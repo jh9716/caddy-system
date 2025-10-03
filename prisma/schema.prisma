@@ -1,18 +1,27 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-generator client {
-  provider = "prisma-client-js"
+model Assignment {
+  id        Int      @id @default(autoincrement())
+  caddyName String
+  team      Team
+  status    Status
+  notes     String?
+  createdAt DateTime @default(now())
 }
 
 enum Status {
-  AVAILABLE   // 가용
-  LEAVE       // 휴무신청
-  NOTICE      // 공지
-  ADMIN       // 관리자
-  MEMBER      // 조원
+  AVAILABLE
+  LEAVE
+  NOTICE
+  ADMIN
+  MEMBER
 }
 
 enum Team {
@@ -24,13 +33,4 @@ enum Team {
   TEAM_6
   TEAM_7
   TEAM_8
-}
-
-model Assignment {
-  id        Int      @id @default(autoincrement())
-  caddyName String
-  team      Team
-  status    Status
-  notes     String?   // 특이사항(메모)
-  createdAt DateTime @default(now())
 }
