@@ -1,6 +1,4 @@
 {
-  "name": "caddy-system",
-  "version": "1.0.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -11,9 +9,9 @@
   },
   "dependencies": {
     "@prisma/client": "^5.16.2",
+    "next": "latest",
     "react": "latest",
-    "react-dom": "latest",
-    "next": "latest"
+    "react-dom": "latest"
   },
   "devDependencies": {
     "prisma": "^5.16.2",
