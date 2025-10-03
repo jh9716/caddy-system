@@ -1,22 +1,36 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
 enum Status {
-  AVAILABLE   // 가용표
+  AVAILABLE   // 가용
   LEAVE       // 휴무신청
   NOTICE      // 공지
   ADMIN       // 관리자
   MEMBER      // 조원
-  TEAM_1      // 1조
-  TEAM_2      // 2조
-  TEAM_3      // 3조
-  TEAM_4      // 4조
-  TEAM_5      // 5조
-  TEAM_6      // 6조
-  TEAM_7      // 7조
-  TEAM_8      // 8조
+}
+
+enum Team {
+  TEAM_1
+  TEAM_2
+  TEAM_3
+  TEAM_4
+  TEAM_5
+  TEAM_6
+  TEAM_7
+  TEAM_8
 }
 
 model Assignment {
   id        Int      @id @default(autoincrement())
-  caddyId   String
+  caddyName String
+  team      Team
   status    Status
+  notes     String?   // 특이사항(메모)
   createdAt DateTime @default(now())
 }

@@ -1,10 +1,13 @@
 // src/utils/statusLabels.ts
 export const statusLabels: Record<string, string> = {
-  AVAILABLE: "가용표",
+  AVAILABLE: "가용",
   LEAVE: "휴무신청",
   NOTICE: "공지",
   ADMIN: "관리자",
   MEMBER: "조원",
+};
+
+export const teamLabels: Record<string, string> = {
   TEAM_1: "1조",
   TEAM_2: "2조",
   TEAM_3: "3조",
