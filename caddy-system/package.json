@@ -3,14 +3,12 @@
   "private": true,
   "version": "1.0.0",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "seed": "node prisma/seed.js",
-    "postinstall": "prisma generate",
-    "prisma:generate": "prisma generate",
-    "prisma:deploy": "prisma migrate deploy"
-  },
+  "dev": "next dev",
+  "build": "next build",
+  "start": "next start",
+  "seed": "node prisma/seed.js",
+  "postinstall": "prisma generate"
+},
   "dependencies": {
     "@prisma/client": "^5.16.2",
     "next": "latest",
