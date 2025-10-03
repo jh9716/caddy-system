@@ -1,37 +1,32 @@
-// app/schedule/page.tsx
-"use client";
-import React from "react";
+// src/app/schedule/page.tsx
+import { prisma } from '@/lib/prisma';
 
-interface Team {
-  조: number;
-  성명: string;
-  특이사항?: string[];
-}
+export const dynamic = 'force-dynamic'; // 캐시 방지(초기엔 편해요)
 
-const SAMPLE: Team[] = [
-  { 조: 1, 성명: "홍길동", 특이사항: ["지각"] },
-  { 조: 2, 성명: "김철수", 특이사항: ["병가"] },
-  { 조: 3, 성명: "이영희", 특이사항: ["휴무"] },
-];
+export default async function SchedulePage() {
+  const items = await prisma.assignment.findMany({
+    orderBy: [{ 조: 'asc' }, { 성함: 'asc' }],
+  });
 
-export default function SchedulePage() {
   return (
-    <div style={{ padding: "20px" }}>
-      <h1>가용표</h1>
-      <table border={1} cellPadding={10} style={{ borderCollapse: "collapse" }}>
+    <div className="p-6">
+      <h1 className="text-xl font-semibold mb-4">가용표</h1>
+      <table className="min-w-[640px] border">
         <thead>
           <tr>
-            <th>조</th>
-            <th>성명</th>
-            <th>특이사항</th>
+            <th className="border px-2 py-1">조</th>
+            <th className="border px-2 py-1">성함</th>
+            <th className="border px-2 py-1">직무</th>
+            <th className="border px-2 py-1">투입가능일</th>
           </tr>
         </thead>
         <tbody>
-          {SAMPLE.map((member, idx) => (
-            <tr key={idx}>
-              <td>{member.조}</td>
-              <td>{member.성명}</td>
-              <td>{member.특이사항?.join(", ") || "-"}</td>
+          {items.map((m) => (
+            <tr key={m.id}>
+              <td className="border px-2 py-1">{m.조}</td>
+              <td className="border px-2 py-1">{m.성함}</td>
+              <td className="border px-2 py-1">{m.직무}</td>
+              <td className="border px-2 py-1">{m.투입가능일 ?? '-'}</td>
             </tr>
           ))}
         </tbody>
