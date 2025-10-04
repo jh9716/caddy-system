@@ -1,36 +1,24 @@
-generator client {
-  provider = "prisma-client-js"
-}
+// prisma/schema.prisma
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-model Assignment {
-  id        Int      @id @default(autoincrement())
-  caddyName String
-  team      Team
-  status    Status
-  notes     String?
-  createdAt DateTime @default(now())
+generator client {
+  provider = "prisma-client-js"
 }
 
-enum Status {
-  AVAILABLE
-  LEAVE
-  NOTICE
-  ADMIN
-  MEMBER
-}
+// 캐디 기본 테이블
+// status는 일단 자유 문자로 둡니다. (예: '근무중', '휴무', '병가' 등)
+// 나중에 enum으로 고정하고 싶으면 바꿔도 됩니다.
+model Caddy {
+  id     Int    @id @default(autoincrement())
+  name   String
+  team   String
+  status String
 
-enum Team {
-  TEAM_1
-  TEAM_2
-  TEAM_3
-  TEAM_4
-  TEAM_5
-  TEAM_6
-  TEAM_7
-  TEAM_8
+  // 필요 시 생성/수정 시간도 추가 가능
+  // createdAt DateTime @default(now())
+  // updatedAt DateTime @updatedAt
 }
