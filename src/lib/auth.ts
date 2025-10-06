@@ -1,19 +1,13 @@
-import { cookies } from 'next/headers';
+// src/lib/auth.ts
+import { NextRequest, NextResponse } from 'next/server';
 
-export type Session = {
-  role: 'admin' | 'caddy';
-  user: string;
-} | null;
-
-export function getSession(): Session {
-  const store = cookies();
-  const role = store.get('session_role')?.value as 'admin' | 'caddy' | undefined;
-  const user = store.get('session_user')?.value;
-  if (!role || !user) return null;
-  return { role, user };
-}
-
-export function isAdmin(): boolean {
-  const s = getSession();
-  return !!s && s.role === 'admin';
+/**
+ * 관리자 쿠키(admin=1)가 없으면 401을 반환합니다.
+ * 사용법: const guard = requireAdmin(req); if (guard) return guard;
+ */
+export function requireAdmin(req: NextRequest): NextResponse | void {
+  const isAdmin = req.cookies.get('admin')?.value === '1';
+  if (!isAdmin) {
+    return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  }
 }

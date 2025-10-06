@@ -1,79 +1,41 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
-import { requireAdmin } from '@/utils/requireAdmin'
+// src/app/api/assignments/[id]/route.ts
+import { NextRequest, NextResponse } from 'next/server';
+import { prisma } from '@/lib/prisma';
+import { requireAdmin } from '@/lib/auth';
 
-// 단일 조회
-export async function GET(_: NextRequest, { params }: { params: { id: string } }) {
-  try {
-    const id = Number(params.id)
-    if (Number.isNaN(id)) {
-      return NextResponse.json({ error: 'invalid id' }, { status: 400 })
-    }
-
-    const assignment = await prisma.assignment.findUnique({
-      where: { id },
-      include: { caddy: true },
-    })
-    if (!assignment) {
-      return NextResponse.json({ error: 'Not found' }, { status: 404 })
-    }
-    return NextResponse.json(assignment)
-  } catch (e: any) {
-    console.error('[GET /api/assignments/[id]]', e)
-    return NextResponse.json({ error: e?.message ?? 'GET failed' }, { status: 500 })
+// 단일 조회 (필요 없으면 이 GET 자체를 지워도 됩니다)
+export async function GET(_req: Request, { params }: { params: { id: string } }) {
+  const id = Number(params.id);
+  if (Number.isNaN(id)) {
+    return NextResponse.json({ error: 'invalid id' }, { status: 400 });
   }
+  const row = await prisma.assignment.findUnique({
+    where: { id },
+    include: { caddy: true },
+  });
+  if (!row) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  return NextResponse.json(row);
 }
 
-// 수정
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
-  try {
-    requireAdmin() // 관리자만 수정 가능
+  const guard = requireAdmin(req); if (guard) return guard;
 
-    const id = Number(params.id)
-    if (Number.isNaN(id)) {
-      return NextResponse.json({ error: 'invalid id' }, { status: 400 })
-    }
-
-    const body = await req.json() as {
-      caddyId?: number
-      type?: string
-      startDate?: string | Date
-      endDate?: string | Date
-    }
-
-    const data: any = {}
-    if (typeof body.caddyId === 'number') data.caddyId = body.caddyId
-    if (typeof body.type === 'string') data.type = body.type
-    if (body.startDate) data.startDate = new Date(body.startDate)
-    if (body.endDate) data.endDate = new Date(body.endDate)
-
-    const updated = await prisma.assignment.update({
-      where: { id },
-      data,
-      include: { caddy: true },
-    })
-
-    return NextResponse.json(updated)
-  } catch (e: any) {
-    console.error('[PATCH /api/assignments/[id]]', e)
-    return NextResponse.json({ error: e?.message ?? 'PATCH failed' }, { status: 400 })
+  const id = Number(params.id);
+  if (Number.isNaN(id)) {
+    return NextResponse.json({ error: 'invalid id' }, { status: 400 });
   }
+  const data = await req.json();
+  const updated = await prisma.assignment.update({ where: { id }, data });
+  return NextResponse.json(updated);
 }
 
-// 삭제
-export async function DELETE(_: NextRequest, { params }: { params: { id: string } }) {
-  try {
-    requireAdmin() // 관리자만 삭제 가능
+export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+  const guard = requireAdmin(req); if (guard) return guard;
 
-    const id = Number(params.id)
-    if (Number.isNaN(id)) {
-      return NextResponse.json({ error: 'invalid id' }, { status: 400 })
-    }
-
-    await prisma.assignment.delete({ where: { id } })
-    return NextResponse.json({ ok: true })
-  } catch (e: any) {
-    console.error('[DELETE /api/assignments/[id]]', e)
-    return NextResponse.json({ error: e?.message ?? 'DELETE failed' }, { status: 400 })
+  const id = Number(params.id);
+  if (Number.isNaN(id)) {
+    return NextResponse.json({ error: 'invalid id' }, { status: 400 });
   }
+  await prisma.assignment.delete({ where: { id } });
+  return NextResponse.json({ ok: true });
 }
