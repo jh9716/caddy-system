@@ -1,12 +1,19 @@
 // src/utils/requireAdmin.ts
+import { cookies } from 'next/headers';
 
-import { NextRequest, NextResponse } from 'next/server';
+const ADMIN_COOKIE = 'admin';
 
-// 간단한 관리자 인증 예시 (쿠키나 헤더 기반)
-export async function requireAdmin(req: NextRequest) {
-  const cookie = req.cookies.get('admin');
-  if (!cookie || cookie.value !== process.env.ADMIN_SECRET) {
-    return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+export function isAdmin() {
+  const c = cookies().get(ADMIN_COOKIE);
+  return c?.value === '1';
+}
+
+// ✅ named export "requireAdmin" 로 정확히 내보내기
+export function requireAdmin() {
+  if (!isAdmin()) {
+    const err = new Error('unauthorized');
+    // @ts-expect-error attach status for route handlers
+    err.status = 401;
+    throw err;
   }
-  return null;
 }

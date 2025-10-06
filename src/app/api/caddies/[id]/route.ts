@@ -1,13 +1,15 @@
-// src/app/api/caddies/[id]/route.ts
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { requireAdmin } from '@/lib/auth'
+import { requireAdmin } from '@/utils/requireAdmin'   // ✅ 여기 경로 바뀜!
 import { logAudit } from '@/lib/audit'
 
-// 부분 수정
-export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+// 캐디 수정
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: { id: string } }
+) {
   try {
-    await requireAdmin(req) // ← req 넘겨주기
+    requireAdmin() // ✅ req 넘기지 않고 단순 호출로 변경
     const id = Number(params.id)
     const body = await req.json()
 
@@ -21,18 +23,28 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       },
     })
 
-    await logAudit({ action: 'UPDATE_CADDY', entity: 'Caddy', entityId: id, payload: body })
+    await logAudit({
+      action: 'UPDATE_CADDY',
+      entity: 'Caddy',
+      entityId: id,
+      payload: body,
+    })
+
     return NextResponse.json(updated)
   } catch (e: any) {
     console.error('[PATCH /api/caddies/[id]]', e)
-    return NextResponse.json({ error: e?.message ?? 'PATCH failed' }, { status: e?.status ?? 400 })
+    const status = e?.status ?? 400
+    return NextResponse.json({ error: e?.message ?? 'PATCH failed' }, { status })
   }
 }
 
-// 삭제 (자식 → 부모 순서)
-export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+// 캐디 삭제
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: { id: string } }
+) {
   try {
-    await requireAdmin(req) // ← req 넘겨주기
+    requireAdmin() // ✅ 관리자 인증 체크
     const id = Number(params.id)
 
     await prisma.$transaction([
@@ -41,10 +53,16 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
       prisma.caddy.delete({ where: { id } }),
     ])
 
-    await logAudit({ action: 'DELETE_CADDY', entity: 'Caddy', entityId: id })
+    await logAudit({
+      action: 'DELETE_CADDY',
+      entity: 'Caddy',
+      entityId: id,
+    })
+
     return NextResponse.json({ ok: true })
   } catch (e: any) {
     console.error('[DELETE /api/caddies/[id]]', e)
-    return NextResponse.json({ error: e?.message ?? 'DELETE failed' }, { status: e?.status ?? 400 })
+    const status = e?.status ?? 400
+    return NextResponse.json({ error: e?.message ?? 'DELETE failed' }, { status })
   }
 }
