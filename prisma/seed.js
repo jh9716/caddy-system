@@ -1,26 +1,27 @@
 // prisma/seed.js
 const { PrismaClient } = require('@prisma/client');
+const bcrypt = require('bcryptjs');
+
 const prisma = new PrismaClient();
 
 async function main() {
-  // 샘플 캐디 데이터
-  const caddies = [
-    { name: "김철수", team: "1조", status: "근무중" },
-    { name: "이영희", team: "2조", status: "휴무" },
-    { name: "박민수", team: "3조", status: "병가" },
-  ];
+  const username = process.env.ADMIN_USERNAME || 'admin';
+  const password = process.env.ADMIN_PASSWORD || 'admin1234';
 
-  for (const caddy of caddies) {
-    await prisma.caddy.create({ data: caddy });
+  const exists = await prisma.user.findUnique({ where: { username }});
+  if (!exists) {
+    const hash = await bcrypt.hash(password, 10);
+    await prisma.user.create({
+      data: { username, password: hash, role: 'admin' }
+    });
+    console.log(`✔ Admin user created: ${username}/${password}`);
+  } else {
+    console.log('✔ Admin user already exists');
   }
-
-  console.log("✅ 샘플 데이터 입력 완료!");
 }
 
 main()
-  .then(async () => {
-    await prisma.$disconnect();
-  })
+  .then(() => prisma.$disconnect())
   .catch(async (e) => {
     console.error(e);
     await prisma.$disconnect();

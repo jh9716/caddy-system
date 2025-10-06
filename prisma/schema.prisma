@@ -1,24 +1,87 @@
-// prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-generator client {
-  provider = "prisma-client-js"
+/// 근무/휴무, 병가, 당번 등 기간성 지정에 사용할 ENUM
+enum AssignmentType {
+  OFF
+  SICK
+  LONG_SICK
+  DUTY
+  MARSHAL
 }
 
-// 캐디 기본 테이블
-// status는 일단 자유 문자로 둡니다. (예: '근무중', '휴무', '병가' 등)
-// 나중에 enum으로 고정하고 싶으면 바꿔도 됩니다.
 model Caddy {
-  id     Int    @id @default(autoincrement())
-  name   String
-  team   String
-  status String
+  id          Int          @id @default(autoincrement())
+  name        String
+  team        String
+  status      String?      @default("근무중")
+  memo        String?
+  assignments Assignment[]
+  schedules   Schedule[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+}
 
-  // 필요 시 생성/수정 시간도 추가 가능
-  // createdAt DateTime @default(now())
-  // updatedAt DateTime @updatedAt
+model Assignment {
+  id        Int            @id @default(autoincrement())
+  caddy     Caddy          @relation(fields: [caddyId], references: [id])
+  caddyId   Int
+  type      AssignmentType
+  startDate DateTime
+  endDate   DateTime
+  createdAt DateTime       @default(now())
+}
+
+model Audit {
+  id        Int      @id @default(autoincrement())
+  action    String
+  entity    String
+  entityId  Int?
+  ip        String?
+  payload   Json?
+  createdAt DateTime @default(now())
+}
+
+model DailySchedule {
+  id        Int      @id @default(autoincrement())
+  date      DateTime
+  available Int
+  rest      Int
+  sick      Int
+  longSick  Int
+  duty      Int
+  marshal   Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Schedule {
+  id      Int      @id @default(autoincrement())
+  date    DateTime
+  caddyId Int
+  memo    String?
+  caddy   Caddy    @relation(fields: [caddyId], references: [id])
+}
+
+model Notice {
+  id        Int      @id @default(autoincrement())
+  title     String
+  content   String
+  author    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  username  String   @unique
+  password  String // bcrypt hash
+  role      String // "admin" | (확장 여지)
+  createdAt DateTime @default(now())
 }

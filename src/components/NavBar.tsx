@@ -7,12 +7,18 @@ const tabs = [
   { href: '/', label: '대시보드' },
   { href: '/schedule', label: '가용표' },
   { href: '/leave', label: '휴무 신청' },
-  { href: '/notice', label: '공지' },
-  { href: '/admin', label: '관리' },
+  { href: '/notice', label: '공지사항' },
+  { href: '/manage/caddies', label: '캐디 관리' },
 ];
 
 export default function NavBar() {
   const pathname = usePathname();
+
+  async function logout() {
+    await fetch('/api/auth/logout', { method: 'POST' });
+    window.location.href = '/login';
+  }
+
   return (
     <header style={{
       position: 'sticky', top: 0, zIndex: 40,
@@ -21,7 +27,7 @@ export default function NavBar() {
     }}>
       <div style={{maxWidth: 1120, margin: '0 auto', padding: '14px 20px', display:'flex', alignItems:'center', justifyContent:'space-between'}}>
         <Link href="/" style={{fontWeight: 800, letterSpacing: 0.5, fontSize: 18}}>VERTHILL • Caddy</Link>
-        <nav style={{display:'flex', gap: 10}}>
+        <nav style={{display:'flex', gap: 10, alignItems:'center'}}>
           {tabs.map(t => (
             <Link
               key={t.href}
@@ -38,6 +44,9 @@ export default function NavBar() {
               {t.label}
             </Link>
           ))}
+          <button onClick={logout} style={{padding:'8px 12px', border:'1px solid #e5e7eb', background:'#fff', borderRadius:10}}>
+            로그아웃
+          </button>
         </nav>
       </div>
     </header>
