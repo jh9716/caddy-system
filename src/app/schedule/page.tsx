@@ -1,137 +1,181 @@
-'use client';
+'use client'
+import { useEffect, useState } from 'react'
 
-import { useEffect, useMemo, useState } from 'react';
-import dayjs from 'dayjs';
+type TableColumn = {
+  team: string
+  rows: { id: number; name: string; badges: string[] }[]
+}
+type TableData = {
+  date: string
+  columns: TableColumn[]
+  maxRows: number
+}
 
-type Caddy = {
-  id: number;
-  name: string;
-  team: string;
-};
+function todayYMD() {
+  const d = new Date()
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
 
-type ScheduleRow = {
-  id: number;
-  date: string;
-  caddyId: number;
-  memo: string | null;
-  caddy: Caddy;
-};
+const TAG_COLOR: Record<string, string> = {
+  '휴무': '#bbf7d0',
+  '병가': '#fde68a',
+  '장기병가': '#a7f3d0',
+  '당번': '#e0e7ff',
+  '마샬': '#f5d0fe',
+  '타구사고': '#fee2e2',
+  '경조사': '#fef3c7',
+}
+
+function Chip({ text }: { text: string }) {
+  const base = text.includes('당번')
+    ? '당번'
+    : text.includes('마샬')
+    ? '마샬'
+    : text
+  const bg = TAG_COLOR[base] ?? '#e2e8f0'
+  return (
+    <span
+      style={{
+        display: 'inline-block',
+        padding: '2px 6px',
+        marginRight: 6,
+        borderRadius: 8,
+        fontSize: 12,
+        background: bg,
+        color: '#111827',
+      }}
+    >
+      {text}
+    </span>
+  )
+}
 
 export default function SchedulePage() {
-  const [date, setDate] = useState<string>(() => dayjs().format('YYYY-MM-DD'));
-  const [rows, setRows] = useState<ScheduleRow[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [date, setDate] = useState<string>(todayYMD())
+  const [data, setData] = useState<TableData | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
 
-  const dateLabel = useMemo(
-    () => dayjs(date).format('YYYY-MM-DD'),
-    [date]
-  );
-
-  async function fetchSchedules(targetDate: string) {
-    setLoading(true);
+  async function load(d: string) {
     try {
-      const res = await fetch(`/api/schedules?date=${encodeURIComponent(targetDate)}`);
+      setLoading(true)
+      setErr(null)
+      const res = await fetch(`/api/schedule/table?date=${encodeURIComponent(d)}`, { cache: 'no-store' })
+      const json = await res.json()
       if (!res.ok) {
-        const payload = await res.json().catch(() => ({}));
-        throw new Error(payload?.error || `HTTP ${res.status}`);
+        setErr(json?.error || '가용표 조회 실패')
+        setData(null)
+      } else {
+        setData(json as TableData)
       }
-      const data: ScheduleRow[] = await res.json();
-      setRows(data);
-    } catch (err: any) {
-      alert(`가용표를 불러오는 중 오류가 발생했습니다.\n\n${err?.message ?? err}`);
-      setRows([]);
+    } catch {
+      setErr('네트워크 오류')
+      setData(null)
     } finally {
-      setLoading(false);
-    }
-  }
-
-  async function generateSchedules(targetDate: string) {
-    if (!confirm(`${targetDate} 가용표를 자동 생성할까요?`)) return;
-    setLoading(true);
-    try {
-      const res = await fetch('/api/schedules', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date: targetDate }),
-      });
-      const payload = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(payload?.error || `HTTP ${res.status}`);
-      }
-      // 생성 후 바로 새로고침
-      await fetchSchedules(targetDate);
-      alert(payload?.message || '가용표가 생성되었습니다.');
-    } catch (err: any) {
-      alert(`가용표 생성 중 오류가 발생했습니다.\n\n${err?.message ?? err}`);
-    } finally {
-      setLoading(false);
+      setLoading(false)
     }
   }
 
   useEffect(() => {
-    fetchSchedules(date);
-  }, [date]);
+    load(date)
+  }, [date])
 
   return (
-    <div style={{ maxWidth: 900, margin: '40px auto' }}>
-      <h2 style={{ marginBottom: 16 }}>가용표</h2>
+    <div style={{ maxWidth: 1200, margin: '0 auto' }}>
+      <h2 style={{ fontSize: 22, fontWeight: 800, marginBottom: 12 }}>📅 가용표</h2>
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
         <input
           type="date"
           value={date}
           onChange={(e) => setDate(e.target.value)}
+          style={{ padding: 8, border: '1px solid #e5e7eb', borderRadius: 8 }}
         />
-        <button onClick={() => fetchSchedules(date)} disabled={loading}>
+        <button
+          onClick={() => load(date)}
+          style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e5e7eb', background: '#fff' }}
+          disabled={loading}
+        >
           새로고침
         </button>
-        <button onClick={() => generateSchedules(date)} disabled={loading}>
-          자동 생성
-        </button>
       </div>
 
-      <div style={{ fontSize: 12, color: '#666', marginBottom: 8 }}>
-        선택일: {dateLabel}
+      {/* 범례 */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+        {['휴무','병가','장기병가','당번','마샬','타구사고','경조사','1부','2부','3부','1·3','1·2','54'].map(t => (
+          <Chip key={t} text={t} />
+        ))}
       </div>
 
-      <table width="100%" cellPadding={8} style={{ borderCollapse: 'collapse' }}>
-        <thead>
-          <tr style={{ background: '#f4f4f4' }}>
-            <th style={th}>ID</th>
-            <th style={th}>이름</th>
-            <th style={th}>조</th>
-            <th style={th}>특이사항</th>
-          </tr>
-        </thead>
-        <tbody>
-          {loading ? (
-            <tr><td colSpan={4} style={{ textAlign: 'center' }}>로딩 중…</td></tr>
-          ) : rows.length === 0 ? (
-            <tr><td colSpan={4} style={{ textAlign: 'center' }}>데이터가 없습니다.</td></tr>
-          ) : (
-            rows.map(r => (
-              <tr key={r.id} style={{ borderBottom: '1px solid #eee' }}>
-                <td style={td}>{r.caddy.id}</td>
-                <td style={td}>{r.caddy.name}</td>
-                <td style={td}>{r.caddy.team}</td>
-                <td style={td}>{r.memo || '근무중'}</td>
+      {err && (
+        <div
+          style={{
+            padding: 12,
+            border: '1px solid #fecaca',
+            background: '#fef2f2',
+            color: '#b91c1c',
+            borderRadius: 8,
+            marginBottom: 12,
+          }}
+        >
+          {err}
+        </div>
+      )}
+
+      {loading || !data ? (
+        <p style={{ textAlign: 'center', marginTop: 60 }}>불러오는 중…</p>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff' }}>
+            <thead>
+              <tr>
+                {data.columns.map((c, i) => (
+                  <th
+                    key={i}
+                    style={{
+                      padding: 10,
+                      borderBottom: '1px solid #e5e7eb',
+                      background: '#f8fafc',
+                      fontSize: 13,
+                      color: '#334155',
+                    }}
+                  >
+                    {c.team}
+                  </th>
+                ))}
               </tr>
-            ))
-          )}
-        </tbody>
-      </table>
-
-      <div style={{ marginTop: 8, fontSize: 12, color: '#666' }}>
-        * 특이사항 표시는 휴무/병가/장기병가/당번/마샬 순으로 우선 표시됩니다.
-      </div>
+            </thead>
+            <tbody>
+              {Array.from({ length: data.maxRows }).map((_, rIdx) => (
+                <tr key={rIdx} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                  {data.columns.map((col, cIdx) => {
+                    const row = col.rows[rIdx]
+                    return (
+                      <td key={`${cIdx}-${rIdx}`} style={{ verticalAlign: 'top', padding: 8, fontSize: 14 }}>
+                        {row ? (
+                          <div>
+                            <div style={{ marginBottom: 4 }}>{row.name}</div>
+                            <div>
+                              {(row.badges ?? []).map((b, i) => (
+                                <Chip key={`${row.id}-${i}`} text={b} />
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          <span style={{ color: '#cbd5e1' }}>—</span>
+                        )}
+                      </td>
+                    )
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
-  );
+  )
 }
-
-const th: React.CSSProperties = {
-  borderBottom: '1px solid #ddd',
-  textAlign: 'left',
-};
-const td: React.CSSProperties = {
-  borderBottom: '1px solid #f6f6f6',
-};

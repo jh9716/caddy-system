@@ -1,101 +1,52 @@
 import { NextRequest, NextResponse } from 'next/server';
-import prisma from '@/lib/prisma';
+import { prisma } from '@/lib/prisma';
 
-// 📘 GET: 전체 목록 조회
-export async function GET() {
-  try {
-    const assignments = await prisma.assignment.findMany({
-      include: { caddy: true },
-      orderBy: { startDate: 'desc' },
-    });
-    return NextResponse.json(assignments);
-  } catch (e: any) {
-    console.error('[GET /api/assignments]', e);
-    return NextResponse.json(
-      { error: e?.message ?? '서버 오류' },
-      { status: 500 }
-    );
-  }
-}
-
-// 🟢 POST: 새 일정 등록
+// POST: 기간 지정 생성
 export async function POST(req: NextRequest) {
   try {
-    const data = await req.json();
-    const { caddyId, type, startDate, endDate } = data ?? {};
+    const { caddyId, type, startDate, endDate } = await req.json();
 
-    // 유효성 검사
     if (!caddyId || !type || !startDate || !endDate) {
-      return NextResponse.json(
-        { error: '필수 값이 누락되었습니다. (caddyId, type, startDate, endDate)' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: '필수 값이 누락되었습니다.' }, { status: 400 });
     }
 
-    const assignment = await prisma.assignment.create({
+    // 캐디 존재 확인
+    const exists = await prisma.caddy.findUnique({ where: { id: Number(caddyId) } });
+    if (!exists) {
+      return NextResponse.json({ error: '존재하지 않는 캐디입니다.' }, { status: 404 });
+    }
+
+    const created = await prisma.assignment.create({
       data: {
         caddyId: Number(caddyId),
-        type,
+        type, // AssignmentType enum
         startDate: new Date(startDate),
         endDate: new Date(endDate),
       },
     });
 
-    return NextResponse.json(assignment, { status: 201 });
+    return NextResponse.json(created);
   } catch (e: any) {
-    console.error('[POST /api/assignments]', e);
-    return NextResponse.json(
-      { error: e?.message ?? '서버 오류' },
-      { status: 500 }
-    );
+    console.error('Assignment POST Error:', e);
+    return NextResponse.json({ error: e?.message || '등록 실패' }, { status: 500 });
   }
 }
 
-// 🟡 PATCH: 일부 수정 (ex. 기간, 유형)
-export async function PATCH(req: NextRequest) {
-  try {
-    const data = await req.json();
-    const { id, type, startDate, endDate } = data ?? {};
-
-    if (!id) {
-      return NextResponse.json({ error: 'id가 필요합니다.' }, { status: 400 });
-    }
-
-    const updated = await prisma.assignment.update({
-      where: { id: Number(id) },
-      data: {
-        ...(type ? { type } : {}),
-        ...(startDate ? { startDate: new Date(startDate) } : {}),
-        ...(endDate ? { endDate: new Date(endDate) } : {}),
-      },
-    });
-
-    return NextResponse.json(updated);
-  } catch (e: any) {
-    console.error('[PATCH /api/assignments]', e);
-    return NextResponse.json(
-      { error: e?.message ?? '서버 오류' },
-      { status: 500 }
-    );
-  }
-}
-
-// 🔴 DELETE: 삭제
-export async function DELETE(req: NextRequest) {
+// GET: 특정 캐디의 기간 지정 목록
+export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const id = searchParams.get('id');
-    if (!id) {
-      return NextResponse.json({ error: 'id가 필요합니다.' }, { status: 400 });
-    }
+    const caddyId = Number(searchParams.get('caddyId'));
+    if (!caddyId) return NextResponse.json({ error: 'caddyId 필요' }, { status: 400 });
 
-    await prisma.assignment.delete({ where: { id: Number(id) } });
-    return NextResponse.json({ ok: true });
+    const list = await prisma.assignment.findMany({
+      where: { caddyId },
+      orderBy: [{ startDate: 'desc' }],
+    });
+
+    return NextResponse.json(list);
   } catch (e: any) {
-    console.error('[DELETE /api/assignments]', e);
-    return NextResponse.json(
-      { error: e?.message ?? '서버 오류' },
-      { status: 500 }
-    );
+    console.error('Assignment GET Error:', e);
+    return NextResponse.json({ error: e?.message || '조회 실패' }, { status: 500 });
   }
 }

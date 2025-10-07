@@ -1,41 +1,35 @@
-// src/app/api/assignments/[id]/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { requireAdmin } from '@/lib/auth';
-
-// 단일 조회 (필요 없으면 이 GET 자체를 지워도 됩니다)
-export async function GET(_req: Request, { params }: { params: { id: string } }) {
-  const id = Number(params.id);
-  if (Number.isNaN(id)) {
-    return NextResponse.json({ error: 'invalid id' }, { status: 400 });
-  }
-  const row = await prisma.assignment.findUnique({
-    where: { id },
-    include: { caddy: true },
-  });
-  if (!row) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-  return NextResponse.json(row);
-}
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
-  const guard = requireAdmin(req); if (guard) return guard;
+  try {
+    const body = await req.json();
+    const id = Number(params.id);
 
-  const id = Number(params.id);
-  if (Number.isNaN(id)) {
-    return NextResponse.json({ error: 'invalid id' }, { status: 400 });
+    const updated = await prisma.assignment.update({
+      where: { id },
+      data: {
+        type: body.type ?? undefined,
+        subType: body.subType ?? undefined,
+        startDate: body.startDate ? new Date(body.startDate) : undefined,
+        endDate: body.endDate ? new Date(body.endDate) : undefined,
+        comment: body.comment ?? undefined,
+      },
+    });
+    return NextResponse.json(updated);
+  } catch (e: any) {
+    console.error('PATCH /api/assignments/[id] error:', e);
+    return NextResponse.json({ error: e?.message ?? '수정 실패' }, { status: 500 });
   }
-  const data = await req.json();
-  const updated = await prisma.assignment.update({ where: { id }, data });
-  return NextResponse.json(updated);
 }
 
-export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
-  const guard = requireAdmin(req); if (guard) return guard;
-
-  const id = Number(params.id);
-  if (Number.isNaN(id)) {
-    return NextResponse.json({ error: 'invalid id' }, { status: 400 });
+export async function DELETE(_: NextRequest, { params }: { params: { id: string } }) {
+  try {
+    const id = Number(params.id);
+    await prisma.assignment.delete({ where: { id } });
+    return NextResponse.json({ ok: true });
+  } catch (e: any) {
+    console.error('DELETE /api/assignments/[id] error:', e);
+    return NextResponse.json({ error: e?.message ?? '삭제 실패' }, { status: 500 });
   }
-  await prisma.assignment.delete({ where: { id } });
-  return NextResponse.json({ ok: true });
 }

@@ -7,13 +7,27 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-/// 근무/휴무, 병가, 당번 등 기간성 지정에 사용할 ENUM
 enum AssignmentType {
   OFF
   SICK
   LONG_SICK
   DUTY
   MARSHAL
+  ACCIDENT
+  FAMILY_EVENT
+}
+
+enum ShiftPart {
+  ONE
+  TWO
+  THREE
+}
+
+enum ShiftVariant {
+  NORMAL
+  ONE_THREE
+  ONE_TWO
+  FIFTY_FOUR
 }
 
 model Caddy {
@@ -24,18 +38,21 @@ model Caddy {
   memo        String?
   assignments Assignment[]
   schedules   Schedule[]
+  shiftDuties ShiftDuty[]
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 }
 
 model Assignment {
-  id        Int            @id @default(autoincrement())
-  caddy     Caddy          @relation(fields: [caddyId], references: [id])
+  id        Int             @id @default(autoincrement())
+  caddy     Caddy           @relation(fields: [caddyId], references: [id])
   caddyId   Int
   type      AssignmentType
+  subType   String?
   startDate DateTime
   endDate   DateTime
-  createdAt DateTime       @default(now())
+  comment   String?
+  createdAt DateTime        @default(now())
 }
 
 model Audit {
@@ -81,7 +98,36 @@ model Notice {
 model User {
   id        Int      @id @default(autoincrement())
   username  String   @unique
-  password  String // bcrypt hash
-  role      String // "admin" | (확장 여지)
+  password  String
+  role      String
   createdAt DateTime @default(now())
+}
+
+model ShiftDuty {
+  id      Int          @id @default(autoincrement())
+  date    DateTime
+  part    ShiftPart
+  variant ShiftVariant @default(NORMAL)
+
+  orderNo Int
+  caddyId Int
+  team    String?
+  caddy   Caddy       @relation(fields: [caddyId], references: [id])
+
+  createdAt DateTime  @default(now())
+
+  @@index([date, part])
+}
+
+model ScheduleExtraTag {
+  id        Int      @id @default(autoincrement())
+  date      DateTime
+  caddyId   Int
+  tag       String
+
+  createdBy String?
+  createdAt DateTime @default(now())
+
+  @@unique([date, caddyId, tag])
+  @@index([date, caddyId])
 }

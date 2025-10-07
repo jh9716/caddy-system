@@ -51,7 +51,6 @@ export async function POST(req: NextRequest) {
       return { date: new Date(date), caddyId: c.id, memo }
     })
 
-    // 같은 날짜에 중복 생성 방지: 기존 삭제 후 생성(원하시면 upsert로 변경 가능)
     await prisma.schedule.deleteMany({ where: { date: new Date(date) } })
     await prisma.schedule.createMany({ data })
 
