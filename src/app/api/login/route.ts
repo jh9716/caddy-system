@@ -1,29 +1,40 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server'
+import { cookies } from 'next/headers'
 
-const ADMIN_COOKIE = 'admin';
+// .env 값 읽기
+const CADDY_USERNAME = process.env.CADDY_USERNAME || 'caddy'
+const CADDY_PASSWORD = process.env.CADDY_PASSWORD || '1234'
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin'
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '1111'
 
-export async function POST(req: NextRequest) {
-  const { password } = await req.json();
-  if (!password || password !== process.env.ADMIN_PASSWORD) {
-    return NextResponse.json(
-      { ok: false, message: '비밀번호가 올바르지 않습니다.' },
-      { status: 401 }
-    );
-  }
-
-  const res = NextResponse.json({ ok: true });
-  res.cookies.set(ADMIN_COOKIE, '1', {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production', // 개발환경에서는 false
-    sameSite: 'lax',
-    path: '/',
-    maxAge: 60 * 60 * 8, // 8시간
-  });
-  return res;
+// 쿠키 유틸
+function setAuthCookie(role: 'caddy'|'admin') {
+  const res = NextResponse.json({ ok: true, role })
+  // 필요시 secure: true 는 로컬에서 빼고, prod에서만 쓰세요.
+  res.cookies.set('role', role, { httpOnly: true, sameSite: 'lax', path: '/' })
+  return res
 }
 
-export async function DELETE() {
-  const res = NextResponse.json({ ok: true });
-  res.cookies.set(ADMIN_COOKIE, '', { path: '/', maxAge: 0 });
-  return res;
+export async function POST(req: NextRequest) {
+  try {
+    const { id, password } = await req.json()
+
+    const uid = String(id || '').trim().toLowerCase()
+    const pw  = String(password || '').trim()
+
+    // 관리자 먼저 체크
+    if (uid === ADMIN_USERNAME.toLowerCase() && pw === ADMIN_PASSWORD) {
+      return setAuthCookie('admin')
+    }
+
+    // 캐디 체크
+    if (uid === CADDY_USERNAME.toLowerCase() && pw === CADDY_PASSWORD) {
+      return setAuthCookie('caddy')
+    }
+
+    return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+  } catch (e: any) {
+    console.error('[POST /api/login] error', e)
+    return NextResponse.json({ error: 'login failed' }, { status: 400 })
+  }
 }

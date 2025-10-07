@@ -4,12 +4,11 @@ import { useRouter } from 'next/navigation'
 
 type Summary = {
   date: string
-  totalCaddies: number
   today: { off: number; sick: number; longSick: number; duty: number; marshal: number }
   latestNotices: { id: number; title: string; createdAt: string }[]
 }
 
-export default function ManagePage() {
+export default function CaddyPage() {
   const router = useRouter()
   const [loading, setLoading] = useState(true)
   const [summary, setSummary] = useState<Summary | null>(null)
@@ -19,8 +18,8 @@ export default function ManagePage() {
       try {
         const resRole = await fetch('/api/check-role', { credentials: 'include' })
         const dataRole = await resRole.json()
-        if (dataRole.role !== 'admin') {
-          alert('관리자만 접근 가능합니다.')
+        if (dataRole.role !== 'caddy') {
+          alert('캐디만 접근 가능합니다.')
           router.push('/login')
           return
         }
@@ -39,18 +38,17 @@ export default function ManagePage() {
   if (loading) return <p style={{ textAlign: 'center', marginTop: 100 }}>로딩 중...</p>
 
   return (
-    <div style={{ maxWidth: 1100, margin: '20px auto' }}>
-      <h2 style={{ fontSize: 22, fontWeight: 800, marginBottom: 12 }}>관리자 대시보드</h2>
+    <div style={{ maxWidth: 900, margin: '20px auto' }}>
+      <h2 style={{ fontSize: 22, fontWeight: 800, marginBottom: 12 }}>캐디 대시보드</h2>
       {summary && (
         <>
-          <p style={{ marginBottom: 14, color: '#64748b' }}>{summary.date} 요약</p>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12 }}>
-            <Card title="총 캐디" value={summary.totalCaddies} />
-            <Card title="휴무" value={summary.today.off} />
-            <Card title="병가" value={summary.today.sick} />
-            <Card title="장기병가" value={summary.today.longSick} />
-            <Card title="당번" value={summary.today.duty} />
-            <Card title="마샬" value={summary.today.marshal} />
+          <p style={{ marginBottom: 14, color: '#64748b' }}>{summary.date} 오늘 현황</p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10 }}>
+            <Tag label="휴무" value={summary.today.off} />
+            <Tag label="병가" value={summary.today.sick} />
+            <Tag label="장기병가" value={summary.today.longSick} />
+            <Tag label="당번" value={summary.today.duty} />
+            <Tag label="마샬" value={summary.today.marshal} />
           </div>
 
           <div style={{ marginTop: 28 }}>
@@ -77,14 +75,14 @@ export default function ManagePage() {
   )
 }
 
-function Card({ title, value }: { title: string; value: number }) {
+function Tag({ label, value }: { label: string; value: number }) {
   return (
     <div style={{
-      border: '1px solid #e5e7eb', borderRadius: 12, padding: 12,
-      background: '#fff', minHeight: 80
+      border: '1px solid #e5e7eb', borderRadius: 12, padding: '10px 12px',
+      background: '#fff', textAlign: 'center'
     }}>
-      <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>{title}</div>
-      <div style={{ fontSize: 22, fontWeight: 800 }}>{value}</div>
+      <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>{label}</div>
+      <div style={{ fontSize: 18, fontWeight: 800 }}>{value}</div>
     </div>
   )
 }
