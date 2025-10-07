@@ -7,7 +7,7 @@ const prisma = new PrismaClient();
 
 try {
   // ▶ 여기만 바꿔서 사용하세요
-  const username = 'ghineung';
+  const username = '이기흥';
   const plainPassword = 'lee4378';
 
   const hashed = await bcrypt.hash(plainPassword, 10);
