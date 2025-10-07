@@ -16,9 +16,9 @@ export default function CaddyPage() {
   useEffect(() => {
     const run = async () => {
       try {
-        const resRole = await fetch('/api/check-role', { credentials: 'include' })
-        const dataRole = await resRole.json()
-        if (dataRole.role !== 'caddy') {
+        const r = await fetch('/api/check-role', { credentials: 'include' })
+        const d = await r.json()
+        if (d.role !== 'caddy') {
           alert('캐디만 접근 가능합니다.')
           router.push('/login')
           return
@@ -27,7 +27,7 @@ export default function CaddyPage() {
         const data: Summary = await res.json()
         setSummary(data)
       } catch {
-        alert('요약 정보를 불러오지 못했습니다.')
+        alert('정보를 불러오지 못했습니다.')
       } finally {
         setLoading(false)
       }
@@ -35,15 +35,16 @@ export default function CaddyPage() {
     run()
   }, [router])
 
-  if (loading) return <p style={{ textAlign: 'center', marginTop: 100 }}>로딩 중...</p>
+  if (loading) return <p style={{ textAlign:'center', marginTop:100 }}>로딩 중…</p>
 
   return (
-    <div style={{ maxWidth: 900, margin: '20px auto' }}>
-      <h2 style={{ fontSize: 22, fontWeight: 800, marginBottom: 12 }}>캐디 대시보드</h2>
+    <div style={{ maxWidth: 1100, margin: '10px auto' }}>
+      <h2 style={{ fontSize: 22, fontWeight: 800, marginBottom: 12 }}>캐디 대시보드 (보기 전용)</h2>
+
       {summary && (
         <>
           <p style={{ marginBottom: 14, color: '#64748b' }}>{summary.date} 오늘 현황</p>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(5, 1fr)', gap:10 }}>
             <Tag label="휴무" value={summary.today.off} />
             <Tag label="병가" value={summary.today.sick} />
             <Tag label="장기병가" value={summary.today.longSick} />
@@ -78,8 +79,8 @@ export default function CaddyPage() {
 function Tag({ label, value }: { label: string; value: number }) {
   return (
     <div style={{
-      border: '1px solid #e5e7eb', borderRadius: 12, padding: '10px 12px',
-      background: '#fff', textAlign: 'center'
+      border:'1px solid #e5e7eb', borderRadius:12, padding:'10px 12px',
+      background:'#fff', textAlign:'center'
     }}>
       <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>{label}</div>
       <div style={{ fontSize: 18, fontWeight: 800 }}>{value}</div>
