@@ -1,3 +1,5 @@
+// prisma/schema.prisma
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -7,6 +9,7 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// Enums
 enum AssignmentType {
   OFF
   SICK
@@ -30,6 +33,7 @@ enum ShiftVariant {
   FIFTY_FOUR
 }
 
+// Models
 model Caddy {
   id          Int          @id @default(autoincrement())
   name        String
@@ -104,17 +108,15 @@ model User {
 }
 
 model ShiftDuty {
-  id      Int          @id @default(autoincrement())
-  date    DateTime
-  part    ShiftPart
-  variant ShiftVariant @default(NORMAL)
-
-  orderNo Int
-  caddyId Int
-  team    String?
-  caddy   Caddy       @relation(fields: [caddyId], references: [id])
-
-  createdAt DateTime  @default(now())
+  id       Int          @id @default(autoincrement())
+  date     DateTime
+  part     ShiftPart
+  variant  ShiftVariant @default(NORMAL)
+  orderNo  Int
+  caddyId  Int
+  team     String?
+  caddy    Caddy       @relation(fields: [caddyId], references: [id])
+  createdAt DateTime    @default(now())
 
   @@index([date, part])
 }
@@ -124,7 +126,6 @@ model ScheduleExtraTag {
   date      DateTime
   caddyId   Int
   tag       String
-
   createdBy String?
   createdAt DateTime @default(now())
 

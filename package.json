@@ -1,7 +1,8 @@
 {
   "name": "caddy-system",
-  "private": true,
   "version": "1.0.0",
+  "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "next build",
@@ -11,16 +12,17 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
+    "db:seed": "node prisma/seed.js",
     "vercel-build": "npm run db:generate && npm run db:deploy && next build",
     "postinstall": "prisma generate"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
-    "bcrypt": "^6.0.0",
     "bcryptjs": "^3.0.2",
     "dayjs": "^1.11.18",
     "dotenv": "^17.2.3",
     "next": "^15.0.3",
+    "next-auth": "^4.24.11",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "tslib": "^2.8.1",
@@ -35,7 +37,7 @@
     "eslint": "^9.37.0",
     "eslint-config-next": "^15.5.4",
     "prisma": "^5.22.0",
-    "typescript": "^5.6.2"
+    "typescript": "5.9.3"
   },
   "prisma": {
     "schema": "prisma/schema.prisma"
