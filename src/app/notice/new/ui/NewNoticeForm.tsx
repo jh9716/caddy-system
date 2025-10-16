@@ -1,76 +1,71 @@
-"use client";
+'use client'
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter } from 'next/navigation'
+import { useState } from 'react'
 
-export default function NewNoticeForm() {
-  const router = useRouter();
-  const [title, setTitle] = useState("");
-  const [content, setContent] = useState("");
-  const [err, setErr] = useState("");
-  const [loading, setLoading] = useState(false);
+type Props = {
+  mode?: 'new' | 'edit'
+  initial?: { id: number; title: string; body: string }
+}
 
-  const onSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErr("");
-    setLoading(true);
-    try {
-      const res = await fetch("/api/notice", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, content }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || "등록 실패");
-      router.push("/notice");
-      router.refresh();
-    } catch (e: any) {
-      setErr(e.message || "등록 실패");
-    } finally {
-      setLoading(false);
+export default function NewNoticeForm({ mode = 'new', initial }: Props) {
+  const router = useRouter()
+  const [title, setTitle] = useState(initial?.title ?? '')
+  const [body, setBody] = useState(initial?.body ?? '')
+  const [busy, setBusy] = useState(false)
+  const isEdit = mode === 'edit'
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    setBusy(true)
+    const payload = { title, body }
+
+    const url = isEdit ? `/api/notice/${initial?.id}` : '/api/notice'
+    const method = isEdit ? 'PATCH' : 'POST'
+
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    setBusy(false)
+
+    if (!res.ok) {
+      alert(isEdit ? '수정 실패' : '등록 실패')
+      return
     }
-  };
+
+    if (isEdit) {
+      router.replace(`/notice/${initial?.id}`)
+    } else {
+      router.replace('/notice')
+    }
+  }
 
   return (
-    <form onSubmit={onSubmit} className="space-y-3 rounded-xl border bg-white p-4">
-      <div>
-        <label className="mb-1 block text-sm">제목</label>
-        <input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          className="w-full rounded-lg border px-3 py-2 outline-none focus:ring"
-          required
-        />
-      </div>
-      <div>
-        <label className="mb-1 block text-sm">내용</label>
-        <textarea
-          value={content}
-          onChange={(e) => setContent(e.target.value)}
-          className="h-40 w-full resize-none rounded-lg border px-3 py-2 outline-none focus:ring"
-        />
-      </div>
-
-      {err && (
-        <div className="rounded-md bg-rose-50 px-3 py-2 text-sm text-rose-600">{err}</div>
-      )}
-
-      <div className="flex justify-end gap-2">
-        <button
-          type="button"
-          onClick={() => history.back()}
-          className="rounded-md border px-3 py-1.5 hover:bg-slate-50"
-        >
+    <form onSubmit={onSubmit} className="max-w-2xl space-y-4">
+      <input
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        placeholder="제목"
+        className="w-full rounded-lg border border-slate-200 px-3 py-2"
+        required
+      />
+      <textarea
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+        placeholder="내용"
+        className="min-h-[220px] w-full rounded-lg border border-slate-200 px-3 py-2"
+        required
+      />
+      <div className="flex gap-2">
+        <button type="submit" disabled={busy} className="btn btn-primary">
+          {busy ? (isEdit ? '수정 중…' : '등록 중…') : (isEdit ? '수정' : '등록')}
+        </button>
+        <a href={isEdit ? `/notice/${initial?.id}` : '/notice'} className="btn btn-ghost">
           취소
-        </button>
-        <button
-          type="submit"
-          disabled={loading}
-          className="rounded-md bg-slate-900 px-4 py-1.5 font-medium text-white disabled:opacity-60"
-        >
-          {loading ? "저장 중…" : "저장"}
-        </button>
+        </a>
       </div>
     </form>
-  );
+  )
 }
