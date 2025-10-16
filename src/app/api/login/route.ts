@@ -1,40 +1,33 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { cookies } from 'next/headers'
+import { NextResponse } from "next/server";
 
-// .env 값 읽기
-const CADDY_USERNAME = process.env.CADDY_USERNAME || 'caddy'
-const CADDY_PASSWORD = process.env.CADDY_PASSWORD || '1234'
-const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin'
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '1111'
+export const dynamic = "force-dynamic";
 
-// 쿠키 유틸
-function setAuthCookie(role: 'caddy'|'admin') {
-  const res = NextResponse.json({ ok: true, role })
-  // 필요시 secure: true 는 로컬에서 빼고, prod에서만 쓰세요.
-  res.cookies.set('role', role, { httpOnly: true, sameSite: 'lax', path: '/' })
-  return res
-}
+export async function POST(req: Request) {
+  const { username, password } = await req.json().catch(() => ({}));
 
-export async function POST(req: NextRequest) {
-  try {
-    const { id, password } = await req.json()
+  const ADMIN_USER = process.env.ADMIN_USER ?? "admin";
+  const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "";
+  const CADDY_USER = process.env.CADDY_USER ?? "caddy";
+  const CADDY_PASSWORD = process.env.CADDY_PASSWORD ?? "";
 
-    const uid = String(id || '').trim().toLowerCase()
-    const pw  = String(password || '').trim()
+  let role: "admin" | "caddy" | null = null;
 
-    // 관리자 먼저 체크
-    if (uid === ADMIN_USERNAME.toLowerCase() && pw === ADMIN_PASSWORD) {
-      return setAuthCookie('admin')
-    }
+  if (username === ADMIN_USER && password === ADMIN_PASSWORD) role = "admin";
+  if (username === CADDY_USER && password === CADDY_PASSWORD) role = "caddy";
 
-    // 캐디 체크
-    if (uid === CADDY_USERNAME.toLowerCase() && pw === CADDY_PASSWORD) {
-      return setAuthCookie('caddy')
-    }
-
-    return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
-  } catch (e: any) {
-    console.error('[POST /api/login] error', e)
-    return NextResponse.json({ error: 'login failed' }, { status: 400 })
+  if (!role) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+
+  const res = NextResponse.json({ ok: true, role });
+
+  // role 쿠키 설정 (서버 렌더에서만 읽으므로 httpOnly 여도 무방)
+  res.cookies.set("role", role, {
+    path: "/",
+    httpOnly: true,
+    sameSite: "lax",
+    // 필요하면 expires 나 maxAge로 지속시간도 설정
+  });
+
+  return res;
 }

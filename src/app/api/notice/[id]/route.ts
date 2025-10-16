@@ -28,7 +28,7 @@ export async function GET(_: NextRequest, { params }: { params: { id: string } }
 // 수정
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   try {
-    requireAdmin() // 관리자만 수정
+    await requireAdmin() // 관리자만 수정
 
     const id = Number(params.id)
     if (Number.isNaN(id)) {
@@ -60,7 +60,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 // 삭제
 export async function DELETE(_: NextRequest, { params }: { params: { id: string } }) {
   try {
-    requireAdmin() // 관리자만 삭제
+    await requireAdmin() // 관리자만 삭제
 
     const id = Number(params.id)
     if (Number.isNaN(id)) {

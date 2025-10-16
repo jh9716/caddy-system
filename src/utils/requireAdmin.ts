@@ -1,19 +1,16 @@
 // src/utils/requireAdmin.ts
-import { cookies } from 'next/headers';
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
-const ADMIN_COOKIE = 'admin';
+/** API 라우트에서 관리자 권한 확인 */
+export async function requireAdmin() {
+  const session = await getServerSession(authOptions);
+  const role = (session as any)?.user?.role?.toString().toLowerCase();
 
-export function isAdmin() {
-  const c = cookies().get(ADMIN_COOKIE);
-  return c?.value === '1';
-}
-
-// ✅ named export "requireAdmin" 로 정확히 내보내기
-export function requireAdmin() {
-  if (!isAdmin()) {
-    const err = new Error('unauthorized');
-    // @ts-expect-error attach status for route handlers
+  if (role !== "admin") {
+    const err: any = new Error("unauthorized");
     err.status = 401;
     throw err;
   }
+  return session;
 }

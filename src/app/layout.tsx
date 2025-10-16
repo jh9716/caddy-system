@@ -1,47 +1,49 @@
-// src/app/layout.tsx
-import './globals.css'
-import type { Metadata, Viewport } from 'next'
-import { Inter } from 'next/font/google'
-import NavBar from '@/components/NavBar'
+import "./globals.css";
+import Link from "next/link";
+import { cookies } from "next/headers";
+import LogoutButton from "@/components/LogoutButton";
 
-const inter = Inter({ subsets: ['latin'], display: 'swap' })
+export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = {
-  title: 'Verthill Caddy System',
-  description: '베르힐 캐디 관리 시스템',
-  icons: [{ rel: 'icon', url: '/favicon.ico' }],
-}
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const store = await cookies();
+  const role = store.get("role")?.value ?? null;
 
-export const viewport: Viewport = {
-  themeColor: '#0f172a',
-  colorScheme: 'light',
-}
-
-export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="ko">
-      <body className={inter.className} style={{ background: '#fafafa', color: '#0f172a' }}>
-        {/* 상단 네비게이션 */}
-        <NavBar />
+      <body className="min-h-screen bg-slate-50 text-slate-900">
+        <header className="border-b bg-white">
+          <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
+            <Link href="/" className="font-semibold">VERTHILL • Caddy</Link>
 
-        {/* 메인 컨테이너 */}
-        <main style={{ maxWidth: 1120, margin: '0 auto', padding: '28px 20px' }}>
-          {children}
-        </main>
+            <nav className="flex items-center gap-3 text-sm">
+              <Link className="rounded-md border px-3 py-1.5 hover:bg-slate-50" href="/">홈</Link>
+              <Link className="rounded-md border px-3 py-1.5 hover:bg-slate-50" href="/notice">공지</Link>
 
-        {/* 하단 푸터 */}
-        <footer
-          style={{
-            maxWidth: 1120,
-            margin: '20px auto 60px',
-            padding: '0 20px',
-            color: '#6b7280',
-            fontSize: 12,
-          }}
-        >
-          © {new Date().getFullYear()} Verthill Caddy System
-        </footer>
+              {role === "admin" && (
+                <Link className="rounded-md border px-3 py-1.5 hover:bg-slate-50" href="/manage">
+                  관리자
+                </Link>
+              )}
+              {role === "caddy" && (
+                <Link className="rounded-md border px-3 py-1.5 hover:bg-slate-50" href="/caddy">
+                  내 대시보드
+                </Link>
+              )}
+
+              {role ? (
+                <LogoutButton />
+              ) : (
+                <Link className="rounded-md border px-3 py-1.5 hover:bg-slate-50" href="/login">
+                  로그인
+                </Link>
+              )}
+            </nav>
+          </div>
+        </header>
+
+        <main className="mx-auto max-w-5xl px-4 py-8">{children}</main>
       </body>
     </html>
-  )
+  );
 }

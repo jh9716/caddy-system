@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { requireAdmin } from '@/utils/requireAdmin'   // ✅ 여기 경로 바뀜!
+import { requireAdmin } from '@/utils/requireAdmin'
 import { logAudit } from '@/lib/audit'
 
 // 캐디 수정
@@ -9,7 +9,7 @@ export async function PATCH(
   { params }: { params: { id: string } }
 ) {
   try {
-    requireAdmin() // ✅ req 넘기지 않고 단순 호출로 변경
+    await requireAdmin(); // ✅ 반드시 await
     const id = Number(params.id)
     const body = await req.json()
 
@@ -44,7 +44,7 @@ export async function DELETE(
   { params }: { params: { id: string } }
 ) {
   try {
-    requireAdmin() // ✅ 관리자 인증 체크
+    await requireAdmin(); // ✅ 반드시 await
     const id = Number(params.id)
 
     await prisma.$transaction([

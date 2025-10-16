@@ -1,9 +1,10 @@
-// src/utils/middleware.ts
-import { NextRequest } from "next/server";
+// src/middleware.ts
+export { default } from "next-auth/middleware";
 
-export function requireAdmin(req: NextRequest): { ok: boolean; admin: string } {
-  const headerPass = req.headers.get("x-admin-password") || "";
-  const headerAdmin = req.headers.get("x-admin-name") || "admin";
-  const ok = headerPass && process.env.ADMIN_PASSWORD && headerPass === process.env.ADMIN_PASSWORD;
-  return { ok: !!ok, admin: headerAdmin };
-}
+// 로그인만 필수인 경로
+export const config = {
+  matcher: [
+    "/manage/:path*",  // 관리자 대시보드 등
+    "/caddy/:path*",   // 캐디 전용 화면
+  ],
+};

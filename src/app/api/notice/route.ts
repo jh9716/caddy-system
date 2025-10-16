@@ -1,28 +1,24 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
-import { requireAdmin } from '@/lib/auth';
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { requireAdmin } from "@/utils/requireAdmin";
 
-// GET: 공지 목록
+export const dynamic = "force-dynamic";
+
 export async function GET() {
-  const rows = await prisma.notice.findMany({
-    orderBy: { createdAt: 'desc' }
+  const list = await prisma.notice.findMany({
+    orderBy: { createdAt: "desc" },
   });
-  return NextResponse.json(rows);
+  return NextResponse.json(list);
 }
 
-// POST: 공지 등록(관리자)
 export async function POST(req: NextRequest) {
-  const guard = requireAdmin(req);
-  if (guard) return guard; // 401
-
-  const { title, content, author } = await req.json();
-  if (!title || !content) {
-    return NextResponse.json({ error: 'title, content는 필수입니다.' }, { status: 400 });
+  await requireAdmin(); // 관리자만
+  const { title, content } = await req.json();
+  if (!title || String(title).trim() === "") {
+    return NextResponse.json({ error: "제목은 필수입니다." }, { status: 400 });
   }
-
-  const row = await prisma.notice.create({
-    data: { title, content, author: author ?? null },
+  const n = await prisma.notice.create({
+    data: { title: String(title), content: content ? String(content) : "" },
   });
-
-  return NextResponse.json(row, { status: 201 });
+  return NextResponse.json({ ok: true, id: n.id });
 }

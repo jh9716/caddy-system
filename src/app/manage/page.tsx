@@ -1,90 +1,92 @@
-'use client'
-import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { prisma } from "@/lib/prisma";
+import dayjs from "dayjs";
 
-type Summary = {
-  date: string
-  totalCaddies: number
-  today: { off: number; sick: number; longSick: number; duty: number; marshal: number }
-  latestNotices: { id: number; title: string; createdAt: string }[]
-}
+export const dynamic = "force-dynamic";
 
-export default function ManagePage() {
-  const router = useRouter()
-  const [loading, setLoading] = useState(true)
-  const [summary, setSummary] = useState<Summary | null>(null)
+export default async function ManagePage() {
+  const role = (await cookies()).get("role")?.value ?? null;
+  if (role !== "admin") redirect("/login");
 
-  useEffect(() => {
-    const run = async () => {
-      try {
-        const resRole = await fetch('/api/check-role', { credentials: 'include' })
-        const dataRole = await resRole.json()
-        if (dataRole.role !== 'admin') {
-          alert('관리자만 접근 가능합니다.')
-          router.push('/login')
-          return
-        }
-        const res = await fetch('/api/summary')
-        const data: Summary = await res.json()
-        setSummary(data)
-      } catch {
-        alert('요약 정보를 불러오지 못했습니다.')
-      } finally {
-        setLoading(false)
-      }
-    }
-    run()
-  }, [router])
+  const today = dayjs().startOf("day").toDate();
+  const tomorrow = dayjs(today).add(1, "day").toDate();
 
-  if (loading) return <p style={{ textAlign: 'center', marginTop: 100 }}>로딩 중...</p>
+  const [
+    totalCaddies,
+    off,
+    sick,
+    longSick,
+    duty,
+    marshal,
+    latestNotices,
+  ] = await Promise.all([
+    prisma.caddy.count(),
+    prisma.assignment.count({
+      where: { type: "OFF", startDate: { lte: tomorrow }, endDate: { gte: today } },
+    }),
+    prisma.assignment.count({
+      where: { type: "SICK", startDate: { lte: tomorrow }, endDate: { gte: today } },
+    }),
+    prisma.assignment.count({
+      where: { type: "LONG_SICK", startDate: { lte: tomorrow }, endDate: { gte: today } },
+    }),
+    prisma.assignment.count({
+      where: { type: "DUTY", startDate: { lte: tomorrow }, endDate: { gte: today } },
+    }),
+    prisma.assignment.count({
+      where: { type: "MARSHAL", startDate: { lte: tomorrow }, endDate: { gte: today } },
+    }),
+    prisma.notice.findMany({
+      select: { id: true, title: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+      take: 5,
+    }),
+  ]);
 
   return (
-    <div style={{ maxWidth: 1100, margin: '20px auto' }}>
-      <h2 style={{ fontSize: 22, fontWeight: 800, marginBottom: 12 }}>관리자 대시보드</h2>
-      {summary && (
-        <>
-          <p style={{ marginBottom: 14, color: '#64748b' }}>{summary.date} 요약</p>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12 }}>
-            <Card title="총 캐디" value={summary.totalCaddies} />
-            <Card title="휴무" value={summary.today.off} />
-            <Card title="병가" value={summary.today.sick} />
-            <Card title="장기병가" value={summary.today.longSick} />
-            <Card title="당번" value={summary.today.duty} />
-            <Card title="마샬" value={summary.today.marshal} />
-          </div>
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-2xl font-bold">관리자 대시보드</h2>
+        <p className="text-slate-500">{dayjs().format("YYYY-MM-DD")} 요약</p>
+      </div>
 
-          <div style={{ marginTop: 28 }}>
-            <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>최근 공지</h3>
-            <ul style={{ border: '1px solid #e5e7eb', borderRadius: 10, overflow: 'hidden' }}>
-              {summary.latestNotices.length === 0 && (
-                <li style={{ padding: 12, color: '#64748b' }}>공지 없음</li>
-              )}
-              {summary.latestNotices.map(n => (
-                <li key={n.id} style={{ padding: 12, borderTop: '1px solid #f1f5f9' }}>
-                  <a href={`/notice/${n.id}`} style={{ textDecoration: 'none', color: '#0f172a' }}>
-                    {n.title}
-                  </a>
-                  <span style={{ marginLeft: 8, fontSize: 12, color: '#94a3b8' }}>
-                    {new Date(n.createdAt).toLocaleString()}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </>
-      )}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
+        <Card title="총 캐디" value={totalCaddies} />
+        <Card title="휴무" value={off} />
+        <Card title="병가" value={sick} />
+        <Card title="장기병가" value={longSick} />
+        <Card title="당번" value={duty} />
+        <Card title="마샬" value={marshal} />
+      </div>
+
+      <section className="mt-4">
+        <h3 className="mb-2 text-lg font-semibold">최근 공지</h3>
+        <ul className="divide-y rounded-xl border bg-white">
+          {latestNotices.length === 0 && (
+            <li className="p-3 text-slate-500">공지 없음</li>
+          )}
+          {latestNotices.map((n) => (
+            <li key={n.id} className="p-3">
+              <a className="hover:underline" href={`/notice/${n.id}`}>
+                {n.title}
+              </a>
+              <span className="ml-2 text-xs text-slate-500">
+                {dayjs(n.createdAt).format("YYYY-MM-DD HH:mm")}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </section>
     </div>
-  )
+  );
 }
 
 function Card({ title, value }: { title: string; value: number }) {
   return (
-    <div style={{
-      border: '1px solid #e5e7eb', borderRadius: 12, padding: 12,
-      background: '#fff', minHeight: 80
-    }}>
-      <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>{title}</div>
-      <div style={{ fontSize: 22, fontWeight: 800 }}>{value}</div>
+    <div className="rounded-xl border bg-white p-4">
+      <div className="text-xs text-slate-500">{title}</div>
+      <div className="mt-1 text-2xl font-semibold">{value}</div>
     </div>
-  )
+  );
 }
