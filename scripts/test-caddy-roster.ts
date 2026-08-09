@@ -14,7 +14,7 @@
  *         2. ALLOW_DB_TEST=1 환경변수를 명시할 것
  *
  * 운영 DB 검증은 브라우저 /manage/caddies 또는 scripts/test-caddy-roster-unit.ts 를 사용하세요.
- * 자세한 내용: scripts/test-caddy-roster.UNSAFE.md
+ * (DB 쓰기 없는 규칙 검증: scripts/test-caddy-roster-unit.ts)
  * ═══════════════════════════════════════════════════════════════════════════
  */
 

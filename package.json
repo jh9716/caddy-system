@@ -12,7 +12,8 @@
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "vercel-build": "npm run db:generate && npm run db:deploy && next build",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "test:roster-unit": "npx tsx scripts/test-caddy-roster-unit.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",

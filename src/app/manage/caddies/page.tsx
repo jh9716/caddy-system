@@ -6,12 +6,35 @@ type Caddy = { id: number; name: string; team: string; status?: string };
 type Note = { id: number; text: string; createdAt?: string };
 type Extra = { id: number; tag: string; date?: string };
 
+type ImportPreview = {
+  summary: {
+    update: number;
+    unchanged: number;
+    new: number;
+    needsReview: number;
+    missingInImport: number;
+  };
+  updates: Array<{ id: number; name: string; currentTeam: string; nextTeam: string }>;
+  creates: Array<{ name: string; team: string; rowNumber: number }>;
+  needsReview: Array<{ name: string; team: string; rowNumber: number; reason: string; candidateIds?: number[] }>;
+  missingInImport: Array<{ id: number; name: string; team: string }>;
+  applyPayload: {
+    updates: Array<{ id: number; team: string }>;
+    creates: Array<{ name: string; team: string }>;
+  };
+  touchesEmploymentStatus: false;
+};
+
 export default function ManageCaddiesPage() {
   const [rows, setRows] = useState<Caddy[]>([]);
   const [loading, setLoading] = useState(false);
 
   const [newTeam, setNewTeam] = useState('');
   const [newName, setNewName] = useState('');
+
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<ImportPreview | null>(null);
+  const [importBusy, setImportBusy] = useState(false);
 
   // 펼쳐진 행(id)
   const [openId, setOpenId] = useState<number | null>(null);
@@ -158,9 +181,133 @@ export default function ManageCaddiesPage() {
     setEndDate('');
   }
 
+  async function runImportPreview() {
+    if (!importFile) return alert('CSV 파일을 선택하세요.');
+    setImportBusy(true);
+    setPreview(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', importFile);
+      const res = await fetch('/api/caddies/import/preview', {
+        method: 'POST',
+        body: fd,
+      });
+      const data = await res.json();
+      if (!res.ok) return alert(data?.error || '미리보기 실패');
+      setPreview(data as ImportPreview);
+    } finally {
+      setImportBusy(false);
+    }
+  }
+
+  async function runImportApply() {
+    if (!preview) return;
+    if (preview.summary.needsReview > 0) {
+      const ok = confirm(
+        `확인 필요 ${preview.summary.needsReview}건은 적용되지 않습니다. 조 변경 ${preview.summary.update}건 / 신규 ${preview.summary.new}건만 적용할까요?`
+      );
+      if (!ok) return;
+    } else if (!confirm(`조 변경 ${preview.summary.update}건 / 신규 ${preview.summary.new}건을 적용할까요? (기존 ID 유지)`)) {
+      return;
+    }
+
+    setImportBusy(true);
+    try {
+      const res = await fetch('/api/caddies/import/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ applyPayload: preview.applyPayload }),
+      });
+      const data = await res.json();
+      if (!res.ok) return alert(data?.error || '적용 실패');
+      alert(`적용 완료: 조 변경 ${data.updated} / 신규 ${data.created}`);
+      setPreview(null);
+      setImportFile(null);
+      await load();
+    } finally {
+      setImportBusy(false);
+    }
+  }
+
   return (
     <div style={{ maxWidth: 1000, margin: '0 auto' }}>
       <h2 style={{ fontSize: 22, fontWeight: 800, marginBottom: 12 }}>👥 캐디 관리</h2>
+
+      {/* 명단 import */}
+      <div style={{ marginBottom: 20, paddingBottom: 16, borderBottom: '1px solid #e5e7eb' }}>
+        <div style={{ fontWeight: 700, marginBottom: 8 }}>명단 CSV 가져오기</div>
+        <p style={{ color: '#64748b', fontSize: 13, marginTop: 0, marginBottom: 8 }}>
+          이름 기준으로 기존 ID를 유지하고, 조만 갱신합니다. 박준형 / 김기환2 / 김예진1 / 김예진2는 확인 필요로 분리되며 자동 적용되지 않습니다.
+          휴무·병가·찾근·마샬·당번은 퇴사로 처리하지 않습니다.
+        </p>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <input
+            type="file"
+            accept=".csv,text/csv"
+            onChange={(e) => {
+              setImportFile(e.target.files?.[0] ?? null);
+              setPreview(null);
+            }}
+          />
+          <button onClick={runImportPreview} disabled={importBusy || !importFile} style={btnDark}>
+            미리보기
+          </button>
+          <button
+            onClick={runImportApply}
+            disabled={importBusy || !preview || (preview.summary.update === 0 && preview.summary.new === 0)}
+            style={btn}
+          >
+            적용
+          </button>
+        </div>
+        {preview && (
+          <div style={{ marginTop: 12, fontSize: 13, color: '#0f172a' }}>
+            <div style={{ marginBottom: 8 }}>
+              조 변경 {preview.summary.update} · 동일 {preview.summary.unchanged} · 신규 {preview.summary.new} ·
+              확인 필요 {preview.summary.needsReview} · 명단 없음(수동확인) {preview.summary.missingInImport}
+            </div>
+            {preview.needsReview.length > 0 && (
+              <div style={{ marginBottom: 8 }}>
+                <div style={{ fontWeight: 600, color: '#b45309' }}>확인 필요 (자동 매칭/생성 안 함)</div>
+                <ul style={{ margin: '4px 0', paddingLeft: 18 }}>
+                  {preview.needsReview.map((r, i) => (
+                    <li key={`${r.name}-${r.rowNumber}-${i}`}>
+                      {r.team} / {r.name} — {r.reason}
+                      {r.candidateIds?.length ? ` (후보 id: ${r.candidateIds.join(', ')})` : ''}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {preview.updates.length > 0 && (
+              <div style={{ marginBottom: 8 }}>
+                <div style={{ fontWeight: 600 }}>조 변경 (ID 유지)</div>
+                <ul style={{ margin: '4px 0', paddingLeft: 18 }}>
+                  {preview.updates.slice(0, 30).map((u) => (
+                    <li key={u.id}>
+                      id {u.id} {u.name}: {u.currentTeam} → {u.nextTeam}
+                    </li>
+                  ))}
+                  {preview.updates.length > 30 && <li>…외 {preview.updates.length - 30}건</li>}
+                </ul>
+              </div>
+            )}
+            {preview.creates.length > 0 && (
+              <div style={{ marginBottom: 8 }}>
+                <div style={{ fontWeight: 600 }}>신규 추가</div>
+                <ul style={{ margin: '4px 0', paddingLeft: 18 }}>
+                  {preview.creates.slice(0, 30).map((c, i) => (
+                    <li key={`${c.name}-${c.rowNumber}-${i}`}>
+                      {c.team} / {c.name}
+                    </li>
+                  ))}
+                  {preview.creates.length > 30 && <li>…외 {preview.creates.length - 30}건</li>}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* 추가 폼 */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
