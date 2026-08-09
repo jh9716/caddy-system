@@ -6,6 +6,15 @@ type Caddy = { id: number; name: string; team: string; status?: string };
 type Note = { id: number; text: string; createdAt?: string };
 type Extra = { id: number; tag: string; date?: string };
 
+type PreviewLine = {
+  action: 'update' | 'unchanged' | 'create' | 'needsReview' | 'missingInImport';
+  id: number | null;
+  name: string;
+  currentTeam: string | null;
+  nextTeam: string | null;
+  reason?: string;
+};
+
 type ImportPreview = {
   summary: {
     update: number;
@@ -18,11 +27,20 @@ type ImportPreview = {
   creates: Array<{ name: string; team: string; rowNumber: number }>;
   needsReview: Array<{ name: string; team: string; rowNumber: number; reason: string; candidateIds?: number[] }>;
   missingInImport: Array<{ id: number; name: string; team: string }>;
+  lines: PreviewLine[];
   applyPayload: {
     updates: Array<{ id: number; team: string }>;
     creates: Array<{ name: string; team: string }>;
   };
   touchesEmploymentStatus: false;
+};
+
+const ACTION_LABEL: Record<PreviewLine['action'], string> = {
+  update: 'update (조 변경)',
+  unchanged: 'unchanged',
+  create: 'create (신규)',
+  needsReview: 'needsReview (확인 필요)',
+  missingInImport: 'missingInImport (명단 없음)',
 };
 
 export default function ManageCaddiesPage() {
@@ -235,15 +253,16 @@ export default function ManageCaddiesPage() {
 
       {/* 명단 import */}
       <div style={{ marginBottom: 20, paddingBottom: 16, borderBottom: '1px solid #e5e7eb' }}>
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>명단 CSV 가져오기</div>
+        <div style={{ fontWeight: 700, marginBottom: 8 }}>명단 가져오기 (CSV / Excel)</div>
         <p style={{ color: '#64748b', fontSize: 13, marginTop: 0, marginBottom: 8 }}>
-          이름 기준으로 기존 ID를 유지하고, 조만 갱신합니다. 박준형 / 김기환2 / 김예진1 / 김예진2는 확인 필요로 분리되며 자동 적용되지 않습니다.
-          휴무·병가·찾근·마샬·당번은 퇴사로 처리하지 않습니다.
+          CSV는 team,name 열 / Excel은 1조~12조 가로 + 카트·성명 레이아웃을 지원합니다.
+          카트번호·고정카트 색은 저장하지 않습니다. 미리보기 확인 후에만 적용하세요.
+          박준형 / 김기환2 / 김예진1 / 김예진2는 확인 필요로 분리됩니다.
         </p>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <input
             type="file"
-            accept=".csv,text/csv"
+            accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
             onChange={(e) => {
               setImportFile(e.target.files?.[0] ?? null);
               setPreview(null);
@@ -266,45 +285,44 @@ export default function ManageCaddiesPage() {
               조 변경 {preview.summary.update} · 동일 {preview.summary.unchanged} · 신규 {preview.summary.new} ·
               확인 필요 {preview.summary.needsReview} · 명단 없음(수동확인) {preview.summary.missingInImport}
             </div>
-            {preview.needsReview.length > 0 && (
-              <div style={{ marginBottom: 8 }}>
-                <div style={{ fontWeight: 600, color: '#b45309' }}>확인 필요 (자동 매칭/생성 안 함)</div>
-                <ul style={{ margin: '4px 0', paddingLeft: 18 }}>
-                  {preview.needsReview.map((r, i) => (
-                    <li key={`${r.name}-${r.rowNumber}-${i}`}>
-                      {r.team} / {r.name} — {r.reason}
-                      {r.candidateIds?.length ? ` (후보 id: ${r.candidateIds.join(', ')})` : ''}
-                    </li>
+            <div style={{ overflowX: 'auto', maxHeight: 420, border: '1px solid #e5e7eb' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
+                <thead>
+                  <tr style={{ background: '#f8fafc', position: 'sticky', top: 0 }}>
+                    <th style={th}>기존 ID</th>
+                    <th style={th}>이름</th>
+                    <th style={th}>기존 조</th>
+                    <th style={th}>최신 조</th>
+                    <th style={th}>처리 결과</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(preview.lines ?? []).map((line, idx) => (
+                    <tr
+                      key={`${line.action}-${line.id ?? 'x'}-${line.name}-${idx}`}
+                      style={{
+                        borderTop: '1px solid #f1f5f9',
+                        background:
+                          line.action === 'needsReview'
+                            ? '#fff7ed'
+                            : line.action === 'missingInImport'
+                              ? '#f8fafc'
+                              : undefined,
+                      }}
+                    >
+                      <td style={td}>{line.id ?? '-'}</td>
+                      <td style={{ ...td, textAlign: 'left' }}>{line.name}</td>
+                      <td style={td}>{line.currentTeam ?? '-'}</td>
+                      <td style={td}>{line.nextTeam ?? '-'}</td>
+                      <td style={{ ...td, textAlign: 'left' }}>
+                        {ACTION_LABEL[line.action]}
+                        {line.reason ? ` — ${line.reason}` : ''}
+                      </td>
+                    </tr>
                   ))}
-                </ul>
-              </div>
-            )}
-            {preview.updates.length > 0 && (
-              <div style={{ marginBottom: 8 }}>
-                <div style={{ fontWeight: 600 }}>조 변경 (ID 유지)</div>
-                <ul style={{ margin: '4px 0', paddingLeft: 18 }}>
-                  {preview.updates.slice(0, 30).map((u) => (
-                    <li key={u.id}>
-                      id {u.id} {u.name}: {u.currentTeam} → {u.nextTeam}
-                    </li>
-                  ))}
-                  {preview.updates.length > 30 && <li>…외 {preview.updates.length - 30}건</li>}
-                </ul>
-              </div>
-            )}
-            {preview.creates.length > 0 && (
-              <div style={{ marginBottom: 8 }}>
-                <div style={{ fontWeight: 600 }}>신규 추가</div>
-                <ul style={{ margin: '4px 0', paddingLeft: 18 }}>
-                  {preview.creates.slice(0, 30).map((c, i) => (
-                    <li key={`${c.name}-${c.rowNumber}-${i}`}>
-                      {c.team} / {c.name}
-                    </li>
-                  ))}
-                  {preview.creates.length > 30 && <li>…외 {preview.creates.length - 30}건</li>}
-                </ul>
-              </div>
-            )}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </div>

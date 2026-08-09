@@ -15,6 +15,7 @@ import {
   normalizePersonName,
   shouldTouchEmploymentStatus,
 } from "./caddyImportRules";
+import { parseXlsxRosterBuffer } from "./caddyImportXlsx";
 
 export type ImportRow = {
   name: string;
@@ -64,6 +65,23 @@ export type PreviewMissing = {
   team: string;
 };
 
+export type PreviewAction =
+  | "update"
+  | "unchanged"
+  | "create"
+  | "needsReview"
+  | "missingInImport";
+
+/** Preview 테이블용 평탄 행 */
+export type PreviewLine = {
+  action: PreviewAction;
+  id: number | null;
+  name: string;
+  currentTeam: string | null;
+  nextTeam: string | null;
+  reason?: string;
+};
+
 export type ApplyPayload = {
   updates: Array<{ id: number; team: string }>;
   creates: Array<{ name: string; team: string }>;
@@ -82,6 +100,8 @@ export type ImportPreview = {
   creates: PreviewCreate[];
   needsReview: PreviewNeedsReview[];
   missingInImport: PreviewMissing[];
+  /** UI 표시용: id / 이름 / 기존 조 / 최신 조 / 처리 결과 */
+  lines: PreviewLine[];
   applyPayload: ApplyPayload;
   /** 항상 false — employmentStatus 변경 없음 */
   touchesEmploymentStatus: false;
@@ -120,21 +140,9 @@ function splitCsvLine(line: string): string[] {
   return out.map((s) => s.trim());
 }
 
-/**
- * CSV 파싱. 헤더에 team,name 필요.
- * id 컬럼이 있어도 매칭에 사용하지 않음(이름 기준).
- */
-export function parseImportFile(buffer: Buffer | string, filename = "import.csv"): ImportRow[] {
-  const text = typeof buffer === "string" ? buffer : buffer.toString("utf8");
+function parseCsvText(text: string): ImportRow[] {
   const cleaned = text.replace(/^\uFEFF/, "").trim();
   if (!cleaned) return [];
-
-  const lower = filename.toLowerCase();
-  if (lower.endsWith(".xlsx") || lower.endsWith(".xls")) {
-    throw new Error(
-      "XLSX 파서는 아직 포함되지 않았습니다. CSV(team,name)로 업로드하세요."
-    );
-  }
 
   const lines = cleaned.split(/\r?\n/).filter((l) => l.trim().length > 0);
   if (lines.length < 2) return [];
@@ -159,6 +167,95 @@ export function parseImportFile(buffer: Buffer | string, filename = "import.csv"
     rows.push({ name, team, rowNumber: i, raw });
   }
   return rows;
+}
+
+/**
+ * CSV(team,name) 또는 XLSX/XLS(1~12조 가로 + 카트/성명) 파싱.
+ * - 카트번호·고정카트 색·주중반/주말반·휴무 등은 DB에 반영하지 않음
+ * - id 컬럼이 있어도 매칭에 사용하지 않음(이름 기준)
+ */
+export function parseImportFile(buffer: Buffer | string, filename = "import.csv"): ImportRow[] {
+  const lower = filename.toLowerCase();
+  const isExcel = lower.endsWith(".xlsx") || lower.endsWith(".xls");
+
+  if (isExcel) {
+    if (typeof buffer === "string") {
+      throw new Error("XLSX/XLS는 binary Buffer로 업로드해야 합니다.");
+    }
+    return parseXlsxRosterBuffer(buffer, filename);
+  }
+
+  const text = typeof buffer === "string" ? buffer : buffer.toString("utf8");
+  return parseCsvText(text);
+}
+
+export function buildPreviewLines(preview: Omit<ImportPreview, "lines">): PreviewLine[] {
+  const lines: PreviewLine[] = [];
+
+  for (const u of preview.updates) {
+    lines.push({
+      action: "update",
+      id: u.id,
+      name: u.name,
+      currentTeam: u.currentTeam,
+      nextTeam: u.nextTeam,
+    });
+  }
+  for (const u of preview.unchanged) {
+    lines.push({
+      action: "unchanged",
+      id: u.id,
+      name: u.name,
+      currentTeam: u.team,
+      nextTeam: u.team,
+    });
+  }
+  for (const c of preview.creates) {
+    lines.push({
+      action: "create",
+      id: null,
+      name: c.name,
+      currentTeam: null,
+      nextTeam: c.team,
+    });
+  }
+  for (const r of preview.needsReview) {
+    const ids = r.candidateIds ?? [];
+    lines.push({
+      action: "needsReview",
+      id: ids.length === 1 ? ids[0] : null,
+      name: r.name,
+      currentTeam: null,
+      nextTeam: r.team,
+      reason:
+        ids.length > 1
+          ? `${r.reason} (후보 id: ${ids.join(", ")})`
+          : r.reason,
+    });
+  }
+  for (const m of preview.missingInImport) {
+    lines.push({
+      action: "missingInImport",
+      id: m.id,
+      name: m.name,
+      currentTeam: m.team,
+      nextTeam: null,
+      reason: "최신 명단에 없음 — 자동 퇴사/삭제 없음",
+    });
+  }
+
+  const order: Record<PreviewAction, number> = {
+    needsReview: 0,
+    update: 1,
+    create: 2,
+    unchanged: 3,
+    missingInImport: 4,
+  };
+  return lines.sort((a, b) => {
+    const d = order[a.action] - order[b.action];
+    if (d !== 0) return d;
+    return (a.id ?? 1e12) - (b.id ?? 1e12) || a.name.localeCompare(b.name, "ko");
+  });
 }
 
 function groupByName(caddies: ExistingCaddy[]): Map<string, ExistingCaddy[]> {
@@ -251,7 +348,7 @@ export function buildImportPreview(
     creates: creates.map((c) => ({ name: c.name, team: c.team })),
   };
 
-  return {
+  const base = {
     summary: {
       update: updates.length,
       unchanged: unchanged.length,
@@ -265,7 +362,12 @@ export function buildImportPreview(
     needsReview,
     missingInImport,
     applyPayload,
-    touchesEmploymentStatus: false,
+    touchesEmploymentStatus: false as const,
+  };
+
+  return {
+    ...base,
+    lines: buildPreviewLines(base),
   };
 }
 

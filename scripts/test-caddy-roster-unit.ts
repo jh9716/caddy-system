@@ -16,6 +16,10 @@ import {
   isNeedsReviewName,
   shouldTouchEmploymentStatus,
 } from "../lib/caddyImportRules";
+import {
+  buildTestRosterXlsxBuffer,
+  parseTeamNameMatrix,
+} from "../lib/caddyImportXlsx";
 
 let passed = 0;
 let failed = 0;
@@ -165,6 +169,77 @@ async function main() {
     rejected = true;
   }
   assert(rejected, "reject create for needsReview name");
+
+  section("XLSX horizontal 1~12조 cart/name layout");
+  const aoa = [
+    ["1조", "", "2조", "", "12조", "", "주중반", ""],
+    ["카트", "성명", "카트", "성명", "카트", "성명", "카트", "성명"],
+    [1, "이영진", 5, "이동대상", "", "카트없는사람", 9, "주중반사람"],
+    ["", "박서진2", "", "신규자", "", "", "", ""],
+    [2, "박준형", "", "", "", "", "", ""],
+  ];
+  const matrixRows = parseTeamNameMatrix(aoa.map((r) => r.map((c) => String(c ?? ""))));
+  assert(
+    matrixRows.some((r) => r.name === "이영진" && r.team === "1조"),
+    "xlsx matrix: 이영진 -> 1조"
+  );
+  assert(
+    matrixRows.some((r) => r.name === "카트없는사람" && r.team === "12조"),
+    "empty cart still included"
+  );
+  assert(
+    matrixRows.some((r) => r.name === "박서진2" && r.team === "1조"),
+    "name without cart on next row"
+  );
+  assert(
+    !matrixRows.some((r) => r.name === "주중반사람"),
+    "주중반 ignored in this stage"
+  );
+
+  const xbuf = buildTestRosterXlsxBuffer(aoa);
+  const xrows = parseImportFile(xbuf, "roster.xlsx");
+  assert(xrows.length >= 5, "parseImportFile xlsx returns rows");
+  assert(
+    xrows.some((r) => r.name === "이동대상" && r.team === "2조"),
+    "xlsx file: 이동대상 -> 2조"
+  );
+
+  const xExisting: ExistingCaddy[] = [
+    { id: 1, name: "이영진", team: "1조" },
+    { id: 2, name: "박서진2", team: "8조" }, // will update to 1조
+    { id: 10, name: "이동대상", team: "3조" }, // update to 2조
+    { id: 20, name: "박준형", team: "3조" },
+    { id: 30, name: "DB만존재", team: "8조" },
+  ];
+  const xPreview = buildImportPreview(xrows, xExisting);
+  assert(Array.isArray(xPreview.lines) && xPreview.lines.length > 0, "preview.lines present");
+  assert(
+    xPreview.lines.some(
+      (l) => l.action === "update" && l.id === 2 && l.currentTeam === "8조" && l.nextTeam === "1조"
+    ),
+    "lines show id/old/new team for update"
+  );
+  assert(
+    xPreview.lines.some((l) => l.action === "needsReview" && l.name === "박준형"),
+    "lines include needsReview"
+  );
+  assert(
+    xPreview.lines.some((l) => l.action === "create" && l.name === "신규자"),
+    "lines include create"
+  );
+  assert(
+    xPreview.lines.some((l) => l.action === "missingInImport" && l.id === 30),
+    "lines include missingInImport"
+  );
+  assert(
+    !JSON.stringify(xPreview.applyPayload).includes("cart"),
+    "applyPayload has no cart field"
+  );
+  assert(xPreview.touchesEmploymentStatus === false, "xlsx preview no employmentStatus");
+
+  // CSV still works
+  const csvStill = parseImportFile("team,name\n3조,홍길동\n", "a.csv");
+  assert(csvStill[0]?.name === "홍길동" && csvStill[0]?.team === "3조", "CSV path still works");
 
   console.log(`\nDONE: ${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);
