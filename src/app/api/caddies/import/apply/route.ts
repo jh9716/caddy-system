@@ -101,10 +101,13 @@ export async function POST(req: NextRequest) {
         updates: payload.updates.map((u) => ({
           id: Number(u.id),
           team: String(u.team),
+          // extras는 Preview 전용 — DB 컬럼 없음, 저장하지 않음
+          extras: [],
         })),
         creates: payload.creates.map((c) => ({
           name: String(c.name),
           team: String(c.team),
+          extras: [],
         })),
       },
       prisma,

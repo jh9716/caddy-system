@@ -31,16 +31,26 @@ enum ShiftVariant {
 }
 
 model Caddy {
-  id          Int          @id @default(autoincrement())
-  name        String
-  team        String
-  status      String?      @default("근무중")
-  memo        String?
-  assignments Assignment[]
-  schedules   Schedule[]
-  shiftDuties ShiftDuty[]
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  id               Int          @id @default(autoincrement())
+  name             String
+  team             String
+  /// 조 내 표시 순번 (작을수록 위)
+  teamOrder        Int          @default(0)
+  /// 재직 | 퇴사  (물리 DELETE 대신 사용)
+  employmentStatus String       @default("재직")
+  /// 주중반 / 주말반 / 드라이빙 등 병행 분류
+  extraFlags       String[]     @default([])
+  /// 레거시 근무 상태 문자열 (가용 배지와 별개, 선택)
+  status           String?      @default("근무중")
+  memo             String?
+  assignments      Assignment[]
+  schedules        Schedule[]
+  shiftDuties      ShiftDuty[]
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  @@index([team, teamOrder])
+  @@index([employmentStatus])
 }
 
 model Assignment {

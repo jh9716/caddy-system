@@ -30,9 +30,10 @@ export async function GET(req: NextRequest) {
     }
     const { start, end } = getDayRange(ymd)
 
-    // 팀 + 입력순(=id asc)
+    // 팀 + 조내순번 + id (퇴사자는 가용표에서 제외)
     const caddies = await prisma.caddy.findMany({
-      orderBy: [{ team: 'asc' }, { id: 'asc' }],
+      where: { employmentStatus: '재직' },
+      orderBy: [{ team: 'asc' }, { teamOrder: 'asc' }, { id: 'asc' }],
       select: { id: true, name: true, team: true },
     })
 
@@ -85,7 +86,10 @@ export async function GET(req: NextRequest) {
     }
 
     // 1조~8조 순서 우선
-    const teamOrder = ['1조', '2조', '3조', '4조', '5조', '6조', '7조', '8조']
+    const teamOrder = [
+      '1조', '2조', '3조', '4조', '5조', '6조', '7조', '8조',
+      '9조', '10조', '11조', '12조', '주중반', '주말반', '드라이빙',
+    ]
     const allTeams = Array.from(byTeam.keys())
     const orderedTeams = [
       ...teamOrder.filter(t => byTeam.has(t)),

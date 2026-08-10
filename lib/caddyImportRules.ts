@@ -72,7 +72,7 @@ export function isExtraFlag(team: string): team is ExtraFlag {
 
 export function isNeedsReviewName(name: string): boolean {
   const n = normalizePersonName(name);
-  return (NEEDS_REVIEW_NAMES as readonly string).includes(n);
+  return (NEEDS_REVIEW_NAMES as readonly string[]).includes(n);
 }
 
 export function isNonResignationStatus(status: string | null | undefined): boolean {

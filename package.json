@@ -14,6 +14,7 @@
     "vercel-build": "npm run db:generate && npm run db:deploy && next build",
     "postinstall": "prisma generate",
     "test:roster-unit": "npx tsx scripts/test-caddy-roster-unit.ts",
+    "test:manage-unit": "npx tsx scripts/test-caddy-manage-unit.ts",
     "preview:roster": "npx tsx scripts/preview-roster-import.ts",
     "inspect:db-readonly": "npx tsx scripts/inspect-db-schema-readonly.ts"
   },
