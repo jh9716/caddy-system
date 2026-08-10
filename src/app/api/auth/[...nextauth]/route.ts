@@ -4,6 +4,7 @@ import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
+import { normalizeAppRole } from "@/lib/sessionCookies";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,8 +46,10 @@ export const authOptions: NextAuthOptions = {
         if (!user) return null;
         const ok = await bcrypt.compare(creds.password, user.password);
         if (!ok) return null;
+        const role = normalizeAppRole(user.role);
+        if (!role) return null;
 
-        return { id: String(user.id), name: user.username, role: user.role };
+        return { id: String(user.id), name: user.username, role };
       },
     }),
   ],
