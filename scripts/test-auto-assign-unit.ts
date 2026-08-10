@@ -14,6 +14,7 @@ import {
   isCompatibleOneTwoPair,
   minutesBetweenReservations,
   reasonForFixedType,
+  reflowRegularAssignments,
   REASON,
   type AutoAssignCaddy,
   type AutoAssignReservation,
@@ -1772,6 +1773,446 @@ section("고정/찾근: 배치 후 일반 순번 정상");
     "pointer continues"
   );
   assert(result.meta.availableCount === 5, "fixed caddy not in available pool");
+}
+
+section("reflow: 일반 예약 1건 캔슬 → 뒤 순번 밀림");
+{
+  const date = "2026-10-10";
+  const pool = makeCaddies(5, 1);
+  const ordered = [...pool].sort(compareCaddyOrder);
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      {
+        id: "R1",
+        date,
+        course: "SKY",
+        shift: "1부",
+        teeTime: "07:00",
+        teamName: "a",
+        rawRowIndex: 2,
+      },
+      {
+        id: "R2",
+        date,
+        course: "SKY",
+        shift: "1부",
+        teeTime: "07:08",
+        teamName: "b",
+        rawRowIndex: 3,
+      },
+      {
+        id: "R3",
+        date,
+        course: "SKY",
+        shift: "1부",
+        teeTime: "07:16",
+        teamName: "c",
+        rawRowIndex: 4,
+      },
+    ],
+  });
+  const reflow = reflowRegularAssignments({
+    previous,
+    regularCaddyPool: pool,
+    events: [{ type: "CANCEL_RESERVATION", reservationId: "R1" }],
+  });
+  assert(reflow.reason === REASON.REGULAR_CANCEL_REFLOW, "CANCEL_REFLOW");
+  assert(reflow.after.regularAssignments.length === 2, "2 left");
+  assert(
+    reflow.after.regularAssignments[0].caddy.id === ordered[0].id &&
+      reflow.after.regularAssignments[0].reservation.id === "R2",
+    "first caddy → R2"
+  );
+  assert(
+    reflow.changes.some(
+      (c) =>
+        c.caddy.id === ordered[0].id && c.kind === "movedBackward"
+    ),
+    "cancelled slot caddy movedBackward"
+  );
+  assert(
+    reflow.changes.some(
+      (c) => c.caddy.id === ordered[2].id && c.kind === "becameUnassigned"
+    ),
+    "last becameUnassigned"
+  );
+}
+
+section("reflow: 일반 예약 1건 추가 → 앞 순번 당김");
+{
+  const date = "2026-10-11";
+  const pool = makeCaddies(5, 1);
+  const ordered = [...pool].sort(compareCaddyOrder);
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      {
+        id: "R2",
+        date,
+        course: "OCEAN",
+        shift: "1부",
+        teeTime: "08:00",
+        teamName: "b",
+        rawRowIndex: 2,
+      },
+      {
+        id: "R3",
+        date,
+        course: "OCEAN",
+        shift: "1부",
+        teeTime: "08:08",
+        teamName: "c",
+        rawRowIndex: 3,
+      },
+    ],
+  });
+  const reflow = reflowRegularAssignments({
+    previous,
+    regularCaddyPool: pool,
+    events: [
+      {
+        type: "ADD_RESERVATION",
+        reservation: {
+          id: "R1",
+          date,
+          course: "OCEAN",
+          shift: "1부",
+          teeTime: "07:50",
+          teamName: "new",
+          rawRowIndex: 1,
+        },
+      },
+    ],
+  });
+  assert(reflow.reason === REASON.REGULAR_ADD_REFLOW, "ADD_REFLOW");
+  assert(reflow.after.regularAssignments.length === 3, "3 assigned");
+  assert(
+    reflow.after.regularAssignments[0].reservation.id === "R1",
+    "new earliest first"
+  );
+  assert(
+    reflow.changes.some(
+      (c) => c.caddy.id === ordered[0].id && c.kind === "movedForward"
+    ),
+    "first caddy pulled forward to earlier tee"
+  );
+  assert(
+    reflow.changes.some((c) => c.kind === "newlyAssigned"),
+    "newlyAssigned appears"
+  );
+}
+
+section("reflow: 1부 변경 → 2부 포인터 영향 / 2부 → 3부");
+{
+  const date = "2026-10-12";
+  const pool = makeCaddies(6, 1);
+  const ordered = [...pool].sort(compareCaddyOrder);
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      {
+        id: "S1A",
+        date,
+        course: "LAKE",
+        shift: "1부",
+        teeTime: "07:00",
+        teamName: "1a",
+        rawRowIndex: 2,
+      },
+      {
+        id: "S1B",
+        date,
+        course: "LAKE",
+        shift: "1부",
+        teeTime: "07:08",
+        teamName: "1b",
+        rawRowIndex: 3,
+      },
+      {
+        id: "S2A",
+        date,
+        course: "LAKE",
+        shift: "2부",
+        teeTime: "13:00",
+        teamName: "2a",
+        rawRowIndex: 4,
+      },
+      {
+        id: "S3A",
+        date,
+        course: "LAKE",
+        shift: "3부",
+        teeTime: "16:00",
+        teamName: "3a",
+        rawRowIndex: 5,
+      },
+    ],
+  });
+  // before: seq0,1 → 1부 / seq2 → 2부 / seq3 → 3부
+  assert(
+    previous.regularAssignments.find((a) => a.reservation.id === "S2A")?.caddy
+      .id === ordered[2].id,
+    "2부 starts at seq2"
+  );
+
+  const afterCancel1 = reflowRegularAssignments({
+    previous,
+    regularCaddyPool: pool,
+    events: [{ type: "CANCEL_RESERVATION", reservationId: "S1A" }],
+  });
+  assert(
+    afterCancel1.after.regularAssignments.find((a) => a.reservation.id === "S2A")
+      ?.caddy.id === ordered[1].id,
+    "1부 캔슬 후 2부 시작 포인터 당김"
+  );
+  assert(
+    afterCancel1.after.regularAssignments.find((a) => a.reservation.id === "S3A")
+      ?.caddy.id === ordered[2].id,
+    "3부 포인터도 재계산"
+  );
+
+  const afterCancel2 = reflowRegularAssignments({
+    previous: afterCancel1.after,
+    regularCaddyPool: pool,
+    events: [{ type: "CANCEL_RESERVATION", reservationId: "S2A" }],
+  });
+  assert(
+    afterCancel2.after.regularAssignments.find((a) => a.reservation.id === "S3A")
+      ?.caddy.id === ordered[1].id,
+    "2부 캔슬 후 3부 시작 포인터 갱신"
+  );
+}
+
+section("reflow: special 배치 영향 없음 + 고정캔슬 재투입 금지");
+{
+  const date = "2026-10-13";
+  const pool = makeCaddies(4, 1);
+  const fixedCaddy = {
+    id: 5001,
+    name: "고정",
+    team: "1조",
+    teamOrder: 1,
+  };
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    caddyDirectory: [
+      fixedCaddy,
+      { id: 5003, name: "캔슬찾근", team: "3조", teamOrder: 1 },
+    ],
+    fiftyFourHole: [
+      { id: 5002, name: "오십사", team: "2조", teamOrder: 1 },
+    ],
+    fixedAssignments: [
+      { caddyId: fixedCaddy.id, reservationId: "FX", type: "FIXED" },
+      {
+        caddyId: 5003,
+        reservationId: "CX",
+        type: "마샬찾근",
+        cancelled: true,
+      },
+    ],
+    reservations: [
+      {
+        id: "FX",
+        date,
+        course: "SKY",
+        shift: "1부",
+        teeTime: "06:30",
+        teamName: "fx",
+        rawRowIndex: 2,
+      },
+      {
+        id: "CX",
+        date,
+        course: "SKY",
+        shift: "1부",
+        teeTime: "06:40",
+        teamName: "cx",
+        rawRowIndex: 3,
+      },
+      {
+        id: "G1",
+        date,
+        course: "SKY",
+        shift: "1부",
+        teeTime: "07:00",
+        teamName: "g1",
+        rawRowIndex: 4,
+      },
+      {
+        id: "G2",
+        date,
+        course: "SKY",
+        shift: "1부",
+        teeTime: "07:08",
+        teamName: "g2",
+        rawRowIndex: 5,
+      },
+      {
+        id: "F54A",
+        date,
+        course: "SKY",
+        shift: "1부",
+        teeTime: "10:00",
+        teamName: "54a",
+        rawRowIndex: 6,
+      },
+      {
+        id: "F54B",
+        date,
+        course: "SKY",
+        shift: "3부",
+        teeTime: "16:00",
+        teamName: "54b",
+        rawRowIndex: 7,
+      },
+    ],
+  });
+
+  const fixedBefore = previous.fixedAssignments.map((a) => ({
+    id: a.caddy.id,
+    res: a.reservation.id,
+  }));
+  const fiftyBefore = previous.fiftyFourHoleAssignments.map((a) => ({
+    id: a.caddy.id,
+    res: a.reservation.id,
+  }));
+
+  const reflow = reflowRegularAssignments({
+    previous,
+    regularCaddyPool: pool,
+    events: [
+      { type: "CANCEL_RESERVATION", reservationId: "G1" },
+      { type: "CANCEL_RESERVATION", reservationId: "FX" },
+      { type: "CANCEL_RESERVATION", reservationId: "CX" },
+    ],
+  });
+
+  assert(
+    JSON.stringify(
+      reflow.after.fixedAssignments.map((a) => ({
+        id: a.caddy.id,
+        res: a.reservation.id,
+      }))
+    ) === JSON.stringify(fixedBefore),
+    "fixed preserved"
+  );
+  assert(
+    JSON.stringify(
+      reflow.after.fiftyFourHoleAssignments.map((a) => ({
+        id: a.caddy.id,
+        res: a.reservation.id,
+      }))
+    ) === JSON.stringify(fiftyBefore),
+    "54 preserved"
+  );
+  assert(
+    !reflow.after.regularAssignments.some((a) => a.caddy.id === 5003),
+    "cancelled fixed caddy not in regular"
+  );
+  assert(
+    !reflow.after.regularAssignments.some((a) => a.caddy.id === fixedCaddy.id),
+    "fixed caddy not in regular"
+  );
+  assert(reflow.summary.specialPreserved >= 1, "specialPreserved");
+}
+
+section("reflow: 연속 여러 건 캔슬/추가 + 인접 teeTime");
+{
+  const date = "2026-10-14";
+  const pool = makeCaddies(8, 1);
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      {
+        id: "T1",
+        date,
+        course: "VERTHILL",
+        shift: "1부",
+        teeTime: "07:00",
+        teamName: "t1",
+        rawRowIndex: 2,
+      },
+      {
+        id: "T2",
+        date,
+        course: "VERTHILL",
+        shift: "1부",
+        teeTime: "07:07",
+        teamName: "t2",
+        rawRowIndex: 3,
+      },
+      {
+        id: "T3",
+        date,
+        course: "VERTHILL",
+        shift: "1부",
+        teeTime: "07:14",
+        teamName: "t3",
+        rawRowIndex: 4,
+      },
+      {
+        id: "T4",
+        date,
+        course: "VERTHILL",
+        shift: "1부",
+        teeTime: "07:21",
+        teamName: "t4",
+        rawRowIndex: 5,
+      },
+    ],
+  });
+
+  const reflow = reflowRegularAssignments({
+    previous,
+    regularCaddyPool: pool,
+    events: [
+      { type: "CANCEL_RESERVATION", reservationId: "T2" },
+      { type: "CANCEL_RESERVATION", reservationId: "T4" },
+      {
+        type: "ADD_RESERVATION",
+        reservation: {
+          id: "T15",
+          date,
+          course: "VERTHILL",
+          shift: "1부",
+          teeTime: "07:10",
+          teamName: "mid",
+          rawRowIndex: 6,
+        },
+      },
+      {
+        type: "ADD_RESERVATION",
+        reservation: {
+          id: "T05",
+          date,
+          course: "VERTHILL",
+          shift: "1부",
+          teeTime: "07:03",
+          teamName: "early",
+          rawRowIndex: 7,
+        },
+      },
+    ],
+  });
+  assert(reflow.reason === REASON.REGULAR_MIXED_REFLOW, "MIXED_REFLOW");
+  const tees = reflow.after.regularAssignments.map((a) => a.reservation.teeTime);
+  assert(
+    tees.join(",") === ["07:00", "07:03", "07:10", "07:14"].join(","),
+    "teeTime sort kept after multi events"
+  );
+  assert(
+    reflow.after.regularAssignments.map((a) => a.reservation.id).join(",") ===
+      "T1,T05,T15,T3",
+    "ids order by tee"
+  );
+  assert(reflow.summary.movedBackward + reflow.summary.movedForward + reflow.summary.unchanged + reflow.summary.newlyAssigned + reflow.summary.becameUnassigned === reflow.changes.length, "change kinds cover all");
 }
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);

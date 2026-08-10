@@ -1,8 +1,9 @@
 /**
- * 자동배치 엔진 (3~7단계)
+ * 자동배치 엔진 (3~8단계)
  * - 순수 함수: DB write 없음
  * - 우선순위: 고정/특별찾근 → 54홀 → 1·3부 → 1·2부 → 일반 순번
  * - 일반 순번 포인터/wrap는 special 배치와 분리
+ * - 8단계: 일반 예약 캔슬/추가 시 regular reflow (special 보호)
  */
 
 import { PRIMARY_TEAMS } from "@/lib/caddyManage";
@@ -46,6 +47,9 @@ export const REASON = {
   FIXED_RESERVATION_CONFLICT: "FIXED_RESERVATION_CONFLICT",
   FIXED_TIME_OVERLAP: "FIXED_TIME_OVERLAP",
   FIXED_CANCELLED: "FIXED_CANCELLED",
+  REGULAR_CANCEL_REFLOW: "REGULAR_CANCEL_REFLOW",
+  REGULAR_ADD_REFLOW: "REGULAR_ADD_REFLOW",
+  REGULAR_MIXED_REFLOW: "REGULAR_MIXED_REFLOW",
 } as const;
 
 export type FixedAssignmentType =
@@ -182,6 +186,61 @@ export type AutoAssignResultV1 = {
       { reservations: number; assigned: number; unassigned: number }
     >;
     finalPointer: number;
+  };
+};
+
+export type ReservationChangeEvent =
+  | {
+      type: "CANCEL_RESERVATION";
+      reservationId?: string | number;
+      reservationKey?: string;
+      reservationMatch?: Partial<
+        Pick<
+          AutoAssignReservation,
+          | "date"
+          | "course"
+          | "shift"
+          | "teeTime"
+          | "teamName"
+          | "rawRowIndex"
+          | "id"
+        >
+      >;
+    }
+  | {
+      type: "ADD_RESERVATION";
+      reservation: AutoAssignReservation;
+    };
+
+export type ReflowChangeKind =
+  | "movedBackward"
+  | "movedForward"
+  | "unchanged"
+  | "newlyAssigned"
+  | "becameUnassigned";
+
+export type ReflowCaddyChange = {
+  caddy: AutoAssignCaddy;
+  kind: ReflowChangeKind;
+  beforeReservation: AutoAssignReservation | null;
+  afterReservation: AutoAssignReservation | null;
+  beforeOrderIndex: number | null;
+  afterOrderIndex: number | null;
+};
+
+export type RegularReflowResult = {
+  date: string;
+  reason: string;
+  before: AutoAssignResultV1;
+  after: AutoAssignResultV1;
+  changes: ReflowCaddyChange[];
+  summary: {
+    movedBackward: number;
+    movedForward: number;
+    unchanged: number;
+    newlyAssigned: number;
+    becameUnassigned: number;
+    specialPreserved: number;
   };
 };
 
@@ -1027,6 +1086,100 @@ export function assignOneTwoPriority(input: {
 }
 
 /**
+ * 일반 순번 배치 (포인터 wrap, shift 내 teeTime 순).
+ * special 배치와 분리된 순수 루프 — reflow에서도 재사용.
+ */
+export function assignRegularSequence(input: {
+  date: string;
+  available: AutoAssignCaddy[];
+  reservations: AutoAssignReservation[];
+  reasonCode?: string;
+}): {
+  assignments: AutoAssignmentRow[];
+  unassignedReservations: UnassignedReservationRow[];
+  finalPointer: number;
+  byShift: Record<
+    ShiftPart,
+    { reservations: number; assigned: number; unassigned: number }
+  >;
+} {
+  const available = dedupeCaddies([...(input.available || [])]).sort(
+    compareCaddyOrder
+  );
+  const reservations = [...(input.reservations || [])].sort(
+    compareReservationOrder
+  );
+  const reasonCode = input.reasonCode || REASON.REGULAR_SEQUENCE;
+  const byShift = emptyShiftMeta();
+  for (const shift of SHIFT_PARTS) {
+    byShift[shift].reservations = reservations.filter(
+      (r) => r.shift === shift
+    ).length;
+  }
+
+  const assignments: AutoAssignmentRow[] = [];
+  const unassignedReservations: UnassignedReservationRow[] = [];
+  let pointer = 0;
+
+  for (const shift of SHIFT_PARTS) {
+    const shiftReservations = reservations.filter((r) => r.shift === shift);
+    const usedInShift = new Set<number>();
+
+    for (const reservation of shiftReservations) {
+      if (available.length === 0) {
+        unassignedReservations.push({
+          reservation,
+          reason: "가용 캐디 없음",
+        });
+        byShift[shift].unassigned += 1;
+        continue;
+      }
+
+      let picked: AutoAssignCaddy | null = null;
+      let pickedIndex = -1;
+      for (let attempt = 0; attempt < available.length; attempt++) {
+        const idx = (pointer + attempt) % available.length;
+        const caddy = available[idx];
+        if (usedInShift.has(caddy.id)) continue;
+        picked = caddy;
+        pickedIndex = idx;
+        pointer = (idx + 1) % available.length;
+        break;
+      }
+
+      if (!picked || pickedIndex < 0) {
+        unassignedReservations.push({
+          reservation,
+          reason: `같은 부 중복 방지로 배치 불가(가용 ${available.length}명)`,
+        });
+        byShift[shift].unassigned += 1;
+        continue;
+      }
+
+      usedInShift.add(picked.id);
+      assignments.push({
+        date: input.date,
+        shift,
+        sequenceIndex: pickedIndex,
+        reason: `${reasonCode}(${shift}, seq=${pickedIndex})`,
+        reservation,
+        caddy: picked,
+        pairId: null,
+        kind: "regular",
+      });
+      byShift[shift].assigned += 1;
+    }
+  }
+
+  return {
+    assignments,
+    unassignedReservations,
+    finalPointer: available.length === 0 ? 0 : pointer,
+    byShift,
+  };
+}
+
+/**
  * 자동배치:
  * 0) 고정/특별찾근 1) 54홀 2) 1·3부 3) 1·2부 4) 일반 순번
  * - special/고정 후보는 일반 available/포인터에서 제외
@@ -1168,64 +1321,18 @@ export function computeAutoAssignmentsV1(input: {
   );
 
   // 4) 일반 순번 (포인터는 여기서만 전진)
-  const regularAssignments: AutoAssignmentRow[] = [];
-  const usedCaddyIds = new Set<number>([
-    ...fixed.assignedCaddyIds,
-    ...fiftyFour.assignedCaddyIds,
-    ...oneThree.assignedCaddyIds,
-    ...oneTwo.assignedCaddyIds,
-  ]);
-  let pointer = 0;
+  const regular = assignRegularSequence({
+    date,
+    available,
+    reservations: remainingEligible,
+    reasonCode: REASON.REGULAR_SEQUENCE,
+  });
+  const regularAssignments = regular.assignments;
+  unassignedReservations.push(...regular.unassignedReservations);
 
   for (const shift of SHIFT_PARTS) {
-    const shiftReservations = remainingEligible.filter((r) => r.shift === shift);
-    const usedInShift = new Set<number>();
-
-    for (const reservation of shiftReservations) {
-      if (available.length === 0) {
-        unassignedReservations.push({
-          reservation,
-          reason: "가용 캐디 없음",
-        });
-        byShift[shift].unassigned += 1;
-        continue;
-      }
-
-      let picked: AutoAssignCaddy | null = null;
-      let pickedIndex = -1;
-      for (let attempt = 0; attempt < available.length; attempt++) {
-        const idx = (pointer + attempt) % available.length;
-        const caddy = available[idx];
-        if (usedInShift.has(caddy.id)) continue;
-        picked = caddy;
-        pickedIndex = idx;
-        pointer = (idx + 1) % available.length;
-        break;
-      }
-
-      if (!picked || pickedIndex < 0) {
-        unassignedReservations.push({
-          reservation,
-          reason: `같은 부 중복 방지로 배치 불가(가용 ${available.length}명)`,
-        });
-        byShift[shift].unassigned += 1;
-        continue;
-      }
-
-      usedInShift.add(picked.id);
-      usedCaddyIds.add(picked.id);
-      regularAssignments.push({
-        date,
-        shift,
-        sequenceIndex: pickedIndex,
-        reason: `${REASON.REGULAR_SEQUENCE}(${shift}, seq=${pickedIndex})`,
-        reservation,
-        caddy: picked,
-        pairId: null,
-        kind: "regular",
-      });
-      byShift[shift].assigned += 1;
-    }
+    byShift[shift].assigned += regular.byShift[shift].assigned;
+    byShift[shift].unassigned += regular.byShift[shift].unassigned;
   }
 
   for (const a of [
@@ -1236,6 +1343,14 @@ export function computeAutoAssignmentsV1(input: {
   ]) {
     byShift[a.shift].assigned += 1;
   }
+
+  const usedCaddyIds = new Set<number>([
+    ...fixed.assignedCaddyIds,
+    ...fiftyFour.assignedCaddyIds,
+    ...oneThree.assignedCaddyIds,
+    ...oneTwo.assignedCaddyIds,
+    ...regularAssignments.map((a) => a.caddy.id),
+  ]);
 
   const assignments = [
     ...fixedAssignments,
@@ -1291,7 +1406,277 @@ export function computeAutoAssignmentsV1(input: {
       oneTwoAssignedCaddyCount,
       oneTwoUnassignedCount: oneTwo.specialUnassigned.length,
       byShift,
-      finalPointer: available.length === 0 ? 0 : pointer,
+      finalPointer: regular.finalPointer,
     },
+  };
+}
+
+function matchesCancelEvent(
+  reservation: AutoAssignReservation,
+  event: Extract<ReservationChangeEvent, { type: "CANCEL_RESERVATION" }>
+): boolean {
+  if (event.reservationId != null && String(event.reservationId) !== "") {
+    const want = String(event.reservationId);
+    if (reservation.id != null && String(reservation.id) === want) return true;
+    if (reservationKey(reservation) === want) return true;
+  }
+  if (event.reservationKey && reservationKey(reservation) === event.reservationKey) {
+    return true;
+  }
+  const m = event.reservationMatch;
+  if (!m) return false;
+  if (m.id != null && String(reservation.id ?? "") !== String(m.id)) return false;
+  if (m.date != null && reservation.date !== m.date) return false;
+  if (m.course != null && reservation.course !== m.course) return false;
+  if (m.shift != null && reservation.shift !== m.shift) return false;
+  if (m.teeTime != null && reservation.teeTime !== m.teeTime) return false;
+  if (m.teamName != null && (reservation.teamName || "") !== m.teamName) {
+    return false;
+  }
+  if (m.rawRowIndex != null && reservation.rawRowIndex !== m.rawRowIndex) {
+    return false;
+  }
+  return true;
+}
+
+function specialAssignmentRows(result: AutoAssignResultV1): AutoAssignmentRow[] {
+  return [
+    ...result.fixedAssignments,
+    ...result.fiftyFourHoleAssignments,
+    ...result.oneThreeAssignments,
+    ...result.oneTwoAssignments,
+  ];
+}
+
+function protectedCaddyIds(result: AutoAssignResultV1): Set<number> {
+  const ids = new Set<number>();
+  for (const a of specialAssignmentRows(result)) ids.add(a.caddy.id);
+  for (const u of result.specialUnassigned) {
+    if (u.reason === REASON.FIXED_CANCELLED) ids.add(u.caddy.id);
+  }
+  return ids;
+}
+
+function protectedReservationKeys(result: AutoAssignResultV1): Set<string> {
+  return new Set(
+    specialAssignmentRows(result).map((a) => reservationKey(a.reservation))
+  );
+}
+
+function orderIndexMap(
+  rows: AutoAssignmentRow[]
+): Map<number, { index: number; reservation: AutoAssignReservation }> {
+  const sorted = [...rows].sort((a, b) =>
+    compareReservationOrder(a.reservation, b.reservation)
+  );
+  const map = new Map<
+    number,
+    { index: number; reservation: AutoAssignReservation }
+  >();
+  sorted.forEach((row, index) => {
+    map.set(row.caddy.id, { index, reservation: row.reservation });
+  });
+  return map;
+}
+
+/**
+ * 일반 예약 캔슬/추가 후 일반 순번만 재계산 (special 보호).
+ *
+ * 알고리즘:
+ * 1) previous의 special(고정/찾근·54·1·3·1·2) 배치·FIXED_CANCELLED 캐디를 잠금
+ * 2) 일반 예약 집합에 이벤트 적용 (special 예약 CANCEL은 일반 풀에서만 무시, 캐디 재투입 금지)
+ * 3) regularCaddyPool에서 잠금 캐디 제외 후 assignRegularSequence 재실행
+ * 4) special 배치는 그대로 유지하고 before/after diff 반환
+ */
+export function reflowRegularAssignments(input: {
+  previous: AutoAssignResultV1;
+  /** 원본 일반 available 풀 (정렬 전/후 모두 허용 — 내부에서 재정렬) */
+  regularCaddyPool: AutoAssignCaddy[];
+  events: ReservationChangeEvent[];
+}): RegularReflowResult {
+  const previous = input.previous;
+  const date = previous.date;
+  const lockedCaddies = protectedCaddyIds(previous);
+  const lockedResKeys = protectedReservationKeys(previous);
+
+  let cancelCount = 0;
+  let addCount = 0;
+
+  // 일반 예약 시드: 기존 일반 배치 + 일반 미배치(special 키 제외)
+  const seedMap = new Map<string, AutoAssignReservation>();
+  for (const a of previous.regularAssignments) {
+    const key = reservationKey(a.reservation);
+    if (!lockedResKeys.has(key)) seedMap.set(key, a.reservation);
+  }
+  for (const u of previous.unassignedReservations) {
+    const key = reservationKey(u.reservation);
+    if (lockedResKeys.has(key)) continue;
+    if (!seedMap.has(key)) seedMap.set(key, u.reservation);
+  }
+
+  for (const event of input.events || []) {
+    if (event.type === "CANCEL_RESERVATION") {
+      cancelCount += 1;
+      const keysToDelete: string[] = [];
+      for (const [key, res] of seedMap.entries()) {
+        if (matchesCancelEvent(res, event)) keysToDelete.push(key);
+      }
+      // special 예약 캔슬: 일반 풀에 없어도 OK — 캐디는 locked 유지
+      for (const key of keysToDelete) {
+        if (lockedResKeys.has(key)) continue;
+        seedMap.delete(key);
+      }
+      continue;
+    }
+    if (event.type === "ADD_RESERVATION") {
+      addCount += 1;
+      const res = event.reservation.date
+        ? event.reservation
+        : { ...event.reservation, date };
+      const key = reservationKey(res);
+      if (lockedResKeys.has(key)) continue; // special 슬롯 침범 금지
+      seedMap.set(key, res);
+    }
+  }
+
+  const regularReservations = [...seedMap.values()].sort(compareReservationOrder);
+
+  const pool = dedupeCaddies([...(input.regularCaddyPool || [])])
+    .filter((c) => !lockedCaddies.has(c.id))
+    .sort(compareCaddyOrder);
+
+  const reasonCode =
+    cancelCount > 0 && addCount > 0
+      ? REASON.REGULAR_MIXED_REFLOW
+      : addCount > 0
+        ? REASON.REGULAR_ADD_REFLOW
+        : REASON.REGULAR_CANCEL_REFLOW;
+
+  const regular = assignRegularSequence({
+    date,
+    available: pool,
+    reservations: regularReservations,
+    reasonCode,
+  });
+
+  const specialRows = specialAssignmentRows(previous);
+  const byShift = emptyShiftMeta();
+  for (const shift of SHIFT_PARTS) {
+    const specialCount = specialRows.filter((a) => a.shift === shift).length;
+    byShift[shift].reservations =
+      specialCount + regular.byShift[shift].reservations;
+    byShift[shift].assigned = specialCount + regular.byShift[shift].assigned;
+    byShift[shift].unassigned = regular.byShift[shift].unassigned;
+  }
+
+  const usedRegular = new Set(regular.assignments.map((a) => a.caddy.id));
+  const unusedCaddies = pool.filter((c) => !usedRegular.has(c.id));
+
+  const assignments = [
+    ...specialRows,
+    ...regular.assignments,
+  ].sort((a, b) => {
+    const sr = shiftRank(a.shift) - shiftRank(b.shift);
+    if (sr !== 0) return sr;
+    return a.reservation.teeTime.localeCompare(b.reservation.teeTime);
+  });
+
+  const after: AutoAssignResultV1 = {
+    ...previous,
+    assignments,
+    regularAssignments: regular.assignments,
+    unassignedReservations: regular.unassignedReservations,
+    unusedCaddies,
+    meta: {
+      ...previous.meta,
+      availableCount: pool.length,
+      reservationCount:
+        specialRows.length + regularReservations.length,
+      assignedCount: assignments.length,
+      unassignedCount: regular.unassignedReservations.length,
+      unusedCount: unusedCaddies.length,
+      byShift,
+      finalPointer: regular.finalPointer,
+    },
+  };
+
+  const beforeMap = orderIndexMap(previous.regularAssignments);
+  const afterMap = orderIndexMap(regular.assignments);
+  const caddyIds = new Set<number>([
+    ...beforeMap.keys(),
+    ...afterMap.keys(),
+  ]);
+
+  const changes: ReflowCaddyChange[] = [];
+  for (const id of caddyIds) {
+    const before = beforeMap.get(id);
+    const afterRow = afterMap.get(id);
+    const caddy =
+      afterRow?.reservation && regular.assignments.find((a) => a.caddy.id === id)
+        ?.caddy ||
+      previous.regularAssignments.find((a) => a.caddy.id === id)?.caddy ||
+      pool.find((c) => c.id === id);
+    if (!caddy) continue;
+
+    if (before && afterRow) {
+      const sameRes =
+        reservationKey(before.reservation) ===
+        reservationKey(afterRow.reservation);
+      let kind: ReflowChangeKind = "unchanged";
+      if (sameRes) {
+        kind = "unchanged";
+      } else {
+        // 더 이른 티/부 → 당김(forward), 더 늦은 티/부 → 밀림(backward)
+        const cmp = compareReservationOrder(
+          afterRow.reservation,
+          before.reservation
+        );
+        kind = cmp < 0 ? "movedForward" : "movedBackward";
+      }
+      changes.push({
+        caddy,
+        kind,
+        beforeReservation: before.reservation,
+        afterReservation: afterRow.reservation,
+        beforeOrderIndex: before.index,
+        afterOrderIndex: afterRow.index,
+      });
+    } else if (!before && afterRow) {
+      changes.push({
+        caddy,
+        kind: "newlyAssigned",
+        beforeReservation: null,
+        afterReservation: afterRow.reservation,
+        beforeOrderIndex: null,
+        afterOrderIndex: afterRow.index,
+      });
+    } else if (before && !afterRow) {
+      changes.push({
+        caddy,
+        kind: "becameUnassigned",
+        beforeReservation: before.reservation,
+        afterReservation: null,
+        beforeOrderIndex: before.index,
+        afterOrderIndex: null,
+      });
+    }
+  }
+
+  const summary = {
+    movedBackward: changes.filter((c) => c.kind === "movedBackward").length,
+    movedForward: changes.filter((c) => c.kind === "movedForward").length,
+    unchanged: changes.filter((c) => c.kind === "unchanged").length,
+    newlyAssigned: changes.filter((c) => c.kind === "newlyAssigned").length,
+    becameUnassigned: changes.filter((c) => c.kind === "becameUnassigned").length,
+    specialPreserved: specialRows.length,
+  };
+
+  return {
+    date,
+    reason: reasonCode,
+    before: previous,
+    after,
+    changes,
+    summary,
   };
 }
