@@ -192,8 +192,8 @@ async function main() {
     "name without cart on next row"
   );
   assert(
-    !matrixRows.some((r) => r.name === "주중반사람"),
-    "주중반 ignored in this stage"
+    matrixRows.some((r) => r.name === "주중반사람" && r.team === "주중반"),
+    "주중반 included in roster parse"
   );
 
   const xbuf = buildTestRosterXlsxBuffer(aoa);

@@ -5,13 +5,15 @@
  * - 가로로 1조~12조 제목
  * - 각 조 아래(또는 옆)에 카트 / 성명 열 반복
  * - 카트번호가 비어 있어도 성명만 있으면 포함
- * - 카트번호·셀 색(고정카트)·주중반/주말반·휴무 등은 저장/반영하지 않음
+ * - 카트번호·셀 색(고정카트)는 저장하지 않음
+ * - 주중반/주말반/드라이빙은 조 라벨로 읽어 명단에서 누락하지 않음 (DB 타입 변경은 별도)
  */
 
 import * as XLSX from "xlsx";
 import type { ImportRow } from "./caddyImport";
 
 const TEAM_RE = /^([1-9]|1[0-2])\s*조$/;
+const EXTRA_TEAM_LABELS = new Set(["주중반", "주말반", "드라이빙"]);
 const NAME_HEADERS = new Set(["성명", "이름", "name"]);
 const CART_HEADERS = new Set(["카트", "카트번호", "cart"]);
 const SKIP_NAME_VALUES = new Set([
@@ -23,6 +25,9 @@ const SKIP_NAME_VALUES = new Set([
   "카트번호",
   "cart",
   "비고",
+  "주중반",
+  "주말반",
+  "드라이빙",
 ]);
 
 function cellText(value: unknown): string {
@@ -35,9 +40,11 @@ function cellText(value: unknown): string {
 }
 
 function isTeamLabel(value: string): string | null {
-  const m = value.replace(/\s+/g, "").match(/^([1-9]|1[0-2])조$/);
-  if (!m) return null;
-  return `${Number(m[1])}조`;
+  const compact = value.replace(/\s+/g, "");
+  const m = compact.match(/^([1-9]|1[0-2])조$/);
+  if (m) return `${Number(m[1])}조`;
+  if (EXTRA_TEAM_LABELS.has(compact)) return compact;
+  return null;
 }
 
 function sheetToMatrix(sheet: XLSX.WorkSheet): string[][] {
@@ -124,9 +131,17 @@ function findTeamBlocks(matrix: string[][]): TeamBlock[] {
   for (const b of found) {
     if (!byTeam.has(b.team)) byTeam.set(b.team, b);
   }
-  return [...byTeam.values()].sort(
-    (a, b) => Number(a.team.replace("조", "")) - Number(b.team.replace("조", ""))
-  );
+
+  const teamOrder = (team: string) => {
+    const n = Number(team.replace("조", ""));
+    if (Number.isFinite(n)) return n;
+    if (team === "주중반") return 100;
+    if (team === "주말반") return 101;
+    if (team === "드라이빙") return 102;
+    return 999;
+  };
+
+  return [...byTeam.values()].sort((a, b) => teamOrder(a.team) - teamOrder(b.team));
 }
 
 function looksLikeHeaderName(value: string): boolean {
@@ -135,8 +150,7 @@ function looksLikeHeaderName(value: string): boolean {
     SKIP_NAME_VALUES.has(v) ||
     SKIP_NAME_VALUES.has(v.toLowerCase()) ||
     TEAM_RE.test(v) ||
-    v === "주중반" ||
-    v === "주말반"
+    EXTRA_TEAM_LABELS.has(v)
   );
 }
 
