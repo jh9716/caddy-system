@@ -25,6 +25,10 @@ export default async function ManageLayout({
         <nav style={{ display: "grid", gap: 8 }}>
           <a href="/manage" style={linkStyle}>대시보드</a>
           <a href="/manage/caddies" style={linkStyle}>캐디등록/관리</a>
+          <a href="/manage/availability" style={linkStyle}>가용계산</a>
+          <a href="/manage/reservations" style={linkStyle}>예약표파싱</a>
+          <a href="/manage/assignments" style={linkStyle}>자동배치운영</a>
+          <a href="/manage/assignments/preview" style={linkStyle}>자동배치미리보기</a>
           <a href="/notice" style={linkStyle}>공지관리</a>
           <a href="/schedule" style={linkStyle}>가용표</a>
         </nav>
