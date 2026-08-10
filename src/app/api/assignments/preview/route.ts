@@ -4,6 +4,7 @@ import {
   computeAutoAssignmentsV1,
   type AutoAssignCaddy,
   type AutoAssignReservation,
+  type FixedAssignmentInput,
 } from "@/lib/autoAssignEngine";
 import type { AvailabilityRow } from "@/lib/availabilityEngine";
 import { loadAvailabilityForDate } from "@/lib/availabilityService";
@@ -168,12 +169,16 @@ export async function POST(req: NextRequest) {
       specialRows,
       Array.isArray(body.oneTwoCandidates) ? body.oneTwoCandidates : null
     );
+    const fixedAssignments = Array.isArray(body.fixedAssignments)
+      ? (body.fixedAssignments as FixedAssignmentInput[])
+      : [];
 
     const result = computeAutoAssignmentsV1({
       date,
       reservations,
       available,
       special,
+      fixedAssignments,
       fiftyFourHole,
       oneThreeCandidates,
       oneTwoCandidates,

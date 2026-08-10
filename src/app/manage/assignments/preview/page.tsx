@@ -21,6 +21,7 @@ type PreviewResponse = AutoAssignResultV1 & {
 
 type Tab =
   | "assigned"
+  | "fixed"
   | "fiftyFour"
   | "oneThree"
   | "oneTwo"
@@ -87,7 +88,7 @@ export default function AutoAssignPreviewPage() {
       <div>
         <h1 style={{ margin: 0, fontSize: 22 }}>자동배치 미리보기</h1>
         <p style={{ margin: "6px 0 0", color: "#64748b", fontSize: 14 }}>
-          우선순위: 54홀 → 1·3부 → 1·2부 → 일반 순번. DB에 Assignment를 쓰지 않습니다.
+          우선순위: 고정/찾근 → 54홀 → 1·3부 → 1·2부 → 일반 순번. DB write 없음.
         </p>
       </div>
 
@@ -147,6 +148,10 @@ export default function AutoAssignPreviewPage() {
           >
             <Stat label="배치됨" value={String(result.meta.assignedCount)} />
             <Stat
+              label="고정/찾근"
+              value={String(result.meta.fixedAssignedCount ?? 0)}
+            />
+            <Stat
               label="54홀 배치"
               value={String(result.meta.fiftyFourHoleAssignedCaddyCount ?? 0)}
             />
@@ -161,7 +166,8 @@ export default function AutoAssignPreviewPage() {
             <Stat
               label="special review"
               value={String(
-                (result.meta.fiftyFourHoleUnassignedCount ?? 0) +
+                (result.meta.fixedUnassignedCount ?? 0) +
+                  (result.meta.fiftyFourHoleUnassignedCount ?? 0) +
                   (result.meta.oneThreeUnassignedCount ?? 0) +
                   (result.meta.oneTwoUnassignedCount ?? 0)
               )}
@@ -194,6 +200,7 @@ export default function AutoAssignPreviewPage() {
             {(
               [
                 ["assigned", "전체 배치"],
+                ["fixed", "고정/찾근"],
                 ["fiftyFour", "54홀"],
                 ["oneThree", "1·3부"],
                 ["oneTwo", "1·2부"],
@@ -236,6 +243,7 @@ export default function AutoAssignPreviewPage() {
           </div>
 
           {(tab === "assigned" ||
+            tab === "fixed" ||
             tab === "fiftyFour" ||
             tab === "oneThree" ||
             tab === "oneTwo" ||
@@ -254,13 +262,15 @@ export default function AutoAssignPreviewPage() {
               ]}
               rows={(tab === "assigned"
                 ? assignedRows
-                : tab === "fiftyFour"
-                  ? result.fiftyFourHoleAssignments || []
-                  : tab === "oneThree"
-                    ? result.oneThreeAssignments || []
-                    : tab === "oneTwo"
-                      ? result.oneTwoAssignments || []
-                      : result.regularAssignments || []
+                : tab === "fixed"
+                  ? result.fixedAssignments || []
+                  : tab === "fiftyFour"
+                    ? result.fiftyFourHoleAssignments || []
+                    : tab === "oneThree"
+                      ? result.oneThreeAssignments || []
+                      : tab === "oneTwo"
+                        ? result.oneTwoAssignments || []
+                        : result.regularAssignments || []
               )
                 .filter((a) =>
                   tab === "assigned" && shiftFilter !== "ALL"
@@ -268,13 +278,15 @@ export default function AutoAssignPreviewPage() {
                     : true
                 )
                 .map((a) => [
-                  a.kind === "fiftyFourHole"
-                    ? "54홀"
-                    : a.kind === "oneThree"
-                      ? "1·3부"
-                      : a.kind === "oneTwo"
-                        ? "1·2부"
-                        : "일반",
+                  a.kind === "fixed"
+                    ? "고정/찾근"
+                    : a.kind === "fiftyFourHole"
+                      ? "54홀"
+                      : a.kind === "oneThree"
+                        ? "1·3부"
+                        : a.kind === "oneTwo"
+                          ? "1·2부"
+                          : "일반",
                   a.shift,
                   a.reservation.teeTime,
                   a.reservation.courseLabel || a.reservation.course,

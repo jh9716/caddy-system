@@ -13,6 +13,7 @@ import {
   isCompatibleOneThreePair,
   isCompatibleOneTwoPair,
   minutesBetweenReservations,
+  reasonForFixedType,
   REASON,
   type AutoAssignCaddy,
   type AutoAssignReservation,
@@ -1396,6 +1397,381 @@ section("1·2부: 배치 후 일반 순번 정상");
     "pointer continues"
   );
   assert(result.meta.availableCount === 5, "OT12 excluded from available");
+}
+
+section("고정/찾근: reason 구분");
+{
+  assert(reasonForFixedType("FIXED") === REASON.FIXED_ASSIGNMENT, "FIXED");
+  assert(reasonForFixedType("마샬찾근") === REASON.MARSHAL_CALL, "마샬");
+  assert(reasonForFixedType("DUTY_CALL") === REASON.DUTY_CALL, "당번");
+  assert(reasonForFixedType("당번찾근") === REASON.DUTY_CALL, "당번한글");
+}
+
+section("고정/찾근: 정상 고정배치 + 마샬/당번");
+{
+  const date = "2026-10-01";
+  const available = makeCaddies(5, 1);
+  const fixedCaddy = available[0];
+  const marshal = {
+    id: 2001,
+    name: "마샬",
+    team: "1조",
+    teamOrder: 99,
+  };
+  const duty = { id: 2002, name: "당번", team: "2조", teamOrder: 99 };
+  const reservations: AutoAssignReservation[] = [
+    {
+      id: "R1",
+      date,
+      course: "SKY",
+      shift: "1부",
+      teeTime: "07:00",
+      teamName: "고정팀",
+      rawRowIndex: 2,
+    },
+    {
+      id: "R2",
+      date,
+      course: "SKY",
+      shift: "1부",
+      teeTime: "07:08",
+      teamName: "마샬팀",
+      rawRowIndex: 3,
+    },
+    {
+      id: "R3",
+      date,
+      course: "SKY",
+      shift: "2부",
+      teeTime: "13:00",
+      teamName: "당번팀",
+      rawRowIndex: 4,
+    },
+    {
+      id: "R4",
+      date,
+      course: "SKY",
+      shift: "2부",
+      teeTime: "13:08",
+      teamName: "일반",
+      rawRowIndex: 5,
+    },
+  ];
+  const result = computeAutoAssignmentsV1({
+    date,
+    available,
+    caddyDirectory: [marshal, duty],
+    fixedAssignments: [
+      {
+        caddyId: fixedCaddy.id,
+        reservationId: "R1",
+        type: "FIXED",
+        note: "고정",
+      },
+      {
+        caddyId: marshal.id,
+        reservationId: "R2",
+        type: "마샬찾근",
+      },
+      {
+        caddyId: duty.id,
+        reservationId: "R3",
+        type: "DUTY_CALL",
+      },
+    ],
+    reservations,
+  });
+  assert(result.fixedAssignments.length === 3, "3 fixed");
+  assert(
+    result.fixedAssignments.some((a) => a.reason === REASON.FIXED_ASSIGNMENT),
+    "FIXED_ASSIGNMENT"
+  );
+  assert(
+    result.fixedAssignments.some((a) => a.reason === REASON.MARSHAL_CALL),
+    "MARSHAL_CALL"
+  );
+  assert(
+    result.fixedAssignments.some((a) => a.reason === REASON.DUTY_CALL),
+    "DUTY_CALL"
+  );
+  assert(result.regularAssignments.length === 1, "remaining 1 regular");
+  assert(
+    result.regularAssignments[0].reservation.id === "R4",
+    "regular got R4"
+  );
+}
+
+section("고정/찾근: 존재하지 않는 캐디/예약");
+{
+  const date = "2026-10-02";
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: makeCaddies(2),
+    fixedAssignments: [
+      { caddyId: 99999, reservationId: "RX", type: "FIXED" },
+      {
+        caddyId: 1,
+        reservationId: "NOPE",
+        type: "FIXED",
+      },
+    ],
+    reservations: [
+      {
+        id: "RX2",
+        date,
+        course: "LAKE",
+        shift: "1부",
+        teeTime: "08:00",
+        teamName: "t",
+        rawRowIndex: 2,
+      },
+    ],
+  });
+  assert(
+    result.specialUnassigned.some((u) => u.reason === REASON.FIXED_UNKNOWN_CADDY),
+    "unknown caddy"
+  );
+  assert(
+    result.specialUnassigned.some(
+      (u) => u.reason === REASON.FIXED_UNKNOWN_RESERVATION
+    ),
+    "unknown reservation"
+  );
+  assert(result.fixedAssignments.length === 0, "no fixed success");
+}
+
+section("고정/찾근: 동일 캐디/예약 중복");
+{
+  const date = "2026-10-03";
+  const caddies = makeCaddies(3, 1);
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: caddies,
+    fixedAssignments: [
+      { caddyId: caddies[0].id, reservationId: "A", type: "FIXED" },
+      { caddyId: caddies[0].id, reservationId: "B", type: "FIXED" },
+      { caddyId: caddies[1].id, reservationId: "C", type: "FIXED" },
+      { caddyId: caddies[2].id, reservationId: "C", type: "MARSHAL_CALL" },
+    ],
+    reservations: [
+      {
+        id: "A",
+        date,
+        course: "OCEAN",
+        shift: "1부",
+        teeTime: "07:00",
+        teamName: "a",
+        rawRowIndex: 2,
+      },
+      {
+        id: "B",
+        date,
+        course: "OCEAN",
+        shift: "1부",
+        teeTime: "08:00",
+        teamName: "b",
+        rawRowIndex: 3,
+      },
+      {
+        id: "C",
+        date,
+        course: "OCEAN",
+        shift: "2부",
+        teeTime: "13:00",
+        teamName: "c",
+        rawRowIndex: 4,
+      },
+    ],
+  });
+  assert(
+    result.specialUnassigned.filter((u) => u.reason === REASON.FIXED_CADDY_CONFLICT)
+      .length >= 2,
+    "caddy conflict"
+  );
+  assert(
+    result.specialUnassigned.filter(
+      (u) => u.reason === REASON.FIXED_RESERVATION_CONFLICT
+    ).length >= 2,
+    "reservation conflict"
+  );
+  assert(result.fixedAssignments.length === 0, "conflicts not assigned");
+}
+
+section("고정/찾근: 54홀·1·3·1·2보다 우선");
+{
+  const date = "2026-10-04";
+  const shared = {
+    id: 3001,
+    name: "공유",
+    team: "1조",
+    teamOrder: 1,
+  };
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: makeCaddies(4, 10),
+    fiftyFourHole: [shared],
+    oneThreeCandidates: [shared],
+    oneTwoCandidates: [shared],
+    fixedAssignments: [
+      {
+        caddyId: shared.id,
+        reservationId: "F1",
+        type: "SPECIAL_CALL",
+        note: "관리자지정",
+      },
+    ],
+    caddyDirectory: [shared],
+    reservations: [
+      {
+        id: "F1",
+        date,
+        course: "VERTHILL",
+        shift: "1부",
+        teeTime: "10:00",
+        teamName: "fixed",
+        rawRowIndex: 2,
+      },
+      {
+        id: "F2",
+        date,
+        course: "VERTHILL",
+        shift: "3부",
+        teeTime: "16:00",
+        teamName: "other",
+        rawRowIndex: 3,
+      },
+    ],
+  });
+  assert(result.fixedAssignments.length === 1, "fixed wins");
+  assert(
+    result.fixedAssignments[0].reason === REASON.SPECIAL_CALL,
+    "SPECIAL_CALL"
+  );
+  assert(result.meta.fiftyFourHoleCandidateCount === 0, "54 excluded");
+  assert(result.meta.oneThreeCandidateCount === 0, "13 excluded");
+  assert(result.meta.oneTwoCandidateCount === 0, "12 excluded");
+  assert(result.fiftyFourHoleAssignments.length === 0, "no 54 assign");
+}
+
+section("고정/찾근: 캔슬 시 일반 재투입 없음");
+{
+  const date = "2026-10-05";
+  const caddy = {
+    id: 3100,
+    name: "캔슬찾근",
+    team: "5조",
+    teamOrder: 1,
+  };
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: [...makeCaddies(3, 1), caddy],
+    fixedAssignments: [
+      {
+        caddyId: caddy.id,
+        reservationId: "CANCEL",
+        type: "마샬찾근",
+        cancelled: true,
+      },
+    ],
+    reservations: [
+      {
+        id: "CANCEL",
+        date,
+        course: "SKY",
+        shift: "1부",
+        teeTime: "07:00",
+        teamName: "취소팀",
+        rawRowIndex: 2,
+      },
+      {
+        id: "KEEP",
+        date,
+        course: "SKY",
+        shift: "1부",
+        teeTime: "07:08",
+        teamName: "남음",
+        rawRowIndex: 3,
+      },
+    ],
+  });
+  assert(result.fixedAssignments.length === 0, "cancelled not assigned");
+  assert(
+    result.specialUnassigned.some((u) => u.reason === REASON.FIXED_CANCELLED),
+    "FIXED_CANCELLED review"
+  );
+  assert(
+    !result.assignments.some((a) => a.caddy.id === caddy.id),
+    "caddy not redeployed"
+  );
+  assert(
+    !result.regularAssignments.some((a) => a.reservation.id === "CANCEL"),
+    "cancelled reservation not in regular"
+  );
+  assert(
+    result.regularAssignments.some((a) => a.reservation.id === "KEEP"),
+    "other reservation regular ok"
+  );
+}
+
+section("고정/찾근: 배치 후 일반 순번 정상");
+{
+  const date = "2026-10-06";
+  const available = makeCaddies(5, 1);
+  const ordered = [...available].sort(compareCaddyOrder);
+  const result = computeAutoAssignmentsV1({
+    date,
+    available,
+    fixedAssignments: [
+      {
+        caddyId: 4000,
+        reservationId: "FX",
+        type: "FIXED",
+      },
+    ],
+    caddyDirectory: [
+      { id: 4000, name: "고정자", team: "9조", teamOrder: 1 },
+    ],
+    reservations: [
+      {
+        id: "FX",
+        date,
+        course: "LAKE",
+        shift: "1부",
+        teeTime: "06:30",
+        teamName: "fx",
+        rawRowIndex: 2,
+      },
+      {
+        id: "G1",
+        date,
+        course: "LAKE",
+        shift: "1부",
+        teeTime: "07:00",
+        teamName: "g1",
+        rawRowIndex: 3,
+      },
+      {
+        id: "G2",
+        date,
+        course: "LAKE",
+        shift: "1부",
+        teeTime: "07:08",
+        teamName: "g2",
+        rawRowIndex: 4,
+      },
+    ],
+  });
+  assert(result.fixedAssignments.length === 1, "1 fixed");
+  assert(result.regularAssignments.length === 2, "2 regular");
+  assert(
+    result.regularAssignments[0].caddy.id === ordered[0].id,
+    "pointer starts 0"
+  );
+  assert(
+    result.regularAssignments[1].caddy.id === ordered[1].id,
+    "pointer continues"
+  );
+  assert(result.meta.availableCount === 5, "fixed caddy not in available pool");
 }
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);
