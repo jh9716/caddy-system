@@ -1,8 +1,8 @@
 /**
- * 기본 캐디 자동배치 엔진 v1 + 54홀 우선 (자동배치 3·4단계)
+ * 자동배치 엔진 (3~5단계)
  * - 순수 함수: DB write 없음
- * - 일반 available 순번 포인터/wrap 유지
- * - fiftyFourHole 후보를 먼저 배치한 뒤 남은 예약을 일반 순번으로 채움
+ * - 우선순위: 54홀 → 1·3부 신청자 → 일반 순번
+ * - 일반 순번 포인터/wrap는 special 배치와 분리
  */
 
 import { PRIMARY_TEAMS } from "@/lib/caddyManage";
@@ -11,12 +11,20 @@ import { SHIFT_PARTS, type ShiftPart } from "@/lib/reservationParser";
 /** 54홀 연속 티업 최소 간격 (분) */
 export const MIN_54HOLE_GAP_MINUTES = 6 * 60;
 
+/** 1·3부 신청자 1부↔3부 최소 간격 (분) — 기본은 54홀과 동일, 독립 상수 */
+export const MIN_ONE_THREE_GAP_MINUTES = 6 * 60;
+
 export const REASON = {
   REGULAR_SEQUENCE: "REGULAR_SEQUENCE",
   FIFTY_FOUR_HOLE_PRIORITY: "54HOLE_PRIORITY",
   FIFTY_FOUR_NO_PAIR: "54HOLE_NO_COMPATIBLE_PAIR",
   FIFTY_FOUR_INSUFFICIENT_RESERVATIONS: "54HOLE_INSUFFICIENT_RESERVATIONS",
   FIFTY_FOUR_TIME_OVERLAP: "54HOLE_TIME_OVERLAP",
+  ONE_THREE_PRIORITY: "ONE_THREE_PRIORITY",
+  ONE_THREE_NO_PAIR: "ONE_THREE_NO_COMPATIBLE_PAIR",
+  ONE_THREE_MISSING_SHIFT1: "ONE_THREE_MISSING_SHIFT1",
+  ONE_THREE_MISSING_SHIFT3: "ONE_THREE_MISSING_SHIFT3",
+  ONE_THREE_INSUFFICIENT_RESERVATIONS: "ONE_THREE_INSUFFICIENT_RESERVATIONS",
 } as const;
 
 export type AutoAssignCaddy = {
@@ -44,6 +52,8 @@ export type AutoAssignReservation = {
   reviewReasons?: string[];
 };
 
+export type AssignmentKind = "regular" | "fiftyFourHole" | "oneThree";
+
 export type AutoAssignmentRow = {
   date: string;
   shift: ShiftPart;
@@ -51,9 +61,9 @@ export type AutoAssignmentRow = {
   reason: string;
   reservation: AutoAssignReservation;
   caddy: AutoAssignCaddy;
-  /** 54홀 페어면 동일 pairId 공유 */
+  /** 페어 배치면 동일 pairId 공유 */
   pairId?: string | null;
-  kind: "regular" | "fiftyFourHole";
+  kind: AssignmentKind;
 };
 
 export type UnassignedReservationRow = {
@@ -69,17 +79,16 @@ export type SpecialUnassignedRow = {
 
 export type AutoAssignResultV1 = {
   date: string;
-  /** 전체 배치 (54홀 + 일반) */
+  /** 전체 배치 (54홀 + 1·3부 + 일반) */
   assignments: AutoAssignmentRow[];
-  /** 54홀 우선 배치분만 */
   fiftyFourHoleAssignments: AutoAssignmentRow[];
-  /** 일반 순번 배치분만 */
+  oneThreeAssignments: AutoAssignmentRow[];
   regularAssignments: AutoAssignmentRow[];
   unassignedReservations: UnassignedReservationRow[];
   unusedCaddies: AutoAssignCaddy[];
-  /** v1에서 자동 배치하지 않음 — fiftyFourHole 제외 후 전달 */
+  /** special 배치 후보 제외 후 전달 */
   special: AutoAssignCaddy[];
-  /** 54홀 배치 실패 → 일반 강등 없이 review */
+  /** 54홀/1·3부 실패 → 일반 강등 없이 review */
   specialUnassigned: SpecialUnassignedRow[];
   meta: {
     availableCount: number;
@@ -91,6 +100,9 @@ export type AutoAssignResultV1 = {
     fiftyFourHoleCandidateCount: number;
     fiftyFourHoleAssignedCaddyCount: number;
     fiftyFourHoleUnassignedCount: number;
+    oneThreeCandidateCount: number;
+    oneThreeAssignedCaddyCount: number;
+    oneThreeUnassignedCount: number;
     byShift: Record<
       ShiftPart,
       { reservations: number; assigned: number; unassigned: number }
@@ -187,7 +199,9 @@ export function teeTimeToMinutes(teeTime: string): number {
 }
 
 /** date + teeTime → 비교용 epoch minutes (로컬 일자 기준) */
-export function reservationInstantMinutes(r: Pick<AutoAssignReservation, "date" | "teeTime">): number {
+export function reservationInstantMinutes(
+  r: Pick<AutoAssignReservation, "date" | "teeTime">
+): number {
   const [y, mo, d] = r.date.split("-").map(Number);
   const tee = teeTimeToMinutes(r.teeTime);
   if (!Number.isFinite(tee)) return NaN;
@@ -201,16 +215,34 @@ export function minutesBetweenReservations(
   return Math.abs(reservationInstantMinutes(b) - reservationInstantMinutes(a));
 }
 
+export function isCompatibleGapPair(
+  a: Pick<AutoAssignReservation, "date" | "teeTime">,
+  b: Pick<AutoAssignReservation, "date" | "teeTime">,
+  minGapMinutes: number
+): boolean {
+  if (a.date !== b.date) return false;
+  if (a.teeTime === b.teeTime) return false;
+  const gap = minutesBetweenReservations(a, b);
+  return Number.isFinite(gap) && gap >= minGapMinutes;
+}
+
 /** 두 티타임이 54홀 연속 배치 가능한지 (최소 간격) */
 export function isCompatible54HolePair(
   a: Pick<AutoAssignReservation, "date" | "teeTime" | "shift">,
   b: Pick<AutoAssignReservation, "date" | "teeTime" | "shift">,
   minGapMinutes: number = MIN_54HOLE_GAP_MINUTES
 ): boolean {
-  if (a.date !== b.date) return false;
-  if (a.teeTime === b.teeTime) return false;
-  const gap = minutesBetweenReservations(a, b);
-  return Number.isFinite(gap) && gap >= minGapMinutes;
+  return isCompatibleGapPair(a, b, minGapMinutes);
+}
+
+/** 1·3부 페어 간격 가능 여부 */
+export function isCompatibleOneThreePair(
+  shift1: Pick<AutoAssignReservation, "date" | "teeTime" | "shift">,
+  shift3: Pick<AutoAssignReservation, "date" | "teeTime" | "shift">,
+  minGapMinutes: number = MIN_ONE_THREE_GAP_MINUTES
+): boolean {
+  if (shift1.shift !== "1부" || shift3.shift !== "3부") return false;
+  return isCompatibleGapPair(shift1, shift3, minGapMinutes);
 }
 
 export type FiftyFourHolePair = {
@@ -219,9 +251,15 @@ export type FiftyFourHolePair = {
   gapMinutes: number;
 };
 
+export type OneThreePair = {
+  shift1: AutoAssignReservation;
+  shift3: AutoAssignReservation;
+  gapMinutes: number;
+};
+
 /**
  * 남은 예약에서 시간순 첫 번째 유효 54홀 페어를 찾는다.
- * (이른 티업 + 최소 6시간 이후 다음 티업)
+ * (이른 티업 + 최소 간격 이후 다음 티업)
  */
 export function findEarliest54HolePair(
   reservations: AutoAssignReservation[],
@@ -249,6 +287,67 @@ export function findEarliest54HolePair(
     }
   }
   return null;
+}
+
+/**
+ * 1·3부 페어 탐색:
+ * - 1부: 늦은 teeTime부터
+ * - 3부: 이른 teeTime부터
+ * - 간격 >= minGap 인 첫 조합
+ */
+export function findOneThreePair(
+  reservations: AutoAssignReservation[],
+  minGapMinutes: number = MIN_ONE_THREE_GAP_MINUTES
+):
+  | { ok: true; pair: OneThreePair }
+  | {
+      ok: false;
+      reason:
+        | typeof REASON.ONE_THREE_MISSING_SHIFT1
+        | typeof REASON.ONE_THREE_MISSING_SHIFT3
+        | typeof REASON.ONE_THREE_NO_PAIR;
+    } {
+  const shift1 = reservations
+    .filter((r) => r.shift === "1부")
+    .sort((a, b) => {
+      // 늦은 티타임 우선
+      const tb = reservationInstantMinutes(b) - reservationInstantMinutes(a);
+      if (tb !== 0) return tb;
+      return compareReservationOrder(a, b);
+    });
+  const shift3 = reservations
+    .filter((r) => r.shift === "3부")
+    .sort((a, b) => {
+      // 이른 티타임 우선
+      const ta = reservationInstantMinutes(a) - reservationInstantMinutes(b);
+      if (ta !== 0) return ta;
+      return compareReservationOrder(a, b);
+    });
+
+  if (shift1.length === 0) {
+    return { ok: false, reason: REASON.ONE_THREE_MISSING_SHIFT1 };
+  }
+  if (shift3.length === 0) {
+    return { ok: false, reason: REASON.ONE_THREE_MISSING_SHIFT3 };
+  }
+
+  for (const r1 of shift1) {
+    const t1 = reservationInstantMinutes(r1);
+    if (!Number.isFinite(t1)) continue;
+    for (const r3 of shift3) {
+      const t3 = reservationInstantMinutes(r3);
+      if (!Number.isFinite(t3)) continue;
+      const gap = t3 - t1;
+      if (gap >= minGapMinutes) {
+        return {
+          ok: true,
+          pair: { shift1: r1, shift3: r3, gapMinutes: gap },
+        };
+      }
+    }
+  }
+
+  return { ok: false, reason: REASON.ONE_THREE_NO_PAIR };
 }
 
 function reservationKey(r: AutoAssignReservation): string {
@@ -305,7 +404,6 @@ export function assignFiftyFourHolePriority(input: {
       continue;
     }
 
-    // 안전: 겹침/간격 재검증
     if (!isCompatible54HolePair(pair.first, pair.second, minGap)) {
       specialUnassigned.push({
         caddy,
@@ -322,7 +420,7 @@ export function assignFiftyFourHolePriority(input: {
       assignments.push({
         date: input.date,
         shift: reservation.shift as ShiftPart,
-        sequenceIndex: -1, // 일반 순번 포인터와 무관
+        sequenceIndex: -1,
         reason: REASON.FIFTY_FOUR_HOLE_PRIORITY,
         reservation,
         caddy,
@@ -345,11 +443,97 @@ export function assignFiftyFourHolePriority(input: {
 }
 
 /**
- * v1 자동배치 (+ 선택적 54홀 우선):
- * - 예약: 1부→2부→3부, 같은 부 안 teeTime 오름차순
- * - 54홀 후보 먼저 배치 (6시간 간격 페어), 실패 시 specialUnassigned
- * - 남은 예약은 일반 available 순번 포인터로 배치 (포인터는 일반 소비만 반영)
- * - special(비-54홀)은 배치하지 않고 별도 포함
+ * 1·3부 신청자 우선 배치.
+ * 1부 후반 + 3부 초반 페어, 최소 간격 검증.
+ * 실패 시 일반 강등 없이 specialUnassigned.
+ */
+export function assignOneThreePriority(input: {
+  date: string;
+  reservations: AutoAssignReservation[];
+  oneThreeCandidates: AutoAssignCaddy[];
+  minGapMinutes?: number;
+}): {
+  assignments: AutoAssignmentRow[];
+  specialUnassigned: SpecialUnassignedRow[];
+  remainingReservations: AutoAssignReservation[];
+  assignedCaddyIds: Set<number>;
+} {
+  const minGap = input.minGapMinutes ?? MIN_ONE_THREE_GAP_MINUTES;
+  const candidates = dedupeCaddies([...input.oneThreeCandidates]).sort(
+    compareCaddyOrder
+  );
+  let remaining = [...input.reservations];
+  const assignments: AutoAssignmentRow[] = [];
+  const specialUnassigned: SpecialUnassignedRow[] = [];
+  const assignedCaddyIds = new Set<number>();
+
+  for (const caddy of candidates) {
+    const shift1Count = remaining.filter((r) => r.shift === "1부").length;
+    const shift3Count = remaining.filter((r) => r.shift === "3부").length;
+    if (shift1Count === 0 && shift3Count === 0) {
+      specialUnassigned.push({
+        caddy,
+        reason: REASON.ONE_THREE_INSUFFICIENT_RESERVATIONS,
+        review: true,
+      });
+      continue;
+    }
+
+    const found = findOneThreePair(remaining, minGap);
+    if (!found.ok) {
+      specialUnassigned.push({
+        caddy,
+        reason: found.reason,
+        review: true,
+      });
+      continue;
+    }
+
+    const { shift1, shift3, gapMinutes } = found.pair;
+    if (!isCompatibleOneThreePair(shift1, shift3, minGap)) {
+      specialUnassigned.push({
+        caddy,
+        reason: REASON.ONE_THREE_NO_PAIR,
+        review: true,
+      });
+      continue;
+    }
+
+    const pairId = `13-${caddy.id}-${shift1.teeTime}-${shift3.teeTime}`;
+    for (const reservation of [shift1, shift3]) {
+      assignments.push({
+        date: input.date,
+        shift: reservation.shift as ShiftPart,
+        sequenceIndex: -1,
+        reason: REASON.ONE_THREE_PRIORITY,
+        reservation,
+        caddy,
+        pairId,
+        kind: "oneThree",
+      });
+    }
+
+    // gapMinutes kept for future debug; referenced to avoid unused lint
+    void gapMinutes;
+
+    assignedCaddyIds.add(caddy.id);
+    const taken = new Set([shift1, shift3].map(reservationKey));
+    remaining = remaining.filter((r) => !taken.has(reservationKey(r)));
+  }
+
+  return {
+    assignments,
+    specialUnassigned,
+    remainingReservations: remaining,
+    assignedCaddyIds,
+  };
+}
+
+/**
+ * 자동배치:
+ * 1) 54홀 2) 1·3부 3) 일반 순번
+ * - special 후보는 일반 available/포인터에서 제외
+ * - special 실패는 specialUnassigned (일반 강등 없음)
  */
 export function computeAutoAssignmentsV1(input: {
   date: string;
@@ -358,7 +542,10 @@ export function computeAutoAssignmentsV1(input: {
   special?: AutoAssignCaddy[];
   /** 54홀 신청/지정 후보 — 명시적 입력 */
   fiftyFourHole?: AutoAssignCaddy[];
+  /** 1·3부 신청자 후보 — 명시적 입력 */
+  oneThreeCandidates?: AutoAssignCaddy[];
   min54HoleGapMinutes?: number;
+  minOneThreeGapMinutes?: number;
 }): AutoAssignResultV1 {
   const date = input.date;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
@@ -370,13 +557,20 @@ export function computeAutoAssignmentsV1(input: {
   );
   const fiftyFourIds = new Set(fiftyFourHole.map((c) => c.id));
 
-  const special = dedupeCaddies([...(input.special || [])])
+  // 54홀과 동일 캐디면 54홀 우선 — 1·3 후보에서 제외
+  const oneThreeCandidates = dedupeCaddies([...(input.oneThreeCandidates || [])])
     .filter((c) => !fiftyFourIds.has(c.id))
     .sort(compareCaddyOrder);
+  const oneThreeIds = new Set(oneThreeCandidates.map((c) => c.id));
 
-  // 일반 순번 풀에서 54홀 후보 제외 (포인터 꼬임 방지)
+  const specialExclude = new Set<number>([...fiftyFourIds, ...oneThreeIds]);
+  const special = dedupeCaddies([...(input.special || [])])
+    .filter((c) => !specialExclude.has(c.id))
+    .sort(compareCaddyOrder);
+
+  // 일반 순번 풀에서 special 후보 제외 (포인터 꼬임 방지)
   const available = dedupeCaddies([...(input.available || [])])
-    .filter((c) => !fiftyFourIds.has(c.id))
+    .filter((c) => !specialExclude.has(c.id))
     .sort(compareCaddyOrder);
 
   const unassignedReservations: UnassignedReservationRow[] = [];
@@ -410,15 +604,30 @@ export function computeAutoAssignmentsV1(input: {
     minGapMinutes: input.min54HoleGapMinutes,
   });
 
+  // 2) 1·3부 신청자
+  const oneThree = assignOneThreePriority({
+    date,
+    reservations: fiftyFour.remainingReservations,
+    oneThreeCandidates,
+    minGapMinutes: input.minOneThreeGapMinutes,
+  });
+
   const fiftyFourHoleAssignments = fiftyFour.assignments;
-  const specialUnassigned = fiftyFour.specialUnassigned;
-  const remainingEligible = fiftyFour.remainingReservations.sort(
+  const oneThreeAssignments = oneThree.assignments;
+  const specialUnassigned = [
+    ...fiftyFour.specialUnassigned,
+    ...oneThree.specialUnassigned,
+  ];
+  const remainingEligible = oneThree.remainingReservations.sort(
     compareReservationOrder
   );
 
-  // 2) 일반 순번 (포인터는 여기서만 전진)
+  // 3) 일반 순번 (포인터는 여기서만 전진)
   const regularAssignments: AutoAssignmentRow[] = [];
-  const usedCaddyIds = new Set<number>(fiftyFour.assignedCaddyIds);
+  const usedCaddyIds = new Set<number>([
+    ...fiftyFour.assignedCaddyIds,
+    ...oneThree.assignedCaddyIds,
+  ]);
   let pointer = 0;
 
   for (const shift of SHIFT_PARTS) {
@@ -472,28 +681,33 @@ export function computeAutoAssignmentsV1(input: {
     }
   }
 
-  // 54홀 배치분도 byShift.assigned에 반영
-  for (const a of fiftyFourHoleAssignments) {
+  for (const a of [...fiftyFourHoleAssignments, ...oneThreeAssignments]) {
     byShift[a.shift].assigned += 1;
   }
 
-  const assignments = [...fiftyFourHoleAssignments, ...regularAssignments].sort(
-    (a, b) => {
-      const sr = shiftRank(a.shift) - shiftRank(b.shift);
-      if (sr !== 0) return sr;
-      return a.reservation.teeTime.localeCompare(b.reservation.teeTime);
-    }
-  );
+  const assignments = [
+    ...fiftyFourHoleAssignments,
+    ...oneThreeAssignments,
+    ...regularAssignments,
+  ].sort((a, b) => {
+    const sr = shiftRank(a.shift) - shiftRank(b.shift);
+    if (sr !== 0) return sr;
+    return a.reservation.teeTime.localeCompare(b.reservation.teeTime);
+  });
 
   const unusedCaddies = available.filter((c) => !usedCaddyIds.has(c.id));
   const fiftyFourHoleAssignedCaddyCount = new Set(
     fiftyFourHoleAssignments.map((a) => a.caddy.id)
+  ).size;
+  const oneThreeAssignedCaddyCount = new Set(
+    oneThreeAssignments.map((a) => a.caddy.id)
   ).size;
 
   return {
     date,
     assignments,
     fiftyFourHoleAssignments,
+    oneThreeAssignments,
     regularAssignments,
     unassignedReservations,
     unusedCaddies,
@@ -508,7 +722,10 @@ export function computeAutoAssignmentsV1(input: {
       specialCount: special.length,
       fiftyFourHoleCandidateCount: fiftyFourHole.length,
       fiftyFourHoleAssignedCaddyCount,
-      fiftyFourHoleUnassignedCount: specialUnassigned.length,
+      fiftyFourHoleUnassignedCount: fiftyFour.specialUnassigned.length,
+      oneThreeCandidateCount: oneThreeCandidates.length,
+      oneThreeAssignedCaddyCount,
+      oneThreeUnassignedCount: oneThree.specialUnassigned.length,
       byShift,
       finalPointer: available.length === 0 ? 0 : pointer,
     },

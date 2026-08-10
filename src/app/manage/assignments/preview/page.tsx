@@ -22,6 +22,7 @@ type PreviewResponse = AutoAssignResultV1 & {
 type Tab =
   | "assigned"
   | "fiftyFour"
+  | "oneThree"
   | "regular"
   | "unassigned"
   | "unused"
@@ -83,9 +84,9 @@ export default function AutoAssignPreviewPage() {
   return (
     <div style={{ display: "grid", gap: 16, maxWidth: 1200 }}>
       <div>
-        <h1 style={{ margin: 0, fontSize: 22 }}>자동배치 v1+54홀 미리보기</h1>
+        <h1 style={{ margin: 0, fontSize: 22 }}>자동배치 미리보기</h1>
         <p style={{ margin: "6px 0 0", color: "#64748b", fontSize: 14 }}>
-          54홀 우선(최소 6시간 간격) 후 일반 순번 배치. DB에 Assignment를 쓰지 않습니다.
+          우선순위: 54홀 → 1·3부 → 일반 순번. DB에 Assignment를 쓰지 않습니다.
         </p>
       </div>
 
@@ -149,12 +150,18 @@ export default function AutoAssignPreviewPage() {
               value={String(result.meta.fiftyFourHoleAssignedCaddyCount ?? 0)}
             />
             <Stat
-              label="54홀 review"
-              value={String(result.meta.fiftyFourHoleUnassignedCount ?? 0)}
+              label="1·3부 배치"
+              value={String(result.meta.oneThreeAssignedCaddyCount ?? 0)}
+            />
+            <Stat
+              label="special review"
+              value={String(
+                (result.meta.fiftyFourHoleUnassignedCount ?? 0) +
+                  (result.meta.oneThreeUnassignedCount ?? 0)
+              )}
             />
             <Stat label="미배치 예약" value={String(result.meta.unassignedCount)} />
             <Stat label="미사용 캐디" value={String(result.meta.unusedCount)} />
-            <Stat label="special" value={String(result.meta.specialCount)} />
             <Stat label="가용" value={String(result.meta.availableCount)} />
             <Stat
               label="1/2/3부 배치"
@@ -182,11 +189,12 @@ export default function AutoAssignPreviewPage() {
               [
                 ["assigned", "전체 배치"],
                 ["fiftyFour", "54홀"],
+                ["oneThree", "1·3부"],
                 ["regular", "일반순번"],
                 ["unassigned", "미배치 예약"],
                 ["unused", "미사용 캐디"],
                 ["special", "special"],
-                ["specialUnassigned", "54홀 review"],
+                ["specialUnassigned", "special review"],
               ] as const
             ).map(([key, label]) => (
               <button
@@ -220,7 +228,10 @@ export default function AutoAssignPreviewPage() {
             )}
           </div>
 
-          {(tab === "assigned" || tab === "fiftyFour" || tab === "regular") && (
+          {(tab === "assigned" ||
+            tab === "fiftyFour" ||
+            tab === "oneThree" ||
+            tab === "regular") && (
             <Table
               headers={[
                 "구분",
@@ -237,7 +248,9 @@ export default function AutoAssignPreviewPage() {
                 ? assignedRows
                 : tab === "fiftyFour"
                   ? result.fiftyFourHoleAssignments || []
-                  : result.regularAssignments || []
+                  : tab === "oneThree"
+                    ? result.oneThreeAssignments || []
+                    : result.regularAssignments || []
               )
                 .filter((a) =>
                   tab === "assigned" && shiftFilter !== "ALL"
@@ -245,7 +258,11 @@ export default function AutoAssignPreviewPage() {
                     : true
                 )
                 .map((a) => [
-                  a.kind === "fiftyFourHole" ? "54홀" : "일반",
+                  a.kind === "fiftyFourHole"
+                    ? "54홀"
+                    : a.kind === "oneThree"
+                      ? "1·3부"
+                      : "일반",
                   a.shift,
                   a.reservation.teeTime,
                   a.reservation.courseLabel || a.reservation.course,
