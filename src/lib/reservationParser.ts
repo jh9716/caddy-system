@@ -19,7 +19,8 @@ export type ShiftPart = (typeof SHIFT_PARTS)[number];
 
 export type ParsedReservation = {
   date: string;
-  course: CourseCode;
+  /** 코스 판별 실패 시 null — VERTHILL 강제 fallback 없음 */
+  course: CourseCode | null;
   courseLabel: string;
   shift: ShiftPart;
   teeTime: string;
@@ -73,6 +74,16 @@ type HeaderKind =
   | "shift";
 
 type ColumnMap = Partial<Record<HeaderKind, number>>;
+
+/** 한 시트 안 가로 반복 코스 블록 (예: A:K / L:V / W:AG / AH:AR) */
+export type CourseBlock = {
+  headerRow: number;
+  startCol: number;
+  endCol: number;
+  columns: ColumnMap;
+  /** 블록 데이터/상단 제목에서 추론한 기본 코스 */
+  defaultCourse: CourseCode | null;
+};
 
 const COURSE_ALIASES: Array<{ code: CourseCode; patterns: RegExp[] }> = [
   {
@@ -342,36 +353,188 @@ export function matchHeaderKind(cell: string): HeaderKind | null {
   return null;
 }
 
-export function detectHeaderRow(
+/**
+ * 헤더 행에서 가로 반복되는 코스 블록을 모두 탐지.
+ * - "시간/티타임" 헤더가 여러 번 나타나면 각각 독립 블록
+ * - 단일 테이블(헤더 1세트)도 블록 1개로 처리
+ */
+export function detectCourseBlocks(
   matrix: string[][],
-  maxScanRows = 15
-): { headerRow: number; columns: ColumnMap } | null {
+  maxScanRows = 20
+): CourseBlock[] {
   const limit = Math.min(maxScanRows, matrix.length);
-  let best: { headerRow: number; columns: ColumnMap; score: number } | null = null;
+  let bestRow = -1;
+  let bestScore = -1;
+  let bestTeeCols: number[] = [];
 
   for (let r = 0; r < limit; r++) {
     const row = matrix[r] || [];
-    const columns: ColumnMap = {};
+    const teeCols: number[] = [];
+    let teamCount = 0;
+    let courseCount = 0;
+    let dateCount = 0;
+    let shiftCount = 0;
+    let holeCount = 0;
     for (let c = 0; c < row.length; c++) {
       const kind = matchHeaderKind(row[c] || "");
-      if (!kind) continue;
-      if (columns[kind] == null) columns[kind] = c;
+      if (kind === "teeTime") teeCols.push(c);
+      else if (kind === "teamName") teamCount += 1;
+      else if (kind === "course") courseCount += 1;
+      else if (kind === "date") dateCount += 1;
+      else if (kind === "shift") shiftCount += 1;
+      else if (kind === "hole" || kind === "startingHole") holeCount += 1;
     }
+    if (teeCols.length === 0) continue;
     const score =
-      (columns.teeTime != null ? 3 : 0) +
-      (columns.teamName != null ? 2 : 0) +
-      (columns.date != null ? 1 : 0) +
-      (columns.course != null ? 1 : 0) +
-      (columns.shift != null ? 1 : 0) +
-      (columns.hole != null || columns.startingHole != null ? 1 : 0);
-
-    if (columns.teeTime == null) continue;
-    if (!best || score > best.score) {
-      best = { headerRow: r, columns, score };
+      teeCols.length * 5 +
+      teamCount * 2 +
+      courseCount +
+      dateCount +
+      shiftCount +
+      holeCount;
+    if (score > bestScore) {
+      bestScore = score;
+      bestRow = r;
+      bestTeeCols = teeCols;
     }
   }
 
-  return best ? { headerRow: best.headerRow, columns: best.columns } : null;
+  if (bestRow < 0 || bestTeeCols.length === 0) return [];
+
+  const header = matrix[bestRow] || [];
+  const blocks: CourseBlock[] = [];
+
+  for (let i = 0; i < bestTeeCols.length; i++) {
+    const teeCol = bestTeeCols[i];
+    const prevTee = i > 0 ? bestTeeCols[i - 1] : null;
+    const nextTee = bestTeeCols[i + 1];
+    const leftBound = prevTee == null ? 0 : prevTee + 1;
+
+    // 시간 열 왼쪽으로 코스/날짜 헤더까지 확장
+    let startCol = teeCol;
+    for (let c = teeCol - 1; c >= leftBound; c--) {
+      const kind = matchHeaderKind(header[c] || "");
+      if (
+        kind === "course" ||
+        kind === "date" ||
+        kind === "shift" ||
+        kind === "teamName" ||
+        kind === "hole" ||
+        kind === "startingHole"
+      ) {
+        startCol = c;
+      } else {
+        break;
+      }
+    }
+    if (i === 0) {
+      // 단일 테이블: 선두 장식열 없이 날짜가 더 앞에 있을 수 있음
+      for (let c = startCol - 1; c >= 0; c--) {
+        const kind = matchHeaderKind(header[c] || "");
+        if (kind) startCol = c;
+        else break;
+      }
+    }
+
+    // 다음 블록의 코스열(보통 nextTee-1)은 제외
+    let endCol: number;
+    if (nextTee != null) {
+      endCol = nextTee - 1;
+      if (matchHeaderKind(header[endCol] || "") === "course") {
+        endCol = nextTee - 2;
+      }
+    } else {
+      const gap = prevTee != null ? teeCol - prevTee : 11;
+      endCol = Math.max(
+        teeCol,
+        Math.min(header.length - 1, startCol + Math.max(gap, 11) - 1)
+      );
+      // 헤더에 남은 관련 열 포함
+      for (let c = teeCol + 1; c < header.length; c++) {
+        if (matchHeaderKind(header[c] || "")) endCol = Math.max(endCol, c);
+      }
+    }
+    if (endCol < startCol) endCol = startCol;
+
+    const columns: ColumnMap = { teeTime: teeCol };
+    for (let c = startCol; c <= endCol; c++) {
+      const kind = matchHeaderKind(header[c] || "");
+      if (!kind || kind === "teeTime") continue;
+      if (columns[kind] == null) columns[kind] = c;
+    }
+
+    const defaultCourse = inferBlockDefaultCourse(
+      matrix,
+      bestRow,
+      startCol,
+      endCol,
+      columns.course ?? null
+    );
+
+    blocks.push({
+      headerRow: bestRow,
+      startCol,
+      endCol,
+      columns,
+      defaultCourse,
+    });
+  }
+
+  return blocks;
+}
+
+/** 단일 테이블 호환: 첫 블록의 헤더/컬럼맵 */
+export function detectHeaderRow(
+  matrix: string[][],
+  maxScanRows = 20
+): { headerRow: number; columns: ColumnMap } | null {
+  const blocks = detectCourseBlocks(matrix, maxScanRows);
+  if (!blocks.length) return null;
+  return { headerRow: blocks[0].headerRow, columns: blocks[0].columns };
+}
+
+function inferBlockDefaultCourse(
+  matrix: string[][],
+  headerRow: number,
+  startCol: number,
+  endCol: number,
+  courseCol: number | null
+): CourseCode | null {
+  // 헤더 위 제목 행에서 코스명 탐색
+  for (let r = Math.max(0, headerRow - 3); r < headerRow; r++) {
+    const row = matrix[r] || [];
+    for (let c = startCol; c <= endCol; c++) {
+      const hit = normalizeCourse(row[c] || "");
+      if (hit) return hit;
+    }
+  }
+  // 데이터 행의 코스 열에서 첫 유효 값
+  if (courseCol != null) {
+    for (let r = headerRow + 1; r < Math.min(matrix.length, headerRow + 40); r++) {
+      const hit = normalizeCourse((matrix[r] || [])[courseCol] || "");
+      if (hit) return hit;
+    }
+  }
+  // 블록 안 임의 셀
+  for (let r = headerRow + 1; r < Math.min(matrix.length, headerRow + 15); r++) {
+    const row = matrix[r] || [];
+    for (let c = startCol; c <= endCol; c++) {
+      const hit = normalizeCourse(row[c] || "");
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+function isBlankBlockRange(
+  values: unknown[],
+  startCol: number,
+  endCol: number
+): boolean {
+  for (let c = startCol; c <= endCol; c++) {
+    if (cellText(values[c]) !== "") return false;
+  }
+  return true;
 }
 
 function extractDateFromText(text: string): string | null {
@@ -438,27 +601,60 @@ export function parseReservationMatrix(
   }
 ): ParsedReservation[] {
   const stringMatrix = matrix.map((row) => row.map((c) => cellText(c)));
-  const detected = detectHeaderRow(stringMatrix);
-  if (!detected) return [];
+  const blocks = detectCourseBlocks(stringMatrix);
+  if (!blocks.length) return [];
 
-  const { headerRow, columns } = detected;
-  const headerLabels = stringMatrix[headerRow] || [];
   const sheetCtx = inferContextFromSheetName(options.sourceSheet);
   const fallbackDate = options.defaultDate || sheetCtx.date;
-  const fallbackCourse = options.defaultCourse || sheetCtx.course;
+  const sheetCourse = options.defaultCourse || sheetCtx.course;
   const fallbackShift = options.defaultShift || sheetCtx.shift;
 
+  const out: ParsedReservation[] = [];
+  for (const block of blocks) {
+    out.push(
+      ...parseCourseBlock(matrix, stringMatrix, block, {
+        sourceSheet: options.sourceSheet,
+        fallbackDate,
+        sheetCourse,
+        fallbackShift,
+      })
+    );
+  }
+  return out;
+}
+
+function parseCourseBlock(
+  matrix: unknown[][],
+  stringMatrix: string[][],
+  block: CourseBlock,
+  ctx: {
+    sourceSheet: string;
+    fallbackDate: string | null;
+    sheetCourse: CourseCode | null;
+    fallbackShift: ShiftPart | null;
+  }
+): ParsedReservation[] {
+  const { headerRow, columns, startCol, endCol } = block;
+  const headerLabels = stringMatrix[headerRow] || [];
+  const blockCourse = block.defaultCourse || ctx.sheetCourse;
   const out: ParsedReservation[] = [];
 
   for (let r = headerRow + 1; r < matrix.length; r++) {
     const values = matrix[r] || [];
-    if (isBlankRow(values)) continue;
+    if (isBlankBlockRange(values, startCol, endCol)) continue;
 
-    // skip repeated header-like rows
-    const maybeHeader = values
-      .map((v) => matchHeaderKind(cellText(v)))
-      .filter(Boolean);
-    if (maybeHeader.length >= 2) continue;
+    // 블록 범위 안 반복 헤더 행 스킵
+    let headerHits = 0;
+    for (let c = startCol; c <= endCol; c++) {
+      if (matchHeaderKind(cellText(values[c]))) headerHits += 1;
+    }
+    if (headerHits >= 2) continue;
+
+    const teamRaw =
+      columns.teamName != null ? cellText(values[columns.teamName]) : "";
+    const teamName = teamRaw || null;
+    // 빈 예약자 = 공석 티타임 — 예약팀으로 세지 않음
+    if (!teamName) continue;
 
     const rawData = buildRawData(headerLabels, values, columns);
     const reviewReasons: string[] = [];
@@ -471,24 +667,19 @@ export function parseReservationMatrix(
     }
 
     const dateRaw = columns.date != null ? values[columns.date] : undefined;
-    let date = parseDateValue(dateRaw) || fallbackDate || null;
+    const date = parseDateValue(dateRaw) || ctx.fallbackDate || null;
     if (!date) reviewReasons.push("날짜 없음");
 
     const courseRaw =
       columns.course != null ? cellText(values[columns.course]) : "";
-    let course = normalizeCourse(courseRaw) || fallbackCourse;
+    const course = normalizeCourse(courseRaw) || blockCourse;
     if (!course) reviewReasons.push("코스 판별 실패");
 
     const shiftRaw =
       columns.shift != null ? cellText(values[columns.shift]) : "";
-    let shift = normalizeShift(shiftRaw) || fallbackShift;
+    let shift = normalizeShift(shiftRaw) || ctx.fallbackShift;
     if (!shift && teeTime) shift = inferShiftFromTeeTime(teeTime);
     if (!shift) reviewReasons.push("부 판별 실패");
-
-    const teamRaw =
-      columns.teamName != null ? cellText(values[columns.teamName]) : "";
-    const teamName = teamRaw || null;
-    if (!teamName) reviewReasons.push("예약자/팀명 없음");
 
     const hole =
       columns.hole != null ? parseHoleValue(values[columns.hole]) : null;
@@ -497,56 +688,50 @@ export function parseReservationMatrix(
         ? parseHoleValue(values[columns.startingHole])
         : null;
 
-    // If almost everything empty except noise, skip
-    if (!teeTime && !teamName && !courseRaw && !dateRaw) continue;
+    if (!teeTime && !courseRaw && !dateRaw) continue;
 
-    const needsReview = reviewReasons.length > 0;
-    const courseCode = course || "VERTHILL";
-    const row: ParsedReservation = {
+    out.push({
       date: date || "",
-      course: courseCode,
-      courseLabel: COURSE_LABELS[courseCode],
+      course,
+      courseLabel: course ? COURSE_LABELS[course] : "미상",
       shift: shift || "1부",
       teeTime: teeTime || cellText(teeRaw),
       teamName,
       hole,
       startingHole,
-      sourceSheet: options.sourceSheet,
-      rawRowIndex: r + 1, // 1-based spreadsheet row
+      sourceSheet: ctx.sourceSheet,
+      rawRowIndex: r + 1,
       rawData,
-      needsReview,
+      needsReview: reviewReasons.length > 0,
       reviewReasons,
       isDuplicate: false,
       duplicateKey: null,
-    };
-    out.push(row);
+    });
   }
 
   return out;
 }
 
+function reservationDupeKey(row: ParsedReservation): string {
+  return [
+    row.date,
+    row.course ?? "",
+    row.teeTime,
+    row.startingHole ?? "",
+  ].join("|");
+}
+
 export function markDuplicates(rows: ParsedReservation[]): ParsedReservation[] {
   const keyCount = new Map<string, number>();
   for (const row of rows) {
-    if (!row.date || !row.teeTime || row.needsReview) continue;
-    // duplicate = same date + course + teeTime (+ optional startingHole)
-    const key = [
-      row.date,
-      row.course,
-      row.teeTime,
-      row.startingHole ?? "",
-    ].join("|");
+    if (!row.date || !row.teeTime || row.needsReview || !row.course) continue;
+    const key = reservationDupeKey(row);
     keyCount.set(key, (keyCount.get(key) || 0) + 1);
   }
 
   return rows.map((row) => {
-    if (!row.date || !row.teeTime || row.needsReview) return row;
-    const key = [
-      row.date,
-      row.course,
-      row.teeTime,
-      row.startingHole ?? "",
-    ].join("|");
+    if (!row.date || !row.teeTime || row.needsReview || !row.course) return row;
+    const key = reservationDupeKey(row);
     const count = keyCount.get(key) || 0;
     if (count <= 1) return row;
     const reasons = row.reviewReasons.includes("중복 티타임")
@@ -566,7 +751,9 @@ export function buildReservationSummary(
   rows: ParsedReservation[],
   sheetCount: number
 ): ReservationParseSummary {
-  const valid = rows.filter((r) => !r.needsReview && r.date && r.teeTime);
+  const valid = rows.filter(
+    (r) => !r.needsReview && r.date && r.teeTime && r.course && r.teamName
+  );
   const dates = [...new Set(valid.map((r) => r.date))].sort();
 
   const byDate = dates.map((date) => {
@@ -624,7 +811,9 @@ export function finalizeReservationParse(
 
   const sorted = [...withDupes].sort((a, b) => {
     if (a.date !== b.date) return a.date.localeCompare(b.date);
-    if (a.course !== b.course) return courseRank[a.course] - courseRank[b.course];
+    const ra = a.course != null ? courseRank[a.course] : 999;
+    const rb = b.course != null ? courseRank[b.course] : 999;
+    if (ra !== rb) return ra - rb;
     if (a.shift !== b.shift) return shiftRank[a.shift] - shiftRank[b.shift];
     if (a.teeTime !== b.teeTime) return a.teeTime.localeCompare(b.teeTime);
     if (a.sourceSheet !== b.sourceSheet) {

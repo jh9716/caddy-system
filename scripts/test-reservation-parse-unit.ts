@@ -4,6 +4,7 @@
  */
 
 import {
+  detectCourseBlocks,
   detectHeaderRow,
   inferShiftFromTeeTime,
   matchHeaderKind,
@@ -12,7 +13,9 @@ import {
   parseDateValue,
   parseReservationSheets,
   parseTeeTime,
+  type CourseCode,
   type ParsedReservation,
+  type ShiftPart,
 } from "../src/lib/reservationParser";
 import {
   buildTestReservationXlsxBuffer,
@@ -272,7 +275,7 @@ section("xlsx buffer roundtrip");
   );
 }
 
-section("예약자 없음 → needsReview but raw kept");
+section("빈 예약자 → 예약팀으로 세지 않음 (스킵)");
 {
   const result = parseReservationSheets([
     {
@@ -280,12 +283,159 @@ section("예약자 없음 → needsReview but raw kept");
       matrix: [
         ["날짜", "티타임", "예약자"],
         ["2026-08-17", "10:00", ""],
+        ["2026-08-17", "10:08", "실제팀"],
       ],
     },
   ]);
-  assert(result.needsReview.length === 1, "missing team review");
-  assert(result.needsReview[0].teeTime === "10:00", "time still parsed");
-  assert(result.needsReview[0].rawRowIndex === 2, "row index");
+  assert(result.reservations.length === 1, "empty team skipped");
+  assert(result.summary.totals.teams === 1, "1 team counted");
+  assert(result.needsReview.length === 0, "no review for vacant slot");
+  assert(result.reservations[0].teamName === "실제팀", "kept real team");
+}
+
+section("코스 판별 실패 → needsReview (VERTHILL 강제 없음)");
+{
+  const result = parseReservationSheets([
+    {
+      name: "기타시트",
+      matrix: [
+        ["날짜", "티타임", "예약자"],
+        ["2026-08-18", "10:00", "무코스팀"],
+      ],
+    },
+  ]);
+  assert(result.needsReview.length === 1, "course fail → review");
+  assert(result.needsReview[0].course === null, "course null not VERTHILL");
+  assert(
+    result.needsReview[0].reviewReasons.some((x) => x.includes("코스")),
+    "course reason"
+  );
+  assert(result.summary.totals.teams === 0, "not counted as valid team");
+}
+
+section("가로 4코스 블록 (경기진행등록 구조) → 205팀");
+{
+  const DATE = "2026-08-20";
+  const specs: Array<{
+    course: CourseCode;
+    label: string;
+    shifts: Record<ShiftPart, number>;
+  }> = [
+    { course: "VERTHILL", label: "베르힐", shifts: { "1부": 24, "2부": 12, "3부": 18 } },
+    { course: "SKY", label: "스카이", shifts: { "1부": 24, "2부": 7, "3부": 16 } },
+    { course: "OCEAN", label: "오션", shifts: { "1부": 24, "2부": 13, "3부": 16 } },
+    { course: "LAKE", label: "레이크", shifts: { "1부": 24, "2부": 10, "3부": 17 } },
+  ];
+
+  function teeTimes(shift: ShiftPart, n: number): string[] {
+    const start =
+      shift === "1부" ? 6 * 60 : shift === "2부" ? 12 * 60 : 16 * 60;
+    return Array.from({ length: n }, (_, i) => {
+      const m = start + i * 7;
+      return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+    });
+  }
+
+  const blockRows: Array<
+    Array<{ course: string; time: string; team: string }>
+  > = specs.map((s) => {
+    const rows: Array<{ course: string; time: string; team: string }> = [];
+    for (const shift of ["1부", "2부", "3부"] as ShiftPart[]) {
+      for (const t of teeTimes(shift, s.shifts[shift])) {
+        rows.push({
+          course: s.label,
+          time: t,
+          team: `${s.label}-${t}`,
+        });
+      }
+    }
+    return rows;
+  });
+
+  const maxRows = Math.max(...blockRows.map((b) => b.length));
+  const header = [
+    ...["코스명", "시간", "예약자", "내장객1", "내장객2", "내장객3", "내장객4", "x", "y", "z", "캐디명"],
+    ...["코스명", "시간", "예약자", "내장객1", "내장객2", "내장객3", "내장객4", "x", "y", "z", "캐디명"],
+    ...["코스명", "시간", "예약자", "내장객1", "내장객2", "내장객3", "내장객4", "x", "y", "z", "캐디명"],
+    ...["코스명", "시간", "예약자", "내장객1", "내장객2", "내장객3", "내장객4", "x", "y", "z", "캐디명"],
+  ];
+
+  const matrix: unknown[][] = [
+    ["경기진행등록", "", "", DATE],
+    header,
+  ];
+  for (let i = 0; i < maxRows; i++) {
+    const row: unknown[] = [];
+    for (let b = 0; b < 4; b++) {
+      const cell = blockRows[b][i];
+      if (cell) {
+        row.push(
+          cell.course,
+          cell.time,
+          cell.team,
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          ""
+        );
+      } else {
+        // 공석: 시간은 있어도 예약자 비움 → 세지 않음
+        row.push("", "", "", "", "", "", "", "", "", "", "");
+      }
+    }
+    matrix.push(row);
+  }
+
+  const blocks = detectCourseBlocks(matrix.map((r) => r.map((c) => String(c ?? ""))));
+  assert(blocks.length === 4, "4 horizontal course blocks");
+  assert(blocks[0].startCol === 0 && blocks[0].endCol === 10, "block0 A:K");
+  assert(blocks[1].startCol === 11 && blocks[1].endCol === 21, "block1 L:V");
+  assert(blocks[2].startCol === 22 && blocks[2].endCol === 32, "block2 W:AG");
+  assert(blocks[3].startCol === 33 && blocks[3].endCol === 43, "block3 AH:AR");
+
+  const result = parseReservationSheets(
+    [{ name: "경기진행등록", matrix }],
+    { defaultDate: DATE }
+  );
+
+  assert(result.summary.totals.teams === 205, "total 205 teams");
+  assert(result.needsReview.length === 0, "no review rows");
+
+  const day = result.summary.byDate.find((d) => d.date === DATE);
+  assert(day?.totalTeams === 205, "day total 205");
+  assert(day?.byCourse.length === 4, "4 courses in summary");
+
+  const byCode = Object.fromEntries(
+    (day?.byCourse || []).map((c) => [c.course, c])
+  ) as Record<string, { totalTeams: number; byShift: Record<ShiftPart, number> }>;
+
+  assert(byCode.VERTHILL?.totalTeams === 54, "베르힐 54");
+  assert(byCode.VERTHILL?.byShift["1부"] === 24, "V 1부 24");
+  assert(byCode.VERTHILL?.byShift["2부"] === 12, "V 2부 12");
+  assert(byCode.VERTHILL?.byShift["3부"] === 18, "V 3부 18");
+
+  assert(byCode.SKY?.totalTeams === 47, "스카이 47");
+  assert(byCode.SKY?.byShift["1부"] === 24, "S 1부 24");
+  assert(byCode.SKY?.byShift["2부"] === 7, "S 2부 7");
+  assert(byCode.SKY?.byShift["3부"] === 16, "S 3부 16");
+
+  assert(byCode.OCEAN?.totalTeams === 53, "오션 53");
+  assert(byCode.OCEAN?.byShift["1부"] === 24, "O 1부 24");
+  assert(byCode.OCEAN?.byShift["2부"] === 13, "O 2부 13");
+  assert(byCode.OCEAN?.byShift["3부"] === 16, "O 3부 16");
+
+  assert(byCode.LAKE?.totalTeams === 51, "레이크 51");
+  assert(byCode.LAKE?.byShift["1부"] === 24, "L 1부 24");
+  assert(byCode.LAKE?.byShift["2부"] === 10, "L 2부 10");
+  assert(byCode.LAKE?.byShift["3부"] === 17, "L 3부 17");
+
+  assert(day?.byShift["1부"] === 96, "all 1부 96");
+  assert(day?.byShift["2부"] === 42, "all 2부 42");
+  assert(day?.byShift["3부"] === 67, "all 3부 67");
 }
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);
