@@ -10,6 +10,12 @@ const nextConfig: NextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
+  // Cloudflare quick tunnel 등 외부 호스트에서 next dev 접근 허용
+  allowedDevOrigins: [
+    '*.trycloudflare.com',
+    'localhost',
+    '127.0.0.1',
+  ],
 }
 
 export default nextConfig

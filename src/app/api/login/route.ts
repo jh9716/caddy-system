@@ -1,33 +1,54 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import bcrypt from "bcryptjs";
+import { prisma } from "@/lib/prisma";
+import { applySessionCookies, type AppRole } from "@/lib/sessionCookies";
 
 export const dynamic = "force-dynamic";
 
-export async function POST(req: Request) {
-  const { username, password } = await req.json().catch(() => ({}));
+export async function POST(req: NextRequest) {
+  const body = await req.json().catch(() => ({}));
+  const username = String(body?.username ?? "").trim();
+  const password = String(body?.password ?? "");
 
-  const ADMIN_USER = process.env.ADMIN_USER ?? "admin";
-  const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "";
-  const CADDY_USER = process.env.CADDY_USER ?? "caddy";
-  const CADDY_PASSWORD = process.env.CADDY_PASSWORD ?? "";
+  if (!username || !password) {
+    return NextResponse.json({ error: "아이디/비밀번호를 입력하세요." }, { status: 401 });
+  }
 
-  let role: "admin" | "caddy" | null = null;
+  const ADMIN_USER = process.env.ADMIN_USER || process.env.ADMIN_USERNAME || "admin";
+  const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
+  const CADDY_USER = process.env.CADDY_USER || process.env.CADDY_USERNAME || "caddy";
+  const CADDY_PASSWORD = process.env.CADDY_PASSWORD || "";
 
-  if (username === ADMIN_USER && password === ADMIN_PASSWORD) role = "admin";
-  if (username === CADDY_USER && password === CADDY_PASSWORD) role = "caddy";
+  let role: AppRole | null = null;
+
+  // 1) 환경변수 계정 (로컬/터널 테스트용)
+  if (username === ADMIN_USER && ADMIN_PASSWORD && password === ADMIN_PASSWORD) {
+    role = "admin";
+  } else if (username === CADDY_USER && CADDY_PASSWORD && password === CADDY_PASSWORD) {
+    role = "caddy";
+  } else {
+    // 2) DB User 계정 (bcrypt) — caddy_local 시드 admin 등
+    try {
+      const user = await prisma.user.findUnique({ where: { username } });
+      if (user) {
+        const ok = await bcrypt.compare(password, user.password);
+        if (ok) {
+          const dbRole = String(user.role || "").toLowerCase();
+          if (dbRole === "admin" || dbRole === "caddy") {
+            role = dbRole;
+          }
+        }
+      }
+    } catch (e) {
+      console.error("[POST /api/login] db auth error", e);
+    }
+  }
 
   if (!role) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    return NextResponse.json({ error: "unauthorized", message: "로그인 실패" }, { status: 401 });
   }
 
   const res = NextResponse.json({ ok: true, role });
-
-  // role 쿠키 설정 (서버 렌더에서만 읽으므로 httpOnly 여도 무방)
-  res.cookies.set("role", role, {
-    path: "/",
-    httpOnly: true,
-    sameSite: "lax",
-    // 필요하면 expires 나 maxAge로 지속시간도 설정
-  });
-
+  applySessionCookies(res, req, role, username);
   return res;
 }

@@ -7,7 +7,10 @@ export const dynamic = "force-dynamic";
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const store = await cookies();
-  const role = store.get("role")?.value ?? null;
+  const role =
+    store.get("role")?.value ||
+    store.get("session_role")?.value ||
+    (store.get("admin")?.value === "1" ? "admin" : null);
 
   return (
     <html lang="ko">

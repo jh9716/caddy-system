@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 export default function LoginClient() {
+  const searchParams = useSearchParams();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
@@ -16,11 +18,22 @@ export default function LoginClient() {
       const res = await fetch("/api/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ username, password }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || "로그인 실패");
-      // role 에 따라 이동
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || data?.message || "로그인 실패");
+
+      const callback = searchParams.get("callbackUrl");
+      const safeCallback =
+        callback && callback.startsWith("/") && !callback.startsWith("//")
+          ? callback
+          : null;
+
+      if (safeCallback) {
+        location.href = safeCallback;
+        return;
+      }
       location.href = data.role === "admin" ? "/manage" : "/caddy";
     } catch (e: any) {
       setErr(e.message || "로그인 실패");
@@ -34,25 +47,29 @@ export default function LoginClient() {
       <form onSubmit={onSubmit} className="w-full max-w-md rounded-2xl border bg-white p-6 shadow">
         <h1 className="mb-6 text-xl font-bold">Verthill Caddy System</h1>
 
-        <label className="mb-1 block text-sm">아이디</label>
+        <label className="mb-1 block text-sm" htmlFor="login-username">아이디</label>
         <input
+          id="login-username"
+          name="username"
           value={username}
           onChange={(e) => setUsername(e.target.value)}
           className="mb-4 w-full rounded-lg border px-3 py-2 outline-none focus:ring"
-          autoComplete="off"
+          autoComplete="username"
           autoCapitalize="none"
           autoCorrect="off"
           spellCheck={false}
           inputMode="text"
         />
 
-        <label className="mb-1 block text-sm">비밀번호</label>
+        <label className="mb-1 block text-sm" htmlFor="login-password">비밀번호</label>
         <input
+          id="login-password"
+          name="password"
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           className="mb-4 w-full rounded-lg border px-3 py-2 outline-none focus:ring"
-          autoComplete="new-password"
+          autoComplete="current-password"
         />
 
         {err && (

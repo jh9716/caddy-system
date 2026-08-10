@@ -30,17 +30,44 @@ enum ShiftVariant {
   FIFTY_FOUR
 }
 
+/// Production DB enum (ACTIVE=재직, LEAVE=휴직, RETIRED=퇴사)
+enum EmploymentStatus {
+  ACTIVE
+  LEAVE
+  RETIRED
+}
+
+enum CaddyType {
+  HOUSE
+  THIRD
+  DRIVING
+}
+
 model Caddy {
-  id          Int          @id @default(autoincrement())
-  name        String
-  team        String
-  status      String?      @default("근무중")
-  memo        String?
-  assignments Assignment[]
-  schedules   Schedule[]
-  shiftDuties ShiftDuty[]
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  id                Int              @id @default(autoincrement())
+  name              String
+  team              String
+  /// 조 내 표시 순번 (작을수록 위)
+  teamOrder         Int              @default(0)
+  employeeCode      String?          @unique
+  /// DB: ACTIVE | LEAVE | RETIRED  (UI 라벨: 재직 | 휴직 | 퇴사)
+  employmentStatus  EmploymentStatus @default(ACTIVE)
+  missingFromImport Boolean          @default(false)
+  caddyType         CaddyType        @default(HOUSE)
+  /// 레거시 근무 상태 문자열 (가용 배지와 별개, 선택)
+  status            String?          @default("근무중")
+  /// 주중반 / 주말반 / 드라이빙 등 병행 분류
+  extraFlags        String[]         @default([])
+  memo              String?
+  assignments       Assignment[]
+  schedules         Schedule[]
+  shiftDuties       ShiftDuty[]
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@index([team, teamOrder])
+  @@index([employmentStatus])
+  @@index([caddyType])
 }
 
 model Assignment {
