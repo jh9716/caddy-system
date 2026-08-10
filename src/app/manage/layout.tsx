@@ -1,9 +1,28 @@
-export default function ManageLayout({ children }: { children: React.ReactNode }) {
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+
+export const dynamic = "force-dynamic";
+
+export default async function ManageLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const store = await cookies();
+  const role =
+    store.get("role")?.value ||
+    store.get("session_role")?.value ||
+    (store.get("admin")?.value === "1" ? "admin" : null);
+
+  if (role !== "admin") {
+    redirect("/login?callbackUrl=/manage");
+  }
+
   return (
     <div className="manage-shell">
       <aside className="manage-aside">
         <div style={{ fontWeight: 800, marginBottom: 12 }}>관리 메뉴</div>
-        <nav style={{ display: 'grid', gap: 8 }}>
+        <nav style={{ display: "grid", gap: 8 }}>
           <a href="/manage" style={linkStyle}>대시보드</a>
           <a href="/manage/caddies" style={linkStyle}>캐디등록/관리</a>
           <a href="/notice" style={linkStyle}>공지관리</a>
@@ -51,12 +70,12 @@ export default function ManageLayout({ children }: { children: React.ReactNode }
 }
 
 const linkStyle: React.CSSProperties = {
-  padding: '8px 10px',
-  border: '1px solid #e5e7eb',
+  padding: "8px 10px",
+  border: "1px solid #e5e7eb",
   borderRadius: 10,
-  background: '#f8fafc',
-  textDecoration: 'none',
-  color: '#111',
-  textAlign: 'center',
+  background: "#f8fafc",
+  textDecoration: "none",
+  color: "#111",
+  textAlign: "center",
   fontSize: 14,
 };

@@ -7,18 +7,12 @@ import {
   normalizeExtraFlags,
   normalizeTeamOrder,
 } from "@/lib/caddyManage";
+import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 function assertAdmin(req: NextRequest) {
-  const role =
-    req.cookies.get("role")?.value ||
-    req.cookies.get("session_role")?.value ||
-    (req.cookies.get("admin")?.value === "1" ? "admin" : null);
-  if (role !== "admin") {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
-  return null;
+  return requireAdmin(req) ?? null;
 }
 
 /** PATCH: 이름/조/조내순번/재직상태/extraFlags 수정 — ID 불변 */

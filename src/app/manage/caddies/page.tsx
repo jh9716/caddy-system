@@ -68,7 +68,12 @@ export default function ManageCaddiesPage() {
     try {
       const res = await fetch(`/api/caddies?employment=${employmentFilter}`, {
         cache: 'no-store',
+        credentials: 'include',
       });
+      if (res.status === 401 || res.status === 403) {
+        location.href = '/login?callbackUrl=/manage/caddies';
+        return;
+      }
       const data = await res.json();
       if (!res.ok) {
         setMessage(data?.error || '목록을 불러오지 못했습니다.');
@@ -136,6 +141,7 @@ export default function ManageCaddiesPage() {
       const res = await fetch(`/api/caddies/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           name: draft.name.trim(),
           team: draft.team,
@@ -171,11 +177,13 @@ export default function ManageCaddiesPage() {
         fetch(`/api/caddies/${c.id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
           body: JSON.stringify({ teamOrder: swapWith.teamOrder }),
         }),
         fetch(`/api/caddies/${swapWith.id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
           body: JSON.stringify({ teamOrder: c.teamOrder }),
         }),
       ]);
@@ -195,6 +203,7 @@ export default function ManageCaddiesPage() {
       const res = await fetch(`/api/caddies/${c.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ employmentStatus: status }),
       });
       const data = await res.json();
@@ -219,6 +228,7 @@ export default function ManageCaddiesPage() {
       const res = await fetch('/api/caddies', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           name: createDraft.name.trim(),
           team: createDraft.team,

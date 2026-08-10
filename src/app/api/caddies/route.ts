@@ -6,11 +6,15 @@ import {
   normalizeExtraFlags,
   normalizeTeamOrder,
 } from "@/lib/caddyManage";
+import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
-/** GET: 캐디 목록 (기본: 재직만, ?employment=all|재직|퇴사) */
+/** GET: 캐디 목록 (관리자 전용. 기본: 재직만, ?employment=all|재직|퇴사) */
 export async function GET(req: NextRequest) {
+  const guard = requireAdmin(req);
+  if (guard) return guard;
+
   try {
     const employment = req.nextUrl.searchParams.get("employment") || "재직";
     const where =
@@ -34,6 +38,9 @@ export async function GET(req: NextRequest) {
 
 /** POST: 신규 캐디 등록 (새 ID 발급, 기존 ID 변경 없음) */
 export async function POST(req: NextRequest) {
+  const guard = requireAdmin(req);
+  if (guard) return guard;
+
   try {
     const body = await req.json();
     const parsed = caddyCreateSchema.safeParse(body);
@@ -81,6 +88,9 @@ export async function POST(req: NextRequest) {
  * 하위 호환: 퇴사(soft) 처리만 수행. Assignment/Schedule 유지.
  */
 export async function DELETE(req: NextRequest) {
+  const guard = requireAdmin(req);
+  if (guard) return guard;
+
   try {
     const { searchParams } = new URL(req.url);
     const id = Number(searchParams.get("id"));

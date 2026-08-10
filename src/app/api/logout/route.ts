@@ -1,10 +1,10 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { clearSessionCookies } from "@/lib/sessionCookies";
 
 export const dynamic = "force-dynamic";
 
-export async function POST() {
+export async function POST(req: NextRequest) {
   const res = NextResponse.json({ ok: true });
-  // role 쿠키 제거
-  res.cookies.set("role", "", { path: "/", expires: new Date(0) });
+  clearSessionCookies(res, req);
   return res;
 }

@@ -2,7 +2,7 @@
 
 export default function LogoutButton() {
   const onClick = async () => {
-    await fetch("/api/logout", { method: "POST" });
+    await fetch("/api/logout", { method: "POST", credentials: "include" });
     location.href = "/"; // 새로고침 겸 홈으로
   };
   return (
