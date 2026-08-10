@@ -70,7 +70,13 @@ function loadExistingFromJson(filePath: string): ExistingCaddy[] {
     if (!id || !name || !team) {
       throw new Error(`--existing row[${i}] needs id,name,team`);
     }
-    return { id, name, team, status: row.status ?? null };
+    return {
+      id,
+      name,
+      team,
+      status: row.status ?? null,
+      extras: Array.isArray(row.extras) ? row.extras : [],
+    };
   });
 }
 
@@ -83,7 +89,6 @@ async function loadExistingFromDb(): Promise<ExistingCaddy[]> {
   const { PrismaClient } = await import("@prisma/client");
   const prisma = new PrismaClient();
   try {
-    // 읽기 전용
     return await prisma.caddy.findMany({
       select: { id: true, name: true, team: true, status: true },
       orderBy: { id: "asc" },
@@ -107,32 +112,52 @@ function printSection<T>(
   for (const row of rows) console.log(format(row));
 }
 
-function printPreview(preview: ImportPreview, importCount: number, existingCount: number) {
+function printPreview(
+  preview: ImportPreview,
+  importCount: number,
+  existingCount: number
+) {
   console.log("=== ROSTER IMPORT PREVIEW (read-only, no DB apply) ===");
-  console.log(`import rows: ${importCount}`);
+  console.log(`raw import rows: ${importCount}`);
+  console.log(`unique import people: ${preview.summary.uniqueImportPeople}`);
   console.log(`existing rows: ${existingCount}`);
   console.log("summary:", JSON.stringify(preview.summary, null, 2));
+  console.log("schemaProposal:", JSON.stringify(preview.schemaProposal, null, 2));
   console.log("touchesEmploymentStatus:", preview.touchesEmploymentStatus);
 
   printSection(
-    "update — 기존 ID 유지, 조 변경",
+    "mergedDuplicates — exact 이름 중복 칸 병합",
+    preview.mergedDuplicates.length,
+    preview.mergedDuplicates,
+    (m) =>
+      `${m.name}\tprimary=${m.primaryTeam ?? "(extra-only)"}\textras=[${m.extras.join(",") || "-"}]\tsources=${m.sourceTeams.join("+")}`
+  );
+
+  printSection(
+    "update — 기존 ID 유지",
     preview.summary.update,
     preview.updates,
-    (u) => `id=${u.id}\t${u.name}\t${u.currentTeam} -> ${u.nextTeam}`
+    (u) =>
+      `id=${u.id}\t${u.name}\t${u.currentTeam} -> ${u.nextTeam}` +
+      (u.nextExtras.length ? `\textras=[${u.nextExtras.join(",")}]` : "") +
+      (u.extrasOnly ? "\t(extrasOnly)" : "")
   );
 
   printSection(
-    "unchanged — 기존 ID 유지, 조 동일",
+    "unchanged — 기존 ID 유지, team/extras 동일",
     preview.summary.unchanged,
     preview.unchanged,
-    (u) => `id=${u.id}\t${u.name}\t${u.team}`
+    (u) =>
+      `id=${u.id}\t${u.name}\t${u.team}` +
+      (u.extras.length ? `\textras=[${u.extras.join(",")}]` : "")
   );
 
   printSection(
-    "create — 신규만",
+    "create — 신규만 (새 ID 예정)",
     preview.summary.new,
     preview.creates,
-    (c) => `(new)\t${c.name}\t-> ${c.team}\t(row ${c.rowNumber})`
+    (c) =>
+      `(new)\t${c.name}\tteam=${c.team}\tprimary=${c.primaryTeam ?? "(none)"}\textras=[${c.extras.join(",") || "-"}]\t(row ${c.rowNumber})`
   );
 
   printSection(
@@ -140,7 +165,7 @@ function printPreview(preview: ImportPreview, importCount: number, existingCount
     preview.summary.needsReview,
     preview.needsReview,
     (r) =>
-      `${r.name}\t최신조=${r.team}\t${r.reason}` +
+      `${r.name}\tteam=${r.team}\tprimary=${r.primaryTeam ?? "(none)"}\textras=[${r.extras.join(",") || "-"}]\t${r.reason}` +
       (r.candidateIds?.length ? `\t후보id=[${r.candidateIds.join(",")}]` : "")
   );
 
@@ -151,26 +176,20 @@ function printPreview(preview: ImportPreview, importCount: number, existingCount
     (m) => `id=${m.id}\t${m.name}\t${m.team}`
   );
 
-  // 검증 포인트
-  const updateIds = new Set(preview.updates.map((u) => u.id));
-  const unchangedIds = new Set(preview.unchanged.map((u) => u.id));
-  const overlap = [...updateIds].filter((id) => unchangedIds.has(id));
-  const createHasId = preview.creates.some((c: any) => c.id != null);
-  const reviewInApply = preview.applyPayload.creates.some((c) =>
-    ["박준형", "김기환2", "김예진1", "김예진2"].includes(c.name.trim())
-  );
-
-  console.log("\n## validation checks");
+  console.log("\n## verification");
   console.log(
     JSON.stringify(
       {
-        updateAndUnchangedIdOverlap: overlap,
-        createRowsDoNotCarryId: !createHasId,
-        applyPayloadUpdatesOnlyChangeTeam: preview.applyPayload.updates.every(
-          (u) => Object.keys(u).sort().join(",") === "id,team"
-        ),
-        applyPayloadHasNoNeedsReviewCreates: !reviewInApply,
-        allUpdateIdsArePositive: preview.updates.every((u) => u.id > 0),
+        uniqueImportPeople: preview.summary.uniqueImportPeople,
+        createPlusMatched: preview.summary.createPlusMatched,
+        needsReview: preview.summary.needsReview,
+        partition:
+          preview.summary.createPlusMatched + preview.summary.needsReview,
+        partitionMatchesUnique: preview.summary.partitionMatchesUnique,
+        createPlusMatchedEqualsUnique:
+          preview.summary.createPlusMatchedEqualsUnique,
+        expectedTotalAfterApply: preview.summary.expectedTotalAfterApply,
+        extrasHeadcount: preview.summary.extrasHeadcount,
       },
       null,
       2
@@ -199,10 +218,13 @@ async function main() {
     mode: "preview-only",
     dbApply: false,
     sourceFile: abs,
-    existingSource: existingPath ? path.resolve(existingPath) : "DATABASE_URL(read-only)",
+    existingSource: existingPath
+      ? path.resolve(existingPath)
+      : "DATABASE_URL(read-only)",
     importCount: importRows.length,
     existingCount: existing.length,
     summary: preview.summary,
+    mergedDuplicates: preview.mergedDuplicates,
     updates: preview.updates,
     unchanged: preview.unchanged,
     creates: preview.creates,
@@ -211,11 +233,10 @@ async function main() {
     lines: preview.lines,
     applyPayload: preview.applyPayload,
     touchesEmploymentStatus: preview.touchesEmploymentStatus,
+    schemaProposal: preview.schemaProposal,
   };
 
-  const defaultOut = path.resolve(
-    "roster-import-preview-report.json"
-  );
+  const defaultOut = path.resolve("roster-import-preview-report.json");
   const dest = outPath ? path.resolve(outPath) : defaultOut;
   fs.writeFileSync(dest, JSON.stringify(report, null, 2), "utf8");
   console.log(`\nreport written: ${dest}`);

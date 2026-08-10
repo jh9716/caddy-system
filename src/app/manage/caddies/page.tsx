@@ -17,20 +17,52 @@ type PreviewLine = {
 
 type ImportPreview = {
   summary: {
+    uniqueImportPeople?: number;
     update: number;
     unchanged: number;
     new: number;
     needsReview: number;
     missingInImport: number;
+    createPlusMatched?: number;
+    partitionMatchesUnique?: boolean;
+    expectedTotalAfterApply?: number;
+    extrasHeadcount?: { 주중반: number; 주말반: number; 드라이빙: number };
   };
-  updates: Array<{ id: number; name: string; currentTeam: string; nextTeam: string }>;
-  creates: Array<{ name: string; team: string; rowNumber: number }>;
-  needsReview: Array<{ name: string; team: string; rowNumber: number; reason: string; candidateIds?: number[] }>;
+  updates: Array<{
+    id: number;
+    name: string;
+    currentTeam: string;
+    nextTeam: string;
+    nextExtras?: string[];
+    extrasOnly?: boolean;
+  }>;
+  creates: Array<{
+    name: string;
+    team: string;
+    rowNumber: number;
+    primaryTeam?: string | null;
+    extras?: string[];
+  }>;
+  needsReview: Array<{
+    name: string;
+    team: string;
+    rowNumber: number;
+    reason: string;
+    candidateIds?: number[];
+    primaryTeam?: string | null;
+    extras?: string[];
+  }>;
   missingInImport: Array<{ id: number; name: string; team: string }>;
+  mergedDuplicates?: Array<{
+    name: string;
+    primaryTeam: string | null;
+    extras: string[];
+    sourceTeams: string[];
+  }>;
   lines: PreviewLine[];
   applyPayload: {
-    updates: Array<{ id: number; team: string }>;
-    creates: Array<{ name: string; team: string }>;
+    updates: Array<{ id: number; team: string; extras?: string[] }>;
+    creates: Array<{ name: string; team: string; extras?: string[] }>;
   };
   touchesEmploymentStatus: false;
 };

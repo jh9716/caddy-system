@@ -1,7 +1,6 @@
 /**
  * DB 없는 단위 테스트 — import preview/apply 규칙 검증
  * 실행: npx tsx scripts/test-caddy-roster-unit.ts
- *    또는: node --experimental-strip-types scripts/test-caddy-roster-unit.ts
  *
  * 실제 DB에 쓰지 않습니다.
  */
@@ -9,6 +8,7 @@
 import {
   applyImportPayload,
   buildImportPreview,
+  collapseImportRowsToPeople,
   parseImportFile,
   type ExistingCaddy,
 } from "../lib/caddyImport";
@@ -54,6 +54,35 @@ async function main() {
   );
   assert(rows.length === 3, "parsed 3 rows");
   assert(rows[0].name === "이영진" && rows[0].team === "1조", "first row ok");
+
+  section("collapse — primary + extras merge, keep numbered suffix");
+  const collapsed = collapseImportRowsToPeople(
+    parseImportFile(
+      [
+        "team,name",
+        "10조,김지수",
+        "주중반,김지수",
+        "1조,김예진1",
+        "주중반,김예진2",
+        "주말반,정재훈",
+      ].join("\n")
+    )
+  );
+  assert(collapsed.length === 4, "4 unique people after collapse");
+  const kim = collapsed.find((p) => p.name === "김지수");
+  assert(!!kim && kim.primaryTeam === "10조", "김지수 primary 10조");
+  assert(!!kim && kim.extras.includes("주중반"), "김지수 has 주중반 extra");
+  assert(!!kim && kim.team === "10조", "compatible team stays primary");
+  assert(
+    collapsed.some((p) => p.name === "김예진1") &&
+      collapsed.some((p) => p.name === "김예진2"),
+    "numbered suffixes kept as distinct people"
+  );
+  const jung = collapsed.find((p) => p.name === "정재훈");
+  assert(
+    !!jung && jung.primaryTeam === null && jung.team === "주말반",
+    "extra-only → team=주말반"
+  );
 
   section("buildImportPreview — id keep + team update + create + review");
   const existing: ExistingCaddy[] = [
@@ -106,6 +135,36 @@ async function main() {
     preview.missingInImport.some((m) => m.id === 20),
     "박준형 remains missingInImport for manual check (not auto-matched)"
   );
+  assert(
+    preview.summary.partitionMatchesUnique === true,
+    "create+matched+needsReview == unique import people"
+  );
+
+  section("number variant / typo → needsReview (no auto merge)");
+  const variantPreview = buildImportPreview(
+    parseImportFile("team,name\n1조,김예진1\n12조,허도경\n"),
+    [
+      { id: 97, name: "김예진", team: "5조" },
+      { id: 177, name: "허도겸", team: "8조" },
+    ]
+  );
+  assert(
+    variantPreview.needsReview.some(
+      (r) =>
+        r.name === "김예진1" &&
+        (r.reason.includes("숫자 표기") ||
+          r.reason.includes("번호 표기") ||
+          r.candidateIds?.includes(97))
+    ),
+    "김예진1 number-variant / blocklist review"
+  );
+  assert(
+    variantPreview.needsReview.some(
+      (r) => r.name === "허도경" && r.reason.includes("철자 유사")
+    ),
+    "허도경 typo review"
+  );
+  assert(variantPreview.summary.new === 0, "no auto create for review names");
 
   section("duplicate names → needsReview");
   const dupExisting: ExistingCaddy[] = [
@@ -131,16 +190,20 @@ async function main() {
         const row = store.get(where.id);
         if (!row) throw new Error("missing");
         row.team = data.team;
-        // ensure no employmentStatus written
         assert(
-          !("employmentStatus" in data) && !("status" in data),
+          !("employmentStatus" in data) &&
+            !("status" in data) &&
+            !("extras" in data) &&
+            !("extraFlags" in data),
           "update data only team"
         );
         return { ...row };
       },
       async create({ data }: any) {
         assert(
-          !("employmentStatus" in data) && !("status" in data),
+          !("employmentStatus" in data) &&
+            !("status" in data) &&
+            !("extras" in data),
           "create data only name/team"
         );
         const id = nextId++;
@@ -162,7 +225,10 @@ async function main() {
   let rejected = false;
   try {
     await applyImportPayload(
-      { updates: [], creates: [{ name: "박준형", team: "1조" }] },
+      {
+        updates: [],
+        creates: [{ name: "박준형", team: "1조", extras: [] }],
+      },
       mockPrisma
     );
   } catch {
@@ -170,18 +236,24 @@ async function main() {
   }
   assert(rejected, "reject create for needsReview name");
 
-  section("XLSX horizontal 1~12조 cart/name layout");
+  section("XLSX horizontal layout + dual cell merge");
   const aoa = [
     ["1조", "", "2조", "", "12조", "", "주중반", ""],
     ["카트", "성명", "카트", "성명", "카트", "성명", "카트", "성명"],
-    [1, "이영진", 5, "이동대상", "", "카트없는사람", 9, "주중반사람"],
+    [1, "이영진", 5, "이동대상", "", "카트없는사람", 9, "이영진"],
     ["", "박서진2", "", "신규자", "", "", "", ""],
     [2, "박준형", "", "", "", "", "", ""],
   ];
-  const matrixRows = parseTeamNameMatrix(aoa.map((r) => r.map((c) => String(c ?? ""))));
+  const matrixRows = parseTeamNameMatrix(
+    aoa.map((r) => r.map((c) => String(c ?? "")))
+  );
   assert(
     matrixRows.some((r) => r.name === "이영진" && r.team === "1조"),
     "xlsx matrix: 이영진 -> 1조"
+  );
+  assert(
+    matrixRows.filter((r) => r.name === "이영진").length === 2,
+    "raw rows keep dual 이영진 cells"
   );
   assert(
     matrixRows.some((r) => r.name === "카트없는사람" && r.team === "12조"),
@@ -191,31 +263,42 @@ async function main() {
     matrixRows.some((r) => r.name === "박서진2" && r.team === "1조"),
     "name without cart on next row"
   );
-  assert(
-    matrixRows.some((r) => r.name === "주중반사람" && r.team === "주중반"),
-    "주중반 included in roster parse"
-  );
 
   const xbuf = buildTestRosterXlsxBuffer(aoa);
   const xrows = parseImportFile(xbuf, "roster.xlsx");
   assert(xrows.length >= 5, "parseImportFile xlsx returns rows");
+  const xPeople = collapseImportRowsToPeople(xrows);
+  const young = xPeople.find((p) => p.name === "이영진");
   assert(
-    xrows.some((r) => r.name === "이동대상" && r.team === "2조"),
-    "xlsx file: 이동대상 -> 2조"
+    !!young &&
+      young.primaryTeam === "1조" &&
+      young.extras.includes("주중반") &&
+      young.mergedFromDuplicateCells,
+    "이영진 collapsed to primary+주중반"
   );
 
   const xExisting: ExistingCaddy[] = [
     { id: 1, name: "이영진", team: "1조" },
-    { id: 2, name: "박서진2", team: "8조" }, // will update to 1조
-    { id: 10, name: "이동대상", team: "3조" }, // update to 2조
+    { id: 2, name: "박서진2", team: "8조" },
+    { id: 10, name: "이동대상", team: "3조" },
     { id: 20, name: "박준형", team: "3조" },
     { id: 30, name: "DB만존재", team: "8조" },
   ];
   const xPreview = buildImportPreview(xrows, xExisting);
   assert(Array.isArray(xPreview.lines) && xPreview.lines.length > 0, "preview.lines present");
   assert(
+    xPreview.updates.some(
+      (u) => u.id === 1 && u.extrasOnly && u.nextExtras.includes("주중반")
+    ),
+    "이영진 extras-only update (team 유지, 주중반 추가)"
+  );
+  assert(
     xPreview.lines.some(
-      (l) => l.action === "update" && l.id === 2 && l.currentTeam === "8조" && l.nextTeam === "1조"
+      (l) =>
+        l.action === "update" &&
+        l.id === 2 &&
+        l.currentTeam === "8조" &&
+        l.nextTeam === "1조"
     ),
     "lines show id/old/new team for update"
   );
@@ -236,10 +319,17 @@ async function main() {
     "applyPayload has no cart field"
   );
   assert(xPreview.touchesEmploymentStatus === false, "xlsx preview no employmentStatus");
+  assert(
+    xPreview.summary.uniqueImportPeople ===
+      xPreview.summary.createPlusMatched + xPreview.summary.needsReview,
+    "xlsx partition identity"
+  );
 
-  // CSV still works
   const csvStill = parseImportFile("team,name\n3조,홍길동\n", "a.csv");
-  assert(csvStill[0]?.name === "홍길동" && csvStill[0]?.team === "3조", "CSV path still works");
+  assert(
+    csvStill[0]?.name === "홍길동" && csvStill[0]?.team === "3조",
+    "CSV path still works"
+  );
 
   console.log(`\nDONE: ${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);

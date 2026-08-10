@@ -20,12 +20,13 @@ function assertAdmin(req: NextRequest) {
 /**
  * POST { applyPayload: { updates, creates } }
  * - 기존 id update(team만) + 신규 create만
+ * - extras/extraFlags는 현행 스키마에 없으므로 무시 (migration 전까지 미저장)
  * - needsReview 이름 create 거부
  * - employmentStatus 변경 없음
  * - 삭제/ID 재부여 없음
  *
- * 주의: 이 엔드포인트는 호출 시에만 DB를 변경합니다.
- * 자동 배포/마이그레이션/시드에서는 호출하지 않습니다.
+ * 주의: Production 반영 전에 Preview로 검증할 것.
+ * 이 작업 범위에서는 Production apply를 수행하지 않습니다.
  */
 export async function POST(req: NextRequest) {
   const denied = assertAdmin(req);
