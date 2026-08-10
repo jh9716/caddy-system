@@ -1,7 +1,7 @@
 /**
- * 자동배치 운영 draft (클라이언트 메모리 전용)
- * - DB write 없음
- * - DRAFT → EDITED → CONFIRMED
+ * 자동배치 운영 draft (클라이언트 메모리)
+ * - DRAFT → EDITED → CONFIRMED → (운영 반영 API) APPLIED
+ * - DRAFT/EDITED 는 DB 저장 금지 (confirm API가 거부)
  */
 
 import {
@@ -16,7 +16,7 @@ import {
 } from "@/lib/autoAssignEngine";
 import type { ShiftPart } from "@/lib/reservationParser";
 
-export type DraftStatus = "DRAFT" | "EDITED" | "CONFIRMED";
+export type DraftStatus = "DRAFT" | "EDITED" | "CONFIRMED" | "APPLIED";
 
 export type AssignmentDraft = {
   date: string;
@@ -25,6 +25,8 @@ export type AssignmentDraft = {
   unassignedReservations: UnassignedReservationRow[];
   caddyPool: AutoAssignCaddy[];
   confirmedAt: string | null;
+  appliedAt?: string | null;
+  applyAuditId?: number | null;
 };
 
 export type DraftWarning = {
@@ -76,6 +78,8 @@ export function createDraftFromAutoResult(
     })),
     caddyPool: pool,
     confirmedAt: null,
+    appliedAt: null,
+    applyAuditId: null,
   };
 }
 
@@ -96,8 +100,14 @@ function dedupePool(caddies: AutoAssignCaddy[]): AutoAssignCaddy[] {
 }
 
 function markEdited(draft: AssignmentDraft): AssignmentDraft {
-  if (draft.status === "CONFIRMED") {
-    return { ...draft, status: "EDITED", confirmedAt: null };
+  if (draft.status === "CONFIRMED" || draft.status === "APPLIED") {
+    return {
+      ...draft,
+      status: "EDITED",
+      confirmedAt: null,
+      appliedAt: null,
+      applyAuditId: null,
+    };
   }
   return { ...draft, status: draft.status === "DRAFT" ? "EDITED" : draft.status };
 }
@@ -107,6 +117,24 @@ export function confirmDraft(draft: AssignmentDraft): AssignmentDraft {
     ...draft,
     status: "CONFIRMED",
     confirmedAt: new Date().toISOString(),
+    appliedAt: null,
+    applyAuditId: null,
+  };
+}
+
+/** 운영 반영 API 성공 후 클라이언트 상태 */
+export function markDraftApplied(
+  draft: AssignmentDraft,
+  opts?: { auditId?: number | null }
+): AssignmentDraft {
+  if (draft.status !== "CONFIRMED" && draft.status !== "APPLIED") {
+    return draft;
+  }
+  return {
+    ...draft,
+    status: "APPLIED",
+    appliedAt: new Date().toISOString(),
+    applyAuditId: opts?.auditId ?? draft.applyAuditId ?? null,
   };
 }
 

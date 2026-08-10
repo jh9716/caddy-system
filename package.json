@@ -20,6 +20,7 @@
     "test:reservation-unit": "npx tsx scripts/test-reservation-parse-unit.ts",
     "test:auto-assign-unit": "npx tsx scripts/test-auto-assign-unit.ts",
     "test:assignment-draft-unit": "npx tsx scripts/test-assignment-draft-unit.ts",
+    "test:assignment-confirm-unit": "npx tsx scripts/test-assignment-confirm-unit.ts",
     "preview:roster": "npx tsx scripts/preview-roster-import.ts",
     "inspect:db-readonly": "npx tsx scripts/inspect-db-schema-readonly.ts",
     "check:migration-checksums": "npx tsx scripts/check-migration-checksums-readonly.ts",

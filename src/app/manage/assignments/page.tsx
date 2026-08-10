@@ -7,6 +7,7 @@ import {
   confirmDraft,
   createDraftFromAutoResult,
   detectDraftWarnings,
+  markDraftApplied,
   replaceAssignmentCaddy,
   reservationIdentity,
   swapAssignmentCaddies,
@@ -15,6 +16,7 @@ import {
   type AssignmentDraft,
   type DraftWarning,
 } from "@/lib/assignmentDraft";
+import { draftToConfirmBody } from "@/lib/assignmentConfirm";
 import type {
   AutoAssignCaddy,
   AutoAssignResultV1,
@@ -43,6 +45,7 @@ export default function ManageAssignmentsOpsPage() {
   const [shiftTab, setShiftTab] = useState<ShiftPart | "UNASSIGNED">("1부");
   const [loadingAvail, setLoadingAvail] = useState(false);
   const [loadingRun, setLoadingRun] = useState(false);
+  const [loadingApply, setLoadingApply] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [swapKey, setSwapKey] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -223,19 +226,76 @@ export default function ManageAssignmentsOpsPage() {
 
   function onConfirm() {
     if (!draft) return;
+    if (draft.status === "APPLIED") return;
     if (liveWarnings.some((w) => w.level === "error")) {
       const ok = window.confirm(
-        "충돌/중복 경고가 있습니다. 그래도 CONFIRMED로 둘까요?\n(Production DB에는 저장되지 않습니다)"
+        "충돌/중복 경고가 있습니다. 그래도 CONFIRMED로 둘까요?\n(아직 DB에는 저장되지 않습니다)"
       );
       if (!ok) return;
     } else {
       const ok = window.confirm(
-        "CONFIRMED로 표시합니다. Production DB에는 저장되지 않습니다."
+        "CONFIRMED로 표시합니다. 운영 반영 버튼으로 DB에 저장합니다."
       );
       if (!ok) return;
     }
     setDraft(confirmDraft(draft));
-    showToast("CONFIRMED (메모리 only)");
+    showToast("CONFIRMED — 운영 반영 가능");
+  }
+
+  async function onApplyToOps(replace = false) {
+    if (!draft || draft.status !== "CONFIRMED") return;
+    if (!replace) {
+      const ok = window.confirm(
+        `${draft.date} 배치표를 Schedule/ShiftDuty에 저장할까요?`
+      );
+      if (!ok) return;
+    }
+
+    setLoadingApply(true);
+    setError(null);
+    try {
+      const body = draftToConfirmBody(draft, { replace });
+      const res = await fetch("/api/assignments/confirm", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (res.status === 409 && data.requireReplace) {
+        const approve = window.confirm(
+          `${data.message || "같은 날짜 기존 배치가 있습니다."}\n\n기존 배치를 덮어쓸까요? (관리자 명시 승인)`
+        );
+        if (approve) {
+          setLoadingApply(false);
+          await onApplyToOps(true);
+          return;
+        }
+        setError(data.error || "기존 배치 충돌");
+        return;
+      }
+
+      if (!res.ok) {
+        setError(data.error || data.message || "운영 반영 실패");
+        return;
+      }
+
+      setDraft(
+        markDraftApplied(draft, {
+          auditId: typeof data.auditId === "number" ? data.auditId : null,
+        })
+      );
+      showToast(
+        data.duplicate
+          ? "이미 반영된 배치 (중복 저장 생략)"
+          : `APPLIED · Schedule ${data.counts?.schedules ?? 0} / Duty ${data.counts?.shiftDuties ?? 0}`
+      );
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "운영 반영 요청 실패");
+    } finally {
+      setLoadingApply(false);
+    }
   }
 
   const shiftRows =
@@ -248,10 +308,14 @@ export default function ManageAssignmentsOpsPage() {
       <header className="ops-header">
         <div>
           <h1>자동배치 운영</h1>
-          <p>Excel → 자동배치 → 수동 수정 · DB 저장 없음</p>
+          <p>Excel → 자동배치 → 수동 수정 → CONFIRMED 후 운영 반영</p>
         </div>
         {draft && (
-          <StatusBadge status={draft.status} confirmedAt={draft.confirmedAt} />
+          <StatusBadge
+            status={draft.status}
+            confirmedAt={draft.confirmedAt}
+            appliedAt={draft.appliedAt ?? null}
+          />
         )}
       </header>
 
@@ -292,10 +356,23 @@ export default function ManageAssignmentsOpsPage() {
           <button
             type="button"
             className="btn confirm"
-            disabled={!draft || draft.status === "CONFIRMED"}
+            disabled={
+              !draft ||
+              draft.status === "CONFIRMED" ||
+              draft.status === "APPLIED"
+            }
             onClick={onConfirm}
           >
             CONFIRMED
+          </button>
+          <button
+            type="button"
+            className="btn apply"
+            disabled={!draft || draft.status !== "CONFIRMED" || loadingApply}
+            onClick={() => onApplyToOps(false)}
+            title="CONFIRMED 상태에서만 Schedule/ShiftDuty에 저장"
+          >
+            {loadingApply ? "반영 중…" : "운영 반영"}
           </button>
         </div>
         {availability && (
@@ -474,15 +551,18 @@ export default function ManageAssignmentsOpsPage() {
 function StatusBadge({
   status,
   confirmedAt,
+  appliedAt,
 }: {
   status: string;
   confirmedAt: string | null;
+  appliedAt: string | null;
 }) {
+  const stamp = appliedAt || confirmedAt;
   return (
     <div className={`status ${status}`}>
       <div className="status-label">{status}</div>
-      {confirmedAt && (
-        <div className="status-sub">{new Date(confirmedAt).toLocaleString("ko-KR")}</div>
+      {stamp && (
+        <div className="status-sub">{new Date(stamp).toLocaleString("ko-KR")}</div>
       )}
     </div>
   );
@@ -522,6 +602,7 @@ const opsCss = `
   .status.DRAFT { background: #f1f5f9; }
   .status.EDITED { background: #fff7ed; border-color: #fdba74; }
   .status.CONFIRMED { background: #ecfdf5; border-color: #6ee7b7; }
+  .status.APPLIED { background: #eff6ff; border-color: #93c5fd; }
   .status-label { font-weight: 800; font-size: 0.85rem; }
   .status-sub { font-size: 0.65rem; color: #64748b; margin-top: 2px; }
   .ops-panel {
@@ -550,7 +631,10 @@ const opsCss = `
     gap: 8px;
   }
   @media (min-width: 560px) {
-    .ops-actions { grid-template-columns: repeat(3, 1fr); }
+    .ops-actions { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (min-width: 720px) {
+    .ops-actions { grid-template-columns: repeat(4, 1fr); }
   }
   .btn {
     min-height: 42px;
@@ -563,6 +647,7 @@ const opsCss = `
   .btn:disabled { opacity: 0.5; cursor: not-allowed; }
   .btn.primary { background: #0f172a; color: #fff; border-color: #0f172a; }
   .btn.confirm { background: #047857; color: #fff; border-color: #047857; }
+  .btn.apply { background: #1d4ed8; color: #fff; border-color: #1d4ed8; }
   .btn.ghost { background: #f8fafc; }
   .btn.tiny { min-height: 34px; padding: 0 10px; font-size: 0.8rem; }
   .ops-meta { font-size: 0.8rem; color: #475569; }
