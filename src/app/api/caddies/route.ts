@@ -5,22 +5,23 @@ import {
   normalizeEmploymentStatus,
   normalizeExtraFlags,
   normalizeTeamOrder,
+  parseEmploymentFilter,
 } from "@/lib/caddyManage";
 import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
-/** GET: 캐디 목록 (관리자 전용. 기본: 재직만, ?employment=all|재직|퇴사) */
+/** GET: 캐디 목록 (관리자 전용. 기본: ACTIVE, ?employment=all|ACTIVE|LEAVE|RETIRED|재직|휴직|퇴사) */
 export async function GET(req: NextRequest) {
   const guard = requireAdmin(req);
   if (guard) return guard;
 
   try {
-    const employment = req.nextUrl.searchParams.get("employment") || "재직";
+    const employment = parseEmploymentFilter(
+      req.nextUrl.searchParams.get("employment")
+    );
     const where =
-      employment === "all"
-        ? {}
-        : { employmentStatus: employment === "퇴사" ? "퇴사" : "재직" };
+      employment === "all" ? {} : { employmentStatus: employment };
 
     const caddies = await prisma.caddy.findMany({
       where,
@@ -71,6 +72,14 @@ export async function POST(req: NextRequest) {
         extraFlags: normalizeExtraFlags(data.extraFlags),
         status: data.status ?? "근무중",
         memo: data.memo ?? null,
+        // Preserve Production columns: only set when explicitly provided
+        ...(data.employeeCode !== undefined
+          ? { employeeCode: data.employeeCode }
+          : {}),
+        ...(data.caddyType !== undefined ? { caddyType: data.caddyType } : {}),
+        ...(data.missingFromImport !== undefined
+          ? { missingFromImport: data.missingFromImport }
+          : {}),
       },
     });
     return NextResponse.json(created);
@@ -85,7 +94,7 @@ export async function POST(req: NextRequest) {
 
 /**
  * DELETE 쿼리(?id=) — 물리 삭제 금지.
- * 하위 호환: 퇴사(soft) 처리만 수행. Assignment/Schedule 유지.
+ * 하위 호환: RETIRED(soft) 처리만 수행. Assignment/Schedule 유지.
  */
 export async function DELETE(req: NextRequest) {
   const guard = requireAdmin(req);
@@ -98,7 +107,7 @@ export async function DELETE(req: NextRequest) {
 
     const updated = await prisma.caddy.update({
       where: { id },
-      data: { employmentStatus: "퇴사" },
+      data: { employmentStatus: "RETIRED" },
     });
     return NextResponse.json({
       ok: true,

@@ -17,7 +17,8 @@
     "test:roster-unit": "npx tsx scripts/test-caddy-roster-unit.ts",
     "test:manage-unit": "npx tsx scripts/test-caddy-manage-unit.ts",
     "preview:roster": "npx tsx scripts/preview-roster-import.ts",
-    "inspect:db-readonly": "npx tsx scripts/inspect-db-schema-readonly.ts"
+    "inspect:db-readonly": "npx tsx scripts/inspect-db-schema-readonly.ts",
+    "check:migration-checksums": "npx tsx scripts/check-migration-checksums-readonly.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",

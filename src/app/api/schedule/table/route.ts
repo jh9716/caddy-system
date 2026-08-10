@@ -30,9 +30,9 @@ export async function GET(req: NextRequest) {
     }
     const { start, end } = getDayRange(ymd)
 
-    // 팀 + 조내순번 + id (퇴사자는 가용표에서 제외)
+    // 팀 + 조내순번 + id (ACTIVE만 — 휴직/퇴사 제외)
     const caddies = await prisma.caddy.findMany({
-      where: { employmentStatus: '재직' },
+      where: { employmentStatus: 'ACTIVE' },
       orderBy: [{ team: 'asc' }, { teamOrder: 'asc' }, { id: 'asc' }],
       select: { id: true, name: true, team: true },
     })

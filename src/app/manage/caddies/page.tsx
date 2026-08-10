@@ -3,8 +3,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   EMPLOYMENT_STATUSES,
+  EMPLOYMENT_STATUS_LABELS,
   EXTRA_FLAG_OPTIONS,
   TEAM_OPTIONS,
+  employmentStatusLabel,
+  normalizeEmploymentStatus,
   type ExtraFlagOption,
   type EmploymentStatus,
 } from '@/lib/caddyManage';
@@ -18,6 +21,9 @@ type Caddy = {
   extraFlags: string[];
   status?: string | null;
   memo?: string | null;
+  employeeCode?: string | null;
+  caddyType?: string | null;
+  missingFromImport?: boolean;
 };
 
 type Draft = {
@@ -32,7 +38,7 @@ const emptyDraft = (): Draft => ({
   name: '',
   team: '1조',
   teamOrder: 0,
-  employmentStatus: '재직',
+  employmentStatus: 'ACTIVE',
   extraFlags: [],
 });
 
@@ -41,7 +47,7 @@ function toDraft(c: Caddy): Draft {
     name: c.name,
     team: c.team,
     teamOrder: c.teamOrder ?? 0,
-    employmentStatus: (c.employmentStatus === '퇴사' ? '퇴사' : '재직'),
+    employmentStatus: normalizeEmploymentStatus(c.employmentStatus),
     extraFlags: (c.extraFlags ?? []).filter((f): f is ExtraFlagOption =>
       (EXTRA_FLAG_OPTIONS as readonly string[]).includes(f)
     ),
@@ -52,7 +58,9 @@ export default function ManageCaddiesPage() {
   const [rows, setRows] = useState<Caddy[]>([]);
   const [loading, setLoading] = useState(false);
   const [savingId, setSavingId] = useState<number | null>(null);
-  const [employmentFilter, setEmploymentFilter] = useState<'재직' | '퇴사' | 'all'>('재직');
+  const [employmentFilter, setEmploymentFilter] = useState<
+    EmploymentStatus | 'all'
+  >('ACTIVE');
   const [teamFilter, setTeamFilter] = useState<string>('all');
   const [q, setQ] = useState('');
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -194,7 +202,12 @@ export default function ManageCaddiesPage() {
   }
 
   async function setEmployment(c: Caddy, status: EmploymentStatus) {
-    const label = status === '퇴사' ? '퇴사 처리' : '재직 복귀';
+    const label =
+      status === 'RETIRED'
+        ? '퇴사 처리'
+        : status === 'LEAVE'
+          ? '휴직 처리'
+          : '재직 복귀';
     if (!confirm(`${c.name}을(를) ${label}할까요? (물리 삭제 없음, ID·배정 기록 유지)`)) {
       return;
     }
@@ -212,7 +225,7 @@ export default function ManageCaddiesPage() {
         return;
       }
       await load();
-      setMessage(`${c.name}: ${status}`);
+      setMessage(`${c.name}: ${employmentStatusLabel(status)}`);
     } finally {
       setSavingId(null);
     }
@@ -313,7 +326,9 @@ export default function ManageCaddiesPage() {
                 }
               >
                 {EMPLOYMENT_STATUSES.map((s) => (
-                  <option key={s} value={s}>{s}</option>
+                  <option key={s} value={s}>
+                    {EMPLOYMENT_STATUS_LABELS[s]}
+                  </option>
                 ))}
               </select>
             </label>
@@ -363,8 +378,9 @@ export default function ManageCaddiesPage() {
           value={employmentFilter}
           onChange={(e) => setEmploymentFilter(e.target.value as typeof employmentFilter)}
         >
-          <option value="재직">재직만</option>
-          <option value="퇴사">퇴사만</option>
+          <option value="ACTIVE">재직만</option>
+          <option value="LEAVE">휴직만</option>
+          <option value="RETIRED">퇴사만</option>
           <option value="all">전체</option>
         </select>
         <button type="button" className="cm-btn" onClick={load} disabled={loading}>
@@ -389,7 +405,7 @@ export default function ManageCaddiesPage() {
             return (
               <li
                 key={c.id}
-                className={`cm-item ${c.employmentStatus === '퇴사' ? 'is-retired' : ''}`}
+                className={`cm-item ${normalizeEmploymentStatus(c.employmentStatus) === 'RETIRED' ? 'is-retired' : ''}`}
               >
                 <div className="cm-item-top">
                   <div className="cm-id">#{c.id}</div>
@@ -397,8 +413,14 @@ export default function ManageCaddiesPage() {
                     <strong>{c.name}</strong>
                     <span className="cm-pill">{c.team}</span>
                     <span className="cm-pill muted">순번 {c.teamOrder}</span>
-                    <span className={`cm-pill ${c.employmentStatus === '퇴사' ? 'warn' : 'ok'}`}>
-                      {c.employmentStatus || '재직'}
+                    <span
+                      className={`cm-pill ${
+                        normalizeEmploymentStatus(c.employmentStatus) === 'ACTIVE'
+                          ? 'ok'
+                          : 'warn'
+                      }`}
+                    >
+                      {employmentStatusLabel(c.employmentStatus)}
                     </span>
                   </div>
                   {(c.extraFlags?.length ?? 0) > 0 && (
@@ -421,24 +443,36 @@ export default function ManageCaddiesPage() {
                     <button type="button" className="cm-btn" disabled={busy} onClick={() => moveOrder(c, 1)}>
                       순번↓
                     </button>
-                    {c.employmentStatus === '퇴사' ? (
+                    {normalizeEmploymentStatus(c.employmentStatus) === 'RETIRED' ? (
                       <button
                         type="button"
                         className="cm-btn cm-btn-primary"
                         disabled={busy}
-                        onClick={() => setEmployment(c, '재직')}
+                        onClick={() => setEmployment(c, 'ACTIVE')}
                       >
                         재직 복귀
                       </button>
                     ) : (
-                      <button
-                        type="button"
-                        className="cm-btn cm-btn-danger"
-                        disabled={busy}
-                        onClick={() => setEmployment(c, '퇴사')}
-                      >
-                        퇴사
-                      </button>
+                      <>
+                        {normalizeEmploymentStatus(c.employmentStatus) !== 'LEAVE' && (
+                          <button
+                            type="button"
+                            className="cm-btn"
+                            disabled={busy}
+                            onClick={() => setEmployment(c, 'LEAVE')}
+                          >
+                            휴직
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="cm-btn cm-btn-danger"
+                          disabled={busy}
+                          onClick={() => setEmployment(c, 'RETIRED')}
+                        >
+                          퇴사
+                        </button>
+                      </>
                     )}
                   </div>
                 ) : (
@@ -487,7 +521,9 @@ export default function ManageCaddiesPage() {
                           }
                         >
                           {EMPLOYMENT_STATUSES.map((s) => (
-                            <option key={s} value={s}>{s}</option>
+                            <option key={s} value={s}>
+                              {EMPLOYMENT_STATUS_LABELS[s]}
+                            </option>
                           ))}
                         </select>
                       </label>

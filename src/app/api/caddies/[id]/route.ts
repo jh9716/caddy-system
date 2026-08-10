@@ -56,6 +56,14 @@ export async function PATCH(
     }
     if (data.status !== undefined) updateData.status = data.status;
     if (data.memo !== undefined) updateData.memo = data.memo;
+    // Only touch Production-critical fields when explicitly sent
+    if (data.employeeCode !== undefined) {
+      updateData.employeeCode = data.employeeCode;
+    }
+    if (data.caddyType !== undefined) updateData.caddyType = data.caddyType;
+    if (data.missingFromImport !== undefined) {
+      updateData.missingFromImport = data.missingFromImport;
+    }
 
     const updated = await prisma.caddy.update({
       where: { id },
@@ -80,7 +88,7 @@ export async function PATCH(
 
 /**
  * DELETE /api/caddies/[id] — 물리 삭제 금지.
- * Assignment/Schedule 관계 보존을 위해 employmentStatus=퇴사 만 수행.
+ * Assignment/Schedule 관계 보존을 위해 employmentStatus=RETIRED 만 수행.
  */
 export async function DELETE(
   req: NextRequest,
@@ -98,12 +106,16 @@ export async function DELETE(
 
     const updated = await prisma.caddy.update({
       where: { id },
-      data: { employmentStatus: "퇴사" },
+      data: { employmentStatus: "RETIRED" },
     });
 
     await logAudit({
       action: "SOFT_DELETE_CADDY",
-      meta: { entity: "Caddy", entityId: id, employmentStatus: "퇴사" },
+      meta: {
+        entity: "Caddy",
+        entityId: id,
+        employmentStatus: "RETIRED",
+      },
     });
 
     return NextResponse.json({
