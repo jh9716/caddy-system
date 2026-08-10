@@ -14,7 +14,8 @@
     "vercel-build": "npm run db:generate && npm run db:deploy && next build",
     "postinstall": "prisma generate",
     "test:roster-unit": "npx tsx scripts/test-caddy-roster-unit.ts",
-    "preview:roster": "npx tsx scripts/preview-roster-import.ts"
+    "preview:roster": "npx tsx scripts/preview-roster-import.ts",
+    "inspect:db-readonly": "npx tsx scripts/inspect-db-schema-readonly.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
