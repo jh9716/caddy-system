@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
-import { applySessionCookies, type AppRole } from "@/lib/sessionCookies";
+import {
+  applySessionCookies,
+  normalizeAppRole,
+  type AppRole,
+} from "@/lib/sessionCookies";
 
 export const dynamic = "force-dynamic";
 
@@ -33,10 +37,7 @@ export async function POST(req: NextRequest) {
       if (user) {
         const ok = await bcrypt.compare(password, user.password);
         if (ok) {
-          const dbRole = String(user.role || "").toLowerCase();
-          if (dbRole === "admin" || dbRole === "caddy") {
-            role = dbRole;
-          }
+          role = normalizeAppRole(user.role);
         }
       }
     } catch (e) {

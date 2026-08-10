@@ -4,19 +4,41 @@ export type AppRole = "admin" | "caddy";
 
 const MAX_AGE = 60 * 60 * 8; // 8h
 
-/** Cloudflare 터널 등 프록시 뒤에서도 HTTPS를 정확히 판별 */
+/** DB/env role 문자열 → 앱 역할 (ADMIN/STAFF 등 Production 레거시 값 수용) */
+export function normalizeAppRole(input: unknown): AppRole | null {
+  const raw = String(input ?? "")
+    .trim()
+    .toLowerCase();
+  if (raw === "admin") return "admin";
+  if (raw === "caddy" || raw === "staff") return "caddy";
+  return null;
+}
+
+/** Cloudflare/Vercel 프록시 뒤에서도 HTTPS를 정확히 판별 */
 export function isHttpsRequest(req: NextRequest | Request): boolean {
-  const proto =
+  const forwarded =
     (req as NextRequest).headers?.get?.("x-forwarded-proto") ||
-    (typeof (req as NextRequest).nextUrl?.protocol === "string"
-      ? (req as NextRequest).nextUrl.protocol.replace(":", "")
-      : null);
+    (req as Request).headers?.get?.("x-forwarded-proto") ||
+    "";
+  // "https, http" 같은 다중 값에서 첫 토큰만 사용
+  const proto = String(forwarded).split(",")[0]?.trim().toLowerCase();
   if (proto === "https") return true;
+
+  const nextProto =
+    typeof (req as NextRequest).nextUrl?.protocol === "string"
+      ? (req as NextRequest).nextUrl.protocol.replace(":", "").toLowerCase()
+      : "";
+  if (nextProto === "https") return true;
+
   try {
-    return new URL(req.url).protocol === "https:";
+    if (new URL(req.url).protocol === "https:") return true;
   } catch {
-    return false;
+    // ignore
   }
+
+  // Vercel Production/Preview edge 는 HTTPS
+  if (process.env.VERCEL === "1") return true;
+  return false;
 }
 
 export function getRoleFromCookies(
@@ -26,8 +48,7 @@ export function getRoleFromCookies(
     cookies.get("role")?.value ||
     cookies.get("session_role")?.value ||
     (cookies.get("admin")?.value === "1" ? "admin" : null);
-  if (role === "admin" || role === "caddy") return role;
-  return null;
+  return normalizeAppRole(role);
 }
 
 export function applySessionCookies(
@@ -45,7 +66,7 @@ export function applySessionCookies(
     maxAge: MAX_AGE,
   };
 
-  // UI / manage 페이지가 읽는 주 쿠키
+  // middleware / manage layout / requireAdmin 이 읽는 주 쿠키
   res.cookies.set("role", role, base);
   // 하위 호환 (구 API·가드)
   res.cookies.set("session_role", role, base);
@@ -57,8 +78,13 @@ export function applySessionCookies(
   }
 }
 
-export function clearSessionCookies(res: NextResponse, req?: NextRequest | Request) {
-  const secure = req ? isHttpsRequest(req) : false;
+export function clearSessionCookies(
+  res: NextResponse,
+  req?: NextRequest | Request
+) {
+  const secure = req
+    ? isHttpsRequest(req)
+    : process.env.VERCEL === "1" || process.env.NODE_ENV === "production";
   const base = {
     path: "/",
     httpOnly: true,
