@@ -6,6 +6,10 @@
 import {
   computeAutoAssignmentsV1,
   compareCaddyOrder,
+  findEarliest54HolePair,
+  isCompatible54HolePair,
+  minutesBetweenReservations,
+  REASON,
   type AutoAssignCaddy,
   type AutoAssignReservation,
 } from "../src/lib/autoAssignEngine";
@@ -288,6 +292,324 @@ section("available 입력 중복 id 제거");
   });
   assert(result.meta.availableCount === 2, "deduped to 2");
   assert(result.assignments.length === 2, "still 2 assigned");
+}
+
+section("54홀: 6시간 이상 간격 허용");
+{
+  const a = { date: "2026-09-01", teeTime: "07:00", shift: "1부" as const };
+  const b = { date: "2026-09-01", teeTime: "13:00", shift: "2부" as const };
+  assert(isCompatible54HolePair(a, b), "6h gap ok");
+  assert(minutesBetweenReservations(a, b) === 360, "exactly 6h");
+}
+
+section("54홀: 6시간 미만 거절");
+{
+  const a = { date: "2026-09-01", teeTime: "07:00", shift: "1부" as const };
+  const b = { date: "2026-09-01", teeTime: "12:59", shift: "2부" as const };
+  assert(!isCompatible54HolePair(a, b), "5h59 reject");
+  const pair = findEarliest54HolePair([
+    {
+      date: "2026-09-01",
+      course: "SKY",
+      shift: "1부",
+      teeTime: "10:00",
+      teamName: "A",
+    },
+    {
+      date: "2026-09-01",
+      course: "SKY",
+      shift: "2부",
+      teeTime: "14:00",
+      teamName: "B",
+    },
+  ]);
+  assert(pair === null, "no pair under 6h");
+}
+
+section("54홀: 1부 후반 + 3부 초반 가능");
+{
+  const date = "2026-09-02";
+  const fiftyFour: AutoAssignCaddy = {
+    id: 500,
+    name: "54홀캐디",
+    team: "1조",
+    teamOrder: 1,
+  };
+  const reservations: AutoAssignReservation[] = [
+    {
+      date,
+      course: "VERTHILL",
+      shift: "1부",
+      teeTime: "10:30",
+      teamName: "1부후반",
+      rawRowIndex: 2,
+    },
+    {
+      date,
+      course: "VERTHILL",
+      shift: "2부",
+      teeTime: "13:00",
+      teamName: "2부",
+      rawRowIndex: 3,
+    },
+    {
+      date,
+      course: "VERTHILL",
+      shift: "3부",
+      teeTime: "16:30",
+      teamName: "3부초반",
+      rawRowIndex: 4,
+    },
+  ];
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: makeCaddies(5, 1),
+    fiftyFourHole: [fiftyFour],
+    reservations,
+  });
+  assert(result.fiftyFourHoleAssignments.length === 2, "54홀 2슬롯");
+  assert(
+    result.fiftyFourHoleAssignments.every(
+      (a) => a.reason === REASON.FIFTY_FOUR_HOLE_PRIORITY
+    ),
+    "reason 54HOLE_PRIORITY"
+  );
+  const tees = result.fiftyFourHoleAssignments
+    .map((a) => a.reservation.teeTime)
+    .sort();
+  assert(tees[0] === "10:30" && tees[1] === "16:30", "1부후반+3부초반");
+  assert(result.specialUnassigned.length === 0, "no 54 review");
+  assert(result.regularAssignments.length === 1, "남은 2부 일반배치");
+  assert(
+    result.regularAssignments[0].reservation.teeTime === "13:00",
+    "regular got midday"
+  );
+}
+
+section("54홀: 시간 겹침 방지");
+{
+  const date = "2026-09-03";
+  const c1: AutoAssignCaddy = {
+    id: 501,
+    name: "F1",
+    team: "1조",
+    teamOrder: 1,
+  };
+  const c2: AutoAssignCaddy = {
+    id: 502,
+    name: "F2",
+    team: "1조",
+    teamOrder: 2,
+  };
+  // only one valid pair exists (06:00 + 12:00); second candidate cannot reuse those
+  const reservations: AutoAssignReservation[] = [
+    {
+      date,
+      course: "OCEAN",
+      shift: "1부",
+      teeTime: "06:00",
+      teamName: "A",
+      rawRowIndex: 2,
+    },
+    {
+      date,
+      course: "OCEAN",
+      shift: "2부",
+      teeTime: "12:00",
+      teamName: "B",
+      rawRowIndex: 3,
+    },
+    {
+      date,
+      course: "OCEAN",
+      shift: "2부",
+      teeTime: "12:30",
+      teamName: "C",
+      rawRowIndex: 4,
+    },
+  ];
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: makeCaddies(3, 10),
+    fiftyFourHole: [c1, c2],
+    reservations,
+  });
+  assert(result.meta.fiftyFourHoleAssignedCaddyCount === 1, "only 1 54 caddy");
+  assert(result.specialUnassigned.length === 1, "2nd 54 → review");
+  assert(
+    result.specialUnassigned[0].reason === REASON.FIFTY_FOUR_NO_PAIR ||
+      result.specialUnassigned[0].reason ===
+        REASON.FIFTY_FOUR_INSUFFICIENT_RESERVATIONS,
+    "overlap/no pair reason"
+  );
+  const ids = result.fiftyFourHoleAssignments.map((a) => a.caddy.id);
+  assert(ids.every((id) => id === c1.id), "same caddy on both 54 slots");
+}
+
+section("54홀: 후보 부족 / 예약 부족");
+{
+  const date = "2026-09-04";
+  const onlyOneRes = computeAutoAssignmentsV1({
+    date,
+    available: makeCaddies(3),
+    fiftyFourHole: [
+      { id: 600, name: "F", team: "2조", teamOrder: 1 },
+    ],
+    reservations: [
+      {
+        date,
+        course: "LAKE",
+        shift: "1부",
+        teeTime: "07:00",
+        teamName: "alone",
+        rawRowIndex: 2,
+      },
+    ],
+  });
+  assert(onlyOneRes.specialUnassigned.length === 1, "예약 부족 → review");
+  assert(
+    onlyOneRes.specialUnassigned[0].reason ===
+      REASON.FIFTY_FOUR_INSUFFICIENT_RESERVATIONS,
+    "INSUFFICIENT_RESERVATIONS"
+  );
+  assert(onlyOneRes.regularAssignments.length === 1, "단일 예약은 일반배치");
+
+  const noCandidates = computeAutoAssignmentsV1({
+    date,
+    available: makeCaddies(2),
+    fiftyFourHole: [],
+    reservations: makeReservations(date, [
+      { shift: "1부", count: 1, teeStart: "07:00" },
+      { shift: "3부", count: 1, teeStart: "16:00" },
+    ]),
+  });
+  assert(noCandidates.fiftyFourHoleAssignments.length === 0, "후보 없으면 54 없음");
+  assert(noCandidates.meta.fiftyFourHoleCandidateCount === 0, "candidate 0");
+}
+
+section("54홀: 실패 후 review 남김 (일반 강등 없음)");
+{
+  const date = "2026-09-05";
+  const f: AutoAssignCaddy = {
+    id: 700,
+    name: "실패54",
+    team: "3조",
+    teamOrder: 1,
+  };
+  // gaps all < 6h
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: makeCaddies(4, 1),
+    fiftyFourHole: [f],
+    reservations: [
+      {
+        date,
+        course: "SKY",
+        shift: "1부",
+        teeTime: "08:00",
+        teamName: "a",
+        rawRowIndex: 2,
+      },
+      {
+        date,
+        course: "SKY",
+        shift: "2부",
+        teeTime: "11:00",
+        teamName: "b",
+        rawRowIndex: 3,
+      },
+      {
+        date,
+        course: "SKY",
+        shift: "3부",
+        teeTime: "13:30",
+        teamName: "c",
+        rawRowIndex: 4,
+      },
+    ],
+  });
+  assert(result.fiftyFourHoleAssignments.length === 0, "no 54 assign");
+  assert(result.specialUnassigned.length === 1, "review kept");
+  assert(result.specialUnassigned[0].review === true, "review flag");
+  assert(
+    !result.regularAssignments.some((a) => a.caddy.id === 700),
+    "not demoted to regular"
+  );
+  assert(result.regularAssignments.length === 3, "all reserved by regular pool");
+}
+
+section("54홀: 배치 후 일반 순번 포인터 정상");
+{
+  const date = "2026-09-06";
+  const available = makeCaddies(5, 1);
+  const ordered = [...available].sort(compareCaddyOrder);
+  const fiftyFour: AutoAssignCaddy = {
+    id: 800,
+    name: "54",
+    team: "9조",
+    teamOrder: 1,
+  };
+  // 54 takes 06:00 + 12:00; remaining 07:00, 08:00 go to regular from pointer 0
+  const result = computeAutoAssignmentsV1({
+    date,
+    available,
+    fiftyFourHole: [fiftyFour],
+    reservations: [
+      {
+        date,
+        course: "VERTHILL",
+        shift: "1부",
+        teeTime: "06:00",
+        teamName: "r1",
+        rawRowIndex: 2,
+      },
+      {
+        date,
+        course: "VERTHILL",
+        shift: "1부",
+        teeTime: "07:00",
+        teamName: "r2",
+        rawRowIndex: 3,
+      },
+      {
+        date,
+        course: "VERTHILL",
+        shift: "1부",
+        teeTime: "08:00",
+        teamName: "r3",
+        rawRowIndex: 4,
+      },
+      {
+        date,
+        course: "VERTHILL",
+        shift: "2부",
+        teeTime: "12:00",
+        teamName: "r4",
+        rawRowIndex: 5,
+      },
+    ],
+  });
+  assert(result.fiftyFourHoleAssignments.length === 2, "54 took pair");
+  assert(result.regularAssignments.length === 2, "2 regular");
+  assert(
+    result.regularAssignments[0].caddy.id === ordered[0].id,
+    "regular starts seq0 (pointer not skewed by 54)"
+  );
+  assert(
+    result.regularAssignments[1].caddy.id === ordered[1].id,
+    "regular continues seq1"
+  );
+  assert(
+    result.regularAssignments.every((a) => a.sequenceIndex >= 0),
+    "regular has sequenceIndex"
+  );
+  assert(
+    result.fiftyFourHoleAssignments.every((a) => a.sequenceIndex === -1),
+    "54 sequenceIndex not in regular pointer"
+  );
+  assert(!result.meta.availableCount || result.meta.availableCount === 5, "54 excluded from available count");
+  // fiftyFour id 800 not in available pool — availableCount is 5
+  assert(result.meta.availableCount === 5, "available excludes 54 candidate");
 }
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);

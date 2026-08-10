@@ -19,7 +19,14 @@ type PreviewResponse = AutoAssignResultV1 & {
   };
 };
 
-type Tab = "assigned" | "unassigned" | "unused" | "special";
+type Tab =
+  | "assigned"
+  | "fiftyFour"
+  | "regular"
+  | "unassigned"
+  | "unused"
+  | "special"
+  | "specialUnassigned";
 
 export default function AutoAssignPreviewPage() {
   const [date, setDate] = useState("");
@@ -76,9 +83,9 @@ export default function AutoAssignPreviewPage() {
   return (
     <div style={{ display: "grid", gap: 16, maxWidth: 1200 }}>
       <div>
-        <h1 style={{ margin: 0, fontSize: 22 }}>자동배치 v1 미리보기</h1>
+        <h1 style={{ margin: 0, fontSize: 22 }}>자동배치 v1+54홀 미리보기</h1>
         <p style={{ margin: "6px 0 0", color: "#64748b", fontSize: 14 }}>
-          예약 엑셀 + 당일 가용 캐디로 순번 배치 시뮬레이션. DB에 Assignment를 쓰지 않습니다.
+          54홀 우선(최소 6시간 간격) 후 일반 순번 배치. DB에 Assignment를 쓰지 않습니다.
         </p>
       </div>
 
@@ -137,6 +144,14 @@ export default function AutoAssignPreviewPage() {
             }}
           >
             <Stat label="배치됨" value={String(result.meta.assignedCount)} />
+            <Stat
+              label="54홀 배치"
+              value={String(result.meta.fiftyFourHoleAssignedCaddyCount ?? 0)}
+            />
+            <Stat
+              label="54홀 review"
+              value={String(result.meta.fiftyFourHoleUnassignedCount ?? 0)}
+            />
             <Stat label="미배치 예약" value={String(result.meta.unassignedCount)} />
             <Stat label="미사용 캐디" value={String(result.meta.unusedCount)} />
             <Stat label="special" value={String(result.meta.specialCount)} />
@@ -165,10 +180,13 @@ export default function AutoAssignPreviewPage() {
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             {(
               [
-                ["assigned", "배치됨"],
+                ["assigned", "전체 배치"],
+                ["fiftyFour", "54홀"],
+                ["regular", "일반순번"],
                 ["unassigned", "미배치 예약"],
                 ["unused", "미사용 캐디"],
                 ["special", "special"],
+                ["specialUnassigned", "54홀 review"],
               ] as const
             ).map(([key, label]) => (
               <button
@@ -202,9 +220,10 @@ export default function AutoAssignPreviewPage() {
             )}
           </div>
 
-          {tab === "assigned" && (
+          {(tab === "assigned" || tab === "fiftyFour" || tab === "regular") && (
             <Table
               headers={[
+                "구분",
                 "부",
                 "티타임",
                 "코스",
@@ -214,16 +233,28 @@ export default function AutoAssignPreviewPage() {
                 "순번idx",
                 "reason",
               ]}
-              rows={assignedRows.map((a) => [
-                a.shift,
-                a.reservation.teeTime,
-                a.reservation.courseLabel || a.reservation.course,
-                a.reservation.teamName || "-",
-                `${a.caddy.name}(#${a.caddy.id})`,
-                a.caddy.team,
-                String(a.sequenceIndex),
-                a.reason,
-              ])}
+              rows={(tab === "assigned"
+                ? assignedRows
+                : tab === "fiftyFour"
+                  ? result.fiftyFourHoleAssignments || []
+                  : result.regularAssignments || []
+              )
+                .filter((a) =>
+                  tab === "assigned" && shiftFilter !== "ALL"
+                    ? a.shift === shiftFilter
+                    : true
+                )
+                .map((a) => [
+                  a.kind === "fiftyFourHole" ? "54홀" : "일반",
+                  a.shift,
+                  a.reservation.teeTime,
+                  a.reservation.courseLabel || a.reservation.course,
+                  a.reservation.teamName || "-",
+                  `${a.caddy.name}(#${a.caddy.id})`,
+                  a.caddy.team,
+                  String(a.sequenceIndex),
+                  a.reason,
+                ])}
             />
           )}
 
@@ -261,6 +292,19 @@ export default function AutoAssignPreviewPage() {
                 c.team,
                 String(c.teamOrder),
                 "v1 미배치",
+              ])}
+            />
+          )}
+
+          {tab === "specialUnassigned" && (
+            <Table
+              headers={["ID", "이름", "조", "reason", "review"]}
+              rows={(result.specialUnassigned || []).map((u) => [
+                String(u.caddy.id),
+                u.caddy.name,
+                u.caddy.team,
+                u.reason,
+                u.review ? "Y" : "N",
               ])}
             />
           )}

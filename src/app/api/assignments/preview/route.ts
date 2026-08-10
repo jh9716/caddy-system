@@ -5,8 +5,21 @@ import {
   type AutoAssignCaddy,
   type AutoAssignReservation,
 } from "@/lib/autoAssignEngine";
+import type { AvailabilityRow } from "@/lib/availabilityEngine";
 import { loadAvailabilityForDate } from "@/lib/availabilityService";
 import { parseReservationWorkbook } from "@/lib/reservationImportXlsx";
+
+/** special 태그/라벨에 54홀 힌트가 있으면 54홀 후보로 추출 */
+function extractFiftyFourHoleCandidates(
+  special: AvailabilityRow[],
+  explicit?: AutoAssignCaddy[] | null
+): AutoAssignCaddy[] {
+  if (Array.isArray(explicit)) return explicit;
+  return special.filter((row) => {
+    const marks = [...(row.specialTags || []), ...(row.assignmentLabels || [])];
+    return marks.some((t) => /54|54홀|오십사/.test(String(t)));
+  });
+}
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -52,12 +65,14 @@ export async function POST(req: NextRequest) {
       const reservations: AutoAssignReservation[] = parsed.reservations.filter(
         (r) => !r.date || r.date === date
       );
+      const fiftyFourHole = extractFiftyFourHoleCandidates(availability.special);
 
       const result = computeAutoAssignmentsV1({
         date,
         reservations,
         available: availability.available.all,
         special: availability.special,
+        fiftyFourHole,
       });
 
       return NextResponse.json({
@@ -92,6 +107,7 @@ export async function POST(req: NextRequest) {
     const reservations = (body.reservations || []) as AutoAssignReservation[];
     let available = (body.available || []) as AutoAssignCaddy[];
     let special = (body.special || []) as AutoAssignCaddy[];
+    let specialRows: AvailabilityRow[] = [];
 
     // available 생략 시 DB에서 로드 (읽기 전용)
     if (!Array.isArray(body.available)) {
@@ -99,14 +115,21 @@ export async function POST(req: NextRequest) {
       available = availability.available.all;
       if (!Array.isArray(body.special)) {
         special = availability.special;
+        specialRows = availability.special;
       }
     }
+
+    const fiftyFourHole = extractFiftyFourHoleCandidates(
+      specialRows,
+      Array.isArray(body.fiftyFourHole) ? body.fiftyFourHole : null
+    );
 
     const result = computeAutoAssignmentsV1({
       date,
       reservations,
       available,
       special,
+      fiftyFourHole,
     });
 
     return NextResponse.json({
