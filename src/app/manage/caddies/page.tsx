@@ -70,29 +70,33 @@ export default function ManageCaddiesPage() {
   const [creating, setCreating] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setMessage(null);
-    try {
-      const res = await fetch(`/api/caddies?employment=${employmentFilter}`, {
-        cache: 'no-store',
-        credentials: 'include',
-      });
-      if (res.status === 401 || res.status === 403) {
-        location.href = '/login?callbackUrl=/manage/caddies';
-        return;
+  const load = useCallback(
+    async (employmentOverride?: EmploymentStatus | 'all') => {
+      const employment = employmentOverride ?? employmentFilter;
+      setLoading(true);
+      setMessage(null);
+      try {
+        const res = await fetch(`/api/caddies?employment=${employment}`, {
+          cache: 'no-store',
+          credentials: 'include',
+        });
+        if (res.status === 401 || res.status === 403) {
+          location.href = '/login?callbackUrl=/manage/caddies';
+          return;
+        }
+        const data = await res.json();
+        if (!res.ok) {
+          setMessage(data?.error || '목록을 불러오지 못했습니다.');
+          setRows([]);
+          return;
+        }
+        setRows(Array.isArray(data) ? data : []);
+      } finally {
+        setLoading(false);
       }
-      const data = await res.json();
-      if (!res.ok) {
-        setMessage(data?.error || '목록을 불러오지 못했습니다.');
-        setRows([]);
-        return;
-      }
-      setRows(Array.isArray(data) ? data : []);
-    } finally {
-      setLoading(false);
-    }
-  }, [employmentFilter]);
+    },
+    [employmentFilter]
+  );
 
   useEffect(() => {
     load();
@@ -208,7 +212,11 @@ export default function ManageCaddiesPage() {
         : status === 'LEAVE'
           ? '휴직 처리'
           : '재직 복귀';
-    if (!confirm(`${c.name}을(를) ${label}할까요? (물리 삭제 없음, ID·배정 기록 유지)`)) {
+    if (
+      !confirm(
+        `${c.name}을(를) ${label}할까요?\n물리 삭제 없음 · ID(#${c.id})·배정 기록 유지`
+      )
+    ) {
       return;
     }
     setSavingId(c.id);
@@ -224,8 +232,12 @@ export default function ManageCaddiesPage() {
         alert(data?.error || '상태 변경 실패');
         return;
       }
-      await load();
-      setMessage(`${c.name}: ${employmentStatusLabel(status)}`);
+      // 퇴사/휴직/복귀 직후 해당 필터로 전환해 목록에서 바로 확인·복귀 가능
+      setEmploymentFilter(status);
+      await load(status);
+      setMessage(
+        `${c.name}: ${employmentStatusLabel(status)} (id=${c.id}, 물리삭제 아님)`
+      );
     } finally {
       setSavingId(null);
     }
@@ -270,7 +282,7 @@ export default function ManageCaddiesPage() {
         <div>
           <h2 className="cm-title">캐디 관리</h2>
           <p className="cm-sub">
-            기존 ID·배정 기록 보존 · 물리 삭제 없음 · XLSX 자동반영 보류
+            퇴사=soft 처리(목록에서만 숨김) · ID·배정 보존 · 물리 삭제 없음 · XLSX 자동반영 보류
           </p>
         </div>
         <button type="button" className="cm-btn cm-btn-primary" onClick={() => setCreateOpen((v) => !v)}>
@@ -361,6 +373,27 @@ export default function ManageCaddiesPage() {
         </section>
       )}
 
+      <section className="cm-filter-bar" aria-label="재직상태 필터">
+        {(
+          [
+            ['all', '전체'],
+            ['ACTIVE', '재직'],
+            ['LEAVE', '휴직'],
+            ['RETIRED', '퇴사'],
+          ] as const
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            className={`cm-filter-btn ${employmentFilter === value ? 'is-active' : ''}`}
+            onClick={() => setEmploymentFilter(value)}
+            disabled={loading}
+          >
+            {label}
+          </button>
+        ))}
+      </section>
+
       <section className="cm-toolbar">
         <input
           className="cm-search"
@@ -374,22 +407,16 @@ export default function ManageCaddiesPage() {
             <option key={t} value={t}>{t}</option>
           ))}
         </select>
-        <select
-          value={employmentFilter}
-          onChange={(e) => setEmploymentFilter(e.target.value as typeof employmentFilter)}
-        >
-          <option value="ACTIVE">재직만</option>
-          <option value="LEAVE">휴직만</option>
-          <option value="RETIRED">퇴사만</option>
-          <option value="all">전체</option>
-        </select>
-        <button type="button" className="cm-btn" onClick={load} disabled={loading}>
+        <button type="button" className="cm-btn" onClick={() => load()} disabled={loading}>
           새로고침
         </button>
       </section>
 
       <div className="cm-stats">
         표시 {stats.total}명 · {stats.teams}개 조
+        {employmentFilter === 'ACTIVE' && (
+          <span className="cm-stats-hint"> · 퇴사자는 「퇴사」 필터에서 조회·복귀</span>
+        )}
       </div>
 
       {loading ? (
@@ -469,8 +496,9 @@ export default function ManageCaddiesPage() {
                           className="cm-btn cm-btn-danger"
                           disabled={busy}
                           onClick={() => setEmployment(c, 'RETIRED')}
+                          title="물리 삭제 없음 · employmentStatus=RETIRED"
                         >
-                          퇴사
+                          퇴사 처리
                         </button>
                       </>
                     )}
@@ -614,6 +642,31 @@ export default function ManageCaddiesPage() {
           margin: 0 0 10px;
           font-size: 1rem;
         }
+        .cm-filter-bar {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 6px;
+          margin: 4px 0 8px;
+        }
+        .cm-filter-btn {
+          padding: 10px 8px;
+          border: 1px solid #cbd5e1;
+          border-radius: 999px;
+          background: #fff;
+          color: #334155;
+          font-size: 0.9rem;
+          font-weight: 600;
+          cursor: pointer;
+        }
+        .cm-filter-btn.is-active {
+          background: #0f172a;
+          border-color: #0f172a;
+          color: #fff;
+        }
+        .cm-filter-btn:disabled {
+          opacity: 0.6;
+          cursor: default;
+        }
         .cm-toolbar {
           display: grid;
           grid-template-columns: 1fr;
@@ -635,6 +688,9 @@ export default function ManageCaddiesPage() {
           color: #475569;
           font-size: 0.85rem;
           margin-bottom: 8px;
+        }
+        .cm-stats-hint {
+          color: #b45309;
         }
         .cm-list {
           list-style: none;

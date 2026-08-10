@@ -87,7 +87,7 @@ export async function PATCH(
 }
 
 /**
- * DELETE /api/caddies/[id] — 물리 삭제 금지.
+ * DELETE /api/caddies/[id] — 물리 삭제 절대 금지 (prisma.caddy.delete 사용 금지).
  * Assignment/Schedule 관계 보존을 위해 employmentStatus=RETIRED 만 수행.
  */
 export async function DELETE(
@@ -104,6 +104,7 @@ export async function DELETE(
       return NextResponse.json({ error: "id 필요" }, { status: 400 });
     }
 
+    // soft-retire only — never prisma.caddy.delete / deleteMany
     const updated = await prisma.caddy.update({
       where: { id },
       data: { employmentStatus: "RETIRED" },

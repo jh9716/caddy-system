@@ -93,7 +93,7 @@ export async function POST(req: NextRequest) {
 }
 
 /**
- * DELETE 쿼리(?id=) — 물리 삭제 금지.
+ * DELETE 쿼리(?id=) — 물리 삭제 절대 금지 (prisma.caddy.delete 사용 금지).
  * 하위 호환: RETIRED(soft) 처리만 수행. Assignment/Schedule 유지.
  */
 export async function DELETE(req: NextRequest) {
@@ -105,6 +105,7 @@ export async function DELETE(req: NextRequest) {
     const id = Number(searchParams.get("id"));
     if (!id) return NextResponse.json({ error: "id 필요" }, { status: 400 });
 
+    // soft-retire only — never prisma.caddy.delete / deleteMany
     const updated = await prisma.caddy.update({
       where: { id },
       data: { employmentStatus: "RETIRED" },
