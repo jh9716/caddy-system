@@ -23,6 +23,7 @@ type Tab =
   | "assigned"
   | "fiftyFour"
   | "oneThree"
+  | "oneTwo"
   | "regular"
   | "unassigned"
   | "unused"
@@ -86,7 +87,7 @@ export default function AutoAssignPreviewPage() {
       <div>
         <h1 style={{ margin: 0, fontSize: 22 }}>자동배치 미리보기</h1>
         <p style={{ margin: "6px 0 0", color: "#64748b", fontSize: 14 }}>
-          우선순위: 54홀 → 1·3부 → 일반 순번. DB에 Assignment를 쓰지 않습니다.
+          우선순위: 54홀 → 1·3부 → 1·2부 → 일반 순번. DB에 Assignment를 쓰지 않습니다.
         </p>
       </div>
 
@@ -154,10 +155,15 @@ export default function AutoAssignPreviewPage() {
               value={String(result.meta.oneThreeAssignedCaddyCount ?? 0)}
             />
             <Stat
+              label="1·2부 배치"
+              value={String(result.meta.oneTwoAssignedCaddyCount ?? 0)}
+            />
+            <Stat
               label="special review"
               value={String(
                 (result.meta.fiftyFourHoleUnassignedCount ?? 0) +
-                  (result.meta.oneThreeUnassignedCount ?? 0)
+                  (result.meta.oneThreeUnassignedCount ?? 0) +
+                  (result.meta.oneTwoUnassignedCount ?? 0)
               )}
             />
             <Stat label="미배치 예약" value={String(result.meta.unassignedCount)} />
@@ -190,6 +196,7 @@ export default function AutoAssignPreviewPage() {
                 ["assigned", "전체 배치"],
                 ["fiftyFour", "54홀"],
                 ["oneThree", "1·3부"],
+                ["oneTwo", "1·2부"],
                 ["regular", "일반순번"],
                 ["unassigned", "미배치 예약"],
                 ["unused", "미사용 캐디"],
@@ -231,6 +238,7 @@ export default function AutoAssignPreviewPage() {
           {(tab === "assigned" ||
             tab === "fiftyFour" ||
             tab === "oneThree" ||
+            tab === "oneTwo" ||
             tab === "regular") && (
             <Table
               headers={[
@@ -250,7 +258,9 @@ export default function AutoAssignPreviewPage() {
                   ? result.fiftyFourHoleAssignments || []
                   : tab === "oneThree"
                     ? result.oneThreeAssignments || []
-                    : result.regularAssignments || []
+                    : tab === "oneTwo"
+                      ? result.oneTwoAssignments || []
+                      : result.regularAssignments || []
               )
                 .filter((a) =>
                   tab === "assigned" && shiftFilter !== "ALL"
@@ -262,7 +272,9 @@ export default function AutoAssignPreviewPage() {
                     ? "54홀"
                     : a.kind === "oneThree"
                       ? "1·3부"
-                      : "일반",
+                      : a.kind === "oneTwo"
+                        ? "1·2부"
+                        : "일반",
                   a.shift,
                   a.reservation.teeTime,
                   a.reservation.courseLabel || a.reservation.course,

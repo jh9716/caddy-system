@@ -8,8 +8,10 @@ import {
   compareCaddyOrder,
   findEarliest54HolePair,
   findOneThreePair,
+  findOneTwoPair,
   isCompatible54HolePair,
   isCompatibleOneThreePair,
+  isCompatibleOneTwoPair,
   minutesBetweenReservations,
   REASON,
   type AutoAssignCaddy,
@@ -983,6 +985,417 @@ section("1·3부: 배치 후 일반 순번 정상");
     "pointer continues"
   );
   assert(result.meta.availableCount === 5, "OT excluded from available");
+}
+
+section("1·2부: 정상 1부+2부 페어");
+{
+  const date = "2026-09-20";
+  const ot: AutoAssignCaddy = {
+    id: 950,
+    name: "일이",
+    team: "1조",
+    teamOrder: 1,
+  };
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: makeCaddies(4, 1),
+    oneTwoCandidates: [ot],
+    reservations: [
+      {
+        date,
+        course: "SKY",
+        shift: "1부",
+        teeTime: "07:00",
+        teamName: "이른1부",
+        rawRowIndex: 2,
+      },
+      {
+        date,
+        course: "SKY",
+        shift: "1부",
+        teeTime: "09:30",
+        teamName: "후반1부",
+        rawRowIndex: 3,
+      },
+      {
+        date,
+        course: "SKY",
+        shift: "2부",
+        teeTime: "13:30",
+        teamName: "초반2부",
+        rawRowIndex: 4,
+      },
+      {
+        date,
+        course: "SKY",
+        shift: "2부",
+        teeTime: "14:30",
+        teamName: "늦은2부",
+        rawRowIndex: 5,
+      },
+    ],
+  });
+  assert(result.oneTwoAssignments.length === 2, "1·2 2슬롯");
+  assert(
+    result.oneTwoAssignments.every((a) => a.reason === REASON.ONE_TWO_PRIORITY),
+    "ONE_TWO_PRIORITY"
+  );
+  const tees = result.oneTwoAssignments
+    .map((a) => a.reservation.teeTime)
+    .sort();
+  assert(tees[0] === "09:30" && tees[1] === "13:30", "후반1부+초반2부");
+  assert(result.specialUnassigned.length === 0, "no review");
+  assert(result.regularAssignments.length === 2, "remaining regular");
+}
+
+section("1·2부: 최소 간격 미달 거절");
+{
+  const date = "2026-09-21";
+  const found = findOneTwoPair([
+    {
+      date,
+      course: "OCEAN",
+      shift: "1부",
+      teeTime: "10:00",
+      teamName: "a",
+    },
+    {
+      date,
+      course: "OCEAN",
+      shift: "2부",
+      teeTime: "13:30",
+      teamName: "b",
+    },
+  ]);
+  assert(!found.ok && found.reason === REASON.ONE_TWO_NO_PAIR, "gap < 4h");
+  assert(
+    !isCompatibleOneTwoPair(
+      { date, teeTime: "10:00", shift: "1부" },
+      { date, teeTime: "13:30", shift: "2부" }
+    ),
+    "helper reject 3.5h"
+  );
+  assert(
+    isCompatibleOneTwoPair(
+      { date, teeTime: "09:00", shift: "1부" },
+      { date, teeTime: "13:00", shift: "2부" }
+    ),
+    "helper allow 4h"
+  );
+
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: makeCaddies(3),
+    oneTwoCandidates: [
+      { id: 951, name: "OT2", team: "2조", teamOrder: 1 },
+    ],
+    reservations: [
+      {
+        date,
+        course: "OCEAN",
+        shift: "1부",
+        teeTime: "10:00",
+        teamName: "a",
+        rawRowIndex: 2,
+      },
+      {
+        date,
+        course: "OCEAN",
+        shift: "2부",
+        teeTime: "13:30",
+        teamName: "b",
+        rawRowIndex: 3,
+      },
+    ],
+  });
+  assert(result.oneTwoAssignments.length === 0, "no 1·2 assign");
+  assert(result.specialUnassigned.length === 1, "review");
+  assert(
+    result.specialUnassigned[0].reason === REASON.ONE_TWO_NO_PAIR,
+    "NO_PAIR"
+  );
+  assert(
+    !result.regularAssignments.some((a) => a.caddy.id === 951),
+    "not demoted"
+  );
+}
+
+section("1·2부: 1부만 / 2부만");
+{
+  const date = "2026-09-22";
+  const only1 = computeAutoAssignmentsV1({
+    date,
+    available: makeCaddies(2),
+    oneTwoCandidates: [
+      { id: 960, name: "OT1", team: "1조", teamOrder: 1 },
+    ],
+    reservations: [
+      {
+        date,
+        course: "LAKE",
+        shift: "1부",
+        teeTime: "09:00",
+        teamName: "only1",
+        rawRowIndex: 2,
+      },
+    ],
+  });
+  assert(
+    only1.specialUnassigned[0]?.reason === REASON.ONE_TWO_MISSING_SHIFT2,
+    "1부만 → MISSING_SHIFT2"
+  );
+
+  const only2 = computeAutoAssignmentsV1({
+    date,
+    available: makeCaddies(2),
+    oneTwoCandidates: [
+      { id: 961, name: "OT2", team: "1조", teamOrder: 1 },
+    ],
+    reservations: [
+      {
+        date,
+        course: "LAKE",
+        shift: "2부",
+        teeTime: "13:00",
+        teamName: "only2",
+        rawRowIndex: 2,
+      },
+    ],
+  });
+  assert(
+    only2.specialUnassigned[0]?.reason === REASON.ONE_TWO_MISSING_SHIFT1,
+    "2부만 → MISSING_SHIFT1"
+  );
+}
+
+section("1·2부: 후보/예약 부족");
+{
+  const date = "2026-09-23";
+  const shortRes = computeAutoAssignmentsV1({
+    date,
+    available: makeCaddies(3, 1),
+    oneTwoCandidates: [
+      { id: 970, name: "A", team: "1조", teamOrder: 1 },
+      { id: 971, name: "B", team: "1조", teamOrder: 2 },
+    ],
+    reservations: [
+      {
+        date,
+        course: "VERTHILL",
+        shift: "1부",
+        teeTime: "09:00",
+        teamName: "s1",
+        rawRowIndex: 2,
+      },
+      {
+        date,
+        course: "VERTHILL",
+        shift: "2부",
+        teeTime: "13:00",
+        teamName: "s2",
+        rawRowIndex: 3,
+      },
+    ],
+  });
+  assert(shortRes.meta.oneTwoAssignedCaddyCount === 1, "1 candidate placed");
+  assert(shortRes.meta.oneTwoUnassignedCount === 1, "1 candidate review");
+
+  const shortCand = computeAutoAssignmentsV1({
+    date,
+    available: makeCaddies(4, 1),
+    oneTwoCandidates: [
+      { id: 972, name: "Only", team: "2조", teamOrder: 1 },
+    ],
+    reservations: [
+      {
+        date,
+        course: "VERTHILL",
+        shift: "1부",
+        teeTime: "08:30",
+        teamName: "a1",
+        rawRowIndex: 2,
+      },
+      {
+        date,
+        course: "VERTHILL",
+        shift: "1부",
+        teeTime: "09:30",
+        teamName: "a2",
+        rawRowIndex: 3,
+      },
+      {
+        date,
+        course: "VERTHILL",
+        shift: "2부",
+        teeTime: "13:00",
+        teamName: "b1",
+        rawRowIndex: 4,
+      },
+      {
+        date,
+        course: "VERTHILL",
+        shift: "2부",
+        teeTime: "13:30",
+        teamName: "b2",
+        rawRowIndex: 5,
+      },
+    ],
+  });
+  assert(shortCand.meta.oneTwoAssignedCaddyCount === 1, "후보 1만");
+  assert(shortCand.oneTwoAssignments.length === 2, "1 pair");
+  assert(shortCand.regularAssignments.length === 2, "나머지 일반");
+}
+
+section("1·2부: 54홀 충돌 시 54홀 우선");
+{
+  const date = "2026-09-24";
+  const shared: AutoAssignCaddy = {
+    id: 980,
+    name: "충돌54",
+    team: "3조",
+    teamOrder: 1,
+  };
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: makeCaddies(3, 1),
+    fiftyFourHole: [shared],
+    oneTwoCandidates: [shared],
+    reservations: [
+      {
+        date,
+        course: "SKY",
+        shift: "1부",
+        teeTime: "07:00",
+        teamName: "s1",
+        rawRowIndex: 2,
+      },
+      {
+        date,
+        course: "SKY",
+        shift: "2부",
+        teeTime: "13:00",
+        teamName: "s2",
+        rawRowIndex: 3,
+      },
+    ],
+  });
+  assert(result.meta.oneTwoCandidateCount === 0, "1·2에서 제외");
+  assert(result.fiftyFourHoleAssignments.length === 2, "54홀이 가져감");
+  assert(result.oneTwoAssignments.length === 0, "1·2 없음");
+}
+
+section("1·2부: 1·3부 충돌 시 1·3부 우선");
+{
+  const date = "2026-09-25";
+  const shared: AutoAssignCaddy = {
+    id: 981,
+    name: "충돌13",
+    team: "4조",
+    teamOrder: 1,
+  };
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: makeCaddies(3, 1),
+    oneThreeCandidates: [shared],
+    oneTwoCandidates: [shared],
+    reservations: [
+      {
+        date,
+        course: "OCEAN",
+        shift: "1부",
+        teeTime: "10:00",
+        teamName: "s1",
+        rawRowIndex: 2,
+      },
+      {
+        date,
+        course: "OCEAN",
+        shift: "2부",
+        teeTime: "14:00",
+        teamName: "s2",
+        rawRowIndex: 3,
+      },
+      {
+        date,
+        course: "OCEAN",
+        shift: "3부",
+        teeTime: "16:00",
+        teamName: "s3",
+        rawRowIndex: 4,
+      },
+    ],
+  });
+  assert(result.meta.oneTwoCandidateCount === 0, "1·2 후보에서 제외");
+  assert(result.oneThreeAssignments.length === 2, "1·3이 가져감");
+  assert(result.oneTwoAssignments.length === 0, "1·2 없음");
+  assert(
+    result.oneThreeAssignments.every((a) => a.caddy.id === 981),
+    "1·3 caddy"
+  );
+}
+
+section("1·2부: 배치 후 일반 순번 정상");
+{
+  const date = "2026-09-26";
+  const available = makeCaddies(5, 1);
+  const ordered = [...available].sort(compareCaddyOrder);
+  const result = computeAutoAssignmentsV1({
+    date,
+    available,
+    oneTwoCandidates: [
+      { id: 990, name: "OT12", team: "8조", teamOrder: 1 },
+    ],
+    reservations: [
+      {
+        date,
+        course: "LAKE",
+        shift: "1부",
+        teeTime: "07:00",
+        teamName: "early",
+        rawRowIndex: 2,
+      },
+      {
+        date,
+        course: "LAKE",
+        shift: "1부",
+        teeTime: "09:00",
+        teamName: "late1",
+        rawRowIndex: 3,
+      },
+      {
+        date,
+        course: "LAKE",
+        shift: "2부",
+        teeTime: "13:00",
+        teamName: "early2",
+        rawRowIndex: 4,
+      },
+      {
+        date,
+        course: "LAKE",
+        shift: "3부",
+        teeTime: "16:00",
+        teamName: "s3",
+        rawRowIndex: 5,
+      },
+    ],
+  });
+  assert(result.oneTwoAssignments.length === 2, "OT12 pair");
+  assert(
+    result.oneTwoAssignments.map((a) => a.reservation.teeTime).sort().join(",") ===
+      "09:00,13:00",
+    "OT12 took late1+early2"
+  );
+  assert(result.regularAssignments.length === 2, "2 regular left");
+  assert(
+    result.regularAssignments[0].caddy.id === ordered[0].id,
+    "pointer starts at 0"
+  );
+  assert(
+    result.regularAssignments[1].caddy.id === ordered[1].id,
+    "pointer continues"
+  );
+  assert(result.meta.availableCount === 5, "OT12 excluded from available");
 }
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);

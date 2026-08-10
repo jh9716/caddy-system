@@ -37,6 +37,23 @@ function extractOneThreeCandidates(
   });
 }
 
+/** 1·2부 신청 힌트 (상위 우선순위와 겹치면 compute 쪽에서 제외) */
+function extractOneTwoCandidates(
+  special: AvailabilityRow[],
+  explicit?: AutoAssignCaddy[] | null
+): AutoAssignCaddy[] {
+  if (Array.isArray(explicit)) return explicit;
+  return special.filter((row) => {
+    const marks = [...(row.specialTags || []), ...(row.assignmentLabels || [])];
+    return marks.some((t) => {
+      const s = String(t);
+      if (/54|54홀/.test(s)) return false;
+      if (/1\s*[·・.]?\s*3\s*부|1·3|ONE_THREE/.test(s)) return false;
+      return /1\s*[·・.]?\s*2\s*부|1·2|1\.2부|ONE_TWO|12부/.test(s);
+    });
+  });
+}
+
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
@@ -83,6 +100,7 @@ export async function POST(req: NextRequest) {
       );
       const fiftyFourHole = extractFiftyFourHoleCandidates(availability.special);
       const oneThreeCandidates = extractOneThreeCandidates(availability.special);
+      const oneTwoCandidates = extractOneTwoCandidates(availability.special);
 
       const result = computeAutoAssignmentsV1({
         date,
@@ -91,6 +109,7 @@ export async function POST(req: NextRequest) {
         special: availability.special,
         fiftyFourHole,
         oneThreeCandidates,
+        oneTwoCandidates,
       });
 
       return NextResponse.json({
@@ -145,6 +164,10 @@ export async function POST(req: NextRequest) {
       specialRows,
       Array.isArray(body.oneThreeCandidates) ? body.oneThreeCandidates : null
     );
+    const oneTwoCandidates = extractOneTwoCandidates(
+      specialRows,
+      Array.isArray(body.oneTwoCandidates) ? body.oneTwoCandidates : null
+    );
 
     const result = computeAutoAssignmentsV1({
       date,
@@ -153,6 +176,7 @@ export async function POST(req: NextRequest) {
       special,
       fiftyFourHole,
       oneThreeCandidates,
+      oneTwoCandidates,
     });
 
     return NextResponse.json({
