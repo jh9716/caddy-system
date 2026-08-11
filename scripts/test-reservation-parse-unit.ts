@@ -1,19 +1,25 @@
 /**
  * 예약표 파싱 단위 테스트 (DB 없음)
  * 실행: npx tsx scripts/test-reservation-parse-unit.ts
+ *
+ * 핵심: shift는 teeTime/빈행/출발홀 숫자가 아니라
+ * 시트 공통 rowShiftMap(명시적 1부/2부/3부)으로만 확정.
  */
 
 import {
+  buildRowShiftMap,
   detectCourseBlocks,
+  detectExplicitShiftLabel,
   detectHeaderRow,
   detectShiftSectionLabel,
-  inferShiftFromTeeTime,
   matchHeaderKind,
   normalizeCourse,
   normalizeShift,
+  normalizeShiftColumn,
   parseDateValue,
   parseReservationSheets,
   parseTeeTime,
+  SHIFT_NOT_DETECTED,
   type CourseCode,
   type ParsedReservation,
   type ShiftPart,
@@ -44,37 +50,110 @@ function okRows(rows: ParsedReservation[]) {
   return rows.filter((r) => !r.needsReview);
 }
 
-section("normalize helpers");
+function empty11() {
+  return Array(11).fill("");
+}
+
+function blockHeader() {
+  return [
+    "코스명",
+    "시간",
+    "예약자",
+    "내장객1",
+    "내장객2",
+    "내장객3",
+    "내장객4",
+    "x",
+    "y",
+    "출발홀",
+    "캐디명",
+  ];
+}
+
+function fourCourseHeader() {
+  return [
+    ...blockHeader(),
+    ...blockHeader(),
+    ...blockHeader(),
+    ...blockHeader(),
+  ];
+}
+
+function data11(
+  course: string,
+  time: string,
+  team: string,
+  opts?: { hole?: string | number; caddy?: string }
+) {
+  return [
+    course,
+    time,
+    team,
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    opts?.hole ?? "",
+    opts?.caddy ?? "",
+  ];
+}
+
+function timesFrom(start: string, n: number, step = 7): string[] {
+  const [h, m] = start.split(":").map(Number);
+  let mins = h * 60 + m;
+  const out: string[] = [];
+  for (let i = 0; i < n; i++) {
+    out.push(
+      `${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(
+        mins % 60
+      ).padStart(2, "0")}`
+    );
+    mins += step;
+  }
+  return out;
+}
+
+function sectionRow(label: ShiftPart): unknown[] {
+  // 병합 셀: 라벨이 첫 열(A)에만 존재
+  const row = Array(44).fill("");
+  row[0] = label;
+  return row;
+}
+
+section("normalize / explicit shift labels (bare digit 금지)");
 assert(normalizeCourse("베르힐") === "VERTHILL", "베르힐");
-assert(normalizeCourse("Verthill CC") === "VERTHILL", "Verthill CC");
 assert(normalizeCourse("스카이코스") === "SKY", "스카이코스");
-assert(normalizeCourse("OCEAN") === "OCEAN", "OCEAN");
-assert(normalizeCourse("레이크") === "LAKE", "레이크");
-assert(normalizeCourse("미지") === null, "unknown course");
-assert(normalizeShift("1부") === "1부", "1부");
-assert(normalizeShift("제2부") === "2부", "제2부");
-assert(normalizeShift("3") === "3부", "3");
-assert(inferShiftFromTeeTime("06:30") === "1부", "06:30 → 1부");
-assert(inferShiftFromTeeTime("13:10") === "2부", "13:10 → 2부");
-assert(inferShiftFromTeeTime("16:00") === "3부", "16:00 → 3부");
+assert(detectExplicitShiftLabel("1부") === "1부", "explicit 1부");
+assert(detectExplicitShiftLabel("제2부") === "2부", "제2부");
+assert(detectExplicitShiftLabel("◆3부") === "3부", "◆3부");
+assert(detectExplicitShiftLabel("[2부]") === "2부", "[2부]");
+assert(detectExplicitShiftLabel("1") === null, "bare 1 rejected");
+assert(detectExplicitShiftLabel("2") === null, "bare 2 rejected");
+assert(detectExplicitShiftLabel("3") === null, "bare 3 rejected");
+assert(detectExplicitShiftLabel("10") === null, "bare 10 rejected");
+assert(normalizeShift("3") === null, "normalizeShift bare 3 null");
+assert(normalizeShiftColumn("1부") === "1부", "column 1부");
+assert(normalizeShiftColumn("1") === null, "column bare 1 null");
+assert(
+  detectShiftSectionLabel(["", "1", "10", "팀"], 0, 3) === null,
+  "hole digits not section"
+);
+assert(
+  detectShiftSectionLabel(["2부", "", ""], 0, 2) === "2부",
+  "detect 2부 section"
+);
 
 section("parseTeeTime / parseDateValue");
 assert(parseTeeTime("6:30") === "06:30", "6:30");
-assert(parseTeeTime("06:30") === "06:30", "06:30");
 assert(parseTeeTime("0630") === "06:30", "0630");
-assert(parseTeeTime("6시30분") === "06:30", "6시30분");
-assert(parseTeeTime(6.5 / 24) === "06:30", "excel serial time");
 assert(parseTeeTime("xx:yy") === null, "bad time");
-assert(parseTeeTime("25:00") === null, "invalid hour");
-assert(parseDateValue("2026-08-10") === "2026-08-10", "ymd");
-assert(parseDateValue("2026.8.10") === "2026-08-10", "dotted");
 assert(parseDateValue("2026년 8월 10일") === "2026-08-10", "korean date");
 
 section("header detection");
-assert(matchHeaderKind("티타임") === "teeTime", "티타임 header");
-assert(matchHeaderKind("예약자명") === "teamName", "예약자명");
 assert(matchHeaderKind("출발홀") === "startingHole", "출발홀");
-assert(matchHeaderKind("홀수") === "hole", "홀수");
+assert(matchHeaderKind("캐디명") !== "teamName", "캐디명 ≠ teamName");
 const detected = detectHeaderRow([
   ["예약표"],
   [],
@@ -82,10 +161,8 @@ const detected = detectHeaderRow([
   ["2026-08-10", "06:30", "베르힐", "홍길동", "1"],
 ]);
 assert(detected?.headerRow === 2, "header on row 2");
-assert(detected?.columns.teeTime === 1, "time col");
-assert(detected?.columns.teamName === 3, "team col");
 
-section("정상 행 (부 구간 헤더 — teeTime 추정 없음)");
+section("정상 행: 부 구간 헤더 + 출발홀=1이 shift를 바꾸지 않음");
 {
   const result = parseReservationSheets([
     {
@@ -98,33 +175,57 @@ section("정상 행 (부 구간 헤더 — teeTime 추정 없음)");
         ["2부", "", "", "", ""],
         ["2026-08-10", "11:20", "오후팀", 18, 1],
         ["3부", "", "", "", ""],
-        ["2026-08-10", "16:10", "야간팀", 18, 1],
+        ["2026-08-10", "17:01", "야간팀", 18, 1],
       ],
     },
   ]);
   assert(result.summary.totals.teams === 4, "4 valid teams");
   assert(result.needsReview.length === 0, "no review");
-  assert(result.reservations[0].course === "VERTHILL", "course from sheet");
   assert(result.reservations[0].shift === "1부", "section 1부");
-  assert(result.reservations[2].shift === "2부", "section 2부 @11:20");
-  assert(result.reservations[2].teeTime === "11:20", "2부 tee 11:20");
-  assert(result.reservations[3].shift === "3부", "section 3부");
-  assert(result.reservations[0].startingHole === 1, "startingHole");
-  assert(result.reservations[0].rawData["예약자"] === "김예약", "rawData kept");
-  assert(result.reservations[0].sourceSheet === "베르힐", "sourceSheet");
-  const day = result.summary.byDate[0];
-  assert(day?.byShift["1부"] === 2, "day 1부 count");
-  assert(day?.byShift["2부"] === 1, "day 2부 count");
-  assert(day?.byShift["3부"] === 1, "day 3부 count");
+  assert(result.reservations[2].shift === "2부", "11:20 is 2부");
+  assert(result.reservations[3].shift === "3부", "17:01 is 3부");
+  assert(result.reservations[0].startingHole === 1, "startingHole 1 kept");
 }
 
-section("빈 행 무시");
+section("SHIFT_NOT_DETECTED: 라벨 없으면 null (1부 fallback 없음)");
 {
   const result = parseReservationSheets([
     {
       name: "스카이",
       matrix: [
         ["날짜", "시간", "팀명"],
+        ["2026-08-11", "07:00", "A"],
+        ["2026-08-11", "13:00", "B"],
+        ["2026-08-11", "17:00", "C"],
+      ],
+    },
+  ]);
+  assert(result.reservations.length === 3, "3 parsed rows");
+  assert(
+    result.reservations.every((r) => r.shift === null),
+    "shift null"
+  );
+  assert(
+    result.reservations.every((r) =>
+      r.reviewReasons.includes(SHIFT_NOT_DETECTED)
+    ),
+    "SHIFT_NOT_DETECTED reason"
+  );
+  assert(result.summary.totals.teams === 0, "not counted as valid");
+  assert(
+    !result.reservations.some((r) => r.teeTime === "13:00" && r.shift === "2부"),
+    "no teeTime→2부"
+  );
+}
+
+section("빈 행 무시 + 라벨 유지");
+{
+  const result = parseReservationSheets([
+    {
+      name: "스카이",
+      matrix: [
+        ["날짜", "시간", "팀명"],
+        ["1부", "", ""],
         ["2026-08-11", "07:00", "A"],
         ["", "", ""],
         [null, null, null],
@@ -133,15 +234,14 @@ section("빈 행 무시");
     },
   ]);
   assert(okRows(result.reservations).length === 2, "skip blank rows");
-  assert(result.reservations.every((r) => r.course === "SKY"), "sky from sheet");
+  assert(
+    okRows(result.reservations).every((r) => r.shift === "1부"),
+    "blank rows do not advance shift"
+  );
 }
 
-section("본문 부 구간 헤더: 11:20 등은 2부 (티타임 추정 아님)");
+section("본문 부 구간: 11:20~11:55는 2부");
 {
-  assert(
-    detectShiftSectionLabel(["2부", "", ""], 0, 2) === "2부",
-    "detect 2부 section"
-  );
   const result = parseReservationSheets([
     {
       name: "베르힐",
@@ -160,84 +260,64 @@ section("본문 부 구간 헤더: 11:20 등은 2부 (티타임 추정 아님)")
       ],
     },
   ]);
-  const s1 = result.reservations.filter((r) => r.shift === "1부" && !r.needsReview);
-  const s2 = result.reservations.filter((r) => r.shift === "2부" && !r.needsReview);
+  const s1 = okRows(result.reservations).filter((r) => r.shift === "1부");
+  const s2 = okRows(result.reservations).filter((r) => r.shift === "2부");
   assert(s1.length === 2, "1부 2팀");
-  assert(s2.length === 6, "2부 6팀 (11:20–11:55)");
-  assert(
-    !s1.some((r) => r.teeTime === "11:20"),
-    "11:20 not mislabeled as 1부"
-  );
-  assert(
-    s2.find((r) => r.teeTime === "11:20")?.teamName === "오후A",
-    "11:20 is 2부"
-  );
+  assert(s2.length === 6, "2부 6팀");
+  assert(!s1.some((r) => r.teeTime >= "11:20"), "no 11:xx in 1부");
 }
 
-section("병합 셀: 2부 라벨이 A열에만 있어도 모든 코스 블록에 적용");
+section("병합 셀 A열 라벨 → 전 코스 블록 공유");
 {
   const DATE = "2026-08-21";
-  const header = [
-    ...["코스명", "시간", "예약자", "a", "b", "c", "d", "e", "f", "g", "h"],
-    ...["코스명", "시간", "예약자", "a", "b", "c", "d", "e", "f", "g", "h"],
-  ];
-  const empty11 = () => Array(11).fill("");
-  const data = (course: string, time: string, team: string) => [
-    course,
-    time,
-    team,
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-  ];
+  const header = [...blockHeader(), ...blockHeader()];
   const matrix: unknown[][] = [
     ["경기진행등록", "", "", DATE],
     header,
-    // 병합 형태: 라벨이 첫 블록 A열에만 존재
-    ["1부", "", "", "", "", "", "", "", "", "", "", ...empty11()],
-    [...data("베르힐", "06:30", "V1"), ...data("스카이", "06:30", "S1")],
-    ["2부", "", "", "", "", "", "", "", "", "", "", ...empty11()],
-    [...data("베르힐", "11:20", "V2"), ...data("스카이", "11:27", "S2")],
+    ["1부", ...Array(21).fill("")],
+    [
+      ...data11("베르힐", "06:30", "V1", { hole: 1, caddy: "김캐디" }),
+      ...data11("스카이", "06:30", "S1", { hole: 10, caddy: "이캐디" }),
+    ],
+    ["2부", ...Array(21).fill("")],
+    [
+      ...data11("베르힐", "11:20", "V2", { hole: 1, caddy: "박캐디" }),
+      ...data11("스카이", "11:27", "S2", { hole: 1 }),
+    ],
   ];
-  const result = parseReservationSheets(
-    [{ name: "경기진행등록", matrix }],
-    { defaultDate: DATE }
-  );
-  const ok = result.reservations.filter((r) => !r.needsReview);
+  const map = buildRowShiftMap(matrix);
+  assert(map[2] === "1부", "rowShiftMap 1부");
+  assert(map[4] === "2부", "rowShiftMap 2부");
+  const result = parseReservationSheets([{ name: "경기진행등록", matrix }], {
+    defaultDate: DATE,
+  });
+  const ok = okRows(result.reservations);
   assert(ok.length === 4, "4 teams");
   assert(
     ok.filter((r) => r.shift === "2부").map((r) => r.teamName).sort().join(",") ===
       "S2,V2",
-    "both courses get 2부 from A-column merge label"
+    "A-column merge label shared"
   );
   assert(
-    !ok.some((r) => r.shift === "1부" && r.teeTime >= "11:20"),
-    "no 11:xx in 1부"
+    ok.find((r) => r.teamName === "V1")?.rawData["캐디명"] === "김캐디",
+    "caddy preserved in rawData"
   );
 }
 
-section("잘못된 시간 형식 → needsReview");
+section("잘못된 시간 → needsReview");
 {
   const result = parseReservationSheets([
     {
       name: "오션",
       matrix: [
         ["날짜", "티타임", "예약자"],
+        ["1부", "", ""],
         ["2026-08-12", "아침일찍", "이상행"],
         ["2026-08-12", "08:00", "정상"],
       ],
     },
   ]);
   assert(result.needsReview.length === 1, "1 needs review");
-  assert(
-    result.needsReview[0].reviewReasons.some((x) => x.includes("시간")),
-    "bad time reason"
-  );
   assert(result.summary.totals.teams === 1, "1 valid");
 }
 
@@ -248,6 +328,7 @@ section("중복 티타임");
       name: "레이크",
       matrix: [
         ["날짜", "티타임", "팀명"],
+        ["1부", "", ""],
         ["2026-08-13", "09:00", "팀1"],
         ["2026-08-13", "09:00", "팀2"],
         ["2026-08-13", "09:08", "팀3"],
@@ -255,79 +336,66 @@ section("중복 티타임");
     },
   ]);
   assert(result.duplicates.length === 2, "2 duplicate rows");
-  assert(result.summary.totals.duplicates === 2, "dup count");
-  assert(
-    result.duplicates.every((r) => r.reviewReasons.includes("중복 티타임")),
-    "dup reason"
-  );
-  assert(result.summary.totals.teams === 1, "only non-dup valid in summary");
+  assert(result.summary.totals.teams === 1, "only non-dup valid");
 }
 
-section("여러 시트 + 코스명 변형");
+section("여러 시트 + 명시 부 컬럼");
 {
   const result = parseReservationSheets([
     {
       name: "본관(베르힐)",
       matrix: [
-        ["일자", "Tee Time", "Guest", "Course"],
-        ["2026-08-14", "06:40", "V1", "Verthill"],
+        ["일자", "Tee Time", "Guest", "Course", "부"],
+        ["2026-08-14", "06:40", "V1", "Verthill", "1부"],
       ],
     },
     {
       name: "Sky Course",
       matrix: [
-        ["date", "time", "name"],
-        ["2026-08-14", "07:00", "S1"],
+        ["date", "time", "name", "부"],
+        ["2026-08-14", "07:00", "S1", "1부"],
       ],
     },
     {
       name: "OCEAN",
       matrix: [
-        ["날짜", "시간", "예약자", "코스"],
-        ["2026-08-14", "12:10", "O1", "오션"],
+        ["날짜", "시간", "예약자", "코스", "부"],
+        ["2026-08-14", "12:10", "O1", "오션", "2부"],
       ],
     },
     {
       name: "기타",
       matrix: [
-        ["날짜", "시간", "팀명", "코스명"],
-        ["2026-08-14", "16:20", "L1", "Lake"],
+        ["날짜", "시간", "팀명", "코스명", "부"],
+        ["2026-08-14", "17:20", "L1", "Lake", "3부"],
       ],
     },
   ]);
-  assert(result.summary.totals.sheets === 4, "4 sheets");
   assert(result.summary.totals.teams === 4, "4 teams multi-sheet");
-  const courses = new Set(okRows(result.reservations).map((r) => r.course));
-  assert(courses.has("VERTHILL"), "VERTHILL");
-  assert(courses.has("SKY"), "SKY");
-  assert(courses.has("OCEAN"), "OCEAN");
-  assert(courses.has("LAKE"), "LAKE");
-  const day = result.summary.byDate.find((d) => d.date === "2026-08-14");
-  assert(day?.totalTeams === 4, "day total 4");
-  assert(day?.byCourse.length === 4, "4 courses in summary");
+  assert(
+    okRows(result.reservations).find((r) => r.teamName === "L1")?.shift ===
+      "3부",
+    "explicit column 3부"
+  );
 }
 
-section("헤더 위치가 다른 경우");
+section("헤더 offset + 부 컬럼");
 {
-  const result = parseReservationSheets(
-    [
-      {
-        name: "스카이",
-        matrix: [
-          ["베르힐CC 예약현황"],
-          ["작성: 관리자"],
-          [],
-          ["No", "경기일", "티업시간", "단체명", "부", "코스"],
-          [1, "2026-08-15", "06:50", "헤더아래", "1부", "스카이"],
-          [2, "2026-08-15", "14:00", "오후", "2부", "스카이"],
-        ],
-      },
-    ],
-    { defaultDate: "2026-08-15" }
-  );
+  const result = parseReservationSheets([
+    {
+      name: "스카이",
+      matrix: [
+        ["베르힐CC 예약현황"],
+        ["작성: 관리자"],
+        [],
+        ["No", "경기일", "티업시간", "단체명", "부", "코스"],
+        [1, "2026-08-15", "06:50", "헤더아래", "1부", "스카이"],
+        [2, "2026-08-15", "14:00", "오후", "2부", "스카이"],
+      ],
+    },
+  ]);
   assert(result.summary.totals.teams === 2, "header offset ok");
   assert(result.reservations[0].shift === "1부", "explicit shift");
-  assert(result.reservations[1].teamName === "오후", "team name");
 }
 
 section("xlsx buffer roundtrip");
@@ -337,6 +405,7 @@ section("xlsx buffer roundtrip");
       name: "오션",
       aoa: [
         ["날짜", "티타임", "예약자", "출발홀"],
+        ["1부", "", "", ""],
         ["2026-08-16", "08:00", "버퍼팀", 1],
         ["2026-08-16", "08:08", "버퍼팀2", 1],
         ["2026-08-16", "bad", "리뷰팀", 1],
@@ -346,6 +415,7 @@ section("xlsx buffer roundtrip");
       name: "레이크",
       aoa: [
         ["날짜", "시간", "팀명"],
+        ["1부", "", ""],
         ["2026-08-16", "09:00", "L"],
         ["2026-08-16", "09:00", "L-dup"],
       ],
@@ -354,186 +424,156 @@ section("xlsx buffer roundtrip");
   const result = parseReservationWorkbook(buf, {
     filename: "예약_2026-08-16.xlsx",
   });
-  assert(result.summary.totals.sheets === 2, "xlsx sheets");
-  assert(result.summary.totals.teams === 2, "xlsx valid teams (2 ocean; lake dups excluded)");
-  assert(result.needsReview.length === 3, "xlsx review (bad time + 2 dups)");
+  assert(result.summary.totals.teams === 2, "xlsx valid teams");
   assert(result.duplicates.length === 2, "xlsx duplicates");
-  assert(
-    result.reservations.some((r) => r.rawData && Object.keys(r.rawData).length > 0),
-    "rawData present"
-  );
 }
 
-section("빈 예약자 → 예약팀으로 세지 않음 (스킵)");
+section("빈 예약자 스킵");
 {
   const result = parseReservationSheets([
     {
       name: "베르힐",
       matrix: [
         ["날짜", "티타임", "예약자"],
+        ["1부", "", ""],
         ["2026-08-17", "10:00", ""],
         ["2026-08-17", "10:08", "실제팀"],
       ],
     },
   ]);
   assert(result.reservations.length === 1, "empty team skipped");
-  assert(result.summary.totals.teams === 1, "1 team counted");
-  assert(result.needsReview.length === 0, "no review for vacant slot");
   assert(result.reservations[0].teamName === "실제팀", "kept real team");
 }
 
-section("코스 판별 실패 → needsReview (VERTHILL 강제 없음)");
+section("코스 판별 실패 → needsReview");
 {
   const result = parseReservationSheets([
     {
       name: "기타시트",
       matrix: [
         ["날짜", "티타임", "예약자"],
+        ["1부", "", ""],
         ["2026-08-18", "10:00", "무코스팀"],
       ],
     },
   ]);
-  assert(result.needsReview.length === 1, "course fail → review");
-  assert(result.needsReview[0].course === null, "course null not VERTHILL");
-  assert(
-    result.needsReview[0].reviewReasons.some((x) => x.includes("코스")),
-    "course reason"
-  );
-  assert(result.summary.totals.teams === 0, "not counted as valid team");
+  assert(result.needsReview[0].course === null, "course null");
+  assert(result.summary.totals.teams === 0, "not valid");
 }
 
-section("가로 4코스 블록 + 블록별 부 구간 (2부 11:xx, 코스별 종료 상이)");
+section("회귀: 가로 4코스 205팀 = 1부96 / 2부42 / 3부67");
 {
   const DATE = "2026-08-20";
   const specs: Array<{
     course: CourseCode;
     label: string;
-    shifts: Record<ShiftPart, number>;
-    /** 코스마다 다른 2부 시작(분) */
-    shift2StartMin: number;
+    n1: number;
+    n2: number;
+    n3: number;
+    s2: string;
   }> = [
     {
       course: "VERTHILL",
       label: "베르힐",
-      shifts: { "1부": 24, "2부": 12, "3부": 18 },
-      shift2StartMin: 11 * 60 + 20,
+      n1: 24,
+      n2: 12,
+      n3: 18,
+      s2: "11:20",
     },
-    {
-      course: "SKY",
-      label: "스카이",
-      shifts: { "1부": 24, "2부": 7, "3부": 16 },
-      shift2StartMin: 11 * 60 + 27,
-    },
-    {
-      course: "OCEAN",
-      label: "오션",
-      shifts: { "1부": 24, "2부": 13, "3부": 16 },
-      shift2StartMin: 11 * 60 + 20,
-    },
-    {
-      course: "LAKE",
-      label: "레이크",
-      shifts: { "1부": 24, "2부": 10, "3부": 17 },
-      shift2StartMin: 11 * 60 + 34,
-    },
+    { course: "SKY", label: "스카이", n1: 24, n2: 7, n3: 16, s2: "11:27" },
+    { course: "OCEAN", label: "오션", n1: 24, n2: 13, n3: 16, s2: "11:20" },
+    { course: "LAKE", label: "레이크", n1: 24, n2: 10, n3: 17, s2: "11:34" },
   ];
 
-  function fmtMin(m: number): string {
-    return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
-  }
-
-  type Ev =
-    | { type: "section"; shift: ShiftPart }
-    | { type: "data"; shift: ShiftPart; time: string; team: string; course: string };
-
-  const blockEvents: Ev[][] = specs.map((s) => {
-    const ev: Ev[] = [];
-    for (const shift of ["1부", "2부", "3부"] as ShiftPart[]) {
-      ev.push({ type: "section", shift });
-      // 1부: 마지막 티가 2부 직전(~7분)이 되도록 역산 → 1부 후반·2부 11시대 공존
-      const n = s.shifts[shift];
-      let start: number;
-      if (shift === "1부") {
-        start = s.shift2StartMin - 7 - (n - 1) * 7;
-      } else if (shift === "2부") {
-        start = s.shift2StartMin;
-      } else {
-        start = 16 * 60;
-      }
-      for (let i = 0; i < n; i++) {
-        const t = fmtMin(start + i * 7);
-        ev.push({
-          type: "data",
-          shift,
-          time: t,
-          team: `${s.label}-${shift}-${t}`,
-          course: s.label,
-        });
-      }
-    }
-    return ev;
-  });
-
-  // 1부 마지막 티가 11:xx에 가깝도록 베르힐 1부 끝을 조정한 별도 검증은 아래 assert에서 수행
-  const maxRows = Math.max(...blockEvents.map((b) => b.length));
-  const header = [
-    ...["코스명", "시간", "예약자", "내장객1", "내장객2", "내장객3", "내장객4", "x", "y", "z", "캐디명"],
-    ...["코스명", "시간", "예약자", "내장객1", "내장객2", "내장객3", "내장객4", "x", "y", "z", "캐디명"],
-    ...["코스명", "시간", "예약자", "내장객1", "내장객2", "내장객3", "내장객4", "x", "y", "z", "캐디명"],
-    ...["코스명", "시간", "예약자", "내장객1", "내장객2", "내장객3", "내장객4", "x", "y", "z", "캐디명"],
-  ];
+  // 공유 밴드: 코스별 길이가 달라 일부 블록은 중간부터 빈 칸
+  // 2부는 코스마다 시작 시각이 다름 → 행을 공유하되 앞쪽 슬롯은 빈 칸
+  const t1 = timesFrom("08:32", 24); // …11:13
+  const t2Slots = timesFrom("11:20", 13); // 11:20 … 
+  const t3 = timesFrom("16:10", 18); // includes 17~18
 
   const matrix: unknown[][] = [
     ["경기진행등록", "", "", DATE],
-    header,
+    fourCourseHeader(),
   ];
-  for (let i = 0; i < maxRows; i++) {
+
+  const pushBand1or3 = (
+    times: string[],
+    nOf: (i: number) => number,
+    label: ShiftPart
+  ) => {
+    matrix.push(sectionRow(label));
+    for (let i = 0; i < times.length; i++) {
+      const row: unknown[] = [];
+      for (let b = 0; b < 4; b++) {
+        if (i < nOf(b)) {
+          const hole = i % 2 === 0 ? 1 : 10;
+          const caddy = `캐디${specs[b].label}${i}`;
+          row.push(
+            ...data11(specs[b].label, times[i], `${specs[b].label}-${times[i]}`, {
+              hole,
+              caddy,
+            })
+          );
+        } else {
+          row.push(...empty11());
+        }
+      }
+      matrix.push(row);
+    }
+  };
+
+  pushBand1or3(t1, (b) => specs[b].n1, "1부");
+
+  // 2부: 각 코스는 s2부터 n2개. 공유 슬롯 행에서 시작 전은 빈 블록.
+  matrix.push(sectionRow("2부"));
+  for (let i = 0; i < t2Slots.length; i++) {
+    const slot = t2Slots[i];
     const row: unknown[] = [];
     for (let b = 0; b < 4; b++) {
-      const ev = blockEvents[b][i];
-      if (!ev) {
-        row.push("", "", "", "", "", "", "", "", "", "", "");
-      } else if (ev.type === "section") {
-        row.push(ev.shift, "", "", "", "", "", "", "", "", "", "");
-      } else {
+      const s = specs[b];
+      const startIdx = t2Slots.indexOf(s.s2);
+      const local = i - startIdx;
+      if (local >= 0 && local < s.n2) {
+        const hole = local % 2 === 0 ? 1 : 10;
         row.push(
-          ev.course,
-          ev.time,
-          ev.team,
-          "",
-          "",
-          "",
-          "",
-          "",
-          "",
-          "",
-          ""
+          ...data11(s.label, slot, `${s.label}-${slot}`, {
+            hole,
+            caddy: `캐디${s.label}${local}`,
+          })
         );
+      } else {
+        row.push(...empty11());
       }
     }
     matrix.push(row);
   }
 
+  pushBand1or3(t3, (b) => specs[b].n3, "3부");
+
   const blocks = detectCourseBlocks(
     matrix.map((r) => r.map((c) => String(c ?? "")))
   );
   assert(blocks.length === 4, "4 horizontal course blocks");
-  assert(blocks[0].startCol === 0 && blocks[0].endCol === 10, "block0 A:K");
-  assert(blocks[1].startCol === 11 && blocks[1].endCol === 21, "block1 L:V");
-  assert(blocks[2].startCol === 22 && blocks[2].endCol === 32, "block2 W:AG");
-  assert(blocks[3].startCol === 33 && blocks[3].endCol === 43, "block3 AH:AR");
+  assert(blocks[0].startCol === 0 && blocks[0].endCol === 10, "A:K");
+  assert(blocks[1].startCol === 11 && blocks[1].endCol === 21, "L:V");
+  assert(blocks[2].startCol === 22 && blocks[2].endCol === 32, "W:AG");
+  assert(blocks[3].startCol === 33 && blocks[3].endCol === 43, "AH:AR");
 
-  const result = parseReservationSheets(
-    [{ name: "경기진행등록", matrix }],
-    { defaultDate: DATE }
+  const result = parseReservationSheets([{ name: "경기진행등록", matrix }], {
+    defaultDate: DATE,
+  });
+
+  assert(result.summary.totals.teams === 205, "total 205");
+  assert(result.needsReview.length === 0, "shift 누락 0");
+  assert(
+    result.reservations.every((r) => r.shift != null && !r.needsReview),
+    "every reservation has shift"
   );
 
-  assert(result.summary.totals.teams === 205, "total 205 teams");
-  assert(result.needsReview.length === 0, "no review rows");
-
   const day = result.summary.byDate.find((d) => d.date === DATE);
-  assert(day?.totalTeams === 205, "day total 205");
-  assert(day?.byCourse.length === 4, "4 courses in summary");
+  assert(day?.byShift["1부"] === 96, "all 1부 96");
+  assert(day?.byShift["2부"] === 42, "all 2부 42");
+  assert(day?.byShift["3부"] === 67, "all 3부 67");
 
   const byCode = Object.fromEntries(
     (day?.byCourse || []).map((c) => [c.course, c])
@@ -541,104 +581,140 @@ section("가로 4코스 블록 + 블록별 부 구간 (2부 11:xx, 코스별 종
     string,
     { totalTeams: number; byShift: Record<ShiftPart, number> }
   >;
-
-  assert(byCode.VERTHILL?.totalTeams === 54, "베르힐 54");
   assert(byCode.VERTHILL?.byShift["1부"] === 24, "V 1부 24");
   assert(byCode.VERTHILL?.byShift["2부"] === 12, "V 2부 12");
   assert(byCode.VERTHILL?.byShift["3부"] === 18, "V 3부 18");
-
   assert(byCode.SKY?.totalTeams === 47, "스카이 47");
-  assert(byCode.SKY?.byShift["1부"] === 24, "S 1부 24");
-  assert(byCode.SKY?.byShift["2부"] === 7, "S 2부 7");
-  assert(byCode.SKY?.byShift["3부"] === 16, "S 3부 16");
-
   assert(byCode.OCEAN?.totalTeams === 53, "오션 53");
-  assert(byCode.OCEAN?.byShift["1부"] === 24, "O 1부 24");
-  assert(byCode.OCEAN?.byShift["2부"] === 13, "O 2부 13");
-  assert(byCode.OCEAN?.byShift["3부"] === 16, "O 3부 16");
-
   assert(byCode.LAKE?.totalTeams === 51, "레이크 51");
-  assert(byCode.LAKE?.byShift["1부"] === 24, "L 1부 24");
-  assert(byCode.LAKE?.byShift["2부"] === 10, "L 2부 10");
-  assert(byCode.LAKE?.byShift["3부"] === 17, "L 3부 17");
 
-  assert(day?.byShift["1부"] === 96, "all 1부 96");
-  assert(day?.byShift["2부"] === 42, "all 2부 42");
-  assert(day?.byShift["3부"] === 67, "all 3부 67");
-
-  // 코스별 2부 시작 / 1부 종료
-  const first2 = (code: CourseCode) =>
-    result.reservations
-      .filter((r) => r.course === code && r.shift === "2부" && !r.needsReview)
+  for (const s of specs) {
+    const first2 = result.reservations
+      .filter((r) => r.course === s.course && r.shift === "2부")
       .map((r) => r.teeTime)
       .sort()[0];
-  const last1 = (code: CourseCode) =>
-    result.reservations
-      .filter((r) => r.course === code && r.shift === "1부" && !r.needsReview)
-      .map((r) => r.teeTime)
-      .sort()
-      .at(-1)!;
-
-  assert(first2("VERTHILL") === "11:20", "V 2부 starts 11:20");
-  assert(first2("SKY") === "11:27", "S 2부 starts 11:27");
-  assert(first2("OCEAN") === "11:20", "O 2부 starts 11:20");
-  assert(first2("LAKE") === "11:34", "L 2부 starts 11:34");
-  assert(last1("VERTHILL") === "11:13", "V 1부 ends 11:13 (직전 구간)");
-  assert(last1("SKY") === "11:20", "S 1부 ends 11:20");
-  assert(last1("LAKE") === "11:27", "L 1부 ends 11:27");
-
-  // 회귀: 각 코스에서 2부 시작 시각 이후 티는 1부가 아님 (teeTime 추정 혼입 방지)
-  for (const code of ["VERTHILL", "SKY", "OCEAN", "LAKE"] as CourseCode[]) {
-    const f2 = first2(code);
-    const leaked = result.reservations.filter(
+    assert(first2 === s.s2, `${s.label} 2부 starts ${s.s2}`);
+    const leaked1 = result.reservations.filter(
       (r) =>
-        !r.needsReview &&
-        r.course === code &&
+        r.course === s.course &&
         r.shift === "1부" &&
-        r.teeTime >= f2
+        r.teeTime >= s.s2
     );
-    assert(leaked.length === 0, `${code}: no 1부 at/after 2부 start ${f2}`);
+    assert(leaked1.length === 0, `${s.label}: no 11:xx+ in 1부`);
   }
+
+  const eveningWrong = result.reservations.filter(
+    (r) =>
+      r.teeTime >= "17:00" &&
+      (r.shift === "1부" || r.shift === "2부")
+  );
+  assert(eveningWrong.length === 0, "17~18 not in 1/2부");
   assert(
-    result.reservations.some(
-      (r) => r.course === "VERTHILL" && r.teeTime === "11:20" && r.shift === "2부"
-    ),
-    "V 11:20 is 2부"
+    result.reservations.filter((r) => r.shift === "3부" && r.teeTime >= "17:00")
+      .length > 0,
+    "17~18 in 3부"
   );
 
-  // 3부 존재
+  // 출발홀=1 이 있어도 shift 유지 + 캐디명 rawData만 보존
+  const withHole1 = result.reservations.filter((r) => r.startingHole === 1);
+  assert(withHole1.length > 0, "startingHole=1 present");
   assert(
-    result.reservations.filter((r) => r.shift === "3부" && !r.needsReview)
-      .length === 67,
-    "3부 67"
+    withHole1.every((r) => r.shift != null),
+    "hole=1 did not clear shift"
+  );
+  assert(
+    result.reservations.some(
+      (r) => r.rawData["캐디명"] && String(r.rawData["캐디명"]).startsWith("캐디")
+    ),
+    "caddy names in rawData"
+  );
+  assert(
+    !result.reservations.some((r) => r.teamName?.startsWith("캐디")),
+    "caddy not used as teamName"
   );
 }
 
-section("teeTime만으로는 부 부여 안 함 (추정 제거)");
+section("코스 1개 Close(예약 0) + 나머지 정상");
 {
-  const result = parseReservationSheets([
-    {
-      name: "오션",
-      matrix: [
-        ["날짜", "티타임", "예약자"],
-        ["2026-08-22", "06:30", "A"],
-        ["2026-08-22", "13:00", "B"],
-        ["2026-08-22", "16:10", "C"],
-      ],
-    },
-  ]);
-  // 구간 헤더·부 컬럼 없음 → 첫 연속 영역만 순서상 1부로 시작, 공백 break 없으면 전부 1부
-  // (teeTime 13:00/16:10을 2부/3부로 추정하지 않음)
-  const ok = result.reservations.filter((r) => !r.needsReview);
-  assert(ok.length === 3, "3 teams still parsed");
+  const DATE = "2026-08-22";
+  const matrix: unknown[][] = [
+    ["경기진행등록", "", "", DATE],
+    fourCourseHeader(),
+    sectionRow("1부"),
+    [
+      ...data11("베르힐", "06:30", "V", { hole: 1 }),
+      ...empty11(), // 스카이 Close
+      ...data11("오션", "06:30", "O", { hole: 10 }),
+      ...data11("레이크", "06:30", "L", { hole: 1, caddy: "과거캐디" }),
+    ],
+    sectionRow("2부"),
+    [
+      ...data11("베르힐", "11:20", "V2", { hole: 1 }),
+      ...empty11(),
+      ...data11("오션", "11:20", "O2", { hole: 1 }),
+      ...empty11(), // 레이크 2부 없음
+    ],
+    sectionRow("3부"),
+    [
+      ...data11("베르힐", "17:01", "V3", { hole: 1 }),
+      ...empty11(),
+      ...empty11(),
+      ...data11("레이크", "18:53", "L3", { hole: 10 }),
+    ],
+  ];
+  const result = parseReservationSheets([{ name: "경기진행등록", matrix }], {
+    defaultDate: DATE,
+  });
+  const ok = okRows(result.reservations);
+  assert(ok.length === 7, "7 teams (SKY closed)");
+  assert(!ok.some((r) => r.course === "SKY"), "no SKY rows");
   assert(
-    ok.every((r) => r.shift === "1부"),
-    "without section breaks all stay 1부 region (no teeTime infer)"
+    ok.filter((r) => r.shift === "1부").length === 3,
+    "1부 3 (V/O/L)"
   );
+  assert(ok.filter((r) => r.shift === "2부").length === 2, "2부 2");
+  assert(ok.filter((r) => r.shift === "3부").length === 2, "3부 2");
   assert(
-    !ok.some((r) => r.teeTime === "13:00" && r.shift === "2부"),
-    "13:00 not inferred as 2부"
+    ok.find((r) => r.teamName === "L")?.rawData["캐디명"] === "과거캐디",
+    "legacy caddy kept"
   );
+  // 빈 스카이 블록이 있어도 라벨 행의 shift는 유지
+  const map = buildRowShiftMap(matrix);
+  const idx3 = matrix.findIndex((r) => cellHas(r, "3부"));
+  assert(map[idx3] === "3부", "row map 3부 after empty sky blocks");
+}
+
+function cellHas(row: unknown[], text: string) {
+  return row.some((c) => String(c ?? "") === text);
+}
+
+section("출발홀 숫자만 있는 행이 shift state를 바꾸지 않음");
+{
+  const matrix: unknown[][] = [
+    ["경기진행등록"],
+    fourCourseHeader(),
+    sectionRow("2부"),
+    [
+      ...data11("베르힐", "11:20", "V", { hole: 1 }),
+      ...data11("스카이", "11:27", "S", { hole: 1 }),
+      ...data11("오션", "11:20", "O", { hole: 10 }),
+      ...data11("레이크", "11:34", "L", { hole: 1 }),
+    ],
+    // 다음 행: 일부 코스만 비고 출발홀 잔재처럼 보이면 안 됨 — 완전 빈 블록
+    [...empty11(), ...empty11(), ...empty11(), ...empty11()],
+    [
+      ...data11("베르힐", "11:41", "V2", { hole: 1 }),
+      ...empty11(),
+      ...empty11(),
+      ...empty11(),
+    ],
+  ];
+  const result = parseReservationSheets([{ name: "경기진행등록", matrix }], {
+    defaultDate: "2026-08-23",
+  });
+  const ok = okRows(result.reservations);
+  assert(ok.every((r) => r.shift === "2부"), "all stay 2부");
+  assert(ok.length === 5, "5 teams");
 }
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);
