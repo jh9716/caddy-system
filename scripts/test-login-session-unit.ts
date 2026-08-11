@@ -38,6 +38,9 @@ assert(normalizeAppRole("ADMIN") === "admin", "ADMIN→admin");
 assert(normalizeAppRole("caddy") === "caddy", "caddy");
 assert(normalizeAppRole("STAFF") === "caddy", "STAFF→caddy");
 assert(normalizeAppRole("staff") === "caddy", "staff→caddy");
+assert(normalizeAppRole("leader") === "leader", "leader");
+assert(normalizeAppRole("LEADER") === "leader", "LEADER→leader");
+assert(normalizeAppRole("조장") === "leader", "조장→leader");
 assert(normalizeAppRole("nope") === null, "unknown null");
 
 console.log("== isHttpsRequest ==");

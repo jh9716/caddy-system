@@ -1,6 +1,7 @@
 import type { NextRequest, NextResponse } from "next/server";
 
-export type AppRole = "admin" | "caddy";
+/** admin | caddy | leader — leader는 managedTeams로 조 범위 결정 */
+export type AppRole = "admin" | "caddy" | "leader";
 
 const MAX_AGE = 60 * 60 * 8; // 8h
 
@@ -10,6 +11,7 @@ export function normalizeAppRole(input: unknown): AppRole | null {
     .trim()
     .toLowerCase();
   if (raw === "admin") return "admin";
+  if (raw === "leader" || raw === "조장") return "leader";
   if (raw === "caddy" || raw === "staff") return "caddy";
   return null;
 }
@@ -49,6 +51,13 @@ export function getRoleFromCookies(
     cookies.get("session_role")?.value ||
     (cookies.get("admin")?.value === "1" ? "admin" : null);
   return normalizeAppRole(role);
+}
+
+export function getUsernameFromCookies(
+  cookies: { get: (name: string) => { value: string } | undefined }
+): string | null {
+  const u = cookies.get("session_user")?.value;
+  return u ? String(u) : null;
 }
 
 export function applySessionCookies(
