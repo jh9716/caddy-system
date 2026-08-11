@@ -143,6 +143,8 @@ model User {
   /// 캐디 본인 계정 연결 (기존 User는 null 유지)
   caddyId   Int?     @unique
   caddy     Caddy?   @relation(fields: [caddyId], references: [id])
+  /// 조장(leader)이 관리하는 조 목록. 복수 조·공동 조장 가능 (1명=1조 강제 아님). admin은 비워도 전체 접근.
+  managedTeams String[] @default([])
   createdAt DateTime @default(now())
 }
 

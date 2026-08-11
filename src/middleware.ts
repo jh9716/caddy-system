@@ -23,7 +23,8 @@ export function middleware(req: NextRequest) {
   }
 
   if (pathname.startsWith("/caddy")) {
-    if (role !== "caddy" && role !== "admin") {
+    // leader도 본인 캐디 연결 시 /caddy 접근 가능 (API 권한은 managedTeams/caddyId로 별도 검증)
+    if (role !== "caddy" && role !== "admin" && role !== "leader") {
       const login = req.nextUrl.clone();
       login.pathname = "/login";
       login.searchParams.set("callbackUrl", pathname);

@@ -26,7 +26,9 @@
     "inspect:db-readonly": "npx tsx scripts/inspect-db-schema-readonly.ts",
     "check:migration-checksums": "npx tsx scripts/check-migration-checksums-readonly.ts",
     "test:availability-unit": "npx tsx scripts/test-availability-unit.ts",
-    "test:off-request-domain-unit": "npx tsx scripts/test-off-request-domain-unit.ts"
+    "test:off-request-domain-unit": "npx tsx scripts/test-off-request-domain-unit.ts",
+    "test:off-request-auth-unit": "npx tsx scripts/test-off-request-auth-unit.ts",
+    "test:off-request-api-unit": "npx tsx scripts/test-off-request-api-unit.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",

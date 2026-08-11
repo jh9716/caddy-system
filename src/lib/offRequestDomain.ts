@@ -204,7 +204,8 @@ export function applyRevokePreservingApprovalAudit(
 }
 
 export function applyApproveDecision(input: {
-  decidedByUserId: number;
+  /** 환경변수 admin 등 DB User 미연결 시 null 허용 */
+  decidedByUserId: number | null;
   decisionNote?: string | null;
   assignmentId: number;
   at?: Date;
@@ -222,7 +223,7 @@ export function applyApproveDecision(input: {
 }
 
 export function applyRejectDecision(input: {
-  decidedByUserId: number;
+  decidedByUserId: number | null;
   decisionNote?: string | null;
   at?: Date;
 }): Pick<
