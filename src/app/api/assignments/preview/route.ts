@@ -103,6 +103,17 @@ export async function POST(req: NextRequest) {
       const oneThreeCandidates = extractOneThreeCandidates(availability.special);
       const oneTwoCandidates = extractOneTwoCandidates(availability.special);
 
+      let openCourses: string[] | null = null;
+      const openRaw = form.get("openCourses");
+      if (typeof openRaw === "string" && openRaw.trim()) {
+        try {
+          const parsedOpen = JSON.parse(openRaw);
+          if (Array.isArray(parsedOpen)) openCourses = parsedOpen.map(String);
+        } catch {
+          openCourses = openRaw.split(",").map((s) => s.trim()).filter(Boolean);
+        }
+      }
+
       const result = computeAutoAssignmentsV1({
         date,
         reservations,
@@ -111,6 +122,7 @@ export async function POST(req: NextRequest) {
         fiftyFourHole,
         oneThreeCandidates,
         oneTwoCandidates,
+        openCourses,
       });
 
       return NextResponse.json({
@@ -173,6 +185,10 @@ export async function POST(req: NextRequest) {
       ? (body.fixedAssignments as FixedAssignmentInput[])
       : [];
 
+    const openCourses = Array.isArray(body.openCourses)
+      ? (body.openCourses as string[])
+      : null;
+
     const result = computeAutoAssignmentsV1({
       date,
       reservations,
@@ -182,6 +198,7 @@ export async function POST(req: NextRequest) {
       fiftyFourHole,
       oneThreeCandidates,
       oneTwoCandidates,
+      openCourses,
     });
 
     return NextResponse.json({

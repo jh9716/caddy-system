@@ -1,7 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { AutoAssignResultV1 } from "@/lib/autoAssignEngine";
+import {
+  compareAssignmentOrder,
+  type AutoAssignResultV1,
+} from "@/lib/autoAssignEngine";
 
 type PreviewResponse = AutoAssignResultV1 & {
   error?: string;
@@ -79,8 +82,11 @@ export default function AutoAssignPreviewPage() {
 
   const assignedRows = useMemo(() => {
     if (!result) return [];
-    if (shiftFilter === "ALL") return result.assignments;
-    return result.assignments.filter((a) => a.shift === shiftFilter);
+    const rows =
+      shiftFilter === "ALL"
+        ? [...result.assignments]
+        : result.assignments.filter((a) => a.shift === shiftFilter);
+    return rows.sort(compareAssignmentOrder);
   }, [result, shiftFilter]);
 
   return (

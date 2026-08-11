@@ -5,6 +5,8 @@
  */
 
 import {
+  compareAssignmentOrder,
+  compareReservationOrder,
   minutesBetweenReservations,
   reservationKey,
   type AutoAssignCaddy,
@@ -14,7 +16,7 @@ import {
   type AssignmentKind,
   type UnassignedReservationRow,
 } from "@/lib/autoAssignEngine";
-import type { ShiftPart } from "@/lib/reservationParser";
+import type { CourseCode, ShiftPart } from "@/lib/reservationParser";
 
 export type DraftStatus = "DRAFT" | "EDITED" | "CONFIRMED" | "APPLIED";
 
@@ -23,6 +25,8 @@ export type AssignmentDraft = {
   status: DraftStatus;
   assignments: AutoAssignmentRow[];
   unassignedReservations: UnassignedReservationRow[];
+  closedCourseReservations: UnassignedReservationRow[];
+  openCourses: CourseCode[];
   caddyPool: AutoAssignCaddy[];
   confirmedAt: string | null;
   appliedAt?: string | null;
@@ -71,11 +75,20 @@ export function createDraftFromAutoResult(
   return {
     date: result.date,
     status: "DRAFT",
-    assignments: result.assignments.map(cloneRow),
-    unassignedReservations: result.unassignedReservations.map((u) => ({
-      reservation: { ...u.reservation },
-      reason: u.reason,
-    })),
+    assignments: result.assignments.map(cloneRow).sort(compareAssignmentOrder),
+    unassignedReservations: result.unassignedReservations
+      .map((u) => ({
+        reservation: { ...u.reservation },
+        reason: u.reason,
+      }))
+      .sort((a, b) => compareReservationOrder(a.reservation, b.reservation)),
+    closedCourseReservations: (result.closedCourseReservations || [])
+      .map((u) => ({
+        reservation: { ...u.reservation },
+        reason: u.reason,
+      }))
+      .sort((a, b) => compareReservationOrder(a.reservation, b.reservation)),
+    openCourses: [...(result.openCourses || [])],
     caddyPool: pool,
     confirmedAt: null,
     appliedAt: null,
@@ -153,7 +166,7 @@ export function assignmentsByShift(
 ): AutoAssignmentRow[] {
   return draft.assignments
     .filter((a) => a.shift === shift)
-    .sort((a, b) => a.reservation.teeTime.localeCompare(b.reservation.teeTime));
+    .sort(compareAssignmentOrder);
 }
 
 export function detectDraftWarnings(draft: AssignmentDraft): DraftWarning[] {
