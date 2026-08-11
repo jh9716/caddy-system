@@ -67,6 +67,7 @@ export default function ManageAssignmentsOpsPage() {
   const [loadingApply, setLoadingApply] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [swapKey, setSwapKey] = useState<string | null>(null);
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   const openCourseList = useMemo(
@@ -86,7 +87,17 @@ export default function ManageAssignmentsOpsPage() {
   }, [availability, draft]);
 
   const freeCaddies = draft ? unusedCaddies(draft) : [];
-  const liveWarnings = draft ? detectDraftWarnings(draft) : warnings;
+  const liveWarnings = (draft ? detectDraftWarnings(draft) : warnings).filter(
+    (w) =>
+      w.code === "SAME_SHIFT_DUPLICATE" ||
+      w.code === "TIME_CONFLICT" ||
+      w.code === "SPECIAL_GAP_CONFLICT"
+  );
+
+  const shiftSpare =
+    draft && shiftTab !== "UNASSIGNED" && shiftTab !== "CLOSED"
+      ? draft.sparesByShift?.find((s) => s.shift === shiftTab) || null
+      : null;
 
   function showToast(msg: string) {
     setToast(msg);
@@ -175,6 +186,7 @@ export default function ManageAssignmentsOpsPage() {
       setDraft(next);
       setWarnings(detectDraftWarnings(next));
       setSwapKey(null);
+      setExpandedKey(null);
       setShiftTab("1부");
       const closedN = data.closedCourseReservations?.length ?? 0;
       showToast(
@@ -502,113 +514,167 @@ export default function ManageAssignmentsOpsPage() {
             </button>
           </nav>
 
-          {shiftTab !== "UNASSIGNED" && (
-            <ul className="ops-list">
-              {shiftRows.length === 0 && (
-                <li className="ops-empty">이 부 배치 없음</li>
-              )}
-              {shiftRows.map((row) => {
-                const key = reservationIdentity(row.reservation);
-                const special = row.kind !== "regular";
-                return (
-                  <li
-                    key={key}
-                    className={`ops-item ${special ? "special" : ""} ${
-                      swapKey === key ? "swap-on" : ""
-                    }`}
-                  >
-                    <div className="ops-item-top">
-                      <strong>{row.reservation.teeTime}</strong>
-                      <span className="chip">{row.kind}</span>
-                      {special && <span className="chip warn">special</span>}
-                    </div>
-                    <div className="ops-item-main">
-                      <div>
-                        {row.reservation.teamName || "-"} ·{" "}
-                        {row.reservation.courseLabel || row.reservation.course}
-                      </div>
-                      <div className="caddy">
-                        {row.caddy.name}{" "}
-                        <span className="muted">
-                          #{row.caddy.id} · {row.caddy.team}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="ops-item-actions">
-                      <label className="inline">
-                        교체
-                        <select
-                          defaultValue=""
-                          onChange={(e) => {
-                            const id = Number(e.target.value);
-                            if (id) onReplace(row, id);
-                            e.target.value = "";
-                          }}
-                        >
-                          <option value="">캐디 선택</option>
-                          {freeCaddies.map((c) => (
-                            <option key={c.id} value={c.id}>
-                              {c.name} (#{c.id}/{c.team})
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <button type="button" className="btn tiny" onClick={() => onSwapClick(row)}>
-                        {swapKey === key ? "선택됨" : "Swap"}
-                      </button>
+          {shiftTab !== "UNASSIGNED" && shiftTab !== "CLOSED" && (
+            <>
+              <ul className="ops-list compact">
+                {shiftRows.length === 0 && (
+                  <li className="ops-empty">이 부 배치 없음</li>
+                )}
+                {shiftRows.map((row) => {
+                  const key = reservationIdentity(row.reservation);
+                  const special = row.kind !== "regular";
+                  const open = expandedKey === key || swapKey === key;
+                  const course =
+                    row.reservation.courseLabel ||
+                    COURSE_LABELS[row.reservation.course as CourseCode] ||
+                    row.reservation.course;
+                  return (
+                    <li
+                      key={key}
+                      className={`ops-row ${special ? "special" : ""} ${
+                        swapKey === key ? "swap-on" : ""
+                      } ${open ? "open" : ""}`}
+                    >
                       <button
                         type="button"
-                        className="btn tiny ghost"
-                        onClick={() => onUnassign(row)}
+                        className="ops-row-main"
+                        onClick={() =>
+                          setExpandedKey((prev) => (prev === key ? null : key))
+                        }
                       >
-                        해제
+                        <span className="col time">{row.reservation.teeTime}</span>
+                        <span className="col team">
+                          {row.reservation.teamName || "-"}
+                          {special ? (
+                            <em className="tag-s">{row.kind}</em>
+                          ) : null}
+                        </span>
+                        <span className="col course">{course}</span>
+                        <span className="col caddy">{row.caddy.name}</span>
+                        <span className="col meta">
+                          {row.caddy.team}·{row.caddy.teamOrder}
+                        </span>
                       </button>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
+                      {open && (
+                        <div className="ops-row-actions">
+                          <label className="inline">
+                            교체
+                            <select
+                              defaultValue=""
+                              onChange={(e) => {
+                                const id = Number(e.target.value);
+                                if (id) onReplace(row, id);
+                                e.target.value = "";
+                              }}
+                            >
+                              <option value="">캐디 선택</option>
+                              {freeCaddies.map((c) => (
+                                <option key={c.id} value={c.id}>
+                                  {c.name} (#{c.id}/{c.team})
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <button
+                            type="button"
+                            className="btn tiny"
+                            onClick={() => onSwapClick(row)}
+                          >
+                            {swapKey === key ? "선택됨" : "Swap"}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn tiny ghost"
+                            onClick={() => onUnassign(row)}
+                          >
+                            해제
+                          </button>
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+              <div className="ops-spares">
+                <div className="ops-spares-title">{shiftTab} 스페어</div>
+                <div className="ops-spare-line">
+                  <span className="lbl">스페어1</span>
+                  {shiftSpare?.spare1 ? (
+                    <span>
+                      {shiftSpare.spare1.name} · {shiftSpare.spare1.team} ·{" "}
+                      {shiftSpare.spare1.teamOrder}번
+                    </span>
+                  ) : (
+                    <span className="muted">-</span>
+                  )}
+                </div>
+                <div className="ops-spare-line">
+                  <span className="lbl">스페어2</span>
+                  {shiftSpare?.spare2 ? (
+                    <span>
+                      {shiftSpare.spare2.name} · {shiftSpare.spare2.team} ·{" "}
+                      {shiftSpare.spare2.teamOrder}번
+                    </span>
+                  ) : (
+                    <span className="muted">-</span>
+                  )}
+                </div>
+              </div>
+            </>
           )}
 
           {shiftTab === "UNASSIGNED" && (
-            <ul className="ops-list">
+            <ul className="ops-list compact">
               {draft.unassignedReservations.length === 0 && (
                 <li className="ops-empty">미배치 없음</li>
               )}
               {draft.unassignedReservations.map((u) => {
                 const key = reservationIdentity(u.reservation);
+                const open = expandedKey === key;
+                const course =
+                  u.reservation.courseLabel ||
+                  COURSE_LABELS[u.reservation.course as CourseCode] ||
+                  u.reservation.course;
                 return (
-                  <li key={key} className="ops-item">
-                    <div className="ops-item-top">
-                      <strong>
-                        {u.reservation.shift} {u.reservation.teeTime}
-                      </strong>
-                    </div>
-                    <div className="ops-item-main">
-                      {u.reservation.teamName || "-"} ·{" "}
-                      {u.reservation.courseLabel || u.reservation.course} ·{" "}
-                      {u.reason}
-                    </div>
-                    <div className="ops-item-actions">
-                      <label className="inline">
-                        지정
-                        <select
-                          defaultValue=""
-                          onChange={(e) => {
-                            const id = Number(e.target.value);
-                            if (id) onAssignUnassigned(key, id);
-                            e.target.value = "";
-                          }}
-                        >
-                          <option value="">캐디 선택</option>
-                          {freeCaddies.map((c) => (
-                            <option key={c.id} value={c.id}>
-                              {c.name} (#{c.id}/{c.team})
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    </div>
+                  <li key={key} className={`ops-row ${open ? "open" : ""}`}>
+                    <button
+                      type="button"
+                      className="ops-row-main"
+                      onClick={() =>
+                        setExpandedKey((prev) => (prev === key ? null : key))
+                      }
+                    >
+                      <span className="col time">{u.reservation.teeTime}</span>
+                      <span className="col team">
+                        {u.reservation.teamName || "-"}
+                      </span>
+                      <span className="col course">{course}</span>
+                      <span className="col caddy muted">{u.reservation.shift}</span>
+                      <span className="col meta muted">미배치</span>
+                    </button>
+                    {open && (
+                      <div className="ops-row-actions">
+                        <label className="inline">
+                          지정
+                          <select
+                            defaultValue=""
+                            onChange={(e) => {
+                              const id = Number(e.target.value);
+                              if (id) onAssignUnassigned(key, id);
+                              e.target.value = "";
+                            }}
+                          >
+                            <option value="">캐디 선택</option>
+                            {freeCaddies.map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {c.name} (#{c.id}/{c.team})
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <span className="muted reason">{u.reason}</span>
+                      </div>
+                    )}
                   </li>
                 );
               })}
@@ -616,23 +682,26 @@ export default function ManageAssignmentsOpsPage() {
           )}
 
           {shiftTab === "CLOSED" && (
-            <ul className="ops-list">
+            <ul className="ops-list compact">
               {(draft.closedCourseReservations?.length ?? 0) === 0 && (
                 <li className="ops-empty">닫힌 코스 예약 없음</li>
               )}
               {(draft.closedCourseReservations || []).map((u) => {
                 const key = reservationIdentity(u.reservation);
+                const course =
+                  u.reservation.courseLabel ||
+                  COURSE_LABELS[u.reservation.course as CourseCode] ||
+                  u.reservation.course;
                 return (
-                  <li key={key} className="ops-item closed">
-                    <div className="ops-item-top">
-                      <strong>
-                        {u.reservation.shift} {u.reservation.teeTime}
-                      </strong>
-                      <span className="chip warn">{u.reason}</span>
-                    </div>
-                    <div className="ops-item-main">
-                      {u.reservation.teamName || "-"} ·{" "}
-                      {u.reservation.courseLabel || u.reservation.course}
+                  <li key={key} className="ops-row closed">
+                    <div className="ops-row-main static">
+                      <span className="col time">{u.reservation.teeTime}</span>
+                      <span className="col team">
+                        {u.reservation.teamName || "-"}
+                      </span>
+                      <span className="col course">{course}</span>
+                      <span className="col caddy muted">{u.reservation.shift}</span>
+                      <span className="col meta muted">CLOSED</span>
                     </div>
                   </li>
                 );
@@ -838,51 +907,102 @@ const opsCss = `
     margin: 0;
     padding: 0;
     display: grid;
-    gap: 8px;
+    gap: 2px;
   }
-  .ops-item {
-    border: 1px solid #e5e7eb;
-    border-radius: 12px;
-    padding: 10px;
+  .ops-list.compact { gap: 1px; }
+  .ops-row {
     background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .ops-row.special { border-color: #f59e0b; background: #fffbeb; }
+  .ops-row.swap-on { outline: 2px solid #2563eb; }
+  .ops-row.closed { background: #f8fafc; color: #64748b; }
+  .ops-row-main {
+    width: 100%;
     display: grid;
-    gap: 8px;
-  }
-  .ops-item.special { border-color: #f59e0b; background: #fffbeb; }
-  .ops-item.swap-on { outline: 2px solid #2563eb; }
-  .ops-item-top {
-    display: flex;
-    gap: 6px;
+    grid-template-columns: 46px minmax(0, 1.3fr) 52px minmax(0, 1fr) 56px;
+    gap: 4px;
     align-items: center;
-    flex-wrap: wrap;
+    padding: 5px 6px;
+    min-height: 32px;
+    border: 0;
+    background: transparent;
+    text-align: left;
+    font: inherit;
+    cursor: pointer;
+    color: inherit;
   }
-  .chip {
-    font-size: 0.7rem;
-    padding: 2px 6px;
-    border-radius: 999px;
-    background: #e2e8f0;
+  .ops-row-main.static { cursor: default; }
+  .ops-row-main .col {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.78rem;
+    line-height: 1.2;
   }
-  .chip.warn { background: #fde68a; }
-  .caddy { font-weight: 700; margin-top: 2px; }
-  .muted { color: #64748b; font-weight: 500; font-size: 0.8rem; }
-  .ops-item-actions {
+  .ops-row-main .time { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .ops-row-main .team { font-weight: 600; }
+  .ops-row-main .course { color: #475569; font-size: 0.72rem; }
+  .ops-row-main .caddy { font-weight: 700; }
+  .ops-row-main .meta { color: #64748b; font-size: 0.68rem; text-align: right; }
+  .tag-s {
+    display: inline;
+    margin-left: 3px;
+    font-style: normal;
+    font-size: 0.62rem;
+    color: #b45309;
+    font-weight: 700;
+  }
+  .muted { color: #64748b; font-weight: 500; font-size: 0.75rem; }
+  .ops-row-actions {
     display: grid;
     gap: 6px;
     grid-template-columns: 1fr auto auto;
     align-items: end;
+    padding: 6px;
+    border-top: 1px solid #e2e8f0;
+    background: #f8fafc;
   }
+  .ops-row-actions .reason { grid-column: 1 / -1; font-size: 0.72rem; }
   .inline {
     display: grid;
     gap: 2px;
     font-size: 0.75rem;
     color: #64748b;
   }
+  .ops-spares {
+    margin-top: 8px;
+    padding: 8px 10px;
+    border: 1px dashed #cbd5e1;
+    border-radius: 8px;
+    background: #f8fafc;
+    display: grid;
+    gap: 4px;
+  }
+  .ops-spares-title {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: #334155;
+  }
+  .ops-spare-line {
+    display: grid;
+    grid-template-columns: 56px 1fr;
+    gap: 6px;
+    font-size: 0.78rem;
+  }
+  .ops-spare-line .lbl {
+    color: #64748b;
+    font-weight: 600;
+  }
   .ops-empty {
-    padding: 16px;
+    padding: 12px;
     text-align: center;
     color: #64748b;
     border: 1px dashed #cbd5e1;
-    border-radius: 12px;
+    border-radius: 8px;
+    font-size: 0.85rem;
   }
   .ops-toast {
     position: fixed;
