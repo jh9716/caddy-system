@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   assignCaddyToUnassigned,
   assignmentsByShift,
@@ -81,6 +81,13 @@ export default function ManageAssignmentsOpsPage() {
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ResultViewMode>("board");
   const [toast, setToast] = useState<string | null>(null);
+  const stickyStackRef = useRef<HTMLDivElement | null>(null);
+
+  /** 부 탭/보기 전환 시 sticky 스택 기준으로 첫 데이터 행이 보이도록 스크롤 */
+  useEffect(() => {
+    if (!draft) return;
+    stickyStackRef.current?.scrollIntoView({ block: "start", behavior: "auto" });
+  }, [shiftTab, viewMode, draft?.id]);
 
   const openCourseList = useMemo(
     () => COURSE_CODES.filter((c) => courseOpen[c]),
@@ -523,40 +530,45 @@ export default function ManageAssignmentsOpsPage() {
 
       {draft && (
         <>
-          <nav className="ops-tabs">
-            {SHIFTS.map((s) => (
+          {/*
+            부 탭 + (배치표) 컬럼 헤더를 하나의 sticky 스택으로 묶어
+            서로 다른 top/z-index sticky가 첫 데이터 행을 덮지 않게 한다.
+            헤더는 문서 흐름 높이를 유지한 채 스택과 함께 고정된다.
+          */}
+          <div className="ops-sticky-stack" ref={stickyStackRef}>
+            <nav className="ops-tabs">
+              {SHIFTS.map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  className={shiftTab === s ? "on" : ""}
+                  onClick={() => setShiftTab(s)}
+                >
+                  {s}
+                  <small>
+                    {assignmentsByShift(draft, s).length}
+                  </small>
+                </button>
+              ))}
               <button
-                key={s}
                 type="button"
-                className={shiftTab === s ? "on" : ""}
-                onClick={() => setShiftTab(s)}
+                className={shiftTab === "UNASSIGNED" ? "on" : ""}
+                onClick={() => setShiftTab("UNASSIGNED")}
               >
-                {s}
-                <small>
-                  {assignmentsByShift(draft, s).length}
-                </small>
+                미배치
+                <small>{draft.unassignedReservations.length}</small>
               </button>
-            ))}
-            <button
-              type="button"
-              className={shiftTab === "UNASSIGNED" ? "on" : ""}
-              onClick={() => setShiftTab("UNASSIGNED")}
-            >
-              미배치
-              <small>{draft.unassignedReservations.length}</small>
-            </button>
-            <button
-              type="button"
-              className={shiftTab === "CLOSED" ? "on" : ""}
-              onClick={() => setShiftTab("CLOSED")}
-            >
-              닫힌코스
-              <small>{draft.closedCourseReservations?.length ?? 0}</small>
-            </button>
-          </nav>
+              <button
+                type="button"
+                className={shiftTab === "CLOSED" ? "on" : ""}
+                onClick={() => setShiftTab("CLOSED")}
+              >
+                닫힌코스
+                <small>{draft.closedCourseReservations?.length ?? 0}</small>
+              </button>
+            </nav>
 
-          {shiftTab !== "UNASSIGNED" && shiftTab !== "CLOSED" && (
-            <>
+            {shiftTab !== "UNASSIGNED" && shiftTab !== "CLOSED" && (
               <div className="ops-view-toggle" role="group" aria-label="결과 보기">
                 <button
                   type="button"
@@ -573,30 +585,50 @@ export default function ManageAssignmentsOpsPage() {
                   목록보기
                 </button>
               </div>
+            )}
 
+            {shiftTab !== "UNASSIGNED" &&
+              shiftTab !== "CLOSED" &&
+              viewMode === "board" &&
+              boardRows.length > 0 && (
+                <div className="ops-board-head-bar">
+                  <div
+                    className="ops-board-head"
+                    role="row"
+                    aria-label={`${shiftTab} 배치표 헤더`}
+                  >
+                    <div className="bh-time" role="columnheader">
+                      시간
+                    </div>
+                    {COURSE_CODES.map((code) => (
+                      <div
+                        key={code}
+                        className={`bh-course ${
+                          boardOpenCourses.includes(code) ? "" : "closed"
+                        }`}
+                        role="columnheader"
+                        title={COURSE_LABELS[code]}
+                      >
+                        {COURSE_SHORT[code]}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+          </div>
+
+          {shiftTab !== "UNASSIGNED" && shiftTab !== "CLOSED" && (
+            <>
               {viewMode === "board" && (
-                <div className="ops-board-wrap">
+                <div
+                  className={`ops-board-wrap${
+                    boardRows.length > 0 ? " has-sticky-head" : ""
+                  }`}
+                >
                   {boardRows.length === 0 ? (
                     <div className="ops-empty">이 부 배치 없음</div>
                   ) : (
                     <div className="ops-board" role="table" aria-label={`${shiftTab} 배치표`}>
-                      <div className="ops-board-head" role="row">
-                        <div className="bh-time" role="columnheader">
-                          시간
-                        </div>
-                        {COURSE_CODES.map((code) => (
-                          <div
-                            key={code}
-                            className={`bh-course ${
-                              boardOpenCourses.includes(code) ? "" : "closed"
-                            }`}
-                            role="columnheader"
-                            title={COURSE_LABELS[code]}
-                          >
-                            {COURSE_SHORT[code]}
-                          </div>
-                        ))}
-                      </div>
                       {boardRows.map((tr) => {
                         const rowHasExpand = COURSE_CODES.some((code) => {
                           const cell = tr.cells[code];
@@ -1001,7 +1033,6 @@ function StatusBadge({
 
 const opsCss = `
   .ops-root {
-    --ops-tabs-sticky-h: 60px;
     max-width: 720px;
     margin: 0 auto;
     display: grid;
@@ -1137,18 +1168,28 @@ const opsCss = `
   }
   .warn.error { background: #fef2f2; color: #991b1b; }
   .warn.warn { background: #fffbeb; color: #92400e; }
-  .ops-root {
-    --ops-tabs-sticky-h: 60px;
+  /*
+    단일 sticky 스택: 부 탭 + 보기 토글 + 컬럼 헤더가 같은 블록으로 고정되어
+    이중 sticky(top 오프셋)로 첫 행을 덮는 문제를 제거한다.
+  */
+  .ops-sticky-stack {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    display: grid;
+    gap: 8px;
+    padding: 6px 0 0;
+    background: #f8fafc;
+    box-shadow: 0 1px 0 #e2e8f0;
   }
   .ops-tabs {
     display: grid;
     grid-template-columns: repeat(5, 1fr);
     gap: 6px;
-    position: sticky;
-    top: 0;
-    z-index: 4;
-    background: #f8fafc;
-    padding: 6px 0;
+    position: relative;
+    z-index: auto;
+    background: transparent;
+    padding: 0;
   }
   .ops-tabs button {
     border: 1px solid #e2e8f0;
@@ -1188,11 +1229,22 @@ const opsCss = `
     border-color: #0f172a;
     font-weight: 700;
   }
+  .ops-board-head-bar {
+    width: 100%;
+    border: 1px solid #e2e8f0;
+    border-bottom: 0;
+    border-radius: 8px 8px 0 0;
+    overflow: hidden;
+    background: #0f172a;
+  }
   .ops-board-wrap {
     width: 100%;
-    overflow-x: hidden;
-    /* sticky 헤더가 첫 데이터 행을 가리지 않도록 상단 여유 */
-    scroll-margin-top: calc(var(--ops-tabs-sticky-h, 56px) + 36px);
+    /* overflow-x:hidden 은 sticky 스크롤 컨테인먼트를 만들어 모바일에서 깨질 수 있음 */
+    overflow-x: clip;
+  }
+  /* ops-root gap(12px)을 상쇄해 헤더 바·본문 테두리가 이어지게 함 */
+  .ops-sticky-stack:has(.ops-board-head-bar) + .ops-board-wrap.has-sticky-head {
+    margin-top: -12px;
   }
   .ops-board {
     width: 100%;
@@ -1200,8 +1252,12 @@ const opsCss = `
     gap: 0;
     border: 1px solid #e2e8f0;
     border-radius: 8px;
-    overflow: visible;
+    overflow: hidden;
     background: #fff;
+  }
+  .ops-board-wrap.has-sticky-head .ops-board {
+    border-top: 0;
+    border-radius: 0 0 8px 8px;
   }
   .ops-board-head,
   .ops-board-row {
@@ -1210,17 +1266,10 @@ const opsCss = `
     width: 100%;
   }
   .ops-board-head {
-    position: sticky;
-    /* 부 탭(sticky) 아래로 — 데이터 행 z보다 위, 탭보다는 아래 */
-    top: var(--ops-tabs-sticky-h, 56px);
-    z-index: 3;
+    /* 스택 안에서 일반 흐름 — 별도 sticky/top 오프셋 없음 */
+    position: relative;
     background: #0f172a;
     color: #fff;
-    box-shadow: 0 1px 0 #0f172a;
-  }
-  /* 헤더 높이만큼 첫 블록이 헤더 아래에 오도록 (initial + sticky) */
-  .ops-board-head + .ops-board-block {
-    scroll-margin-top: calc(var(--ops-tabs-sticky-h, 56px) + 32px);
   }
   .ops-board-head > div {
     padding: 6px 2px;
