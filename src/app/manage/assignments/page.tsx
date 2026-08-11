@@ -1001,6 +1001,7 @@ function StatusBadge({
 
 const opsCss = `
   .ops-root {
+    --ops-tabs-sticky-h: 60px;
     max-width: 720px;
     margin: 0 auto;
     display: grid;
