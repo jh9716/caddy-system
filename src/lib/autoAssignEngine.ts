@@ -1231,9 +1231,13 @@ export function assignOneTwoPriority(input: {
  * - HOUSE 풀만 1·2부 순번/스페어에 사용 (special 제외된 풀을 넘길 것)
  * - 스페어1·2 = 해당 부 배치 N명 다음 HOUSE 2명 (대기, 예약 아님)
  * - 다음 부 HOUSE 시작 = 직전 부 스페어1 (= N)
- * - 3부: 2부 스페어1 → 스페어2 → THIRD 전체 순번 → 남은 HOUSE
+ * - 3부 (실제 1·2부 배치 결과 기준):
+ *   A) HOUSE 원번 잔여(1·2부 미근무 HOUSE 존재):
+ *      2부 스페어1 → 스페어2 → THIRD → 남은 미근무 HOUSE → (부족 시) 기근무 wrap
+ *   B) HOUSE 소진(전원이 1·2부 중 ≥1회 실근무):
+ *      THIRD 전체 → (1부 미근무 ∩ 2부 실근무) HOUSE, 단 1부 spare1·2 제외
+ * - 3부 spare1·2 = 위 3부 HOUSE 흐름의 다음 적격 후보 (cursor/length 단정 금지)
  * - DRIVING은 일반 순번에 섞지 않음
- * - HOUSE 소진 시 wrap (기존 동작 유지)
  */
 export function assignRegularSequence(input: {
   date: string;
@@ -1264,6 +1268,7 @@ export function assignRegularSequence(input: {
 
   const house = pools.house;
   const third = pools.third;
+  const houseIndexById = new Map(house.map((c, i) => [c.id, i]));
   const reservations = [...(input.reservations || [])].sort(
     compareReservationOrder
   );
@@ -1285,28 +1290,90 @@ export function assignRegularSequence(input: {
     const shiftReservations = reservations.filter((r) => r.shift === shift);
     const usedInShift = new Set<number>();
     let houseAssigned = 0;
+    /** 3부 HOUSE 흐름 큐 + 사용 수 — spare1/2 계산용 */
+    let thirdHouseFlow: AutoAssignCaddy[] | null = null;
+    let thirdHouseUsed = 0;
 
     if (shift === "3부") {
+      const houseIds = new Set(house.map((c) => c.id));
+      const workedShift1 = new Set<number>();
+      const workedShift2 = new Set<number>();
+      for (const a of assignments) {
+        if (!houseIds.has(a.caddy.id)) continue;
+        if (a.shift === "1부") workedShift1.add(a.caddy.id);
+        else if (a.shift === "2부") workedShift2.add(a.caddy.id);
+      }
+      const worked12 = new Set<number>([...workedShift1, ...workedShift2]);
+      const neverWorked = house.filter((c) => !worked12.has(c.id));
+      const houseExhaustedIn12 = neverWorked.length === 0;
+
+      const shift1Spare = sparesByShift.find((s) => s.shift === "1부");
+      const excludeModeBSpare = new Set<number>();
+      if (shift1Spare?.spare1?.caddyId != null) {
+        excludeModeBSpare.add(shift1Spare.spare1.caddyId);
+      }
+      if (shift1Spare?.spare2?.caddyId != null) {
+        excludeModeBSpare.add(shift1Spare.spare2.caddyId);
+      }
+      /** 1부 미근무 + 2부 실근무, 1부 spare1·2 제외 (원번 순) */
+      const modeBHouse = house.filter(
+        (c) =>
+          !workedShift1.has(c.id) &&
+          workedShift2.has(c.id) &&
+          !excludeModeBSpare.has(c.id)
+      );
+
       const order: Array<{ caddy: AutoAssignCaddy; sequenceIndex: number }> =
         [];
       const seen = new Set<number>();
-      const pushHouse = (idx: number) => {
-        if (idx < 0 || idx >= house.length) return;
-        const c = house[idx];
-        if (seen.has(c.id)) return;
-        seen.add(c.id);
-        order.push({ caddy: c, sequenceIndex: idx });
+      const pushCaddy = (caddy: AutoAssignCaddy, sequenceIndex: number) => {
+        if (seen.has(caddy.id)) return;
+        seen.add(caddy.id);
+        order.push({ caddy, sequenceIndex });
       };
-      pushHouse(houseStart);
-      pushHouse(houseStart + 1);
-      for (let i = 0; i < third.length; i++) {
-        const c = third[i];
-        if (seen.has(c.id)) continue;
-        seen.add(c.id);
-        order.push({ caddy: c, sequenceIndex: 10_000 + i });
+      const seqOf = (caddy: AutoAssignCaddy) =>
+        houseIndexById.get(caddy.id) ?? 0;
+
+      thirdHouseFlow = [];
+
+      if (!houseExhaustedIn12) {
+        // Mode A: 미근무 HOUSE 원번 보존 → (부족 시) 기근무 wrap
+        for (const c of neverWorked) thirdHouseFlow.push(c);
+        for (const c of house) {
+          if (!worked12.has(c.id)) continue;
+          thirdHouseFlow.push(c);
+        }
+
+        if (neverWorked[0]) pushCaddy(neverWorked[0], seqOf(neverWorked[0]));
+        if (neverWorked[1]) pushCaddy(neverWorked[1], seqOf(neverWorked[1]));
+        for (let i = 0; i < third.length; i++) {
+          pushCaddy(third[i], 10_000 + i);
+        }
+        for (let i = 2; i < neverWorked.length; i++) {
+          pushCaddy(neverWorked[i], seqOf(neverWorked[i]));
+        }
+        for (const c of house) {
+          if (!worked12.has(c.id)) continue;
+          pushCaddy(c, seqOf(c));
+        }
+      } else {
+        // Mode B: THIRD 전체 → 2부 실근무·1부 미근무 HOUSE (spare1·2 제외)
+        for (const c of modeBHouse) thirdHouseFlow.push(c);
+        for (const c of house) {
+          if (modeBHouse.some((m) => m.id === c.id)) continue;
+          thirdHouseFlow.push(c);
+        }
+
+        for (let i = 0; i < third.length; i++) {
+          pushCaddy(third[i], 10_000 + i);
+        }
+        for (const c of modeBHouse) {
+          pushCaddy(c, seqOf(c));
+        }
+        for (const c of house) {
+          pushCaddy(c, seqOf(c));
+        }
       }
-      for (let i = houseStart + 2; i < house.length; i++) pushHouse(i);
-      for (let i = 0; i < house.length && i < houseStart + 2; i++) pushHouse(i);
 
       let oi = 0;
       for (const reservation of shiftReservations) {
@@ -1340,6 +1407,7 @@ export function assignRegularSequence(input: {
         usedInShift.add(picked.caddy.id);
         if (normalizeAssignCaddyType(picked.caddy.caddyType) === "HOUSE") {
           houseAssigned += 1;
+          thirdHouseUsed += 1;
         }
         assignments.push({
           date: input.date,
@@ -1405,19 +1473,34 @@ export function assignRegularSequence(input: {
       }
     }
 
-    const spareBase = houseStart + houseAssigned;
-    sparesByShift.push({
-      shift,
-      spare1: toSpareInfo(
-        spareBase >= 0 && spareBase < house.length ? house[spareBase] : null
-      ),
-      spare2: toSpareInfo(
-        spareBase + 1 >= 0 && spareBase + 1 < house.length
-          ? house[spareBase + 1]
-          : null
-      ),
-    });
-    houseStart = spareBase;
+    if (shift === "3부" && thirdHouseFlow) {
+      const spare1 = thirdHouseFlow[thirdHouseUsed] ?? null;
+      const spare2 = thirdHouseFlow[thirdHouseUsed + 1] ?? null;
+      sparesByShift.push({
+        shift,
+        spare1: toSpareInfo(spare1),
+        spare2: toSpareInfo(spare2),
+      });
+      if (spare1) {
+        houseStart = houseIndexById.get(spare1.id) ?? houseStart + houseAssigned;
+      } else {
+        houseStart = houseStart + houseAssigned;
+      }
+    } else {
+      const spareBase = houseStart + houseAssigned;
+      sparesByShift.push({
+        shift,
+        spare1: toSpareInfo(
+          spareBase >= 0 && spareBase < house.length ? house[spareBase] : null
+        ),
+        spare2: toSpareInfo(
+          spareBase + 1 >= 0 && spareBase + 1 < house.length
+            ? house[spareBase + 1]
+            : null
+        ),
+      });
+      houseStart = spareBase;
+    }
   }
 
   const finalPointer =
