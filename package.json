@@ -25,7 +25,8 @@
     "preview:roster": "npx tsx scripts/preview-roster-import.ts",
     "inspect:db-readonly": "npx tsx scripts/inspect-db-schema-readonly.ts",
     "check:migration-checksums": "npx tsx scripts/check-migration-checksums-readonly.ts",
-    "test:availability-unit": "npx tsx scripts/test-availability-unit.ts"
+    "test:availability-unit": "npx tsx scripts/test-availability-unit.ts",
+    "test:off-request-domain-unit": "npx tsx scripts/test-off-request-domain-unit.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
