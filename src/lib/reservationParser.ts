@@ -301,7 +301,11 @@ export function parseTeeTime(value: unknown): string | null {
   return null;
 }
 
-/** 티타임으로 부 추정: 1부 <12:00, 2부 12:00–15:59, 3부 ≥16:00 */
+/**
+ * @deprecated 파싱 경로에서 사용하지 않음.
+ * 현장 2부는 11시대부터 시작할 수 있어 teeTime→부 추정은 구조적으로 부정확함.
+ * 테스트/디버그용으로만 유지.
+ */
 export function inferShiftFromTeeTime(teeTime: string): ShiftPart {
   const [hStr, mStr] = teeTime.split(":");
   const minutes = Number(hStr) * 60 + Number(mStr);
@@ -623,18 +627,23 @@ export function parseReservationMatrix(
   return out;
 }
 
-/** 시트 본문의 "1부"/"2부"/"3부" 구간 제목 행 감지 (티타임 추정과 무관) */
+/**
+ * 시트 본문의 "1부"/"2부"/"3부" 구간 제목 셀 감지 (티타임 추정과 무관).
+ * - 순수 라벨: 1부/2부/3부, 제2부, ◆2부, [2부] 등
+ * - 팀명·일반 문장에 섞인 경우는 길이·형태 mid로 제한
+ */
 export function detectShiftSectionLabel(
   values: unknown[],
   startCol: number,
   endCol: number
 ): ShiftPart | null {
-  for (let c = startCol; c <= endCol; c++) {
+  const lo = Math.max(0, startCol);
+  const hi = Math.min(endCol, (values?.length ?? 1) - 1);
+  for (let c = lo; c <= hi; c++) {
     const t = cellText(values[c]);
     if (!t) continue;
     const shift = normalizeShift(t);
     if (!shift) continue;
-    // 셀이 부 표기 자체일 때만 구간 헤더로 인정 (팀명 등에 부 글자 혼입 방지)
     const compactLabel = compact(t).replace(/^제/, "");
     if (
       compactLabel === "1부" ||
@@ -646,9 +655,25 @@ export function detectShiftSectionLabel(
     ) {
       return shift;
     }
+    // ◆2부 / [2부] / 2부타임 등 짧은 라벨
+    if (
+      compactLabel.length <= 10 &&
+      /(^|[^0-9])[123]부/.test(compactLabel) &&
+      !normalizeCourse(t)
+    ) {
+      return shift;
+    }
   }
   return null;
 }
+
+/** 병합 셀이 A열에만 값이 있는 행 전체 구간 헤더 */
+export function detectRowShiftSectionLabel(values: unknown[]): ShiftPart | null {
+  if (!values?.length) return null;
+  return detectShiftSectionLabel(values, 0, values.length - 1);
+}
+
+const REGION_SHIFTS: readonly ShiftPart[] = ["1부", "2부", "3부"];
 
 function parseCourseBlock(
   matrix: unknown[][],
@@ -665,14 +690,21 @@ function parseCourseBlock(
   const headerLabels = stringMatrix[headerRow] || [];
   const blockCourse = block.defaultCourse || ctx.sheetCourse;
   const out: ParsedReservation[] = [];
-  /** 본문 "2부" 등 구간 헤더 — 이후 행에 명시 shift 없을 때 사용 (teeTime 추정보다 우선) */
+  /**
+   * 코스 블록 독립 부 구간 상태 (teeTime 추정 사용 안 함)
+   * - 명시 라벨: 블록 내 또는 행 전체(병합 셀 A열) "1부"/"2부"/"3부"
+   * - 라벨 없이 공백 행으로 영역이 나뉘면 등장 순서대로 1부→2부→3부
+   */
   let sectionShift: ShiftPart | null = null;
+  let regionIndex = -1;
+  let seenDataInRegion = false;
+  let pendingRegionBreak = false;
 
   for (let r = headerRow + 1; r < matrix.length; r++) {
     const values = matrix[r] || [];
-    if (isBlankBlockRange(values, startCol, endCol)) continue;
+    const blockBlank = isBlankBlockRange(values, startCol, endCol);
 
-    // 블록 범위 안 반복 헤더 행 스킵
+    // 블록 범위 안 반복 헤더 행 스킵 (부 구간 상태는 유지)
     let headerHits = 0;
     for (let c = startCol; c <= endCol; c++) {
       if (matchHeaderKind(cellText(values[c]))) headerHits += 1;
@@ -683,11 +715,41 @@ function parseCourseBlock(
       columns.teamName != null ? cellText(values[columns.teamName]) : "";
     const teamName = teamRaw || null;
 
-    // 예약자 없는 행: 부 구간 제목이면 sectionShift 갱신 후 스킵
-    const sectionLabel = detectShiftSectionLabel(values, startCol, endCol);
+    // 블록 로컬 라벨 우선, 없으면 행 전체(가로 병합 "2부"가 A열에만 있는 경우)
+    const sectionLabel =
+      detectShiftSectionLabel(values, startCol, endCol) ||
+      (!teamName ? detectRowShiftSectionLabel(values) : null);
+
+    if (blockBlank) {
+      if (seenDataInRegion) {
+        pendingRegionBreak = true;
+        seenDataInRegion = false;
+      }
+      if (sectionLabel) {
+        sectionShift = sectionLabel;
+        regionIndex = REGION_SHIFTS.indexOf(sectionLabel);
+        pendingRegionBreak = false;
+      }
+      continue;
+    }
+
+    // 예약자 없는 행: 부 구간 제목이면 블록 section 갱신 후 스킵
     if (!teamName) {
-      if (sectionLabel) sectionShift = sectionLabel;
-      // 빈 예약자 = 공석 티타임 — 예약팀으로 세지 않음
+      if (sectionLabel) {
+        sectionShift = sectionLabel;
+        regionIndex = REGION_SHIFTS.indexOf(sectionLabel);
+        pendingRegionBreak = false;
+        seenDataInRegion = false;
+      } else if (seenDataInRegion) {
+        // 공석 티(시간만 있고 예약자 없음)는 영역 유지, 완전 빈 행이 아닐 수 있음
+        const teeOnly =
+          columns.teeTime != null &&
+          !!parseTeeTime(values[columns.teeTime]);
+        if (!teeOnly) {
+          pendingRegionBreak = true;
+          seenDataInRegion = false;
+        }
+      }
       continue;
     }
 
@@ -707,15 +769,33 @@ function parseCourseBlock(
 
     const courseRaw =
       columns.course != null ? cellText(values[columns.course]) : "";
+    // 코스명이 부 라벨이면 구간 갱신으로 보고 코스는 블록 기본값 사용
+    if (courseRaw && normalizeShift(courseRaw) && !normalizeCourse(courseRaw)) {
+      const labeled = normalizeShift(courseRaw)!;
+      sectionShift = labeled;
+      regionIndex = REGION_SHIFTS.indexOf(labeled);
+      pendingRegionBreak = false;
+    }
     const course = normalizeCourse(courseRaw) || blockCourse;
     if (!course) reviewReasons.push("코스 판별 실패");
 
+    // 공백으로 나뉜 새 영역 + 명시 라벨 없음 → 등장 순서로 1부·2부·3부
+    if (pendingRegionBreak || (regionIndex < 0 && !sectionShift && !ctx.fallbackShift)) {
+      if (pendingRegionBreak || regionIndex < 0) {
+        regionIndex += 1;
+        if (regionIndex >= 0 && regionIndex < REGION_SHIFTS.length) {
+          sectionShift = REGION_SHIFTS[regionIndex];
+        }
+        pendingRegionBreak = false;
+      }
+    }
+
     const shiftRaw =
       columns.shift != null ? cellText(values[columns.shift]) : "";
-    // 우선순위: 행 부 컬럼 → 본문 구간 헤더 → 시트/default → (최후) 티타임 추정
+    // 우선순위: 행 부 컬럼 → 블록 구간 상태 → 시트/default
+    // ⚠ teeTime으로 부를 추정하지 않음 (현장 2부는 11시대부터 시작 가능)
     let shift =
-      normalizeShift(shiftRaw) || sectionShift || ctx.fallbackShift;
-    if (!shift && teeTime) shift = inferShiftFromTeeTime(teeTime);
+      normalizeShift(shiftRaw) || sectionShift || ctx.fallbackShift || null;
     if (!shift) reviewReasons.push("부 판별 실패");
 
     const hole =
@@ -727,10 +807,13 @@ function parseCourseBlock(
 
     if (!teeTime && !courseRaw && !dateRaw) continue;
 
+    seenDataInRegion = true;
+
     out.push({
       date: date || "",
       course,
       courseLabel: course ? COURSE_LABELS[course] : "미상",
+      // 부 미확정이면 needsReview로 집계 제외 (잘못된 1부 기본값 금지)
       shift: shift || "1부",
       teeTime: teeTime || cellText(teeRaw),
       teamName,
