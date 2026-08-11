@@ -6,6 +6,8 @@
 import {
   computeAutoAssignmentsV1,
   compareCaddyOrder,
+  compareReservationOrder,
+  COURSE_ORDER,
   findEarliest54HolePair,
   findOneThreePair,
   findOneTwoPair,
@@ -13,6 +15,7 @@ import {
   isCompatibleOneThreePair,
   isCompatibleOneTwoPair,
   minutesBetweenReservations,
+  normalizeOpenCourses,
   reasonForFixedType,
   reflowRegularAssignments,
   REASON,
@@ -2213,6 +2216,227 @@ section("reflow: 연속 여러 건 캔슬/추가 + 인접 teeTime");
     "ids order by tee"
   );
   assert(reflow.summary.movedBackward + reflow.summary.movedForward + reflow.summary.unchanged + reflow.summary.newlyAssigned + reflow.summary.becameUnassigned === reflow.changes.length, "change kinds cover all");
+}
+
+section("코스 순서 VERTHILL→SKY→OCEAN→LAKE + teeTime");
+{
+  const date = "2026-10-01";
+  const available = makeCaddies(20);
+  const reservations: AutoAssignReservation[] = [
+    { date, course: "LAKE", shift: "1부", teeTime: "06:30", teamName: "L1", rawRowIndex: 1 },
+    { date, course: "SKY", shift: "1부", teeTime: "06:37", teamName: "S2", rawRowIndex: 2 },
+    { date, course: "VERTHILL", shift: "1부", teeTime: "06:44", teamName: "V2", rawRowIndex: 3 },
+    { date, course: "OCEAN", shift: "1부", teeTime: "06:30", teamName: "O1", rawRowIndex: 4 },
+    { date, course: "SKY", shift: "1부", teeTime: "06:30", teamName: "S1", rawRowIndex: 5 },
+    { date, course: "VERTHILL", shift: "1부", teeTime: "06:30", teamName: "V1", rawRowIndex: 6 },
+    { date, course: "VERTHILL", shift: "2부", teeTime: "13:00", teamName: "V3", rawRowIndex: 7 },
+    { date, course: "SKY", shift: "2부", teeTime: "12:50", teamName: "S3", rawRowIndex: 8 },
+  ];
+  const result = computeAutoAssignmentsV1({ date, available, reservations });
+  const keys = result.assignments.map(
+    (a) => `${a.shift}|${a.reservation.course}|${a.reservation.teeTime}`
+  );
+  assert(
+    keys.join(",") ===
+      [
+        "1부|VERTHILL|06:30",
+        "1부|VERTHILL|06:44",
+        "1부|SKY|06:30",
+        "1부|SKY|06:37",
+        "1부|OCEAN|06:30",
+        "1부|LAKE|06:30",
+        "2부|VERTHILL|13:00",
+        "2부|SKY|12:50",
+      ].join(","),
+    "shift→course→teeTime order"
+  );
+  assert(COURSE_ORDER.join(",") === "VERTHILL,SKY,OCEAN,LAKE", "COURSE_ORDER fixed");
+  const sorted = [...reservations].sort(compareReservationOrder);
+  assert(sorted[0].teamName === "V1", "compareReservationOrder V first");
+  assert(sorted[2].teamName === "S1", "then SKY earliest tee");
+}
+
+section("코스 Open/Close: 4코스 모두 ON");
+{
+  const date = "2026-10-02";
+  const available = makeCaddies(12);
+  const reservations: AutoAssignReservation[] = [
+    { date, course: "VERTHILL", shift: "1부", teeTime: "07:00", teamName: "V" },
+    { date, course: "SKY", shift: "1부", teeTime: "07:00", teamName: "S" },
+    { date, course: "OCEAN", shift: "1부", teeTime: "07:00", teamName: "O" },
+    { date, course: "LAKE", shift: "1부", teeTime: "07:00", teamName: "L" },
+  ];
+  const result = computeAutoAssignmentsV1({
+    date,
+    available,
+    reservations,
+    openCourses: ["VERTHILL", "SKY", "OCEAN", "LAKE"],
+  });
+  assert(result.assignments.length === 4, "all 4 assigned");
+  assert(result.closedCourseReservations.length === 0, "none closed");
+  assert(result.openCourses.length === 4, "4 open");
+  assert(normalizeOpenCourses(null).length === 4, "default all open");
+}
+
+section("코스 Open/Close: 베르힐+스카이만 ON");
+{
+  const date = "2026-10-03";
+  const available = makeCaddies(10);
+  const reservations: AutoAssignReservation[] = [
+    { date, course: "VERTHILL", shift: "1부", teeTime: "07:00", teamName: "V" },
+    { date, course: "SKY", shift: "1부", teeTime: "07:08", teamName: "S" },
+    { date, course: "OCEAN", shift: "1부", teeTime: "07:00", teamName: "O" },
+    { date, course: "LAKE", shift: "2부", teeTime: "13:00", teamName: "L" },
+  ];
+  const result = computeAutoAssignmentsV1({
+    date,
+    available,
+    reservations,
+    openCourses: ["VERTHILL", "SKY"],
+  });
+  assert(result.assignments.length === 2, "2 assigned");
+  assert(
+    result.assignments.every((a) =>
+      ["VERTHILL", "SKY"].includes(a.reservation.course)
+    ),
+    "only V/S"
+  );
+  assert(result.closedCourseReservations.length === 2, "2 closed");
+  assert(
+    result.closedCourseReservations.every((u) => u.reason === REASON.CLOSED_COURSE),
+    "CLOSED_COURSE reason"
+  );
+  assert(result.meta.closedCourseCount === 2, "meta closed count");
+}
+
+section("코스 Open/Close: 오션만 OFF");
+{
+  const date = "2026-10-04";
+  const available = makeCaddies(10);
+  const reservations: AutoAssignReservation[] = [
+    { date, course: "VERTHILL", shift: "1부", teeTime: "07:00", teamName: "V" },
+    { date, course: "SKY", shift: "1부", teeTime: "07:00", teamName: "S" },
+    { date, course: "OCEAN", shift: "1부", teeTime: "07:00", teamName: "O" },
+    { date, course: "LAKE", shift: "1부", teeTime: "07:00", teamName: "L" },
+  ];
+  const result = computeAutoAssignmentsV1({
+    date,
+    available,
+    reservations,
+    openCourses: ["VERTHILL", "SKY", "LAKE"],
+  });
+  assert(result.assignments.length === 3, "3 assigned");
+  assert(result.closedCourseReservations.length === 1, "1 closed");
+  assert(
+    result.closedCourseReservations[0].reservation.course === "OCEAN",
+    "ocean closed"
+  );
+  assert(
+    !result.assignments.some((a) => a.reservation.course === "OCEAN"),
+    "no ocean in assignments"
+  );
+}
+
+section("코스 Open/Close: 1개 코스만 ON");
+{
+  const date = "2026-10-05";
+  const available = makeCaddies(5);
+  const reservations: AutoAssignReservation[] = [
+    { date, course: "LAKE", shift: "1부", teeTime: "07:00", teamName: "L1" },
+    { date, course: "LAKE", shift: "1부", teeTime: "07:08", teamName: "L2" },
+    { date, course: "VERTHILL", shift: "1부", teeTime: "07:00", teamName: "V" },
+    { date, course: "SKY", shift: "1부", teeTime: "07:00", teamName: "S" },
+  ];
+  const result = computeAutoAssignmentsV1({
+    date,
+    available,
+    reservations,
+    openCourses: ["LAKE"],
+  });
+  assert(result.assignments.length === 2, "2 lake assigned");
+  assert(
+    result.assignments.every((a) => a.reservation.course === "LAKE"),
+    "only lake"
+  );
+  assert(result.closedCourseReservations.length === 2, "2 closed others");
+  assert(
+    result.assignments[0].reservation.teeTime === "07:00" &&
+      result.assignments[1].reservation.teeTime === "07:08",
+    "same course teeTime asc"
+  );
+}
+
+section("닫힌 코스에 special/고정 배치 금지");
+{
+  const date = "2026-10-06";
+  const available = makeCaddies(8);
+  const special = [{ id: 101, name: "특A", team: "1조", teamOrder: 1 }];
+  const fiftyFourHole = [{ id: 102, name: "오십사", team: "2조", teamOrder: 1 }];
+  const reservations: AutoAssignReservation[] = [
+    {
+      id: "closed-fixed",
+      date,
+      course: "OCEAN",
+      shift: "1부",
+      teeTime: "07:00",
+      teamName: "닫힌고정",
+    },
+    {
+      id: "open-reg",
+      date,
+      course: "VERTHILL",
+      shift: "1부",
+      teeTime: "07:00",
+      teamName: "열린일반",
+    },
+    {
+      date,
+      course: "OCEAN",
+      shift: "1부",
+      teeTime: "07:08",
+      teamName: "닫힌54후보1",
+    },
+    {
+      date,
+      course: "OCEAN",
+      shift: "2부",
+      teeTime: "13:10",
+      teamName: "닫힌54후보2",
+    },
+  ];
+  const result = computeAutoAssignmentsV1({
+    date,
+    available,
+    special,
+    fiftyFourHole,
+    reservations,
+    openCourses: ["VERTHILL", "SKY", "LAKE"],
+    fixedAssignments: [
+      { caddyId: 101, reservationId: "closed-fixed", type: "FIXED" },
+    ],
+  });
+  assert(
+    !result.assignments.some((a) => a.reservation.course === "OCEAN"),
+    "no ocean assignments incl special"
+  );
+  assert(
+    result.fixedAssignments.length === 0,
+    "fixed not applied on closed course"
+  );
+  assert(
+    result.fiftyFourHoleAssignments.length === 0,
+    "54hole not on closed course"
+  );
+  assert(
+    result.closedCourseReservations.some(
+      (u) => u.reservation.id === "closed-fixed"
+    ),
+    "closed fixed reservation kept in closed list"
+  );
+  assert(
+    result.assignments.some((a) => a.reservation.id === "open-reg"),
+    "open course still assigned"
+  );
 }
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);

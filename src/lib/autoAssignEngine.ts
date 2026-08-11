@@ -7,7 +7,16 @@
  */
 
 import { PRIMARY_TEAMS } from "@/lib/caddyManage";
-import { SHIFT_PARTS, type ShiftPart } from "@/lib/reservationParser";
+import {
+  COURSE_CODES,
+  normalizeCourse,
+  SHIFT_PARTS,
+  type CourseCode,
+  type ShiftPart,
+} from "@/lib/reservationParser";
+
+/** 배치/표시용 코스 고정 순서 */
+export const COURSE_ORDER: readonly CourseCode[] = COURSE_CODES;
 
 /** 54홀 연속 티업 최소 간격 (분) */
 export const MIN_54HOLE_GAP_MINUTES = 6 * 60;
@@ -50,6 +59,7 @@ export const REASON = {
   REGULAR_CANCEL_REFLOW: "REGULAR_CANCEL_REFLOW",
   REGULAR_ADD_REFLOW: "REGULAR_ADD_REFLOW",
   REGULAR_MIXED_REFLOW: "REGULAR_MIXED_REFLOW",
+  CLOSED_COURSE: "CLOSED_COURSE",
 } as const;
 
 export type FixedAssignmentType =
@@ -158,16 +168,21 @@ export type AutoAssignResultV1 = {
   oneTwoAssignments: AutoAssignmentRow[];
   regularAssignments: AutoAssignmentRow[];
   unassignedReservations: UnassignedReservationRow[];
+  /** Open/Close에서 OFF된 코스 예약 (삭제하지 않고 분리) */
+  closedCourseReservations: UnassignedReservationRow[];
   unusedCaddies: AutoAssignCaddy[];
   /** special 배치 후보 제외 후 전달 */
   special: AutoAssignCaddy[];
   /** 고정/찾근·54홀/1·3/1·2 실패·conflict → 일반 강등 없이 review */
   specialUnassigned: SpecialUnassignedRow[];
+  /** 이번 실행에 열린 코스 (기본 4개 전부) */
+  openCourses: CourseCode[];
   meta: {
     availableCount: number;
     reservationCount: number;
     assignedCount: number;
     unassignedCount: number;
+    closedCourseCount: number;
     unusedCount: number;
     specialCount: number;
     fixedAssignedCount: number;
@@ -263,18 +278,71 @@ function shiftRank(shift: string): number {
   return idx >= 0 ? idx : 99;
 }
 
+/** 예약 course 문자열 → CourseCode (미상이면 null) */
+export function resolveCourseCode(
+  course: string | null | undefined
+): CourseCode | null {
+  if (course == null || course === "") return null;
+  const direct = String(course).trim().toUpperCase();
+  if ((COURSE_ORDER as readonly string[]).includes(direct)) {
+    return direct as CourseCode;
+  }
+  return normalizeCourse(String(course));
+}
+
+export function courseRank(course: string | null | undefined): number {
+  const code = resolveCourseCode(course);
+  if (!code) return 99;
+  return COURSE_ORDER.indexOf(code);
+}
+
+/**
+ * 정렬: 1부→2부→3부, 각 부 안 VERTHILL→SKY→OCEAN→LAKE, 같은 코스 teeTime 오름차순
+ */
 export function compareReservationOrder(
   a: AutoAssignReservation,
   b: AutoAssignReservation
 ): number {
   const sr = shiftRank(String(a.shift)) - shiftRank(String(b.shift));
   if (sr !== 0) return sr;
+  const cr = courseRank(a.course) - courseRank(b.course);
+  if (cr !== 0) return cr;
   if (a.teeTime !== b.teeTime) return a.teeTime.localeCompare(b.teeTime);
-  if (a.course !== b.course) return a.course.localeCompare(b.course);
   const ra = a.rawRowIndex ?? 0;
   const rb = b.rawRowIndex ?? 0;
   if (ra !== rb) return ra - rb;
   return String(a.teamName || "").localeCompare(String(b.teamName || ""), "ko");
+}
+
+export function compareAssignmentOrder(
+  a: AutoAssignmentRow,
+  b: AutoAssignmentRow
+): number {
+  return compareReservationOrder(a.reservation, b.reservation);
+}
+
+/** openCourses 정규화 — 미지정/빈 입력이면 4코스 전부 ON */
+export function normalizeOpenCourses(
+  openCourses?: readonly string[] | null
+): CourseCode[] {
+  if (openCourses == null) return [...COURSE_ORDER];
+  const set = new Set<CourseCode>();
+  for (const raw of openCourses) {
+    const code = resolveCourseCode(raw);
+    if (code) set.add(code);
+  }
+  // 명시적으로 [] 가 오면 전부 OFF 허용
+  if (openCourses.length === 0) return [];
+  return COURSE_ORDER.filter((c) => set.has(c));
+}
+
+export function isCourseOpen(
+  course: string | null | undefined,
+  openCourses: readonly CourseCode[]
+): boolean {
+  const code = resolveCourseCode(course);
+  if (!code) return false;
+  return openCourses.includes(code);
 }
 
 function emptyShiftMeta(): Record<
@@ -1200,6 +1268,11 @@ export function computeAutoAssignmentsV1(input: {
   oneThreeCandidates?: AutoAssignCaddy[];
   /** 1·2부 신청자 후보 — 명시적 입력 */
   oneTwoCandidates?: AutoAssignCaddy[];
+  /**
+   * 운영 코스 Open 목록. 미지정 시 4코스 전부 ON.
+   * OFF 코스 예약은 closedCourseReservations 로 분리 (CLOSED_COURSE).
+   */
+  openCourses?: readonly string[] | null;
   min54HoleGapMinutes?: number;
   minOneThreeGapMinutes?: number;
   minOneTwoGapMinutes?: number;
@@ -1209,7 +1282,9 @@ export function computeAutoAssignmentsV1(input: {
     throw new Error("date must be YYYY-MM-DD");
   }
 
+  const openCourses = normalizeOpenCourses(input.openCourses);
   const unassignedReservations: UnassignedReservationRow[] = [];
+  const closedCourseReservations: UnassignedReservationRow[] = [];
   const byShift = emptyShiftMeta();
 
   const dayReservations = (input.reservations || []).map((r) =>
@@ -1219,6 +1294,13 @@ export function computeAutoAssignmentsV1(input: {
   const eligible: AutoAssignReservation[] = [];
   for (const r of dayReservations) {
     if (r.date && r.date !== date) continue;
+    if (!isCourseOpen(r.course, openCourses)) {
+      closedCourseReservations.push({
+        reservation: r,
+        reason: REASON.CLOSED_COURSE,
+      });
+      continue;
+    }
     const check = isAssignableReservation(r, date);
     if (!check.ok) {
       unassignedReservations.push({ reservation: r, reason: check.reason });
@@ -1227,6 +1309,9 @@ export function computeAutoAssignmentsV1(input: {
     eligible.push(r);
   }
   eligible.sort(compareReservationOrder);
+  closedCourseReservations.sort((a, b) =>
+    compareReservationOrder(a.reservation, b.reservation)
+  );
   for (const shift of SHIFT_PARTS) {
     byShift[shift].reservations = eligible.filter((r) => r.shift === shift).length;
   }
@@ -1358,11 +1443,7 @@ export function computeAutoAssignmentsV1(input: {
     ...oneThreeAssignments,
     ...oneTwoAssignments,
     ...regularAssignments,
-  ].sort((a, b) => {
-    const sr = shiftRank(a.shift) - shiftRank(b.shift);
-    if (sr !== 0) return sr;
-    return a.reservation.teeTime.localeCompare(b.reservation.teeTime);
-  });
+  ].sort(compareAssignmentOrder);
 
   const unusedCaddies = available.filter((c) => !usedCaddyIds.has(c.id));
   const fiftyFourHoleAssignedCaddyCount = new Set(
@@ -1384,14 +1465,17 @@ export function computeAutoAssignmentsV1(input: {
     oneTwoAssignments,
     regularAssignments,
     unassignedReservations,
+    closedCourseReservations,
     unusedCaddies,
     special,
     specialUnassigned,
+    openCourses,
     meta: {
       availableCount: available.length,
       reservationCount: eligible.length,
       assignedCount: assignments.length,
       unassignedCount: unassignedReservations.length,
+      closedCourseCount: closedCourseReservations.length,
       unusedCount: unusedCaddies.length,
       specialCount: special.length,
       fixedAssignedCount: fixedAssignments.length,
@@ -1572,20 +1656,17 @@ export function reflowRegularAssignments(input: {
   const usedRegular = new Set(regular.assignments.map((a) => a.caddy.id));
   const unusedCaddies = pool.filter((c) => !usedRegular.has(c.id));
 
-  const assignments = [
-    ...specialRows,
-    ...regular.assignments,
-  ].sort((a, b) => {
-    const sr = shiftRank(a.shift) - shiftRank(b.shift);
-    if (sr !== 0) return sr;
-    return a.reservation.teeTime.localeCompare(b.reservation.teeTime);
-  });
+  const assignments = [...specialRows, ...regular.assignments].sort(
+    compareAssignmentOrder
+  );
 
   const after: AutoAssignResultV1 = {
     ...previous,
     assignments,
     regularAssignments: regular.assignments,
     unassignedReservations: regular.unassignedReservations,
+    closedCourseReservations: previous.closedCourseReservations || [],
+    openCourses: previous.openCourses || [...COURSE_ORDER],
     unusedCaddies,
     meta: {
       ...previous.meta,
@@ -1594,6 +1675,7 @@ export function reflowRegularAssignments(input: {
         specialRows.length + regularReservations.length,
       assignedCount: assignments.length,
       unassignedCount: regular.unassignedReservations.length,
+      closedCourseCount: (previous.closedCourseReservations || []).length,
       unusedCount: unusedCaddies.length,
       byShift,
       finalPointer: regular.finalPointer,

@@ -320,9 +320,12 @@ export function draftToConfirmBody(
     status: string;
     date: string;
     assignments: AutoAssignmentRow[];
+    /** 닫힌 코스 예약은 저장 대상에서 제외 (전달해도 무시) */
+    closedCourseReservations?: unknown[];
   },
   opts?: { replace?: boolean; idempotencyKey?: string }
 ): ConfirmRequestBody {
+  // 운영 반영: 열린 코스 배치만 — closedCourseReservations 는 포함하지 않음
   return {
     status: draft.status,
     date: draft.date,

@@ -23,7 +23,12 @@ import type {
   AutoAssignmentRow,
 } from "@/lib/autoAssignEngine";
 import type { AvailabilityResult } from "@/lib/availabilityEngine";
-import type { ShiftPart } from "@/lib/reservationParser";
+import {
+  COURSE_CODES,
+  COURSE_LABELS,
+  type CourseCode,
+  type ShiftPart,
+} from "@/lib/reservationParser";
 
 type RunResponse = AutoAssignResultV1 & {
   error?: string;
@@ -32,6 +37,17 @@ type RunResponse = AutoAssignResultV1 & {
 };
 
 const SHIFTS: ShiftPart[] = ["1부", "2부", "3부"];
+
+type CourseOpenState = Record<CourseCode, boolean>;
+
+function defaultCourseOpen(): CourseOpenState {
+  return {
+    VERTHILL: true,
+    SKY: true,
+    OCEAN: true,
+    LAKE: true,
+  };
+}
 
 export default function ManageAssignmentsOpsPage() {
   const [date, setDate] = useState("");
@@ -42,13 +58,21 @@ export default function ManageAssignmentsOpsPage() {
   const [autoResult, setAutoResult] = useState<RunResponse | null>(null);
   const [draft, setDraft] = useState<AssignmentDraft | null>(null);
   const [warnings, setWarnings] = useState<DraftWarning[]>([]);
-  const [shiftTab, setShiftTab] = useState<ShiftPart | "UNASSIGNED">("1부");
+  const [shiftTab, setShiftTab] = useState<
+    ShiftPart | "UNASSIGNED" | "CLOSED"
+  >("1부");
+  const [courseOpen, setCourseOpen] = useState<CourseOpenState>(defaultCourseOpen);
   const [loadingAvail, setLoadingAvail] = useState(false);
   const [loadingRun, setLoadingRun] = useState(false);
   const [loadingApply, setLoadingApply] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [swapKey, setSwapKey] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+
+  const openCourseList = useMemo(
+    () => COURSE_CODES.filter((c) => courseOpen[c]),
+    [courseOpen]
+  );
 
   const pool: AutoAssignCaddy[] = useMemo(() => {
     if (availability) {
@@ -103,6 +127,10 @@ export default function ManageAssignmentsOpsPage() {
       setError("예약 Excel 파일을 선택하세요.");
       return;
     }
+    if (openCourseList.length === 0) {
+      setError("최소 1개 코스를 ON으로 선택하세요.");
+      return;
+    }
     setLoadingRun(true);
     setError(null);
     try {
@@ -126,6 +154,7 @@ export default function ManageAssignmentsOpsPage() {
       const form = new FormData();
       form.append("date", date);
       form.append("file", file);
+      form.append("openCourses", JSON.stringify(openCourseList));
       const res = await fetch("/api/assignments/preview", {
         method: "POST",
         body: form,
@@ -147,7 +176,12 @@ export default function ManageAssignmentsOpsPage() {
       setWarnings(detectDraftWarnings(next));
       setSwapKey(null);
       setShiftTab("1부");
-      showToast("자동배치 완료 · DRAFT");
+      const closedN = data.closedCourseReservations?.length ?? 0;
+      showToast(
+        closedN > 0
+          ? `자동배치 완료 · DRAFT (닫힌 코스 ${closedN}건 제외)`
+          : "자동배치 완료 · DRAFT"
+      );
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "자동배치 요청 실패");
     } finally {
@@ -299,9 +333,13 @@ export default function ManageAssignmentsOpsPage() {
   }
 
   const shiftRows =
-    draft && shiftTab !== "UNASSIGNED"
+    draft && shiftTab !== "UNASSIGNED" && shiftTab !== "CLOSED"
       ? assignmentsByShift(draft, shiftTab)
       : [];
+
+  function toggleCourse(code: CourseCode) {
+    setCourseOpen((prev) => ({ ...prev, [code]: !prev[code] }));
+  }
 
   return (
     <div className="ops-root">
@@ -336,6 +374,27 @@ export default function ManageAssignmentsOpsPage() {
             onChange={(e) => setFile(e.target.files?.[0] || null)}
           />
         </label>
+        <div className="ops-courses" aria-label="코스 Open/Close">
+          <div className="ops-courses-label">
+            코스 운영 (기본 전부 ON · OFF 코스는 배치 제외)
+          </div>
+          <div className="ops-courses-toggles">
+            {COURSE_CODES.map((code) => (
+              <button
+                key={code}
+                type="button"
+                className={`course-toggle ${courseOpen[code] ? "on" : "off"}`}
+                onClick={() => toggleCourse(code)}
+                aria-pressed={courseOpen[code]}
+              >
+                <span className="course-name">{COURSE_LABELS[code]}</span>
+                <span className="course-state">
+                  {courseOpen[code] ? "ON" : "OFF"}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="ops-actions">
           <button
             type="button"
@@ -384,7 +443,14 @@ export default function ManageAssignmentsOpsPage() {
         {autoResult && (
           <div className="ops-meta">
             자동배치 {autoResult.meta.assignedCount}건 · 미배치{" "}
-            {autoResult.meta.unassignedCount} · 파일 {autoResult.filename || "-"}
+            {autoResult.meta.unassignedCount}
+            {(autoResult.meta.closedCourseCount ?? 0) > 0 && (
+              <> · 닫힌코스 {autoResult.meta.closedCourseCount}</>
+            )}{" "}
+            · 파일 {autoResult.filename || "-"} · 열린코스{" "}
+            {(autoResult.openCourses || openCourseList)
+              .map((c) => COURSE_LABELS[c as CourseCode] || c)
+              .join("/")}
           </div>
         )}
         {error && <div className="ops-error">{error}</div>}
@@ -425,6 +491,14 @@ export default function ManageAssignmentsOpsPage() {
             >
               미배치
               <small>{draft.unassignedReservations.length}</small>
+            </button>
+            <button
+              type="button"
+              className={shiftTab === "CLOSED" ? "on" : ""}
+              onClick={() => setShiftTab("CLOSED")}
+            >
+              닫힌코스
+              <small>{draft.closedCourseReservations?.length ?? 0}</small>
             </button>
           </nav>
 
@@ -511,7 +585,9 @@ export default function ManageAssignmentsOpsPage() {
                       </strong>
                     </div>
                     <div className="ops-item-main">
-                      {u.reservation.teamName || "-"} · {u.reason}
+                      {u.reservation.teamName || "-"} ·{" "}
+                      {u.reservation.courseLabel || u.reservation.course} ·{" "}
+                      {u.reason}
                     </div>
                     <div className="ops-item-actions">
                       <label className="inline">
@@ -532,6 +608,31 @@ export default function ManageAssignmentsOpsPage() {
                           ))}
                         </select>
                       </label>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+
+          {shiftTab === "CLOSED" && (
+            <ul className="ops-list">
+              {(draft.closedCourseReservations?.length ?? 0) === 0 && (
+                <li className="ops-empty">닫힌 코스 예약 없음</li>
+              )}
+              {(draft.closedCourseReservations || []).map((u) => {
+                const key = reservationIdentity(u.reservation);
+                return (
+                  <li key={key} className="ops-item closed">
+                    <div className="ops-item-top">
+                      <strong>
+                        {u.reservation.shift} {u.reservation.teeTime}
+                      </strong>
+                      <span className="chip warn">{u.reason}</span>
+                    </div>
+                    <div className="ops-item-main">
+                      {u.reservation.teamName || "-"} ·{" "}
+                      {u.reservation.courseLabel || u.reservation.course}
                     </div>
                   </li>
                 );
@@ -613,6 +714,49 @@ const opsCss = `
     border-radius: 14px;
     background: #fff;
   }
+  .ops-courses {
+    display: grid;
+    gap: 6px;
+  }
+  .ops-courses-label {
+    font-size: 0.8rem;
+    color: #475569;
+    font-weight: 600;
+  }
+  .ops-courses-toggles {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+  }
+  @media (min-width: 560px) {
+    .ops-courses-toggles { grid-template-columns: repeat(4, 1fr); }
+  }
+  .course-toggle {
+    min-height: 42px;
+    border-radius: 10px;
+    border: 1px solid #cbd5e1;
+    background: #f8fafc;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 10px;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  .course-toggle.on {
+    background: #ecfdf5;
+    border-color: #6ee7b7;
+  }
+  .course-toggle.off {
+    background: #f8fafc;
+    color: #94a3b8;
+  }
+  .course-state {
+    font-size: 0.7rem;
+    font-weight: 800;
+  }
+  .course-toggle.on .course-state { color: #047857; }
+  .course-toggle.off .course-state { color: #94a3b8; }
   .ops-field {
     display: grid;
     gap: 4px;
@@ -662,7 +806,7 @@ const opsCss = `
   .warn.warn { background: #fffbeb; color: #92400e; }
   .ops-tabs {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: 6px;
     position: sticky;
     top: 0;
