@@ -17,10 +17,11 @@ import {
   type DraftWarning,
 } from "@/lib/assignmentDraft";
 import { draftToConfirmBody } from "@/lib/assignmentConfirm";
-import type {
-  AutoAssignCaddy,
-  AutoAssignResultV1,
-  AutoAssignmentRow,
+import {
+  resolveCourseCode,
+  type AutoAssignCaddy,
+  type AutoAssignResultV1,
+  type AutoAssignmentRow,
 } from "@/lib/autoAssignEngine";
 import type { AvailabilityResult } from "@/lib/availabilityEngine";
 import {
@@ -38,7 +39,26 @@ type RunResponse = AutoAssignResultV1 & {
 
 const SHIFTS: ShiftPart[] = ["1부", "2부", "3부"];
 
+/** 모바일 배치표 헤더 (가로 스크롤 없이 4코스) */
+const COURSE_SHORT: Record<CourseCode, string> = {
+  VERTHILL: "베",
+  SKY: "스",
+  OCEAN: "오",
+  LAKE: "레",
+};
+
 type CourseOpenState = Record<CourseCode, boolean>;
+type ResultViewMode = "board" | "list";
+
+type BoardCell =
+  | { kind: "closed" }
+  | { kind: "empty" }
+  | { kind: "assigned"; rows: AutoAssignmentRow[] };
+
+type BoardTimeRow = {
+  teeTime: string;
+  cells: Record<CourseCode, BoardCell>;
+};
 
 function defaultCourseOpen(): CourseOpenState {
   return {
@@ -47,6 +67,40 @@ function defaultCourseOpen(): CourseOpenState {
     OCEAN: true,
     LAKE: true,
   };
+}
+
+function buildShiftBoard(
+  rows: AutoAssignmentRow[],
+  openCourses: readonly CourseCode[]
+): BoardTimeRow[] {
+  const open = new Set(openCourses);
+  const byTimeCourse = new Map<string, AutoAssignmentRow[]>();
+  const times = new Set<string>();
+
+  for (const row of rows) {
+    const code = resolveCourseCode(row.reservation.course);
+    if (!code) continue;
+    const tee = row.reservation.teeTime || "";
+    times.add(tee);
+    const key = `${tee}|${code}`;
+    const list = byTimeCourse.get(key) || [];
+    list.push(row);
+    byTimeCourse.set(key, list);
+  }
+
+  return [...times].sort((a, b) => a.localeCompare(b)).map((teeTime) => {
+    const cells = {} as Record<CourseCode, BoardCell>;
+    for (const code of COURSE_CODES) {
+      if (!open.has(code)) {
+        cells[code] = { kind: "closed" };
+        continue;
+      }
+      const list = byTimeCourse.get(`${teeTime}|${code}`) || [];
+      cells[code] =
+        list.length > 0 ? { kind: "assigned", rows: list } : { kind: "empty" };
+    }
+    return { teeTime, cells };
+  });
 }
 
 export default function ManageAssignmentsOpsPage() {
@@ -68,6 +122,7 @@ export default function ManageAssignmentsOpsPage() {
   const [error, setError] = useState<string | null>(null);
   const [swapKey, setSwapKey] = useState<string | null>(null);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<ResultViewMode>("board");
   const [toast, setToast] = useState<string | null>(null);
 
   const openCourseList = useMemo(
@@ -349,8 +404,38 @@ export default function ManageAssignmentsOpsPage() {
       ? assignmentsByShift(draft, shiftTab)
       : [];
 
+  const boardOpenCourses = useMemo<CourseCode[]>(() => {
+    if (!draft || draft.openCourses == null) return [...COURSE_CODES];
+    const open = new Set(
+      draft.openCourses
+        .map((c) => resolveCourseCode(c))
+        .filter((c): c is CourseCode => !!c)
+    );
+    return COURSE_CODES.filter((c) => open.has(c));
+  }, [draft]);
+
+  const boardRows = useMemo(
+    () => buildShiftBoard(shiftRows, boardOpenCourses),
+    [shiftRows, boardOpenCourses]
+  );
+
+  const detailRow = useMemo(() => {
+    if (!draft) return null;
+    const key = expandedKey || swapKey;
+    if (!key) return null;
+    return (
+      draft.assignments.find(
+        (a) => reservationIdentity(a.reservation) === key
+      ) || null
+    );
+  }, [draft, expandedKey, swapKey]);
+
   function toggleCourse(code: CourseCode) {
     setCourseOpen((prev) => ({ ...prev, [code]: !prev[code] }));
+  }
+
+  function toggleExpandKey(key: string) {
+    setExpandedKey((prev) => (prev === key ? null : key));
   }
 
   return (
@@ -516,85 +601,305 @@ export default function ManageAssignmentsOpsPage() {
 
           {shiftTab !== "UNASSIGNED" && shiftTab !== "CLOSED" && (
             <>
-              <ul className="ops-list compact">
-                {shiftRows.length === 0 && (
-                  <li className="ops-empty">이 부 배치 없음</li>
-                )}
-                {shiftRows.map((row) => {
-                  const key = reservationIdentity(row.reservation);
-                  const special = row.kind !== "regular";
-                  const open = expandedKey === key || swapKey === key;
-                  const course =
-                    row.reservation.courseLabel ||
-                    COURSE_LABELS[row.reservation.course as CourseCode] ||
-                    row.reservation.course;
-                  return (
-                    <li
-                      key={key}
-                      className={`ops-row ${special ? "special" : ""} ${
-                        swapKey === key ? "swap-on" : ""
-                      } ${open ? "open" : ""}`}
-                    >
-                      <button
-                        type="button"
-                        className="ops-row-main"
-                        onClick={() =>
-                          setExpandedKey((prev) => (prev === key ? null : key))
-                        }
-                      >
-                        <span className="col time">{row.reservation.teeTime}</span>
-                        <span className="col team">
-                          {row.reservation.teamName || "-"}
-                          {special ? (
-                            <em className="tag-s">{row.kind}</em>
-                          ) : null}
-                        </span>
-                        <span className="col course">{course}</span>
-                        <span className="col caddy">{row.caddy.name}</span>
-                        <span className="col meta">
-                          {row.caddy.team}·{row.caddy.teamOrder}
-                        </span>
-                      </button>
-                      {open && (
-                        <div className="ops-row-actions">
-                          <label className="inline">
-                            교체
-                            <select
-                              defaultValue=""
-                              onChange={(e) => {
-                                const id = Number(e.target.value);
-                                if (id) onReplace(row, id);
-                                e.target.value = "";
-                              }}
-                            >
-                              <option value="">캐디 선택</option>
-                              {freeCaddies.map((c) => (
-                                <option key={c.id} value={c.id}>
-                                  {c.name} (#{c.id}/{c.team})
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          <button
-                            type="button"
-                            className="btn tiny"
-                            onClick={() => onSwapClick(row)}
-                          >
-                            {swapKey === key ? "선택됨" : "Swap"}
-                          </button>
-                          <button
-                            type="button"
-                            className="btn tiny ghost"
-                            onClick={() => onUnassign(row)}
-                          >
-                            해제
-                          </button>
+              <div className="ops-view-toggle" role="group" aria-label="결과 보기">
+                <button
+                  type="button"
+                  className={viewMode === "board" ? "on" : ""}
+                  onClick={() => setViewMode("board")}
+                >
+                  배치표보기
+                </button>
+                <button
+                  type="button"
+                  className={viewMode === "list" ? "on" : ""}
+                  onClick={() => setViewMode("list")}
+                >
+                  목록보기
+                </button>
+              </div>
+
+              {viewMode === "board" && (
+                <div className="ops-board-wrap">
+                  {boardRows.length === 0 ? (
+                    <div className="ops-empty">이 부 배치 없음</div>
+                  ) : (
+                    <div className="ops-board" role="table" aria-label={`${shiftTab} 배치표`}>
+                      <div className="ops-board-head" role="row">
+                        <div className="bh-time" role="columnheader">
+                          시간
                         </div>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
+                        {COURSE_CODES.map((code) => (
+                          <div
+                            key={code}
+                            className={`bh-course ${
+                              boardOpenCourses.includes(code) ? "" : "closed"
+                            }`}
+                            role="columnheader"
+                            title={COURSE_LABELS[code]}
+                          >
+                            {COURSE_SHORT[code]}
+                          </div>
+                        ))}
+                      </div>
+                      {boardRows.map((tr) => {
+                        const rowHasExpand = COURSE_CODES.some((code) => {
+                          const cell = tr.cells[code];
+                          if (cell.kind !== "assigned") return false;
+                          return cell.rows.some(
+                            (r) =>
+                              reservationIdentity(r.reservation) ===
+                                expandedKey ||
+                              reservationIdentity(r.reservation) === swapKey
+                          );
+                        });
+                        return (
+                          <div key={tr.teeTime} className="ops-board-block">
+                            <div className="ops-board-row" role="row">
+                              <div className="bc-time" role="cell">
+                                {tr.teeTime}
+                              </div>
+                              {COURSE_CODES.map((code) => {
+                                const cell = tr.cells[code];
+                                if (cell.kind === "closed") {
+                                  return (
+                                    <div
+                                      key={code}
+                                      className="bc-cell closed"
+                                      role="cell"
+                                      aria-label={`${COURSE_LABELS[code]} 닫힘`}
+                                    >
+                                      <span className="bc-closed">닫힘</span>
+                                    </div>
+                                  );
+                                }
+                                if (cell.kind === "empty") {
+                                  return (
+                                    <div
+                                      key={code}
+                                      className="bc-cell empty"
+                                      role="cell"
+                                    >
+                                      -
+                                    </div>
+                                  );
+                                }
+                                const primary = cell.rows[0];
+                                const key = reservationIdentity(
+                                  primary.reservation
+                                );
+                                const special = primary.kind !== "regular";
+                                const active =
+                                  expandedKey === key ||
+                                  swapKey === key ||
+                                  cell.rows.some(
+                                    (r) =>
+                                      reservationIdentity(r.reservation) ===
+                                        expandedKey ||
+                                      reservationIdentity(r.reservation) ===
+                                        swapKey
+                                  );
+                                return (
+                                  <button
+                                    key={code}
+                                    type="button"
+                                    className={`bc-cell assigned ${
+                                      special ? "special" : ""
+                                    } ${active ? "active" : ""}`}
+                                    role="cell"
+                                    onClick={() => {
+                                      if (cell.rows.length === 1) {
+                                        toggleExpandKey(key);
+                                        return;
+                                      }
+                                      const idx = cell.rows.findIndex(
+                                        (r) =>
+                                          reservationIdentity(r.reservation) ===
+                                          expandedKey
+                                      );
+                                      const next =
+                                        cell.rows[
+                                          idx >= 0
+                                            ? (idx + 1) % cell.rows.length
+                                            : 0
+                                        ];
+                                      toggleExpandKey(
+                                        reservationIdentity(next.reservation)
+                                      );
+                                    }}
+                                  >
+                                    <span className="bc-name">
+                                      {primary.caddy.name}
+                                    </span>
+                                    {cell.rows.length > 1 && (
+                                      <span className="bc-more">
+                                        +{cell.rows.length - 1}
+                                      </span>
+                                    )}
+                                    {special && (
+                                      <span className="bc-special">S</span>
+                                    )}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            {rowHasExpand && detailRow && (
+                              <div className="ops-board-detail">
+                                <div className="ops-board-detail-meta">
+                                  <strong>{detailRow.reservation.teeTime}</strong>
+                                  <span>
+                                    {detailRow.reservation.teamName || "-"}
+                                  </span>
+                                  <span>
+                                    {detailRow.reservation.courseLabel ||
+                                      (() => {
+                                        const code = resolveCourseCode(
+                                          detailRow.reservation.course
+                                        );
+                                        return code
+                                          ? COURSE_LABELS[code]
+                                          : detailRow.reservation.course;
+                                      })()}
+                                  </span>
+                                  <span className="caddy-strong">
+                                    {detailRow.caddy.name}
+                                  </span>
+                                  <span className="muted">
+                                    {detailRow.caddy.team}·
+                                    {detailRow.caddy.teamOrder}
+                                    {detailRow.kind !== "regular"
+                                      ? ` · ${detailRow.kind}`
+                                      : ""}
+                                  </span>
+                                </div>
+                                <div className="ops-row-actions">
+                                  <label className="inline">
+                                    교체
+                                    <select
+                                      defaultValue=""
+                                      onChange={(e) => {
+                                        const id = Number(e.target.value);
+                                        if (id) onReplace(detailRow, id);
+                                        e.target.value = "";
+                                      }}
+                                    >
+                                      <option value="">캐디 선택</option>
+                                      {freeCaddies.map((c) => (
+                                        <option key={c.id} value={c.id}>
+                                          {c.name} (#{c.id}/{c.team})
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                  <button
+                                    type="button"
+                                    className="btn tiny"
+                                    onClick={() => onSwapClick(detailRow)}
+                                  >
+                                    {swapKey ===
+                                    reservationIdentity(detailRow.reservation)
+                                      ? "선택됨"
+                                      : "Swap"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn tiny ghost"
+                                    onClick={() => onUnassign(detailRow)}
+                                  >
+                                    해제
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {viewMode === "list" && (
+                <ul className="ops-list compact">
+                  {shiftRows.length === 0 && (
+                    <li className="ops-empty">이 부 배치 없음</li>
+                  )}
+                  {shiftRows.map((row) => {
+                    const key = reservationIdentity(row.reservation);
+                    const special = row.kind !== "regular";
+                    const open = expandedKey === key || swapKey === key;
+                    const course =
+                      row.reservation.courseLabel ||
+                      COURSE_LABELS[row.reservation.course as CourseCode] ||
+                      row.reservation.course;
+                    return (
+                      <li
+                        key={key}
+                        className={`ops-row ${special ? "special" : ""} ${
+                          swapKey === key ? "swap-on" : ""
+                        } ${open ? "open" : ""}`}
+                      >
+                        <button
+                          type="button"
+                          className="ops-row-main"
+                          onClick={() => toggleExpandKey(key)}
+                        >
+                          <span className="col time">
+                            {row.reservation.teeTime}
+                          </span>
+                          <span className="col team">
+                            {row.reservation.teamName || "-"}
+                            {special ? (
+                              <em className="tag-s">{row.kind}</em>
+                            ) : null}
+                          </span>
+                          <span className="col course">{course}</span>
+                          <span className="col caddy">{row.caddy.name}</span>
+                          <span className="col meta">
+                            {row.caddy.team}·{row.caddy.teamOrder}
+                          </span>
+                        </button>
+                        {open && (
+                          <div className="ops-row-actions">
+                            <label className="inline">
+                              교체
+                              <select
+                                defaultValue=""
+                                onChange={(e) => {
+                                  const id = Number(e.target.value);
+                                  if (id) onReplace(row, id);
+                                  e.target.value = "";
+                                }}
+                              >
+                                <option value="">캐디 선택</option>
+                                {freeCaddies.map((c) => (
+                                  <option key={c.id} value={c.id}>
+                                    {c.name} (#{c.id}/{c.team})
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <button
+                              type="button"
+                              className="btn tiny"
+                              onClick={() => onSwapClick(row)}
+                            >
+                              {swapKey === key ? "선택됨" : "Swap"}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn tiny ghost"
+                              onClick={() => onUnassign(row)}
+                            >
+                              해제
+                            </button>
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+
               <div className="ops-spares">
                 <div className="ops-spares-title">{shiftTab} 스페어</div>
                 <div className="ops-spare-line">
@@ -744,7 +1049,9 @@ const opsCss = `
     margin: 0 auto;
     display: grid;
     gap: 12px;
-    padding-bottom: 72px;
+    padding: 0 8px 72px;
+    box-sizing: border-box;
+    width: 100%;
   }
   .ops-header {
     display: flex;
@@ -901,6 +1208,164 @@ const opsCss = `
   .ops-tabs small {
     font-size: 0.7rem;
     opacity: 0.8;
+  }
+  .ops-view-toggle {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+  .ops-view-toggle button {
+    min-height: 36px;
+    border-radius: 8px;
+    border: 1px solid #e2e8f0;
+    background: #fff;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+  .ops-view-toggle button.on {
+    background: #0f172a;
+    color: #fff;
+    border-color: #0f172a;
+    font-weight: 700;
+  }
+  .ops-board-wrap {
+    width: 100%;
+    overflow-x: hidden;
+  }
+  .ops-board {
+    width: 100%;
+    display: grid;
+    gap: 0;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #fff;
+  }
+  .ops-board-head,
+  .ops-board-row {
+    display: grid;
+    grid-template-columns: 40px repeat(4, minmax(0, 1fr));
+    width: 100%;
+  }
+  .ops-board-head {
+    position: sticky;
+    top: 52px;
+    z-index: 1;
+    background: #0f172a;
+    color: #fff;
+  }
+  .ops-board-head > div {
+    padding: 6px 2px;
+    text-align: center;
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+  }
+  .ops-board-head .bh-time { text-align: center; }
+  .ops-board-head .bh-course.closed { color: #94a3b8; text-decoration: line-through; }
+  .ops-board-block + .ops-board-block {
+    border-top: 1px solid #e2e8f0;
+  }
+  .ops-board-row > .bc-time {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.68rem;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    color: #334155;
+    background: #f8fafc;
+    border-right: 1px solid #e2e8f0;
+    padding: 4px 1px;
+    min-height: 36px;
+  }
+  .bc-cell {
+    min-width: 0;
+    min-height: 36px;
+    padding: 4px 2px;
+    border-right: 1px solid #f1f5f9;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
+    font-size: 0.72rem;
+    line-height: 1.15;
+    background: #fff;
+  }
+  .ops-board-row > .bc-cell:last-child { border-right: 0; }
+  .bc-cell.empty {
+    color: #cbd5e1;
+    font-weight: 600;
+  }
+  .bc-cell.closed {
+    background: repeating-linear-gradient(
+      -45deg,
+      #f1f5f9,
+      #f1f5f9 4px,
+      #e2e8f0 4px,
+      #e2e8f0 8px
+    );
+    color: #94a3b8;
+  }
+  .bc-closed {
+    font-size: 0.62rem;
+    font-weight: 800;
+  }
+  button.bc-cell {
+    border: 0;
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+    width: 100%;
+  }
+  button.bc-cell.assigned {
+    background: #fff;
+  }
+  button.bc-cell.assigned.special {
+    background: #fffbeb;
+  }
+  button.bc-cell.assigned.active {
+    outline: 2px solid #2563eb;
+    outline-offset: -2px;
+    z-index: 1;
+  }
+  .bc-name {
+    font-weight: 800;
+    font-size: 0.78rem;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #0f172a;
+  }
+  .bc-more {
+    font-size: 0.6rem;
+    color: #64748b;
+    font-weight: 700;
+  }
+  .bc-special {
+    font-size: 0.58rem;
+    font-weight: 800;
+    color: #b45309;
+  }
+  .ops-board-detail {
+    border-top: 1px solid #e2e8f0;
+    background: #f8fafc;
+    padding: 8px;
+    display: grid;
+    gap: 8px;
+  }
+  .ops-board-detail-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    font-size: 0.78rem;
+    align-items: baseline;
+  }
+  .ops-board-detail-meta .caddy-strong {
+    font-weight: 800;
+    font-size: 0.9rem;
   }
   .ops-list {
     list-style: none;
