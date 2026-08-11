@@ -2847,5 +2847,324 @@ section("reflow 후에도 teeTime→courseOrder 유지");
   assert(s2[0].caddy.id === spare1?.caddyId, "reflow spare1 → 11:30 V");
 }
 
+function makeThird(n: number, startId = 5000): AutoAssignCaddy[] {
+  const out: AutoAssignCaddy[] = [];
+  for (let i = 0; i < n; i++) {
+    out.push({
+      id: startId + i,
+      name: `THIRD${startId + i}`,
+      team: `${(i % 12) + 1}조`,
+      teamOrder: Math.floor(i / 12) + 1,
+      caddyType: "THIRD",
+    });
+  }
+  return out.sort(compareCaddyOrder);
+}
+
+section("Fixture1 ModeA: HOUSE원번 잔여 — spare→THIRD→미근무 HOUSE");
+{
+  const date = "2026-12-01";
+  const house = makeCaddies(140).map((c) => ({ ...c, caddyType: "HOUSE" }));
+  const third = makeThird(5);
+  const orderedHouse = [...house].sort(compareCaddyOrder);
+  const orderedThird = [...third].sort(compareCaddyOrder);
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: [...house, ...third],
+    reservations: makeReservations(date, [
+      { shift: "1부", count: 40 },
+      { shift: "2부", count: 40 },
+      { shift: "3부", count: 10 },
+    ]),
+  });
+  const s1 = result.regularAssignments.filter((a) => a.shift === "1부");
+  const s2 = result.regularAssignments.filter((a) => a.shift === "2부");
+  const s3 = result.regularAssignments.filter((a) => a.shift === "3부");
+  assert(
+    s1.every((a, i) => a.caddy.id === orderedHouse[i].id),
+    "1부 HOUSE [0..39]"
+  );
+  assert(
+    s2.every((a, i) => a.caddy.id === orderedHouse[40 + i].id),
+    "2부 HOUSE [40..79]"
+  );
+  const spare2 = result.sparesByShift.find((s) => s.shift === "2부")!;
+  assert(spare2.spare1?.caddyId === orderedHouse[80].id, "2부 spare1=[80]");
+  assert(spare2.spare2?.caddyId === orderedHouse[81].id, "2부 spare2=[81]");
+  assert(s3[0].caddy.id === orderedHouse[80].id, "3부1=[80]");
+  assert(s3[1].caddy.id === orderedHouse[81].id, "3부2=[81]");
+  assert(s3[2].caddy.id === orderedThird[0].id, "3부3=THIRD first");
+  assert(s3[3].caddy.id === orderedThird[1].id, "3부4=THIRD second");
+  assert(s3[4].caddy.id === orderedThird[2].id, "3부5=THIRD third");
+  assert(s3[5].caddy.id === orderedThird[3].id, "3부6=THIRD fourth");
+  assert(s3[6].caddy.id === orderedThird[4].id, "3부7=THIRD fifth");
+  assert(s3[7].caddy.id === orderedHouse[82].id, "3부8=미근무 HOUSE[82]");
+  assert(s3[8].caddy.id === orderedHouse[83].id, "3부9=HOUSE[83]");
+  assert(s3[9].caddy.id === orderedHouse[84].id, "3부10=HOUSE[84]");
+  const neverWorked12 = orderedHouse.filter(
+    (h) =>
+      !s1.some((a) => a.caddy.id === h.id) &&
+      !s2.some((a) => a.caddy.id === h.id)
+  );
+  assert(neverWorked12[0].id === orderedHouse[80].id, "미근무 시작 [80]");
+  assert(
+    s3.slice(7).every((a) => neverWorked12.some((h) => h.id === a.caddy.id)),
+    "3부 HOUSE 추가분은 1·2 미근무 원번"
+  );
+  console.log(
+    "  [Fixture1 out]",
+    "s3=",
+    s3.map((a) => a.caddy.id).join(","),
+    "spare3=",
+    JSON.stringify(result.sparesByShift.find((s) => s.shift === "3부"))
+  );
+}
+
+section("Fixture2 ModeB: HOUSE소진 — THIRD→[82..91], [0..9]/spare80·81 금지");
+{
+  const date = "2026-12-02";
+  const house = makeCaddies(140).map((c) => ({ ...c, caddyType: "HOUSE" }));
+  const third = makeThird(70);
+  const orderedHouse = [...house].sort(compareCaddyOrder);
+  const orderedThird = [...third].sort(compareCaddyOrder);
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: [...house, ...third],
+    reservations: makeReservations(date, [
+      { shift: "1부", count: 80 },
+      { shift: "2부", count: 80 },
+      { shift: "3부", count: 80 },
+    ]),
+  });
+  const s1 = result.regularAssignments.filter((a) => a.shift === "1부");
+  const s2 = result.regularAssignments.filter((a) => a.shift === "2부");
+  const s3 = result.regularAssignments.filter((a) => a.shift === "3부");
+  const spare1 = result.sparesByShift.find((s) => s.shift === "1부")!;
+  assert(spare1.spare1?.caddyId === orderedHouse[80].id, "1부 spare1=[80]");
+  assert(spare1.spare2?.caddyId === orderedHouse[81].id, "1부 spare2=[81]");
+  assert(s1.length === 80 && s2.length === 80 && s3.length === 80, "80/80/80");
+  const worked12 = new Set([
+    ...s1.map((a) => a.caddy.id),
+    ...s2.map((a) => a.caddy.id),
+  ]);
+  assert(
+    orderedHouse.every((h) => worked12.has(h.id)),
+    "HOUSE 전원 1·2부 실근무 ≥1"
+  );
+  assert(
+    s3.slice(0, 70).every((a, i) => a.caddy.id === orderedThird[i].id),
+    "3부 THIRD [0..69]"
+  );
+  const housePart = s3.slice(70);
+  assert(housePart.length === 10, "3부 HOUSE 추가 10");
+  assert(
+    housePart.every((a, i) => a.caddy.id === orderedHouse[82 + i].id),
+    "3부 HOUSE [82..91]"
+  );
+  const banned = new Set([
+    ...orderedHouse.slice(0, 10).map((h) => h.id),
+    orderedHouse[80].id,
+    orderedHouse[81].id,
+  ]);
+  assert(
+    s3.every((a) => !banned.has(a.caddy.id)),
+    "3부 [0..9] 및 1부 spare1·2 재사용 금지"
+  );
+  console.log(
+    "  [Fixture2 out]",
+    "s3THIRD=",
+    s3
+      .slice(0, 3)
+      .map((a) => a.caddy.id)
+      .join(","),
+    "...",
+    "s3HOUSE=",
+    housePart.map((a) => a.caddy.id).join(","),
+    "spare3=",
+    JSON.stringify(result.sparesByShift.find((s) => s.shift === "3부"))
+  );
+}
+
+section("Fixture3: 3부 spare = HOUSE 추가배치 다음 적격 순번");
+{
+  const date = "2026-12-03";
+  const house = makeCaddies(140).map((c) => ({ ...c, caddyType: "HOUSE" }));
+  const third = makeThird(70);
+  const orderedHouse = [...house].sort(compareCaddyOrder);
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: [...house, ...third],
+    reservations: makeReservations(date, [
+      { shift: "1부", count: 80 },
+      { shift: "2부", count: 80 },
+      { shift: "3부", count: 80 },
+    ]),
+  });
+  const spare3 = result.sparesByShift.find((s) => s.shift === "3부")!;
+  assert(spare3.spare1?.caddyId === orderedHouse[92].id, "3부 spare1=[92]");
+  assert(spare3.spare2?.caddyId === orderedHouse[93].id, "3부 spare2=[93]");
+  assert(spare3.spare1 != null && spare3.spare2 != null, "spare not null after HOUSE add-on");
+
+  const resultShort = computeAutoAssignmentsV1({
+    date: "2026-12-05",
+    available: [...house, ...third],
+    reservations: makeReservations("2026-12-05", [
+      { shift: "1부", count: 80 },
+      { shift: "2부", count: 80 },
+      { shift: "3부", count: 72 },
+    ]),
+  });
+  const s3short = resultShort.regularAssignments.filter((a) => a.shift === "3부");
+  const spare3short = resultShort.sparesByShift.find((s) => s.shift === "3부")!;
+  assert(s3short.length === 72, "72 teams");
+  assert(
+    s3short.slice(70).every((a, i) => a.caddy.id === orderedHouse[82 + i].id),
+    "72팀: HOUSE [82],[83]"
+  );
+  assert(spare3short.spare1?.caddyId === orderedHouse[84].id, "short spare1=[84]");
+  assert(spare3short.spare2?.caddyId === orderedHouse[85].id, "short spare2=[85]");
+  console.log(
+    "  [Fixture3 out]",
+    "spare80=",
+    `${spare3.spare1?.caddyId},${spare3.spare2?.caddyId}`,
+    "spare72=",
+    `${spare3short.spare1?.caddyId},${spare3short.spare2?.caddyId}`
+  );
+}
+
+section("Fixture4: special/fixed/54/1·3/1·2는 일반 HOUSE 후보 재진입 금지");
+{
+  const date = "2026-12-04";
+  const house = makeCaddies(140).map((c) => ({ ...c, caddyType: "HOUSE" }));
+  const third = makeThird(70);
+  const orderedHouse = [...house].sort(compareCaddyOrder);
+  const special54 = orderedHouse[90];
+  const special13 = orderedHouse[91];
+  const special12 = orderedHouse[92];
+  const specialFixed = orderedHouse[93];
+  const reservations: AutoAssignReservation[] = [
+    ...makeReservations(date, [
+      { shift: "1부", count: 78, teeStart: "06:00" },
+      { shift: "2부", count: 78, teeStart: "11:30" },
+      { shift: "3부", count: 80, teeStart: "15:00" },
+    ]),
+    {
+      date,
+      course: "SKY",
+      shift: "1부",
+      teeTime: "06:00",
+      teamName: "54a",
+      id: "54a",
+    },
+    {
+      date,
+      course: "SKY",
+      shift: "2부",
+      teeTime: "11:30",
+      teamName: "54b",
+      id: "54b",
+    },
+    {
+      date,
+      course: "OCEAN",
+      shift: "1부",
+      teeTime: "10:00",
+      teamName: "13a",
+      id: "13a",
+    },
+    {
+      date,
+      course: "OCEAN",
+      shift: "3부",
+      teeTime: "16:00",
+      teamName: "13b",
+      id: "13b",
+    },
+    {
+      date,
+      course: "LAKE",
+      shift: "1부",
+      teeTime: "09:30",
+      teamName: "12a",
+      id: "12a",
+    },
+    {
+      date,
+      course: "LAKE",
+      shift: "2부",
+      teeTime: "13:30",
+      teamName: "12b",
+      id: "12b",
+    },
+    {
+      date,
+      course: "VERTHILL",
+      shift: "1부",
+      teeTime: "06:14",
+      teamName: "fixed1",
+      id: "fixed1",
+    },
+  ];
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: [...house, ...third],
+    fiftyFourHole: [special54],
+    oneThreeCandidates: [special13],
+    oneTwoCandidates: [special12],
+    fixedAssignments: [
+      {
+        caddyId: specialFixed.id,
+        type: "FIXED",
+        reservationId: "fixed1",
+      },
+    ],
+    reservations,
+  });
+  const specialIds = new Set([
+    special54.id,
+    special13.id,
+    special12.id,
+    specialFixed.id,
+  ]);
+  assert(
+    result.regularAssignments.every((a) => !specialIds.has(a.caddy.id)),
+    "special/fixed not in regular HOUSE/THIRD sequence"
+  );
+  assert(
+    result.fiftyFourHoleAssignments.some((a) => a.caddy.id === special54.id),
+    "54홀 배치됨"
+  );
+  assert(
+    result.oneThreeAssignments.some((a) => a.caddy.id === special13.id),
+    "1·3 배치됨"
+  );
+  assert(
+    result.oneTwoAssignments.some((a) => a.caddy.id === special12.id),
+    "1·2 배치됨"
+  );
+  assert(
+    result.fixedAssignments.some((a) => a.caddy.id === specialFixed.id),
+    "fixed 배치됨"
+  );
+  const s3House = result.regularAssignments.filter(
+    (a) =>
+      a.shift === "3부" &&
+      (a.caddy.caddyType === "HOUSE" || a.caddy.caddyType == null)
+  );
+  assert(
+    s3House.every((a) => !specialIds.has(a.caddy.id)),
+    "3부 일반 HOUSE에 special 재진입 없음"
+  );
+  console.log(
+    "  [Fixture4 out]",
+    "specialIds=",
+    [...specialIds].join(","),
+    "regularHasSpecial=",
+    result.regularAssignments.some((a) => specialIds.has(a.caddy.id)),
+    "s3HouseCount=",
+    s3House.length
+  );
+}
+
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
