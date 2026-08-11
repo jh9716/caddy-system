@@ -43,6 +43,14 @@ enum CaddyType {
   DRIVING
 }
 
+/// 휴무 신청 workflow 상태 (확정 OFF는 Assignment로만 가용 제외)
+enum OffRequestStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
 model Caddy {
   id                Int              @id @default(autoincrement())
   name              String
@@ -62,6 +70,9 @@ model Caddy {
   assignments       Assignment[]
   schedules         Schedule[]
   shiftDuties       ShiftDuty[]
+  offRequests       OffRequest[]
+  /// 로그인 User와 1:1 (미연결 시 null)
+  user              User?
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
 
@@ -80,6 +91,8 @@ model Assignment {
   endDate   DateTime
   comment   String?
   createdAt DateTime        @default(now())
+  /// OffRequest 승인으로 생성된 경우 역링크 (레거시/수동 OFF는 null)
+  offRequest OffRequest?
 }
 
 model Audit {
@@ -127,6 +140,9 @@ model User {
   username  String   @unique
   password  String
   role      String
+  /// 캐디 본인 계정 연결 (기존 User는 null 유지)
+  caddyId   Int?     @unique
+  caddy     Caddy?   @relation(fields: [caddyId], references: [id])
   createdAt DateTime @default(now())
 }
 
@@ -157,4 +173,35 @@ model ScheduleExtraTag {
 
   @@unique([date, caddyId, tag])
   @@index([date, caddyId])
+}
+
+/// 휴무 신청 이력 (row 삭제 금지 — 운영 감사 보존)
+/// 활성 중복(REQUESTED|APPROVED)은 migration SQL의 partial unique index로 방지:
+///   OffRequest_caddyId_date_active_key
+model OffRequest {
+  id               Int              @id @default(autoincrement())
+  caddyId          Int
+  caddy            Caddy            @relation(fields: [caddyId], references: [id])
+  /// 휴무 대상일 (로컬 자정으로 normalize)
+  date             DateTime
+  status           OffRequestStatus @default(REQUESTED)
+  requestedAt      DateTime         @default(now())
+  note             String?
+
+  /// 승인/반려 시점·처리자 (승인 후 revoke 되어도 유지 — 감사)
+  decidedAt        DateTime?
+  decidedByUserId  Int?
+  decisionNote     String?
+
+  /// APPROVED 시 생성된 Assignment(OFF). revoke 시 null로 해제(Assignment 삭제)
+  assignmentId     Int?             @unique
+  assignment       Assignment?      @relation(fields: [assignmentId], references: [id], onDelete: SetNull)
+
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  @@index([date, status])
+  @@index([caddyId, date])
+  @@index([caddyId, status])
+  @@index([decidedByUserId])
 }
