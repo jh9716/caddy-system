@@ -66,6 +66,7 @@ function assertLocalDatabaseUrl(url: string) {
   }
 }
 
+async function main() {
 section("serialize + quota gate (pure)");
 {
   const snap = computeOffQuotaSnapshot({ approvedCount: 5, requestedCount: 2 });
@@ -355,3 +356,9 @@ await runLocalDbTests();
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
+}
+
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
