@@ -7,6 +7,9 @@
 import {
   compareAssignmentOrder,
   compareReservationOrder,
+  MIN_54HOLE_GAP_MINUTES,
+  MIN_ONE_THREE_GAP_MINUTES,
+  MIN_ONE_TWO_GAP_MINUTES,
   minutesBetweenReservations,
   reservationKey,
   type AutoAssignCaddy,
@@ -14,6 +17,7 @@ import {
   type AutoAssignResultV1,
   type AutoAssignmentRow,
   type AssignmentKind,
+  type SpareByShift,
   type UnassignedReservationRow,
 } from "@/lib/autoAssignEngine";
 import type { CourseCode, ShiftPart } from "@/lib/reservationParser";
@@ -28,6 +32,8 @@ export type AssignmentDraft = {
   closedCourseReservations: UnassignedReservationRow[];
   openCourses: CourseCode[];
   caddyPool: AutoAssignCaddy[];
+  /** 부별 스페어 (대기 — confirm 저장 대상 아님) */
+  sparesByShift: SpareByShift[];
   confirmedAt: string | null;
   appliedAt?: string | null;
   applyAuditId?: number | null;
@@ -90,6 +96,11 @@ export function createDraftFromAutoResult(
       .sort((a, b) => compareReservationOrder(a.reservation, b.reservation)),
     openCourses: [...(result.openCourses || [])],
     caddyPool: pool,
+    sparesByShift: (result.sparesByShift || []).map((s) => ({
+      shift: s.shift,
+      spare1: s.spare1 ? { ...s.spare1 } : null,
+      spare2: s.spare2 ? { ...s.spare2 } : null,
+    })),
     confirmedAt: null,
     appliedAt: null,
     applyAuditId: null,
@@ -169,6 +180,7 @@ export function assignmentsByShift(
     .sort(compareAssignmentOrder);
 }
 
+/** 정상 다회근무(1+2 / 1+3 / 2+3 / special 정상 페어)는 오류로 치지 않음 */
 export function detectDraftWarnings(draft: AssignmentDraft): DraftWarning[] {
   const warnings: DraftWarning[] = [];
   const byCaddy = new Map<number, AutoAssignmentRow[]>();
@@ -181,30 +193,57 @@ export function detectDraftWarnings(draft: AssignmentDraft): DraftWarning[] {
 
   for (const [caddyId, rows] of byCaddy.entries()) {
     if (rows.length <= 1) continue;
-    warnings.push({
-      level: "error",
-      code: "DUPLICATE_CADDY",
-      message: `캐디 #${caddyId}(${rows[0].caddy.name})가 ${rows.length}개 예약에 중복 배치됨`,
-      caddyId,
-    });
+
+    const byShift = new Map<string, AutoAssignmentRow[]>();
+    for (const row of rows) {
+      const list = byShift.get(String(row.shift)) || [];
+      list.push(row);
+      byShift.set(String(row.shift), list);
+    }
+    for (const [shift, shiftRows] of byShift.entries()) {
+      if (shiftRows.length < 2) continue;
+      warnings.push({
+        level: "error",
+        code: "SAME_SHIFT_DUPLICATE",
+        message: `캐디 #${caddyId}(${shiftRows[0].caddy.name})가 ${shift}에 ${shiftRows.length}개 예약 중복 배치`,
+        caddyId,
+        reservationKey: reservationKey(shiftRows[0].reservation),
+      });
+    }
 
     const sorted = [...rows].sort((a, b) =>
       a.reservation.teeTime.localeCompare(b.reservation.teeTime)
     );
+
     for (let i = 0; i < sorted.length; i++) {
       for (let j = i + 1; j < sorted.length; j++) {
-        const gap = minutesBetweenReservations(
-          sorted[i].reservation,
-          sorted[j].reservation
-        );
-        // 같은 시각이거나 4시간 미만이면 경고 (운영 휴리스틱)
-        if (Number.isFinite(gap) && gap < 4 * 60) {
+        const a = sorted[i];
+        const b = sorted[j];
+        if (String(a.shift) === String(b.shift)) continue;
+
+        const gap = minutesBetweenReservations(a.reservation, b.reservation);
+        if (!Number.isFinite(gap)) continue;
+
+        const specialGap = requiredSpecialGapMinutes(a, b);
+        if (specialGap != null && gap < specialGap) {
+          warnings.push({
+            level: "error",
+            code: "SPECIAL_GAP_CONFLICT",
+            message: `캐디 ${a.caddy.name}: ${a.kind}/${b.kind} 최소 ${specialGap}분 간격 위반 (${a.reservation.teeTime}↔${b.reservation.teeTime}, ${gap}분)`,
+            caddyId,
+            reservationKey: reservationKey(a.reservation),
+          });
+          continue;
+        }
+
+        // 실제 수행 불가: 동일 시각 또는 2시간 미만 (정상 다회근무 티는 보통 충분)
+        if (gap < 2 * 60) {
           warnings.push({
             level: "error",
             code: "TIME_CONFLICT",
-            message: `캐디 ${sorted[i].caddy.name}: ${sorted[i].reservation.teeTime} ↔ ${sorted[j].reservation.teeTime} 간격 ${gap}분 (충돌 가능)`,
+            message: `캐디 ${a.caddy.name}: ${a.reservation.teeTime} ↔ ${b.reservation.teeTime} 간격 ${gap}분 (수행 불가)`,
             caddyId,
-            reservationKey: reservationKey(sorted[i].reservation),
+            reservationKey: reservationKey(a.reservation),
           });
         }
       }
@@ -212,6 +251,17 @@ export function detectDraftWarnings(draft: AssignmentDraft): DraftWarning[] {
   }
 
   return warnings;
+}
+
+function requiredSpecialGapMinutes(
+  a: AutoAssignmentRow,
+  b: AutoAssignmentRow
+): number | null {
+  const kinds = new Set([a.kind, b.kind]);
+  if (kinds.has("fiftyFourHole")) return MIN_54HOLE_GAP_MINUTES;
+  if (kinds.has("oneThree")) return MIN_ONE_THREE_GAP_MINUTES;
+  if (kinds.has("oneTwo")) return MIN_ONE_TWO_GAP_MINUTES;
+  return null;
 }
 
 function findAssignmentIndex(
@@ -292,12 +342,17 @@ export function replaceAssignmentCaddy(
     };
   }
 
-  const used = usedCaddyIds(draft);
-  if (used.has(newCaddyId) && row.caddy.id !== newCaddyId) {
+  const sameShiftDup = draft.assignments.some(
+    (a) =>
+      a.caddy.id === newCaddyId &&
+      String(a.shift) === String(row.shift) &&
+      reservationKey(a.reservation) !== resKey
+  );
+  if (sameShiftDup) {
     warnings.push({
       level: "error",
-      code: "DUPLICATE_CADDY",
-      message: `${newCaddy.name}은(는) 이미 다른 예약에 배치되어 있습니다.`,
+      code: "SAME_SHIFT_DUPLICATE",
+      message: `${newCaddy.name}은(는) 이미 같은 부 다른 예약에 배치되어 있습니다.`,
       caddyId: newCaddyId,
     });
   }
@@ -430,16 +485,19 @@ export function assignCaddyToUnassigned(
     };
   }
 
-  if (usedCaddyIds(draft).has(caddyId)) {
+  const reservation = draft.unassignedReservations[uidx].reservation;
+  const sameShiftDup = draft.assignments.some(
+    (a) =>
+      a.caddy.id === caddyId && String(a.shift) === String(reservation.shift)
+  );
+  if (sameShiftDup) {
     warnings.push({
       level: "error",
-      code: "DUPLICATE_CADDY",
-      message: `${caddy.name}은(는) 이미 배치되어 있습니다.`,
+      code: "SAME_SHIFT_DUPLICATE",
+      message: `${caddy.name}은(는) 이미 같은 부 다른 예약에 배치되어 있습니다.`,
       caddyId,
     });
   }
-
-  const reservation = draft.unassignedReservations[uidx].reservation;
   const newRow: AutoAssignmentRow = {
     date: draft.date,
     shift: reservation.shift as ShiftPart,

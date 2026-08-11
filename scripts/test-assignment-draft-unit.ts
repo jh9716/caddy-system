@@ -139,7 +139,7 @@ section("replace / swap / assign unassigned → EDITED");
   );
 }
 
-section("duplicate / time conflict warnings");
+section("same-shift duplicate / multi-shift ok");
 {
   const date = "2026-11-03";
   const available = pool(3);
@@ -153,13 +153,57 @@ section("duplicate / time conflict warnings");
   const sameId = draft.assignments[0].caddy.id;
   const dup = replaceAssignmentCaddy(draft, keyB, sameId);
   assert(
-    dup.warnings.some((w) => w.code === "DUPLICATE_CADDY"),
-    "duplicate warning"
+    dup.warnings.some((w) => w.code === "SAME_SHIFT_DUPLICATE"),
+    "same-shift duplicate warning"
   );
   const detected = detectDraftWarnings(dup.draft);
   assert(
-    detected.some((w) => w.code === "DUPLICATE_CADDY" || w.code === "TIME_CONFLICT"),
-    "detectDraftWarnings finds conflict"
+    detected.some((w) => w.code === "SAME_SHIFT_DUPLICATE"),
+    "detectDraftWarnings finds SAME_SHIFT_DUPLICATE"
+  );
+
+  // 정상 1부+2부 다회근무는 duplicate error 없음
+  const multiDate = "2026-11-13";
+  const multi = computeAutoAssignmentsV1({
+    date: multiDate,
+    available: pool(5),
+    reservations: [
+      {
+        id: "M1",
+        date: multiDate,
+        course: "LAKE",
+        shift: "1부",
+        teeTime: "07:00",
+        teamName: "a",
+        rawRowIndex: 1,
+      },
+      {
+        id: "M2",
+        date: multiDate,
+        course: "LAKE",
+        shift: "2부",
+        teeTime: "13:00",
+        teamName: "b",
+        rawRowIndex: 2,
+      },
+    ],
+  });
+  const multiDraft = createDraftFromAutoResult(multi, pool(5));
+  // 강제로 같은 캐디를 1·2부에 배치
+  const k2 = reservationKey(multiDraft.assignments[1].reservation);
+  const forced = replaceAssignmentCaddy(
+    multiDraft,
+    k2,
+    multiDraft.assignments[0].caddy.id
+  );
+  const multiWarns = detectDraftWarnings(forced.draft);
+  assert(
+    !multiWarns.some((w) => w.code === "SAME_SHIFT_DUPLICATE"),
+    "1+2 multi-duty is not SAME_SHIFT_DUPLICATE"
+  );
+  assert(
+    !multiWarns.some((w) => w.code === "DUPLICATE_CADDY"),
+    "no legacy DUPLICATE_CADDY for multi-shift"
   );
 }
 

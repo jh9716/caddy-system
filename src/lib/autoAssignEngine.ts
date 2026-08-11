@@ -2,8 +2,9 @@
  * 자동배치 엔진 (3~8단계)
  * - 순수 함수: DB write 없음
  * - 우선순위: 고정/특별찾근 → 54홀 → 1·3부 → 1·2부 → 일반 순번
- * - 일반 순번 포인터/wrap는 special 배치와 분리
- * - 8단계: 일반 예약 캔슬/추가 시 regular reflow (special 보호)
+ * - 일반: HOUSE 순번 + 부별 스페어1·2, 3부는 스페어→THIRD→남은 HOUSE
+ * - DRIVING은 일반 HOUSE/THIRD 순번에 섞지 않음
+ * - 8단계: 일반 예약 캔슬/추가 시 regular reflow (special 보호, 스페어·3부 재계산)
  */
 
 import { PRIMARY_TEAMS } from "@/lib/caddyManage";
@@ -158,6 +159,23 @@ export type SpecialUnassignedRow = {
   fixedType?: string | null;
 };
 
+/** 일반 순번 타입 풀 (HOUSE / THIRD / DRIVING 분리) */
+export type AssignCaddyType = "HOUSE" | "THIRD" | "DRIVING";
+
+/** 부별 스페어 (예약 배치 아님 — 대기, confirm 시 Schedule에 저장하지 않음) */
+export type SpareCaddyInfo = {
+  caddyId: number;
+  name: string;
+  team: string;
+  teamOrder: number;
+};
+
+export type SpareByShift = {
+  shift: ShiftPart;
+  spare1: SpareCaddyInfo | null;
+  spare2: SpareCaddyInfo | null;
+};
+
 export type AutoAssignResultV1 = {
   date: string;
   /** 전체 배치 (고정/찾근 + 54홀 + 1·3부 + 1·2부 + 일반) */
@@ -177,6 +195,8 @@ export type AutoAssignResultV1 = {
   specialUnassigned: SpecialUnassignedRow[];
   /** 이번 실행에 열린 코스 (기본 4개 전부) */
   openCourses: CourseCode[];
+  /** 부별 HOUSE 스페어1·2 (대기, 예약 row 아님) */
+  sparesByShift: SpareByShift[];
   meta: {
     availableCount: number;
     reservationCount: number;
@@ -196,6 +216,9 @@ export type AutoAssignResultV1 = {
     oneTwoCandidateCount: number;
     oneTwoAssignedCaddyCount: number;
     oneTwoUnassignedCount: number;
+    housePoolCount: number;
+    thirdPoolCount: number;
+    drivingPoolCount: number;
     byShift: Record<
       ShiftPart,
       { reservations: number; assigned: number; unassigned: number }
@@ -365,6 +388,55 @@ function dedupeCaddies(caddies: AutoAssignCaddy[]): AutoAssignCaddy[] {
     out.push(c);
   }
   return out;
+}
+
+/** caddyType 정규화 — 미지정은 HOUSE */
+export function normalizeAssignCaddyType(
+  input?: string | null
+): AssignCaddyType {
+  const v = String(input ?? "HOUSE").trim().toUpperCase();
+  if (v === "THIRD") return "THIRD";
+  if (v === "DRIVING") return "DRIVING";
+  return "HOUSE";
+}
+
+/** 일반 순번용 타입별 풀 분리 (정렬 포함). DRIVING은 3부 HOUSE 순번에 섞지 않음. */
+export function splitCaddyPools(caddies: AutoAssignCaddy[]): {
+  house: AutoAssignCaddy[];
+  third: AutoAssignCaddy[];
+  driving: AutoAssignCaddy[];
+} {
+  const house: AutoAssignCaddy[] = [];
+  const third: AutoAssignCaddy[] = [];
+  const driving: AutoAssignCaddy[] = [];
+  for (const c of dedupeCaddies(caddies || [])) {
+    const t = normalizeAssignCaddyType(c.caddyType);
+    if (t === "THIRD") third.push(c);
+    else if (t === "DRIVING") driving.push(c);
+    else house.push(c);
+  }
+  house.sort(compareCaddyOrder);
+  third.sort(compareCaddyOrder);
+  driving.sort(compareCaddyOrder);
+  return { house, third, driving };
+}
+
+function toSpareInfo(caddy: AutoAssignCaddy | null | undefined): SpareCaddyInfo | null {
+  if (!caddy) return null;
+  return {
+    caddyId: caddy.id,
+    name: caddy.name,
+    team: caddy.team,
+    teamOrder: caddy.teamOrder,
+  };
+}
+
+function emptySparesByShift(): SpareByShift[] {
+  return SHIFT_PARTS.map((shift) => ({
+    shift,
+    spare1: null,
+    spare2: null,
+  }));
 }
 
 function isAssignableReservation(
@@ -1154,12 +1226,20 @@ export function assignOneTwoPriority(input: {
 }
 
 /**
- * 일반 순번 배치 (포인터 wrap, shift 내 teeTime 순).
- * special 배치와 분리된 순수 루프 — reflow에서도 재사용.
+ * 일반 순번 배치
+ * - HOUSE 풀만 1·2부 순번/스페어에 사용 (special 제외된 풀을 넘길 것)
+ * - 스페어1·2 = 해당 부 배치 N명 다음 HOUSE 2명 (대기, 예약 아님)
+ * - 다음 부 HOUSE 시작 = 직전 부 스페어1 (= N)
+ * - 3부: 2부 스페어1 → 스페어2 → THIRD 전체 순번 → 남은 HOUSE
+ * - DRIVING은 일반 순번에 섞지 않음
+ * - HOUSE 소진 시 wrap (기존 동작 유지)
  */
 export function assignRegularSequence(input: {
   date: string;
-  available: AutoAssignCaddy[];
+  /** 혼합 가용(하위 호환). house/third가 있으면 무시됨 */
+  available?: AutoAssignCaddy[];
+  house?: AutoAssignCaddy[];
+  third?: AutoAssignCaddy[];
   reservations: AutoAssignReservation[];
   reasonCode?: string;
 }): {
@@ -1170,10 +1250,19 @@ export function assignRegularSequence(input: {
     ShiftPart,
     { reservations: number; assigned: number; unassigned: number }
   >;
+  sparesByShift: SpareByShift[];
 } {
-  const available = dedupeCaddies([...(input.available || [])]).sort(
-    compareCaddyOrder
-  );
+  const pools =
+    input.house != null
+      ? {
+          house: dedupeCaddies([...(input.house || [])]).sort(compareCaddyOrder),
+          third: dedupeCaddies([...(input.third || [])]).sort(compareCaddyOrder),
+          driving: [] as AutoAssignCaddy[],
+        }
+      : splitCaddyPools(input.available || []);
+
+  const house = pools.house;
+  const third = pools.third;
   const reservations = [...(input.reservations || [])].sort(
     compareReservationOrder
   );
@@ -1187,63 +1276,161 @@ export function assignRegularSequence(input: {
 
   const assignments: AutoAssignmentRow[] = [];
   const unassignedReservations: UnassignedReservationRow[] = [];
-  let pointer = 0;
+  /** 다음 부가 시작할 HOUSE 절대 인덱스 (스페어1 위치, wrap 없이 누적) */
+  let houseStart = 0;
+  const sparesByShift: SpareByShift[] = [];
 
   for (const shift of SHIFT_PARTS) {
     const shiftReservations = reservations.filter((r) => r.shift === shift);
     const usedInShift = new Set<number>();
+    let houseAssigned = 0;
 
-    for (const reservation of shiftReservations) {
-      if (available.length === 0) {
-        unassignedReservations.push({
+    if (shift === "3부") {
+      const order: Array<{ caddy: AutoAssignCaddy; sequenceIndex: number }> =
+        [];
+      const seen = new Set<number>();
+      const pushHouse = (idx: number) => {
+        if (idx < 0 || idx >= house.length) return;
+        const c = house[idx];
+        if (seen.has(c.id)) return;
+        seen.add(c.id);
+        order.push({ caddy: c, sequenceIndex: idx });
+      };
+      pushHouse(houseStart);
+      pushHouse(houseStart + 1);
+      for (let i = 0; i < third.length; i++) {
+        const c = third[i];
+        if (seen.has(c.id)) continue;
+        seen.add(c.id);
+        order.push({ caddy: c, sequenceIndex: 10_000 + i });
+      }
+      for (let i = houseStart + 2; i < house.length; i++) pushHouse(i);
+      for (let i = 0; i < house.length && i < houseStart + 2; i++) pushHouse(i);
+
+      let oi = 0;
+      for (const reservation of shiftReservations) {
+        if (order.length === 0) {
+          unassignedReservations.push({
+            reservation,
+            reason: "가용 캐디 없음",
+          });
+          byShift[shift].unassigned += 1;
+          continue;
+        }
+
+        let picked: { caddy: AutoAssignCaddy; sequenceIndex: number } | null =
+          null;
+        while (oi < order.length) {
+          const cand = order[oi++];
+          if (usedInShift.has(cand.caddy.id)) continue;
+          picked = cand;
+          break;
+        }
+
+        if (!picked) {
+          unassignedReservations.push({
+            reservation,
+            reason: `같은 부 중복 방지로 배치 불가(가용 HOUSE ${house.length}/THIRD ${third.length})`,
+          });
+          byShift[shift].unassigned += 1;
+          continue;
+        }
+
+        usedInShift.add(picked.caddy.id);
+        if (normalizeAssignCaddyType(picked.caddy.caddyType) === "HOUSE") {
+          houseAssigned += 1;
+        }
+        assignments.push({
+          date: input.date,
+          shift,
+          sequenceIndex: picked.sequenceIndex,
+          reason: `${reasonCode}(${shift}, seq=${picked.sequenceIndex})`,
           reservation,
-          reason: "가용 캐디 없음",
+          caddy: picked.caddy,
+          pairId: null,
+          kind: "regular",
         });
-        byShift[shift].unassigned += 1;
-        continue;
+        byShift[shift].assigned += 1;
       }
+    } else {
+      // 1·2부: HOUSE만, houseStart부터 wrap
+      let cursor =
+        house.length === 0 ? 0 : ((houseStart % house.length) + house.length) % house.length;
 
-      let picked: AutoAssignCaddy | null = null;
-      let pickedIndex = -1;
-      for (let attempt = 0; attempt < available.length; attempt++) {
-        const idx = (pointer + attempt) % available.length;
-        const caddy = available[idx];
-        if (usedInShift.has(caddy.id)) continue;
-        picked = caddy;
-        pickedIndex = idx;
-        pointer = (idx + 1) % available.length;
-        break;
-      }
+      for (const reservation of shiftReservations) {
+        if (house.length === 0) {
+          unassignedReservations.push({
+            reservation,
+            reason: "가용 캐디 없음",
+          });
+          byShift[shift].unassigned += 1;
+          continue;
+        }
 
-      if (!picked || pickedIndex < 0) {
-        unassignedReservations.push({
+        let picked: AutoAssignCaddy | null = null;
+        let pickedIndex = -1;
+        for (let attempt = 0; attempt < house.length; attempt++) {
+          const idx = (cursor + attempt) % house.length;
+          const caddy = house[idx];
+          if (usedInShift.has(caddy.id)) continue;
+          picked = caddy;
+          pickedIndex = idx;
+          cursor = (idx + 1) % house.length;
+          break;
+        }
+
+        if (!picked || pickedIndex < 0) {
+          unassignedReservations.push({
+            reservation,
+            reason: `같은 부 중복 방지로 배치 불가(가용 ${house.length}명)`,
+          });
+          byShift[shift].unassigned += 1;
+          continue;
+        }
+
+        usedInShift.add(picked.id);
+        houseAssigned += 1;
+        assignments.push({
+          date: input.date,
+          shift,
+          sequenceIndex: pickedIndex,
+          reason: `${reasonCode}(${shift}, seq=${pickedIndex})`,
           reservation,
-          reason: `같은 부 중복 방지로 배치 불가(가용 ${available.length}명)`,
+          caddy: picked,
+          pairId: null,
+          kind: "regular",
         });
-        byShift[shift].unassigned += 1;
-        continue;
+        byShift[shift].assigned += 1;
       }
-
-      usedInShift.add(picked.id);
-      assignments.push({
-        date: input.date,
-        shift,
-        sequenceIndex: pickedIndex,
-        reason: `${reasonCode}(${shift}, seq=${pickedIndex})`,
-        reservation,
-        caddy: picked,
-        pairId: null,
-        kind: "regular",
-      });
-      byShift[shift].assigned += 1;
     }
+
+    const spareBase = houseStart + houseAssigned;
+    sparesByShift.push({
+      shift,
+      spare1: toSpareInfo(
+        spareBase >= 0 && spareBase < house.length ? house[spareBase] : null
+      ),
+      spare2: toSpareInfo(
+        spareBase + 1 >= 0 && spareBase + 1 < house.length
+          ? house[spareBase + 1]
+          : null
+      ),
+    });
+    houseStart = spareBase;
   }
+
+  const finalPointer =
+    house.length === 0 ? 0 : ((houseStart % house.length) + house.length) % house.length;
 
   return {
     assignments,
     unassignedReservations,
-    finalPointer: available.length === 0 ? 0 : pointer,
+    finalPointer,
     byShift,
+    sparesByShift:
+      sparesByShift.length === SHIFT_PARTS.length
+        ? sparesByShift
+        : emptySparesByShift(),
   };
 }
 
@@ -1366,6 +1553,7 @@ export function computeAutoAssignmentsV1(input: {
   const available = dedupeCaddies([...(input.available || [])])
     .filter((c) => !specialExclude.has(c.id))
     .sort(compareCaddyOrder);
+  const pools = splitCaddyPools(available);
 
   // 1) 54홀
   const fiftyFour = assignFiftyFourHolePriority({
@@ -1405,10 +1593,11 @@ export function computeAutoAssignmentsV1(input: {
     compareReservationOrder
   );
 
-  // 4) 일반 순번 (포인터는 여기서만 전진)
+  // 4) 일반 순번 — HOUSE 스페어 + 3부 THIRD (DRIVING 비혼합)
   const regular = assignRegularSequence({
     date,
-    available,
+    house: pools.house,
+    third: pools.third,
     reservations: remainingEligible,
     reasonCode: REASON.REGULAR_SEQUENCE,
   });
@@ -1470,6 +1659,7 @@ export function computeAutoAssignmentsV1(input: {
     special,
     specialUnassigned,
     openCourses,
+    sparesByShift: regular.sparesByShift,
     meta: {
       availableCount: available.length,
       reservationCount: eligible.length,
@@ -1489,6 +1679,9 @@ export function computeAutoAssignmentsV1(input: {
       oneTwoCandidateCount: oneTwoCandidates.length,
       oneTwoAssignedCaddyCount,
       oneTwoUnassignedCount: oneTwo.specialUnassigned.length,
+      housePoolCount: pools.house.length,
+      thirdPoolCount: pools.third.length,
+      drivingPoolCount: pools.driving.length,
       byShift,
       finalPointer: regular.finalPointer,
     },
@@ -1628,6 +1821,7 @@ export function reflowRegularAssignments(input: {
   const pool = dedupeCaddies([...(input.regularCaddyPool || [])])
     .filter((c) => !lockedCaddies.has(c.id))
     .sort(compareCaddyOrder);
+  const pools = splitCaddyPools(pool);
 
   const reasonCode =
     cancelCount > 0 && addCount > 0
@@ -1638,7 +1832,8 @@ export function reflowRegularAssignments(input: {
 
   const regular = assignRegularSequence({
     date,
-    available: pool,
+    house: pools.house,
+    third: pools.third,
     reservations: regularReservations,
     reasonCode,
   });
@@ -1668,6 +1863,7 @@ export function reflowRegularAssignments(input: {
     closedCourseReservations: previous.closedCourseReservations || [],
     openCourses: previous.openCourses || [...COURSE_ORDER],
     unusedCaddies,
+    sparesByShift: regular.sparesByShift,
     meta: {
       ...previous.meta,
       availableCount: pool.length,
@@ -1677,6 +1873,9 @@ export function reflowRegularAssignments(input: {
       unassignedCount: regular.unassignedReservations.length,
       closedCourseCount: (previous.closedCourseReservations || []).length,
       unusedCount: unusedCaddies.length,
+      housePoolCount: pools.house.length,
+      thirdPoolCount: pools.third.length,
+      drivingPoolCount: pools.driving.length,
       byShift,
       finalPointer: regular.finalPointer,
     },

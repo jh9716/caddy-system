@@ -18,6 +18,7 @@ import {
   normalizeOpenCourses,
   reasonForFixedType,
   reflowRegularAssignments,
+  reservationKey,
   REASON,
   type AutoAssignCaddy,
   type AutoAssignReservation,
@@ -2437,6 +2438,262 @@ section("닫힌 코스에 special/고정 배치 금지");
     result.assignments.some((a) => a.reservation.id === "open-reg"),
     "open course still assigned"
   );
+}
+
+section("HOUSE 스페어: 100명 / 1부40 → spare 41,42 / 2부 시작 41");
+{
+  const date = "2026-10-10";
+  const available = makeCaddies(100).map((c) => ({ ...c, caddyType: "HOUSE" }));
+  const ordered = [...available].sort(compareCaddyOrder);
+  const result = computeAutoAssignmentsV1({
+    date,
+    available,
+    reservations: makeReservations(date, [
+      { shift: "1부", count: 40 },
+      { shift: "2부", count: 5 },
+    ]),
+  });
+  const s1 = result.sparesByShift.find((s) => s.shift === "1부")!;
+  assert(s1.spare1?.caddyId === ordered[40].id, "spare1 = 41st HOUSE");
+  assert(s1.spare2?.caddyId === ordered[41].id, "spare2 = 42nd HOUSE");
+  const shift2 = result.assignments.filter((a) => a.shift === "2부");
+  assert(shift2[0].caddy.id === ordered[40].id, "2부 first = spare1 (41)");
+  assert(shift2[1].caddy.id === ordered[41].id, "2부 second overlaps spare2");
+}
+
+section("스페어 이동: 1부 팀수 39/40/41");
+{
+  const date = "2026-10-11";
+  const available = makeCaddies(100).map((c) => ({ ...c, caddyType: "HOUSE" }));
+  const ordered = [...available].sort(compareCaddyOrder);
+  for (const n of [39, 40, 41] as const) {
+    const result = computeAutoAssignmentsV1({
+      date,
+      available,
+      reservations: makeReservations(date, [{ shift: "1부", count: n }]),
+    });
+    const s1 = result.sparesByShift.find((s) => s.shift === "1부")!;
+    assert(
+      s1.spare1?.caddyId === ordered[n].id,
+      `1부 ${n}팀 spare1 = index ${n}`
+    );
+    assert(
+      s1.spare2?.caddyId === ordered[n + 1].id,
+      `1부 ${n}팀 spare2 = index ${n + 1}`
+    );
+  }
+}
+
+section("3부: HOUSE80 사용 후 spare→THIRD→남은 HOUSE");
+{
+  const date = "2026-10-12";
+  const house = makeCaddies(100).map((c) => ({ ...c, caddyType: "HOUSE" }));
+  const third = [
+    { id: 501, name: "T1", team: "1조", teamOrder: 1, caddyType: "THIRD" },
+    { id: 502, name: "T2", team: "1조", teamOrder: 2, caddyType: "THIRD" },
+    { id: 503, name: "T3", team: "2조", teamOrder: 1, caddyType: "THIRD" },
+  ];
+  const orderedHouse = [...house].sort(compareCaddyOrder);
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: [...house, ...third],
+    reservations: makeReservations(date, [
+      { shift: "1부", count: 40 },
+      { shift: "2부", count: 40 },
+      { shift: "3부", count: 8 },
+    ]),
+  });
+  const s3 = result.assignments.filter((a) => a.shift === "3부");
+  assert(s3[0].caddy.id === orderedHouse[80].id, "3부1 = HOUSE81 (2부 spare1)");
+  assert(s3[1].caddy.id === orderedHouse[81].id, "3부2 = HOUSE82 (2부 spare2)");
+  assert(s3[2].caddy.id === 501, "3부3 = THIRD first");
+  assert(s3[3].caddy.id === 502, "3부4 = THIRD second");
+  assert(s3[4].caddy.id === 503, "3부5 = THIRD third");
+  assert(s3[5].caddy.id === orderedHouse[82].id, "3부6 = HOUSE83");
+  assert(s3[6].caddy.id === orderedHouse[83].id, "3부7 = HOUSE84");
+  assert(result.meta.thirdPoolCount === 3, "third pool count");
+  assert(result.meta.housePoolCount === 100, "house pool count");
+}
+
+section("3부 THIRD 0명");
+{
+  const date = "2026-10-13";
+  const house = makeCaddies(20).map((c) => ({ ...c, caddyType: "HOUSE" }));
+  const ordered = [...house].sort(compareCaddyOrder);
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: house,
+    reservations: makeReservations(date, [
+      { shift: "1부", count: 4 },
+      { shift: "2부", count: 4 },
+      { shift: "3부", count: 4 },
+    ]),
+  });
+  const s3 = result.assignments.filter((a) => a.shift === "3부");
+  assert(s3[0].caddy.id === ordered[8].id, "no THIRD: starts at spare1");
+  assert(s3[1].caddy.id === ordered[9].id, "then spare2");
+  assert(s3[2].caddy.id === ordered[10].id, "then remaining HOUSE");
+  assert(result.meta.thirdPoolCount === 0, "third 0");
+}
+
+section("special 캐디는 spare/HOUSE 순번에서 제외");
+{
+  const date = "2026-10-14";
+  const available = makeCaddies(10).map((c) => ({ ...c, caddyType: "HOUSE" }));
+  const ordered = [...available].sort(compareCaddyOrder);
+  const fiftyFourHole = [ordered[0]];
+  const result = computeAutoAssignmentsV1({
+    date,
+    available,
+    fiftyFourHole,
+    reservations: [
+      ...makeReservations(date, [{ shift: "1부", count: 3, teeStart: "06:00" }]),
+      {
+        date,
+        course: "SKY",
+        shift: "1부",
+        teeTime: "06:00",
+        teamName: "54a",
+        rawRowIndex: 90,
+      },
+      {
+        date,
+        course: "SKY",
+        shift: "2부",
+        teeTime: "13:00",
+        teamName: "54b",
+        rawRowIndex: 91,
+      },
+    ],
+  });
+  const s1 = result.sparesByShift.find((s) => s.shift === "1부")!;
+  const regularIds = new Set(
+    result.regularAssignments.map((a) => a.caddy.id)
+  );
+  assert(!regularIds.has(ordered[0].id), "special not in regular");
+  assert(
+    s1.spare1 && s1.spare1.caddyId !== ordered[0].id,
+    "spare excludes special"
+  );
+  assert(
+    result.regularAssignments.every((a) => a.caddy.id !== ordered[0].id),
+    "HOUSE pool excluded special"
+  );
+}
+
+section("닫힌 코스는 팀수/spare 계산 제외");
+{
+  const date = "2026-10-15";
+  const available = makeCaddies(50).map((c) => ({ ...c, caddyType: "HOUSE" }));
+  const ordered = [...available].sort(compareCaddyOrder);
+  const result = computeAutoAssignmentsV1({
+    date,
+    available,
+    openCourses: ["VERTHILL"],
+    reservations: [
+      ...makeReservations(date, [{ shift: "1부", count: 5 }]),
+      {
+        date,
+        course: "OCEAN",
+        shift: "1부",
+        teeTime: "07:00",
+        teamName: "닫힘1",
+        rawRowIndex: 200,
+      },
+      {
+        date,
+        course: "OCEAN",
+        shift: "1부",
+        teeTime: "07:08",
+        teamName: "닫힘2",
+        rawRowIndex: 201,
+      },
+    ],
+  });
+  assert(result.meta.byShift["1부"].assigned === 5, "only open teams count");
+  assert(result.closedCourseReservations.length === 2, "2 closed excluded");
+  const s1 = result.sparesByShift.find((s) => s.shift === "1부")!;
+  assert(s1.spare1?.caddyId === ordered[5].id, "spare after 5 open teams");
+  assert(s1.spare2?.caddyId === ordered[6].id, "spare2 after open only");
+}
+
+section("DRIVING은 3부 HOUSE 순번에 섞지 않음");
+{
+  const date = "2026-10-16";
+  const house = makeCaddies(6).map((c) => ({ ...c, caddyType: "HOUSE" }));
+  const driving = [
+    { id: 900, name: "드라이브", team: "1조", teamOrder: 1, caddyType: "DRIVING" },
+  ];
+  const ordered = [...house].sort(compareCaddyOrder);
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: [...house, ...driving],
+    reservations: makeReservations(date, [
+      { shift: "1부", count: 2 },
+      { shift: "2부", count: 2 },
+      { shift: "3부", count: 3 },
+    ]),
+  });
+  assert(
+    !result.assignments.some((a) => a.caddy.id === 900),
+    "DRIVING not auto-assigned in regular"
+  );
+  const s3 = result.assignments.filter((a) => a.shift === "3부");
+  assert(s3.every((a) => a.caddy.id !== 900), "3부 no DRIVING");
+  assert(s3[0].caddy.id === ordered[4].id, "3부 uses HOUSE spare");
+  assert(result.meta.drivingPoolCount === 1, "driving pool tracked");
+}
+
+section("reflow 후 spare/3부 순서 재계산");
+{
+  const date = "2026-10-17";
+  const house = makeCaddies(30).map((c) => ({ ...c, caddyType: "HOUSE" }));
+  const third = [
+    { id: 701, name: "TH1", team: "3조", teamOrder: 1, caddyType: "THIRD" },
+  ];
+  const ordered = [...house].sort(compareCaddyOrder);
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: [...house, ...third],
+    reservations: makeReservations(date, [
+      { shift: "1부", count: 5 },
+      { shift: "2부", count: 5 },
+      { shift: "3부", count: 4 },
+    ]),
+  });
+  assert(
+    previous.sparesByShift.find((s) => s.shift === "1부")!.spare1?.caddyId ===
+      ordered[5].id,
+    "before: 1부 spare1 = 6th"
+  );
+  const first1 = previous.regularAssignments.find((a) => a.shift === "1부")!;
+  const reflow2 = reflowRegularAssignments({
+    previous,
+    regularCaddyPool: [...house, ...third],
+    events: [
+      {
+        type: "CANCEL_RESERVATION",
+        reservationKey: reservationKey(first1.reservation),
+      },
+    ],
+  });
+  assert(reflow2.after.meta.byShift["1부"].assigned === 4, "1부 4 after cancel");
+  const spareAfter = reflow2.after.sparesByShift.find((s) => s.shift === "1부")!;
+  assert(
+    spareAfter.spare1?.caddyId === ordered[4].id,
+    "reflow spare1 moves to index 4"
+  );
+  assert(
+    spareAfter.spare2?.caddyId === ordered[5].id,
+    "reflow spare2 moves to index 5"
+  );
+  const s2first = reflow2.after.regularAssignments.find((a) => a.shift === "2부")!;
+  assert(s2first.caddy.id === ordered[4].id, "2부 starts at new spare1");
+  const s3 = reflow2.after.regularAssignments.filter((a) => a.shift === "3부");
+  // 1부4 + 2부5 → houseStart 9 for 3부; spare1/2 = 9,10 then THIRD
+  assert(s3[0].caddy.id === ordered[9].id, "3부 recalc spare1");
+  assert(s3[1].caddy.id === ordered[10].id, "3부 recalc spare2");
+  assert(s3[2].caddy.id === 701, "3부 THIRD after spares");
 }
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);
