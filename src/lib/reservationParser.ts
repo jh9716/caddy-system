@@ -17,12 +17,16 @@ export const COURSE_LABELS: Record<CourseCode, string> = {
 export const SHIFT_PARTS = ["1부", "2부", "3부"] as const;
 export type ShiftPart = (typeof SHIFT_PARTS)[number];
 
+/** 부 미검출 시 reviewReasons에 넣는 고정 코드 */
+export const SHIFT_NOT_DETECTED = "SHIFT_NOT_DETECTED";
+
 export type ParsedReservation = {
   date: string;
   /** 코스 판별 실패 시 null — VERTHILL 강제 fallback 없음 */
   course: CourseCode | null;
   courseLabel: string;
-  shift: ShiftPart;
+  /** 명시적 부 구간/컬럼으로만 확정. 미검출 시 null (1부 fallback 없음) */
+  shift: ShiftPart | null;
   teeTime: string;
   teamName: string | null;
   hole: number | null;
@@ -161,17 +165,44 @@ export function normalizeCourse(raw: string | null | undefined): CourseCode | nu
   return null;
 }
 
-export function normalizeShift(raw: string | null | undefined): ShiftPart | null {
-  if (!raw) return null;
-  const c = compact(String(raw));
+/**
+ * 섹션 헤더·행 전체 검색용: 문자열에 "1부"/"2부"/"3부"가 명시된 경우만.
+ * bare "1"|"2"|"3", 출발홀·인원수 숫자는 절대 인정하지 않음.
+ */
+export function detectExplicitShiftLabel(
+  raw: string | null | undefined
+): ShiftPart | null {
+  if (raw == null) return null;
+  const text = String(raw).replace(/\s+/g, " ").trim();
+  if (!text) return null;
+  const c = compact(text);
   if (!c) return null;
-  if (/(^|[^0-9])1부/.test(c) || c === "1" || c === "one" || c === "part1") return "1부";
-  if (/(^|[^0-9])2부/.test(c) || c === "2" || c === "two" || c === "part2") return "2부";
-  if (/(^|[^0-9])3부/.test(c) || c === "3" || c === "three" || c === "part3") return "3부";
-  if (c.includes("1부")) return "1부";
-  if (c.includes("2부")) return "2부";
-  if (c.includes("3부")) return "3부";
+  // 순수 숫자(출발홀 1, 인원 2 등) 금지
+  if (/^\d+$/.test(c)) return null;
+  // 3 → 2 → 1 순으로 매칭 (겹침 방지)
+  if (/(^|[^0-9])3부/.test(c)) return "3부";
+  if (/(^|[^0-9])2부/.test(c)) return "2부";
+  if (/(^|[^0-9])1부/.test(c)) return "1부";
   return null;
+}
+
+/**
+ * 전용 부(shift) 컬럼 값 정규화.
+ * 섹션 헤더와 동일하게 "부"가 포함된 명시 표기만 허용 (bare 1/2/3 금지).
+ */
+export function normalizeShiftColumn(
+  raw: string | null | undefined
+): ShiftPart | null {
+  return detectExplicitShiftLabel(raw);
+}
+
+/**
+ * @deprecated bare "1"/"2"/"3" 허용하던 구버전.
+ * 신규 코드는 detectExplicitShiftLabel / normalizeShiftColumn 사용.
+ * 호환: 명시적 "N부"만 반환 (bare digit 제거).
+ */
+export function normalizeShift(raw: string | null | undefined): ShiftPart | null {
+  return detectExplicitShiftLabel(raw);
 }
 
 /** Excel serial date → YYYY-MM-DD (local-ish, UTC-based serial) */
@@ -302,9 +333,9 @@ export function parseTeeTime(value: unknown): string | null {
 }
 
 /**
- * @deprecated 파싱 경로에서 사용하지 않음.
- * 현장 2부는 11시대부터 시작할 수 있어 teeTime→부 추정은 구조적으로 부정확함.
- * 테스트/디버그용으로만 유지.
+ * @deprecated 파싱 경로에서 사용 금지.
+ * 현장 2부는 11시대부터, 3부는 17~18시대가 있어 teeTime→부 추정은 구조적으로 틀림.
+ * 디버그/구 테스트 호환용으로만 유지.
  */
 export function inferShiftFromTeeTime(teeTime: string): ShiftPart {
   const [hStr, mStr] = teeTime.split(":");
@@ -595,12 +626,55 @@ function buildRawData(
   return raw;
 }
 
+/**
+ * 행의 어느 셀이든 명시적 "1부"/"2부"/"3부" 문자열만 섹션 라벨로 인정.
+ * bare 1/2/3·출발홀 숫자는 무시. 병합셀 top-left만 값이 있어도 행 전체 스캔.
+ */
+export function detectShiftSectionLabel(
+  values: unknown[],
+  startCol: number,
+  endCol: number
+): ShiftPart | null {
+  if (!values?.length) return null;
+  const lo = Math.max(0, startCol);
+  const hi = Math.min(endCol, values.length - 1);
+  let found: ShiftPart | null = null;
+  for (let c = lo; c <= hi; c++) {
+    const hit = detectExplicitShiftLabel(cellText(values[c]));
+    if (hit) found = hit; // 같은 행에 여러 라벨이면 마지막 것
+  }
+  return found;
+}
+
+/** 행 전체에서 명시적 부 섹션 라벨 검색 (A열 병합 배너 포함) */
+export function detectRowShiftSectionLabel(values: unknown[]): ShiftPart | null {
+  if (!values?.length) return null;
+  return detectShiftSectionLabel(values, 0, values.length - 1);
+}
+
+/**
+ * 시트 전체 pre-pass: 행 인덱스 → 공통 shift.
+ * 명시적 1부/2부/3부 라벨을 만나면 전환하고, 다음 라벨까지 유지.
+ * 코스 블록 빈칸·출발홀·캐디명·teeTime은 state에 영향 없음.
+ */
+export function buildRowShiftMap(matrix: unknown[][]): Array<ShiftPart | null> {
+  const map: Array<ShiftPart | null> = new Array(matrix.length).fill(null);
+  let current: ShiftPart | null = null;
+  for (let r = 0; r < matrix.length; r++) {
+    const label = detectRowShiftSectionLabel(matrix[r] || []);
+    if (label) current = label;
+    map[r] = current;
+  }
+  return map;
+}
+
 export function parseReservationMatrix(
   matrix: unknown[][],
   options: {
     sourceSheet: string;
     defaultDate?: string | null;
     defaultCourse?: CourseCode | null;
+    /** @deprecated 시트 공통 rowShiftMap만 사용. 무시됨(잘못된 1부 fallback 방지). */
     defaultShift?: ShiftPart | null;
   }
 ): ParsedReservation[] {
@@ -611,7 +685,8 @@ export function parseReservationMatrix(
   const sheetCtx = inferContextFromSheetName(options.sourceSheet);
   const fallbackDate = options.defaultDate || sheetCtx.date;
   const sheetCourse = options.defaultCourse || sheetCtx.course;
-  const fallbackShift = options.defaultShift || sheetCtx.shift;
+  // 시트 공통 부 구간 (4코스 블록이 같은 행의 shift를 공유)
+  const rowShiftMap = buildRowShiftMap(matrix);
 
   const out: ParsedReservation[] = [];
   for (const block of blocks) {
@@ -620,60 +695,12 @@ export function parseReservationMatrix(
         sourceSheet: options.sourceSheet,
         fallbackDate,
         sheetCourse,
-        fallbackShift,
+        rowShiftMap,
       })
     );
   }
   return out;
 }
-
-/**
- * 시트 본문의 "1부"/"2부"/"3부" 구간 제목 셀 감지 (티타임 추정과 무관).
- * - 순수 라벨: 1부/2부/3부, 제2부, ◆2부, [2부] 등
- * - 팀명·일반 문장에 섞인 경우는 길이·형태 mid로 제한
- */
-export function detectShiftSectionLabel(
-  values: unknown[],
-  startCol: number,
-  endCol: number
-): ShiftPart | null {
-  const lo = Math.max(0, startCol);
-  const hi = Math.min(endCol, (values?.length ?? 1) - 1);
-  for (let c = lo; c <= hi; c++) {
-    const t = cellText(values[c]);
-    if (!t) continue;
-    const shift = normalizeShift(t);
-    if (!shift) continue;
-    const compactLabel = compact(t).replace(/^제/, "");
-    if (
-      compactLabel === "1부" ||
-      compactLabel === "2부" ||
-      compactLabel === "3부" ||
-      compactLabel === "1" ||
-      compactLabel === "2" ||
-      compactLabel === "3"
-    ) {
-      return shift;
-    }
-    // ◆2부 / [2부] / 2부타임 등 짧은 라벨
-    if (
-      compactLabel.length <= 10 &&
-      /(^|[^0-9])[123]부/.test(compactLabel) &&
-      !normalizeCourse(t)
-    ) {
-      return shift;
-    }
-  }
-  return null;
-}
-
-/** 병합 셀이 A열에만 값이 있는 행 전체 구간 헤더 */
-export function detectRowShiftSectionLabel(values: unknown[]): ShiftPart | null {
-  if (!values?.length) return null;
-  return detectShiftSectionLabel(values, 0, values.length - 1);
-}
-
-const REGION_SHIFTS: readonly ShiftPart[] = ["1부", "2부", "3부"];
 
 function parseCourseBlock(
   matrix: unknown[][],
@@ -683,28 +710,21 @@ function parseCourseBlock(
     sourceSheet: string;
     fallbackDate: string | null;
     sheetCourse: CourseCode | null;
-    fallbackShift: ShiftPart | null;
+    rowShiftMap: Array<ShiftPart | null>;
   }
 ): ParsedReservation[] {
   const { headerRow, columns, startCol, endCol } = block;
   const headerLabels = stringMatrix[headerRow] || [];
   const blockCourse = block.defaultCourse || ctx.sheetCourse;
   const out: ParsedReservation[] = [];
-  /**
-   * 코스 블록 독립 부 구간 상태 (teeTime 추정 사용 안 함)
-   * - 명시 라벨: 블록 내 또는 행 전체(병합 셀 A열) "1부"/"2부"/"3부"
-   * - 라벨 없이 공백 행으로 영역이 나뉘면 등장 순서대로 1부→2부→3부
-   */
-  let sectionShift: ShiftPart | null = null;
-  let regionIndex = -1;
-  let seenDataInRegion = false;
-  let pendingRegionBreak = false;
 
   for (let r = headerRow + 1; r < matrix.length; r++) {
     const values = matrix[r] || [];
-    const blockBlank = isBlankBlockRange(values, startCol, endCol);
 
-    // 블록 범위 안 반복 헤더 행 스킵 (부 구간 상태는 유지)
+    // 이 코스 블록이 비어 있으면 skip (다른 코스 때문에 shift를 바꾸지 않음)
+    if (isBlankBlockRange(values, startCol, endCol)) continue;
+
+    // 블록 범위 안 반복 헤더 행 스킵
     let headerHits = 0;
     for (let c = startCol; c <= endCol; c++) {
       if (matchHeaderKind(cellText(values[c]))) headerHits += 1;
@@ -714,89 +734,44 @@ function parseCourseBlock(
     const teamRaw =
       columns.teamName != null ? cellText(values[columns.teamName]) : "";
     const teamName = teamRaw || null;
+    // 예약자/팀명 없는 행은 예약으로 세지 않음 (섹션 라벨·공석 티)
+    if (!teamName) continue;
 
-    // 블록 로컬 라벨 우선, 없으면 행 전체(가로 병합 "2부"가 A열에만 있는 경우)
-    const sectionLabel =
-      detectShiftSectionLabel(values, startCol, endCol) ||
-      (!teamName ? detectRowShiftSectionLabel(values) : null);
-
-    if (blockBlank) {
-      if (seenDataInRegion) {
-        pendingRegionBreak = true;
-        seenDataInRegion = false;
-      }
-      if (sectionLabel) {
-        sectionShift = sectionLabel;
-        regionIndex = REGION_SHIFTS.indexOf(sectionLabel);
-        pendingRegionBreak = false;
-      }
+    const courseRaw =
+      columns.course != null ? cellText(values[columns.course]) : "";
+    // 코스 셀이 부 라벨만인 행은 예약이 아님
+    if (
+      courseRaw &&
+      detectExplicitShiftLabel(courseRaw) &&
+      !normalizeCourse(courseRaw)
+    ) {
       continue;
     }
-
-    // 예약자 없는 행: 부 구간 제목이면 블록 section 갱신 후 스킵
-    if (!teamName) {
-      if (sectionLabel) {
-        sectionShift = sectionLabel;
-        regionIndex = REGION_SHIFTS.indexOf(sectionLabel);
-        pendingRegionBreak = false;
-        seenDataInRegion = false;
-      } else if (seenDataInRegion) {
-        // 공석 티(시간만 있고 예약자 없음)는 영역 유지, 완전 빈 행이 아닐 수 있음
-        const teeOnly =
-          columns.teeTime != null &&
-          !!parseTeeTime(values[columns.teeTime]);
-        if (!teeOnly) {
-          pendingRegionBreak = true;
-          seenDataInRegion = false;
-        }
-      }
-      continue;
-    }
-
-    const rawData = buildRawData(headerLabels, values, columns);
-    const reviewReasons: string[] = [];
 
     const teeRaw =
       columns.teeTime != null ? values[columns.teeTime] : undefined;
     const teeTime = parseTeeTime(teeRaw);
-    if (!teeTime) {
-      reviewReasons.push("잘못된 시간 형식");
-    }
-
     const dateRaw = columns.date != null ? values[columns.date] : undefined;
     const date = parseDateValue(dateRaw) || ctx.fallbackDate || null;
+
+    // 시간·코스·날짜 단서가 전혀 없으면 스킵
+    if (!teeTime && !courseRaw && !dateRaw) continue;
+
+    const rawData = buildRawData(headerLabels, values, columns);
+    const reviewReasons: string[] = [];
+
+    if (!teeTime) reviewReasons.push("잘못된 시간 형식");
     if (!date) reviewReasons.push("날짜 없음");
 
-    const courseRaw =
-      columns.course != null ? cellText(values[columns.course]) : "";
-    // 코스명이 부 라벨이면 구간 갱신으로 보고 코스는 블록 기본값 사용
-    if (courseRaw && normalizeShift(courseRaw) && !normalizeCourse(courseRaw)) {
-      const labeled = normalizeShift(courseRaw)!;
-      sectionShift = labeled;
-      regionIndex = REGION_SHIFTS.indexOf(labeled);
-      pendingRegionBreak = false;
-    }
     const course = normalizeCourse(courseRaw) || blockCourse;
     if (!course) reviewReasons.push("코스 판별 실패");
 
-    // 공백으로 나뉜 새 영역 + 명시 라벨 없음 → 등장 순서로 1부·2부·3부
-    if (pendingRegionBreak || (regionIndex < 0 && !sectionShift && !ctx.fallbackShift)) {
-      if (pendingRegionBreak || regionIndex < 0) {
-        regionIndex += 1;
-        if (regionIndex >= 0 && regionIndex < REGION_SHIFTS.length) {
-          sectionShift = REGION_SHIFTS[regionIndex];
-        }
-        pendingRegionBreak = false;
-      }
-    }
-
     const shiftRaw =
       columns.shift != null ? cellText(values[columns.shift]) : "";
-    // 우선순위: 행 부 컬럼 → 블록 구간 상태 → 시트/default
-    // ⚠ teeTime으로 부를 추정하지 않음 (현장 2부는 11시대부터 시작 가능)
-    let shift =
-      normalizeShift(shiftRaw) || sectionShift || ctx.fallbackShift || null;
-    if (!shift) reviewReasons.push("부 판별 실패");
+    // 전용 부 컬럼(명시 N부) → 시트 공통 rowShiftMap. teeTime/빈행/1부 fallback 없음.
+    const shift: ShiftPart | null =
+      normalizeShiftColumn(shiftRaw) || ctx.rowShiftMap[r] || null;
+    if (!shift) reviewReasons.push(SHIFT_NOT_DETECTED);
 
     const hole =
       columns.hole != null ? parseHoleValue(values[columns.hole]) : null;
@@ -805,16 +780,11 @@ function parseCourseBlock(
         ? parseHoleValue(values[columns.startingHole])
         : null;
 
-    if (!teeTime && !courseRaw && !dateRaw) continue;
-
-    seenDataInRegion = true;
-
     out.push({
       date: date || "",
       course,
       courseLabel: course ? COURSE_LABELS[course] : "미상",
-      // 부 미확정이면 needsReview로 집계 제외 (잘못된 1부 기본값 금지)
-      shift: shift || "1부",
+      shift,
       teeTime: teeTime || cellText(teeRaw),
       teamName,
       hole,
@@ -872,14 +842,22 @@ export function buildReservationSummary(
   sheetCount: number
 ): ReservationParseSummary {
   const valid = rows.filter(
-    (r) => !r.needsReview && r.date && r.teeTime && r.course && r.teamName
+    (r) =>
+      !r.needsReview &&
+      r.date &&
+      r.teeTime &&
+      r.course &&
+      r.teamName &&
+      r.shift
   );
   const dates = [...new Set(valid.map((r) => r.date))].sort();
 
   const byDate = dates.map((date) => {
     const dayRows = valid.filter((r) => r.date === date);
     const byShift = emptyShiftCounts();
-    for (const r of dayRows) byShift[r.shift] += 1;
+    for (const r of dayRows) {
+      if (r.shift) byShift[r.shift] += 1;
+    }
 
     const courses = COURSE_CODES.filter((c) =>
       dayRows.some((r) => r.course === c)
@@ -887,7 +865,9 @@ export function buildReservationSummary(
     const byCourse = courses.map((course) => {
       const courseRows = dayRows.filter((r) => r.course === course);
       const shiftCounts = emptyShiftCounts();
-      for (const r of courseRows) shiftCounts[r.shift] += 1;
+      for (const r of courseRows) {
+        if (r.shift) shiftCounts[r.shift] += 1;
+      }
       return {
         course,
         courseLabel: COURSE_LABELS[course],
@@ -934,7 +914,9 @@ export function finalizeReservationParse(
     const ra = a.course != null ? courseRank[a.course] : 999;
     const rb = b.course != null ? courseRank[b.course] : 999;
     if (ra !== rb) return ra - rb;
-    if (a.shift !== b.shift) return shiftRank[a.shift] - shiftRank[b.shift];
+    const sa = a.shift != null ? shiftRank[a.shift] : 999;
+    const sb = b.shift != null ? shiftRank[b.shift] : 999;
+    if (sa !== sb) return sa - sb;
     if (a.teeTime !== b.teeTime) return a.teeTime.localeCompare(b.teeTime);
     if (a.sourceSheet !== b.sourceSheet) {
       return a.sourceSheet.localeCompare(b.sourceSheet);
