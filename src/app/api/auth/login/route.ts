@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import bcrypt from 'bcryptjs';
 import {
   applySessionCookies,
   normalizeAppRole,
   type AppRole,
 } from '@/lib/sessionCookies';
+import { verifyUserPassword } from '@/lib/userPassword';
 
 export async function POST(req: NextRequest) {
   const { username, password } = await req.json();
@@ -26,7 +26,8 @@ export async function POST(req: NextRequest) {
     if (!user) {
       return NextResponse.json({ ok:false, message:'존재하지 않거나 권한이 없습니다.' }, { status: 401 });
     }
-    const ok = await bcrypt.compare(password, user.password);
+    // password null(OAuth 전용) → bcrypt 미호출, 401
+    const ok = await verifyUserPassword(password, user.password);
     if (!ok) {
       return NextResponse.json({ ok:false, message:'비밀번호가 올바르지 않습니다.' }, { status: 401 });
     }
