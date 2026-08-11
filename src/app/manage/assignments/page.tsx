@@ -17,6 +17,7 @@ import {
   type DraftWarning,
 } from "@/lib/assignmentDraft";
 import { draftToConfirmBody } from "@/lib/assignmentConfirm";
+import { buildShiftBoard } from "@/lib/assignmentBoardView";
 import {
   resolveCourseCode,
   type AutoAssignCaddy,
@@ -50,16 +51,6 @@ const COURSE_SHORT: Record<CourseCode, string> = {
 type CourseOpenState = Record<CourseCode, boolean>;
 type ResultViewMode = "board" | "list";
 
-type BoardCell =
-  | { kind: "closed" }
-  | { kind: "empty" }
-  | { kind: "assigned"; rows: AutoAssignmentRow[] };
-
-type BoardTimeRow = {
-  teeTime: string;
-  cells: Record<CourseCode, BoardCell>;
-};
-
 function defaultCourseOpen(): CourseOpenState {
   return {
     VERTHILL: true,
@@ -67,40 +58,6 @@ function defaultCourseOpen(): CourseOpenState {
     OCEAN: true,
     LAKE: true,
   };
-}
-
-function buildShiftBoard(
-  rows: AutoAssignmentRow[],
-  openCourses: readonly CourseCode[]
-): BoardTimeRow[] {
-  const open = new Set(openCourses);
-  const byTimeCourse = new Map<string, AutoAssignmentRow[]>();
-  const times = new Set<string>();
-
-  for (const row of rows) {
-    const code = resolveCourseCode(row.reservation.course);
-    if (!code) continue;
-    const tee = row.reservation.teeTime || "";
-    times.add(tee);
-    const key = `${tee}|${code}`;
-    const list = byTimeCourse.get(key) || [];
-    list.push(row);
-    byTimeCourse.set(key, list);
-  }
-
-  return [...times].sort((a, b) => a.localeCompare(b)).map((teeTime) => {
-    const cells = {} as Record<CourseCode, BoardCell>;
-    for (const code of COURSE_CODES) {
-      if (!open.has(code)) {
-        cells[code] = { kind: "closed" };
-        continue;
-      }
-      const list = byTimeCourse.get(`${teeTime}|${code}`) || [];
-      cells[code] =
-        list.length > 0 ? { kind: "assigned", rows: list } : { kind: "empty" };
-    }
-    return { teeTime, cells };
-  });
 }
 
 export default function ManageAssignmentsOpsPage() {
@@ -414,10 +371,11 @@ export default function ManageAssignmentsOpsPage() {
     return COURSE_CODES.filter((c) => open.has(c));
   }, [draft]);
 
-  const boardRows = useMemo(
-    () => buildShiftBoard(shiftRows, boardOpenCourses),
-    [shiftRows, boardOpenCourses]
-  );
+  const boardRows = useMemo(() => {
+    if (shiftTab === "UNASSIGNED" || shiftTab === "CLOSED") return [];
+    // 선택된 부 내부에서만 matrix — reservation.shift 기준으로 재검증
+    return buildShiftBoard(shiftRows, boardOpenCourses, shiftTab);
+  }, [shiftRows, boardOpenCourses, shiftTab]);
 
   const detailRow = useMemo(() => {
     if (!draft) return null;
@@ -575,9 +533,7 @@ export default function ManageAssignmentsOpsPage() {
               >
                 {s}
                 <small>
-                  {
-                    draft.assignments.filter((a) => a.shift === s).length
-                  }
+                  {assignmentsByShift(draft, s).length}
                 </small>
               </button>
             ))}
