@@ -623,6 +623,33 @@ export function parseReservationMatrix(
   return out;
 }
 
+/** 시트 본문의 "1부"/"2부"/"3부" 구간 제목 행 감지 (티타임 추정과 무관) */
+export function detectShiftSectionLabel(
+  values: unknown[],
+  startCol: number,
+  endCol: number
+): ShiftPart | null {
+  for (let c = startCol; c <= endCol; c++) {
+    const t = cellText(values[c]);
+    if (!t) continue;
+    const shift = normalizeShift(t);
+    if (!shift) continue;
+    // 셀이 부 표기 자체일 때만 구간 헤더로 인정 (팀명 등에 부 글자 혼입 방지)
+    const compactLabel = compact(t).replace(/^제/, "");
+    if (
+      compactLabel === "1부" ||
+      compactLabel === "2부" ||
+      compactLabel === "3부" ||
+      compactLabel === "1" ||
+      compactLabel === "2" ||
+      compactLabel === "3"
+    ) {
+      return shift;
+    }
+  }
+  return null;
+}
+
 function parseCourseBlock(
   matrix: unknown[][],
   stringMatrix: string[][],
@@ -638,6 +665,8 @@ function parseCourseBlock(
   const headerLabels = stringMatrix[headerRow] || [];
   const blockCourse = block.defaultCourse || ctx.sheetCourse;
   const out: ParsedReservation[] = [];
+  /** 본문 "2부" 등 구간 헤더 — 이후 행에 명시 shift 없을 때 사용 (teeTime 추정보다 우선) */
+  let sectionShift: ShiftPart | null = null;
 
   for (let r = headerRow + 1; r < matrix.length; r++) {
     const values = matrix[r] || [];
@@ -653,8 +682,14 @@ function parseCourseBlock(
     const teamRaw =
       columns.teamName != null ? cellText(values[columns.teamName]) : "";
     const teamName = teamRaw || null;
-    // 빈 예약자 = 공석 티타임 — 예약팀으로 세지 않음
-    if (!teamName) continue;
+
+    // 예약자 없는 행: 부 구간 제목이면 sectionShift 갱신 후 스킵
+    const sectionLabel = detectShiftSectionLabel(values, startCol, endCol);
+    if (!teamName) {
+      if (sectionLabel) sectionShift = sectionLabel;
+      // 빈 예약자 = 공석 티타임 — 예약팀으로 세지 않음
+      continue;
+    }
 
     const rawData = buildRawData(headerLabels, values, columns);
     const reviewReasons: string[] = [];
@@ -677,7 +712,9 @@ function parseCourseBlock(
 
     const shiftRaw =
       columns.shift != null ? cellText(values[columns.shift]) : "";
-    let shift = normalizeShift(shiftRaw) || ctx.fallbackShift;
+    // 우선순위: 행 부 컬럼 → 본문 구간 헤더 → 시트/default → (최후) 티타임 추정
+    let shift =
+      normalizeShift(shiftRaw) || sectionShift || ctx.fallbackShift;
     if (!shift && teeTime) shift = inferShiftFromTeeTime(teeTime);
     if (!shift) reviewReasons.push("부 판별 실패");
 

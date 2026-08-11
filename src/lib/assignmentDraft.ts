@@ -176,7 +176,14 @@ export function assignmentsByShift(
   shift: ShiftPart
 ): AutoAssignmentRow[] {
   return draft.assignments
-    .filter((a) => a.shift === shift)
+    .filter((a) => {
+      // 표시/탭 분류: reservation.shift 우선 (teeTime 추정 금지)
+      const s =
+        a.reservation?.shift != null && String(a.reservation.shift).trim() !== ""
+          ? String(a.reservation.shift)
+          : String(a.shift || "");
+      return s === shift;
+    })
     .sort(compareAssignmentOrder);
 }
 

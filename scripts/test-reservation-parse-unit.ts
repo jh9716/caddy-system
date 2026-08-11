@@ -6,6 +6,7 @@
 import {
   detectCourseBlocks,
   detectHeaderRow,
+  detectShiftSectionLabel,
   inferShiftFromTeeTime,
   matchHeaderKind,
   normalizeCourse,
@@ -130,6 +131,48 @@ section("빈 행 무시");
   ]);
   assert(okRows(result.reservations).length === 2, "skip blank rows");
   assert(result.reservations.every((r) => r.course === "SKY"), "sky from sheet");
+}
+
+section("본문 부 구간 헤더: 11:20 등은 2부 (티타임 추정 아님)");
+{
+  assert(
+    detectShiftSectionLabel(["2부", "", ""], 0, 2) === "2부",
+    "detect 2부 section"
+  );
+  const result = parseReservationSheets([
+    {
+      name: "예약",
+      matrix: [
+        ["날짜", "티타임", "예약자"],
+        ["1부", "", ""],
+        ["2026-08-20", "06:30", "아침A"],
+        ["2026-08-20", "11:41", "아침후반"],
+        ["2부", "", ""],
+        ["2026-08-20", "11:20", "오후A"],
+        ["2026-08-20", "11:27", "오후B"],
+        ["2026-08-20", "11:34", "오후C"],
+        ["2026-08-20", "11:41", "오후D"],
+        ["2026-08-20", "11:48", "오후E"],
+        ["2026-08-20", "11:55", "오후F"],
+      ],
+    },
+  ]);
+  const s1 = result.reservations.filter((r) => r.shift === "1부");
+  const s2 = result.reservations.filter((r) => r.shift === "2부");
+  assert(s1.length === 2, "1부 2팀");
+  assert(s2.length === 6, "2부 6팀 (11:20–11:55)");
+  assert(
+    s2.every((r) => r.teeTime >= "11:20" && r.teeTime <= "11:55"),
+    "2부 times are late morning"
+  );
+  assert(
+    !s1.some((r) => r.teeTime === "11:20"),
+    "11:20 not mislabeled as 1부"
+  );
+  assert(
+    s2.find((r) => r.teeTime === "11:20")?.teamName === "오후A",
+    "11:20 is 2부"
+  );
 }
 
 section("잘못된 시간 형식 → needsReview");
