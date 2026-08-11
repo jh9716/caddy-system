@@ -138,13 +138,16 @@ model Notice {
 model User {
   id        Int      @id @default(autoincrement())
   username  String   @unique
-  password  String
+  /// ID/PW 계정은 bcrypt 해시. 카카오 OAuth 전용 User는 null (null 시 ID/PW 로그인 거부).
+  password  String?
   role      String
   /// 캐디 본인 계정 연결 (기존 User는 null 유지)
   caddyId   Int?     @unique
   caddy     Caddy?   @relation(fields: [caddyId], references: [id])
   /// 조장(leader)이 관리하는 조 목록. 복수 조·공동 조장 가능 (1명=1조 강제 아님). admin은 비워도 전체 접근.
   managedTeams String[] @default([])
+  /// 카카오 고유 numeric user id (문자열). 이메일/닉네임/이름 identity 금지. 기존 User backfill 없음.
+  kakaoUserId String? @unique
   createdAt DateTime @default(now())
 }
 

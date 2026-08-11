@@ -2,9 +2,9 @@
 import type { NextAuthOptions } from "next-auth";
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
-import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { normalizeAppRole } from "@/lib/sessionCookies";
+import { verifyUserPassword } from "@/lib/userPassword";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,7 +44,8 @@ export const authOptions: NextAuthOptions = {
           where: { username: creds.username },
         });
         if (!user) return null;
-        const ok = await bcrypt.compare(creds.password, user.password);
+        // password null(OAuth 전용) → bcrypt 미호출, 로그인 거부
+        const ok = await verifyUserPassword(creds.password, user.password);
         if (!ok) return null;
         const role = normalizeAppRole(user.role);
         if (!role) return null;

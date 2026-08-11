@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import {
   applySessionCookies,
   normalizeAppRole,
   type AppRole,
 } from "@/lib/sessionCookies";
+import { verifyUserPassword } from "@/lib/userPassword";
 
 export const dynamic = "force-dynamic";
 
@@ -31,11 +31,11 @@ export async function POST(req: NextRequest) {
   } else if (username === CADDY_USER && CADDY_PASSWORD && password === CADDY_PASSWORD) {
     role = "caddy";
   } else {
-    // 2) DB User 계정 (bcrypt) — caddy_local 시드 admin 등
+    // 2) DB User 계정 (bcrypt) — password null(OAuth 전용)은 안전하게 실패
     try {
       const user = await prisma.user.findUnique({ where: { username } });
       if (user) {
-        const ok = await bcrypt.compare(password, user.password);
+        const ok = await verifyUserPassword(password, user.password);
         if (ok) {
           role = normalizeAppRole(user.role);
         }
