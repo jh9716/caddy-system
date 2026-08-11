@@ -627,8 +627,8 @@ function buildRawData(
 }
 
 /**
- * 행의 어느 셀이든 명시적 "1부"/"2부"/"3부" 문자열만 섹션 라벨로 인정.
- * bare 1/2/3·출발홀 숫자는 무시. 병합셀 top-left만 값이 있어도 행 전체 스캔.
+ * @deprecated 실제 경기진행등록.xls에는 명시적 1부/2부/3부 셀이 없음.
+ * shift는 buildRowShiftMap(티타임 gap 밴드)으로만 판정. 부 전용 컬럼 테스트용으로만 유지.
  */
 export function detectShiftSectionLabel(
   values: unknown[],
@@ -641,29 +641,131 @@ export function detectShiftSectionLabel(
   let found: ShiftPart | null = null;
   for (let c = lo; c <= hi; c++) {
     const hit = detectExplicitShiftLabel(cellText(values[c]));
-    if (hit) found = hit; // 같은 행에 여러 라벨이면 마지막 것
+    if (hit) found = hit;
   }
   return found;
 }
 
-/** 행 전체에서 명시적 부 섹션 라벨 검색 (A열 병합 배너 포함) */
+/** @deprecated detectShiftSectionLabel과 동일 — 섹션 셀 전제 폐기 */
 export function detectRowShiftSectionLabel(values: unknown[]): ShiftPart | null {
   if (!values?.length) return null;
   return detectShiftSectionLabel(values, 0, values.length - 1);
 }
 
+export function teeTimeToMinutes(teeTime: string): number | null {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(teeTime);
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h < 0 || h > 23 || min < 0 || min > 59) return null;
+  return h * 60 + min;
+}
+
+function medianSorted(sorted: number[]): number {
+  if (!sorted.length) return 0;
+  const mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 0) {
+    return (sorted[mid - 1] + sorted[mid]) / 2;
+  }
+  return sorted[mid];
+}
+
 /**
- * 시트 전체 pre-pass: 행 인덱스 → 공통 shift.
- * 명시적 1부/2부/3부 라벨을 만나면 전환하고, 다음 라벨까지 유지.
- * 코스 블록 빈칸·출발홀·캐디명·teeTime은 state에 영향 없음.
+ * 인접 행 gap 중 “연속 티타임(~7분) 대비 현저히 큰 gap” 인덱스를 찾는다.
+ * 절대 시각 threshold(<12시 등)는 사용하지 않음.
+ * @returns gaps[i] = rowTimes[i+1]-rowTimes[i] 가 밴드 경계일 때 i 목록
  */
-export function buildRowShiftMap(matrix: unknown[][]): Array<ShiftPart | null> {
+export function findTeeBandBreakIndices(gapsMinutes: number[]): number[] {
+  if (!gapsMinutes.length) return [];
+  // 밴드 내부 간격 후보 (현장 ~7분, 여유 있게 ≤45분)
+  const small = gapsMinutes.filter((g) => g > 0 && g <= 45).sort((a, b) => a - b);
+  const medianSmall = small.length ? medianSorted(small) : 7;
+  // 연속 간격의 수 배 이상이면서 최소 90분 이상 → 밴드 분리 (~3시간 공백)
+  const threshold = Math.max(90, medianSmall * 8);
+  const breaks: number[] = [];
+  for (let i = 0; i < gapsMinutes.length; i++) {
+    if (gapsMinutes[i] >= threshold) breaks.push(i);
+  }
+  return breaks;
+}
+
+type RowTeeSample = { row: number; minutes: number; teeTime: string };
+
+/**
+ * 시트 공통 티타임 밴드로 행→shift 맵 생성.
+ * - 4코스 블록의 teeTime을 행 단위로 모아 대표 시각(최소) 사용
+ * - 큰 시간 gap으로 정확히 3밴드가 되면 순서대로 1/2/3부
+ * - 3밴드가 아니면 전부 null (SHIFT_NOT_DETECTED) — 임의 부여 금지
+ * - 명시적 N부 셀·절대 시각·bare 1/2/3·캐디명 미사용
+ */
+export function buildRowShiftMap(
+  matrix: unknown[][],
+  blocks?: CourseBlock[]
+): Array<ShiftPart | null> {
   const map: Array<ShiftPart | null> = new Array(matrix.length).fill(null);
-  let current: ShiftPart | null = null;
-  for (let r = 0; r < matrix.length; r++) {
-    const label = detectRowShiftSectionLabel(matrix[r] || []);
-    if (label) current = label;
-    map[r] = current;
+  const stringMatrix = matrix.map((row) => row.map((c) => cellText(c)));
+  const courseBlocks = blocks ?? detectCourseBlocks(stringMatrix);
+  if (!courseBlocks.length) return map;
+
+  const headerRow = Math.min(...courseBlocks.map((b) => b.headerRow));
+  const samples: RowTeeSample[] = [];
+
+  for (let r = headerRow + 1; r < matrix.length; r++) {
+    const values = matrix[r] || [];
+    // 반복 헤더 행 제외
+    let headerHits = 0;
+    for (const block of courseBlocks) {
+      for (let c = block.startCol; c <= block.endCol; c++) {
+        if (matchHeaderKind(cellText(values[c]))) headerHits += 1;
+      }
+    }
+    if (headerHits >= 2) continue;
+
+    const mins: number[] = [];
+    let sampleTee = "";
+    for (const block of courseBlocks) {
+      const col = block.columns.teeTime;
+      if (col == null) continue;
+      const tee = parseTeeTime(values[col]);
+      if (!tee) continue;
+      const m = teeTimeToMinutes(tee);
+      if (m == null) continue;
+      mins.push(m);
+      if (!sampleTee || m < teeTimeToMinutes(sampleTee)!) sampleTee = tee;
+    }
+    if (!mins.length) continue;
+    samples.push({
+      row: r,
+      minutes: Math.min(...mins),
+      teeTime: sampleTee,
+    });
+  }
+
+  if (samples.length < 3) return map;
+
+  const gaps: number[] = [];
+  for (let i = 0; i < samples.length - 1; i++) {
+    gaps.push(samples[i + 1].minutes - samples[i].minutes);
+  }
+  const breaks = findTeeBandBreakIndices(gaps);
+  // 정확히 2개의 큰 gap → 3밴드만 인정
+  if (breaks.length !== 2) return map;
+
+  const b0 = breaks[0];
+  const b1 = breaks[1];
+  const bands: Array<{ shift: ShiftPart; rows: RowTeeSample[] }> = [
+    { shift: "1부", rows: samples.slice(0, b0 + 1) },
+    { shift: "2부", rows: samples.slice(b0 + 1, b1 + 1) },
+    { shift: "3부", rows: samples.slice(b1 + 1) },
+  ];
+  if (bands.some((b) => b.rows.length === 0)) return map;
+
+  for (const band of bands) {
+    const start = band.rows[0].row;
+    const end = band.rows[band.rows.length - 1].row;
+    for (let r = start; r <= end; r++) {
+      map[r] = band.shift;
+    }
   }
   return map;
 }
@@ -674,7 +776,7 @@ export function parseReservationMatrix(
     sourceSheet: string;
     defaultDate?: string | null;
     defaultCourse?: CourseCode | null;
-    /** @deprecated 시트 공통 rowShiftMap만 사용. 무시됨(잘못된 1부 fallback 방지). */
+    /** @deprecated 무시됨 — 티타임 밴드/부 컬럼만 사용 */
     defaultShift?: ShiftPart | null;
   }
 ): ParsedReservation[] {
@@ -685,8 +787,8 @@ export function parseReservationMatrix(
   const sheetCtx = inferContextFromSheetName(options.sourceSheet);
   const fallbackDate = options.defaultDate || sheetCtx.date;
   const sheetCourse = options.defaultCourse || sheetCtx.course;
-  // 시트 공통 부 구간 (4코스 블록이 같은 행의 shift를 공유)
-  const rowShiftMap = buildRowShiftMap(matrix);
+  // 시트 공통 티타임 밴드 (4코스가 같은 행의 shift를 공유)
+  const rowShiftMap = buildRowShiftMap(matrix, blocks);
 
   const out: ParsedReservation[] = [];
   for (const block of blocks) {
@@ -739,14 +841,6 @@ function parseCourseBlock(
 
     const courseRaw =
       columns.course != null ? cellText(values[columns.course]) : "";
-    // 코스 셀이 부 라벨만인 행은 예약이 아님
-    if (
-      courseRaw &&
-      detectExplicitShiftLabel(courseRaw) &&
-      !normalizeCourse(courseRaw)
-    ) {
-      continue;
-    }
 
     const teeRaw =
       columns.teeTime != null ? values[columns.teeTime] : undefined;
@@ -768,7 +862,8 @@ function parseCourseBlock(
 
     const shiftRaw =
       columns.shift != null ? cellText(values[columns.shift]) : "";
-    // 전용 부 컬럼(명시 N부) → 시트 공통 rowShiftMap. teeTime/빈행/1부 fallback 없음.
+    // 전용 부 컬럼(명시 N부, 드묾) → 아니면 시트 공통 티타임 밴드.
+    // 절대시각 threshold / 빈행 순서 / 1부 fallback 없음.
     const shift: ShiftPart | null =
       normalizeShiftColumn(shiftRaw) || ctx.rowShiftMap[r] || null;
     if (!shift) reviewReasons.push(SHIFT_NOT_DETECTED);
