@@ -1001,6 +1001,7 @@ function StatusBadge({
 
 const opsCss = `
   .ops-root {
+    --ops-tabs-sticky-h: 60px;
     max-width: 720px;
     margin: 0 auto;
     display: grid;
@@ -1136,13 +1137,16 @@ const opsCss = `
   }
   .warn.error { background: #fef2f2; color: #991b1b; }
   .warn.warn { background: #fffbeb; color: #92400e; }
+  .ops-root {
+    --ops-tabs-sticky-h: 60px;
+  }
   .ops-tabs {
     display: grid;
     grid-template-columns: repeat(5, 1fr);
     gap: 6px;
     position: sticky;
     top: 0;
-    z-index: 2;
+    z-index: 4;
     background: #f8fafc;
     padding: 6px 0;
   }
@@ -1187,6 +1191,8 @@ const opsCss = `
   .ops-board-wrap {
     width: 100%;
     overflow-x: hidden;
+    /* sticky 헤더가 첫 데이터 행을 가리지 않도록 상단 여유 */
+    scroll-margin-top: calc(var(--ops-tabs-sticky-h, 56px) + 36px);
   }
   .ops-board {
     width: 100%;
@@ -1194,7 +1200,7 @@ const opsCss = `
     gap: 0;
     border: 1px solid #e2e8f0;
     border-radius: 8px;
-    overflow: hidden;
+    overflow: visible;
     background: #fff;
   }
   .ops-board-head,
@@ -1205,10 +1211,16 @@ const opsCss = `
   }
   .ops-board-head {
     position: sticky;
-    top: 52px;
-    z-index: 1;
+    /* 부 탭(sticky) 아래로 — 데이터 행 z보다 위, 탭보다는 아래 */
+    top: var(--ops-tabs-sticky-h, 56px);
+    z-index: 3;
     background: #0f172a;
     color: #fff;
+    box-shadow: 0 1px 0 #0f172a;
+  }
+  /* 헤더 높이만큼 첫 블록이 헤더 아래에 오도록 (initial + sticky) */
+  .ops-board-head + .ops-board-block {
+    scroll-margin-top: calc(var(--ops-tabs-sticky-h, 56px) + 32px);
   }
   .ops-board-head > div {
     padding: 6px 2px;

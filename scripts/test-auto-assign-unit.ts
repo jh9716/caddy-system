@@ -2219,7 +2219,7 @@ section("reflow: 연속 여러 건 캔슬/추가 + 인접 teeTime");
   assert(reflow.summary.movedBackward + reflow.summary.movedForward + reflow.summary.unchanged + reflow.summary.newlyAssigned + reflow.summary.becameUnassigned === reflow.changes.length, "change kinds cover all");
 }
 
-section("코스 순서 VERTHILL→SKY→OCEAN→LAKE + teeTime");
+section("슬롯 큐: shift → teeTime → courseOrder (베→스→오→레)");
 {
   const date = "2026-10-01";
   const available = makeCaddies(20);
@@ -2235,26 +2235,29 @@ section("코스 순서 VERTHILL→SKY→OCEAN→LAKE + teeTime");
   ];
   const result = computeAutoAssignmentsV1({ date, available, reservations });
   const keys = result.assignments.map(
-    (a) => `${a.shift}|${a.reservation.course}|${a.reservation.teeTime}`
+    (a) => `${a.shift}|${a.reservation.teeTime}|${a.reservation.course}`
   );
   assert(
     keys.join(",") ===
       [
-        "1부|VERTHILL|06:30",
-        "1부|VERTHILL|06:44",
-        "1부|SKY|06:30",
-        "1부|SKY|06:37",
-        "1부|OCEAN|06:30",
-        "1부|LAKE|06:30",
-        "2부|VERTHILL|13:00",
-        "2부|SKY|12:50",
+        "1부|06:30|VERTHILL",
+        "1부|06:30|SKY",
+        "1부|06:30|OCEAN",
+        "1부|06:30|LAKE",
+        "1부|06:37|SKY",
+        "1부|06:44|VERTHILL",
+        "2부|12:50|SKY",
+        "2부|13:00|VERTHILL",
       ].join(","),
-    "shift→course→teeTime order"
+    "shift→teeTime→courseOrder"
   );
   assert(COURSE_ORDER.join(",") === "VERTHILL,SKY,OCEAN,LAKE", "COURSE_ORDER fixed");
   const sorted = [...reservations].sort(compareReservationOrder);
-  assert(sorted[0].teamName === "V1", "compareReservationOrder V first");
-  assert(sorted[2].teamName === "S1", "then SKY earliest tee");
+  assert(sorted[0].teamName === "V1", "06:30 V first");
+  assert(sorted[1].teamName === "S1", "06:30 S second");
+  assert(sorted[2].teamName === "O1", "06:30 O third");
+  assert(sorted[3].teamName === "L1", "06:30 L fourth");
+  assert(sorted[4].teamName === "S2", "06:37 S next");
 }
 
 section("코스 Open/Close: 4코스 모두 ON");
@@ -2694,6 +2697,154 @@ section("reflow 후 spare/3부 순서 재계산");
   assert(s3[0].caddy.id === ordered[9].id, "3부 recalc spare1");
   assert(s3[1].caddy.id === ordered[10].id, "3부 recalc spare2");
   assert(s3[2].caddy.id === 701, "3부 THIRD after spares");
+}
+
+section("동일 시각 4코스: spare1/2 = 다음 부 첫 슬롯 베→스");
+{
+  const date = "2026-11-01";
+  const available = makeCaddies(40);
+  const reservations: AutoAssignReservation[] = [];
+  // 1부 4슬롯 → spare1/2 확정
+  for (const [course, tee] of [
+    ["VERTHILL", "06:30"],
+    ["SKY", "06:30"],
+    ["OCEAN", "06:30"],
+    ["LAKE", "06:30"],
+  ] as const) {
+    reservations.push({
+      date,
+      course,
+      shift: "1부",
+      teeTime: tee,
+      teamName: `1-${course}`,
+    });
+  }
+  // 2부: 11:30 4코스 + 11:37 4코스
+  for (const tee of ["11:30", "11:37"] as const) {
+    for (const course of COURSE_ORDER) {
+      reservations.push({
+        date,
+        course,
+        shift: "2부",
+        teeTime: tee,
+        teamName: `2-${tee}-${course}`,
+      });
+    }
+  }
+  const result = computeAutoAssignmentsV1({ date, available, reservations });
+  const s2queue = result.regularAssignments.filter((a) => a.shift === "2부");
+  assert(s2queue.length === 8, "2부 8 slots");
+  assert(
+    s2queue.map((a) => `${a.reservation.teeTime}|${a.reservation.course}`).join(",") ===
+      [
+        "11:30|VERTHILL",
+        "11:30|SKY",
+        "11:30|OCEAN",
+        "11:30|LAKE",
+        "11:37|VERTHILL",
+        "11:37|SKY",
+        "11:37|OCEAN",
+        "11:37|LAKE",
+      ].join(","),
+    "2부 queue tee then course"
+  );
+  const spare1 = result.sparesByShift.find((s) => s.shift === "1부")?.spare1;
+  assert(spare1 != null, "1부 spare1 exists");
+  assert(s2queue[0].caddy.id === spare1!.caddyId, "spare1 → 11:30 VERTHILL");
+  assert(s2queue[1].reservation.course === "SKY", "spare2 slot → 11:30 SKY");
+  assert(s2queue[2].reservation.course === "OCEAN", "next → 11:30 OCEAN");
+  assert(s2queue[3].reservation.course === "LAKE", "next → 11:30 LAKE");
+  assert(s2queue[4].reservation.teeTime === "11:37", "then 11:37 VERTHILL");
+  assert(s2queue[4].reservation.course === "VERTHILL", "11:37 starts VERTHILL");
+}
+
+section("일부 코스 예약 없음 / Close 시 슬롯 스킵");
+{
+  const date = "2026-11-02";
+  const available = makeCaddies(30);
+  const reservations: AutoAssignReservation[] = [
+    { date, course: "VERTHILL", shift: "1부", teeTime: "06:30", teamName: "v" },
+    { date, course: "SKY", shift: "1부", teeTime: "06:30", teamName: "s" },
+    // 2부: 11:30에 OCEAN 없음, LAKE Close
+    { date, course: "VERTHILL", shift: "2부", teeTime: "11:30", teamName: "v2" },
+    { date, course: "SKY", shift: "2부", teeTime: "11:30", teamName: "s2" },
+    { date, course: "LAKE", shift: "2부", teeTime: "11:30", teamName: "l2" },
+    { date, course: "VERTHILL", shift: "2부", teeTime: "11:37", teamName: "v3" },
+    { date, course: "OCEAN", shift: "2부", teeTime: "11:37", teamName: "o3" },
+  ];
+  const result = computeAutoAssignmentsV1({
+    date,
+    available,
+    reservations,
+    openCourses: ["VERTHILL", "SKY", "OCEAN"], // LAKE close
+  });
+  const s2 = result.regularAssignments.filter((a) => a.shift === "2부");
+  assert(
+    s2.map((a) => `${a.reservation.teeTime}|${a.reservation.course}`).join(",") ===
+      ["11:30|VERTHILL", "11:30|SKY", "11:37|VERTHILL", "11:37|OCEAN"].join(","),
+    "skip missing OCEAN@11:30 and closed LAKE"
+  );
+  assert(
+    result.closedCourseReservations.some(
+      (u) => u.reservation.course === "LAKE"
+    ),
+    "LAKE closed recorded"
+  );
+}
+
+section("reflow 후에도 teeTime→courseOrder 유지");
+{
+  const date = "2026-11-03";
+  const available = makeCaddies(30);
+  const reservations: AutoAssignReservation[] = [];
+  for (const course of COURSE_ORDER) {
+    reservations.push({
+      date,
+      course,
+      shift: "1부",
+      teeTime: "06:30",
+      teamName: `1-${course}`,
+      id: `1-${course}`,
+    });
+  }
+  for (const tee of ["11:30", "11:37"] as const) {
+    for (const course of COURSE_ORDER) {
+      reservations.push({
+        date,
+        course,
+        shift: "2부",
+        teeTime: tee,
+        teamName: `2-${tee}-${course}`,
+        id: `2-${tee}-${course}`,
+      });
+    }
+  }
+  const previous = computeAutoAssignmentsV1({ date, available, reservations });
+  const cancelId = previous.regularAssignments.find(
+    (a) => a.shift === "1부" && a.reservation.course === "SKY"
+  )!.reservation.id!;
+  const reflow = reflowRegularAssignments({
+    previous,
+    regularCaddyPool: available,
+    events: [{ type: "CANCEL_RESERVATION", reservationId: cancelId }],
+  });
+  const s2 = reflow.after.regularAssignments.filter((a) => a.shift === "2부");
+  assert(
+    s2.map((a) => `${a.reservation.teeTime}|${a.reservation.course}`).join(",") ===
+      [
+        "11:30|VERTHILL",
+        "11:30|SKY",
+        "11:30|OCEAN",
+        "11:30|LAKE",
+        "11:37|VERTHILL",
+        "11:37|SKY",
+        "11:37|OCEAN",
+        "11:37|LAKE",
+      ].join(","),
+    "reflow keeps teeTime→course queue"
+  );
+  const spare1 = reflow.after.sparesByShift.find((s) => s.shift === "1부")?.spare1;
+  assert(s2[0].caddy.id === spare1?.caddyId, "reflow spare1 → 11:30 V");
 }
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);

@@ -320,7 +320,8 @@ export function courseRank(course: string | null | undefined): number {
 }
 
 /**
- * 정렬: 1부→2부→3부, 각 부 안 VERTHILL→SKY→OCEAN→LAKE, 같은 코스 teeTime 오름차순
+ * 정렬: shift → teeTime → courseOrder(VERTHILL→SKY→OCEAN→LAKE)
+ * 현장 슬롯 큐: 같은 시각에 베→스→오→레 후 다음 시각 (코스별 전체 묶음 아님)
  */
 export function compareReservationOrder(
   a: AutoAssignReservation,
@@ -328,9 +329,9 @@ export function compareReservationOrder(
 ): number {
   const sr = shiftRank(String(a.shift)) - shiftRank(String(b.shift));
   if (sr !== 0) return sr;
+  if (a.teeTime !== b.teeTime) return a.teeTime.localeCompare(b.teeTime);
   const cr = courseRank(a.course) - courseRank(b.course);
   if (cr !== 0) return cr;
-  if (a.teeTime !== b.teeTime) return a.teeTime.localeCompare(b.teeTime);
   const ra = a.rawRowIndex ?? 0;
   const rb = b.rawRowIndex ?? 0;
   if (ra !== rb) return ra - rb;
