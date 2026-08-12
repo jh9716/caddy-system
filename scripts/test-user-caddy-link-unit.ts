@@ -213,6 +213,18 @@ function createMockDb() {
         return out;
       },
     },
+    caddyLinkRequest: {
+      async updateMany(_args: {
+        where: { userId: number; status: string };
+        data: Record<string, unknown>;
+      }) {
+        // link tests do not seed requests; no-op count 0 is fine
+        return { count: 0 };
+      },
+    },
+    async $transaction<T>(fn: (tx: typeof db) => Promise<T>): Promise<T> {
+      return fn(db);
+    },
     _users: users,
     _caddies: caddies,
     addUser,
