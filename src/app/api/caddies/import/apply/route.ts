@@ -2,9 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import {
   applyImportPayload,
+  CaddyImportApplyError,
   type ApplyPayload,
 } from "@/lib/caddyImport";
 import { isNeedsReviewName } from "@/lib/caddyImportRules";
+import { maskKrMobile } from "@/lib/caddyPhone";
+import { logAudit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -19,14 +22,12 @@ function assertAdmin(req: NextRequest) {
 
 /**
  * POST { applyPayload: { updates, creates } }
- * - 기존 id update(team만) + 신규 create만
- * - extras/extraFlags는 현행 스키마에 없으므로 무시 (migration 전까지 미저장)
+ * - 기존 id update(team + optional phone) + 신규 create
+ * - extras/extraFlags는 현행 스키마에 없으므로 무시
+ * - phone 키 생략 = 기존 유지. import로 phone 삭제 금지
  * - needsReview 이름 create 거부
  * - employmentStatus 변경 없음
  * - 삭제/ID 재부여 없음
- *
- * 주의: Production 반영 전에 Preview로 검증할 것.
- * 이 작업 범위에서는 Production apply를 수행하지 않습니다.
  */
 export async function POST(req: NextRequest) {
   const denied = assertAdmin(req);
@@ -79,6 +80,7 @@ export async function POST(req: NextRequest) {
       "caddyType",
       "missingFromImport",
       "status",
+      "phoneNormalized",
     ];
     const leaked = JSON.stringify(payload);
     for (const key of forbiddenKeys) {
@@ -93,7 +95,12 @@ export async function POST(req: NextRequest) {
     }
 
     const existing = await prisma.caddy.findMany({
-      select: { id: true, name: true, team: true },
+      select: {
+        id: true,
+        name: true,
+        team: true,
+        phoneNormalized: true,
+      },
     });
 
     const result = await applyImportPayload(
@@ -101,18 +108,47 @@ export async function POST(req: NextRequest) {
         updates: payload.updates.map((u) => ({
           id: Number(u.id),
           team: String(u.team),
-          // extras는 Preview 전용 — DB 컬럼 없음, 저장하지 않음
           extras: [],
+          ...(u.phone !== undefined ? { phone: String(u.phone) } : {}),
         })),
         creates: payload.creates.map((c) => ({
           name: String(c.name),
           team: String(c.team),
           extras: [],
+          ...(c.phone !== undefined ? { phone: String(c.phone) } : {}),
         })),
       },
       prisma,
       { existingForGuard: existing, rejectNeedsReviewNames: true }
     );
+
+    // Audit: 마스킹만 (원문 금지)
+    const maskedUpdates = payload.updates.map((u) => ({
+      id: Number(u.id),
+      team: String(u.team),
+      ...(u.phone !== undefined
+        ? { phone: maskKrMobile(String(u.phone)) }
+        : {}),
+    }));
+    const maskedCreates = payload.creates.map((c) => ({
+      name: String(c.name),
+      team: String(c.team),
+      ...(c.phone !== undefined
+        ? { phone: maskKrMobile(String(c.phone)) }
+        : {}),
+    }));
+
+    await logAudit({
+      action: "IMPORT_CADDIES",
+      meta: {
+        entity: "Caddy",
+        updated: result.updated,
+        created: result.created,
+        phoneUpdated: result.phoneUpdated,
+        updates: maskedUpdates,
+        creates: maskedCreates,
+      },
+    });
 
     return NextResponse.json({
       ok: true,
@@ -120,7 +156,13 @@ export async function POST(req: NextRequest) {
       touchesEmploymentStatus: false,
     });
   } catch (e: any) {
-    console.error("[POST /api/caddies/import/apply]", e);
+    if (e instanceof CaddyImportApplyError) {
+      return NextResponse.json(
+        { error: e.message, code: e.code },
+        { status: e.status }
+      );
+    }
+    console.error("[POST /api/caddies/import/apply]", e?.message || e);
     return NextResponse.json(
       { error: e?.message || "apply 실패" },
       { status: 400 }
