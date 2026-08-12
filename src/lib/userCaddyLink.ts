@@ -185,23 +185,35 @@ export async function linkUserToCaddy(
     );
   }
 
-  try {
-    // 조건부 update: 여전히 미연결일 때만 (동시성/교체 방지)
-    const updated = await db.user.updateMany({
-      where: {
-        id: userId,
-        caddyId: null,
-        kakaoUserId: { not: null },
-      },
-      data: { caddyId },
+try {
+    // 동일 TX: User.caddyId 연결 + 해당 User PENDING 요청 CANCELLED
+    // phoneNormalized 는 절대 변경하지 않음
+    await db.$transaction(async (tx) => {
+      const updated = await tx.user.updateMany({
+        where: {
+          id: userId,
+          caddyId: null,
+          kakaoUserId: { not: null },
+        },
+        data: { caddyId },
+      });
+      if (updated.count !== 1) {
+        throw new UserCaddyLinkError(
+          "already_linked",
+          "이미 연결된 계정이거나 연결할 수 없는 상태입니다.",
+          409
+        );
+      }
+      // 동일 TX: PENDING 본인확인 요청 정리 (phone 미변경)
+      await tx.caddyLinkRequest.updateMany({
+        where: { userId, status: "PENDING" },
+        data: {
+          status: "CANCELLED",
+          decidedAt: new Date(),
+          decisionNote: "superseded_by_manual_link",
+        },
+      });
     });
-    if (updated.count !== 1) {
-      throw new UserCaddyLinkError(
-        "already_linked",
-        "이미 연결된 계정이거나 연결할 수 없는 상태입니다.",
-        409
-      );
-    }
   } catch (e) {
     if (e instanceof UserCaddyLinkError) throw e;
     if (
