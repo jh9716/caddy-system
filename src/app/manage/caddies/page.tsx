@@ -11,6 +11,7 @@ import {
   type ExtraFlagOption,
   type EmploymentStatus,
 } from '@/lib/caddyManage';
+import { maskKrMobile } from '@/lib/caddyPhone';
 
 type Caddy = {
   id: number;
@@ -24,6 +25,7 @@ type Caddy = {
   employeeCode?: string | null;
   caddyType?: string | null;
   missingFromImport?: boolean;
+  phoneNormalized?: string | null;
 };
 
 type Draft = {
@@ -32,6 +34,8 @@ type Draft = {
   teamOrder: number;
   employmentStatus: EmploymentStatus;
   extraFlags: ExtraFlagOption[];
+  /** 입력용 원문/정규화 번호. 목록 표시는 maskKrMobile 사용 */
+  phone: string;
 };
 
 const emptyDraft = (): Draft => ({
@@ -40,6 +44,7 @@ const emptyDraft = (): Draft => ({
   teamOrder: 0,
   employmentStatus: 'ACTIVE',
   extraFlags: [],
+  phone: '',
 });
 
 function toDraft(c: Caddy): Draft {
@@ -51,7 +56,12 @@ function toDraft(c: Caddy): Draft {
     extraFlags: (c.extraFlags ?? []).filter((f): f is ExtraFlagOption =>
       (EXTRA_FLAG_OPTIONS as readonly string[]).includes(f)
     ),
+    phone: c.phoneNormalized ?? '',
   };
+}
+
+function formatPhoneDisplay(phoneNormalized: string | null | undefined): string {
+  return maskKrMobile(phoneNormalized) ?? '—';
 }
 
 export default function ManageCaddiesPage() {
@@ -160,6 +170,7 @@ export default function ManageCaddiesPage() {
           teamOrder: Number(draft.teamOrder) || 0,
           employmentStatus: draft.employmentStatus,
           extraFlags: draft.extraFlags,
+          phone: draft.phone.trim() === '' ? null : draft.phone.trim(),
         }),
       });
       const data = await res.json();
@@ -260,6 +271,8 @@ export default function ManageCaddiesPage() {
           teamOrder: createDraft.teamOrder || undefined,
           employmentStatus: createDraft.employmentStatus,
           extraFlags: createDraft.extraFlags,
+          phone:
+            createDraft.phone.trim() === '' ? null : createDraft.phone.trim(),
         }),
       });
       const data = await res.json();
@@ -343,6 +356,19 @@ export default function ManageCaddiesPage() {
                   </option>
                 ))}
               </select>
+            </label>
+            <label>
+              휴대폰번호
+              <input
+                type="tel"
+                inputMode="tel"
+                autoComplete="tel"
+                value={createDraft.phone}
+                onChange={(e) =>
+                  setCreateDraft((d) => ({ ...d, phone: e.target.value }))
+                }
+                placeholder="010-1234-5678"
+              />
             </label>
           </div>
           <fieldset className="cm-flags">
@@ -457,6 +483,9 @@ export default function ManageCaddiesPage() {
                       ))}
                     </div>
                   )}
+                  <div className="cm-phone-line">
+                    휴대폰 {formatPhoneDisplay(c.phoneNormalized)}
+                  </div>
                 </div>
 
                 {!editing ? (
@@ -554,6 +583,19 @@ export default function ManageCaddiesPage() {
                             </option>
                           ))}
                         </select>
+                      </label>
+                      <label>
+                        휴대폰번호
+                        <input
+                          type="tel"
+                          inputMode="tel"
+                          autoComplete="tel"
+                          value={draft.phone}
+                          onChange={(e) =>
+                            updateDraft(c.id, { phone: e.target.value })
+                          }
+                          placeholder="010-1234-5678"
+                        />
                       </label>
                     </div>
                     <fieldset className="cm-flags">
@@ -733,6 +775,11 @@ export default function ManageCaddiesPage() {
         .cm-pill.warn { background: #fee2e2; color: #991b1b; }
         .cm-pill.accent { background: #e0e7ff; color: #3730a3; }
         .cm-extra-row { display: flex; flex-wrap: wrap; gap: 4px; }
+        .cm-phone-line {
+          margin-top: 2px;
+          font-size: 0.85rem;
+          color: #64748b;
+        }
         .cm-item-actions {
           display: flex;
           flex-wrap: wrap;

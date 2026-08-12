@@ -10,7 +10,22 @@ export async function GET(req: NextRequest) {
 
     const schedules = await prisma.schedule.findMany({
       where: { date: new Date(date) },
-      include: { caddy: true },
+      include: {
+        // phoneNormalized 등 PII 제외 (비관리자 응답 유출 방지)
+        caddy: {
+          select: {
+            id: true,
+            name: true,
+            team: true,
+            teamOrder: true,
+            employmentStatus: true,
+            status: true,
+            memo: true,
+            extraFlags: true,
+            caddyType: true,
+          },
+        },
+      },
       orderBy: { caddyId: 'asc' },
     })
     return NextResponse.json(schedules)

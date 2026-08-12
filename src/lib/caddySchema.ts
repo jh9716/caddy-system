@@ -15,6 +15,9 @@ export const employmentStatusSchema = z
 
 export const extraFlagSchema = z.enum(EXTRA_FLAG_OPTIONS);
 
+/** UI/API 입력 필드명. DB 컬럼은 phoneNormalized. 빈 문자열 허용(서버에서 null). */
+const phoneInputSchema = z.string().optional().nullable();
+
 export const caddyCreateSchema = z.object({
   name: z.string().trim().min(1, "이름은 필수입니다."),
   team: z.string().trim().min(1, "조는 필수입니다."),
@@ -23,6 +26,7 @@ export const caddyCreateSchema = z.object({
   extraFlags: z.array(extraFlagSchema).optional().default([]),
   status: caddyStatus.optional().default("근무중"),
   memo: z.string().optional().nullable(),
+  phone: phoneInputSchema,
   // optional passthrough fields — never wipe Production defaults if omitted
   employeeCode: z.string().trim().min(1).optional().nullable(),
   caddyType: z.enum(["HOUSE", "THIRD", "DRIVING"]).optional(),
@@ -37,6 +41,8 @@ export const caddyUpdateSchema = z.object({
   extraFlags: z.array(extraFlagSchema).optional(),
   status: caddyStatus.optional(),
   memo: z.string().optional().nullable(),
+  /** 생략 시 기존 phone 유지. null/"" → 삭제(null). */
+  phone: phoneInputSchema,
   employeeCode: z.string().trim().min(1).optional().nullable(),
   caddyType: z.enum(["HOUSE", "THIRD", "DRIVING"]).optional(),
   missingFromImport: z.boolean().optional(),

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAudit } from "@/lib/audit";
 import { caddyUpdateSchema } from "@/lib/caddySchema";
@@ -7,6 +8,12 @@ import {
   normalizeExtraFlags,
   normalizeTeamOrder,
 } from "@/lib/caddyManage";
+import {
+  CaddyPhoneError,
+  isPhoneUniqueViolation,
+  maskKrMobile,
+  parseOptionalPhoneInput,
+} from "@/lib/caddyPhone";
 import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -15,7 +22,7 @@ function assertAdmin(req: NextRequest) {
   return requireAdmin(req) ?? null;
 }
 
-/** PATCH: 이름/조/조내순번/재직상태/extraFlags 수정 — ID 불변 */
+/** PATCH: 이름/조/조내순번/재직상태/extraFlags/phone 수정 — ID 불변 */
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> | { id: string } }
@@ -56,6 +63,10 @@ export async function PATCH(
     }
     if (data.status !== undefined) updateData.status = data.status;
     if (data.memo !== undefined) updateData.memo = data.memo;
+    // phone: only when key present — omit keeps existing value
+    if (Object.prototype.hasOwnProperty.call(body, "phone")) {
+      updateData.phoneNormalized = parseOptionalPhoneInput(data.phone);
+    }
     // Only touch Production-critical fields when explicitly sent
     if (data.employeeCode !== undefined) {
       updateData.employeeCode = data.employeeCode;
@@ -70,13 +81,40 @@ export async function PATCH(
       data: updateData,
     });
 
+    const auditPayload = { ...data } as Record<string, unknown>;
+    if (Object.prototype.hasOwnProperty.call(auditPayload, "phone")) {
+      auditPayload.phone = maskKrMobile(
+        typeof updateData.phoneNormalized === "string"
+          ? updateData.phoneNormalized
+          : null
+      );
+    }
+
     await logAudit({
       action: "UPDATE_CADDY",
-      meta: { entity: "Caddy", entityId: id, payload: data },
+      meta: { entity: "Caddy", entityId: id, payload: auditPayload },
     });
 
     return NextResponse.json(updated);
   } catch (e: any) {
+    if (e instanceof CaddyPhoneError) {
+      return NextResponse.json(
+        { error: e.message, code: e.code },
+        { status: e.status }
+      );
+    }
+    if (
+      e instanceof Prisma.PrismaClientKnownRequestError &&
+      isPhoneUniqueViolation(e)
+    ) {
+      return NextResponse.json(
+        {
+          error: "이미 등록된 휴대폰번호입니다.",
+          code: "phone_duplicate",
+        },
+        { status: 409 }
+      );
+    }
     console.error("[PATCH /api/caddies/[id]]", e);
     const status = e?.status ?? 400;
     return NextResponse.json(

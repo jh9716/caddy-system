@@ -67,6 +67,8 @@ model Caddy {
   /// 주중반 / 주말반 / 드라이빙 등 병행 분류
   extraFlags        String[]         @default([])
   memo              String?
+  /// 휴대폰 (canonical: 010XXXXXXXX). null=미등록. PG unique는 NULL 다수 허용.
+  phoneNormalized   String?          @unique
   assignments       Assignment[]
   schedules         Schedule[]
   shiftDuties       ShiftDuty[]

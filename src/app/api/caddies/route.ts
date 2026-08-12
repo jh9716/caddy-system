@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { caddyCreateSchema } from "@/lib/caddySchema";
 import {
@@ -7,6 +8,11 @@ import {
   normalizeTeamOrder,
   parseEmploymentFilter,
 } from "@/lib/caddyManage";
+import {
+  CaddyPhoneError,
+  isPhoneUniqueViolation,
+  parseOptionalPhoneInput,
+} from "@/lib/caddyPhone";
 import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -27,6 +33,7 @@ export async function GET(req: NextRequest) {
       where,
       orderBy: [{ team: "asc" }, { teamOrder: "asc" }, { id: "asc" }],
     });
+    // admin-only route: phoneNormalized 원문 포함 가능 (UI에서 마스킹)
     return NextResponse.json(caddies);
   } catch (e: any) {
     console.error("GET /api/caddies error:", e);
@@ -53,6 +60,10 @@ export async function POST(req: NextRequest) {
     }
 
     const data = parsed.data;
+    // 미입력/빈값 → null (기존 183명은 전부 null 유지 패턴)
+    const phoneNormalized =
+      data.phone === undefined ? null : parseOptionalPhoneInput(data.phone);
+
     const team = data.team.trim();
     const maxOrder = await prisma.caddy.aggregate({
       where: { team },
@@ -72,6 +83,7 @@ export async function POST(req: NextRequest) {
         extraFlags: normalizeExtraFlags(data.extraFlags),
         status: data.status ?? "근무중",
         memo: data.memo ?? null,
+        phoneNormalized,
         // Preserve Production columns: only set when explicitly provided
         ...(data.employeeCode !== undefined
           ? { employeeCode: data.employeeCode }
@@ -84,6 +96,24 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json(created);
   } catch (e: any) {
+    if (e instanceof CaddyPhoneError) {
+      return NextResponse.json(
+        { error: e.message, code: e.code },
+        { status: e.status }
+      );
+    }
+    if (
+      e instanceof Prisma.PrismaClientKnownRequestError &&
+      isPhoneUniqueViolation(e)
+    ) {
+      return NextResponse.json(
+        {
+          error: "이미 등록된 휴대폰번호입니다.",
+          code: "phone_duplicate",
+        },
+        { status: 409 }
+      );
+    }
     console.error("POST /api/caddies error:", e);
     return NextResponse.json(
       { error: e?.message || "추가 실패" },

@@ -29,8 +29,27 @@ export async function GET(req: NextRequest) {
 
   const list = await prisma.shiftDuty.findMany({
     where: { date: new Date(date), part },
-    include: { caddy: true },
-    orderBy: [{ orderNo: 'asc' }]
+    include: {
+      // phoneNormalized 등 PII 제외 — consumer는 name/team 사용
+      caddy: {
+        select: {
+          id: true,
+          name: true,
+          team: true,
+          teamOrder: true,
+          employeeCode: true,
+          employmentStatus: true,
+          missingFromImport: true,
+          caddyType: true,
+          status: true,
+          extraFlags: true,
+          memo: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      },
+    },
+    orderBy: [{ orderNo: 'asc' }],
   })
   return NextResponse.json(list)
 }
