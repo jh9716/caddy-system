@@ -51,6 +51,14 @@ enum OffRequestStatus {
   CANCELLED
 }
 
+/// Kakao 본인확인(이름+휴대폰) → 관리자 승인 연결 요청 상태
+enum CaddyLinkRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
 model Caddy {
   id                Int              @id @default(autoincrement())
   name              String
@@ -73,6 +81,8 @@ model Caddy {
   schedules         Schedule[]
   shiftDuties       ShiftDuty[]
   offRequests       OffRequest[]
+  /// 승인 시 선택된 Caddy로 역참조 (이력). Caddy 물리 삭제 시 selectedCaddyId만 null
+  linkRequestSelections CaddyLinkRequest[] @relation("CaddyLinkRequestSelectedCaddy")
   /// 로그인 User와 1:1 (미연결 시 null)
   user              User?
   createdAt         DateTime         @default(now())
@@ -150,7 +160,46 @@ model User {
   managedTeams String[] @default([])
   /// 카카오 고유 numeric user id (문자열). 이메일/닉네임/이름 identity 금지. 기존 User backfill 없음.
   kakaoUserId String? @unique
+  /// 본인확인 연결 요청 이력 (User 물리 삭제는 Restrict로 이력 보호)
+  caddyLinkRequests CaddyLinkRequest[]
   createdAt DateTime @default(now())
+}
+
+/// Kakao 직원 본인확인 요청 (이름+휴대폰 → 관리자 승인 후 User.caddyId / Caddy.phoneNormalized)
+/// 사용자당 PENDING 1건은 migration SQL partial unique:
+///   CaddyLinkRequest_userId_pending_key
+/// Prisma migrate diff 가 DROP을 제안해도 이 인덱스는 절대 제거하지 말 것.
+model CaddyLinkRequest {
+  id     Int  @id @default(autoincrement())
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  /// 제출 이름 (표시용). 매칭 키는 앱에서 normalize
+  submittedName String
+  /// 제출 번호 canonical (010XXXXXXXX). raw 포맷 저장 안 함
+  phoneNormalized String
+  /// 제출 시점 ACTIVE exact-name 후보 Caddy id 스냅샷
+  candidateCaddyIds Int[] @default([])
+
+  /// 승인 시 확정 Caddy. PENDING/REJECTED/CANCELLED에서는 null
+  selectedCaddyId Int?
+  selectedCaddy   Caddy? @relation("CaddyLinkRequestSelectedCaddy", fields: [selectedCaddyId], references: [id], onDelete: SetNull)
+
+  status CaddyLinkRequestStatus @default(PENDING)
+
+  requestedAt DateTime @default(now())
+  decidedAt   DateTime?
+  /// OffRequest.decidedByUserId 와 동일: FK 없음 (admin User 삭제와 이력 분리)
+  decidedByUserId Int?
+  decisionNote    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, requestedAt])
+  @@index([userId, status])
+  @@index([phoneNormalized])
+  @@index([decidedByUserId])
 }
 
 model ShiftDuty {
