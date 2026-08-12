@@ -16,6 +16,7 @@ function assertAdmin(req: NextRequest) {
 /**
  * POST multipart file (csv) 또는 JSON { csv: string }
  * DB 쓰기 없음 — preview만.
+ * phone 컬럼이 있으면 masked 필드 + applyPayload(normalized)만 노출.
  */
 export async function POST(req: NextRequest) {
   const denied = assertAdmin(req);
@@ -45,14 +46,20 @@ export async function POST(req: NextRequest) {
     }
 
     const existing = await prisma.caddy.findMany({
-      select: { id: true, name: true, team: true, status: true },
+      select: {
+        id: true,
+        name: true,
+        team: true,
+        status: true,
+        phoneNormalized: true,
+      },
       orderBy: { id: "asc" },
     });
 
     const preview = buildImportPreview(rows, existing);
     return NextResponse.json(preview);
   } catch (e: any) {
-    console.error("[POST /api/caddies/import/preview]", e);
+    console.error("[POST /api/caddies/import/preview]", e?.message || e);
     return NextResponse.json(
       { error: e?.message || "preview 실패" },
       { status: 400 }
