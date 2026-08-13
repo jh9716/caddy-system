@@ -83,8 +83,9 @@ function main() {
 
   console.log("== staffLinkErrorMessage ==");
   assert(
-    staffLinkErrorMessage("no_candidates").includes("일치하지"),
-    "no_candidates"
+    staffLinkErrorMessage("no_candidates").includes("등록된 캐디 정보를 찾을 수 없습니다") &&
+      staffLinkErrorMessage("no_candidates").includes("경기과"),
+    "no_candidates copy"
   );
   assert(
     staffLinkErrorMessage("invalid_phone").includes("휴대폰"),
@@ -171,6 +172,15 @@ function main() {
       );
     }
   }
+
+  const linkClient = fs.readFileSync(
+    path.join(root, "src/app/caddy/link/CaddyLinkClient.tsx"),
+    "utf8"
+  );
+  assert(
+    linkClient.includes("홈페이지에 먼저 캐디 등록이 되어 있어야"),
+    "link page shows pre-registration hint"
+  );
 
   const caddyPage = fs.readFileSync(
     path.join(root, "src/app/caddy/page.tsx"),

@@ -45,7 +45,7 @@ export function staffLinkErrorMessage(
   const c = String(code || "").trim();
   switch (c) {
     case "no_candidates":
-      return "등록된 캐디 이름과 일치하지 않습니다. 이름을 다시 확인하거나 관리자에게 문의해 주세요.";
+      return "등록된 캐디 정보를 찾을 수 없습니다. 신규 입사자이거나 아직 홈페이지에 등록되지 않은 경우 경기과에 캐디 등록을 요청한 뒤 다시 시도해 주세요.";
     case "invalid_phone":
       return "휴대폰번호 형식이 올바르지 않습니다. 010으로 시작하는 번호를 입력해 주세요.";
     case "invalid_name":
