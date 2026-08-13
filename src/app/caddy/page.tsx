@@ -23,7 +23,24 @@ export default function CaddyPage() {
           router.push('/login')
           return
         }
-        const res = await fetch('/api/summary')
+        // 미연결 Kakao 직원 → 본인확인 요청 화면으로 유도 (middleware 미변경)
+        const mineRes = await fetch('/api/caddy-link-requests/mine', {
+          credentials: 'include',
+          cache: 'no-store',
+        })
+        if (mineRes.ok) {
+          const mine = await mineRes.json().catch(() => null)
+          // 미연결만 /caddy/link로. APPROVED(+미연결 레이스)는 루프 방지로 대시보드 유지
+          if (
+            mine &&
+            mine.linked === false &&
+            mine.request?.status !== 'APPROVED'
+          ) {
+            router.replace('/caddy/link')
+            return
+          }
+        }
+        const res = await fetch('/api/summary', { credentials: 'include' })
         const data: Summary = await res.json()
         setSummary(data)
       } catch {
