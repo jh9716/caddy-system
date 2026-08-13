@@ -163,9 +163,12 @@ export default function CaddyLinkClient() {
   return (
     <div className="mx-auto max-w-md">
       <h1 className="mb-2 text-xl font-bold text-slate-900">캐디 본인확인</h1>
-      <p className="mb-6 text-sm leading-relaxed text-slate-600">
+      <p className="mb-2 text-sm leading-relaxed text-slate-600">
         카카오 계정과 캐디 정보를 연결하려면 이름과 휴대폰번호를 제출해 주세요.
         관리자 승인 후 이용할 수 있습니다.
+      </p>
+      <p className="mb-6 text-xs leading-relaxed text-slate-500">
+        홈페이지에 먼저 캐디 등록이 되어 있어야 본인확인 요청이 가능합니다.
       </p>
 
       {error && (
