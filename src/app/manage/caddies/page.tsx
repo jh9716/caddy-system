@@ -88,6 +88,52 @@ export default function ManageCaddiesPage() {
   /** 모바일 상세: 액션 펼침 */
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
+  /** 명단 Import v2 Preview */
+  type ImportPreviewLine = {
+    action: 'update' | 'create' | 'unchanged' | 'needsReview' | 'missingInImport';
+    id: number | null;
+    name: string;
+    currentTeam: string | null;
+    nextTeam: string | null;
+    currentTeamOrder: number | null;
+    nextTeamOrder: number | null;
+    currentEmploymentStatus: string | null;
+    nextEmploymentStatus: string | null;
+    phoneChanged: boolean;
+    currentMaskedPhone: string | null;
+    nextMaskedPhone: string | null;
+    reason?: string;
+  };
+  type ImportPreview = {
+    format?: string;
+    summary: {
+      inputPeople: number;
+      update: number;
+      create: number;
+      unchanged: number;
+      needsReview: number;
+      missingInImport: number;
+      phoneIssues: number;
+      teamOrderConflicts: number;
+      applyBlocked: boolean;
+      phoneColumnPresent?: boolean;
+    };
+    lines: ImportPreviewLine[];
+    phoneIssues?: Array<{ kind: string; name: string; message: string; maskedPhone?: string | null }>;
+    teamOrderConflicts?: Array<{
+      team: string;
+      teamOrder: number;
+      names: string[];
+      ids: Array<number | null>;
+    }>;
+    applyPayload?: { updates: unknown[]; creates: unknown[] };
+    error?: string;
+  };
+  const [importOpen, setImportOpen] = useState(false);
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importFileName, setImportFileName] = useState<string | null>(null);
+
   const load = useCallback(
     async (employmentOverride?: EmploymentStatus | 'all') => {
       // 한눈에 보기: 재직/휴직/퇴사 집계를 위해 전체 로드
@@ -343,6 +389,52 @@ export default function ManageCaddiesPage() {
             }}
           >
             신규 등록
+          </button>
+          <button
+            type="button"
+            className="cm-btn cm-btn-sm"
+            onClick={() => {
+              setViewMode('detail');
+              setImportOpen(true);
+            }}
+          >
+            명단 가져오기
+          </button>
+          <button
+            type="button"
+            className="cm-btn cm-btn-sm"
+            onClick={async () => {
+              setMessage(null);
+              try {
+                const res = await fetch('/api/caddies/export', {
+                  credentials: 'include',
+                });
+                if (res.status === 401 || res.status === 403) {
+                  location.href = '/login?callbackUrl=/manage/caddies';
+                  return;
+                }
+                if (!res.ok) {
+                  const data = await res.json().catch(() => ({}));
+                  setMessage(data?.error || 'Export 실패');
+                  return;
+                }
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download =
+                  res.headers
+                    .get('Content-Disposition')
+                    ?.match(/filename="([^"]+)"/)?.[1] || 'caddy-roster.csv';
+                a.click();
+                URL.revokeObjectURL(url);
+                setMessage('명단 CSV를 다운로드했습니다. (관리자 전용 · 휴대폰 원문 포함)');
+              } catch {
+                setMessage('Export 중 오류가 발생했습니다.');
+              }
+            }}
+          >
+            명단 Export
           </button>
           <button
             type="button"
@@ -1000,14 +1092,257 @@ export default function ManageCaddiesPage() {
         </>
       )}
 
-      {viewMode === 'detail' && (
-        <details className="cm-deferred">
-          <summary>XLSX 명단 자동 매칭/반영 (보류)</summary>
-          <p>
-            운영 중 실수 방지를 위해 자동 반영은 잠시 꺼 두었습니다.
-            캐디 등록·조 이동·순번·재직/퇴사·추가 속성은 이 화면에서 직접 관리하세요.
+      {viewMode === 'detail' && importOpen && (
+        <section className="cm-card cm-import" aria-label="명단 가져오기">
+          <div className="cm-import-head">
+            <h3>명단 가져오기 (CSV)</h3>
+            <button
+              type="button"
+              className="cm-btn cm-btn-sm"
+              onClick={() => {
+                setImportOpen(false);
+                setImportPreview(null);
+                setImportFileName(null);
+              }}
+            >
+              닫기
+            </button>
+          </div>
+          <p className="cm-import-help">
+            컬럼: <code>id,name,team,teamOrder,employmentStatus,phone</code>
+            · id는 선택 · 빈 선택필드는 기존 유지 · 삭제/재생성 없음 · extraFlags 미반영
           </p>
-        </details>
+          <div className="cm-import-actions">
+            <label className="cm-btn cm-btn-sm cm-file-label">
+              CSV 선택
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                hidden
+                disabled={importBusy}
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = '';
+                  if (!file) return;
+                  setImportBusy(true);
+                  setImportPreview(null);
+                  setImportFileName(file.name);
+                  setMessage(null);
+                  try {
+                    const fd = new FormData();
+                    fd.append('file', file);
+                    const res = await fetch('/api/caddies/import/preview', {
+                      method: 'POST',
+                      body: fd,
+                      credentials: 'include',
+                    });
+                    if (res.status === 401 || res.status === 403) {
+                      location.href = '/login?callbackUrl=/manage/caddies';
+                      return;
+                    }
+                    const data = await res.json();
+                    if (!res.ok) {
+                      setMessage(data?.error || 'Preview 실패');
+                      return;
+                    }
+                    if (data.format && data.format !== 'csv-v2') {
+                      setMessage(
+                        '이 화면은 CSV v2만 지원합니다. XLSX는 별도 경로를 사용하세요.'
+                      );
+                      return;
+                    }
+                    setImportPreview(data);
+                  } catch {
+                    setMessage('Preview 중 오류가 발생했습니다.');
+                  } finally {
+                    setImportBusy(false);
+                  }
+                }}
+              />
+            </label>
+            {importFileName && (
+              <span className="cm-muted">파일: {importFileName}</span>
+            )}
+            <button
+              type="button"
+              className="cm-btn cm-btn-primary cm-btn-sm"
+              disabled={
+                importBusy ||
+                !importPreview?.applyPayload ||
+                importPreview.summary.applyBlocked
+              }
+              onClick={async () => {
+                if (!importPreview?.applyPayload) return;
+                if (
+                  !confirm(
+                    `명단을 반영할까요?\n갱신 ${importPreview.summary.update} · 신규 ${importPreview.summary.create}\n(누락 ${importPreview.summary.missingInImport}명은 변경하지 않습니다)`
+                  )
+                ) {
+                  return;
+                }
+                setImportBusy(true);
+                setMessage(null);
+                try {
+                  const res = await fetch('/api/caddies/import/apply', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({
+                      applyPayload: importPreview.applyPayload,
+                    }),
+                  });
+                  const data = await res.json().catch(() => ({}));
+                  if (res.status === 401 || res.status === 403) {
+                    location.href = '/login?callbackUrl=/manage/caddies';
+                    return;
+                  }
+                  if (!res.ok) {
+                    setMessage(data?.error || 'Apply 실패');
+                    return;
+                  }
+                  setMessage(
+                    `명단 반영 완료: 갱신 ${data.updated} · 신규 ${data.created} · 전화 ${data.phoneUpdated}`
+                  );
+                  setImportPreview(null);
+                  setImportFileName(null);
+                  setImportOpen(false);
+                  await load('all');
+                } catch {
+                  setMessage('Apply 중 오류가 발생했습니다.');
+                } finally {
+                  setImportBusy(false);
+                }
+              }}
+            >
+              Apply 반영
+            </button>
+          </div>
+
+          {importPreview && (
+            <>
+              <div className="cm-import-summary">
+                <span>입력 {importPreview.summary.inputPeople}</span>
+                <span>갱신 {importPreview.summary.update}</span>
+                <span>신규 {importPreview.summary.create}</span>
+                <span>변경없음 {importPreview.summary.unchanged}</span>
+                <span className={importPreview.summary.needsReview ? 'is-warn' : ''}>
+                  검토필요 {importPreview.summary.needsReview}
+                </span>
+                <span className={importPreview.summary.missingInImport ? 'is-warn' : ''}>
+                  누락경고 {importPreview.summary.missingInImport}
+                </span>
+                <span className={importPreview.summary.phoneIssues ? 'is-warn' : ''}>
+                  전화문제 {importPreview.summary.phoneIssues}
+                </span>
+                <span
+                  className={
+                    importPreview.summary.teamOrderConflicts ? 'is-warn' : ''
+                  }
+                >
+                  순번충돌 {importPreview.summary.teamOrderConflicts}
+                </span>
+              </div>
+              {importPreview.summary.applyBlocked && (
+                <p className="cm-import-block">
+                  needsReview / 전화번호 문제 / 조·순번 충돌이 있어 Apply가
+                  비활성화되었습니다. 수정 후 다시 Preview 하세요. 누락 경고만으로는
+                  막지 않습니다(자동 퇴사 없음).
+                </p>
+              )}
+              {(importPreview.phoneIssues?.length ?? 0) > 0 && (
+                <ul className="cm-import-issues">
+                  {importPreview.phoneIssues!.map((iss, i) => (
+                    <li key={`p-${i}`}>
+                      [전화:{iss.kind}] {iss.name} — {iss.message}
+                      {iss.maskedPhone ? ` (${iss.maskedPhone})` : ''}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {(importPreview.teamOrderConflicts?.length ?? 0) > 0 && (
+                <ul className="cm-import-issues">
+                  {importPreview.teamOrderConflicts!.map((c, i) => (
+                    <li key={`t-${i}`}>
+                      [순번충돌] {c.team} 순번 {c.teamOrder}: {c.names.join(', ')}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="cm-import-table-wrap">
+                <table className="cm-import-table">
+                  <thead>
+                    <tr>
+                      <th>구분</th>
+                      <th>id</th>
+                      <th>이름</th>
+                      <th>조</th>
+                      <th>순번</th>
+                      <th>상태</th>
+                      <th>휴대폰</th>
+                      <th>사유</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {importPreview.lines.map((line, idx) => {
+                      const actionLabel: Record<ImportPreviewLine['action'], string> = {
+                        update: '수정',
+                        create: '신규',
+                        unchanged: '동일',
+                        needsReview: '검토필요',
+                        missingInImport: '누락경고',
+                      };
+                      const teamText =
+                        line.action === 'missingInImport'
+                          ? `${line.currentTeam ?? '—'} → (유지)`
+                          : line.currentTeam == null
+                            ? `${line.nextTeam ?? '—'}`
+                            : line.currentTeam === line.nextTeam
+                              ? String(line.nextTeam)
+                              : `${line.currentTeam}→${line.nextTeam}`;
+                      const orderText =
+                        line.action === 'missingInImport'
+                          ? `${line.currentTeamOrder ?? '—'} → (유지)`
+                          : line.currentTeamOrder == null
+                            ? `${line.nextTeamOrder ?? '—'}`
+                            : line.currentTeamOrder === line.nextTeamOrder
+                              ? String(line.nextTeamOrder)
+                              : `${line.currentTeamOrder}→${line.nextTeamOrder}`;
+                      const empText =
+                        line.action === 'missingInImport'
+                          ? `${line.currentEmploymentStatus ?? '—'} → (유지)`
+                          : line.currentEmploymentStatus == null
+                            ? `${line.nextEmploymentStatus ?? '—'}`
+                            : line.currentEmploymentStatus ===
+                                line.nextEmploymentStatus
+                              ? String(line.nextEmploymentStatus)
+                              : `${line.currentEmploymentStatus}→${line.nextEmploymentStatus}`;
+                      const phoneText = line.phoneChanged
+                        ? `${line.currentMaskedPhone ?? '—'}→${line.nextMaskedPhone ?? '—'}`
+                        : line.currentMaskedPhone ??
+                          line.nextMaskedPhone ??
+                          '—';
+                      return (
+                        <tr
+                          key={`${line.action}-${line.id}-${line.name}-${idx}`}
+                          className={`is-${line.action}`}
+                        >
+                          <td>{actionLabel[line.action]}</td>
+                          <td>{line.id ?? '—'}</td>
+                          <td>{line.name}</td>
+                          <td>{teamText}</td>
+                          <td>{orderText}</td>
+                          <td>{empText}</td>
+                          <td>{phoneText}</td>
+                          <td>{line.reason ?? ''}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </section>
       )}
 
       <style>{`
@@ -1472,12 +1807,103 @@ export default function ManageCaddiesPage() {
         }
         .cm-actions { margin-top: 10px; }
         .cm-muted { color: var(--vh-muted); font-size: 0.84rem; }
-        .cm-deferred {
-          margin-top: 14px;
-          color: var(--vh-muted);
-          font-size: 0.78rem;
+        .cm-import { margin-bottom: 14px; }
+        .cm-import-head {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 8px;
         }
-        .cm-deferred p { margin: 6px 0 0; }
+        .cm-import-head h3 {
+          margin: 0;
+          font-size: 1rem;
+          color: var(--vh-green-900);
+        }
+        .cm-import-help {
+          margin: 0 0 10px;
+          font-size: 0.78rem;
+          color: var(--vh-muted);
+          line-height: 1.45;
+        }
+        .cm-import-help code {
+          font-size: 0.72rem;
+          background: #f0ebe3;
+          padding: 1px 4px;
+          border-radius: 4px;
+        }
+        .cm-import-actions {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+          align-items: center;
+          margin-bottom: 10px;
+        }
+        .cm-file-label { cursor: pointer; }
+        .cm-import-summary {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+          margin-bottom: 8px;
+        }
+        .cm-import-summary span {
+          font-size: 0.75rem;
+          font-weight: 600;
+          padding: 4px 8px;
+          border-radius: 999px;
+          background: #eef4ef;
+          color: var(--vh-green-900);
+        }
+        .cm-import-summary span.is-warn {
+          background: #fff1e8;
+          color: #9a3412;
+        }
+        .cm-import-block {
+          margin: 0 0 8px;
+          padding: 8px 10px;
+          border-radius: 8px;
+          background: #fff1e8;
+          color: #9a3412;
+          font-size: 0.8rem;
+        }
+        .cm-import-issues {
+          margin: 0 0 8px;
+          padding-left: 18px;
+          font-size: 0.78rem;
+          color: #9a3412;
+        }
+        .cm-import-table-wrap {
+          overflow-x: auto;
+          max-height: 420px;
+          overflow-y: auto;
+          border: 1px solid var(--vh-border);
+          border-radius: 8px;
+        }
+        .cm-import-table {
+          width: 100%;
+          border-collapse: collapse;
+          font-size: 0.75rem;
+          min-width: 720px;
+        }
+        .cm-import-table th,
+        .cm-import-table td {
+          padding: 6px 8px;
+          border-bottom: 1px solid #eee8de;
+          text-align: left;
+          vertical-align: top;
+        }
+        .cm-import-table th {
+          position: sticky;
+          top: 0;
+          background: #f7f3ec;
+          z-index: 1;
+        }
+        .cm-import-table tr.is-needsReview { background: #fff7ed; }
+        .cm-import-table tr.is-create { background: #f0fdf4; }
+        .cm-import-table tr.is-missingInImport {
+          background: #f8fafc;
+          color: #64748b;
+        }
 
         @media (min-width: 720px) {
           .cm-toolbar {

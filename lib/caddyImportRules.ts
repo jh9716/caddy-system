@@ -83,9 +83,45 @@ export function isNonResignationStatus(status: string | null | undefined): boole
   );
 }
 
-/** import apply에서 employmentStatus를 절대 건드리지 않음 */
+/**
+ * v1 호환: 호출부가 "기본값으로 employment를 만지지 않음"을 표시할 때 사용.
+ * v2 CSV에 employmentStatus 값이 명시되면 apply가 해당 필드만 갱신한다.
+ */
 export function shouldTouchEmploymentStatus(_input?: unknown): false {
   return false;
+}
+
+export type EmploymentStatusValue = "ACTIVE" | "LEAVE" | "RETIRED";
+
+/** CSV employmentStatus 셀 파싱. 빈칸 → null(유지). 무효 → throw. */
+export function parseImportEmploymentStatus(
+  raw: string | null | undefined
+): EmploymentStatusValue | null {
+  const v = String(raw ?? "").trim();
+  if (!v) return null;
+  const upper = v.toUpperCase();
+  if (upper === "ACTIVE" || v === "재직") return "ACTIVE";
+  if (upper === "LEAVE" || v === "휴직") return "LEAVE";
+  if (upper === "RETIRED" || v === "퇴사") return "RETIRED";
+  throw new Error(
+    `유효하지 않은 재직상태입니다: ${v} (ACTIVE|LEAVE|RETIRED 또는 재직|휴직|퇴사)`
+  );
+}
+
+/** teamOrder 셀: 양의 정수(≥1). 빈칸 → null(유지). */
+export function parseImportTeamOrder(
+  raw: string | null | undefined
+): number | null {
+  const v = String(raw ?? "").trim();
+  if (!v) return null;
+  if (!/^\d+$/.test(v)) {
+    throw new Error(`teamOrder는 양의 정수여야 합니다: ${v}`);
+  }
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1) {
+    throw new Error(`teamOrder는 1 이상의 정수여야 합니다: ${v}`);
+  }
+  return n;
 }
 
 /** Levenshtein distance (짧은 이름용). 자동 매칭에 사용하지 않음. */

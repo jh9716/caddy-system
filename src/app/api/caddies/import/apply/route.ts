@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import {
-  applyImportPayload,
-  CaddyImportApplyError,
-  type ApplyPayload,
-} from "@/lib/caddyImport";
+  applyRosterImportPayloadV2,
+  RosterImportApplyError,
+  type RosterApplyPayload,
+} from "@/lib/caddyRosterImportV2";
 import { isNeedsReviewName } from "@/lib/caddyImportRules";
 import { maskKrMobile } from "@/lib/caddyPhone";
 import { logAudit } from "@/lib/audit";
@@ -21,13 +21,11 @@ function assertAdmin(req: NextRequest) {
 }
 
 /**
- * POST { applyPayload: { updates, creates } }
- * - 기존 id update(team + optional phone) + 신규 create
- * - extras/extraFlags는 현행 스키마에 없으므로 무시
- * - phone 키 생략 = 기존 유지. import로 phone 삭제 금지
- * - needsReview 이름 create 거부
- * - employmentStatus 변경 없음
- * - 삭제/ID 재부여 없음
+ * POST { applyPayload: { updates, creates } } — Import v2
+ * - 기존 id update (team / teamOrder / employmentStatus / phone)
+ * - 신규 create (name+team 필수)
+ * - extraFlags / missingFromImport / 삭제 / ID 재부여 금지
+ * - Assignment/Schedule/ShiftDuty/OffRequest/User 연관 수정 없음
  */
 export async function POST(req: NextRequest) {
   const denied = assertAdmin(req);
@@ -35,7 +33,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json().catch(() => ({}));
-    const payload = body?.applyPayload as ApplyPayload | undefined;
+    const payload = body?.applyPayload as RosterApplyPayload | undefined;
 
     if (
       !payload ||
@@ -66,21 +64,21 @@ export async function POST(req: NextRequest) {
     }
 
     for (const u of payload.updates) {
-      if (!u?.id || typeof u.team !== "string") {
+      if (!u?.id) {
         return NextResponse.json(
-          { error: "update 항목에 id, team 필요" },
+          { error: "update 항목에 id 필요" },
           { status: 400 }
         );
       }
     }
 
-    // employmentStatus 등 금지 필드가 실수로 들어오면 거부
     const forbiddenKeys = [
-      "employmentStatus",
       "caddyType",
       "missingFromImport",
       "status",
       "phoneNormalized",
+      "extraFlags",
+      "extras",
     ];
     const leaked = JSON.stringify(payload);
     for (const key of forbiddenKeys) {
@@ -99,33 +97,67 @@ export async function POST(req: NextRequest) {
         id: true,
         name: true,
         team: true,
+        teamOrder: true,
+        employmentStatus: true,
         phoneNormalized: true,
       },
     });
 
-    const result = await applyImportPayload(
+    const result = await applyRosterImportPayloadV2(
       {
         updates: payload.updates.map((u) => ({
           id: Number(u.id),
-          team: String(u.team),
-          extras: [],
+          ...(u.team !== undefined ? { team: String(u.team) } : {}),
+          ...(u.teamOrder !== undefined
+            ? { teamOrder: Number(u.teamOrder) }
+            : {}),
+          ...(u.employmentStatus !== undefined
+            ? {
+                employmentStatus: u.employmentStatus as
+                  | "ACTIVE"
+                  | "LEAVE"
+                  | "RETIRED",
+              }
+            : {}),
           ...(u.phone !== undefined ? { phone: String(u.phone) } : {}),
         })),
         creates: payload.creates.map((c) => ({
           name: String(c.name),
           team: String(c.team),
-          extras: [],
+          ...(c.teamOrder !== undefined
+            ? { teamOrder: Number(c.teamOrder) }
+            : {}),
+          ...(c.employmentStatus !== undefined
+            ? {
+                employmentStatus: c.employmentStatus as
+                  | "ACTIVE"
+                  | "LEAVE"
+                  | "RETIRED",
+              }
+            : {}),
           ...(c.phone !== undefined ? { phone: String(c.phone) } : {}),
         })),
       },
       prisma,
-      { existingForGuard: existing, rejectNeedsReviewNames: true }
+      {
+        existingForGuard: existing.map((e) => ({
+          id: e.id,
+          name: e.name,
+          team: e.team,
+          teamOrder: e.teamOrder,
+          employmentStatus: String(e.employmentStatus),
+          phoneNormalized: e.phoneNormalized,
+        })),
+      }
     );
 
-    // Audit: 마스킹만 (원문 금지)
     const maskedUpdates = payload.updates.map((u) => ({
       id: Number(u.id),
-      team: String(u.team),
+      ...(u.team !== undefined ? { team: String(u.team) } : {}),
+      ...(u.teamOrder !== undefined ? { teamOrder: Number(u.teamOrder) } : {}),
+      ...(u.employmentStatus !== undefined
+        ? { employmentStatus: u.employmentStatus }
+        : {}),
       ...(u.phone !== undefined
         ? { phone: maskKrMobile(String(u.phone)) }
         : {}),
@@ -133,13 +165,17 @@ export async function POST(req: NextRequest) {
     const maskedCreates = payload.creates.map((c) => ({
       name: String(c.name),
       team: String(c.team),
+      ...(c.teamOrder !== undefined ? { teamOrder: Number(c.teamOrder) } : {}),
+      ...(c.employmentStatus !== undefined
+        ? { employmentStatus: c.employmentStatus }
+        : {}),
       ...(c.phone !== undefined
         ? { phone: maskKrMobile(String(c.phone)) }
         : {}),
     }));
 
     await logAudit({
-      action: "IMPORT_CADDIES",
+      action: "IMPORT_CADDIES_V2",
       meta: {
         entity: "Caddy",
         updated: result.updated,
@@ -153,10 +189,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       ...result,
-      touchesEmploymentStatus: false,
     });
   } catch (e: any) {
-    if (e instanceof CaddyImportApplyError) {
+    if (e instanceof RosterImportApplyError) {
       return NextResponse.json(
         { error: e.message, code: e.code },
         { status: e.status }
