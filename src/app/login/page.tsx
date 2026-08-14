@@ -16,7 +16,23 @@ export default async function LoginPage() {
   if (role === "caddy") redirect("/caddy");
 
   return (
-    <Suspense fallback={<div className="p-8 text-center text-slate-500">로그인 준비 중…</div>}>
+    <Suspense
+      fallback={
+        <div className="vh-auth-hero">
+          <div
+            className="vh-auth-bg"
+            style={{ backgroundImage: "url(/brand/hero-fairway.jpg)" }}
+            aria-hidden
+          />
+          <div className="vh-auth-overlay" aria-hidden />
+          <div className="vh-auth-frame">
+            <p style={{ color: "rgba(255,255,255,0.75)", marginTop: 40 }}>
+              로그인 준비 중…
+            </p>
+          </div>
+        </div>
+      }
+    >
       <LoginClient />
     </Suspense>
   );

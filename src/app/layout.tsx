@@ -1,9 +1,31 @@
 import "./globals.css";
 import Link from "next/link";
 import { cookies } from "next/headers";
+import { Cormorant_Garamond, Noto_Serif_KR, Source_Sans_3 } from "next/font/google";
 import LogoutButton from "@/components/LogoutButton";
 
 export const dynamic = "force-dynamic";
+
+const display = Cormorant_Garamond({
+  subsets: ["latin"],
+  weight: ["500", "600", "700"],
+  variable: "--font-display-loaded",
+  display: "swap",
+});
+
+const displayKr = Noto_Serif_KR({
+  subsets: ["latin"],
+  weight: ["500", "600", "700"],
+  variable: "--font-display-kr-loaded",
+  display: "swap",
+});
+
+const sans = Source_Sans_3({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
+  variable: "--font-sans-loaded",
+  display: "swap",
+});
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const store = await cookies();
@@ -13,23 +35,32 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     (store.get("admin")?.value === "1" ? "admin" : null);
 
   return (
-    <html lang="ko">
-      <body className="min-h-screen bg-slate-50 text-slate-900">
-        <header className="border-b bg-white">
-          <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
-            <Link href="/" className="font-semibold">VERTHILL • Caddy</Link>
+    <html
+      lang="ko"
+      className={`${display.variable} ${displayKr.variable} ${sans.variable}`}
+    >
+      <body>
+        <header className="vh-header">
+          <div className="vh-header-inner">
+            <Link href="/" className="vh-brand">
+              VERTHILL <span>• Caddy</span>
+            </Link>
 
-            <nav className="flex items-center gap-3 text-sm">
-              <Link className="rounded-md border px-3 py-1.5 hover:bg-slate-50" href="/">홈</Link>
-              <Link className="rounded-md border px-3 py-1.5 hover:bg-slate-50" href="/notice">공지</Link>
+            <nav className="vh-nav">
+              <Link className="ui-btn ui-btn-ghost" href="/">
+                홈
+              </Link>
+              <Link className="ui-btn ui-btn-ghost" href="/notice">
+                공지
+              </Link>
 
               {role === "admin" && (
-                <Link className="rounded-md border px-3 py-1.5 hover:bg-slate-50" href="/manage">
+                <Link className="ui-btn ui-btn-gold" href="/manage">
                   관리자
                 </Link>
               )}
               {role === "caddy" && (
-                <Link className="rounded-md border px-3 py-1.5 hover:bg-slate-50" href="/caddy">
+                <Link className="ui-btn ui-btn-gold" href="/caddy">
                   내 대시보드
                 </Link>
               )}
@@ -37,7 +68,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
               {role ? (
                 <LogoutButton />
               ) : (
-                <Link className="rounded-md border px-3 py-1.5 hover:bg-slate-50" href="/login">
+                <Link className="ui-btn ui-btn-primary" href="/login">
                   로그인
                 </Link>
               )}
@@ -45,7 +76,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           </div>
         </header>
 
-        <main className="mx-auto max-w-5xl px-4 py-8">{children}</main>
+        <main className="vh-main">{children}</main>
       </body>
     </html>
   );

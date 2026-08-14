@@ -328,194 +328,112 @@ export default function ManageUsersPage() {
   };
 
   return (
-    <div style={{ maxWidth: 960 }}>
-      <h1 style={{ fontSize: 22, fontWeight: 800, marginBottom: 8 }}>
-        계정 연결 (Kakao ↔ 캐디)
-      </h1>
-      <p style={{ color: "#64748b", marginBottom: 16, fontSize: 14 }}>
-        직원이 제출한 본인확인 요청을 승인한 뒤 연결하거나, 아래에서 수동으로
-        연결할 수 있습니다. (후보 자동 승인 없음)
-      </p>
+    <div className="users-page">
+      <header className="us-header">
+        <div>
+          <h1 className="us-title">계정 연결</h1>
+          <p className="us-sub">
+            승인 대기 요청과 수동 연결을 분리해 관리합니다. (후보 자동 승인 없음)
+          </p>
+        </div>
+        <button
+          type="button"
+          className="us-btn"
+          disabled={pendingLoading || loading || queueBusyId != null}
+          onClick={() => void refreshAll()}
+        >
+          전체 새로고침
+        </button>
+      </header>
 
-      {message && (
-        <div
-          style={{
-            marginBottom: 12,
-            padding: "10px 12px",
-            background: "#ecfdf5",
-            border: "1px solid #a7f3d0",
-            borderRadius: 8,
-            color: "#065f46",
-            fontSize: 14,
-          }}
-        >
-          {message}
-        </div>
-      )}
-      {error && (
-        <div
-          style={{
-            marginBottom: 12,
-            padding: "10px 12px",
-            background: "#fff1f2",
-            border: "1px solid #fecdd3",
-            borderRadius: 8,
-            color: "#9f1239",
-            fontSize: 14,
-          }}
-        >
-          {error}
-        </div>
-      )}
+      {message && <div className="us-banner ok">{message}</div>}
+      {error && <div className="us-banner err">{error}</div>}
 
       {/* —— 승인 대기 큐 —— */}
-      <section style={{ marginBottom: 28 }}>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "baseline",
-            justifyContent: "space-between",
-            gap: 12,
-            marginBottom: 10,
-          }}
-        >
-          <h2 style={{ fontSize: 17, fontWeight: 800, margin: 0 }}>
-            본인확인 승인 대기
-            {!pendingLoading && (
-              <span
-                style={{
-                  marginLeft: 8,
-                  fontSize: 13,
-                  fontWeight: 600,
-                  color: "#64748b",
-                }}
-              >
-                {pending.length}건
-              </span>
-            )}
-          </h2>
+      <section className="us-section us-section-queue">
+        <div className="us-section-head">
+          <div>
+            <div className="us-eyebrow">승인 큐</div>
+            <h2 className="us-section-title">
+              본인확인 승인 대기
+              {!pendingLoading && (
+                <span className="us-count">{pending.length}건</span>
+              )}
+            </h2>
+          </div>
           <button
             type="button"
             disabled={pendingLoading || queueBusyId != null}
             onClick={() => void loadPending()}
-            style={btnGhost}
+            className="us-btn"
           >
             새로고침
           </button>
         </div>
 
         {pendingLoading ? (
-          <p style={{ color: "#64748b", fontSize: 14 }}>불러오는 중…</p>
+          <p className="us-muted">불러오는 중…</p>
         ) : pending.length === 0 ? (
-          <p
-            style={{
-              color: "#64748b",
-              fontSize: 14,
-              padding: 14,
-              border: "1px dashed #e5e7eb",
-              borderRadius: 8,
-              background: "#fff",
-            }}
-          >
-            승인 대기 중인 요청이 없습니다.
-          </p>
+          <p className="us-empty">승인 대기 중인 요청이 없습니다.</p>
         ) : (
-          <div style={{ display: "grid", gap: 12 }}>
+          <div className="us-queue-list">
             {pending.map((req) => {
               const selectedId = selectedByRequest[req.id] ?? null;
               const busyRow = queueBusyId === req.id;
               return (
-                <div
-                  key={req.id}
-                  style={{
-                    border: "1px solid #e5e7eb",
-                    borderRadius: 10,
-                    background: "#fff",
-                    padding: 14,
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "flex",
-                      flexWrap: "wrap",
-                      gap: 12,
-                      justifyContent: "space-between",
-                      marginBottom: 10,
-                    }}
-                  >
-                    <div style={{ fontSize: 14 }}>
-                      <div style={{ fontWeight: 700, marginBottom: 4 }}>
-                        {req.submittedName}{" "}
-                        <span style={{ color: "#94a3b8", fontWeight: 500 }}>
+                <article key={req.id} className="us-queue-card">
+                  <div className="us-queue-top">
+                    <div>
+                      <div className="us-queue-name">
+                        {req.submittedName}
+                        <span className="us-queue-phone">
                           · {req.maskedPhone || "010-****-****"}
                         </span>
                       </div>
-                      <div style={{ color: "#64748b", fontSize: 13 }}>
-                        Kakao username{" "}
-                        <strong style={{ color: "#0f172a" }}>
-                          {req.user.username}
-                        </strong>
+                      <div className="us-queue-meta">
+                        Kakao <strong>{req.user.username}</strong>
                         {" · "}
                         {formatRequestedAt(req.requestedAt)}
                       </div>
                     </div>
-                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <div className="us-queue-actions">
                       <button
                         type="button"
+                        className="us-btn us-btn-primary"
                         disabled={busyRow || selectedId == null}
                         onClick={() => void confirmApprove(req)}
-                        style={
-                          busyRow || selectedId == null
-                            ? { ...btnPrimary, opacity: 0.5, cursor: "not-allowed" }
-                            : btnPrimary
-                        }
                       >
                         {busyRow ? "처리 중…" : "승인"}
                       </button>
                       <button
                         type="button"
+                        className="us-btn us-btn-danger"
                         disabled={busyRow}
                         onClick={() => void confirmReject(req)}
-                        style={btnDanger}
                       >
                         반려
                       </button>
                     </div>
                   </div>
 
-                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>
+                  <div className="us-cand-label">
                     후보 캐디
-                    <span style={{ fontWeight: 500, color: "#94a3b8", marginLeft: 6 }}>
+                    <span>
                       {req.candidates.length}명 · 직접 선택 필요 (자동 승인 없음)
                     </span>
                   </div>
                   {req.candidates.length === 0 ? (
-                    <p style={{ color: "#be123c", fontSize: 13, margin: 0 }}>
+                    <p className="us-warn">
                       후보가 없습니다. 반려 후 직원에게 이름 확인을 요청하세요.
                     </p>
                   ) : (
-                    <div
-                      style={{
-                        border: "1px solid #f1f5f9",
-                        borderRadius: 8,
-                        overflow: "hidden",
-                      }}
-                    >
+                    <div className="us-cand-list">
                       {req.candidates.map((c) => {
                         const selected = selectedId === c.id;
                         return (
                           <label
                             key={c.id}
-                            style={{
-                              display: "flex",
-                              gap: 10,
-                              alignItems: "center",
-                              padding: "10px 12px",
-                              borderBottom: "1px solid #f8fafc",
-                              background: selected ? "#eff6ff" : "#fff",
-                              cursor: busyRow ? "default" : "pointer",
-                              fontSize: 14,
-                            }}
+                            className={`us-cand${selected ? " is-selected" : ""}`}
                           >
                             <input
                               type="radio"
@@ -538,7 +456,7 @@ export default function ManageUsersPage() {
                       })}
                     </div>
                   )}
-                </div>
+                </article>
               );
             })}
           </div>
@@ -546,118 +464,149 @@ export default function ManageUsersPage() {
       </section>
 
       {/* —— 수동 연결 (기존) —— */}
-      <h2 style={{ fontSize: 17, fontWeight: 800, marginBottom: 8 }}>
-        수동 연결 / 해제
-      </h2>
-      <p style={{ color: "#64748b", marginBottom: 12, fontSize: 14 }}>
-        Kakao로 가입한 계정만 표시됩니다. 관리자가 캐디를 직접 선택한 뒤에만
-        연결됩니다. (이름 자동 매칭 없음)
-      </p>
+      <section className="us-section us-section-manual">
+        <div className="us-section-head">
+          <div>
+            <div className="us-eyebrow">수동 운영</div>
+            <h2 className="us-section-title">수동 연결 / 해제</h2>
+          </div>
+        </div>
+        <p className="us-sub us-sub-inline">
+          Kakao 가입 계정만 표시됩니다. 관리자가 캐디를 직접 선택한 뒤에만
+          연결됩니다. (이름 자동 매칭 없음)
+        </p>
 
-      {loading ? (
-        <p>불러오는 중…</p>
-      ) : users.length === 0 ? (
-        <p style={{ color: "#64748b" }}>Kakao 가입 계정이 없습니다.</p>
-      ) : (
-        <table
-          style={{
-            width: "100%",
-            borderCollapse: "collapse",
-            background: "#fff",
-            border: "1px solid #e5e7eb",
-            borderRadius: 8,
-            overflow: "hidden",
-            fontSize: 14,
-          }}
-        >
-          <thead>
-            <tr style={{ background: "#f8fafc", textAlign: "left" }}>
-              <th style={th}>username</th>
-              <th style={th}>상태</th>
-              <th style={th}>연결된 캐디</th>
-              <th style={th}>작업</th>
-            </tr>
-          </thead>
-          <tbody>
-            {users.map((u) => (
-              <tr key={u.id} style={{ borderTop: "1px solid #f1f5f9" }}>
-                <td style={td}>
-                  <div style={{ fontWeight: 600 }}>{u.username}</div>
-                  <div style={{ fontSize: 12, color: "#94a3b8" }}>
-                    kakaoUserId {u.kakaoUserId} · role {u.role}
+        {loading ? (
+          <p className="us-muted">불러오는 중…</p>
+        ) : users.length === 0 ? (
+          <p className="us-muted">Kakao 가입 계정이 없습니다.</p>
+        ) : (
+          <>
+            <div className="us-table-wrap us-manual-pc">
+              <table className="us-table">
+                <thead>
+                  <tr>
+                    <th>username</th>
+                    <th>상태</th>
+                    <th>연결된 캐디</th>
+                    <th>작업</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {users.map((u) => (
+                    <tr key={u.id}>
+                      <td>
+                        <div className="us-uname">{u.username}</div>
+                        <div className="us-uid">
+                          kakaoUserId {u.kakaoUserId} · role {u.role}
+                        </div>
+                      </td>
+                      <td>
+                        <span
+                          className={`us-status ${u.linked ? "ok" : "off"}`}
+                        >
+                          {u.linked ? "연결됨" : "미연결"}
+                        </span>
+                      </td>
+                      <td>
+                        {u.caddy ? (
+                          <>
+                            {u.caddy.name} / {u.caddy.team} / 순번{" "}
+                            {u.caddy.teamOrder}{" "}
+                            <span className="us-uid">(id {u.caddy.id})</span>
+                          </>
+                        ) : (
+                          <span className="us-muted">—</span>
+                        )}
+                      </td>
+                      <td>
+                        {!u.linked ? (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void openLinkModal(u)}
+                            className="us-btn us-btn-primary us-btn-sm"
+                          >
+                            캐디 연결
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void confirmUnlink(u)}
+                            className="us-btn us-btn-danger us-btn-sm"
+                          >
+                            연결 해제
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <ul className="us-manual-mobile">
+              {users.map((u) => (
+                <li key={u.id} className="us-user-row">
+                  <div className="us-user-main">
+                    <strong>{u.username}</strong>
+                    <span
+                      className={`us-status ${u.linked ? "ok" : "off"}`}
+                    >
+                      {u.linked ? "연결됨" : "미연결"}
+                    </span>
                   </div>
-                </td>
-                <td style={td}>{u.linked ? "연결됨" : "미연결"}</td>
-                <td style={td}>
-                  {u.caddy ? (
-                    <>
-                      {u.caddy.name} / {u.caddy.team} / 순번 {u.caddy.teamOrder}{" "}
-                      <span style={{ color: "#94a3b8" }}>(id {u.caddy.id})</span>
-                    </>
-                  ) : (
-                    <span style={{ color: "#94a3b8" }}>—</span>
-                  )}
-                </td>
-                <td style={td}>
-                  {!u.linked ? (
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => void openLinkModal(u)}
-                      style={btnPrimary}
-                    >
-                      캐디 연결
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => void confirmUnlink(u)}
-                      style={btnDanger}
-                    >
-                      연결 해제
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+                  <div className="us-user-sub">
+                    {u.caddy
+                      ? `${u.caddy.name} / ${u.caddy.team} / 순번 ${u.caddy.teamOrder}`
+                      : "연결된 캐디 없음"}
+                  </div>
+                  <div className="us-user-actions">
+                    {!u.linked ? (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void openLinkModal(u)}
+                        className="us-btn us-btn-primary us-btn-sm"
+                      >
+                        캐디 연결
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void confirmUnlink(u)}
+                        className="us-btn us-btn-danger us-btn-sm"
+                      >
+                        연결 해제
+                      </button>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </section>
 
       {linkUser && (
-        <div style={modalOverlay} onClick={() => !busy && setLinkUser(null)}>
-          <div style={modalCard} onClick={(e) => e.stopPropagation()}>
-            <h2 style={{ fontSize: 18, fontWeight: 800, marginBottom: 8 }}>
-              캐디 연결
-            </h2>
-            <p style={{ fontSize: 14, color: "#64748b", marginBottom: 12 }}>
+        <div className="us-modal-overlay" onClick={() => !busy && setLinkUser(null)}>
+          <div className="us-modal" onClick={(e) => e.stopPropagation()}>
+            <h2 className="us-modal-title">캐디 연결</h2>
+            <p className="us-sub us-sub-inline">
               계정 <strong>{linkUser.username}</strong> 에 연결할 ACTIVE
               캐디를 선택하세요. 이미 다른 계정에 연결된 캐디는 목록에 없습니다.
             </p>
             <input
+              className="us-input"
               value={caddyQuery}
               onChange={(e) => setCaddyQuery(e.target.value)}
               placeholder="이름 / 조 / 순번 / id 검색"
-              style={{
-                width: "100%",
-                marginBottom: 10,
-                padding: "8px 10px",
-                border: "1px solid #e5e7eb",
-                borderRadius: 8,
-              }}
             />
-            <div
-              style={{
-                maxHeight: 280,
-                overflow: "auto",
-                border: "1px solid #e5e7eb",
-                borderRadius: 8,
-                marginBottom: 12,
-              }}
-            >
+            <div className="us-modal-list">
               {filteredCaddies.length === 0 ? (
-                <div style={{ padding: 12, color: "#94a3b8", fontSize: 13 }}>
+                <div className="us-muted" style={{ padding: 12 }}>
                   선택 가능한 캐디가 없습니다.
                 </div>
               ) : (
@@ -667,18 +616,8 @@ export default function ManageUsersPage() {
                     <button
                       key={c.id}
                       type="button"
+                      className={`us-modal-item${selected ? " is-selected" : ""}`}
                       onClick={() => setSelectedCaddyId(c.id)}
-                      style={{
-                        display: "block",
-                        width: "100%",
-                        textAlign: "left",
-                        padding: "10px 12px",
-                        border: 0,
-                        borderBottom: "1px solid #f1f5f9",
-                        background: selected ? "#eff6ff" : "#fff",
-                        cursor: "pointer",
-                        fontSize: 14,
-                      }}
                     >
                       <strong>{c.name}</strong> · {c.team} · 순번 {c.teamOrder}{" "}
                       · id {c.id}
@@ -687,12 +626,12 @@ export default function ManageUsersPage() {
                 })
               )}
             </div>
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <div className="us-modal-actions">
               <button
                 type="button"
                 disabled={busy}
                 onClick={() => setLinkUser(null)}
-                style={btnGhost}
+                className="us-btn"
               >
                 취소
               </button>
@@ -700,7 +639,7 @@ export default function ManageUsersPage() {
                 type="button"
                 disabled={busy || selectedCaddyId == null}
                 onClick={() => void confirmLink()}
-                style={btnPrimary}
+                className="us-btn us-btn-primary"
               >
                 {busy ? "처리 중…" : "연결 확인"}
               </button>
@@ -708,6 +647,200 @@ export default function ManageUsersPage() {
           </div>
         </div>
       )}
+
+      <style>{`
+        .users-page { max-width: 1100px; margin: 0 auto; }
+        .us-header {
+          display: flex; flex-wrap: wrap; gap: 10px;
+          justify-content: space-between; align-items: flex-end;
+          margin-bottom: 12px; padding-bottom: 10px;
+          border-bottom: 1px solid var(--vh-gold-line);
+        }
+        .us-title {
+          margin: 0;
+          font-family: var(--font-display-kr);
+          font-size: 1.65rem; font-weight: 700;
+          color: var(--vh-green-900); line-height: 1.12;
+        }
+        .us-sub {
+          margin: 4px 0 0; color: var(--vh-muted); font-size: 0.78rem;
+        }
+        .us-sub-inline { margin: 0 0 10px; }
+        .us-banner {
+          padding: 8px 10px; border-radius: 8px; margin-bottom: 10px;
+          font-size: 0.82rem;
+        }
+        .us-banner.ok {
+          background: var(--vh-ok-bg); border: 1px solid #b7dfc8; color: var(--vh-ok);
+        }
+        .us-banner.err {
+          background: var(--vh-danger-bg); border: 1px solid #f0c4c9; color: var(--vh-danger);
+        }
+        .us-section {
+          background: var(--vh-paper); border: 1px solid var(--vh-border);
+          border-radius: var(--vh-radius); padding: 14px;
+          margin-bottom: 14px; box-shadow: var(--vh-shadow-sm);
+        }
+        .us-section-queue {
+          border-color: rgba(196, 165, 116, 0.55);
+          box-shadow: 0 0 0 1px rgba(196, 165, 116, 0.12), var(--vh-shadow-sm);
+        }
+        .us-section-manual {
+          border-top: 3px solid var(--vh-green-800);
+        }
+        .us-section-head {
+          display: flex; justify-content: space-between; align-items: flex-start;
+          gap: 10px; margin-bottom: 10px;
+        }
+        .us-eyebrow {
+          font-size: 0.66rem; font-weight: 700; letter-spacing: 0.08em;
+          text-transform: uppercase; color: var(--vh-gold-deep); margin-bottom: 2px;
+        }
+        .us-section-title {
+          margin: 0;
+          font-family: var(--font-display-kr);
+          font-size: 1.12rem; font-weight: 700; color: var(--vh-green-900);
+        }
+        .us-count {
+          margin-left: 8px; font-size: 0.78rem; font-weight: 600;
+          color: var(--vh-muted); font-family: var(--font-sans);
+        }
+        .us-muted { color: var(--vh-muted); font-size: 0.8rem; }
+        .us-empty {
+          margin: 0; padding: 12px; border: 1px dashed var(--vh-border-strong);
+          border-radius: 8px; color: var(--vh-muted); font-size: 0.8rem;
+          background: var(--vh-ivory);
+        }
+        .us-queue-list { display: grid; gap: 8px; }
+        .us-queue-card {
+          border: 1px solid var(--vh-border); border-radius: var(--vh-radius-sm);
+          background: linear-gradient(180deg, #fffcf7 0%, #f7f4ec 100%);
+          padding: 10px 12px;
+        }
+        .us-queue-top {
+          display: flex; flex-wrap: wrap; gap: 8px;
+          justify-content: space-between; margin-bottom: 8px;
+        }
+        .us-queue-name {
+          font-size: 0.9rem; font-weight: 700; color: var(--vh-green-900);
+        }
+        .us-queue-phone { color: var(--vh-muted); font-weight: 500; }
+        .us-queue-meta { margin-top: 2px; font-size: 0.72rem; color: var(--vh-muted); }
+        .us-queue-actions { display: flex; gap: 6px; align-items: center; }
+        .us-cand-label {
+          font-size: 0.74rem; font-weight: 700; color: var(--vh-ink-soft);
+          margin-bottom: 5px;
+        }
+        .us-cand-label span {
+          margin-left: 6px; font-weight: 500; color: var(--vh-muted);
+        }
+        .us-warn { margin: 0; color: var(--vh-danger); font-size: 0.78rem; }
+        .us-cand-list {
+          border: 1px solid var(--vh-border); border-radius: 8px; overflow: hidden;
+          background: #fff;
+        }
+        .us-cand {
+          display: flex; gap: 8px; align-items: center;
+          padding: 7px 10px; border-top: 1px solid var(--vh-border);
+          font-size: 0.78rem; cursor: pointer;
+        }
+        .us-cand:first-child { border-top: 0; }
+        .us-cand.is-selected {
+          background: rgba(196, 165, 116, 0.14);
+        }
+        .us-btn {
+          min-height: 30px; padding: 5px 10px; border-radius: 8px;
+          border: 1px solid var(--vh-border-strong); background: var(--vh-paper);
+          font-size: 0.74rem; font-weight: 600; cursor: pointer;
+          font-family: var(--font-sans); color: var(--vh-ink);
+        }
+        .us-btn-sm { min-height: 26px; padding: 3px 8px; font-size: 0.7rem; }
+        .us-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .us-btn-primary {
+          background: var(--vh-green-900); border-color: var(--vh-green-900); color: #fff;
+        }
+        .us-btn-danger {
+          background: #fff; border-color: #e2b4ba; color: var(--vh-danger);
+        }
+        .us-table-wrap {
+          overflow: auto; border: 1px solid var(--vh-border);
+          border-radius: var(--vh-radius-sm);
+        }
+        .us-table {
+          width: 100%; border-collapse: collapse; font-size: 0.8rem;
+        }
+        .us-table th {
+          text-align: left; padding: 7px 8px; background: var(--vh-green-50);
+          color: var(--vh-green-800); font-size: 0.7rem; font-weight: 700;
+          border-bottom: 1px solid var(--vh-border);
+        }
+        .us-table td {
+          padding: 7px 8px; border-top: 1px solid var(--vh-border);
+          vertical-align: middle;
+        }
+        .us-uname { font-weight: 700; color: var(--vh-green-900); }
+        .us-uid { font-size: 0.68rem; color: var(--vh-muted); }
+        .us-status {
+          display: inline-flex; padding: 1px 7px; border-radius: 999px;
+          font-size: 0.68rem; font-weight: 700;
+        }
+        .us-status.ok { background: var(--vh-ok-bg); color: var(--vh-ok); }
+        .us-status.off { background: var(--vh-ivory-deep); color: var(--vh-muted); }
+        .us-manual-mobile { display: grid; gap: 0; list-style: none; margin: 0; padding: 0;
+          border: 1px solid var(--vh-border); border-radius: var(--vh-radius-sm); overflow: hidden;
+        }
+        .us-manual-pc { display: none; }
+        .us-user-row {
+          padding: 8px 10px; border-top: 1px solid var(--vh-border);
+          background: var(--vh-paper);
+        }
+        .us-user-row:first-child { border-top: 0; }
+        .us-user-main {
+          display: flex; justify-content: space-between; gap: 8px; align-items: center;
+        }
+        .us-user-main strong { color: var(--vh-green-900); font-size: 0.86rem; }
+        .us-user-sub { margin-top: 2px; font-size: 0.72rem; color: var(--vh-muted); }
+        .us-user-actions { margin-top: 6px; }
+        @media (min-width: 960px) {
+          .us-title { font-size: 1.8rem; }
+          .us-manual-mobile { display: none; }
+          .us-manual-pc { display: block; }
+        }
+        .us-modal-overlay {
+          position: fixed; inset: 0; z-index: 60;
+          background: rgba(15, 31, 24, 0.48);
+          display: flex; align-items: center; justify-content: center; padding: 16px;
+        }
+        .us-modal {
+          width: 100%; max-width: 480px; background: var(--vh-paper);
+          border: 1px solid var(--vh-border); border-radius: var(--vh-radius);
+          padding: 16px; box-shadow: var(--vh-shadow);
+        }
+        .us-modal-title {
+          margin: 0 0 6px;
+          font-family: var(--font-display-kr);
+          font-size: 1.2rem; color: var(--vh-green-900);
+        }
+        .us-input {
+          width: 100%; margin-bottom: 8px; padding: 8px 10px;
+          border: 1px solid var(--vh-border-strong); border-radius: 8px;
+          font-size: 16px; background: #fff;
+        }
+        .us-modal-list {
+          max-height: 280px; overflow: auto;
+          border: 1px solid var(--vh-border); border-radius: 8px; margin-bottom: 10px;
+        }
+        .us-modal-item {
+          display: block; width: 100%; text-align: left; padding: 8px 10px;
+          border: 0; border-bottom: 1px solid var(--vh-border);
+          background: #fff; cursor: pointer; font-size: 0.8rem;
+          font-family: var(--font-sans); color: var(--vh-ink);
+        }
+        .us-modal-item.is-selected { background: rgba(196, 165, 116, 0.16); }
+        .us-modal-actions {
+          display: flex; gap: 6px; justify-content: flex-end;
+        }
+      `}</style>
     </div>
   );
 }
@@ -721,56 +854,3 @@ function formatRequestedAt(value: string | Date): string {
     return String(value);
   }
 }
-
-const th: React.CSSProperties = {
-  padding: "10px 12px",
-  fontWeight: 700,
-  fontSize: 13,
-  color: "#475569",
-};
-const td: React.CSSProperties = { padding: "12px", verticalAlign: "top" };
-const btnPrimary: React.CSSProperties = {
-  padding: "8px 12px",
-  borderRadius: 8,
-  border: "1px solid #0f172a",
-  background: "#0f172a",
-  color: "#fff",
-  fontSize: 13,
-  cursor: "pointer",
-};
-const btnDanger: React.CSSProperties = {
-  padding: "8px 12px",
-  borderRadius: 8,
-  border: "1px solid #be123c",
-  background: "#fff",
-  color: "#be123c",
-  fontSize: 13,
-  cursor: "pointer",
-};
-const btnGhost: React.CSSProperties = {
-  padding: "8px 12px",
-  borderRadius: 8,
-  border: "1px solid #e5e7eb",
-  background: "#fff",
-  color: "#334155",
-  fontSize: 13,
-  cursor: "pointer",
-};
-const modalOverlay: React.CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  background: "rgba(15, 23, 42, 0.45)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  zIndex: 50,
-  padding: 16,
-};
-const modalCard: React.CSSProperties = {
-  width: "100%",
-  maxWidth: 480,
-  background: "#fff",
-  borderRadius: 12,
-  padding: 20,
-  boxShadow: "0 20px 40px rgba(0,0,0,0.15)",
-};
