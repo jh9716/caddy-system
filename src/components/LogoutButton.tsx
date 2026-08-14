@@ -3,10 +3,10 @@
 export default function LogoutButton() {
   const onClick = async () => {
     await fetch("/api/logout", { method: "POST", credentials: "include" });
-    location.href = "/"; // 새로고침 겸 홈으로
+    location.href = "/";
   };
   return (
-    <button onClick={onClick} className="rounded-md border px-3 py-1.5 hover:bg-slate-50">
+    <button type="button" onClick={onClick} className="ui-btn ui-btn-ghost">
       로그아웃
     </button>
   );

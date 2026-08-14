@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 
 const KAKAO_ERROR_MESSAGES: Record<string, string> = {
   kakao_config: "카카오 로그인 설정이 없습니다. 관리자에게 문의하세요.",
@@ -61,70 +62,88 @@ export default function LoginClient() {
   };
 
   return (
-    <div className="flex min-h-[70vh] items-center justify-center">
-      <form
-        onSubmit={onSubmit}
-        className="w-full max-w-md rounded-2xl border bg-white p-6 shadow"
-      >
-        <h1 className="mb-6 text-xl font-bold">Verthill Caddy System</h1>
+    <div className="vh-auth-hero">
+      <div
+        className="vh-auth-bg"
+        style={{ backgroundImage: "url(/brand/hero-fairway.jpg)" }}
+        aria-hidden
+      />
+      <div className="vh-auth-overlay" aria-hidden />
 
-        <button
-          type="button"
-          onClick={onKakao}
-          className="mb-5 w-full rounded-lg bg-[#FEE500] px-4 py-2.5 text-sm font-semibold text-[#191919] hover:brightness-95"
-        >
-          카카오로 시작
-        </button>
+      <div className="vh-auth-frame">
+        <header className="vh-auth-top">
+          <Link href="/" className="vh-auth-brand">
+            VERTHILL <span>Caddy</span>
+          </Link>
+        </header>
 
-        <div className="mb-5 flex items-center gap-3 text-xs text-slate-400">
-          <div className="h-px flex-1 bg-slate-200" />
-          <span>또는 아이디로 로그인</span>
-          <div className="h-px flex-1 bg-slate-200" />
-        </div>
-
-        <label className="mb-1 block text-sm" htmlFor="login-username">
-          아이디
-        </label>
-        <input
-          id="login-username"
-          name="username"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          className="mb-4 w-full rounded-lg border px-3 py-2 outline-none focus:ring"
-          autoComplete="username"
-          autoCapitalize="none"
-          autoCorrect="off"
-          spellCheck={false}
-          inputMode="text"
-        />
-
-        <label className="mb-1 block text-sm" htmlFor="login-password">
-          비밀번호
-        </label>
-        <input
-          id="login-password"
-          name="password"
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className="mb-4 w-full rounded-lg border px-3 py-2 outline-none focus:ring"
-          autoComplete="current-password"
-        />
-
-        {err && (
-          <div className="mb-4 rounded-md bg-rose-50 px-3 py-2 text-sm text-rose-600">
-            {err}
+        <div className="vh-auth-stage">
+          <div className="vh-auth-intro">
+            <p className="vh-auth-eyebrow">Golf Resort Operations</p>
+            <h1 className="vh-auth-title">VERTHILL Caddy</h1>
+            <div className="vh-auth-rule" aria-hidden />
+            <p className="vh-auth-lead">
+              프리미엄 골프 리조트를 위한 캐디·가용·배치 운영 시스템
+            </p>
           </div>
-        )}
 
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full rounded-lg bg-slate-900 px-4 py-2 font-medium text-white disabled:opacity-60"
-        >
-          {loading ? "로그인 중…" : "로그인"}
-        </button>
-      </form>
+          <form onSubmit={onSubmit} className="vh-auth-card">
+            <h2 className="vh-auth-card-title">로그인</h2>
+            <p className="vh-auth-card-sub">관리자 및 캐디 계정으로 입장합니다</p>
+
+            <button
+              type="button"
+              onClick={onKakao}
+              className="vh-auth-kakao"
+            >
+              카카오로 시작
+            </button>
+
+            <div className="vh-auth-or">
+              <span>또는 아이디로 로그인</span>
+            </div>
+
+            <label className="vh-auth-label" htmlFor="login-username">
+              아이디
+            </label>
+            <input
+              id="login-username"
+              name="username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              className="vh-auth-input"
+              autoComplete="username"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              inputMode="text"
+            />
+
+            <label className="vh-auth-label" htmlFor="login-password">
+              비밀번호
+            </label>
+            <input
+              id="login-password"
+              name="password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="vh-auth-input"
+              autoComplete="current-password"
+            />
+
+            {err && <div className="vh-auth-error">{err}</div>}
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="vh-auth-submit"
+            >
+              {loading ? "로그인 중…" : "로그인"}
+            </button>
+          </form>
+        </div>
+      </div>
     </div>
   );
 }

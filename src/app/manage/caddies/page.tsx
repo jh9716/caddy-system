@@ -5,6 +5,7 @@ import {
   EMPLOYMENT_STATUSES,
   EMPLOYMENT_STATUS_LABELS,
   EXTRA_FLAG_OPTIONS,
+  PRIMARY_TEAMS,
   TEAM_OPTIONS,
   employmentStatusLabel,
   normalizeEmploymentStatus,
@@ -12,6 +13,9 @@ import {
   type EmploymentStatus,
 } from '@/lib/caddyManage';
 import { maskKrMobile } from '@/lib/caddyPhone';
+
+/** 시안: 한눈에 보기 1~8조 */
+const GLANCE_TEAMS = PRIMARY_TEAMS.slice(0, 8) as readonly string[];
 
 type Caddy = {
   id: number;
@@ -79,10 +83,17 @@ export default function ManageCaddiesPage() {
   const [createDraft, setCreateDraft] = useState<Draft>(emptyDraft);
   const [creating, setCreating] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  /** UI only — 한눈에(조별 요약) / 상세(목록·편집) */
+  const [viewMode, setViewMode] = useState<'summary' | 'detail'>('summary');
+  /** 모바일 상세: 액션 펼침 */
+  const [expandedId, setExpandedId] = useState<number | null>(null);
 
   const load = useCallback(
     async (employmentOverride?: EmploymentStatus | 'all') => {
-      const employment = employmentOverride ?? employmentFilter;
+      // 한눈에 보기: 재직/휴직/퇴사 집계를 위해 전체 로드
+      const employment =
+        employmentOverride ??
+        (viewMode === 'summary' ? 'all' : employmentFilter);
       setLoading(true);
       setMessage(null);
       try {
@@ -105,7 +116,7 @@ export default function ManageCaddiesPage() {
         setLoading(false);
       }
     },
-    [employmentFilter]
+    [employmentFilter, viewMode]
   );
 
   useEffect(() => {
@@ -115,11 +126,18 @@ export default function ManageCaddiesPage() {
   const filtered = useMemo(() => {
     const query = q.trim();
     return rows.filter((r) => {
+      if (viewMode === 'detail') {
+        if (employmentFilter !== 'all') {
+          if (normalizeEmploymentStatus(r.employmentStatus) !== employmentFilter) {
+            return false;
+          }
+        }
+      }
       if (teamFilter !== 'all' && r.team !== teamFilter) return false;
       if (!query) return true;
       return r.name.includes(query) || String(r.id).includes(query);
     });
-  }, [rows, teamFilter, q]);
+  }, [rows, teamFilter, q, viewMode, employmentFilter]);
 
   const stats = useMemo(() => {
     const byTeam = new Map<string, number>();
@@ -128,6 +146,26 @@ export default function ManageCaddiesPage() {
     }
     return { total: filtered.length, teams: byTeam.size };
   }, [filtered]);
+
+  const teamSummaries = useMemo(() => {
+    const map = new Map(
+      GLANCE_TEAMS.map((team) => [
+        team,
+        { team, total: 0, active: 0, leave: 0, retired: 0, other: 0 },
+      ])
+    );
+    for (const r of rows) {
+      const cur = map.get(r.team);
+      if (!cur) continue;
+      cur.total += 1;
+      const st = normalizeEmploymentStatus(r.employmentStatus);
+      if (st === 'ACTIVE') cur.active += 1;
+      else if (st === 'LEAVE') cur.leave += 1;
+      else if (st === 'RETIRED') cur.retired += 1;
+      else cur.other += 1;
+    }
+    return GLANCE_TEAMS.map((t) => map.get(t)!);
+  }, [rows]);
 
   function startEdit(c: Caddy) {
     setEditingId(c.id);
@@ -290,22 +328,57 @@ export default function ManageCaddiesPage() {
   }
 
   return (
-    <div className="caddy-manage">
+    <div className={`caddy-manage mode-${viewMode}`}>
       <header className="cm-header">
         <div>
-          <h2 className="cm-title">캐디 관리</h2>
-          <p className="cm-sub">
-            퇴사=soft 처리(목록에서만 숨김) · ID·배정 보존 · 물리 삭제 없음 · XLSX 자동반영 보류
-          </p>
+          <h1 className="cm-title">캐디 관리</h1>
         </div>
-        <button type="button" className="cm-btn cm-btn-primary" onClick={() => setCreateOpen((v) => !v)}>
-          {createOpen ? '등록 닫기' : '신규 등록'}
-        </button>
+        <div className="cm-header-actions">
+          <button
+            type="button"
+            className="cm-btn cm-btn-primary cm-btn-sm"
+            onClick={() => {
+              setViewMode('detail');
+              setCreateOpen(true);
+            }}
+          >
+            신규 등록
+          </button>
+          <button
+            type="button"
+            className="cm-btn cm-btn-sm"
+            onClick={() => load()}
+            disabled={loading}
+          >
+            새로고침
+          </button>
+        </div>
       </header>
+
+      <div className="cm-tabs" role="tablist" aria-label="보기 모드">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={viewMode === 'summary'}
+          className={viewMode === 'summary' ? 'is-active' : ''}
+          onClick={() => setViewMode('summary')}
+        >
+          한눈에 보기
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={viewMode === 'detail'}
+          className={viewMode === 'detail' ? 'is-active' : ''}
+          onClick={() => setViewMode('detail')}
+        >
+          상세 보기
+        </button>
+      </div>
 
       {message && <div className="cm-banner">{message}</div>}
 
-      {createOpen && (
+      {createOpen && viewMode === 'detail' && (
         <section className="cm-card cm-create">
           <h3>신규 캐디 등록</h3>
           <div className="cm-form-grid">
@@ -399,310 +472,645 @@ export default function ManageCaddiesPage() {
         </section>
       )}
 
-      <section className="cm-filter-bar" aria-label="재직상태 필터">
-        {(
-          [
-            ['all', '전체'],
-            ['ACTIVE', '재직'],
-            ['LEAVE', '휴직'],
-            ['RETIRED', '퇴사'],
-          ] as const
-        ).map(([value, label]) => (
-          <button
-            key={value}
-            type="button"
-            className={`cm-filter-btn ${employmentFilter === value ? 'is-active' : ''}`}
-            onClick={() => setEmploymentFilter(value)}
-            disabled={loading}
-          >
-            {label}
-          </button>
-        ))}
-      </section>
+      {viewMode === 'detail' && (
+        <>
+          <section className="cm-filter-bar" aria-label="재직상태 필터">
+            {(
+              [
+                ['all', '전체'],
+                ['ACTIVE', '재직'],
+                ['LEAVE', '휴직'],
+                ['RETIRED', '퇴사'],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                className={`cm-filter-btn ${employmentFilter === value ? 'is-active' : ''}`}
+                onClick={() => setEmploymentFilter(value)}
+                disabled={loading}
+              >
+                {label}
+              </button>
+            ))}
+          </section>
 
-      <section className="cm-toolbar">
-        <input
-          className="cm-search"
-          placeholder="이름 / ID 검색"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-        />
-        <select value={teamFilter} onChange={(e) => setTeamFilter(e.target.value)}>
-          <option value="all">전체 조</option>
-          {TEAM_OPTIONS.map((t) => (
-            <option key={t} value={t}>{t}</option>
-          ))}
-        </select>
-        <button type="button" className="cm-btn" onClick={() => load()} disabled={loading}>
-          새로고침
-        </button>
-      </section>
+          <section className="cm-toolbar">
+            <input
+              className="cm-search"
+              placeholder="이름 / ID 검색"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+            />
+            <select value={teamFilter} onChange={(e) => setTeamFilter(e.target.value)}>
+              <option value="all">전체 조</option>
+              {TEAM_OPTIONS.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          </section>
 
-      <div className="cm-stats">
-        표시 {stats.total}명 · {stats.teams}개 조
-        {employmentFilter === 'ACTIVE' && (
-          <span className="cm-stats-hint"> · 퇴사자는 「퇴사」 필터에서 조회·복귀</span>
-        )}
-      </div>
+          <div className="cm-stats">
+            표시 {stats.total}명 · {stats.teams}개 조
+            {employmentFilter === 'ACTIVE' && (
+              <span className="cm-stats-hint"> · 퇴사자는 「퇴사」 필터에서 조회·복귀</span>
+            )}
+          </div>
+        </>
+      )}
 
       {loading ? (
         <p className="cm-muted">불러오는 중…</p>
+      ) : viewMode === 'summary' ? (
+        <div className="cm-summary-grid">
+          {teamSummaries.map((t) => (
+            <button
+              key={t.team}
+              type="button"
+              className="cm-team-card"
+              onClick={() => {
+                setTeamFilter(t.team);
+                setEmploymentFilter('all');
+                setViewMode('detail');
+              }}
+            >
+              <div className="cm-team-head">
+                <span className="cm-team-name">{t.team}</span>
+                <span className="cm-team-chevron" aria-hidden>›</span>
+              </div>
+              <ul className="cm-team-status">
+                <li>
+                  <span className="dot active" />
+                  <span className="lbl">재직</span> <strong>{t.active}</strong>
+                </li>
+                <li>
+                  <span className="dot leave" />
+                  <span className="lbl">휴직</span> <strong>{t.leave}</strong>
+                </li>
+                <li>
+                  <span className="dot retired" />
+                  <span className="lbl">퇴사</span> <strong>{t.retired}</strong>
+                </li>
+                <li>
+                  <span className="dot other" />
+                  <span className="lbl">기타</span> <strong>{t.other}</strong>
+                </li>
+              </ul>
+              <div className="cm-team-foot">총 {t.total}명</div>
+            </button>
+          ))}
+        </div>
       ) : filtered.length === 0 ? (
         <p className="cm-muted">조건에 맞는 캐디가 없습니다.</p>
       ) : (
-        <ul className="cm-list">
-          {filtered.map((c) => {
-            const editing = editingId === c.id;
-            const draft = drafts[c.id] ?? toDraft(c);
-            const busy = savingId === c.id;
-            return (
-              <li
-                key={c.id}
-                className={`cm-item ${normalizeEmploymentStatus(c.employmentStatus) === 'RETIRED' ? 'is-retired' : ''}`}
-              >
-                <div className="cm-item-top">
-                  <div className="cm-id">#{c.id}</div>
-                  <div className="cm-name-line">
-                    <strong>{c.name}</strong>
-                    <span className="cm-pill">{c.team}</span>
-                    <span className="cm-pill muted">순번 {c.teamOrder}</span>
+        <>
+          {/* PC: dense table */}
+          <div className="cm-table-wrap cm-detail-pc">
+            <table className="cm-table">
+              <thead>
+                <tr>
+                  <th>이름</th>
+                  <th>조</th>
+                  <th>순번</th>
+                  <th>상태</th>
+                  <th>휴대폰</th>
+                  <th>속성</th>
+                  <th>작업</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((c) => {
+                  const editing = editingId === c.id;
+                  const draft = drafts[c.id] ?? toDraft(c);
+                  const busy = savingId === c.id;
+                  const st = normalizeEmploymentStatus(c.employmentStatus);
+                  return (
+                    <tr
+                      key={c.id}
+                      className={st === 'RETIRED' ? 'is-retired' : ''}
+                    >
+                      {editing ? (
+                        <td colSpan={7} className="cm-edit-cell">
+                          <div className="cm-form-grid">
+                            <label>
+                              이름
+                              <input
+                                value={draft.name}
+                                onChange={(e) =>
+                                  updateDraft(c.id, { name: e.target.value })
+                                }
+                              />
+                            </label>
+                            <label>
+                              조
+                              <select
+                                value={draft.team}
+                                onChange={(e) =>
+                                  updateDraft(c.id, { team: e.target.value })
+                                }
+                              >
+                                {!(TEAM_OPTIONS as readonly string[]).includes(
+                                  draft.team
+                                ) && (
+                                  <option value={draft.team}>{draft.team}</option>
+                                )}
+                                {TEAM_OPTIONS.map((t) => (
+                                  <option key={t} value={t}>
+                                    {t}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <label>
+                              조내순번
+                              <input
+                                type="number"
+                                min={0}
+                                value={draft.teamOrder}
+                                onChange={(e) =>
+                                  updateDraft(c.id, {
+                                    teamOrder: Number(e.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </label>
+                            <label>
+                              재직상태
+                              <select
+                                value={draft.employmentStatus}
+                                onChange={(e) =>
+                                  updateDraft(c.id, {
+                                    employmentStatus: e.target
+                                      .value as EmploymentStatus,
+                                  })
+                                }
+                              >
+                                {EMPLOYMENT_STATUSES.map((s) => (
+                                  <option key={s} value={s}>
+                                    {EMPLOYMENT_STATUS_LABELS[s]}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <label>
+                              휴대폰
+                              <input
+                                type="tel"
+                                value={draft.phone}
+                                onChange={(e) =>
+                                  updateDraft(c.id, { phone: e.target.value })
+                                }
+                              />
+                            </label>
+                          </div>
+                          <fieldset className="cm-flags">
+                            <legend>추가 속성</legend>
+                            {EXTRA_FLAG_OPTIONS.map((flag) => (
+                              <label key={flag} className="cm-check">
+                                <input
+                                  type="checkbox"
+                                  checked={draft.extraFlags.includes(flag)}
+                                  onChange={() => toggleFlag(c.id, flag)}
+                                />
+                                {flag}
+                              </label>
+                            ))}
+                          </fieldset>
+                          <div className="cm-item-actions">
+                            <button
+                              type="button"
+                              className="cm-btn cm-btn-primary cm-btn-sm"
+                              disabled={busy}
+                              onClick={() => saveEdit(c.id)}
+                            >
+                              {busy ? '저장 중…' : '저장'}
+                            </button>
+                            <button
+                              type="button"
+                              className="cm-btn cm-btn-sm"
+                              disabled={busy}
+                              onClick={cancelEdit}
+                            >
+                              취소
+                            </button>
+                          </div>
+                        </td>
+                      ) : (
+                        <>
+                          <td>
+                            <strong className="cm-name">{c.name}</strong>
+                            <span className="cm-id-inline">#{c.id}</span>
+                          </td>
+                          <td>{c.team}</td>
+                          <td className="cm-num">{c.teamOrder}</td>
+                          <td>
+                            <span
+                              className={`cm-status ${
+                                st === 'ACTIVE'
+                                  ? 'ok'
+                                  : st === 'LEAVE'
+                                    ? 'leave'
+                                    : 'out'
+                              }`}
+                            >
+                              {employmentStatusLabel(c.employmentStatus)}
+                            </span>
+                          </td>
+                          <td className="cm-phone">
+                            {formatPhoneDisplay(c.phoneNormalized)}
+                          </td>
+                          <td className="cm-flags-cell">
+                            {(c.extraFlags ?? []).join(' · ') || '—'}
+                          </td>
+                          <td>
+                            <div className="cm-row-actions">
+                              <button
+                                type="button"
+                                className="cm-btn cm-btn-sm"
+                                disabled={busy}
+                                onClick={() => startEdit(c)}
+                              >
+                                수정
+                              </button>
+                              <button
+                                type="button"
+                                className="cm-btn cm-btn-sm"
+                                disabled={busy}
+                                onClick={() => moveOrder(c, -1)}
+                              >
+                                ↑
+                              </button>
+                              <button
+                                type="button"
+                                className="cm-btn cm-btn-sm"
+                                disabled={busy}
+                                onClick={() => moveOrder(c, 1)}
+                              >
+                                ↓
+                              </button>
+                              {st === 'RETIRED' ? (
+                                <button
+                                  type="button"
+                                  className="cm-btn cm-btn-primary cm-btn-sm"
+                                  disabled={busy}
+                                  onClick={() => setEmployment(c, 'ACTIVE')}
+                                >
+                                  복귀
+                                </button>
+                              ) : (
+                                <>
+                                  {st !== 'LEAVE' && (
+                                    <button
+                                      type="button"
+                                      className="cm-btn cm-btn-sm"
+                                      disabled={busy}
+                                      onClick={() => setEmployment(c, 'LEAVE')}
+                                    >
+                                      휴직
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    className="cm-btn cm-btn-danger cm-btn-sm"
+                                    disabled={busy}
+                                    onClick={() => setEmployment(c, 'RETIRED')}
+                                  >
+                                    퇴사
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          </td>
+                        </>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Mobile: compact one-line rows */}
+          <ul className="cm-dense-list cm-detail-mobile">
+            {filtered.map((c) => {
+              const editing = editingId === c.id;
+              const draft = drafts[c.id] ?? toDraft(c);
+              const busy = savingId === c.id;
+              const st = normalizeEmploymentStatus(c.employmentStatus);
+              const open = expandedId === c.id || editing;
+              return (
+                <li
+                  key={c.id}
+                  className={`cm-dense-row ${st === 'RETIRED' ? 'is-retired' : ''} ${open ? 'is-open' : ''}`}
+                >
+                  <button
+                    type="button"
+                    className="cm-dense-main"
+                    onClick={() =>
+                      setExpandedId((id) => (id === c.id ? null : c.id))
+                    }
+                  >
+                    <strong className="cm-name">{c.name}</strong>
+                    <span className="cm-meta">{c.team}</span>
+                    <span className="cm-num">{c.teamOrder}</span>
                     <span
-                      className={`cm-pill ${
-                        normalizeEmploymentStatus(c.employmentStatus) === 'ACTIVE'
-                          ? 'ok'
-                          : 'warn'
+                      className={`cm-status ${
+                        st === 'ACTIVE' ? 'ok' : st === 'LEAVE' ? 'leave' : 'out'
                       }`}
                     >
                       {employmentStatusLabel(c.employmentStatus)}
                     </span>
-                  </div>
-                  {(c.extraFlags?.length ?? 0) > 0 && (
-                    <div className="cm-extra-row">
-                      {c.extraFlags.map((f) => (
-                        <span key={f} className="cm-pill accent">{f}</span>
-                      ))}
-                    </div>
-                  )}
-                  <div className="cm-phone-line">
-                    휴대폰 {formatPhoneDisplay(c.phoneNormalized)}
-                  </div>
-                </div>
-
-                {!editing ? (
-                  <div className="cm-item-actions">
-                    <button type="button" className="cm-btn" disabled={busy} onClick={() => startEdit(c)}>
-                      수정
-                    </button>
-                    <button type="button" className="cm-btn" disabled={busy} onClick={() => moveOrder(c, -1)}>
-                      순번↑
-                    </button>
-                    <button type="button" className="cm-btn" disabled={busy} onClick={() => moveOrder(c, 1)}>
-                      순번↓
-                    </button>
-                    {normalizeEmploymentStatus(c.employmentStatus) === 'RETIRED' ? (
-                      <button
-                        type="button"
-                        className="cm-btn cm-btn-primary"
-                        disabled={busy}
-                        onClick={() => setEmployment(c, 'ACTIVE')}
-                      >
-                        재직 복귀
-                      </button>
-                    ) : (
-                      <>
-                        {normalizeEmploymentStatus(c.employmentStatus) !== 'LEAVE' && (
+                    <span className="cm-more" aria-hidden>
+                      {open ? '▾' : '⋮'}
+                    </span>
+                  </button>
+                  {open && (
+                    <div className="cm-dense-panel">
+                      <div className="cm-phone-line">
+                        휴대폰 {formatPhoneDisplay(c.phoneNormalized)}
+                        {(c.extraFlags?.length ?? 0) > 0 &&
+                          ` · ${c.extraFlags.join('/')}`}
+                      </div>
+                      {!editing ? (
+                        <div className="cm-item-actions">
                           <button
                             type="button"
-                            className="cm-btn"
+                            className="cm-btn cm-btn-sm"
                             disabled={busy}
-                            onClick={() => setEmployment(c, 'LEAVE')}
+                            onClick={() => startEdit(c)}
                           >
-                            휴직
+                            수정
                           </button>
-                        )}
-                        <button
-                          type="button"
-                          className="cm-btn cm-btn-danger"
-                          disabled={busy}
-                          onClick={() => setEmployment(c, 'RETIRED')}
-                          title="물리 삭제 없음 · employmentStatus=RETIRED"
-                        >
-                          퇴사 처리
-                        </button>
-                      </>
-                    )}
-                  </div>
-                ) : (
-                  <div className="cm-edit">
-                    <div className="cm-form-grid">
-                      <label>
-                        이름
-                        <input
-                          value={draft.name}
-                          onChange={(e) => updateDraft(c.id, { name: e.target.value })}
-                        />
-                      </label>
-                      <label>
-                        조
-                        <select
-                          value={draft.team}
-                          onChange={(e) => updateDraft(c.id, { team: e.target.value })}
-                        >
-                          {!(TEAM_OPTIONS as readonly string[]).includes(draft.team) && (
-                            <option value={draft.team}>{draft.team}</option>
+                          <button
+                            type="button"
+                            className="cm-btn cm-btn-sm"
+                            disabled={busy}
+                            onClick={() => moveOrder(c, -1)}
+                          >
+                            순번↑
+                          </button>
+                          <button
+                            type="button"
+                            className="cm-btn cm-btn-sm"
+                            disabled={busy}
+                            onClick={() => moveOrder(c, 1)}
+                          >
+                            순번↓
+                          </button>
+                          {st === 'RETIRED' ? (
+                            <button
+                              type="button"
+                              className="cm-btn cm-btn-primary cm-btn-sm"
+                              disabled={busy}
+                              onClick={() => setEmployment(c, 'ACTIVE')}
+                            >
+                              재직 복귀
+                            </button>
+                          ) : (
+                            <>
+                              {st !== 'LEAVE' && (
+                                <button
+                                  type="button"
+                                  className="cm-btn cm-btn-sm"
+                                  disabled={busy}
+                                  onClick={() => setEmployment(c, 'LEAVE')}
+                                >
+                                  휴직
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                className="cm-btn cm-btn-danger cm-btn-sm"
+                                disabled={busy}
+                                onClick={() => setEmployment(c, 'RETIRED')}
+                              >
+                                퇴사
+                              </button>
+                            </>
                           )}
-                          {TEAM_OPTIONS.map((t) => (
-                            <option key={t} value={t}>{t}</option>
-                          ))}
-                        </select>
-                      </label>
-                      <label>
-                        조내순번
-                        <input
-                          type="number"
-                          min={0}
-                          value={draft.teamOrder}
-                          onChange={(e) =>
-                            updateDraft(c.id, { teamOrder: Number(e.target.value) || 0 })
-                          }
-                        />
-                      </label>
-                      <label>
-                        재직상태
-                        <select
-                          value={draft.employmentStatus}
-                          onChange={(e) =>
-                            updateDraft(c.id, {
-                              employmentStatus: e.target.value as EmploymentStatus,
-                            })
-                          }
-                        >
-                          {EMPLOYMENT_STATUSES.map((s) => (
-                            <option key={s} value={s}>
-                              {EMPLOYMENT_STATUS_LABELS[s]}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label>
-                        휴대폰번호
-                        <input
-                          type="tel"
-                          inputMode="tel"
-                          autoComplete="tel"
-                          value={draft.phone}
-                          onChange={(e) =>
-                            updateDraft(c.id, { phone: e.target.value })
-                          }
-                          placeholder="010-1234-5678"
-                        />
-                      </label>
+                        </div>
+                      ) : (
+                        <div className="cm-edit">
+                          <div className="cm-form-grid">
+                            <label>
+                              이름
+                              <input
+                                value={draft.name}
+                                onChange={(e) =>
+                                  updateDraft(c.id, { name: e.target.value })
+                                }
+                              />
+                            </label>
+                            <label>
+                              조
+                              <select
+                                value={draft.team}
+                                onChange={(e) =>
+                                  updateDraft(c.id, { team: e.target.value })
+                                }
+                              >
+                                {TEAM_OPTIONS.map((t) => (
+                                  <option key={t} value={t}>
+                                    {t}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <label>
+                              순번
+                              <input
+                                type="number"
+                                min={0}
+                                value={draft.teamOrder}
+                                onChange={(e) =>
+                                  updateDraft(c.id, {
+                                    teamOrder: Number(e.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </label>
+                            <label>
+                              상태
+                              <select
+                                value={draft.employmentStatus}
+                                onChange={(e) =>
+                                  updateDraft(c.id, {
+                                    employmentStatus: e.target
+                                      .value as EmploymentStatus,
+                                  })
+                                }
+                              >
+                                {EMPLOYMENT_STATUSES.map((s) => (
+                                  <option key={s} value={s}>
+                                    {EMPLOYMENT_STATUS_LABELS[s]}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <label>
+                              휴대폰
+                              <input
+                                type="tel"
+                                value={draft.phone}
+                                onChange={(e) =>
+                                  updateDraft(c.id, { phone: e.target.value })
+                                }
+                              />
+                            </label>
+                          </div>
+                          <fieldset className="cm-flags">
+                            <legend>추가 속성</legend>
+                            {EXTRA_FLAG_OPTIONS.map((flag) => (
+                              <label key={flag} className="cm-check">
+                                <input
+                                  type="checkbox"
+                                  checked={draft.extraFlags.includes(flag)}
+                                  onChange={() => toggleFlag(c.id, flag)}
+                                />
+                                {flag}
+                              </label>
+                            ))}
+                          </fieldset>
+                          <div className="cm-item-actions">
+                            <button
+                              type="button"
+                              className="cm-btn cm-btn-primary cm-btn-sm"
+                              disabled={busy}
+                              onClick={() => saveEdit(c.id)}
+                            >
+                              {busy ? '저장 중…' : '저장'}
+                            </button>
+                            <button
+                              type="button"
+                              className="cm-btn cm-btn-sm"
+                              disabled={busy}
+                              onClick={cancelEdit}
+                            >
+                              취소
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    <fieldset className="cm-flags">
-                      <legend>추가 속성</legend>
-                      {EXTRA_FLAG_OPTIONS.map((flag) => (
-                        <label key={flag} className="cm-check">
-                          <input
-                            type="checkbox"
-                            checked={draft.extraFlags.includes(flag)}
-                            onChange={() => toggleFlag(c.id, flag)}
-                          />
-                          {flag}
-                        </label>
-                      ))}
-                    </fieldset>
-                    <div className="cm-item-actions">
-                      <button
-                        type="button"
-                        className="cm-btn cm-btn-primary"
-                        disabled={busy}
-                        onClick={() => saveEdit(c.id)}
-                      >
-                        {busy ? '저장 중…' : '저장'}
-                      </button>
-                      <button type="button" className="cm-btn" disabled={busy} onClick={cancelEdit}>
-                        취소
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </li>
-            );
-          })}
-        </ul>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </>
       )}
 
-      <details className="cm-deferred">
-        <summary>XLSX 명단 자동 매칭/반영 (보류)</summary>
-        <p>
-          운영 중 실수 방지를 위해 자동 반영은 잠시 꺼 두었습니다.
-          캐디 등록·조 이동·순번·재직/퇴사·추가 속성은 이 화면에서 직접 관리하세요.
-        </p>
-      </details>
+      {viewMode === 'detail' && (
+        <details className="cm-deferred">
+          <summary>XLSX 명단 자동 매칭/반영 (보류)</summary>
+          <p>
+            운영 중 실수 방지를 위해 자동 반영은 잠시 꺼 두었습니다.
+            캐디 등록·조 이동·순번·재직/퇴사·추가 속성은 이 화면에서 직접 관리하세요.
+          </p>
+        </details>
+      )}
 
       <style>{`
         .caddy-manage {
-          max-width: 920px;
+          max-width: 1280px;
           margin: 0 auto;
-          padding-bottom: 48px;
         }
         .cm-header {
           display: flex;
           justify-content: space-between;
-          align-items: flex-start;
-          gap: 12px;
-          margin-bottom: 12px;
+          align-items: flex-end;
+          gap: 10px;
+          margin-bottom: 10px;
+          padding-bottom: 10px;
+          border-bottom: 1px solid var(--vh-gold-line);
+          flex-wrap: wrap;
+        }
+        .cm-header-actions {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+          align-items: center;
         }
         .cm-title {
           margin: 0;
-          font-size: 1.35rem;
-          font-weight: 800;
+          font-family: var(--font-display-kr);
+          font-size: 1.65rem;
+          font-weight: 700;
+          color: var(--vh-green-900);
+          line-height: 1.12;
+          letter-spacing: 0.01em;
         }
-        .cm-sub {
-          margin: 4px 0 0;
-          color: #64748b;
-          font-size: 0.85rem;
+        .cm-tabs {
+          display: inline-flex;
+          gap: 0;
+          margin-bottom: 12px;
+          border-bottom: 1px solid var(--vh-border);
+          width: 100%;
+        }
+        .cm-tabs button {
+          border: 0;
+          background: transparent;
+          padding: 8px 14px;
+          font-size: 0.82rem;
+          font-weight: 600;
+          color: var(--vh-muted);
+          cursor: pointer;
+          border-bottom: 2px solid transparent;
+          margin-bottom: -1px;
+          font-family: var(--font-sans);
+          letter-spacing: 0.01em;
+        }
+        .cm-tabs button.is-active {
+          color: var(--vh-green-900);
+          border-bottom-color: var(--vh-gold);
         }
         .cm-banner {
-          background: #ecfdf5;
-          border: 1px solid #a7f3d0;
-          color: #065f46;
-          padding: 8px 10px;
+          background: var(--vh-ok-bg);
+          border: 1px solid #b7dfc8;
+          color: var(--vh-ok);
+          padding: 6px 10px;
           border-radius: 8px;
-          margin-bottom: 12px;
-          font-size: 0.9rem;
+          margin-bottom: 10px;
+          font-size: 0.82rem;
         }
         .cm-card,
         .cm-item {
-          background: #fff;
-          border: 1px solid #e2e8f0;
-          border-radius: 12px;
+          background: var(--vh-paper);
+          border: 1px solid var(--vh-border);
+          border-radius: var(--vh-radius-sm);
           padding: 12px;
-          margin-bottom: 10px;
+          margin-bottom: 8px;
+          box-shadow: var(--vh-shadow-sm);
         }
         .cm-create h3 {
-          margin: 0 0 10px;
-          font-size: 1rem;
+          margin: 0 0 8px;
+          font-family: var(--font-display);
+          font-size: 1.05rem;
+          color: var(--vh-green-900);
         }
         .cm-filter-bar {
           display: grid;
           grid-template-columns: repeat(4, minmax(0, 1fr));
-          gap: 6px;
+          gap: 4px;
           margin: 4px 0 8px;
+          padding: 8px;
+          background: var(--vh-paper);
+          border: 1px solid var(--vh-border);
+          border-radius: var(--vh-radius-sm);
         }
         .cm-filter-btn {
-          padding: 10px 8px;
-          border: 1px solid #cbd5e1;
-          border-radius: 999px;
+          padding: 7px 6px;
+          border: 1px solid var(--vh-border);
+          border-radius: 8px;
           background: #fff;
-          color: #334155;
-          font-size: 0.9rem;
+          color: var(--vh-ink-soft);
+          font-size: 0.8rem;
           font-weight: 600;
           cursor: pointer;
         }
         .cm-filter-btn.is-active {
-          background: #0f172a;
-          border-color: #0f172a;
+          background: var(--vh-green-900);
+          border-color: var(--vh-green-900);
           color: #fff;
         }
         .cm-filter-btn:disabled {
@@ -712,146 +1120,372 @@ export default function ManageCaddiesPage() {
         .cm-toolbar {
           display: grid;
           grid-template-columns: 1fr;
-          gap: 8px;
-          margin: 12px 0;
+          gap: 6px;
+          margin: 8px 0;
         }
         .cm-search,
         .cm-toolbar select,
         .cm-form-grid input,
         .cm-form-grid select {
           width: 100%;
-          padding: 10px 12px;
-          border: 1px solid #cbd5e1;
+          padding: 8px 10px;
+          border: 1px solid var(--vh-border-strong);
           border-radius: 8px;
-          font-size: 16px; /* iOS zoom 방지 */
+          font-size: 16px;
           background: #fff;
         }
         .cm-stats {
-          color: #475569;
-          font-size: 0.85rem;
+          color: var(--vh-muted);
+          font-size: 0.76rem;
           margin-bottom: 8px;
+          font-weight: 500;
         }
         .cm-stats-hint {
-          color: #b45309;
+          color: var(--vh-warn);
         }
-        .cm-list {
+        .cm-summary-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 8px;
+        }
+        @media (min-width: 960px) {
+          .cm-summary-grid {
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px;
+          }
+          .cm-title { font-size: 1.8rem; }
+        }
+        .cm-team-card {
+          text-align: left;
+          border: 1px solid var(--vh-border);
+          border-radius: var(--vh-radius-sm);
+          background: linear-gradient(180deg, #fffcf7 0%, #f7f4ec 100%);
+          padding: 10px 11px 8px;
+          cursor: pointer;
+          font-family: var(--font-sans);
+          color: inherit;
+          min-height: 0;
+          box-shadow: var(--vh-shadow-sm);
+          transition: border-color 0.15s ease, box-shadow 0.15s ease;
+        }
+        .cm-team-card:hover {
+          border-color: var(--vh-gold);
+          box-shadow: var(--vh-shadow);
+        }
+        .cm-team-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 6px;
+          padding-bottom: 5px;
+          border-bottom: 1px solid rgba(230, 224, 212, 0.9);
+        }
+        .cm-team-name {
+          font-size: 0.95rem;
+          font-weight: 700;
+          color: var(--vh-green-900);
+          letter-spacing: 0.01em;
+        }
+        .cm-team-chevron {
+          color: var(--vh-gold-deep);
+          font-size: 1.05rem;
+          line-height: 1;
+          opacity: 0.8;
+        }
+        .cm-team-status {
           list-style: none;
           margin: 0;
           padding: 0;
-        }
-        .cm-item.is-retired {
-          opacity: 0.72;
-          background: #f8fafc;
-        }
-        .cm-item-top {
           display: grid;
-          gap: 6px;
+          gap: 3px;
+          font-size: 0.72rem;
+          color: var(--vh-muted);
+          font-weight: 500;
         }
-        .cm-id {
-          color: #94a3b8;
-          font-size: 0.75rem;
-        }
-        .cm-name-line {
+        .cm-team-status li {
           display: flex;
-          flex-wrap: wrap;
+          align-items: center;
           gap: 6px;
-          align-items: center;
         }
-        .cm-name-line strong {
-          font-size: 1.05rem;
-          margin-right: 4px;
+        .cm-team-status strong {
+          margin-left: auto;
+          font-variant-numeric: tabular-nums;
+          color: var(--vh-green-900);
+          font-weight: 700;
+          font-size: 0.8rem;
         }
-        .cm-pill {
+        .cm-team-status .dot {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          flex-shrink: 0;
+          box-shadow: 0 0 0 1.5px rgba(0,0,0,0.04);
+        }
+        .cm-team-status .dot.active { background: #2f8f5b; }
+        .cm-team-status .dot.leave { background: #c9a227; }
+        .cm-team-status .dot.retired { background: #c44b4b; }
+        .cm-team-status .dot.other { background: #9aa39c; }
+        .cm-team-foot {
+          margin-top: 7px;
+          padding-top: 6px;
+          border-top: 1px solid var(--vh-border);
+          text-align: center;
+          font-size: 0.74rem;
+          font-weight: 700;
+          color: var(--vh-green-800);
+          font-variant-numeric: tabular-nums;
+          letter-spacing: 0.01em;
+        }
+        @media (max-width: 959px) {
+          .cm-title { font-size: 1.4rem; }
+          .cm-team-card {
+            display: grid;
+            grid-template-columns: auto 1fr auto;
+            align-items: center;
+            column-gap: 6px;
+            padding: 8px 9px;
+            background: var(--vh-paper);
+          }
+          .cm-team-head {
+            grid-column: 1;
+            margin: 0;
+            padding: 0;
+            border: 0;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 0;
+          }
+          .cm-team-chevron { display: none; }
+          .cm-team-name { font-size: 0.84rem; }
+          .cm-team-status {
+            grid-column: 2;
+            display: flex;
+            flex-wrap: nowrap;
+            gap: 5px;
+            font-size: 0.62rem;
+          }
+          .cm-team-status li { gap: 2px; white-space: nowrap; }
+          .cm-team-status .lbl { display: none; }
+          .cm-team-status strong {
+            margin-left: 0;
+            font-size: 0.68rem;
+          }
+          .cm-team-foot {
+            grid-column: 3;
+            margin: 0;
+            padding: 0;
+            border: 0;
+            font-size: 0.72rem;
+            white-space: nowrap;
+          }
+        }
+        .cm-detail-mobile { display: block; }
+        .cm-detail-pc { display: none; }
+        @media (min-width: 960px) {
+          .cm-detail-mobile { display: none; }
+          .cm-detail-pc { display: block; }
+        }
+        .cm-table-wrap {
+          overflow: auto;
+          border: 1px solid var(--vh-border);
+          border-radius: var(--vh-radius-sm);
+          background: var(--vh-paper);
+          box-shadow: var(--vh-shadow-sm);
+        }
+        .cm-table {
+          width: 100%;
+          border-collapse: collapse;
+          font-size: 0.8rem;
+        }
+        .cm-table th {
+          text-align: left;
+          padding: 7px 8px;
+          background: var(--vh-green-50);
+          color: var(--vh-green-800);
+          font-size: 0.7rem;
+          font-weight: 700;
+          letter-spacing: 0.03em;
+          border-bottom: 1px solid var(--vh-border);
+          white-space: nowrap;
+        }
+        .cm-table td {
+          padding: 6px 8px;
+          border-top: 1px solid var(--vh-border);
+          vertical-align: middle;
+          color: var(--vh-ink);
+        }
+        .cm-table tr:hover td { background: rgba(243, 247, 244, 0.55); }
+        .cm-table tr.is-retired td { opacity: 0.62; }
+        .cm-name { color: var(--vh-green-900); font-weight: 700; }
+        .cm-id-inline {
+          margin-left: 6px;
+          color: var(--vh-muted);
+          font-size: 0.68rem;
+          font-weight: 500;
+        }
+        .cm-num {
+          font-variant-numeric: tabular-nums;
+          font-weight: 700;
+          color: var(--vh-green-800);
+        }
+        .cm-phone, .cm-flags-cell {
+          color: var(--vh-muted);
+          font-size: 0.74rem;
+          white-space: nowrap;
+        }
+        .cm-status {
           display: inline-flex;
-          align-items: center;
-          padding: 2px 8px;
+          padding: 1px 7px;
           border-radius: 999px;
-          font-size: 0.75rem;
-          background: #e2e8f0;
-          color: #0f172a;
+          font-size: 0.68rem;
+          font-weight: 700;
+          background: var(--vh-ivory-deep);
+          color: var(--vh-muted);
         }
-        .cm-pill.muted { background: #f1f5f9; color: #64748b; }
-        .cm-pill.ok { background: #dcfce7; color: #166534; }
-        .cm-pill.warn { background: #fee2e2; color: #991b1b; }
-        .cm-pill.accent { background: #e0e7ff; color: #3730a3; }
-        .cm-extra-row { display: flex; flex-wrap: wrap; gap: 4px; }
+        .cm-status.ok { background: var(--vh-ok-bg); color: var(--vh-ok); }
+        .cm-status.leave { background: var(--vh-warn-bg); color: var(--vh-warn); }
+        .cm-status.out { background: var(--vh-danger-bg); color: var(--vh-danger); }
+        .cm-row-actions {
+          display: flex;
+          flex-wrap: nowrap;
+          gap: 4px;
+        }
+        .cm-edit-cell { background: var(--vh-ivory); }
+        .cm-dense-list {
+          list-style: none;
+          margin: 0;
+          padding: 0;
+          border: 1px solid var(--vh-border);
+          border-radius: var(--vh-radius-sm);
+          background: var(--vh-paper);
+          overflow: hidden;
+        }
+        .cm-dense-row {
+          border-top: 1px solid var(--vh-border);
+        }
+        .cm-dense-row:first-child { border-top: 0; }
+        .cm-dense-row.is-retired { opacity: 0.65; }
+        .cm-dense-main {
+          width: 100%;
+          display: grid;
+          grid-template-columns: minmax(0, 1.2fr) auto 32px auto 22px;
+          align-items: center;
+          gap: 6px;
+          padding: 7px 8px;
+          border: 0;
+          background: transparent;
+          text-align: left;
+          cursor: pointer;
+          font-family: var(--font-sans);
+          color: inherit;
+        }
+        .cm-dense-main .cm-name {
+          font-size: 0.84rem;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .cm-dense-main .cm-meta {
+          font-size: 0.72rem;
+          font-weight: 600;
+          color: var(--vh-ink-soft);
+        }
+        .cm-dense-main .cm-num { font-size: 0.74rem; text-align: center; }
+        .cm-more {
+          color: var(--vh-gold-deep);
+          font-size: 0.9rem;
+          text-align: center;
+        }
+        .cm-dense-panel {
+          padding: 0 8px 8px;
+          background: var(--vh-ivory);
+          border-top: 1px dashed var(--vh-border);
+        }
         .cm-phone-line {
-          margin-top: 2px;
-          font-size: 0.85rem;
-          color: #64748b;
+          margin: 6px 0 4px;
+          font-size: 0.72rem;
+          color: var(--vh-muted);
         }
         .cm-item-actions {
           display: flex;
           flex-wrap: wrap;
-          gap: 8px;
-          margin-top: 10px;
+          gap: 5px;
+          margin-top: 6px;
         }
         .cm-btn {
-          min-height: 40px;
-          padding: 8px 12px;
-          border-radius: 8px;
-          border: 1px solid #cbd5e1;
-          background: #fff;
+          min-height: 28px;
+          padding: 4px 9px;
+          border-radius: 7px;
+          border: 1px solid var(--vh-border-strong);
+          background: var(--vh-paper);
           cursor: pointer;
-          font-size: 0.9rem;
+          font-size: 0.72rem;
+          font-weight: 600;
+          color: var(--vh-ink);
+          font-family: var(--font-sans);
+        }
+        .cm-btn-sm {
+          min-height: 26px;
+          padding: 3px 8px;
+          font-size: 0.7rem;
         }
         .cm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .cm-btn-primary {
-          background: #0f172a;
-          border-color: #0f172a;
+          background: var(--vh-green-900);
+          border-color: var(--vh-green-900);
           color: #fff;
         }
         .cm-btn-danger {
           background: #fff;
-          border-color: #fca5a5;
-          color: #b91c1c;
+          border-color: #e2b4ba;
+          color: var(--vh-danger);
         }
         .cm-form-grid {
           display: grid;
-          grid-template-columns: 1fr;
-          gap: 10px;
+          grid-template-columns: 1fr 1fr;
+          gap: 8px;
         }
         .cm-form-grid label {
           display: grid;
-          gap: 4px;
-          font-size: 0.8rem;
-          color: #475569;
+          gap: 3px;
+          font-size: 0.72rem;
+          color: var(--vh-ink-soft);
         }
         .cm-flags {
-          border: 1px dashed #cbd5e1;
-          border-radius: 8px;
-          padding: 8px 10px;
-          margin: 10px 0 0;
+          border: 1px dashed var(--vh-border-strong);
+          border-radius: var(--vh-radius-sm);
+          padding: 6px 8px;
+          margin: 8px 0 0;
         }
         .cm-flags legend {
           padding: 0 4px;
-          font-size: 0.8rem;
-          color: #64748b;
+          font-size: 0.72rem;
+          color: var(--vh-muted);
         }
         .cm-check {
           display: inline-flex;
           align-items: center;
-          gap: 6px;
-          margin-right: 12px;
-          margin-top: 4px;
-          font-size: 0.9rem;
+          gap: 5px;
+          margin-right: 10px;
+          margin-top: 3px;
+          font-size: 0.78rem;
         }
-        .cm-actions { margin-top: 12px; }
-        .cm-muted { color: #64748b; }
+        .cm-actions { margin-top: 10px; }
+        .cm-muted { color: var(--vh-muted); font-size: 0.84rem; }
         .cm-deferred {
-          margin-top: 20px;
-          color: #64748b;
-          font-size: 0.85rem;
+          margin-top: 14px;
+          color: var(--vh-muted);
+          font-size: 0.78rem;
         }
-        .cm-deferred p { margin: 8px 0 0; }
+        .cm-deferred p { margin: 6px 0 0; }
 
         @media (min-width: 720px) {
           .cm-toolbar {
-            grid-template-columns: 1.4fr 1fr 1fr auto;
+            grid-template-columns: 1.4fr 1fr auto;
             align-items: center;
           }
           .cm-form-grid {
-            grid-template-columns: 1.2fr 1fr 0.7fr 0.8fr;
+            grid-template-columns: 1.2fr 1fr 0.7fr 0.8fr 1fr;
           }
         }
       `}</style>

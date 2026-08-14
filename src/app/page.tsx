@@ -1,41 +1,60 @@
-// src/app/page.tsx
 import Link from "next/link";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { cookies } from "next/headers";
 
 export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
-  const session = await getServerSession(authOptions);
-  const role = (session?.user as any)?.role ?? null;
+  const store = await cookies();
+  const role =
+    store.get("role")?.value ||
+    store.get("session_role")?.value ||
+    (store.get("admin")?.value === "1" ? "admin" : null);
 
   const target =
-    role === "admin" ? "/manage" :
-    role === "caddy" ? "/caddy" : "/login";
+    role === "admin" ? "/manage" : role === "caddy" ? "/caddy" : "/login";
+  const cta = role ? "대시보드로 이동" : "로그인";
 
   return (
-    <main style={{ maxWidth: 900, margin: "60px auto", textAlign: "center" }}>
-      <h1 style={{ fontSize: 28, fontWeight: 800, marginBottom: 10 }}>
-        Verthill Caddy System
-      </h1>
-      <p style={{ color: "#64748b" }}>
-        {role ? `현재 역할: ${role}` : "로그인 후 이용 가능합니다."}
-      </p>
-      <div style={{ marginTop: 22 }}>
-        <Link
-          href={target}
-          style={{
-            padding: "10px 14px",
-            borderRadius: 10,
-            border: "1px solid #e5e7eb",
-            background: "#0f172a",
-            color: "#fff",
-            textDecoration: "none",
-          }}
-        >
-          {role ? "대시보드로 이동" : "로그인"}
-        </Link>
+    <div className="vh-auth-hero vh-home-hero">
+      <div
+        className="vh-auth-bg"
+        style={{ backgroundImage: "url(/brand/hero-green.jpg)" }}
+        aria-hidden
+      />
+      <div className="vh-auth-overlay vh-home-overlay" aria-hidden />
+
+      <div className="vh-auth-frame">
+        <header className="vh-auth-top">
+          <div className="vh-auth-brand">
+            VERTHILL <span>Caddy</span>
+          </div>
+          {!role && (
+            <Link href="/login" className="vh-home-top-link">
+              로그인
+            </Link>
+          )}
+        </header>
+
+        <div className="vh-home-center">
+          <p className="vh-auth-eyebrow">Premium Golf Resort</p>
+          <h1 className="vh-home-title">VERTHILL Caddy</h1>
+          <div className="vh-auth-rule" aria-hidden />
+          <p className="vh-home-lead">
+            {role
+              ? `현재 역할 · ${role}`
+              : "캐디 · 가용 · 배치를 하나의 운영 흐름으로"}
+          </p>
+          <div className="vh-home-cta">
+            <Link href={target} className="vh-auth-submit vh-home-btn">
+              {cta}
+            </Link>
+          </div>
+        </div>
+
+        <footer className="vh-home-foot">
+          <span>Operations Console</span>
+        </footer>
       </div>
-    </main>
+    </div>
   );
 }
