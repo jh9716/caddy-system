@@ -15,6 +15,7 @@
     "vercel-build": "npm run db:generate && next build",
     "postinstall": "prisma generate",
     "test:roster-unit": "npx tsx scripts/test-caddy-roster-unit.ts",
+    "test:roster-import-v2-unit": "npx tsx scripts/test-caddy-roster-import-v2-unit.ts",
     "test:manage-unit": "npx tsx scripts/test-caddy-manage-unit.ts",
     "test:login-unit": "npx tsx scripts/test-login-session-unit.ts",
     "test:user-kakao-schema-unit": "npx tsx scripts/test-user-kakao-schema-unit.ts",
