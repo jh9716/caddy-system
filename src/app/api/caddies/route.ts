@@ -13,6 +13,12 @@ import {
   isPhoneUniqueViolation,
   parseOptionalPhoneInput,
 } from "@/lib/caddyPhone";
+import {
+  SlotOccupiedError,
+  SlotOutOfRangeError,
+  assertSlotAvailable,
+  assertSlotWithinConfiguredCapacity,
+} from "@/lib/caddySlot";
 import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -33,7 +39,6 @@ export async function GET(req: NextRequest) {
       where,
       orderBy: [{ team: "asc" }, { teamOrder: "asc" }, { id: "asc" }],
     });
-    // admin-only route: phoneNormalized 원문 포함 가능 (UI에서 마스킹)
     return NextResponse.json(caddies);
   } catch (e: any) {
     console.error("GET /api/caddies error:", e);
@@ -44,7 +49,7 @@ export async function GET(req: NextRequest) {
   }
 }
 
-/** POST: 신규 캐디 등록 (새 ID 발급, 기존 ID 변경 없음) */
+/** POST: 신규 캐디 등록 — 빈 슬롯(teamOrder) 명시 필수. max+1 자동부여 없음. */
 export async function POST(req: NextRequest) {
   const guard = requireAdmin(req);
   if (guard) return guard;
@@ -60,31 +65,48 @@ export async function POST(req: NextRequest) {
     }
 
     const data = parsed.data;
-    // 미입력/빈값 → null (기존 183명은 전부 null 유지 패턴)
     const phoneNormalized =
       data.phone === undefined ? null : parseOptionalPhoneInput(data.phone);
 
     const team = data.team.trim();
-    const maxOrder = await prisma.caddy.aggregate({
+    const teamOrder = normalizeTeamOrder(data.teamOrder);
+    if (teamOrder < 1) {
+      return NextResponse.json(
+        { error: "빈 슬롯(teamOrder)을 선택해주세요.", code: "slot_required" },
+        { status: 400 }
+      );
+    }
+    assertSlotWithinConfiguredCapacity(team, teamOrder);
+
+    const peers = await prisma.caddy.findMany({
       where: { team },
-      _max: { teamOrder: true },
+      select: {
+        id: true,
+        name: true,
+        team: true,
+        teamOrder: true,
+        employmentStatus: true,
+      },
     });
-    const teamOrder =
-      data.teamOrder && data.teamOrder > 0
-        ? data.teamOrder
-        : (maxOrder._max.teamOrder ?? 0) + 1;
+    assertSlotAvailable(
+      peers.map((p) => ({
+        ...p,
+        employmentStatus: String(p.employmentStatus),
+      })),
+      team,
+      teamOrder
+    );
 
     const created = await prisma.caddy.create({
       data: {
         name: data.name.trim(),
         team,
-        teamOrder: normalizeTeamOrder(teamOrder),
+        teamOrder,
         employmentStatus: normalizeEmploymentStatus(data.employmentStatus),
         extraFlags: normalizeExtraFlags(data.extraFlags),
         status: data.status ?? "근무중",
         memo: data.memo ?? null,
         phoneNormalized,
-        // Preserve Production columns: only set when explicitly provided
         ...(data.employeeCode !== undefined
           ? { employeeCode: data.employeeCode }
           : {}),
@@ -96,6 +118,18 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json(created);
   } catch (e: any) {
+    if (e instanceof SlotOccupiedError || e instanceof SlotOutOfRangeError) {
+      return NextResponse.json(
+        {
+          error: e.message,
+          code: e.code,
+          ...(e instanceof SlotOccupiedError
+            ? { occupant: e.occupant ?? null }
+            : {}),
+        },
+        { status: e.status }
+      );
+    }
     if (e instanceof CaddyPhoneError) {
       return NextResponse.json(
         { error: e.message, code: e.code },
@@ -123,8 +157,8 @@ export async function POST(req: NextRequest) {
 }
 
 /**
- * DELETE 쿼리(?id=) — 물리 삭제 절대 금지 (prisma.caddy.delete 사용 금지).
- * 하위 호환: RETIRED(soft) 처리만 수행. Assignment/Schedule 유지.
+ * DELETE 쿼리(?id=) — 물리 삭제 절대 금지.
+ * RETIRED(soft)만. Assignment/Schedule 유지.
  */
 export async function DELETE(req: NextRequest) {
   const guard = requireAdmin(req);
@@ -135,7 +169,6 @@ export async function DELETE(req: NextRequest) {
     const id = Number(searchParams.get("id"));
     if (!id) return NextResponse.json({ error: "id 필요" }, { status: 400 });
 
-    // soft-retire only — never prisma.caddy.delete / deleteMany
     const updated = await prisma.caddy.update({
       where: { id },
       data: { employmentStatus: "RETIRED" },

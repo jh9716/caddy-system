@@ -2,9 +2,12 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import type { AvailabilityResult, AvailabilityRow } from '@/lib/availabilityEngine';
+import type { TeamSlotGrid, SlotCell } from '@/lib/availabilitySlotGrid';
 import { PRIMARY_TEAMS } from '@/lib/caddyManage';
 
-const GLANCE_TEAMS = PRIMARY_TEAMS.slice(0, 8) as readonly string[];
+const GLANCE_TEAMS = PRIMARY_TEAMS;
+
+type AvailabilityPayload = AvailabilityResult & { slotGrid?: TeamSlotGrid };
 
 function todayYmd() {
   const d = new Date();
@@ -54,9 +57,17 @@ function DensePersonList({
   );
 }
 
+function slotKindLabel(cell: SlotCell): string {
+  if (cell.kind === 'empty') return '빈자리';
+  if (cell.kind === 'leave') return '휴직';
+  if (cell.kind === 'special') return cell.specialTags[0] || '특수';
+  if (cell.kind === 'excluded') return cell.statusLabels[0] || '제외';
+  return '가용';
+}
+
 export default function ManageAvailabilityPage() {
   const [date, setDate] = useState(todayYmd);
-  const [data, setData] = useState<AvailabilityResult | null>(null);
+  const [data, setData] = useState<AvailabilityPayload | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'summary' | 'detail'>('summary');
@@ -79,7 +90,7 @@ export default function ManageAvailabilityPage() {
         setData(null);
         return;
       }
-      setData(json as AvailabilityResult);
+      setData(json as AvailabilityPayload);
     } finally {
       setLoading(false);
     }
@@ -107,6 +118,8 @@ export default function ManageAvailabilityPage() {
     }));
   }, [data]);
 
+  const slotGrid = data?.slotGrid;
+
   return (
     <div className="av-page">
       <header className="av-header">
@@ -124,7 +137,7 @@ export default function ManageAvailabilityPage() {
                 className={viewMode === 'summary' ? 'is-active' : ''}
                 onClick={() => setViewMode('summary')}
               >
-                한눈에 보기
+                슬롯 그리드
               </button>
               <button
                 type="button"
@@ -133,7 +146,7 @@ export default function ManageAvailabilityPage() {
                 className={viewMode === 'detail' ? 'is-active' : ''}
                 onClick={() => setViewMode('detail')}
               >
-                상세 보기
+                목록
               </button>
             </div>
           )}
@@ -179,49 +192,106 @@ export default function ManageAvailabilityPage() {
       )}
 
       {data && viewMode === 'summary' && (
-        <section className="av-panel">
-          <div className="av-panel-head">
-            <h2 className="av-panel-title">조별 현황 (1~8조)</h2>
-            <button
-              type="button"
-              className="av-link"
-              onClick={() => setViewMode('detail')}
-            >
-              상세 보기 →
-            </button>
-          </div>
-          <div className="av-team-grid">
-            {teamGlance.map((t) => (
-              <button
-                key={t.team}
-                type="button"
-                className="av-team-card"
-                onClick={() => setViewMode('detail')}
-              >
-                <div className="av-team-name">{t.team}</div>
-                <ul className="av-team-stats">
-                  <li>
-                    <span className="dot ok" />
-                    <span className="lbl">가용</span> <strong>{t.available}</strong>
-                  </li>
-                  <li>
-                    <span className="dot gold" />
-                    <span className="lbl">특별</span> <strong>{t.special}</strong>
-                  </li>
-                  <li>
-                    <span className="dot out" />
-                    <span className="lbl">제외</span> <strong>{t.excluded}</strong>
-                  </li>
-                </ul>
-                <div className="av-team-foot">가용 {t.available}명</div>
-              </button>
-            ))}
-          </div>
-          <p className="av-muted av-type-line">
-            HOUSE {summary?.byType.HOUSE} · THIRD {summary?.byType.THIRD} ·
-            DRIVING {summary?.byType.DRIVING}
-          </p>
-        </section>
+        <>
+          <section className="av-panel">
+            <div className="av-panel-head">
+              <h2 className="av-panel-title">
+                고정 슬롯 그리드 (1~12조 · 최대 {slotGrid?.maxSlot ?? '—'}번)
+              </h2>
+            </div>
+            <p className="av-muted av-legend">
+              <span className="lg ok">가용</span>
+              <span className="lg out">휴무·당번·마샬·병가·타구사고·경조사 등</span>
+              <span className="lg leave">휴직</span>
+              <span className="lg special">특수(찾근/54/1·3 여지)</span>
+              <span className="lg empty">빈자리</span>
+            </p>
+            {slotGrid ? (
+              <div className="av-slot-scroll">
+                <table className="av-slot-table">
+                  <thead>
+                    <tr>
+                      <th className="av-slot-corner">슬롯</th>
+                      {slotGrid.teams.map((col) => (
+                        <th key={col.team}>{col.team}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Array.from({ length: slotGrid.maxSlot }, (_, i) => i + 1).map(
+                      (slot) => (
+                        <tr key={slot}>
+                          <th scope="row">{slot}</th>
+                          {slotGrid.teams.map((col) => {
+                            const cell = col.slots[slot - 1];
+                            return (
+                              <td
+                                key={`${col.team}-${slot}`}
+                                className={`av-slot-cell is-${cell?.kind ?? 'empty'}`}
+                              >
+                                {cell?.kind === 'empty' ? (
+                                  <span className="av-slot-empty">·</span>
+                                ) : (
+                                  <>
+                                    <div className="av-slot-name">{cell.name}</div>
+                                    <div className="av-slot-status">
+                                      {slotKindLabel(cell)}
+                                      {cell.statusLabels.length > 1
+                                        ? ` · ${cell.statusLabels.slice(1).join(' · ')}`
+                                        : ''}
+                                      {cell.specialTags.length > 0 &&
+                                      cell.kind !== 'special'
+                                        ? ` · ${cell.specialTags.join(' · ')}`
+                                        : ''}
+                                    </div>
+                                  </>
+                                )}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      )
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="av-muted">슬롯 그리드 없음 — 다시 계산해주세요.</p>
+            )}
+          </section>
+
+          <section className="av-panel">
+            <div className="av-panel-head">
+              <h2 className="av-panel-title">조별 요약 (1~12조)</h2>
+            </div>
+            <div className="av-team-grid">
+              {teamGlance.map((t) => (
+                <button
+                  key={t.team}
+                  type="button"
+                  className="av-team-card"
+                  onClick={() => setViewMode('detail')}
+                >
+                  <div className="av-team-name">{t.team}</div>
+                  <ul className="av-team-stats">
+                    <li>
+                      <span className="dot ok" />
+                      <span className="lbl">가용</span> <strong>{t.available}</strong>
+                    </li>
+                    <li>
+                      <span className="dot gold" />
+                      <span className="lbl">특별</span> <strong>{t.special}</strong>
+                    </li>
+                    <li>
+                      <span className="dot out" />
+                      <span className="lbl">제외</span> <strong>{t.excluded}</strong>
+                    </li>
+                  </ul>
+                </button>
+              ))}
+            </div>
+          </section>
+        </>
       )}
 
       {data && viewMode === 'detail' && (
@@ -241,36 +311,11 @@ export default function ManageAvailabilityPage() {
             rows={data.excluded}
             empty="제외 캐디 없음"
           />
-
-          <section className="av-panel">
-            <h3 className="av-panel-title">조별 일반가용</h3>
-            {data.available.byTeam.length === 0 ? (
-              <p className="av-muted">없음</p>
-            ) : (
-              <div className="av-team-detail">
-                {data.available.byTeam.map((col) => (
-                  <div key={col.team} className="av-team-block">
-                    <div className="av-team-block-head">
-                      {col.team} <strong>{col.rows.length}</strong>
-                    </div>
-                    <ol>
-                      {col.rows.map((r) => (
-                        <li key={r.id}>
-                          <span className="av-num">{r.teamOrder}</span> {r.name}
-                          <span className="av-meta muted"> · {r.caddyType}</span>
-                        </li>
-                      ))}
-                    </ol>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
         </>
       )}
 
       <style>{`
-        .av-page { max-width: 1200px; margin: 0 auto; }
+        .av-page { max-width: 1400px; margin: 0 auto; }
         .av-header {
           display: flex; flex-wrap: wrap; gap: 10px;
           justify-content: space-between; align-items: flex-end;
@@ -336,16 +381,10 @@ export default function ManageAvailabilityPage() {
         .av-kpi-card {
           background: var(--vh-paper); border: 1px solid var(--vh-border);
           border-radius: var(--vh-radius-sm); padding: 10px 12px;
-          box-shadow: var(--vh-shadow-sm); position: relative; overflow: hidden;
-        }
-        .av-kpi-card::after {
-          content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px;
-          background: linear-gradient(90deg, transparent, var(--vh-gold), transparent);
-          opacity: 0.5;
+          box-shadow: var(--vh-shadow-sm);
         }
         .av-kpi-card .lbl {
           font-size: 0.68rem; font-weight: 600; color: var(--vh-muted);
-          letter-spacing: 0.03em;
         }
         .av-kpi-card .val {
           margin-top: 6px; font-size: 1.45rem; font-weight: 700;
@@ -361,27 +400,63 @@ export default function ManageAvailabilityPage() {
           gap: 8px; margin-bottom: 10px;
         }
         .av-panel-title {
-          margin: 0 0 8px;
+          margin: 0;
           font-family: var(--font-display-kr);
           font-size: 1.05rem; font-weight: 700; color: var(--vh-green-900);
         }
-        .av-panel-head .av-panel-title { margin: 0; }
-        .av-link {
-          border: 0; background: transparent; color: var(--vh-gold-deep);
-          font-size: 0.74rem; font-weight: 600; cursor: pointer;
-          font-family: var(--font-sans);
-        }
-        .av-count { color: var(--vh-muted); font-weight: 600; font-size: 0.85em; }
         .av-muted { color: var(--vh-muted); font-size: 0.78rem; margin: 0; }
-        .av-type-line { margin-top: 10px; }
+        .av-legend {
+          display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 10px;
+          font-size: 0.68rem;
+        }
+        .av-legend .lg {
+          padding: 2px 6px; border-radius: 4px; border: 1px solid var(--vh-border);
+        }
+        .av-legend .ok { background: #e8f6ee; }
+        .av-legend .out { background: #fdecec; }
+        .av-legend .leave { background: #f3f0e8; }
+        .av-legend .special { background: #f8f1d8; }
+        .av-legend .empty { background: #f7f7f5; color: var(--vh-muted); }
+        .av-slot-scroll {
+          overflow-x: auto; -webkit-overflow-scrolling: touch;
+          border: 1px solid var(--vh-border); border-radius: var(--vh-radius-sm);
+        }
+        .av-slot-table {
+          border-collapse: collapse; width: max-content; min-width: 100%;
+          font-size: 0.72rem;
+        }
+        .av-slot-table th, .av-slot-table td {
+          border: 1px solid var(--vh-border); padding: 5px 6px;
+          vertical-align: top; min-width: 72px; max-width: 110px;
+        }
+        .av-slot-table thead th {
+          background: var(--vh-ivory); color: var(--vh-green-900);
+          font-weight: 700; position: sticky; top: 0; z-index: 1;
+        }
+        .av-slot-table tbody th {
+          background: var(--vh-paper); font-variant-numeric: tabular-nums;
+          text-align: center; position: sticky; left: 0; z-index: 1;
+        }
+        .av-slot-corner { left: 0; z-index: 2 !important; }
+        .av-slot-cell.is-empty { background: #fafaf8; color: var(--vh-muted); text-align: center; }
+        .av-slot-cell.is-available { background: #eef8f1; }
+        .av-slot-cell.is-excluded { background: #fdecec; }
+        .av-slot-cell.is-leave { background: #f3f0e8; }
+        .av-slot-cell.is-special { background: #f8f1d8; }
+        .av-slot-name { font-weight: 700; color: var(--vh-green-900); line-height: 1.2; }
+        .av-slot-status { margin-top: 2px; font-size: 0.62rem; color: var(--vh-muted); line-height: 1.25; }
+        .av-slot-empty { opacity: 0.45; }
+        .av-count { color: var(--vh-muted); font-weight: 600; font-size: 0.85em; }
         .av-team-grid {
           display: grid;
           grid-template-columns: repeat(2, minmax(0, 1fr));
           gap: 7px;
         }
         @media (min-width: 960px) {
-          .av-title { font-size: 1.8rem; }
           .av-team-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
+        }
+        @media (min-width: 1200px) {
+          .av-team-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
         }
         .av-team-card {
           text-align: left; border: 1px solid var(--vh-border);
@@ -390,7 +465,6 @@ export default function ManageAvailabilityPage() {
           padding: 8px 9px 7px; cursor: pointer; font-family: var(--font-sans);
           color: inherit; box-shadow: var(--vh-shadow-sm);
         }
-        .av-team-card:hover { border-color: var(--vh-gold); }
         .av-team-name {
           font-size: 0.88rem; font-weight: 700; color: var(--vh-green-900);
           margin-bottom: 4px;
@@ -409,25 +483,6 @@ export default function ManageAvailabilityPage() {
         .av-team-stats .dot.ok { background: #2f8f5b; }
         .av-team-stats .dot.gold { background: #c9a227; }
         .av-team-stats .dot.out { background: #c44b4b; }
-        .av-team-foot {
-          margin-top: 5px; padding-top: 4px; border-top: 1px solid var(--vh-border);
-          text-align: center; font-size: 0.72rem; font-weight: 700;
-          color: var(--vh-green-800); font-variant-numeric: tabular-nums;
-        }
-        @media (max-width: 959px) {
-          .av-team-card {
-            display: grid; grid-template-columns: auto 1fr auto;
-            align-items: center; gap: 6px; padding: 7px 8px;
-          }
-          .av-team-name { margin: 0; font-size: 0.8rem; }
-          .av-team-stats {
-            display: flex; flex-wrap: nowrap; gap: 6px; font-size: 0.62rem;
-          }
-          .av-team-stats li span:not(.dot) { display: none; }
-          .av-team-stats .lbl { display: none; }
-          .av-team-stats strong { margin-left: 0; font-size: 0.66rem; }
-          .av-team-foot { margin: 0; padding: 0; border: 0; font-size: 0.7rem; }
-        }
         .av-dense {
           list-style: none; margin: 0; padding: 0;
           border: 1px solid var(--vh-border); border-radius: var(--vh-radius-sm);
@@ -441,7 +496,7 @@ export default function ManageAvailabilityPage() {
           font-size: 0.78rem;
         }
         .av-dense-row:first-child { border-top: 0; }
-        .av-dense-row strong { color: var(--vh-green-900); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .av-dense-row strong { color: var(--vh-green-900); }
         .av-meta { color: var(--vh-ink-soft); font-weight: 600; font-size: 0.72rem; }
         .av-meta.muted { color: var(--vh-muted); font-weight: 500; }
         .av-num { font-variant-numeric: tabular-nums; font-weight: 700; color: var(--vh-green-800); text-align: center; }
@@ -449,34 +504,6 @@ export default function ManageAvailabilityPage() {
           grid-column: 1 / -1; font-size: 0.68rem; color: var(--vh-muted);
         }
         .av-reason { color: var(--vh-warn); }
-        .av-team-detail {
-          display: grid;
-          grid-template-columns: 1fr;
-          gap: 8px;
-        }
-        @media (min-width: 720px) {
-          .av-team-detail { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        }
-        @media (min-width: 1100px) {
-          .av-team-detail { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-        }
-        .av-team-block {
-          border: 1px solid var(--vh-border); border-radius: var(--vh-radius-sm);
-          padding: 8px; background: var(--vh-ivory);
-        }
-        .av-team-block-head {
-          font-size: 0.82rem; font-weight: 700; color: var(--vh-green-900);
-          margin-bottom: 4px; display: flex; justify-content: space-between;
-        }
-        .av-team-block ol {
-          margin: 0; padding-left: 0; list-style: none;
-          font-size: 0.74rem; color: var(--vh-ink);
-        }
-        .av-team-block li {
-          display: flex; gap: 6px; align-items: baseline;
-          padding: 2px 0; border-top: 1px solid rgba(230,224,212,0.7);
-        }
-        .av-team-block li:first-child { border-top: 0; }
       `}</style>
     </div>
   );

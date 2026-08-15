@@ -9,13 +9,15 @@ import { PRIMARY_TEAMS, type ExtraFlagOption } from "@/lib/caddyManage";
 export type CaddyTypeCode = "HOUSE" | "THIRD" | "DRIVING";
 export type EmploymentCode = "ACTIVE" | "LEAVE" | "RETIRED";
 
-/** 일반 배치에서 제외하는 Assignment 타입 (휴무/병가/마샬/당번 + 장기병가) */
+/** 일반 배치에서 제외하는 Assignment 타입 */
 export const BLOCKING_ASSIGNMENT_TYPES = [
   "OFF",
   "SICK",
   "LONG_SICK",
   "DUTY",
   "MARSHAL",
+  "ACCIDENT",
+  "FAMILY_EVENT",
 ] as const;
 export type BlockingAssignmentType = (typeof BLOCKING_ASSIGNMENT_TYPES)[number];
 

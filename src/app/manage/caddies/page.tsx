@@ -13,9 +13,13 @@ import {
   type EmploymentStatus,
 } from '@/lib/caddyManage';
 import { maskKrMobile } from '@/lib/caddyPhone';
+import {
+  listSelectableEmptySlots,
+  type SlotOccupant,
+} from '@/lib/caddySlot';
 
-/** 시안: 한눈에 보기 1~8조 */
-const GLANCE_TEAMS = PRIMARY_TEAMS.slice(0, 8) as readonly string[];
+/** 한눈에 보기: 1~12조 */
+const GLANCE_TEAMS = PRIMARY_TEAMS;
 
 type Caddy = {
   id: number;
@@ -133,6 +137,31 @@ export default function ManageCaddiesPage() {
   const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
   const [importBusy, setImportBusy] = useState(false);
   const [importFileName, setImportFileName] = useState<string | null>(null);
+  /** 슬롯 점유 계산용 — ACTIVE+LEAVE+RETIRED 전체 */
+  const [slotPeers, setSlotPeers] = useState<SlotOccupant[]>([]);
+
+  const refreshSlotPeers = useCallback(async () => {
+    try {
+      const res = await fetch('/api/caddies?employment=all', {
+        cache: 'no-store',
+        credentials: 'include',
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!Array.isArray(data)) return;
+      setSlotPeers(
+        data.map((c: Caddy) => ({
+          id: c.id,
+          name: c.name,
+          team: c.team,
+          teamOrder: c.teamOrder,
+          employmentStatus: String(c.employmentStatus),
+        }))
+      );
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   const load = useCallback(
     async (employmentOverride?: EmploymentStatus | 'all') => {
@@ -158,11 +187,12 @@ export default function ManageCaddiesPage() {
           return;
         }
         setRows(Array.isArray(data) ? data : []);
+        void refreshSlotPeers();
       } finally {
         setLoading(false);
       }
     },
-    [employmentFilter, viewMode]
+    [employmentFilter, viewMode, refreshSlotPeers]
   );
 
   useEffect(() => {
@@ -242,6 +272,22 @@ export default function ManageCaddiesPage() {
       alert('이름과 조는 필수입니다.');
       return;
     }
+    const original = rows.find((r) => r.id === id);
+    const teamChanging = original && draft.team !== original.team;
+    const slot = Number(draft.teamOrder) || 0;
+    if (slot < 1) {
+      alert('고정 슬롯(조내순번)은 1 이상이어야 합니다.');
+      return;
+    }
+    if (teamChanging) {
+      if (
+        !confirm(
+          `${original?.name}: ${original?.team} ${original?.teamOrder}번 → ${draft.team} ${slot}번으로 이동할까요?\n기존 슬롯은 빈자리가 됩니다.`
+        )
+      ) {
+        return;
+      }
+    }
     setSavingId(id);
     try {
       const res = await fetch(`/api/caddies/${id}`, {
@@ -251,7 +297,7 @@ export default function ManageCaddiesPage() {
         body: JSON.stringify({
           name: draft.name.trim(),
           team: draft.team,
-          teamOrder: Number(draft.teamOrder) || 0,
+          teamOrder: slot,
           employmentStatus: draft.employmentStatus,
           extraFlags: draft.extraFlags,
           phone: draft.phone.trim() === '' ? null : draft.phone.trim(),
@@ -280,20 +326,17 @@ export default function ManageCaddiesPage() {
 
     setSavingId(c.id);
     try {
-      await Promise.all([
-        fetch(`/api/caddies/${c.id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ teamOrder: swapWith.teamOrder }),
-        }),
-        fetch(`/api/caddies/${swapWith.id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ teamOrder: c.teamOrder }),
-        }),
-      ]);
+      const res = await fetch(`/api/caddies/${c.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ swapWithId: swapWith.id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(data?.error || '순번 교환 실패');
+        return;
+      }
       await load();
     } finally {
       setSavingId(null);
@@ -343,6 +386,11 @@ export default function ManageCaddiesPage() {
       alert('이름과 조는 필수입니다.');
       return;
     }
+    const slot = Number(createDraft.teamOrder) || 0;
+    if (slot < 1) {
+      alert('빈 슬롯(조내순번)을 선택해주세요.');
+      return;
+    }
     setCreating(true);
     try {
       const res = await fetch('/api/caddies', {
@@ -352,7 +400,7 @@ export default function ManageCaddiesPage() {
         body: JSON.stringify({
           name: createDraft.name.trim(),
           team: createDraft.team,
-          teamOrder: createDraft.teamOrder || undefined,
+          teamOrder: slot,
           employmentStatus: createDraft.employmentStatus,
           extraFlags: createDraft.extraFlags,
           phone:
@@ -367,11 +415,30 @@ export default function ManageCaddiesPage() {
       setCreateDraft(emptyDraft());
       setCreateOpen(false);
       await load();
-      setMessage(`신규 등록 완료 (id=${data.id})`);
+      setMessage(
+        `신규 등록: ${data.name} → ${data.team} ${data.teamOrder}번 (id=${data.id})`
+      );
     } finally {
       setCreating(false);
     }
   }
+
+  const createEmptySlots = useMemo(() => {
+    return listSelectableEmptySlots(slotPeers, createDraft.team);
+  }, [slotPeers, createDraft.team]);
+
+  const editEmptySlots = useMemo(() => {
+    if (editingId == null) return [] as number[];
+    const draft = drafts[editingId];
+    if (!draft) return [];
+    const empty = listSelectableEmptySlots(slotPeers, draft.team, {
+      excludeId: editingId,
+    });
+    const cur = Number(draft.teamOrder) || 0;
+    // 현재 점유 슬롯 유지(편집 중 선택 가능). capacity 초과 기존 데이터도 삭제/재번호 없이 유지.
+    if (cur >= 1 && !empty.includes(cur)) empty.push(cur);
+    return empty.sort((a, b) => a - b);
+  }, [editingId, drafts, slotPeers]);
 
   return (
     <div className={`caddy-manage mode-${viewMode}`}>
@@ -486,7 +553,13 @@ export default function ManageCaddiesPage() {
               조
               <select
                 value={createDraft.team}
-                onChange={(e) => setCreateDraft((d) => ({ ...d, team: e.target.value }))}
+                onChange={(e) =>
+                  setCreateDraft((d) => ({
+                    ...d,
+                    team: e.target.value,
+                    teamOrder: 0,
+                  }))
+                }
               >
                 {TEAM_OPTIONS.map((t) => (
                   <option key={t} value={t}>{t}</option>
@@ -494,15 +567,23 @@ export default function ManageCaddiesPage() {
               </select>
             </label>
             <label>
-              조내순번
-              <input
-                type="number"
-                min={0}
-                value={createDraft.teamOrder}
+              빈 슬롯
+              <select
+                value={createDraft.teamOrder || ''}
                 onChange={(e) =>
-                  setCreateDraft((d) => ({ ...d, teamOrder: Number(e.target.value) || 0 }))
+                  setCreateDraft((d) => ({
+                    ...d,
+                    teamOrder: Number(e.target.value) || 0,
+                  }))
                 }
-              />
+              >
+                <option value="">선택…</option>
+                {createEmptySlots.map((n) => (
+                  <option key={n} value={n}>
+                    {n}번
+                  </option>
+                ))}
+              </select>
             </label>
             <label>
               재직상태
@@ -698,7 +779,13 @@ export default function ManageCaddiesPage() {
                               <select
                                 value={draft.team}
                                 onChange={(e) =>
-                                  updateDraft(c.id, { team: e.target.value })
+                                  updateDraft(c.id, {
+                                    team: e.target.value,
+                                    teamOrder:
+                                      e.target.value === c.team
+                                        ? draft.teamOrder
+                                        : 0,
+                                  })
                                 }
                               >
                                 {!(TEAM_OPTIONS as readonly string[]).includes(
@@ -714,17 +801,23 @@ export default function ManageCaddiesPage() {
                               </select>
                             </label>
                             <label>
-                              조내순번
-                              <input
-                                type="number"
-                                min={0}
-                                value={draft.teamOrder}
+                              슬롯
+                              <select
+                                value={draft.teamOrder || ''}
                                 onChange={(e) =>
                                   updateDraft(c.id, {
                                     teamOrder: Number(e.target.value) || 0,
                                   })
                                 }
-                              />
+                              >
+                                <option value="">선택…</option>
+                                {editEmptySlots.map((n) => (
+                                  <option key={n} value={n}>
+                                    {n}번
+                                    {draft.team !== c.team ? ' (이동)' : ''}
+                                  </option>
+                                ))}
+                              </select>
                             </label>
                             <label>
                               재직상태
@@ -998,7 +1091,13 @@ export default function ManageCaddiesPage() {
                               <select
                                 value={draft.team}
                                 onChange={(e) =>
-                                  updateDraft(c.id, { team: e.target.value })
+                                  updateDraft(c.id, {
+                                    team: e.target.value,
+                                    teamOrder:
+                                      e.target.value === c.team
+                                        ? draft.teamOrder
+                                        : 0,
+                                  })
                                 }
                               >
                                 {TEAM_OPTIONS.map((t) => (
@@ -1009,17 +1108,22 @@ export default function ManageCaddiesPage() {
                               </select>
                             </label>
                             <label>
-                              순번
-                              <input
-                                type="number"
-                                min={0}
-                                value={draft.teamOrder}
+                              슬롯
+                              <select
+                                value={draft.teamOrder || ''}
                                 onChange={(e) =>
                                   updateDraft(c.id, {
                                     teamOrder: Number(e.target.value) || 0,
                                   })
                                 }
-                              />
+                              >
+                                <option value="">선택…</option>
+                                {editEmptySlots.map((n) => (
+                                  <option key={n} value={n}>
+                                    {n}번
+                                  </option>
+                                ))}
+                              </select>
                             </label>
                             <label>
                               상태

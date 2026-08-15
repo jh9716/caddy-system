@@ -8,10 +8,18 @@ import {
   parseYmd,
   type AvailabilityResult,
 } from "@/lib/availabilityEngine";
+import {
+  buildTeamSlotGrid,
+  type TeamSlotGrid,
+} from "@/lib/availabilitySlotGrid";
+
+export type AvailabilityWithSlotGrid = AvailabilityResult & {
+  slotGrid: TeamSlotGrid;
+};
 
 export async function loadAvailabilityForDate(
   ymd: string
-): Promise<AvailabilityResult> {
+): Promise<AvailabilityWithSlotGrid> {
   parseYmd(ymd); // validate early
   const { start, end } = parseYmd(ymd);
 
@@ -53,7 +61,7 @@ export async function loadAvailabilityForDate(
     }),
   ]);
 
-  return computeAvailability({
+  const availability = computeAvailability({
     date: ymd,
     caddies: caddies.map((c) => ({
       id: c.id,
@@ -67,4 +75,17 @@ export async function loadAvailabilityForDate(
     assignments,
     extraTags,
   });
+
+  const slotGrid = buildTeamSlotGrid({
+    availability,
+    occupants: caddies.map((c) => ({
+      id: c.id,
+      name: c.name,
+      team: c.team,
+      teamOrder: c.teamOrder,
+      employmentStatus: String(c.employmentStatus),
+    })),
+  });
+
+  return { ...availability, slotGrid };
 }

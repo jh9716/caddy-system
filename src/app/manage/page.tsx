@@ -8,7 +8,7 @@ import { PRIMARY_TEAMS, normalizeEmploymentStatus } from "@/lib/caddyManage";
 
 export const dynamic = "force-dynamic";
 
-const GLANCE_TEAMS = PRIMARY_TEAMS.slice(0, 8);
+const GLANCE_TEAMS = PRIMARY_TEAMS;
 
 export default async function ManagePage() {
   const role = (await cookies()).get("role")?.value ?? null;

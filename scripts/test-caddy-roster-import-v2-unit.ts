@@ -160,6 +160,18 @@ async function main() {
   assert(conflict.summary.applyBlocked === true, "apply blocked");
   assert(conflict.applyPayload.updates.length === 0, "empty payload when blocked");
 
+  section("LEAVE holds slot — conflicts with ACTIVE");
+  const leaveConflictRows = parseRosterCsvV2(
+    [
+      "id,name,team,teamOrder,employmentStatus,phone",
+      "1,이영진,1조,2,ACTIVE,",
+      "2,박서진,1조,2,LEAVE,",
+    ].join("\n")
+  );
+  const leaveConflict = buildRosterImportPreviewV2(leaveConflictRows, existing);
+  assert(leaveConflict.summary.teamOrderConflicts >= 1, "LEAVE+ACTIVE conflict");
+  assert(leaveConflict.summary.applyBlocked === true, "LEAVE conflict blocks apply");
+
   section("RETIRED excluded from order conflict");
   const retireRows = parseRosterCsvV2(
     [
@@ -171,6 +183,26 @@ async function main() {
   const retire = buildRosterImportPreviewV2(retireRows, existing);
   assert(retire.summary.teamOrderConflicts === 0, "retired not in conflict");
   assert(retire.summary.applyBlocked === false, "apply ok");
+
+  section("slot capacity range validation");
+  const overCap = buildRosterImportPreviewV2(
+    parseRosterCsvV2(
+      [
+        "name,team,teamOrder,employmentStatus,phone",
+        "초과자,1조,25,ACTIVE,",
+      ].join("\n")
+    ),
+    existing
+  );
+  assert(
+    overCap.lines.some(
+      (l) =>
+        l.action === "needsReview" &&
+        String(l.reason ?? "").includes("1~24")
+    ),
+    "create teamOrder 25 needsReview"
+  );
+  assert(overCap.summary.applyBlocked === true, "over capacity blocks apply");
 
   section("duplicate phone in file blocks");
   const dupPhone = buildRosterImportPreviewV2(

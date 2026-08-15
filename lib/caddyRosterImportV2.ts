@@ -7,7 +7,8 @@
  * - 기존 id update만 (삭제/재생성 금지)
  * - extraFlags 미반영
  * - missingInImport = 경고만 (자동 RETIRED 금지)
- * - ACTIVE 조 내 teamOrder 중복 시 Apply 차단
+ * - ACTIVE+LEAVE 슬롯 점유 기준 teamOrder 중복 시 Apply 차단 (RETIRED 제외)
+ * - 신규 create는 teamOrder 필수 (max+1 자동부여 없음)
  */
 
 import {
@@ -25,6 +26,7 @@ import {
   stripTrailingDigits,
   type EmploymentStatusValue,
 } from "./caddyImportRules";
+import { getConfiguredSlotCapacity } from "../src/lib/caddySlot";
 
 const PHONE_HEADER_ALIASES = ["phone", "휴대폰", "전화번호", "mobile"] as const;
 
@@ -600,6 +602,45 @@ export function buildRosterImportPreviewV2(
       continue;
     }
 
+    if (row.teamOrder == null || row.teamOrder < 1) {
+      lines.push({
+        action: "needsReview",
+        id: null,
+        name: row.name,
+        currentTeam: null,
+        nextTeam: row.team,
+        currentTeamOrder: null,
+        nextTeamOrder: row.teamOrder,
+        currentEmploymentStatus: null,
+        nextEmploymentStatus: row.employmentStatus,
+        phoneChanged: false,
+        currentMaskedPhone: null,
+        nextMaskedPhone: phone.masked,
+        reason: "신규 등록에 teamOrder(빈 슬롯)가 필요합니다",
+      });
+      continue;
+    }
+
+    const createCap = getConfiguredSlotCapacity(row.team);
+    if (row.teamOrder > createCap) {
+      lines.push({
+        action: "needsReview",
+        id: null,
+        name: row.name,
+        currentTeam: null,
+        nextTeam: row.team,
+        currentTeamOrder: null,
+        nextTeamOrder: row.teamOrder,
+        currentEmploymentStatus: null,
+        nextEmploymentStatus: row.employmentStatus,
+        phoneChanged: false,
+        currentMaskedPhone: null,
+        nextMaskedPhone: phone.masked,
+        reason: `슬롯은 1~${createCap}만 선택 가능합니다 (요청: ${row.teamOrder})`,
+      });
+      continue;
+    }
+
     createsDraft.push({ row, phone });
   }
 
@@ -717,6 +758,32 @@ export function buildRosterImportPreviewV2(
       continue;
     }
 
+    const nextCap = getConfiguredSlotCapacity(m.nextTeam);
+    const orderChanging =
+      m.nextOrder !== m.cur.teamOrder || m.nextTeam !== m.cur.team;
+    if (
+      orderChanging &&
+      Number.isInteger(m.nextOrder) &&
+      m.nextOrder > nextCap
+    ) {
+      lines.push({
+        action: "needsReview",
+        id: m.cur.id,
+        name: m.row.name,
+        currentTeam: m.cur.team,
+        nextTeam: m.nextTeam,
+        currentTeamOrder: m.cur.teamOrder,
+        nextTeamOrder: m.nextOrder,
+        currentEmploymentStatus: empLabel(m.cur.employmentStatus),
+        nextEmploymentStatus: m.nextEmp,
+        phoneChanged: false,
+        currentMaskedPhone: maskKrMobile(m.cur.phoneNormalized ?? null),
+        nextMaskedPhone: m.phone.masked,
+        reason: `슬롯은 1~${nextCap}만 선택 가능합니다 (요청: ${m.nextOrder}) — 기존 capacity 초과 데이터는 임의 재번호하지 않습니다`,
+      });
+      continue;
+    }
+
     const phoneChanged = Boolean(m.applyPhone);
     if (m.changed || phoneChanged) {
       updateCount++;
@@ -797,8 +864,8 @@ export function buildRosterImportPreviewV2(
     const create: RosterApplyPayload["creates"][number] = {
       name: c.row.name,
       team: c.row.team!,
+      teamOrder: c.row.teamOrder!,
     };
-    if (c.row.teamOrder != null) create.teamOrder = c.row.teamOrder;
     if (c.row.employmentStatus != null) {
       create.employmentStatus = c.row.employmentStatus;
     }
@@ -842,7 +909,7 @@ export function buildRosterImportPreviewV2(
 
   lines.push(...missingInImport);
 
-  // --- teamOrder conflict on final ACTIVE state ---
+  // --- teamOrder conflict on final slot-holding (ACTIVE+LEAVE) state ---
   const finalById = new Map<
     number,
     { name: string; team: string; teamOrder: number; emp: string }
@@ -1006,10 +1073,14 @@ function findTeamOrderConflicts(
     emp: string;
   }>
 ): TeamOrderConflict[] {
-  const active = people.filter((p) => empLabel(p.emp) === "ACTIVE");
-  const groups = new Map<string, typeof active>();
-  for (const p of active) {
-    // teamOrder 0/missing on create without order: skip conflict (0 not positive)
+  // ACTIVE + LEAVE = 슬롯 보유. RETIRED는 빈자리로 취급.
+  const holders = people.filter((p) => {
+    const e = empLabel(p.emp);
+    return e === "ACTIVE" || e === "LEAVE";
+  });
+  const groups = new Map<string, typeof holders>();
+  for (const p of holders) {
+    // teamOrder 0/missing: skip grouping (create without order → needsReview elsewhere)
     if (!p.teamOrder || p.teamOrder < 1) continue;
     const key = `${p.team}#${p.teamOrder}`;
     const list = groups.get(key) ?? [];
@@ -1078,9 +1149,19 @@ export async function applyRosterImportPayloadV2(
         `needsReview 이름은 신규 생성할 수 없습니다: ${c.name}`
       );
     }
-    if (c.teamOrder != null && (!Number.isInteger(c.teamOrder) || c.teamOrder < 1)) {
+    if (c.teamOrder == null || !Number.isInteger(c.teamOrder) || c.teamOrder < 1) {
       throw new RosterImportApplyError(
-        `teamOrder는 1 이상 정수여야 합니다: ${c.name}`
+        `신규 등록에 teamOrder(슬롯)가 필요합니다: ${c.name}`,
+        400,
+        "slot_required"
+      );
+    }
+    const createCap = getConfiguredSlotCapacity(c.team);
+    if (c.teamOrder > createCap) {
+      throw new RosterImportApplyError(
+        `슬롯은 1~${createCap}만 선택 가능합니다: ${c.name} (요청: ${c.teamOrder})`,
+        400,
+        "slot_out_of_range"
       );
     }
   }
@@ -1112,6 +1193,26 @@ export async function applyRosterImportPayloadV2(
         phoneNormalized: true,
       },
     }));
+
+  const existingById = new Map(existing.map((e) => [e.id, e]));
+  for (const u of payload.updates) {
+    if (u.teamOrder == null) continue;
+    const cur = existingById.get(u.id);
+    if (!cur) {
+      throw new RosterImportApplyError(`update 대상 없음: id=${u.id}`, 404);
+    }
+    const nextTeam = u.team ?? cur.team;
+    const cap = getConfiguredSlotCapacity(nextTeam);
+    const keepingOverCapacity =
+      nextTeam === cur.team && u.teamOrder === cur.teamOrder && u.teamOrder > cap;
+    if (u.teamOrder > cap && !keepingOverCapacity) {
+      throw new RosterImportApplyError(
+        `슬롯은 1~${cap}만 선택 가능합니다: id=${u.id} (요청: ${u.teamOrder})`,
+        400,
+        "slot_out_of_range"
+      );
+    }
+  }
 
   // Re-run preview-equivalent conflict check from payload + existing
   const byId = new Map(existing.map((e) => [e.id, e]));
@@ -1265,17 +1366,13 @@ export async function applyRosterImportPayloadV2(
     }
 
     for (const c of normCreates) {
-      let teamOrder = c.teamOrder;
-      if (teamOrder == null) {
-        if (typeof client.caddy.aggregate === "function") {
-          const agg = await client.caddy.aggregate({
-            where: { team: c.team },
-            _max: { teamOrder: true },
-          });
-          teamOrder = (agg._max.teamOrder ?? 0) + 1;
-        } else {
-          teamOrder = 1;
-        }
+      const teamOrder = c.teamOrder;
+      if (teamOrder == null || !Number.isInteger(teamOrder) || teamOrder < 1) {
+        throw new RosterImportApplyError(
+          `신규 등록에 teamOrder(슬롯)가 필요합니다: ${c.name}`,
+          400,
+          "slot_required"
+        );
       }
       const data: Record<string, unknown> = {
         name: c.name,
