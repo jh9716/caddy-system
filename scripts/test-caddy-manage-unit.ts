@@ -52,6 +52,7 @@ console.log("== caddySchema ==");
 const created = caddyCreateSchema.safeParse({
   name: "홍길동",
   team: "3조",
+  teamOrder: 2,
   extraFlags: ["주말반"],
 });
 assert(created.success, "create schema ok");
@@ -59,10 +60,12 @@ assert(
   created.success && created.data.employmentStatus === "ACTIVE",
   "default ACTIVE"
 );
+assert(created.success && created.data.teamOrder === 2, "create teamOrder set");
 
 const createdKo = caddyCreateSchema.safeParse({
   name: "홍길동",
   team: "3조",
+  teamOrder: 1,
   employmentStatus: "퇴사",
 });
 assert(
@@ -70,8 +73,11 @@ assert(
   "create accepts 한글 퇴사→RETIRED"
 );
 
-const bad = caddyCreateSchema.safeParse({ name: "", team: "1조" });
+const bad = caddyCreateSchema.safeParse({ name: "", team: "1조", teamOrder: 1 });
 assert(!bad.success, "reject empty name");
+
+const noSlot = caddyCreateSchema.safeParse({ name: "홍길동", team: "1조" });
+assert(!noSlot.success, "reject missing teamOrder");
 
 const updated = caddyUpdateSchema.safeParse({
   teamOrder: 5,

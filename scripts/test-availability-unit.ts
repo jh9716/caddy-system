@@ -224,5 +224,52 @@ const m = computeAvailability({
 });
 assert(m.counts.available === 0 && m.counts.excluded === 2, "MARSHAL/SICK exclude");
 
+// ACCIDENT / FAMILY_EVENT also exclude from regular assignment
+const af = computeAvailability({
+  date: "2026-08-10",
+  caddies: [
+    {
+      id: 20,
+      name: "타구",
+      team: "1조",
+      teamOrder: 1,
+      employmentStatus: "ACTIVE",
+    },
+    {
+      id: 21,
+      name: "경조",
+      team: "1조",
+      teamOrder: 2,
+      employmentStatus: "ACTIVE",
+    },
+  ],
+  assignments: [
+    {
+      caddyId: 20,
+      type: "ACCIDENT",
+      startDate: "2026-08-10",
+      endDate: "2026-08-10",
+    },
+    {
+      caddyId: 21,
+      type: "FAMILY_EVENT",
+      startDate: "2026-08-10",
+      endDate: "2026-08-10",
+    },
+  ],
+});
+assert(
+  af.counts.available === 0 && af.counts.excluded === 2,
+  "ACCIDENT/FAMILY_EVENT exclude"
+);
+assert(
+  af.excluded.find((r) => r.id === 20)?.excludedReasons.some((x) => x.includes("타구")),
+  "ACCIDENT label"
+);
+assert(
+  af.excluded.find((r) => r.id === 21)?.excludedReasons.some((x) => x.includes("경조")),
+  "FAMILY_EVENT label"
+);
+
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
