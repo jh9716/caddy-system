@@ -15,8 +15,127 @@ export const PRIMARY_TEAMS = [
   "12조",
 ] as const;
 
+/** 3부반 조 (주중/주말 세부구분 허용) */
+export const THIRD_BAND_TEAMS = ["9조", "10조", "11조", "12조"] as const;
+export type ThirdBandTeam = (typeof THIRD_BAND_TEAMS)[number];
+
+/** Prisma ThirdBandSubgroup — DRIVING 포함 금지 */
+export const THIRD_BAND_SUBGROUPS = ["WEEKDAY", "WEEKEND"] as const;
+export type ThirdBandSubgroup = (typeof THIRD_BAND_SUBGROUPS)[number];
+
+export const THIRD_BAND_SUBGROUP_LABELS: Record<ThirdBandSubgroup, string> = {
+  WEEKDAY: "주중",
+  WEEKEND: "주말",
+};
+
+export function isThirdBandTeam(team: string): boolean {
+  return (THIRD_BAND_TEAMS as readonly string[]).includes(String(team ?? "").trim());
+}
+
+export class ThirdBandSubgroupError extends Error {
+  status = 400;
+  code = "third_band_subgroup_invalid";
+  constructor(message: string) {
+    super(message);
+    this.name = "ThirdBandSubgroupError";
+  }
+}
+
+/**
+ * API 입력 정규화.
+ * - undefined: 필드 미전송
+ * - null / "" / "null" / "NONE" / "일반": null
+ * - WEEKDAY | WEEKEND (및 한글 주중/주말): enum
+ */
+export function parseThirdBandSubgroupInput(
+  input: unknown
+): ThirdBandSubgroup | null | undefined {
+  if (input === undefined) return undefined;
+  if (input === null) return null;
+  const v = String(input).trim();
+  if (v === "" || v === "null" || v.toUpperCase() === "NONE" || v === "일반") {
+    return null;
+  }
+  const upper = v.toUpperCase();
+  if (upper === "WEEKDAY" || v === "주중" || v === "주중반") return "WEEKDAY";
+  if (upper === "WEEKEND" || v === "주말" || v === "주말반") return "WEEKEND";
+  throw new ThirdBandSubgroupError(
+    "3부반 세부구분은 일반/주중/주말만 선택할 수 있습니다."
+  );
+}
+
+/**
+ * 최종 team 기준 invariant:
+ * - 1~8조: 항상 null. WEEKDAY/WEEKEND 명시 요청이면 400.
+ * - 9~12조: null | WEEKDAY | WEEKEND.
+ * - requested === undefined → keepCurrent(없으면 null). 1~8→9~12 이동 시 keepCurrent는 보통 null.
+ */
+export function resolveThirdBandSubgroup(input: {
+  team: string;
+  requested: unknown;
+  /** update 시 현재 DB 값. create면 null/undefined */
+  current?: ThirdBandSubgroup | null;
+}): ThirdBandSubgroup | null {
+  const team = String(input.team ?? "").trim();
+  const requested = parseThirdBandSubgroupInput(input.requested);
+
+  if (!isThirdBandTeam(team)) {
+    if (requested === "WEEKDAY" || requested === "WEEKEND") {
+      throw new ThirdBandSubgroupError(
+        "1~8조 캐디는 주중반/주말반(thirdBandSubgroup)을 가질 수 없습니다."
+      );
+    }
+    return null;
+  }
+
+  if (requested === undefined) {
+    const cur = input.current ?? null;
+    if (cur === "WEEKDAY" || cur === "WEEKEND") return cur;
+    return null;
+  }
+  return requested;
+}
+
 export const EXTRA_FLAG_OPTIONS = ["주중반", "주말반", "드라이빙"] as const;
 export type ExtraFlagOption = (typeof EXTRA_FLAG_OPTIONS)[number];
+
+/** legacy 주중/주말 — 신규 SoT는 thirdBandSubgroup. UI 편집·신규 추가 금지, DB 기존값만 보존 */
+export const LEGACY_THIRD_BAND_EXTRA_FLAGS = ["주중반", "주말반"] as const;
+export type LegacyThirdBandExtraFlag =
+  (typeof LEGACY_THIRD_BAND_EXTRA_FLAGS)[number];
+
+/** 관리자 UI에서만 편집 가능한 extraFlags (주중반/주말반 제외) */
+export const EDITABLE_EXTRA_FLAG_OPTIONS = ["드라이빙"] as const;
+export type EditableExtraFlagOption =
+  (typeof EDITABLE_EXTRA_FLAG_OPTIONS)[number];
+
+export function isLegacyThirdBandExtraFlag(
+  value: string
+): value is LegacyThirdBandExtraFlag {
+  return (LEGACY_THIRD_BAND_EXTRA_FLAGS as readonly string[]).includes(value);
+}
+
+/**
+ * create: 주중반/주말반 신규 저장 금지 (incoming에서 제거).
+ * update: incoming의 주중반/주말반은 무시하고, DB에 있던 주중반/주말반만 보존·재합류.
+ * 그 외(드라이빙 등)는 incoming 기준.
+ */
+export function mergeExtraFlagsForPersist(input: {
+  incoming: unknown;
+  current?: string[] | null;
+  mode: "create" | "update";
+}): ExtraFlagOption[] {
+  const incomingEditable = normalizeExtraFlags(input.incoming).filter(
+    (f) => !isLegacyThirdBandExtraFlag(f)
+  );
+  if (input.mode === "create") {
+    return incomingEditable;
+  }
+  const preservedLegacy = normalizeExtraFlags(input.current ?? []).filter(
+    isLegacyThirdBandExtraFlag
+  );
+  return normalizeExtraFlags([...incomingEditable, ...preservedLegacy]);
+}
 
 /** Production DB enum values */
 export const EMPLOYMENT_STATUSES = ["ACTIVE", "LEAVE", "RETIRED"] as const;

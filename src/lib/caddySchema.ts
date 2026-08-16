@@ -3,6 +3,7 @@ import {
   EMPLOYMENT_STATUSES,
   EXTRA_FLAG_OPTIONS,
   TEAM_OPTIONS,
+  THIRD_BAND_SUBGROUPS,
   normalizeEmploymentStatus,
 } from "@/lib/caddyManage";
 
@@ -14,6 +15,21 @@ export const employmentStatusSchema = z
   .pipe(z.enum(EMPLOYMENT_STATUSES));
 
 export const extraFlagSchema = z.enum(EXTRA_FLAG_OPTIONS);
+
+/** UI/API: null=일반. 서버에서 team invariant 재검증. */
+export const thirdBandSubgroupSchema = z
+  .union([
+    z.enum(THIRD_BAND_SUBGROUPS),
+    z.null(),
+    z.literal(""),
+    z.literal("일반"),
+    z.literal("주중"),
+    z.literal("주말"),
+    z.literal("주중반"),
+    z.literal("주말반"),
+    z.literal("NONE"),
+  ])
+  .optional();
 
 /** UI/API 입력 필드명. DB 컬럼은 phoneNormalized. 빈 문자열 허용(서버에서 null). */
 const phoneInputSchema = z.string().optional().nullable();
@@ -35,6 +51,8 @@ export const caddyCreateSchema = z.object({
   employeeCode: z.string().trim().min(1).optional().nullable(),
   caddyType: z.enum(["HOUSE", "THIRD", "DRIVING"]).optional(),
   missingFromImport: z.boolean().optional(),
+  /** 9~12조만. 미전송/null=일반. 1~8조+WEEKDAY/WEEKEND는 서버에서 거부. */
+  thirdBandSubgroup: thirdBandSubgroupSchema,
 });
 
 export const caddyUpdateSchema = z.object({
@@ -50,6 +68,7 @@ export const caddyUpdateSchema = z.object({
   employeeCode: z.string().trim().min(1).optional().nullable(),
   caddyType: z.enum(["HOUSE", "THIRD", "DRIVING"]).optional(),
   missingFromImport: z.boolean().optional(),
+  thirdBandSubgroup: thirdBandSubgroupSchema,
   /**
    * ↑↓ 스왑: 대상 캐디 id. 서버가 두 슬롯을 원자적으로 교환.
    * 조 이동(고정 슬롯)과 별개.

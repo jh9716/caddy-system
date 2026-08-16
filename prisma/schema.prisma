@@ -43,6 +43,12 @@ enum CaddyType {
   DRIVING
 }
 
+/// 3부반(9~12조) 주중/주말 세부구분 — 배치 엔진 미연동(저장 전용)
+enum ThirdBandSubgroup {
+  WEEKDAY
+  WEEKEND
+}
+
 /// 휴무 신청 workflow 상태 (확정 OFF는 Assignment로만 가용 제외)
 enum OffRequestStatus {
   REQUESTED
@@ -70,9 +76,11 @@ model Caddy {
   employmentStatus  EmploymentStatus @default(ACTIVE)
   missingFromImport Boolean          @default(false)
   caddyType         CaddyType        @default(HOUSE)
+  /// 3부반 주중반/주말반 (9~12조만). null=일반 3부반 또는 해당 없음. DRIVING 아님.
+  thirdBandSubgroup ThirdBandSubgroup?
   /// 레거시 근무 상태 문자열 (가용 배지와 별개, 선택)
   status            String?          @default("근무중")
-  /// 주중반 / 주말반 / 드라이빙 등 병행 분류
+  /// 주중반 / 주말반 / 드라이빙 등 병행 분류 (레거시 extraFlags — Import 형식 유지)
   extraFlags        String[]         @default([])
   memo              String?
   /// 휴대폰 (canonical: 010XXXXXXXX). null=미등록. PG unique는 NULL 다수 허용.
@@ -91,6 +99,7 @@ model Caddy {
   @@index([team, teamOrder])
   @@index([employmentStatus])
   @@index([caddyType])
+  @@index([thirdBandSubgroup])
 }
 
 model Assignment {
