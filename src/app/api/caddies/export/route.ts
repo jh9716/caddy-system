@@ -8,7 +8,7 @@ export const runtime = "nodejs";
 
 /**
  * GET /api/caddies/export — admin only
- * CSV: id,name,team,teamOrder,employmentStatus,phone
+ * CSV: id,name,team,teamOrder,employmentStatus,phone,thirdBandSubgroup
  *
  * phone는 관리자 전용 round-trip용 전체번호(phoneNormalized).
  * UI 목록 마스킹 정책과 별도로, admin GET /api/caddies 와 동일하게
@@ -27,6 +27,7 @@ export async function GET(req: NextRequest) {
         teamOrder: true,
         employmentStatus: true,
         phoneNormalized: true,
+        thirdBandSubgroup: true,
       },
       orderBy: [{ team: "asc" }, { teamOrder: "asc" }, { id: "asc" }],
     });
@@ -39,6 +40,7 @@ export async function GET(req: NextRequest) {
         teamOrder: r.teamOrder,
         employmentStatus: String(r.employmentStatus),
         phoneNormalized: r.phoneNormalized,
+        thirdBandSubgroup: r.thirdBandSubgroup ?? null,
       }))
     );
 

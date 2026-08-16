@@ -18,7 +18,7 @@ function isExcelName(name: string): boolean {
 /**
  * POST multipart file 또는 JSON { csv, filename? }
  * DB 쓰기 없음 — preview만.
- * CSV → Import v2 (id/teamOrder/employmentStatus/phone)
+ * CSV → Import v2 (id/teamOrder/employmentStatus/phone/thirdBandSubgroup)
  * XLSX → 기존 v1 preview (team/name 레이아웃)
  */
 export async function POST(req: NextRequest) {
@@ -85,6 +85,7 @@ export async function POST(req: NextRequest) {
         teamOrder: true,
         employmentStatus: true,
         phoneNormalized: true,
+        thirdBandSubgroup: true,
       },
       orderBy: [{ team: "asc" }, { teamOrder: "asc" }, { id: "asc" }],
     });
@@ -97,6 +98,7 @@ export async function POST(req: NextRequest) {
         teamOrder: e.teamOrder,
         employmentStatus: String(e.employmentStatus),
         phoneNormalized: e.phoneNormalized,
+        thirdBandSubgroup: e.thirdBandSubgroup ?? null,
       }))
     );
     return NextResponse.json(preview);

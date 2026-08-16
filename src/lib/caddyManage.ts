@@ -65,6 +65,31 @@ export function parseThirdBandSubgroupInput(
 }
 
 /**
+ * Import CSV 셀 파싱.
+ * - 빈칸 / 컬럼 생략 → undefined (기존 값 유지; 신규는 resolve 시 null)
+ * - 일반 / NONE / "null" → null (명시적 해제)
+ * - 주중·WEEKDAY·주중반 / 주말·WEEKEND·주말반 → enum
+ * - DRIVING / 드라이빙 및 그 외 → throw
+ */
+export function parseImportThirdBandSubgroup(
+  input: unknown
+): ThirdBandSubgroup | null | undefined {
+  if (input === undefined || input === null) return undefined;
+  const v = String(input).trim();
+  if (v === "") return undefined;
+  return parseThirdBandSubgroupInput(v);
+}
+
+/** Export/Preview 표시: null → 일반, WEEKDAY → 주중, WEEKEND → 주말 */
+export function thirdBandSubgroupCsvLabel(
+  value: ThirdBandSubgroup | null | undefined
+): string {
+  if (value === "WEEKDAY") return THIRD_BAND_SUBGROUP_LABELS.WEEKDAY;
+  if (value === "WEEKEND") return THIRD_BAND_SUBGROUP_LABELS.WEEKEND;
+  return "일반";
+}
+
+/**
  * 최종 team 기준 invariant:
  * - 1~8조: 항상 null. WEEKDAY/WEEKEND 명시 요청이면 400.
  * - 9~12조: null | WEEKDAY | WEEKEND.
