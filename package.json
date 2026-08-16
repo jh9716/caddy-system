@@ -25,6 +25,7 @@
     "test:user-kakao-schema-unit": "npx tsx scripts/test-user-kakao-schema-unit.ts",
     "test:reservation-unit": "npx tsx scripts/test-reservation-parse-unit.ts",
     "test:auto-assign-unit": "npx tsx scripts/test-auto-assign-unit.ts",
+    "test:auto-assign-acceptance": "npx tsx scripts/test-auto-assign-acceptance-ops-rules.ts",
     "test:assignment-draft-unit": "npx tsx scripts/test-assignment-draft-unit.ts",
     "test:assignment-board-view-unit": "npx tsx scripts/test-assignment-board-view-unit.ts",
     "test:assignment-confirm-unit": "npx tsx scripts/test-assignment-confirm-unit.ts",
