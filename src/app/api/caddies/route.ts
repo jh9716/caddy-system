@@ -3,10 +3,12 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { caddyCreateSchema } from "@/lib/caddySchema";
 import {
+  ThirdBandSubgroupError,
+  mergeExtraFlagsForPersist,
   normalizeEmploymentStatus,
-  normalizeExtraFlags,
   normalizeTeamOrder,
   parseEmploymentFilter,
+  resolveThirdBandSubgroup,
 } from "@/lib/caddyManage";
 import {
   CaddyPhoneError,
@@ -97,16 +99,28 @@ export async function POST(req: NextRequest) {
       teamOrder
     );
 
+    const thirdBandSubgroup = resolveThirdBandSubgroup({
+      team,
+      requested: Object.prototype.hasOwnProperty.call(body, "thirdBandSubgroup")
+        ? data.thirdBandSubgroup
+        : undefined,
+      current: null,
+    });
+
     const created = await prisma.caddy.create({
       data: {
         name: data.name.trim(),
         team,
         teamOrder,
         employmentStatus: normalizeEmploymentStatus(data.employmentStatus),
-        extraFlags: normalizeExtraFlags(data.extraFlags),
+        extraFlags: mergeExtraFlagsForPersist({
+          incoming: data.extraFlags,
+          mode: "create",
+        }),
         status: data.status ?? "근무중",
         memo: data.memo ?? null,
         phoneNormalized,
+        thirdBandSubgroup,
         ...(data.employeeCode !== undefined
           ? { employeeCode: data.employeeCode }
           : {}),
@@ -118,6 +132,12 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json(created);
   } catch (e: any) {
+    if (e instanceof ThirdBandSubgroupError) {
+      return NextResponse.json(
+        { error: e.message, code: e.code },
+        { status: e.status }
+      );
+    }
     if (e instanceof SlotOccupiedError || e instanceof SlotOutOfRangeError) {
       return NextResponse.json(
         {

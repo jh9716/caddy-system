@@ -4,9 +4,11 @@ import { prisma } from "@/lib/prisma";
 import { logAudit } from "@/lib/audit";
 import { caddyUpdateSchema } from "@/lib/caddySchema";
 import {
+  ThirdBandSubgroupError,
+  mergeExtraFlagsForPersist,
   normalizeEmploymentStatus,
-  normalizeExtraFlags,
   normalizeTeamOrder,
+  resolveThirdBandSubgroup,
 } from "@/lib/caddyManage";
 import {
   CaddyPhoneError,
@@ -170,7 +172,11 @@ export async function PATCH(
       );
     }
     if (data.extraFlags !== undefined) {
-      updateData.extraFlags = normalizeExtraFlags(data.extraFlags);
+      updateData.extraFlags = mergeExtraFlagsForPersist({
+        incoming: data.extraFlags,
+        current: current.extraFlags,
+        mode: "update",
+      });
     }
     if (data.status !== undefined) updateData.status = data.status;
     if (data.memo !== undefined) updateData.memo = data.memo;
@@ -184,6 +190,21 @@ export async function PATCH(
     if (data.missingFromImport !== undefined) {
       updateData.missingFromImport = data.missingFromImport;
     }
+
+    // 3부반 세부구분 invariant: 1~8조 → 항상 null, 9~12→1~8 이동 시 정리
+    const subgroupRequested = Object.prototype.hasOwnProperty.call(
+      body,
+      "thirdBandSubgroup"
+    )
+      ? data.thirdBandSubgroup
+      : undefined;
+    updateData.thirdBandSubgroup = resolveThirdBandSubgroup({
+      team: nextTeam,
+      requested: subgroupRequested,
+      current:
+        (current as { thirdBandSubgroup?: "WEEKDAY" | "WEEKEND" | null })
+          .thirdBandSubgroup ?? null,
+    });
 
     // LEAVE/ACTIVE로 복귀·변경 시에도 최종 슬롯 점유 재확인
     if (data.employmentStatus !== undefined) {
@@ -236,6 +257,12 @@ export async function PATCH(
 
     return NextResponse.json(updated);
   } catch (e: any) {
+    if (e instanceof ThirdBandSubgroupError) {
+      return NextResponse.json(
+        { error: e.message, code: e.code },
+        { status: e.status }
+      );
+    }
     if (e instanceof SlotOccupiedError || e instanceof SlotOutOfRangeError) {
       return NextResponse.json(
         {

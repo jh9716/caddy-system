@@ -4,13 +4,16 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   EMPLOYMENT_STATUSES,
   EMPLOYMENT_STATUS_LABELS,
-  EXTRA_FLAG_OPTIONS,
+  EDITABLE_EXTRA_FLAG_OPTIONS,
   PRIMARY_TEAMS,
   TEAM_OPTIONS,
+  THIRD_BAND_SUBGROUP_LABELS,
   employmentStatusLabel,
+  isThirdBandTeam,
   normalizeEmploymentStatus,
   type ExtraFlagOption,
   type EmploymentStatus,
+  type ThirdBandSubgroup,
 } from '@/lib/caddyManage';
 import { maskKrMobile } from '@/lib/caddyPhone';
 import {
@@ -32,6 +35,8 @@ type Caddy = {
   memo?: string | null;
   employeeCode?: string | null;
   caddyType?: string | null;
+  /** 9~12조만. null=일반 3부반 */
+  thirdBandSubgroup?: ThirdBandSubgroup | null;
   missingFromImport?: boolean;
   phoneNormalized?: string | null;
 };
@@ -44,6 +49,8 @@ type Draft = {
   extraFlags: ExtraFlagOption[];
   /** 입력용 원문/정규화 번호. 목록 표시는 maskKrMobile 사용 */
   phone: string;
+  /** null = 일반 (또는 1~8조) */
+  thirdBandSubgroup: ThirdBandSubgroup | null;
 };
 
 const emptyDraft = (): Draft => ({
@@ -53,18 +60,24 @@ const emptyDraft = (): Draft => ({
   employmentStatus: 'ACTIVE',
   extraFlags: [],
   phone: '',
+  thirdBandSubgroup: null,
 });
 
 function toDraft(c: Caddy): Draft {
+  const subgroup =
+    c.thirdBandSubgroup === 'WEEKDAY' || c.thirdBandSubgroup === 'WEEKEND'
+      ? c.thirdBandSubgroup
+      : null;
   return {
     name: c.name,
     team: c.team,
     teamOrder: c.teamOrder ?? 0,
     employmentStatus: normalizeEmploymentStatus(c.employmentStatus),
     extraFlags: (c.extraFlags ?? []).filter((f): f is ExtraFlagOption =>
-      (EXTRA_FLAG_OPTIONS as readonly string[]).includes(f)
+      (EDITABLE_EXTRA_FLAG_OPTIONS as readonly string[]).includes(f)
     ),
     phone: c.phoneNormalized ?? '',
+    thirdBandSubgroup: isThirdBandTeam(c.team) ? subgroup : null,
   };
 }
 
@@ -300,6 +313,9 @@ export default function ManageCaddiesPage() {
           teamOrder: slot,
           employmentStatus: draft.employmentStatus,
           extraFlags: draft.extraFlags,
+          thirdBandSubgroup: isThirdBandTeam(draft.team)
+            ? draft.thirdBandSubgroup
+            : null,
           phone: draft.phone.trim() === '' ? null : draft.phone.trim(),
         }),
       });
@@ -403,6 +419,9 @@ export default function ManageCaddiesPage() {
           teamOrder: slot,
           employmentStatus: createDraft.employmentStatus,
           extraFlags: createDraft.extraFlags,
+          thirdBandSubgroup: isThirdBandTeam(createDraft.team)
+            ? createDraft.thirdBandSubgroup
+            : null,
           phone:
             createDraft.phone.trim() === '' ? null : createDraft.phone.trim(),
         }),
@@ -554,11 +573,17 @@ export default function ManageCaddiesPage() {
               <select
                 value={createDraft.team}
                 onChange={(e) =>
-                  setCreateDraft((d) => ({
-                    ...d,
-                    team: e.target.value,
-                    teamOrder: 0,
-                  }))
+                  setCreateDraft((d) => {
+                    const team = e.target.value;
+                    return {
+                      ...d,
+                      team,
+                      teamOrder: 0,
+                      thirdBandSubgroup: isThirdBandTeam(team)
+                        ? d.thirdBandSubgroup
+                        : null,
+                    };
+                  })
                 }
               >
                 {TEAM_OPTIONS.map((t) => (
@@ -616,10 +641,30 @@ export default function ManageCaddiesPage() {
                 placeholder="010-1234-5678"
               />
             </label>
+            {isThirdBandTeam(createDraft.team) && (
+              <label>
+                3부반 구분
+                <select
+                  value={createDraft.thirdBandSubgroup ?? ''}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setCreateDraft((d) => ({
+                      ...d,
+                      thirdBandSubgroup:
+                        v === 'WEEKDAY' || v === 'WEEKEND' ? v : null,
+                    }));
+                  }}
+                >
+                  <option value="">일반</option>
+                  <option value="WEEKDAY">{THIRD_BAND_SUBGROUP_LABELS.WEEKDAY}</option>
+                  <option value="WEEKEND">{THIRD_BAND_SUBGROUP_LABELS.WEEKEND}</option>
+                </select>
+              </label>
+            )}
           </div>
           <fieldset className="cm-flags">
             <legend>추가 속성</legend>
-            {EXTRA_FLAG_OPTIONS.map((flag) => (
+            {EDITABLE_EXTRA_FLAG_OPTIONS.map((flag) => (
               <label key={flag} className="cm-check">
                 <input
                   type="checkbox"
@@ -778,15 +823,17 @@ export default function ManageCaddiesPage() {
                               조
                               <select
                                 value={draft.team}
-                                onChange={(e) =>
+                                onChange={(e) => {
+                                  const team = e.target.value;
                                   updateDraft(c.id, {
-                                    team: e.target.value,
+                                    team,
                                     teamOrder:
-                                      e.target.value === c.team
-                                        ? draft.teamOrder
-                                        : 0,
-                                  })
-                                }
+                                      team === c.team ? draft.teamOrder : 0,
+                                    thirdBandSubgroup: isThirdBandTeam(team)
+                                      ? draft.thirdBandSubgroup
+                                      : null,
+                                  });
+                                }}
                               >
                                 {!(TEAM_OPTIONS as readonly string[]).includes(
                                   draft.team
@@ -847,10 +894,35 @@ export default function ManageCaddiesPage() {
                                 }
                               />
                             </label>
+                            {isThirdBandTeam(draft.team) && (
+                              <label>
+                                3부반 구분
+                                <select
+                                  value={draft.thirdBandSubgroup ?? ''}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    updateDraft(c.id, {
+                                      thirdBandSubgroup:
+                                        v === 'WEEKDAY' || v === 'WEEKEND'
+                                          ? v
+                                          : null,
+                                    });
+                                  }}
+                                >
+                                  <option value="">일반</option>
+                                  <option value="WEEKDAY">
+                                    {THIRD_BAND_SUBGROUP_LABELS.WEEKDAY}
+                                  </option>
+                                  <option value="WEEKEND">
+                                    {THIRD_BAND_SUBGROUP_LABELS.WEEKEND}
+                                  </option>
+                                </select>
+                              </label>
+                            )}
                           </div>
                           <fieldset className="cm-flags">
                             <legend>추가 속성</legend>
-                            {EXTRA_FLAG_OPTIONS.map((flag) => (
+                            {EDITABLE_EXTRA_FLAG_OPTIONS.map((flag) => (
                               <label key={flag} className="cm-check">
                                 <input
                                   type="checkbox"
@@ -1090,15 +1162,17 @@ export default function ManageCaddiesPage() {
                               조
                               <select
                                 value={draft.team}
-                                onChange={(e) =>
+                                onChange={(e) => {
+                                  const team = e.target.value;
                                   updateDraft(c.id, {
-                                    team: e.target.value,
+                                    team,
                                     teamOrder:
-                                      e.target.value === c.team
-                                        ? draft.teamOrder
-                                        : 0,
-                                  })
-                                }
+                                      team === c.team ? draft.teamOrder : 0,
+                                    thirdBandSubgroup: isThirdBandTeam(team)
+                                      ? draft.thirdBandSubgroup
+                                      : null,
+                                  });
+                                }}
                               >
                                 {TEAM_OPTIONS.map((t) => (
                                   <option key={t} value={t}>
@@ -1153,10 +1227,35 @@ export default function ManageCaddiesPage() {
                                 }
                               />
                             </label>
+                            {isThirdBandTeam(draft.team) && (
+                              <label>
+                                3부반 구분
+                                <select
+                                  value={draft.thirdBandSubgroup ?? ''}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    updateDraft(c.id, {
+                                      thirdBandSubgroup:
+                                        v === 'WEEKDAY' || v === 'WEEKEND'
+                                          ? v
+                                          : null,
+                                    });
+                                  }}
+                                >
+                                  <option value="">일반</option>
+                                  <option value="WEEKDAY">
+                                    {THIRD_BAND_SUBGROUP_LABELS.WEEKDAY}
+                                  </option>
+                                  <option value="WEEKEND">
+                                    {THIRD_BAND_SUBGROUP_LABELS.WEEKEND}
+                                  </option>
+                                </select>
+                              </label>
+                            )}
                           </div>
                           <fieldset className="cm-flags">
                             <legend>추가 속성</legend>
-                            {EXTRA_FLAG_OPTIONS.map((flag) => (
+                            {EDITABLE_EXTRA_FLAG_OPTIONS.map((flag) => (
                               <label key={flag} className="cm-check">
                                 <input
                                   type="checkbox"
