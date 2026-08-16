@@ -20,6 +20,9 @@ import {
   reflowRegularAssignments,
   reservationKey,
   REASON,
+  rotateHouseQueueFromStart,
+  HouseStartCaddyError,
+  assignRegularSequence,
   type AutoAssignCaddy,
   type AutoAssignReservation,
 } from "../src/lib/autoAssignEngine";
@@ -3163,6 +3166,189 @@ section("Fixture4: special/fixed/54/1·3/1·2는 일반 HOUSE 후보 재진입 �
     result.regularAssignments.some((a) => specialIds.has(a.caddy.id)),
     "s3HouseCount=",
     s3House.length
+  );
+}
+
+section("오늘 1부 첫 캐디 · HOUSE 순환큐 오프셋");
+{
+  const A: AutoAssignCaddy = {
+    id: 1,
+    name: "A",
+    team: "1조",
+    teamOrder: 1,
+    caddyType: "HOUSE",
+  };
+  const B: AutoAssignCaddy = {
+    id: 2,
+    name: "B",
+    team: "1조",
+    teamOrder: 2,
+    caddyType: "HOUSE",
+  };
+  const C: AutoAssignCaddy = {
+    id: 3,
+    name: "C",
+    team: "1조",
+    teamOrder: 3,
+    caddyType: "HOUSE",
+  };
+  const D: AutoAssignCaddy = {
+    id: 4,
+    name: "D",
+    team: "1조",
+    teamOrder: 4,
+    caddyType: "HOUSE",
+  };
+  const E: AutoAssignCaddy = {
+    id: 5,
+    name: "E",
+    team: "1조",
+    teamOrder: 5,
+    caddyType: "HOUSE",
+  };
+  const sorted = [A, B, C, D, E];
+  const fromC = rotateHouseQueueFromStart(sorted, 3);
+  assert(
+    fromC.map((x) => x.name).join("") === "CDEAB",
+    "C 시작 → C D E A B"
+  );
+  const fromE = rotateHouseQueueFromStart(sorted, 5);
+  assert(
+    fromE.map((x) => x.name).join("") === "EABCD",
+    "E 시작 → E A B C D"
+  );
+  assert(
+    fromC[0].teamOrder === 3 && C.teamOrder === 3,
+    "first caddy 선택이 teamOrder 값을 수정하지 않음"
+  );
+
+  try {
+    rotateHouseQueueFromStart(sorted, 999);
+    assert(false, "비가용 id는 실패해야 함");
+  } catch (e) {
+    assert(
+      e instanceof HouseStartCaddyError,
+      "비가용 first caddy → HouseStartCaddyError (자동 대체 없음)"
+    );
+  }
+
+  const resLegacy = (n: number, shift: "1부" | "2부" | "3부" = "1부") =>
+    Array.from({ length: n }, (_, i) => ({
+      date: "2026-08-15",
+      course: COURSE_ORDER[i % 4],
+      shift,
+      teeTime: `06:${String(i).padStart(2, "0")}`,
+      teamName: `T${i}`,
+    })) as AutoAssignReservation[];
+
+  const legacy = computeAutoAssignmentsV1({
+    date: "2026-08-15",
+    available: sorted,
+    reservations: resLegacy(3),
+  });
+  const withStart = computeAutoAssignmentsV1({
+    date: "2026-08-15",
+    available: sorted,
+    reservations: resLegacy(3),
+    houseStartCaddyId: 3,
+  });
+  assert(
+    legacy.regularAssignments.map((a) => a.caddy.name).join("") === "ABC",
+    "first caddy 미입력 legacy → 기존 A B C"
+  );
+  assert(
+    withStart.regularAssignments.map((a) => a.caddy.name).join("") === "CDE",
+    "first caddy=C → 1부 첫 일반배치 C D E"
+  );
+  assert(
+    withStart.sparesByShift.find((s) => s.shift === "1부")?.spare1?.name ===
+      "A" &&
+      withStart.sparesByShift.find((s) => s.shift === "1부")?.spare2?.name ===
+        "B",
+    "1부 Spare1=A Spare2=B (CDE 배치 다음)"
+  );
+
+  const fixedCaddy: AutoAssignCaddy = {
+    id: 90,
+    name: "고정",
+    team: "2조",
+    teamOrder: 1,
+    caddyType: "HOUSE",
+  };
+  const housePool = [...sorted, fixedCaddy];
+  const reservations = [
+    {
+      date: "2026-08-15",
+      course: "VERTHILL",
+      shift: "1부",
+      teeTime: "06:00",
+      teamName: "FIX",
+      id: "r-fix",
+    },
+    ...resLegacy(2).map((r, i) => ({
+      ...r,
+      teeTime: `07:${String(i).padStart(2, "0")}`,
+      teamName: `R${i}`,
+    })),
+  ] as AutoAssignReservation[];
+  const fixedInput = [
+    { caddyId: 90, reservationId: "r-fix", type: "FIXED" as const },
+  ];
+  const specialBase = computeAutoAssignmentsV1({
+    date: "2026-08-15",
+    available: housePool,
+    reservations,
+    fixedAssignments: fixedInput,
+    caddyDirectory: housePool,
+  });
+  const specialWithStart = computeAutoAssignmentsV1({
+    date: "2026-08-15",
+    available: housePool,
+    reservations,
+    fixedAssignments: fixedInput,
+    caddyDirectory: housePool,
+    houseStartCaddyId: 3,
+  });
+  assert(
+    specialBase.fixedAssignments.length === 1 &&
+      specialBase.fixedAssignments[0].caddy.id === 90 &&
+      specialWithStart.fixedAssignments.length === 1 &&
+      specialWithStart.fixedAssignments[0].caddy.id === 90 &&
+      specialWithStart.fixedAssignments[0].reservation.id === "r-fix",
+    "특수 우선배치(고정) 결과는 기존과 동일"
+  );
+  assert(
+    specialWithStart.regularAssignments[0]?.caddy.name === "C",
+    "고정 제외 후 일반 1부 시작 = C"
+  );
+
+  try {
+    computeAutoAssignmentsV1({
+      date: "2026-08-15",
+      available: sorted,
+      reservations: resLegacy(1),
+      houseStartCaddyId: 999,
+    });
+    assert(false, "compute도 비가용 first caddy 실패");
+  } catch (e) {
+    assert(
+      e instanceof HouseStartCaddyError,
+      "computeAutoAssignmentsV1 비가용 → validation fail"
+    );
+  }
+
+  const seq = assignRegularSequence({
+    date: "2026-08-15",
+    house: sorted,
+    third: [],
+    reservations: resLegacy(2, "1부"),
+    houseStartCaddyId: 4,
+  });
+  assert(
+    seq.assignments.map((a) => a.caddy.name).join("") === "DE" &&
+      seq.sparesByShift[0]?.spare1?.name === "A" &&
+      seq.sparesByShift[0]?.spare2?.name === "B",
+    "D 시작 2팀 → DE, Spare1=A Spare2=B"
   );
 }
 

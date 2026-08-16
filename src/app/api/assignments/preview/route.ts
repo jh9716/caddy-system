@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
 import {
   computeAutoAssignmentsV1,
+  HouseStartCaddyError,
   type AutoAssignCaddy,
   type AutoAssignReservation,
   type FixedAssignmentInput,
@@ -114,6 +115,22 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      let houseStartCaddyId: number | null = null;
+      const startRaw = form.get("houseStartCaddyId");
+      if (startRaw != null && String(startRaw).trim() !== "") {
+        const n = Number(startRaw);
+        if (!Number.isInteger(n) || n < 1) {
+          return NextResponse.json(
+            {
+              error: "오늘 1부 첫 캐디(id)가 올바르지 않습니다.",
+              code: "house_start_caddy_invalid",
+            },
+            { status: 400 }
+          );
+        }
+        houseStartCaddyId = n;
+      }
+
       const result = computeAutoAssignmentsV1({
         date,
         reservations,
@@ -123,6 +140,7 @@ export async function POST(req: NextRequest) {
         oneThreeCandidates,
         oneTwoCandidates,
         openCourses,
+        houseStartCaddyId,
       });
 
       return NextResponse.json({
@@ -189,6 +207,24 @@ export async function POST(req: NextRequest) {
       ? (body.openCourses as string[])
       : null;
 
+    let houseStartCaddyId: number | null = null;
+    if (
+      body.houseStartCaddyId != null &&
+      String(body.houseStartCaddyId).trim() !== ""
+    ) {
+      const n = Number(body.houseStartCaddyId);
+      if (!Number.isInteger(n) || n < 1) {
+        return NextResponse.json(
+          {
+            error: "오늘 1부 첫 캐디(id)가 올바르지 않습니다.",
+            code: "house_start_caddy_invalid",
+          },
+          { status: 400 }
+        );
+      }
+      houseStartCaddyId = n;
+    }
+
     const result = computeAutoAssignmentsV1({
       date,
       reservations,
@@ -199,6 +235,7 @@ export async function POST(req: NextRequest) {
       oneThreeCandidates,
       oneTwoCandidates,
       openCourses,
+      houseStartCaddyId,
     });
 
     return NextResponse.json({
@@ -206,6 +243,12 @@ export async function POST(req: NextRequest) {
       ...result,
     });
   } catch (e: unknown) {
+    if (e instanceof HouseStartCaddyError) {
+      return NextResponse.json(
+        { error: e.message, code: e.code },
+        { status: e.status }
+      );
+    }
     const message = e instanceof Error ? e.message : "preview 실패";
     console.error("[POST /api/assignments/preview]", e);
     return NextResponse.json({ error: message }, { status: 400 });
