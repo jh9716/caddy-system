@@ -224,6 +224,8 @@ export type AutoAssignResultV1 = {
       { reservations: number; assigned: number; unassigned: number }
     >;
     finalPointer: number;
+    /** 오늘 1부 첫 캐디 (입력된 경우만) */
+    houseStartCaddyId?: number;
   };
 };
 
@@ -422,6 +424,42 @@ export function splitCaddyPools(caddies: AutoAssignCaddy[]): {
   return { house, third, driving };
 }
 
+/**
+ * 오늘 1부 첫 캐디 검증 실패 — 자동으로 다음 캐디로 대체하지 않음.
+ */
+export class HouseStartCaddyError extends Error {
+  status = 400;
+  code = "house_start_caddy_invalid";
+  constructor(message: string) {
+    super(message);
+    this.name = "HouseStartCaddyError";
+  }
+}
+
+/**
+ * 정렬된 HOUSE 큐에서 startCaddyId를 찾아
+ * [선택 → 뒤 → 끝 → 처음 → 선택 직전] 순환 순서로 재배열.
+ * teamOrder 필드 값은 수정하지 않음 (참조 객체 그대로).
+ */
+export function rotateHouseQueueFromStart(
+  sortedHouse: AutoAssignCaddy[],
+  startCaddyId: number
+): AutoAssignCaddy[] {
+  if (!Number.isInteger(startCaddyId) || startCaddyId < 1) {
+    throw new HouseStartCaddyError(
+      "오늘 1부 첫 캐디(id)가 올바르지 않습니다."
+    );
+  }
+  const idx = sortedHouse.findIndex((c) => c.id === startCaddyId);
+  if (idx < 0) {
+    throw new HouseStartCaddyError(
+      `선택한 1부 첫 캐디(id=${startCaddyId})는 당일 일반 HOUSE 가용 풀에 없습니다. 다시 선택해주세요.`
+    );
+  }
+  if (idx === 0) return sortedHouse;
+  return [...sortedHouse.slice(idx), ...sortedHouse.slice(0, idx)];
+}
+
 function toSpareInfo(caddy: AutoAssignCaddy | null | undefined): SpareCaddyInfo | null {
   if (!caddy) return null;
   return {
@@ -429,6 +467,33 @@ function toSpareInfo(caddy: AutoAssignCaddy | null | undefined): SpareCaddyInfo 
     name: caddy.name,
     team: caddy.team,
     teamOrder: caddy.teamOrder,
+  };
+}
+
+/**
+ * HOUSE 순환큐 기준 Spare1·2.
+ * startIdx부터 wrap하며, 같은 부 실배치(usedInShift)는 건너뜀.
+ * 풀이 부족하면 남은 자리는 null.
+ */
+export function pickCircularHouseSpares(
+  house: AutoAssignCaddy[],
+  startIdx: number,
+  usedInShift: ReadonlySet<number>
+): { spare1: SpareCaddyInfo | null; spare2: SpareCaddyInfo | null } {
+  if (house.length === 0) {
+    return { spare1: null, spare2: null };
+  }
+  const origin =
+    ((startIdx % house.length) + house.length) % house.length;
+  const picked: AutoAssignCaddy[] = [];
+  for (let attempt = 0; attempt < house.length && picked.length < 2; attempt++) {
+    const caddy = house[(origin + attempt) % house.length];
+    if (usedInShift.has(caddy.id)) continue;
+    picked.push(caddy);
+  }
+  return {
+    spare1: toSpareInfo(picked[0] ?? null),
+    spare2: toSpareInfo(picked[1] ?? null),
   };
 }
 
@@ -1247,6 +1312,12 @@ export function assignRegularSequence(input: {
   third?: AutoAssignCaddy[];
   reservations: AutoAssignReservation[];
   reasonCode?: string;
+  /**
+   * 오늘 1부 첫 HOUSE 캐디 id.
+   * 있으면 정렬 후 해당 캐디부터 순환큐 회전. 없으면 현행(start=0).
+   * teamOrder 값은 수정하지 않음.
+   */
+  houseStartCaddyId?: number | null;
 }): {
   assignments: AutoAssignmentRow[];
   unassignedReservations: UnassignedReservationRow[];
@@ -1266,7 +1337,10 @@ export function assignRegularSequence(input: {
         }
       : splitCaddyPools(input.available || []);
 
-  const house = pools.house;
+  const house =
+    input.houseStartCaddyId != null && input.houseStartCaddyId !== undefined
+      ? rotateHouseQueueFromStart(pools.house, Number(input.houseStartCaddyId))
+      : pools.house;
   const third = pools.third;
   const houseIndexById = new Map(house.map((c, i) => [c.id, i]));
   const reservations = [...(input.reservations || [])].sort(
@@ -1487,19 +1561,19 @@ export function assignRegularSequence(input: {
         houseStart = houseStart + houseAssigned;
       }
     } else {
-      const spareBase = houseStart + houseAssigned;
+      // 다음 부 시작점 = 순환큐상 배치 직후 위치 (modulo)
+      const nextCursor =
+        house.length === 0
+          ? 0
+          : ((houseStart + houseAssigned) % house.length + house.length) %
+            house.length;
+      const spares = pickCircularHouseSpares(house, nextCursor, usedInShift);
       sparesByShift.push({
         shift,
-        spare1: toSpareInfo(
-          spareBase >= 0 && spareBase < house.length ? house[spareBase] : null
-        ),
-        spare2: toSpareInfo(
-          spareBase + 1 >= 0 && spareBase + 1 < house.length
-            ? house[spareBase + 1]
-            : null
-        ),
+        spare1: spares.spare1,
+        spare2: spares.spare2,
       });
-      houseStart = spareBase;
+      houseStart = nextCursor;
     }
   }
 
@@ -1547,6 +1621,12 @@ export function computeAutoAssignmentsV1(input: {
   min54HoleGapMinutes?: number;
   minOneThreeGapMinutes?: number;
   minOneTwoGapMinutes?: number;
+  /**
+   * 오늘 1부 첫 HOUSE 캐디.
+   * 미입력(legacy) → 기존 start=0.
+   * 입력 시 일반 HOUSE 순환 시작점만 변경 (특수 우선순위 파이프라인 불변).
+   */
+  houseStartCaddyId?: number | null;
 }): AutoAssignResultV1 {
   const date = input.date;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
@@ -1678,12 +1758,14 @@ export function computeAutoAssignmentsV1(input: {
   );
 
   // 4) 일반 순번 — HOUSE 스페어 + 3부 THIRD (DRIVING 비혼합)
+  // houseStartCaddyId는 여기(특수 제외 후 HOUSE 풀)에서만 적용·검증
   const regular = assignRegularSequence({
     date,
     house: pools.house,
     third: pools.third,
     reservations: remainingEligible,
     reasonCode: REASON.REGULAR_SEQUENCE,
+    houseStartCaddyId: input.houseStartCaddyId,
   });
   const regularAssignments = regular.assignments;
   unassignedReservations.push(...regular.unassignedReservations);
@@ -1768,6 +1850,9 @@ export function computeAutoAssignmentsV1(input: {
       drivingPoolCount: pools.driving.length,
       byShift,
       finalPointer: regular.finalPointer,
+      ...(input.houseStartCaddyId != null
+        ? { houseStartCaddyId: Number(input.houseStartCaddyId) }
+        : {}),
     },
   };
 }

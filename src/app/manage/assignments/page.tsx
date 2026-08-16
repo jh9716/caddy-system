@@ -73,6 +73,7 @@ export default function ManageAssignmentsOpsPage() {
     ShiftPart | "UNASSIGNED" | "CLOSED"
   >("1부");
   const [courseOpen, setCourseOpen] = useState<CourseOpenState>(defaultCourseOpen);
+  const [houseStartCaddyId, setHouseStartCaddyId] = useState<number | "">("");
   const [loadingAvail, setLoadingAvail] = useState(false);
   const [loadingRun, setLoadingRun] = useState(false);
   const [loadingApply, setLoadingApply] = useState(false);
@@ -93,6 +94,23 @@ export default function ManageAssignmentsOpsPage() {
     () => COURSE_CODES.filter((c) => courseOpen[c]),
     [courseOpen]
   );
+
+  /** 오늘 1부 첫 캐디 후보: 당일 일반 가용 HOUSE만 (special/제외 제외) */
+  const houseStartCandidates = useMemo(() => {
+    const rows = availability?.available?.all || [];
+    return rows
+      .filter((r) => {
+        const t = String(r.caddyType || "HOUSE").toUpperCase();
+        return t === "HOUSE" || t === "";
+      })
+      .slice()
+      .sort(
+        (a, b) =>
+          String(a.team).localeCompare(String(b.team), "ko") ||
+          (Number(a.teamOrder) || 0) - (Number(b.teamOrder) || 0) ||
+          a.id - b.id
+      );
+  }, [availability]);
 
   const pool: AutoAssignCaddy[] = useMemo(() => {
     if (availability) {
@@ -140,6 +158,7 @@ export default function ManageAssignmentsOpsPage() {
         return;
       }
       setAvailability(data as AvailabilityResult);
+      setHouseStartCaddyId("");
       showToast(`가용 ${data.counts?.available ?? 0}명 로드`);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "가용 요청 실패");
@@ -159,6 +178,10 @@ export default function ManageAssignmentsOpsPage() {
     }
     if (openCourseList.length === 0) {
       setError("최소 1개 코스를 ON으로 선택하세요.");
+      return;
+    }
+    if (houseStartCaddyId === "" || !Number(houseStartCaddyId)) {
+      setError("오늘 1부 첫 캐디를 선택하세요.");
       return;
     }
     setLoadingRun(true);
@@ -185,6 +208,7 @@ export default function ManageAssignmentsOpsPage() {
       form.append("date", date);
       form.append("file", file);
       form.append("openCourses", JSON.stringify(openCourseList));
+      form.append("houseStartCaddyId", String(houseStartCaddyId));
       const res = await fetch("/api/assignments/preview", {
         method: "POST",
         body: form,
@@ -425,7 +449,11 @@ export default function ManageAssignmentsOpsPage() {
           <input
             type="date"
             value={date}
-            onChange={(e) => setDate(e.target.value)}
+            onChange={(e) => {
+              setDate(e.target.value);
+              setHouseStartCaddyId("");
+              setAvailability(null);
+            }}
           />
         </label>
         <label className="ops-field">
@@ -457,6 +485,30 @@ export default function ManageAssignmentsOpsPage() {
             ))}
           </div>
         </div>
+        <label className="ops-field ops-first-caddy">
+          <span>오늘 1부 첫 캐디 (필수)</span>
+          <select
+            value={houseStartCaddyId === "" ? "" : String(houseStartCaddyId)}
+            onChange={(e) => {
+              const v = e.target.value;
+              setHouseStartCaddyId(v ? Number(v) : "");
+            }}
+            disabled={!availability || houseStartCandidates.length === 0}
+          >
+            <option value="">
+              {!availability
+                ? "먼저 가용 캐디를 불러오세요"
+                : houseStartCandidates.length === 0
+                  ? "선택 가능한 HOUSE 가용 캐디 없음"
+                  : "HOUSE 가용 캐디 선택…"}
+            </option>
+            {houseStartCandidates.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name} · {c.team} · {c.teamOrder}번 (id {c.id})
+              </option>
+            ))}
+          </select>
+        </label>
         <div className="ops-actions">
           <button
             type="button"
@@ -469,7 +521,13 @@ export default function ManageAssignmentsOpsPage() {
           <button
             type="button"
             className="btn primary"
-            disabled={!date || !file || loadingRun}
+            disabled={
+              !date ||
+              !file ||
+              loadingRun ||
+              houseStartCaddyId === "" ||
+              !Number(houseStartCaddyId)
+            }
             onClick={runAutoAssign}
           >
             {loadingRun ? "배치 중…" : "자동배치 실행"}
@@ -567,6 +625,31 @@ export default function ManageAssignmentsOpsPage() {
                 <small>{draft.closedCourseReservations?.length ?? 0}</small>
               </button>
             </nav>
+
+            {draft.sparesByShift?.length > 0 && (
+              <div className="ops-spares-all" aria-label="부별 스페어 현황">
+                {SHIFTS.map((s) => {
+                  const sp = draft.sparesByShift.find((x) => x.shift === s);
+                  return (
+                    <div key={s} className="ops-spares-all-col">
+                      <div className="ops-spares-all-title">{s} 스페어</div>
+                      <div>
+                        스페어 1:{" "}
+                        {sp?.spare1
+                          ? `${sp.spare1.name} / ${sp.spare1.team} / ${sp.spare1.teamOrder}번`
+                          : "-"}
+                      </div>
+                      <div>
+                        스페어 2:{" "}
+                        {sp?.spare2
+                          ? `${sp.spare2.name} / ${sp.spare2.team} / ${sp.spare2.teamOrder}번`
+                          : "-"}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
             {shiftTab !== "UNASSIGNED" && shiftTab !== "CLOSED" && (
               <div className="ops-view-toggle" role="group" aria-label="결과 보기">
@@ -889,12 +972,12 @@ export default function ManageAssignmentsOpsPage() {
               )}
 
               <div className="ops-spares">
-                <div className="ops-spares-title">{shiftTab} 스페어</div>
+                <div className="ops-spares-title">{shiftTab} 스페어 (현재 계산)</div>
                 <div className="ops-spare-line">
-                  <span className="lbl">스페어1</span>
+                  <span className="lbl">스페어 1</span>
                   {shiftSpare?.spare1 ? (
                     <span>
-                      {shiftSpare.spare1.name} · {shiftSpare.spare1.team} ·{" "}
+                      {shiftSpare.spare1.name} / {shiftSpare.spare1.team} /{" "}
                       {shiftSpare.spare1.teamOrder}번
                     </span>
                   ) : (
@@ -902,10 +985,10 @@ export default function ManageAssignmentsOpsPage() {
                   )}
                 </div>
                 <div className="ops-spare-line">
-                  <span className="lbl">스페어2</span>
+                  <span className="lbl">스페어 2</span>
                   {shiftSpare?.spare2 ? (
                     <span>
-                      {shiftSpare.spare2.name} · {shiftSpare.spare2.team} ·{" "}
+                      {shiftSpare.spare2.name} / {shiftSpare.spare2.team} /{" "}
                       {shiftSpare.spare2.teamOrder}번
                     </span>
                   ) : (
@@ -1128,10 +1211,38 @@ const opsCss = `
   }
   .ops-field input[type="date"],
   .ops-field input[type="file"],
+  .ops-field select,
   .inline select {
     width: 100%;
     min-height: 40px;
     font-size: 16px; /* iOS zoom prevent */
+  }
+  .ops-first-caddy {
+    margin-top: 4px;
+  }
+  .ops-spares-all {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 10px 12px;
+    background: #f8faf9;
+    border-bottom: 1px solid #e7e5e4;
+    font-size: 0.78rem;
+    color: #1c1917;
+  }
+  @media (min-width: 720px) {
+    .ops-spares-all {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+  .ops-spares-all-title {
+    font-weight: 700;
+    margin-bottom: 4px;
+    color: #14532d;
+  }
+  .ops-spares-all-col {
+    min-width: 0;
+    line-height: 1.45;
   }
   .ops-actions {
     display: grid;
