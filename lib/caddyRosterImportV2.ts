@@ -1,11 +1,12 @@
 /**
  * 캐디 명단 Import v2 (CSV)
  *
- * 컬럼: id,name,team,teamOrder,employmentStatus,phone
+ * 컬럼: id,name,team,teamOrder,employmentStatus,phone[,thirdBandSubgroup]
  * - id optional — 있으면 Caddy.id 매칭 후 name 일치 검증
  * - id 없으면 exact name 1:1
  * - 기존 id update만 (삭제/재생성 금지)
  * - extraFlags 미반영
+ * - thirdBandSubgroup optional (6컬럼 CSV 호환). 빈칸=기존 유지, 일반=null
  * - missingInImport = 경고만 (자동 RETIRED 금지)
  * - ACTIVE+LEAVE 슬롯 점유 기준 teamOrder 중복 시 Apply 차단 (RETIRED 제외)
  * - 신규 create는 teamOrder 필수 (max+1 자동부여 없음)
@@ -27,6 +28,13 @@ import {
   type EmploymentStatusValue,
 } from "./caddyImportRules";
 import { getConfiguredSlotCapacity } from "../src/lib/caddySlot";
+import {
+  parseImportThirdBandSubgroup,
+  resolveThirdBandSubgroup,
+  thirdBandSubgroupCsvLabel,
+  ThirdBandSubgroupError,
+  type ThirdBandSubgroup,
+} from "../src/lib/caddyManage";
 
 const PHONE_HEADER_ALIASES = ["phone", "휴대폰", "전화번호", "mobile"] as const;
 
@@ -50,6 +58,7 @@ export type RosterExisting = {
   teamOrder: number;
   employmentStatus: string;
   phoneNormalized?: string | null;
+  thirdBandSubgroup?: ThirdBandSubgroup | null;
 };
 
 export type RosterCsvRow = {
@@ -60,6 +69,8 @@ export type RosterCsvRow = {
   teamOrder: number | null;
   employmentStatus: EmploymentStatusValue | null;
   phoneRaw: string | undefined; // undefined = column absent; "" = blank keep
+  /** undefined = 컬럼 없음/빈칸(유지). null = 명시적 일반 */
+  thirdBandSubgroup: ThirdBandSubgroup | null | undefined;
   parseErrors: string[];
 };
 
@@ -83,6 +94,8 @@ export type RosterPreviewLine = {
   phoneChanged: boolean;
   currentMaskedPhone: string | null;
   nextMaskedPhone: string | null;
+  currentThirdBandSubgroup?: ThirdBandSubgroup | null;
+  nextThirdBandSubgroup?: ThirdBandSubgroup | null;
   reason?: string;
 };
 
@@ -100,6 +113,7 @@ export type RosterApplyPayload = {
     teamOrder?: number;
     employmentStatus?: EmploymentStatusValue;
     phone?: string;
+    thirdBandSubgroup?: ThirdBandSubgroup | null;
   }>;
   creates: Array<{
     name: string;
@@ -107,6 +121,7 @@ export type RosterApplyPayload = {
     teamOrder?: number;
     employmentStatus?: EmploymentStatusValue;
     phone?: string;
+    thirdBandSubgroup?: ThirdBandSubgroup | null;
   }>;
 };
 
@@ -184,7 +199,7 @@ function findHeader(
 }
 
 /**
- * CSV v2 파싱. name 필수. team/id/teamOrder/employmentStatus/phone optional columns.
+ * CSV v2 파싱. name 필수. team/id/teamOrder/employmentStatus/phone/thirdBandSubgroup optional.
  */
 export function parseRosterCsvV2(text: string): RosterCsvRow[] {
   const cleaned = text.replace(/^\uFEFF/, "").trim();
@@ -208,6 +223,13 @@ export function parseRosterCsvV2(text: string): RosterCsvRow[] {
   ]);
   const phoneIdx = headers.findIndex((h) => isPhoneHeader(h));
   const phoneColumnPresent = phoneIdx !== -1;
+  const thirdBandIdx = findHeader(headers, [
+    "thirdBandSubgroup",
+    "thirdbandsubgroup",
+    "3부구분",
+    "3부반구분",
+    "3부반",
+  ]);
 
   const rows: RosterCsvRow[] = [];
   for (let i = 1; i < lines.length; i++) {
@@ -261,6 +283,17 @@ export function parseRosterCsvV2(text: string): RosterCsvRow[] {
       phoneRaw = (parts[phoneIdx] ?? "").trim();
     }
 
+    let thirdBandSubgroup: ThirdBandSubgroup | null | undefined;
+    if (thirdBandIdx !== -1) {
+      try {
+        thirdBandSubgroup = parseImportThirdBandSubgroup(
+          unescapeCsvFormulaCell(parts[thirdBandIdx] ?? "")
+        );
+      } catch (e) {
+        parseErrors.push(e instanceof Error ? e.message : String(e));
+      }
+    }
+
     rows.push({
       rowNumber: i,
       id,
@@ -269,6 +302,7 @@ export function parseRosterCsvV2(text: string): RosterCsvRow[] {
       teamOrder,
       employmentStatus,
       phoneRaw,
+      thirdBandSubgroup,
       parseErrors,
     });
   }
@@ -373,6 +407,7 @@ export function buildRosterImportPreviewV2(
     nextTeam: string;
     nextOrder: number;
     nextEmp: string;
+    nextSubgroup: ThirdBandSubgroup | null;
     phone: PhoneResolve;
     phoneChanged: boolean;
     applyPhone?: string;
@@ -382,6 +417,7 @@ export function buildRosterImportPreviewV2(
   const createsDraft: Array<{
     row: RosterCsvRow;
     phone: PhoneResolve;
+    nextSubgroup: ThirdBandSubgroup | null;
   }> = [];
 
   for (const row of rows) {
@@ -487,7 +523,28 @@ export function buildRosterImportPreviewV2(
         continue;
       }
       matchedIds.add(cur.id);
-      matched.push(buildMatched(row, cur, phone));
+      const built = buildMatched(row, cur, phone);
+      if ("error" in built) {
+        lines.push({
+          action: "needsReview",
+          id: cur.id,
+          name: row.name,
+          currentTeam: cur.team,
+          nextTeam: built.nextTeam,
+          currentTeamOrder: cur.teamOrder,
+          nextTeamOrder: built.nextOrder,
+          currentEmploymentStatus: empLabel(cur.employmentStatus),
+          nextEmploymentStatus: built.nextEmp,
+          phoneChanged: false,
+          currentMaskedPhone: maskKrMobile(cur.phoneNormalized ?? null),
+          nextMaskedPhone: phone.masked,
+          currentThirdBandSubgroup: cur.thirdBandSubgroup ?? null,
+          nextThirdBandSubgroup: built.nextSubgroup,
+          reason: built.error,
+        });
+        continue;
+      }
+      matched.push(built);
       continue;
     }
 
@@ -534,7 +591,28 @@ export function buildRosterImportPreviewV2(
         continue;
       }
       matchedIds.add(cur.id);
-      matched.push(buildMatched(row, cur, phone));
+      const built = buildMatched(row, cur, phone);
+      if ("error" in built) {
+        lines.push({
+          action: "needsReview",
+          id: cur.id,
+          name: row.name,
+          currentTeam: cur.team,
+          nextTeam: built.nextTeam,
+          currentTeamOrder: cur.teamOrder,
+          nextTeamOrder: built.nextOrder,
+          currentEmploymentStatus: empLabel(cur.employmentStatus),
+          nextEmploymentStatus: built.nextEmp,
+          phoneChanged: false,
+          currentMaskedPhone: maskKrMobile(cur.phoneNormalized ?? null),
+          nextMaskedPhone: phone.masked,
+          currentThirdBandSubgroup: cur.thirdBandSubgroup ?? null,
+          nextThirdBandSubgroup: built.nextSubgroup,
+          reason: built.error,
+        });
+        continue;
+      }
+      matched.push(built);
       continue;
     }
 
@@ -641,7 +719,41 @@ export function buildRosterImportPreviewV2(
       continue;
     }
 
-    createsDraft.push({ row, phone });
+    try {
+      const nextSubgroup = resolveThirdBandSubgroup({
+        team: row.team,
+        requested: row.thirdBandSubgroup,
+        current: null,
+      });
+      createsDraft.push({ row, phone, nextSubgroup });
+    } catch (e) {
+      lines.push({
+        action: "needsReview",
+        id: null,
+        name: row.name,
+        currentTeam: null,
+        nextTeam: row.team,
+        currentTeamOrder: null,
+        nextTeamOrder: row.teamOrder,
+        currentEmploymentStatus: null,
+        nextEmploymentStatus: row.employmentStatus,
+        phoneChanged: false,
+        currentMaskedPhone: null,
+        nextMaskedPhone: phone.masked,
+        currentThirdBandSubgroup: null,
+        nextThirdBandSubgroup:
+          row.thirdBandSubgroup === "WEEKDAY" ||
+          row.thirdBandSubgroup === "WEEKEND"
+            ? row.thirdBandSubgroup
+            : null,
+        reason:
+          e instanceof ThirdBandSubgroupError
+            ? e.message
+            : e instanceof Error
+              ? e.message
+              : String(e),
+      });
+    }
   }
 
   // phone validation for matched + creates
@@ -794,6 +906,10 @@ export function buildRosterImportPreviewV2(
         patch.employmentStatus = m.row.employmentStatus;
       }
       if (m.applyPhone) patch.phone = m.applyPhone;
+      const currentSub = m.cur.thirdBandSubgroup ?? null;
+      if (m.nextSubgroup !== currentSub) {
+        patch.thirdBandSubgroup = m.nextSubgroup;
+      }
       // always send team if any roster field changes so apply has full team context for conflict? 
       // User said omit empty = keep. Only include provided fields.
       if (Object.keys(patch).length === 1) {
@@ -815,6 +931,8 @@ export function buildRosterImportPreviewV2(
         nextMaskedPhone: phoneChanged
           ? m.phone.masked
           : maskKrMobile(m.cur.phoneNormalized ?? null),
+        currentThirdBandSubgroup: currentSub,
+        nextThirdBandSubgroup: m.nextSubgroup,
       });
     } else {
       unchangedCount++;
@@ -831,6 +949,8 @@ export function buildRosterImportPreviewV2(
         phoneChanged: false,
         currentMaskedPhone: maskKrMobile(m.cur.phoneNormalized ?? null),
         nextMaskedPhone: maskKrMobile(m.cur.phoneNormalized ?? null),
+        currentThirdBandSubgroup: m.cur.thirdBandSubgroup ?? null,
+        nextThirdBandSubgroup: m.nextSubgroup,
       });
     }
   }
@@ -872,6 +992,7 @@ export function buildRosterImportPreviewV2(
     if (c.phone.intent === "set" && c.phone.normalized) {
       create.phone = c.phone.normalized;
     }
+    create.thirdBandSubgroup = c.nextSubgroup;
     applyCreates.push(create);
     lines.push({
       action: "create",
@@ -886,6 +1007,8 @@ export function buildRosterImportPreviewV2(
       phoneChanged: c.phone.intent === "set",
       currentMaskedPhone: null,
       nextMaskedPhone: c.phone.masked,
+      currentThirdBandSubgroup: null,
+      nextThirdBandSubgroup: c.nextSubgroup,
     });
   }
 
@@ -904,6 +1027,8 @@ export function buildRosterImportPreviewV2(
       phoneChanged: false,
       currentMaskedPhone: maskKrMobile(e.phoneNormalized ?? null),
       nextMaskedPhone: null,
+      currentThirdBandSubgroup: e.thirdBandSubgroup ?? null,
+      nextThirdBandSubgroup: e.thirdBandSubgroup ?? null,
       reason: "최신 명단에 없음 — 자동 퇴사/삭제 없음 (경고만)",
     }));
 
@@ -1016,17 +1141,26 @@ function buildMatched(
   row: RosterCsvRow,
   cur: RosterExisting,
   phone: PhoneResolve
-): {
-  row: RosterCsvRow;
-  cur: RosterExisting;
-  nextTeam: string;
-  nextOrder: number;
-  nextEmp: string;
-  phone: PhoneResolve;
-  phoneChanged: boolean;
-  applyPhone?: string;
-  changed: boolean;
-} {
+):
+  | {
+      row: RosterCsvRow;
+      cur: RosterExisting;
+      nextTeam: string;
+      nextOrder: number;
+      nextEmp: string;
+      nextSubgroup: ThirdBandSubgroup | null;
+      phone: PhoneResolve;
+      phoneChanged: boolean;
+      applyPhone?: string;
+      changed: boolean;
+    }
+  | {
+      error: string;
+      nextTeam: string;
+      nextOrder: number;
+      nextEmp: string;
+      nextSubgroup: ThirdBandSubgroup | null;
+    } {
   const nextTeam = row.team != null && row.team !== "" ? row.team : cur.team;
   const nextOrder = row.teamOrder != null ? row.teamOrder : cur.teamOrder;
   const nextEmp =
@@ -1046,10 +1180,38 @@ function buildMatched(
     applyPhone = phone.normalized;
   }
 
+  const currentSub = cur.thirdBandSubgroup ?? null;
+  let nextSubgroup: ThirdBandSubgroup | null;
+  try {
+    nextSubgroup = resolveThirdBandSubgroup({
+      team: nextTeam,
+      requested: row.thirdBandSubgroup,
+      current: currentSub,
+    });
+  } catch (e) {
+    return {
+      error:
+        e instanceof ThirdBandSubgroupError
+          ? e.message
+          : e instanceof Error
+            ? e.message
+            : String(e),
+      nextTeam,
+      nextOrder,
+      nextEmp,
+      nextSubgroup:
+        row.thirdBandSubgroup === "WEEKDAY" ||
+        row.thirdBandSubgroup === "WEEKEND"
+          ? row.thirdBandSubgroup
+          : currentSub,
+    };
+  }
+
   const changed =
     nextTeam !== cur.team ||
     nextOrder !== cur.teamOrder ||
-    nextEmp !== (empLabel(cur.employmentStatus) || "ACTIVE");
+    nextEmp !== (empLabel(cur.employmentStatus) || "ACTIVE") ||
+    nextSubgroup !== currentSub;
 
   return {
     row,
@@ -1057,6 +1219,7 @@ function buildMatched(
     nextTeam,
     nextOrder,
     nextEmp,
+    nextSubgroup,
     phone,
     phoneChanged,
     applyPhone,
@@ -1191,6 +1354,7 @@ export async function applyRosterImportPayloadV2(
         teamOrder: true,
         employmentStatus: true,
         phoneNormalized: true,
+        thirdBandSubgroup: true,
       },
     }));
 
@@ -1230,6 +1394,7 @@ export async function applyRosterImportPayloadV2(
     teamOrder?: number;
     employmentStatus?: EmploymentStatusValue;
     phone?: string;
+    thirdBandSubgroup?: ThirdBandSubgroup | null;
   }> = [];
   const normCreates: typeof payload.creates = [];
 
@@ -1352,6 +1517,10 @@ export async function applyRosterImportPayloadV2(
     const createdIds: number[] = [];
 
     for (const u of normUpdates) {
+      const cur = existingById.get(u.id);
+      if (!cur) {
+        throw new RosterImportApplyError(`존재하지 않는 id: ${u.id}`);
+      }
       const data: Record<string, unknown> = {};
       if (u.team != null) data.team = u.team;
       if (u.teamOrder != null) data.teamOrder = u.teamOrder;
@@ -1359,6 +1528,30 @@ export async function applyRosterImportPayloadV2(
       if (u.phone) {
         data.phoneNormalized = u.phone;
         phoneUpdated++;
+      }
+      const nextTeam = u.team ?? cur.team;
+      const requested = Object.prototype.hasOwnProperty.call(
+        u,
+        "thirdBandSubgroup"
+      )
+        ? u.thirdBandSubgroup
+        : undefined;
+      try {
+        const nextSub = resolveThirdBandSubgroup({
+          team: nextTeam,
+          requested,
+          current: cur.thirdBandSubgroup ?? null,
+        });
+        const currentSub = cur.thirdBandSubgroup ?? null;
+        if (nextSub !== currentSub) {
+          data.thirdBandSubgroup = nextSub;
+        }
+      } catch (e) {
+        throw new RosterImportApplyError(
+          e instanceof Error ? e.message : "thirdBandSubgroup 오류",
+          400,
+          "third_band_subgroup_invalid"
+        );
       }
       if (Object.keys(data).length === 0) continue;
       await client.caddy.update({ where: { id: u.id }, data });
@@ -1381,6 +1574,21 @@ export async function applyRosterImportPayloadV2(
         employmentStatus: c.employmentStatus ?? "ACTIVE",
       };
       if (c.phone) data.phoneNormalized = c.phone;
+      try {
+        data.thirdBandSubgroup = resolveThirdBandSubgroup({
+          team: c.team,
+          requested: Object.prototype.hasOwnProperty.call(c, "thirdBandSubgroup")
+            ? c.thirdBandSubgroup
+            : undefined,
+          current: null,
+        });
+      } catch (e) {
+        throw new RosterImportApplyError(
+          e instanceof Error ? e.message : "thirdBandSubgroup 오류",
+          400,
+          "third_band_subgroup_invalid"
+        );
+      }
       const row = await client.caddy.create({ data });
       createdIds.push(row.id);
     }
@@ -1400,6 +1608,9 @@ export async function applyRosterImportPayloadV2(
     return await run(prisma);
   } catch (e) {
     if (e instanceof RosterImportApplyError) throw e;
+    if (e instanceof ThirdBandSubgroupError) {
+      throw new RosterImportApplyError(e.message, e.status, e.code);
+    }
     if (e instanceof CaddyPhoneError) {
       throw new RosterImportApplyError(e.message, e.status, e.code);
     }
@@ -1433,7 +1644,8 @@ export function unescapeCsvFormulaCell(value: string): string {
 
 /** Admin export CSV (full phone for round-trip). Caller must be admin-only. */
 export function buildRosterExportCsv(rows: RosterExisting[]): string {
-  const header = "id,name,team,teamOrder,employmentStatus,phone";
+  const header =
+    "id,name,team,teamOrder,employmentStatus,phone,thirdBandSubgroup";
   const escape = (v: string) => {
     const formulaSafe = escapeCsvFormulaCell(v);
     if (/[",\n\r]/.test(formulaSafe)) {
@@ -1451,6 +1663,7 @@ export function buildRosterExportCsv(rows: RosterExisting[]): string {
       String(r.teamOrder ?? 0),
       emp,
       phone,
+      escape(thirdBandSubgroupCsvLabel(r.thirdBandSubgroup ?? null)),
     ].join(",");
   });
   // UTF-8 BOM: Windows Excel 한글 호환. Import는 BOM strip.

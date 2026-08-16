@@ -11,6 +11,7 @@ import {
   employmentStatusLabel,
   isThirdBandTeam,
   normalizeEmploymentStatus,
+  thirdBandSubgroupCsvLabel,
   type ExtraFlagOption,
   type EmploymentStatus,
   type ThirdBandSubgroup,
@@ -119,6 +120,8 @@ export default function ManageCaddiesPage() {
     phoneChanged: boolean;
     currentMaskedPhone: string | null;
     nextMaskedPhone: string | null;
+    currentThirdBandSubgroup?: ThirdBandSubgroup | null;
+    nextThirdBandSubgroup?: ThirdBandSubgroup | null;
     reason?: string;
   };
   type ImportPreview = {
@@ -1312,8 +1315,8 @@ export default function ManageCaddiesPage() {
             </button>
           </div>
           <p className="cm-import-help">
-            컬럼: <code>id,name,team,teamOrder,employmentStatus,phone</code>
-            · id는 선택 · 빈 선택필드는 기존 유지 · 삭제/재생성 없음 · extraFlags 미반영
+            컬럼: <code>id,name,team,teamOrder,employmentStatus,phone[,thirdBandSubgroup]</code>
+            · id는 선택 · 빈 선택필드는 기존 유지 · 일반=3부구분 해제 · 삭제/재생성 없음 · extraFlags 미반영
           </p>
           <div className="cm-import-actions">
             <label className="cm-btn cm-btn-sm cm-file-label">
@@ -1481,6 +1484,7 @@ export default function ManageCaddiesPage() {
                       <th>조</th>
                       <th>순번</th>
                       <th>상태</th>
+                      <th>3부구분</th>
                       <th>휴대폰</th>
                       <th>사유</th>
                     </tr>
@@ -1524,6 +1528,18 @@ export default function ManageCaddiesPage() {
                         : line.currentMaskedPhone ??
                           line.nextMaskedPhone ??
                           '—';
+                      const curBand = thirdBandSubgroupCsvLabel(
+                        line.currentThirdBandSubgroup
+                      );
+                      const nextBand = thirdBandSubgroupCsvLabel(
+                        line.nextThirdBandSubgroup
+                      );
+                      const bandText =
+                        line.action === 'missingInImport'
+                          ? `${curBand} → (유지)`
+                          : curBand === nextBand
+                            ? `3부구분: ${nextBand}`
+                            : `3부구분: ${curBand} → ${nextBand}`;
                       return (
                         <tr
                           key={`${line.action}-${line.id}-${line.name}-${idx}`}
@@ -1535,6 +1551,7 @@ export default function ManageCaddiesPage() {
                           <td>{teamText}</td>
                           <td>{orderText}</td>
                           <td>{empText}</td>
+                          <td>{bandText}</td>
                           <td>{phoneText}</td>
                           <td>{line.reason ?? ''}</td>
                         </tr>

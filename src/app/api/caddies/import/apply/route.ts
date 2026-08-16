@@ -15,7 +15,7 @@ export const runtime = "nodejs";
 
 /**
  * POST { applyPayload: { updates, creates } } — Import v2
- * - 기존 id update (team / teamOrder / employmentStatus / phone)
+ * - 기존 id update (team / teamOrder / employmentStatus / phone / thirdBandSubgroup)
  * - 신규 create (name+team 필수)
  * - extraFlags / missingFromImport / 삭제 / ID 재부여 금지
  * - Assignment/Schedule/ShiftDuty/OffRequest/User 연관 수정 없음
@@ -93,6 +93,7 @@ export async function POST(req: NextRequest) {
         teamOrder: true,
         employmentStatus: true,
         phoneNormalized: true,
+        thirdBandSubgroup: true,
       },
     });
 
@@ -113,6 +114,9 @@ export async function POST(req: NextRequest) {
               }
             : {}),
           ...(u.phone !== undefined ? { phone: String(u.phone) } : {}),
+          ...(Object.prototype.hasOwnProperty.call(u, "thirdBandSubgroup")
+            ? { thirdBandSubgroup: u.thirdBandSubgroup ?? null }
+            : {}),
         })),
         creates: payload.creates.map((c) => ({
           name: String(c.name),
@@ -129,6 +133,9 @@ export async function POST(req: NextRequest) {
               }
             : {}),
           ...(c.phone !== undefined ? { phone: String(c.phone) } : {}),
+          ...(Object.prototype.hasOwnProperty.call(c, "thirdBandSubgroup")
+            ? { thirdBandSubgroup: c.thirdBandSubgroup ?? null }
+            : {}),
         })),
       },
       prisma,
@@ -140,6 +147,7 @@ export async function POST(req: NextRequest) {
           teamOrder: e.teamOrder,
           employmentStatus: String(e.employmentStatus),
           phoneNormalized: e.phoneNormalized,
+          thirdBandSubgroup: e.thirdBandSubgroup ?? null,
         })),
       }
     );
@@ -154,6 +162,9 @@ export async function POST(req: NextRequest) {
       ...(u.phone !== undefined
         ? { phone: maskKrMobile(String(u.phone)) }
         : {}),
+      ...(Object.prototype.hasOwnProperty.call(u, "thirdBandSubgroup")
+        ? { thirdBandSubgroup: u.thirdBandSubgroup ?? null }
+        : {}),
     }));
     const maskedCreates = payload.creates.map((c) => ({
       name: String(c.name),
@@ -164,6 +175,9 @@ export async function POST(req: NextRequest) {
         : {}),
       ...(c.phone !== undefined
         ? { phone: maskKrMobile(String(c.phone)) }
+        : {}),
+      ...(Object.prototype.hasOwnProperty.call(c, "thirdBandSubgroup")
+        ? { thirdBandSubgroup: c.thirdBandSubgroup ?? null }
         : {}),
     }));
 
