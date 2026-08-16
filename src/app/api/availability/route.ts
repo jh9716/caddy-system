@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
  * 가용 캐디 계산 (읽기 전용). Production 데이터 수정 없음.
  */
 export async function GET(req: NextRequest) {
-  const guard = requireAdmin(req);
+  const guard = await requireAdmin(req);
   if (guard) return guard;
 
   try {

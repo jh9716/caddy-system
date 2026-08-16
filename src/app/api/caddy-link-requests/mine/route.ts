@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getUsernameFromCookies } from "@/lib/sessionCookies";
+import { resolveAuthUser } from "@/lib/auth";
 import {
   CaddyLinkRequestError,
   getMineCaddyLinkRequest,
@@ -12,7 +12,8 @@ export const dynamic = "force-dynamic";
 /** GET — 본인 최신 연결 요청 (마스킹만) */
 export async function GET(req: NextRequest) {
   try {
-    const username = getUsernameFromCookies(req.cookies);
+    const auth = await resolveAuthUser(req);
+    const username = auth?.username ?? null;
     const user = await resolveSessionUser(prisma, username);
     if (!user) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });

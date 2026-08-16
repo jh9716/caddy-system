@@ -1,11 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import {
-  applySessionCookies,
-  normalizeAppRole,
-  type AppRole,
-} from "@/lib/sessionCookies";
-import { verifyUserPassword } from "@/lib/userPassword";
+import { applySessionCookies } from "@/lib/sessionCookies";
+import { passwordLogin } from "@/lib/passwordLogin";
 
 export const dynamic = "force-dynamic";
 
@@ -15,41 +11,34 @@ export async function POST(req: NextRequest) {
   const password = String(body?.password ?? "");
 
   if (!username || !password) {
-    return NextResponse.json({ error: "아이디/비밀번호를 입력하세요." }, { status: 401 });
+    return NextResponse.json(
+      { error: "아이디/비밀번호를 입력하세요." },
+      { status: 401 }
+    );
   }
 
-  const ADMIN_USER = process.env.ADMIN_USER || process.env.ADMIN_USERNAME || "admin";
-  const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
-  const CADDY_USER = process.env.CADDY_USER || process.env.CADDY_USERNAME || "caddy";
-  const CADDY_PASSWORD = process.env.CADDY_PASSWORD || "";
-
-  let role: AppRole | null = null;
-
-  // 1) 환경변수 계정 (로컬/터널 테스트용)
-  if (username === ADMIN_USER && ADMIN_PASSWORD && password === ADMIN_PASSWORD) {
-    role = "admin";
-  } else if (username === CADDY_USER && CADDY_PASSWORD && password === CADDY_PASSWORD) {
-    role = "caddy";
-  } else {
-    // 2) DB User 계정 (bcrypt) — password null(OAuth 전용)은 안전하게 실패
-    try {
-      const user = await prisma.user.findUnique({ where: { username } });
-      if (user) {
-        const ok = await verifyUserPassword(password, user.password);
-        if (ok) {
-          role = normalizeAppRole(user.role);
-        }
-      }
-    } catch (e) {
-      console.error("[POST /api/login] db auth error", e);
-    }
+  const result = await passwordLogin(username, password, prisma);
+  if (result.status === "unavailable") {
+    return NextResponse.json({ error: "auth_unavailable" }, { status: 500 });
+  }
+  if (result.status !== "ok") {
+    return NextResponse.json(
+      { error: "unauthorized", message: "로그인 실패" },
+      { status: 401 }
+    );
   }
 
-  if (!role) {
-    return NextResponse.json({ error: "unauthorized", message: "로그인 실패" }, { status: 401 });
+  try {
+    const res = NextResponse.json({ ok: true, role: result.role });
+    await applySessionCookies(res, req, {
+      userId: result.userId,
+      username: result.username,
+      role: result.role,
+      sessionVersion: result.sessionVersion,
+    });
+    return res;
+  } catch (e) {
+    console.error("[POST /api/login] session issue", e);
+    return NextResponse.json({ error: "auth_unavailable" }, { status: 500 });
   }
-
-  const res = NextResponse.json({ ok: true, role });
-  applySessionCookies(res, req, role, username);
-  return res;
 }

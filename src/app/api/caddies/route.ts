@@ -25,7 +25,7 @@ export const dynamic = "force-dynamic";
 
 /** GET: 캐디 목록 (관리자 전용. 기본: ACTIVE, ?employment=all|ACTIVE|LEAVE|RETIRED|재직|휴직|퇴사) */
 export async function GET(req: NextRequest) {
-  const guard = requireAdmin(req);
+  const guard = await requireAdmin(req);
   if (guard) return guard;
 
   try {
@@ -51,7 +51,7 @@ export async function GET(req: NextRequest) {
 
 /** POST: 신규 캐디 등록 — 빈 슬롯(teamOrder) 명시 필수. max+1 자동부여 없음. */
 export async function POST(req: NextRequest) {
-  const guard = requireAdmin(req);
+  const guard = await requireAdmin(req);
   if (guard) return guard;
 
   try {
@@ -161,7 +161,7 @@ export async function POST(req: NextRequest) {
  * RETIRED(soft)만. Assignment/Schedule 유지.
  */
 export async function DELETE(req: NextRequest) {
-  const guard = requireAdmin(req);
+  const guard = await requireAdmin(req);
   if (guard) return guard;
 
   try {

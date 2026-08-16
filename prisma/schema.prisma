@@ -160,6 +160,8 @@ model User {
   managedTeams String[] @default([])
   /// 카카오 고유 numeric user id (문자열). 이메일/닉네임/이름 identity 금지. 기존 User backfill 없음.
   kakaoUserId String? @unique
+  /// 서명 세션 무효화 카운터. +1 시 해당 User의 기존 signed cookie 전부 거부.
+  sessionVersion Int @default(0)
   /// 본인확인 연결 요청 이력 (User 물리 삭제는 Restrict로 이력 보호)
   caddyLinkRequests CaddyLinkRequest[]
   createdAt DateTime @default(now())

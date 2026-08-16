@@ -276,7 +276,7 @@ async function main() {
   section("admin only (requireAdmin + routes)");
   {
     const noCookie = new NextRequest("http://localhost/api/users");
-    const guard = requireAdmin(noCookie);
+    const guard = await requireAdmin(noCookie);
     assert(guard instanceof Response && guard.status === 401, "requireAdmin 401");
 
     const listRes = await usersGET(noCookie);

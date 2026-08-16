@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireAdmin } from "@/utils/requireAdmin";
+import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +12,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  await requireAdmin(); // 관리자만
+  const guard = await requireAdmin(req);
+  if (guard) return guard;
   const { title, content } = await req.json();
   if (!title || String(title).trim() === "") {
     return NextResponse.json({ error: "제목은 필수입니다." }, { status: 400 });

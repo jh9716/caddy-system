@@ -82,7 +82,12 @@ export async function GET(req: NextRequest) {
   try {
     let user = await prisma.user.findUnique({
       where: { kakaoUserId },
-      select: { id: true, username: true, role: true },
+      select: {
+        id: true,
+        username: true,
+        role: true,
+        sessionVersion: true,
+      },
     });
 
     if (!user) {
@@ -96,7 +101,12 @@ export async function GET(req: NextRequest) {
             managedTeams: [],
             kakaoUserId,
           },
-          select: { id: true, username: true, role: true },
+          select: {
+            id: true,
+            username: true,
+            role: true,
+            sessionVersion: true,
+          },
         });
       } catch (e) {
         // 동시 최초 로그인 레이스 → kakaoUserId unique
@@ -106,7 +116,12 @@ export async function GET(req: NextRequest) {
         ) {
           user = await prisma.user.findUnique({
             where: { kakaoUserId },
-            select: { id: true, username: true, role: true },
+            select: {
+              id: true,
+              username: true,
+              role: true,
+              sessionVersion: true,
+            },
           });
         } else {
           throw e;
@@ -119,19 +134,23 @@ export async function GET(req: NextRequest) {
     // 기존 User는 DB role 유지 (leader 등). 신규는 caddy.
     role = normalizeAppRole(user.role) || "caddy";
     username = user.username;
+
+    const returnCookie = req.cookies.get(KAKAO_RETURN_COOKIE)?.value;
+    const returnTo = safeReturnPath(returnCookie);
+    const dest =
+      returnTo || (role === "admin" ? "/manage" : "/caddy");
+
+    const res = NextResponse.redirect(new URL(dest, req.url));
+    clearOAuthCookies(res, req);
+    await applySessionCookies(res, req, {
+      userId: user.id,
+      username: user.username,
+      role,
+      sessionVersion: user.sessionVersion ?? 0,
+    });
+    return res;
   } catch (e) {
     console.error("[kakao/callback] user upsert", e);
     return redirectLoginError(req, "kakao_user");
   }
-
-  const returnCookie = req.cookies.get(KAKAO_RETURN_COOKIE)?.value;
-  const returnTo = safeReturnPath(returnCookie);
-  const dest =
-    returnTo ||
-    (role === "admin" ? "/manage" : "/caddy");
-
-  const res = NextResponse.redirect(new URL(dest, req.url));
-  clearOAuthCookies(res, req);
-  applySessionCookies(res, req, role, username);
-  return res;
 }

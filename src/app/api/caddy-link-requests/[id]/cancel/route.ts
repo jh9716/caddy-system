@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getUsernameFromCookies } from "@/lib/sessionCookies";
+import { resolveAuthUser } from "@/lib/auth";
 import {
   CaddyLinkRequestError,
   cancelCaddyLinkRequest,
@@ -15,7 +15,8 @@ export async function POST(
   ctx: { params: Promise<{ id: string }> | { id: string } }
 ) {
   try {
-    const username = getUsernameFromCookies(req.cookies);
+    const auth = await resolveAuthUser(req);
+    const username = auth?.username ?? null;
     const user = await resolveSessionUser(prisma, username);
     if (!user) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });

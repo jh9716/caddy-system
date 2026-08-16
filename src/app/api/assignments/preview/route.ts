@@ -66,7 +66,7 @@ export const runtime = "nodejs";
  * 2) JSON: { date, reservations, available, special? } → 순수 배치만
  */
 export async function POST(req: NextRequest) {
-  const guard = requireAdmin(req);
+  const guard = await requireAdmin(req);
   if (guard) return guard;
 
   try {

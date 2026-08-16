@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 /** GET — Kakao User 목록 (admin). admin role User는 목록에서 제외 */
 export async function GET(req: NextRequest) {
-  const guard = requireAdmin(req);
+  const guard = await requireAdmin(req);
   if (guard) return guard;
 
   try {

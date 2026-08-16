@@ -5,14 +5,15 @@ import type { ReactNode } from "react";
 import { prisma } from "@/lib/prisma";
 import dayjs from "dayjs";
 import { PRIMARY_TEAMS, normalizeEmploymentStatus } from "@/lib/caddyManage";
+import { resolveAuthFromCookieStore } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 const GLANCE_TEAMS = PRIMARY_TEAMS;
 
 export default async function ManagePage() {
-  const role = (await cookies()).get("role")?.value ?? null;
-  if (role !== "admin") redirect("/login");
+  const auth = await resolveAuthFromCookieStore(await cookies());
+  if (!auth || auth.role !== "admin") redirect("/login");
 
   const today = dayjs().startOf("day").toDate();
   const tomorrow = dayjs(today).add(1, "day").toDate();

@@ -15,7 +15,7 @@ export const runtime = "nodejs";
  * 원문을 내려준다 (명단 재업로드에 필요).
  */
 export async function GET(req: NextRequest) {
-  const guard = requireAdmin(req);
+  const guard = await requireAdmin(req);
   if (guard) return guard;
 
   try {
