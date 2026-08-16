@@ -1,7 +1,8 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from "next/server";
+import { clearSessionCookies } from "@/lib/sessionCookies";
 
-export async function POST() {
-  const res = NextResponse.json({ ok: true })
-  res.cookies.set('admin', '', { httpOnly: true, maxAge: 0, path: '/' })
-  return res
+export async function POST(req: NextRequest) {
+  const res = NextResponse.json({ ok: true });
+  clearSessionCookies(res, req);
+  return res;
 }

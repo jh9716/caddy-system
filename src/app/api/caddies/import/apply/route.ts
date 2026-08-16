@@ -8,17 +8,10 @@ import {
 import { isNeedsReviewName } from "@/lib/caddyImportRules";
 import { maskKrMobile } from "@/lib/caddyPhone";
 import { logAudit } from "@/lib/audit";
+import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-
-function assertAdmin(req: NextRequest) {
-  const role = req.cookies.get("role")?.value;
-  if (role !== "admin") {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
-  return null;
-}
 
 /**
  * POST { applyPayload: { updates, creates } } — Import v2
@@ -28,7 +21,7 @@ function assertAdmin(req: NextRequest) {
  * - Assignment/Schedule/ShiftDuty/OffRequest/User 연관 수정 없음
  */
 export async function POST(req: NextRequest) {
-  const denied = assertAdmin(req);
+  const denied = await requireAdmin(req);
   if (denied) return denied;
 
   try {

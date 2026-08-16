@@ -1,22 +1,21 @@
-// src/utils/guards.ts
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { cookies } from "next/headers";
 import { redirect, notFound } from "next/navigation";
+import { resolveAuthFromCookieStore } from "@/lib/auth";
 
 export async function requireUser() {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) redirect("/login");
-  return session;
+  const auth = await resolveAuthFromCookieStore(await cookies());
+  if (!auth) redirect("/login");
+  return auth;
 }
 
 export async function requireAdmin() {
-  const session = await requireUser();
-  if ((session.user as any).role !== "admin") notFound();
-  return session;
+  const auth = await requireUser();
+  if (auth.role !== "admin") notFound();
+  return auth;
 }
 
 export async function requireCaddy() {
-  const session = await requireUser();
-  if ((session.user as any).role !== "caddy") notFound();
-  return session;
+  const auth = await requireUser();
+  if (auth.role !== "caddy" && auth.role !== "leader") notFound();
+  return auth;
 }

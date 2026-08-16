@@ -10,7 +10,7 @@ export const runtime = "nodejs";
  * DB 쓰기 없음 — 예약표 파싱 preview만.
  */
 export async function POST(req: NextRequest) {
-  const guard = requireAdmin(req);
+  const guard = await requireAdmin(req);
   if (guard) return guard;
 
   try {

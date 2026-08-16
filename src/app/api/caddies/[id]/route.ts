@@ -24,16 +24,12 @@ import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
-function assertAdmin(req: NextRequest) {
-  return requireAdmin(req) ?? null;
-}
-
 /** PATCH: 이름/조/고정슬롯/재직상태/extraFlags/phone 수정 — ID 불변 */
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> | { id: string } }
 ) {
-  const denied = assertAdmin(req);
+  const denied = await requireAdmin(req);
   if (denied) return denied;
 
   try {
@@ -287,7 +283,7 @@ export async function DELETE(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> | { id: string } }
 ) {
-  const denied = assertAdmin(req);
+  const denied = await requireAdmin(req);
   if (denied) return denied;
 
   try {

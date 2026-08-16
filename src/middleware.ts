@@ -1,20 +1,19 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { getVerifiedSessionFromCookies } from "@/lib/sessionCookies";
 
 /**
- * 관리 화면은 로그인(admin) 필수.
- * NextAuth middleware는 NEXTAUTH_URL(localhost) 고정 이슈가 있어
- * 쿠키 기반 role 가드를 사용한다 (Cloudflare 터널 호환).
+ * Edge-safe gate only:
+ * - signed vh_session required (legacy unsigned cookies ignored)
+ * - signature + expiry + role claim
+ * DB sessionVersion is enforced in Node requireAdmin / layouts / APIs.
  */
-export function middleware(req: NextRequest) {
+export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
-  const role =
-    req.cookies.get("role")?.value ||
-    req.cookies.get("session_role")?.value ||
-    (req.cookies.get("admin")?.value === "1" ? "admin" : null);
+  const session = await getVerifiedSessionFromCookies(req.cookies);
 
   if (pathname.startsWith("/manage")) {
-    if (role !== "admin") {
+    if (!session || session.role !== "admin") {
       const login = req.nextUrl.clone();
       login.pathname = "/login";
       login.searchParams.set("callbackUrl", pathname);
@@ -23,8 +22,12 @@ export function middleware(req: NextRequest) {
   }
 
   if (pathname.startsWith("/caddy")) {
-    // leader도 본인 캐디 연결 시 /caddy 접근 가능 (API 권한은 managedTeams/caddyId로 별도 검증)
-    if (role !== "caddy" && role !== "admin" && role !== "leader") {
+    if (
+      !session ||
+      (session.role !== "caddy" &&
+        session.role !== "admin" &&
+        session.role !== "leader")
+    ) {
       const login = req.nextUrl.clone();
       login.pathname = "/login";
       login.searchParams.set("callbackUrl", pathname);

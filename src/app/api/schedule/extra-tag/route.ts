@@ -10,7 +10,8 @@ function toDateRange(ymd: string) {
 
 export async function POST(req: NextRequest) {
   try {
-    await requireAdmin(req);
+    const _guard = await requireAdmin(req);
+    if (_guard) return _guard;
 
     const { date, caddyId, tag, createdBy } = await req.json();
     if (!date || !caddyId || !tag) {
@@ -36,7 +37,8 @@ export async function POST(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
-    await requireAdmin(req);
+    const _guard = await requireAdmin(req);
+    if (_guard) return _guard;
 
     const { searchParams } = new URL(req.url);
     const date = searchParams.get('date');

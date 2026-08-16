@@ -2,11 +2,12 @@ import { prisma } from "@/lib/prisma";
 import { cookies } from "next/headers";
 import Link from "next/link";
 import dayjs from "dayjs";
+import { getVerifiedSessionFromCookies } from "@/lib/sessionCookies";
 
 export const dynamic = "force-dynamic";
 
 export default async function NoticeListPage() {
-  const role = (await cookies()).get("role")?.value ?? null;
+  const role = (await getVerifiedSessionFromCookies(await cookies()))?.role ?? null;
 
   const notices = await prisma.notice.findMany({
     select: { id: true, title: true, createdAt: true },

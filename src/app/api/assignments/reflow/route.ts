@@ -15,7 +15,7 @@ export const runtime = "nodejs";
  * body: { previous, regularCaddyPool, events }
  */
 export async function POST(req: NextRequest) {
-  const guard = requireAdmin(req);
+  const guard = await requireAdmin(req);
   if (guard) return guard;
 
   try {

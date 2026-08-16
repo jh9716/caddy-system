@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireAdmin } from "@/lib/auth";
-import { getUsernameFromCookies } from "@/lib/sessionCookies";
+import { requireAdmin, resolveAuthUser } from "@/lib/auth";
 import {
   CaddyLinkRequestError,
   listPendingCaddyLinkRequests,
@@ -14,7 +13,8 @@ export const dynamic = "force-dynamic";
 /** POST — 직원 본인확인 제출 (PENDING만, User/Caddy 미변경) */
 export async function POST(req: NextRequest) {
   try {
-    const username = getUsernameFromCookies(req.cookies);
+    const auth = await resolveAuthUser(req);
+    const username = auth?.username ?? null;
     const user = await resolveSessionUser(prisma, username);
     if (!user) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
 
 /** GET — admin PENDING 목록 (?status=PENDING) */
 export async function GET(req: NextRequest) {
-  const guard = requireAdmin(req);
+  const guard = await requireAdmin(req);
   if (guard) return guard;
 
   try {

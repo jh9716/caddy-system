@@ -2,24 +2,105 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import {
-  getRoleFromCookies,
-  getUsernameFromCookies,
+  clearSessionCookies,
+  getVerifiedSessionFromCookies,
   normalizeAppRole,
   type AppRole,
+  type VerifiedSession,
 } from "@/lib/sessionCookies";
 import {
   uniqueTeams,
   type OffRequestActor,
 } from "@/lib/offRequestAuth";
 
+export type ResolvedAuthUser = {
+  session: VerifiedSession;
+  /** null for env-only accounts (no DB User row) */
+  userId: number | null;
+  username: string;
+  /** Authorization role — from DB when userId present, else session claim */
+  role: AppRole;
+  sessionVersion: number;
+  caddyId: number | null;
+  managedTeams: string[];
+};
+
 /**
- * 관리자 쿠키가 없으면 401을 반환합니다.
- * 사용법: const guard = requireAdmin(req); if (guard) return guard;
+ * Full auth resolution for Node runtime (API / RSC).
+ * - Requires valid signed vh_session
+ * - Legacy unsigned cookies alone → null
+ * - DB user: role + sessionVersion must match
  */
-export function requireAdmin(req: NextRequest): NextResponse | void {
-  const role = getRoleFromCookies(req.cookies);
-  if (role !== "admin") {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+export async function resolveAuthUser(
+  req: NextRequest
+): Promise<ResolvedAuthUser | null> {
+  return resolveAuthFromCookieStore(req.cookies);
+}
+
+/** RSC / layout: next/headers cookies() */
+export async function resolveAuthFromCookieStore(cookies: {
+  get: (name: string) => { value: string } | undefined;
+}): Promise<ResolvedAuthUser | null> {
+  const session = await getVerifiedSessionFromCookies(cookies);
+  if (!session) return null;
+
+  if (session.uid == null) {
+    return {
+      session,
+      userId: null,
+      username: session.username,
+      role: session.role,
+      sessionVersion: session.sv,
+      caddyId: null,
+      managedTeams: [],
+    };
+  }
+
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: session.uid },
+      select: {
+        id: true,
+        username: true,
+        role: true,
+        sessionVersion: true,
+        caddyId: true,
+        managedTeams: true,
+      },
+    });
+    if (!user) return null;
+    if (user.username !== session.username) return null;
+    if (user.sessionVersion !== session.sv) return null;
+    const dbRole = normalizeAppRole(user.role);
+    if (!dbRole) return null;
+
+    return {
+      session,
+      userId: user.id,
+      username: user.username,
+      role: dbRole,
+      sessionVersion: user.sessionVersion,
+      caddyId: user.caddyId ?? null,
+      managedTeams: uniqueTeams(user.managedTeams ?? []),
+    };
+  } catch (e) {
+    console.error("[resolveAuthFromCookieStore]", e);
+    return null;
+  }
+}
+
+/**
+ * 관리자만. 서명 세션 + (DB User면) DB role=admin + sessionVersion 일치.
+ * 사용법: const guard = await requireAdmin(req); if (guard) return guard;
+ */
+export async function requireAdmin(
+  req: NextRequest
+): Promise<NextResponse | void> {
+  const auth = await resolveAuthUser(req);
+  if (!auth || auth.role !== "admin") {
+    const res = NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    if (!auth) clearSessionCookies(res, req);
+    return res;
   }
 }
 
@@ -32,42 +113,15 @@ export type { OffRequestActor };
 export async function resolveOffRequestActor(
   req: NextRequest
 ): Promise<OffRequestActor | null> {
-  const role = getRoleFromCookies(req.cookies);
-  const username = getUsernameFromCookies(req.cookies);
-  if (!role || !username) return null;
+  const auth = await resolveAuthUser(req);
+  if (!auth) return null;
 
-  try {
-    const user = await prisma.user.findUnique({
-      where: { username },
-      select: {
-        id: true,
-        role: true,
-        caddyId: true,
-        managedTeams: true,
-      },
-    });
-
-    if (user) {
-      const dbRole = normalizeAppRole(user.role) || role;
-      return {
-        role: dbRole,
-        username,
-        userId: user.id,
-        caddyId: user.caddyId ?? null,
-        managedTeams: uniqueTeams(user.managedTeams ?? []),
-      };
-    }
-  } catch (e) {
-    console.error("[resolveOffRequestActor]", e);
-  }
-
-  // 환경변수 계정 등 DB User 없음
   return {
-    role,
-    username,
-    userId: null,
-    caddyId: null,
-    managedTeams: [],
+    role: auth.role,
+    username: auth.username,
+    userId: auth.userId,
+    caddyId: auth.caddyId,
+    managedTeams: auth.managedTeams,
   };
 }
 
@@ -76,7 +130,9 @@ export async function requireOffRequestActor(
 ): Promise<OffRequestActor | NextResponse> {
   const actor = await resolveOffRequestActor(req);
   if (!actor) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    const res = NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    clearSessionCookies(res, req);
+    return res;
   }
   return actor;
 }

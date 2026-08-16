@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireAdmin } from "@/lib/auth";
-import { getUsernameFromCookies } from "@/lib/sessionCookies";
+import { requireAdmin, resolveAuthUser } from "@/lib/auth";
 import {
   CaddyLinkRequestError,
   approveCaddyLinkRequest,
@@ -17,7 +16,7 @@ export async function POST(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> | { id: string } }
 ) {
-  const guard = requireAdmin(req);
+  const guard = await requireAdmin(req);
   if (guard) return guard;
 
   try {
@@ -26,7 +25,8 @@ export async function POST(
     const body = await req.json().catch(() => ({}));
     const selectedCaddyId = Number(body?.selectedCaddyId);
 
-    const username = getUsernameFromCookies(req.cookies);
+    const auth = await resolveAuthUser(req);
+    const username = auth?.username ?? null;
     const admin = await resolveSessionUser(prisma, username);
     const adminUserId = admin?.id ?? null;
 

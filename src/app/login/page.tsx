@@ -1,5 +1,6 @@
 import { Suspense } from "react";
 import { cookies } from "next/headers";
+import { getVerifiedSessionFromCookies } from "@/lib/sessionCookies";
 import { redirect } from "next/navigation";
 import LoginClient from "./LoginClient";
 
@@ -7,13 +8,10 @@ export const dynamic = "force-dynamic";
 
 export default async function LoginPage() {
   const store = await cookies();
-  const role =
-    store.get("role")?.value ||
-    store.get("session_role")?.value ||
-    null;
+  const role = (await getVerifiedSessionFromCookies(store))?.role ?? null;
 
   if (role === "admin") redirect("/manage");
-  if (role === "caddy") redirect("/caddy");
+  if (role === "caddy" || role === "leader") redirect("/caddy");
 
   return (
     <Suspense

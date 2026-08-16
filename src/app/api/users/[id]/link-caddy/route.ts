@@ -13,7 +13,7 @@ export async function POST(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> | { id: string } }
 ) {
-  const guard = requireAdmin(req);
+  const guard = await requireAdmin(req);
   if (guard) return guard;
 
   try {

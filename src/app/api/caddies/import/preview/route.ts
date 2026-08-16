@@ -5,17 +5,10 @@ import {
   buildRosterImportPreviewV2,
   parseRosterCsvV2,
 } from "@/lib/caddyRosterImportV2";
+import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-
-function assertAdmin(req: NextRequest) {
-  const role = req.cookies.get("role")?.value;
-  if (role !== "admin") {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
-  return null;
-}
 
 function isExcelName(name: string): boolean {
   const lower = name.toLowerCase();
@@ -29,7 +22,7 @@ function isExcelName(name: string): boolean {
  * XLSX → 기존 v1 preview (team/name 레이아웃)
  */
 export async function POST(req: NextRequest) {
-  const denied = assertAdmin(req);
+  const denied = await requireAdmin(req);
   if (denied) return denied;
 
   try {

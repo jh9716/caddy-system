@@ -1,14 +1,20 @@
-// app/api/me/route.ts
-import { NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '../auth/[...nextauth]/route'  // ✅ 상대경로로!
+import { NextRequest, NextResponse } from "next/server";
+import { resolveAuthUser } from "@/lib/auth";
 
-export const dynamic = 'force-dynamic'
+export const dynamic = "force-dynamic";
 
-export async function GET() {
-  const session = await getServerSession(authOptions)
+export async function GET(req: NextRequest) {
+  const auth = await resolveAuthUser(req);
+  if (!auth) {
+    return NextResponse.json({ authenticated: false }, { status: 401 });
+  }
   return NextResponse.json({
-    ok: true,
-    session,                      // 세션 확인용
-  })
+    authenticated: true,
+    user: {
+      id: auth.userId,
+      username: auth.username,
+      role: auth.role,
+      sessionVersion: auth.sessionVersion,
+    },
+  });
 }

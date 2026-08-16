@@ -16,7 +16,7 @@ export const runtime = "nodejs";
  * - 성공 시 Audit 기록, status APPLIED
  */
 export async function POST(req: NextRequest) {
-  const guard = requireAdmin(req);
+  const guard = await requireAdmin(req);
   if (guard) return guard;
 
   try {

@@ -3,6 +3,7 @@ import Link from "next/link";
 import { cookies } from "next/headers";
 import { Cormorant_Garamond, Noto_Serif_KR, Source_Sans_3 } from "next/font/google";
 import LogoutButton from "@/components/LogoutButton";
+import { getVerifiedSessionFromCookies } from "@/lib/sessionCookies";
 
 export const dynamic = "force-dynamic";
 
@@ -29,10 +30,7 @@ const sans = Source_Sans_3({
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const store = await cookies();
-  const role =
-    store.get("role")?.value ||
-    store.get("session_role")?.value ||
-    (store.get("admin")?.value === "1" ? "admin" : null);
+  const role = (await getVerifiedSessionFromCookies(store))?.role ?? null;
 
   return (
     <html
