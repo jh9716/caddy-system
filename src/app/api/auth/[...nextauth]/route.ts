@@ -3,8 +3,7 @@ import type { NextAuthOptions } from "next-auth";
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { prisma } from "@/lib/prisma";
-import { normalizeAppRole } from "@/lib/sessionCookies";
-import { verifyUserPassword } from "@/lib/userPassword";
+import { passwordLogin } from "@/lib/passwordLogin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,28 +28,29 @@ export const authOptions: NextAuthOptions = {
       async authorize(creds) {
         if (!creds?.username || !creds?.password) return null;
 
-        // env 계정 허용 (로컬 테스트)
-        const adminUser = process.env.ADMIN_USER || process.env.ADMIN_USERNAME || "admin";
-        const adminPass = process.env.ADMIN_PASSWORD || "";
-        if (
-          creds.username === adminUser &&
-          adminPass &&
-          creds.password === adminPass
-        ) {
-          return { id: "env-admin", name: adminUser, role: "admin" };
+        const result = await passwordLogin(
+          String(creds.username),
+          String(creds.password),
+          prisma
+        );
+        if (result.status === "unavailable") {
+          throw new Error("auth_unavailable");
+        }
+        if (result.status !== "ok") return null;
+
+        if (result.source === "env") {
+          return {
+            id: result.role === "admin" ? "env-admin" : "env-caddy",
+            name: result.username,
+            role: result.role,
+          };
         }
 
-        const user = await prisma.user.findUnique({
-          where: { username: creds.username },
-        });
-        if (!user) return null;
-        // password null(OAuth 전용) → bcrypt 미호출, 로그인 거부
-        const ok = await verifyUserPassword(creds.password, user.password);
-        if (!ok) return null;
-        const role = normalizeAppRole(user.role);
-        if (!role) return null;
-
-        return { id: String(user.id), name: user.username, role };
+        return {
+          id: String(result.userId),
+          name: result.username,
+          role: result.role,
+        };
       },
     }),
   ],
