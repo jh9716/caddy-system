@@ -23,6 +23,7 @@ import {
   rotateHouseQueueFromStart,
   HouseStartCaddyError,
   assignRegularSequence,
+  pickCircularHouseSpares,
   type AutoAssignCaddy,
   type AutoAssignReservation,
 } from "../src/lib/autoAssignEngine";
@@ -3349,6 +3350,160 @@ section("오늘 1부 첫 캐디 · HOUSE 순환큐 오프셋");
       seq.sparesByShift[0]?.spare1?.name === "A" &&
       seq.sparesByShift[0]?.spare2?.name === "B",
     "D 시작 2팀 → DE, Spare1=A Spare2=B"
+  );
+}
+
+section("Spare1/2 순환큐 wrap (houseStart offset)");
+{
+  const house10: AutoAssignCaddy[] = Array.from({ length: 10 }, (_, i) => ({
+    id: i + 1,
+    name: `H${i + 1}`,
+    team: "1조",
+    teamOrder: i + 1,
+    caddyType: "HOUSE",
+  }));
+  const third3: AutoAssignCaddy[] = Array.from({ length: 3 }, (_, i) => ({
+    id: 100 + i,
+    name: `T${i + 1}`,
+    team: "9조",
+    teamOrder: i + 1,
+    caddyType: "THIRD",
+  }));
+  const mkRes = (
+    n: number,
+    shift: "1부" | "2부" | "3부",
+    hour: number
+  ): AutoAssignReservation[] =>
+    Array.from({ length: n }, (_, i) => ({
+      date: "2026-08-15",
+      course: COURSE_ORDER[i % 4],
+      shift,
+      teeTime: `${String(hour).padStart(2, "0")}:${String(i).padStart(2, "0")}`,
+      teamName: `${shift}-${i}`,
+    }));
+
+  // helper unit
+  const used = new Set([1, 2, 3, 4, 5, 6, 7, 8]);
+  const picked = pickCircularHouseSpares(house10, 8, used);
+  assert(
+    picked.spare1?.caddyId === 9 && picked.spare2?.caddyId === 10,
+    "pickCircular: start 8 → 9,10"
+  );
+  const wrapPick = pickCircularHouseSpares(house10, 9, used);
+  assert(
+    wrapPick.spare1?.caddyId === 10 && wrapPick.spare2?.caddyId === 9,
+    "pickCircular: wrap skips used, only 9·10 left order from 9"
+  );
+  // from 9: try 10 (ok), then 1..8 used skip, then 9 ok → spare1=10 spare2=9
+  const allUsed = pickCircularHouseSpares(
+    house10,
+    0,
+    new Set(house10.map((h) => h.id))
+  );
+  assert(
+    allUsed.spare1 == null && allUsed.spare2 == null,
+    "풀 전부 실배치 시에만 spare null"
+  );
+
+  // start=4, 1부 3팀 → 4,5,6 Spare 7,8
+  const a = assignRegularSequence({
+    date: "2026-08-15",
+    house: house10,
+    third: third3,
+    reservations: [
+      ...mkRes(3, "1부", 6),
+      ...mkRes(3, "2부", 10),
+      ...mkRes(5, "3부", 14),
+    ],
+    houseStartCaddyId: 4,
+  });
+  const a1sp = a.sparesByShift.find((s) => s.shift === "1부")!;
+  const a2sp = a.sparesByShift.find((s) => s.shift === "2부")!;
+  const a3sp = a.sparesByShift.find((s) => s.shift === "3부")!;
+  assert(
+    a.assignments
+      .filter((x) => x.shift === "1부")
+      .map((x) => x.caddy.id)
+      .join(",") === "4,5,6",
+    "start4 1부 배치 4,5,6"
+  );
+  assert(
+    a1sp.spare1?.caddyId === 7 && a1sp.spare2?.caddyId === 8,
+    "start4 1부 Spare 7,8"
+  );
+  assert(
+    a.assignments
+      .filter((x) => x.shift === "2부")
+      .map((x) => x.caddy.id)
+      .join(",") === "7,8,9",
+    "start4 2부 7,8,9"
+  );
+  assert(
+    a2sp.spare1?.caddyId === 10 && a2sp.spare2?.caddyId === 1,
+    "2부 cursor wrap 후에도 Spare=10,1 (null 아님)"
+  );
+  assert(
+    a3sp.spare1 != null && a3sp.spare2 != null,
+    "3부 Spare1/2 존재 (ModeA flow)"
+  );
+  const a2ids = new Set(
+    a.assignments.filter((x) => x.shift === "2부").map((x) => x.caddy.id)
+  );
+  assert(
+    !a2ids.has(a2sp.spare1!.caddyId) && !a2ids.has(a2sp.spare2!.caddyId),
+    "2부 Spare ≠ 같은 부 실배치 캐디"
+  );
+
+  // start=7, heavy 1·2 so cursor past length — Spare still non-null when pool remains
+  const b = assignRegularSequence({
+    date: "2026-08-15",
+    house: house10,
+    third: third3,
+    reservations: [...mkRes(8, "1부", 6), ...mkRes(6, "2부", 10), ...mkRes(4, "3부", 14)],
+    houseStartCaddyId: 7,
+  });
+  const b1 = b.assignments.filter((x) => x.shift === "1부").map((x) => x.caddy.id);
+  const b2 = b.assignments.filter((x) => x.shift === "2부").map((x) => x.caddy.id);
+  const b1sp = b.sparesByShift.find((s) => s.shift === "1부")!;
+  const b2sp = b.sparesByShift.find((s) => s.shift === "2부")!;
+  const b3sp = b.sparesByShift.find((s) => s.shift === "3부")!;
+  assert(b1.join(",") === "7,8,9,10,1,2,3,4", "start7 1부 wrap 연속");
+  assert(
+    b1sp.spare1?.caddyId === 5 && b1sp.spare2?.caddyId === 6,
+    "start7 1부 Spare 5,6"
+  );
+  assert(b2.join(",") === "5,6,7,8,9,10", "start7 2부 이어짐");
+  assert(
+    b2sp.spare1 != null && b2sp.spare2 != null,
+    "start7 2부 cursor가 길이 초과해도 Spare null 아님"
+  );
+  assert(
+    b2sp.spare1!.caddyId === 1 && b2sp.spare2!.caddyId === 2,
+    "start7 2부 Spare wrap = 1,2"
+  );
+  const b2set = new Set(b2);
+  assert(
+    !b2set.has(b2sp.spare1!.caddyId) && !b2set.has(b2sp.spare2!.caddyId),
+    "start7 2부 Spare 중복 없음"
+  );
+  assert(
+    b.sparesByShift.every((s) => s.spare1 != null && s.spare2 != null),
+    "1·2·3부 모두 Spare1/2 존재 (풀 충분)"
+  );
+  assert(b3sp.spare1 != null && b3sp.spare2 != null, "3부 Spare 존재");
+
+  // 인원 부족: 1부에서 전원 배치 → Spare null 허용
+  const c = assignRegularSequence({
+    date: "2026-08-15",
+    house: house10,
+    third: [],
+    reservations: mkRes(10, "1부", 6),
+    houseStartCaddyId: 4,
+  });
+  const c1sp = c.sparesByShift.find((s) => s.shift === "1부")!;
+  assert(
+    c1sp.spare1 == null && c1sp.spare2 == null,
+    "HOUSE 전원 1부 실배치 → Spare null 허용"
   );
 }
 

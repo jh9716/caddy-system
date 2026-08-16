@@ -470,6 +470,33 @@ function toSpareInfo(caddy: AutoAssignCaddy | null | undefined): SpareCaddyInfo 
   };
 }
 
+/**
+ * HOUSE 순환큐 기준 Spare1·2.
+ * startIdx부터 wrap하며, 같은 부 실배치(usedInShift)는 건너뜀.
+ * 풀이 부족하면 남은 자리는 null.
+ */
+export function pickCircularHouseSpares(
+  house: AutoAssignCaddy[],
+  startIdx: number,
+  usedInShift: ReadonlySet<number>
+): { spare1: SpareCaddyInfo | null; spare2: SpareCaddyInfo | null } {
+  if (house.length === 0) {
+    return { spare1: null, spare2: null };
+  }
+  const origin =
+    ((startIdx % house.length) + house.length) % house.length;
+  const picked: AutoAssignCaddy[] = [];
+  for (let attempt = 0; attempt < house.length && picked.length < 2; attempt++) {
+    const caddy = house[(origin + attempt) % house.length];
+    if (usedInShift.has(caddy.id)) continue;
+    picked.push(caddy);
+  }
+  return {
+    spare1: toSpareInfo(picked[0] ?? null),
+    spare2: toSpareInfo(picked[1] ?? null),
+  };
+}
+
 function emptySparesByShift(): SpareByShift[] {
   return SHIFT_PARTS.map((shift) => ({
     shift,
@@ -1534,19 +1561,19 @@ export function assignRegularSequence(input: {
         houseStart = houseStart + houseAssigned;
       }
     } else {
-      const spareBase = houseStart + houseAssigned;
+      // 다음 부 시작점 = 순환큐상 배치 직후 위치 (modulo)
+      const nextCursor =
+        house.length === 0
+          ? 0
+          : ((houseStart + houseAssigned) % house.length + house.length) %
+            house.length;
+      const spares = pickCircularHouseSpares(house, nextCursor, usedInShift);
       sparesByShift.push({
         shift,
-        spare1: toSpareInfo(
-          spareBase >= 0 && spareBase < house.length ? house[spareBase] : null
-        ),
-        spare2: toSpareInfo(
-          spareBase + 1 >= 0 && spareBase + 1 < house.length
-            ? house[spareBase + 1]
-            : null
-        ),
+        spare1: spares.spare1,
+        spare2: spares.spare2,
       });
-      houseStart = spareBase;
+      houseStart = nextCursor;
     }
   }
 
