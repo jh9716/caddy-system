@@ -1293,10 +1293,19 @@ export type RosterImportApplyTransactionOptions = {
   timeout?: number;
 };
 
+type RosterCreateData = {
+  name: string;
+  team: string;
+  teamOrder: number;
+  employmentStatus: EmploymentStatusValue;
+  phoneNormalized?: string;
+  thirdBandSubgroup: ThirdBandSubgroup | null;
+};
+
 type PrismaLike = {
   caddy: {
     createManyAndReturn: (args: {
-      data: Record<string, unknown>[];
+      data: RosterCreateData[];
       select: { id: true };
     }) => Promise<Array<{ id: number }>>;
     findMany: (args?: {
@@ -1674,7 +1683,7 @@ export async function applyRosterImportPayloadV2(
     if (Object.keys(update).length > 1) batchUpdates.push(update);
   }
 
-  const createData: Record<string, unknown>[] = [];
+  const createData: RosterCreateData[] = [];
   for (const c of normCreates) {
     const teamOrder = c.teamOrder;
     if (teamOrder == null || !Number.isInteger(teamOrder) || teamOrder < 1) {
@@ -1684,11 +1693,12 @@ export async function applyRosterImportPayloadV2(
         "slot_required"
       );
     }
-    const data: Record<string, unknown> = {
+    const data: RosterCreateData = {
       name: c.name,
       team: c.team,
       teamOrder,
       employmentStatus: c.employmentStatus ?? "ACTIVE",
+      thirdBandSubgroup: null,
     };
     if (c.phone) data.phoneNormalized = c.phone;
     try {

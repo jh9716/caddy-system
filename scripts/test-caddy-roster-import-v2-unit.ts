@@ -705,62 +705,63 @@ async function main() {
       return affected;
     };
 
-    const prisma = {
-      caddy: {
-        findMany: async () => [...store.values()],
-        createManyAndReturn: async ({
-          data,
-        }: {
-          data: Record<string, unknown>[];
-          select: { id: true };
-        }) => {
-          opts?.metrics && opts.metrics.createManyAndReturn++;
-          const rows: Array<{ id: number }> = [];
-          for (let i = 0; i < data.length; i++) {
-            if (opts?.throwOnCreateIndex === i) {
-              throw new Error("forced batch create failure");
-            }
-            const id = nextCreateId++;
-            const item = data[i];
-            store.set(id, {
-              id,
-              name: String(item.name),
-              team: String(item.team),
-              teamOrder: Number(item.teamOrder) || 1,
-              employmentStatus: String(item.employmentStatus || "ACTIVE"),
-              phoneNormalized: (item.phoneNormalized as string) ?? null,
-              thirdBandSubgroup:
-                (item.thirdBandSubgroup as RosterExisting["thirdBandSubgroup"]) ??
-                null,
-            });
-            rows.push({ id });
+    const caddy = {
+      findMany: async () => [...store.values()],
+      createManyAndReturn: async ({
+        data,
+      }: {
+        data: Record<string, unknown>[];
+        select: { id: true };
+      }) => {
+        opts?.metrics && opts.metrics.createManyAndReturn++;
+        const rows: Array<{ id: number }> = [];
+        for (let i = 0; i < data.length; i++) {
+          if (opts?.throwOnCreateIndex === i) {
+            throw new Error("forced batch create failure");
           }
-          return rows;
-        },
-      },
-      $executeRaw: executeBatchUpdate,
-      $transaction: async <T,>(
-        fn: (tx: typeof prisma) => Promise<T>,
-        options?: { maxWait?: number; timeout?: number }
-      ) => {
-        opts?.onTransaction?.(options);
-        const snapshot = cloneStore(store);
-        const tx = {
-          caddy: prisma.caddy,
-          $executeRaw: executeBatchUpdate,
-          $transaction: prisma.$transaction,
-        };
-        try {
-          return await fn(tx);
-        } catch (e) {
-          const rolled = cloneStore(snapshot);
-          store.clear();
-          for (const [k, v] of rolled) store.set(k, v);
-          throw e;
+          const id = nextCreateId++;
+          const item = data[i];
+          store.set(id, {
+            id,
+            name: String(item.name),
+            team: String(item.team),
+            teamOrder: Number(item.teamOrder) || 1,
+            employmentStatus: String(item.employmentStatus || "ACTIVE"),
+            phoneNormalized: (item.phoneNormalized as string) ?? null,
+            thirdBandSubgroup:
+              (item.thirdBandSubgroup as RosterExisting["thirdBandSubgroup"]) ??
+              null,
+          });
+          rows.push({ id });
         }
+        return rows;
       },
     };
-    return prisma;
+    async function transaction<T>(
+      fn: (tx: any) => Promise<T>,
+      options?: { maxWait?: number; timeout?: number }
+    ): Promise<T> {
+      opts?.onTransaction?.(options);
+      const snapshot = cloneStore(store);
+      const tx = {
+        caddy,
+        $executeRaw: executeBatchUpdate,
+        $transaction: transaction,
+      };
+      try {
+        return await fn(tx);
+      } catch (e) {
+        const rolled = cloneStore(snapshot);
+        store.clear();
+        for (const [k, v] of rolled) store.set(k, v);
+        throw e;
+      }
+    }
+    return {
+      caddy,
+      $executeRaw: executeBatchUpdate,
+      $transaction: transaction,
+    };
   }
 
   const bulkCount = 175;
