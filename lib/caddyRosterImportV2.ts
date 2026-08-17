@@ -12,6 +12,7 @@
  * - 신규 create는 teamOrder 필수 (max+1 자동부여 없음)
  */
 
+import { Prisma } from "@prisma/client";
 import {
   CaddyPhoneError,
   isPhoneUniqueViolation,
@@ -1292,15 +1293,21 @@ export type RosterImportApplyTransactionOptions = {
   timeout?: number;
 };
 
+type RosterCreateData = {
+  name: string;
+  team: string;
+  teamOrder: number;
+  employmentStatus: EmploymentStatusValue;
+  phoneNormalized?: string;
+  thirdBandSubgroup: ThirdBandSubgroup | null;
+};
+
 type PrismaLike = {
   caddy: {
-    update: (args: {
-      where: { id: number };
-      data: Record<string, unknown>;
-    }) => Promise<{ id: number }>;
-    create: (args: {
-      data: Record<string, unknown>;
-    }) => Promise<{ id: number }>;
+    createManyAndReturn: (args: {
+      data: RosterCreateData[];
+      select: { id: true };
+    }) => Promise<Array<{ id: number }>>;
     findMany: (args?: {
       select?: Record<string, boolean>;
     }) => Promise<RosterExisting[]>;
@@ -1309,6 +1316,7 @@ type PrismaLike = {
       _max: { teamOrder: true };
     }) => Promise<{ _max: { teamOrder: number | null } }>;
   };
+  $executeRaw: (query: Prisma.Sql) => Promise<number>;
   $transaction?: <T>(
     fn: (tx: PrismaLike) => Promise<T>,
     options?: RosterImportApplyTransactionOptions
@@ -1320,6 +1328,97 @@ export const ROSTER_IMPORT_APPLY_TX_OPTIONS: RosterImportApplyTransactionOptions
     maxWait: ROSTER_IMPORT_APPLY_TX_MAX_WAIT_MS,
     timeout: ROSTER_IMPORT_APPLY_TX_TIMEOUT_MS,
   };
+
+type RosterBatchUpdate = {
+  id: number;
+  team?: string;
+  teamOrder?: number;
+  employmentStatus?: EmploymentStatusValue;
+  phoneNormalized?: string;
+  thirdBandSubgroup?: ThirdBandSubgroup | null;
+};
+
+/**
+ * One parameterized PostgreSQL UPDATE for all changed Caddies.
+ *
+ * `Prisma.sql` / `Prisma.join` bind every row value as a query parameter.
+ * Identifiers and enum casts are static SQL; payload strings are never interpolated
+ * into SQL source. Per-field flags preserve patch semantics, including an explicit
+ * NULL for thirdBandSubgroup.
+ */
+export function buildRosterBatchUpdateSql(
+  updates: RosterBatchUpdate[]
+): Prisma.Sql {
+  if (updates.length === 0) {
+    throw new Error("batch update requires at least one row");
+  }
+
+  const values = updates.map((u) => {
+    const setTeam = u.team !== undefined;
+    const setTeamOrder = u.teamOrder !== undefined;
+    const setEmploymentStatus = u.employmentStatus !== undefined;
+    const setPhone = u.phoneNormalized !== undefined;
+    const setThirdBandSubgroup = Object.prototype.hasOwnProperty.call(
+      u,
+      "thirdBandSubgroup"
+    );
+
+    return Prisma.sql`(
+      ${u.id}::integer,
+      ${setTeam}::boolean,
+      ${u.team ?? null}::text,
+      ${setTeamOrder}::boolean,
+      ${u.teamOrder ?? null}::integer,
+      ${setEmploymentStatus}::boolean,
+      ${u.employmentStatus ?? null}::text,
+      ${setPhone}::boolean,
+      ${u.phoneNormalized ?? null}::text,
+      ${setThirdBandSubgroup}::boolean,
+      ${u.thirdBandSubgroup ?? null}::text
+    )`;
+  });
+
+  return Prisma.sql`
+    UPDATE "Caddy" AS c
+    SET
+      "team" = CASE WHEN v."setTeam" THEN v."team" ELSE c."team" END,
+      "teamOrder" = CASE
+        WHEN v."setTeamOrder" THEN v."teamOrder"
+        ELSE c."teamOrder"
+      END,
+      "employmentStatus" = CASE
+        WHEN v."setEmploymentStatus"
+          THEN v."employmentStatus"::"EmploymentStatus"
+        ELSE c."employmentStatus"
+      END,
+      "phoneNormalized" = CASE
+        WHEN v."setPhone" THEN v."phoneNormalized"
+        ELSE c."phoneNormalized"
+      END,
+      "thirdBandSubgroup" = CASE
+        WHEN v."setThirdBandSubgroup"
+          THEN v."thirdBandSubgroup"::"ThirdBandSubgroup"
+        ELSE c."thirdBandSubgroup"
+      END,
+      "updatedAt" = CURRENT_TIMESTAMP
+    FROM (
+      VALUES ${Prisma.join(values, ",")}
+    ) AS v(
+      "id",
+      "setTeam",
+      "team",
+      "setTeamOrder",
+      "teamOrder",
+      "setEmploymentStatus",
+      "employmentStatus",
+      "setPhone",
+      "phoneNormalized",
+      "setThirdBandSubgroup",
+      "thirdBandSubgroup"
+    )
+    WHERE c."id" = v."id"
+  `;
+}
 
 /**
  * Apply — 서버에서 검증 재수행 후 all-or-nothing transaction.
@@ -1538,87 +1637,114 @@ export async function applyRosterImportPayloadV2(
     );
   }
 
+  let phoneUpdated = 0;
+  const batchUpdates: RosterBatchUpdate[] = [];
+  for (const u of normUpdates) {
+    const cur = existingById.get(u.id);
+    if (!cur) {
+      throw new RosterImportApplyError(`존재하지 않는 id: ${u.id}`);
+    }
+    const update: RosterBatchUpdate = { id: u.id };
+    if (u.team != null) update.team = u.team;
+    if (u.teamOrder != null) update.teamOrder = u.teamOrder;
+    if (u.employmentStatus != null) {
+      update.employmentStatus = u.employmentStatus;
+    }
+    if (u.phone) {
+      update.phoneNormalized = u.phone;
+      phoneUpdated++;
+    }
+
+    const nextTeam = u.team ?? cur.team;
+    const requested = Object.prototype.hasOwnProperty.call(
+      u,
+      "thirdBandSubgroup"
+    )
+      ? u.thirdBandSubgroup
+      : undefined;
+    try {
+      const nextSub = resolveThirdBandSubgroup({
+        team: nextTeam,
+        requested,
+        current: cur.thirdBandSubgroup ?? null,
+      });
+      const currentSub = cur.thirdBandSubgroup ?? null;
+      if (nextSub !== currentSub) {
+        update.thirdBandSubgroup = nextSub;
+      }
+    } catch (e) {
+      throw new RosterImportApplyError(
+        e instanceof Error ? e.message : "thirdBandSubgroup 오류",
+        400,
+        "third_band_subgroup_invalid"
+      );
+    }
+
+    if (Object.keys(update).length > 1) batchUpdates.push(update);
+  }
+
+  const createData: RosterCreateData[] = [];
+  for (const c of normCreates) {
+    const teamOrder = c.teamOrder;
+    if (teamOrder == null || !Number.isInteger(teamOrder) || teamOrder < 1) {
+      throw new RosterImportApplyError(
+        `신규 등록에 teamOrder(슬롯)가 필요합니다: ${c.name}`,
+        400,
+        "slot_required"
+      );
+    }
+    const data: RosterCreateData = {
+      name: c.name,
+      team: c.team,
+      teamOrder,
+      employmentStatus: c.employmentStatus ?? "ACTIVE",
+      thirdBandSubgroup: null,
+    };
+    if (c.phone) data.phoneNormalized = c.phone;
+    try {
+      data.thirdBandSubgroup = resolveThirdBandSubgroup({
+        team: c.team,
+        requested: Object.prototype.hasOwnProperty.call(c, "thirdBandSubgroup")
+          ? c.thirdBandSubgroup
+          : undefined,
+        current: null,
+      });
+    } catch (e) {
+      throw new RosterImportApplyError(
+        e instanceof Error ? e.message : "thirdBandSubgroup 오류",
+        400,
+        "third_band_subgroup_invalid"
+      );
+    }
+    createData.push(data);
+  }
+
   const run = async (client: PrismaLike) => {
     let updated = 0;
-    let phoneUpdated = 0;
-    const createdIds: number[] = [];
-
-    for (const u of normUpdates) {
-      const cur = existingById.get(u.id);
-      if (!cur) {
-        throw new RosterImportApplyError(`존재하지 않는 id: ${u.id}`);
-      }
-      const data: Record<string, unknown> = {};
-      if (u.team != null) data.team = u.team;
-      if (u.teamOrder != null) data.teamOrder = u.teamOrder;
-      if (u.employmentStatus != null) data.employmentStatus = u.employmentStatus;
-      if (u.phone) {
-        data.phoneNormalized = u.phone;
-        phoneUpdated++;
-      }
-      const nextTeam = u.team ?? cur.team;
-      const requested = Object.prototype.hasOwnProperty.call(
-        u,
-        "thirdBandSubgroup"
-      )
-        ? u.thirdBandSubgroup
-        : undefined;
-      try {
-        const nextSub = resolveThirdBandSubgroup({
-          team: nextTeam,
-          requested,
-          current: cur.thirdBandSubgroup ?? null,
-        });
-        const currentSub = cur.thirdBandSubgroup ?? null;
-        if (nextSub !== currentSub) {
-          data.thirdBandSubgroup = nextSub;
-        }
-      } catch (e) {
-        throw new RosterImportApplyError(
-          e instanceof Error ? e.message : "thirdBandSubgroup 오류",
-          400,
-          "third_band_subgroup_invalid"
+    if (batchUpdates.length > 0) {
+      updated = await client.$executeRaw(
+        buildRosterBatchUpdateSql(batchUpdates)
+      );
+      if (updated !== batchUpdates.length) {
+        throw new Error(
+          `Caddy batch update count mismatch: expected ${batchUpdates.length}, got ${updated}`
         );
       }
-      if (Object.keys(data).length === 0) continue;
-      await client.caddy.update({ where: { id: u.id }, data });
-      updated++;
     }
 
-    for (const c of normCreates) {
-      const teamOrder = c.teamOrder;
-      if (teamOrder == null || !Number.isInteger(teamOrder) || teamOrder < 1) {
-        throw new RosterImportApplyError(
-          `신규 등록에 teamOrder(슬롯)가 필요합니다: ${c.name}`,
-          400,
-          "slot_required"
-        );
-      }
-      const data: Record<string, unknown> = {
-        name: c.name,
-        team: c.team,
-        teamOrder,
-        employmentStatus: c.employmentStatus ?? "ACTIVE",
-      };
-      if (c.phone) data.phoneNormalized = c.phone;
-      try {
-        data.thirdBandSubgroup = resolveThirdBandSubgroup({
-          team: c.team,
-          requested: Object.prototype.hasOwnProperty.call(c, "thirdBandSubgroup")
-            ? c.thirdBandSubgroup
-            : undefined,
-          current: null,
-        });
-      } catch (e) {
-        throw new RosterImportApplyError(
-          e instanceof Error ? e.message : "thirdBandSubgroup 오류",
-          400,
-          "third_band_subgroup_invalid"
-        );
-      }
-      const row = await client.caddy.create({ data });
-      createdIds.push(row.id);
+    const createdRows =
+      createData.length > 0
+        ? await client.caddy.createManyAndReturn({
+            data: createData,
+            select: { id: true },
+          })
+        : [];
+    if (createdRows.length !== createData.length) {
+      throw new Error(
+        `Caddy batch create count mismatch: expected ${createData.length}, got ${createdRows.length}`
+      );
     }
+    const createdIds = createdRows.map((row) => row.id);
 
     return {
       updated,
