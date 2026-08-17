@@ -229,61 +229,26 @@ async function main() {
 
   section("apply mock prisma — id preserved, no relation writes");
   const store = new Map(existing.map((e) => [e.id, { ...e }]));
-  let nextId = 100;
   let happyTxOptions: { maxWait?: number; timeout?: number } | undefined;
-  const prisma = {
-    caddy: {
-      findMany: async () => [...store.values()],
-      update: async ({
-        where,
-        data,
-      }: {
-        where: { id: number };
-        data: Record<string, unknown>;
-      }) => {
-        const row = store.get(where.id);
-        if (!row) throw new Error("missing");
-        assert(
-          !("assignments" in data) && !("schedules" in data),
-          "no relation fields in update"
-        );
-        Object.assign(row, data);
-        if (data.phoneNormalized !== undefined) {
-          row.phoneNormalized = data.phoneNormalized as string;
-        }
-        return { id: where.id };
-      },
-      create: async ({ data }: { data: Record<string, unknown> }) => {
-        const id = nextId++;
-        store.set(id, {
-          id,
-          name: String(data.name),
-          team: String(data.team),
-          teamOrder: Number(data.teamOrder) || 1,
-          employmentStatus: String(data.employmentStatus || "ACTIVE"),
-          phoneNormalized: (data.phoneNormalized as string) ?? null,
-          thirdBandSubgroup:
-            (data.thirdBandSubgroup as RosterExisting["thirdBandSubgroup"]) ??
-            null,
-        });
-        return { id };
-      },
-      aggregate: async () => ({ _max: { teamOrder: 1 } }),
-    },
-    $transaction: async <T,>(
-      fn: (tx: typeof prisma) => Promise<T>,
-      options?: { maxWait?: number; timeout?: number }
-    ) => {
+  const happyMetrics = { executeRaw: 0, createManyAndReturn: 0 };
+  const prisma = createTransactionalPrisma(store, {
+    nextCreateId: 100,
+    metrics: happyMetrics,
+    onTransaction: (options) => {
       happyTxOptions = options;
-      return fn(prisma);
     },
-  };
+  });
 
   const result = await applyRosterImportPayloadV2(happy.applyPayload, prisma, {
     existingForGuard: existing,
   });
   assert(result.updated === 2, "updated 2");
   assert(result.created === 1, "created 1");
+  assert(happyMetrics.executeRaw === 1, "updates use one batch SQL call");
+  assert(
+    happyMetrics.createManyAndReturn === 1,
+    "creates use one createManyAndReturn call"
+  );
   assert(store.get(1)?.phoneNormalized === "01011112222", "id1 phone set");
   assert(store.get(2)?.team === "2조", "id2 team moved");
   assert(store.get(2)?.employmentStatus === "LEAVE", "id2 leave");
@@ -681,84 +646,108 @@ async function main() {
     store: Map<number, StoreRow>,
     opts?: {
       throwOnUpdateId?: number;
-      simulatedUpdateMs?: number;
+      throwOnCreateIndex?: number;
+      nextCreateId?: number;
+      metrics?: {
+        executeRaw: number;
+        createManyAndReturn: number;
+      };
       onTransaction?: (options?: {
         maxWait?: number;
         timeout?: number;
       }) => void;
     }
   ) {
-    let nextCreateId = 50_000;
-    const mutateUpdate = async ({
-      where,
-      data,
-    }: {
-      where: { id: number };
-      data: Record<string, unknown>;
+    let nextCreateId = opts?.nextCreateId ?? 50_000;
+    const executeBatchUpdate = async (query: {
+      values: readonly unknown[];
     }) => {
-      const row = store.get(where.id);
-      if (!row) throw new Error("missing");
-      Object.assign(row, data);
-      if (data.phoneNormalized !== undefined) {
-        row.phoneNormalized = data.phoneNormalized as string | null;
+      opts?.metrics && opts.metrics.executeRaw++;
+      const fieldsPerRow = 11;
+      if (query.values.length % fieldsPerRow !== 0) {
+        throw new Error("unexpected batch SQL parameter count");
       }
-      return { id: where.id };
+      let affected = 0;
+      for (let i = 0; i < query.values.length; i += fieldsPerRow) {
+        const [
+          rawId,
+          setTeam,
+          team,
+          setTeamOrder,
+          teamOrder,
+          setEmploymentStatus,
+          employmentStatus,
+          setPhone,
+          phoneNormalized,
+          setThirdBandSubgroup,
+          thirdBandSubgroup,
+        ] = query.values.slice(i, i + fieldsPerRow);
+        const id = Number(rawId);
+        if (opts?.throwOnUpdateId === id) {
+          throw new Error("forced mid-transaction failure");
+        }
+        const row = store.get(id);
+        if (!row) continue;
+        if (setTeam) row.team = String(team);
+        if (setTeamOrder) row.teamOrder = Number(teamOrder);
+        if (setEmploymentStatus) {
+          row.employmentStatus = String(employmentStatus);
+        }
+        if (setPhone) {
+          row.phoneNormalized = phoneNormalized as string;
+        }
+        if (setThirdBandSubgroup) {
+          row.thirdBandSubgroup =
+            (thirdBandSubgroup as RosterExisting["thirdBandSubgroup"]) ?? null;
+        }
+        affected++;
+      }
+      return affected;
     };
+
     const prisma = {
       caddy: {
         findMany: async () => [...store.values()],
-        update: mutateUpdate,
-        create: async ({ data }: { data: Record<string, unknown> }) => {
-          const id = nextCreateId++;
-          store.set(id, {
-            id,
-            name: String(data.name),
-            team: String(data.team),
-            teamOrder: Number(data.teamOrder) || 1,
-            employmentStatus: String(data.employmentStatus || "ACTIVE"),
-            phoneNormalized: (data.phoneNormalized as string) ?? null,
-            thirdBandSubgroup:
-              (data.thirdBandSubgroup as RosterExisting["thirdBandSubgroup"]) ??
-              null,
-          });
-          return { id };
+        createManyAndReturn: async ({
+          data,
+        }: {
+          data: Record<string, unknown>[];
+          select: { id: true };
+        }) => {
+          opts?.metrics && opts.metrics.createManyAndReturn++;
+          const rows: Array<{ id: number }> = [];
+          for (let i = 0; i < data.length; i++) {
+            if (opts?.throwOnCreateIndex === i) {
+              throw new Error("forced batch create failure");
+            }
+            const id = nextCreateId++;
+            const item = data[i];
+            store.set(id, {
+              id,
+              name: String(item.name),
+              team: String(item.team),
+              teamOrder: Number(item.teamOrder) || 1,
+              employmentStatus: String(item.employmentStatus || "ACTIVE"),
+              phoneNormalized: (item.phoneNormalized as string) ?? null,
+              thirdBandSubgroup:
+                (item.thirdBandSubgroup as RosterExisting["thirdBandSubgroup"]) ??
+                null,
+            });
+            rows.push({ id });
+          }
+          return rows;
         },
       },
+      $executeRaw: executeBatchUpdate,
       $transaction: async <T,>(
         fn: (tx: typeof prisma) => Promise<T>,
         options?: { maxWait?: number; timeout?: number }
       ) => {
         opts?.onTransaction?.(options);
-        const timeout = options?.timeout ?? 5_000;
         const snapshot = cloneStore(store);
-        let elapsed = 0;
         const tx = {
-          caddy: {
-            findMany: prisma.caddy.findMany,
-            create: prisma.caddy.create,
-            update: async (args: {
-              where: { id: number };
-              data: Record<string, unknown>;
-            }) => {
-              if (opts?.simulatedUpdateMs) {
-                elapsed += opts.simulatedUpdateMs;
-                if (elapsed > timeout) {
-                  const err = new Error(
-                    `Unable to start a transaction in the given time. The timeout for this transaction was ${timeout} ms, PrismaClientKnownRequestError P2028`
-                  ) as Error & { code: string };
-                  err.code = "P2028";
-                  throw err;
-                }
-              }
-              if (
-                opts?.throwOnUpdateId != null &&
-                args.where.id === opts.throwOnUpdateId
-              ) {
-                throw new Error("forced mid-transaction failure");
-              }
-              return mutateUpdate(args);
-            },
-          },
+          caddy: prisma.caddy,
+          $executeRaw: executeBatchUpdate,
           $transaction: prisma.$transaction,
         };
         try {
@@ -798,8 +787,9 @@ async function main() {
   const bulkStore = cloneStore(
     new Map(bulkExisting.map((e) => [e.id, { ...e }]))
   );
+  const bulkMetrics = { executeRaw: 0, createManyAndReturn: 0 };
   const bulkPrisma = createTransactionalPrisma(bulkStore, {
-    simulatedUpdateMs: 40,
+    metrics: bulkMetrics,
     onTransaction: (options) => {
       bulkTxOptions = options;
     },
@@ -813,13 +803,129 @@ async function main() {
     "all 175 phones committed"
   );
   assert(
+    bulkMetrics.executeRaw === 1 && bulkMetrics.createManyAndReturn === 0,
+    "175 updates use one write statement, not O(N) calls"
+  );
+  assert(
     bulkTxOptions?.timeout === ROSTER_IMPORT_APPLY_TX_TIMEOUT_MS,
     "175-update apply uses 60s timeout not 5s default"
   );
+
+  const createCount = 88;
+  const createPayload = {
+    updates: [] as Array<{ id: number }>,
+    creates: Array.from({ length: createCount }, (_, i) => ({
+      name: `대량신규-${i}`,
+      team: TEAMS[i % 8],
+      teamOrder: Math.floor(i / 8) + 1,
+      employmentStatus: "ACTIVE" as const,
+      ...(i === 0 ? { phone: "01077770000" } : {}),
+    })),
+  };
+  const createStore = new Map<number, StoreRow>();
+  const createMetrics = { executeRaw: 0, createManyAndReturn: 0 };
+  const createPrisma = createTransactionalPrisma(createStore, {
+    metrics: createMetrics,
+  });
+  const createResult = await applyRosterImportPayloadV2(
+    createPayload,
+    createPrisma,
+    { existingForGuard: [] }
+  );
+  assert(createResult.created === 88, "88 creates commit");
   assert(
-    175 * 40 > 5_000 &&
-      175 * 40 < ROSTER_IMPORT_APPLY_TX_TIMEOUT_MS,
-    "175 sequential updates exceed 5s simulated budget but fit new timeout"
+    createResult.createdIds.length === 88 &&
+      new Set(createResult.createdIds).size === 88,
+    "88 created ids returned"
+  );
+  assert(
+    createMetrics.executeRaw === 0 &&
+      createMetrics.createManyAndReturn === 1,
+    "88 creates use one createManyAndReturn statement"
+  );
+  assert(
+    [...createStore.values()].filter((r) => r.phoneNormalized == null).length ===
+      87,
+    "createMany preserves null phones"
+  );
+
+  const mixedExisting: RosterExisting[] = [
+    {
+      id: 70_001,
+      name: "혼합기존",
+      team: "9조",
+      teamOrder: 1,
+      employmentStatus: "ACTIVE",
+      phoneNormalized: null,
+      thirdBandSubgroup: "WEEKDAY",
+    },
+  ];
+  const mixedPayload = {
+    updates: [{ id: 70_001, thirdBandSubgroup: null }],
+    creates: [
+      {
+        name: "혼합신규",
+        team: "10조",
+        teamOrder: 1,
+        employmentStatus: "ACTIVE" as const,
+        thirdBandSubgroup: "WEEKEND" as const,
+      },
+    ],
+  };
+  const mixedStore = cloneStore(
+    new Map(mixedExisting.map((e) => [e.id, { ...e }]))
+  );
+  const mixedMetrics = { executeRaw: 0, createManyAndReturn: 0 };
+  const mixedPrisma = createTransactionalPrisma(mixedStore, {
+    metrics: mixedMetrics,
+  });
+  const mixedResult = await applyRosterImportPayloadV2(
+    mixedPayload,
+    mixedPrisma,
+    { existingForGuard: mixedExisting }
+  );
+  const mixedCreated = [...mixedStore.values()].find(
+    (row) => row.name === "혼합신규"
+  );
+  assert(
+    mixedResult.updated === 1 &&
+      mixedResult.created === 1 &&
+      mixedMetrics.executeRaw === 1 &&
+      mixedMetrics.createManyAndReturn === 1,
+    "mixed update + create uses two write statements"
+  );
+  assert(
+    mixedStore.get(70_001)?.phoneNormalized == null &&
+      mixedStore.get(70_001)?.thirdBandSubgroup === null,
+    "batch update keeps null phone and applies explicit null subgroup"
+  );
+  assert(
+    mixedCreated?.phoneNormalized == null &&
+      mixedCreated?.thirdBandSubgroup === "WEEKEND",
+    "batch create stores null phone and enum subgroup"
+  );
+
+  const mixedFailStore = cloneStore(
+    new Map(mixedExisting.map((e) => [e.id, { ...e }]))
+  );
+  const mixedFailPrisma = createTransactionalPrisma(mixedFailStore, {
+    throwOnCreateIndex: 0,
+  });
+  try {
+    await applyRosterImportPayloadV2(mixedPayload, mixedFailPrisma, {
+      existingForGuard: mixedExisting,
+    });
+    assert(false, "mixed create error should fail");
+  } catch (e) {
+    assert(
+      e instanceof RosterImportApplyError && e.code === "apply_failed",
+      "mixed create error maps to apply_failed"
+    );
+  }
+  assert(
+    mixedFailStore.size === 1 &&
+      mixedFailStore.get(70_001)?.thirdBandSubgroup === "WEEKDAY",
+    "create failure rolls back preceding batch update"
   );
 
   const failStore = cloneStore(
@@ -864,9 +970,9 @@ async function main() {
   const leakPrisma = {
     caddy: {
       findMany: async () => existing,
-      update: async () => ({ id: 1 }),
-      create: async () => ({ id: 1 }),
+      createManyAndReturn: async () => [{ id: 1 }],
     },
+    $executeRaw: async () => 1,
     $transaction: async () => {
       throw prismaTimeout;
     },
@@ -961,6 +1067,23 @@ async function main() {
     assert(
       e instanceof RosterImportApplyError && e.code === "phone_duplicate",
       "apply revalidates phone uniqueness vs existing"
+    );
+  }
+  try {
+    await applyRosterImportPayloadV2(
+      {
+        updates: [{ id: 999_999, team: "1조" }],
+        creates: [],
+      },
+      guardPrisma,
+      { existingForGuard: existing }
+    );
+    assert(false, "missing update id should fail apply");
+  } catch (e) {
+    assert(
+      e instanceof RosterImportApplyError &&
+        String(e.message).includes("존재하지 않는 id"),
+      "apply revalidates update id"
     );
   }
   assert(
