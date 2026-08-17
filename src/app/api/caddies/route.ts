@@ -8,6 +8,7 @@ import {
   normalizeEmploymentStatus,
   normalizeTeamOrder,
   parseEmploymentFilter,
+  resolveCaddyTypeFromTeam,
   resolveThirdBandSubgroup,
 } from "@/lib/caddyManage";
 import {
@@ -121,10 +122,10 @@ export async function POST(req: NextRequest) {
         memo: data.memo ?? null,
         phoneNormalized,
         thirdBandSubgroup,
+        caddyType: resolveCaddyTypeFromTeam(team),
         ...(data.employeeCode !== undefined
           ? { employeeCode: data.employeeCode }
           : {}),
-        ...(data.caddyType !== undefined ? { caddyType: data.caddyType } : {}),
         ...(data.missingFromImport !== undefined
           ? { missingFromImport: data.missingFromImport }
           : {}),

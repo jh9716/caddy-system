@@ -13,6 +13,7 @@ import {
   parseEmploymentFilter,
   mergeExtraFlagsForPersist,
   parseThirdBandSubgroupInput,
+  resolveCaddyTypeFromTeam,
   resolveThirdBandSubgroup,
   ThirdBandSubgroupError,
   EDITABLE_EXTRA_FLAG_OPTIONS,
@@ -107,6 +108,23 @@ assert(
 assert(
   created.success && created.data.missingFromImport === undefined,
   "create omits missingFromImport by default"
+);
+
+console.log("== caddyType from team ==");
+assert(resolveCaddyTypeFromTeam("1조") === "HOUSE", "1조 → HOUSE");
+assert(resolveCaddyTypeFromTeam("8조") === "HOUSE", "8조 → HOUSE");
+assert(resolveCaddyTypeFromTeam("9조") === "THIRD", "9조 → THIRD");
+assert(resolveCaddyTypeFromTeam("10조") === "THIRD", "10조 → THIRD");
+assert(resolveCaddyTypeFromTeam("12조") === "THIRD", "12조 → THIRD");
+assert(
+  resolveCaddyTypeFromTeam("8조") === "HOUSE" &&
+    resolveCaddyTypeFromTeam("9조") === "THIRD",
+  "8→9 이동 시 THIRD"
+);
+assert(
+  resolveCaddyTypeFromTeam("9조") === "THIRD" &&
+    resolveCaddyTypeFromTeam("8조") === "HOUSE",
+  "9→8 이동 시 HOUSE"
 );
 
 console.log("== thirdBandSubgroup ==");
@@ -318,6 +336,10 @@ for (const rel of apiFiles) {
   assert(
     src.includes('employmentStatus: "RETIRED"'),
     `${rel} soft-retires with RETIRED`
+  );
+  assert(
+    src.includes("resolveCaddyTypeFromTeam"),
+    `${rel} forces caddyType from team`
   );
 }
 

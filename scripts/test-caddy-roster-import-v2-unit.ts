@@ -618,7 +618,7 @@ async function main() {
     "success message includes apply counts"
   );
 
-  type StoreRow = RosterExisting;
+  type StoreRow = RosterExisting & { caddyType?: string };
   const TEAMS = [
     "1조",
     "2조",
@@ -663,7 +663,7 @@ async function main() {
       values: readonly unknown[];
     }) => {
       opts?.metrics && opts.metrics.executeRaw++;
-      const fieldsPerRow = 11;
+      const fieldsPerRow = 13;
       if (query.values.length % fieldsPerRow !== 0) {
         throw new Error("unexpected batch SQL parameter count");
       }
@@ -681,6 +681,8 @@ async function main() {
           phoneNormalized,
           setThirdBandSubgroup,
           thirdBandSubgroup,
+          setCaddyType,
+          caddyType,
         ] = query.values.slice(i, i + fieldsPerRow);
         const id = Number(rawId);
         if (opts?.throwOnUpdateId === id) {
@@ -699,6 +701,9 @@ async function main() {
         if (setThirdBandSubgroup) {
           row.thirdBandSubgroup =
             (thirdBandSubgroup as RosterExisting["thirdBandSubgroup"]) ?? null;
+        }
+        if (setCaddyType) {
+          row.caddyType = String(caddyType);
         }
         affected++;
       }
@@ -731,6 +736,7 @@ async function main() {
             thirdBandSubgroup:
               (item.thirdBandSubgroup as RosterExisting["thirdBandSubgroup"]) ??
               null,
+            caddyType: item.caddyType != null ? String(item.caddyType) : undefined,
           });
           rows.push({ id });
         }
@@ -904,6 +910,104 @@ async function main() {
     mixedCreated?.phoneNormalized == null &&
       mixedCreated?.thirdBandSubgroup === "WEEKEND",
     "batch create stores null phone and enum subgroup"
+  );
+
+  const typeCreatePayload = {
+    updates: [] as Array<{ id: number }>,
+    creates: [
+      {
+        name: "신규1조",
+        team: "1조",
+        teamOrder: 3,
+        employmentStatus: "ACTIVE" as const,
+      },
+      {
+        name: "신규9조",
+        team: "9조",
+        teamOrder: 3,
+        employmentStatus: "ACTIVE" as const,
+        thirdBandSubgroup: "WEEKDAY" as const,
+      },
+      {
+        name: "신규10조",
+        team: "10조",
+        teamOrder: 4,
+        employmentStatus: "ACTIVE" as const,
+      },
+    ],
+  };
+  const typeCreateStore = new Map<number, StoreRow>();
+  const typeCreatePrisma = createTransactionalPrisma(typeCreateStore);
+  await applyRosterImportPayloadV2(typeCreatePayload, typeCreatePrisma, {
+    existingForGuard: [],
+  });
+  const createdByName = new Map(
+    [...typeCreateStore.values()].map((r) => [r.name, r])
+  );
+  assert(
+    createdByName.get("신규1조")?.caddyType === "HOUSE",
+    "import create 1조 → HOUSE"
+  );
+  assert(
+    createdByName.get("신규9조")?.caddyType === "THIRD" &&
+      createdByName.get("신규9조")?.thirdBandSubgroup === "WEEKDAY",
+    "import create 9조 → THIRD, subgroup preserved"
+  );
+  assert(
+    createdByName.get("신규10조")?.caddyType === "THIRD",
+    "import create 10조 → THIRD"
+  );
+
+  const moveExisting: RosterExisting[] = [
+    {
+      id: 80_001,
+      name: "팔에서아홉",
+      team: "8조",
+      teamOrder: 1,
+      employmentStatus: "ACTIVE",
+      phoneNormalized: null,
+      thirdBandSubgroup: null,
+    },
+    {
+      id: 80_002,
+      name: "아홉에서팔",
+      team: "9조",
+      teamOrder: 1,
+      employmentStatus: "ACTIVE",
+      phoneNormalized: null,
+      thirdBandSubgroup: "WEEKEND",
+    },
+  ];
+  const moveStore = cloneStore(
+    new Map(
+      moveExisting.map((e) => [
+        e.id,
+        { ...e, caddyType: e.team === "9조" ? "THIRD" : "HOUSE" },
+      ])
+    )
+  );
+  const movePrisma = createTransactionalPrisma(moveStore);
+  await applyRosterImportPayloadV2(
+    {
+      updates: [
+        { id: 80_001, team: "9조", teamOrder: 5 },
+        { id: 80_002, team: "8조", teamOrder: 5 },
+      ],
+      creates: [],
+    },
+    movePrisma,
+    { existingForGuard: moveExisting }
+  );
+  assert(
+    moveStore.get(80_001)?.team === "9조" &&
+      moveStore.get(80_001)?.caddyType === "THIRD",
+    "import 8→9 이동 시 THIRD"
+  );
+  assert(
+    moveStore.get(80_002)?.team === "8조" &&
+      moveStore.get(80_002)?.caddyType === "HOUSE" &&
+      moveStore.get(80_002)?.thirdBandSubgroup == null,
+    "import 9→8 이동 시 HOUSE, subgroup cleared"
   );
 
   const mixedFailStore = cloneStore(
@@ -1110,6 +1214,22 @@ async function main() {
   assert(
     applyRouteSrc.includes("ROSTER_IMPORT_APPLY_FAILED_USER_MESSAGE"),
     "apply route returns user-safe failure message"
+  );
+  const importLibSrc = fs.readFileSync(
+    path.join(root, "lib/caddyRosterImportV2.ts"),
+    "utf8"
+  );
+  assert(
+    importLibSrc.includes("resolveCaddyTypeFromTeam"),
+    "import apply forces caddyType from team"
+  );
+  const assignPageSrc = fs.readFileSync(
+    path.join(root, "src/app/manage/assignments/page.tsx"),
+    "utf8"
+  );
+  assert(
+    assignPageSrc.includes("isHouseStartCandidate"),
+    "1부 첫 캐디 후보는 isHouseStartCandidate"
   );
   assert(
     !applyRouteSrc.includes('e?.message || "apply 실패"') &&

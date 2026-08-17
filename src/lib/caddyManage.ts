@@ -32,6 +32,19 @@ export function isThirdBandTeam(team: string): boolean {
   return (THIRD_BAND_TEAMS as readonly string[]).includes(String(team ?? "").trim());
 }
 
+/** 조 기준 canonical caddyType. DRIVING은 이 헬퍼가 부여하지 않음. */
+export type TeamCaddyType = "HOUSE" | "THIRD";
+
+/**
+ * 서버 canonical invariant:
+ * - 1~8조 → HOUSE
+ * - 9~12조 → THIRD
+ * thirdBandSubgroup(일반/주중/주말)과 독립.
+ */
+export function resolveCaddyTypeFromTeam(team: string): TeamCaddyType {
+  return isThirdBandTeam(team) ? "THIRD" : "HOUSE";
+}
+
 export class ThirdBandSubgroupError extends Error {
   status = 400;
   code = "third_band_subgroup_invalid";

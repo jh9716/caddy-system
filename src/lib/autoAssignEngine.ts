@@ -7,7 +7,7 @@
  * - 8단계: 일반 예약 캔슬/추가 시 regular reflow (special 보호, 스페어·3부 재계산)
  */
 
-import { PRIMARY_TEAMS } from "@/lib/caddyManage";
+import { PRIMARY_TEAMS, isThirdBandTeam } from "@/lib/caddyManage";
 import {
   COURSE_CODES,
   normalizeCourse,
@@ -403,6 +403,19 @@ export function normalizeAssignCaddyType(
   return "HOUSE";
 }
 
+/**
+ * 오늘 1부 첫 캐디 후보: 1~8조 HOUSE만.
+ * 9~12조는 caddyType이 HOUSE여도 제외.
+ */
+export function isHouseStartCandidate(c: {
+  team?: string | null;
+  caddyType?: string | null;
+}): boolean {
+  if (isThirdBandTeam(String(c.team ?? ""))) return false;
+  const t = String(c.caddyType || "HOUSE").trim().toUpperCase();
+  return t === "HOUSE" || t === "";
+}
+
 /** 일반 순번용 타입별 풀 분리 (정렬 포함). DRIVING은 3부 HOUSE 순번에 섞지 않음. */
 export function splitCaddyPools(caddies: AutoAssignCaddy[]): {
   house: AutoAssignCaddy[];
@@ -413,6 +426,11 @@ export function splitCaddyPools(caddies: AutoAssignCaddy[]): {
   const third: AutoAssignCaddy[] = [];
   const driving: AutoAssignCaddy[] = [];
   for (const c of dedupeCaddies(caddies || [])) {
+    // 9~12조는 caddyType과 무관하게 HOUSE 순환에 넣지 않음
+    if (isThirdBandTeam(c.team)) {
+      third.push(c);
+      continue;
+    }
     const t = normalizeAssignCaddyType(c.caddyType);
     if (t === "THIRD") third.push(c);
     else if (t === "DRIVING") driving.push(c);
