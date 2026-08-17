@@ -9,9 +9,16 @@ import { isNeedsReviewName } from "@/lib/caddyImportRules";
 import { maskKrMobile } from "@/lib/caddyPhone";
 import { logAudit } from "@/lib/audit";
 import { requireAdmin } from "@/lib/auth";
+import { ROSTER_IMPORT_APPLY_FAILED_USER_MESSAGE } from "@/lib/caddyRosterImportApplyConfig";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+/**
+ * Vercel Fluid 기본/Hobby 상한 300s 이내.
+ * transaction timeout 60s + maxWait 10s + findMany/audit headroom < 90s.
+ * Next.js 15는 숫자 리터럴만 정적 추출한다.
+ */
+export const maxDuration = 90;
 
 /**
  * POST { applyPayload: { updates, creates } } — Import v2
@@ -206,8 +213,8 @@ export async function POST(req: NextRequest) {
     }
     console.error("[POST /api/caddies/import/apply]", e?.message || e);
     return NextResponse.json(
-      { error: e?.message || "apply 실패" },
-      { status: 400 }
+      { error: ROSTER_IMPORT_APPLY_FAILED_USER_MESSAGE, code: "apply_failed" },
+      { status: 500 }
     );
   }
 }

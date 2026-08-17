@@ -35,6 +35,19 @@ import {
   ThirdBandSubgroupError,
   type ThirdBandSubgroup,
 } from "../src/lib/caddyManage";
+import {
+  ROSTER_IMPORT_APPLY_FAILED_USER_MESSAGE,
+  ROSTER_IMPORT_APPLY_TX_MAX_WAIT_MS,
+  ROSTER_IMPORT_APPLY_TX_TIMEOUT_MS,
+} from "../src/lib/caddyRosterImportApplyConfig";
+
+export {
+  ROSTER_IMPORT_APPLY_FAILED_USER_MESSAGE,
+  ROSTER_IMPORT_APPLY_ROUTE_MAX_DURATION_SECONDS,
+  ROSTER_IMPORT_APPLY_TX_MAX_WAIT_MS,
+  ROSTER_IMPORT_APPLY_TX_TIMEOUT_MS,
+  rosterImportApplySuccessMessage,
+} from "../src/lib/caddyRosterImportApplyConfig";
 
 const PHONE_HEADER_ALIASES = ["phone", "휴대폰", "전화번호", "mobile"] as const;
 
@@ -1274,6 +1287,11 @@ export class RosterImportApplyError extends Error {
   }
 }
 
+export type RosterImportApplyTransactionOptions = {
+  maxWait?: number;
+  timeout?: number;
+};
+
 type PrismaLike = {
   caddy: {
     update: (args: {
@@ -1291,8 +1309,17 @@ type PrismaLike = {
       _max: { teamOrder: true };
     }) => Promise<{ _max: { teamOrder: number | null } }>;
   };
-  $transaction?: <T>(fn: (tx: PrismaLike) => Promise<T>) => Promise<T>;
+  $transaction?: <T>(
+    fn: (tx: PrismaLike) => Promise<T>,
+    options?: RosterImportApplyTransactionOptions
+  ) => Promise<T>;
 };
+
+export const ROSTER_IMPORT_APPLY_TX_OPTIONS: RosterImportApplyTransactionOptions =
+  {
+    maxWait: ROSTER_IMPORT_APPLY_TX_MAX_WAIT_MS,
+    timeout: ROSTER_IMPORT_APPLY_TX_TIMEOUT_MS,
+  };
 
 /**
  * Apply — 서버에서 검증 재수행 후 all-or-nothing transaction.
@@ -1603,7 +1630,10 @@ export async function applyRosterImportPayloadV2(
 
   try {
     if (typeof prisma.$transaction === "function") {
-      return await prisma.$transaction((tx) => run(tx));
+      return await prisma.$transaction(
+        (tx) => run(tx),
+        ROSTER_IMPORT_APPLY_TX_OPTIONS
+      );
     }
     return await run(prisma);
   } catch (e) {
@@ -1621,7 +1651,12 @@ export async function applyRosterImportPayloadV2(
         "phone_duplicate"
       );
     }
-    throw e;
+    console.error("[applyRosterImportPayloadV2]", e);
+    throw new RosterImportApplyError(
+      ROSTER_IMPORT_APPLY_FAILED_USER_MESSAGE,
+      500,
+      "apply_failed"
+    );
   }
 }
 

@@ -10,12 +10,21 @@ import {
   escapeCsvFormulaCell,
   parseRosterCsvV2,
   unescapeCsvFormulaCell,
+  RosterImportApplyError,
+  ROSTER_IMPORT_APPLY_FAILED_USER_MESSAGE,
+  ROSTER_IMPORT_APPLY_ROUTE_MAX_DURATION_SECONDS,
+  ROSTER_IMPORT_APPLY_TX_MAX_WAIT_MS,
+  ROSTER_IMPORT_APPLY_TX_OPTIONS,
+  ROSTER_IMPORT_APPLY_TX_TIMEOUT_MS,
+  rosterImportApplySuccessMessage,
   type RosterExisting,
 } from "../lib/caddyRosterImportV2";
 import {
   parseImportEmploymentStatus,
   parseImportTeamOrder,
 } from "../lib/caddyImportRules";
+import fs from "fs";
+import path from "path";
 
 let passed = 0;
 let failed = 0;
@@ -221,6 +230,7 @@ async function main() {
   section("apply mock prisma — id preserved, no relation writes");
   const store = new Map(existing.map((e) => [e.id, { ...e }]));
   let nextId = 100;
+  let happyTxOptions: { maxWait?: number; timeout?: number } | undefined;
   const prisma = {
     caddy: {
       findMany: async () => [...store.values()],
@@ -260,7 +270,13 @@ async function main() {
       },
       aggregate: async () => ({ _max: { teamOrder: 1 } }),
     },
-    $transaction: async <T,>(fn: (tx: typeof prisma) => Promise<T>) => fn(prisma),
+    $transaction: async <T,>(
+      fn: (tx: typeof prisma) => Promise<T>,
+      options?: { maxWait?: number; timeout?: number }
+    ) => {
+      happyTxOptions = options;
+      return fn(prisma);
+    },
   };
 
   const result = await applyRosterImportPayloadV2(happy.applyPayload, prisma, {
@@ -274,6 +290,11 @@ async function main() {
   assert(store.get(2)?.phoneNormalized === "01099998888", "id2 phone kept");
   assert(store.has(30), "missing id30 still present");
   assert(store.get(30)?.employmentStatus === "ACTIVE", "missing not retired");
+  assert(
+    happyTxOptions?.timeout === ROSTER_IMPORT_APPLY_TX_TIMEOUT_MS &&
+      happyTxOptions?.maxWait === ROSTER_IMPORT_APPLY_TX_MAX_WAIT_MS,
+    "apply uses explicit transaction timeout/maxWait"
+  );
 
   section("export csv");
   const csv = buildRosterExportCsv(existing);
@@ -585,6 +606,416 @@ async function main() {
     rtBand.applyPayload.updates.length === 0 &&
       rtBand.applyPayload.creates.length === 0,
     "export→import round-trip 값 불변"
+  );
+
+  section("apply transaction timeout / atomicity / public errors");
+  assert(
+    ROSTER_IMPORT_APPLY_TX_TIMEOUT_MS >= 45_000 &&
+      ROSTER_IMPORT_APPLY_TX_TIMEOUT_MS <= 60_000,
+    "tx timeout in 45–60s range"
+  );
+  assert(
+    ROSTER_IMPORT_APPLY_TX_TIMEOUT_MS > 5_000,
+    "tx timeout exceeds Prisma 5s default"
+  );
+  assert(
+    ROSTER_IMPORT_APPLY_TX_MAX_WAIT_MS >= 5_000,
+    "maxWait at least Prisma default"
+  );
+  assert(
+    ROSTER_IMPORT_APPLY_ROUTE_MAX_DURATION_SECONDS <= 300,
+    "maxDuration within Vercel Fluid Hobby/Pro 300s ceiling"
+  );
+  assert(
+    ROSTER_IMPORT_APPLY_TX_TIMEOUT_MS / 1000 <
+      ROSTER_IMPORT_APPLY_ROUTE_MAX_DURATION_SECONDS,
+    "tx timeout shorter than route maxDuration"
+  );
+  assert(
+    ROSTER_IMPORT_APPLY_TX_TIMEOUT_MS +
+      ROSTER_IMPORT_APPLY_TX_MAX_WAIT_MS +
+      15_000 <=
+      ROSTER_IMPORT_APPLY_ROUTE_MAX_DURATION_SECONDS * 1000,
+    "maxWait + timeout + 15s headroom fit in route maxDuration"
+  );
+  assert(
+    ROSTER_IMPORT_APPLY_TX_OPTIONS.timeout === ROSTER_IMPORT_APPLY_TX_TIMEOUT_MS &&
+      ROSTER_IMPORT_APPLY_TX_OPTIONS.maxWait ===
+        ROSTER_IMPORT_APPLY_TX_MAX_WAIT_MS,
+    "exported tx options match constants"
+  );
+  assert(
+    rosterImportApplySuccessMessage({
+      updated: 175,
+      created: 2,
+      phoneUpdated: 10,
+    }) === "명단 반영 완료: 갱신 175 · 신규 2 · 전화 10",
+    "success message includes apply counts"
+  );
+
+  type StoreRow = RosterExisting;
+  const TEAMS = [
+    "1조",
+    "2조",
+    "3조",
+    "4조",
+    "5조",
+    "6조",
+    "7조",
+    "8조",
+    "9조",
+    "10조",
+    "11조",
+    "12조",
+  ];
+
+  function phoneForIndex(i: number): string {
+    return `0101${String(i).padStart(7, "0")}`;
+  }
+
+  function cloneStore(src: Map<number, StoreRow>): Map<number, StoreRow> {
+    return new Map([...src.entries()].map(([k, v]) => [k, { ...v }]));
+  }
+
+  function createTransactionalPrisma(
+    store: Map<number, StoreRow>,
+    opts?: {
+      throwOnUpdateId?: number;
+      simulatedUpdateMs?: number;
+      onTransaction?: (options?: {
+        maxWait?: number;
+        timeout?: number;
+      }) => void;
+    }
+  ) {
+    let nextCreateId = 50_000;
+    const mutateUpdate = async ({
+      where,
+      data,
+    }: {
+      where: { id: number };
+      data: Record<string, unknown>;
+    }) => {
+      const row = store.get(where.id);
+      if (!row) throw new Error("missing");
+      Object.assign(row, data);
+      if (data.phoneNormalized !== undefined) {
+        row.phoneNormalized = data.phoneNormalized as string | null;
+      }
+      return { id: where.id };
+    };
+    const prisma = {
+      caddy: {
+        findMany: async () => [...store.values()],
+        update: mutateUpdate,
+        create: async ({ data }: { data: Record<string, unknown> }) => {
+          const id = nextCreateId++;
+          store.set(id, {
+            id,
+            name: String(data.name),
+            team: String(data.team),
+            teamOrder: Number(data.teamOrder) || 1,
+            employmentStatus: String(data.employmentStatus || "ACTIVE"),
+            phoneNormalized: (data.phoneNormalized as string) ?? null,
+            thirdBandSubgroup:
+              (data.thirdBandSubgroup as RosterExisting["thirdBandSubgroup"]) ??
+              null,
+          });
+          return { id };
+        },
+      },
+      $transaction: async <T,>(
+        fn: (tx: typeof prisma) => Promise<T>,
+        options?: { maxWait?: number; timeout?: number }
+      ) => {
+        opts?.onTransaction?.(options);
+        const timeout = options?.timeout ?? 5_000;
+        const snapshot = cloneStore(store);
+        let elapsed = 0;
+        const tx = {
+          caddy: {
+            findMany: prisma.caddy.findMany,
+            create: prisma.caddy.create,
+            update: async (args: {
+              where: { id: number };
+              data: Record<string, unknown>;
+            }) => {
+              if (opts?.simulatedUpdateMs) {
+                elapsed += opts.simulatedUpdateMs;
+                if (elapsed > timeout) {
+                  const err = new Error(
+                    `Unable to start a transaction in the given time. The timeout for this transaction was ${timeout} ms, PrismaClientKnownRequestError P2028`
+                  ) as Error & { code: string };
+                  err.code = "P2028";
+                  throw err;
+                }
+              }
+              if (
+                opts?.throwOnUpdateId != null &&
+                args.where.id === opts.throwOnUpdateId
+              ) {
+                throw new Error("forced mid-transaction failure");
+              }
+              return mutateUpdate(args);
+            },
+          },
+          $transaction: prisma.$transaction,
+        };
+        try {
+          return await fn(tx);
+        } catch (e) {
+          const rolled = cloneStore(snapshot);
+          store.clear();
+          for (const [k, v] of rolled) store.set(k, v);
+          throw e;
+        }
+      },
+    };
+    return prisma;
+  }
+
+  const bulkCount = 175;
+  const bulkExisting: RosterExisting[] = [];
+  for (let i = 0; i < bulkCount; i++) {
+    bulkExisting.push({
+      id: 2000 + i,
+      name: `대량${i}`,
+      team: TEAMS[i % TEAMS.length],
+      teamOrder: Math.floor(i / TEAMS.length) + 1,
+      employmentStatus: "ACTIVE",
+      phoneNormalized: null,
+    });
+  }
+  const bulkPayload = {
+    updates: bulkExisting.map((e, i) => ({
+      id: e.id,
+      phone: phoneForIndex(i),
+    })),
+    creates: [] as Array<{ name: string; team: string; teamOrder: number }>,
+  };
+
+  let bulkTxOptions: { maxWait?: number; timeout?: number } | undefined;
+  const bulkStore = cloneStore(
+    new Map(bulkExisting.map((e) => [e.id, { ...e }]))
+  );
+  const bulkPrisma = createTransactionalPrisma(bulkStore, {
+    simulatedUpdateMs: 40,
+    onTransaction: (options) => {
+      bulkTxOptions = options;
+    },
+  });
+  const bulkResult = await applyRosterImportPayloadV2(bulkPayload, bulkPrisma, {
+    existingForGuard: bulkExisting,
+  });
+  assert(bulkResult.updated === 175, "175 updates commit");
+  assert(
+    [...bulkStore.values()].every((r) => r.phoneNormalized),
+    "all 175 phones committed"
+  );
+  assert(
+    bulkTxOptions?.timeout === ROSTER_IMPORT_APPLY_TX_TIMEOUT_MS,
+    "175-update apply uses 60s timeout not 5s default"
+  );
+  assert(
+    175 * 40 > 5_000 &&
+      175 * 40 < ROSTER_IMPORT_APPLY_TX_TIMEOUT_MS,
+    "175 sequential updates exceed 5s simulated budget but fit new timeout"
+  );
+
+  const failStore = cloneStore(
+    new Map(bulkExisting.map((e) => [e.id, { ...e }]))
+  );
+  const failPrisma = createTransactionalPrisma(failStore, {
+    throwOnUpdateId: bulkExisting[50].id,
+  });
+  try {
+    await applyRosterImportPayloadV2(bulkPayload, failPrisma, {
+      existingForGuard: bulkExisting,
+    });
+    assert(false, "mid-transaction throw should fail");
+  } catch (e) {
+    assert(
+      e instanceof RosterImportApplyError && e.code === "apply_failed",
+      "internal tx error mapped to apply_failed"
+    );
+    assert(
+      e instanceof Error &&
+        !String(e.message).toLowerCase().includes("prisma") &&
+        !String(e.message).includes("forced mid-transaction"),
+      "Prisma/internal error text not in apply error message"
+    );
+    assert(
+      e instanceof RosterImportApplyError &&
+        e.message === ROSTER_IMPORT_APPLY_FAILED_USER_MESSAGE,
+      "user-safe apply failure message"
+    );
+  }
+  assert(
+    [...failStore.values()].every((r) => r.phoneNormalized == null),
+    "transaction error rolls back all 175 updates"
+  );
+
+  const prismaTimeout = Object.assign(
+    new Error(
+      "Transaction already closed: A query cannot be executed on an expired transaction. The timeout for this transaction was 5000 ms, PrismaClientKnownRequestError"
+    ),
+    { code: "P2028" }
+  );
+  const leakPrisma = {
+    caddy: {
+      findMany: async () => existing,
+      update: async () => ({ id: 1 }),
+      create: async () => ({ id: 1 }),
+    },
+    $transaction: async () => {
+      throw prismaTimeout;
+    },
+  };
+  try {
+    await applyRosterImportPayloadV2(happy.applyPayload, leakPrisma, {
+      existingForGuard: existing,
+    });
+    assert(false, "prisma timeout should fail apply");
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    assert(
+      e instanceof RosterImportApplyError &&
+        e.code === "apply_failed" &&
+        msg === ROSTER_IMPORT_APPLY_FAILED_USER_MESSAGE,
+      "prisma timeout becomes user-safe apply_failed"
+    );
+    assert(
+      !msg.toLowerCase().includes("prisma") &&
+        !msg.includes("5000") &&
+        !msg.includes("P2028") &&
+        !msg.includes("expired transaction"),
+      "UI-facing apply error omits Prisma timeout details"
+    );
+  }
+
+  section("apply server revalidation — needsReview/slot/phone blocking");
+  const guardPrisma = createTransactionalPrisma(
+    cloneStore(new Map(existing.map((e) => [e.id, { ...e }])))
+  );
+  try {
+    await applyRosterImportPayloadV2(
+      {
+        updates: [],
+        creates: [{ name: "박준형", team: "1조", teamOrder: 4 }],
+      },
+      guardPrisma,
+      { existingForGuard: existing }
+    );
+    assert(false, "needsReview create should fail apply");
+  } catch (e) {
+    assert(
+      e instanceof RosterImportApplyError &&
+        String(e.message).includes("needsReview"),
+      "apply revalidates needsReview names"
+    );
+  }
+  try {
+    await applyRosterImportPayloadV2(
+      {
+        updates: [],
+        creates: [{ name: "슬롯초과", team: "1조", teamOrder: 25 }],
+      },
+      guardPrisma,
+      { existingForGuard: existing }
+    );
+    assert(false, "over-capacity create should fail apply");
+  } catch (e) {
+    assert(
+      e instanceof RosterImportApplyError && e.code === "slot_out_of_range",
+      "apply revalidates slot capacity"
+    );
+  }
+  try {
+    await applyRosterImportPayloadV2(
+      {
+        updates: [{ id: 1, phone: "" }],
+        creates: [],
+      },
+      guardPrisma,
+      { existingForGuard: existing }
+    );
+    assert(false, "empty phone should fail apply");
+  } catch (e) {
+    assert(
+      e instanceof RosterImportApplyError &&
+        e.code === "phone_delete_forbidden",
+      "apply blocks phone delete"
+    );
+  }
+  try {
+    await applyRosterImportPayloadV2(
+      {
+        updates: [{ id: 1, phone: "01099998888" }],
+        creates: [],
+      },
+      guardPrisma,
+      { existingForGuard: existing }
+    );
+    assert(false, "duplicate phone should fail apply");
+  } catch (e) {
+    assert(
+      e instanceof RosterImportApplyError && e.code === "phone_duplicate",
+      "apply revalidates phone uniqueness vs existing"
+    );
+  }
+  assert(
+    happy.summary.applyBlocked === false &&
+      Array.isArray(happy.applyPayload.updates),
+    "preview→apply payload still produced after revalidation tests"
+  );
+
+  section("apply failure UX source guards");
+  const root = path.join(__dirname, "..");
+  const pageSrc = fs.readFileSync(
+    path.join(root, "src/app/manage/caddies/page.tsx"),
+    "utf8"
+  );
+  const applyRouteSrc = fs.readFileSync(
+    path.join(root, "src/app/api/caddies/import/apply/route.ts"),
+    "utf8"
+  );
+  assert(
+    /export const maxDuration = 90/.test(applyRouteSrc),
+    "apply route exports maxDuration = 90 literal"
+  );
+  assert(
+    applyRouteSrc.includes("ROSTER_IMPORT_APPLY_FAILED_USER_MESSAGE"),
+    "apply route returns user-safe failure message"
+  );
+  assert(
+    !applyRouteSrc.includes('e?.message || "apply 실패"') &&
+      !applyRouteSrc.includes("e?.message || 'apply 실패'"),
+    "apply route does not return raw exception message"
+  );
+  const applyUi = pageSrc.slice(
+    pageSrc.indexOf("/api/caddies/import/apply"),
+    pageSrc.indexOf("Apply 반영")
+  );
+  assert(
+    applyUi.includes("ROSTER_IMPORT_APPLY_FAILED_USER_MESSAGE"),
+    "apply UI uses shared failure message"
+  );
+  assert(
+    !applyUi.includes("data?.error"),
+    "apply UI does not render API/Prisma error text"
+  );
+  assert(
+    pageSrc.includes("rosterImportApplySuccessMessage"),
+    "success uses 명단 반영 완료 helper"
+  );
+  assert(
+    pageSrc.includes("cm-import-apply-error") &&
+      pageSrc.includes("Preview 미반영"),
+    "failure shown near import panel and preview marked 미반영"
+  );
+  assert(
+    pageSrc.includes("cm-banner") && pageSrc.includes("is-error"),
+    "top banner has error tone for apply failure"
   );
 
   console.log(`\nDONE: ${passed} passed, ${failed} failed`);

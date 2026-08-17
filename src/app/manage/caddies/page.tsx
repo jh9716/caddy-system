@@ -21,6 +21,10 @@ import {
   listSelectableEmptySlots,
   type SlotOccupant,
 } from '@/lib/caddySlot';
+import {
+  ROSTER_IMPORT_APPLY_FAILED_USER_MESSAGE,
+  rosterImportApplySuccessMessage,
+} from '@/lib/caddyRosterImportApplyConfig';
 
 /** 한눈에 보기: 1~12조 */
 const GLANCE_TEAMS = PRIMARY_TEAMS;
@@ -153,6 +157,8 @@ export default function ManageCaddiesPage() {
   const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
   const [importBusy, setImportBusy] = useState(false);
   const [importFileName, setImportFileName] = useState<string | null>(null);
+  /** Apply 실패 시 Preview와 구분 — 반영되지 않음 */
+  const [importApplyFailed, setImportApplyFailed] = useState(false);
   /** 슬롯 점유 계산용 — ACTIVE+LEAVE+RETIRED 전체 */
   const [slotPeers, setSlotPeers] = useState<SlotOccupant[]>([]);
 
@@ -485,6 +491,7 @@ export default function ManageCaddiesPage() {
             onClick={() => {
               setViewMode('detail');
               setImportOpen(true);
+              setImportApplyFailed(false);
             }}
           >
             명단 가져오기
@@ -557,7 +564,15 @@ export default function ManageCaddiesPage() {
         </button>
       </div>
 
-      {message && <div className="cm-banner">{message}</div>}
+      {message && (
+        <div
+          className={`cm-banner${
+            message === ROSTER_IMPORT_APPLY_FAILED_USER_MESSAGE ? ' is-error' : ''
+          }`}
+        >
+          {message}
+        </div>
+      )}
 
       {createOpen && viewMode === 'detail' && (
         <section className="cm-card cm-create">
@@ -1309,6 +1324,7 @@ export default function ManageCaddiesPage() {
                 setImportOpen(false);
                 setImportPreview(null);
                 setImportFileName(null);
+                setImportApplyFailed(false);
               }}
             >
               닫기
@@ -1333,6 +1349,7 @@ export default function ManageCaddiesPage() {
                   setImportBusy(true);
                   setImportPreview(null);
                   setImportFileName(file.name);
+                  setImportApplyFailed(false);
                   setMessage(null);
                   try {
                     const fd = new FormData();
@@ -1388,6 +1405,7 @@ export default function ManageCaddiesPage() {
                 }
                 setImportBusy(true);
                 setMessage(null);
+                setImportApplyFailed(false);
                 try {
                   const res = await fetch('/api/caddies/import/apply', {
                     method: 'POST',
@@ -1403,18 +1421,25 @@ export default function ManageCaddiesPage() {
                     return;
                   }
                   if (!res.ok) {
-                    setMessage(data?.error || 'Apply 실패');
+                    setImportApplyFailed(true);
+                    setMessage(ROSTER_IMPORT_APPLY_FAILED_USER_MESSAGE);
                     return;
                   }
+                  setImportApplyFailed(false);
                   setMessage(
-                    `명단 반영 완료: 갱신 ${data.updated} · 신규 ${data.created} · 전화 ${data.phoneUpdated}`
+                    rosterImportApplySuccessMessage({
+                      updated: Number(data.updated) || 0,
+                      created: Number(data.created) || 0,
+                      phoneUpdated: Number(data.phoneUpdated) || 0,
+                    })
                   );
                   setImportPreview(null);
                   setImportFileName(null);
                   setImportOpen(false);
                   await load('all');
                 } catch {
-                  setMessage('Apply 중 오류가 발생했습니다.');
+                  setImportApplyFailed(true);
+                  setMessage(ROSTER_IMPORT_APPLY_FAILED_USER_MESSAGE);
                 } finally {
                   setImportBusy(false);
                 }
@@ -1423,10 +1448,18 @@ export default function ManageCaddiesPage() {
               Apply 반영
             </button>
           </div>
+          {importApplyFailed && (
+            <p className="cm-import-apply-error" role="alert">
+              {ROSTER_IMPORT_APPLY_FAILED_USER_MESSAGE}
+            </p>
+          )}
 
           {importPreview && (
             <>
               <div className="cm-import-summary">
+                {importApplyFailed && (
+                  <span className="is-warn">Preview 미반영</span>
+                )}
                 <span>입력 {importPreview.summary.inputPeople}</span>
                 <span>갱신 {importPreview.summary.update}</span>
                 <span>신규 {importPreview.summary.create}</span>
@@ -1627,6 +1660,11 @@ export default function ManageCaddiesPage() {
           border-radius: 8px;
           margin-bottom: 10px;
           font-size: 0.82rem;
+        }
+        .cm-banner.is-error {
+          background: var(--vh-danger-bg);
+          border-color: #f0c4c9;
+          color: var(--vh-danger);
         }
         .cm-card,
         .cm-item {
@@ -2085,6 +2123,16 @@ export default function ManageCaddiesPage() {
           background: #fff1e8;
           color: #9a3412;
           font-size: 0.8rem;
+        }
+        .cm-import-apply-error {
+          margin: 8px 0 0;
+          padding: 8px 10px;
+          border-radius: 8px;
+          background: var(--vh-danger-bg);
+          border: 1px solid #f0c4c9;
+          color: var(--vh-danger);
+          font-size: 0.82rem;
+          font-weight: 600;
         }
         .cm-import-issues {
           margin: 0 0 8px;
