@@ -17,7 +17,10 @@ import {
   type DraftWarning,
 } from "@/lib/assignmentDraft";
 import { draftToConfirmBody } from "@/lib/assignmentConfirm";
-import { buildShiftBoard } from "@/lib/assignmentBoardView";
+import {
+  boardAssignmentMarks,
+  buildShiftBoard,
+} from "@/lib/assignmentBoardView";
 import {
   isHouseStartCandidate,
   resolveCourseCode,
@@ -51,6 +54,28 @@ const COURSE_SHORT: Record<CourseCode, string> = {
 
 type CourseOpenState = Record<CourseCode, boolean>;
 type ResultViewMode = "board" | "list";
+
+function AssignmentMarkBadges({
+  twoWork,
+  chageun,
+  special,
+}: {
+  twoWork: boolean;
+  chageun: boolean;
+  special?: boolean;
+}) {
+  if (!twoWork && !chageun && !special) return null;
+  return (
+    <span className="bc-marks">
+      {twoWork ? <span className="bc-badge two">투</span> : null}
+      {chageun ? (
+        <span className="bc-badge call">찾근</span>
+      ) : special ? (
+        <span className="bc-special">S</span>
+      ) : null}
+    </span>
+  );
+}
 
 function defaultCourseOpen(): CourseOpenState {
   return {
@@ -757,6 +782,10 @@ export default function ManageAssignmentsOpsPage() {
                                   primary.reservation
                                 );
                                 const special = primary.kind !== "regular";
+                                const marks = boardAssignmentMarks(
+                                  primary,
+                                  draft.assignments
+                                );
                                 const active =
                                   expandedKey === key ||
                                   swapKey === key ||
@@ -773,6 +802,8 @@ export default function ManageAssignmentsOpsPage() {
                                     type="button"
                                     className={`bc-cell assigned ${
                                       special ? "special" : ""
+                                    }${marks.twoWork ? " two-work" : ""}${
+                                      marks.chageun ? " chageun" : ""
                                     } ${active ? "active" : ""}`}
                                     role="cell"
                                     onClick={() => {
@@ -799,13 +830,15 @@ export default function ManageAssignmentsOpsPage() {
                                     <span className="bc-name">
                                       {primary.caddy.name}
                                     </span>
+                                    <AssignmentMarkBadges
+                                      twoWork={marks.twoWork}
+                                      chageun={marks.chageun}
+                                      special={special}
+                                    />
                                     {cell.rows.length > 1 && (
                                       <span className="bc-more">
                                         +{cell.rows.length - 1}
                                       </span>
-                                    )}
-                                    {special && (
-                                      <span className="bc-special">S</span>
                                     )}
                                   </button>
                                 );
@@ -832,6 +865,13 @@ export default function ManageAssignmentsOpsPage() {
                                   <span className="caddy-strong">
                                     {detailRow.caddy.name}
                                   </span>
+                                  <AssignmentMarkBadges
+                                    {...boardAssignmentMarks(
+                                      detailRow,
+                                      draft.assignments
+                                    )}
+                                    special={detailRow.kind !== "regular"}
+                                  />
                                   <span className="muted">
                                     {detailRow.caddy.team}·
                                     {detailRow.caddy.teamOrder}
@@ -895,6 +935,10 @@ export default function ManageAssignmentsOpsPage() {
                   {shiftRows.map((row) => {
                     const key = reservationIdentity(row.reservation);
                     const special = row.kind !== "regular";
+                    const marks = boardAssignmentMarks(
+                      row,
+                      draft.assignments
+                    );
                     const open = expandedKey === key || swapKey === key;
                     const course =
                       row.reservation.courseLabel ||
@@ -903,7 +947,9 @@ export default function ManageAssignmentsOpsPage() {
                     return (
                       <li
                         key={key}
-                        className={`ops-row ${special ? "special" : ""} ${
+                        className={`ops-row ${special ? "special" : ""}${
+                          marks.twoWork ? " two-work" : ""
+                        }${marks.chageun ? " chageun" : ""} ${
                           swapKey === key ? "swap-on" : ""
                         } ${open ? "open" : ""}`}
                       >
@@ -917,12 +963,19 @@ export default function ManageAssignmentsOpsPage() {
                           </span>
                           <span className="col team">
                             {row.reservation.teamName || "-"}
-                            {special ? (
+                            {special && !marks.chageun ? (
                               <em className="tag-s">{row.kind}</em>
                             ) : null}
                           </span>
                           <span className="col course">{course}</span>
-                          <span className="col caddy">{row.caddy.name}</span>
+                          <span className="col caddy">
+                            {row.caddy.name}
+                            <AssignmentMarkBadges
+                              twoWork={marks.twoWork}
+                              chageun={marks.chageun}
+                              special={special}
+                            />
+                          </span>
                           <span className="col meta">
                             {row.caddy.team}·{row.caddy.teamOrder}
                           </span>
@@ -1451,6 +1504,18 @@ const opsCss = `
   button.bc-cell.assigned.special {
     background: #fffbeb;
   }
+  button.bc-cell.assigned.two-work {
+    background: #f8fafc;
+    box-shadow: inset 2px 0 0 #94a3b8;
+  }
+  button.bc-cell.assigned.chageun {
+    background: #fffdf6;
+    box-shadow: inset 2px 0 0 #d6b37a;
+  }
+  button.bc-cell.assigned.two-work.chageun {
+    background: #f8fafc;
+    box-shadow: inset 2px 0 0 #94a3b8, inset 0 -2px 0 #d6b37a;
+  }
   button.bc-cell.assigned.active {
     outline: 2px solid #2563eb;
     outline-offset: -2px;
@@ -1464,6 +1529,31 @@ const opsCss = `
     text-overflow: ellipsis;
     white-space: nowrap;
     color: #0f172a;
+  }
+  .bc-marks {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    max-width: 100%;
+  }
+  .bc-badge {
+    display: inline-block;
+    font-size: 0.55rem;
+    font-weight: 800;
+    line-height: 1.15;
+    padding: 1px 4px;
+    border-radius: 4px;
+    letter-spacing: 0;
+    white-space: nowrap;
+  }
+  .bc-badge.two {
+    color: #334155;
+    background: #e2e8f0;
+  }
+  .bc-badge.call {
+    color: #7c5a1e;
+    background: #f4ead6;
   }
   .bc-more {
     font-size: 0.6rem;
@@ -1507,7 +1597,12 @@ const opsCss = `
     border-radius: 6px;
     overflow: hidden;
   }
-  .ops-row.special { border-color: #f59e0b; background: #fffbeb; }
+  .ops-row.special { border-color: #e7d3a8; background: #fffdf8; }
+  .ops-row.two-work { box-shadow: inset 3px 0 0 #94a3b8; }
+  .ops-row.chageun { box-shadow: inset 3px 0 0 #d6b37a; }
+  .ops-row.two-work.chageun {
+    box-shadow: inset 3px 0 0 #94a3b8, inset 0 -2px 0 #d6b37a;
+  }
   .ops-row.swap-on { outline: 2px solid #2563eb; }
   .ops-row.closed { background: #f8fafc; color: #64748b; }
   .ops-row-main {
@@ -1536,7 +1631,7 @@ const opsCss = `
   .ops-row-main .time { font-weight: 700; font-variant-numeric: tabular-nums; }
   .ops-row-main .team { font-weight: 600; }
   .ops-row-main .course { color: #475569; font-size: 0.72rem; }
-  .ops-row-main .caddy { font-weight: 700; }
+  .ops-row-main .caddy { font-weight: 700; display: inline-flex; align-items: center; gap: 4px; }
   .ops-row-main .meta { color: #64748b; font-size: 0.68rem; text-align: right; }
   .tag-s {
     display: inline;

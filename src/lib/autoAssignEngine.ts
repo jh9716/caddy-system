@@ -489,8 +489,9 @@ function toSpareInfo(caddy: AutoAssignCaddy | null | undefined): SpareCaddyInfo 
 }
 
 /**
- * HOUSE 순환큐 기준 Spare1·2.
+ * 순환 sequence 기준 Spare1·2.
  * startIdx부터 wrap하며, 같은 부 실배치(usedInShift)는 건너뜀.
+ * 1·2부는 HOUSE 큐, 3부는 당일 3부 최종 배치 sequence에 사용.
  * 풀이 부족하면 남은 자리는 null.
  */
 export function pickCircularHouseSpares(
@@ -1319,7 +1320,8 @@ export function assignOneTwoPriority(input: {
  *      2부 스페어1 → 스페어2 → THIRD → 남은 미근무 HOUSE → (부족 시) 기근무 wrap
  *   B) HOUSE 소진(전원이 1·2부 중 ≥1회 실근무):
  *      THIRD 전체 → (1부 미근무 ∩ 2부 실근무) HOUSE, 단 1부 spare1·2 제외
- * - 3부 spare1·2 = 위 3부 HOUSE 흐름의 다음 적격 후보 (cursor/length 단정 금지)
+ * - 3부 spare1·2 = 당일 3부 최종 배치 sequence에서 마지막 배치자 다음 가용 2명
+ *   (별도 HOUSE queue에서 새로 뽑지 않음. Mode A/B 동일. 순환 시 해당 3부 sequence 유지)
  * - DRIVING은 일반 순번에 섞지 않음
  */
 export function assignRegularSequence(input: {
@@ -1382,9 +1384,9 @@ export function assignRegularSequence(input: {
     const shiftReservations = reservations.filter((r) => r.shift === shift);
     const usedInShift = new Set<number>();
     let houseAssigned = 0;
-    /** 3부 HOUSE 흐름 큐 + 사용 수 — spare1/2 계산용 */
-    let thirdHouseFlow: AutoAssignCaddy[] | null = null;
-    let thirdHouseUsed = 0;
+    /** 3부 실제 배치 sequence + 다음 인덱스 — spare1/2는 이 연속선상에서만 계산 */
+    let thirdSequence: AutoAssignCaddy[] | null = null;
+    let thirdNextIdx = 0;
 
     if (shift === "3부") {
       const houseIds = new Set(house.map((c) => c.id));
@@ -1426,16 +1428,8 @@ export function assignRegularSequence(input: {
       const seqOf = (caddy: AutoAssignCaddy) =>
         houseIndexById.get(caddy.id) ?? 0;
 
-      thirdHouseFlow = [];
-
       if (!houseExhaustedIn12) {
         // Mode A: 미근무 HOUSE 원번 보존 → (부족 시) 기근무 wrap
-        for (const c of neverWorked) thirdHouseFlow.push(c);
-        for (const c of house) {
-          if (!worked12.has(c.id)) continue;
-          thirdHouseFlow.push(c);
-        }
-
         if (neverWorked[0]) pushCaddy(neverWorked[0], seqOf(neverWorked[0]));
         if (neverWorked[1]) pushCaddy(neverWorked[1], seqOf(neverWorked[1]));
         for (let i = 0; i < third.length; i++) {
@@ -1450,12 +1444,6 @@ export function assignRegularSequence(input: {
         }
       } else {
         // Mode B: THIRD 전체 → 2부 실근무·1부 미근무 HOUSE (spare1·2 제외)
-        for (const c of modeBHouse) thirdHouseFlow.push(c);
-        for (const c of house) {
-          if (modeBHouse.some((m) => m.id === c.id)) continue;
-          thirdHouseFlow.push(c);
-        }
-
         for (let i = 0; i < third.length; i++) {
           pushCaddy(third[i], 10_000 + i);
         }
@@ -1499,7 +1487,6 @@ export function assignRegularSequence(input: {
         usedInShift.add(picked.caddy.id);
         if (normalizeAssignCaddyType(picked.caddy.caddyType) === "HOUSE") {
           houseAssigned += 1;
-          thirdHouseUsed += 1;
         }
         assignments.push({
           date: input.date,
@@ -1513,6 +1500,8 @@ export function assignRegularSequence(input: {
         });
         byShift[shift].assigned += 1;
       }
+      thirdSequence = order.map((o) => o.caddy);
+      thirdNextIdx = oi;
     } else {
       // 1·2부: HOUSE만, houseStart부터 wrap
       let cursor =
@@ -1565,16 +1554,21 @@ export function assignRegularSequence(input: {
       }
     }
 
-    if (shift === "3부" && thirdHouseFlow) {
-      const spare1 = thirdHouseFlow[thirdHouseUsed] ?? null;
-      const spare2 = thirdHouseFlow[thirdHouseUsed + 1] ?? null;
+    if (shift === "3부" && thirdSequence) {
+      const spares = pickCircularHouseSpares(
+        thirdSequence,
+        thirdNextIdx,
+        usedInShift
+      );
       sparesByShift.push({
         shift,
-        spare1: toSpareInfo(spare1),
-        spare2: toSpareInfo(spare2),
+        spare1: spares.spare1,
+        spare2: spares.spare2,
       });
-      if (spare1) {
-        houseStart = houseIndexById.get(spare1.id) ?? houseStart + houseAssigned;
+      if (spares.spare1) {
+        houseStart =
+          houseIndexById.get(spares.spare1.caddyId) ??
+          houseStart + houseAssigned;
       } else {
         houseStart = houseStart + houseAssigned;
       }

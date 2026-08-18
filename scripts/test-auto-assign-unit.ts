@@ -3569,5 +3569,115 @@ section("9~12조는 HOUSE 풀 제외, THIRD 풀 / 1부 첫 캐디 후보 제외"
   );
 }
 
+section("3부 Spare = 실제 배치 sequence 연속 (잔여 THIRD, 별도 HOUSE queue 금지)");
+{
+  const date = "2026-08-18";
+  const house: AutoAssignCaddy[] = [
+    { id: 1, name: "A", team: "1조", teamOrder: 1, caddyType: "HOUSE" },
+    { id: 2, name: "B", team: "1조", teamOrder: 2, caddyType: "HOUSE" },
+    { id: 3, name: "C", team: "1조", teamOrder: 3, caddyType: "HOUSE" },
+    { id: 4, name: "D", team: "1조", teamOrder: 4, caddyType: "HOUSE" },
+    { id: 5, name: "X", team: "1조", teamOrder: 5, caddyType: "HOUSE" },
+    { id: 6, name: "Y", team: "1조", teamOrder: 6, caddyType: "HOUSE" },
+    { id: 7, name: "김영한", team: "2조", teamOrder: 3, caddyType: "HOUSE" },
+    { id: 8, name: "최유진", team: "2조", teamOrder: 5, caddyType: "HOUSE" },
+  ];
+  const third: AutoAssignCaddy[] = [
+    { id: 101, name: "김가원", team: "9조", teamOrder: 1, caddyType: "THIRD" },
+    { id: 201, name: "T12-1", team: "12조", teamOrder: 1, caddyType: "THIRD" },
+    { id: 202, name: "T12-2", team: "12조", teamOrder: 2, caddyType: "THIRD" },
+    { id: 203, name: "T12-3", team: "12조", teamOrder: 3, caddyType: "THIRD" },
+    { id: 204, name: "T12-4", team: "12조", teamOrder: 4, caddyType: "THIRD" },
+    { id: 205, name: "T12-5", team: "12조", teamOrder: 5, caddyType: "THIRD" },
+    { id: 206, name: "T12-6", team: "12조", teamOrder: 6, caddyType: "THIRD" },
+    { id: 207, name: "이강우", team: "12조", teamOrder: 7, caddyType: "THIRD" },
+    { id: 208, name: "허도겸", team: "12조", teamOrder: 8, caddyType: "THIRD" },
+    { id: 209, name: "심은아", team: "12조", teamOrder: 9, caddyType: "THIRD" },
+  ];
+  // Mode B: HOUSE 8명 전원 1·2부 근무. 1부 Spare=X,Y → 2부 선두 X,Y,김영한,최유진
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: [...house, ...third],
+    reservations: makeReservations(date, [
+      { shift: "1부", count: 4 },
+      { shift: "2부", count: 4 },
+      { shift: "3부", count: 8 },
+    ]),
+  });
+  const s3 = result.regularAssignments.filter((a) => a.shift === "3부");
+  const spare3 = result.sparesByShift.find((s) => s.shift === "3부")!;
+  assert(s3[0].caddy.name === "김가원", "3부 THIRD 시작 = 김가원 / 9조 / 1번");
+  assert(s3[s3.length - 1].caddy.name === "이강우", "3부 마지막 = 이강우 / 12조 / 7번");
+  assert(
+    s3[s3.length - 1].caddy.team === "12조" &&
+      s3[s3.length - 1].caddy.teamOrder === 7,
+    "마지막 배치 12조 7번"
+  );
+  assert(spare3.spare1?.name === "허도겸", "Spare1 = 허도겸");
+  assert(spare3.spare1?.team === "12조" && spare3.spare1?.teamOrder === 8, "Spare1 = 12조 8번");
+  assert(spare3.spare2?.name === "심은아", "Spare2 = 심은아");
+  assert(spare3.spare2?.team === "12조" && spare3.spare2?.teamOrder === 9, "Spare2 = 12조 9번");
+  assert(
+    spare3.spare1?.name !== "김영한" && spare3.spare2?.name !== "김영한",
+    "김영한 / 2조 / 3번은 3부 스페어가 아님"
+  );
+  assert(
+    spare3.spare1?.name !== "최유진" && spare3.spare2?.name !== "최유진",
+    "최유진 / 2조 / 5번은 3부 스페어가 아님"
+  );
+
+  // Mode A: 잔여 THIRD가 있으면 다음 THIRD가 spare (남은 미근무 HOUSE queue 아님)
+  const houseA: AutoAssignCaddy[] = Array.from({ length: 10 }, (_, i) => ({
+    id: i + 1,
+    name: `HA${i + 1}`,
+    team: "1조",
+    teamOrder: i + 1,
+    caddyType: "HOUSE" as const,
+  }));
+  const thirdA: AutoAssignCaddy[] = [
+    { id: 501, name: "TA1", team: "9조", teamOrder: 1, caddyType: "THIRD" },
+    { id: 502, name: "TA2", team: "9조", teamOrder: 2, caddyType: "THIRD" },
+    { id: 503, name: "TA3", team: "9조", teamOrder: 3, caddyType: "THIRD" },
+    { id: 504, name: "TA4", team: "9조", teamOrder: 4, caddyType: "THIRD" },
+  ];
+  const modeA = computeAutoAssignmentsV1({
+    date: "2026-08-19",
+    available: [...houseA, ...thirdA],
+    reservations: makeReservations("2026-08-19", [
+      { shift: "1부", count: 4 },
+      { shift: "2부", count: 4 },
+      { shift: "3부", count: 4 },
+    ]),
+  });
+  const modeA3 = modeA.regularAssignments.filter((a) => a.shift === "3부");
+  const modeASpare = modeA.sparesByShift.find((s) => s.shift === "3부")!;
+  assert(
+    modeA3.map((a) => a.caddy.name).join(",") === "HA9,HA10,TA1,TA2",
+    "Mode A 3부 = 2부Spare + THIRD 일부"
+  );
+  assert(
+    modeASpare.spare1?.name === "TA3" && modeASpare.spare2?.name === "TA4",
+    "Mode A 잔여 THIRD가 Spare (HA1/HA2 HOUSE queue 아님)"
+  );
+
+  // 순환: 잔여 THIRD 1명 → Spare2는 3부 sequence 다음 (Mode B HOUSE 투)
+  const wrap = computeAutoAssignmentsV1({
+    date,
+    available: [...house, ...third],
+    reservations: makeReservations(date, [
+      { shift: "1부", count: 4 },
+      { shift: "2부", count: 4 },
+      { shift: "3부", count: 9 },
+    ]),
+  });
+  const wrap3 = wrap.regularAssignments.filter((a) => a.shift === "3부");
+  const wrapSpare = wrap.sparesByShift.find((s) => s.shift === "3부")!;
+  assert(wrap3[wrap3.length - 1].caddy.name === "허도겸", "9팀 마지막 = 허도겸");
+  assert(
+    wrapSpare.spare1?.name === "심은아" && wrapSpare.spare2?.name === "김영한",
+    "순환: Spare1=잔여 THIRD 심은아, Spare2=Mode B 다음 김영한"
+  );
+}
+
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

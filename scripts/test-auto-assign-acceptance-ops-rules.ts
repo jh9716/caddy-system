@@ -291,12 +291,14 @@ section("acceptance / business-rule CASE A — Mode A (HOUSE 첫 바퀴 미완�
   const s3 = namesOfShift(result, "3부");
   const [sp1a, sp1b] = spareNames(result.sparesByShift, "1부");
   const [sp2a, sp2b] = spareNames(result.sparesByShift, "2부");
+  const [sp3a, sp3b] = spareNames(result.sparesByShift, "3부");
 
   printSeq("1부 실배치", s1);
   printSpare("1부", sp1a, sp1b);
   printSeq("2부 실배치", s2);
   printSpare("2부", sp2a, sp2b);
   printSeq("3부 실배치", s3);
+  printSpare("3부", sp3a, sp3b);
 
   const expect1 = rangeNames("H", 11, 30, 2);
   const expect2 = rangeNames("H", 31, 50, 2);
@@ -361,6 +363,18 @@ section("acceptance / business-rule CASE A — Mode A (HOUSE 첫 바퀴 미완�
     CASE
   );
 
+  // 3부 Spare = 실제 배치 sequence 연속 (마지막 H10 다음 wrap = 기근무 H11,H12)
+  assert(
+    s3[s3.length - 1] === "H10",
+    "Mode A: 3부 마지막 = H10",
+    CASE
+  );
+  assert(
+    sp3a === "H11" && sp3b === "H12",
+    `3부 Spare = 마지막 배치 다음 H11,H12 got ${sp3a},${sp3b}`,
+    CASE
+  );
+
   // 3부 중복/누락
   assert(new Set(s3).size === s3.length, "3부 중복 없음", CASE);
   assert(s3.length === 30, "3부 30팀 전부 배치", CASE);
@@ -405,6 +419,7 @@ section("acceptance / business-rule CASE B — Mode B (HOUSE 첫 바퀴 완료)"
   const s3 = namesOfShift(result, "3부");
   const [sp1a, sp1b] = spareNames(result.sparesByShift, "1부");
   const [sp2a, sp2b] = spareNames(result.sparesByShift, "2부");
+  const [sp3a, sp3b] = spareNames(result.sparesByShift, "3부");
 
   printSeq("1부 실배치", s1);
   printSpare("1부", sp1a, sp1b);
@@ -412,6 +427,7 @@ section("acceptance / business-rule CASE B — Mode B (HOUSE 첫 바퀴 완료)"
   printSpare("2부", sp2a, sp2b);
   printSeq("3부 실배치 (전체)", s3);
   printSeq("3부 HOUSE 2·3부 투 (뒤 20)", s3.slice(60));
+  printSpare("3부", sp3a, sp3b);
 
   const expect1 = wrapRangeNames("H", 31, 80, 120, 3); // H031~H110
   const expect2Never = [
@@ -466,6 +482,28 @@ section("acceptance / business-rule CASE B — Mode B (HOUSE 첫 바퀴 완료)"
   );
   expectSeq(s3, expect3, "3부 전체 Mode B", CASE);
 
+  // HOUSE 투근무 대상 = 2부에서 그날 첫 근무를 시작한 캐디 순번의 연속
+  // (1부 Spare H111,H112 제외)
+  const twoWorkSource = expect2Never.filter(
+    (n) => n !== "H111" && n !== "H112"
+  );
+  expectSeq(
+    twoWorkSource.slice(0, 20),
+    expect3HouseTour,
+    "HOUSE 투 = 2부 첫근무 연속(1부 Spare 제외) 앞 20",
+    CASE
+  );
+  assert(
+    s3[s3.length - 1] === "H012",
+    "Mode B: 3부 마지막 = H012",
+    CASE
+  );
+  assert(
+    sp3a === "H013" && sp3b === "H014",
+    `3부 Spare = 마지막 배치 다음 H013,H014 got ${sp3a},${sp3b}`,
+    CASE
+  );
+
   // 1부 Spare H111,H112는 2부 근무 가능하지만 2·3부 투에서 제외
   assert(s2.includes("H111") && s2.includes("H112"), "1부 Spare는 2부 근무 가능", CASE);
   assert(
@@ -510,11 +548,52 @@ section("acceptance / business-rule CASE B — Mode B (HOUSE 첫 바퀴 완료)"
   );
 
   finalizeCase(CASE);
+
+  // CASE B leftover THIRD: 3부 팀이 3부반보다 적으면 Spare는 다음 THIRD
+  // (별도 HOUSE queue / 김영한식 2부 첫근무 선두가 아님)
+  {
+    const CASE_SP = "CASE_B_THIRD_SPARE";
+    markCaseStart(CASE_SP);
+    const leftover = computeAutoAssignmentsV1({
+      date,
+      available,
+      special: [],
+      reservations: [
+        ...makeShiftReservations(date, "1부", 80, 5),
+        ...makeShiftReservations(date, "2부", 80, 10),
+        ...makeShiftReservations(date, "3부", 58, 14),
+      ],
+      houseStartCaddyId: start.id,
+    });
+    const left3 = namesOfShift(leftover, "3부");
+    const [lsp1, lsp2] = spareNames(leftover.sparesByShift, "3부");
+    printSeq("3부 잔여THIRD 실배치 끝", left3.slice(-3));
+    printSpare("3부 잔여THIRD", lsp1, lsp2);
+    assert(left3.length === 58, "3부 58팀", CASE_SP);
+    assert(left3[0] === "T001" && left3[57] === "T058", "3부 전부 THIRD T001~T058", CASE_SP);
+    assert(
+      left3.every((n) => n.startsWith("T")),
+      "3부반이 팀을 채우면 HOUSE 투 미투입",
+      CASE_SP
+    );
+    assert(
+      lsp1 === "T059" && lsp2 === "T060",
+      `잔여 THIRD Spare = T059,T060 got ${lsp1},${lsp2}`,
+      CASE_SP
+    );
+    assert(
+      lsp1 !== "H113" && lsp2 !== "H114" && lsp1 !== "H111" && lsp2 !== "H112",
+      "잔여 THIRD Spare ≠ HOUSE 투/1부 Spare queue",
+      CASE_SP
+    );
+    assertSpareNotInShiftAssignees(leftover, "3부", CASE_SP);
+    finalizeCase(CASE_SP);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
 console.log("\n======== ACCEPTANCE SUMMARY ========");
-for (const key of ["CASE_A", "CASE_B"]) {
+for (const key of ["CASE_A", "CASE_B", "CASE_B_THIRD_SPARE"]) {
   const r = caseResults[key];
   console.log(`${key}: ${r?.pass ? "PASS" : "FAIL"}`);
   if (r && !r.pass) {
