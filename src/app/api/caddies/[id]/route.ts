@@ -8,6 +8,7 @@ import {
   mergeExtraFlagsForPersist,
   normalizeEmploymentStatus,
   normalizeTeamOrder,
+  resolveCaddyTypeFromTeam,
   resolveThirdBandSubgroup,
 } from "@/lib/caddyManage";
 import {
@@ -186,10 +187,11 @@ export async function PATCH(
     if (data.employeeCode !== undefined) {
       updateData.employeeCode = data.employeeCode;
     }
-    if (data.caddyType !== undefined) updateData.caddyType = data.caddyType;
     if (data.missingFromImport !== undefined) {
       updateData.missingFromImport = data.missingFromImport;
     }
+    // 조 기준 canonical invariant: 1~8 HOUSE, 9~12 THIRD (클라이언트 caddyType 무시)
+    updateData.caddyType = resolveCaddyTypeFromTeam(nextTeam);
 
     // 3부반 세부구분 invariant: 1~8조 → 항상 null, 9~12→1~8 이동 시 정리
     const subgroupRequested = Object.prototype.hasOwnProperty.call(

@@ -19,6 +19,7 @@ import {
 import { draftToConfirmBody } from "@/lib/assignmentConfirm";
 import { buildShiftBoard } from "@/lib/assignmentBoardView";
 import {
+  isHouseStartCandidate,
   resolveCourseCode,
   type AutoAssignCaddy,
   type AutoAssignResultV1,
@@ -95,14 +96,11 @@ export default function ManageAssignmentsOpsPage() {
     [courseOpen]
   );
 
-  /** 오늘 1부 첫 캐디 후보: 당일 일반 가용 HOUSE만 (special/제외 제외) */
+  /** 오늘 1부 첫 캐디 후보: 당일 일반 가용 1~8조 HOUSE만 (9~12조·special/제외 제외) */
   const houseStartCandidates = useMemo(() => {
     const rows = availability?.available?.all || [];
     return rows
-      .filter((r) => {
-        const t = String(r.caddyType || "HOUSE").toUpperCase();
-        return t === "HOUSE" || t === "";
-      })
+      .filter((r) => isHouseStartCandidate(r))
       .slice()
       .sort(
         (a, b) =>

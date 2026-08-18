@@ -31,6 +31,7 @@ import {
 import { getConfiguredSlotCapacity } from "../src/lib/caddySlot";
 import {
   parseImportThirdBandSubgroup,
+  resolveCaddyTypeFromTeam,
   resolveThirdBandSubgroup,
   thirdBandSubgroupCsvLabel,
   ThirdBandSubgroupError,
@@ -1300,6 +1301,7 @@ type RosterCreateData = {
   employmentStatus: EmploymentStatusValue;
   phoneNormalized?: string;
   thirdBandSubgroup: ThirdBandSubgroup | null;
+  caddyType: "HOUSE" | "THIRD";
 };
 
 type PrismaLike = {
@@ -1336,6 +1338,7 @@ type RosterBatchUpdate = {
   employmentStatus?: EmploymentStatusValue;
   phoneNormalized?: string;
   thirdBandSubgroup?: ThirdBandSubgroup | null;
+  caddyType?: "HOUSE" | "THIRD";
 };
 
 /**
@@ -1362,6 +1365,7 @@ export function buildRosterBatchUpdateSql(
       u,
       "thirdBandSubgroup"
     );
+    const setCaddyType = u.caddyType !== undefined;
 
     return Prisma.sql`(
       ${u.id}::integer,
@@ -1374,7 +1378,9 @@ export function buildRosterBatchUpdateSql(
       ${setPhone}::boolean,
       ${u.phoneNormalized ?? null}::text,
       ${setThirdBandSubgroup}::boolean,
-      ${u.thirdBandSubgroup ?? null}::text
+      ${u.thirdBandSubgroup ?? null}::text,
+      ${setCaddyType}::boolean,
+      ${u.caddyType ?? null}::text
     )`;
   });
 
@@ -1400,6 +1406,10 @@ export function buildRosterBatchUpdateSql(
           THEN v."thirdBandSubgroup"::"ThirdBandSubgroup"
         ELSE c."thirdBandSubgroup"
       END,
+      "caddyType" = CASE
+        WHEN v."setCaddyType" THEN v."caddyType"::"CaddyType"
+        ELSE c."caddyType"
+      END,
       "updatedAt" = CURRENT_TIMESTAMP
     FROM (
       VALUES ${Prisma.join(values, ",")}
@@ -1414,7 +1424,9 @@ export function buildRosterBatchUpdateSql(
       "setPhone",
       "phoneNormalized",
       "setThirdBandSubgroup",
-      "thirdBandSubgroup"
+      "thirdBandSubgroup",
+      "setCaddyType",
+      "caddyType"
     )
     WHERE c."id" = v."id"
   `;
@@ -1645,7 +1657,10 @@ export async function applyRosterImportPayloadV2(
       throw new RosterImportApplyError(`존재하지 않는 id: ${u.id}`);
     }
     const update: RosterBatchUpdate = { id: u.id };
-    if (u.team != null) update.team = u.team;
+    if (u.team != null) {
+      update.team = u.team;
+      update.caddyType = resolveCaddyTypeFromTeam(u.team);
+    }
     if (u.teamOrder != null) update.teamOrder = u.teamOrder;
     if (u.employmentStatus != null) {
       update.employmentStatus = u.employmentStatus;
@@ -1699,6 +1714,7 @@ export async function applyRosterImportPayloadV2(
       teamOrder,
       employmentStatus: c.employmentStatus ?? "ACTIVE",
       thirdBandSubgroup: null,
+      caddyType: resolveCaddyTypeFromTeam(c.team),
     };
     if (c.phone) data.phoneNormalized = c.phone;
     try {

@@ -24,6 +24,8 @@ import {
   HouseStartCaddyError,
   assignRegularSequence,
   pickCircularHouseSpares,
+  splitCaddyPools,
+  isHouseStartCandidate,
   type AutoAssignCaddy,
   type AutoAssignReservation,
 } from "../src/lib/autoAssignEngine";
@@ -49,7 +51,7 @@ function makeCaddies(n: number, startId = 1): AutoAssignCaddy[] {
   const out: AutoAssignCaddy[] = [];
   for (let i = 0; i < n; i++) {
     const id = startId + i;
-    const teamNum = (i % 12) + 1;
+    const teamNum = (i % 8) + 1;
     out.push({
       id,
       name: `캐디${id}`,
@@ -3504,6 +3506,66 @@ section("Spare1/2 순환큐 wrap (houseStart offset)");
   assert(
     c1sp.spare1 == null && c1sp.spare2 == null,
     "HOUSE 전원 1부 실배치 → Spare null 허용"
+  );
+}
+
+section("9~12조는 HOUSE 풀 제외, THIRD 풀 / 1부 첫 캐디 후보 제외");
+{
+  const house18: AutoAssignCaddy = {
+    id: 1,
+    name: "H8",
+    team: "8조",
+    teamOrder: 1,
+    caddyType: "HOUSE",
+  };
+  const taggedHouse10: AutoAssignCaddy = {
+    id: 10,
+    name: "H10",
+    team: "10조",
+    teamOrder: 1,
+    caddyType: "HOUSE",
+  };
+  const third9: AutoAssignCaddy = {
+    id: 9,
+    name: "T9",
+    team: "9조",
+    teamOrder: 1,
+    caddyType: "THIRD",
+  };
+  const pools = splitCaddyPools([house18, taggedHouse10, third9]);
+  assert(
+    pools.house.map((c) => c.id).join(",") === "1",
+    "HOUSE pool is 1~8 only"
+  );
+  assert(
+    pools.third.map((c) => c.id).sort((a, b) => a - b).join(",") === "9,10",
+    "9~12 go to THIRD even if tagged HOUSE"
+  );
+  assert(isHouseStartCandidate(house18) === true, "8조 HOUSE is start candidate");
+  assert(
+    isHouseStartCandidate(taggedHouse10) === false,
+    "10조 excluded from 1부 첫 캐디 후보"
+  );
+  assert(
+    isHouseStartCandidate(third9) === false,
+    "9조 excluded from 1부 첫 캐디 후보"
+  );
+
+  const date = "2026-08-17";
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: [house18, taggedHouse10, third9],
+    reservations: makeReservations(date, [
+      { shift: "1부", count: 1 },
+      { shift: "3부", count: 2 },
+    ]),
+  });
+  const s1 = result.regularAssignments.filter((a) => a.shift === "1부");
+  const s3 = result.regularAssignments.filter((a) => a.shift === "3부");
+  assert(s1.length === 1 && s1[0].caddy.id === 1, "1부 uses 8조 HOUSE only");
+  assert(
+    s3.map((a) => a.caddy.id).join(",") === "9,10",
+    "3부 uses 9~12 as THIRD pool"
   );
 }
 
