@@ -4,11 +4,15 @@
  */
 
 import {
+  boardAssignmentMarks,
   buildShiftBoard,
   countBoardAssignments,
   filterAssignmentsByShift,
+  isChageunAssignment,
+  isTwoWorkAssignment,
 } from "../src/lib/assignmentBoardView";
 import type { AutoAssignmentRow } from "../src/lib/autoAssignEngine";
+import { REASON } from "../src/lib/autoAssignEngine";
 import { COURSE_CODES, type ShiftPart } from "../src/lib/reservationParser";
 
 let passed = 0;
@@ -32,14 +36,15 @@ function row(
   shift: ShiftPart,
   teeTime: string,
   course: string,
-  id: string
+  id: string,
+  extra?: Partial<AutoAssignmentRow> & { caddyId?: number; caddyName?: string }
 ): AutoAssignmentRow {
-  return {
+  const base = {
     date: "2026-08-20",
     shift,
     sequenceIndex: 0,
-    reason: "TEST",
-    kind: "regular",
+    reason: extra?.reason ?? "TEST",
+    kind: extra?.kind ?? "regular",
     pairId: null,
     reservation: {
       id,
@@ -51,12 +56,14 @@ function row(
       rawRowIndex: 1,
     },
     caddy: {
-      id: Number(id.replace(/\D/g, "") || 1),
-      name: `C${id}`,
+      id: extra?.caddyId ?? Number(id.replace(/\D/g, "") || 1),
+      name: extra?.caddyName ?? `C${id}`,
       team: "1조",
       teamOrder: 1,
     },
-  };
+  } as AutoAssignmentRow;
+  if (extra?.note) base.note = extra.note;
+  return base;
 }
 
 section("부 필터: reservation.shift 기준 (시간 무시)");
@@ -191,6 +198,61 @@ section("row.shift와 reservation.shift 불일치 시 reservation 우선");
   assert(countBoardAssignments(board1) === 0, "1부 board empty");
   const board2 = buildShiftBoard([mismatched], COURSE_CODES, "2부");
   assert(countBoardAssignments(board2) === 1, "2부 board has it");
+}
+
+section("투근무: 같은 날짜 앞 부 근무 후 재배치만 표시");
+{
+  const first = row("1부", "06:00", "VERTHILL", "W1", {
+    caddyId: 10,
+    caddyName: "투캐디",
+  });
+  const second = row("2부", "11:30", "SKY", "W2", {
+    caddyId: 10,
+    caddyName: "투캐디",
+  });
+  const other = row("2부", "11:37", "OCEAN", "W3", {
+    caddyId: 11,
+    caddyName: "일반",
+  });
+  const all = [first, second, other];
+  assert(isTwoWorkAssignment(first, all) === false, "1부 첫 근무는 투 아님");
+  assert(isTwoWorkAssignment(second, all) === true, "2부 재배치는 투");
+  assert(isTwoWorkAssignment(other, all) === false, "다른 캐디 2부는 투 아님");
+  assert(
+    boardAssignmentMarks(second, all).twoWork === true &&
+      boardAssignmentMarks(other, all).twoWork === false,
+    "marks.twoWork 구분"
+  );
+}
+
+section("찾근: fixed+찾근 reason만, 일반/54홀은 유지");
+{
+  const call = row("1부", "06:07", "VERTHILL", "C1", {
+    caddyId: 20,
+    kind: "fixed",
+    reason: REASON.SPECIAL_CALL,
+  });
+  const marshal = row("2부", "11:30", "SKY", "C2", {
+    caddyId: 21,
+    kind: "fixed",
+    reason: REASON.MARSHAL_CALL,
+    note: "마샬찾근",
+  });
+  const fiftyFour = row("1부", "06:14", "OCEAN", "C3", {
+    caddyId: 22,
+    kind: "fiftyFourHole",
+    reason: REASON.FIFTY_FOUR_HOLE_PRIORITY,
+  });
+  const regular = row("3부", "15:00", "LAKE", "C4", { caddyId: 23 });
+  assert(isChageunAssignment(call) === true, "SPECIAL_CALL = 찾근");
+  assert(isChageunAssignment(marshal) === true, "마샬찾근 = 찾근");
+  assert(isChageunAssignment(fiftyFour) === false, "54홀은 찾근 아님");
+  assert(isChageunAssignment(regular) === false, "일반 원번은 찾근 아님");
+  assert(
+    boardAssignmentMarks(call, [call]).chageun === true &&
+      boardAssignmentMarks(regular, [regular]).chageun === false,
+    "일반 근무 표시 유지"
+  );
 }
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);
