@@ -6,12 +6,33 @@ import {
   type AutoAssignCaddy,
   type AutoAssignReservation,
   type FixedAssignmentInput,
+  type SpecialStartAnchor,
 } from "@/lib/autoAssignEngine";
 import type { AvailabilityRow } from "@/lib/availabilityEngine";
 import { loadAvailabilityForDate } from "@/lib/availabilityService";
 import { parseReservationWorkbook } from "@/lib/reservationImportXlsx";
 import { OffSheetError } from "@/lib/offSheetFetch";
 import { DutyExcelError } from "@/lib/dutyMarshalLeaderParser";
+import {
+  applyBundlesToAssignPools,
+  unavailableReasonsFromRows,
+  type EngineSpecialBundles,
+} from "@/lib/dailySpecialDuty";
+import { loadEngineSpecialBundlesForDate } from "@/lib/dailySpecialDutyService";
+import { isThirdWeeklyTeam } from "@/lib/thirdWeeklyRotation";
+import { loadEffectiveThirdStartTeam } from "@/lib/thirdWeeklyStartService";
+
+function parseThirdStartTeam(raw: unknown): string | null {
+  const value = String(raw ?? "").trim();
+  return isThirdWeeklyTeam(value) ? value : null;
+}
+
+async function resolvePreviewThirdStartTeam(
+  date: string,
+  explicit: unknown
+): Promise<string> {
+  return parseThirdStartTeam(explicit) ?? loadEffectiveThirdStartTeam(date);
+}
 
 /** special 태그/라벨에 54홀 힌트가 있으면 54홀 후보로 추출 */
 function extractFiftyFourHoleCandidates(
@@ -56,6 +77,14 @@ function extractOneTwoCandidates(
       return /1\s*[·・.]?\s*2\s*부|1·2|1\.2부|ONE_TWO|12부/.test(s);
     });
   });
+}
+
+function parseSpecialAnchor(raw: unknown): SpecialStartAnchor | null {
+  if (!raw || typeof raw !== "object") return null;
+  const course = String((raw as { course?: unknown }).course || "").trim();
+  const teeTime = String((raw as { teeTime?: unknown }).teeTime || "").trim();
+  if (!course || !teeTime) return null;
+  return { course, teeTime };
 }
 
 export const dynamic = "force-dynamic";
@@ -107,9 +136,27 @@ export async function POST(req: NextRequest) {
       const reservations: AutoAssignReservation[] = parsed.reservations.filter(
         (r) => !r.date || r.date === date
       );
-      const fiftyFourHole = extractFiftyFourHoleCandidates(availability.special);
-      const oneThreeCandidates = extractOneThreeCandidates(availability.special);
-      const oneTwoCandidates = extractOneTwoCandidates(availability.special);
+      const unavailable = unavailableReasonsFromRows(availability.excluded);
+      const { bundles, anchors } = await loadEngineSpecialBundlesForDate(
+        date,
+        unavailable
+      );
+      const pools = applyBundlesToAssignPools({
+        available: availability.available.all,
+        special: availability.special,
+        extraSpecial: bundles.extraSpecial,
+        skipFromAvailableIds: bundles.skipFromAvailableIds,
+      });
+      const fiftyFourHole =
+        bundles.fiftyFourHole ??
+        extractFiftyFourHoleCandidates(availability.special);
+      const oneThreeCandidates =
+        bundles.oneThreeCandidates ??
+        extractOneThreeCandidates(availability.special);
+      const oneTwoCandidates =
+        bundles.oneTwoCandidates ??
+        extractOneTwoCandidates(availability.special);
+      const oneMakCandidates = bundles.oneMakCandidates ?? [];
 
       let openCourses: string[] | null = null;
       const openRaw = form.get("openCourses");
@@ -138,16 +185,25 @@ export async function POST(req: NextRequest) {
         houseStartCaddyId = n;
       }
 
+      const thirdStartTeam = await resolvePreviewThirdStartTeam(
+        date,
+        form.get("thirdStartTeam")
+      );
+
       const result = computeAutoAssignmentsV1({
         date,
         reservations,
-        available: availability.available.all,
-        special: availability.special,
+        available: pools.available,
+        special: pools.special,
         fiftyFourHole,
         oneThreeCandidates,
         oneTwoCandidates,
+        oneMakCandidates,
+        oneThreeAnchor: anchors.ONE_THREE,
+        oneMakAnchor: anchors.ONE_MAK,
         openCourses,
         houseStartCaddyId,
+        thirdStartTeam,
       });
 
       return NextResponse.json({
@@ -160,6 +216,7 @@ export async function POST(req: NextRequest) {
         },
         availabilityCounts: availability.counts,
         dailySummary: availability.dailySummary,
+        specialDutySkipped: bundles.skippedPlacements,
         ...result,
       });
     }
@@ -184,6 +241,21 @@ export async function POST(req: NextRequest) {
     let available = (body.available || []) as AutoAssignCaddy[];
     let special = (body.special || []) as AutoAssignCaddy[];
     let specialRows: AvailabilityRow[] = [];
+    let specialDutySkipped: EngineSpecialBundles["skippedPlacements"] = [];
+    let explicit54 = Array.isArray(body.fiftyFourHole)
+      ? body.fiftyFourHole
+      : null;
+    let explicit13 = Array.isArray(body.oneThreeCandidates)
+      ? body.oneThreeCandidates
+      : null;
+    let explicit12 = Array.isArray(body.oneTwoCandidates)
+      ? body.oneTwoCandidates
+      : null;
+    let explicitMak = Array.isArray(body.oneMakCandidates)
+      ? body.oneMakCandidates
+      : null;
+    let oneThreeAnchor = parseSpecialAnchor(body.oneThreeAnchor);
+    let oneMakAnchor = parseSpecialAnchor(body.oneMakAnchor);
 
     // available 생략 시 DB에서 로드 (읽기 전용)
     if (!Array.isArray(body.available)) {
@@ -193,20 +265,49 @@ export async function POST(req: NextRequest) {
         special = availability.special;
         specialRows = availability.special;
       }
+      const unavailable = unavailableReasonsFromRows(availability.excluded);
+      const { bundles, anchors } = await loadEngineSpecialBundlesForDate(
+        date,
+        unavailable
+      );
+      specialDutySkipped = bundles.skippedPlacements;
+      const pools = applyBundlesToAssignPools({
+        available,
+        special,
+        extraSpecial: bundles.extraSpecial,
+        skipFromAvailableIds: bundles.skipFromAvailableIds,
+      });
+      available = pools.available;
+      special = pools.special as AutoAssignCaddy[];
+      if (explicit54 == null && bundles.fiftyFourHole !== null) {
+        explicit54 = bundles.fiftyFourHole;
+      }
+      if (explicit13 == null && bundles.oneThreeCandidates !== null) {
+        explicit13 = bundles.oneThreeCandidates;
+      }
+      if (explicit12 == null && bundles.oneTwoCandidates !== null) {
+        explicit12 = bundles.oneTwoCandidates;
+      }
+      if (explicitMak == null && bundles.oneMakCandidates !== null) {
+        explicitMak = bundles.oneMakCandidates;
+      }
+      if (oneThreeAnchor == null) oneThreeAnchor = anchors.ONE_THREE;
+      if (oneMakAnchor == null) oneMakAnchor = anchors.ONE_MAK;
     }
 
     const fiftyFourHole = extractFiftyFourHoleCandidates(
       specialRows,
-      Array.isArray(body.fiftyFourHole) ? body.fiftyFourHole : null
+      explicit54
     );
     const oneThreeCandidates = extractOneThreeCandidates(
       specialRows,
-      Array.isArray(body.oneThreeCandidates) ? body.oneThreeCandidates : null
+      explicit13
     );
     const oneTwoCandidates = extractOneTwoCandidates(
       specialRows,
-      Array.isArray(body.oneTwoCandidates) ? body.oneTwoCandidates : null
+      explicit12
     );
+    const oneMakCandidates = Array.isArray(explicitMak) ? explicitMak : [];
     const fixedAssignments = Array.isArray(body.fixedAssignments)
       ? (body.fixedAssignments as FixedAssignmentInput[])
       : [];
@@ -242,12 +343,20 @@ export async function POST(req: NextRequest) {
       fiftyFourHole,
       oneThreeCandidates,
       oneTwoCandidates,
+      oneMakCandidates,
+      oneThreeAnchor,
+      oneMakAnchor,
       openCourses,
       houseStartCaddyId,
+      thirdStartTeam: await resolvePreviewThirdStartTeam(
+        date,
+        body.thirdStartTeam
+      ),
     });
 
     return NextResponse.json({
       mode: Array.isArray(body.available) ? "json" : "json+db-availability",
+      specialDutySkipped,
       ...result,
     });
   } catch (e: unknown) {

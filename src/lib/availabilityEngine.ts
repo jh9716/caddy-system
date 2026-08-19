@@ -47,6 +47,7 @@ export type AvailabilityCaddyInput = {
   employmentStatus: EmploymentCode | string;
   caddyType?: CaddyTypeCode | string | null;
   extraFlags?: string[] | null;
+  thirdBandSubgroup?: string | null;
 };
 
 export type AvailabilityAssignmentInput = {
@@ -72,6 +73,7 @@ export type AvailabilityRow = {
   teamOrder: number;
   caddyType: CaddyTypeCode;
   extraFlags: ExtraFlagOption[];
+  thirdBandSubgroup?: string | null;
   bucket: AvailabilityBucket;
   excludedReasons: string[];
   specialTags: string[];
@@ -255,6 +257,7 @@ export function computeAvailability(input: {
       teamOrder: Number(c.teamOrder) || 0,
       caddyType,
       extraFlags,
+      thirdBandSubgroup: c.thirdBandSubgroup ?? null,
       bucket: "excluded",
       excludedReasons: [],
       specialTags: specialMarks,

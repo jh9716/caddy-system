@@ -43,7 +43,7 @@ enum CaddyType {
   DRIVING
 }
 
-/// 3부반(9~12조) 주중/주말 세부구분 — 배치 엔진 미연동(저장 전용)
+/// 3부반(9~12조) 주중/주말 세부구분. WEEKEND는 토/일/공휴일 3부 우선에만 사용.
 enum ThirdBandSubgroup {
   WEEKDAY
   WEEKEND
@@ -89,6 +89,7 @@ model Caddy {
   schedules         Schedule[]
   shiftDuties       ShiftDuty[]
   offRequests       OffRequest[]
+  dailySpecialDuties DailySpecialDuty[]
   /// 승인 시 선택된 Caddy로 역참조 (이력). Caddy 물리 삭제 시 selectedCaddyId만 null
   linkRequestSelections CaddyLinkRequest[] @relation("CaddyLinkRequestSelectedCaddy")
   /// 로그인 User와 1:1 (미연결 시 null)
@@ -271,4 +272,58 @@ model OffRequest {
   @@index([caddyId, date])
   @@index([caddyId, status])
   @@index([decidedByUserId])
+}
+
+/// 날짜별 관리자 특수근무 입력 (캐디 본인 신청 아님)
+/// 같은 날짜·유형 안 sortOrder = 입력 순서(우선순위). team/teamOrder는 변경하지 않음.
+enum DailySpecialKind {
+  ONE_MAK
+  ONE_TWO
+  ONE_THREE
+  FIFTY_FOUR
+  CHAGEUN
+}
+
+model DailySpecialDuty {
+  id        Int              @id @default(autoincrement())
+  date      DateTime
+  kind      DailySpecialKind
+  caddyId   Int
+  caddy     Caddy            @relation(fields: [caddyId], references: [id])
+  /// 1부터. 같은 date+kind 안에서 작을수록 먼저 배치
+  sortOrder Int
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  @@unique([date, kind, caddyId])
+  @@index([date, kind, sortOrder])
+  @@index([caddyId])
+}
+
+/// 1·3부 / 1막 1부 시작 예약 (코스+티타임). 54홀·1·2부는 사용하지 않음.
+model DailySpecialDutyAnchor {
+  id        Int              @id @default(autoincrement())
+  date      DateTime
+  kind      DailySpecialKind
+  course    String
+  teeTime   String
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  @@unique([date, kind])
+  @@index([date])
+}
+
+/// 해당 월~일 주에만 적용되는 3부반 시작조 수동 지정.
+/// 없으면 2026-08-17=12조 기준 자동 순환. 다음 주로 이월되지 않음.
+model ThirdWeeklyStartOverride {
+  id        Int      @id @default(autoincrement())
+  /// 그 주 월요일 00:00
+  weekStart DateTime
+  /// "9조" | "10조" | "11조" | "12조"
+  startTeam String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([weekStart])
 }
