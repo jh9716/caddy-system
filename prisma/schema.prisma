@@ -90,6 +90,8 @@ model Caddy {
   shiftDuties       ShiftDuty[]
   offRequests       OffRequest[]
   dailySpecialDuties DailySpecialDuty[]
+  dailyPlacements    DailyPlacement[]
+  dailyUnavailables  DailyCaddyUnavailable[]
   /// 승인 시 선택된 Caddy로 역참조 (이력). Caddy 물리 삭제 시 selectedCaddyId만 null
   linkRequestSelections CaddyLinkRequest[] @relation("CaddyLinkRequestSelectedCaddy")
   /// 로그인 User와 1:1 (미연결 시 null)
@@ -326,4 +328,100 @@ model ThirdWeeklyStartOverride {
   updatedAt DateTime @updatedAt
 
   @@unique([weekStart])
+}
+
+/// 당일 예약 영속 (자동배치 Excel + 당추). Production migrate는 별도 승인.
+enum DailyReservationStatus {
+  ACTIVE
+  CANCELLED
+  TEAM_NOSHOW
+}
+
+model DailyReservation {
+  id           Int                    @id @default(autoincrement())
+  date         DateTime
+  course       String
+  shift        String
+  teeTime      String
+  teamName     String?
+  hole         Int?
+  source       String?
+  status       DailyReservationStatus @default(ACTIVE)
+  identityKey  String
+  rawRowIndex  Int?
+  /// 리무진카트 요청팀. 캐디 속성이 아니라 예약팀 속성.
+  limousineCart Boolean               @default(false)
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
+  placements   DailyPlacement[]
+
+  @@unique([date, identityKey])
+  @@index([date, status])
+  @@index([date, course, teeTime])
+}
+
+model DailyPlacement {
+  id             Int              @id @default(autoincrement())
+  date           DateTime
+  reservationId  Int
+  reservation    DailyReservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  caddyId        Int
+  caddy          Caddy            @relation(fields: [caddyId], references: [id])
+  kind           String
+  reason         String?
+  sequenceIndex  Int              @default(0)
+  pairId         String?
+  /// true=특수 LOCK ON (해당 reservation 고정)
+  locked         Boolean          @default(false)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@unique([reservationId])
+  @@index([date, caddyId])
+  @@index([date, locked])
+}
+
+enum DailyCaddyUnavailableReason {
+  SICK
+  ATTENDANCE_NOSHOW
+}
+
+/// 해당 날짜만 임시 비가용. Caddy.employmentStatus는 변경하지 않음.
+model DailyCaddyUnavailable {
+  id        Int                          @id @default(autoincrement())
+  date      DateTime
+  caddyId   Int
+  caddy     Caddy                        @relation(fields: [caddyId], references: [id])
+  reason    DailyCaddyUnavailableReason
+  note      String?
+  createdAt DateTime                     @default(now())
+
+  @@unique([date, caddyId])
+  @@index([caddyId])
+}
+
+enum DailyAssignmentChangeType {
+  CANCEL_RESERVATION
+  TEAM_NOSHOW
+  CADDY_SICK
+  CADDY_ATTENDANCE_NOSHOW
+  ADD_RESERVATION
+  SWAP_CADDY
+  SET_LIMOUSINE
+  ASSIGN_DRIVING
+  CLEAR_DRIVING
+}
+
+/// 현장 배치 변경 이력. preview는 저장하지 않고 apply 시에만 row 생성.
+model DailyAssignmentChange {
+  id          Int                       @id @default(autoincrement())
+  date        DateTime
+  changeType  DailyAssignmentChangeType
+  /// CANCEL vs TEAM_NOSHOW 등 동일 reflow의 사유 구분
+  cause       String?
+  payload     Json?
+  appliedAt   DateTime                  @default(now())
+  createdAt   DateTime                  @default(now())
+
+  @@index([date, appliedAt])
 }

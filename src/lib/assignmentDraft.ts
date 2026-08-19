@@ -7,6 +7,8 @@
 import {
   compareAssignmentOrder,
   compareReservationOrder,
+  isPlacementLocked,
+  isWeekendBandRow,
   MIN_54HOLE_GAP_MINUTES,
   MIN_ONE_THREE_GAP_MINUTES,
   MIN_ONE_TWO_GAP_MINUTES,
@@ -59,6 +61,7 @@ const SPECIAL_KINDS: AssignmentKind[] = [
   "oneThree",
   "oneTwo",
   "oneMak",
+  "driving",
 ];
 
 export function isSpecialKind(kind: AssignmentKind): boolean {
@@ -113,6 +116,7 @@ function cloneRow(row: AutoAssignmentRow): AutoAssignmentRow {
     ...row,
     reservation: { ...row.reservation },
     caddy: { ...row.caddy },
+    locked: row.locked,
   };
 }
 
@@ -581,3 +585,129 @@ export function unassignReservation(
 export function reservationIdentity(r: AutoAssignReservation): string {
   return reservationKey(r);
 }
+
+export function setPlacementLock(
+  draft: AssignmentDraft,
+  resKey: string,
+  locked: boolean
+): DraftMutationResult {
+  const idx = findAssignmentIndex(draft, resKey);
+  if (idx < 0) {
+    return {
+      draft,
+      warnings: [
+        {
+          level: "error",
+          code: "RESERVATION_NOT_FOUND",
+          message: "LOCK 대상 예약을 찾을 수 없습니다.",
+          reservationKey: resKey,
+        },
+      ],
+      specialEditWarned: false,
+    };
+  }
+  const nextAssignments = draft.assignments.map((a, i) =>
+    i === idx ? { ...cloneRow(a), locked } : a
+  );
+  return {
+    draft: { ...draft, assignments: nextAssignments },
+    warnings: detectDraftWarnings({ ...draft, assignments: nextAssignments }),
+    specialEditWarned: false,
+  };
+}
+
+export function autoResultFromDraft(
+  draft: AssignmentDraft,
+  base: AutoAssignResultV1 | null
+): AutoAssignResultV1 {
+  const assignments = draft.assignments.map(cloneRow);
+  const weekendBandAssignments = assignments.filter(isWeekendBandRow);
+  const regularAssignments = assignments.filter(
+    (a) => a.kind === "regular" && !isWeekendBandRow(a)
+  );
+  const fallbackMeta = {
+    availableCount: draft.caddyPool.length,
+    reservationCount: assignments.length + draft.unassignedReservations.length,
+    assignedCount: assignments.length,
+    unassignedCount: draft.unassignedReservations.length,
+    closedCourseCount: draft.closedCourseReservations.length,
+    unusedCount: unusedCaddies(draft).length,
+    specialCount: base?.meta.specialCount ?? 0,
+    fixedAssignedCount: 0,
+    fixedUnassignedCount: 0,
+    fiftyFourHoleCandidateCount: 0,
+    fiftyFourHoleAssignedCaddyCount: 0,
+    fiftyFourHoleUnassignedCount: 0,
+    oneThreeCandidateCount: 0,
+    oneThreeAssignedCaddyCount: 0,
+    oneThreeUnassignedCount: 0,
+    oneTwoCandidateCount: 0,
+    oneTwoAssignedCaddyCount: 0,
+    oneTwoUnassignedCount: 0,
+    oneMakCandidateCount: 0,
+    oneMakAssignedCaddyCount: 0,
+    oneMakUnassignedCount: 0,
+    housePoolCount: 0,
+    thirdPoolCount: 0,
+    drivingPoolCount: 0,
+    byShift: {
+      "1부": { reservations: 0, assigned: 0, unassigned: 0 },
+      "2부": { reservations: 0, assigned: 0, unassigned: 0 },
+      "3부": { reservations: 0, assigned: 0, unassigned: 0 },
+    },
+    finalPointer: 0,
+    thirdStartTeam: base?.meta.thirdStartTeam || "",
+    thirdStartTeamAutomatic: base?.meta.thirdStartTeamAutomatic || "",
+  };
+  return {
+    date: draft.date,
+    assignments,
+    fixedAssignments: assignments.filter((a) => a.kind === "fixed"),
+    fiftyFourHoleAssignments: assignments.filter((a) => a.kind === "fiftyFourHole"),
+    oneThreeAssignments: assignments.filter((a) => a.kind === "oneThree"),
+    oneTwoAssignments: assignments.filter((a) => a.kind === "oneTwo"),
+    oneMakAssignments: assignments.filter((a) => a.kind === "oneMak"),
+    weekendBandAssignments,
+    regularAssignments,
+    unassignedReservations: draft.unassignedReservations.map((u) => ({
+      reservation: { ...u.reservation },
+      reason: u.reason,
+    })),
+    closedCourseReservations: (draft.closedCourseReservations || []).map((u) => ({
+      reservation: { ...u.reservation },
+      reason: u.reason,
+    })),
+    unusedCaddies: unusedCaddies(draft),
+    special: base?.special || [],
+    specialUnassigned: base?.specialUnassigned || [],
+    openCourses: [...(draft.openCourses || [])],
+    sparesByShift: (draft.sparesByShift || []).map((s) => ({
+      shift: s.shift,
+      spare1: s.spare1 ? { ...s.spare1 } : null,
+      spare2: s.spare2 ? { ...s.spare2 } : null,
+    })),
+    meta: { ...fallbackMeta, ...(base?.meta || {}), ...{
+      assignedCount: assignments.length,
+      unassignedCount: draft.unassignedReservations.length,
+      closedCourseCount: draft.closedCourseReservations.length,
+      unusedCount: unusedCaddies(draft).length,
+    } },
+  };
+}
+
+export function applyLiveResultToDraft(
+  draft: AssignmentDraft,
+  after: AutoAssignResultV1
+): AssignmentDraft {
+  const next = createDraftFromAutoResult(after, draft.caddyPool);
+  const resetConfirm = draft.status === "CONFIRMED" || draft.status === "APPLIED";
+  return {
+    ...next,
+    status: "EDITED",
+    confirmedAt: resetConfirm ? null : draft.confirmedAt,
+    appliedAt: null,
+    applyAuditId: null,
+  };
+}
+
+export { isPlacementLocked };

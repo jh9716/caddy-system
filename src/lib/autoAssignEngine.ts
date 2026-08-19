@@ -69,8 +69,14 @@ export const REASON = {
   FIXED_TIME_OVERLAP: "FIXED_TIME_OVERLAP",
   FIXED_CANCELLED: "FIXED_CANCELLED",
   REGULAR_CANCEL_REFLOW: "REGULAR_CANCEL_REFLOW",
+  TEAM_NOSHOW_REFLOW: "TEAM_NOSHOW_REFLOW",
   REGULAR_ADD_REFLOW: "REGULAR_ADD_REFLOW",
   REGULAR_MIXED_REFLOW: "REGULAR_MIXED_REFLOW",
+  CADDY_UNAVAILABLE_REFLOW: "CADDY_UNAVAILABLE_REFLOW",
+  CADDY_SWAP: "CADDY_SWAP",
+  LIMOUSINE_SET: "LIMOUSINE_SET",
+  DRIVING_ASSIGN: "DRIVING_ASSIGN",
+  DRIVING_CLEAR: "DRIVING_CLEAR",
   CLOSED_COURSE: "CLOSED_COURSE",
   WEEKEND_BAND_PRIORITY: "WEEKEND_BAND_PRIORITY",
 } as const;
@@ -143,6 +149,8 @@ export type AutoAssignReservation = {
   needsReview?: boolean;
   isDuplicate?: boolean;
   reviewReasons?: string[];
+  /** 리무진카트 요청팀. 캐디가 아니라 예약 속성. */
+  limousineCart?: boolean;
 };
 
 /** 1부 특수근무(54홀/1·2)가 건너뛰는 앞자리 수 — 코스명 하드코딩 없음 */
@@ -159,7 +167,8 @@ export type AssignmentKind =
   | "oneThree"
   | "oneTwo"
   | "oneMak"
-  | "fixed";
+  | "fixed"
+  | "driving";
 
 export type AutoAssignmentRow = {
   date: string;
@@ -172,6 +181,11 @@ export type AutoAssignmentRow = {
   pairId?: string | null;
   kind: AssignmentKind;
   note?: string | null;
+  /**
+   * 특수배치 LOCK. true면 해당 reservation에 고정되어 일반 reflow에 참여하지 않음.
+   * 미지정 시 기본값: 특수 kind·주말반=ON, 일반=OFF.
+   */
+  locked?: boolean;
 };
 
 export type UnassignedReservationRow = {
@@ -267,9 +281,14 @@ export type AutoAssignResultV1 = {
   };
 };
 
+export type ReservationCancelCause = "CANCEL" | "TEAM_NOSHOW";
+export type CaddyUnavailableCause = "SICK" | "ATTENDANCE_NOSHOW";
+
 export type ReservationChangeEvent =
   | {
       type: "CANCEL_RESERVATION";
+      /** V1: CANCEL과 TEAM_NOSHOW는 동일 reflow, 사유만 구분 */
+      cause?: ReservationCancelCause;
       reservationId?: string | number;
       reservationKey?: string;
       reservationMatch?: Partial<
@@ -288,6 +307,32 @@ export type ReservationChangeEvent =
   | {
       type: "ADD_RESERVATION";
       reservation: AutoAssignReservation;
+    }
+  | {
+      type: "REMOVE_CADDY";
+      caddyId: number;
+      cause: CaddyUnavailableCause;
+      note?: string | null;
+    }
+  | {
+      type: "SWAP_CADDY";
+      reservationKeyA: string;
+      reservationKeyB: string;
+    }
+  | {
+      type: "SET_LIMOUSINE";
+      reservationKey?: string;
+      reservationId?: string | number;
+      limousineCart: boolean;
+    }
+  | {
+      type: "ASSIGN_DRIVING";
+      reservationKey: string;
+      caddyId: number;
+    }
+  | {
+      type: "CLEAR_DRIVING";
+      reservationKey: string;
     };
 
 export type ReflowChangeKind =
@@ -306,12 +351,39 @@ export type ReflowCaddyChange = {
   afterOrderIndex: number | null;
 };
 
+export type ReflowWarning = {
+  level: "error" | "warn";
+  code: string;
+  message: string;
+  reservationKey?: string;
+  caddyId?: number;
+};
+
+export type PlacementDiff = {
+  reservationKey: string;
+  reservation: AutoAssignReservation;
+  beforeCaddy: AutoAssignCaddy | null;
+  afterCaddy: AutoAssignCaddy | null;
+  lockedPreserved: boolean;
+};
+
+export type LockedPreservedRow = {
+  reservationKey: string;
+  caddy: AutoAssignCaddy;
+  kind: AssignmentKind;
+  reason: string;
+};
+
 export type RegularReflowResult = {
   date: string;
   reason: string;
   before: AutoAssignResultV1;
   after: AutoAssignResultV1;
   changes: ReflowCaddyChange[];
+  placementDiffs: PlacementDiff[];
+  lockedPreserved: LockedPreservedRow[];
+  warnings: ReflowWarning[];
+  unavailableCaddyIds: number[];
   summary: {
     movedBackward: number;
     movedForward: number;
@@ -319,6 +391,9 @@ export type RegularReflowResult = {
     newlyAssigned: number;
     becameUnassigned: number;
     specialPreserved: number;
+    pulledCount: number;
+    pushedCount: number;
+    lockedPreservedCount: number;
   };
 };
 
@@ -2493,30 +2568,91 @@ function matchesCancelEvent(
   return true;
 }
 
-function specialAssignmentRows(result: AutoAssignResultV1): AutoAssignmentRow[] {
-  return [
-    ...result.fixedAssignments,
-    ...result.fiftyFourHoleAssignments,
-    ...result.oneThreeAssignments,
-    ...result.oneTwoAssignments,
-    ...result.oneMakAssignments,
-    ...(result.weekendBandAssignments || []),
-  ];
+export function isDrivingPlacement(row: Pick<AutoAssignmentRow, "kind">): boolean {
+  return row.kind === "driving";
 }
 
-function protectedCaddyIds(result: AutoAssignResultV1): Set<number> {
+export function isLimousineReservation(
+  reservation: Pick<AutoAssignReservation, "limousineCart">
+): boolean {
+  return reservation.limousineCart === true;
+}
+
+export function isWeekendBandRow(row: Pick<AutoAssignmentRow, "reason">): boolean {
+  const reason = String(row.reason || "");
+  return (
+    reason === REASON.WEEKEND_BAND_PRIORITY ||
+    reason.startsWith(`${REASON.WEEKEND_BAND_PRIORITY}(`)
+  );
+}
+
+/** 미지정 locked의 기본값: 특수 kind·주말반 ON, 일반 OFF */
+export function defaultPlacementLocked(
+  row: Pick<AutoAssignmentRow, "kind" | "reason">
+): boolean {
+  if (row.kind !== "regular") return true;
+  return isWeekendBandRow(row);
+}
+
+export function isPlacementLocked(row: AutoAssignmentRow): boolean {
+  if (typeof row.locked === "boolean") return row.locked;
+  return defaultPlacementLocked(row);
+}
+
+function cloneAssignmentRow(row: AutoAssignmentRow): AutoAssignmentRow {
+  return {
+    ...row,
+    reservation: { ...row.reservation },
+    caddy: { ...row.caddy },
+  };
+}
+
+function specialTagRow(row: AutoAssignmentRow): boolean {
+  return row.kind !== "regular" || isWeekendBandRow(row);
+}
+
+function bucketizeAssignments(assignments: AutoAssignmentRow[]): {
+  fixedAssignments: AutoAssignmentRow[];
+  fiftyFourHoleAssignments: AutoAssignmentRow[];
+  oneThreeAssignments: AutoAssignmentRow[];
+  oneTwoAssignments: AutoAssignmentRow[];
+  oneMakAssignments: AutoAssignmentRow[];
+  weekendBandAssignments: AutoAssignmentRow[];
+  regularAssignments: AutoAssignmentRow[];
+} {
+  const fixedAssignments: AutoAssignmentRow[] = [];
+  const fiftyFourHoleAssignments: AutoAssignmentRow[] = [];
+  const oneThreeAssignments: AutoAssignmentRow[] = [];
+  const oneTwoAssignments: AutoAssignmentRow[] = [];
+  const oneMakAssignments: AutoAssignmentRow[] = [];
+  const weekendBandAssignments: AutoAssignmentRow[] = [];
+  const regularAssignments: AutoAssignmentRow[] = [];
+  for (const row of assignments) {
+    if (row.kind === "fixed") fixedAssignments.push(row);
+    else if (row.kind === "fiftyFourHole") fiftyFourHoleAssignments.push(row);
+    else if (row.kind === "oneThree") oneThreeAssignments.push(row);
+    else if (row.kind === "oneTwo") oneTwoAssignments.push(row);
+    else if (row.kind === "oneMak") oneMakAssignments.push(row);
+    else if (isWeekendBandRow(row)) weekendBandAssignments.push(row);
+    else regularAssignments.push(row);
+  }
+  return {
+    fixedAssignments,
+    fiftyFourHoleAssignments,
+    oneThreeAssignments,
+    oneTwoAssignments,
+    oneMakAssignments,
+    weekendBandAssignments,
+    regularAssignments,
+  };
+}
+
+function fixedCancelledCaddyIds(result: AutoAssignResultV1): Set<number> {
   const ids = new Set<number>();
-  for (const a of specialAssignmentRows(result)) ids.add(a.caddy.id);
-  for (const u of result.specialUnassigned) {
+  for (const u of result.specialUnassigned || []) {
     if (u.reason === REASON.FIXED_CANCELLED) ids.add(u.caddy.id);
   }
   return ids;
-}
-
-function protectedReservationKeys(result: AutoAssignResultV1): Set<string> {
-  return new Set(
-    specialAssignmentRows(result).map((a) => reservationKey(a.reservation))
-  );
 }
 
 function orderIndexMap(
@@ -2535,148 +2671,35 @@ function orderIndexMap(
   return map;
 }
 
-/**
- * 일반 예약 캔슬/추가 후 일반 순번만 재계산 (special 보호).
- *
- * 알고리즘:
- * 1) previous의 special(고정/찾근·54·1·3·1·2) 배치·FIXED_CANCELLED 캐디를 잠금
- * 2) 일반 예약 집합에 이벤트 적용 (special 예약 CANCEL은 일반 풀에서만 무시, 캐디 재투입 금지)
- * 3) regularCaddyPool에서 잠금 캐디 제외 후 assignRegularSequence 재실행
- * 4) special 배치는 그대로 유지하고 before/after diff 반환
- */
-export function reflowRegularAssignments(input: {
-  previous: AutoAssignResultV1;
-  /** 원본 일반 available 풀 (정렬 전/후 모두 허용 — 내부에서 재정렬) */
-  regularCaddyPool: AutoAssignCaddy[];
-  events: ReservationChangeEvent[];
-}): RegularReflowResult {
-  const previous = input.previous;
-  const date = previous.date;
-  const lockedCaddies = protectedCaddyIds(previous);
-  const lockedResKeys = protectedReservationKeys(previous);
-
-  let cancelCount = 0;
-  let addCount = 0;
-
-  // 일반 예약 시드: 기존 일반 배치 + 일반 미배치(special 키 제외)
-  const seedMap = new Map<string, AutoAssignReservation>();
-  for (const a of previous.regularAssignments) {
-    const key = reservationKey(a.reservation);
-    if (!lockedResKeys.has(key)) seedMap.set(key, a.reservation);
-  }
-  for (const u of previous.unassignedReservations) {
-    const key = reservationKey(u.reservation);
-    if (lockedResKeys.has(key)) continue;
-    if (!seedMap.has(key)) seedMap.set(key, u.reservation);
-  }
-
-  for (const event of input.events || []) {
-    if (event.type === "CANCEL_RESERVATION") {
-      cancelCount += 1;
-      const keysToDelete: string[] = [];
-      for (const [key, res] of seedMap.entries()) {
-        if (matchesCancelEvent(res, event)) keysToDelete.push(key);
-      }
-      // special 예약 캔슬: 일반 풀에 없어도 OK — 캐디는 locked 유지
-      for (const key of keysToDelete) {
-        if (lockedResKeys.has(key)) continue;
-        seedMap.delete(key);
-      }
-      continue;
-    }
-    if (event.type === "ADD_RESERVATION") {
-      addCount += 1;
-      const res = event.reservation.date
-        ? event.reservation
-        : { ...event.reservation, date };
-      const key = reservationKey(res);
-      if (lockedResKeys.has(key)) continue; // special 슬롯 침범 금지
-      seedMap.set(key, res);
-    }
-  }
-
-  const regularReservations = [...seedMap.values()].sort(compareReservationOrder);
-
-  const pool = dedupeCaddies([...(input.regularCaddyPool || [])])
-    .filter((c) => !lockedCaddies.has(c.id))
-    .sort(compareCaddyOrder);
-  const pools = splitCaddyPools(pool);
-
-  const reasonCode =
-    cancelCount > 0 && addCount > 0
-      ? REASON.REGULAR_MIXED_REFLOW
-      : addCount > 0
-        ? REASON.REGULAR_ADD_REFLOW
-        : REASON.REGULAR_CANCEL_REFLOW;
-
-  const regular = assignRegularSequence({
-    date,
-    house: pools.house,
-    third: pools.third,
-    reservations: regularReservations,
-    reasonCode,
-    thirdStartTeam:
-      previous.meta.thirdStartTeam || automaticThirdStartTeam(date),
-  });
-
-  const specialRows = specialAssignmentRows(previous);
-  const byShift = emptyShiftMeta();
-  for (const shift of SHIFT_PARTS) {
-    const specialCount = specialRows.filter((a) => a.shift === shift).length;
-    byShift[shift].reservations =
-      specialCount + regular.byShift[shift].reservations;
-    byShift[shift].assigned = specialCount + regular.byShift[shift].assigned;
-    byShift[shift].unassigned = regular.byShift[shift].unassigned;
-  }
-
-  const usedRegular = new Set(regular.assignments.map((a) => a.caddy.id));
-  const unusedCaddies = pool.filter((c) => !usedRegular.has(c.id));
-
-  const assignments = [...specialRows, ...regular.assignments].sort(
-    compareAssignmentOrder
-  );
-
-  const after: AutoAssignResultV1 = {
-    ...previous,
-    assignments,
-    regularAssignments: regular.assignments,
-    unassignedReservations: regular.unassignedReservations,
-    closedCourseReservations: previous.closedCourseReservations || [],
-    openCourses: previous.openCourses || [...COURSE_ORDER],
-    unusedCaddies,
-    sparesByShift: regular.sparesByShift,
-    meta: {
-      ...previous.meta,
-      availableCount: pool.length,
-      reservationCount:
-        specialRows.length + regularReservations.length,
-      assignedCount: assignments.length,
-      unassignedCount: regular.unassignedReservations.length,
-      closedCourseCount: (previous.closedCourseReservations || []).length,
-      unusedCount: unusedCaddies.length,
-      housePoolCount: pools.house.length,
-      thirdPoolCount: pools.third.length,
-      drivingPoolCount: pools.driving.length,
-      byShift,
-      finalPointer: regular.finalPointer,
-    },
+function emptyReflowSummary(specialPreserved = 0) {
+  return {
+    movedBackward: 0,
+    movedForward: 0,
+    unchanged: 0,
+    newlyAssigned: 0,
+    becameUnassigned: 0,
+    specialPreserved,
+    pulledCount: 0,
+    pushedCount: 0,
+    lockedPreservedCount: specialPreserved,
   };
+}
 
-  const beforeMap = orderIndexMap(previous.regularAssignments);
-  const afterMap = orderIndexMap(regular.assignments);
-  const caddyIds = new Set<number>([
-    ...beforeMap.keys(),
-    ...afterMap.keys(),
-  ]);
-
+function buildCaddyChanges(
+  beforeRows: AutoAssignmentRow[],
+  afterRows: AutoAssignmentRow[],
+  pool: AutoAssignCaddy[]
+): ReflowCaddyChange[] {
+  const beforeMap = orderIndexMap(beforeRows);
+  const afterMap = orderIndexMap(afterRows);
+  const caddyIds = new Set<number>([...beforeMap.keys(), ...afterMap.keys()]);
   const changes: ReflowCaddyChange[] = [];
   for (const id of caddyIds) {
     const before = beforeMap.get(id);
     const afterRow = afterMap.get(id);
     const caddy =
-      afterRow?.reservation && regular.assignments.find((a) => a.caddy.id === id)
-        ?.caddy ||
-      previous.regularAssignments.find((a) => a.caddy.id === id)?.caddy ||
+      afterRows.find((a) => a.caddy.id === id)?.caddy ||
+      beforeRows.find((a) => a.caddy.id === id)?.caddy ||
       pool.find((c) => c.id === id);
     if (!caddy) continue;
 
@@ -2685,10 +2708,7 @@ export function reflowRegularAssignments(input: {
         reservationKey(before.reservation) ===
         reservationKey(afterRow.reservation);
       let kind: ReflowChangeKind = "unchanged";
-      if (sameRes) {
-        kind = "unchanged";
-      } else {
-        // 더 이른 티/부 → 당김(forward), 더 늦은 티/부 → 밀림(backward)
+      if (!sameRes) {
         const cmp = compareReservationOrder(
           afterRow.reservation,
           before.reservation
@@ -2723,15 +2743,806 @@ export function reflowRegularAssignments(input: {
       });
     }
   }
+  return changes;
+}
 
-  const summary = {
-    movedBackward: changes.filter((c) => c.kind === "movedBackward").length,
-    movedForward: changes.filter((c) => c.kind === "movedForward").length,
+function buildPlacementDiffs(
+  before: AutoAssignResultV1,
+  after: AutoAssignResultV1,
+  lockedKeys: Set<string>
+): PlacementDiff[] {
+  const beforeByKey = new Map<string, AutoAssignmentRow>();
+  for (const row of before.assignments) {
+    beforeByKey.set(reservationKey(row.reservation), row);
+  }
+  const afterByKey = new Map<string, AutoAssignmentRow>();
+  for (const row of after.assignments) {
+    afterByKey.set(reservationKey(row.reservation), row);
+  }
+  const keys = new Set<string>([...beforeByKey.keys(), ...afterByKey.keys()]);
+  const diffs: PlacementDiff[] = [];
+  for (const key of keys) {
+    const b = beforeByKey.get(key);
+    const a = afterByKey.get(key);
+    const reservation = a?.reservation || b?.reservation;
+    if (!reservation) continue;
+    diffs.push({
+      reservationKey: key,
+      reservation,
+      beforeCaddy: b?.caddy ?? null,
+      afterCaddy: a?.caddy ?? null,
+      lockedPreserved: lockedKeys.has(key) && !!b && !!a && b.caddy.id === a.caddy.id,
+    });
+  }
+  diffs.sort((x, y) => compareReservationOrder(x.reservation, y.reservation));
+  return diffs;
+}
+
+function summarizeChanges(
+  changes: ReflowCaddyChange[],
+  specialPreserved: number,
+  lockedPreservedCount: number
+): RegularReflowResult["summary"] {
+  const movedBackward = changes.filter((c) => c.kind === "movedBackward").length;
+  const movedForward = changes.filter((c) => c.kind === "movedForward").length;
+  return {
+    movedBackward,
+    movedForward,
     unchanged: changes.filter((c) => c.kind === "unchanged").length,
     newlyAssigned: changes.filter((c) => c.kind === "newlyAssigned").length,
     becameUnassigned: changes.filter((c) => c.kind === "becameUnassigned").length,
-    specialPreserved: specialRows.length,
+    specialPreserved,
+    pulledCount: movedForward,
+    pushedCount: movedBackward,
+    lockedPreservedCount,
   };
+}
+
+function courseTeeCollision(
+  candidate: AutoAssignReservation,
+  existing: AutoAssignReservation[]
+): AutoAssignReservation | null {
+  const course = String(candidate.course || "").toUpperCase();
+  const tee = String(candidate.teeTime || "");
+  return (
+    existing.find(
+      (r) =>
+        String(r.course || "").toUpperCase() === course &&
+        String(r.teeTime || "") === tee &&
+        reservationKey(r) !== reservationKey(candidate)
+    ) || null
+  );
+}
+
+function overlaySpecialTag(
+  row: AutoAssignmentRow,
+  previousByCaddy: Map<number, AutoAssignmentRow>
+): AutoAssignmentRow {
+  const prev = previousByCaddy.get(row.caddy.id);
+  if (!prev || !specialTagRow(prev)) {
+    return { ...row, locked: false };
+  }
+  return {
+    ...row,
+    kind: prev.kind,
+    pairId: prev.pairId ?? row.pairId,
+    note: prev.note ?? row.note,
+    reason: prev.reason,
+    locked: false,
+  };
+}
+
+function resolveReflowReason(input: {
+  swapCount: number;
+  cancelCount: number;
+  teamNoshowCount: number;
+  addCount: number;
+  removeCount: number;
+}): string {
+  const kinds =
+    (input.swapCount > 0 ? 1 : 0) +
+    (input.cancelCount + input.teamNoshowCount > 0 ? 1 : 0) +
+    (input.addCount > 0 ? 1 : 0) +
+    (input.removeCount > 0 ? 1 : 0);
+  if (input.swapCount > 0 && kinds === 1) return REASON.CADDY_SWAP;
+  if (kinds > 1) return REASON.REGULAR_MIXED_REFLOW;
+  if (input.removeCount > 0) return REASON.CADDY_UNAVAILABLE_REFLOW;
+  if (input.addCount > 0) return REASON.REGULAR_ADD_REFLOW;
+  if (input.teamNoshowCount > 0 && input.cancelCount === 0) {
+    return REASON.TEAM_NOSHOW_REFLOW;
+  }
+  return REASON.REGULAR_CANCEL_REFLOW;
+}
+
+function reservationMatchesKey(
+  reservation: AutoAssignReservation,
+  key?: string,
+  id?: string | number
+): boolean {
+  if (key && reservationKey(reservation) === key) return true;
+  if (id != null && String(id) !== "" && String(reservation.id ?? "") === String(id)) {
+    return true;
+  }
+  return false;
+}
+
+function patchResultReservations(
+  previous: AutoAssignResultV1,
+  patch: (reservation: AutoAssignReservation) => AutoAssignReservation
+): AutoAssignResultV1 {
+  const assignments = previous.assignments.map((row) => ({
+    ...cloneAssignmentRow(row),
+    reservation: patch(row.reservation),
+  }));
+  const buckets = bucketizeAssignments(assignments);
+  return {
+    ...previous,
+    ...buckets,
+    assignments,
+    unassignedReservations: (previous.unassignedReservations || []).map((u) => ({
+      ...u,
+      reservation: patch(u.reservation),
+    })),
+    closedCourseReservations: (previous.closedCourseReservations || []).map((u) => ({
+      ...u,
+      reservation: patch(u.reservation),
+    })),
+  };
+}
+
+function findCaddyInScope(
+  previous: AutoAssignResultV1,
+  pool: AutoAssignCaddy[],
+  caddyId: number
+): AutoAssignCaddy | null {
+  return (
+    pool.find((c) => c.id === caddyId) ||
+    previous.assignments.find((a) => a.caddy.id === caddyId)?.caddy ||
+    previous.unusedCaddies.find((c) => c.id === caddyId) ||
+    previous.special.find((c) => c.id === caddyId) ||
+    null
+  );
+}
+
+function applyLimousineOnly(
+  previous: AutoAssignResultV1,
+  event: Extract<ReservationChangeEvent, { type: "SET_LIMOUSINE" }>,
+  pool: AutoAssignCaddy[]
+): RegularReflowResult {
+  const warnings: ReflowWarning[] = [];
+  const found =
+    previous.assignments.some((a) =>
+      reservationMatchesKey(a.reservation, event.reservationKey, event.reservationId)
+    ) ||
+    (previous.unassignedReservations || []).some((u) =>
+      reservationMatchesKey(u.reservation, event.reservationKey, event.reservationId)
+    );
+  if (!found) {
+    warnings.push({
+      level: "error",
+      code: "LIMOUSINE_TARGET_NOT_FOUND",
+      message: "리무진 표시 대상 예약을 찾을 수 없습니다.",
+      reservationKey: event.reservationKey,
+    });
+    return {
+      date: previous.date,
+      reason: REASON.LIMOUSINE_SET,
+      before: previous,
+      after: previous,
+      changes: [],
+      placementDiffs: [],
+      lockedPreserved: [],
+      warnings,
+      unavailableCaddyIds: [],
+      summary: emptyReflowSummary(0),
+    };
+  }
+  const after = patchResultReservations(previous, (reservation) =>
+    reservationMatchesKey(reservation, event.reservationKey, event.reservationId)
+      ? { ...reservation, limousineCart: event.limousineCart }
+      : reservation
+  );
+  const lockedPreserved = after.assignments.filter(isPlacementLocked).map((row) => ({
+    reservationKey: reservationKey(row.reservation),
+    caddy: row.caddy,
+    kind: row.kind,
+    reason: row.reason,
+  }));
+  const lockedKeys = new Set(lockedPreserved.map((r) => r.reservationKey));
+  return {
+    date: previous.date,
+    reason: REASON.LIMOUSINE_SET,
+    before: previous,
+    after,
+    changes: [],
+    placementDiffs: buildPlacementDiffs(previous, after, lockedKeys),
+    lockedPreserved,
+    warnings,
+    unavailableCaddyIds: [],
+    summary: summarizeChanges([], lockedPreserved.length, lockedPreserved.length),
+  };
+}
+
+function applyDrivingAssign(
+  previous: AutoAssignResultV1,
+  event: Extract<ReservationChangeEvent, { type: "ASSIGN_DRIVING" }>,
+  pool: AutoAssignCaddy[]
+): RegularReflowResult {
+  const warnings: ReflowWarning[] = [];
+  const assignedIdx = previous.assignments.findIndex(
+    (a) => reservationKey(a.reservation) === event.reservationKey
+  );
+  const unassignedIdx = (previous.unassignedReservations || []).findIndex(
+    (u) => reservationKey(u.reservation) === event.reservationKey
+  );
+  const sourceRow =
+    assignedIdx >= 0 ? previous.assignments[assignedIdx] : null;
+  const sourceUnassigned =
+    unassignedIdx >= 0 ? previous.unassignedReservations[unassignedIdx] : null;
+  const reservation = sourceRow?.reservation || sourceUnassigned?.reservation;
+  if (!reservation) {
+    warnings.push({
+      level: "error",
+      code: "DRIVING_TARGET_NOT_FOUND",
+      message: "드라이빙 지정 대상 예약을 찾을 수 없습니다.",
+      reservationKey: event.reservationKey,
+    });
+    return {
+      date: previous.date,
+      reason: REASON.DRIVING_ASSIGN,
+      before: previous,
+      after: previous,
+      changes: [],
+      placementDiffs: [],
+      lockedPreserved: [],
+      warnings,
+      unavailableCaddyIds: [],
+      summary: emptyReflowSummary(0),
+    };
+  }
+  if (String(reservation.shift) !== "3부") {
+    warnings.push({
+      level: "error",
+      code: "DRIVING_SHIFT_REQUIRED",
+      message: "드라이빙 캐디는 3부 예약에만 지정할 수 있습니다.",
+      reservationKey: event.reservationKey,
+    });
+    return {
+      date: previous.date,
+      reason: REASON.DRIVING_ASSIGN,
+      before: previous,
+      after: previous,
+      changes: [],
+      placementDiffs: [],
+      lockedPreserved: [],
+      warnings,
+      unavailableCaddyIds: [],
+      summary: emptyReflowSummary(0),
+    };
+  }
+  const caddy = findCaddyInScope(previous, pool, event.caddyId);
+  if (!caddy) {
+    warnings.push({
+      level: "error",
+      code: "DRIVING_CADDY_NOT_FOUND",
+      message: `캐디 #${event.caddyId}를 찾을 수 없습니다.`,
+      caddyId: event.caddyId,
+    });
+    return {
+      date: previous.date,
+      reason: REASON.DRIVING_ASSIGN,
+      before: previous,
+      after: previous,
+      changes: [],
+      placementDiffs: [],
+      lockedPreserved: [],
+      warnings,
+      unavailableCaddyIds: [],
+      summary: emptyReflowSummary(0),
+    };
+  }
+  const other = previous.assignments.find(
+    (a) =>
+      a.caddy.id === event.caddyId &&
+      reservationKey(a.reservation) !== event.reservationKey
+  );
+  if (other) {
+    warnings.push({
+      level: "error",
+      code: "DRIVING_CADDY_ALREADY_ASSIGNED",
+      message: `${caddy.name}은(는) 이미 다른 예약에 배치되어 있습니다.`,
+      caddyId: event.caddyId,
+      reservationKey: reservationKey(other.reservation),
+    });
+    return {
+      date: previous.date,
+      reason: REASON.DRIVING_ASSIGN,
+      before: previous,
+      after: previous,
+      changes: [],
+      placementDiffs: [],
+      lockedPreserved: [],
+      warnings,
+      unavailableCaddyIds: [],
+      summary: emptyReflowSummary(0),
+    };
+  }
+
+  const drivingRow: AutoAssignmentRow = {
+    date: previous.date,
+    shift: "3부",
+    sequenceIndex: sourceRow?.sequenceIndex ?? -1,
+    reason: REASON.DRIVING_ASSIGN,
+    reservation: { ...reservation },
+    caddy: { ...caddy },
+    pairId: null,
+    kind: "driving",
+    locked: true,
+    note: sourceRow?.note ?? null,
+  };
+  const assignments = previous.assignments.map(cloneAssignmentRow);
+  if (assignedIdx >= 0) assignments[assignedIdx] = drivingRow;
+  else assignments.push(drivingRow);
+  const sorted = assignments.sort(compareAssignmentOrder);
+  const buckets = bucketizeAssignments(sorted);
+  const used = new Set(sorted.map((a) => a.caddy.id));
+  const after: AutoAssignResultV1 = {
+    ...previous,
+    ...buckets,
+    assignments: sorted,
+    unassignedReservations: (previous.unassignedReservations || []).filter(
+      (u) => reservationKey(u.reservation) !== event.reservationKey
+    ),
+    unusedCaddies: [
+      ...previous.unusedCaddies.filter((c) => c.id !== caddy.id),
+      ...(sourceRow && sourceRow.caddy.id !== caddy.id && !used.has(sourceRow.caddy.id)
+        ? [{ ...sourceRow.caddy }]
+        : []),
+    ].filter((c) => !used.has(c.id)),
+  };
+  const lockedPreserved = sorted.filter(isPlacementLocked).map((row) => ({
+    reservationKey: reservationKey(row.reservation),
+    caddy: row.caddy,
+    kind: row.kind,
+    reason: row.reason,
+  }));
+  const lockedKeys = new Set(lockedPreserved.map((r) => r.reservationKey));
+  return {
+    date: previous.date,
+    reason: REASON.DRIVING_ASSIGN,
+    before: previous,
+    after,
+    changes: buildCaddyChanges(
+      assignedIdx >= 0 ? [previous.assignments[assignedIdx]] : [],
+      [drivingRow],
+      pool
+    ),
+    placementDiffs: buildPlacementDiffs(previous, after, lockedKeys),
+    lockedPreserved,
+    warnings,
+    unavailableCaddyIds: [],
+    summary: summarizeChanges(
+      buildCaddyChanges(
+        assignedIdx >= 0 ? [previous.assignments[assignedIdx]] : [],
+        [drivingRow],
+        pool
+      ),
+      lockedPreserved.length,
+      lockedPreserved.length
+    ),
+  };
+}
+
+function applyDrivingClear(
+  previous: AutoAssignResultV1,
+  event: Extract<ReservationChangeEvent, { type: "CLEAR_DRIVING" }>,
+  pool: AutoAssignCaddy[]
+): RegularReflowResult {
+  const warnings: ReflowWarning[] = [];
+  const idx = previous.assignments.findIndex(
+    (a) => reservationKey(a.reservation) === event.reservationKey
+  );
+  if (idx < 0 || !isDrivingPlacement(previous.assignments[idx])) {
+    warnings.push({
+      level: "error",
+      code: "DRIVING_CLEAR_NOT_FOUND",
+      message: "해제할 드라이빙 배치를 찾을 수 없습니다.",
+      reservationKey: event.reservationKey,
+    });
+    return {
+      date: previous.date,
+      reason: REASON.DRIVING_CLEAR,
+      before: previous,
+      after: previous,
+      changes: [],
+      placementDiffs: [],
+      lockedPreserved: [],
+      warnings,
+      unavailableCaddyIds: [],
+      summary: emptyReflowSummary(0),
+    };
+  }
+  const removed = previous.assignments[idx];
+  const assignments = previous.assignments
+    .filter((_, i) => i !== idx)
+    .map(cloneAssignmentRow)
+    .sort(compareAssignmentOrder);
+  const buckets = bucketizeAssignments(assignments);
+  const used = new Set(assignments.map((a) => a.caddy.id));
+  const after: AutoAssignResultV1 = {
+    ...previous,
+    ...buckets,
+    assignments,
+    unassignedReservations: [
+      ...(previous.unassignedReservations || []),
+      { reservation: { ...removed.reservation }, reason: REASON.DRIVING_CLEAR },
+    ],
+    unusedCaddies: used.has(removed.caddy.id)
+      ? previous.unusedCaddies
+      : [...previous.unusedCaddies, { ...removed.caddy }],
+  };
+  const lockedPreserved = assignments.filter(isPlacementLocked).map((row) => ({
+    reservationKey: reservationKey(row.reservation),
+    caddy: row.caddy,
+    kind: row.kind,
+    reason: row.reason,
+  }));
+  const lockedKeys = new Set(lockedPreserved.map((r) => r.reservationKey));
+  const changes = buildCaddyChanges([removed], [], pool);
+  return {
+    date: previous.date,
+    reason: REASON.DRIVING_CLEAR,
+    before: previous,
+    after,
+    changes,
+    placementDiffs: buildPlacementDiffs(previous, after, lockedKeys),
+    lockedPreserved,
+    warnings,
+    unavailableCaddyIds: [],
+    summary: summarizeChanges(changes, lockedPreserved.length, lockedPreserved.length),
+  };
+}
+
+function applySwapOnly(
+  previous: AutoAssignResultV1,
+  event: Extract<ReservationChangeEvent, { type: "SWAP_CADDY" }>,
+  pool: AutoAssignCaddy[]
+): RegularReflowResult {
+  const warnings: ReflowWarning[] = [];
+  const assignments = previous.assignments.map(cloneAssignmentRow);
+  const ia = assignments.findIndex(
+    (a) => reservationKey(a.reservation) === event.reservationKeyA
+  );
+  const ib = assignments.findIndex(
+    (a) => reservationKey(a.reservation) === event.reservationKeyB
+  );
+  if (ia < 0 || ib < 0) {
+    warnings.push({
+      level: "error",
+      code: "SWAP_TARGET_NOT_FOUND",
+      message: "순번 바꿈 대상 예약을 찾을 수 없습니다.",
+    });
+    return {
+      date: previous.date,
+      reason: REASON.CADDY_SWAP,
+      before: previous,
+      after: previous,
+      changes: [],
+      placementDiffs: [],
+      lockedPreserved: [],
+      warnings,
+      unavailableCaddyIds: [],
+      summary: emptyReflowSummary(0),
+    };
+  }
+  if (
+    isDrivingPlacement(assignments[ia]) && isPlacementLocked(assignments[ia]) ||
+    isDrivingPlacement(assignments[ib]) && isPlacementLocked(assignments[ib])
+  ) {
+    warnings.push({
+      level: "error",
+      code: "SWAP_DRIVING_LOCKED",
+      message: "드라이빙 LOCK ON 배치는 순번 바꿈할 수 없습니다. 먼저 드라이빙을 해제하세요.",
+    });
+    return {
+      date: previous.date,
+      reason: REASON.CADDY_SWAP,
+      before: previous,
+      after: previous,
+      changes: [],
+      placementDiffs: [],
+      lockedPreserved: [],
+      warnings,
+      unavailableCaddyIds: [],
+      summary: emptyReflowSummary(0),
+    };
+  }
+  const caddyA = assignments[ia].caddy;
+  const caddyB = assignments[ib].caddy;
+  assignments[ia] = { ...assignments[ia], caddy: { ...caddyB } };
+  assignments[ib] = { ...assignments[ib], caddy: { ...caddyA } };
+  const sorted = assignments.sort(compareAssignmentOrder);
+  const buckets = bucketizeAssignments(sorted);
+  const after: AutoAssignResultV1 = {
+    ...previous,
+    ...buckets,
+    assignments: sorted,
+  };
+  const changes = buildCaddyChanges(
+    previous.assignments,
+    sorted,
+    pool
+  ).filter(
+    (c) =>
+      c.caddy.id === caddyA.id ||
+      c.caddy.id === caddyB.id
+  );
+  const lockedPreserved = sorted
+    .filter(isPlacementLocked)
+    .map((row) => ({
+      reservationKey: reservationKey(row.reservation),
+      caddy: row.caddy,
+      kind: row.kind,
+      reason: row.reason,
+    }));
+  const lockedKeys = new Set(lockedPreserved.map((r) => r.reservationKey));
+  return {
+    date: previous.date,
+    reason: REASON.CADDY_SWAP,
+    before: previous,
+    after,
+    changes,
+    placementDiffs: buildPlacementDiffs(previous, after, lockedKeys),
+    lockedPreserved,
+    warnings,
+    unavailableCaddyIds: [],
+    summary: summarizeChanges(changes, lockedPreserved.length, lockedPreserved.length),
+  };
+}
+
+/**
+ * 일반 예약 캔슬/추가/병가/체인지 후 순번 재계산.
+ * LOCK ON placement는 같은 reservation에 고정, LOCK OFF는 일반 reflow에 참여.
+ * assignRegularSequence(Mode A/B · Spare · THIRD)를 source of truth로 재사용.
+ * teamOrder / 캐디 DB 순번은 변경하지 않음.
+ */
+export function reflowRegularAssignments(input: {
+  previous: AutoAssignResultV1;
+  /** 원본 일반 available 풀 (정렬 전/후 모두 허용 — 내부에서 재정렬) */
+  regularCaddyPool: AutoAssignCaddy[];
+  events: ReservationChangeEvent[];
+}): RegularReflowResult {
+  const previous = input.previous;
+  const date = previous.date;
+  const events = input.events || [];
+  const warnings: ReflowWarning[] = [];
+  const fullPool = dedupeCaddies([...(input.regularCaddyPool || [])]);
+
+  const swapEvents = events.filter(
+    (e): e is Extract<ReservationChangeEvent, { type: "SWAP_CADDY" }> =>
+      e.type === "SWAP_CADDY"
+  );
+  const limoEvents = events.filter(
+    (e): e is Extract<ReservationChangeEvent, { type: "SET_LIMOUSINE" }> =>
+      e.type === "SET_LIMOUSINE"
+  );
+  const drivingAssignEvents = events.filter(
+    (e): e is Extract<ReservationChangeEvent, { type: "ASSIGN_DRIVING" }> =>
+      e.type === "ASSIGN_DRIVING"
+  );
+  const drivingClearEvents = events.filter(
+    (e): e is Extract<ReservationChangeEvent, { type: "CLEAR_DRIVING" }> =>
+      e.type === "CLEAR_DRIVING"
+  );
+  if (swapEvents.length > 0 && events.every((e) => e.type === "SWAP_CADDY")) {
+    return applySwapOnly(previous, swapEvents[0], fullPool);
+  }
+  if (limoEvents.length > 0 && events.every((e) => e.type === "SET_LIMOUSINE")) {
+    return applyLimousineOnly(previous, limoEvents[0], fullPool);
+  }
+  if (
+    drivingAssignEvents.length > 0 &&
+    events.every((e) => e.type === "ASSIGN_DRIVING")
+  ) {
+    return applyDrivingAssign(previous, drivingAssignEvents[0], fullPool);
+  }
+  if (
+    drivingClearEvents.length > 0 &&
+    events.every((e) => e.type === "CLEAR_DRIVING")
+  ) {
+    return applyDrivingClear(previous, drivingClearEvents[0], fullPool);
+  }
+  if (swapEvents.length > 0) {
+    warnings.push({
+      level: "warn",
+      code: "SWAP_IGNORED_WITH_REFLOW",
+      message: "순번 바꿈과 다른 변경을 함께 주면 순번 바꿈은 무시되고 reflow만 적용됩니다.",
+    });
+  }
+
+  const unavailable = new Map<number, CaddyUnavailableCause>();
+  let cancelCount = 0;
+  let teamNoshowCount = 0;
+  let addCount = 0;
+  let removeCount = 0;
+
+  for (const event of events) {
+    if (event.type === "REMOVE_CADDY") {
+      removeCount += 1;
+      unavailable.set(event.caddyId, event.cause);
+    }
+  }
+
+  const lockedRows = previous.assignments
+    .filter((row) => isPlacementLocked(row) && !unavailable.has(row.caddy.id))
+    .map(cloneAssignmentRow)
+    .map((row) => ({ ...row, locked: true }));
+  const lockedCaddies = new Set<number>([
+    ...lockedRows.map((r) => r.caddy.id),
+    ...fixedCancelledCaddyIds(previous),
+  ]);
+  const lockedResKeys = new Set(
+    lockedRows.map((r) => reservationKey(r.reservation))
+  );
+
+  const unlockedPrevious = previous.assignments.filter(
+    (row) => !lockedResKeys.has(reservationKey(row.reservation))
+  );
+  const unlockedSpecialByCaddy = new Map<number, AutoAssignmentRow>();
+  for (const row of unlockedPrevious) {
+    if (specialTagRow(row) && !unavailable.has(row.caddy.id)) {
+      unlockedSpecialByCaddy.set(row.caddy.id, row);
+    }
+  }
+
+  const seedMap = new Map<string, AutoAssignReservation>();
+  for (const a of unlockedPrevious) {
+    seedMap.set(reservationKey(a.reservation), a.reservation);
+  }
+  for (const u of previous.unassignedReservations || []) {
+    const key = reservationKey(u.reservation);
+    if (lockedResKeys.has(key)) continue;
+    if (!seedMap.has(key)) seedMap.set(key, u.reservation);
+  }
+
+  for (const event of events) {
+    if (event.type === "CANCEL_RESERVATION") {
+      const cause = event.cause === "TEAM_NOSHOW" ? "TEAM_NOSHOW" : "CANCEL";
+      if (cause === "TEAM_NOSHOW") teamNoshowCount += 1;
+      else cancelCount += 1;
+      const keysToDelete: string[] = [];
+      for (const [key, res] of seedMap.entries()) {
+        if (matchesCancelEvent(res, event)) keysToDelete.push(key);
+      }
+      for (const key of keysToDelete) {
+        if (lockedResKeys.has(key)) continue;
+        seedMap.delete(key);
+      }
+      continue;
+    }
+    if (event.type === "ADD_RESERVATION") {
+      addCount += 1;
+      const res = event.reservation.date
+        ? event.reservation
+        : { ...event.reservation, date };
+      const key = reservationKey(res);
+      if (lockedResKeys.has(key)) {
+        warnings.push({
+          level: "warn",
+          code: "ADD_LOCKED_SLOT",
+          message: "LOCK ON 특수배치 슬롯에는 당추할 수 없습니다.",
+          reservationKey: key,
+        });
+        continue;
+      }
+      const existing = [...seedMap.values(), ...lockedRows.map((r) => r.reservation)];
+      const hit = courseTeeCollision(res, existing);
+      if (hit) {
+        warnings.push({
+          level: "warn",
+          code: "DUPLICATE_COURSE_TEETIME",
+          message: `동일 코스·티타임 예약이 있습니다 (${hit.course} ${hit.teeTime}).`,
+          reservationKey: key,
+        });
+      }
+      seedMap.set(key, res);
+    }
+  }
+
+  const regularReservations = [...seedMap.values()].sort(compareReservationOrder);
+
+  const pool = dedupeCaddies([
+    ...fullPool,
+    ...unlockedPrevious
+      .filter((row) => !unavailable.has(row.caddy.id))
+      .map((row) => row.caddy),
+  ])
+    .filter((c) => !lockedCaddies.has(c.id) && !unavailable.has(c.id))
+    .sort(compareCaddyOrder);
+  const pools = splitCaddyPools(pool);
+
+  const reasonCode = resolveReflowReason({
+    swapCount: 0,
+    cancelCount,
+    teamNoshowCount,
+    addCount,
+    removeCount,
+  });
+
+  const startId = previous.meta.houseStartCaddyId;
+  const houseStartCaddyId =
+    startId != null && pools.house.some((c) => c.id === startId)
+      ? startId
+      : null;
+
+  const regular = assignRegularSequence({
+    date,
+    house: pools.house,
+    third: pools.third,
+    reservations: regularReservations,
+    reasonCode,
+    houseStartCaddyId,
+    thirdStartTeam:
+      previous.meta.thirdStartTeam || automaticThirdStartTeam(date),
+  });
+
+  const regularAssignments = regular.assignments.map((row) =>
+    overlaySpecialTag(row, unlockedSpecialByCaddy)
+  );
+  const usedRegular = new Set(regularAssignments.map((a) => a.caddy.id));
+  const unusedCaddies = pool.filter((c) => !usedRegular.has(c.id));
+
+  const assignments = [...lockedRows, ...regularAssignments].sort(
+    compareAssignmentOrder
+  );
+  const buckets = bucketizeAssignments(assignments);
+
+  const byShift = emptyShiftMeta();
+  for (const shift of SHIFT_PARTS) {
+    const lockedCount = lockedRows.filter((a) => a.shift === shift).length;
+    byShift[shift].reservations =
+      lockedCount + regular.byShift[shift].reservations;
+    byShift[shift].assigned = lockedCount + regular.byShift[shift].assigned;
+    byShift[shift].unassigned = regular.byShift[shift].unassigned;
+  }
+
+  const after: AutoAssignResultV1 = {
+    ...previous,
+    ...buckets,
+    assignments,
+    unassignedReservations: regular.unassignedReservations,
+    closedCourseReservations: previous.closedCourseReservations || [],
+    openCourses: previous.openCourses || [...COURSE_ORDER],
+    unusedCaddies,
+    sparesByShift: regular.sparesByShift,
+    meta: {
+      ...previous.meta,
+      availableCount: pool.length,
+      reservationCount: lockedRows.length + regularReservations.length,
+      assignedCount: assignments.length,
+      unassignedCount: regular.unassignedReservations.length,
+      closedCourseCount: (previous.closedCourseReservations || []).length,
+      unusedCount: unusedCaddies.length,
+      housePoolCount: pools.house.length,
+      thirdPoolCount: pools.third.length,
+      drivingPoolCount: pools.driving.length,
+      byShift,
+      finalPointer: regular.finalPointer,
+    },
+  };
+
+  const lockedPreserved: LockedPreservedRow[] = lockedRows.map((row) => ({
+    reservationKey: reservationKey(row.reservation),
+    caddy: row.caddy,
+    kind: row.kind,
+    reason: row.reason,
+  }));
+  const lockedKeys = new Set(lockedPreserved.map((r) => r.reservationKey));
+  const changes = buildCaddyChanges(
+    unlockedPrevious.length > 0 ? unlockedPrevious : previous.regularAssignments,
+    regularAssignments,
+    pool
+  );
 
   return {
     date,
@@ -2739,6 +3550,14 @@ export function reflowRegularAssignments(input: {
     before: previous,
     after,
     changes,
-    summary,
+    placementDiffs: buildPlacementDiffs(previous, after, lockedKeys),
+    lockedPreserved,
+    warnings,
+    unavailableCaddyIds: [...unavailable.keys()],
+    summary: summarizeChanges(
+      changes,
+      lockedRows.length,
+      lockedPreserved.length
+    ),
   };
 }

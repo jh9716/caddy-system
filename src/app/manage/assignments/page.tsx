@@ -4,13 +4,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   assignCaddyToUnassigned,
   assignmentsByShift,
+  autoResultFromDraft,
+  applyLiveResultToDraft,
   confirmDraft,
   createDraftFromAutoResult,
   detectDraftWarnings,
   markDraftApplied,
   replaceAssignmentCaddy,
   reservationIdentity,
-  swapAssignmentCaddies,
+  setPlacementLock,
   unassignReservation,
   unusedCaddies,
   type AssignmentDraft,
@@ -56,7 +58,9 @@ const COURSE_SHORT: Record<CourseCode, string> = {
 };
 
 import { SpecialDutyPanel, type Shift1StartOption } from "./SpecialDutyPanel";
+import { LiveChangePanel, LockToggle, RowLiveActions } from "./LiveChangePanel";
 import { THIRD_BAND_TEAMS } from "@/lib/caddyManage";
+import type { LiveChangeInput, LiveChangePreview } from "@/lib/assignmentChange";
 
 type ResultViewMode = "board" | "list";
 
@@ -71,18 +75,24 @@ function AssignmentMarkBadges({
   twoWork,
   chageun,
   special,
+  limousine,
+  driving,
 }: {
   twoWork: boolean;
   chageun: boolean;
   special?: boolean;
+  limousine?: boolean;
+  driving?: boolean;
 }) {
-  if (!twoWork && !chageun && !special) return null;
+  if (!twoWork && !chageun && !special && !limousine && !driving) return null;
   return (
     <span className="bc-marks">
+      {limousine ? <span className="bc-badge limo">리무진</span> : null}
+      {driving ? <span className="bc-badge drive">드라이빙</span> : null}
       {twoWork ? <span className="bc-badge two">투</span> : null}
       {chageun ? (
         <span className="bc-badge call">찾근</span>
-      ) : special ? (
+      ) : special && !driving ? (
         <span className="bc-special">S</span>
       ) : null}
     </span>
@@ -121,6 +131,10 @@ export default function ManageAssignmentsOpsPage() {
   const [loadingAvail, setLoadingAvail] = useState(false);
   const [loadingRun, setLoadingRun] = useState(false);
   const [loadingApply, setLoadingApply] = useState(false);
+  const [loadingLiveApply, setLoadingLiveApply] = useState(false);
+  const [pendingLiveChange, setPendingLiveChange] = useState<LiveChangeInput | null>(
+    null
+  );
   const [error, setError] = useState<string | null>(null);
   const [swapKey, setSwapKey] = useState<string | null>(null);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
@@ -434,28 +448,25 @@ export default function ManageAssignmentsOpsPage() {
     const key = reservationIdentity(row.reservation);
     if (!swapKey) {
       setSwapKey(key);
-      showToast("swap 대상 선택 · 다른 예약을 탭하세요");
+      showToast("순번 바꿈 · 다른 예약을 탭하세요");
       return;
     }
     if (swapKey === key) {
       setSwapKey(null);
       return;
     }
-    let result = swapAssignmentCaddies(draft, swapKey, key);
-    if (result.specialEditWarned) {
-      const ok = window.confirm("special 배치가 포함된 swap입니다. 계속할까요?");
-      if (!ok) {
-        setSwapKey(null);
-        return;
-      }
-      result = swapAssignmentCaddies(draft, swapKey, key, {
-        allowSpecialEdit: true,
-      });
-    }
-    setDraft(result.draft);
-    setWarnings(result.warnings);
+    setPendingLiveChange({
+      type: "SWAP_CADDY",
+      reservationKeyA: swapKey,
+      reservationKeyB: key,
+    });
     setSwapKey(null);
-    showToast("캐디 swap 완료");
+    showToast("순번 바꿈 미리보기 · 이대로 적용으로 저장");
+  }
+
+  function onRequestLiveChange(change: LiveChangeInput) {
+    setPendingLiveChange(change);
+    showToast("변경 미리보기 · 이대로 적용으로 저장");
   }
 
   function onAssignUnassigned(resKey: string, caddyId: number) {
@@ -552,6 +563,61 @@ export default function ManageAssignmentsOpsPage() {
     } finally {
       setLoadingApply(false);
     }
+  }
+
+  async function onLiveApply(preview: LiveChangePreview) {
+    if (!draft) return;
+    setLoadingLiveApply(true);
+    setError(null);
+    try {
+      const previous = autoResultFromDraft(draft, autoResult);
+      const res = await fetch("/api/assignments/reflow/apply", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          previous,
+          regularCaddyPool: draft.caddyPool,
+          events: preview.events,
+          changeType: preview.changeType,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      const after = (data.preview?.after || preview.after) as typeof preview.after;
+      const next = applyLiveResultToDraft(draft, after);
+      setDraft(next);
+      setWarnings(detectDraftWarnings(next));
+      if (autoResult) {
+        setAutoResult({ ...autoResult, ...after });
+      }
+      if (!res.ok) {
+        setError(
+          data.error ||
+            data.message ||
+            "배치표는 갱신했지만 DB 저장에 실패했습니다. (migration 미적용일 수 있음)"
+        );
+        showToast("미리보기 결과를 배치표에 반영 · DB 저장 실패");
+        return;
+      }
+      showToast(
+        data.opsUpdated
+          ? "현장 변경 적용 · Reservation/Placement + 운영 배치 갱신"
+          : "현장 변경 적용 · Reservation/Placement 저장"
+      );
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "현장 변경 적용 실패");
+    } finally {
+      setLoadingLiveApply(false);
+    }
+  }
+
+  function onToggleLock(row: AutoAssignmentRow, locked: boolean) {
+    if (!draft) return;
+    const key = reservationIdentity(row.reservation);
+    const result = setPlacementLock(draft, key, locked);
+    setDraft(result.draft);
+    setWarnings(result.warnings);
+    showToast(locked ? "LOCK ON" : "LOCK OFF");
   }
 
   const shiftRows =
@@ -841,6 +907,17 @@ export default function ManageAssignmentsOpsPage() {
       )}
 
       {draft && (
+        <LiveChangePanel
+          draft={draft}
+          previous={autoResultFromDraft(draft, autoResult)}
+          applying={loadingLiveApply}
+          onApplyPreview={onLiveApply}
+          preset={pendingLiveChange}
+          onPresetConsumed={() => setPendingLiveChange(null)}
+        />
+      )}
+
+      {draft && (
         <>
           {/*
             부 탭 + (배치표) 컬럼 헤더를 하나의 sticky 스택으로 묶어
@@ -1035,6 +1112,8 @@ export default function ManageAssignmentsOpsPage() {
                                       special ? "special" : ""
                                     }${marks.twoWork ? " two-work" : ""}${
                                       marks.chageun ? " chageun" : ""
+                                    }${marks.limousine ? " limo" : ""}${
+                                      marks.driving ? " drive" : ""
                                     } ${active ? "active" : ""}`}
                                     role="cell"
                                     onClick={() => {
@@ -1065,6 +1144,8 @@ export default function ManageAssignmentsOpsPage() {
                                       twoWork={marks.twoWork}
                                       chageun={marks.chageun}
                                       special={special}
+                                      limousine={marks.limousine}
+                                      driving={marks.driving}
                                     />
                                     {cell.rows.length > 1 && (
                                       <span className="bc-more">
@@ -1112,41 +1193,22 @@ export default function ManageAssignmentsOpsPage() {
                                   </span>
                                 </div>
                                 <div className="ops-row-actions">
-                                  <label className="inline">
-                                    교체
-                                    <select
-                                      defaultValue=""
-                                      onChange={(e) => {
-                                        const id = Number(e.target.value);
-                                        if (id) onReplace(detailRow, id);
-                                        e.target.value = "";
-                                      }}
-                                    >
-                                      <option value="">캐디 선택</option>
-                                      {freeCaddies.map((c) => (
-                                        <option key={c.id} value={c.id}>
-                                          {c.name} (#{c.id}/{c.team})
-                                        </option>
-                                      ))}
-                                    </select>
-                                  </label>
-                                  <button
-                                    type="button"
-                                    className="btn tiny"
-                                    onClick={() => onSwapClick(detailRow)}
-                                  >
-                                    {swapKey ===
-                                    reservationIdentity(detailRow.reservation)
-                                      ? "선택됨"
-                                      : "Swap"}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="btn tiny ghost"
-                                    onClick={() => onUnassign(detailRow)}
-                                  >
-                                    해제
-                                  </button>
+                                  <RowLiveActions
+                                    row={detailRow}
+                                    swapSelected={
+                                      swapKey ===
+                                      reservationIdentity(detailRow.reservation)
+                                    }
+                                    freeCaddies={freeCaddies}
+                                    onRequestChange={onRequestLiveChange}
+                                    onSwapClick={() => onSwapClick(detailRow)}
+                                  />
+                                  <LockToggle
+                                    row={detailRow}
+                                    onToggle={(locked) =>
+                                      onToggleLock(detailRow, locked)
+                                    }
+                                  />
                                 </div>
                               </div>
                             )}
@@ -1180,7 +1242,9 @@ export default function ManageAssignmentsOpsPage() {
                         key={key}
                         className={`ops-row ${special ? "special" : ""}${
                           marks.twoWork ? " two-work" : ""
-                        }${marks.chageun ? " chageun" : ""} ${
+                        }${marks.chageun ? " chageun" : ""}${
+                          marks.limousine ? " limo" : ""
+                        }${marks.driving ? " drive" : ""} ${
                           swapKey === key ? "swap-on" : ""
                         } ${open ? "open" : ""}`}
                       >
@@ -1205,6 +1269,8 @@ export default function ManageAssignmentsOpsPage() {
                               twoWork={marks.twoWork}
                               chageun={marks.chageun}
                               special={special}
+                              limousine={marks.limousine}
+                              driving={marks.driving}
                             />
                           </span>
                           <span className="col meta">
@@ -1213,38 +1279,17 @@ export default function ManageAssignmentsOpsPage() {
                         </button>
                         {open && (
                           <div className="ops-row-actions">
-                            <label className="inline">
-                              교체
-                              <select
-                                defaultValue=""
-                                onChange={(e) => {
-                                  const id = Number(e.target.value);
-                                  if (id) onReplace(row, id);
-                                  e.target.value = "";
-                                }}
-                              >
-                                <option value="">캐디 선택</option>
-                                {freeCaddies.map((c) => (
-                                  <option key={c.id} value={c.id}>
-                                    {c.name} (#{c.id}/{c.team})
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                            <button
-                              type="button"
-                              className="btn tiny"
-                              onClick={() => onSwapClick(row)}
-                            >
-                              {swapKey === key ? "선택됨" : "Swap"}
-                            </button>
-                            <button
-                              type="button"
-                              className="btn tiny ghost"
-                              onClick={() => onUnassign(row)}
-                            >
-                              해제
-                            </button>
+                            <RowLiveActions
+                              row={row}
+                              swapSelected={swapKey === key}
+                              freeCaddies={freeCaddies}
+                              onRequestChange={onRequestLiveChange}
+                              onSwapClick={() => onSwapClick(row)}
+                            />
+                            <LockToggle
+                              row={row}
+                              onToggle={(locked) => onToggleLock(row, locked)}
+                            />
                           </div>
                         )}
                       </li>
@@ -1827,6 +1872,25 @@ const opsCss = `
     color: #7c5a1e;
     background: #f4ead6;
   }
+  .bc-badge.limo {
+    color: #7c2d12;
+    background: #fdba74;
+  }
+  .bc-badge.drive {
+    color: #fff;
+    background: #7c3aed;
+  }
+  button.bc-cell.assigned.limo {
+    box-shadow: inset 0 -3px 0 #f59e0b;
+  }
+  button.bc-cell.assigned.drive {
+    box-shadow: inset 3px 0 0 #7c3aed;
+  }
+  button.bc-cell.assigned.limo.drive {
+    box-shadow: inset 3px 0 0 #7c3aed, inset 0 -3px 0 #f59e0b;
+  }
+  .ops-row.limo { background: #fff7ed; }
+  .ops-row.drive { box-shadow: inset 3px 0 0 #7c3aed; }
   .bc-more {
     font-size: 0.6rem;
     color: #64748b;
@@ -1974,5 +2038,74 @@ const opsCss = `
     font-size: 0.85rem;
     z-index: 20;
     max-width: 90vw;
+  }
+  .live-change {
+    border: 1px solid #cbd5e1;
+    border-radius: 12px;
+    padding: 12px;
+    background: #fff;
+    display: grid;
+    gap: 10px;
+  }
+  .live-change-head {
+    display: grid;
+    gap: 2px;
+  }
+  .live-change-head span {
+    color: #64748b;
+    font-size: 0.8rem;
+  }
+  .live-change-grid {
+    display: grid;
+    gap: 8px;
+  }
+  .live-change-grid label {
+    display: grid;
+    gap: 4px;
+    font-size: 0.8rem;
+    color: #334155;
+  }
+  .live-change-grid select,
+  .live-change-grid input {
+    min-height: 40px;
+    font-size: 16px;
+  }
+  .live-change-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .live-preview {
+    border: 1px dashed #94a3b8;
+    border-radius: 8px;
+    padding: 10px;
+    background: #f8fafc;
+    display: grid;
+    gap: 6px;
+    font-size: 0.8rem;
+  }
+  .live-preview-title {
+    font-weight: 700;
+  }
+  .live-preview-warn {
+    margin: 0;
+    padding-left: 18px;
+    color: #b45309;
+  }
+  .live-preview-diff {
+    margin: 0;
+    padding-left: 18px;
+    max-height: 220px;
+    overflow: auto;
+  }
+  .live-preview-lock,
+  .live-preview-unassigned {
+    color: #334155;
+  }
+  .live-row-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
   }
 `;
