@@ -58,6 +58,7 @@ const SPECIAL_KINDS: AssignmentKind[] = [
   "fiftyFourHole",
   "oneThree",
   "oneTwo",
+  "oneMak",
 ];
 
 export function isSpecialKind(kind: AssignmentKind): boolean {

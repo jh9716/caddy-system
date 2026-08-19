@@ -299,3 +299,17 @@ model DailySpecialDuty {
   @@index([date, kind, sortOrder])
   @@index([caddyId])
 }
+
+/// 1·3부 / 1막 1부 시작 예약 (코스+티타임). 54홀·1·2부는 사용하지 않음.
+model DailySpecialDutyAnchor {
+  id        Int              @id @default(autoincrement())
+  date      DateTime
+  kind      DailySpecialKind
+  course    String
+  teeTime   String
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  @@unique([date, kind])
+  @@index([date])
+}

@@ -361,7 +361,74 @@ export async function buildDailySpecialDutyPayload(date: string) {
     count: group.count,
     items: group.items,
   }));
-  return { date, groups };
+  const anchors = await listSpecialStartAnchors(date);
+  return { date, groups, anchors };
+}
+
+export async function listSpecialStartAnchors(
+  date: string
+): Promise<{
+  ONE_THREE: { course: string; teeTime: string } | null;
+  ONE_MAK: { course: string; teeTime: string } | null;
+}> {
+  const { start, end } = dateRange(date);
+  const rows = await prisma.dailySpecialDutyAnchor.findMany({
+    where: { date: { gte: start, lte: end } },
+  });
+  const byKind = new Map(rows.map((row) => [row.kind, row]));
+  const pick = (kind: DailySpecialKind) => {
+    const row = byKind.get(kind);
+    return row ? { course: row.course, teeTime: row.teeTime } : null;
+  };
+  return {
+    ONE_THREE: pick("ONE_THREE"),
+    ONE_MAK: pick("ONE_MAK"),
+  };
+}
+
+export async function upsertSpecialStartAnchor(input: {
+  date: string;
+  kind: DailySpecialKind;
+  course?: string | null;
+  teeTime?: string | null;
+}): Promise<{
+  ONE_THREE: { course: string; teeTime: string } | null;
+  ONE_MAK: { course: string; teeTime: string } | null;
+}> {
+  if (input.kind !== "ONE_THREE" && input.kind !== "ONE_MAK") {
+    throw new DailySpecialDutyError(
+      "시작 예약은 1·3부와 1막만 지정합니다.",
+      "anchor_kind_invalid"
+    );
+  }
+  const { start, end } = dateRange(input.date);
+  const course = String(input.course || "").trim();
+  const teeTime = String(input.teeTime || "").trim();
+  const existing = await prisma.dailySpecialDutyAnchor.findFirst({
+    where: { date: { gte: start, lte: end }, kind: input.kind },
+  });
+  if (!course || !teeTime) {
+    if (existing) {
+      await prisma.dailySpecialDutyAnchor.delete({ where: { id: existing.id } });
+    }
+    return listSpecialStartAnchors(input.date);
+  }
+  if (existing) {
+    await prisma.dailySpecialDutyAnchor.update({
+      where: { id: existing.id },
+      data: { course, teeTime },
+    });
+  } else {
+    await prisma.dailySpecialDutyAnchor.create({
+      data: {
+        date: start,
+        kind: input.kind,
+        course,
+        teeTime,
+      },
+    });
+  }
+  return listSpecialStartAnchors(input.date);
 }
 
 export async function loadEngineSpecialBundlesForDate(
@@ -369,8 +436,10 @@ export async function loadEngineSpecialBundlesForDate(
   unavailableById: ReadonlyMap<number, string[]>
 ) {
   const records = await listDailySpecialDutyRecords(date);
+  const anchors = await listSpecialStartAnchors(date);
   return {
     records,
+    anchors,
     bundles: buildEngineSpecialBundles(records, unavailableById),
   };
 }

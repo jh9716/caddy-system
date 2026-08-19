@@ -88,6 +88,24 @@ function makeReservations(
   return out;
 }
 
+function waveSlots(
+  date: string,
+  shift: "1부" | "2부" | "3부",
+  teeTime: string,
+  courses: Array<"VERTHILL" | "SKY" | "OCEAN" | "LAKE">,
+  rowStart: number
+): AutoAssignReservation[] {
+  return courses.map((course, i) => ({
+    date,
+    course,
+    courseLabel: course,
+    shift,
+    teeTime,
+    teamName: `${shift}-${course}-${i + 1}`,
+    rawRowIndex: rowStart + i,
+  }));
+}
+
 section("캐디 > 예약");
 {
   const date = "2026-08-20";
@@ -352,13 +370,14 @@ section("54홀: 1부 후반 + 3부 초반 가능");
     teamOrder: 1,
   };
   const reservations: AutoAssignReservation[] = [
+    ...waveSlots(date, "1부", "06:00", ["VERTHILL", "SKY"], 2),
     {
       date,
       course: "VERTHILL",
       shift: "1부",
       teeTime: "10:30",
       teamName: "1부후반",
-      rawRowIndex: 2,
+      rawRowIndex: 4,
     },
     {
       date,
@@ -366,7 +385,7 @@ section("54홀: 1부 후반 + 3부 초반 가능");
       shift: "2부",
       teeTime: "13:00",
       teamName: "2부",
-      rawRowIndex: 3,
+      rawRowIndex: 5,
     },
     {
       date,
@@ -374,7 +393,7 @@ section("54홀: 1부 후반 + 3부 초반 가능");
       shift: "3부",
       teeTime: "16:30",
       teamName: "3부초반",
-      rawRowIndex: 4,
+      rawRowIndex: 6,
     },
   ];
   const result = computeAutoAssignmentsV1({
@@ -393,13 +412,13 @@ section("54홀: 1부 후반 + 3부 초반 가능");
   const tees = result.fiftyFourHoleAssignments
     .map((a) => a.reservation.teeTime)
     .sort();
-  assert(tees[0] === "10:30" && tees[1] === "16:30", "1부후반+3부초반");
-  assert(result.specialUnassigned.length === 0, "no 54 review");
-  assert(result.regularAssignments.length === 1, "남은 2부 일반배치");
+  assert(tees[0] === "10:30" && tees[1] === "16:30", "1부 3번째+6h 3부");
   assert(
-    result.regularAssignments[0].reservation.teeTime === "13:00",
-    "regular got midday"
+    result.fiftyFourHoleAssignments.find((a) => a.shift === "1부")?.reservation
+      .teeTime === "10:30",
+    "54 1부는 세 번째 자리"
   );
+  assert(result.specialUnassigned.length === 0, "no 54 review");
 }
 
 section("54홀: 시간 겹침 방지");
@@ -419,21 +438,14 @@ section("54홀: 시간 겹침 방지");
   };
   // only one valid pair exists (06:00 + 12:00); second candidate cannot reuse those
   const reservations: AutoAssignReservation[] = [
-    {
-      date,
-      course: "OCEAN",
-      shift: "1부",
-      teeTime: "06:00",
-      teamName: "A",
-      rawRowIndex: 2,
-    },
+    ...waveSlots(date, "1부", "06:00", ["VERTHILL", "SKY", "OCEAN"], 2),
     {
       date,
       course: "OCEAN",
       shift: "2부",
       teeTime: "12:00",
       teamName: "B",
-      rawRowIndex: 3,
+      rawRowIndex: 6,
     },
     {
       date,
@@ -441,7 +453,7 @@ section("54홀: 시간 겹침 방지");
       shift: "2부",
       teeTime: "12:30",
       teamName: "C",
-      rawRowIndex: 4,
+      rawRowIndex: 7,
     },
   ];
   const result = computeAutoAssignmentsV1({
@@ -571,22 +583,7 @@ section("54홀: 배치 후 일반 순번 포인터 정상");
     available,
     fiftyFourHole: [fiftyFour],
     reservations: [
-      {
-        date,
-        course: "VERTHILL",
-        shift: "1부",
-        teeTime: "06:00",
-        teamName: "r1",
-        rawRowIndex: 2,
-      },
-      {
-        date,
-        course: "VERTHILL",
-        shift: "1부",
-        teeTime: "07:00",
-        teamName: "r2",
-        rawRowIndex: 3,
-      },
+      ...waveSlots(date, "1부", "06:00", ["VERTHILL", "SKY"], 2),
       {
         date,
         course: "VERTHILL",
@@ -603,10 +600,18 @@ section("54홀: 배치 후 일반 순번 포인터 정상");
         teamName: "r4",
         rawRowIndex: 5,
       },
+      {
+        date,
+        course: "VERTHILL",
+        shift: "3부",
+        teeTime: "14:00",
+        teamName: "r5",
+        rawRowIndex: 6,
+      },
     ],
   });
-  assert(result.fiftyFourHoleAssignments.length === 2, "54 took pair");
-  assert(result.regularAssignments.length === 2, "2 regular");
+  assert(result.fiftyFourHoleAssignments.length === 2, "54 took 3rd 1부 + 6h");
+  assert(result.regularAssignments.length === 3, "2 protected 1부 + leftover 2부");
   assert(
     result.regularAssignments[0].caddy.id === ordered[0].id,
     "regular starts seq0 (pointer not skewed by 54)"
@@ -641,6 +646,7 @@ section("1·3부: 1부 후반 + 3부 초반 정상");
     date,
     available: makeCaddies(4, 1),
     oneThreeCandidates: [ot],
+    oneThreeAnchor: { course: "SKY", teeTime: "10:30" },
     reservations: [
       {
         date,
@@ -746,8 +752,8 @@ section("1·3부: 6시간 미만 거절");
   assert(result.oneThreeAssignments.length === 0, "no 1·3 assign");
   assert(result.specialUnassigned.length === 1, "review");
   assert(
-    result.specialUnassigned[0].reason === REASON.ONE_THREE_NO_PAIR,
-    "NO_PAIR reason"
+    result.specialUnassigned[0].reason === REASON.ONE_THREE_MISSING_ANCHOR,
+    "anchor 없으면 MISSING_ANCHOR"
   );
   assert(
     !result.regularAssignments.some((a) => a.caddy.id === 901),
@@ -764,6 +770,7 @@ section("1·3부: 1부만 / 3부만");
     oneThreeCandidates: [
       { id: 910, name: "OT1", team: "1조", teamOrder: 1 },
     ],
+    oneThreeAnchor: { course: "LAKE", teeTime: "10:00" },
     reservations: [
       {
         date,
@@ -786,6 +793,7 @@ section("1·3부: 1부만 / 3부만");
     oneThreeCandidates: [
       { id: 911, name: "OT3", team: "1조", teamOrder: 1 },
     ],
+    oneThreeAnchor: { course: "LAKE", teeTime: "10:00" },
     reservations: [
       {
         date,
@@ -798,8 +806,8 @@ section("1·3부: 1부만 / 3부만");
     ],
   });
   assert(
-    only3.specialUnassigned[0]?.reason === REASON.ONE_THREE_MISSING_SHIFT1,
-    "3부만 → MISSING_SHIFT1"
+    only3.specialUnassigned[0]?.reason === REASON.ONE_THREE_MISSING_ANCHOR,
+    "3부만+없는 1부 anchor → MISSING_ANCHOR"
   );
 }
 
@@ -814,6 +822,7 @@ section("1·3부: 후보/예약 부족");
       { id: 920, name: "A", team: "1조", teamOrder: 1 },
       { id: 921, name: "B", team: "1조", teamOrder: 2 },
     ],
+    oneThreeAnchor: { course: "VERTHILL", teeTime: "10:00" },
     reservations: [
       {
         date,
@@ -852,6 +861,7 @@ section("1·3부: 후보/예약 부족");
     oneThreeCandidates: [
       { id: 922, name: "Only", team: "2조", teamOrder: 1 },
     ],
+    oneThreeAnchor: { course: "VERTHILL", teeTime: "09:30" },
     reservations: [
       {
         date,
@@ -908,13 +918,14 @@ section("1·3부: 54홀과 동일 캐디면 54홀 우선");
     fiftyFourHole: [shared],
     oneThreeCandidates: [shared],
     reservations: [
+      ...waveSlots(date, "1부", "06:00", ["VERTHILL", "SKY"], 2),
       {
         date,
         course: "SKY",
         shift: "1부",
         teeTime: "10:30",
         teamName: "s1",
-        rawRowIndex: 2,
+        rawRowIndex: 4,
       },
       {
         date,
@@ -922,7 +933,7 @@ section("1·3부: 54홀과 동일 캐디면 54홀 우선");
         shift: "3부",
         teeTime: "16:30",
         teamName: "s3",
-        rawRowIndex: 3,
+        rawRowIndex: 5,
       },
     ],
   });
@@ -946,6 +957,7 @@ section("1·3부: 배치 후 일반 순번 정상");
     oneThreeCandidates: [
       { id: 940, name: "OT", team: "8조", teamOrder: 1 },
     ],
+    oneThreeAnchor: { course: "OCEAN", teeTime: "10:00" },
     reservations: [
       {
         date,
@@ -1013,38 +1025,16 @@ section("1·2부: 정상 1부+2부 페어");
     available: makeCaddies(4, 1),
     oneTwoCandidates: [ot],
     reservations: [
-      {
-        date,
-        course: "SKY",
-        shift: "1부",
-        teeTime: "07:00",
-        teamName: "이른1부",
-        rawRowIndex: 2,
-      },
+      ...waveSlots(date, "1부", "07:00", ["SKY", "OCEAN"], 2),
       {
         date,
         course: "SKY",
         shift: "1부",
         teeTime: "09:30",
         teamName: "후반1부",
-        rawRowIndex: 3,
-      },
-      {
-        date,
-        course: "SKY",
-        shift: "2부",
-        teeTime: "13:30",
-        teamName: "초반2부",
         rawRowIndex: 4,
       },
-      {
-        date,
-        course: "SKY",
-        shift: "2부",
-        teeTime: "14:30",
-        teamName: "늦은2부",
-        rawRowIndex: 5,
-      },
+      ...waveSlots(date, "2부", "13:30", ["SKY", "OCEAN", "LAKE"], 5),
     ],
   });
   assert(result.oneTwoAssignments.length === 2, "1·2 2슬롯");
@@ -1052,12 +1042,11 @@ section("1·2부: 정상 1부+2부 페어");
     result.oneTwoAssignments.every((a) => a.reason === REASON.ONE_TWO_PRIORITY),
     "ONE_TWO_PRIORITY"
   );
-  const tees = result.oneTwoAssignments
-    .map((a) => a.reservation.teeTime)
-    .sort();
-  assert(tees[0] === "09:30" && tees[1] === "13:30", "후반1부+초반2부");
+  const s1 = result.oneTwoAssignments.find((a) => a.shift === "1부");
+  const s2 = result.oneTwoAssignments.find((a) => a.shift === "2부");
+  assert(s1?.reservation.teeTime === "09:30", "1·2 1부는 세 번째 자리");
+  assert(s2?.reservation.course === "LAKE", "1·2 2부는 HOUSE 첫근무 종료 다음");
   assert(result.specialUnassigned.length === 0, "no review");
-  assert(result.regularAssignments.length === 2, "remaining regular");
 }
 
 section("1·2부: 최소 간격 미달 거절");
@@ -1123,8 +1112,8 @@ section("1·2부: 최소 간격 미달 거절");
   assert(result.oneTwoAssignments.length === 0, "no 1·2 assign");
   assert(result.specialUnassigned.length === 1, "review");
   assert(
-    result.specialUnassigned[0].reason === REASON.ONE_TWO_NO_PAIR,
-    "NO_PAIR"
+    result.specialUnassigned[0].reason === REASON.ONE_TWO_MISSING_SHIFT1,
+    "1부 2자리 보호로 1·2 1부 없음"
   );
   assert(
     !result.regularAssignments.some((a) => a.caddy.id === 951),
@@ -1153,8 +1142,8 @@ section("1·2부: 1부만 / 2부만");
     ],
   });
   assert(
-    only1.specialUnassigned[0]?.reason === REASON.ONE_TWO_MISSING_SHIFT2,
-    "1부만 → MISSING_SHIFT2"
+    only1.specialUnassigned[0]?.reason === REASON.ONE_TWO_MISSING_SHIFT1,
+    "1부만(2자리 미만) → MISSING_SHIFT1"
   );
 
   const only2 = computeAutoAssignmentsV1({
@@ -1191,22 +1180,8 @@ section("1·2부: 후보/예약 부족");
       { id: 971, name: "B", team: "1조", teamOrder: 2 },
     ],
     reservations: [
-      {
-        date,
-        course: "VERTHILL",
-        shift: "1부",
-        teeTime: "09:00",
-        teamName: "s1",
-        rawRowIndex: 2,
-      },
-      {
-        date,
-        course: "VERTHILL",
-        shift: "2부",
-        teeTime: "13:00",
-        teamName: "s2",
-        rawRowIndex: 3,
-      },
+      ...waveSlots(date, "1부", "09:00", ["VERTHILL", "SKY", "OCEAN"], 2),
+      ...waveSlots(date, "2부", "13:00", ["VERTHILL", "SKY", "OCEAN"], 5),
     ],
   });
   assert(shortRes.meta.oneTwoAssignedCaddyCount === 1, "1 candidate placed");
@@ -1219,43 +1194,12 @@ section("1·2부: 후보/예약 부족");
       { id: 972, name: "Only", team: "2조", teamOrder: 1 },
     ],
     reservations: [
-      {
-        date,
-        course: "VERTHILL",
-        shift: "1부",
-        teeTime: "08:30",
-        teamName: "a1",
-        rawRowIndex: 2,
-      },
-      {
-        date,
-        course: "VERTHILL",
-        shift: "1부",
-        teeTime: "09:30",
-        teamName: "a2",
-        rawRowIndex: 3,
-      },
-      {
-        date,
-        course: "VERTHILL",
-        shift: "2부",
-        teeTime: "13:00",
-        teamName: "b1",
-        rawRowIndex: 4,
-      },
-      {
-        date,
-        course: "VERTHILL",
-        shift: "2부",
-        teeTime: "13:30",
-        teamName: "b2",
-        rawRowIndex: 5,
-      },
+      ...waveSlots(date, "1부", "08:30", ["VERTHILL", "SKY", "OCEAN"], 2),
+      ...waveSlots(date, "2부", "13:00", ["VERTHILL", "SKY", "OCEAN"], 5),
     ],
   });
   assert(shortCand.meta.oneTwoAssignedCaddyCount === 1, "후보 1만");
   assert(shortCand.oneTwoAssignments.length === 2, "1 pair");
-  assert(shortCand.regularAssignments.length === 2, "나머지 일반");
 }
 
 section("1·2부: 54홀 충돌 시 54홀 우선");
@@ -1273,21 +1217,22 @@ section("1·2부: 54홀 충돌 시 54홀 우선");
     fiftyFourHole: [shared],
     oneTwoCandidates: [shared],
     reservations: [
-      {
-        date,
-        course: "SKY",
-        shift: "1부",
-        teeTime: "07:00",
-        teamName: "s1",
-        rawRowIndex: 2,
-      },
+      ...waveSlots(date, "1부", "07:00", ["SKY", "OCEAN", "LAKE"], 2),
       {
         date,
         course: "SKY",
         shift: "2부",
         teeTime: "13:00",
         teamName: "s2",
-        rawRowIndex: 3,
+        rawRowIndex: 6,
+      },
+      {
+        date,
+        course: "SKY",
+        shift: "3부",
+        teeTime: "13:10",
+        teamName: "late",
+        rawRowIndex: 7,
       },
     ],
   });
@@ -1310,6 +1255,7 @@ section("1·2부: 1·3부 충돌 시 1·3부 우선");
     available: makeCaddies(3, 1),
     oneThreeCandidates: [shared],
     oneTwoCandidates: [shared],
+    oneThreeAnchor: { course: "OCEAN", teeTime: "10:00" },
     reservations: [
       {
         date,
@@ -1358,47 +1304,29 @@ section("1·2부: 배치 후 일반 순번 정상");
       { id: 990, name: "OT12", team: "8조", teamOrder: 1 },
     ],
     reservations: [
-      {
-        date,
-        course: "LAKE",
-        shift: "1부",
-        teeTime: "07:00",
-        teamName: "early",
-        rawRowIndex: 2,
-      },
+      ...waveSlots(date, "1부", "07:00", ["LAKE", "OCEAN"], 2),
       {
         date,
         course: "LAKE",
         shift: "1부",
         teeTime: "09:00",
         teamName: "late1",
-        rawRowIndex: 3,
-      },
-      {
-        date,
-        course: "LAKE",
-        shift: "2부",
-        teeTime: "13:00",
-        teamName: "early2",
         rawRowIndex: 4,
       },
+      ...waveSlots(date, "2부", "13:00", ["LAKE", "OCEAN", "SKY", "VERTHILL"], 5),
       {
         date,
         course: "LAKE",
         shift: "3부",
         teeTime: "16:00",
         teamName: "s3",
-        rawRowIndex: 5,
+        rawRowIndex: 9,
       },
     ],
   });
   assert(result.oneTwoAssignments.length === 2, "OT12 pair");
-  assert(
-    result.oneTwoAssignments.map((a) => a.reservation.teeTime).sort().join(",") ===
-      "09:00,13:00",
-    "OT12 took late1+early2"
-  );
-  assert(result.regularAssignments.length === 2, "2 regular left");
+  const s1_12 = result.oneTwoAssignments.find((a) => a.shift === "1부");
+  assert(s1_12?.reservation.teeTime === "09:00", "1·2 1부는 세 번째");
   assert(
     result.regularAssignments[0].caddy.id === ordered[0].id,
     "pointer starts at 0"
@@ -3117,6 +3045,7 @@ section("Fixture4: special/fixed/54/1·3/1·2는 일반 HOUSE 후보 재진입 �
     fiftyFourHole: [special54],
     oneThreeCandidates: [special13],
     oneTwoCandidates: [special12],
+    oneThreeAnchor: { course: "OCEAN", teeTime: "10:00" },
     fixedAssignments: [
       {
         caddyId: specialFixed.id,

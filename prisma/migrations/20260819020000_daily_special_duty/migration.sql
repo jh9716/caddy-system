@@ -22,3 +22,19 @@ CREATE INDEX "DailySpecialDuty_date_kind_sortOrder_idx" ON "DailySpecialDuty"("d
 CREATE INDEX "DailySpecialDuty_caddyId_idx" ON "DailySpecialDuty"("caddyId");
 
 ALTER TABLE "DailySpecialDuty" ADD CONSTRAINT "DailySpecialDuty_caddyId_fkey" FOREIGN KEY ("caddyId") REFERENCES "Caddy"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+CREATE TABLE "DailySpecialDutyAnchor" (
+    "id" SERIAL NOT NULL,
+    "date" TIMESTAMP(3) NOT NULL,
+    "kind" "DailySpecialKind" NOT NULL,
+    "course" TEXT NOT NULL,
+    "teeTime" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "DailySpecialDutyAnchor_pkey" PRIMARY KEY ("id")
+);
+
+CREATE UNIQUE INDEX "DailySpecialDutyAnchor_date_kind_key" ON "DailySpecialDutyAnchor"("date", "kind");
+
+CREATE INDEX "DailySpecialDutyAnchor_date_idx" ON "DailySpecialDutyAnchor"("date");

@@ -24,7 +24,9 @@ import {
 import {
   isHouseStartCandidate,
   resolveCourseCode,
+  compareReservationOrder,
   type AutoAssignCaddy,
+  type AutoAssignReservation,
   type AutoAssignResultV1,
   type AutoAssignmentRow,
 } from "@/lib/autoAssignEngine";
@@ -53,7 +55,7 @@ const COURSE_SHORT: Record<CourseCode, string> = {
   LAKE: "레",
 };
 
-import { SpecialDutyPanel } from "./SpecialDutyPanel";
+import { SpecialDutyPanel, type Shift1StartOption } from "./SpecialDutyPanel";
 type ResultViewMode = "board" | "list";
 
 function AssignmentMarkBadges({
@@ -91,6 +93,7 @@ export default function ManageAssignmentsOpsPage() {
   const [date, setDate] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [dutyFile, setDutyFile] = useState<File | null>(null);
+  const [shift1Options, setShift1Options] = useState<Shift1StartOption[]>([]);
   const [availability, setAvailability] = useState<
     (AvailabilityResult & { dailySummary?: DailyAvailabilitySummary }) | null
   >(null);
@@ -111,6 +114,54 @@ export default function ManageAssignmentsOpsPage() {
   const [viewMode, setViewMode] = useState<ResultViewMode>("board");
   const [toast, setToast] = useState<string | null>(null);
   const stickyStackRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!file || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      setShift1Options([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const form = new FormData();
+        form.append("file", file);
+        form.append("defaultDate", date);
+        const res = await fetch("/api/reservations/preview", {
+          method: "POST",
+          body: form,
+          credentials: "include",
+        });
+        const data = await res.json();
+        if (!res.ok || cancelled) return;
+        const rows = ((data.reservations || []) as AutoAssignReservation[])
+          .filter(
+            (row) =>
+              row.shift === "1부" && (!row.date || row.date === date)
+          )
+          .slice()
+          .sort(compareReservationOrder);
+        if (cancelled) return;
+        setShift1Options(
+          rows.map((row) => {
+            const code = resolveCourseCode(row.course);
+            const courseLabel = code ? COURSE_LABELS[code] : row.course;
+            return {
+              course: row.course,
+              teeTime: row.teeTime,
+              label: `${courseLabel} ${row.teeTime}${
+                row.teamName ? ` · ${row.teamName}` : ""
+              }`,
+            };
+          })
+        );
+      } catch {
+        if (!cancelled) setShift1Options([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [file, date]);
 
   /** 부 탭/보기 전환 시 sticky 스택 기준으로 첫 데이터 행이 보이도록 스크롤 */
   useEffect(() => {
@@ -657,6 +708,7 @@ export default function ManageAssignmentsOpsPage() {
         <SpecialDutyPanel
           date={date}
           excludedRows={availability?.excluded}
+          shift1Options={shift1Options}
         />
       </section>
 

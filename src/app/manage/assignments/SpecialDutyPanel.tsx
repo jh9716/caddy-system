@@ -5,11 +5,14 @@ import { normalizePersonName } from "@/lib/dailyCaddyNameMatch";
 import {
   DAILY_SPECIAL_KINDS,
   DAILY_SPECIAL_KIND_LABELS,
+  ANCHOR_SPECIAL_KINDS,
   annotateSpecialDutyConflicts,
   unavailableReasonsFromRows,
   type DailySpecialKind,
+  type SpecialDutyAnchors,
   type SpecialDutyConflict,
   type SpecialDutyRecord,
+  type SpecialStartAnchor,
 } from "@/lib/dailySpecialDuty";
 
 type GroupPayload = {
@@ -24,10 +27,17 @@ type GroupPayload = {
 type ListPayload = {
   date: string;
   groups: GroupPayload[];
+  anchors?: SpecialDutyAnchors;
   added?: SpecialDutyRecord[];
   reviews?: Array<{ status: string; name: string; reason?: string }>;
   duplicates?: Array<{ caddyId: number; name?: string }>;
   error?: string;
+};
+
+export type Shift1StartOption = {
+  course: string;
+  teeTime: string;
+  label: string;
 };
 
 type SearchCaddy = {
@@ -38,14 +48,27 @@ type SearchCaddy = {
   employmentStatus: string;
 };
 
+const EMPTY_ANCHORS: SpecialDutyAnchors = {
+  ONE_THREE: null,
+  ONE_MAK: null,
+};
+
+function anchorValue(anchor: SpecialStartAnchor | null | undefined): string {
+  if (!anchor?.course || !anchor?.teeTime) return "";
+  return `${anchor.course}@@${anchor.teeTime}`;
+}
+
 export function SpecialDutyPanel({
   date,
   excludedRows,
+  shift1Options = [],
 }: {
   date: string;
   excludedRows?: Array<{ id: number; excludedReasons?: string[] | null }>;
+  shift1Options?: Shift1StartOption[];
 }) {
   const [groups, setGroups] = useState<GroupPayload[]>([]);
+  const [anchors, setAnchors] = useState<SpecialDutyAnchors>(EMPTY_ANCHORS);
   const [openKinds, setOpenKinds] = useState<Set<DailySpecialKind>>(new Set());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -64,11 +87,13 @@ export function SpecialDutyPanel({
 
   const applyPayload = useCallback((data: ListPayload) => {
     setGroups(data.groups || []);
+    if (data.anchors) setAnchors(data.anchors);
   }, []);
 
   const load = useCallback(async () => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       setGroups([]);
+      setAnchors(EMPTY_ANCHORS);
       return;
     }
     setLoading(true);
@@ -220,6 +245,40 @@ export function SpecialDutyPanel({
     }
   }
 
+  async function onAnchor(kind: DailySpecialKind, value: string) {
+    const [course, teeTime] = value ? value.split("@@") : ["", ""];
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/daily-special-duties", {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "anchor",
+          date,
+          kind,
+          anchor: { course: course || "", teeTime: teeTime || "" },
+        }),
+      });
+      const data = (await res.json()) as ListPayload;
+      if (!res.ok) {
+        setError(data.error || "시작 예약 저장 실패");
+        return;
+      }
+      applyPayload(data);
+      showToast(
+        value
+          ? `${DAILY_SPECIAL_KIND_LABELS[kind]} 시작 ${(data.anchors as SpecialDutyAnchors | undefined)?.[kind as "ONE_THREE" | "ONE_MAK"]?.teeTime || teeTime}`
+          : `${DAILY_SPECIAL_KIND_LABELS[kind]} 시작 해제`
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "시작 예약 저장 실패");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     return (
       <section className="sd-panel">
@@ -234,7 +293,10 @@ export function SpecialDutyPanel({
       <div className="sd-head">
         <div>
           <div className="sd-title">특수근무</div>
-          <p className="sd-hint">같은 유형 안 입력 순서가 우선순위입니다.</p>
+          <p className="sd-hint">
+            같은 유형 안 입력 순서가 우선순위입니다. 54홀·1·2부는 시작팀을
+            지정하지 않습니다.
+          </p>
         </div>
         <button type="button" className="sd-add" onClick={() => void openModal()}>
           + 특수근무 등록
@@ -265,10 +327,47 @@ export function SpecialDutyPanel({
               </span>
             </button>
             {openKinds.has(group.kind) ? (
-              group.items.length === 0 ? (
-                <div className="sd-empty">등록 없음</div>
-              ) : (
-                <ol className="sd-list">
+              <>
+                {ANCHOR_SPECIAL_KINDS.includes(
+                  group.kind as (typeof ANCHOR_SPECIAL_KINDS)[number]
+                ) ? (
+                  <label className="sd-anchor">
+                    <span>1부 시작 예약 (코스+티타임)</span>
+                    <select
+                      value={anchorValue(
+                        anchors[group.kind as "ONE_THREE" | "ONE_MAK"]
+                      )}
+                      disabled={busy || shift1Options.length === 0}
+                      onChange={(e) =>
+                        void onAnchor(group.kind, e.target.value)
+                      }
+                    >
+                      <option value="">
+                        {shift1Options.length === 0
+                          ? "예약 Excel 업로드 후 선택"
+                          : "시작 예약 선택…"}
+                      </option>
+                      {shift1Options.map((opt) => (
+                        <option
+                          key={`${opt.course}-${opt.teeTime}-${opt.label}`}
+                          value={`${opt.course}@@${opt.teeTime}`}
+                        >
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : group.kind === "FIFTY_FOUR" || group.kind === "ONE_TWO" ? (
+                  <div className="sd-empty sd-rule">
+                    {group.kind === "FIFTY_FOUR"
+                      ? "1부 세 번째 자리부터 자동 배치"
+                      : "1부는 첫 2자리(및 54홀) 다음, 2부는 HOUSE 첫근무 종료 지점"}
+                  </div>
+                ) : null}
+                {group.items.length === 0 ? (
+                  <div className="sd-empty">등록 없음</div>
+                ) : (
+                  <ol className="sd-list">
                   {group.items.map((item, index) => (
                     <li key={item.id || `${item.caddyId}-${index}`}>
                       <div className="sd-row">
@@ -316,7 +415,8 @@ export function SpecialDutyPanel({
                     </li>
                   ))}
                 </ol>
-              )
+                )}
+              </>
             ) : null}
           </div>
         ))}
@@ -454,6 +554,24 @@ export function SpecialDutyPanel({
           padding: 10px 12px;
           color: #94a3b8;
           font-size: 0.8rem;
+        }
+        .sd-rule {
+          padding-bottom: 0;
+        }
+        .sd-anchor {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+          padding: 8px 12px;
+          font-size: 0.75rem;
+          color: #475569;
+        }
+        .sd-anchor select {
+          min-height: 40px;
+          border: 1px solid #e2e8f0;
+          border-radius: 8px;
+          background: #fff;
+          font-size: 0.85rem;
         }
         .sd-list {
           list-style: none;

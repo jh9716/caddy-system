@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { isDailySpecialKind, type DailySpecialKind } from "@/lib/dailySpecialDuty";
+import { isAnchorSpecialKind, isDailySpecialKind, type DailySpecialKind } from "@/lib/dailySpecialDuty";
 import {
   DailySpecialDutyError,
   addDailySpecialDuties,
   buildDailySpecialDutyPayload,
   moveDailySpecialDuty,
   reorderDailySpecialDuties,
+  upsertSpecialStartAnchor,
 } from "@/lib/dailySpecialDutyService";
 
 export const dynamic = "force-dynamic";
@@ -97,6 +98,21 @@ export async function PATCH(req: NextRequest) {
     const date = String(body?.date || "");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return NextResponse.json({ error: "date=YYYY-MM-DD 필요" }, { status: 400 });
+    }
+    if (body?.action === "anchor") {
+      if (!isAnchorSpecialKind(body?.kind)) {
+        return NextResponse.json(
+          { error: "시작 예약은 1·3부와 1막만 지정합니다." },
+          { status: 400 }
+        );
+      }
+      await upsertSpecialStartAnchor({
+        date,
+        kind: body.kind,
+        course: body?.anchor?.course ?? body?.course ?? "",
+        teeTime: body?.anchor?.teeTime ?? body?.teeTime ?? "",
+      });
+      return NextResponse.json(await buildDailySpecialDutyPayload(date));
     }
     if (!isDailySpecialKind(body?.kind)) {
       return NextResponse.json({ error: "유형을 선택하세요." }, { status: 400 });

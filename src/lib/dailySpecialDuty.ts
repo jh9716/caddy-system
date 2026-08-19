@@ -30,17 +30,36 @@ export const DAILY_SPECIAL_KIND_LABELS: Record<DailySpecialKind, string> = {
   CHAGEUN: "찾근",
 };
 
-/** 엔진 후보 배열에 연결되는 유형. 1막은 기존 파이프라인이 없어 저장만. */
+/** 엔진 후보 배열에 연결되는 유형 */
 export const ENGINE_SPECIAL_KINDS = [
+  "ONE_MAK",
   "ONE_TWO",
   "ONE_THREE",
   "FIFTY_FOUR",
   "CHAGEUN",
 ] as const;
 
+export const ANCHOR_SPECIAL_KINDS = ["ONE_THREE", "ONE_MAK"] as const;
+
+export type AnchorSpecialKind = (typeof ANCHOR_SPECIAL_KINDS)[number];
+
 export function isDailySpecialKind(value: unknown): value is DailySpecialKind {
   return DAILY_SPECIAL_KINDS.includes(String(value) as DailySpecialKind);
 }
+
+export function isAnchorSpecialKind(value: unknown): value is AnchorSpecialKind {
+  return ANCHOR_SPECIAL_KINDS.includes(String(value) as AnchorSpecialKind);
+}
+
+export type SpecialStartAnchor = {
+  course: string;
+  teeTime: string;
+};
+
+export type SpecialDutyAnchors = {
+  ONE_THREE: SpecialStartAnchor | null;
+  ONE_MAK: SpecialStartAnchor | null;
+};
 
 export type SpecialDutyConflictCode = "CROSS_KIND" | "UNAVAILABLE" | "INACTIVE";
 
@@ -202,7 +221,7 @@ export type EngineSpecialBundles = {
   fiftyFourHole: EngineSpecialCaddy[] | null;
   oneThreeCandidates: EngineSpecialCaddy[] | null;
   oneTwoCandidates: EngineSpecialCaddy[] | null;
-  /** 찾근: 일반 가용에서 빼고 special로만 전달 (예약 없는 고정배치는 강행하지 않음) */
+  oneMakCandidates: EngineSpecialCaddy[] | null;
   extraSpecial: EngineSpecialCaddy[];
   skipFromAvailableIds: number[];
   skippedPlacements: Array<{
@@ -278,23 +297,14 @@ export function buildEngineSpecialBundles(
   const fiftyFourHole = pick("FIFTY_FOUR");
   const oneThreeCandidates = pick("ONE_THREE");
   const oneTwoCandidates = pick("ONE_TWO");
+  const oneMakCandidates = pick("ONE_MAK");
   const chageun = pick("CHAGEUN") || [];
-  // 1막: 기존 엔진 파이프라인 없음 — 저장/표시만, 일반 순번에서 빼지 않음
-  for (const row of orderedKind(records, "ONE_MAK")) {
-    if (!eligibleForEngine(row, unavailableById)) {
-      skippedPlacements.push({
-        kind: "ONE_MAK",
-        caddyId: row.caddyId,
-        name: row.name,
-        reasons: unavailableById.get(row.caddyId) || [],
-      });
-    }
-  }
 
   return {
     fiftyFourHole,
     oneThreeCandidates,
     oneTwoCandidates,
+    oneMakCandidates,
     extraSpecial: chageun,
     skipFromAvailableIds: [...skip],
     skippedPlacements,

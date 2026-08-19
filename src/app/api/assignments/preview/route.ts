@@ -6,6 +6,7 @@ import {
   type AutoAssignCaddy,
   type AutoAssignReservation,
   type FixedAssignmentInput,
+  type SpecialStartAnchor,
 } from "@/lib/autoAssignEngine";
 import type { AvailabilityRow } from "@/lib/availabilityEngine";
 import { loadAvailabilityForDate } from "@/lib/availabilityService";
@@ -64,6 +65,14 @@ function extractOneTwoCandidates(
   });
 }
 
+function parseSpecialAnchor(raw: unknown): SpecialStartAnchor | null {
+  if (!raw || typeof raw !== "object") return null;
+  const course = String((raw as { course?: unknown }).course || "").trim();
+  const teeTime = String((raw as { teeTime?: unknown }).teeTime || "").trim();
+  if (!course || !teeTime) return null;
+  return { course, teeTime };
+}
+
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
@@ -114,7 +123,10 @@ export async function POST(req: NextRequest) {
         (r) => !r.date || r.date === date
       );
       const unavailable = unavailableReasonsFromRows(availability.excluded);
-      const { bundles } = await loadEngineSpecialBundlesForDate(date, unavailable);
+      const { bundles, anchors } = await loadEngineSpecialBundlesForDate(
+        date,
+        unavailable
+      );
       const pools = applyBundlesToAssignPools({
         available: availability.available.all,
         special: availability.special,
@@ -130,6 +142,7 @@ export async function POST(req: NextRequest) {
       const oneTwoCandidates =
         bundles.oneTwoCandidates ??
         extractOneTwoCandidates(availability.special);
+      const oneMakCandidates = bundles.oneMakCandidates ?? [];
 
       let openCourses: string[] | null = null;
       const openRaw = form.get("openCourses");
@@ -166,6 +179,9 @@ export async function POST(req: NextRequest) {
         fiftyFourHole,
         oneThreeCandidates,
         oneTwoCandidates,
+        oneMakCandidates,
+        oneThreeAnchor: anchors.ONE_THREE,
+        oneMakAnchor: anchors.ONE_MAK,
         openCourses,
         houseStartCaddyId,
       });
@@ -215,6 +231,11 @@ export async function POST(req: NextRequest) {
     let explicit12 = Array.isArray(body.oneTwoCandidates)
       ? body.oneTwoCandidates
       : null;
+    let explicitMak = Array.isArray(body.oneMakCandidates)
+      ? body.oneMakCandidates
+      : null;
+    let oneThreeAnchor = parseSpecialAnchor(body.oneThreeAnchor);
+    let oneMakAnchor = parseSpecialAnchor(body.oneMakAnchor);
 
     // available 생략 시 DB에서 로드 (읽기 전용)
     if (!Array.isArray(body.available)) {
@@ -225,7 +246,7 @@ export async function POST(req: NextRequest) {
         specialRows = availability.special;
       }
       const unavailable = unavailableReasonsFromRows(availability.excluded);
-      const { bundles } = await loadEngineSpecialBundlesForDate(
+      const { bundles, anchors } = await loadEngineSpecialBundlesForDate(
         date,
         unavailable
       );
@@ -247,6 +268,11 @@ export async function POST(req: NextRequest) {
       if (explicit12 == null && bundles.oneTwoCandidates !== null) {
         explicit12 = bundles.oneTwoCandidates;
       }
+      if (explicitMak == null && bundles.oneMakCandidates !== null) {
+        explicitMak = bundles.oneMakCandidates;
+      }
+      if (oneThreeAnchor == null) oneThreeAnchor = anchors.ONE_THREE;
+      if (oneMakAnchor == null) oneMakAnchor = anchors.ONE_MAK;
     }
 
     const fiftyFourHole = extractFiftyFourHoleCandidates(
@@ -261,6 +287,7 @@ export async function POST(req: NextRequest) {
       specialRows,
       explicit12
     );
+    const oneMakCandidates = Array.isArray(explicitMak) ? explicitMak : [];
     const fixedAssignments = Array.isArray(body.fixedAssignments)
       ? (body.fixedAssignments as FixedAssignmentInput[])
       : [];
@@ -296,6 +323,9 @@ export async function POST(req: NextRequest) {
       fiftyFourHole,
       oneThreeCandidates,
       oneTwoCandidates,
+      oneMakCandidates,
+      oneThreeAnchor,
+      oneMakAnchor,
       openCourses,
       houseStartCaddyId,
     });
