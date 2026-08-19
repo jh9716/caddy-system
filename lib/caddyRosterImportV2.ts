@@ -30,6 +30,8 @@ import {
 } from "./caddyImportRules";
 import { getConfiguredSlotCapacity } from "../src/lib/caddySlot";
 import {
+  isPrimaryTeam,
+  occupiesHouseThirdSlot,
   parseImportThirdBandSubgroup,
   resolveCaddyTypeFromTeam,
   resolveThirdBandSubgroup,
@@ -74,6 +76,7 @@ export type RosterExisting = {
   employmentStatus: string;
   phoneNormalized?: string | null;
   thirdBandSubgroup?: ThirdBandSubgroup | null;
+  caddyType?: string | null;
 };
 
 export type RosterCsvRow = {
@@ -395,6 +398,30 @@ function empLabel(s: string | null | undefined): string | null {
   return String(s);
 }
 
+function drivingRosterSkipLine(
+  cur: RosterExisting,
+  row: RosterCsvRow,
+  phone: PhoneResolve
+): RosterPreviewLine {
+  return {
+    action: "unchanged",
+    id: cur.id,
+    name: cur.name,
+    currentTeam: cur.team,
+    nextTeam: cur.team,
+    currentTeamOrder: cur.teamOrder,
+    nextTeamOrder: cur.teamOrder,
+    currentEmploymentStatus: empLabel(cur.employmentStatus),
+    nextEmploymentStatus: empLabel(cur.employmentStatus),
+    phoneChanged: false,
+    currentMaskedPhone: maskKrMobile(cur.phoneNormalized ?? null),
+    nextMaskedPhone: phone.masked,
+    currentThirdBandSubgroup: cur.thirdBandSubgroup ?? null,
+    nextThirdBandSubgroup: cur.thirdBandSubgroup ?? null,
+    reason: "드라이빙 전담 캐디 — 일반 명단 import에서 조/슬롯/타입 유지",
+  };
+}
+
 /**
  * Preview (DB write 없음).
  */
@@ -519,6 +546,11 @@ export function buildRosterImportPreviewV2(
         });
         continue;
       }
+      if (!occupiesHouseThirdSlot(cur)) {
+        matchedIds.add(cur.id);
+        lines.push(drivingRosterSkipLine(cur, row, phone));
+        continue;
+      }
       if (matchedIds.has(cur.id)) {
         lines.push({
           action: "needsReview",
@@ -587,6 +619,11 @@ export function buildRosterImportPreviewV2(
     }
     if (candidates.length === 1) {
       const cur = candidates[0];
+      if (!occupiesHouseThirdSlot(cur)) {
+        matchedIds.add(cur.id);
+        lines.push(drivingRosterSkipLine(cur, row, phone));
+        continue;
+      }
       if (matchedIds.has(cur.id)) {
         lines.push({
           action: "needsReview",
@@ -691,6 +728,25 @@ export function buildRosterImportPreviewV2(
         currentMaskedPhone: null,
         nextMaskedPhone: phone.masked,
         reason: "신규 등록에 team이 필요합니다",
+      });
+      continue;
+    }
+
+    if (!isPrimaryTeam(row.team)) {
+      lines.push({
+        action: "needsReview",
+        id: null,
+        name: row.name,
+        currentTeam: null,
+        nextTeam: row.team,
+        currentTeamOrder: null,
+        nextTeamOrder: row.teamOrder,
+        currentEmploymentStatus: null,
+        nextEmploymentStatus: row.employmentStatus,
+        phoneChanged: false,
+        currentMaskedPhone: null,
+        nextMaskedPhone: phone.masked,
+        reason: "일반 명단 import는 1~12조만 등록할 수 있습니다",
       });
       continue;
     }
@@ -1028,7 +1084,7 @@ export function buildRosterImportPreviewV2(
   }
 
   const missingInImport: RosterPreviewLine[] = existing
-    .filter((e) => !matchedIds.has(e.id))
+    .filter((e) => !matchedIds.has(e.id) && occupiesHouseThirdSlot(e))
     .map((e) => ({
       action: "missingInImport" as const,
       id: e.id,
@@ -1052,7 +1108,13 @@ export function buildRosterImportPreviewV2(
   // --- teamOrder conflict on final slot-holding (ACTIVE+LEAVE) state ---
   const finalById = new Map<
     number,
-    { name: string; team: string; teamOrder: number; emp: string }
+    {
+      name: string;
+      team: string;
+      teamOrder: number;
+      emp: string;
+      caddyType?: string | null;
+    }
   >();
   for (const e of existing) {
     finalById.set(e.id, {
@@ -1060,6 +1122,7 @@ export function buildRosterImportPreviewV2(
       team: e.team,
       teamOrder: e.teamOrder,
       emp: empLabel(e.employmentStatus) || "ACTIVE",
+      caddyType: e.caddyType,
     });
   }
   for (const m of matched) {
@@ -1073,6 +1136,7 @@ export function buildRosterImportPreviewV2(
       team: m.nextTeam,
       teamOrder: m.nextOrder,
       emp: m.nextEmp,
+      caddyType: m.cur.caddyType,
     });
   }
   // creates as synthetic negative ids for conflict grouping
@@ -1100,6 +1164,7 @@ export function buildRosterImportPreviewV2(
       team: v.team,
       teamOrder: v.teamOrder,
       emp: v.emp,
+      caddyType: v.caddyType,
     })),
     ...createFinals,
   ]);
@@ -1249,12 +1314,15 @@ function findTeamOrderConflicts(
     team: string;
     teamOrder: number;
     emp: string;
+    caddyType?: string | null;
   }>
 ): TeamOrderConflict[] {
-  // ACTIVE + LEAVE = 슬롯 보유. RETIRED는 빈자리로 취급.
+  // ACTIVE + LEAVE = 슬롯 보유. RETIRED·DRIVING은 빈자리로 취급.
   const holders = people.filter((p) => {
     const e = empLabel(p.emp);
-    return e === "ACTIVE" || e === "LEAVE";
+    if (!(e === "ACTIVE" || e === "LEAVE")) return false;
+    if (!occupiesHouseThirdSlot(p)) return false;
+    return true;
   });
   const groups = new Map<string, typeof holders>();
   for (const p of holders) {
@@ -1457,6 +1525,13 @@ export async function applyRosterImportPayloadV2(
         "slot_required"
       );
     }
+    if (!isPrimaryTeam(c.team)) {
+      throw new RosterImportApplyError(
+        `일반 명단 import는 1~12조만 등록할 수 있습니다: ${c.name}`,
+        400,
+        "team_not_primary"
+      );
+    }
     const createCap = getConfiguredSlotCapacity(c.team);
     if (c.teamOrder > createCap) {
       throw new RosterImportApplyError(
@@ -1493,6 +1568,7 @@ export async function applyRosterImportPayloadV2(
         employmentStatus: true,
         phoneNormalized: true,
         thirdBandSubgroup: true,
+        caddyType: true,
       },
     }));
 
@@ -1503,6 +1579,7 @@ export async function applyRosterImportPayloadV2(
     if (!cur) {
       throw new RosterImportApplyError(`update 대상 없음: id=${u.id}`, 404);
     }
+    if (!occupiesHouseThirdSlot(cur)) continue;
     const nextTeam = u.team ?? cur.team;
     const cap = getConfiguredSlotCapacity(nextTeam);
     const keepingOverCapacity =
@@ -1604,7 +1681,13 @@ export async function applyRosterImportPayloadV2(
   // final ACTIVE teamOrder conflicts
   const finalState = new Map<
     number,
-    { name: string; team: string; teamOrder: number; emp: string }
+    {
+      name: string;
+      team: string;
+      teamOrder: number;
+      emp: string;
+      caddyType?: string | null;
+    }
   >();
   for (const e of existing) {
     finalState.set(e.id, {
@@ -1612,15 +1695,21 @@ export async function applyRosterImportPayloadV2(
       team: e.team,
       teamOrder: e.teamOrder,
       emp: empLabel(e.employmentStatus) || "ACTIVE",
+      caddyType: e.caddyType,
     });
   }
   for (const u of normUpdates) {
     const cur = finalState.get(u.id)!;
+    const existingRow = existingById.get(u.id);
+    if (existingRow && !occupiesHouseThirdSlot(existingRow)) {
+      continue;
+    }
     finalState.set(u.id, {
       name: cur.name,
       team: u.team ?? cur.team,
       teamOrder: u.teamOrder ?? cur.teamOrder,
       emp: u.employmentStatus ?? cur.emp,
+      caddyType: cur.caddyType,
     });
   }
   const createStates = normCreates.map((c) => ({
@@ -1637,6 +1726,7 @@ export async function applyRosterImportPayloadV2(
       team: v.team,
       teamOrder: v.teamOrder,
       emp: v.emp,
+      caddyType: v.caddyType,
     })),
     ...createStates,
   ]);
@@ -1657,11 +1747,12 @@ export async function applyRosterImportPayloadV2(
       throw new RosterImportApplyError(`존재하지 않는 id: ${u.id}`);
     }
     const update: RosterBatchUpdate = { id: u.id };
-    if (u.team != null) {
+    const keepDriving = !occupiesHouseThirdSlot(cur);
+    if (u.team != null && !keepDriving) {
       update.team = u.team;
       update.caddyType = resolveCaddyTypeFromTeam(u.team);
     }
-    if (u.teamOrder != null) update.teamOrder = u.teamOrder;
+    if (u.teamOrder != null && !keepDriving) update.teamOrder = u.teamOrder;
     if (u.employmentStatus != null) {
       update.employmentStatus = u.employmentStatus;
     }
@@ -1830,7 +1921,8 @@ export function buildRosterExportCsv(rows: RosterExisting[]): string {
     }
     return formulaSafe;
   };
-  const lines = rows.map((r) => {
+  const regular = rows.filter((r) => occupiesHouseThirdSlot(r));
+  const lines = regular.map((r) => {
     const emp = empLabel(r.employmentStatus) || "ACTIVE";
     const phone = r.phoneNormalized ?? "";
     return [

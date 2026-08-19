@@ -1000,18 +1000,6 @@ export default function ManageAssignmentsOpsPage() {
       )}
 
       {draft && (
-        <LiveChangePanel
-          draft={draft}
-          previous={autoResultFromDraft(draft, autoResult)}
-          applying={loadingLiveApply}
-          onApplyPreview={onLiveApply}
-          preset={pendingLiveChange}
-          onPresetConsumed={() => setPendingLiveChange(null)}
-          unavailableCaddyIds={unavailableCaddyIds}
-        />
-      )}
-
-      {draft && (
         <>
           {/*
             부 탭 + (배치표) 컬럼 헤더를 하나의 sticky 스택으로 묶어
@@ -1408,7 +1396,19 @@ export default function ManageAssignmentsOpsPage() {
         </>
       )}
 
-      {toast && <div className="ops-toast">{toast}</div>}
+      {draft && (
+        <LiveChangePanel
+          draft={draft}
+          previous={autoResultFromDraft(draft, autoResult)}
+          applying={loadingLiveApply}
+          onApplyPreview={onLiveApply}
+          preset={pendingLiveChange}
+          onPresetConsumed={() => setPendingLiveChange(null)}
+          unavailableCaddyIds={unavailableCaddyIds}
+        />
+      )}
+
+      {toast && <div className="ops-toast vh-manage-toast">{toast}</div>}
       {quickSheet && quickSheetRow && (
         <BoardQuickSheet
           mode={quickSheet.mode}
@@ -2099,24 +2099,73 @@ const opsCss = `
   }
   .ops-toast {
     position: fixed;
-    left: 50%;
-    bottom: 18px;
-    transform: translateX(-50%);
     background: #0f172a;
     color: #fff;
     padding: 10px 14px;
     border-radius: 999px;
     font-size: 0.85rem;
-    z-index: 20;
-    max-width: 90vw;
+    text-align: center;
+  }
+  .live-preview-dock {
+    position: fixed;
+    left: max(12px, env(safe-area-inset-left, 0px));
+    right: max(12px, env(safe-area-inset-right, 0px));
+    width: auto;
+    max-width: min(560px, calc(100vw - 24px));
+    margin: 0 auto;
+    bottom: calc(58px + env(safe-area-inset-bottom, 0px) + 58px);
+    z-index: 55;
+    background: #0f172a;
+    color: #fff;
+    border-radius: 12px;
+    padding: 10px 12px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    justify-content: space-between;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.28);
+  }
+  .live-preview-dock-copy {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+  .live-preview-dock-copy span {
+    color: #cbd5e1;
+    font-size: 0.75rem;
+  }
+  .live-preview-dock-actions {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  @media (min-width: 960px) {
+    .live-preview-dock {
+      bottom: 24px;
+    }
   }
   .live-change {
     border: 1px solid #cbd5e1;
     border-radius: 12px;
-    padding: 12px;
+    padding: 10px 12px;
     background: #fff;
     display: grid;
     gap: 10px;
+  }
+  .live-change.is-collapsed {
+    padding: 8px 12px;
+    gap: 0;
+  }
+  .live-advanced-toggle {
+    width: 100%;
+    min-height: 44px;
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    background: #f8fafc;
+    color: #0f172a;
+    font-size: 0.9rem;
+    font-weight: 700;
   }
   .live-change-head {
     display: grid;
@@ -2140,6 +2189,12 @@ const opsCss = `
   .live-change-grid input {
     min-height: 40px;
     font-size: 16px;
+  }
+  .live-swap-hint {
+    margin: 0;
+    color: #64748b;
+    font-size: 0.78rem;
+    line-height: 1.4;
   }
   .live-change-actions {
     display: flex;

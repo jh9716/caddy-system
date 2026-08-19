@@ -101,6 +101,7 @@ export async function POST(req: NextRequest) {
         employmentStatus: true,
         phoneNormalized: true,
         thirdBandSubgroup: true,
+        caddyType: true,
       },
     });
 
@@ -155,6 +156,7 @@ export async function POST(req: NextRequest) {
           employmentStatus: String(e.employmentStatus),
           phoneNormalized: e.phoneNormalized,
           thirdBandSubgroup: e.thirdBandSubgroup ?? null,
+          caddyType: e.caddyType,
         })),
       }
     );

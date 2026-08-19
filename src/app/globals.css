@@ -647,6 +647,36 @@ a {
   box-shadow: 0 -6px 18px rgba(15, 31, 24, 0.04);
 }
 
+/* 관리자 toast: 하단 탭/safe-area 위, 가로폭 안 */
+.manage-mode {
+  --vh-bottom-nav-height: 58px;
+  --vh-toast-z: 60;
+}
+.manage-mode .ops-toast,
+.manage-mode .sd-toast,
+.manage-mode .vh-manage-toast {
+  position: fixed !important;
+  left: max(12px, env(safe-area-inset-left, 0px));
+  right: max(12px, env(safe-area-inset-right, 0px));
+  width: auto;
+  max-width: min(520px, calc(100vw - 24px));
+  margin-left: auto;
+  margin-right: auto;
+  bottom: calc(
+    var(--vh-bottom-nav-height) + env(safe-area-inset-bottom, 0px) + 10px
+  ) !important;
+  transform: none !important;
+  z-index: var(--vh-toast-z) !important;
+  box-sizing: border-box;
+}
+@media (min-width: 960px) {
+  .manage-mode .ops-toast,
+  .manage-mode .sd-toast,
+  .manage-mode .vh-manage-toast {
+    bottom: 24px !important;
+  }
+}
+
 .vh-tab {
   display: flex;
   flex-direction: column;

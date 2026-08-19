@@ -1,11 +1,12 @@
 /**
- * 고정 슬롯 (team + teamOrder) 점유 규칙 + 조별 capacity 중앙 관리.
+ * 조별 고정 슬롯 occupancy 규칙.
  * - ACTIVE / LEAVE = 슬롯 보유
  * - RETIRED = 점유하지 않음 (빈자리로 취급)
  * - 렌더 범위 = max(configured capacity, observed max teamOrder)
  * - 신규/편집/이동 선택 범위 = configured capacity
  * DB unique migration 없이 앱 레벨 검증용.
  */
+import { occupiesHouseThirdSlot } from "@/lib/caddyManage";
 
 export const SLOT_HOLDING_STATUSES = ["ACTIVE", "LEAVE"] as const;
 export type SlotHoldingStatus = (typeof SLOT_HOLDING_STATUSES)[number];
@@ -26,6 +27,7 @@ export type SlotOccupant = {
   team: string;
   teamOrder: number;
   employmentStatus: string;
+  caddyType?: string | null;
 };
 
 export function empStatusLabel(status: string | null | undefined): string {
@@ -163,6 +165,7 @@ export function findSlotHoldingConflicts(
     team: string;
     teamOrder: number;
     emp: string;
+    caddyType?: string | null;
   }>,
   options?: { excludeIds?: number[] }
 ): Array<{
@@ -173,6 +176,7 @@ export function findSlotHoldingConflicts(
 }> {
   const exclude = new Set(options?.excludeIds ?? []);
   const holders = people.filter((p) => {
+    if (!occupiesHouseThirdSlot(p)) return false;
     if (!isSlotHoldingStatus(p.emp)) return false;
     if (!p.teamOrder || p.teamOrder < 1) return false;
     if (p.id != null && exclude.has(p.id)) return false;
@@ -214,6 +218,7 @@ export function findSlotOccupant(
 ): SlotOccupant | null {
   for (const p of people) {
     if (excludeId != null && p.id === excludeId) continue;
+    if (!occupiesHouseThirdSlot(p)) continue;
     if (!isSlotHoldingStatus(p.employmentStatus)) continue;
     if (p.team !== team) continue;
     if (Number(p.teamOrder) !== teamOrder) continue;
@@ -232,6 +237,7 @@ export function listEmptySlots(
   const occupied = new Set<number>();
   for (const p of people) {
     if (options?.excludeId != null && p.id === options.excludeId) continue;
+    if (!occupiesHouseThirdSlot(p)) continue;
     if (!isSlotHoldingStatus(p.employmentStatus)) continue;
     if (p.team !== team) continue;
     const n = Number(p.teamOrder) || 0;

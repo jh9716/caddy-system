@@ -2583,6 +2583,47 @@ section("DRIVING은 3부 HOUSE 순번에 섞지 않음");
   assert(s3.every((a) => a.caddy.id !== 900), "3부 no DRIVING");
   assert(s3[0].caddy.id === ordered[4].id, "3부 uses HOUSE spare");
   assert(result.meta.drivingPoolCount === 1, "driving pool tracked");
+  const s1 = result.sparesByShift.find((s) => s.shift === "1부")!;
+  assert(s1.spare1?.caddyId !== 900 && s1.spare2?.caddyId !== 900, "DRIVING not spare");
+}
+
+section("virtual team DRIVING도 rotation/Spare에서 제외");
+{
+  const date = "2026-10-16";
+  const house = makeCaddies(6).map((c) => ({ ...c, caddyType: "HOUSE" }));
+  const driving = {
+    id: 910,
+    name: "전담드라이브",
+    team: "드라이빙",
+    teamOrder: 0,
+    caddyType: "DRIVING" as const,
+    employmentStatus: "ACTIVE" as const,
+  };
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: [...house, driving],
+    reservations: makeReservations(date, [
+      { shift: "1부", count: 2 },
+      { shift: "2부", count: 2 },
+      { shift: "3부", count: 2 },
+    ]),
+  });
+  assert(
+    !result.assignments.some((a) => a.caddy.id === 910),
+    "virtual-team DRIVING not in rotation"
+  );
+  assert(
+    result.sparesByShift.every(
+      (s) => s.spare1?.caddyId !== 910 && s.spare2?.caddyId !== 910
+    ),
+    "virtual-team DRIVING not spare"
+  );
+  const pools = splitCaddyPools([...house, driving]);
+  assert(pools.driving.some((c) => c.id === 910), "splitCaddyPools driving bucket");
+  assert(
+    pools.house.every((c) => c.id !== 910) && pools.third.every((c) => c.id !== 910),
+    "not in HOUSE/THIRD pools"
+  );
 }
 
 section("9~12조 DRIVING도 THIRD 순번에 넣지 않음");

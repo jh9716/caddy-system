@@ -5,6 +5,9 @@ import { logAudit } from "@/lib/audit";
 import { caddyUpdateSchema } from "@/lib/caddySchema";
 import {
   ThirdBandSubgroupError,
+  DRIVING_POOL_TEAM,
+  drivingPersistFields,
+  isDrivingCaddyType,
   mergeExtraFlagsForPersist,
   normalizeEmploymentStatus,
   normalizeTeamOrder,
@@ -79,6 +82,17 @@ export async function PATCH(
           { status: 400 }
         );
       }
+      if (
+        isDrivingCaddyType(current.caddyType) ||
+        isDrivingCaddyType(other.caddyType) ||
+        current.team === DRIVING_POOL_TEAM ||
+        other.team === DRIVING_POOL_TEAM
+      ) {
+        return NextResponse.json(
+          { error: "드라이빙 캐디는 고정 슬롯 순번을 교환할 수 없습니다." },
+          { status: 400 }
+        );
+      }
       const orderA = current.teamOrder;
       const orderB = other.teamOrder;
       const [updated] = await prisma.$transaction([
@@ -100,6 +114,65 @@ export async function PATCH(
           team: current.team,
           orders: [orderA, orderB],
         },
+      });
+      return NextResponse.json(updated);
+    }
+
+    const nextIsDriving =
+      data.caddyType === "DRIVING" ||
+      (isDrivingCaddyType(current.caddyType) &&
+        data.caddyType !== "HOUSE" &&
+        data.caddyType !== "THIRD");
+
+    if (nextIsDriving) {
+      const driving = drivingPersistFields();
+      const updateData: Record<string, unknown> = {
+        team: driving.team,
+        teamOrder: driving.teamOrder,
+        caddyType: driving.caddyType,
+        thirdBandSubgroup: driving.thirdBandSubgroup,
+      };
+      if (data.name !== undefined) updateData.name = data.name.trim();
+      if (data.employmentStatus !== undefined) {
+        updateData.employmentStatus = normalizeEmploymentStatus(
+          data.employmentStatus
+        );
+      }
+      if (data.extraFlags !== undefined) {
+        updateData.extraFlags = mergeExtraFlagsForPersist({
+          incoming: data.extraFlags,
+          current: current.extraFlags,
+          mode: "update",
+        });
+      }
+      if (data.status !== undefined) updateData.status = data.status;
+      if (data.memo !== undefined) updateData.memo = data.memo;
+      if (Object.prototype.hasOwnProperty.call(body, "phone")) {
+        updateData.phoneNormalized = parseOptionalPhoneInput(data.phone);
+      }
+      if (data.employeeCode !== undefined) {
+        updateData.employeeCode = data.employeeCode;
+      }
+      if (data.missingFromImport !== undefined) {
+        updateData.missingFromImport = data.missingFromImport;
+      }
+
+      const updated = await prisma.caddy.update({
+        where: { id },
+        data: updateData,
+      });
+      const auditPayload = { ...data } as Record<string, unknown>;
+      if (Object.prototype.hasOwnProperty.call(auditPayload, "phone")) {
+        auditPayload.phone = maskKrMobile(
+          typeof updateData.phoneNormalized === "string"
+            ? updateData.phoneNormalized
+            : null
+        );
+      }
+      delete auditPayload.swapWithId;
+      await logAudit({
+        action: "UPDATE_CADDY",
+        meta: { entity: "Caddy", entityId: id, payload: auditPayload },
       });
       return NextResponse.json(updated);
     }
@@ -148,6 +221,7 @@ export async function PATCH(
           team: true,
           teamOrder: true,
           employmentStatus: true,
+          caddyType: true,
         },
       });
       assertSlotAvailable(
@@ -223,6 +297,7 @@ export async function PATCH(
             team: true,
             teamOrder: true,
             employmentStatus: true,
+            caddyType: true,
           },
         });
         assertSlotAvailable(

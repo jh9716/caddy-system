@@ -261,6 +261,31 @@ async function main() {
     "apply uses explicit transaction timeout/maxWait"
   );
 
+  section("apply cannot move DRIVING into HOUSE slot");
+  {
+    const drivingGuard: RosterExisting[] = [
+      ...existing,
+      {
+        id: 900,
+        name: "드라이브김",
+        team: "드라이빙",
+        teamOrder: 0,
+        employmentStatus: "ACTIVE",
+        caddyType: "DRIVING",
+      },
+    ];
+    const driveStore = new Map(drivingGuard.map((e) => [e.id, { ...e }]));
+    const drivePrisma = createTransactionalPrisma(driveStore);
+    await applyRosterImportPayloadV2(
+      { updates: [{ id: 900, team: "1조", teamOrder: 1 }], creates: [] },
+      drivePrisma,
+      { existingForGuard: drivingGuard }
+    );
+    assert(driveStore.get(900)?.caddyType === "DRIVING", "apply keeps DRIVING type");
+    assert(driveStore.get(900)?.team === "드라이빙", "apply keeps virtual team");
+    assert(driveStore.get(900)?.teamOrder === 0, "apply keeps teamOrder 0");
+  }
+
   section("export csv");
   const csv = buildRosterExportCsv(existing);
   assert(csv.charCodeAt(0) === 0xfeff, "UTF-8 BOM at start");
@@ -271,6 +296,65 @@ async function main() {
     "header after BOM"
   );
   assert(csv.includes("01099998888"), "full phone in admin export");
+
+  section("DRIVING virtual team is outside regular roster import");
+  const drivingExisting: RosterExisting[] = [
+    ...existing,
+    {
+      id: 900,
+      name: "드라이브김",
+      team: "드라이빙",
+      teamOrder: 0,
+      employmentStatus: "ACTIVE",
+      caddyType: "DRIVING",
+    },
+  ];
+  const drivingCsv = parseRosterCsvV2(
+    [
+      "id,name,team,teamOrder,employmentStatus,phone",
+      "1,이영진,1조,1,ACTIVE,",
+      "2,박서진,1조,2,ACTIVE,",
+      "9,실제이름,1조,3,ACTIVE,",
+      "30,DB만존재,8조,1,ACTIVE,",
+      "900,드라이브김,1조,1,ACTIVE,",
+    ].join("\n")
+  );
+  const drivingPreview = buildRosterImportPreviewV2(drivingCsv, drivingExisting);
+  assert(
+    drivingPreview.lines.some(
+      (l) =>
+        l.id === 900 &&
+        l.action === "unchanged" &&
+        String(l.reason ?? "").includes("드라이빙")
+    ),
+    "DRIVING row skipped, not converted to HOUSE slot"
+  );
+  assert(
+    !drivingPreview.missingInImport.some((l) => l.id === 900),
+    "DRIVING not flagged missingInImport"
+  );
+  assert(
+    drivingPreview.summary.teamOrderConflicts === 0,
+    "DRIVING teamOrder 0 does not collide with 1조 slots"
+  );
+  const createDrivingTeam = buildRosterImportPreviewV2(
+    parseRosterCsvV2(
+      ["name,team,teamOrder,employmentStatus,phone", "신규드라이브,드라이빙,1,ACTIVE,"].join(
+        "\n"
+      )
+    ),
+    existing
+  );
+  assert(
+    createDrivingTeam.lines.some(
+      (l) =>
+        l.action === "needsReview" &&
+        String(l.reason ?? "").includes("1~12조")
+    ),
+    "CSV cannot create HOUSE caddy on 드라이빙 team"
+  );
+  const exportedDriving = buildRosterExportCsv(drivingExisting);
+  assert(!exportedDriving.includes("드라이브김"), "regular export omits DRIVING");
 
   section("formula injection escape/unescape");
   assert(escapeCsvFormulaCell("=1+1") === "'=1+1", "escape =");
@@ -290,7 +374,7 @@ async function main() {
     {
       id: 101,
       name: "=HYPERLINK(\"http://x\")",
-      team: "+evil",
+      team: "1조",
       teamOrder: 1,
       employmentStatus: "ACTIVE",
       phoneNormalized: "01012345678",
@@ -309,14 +393,13 @@ async function main() {
   const exported = buildRosterExportCsv(risky);
   assert(exported.startsWith("\uFEFF"), "round-trip export has BOM");
   assert(exported.includes("'=HYPERLINK"), "export prefixes formula name");
-  assert(exported.includes("'+evil"), "export prefixes formula team");
   assert(exported.includes("정상이름"), "normal name unescaped in export");
   assert(exported.includes(",3조,"), "normal team unescaped in export");
 
   const reparsed = parseRosterCsvV2(exported);
   assert(reparsed.length === 2, "round-trip parse 2 rows");
   assert(reparsed[0].name === '=HYPERLINK("http://x")', "formula name restored");
-  assert(reparsed[0].team === "+evil", "formula team restored");
+  assert(reparsed[0].team === "1조", "formula row keeps primary team");
   assert(reparsed[1].name === "정상이름", "normal name unchanged after round-trip");
   assert(reparsed[1].team === "3조", "normal team unchanged after round-trip");
   assert(reparsed[0].id === 101, "id preserved");

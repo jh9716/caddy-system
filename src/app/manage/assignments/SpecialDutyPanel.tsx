@@ -491,7 +491,7 @@ export function SpecialDutyPanel({
           </div>
         </div>
       ) : null}
-      {toast ? <div className="sd-toast">{toast}</div> : null}
+      {toast ? <div className="sd-toast vh-manage-toast">{toast}</div> : null}
       <style>{`
         .sd-panel {
           margin-top: 12px;
@@ -703,15 +703,12 @@ export function SpecialDutyPanel({
         }
         .sd-toast {
           position: fixed;
-          left: 50%;
-          bottom: 16px;
-          transform: translateX(-50%);
           background: #0f172a;
           color: #fff;
           padding: 8px 12px;
           border-radius: 8px;
           font-size: 0.8rem;
-          z-index: 90;
+          text-align: center;
         }
       `}</style>
     </section>

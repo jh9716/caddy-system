@@ -10,6 +10,7 @@ import {
   makeAddReservation,
   previewLiveAssignmentChange,
   LIVE_CHANGE_APPLY_USER_MESSAGE,
+  isLiveChangeReady,
 } from "../src/lib/assignmentChange";
 import { createDraftFromAutoResult } from "../src/lib/assignmentDraft";
 import {
@@ -1046,6 +1047,33 @@ section("일반 순번 바꿈은 A↔B만 변경");
   assert(caddyOn(swapped.after, "R1") === b.caddy.id, "only A moved");
   assert(caddyOn(swapped.after, "R3") === a.caddy.id, "only B moved");
   assert(caddyOn(swapped.after, "R2") === mid, "middle unchanged");
+  assert(
+    isLiveChangeReady({
+      type: "SWAP_CADDY",
+      reservationKeyA: reservationKey(a.reservation),
+      reservationKeyB: reservationKey(b.reservation),
+    }),
+    "B selected → swap is ready for auto preview"
+  );
+  assert(
+    !isLiveChangeReady({
+      type: "SWAP_CADDY",
+      reservationKeyA: reservationKey(a.reservation),
+    }),
+    "A only is not ready"
+  );
+  const store = emptyLiveChangeMemoryStore();
+  previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: {
+      type: "SWAP_CADDY",
+      reservationKeyA: reservationKey(a.reservation),
+      reservationKeyB: reservationKey(b.reservation),
+    },
+  });
+  assert(store.placements.length === 0, "preview does not write placements");
+  assert(store.reservations.length === 0, "preview does not write reservations");
 }
 
 section("드라이빙 후보는 DRIVING+ACTIVE만, 없으면 일반 캐디 대체 없음");
@@ -1075,6 +1103,55 @@ section("드라이빙 후보는 DRIVING+ACTIVE만, 없으면 일반 캐디 대�
     }).length === 0,
     "unavailable driving is not listed"
   );
+  assert(
+    drivingCandidateCaddies({
+      pool: [...makeCaddies(3), drivingCaddy(901)],
+      assignedCaddyIds: [901],
+    }).length === 0,
+    "already assigned DRIVING is not a candidate"
+  );
+}
+
+section("같은 DRIVING 캐디를 다른 팀에 중복 지정하면 거부");
+{
+  const date = "2026-09-19";
+  const pool = [...makeCaddies(8), drivingCaddy(900)];
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      res(date, "S3A", { teeTime: "16:00", shift: "3부" }),
+      res(date, "S3B", { teeTime: "16:08", shift: "3부" }),
+    ],
+  });
+  const first = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: {
+      type: "ASSIGN_DRIVING",
+      reservationKey: reservationKey(
+        previous.assignments.find((x) => x.reservation.id === "S3A")!.reservation
+      ),
+      caddyId: 900,
+    },
+  });
+  assert(caddyOn(first.after, "S3A") === 900, "first driving assign ok");
+  const dup = previewLiveAssignmentChange({
+    previous: first.after,
+    regularCaddyPool: pool,
+    change: {
+      type: "ASSIGN_DRIVING",
+      reservationKey: reservationKey(
+        previous.assignments.find((x) => x.reservation.id === "S3B")!.reservation
+      ),
+      caddyId: 900,
+    },
+  });
+  assert(
+    dup.warnings.some((w) => w.code === "DRIVING_CADDY_ALREADY_ASSIGNED"),
+    "duplicate driving assign blocked"
+  );
+  assert(caddyOn(dup.after, "S3B") !== 900, "second team keeps regular");
 }
 
 section("SET_LOCK는 같은 자리 캐디를 유지하고 locked만 변경");
