@@ -6,19 +6,41 @@ import { prisma } from "@/lib/prisma";
 import {
   computeAvailability,
   parseYmd,
-  type AvailabilityResult,
 } from "@/lib/availabilityEngine";
 import {
   buildTeamSlotGrid,
   type TeamSlotGrid,
 } from "@/lib/availabilitySlotGrid";
+import {
+  applyDailyExternalExclusions,
+  type DailyAvailabilityResult,
+} from "@/lib/dailyAvailabilityOverlay";
+import {
+  fetchPublishedOffSheets,
+  requireOffNamesForDate,
+} from "@/lib/offSheetFetch";
+import type { OffSheet } from "@/lib/offSheetParser";
+import {
+  parseDutyMarshalLeaderWorkbook,
+  type DutyExcelEntry,
+} from "@/lib/dutyMarshalLeaderParser";
 
-export type AvailabilityWithSlotGrid = AvailabilityResult & {
+export type AvailabilityWithSlotGrid = DailyAvailabilityResult & {
   slotGrid: TeamSlotGrid;
 };
 
+export type LoadAvailabilityOptions = {
+  /** 테스트/미리 읽은 시트. 없으면 운영 Sheet를 fetch */
+  offSheets?: OffSheet[];
+  /** 당번·마샬·조장 파일 버퍼 (없으면 해당 제외 없음) */
+  dutyWorkbook?: Buffer | ArrayBuffer | Uint8Array | null;
+  /** false면 휴무 Sheet를 읽지 않음 (기본 true) */
+  includeOffSheet?: boolean;
+};
+
 export async function loadAvailabilityForDate(
-  ymd: string
+  ymd: string,
+  options?: LoadAvailabilityOptions
 ): Promise<AvailabilityWithSlotGrid> {
   parseYmd(ymd); // validate early
   const { start, end } = parseYmd(ymd);
@@ -76,8 +98,27 @@ export async function loadAvailabilityForDate(
     extraTags,
   });
 
-  const slotGrid = buildTeamSlotGrid({
+  let offNames: string[] = [];
+  if (options?.includeOffSheet !== false) {
+    const sheets = options?.offSheets ?? (await fetchPublishedOffSheets());
+    offNames = requireOffNamesForDate(sheets, ymd);
+  }
+
+  let dutyEntries: DutyExcelEntry[] = [];
+  if (options?.dutyWorkbook) {
+    dutyEntries = parseDutyMarshalLeaderWorkbook(options.dutyWorkbook, ymd)
+      .entries;
+  }
+
+  const overlaid = applyDailyExternalExclusions({
     availability,
+    caddies,
+    offNames,
+    dutyEntries,
+  });
+
+  const slotGrid = buildTeamSlotGrid({
+    availability: overlaid,
     occupants: caddies.map((c) => ({
       id: c.id,
       name: c.name,
@@ -87,5 +128,5 @@ export async function loadAvailabilityForDate(
     })),
   });
 
-  return { ...availability, slotGrid };
+  return { ...overlaid, slotGrid };
 }

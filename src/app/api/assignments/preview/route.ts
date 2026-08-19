@@ -10,6 +10,8 @@ import {
 import type { AvailabilityRow } from "@/lib/availabilityEngine";
 import { loadAvailabilityForDate } from "@/lib/availabilityService";
 import { parseReservationWorkbook } from "@/lib/reservationImportXlsx";
+import { OffSheetError } from "@/lib/offSheetFetch";
+import { DutyExcelError } from "@/lib/dutyMarshalLeaderParser";
 
 /** special 태그/라벨에 54홀 힌트가 있으면 54홀 후보로 추출 */
 function extractFiftyFourHoleCandidates(
@@ -96,7 +98,12 @@ export async function POST(req: NextRequest) {
         defaultDate: date,
       });
 
-      const availability = await loadAvailabilityForDate(date);
+      let dutyWorkbook: Buffer | null = null;
+      const dutyFile = form.get("dutyFile");
+      if (dutyFile && dutyFile instanceof File) {
+        dutyWorkbook = Buffer.from(await dutyFile.arrayBuffer());
+      }
+      const availability = await loadAvailabilityForDate(date, { dutyWorkbook });
       const reservations: AutoAssignReservation[] = parsed.reservations.filter(
         (r) => !r.date || r.date === date
       );
@@ -152,6 +159,7 @@ export async function POST(req: NextRequest) {
           needsReviewCount: parsed.needsReview.length,
         },
         availabilityCounts: availability.counts,
+        dailySummary: availability.dailySummary,
         ...result,
       });
     }
@@ -244,6 +252,12 @@ export async function POST(req: NextRequest) {
     });
   } catch (e: unknown) {
     if (e instanceof HouseStartCaddyError) {
+      return NextResponse.json(
+        { error: e.message, code: e.code },
+        { status: e.status }
+      );
+    }
+    if (e instanceof OffSheetError || e instanceof DutyExcelError) {
       return NextResponse.json(
         { error: e.message, code: e.code },
         { status: e.status }
