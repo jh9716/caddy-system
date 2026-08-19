@@ -894,6 +894,39 @@ section("드라이빙 삽입 후 뒤 일반 캐디가 한 자리씩 밀림");
   );
 }
 
+section("일반 캔슬 reflow 후에도 unused DRIVING은 일반 순번에 안 들어감");
+{
+  const date = "2026-09-23";
+  const pool = [...makeCaddies(8), drivingCaddy(900)];
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      res(date, "R1", { teeTime: "07:00" }),
+      res(date, "R2", { teeTime: "07:08" }),
+      res(date, "S3A", { teeTime: "16:00", shift: "3부" }),
+    ],
+  });
+  assert(
+    !previous.assignments.some((a) => a.caddy.id === 900),
+    "auto-assign leaves DRIVING unused"
+  );
+  const preview = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: {
+      type: "CANCEL_RESERVATION",
+      reservationKey: reservationKey(
+        previous.assignments.find((x) => x.reservation.id === "R1")!.reservation
+      ),
+    },
+  });
+  assert(
+    !preview.after.assignments.some((a) => a.caddy.id === 900),
+    "reflow still excludes unused DRIVING"
+  );
+}
+
 section("드라이빙 해제 시 뒤 일반이 당겨져 원래 흐름 복원");
 {
   const date = "2026-09-15";

@@ -540,6 +540,12 @@ export function normalizeAssignCaddyType(
   return "HOUSE";
 }
 
+function withoutDrivingCaddies(caddies: AutoAssignCaddy[]): AutoAssignCaddy[] {
+  return caddies.filter(
+    (c) => normalizeAssignCaddyType(c.caddyType) !== "DRIVING"
+  );
+}
+
 /**
  * 오늘 1부 첫 캐디 후보: 1~8조 HOUSE만.
  * 9~12조는 caddyType이 HOUSE여도 제외.
@@ -553,7 +559,7 @@ export function isHouseStartCandidate(c: {
   return t === "HOUSE" || t === "";
 }
 
-/** 일반 순번용 타입별 풀 분리 (정렬 포함). DRIVING은 3부 HOUSE 순번에 섞지 않음. */
+/** 일반 순번용 타입별 풀 분리 (정렬 포함). DRIVING은 조와 무관하게 HOUSE/THIRD에 섞지 않음. */
 export function splitCaddyPools(caddies: AutoAssignCaddy[]): {
   house: AutoAssignCaddy[];
   third: AutoAssignCaddy[];
@@ -563,15 +569,17 @@ export function splitCaddyPools(caddies: AutoAssignCaddy[]): {
   const third: AutoAssignCaddy[] = [];
   const driving: AutoAssignCaddy[] = [];
   for (const c of dedupeCaddies(caddies || [])) {
+    const t = normalizeAssignCaddyType(c.caddyType);
+    if (t === "DRIVING") {
+      driving.push(c);
+      continue;
+    }
     // 9~12조는 caddyType과 무관하게 HOUSE 순환에 넣지 않음
-    if (isThirdBandTeam(c.team)) {
+    if (isThirdBandTeam(c.team) || t === "THIRD") {
       third.push(c);
       continue;
     }
-    const t = normalizeAssignCaddyType(c.caddyType);
-    if (t === "THIRD") third.push(c);
-    else if (t === "DRIVING") driving.push(c);
-    else house.push(c);
+    house.push(c);
   }
   house.sort(compareCaddyOrder);
   third.sort(compareCaddyOrder);
@@ -1981,8 +1989,10 @@ export function assignRegularSequence(input: {
   const pools =
     input.house != null
       ? {
-          house: dedupeCaddies([...(input.house || [])]).sort(compareCaddyOrder),
-          third: dedupeCaddies([...(input.third || [])]),
+          house: withoutDrivingCaddies(
+            dedupeCaddies([...(input.house || [])]).sort(compareCaddyOrder)
+          ),
+          third: withoutDrivingCaddies(dedupeCaddies([...(input.third || [])])),
           driving: [] as AutoAssignCaddy[],
         }
       : splitCaddyPools(input.available || []);
