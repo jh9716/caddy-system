@@ -106,6 +106,11 @@ export type AutoAssignCaddy = {
   teamOrder: number;
   caddyType?: string;
   extraFlags?: string[] | null;
+  /**
+   * 관리자 특수근무 입력 순서 (같은 유형 내부 우선순위).
+   * 있으면 조순/이름순 대신 이 값을 사용한다.
+   */
+  inputOrder?: number;
 };
 
 export type AutoAssignReservation = {
@@ -296,6 +301,23 @@ export function compareCaddyOrder(a: AutoAssignCaddy, b: AutoAssignCaddy): numbe
   if (a.team !== b.team) return a.team.localeCompare(b.team, "ko");
   if (a.teamOrder !== b.teamOrder) return a.teamOrder - b.teamOrder;
   return a.id - b.id;
+}
+
+/** 같은 특수유형 내부: 관리자 inputOrder 보존, 없으면 기존 조순 */
+export function compareSpecialCandidateOrder(
+  a: AutoAssignCaddy,
+  b: AutoAssignCaddy
+): number {
+  const ao = a.inputOrder;
+  const bo = b.inputOrder;
+  const hasA = typeof ao === "number" && Number.isFinite(ao);
+  const hasB = typeof bo === "number" && Number.isFinite(bo);
+  if (hasA && hasB) {
+    const d = (ao as number) - (bo as number);
+    if (d !== 0) return d;
+    return a.id - b.id;
+  }
+  return compareCaddyOrder(a, b);
 }
 
 function shiftRank(shift: string): number {
@@ -1014,7 +1036,9 @@ export function assignFiftyFourHolePriority(input: {
   assignedCaddyIds: Set<number>;
 } {
   const minGap = input.minGapMinutes ?? MIN_54HOLE_GAP_MINUTES;
-  const candidates = dedupeCaddies([...input.fiftyFourHole]).sort(compareCaddyOrder);
+  const candidates = dedupeCaddies([...input.fiftyFourHole]).sort(
+    compareSpecialCandidateOrder
+  );
   let remaining = [...input.reservations];
   const assignments: AutoAssignmentRow[] = [];
   const specialUnassigned: SpecialUnassignedRow[] = [];
@@ -1096,7 +1120,7 @@ export function assignOneThreePriority(input: {
 } {
   const minGap = input.minGapMinutes ?? MIN_ONE_THREE_GAP_MINUTES;
   const candidates = dedupeCaddies([...input.oneThreeCandidates]).sort(
-    compareCaddyOrder
+    compareSpecialCandidateOrder
   );
   let remaining = [...input.reservations];
   const assignments: AutoAssignmentRow[] = [];
@@ -1242,7 +1266,7 @@ export function assignOneTwoPriority(input: {
 } {
   const minGap = input.minGapMinutes ?? MIN_ONE_TWO_GAP_MINUTES;
   const candidates = dedupeCaddies([...input.oneTwoCandidates]).sort(
-    compareCaddyOrder
+    compareSpecialCandidateOrder
   );
   let remaining = [...input.reservations];
   const assignments: AutoAssignmentRow[] = [];
@@ -1700,12 +1724,12 @@ export function computeAutoAssignmentsV1(input: {
 
   const fiftyFourHole = dedupeCaddies([...(input.fiftyFourHole || [])])
     .filter((c) => !fixedIds.has(c.id))
-    .sort(compareCaddyOrder);
+    .sort(compareSpecialCandidateOrder);
   const fiftyFourIds = new Set(fiftyFourHole.map((c) => c.id));
 
   const oneThreeCandidates = dedupeCaddies([...(input.oneThreeCandidates || [])])
     .filter((c) => !fixedIds.has(c.id) && !fiftyFourIds.has(c.id))
-    .sort(compareCaddyOrder);
+    .sort(compareSpecialCandidateOrder);
   const oneThreeIds = new Set(oneThreeCandidates.map((c) => c.id));
 
   const oneTwoCandidates = dedupeCaddies([...(input.oneTwoCandidates || [])])
@@ -1713,7 +1737,7 @@ export function computeAutoAssignmentsV1(input: {
       (c) =>
         !fixedIds.has(c.id) && !fiftyFourIds.has(c.id) && !oneThreeIds.has(c.id)
     )
-    .sort(compareCaddyOrder);
+    .sort(compareSpecialCandidateOrder);
   const oneTwoIds = new Set(oneTwoCandidates.map((c) => c.id));
 
   const specialExclude = new Set<number>([

@@ -89,6 +89,7 @@ model Caddy {
   schedules         Schedule[]
   shiftDuties       ShiftDuty[]
   offRequests       OffRequest[]
+  dailySpecialDuties DailySpecialDuty[]
   /// 승인 시 선택된 Caddy로 역참조 (이력). Caddy 물리 삭제 시 selectedCaddyId만 null
   linkRequestSelections CaddyLinkRequest[] @relation("CaddyLinkRequestSelectedCaddy")
   /// 로그인 User와 1:1 (미연결 시 null)
@@ -271,4 +272,30 @@ model OffRequest {
   @@index([caddyId, date])
   @@index([caddyId, status])
   @@index([decidedByUserId])
+}
+
+/// 날짜별 관리자 특수근무 입력 (캐디 본인 신청 아님)
+/// 같은 날짜·유형 안 sortOrder = 입력 순서(우선순위). team/teamOrder는 변경하지 않음.
+enum DailySpecialKind {
+  ONE_MAK
+  ONE_TWO
+  ONE_THREE
+  FIFTY_FOUR
+  CHAGEUN
+}
+
+model DailySpecialDuty {
+  id        Int              @id @default(autoincrement())
+  date      DateTime
+  kind      DailySpecialKind
+  caddyId   Int
+  caddy     Caddy            @relation(fields: [caddyId], references: [id])
+  /// 1부터. 같은 date+kind 안에서 작을수록 먼저 배치
+  sortOrder Int
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  @@unique([date, kind, caddyId])
+  @@index([date, kind, sortOrder])
+  @@index([caddyId])
 }

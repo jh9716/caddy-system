@@ -53,7 +53,7 @@ const COURSE_SHORT: Record<CourseCode, string> = {
   LAKE: "레",
 };
 
-type CourseOpenState = Record<CourseCode, boolean>;
+import { SpecialDutyPanel } from "./SpecialDutyPanel";
 type ResultViewMode = "board" | "list";
 
 function AssignmentMarkBadges({
@@ -654,6 +654,10 @@ export default function ManageAssignmentsOpsPage() {
           </div>
         )}
         {error && <div className="ops-error">{error}</div>}
+        <SpecialDutyPanel
+          date={date}
+          excludedRows={availability?.excluded}
+        />
       </section>
 
       {liveWarnings.length > 0 && (

@@ -12,6 +12,12 @@ import { loadAvailabilityForDate } from "@/lib/availabilityService";
 import { parseReservationWorkbook } from "@/lib/reservationImportXlsx";
 import { OffSheetError } from "@/lib/offSheetFetch";
 import { DutyExcelError } from "@/lib/dutyMarshalLeaderParser";
+import {
+  applyBundlesToAssignPools,
+  unavailableReasonsFromRows,
+  type EngineSpecialBundles,
+} from "@/lib/dailySpecialDuty";
+import { loadEngineSpecialBundlesForDate } from "@/lib/dailySpecialDutyService";
 
 /** special 태그/라벨에 54홀 힌트가 있으면 54홀 후보로 추출 */
 function extractFiftyFourHoleCandidates(
@@ -107,9 +113,23 @@ export async function POST(req: NextRequest) {
       const reservations: AutoAssignReservation[] = parsed.reservations.filter(
         (r) => !r.date || r.date === date
       );
-      const fiftyFourHole = extractFiftyFourHoleCandidates(availability.special);
-      const oneThreeCandidates = extractOneThreeCandidates(availability.special);
-      const oneTwoCandidates = extractOneTwoCandidates(availability.special);
+      const unavailable = unavailableReasonsFromRows(availability.excluded);
+      const { bundles } = await loadEngineSpecialBundlesForDate(date, unavailable);
+      const pools = applyBundlesToAssignPools({
+        available: availability.available.all,
+        special: availability.special,
+        extraSpecial: bundles.extraSpecial,
+        skipFromAvailableIds: bundles.skipFromAvailableIds,
+      });
+      const fiftyFourHole =
+        bundles.fiftyFourHole ??
+        extractFiftyFourHoleCandidates(availability.special);
+      const oneThreeCandidates =
+        bundles.oneThreeCandidates ??
+        extractOneThreeCandidates(availability.special);
+      const oneTwoCandidates =
+        bundles.oneTwoCandidates ??
+        extractOneTwoCandidates(availability.special);
 
       let openCourses: string[] | null = null;
       const openRaw = form.get("openCourses");
@@ -141,8 +161,8 @@ export async function POST(req: NextRequest) {
       const result = computeAutoAssignmentsV1({
         date,
         reservations,
-        available: availability.available.all,
-        special: availability.special,
+        available: pools.available,
+        special: pools.special,
         fiftyFourHole,
         oneThreeCandidates,
         oneTwoCandidates,
@@ -160,6 +180,7 @@ export async function POST(req: NextRequest) {
         },
         availabilityCounts: availability.counts,
         dailySummary: availability.dailySummary,
+        specialDutySkipped: bundles.skippedPlacements,
         ...result,
       });
     }
@@ -184,6 +205,16 @@ export async function POST(req: NextRequest) {
     let available = (body.available || []) as AutoAssignCaddy[];
     let special = (body.special || []) as AutoAssignCaddy[];
     let specialRows: AvailabilityRow[] = [];
+    let specialDutySkipped: EngineSpecialBundles["skippedPlacements"] = [];
+    let explicit54 = Array.isArray(body.fiftyFourHole)
+      ? body.fiftyFourHole
+      : null;
+    let explicit13 = Array.isArray(body.oneThreeCandidates)
+      ? body.oneThreeCandidates
+      : null;
+    let explicit12 = Array.isArray(body.oneTwoCandidates)
+      ? body.oneTwoCandidates
+      : null;
 
     // available 생략 시 DB에서 로드 (읽기 전용)
     if (!Array.isArray(body.available)) {
@@ -193,19 +224,42 @@ export async function POST(req: NextRequest) {
         special = availability.special;
         specialRows = availability.special;
       }
+      const unavailable = unavailableReasonsFromRows(availability.excluded);
+      const { bundles } = await loadEngineSpecialBundlesForDate(
+        date,
+        unavailable
+      );
+      specialDutySkipped = bundles.skippedPlacements;
+      const pools = applyBundlesToAssignPools({
+        available,
+        special,
+        extraSpecial: bundles.extraSpecial,
+        skipFromAvailableIds: bundles.skipFromAvailableIds,
+      });
+      available = pools.available;
+      special = pools.special as AutoAssignCaddy[];
+      if (explicit54 == null && bundles.fiftyFourHole !== null) {
+        explicit54 = bundles.fiftyFourHole;
+      }
+      if (explicit13 == null && bundles.oneThreeCandidates !== null) {
+        explicit13 = bundles.oneThreeCandidates;
+      }
+      if (explicit12 == null && bundles.oneTwoCandidates !== null) {
+        explicit12 = bundles.oneTwoCandidates;
+      }
     }
 
     const fiftyFourHole = extractFiftyFourHoleCandidates(
       specialRows,
-      Array.isArray(body.fiftyFourHole) ? body.fiftyFourHole : null
+      explicit54
     );
     const oneThreeCandidates = extractOneThreeCandidates(
       specialRows,
-      Array.isArray(body.oneThreeCandidates) ? body.oneThreeCandidates : null
+      explicit13
     );
     const oneTwoCandidates = extractOneTwoCandidates(
       specialRows,
-      Array.isArray(body.oneTwoCandidates) ? body.oneTwoCandidates : null
+      explicit12
     );
     const fixedAssignments = Array.isArray(body.fixedAssignments)
       ? (body.fixedAssignments as FixedAssignmentInput[])
@@ -248,6 +302,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       mode: Array.isArray(body.available) ? "json" : "json+db-availability",
+      specialDutySkipped,
       ...result,
     });
   } catch (e: unknown) {
