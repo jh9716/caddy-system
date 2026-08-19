@@ -29,6 +29,10 @@ import {
   type AutoAssignCaddy,
   type AutoAssignReservation,
 } from "../src/lib/autoAssignEngine";
+import {
+  automaticThirdStartTeam,
+  rotateThirdQueueFromStartTeam,
+} from "../src/lib/thirdWeeklyRotation";
 
 let passed = 0;
 let failed = 0;
@@ -2801,7 +2805,10 @@ section("Fixture1 ModeA: HOUSE원번 잔여 — spare→THIRD→미근무 HOUSE"
   const house = makeCaddies(140).map((c) => ({ ...c, caddyType: "HOUSE" }));
   const third = makeThird(5);
   const orderedHouse = [...house].sort(compareCaddyOrder);
-  const orderedThird = [...third].sort(compareCaddyOrder);
+  const orderedThird = rotateThirdQueueFromStartTeam(
+    third,
+    automaticThirdStartTeam(date)
+  );
   const result = computeAutoAssignmentsV1({
     date,
     available: [...house, ...third],
@@ -2860,7 +2867,10 @@ section("Fixture2 ModeB: HOUSE소진 — THIRD→[82..91], [0..9]/spare80·81 �
   const house = makeCaddies(140).map((c) => ({ ...c, caddyType: "HOUSE" }));
   const third = makeThird(70);
   const orderedHouse = [...house].sort(compareCaddyOrder);
-  const orderedThird = [...third].sort(compareCaddyOrder);
+  const orderedThird = rotateThirdQueueFromStartTeam(
+    third,
+    automaticThirdStartTeam(date)
+  );
   const result = computeAutoAssignmentsV1({
     date,
     available: [...house, ...third],
@@ -3500,7 +3510,7 @@ section("9~12조는 HOUSE 풀 제외, THIRD 풀 / 1부 첫 캐디 후보 제외"
 
 section("3부 Spare = 실제 배치 sequence 연속 (잔여 THIRD, 별도 HOUSE queue 금지)");
 {
-  const date = "2026-08-18";
+  const date = "2026-08-25";
   const house: AutoAssignCaddy[] = [
     { id: 1, name: "A", team: "1조", teamOrder: 1, caddyType: "HOUSE" },
     { id: 2, name: "B", team: "1조", teamOrder: 2, caddyType: "HOUSE" },
@@ -3570,9 +3580,9 @@ section("3부 Spare = 실제 배치 sequence 연속 (잔여 THIRD, 별도 HOUSE 
     { id: 504, name: "TA4", team: "9조", teamOrder: 4, caddyType: "THIRD" },
   ];
   const modeA = computeAutoAssignmentsV1({
-    date: "2026-08-19",
+    date: "2026-08-26",
     available: [...houseA, ...thirdA],
-    reservations: makeReservations("2026-08-19", [
+    reservations: makeReservations("2026-08-26", [
       { shift: "1부", count: 4 },
       { shift: "2부", count: 4 },
       { shift: "3부", count: 4 },

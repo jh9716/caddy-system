@@ -56,7 +56,16 @@ const COURSE_SHORT: Record<CourseCode, string> = {
 };
 
 import { SpecialDutyPanel, type Shift1StartOption } from "./SpecialDutyPanel";
+import { THIRD_BAND_TEAMS } from "@/lib/caddyManage";
+
 type ResultViewMode = "board" | "list";
+
+type ThirdWeeklyStartState = {
+  weekStart: string;
+  autoStartTeam: string;
+  startTeam: string;
+  overridden: boolean;
+};
 
 function AssignmentMarkBadges({
   twoWork,
@@ -105,6 +114,10 @@ export default function ManageAssignmentsOpsPage() {
   >("1부");
   const [courseOpen, setCourseOpen] = useState<CourseOpenState>(defaultCourseOpen);
   const [houseStartCaddyId, setHouseStartCaddyId] = useState<number | "">("");
+  const [thirdWeekly, setThirdWeekly] = useState<ThirdWeeklyStartState | null>(
+    null
+  );
+  const [savingThirdWeekly, setSavingThirdWeekly] = useState(false);
   const [loadingAvail, setLoadingAvail] = useState(false);
   const [loadingRun, setLoadingRun] = useState(false);
   const [loadingApply, setLoadingApply] = useState(false);
@@ -163,6 +176,35 @@ export default function ManageAssignmentsOpsPage() {
     };
   }, [file, date]);
 
+  useEffect(() => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      setThirdWeekly(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/third-weekly-start?date=${encodeURIComponent(date)}`,
+          { credentials: "include" }
+        );
+        const data = await res.json();
+        if (!res.ok || cancelled) return;
+        setThirdWeekly({
+          weekStart: String(data.weekStart || ""),
+          autoStartTeam: String(data.autoStartTeam || ""),
+          startTeam: String(data.startTeam || ""),
+          overridden: Boolean(data.overridden),
+        });
+      } catch {
+        if (!cancelled) setThirdWeekly(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [date]);
+
   /** 부 탭/보기 전환 시 sticky 스택 기준으로 첫 데이터 행이 보이도록 스크롤 */
   useEffect(() => {
     if (!draft) return;
@@ -215,6 +257,40 @@ export default function ManageAssignmentsOpsPage() {
   function showToast(msg: string) {
     setToast(msg);
     setTimeout(() => setToast(null), 2200);
+  }
+
+  async function persistThirdWeeklyStart(startTeam: string | null) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+    setSavingThirdWeekly(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/third-weekly-start", {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date, startTeam }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "3부반 시작조 저장 실패");
+        return;
+      }
+      setThirdWeekly({
+        weekStart: String(data.weekStart || ""),
+        autoStartTeam: String(data.autoStartTeam || ""),
+        startTeam: String(data.startTeam || ""),
+        overridden: Boolean(data.overridden),
+      });
+      showToast(
+        startTeam
+          ? `이번 주 3부반 시작조 ${data.startTeam} (수동)`
+          : `이번 주 3부반 시작조 ${data.startTeam} (자동)`
+      );
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "3부반 시작조 저장 실패");
+    } finally {
+      setSavingThirdWeekly(false);
+    }
   }
 
   async function loadAvailability() {
@@ -297,6 +373,9 @@ export default function ManageAssignmentsOpsPage() {
       if (dutyFile) form.append("dutyFile", dutyFile);
       form.append("openCourses", JSON.stringify(openCourseList));
       form.append("houseStartCaddyId", String(houseStartCaddyId));
+      if (thirdWeekly?.startTeam) {
+        form.append("thirdStartTeam", thirdWeekly.startTeam);
+      }
       const res = await fetch("/api/assignments/preview", {
         method: "POST",
         body: form,
@@ -605,6 +684,45 @@ export default function ManageAssignmentsOpsPage() {
             ))}
           </select>
         </label>
+        <div className="ops-field ops-third-week">
+          <span>
+            이번 주 3부반 시작조
+            {thirdWeekly?.overridden ? (
+              <span className="ops-manual-badge">수동 지정</span>
+            ) : null}
+          </span>
+          <div className="ops-third-week-row">
+            <select
+              value={thirdWeekly?.startTeam || ""}
+              disabled={!date || savingThirdWeekly}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (!v) return;
+                void persistThirdWeeklyStart(v);
+              }}
+            >
+              <option value="">
+                {!date ? "날짜를 선택하세요" : "불러오는 중…"}
+              </option>
+              {THIRD_BAND_TEAMS.map((team) => (
+                <option key={team} value={team}>
+                  {team}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="btn ghost"
+              disabled={!thirdWeekly?.overridden || savingThirdWeekly}
+              onClick={() => void persistThirdWeeklyStart(null)}
+            >
+              자동값으로 복원
+            </button>
+          </div>
+          <span className="ops-third-week-hint">
+            자동 계산값 {thirdWeekly?.autoStartTeam || "—"} · {thirdWeekly?.weekStart || "—"} 주만 적용
+          </span>
+        </div>
         <div className="ops-actions">
           <button
             type="button"
@@ -1383,6 +1501,30 @@ const opsCss = `
   }
   .ops-first-caddy {
     margin-top: 4px;
+  }
+  .ops-third-week {
+    margin-top: 4px;
+  }
+  .ops-third-week-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+  }
+  .ops-third-week-hint {
+    color: #57534e;
+    font-size: 0.78rem;
+  }
+  .ops-manual-badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: #fef3c7;
+    color: #92400e;
+    font-size: 0.72rem;
+    font-weight: 700;
+    vertical-align: middle;
   }
   .ops-spares-all {
     display: grid;

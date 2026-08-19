@@ -457,7 +457,7 @@ section("1·3부 1부 anchor + 3부 주말반 훅 이후 앞자리");
   assert(
     weekend.map((r) => r.teamName).join(",") ===
       [...shift3].sort(compareReservationOrder).map((r) => r.teamName).join(","),
-    "주말반 우선은 현재 noop(정렬만)"
+    "예약 훅은 정렬만 (주말반 캐디 우선은 엔진 3부 queue)"
   );
   const result = computeAutoAssignmentsV1({
     date,

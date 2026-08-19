@@ -19,6 +19,20 @@ import {
   type EngineSpecialBundles,
 } from "@/lib/dailySpecialDuty";
 import { loadEngineSpecialBundlesForDate } from "@/lib/dailySpecialDutyService";
+import { isThirdWeeklyTeam } from "@/lib/thirdWeeklyRotation";
+import { loadEffectiveThirdStartTeam } from "@/lib/thirdWeeklyStartService";
+
+function parseThirdStartTeam(raw: unknown): string | null {
+  const value = String(raw ?? "").trim();
+  return isThirdWeeklyTeam(value) ? value : null;
+}
+
+async function resolvePreviewThirdStartTeam(
+  date: string,
+  explicit: unknown
+): Promise<string> {
+  return parseThirdStartTeam(explicit) ?? loadEffectiveThirdStartTeam(date);
+}
 
 /** special 태그/라벨에 54홀 힌트가 있으면 54홀 후보로 추출 */
 function extractFiftyFourHoleCandidates(
@@ -171,6 +185,11 @@ export async function POST(req: NextRequest) {
         houseStartCaddyId = n;
       }
 
+      const thirdStartTeam = await resolvePreviewThirdStartTeam(
+        date,
+        form.get("thirdStartTeam")
+      );
+
       const result = computeAutoAssignmentsV1({
         date,
         reservations,
@@ -184,6 +203,7 @@ export async function POST(req: NextRequest) {
         oneMakAnchor: anchors.ONE_MAK,
         openCourses,
         houseStartCaddyId,
+        thirdStartTeam,
       });
 
       return NextResponse.json({
@@ -328,6 +348,10 @@ export async function POST(req: NextRequest) {
       oneMakAnchor,
       openCourses,
       houseStartCaddyId,
+      thirdStartTeam: await resolvePreviewThirdStartTeam(
+        date,
+        body.thirdStartTeam
+      ),
     });
 
     return NextResponse.json({

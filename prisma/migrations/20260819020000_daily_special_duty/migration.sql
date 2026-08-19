@@ -38,3 +38,18 @@ CREATE TABLE "DailySpecialDutyAnchor" (
 CREATE UNIQUE INDEX "DailySpecialDutyAnchor_date_kind_key" ON "DailySpecialDutyAnchor"("date", "kind");
 
 CREATE INDEX "DailySpecialDutyAnchor_date_idx" ON "DailySpecialDutyAnchor"("date");
+
+-- 해당 월~일 주에만 적용되는 3부반 시작조 수동 지정.
+-- 다음 주 자동 rotation을 밀어내지 않음. Production 적용은 별도 승인.
+
+CREATE TABLE "ThirdWeeklyStartOverride" (
+    "id" SERIAL NOT NULL,
+    "weekStart" TIMESTAMP(3) NOT NULL,
+    "startTeam" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "ThirdWeeklyStartOverride_pkey" PRIMARY KEY ("id")
+);
+
+CREATE UNIQUE INDEX "ThirdWeeklyStartOverride_weekStart_key" ON "ThirdWeeklyStartOverride"("weekStart");

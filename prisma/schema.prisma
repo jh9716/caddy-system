@@ -43,7 +43,7 @@ enum CaddyType {
   DRIVING
 }
 
-/// 3부반(9~12조) 주중/주말 세부구분 — 배치 엔진 미연동(저장 전용)
+/// 3부반(9~12조) 주중/주말 세부구분. WEEKEND는 토/일/공휴일 3부 우선에만 사용.
 enum ThirdBandSubgroup {
   WEEKDAY
   WEEKEND
@@ -312,4 +312,18 @@ model DailySpecialDutyAnchor {
 
   @@unique([date, kind])
   @@index([date])
+}
+
+/// 해당 월~일 주에만 적용되는 3부반 시작조 수동 지정.
+/// 없으면 2026-08-17=12조 기준 자동 순환. 다음 주로 이월되지 않음.
+model ThirdWeeklyStartOverride {
+  id        Int      @id @default(autoincrement())
+  /// 그 주 월요일 00:00
+  weekStart DateTime
+  /// "9조" | "10조" | "11조" | "12조"
+  startTeam String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([weekStart])
 }
