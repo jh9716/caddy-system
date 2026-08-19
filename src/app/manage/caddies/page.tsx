@@ -2,13 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  DRIVING_POOL_TEAM,
   EMPLOYMENT_STATUSES,
   EMPLOYMENT_STATUS_LABELS,
   EDITABLE_EXTRA_FLAG_OPTIONS,
   PRIMARY_TEAMS,
-  TEAM_OPTIONS,
   THIRD_BAND_SUBGROUP_LABELS,
   employmentStatusLabel,
+  isDrivingCaddyType,
   isThirdBandTeam,
   normalizeEmploymentStatus,
   thirdBandSubgroupCsvLabel,
@@ -102,6 +103,7 @@ export default function ManageCaddiesPage() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [drafts, setDrafts] = useState<Record<number, Draft>>({});
   const [createOpen, setCreateOpen] = useState(false);
+  const [createKind, setCreateKind] = useState<'regular' | 'driving'>('regular');
   const [createDraft, setCreateDraft] = useState<Draft>(emptyDraft);
   const [creating, setCreating] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -178,6 +180,7 @@ export default function ManageCaddiesPage() {
           team: c.team,
           teamOrder: c.teamOrder,
           employmentStatus: String(c.employmentStatus),
+          caddyType: c.caddyType ?? null,
         }))
       );
     } catch {
@@ -231,11 +234,46 @@ export default function ManageCaddiesPage() {
           }
         }
       }
-      if (teamFilter !== 'all' && r.team !== teamFilter) return false;
+      if (teamFilter === DRIVING_POOL_TEAM) {
+        if (!isDrivingCaddyType(r.caddyType) && r.team !== DRIVING_POOL_TEAM) {
+          return false;
+        }
+      } else if (teamFilter !== 'all' && r.team !== teamFilter) {
+        return false;
+      }
       if (!query) return true;
       return r.name.includes(query) || String(r.id).includes(query);
     });
   }, [rows, teamFilter, q, viewMode, employmentFilter]);
+
+  const rosterCounts = useMemo(() => {
+    const regular = rows.filter(
+      (r) => !isDrivingCaddyType(r.caddyType) && r.team !== DRIVING_POOL_TEAM
+    );
+    const driving = rows.filter(
+      (r) => isDrivingCaddyType(r.caddyType) || r.team === DRIVING_POOL_TEAM
+    );
+    const activeRegular = regular.filter(
+      (r) => normalizeEmploymentStatus(r.employmentStatus) === 'ACTIVE'
+    ).length;
+    const activeDriving = driving.filter(
+      (r) => normalizeEmploymentStatus(r.employmentStatus) === 'ACTIVE'
+    ).length;
+    return {
+      regular: regular.length,
+      driving: driving.length,
+      activeRegular,
+      activeDriving,
+    };
+  }, [rows]);
+
+  const drivingRows = useMemo(
+    () =>
+      rows.filter(
+        (r) => isDrivingCaddyType(r.caddyType) || r.team === DRIVING_POOL_TEAM
+      ),
+    [rows]
+  );
 
   const stats = useMemo(() => {
     const byTeam = new Map<string, number>();
@@ -253,6 +291,7 @@ export default function ManageCaddiesPage() {
       ])
     );
     for (const r of rows) {
+      if (isDrivingCaddyType(r.caddyType) || r.team === DRIVING_POOL_TEAM) continue;
       const cur = map.get(r.team);
       if (!cur) continue;
       cur.total += 1;
@@ -290,11 +329,47 @@ export default function ManageCaddiesPage() {
   async function saveEdit(id: number) {
     const draft = drafts[id];
     if (!draft) return;
+    const original = rows.find((r) => r.id === id);
+    const originalDriving = original
+      ? isDrivingCaddyType(original.caddyType) ||
+        original.team === DRIVING_POOL_TEAM
+      : false;
+    if (originalDriving) {
+      if (!draft.name.trim()) {
+        alert('이름은 필수입니다.');
+        return;
+      }
+      setSavingId(id);
+      try {
+        const res = await fetch(`/api/caddies/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            name: draft.name.trim(),
+            caddyType: 'DRIVING',
+            employmentStatus: draft.employmentStatus,
+            extraFlags: draft.extraFlags,
+            phone: draft.phone.trim() === '' ? null : draft.phone.trim(),
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          alert(data?.error || '저장 실패');
+          return;
+        }
+        setEditingId(null);
+        await load();
+        setMessage(`#${id} 드라이빙 캐디 저장됨 (ID 유지)`);
+      } finally {
+        setSavingId(null);
+      }
+      return;
+    }
     if (!draft.name.trim() || !draft.team.trim()) {
       alert('이름과 조는 필수입니다.');
       return;
     }
-    const original = rows.find((r) => r.id === id);
     const teamChanging = original && draft.team !== original.team;
     const slot = Number(draft.teamOrder) || 0;
     if (slot < 1) {
@@ -341,7 +416,40 @@ export default function ManageCaddiesPage() {
     }
   }
 
+  async function convertToDriving(c: Caddy) {
+    const slotNote =
+      c.team && Number(c.teamOrder) >= 1
+        ? `${c.team} ${c.teamOrder}번 고정 슬롯은 빈자리가 됩니다.`
+        : '고정 슬롯에서 제외됩니다.';
+    if (
+      !confirm(
+        `${c.name}을(를) 드라이빙 전담 캐디로 바꿀까요?\n${slotNote}\n기존 스케줄/계정 연결 기록은 유지되지만 이후 일반 자동배치·HOUSE/THIRD 순번에는 참여하지 않습니다.`
+      )
+    ) {
+      return;
+    }
+    setSavingId(c.id);
+    try {
+      const res = await fetch(`/api/caddies/${c.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ caddyType: 'DRIVING' }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data?.error || '변경 실패');
+        return;
+      }
+      await load();
+      setMessage(`${c.name}: 드라이빙 캐디로 변경 (슬롯 해제)`);
+    } finally {
+      setSavingId(null);
+    }
+  }
+
   async function moveOrder(c: Caddy, direction: -1 | 1) {
+    if (isDrivingCaddyType(c.caddyType) || c.team === DRIVING_POOL_TEAM) return;
     const sameTeam = rows
       .filter((r) => r.team === c.team)
       .sort((a, b) => a.teamOrder - b.teamOrder || a.id - b.id);
@@ -407,6 +515,40 @@ export default function ManageCaddiesPage() {
   }
 
   async function createCaddy() {
+    if (createKind === 'driving') {
+      if (!createDraft.name.trim()) {
+        alert('이름은 필수입니다.');
+        return;
+      }
+      setCreating(true);
+      try {
+        const res = await fetch('/api/caddies', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            name: createDraft.name.trim(),
+            caddyType: 'DRIVING',
+            employmentStatus: createDraft.employmentStatus,
+            phone:
+              createDraft.phone.trim() === '' ? null : createDraft.phone.trim(),
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          alert(data?.error || '등록 실패');
+          return;
+        }
+        setCreateDraft(emptyDraft());
+        setCreateKind('regular');
+        setCreateOpen(false);
+        await load();
+        setMessage(`드라이빙 캐디 등록: ${data.name} (id=${data.id}, 조/순번 없음)`);
+      } finally {
+        setCreating(false);
+      }
+      return;
+    }
     if (!createDraft.name.trim() || !createDraft.team.trim()) {
       alert('이름과 조는 필수입니다.');
       return;
@@ -480,10 +622,22 @@ export default function ManageCaddiesPage() {
             className="cm-btn cm-btn-primary cm-btn-sm"
             onClick={() => {
               setViewMode('detail');
+              setCreateKind('regular');
               setCreateOpen(true);
             }}
           >
             신규 등록
+          </button>
+          <button
+            type="button"
+            className="cm-btn cm-btn-sm"
+            onClick={() => {
+              setViewMode('detail');
+              setCreateKind('driving');
+              setCreateOpen(true);
+            }}
+          >
+            드라이빙 추가
           </button>
           <button
             type="button"
@@ -576,7 +730,30 @@ export default function ManageCaddiesPage() {
 
       {createOpen && viewMode === 'detail' && (
         <section className="cm-card cm-create">
-          <h3>신규 캐디 등록</h3>
+          <h3>
+            {createKind === 'driving' ? '드라이빙 캐디 등록' : '신규 캐디 등록'}
+          </h3>
+          <div className="cm-kind-toggle" role="group" aria-label="등록 유형">
+            <button
+              type="button"
+              className={createKind === 'regular' ? 'is-on' : ''}
+              onClick={() => setCreateKind('regular')}
+            >
+              일반 (HOUSE/THIRD)
+            </button>
+            <button
+              type="button"
+              className={createKind === 'driving' ? 'is-on' : ''}
+              onClick={() => setCreateKind('driving')}
+            >
+              드라이빙 전담
+            </button>
+          </div>
+          {createKind === 'driving' ? (
+            <p className="cm-muted">
+              조/순번 없이 등록됩니다. 일반 자동배치·Spare에 들어가지 않고, 3부 드라이빙 지정 시에만 배치됩니다.
+            </p>
+          ) : null}
           <div className="cm-form-grid">
             <label>
               이름
@@ -586,6 +763,8 @@ export default function ManageCaddiesPage() {
                 placeholder="이름"
               />
             </label>
+            {createKind === 'regular' ? (
+              <>
             <label>
               조
               <select
@@ -604,7 +783,7 @@ export default function ManageCaddiesPage() {
                   })
                 }
               >
-                {TEAM_OPTIONS.map((t) => (
+                {PRIMARY_TEAMS.map((t) => (
                   <option key={t} value={t}>{t}</option>
                 ))}
               </select>
@@ -628,6 +807,8 @@ export default function ManageCaddiesPage() {
                 ))}
               </select>
             </label>
+              </>
+            ) : null}
             <label>
               재직상태
               <select
@@ -659,7 +840,7 @@ export default function ManageCaddiesPage() {
                 placeholder="010-1234-5678"
               />
             </label>
-            {isThirdBandTeam(createDraft.team) && (
+            {createKind === 'regular' && isThirdBandTeam(createDraft.team) && (
               <label>
                 3부반 구분
                 <select
@@ -680,6 +861,7 @@ export default function ManageCaddiesPage() {
               </label>
             )}
           </div>
+          {createKind === 'regular' && (
           <fieldset className="cm-flags">
             <legend>추가 속성</legend>
             {EDITABLE_EXTRA_FLAG_OPTIONS.map((flag) => (
@@ -700,6 +882,7 @@ export default function ManageCaddiesPage() {
               </label>
             ))}
           </fieldset>
+          )}
           <div className="cm-actions">
             <button type="button" className="cm-btn cm-btn-primary" disabled={creating} onClick={createCaddy}>
               {creating ? '등록 중…' : '등록'}
@@ -740,14 +923,20 @@ export default function ManageCaddiesPage() {
             />
             <select value={teamFilter} onChange={(e) => setTeamFilter(e.target.value)}>
               <option value="all">전체 조</option>
-              {TEAM_OPTIONS.map((t) => (
+              <option value={DRIVING_POOL_TEAM}>드라이빙</option>
+              {PRIMARY_TEAMS.map((t) => (
                 <option key={t} value={t}>{t}</option>
               ))}
             </select>
           </section>
 
           <div className="cm-stats">
-            표시 {stats.total}명 · {stats.teams}개 조
+            재직 일반캐디 {rosterCounts.activeRegular}명 · 드라이빙캐디{' '}
+            {rosterCounts.activeDriving}명
+            <span className="cm-stats-hint">
+              {' '}
+              · 표시 {stats.total}명
+            </span>
             {employmentFilter === 'ACTIVE' && (
               <span className="cm-stats-hint"> · 퇴사자는 「퇴사」 필터에서 조회·복귀</span>
             )}
@@ -759,6 +948,62 @@ export default function ManageCaddiesPage() {
         <p className="cm-muted">불러오는 중…</p>
       ) : viewMode === 'summary' ? (
         <div className="cm-summary-grid">
+          <button
+            type="button"
+            className="cm-team-card cm-driving-card"
+            onClick={() => {
+              setTeamFilter(DRIVING_POOL_TEAM);
+              setEmploymentFilter('all');
+              setViewMode('detail');
+            }}
+          >
+            <div className="cm-team-head">
+              <span className="cm-team-name">드라이빙 캐디</span>
+              <span className="cm-team-chevron" aria-hidden>›</span>
+            </div>
+            <ul className="cm-team-status">
+              <li>
+                <span className="dot active" />
+                <span className="lbl">재직</span>{' '}
+                <strong>
+                  {
+                    drivingRows.filter(
+                      (r) =>
+                        normalizeEmploymentStatus(r.employmentStatus) ===
+                        'ACTIVE'
+                    ).length
+                  }
+                </strong>
+              </li>
+              <li>
+                <span className="dot leave" />
+                <span className="lbl">휴직</span>{' '}
+                <strong>
+                  {
+                    drivingRows.filter(
+                      (r) =>
+                        normalizeEmploymentStatus(r.employmentStatus) ===
+                        'LEAVE'
+                    ).length
+                  }
+                </strong>
+              </li>
+              <li>
+                <span className="dot retired" />
+                <span className="lbl">퇴사</span>{' '}
+                <strong>
+                  {
+                    drivingRows.filter(
+                      (r) =>
+                        normalizeEmploymentStatus(r.employmentStatus) ===
+                        'RETIRED'
+                    ).length
+                  }
+                </strong>
+              </li>
+            </ul>
+            <div className="cm-team-foot">총 {drivingRows.length}명 · 조/순번 없음</div>
+          </button>
           {teamSummaries.map((t) => (
             <button
               key={t.team}
@@ -820,6 +1065,9 @@ export default function ManageCaddiesPage() {
                   const draft = drafts[c.id] ?? toDraft(c);
                   const busy = savingId === c.id;
                   const st = normalizeEmploymentStatus(c.employmentStatus);
+                  const isDriving =
+                    isDrivingCaddyType(c.caddyType) ||
+                    c.team === DRIVING_POOL_TEAM;
                   return (
                     <tr
                       key={c.id}
@@ -837,6 +1085,7 @@ export default function ManageCaddiesPage() {
                                 }
                               />
                             </label>
+                            {!isDriving && (
                             <label>
                               조
                               <select
@@ -853,18 +1102,20 @@ export default function ManageCaddiesPage() {
                                   });
                                 }}
                               >
-                                {!(TEAM_OPTIONS as readonly string[]).includes(
+                                {!(PRIMARY_TEAMS as readonly string[]).includes(
                                   draft.team
                                 ) && (
                                   <option value={draft.team}>{draft.team}</option>
                                 )}
-                                {TEAM_OPTIONS.map((t) => (
+                                {PRIMARY_TEAMS.map((t) => (
                                   <option key={t} value={t}>
                                     {t}
                                   </option>
                                 ))}
                               </select>
                             </label>
+                            )}
+                            {!isDriving && (
                             <label>
                               슬롯
                               <select
@@ -884,6 +1135,7 @@ export default function ManageCaddiesPage() {
                                 ))}
                               </select>
                             </label>
+                            )}
                             <label>
                               재직상태
                               <select
@@ -912,7 +1164,7 @@ export default function ManageCaddiesPage() {
                                 }
                               />
                             </label>
-                            {isThirdBandTeam(draft.team) && (
+                            {!isDriving && isThirdBandTeam(draft.team) && (
                               <label>
                                 3부반 구분
                                 <select
@@ -938,6 +1190,7 @@ export default function ManageCaddiesPage() {
                               </label>
                             )}
                           </div>
+                          {!isDriving && (
                           <fieldset className="cm-flags">
                             <legend>추가 속성</legend>
                             {EDITABLE_EXTRA_FLAG_OPTIONS.map((flag) => (
@@ -951,6 +1204,7 @@ export default function ManageCaddiesPage() {
                               </label>
                             ))}
                           </fieldset>
+                          )}
                           <div className="cm-item-actions">
                             <button
                               type="button"
@@ -975,9 +1229,12 @@ export default function ManageCaddiesPage() {
                           <td>
                             <strong className="cm-name">{c.name}</strong>
                             <span className="cm-id-inline">#{c.id}</span>
+                            {isDriving ? (
+                              <span className="cm-drive-tag">드라이빙</span>
+                            ) : null}
                           </td>
-                          <td>{c.team}</td>
-                          <td className="cm-num">{c.teamOrder}</td>
+                          <td>{isDriving ? '—' : c.team}</td>
+                          <td className="cm-num">{isDriving ? '—' : c.teamOrder}</td>
                           <td>
                             <span
                               className={`cm-status ${
@@ -1007,6 +1264,8 @@ export default function ManageCaddiesPage() {
                               >
                                 수정
                               </button>
+                              {!isDriving && (
+                                <>
                               <button
                                 type="button"
                                 className="cm-btn cm-btn-sm"
@@ -1023,6 +1282,16 @@ export default function ManageCaddiesPage() {
                               >
                                 ↓
                               </button>
+                              <button
+                                type="button"
+                                className="cm-btn cm-btn-sm"
+                                disabled={busy}
+                                onClick={() => convertToDriving(c)}
+                              >
+                                드라이빙으로
+                              </button>
+                                </>
+                              )}
                               {st === 'RETIRED' ? (
                                 <button
                                   type="button"
@@ -1073,6 +1342,9 @@ export default function ManageCaddiesPage() {
               const busy = savingId === c.id;
               const st = normalizeEmploymentStatus(c.employmentStatus);
               const open = expandedId === c.id || editing;
+              const isDriving =
+                isDrivingCaddyType(c.caddyType) ||
+                c.team === DRIVING_POOL_TEAM;
               return (
                 <li
                   key={c.id}
@@ -1086,8 +1358,10 @@ export default function ManageCaddiesPage() {
                     }
                   >
                     <strong className="cm-name">{c.name}</strong>
-                    <span className="cm-meta">{c.team}</span>
-                    <span className="cm-num">{c.teamOrder}</span>
+                    <span className="cm-meta">
+                      {isDriving ? '드라이빙' : c.team}
+                    </span>
+                    <span className="cm-num">{isDriving ? '—' : c.teamOrder}</span>
                     <span
                       className={`cm-status ${
                         st === 'ACTIVE' ? 'ok' : st === 'LEAVE' ? 'leave' : 'out'
@@ -1116,6 +1390,8 @@ export default function ManageCaddiesPage() {
                           >
                             수정
                           </button>
+                          {!isDriving && (
+                            <>
                           <button
                             type="button"
                             className="cm-btn cm-btn-sm"
@@ -1132,6 +1408,16 @@ export default function ManageCaddiesPage() {
                           >
                             순번↓
                           </button>
+                          <button
+                            type="button"
+                            className="cm-btn cm-btn-sm"
+                            disabled={busy}
+                            onClick={() => convertToDriving(c)}
+                          >
+                            드라이빙으로
+                          </button>
+                            </>
+                          )}
                           {st === 'RETIRED' ? (
                             <button
                               type="button"
@@ -1176,6 +1462,7 @@ export default function ManageCaddiesPage() {
                                 }
                               />
                             </label>
+                            {!isDriving && (
                             <label>
                               조
                               <select
@@ -1192,13 +1479,20 @@ export default function ManageCaddiesPage() {
                                   });
                                 }}
                               >
-                                {TEAM_OPTIONS.map((t) => (
+                                {!(PRIMARY_TEAMS as readonly string[]).includes(
+                                  draft.team
+                                ) && (
+                                  <option value={draft.team}>{draft.team}</option>
+                                )}
+                                {PRIMARY_TEAMS.map((t) => (
                                   <option key={t} value={t}>
                                     {t}
                                   </option>
                                 ))}
                               </select>
                             </label>
+                            )}
+                            {!isDriving && (
                             <label>
                               슬롯
                               <select
@@ -1217,6 +1511,7 @@ export default function ManageCaddiesPage() {
                                 ))}
                               </select>
                             </label>
+                            )}
                             <label>
                               상태
                               <select
@@ -1245,7 +1540,7 @@ export default function ManageCaddiesPage() {
                                 }
                               />
                             </label>
-                            {isThirdBandTeam(draft.team) && (
+                            {!isDriving && isThirdBandTeam(draft.team) && (
                               <label>
                                 3부반 구분
                                 <select
@@ -1271,6 +1566,7 @@ export default function ManageCaddiesPage() {
                               </label>
                             )}
                           </div>
+                          {!isDriving && (
                           <fieldset className="cm-flags">
                             <legend>추가 속성</legend>
                             {EDITABLE_EXTRA_FLAG_OPTIONS.map((flag) => (
@@ -1284,6 +1580,7 @@ export default function ManageCaddiesPage() {
                               </label>
                             ))}
                           </fieldset>
+                          )}
                           <div className="cm-item-actions">
                             <button
                               type="button"
@@ -1675,7 +1972,38 @@ export default function ManageCaddiesPage() {
           margin-bottom: 8px;
           box-shadow: var(--vh-shadow-sm);
         }
-        .cm-create h3 {
+        .cm-kind-toggle {
+          display: flex;
+          gap: 6px;
+          margin-bottom: 10px;
+        }
+        .cm-kind-toggle button {
+          flex: 1;
+          min-height: 40px;
+          border: 1px solid var(--vh-border);
+          background: #fff;
+          border-radius: 8px;
+          font-size: 0.8rem;
+          cursor: pointer;
+        }
+        .cm-kind-toggle button.is-on {
+          border-color: var(--vh-gold);
+          background: #fffbeb;
+          font-weight: 700;
+        }
+        .cm-driving-card {
+          border-color: #c4b5fd;
+          background: #f5f3ff;
+        }
+        .cm-drive-tag {
+          margin-left: 6px;
+          font-size: 0.65rem;
+          font-weight: 800;
+          color: #6d28d9;
+          background: #ede9fe;
+          padding: 1px 5px;
+          border-radius: 4px;
+        }
           margin: 0 0 8px;
           font-family: var(--font-display);
           font-size: 1.05rem;

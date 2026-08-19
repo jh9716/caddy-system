@@ -115,6 +115,31 @@ assert(!selectable.includes(25), "25 not selectable (over capacity)");
 assert(selectable.includes(4), "empty 4 in capacity range");
 assert(!selectable.includes(1) && !selectable.includes(3), "occupied not selectable");
 
+section("DRIVING does not consume HOUSE slots");
+{
+  const mixed = [
+    ...peers,
+    {
+      id: 90,
+      name: "드라이브",
+      team: "1조",
+      teamOrder: 4,
+      employmentStatus: "ACTIVE",
+      caddyType: "DRIVING",
+    },
+    {
+      id: 91,
+      name: "전담",
+      team: "드라이빙",
+      teamOrder: 0,
+      employmentStatus: "ACTIVE",
+      caddyType: "DRIVING",
+    },
+  ];
+  assert(findSlotOccupant(mixed, "1조", 4) == null, "DRIVING on 1조 4 not occupant");
+  assert(listSelectableEmptySlots(mixed, "1조").includes(4), "slot 4 still empty");
+}
+
 try {
   assertSlotAvailable(peers, "1조", 1);
   assert(false, "should block occupied");

@@ -6,15 +6,19 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   employmentStatusLabel,
+  isDrivingCaddyType,
   isThirdBandTeam,
   normalizeEmploymentStatus,
   normalizeExtraFlags,
   normalizeTeamOrder,
+  occupiesHouseThirdSlot,
   parseEmploymentFilter,
   mergeExtraFlagsForPersist,
   parseThirdBandSubgroupInput,
   resolveCaddyTypeFromTeam,
   resolveThirdBandSubgroup,
+  drivingPersistFields,
+  DRIVING_POOL_TEAM,
   ThirdBandSubgroupError,
   EDITABLE_EXTRA_FLAG_OPTIONS,
 } from "../src/lib/caddyManage";
@@ -85,6 +89,29 @@ assert(!bad.success, "reject empty name");
 
 const noSlot = caddyCreateSchema.safeParse({ name: "홍길동", team: "1조" });
 assert(!noSlot.success, "reject missing teamOrder");
+
+const drivingCreate = caddyCreateSchema.safeParse({
+  name: "드라이브",
+  caddyType: "DRIVING",
+});
+assert(drivingCreate.success, "DRIVING create without team/slot");
+assert(
+  drivingCreate.success && drivingCreate.data.caddyType === "DRIVING",
+  "create keeps DRIVING type"
+);
+
+assert(isDrivingCaddyType("DRIVING"), "isDrivingCaddyType");
+assert(!occupiesHouseThirdSlot({ caddyType: "DRIVING", team: "1조" }), "DRIVING skips slot");
+assert(
+  !occupiesHouseThirdSlot({ caddyType: "HOUSE", team: DRIVING_POOL_TEAM }),
+  "드라이빙 조 skips slot"
+);
+assert(
+  occupiesHouseThirdSlot({ caddyType: "HOUSE", team: "1조" }),
+  "HOUSE occupies slot"
+);
+assert(drivingPersistFields().teamOrder === 0, "driving teamOrder 0");
+assert(drivingPersistFields().team === DRIVING_POOL_TEAM, "driving pool team");
 
 const updated = caddyUpdateSchema.safeParse({
   teamOrder: 5,
@@ -319,6 +346,46 @@ console.log("== legacy extraFlags 보존 / 신규 이중입력 차단 ==");
       !/\bEXTRA_FLAG_OPTIONS\.map/.test(uiSrc) &&
       !/checked=\{[^}]*주중반/.test(uiSrc),
     "manage UI maps EDITABLE flags only (no 주중반/주말반 checkbox)"
+  );
+  assert(
+    /드라이빙 캐디 등록/.test(uiSrc) && /createKind === 'driving'/.test(uiSrc),
+    "manage UI has dedicated driving create"
+  );
+}
+
+console.log("== manage toast sits above bottom nav ==");
+{
+  const css = fs.readFileSync(path.resolve("src/app/globals.css"), "utf8");
+  assert(/--vh-toast-z:\s*60/.test(css), "toast z-index above bottom tabs 35");
+  assert(
+    /--vh-bottom-nav-height:\s*58px/.test(css) &&
+      /env\(safe-area-inset-bottom/.test(css),
+    "toast offset includes nav height and safe-area"
+  );
+  assert(
+    /z-index:\s*var\(--vh-toast-z\)\s*!important/.test(css),
+    "toast z-index beats local styled rules"
+  );
+}
+
+console.log("== swap B auto-preview source ==");
+{
+  const panel = fs.readFileSync(
+    path.resolve("src/app/manage/assignments/LiveChangePanel.tsx"),
+    "utf8"
+  );
+  const board = fs.readFileSync(
+    path.resolve("src/app/manage/assignments/page.tsx"),
+    "utf8"
+  );
+  assert(/function previewSwap\(/.test(panel), "panel previewSwap helper");
+  assert(
+    /changeType !== "SWAP_CADDY"/.test(panel),
+    "SWAP skips 배치 다시 맞추기 button"
+  );
+  assert(
+    /setPendingLiveChange\(\{\s*type: "SWAP_CADDY"/.test(board),
+    "board B tap sets SWAP preset"
   );
 }
 

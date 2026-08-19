@@ -10,6 +10,7 @@ import {
   makeAddReservation,
   previewLiveAssignmentChange,
   LIVE_CHANGE_APPLY_USER_MESSAGE,
+  isLiveChangeReady,
 } from "../src/lib/assignmentChange";
 import { createDraftFromAutoResult } from "../src/lib/assignmentDraft";
 import {
@@ -1046,6 +1047,33 @@ section("일반 순번 바꿈은 A↔B만 변경");
   assert(caddyOn(swapped.after, "R1") === b.caddy.id, "only A moved");
   assert(caddyOn(swapped.after, "R3") === a.caddy.id, "only B moved");
   assert(caddyOn(swapped.after, "R2") === mid, "middle unchanged");
+  assert(
+    isLiveChangeReady({
+      type: "SWAP_CADDY",
+      reservationKeyA: reservationKey(a.reservation),
+      reservationKeyB: reservationKey(b.reservation),
+    }),
+    "B selected → swap is ready for auto preview"
+  );
+  assert(
+    !isLiveChangeReady({
+      type: "SWAP_CADDY",
+      reservationKeyA: reservationKey(a.reservation),
+    }),
+    "A only is not ready"
+  );
+  const store = emptyLiveChangeMemoryStore();
+  previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: {
+      type: "SWAP_CADDY",
+      reservationKeyA: reservationKey(a.reservation),
+      reservationKeyB: reservationKey(b.reservation),
+    },
+  });
+  assert(store.placements.length === 0, "preview does not write placements");
+  assert(store.reservations.length === 0, "preview does not write reservations");
 }
 
 section("드라이빙 후보는 DRIVING+ACTIVE만, 없으면 일반 캐디 대체 없음");

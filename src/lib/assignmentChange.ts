@@ -56,6 +56,40 @@ export const LIVE_CHANGE_LABELS: Record<LiveChangeType, string> = {
 export const LIVE_CHANGE_APPLY_USER_MESSAGE =
   "배치 저장 중 오류가 발생했습니다. 다시 시도해주세요.";
 
+/** 보드 탭/프리셋이 이 조건을 충족하면 배치 다시 맞추기 없이 preview 계산. */
+export function isLiveChangeReady(
+  change: LiveChangeInput | null | undefined
+): boolean {
+  if (!change) return false;
+  switch (change.type) {
+    case "CANCEL_RESERVATION":
+    case "TEAM_NOSHOW":
+      return !!change.reservationKey || change.reservationId != null;
+    case "CADDY_SICK":
+    case "CADDY_ATTENDANCE_NOSHOW":
+      return Number(change.caddyId) > 0;
+    case "ADD_RESERVATION":
+      return !!change.addReservation;
+    case "SWAP_CADDY":
+      return (
+        !!change.reservationKeyA &&
+        !!change.reservationKeyB &&
+        change.reservationKeyA !== change.reservationKeyB
+      );
+    case "SET_LIMOUSINE":
+    case "CLEAR_DRIVING":
+    case "SET_LOCK":
+      return !!change.reservationKey || change.reservationId != null;
+    case "ASSIGN_DRIVING":
+      return (
+        (!!change.reservationKey || change.reservationId != null) &&
+        Number(change.caddyId) > 0
+      );
+    default:
+      return false;
+  }
+}
+
 export type LiveChangeInput = {
   type: LiveChangeType;
   reservationKey?: string;

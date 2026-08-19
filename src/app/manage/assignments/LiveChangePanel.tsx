@@ -9,6 +9,7 @@ import {
   type ShiftPart,
 } from "@/lib/reservationParser";
 import {
+  isLiveChangeReady,
   LIVE_CHANGE_LABELS,
   LIVE_CHANGE_TYPES,
   makeAddReservation,
@@ -106,21 +107,7 @@ export function LiveChangePanel({
     setLimousineOn(preset.limousineCart !== false);
     setLockOn(preset.locked !== false);
     setError(null);
-    const eventsReady =
-      (preset.type === "CANCEL_RESERVATION" && !!preset.reservationKey) ||
-      (preset.type === "TEAM_NOSHOW" && !!preset.reservationKey) ||
-      (preset.type === "CADDY_SICK" && !!preset.caddyId) ||
-      (preset.type === "CADDY_ATTENDANCE_NOSHOW" && !!preset.caddyId) ||
-      (preset.type === "SWAP_CADDY" &&
-        !!preset.reservationKeyA &&
-        !!preset.reservationKeyB) ||
-      (preset.type === "SET_LIMOUSINE" && !!preset.reservationKey) ||
-      (preset.type === "ASSIGN_DRIVING" &&
-        !!preset.reservationKey &&
-        !!preset.caddyId) ||
-      (preset.type === "CLEAR_DRIVING" && !!preset.reservationKey) ||
-      (preset.type === "SET_LOCK" && !!preset.reservationKey);
-    if (eventsReady) {
+    if (isLiveChangeReady(preset)) {
       const next = previewLiveAssignmentChange({
         previous,
         regularCaddyPool: draft.caddyPool,
@@ -195,6 +182,25 @@ export function LiveChangePanel({
     return null;
   }
 
+  function previewSwap(reservationKeyA: string, reservationKeyB: string) {
+    setError(null);
+    if (!reservationKeyA || !reservationKeyB || reservationKeyA === reservationKeyB) {
+      setPreview(null);
+      return;
+    }
+    setPreview(
+      previewLiveAssignmentChange({
+        previous,
+        regularCaddyPool: draft.caddyPool,
+        change: {
+          type: "SWAP_CADDY",
+          reservationKeyA,
+          reservationKeyB,
+        },
+      })
+    );
+  }
+
   function onReflow() {
     setError(null);
     const change = buildChange();
@@ -226,7 +232,7 @@ export function LiveChangePanel({
     <section className="live-change" aria-label="현장 배치 변경">
       <div className="live-change-head">
         <strong>현장 배치 변경</strong>
-        <span>변경 선택 → 배치 다시 맞추기 → 미리보기 → 이대로 적용</span>
+        <span>보드에서 탭하면 미리보기가 바로 열립니다. 저장은 이대로 적용만.</span>
       </div>
 
       <div className="live-change-grid">
@@ -335,7 +341,14 @@ export function LiveChangePanel({
           <>
             <label>
               캐디 A 예약
-              <select value={swapA} onChange={(e) => setSwapA(e.target.value)}>
+              <select
+                value={swapA}
+                onChange={(e) => {
+                  const nextA = e.target.value;
+                  setSwapA(nextA);
+                  previewSwap(nextA, swapB);
+                }}
+              >
                 <option value="">선택</option>
                 {assignedOptions.map((o) => (
                   <option key={o.key} value={o.key}>
@@ -346,7 +359,14 @@ export function LiveChangePanel({
             </label>
             <label>
               캐디 B 예약
-              <select value={swapB} onChange={(e) => setSwapB(e.target.value)}>
+              <select
+                value={swapB}
+                onChange={(e) => {
+                  const nextB = e.target.value;
+                  setSwapB(nextB);
+                  previewSwap(swapA, nextB);
+                }}
+              >
                 <option value="">선택</option>
                 {assignedOptions.map((o) => (
                   <option key={o.key} value={o.key}>
@@ -355,6 +375,9 @@ export function LiveChangePanel({
                 ))}
               </select>
             </label>
+            <p className="live-swap-hint">
+              B를 고르면 미리보기가 바로 열립니다. 저장은 「이대로 적용」만.
+            </p>
           </>
         )}
 
@@ -479,9 +502,11 @@ export function LiveChangePanel({
       </div>
 
       <div className="live-change-actions">
-        <button type="button" className="btn primary" onClick={onReflow}>
-          배치 다시 맞추기
-        </button>
+        {changeType !== "SWAP_CADDY" && (
+          <button type="button" className="btn primary" onClick={onReflow}>
+            배치 다시 맞추기
+          </button>
+        )}
         <button
           type="button"
           className="btn ghost"
@@ -501,6 +526,28 @@ export function LiveChangePanel({
       </div>
 
       {error && <div className="ops-error">{error}</div>}
+
+      {preview && (
+        <div className="live-preview-dock" role="status">
+          <div className="live-preview-dock-copy">
+            <strong>{LIVE_CHANGE_LABELS[preview.changeType]} 미리보기</strong>
+            <span>아직 저장되지 않음 · 이대로 적용 시에만 DB 반영</span>
+          </div>
+          <div className="live-preview-dock-actions">
+            <button type="button" className="btn ghost" onClick={onCancelPreview}>
+              취소
+            </button>
+            <button
+              type="button"
+              className="btn apply"
+              disabled={applying}
+              onClick={() => void onApply()}
+            >
+              {applying ? "적용 중…" : "이대로 적용"}
+            </button>
+          </div>
+        </div>
+      )}
 
       {preview && (
         <div className="live-preview">

@@ -32,6 +32,37 @@ export function isThirdBandTeam(team: string): boolean {
   return (THIRD_BAND_TEAMS as readonly string[]).includes(String(team ?? "").trim());
 }
 
+/** DRIVING 전담 캐디가 쓰는 가상 조. 1~12조 고정 슬롯을 점유하지 않음. */
+export const DRIVING_POOL_TEAM = "드라이빙";
+
+export function isDrivingCaddyType(value: unknown): boolean {
+  return String(value ?? "").trim().toUpperCase() === "DRIVING";
+}
+
+export function drivingPersistFields(): {
+  team: string;
+  teamOrder: number;
+  caddyType: "DRIVING";
+  thirdBandSubgroup: null;
+} {
+  return {
+    team: DRIVING_POOL_TEAM,
+    teamOrder: 0,
+    caddyType: "DRIVING",
+    thirdBandSubgroup: null,
+  };
+}
+
+/** HOUSE/THIRD 고정 슬롯 점유 여부. DRIVING은 조/순번과 무관하게 제외. */
+export function occupiesHouseThirdSlot(p: {
+  caddyType?: string | null;
+  team?: string | null;
+}): boolean {
+  if (isDrivingCaddyType(p.caddyType)) return false;
+  if (String(p.team ?? "").trim() === DRIVING_POOL_TEAM) return false;
+  return true;
+}
+
 /** 조 기준 canonical caddyType. DRIVING은 이 헬퍼가 부여하지 않음. */
 export type TeamCaddyType = "HOUSE" | "THIRD";
 

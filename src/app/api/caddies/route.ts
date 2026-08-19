@@ -4,6 +4,8 @@ import { prisma } from "@/lib/prisma";
 import { caddyCreateSchema } from "@/lib/caddySchema";
 import {
   ThirdBandSubgroupError,
+  drivingPersistFields,
+  isDrivingCaddyType,
   mergeExtraFlagsForPersist,
   normalizeEmploymentStatus,
   normalizeTeamOrder,
@@ -71,7 +73,35 @@ export async function POST(req: NextRequest) {
     const phoneNormalized =
       data.phone === undefined ? null : parseOptionalPhoneInput(data.phone);
 
-    const team = data.team.trim();
+    if (isDrivingCaddyType(data.caddyType)) {
+      const driving = drivingPersistFields();
+      const created = await prisma.caddy.create({
+        data: {
+          name: data.name.trim(),
+          team: driving.team,
+          teamOrder: driving.teamOrder,
+          employmentStatus: normalizeEmploymentStatus(data.employmentStatus),
+          extraFlags: mergeExtraFlagsForPersist({
+            incoming: data.extraFlags,
+            mode: "create",
+          }),
+          status: data.status ?? "근무중",
+          memo: data.memo ?? null,
+          phoneNormalized,
+          thirdBandSubgroup: driving.thirdBandSubgroup,
+          caddyType: driving.caddyType,
+          ...(data.employeeCode !== undefined
+            ? { employeeCode: data.employeeCode }
+            : {}),
+          ...(data.missingFromImport !== undefined
+            ? { missingFromImport: data.missingFromImport }
+            : {}),
+        },
+      });
+      return NextResponse.json(created);
+    }
+
+    const team = String(data.team ?? "").trim();
     const teamOrder = normalizeTeamOrder(data.teamOrder);
     if (teamOrder < 1) {
       return NextResponse.json(
@@ -89,6 +119,7 @@ export async function POST(req: NextRequest) {
         team: true,
         teamOrder: true,
         employmentStatus: true,
+        caddyType: true,
       },
     });
     assertSlotAvailable(

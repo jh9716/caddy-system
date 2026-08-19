@@ -34,26 +34,39 @@ export const thirdBandSubgroupSchema = z
 /** UI/API 입력 필드명. DB 컬럼은 phoneNormalized. 빈 문자열 허용(서버에서 null). */
 const phoneInputSchema = z.string().optional().nullable();
 
-export const caddyCreateSchema = z.object({
-  name: z.string().trim().min(1, "이름은 필수입니다."),
-  team: z.string().trim().min(1, "조는 필수입니다."),
-  /** 고정 슬롯 번호 — 필수, 1 이상. max+1 자동부여 없음. */
-  teamOrder: z.coerce
-    .number({ message: "빈 슬롯(teamOrder)을 선택해주세요." })
-    .int()
-    .min(1, "슬롯(teamOrder)은 1 이상이어야 합니다."),
-  employmentStatus: employmentStatusSchema.optional().default("ACTIVE"),
-  extraFlags: z.array(extraFlagSchema).optional().default([]),
-  status: caddyStatus.optional().default("근무중"),
-  memo: z.string().optional().nullable(),
-  phone: phoneInputSchema,
-  // optional passthrough fields — never wipe Production defaults if omitted
-  employeeCode: z.string().trim().min(1).optional().nullable(),
-  caddyType: z.enum(["HOUSE", "THIRD", "DRIVING"]).optional(),
-  missingFromImport: z.boolean().optional(),
-  /** 9~12조만. 미전송/null=일반. 1~8조+WEEKDAY/WEEKEND는 서버에서 거부. */
-  thirdBandSubgroup: thirdBandSubgroupSchema,
-});
+export const caddyCreateSchema = z
+  .object({
+    name: z.string().trim().min(1, "이름은 필수입니다."),
+    team: z.string().trim().optional().default(""),
+    /** 고정 슬롯 번호 — HOUSE/THIRD는 필수 1 이상. DRIVING은 불필요. */
+    teamOrder: z.coerce.number().int().optional(),
+    employmentStatus: employmentStatusSchema.optional().default("ACTIVE"),
+    extraFlags: z.array(extraFlagSchema).optional().default([]),
+    status: caddyStatus.optional().default("근무중"),
+    memo: z.string().optional().nullable(),
+    phone: phoneInputSchema,
+    employeeCode: z.string().trim().min(1).optional().nullable(),
+    caddyType: z.enum(["HOUSE", "THIRD", "DRIVING"]).optional(),
+    missingFromImport: z.boolean().optional(),
+    thirdBandSubgroup: thirdBandSubgroupSchema,
+  })
+  .superRefine((data, ctx) => {
+    if (data.caddyType === "DRIVING") return;
+    if (!String(data.team ?? "").trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "조는 필수입니다.",
+        path: ["team"],
+      });
+    }
+    if (data.teamOrder == null || data.teamOrder < 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "빈 슬롯(teamOrder)을 선택해주세요.",
+        path: ["teamOrder"],
+      });
+    }
+  });
 
 export const caddyUpdateSchema = z.object({
   name: z.string().trim().min(1, "이름은 필수입니다.").optional(),
