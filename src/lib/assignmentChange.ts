@@ -32,6 +32,9 @@ export const LIVE_CHANGE_TYPES = [
   "CADDY_ATTENDANCE_NOSHOW",
   "ADD_RESERVATION",
   "SWAP_CADDY",
+  "SET_LIMOUSINE",
+  "ASSIGN_DRIVING",
+  "CLEAR_DRIVING",
 ] as const;
 
 export type LiveChangeType = (typeof LIVE_CHANGE_TYPES)[number];
@@ -42,7 +45,10 @@ export const LIVE_CHANGE_LABELS: Record<LiveChangeType, string> = {
   CADDY_SICK: "캐디 병가",
   CADDY_ATTENDANCE_NOSHOW: "캐디 출근 노쇼",
   ADD_RESERVATION: "당추(예약 추가)",
-  SWAP_CADDY: "캐디 체인지",
+  SWAP_CADDY: "순번 바꿈",
+  SET_LIMOUSINE: "리무진카트 요청",
+  ASSIGN_DRIVING: "드라이빙 캐디 지정",
+  CLEAR_DRIVING: "드라이빙 지정 해제",
 };
 
 export type LiveChangeInput = {
@@ -53,6 +59,7 @@ export type LiveChangeInput = {
   reservationKeyA?: string;
   reservationKeyB?: string;
   addReservation?: AutoAssignReservation;
+  limousineCart?: boolean;
   note?: string | null;
 };
 
@@ -71,6 +78,7 @@ export type PersistReservationRow = {
   source: string | null;
   status: "ACTIVE" | "CANCELLED" | "TEAM_NOSHOW";
   rawRowIndex: number | null;
+  limousineCart: boolean;
 };
 
 export type PersistPlacementRow = {
@@ -111,8 +119,9 @@ export type LiveChangeMemoryStore = {
     cause: string;
     payload: Record<string, unknown>;
   }>;
-  /** employmentStatus 회귀 검증용 (apply가 만지면 안 됨) */
+  /** employmentStatus / caddyType 회귀 검증용 (apply가 만지면 안 됨) */
   caddyEmployment: Map<number, string>;
+  caddyTypes: Map<number, string>;
 };
 
 export function emptyLiveChangeMemoryStore(): LiveChangeMemoryStore {
@@ -122,6 +131,7 @@ export function emptyLiveChangeMemoryStore(): LiveChangeMemoryStore {
     unavailables: [],
     changes: [],
     caddyEmployment: new Map(),
+    caddyTypes: new Map(),
   };
 }
 
@@ -170,6 +180,31 @@ export function eventsFromLiveChange(
         },
       ];
     }
+    case "SET_LIMOUSINE": {
+      if (!input.reservationKey && input.reservationId == null) return [];
+      return [
+        {
+          type: "SET_LIMOUSINE",
+          reservationKey: input.reservationKey,
+          reservationId: input.reservationId,
+          limousineCart: input.limousineCart === true,
+        },
+      ];
+    }
+    case "ASSIGN_DRIVING": {
+      if (!input.reservationKey || !input.caddyId) return [];
+      return [
+        {
+          type: "ASSIGN_DRIVING",
+          reservationKey: input.reservationKey,
+          caddyId: input.caddyId,
+        },
+      ];
+    }
+    case "CLEAR_DRIVING": {
+      if (!input.reservationKey) return [];
+      return [{ type: "CLEAR_DRIVING", reservationKey: input.reservationKey }];
+    }
     default:
       return [];
   }
@@ -216,6 +251,9 @@ function inferChangeType(events: ReservationChangeEvent[]): LiveChangeType {
   if (events.length === 1) {
     const e = events[0];
     if (e.type === "SWAP_CADDY") return "SWAP_CADDY";
+    if (e.type === "SET_LIMOUSINE") return "SET_LIMOUSINE";
+    if (e.type === "ASSIGN_DRIVING") return "ASSIGN_DRIVING";
+    if (e.type === "CLEAR_DRIVING") return "CLEAR_DRIVING";
     if (e.type === "ADD_RESERVATION") return "ADD_RESERVATION";
     if (e.type === "REMOVE_CADDY") {
       return e.cause === "SICK" ? "CADDY_SICK" : "CADDY_ATTENDANCE_NOSHOW";
@@ -284,6 +322,7 @@ export function buildLiveChangePersistPlan(
         preview.changeType
       ),
       rawRowIndex: r.rawRowIndex ?? null,
+      limousineCart: r.limousineCart === true,
     })
   );
 
@@ -344,6 +383,7 @@ export function applyLiveChangeToMemory(
   plan: LiveChangePersistPlan
 ): { changeId: number } {
   const employmentBefore = new Map(store.caddyEmployment);
+  const typesBefore = new Map(store.caddyTypes);
   store.reservations = plan.reservations.map((r) => ({ ...r }));
   store.placements = plan.placements.map((p) => ({ ...p }));
   const byCaddy = new Map(store.unavailables.map((u) => [u.caddyId, u]));
@@ -358,6 +398,7 @@ export function applyLiveChangeToMemory(
     payload: plan.payload,
   });
   store.caddyEmployment = employmentBefore;
+  store.caddyTypes = typesBefore;
   return { changeId };
 }
 
@@ -392,7 +433,10 @@ function mapChangeType(
   | "CADDY_SICK"
   | "CADDY_ATTENDANCE_NOSHOW"
   | "ADD_RESERVATION"
-  | "SWAP_CADDY" {
+  | "SWAP_CADDY"
+  | "SET_LIMOUSINE"
+  | "ASSIGN_DRIVING"
+  | "CLEAR_DRIVING" {
   return type;
 }
 
@@ -426,6 +470,7 @@ async function writePlanWithPrisma(
           status: mapReservationStatus(row.status),
           identityKey: row.identityKey,
           rawRowIndex: row.rawRowIndex,
+          limousineCart: row.limousineCart,
         },
       });
       created.set(row.identityKey, rec.id);

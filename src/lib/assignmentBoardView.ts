@@ -76,6 +76,8 @@ export function isChageunAssignment(row: AutoAssignmentRow): boolean {
 export type BoardAssignmentMarks = {
   twoWork: boolean;
   chageun: boolean;
+  limousine: boolean;
+  driving: boolean;
 };
 
 export function boardAssignmentMarks(
@@ -85,6 +87,8 @@ export function boardAssignmentMarks(
   return {
     twoWork: isTwoWorkAssignment(row, allRows),
     chageun: isChageunAssignment(row),
+    limousine: row.reservation?.limousineCart === true,
+    driving: row.kind === "driving",
   };
 }
 

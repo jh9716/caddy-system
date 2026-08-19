@@ -67,6 +67,7 @@ const KIND_TAG: Partial<Record<AssignmentKind, string>> = {
   oneThree: "1·3부",
   oneTwo: "1·2부",
   oneMak: "1막",
+  driving: "드라이빙",
 };
 
 const KIND_VARIANT: Record<AssignmentKind, DbShiftVariant> = {
@@ -76,6 +77,7 @@ const KIND_VARIANT: Record<AssignmentKind, DbShiftVariant> = {
   oneThree: "ONE_THREE",
   oneTwo: "ONE_TWO",
   oneMak: "NORMAL",
+  driving: "NORMAL",
 };
 
 export function isConfirmableStatus(status: string): status is "CONFIRMED" {

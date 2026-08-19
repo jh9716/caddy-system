@@ -61,6 +61,7 @@ const SPECIAL_KINDS: AssignmentKind[] = [
   "oneThree",
   "oneTwo",
   "oneMak",
+  "driving",
 ];
 
 export function isSpecialKind(kind: AssignmentKind): boolean {

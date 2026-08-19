@@ -3,6 +3,14 @@
  * 실행: npx tsx scripts/test-assignment-change-reflow-unit.ts
  */
 import {
+  applyLiveChangeToMemory,
+  buildLiveChangePersistPlan,
+  emptyLiveChangeMemoryStore,
+  makeAddReservation,
+  previewLiveAssignmentChange,
+} from "../src/lib/assignmentChange";
+import { createDraftFromAutoResult } from "../src/lib/assignmentDraft";
+import {
   computeAutoAssignmentsV1,
   compareCaddyOrder,
   isPlacementLocked,
@@ -12,14 +20,6 @@ import {
   type AutoAssignReservation,
   type AutoAssignResultV1,
 } from "../src/lib/autoAssignEngine";
-import {
-  applyLiveChangeToMemory,
-  buildLiveChangePersistPlan,
-  emptyLiveChangeMemoryStore,
-  makeAddReservation,
-  previewLiveAssignmentChange,
-} from "../src/lib/assignmentChange";
-import { createDraftFromAutoResult } from "../src/lib/assignmentDraft";
 
 let passed = 0;
 let failed = 0;
@@ -631,6 +631,328 @@ section("preview payload includes before/after caddy + lock + unassigned");
   assert(typeof preview.summary.pushedCount === "number", "pushedCount");
   assert(Array.isArray(preview.after.sparesByShift), "new spares");
   assert(Array.isArray(preview.lockedPreserved), "locked preserved list");
+}
+
+section("리무진 ON 후 일반 reflow가 일어나도 같은 reservation에 표시 유지");
+{
+  const date = "2026-09-10";
+  const pool = makeCaddies(5);
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      res(date, "R1", { teeTime: "07:00" }),
+      res(date, "R2", { teeTime: "07:08" }),
+      res(date, "R3", { teeTime: "07:16" }),
+    ],
+  });
+  const withLimo = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: {
+      type: "SET_LIMOUSINE",
+      reservationKey: reservationKey(
+        previous.assignments.find((a) => a.reservation.id === "R2")!.reservation
+      ),
+      limousineCart: true,
+    },
+  });
+  assert(
+    withLimo.after.assignments.find((a) => a.reservation.id === "R2")?.reservation
+      .limousineCart === true,
+    "limo ON on R2"
+  );
+  const afterCancel = previewLiveAssignmentChange({
+    previous: withLimo.after,
+    regularCaddyPool: pool,
+    change: { type: "CANCEL_RESERVATION", reservationId: "R1" },
+  });
+  const r2 = afterCancel.after.assignments.find((a) => a.reservation.id === "R2");
+  assert(!!r2, "R2 remains after cancel R1");
+  assert(r2?.reservation.limousineCart === true, "limo stays on R2 after reflow");
+}
+
+section("순번 바꿈 후에도 리무진은 reservation에 유지");
+{
+  const date = "2026-09-11";
+  const pool = makeCaddies(4);
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      res(date, "R1", { teeTime: "07:42" }),
+      res(date, "R2", { teeTime: "07:49" }),
+    ],
+  });
+  const a = previous.assignments.find((x) => x.reservation.id === "R1")!;
+  const b = previous.assignments.find((x) => x.reservation.id === "R2")!;
+  const withLimo = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: {
+      type: "SET_LIMOUSINE",
+      reservationKey: reservationKey(b.reservation),
+      limousineCart: true,
+    },
+  });
+  const swapped = previewLiveAssignmentChange({
+    previous: withLimo.after,
+    regularCaddyPool: pool,
+    change: {
+      type: "SWAP_CADDY",
+      reservationKeyA: reservationKey(a.reservation),
+      reservationKeyB: reservationKey(b.reservation),
+    },
+  });
+  const afterA = swapped.after.assignments.find((x) => x.reservation.id === "R1")!;
+  const afterB = swapped.after.assignments.find((x) => x.reservation.id === "R2")!;
+  assert(afterA.caddy.id === b.caddy.id, "R1 got B");
+  assert(afterB.caddy.id === a.caddy.id, "R2 got A");
+  assert(afterA.reservation.limousineCart !== true, "R1 stays 일반팀");
+  assert(afterB.reservation.limousineCart === true, "R2 keeps 리무진");
+}
+
+section("드라이빙은 3부 특정 reservation에 저장되고 기본 LOCK ON");
+{
+  const date = "2026-09-12";
+  const pool = makeCaddies(12);
+  for (const c of pool) (c as AutoAssignCaddy).caddyType = "HOUSE";
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      res(date, "S1", { teeTime: "07:00", shift: "1부" }),
+      res(date, "S3A", { teeTime: "16:00", shift: "3부" }),
+      res(date, "S3B", { teeTime: "16:08", shift: "3부" }),
+    ],
+  });
+  const target = previous.assignments.find((a) => a.reservation.id === "S3B")!;
+  const free = previous.unusedCaddies[0];
+  assert(!!free, "unused caddy exists");
+  const store = emptyLiveChangeMemoryStore();
+  store.caddyTypes.set(free.id, "HOUSE");
+  store.caddyEmployment.set(free.id, "ACTIVE");
+  const preview = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: {
+      type: "ASSIGN_DRIVING",
+      reservationKey: reservationKey(target.reservation),
+      caddyId: free.id,
+    },
+  });
+  const row = preview.after.assignments.find((a) => a.reservation.id === "S3B")!;
+  assert(row.kind === "driving", "kind driving");
+  assert(row.locked === true, "default LOCK ON");
+  assert(isPlacementLocked(row), "placement locked");
+  assert(row.caddy.id === free.id, "assigned selected caddy");
+  assert(String(row.reservation.shift) === "3부", "stays 3부");
+  applyLiveChangeToMemory(store, buildLiveChangePersistPlan(preview));
+  assert(store.caddyTypes.get(free.id) === "HOUSE", "caddyType unchanged");
+  assert(store.caddyEmployment.get(free.id) === "ACTIVE", "employment unchanged");
+  assert(
+    store.placements.some((p) => p.kind === "driving" && p.locked && p.caddyId === free.id),
+    "driving placement persisted"
+  );
+}
+
+section("1부에는 드라이빙 지정 불가");
+{
+  const date = "2026-09-13";
+  const pool = makeCaddies(6);
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [res(date, "S1", { teeTime: "07:00", shift: "1부" })],
+  });
+  const target = previous.assignments[0];
+  const preview = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: {
+      type: "ASSIGN_DRIVING",
+      reservationKey: reservationKey(target.reservation),
+      caddyId: previous.unusedCaddies[0]?.id || pool[5].id,
+    },
+  });
+  assert(
+    preview.warnings.some((w) => w.code === "DRIVING_SHIFT_REQUIRED"),
+    "3부 only"
+  );
+  assert(
+    preview.after.assignments.every((a) => a.kind !== "driving"),
+    "no driving applied"
+  );
+}
+
+section("드라이빙 앞에서 예약 취소/당추가 발생해도 같은 reservation에 유지");
+{
+  const date = "2026-09-14";
+  const pool = makeCaddies(14);
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      res(date, "S1", { teeTime: "07:00", shift: "1부" }),
+      res(date, "S3A", { teeTime: "16:00", shift: "3부" }),
+      res(date, "S3B", { teeTime: "16:16", shift: "3부" }),
+    ],
+  });
+  const target = previous.assignments.find((a) => a.reservation.id === "S3B")!;
+  const free = previous.unusedCaddies[0];
+  const driving = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: {
+      type: "ASSIGN_DRIVING",
+      reservationKey: reservationKey(target.reservation),
+      caddyId: free.id,
+    },
+  });
+  const afterCancel = previewLiveAssignmentChange({
+    previous: driving.after,
+    regularCaddyPool: pool,
+    change: { type: "CANCEL_RESERVATION", reservationId: "S3A" },
+  });
+  const kept = afterCancel.after.assignments.find((a) => a.reservation.id === "S3B")!;
+  assert(kept.caddy.id === free.id, "driving caddy stays after 3부 cancel ahead");
+  assert(kept.kind === "driving", "kind stays driving");
+  const afterAdd = previewLiveAssignmentChange({
+    previous: driving.after,
+    regularCaddyPool: pool,
+    change: {
+      type: "ADD_RESERVATION",
+      addReservation: makeAddReservation({
+        date,
+        course: "SKY",
+        shift: "3부",
+        teeTime: "16:08",
+        teamName: "당추",
+      }),
+    },
+  });
+  const keptAdd = afterAdd.after.assignments.find((a) => a.reservation.id === "S3B")!;
+  assert(keptAdd.caddy.id === free.id, "driving caddy stays after 당추 ahead");
+  assert(keptAdd.kind === "driving", "kind stays driving after add");
+}
+
+section("드라이빙 해제 정상");
+{
+  const date = "2026-09-15";
+  const pool = makeCaddies(12);
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      res(date, "S3A", { teeTime: "16:00", shift: "3부" }),
+      res(date, "S3B", { teeTime: "16:08", shift: "3부" }),
+    ],
+  });
+  const target = previous.assignments.find((a) => a.reservation.id === "S3B")!;
+  const free = previous.unusedCaddies[0];
+  const driving = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: {
+      type: "ASSIGN_DRIVING",
+      reservationKey: reservationKey(target.reservation),
+      caddyId: free.id,
+    },
+  });
+  const cleared = previewLiveAssignmentChange({
+    previous: driving.after,
+    regularCaddyPool: pool,
+    change: {
+      type: "CLEAR_DRIVING",
+      reservationKey: reservationKey(target.reservation),
+    },
+  });
+  assert(
+    !cleared.after.assignments.some((a) => a.reservation.id === "S3B"),
+    "driving placement removed"
+  );
+  assert(
+    cleared.after.unassignedReservations.some((u) => u.reservation.id === "S3B"),
+    "reservation remains unassigned"
+  );
+  assert(
+    cleared.after.assignments.every((a) => a.kind !== "driving"),
+    "no driving rows left"
+  );
+}
+
+section("드라이빙 LOCK ON은 순번 바꿈 차단");
+{
+  const date = "2026-09-16";
+  const pool = makeCaddies(12);
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      res(date, "S3A", { teeTime: "16:00", shift: "3부" }),
+      res(date, "S3B", { teeTime: "16:08", shift: "3부" }),
+    ],
+  });
+  const a = previous.assignments.find((x) => x.reservation.id === "S3A")!;
+  const b = previous.assignments.find((x) => x.reservation.id === "S3B")!;
+  const free = previous.unusedCaddies[0];
+  const driving = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: {
+      type: "ASSIGN_DRIVING",
+      reservationKey: reservationKey(b.reservation),
+      caddyId: free.id,
+    },
+  });
+  const swapped = previewLiveAssignmentChange({
+    previous: driving.after,
+    regularCaddyPool: pool,
+    change: {
+      type: "SWAP_CADDY",
+      reservationKeyA: reservationKey(a.reservation),
+      reservationKeyB: reservationKey(b.reservation),
+    },
+  });
+  assert(
+    swapped.warnings.some((w) => w.code === "SWAP_DRIVING_LOCKED"),
+    "swap blocked"
+  );
+  assert(
+    swapped.after.assignments.find((x) => x.reservation.id === "S3B")?.caddy.id ===
+      free.id,
+    "driving placement unchanged"
+  );
+}
+
+section("일반 순번 바꿈은 A↔B만 변경");
+{
+  const date = "2026-09-17";
+  const pool = makeCaddies(5);
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      res(date, "R1", { teeTime: "07:00" }),
+      res(date, "R2", { teeTime: "07:08" }),
+      res(date, "R3", { teeTime: "07:16" }),
+    ],
+  });
+  const a = previous.assignments.find((x) => x.reservation.id === "R1")!;
+  const b = previous.assignments.find((x) => x.reservation.id === "R3")!;
+  const mid = caddyOn(previous, "R2");
+  const swapped = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: {
+      type: "SWAP_CADDY",
+      reservationKeyA: reservationKey(a.reservation),
+      reservationKeyB: reservationKey(b.reservation),
+    },
+  });
+  assert(caddyOn(swapped.after, "R1") === b.caddy.id, "only A moved");
+  assert(caddyOn(swapped.after, "R3") === a.caddy.id, "only B moved");
+  assert(caddyOn(swapped.after, "R2") === mid, "middle unchanged");
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

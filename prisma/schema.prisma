@@ -349,6 +349,8 @@ model DailyReservation {
   status       DailyReservationStatus @default(ACTIVE)
   identityKey  String
   rawRowIndex  Int?
+  /// 리무진카트 요청팀. 캐디 속성이 아니라 예약팀 속성.
+  limousineCart Boolean               @default(false)
   createdAt    DateTime               @default(now())
   updatedAt    DateTime               @updatedAt
   placements   DailyPlacement[]
@@ -405,6 +407,9 @@ enum DailyAssignmentChangeType {
   CADDY_ATTENDANCE_NOSHOW
   ADD_RESERVATION
   SWAP_CADDY
+  SET_LIMOUSINE
+  ASSIGN_DRIVING
+  CLEAR_DRIVING
 }
 
 /// 현장 배치 변경 이력. preview는 저장하지 않고 apply 시에만 row 생성.

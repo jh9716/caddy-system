@@ -15,6 +15,7 @@ CREATE TABLE "DailyReservation" (
     "status" "DailyReservationStatus" NOT NULL DEFAULT 'ACTIVE',
     "identityKey" TEXT NOT NULL,
     "rawRowIndex" INTEGER,
+    "limousineCart" BOOLEAN NOT NULL DEFAULT false,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -66,7 +67,7 @@ CREATE INDEX "DailyCaddyUnavailable_caddyId_idx" ON "DailyCaddyUnavailable"("cad
 
 ALTER TABLE "DailyCaddyUnavailable" ADD CONSTRAINT "DailyCaddyUnavailable_caddyId_fkey" FOREIGN KEY ("caddyId") REFERENCES "Caddy"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
-CREATE TYPE "DailyAssignmentChangeType" AS ENUM ('CANCEL_RESERVATION', 'TEAM_NOSHOW', 'CADDY_SICK', 'CADDY_ATTENDANCE_NOSHOW', 'ADD_RESERVATION', 'SWAP_CADDY');
+CREATE TYPE "DailyAssignmentChangeType" AS ENUM ('CANCEL_RESERVATION', 'TEAM_NOSHOW', 'CADDY_SICK', 'CADDY_ATTENDANCE_NOSHOW', 'ADD_RESERVATION', 'SWAP_CADDY', 'SET_LIMOUSINE', 'ASSIGN_DRIVING', 'CLEAR_DRIVING');
 
 CREATE TABLE "DailyAssignmentChange" (
     "id" SERIAL NOT NULL,
