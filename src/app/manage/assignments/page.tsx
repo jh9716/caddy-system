@@ -1000,18 +1000,6 @@ export default function ManageAssignmentsOpsPage() {
       )}
 
       {draft && (
-        <LiveChangePanel
-          draft={draft}
-          previous={autoResultFromDraft(draft, autoResult)}
-          applying={loadingLiveApply}
-          onApplyPreview={onLiveApply}
-          preset={pendingLiveChange}
-          onPresetConsumed={() => setPendingLiveChange(null)}
-          unavailableCaddyIds={unavailableCaddyIds}
-        />
-      )}
-
-      {draft && (
         <>
           {/*
             부 탭 + (배치표) 컬럼 헤더를 하나의 sticky 스택으로 묶어
@@ -1406,6 +1394,18 @@ export default function ManageAssignmentsOpsPage() {
             </ul>
           )}
         </>
+      )}
+
+      {draft && (
+        <LiveChangePanel
+          draft={draft}
+          previous={autoResultFromDraft(draft, autoResult)}
+          applying={loadingLiveApply}
+          onApplyPreview={onLiveApply}
+          preset={pendingLiveChange}
+          onPresetConsumed={() => setPendingLiveChange(null)}
+          unavailableCaddyIds={unavailableCaddyIds}
+        />
       )}
 
       {toast && <div className="ops-toast vh-manage-toast">{toast}</div>}
@@ -2148,10 +2148,24 @@ const opsCss = `
   .live-change {
     border: 1px solid #cbd5e1;
     border-radius: 12px;
-    padding: 12px;
+    padding: 10px 12px;
     background: #fff;
     display: grid;
     gap: 10px;
+  }
+  .live-change.is-collapsed {
+    padding: 8px 12px;
+    gap: 0;
+  }
+  .live-advanced-toggle {
+    width: 100%;
+    min-height: 44px;
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    background: #f8fafc;
+    color: #0f172a;
+    font-size: 0.9rem;
+    font-weight: 700;
   }
   .live-change-head {
     display: grid;

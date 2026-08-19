@@ -281,6 +281,22 @@ const grid = buildTeamSlotGrid({
       teamOrder: 17,
       employmentStatus: "ACTIVE",
     },
+    {
+      id: 90,
+      name: "드라이브",
+      team: "1조",
+      teamOrder: 18,
+      employmentStatus: "ACTIVE",
+      caddyType: "DRIVING",
+    },
+    {
+      id: 91,
+      name: "전담",
+      team: "드라이빙",
+      teamOrder: 0,
+      employmentStatus: "ACTIVE",
+      caddyType: "DRIVING",
+    },
   ],
 });
 const t1 = grid.teams.find((t) => t.team === "1조")!;
@@ -291,9 +307,13 @@ assert(t1.slots[1].kind === "empty", "2 empty (RETIRED)");
 assert(t1.slots[2].kind === "leave" && t1.slots[2].name === "김C", "3 leave");
 assert(t1.slots[3].kind === "excluded", "4 excluded OFF");
 assert(t1.slots[16].kind === "available" && t1.slots[16].name === "김Q", "17 occupied");
-assert(t1.slots[17].kind === "empty", "18 trailing empty");
+assert(t1.slots[17].kind === "empty", "18 trailing empty (DRIVING ignored)");
 assert(t1.slots[23].kind === "empty", "24 trailing empty");
 assert(grid.teams.length === 12, "12 teams");
+assert(
+  !grid.teams.some((t) => t.team === "드라이빙"),
+  "slot grid has no 드라이빙 column"
+);
 assert(observedMaxTeamOrder([{ teamOrder: 17 }]) === 17, "max order 17");
 
 const af = computeAvailability({

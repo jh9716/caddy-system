@@ -64,6 +64,7 @@ export function LiveChangePanel({
   const [addTeamName, setAddTeamName] = useState("당추");
   const [preview, setPreview] = useState<LiveChangePreview | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const assignedOptions = useMemo(
     () =>
@@ -229,10 +230,24 @@ export function LiveChangePanel({
   }
 
   return (
-    <section className="live-change" aria-label="현장 배치 변경">
+    <section
+      className={`live-change ${advancedOpen ? "is-open" : "is-collapsed"}`}
+      aria-label="고급 배치 변경"
+    >
+      <button
+        type="button"
+        className="live-advanced-toggle"
+        aria-expanded={advancedOpen}
+        onClick={() => setAdvancedOpen((open) => !open)}
+      >
+        {advancedOpen ? "고급 배치 변경 접기" : "고급 배치 변경 열기"}
+      </button>
+
+      {advancedOpen && (
+        <>
       <div className="live-change-head">
-        <strong>현장 배치 변경</strong>
-        <span>보드에서 탭하면 미리보기가 바로 열립니다. 저장은 이대로 적용만.</span>
+        <strong>고급 배치 변경</strong>
+        <span>예외 처리용입니다. 현장은 배치표 탭(Quick Action)을 먼저 쓰세요. 저장은 이대로 적용만.</span>
       </div>
 
       <div className="live-change-grid">
@@ -525,30 +540,6 @@ export function LiveChangePanel({
         </button>
       </div>
 
-      {error && <div className="ops-error">{error}</div>}
-
-      {preview && (
-        <div className="live-preview-dock" role="status">
-          <div className="live-preview-dock-copy">
-            <strong>{LIVE_CHANGE_LABELS[preview.changeType]} 미리보기</strong>
-            <span>아직 저장되지 않음 · 이대로 적용 시에만 DB 반영</span>
-          </div>
-          <div className="live-preview-dock-actions">
-            <button type="button" className="btn ghost" onClick={onCancelPreview}>
-              취소
-            </button>
-            <button
-              type="button"
-              className="btn apply"
-              disabled={applying}
-              onClick={() => void onApply()}
-            >
-              {applying ? "적용 중…" : "이대로 적용"}
-            </button>
-          </div>
-        </div>
-      )}
-
       {preview && (
         <div className="live-preview">
           <div className="live-preview-title">변경 미리보기 (아직 저장되지 않음)</div>
@@ -612,6 +603,32 @@ export function LiveChangePanel({
               </ul>
             </div>
           )}
+        </div>
+      )}
+        </>
+      )}
+
+      {error && <div className="ops-error">{error}</div>}
+
+      {preview && (
+        <div className="live-preview-dock" role="status">
+          <div className="live-preview-dock-copy">
+            <strong>{LIVE_CHANGE_LABELS[preview.changeType]} 미리보기</strong>
+            <span>아직 저장되지 않음 · 이대로 적용 시에만 DB 반영</span>
+          </div>
+          <div className="live-preview-dock-actions">
+            <button type="button" className="btn ghost" onClick={onCancelPreview}>
+              취소
+            </button>
+            <button
+              type="button"
+              className="btn apply"
+              disabled={applying}
+              onClick={() => void onApply()}
+            >
+              {applying ? "적용 중…" : "이대로 적용"}
+            </button>
+          </div>
         </div>
       )}
     </section>

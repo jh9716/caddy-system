@@ -12,6 +12,7 @@ import {
   normalizeExtraFlags,
   normalizeTeamOrder,
   occupiesHouseThirdSlot,
+  isPrimaryTeam,
   parseEmploymentFilter,
   mergeExtraFlagsForPersist,
   parseThirdBandSubgroupInput,
@@ -110,6 +111,11 @@ assert(
   occupiesHouseThirdSlot({ caddyType: "HOUSE", team: "1조" }),
   "HOUSE occupies slot"
 );
+assert(
+  !occupiesHouseThirdSlot({ caddyType: "HOUSE", team: "주중반" }),
+  "extra-flag team is not a 1~12 slot"
+);
+assert(isPrimaryTeam("12조") && !isPrimaryTeam("드라이빙"), "primary teams only 1~12");
 assert(drivingPersistFields().teamOrder === 0, "driving teamOrder 0");
 assert(drivingPersistFields().team === DRIVING_POOL_TEAM, "driving pool team");
 
@@ -382,6 +388,23 @@ console.log("== swap B auto-preview source ==");
   assert(
     /changeType !== "SWAP_CADDY"/.test(panel),
     "SWAP skips 배치 다시 맞추기 button"
+  );
+  assert(
+    /useState\(false\)/.test(panel) &&
+      /고급 배치 변경 열기/.test(panel) &&
+      /aria-expanded=\{advancedOpen\}/.test(panel),
+    "advanced live-change form starts collapsed"
+  );
+  assert(
+    !/setAdvancedOpen\(true\)/.test(panel),
+    "Quick Action preset does not auto-open advanced form"
+  );
+  assert(
+    /예약 취소/.test(panel) &&
+      /팀 노쇼/.test(panel) &&
+      /캐디 결근/.test(panel) &&
+      /순번 바꿈/.test(panel),
+    "Quick Action labels remain"
   );
   assert(
     /setPendingLiveChange\(\{\s*type: "SWAP_CADDY"/.test(board),

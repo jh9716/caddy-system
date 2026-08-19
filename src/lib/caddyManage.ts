@@ -15,6 +15,10 @@ export const PRIMARY_TEAMS = [
   "12조",
 ] as const;
 
+export function isPrimaryTeam(team: string): boolean {
+  return (PRIMARY_TEAMS as readonly string[]).includes(String(team ?? "").trim());
+}
+
 /** 3부반 조 (주중/주말 세부구분 허용) */
 export const THIRD_BAND_TEAMS = ["9조", "10조", "11조", "12조"] as const;
 export type ThirdBandTeam = (typeof THIRD_BAND_TEAMS)[number];
@@ -60,7 +64,7 @@ export function occupiesHouseThirdSlot(p: {
 }): boolean {
   if (isDrivingCaddyType(p.caddyType)) return false;
   if (String(p.team ?? "").trim() === DRIVING_POOL_TEAM) return false;
-  return true;
+  return isPrimaryTeam(String(p.team ?? ""));
 }
 
 /** 조 기준 canonical caddyType. DRIVING은 이 헬퍼가 부여하지 않음. */

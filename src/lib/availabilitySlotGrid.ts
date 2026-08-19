@@ -3,7 +3,7 @@
  * Caddy row를 새로 만들지 않고, slot-holding 점유자 유무로 빈자리를 렌더.
  */
 
-import { PRIMARY_TEAMS } from "@/lib/caddyManage";
+import { occupiesHouseThirdSlot, PRIMARY_TEAMS } from "@/lib/caddyManage";
 import {
   isSlotHoldingStatus,
   resolveGridSlotCount,
@@ -51,6 +51,7 @@ type OccupantLite = {
   team: string;
   teamOrder: number;
   employmentStatus: string;
+  caddyType?: string | null;
 };
 
 /**
@@ -100,11 +101,13 @@ export function buildTeamSlotGrid(input: {
           team: r.team,
           teamOrder: r.teamOrder,
           employmentStatus: emp,
+          caddyType: r.caddyType,
         };
       });
 
   const holders = occupants.filter(
     (o) =>
+      occupiesHouseThirdSlot(o) &&
       isSlotHoldingStatus(o.employmentStatus) &&
       (teams as readonly string[]).includes(o.team) &&
       Number(o.teamOrder) >= 1
@@ -112,11 +115,15 @@ export function buildTeamSlotGrid(input: {
 
   // 렌더: max(capacity, 관측 max) — trailing empty 포함. RETIRED 등 높은 teamOrder도 관측에 포함해 숨김 방지
   const observedRows = [
-    ...occupants.map((o) => ({ team: o.team, teamOrder: o.teamOrder })),
-    ...[...byId.values()].map((r) => ({
-      team: r.team,
-      teamOrder: r.teamOrder,
-    })),
+    ...occupants
+      .filter((o) => occupiesHouseThirdSlot(o))
+      .map((o) => ({ team: o.team, teamOrder: o.teamOrder })),
+    ...[...byId.values()]
+      .filter((r) => occupiesHouseThirdSlot(r))
+      .map((r) => ({
+        team: r.team,
+        teamOrder: r.teamOrder,
+      })),
   ];
   const maxSlot = resolveGridSlotCount(teams, observedRows);
 

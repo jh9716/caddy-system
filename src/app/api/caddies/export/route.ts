@@ -28,6 +28,7 @@ export async function GET(req: NextRequest) {
         employmentStatus: true,
         phoneNormalized: true,
         thirdBandSubgroup: true,
+        caddyType: true,
       },
       orderBy: [{ team: "asc" }, { teamOrder: "asc" }, { id: "asc" }],
     });
@@ -41,6 +42,7 @@ export async function GET(req: NextRequest) {
         employmentStatus: String(r.employmentStatus),
         phoneNormalized: r.phoneNormalized,
         thirdBandSubgroup: r.thirdBandSubgroup ?? null,
+        caddyType: r.caddyType,
       }))
     );
 
