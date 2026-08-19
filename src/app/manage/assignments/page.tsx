@@ -4,12 +4,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   assignCaddyToUnassigned,
   assignmentsByShift,
+  autoResultFromDraft,
+  applyLiveResultToDraft,
   confirmDraft,
   createDraftFromAutoResult,
   detectDraftWarnings,
   markDraftApplied,
   replaceAssignmentCaddy,
   reservationIdentity,
+  setPlacementLock,
   swapAssignmentCaddies,
   unassignReservation,
   unusedCaddies,
@@ -56,7 +59,9 @@ const COURSE_SHORT: Record<CourseCode, string> = {
 };
 
 import { SpecialDutyPanel, type Shift1StartOption } from "./SpecialDutyPanel";
+import { LiveChangePanel, LockToggle } from "./LiveChangePanel";
 import { THIRD_BAND_TEAMS } from "@/lib/caddyManage";
+import type { LiveChangePreview } from "@/lib/assignmentChange";
 
 type ResultViewMode = "board" | "list";
 
@@ -121,6 +126,7 @@ export default function ManageAssignmentsOpsPage() {
   const [loadingAvail, setLoadingAvail] = useState(false);
   const [loadingRun, setLoadingRun] = useState(false);
   const [loadingApply, setLoadingApply] = useState(false);
+  const [loadingLiveApply, setLoadingLiveApply] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [swapKey, setSwapKey] = useState<string | null>(null);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
@@ -554,6 +560,61 @@ export default function ManageAssignmentsOpsPage() {
     }
   }
 
+  async function onLiveApply(preview: LiveChangePreview) {
+    if (!draft) return;
+    setLoadingLiveApply(true);
+    setError(null);
+    try {
+      const previous = autoResultFromDraft(draft, autoResult);
+      const res = await fetch("/api/assignments/reflow/apply", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          previous,
+          regularCaddyPool: draft.caddyPool,
+          events: preview.events,
+          changeType: preview.changeType,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      const after = (data.preview?.after || preview.after) as typeof preview.after;
+      const next = applyLiveResultToDraft(draft, after);
+      setDraft(next);
+      setWarnings(detectDraftWarnings(next));
+      if (autoResult) {
+        setAutoResult({ ...autoResult, ...after });
+      }
+      if (!res.ok) {
+        setError(
+          data.error ||
+            data.message ||
+            "배치표는 갱신했지만 DB 저장에 실패했습니다. (migration 미적용일 수 있음)"
+        );
+        showToast("미리보기 결과를 배치표에 반영 · DB 저장 실패");
+        return;
+      }
+      showToast(
+        data.opsUpdated
+          ? "현장 변경 적용 · Reservation/Placement + 운영 배치 갱신"
+          : "현장 변경 적용 · Reservation/Placement 저장"
+      );
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "현장 변경 적용 실패");
+    } finally {
+      setLoadingLiveApply(false);
+    }
+  }
+
+  function onToggleLock(row: AutoAssignmentRow, locked: boolean) {
+    if (!draft) return;
+    const key = reservationIdentity(row.reservation);
+    const result = setPlacementLock(draft, key, locked);
+    setDraft(result.draft);
+    setWarnings(result.warnings);
+    showToast(locked ? "LOCK ON" : "LOCK OFF");
+  }
+
   const shiftRows =
     draft && shiftTab !== "UNASSIGNED" && shiftTab !== "CLOSED"
       ? assignmentsByShift(draft, shiftTab)
@@ -838,6 +899,15 @@ export default function ManageAssignmentsOpsPage() {
             </div>
           ))}
         </section>
+      )}
+
+      {draft && (
+        <LiveChangePanel
+          draft={draft}
+          previous={autoResultFromDraft(draft, autoResult)}
+          applying={loadingLiveApply}
+          onApplyPreview={onLiveApply}
+        />
       )}
 
       {draft && (
@@ -1147,6 +1217,12 @@ export default function ManageAssignmentsOpsPage() {
                                   >
                                     해제
                                   </button>
+                                  <LockToggle
+                                    row={detailRow}
+                                    onToggle={(locked) =>
+                                      onToggleLock(detailRow, locked)
+                                    }
+                                  />
                                 </div>
                               </div>
                             )}
@@ -1245,6 +1321,10 @@ export default function ManageAssignmentsOpsPage() {
                             >
                               해제
                             </button>
+                            <LockToggle
+                              row={row}
+                              onToggle={(locked) => onToggleLock(row, locked)}
+                            />
                           </div>
                         )}
                       </li>
@@ -1974,5 +2054,68 @@ const opsCss = `
     font-size: 0.85rem;
     z-index: 20;
     max-width: 90vw;
+  }
+  .live-change {
+    border: 1px solid #cbd5e1;
+    border-radius: 12px;
+    padding: 12px;
+    background: #fff;
+    display: grid;
+    gap: 10px;
+  }
+  .live-change-head {
+    display: grid;
+    gap: 2px;
+  }
+  .live-change-head span {
+    color: #64748b;
+    font-size: 0.8rem;
+  }
+  .live-change-grid {
+    display: grid;
+    gap: 8px;
+  }
+  .live-change-grid label {
+    display: grid;
+    gap: 4px;
+    font-size: 0.8rem;
+    color: #334155;
+  }
+  .live-change-grid select,
+  .live-change-grid input {
+    min-height: 40px;
+    font-size: 16px;
+  }
+  .live-change-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .live-preview {
+    border: 1px dashed #94a3b8;
+    border-radius: 8px;
+    padding: 10px;
+    background: #f8fafc;
+    display: grid;
+    gap: 6px;
+    font-size: 0.8rem;
+  }
+  .live-preview-title {
+    font-weight: 700;
+  }
+  .live-preview-warn {
+    margin: 0;
+    padding-left: 18px;
+    color: #b45309;
+  }
+  .live-preview-diff {
+    margin: 0;
+    padding-left: 18px;
+    max-height: 220px;
+    overflow: auto;
+  }
+  .live-preview-lock,
+  .live-preview-unassigned {
+    color: #334155;
   }
 `;
