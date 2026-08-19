@@ -4,15 +4,18 @@
  */
 import {
   applyLiveChangeToMemory,
+  applyLiveAssignmentChange,
   buildLiveChangePersistPlan,
   emptyLiveChangeMemoryStore,
   makeAddReservation,
   previewLiveAssignmentChange,
+  LIVE_CHANGE_APPLY_USER_MESSAGE,
 } from "../src/lib/assignmentChange";
 import { createDraftFromAutoResult } from "../src/lib/assignmentDraft";
 import {
   computeAutoAssignmentsV1,
   compareCaddyOrder,
+  drivingCandidateCaddies,
   isPlacementLocked,
   reservationKey,
   REASON,
@@ -36,6 +39,17 @@ function assert(cond: unknown, msg: string) {
 
 function section(title: string) {
   console.log("\n==", title, "==");
+}
+
+function drivingCaddy(id = 900): AutoAssignCaddy {
+  return {
+    id,
+    name: `드라이빙${id}`,
+    team: "1조",
+    teamOrder: 99,
+    caddyType: "DRIVING",
+    employmentStatus: "ACTIVE",
+  };
 }
 
 function makeCaddies(n: number, startId = 1): AutoAssignCaddy[] {
@@ -715,8 +729,7 @@ section("순번 바꿈 후에도 리무진은 reservation에 유지");
 section("드라이빙은 3부 특정 reservation에 저장되고 기본 LOCK ON");
 {
   const date = "2026-09-12";
-  const pool = makeCaddies(12);
-  for (const c of pool) (c as AutoAssignCaddy).caddyType = "HOUSE";
+  const pool = [...makeCaddies(12), drivingCaddy(900)];
   const previous = computeAutoAssignmentsV1({
     date,
     available: pool,
@@ -727,31 +740,29 @@ section("드라이빙은 3부 특정 reservation에 저장되고 기본 LOCK ON"
     ],
   });
   const target = previous.assignments.find((a) => a.reservation.id === "S3B")!;
-  const free = previous.unusedCaddies[0];
-  assert(!!free, "unused caddy exists");
   const store = emptyLiveChangeMemoryStore();
-  store.caddyTypes.set(free.id, "HOUSE");
-  store.caddyEmployment.set(free.id, "ACTIVE");
+  store.caddyTypes.set(900, "DRIVING");
+  store.caddyEmployment.set(900, "ACTIVE");
   const preview = previewLiveAssignmentChange({
     previous,
     regularCaddyPool: pool,
     change: {
       type: "ASSIGN_DRIVING",
       reservationKey: reservationKey(target.reservation),
-      caddyId: free.id,
+      caddyId: 900,
     },
   });
   const row = preview.after.assignments.find((a) => a.reservation.id === "S3B")!;
   assert(row.kind === "driving", "kind driving");
   assert(row.locked === true, "default LOCK ON");
   assert(isPlacementLocked(row), "placement locked");
-  assert(row.caddy.id === free.id, "assigned selected caddy");
+  assert(row.caddy.id === 900, "assigned selected caddy");
   assert(String(row.reservation.shift) === "3부", "stays 3부");
   applyLiveChangeToMemory(store, buildLiveChangePersistPlan(preview));
-  assert(store.caddyTypes.get(free.id) === "HOUSE", "caddyType unchanged");
-  assert(store.caddyEmployment.get(free.id) === "ACTIVE", "employment unchanged");
+  assert(store.caddyTypes.get(900) === "DRIVING", "caddyType unchanged");
+  assert(store.caddyEmployment.get(900) === "ACTIVE", "employment unchanged");
   assert(
-    store.placements.some((p) => p.kind === "driving" && p.locked && p.caddyId === free.id),
+    store.placements.some((p) => p.kind === "driving" && p.locked && p.caddyId === 900),
     "driving placement persisted"
   );
 }
@@ -788,7 +799,7 @@ section("1부에는 드라이빙 지정 불가");
 section("드라이빙 앞에서 예약 취소/당추가 발생해도 같은 reservation에 유지");
 {
   const date = "2026-09-14";
-  const pool = makeCaddies(14);
+  const pool = [...makeCaddies(14), drivingCaddy(900)];
   const previous = computeAutoAssignmentsV1({
     date,
     available: pool,
@@ -799,14 +810,13 @@ section("드라이빙 앞에서 예약 취소/당추가 발생해도 같은 rese
     ],
   });
   const target = previous.assignments.find((a) => a.reservation.id === "S3B")!;
-  const free = previous.unusedCaddies[0];
   const driving = previewLiveAssignmentChange({
     previous,
     regularCaddyPool: pool,
     change: {
       type: "ASSIGN_DRIVING",
       reservationKey: reservationKey(target.reservation),
-      caddyId: free.id,
+      caddyId: 900,
     },
   });
   const afterCancel = previewLiveAssignmentChange({
@@ -815,7 +825,7 @@ section("드라이빙 앞에서 예약 취소/당추가 발생해도 같은 rese
     change: { type: "CANCEL_RESERVATION", reservationId: "S3A" },
   });
   const kept = afterCancel.after.assignments.find((a) => a.reservation.id === "S3B")!;
-  assert(kept.caddy.id === free.id, "driving caddy stays after 3부 cancel ahead");
+  assert(kept.caddy.id === 900, "driving caddy stays after 3부 cancel ahead");
   assert(kept.kind === "driving", "kind stays driving");
   const afterAdd = previewLiveAssignmentChange({
     previous: driving.after,
@@ -832,31 +842,118 @@ section("드라이빙 앞에서 예약 취소/당추가 발생해도 같은 rese
     },
   });
   const keptAdd = afterAdd.after.assignments.find((a) => a.reservation.id === "S3B")!;
-  assert(keptAdd.caddy.id === free.id, "driving caddy stays after 당추 ahead");
+  assert(keptAdd.caddy.id === 900, "driving caddy stays after 당추 ahead");
   assert(keptAdd.kind === "driving", "kind stays driving after add");
 }
 
-section("드라이빙 해제 정상");
+section("드라이빙 삽입 후 뒤 일반 캐디가 한 자리씩 밀림");
 {
-  const date = "2026-09-15";
-  const pool = makeCaddies(12);
+  const date = "2026-09-18";
+  const pool = [...makeCaddies(12), drivingCaddy(900)];
   const previous = computeAutoAssignmentsV1({
     date,
     available: pool,
     reservations: [
       res(date, "S3A", { teeTime: "16:00", shift: "3부" }),
       res(date, "S3B", { teeTime: "16:08", shift: "3부" }),
+      res(date, "S3C", { teeTime: "16:16", shift: "3부" }),
     ],
   });
-  const target = previous.assignments.find((a) => a.reservation.id === "S3B")!;
-  const free = previous.unusedCaddies[0];
+  const a = caddyOn(previous, "S3A");
+  const b = caddyOn(previous, "S3B");
+  const c = caddyOn(previous, "S3C");
+  const preview = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: {
+      type: "ASSIGN_DRIVING",
+      reservationKey: reservationKey(
+        previous.assignments.find((x) => x.reservation.id === "S3B")!.reservation
+      ),
+      caddyId: 900,
+    },
+  });
+  assert(caddyOn(preview.after, "S3A") === a, "ahead regular stays");
+  assert(caddyOn(preview.after, "S3B") === 900, "inserted driving at target");
+  assert(
+    preview.after.assignments.find((x) => x.reservation.id === "S3B")?.kind ===
+      "driving",
+    "target is driving"
+  );
+  assert(caddyOn(preview.after, "S3C") === b, "original B shifted back one");
+  assert(
+    preview.after.unusedCaddies.some((x) => x.id === c) ||
+      preview.after.sparesByShift.some(
+        (s) => s.spare1?.caddyId === c || s.spare2?.caddyId === c
+      ),
+    "original last regular became unused/spare"
+  );
+  assert(
+    preview.after.assignments.filter((x) => x.caddy.id === 900).length === 1,
+    "driving not also in regular rotation"
+  );
+}
+
+section("일반 캔슬 reflow 후에도 unused DRIVING은 일반 순번에 안 들어감");
+{
+  const date = "2026-09-23";
+  const pool = [...makeCaddies(8), drivingCaddy(900)];
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      res(date, "R1", { teeTime: "07:00" }),
+      res(date, "R2", { teeTime: "07:08" }),
+      res(date, "S3A", { teeTime: "16:00", shift: "3부" }),
+    ],
+  });
+  assert(
+    !previous.assignments.some((a) => a.caddy.id === 900),
+    "auto-assign leaves DRIVING unused"
+  );
+  const preview = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: {
+      type: "CANCEL_RESERVATION",
+      reservationKey: reservationKey(
+        previous.assignments.find((x) => x.reservation.id === "R1")!.reservation
+      ),
+    },
+  });
+  assert(
+    !preview.after.assignments.some((a) => a.caddy.id === 900),
+    "reflow still excludes unused DRIVING"
+  );
+}
+
+section("드라이빙 해제 시 뒤 일반이 당겨져 원래 흐름 복원");
+{
+  const date = "2026-09-15";
+  const pool = [...makeCaddies(12), drivingCaddy(900)];
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      res(date, "S3A", { teeTime: "16:00", shift: "3부" }),
+      res(date, "S3B", { teeTime: "16:08", shift: "3부" }),
+      res(date, "S3C", { teeTime: "16:16", shift: "3부" }),
+    ],
+  });
+  const original = {
+    a: caddyOn(previous, "S3A"),
+    b: caddyOn(previous, "S3B"),
+    c: caddyOn(previous, "S3C"),
+  };
   const driving = previewLiveAssignmentChange({
     previous,
     regularCaddyPool: pool,
     change: {
       type: "ASSIGN_DRIVING",
-      reservationKey: reservationKey(target.reservation),
-      caddyId: free.id,
+      reservationKey: reservationKey(
+        previous.assignments.find((x) => x.reservation.id === "S3B")!.reservation
+      ),
+      caddyId: 900,
     },
   });
   const cleared = previewLiveAssignmentChange({
@@ -864,27 +961,24 @@ section("드라이빙 해제 정상");
     regularCaddyPool: pool,
     change: {
       type: "CLEAR_DRIVING",
-      reservationKey: reservationKey(target.reservation),
+      reservationKey: reservationKey(
+        previous.assignments.find((x) => x.reservation.id === "S3B")!.reservation
+      ),
     },
   });
   assert(
-    !cleared.after.assignments.some((a) => a.reservation.id === "S3B"),
-    "driving placement removed"
-  );
-  assert(
-    cleared.after.unassignedReservations.some((u) => u.reservation.id === "S3B"),
-    "reservation remains unassigned"
-  );
-  assert(
-    cleared.after.assignments.every((a) => a.kind !== "driving"),
+    cleared.after.assignments.every((x) => x.kind !== "driving"),
     "no driving rows left"
   );
+  assert(caddyOn(cleared.after, "S3A") === original.a, "S3A restored");
+  assert(caddyOn(cleared.after, "S3B") === original.b, "S3B pulled original regular");
+  assert(caddyOn(cleared.after, "S3C") === original.c, "S3C restored");
 }
 
 section("드라이빙 LOCK ON은 순번 바꿈 차단");
 {
   const date = "2026-09-16";
-  const pool = makeCaddies(12);
+  const pool = [...makeCaddies(12), drivingCaddy(900)];
   const previous = computeAutoAssignmentsV1({
     date,
     available: pool,
@@ -895,14 +989,13 @@ section("드라이빙 LOCK ON은 순번 바꿈 차단");
   });
   const a = previous.assignments.find((x) => x.reservation.id === "S3A")!;
   const b = previous.assignments.find((x) => x.reservation.id === "S3B")!;
-  const free = previous.unusedCaddies[0];
   const driving = previewLiveAssignmentChange({
     previous,
     regularCaddyPool: pool,
     change: {
       type: "ASSIGN_DRIVING",
       reservationKey: reservationKey(b.reservation),
-      caddyId: free.id,
+      caddyId: 900,
     },
   });
   const swapped = previewLiveAssignmentChange({
@@ -920,7 +1013,7 @@ section("드라이빙 LOCK ON은 순번 바꿈 차단");
   );
   assert(
     swapped.after.assignments.find((x) => x.reservation.id === "S3B")?.caddy.id ===
-      free.id,
+      900,
     "driving placement unchanged"
   );
 }
@@ -955,5 +1048,261 @@ section("일반 순번 바꿈은 A↔B만 변경");
   assert(caddyOn(swapped.after, "R2") === mid, "middle unchanged");
 }
 
-console.log(`\n${passed} passed, ${failed} failed`);
-if (failed > 0) process.exit(1);
+section("드라이빙 후보는 DRIVING+ACTIVE만, 없으면 일반 캐디 대체 없음");
+{
+  const pool = [
+    ...makeCaddies(3),
+    drivingCaddy(901),
+    {
+      ...drivingCaddy(902),
+      employmentStatus: "LEAVE",
+    },
+  ];
+  const assigned = new Set([1]);
+  const cands = drivingCandidateCaddies({
+    pool,
+    assignedCaddyIds: assigned,
+  });
+  assert(cands.length === 1 && cands[0].id === 901, "only active unused DRIVING");
+  assert(
+    drivingCandidateCaddies({ pool: makeCaddies(8) }).length === 0,
+    "HOUSE pool yields zero driving candidates"
+  );
+  assert(
+    drivingCandidateCaddies({
+      pool: [...makeCaddies(3), drivingCaddy(903)],
+      unavailableCaddyIds: [903],
+    }).length === 0,
+    "unavailable driving is not listed"
+  );
+}
+
+section("SET_LOCK는 같은 자리 캐디를 유지하고 locked만 변경");
+{
+  const date = "2026-09-22";
+  const pool = makeCaddies(4);
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      res(date, "R1", { teeTime: "07:00" }),
+      res(date, "R2", { teeTime: "07:08" }),
+    ],
+  });
+  const key = reservationKey(
+    previous.assignments.find((x) => x.reservation.id === "R2")!.reservation
+  );
+  const before = caddyOn(previous, "R2");
+  const preview = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: { type: "SET_LOCK", reservationKey: key, locked: true },
+  });
+  assert(caddyOn(preview.after, "R2") === before, "caddy unchanged");
+  assert(
+    preview.after.assignments.find((x) => x.reservation.id === "R2")?.locked ===
+      true,
+    "LOCK ON"
+  );
+  const unlocked = previewLiveAssignmentChange({
+    previous: preview.after,
+    regularCaddyPool: pool,
+    change: { type: "SET_LOCK", reservationKey: key, locked: false },
+  });
+  assert(
+    unlocked.after.assignments.find((x) => x.reservation.id === "R2")?.locked ===
+      false,
+    "LOCK OFF"
+  );
+}
+
+section("일반 HOUSE를 드라이빙으로 지정하면 거부");
+{
+  const date = "2026-09-19";
+  const pool = makeCaddies(8);
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [res(date, "S3A", { teeTime: "16:00", shift: "3부" })],
+  });
+  const preview = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: {
+      type: "ASSIGN_DRIVING",
+      reservationKey: reservationKey(previous.assignments[0].reservation),
+      caddyId: previous.unusedCaddies[0].id,
+    },
+  });
+  assert(
+    preview.warnings.some((w) => w.code === "DRIVING_TYPE_REQUIRED"),
+    "HOUSE rejected"
+  );
+}
+
+async function runPersistTests() {
+  section("250건 Reservation 저장은 createMany, 개별 create 없음");
+  {
+    const date = "2026-09-20";
+    const pool = makeCaddies(8);
+    const reservations = Array.from({ length: 250 }, (_, i) =>
+      res(date, `R${i + 1}`, {
+        teeTime: `${String(7 + Math.floor(i / 12)).padStart(2, "0")}:${String(
+          (i % 12) * 5
+        ).padStart(2, "0")}`,
+        shift: "1부",
+        course: "SKY",
+      })
+    );
+    const previous = computeAutoAssignmentsV1({
+      date,
+      available: pool,
+      reservations,
+    });
+    const counts = {
+      reservationCreate: 0,
+      reservationCreateMany: 0,
+      placementCreate: 0,
+      placementCreateMany: 0,
+      txCalls: 0,
+    };
+    const fakeTx = {
+      dailyPlacement: {
+        deleteMany: async () => ({ count: 0 }),
+        create: async () => {
+          counts.placementCreate += 1;
+          if (counts.placementCreate > 20) {
+            throw new Error(
+              "Transaction not found. Transaction ID is invalid, refers to an old closed transaction"
+            );
+          }
+          return { id: counts.placementCreate };
+        },
+        createMany: async (args: { data: unknown[] }) => {
+          counts.placementCreateMany += args.data.length;
+          return { count: args.data.length };
+        },
+      },
+      dailyReservation: {
+        deleteMany: async () => ({ count: 0 }),
+        create: async () => {
+          counts.reservationCreate += 1;
+          if (counts.reservationCreate > 20) {
+            throw new Error(
+              "Transaction not found. Transaction ID is invalid, refers to an old closed transaction"
+            );
+          }
+          return { id: counts.reservationCreate };
+        },
+        createMany: async (args: { data: unknown[] }) => {
+          counts.reservationCreateMany += args.data.length;
+          return { count: args.data.length };
+        },
+        createManyAndReturn: async (args: { data: unknown[] }) => {
+          counts.reservationCreateMany += args.data.length;
+          return (args.data as Array<{ identityKey: string }>).map((row, i) => ({
+            id: i + 1,
+            identityKey: row.identityKey,
+          }));
+        },
+        findMany: async () => {
+          throw new Error("findMany should not be used after createManyAndReturn");
+        },
+      },
+      dailyCaddyUnavailable: {
+        deleteMany: async () => ({ count: 0 }),
+        createMany: async () => ({ count: 0 }),
+        upsert: async () => {
+          throw new Error("unavailable upsert should be batched");
+        },
+      },
+      dailyAssignmentChange: {
+        create: async () => ({ id: 1 }),
+      },
+      audit: {
+        create: async () => ({ id: 1 }),
+      },
+      shiftDuty: {
+        count: async () => 0,
+        deleteMany: async () => ({ count: 0 }),
+        createMany: async () => ({ count: 0 }),
+      },
+      schedule: {
+        deleteMany: async () => ({ count: 0 }),
+        createMany: async () => ({ count: 0 }),
+      },
+      scheduleExtraTag: {
+        deleteMany: async () => ({ count: 0 }),
+        createMany: async () => ({ count: 0 }),
+      },
+    };
+    const fakePrisma = {
+      $transaction: async (
+        fn: (tx: typeof fakeTx) => Promise<unknown>,
+        _opts?: unknown
+      ) => {
+        counts.txCalls += 1;
+        return fn(fakeTx);
+      },
+    };
+    const result = await applyLiveAssignmentChange(
+      {
+        previous,
+        regularCaddyPool: pool,
+        change: {
+          type: "CANCEL_RESERVATION",
+          reservationKey: reservationKey(previous.assignments[0].reservation),
+        },
+      },
+      { prisma: fakePrisma as never, updateOpsIfPresent: false }
+    );
+    assert(result.ok === true, "250-row apply succeeds");
+    assert(counts.reservationCreate === 0, "no per-row reservation.create");
+    assert(counts.placementCreate === 0, "no per-row placement.create");
+    assert(counts.reservationCreateMany >= 200, "reservations batched");
+    assert(counts.txCalls === 1, "single short transaction");
+  }
+
+  section("저장 실패 시 Prisma 원문을 사용자 메시지에 넣지 않음");
+  {
+    const date = "2026-09-21";
+    const pool = makeCaddies(4);
+    const previous = computeAutoAssignmentsV1({
+      date,
+      available: pool,
+      reservations: [res(date, "R1", { teeTime: "07:00" })],
+    });
+    const fakePrisma = {
+      $transaction: async () => {
+        throw new Error(
+          "Invalid prisma.dailyReservation.create() invocation Transaction API error: Transaction not found"
+        );
+      },
+    };
+    const result = await applyLiveAssignmentChange(
+      {
+        previous,
+        regularCaddyPool: pool,
+        change: {
+          type: "CANCEL_RESERVATION",
+          reservationKey: reservationKey(previous.assignments[0].reservation),
+        },
+      },
+      { prisma: fakePrisma as never }
+    );
+    assert(result.ok === false, "apply failed");
+    assert(
+      result.ok === false && result.message === LIVE_CHANGE_APPLY_USER_MESSAGE,
+      "user-safe message"
+    );
+    assert(
+      result.ok === false && !result.message.includes("Transaction not found"),
+      "no prisma stack in user message"
+    );
+  }
+
+  console.log(`\n${passed} passed, ${failed} failed`);
+  if (failed > 0) process.exit(1);
+}
+
+void runPersistTests();

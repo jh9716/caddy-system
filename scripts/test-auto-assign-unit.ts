@@ -2585,6 +2585,62 @@ section("DRIVING은 3부 HOUSE 순번에 섞지 않음");
   assert(result.meta.drivingPoolCount === 1, "driving pool tracked");
 }
 
+section("9~12조 DRIVING도 THIRD 순번에 넣지 않음");
+{
+  const date = "2026-10-18";
+  const house = makeCaddies(4).map((c) => ({ ...c, caddyType: "HOUSE" }));
+  const third = [
+    { id: 701, name: "TH1", team: "9조", teamOrder: 1, caddyType: "THIRD" },
+    { id: 702, name: "TH2", team: "10조", teamOrder: 1, caddyType: "THIRD" },
+  ];
+  const drivingOnThirdBand = {
+    id: 901,
+    name: "드라이브9조",
+    team: "9조",
+    teamOrder: 1,
+    caddyType: "DRIVING",
+  };
+  const pools = splitCaddyPools([...house, ...third, drivingOnThirdBand]);
+  assert(
+    pools.driving.map((c) => c.id).join(",") === "901",
+    "9조 DRIVING stays in driving pool"
+  );
+  assert(
+    !pools.third.some((c) => c.id === 901),
+    "9조 DRIVING not in THIRD pool"
+  );
+  assert(
+    !pools.house.some((c) => c.id === 901),
+    "9조 DRIVING not in HOUSE pool"
+  );
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: [...house, ...third, drivingOnThirdBand],
+    reservations: makeReservations(date, [
+      { shift: "1부", count: 2 },
+      { shift: "3부", count: 3 },
+    ]),
+  });
+  assert(
+    !result.assignments.some((a) => a.caddy.id === 901),
+    "9조 DRIVING never auto-assigned"
+  );
+  assert(
+    result.unusedCaddies.some((c) => c.id === 901),
+    "unused until manually assigned"
+  );
+  const slipped = assignRegularSequence({
+    date,
+    house: [...house, drivingOnThirdBand],
+    third,
+    reservations: makeReservations(date, [{ shift: "1부", count: 3 }]),
+  });
+  assert(
+    !slipped.assignments.some((a) => a.caddy.id === 901),
+    "explicit house array still strips DRIVING"
+  );
+}
+
 section("reflow 후 spare/3부 순서 재계산");
 {
   const date = "2026-10-17";

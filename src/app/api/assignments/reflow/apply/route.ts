@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
 import {
   applyLiveAssignmentChange,
+  LIVE_CHANGE_APPLY_USER_MESSAGE,
   type LiveChangeInput,
 } from "@/lib/assignmentChange";
 import type {
@@ -54,9 +55,13 @@ export async function POST(req: NextRequest) {
     );
 
     if (!result.ok) {
+      const hideDetails =
+        result.httpStatus >= 500 || result.code === "APPLY_FAILED";
       return NextResponse.json(
         {
-          error: result.message,
+          error: hideDetails
+            ? LIVE_CHANGE_APPLY_USER_MESSAGE
+            : result.message,
           code: result.code,
           warnings: result.warnings,
         },
@@ -73,8 +78,10 @@ export async function POST(req: NextRequest) {
       preview: result.preview,
     });
   } catch (e: unknown) {
-    const message = e instanceof Error ? e.message : "apply 실패";
     console.error("[POST /api/assignments/reflow/apply]", e);
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json(
+      { error: LIVE_CHANGE_APPLY_USER_MESSAGE },
+      { status: 500 }
+    );
   }
 }
