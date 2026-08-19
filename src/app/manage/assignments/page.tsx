@@ -12,7 +12,6 @@ import {
   markDraftApplied,
   replaceAssignmentCaddy,
   reservationIdentity,
-  setPlacementLock,
   unassignReservation,
   unusedCaddies,
   type AssignmentDraft,
@@ -24,6 +23,7 @@ import {
   buildShiftBoard,
 } from "@/lib/assignmentBoardView";
 import {
+  drivingCandidateCaddies,
   isHouseStartCandidate,
   resolveCourseCode,
   compareReservationOrder,
@@ -58,7 +58,7 @@ const COURSE_SHORT: Record<CourseCode, string> = {
 };
 
 import { SpecialDutyPanel, type Shift1StartOption } from "./SpecialDutyPanel";
-import { LiveChangePanel, LockToggle, RowLiveActions } from "./LiveChangePanel";
+import { BoardQuickSheet, LiveChangePanel, LockToggle } from "./LiveChangePanel";
 import { THIRD_BAND_TEAMS } from "@/lib/caddyManage";
 import type { LiveChangeInput, LiveChangePreview } from "@/lib/assignmentChange";
 
@@ -96,6 +96,73 @@ function AssignmentMarkBadges({
         <span className="bc-special">S</span>
       ) : null}
     </span>
+  );
+}
+
+function BoardAssignedSlots({
+  rows,
+  allAssignments,
+  expandedKey,
+  swapKey,
+  onTeamTap,
+  onCaddyTap,
+  onToggleLock,
+}: {
+  rows: AutoAssignmentRow[];
+  allAssignments: AutoAssignmentRow[];
+  expandedKey: string | null;
+  swapKey: string | null;
+  onTeamTap: (row: AutoAssignmentRow) => void;
+  onCaddyTap: (row: AutoAssignmentRow) => void;
+  onToggleLock: (row: AutoAssignmentRow, locked: boolean) => void;
+}) {
+  return (
+    <>
+      {rows.map((row) => {
+        const key = reservationIdentity(row.reservation);
+        const special = row.kind !== "regular";
+        const marks = boardAssignmentMarks(row, allAssignments);
+        const active = expandedKey === key || swapKey === key;
+        return (
+          <div
+            key={key}
+            className={`bc-slot${active ? " active" : ""}${
+              swapKey === key ? " swap-on" : ""
+            }`}
+          >
+            <button
+              type="button"
+              className="bc-team"
+              onClick={() => onTeamTap(row)}
+            >
+              <span className="bc-team-name">
+                {row.reservation.teamName || "팀"}
+              </span>
+              {marks.limousine ? (
+                <span className="bc-badge limo">리무진</span>
+              ) : null}
+            </button>
+            <button
+              type="button"
+              className="bc-caddy"
+              onClick={() => onCaddyTap(row)}
+            >
+              <span className="bc-name">{row.caddy.name}</span>
+              <AssignmentMarkBadges
+                twoWork={marks.twoWork}
+                chageun={marks.chageun}
+                special={special}
+                driving={marks.driving}
+              />
+            </button>
+            <LockToggle
+              row={row}
+              onToggle={(locked) => onToggleLock(row, locked)}
+            />
+          </div>
+        );
+      })}
+    </>
   );
 }
 
@@ -138,6 +205,11 @@ export default function ManageAssignmentsOpsPage() {
   const [error, setError] = useState<string | null>(null);
   const [swapKey, setSwapKey] = useState<string | null>(null);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
+  const [quickSheet, setQuickSheet] = useState<{
+    mode: "team" | "caddy";
+    key: string;
+  } | null>(null);
+  const [unavailableCaddyIds, setUnavailableCaddyIds] = useState<number[]>([]);
   const [viewMode, setViewMode] = useState<ResultViewMode>("board");
   const [toast, setToast] = useState<string | null>(null);
   const stickyStackRef = useRef<HTMLDivElement | null>(null);
@@ -256,6 +328,13 @@ export default function ManageAssignmentsOpsPage() {
   }, [availability, draft]);
 
   const freeCaddies = draft ? unusedCaddies(draft) : [];
+  const drivingCandidates = draft
+    ? drivingCandidateCaddies({
+        pool: draft.caddyPool,
+        assignedCaddyIds: draft.assignments.map((a) => a.caddy.id),
+        unavailableCaddyIds,
+      })
+    : [];
   const liveWarnings = (draft ? detectDraftWarnings(draft) : warnings).filter(
     (w) =>
       w.code === "SAME_SHIFT_DUPLICATE" ||
@@ -411,6 +490,8 @@ export default function ManageAssignmentsOpsPage() {
       setWarnings(detectDraftWarnings(next));
       setSwapKey(null);
       setExpandedKey(null);
+      setQuickSheet(null);
+      setUnavailableCaddyIds([]);
       setShiftTab("1부");
       const closedN = data.closedCourseReservations?.length ?? 0;
       showToast(
@@ -448,7 +529,7 @@ export default function ManageAssignmentsOpsPage() {
     const key = reservationIdentity(row.reservation);
     if (!swapKey) {
       setSwapKey(key);
-      showToast("순번 바꿈 · 다른 예약을 탭하세요");
+      showToast("순번 바꿈 · 다른 캐디를 탭하세요");
       return;
     }
     if (swapKey === key) {
@@ -462,6 +543,20 @@ export default function ManageAssignmentsOpsPage() {
     });
     setSwapKey(null);
     showToast("순번 바꿈 미리보기 · 이대로 적용으로 저장");
+  }
+
+  function handlePlacementTap(
+    row: AutoAssignmentRow,
+    mode: "team" | "caddy"
+  ) {
+    if (swapKey) {
+      onSwapClick(row);
+      setQuickSheet(null);
+      return;
+    }
+    const key = reservationIdentity(row.reservation);
+    setExpandedKey(key);
+    setQuickSheet({ mode, key });
   }
 
   function onRequestLiveChange(change: LiveChangeInput) {
@@ -583,21 +678,26 @@ export default function ManageAssignmentsOpsPage() {
         }),
       });
       const data = await res.json().catch(() => ({}));
-      const after = (data.preview?.after || preview.after) as typeof preview.after;
-      const next = applyLiveResultToDraft(draft, after);
-      setDraft(next);
-      setWarnings(detectDraftWarnings(next));
-      if (autoResult) {
-        setAutoResult({ ...autoResult, ...after });
-      }
       if (!res.ok) {
         setError(
           data.error ||
             data.message ||
-            "배치표는 갱신했지만 DB 저장에 실패했습니다. (migration 미적용일 수 있음)"
+            "배치 저장 중 오류가 발생했습니다. 다시 시도해주세요."
         );
-        showToast("미리보기 결과를 배치표에 반영 · DB 저장 실패");
+        showToast("DB 저장 실패 · 배치표는 그대로입니다");
         return;
+      }
+      const after = (data.preview?.after || preview.after) as typeof preview.after;
+      const next = applyLiveResultToDraft(draft, after);
+      setDraft(next);
+      setWarnings(detectDraftWarnings(next));
+      setUnavailableCaddyIds(
+        Array.isArray(data.preview?.unavailableCaddyIds)
+          ? data.preview.unavailableCaddyIds
+          : preview.unavailableCaddyIds || []
+      );
+      if (autoResult) {
+        setAutoResult({ ...autoResult, ...after });
       }
       showToast(
         data.opsUpdated
@@ -612,12 +712,11 @@ export default function ManageAssignmentsOpsPage() {
   }
 
   function onToggleLock(row: AutoAssignmentRow, locked: boolean) {
-    if (!draft) return;
-    const key = reservationIdentity(row.reservation);
-    const result = setPlacementLock(draft, key, locked);
-    setDraft(result.draft);
-    setWarnings(result.warnings);
-    showToast(locked ? "LOCK ON" : "LOCK OFF");
+    onRequestLiveChange({
+      type: "SET_LOCK",
+      reservationKey: reservationIdentity(row.reservation),
+      locked,
+    });
   }
 
   const shiftRows =
@@ -641,23 +740,17 @@ export default function ManageAssignmentsOpsPage() {
     return buildShiftBoard(shiftRows, boardOpenCourses, shiftTab);
   }, [shiftRows, boardOpenCourses, shiftTab]);
 
-  const detailRow = useMemo(() => {
-    if (!draft) return null;
-    const key = expandedKey || swapKey;
-    if (!key) return null;
+  const quickSheetRow = useMemo(() => {
+    if (!draft || !quickSheet) return null;
     return (
       draft.assignments.find(
-        (a) => reservationIdentity(a.reservation) === key
+        (a) => reservationIdentity(a.reservation) === quickSheet.key
       ) || null
     );
-  }, [draft, expandedKey, swapKey]);
+  }, [draft, quickSheet]);
 
   function toggleCourse(code: CourseCode) {
     setCourseOpen((prev) => ({ ...prev, [code]: !prev[code] }));
-  }
-
-  function toggleExpandKey(key: string) {
-    setExpandedKey((prev) => (prev === key ? null : key));
   }
 
   return (
@@ -914,6 +1007,7 @@ export default function ManageAssignmentsOpsPage() {
           onApplyPreview={onLiveApply}
           preset={pendingLiveChange}
           onPresetConsumed={() => setPendingLiveChange(null)}
+          unavailableCaddyIds={unavailableCaddyIds}
         />
       )}
 
@@ -1043,18 +1137,7 @@ export default function ManageAssignmentsOpsPage() {
                     <div className="ops-empty">이 부 배치 없음</div>
                   ) : (
                     <div className="ops-board" role="table" aria-label={`${shiftTab} 배치표`}>
-                      {boardRows.map((tr) => {
-                        const rowHasExpand = COURSE_CODES.some((code) => {
-                          const cell = tr.cells[code];
-                          if (cell.kind !== "assigned") return false;
-                          return cell.rows.some(
-                            (r) =>
-                              reservationIdentity(r.reservation) ===
-                                expandedKey ||
-                              reservationIdentity(r.reservation) === swapKey
-                          );
-                        });
-                        return (
+                      {boardRows.map((tr) => (
                           <div key={tr.teeTime} className="ops-board-block">
                             <div className="ops-board-row" role="row">
                               <div className="bc-time" role="cell">
@@ -1086,28 +1169,23 @@ export default function ManageAssignmentsOpsPage() {
                                   );
                                 }
                                 const primary = cell.rows[0];
-                                const key = reservationIdentity(
-                                  primary.reservation
-                                );
-                                const special = primary.kind !== "regular";
                                 const marks = boardAssignmentMarks(
                                   primary,
                                   draft.assignments
                                 );
-                                const active =
-                                  expandedKey === key ||
-                                  swapKey === key ||
-                                  cell.rows.some(
-                                    (r) =>
-                                      reservationIdentity(r.reservation) ===
-                                        expandedKey ||
-                                      reservationIdentity(r.reservation) ===
-                                        swapKey
-                                  );
+                                const special = cell.rows.some(
+                                  (r) => r.kind !== "regular"
+                                );
+                                const active = cell.rows.some(
+                                  (r) =>
+                                    reservationIdentity(r.reservation) ===
+                                      expandedKey ||
+                                    reservationIdentity(r.reservation) ===
+                                      swapKey
+                                );
                                 return (
-                                  <button
+                                  <div
                                     key={code}
-                                    type="button"
                                     className={`bc-cell assigned ${
                                       special ? "special" : ""
                                     }${marks.twoWork ? " two-work" : ""}${
@@ -1116,105 +1194,26 @@ export default function ManageAssignmentsOpsPage() {
                                       marks.driving ? " drive" : ""
                                     } ${active ? "active" : ""}`}
                                     role="cell"
-                                    onClick={() => {
-                                      if (cell.rows.length === 1) {
-                                        toggleExpandKey(key);
-                                        return;
-                                      }
-                                      const idx = cell.rows.findIndex(
-                                        (r) =>
-                                          reservationIdentity(r.reservation) ===
-                                          expandedKey
-                                      );
-                                      const next =
-                                        cell.rows[
-                                          idx >= 0
-                                            ? (idx + 1) % cell.rows.length
-                                            : 0
-                                        ];
-                                      toggleExpandKey(
-                                        reservationIdentity(next.reservation)
-                                      );
-                                    }}
                                   >
-                                    <span className="bc-name">
-                                      {primary.caddy.name}
-                                    </span>
-                                    <AssignmentMarkBadges
-                                      twoWork={marks.twoWork}
-                                      chageun={marks.chageun}
-                                      special={special}
-                                      limousine={marks.limousine}
-                                      driving={marks.driving}
+                                    <BoardAssignedSlots
+                                      rows={cell.rows}
+                                      allAssignments={draft.assignments}
+                                      expandedKey={expandedKey}
+                                      swapKey={swapKey}
+                                      onTeamTap={(row) =>
+                                        handlePlacementTap(row, "team")
+                                      }
+                                      onCaddyTap={(row) =>
+                                        handlePlacementTap(row, "caddy")
+                                      }
+                                      onToggleLock={onToggleLock}
                                     />
-                                    {cell.rows.length > 1 && (
-                                      <span className="bc-more">
-                                        +{cell.rows.length - 1}
-                                      </span>
-                                    )}
-                                  </button>
+                                  </div>
                                 );
                               })}
                             </div>
-                            {rowHasExpand && detailRow && (
-                              <div className="ops-board-detail">
-                                <div className="ops-board-detail-meta">
-                                  <strong>{detailRow.reservation.teeTime}</strong>
-                                  <span>
-                                    {detailRow.reservation.teamName || "-"}
-                                  </span>
-                                  <span>
-                                    {detailRow.reservation.courseLabel ||
-                                      (() => {
-                                        const code = resolveCourseCode(
-                                          detailRow.reservation.course
-                                        );
-                                        return code
-                                          ? COURSE_LABELS[code]
-                                          : detailRow.reservation.course;
-                                      })()}
-                                  </span>
-                                  <span className="caddy-strong">
-                                    {detailRow.caddy.name}
-                                  </span>
-                                  <AssignmentMarkBadges
-                                    {...boardAssignmentMarks(
-                                      detailRow,
-                                      draft.assignments
-                                    )}
-                                    special={detailRow.kind !== "regular"}
-                                  />
-                                  <span className="muted">
-                                    {detailRow.caddy.team}·
-                                    {detailRow.caddy.teamOrder}
-                                    {detailRow.kind !== "regular"
-                                      ? ` · ${detailRow.kind}`
-                                      : ""}
-                                  </span>
-                                </div>
-                                <div className="ops-row-actions">
-                                  <RowLiveActions
-                                    row={detailRow}
-                                    swapSelected={
-                                      swapKey ===
-                                      reservationIdentity(detailRow.reservation)
-                                    }
-                                    freeCaddies={freeCaddies}
-                                    onRequestChange={onRequestLiveChange}
-                                    onSwapClick={() => onSwapClick(detailRow)}
-                                  />
-                                  <LockToggle
-                                    row={detailRow}
-                                    onToggle={(locked) =>
-                                      onToggleLock(detailRow, locked)
-                                    }
-                                  />
-                                </div>
-                              </div>
-                            )}
                           </div>
-                        );
-                      })}
+                        ))}
                     </div>
                   )}
                 </div>
@@ -1248,50 +1247,45 @@ export default function ManageAssignmentsOpsPage() {
                           swapKey === key ? "swap-on" : ""
                         } ${open ? "open" : ""}`}
                       >
-                        <button
-                          type="button"
-                          className="ops-row-main"
-                          onClick={() => toggleExpandKey(key)}
-                        >
+                        <div className="ops-row-main">
                           <span className="col time">
                             {row.reservation.teeTime}
                           </span>
-                          <span className="col team">
-                            {row.reservation.teamName || "-"}
-                            {special && !marks.chageun ? (
+                          <button
+                            type="button"
+                            className="col team ops-row-hit"
+                            onClick={() => handlePlacementTap(row, "team")}
+                          >
+                            {row.reservation.teamName || "팀"}
+                            {marks.limousine ? (
+                              <span className="bc-badge limo">리무진</span>
+                            ) : null}
+                            {special && !marks.chageun && !marks.driving ? (
                               <em className="tag-s">{row.kind}</em>
                             ) : null}
-                          </span>
+                          </button>
                           <span className="col course">{course}</span>
-                          <span className="col caddy">
+                          <button
+                            type="button"
+                            className="col caddy ops-row-hit"
+                            onClick={() => handlePlacementTap(row, "caddy")}
+                          >
                             {row.caddy.name}
                             <AssignmentMarkBadges
                               twoWork={marks.twoWork}
                               chageun={marks.chageun}
                               special={special}
-                              limousine={marks.limousine}
                               driving={marks.driving}
                             />
-                          </span>
+                          </button>
                           <span className="col meta">
                             {row.caddy.team}·{row.caddy.teamOrder}
                           </span>
-                        </button>
-                        {open && (
-                          <div className="ops-row-actions">
-                            <RowLiveActions
-                              row={row}
-                              swapSelected={swapKey === key}
-                              freeCaddies={freeCaddies}
-                              onRequestChange={onRequestLiveChange}
-                              onSwapClick={() => onSwapClick(row)}
-                            />
-                            <LockToggle
-                              row={row}
-                              onToggle={(locked) => onToggleLock(row, locked)}
-                            />
-                          </div>
-                        )}
+                          <LockToggle
+                            row={row}
+                            onToggle={(locked) => onToggleLock(row, locked)}
+                          />
+                        </div>
                       </li>
                     );
                   })}
@@ -1415,6 +1409,19 @@ export default function ManageAssignmentsOpsPage() {
       )}
 
       {toast && <div className="ops-toast">{toast}</div>}
+      {quickSheet && quickSheetRow && (
+        <BoardQuickSheet
+          mode={quickSheet.mode}
+          row={quickSheetRow}
+          drivingCandidates={drivingCandidates}
+          swapSelected={
+            swapKey === reservationIdentity(quickSheetRow.reservation)
+          }
+          onClose={() => setQuickSheet(null)}
+          onRequestChange={onRequestLiveChange}
+          onSwapClick={() => onSwapClick(quickSheetRow)}
+        />
+      )}
 
       <style>{opsCss}</style>
     </div>
@@ -1815,28 +1822,78 @@ const opsCss = `
     color: inherit;
     width: 100%;
   }
-  button.bc-cell.assigned {
+  .bc-cell.assigned {
     background: #fff;
+    gap: 4px;
+    padding: 3px 1px;
   }
-  button.bc-cell.assigned.special {
+  .bc-cell.assigned.special {
     background: #fffbeb;
   }
-  button.bc-cell.assigned.two-work {
+  .bc-cell.assigned.two-work {
     background: #f8fafc;
     box-shadow: inset 2px 0 0 #94a3b8;
   }
-  button.bc-cell.assigned.chageun {
+  .bc-cell.assigned.chageun {
     background: #fffdf6;
     box-shadow: inset 2px 0 0 #d6b37a;
   }
-  button.bc-cell.assigned.two-work.chageun {
+  .bc-cell.assigned.two-work.chageun {
     background: #f8fafc;
     box-shadow: inset 2px 0 0 #94a3b8, inset 0 -2px 0 #d6b37a;
   }
-  button.bc-cell.assigned.active {
+  .bc-cell.assigned.active {
     outline: 2px solid #2563eb;
     outline-offset: -2px;
     z-index: 1;
+  }
+  .bc-slot {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+    width: 100%;
+    min-width: 0;
+  }
+  .bc-slot.swap-on,
+  .bc-slot.active {
+    outline: 2px solid #2563eb;
+    outline-offset: -1px;
+    border-radius: 4px;
+  }
+  .bc-team,
+  .bc-caddy {
+    border: 0;
+    background: transparent;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+    width: 100%;
+    padding: 1px 2px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+    min-height: 22px;
+  }
+  .bc-team-name {
+    font-size: 0.58rem;
+    font-weight: 700;
+    color: #475569;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .bc-caddy .bc-name {
+    pointer-events: none;
+  }
+  .lock-chip {
+    font-size: 0.58rem !important;
+    padding: 1px 5px !important;
+    min-height: 18px !important;
+    line-height: 1.1;
+    border-radius: 999px;
   }
   .bc-name {
     font-weight: 800;
@@ -1873,20 +1930,22 @@ const opsCss = `
     background: #f4ead6;
   }
   .bc-badge.limo {
-    color: #7c2d12;
-    background: #fdba74;
+    color: #9a3412;
+    background: #fb923c;
+    box-shadow: 0 0 0 1px #c2410c;
+    font-size: 0.6rem;
   }
   .bc-badge.drive {
     color: #fff;
     background: #7c3aed;
   }
-  button.bc-cell.assigned.limo {
+  .bc-cell.assigned.limo {
     box-shadow: inset 0 -3px 0 #f59e0b;
   }
-  button.bc-cell.assigned.drive {
+  .bc-cell.assigned.drive {
     box-shadow: inset 3px 0 0 #7c3aed;
   }
-  button.bc-cell.assigned.limo.drive {
+  .bc-cell.assigned.limo.drive {
     box-shadow: inset 3px 0 0 #7c3aed, inset 0 -3px 0 #f59e0b;
   }
   .ops-row.limo { background: #fff7ed; }
@@ -1944,7 +2003,7 @@ const opsCss = `
   .ops-row-main {
     width: 100%;
     display: grid;
-    grid-template-columns: 46px minmax(0, 1.3fr) 52px minmax(0, 1fr) 56px;
+    grid-template-columns: 46px minmax(0, 1.3fr) 52px minmax(0, 1fr) 40px auto;
     gap: 4px;
     align-items: center;
     padding: 5px 6px;
@@ -1953,10 +2012,22 @@ const opsCss = `
     background: transparent;
     text-align: left;
     font: inherit;
-    cursor: pointer;
     color: inherit;
   }
   .ops-row-main.static { cursor: default; }
+  .ops-row-hit {
+    border: 0;
+    background: transparent;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    padding: 0;
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
   .ops-row-main .col {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -2107,5 +2178,45 @@ const opsCss = `
     flex-wrap: wrap;
     gap: 6px;
     align-items: center;
+  }
+  .qa-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.45);
+    z-index: 80;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+  }
+  .qa-sheet {
+    width: 100%;
+    max-width: 480px;
+    background: #fff;
+    border-radius: 16px 16px 0 0;
+    padding: 12px 14px 24px;
+    max-height: 80vh;
+    overflow: auto;
+    box-shadow: 0 -8px 24px rgba(15, 23, 42, 0.18);
+  }
+  .qa-sheet-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .qa-actions {
+    display: grid;
+    gap: 8px;
+  }
+  .qa-actions .btn {
+    min-height: 44px;
+  }
+  .qa-empty {
+    padding: 10px 8px;
+    color: #64748b;
+    font-size: 0.85rem;
+    background: #f8fafc;
+    border-radius: 8px;
   }
 `;

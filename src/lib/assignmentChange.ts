@@ -35,6 +35,7 @@ export const LIVE_CHANGE_TYPES = [
   "SET_LIMOUSINE",
   "ASSIGN_DRIVING",
   "CLEAR_DRIVING",
+  "SET_LOCK",
 ] as const;
 
 export type LiveChangeType = (typeof LIVE_CHANGE_TYPES)[number];
@@ -49,7 +50,11 @@ export const LIVE_CHANGE_LABELS: Record<LiveChangeType, string> = {
   SET_LIMOUSINE: "리무진카트 요청",
   ASSIGN_DRIVING: "드라이빙 캐디 지정",
   CLEAR_DRIVING: "드라이빙 지정 해제",
+  SET_LOCK: "LOCK 변경",
 };
+
+export const LIVE_CHANGE_APPLY_USER_MESSAGE =
+  "배치 저장 중 오류가 발생했습니다. 다시 시도해주세요.";
 
 export type LiveChangeInput = {
   type: LiveChangeType;
@@ -60,6 +65,7 @@ export type LiveChangeInput = {
   reservationKeyB?: string;
   addReservation?: AutoAssignReservation;
   limousineCart?: boolean;
+  locked?: boolean;
   note?: string | null;
 };
 
@@ -205,6 +211,16 @@ export function eventsFromLiveChange(
       if (!input.reservationKey) return [];
       return [{ type: "CLEAR_DRIVING", reservationKey: input.reservationKey }];
     }
+    case "SET_LOCK": {
+      if (!input.reservationKey) return [];
+      return [
+        {
+          type: "SET_LOCK",
+          reservationKey: input.reservationKey,
+          locked: input.locked === true,
+        },
+      ];
+    }
     default:
       return [];
   }
@@ -254,6 +270,7 @@ function inferChangeType(events: ReservationChangeEvent[]): LiveChangeType {
     if (e.type === "SET_LIMOUSINE") return "SET_LIMOUSINE";
     if (e.type === "ASSIGN_DRIVING") return "ASSIGN_DRIVING";
     if (e.type === "CLEAR_DRIVING") return "CLEAR_DRIVING";
+    if (e.type === "SET_LOCK") return "SET_LOCK";
     if (e.type === "ADD_RESERVATION") return "ADD_RESERVATION";
     if (e.type === "REMOVE_CADDY") {
       return e.cause === "SICK" ? "CADDY_SICK" : "CADDY_ATTENDANCE_NOSHOW";
@@ -426,7 +443,7 @@ function mapUnavailableReason(
 }
 
 function mapChangeType(
-  type: LiveChangeType
+  type: Exclude<LiveChangeType, "SET_LOCK">
 ):
   | "CANCEL_RESERVATION"
   | "TEAM_NOSHOW"
@@ -452,120 +469,153 @@ async function writePlanWithPrisma(
   preview: LiveChangePreview,
   opts: { ip?: string | null; updateOpsIfPresent?: boolean }
 ): Promise<{ changeId: number; opsUpdated: boolean }> {
-  return db.$transaction(async (tx) => {
-    await tx.dailyPlacement.deleteMany({ where: { date: plan.dateObj } });
-    await tx.dailyReservation.deleteMany({ where: { date: plan.dateObj } });
+  // 계산은 이미 plan에 완료. tx 안에서는 날짜 단위 delete + createMany 몇 번만.
+  // 244건을 하나씩 create 하면 Prisma interactive tx(기본 5s)가 닫혀
+  // "Transaction not found / Transaction ID is invalid" 가 난다.
+  return db.$transaction(
+    async (tx) => {
+      await tx.dailyPlacement.deleteMany({ where: { date: plan.dateObj } });
+      await tx.dailyReservation.deleteMany({ where: { date: plan.dateObj } });
 
-    const created = new Map<string, number>();
-    for (const row of plan.reservations) {
-      const rec = await tx.dailyReservation.create({
-        data: {
-          date: plan.dateObj,
-          course: row.course,
-          shift: row.shift,
-          teeTime: row.teeTime,
-          teamName: row.teamName,
-          hole: row.hole,
-          source: row.source,
-          status: mapReservationStatus(row.status),
-          identityKey: row.identityKey,
-          rawRowIndex: row.rawRowIndex,
-          limousineCart: row.limousineCart,
-        },
-      });
-      created.set(row.identityKey, rec.id);
-    }
-
-    for (const row of plan.placements) {
-      const reservationId = created.get(row.identityKey);
-      if (!reservationId) continue;
-      await tx.dailyPlacement.create({
-        data: {
-          date: plan.dateObj,
-          reservationId,
-          caddyId: row.caddyId,
-          kind: row.kind,
-          reason: row.reason,
-          sequenceIndex: row.sequenceIndex,
-          pairId: row.pairId,
-          locked: row.locked,
-        },
-      });
-    }
-
-    for (const row of plan.unavailables) {
-      await tx.dailyCaddyUnavailable.upsert({
-        where: {
-          date_caddyId: { date: plan.dateObj, caddyId: row.caddyId },
-        },
-        create: {
-          date: plan.dateObj,
-          caddyId: row.caddyId,
-          reason: mapUnavailableReason(row.reason),
-          note: row.note,
-        },
-        update: {
-          reason: mapUnavailableReason(row.reason),
-          note: row.note,
-        },
-      });
-    }
-
-    const change = await tx.dailyAssignmentChange.create({
-      data: {
+      const reservationData = plan.reservations.map((row) => ({
         date: plan.dateObj,
-        changeType: mapChangeType(plan.changeType),
-        cause: plan.cause,
-        payload: plan.payload as Prisma.InputJsonValue,
-      },
-    });
+        course: row.course,
+        shift: row.shift,
+        teeTime: row.teeTime,
+        teamName: row.teamName,
+        hole: row.hole,
+        source: row.source,
+        status: mapReservationStatus(row.status),
+        identityKey: row.identityKey,
+        rawRowIndex: row.rawRowIndex,
+        limousineCart: row.limousineCart,
+      }));
+      const createdRows =
+        reservationData.length > 0
+          ? await tx.dailyReservation.createManyAndReturn({
+              data: reservationData,
+              select: { id: true, identityKey: true },
+            })
+          : [];
+      const created = new Map(
+        createdRows.map((row) => [row.identityKey, row.id])
+      );
 
-    await tx.audit.create({
-      data: {
-        action: "ASSIGNMENTS_LIVE_CHANGE",
-        entity: "DailyAssignmentChange",
-        entityId: change.id,
-        ip: opts.ip || null,
-        payload: {
-          date: plan.date,
-          changeType: plan.changeType,
-          cause: plan.cause,
-          changeId: change.id,
-        },
-      },
-    });
-
-    let opsUpdated = false;
-    if (opts.updateOpsIfPresent) {
-      const existing = await tx.shiftDuty.count({
-        where: { date: plan.dateObj },
-      });
-      if (existing > 0 && preview.after.assignments.length > 0) {
-        const body: ConfirmRequestBody = {
-          status: "CONFIRMED",
-          date: plan.date,
-          assignments: preview.after.assignments,
-          replace: true,
-        };
-        const opsPlan = buildConfirmPersistPlan(body);
-        await tx.shiftDuty.deleteMany({ where: { date: plan.dateObj } });
-        await tx.schedule.deleteMany({ where: { date: plan.dateObj } });
-        await tx.scheduleExtraTag.deleteMany({ where: { date: plan.dateObj } });
-        if (opsPlan.schedules.length > 0) {
-          await tx.schedule.createMany({ data: opsPlan.schedules });
-        }
-        if (opsPlan.shiftDuties.length > 0) {
-          await tx.shiftDuty.createMany({ data: opsPlan.shiftDuties });
-        }
-        if (opsPlan.extraTags.length > 0) {
-          await tx.scheduleExtraTag.createMany({ data: opsPlan.extraTags });
-        }
-        opsUpdated = true;
+      const placementData = plan.placements
+        .map((row) => {
+          const reservationId = created.get(row.identityKey);
+          if (!reservationId) return null;
+          return {
+            date: plan.dateObj,
+            reservationId,
+            caddyId: row.caddyId,
+            kind: row.kind,
+            reason: row.reason,
+            sequenceIndex: row.sequenceIndex,
+            pairId: row.pairId,
+            locked: row.locked,
+          };
+        })
+        .filter(
+          (row): row is NonNullable<typeof row> => row != null
+        );
+      if (placementData.length > 0) {
+        await tx.dailyPlacement.createMany({ data: placementData });
       }
-    }
 
-    return { changeId: change.id, opsUpdated };
-  });
+      if (plan.unavailables.length > 0) {
+        const unavailableIds = plan.unavailables.map((row) => row.caddyId);
+        await tx.dailyCaddyUnavailable.deleteMany({
+          where: { date: plan.dateObj, caddyId: { in: unavailableIds } },
+        });
+        await tx.dailyCaddyUnavailable.createMany({
+          data: plan.unavailables.map((row) => ({
+            date: plan.dateObj,
+            caddyId: row.caddyId,
+            reason: mapUnavailableReason(row.reason),
+            note: row.note,
+          })),
+        });
+      }
+
+      let changeId: number;
+      if (plan.changeType === "SET_LOCK") {
+        const audit = await tx.audit.create({
+          data: {
+            action: "ASSIGNMENTS_SET_LOCK",
+            entity: "DailyPlacement",
+            entityId: 0,
+            ip: opts.ip || null,
+            payload: {
+              date: plan.date,
+              changeType: plan.changeType,
+              cause: plan.cause,
+            },
+          },
+        });
+        changeId = audit.id;
+      } else {
+        const change = await tx.dailyAssignmentChange.create({
+          data: {
+            date: plan.dateObj,
+            changeType: mapChangeType(plan.changeType),
+            cause: plan.cause,
+            payload: plan.payload as Prisma.InputJsonValue,
+          },
+        });
+        changeId = change.id;
+        await tx.audit.create({
+          data: {
+            action: "ASSIGNMENTS_LIVE_CHANGE",
+            entity: "DailyAssignmentChange",
+            entityId: change.id,
+            ip: opts.ip || null,
+            payload: {
+              date: plan.date,
+              changeType: plan.changeType,
+              cause: plan.cause,
+              changeId: change.id,
+            },
+          },
+        });
+      }
+
+      let opsUpdated = false;
+      if (opts.updateOpsIfPresent) {
+        const existing = await tx.shiftDuty.count({
+          where: { date: plan.dateObj },
+        });
+        if (existing > 0 && preview.after.assignments.length > 0) {
+          const body: ConfirmRequestBody = {
+            status: "CONFIRMED",
+            date: plan.date,
+            assignments: preview.after.assignments,
+            replace: true,
+          };
+          const opsPlan = buildConfirmPersistPlan(body);
+          await tx.shiftDuty.deleteMany({ where: { date: plan.dateObj } });
+          await tx.schedule.deleteMany({ where: { date: plan.dateObj } });
+          await tx.scheduleExtraTag.deleteMany({ where: { date: plan.dateObj } });
+          if (opsPlan.schedules.length > 0) {
+            await tx.schedule.createMany({ data: opsPlan.schedules });
+          }
+          if (opsPlan.shiftDuties.length > 0) {
+            await tx.shiftDuty.createMany({ data: opsPlan.shiftDuties });
+          }
+          if (opsPlan.extraTags.length > 0) {
+            await tx.scheduleExtraTag.createMany({ data: opsPlan.extraTags });
+          }
+          opsUpdated = true;
+        }
+      }
+
+      return { changeId, opsUpdated };
+    },
+    {
+      maxWait: 10_000,
+      timeout: 20_000,
+    }
+  );
 }
 
 export async function applyLiveAssignmentChange(
@@ -640,12 +690,12 @@ export async function applyLiveAssignmentChange(
       preview,
     };
   } catch (e: unknown) {
-    const message = e instanceof Error ? e.message : "live change apply 실패";
+    console.error("[applyLiveAssignmentChange]", e);
     return {
       ok: false,
       httpStatus: 500,
       code: "APPLY_FAILED",
-      message,
+      message: LIVE_CHANGE_APPLY_USER_MESSAGE,
     };
   }
 }

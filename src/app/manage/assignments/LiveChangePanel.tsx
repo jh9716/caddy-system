@@ -20,11 +20,11 @@ import {
 import {
   isPlacementLocked,
   reservationIdentity,
-  unusedCaddies,
   type AssignmentDraft,
 } from "@/lib/assignmentDraft";
 import {
   isDrivingPlacement,
+  drivingCandidateCaddies,
   reservationKey,
   type AutoAssignCaddy,
   type AutoAssignResultV1,
@@ -38,6 +38,7 @@ type Props = {
   applying?: boolean;
   preset?: LiveChangeInput | null;
   onPresetConsumed?: () => void;
+  unavailableCaddyIds?: number[];
 };
 
 export function LiveChangePanel({
@@ -47,6 +48,7 @@ export function LiveChangePanel({
   applying,
   preset,
   onPresetConsumed,
+  unavailableCaddyIds,
 }: Props) {
   const [changeType, setChangeType] = useState<LiveChangeType>("CANCEL_RESERVATION");
   const [reservationKeyValue, setReservationKeyValue] = useState("");
@@ -54,6 +56,7 @@ export function LiveChangePanel({
   const [swapA, setSwapA] = useState("");
   const [swapB, setSwapB] = useState("");
   const [limousineOn, setLimousineOn] = useState(true);
+  const [lockOn, setLockOn] = useState(true);
   const [addCourse, setAddCourse] = useState<CourseCode>("VERTHILL");
   const [addShift, setAddShift] = useState<ShiftPart>("1부");
   const [addTeeTime, setAddTeeTime] = useState("07:00");
@@ -83,7 +86,15 @@ export function LiveChangePanel({
     () => assignedOptions.filter((o) => String(o.row.reservation.shift) === "3부"),
     [assignedOptions]
   );
-  const freeCaddies = useMemo(() => unusedCaddies(draft), [draft]);
+  const drivingCandidates = useMemo(
+    () =>
+      drivingCandidateCaddies({
+        pool: draft.caddyPool,
+        assignedCaddyIds: draft.assignments.map((a) => a.caddy.id),
+        unavailableCaddyIds,
+      }),
+    [draft, unavailableCaddyIds]
+  );
 
   useEffect(() => {
     if (!preset) return;
@@ -93,6 +104,7 @@ export function LiveChangePanel({
     setSwapA(preset.reservationKeyA || "");
     setSwapB(preset.reservationKeyB || "");
     setLimousineOn(preset.limousineCart !== false);
+    setLockOn(preset.locked !== false);
     setError(null);
     const eventsReady =
       (preset.type === "CANCEL_RESERVATION" && !!preset.reservationKey) ||
@@ -106,7 +118,8 @@ export function LiveChangePanel({
       (preset.type === "ASSIGN_DRIVING" &&
         !!preset.reservationKey &&
         !!preset.caddyId) ||
-      (preset.type === "CLEAR_DRIVING" && !!preset.reservationKey);
+      (preset.type === "CLEAR_DRIVING" && !!preset.reservationKey) ||
+      (preset.type === "SET_LOCK" && !!preset.reservationKey);
     if (eventsReady) {
       const next = previewLiveAssignmentChange({
         previous,
@@ -170,6 +183,14 @@ export function LiveChangePanel({
     if (changeType === "CLEAR_DRIVING") {
       if (!reservationKeyValue) return null;
       return { type: "CLEAR_DRIVING", reservationKey: reservationKeyValue };
+    }
+    if (changeType === "SET_LOCK") {
+      if (!reservationKeyValue) return null;
+      return {
+        type: "SET_LOCK",
+        reservationKey: reservationKeyValue,
+        locked: lockOn,
+      };
     }
     return null;
   }
@@ -390,9 +411,14 @@ export function LiveChangePanel({
                 onChange={(e) =>
                   setCaddyId(e.target.value ? Number(e.target.value) : "")
                 }
+                disabled={drivingCandidates.length === 0}
               >
-                <option value="">가용 캐디 선택</option>
-                {freeCaddies.map((c) => (
+                <option value="">
+                  {drivingCandidates.length === 0
+                    ? "등록된 드라이빙 캐디가 없습니다"
+                    : "드라이빙 캐디 선택"}
+                </option>
+                {drivingCandidates.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name} (#{c.id}/{c.team})
                   </option>
@@ -419,6 +445,36 @@ export function LiveChangePanel({
                 ))}
             </select>
           </label>
+        )}
+
+        {changeType === "SET_LOCK" && (
+          <>
+            <label>
+              대상 예약
+              <select
+                value={reservationKeyValue}
+                onChange={(e) => setReservationKeyValue(e.target.value)}
+              >
+                <option value="">선택</option>
+                {assignedOptions.map((o) => (
+                  <option key={o.key} value={o.key}>
+                    {o.label}
+                    {isPlacementLocked(o.row) ? " · LOCK" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              LOCK
+              <select
+                value={lockOn ? "on" : "off"}
+                onChange={(e) => setLockOn(e.target.value === "on")}
+              >
+                <option value="on">ON</option>
+                <option value="off">OFF</option>
+              </select>
+            </label>
+          </>
         )}
       </div>
 
@@ -523,26 +579,17 @@ export function LockToggle({
   onToggle: (locked: boolean) => void;
 }) {
   const locked = isPlacementLocked(row);
-  const special = row.kind !== "regular";
-  if (!special && !locked && row.kind === "regular") {
-    return (
-      <button
-        type="button"
-        className="btn tiny ghost"
-        onClick={() => onToggle(true)}
-        title="이 배치를 LOCK ON"
-      >
-        LOCK OFF
-      </button>
-    );
-  }
   return (
     <button
       type="button"
-      className={`btn tiny ${locked ? "apply" : "ghost"}`}
-      onClick={() => onToggle(!locked)}
+      className={`btn tiny lock-chip ${locked ? "apply" : "ghost"}`}
+      onClick={(e) => {
+        e.stopPropagation();
+        onToggle(!locked);
+      }}
+      title={locked ? "LOCK ON — 탭하면 OFF 미리보기" : "일반 — 탭하면 LOCK ON 미리보기"}
     >
-      {locked ? "LOCK ON" : "LOCK OFF"}
+      {locked ? "🔒 LOCK" : "🔓 일반"}
     </button>
   );
 }
@@ -550,13 +597,13 @@ export function LockToggle({
 export function RowLiveActions({
   row,
   swapSelected,
-  freeCaddies,
+  drivingCandidates,
   onRequestChange,
   onSwapClick,
 }: {
   row: AutoAssignmentRow;
   swapSelected: boolean;
-  freeCaddies: AutoAssignCaddy[];
+  drivingCandidates: AutoAssignCaddy[];
   onRequestChange: (change: LiveChangeInput) => void;
   onSwapClick: () => void;
 }) {
@@ -564,6 +611,7 @@ export function RowLiveActions({
   const limo = row.reservation.limousineCart === true;
   const driving = isDrivingPlacement(row);
   const shift3 = String(row.reservation.shift) === "3부";
+  const locked = isPlacementLocked(row);
   return (
     <div className="live-row-actions">
       <button
@@ -582,26 +630,30 @@ export function RowLiveActions({
       {shift3 && !driving && (
         <label className="inline">
           드라이빙
-          <select
-            defaultValue=""
-            onChange={(e) => {
-              const id = Number(e.target.value);
-              if (!id) return;
-              onRequestChange({
-                type: "ASSIGN_DRIVING",
-                reservationKey: key,
-                caddyId: id,
-              });
-              e.target.value = "";
-            }}
-          >
-            <option value="">캐디 선택</option>
-            {freeCaddies.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
+          {drivingCandidates.length === 0 ? (
+            <span className="muted">등록된 드라이빙 캐디가 없습니다</span>
+          ) : (
+            <select
+              defaultValue=""
+              onChange={(e) => {
+                const id = Number(e.target.value);
+                if (!id) return;
+                onRequestChange({
+                  type: "ASSIGN_DRIVING",
+                  reservationKey: key,
+                  caddyId: id,
+                });
+                e.target.value = "";
+              }}
+            >
+              <option value="">캐디 선택</option>
+              {drivingCandidates.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          )}
         </label>
       )}
       {driving && (
@@ -616,8 +668,18 @@ export function RowLiveActions({
         </button>
       )}
       <button type="button" className="btn tiny" onClick={onSwapClick}>
-        {swapSelected ? "선택됨" : "순번 바꿈"}
+        {swapSelected ? "상대 캐디를 탭하세요" : "순번 바꿈"}
       </button>
+      <LockToggle
+        row={row}
+        onToggle={(next) =>
+          onRequestChange({
+            type: "SET_LOCK",
+            reservationKey: key,
+            locked: next,
+          })
+        }
+      />
       <button
         type="button"
         className="btn tiny ghost"
@@ -629,6 +691,18 @@ export function RowLiveActions({
         }
       >
         예약 취소
+      </button>
+      <button
+        type="button"
+        className="btn tiny ghost"
+        onClick={() =>
+          onRequestChange({
+            type: "TEAM_NOSHOW",
+            reservationKey: key,
+          })
+        }
+      >
+        팀 노쇼
       </button>
       <button
         type="button"
@@ -652,8 +726,179 @@ export function RowLiveActions({
           })
         }
       >
-        노쇼
+        출근 노쇼
       </button>
+    </div>
+  );
+}
+
+export function BoardQuickSheet({
+  mode,
+  row,
+  drivingCandidates,
+  swapSelected,
+  onClose,
+  onRequestChange,
+  onSwapClick,
+}: {
+  mode: "team" | "caddy";
+  row: AutoAssignmentRow;
+  drivingCandidates: AutoAssignCaddy[];
+  swapSelected: boolean;
+  onClose: () => void;
+  onRequestChange: (change: LiveChangeInput) => void;
+  onSwapClick: () => void;
+}) {
+  const key = reservationIdentity(row.reservation);
+  const limo = row.reservation.limousineCart === true;
+  const driving = isDrivingPlacement(row);
+  const shift3 = String(row.reservation.shift) === "3부";
+  const locked = isPlacementLocked(row);
+  function fire(change: LiveChangeInput) {
+    onRequestChange(change);
+    onClose();
+  }
+  return (
+    <div className="qa-overlay" role="presentation" onClick={onClose}>
+      <div
+        className="qa-sheet"
+        role="dialog"
+        aria-label={mode === "team" ? "예약팀 변경" : "캐디 변경"}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="qa-sheet-head">
+          <strong>
+            {mode === "team"
+              ? `${row.reservation.teeTime} ${row.reservation.teamName || "팀"}`
+              : row.caddy.name}
+          </strong>
+          <button type="button" className="btn tiny ghost" onClick={onClose}>
+            닫기
+          </button>
+        </div>
+        {mode === "team" ? (
+          <div className="qa-actions">
+            <button
+              type="button"
+              className="btn"
+              onClick={() =>
+                fire({ type: "CANCEL_RESERVATION", reservationKey: key })
+              }
+            >
+              예약 취소
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => fire({ type: "TEAM_NOSHOW", reservationKey: key })}
+            >
+              팀 노쇼
+            </button>
+            <button
+              type="button"
+              className={`btn ${limo ? "apply" : ""}`}
+              onClick={() =>
+                fire({
+                  type: "SET_LIMOUSINE",
+                  reservationKey: key,
+                  limousineCart: !limo,
+                })
+              }
+            >
+              리무진카트 {limo ? "OFF" : "ON"}
+            </button>
+            {shift3 && !driving && (
+              drivingCandidates.length === 0 ? (
+                <div className="qa-empty">등록된 드라이빙 캐디가 없습니다</div>
+              ) : (
+                <label className="inline">
+                  드라이빙 캐디 지정
+                  <select
+                    defaultValue=""
+                    onChange={(e) => {
+                      const id = Number(e.target.value);
+                      if (!id) return;
+                      fire({
+                        type: "ASSIGN_DRIVING",
+                        reservationKey: key,
+                        caddyId: id,
+                      });
+                    }}
+                  >
+                    <option value="">선택</option>
+                    {drivingCandidates.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )
+            )}
+            {driving && (
+              <button
+                type="button"
+                className="btn ghost"
+                onClick={() =>
+                  fire({ type: "CLEAR_DRIVING", reservationKey: key })
+                }
+              >
+                드라이빙 해제
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn"
+              onClick={() =>
+                fire({ type: "SET_LOCK", reservationKey: key, locked: !locked })
+              }
+            >
+              {locked ? "🔒 LOCK → OFF" : "🔓 일반 → LOCK ON"}
+            </button>
+          </div>
+        ) : (
+          <div className="qa-actions">
+            <button
+              type="button"
+              className="btn"
+              onClick={() => fire({ type: "CADDY_SICK", caddyId: row.caddy.id })}
+            >
+              병가
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() =>
+                fire({
+                  type: "CADDY_ATTENDANCE_NOSHOW",
+                  caddyId: row.caddy.id,
+                })
+              }
+            >
+              출근 노쇼
+            </button>
+            <button
+              type="button"
+              className={`btn ${swapSelected ? "apply" : ""}`}
+              onClick={() => {
+                onSwapClick();
+                onClose();
+              }}
+            >
+              {swapSelected ? "상대 캐디를 탭하세요" : "순번 바꿈"}
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() =>
+                fire({ type: "SET_LOCK", reservationKey: key, locked: !locked })
+              }
+            >
+              {locked ? "🔒 LOCK → OFF" : "🔓 일반 → LOCK ON"}
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

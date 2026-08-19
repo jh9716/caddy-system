@@ -77,6 +77,7 @@ export const REASON = {
   LIMOUSINE_SET: "LIMOUSINE_SET",
   DRIVING_ASSIGN: "DRIVING_ASSIGN",
   DRIVING_CLEAR: "DRIVING_CLEAR",
+  LOCK_SET: "LOCK_SET",
   CLOSED_COURSE: "CLOSED_COURSE",
   WEEKEND_BAND_PRIORITY: "WEEKEND_BAND_PRIORITY",
 } as const;
@@ -124,6 +125,7 @@ export type AutoAssignCaddy = {
   teamOrder: number;
   caddyType?: string;
   extraFlags?: string[] | null;
+  employmentStatus?: string;
   /** 3부반 주중/주말. WEEKEND는 토·일·공휴일 3부 우선에만 사용 */
   thirdBandSubgroup?: string | null;
   /**
@@ -333,6 +335,11 @@ export type ReservationChangeEvent =
   | {
       type: "CLEAR_DRIVING";
       reservationKey: string;
+    }
+  | {
+      type: "SET_LOCK";
+      reservationKey: string;
+      locked: boolean;
     };
 
 export type ReflowChangeKind =
@@ -2594,6 +2601,35 @@ export function defaultPlacementLocked(
   return isWeekendBandRow(row);
 }
 
+export function isActiveEmploymentStatus(value: unknown): boolean {
+  const raw = String(value ?? "ACTIVE").trim().toUpperCase();
+  if (raw === "LEAVE" || raw === "RETIRED" || raw === "휴직" || raw === "퇴사") {
+    return false;
+  }
+  return true;
+}
+
+/** 드라이빙 지정 후보. 일반 HOUSE/THIRD로 대체하지 않음. */
+export function drivingCandidateCaddies(input: {
+  pool: AutoAssignCaddy[];
+  assignedCaddyIds?: Iterable<number>;
+  unavailableCaddyIds?: Iterable<number>;
+}): AutoAssignCaddy[] {
+  const assigned = new Set(
+    [...(input.assignedCaddyIds || [])].map((id) => Number(id))
+  );
+  const unavailable = new Set(
+    [...(input.unavailableCaddyIds || [])].map((id) => Number(id))
+  );
+  return input.pool.filter((c) => {
+    if (normalizeAssignCaddyType(c.caddyType) !== "DRIVING") return false;
+    if (!isActiveEmploymentStatus(c.employmentStatus)) return false;
+    if (assigned.has(c.id)) return false;
+    if (unavailable.has(c.id)) return false;
+    return c.id > 0 && !!c.name;
+  });
+}
+
 export function isPlacementLocked(row: AutoAssignmentRow): boolean {
   if (typeof row.locked === "boolean") return row.locked;
   return defaultPlacementLocked(row);
@@ -2963,6 +2999,48 @@ function applyLimousineOnly(
   };
 }
 
+function boardAfterMutation(
+  previous: AutoAssignResultV1,
+  assignments: AutoAssignmentRow[],
+  unassignedReservations: UnassignedReservationRow[],
+  extraUnused: AutoAssignCaddy[]
+): AutoAssignResultV1 {
+  const sorted = assignments.map(cloneAssignmentRow).sort(compareAssignmentOrder);
+  const buckets = bucketizeAssignments(sorted);
+  const used = new Set(sorted.map((a) => a.caddy.id));
+  const unusedCaddies = dedupeCaddies([
+    ...previous.unusedCaddies,
+    ...extraUnused,
+  ]).filter((c) => !used.has(c.id));
+  return {
+    ...previous,
+    ...buckets,
+    assignments: sorted,
+    unassignedReservations,
+    unusedCaddies,
+  };
+}
+
+function reflowUnlockedAfterMutation(
+  original: AutoAssignResultV1,
+  seeded: AutoAssignResultV1,
+  pool: AutoAssignCaddy[],
+  reason: string,
+  extraWarnings: ReflowWarning[]
+): RegularReflowResult {
+  const reflowed = reflowRegularAssignments({
+    previous: seeded,
+    regularCaddyPool: pool,
+    events: [],
+  });
+  return {
+    ...reflowed,
+    reason,
+    before: original,
+    warnings: [...extraWarnings, ...reflowed.warnings],
+  };
+}
+
 function applyDrivingAssign(
   previous: AutoAssignResultV1,
   event: Extract<ReservationChangeEvent, { type: "ASSIGN_DRIVING" }>,
@@ -3041,6 +3119,46 @@ function applyDrivingAssign(
       summary: emptyReflowSummary(0),
     };
   }
+  if (normalizeAssignCaddyType(caddy.caddyType) !== "DRIVING") {
+    warnings.push({
+      level: "error",
+      code: "DRIVING_TYPE_REQUIRED",
+      message: "드라이빙 캐디만 지정할 수 있습니다.",
+      caddyId: event.caddyId,
+    });
+    return {
+      date: previous.date,
+      reason: REASON.DRIVING_ASSIGN,
+      before: previous,
+      after: previous,
+      changes: [],
+      placementDiffs: [],
+      lockedPreserved: [],
+      warnings,
+      unavailableCaddyIds: [],
+      summary: emptyReflowSummary(0),
+    };
+  }
+  if (!isActiveEmploymentStatus(caddy.employmentStatus)) {
+    warnings.push({
+      level: "error",
+      code: "DRIVING_NOT_ACTIVE",
+      message: `${caddy.name}은(는) 재직 상태가 아닙니다.`,
+      caddyId: event.caddyId,
+    });
+    return {
+      date: previous.date,
+      reason: REASON.DRIVING_ASSIGN,
+      before: previous,
+      after: previous,
+      changes: [],
+      placementDiffs: [],
+      lockedPreserved: [],
+      warnings,
+      unavailableCaddyIds: [],
+      summary: emptyReflowSummary(0),
+    };
+  }
   const other = previous.assignments.find(
     (a) =>
       a.caddy.id === event.caddyId &&
@@ -3080,57 +3198,25 @@ function applyDrivingAssign(
     locked: true,
     note: sourceRow?.note ?? null,
   };
-  const assignments = previous.assignments.map(cloneAssignmentRow);
-  if (assignedIdx >= 0) assignments[assignedIdx] = drivingRow;
-  else assignments.push(drivingRow);
-  const sorted = assignments.sort(compareAssignmentOrder);
-  const buckets = bucketizeAssignments(sorted);
-  const used = new Set(sorted.map((a) => a.caddy.id));
-  const after: AutoAssignResultV1 = {
-    ...previous,
-    ...buckets,
-    assignments: sorted,
-    unassignedReservations: (previous.unassignedReservations || []).filter(
+  const remaining = previous.assignments
+    .filter((_, i) => i !== assignedIdx)
+    .map(cloneAssignmentRow);
+  remaining.push(drivingRow);
+  const seeded = boardAfterMutation(
+    previous,
+    remaining,
+    (previous.unassignedReservations || []).filter(
       (u) => reservationKey(u.reservation) !== event.reservationKey
     ),
-    unusedCaddies: [
-      ...previous.unusedCaddies.filter((c) => c.id !== caddy.id),
-      ...(sourceRow && sourceRow.caddy.id !== caddy.id && !used.has(sourceRow.caddy.id)
-        ? [{ ...sourceRow.caddy }]
-        : []),
-    ].filter((c) => !used.has(c.id)),
-  };
-  const lockedPreserved = sorted.filter(isPlacementLocked).map((row) => ({
-    reservationKey: reservationKey(row.reservation),
-    caddy: row.caddy,
-    kind: row.kind,
-    reason: row.reason,
-  }));
-  const lockedKeys = new Set(lockedPreserved.map((r) => r.reservationKey));
-  return {
-    date: previous.date,
-    reason: REASON.DRIVING_ASSIGN,
-    before: previous,
-    after,
-    changes: buildCaddyChanges(
-      assignedIdx >= 0 ? [previous.assignments[assignedIdx]] : [],
-      [drivingRow],
-      pool
-    ),
-    placementDiffs: buildPlacementDiffs(previous, after, lockedKeys),
-    lockedPreserved,
-    warnings,
-    unavailableCaddyIds: [],
-    summary: summarizeChanges(
-      buildCaddyChanges(
-        assignedIdx >= 0 ? [previous.assignments[assignedIdx]] : [],
-        [drivingRow],
-        pool
-      ),
-      lockedPreserved.length,
-      lockedPreserved.length
-    ),
-  };
+    sourceRow && sourceRow.caddy.id !== caddy.id ? [sourceRow.caddy] : []
+  );
+  return reflowUnlockedAfterMutation(
+    previous,
+    seeded,
+    pool,
+    REASON.DRIVING_ASSIGN,
+    warnings
+  );
 }
 
 function applyDrivingClear(
@@ -3163,43 +3249,81 @@ function applyDrivingClear(
     };
   }
   const removed = previous.assignments[idx];
-  const assignments = previous.assignments
-    .filter((_, i) => i !== idx)
-    .map(cloneAssignmentRow)
-    .sort(compareAssignmentOrder);
-  const buckets = bucketizeAssignments(assignments);
-  const used = new Set(assignments.map((a) => a.caddy.id));
-  const after: AutoAssignResultV1 = {
-    ...previous,
-    ...buckets,
-    assignments,
-    unassignedReservations: [
+  const remaining = previous.assignments.filter((_, i) => i !== idx);
+  const seeded = boardAfterMutation(
+    previous,
+    remaining,
+    [
       ...(previous.unassignedReservations || []),
       { reservation: { ...removed.reservation }, reason: REASON.DRIVING_CLEAR },
     ],
-    unusedCaddies: used.has(removed.caddy.id)
-      ? previous.unusedCaddies
-      : [...previous.unusedCaddies, { ...removed.caddy }],
+    [{ ...removed.caddy }]
+  );
+  return reflowUnlockedAfterMutation(
+    previous,
+    seeded,
+    pool,
+    REASON.DRIVING_CLEAR,
+    warnings
+  );
+}
+
+function applyLockOnly(
+  previous: AutoAssignResultV1,
+  event: Extract<ReservationChangeEvent, { type: "SET_LOCK" }>,
+  pool: AutoAssignCaddy[]
+): RegularReflowResult {
+  const warnings: ReflowWarning[] = [];
+  const idx = previous.assignments.findIndex(
+    (a) => reservationKey(a.reservation) === event.reservationKey
+  );
+  if (idx < 0) {
+    warnings.push({
+      level: "error",
+      code: "LOCK_TARGET_NOT_FOUND",
+      message: "LOCK 대상 예약을 찾을 수 없습니다.",
+      reservationKey: event.reservationKey,
+    });
+    return {
+      date: previous.date,
+      reason: REASON.LOCK_SET,
+      before: previous,
+      after: previous,
+      changes: [],
+      placementDiffs: [],
+      lockedPreserved: [],
+      warnings,
+      unavailableCaddyIds: [],
+      summary: emptyReflowSummary(0),
+    };
+  }
+  const afterAssignments = previous.assignments.map((row, i) =>
+    i === idx ? { ...cloneAssignmentRow(row), locked: event.locked } : cloneAssignmentRow(row)
+  );
+  const buckets = bucketizeAssignments(afterAssignments);
+  const after: AutoAssignResultV1 = {
+    ...previous,
+    ...buckets,
+    assignments: afterAssignments,
   };
-  const lockedPreserved = assignments.filter(isPlacementLocked).map((row) => ({
+  const lockedPreserved = afterAssignments.filter(isPlacementLocked).map((row) => ({
     reservationKey: reservationKey(row.reservation),
     caddy: row.caddy,
     kind: row.kind,
     reason: row.reason,
   }));
   const lockedKeys = new Set(lockedPreserved.map((r) => r.reservationKey));
-  const changes = buildCaddyChanges([removed], [], pool);
   return {
     date: previous.date,
-    reason: REASON.DRIVING_CLEAR,
+    reason: REASON.LOCK_SET,
     before: previous,
     after,
-    changes,
+    changes: [],
     placementDiffs: buildPlacementDiffs(previous, after, lockedKeys),
     lockedPreserved,
     warnings,
     unavailableCaddyIds: [],
-    summary: summarizeChanges(changes, lockedPreserved.length, lockedPreserved.length),
+    summary: summarizeChanges([], lockedPreserved.length, lockedPreserved.length),
   };
 }
 
@@ -3334,6 +3458,10 @@ export function reflowRegularAssignments(input: {
     (e): e is Extract<ReservationChangeEvent, { type: "CLEAR_DRIVING" }> =>
       e.type === "CLEAR_DRIVING"
   );
+  const lockEvents = events.filter(
+    (e): e is Extract<ReservationChangeEvent, { type: "SET_LOCK" }> =>
+      e.type === "SET_LOCK"
+  );
   if (swapEvents.length > 0 && events.every((e) => e.type === "SWAP_CADDY")) {
     return applySwapOnly(previous, swapEvents[0], fullPool);
   }
@@ -3351,6 +3479,9 @@ export function reflowRegularAssignments(input: {
     events.every((e) => e.type === "CLEAR_DRIVING")
   ) {
     return applyDrivingClear(previous, drivingClearEvents[0], fullPool);
+  }
+  if (lockEvents.length > 0 && events.every((e) => e.type === "SET_LOCK")) {
+    return applyLockOnly(previous, lockEvents[0], fullPool);
   }
   if (swapEvents.length > 0) {
     warnings.push({
