@@ -143,6 +143,47 @@ section("당번마샬조장 Excel — 4행 실제 날짜");
   );
 }
 
+section("당번마샬조장 Excel — 4행 M/D (요일) 문자열");
+{
+  const buf = buildDutyMarshalLeaderTestBuffer(
+    ["6/10 (Wed)", "6/11 (Thu)", "6/12 (Fri)"],
+    [
+      { key: "당번_조출_1", values: ["수당번", "목당번", "금당번"] },
+      { key: "당번_조출_2", values: ["수당2", "", "금당2"] },
+      { key: "당번_후출_1", values: ["", "", ""] },
+      { key: "당번_후출_2", values: ["", "", ""] },
+      { key: "마샬_조출_1", values: ["", "", ""] },
+      { key: "마샬_조출_2", values: ["", "", ""] },
+      { key: "마샬_후출_1", values: ["", "", ""] },
+      { key: "조장_1", values: ["수조장", "목조장", "금조장"] },
+    ]
+  );
+  const wed = parseDutyMarshalLeaderWorkbook(buf, "2026-06-10");
+  assert(wed.dateColumn === 1, "selectedDate 2026-06-10 → 6/10 (Wed) 열");
+  assert(wed.entries[0]?.rawName === "수당번", "6/10 (Wed) 열 인원");
+  const fri = parseDutyMarshalLeaderWorkbook(buf, "2026-06-12");
+  assert(fri.dateColumn === 3, "selectedDate 2026-06-12 → 6/12 (Fri) 열");
+  assert(fri.entries[0]?.rawName === "금당번", "6/12 (Fri) 열 인원");
+  assert(
+    fri.entries.map((e) => e.rawName).join(",") === "금당번,금당2,금조장",
+    "선택일 열만 사용 (월요일 시작 가정 없음)"
+  );
+
+  const serialJun10 = 46183; // Excel serial 2026-06-10
+  const mixed = buildDutyMarshalLeaderTestBuffer(
+    [new Date(2026, 5, 10), serialJun10, "2026-06-10", "2026.06.12", "6/12"],
+    [{ key: "당번_조출_1", values: ["D", "S", "Y", "DOT", "MD"] }]
+  );
+  assert(
+    parseDutyMarshalLeaderWorkbook(mixed, "2026-06-10").dateColumn === 1,
+    "Date 객체 열"
+  );
+  assert(
+    parseDutyMarshalLeaderWorkbook(mixed, "2026-06-12").dateColumn === 4,
+    "YYYY.MM.DD 열 (M/D는 selectedDate year)"
+  );
+}
+
 section("이름 매칭 안전규칙");
 {
   const caddies = [

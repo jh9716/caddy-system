@@ -92,9 +92,14 @@ function ymdFromHeader(value: unknown, selectedYmd: string): string | null {
   if (parsed) return parsed;
   const text = String(value ?? "").replace(/\u00a0/g, " ").trim();
   if (!text) return null;
-  const m = text.match(/(\d{4})[.\-\/](\d{1,2})[.\-\/](\d{1,2})/);
-  if (m) return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
-  const md = text.match(/^(\d{1,2})[.\-\/](\d{1,2})$/);
+  const ymd = text.match(
+    /(\d{4})[.\-\/](\d{1,2})[.\-\/](\d{1,2})(?:\s*\([^)]+\))?/,
+  );
+  if (ymd) {
+    return `${ymd[1]}-${ymd[2].padStart(2, "0")}-${ymd[3].padStart(2, "0")}`;
+  }
+  // M/D, M/D (Wed), 6/10(Thu) — year comes from selectedDate, not Monday-start.
+  const md = text.match(/^(\d{1,2})[.\-\/](\d{1,2})(?:\s*\([^)]+\))?\s*$/);
   if (md) {
     const year = selectedYmd.slice(0, 4);
     return `${year}-${md[1].padStart(2, "0")}-${md[2].padStart(2, "0")}`;
