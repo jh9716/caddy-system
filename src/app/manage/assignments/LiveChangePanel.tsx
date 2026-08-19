@@ -726,7 +726,7 @@ export function RowLiveActions({
           })
         }
       >
-        출근 노쇼
+        캐디 결근
       </button>
     </div>
   );
@@ -875,7 +875,7 @@ export function BoardQuickSheet({
                 })
               }
             >
-              출근 노쇼
+              캐디 결근
             </button>
             <button
               type="button"
