@@ -29,6 +29,7 @@ import {
   type AutoAssignmentRow,
 } from "@/lib/autoAssignEngine";
 import type { AvailabilityResult } from "@/lib/availabilityEngine";
+import type { DailyAvailabilitySummary } from "@/lib/dailyAvailabilityOverlay";
 import {
   COURSE_CODES,
   COURSE_LABELS,
@@ -89,9 +90,10 @@ function defaultCourseOpen(): CourseOpenState {
 export default function ManageAssignmentsOpsPage() {
   const [date, setDate] = useState("");
   const [file, setFile] = useState<File | null>(null);
-  const [availability, setAvailability] = useState<AvailabilityResult | null>(
-    null
-  );
+  const [dutyFile, setDutyFile] = useState<File | null>(null);
+  const [availability, setAvailability] = useState<
+    (AvailabilityResult & { dailySummary?: DailyAvailabilitySummary }) | null
+  >(null);
   const [autoResult, setAutoResult] = useState<RunResponse | null>(null);
   const [draft, setDraft] = useState<AssignmentDraft | null>(null);
   const [warnings, setWarnings] = useState<DraftWarning[]>([]);
@@ -172,7 +174,12 @@ export default function ManageAssignmentsOpsPage() {
     setLoadingAvail(true);
     setError(null);
     try {
-      const res = await fetch(`/api/availability?date=${encodeURIComponent(date)}`, {
+      const form = new FormData();
+      form.append("date", date);
+      if (dutyFile) form.append("dutyFile", dutyFile);
+      const res = await fetch("/api/availability", {
+        method: "POST",
+        body: form,
         credentials: "include",
       });
       const data = await res.json();
@@ -180,9 +187,9 @@ export default function ManageAssignmentsOpsPage() {
         setError(data.error || "가용 불러오기 실패");
         return;
       }
-      setAvailability(data as AvailabilityResult);
+      setAvailability(data as AvailabilityResult & { dailySummary?: DailyAvailabilitySummary });
       setHouseStartCaddyId("");
-      showToast(`가용 ${data.counts?.available ?? 0}명 로드`);
+      showToast(`최종 가용 ${data.counts?.available ?? 0}명 로드`);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "가용 요청 실패");
     } finally {
@@ -212,24 +219,31 @@ export default function ManageAssignmentsOpsPage() {
     try {
       let caddyPool = pool;
       if (!availability) {
-        const availRes = await fetch(
-          `/api/availability?date=${encodeURIComponent(date)}`,
-          { credentials: "include" }
-        );
+        const availForm = new FormData();
+        availForm.append("date", date);
+        if (dutyFile) availForm.append("dutyFile", dutyFile);
+        const availRes = await fetch("/api/availability", {
+          method: "POST",
+          body: availForm,
+          credentials: "include",
+        });
         const availData = await availRes.json();
-        if (availRes.ok) {
-          setAvailability(availData as AvailabilityResult);
-          caddyPool = [
-            ...(availData.available?.all || []),
-            ...(availData.special || []),
-            ...(availData.excluded || []),
-          ];
+        if (!availRes.ok) {
+          setError(availData.error || "가용 불러오기 실패");
+          return;
         }
+        setAvailability(availData as AvailabilityResult & { dailySummary?: DailyAvailabilitySummary });
+        caddyPool = [
+          ...(availData.available?.all || []),
+          ...(availData.special || []),
+          ...(availData.excluded || []),
+        ];
       }
 
       const form = new FormData();
       form.append("date", date);
       form.append("file", file);
+      if (dutyFile) form.append("dutyFile", dutyFile);
       form.append("openCourses", JSON.stringify(openCourseList));
       form.append("houseStartCaddyId", String(houseStartCaddyId));
       const res = await fetch("/api/assignments/preview", {
@@ -487,6 +501,14 @@ export default function ManageAssignmentsOpsPage() {
             onChange={(e) => setFile(e.target.files?.[0] || null)}
           />
         </label>
+        <label className="ops-field">
+          <span>당번·마샬·조장 Excel (xlsx/xlsm)</span>
+          <input
+            type="file"
+            accept=".xlsx,.xlsm"
+            onChange={(e) => setDutyFile(e.target.files?.[0] || null)}
+          />
+        </label>
         <div className="ops-courses" aria-label="코스 Open/Close">
           <div className="ops-courses-label">
             코스 운영 (기본 전부 ON · OFF 코스는 배치 제외)
@@ -581,6 +603,41 @@ export default function ManageAssignmentsOpsPage() {
           <div className="ops-meta">
             가용 {availability.counts.available} · special{" "}
             {availability.counts.special} · 제외 {availability.counts.excluded}
+          </div>
+        )}
+        {availability?.dailySummary && (
+          <div className="ops-daily" aria-label="당일 가용 요약">
+            <div className="ops-daily-title">당일 가용 요약</div>
+            <ul className="ops-daily-list">
+              <li>재직/기본 가용 {availability.dailySummary.baseAvailable}</li>
+              <li>휴무 {availability.dailySummary.off}</li>
+              <li>
+                조출당번 {availability.dailySummary.dutyAm} / 후출당번{" "}
+                {availability.dailySummary.dutyPm}
+              </li>
+              <li>
+                조출마샬 {availability.dailySummary.marshalAm} / 후출마샬{" "}
+                {availability.dailySummary.marshalPm}
+              </li>
+              <li>조장 {availability.dailySummary.leader}</li>
+              <li>중복 제외 {availability.dailySummary.duplicateExcluded}</li>
+              <li>확인 필요 {availability.dailySummary.reviewCount}</li>
+              <li className="final">
+                최종 가용 {availability.dailySummary.finalAvailable}
+              </li>
+            </ul>
+            {availability.dailySummary.reviews.length > 0 && (
+              <div className="ops-daily-reviews">
+                <div className="ops-daily-title">확인 필요</div>
+                <ul>
+                  {availability.dailySummary.reviews.map((r, i) => (
+                    <li key={`${r.name}-${i}`}>
+                      <strong>{r.name}</strong> — {r.reason}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         )}
         {autoResult && (
@@ -1321,6 +1378,23 @@ const opsCss = `
   .btn.ghost { background: #f8fafc; }
   .btn.tiny { min-height: 34px; padding: 0 10px; font-size: 0.8rem; }
   .ops-meta { font-size: 0.8rem; color: #475569; }
+  .ops-daily {
+    border: 1px solid #e7e5e4;
+    background: #fafaf9;
+    border-radius: 10px;
+    padding: 10px 12px;
+    display: grid;
+    gap: 8px;
+  }
+  .ops-daily-title { font-size: 0.78rem; font-weight: 800; color: #1c1917; }
+  .ops-daily-list {
+    margin: 0; padding: 0; list-style: none;
+    display: grid; gap: 3px; font-size: 0.8rem; color: #334155;
+  }
+  .ops-daily-list .final { font-weight: 800; color: #14532d; }
+  .ops-daily-reviews ul {
+    margin: 0; padding-left: 18px; font-size: 0.78rem; color: #9a3412;
+  }
   .ops-error { color: #b91c1c; font-size: 0.85rem; }
   .ops-warnings { display: grid; gap: 6px; }
   .warn {
