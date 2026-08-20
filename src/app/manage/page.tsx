@@ -1,20 +1,14 @@
-import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { prisma } from "@/lib/prisma";
 import dayjs from "dayjs";
 import { PRIMARY_TEAMS, normalizeEmploymentStatus } from "@/lib/caddyManage";
-import { resolveAuthFromCookieStore } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 const GLANCE_TEAMS = PRIMARY_TEAMS;
 
 export default async function ManagePage() {
-  const auth = await resolveAuthFromCookieStore(await cookies());
-  if (!auth || auth.role !== "admin") redirect("/login");
-
   const today = dayjs().startOf("day").toDate();
   const tomorrow = dayjs(today).add(1, "day").toDate();
 
@@ -214,7 +208,7 @@ export default async function ManagePage() {
           )}
           {latestNotices.map((n) => (
             <li key={n.id}>
-              <a href={`/notice/${n.id}`}>{n.title}</a>
+              <Link href={`/notice/${n.id}`}>{n.title}</Link>
               <time>{dayjs(n.createdAt).format("MM-DD HH:mm")}</time>
             </li>
           ))}

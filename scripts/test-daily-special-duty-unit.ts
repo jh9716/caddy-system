@@ -10,6 +10,9 @@ import {
   detectCrossKindConflicts,
   hasDuplicateKind,
   isSpecialDutyPayloadForSelectedDate,
+  appendSpecialDutyPick,
+  mergePastedSpecialDutyPicks,
+  specialDutyRegisterRequestCount,
   moveItemIndex,
   nextSortOrder,
   renumberSortOrders,
@@ -176,6 +179,40 @@ section("날짜별 데이터 분리");
     !isSpecialDutyPayloadForSelectedDate({ date: "2026-08-19" }, ""),
     "날짜 비면 stale payload 무시"
   );
+}
+
+section("특수근무 선택은 서버 없이 목록에 쌓이고 등록은 1회");
+{
+  let selected = appendSpecialDutyPick([], {
+    caddyId: 1,
+    name: "김A",
+    team: "1조",
+    teamOrder: 1,
+  }).selected;
+  selected = appendSpecialDutyPick(selected, {
+    caddyId: 2,
+    name: "김B",
+    team: "1조",
+    teamOrder: 2,
+  }).selected;
+  const dup = appendSpecialDutyPick(selected, { caddyId: 1, name: "김A" });
+  assert(dup.duplicate === true, "중복 선택은 추가하지 않음");
+  assert(selected.map((r) => r.name).join(",") === "김A,김B", "선택 2명");
+  const pasted = mergePastedSpecialDutyPicks({
+    selected,
+    namesText: "김C\n없는사람\n김A",
+    caddies: [
+      { id: 1, name: "김A", employmentStatus: "ACTIVE", team: "1조", teamOrder: 1 },
+      { id: 2, name: "김B", employmentStatus: "ACTIVE", team: "1조", teamOrder: 2 },
+      { id: 3, name: "김C", employmentStatus: "ACTIVE", team: "2조", teamOrder: 1 },
+    ],
+  });
+  assert(pasted.selected.map((r) => r.name).join(",") === "김A,김B,김C", "붙여넣기 순서 유지");
+  assert(pasted.unmatched.includes("없는사람"), "불일치 경고");
+  assert(pasted.duplicates.includes("김A"), "중복 경고");
+  const counts = specialDutyRegisterRequestCount(pasted.selected.length);
+  assert(counts.perPerson === 3, "before: 3회");
+  assert(counts.batch === 1, "after: 1회 batch");
 }
 
 section("붙여넣기 이름 분리");

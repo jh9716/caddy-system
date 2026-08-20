@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import LogoutButton from "@/components/LogoutButton";
 
@@ -96,6 +96,7 @@ const BOTTOM = [
 
 export default function ManageShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() || "/manage";
+  const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
@@ -104,8 +105,12 @@ export default function ManageShell({ children }: { children: React.ReactNode })
 
   useEffect(() => {
     document.body.classList.add("manage-mode");
+    router.prefetch("/manage");
+    router.prefetch("/manage/caddies");
+    router.prefetch("/manage/assignments");
+    router.prefetch("/manage/availability");
     return () => document.body.classList.remove("manage-mode");
-  }, []);
+  }, [router]);
 
   return (
     <div className="vh-manage">
@@ -124,6 +129,7 @@ export default function ManageShell({ children }: { children: React.ReactNode })
               <Link
                 key={item.href}
                 href={item.href}
+                prefetch
                 className={`vh-sidebar-link${active ? " is-active" : ""}`}
               >
                 {item.label}
@@ -182,6 +188,7 @@ export default function ManageShell({ children }: { children: React.ReactNode })
               <Link
                 key={item.href}
                 href={item.href}
+                prefetch
                 className={`vh-tab${active ? " is-active" : ""}`}
               >
                 <span className="vh-tab-icon">

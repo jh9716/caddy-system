@@ -142,6 +142,70 @@ export function hasDuplicateKind(
   return existing.some((row) => row.kind === kind && row.caddyId === caddyId);
 }
 
+export type SpecialDutyPick = {
+  caddyId: number;
+  name: string;
+  team?: string;
+  teamOrder?: number;
+};
+
+export function appendSpecialDutyPick(
+  selected: readonly SpecialDutyPick[],
+  pick: SpecialDutyPick
+): { selected: SpecialDutyPick[]; duplicate: boolean } {
+  if (selected.some((row) => row.caddyId === pick.caddyId)) {
+    return { selected: [...selected], duplicate: true };
+  }
+  return { selected: [...selected, pick], duplicate: false };
+}
+
+export function mergePastedSpecialDutyPicks(input: {
+  selected: readonly SpecialDutyPick[];
+  namesText: string;
+  caddies: ReadonlyArray<{
+    id: number;
+    name: string;
+    team?: string;
+    teamOrder?: number;
+    employmentStatus: string;
+  }>;
+}): {
+  selected: SpecialDutyPick[];
+  unmatched: string[];
+  duplicates: string[];
+} {
+  const pasted = resolvePastedSpecialNames(input.namesText, input.caddies);
+  let selected = [...input.selected];
+  const duplicates: string[] = [];
+  for (const hit of pasted.matched) {
+    const roster = input.caddies.find((c) => c.id === hit.caddyId);
+    const next = appendSpecialDutyPick(selected, {
+      caddyId: hit.caddyId,
+      name: hit.name,
+      team: roster?.team,
+      teamOrder: roster?.teamOrder,
+    });
+    if (next.duplicate) duplicates.push(hit.name);
+    selected = next.selected;
+  }
+  return {
+    selected,
+    unmatched: pasted.reviews.map((row) => row.name),
+    duplicates,
+  };
+}
+
+/** 한 명씩 POST vs 마지막 1회 batch. */
+export function specialDutyRegisterRequestCount(selectedCount: number): {
+  perPerson: number;
+  batch: number;
+} {
+  return {
+    perPerson: Math.max(0, selectedCount),
+    batch: selectedCount > 0 ? 1 : 0,
+  };
+}
+
 export function detectCrossKindConflicts(
   existing: readonly Pick<SpecialDutyRecord, "kind" | "caddyId">[],
   kind: DailySpecialKind,

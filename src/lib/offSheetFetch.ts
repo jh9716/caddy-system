@@ -64,8 +64,26 @@ export function workbookToOffSheets(buffer: Buffer): OffSheet[] {
   });
 }
 
-export async function fetchPublishedOffSheets(): Promise<OffSheet[]> {
+const OFF_SHEET_CACHE_MS = 45_000;
+let offSheetCache: { id: string; at: number; sheets: OffSheet[] } | null = null;
+
+export function invalidateOffSheetCache() {
+  offSheetCache = null;
+}
+
+export async function fetchPublishedOffSheets(opts?: {
+  force?: boolean;
+}): Promise<OffSheet[]> {
   const id = sheetId();
+  const now = Date.now();
+  if (
+    !opts?.force &&
+    offSheetCache &&
+    offSheetCache.id === id &&
+    now - offSheetCache.at < OFF_SHEET_CACHE_MS
+  ) {
+    return offSheetCache.sheets;
+  }
   const url = exportUrl(id);
   let res: Response;
   try {
@@ -105,6 +123,7 @@ export async function fetchPublishedOffSheets(): Promise<OffSheet[]> {
         502
       );
     }
+    offSheetCache = { id, at: Date.now(), sheets };
     return sheets;
   } catch (e) {
     if (e instanceof OffSheetError) throw e;

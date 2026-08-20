@@ -78,7 +78,10 @@ export async function POST(req: NextRequest) {
       );
     }
     const dutyWorkbook = await dutyBufferFromForm(form);
-    const result = await loadAvailabilityForDate(date, { dutyWorkbook });
+    const result = await loadAvailabilityForDate(date, {
+      dutyWorkbook,
+      forceOffSheet: true,
+    });
     return NextResponse.json(result);
   } catch (e: unknown) {
     return errorResponse(e);

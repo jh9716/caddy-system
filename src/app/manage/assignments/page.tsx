@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, memo } from "react";
 import {
   assignCaddyToUnassigned,
   assignmentsByShift,
@@ -107,7 +107,7 @@ function AssignmentMarkBadges({
   );
 }
 
-function BoardAssignedSlots({
+const BoardAssignedSlots = memo(function BoardAssignedSlots({
   rows,
   allAssignments,
   expandedKey,
@@ -172,7 +172,7 @@ function BoardAssignedSlots({
       })}
     </>
   );
-}
+});
 
 function defaultCourseOpen(): CourseOpenState {
   return {
@@ -218,6 +218,12 @@ export default function ManageAssignmentsOpsPage() {
   const [viewMode, setViewMode] = useState<ResultViewMode>("board");
   const [toast, setToast] = useState<string | null>(null);
   const stickyStackRef = useRef<HTMLDivElement | null>(null);
+  const draftRef = useRef<AssignmentDraft | null>(null);
+  const autoResultRef = useRef<RunResponse | null>(null);
+  const persistQueueRef = useRef(Promise.resolve());
+  const persistGenRef = useRef(0);
+  draftRef.current = draft;
+  autoResultRef.current = autoResult;
 
   useEffect(() => {
     if (!file || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
@@ -564,6 +570,21 @@ export default function ManageAssignmentsOpsPage() {
     setQuickSheet({ mode, key });
   }
 
+  const onTeamTap = useCallback(
+    (row: AutoAssignmentRow) => {
+      handlePlacementTap(row, "team");
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [swapKey]
+  );
+  const onCaddyTap = useCallback(
+    (row: AutoAssignmentRow) => {
+      handlePlacementTap(row, "caddy");
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [swapKey]
+  );
+
   function onRequestLiveChange(change: LiveChangeInput) {
     void applyQuickChange(change);
   }
@@ -664,64 +685,81 @@ export default function ManageAssignmentsOpsPage() {
     }
   }
 
-  async function persistLivePreview(
-    preview: LiveChangePreview,
-    successToast: string
-  ): Promise<boolean> {
-    if (!draft) return false;
-    setLoadingLiveApply(true);
+  async function persistLivePreview(input: {
+    preview: LiveChangePreview;
+    previous: AutoAssignResultV1;
+    pool: AutoAssignCaddy[];
+    successToast?: string;
+    applyServerDraft?: boolean;
+    rollbackDraft?: AssignmentDraft | null;
+  }): Promise<boolean> {
     setError(null);
     try {
-      const previous = autoResultFromDraft(draft, autoResult);
       const res = await fetch("/api/assignments/reflow/apply", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          previous,
-          regularCaddyPool: draft.caddyPool,
-          events: preview.events,
-          changeType: preview.changeType,
+          previous: input.previous,
+          regularCaddyPool: input.pool,
+          events: input.preview.events,
+          changeType: input.preview.changeType,
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
+        if (input.rollbackDraft) {
+          setDraft(input.rollbackDraft);
+          setWarnings(detectDraftWarnings(input.rollbackDraft));
+        }
         setError(
           data.error ||
             data.message ||
             "배치 저장 중 오류가 발생했습니다. 다시 시도해주세요."
         );
-        showToast("DB 저장 실패 · 배치표는 그대로입니다");
+        showToast("저장 실패 · 이전 상태로 되돌렸습니다");
         return false;
       }
-      const after = (data.preview?.after || preview.after) as typeof preview.after;
-      const next = applyLiveResultToDraft(draft, after);
-      setDraft(next);
-      setWarnings(detectDraftWarnings(next));
+      if (input.applyServerDraft !== false) {
+        const current = draftRef.current;
+        if (current) {
+          const after = (data.preview?.after ||
+            input.preview.after) as typeof input.preview.after;
+          const next = applyLiveResultToDraft(current, after);
+          setDraft(next);
+          setWarnings(detectDraftWarnings(next));
+          if (autoResultRef.current) {
+            setAutoResult({ ...autoResultRef.current, ...after });
+          }
+        }
+      }
       setUnavailableCaddyIds(
         Array.isArray(data.preview?.unavailableCaddyIds)
           ? data.preview.unavailableCaddyIds
-          : preview.unavailableCaddyIds || []
+          : input.preview.unavailableCaddyIds || []
       );
-      if (autoResult) {
-        setAutoResult({ ...autoResult, ...after });
-      }
-      showToast(successToast);
+      if (input.successToast) showToast(input.successToast);
       return true;
     } catch (e: unknown) {
+      if (input.rollbackDraft) {
+        setDraft(input.rollbackDraft);
+        setWarnings(detectDraftWarnings(input.rollbackDraft));
+      }
       setError(e instanceof Error ? e.message : "현장 변경 적용 실패");
+      showToast("저장 실패 · 이전 상태로 되돌렸습니다");
       return false;
-    } finally {
-      setLoadingLiveApply(false);
     }
   }
 
-  function quickActionToast(change: LiveChangeInput): string {
+  function quickActionToast(
+    change: LiveChangeInput,
+    source: AssignmentDraft | null
+  ): string {
     if (change.type === "SWAP_CADDY") {
-      const a = draft?.assignments.find(
+      const a = source?.assignments.find(
         (row) => reservationIdentity(row.reservation) === change.reservationKeyA
       );
-      const b = draft?.assignments.find(
+      const b = source?.assignments.find(
         (row) => reservationIdentity(row.reservation) === change.reservationKeyB
       );
       return swapOrderToast(a?.caddy.name || "A", b?.caddy.name || "B");
@@ -735,15 +773,16 @@ export default function ManageAssignmentsOpsPage() {
     return `${LIVE_CHANGE_LABELS[change.type]} 적용`;
   }
 
-  async function applyQuickChange(change: LiveChangeInput) {
-    if (!draft || loadingLiveApply) return;
+  function applyQuickChange(change: LiveChangeInput) {
+    const current = draftRef.current;
+    if (!current) return;
     if (needsQuickActionConfirm(change.type)) {
       if (!window.confirm(QUICK_ACTION_CONFIRM_MESSAGE)) return;
     }
-    const previous = autoResultFromDraft(draft, autoResult);
+    const previous = autoResultFromDraft(current, autoResultRef.current);
     const preview = previewLiveAssignmentChange({
       previous,
-      regularCaddyPool: draft.caddyPool,
+      regularCaddyPool: current.caddyPool,
       change,
     });
     const blocking = preview.warnings.find((w) => w.level === "error");
@@ -752,23 +791,53 @@ export default function ManageAssignmentsOpsPage() {
       showToast(blocking.message);
       return;
     }
-    await persistLivePreview(preview, quickActionToast(change));
+    const next = applyLiveResultToDraft(current, preview.after);
+    setDraft(next);
+    setWarnings(detectDraftWarnings(next));
+    setUnavailableCaddyIds(preview.unavailableCaddyIds || []);
+    if (autoResultRef.current) {
+      setAutoResult({ ...autoResultRef.current, ...preview.after });
+    }
+    showToast(quickActionToast(change, current));
+    const gen = persistGenRef.current;
+    persistQueueRef.current = persistQueueRef.current.then(async () => {
+      if (gen !== persistGenRef.current) return;
+      const ok = await persistLivePreview({
+        preview,
+        previous,
+        pool: current.caddyPool,
+        applyServerDraft: false,
+        rollbackDraft: current,
+      });
+      if (!ok) persistGenRef.current += 1;
+    });
   }
 
   async function onLiveApply(preview: LiveChangePreview) {
-    await persistLivePreview(
-      preview,
-      "현장 변경 적용 · Reservation/Placement 저장"
-    );
+    const current = draftRef.current;
+    if (!current) return;
+    setLoadingLiveApply(true);
+    try {
+      await persistLivePreview({
+        preview,
+        previous: autoResultFromDraft(current, autoResultRef.current),
+        pool: current.caddyPool,
+        successToast: "현장 변경 적용 · Reservation/Placement 저장",
+        applyServerDraft: true,
+      });
+    } finally {
+      setLoadingLiveApply(false);
+    }
   }
 
-  function onToggleLock(row: AutoAssignmentRow, locked: boolean) {
-    onRequestLiveChange({
+  const onToggleLock = useCallback((row: AutoAssignmentRow, locked: boolean) => {
+    applyQuickChange({
       type: "SET_LOCK",
       reservationKey: reservationIdentity(row.reservation),
       locked,
     });
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const shiftRows =
     draft && shiftTab !== "UNASSIGNED" && shiftTab !== "CLOSED"
@@ -1240,12 +1309,8 @@ export default function ManageAssignmentsOpsPage() {
                                       allAssignments={draft.assignments}
                                       expandedKey={expandedKey}
                                       swapKey={swapKey}
-                                      onTeamTap={(row) =>
-                                        handlePlacementTap(row, "team")
-                                      }
-                                      onCaddyTap={(row) =>
-                                        handlePlacementTap(row, "caddy")
-                                      }
+                                      onTeamTap={onTeamTap}
+                                      onCaddyTap={onCaddyTap}
                                       onToggleLock={onToggleLock}
                                     />
                                   </div>

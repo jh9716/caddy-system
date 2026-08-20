@@ -7,11 +7,16 @@ import {
   DAILY_SPECIAL_KIND_LABELS,
   ANCHOR_SPECIAL_KINDS,
   annotateSpecialDutyConflicts,
+  appendSpecialDutyPick,
   isSpecialDutyPayloadForSelectedDate,
+  mergePastedSpecialDutyPicks,
+  moveItemIndex,
+  renumberSortOrders,
   unavailableReasonsFromRows,
   type DailySpecialKind,
   type SpecialDutyAnchors,
   type SpecialDutyConflict,
+  type SpecialDutyPick,
   type SpecialDutyRecord,
   type SpecialStartAnchor,
 } from "@/lib/dailySpecialDuty";
@@ -80,6 +85,12 @@ export function SpecialDutyPanel({
   const [paste, setPaste] = useState("");
   const [caddies, setCaddies] = useState<SearchCaddy[]>([]);
   const [busy, setBusy] = useState(false);
+  const [selected, setSelected] = useState<SpecialDutyPick[]>([]);
+  const [pasteWarnings, setPasteWarnings] = useState<string | null>(null);
+  const [deletedIdsByKind, setDeletedIdsByKind] = useState<
+    Partial<Record<DailySpecialKind, number[]>>
+  >({});
+  const [dirtyKinds, setDirtyKinds] = useState<Set<DailySpecialKind>>(new Set());
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -124,6 +135,10 @@ export function SpecialDutyPanel({
     setGroups([]);
     setAnchors(EMPTY_ANCHORS);
     setError(null);
+    setSelected([]);
+    setPasteWarnings(null);
+    setDeletedIdsByKind({});
+    setDirtyKinds(new Set());
     const ac = new AbortController();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return () => ac.abort();
@@ -179,6 +194,8 @@ export function SpecialDutyPanel({
     setModalOpen(true);
     setQuery("");
     setPaste("");
+    setSelected([]);
+    setPasteWarnings(null);
     await ensureCaddies();
   }
 
@@ -228,51 +245,122 @@ export function SpecialDutyPanel({
     }
   }
 
-  async function onPick(caddyId: number) {
-    await postAdd({ caddyIds: [caddyId] });
+  function onPick(caddy: SearchCaddy) {
+    setPasteWarnings(null);
+    const next = appendSpecialDutyPick(selected, {
+      caddyId: caddy.id,
+      name: caddy.name,
+      team: caddy.team,
+      teamOrder: caddy.teamOrder,
+    });
+    setSelected(next.selected);
+    if (next.duplicate) setPasteWarnings(`${caddy.name}은(는) 이미 선택됨`);
     setQuery("");
   }
 
-  async function onPaste() {
+  function onPasteLocal() {
     if (!paste.trim()) return;
-    await postAdd({ namesText: paste });
+    const merged = mergePastedSpecialDutyPicks({
+      selected,
+      namesText: paste,
+      caddies,
+    });
+    setSelected(merged.selected);
+    const bits: string[] = [];
+    if (merged.unmatched.length) bits.push(`불일치 ${merged.unmatched.join(", ")}`);
+    if (merged.duplicates.length) bits.push(`중복 ${merged.duplicates.join(", ")}`);
+    setPasteWarnings(bits.length ? bits.join(" · ") : null);
     setPaste("");
   }
 
-  async function onMove(id: number, direction: "up" | "down") {
+  function moveSelected(index: number, direction: -1 | 1) {
+    setSelected(moveItemIndex(selected, index, direction));
+  }
+
+  function removeSelected(caddyId: number) {
+    setSelected(selected.filter((row) => row.caddyId !== caddyId));
+  }
+
+  async function onRegisterBatch() {
+    if (!selected.length) return;
+    await postAdd({ caddyIds: selected.map((row) => row.caddyId) });
+    setSelected([]);
+    setPasteWarnings(null);
+  }
+
+  function markDirty(kind: DailySpecialKind) {
+    setDirtyKinds((prev) => new Set(prev).add(kind));
+  }
+
+  function onMoveLocal(kind: DailySpecialKind, index: number, direction: "up" | "down") {
+    setGroups((prev) =>
+      prev.map((group) => {
+        if (group.kind !== kind) return group;
+        const items = renumberSortOrders(
+          moveItemIndex(group.items, index, direction === "up" ? -1 : 1)
+        );
+        return { ...group, items };
+      })
+    );
+    markDirty(kind);
+  }
+
+  function onDeleteLocal(kind: DailySpecialKind, item: SpecialDutyRecord & { id?: number }) {
+    if (item.id) {
+      setDeletedIdsByKind((prev) => ({
+        ...prev,
+        [kind]: [...(prev[kind] || []), item.id!],
+      }));
+    }
+    setGroups((prev) =>
+      prev.map((group) => {
+        if (group.kind !== kind) return group;
+        const items = renumberSortOrders(
+          group.items.filter((row) => row.caddyId !== item.caddyId)
+        );
+        return { ...group, items, count: items.length };
+      })
+    );
+    markDirty(kind);
+  }
+
+  async function onSaveKind(kind: DailySpecialKind) {
+    const group = groups.find((g) => g.kind === kind);
+    if (!group) return;
     setBusy(true);
+    setError(null);
     try {
       const res = await fetch("/api/daily-special-duties", {
         method: "PATCH",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "move", id, direction }),
+        body: JSON.stringify({
+          action: "commitKind",
+          date,
+          kind,
+          orderedCaddyIds: group.items.map((row) => row.caddyId),
+          deleteIds: deletedIdsByKind[kind] || [],
+        }),
       });
       const data = (await res.json()) as ListPayload;
       if (!res.ok) {
-        setError(data.error || "순서 변경 실패");
+        setError(data.error || "저장 실패");
         return;
       }
       applyPayload(data);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function onDelete(id: number) {
-    setBusy(true);
-    try {
-      const res = await fetch(`/api/daily-special-duties/${id}`, {
-        method: "DELETE",
-        credentials: "include",
+      setDeletedIdsByKind((prev) => {
+        const next = { ...prev };
+        delete next[kind];
+        return next;
       });
-      const data = (await res.json()) as ListPayload;
-      if (!res.ok) {
-        setError(data.error || "삭제 실패");
-        return;
-      }
-      applyPayload(data);
-      showToast("삭제 · 우선순위 재번호");
+      setDirtyKinds((prev) => {
+        const next = new Set(prev);
+        next.delete(kind);
+        return next;
+      });
+      showToast(`${DAILY_SPECIAL_KIND_LABELS[kind]} 저장`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "저장 실패");
     } finally {
       setBusy(false);
     }
@@ -327,8 +415,8 @@ export function SpecialDutyPanel({
         <div>
           <div className="sd-title">특수근무</div>
           <p className="sd-hint">
-            같은 유형 안 입력 순서가 우선순위입니다. 54홀·1·2부는 시작팀을
-            지정하지 않습니다.
+            같은 유형 안 선택 순서가 우선순위입니다. 순서/삭제는 화면에서 정리한 뒤
+            한 번에 저장합니다.
           </p>
         </div>
         <button type="button" className="sd-add" onClick={() => void openModal()}>
@@ -421,16 +509,18 @@ export function SpecialDutyPanel({
                         <div className="sd-ops">
                           <button
                             type="button"
-                            disabled={busy || index === 0}
-                            onClick={() => item.id && void onMove(item.id, "up")}
+                            disabled={index === 0}
+                            onClick={() =>
+                              onMoveLocal(group.kind, index, "up")
+                            }
                           >
                             위
                           </button>
                           <button
                             type="button"
-                            disabled={busy || index === group.items.length - 1}
+                            disabled={index === group.items.length - 1}
                             onClick={() =>
-                              item.id && void onMove(item.id, "down")
+                              onMoveLocal(group.kind, index, "down")
                             }
                           >
                             아래
@@ -438,8 +528,7 @@ export function SpecialDutyPanel({
                           <button
                             type="button"
                             className="danger"
-                            disabled={busy}
-                            onClick={() => item.id && void onDelete(item.id)}
+                            onClick={() => onDeleteLocal(group.kind, item)}
                           >
                             삭제
                           </button>
@@ -449,6 +538,16 @@ export function SpecialDutyPanel({
                   ))}
                 </ol>
                 )}
+                {dirtyKinds.has(group.kind) ? (
+                  <button
+                    type="button"
+                    className="sd-save sd-kind-save"
+                    disabled={busy}
+                    onClick={() => void onSaveKind(group.kind)}
+                  >
+                    {busy ? "저장 중…" : `${group.label} 변경 저장`}
+                  </button>
+                ) : null}
               </>
             ) : null}
           </div>
@@ -489,17 +588,58 @@ export function SpecialDutyPanel({
               <ul className="sd-hits">
                 {hits.map((c) => (
                   <li key={c.id}>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => void onPick(c.id)}
-                    >
+                    <button type="button" onClick={() => onPick(c)}>
                       {c.name} · {c.team} {c.teamOrder}번
                     </button>
                   </li>
                 ))}
               </ul>
             ) : null}
+            <div className="sd-selected">
+              <strong>선택 {selected.length}명</strong>
+              {selected.length === 0 ? (
+                <div className="sd-empty">검색 또는 붙여넣기로 추가</div>
+              ) : (
+                <ol className="sd-list">
+                  {selected.map((row, index) => (
+                    <li key={row.caddyId}>
+                      <div className="sd-row">
+                        <span className="sd-pri">{index + 1}</span>
+                        <div className="sd-who">
+                          <strong>{row.name}</strong>
+                          <span>
+                            {row.team || ""} {row.teamOrder ?? ""}
+                          </span>
+                        </div>
+                        <div className="sd-ops">
+                          <button
+                            type="button"
+                            disabled={index === 0}
+                            onClick={() => moveSelected(index, -1)}
+                          >
+                            위
+                          </button>
+                          <button
+                            type="button"
+                            disabled={index === selected.length - 1}
+                            onClick={() => moveSelected(index, 1)}
+                          >
+                            아래
+                          </button>
+                          <button
+                            type="button"
+                            className="danger"
+                            onClick={() => removeSelected(row.caddyId)}
+                          >
+                            빼기
+                          </button>
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
             <label className="sd-field">
               <span>이름 붙여넣기 (줄바꿈)</span>
               <textarea
@@ -512,14 +652,24 @@ export function SpecialDutyPanel({
             <button
               type="button"
               className="sd-save"
-              disabled={busy || !paste.trim()}
-              onClick={() => void onPaste()}
+              disabled={!paste.trim()}
+              onClick={onPasteLocal}
             >
-              {busy ? "저장 중…" : `${DAILY_SPECIAL_KIND_LABELS[kind]} 일괄등록`}
+              붙여넣기 목록에 추가
+            </button>
+            {pasteWarnings ? <div className="sd-error">{pasteWarnings}</div> : null}
+            <button
+              type="button"
+              className="sd-save"
+              disabled={busy || selected.length === 0}
+              onClick={() => void onRegisterBatch()}
+            >
+              {busy
+                ? "저장 중…"
+                : `${selected.length}명 한번에 등록`}
             </button>
             <p className="sd-hint">
-              한 명씩 탭하거나 붙여넣은 뒤에도 창이 유지됩니다. 같은 유형은
-              입력 순서가 우선순위입니다.
+              선택 중에는 서버에 요청하지 않습니다. 마지막 등록 한 번만 저장됩니다.
             </p>
           </div>
         </div>
@@ -732,7 +882,17 @@ export function SpecialDutyPanel({
         }
         .sd-save {
           width: 100%;
-          margin-bottom: 8px;
+          margin: 8px 0;
+        }
+        .sd-kind-save {
+          margin: 8px;
+          width: calc(100% - 16px);
+        }
+        .sd-selected {
+          margin: 8px 0;
+          padding: 8px;
+          border: 1px solid #e2e8f0;
+          border-radius: 10px;
         }
         .sd-toast {
           position: fixed;

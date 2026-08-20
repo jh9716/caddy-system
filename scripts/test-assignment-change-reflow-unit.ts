@@ -12,7 +12,9 @@ import {
   LIVE_CHANGE_APPLY_USER_MESSAGE,
   isInstantQuickAction,
   isLiveChangeReady,
+  isPatchableLiveChange,
   needsQuickActionConfirm,
+  skipsOpsRewriteOnLivePersist,
   swapOrderToast,
 } from "../src/lib/assignmentChange";
 import { createDraftFromAutoResult } from "../src/lib/assignmentDraft";
@@ -1401,6 +1403,48 @@ section("Quick Action은 확인 대상만 confirm, 나머지는 즉시 타입");
     swapOrderToast("김A", "김B") === "김A ↔ 김B 순번을 변경했습니다",
     "swap toast copy"
   );
+  assert(isPatchableLiveChange("SWAP_CADDY"), "swap patches");
+  assert(isPatchableLiveChange("SET_LOCK"), "lock patches");
+  assert(isPatchableLiveChange("SET_LIMOUSINE"), "limo patches");
+  assert(!isPatchableLiveChange("ASSIGN_DRIVING"), "driving full replace");
+  assert(skipsOpsRewriteOnLivePersist("SET_LOCK"), "lock skips ops rewrite");
+  assert(!skipsOpsRewriteOnLivePersist("SWAP_CADDY"), "swap may update ops");
+}
+
+section("optimistic persist는 적용 전 snapshot을 previous로 써야 함");
+{
+  const date = "2026-09-27";
+  const pool = makeCaddies(4);
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      res(date, "R1", { teeTime: "07:00" }),
+      res(date, "R2", { teeTime: "07:08" }),
+    ],
+  });
+  const a = previous.assignments.find((x) => x.reservation.id === "R1")!;
+  const b = previous.assignments.find((x) => x.reservation.id === "R2")!;
+  const change = {
+    type: "SWAP_CADDY" as const,
+    reservationKeyA: reservationKey(a.reservation),
+    reservationKeyB: reservationKey(b.reservation),
+  };
+  const first = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change,
+  });
+  assert(caddyOn(first.after, "R1") === b.caddy.id, "UI snapshot swapped");
+  const doubled = previewLiveAssignmentChange({
+    previous: first.after,
+    regularCaddyPool: pool,
+    change,
+  });
+  assert(
+    caddyOn(doubled.after, "R1") === a.caddy.id,
+    "sending already-swapped previous would invert"
+  );
 }
 
 section("Quick swap/리무진/LOCK 적용은 memory store에 즉시 기록");
@@ -1551,6 +1595,102 @@ async function runPersistTests() {
       ),
       "sick unavailable persisted"
     );
+  }
+
+  section("기존 Daily row가 있으면 swap/lock/limo는 patch만");
+  {
+    const date = "2026-09-28";
+    const pool = makeCaddies(4);
+    const previous = computeAutoAssignmentsV1({
+      date,
+      available: pool,
+      reservations: [
+        res(date, "R1", { teeTime: "07:00" }),
+        res(date, "R2", { teeTime: "07:08" }),
+      ],
+    });
+    const a = previous.assignments.find((x) => x.reservation.id === "R1")!;
+    const b = previous.assignments.find((x) => x.reservation.id === "R2")!;
+    const keyA = reservationKey(a.reservation);
+    const keyB = reservationKey(b.reservation);
+    const counts = {
+      reservationDelete: 0,
+      placementDelete: 0,
+      reservationCreateMany: 0,
+      placementUpdate: 0,
+      reservationUpdate: 0,
+    };
+    const fakeTx = {
+      dailyReservation: {
+        count: async () => 2,
+        findUnique: async (args: {
+          where: { date_identityKey: { identityKey: string } };
+        }) => {
+          const key = args.where.date_identityKey.identityKey;
+          if (key === keyA) return { id: 11 };
+          if (key === keyB) return { id: 12 };
+          return null;
+        },
+        deleteMany: async () => {
+          counts.reservationDelete += 1;
+          return { count: 0 };
+        },
+        createManyAndReturn: async (args: { data: unknown[] }) => {
+          counts.reservationCreateMany += args.data.length;
+          return [];
+        },
+        update: async () => {
+          counts.reservationUpdate += 1;
+          return { id: 11 };
+        },
+      },
+      dailyPlacement: {
+        deleteMany: async () => {
+          counts.placementDelete += 1;
+          return { count: 0 };
+        },
+        createMany: async () => ({ count: 0 }),
+        update: async () => {
+          counts.placementUpdate += 1;
+          return { id: 1 };
+        },
+      },
+      dailyCaddyUnavailable: {
+        deleteMany: async () => ({ count: 0 }),
+        createMany: async () => ({ count: 0 }),
+      },
+      dailyAssignmentChange: {
+        create: async () => ({ id: 1 }),
+      },
+      audit: { create: async () => ({ id: 1 }) },
+      shiftDuty: { count: async () => 0 },
+      schedule: { deleteMany: async () => ({ count: 0 }), createMany: async () => ({ count: 0 }) },
+      scheduleExtraTag: {
+        deleteMany: async () => ({ count: 0 }),
+        createMany: async () => ({ count: 0 }),
+      },
+    };
+    const fakePrisma = {
+      $transaction: async (fn: (tx: typeof fakeTx) => Promise<unknown>) =>
+        fn(fakeTx),
+    };
+    const swapped = await applyLiveAssignmentChange(
+      {
+        previous,
+        regularCaddyPool: pool,
+        change: {
+          type: "SWAP_CADDY",
+          reservationKeyA: keyA,
+          reservationKeyB: keyB,
+        },
+      },
+      { prisma: fakePrisma as never }
+    );
+    assert(swapped.ok === true, "swap patch ok");
+    assert(counts.reservationDelete === 0, "swap did not delete reservations");
+    assert(counts.placementDelete === 0, "swap did not delete placements");
+    assert(counts.reservationCreateMany === 0, "swap did not recreate day");
+    assert(counts.placementUpdate === 2, "swap updated two placements");
   }
 
   section("250건 Reservation 저장은 createMany, 개별 create 없음");

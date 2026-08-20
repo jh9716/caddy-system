@@ -212,7 +212,20 @@ export default function ManageCaddiesPage() {
           return;
         }
         setRows(Array.isArray(data) ? data : []);
-        void refreshSlotPeers();
+        if (employment === 'all' && Array.isArray(data)) {
+          setSlotPeers(
+            data.map((c: Caddy) => ({
+              id: c.id,
+              name: c.name,
+              team: c.team,
+              teamOrder: c.teamOrder,
+              employmentStatus: String(c.employmentStatus),
+              caddyType: c.caddyType ?? null,
+            }))
+          );
+        } else {
+          void refreshSlotPeers();
+        }
       } finally {
         setLoading(false);
       }

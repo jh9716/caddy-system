@@ -3,9 +3,10 @@ import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { isAnchorSpecialKind, isDailySpecialKind, type DailySpecialKind } from "@/lib/dailySpecialDuty";
 import {
-  DailySpecialDutyError,
+    DailySpecialDutyError,
   addDailySpecialDuties,
   buildDailySpecialDutyPayload,
+  commitKindSpecialDuties,
   moveDailySpecialDuty,
   reorderDailySpecialDuties,
   upsertSpecialStartAnchor,
@@ -55,14 +56,18 @@ export async function POST(req: NextRequest) {
     if (!isDailySpecialKind(body?.kind)) {
       return NextResponse.json({ error: "유형을 선택하세요." }, { status: 400 });
     }
-    const caddies = await prisma.caddy.findMany({
-      select: { id: true, name: true, employmentStatus: true },
-    });
+    const namesText = typeof body?.namesText === "string" ? body.namesText : "";
+    const caddyIds = Array.isArray(body?.caddyIds) ? body.caddyIds : [];
+    const caddies = namesText.trim()
+      ? await prisma.caddy.findMany({
+          select: { id: true, name: true, employmentStatus: true },
+        })
+      : [];
     const result = await addDailySpecialDuties({
       date,
       kind: body.kind as DailySpecialKind,
-      caddyIds: Array.isArray(body?.caddyIds) ? body.caddyIds : [],
-      namesText: typeof body?.namesText === "string" ? body.namesText : "",
+      caddyIds,
+      namesText,
       caddies,
     });
     const payload = await buildDailySpecialDutyPayload(date);
@@ -82,6 +87,29 @@ export async function PATCH(req: NextRequest) {
   if (guard) return guard;
   try {
     const body = await req.json().catch(() => null);
+    if (body?.action === "commitKind") {
+      const date = String(body?.date || "");
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return NextResponse.json({ error: "date=YYYY-MM-DD 필요" }, { status: 400 });
+      }
+      if (!isDailySpecialKind(body?.kind)) {
+        return NextResponse.json({ error: "유형을 선택하세요." }, { status: 400 });
+      }
+      if (!Array.isArray(body?.orderedCaddyIds)) {
+        return NextResponse.json(
+          { error: "orderedCaddyIds가 필요합니다." },
+          { status: 400 }
+        );
+      }
+      await commitKindSpecialDuties({
+        date,
+        kind: body.kind,
+        orderedCaddyIds: body.orderedCaddyIds.map(Number),
+        deleteIds: Array.isArray(body?.deleteIds) ? body.deleteIds.map(Number) : [],
+      });
+      return NextResponse.json(await buildDailySpecialDutyPayload(date));
+    }
+
     if (body?.action === "move") {
       const id = Number(body?.id);
       const direction = body?.direction;
