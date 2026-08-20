@@ -11,6 +11,11 @@ import {
   type ConfirmRequestBody,
 } from "@/lib/assignmentConfirm";
 import {
+  applyLiveResultToDraft,
+  autoResultFromDraft,
+  type AssignmentDraft,
+} from "@/lib/assignmentDraft";
+import {
   isPlacementLocked,
   reflowRegularAssignments,
   reservationKey,
@@ -92,6 +97,26 @@ export function isPatchableLiveChange(type: LiveChangeType): boolean {
   return (
     type === "SWAP_CADDY" || type === "SET_LOCK" || type === "SET_LIMOUSINE"
   );
+}
+
+/**
+ * 예약 취소/팀 노쇼/병가/결근 — 한 row delete/patch 금지.
+ * Quick Action과 고급 배치 변경 모두 reflowRegularAssignments가 source of truth.
+ */
+export const SEQUENCE_REFLOW_LIVE_CHANGE_TYPES: readonly LiveChangeType[] = [
+  "CANCEL_RESERVATION",
+  "TEAM_NOSHOW",
+  "CADDY_SICK",
+  "CADDY_ATTENDANCE_NOSHOW",
+];
+
+export function isSequenceReflowLiveChange(type: LiveChangeType): boolean {
+  return (SEQUENCE_REFLOW_LIVE_CHANGE_TYPES as readonly string[]).includes(type);
+}
+
+/** sequence reflow 액션은 서버 재계산 결과를 화면에 반영해야 한다. swap/lock/limo는 optimistic patch 유지. */
+export function shouldReconcileLivePersist(type: LiveChangeType): boolean {
+  return isSequenceReflowLiveChange(type);
 }
 
 export function skipsOpsRewriteOnLivePersist(type: LiveChangeType): boolean {
@@ -321,6 +346,81 @@ export function previewLiveAssignmentChange(input: {
   };
 }
 
+/** Quick Action / 고급 배치 변경이 같은 draft → reflow 경로를 타게 한다. */
+export function previewLiveChangeFromDraft(input: {
+  draft: AssignmentDraft;
+  base?: AutoAssignResultV1 | null;
+  change: LiveChangeInput;
+}): LiveChangePreview {
+  return previewLiveAssignmentChange({
+    previous: autoResultFromDraft(input.draft, input.base ?? null),
+    regularCaddyPool: input.draft.caddyPool,
+    change: input.change,
+  });
+}
+
+export function applyLiveChangePreviewToDraft(
+  draft: AssignmentDraft,
+  preview: LiveChangePreview
+): AssignmentDraft {
+  return applyLiveResultToDraft(draft, preview.after);
+}
+
+export type LiveBoardSnapshot = {
+  placements: Array<{
+    key: string;
+    reservationId: string;
+    teeTime: string;
+    course: string;
+    shift: string;
+    caddyId: number;
+    kind: string;
+    locked: boolean;
+    sequenceIndex: number;
+  }>;
+  spares: Array<{
+    shift: string;
+    spare1: number | null;
+    spare2: number | null;
+  }>;
+  unassignedKeys: string[];
+};
+
+export function liveBoardSnapshot(result: AutoAssignResultV1): LiveBoardSnapshot {
+  return {
+    placements: [...result.assignments]
+      .map((row) => ({
+        key: reservationKey(row.reservation),
+        reservationId: String(row.reservation.id ?? ""),
+        teeTime: row.reservation.teeTime,
+        course: String(row.reservation.course),
+        shift: String(row.reservation.shift),
+        caddyId: row.caddy.id,
+        kind: row.kind,
+        locked: isPlacementLocked(row),
+        sequenceIndex: row.sequenceIndex,
+      }))
+      .sort((a, b) => a.key.localeCompare(b.key)),
+    spares: [...(result.sparesByShift || [])]
+      .map((row) => ({
+        shift: String(row.shift),
+        spare1: row.spare1?.caddyId ?? null,
+        spare2: row.spare2?.caddyId ?? null,
+      }))
+      .sort((a, b) => a.shift.localeCompare(b.shift)),
+    unassignedKeys: (result.unassignedReservations || [])
+      .map((row) => reservationKey(row.reservation))
+      .sort(),
+  };
+}
+
+export function sameLiveBoard(
+  a: AutoAssignResultV1,
+  b: AutoAssignResultV1
+): boolean {
+  return JSON.stringify(liveBoardSnapshot(a)) === JSON.stringify(liveBoardSnapshot(b));
+}
+
 export function previewLiveAssignmentEvents(input: {
   previous: AutoAssignResultV1;
   regularCaddyPool: AutoAssignCaddy[];
@@ -544,6 +644,8 @@ async function tryPatchLiveDay(
   plan: LiveChangePersistPlan,
   preview: LiveChangePreview
 ): Promise<boolean> {
+  // 예약취소/노쇼/병가/결근은 1–2 row patch 금지. reflow persist만 허용.
+  if (isSequenceReflowLiveChange(plan.changeType)) return false;
   if (!isPatchableLiveChange(plan.changeType)) return false;
   const existing = await tx.dailyReservation.count({
     where: { date: plan.dateObj },

@@ -13,7 +13,7 @@ import {
   LIVE_CHANGE_LABELS,
   LIVE_CHANGE_TYPES,
   makeAddReservation,
-  previewLiveAssignmentChange,
+  previewLiveChangeFromDraft,
   type LiveChangeInput,
   type LiveChangePreview,
   type LiveChangeType,
@@ -109,9 +109,9 @@ export function LiveChangePanel({
     setLockOn(preset.locked !== false);
     setError(null);
     if (isLiveChangeReady(preset)) {
-      const next = previewLiveAssignmentChange({
-        previous,
-        regularCaddyPool: draft.caddyPool,
+      const next = previewLiveChangeFromDraft({
+        draft,
+        base: previous,
         change: preset,
       });
       setPreview(next);
@@ -190,9 +190,9 @@ export function LiveChangePanel({
       return;
     }
     setPreview(
-      previewLiveAssignmentChange({
-        previous,
-        regularCaddyPool: draft.caddyPool,
+      previewLiveChangeFromDraft({
+        draft,
+        base: previous,
         change: {
           type: "SWAP_CADDY",
           reservationKeyA,
@@ -209,9 +209,9 @@ export function LiveChangePanel({
       setError("변경 대상을 선택하세요.");
       return;
     }
-    const next = previewLiveAssignmentChange({
-      previous,
-      regularCaddyPool: draft.caddyPool,
+    const next = previewLiveChangeFromDraft({
+      draft,
+      base: previous,
       change,
     });
     setPreview(next);

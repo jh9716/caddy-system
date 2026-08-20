@@ -3,21 +3,30 @@
  * 실행: npx tsx scripts/test-assignment-change-reflow-unit.ts
  */
 import {
+  applyLiveChangePreviewToDraft,
   applyLiveChangeToMemory,
   applyLiveAssignmentChange,
   buildLiveChangePersistPlan,
   emptyLiveChangeMemoryStore,
+  isSequenceReflowLiveChange,
+  liveBoardSnapshot,
   makeAddReservation,
   previewLiveAssignmentChange,
+  previewLiveChangeFromDraft,
   LIVE_CHANGE_APPLY_USER_MESSAGE,
   isInstantQuickAction,
   isLiveChangeReady,
   isPatchableLiveChange,
   needsQuickActionConfirm,
+  sameLiveBoard,
+  shouldReconcileLivePersist,
   skipsOpsRewriteOnLivePersist,
   swapOrderToast,
 } from "../src/lib/assignmentChange";
-import { createDraftFromAutoResult } from "../src/lib/assignmentDraft";
+import {
+  autoResultFromDraft,
+  createDraftFromAutoResult,
+} from "../src/lib/assignmentDraft";
 import {
   computeAutoAssignmentsV1,
   compareCaddyOrder,
@@ -1407,6 +1416,19 @@ section("Quick Action은 확인 대상만 confirm, 나머지는 즉시 타입");
   assert(isPatchableLiveChange("SET_LOCK"), "lock patches");
   assert(isPatchableLiveChange("SET_LIMOUSINE"), "limo patches");
   assert(!isPatchableLiveChange("ASSIGN_DRIVING"), "driving full replace");
+  assert(!isPatchableLiveChange("CANCEL_RESERVATION"), "cancel not patchable");
+  assert(!isPatchableLiveChange("TEAM_NOSHOW"), "noshow not patchable");
+  assert(!isPatchableLiveChange("CADDY_SICK"), "sick not patchable");
+  assert(!isPatchableLiveChange("CADDY_ATTENDANCE_NOSHOW"), "결근 not patchable");
+  assert(isSequenceReflowLiveChange("CANCEL_RESERVATION"), "cancel reflows");
+  assert(isSequenceReflowLiveChange("TEAM_NOSHOW"), "noshow reflows");
+  assert(isSequenceReflowLiveChange("CADDY_SICK"), "sick reflows");
+  assert(isSequenceReflowLiveChange("CADDY_ATTENDANCE_NOSHOW"), "결근 reflows");
+  assert(!isSequenceReflowLiveChange("SWAP_CADDY"), "swap is not sequence reflow");
+  assert(shouldReconcileLivePersist("CANCEL_RESERVATION"), "cancel reconciles server");
+  assert(!shouldReconcileLivePersist("SWAP_CADDY"), "swap keeps optimistic patch");
+  assert(!shouldReconcileLivePersist("SET_LOCK"), "lock keeps optimistic patch");
+  assert(!shouldReconcileLivePersist("SET_LIMOUSINE"), "limo keeps optimistic patch");
   assert(skipsOpsRewriteOnLivePersist("SET_LOCK"), "lock skips ops rewrite");
   assert(!skipsOpsRewriteOnLivePersist("SWAP_CADDY"), "swap may update ops");
 }
@@ -1445,6 +1467,246 @@ section("optimistic persist는 적용 전 snapshot을 previous로 써야 함");
     caddyOn(doubled.after, "R1") === a.caddy.id,
     "sending already-swapped previous would invert"
   );
+}
+
+function persistBoardSnap(plan: ReturnType<typeof buildLiveChangePersistPlan>) {
+  return JSON.stringify({
+    reservations: [...plan.reservations]
+      .map((row) => ({
+        key: row.identityKey,
+        status: row.status,
+        teeTime: row.teeTime,
+        shift: row.shift,
+      }))
+      .sort((a, b) => a.key.localeCompare(b.key)),
+    placements: [...plan.placements]
+      .map((row) => ({
+        key: row.identityKey,
+        caddyId: row.caddyId,
+        kind: row.kind,
+        locked: row.locked,
+        sequenceIndex: row.sequenceIndex,
+      }))
+      .sort((a, b) => a.key.localeCompare(b.key)),
+    unavailables: [...plan.unavailables]
+      .map((row) => ({ caddyId: row.caddyId, reason: row.reason }))
+      .sort((a, b) => a.caddyId - b.caddyId),
+    spares: plan.payload.sparesByShift,
+  });
+}
+
+function assertAdvancedEqualsQuick(
+  label: string,
+  previous: AutoAssignResultV1,
+  pool: AutoAssignCaddy[],
+  advancedChange: Parameters<typeof previewLiveAssignmentChange>[0]["change"],
+  quickChange: Parameters<typeof previewLiveAssignmentChange>[0]["change"]
+) {
+  const draft = createDraftFromAutoResult(previous, pool);
+  const advanced = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: advancedChange,
+  });
+  const quick = previewLiveChangeFromDraft({
+    draft,
+    base: previous,
+    change: quickChange,
+  });
+  const quickDraft = applyLiveChangePreviewToDraft(draft, quick);
+  const fromDraft = autoResultFromDraft(quickDraft, previous);
+  assert(sameLiveBoard(advanced.after, quick.after), `${label} after board`);
+  assert(sameLiveBoard(advanced.after, fromDraft), `${label} draft board`);
+  assert(
+    persistBoardSnap(buildLiveChangePersistPlan(advanced)) ===
+      persistBoardSnap(buildLiveChangePersistPlan(quick)),
+    `${label} persist plan`
+  );
+  return { advanced, quick, draft, quickDraft };
+}
+
+section("고급 배치 변경 vs Quick Action 예약 취소 동등성");
+{
+  const date = "2026-10-02";
+  const pool = makeCaddies(8);
+  const ordered = [...pool].sort(compareCaddyOrder);
+  const previous = stampLocks(
+    computeAutoAssignmentsV1({
+      date,
+      available: pool,
+      reservations: [
+        res(date, "R1", { teeTime: "07:00" }),
+        res(date, "R2", { teeTime: "07:08" }),
+        res(date, "R3", { teeTime: "07:16" }),
+        res(date, "R4", { teeTime: "07:24" }),
+      ],
+    }),
+    { R3: true }
+  );
+  const r2 = previous.assignments.find((row) => row.reservation.id === "R2")!;
+  const lockedCaddy = caddyOn(previous, "R3");
+  const beforeR4 = caddyOn(previous, "R4");
+  const { advanced, quickDraft } = assertAdvancedEqualsQuick(
+    "cancel",
+    previous,
+    pool,
+    { type: "CANCEL_RESERVATION", reservationId: "R2" },
+    {
+      type: "CANCEL_RESERVATION",
+      reservationKey: reservationKey(r2.reservation),
+    }
+  );
+  assert(caddyOn(advanced.after, "R2") == null, "Quick/고급 R2 제거");
+  assert(caddyOn(advanced.after, "R1") === ordered[0].id, "R1 유지");
+  assert(
+    caddyOn(advanced.after, "R4") === ordered[1].id,
+    "Quick 예약취소 뒤 일반 캐디 실제 당김"
+  );
+  assert(caddyOn(advanced.after, "R4") !== beforeR4, "R4 caddy changed");
+  assert(caddyOn(advanced.after, "R3") === lockedCaddy, "LOCK 유지");
+  assert(
+    liveBoardSnapshot(advanced.after).placements.find((row) => row.reservationId === "R3")
+      ?.locked === true,
+    "LOCK flag 유지"
+  );
+  const afterSpare = spareSnap(advanced.after, "1부");
+  const beforeSpare = spareSnap(previous, "1부");
+  assert(afterSpare !== beforeSpare, "Spare 재계산");
+  assert(
+    !quickDraft.assignments.some((row) => row.reservation.id === "R2"),
+    "draft에서도 예약 제거"
+  );
+  assert(
+    quickDraft.assignments.find((row) => row.reservation.id === "R4")?.caddy.id ===
+      ordered[1].id,
+    "draft에서도 당김"
+  );
+}
+
+section("고급 배치 변경 vs Quick Action 팀 노쇼 동등성");
+{
+  const date = "2026-10-03";
+  const pool = makeCaddies(6);
+  const ordered = [...pool].sort(compareCaddyOrder);
+  const previous = stampLocks(
+    computeAutoAssignmentsV1({
+      date,
+      available: pool,
+      reservations: [
+        res(date, "A", { teeTime: "07:00" }),
+        res(date, "B", { teeTime: "07:08" }),
+        res(date, "C", { teeTime: "07:16" }),
+      ],
+    }),
+    { C: true }
+  );
+  const target = previous.assignments.find((row) => row.reservation.id === "A")!;
+  const lockedCaddy = caddyOn(previous, "C");
+  const { advanced } = assertAdvancedEqualsQuick(
+    "noshow",
+    previous,
+    pool,
+    { type: "TEAM_NOSHOW", reservationId: "A" },
+    { type: "TEAM_NOSHOW", reservationKey: reservationKey(target.reservation) }
+  );
+  assert(caddyOn(advanced.after, "A") == null, "노쇼 예약 제거");
+  assert(
+    caddyOn(advanced.after, "B") === ordered[0].id,
+    "Quick 팀노쇼 뒤 일반 캐디 당김"
+  );
+  assert(caddyOn(advanced.after, "C") === lockedCaddy, "노쇼 LOCK 유지");
+  assert(advanced.reason === REASON.TEAM_NOSHOW_REFLOW, "노쇼 사유 코드");
+}
+
+section("고급 배치 변경 vs Quick Action 병가/결근 동등성");
+{
+  const date = "2026-10-04";
+  const pool = makeCaddies(6);
+  const previous = stampLocks(
+    computeAutoAssignmentsV1({
+      date,
+      available: pool,
+      reservations: [
+        res(date, "R1", { teeTime: "07:00", shift: "1부" }),
+        res(date, "R2", { teeTime: "07:08", shift: "1부" }),
+        res(date, "R3", { teeTime: "07:16", shift: "1부" }),
+        res(date, "S2A", { teeTime: "13:00", shift: "2부" }),
+        res(date, "S2B", { teeTime: "13:08", shift: "2부" }),
+      ],
+    }),
+    { R3: true }
+  );
+  const sickId = caddyOn(previous, "R2")!;
+  const lockedCaddy = caddyOn(previous, "R3");
+  const beforeCount = previous.assignments.length;
+  const { advanced: sick } = assertAdvancedEqualsQuick(
+    "sick",
+    previous,
+    pool,
+    { type: "CADDY_SICK", caddyId: sickId },
+    { type: "CADDY_SICK", caddyId: sickId }
+  );
+  assert(sick.after.assignments.length === beforeCount, "병가 reservation 유지");
+  assert(
+    sick.after.assignments.every((row) => row.caddy.id !== sickId),
+    "병가 캐디 당일 전체 제외"
+  );
+  assert(caddyOn(sick.after, "R2") != null, "병가 뒤 R2 예약 유지");
+  assert(caddyOn(sick.after, "R2") !== sickId, "병가 뒤 일반 당김");
+  assert(caddyOn(sick.after, "R3") === lockedCaddy, "병가 LOCK 유지");
+
+  const dualDate = "2026-10-06";
+  const dualPool = makeCaddies(3);
+  const dualPrevious = computeAutoAssignmentsV1({
+    date: dualDate,
+    available: dualPool,
+    reservations: [
+      res(dualDate, "S1A", { teeTime: "07:00", shift: "1부" }),
+      res(dualDate, "S1B", { teeTime: "07:08", shift: "1부" }),
+      res(dualDate, "S2A", { teeTime: "13:00", shift: "2부" }),
+      res(dualDate, "S2B", { teeTime: "13:08", shift: "2부" }),
+    ],
+  });
+  const dualCounts = dualPrevious.assignments.reduce((acc, row) => {
+    acc.set(row.caddy.id, (acc.get(row.caddy.id) || 0) + 1);
+    return acc;
+  }, new Map<number, number>());
+  const dualId = [...dualCounts.entries()].find(([, n]) => n >= 2)?.[0];
+  assert(!!dualId, "found multi-shift caddy for 결근");
+  const dualAbsent = previewLiveChangeFromDraft({
+    draft: createDraftFromAutoResult(dualPrevious, dualPool),
+    base: dualPrevious,
+    change: { type: "CADDY_ATTENDANCE_NOSHOW", caddyId: Number(dualId) },
+  });
+  const advancedDual = previewLiveAssignmentChange({
+    previous: dualPrevious,
+    regularCaddyPool: dualPool,
+    change: { type: "CADDY_ATTENDANCE_NOSHOW", caddyId: Number(dualId) },
+  });
+  assert(sameLiveBoard(advancedDual.after, dualAbsent.after), "dual 결근 고급=Quick");
+  assert(
+    dualAbsent.after.assignments.every((row) => row.caddy.id !== dualId),
+    "결근 캐디 당일 후속 근무에서도 제외"
+  );
+  assert(
+    dualAbsent.after.assignments.length === dualPrevious.assignments.length,
+    "dual 결근 reservation 유지"
+  );
+
+  const absentId = caddyOn(previous, "R1")!;
+  const { advanced: absent } = assertAdvancedEqualsQuick(
+    "absent",
+    previous,
+    pool,
+    { type: "CADDY_ATTENDANCE_NOSHOW", caddyId: absentId },
+    { type: "CADDY_ATTENDANCE_NOSHOW", caddyId: absentId }
+  );
+  assert(absent.after.assignments.length === beforeCount, "결근 reservation 유지");
+  assert(
+    absent.after.assignments.every((row) => row.caddy.id !== absentId),
+    "결근 캐디 당일 후속 근무에서도 제외"
+  );
+  assert(caddyOn(absent.after, "R3") === lockedCaddy, "결근 LOCK 유지");
 }
 
 section("Quick swap/리무진/LOCK 적용은 memory store에 즉시 기록");
@@ -1578,6 +1840,14 @@ async function runPersistTests() {
       ),
       "cancel status persisted"
     );
+    const remainingR3 = previous.assignments.find((x) => x.reservation.id === "R3")!;
+    const pulled = cancelStore.placements.find(
+      (p) => p.identityKey === reservationKey(remainingR3.reservation)
+    );
+    assert(
+      pulled?.caddyId === previous.assignments.find((x) => x.reservation.id === "R2")?.caddy.id,
+      "cancel persist pulled next regular onto R3"
+    );
 
     const sickStore = emptyLiveChangeMemoryStore();
     const sick = await applyLiveAssignmentChange(
@@ -1691,6 +1961,86 @@ async function runPersistTests() {
     assert(counts.placementDelete === 0, "swap did not delete placements");
     assert(counts.reservationCreateMany === 0, "swap did not recreate day");
     assert(counts.placementUpdate === 2, "swap updated two placements");
+  }
+
+  section("기존 Daily row가 있어도 예약취소는 patch하지 않고 reflow rewrite");
+  {
+    const date = "2026-10-05";
+    const pool = makeCaddies(4);
+    const previous = computeAutoAssignmentsV1({
+      date,
+      available: pool,
+      reservations: [
+        res(date, "R1", { teeTime: "07:00" }),
+        res(date, "R2", { teeTime: "07:08" }),
+        res(date, "R3", { teeTime: "07:16" }),
+      ],
+    });
+    const counts = {
+      reservationDelete: 0,
+      placementDelete: 0,
+      reservationCreateMany: 0,
+      placementUpdate: 0,
+    };
+    const fakeTx = {
+      dailyReservation: {
+        count: async () => 3,
+        findUnique: async () => ({ id: 1 }),
+        deleteMany: async () => {
+          counts.reservationDelete += 1;
+          return { count: 3 };
+        },
+        update: async () => {
+          throw new Error("cancel must not patch reservation");
+        },
+        createManyAndReturn: async (args: { data: unknown[] }) => {
+          counts.reservationCreateMany += args.data.length;
+          return (args.data as Array<{ identityKey: string }>).map((row, i) => ({
+            id: i + 1,
+            identityKey: row.identityKey,
+          }));
+        },
+      },
+      dailyPlacement: {
+        deleteMany: async () => {
+          counts.placementDelete += 1;
+          return { count: 3 };
+        },
+        update: async () => {
+          counts.placementUpdate += 1;
+          throw new Error("cancel must not patch placement");
+        },
+        createMany: async () => ({ count: 2 }),
+      },
+      dailyCaddyUnavailable: {
+        deleteMany: async () => ({ count: 0 }),
+        createMany: async () => ({ count: 0 }),
+      },
+      dailyAssignmentChange: { create: async () => ({ id: 1 }) },
+      audit: { create: async () => ({ id: 1 }) },
+      shiftDuty: { count: async () => 0 },
+    };
+    const fakePrisma = {
+      $transaction: async (fn: (tx: typeof fakeTx) => Promise<unknown>) =>
+        fn(fakeTx),
+    };
+    const result = await applyLiveAssignmentChange(
+      {
+        previous,
+        regularCaddyPool: pool,
+        change: {
+          type: "CANCEL_RESERVATION",
+          reservationKey: reservationKey(previous.assignments[0].reservation),
+        },
+      },
+      { prisma: fakePrisma as never, updateOpsIfPresent: false }
+    );
+    assert(result.ok === true, "cancel rewrite ok");
+    assert(counts.placementUpdate === 0, "cancel did not patch placements");
+    assert(counts.reservationDelete === 1, "cancel rewrote reservations");
+    assert(counts.placementDelete === 1, "cancel rewrote placements");
+    assert(counts.reservationCreateMany >= 3, "cancel rewrote reservation rows");
+    assert(caddyOn(result.ok ? result.preview.after : previous, "R2") === caddyOn(previous, "R1"), "rewrite still pulled");
   }
 
   section("250건 Reservation 저장은 createMany, 개별 create 없음");

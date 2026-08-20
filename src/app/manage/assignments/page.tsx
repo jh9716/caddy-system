@@ -64,7 +64,8 @@ import {
   LIVE_CHANGE_LABELS,
   QUICK_ACTION_CONFIRM_MESSAGE,
   needsQuickActionConfirm,
-  previewLiveAssignmentChange,
+  previewLiveChangeFromDraft,
+  shouldReconcileLivePersist,
   swapOrderToast,
   type LiveChangeInput,
   type LiveChangePreview,
@@ -780,9 +781,9 @@ export default function ManageAssignmentsOpsPage() {
       if (!window.confirm(QUICK_ACTION_CONFIRM_MESSAGE)) return;
     }
     const previous = autoResultFromDraft(current, autoResultRef.current);
-    const preview = previewLiveAssignmentChange({
-      previous,
-      regularCaddyPool: current.caddyPool,
+    const preview = previewLiveChangeFromDraft({
+      draft: current,
+      base: autoResultRef.current,
       change,
     });
     const blocking = preview.warnings.find((w) => w.level === "error");
@@ -806,7 +807,7 @@ export default function ManageAssignmentsOpsPage() {
         preview,
         previous,
         pool: current.caddyPool,
-        applyServerDraft: false,
+        applyServerDraft: shouldReconcileLivePersist(change.type),
         rollbackDraft: current,
       });
       if (!ok) persistGenRef.current += 1;
