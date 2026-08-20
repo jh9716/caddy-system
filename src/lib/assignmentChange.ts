@@ -87,6 +87,17 @@ export function swapOrderToast(nameA: string, nameB: string): string {
 
 export const QUICK_ACTION_CONFIRM_MESSAGE = "정말 적용하시겠습니까?";
 
+/** 전체 날짜 delete/create 없이 patch 가능한 단순 Quick Action. */
+export function isPatchableLiveChange(type: LiveChangeType): boolean {
+  return (
+    type === "SWAP_CADDY" || type === "SET_LOCK" || type === "SET_LIMOUSINE"
+  );
+}
+
+export function skipsOpsRewriteOnLivePersist(type: LiveChangeType): boolean {
+  return type === "SET_LOCK" || type === "SET_LIMOUSINE";
+}
+
 /** 보드 탭/프리셋이 이 조건을 충족하면 배치 다시 맞추기 없이 preview 계산. */
 export function isLiveChangeReady(
   change: LiveChangeInput | null | undefined
@@ -528,6 +539,83 @@ function mapReservationStatus(
   return status;
 }
 
+async function tryPatchLiveDay(
+  tx: Prisma.TransactionClient,
+  plan: LiveChangePersistPlan,
+  preview: LiveChangePreview
+): Promise<boolean> {
+  if (!isPatchableLiveChange(plan.changeType)) return false;
+  const existing = await tx.dailyReservation.count({
+    where: { date: plan.dateObj },
+  });
+  if (existing === 0) return false;
+
+  const findReservationId = async (identityKey: string) => {
+    const row = await tx.dailyReservation.findUnique({
+      where: {
+        date_identityKey: { date: plan.dateObj, identityKey },
+      },
+      select: { id: true },
+    });
+    return row?.id ?? null;
+  };
+
+  if (plan.changeType === "SET_LIMOUSINE") {
+    const event = preview.events.find((e) => e.type === "SET_LIMOUSINE");
+    const key = event && "reservationKey" in event ? event.reservationKey : "";
+    if (!key) return false;
+    const row = plan.reservations.find((r) => r.identityKey === key);
+    if (!row) return false;
+    const id = await findReservationId(key);
+    if (id == null) return false;
+    await tx.dailyReservation.update({
+      where: { id },
+      data: { limousineCart: row.limousineCart },
+    });
+    return true;
+  }
+
+  if (plan.changeType === "SET_LOCK") {
+    const event = preview.events.find((e) => e.type === "SET_LOCK");
+    const key = event && "reservationKey" in event ? event.reservationKey : "";
+    if (!key) return false;
+    const placement = plan.placements.find((p) => p.identityKey === key);
+    if (!placement) return false;
+    const reservationId = await findReservationId(key);
+    if (reservationId == null) return false;
+    await tx.dailyPlacement.update({
+      where: { reservationId },
+      data: { locked: placement.locked },
+    });
+    return true;
+  }
+
+  if (plan.changeType === "SWAP_CADDY") {
+    const event = preview.events.find((e) => e.type === "SWAP_CADDY");
+    if (!event || event.type !== "SWAP_CADDY") return false;
+    const keys = [event.reservationKeyA, event.reservationKeyB];
+    for (const key of keys) {
+      const placement = plan.placements.find((p) => p.identityKey === key);
+      const reservationId = await findReservationId(key);
+      if (!placement || reservationId == null) return false;
+      await tx.dailyPlacement.update({
+        where: { reservationId },
+        data: {
+          caddyId: placement.caddyId,
+          kind: placement.kind,
+          reason: placement.reason,
+          sequenceIndex: placement.sequenceIndex,
+          pairId: placement.pairId,
+          locked: placement.locked,
+        },
+      });
+    }
+    return true;
+  }
+
+  return false;
+}
+
 async function writePlanWithPrisma(
   db: PrismaClient,
   plan: LiveChangePersistPlan,
@@ -539,53 +627,54 @@ async function writePlanWithPrisma(
   // "Transaction not found / Transaction ID is invalid" 가 난다.
   return db.$transaction(
     async (tx) => {
-      await tx.dailyPlacement.deleteMany({ where: { date: plan.dateObj } });
-      await tx.dailyReservation.deleteMany({ where: { date: plan.dateObj } });
+      const patched = await tryPatchLiveDay(tx, plan, preview);
+      if (!patched) {
+        await tx.dailyPlacement.deleteMany({ where: { date: plan.dateObj } });
+        await tx.dailyReservation.deleteMany({ where: { date: plan.dateObj } });
 
-      const reservationData = plan.reservations.map((row) => ({
-        date: plan.dateObj,
-        course: row.course,
-        shift: row.shift,
-        teeTime: row.teeTime,
-        teamName: row.teamName,
-        hole: row.hole,
-        source: row.source,
-        status: mapReservationStatus(row.status),
-        identityKey: row.identityKey,
-        rawRowIndex: row.rawRowIndex,
-        limousineCart: row.limousineCart,
-      }));
-      const createdRows =
-        reservationData.length > 0
-          ? await tx.dailyReservation.createManyAndReturn({
-              data: reservationData,
-              select: { id: true, identityKey: true },
-            })
-          : [];
-      const created = new Map(
-        createdRows.map((row) => [row.identityKey, row.id])
-      );
-
-      const placementData = plan.placements
-        .map((row) => {
-          const reservationId = created.get(row.identityKey);
-          if (!reservationId) return null;
-          return {
-            date: plan.dateObj,
-            reservationId,
-            caddyId: row.caddyId,
-            kind: row.kind,
-            reason: row.reason,
-            sequenceIndex: row.sequenceIndex,
-            pairId: row.pairId,
-            locked: row.locked,
-          };
-        })
-        .filter(
-          (row): row is NonNullable<typeof row> => row != null
+        const reservationData = plan.reservations.map((row) => ({
+          date: plan.dateObj,
+          course: row.course,
+          shift: row.shift,
+          teeTime: row.teeTime,
+          teamName: row.teamName,
+          hole: row.hole,
+          source: row.source,
+          status: mapReservationStatus(row.status),
+          identityKey: row.identityKey,
+          rawRowIndex: row.rawRowIndex,
+          limousineCart: row.limousineCart,
+        }));
+        const createdRows =
+          reservationData.length > 0
+            ? await tx.dailyReservation.createManyAndReturn({
+                data: reservationData,
+                select: { id: true, identityKey: true },
+              })
+            : [];
+        const created = new Map(
+          createdRows.map((row) => [row.identityKey, row.id])
         );
-      if (placementData.length > 0) {
-        await tx.dailyPlacement.createMany({ data: placementData });
+
+        const placementData = plan.placements
+          .map((row) => {
+            const reservationId = created.get(row.identityKey);
+            if (!reservationId) return null;
+            return {
+              date: plan.dateObj,
+              reservationId,
+              caddyId: row.caddyId,
+              kind: row.kind,
+              reason: row.reason,
+              sequenceIndex: row.sequenceIndex,
+              pairId: row.pairId,
+              locked: row.locked,
+            };
+          })
+          .filter((row): row is NonNullable<typeof row> => row != null);
+        if (placementData.length > 0) {
+          await tx.dailyPlacement.createMany({ data: placementData });
+        }
       }
 
       if (plan.unavailables.length > 0) {
@@ -646,7 +735,10 @@ async function writePlanWithPrisma(
       }
 
       let opsUpdated = false;
-      if (opts.updateOpsIfPresent) {
+      if (
+        opts.updateOpsIfPresent &&
+        !skipsOpsRewriteOnLivePersist(plan.changeType)
+      ) {
         const existing = await tx.shiftDuty.count({
           where: { date: plan.dateObj },
         });

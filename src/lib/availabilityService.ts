@@ -36,6 +36,8 @@ export type LoadAvailabilityOptions = {
   dutyWorkbook?: Buffer | ArrayBuffer | Uint8Array | null;
   /** false면 휴무 Sheet를 읽지 않음 (기본 true) */
   includeOffSheet?: boolean;
+  /** true면 휴무 Sheet 캐시를 무시하고 다시 읽음 (가용 새로고침) */
+  forceOffSheet?: boolean;
 };
 
 export async function loadAvailabilityForDate(
@@ -102,7 +104,9 @@ export async function loadAvailabilityForDate(
 
   let offNames: string[] = [];
   if (options?.includeOffSheet !== false) {
-    const sheets = options?.offSheets ?? (await fetchPublishedOffSheets());
+    const sheets =
+      options?.offSheets ??
+      (await fetchPublishedOffSheets({ force: options?.forceOffSheet === true }));
     offNames = requireOffNamesForDate(sheets, ymd);
   }
 

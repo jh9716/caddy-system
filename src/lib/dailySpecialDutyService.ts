@@ -4,7 +4,6 @@
 
 import { prisma } from "@/lib/prisma";
 import { parseYmd } from "@/lib/availabilityEngine";
-import { loadAvailabilityForDate } from "@/lib/availabilityService";
 import {
   DAILY_SPECIAL_KIND_LABELS,
   DAILY_SPECIAL_KINDS,
@@ -16,7 +15,6 @@ import {
   nextSortOrder,
   renumberSortOrders,
   resolvePastedSpecialNames,
-  unavailableReasonsFromRows,
   type DailySpecialKind,
   type SpecialDutyConflict,
   type SpecialDutyRecord,
@@ -314,6 +312,36 @@ export async function reorderDailySpecialDuties(input: {
   return next.map(toRecord);
 }
 
+/** 화면에서 모은 순서/삭제를 한 트랜잭션으로 저장. */
+export async function commitKindSpecialDuties(input: {
+  date: string;
+  kind: DailySpecialKind;
+  orderedCaddyIds: number[];
+  deleteIds?: number[];
+}): Promise<SpecialDutyRecord[]> {
+  const { start, end } = dateRange(input.date);
+  const deleteIds = [...new Set((input.deleteIds || []).map(Number))].filter(
+    (id) => Number.isInteger(id) && id > 0
+  );
+  if (deleteIds.length) {
+    await prisma.dailySpecialDuty.deleteMany({
+      where: {
+        id: { in: deleteIds },
+        date: { gte: start, lte: end },
+        kind: input.kind,
+      },
+    });
+  }
+  if (input.orderedCaddyIds.length === 0) {
+    return [];
+  }
+  return reorderDailySpecialDuties({
+    date: input.date,
+    kind: input.kind,
+    orderedCaddyIds: input.orderedCaddyIds.map(Number),
+  });
+}
+
 function toYmd(date: Date): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
@@ -328,32 +356,20 @@ export function withConflicts(
   return annotateSpecialDutyConflicts(records, unavailableById);
 }
 
-async function unavailableMapForDate(date: string): Promise<Map<number, string[]>> {
-  try {
-    const availability = await loadAvailabilityForDate(date, {
-      includeOffSheet: true,
-    });
-    return unavailableReasonsFromRows(availability.excluded);
-  } catch {
-    const caddies = await prisma.caddy.findMany({
-      select: { id: true, employmentStatus: true },
-    });
-    const map = new Map<number, string[]>();
-    for (const caddy of caddies) {
-      const emp = String(caddy.employmentStatus || "").toUpperCase();
-      if (emp === "RETIRED") map.set(caddy.id, ["퇴사(RETIRED)"]);
-      else if (emp === "LEAVE") map.set(caddy.id, ["휴직(LEAVE)"]);
-      else if (emp !== "ACTIVE") {
-        map.set(caddy.id, [`재직상태 아님(${emp || "UNKNOWN"})`]);
-      }
-    }
-    return map;
-  }
-}
-
 export async function buildDailySpecialDutyPayload(date: string) {
   const records = await listDailySpecialDutyRecords(date);
-  const unavailable = await unavailableMapForDate(date);
+  const caddies = await prisma.caddy.findMany({
+    select: { id: true, employmentStatus: true },
+  });
+  const unavailable = new Map<number, string[]>();
+  for (const caddy of caddies) {
+    const emp = String(caddy.employmentStatus || "").toUpperCase();
+    if (emp === "RETIRED") unavailable.set(caddy.id, ["퇴사(RETIRED)"]);
+    else if (emp === "LEAVE") unavailable.set(caddy.id, ["휴직(LEAVE)"]);
+    else if (emp !== "ACTIVE") {
+      unavailable.set(caddy.id, [`재직상태 아님(${emp || "UNKNOWN"})`]);
+    }
+  }
   const annotated = withConflicts(records, unavailable);
   const groups = groupSpecialDuties(annotated).map((group) => ({
     kind: group.kind,
