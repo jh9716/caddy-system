@@ -289,7 +289,7 @@ export type CaddyUnavailableCause = "SICK" | "ATTENDANCE_NOSHOW";
 export type ReservationChangeEvent =
   | {
       type: "CANCEL_RESERVATION";
-      /** V1: CANCEL과 TEAM_NOSHOW는 동일 reflow, 사유만 구분 */
+      /** V1: CANCEL과 TEAM_NOSHOW는 동일 밀림 reflow, 사유만 구분 */
       cause?: ReservationCancelCause;
       reservationId?: string | number;
       reservationKey?: string;
@@ -3750,7 +3750,10 @@ function applySwapOnly(
 
 /**
  * 일반 예약 캔슬/추가/병가/체인지 후 순번 재계산.
- * LOCK ON placement는 같은 reservation에 고정, LOCK OFF는 일반 reflow에 참여.
+ * - 예약 취소/팀 노쇼: reservation 제거, 그 캐디부터 이후 일반이 남은 슬롯으로 뒤로 밀림.
+ * - 병가/결근: reservation 유지, 해당 캐디 제외, 뒤 일반이 앞으로 당김.
+ * LOCK ON placement는 같은 reservation에 고정하고 건너뛴다.
+ * LOCK된 reservation 자체 취소는 그 placement만 제거하고 다른 LOCK은 이동시키지 않는다.
  * assignRegularSequence(Mode A/B · Spare · THIRD)를 source of truth로 재사용.
  * teamOrder / 캐디 DB 순번은 변경하지 않음.
  */
@@ -3828,10 +3831,11 @@ export function reflowRegularAssignments(input: {
     }
   }
 
-  const lockedRows = previous.assignments
+  let lockedRows = previous.assignments
     .filter((row) => isPlacementLocked(row) && !unavailable.has(row.caddy.id))
     .map(cloneAssignmentRow)
-    .map((row) => ({ ...row, locked: true }));
+    .map((row) => ({ ...row, locked: true as const }));
+  const cancelledLockedKeys = new Set<string>();
   const lockedCaddies = new Set<number>([
     ...lockedRows.map((r) => r.caddy.id),
     ...fixedCancelledCaddyIds(previous),
@@ -3870,8 +3874,12 @@ export function reflowRegularAssignments(input: {
         if (matchesCancelEvent(res, event)) keysToDelete.push(key);
       }
       for (const key of keysToDelete) {
-        if (lockedResKeys.has(key)) continue;
         seedMap.delete(key);
+      }
+      for (const row of lockedRows) {
+        if (matchesCancelEvent(row.reservation, event)) {
+          cancelledLockedKeys.add(reservationKey(row.reservation));
+        }
       }
       continue;
     }
@@ -3881,7 +3889,7 @@ export function reflowRegularAssignments(input: {
         ? event.reservation
         : { ...event.reservation, date };
       const key = reservationKey(res);
-      if (lockedResKeys.has(key)) {
+      if (lockedResKeys.has(key) && !cancelledLockedKeys.has(key)) {
         warnings.push({
           level: "warn",
           code: "ADD_LOCKED_SLOT",
@@ -3902,6 +3910,15 @@ export function reflowRegularAssignments(input: {
       }
       seedMap.set(key, res);
     }
+  }
+
+  const cancelledLockedSpecial = lockedRows.filter((row) =>
+    cancelledLockedKeys.has(reservationKey(row.reservation))
+  );
+  if (cancelledLockedKeys.size > 0) {
+    lockedRows = lockedRows.filter(
+      (row) => !cancelledLockedKeys.has(reservationKey(row.reservation))
+    );
   }
 
   const regularReservations = [...seedMap.values()].sort(compareReservationOrder);
@@ -3969,6 +3986,17 @@ export function reflowRegularAssignments(input: {
     closedCourseReservations: previous.closedCourseReservations || [],
     openCourses: previous.openCourses || [...COURSE_ORDER],
     unusedCaddies,
+    specialUnassigned: [
+      ...(previous.specialUnassigned || []),
+      ...cancelledLockedSpecial
+        .filter((row) => specialTagRow(row))
+        .map((row) => ({
+          caddy: row.caddy,
+          reason: REASON.FIXED_CANCELLED,
+          review: true as const,
+          note: row.note ?? null,
+        })),
+    ],
     sparesByShift: regular.sparesByShift,
     meta: {
       ...previous.meta,
