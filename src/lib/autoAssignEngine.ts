@@ -3028,26 +3028,178 @@ function boardAfterMutation(
     assignments: sorted,
     unassignedReservations,
     unusedCaddies,
+    meta: {
+      ...previous.meta,
+      assignedCount: sorted.length,
+      unassignedCount: unassignedReservations.length,
+      unusedCount: unusedCaddies.length,
+    },
   };
 }
 
-function reflowUnlockedAfterMutation(
+function cloneUnassigned(
+  rows: UnassignedReservationRow[] | undefined
+): UnassignedReservationRow[] {
+  return (rows || []).map((row) => ({
+    reservation: { ...row.reservation },
+    reason: row.reason,
+  }));
+}
+
+function otherShiftRows(assignments: AutoAssignmentRow[]): AutoAssignmentRow[] {
+  return assignments
+    .filter((row) => String(row.reservation.shift) !== "3부")
+    .map(cloneAssignmentRow);
+}
+
+function thirdShiftRows(assignments: AutoAssignmentRow[]): AutoAssignmentRow[] {
+  return assignments
+    .filter((row) => String(row.reservation.shift) === "3부")
+    .map(cloneAssignmentRow)
+    .sort(compareAssignmentOrder);
+}
+
+function unlockedRegularChainIndexes(
+  third: AutoAssignmentRow[],
+  targetIndex: number
+): number[] {
+  const chain = [targetIndex];
+  for (let i = targetIndex + 1; i < third.length; i += 1) {
+    const row = third[i]!;
+    if (row.kind === "regular" && !isPlacementLocked(row)) {
+      chain.push(i);
+    }
+  }
+  return chain;
+}
+
+function placeRegularCaddy(
+  dest: AutoAssignmentRow,
+  caddy: AutoAssignCaddy,
+  reason: string
+): AutoAssignmentRow {
+  return {
+    ...cloneAssignmentRow(dest),
+    caddy: { ...caddy },
+    kind: "regular",
+    locked: false,
+    reason,
+  };
+}
+
+function thirdSpareCaddies(
+  previous: AutoAssignResultV1,
+  pool: AutoAssignCaddy[]
+): AutoAssignCaddy[] {
+  const row = (previous.sparesByShift || []).find((s) => s.shift === "3부");
+  if (!row) return [];
+  const out: AutoAssignCaddy[] = [];
+  for (const info of [row.spare1, row.spare2]) {
+    if (!info) continue;
+    const found =
+      previous.unusedCaddies.find((c) => c.id === info.caddyId) ||
+      pool.find((c) => c.id === info.caddyId) ||
+      previous.assignments.find((a) => a.caddy.id === info.caddyId)?.caddy;
+    out.push(
+      found
+        ? { ...found }
+        : {
+            id: info.caddyId,
+            name: info.name,
+            team: info.team,
+            teamOrder: info.teamOrder,
+          }
+    );
+  }
+  return out;
+}
+
+function patchThirdSpares(
+  previous: SpareByShift[] | undefined,
+  sparePeople: AutoAssignCaddy[]
+): SpareByShift[] {
+  const unique: AutoAssignCaddy[] = [];
+  for (const caddy of sparePeople) {
+    if (unique.some((row) => row.id === caddy.id)) continue;
+    unique.push(caddy);
+  }
+  const source = previous?.length ? previous : emptySparesByShift();
+  return SHIFT_PARTS.map((shift) => {
+    const prev = source.find((row) => row.shift === shift) || {
+      shift,
+      spare1: null,
+      spare2: null,
+    };
+    if (shift !== "3부") {
+      return { ...prev };
+    }
+    return {
+      shift: "3부",
+      spare1: toSpareInfo(unique[0]),
+      spare2: toSpareInfo(unique[1]),
+    };
+  });
+}
+
+function resultFromScopedBoard(
   original: AutoAssignResultV1,
-  seeded: AutoAssignResultV1,
+  after: AutoAssignResultV1,
   pool: AutoAssignCaddy[],
   reason: string,
-  extraWarnings: ReflowWarning[]
+  warnings: ReflowWarning[]
 ): RegularReflowResult {
-  const reflowed = reflowRegularAssignments({
-    previous: seeded,
-    regularCaddyPool: pool,
-    events: [],
-  });
+  const changes = buildCaddyChanges(original.assignments, after.assignments, pool);
+  const lockedPreserved = after.assignments
+    .filter(isPlacementLocked)
+    .map((row) => ({
+      reservationKey: reservationKey(row.reservation),
+      caddy: row.caddy,
+      kind: row.kind,
+      reason: row.reason,
+    }));
+  const lockedKeys = new Set(lockedPreserved.map((row) => row.reservationKey));
   return {
-    ...reflowed,
+    date: original.date,
     reason,
     before: original,
-    warnings: [...extraWarnings, ...reflowed.warnings],
+    after,
+    changes,
+    placementDiffs: buildPlacementDiffs(original, after, lockedKeys),
+    lockedPreserved,
+    warnings,
+    unavailableCaddyIds: [],
+    summary: summarizeChanges(
+      changes,
+      lockedPreserved.length,
+      lockedPreserved.length
+    ),
+  };
+}
+
+function scopedThirdBoard(args: {
+  previous: AutoAssignResultV1;
+  nextThird: AutoAssignmentRow[];
+  unassignedReservations: UnassignedReservationRow[];
+  extraUnused: AutoAssignCaddy[];
+  thirdSparePeople: AutoAssignCaddy[];
+}): AutoAssignResultV1 {
+  const nextAssignments = [
+    ...otherShiftRows(args.previous.assignments),
+    ...args.nextThird,
+  ];
+  const after = boardAfterMutation(
+    args.previous,
+    nextAssignments,
+    args.unassignedReservations,
+    args.extraUnused
+  );
+  const used = new Set(after.assignments.map((row) => row.caddy.id));
+  return {
+    ...after,
+    sparesByShift: patchThirdSpares(
+      args.previous.sparesByShift,
+      args.thirdSparePeople.filter((caddy) => !used.has(caddy.id))
+    ),
   };
 }
 
@@ -3203,26 +3355,113 @@ function applyDrivingAssign(
     reason: REASON.DRIVING_ASSIGN,
     reservation: { ...reservation },
     caddy: { ...caddy },
-    pairId: null,
+    pairId: sourceRow?.pairId ?? null,
     kind: "driving",
     locked: true,
     note: sourceRow?.note ?? null,
   };
-  const remaining = previous.assignments
-    .filter((_, i) => i !== assignedIdx)
-    .map(cloneAssignmentRow);
-  remaining.push(drivingRow);
-  const seeded = boardAfterMutation(
-    previous,
-    remaining,
-    (previous.unassignedReservations || []).filter(
-      (u) => reservationKey(u.reservation) !== event.reservationKey
-    ),
-    sourceRow && sourceRow.caddy.id !== caddy.id ? [sourceRow.caddy] : []
+
+  // 미배치 예약에 지정: 그 자리만 채우고 1·2·3부 기존 placement는 건드리지 않음.
+  if (!sourceRow) {
+    const after = scopedThirdBoard({
+      previous,
+      nextThird: [...thirdShiftRows(previous.assignments), drivingRow],
+      unassignedReservations: cloneUnassigned(previous.unassignedReservations).filter(
+        (u) => reservationKey(u.reservation) !== event.reservationKey
+      ),
+      extraUnused: [],
+      thirdSparePeople: thirdSpareCaddies(previous, pool),
+    });
+    return resultFromScopedBoard(
+      previous,
+      after,
+      pool,
+      REASON.DRIVING_ASSIGN,
+      warnings
+    );
+  }
+
+  const third = thirdShiftRows(previous.assignments);
+  const targetIndex = third.findIndex(
+    (row) => reservationKey(row.reservation) === event.reservationKey
   );
-  return reflowUnlockedAfterMutation(
+  if (targetIndex < 0) {
+    warnings.push({
+      level: "error",
+      code: "DRIVING_TARGET_NOT_FOUND",
+      message: "드라이빙 지정 대상 예약을 찾을 수 없습니다.",
+      reservationKey: event.reservationKey,
+    });
+    return {
+      date: previous.date,
+      reason: REASON.DRIVING_ASSIGN,
+      before: previous,
+      after: previous,
+      changes: [],
+      placementDiffs: [],
+      lockedPreserved: [],
+      warnings,
+      unavailableCaddyIds: [],
+      summary: emptyReflowSummary(0),
+    };
+  }
+
+  const nextThird = third.map(cloneAssignmentRow);
+  if (isDrivingPlacement(third[targetIndex]!)) {
+    nextThird[targetIndex] = {
+      ...drivingRow,
+      sequenceIndex: third[targetIndex]!.sequenceIndex,
+      reservation: { ...third[targetIndex]!.reservation },
+    };
+    const after = scopedThirdBoard({
+      previous,
+      nextThird,
+      unassignedReservations: cloneUnassigned(previous.unassignedReservations),
+      extraUnused:
+        third[targetIndex]!.caddy.id !== caddy.id ? [third[targetIndex]!.caddy] : [],
+      thirdSparePeople: thirdSpareCaddies(previous, pool),
+    });
+    return resultFromScopedBoard(
+      previous,
+      after,
+      pool,
+      REASON.DRIVING_ASSIGN,
+      warnings
+    );
+  }
+
+  // 3부 local shift: target에 DRIVING LOCK 삽입, 이후 일반 UNLOCKED만 한 칸 밀림.
+  // LOCK placement는 reservation에 유지하고 건너뛴다. assignRegularSequence 재실행 금지.
+  const chainIdxs = unlockedRegularChainIndexes(third, targetIndex);
+  const displaced = chainIdxs.map((idx) => third[idx]!.caddy);
+  nextThird[targetIndex] = {
+    ...drivingRow,
+    sequenceIndex: third[targetIndex]!.sequenceIndex,
+    reservation: { ...third[targetIndex]!.reservation },
+  };
+  for (let k = 1; k < chainIdxs.length; k += 1) {
+    const destIdx = chainIdxs[k]!;
+    const person = displaced[k - 1]!;
+    nextThird[destIdx] = placeRegularCaddy(
+      third[destIdx]!,
+      person,
+      `${person.name} 순번 이동`
+    );
+  }
+  const leftover = displaced[chainIdxs.length - 1];
+  const after = scopedThirdBoard({
     previous,
-    seeded,
+    nextThird,
+    unassignedReservations: cloneUnassigned(previous.unassignedReservations),
+    extraUnused: leftover ? [leftover] : [],
+    thirdSparePeople: [
+      ...(leftover ? [leftover] : []),
+      ...thirdSpareCaddies(previous, pool),
+    ],
+  });
+  return resultFromScopedBoard(
+    previous,
+    after,
     pool,
     REASON.DRIVING_ASSIGN,
     warnings
@@ -3259,19 +3498,94 @@ function applyDrivingClear(
     };
   }
   const removed = previous.assignments[idx];
-  const remaining = previous.assignments.filter((_, i) => i !== idx);
-  const seeded = boardAfterMutation(
-    previous,
-    remaining,
-    [
-      ...(previous.unassignedReservations || []),
-      { reservation: { ...removed.reservation }, reason: REASON.DRIVING_CLEAR },
-    ],
-    [{ ...removed.caddy }]
+  if (String(removed.reservation.shift) !== "3부") {
+    warnings.push({
+      level: "error",
+      code: "DRIVING_SHIFT_REQUIRED",
+      message: "드라이빙 해제는 3부에서만 처리할 수 있습니다.",
+      reservationKey: event.reservationKey,
+    });
+    return {
+      date: previous.date,
+      reason: REASON.DRIVING_CLEAR,
+      before: previous,
+      after: previous,
+      changes: [],
+      placementDiffs: [],
+      lockedPreserved: [],
+      warnings,
+      unavailableCaddyIds: [],
+      summary: emptyReflowSummary(0),
+    };
+  }
+
+  const third = thirdShiftRows(previous.assignments);
+  const targetIndex = third.findIndex(
+    (row) => reservationKey(row.reservation) === event.reservationKey
   );
-  return reflowUnlockedAfterMutation(
+  if (targetIndex < 0) {
+    warnings.push({
+      level: "error",
+      code: "DRIVING_CLEAR_NOT_FOUND",
+      message: "해제할 드라이빙 배치를 찾을 수 없습니다.",
+      reservationKey: event.reservationKey,
+    });
+    return {
+      date: previous.date,
+      reason: REASON.DRIVING_CLEAR,
+      before: previous,
+      after: previous,
+      changes: [],
+      placementDiffs: [],
+      lockedPreserved: [],
+      warnings,
+      unavailableCaddyIds: [],
+      summary: emptyReflowSummary(0),
+    };
+  }
+
+  const nextThird = third.map(cloneAssignmentRow);
+  const chainIdxs = unlockedRegularChainIndexes(third, targetIndex);
+  const incoming: AutoAssignCaddy[] = [
+    ...chainIdxs.slice(1).map((i) => third[i]!.caddy),
+    ...thirdSpareCaddies(previous, pool),
+  ];
+  const dropped: UnassignedReservationRow[] = [];
+  for (let k = 0; k < chainIdxs.length; k += 1) {
+    const destIdx = chainIdxs[k]!;
+    const person = incoming[k];
+    if (person) {
+      nextThird[destIdx] = placeRegularCaddy(
+        third[destIdx]!,
+        person,
+        `${person.name} 순번 이동`
+      );
+    } else {
+      dropped.push({
+        reservation: { ...third[destIdx]!.reservation },
+        reason: REASON.DRIVING_CLEAR,
+      });
+    }
+  }
+  const keptThird = nextThird.filter((_, i) => {
+    const chainPos = chainIdxs.indexOf(i);
+    if (chainPos < 0) return true;
+    return Boolean(incoming[chainPos]);
+  });
+  const leftoverIncoming = incoming.slice(chainIdxs.length);
+  const after = scopedThirdBoard({
     previous,
-    seeded,
+    nextThird: keptThird,
+    unassignedReservations: [
+      ...cloneUnassigned(previous.unassignedReservations),
+      ...dropped,
+    ],
+    extraUnused: [{ ...removed.caddy }, ...leftoverIncoming],
+    thirdSparePeople: [...leftoverIncoming, ...previous.unusedCaddies],
+  });
+  return resultFromScopedBoard(
+    previous,
+    after,
     pool,
     REASON.DRIVING_CLEAR,
     warnings

@@ -247,7 +247,7 @@ export function LiveChangePanel({
         <>
       <div className="live-change-head">
         <strong>고급 배치 변경</strong>
-        <span>예외 처리용입니다. 현장은 배치표 탭(Quick Action)을 먼저 쓰세요. 저장은 이대로 적용만.</span>
+        <span>예외 처리용입니다. 현장 Quick Action은 즉시 저장됩니다. 여기서만 미리보기 후 이대로 적용합니다.</span>
       </div>
 
       <div className="live-change-grid">
@@ -391,7 +391,7 @@ export function LiveChangePanel({
               </select>
             </label>
             <p className="live-swap-hint">
-              B를 고르면 미리보기가 바로 열립니다. 저장은 「이대로 적용」만.
+              B를 고르면 미리보기가 바로 열립니다. 고급 변경만 이대로 적용으로 저장합니다. 보드는 탭 즉시 저장입니다.
             </p>
           </>
         )}
@@ -651,7 +651,7 @@ export function LockToggle({
         e.stopPropagation();
         onToggle(!locked);
       }}
-      title={locked ? "LOCK ON — 탭하면 OFF 미리보기" : "일반 — 탭하면 LOCK ON 미리보기"}
+      title={locked ? "LOCK ON — 탭하면 즉시 OFF" : "일반 — 탭하면 즉시 LOCK ON"}
     >
       {locked ? "🔒 LOCK" : "🔓 일반"}
     </button>

@@ -7,6 +7,7 @@ import {
   DAILY_SPECIAL_KIND_LABELS,
   ANCHOR_SPECIAL_KINDS,
   annotateSpecialDutyConflicts,
+  isSpecialDutyPayloadForSelectedDate,
   unavailableReasonsFromRows,
   type DailySpecialKind,
   type SpecialDutyAnchors,
@@ -104,6 +105,9 @@ export function SpecialDutyPanel({
         { credentials: "include" }
       );
       const data = (await res.json()) as ListPayload;
+      if (!isSpecialDutyPayloadForSelectedDate(data, date)) {
+        return;
+      }
       if (!res.ok) {
         setError(data.error || "특수근무 목록을 불러오지 못했습니다.");
         return;
@@ -117,8 +121,37 @@ export function SpecialDutyPanel({
   }, [date, applyPayload]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    setGroups([]);
+    setAnchors(EMPTY_ANCHORS);
+    setError(null);
+    const ac = new AbortController();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return () => ac.abort();
+    }
+    void (async () => {
+      setLoading(true);
+      try {
+        const res = await fetch(
+          `/api/daily-special-duties?date=${encodeURIComponent(date)}`,
+          { credentials: "include", signal: ac.signal }
+        );
+        const data = (await res.json()) as ListPayload;
+        if (ac.signal.aborted) return;
+        if (!isSpecialDutyPayloadForSelectedDate(data, date)) return;
+        if (!res.ok) {
+          setError(data.error || "특수근무 목록을 불러오지 못했습니다.");
+          return;
+        }
+        applyPayload(data);
+      } catch (e) {
+        if (ac.signal.aborted) return;
+        setError(e instanceof Error ? e.message : "특수근무 목록 실패");
+      } finally {
+        if (!ac.signal.aborted) setLoading(false);
+      }
+    })();
+    return () => ac.abort();
+  }, [date, applyPayload]);
 
   const displayGroups = useMemo(() => {
     if (!excludedRows?.length) return groups;

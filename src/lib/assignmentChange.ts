@@ -56,6 +56,37 @@ export const LIVE_CHANGE_LABELS: Record<LiveChangeType, string> = {
 export const LIVE_CHANGE_APPLY_USER_MESSAGE =
   "배치 저장 중 오류가 발생했습니다. 다시 시도해주세요.";
 
+/** 보드 Quick Action에서 확인창 후 즉시 저장. 고급 배치 변경은 preview 유지. */
+export const QUICK_ACTION_CONFIRM_TYPES: readonly LiveChangeType[] = [
+  "CANCEL_RESERVATION",
+  "TEAM_NOSHOW",
+  "CADDY_SICK",
+  "CADDY_ATTENDANCE_NOSHOW",
+];
+
+/** 보드에서 미리보기 없이 즉시 저장하는 Quick Action. */
+export const QUICK_ACTION_INSTANT_TYPES: readonly LiveChangeType[] = [
+  "SET_LIMOUSINE",
+  "SET_LOCK",
+  "SWAP_CADDY",
+  "ASSIGN_DRIVING",
+  "CLEAR_DRIVING",
+];
+
+export function needsQuickActionConfirm(type: LiveChangeType): boolean {
+  return (QUICK_ACTION_CONFIRM_TYPES as readonly string[]).includes(type);
+}
+
+export function isInstantQuickAction(type: LiveChangeType): boolean {
+  return (QUICK_ACTION_INSTANT_TYPES as readonly string[]).includes(type);
+}
+
+export function swapOrderToast(nameA: string, nameB: string): string {
+  return `${nameA} ↔ ${nameB} 순번을 변경했습니다`;
+}
+
+export const QUICK_ACTION_CONFIRM_MESSAGE = "정말 적용하시겠습니까?";
+
 /** 보드 탭/프리셋이 이 조건을 충족하면 배치 다시 맞추기 없이 preview 계산. */
 export function isLiveChangeReady(
   change: LiveChangeInput | null | undefined

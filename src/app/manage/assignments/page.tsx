@@ -60,7 +60,15 @@ const COURSE_SHORT: Record<CourseCode, string> = {
 import { SpecialDutyPanel, type Shift1StartOption } from "./SpecialDutyPanel";
 import { BoardQuickSheet, LiveChangePanel, LockToggle } from "./LiveChangePanel";
 import { THIRD_BAND_TEAMS } from "@/lib/caddyManage";
-import type { LiveChangeInput, LiveChangePreview } from "@/lib/assignmentChange";
+import {
+  LIVE_CHANGE_LABELS,
+  QUICK_ACTION_CONFIRM_MESSAGE,
+  needsQuickActionConfirm,
+  previewLiveAssignmentChange,
+  swapOrderToast,
+  type LiveChangeInput,
+  type LiveChangePreview,
+} from "@/lib/assignmentChange";
 
 type ResultViewMode = "board" | "list";
 
@@ -199,9 +207,6 @@ export default function ManageAssignmentsOpsPage() {
   const [loadingRun, setLoadingRun] = useState(false);
   const [loadingApply, setLoadingApply] = useState(false);
   const [loadingLiveApply, setLoadingLiveApply] = useState(false);
-  const [pendingLiveChange, setPendingLiveChange] = useState<LiveChangeInput | null>(
-    null
-  );
   const [error, setError] = useState<string | null>(null);
   const [swapKey, setSwapKey] = useState<string | null>(null);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
@@ -536,13 +541,13 @@ export default function ManageAssignmentsOpsPage() {
       setSwapKey(null);
       return;
     }
-    setPendingLiveChange({
+    const change: LiveChangeInput = {
       type: "SWAP_CADDY",
       reservationKeyA: swapKey,
       reservationKeyB: key,
-    });
+    };
     setSwapKey(null);
-    showToast("순번 바꿈 미리보기 · 이대로 적용으로 저장");
+    void applyQuickChange(change);
   }
 
   function handlePlacementTap(
@@ -560,8 +565,7 @@ export default function ManageAssignmentsOpsPage() {
   }
 
   function onRequestLiveChange(change: LiveChangeInput) {
-    setPendingLiveChange(change);
-    showToast("변경 미리보기 · 이대로 적용으로 저장");
+    void applyQuickChange(change);
   }
 
   function onAssignUnassigned(resKey: string, caddyId: number) {
@@ -660,8 +664,11 @@ export default function ManageAssignmentsOpsPage() {
     }
   }
 
-  async function onLiveApply(preview: LiveChangePreview) {
-    if (!draft) return;
+  async function persistLivePreview(
+    preview: LiveChangePreview,
+    successToast: string
+  ): Promise<boolean> {
+    if (!draft) return false;
     setLoadingLiveApply(true);
     setError(null);
     try {
@@ -685,7 +692,7 @@ export default function ManageAssignmentsOpsPage() {
             "배치 저장 중 오류가 발생했습니다. 다시 시도해주세요."
         );
         showToast("DB 저장 실패 · 배치표는 그대로입니다");
-        return;
+        return false;
       }
       const after = (data.preview?.after || preview.after) as typeof preview.after;
       const next = applyLiveResultToDraft(draft, after);
@@ -699,16 +706,60 @@ export default function ManageAssignmentsOpsPage() {
       if (autoResult) {
         setAutoResult({ ...autoResult, ...after });
       }
-      showToast(
-        data.opsUpdated
-          ? "현장 변경 적용 · Reservation/Placement + 운영 배치 갱신"
-          : "현장 변경 적용 · Reservation/Placement 저장"
-      );
+      showToast(successToast);
+      return true;
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "현장 변경 적용 실패");
+      return false;
     } finally {
       setLoadingLiveApply(false);
     }
+  }
+
+  function quickActionToast(change: LiveChangeInput): string {
+    if (change.type === "SWAP_CADDY") {
+      const a = draft?.assignments.find(
+        (row) => reservationIdentity(row.reservation) === change.reservationKeyA
+      );
+      const b = draft?.assignments.find(
+        (row) => reservationIdentity(row.reservation) === change.reservationKeyB
+      );
+      return swapOrderToast(a?.caddy.name || "A", b?.caddy.name || "B");
+    }
+    if (change.type === "SET_LIMOUSINE") {
+      return change.limousineCart ? "리무진 ON" : "리무진 OFF";
+    }
+    if (change.type === "SET_LOCK") {
+      return change.locked ? "LOCK ON" : "LOCK OFF";
+    }
+    return `${LIVE_CHANGE_LABELS[change.type]} 적용`;
+  }
+
+  async function applyQuickChange(change: LiveChangeInput) {
+    if (!draft || loadingLiveApply) return;
+    if (needsQuickActionConfirm(change.type)) {
+      if (!window.confirm(QUICK_ACTION_CONFIRM_MESSAGE)) return;
+    }
+    const previous = autoResultFromDraft(draft, autoResult);
+    const preview = previewLiveAssignmentChange({
+      previous,
+      regularCaddyPool: draft.caddyPool,
+      change,
+    });
+    const blocking = preview.warnings.find((w) => w.level === "error");
+    if (blocking) {
+      setError(blocking.message);
+      showToast(blocking.message);
+      return;
+    }
+    await persistLivePreview(preview, quickActionToast(change));
+  }
+
+  async function onLiveApply(preview: LiveChangePreview) {
+    await persistLivePreview(
+      preview,
+      "현장 변경 적용 · Reservation/Placement 저장"
+    );
   }
 
   function onToggleLock(row: AutoAssignmentRow, locked: boolean) {
@@ -983,6 +1034,7 @@ export default function ManageAssignmentsOpsPage() {
         )}
         {error && <div className="ops-error">{error}</div>}
         <SpecialDutyPanel
+          key={date || "no-date"}
           date={date}
           excludedRows={availability?.excluded}
           shift1Options={shift1Options}
@@ -1402,8 +1454,6 @@ export default function ManageAssignmentsOpsPage() {
           previous={autoResultFromDraft(draft, autoResult)}
           applying={loadingLiveApply}
           onApplyPreview={onLiveApply}
-          preset={pendingLiveChange}
-          onPresetConsumed={() => setPendingLiveChange(null)}
           unavailableCaddyIds={unavailableCaddyIds}
         />
       )}
