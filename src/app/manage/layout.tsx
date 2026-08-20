@@ -1,7 +1,6 @@
-import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import ManageShell from "@/components/manage/ManageShell";
-import { resolveAuthFromCookieStore } from "@/lib/auth";
+import { getRequestAuthUser } from "@/lib/getRequestAuthUser";
 
 export const dynamic = "force-dynamic";
 
@@ -10,7 +9,7 @@ export default async function ManageLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const auth = await resolveAuthFromCookieStore(await cookies());
+  const auth = await getRequestAuthUser();
   if (!auth || auth.role !== "admin") {
     redirect("/login?callbackUrl=/manage");
   }
