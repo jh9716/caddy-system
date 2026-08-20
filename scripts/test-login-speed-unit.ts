@@ -136,8 +136,8 @@ console.log("== security structure unchanged ==");
   );
 }
 
-console.log("== HMAC cache still verifies ==");
-{
+async function main() {
+  console.log("== HMAC cache still verifies ==");
   const prev = process.env.SESSION_SECRET;
   process.env.SESSION_SECRET = "login-speed-unit-session-secret!!";
   try {
@@ -174,10 +174,15 @@ console.log("== HMAC cache still verifies ==");
     if (prev === undefined) delete process.env.SESSION_SECRET;
     else process.env.SESSION_SECRET = prev;
   }
+
+  console.log(`\nBEFORE callback DB=1 User | AFTER callback DB=1 User`);
+  console.log(`BEFORE /manage shell blocking DB=9 (1 auth + 8 dash) | AFTER shell blocking DB=1 auth`);
+  console.log(`BEFORE hydrate prefetch RSC=4 (includes /manage) | AFTER idle prefetch RSC=3 (skip current)`);
+  console.log(`DONE: ${passed} passed, ${failed} failed`);
+  if (failed > 0) process.exit(1);
 }
 
-console.log(`\nBEFORE callback DB=1 User | AFTER callback DB=1 User`);
-console.log(`BEFORE /manage shell blocking DB=9 (1 auth + 8 dash) | AFTER shell blocking DB=1 auth`);
-console.log(`BEFORE hydrate prefetch RSC=4 (includes /manage) | AFTER idle prefetch RSC=3 (skip current)`);
-console.log(`DONE: ${passed} passed, ${failed} failed`);
-if (failed > 0) process.exit(1);
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
