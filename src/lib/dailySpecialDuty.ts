@@ -47,6 +47,15 @@ export function isDailySpecialKind(value: unknown): value is DailySpecialKind {
   return DAILY_SPECIAL_KINDS.includes(String(value) as DailySpecialKind);
 }
 
+/** 특수근무 UI는 selected date의 payload만 반영. 다른 날짜 응답은 stale. */
+export function isSpecialDutyPayloadForSelectedDate(
+  payload: { date?: string | null },
+  selectedDate: string
+): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(selectedDate)) return false;
+  return payload.date === selectedDate;
+}
+
 export function isAnchorSpecialKind(value: unknown): value is AnchorSpecialKind {
   return ANCHOR_SPECIAL_KINDS.includes(String(value) as AnchorSpecialKind);
 }

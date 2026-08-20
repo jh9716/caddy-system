@@ -9,6 +9,7 @@ import {
   buildEngineSpecialBundles,
   detectCrossKindConflicts,
   hasDuplicateKind,
+  isSpecialDutyPayloadForSelectedDate,
   moveItemIndex,
   nextSortOrder,
   renumberSortOrders,
@@ -162,6 +163,18 @@ section("날짜별 데이터 분리");
     buildEngineSpecialBundles(day2, new Map()).oneTwoCandidates?.[0].name ===
       "이틀B",
     "day2만"
+  );
+  assert(
+    isSpecialDutyPayloadForSelectedDate({ date: "2026-08-19" }, "2026-08-19"),
+    "같은 날짜 payload 허용"
+  );
+  assert(
+    !isSpecialDutyPayloadForSelectedDate({ date: "2026-08-19" }, "2026-08-20"),
+    "날짜 A 신청자를 날짜 B UI에 넣지 않음"
+  );
+  assert(
+    !isSpecialDutyPayloadForSelectedDate({ date: "2026-08-19" }, ""),
+    "날짜 비면 stale payload 무시"
   );
 }
 
