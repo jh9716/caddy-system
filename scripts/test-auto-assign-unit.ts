@@ -2016,10 +2016,6 @@ section("reflow: special 배치 영향 없음 + 고정캔슬 재투입 금지");
     ],
   });
 
-  const fixedBefore = previous.fixedAssignments.map((a) => ({
-    id: a.caddy.id,
-    res: a.reservation.id,
-  }));
   const fiftyBefore = previous.fiftyFourHoleAssignments.map((a) => ({
     id: a.caddy.id,
     res: a.reservation.id,
@@ -2029,20 +2025,15 @@ section("reflow: special 배치 영향 없음 + 고정캔슬 재투입 금지");
     previous,
     regularCaddyPool: pool,
     events: [
-      { type: "CANCEL_RESERVATION", reservationId: "G1" },
+      { type: "CANCEL_RESERVATION", reservationId: "G2" },
       { type: "CANCEL_RESERVATION", reservationId: "FX" },
       { type: "CANCEL_RESERVATION", reservationId: "CX" },
     ],
   });
 
   assert(
-    JSON.stringify(
-      reflow.after.fixedAssignments.map((a) => ({
-        id: a.caddy.id,
-        res: a.reservation.id,
-      }))
-    ) === JSON.stringify(fixedBefore),
-    "fixed preserved"
+    !reflow.after.fixedAssignments.some((a) => a.reservation.id === "FX"),
+    "LOCKED FX 취소는 그 placement만 제거"
   );
   assert(
     JSON.stringify(

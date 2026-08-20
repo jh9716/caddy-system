@@ -107,6 +107,42 @@ function caddyOn(
     ?.caddy.id;
 }
 
+function nameOn(
+  result: AutoAssignResultV1,
+  reservationId: string
+): string | undefined {
+  return result.assignments.find((a) => a.reservation.id === reservationId)
+    ?.caddy.name;
+}
+
+function namedHouse(n = 6): AutoAssignCaddy[] {
+  const names = ["A", "B", "C", "D", "E", "F", "G", "H"];
+  const out: AutoAssignCaddy[] = [];
+  for (let i = 0; i < n; i++) {
+    out.push({
+      id: i + 1,
+      name: names[i],
+      team: `${i + 1}조`,
+      teamOrder: 1,
+      caddyType: "HOUSE",
+    });
+  }
+  return out;
+}
+
+function namedBoard(date: string, pool: AutoAssignCaddy[]) {
+  return computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      res(date, "R1", { teeTime: "07:00" }),
+      res(date, "R2", { teeTime: "07:07" }),
+      res(date, "R3", { teeTime: "07:14" }),
+      res(date, "R4", { teeTime: "07:21" }),
+    ],
+  });
+}
+
 function stampLocks(
   result: AutoAssignResultV1,
   lockedByResId: Record<string, boolean>
@@ -149,7 +185,205 @@ function beforeTargetSnap(result: AutoAssignResultV1, target: AutoAssignReservat
     .join("|");
 }
 
-section("중간 예약 취소 → 뒤 일반 캐디가 한 자리씩 당겨짐");
+section("방향: R2 예약취소는 B/C 밀림 (R1=A, R3=B, R4=C)");
+{
+  const date = "2026-10-20";
+  const pool = namedHouse(6);
+  const previous = namedBoard(date, pool);
+  assert(nameOn(previous, "R1") === "A", "before R1=A");
+  assert(nameOn(previous, "R2") === "B", "before R2=B");
+  assert(nameOn(previous, "R3") === "C", "before R3=C");
+  assert(nameOn(previous, "R4") === "D", "before R4=D");
+  const preview = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: { type: "CANCEL_RESERVATION", reservationId: "R2" },
+  });
+  assert(nameOn(preview.after, "R2") == null, "R2 예약 삭제");
+  assert(nameOn(preview.after, "R1") === "A", "R1=A 유지");
+  assert(nameOn(preview.after, "R3") === "B", "R3=B 밀림");
+  assert(nameOn(preview.after, "R4") === "C", "R4=C 밀림");
+  assert(spareSnap(preview.after, "1부").startsWith("4/"), "D는 Spare 흐름");
+  assert(preview.summary.pushedCount >= 2, "cancel pushedCount 밀림");
+  assert(preview.summary.pulledCount === 0, "cancel 당김 없음");
+}
+
+section("방향: R2 팀노쇼는 취소와 동일 밀림");
+{
+  const date = "2026-10-20";
+  const pool = namedHouse(6);
+  const previous = namedBoard(date, pool);
+  const cancel = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: { type: "CANCEL_RESERVATION", reservationId: "R2" },
+  });
+  const noshow = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: { type: "TEAM_NOSHOW", reservationId: "R2" },
+  });
+  assert(nameOn(noshow.after, "R1") === "A", "노쇼 R1=A");
+  assert(nameOn(noshow.after, "R3") === "B", "노쇼 R3=B 밀림");
+  assert(nameOn(noshow.after, "R4") === "C", "노쇼 R4=C 밀림");
+  assert(
+    JSON.stringify(liveBoardSnapshot(cancel.after)) ===
+      JSON.stringify(liveBoardSnapshot(noshow.after)),
+    "노쇼 배치 = 취소 밀림"
+  );
+}
+
+section("방향: B 병가는 C/D 당김 (R1=A, R2=C, R3=D)");
+{
+  const date = "2026-10-20";
+  const pool = namedHouse(6);
+  const previous = namedBoard(date, pool);
+  const preview = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: { type: "CADDY_SICK", caddyId: 2 },
+  });
+  assert(preview.after.assignments.length === 4, "병가 reservation 유지");
+  assert(nameOn(preview.after, "R1") === "A", "병가 R1=A");
+  assert(nameOn(preview.after, "R2") === "C", "병가 R2=C 당김");
+  assert(nameOn(preview.after, "R3") === "D", "병가 R3=D 당김");
+  assert(
+    preview.after.assignments.every((row) => row.caddy.name !== "B"),
+    "B 당일 제외"
+  );
+  assert(preview.summary.pulledCount >= 2, "sick pulledCount 당김");
+  assert(preview.summary.pushedCount === 0, "sick 밀림 없음");
+}
+
+section("방향: B 결근은 병가와 동일 당김");
+{
+  const date = "2026-10-20";
+  const pool = namedHouse(6);
+  const previous = namedBoard(date, pool);
+  const sick = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: { type: "CADDY_SICK", caddyId: 2 },
+  });
+  const absent = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: { type: "CADDY_ATTENDANCE_NOSHOW", caddyId: 2 },
+  });
+  assert(nameOn(absent.after, "R2") === "C", "결근 R2=C 당김");
+  assert(nameOn(absent.after, "R3") === "D", "결근 R3=D 당김");
+  assert(
+    JSON.stringify(liveBoardSnapshot(sick.after)) ===
+      JSON.stringify(liveBoardSnapshot(absent.after)),
+    "결근 배치 = 병가 당김"
+  );
+}
+
+section("방향: Quick vs 고급 이름 보드 동등 (취소 밀림 / 병가 당김)");
+{
+  const date = "2026-10-21";
+  const pool = namedHouse(6);
+  const previous = namedBoard(date, pool);
+  const draft = createDraftFromAutoResult(previous, pool);
+  const cases: Array<{
+    label: string;
+    advanced: Parameters<typeof previewLiveAssignmentChange>[0]["change"];
+    quick: Parameters<typeof previewLiveAssignmentChange>[0]["change"];
+  }> = [
+    {
+      label: "cancel",
+      advanced: { type: "CANCEL_RESERVATION", reservationId: "R2" },
+      quick: {
+        type: "CANCEL_RESERVATION",
+        reservationKey: reservationKey(
+          previous.assignments.find((row) => row.reservation.id === "R2")!.reservation
+        ),
+      },
+    },
+    {
+      label: "noshow",
+      advanced: { type: "TEAM_NOSHOW", reservationId: "R2" },
+      quick: {
+        type: "TEAM_NOSHOW",
+        reservationKey: reservationKey(
+          previous.assignments.find((row) => row.reservation.id === "R2")!.reservation
+        ),
+      },
+    },
+    {
+      label: "sick",
+      advanced: { type: "CADDY_SICK", caddyId: 2 },
+      quick: { type: "CADDY_SICK", caddyId: 2 },
+    },
+    {
+      label: "absent",
+      advanced: { type: "CADDY_ATTENDANCE_NOSHOW", caddyId: 2 },
+      quick: { type: "CADDY_ATTENDANCE_NOSHOW", caddyId: 2 },
+    },
+  ];
+  for (const item of cases) {
+    const advanced = previewLiveAssignmentChange({
+      previous,
+      regularCaddyPool: pool,
+      change: item.advanced,
+    });
+    const quick = previewLiveChangeFromDraft({
+      draft,
+      base: previous,
+      change: item.quick,
+    });
+    assert(sameLiveBoard(advanced.after, quick.after), `Quick=고급 ${item.label}`);
+  }
+}
+
+section("LOCK 중간 포함: 취소는 LOCK 건너뛰며 밀림, 병가는 LOCK 건너뛰며 당김");
+{
+  const date = "2026-10-22";
+  const pool = namedHouse(6);
+  const previous = stampLocks(namedBoard(date, pool), { R3: true });
+  assert(nameOn(previous, "R3") === "C", "LOCK C on R3");
+  const cancel = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: { type: "CANCEL_RESERVATION", reservationId: "R2" },
+  });
+  assert(nameOn(cancel.after, "R1") === "A", "lock-cancel R1=A");
+  assert(nameOn(cancel.after, "R3") === "C", "LOCK C 유지");
+  assert(nameOn(cancel.after, "R4") === "B", "B는 LOCK 건너뛰고 밀림");
+  assert(isPlacementLocked(cancel.after.assignments.find((a) => a.reservation.id === "R3")!), "R3 still LOCK");
+
+  const sick = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: { type: "CADDY_SICK", caddyId: 2 },
+  });
+  assert(nameOn(sick.after, "R1") === "A", "lock-sick R1=A");
+  assert(nameOn(sick.after, "R2") === "D", "D가 LOCK 건너뛰고 당김");
+  assert(nameOn(sick.after, "R3") === "C", "병가도 LOCK 유지");
+  assert(sick.after.assignments.length === 4, "병가 reservation 유지 with LOCK");
+}
+
+section("LOCK된 reservation 취소는 그 placement만 제거하고 다른 LOCK은 유지");
+{
+  const date = "2026-10-23";
+  const pool = namedHouse(6);
+  const previous = stampLocks(namedBoard(date, pool), { R2: true, R3: true });
+  const preview = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: { type: "CANCEL_RESERVATION", reservationId: "R2" },
+  });
+  assert(nameOn(preview.after, "R2") == null, "LOCKED R2 예약 제거");
+  assert(nameOn(preview.after, "R1") === "A", "unlocked A 유지");
+  assert(nameOn(preview.after, "R3") === "C", "다른 LOCK C 이동 없음");
+  assert(nameOn(preview.after, "R4") === "D", "뒤 일반 밀림 없음");
+  assert(
+    isPlacementLocked(preview.after.assignments.find((a) => a.reservation.id === "R3")!),
+    "remaining LOCK stays"
+  );
+}
+
+section("중간 예약 취소 → 뒤 일반 캐디가 한 자리씩 밀림");
 {
   const date = "2026-08-20";
   const pool = makeCaddies(5);
@@ -177,7 +411,7 @@ section("중간 예약 취소 → 뒤 일반 캐디가 한 자리씩 당겨짐")
   assert(caddyOn(preview.after, "R1") === ordered[0].id, "R1 stays first");
   assert(
     caddyOn(preview.after, "R3") === ordered[1].id,
-    "R3 filled by previous R2 caddy (one slot pull)"
+    "R3 filled by previous R2 caddy (one slot 밀림)"
   );
   assert(
     !preview.after.assignments.some((a) => a.caddy.id === ordered[2].id),
@@ -388,7 +622,7 @@ section("LOCK ON placement는 앞 변경에도 같은 reservation 유지");
     preview.lockedPreserved.some((r) => r.reservationKey.includes("R3") || r.caddy.id === lockedCaddy),
     "lockedPreserved listed"
   );
-  assert(caddyOn(preview.after, "R2") === ordered[0].id, "regulars pull around lock");
+  assert(caddyOn(preview.after, "R2") === ordered[0].id, "regulars 밀림 around lock");
   assert(caddyOn(preview.after, "R4") === ordered[1].id, "after-lock slot filled by next regular");
 }
 
@@ -1560,7 +1794,7 @@ section("고급 배치 변경 vs Quick Action 예약 취소 동등성");
   assert(caddyOn(advanced.after, "R1") === ordered[0].id, "R1 유지");
   assert(
     caddyOn(advanced.after, "R4") === ordered[1].id,
-    "Quick 예약취소 뒤 일반 캐디 실제 당김"
+    "Quick 예약취소 뒤 일반 캐디 실제 밀림"
   );
   assert(caddyOn(advanced.after, "R4") !== beforeR4, "R4 caddy changed");
   assert(caddyOn(advanced.after, "R3") === lockedCaddy, "LOCK 유지");
@@ -1579,7 +1813,7 @@ section("고급 배치 변경 vs Quick Action 예약 취소 동등성");
   assert(
     quickDraft.assignments.find((row) => row.reservation.id === "R4")?.caddy.id ===
       ordered[1].id,
-    "draft에서도 당김"
+    "draft에서도 밀림"
   );
 }
 
@@ -1612,7 +1846,7 @@ section("고급 배치 변경 vs Quick Action 팀 노쇼 동등성");
   assert(caddyOn(advanced.after, "A") == null, "노쇼 예약 제거");
   assert(
     caddyOn(advanced.after, "B") === ordered[0].id,
-    "Quick 팀노쇼 뒤 일반 캐디 당김"
+    "Quick 팀노쇼 뒤 일반 캐디 밀림"
   );
   assert(caddyOn(advanced.after, "C") === lockedCaddy, "노쇼 LOCK 유지");
   assert(advanced.reason === REASON.TEAM_NOSHOW_REFLOW, "노쇼 사유 코드");
@@ -1846,7 +2080,7 @@ async function runPersistTests() {
     );
     assert(
       pulled?.caddyId === previous.assignments.find((x) => x.reservation.id === "R2")?.caddy.id,
-      "cancel persist pulled next regular onto R3"
+      "cancel persist 밀림 next regular onto R3"
     );
 
     const sickStore = emptyLiveChangeMemoryStore();
@@ -2040,7 +2274,7 @@ async function runPersistTests() {
     assert(counts.reservationDelete === 1, "cancel rewrote reservations");
     assert(counts.placementDelete === 1, "cancel rewrote placements");
     assert(counts.reservationCreateMany >= 3, "cancel rewrote reservation rows");
-    assert(caddyOn(result.ok ? result.preview.after : previous, "R2") === caddyOn(previous, "R1"), "rewrite still pulled");
+    assert(caddyOn(result.ok ? result.preview.after : previous, "R2") === caddyOn(previous, "R1"), "rewrite still 밀림");
   }
 
   section("250건 Reservation 저장은 createMany, 개별 create 없음");
