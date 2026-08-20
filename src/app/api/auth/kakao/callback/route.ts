@@ -80,6 +80,7 @@ export async function GET(req: NextRequest) {
 
   let role: AppRole = "caddy";
   try {
+    // Existing user: 1 User lookup. Caddy link is not needed to issue the session.
     let user = await prisma.user.findUnique({
       where: { kakaoUserId },
       select: {

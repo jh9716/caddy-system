@@ -123,14 +123,26 @@ export function canonicalSessionPayload(claims: SessionClaims): string {
   ].join("|");
 }
 
+let hmacKeySecret = "";
+let hmacKeyPromise: Promise<CryptoKey> | null = null;
+
 async function importHmacKey(secret: string): Promise<CryptoKey> {
-  return crypto.subtle.importKey(
+  if (hmacKeyPromise && hmacKeySecret === secret) return hmacKeyPromise;
+  hmacKeySecret = secret;
+  hmacKeyPromise = crypto.subtle.importKey(
     "raw",
     utf8Bytes(secret),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign", "verify"]
   );
+  try {
+    return await hmacKeyPromise;
+  } catch (e) {
+    hmacKeyPromise = null;
+    hmacKeySecret = "";
+    throw e;
+  }
 }
 
 export async function signSessionClaims(

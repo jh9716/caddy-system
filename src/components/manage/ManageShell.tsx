@@ -105,12 +105,37 @@ export default function ManageShell({ children }: { children: React.ReactNode })
 
   useEffect(() => {
     document.body.classList.add("manage-mode");
-    router.prefetch("/manage");
-    router.prefetch("/manage/caddies");
-    router.prefetch("/manage/assignments");
-    router.prefetch("/manage/availability");
-    return () => document.body.classList.remove("manage-mode");
-  }, [router]);
+
+    const toPrefetch = [
+      "/manage",
+      "/manage/caddies",
+      "/manage/assignments",
+      "/manage/availability",
+    ].filter((href) => href !== pathname);
+
+    let cancelled = false;
+    const run = () => {
+      if (cancelled) return;
+      for (const href of toPrefetch) router.prefetch(href);
+    };
+
+    let idleId: number | undefined;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    if (typeof requestIdleCallback === "function") {
+      idleId = requestIdleCallback(run, { timeout: 1200 });
+    } else {
+      timeoutId = setTimeout(run, 400);
+    }
+
+    return () => {
+      cancelled = true;
+      document.body.classList.remove("manage-mode");
+      if (idleId != null && typeof cancelIdleCallback === "function") {
+        cancelIdleCallback(idleId);
+      }
+      if (timeoutId != null) clearTimeout(timeoutId);
+    };
+  }, [router, pathname]);
 
   return (
     <div className="vh-manage">

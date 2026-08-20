@@ -948,6 +948,16 @@ a {
   letter-spacing: 0.04em;
 }
 
+.dash[aria-busy="true"] .dash-kpi-value,
+.dash[aria-busy="true"] .dash-dots,
+.dash[aria-busy="true"] .dash-team-total {
+  opacity: 0.4;
+}
+
+.dash-kpi-pending {
+  font-weight: 600;
+}
+
 .dash-kpi-value {
   margin-top: 8px;
   font-size: 1.62rem;
