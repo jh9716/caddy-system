@@ -658,6 +658,12 @@ export function autoResultFromDraft(
     finalPointer: 0,
     thirdStartTeam: base?.meta.thirdStartTeam || "",
     thirdStartTeamAutomatic: base?.meta.thirdStartTeamAutomatic || "",
+    ...(base?.meta.houseStartCaddyId != null
+      ? { houseStartCaddyId: Number(base.meta.houseStartCaddyId) }
+      : {}),
+    ...(base?.meta.thirdStartCaddyId != null
+      ? { thirdStartCaddyId: Number(base.meta.thirdStartCaddyId) }
+      : {}),
   };
   return {
     date: draft.date,

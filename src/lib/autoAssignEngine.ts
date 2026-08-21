@@ -19,6 +19,7 @@ import {
 import {
   extractWeekendBandInRotationOrder,
   resolveThirdStartTeam,
+  rotateThirdQueueFromStartCaddy,
   rotateThirdQueueFromStartTeam,
   automaticThirdStartTeam,
 } from "@/lib/thirdWeeklyRotation";
@@ -276,6 +277,8 @@ export type AutoAssignResultV1 = {
     finalPointer: number;
     /** 오늘 1부 첫 캐디 (입력된 경우만) */
     houseStartCaddyId?: number;
+    /** 오늘 3부 regular 첫 캐디 (Preview에서 고른 값, 입력된 경우만) */
+    thirdStartCaddyId?: number;
     /** 이번 주 3부반 시작조 (자동 또는 해당 주 override) */
     thirdStartTeam: string;
     /** 기준점(2026-08-17=12조)으로 계산한 자동 시작조 */
@@ -597,6 +600,52 @@ export class HouseStartCaddyError extends Error {
     super(message);
     this.name = "HouseStartCaddyError";
   }
+}
+
+/** 오늘 3부 첫 캐디 id 형식/대상 검증 실패. 당일 불가는 에러가 아니라 다음 가용으로 스킵. */
+export class ThirdStartCaddyError extends Error {
+  status = 400;
+  code = "third_start_caddy_invalid";
+  constructor(message: string) {
+    super(message);
+    this.name = "ThirdStartCaddyError";
+  }
+}
+
+/** Preview form/JSON optional id. 빈 값=null, 비정수=throw. */
+export function parseOptionalThirdStartCaddyId(raw: unknown): number | null {
+  if (raw == null) return null;
+  const value = String(raw).trim();
+  if (value === "") return null;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1) {
+    throw new ThirdStartCaddyError(
+      "오늘 3부 첫 캐디(id)가 올바르지 않습니다."
+    );
+  }
+  return n;
+}
+
+function isDrivingCaddyType(value: unknown): boolean {
+  return String(value ?? "").trim().toUpperCase() === "DRIVING";
+}
+
+function assertThirdStartCaddy(
+  startCaddyId: number,
+  known: readonly AutoAssignCaddy[]
+): AutoAssignCaddy {
+  const found = known.find((caddy) => caddy.id === startCaddyId);
+  if (!found) {
+    throw new ThirdStartCaddyError(
+      `선택한 3부 첫 캐디(id=${startCaddyId})를 찾을 수 없습니다.`
+    );
+  }
+  if (!isThirdBandTeam(found.team) || isDrivingCaddyType(found.caddyType)) {
+    throw new ThirdStartCaddyError(
+      `선택한 3부 첫 캐디(id=${startCaddyId})는 9~12조 THIRD가 아닙니다.`
+    );
+  }
+  return found;
 }
 
 /**
@@ -1976,6 +2025,10 @@ export function assignRegularSequence(input: {
   houseStartCaddyId?: number | null;
   /** 이번 주 3부반 시작조. 미입력 시 날짜 자동 순환 */
   thirdStartTeam?: string | null;
+  /** 오늘 3부 regular 첫 캐디. 미입력 시 시작조 첫 가용. 풀에 없으면 다음 가용 */
+  thirdStartCaddyId?: number | null;
+  /** 9~12조 위치 조회용 (비가용·주말반 제외자 포함). 없으면 third+house로 검증 */
+  thirdRoster?: AutoAssignCaddy[] | null;
 }): {
   assignments: AutoAssignmentRow[];
   unassignedReservations: UnassignedReservationRow[];
@@ -2002,7 +2055,26 @@ export function assignRegularSequence(input: {
       ? rotateHouseQueueFromStart(pools.house, Number(input.houseStartCaddyId))
       : pools.house;
   const thirdStartTeam = resolveThirdStartTeam(input.thirdStartTeam, input.date);
-  const third = rotateThirdQueueFromStartTeam(pools.third, thirdStartTeam);
+  let third = rotateThirdQueueFromStartTeam(pools.third, thirdStartTeam);
+  const thirdStartCaddyId =
+    input.thirdStartCaddyId != null && input.thirdStartCaddyId !== undefined
+      ? Number(input.thirdStartCaddyId)
+      : null;
+  if (thirdStartCaddyId != null) {
+    const roster = dedupeCaddies([
+      ...(input.thirdRoster || []),
+      ...pools.third,
+      ...pools.house,
+      ...pools.driving,
+    ]);
+    assertThirdStartCaddy(thirdStartCaddyId, roster);
+    third = rotateThirdQueueFromStartCaddy(
+      third,
+      thirdStartCaddyId,
+      roster,
+      thirdStartTeam
+    );
+  }
   const houseIndexById = new Map(house.map((c, i) => [c.id, i]));
   const reservations = [...(input.reservations || [])].sort(
     compareReservationOrder
@@ -2287,6 +2359,11 @@ export function computeAutoAssignmentsV1(input: {
    */
   houseStartCaddyId?: number | null;
   /**
+   * 오늘 3부 regular 첫 캐디.
+   * 미입력 → 주간 시작조 첫 가용. 당일 불가면 다음 가용 (에러 아님).
+   */
+  thirdStartCaddyId?: number | null;
+  /**
    * 이번 주 3부반 시작조 (9/10/11/12조).
    * 미입력 시 2026-08-17=12조 기준 자동 순환.
    */
@@ -2446,6 +2523,8 @@ export function computeAutoAssignmentsV1(input: {
     reasonCode: REASON.REGULAR_SEQUENCE,
     houseStartCaddyId: input.houseStartCaddyId,
     thirdStartTeam,
+    thirdStartCaddyId: input.thirdStartCaddyId,
+    thirdRoster: caddyDirectory,
   });
   const regularAssignments = regular.assignments;
   unassignedReservations.push(...regular.unassignedReservations);
@@ -2550,6 +2629,9 @@ export function computeAutoAssignmentsV1(input: {
       finalPointer: regular.finalPointer,
       ...(input.houseStartCaddyId != null
         ? { houseStartCaddyId: Number(input.houseStartCaddyId) }
+        : {}),
+      ...(input.thirdStartCaddyId != null
+        ? { thirdStartCaddyId: Number(input.thirdStartCaddyId) }
         : {}),
       thirdStartTeam,
       thirdStartTeamAutomatic,
@@ -3947,6 +4029,16 @@ export function reflowRegularAssignments(input: {
       ? startId
       : null;
 
+  const thirdStartCaddyId =
+    previous.meta.thirdStartCaddyId != null
+      ? Number(previous.meta.thirdStartCaddyId)
+      : null;
+  const thirdRoster = dedupeCaddies([
+    ...fullPool,
+    ...previous.assignments.map((row) => row.caddy),
+    ...(previous.unusedCaddies || []),
+  ]);
+
   const regular = assignRegularSequence({
     date,
     house: pools.house,
@@ -3956,6 +4048,8 @@ export function reflowRegularAssignments(input: {
     houseStartCaddyId,
     thirdStartTeam:
       previous.meta.thirdStartTeam || automaticThirdStartTeam(date),
+    thirdStartCaddyId,
+    thirdRoster,
   });
 
   const regularAssignments = regular.assignments.map((row) =>

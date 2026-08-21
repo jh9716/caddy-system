@@ -11,6 +11,7 @@ export type ThirdQueueCaddy = {
   name: string;
   team: string;
   teamOrder: number;
+  caddyType?: string | null;
   thirdBandSubgroup?: string | null;
   extraFlags?: string[] | null;
 };
@@ -129,6 +130,41 @@ export function rotateThirdQueueFromStartTeam<T extends ThirdQueueCaddy>(
   });
   rest.sort(compareFallbackCaddy);
   return [...band, ...rest];
+}
+
+/**
+ * 주간 9~12조 회전 큐에서 startCaddyId부터 잘라 regular 가용 THIRD를 재배열.
+ * start 캐디가 가용 풀에 없으면 그 다음 방향으로 풀에 있는 첫 사람을 쓴다 (wrap).
+ * teamOrder 값은 수정하지 않는다. id 유효성(존재/9~12조)은 호출측에서 검사한다.
+ */
+export function rotateThirdQueueFromStartCaddy<T extends ThirdQueueCaddy>(
+  availableThird: readonly T[],
+  startCaddyId: number,
+  roster: readonly T[],
+  startTeam: ThirdBandTeam
+): T[] {
+  const available = rotateThirdQueueFromStartTeam(availableThird, startTeam);
+  if (available.length === 0) return [];
+  const canonical = rotateThirdQueueFromStartTeam(
+    roster.filter((caddy) => isThirdWeeklyTeam(caddy.team)),
+    startTeam
+  );
+  const availableIds = new Set(available.map((caddy) => caddy.id));
+  let idx = canonical.findIndex((caddy) => caddy.id === startCaddyId);
+  if (idx < 0) {
+    idx = available.findIndex((caddy) => caddy.id === startCaddyId);
+    if (idx < 0) return available;
+    return [...available.slice(idx), ...available.slice(0, idx)];
+  }
+  for (let i = 0; i < canonical.length; i++) {
+    const cand = canonical[(idx + i) % canonical.length];
+    if (!availableIds.has(cand.id)) continue;
+    const ai = available.findIndex((caddy) => caddy.id === cand.id);
+    if (ai < 0) continue;
+    if (ai === 0) return available;
+    return [...available.slice(ai), ...available.slice(0, ai)];
+  }
+  return available;
 }
 
 export function isWeekendBandCaddy(caddy: {

@@ -32,7 +32,7 @@ import {
   type AutoAssignResultV1,
   type AutoAssignmentRow,
 } from "@/lib/autoAssignEngine";
-import type { AvailabilityResult } from "@/lib/availabilityEngine";
+import type { AvailabilityResult, AvailabilityRow } from "@/lib/availabilityEngine";
 import type { DailyAvailabilitySummary } from "@/lib/dailyAvailabilityOverlay";
 import {
   COURSE_CODES,
@@ -59,7 +59,8 @@ const COURSE_SHORT: Record<CourseCode, string> = {
 
 import { SpecialDutyPanel, type Shift1StartOption } from "./SpecialDutyPanel";
 import { BoardQuickSheet, LiveChangePanel, LockToggle } from "./LiveChangePanel";
-import { THIRD_BAND_TEAMS } from "@/lib/caddyManage";
+import { isThirdBandTeam, THIRD_BAND_TEAMS } from "@/lib/caddyManage";
+import { rotateThirdQueueFromStartTeam } from "@/lib/thirdWeeklyRotation";
 import {
   LIVE_CHANGE_LABELS,
   QUICK_ACTION_CONFIRM_MESSAGE,
@@ -200,6 +201,7 @@ export default function ManageAssignmentsOpsPage() {
   >("1부");
   const [courseOpen, setCourseOpen] = useState<CourseOpenState>(defaultCourseOpen);
   const [houseStartCaddyId, setHouseStartCaddyId] = useState<number | "">("");
+  const [thirdStartCaddyId, setThirdStartCaddyId] = useState<number | "">("");
   const [thirdWeekly, setThirdWeekly] = useState<ThirdWeeklyStartState | null>(
     null
   );
@@ -327,6 +329,41 @@ export default function ManageAssignmentsOpsPage() {
           a.id - b.id
       );
   }, [availability]);
+
+  /** 오늘 3부 첫 캐디 후보: 9~12조 (가용+특수+제외). 주간 시작조 회전순 */
+  const thirdStartCandidates = useMemo(() => {
+    if (!availability) return [];
+    const rows: AvailabilityRow[] = [
+      ...availability.available.all,
+      ...availability.special,
+      ...availability.excluded,
+    ];
+    const byId = new Map<number, AvailabilityRow>();
+    for (const row of rows) {
+      if (!isThirdBandTeam(row.team)) continue;
+      if (String(row.caddyType || "").toUpperCase() === "DRIVING") continue;
+      if (!byId.has(row.id)) byId.set(row.id, row);
+    }
+    const startTeam = THIRD_BAND_TEAMS.includes(
+      (thirdWeekly?.startTeam || "") as (typeof THIRD_BAND_TEAMS)[number]
+    )
+      ? (thirdWeekly!.startTeam as (typeof THIRD_BAND_TEAMS)[number])
+      : "12조";
+    return rotateThirdQueueFromStartTeam([...byId.values()], startTeam);
+  }, [availability, thirdWeekly]);
+
+  function thirdStartCandidateStatus(row: AvailabilityRow): string {
+    if (row.excludedReasons && row.excludedReasons.length > 0) {
+      return row.excludedReasons[0];
+    }
+    if (row.assignmentLabels && row.assignmentLabels.length > 0) {
+      return row.assignmentLabels[0];
+    }
+    if (row.bucket === "special" || (row.specialTags && row.specialTags.length > 0)) {
+      return row.specialTags[0] || "특수";
+    }
+    return "근무";
+  }
 
   const pool: AutoAssignCaddy[] = useMemo(() => {
     if (availability) {
@@ -480,6 +517,9 @@ export default function ManageAssignmentsOpsPage() {
       form.append("houseStartCaddyId", String(houseStartCaddyId));
       if (thirdWeekly?.startTeam) {
         form.append("thirdStartTeam", thirdWeekly.startTeam);
+      }
+      if (thirdStartCaddyId !== "" && Number(thirdStartCaddyId)) {
+        form.append("thirdStartCaddyId", String(thirdStartCaddyId));
       }
       const res = await fetch("/api/assignments/preview", {
         method: "POST",
@@ -899,6 +939,7 @@ export default function ManageAssignmentsOpsPage() {
             onChange={(e) => {
               setDate(e.target.value);
               setHouseStartCaddyId("");
+              setThirdStartCaddyId("");
               setAvailability(null);
             }}
           />
@@ -1003,6 +1044,28 @@ export default function ManageAssignmentsOpsPage() {
             자동 계산값 {thirdWeekly?.autoStartTeam || "—"} · {thirdWeekly?.weekStart || "—"} 주만 적용
           </span>
         </div>
+        <label className="ops-field ops-first-caddy">
+          <span>3부 첫 캐디 (선택)</span>
+          <select
+            value={thirdStartCaddyId === "" ? "" : String(thirdStartCaddyId)}
+            onChange={(e) => {
+              const v = e.target.value;
+              setThirdStartCaddyId(v ? Number(v) : "");
+            }}
+            disabled={!availability}
+          >
+            <option value="">
+              {!availability
+                ? "먼저 가용 캐디를 불러오세요"
+                : "선택 안 함 (주간 시작조 첫 가용)"}
+            </option>
+            {thirdStartCandidates.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name} · {c.team} {c.teamOrder}번 · {thirdStartCandidateStatus(c)}
+              </option>
+            ))}
+          </select>
+        </label>
         <div className="ops-actions">
           <button
             type="button"
