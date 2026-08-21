@@ -232,7 +232,19 @@ section("overlay: 최종 가용 + 중복 1회 제외");
   assert(over.dailySummary.baseAvailable === 4, "재직/기본 가용");
   assert(over.dailySummary.off === 2, "휴무 제외 2 (B,C)");
   assert(over.dailySummary.duplicateExcluded === 1, "휴무+당번 중복 C");
+  assert(over.dailySummary.dutyAm === 1, "조출당번 원본 1 (중복이어도 역할 수는 원본)");
   assert(over.dailySummary.leader === 1, "조장 1");
+  assert(over.dailySummary.dutyAdditionalExcluded === 1, "실제 추가 제외는 조장 A만");
+  assert(
+    over.dailySummary.duplicates.some(
+      (d) => d.name === "당번C" && d.role === "조출당번" && d.overlappedWith === "휴무"
+    ),
+    "중복 상세: 당번C 휴무 중복"
+  );
+  assert(
+    over.opsDutyCaddyIds.slice().sort((a, b) => a - b).join(",") === "1,3",
+    "당번/조장 매칭 id는 후보 제외 목록에 포함"
+  );
   assert(over.dailySummary.finalAvailable === 1, "최종 가용 1");
   assert(
     over.dailySummary.reviews.some((r) => r.name === "없는사람"),

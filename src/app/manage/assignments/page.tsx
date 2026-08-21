@@ -39,6 +39,7 @@ import {
   type AvailabilityRow,
 } from "@/lib/availabilityEngine";
 import type { DailyAvailabilitySummary } from "@/lib/dailyAvailabilityOverlay";
+import { excludeCaddiesById } from "@/lib/dailyOpsDuty";
 import {
   COURSE_CODES,
   COURSE_LABELS,
@@ -196,6 +197,21 @@ export default function ManageAssignmentsOpsPage() {
   const [date, setDate] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [dutyFile, setDutyFile] = useState<File | null>(null);
+  const [opsDutyStored, setOpsDutyStored] = useState<{
+    count: number;
+    byRole?: Record<string, number>;
+    caddyIds: number[];
+  } | null>(null);
+  const [opsDutyPreview, setOpsDutyPreview] = useState<{
+    matchedCount: number;
+    reviewCount: number;
+    existingCount: number;
+    replaceRequired: boolean;
+    reviews: Array<{ rawName: string; reason: string; role?: string }>;
+    matched: Array<{ name: string; rawName: string; role: string; roleKey: string }>;
+  } | null>(null);
+  const [loadingDutyPreview, setLoadingDutyPreview] = useState(false);
+  const [loadingDutyApply, setLoadingDutyApply] = useState(false);
   const [shift1Options, setShift1Options] = useState<Shift1StartOption[]>([]);
   const [availability, setAvailability] = useState<
     (AvailabilityResult & { dailySummary?: DailyAvailabilitySummary }) | null
@@ -288,6 +304,39 @@ export default function ManageAssignmentsOpsPage() {
 
   useEffect(() => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      setOpsDutyStored(null);
+      setOpsDutyPreview(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/daily-ops-duties?date=${encodeURIComponent(date)}`,
+          { credentials: "include" }
+        );
+        const data = await res.json();
+        if (!res.ok || cancelled) return;
+        setOpsDutyStored({
+          count: Number(data.count) || 0,
+          byRole: data.byRole,
+          caddyIds: Array.isArray(data.caddyIds)
+            ? data.caddyIds
+            : Array.isArray(data.rows)
+              ? data.rows.map((r: { caddyId: number }) => r.caddyId)
+              : [],
+        });
+      } catch {
+        if (!cancelled) setOpsDutyStored(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [date]);
+
+  useEffect(() => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       setThirdWeekly(null);
       return;
     }
@@ -376,17 +425,18 @@ export default function ManageAssignmentsOpsPage() {
     return "근무";
   }
 
+  const opsDutyCaddyIds = opsDutyStored?.caddyIds || [];
   const pool: AutoAssignCaddy[] = useMemo(() => {
-    if (availability) {
-      return regularCaddyPoolFromAvailabilityRows(availability.available.all);
-    }
-    return draft?.caddyPool || [];
-  }, [availability, draft]);
+    const raw = availability
+      ? regularCaddyPoolFromAvailabilityRows(availability.available.all)
+      : draft?.caddyPool || [];
+    return excludeCaddiesById(raw, opsDutyCaddyIds);
+  }, [availability, draft, opsDutyCaddyIds]);
 
   const freeCaddies = draft ? unusedCaddies(draft) : [];
   const drivingCandidates = draft
     ? drivingCandidateCaddies({
-        pool: draft.caddyPool,
+        pool: excludeCaddiesById(draft.caddyPool, opsDutyCaddyIds),
         assignedCaddyIds: draft.assignments.map((a) => a.caddy.id),
         unavailableCaddyIds,
       })
@@ -464,12 +514,150 @@ export default function ManageAssignmentsOpsPage() {
         return;
       }
       setAvailability(data as AvailabilityResult & { dailySummary?: DailyAvailabilitySummary });
+      const dutyIds = Array.isArray((data as { opsDutyCaddyIds?: number[] }).opsDutyCaddyIds)
+        ? ((data as { opsDutyCaddyIds?: number[] }).opsDutyCaddyIds as number[])
+        : [];
+      if (dutyIds.length) {
+        setOpsDutyStored((prev) => ({
+          count: prev?.count ?? dutyIds.length,
+          byRole: prev?.byRole,
+          caddyIds: dutyIds,
+        }));
+        if (draftRef.current) {
+          const current = draftRef.current;
+          setDraft({
+            ...current,
+            caddyPool: excludeCaddiesById(current.caddyPool, dutyIds),
+          });
+        }
+      }
       setHouseStartCaddyId("");
       showToast(`최종 가용 ${data.counts?.available ?? 0}명 로드`);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "가용 요청 실패");
     } finally {
       setLoadingAvail(false);
+    }
+  }
+
+  async function previewOpsDutyFile() {
+    if (!date) {
+      setError("날짜를 선택하세요.");
+      return;
+    }
+    if (!dutyFile) {
+      setError("당번·마샬·조장 파일을 선택하세요.");
+      return;
+    }
+    setLoadingDutyPreview(true);
+    setError(null);
+    try {
+      const form = new FormData();
+      form.append("date", date);
+      form.append("file", dutyFile);
+      const res = await fetch("/api/daily-ops-duties/preview", {
+        method: "POST",
+        body: form,
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "당번 일정 미리보기 실패");
+        return;
+      }
+      setOpsDutyPreview({
+        matchedCount: Number(data.matchedCount) || 0,
+        reviewCount: Number(data.reviewCount) || 0,
+        existingCount: Number(data.existingCount) || 0,
+        replaceRequired: Boolean(data.replaceRequired),
+        reviews: Array.isArray(data.reviews) ? data.reviews : [],
+        matched: Array.isArray(data.matched) ? data.matched : [],
+      });
+      showToast(
+        `당번 일정 미리보기 ${data.matchedCount}명` +
+          (data.existingCount ? ` · 기존 ${data.existingCount}건 교체 필요` : "")
+      );
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "당번 일정 미리보기 실패");
+    } finally {
+      setLoadingDutyPreview(false);
+    }
+  }
+
+  async function applyOpsDutyFile() {
+    if (!date) {
+      setError("날짜를 선택하세요.");
+      return;
+    }
+    if (!dutyFile) {
+      setError("당번·마샬·조장 파일을 선택하세요.");
+      return;
+    }
+    if (opsDutyPreview?.replaceRequired) {
+      const ok = window.confirm(
+        `이 날짜에 이미 당번·마샬·조장 일정 ${opsDutyPreview.existingCount}건이 있습니다. 이번 파일로 교체할까요?`
+      );
+      if (!ok) return;
+    }
+    if (opsDutyPreview && opsDutyPreview.reviewCount > 0) {
+      const ok = window.confirm(
+        `확인 필요 ${opsDutyPreview.reviewCount}건은 저장하지 않습니다. 매칭된 ${opsDutyPreview.matchedCount}명만 이 날짜 일정으로 저장할까요?`
+      );
+      if (!ok) return;
+    }
+    setLoadingDutyApply(true);
+    setError(null);
+    try {
+      const form = new FormData();
+      form.append("date", date);
+      form.append("file", dutyFile);
+      form.append("confirmReplace", "1");
+      const res = await fetch("/api/daily-ops-duties/apply", {
+        method: "POST",
+        body: form,
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "당번 일정 저장 실패");
+        return;
+      }
+      setOpsDutyStored({
+        count: Number(data.savedCount) || 0,
+        byRole: data.byRole,
+        caddyIds: Array.isArray(data.saved)
+          ? data.saved.map((r: { caddyId: number }) => r.caddyId)
+          : [],
+      });
+      setOpsDutyPreview(null);
+      showToast(`당번·마샬·조장 일정 ${data.savedCount}명 저장`);
+      const availForm = new FormData();
+      availForm.append("date", date);
+      const availRes = await fetch("/api/availability", {
+        method: "POST",
+        body: availForm,
+        credentials: "include",
+      });
+      const availData = await availRes.json();
+      if (availRes.ok) {
+        setAvailability(
+          availData as AvailabilityResult & { dailySummary?: DailyAvailabilitySummary }
+        );
+        const dutyIds = Array.isArray(availData.opsDutyCaddyIds)
+          ? (availData.opsDutyCaddyIds as number[])
+          : [];
+        if (dutyIds.length && draftRef.current) {
+          const current = draftRef.current;
+          setDraft({
+            ...current,
+            caddyPool: excludeCaddiesById(current.caddyPool, dutyIds),
+          });
+        }
+      }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "당번 일정 저장 실패");
+    } finally {
+      setLoadingDutyApply(false);
     }
   }
 
@@ -848,8 +1036,9 @@ export default function ManageAssignmentsOpsPage() {
       if (!window.confirm(QUICK_ACTION_CONFIRM_MESSAGE)) return;
     }
     const previous = autoResultFromDraft(current, autoResultRef.current);
+    const livePool = excludeCaddiesById(current.caddyPool, opsDutyCaddyIds);
     const preview = previewLiveChangeFromDraft({
-      draft: current,
+      draft: { ...current, caddyPool: livePool },
       base: autoResultRef.current,
       change,
     });
@@ -873,7 +1062,7 @@ export default function ManageAssignmentsOpsPage() {
       const ok = await persistLivePreview({
         preview,
         previous,
-        pool: current.caddyPool,
+        pool: livePool,
         applyServerDraft: shouldReconcileLivePersist(change.type),
         rollbackDraft: current,
       });
@@ -897,7 +1086,7 @@ export default function ManageAssignmentsOpsPage() {
       await persistLivePreview({
         preview,
         previous: autoResultFromDraft(current, autoResultRef.current),
-        pool: current.caddyPool,
+        pool: excludeCaddiesById(current.caddyPool, opsDutyCaddyIds),
         successToast: "현장 변경 적용 · Reservation/Placement 저장",
         applyServerDraft: true,
       });
@@ -992,8 +1181,70 @@ export default function ManageAssignmentsOpsPage() {
           <input
             type="file"
             accept=".xlsx,.xlsm"
-            onChange={(e) => setDutyFile(e.target.files?.[0] || null)}
+            onChange={(e) => {
+              setDutyFile(e.target.files?.[0] || null);
+              setOpsDutyPreview(null);
+            }}
           />
+          <div className="ops-duty-actions">
+            <button
+              type="button"
+              className="ghost"
+              onClick={previewOpsDutyFile}
+              disabled={loadingDutyPreview || !dutyFile}
+            >
+              {loadingDutyPreview ? "미리보기…" : "일정 미리보기"}
+            </button>
+            <button
+              type="button"
+              onClick={applyOpsDutyFile}
+              disabled={loadingDutyApply || !dutyFile}
+            >
+              {loadingDutyApply
+                ? "저장…"
+                : opsDutyPreview?.replaceRequired
+                  ? "이 날짜 일정 교체 저장"
+                  : "이 날짜 일정 저장"}
+            </button>
+          </div>
+          {opsDutyStored && (
+            <div className="ops-meta">
+              서버 저장 {opsDutyStored.count}명
+              {opsDutyStored.count > 0
+                ? " · 파일 없이 가용/자동배치/reflow에 반영"
+                : " · 아직 없음"}
+              {opsDutyStored.byRole && opsDutyStored.count > 0 ? (
+                <div>
+                  조출당번 {opsDutyStored.byRole.DUTY_AM ?? 0} / 후출당번{" "}
+                  {opsDutyStored.byRole.DUTY_PM ?? 0} / 조출마샬{" "}
+                  {opsDutyStored.byRole.MARSHAL_AM ?? 0} / 후출마샬{" "}
+                  {opsDutyStored.byRole.MARSHAL_PM ?? 0} / 조장{" "}
+                  {opsDutyStored.byRole.LEADER ?? 0}
+                </div>
+              ) : null}
+            </div>
+          )}
+          {opsDutyPreview && (
+            <div className="ops-daily">
+              <div className="ops-daily-title">당번 일정 미리보기</div>
+              <ul className="ops-daily-list">
+                <li>매칭 {opsDutyPreview.matchedCount}명</li>
+                <li>확인 필요 {opsDutyPreview.reviewCount}</li>
+                <li>기존 저장 {opsDutyPreview.existingCount}건</li>
+              </ul>
+              {opsDutyPreview.reviews.length > 0 && (
+                <div className="ops-daily-reviews">
+                  <ul>
+                    {opsDutyPreview.reviews.map((r, i) => (
+                      <li key={`${r.rawName}-${i}`}>
+                        <strong>{r.rawName}</strong> — {r.reason}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
         </label>
         <div className="ops-courses" aria-label="코스 Open/Close">
           <div className="ops-courses-label">
@@ -1167,12 +1418,31 @@ export default function ManageAssignmentsOpsPage() {
                 {availability.dailySummary.marshalPm}
               </li>
               <li>조장 {availability.dailySummary.leader}</li>
-              <li>중복 제외 {availability.dailySummary.duplicateExcluded}</li>
+              <li>
+                휴무/기타 중복 {availability.dailySummary.duplicateExcluded}명
+              </li>
+              <li>
+                실제 추가 제외{" "}
+                {availability.dailySummary.dutyAdditionalExcluded ?? 0}명
+              </li>
               <li>확인 필요 {availability.dailySummary.reviewCount}</li>
               <li className="final">
                 최종 가용 {availability.dailySummary.finalAvailable}
               </li>
             </ul>
+            {(availability.dailySummary.duplicates || []).length > 0 && (
+              <div className="ops-daily-reviews">
+                <div className="ops-daily-title">중복 상세</div>
+                <ul>
+                  {availability.dailySummary.duplicates.map((d, i) => (
+                    <li key={`${d.name}-${d.role}-${i}`}>
+                      <strong>{d.name}</strong> — {d.role} / {d.overlappedWith}{" "}
+                      중복
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             {availability.dailySummary.reviews.length > 0 && (
               <div className="ops-daily-reviews">
                 <div className="ops-daily-title">확인 필요</div>
@@ -1875,6 +2145,12 @@ const opsCss = `
   .btn.ghost { background: #f8fafc; }
   .btn.tiny { min-height: 34px; padding: 0 10px; font-size: 0.8rem; }
   .ops-meta { font-size: 0.8rem; color: #475569; }
+  .ops-duty-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+  }
   .ops-daily {
     border: 1px solid #e7e5e4;
     background: #fafaf9;

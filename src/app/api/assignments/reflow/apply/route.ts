@@ -10,6 +10,7 @@ import type {
   AutoAssignResultV1,
   ReservationChangeEvent,
 } from "@/lib/autoAssignEngine";
+import { regularPoolExcludingStoredOpsDuty } from "@/lib/opsDutyLivePool";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -49,8 +50,13 @@ export async function POST(req: NextRequest) {
       req.headers.get("x-real-ip") ||
       null;
 
+    const pool = await regularPoolExcludingStoredOpsDuty(
+      previous.date,
+      regularCaddyPool
+    );
+
     const result = await applyLiveAssignmentChange(
-      { previous, regularCaddyPool, events, change },
+      { previous, regularCaddyPool: pool, events, change },
       { ip, updateOpsIfPresent: true }
     );
 

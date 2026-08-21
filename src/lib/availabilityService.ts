@@ -24,16 +24,21 @@ import {
   parseDutyMarshalLeaderWorkbook,
   type DutyExcelEntry,
 } from "@/lib/dutyMarshalLeaderParser";
+import { loadStoredDutyEntries } from "@/lib/dailyOpsDutyService";
 
 export type AvailabilityWithSlotGrid = DailyAvailabilityResult & {
   slotGrid: TeamSlotGrid;
+  dutySource?: "file" | "stored" | "none";
+  dutyEntryCount?: number;
 };
 
 export type LoadAvailabilityOptions = {
   /** 테스트/미리 읽은 시트. 없으면 운영 Sheet를 fetch */
   offSheets?: OffSheet[];
-  /** 당번·마샬·조장 파일 버퍼 (없으면 해당 제외 없음) */
+  /** 당번·마샬·조장 파일 버퍼. 있으면 이번 요청 overlay에만 사용(미리보기). 저장은 별도 apply. */
   dutyWorkbook?: Buffer | ArrayBuffer | Uint8Array | null;
+  /** false면 저장된 당번·마샬·조장 일정을 읽지 않음 (기본 true) */
+  includeStoredOpsDuty?: boolean;
   /** false면 휴무 Sheet를 읽지 않음 (기본 true) */
   includeOffSheet?: boolean;
   /** true면 휴무 Sheet 캐시를 무시하고 다시 읽음 (가용 새로고침) */
@@ -111,9 +116,14 @@ export async function loadAvailabilityForDate(
   }
 
   let dutyEntries: DutyExcelEntry[] = [];
+  let dutySource: "file" | "stored" | "none" = "none";
   if (options?.dutyWorkbook) {
     dutyEntries = parseDutyMarshalLeaderWorkbook(options.dutyWorkbook, ymd)
       .entries;
+    dutySource = "file";
+  } else if (options?.includeStoredOpsDuty !== false) {
+    dutyEntries = await loadStoredDutyEntries(ymd);
+    if (dutyEntries.length > 0) dutySource = "stored";
   }
 
   const overlaid = applyDailyExternalExclusions({
@@ -134,5 +144,5 @@ export async function loadAvailabilityForDate(
     })),
   });
 
-  return { ...overlaid, slotGrid };
+  return { ...overlaid, slotGrid, dutySource, dutyEntryCount: dutyEntries.length };
 }

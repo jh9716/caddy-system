@@ -23,6 +23,7 @@ import {
 import { loadEngineSpecialBundlesForDate } from "@/lib/dailySpecialDutyService";
 import { isThirdWeeklyTeam } from "@/lib/thirdWeeklyRotation";
 import { loadEffectiveThirdStartTeam } from "@/lib/thirdWeeklyStartService";
+import { regularPoolExcludingStoredOpsDuty } from "@/lib/opsDutyLivePool";
 
 function parseThirdStartTeam(raw: unknown): string | null {
   const value = String(raw ?? "").trim();
@@ -333,6 +334,8 @@ export async function POST(req: NextRequest) {
       }
       if (oneThreeAnchor == null) oneThreeAnchor = anchors.ONE_THREE;
       if (oneMakAnchor == null) oneMakAnchor = anchors.ONE_MAK;
+    } else {
+      available = await regularPoolExcludingStoredOpsDuty(date, available);
     }
 
     const fiftyFourHole = extractFiftyFourHoleCandidates(

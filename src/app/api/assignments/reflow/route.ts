@@ -11,6 +11,7 @@ import {
   type AutoAssignResultV1,
   type ReservationChangeEvent,
 } from "@/lib/autoAssignEngine";
+import { regularPoolExcludingStoredOpsDuty } from "@/lib/opsDutyLivePool";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -44,10 +45,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const pool = await regularPoolExcludingStoredOpsDuty(
+      previous.date,
+      regularCaddyPool
+    );
+
     if (change && change.type) {
       const result = previewLiveAssignmentChange({
         previous,
-        regularCaddyPool,
+        regularCaddyPool: pool,
         change,
       });
       return NextResponse.json({ mode: "reflow-preview", persisted: false, ...result });
@@ -63,8 +69,12 @@ export async function POST(req: NextRequest) {
         e.type === "SWAP_CADDY" ||
         (e.type === "CANCEL_RESERVATION" && e.cause)
     )
-      ? previewLiveAssignmentEvents({ previous, regularCaddyPool, events })
-      : reflowRegularAssignments({ previous, regularCaddyPool, events });
+      ? previewLiveAssignmentEvents({
+          previous,
+          regularCaddyPool: pool,
+          events,
+        })
+      : reflowRegularAssignments({ previous, regularCaddyPool: pool, events });
 
     return NextResponse.json({ mode: "reflow", persisted: false, ...result });
   } catch (e: unknown) {
