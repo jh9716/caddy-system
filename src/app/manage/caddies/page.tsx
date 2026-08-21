@@ -8,8 +8,10 @@ import {
   EDITABLE_EXTRA_FLAG_OPTIONS,
   PRIMARY_TEAMS,
   THIRD_BAND_SUBGROUP_LABELS,
+  countsTowardRosterHeadcount,
   employmentStatusLabel,
   isDrivingCaddyType,
+  rosterHeadcount,
   isThirdBandTeam,
   normalizeEmploymentStatus,
   thirdBandSubgroupCsvLabel,
@@ -372,6 +374,8 @@ export default function ManageCaddiesPage() {
       driving: driving.length,
       activeRegular,
       activeDriving,
+      headcount: rosterHeadcount(rows),
+      drivingHeadcount: rosterHeadcount(driving),
     };
   }, [rows]);
 
@@ -402,12 +406,12 @@ export default function ManageCaddiesPage() {
       if (isDrivingCaddyType(r.caddyType) || r.team === DRIVING_POOL_TEAM) continue;
       const cur = map.get(r.team);
       if (!cur) continue;
-      cur.total += 1;
       const st = normalizeEmploymentStatus(r.employmentStatus);
       if (st === 'ACTIVE') cur.active += 1;
       else if (st === 'LEAVE') cur.leave += 1;
       else if (st === 'RETIRED') cur.retired += 1;
       else cur.other += 1;
+      if (countsTowardRosterHeadcount(r.employmentStatus)) cur.total += 1;
     }
     return GLANCE_TEAMS.map((t) => map.get(t)!);
   }, [rows]);
@@ -1040,7 +1044,8 @@ export default function ManageCaddiesPage() {
           </section>
 
           <div className="cm-stats">
-            재직 일반캐디 {rosterCounts.activeRegular}명 · 드라이빙캐디{' '}
+            총원 {rosterCounts.headcount}명 · 재직 일반캐디{' '}
+            {rosterCounts.activeRegular}명 · 드라이빙캐디{' '}
             {rosterCounts.activeDriving}명
             <span className="cm-stats-hint">
               {' '}
@@ -1117,7 +1122,9 @@ export default function ManageCaddiesPage() {
                 </strong>
               </li>
             </ul>
-            <div className="cm-team-foot">총 {drivingRows.length}명 · 조/순번 없음</div>
+            <div className="cm-team-foot">
+              총 {rosterCounts.drivingHeadcount}명 · 조/순번 없음
+            </div>
           </button>
           {teamSummaries.map((t) => (
             <button

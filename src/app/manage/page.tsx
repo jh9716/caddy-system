@@ -90,7 +90,9 @@ async function ManageDashboardData() {
     caddyRows,
     latestNotices,
   ] = await Promise.all([
-    prisma.caddy.count(),
+    prisma.caddy.count({
+      where: { employmentStatus: { in: ["ACTIVE", "LEAVE"] } },
+    }),
     prisma.assignment.count({
       where: {
         type: "OFF",
@@ -146,12 +148,12 @@ async function ManageDashboardData() {
   for (const row of caddyRows) {
     const bucket = teamMap.get(row.team);
     if (!bucket) continue;
-    bucket.total += 1;
     const st = normalizeEmploymentStatus(row.employmentStatus);
     if (st === "ACTIVE") bucket.active += 1;
     else if (st === "LEAVE") bucket.leave += 1;
     else if (st === "RETIRED") bucket.retired += 1;
     else bucket.other += 1;
+    if (st === "ACTIVE" || st === "LEAVE") bucket.total += 1;
   }
 
   const teamGlance = GLANCE_TEAMS.map((t) => teamMap.get(t)!);

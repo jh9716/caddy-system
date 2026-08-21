@@ -255,6 +255,18 @@ export function employmentStatusLabel(input: unknown): string {
   return EMPLOYMENT_STATUS_LABELS[status];
 }
 
+/** 총원 집계: 재직+휴직. RETIRED(퇴사)는 제외. */
+export function countsTowardRosterHeadcount(input: unknown): boolean {
+  const st = normalizeEmploymentStatus(input);
+  return st === "ACTIVE" || st === "LEAVE";
+}
+
+export function rosterHeadcount<T extends { employmentStatus?: unknown }>(
+  rows: T[]
+): number {
+  return rows.filter((r) => countsTowardRosterHeadcount(r.employmentStatus)).length;
+}
+
 export function normalizeTeamOrder(input: unknown): number {
   const n = Number(input);
   if (!Number.isFinite(n)) return 0;
