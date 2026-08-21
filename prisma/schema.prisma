@@ -174,6 +174,8 @@ model User {
   kakaoUserId String? @unique
   /// 서명 세션 무효화 카운터. +1 시 해당 User의 기존 signed cookie 전부 거부.
   sessionVersion Int @default(0)
+  /// 임시 비밀번호 최초 로그인 후 본인 변경 강제. 기존 User는 false 유지.
+  mustChangePassword Boolean @default(false)
   /// 본인확인 연결 요청 이력 (User 물리 삭제는 Restrict로 이력 보호)
   caddyLinkRequests CaddyLinkRequest[]
   createdAt DateTime @default(now())

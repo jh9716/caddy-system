@@ -1,17 +1,16 @@
 import { Suspense } from "react";
-import { cookies } from "next/headers";
-import { getVerifiedSessionFromCookies } from "@/lib/sessionCookies";
 import { redirect } from "next/navigation";
 import LoginClient from "./LoginClient";
+import { getRequestAuthUser } from "@/lib/getRequestAuthUser";
+import { shouldForcePasswordChange } from "@/lib/passwordPolicy";
 
 export const dynamic = "force-dynamic";
 
 export default async function LoginPage() {
-  const store = await cookies();
-  const role = (await getVerifiedSessionFromCookies(store))?.role ?? null;
-
-  if (role === "admin") redirect("/manage");
-  if (role === "caddy" || role === "leader") redirect("/caddy");
+  const auth = await getRequestAuthUser();
+  if (shouldForcePasswordChange(auth)) redirect("/change-password");
+  if (auth?.role === "admin") redirect("/manage");
+  if (auth?.role === "caddy" || auth?.role === "leader") redirect("/caddy");
 
   return (
     <Suspense

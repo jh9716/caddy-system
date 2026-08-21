@@ -29,7 +29,11 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const res = NextResponse.json({ ok: true, role: result.role });
+    const res = NextResponse.json({
+      ok: true,
+      role: result.role,
+      mustChangePassword: result.mustChangePassword === true,
+    });
     await applySessionCookies(res, req, {
       userId: result.userId,
       username: result.username,

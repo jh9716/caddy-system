@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { postLoginPath } from "@/lib/passwordPolicy";
 
 const KAKAO_ERROR_MESSAGES: Record<string, string> = {
   kakao_config: "카카오 로그인 설정이 없습니다. 관리자에게 문의하세요.",
@@ -42,11 +43,15 @@ export default function LoginClient() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || data?.message || "로그인 실패");
 
+      if (data.mustChangePassword) {
+        location.href = "/change-password";
+        return;
+      }
       if (safeCallback) {
         location.href = safeCallback;
         return;
       }
-      location.href = data.role === "admin" ? "/manage" : "/caddy";
+      location.href = postLoginPath(String(data.role || ""), false);
     } catch (e: any) {
       setErr(e.message || "로그인 실패");
     } finally {

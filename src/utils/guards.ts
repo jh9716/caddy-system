@@ -11,6 +11,7 @@ export async function requireUser() {
 export async function requireAdmin() {
   const auth = await requireUser();
   if (auth.role !== "admin") notFound();
+  if (auth.mustChangePassword) redirect("/change-password");
   return auth;
 }
 

@@ -8,5 +8,14 @@ export async function requireAdmin() {
   if (!auth || auth.role !== "admin") {
     throw NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  if (auth.mustChangePassword) {
+    throw NextResponse.json(
+      {
+        error: "MUST_CHANGE_PASSWORD",
+        message: "비밀번호를 변경한 뒤 이용할 수 있습니다.",
+      },
+      { status: 403 }
+    );
+  }
   return auth;
 }

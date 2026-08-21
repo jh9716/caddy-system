@@ -24,6 +24,7 @@
     "test:slot-unit": "npx tsx scripts/test-caddy-slot-unit.ts",
     "test:manage-unit": "npx tsx scripts/test-caddy-manage-unit.ts",
     "test:login-unit": "npx tsx scripts/test-login-session-unit.ts",
+    "test:staff-admin-unit": "npx tsx scripts/test-staff-admin-password-unit.ts",
     "test:login-speed-unit": "npx tsx scripts/test-login-speed-unit.ts",
     "test:user-kakao-schema-unit": "npx tsx scripts/test-user-kakao-schema-unit.ts",
     "test:reservation-unit": "npx tsx scripts/test-reservation-parse-unit.ts",

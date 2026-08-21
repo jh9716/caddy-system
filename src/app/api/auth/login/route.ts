@@ -32,6 +32,7 @@ export async function POST(req: NextRequest) {
       ok: true,
       message: "로그인 성공",
       role: result.role,
+      mustChangePassword: result.mustChangePassword === true,
     });
     await applySessionCookies(res, req, {
       userId: result.userId,

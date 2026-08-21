@@ -8,6 +8,7 @@ export const dynamic = "force-dynamic";
 export default async function NewNoticePage() {
   const auth = await resolveAuthFromCookieStore(await cookies());
   if (!auth || auth.role !== "admin") redirect("/login");
+  if (auth.mustChangePassword) redirect("/change-password");
 
   return (
     <div className="mx-auto max-w-2xl">
