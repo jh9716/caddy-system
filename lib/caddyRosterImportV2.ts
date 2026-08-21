@@ -1,5 +1,5 @@
 /**
- * 캐디 명단 Import v2 (CSV)
+ * 캐디 명단 Import v2 (CSV / 표 형식 XLSX)
  *
  * 컬럼: id,name,team,teamOrder,employmentStatus,phone[,thirdBandSubgroup]
  * - id optional — 있으면 Caddy.id 매칭 후 name 일치 검증
@@ -8,14 +8,17 @@
  * - extraFlags 미반영
  * - thirdBandSubgroup optional (6컬럼 CSV 호환). 빈칸=기존 유지, 일반=null
  * - missingInImport = 경고만 (자동 RETIRED 금지). Apply 시에만 missingFromImport 갱신
- * - Apply는 CSV를 최신 전체 일반(1~12조) 명단으로 처리한다. 조 범위 필터 없음.
+ * - Apply는 CSV/XLSX를 최신 전체 일반(1~12조) 명단으로 처리한다. 조 범위 필터 없음.
  *   일부 조만 올리면 파일에 없는 다른 조 재직/휴직자도 누락 후보가 된다.
  * - 드라이빙 캐디는 일반 명단 누락 관리 대상에서 제외
  * - ACTIVE+LEAVE 슬롯 점유 기준 teamOrder 중복 시 Apply 차단 (RETIRED 제외)
  * - 신규 create는 teamOrder 필수 (max+1 자동부여 없음)
+ * - XLSX/XLS는 첫 시트만 표(헤더+행)로 읽고 CSV v2와 동일한 RosterCsvRow로 변환한다.
+ *   시트를 합치지 않는다. 구 xlsx-v1(조 제목 가로 레이아웃)은 이 경로를 쓰지 않는다.
  */
 
 import { Prisma } from "@prisma/client";
+import * as XLSX from "xlsx";
 import {
   CaddyPhoneError,
   isPhoneUniqueViolation,
@@ -335,6 +338,108 @@ export function parseRosterCsvV2(text: string): RosterCsvRow[] {
     });
   }
   return rows;
+}
+
+function xlsxCellText(cell: XLSX.CellObject | undefined): string {
+  if (!cell) return "";
+  const v = cell.v;
+  if (typeof v === "number" && Number.isFinite(v) && Number.isInteger(v)) {
+    return String(v);
+  }
+  if (cell.w != null && String(cell.w).trim() !== "") {
+    return String(cell.w).trim();
+  }
+  if (v == null) return "";
+  return String(v).trim();
+}
+
+function escapeCsvField(value: string): string {
+  if (/[",\n\r]/.test(value)) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
+}
+
+function sheetToStringMatrix(sheet: XLSX.WorkSheet): string[][] {
+  const ref = sheet["!ref"];
+  if (!ref) return [];
+  const range = XLSX.utils.decode_range(ref);
+  const matrix: string[][] = [];
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    const row: string[] = [];
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const addr = XLSX.utils.encode_cell({ r, c });
+      row.push(xlsxCellText(sheet[addr]));
+    }
+    matrix.push(row);
+  }
+  return matrix;
+}
+
+function matrixToCsvText(matrix: string[][]): string {
+  return matrix
+    .filter((row) => row.some((cell) => cell.trim().length > 0))
+    .map((row) => row.map(escapeCsvField).join(","))
+    .join("\n");
+}
+
+/**
+ * 표 형식 XLSX/XLS → RosterCsvRow.
+ * 첫 시트만 사용. 시트 병합 없음. CSV v2와 동일한 헤더 alias·검증.
+ */
+export function parseRosterXlsxV2(
+  buffer: Buffer,
+  filename = "roster.xlsx"
+): RosterCsvRow[] {
+  const wb = XLSX.read(buffer, {
+    type: "buffer",
+    cellDates: false,
+    cellStyles: false,
+    raw: false,
+  });
+  if (!wb.SheetNames.length) {
+    throw new Error(`${filename}: XLSX에 시트가 없습니다.`);
+  }
+  const sheetName = wb.SheetNames[0];
+  const sheet = wb.Sheets[sheetName];
+  if (!sheet) {
+    throw new Error(`${filename}: 첫 시트("${sheetName}")를 읽지 못했습니다.`);
+  }
+  const csv = matrixToCsvText(sheetToStringMatrix(sheet));
+  try {
+    return parseRosterCsvV2(csv);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(
+      `${filename} 첫 시트("${sheetName}"): ${msg} Export와 같은 표 형식(id,name,team,teamOrder,employmentStatus,phone[,thirdBandSubgroup])이어야 합니다.`
+    );
+  }
+}
+
+/** 테스트/round-trip용. extraSheets는 첫 시트 뒤에만 붙이며 parseRosterXlsxV2는 무시한다. */
+export function buildRosterTableXlsxBuffer(
+  aoa: Array<Array<string | number | boolean | null | undefined>>,
+  options?: {
+    sheetName?: string;
+    extraSheets?: Array<{
+      name: string;
+      aoa: Array<Array<string | number | boolean | null | undefined>>;
+    }>;
+  }
+): Buffer {
+  const wb = XLSX.utils.book_new();
+  const first = XLSX.utils.aoa_to_sheet(aoa);
+  XLSX.utils.book_append_sheet(
+    wb,
+    first,
+    (options?.sheetName ?? "명단").slice(0, 31)
+  );
+  for (const extra of options?.extraSheets ?? []) {
+    const ws = XLSX.utils.aoa_to_sheet(extra.aoa);
+    XLSX.utils.book_append_sheet(wb, ws, extra.name.slice(0, 31));
+  }
+  const out = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
+  return Buffer.isBuffer(out) ? out : Buffer.from(out);
 }
 
 function findNumberVariantCandidates(

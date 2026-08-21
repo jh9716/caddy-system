@@ -1652,7 +1652,7 @@ export default function ManageCaddiesPage() {
       {viewMode === 'detail' && importOpen && (
         <section className="cm-card cm-import" aria-label="명단 가져오기">
           <div className="cm-import-head">
-            <h3>명단 가져오기 (CSV)</h3>
+            <h3>명단 가져오기 (CSV/Excel)</h3>
             <button
               type="button"
               className="cm-btn cm-btn-sm"
@@ -1668,15 +1668,15 @@ export default function ManageCaddiesPage() {
           </div>
           <p className="cm-import-help">
             컬럼: <code>id,name,team,teamOrder,employmentStatus,phone[,thirdBandSubgroup]</code>
-            · id는 선택 · 빈 선택필드는 기존 유지 · 일반=3부구분 해제 · 삭제/재생성 없음 · extraFlags 미반영
-            · 이 CSV는 최신 전체 일반 캐디(1~12조) 명단으로 처리됩니다. 일부 조만 올리면 파일에 없는 다른 조 재직/휴직자가 명단 누락으로 표시됩니다. 드라이빙은 대상이 아닙니다.
+            · CSV 또는 표 형식 XLSX/XLS (첫 시트만, 시트 병합 없음) · id는 선택 · 빈 선택필드는 기존 유지 · 일반=3부구분 해제 · 삭제/재생성 없음 · extraFlags 미반영
+            · 이 파일은 최신 전체 일반 캐디(1~12조) 명단으로 처리됩니다. 일부 조만 올리면 파일에 없는 다른 조 재직/휴직자가 명단 누락으로 표시됩니다. 드라이빙은 대상이 아닙니다.
           </p>
           <div className="cm-import-actions">
             <label className="cm-btn cm-btn-sm cm-file-label">
-              CSV 선택
+              파일 선택
               <input
                 type="file"
-                accept=".csv,text/csv"
+                accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 hidden
                 disabled={importBusy}
                 onChange={async (e) => {
@@ -1707,7 +1707,7 @@ export default function ManageCaddiesPage() {
                     }
                     if (data.format && data.format !== 'csv-v2') {
                       setMessage(
-                        '이 화면은 CSV v2만 지원합니다. XLSX는 별도 경로를 사용하세요.'
+                        '이 화면은 CSV/Excel v2 표 형식만 지원합니다. Export와 같은 컬럼으로 올려 주세요.'
                       );
                       return;
                     }
@@ -1735,7 +1735,7 @@ export default function ManageCaddiesPage() {
                 if (!importPreview?.applyPayload) return;
                 if (
                   !confirm(
-                    `명단을 반영할까요?\n이 CSV는 최신 전체 일반 캐디(1~12조) 명단으로 처리됩니다.\n갱신 ${importPreview.summary.update} · 신규 ${importPreview.summary.create}\n파일에 없는 재직/휴직자는 '명단 누락'으로 표시됩니다(자동 퇴사/삭제 없음).\n일부 조만 올리면 다른 조 재직자도 누락으로 표시됩니다.`
+                    `명단을 반영할까요?\n이 파일은 최신 전체 일반 캐디(1~12조) 명단으로 처리됩니다.\n갱신 ${importPreview.summary.update} · 신규 ${importPreview.summary.create}\n파일에 없는 재직/휴직자는 '명단 누락'으로 표시됩니다(자동 퇴사/삭제 없음).\n일부 조만 올리면 다른 조 재직자도 누락으로 표시됩니다.`
                   )
                 ) {
                   return;
