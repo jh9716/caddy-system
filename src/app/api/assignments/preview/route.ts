@@ -3,6 +3,8 @@ import { requireAdmin } from "@/lib/auth";
 import {
   computeAutoAssignmentsV1,
   HouseStartCaddyError,
+  parseOptionalThirdStartCaddyId,
+  ThirdStartCaddyError,
   type AutoAssignCaddy,
   type AutoAssignReservation,
   type FixedAssignmentInput,
@@ -85,6 +87,22 @@ function parseSpecialAnchor(raw: unknown): SpecialStartAnchor | null {
   const teeTime = String((raw as { teeTime?: unknown }).teeTime || "").trim();
   if (!course || !teeTime) return null;
   return { course, teeTime };
+}
+
+function availabilityRowsToCaddies(
+  rows: AvailabilityRow[] | AutoAssignCaddy[] | undefined
+): AutoAssignCaddy[] {
+  if (!Array.isArray(rows)) return [];
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    team: row.team,
+    teamOrder: Number(row.teamOrder) || 0,
+    caddyType: row.caddyType,
+    extraFlags: "extraFlags" in row ? row.extraFlags ?? null : null,
+    thirdBandSubgroup:
+      "thirdBandSubgroup" in row ? row.thirdBandSubgroup ?? null : null,
+  }));
 }
 
 export const dynamic = "force-dynamic";
@@ -189,6 +207,14 @@ export async function POST(req: NextRequest) {
         date,
         form.get("thirdStartTeam")
       );
+      const thirdStartCaddyId = parseOptionalThirdStartCaddyId(
+        form.get("thirdStartCaddyId")
+      );
+      const caddyDirectory = availabilityRowsToCaddies([
+        ...availability.available.all,
+        ...availability.special,
+        ...availability.excluded,
+      ]);
 
       const result = computeAutoAssignmentsV1({
         date,
@@ -204,6 +230,8 @@ export async function POST(req: NextRequest) {
         openCourses,
         houseStartCaddyId,
         thirdStartTeam,
+        thirdStartCaddyId,
+        caddyDirectory,
       });
 
       return NextResponse.json({
@@ -256,6 +284,11 @@ export async function POST(req: NextRequest) {
       : null;
     let oneThreeAnchor = parseSpecialAnchor(body.oneThreeAnchor);
     let oneMakAnchor = parseSpecialAnchor(body.oneMakAnchor);
+    let jsonCaddyDirectory: AutoAssignCaddy[] | undefined = Array.isArray(
+      body.caddyDirectory
+    )
+      ? (body.caddyDirectory as AutoAssignCaddy[])
+      : undefined;
 
     // available 생략 시 DB에서 로드 (읽기 전용)
     if (!Array.isArray(body.available)) {
@@ -265,6 +298,11 @@ export async function POST(req: NextRequest) {
         special = availability.special;
         specialRows = availability.special;
       }
+      jsonCaddyDirectory = availabilityRowsToCaddies([
+        ...availability.available.all,
+        ...availability.special,
+        ...availability.excluded,
+      ]);
       const unavailable = unavailableReasonsFromRows(availability.excluded);
       const { bundles, anchors } = await loadEngineSpecialBundlesForDate(
         date,
@@ -352,6 +390,8 @@ export async function POST(req: NextRequest) {
         date,
         body.thirdStartTeam
       ),
+      thirdStartCaddyId: parseOptionalThirdStartCaddyId(body.thirdStartCaddyId),
+      caddyDirectory: jsonCaddyDirectory,
     });
 
     return NextResponse.json({
@@ -360,7 +400,7 @@ export async function POST(req: NextRequest) {
       ...result,
     });
   } catch (e: unknown) {
-    if (e instanceof HouseStartCaddyError) {
+    if (e instanceof HouseStartCaddyError || e instanceof ThirdStartCaddyError) {
       return NextResponse.json(
         { error: e.message, code: e.code },
         { status: e.status }
