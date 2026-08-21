@@ -13,7 +13,8 @@ export type V1SafeKind =
   | "create"
   | "needsReview"
   | "missing"
-  | "extraOnly";
+  | "extraOnly"
+  | "invalid";
 
 export type V1SafeCandidate = {
   id: number;
@@ -217,6 +218,9 @@ export function v1SafeApplyReady(rows: V1UiDecision[]): {
     if (r.kind === "keep") autoKeep++;
     else if (r.kind === "missing") missing++;
     else if (r.kind === "extraOnly") extraOnly++;
+    else if (r.kind === "invalid") {
+      /* 숫자-only 성명: 신규 생성 금지, 나머지 Apply는 막지 않음 */
+    }
     else if (r.kind === "move") {
       move++;
       if (r.teamOrder == null || r.teamOrder < 1) {
