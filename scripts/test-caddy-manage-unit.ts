@@ -9,6 +9,8 @@ import {
   isDrivingCaddyType,
   isThirdBandTeam,
   normalizeEmploymentStatus,
+  countsTowardRosterHeadcount,
+  rosterHeadcount,
   normalizeExtraFlags,
   normalizeTeamOrder,
   occupiesHouseThirdSlot,
@@ -49,6 +51,36 @@ assert(normalizeEmploymentStatus("retired") === "RETIRED", "retired→RETIRED");
 assert(employmentStatusLabel("ACTIVE") === "재직", "label ACTIVE");
 assert(employmentStatusLabel("LEAVE") === "휴직", "label LEAVE");
 assert(employmentStatusLabel("RETIRED") === "퇴사", "label RETIRED");
+assert(
+  countsTowardRosterHeadcount("ACTIVE") === true,
+  "ACTIVE counts toward 총원"
+);
+assert(
+  countsTowardRosterHeadcount("LEAVE") === true,
+  "LEAVE counts toward 총원"
+);
+assert(
+  countsTowardRosterHeadcount("RETIRED") === false,
+  "RETIRED excluded from 총원"
+);
+assert(
+  rosterHeadcount([
+    { employmentStatus: "ACTIVE" },
+    { employmentStatus: "LEAVE" },
+    { employmentStatus: "RETIRED" },
+    { employmentStatus: "RETIRED" },
+    { employmentStatus: "ACTIVE" },
+  ]) === 3,
+  "총원 = ACTIVE + LEAVE, RETIRED dropped"
+);
+assert(
+  rosterHeadcount([
+    ...Array.from({ length: 18 }, () => ({ employmentStatus: "ACTIVE" })),
+    { employmentStatus: "LEAVE" },
+    ...Array.from({ length: 5 }, () => ({ employmentStatus: "RETIRED" })),
+  ]) === 19,
+  "example: ACTIVE 18 + LEAVE 1 + RETIRED 5 → 총 19"
+);
 assert(parseEmploymentFilter("재직") === "ACTIVE", "filter 재직");
 assert(parseEmploymentFilter("all") === "all", "filter all");
 assert(parseEmploymentFilter("RETIRED") === "RETIRED", "filter RETIRED");
@@ -517,6 +549,38 @@ console.log("== POST schedule/shifts exclude RETIRED only ==");
     !/prisma\.caddy\.delete(Many)?\s*\(/.test(schedule) &&
       !/prisma\.caddy\.delete(Many)?\s*\(/.test(shifts),
     "schedule/shifts routes have no caddy hard-delete"
+  );
+}
+
+console.log("== 총원 excludes RETIRED (source) ==");
+{
+  const caddiesPage = fs.readFileSync(
+    path.resolve("src/app/manage/caddies/page.tsx"),
+    "utf8"
+  );
+  const dash = fs.readFileSync(path.resolve("src/app/manage/page.tsx"), "utf8");
+  assert(
+    caddiesPage.includes("rosterHeadcount") &&
+      caddiesPage.includes("countsTowardRosterHeadcount") &&
+      caddiesPage.includes("총원 {rosterCounts.headcount}명"),
+    "caddies page 총원 uses ACTIVE+LEAVE helper"
+  );
+  assert(
+    caddiesPage.includes("drivingHeadcount") &&
+      caddiesPage.includes("countsTowardRosterHeadcount(r.employmentStatus)) cur.total"),
+    "한눈에 조별/드라이빙 총원 excludes RETIRED"
+  );
+  assert(
+    /employmentStatus:\s*\{\s*in:\s*\["ACTIVE",\s*"LEAVE"\]\s*\}/.test(dash),
+    "dashboard 총 캐디 KPI excludes RETIRED"
+  );
+  assert(
+    dash.includes('if (st === "ACTIVE" || st === "LEAVE") bucket.total += 1'),
+    "dashboard 한눈에 조별 총원 excludes RETIRED"
+  );
+  assert(
+    !fs.existsSync(path.resolve("src/app/api/caddies/[id]/hard-delete/route.ts")),
+    "no generic hard-delete API added"
   );
 }
 
