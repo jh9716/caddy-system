@@ -9,10 +9,12 @@ import {
   type ShiftPart,
 } from "@/lib/reservationParser";
 import {
+  hasBlockingLiveChangeError,
   isLiveChangeReady,
   LIVE_CHANGE_LABELS,
   LIVE_CHANGE_TYPES,
   makeAddReservation,
+  makeAddReservationChange,
   previewLiveChangeFromDraft,
   type LiveChangeInput,
   type LiveChangePreview,
@@ -40,6 +42,8 @@ type Props = {
   preset?: LiveChangeInput | null;
   onPresetConsumed?: () => void;
   unavailableCaddyIds?: number[];
+  /** 고급 당추 폼의 부 기본값. 현재 보드 탭을 넘기면 무조건 1부가 되지 않는다. */
+  defaultShift?: ShiftPart;
 };
 
 export function LiveChangePanel({
@@ -50,6 +54,7 @@ export function LiveChangePanel({
   preset,
   onPresetConsumed,
   unavailableCaddyIds,
+  defaultShift = "1부",
 }: Props) {
   const [changeType, setChangeType] = useState<LiveChangeType>("CANCEL_RESERVATION");
   const [reservationKeyValue, setReservationKeyValue] = useState("");
@@ -59,7 +64,7 @@ export function LiveChangePanel({
   const [limousineOn, setLimousineOn] = useState(true);
   const [lockOn, setLockOn] = useState(true);
   const [addCourse, setAddCourse] = useState<CourseCode>("VERTHILL");
-  const [addShift, setAddShift] = useState<ShiftPart>("1부");
+  const [addShift, setAddShift] = useState<ShiftPart>(defaultShift);
   const [addTeeTime, setAddTeeTime] = useState("07:00");
   const [addTeamName, setAddTeamName] = useState("당추");
   const [preview, setPreview] = useState<LiveChangePreview | null>(null);
@@ -99,6 +104,10 @@ export function LiveChangePanel({
   );
 
   useEffect(() => {
+    setAddShift(defaultShift);
+  }, [defaultShift]);
+
+  useEffect(() => {
     if (!preset) return;
     setChangeType(preset.type);
     setReservationKeyValue(preset.reservationKey || "");
@@ -107,6 +116,19 @@ export function LiveChangePanel({
     setSwapB(preset.reservationKeyB || "");
     setLimousineOn(preset.limousineCart !== false);
     setLockOn(preset.locked !== false);
+    if (preset.type === "ADD_RESERVATION" && preset.addReservation) {
+      const add = preset.addReservation;
+      const course = String(add.course || "").toUpperCase() as CourseCode;
+      if ((COURSE_CODES as readonly string[]).includes(course)) {
+        setAddCourse(course);
+      }
+      const shift = String(add.shift || "") as ShiftPart;
+      if ((SHIFT_PARTS as readonly string[]).includes(shift)) {
+        setAddShift(shift);
+      }
+      if (add.teeTime) setAddTeeTime(add.teeTime);
+      setAddTeamName(add.teamName || "당추");
+    }
     setError(null);
     if (isLiveChangeReady(preset)) {
       const next = previewLiveChangeFromDraft({
@@ -222,8 +244,11 @@ export function LiveChangePanel({
     setError(null);
   }
 
+  const blockingError = hasBlockingLiveChangeError(preview?.warnings);
+  const canApply = !!preview && !applying && !blockingError;
+
   async function onApply() {
-    if (!preview) return;
+    if (!preview || blockingError) return;
     setError(null);
     await onApplyPreview(preview);
     setPreview(null);
@@ -533,7 +558,7 @@ export function LiveChangePanel({
         <button
           type="button"
           className="btn apply"
-          disabled={!preview || applying}
+          disabled={!canApply}
           onClick={() => void onApply()}
         >
           {applying ? "적용 중…" : "이대로 적용"}
@@ -559,7 +584,10 @@ export function LiveChangePanel({
           {preview.warnings.length > 0 && (
             <ul className="live-preview-warn">
               {preview.warnings.map((w, i) => (
-                <li key={`${w.code}-${i}`}>
+                <li
+                  key={`${w.code}-${i}`}
+                  className={w.level === "error" ? "error" : ""}
+                >
                   {w.level === "error" ? "⚠" : "ℹ"} {w.message}
                 </li>
               ))}
@@ -623,7 +651,7 @@ export function LiveChangePanel({
             <button
               type="button"
               className="btn apply"
-              disabled={applying}
+              disabled={!canApply}
               onClick={() => void onApply()}
             >
               {applying ? "적용 중…" : "이대로 적용"}
@@ -632,6 +660,111 @@ export function LiveChangePanel({
         </div>
       )}
     </section>
+  );
+}
+
+export function SameDayAddSheet({
+  date,
+  defaultShift,
+  onClose,
+  onSubmit,
+}: {
+  date: string;
+  defaultShift: ShiftPart;
+  onClose: () => void;
+  onSubmit: (change: LiveChangeInput) => void;
+}) {
+  const [shift, setShift] = useState<ShiftPart>(defaultShift);
+  const [course, setCourse] = useState<CourseCode>("VERTHILL");
+  const [teeTime, setTeeTime] = useState("");
+  const [teamName, setTeamName] = useState("당추");
+  const [formError, setFormError] = useState<string | null>(null);
+
+  function submit() {
+    if (!/^\d{2}:\d{2}$/.test(teeTime)) {
+      setFormError("티타임은 HH:MM 형식으로 입력하세요.");
+      return;
+    }
+    onSubmit(
+      makeAddReservationChange({
+        date,
+        course,
+        shift,
+        teeTime,
+        teamName: teamName.trim() || "당추",
+      })
+    );
+    onClose();
+  }
+
+  return (
+    <div className="qa-overlay" role="presentation" onClick={onClose}>
+      <div
+        className="qa-sheet"
+        role="dialog"
+        aria-label="당추 추가"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="qa-sheet-head">
+          <strong>당추 추가</strong>
+          <button type="button" className="btn tiny ghost" onClick={onClose}>
+            닫기
+          </button>
+        </div>
+        <div className="qa-actions same-day-add-form">
+          <label>
+            날짜
+            <input value={date} readOnly />
+          </label>
+          <label>
+            부
+            <select
+              value={shift}
+              onChange={(e) => setShift(e.target.value as ShiftPart)}
+            >
+              {SHIFT_PARTS.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            코스
+            <select
+              value={course}
+              onChange={(e) => setCourse(e.target.value as CourseCode)}
+            >
+              {COURSE_CODES.map((c) => (
+                <option key={c} value={c}>
+                  {COURSE_LABELS[c]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            티타임
+            <input
+              value={teeTime}
+              onChange={(e) => setTeeTime(e.target.value)}
+              placeholder="11:00"
+              inputMode="numeric"
+            />
+          </label>
+          <label>
+            팀명
+            <input
+              value={teamName}
+              onChange={(e) => setTeamName(e.target.value)}
+            />
+          </label>
+          {formError && <div className="ops-error">{formError}</div>}
+          <button type="button" className="btn primary" onClick={submit}>
+            미리보기
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

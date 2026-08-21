@@ -58,12 +58,14 @@ const COURSE_SHORT: Record<CourseCode, string> = {
 };
 
 import { SpecialDutyPanel, type Shift1StartOption } from "./SpecialDutyPanel";
-import { BoardQuickSheet, LiveChangePanel, LockToggle } from "./LiveChangePanel";
+import { BoardQuickSheet, LiveChangePanel, LockToggle, SameDayAddSheet } from "./LiveChangePanel";
 import { isThirdBandTeam, THIRD_BAND_TEAMS } from "@/lib/caddyManage";
 import { rotateThirdQueueFromStartTeam } from "@/lib/thirdWeeklyRotation";
 import {
   LIVE_CHANGE_LABELS,
   QUICK_ACTION_CONFIRM_MESSAGE,
+  hasBlockingLiveChangeError,
+  makeAddReservationChange,
   needsQuickActionConfirm,
   previewLiveChangeFromDraft,
   shouldReconcileLivePersist,
@@ -217,6 +219,9 @@ export default function ManageAssignmentsOpsPage() {
     mode: "team" | "caddy";
     key: string;
   } | null>(null);
+  const [liveChangePreset, setLiveChangePreset] =
+    useState<LiveChangeInput | null>(null);
+  const [addTeamOpen, setAddTeamOpen] = useState(false);
   const [unavailableCaddyIds, setUnavailableCaddyIds] = useState<number[]>([]);
   const [viewMode, setViewMode] = useState<ResultViewMode>("board");
   const [toast, setToast] = useState<string | null>(null);
@@ -627,7 +632,29 @@ export default function ManageAssignmentsOpsPage() {
   );
 
   function onRequestLiveChange(change: LiveChangeInput) {
+    if (change.type === "ADD_RESERVATION") {
+      setLiveChangePreset(change);
+      return;
+    }
     void applyQuickChange(change);
+  }
+
+  function onEmptyBoardCellClick(course: CourseCode, teeTime: string) {
+    if (!draft || shiftTab === "UNASSIGNED" || shiftTab === "CLOSED") return;
+    const courseLabel = COURSE_LABELS[course];
+    const ok = window.confirm(
+      `${shiftTab} ${teeTime} ${courseLabel}에 당추를 추가할까요?`
+    );
+    if (!ok) return;
+    setLiveChangePreset(
+      makeAddReservationChange({
+        date: draft.date,
+        course,
+        shift: shiftTab,
+        teeTime,
+        teamName: "당추",
+      })
+    );
   }
 
   function onAssignUnassigned(resKey: string, caddyId: number) {
@@ -857,6 +884,14 @@ export default function ManageAssignmentsOpsPage() {
   async function onLiveApply(preview: LiveChangePreview) {
     const current = draftRef.current;
     if (!current) return;
+    if (hasBlockingLiveChangeError(preview.warnings)) {
+      const msg =
+        preview.warnings.find((w) => w.level === "error")?.message ||
+        "적용할 수 없는 변경입니다.";
+      setError(msg);
+      showToast(msg);
+      return;
+    }
     setLoadingLiveApply(true);
     try {
       await persistLivePreview({
@@ -1250,20 +1285,29 @@ export default function ManageAssignmentsOpsPage() {
             )}
 
             {shiftTab !== "UNASSIGNED" && shiftTab !== "CLOSED" && (
-              <div className="ops-view-toggle" role="group" aria-label="결과 보기">
+              <div className="ops-board-tools">
+                <div className="ops-view-toggle" role="group" aria-label="결과 보기">
+                  <button
+                    type="button"
+                    className={viewMode === "board" ? "on" : ""}
+                    onClick={() => setViewMode("board")}
+                  >
+                    배치표보기
+                  </button>
+                  <button
+                    type="button"
+                    className={viewMode === "list" ? "on" : ""}
+                    onClick={() => setViewMode("list")}
+                  >
+                    목록보기
+                  </button>
+                </div>
                 <button
                   type="button"
-                  className={viewMode === "board" ? "on" : ""}
-                  onClick={() => setViewMode("board")}
+                  className="ops-add-team"
+                  onClick={() => setAddTeamOpen(true)}
                 >
-                  배치표보기
-                </button>
-                <button
-                  type="button"
-                  className={viewMode === "list" ? "on" : ""}
-                  onClick={() => setViewMode("list")}
-                >
-                  목록보기
+                  당추 추가
                 </button>
               </div>
             )}
@@ -1332,13 +1376,18 @@ export default function ManageAssignmentsOpsPage() {
                                 }
                                 if (cell.kind === "empty") {
                                   return (
-                                    <div
+                                    <button
                                       key={code}
-                                      className="bc-cell empty"
+                                      type="button"
+                                      className="bc-cell empty addable"
                                       role="cell"
+                                      aria-label={`${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} 당추 추가`}
+                                      onClick={() =>
+                                        onEmptyBoardCellClick(code, tr.teeTime)
+                                      }
                                     >
                                       -
-                                    </div>
+                                    </button>
                                   );
                                 }
                                 const primary = cell.rows[0];
@@ -1584,10 +1633,29 @@ export default function ManageAssignmentsOpsPage() {
           applying={loadingLiveApply}
           onApplyPreview={onLiveApply}
           unavailableCaddyIds={unavailableCaddyIds}
+          preset={liveChangePreset}
+          onPresetConsumed={() => setLiveChangePreset(null)}
+          defaultShift={
+            shiftTab === "UNASSIGNED" || shiftTab === "CLOSED"
+              ? "1부"
+              : shiftTab
+          }
         />
       )}
 
       {toast && <div className="ops-toast vh-manage-toast">{toast}</div>}
+      {addTeamOpen &&
+        draft &&
+        shiftTab !== "UNASSIGNED" &&
+        shiftTab !== "CLOSED" && (
+          <SameDayAddSheet
+            key={shiftTab}
+            date={draft.date}
+            defaultShift={shiftTab}
+            onClose={() => setAddTeamOpen(false)}
+            onSubmit={(change) => setLiveChangePreset(change)}
+          />
+        )}
       {quickSheet && quickSheetRow && (
         <BoardQuickSheet
           mode={quickSheet.mode}
@@ -1879,6 +1947,24 @@ const opsCss = `
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 6px;
+    flex: 1;
+  }
+  .ops-board-tools {
+    display: flex;
+    gap: 6px;
+    align-items: stretch;
+  }
+  .ops-add-team {
+    min-height: 36px;
+    padding: 0 12px;
+    border-radius: 8px;
+    border: 1px solid #0f172a;
+    background: #0f172a;
+    color: #fff;
+    font-size: 0.8rem;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
   }
   .ops-view-toggle button {
     min-height: 36px;
@@ -1979,6 +2065,17 @@ const opsCss = `
   .bc-cell.empty {
     color: #cbd5e1;
     font-weight: 600;
+  }
+  button.bc-cell.empty.addable {
+    cursor: pointer;
+    color: #94a3b8;
+  }
+  button.bc-cell.empty.addable:hover,
+  button.bc-cell.empty.addable:focus-visible {
+    background: #f8fafc;
+    color: #0f172a;
+    outline: 2px solid #0f172a;
+    outline-offset: -2px;
   }
   .bc-cell.closed {
     background: repeating-linear-gradient(
@@ -2396,6 +2493,28 @@ const opsCss = `
     margin: 0;
     padding-left: 18px;
     color: #b45309;
+  }
+  .live-preview-warn .error {
+    color: #b91c1c;
+    font-weight: 700;
+  }
+  .same-day-add-form label {
+    display: grid;
+    gap: 4px;
+    font-size: 0.8rem;
+    color: #334155;
+  }
+  .same-day-add-form input,
+  .same-day-add-form select {
+    min-height: 40px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 6px 8px;
+    font: inherit;
+  }
+  .same-day-add-form input[readonly] {
+    background: #f8fafc;
+    color: #64748b;
   }
   .live-preview-diff {
     margin: 0;
