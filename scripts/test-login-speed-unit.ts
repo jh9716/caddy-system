@@ -125,6 +125,11 @@ console.log("== security structure unchanged ==");
 {
   assert(middlewareSrc.includes("getVerifiedSessionFromCookies"), "middleware still verifies signature");
   assert(middlewareSrc.includes('session.role !== "admin"'), "middleware still gates /manage admin");
+  assert(
+    middlewareSrc.includes("/manage/staff-accounts") &&
+      middlewareSrc.includes("isAccountManagerAuth"),
+    "middleware gates staff-accounts to account manager"
+  );
   assert(authSrc.includes("user.sessionVersion !== session.sv"), "sessionVersion still enforced");
   assert(authSrc.includes("user.username !== session.username"), "username still bound to session");
   assert(sessionSrc.includes("timingSafeEqualBytes"), "HMAC compare still timing-safe");

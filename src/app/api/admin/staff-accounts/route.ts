@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireAdmin } from "@/lib/auth";
+import { requireAccountManager } from "@/lib/auth";
 import { STAFF_PASSWORD_ACCOUNT_WHERE } from "@/lib/staffAdminAccounts";
 
 export const dynamic = "force-dynamic";
@@ -8,7 +8,7 @@ export const runtime = "nodejs";
 
 /** GET /api/admin/staff-accounts — ID/PW 직원 계정 목록. hash 비노출. */
 export async function GET(req: NextRequest) {
-  const guard = await requireAdmin(req);
+  const guard = await requireAccountManager(req);
   if (guard) return guard;
 
   try {

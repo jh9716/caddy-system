@@ -42,6 +42,7 @@ const NAV = [
     href: "/manage/staff-accounts",
     label: "직원 계정",
     match: (p: string) => p.startsWith("/manage/staff-accounts"),
+    accountManagerOnly: true,
   },
   { href: "/notice", label: "공지", match: (p: string) => p.startsWith("/notice") },
   {
@@ -50,6 +51,14 @@ const NAV = [
     match: (p: string) => p.startsWith("/schedule"),
   },
 ] as const;
+
+export function manageNavItems(canManageStaffAccounts: boolean) {
+  return NAV.filter(
+    (item) =>
+      !("accountManagerOnly" in item && item.accountManagerOnly) ||
+      canManageStaffAccounts
+  );
+}
 
 function IconHome() {
   return (
@@ -99,10 +108,17 @@ const BOTTOM = [
   { href: "#menu", label: "메뉴", Icon: IconMenu },
 ] as const;
 
-export default function ManageShell({ children }: { children: React.ReactNode }) {
+export default function ManageShell({
+  children,
+  canManageStaffAccounts = false,
+}: {
+  children: React.ReactNode;
+  canManageStaffAccounts?: boolean;
+}) {
   const pathname = usePathname() || "/manage";
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
+  const navItems = manageNavItems(canManageStaffAccounts);
 
   useEffect(() => {
     setMenuOpen(false);
@@ -153,7 +169,7 @@ export default function ManageShell({ children }: { children: React.ReactNode })
           </div>
         </div>
         <nav className="vh-sidebar-nav">
-          {NAV.map((item) => {
+          {navItems.map((item) => {
             const active = item.match(pathname);
             return (
               <Link
@@ -252,7 +268,7 @@ export default function ManageShell({ children }: { children: React.ReactNode })
               </button>
             </div>
             <nav className="vh-drawer-nav">
-              {NAV.map((item) => (
+              {navItems.map((item) => (
                 <Link
                   key={item.href}
                   href={item.href}

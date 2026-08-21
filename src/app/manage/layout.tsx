@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import ManageShell from "@/components/manage/ManageShell";
 import { getRequestAuthUser } from "@/lib/getRequestAuthUser";
 import { shouldForcePasswordChange } from "@/lib/passwordPolicy";
+import { isAccountManagerAuth } from "@/lib/staffAdminAccounts";
 
 export const dynamic = "force-dynamic";
 
@@ -18,5 +19,9 @@ export default async function ManageLayout({
     redirect("/change-password");
   }
 
-  return <ManageShell>{children}</ManageShell>;
+  return (
+    <ManageShell canManageStaffAccounts={isAccountManagerAuth(auth)}>
+      {children}
+    </ManageShell>
+  );
 }
