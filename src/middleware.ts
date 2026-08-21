@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { getVerifiedSessionFromCookies } from "@/lib/sessionCookies";
+import {
+  isAccountManagerAuth,
+} from "@/lib/staffAdminAccounts";
 
 /**
  * Edge-safe gate only:
@@ -18,6 +21,22 @@ export async function middleware(req: NextRequest) {
       login.pathname = "/login";
       login.searchParams.set("callbackUrl", pathname);
       return NextResponse.redirect(login);
+    }
+    if (
+      pathname.startsWith("/manage/staff-accounts") &&
+      !isAccountManagerAuth({
+        role: session.role,
+        username: session.username,
+        uid: session.uid,
+      })
+    ) {
+      return NextResponse.json(
+        {
+          error: "forbidden",
+          message: "최고관리자만 직원 계정을 관리할 수 있습니다.",
+        },
+        { status: 403 }
+      );
     }
   }
 

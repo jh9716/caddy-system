@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireAdmin } from "@/lib/auth";
+import { requireAccountManager } from "@/lib/auth";
 import { STAFF_PASSWORD_ACCOUNT_WHERE } from "@/lib/staffAdminAccounts";
 import {
   generateTempNumericPassword,
@@ -19,7 +19,7 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> | { id: string } }
 ) {
-  const guard = await requireAdmin(req);
+  const guard = await requireAccountManager(req);
   if (guard) return guard;
 
   const resolved = await Promise.resolve(params);

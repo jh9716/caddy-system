@@ -7,12 +7,11 @@
  *   npx tsx scripts/test-staff-admin-password-unit.ts
  */
 import bcrypt from "bcryptjs";
+import fs from "node:fs";
+import path from "node:path";
 import { NextRequest } from "next/server";
 import { PrismaClient } from "@prisma/client";
-import {
-  SESSION_COOKIE_NAME,
-} from "../src/lib/sessionCookies";
-import { requireAdmin, resolveAuthFromCookieStore } from "../src/lib/auth";
+import { requireAdmin, requireAccountManager, resolveAuthFromCookieStore } from "../src/lib/auth";
 import {
   BANNED_TEMP_NUMERIC_PASSWORDS,
   isBannedTempNumericPassword,
@@ -27,7 +26,18 @@ import {
   generateTempNumericPassword,
   verifyUserPassword,
 } from "../src/lib/userPassword";
-import { STAFF_ADMIN_USERNAMES } from "../src/lib/staffAdminAccounts";
+import {
+  STAFF_ADMIN_USERNAMES,
+  SUPER_ADMIN_USERNAME,
+  isAccountManagerAuth,
+} from "../src/lib/staffAdminAccounts";
+import { manageNavItems } from "../src/components/manage/ManageShell";
+import { middleware } from "../src/middleware";
+import {
+  SESSION_COOKIE_NAME,
+  buildSessionClaims,
+  signSessionClaims,
+} from "../src/lib/sessionCookies";
 
 let passed = 0;
 let failed = 0;
@@ -201,6 +211,201 @@ async function main() {
     "staff names in requested order"
   );
 
+  section("source: 직원 계정 관리는 requireAccountManager");
+  const staffListSrc = fs.readFileSync(
+    path.resolve("src/app/api/admin/staff-accounts/route.ts"),
+    "utf8"
+  );
+  const staffResetSrc = fs.readFileSync(
+    path.resolve("src/app/api/admin/staff-accounts/[id]/reset-password/route.ts"),
+    "utf8"
+  );
+  const authSrc = fs.readFileSync(path.resolve("src/lib/auth.ts"), "utf8");
+  const mwSrc = fs.readFileSync(path.resolve("src/middleware.ts"), "utf8");
+  const manageLayoutSrc = fs.readFileSync(
+    path.resolve("src/app/manage/layout.tsx"),
+    "utf8"
+  );
+  const staffPageLayoutSrc = fs.readFileSync(
+    path.resolve("src/app/manage/staff-accounts/layout.tsx"),
+    "utf8"
+  );
+  const changePwSrc = fs.readFileSync(
+    path.resolve("src/app/api/auth/change-password/route.ts"),
+    "utf8"
+  );
+  assert(
+    staffListSrc.includes("requireAccountManager") &&
+      !staffListSrc.includes("requireAdmin"),
+    "list API uses requireAccountManager, not requireAdmin"
+  );
+  assert(
+    staffResetSrc.includes("requireAccountManager") &&
+      !staffResetSrc.includes("requireAdmin"),
+    "reset API uses requireAccountManager, not requireAdmin"
+  );
+  assert(
+    authSrc.includes("export async function requireAccountManager") &&
+      authSrc.includes("export async function requireSuperAdmin"),
+    "auth exports requireAccountManager / requireSuperAdmin"
+  );
+  assert(
+    authSrc.includes("requireAdmin") &&
+      authSrc.includes("shouldForcePasswordChange"),
+    "requireAdmin still used for ops + password-change gate"
+  );
+  assert(
+    mwSrc.includes("/manage/staff-accounts") &&
+      mwSrc.includes("isAccountManagerAuth"),
+    "middleware blocks /manage/staff-accounts for non-super admin"
+  );
+  assert(
+    manageLayoutSrc.includes("canManageStaffAccounts") &&
+      manageLayoutSrc.includes("isAccountManagerAuth"),
+    "manage layout passes account-manager flag to shell"
+  );
+  assert(
+    staffPageLayoutSrc.includes("isAccountManagerAuth"),
+    "staff-accounts layout has server-side gate"
+  );
+  assert(
+    changePwSrc.includes("resolveAuthUser") &&
+      !changePwSrc.includes("requireAccountManager"),
+    "본인 change-password는 계정관리 권한과 분리"
+  );
+
+  section("최고관리자만 직원 계정 관리");
+  assert(SUPER_ADMIN_USERNAME === "admin", "DB super admin username is admin");
+  assert(
+    isAccountManagerAuth({ role: "admin", username: "admin", userId: 1 }) === true,
+    "DB username=admin can manage staff accounts"
+  );
+  assert(
+    isAccountManagerAuth({ role: "admin", username: "env_admin", userId: null }) ===
+      true,
+    "env-only admin (uid null) can manage staff accounts"
+  );
+  for (const name of STAFF_ADMIN_USERNAMES) {
+    assert(
+      isAccountManagerAuth({ role: "admin", username: name, userId: 10 }) === false,
+      `${name} staff admin cannot manage staff accounts`
+    );
+  }
+  assert(
+    isAccountManagerAuth({ role: "caddy", username: "admin", userId: 1 }) === false,
+    "caddy role cannot manage staff accounts"
+  );
+  const adminNav = manageNavItems(true).map((i) => i.href);
+  const staffNav = manageNavItems(false).map((i) => i.href);
+  assert(adminNav.includes("/manage/staff-accounts"), "admin → 직원 계정 메뉴 보임");
+  assert(
+    !staffNav.includes("/manage/staff-accounts"),
+    "직원 admin → 직원 계정 메뉴 안 보임"
+  );
+  assert(staffNav.includes("/manage/assignments"), "직원 admin 자동배치 메뉴 유지");
+  assert(staffNav.includes("/manage/caddies"), "직원 admin 캐디관리 메뉴 유지");
+
+  const staffMwReq = new NextRequest("https://example.com/manage/staff-accounts", {
+    headers: {
+      cookie: `${SESSION_COOKIE_NAME}=${await signSessionClaims(
+        buildSessionClaims({
+          userId: 99,
+          username: "박성민",
+          role: "admin",
+          sessionVersion: 1,
+        })
+      )}`,
+    },
+  });
+  const staffMw = await middleware(staffMwReq);
+  assert(staffMw.status === 403, "직원 admin URL 직접 입력 → 403");
+  const staffMwJson = await staffMw.json();
+  assert(staffMwJson.error === "forbidden", "middleware forbidden code");
+
+  const superMwReq = new NextRequest("https://example.com/manage/staff-accounts", {
+    headers: {
+      cookie: `${SESSION_COOKIE_NAME}=${await signSessionClaims(
+        buildSessionClaims({
+          userId: 1,
+          username: "admin",
+          role: "admin",
+          sessionVersion: 1,
+        })
+      )}`,
+    },
+  });
+  const superMw = await middleware(superMwReq);
+  assert(superMw.status !== 403, "admin username URL 접근은 middleware 통과");
+
+  const envMwReq = new NextRequest("https://example.com/manage/staff-accounts", {
+    headers: {
+      cookie: `${SESSION_COOKIE_NAME}=${await signSessionClaims(
+        buildSessionClaims({
+          userId: null,
+          username: "env_admin_staff_test",
+          role: "admin",
+          sessionVersion: 0,
+        })
+      )}`,
+    },
+  });
+  const envMw = await middleware(envMwReq);
+  assert(envMw.status !== 403, "env admin URL 접근은 middleware 통과");
+
+  const assignMwReq = new NextRequest("https://example.com/manage/assignments", {
+    headers: {
+      cookie: `${SESSION_COOKIE_NAME}=${await signSessionClaims(
+        buildSessionClaims({
+          userId: 99,
+          username: "박성민",
+          role: "admin",
+          sessionVersion: 1,
+        })
+      )}`,
+    },
+  });
+  const assignMw = await middleware(assignMwReq);
+  assert(assignMw.status !== 403, "직원 admin 자동배치 경로는 403 아님");
+
+  const caddyMwReq = new NextRequest("https://example.com/manage/staff-accounts", {
+    headers: {
+      cookie: `${SESSION_COOKIE_NAME}=${await signSessionClaims(
+        buildSessionClaims({
+          userId: 8,
+          username: "caddy1",
+          role: "caddy",
+          sessionVersion: 1,
+        })
+      )}`,
+    },
+  });
+  const caddyMw = await middleware(caddyMwReq);
+  assert(caddyMw.status === 307 || caddyMw.status === 302, "caddy /manage → login redirect");
+  assert(
+    (caddyMw.headers.get("location") || "").includes("/login"),
+    "caddy role still redirected, not staff-account 403"
+  );
+
+  const envMgrReq = new NextRequest("https://example.com/api/admin/staff-accounts", {
+    headers: {
+      cookie: `${SESSION_COOKIE_NAME}=${await signSessionClaims(
+        buildSessionClaims({
+          userId: null,
+          username: "env_admin_staff_test",
+          role: "admin",
+          sessionVersion: 0,
+        })
+      )}`,
+    },
+  });
+  const envMgr = await requireAccountManager(envMgrReq);
+  assert(
+    envMgr === undefined,
+    "env-only admin requireAccountManager passes (no DB)"
+  );
+  const envAdminOps = await requireAdmin(envMgrReq);
+  assert(envAdminOps === undefined, "env-only admin requireAdmin still passes");
+
   if (!process.env.DATABASE_URL) {
     process.env.DATABASE_URL =
       "postgresql://caddy:caddy@localhost:5432/caddy_local?schema=public";
@@ -228,6 +433,8 @@ async function main() {
   const koreanUsername = `한글테스트${tag.slice(-6)}`;
   const envSnap = snapshotEnvCreds();
   clearEnvCreds();
+  let createdDbSuper = false;
+  let dbSuperId: number | null = null;
 
   try {
     const tempA = generateTempNumericPassword();
@@ -458,6 +665,49 @@ async function main() {
     );
     const newLoginCookie = cookieHeaderFrom(newLogin);
 
+    section("직원 admin은 직원 계정 API 차단, 운영 API는 유지");
+    const staffListForbidden = await staffListGET(
+      new NextRequest("https://example.com/api/admin/staff-accounts", {
+        headers: { cookie: newLoginCookie },
+      })
+    );
+    const staffListForbiddenJson = await staffListForbidden.json();
+    assert(staffListForbidden.status === 403, "직원 admin list API → 403");
+    assert(
+      staffListForbiddenJson.error === "forbidden",
+      "직원 admin list forbidden"
+    );
+    const staffResetForbidden = await staffResetPOST(
+      jsonReq(
+        `https://example.com/api/admin/staff-accounts/${staffUser.id}/reset-password`,
+        {},
+        { cookie: newLoginCookie }
+      ),
+      { params: { id: String(staffUser.id) } }
+    );
+    assert(staffResetForbidden.status === 403, "직원 admin reset API → 403");
+    const staffOps = await caddiesGET(
+      new NextRequest("https://example.com/api/caddies", {
+        headers: { cookie: newLoginCookie },
+      })
+    );
+    assert(staffOps.status === 200, "직원 admin 캐디관리 API 정상");
+    const staffMgrGate = await requireAccountManager(
+      new NextRequest("https://example.com/api/admin/staff-accounts", {
+        headers: { cookie: newLoginCookie },
+      })
+    );
+    assert(
+      staffMgrGate instanceof Response && staffMgrGate.status === 403,
+      "requireAccountManager 직원 admin → 403"
+    );
+    const staffOpsGate = await requireAdmin(
+      new NextRequest("https://example.com/api/caddies", {
+        headers: { cookie: newLoginCookie },
+      })
+    );
+    assert(staffOpsGate === undefined, "requireAdmin 직원 admin 운영 API 통과");
+
     section("기존 DB admin / env admin 회귀");
     const existingLogin = await loginPOST(
       jsonReq("https://example.com/api/login", {
@@ -511,13 +761,67 @@ async function main() {
     assert(envChange.status === 400, "env admin cannot use change-password API");
 
     section("admin reset");
-    const listRes = await staffListGET(
+    const otherAdminList = await staffListGET(
       new NextRequest("https://example.com/api/admin/staff-accounts", {
         headers: { cookie: existingCookie },
       })
     );
+    assert(
+      otherAdminList.status === 403,
+      "non-super DB admin cannot list staff accounts"
+    );
+    const listRes = await staffListGET(
+      new NextRequest("https://example.com/api/admin/staff-accounts", {
+        headers: { cookie: envCookie },
+      })
+    );
     const listJson = await listRes.json();
-    assert(listRes.status === 200, "staff list ok for existing admin");
+    assert(listRes.status === 200, "staff list ok for env/super admin");
+    const envMgrGate = await requireAccountManager(
+      new NextRequest("https://example.com/api/admin/staff-accounts", {
+        headers: { cookie: envCookie },
+      })
+    );
+    assert(envMgrGate === undefined, "requireAccountManager env admin 통과");
+
+    let dbSuper = await prisma.user.findUnique({
+      where: { username: SUPER_ADMIN_USERNAME },
+      select: { id: true, username: true, sessionVersion: true },
+    });
+    if (!dbSuper) {
+      dbSuper = await prisma.user.create({
+        data: {
+          username: SUPER_ADMIN_USERNAME,
+          password: hashExisting,
+          role: "admin",
+          mustChangePassword: false,
+          managedTeams: [],
+        },
+        select: { id: true, username: true, sessionVersion: true },
+      });
+      createdDbSuper = true;
+    }
+    dbSuperId = dbSuper.id;
+    const dbSuperCookie = `${SESSION_COOKIE_NAME}=${await signSessionClaims(
+      buildSessionClaims({
+        userId: dbSuper.id,
+        username: dbSuper.username,
+        role: "admin",
+        sessionVersion: dbSuper.sessionVersion,
+      })
+    )}`;
+    const dbSuperList = await staffListGET(
+      new NextRequest("https://example.com/api/admin/staff-accounts", {
+        headers: { cookie: dbSuperCookie },
+      })
+    );
+    assert(dbSuperList.status === 200, "DB username=admin → 직원 계정 목록 200");
+    const dbSuperMgr = await requireAccountManager(
+      new NextRequest("https://example.com/api/admin/staff-accounts", {
+        headers: { cookie: dbSuperCookie },
+      })
+    );
+    assert(dbSuperMgr === undefined, "DB username=admin requireAccountManager 통과");
     const listed = (listJson.users as Array<{ id: number; username: string }>) || [];
     assert(
       listed.some((u) => u.id === staffUser.id),
@@ -534,6 +838,35 @@ async function main() {
       "staff list has no password field"
     );
 
+    const staffAdminCannotReset = await staffResetPOST(
+      jsonReq(
+        `https://example.com/api/admin/staff-accounts/${staffUser.id}/reset-password`,
+        {},
+        { cookie: existingCookie }
+      ),
+      { params: { id: String(staffUser.id) } }
+    );
+    assert(
+      staffAdminCannotReset.status === 403,
+      "기존 직원 admin reset API 직접 호출 → 403"
+    );
+
+    const dbSuperReset = await staffResetPOST(
+      jsonReq(
+        `https://example.com/api/admin/staff-accounts/${existingAdmin.id}/reset-password`,
+        {},
+        { cookie: dbSuperCookie }
+      ),
+      { params: { id: String(existingAdmin.id) } }
+    );
+    const dbSuperResetJson = await dbSuperReset.json();
+    assert(dbSuperReset.status === 200, "DB username=admin → 임시 비밀번호 reset 가능");
+    assert(dbSuperResetJson.ok === true, "DB admin reset ok=true");
+    assert(
+      /^\d{8}$/.test(String(dbSuperResetJson.temporaryPassword || "")),
+      "DB admin reset returns 8-digit temp once"
+    );
+
     const svBefore = await prisma.user.findUnique({
       where: { id: staffUser.id },
       select: { sessionVersion: true },
@@ -542,7 +875,7 @@ async function main() {
       jsonReq(
         `https://example.com/api/admin/staff-accounts/${staffUser.id}/reset-password`,
         {},
-        { cookie: existingCookie }
+        { cookie: envCookie }
       ),
       { params: { id: String(staffUser.id) } }
     );
@@ -582,7 +915,7 @@ async function main() {
       jsonReq(
         `https://example.com/api/admin/staff-accounts/${kakaoUser.id}/reset-password`,
         {},
-        { cookie: existingCookie }
+        { cookie: envCookie }
       ),
       { params: { id: String(kakaoUser.id) } }
     );
@@ -632,6 +965,9 @@ async function main() {
     console.error(e);
   } finally {
     restoreEnvCreds(envSnap);
+    if (createdDbSuper && dbSuperId != null) {
+      await prisma.user.delete({ where: { id: dbSuperId } }).catch(() => {});
+    }
     await prisma.user.deleteMany({
       where: {
         OR: [

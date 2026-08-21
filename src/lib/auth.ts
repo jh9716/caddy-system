@@ -13,6 +13,7 @@ import {
   type OffRequestActor,
 } from "@/lib/offRequestAuth";
 import { shouldForcePasswordChange } from "@/lib/passwordPolicy";
+import { isAccountManagerAuth } from "@/lib/staffAdminAccounts";
 
 export type ResolvedAuthUser = {
   session: VerifiedSession;
@@ -120,6 +121,34 @@ export async function requireAdmin(
   }
   if (shouldForcePasswordChange(auth)) {
     return mustChangePasswordResponse();
+  }
+}
+
+/** 직원 계정 관리 전용. 운영 requireAdmin과 분리. schema/role 변경 없음. */
+export function forbiddenAccountManagerResponse(): NextResponse {
+  return NextResponse.json(
+    {
+      error: "forbidden",
+      message: "최고관리자만 직원 계정을 관리할 수 있습니다.",
+    },
+    { status: 403 }
+  );
+}
+
+export async function requireSuperAdmin(
+  req: NextRequest
+): Promise<NextResponse | void> {
+  return requireAccountManager(req);
+}
+
+export async function requireAccountManager(
+  req: NextRequest
+): Promise<NextResponse | void> {
+  const adminGuard = await requireAdmin(req);
+  if (adminGuard) return adminGuard;
+  const auth = await resolveAuthUser(req);
+  if (!auth || !isAccountManagerAuth(auth)) {
+    return forbiddenAccountManagerResponse();
   }
 }
 
