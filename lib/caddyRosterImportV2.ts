@@ -1858,13 +1858,20 @@ function assertMatchedExistingIds(
 export async function applyRosterImportPayloadV2(
   payload: RosterApplyPayload,
   prisma: PrismaLike,
-  options?: { existingForGuard?: RosterExisting[] }
+  options?: {
+    existingForGuard?: RosterExisting[];
+    /** XLSX v1 안전 반영에서 관리자가 명시적으로 신규를 고른 뒤에만 true */
+    allowExplicitNeedsReviewCreates?: boolean;
+  }
 ): Promise<RosterApplyResult> {
   for (const c of payload.creates) {
     if (!c.name?.trim() || !c.team?.trim()) {
       throw new RosterImportApplyError("create에 name, team 필수");
     }
-    if (isNeedsReviewName(c.name)) {
+    if (
+      !options?.allowExplicitNeedsReviewCreates &&
+      isNeedsReviewName(c.name)
+    ) {
       throw new RosterImportApplyError(
         `needsReview 이름은 신규 생성할 수 없습니다: ${c.name}`
       );

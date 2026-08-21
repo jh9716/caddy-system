@@ -2028,7 +2028,7 @@ async function main() {
       previewRouteSrc.includes("xlsx-v1") &&
       previewRouteSrc.includes("xlsx-v2") &&
       previewRouteSrc.includes("parseImportFile") &&
-      previewRouteSrc.includes("buildImportPreview") &&
+      previewRouteSrc.includes("buildXlsxV1SafePreview") &&
       !previewRouteSrc.includes("$transaction") &&
       !previewRouteSrc.includes("prisma.caddy.update") &&
       !previewRouteSrc.includes("prisma.caddy.create"),
@@ -2043,20 +2043,24 @@ async function main() {
       pageSrc.includes("rosterImportFormatLabel") &&
       pageSrc.includes("isRosterImportV2ApplyFormat") &&
       pageSrc.includes("조 제목형 XLSX v1로 인식"),
-    "manage caddies shows recognized format and keeps v1 preview off Apply v2"
+    "manage caddies shows recognized format for csv-v2 / xlsx-v2 / xlsx-v1"
   );
   assert(
     pageSrc.includes("if (!isRosterImportV2ApplyFormat(importPreview.format)) return;") &&
-      applyUi.includes("format: importPreview.format"),
-    "Apply click only sends csv-v2 / xlsx-v2 payloads"
+      applyUi.includes("format: importPreview.format") &&
+      applyUi.includes("applyPayload: importPreview.applyPayload"),
+    "v2 Apply click still sends csv-v2 / xlsx-v2 applyPayload"
   );
   assert(
-    applyRouteSrc.includes('body?.format === "xlsx-v1"') &&
-      applyRouteSrc.includes('forbiddenKeys') &&
+    !applyRouteSrc.includes("allowExplicitNeedsReviewCreates") &&
+      applyRouteSrc.includes('body?.format === "xlsx-v1"') &&
+      applyRouteSrc.includes("applyXlsxV1SafePayload") &&
+      applyRouteSrc.includes("xlsx-v1 안전 반영 payload에 extras") &&
+      applyRouteSrc.includes("forbiddenKeys") &&
       applyRouteSrc.includes('"missingFromImport"') &&
       applyRouteSrc.includes('"extras"') &&
       applyRouteSrc.includes("matchedExistingIds"),
-    "apply route rejects xlsx-v1 format and v1 extras payload keys"
+    "v2 apply path still rejects extras; xlsx-v1 uses the safe apply entry without v2 extras payload"
   );
 
   console.log(`\nDONE: ${passed} passed, ${failed} failed`);

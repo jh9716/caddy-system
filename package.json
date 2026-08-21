@@ -19,6 +19,7 @@
     "postinstall": "prisma generate",
     "test:roster-unit": "npx tsx scripts/test-caddy-roster-unit.ts",
     "test:roster-import-v2-unit": "npx tsx scripts/test-caddy-roster-import-v2-unit.ts",
+    "test:roster-import-v1-safe-unit": "npx tsx scripts/test-caddy-roster-import-v1-safe-unit.ts",
     "test:roster-import-v2-db": "npx tsx scripts/test-caddy-roster-import-v2-db.ts",
     "test:slot-unit": "npx tsx scripts/test-caddy-slot-unit.ts",
     "test:manage-unit": "npx tsx scripts/test-caddy-manage-unit.ts",

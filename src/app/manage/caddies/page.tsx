@@ -23,6 +23,14 @@ import {
   type SlotOccupant,
 } from '@/lib/caddySlot';
 import {
+  listV1ProjectedEmptySlots,
+  mergeV1SafeResolutions,
+  v1SafeApplyReady,
+  type V1SafeDecisionRow,
+  type V1SafeImportPerson,
+  type V1SafeResolution,
+} from '@/lib/caddyRosterImportV1SafeShared';
+import {
   ROSTER_IMPORT_APPLY_FAILED_USER_MESSAGE,
   rosterImportApplySuccessMessage,
 } from '@/lib/caddyRosterImportApplyConfig';
@@ -104,6 +112,27 @@ function isRosterImportV2ApplyFormat(
   return format === 'csv-v2' || format === 'xlsx-v2';
 }
 
+function isXlsxV1SafePreview(preview: {
+  format?: string;
+  rows?: unknown;
+  importPeople?: unknown;
+} | null | undefined): boolean {
+  return (
+    preview?.format === 'xlsx-v1' &&
+    Array.isArray(preview.rows) &&
+    Array.isArray(preview.importPeople)
+  );
+}
+
+const V1_SAFE_KIND_LABEL: Record<string, string> = {
+  keep: '변경없음',
+  move: '조 이동',
+  create: '신규',
+  needsReview: '검토필요',
+  missing: '누락',
+  extraOnly: '안내',
+};
+
 export default function ManageCaddiesPage() {
   const [rows, setRows] = useState<Caddy[]>([]);
   const [loading, setLoading] = useState(false);
@@ -156,10 +185,10 @@ export default function ManageCaddiesPage() {
     summary: {
       inputPeople?: number;
       uniqueImportPeople?: number;
-      update: number;
+      update?: number;
       create?: number;
       new?: number;
-      unchanged: number;
+      unchanged?: number;
       needsReview: number;
       missingInImport: number;
       phoneIssues?: number;
@@ -167,8 +196,17 @@ export default function ManageCaddiesPage() {
       applyBlocked?: boolean;
       applyBlockedByPhone?: boolean;
       phoneColumnPresent?: boolean;
+      autoKeep?: number;
+      move?: number;
+      extraOnly?: number;
+      applyReady?: boolean;
+      applyBlockedReasons?: string[];
     };
-    lines: ImportPreviewLine[];
+    lines?: ImportPreviewLine[];
+    rows?: V1SafeDecisionRow[];
+    extraOnly?: Array<{ name: string; team: string }>;
+    importPeople?: V1SafeImportPerson[];
+    occupants?: SlotOccupant[];
     phoneIssues?: Array<{ kind: string; name: string; message: string; maskedPhone?: string | null }>;
     teamOrderConflicts?: Array<{
       team: string;
@@ -185,6 +223,9 @@ export default function ManageCaddiesPage() {
   };
   const [importOpen, setImportOpen] = useState(false);
   const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+  const [v1Resolutions, setV1Resolutions] = useState<
+    Record<string, V1SafeResolution>
+  >({});
   const [importBusy, setImportBusy] = useState(false);
   const [importFileName, setImportFileName] = useState<string | null>(null);
   /** Apply 실패 시 Preview와 구분 — 반영되지 않음 */
@@ -290,6 +331,27 @@ export default function ManageCaddiesPage() {
       return r.name.includes(query) || String(r.id).includes(query);
     });
   }, [rows, teamFilter, q, viewMode, employmentFilter]);
+
+  const v1DecisionRows = importPreview?.rows ?? [];
+  const v1MergedRows = useMemo(
+    () => mergeV1SafeResolutions(v1DecisionRows, v1Resolutions),
+    [v1DecisionRows, v1Resolutions]
+  );
+  const v1Ready = useMemo(
+    () => v1SafeApplyReady(v1MergedRows),
+    [v1MergedRows]
+  );
+  const v1Occupants = importPreview?.occupants ?? slotPeers;
+
+  const patchV1Resolution = useCallback(
+    (name: string, patch: Partial<V1SafeResolution>) => {
+      setV1Resolutions((prev) => {
+        const cur = prev[name] ?? { name };
+        return { ...prev, [name]: { ...cur, ...patch, name } };
+      });
+    },
+    []
+  );
 
   const rosterCounts = useMemo(() => {
     const regular = rows.filter(
@@ -1685,6 +1747,7 @@ export default function ManageCaddiesPage() {
                 setImportPreview(null);
                 setImportFileName(null);
                 setImportApplyFailed(false);
+                setV1Resolutions({});
               }}
             >
               닫기
@@ -1694,7 +1757,7 @@ export default function ManageCaddiesPage() {
             컬럼: <code>id,name,team,teamOrder,employmentStatus,phone[,thirdBandSubgroup]</code>
             · CSV 또는 표 형식 XLSX/XLS (첫 시트만, 시트 병합 없음) · id는 선택 · 빈 선택필드는 기존 유지 · 일반=3부구분 해제 · 삭제/재생성 없음 · extraFlags 미반영
             · 표 형식 CSV/XLSX는 최신 전체 일반 캐디(1~12조) 명단으로 처리됩니다. 일부 조만 올리면 파일에 없는 다른 조 재직/휴직자가 명단 누락으로 표시됩니다. 드라이빙은 대상이 아닙니다.
-            · 조 제목형 XLSX(v1)는 Preview만 가능하며 Apply v2로 반영하지 않습니다.
+            · 조 제목형 XLSX(v1)는 기존 순번을 유지하고, 조 이동/신규만 빈 슬롯을 선택한 뒤 Apply 합니다. 파일 이름 순서는 순번이 아닙니다.
           </p>
           <div className="cm-import-actions">
             <label className="cm-btn cm-btn-sm cm-file-label">
@@ -1710,6 +1773,7 @@ export default function ManageCaddiesPage() {
                   if (!file) return;
                   setImportBusy(true);
                   setImportPreview(null);
+                  setV1Resolutions({});
                   setImportFileName(file.name);
                   setImportApplyFailed(false);
                   setMessage(null);
@@ -1752,11 +1816,67 @@ export default function ManageCaddiesPage() {
               className="cm-btn cm-btn-primary cm-btn-sm"
               disabled={
                 importBusy ||
-                !isRosterImportV2ApplyFormat(importPreview?.format) ||
-                !importPreview?.applyPayload ||
-                !!importPreview.summary.applyBlocked
+                (isXlsxV1SafePreview(importPreview)
+                  ? !v1Ready.ready
+                  : !isRosterImportV2ApplyFormat(importPreview?.format) ||
+                    !importPreview?.applyPayload ||
+                    !!importPreview.summary.applyBlocked)
               }
               onClick={async () => {
+                if (isXlsxV1SafePreview(importPreview)) {
+                  if (!v1Ready.ready) return;
+                  if (
+                    !confirm(
+                      `조 제목형 XLSX v1을 반영할까요?\n변경없음 ${v1Ready.autoKeep} · 조 이동 ${v1Ready.move} · 신규 ${v1Ready.create}\n기존 ID/순번은 가능한 한 유지됩니다. 파일 순서는 순번이 아닙니다.\n파일에 없는 재직/휴직자는 '명단 누락'으로 표시됩니다(자동 퇴사/삭제 없음).`
+                    )
+                  ) {
+                    return;
+                  }
+                  setImportBusy(true);
+                  setMessage(null);
+                  setImportApplyFailed(false);
+                  try {
+                    const res = await fetch('/api/caddies/import/apply', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      credentials: 'include',
+                      body: JSON.stringify({
+                        format: 'xlsx-v1',
+                        importPeople: importPreview.importPeople,
+                        resolutions: Object.values(v1Resolutions),
+                      }),
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (res.status === 401 || res.status === 403) {
+                      location.href = '/login?callbackUrl=/manage/caddies';
+                      return;
+                    }
+                    if (!res.ok) {
+                      setImportApplyFailed(true);
+                      setMessage(ROSTER_IMPORT_APPLY_FAILED_USER_MESSAGE);
+                      return;
+                    }
+                    setImportApplyFailed(false);
+                    setMessage(
+                      rosterImportApplySuccessMessage({
+                        updated: Number(data.updated) || 0,
+                        created: Number(data.created) || 0,
+                        phoneUpdated: Number(data.phoneUpdated) || 0,
+                      })
+                    );
+                    setImportPreview(null);
+                    setV1Resolutions({});
+                    setImportFileName(null);
+                    setImportOpen(false);
+                    await load('all');
+                  } catch {
+                    setImportApplyFailed(true);
+                    setMessage(ROSTER_IMPORT_APPLY_FAILED_USER_MESSAGE);
+                  } finally {
+                    setImportBusy(false);
+                  }
+                  return;
+                }
                 if (!importPreview?.applyPayload) return;
                 if (!isRosterImportV2ApplyFormat(importPreview.format)) return;
                 if (
@@ -1798,6 +1918,7 @@ export default function ManageCaddiesPage() {
                     })
                   );
                   setImportPreview(null);
+                  setV1Resolutions({});
                   setImportFileName(null);
                   setImportOpen(false);
                   await load('all');
@@ -1827,34 +1948,23 @@ export default function ManageCaddiesPage() {
                 <span className="cm-import-format">
                   인식 형식: {rosterImportFormatLabel(importPreview.format)}
                 </span>
-                {importPreview.format === 'xlsx-v1' ? (
+                {isXlsxV1SafePreview(importPreview) ? (
                   <>
-                    <span>
-                      입력 {importPreview.summary.uniqueImportPeople ?? 0}
+                    <span>자동 반영 가능 {v1Ready.autoKeep}</span>
+                    <span className={v1Ready.unresolved ? 'is-warn' : ''}>
+                      관리자 확인 필요 {v1Ready.unresolved}
                     </span>
-                    <span>갱신 {importPreview.summary.update}</span>
-                    <span>신규 {importPreview.summary.new ?? 0}</span>
-                    <span>변경없음 {importPreview.summary.unchanged}</span>
+                    <span>신규 {v1Ready.create}</span>
+                    <span>조 이동 {v1Ready.move}</span>
                     <span
                       className={
-                        importPreview.summary.needsReview ? 'is-warn' : ''
+                        v1Ready.missing ? 'is-warn' : ''
                       }
                     >
-                      검토필요 {importPreview.summary.needsReview}
+                      누락 {v1Ready.missing}
                     </span>
-                    <span
-                      className={
-                        importPreview.summary.missingInImport ? 'is-warn' : ''
-                      }
-                    >
-                      누락경고 {importPreview.summary.missingInImport}
-                    </span>
-                    <span
-                      className={
-                        importPreview.summary.phoneIssues ? 'is-warn' : ''
-                      }
-                    >
-                      전화문제 {importPreview.summary.phoneIssues ?? 0}
+                    <span className={v1Ready.reasons.length ? 'is-warn' : ''}>
+                      Apply 차단 사유 {v1Ready.reasons.length}
                     </span>
                   </>
                 ) : (
@@ -1894,12 +2004,22 @@ export default function ManageCaddiesPage() {
                   </>
                 )}
               </div>
-              {importPreview.format === 'xlsx-v1' && (
-                <p className="cm-import-block">
-                  조 제목형 XLSX v1로 인식되었습니다. 기존 Preview만 표시하며
-                  Apply v2(표 형식 CSV/XLSX)로 반영하지 않습니다. 반영하려면
-                  Export와 같은 세로 표 형식 CSV 또는 XLSX를 올리세요.
-                </p>
+              {isXlsxV1SafePreview(importPreview) && (
+                <>
+                  <p className="cm-import-block">
+                    조 제목형 XLSX v1로 인식되었습니다. 기존 캐디의 ID/순번은
+                    유지하고, 조 이동·신규만 빈 슬롯을 선택한 뒤 Apply 합니다.
+                    파일 위→아래 이름 순서·카트 번호는 순번이 아닙니다. extra-only
+                    (주중반/주말반/드라이빙)는 1~12조에 자동 등록하지 않습니다.
+                  </p>
+                  {v1Ready.reasons.length > 0 && (
+                    <ul className="cm-import-issues">
+                      {v1Ready.reasons.map((reason, i) => (
+                        <li key={`v1-block-${i}`}>{reason}</li>
+                      ))}
+                    </ul>
+                  )}
+                </>
               )}
               {isRosterImportV2ApplyFormat(importPreview.format) &&
                 importPreview.summary.applyBlocked && (
@@ -1931,55 +2051,141 @@ export default function ManageCaddiesPage() {
                 </ul>
               )}
               <div className="cm-import-table-wrap">
-                {importPreview.format === 'xlsx-v1' ? (
+                {isXlsxV1SafePreview(importPreview) ? (
                   <table className="cm-import-table">
                     <thead>
                       <tr>
                         <th>구분</th>
                         <th>id</th>
                         <th>이름</th>
-                        <th>조</th>
-                        <th>휴대폰</th>
+                        <th>파일 조</th>
+                        <th>현재</th>
+                        <th>확인 / 순번</th>
                         <th>사유</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {importPreview.lines.map((line, idx) => {
-                        const v1ActionLabel: Record<string, string> = {
-                          update: '수정',
-                          phoneOnlyUpdate: '전화만변경',
-                          unchanged: '동일',
-                          create: '신규',
-                          needsReview: '검토필요',
-                          missingInImport: '누락경고',
-                        };
-                        const teamText =
-                          line.action === 'missingInImport'
-                            ? `${line.currentTeam ?? '—'} → (유지)`
-                            : line.currentTeam == null
-                              ? `${line.nextTeam ?? '—'}`
-                              : line.currentTeam === line.nextTeam
-                                ? String(line.nextTeam)
-                                : `${line.currentTeam}→${line.nextTeam}`;
-                        const phoneText = line.phoneChanged
-                          ? `${line.currentMaskedPhone ?? '—'}→${
-                              line.nextMaskedPhone ?? line.maskedPhone ?? '—'
-                            }`
-                          : line.currentMaskedPhone ??
-                            line.nextMaskedPhone ??
-                            line.maskedPhone ??
-                            '—';
+                      {v1MergedRows.map((row, idx) => {
+                        const selected = v1Resolutions[row.name];
+                        const matchId = row.matchId ?? selected?.matchId ?? null;
+                        const asCreate = row.asCreate ?? selected?.asCreate ?? false;
+                        const chosenOrder = row.teamOrder ?? null;
+                        const matched = row.candidates.find((c) => c.id === matchId);
+                        const reviewMove =
+                          row.kind === 'needsReview' &&
+                          !asCreate &&
+                          matched != null &&
+                          row.fileTeam != null &&
+                          matched.team !== row.fileTeam;
+                        const needsSlot =
+                          row.kind === 'move' ||
+                          row.kind === 'create' ||
+                          (row.kind === 'needsReview' && asCreate) ||
+                          reviewMove;
+                        const emptySlots =
+                          needsSlot && row.fileTeam
+                            ? listV1ProjectedEmptySlots(
+                                v1Occupants,
+                                v1MergedRows,
+                                row.fileTeam,
+                                row.name
+                              )
+                            : [];
+                        const currentText =
+                          row.kind === 'missing' || row.kind === 'keep' || row.kind === 'move'
+                            ? `${row.currentTeam ?? '—'} ${row.currentTeamOrder ?? '—'}번`
+                            : matched
+                              ? `${matched.team} ${matched.teamOrder}번`
+                              : '—';
+                        const identitySelect =
+                          row.kind === 'needsReview' ? (
+                            <select
+                              className="cm-v1-select"
+                              value={
+                                asCreate
+                                  ? 'create'
+                                  : matchId != null
+                                    ? String(matchId)
+                                    : ''
+                              }
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                if (v === 'create') {
+                                  patchV1Resolution(row.name, {
+                                    asCreate: true,
+                                    matchId: null,
+                                    teamOrder: null,
+                                  });
+                                  return;
+                                }
+                                if (!v) {
+                                  patchV1Resolution(row.name, {
+                                    asCreate: false,
+                                    matchId: null,
+                                    teamOrder: null,
+                                  });
+                                  return;
+                                }
+                                patchV1Resolution(row.name, {
+                                  asCreate: false,
+                                  matchId: Number(v),
+                                  teamOrder: null,
+                                });
+                              }}
+                            >
+                              <option value="">기존 캐디/신규 선택</option>
+                              {row.candidates.map((c) => (
+                                <option key={c.id} value={c.id}>
+                                  {c.name} (id={c.id}, {c.team} {c.teamOrder}번)
+                                </option>
+                              ))}
+                              <option value="create">정말 신규인 경우 신규로 등록</option>
+                            </select>
+                          ) : null;
+                        const slotSelect = needsSlot ? (
+                          <select
+                            className="cm-v1-select"
+                            value={chosenOrder ?? ''}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              patchV1Resolution(row.name, {
+                                teamOrder: v ? Number(v) : null,
+                              });
+                            }}
+                          >
+                            <option value="">빈 슬롯 선택</option>
+                            {emptySlots.map((n) => (
+                              <option key={n} value={n}>
+                                {n}번
+                              </option>
+                            ))}
+                          </select>
+                        ) : row.kind === 'keep' ? (
+                          <span>기존 {row.currentTeamOrder ?? '—'}번 유지</span>
+                        ) : row.kind === 'needsReview' && matchId != null && !reviewMove ? (
+                          <span>기존 {matched?.teamOrder ?? '—'}번 유지</span>
+                        ) : null;
                         return (
                           <tr
-                            key={`${line.action}-${line.id}-${line.name}-${idx}`}
-                            className={`is-${line.action}`}
+                            key={`${row.kind}-${row.key}-${idx}`}
+                            className={`is-${row.kind}`}
                           >
-                            <td>{v1ActionLabel[line.action] ?? line.action}</td>
-                            <td>{line.id ?? '—'}</td>
-                            <td>{line.name}</td>
-                            <td>{teamText}</td>
-                            <td>{phoneText}</td>
-                            <td>{line.reason ?? ''}</td>
+                            <td>{V1_SAFE_KIND_LABEL[row.kind] ?? row.kind}</td>
+                            <td>
+                              {row.kind === 'create' || asCreate
+                                ? '신규'
+                                : matchId ?? row.currentId ?? '—'}
+                            </td>
+                            <td>{row.name}</td>
+                            <td>{row.fileTeam ?? '—'}</td>
+                            <td>{currentText}</td>
+                            <td>
+                              <div className="cm-v1-actions">
+                                {identitySelect}
+                                {slotSelect}
+                              </div>
+                            </td>
+                            <td>{row.reason ?? ''}</td>
                           </tr>
                         );
                       })}
@@ -2001,7 +2207,7 @@ export default function ManageCaddiesPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {importPreview.lines.map((line, idx) => {
+                    {(importPreview.lines ?? []).map((line, idx) => {
                       const actionLabel: Record<string, string> = {
                         update: '수정',
                         create: '신규',
@@ -2699,10 +2905,24 @@ export default function ManageCaddiesPage() {
         }
         .cm-import-table tr.is-needsReview { background: #fff7ed; }
         .cm-import-table tr.is-create { background: #f0fdf4; }
+        .cm-import-table tr.is-move { background: #eff6ff; }
+        .cm-import-table tr.is-keep { background: #f8fafc; }
+        .cm-import-table tr.is-extraOnly { background: #f8fafc; color: #64748b; }
         .cm-import-table tr.is-phoneOnlyUpdate { background: #eff6ff; }
+        .cm-import-table tr.is-missing,
         .cm-import-table tr.is-missingInImport {
           background: #f8fafc;
           color: #64748b;
+        }
+        .cm-v1-actions {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+          align-items: center;
+        }
+        .cm-v1-select {
+          max-width: 220px;
+          font-size: 0.78rem;
         }
 
         @media (min-width: 720px) {
