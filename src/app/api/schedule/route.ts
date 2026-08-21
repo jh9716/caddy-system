@@ -41,7 +41,10 @@ export async function POST(req: NextRequest) {
     const { date } = await req.json()
     if (!date) return NextResponse.json({ error: '날짜가 필요합니다.' }, { status: 400 })
 
-    const caddies = await prisma.caddy.findMany()
+    // 신규 생성만 RETIRED 제외. LEAVE는 기존처럼 포함. 기존 Schedule row/조회는 그대로.
+    const caddies = await prisma.caddy.findMany({
+      where: { employmentStatus: { not: 'RETIRED' } },
+    })
     if (caddies.length === 0) {
       return NextResponse.json({ error: '등록된 캐디가 없습니다.' }, { status: 404 })
     }

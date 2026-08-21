@@ -412,6 +412,54 @@ console.log("== swap B auto-preview source ==");
   );
 }
 
+console.log("== POST schedule/shifts exclude RETIRED only ==");
+{
+  const schedule = fs.readFileSync(
+    path.resolve("src/app/api/schedule/route.ts"),
+    "utf8"
+  );
+  const shifts = fs.readFileSync(
+    path.resolve("src/app/api/shifts/route.ts"),
+    "utf8"
+  );
+  const schedulePost = schedule.split("export async function POST")[1] || "";
+  const scheduleGet = schedule.split("export async function POST")[0] || "";
+  const shiftsPost = shifts.split("export async function POST")[1] || "";
+  const shiftsGet = shifts.split("export async function POST")[0] || "";
+
+  assert(
+    /employmentStatus:\s*\{\s*not:\s*['"]RETIRED['"]\s*\}/.test(schedulePost),
+    "POST /api/schedule findMany excludes RETIRED"
+  );
+  assert(
+    /employmentStatus:\s*\{\s*not:\s*['"]RETIRED['"]\s*\}/.test(shiftsPost),
+    "POST /api/shifts findMany excludes RETIRED"
+  );
+  assert(
+    !/employmentStatus:\s*['"]ACTIVE['"]/.test(schedulePost) &&
+      !/notIn:\s*\[[^\]]*LEAVE/.test(schedulePost),
+    "POST /api/schedule does not change LEAVE policy"
+  );
+  assert(
+    !/employmentStatus:\s*['"]ACTIVE['"]/.test(shiftsPost) &&
+      !/notIn:\s*\[[^\]]*LEAVE/.test(shiftsPost),
+    "POST /api/shifts does not change LEAVE policy"
+  );
+  assert(
+    !/employmentStatus:\s*\{\s*not:\s*['"]RETIRED['"]\s*\}/.test(scheduleGet),
+    "GET /api/schedule does not filter RETIRED (past lookup unchanged)"
+  );
+  assert(
+    !/employmentStatus:\s*\{\s*not:\s*['"]RETIRED['"]\s*\}/.test(shiftsGet),
+    "GET /api/shifts does not filter RETIRED (past lookup unchanged)"
+  );
+  assert(
+    !/prisma\.caddy\.delete(Many)?\s*\(/.test(schedule) &&
+      !/prisma\.caddy\.delete(Many)?\s*\(/.test(shifts),
+    "schedule/shifts routes have no caddy hard-delete"
+  );
+}
+
 console.log("== soft-delete API source guard ==");
 const apiFiles = [
   "src/app/api/caddies/route.ts",
