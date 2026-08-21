@@ -8,7 +8,10 @@ import {
   buildRosterExportCsv,
   buildRosterImportPreviewV2,
   buildRosterTableXlsxBuffer,
+  detectExcelRosterFormat,
   escapeCsvFormulaCell,
+  isRosterImportV2ApplyFormat,
+  looksLikeRosterV2Headers,
   parseRosterCsvV2,
   parseRosterXlsxV2,
   unescapeCsvFormulaCell,
@@ -26,6 +29,9 @@ import {
   parseImportEmploymentStatus,
   parseImportTeamOrder,
 } from "../lib/caddyImportRules";
+import { buildImportPreview, parseImportFile } from "../lib/caddyImport";
+import { buildTestRosterXlsxBuffer } from "../lib/caddyImportXlsx";
+import { normalizeKrMobile } from "../lib/caddyPhone";
 import fs from "fs";
 import path from "path";
 
@@ -1741,10 +1747,103 @@ async function main() {
       assert(
         e instanceof Error &&
           String(e.message).includes("name") &&
-          String(e.message).includes("표 형식"),
-        "legacy layout errors instead of using xlsx-v1 engine"
+          String(e.message).includes("표 형식") &&
+          String(e.message).includes("v2로 변환하지 않습니다"),
+        "legacy layout is not coerced into xlsx-v2"
       );
     }
+
+    const legacyV1Aoa = [
+      ["1조", "", "2조", "", "12조", "", "주중반", ""],
+      ["카트", "성명", "카트", "성명", "카트", "성명", "카트", "성명"],
+      [1, "이영진", 5, "이동대상", "", "카트없는사람", 9, "이영진"],
+      ["", "박서진2", "", "신규자", "", "", "", ""],
+      [2, "박준형", "", "", "", "", "", ""],
+    ];
+    const legacyV1Buf = buildTestRosterXlsxBuffer(legacyV1Aoa);
+    assert(
+      detectExcelRosterFormat(xlsxBuf) === "xlsx-v2",
+      "tabular export-like xlsx detects as xlsx-v2"
+    );
+    assert(
+      detectExcelRosterFormat(legacyV1Buf) === "xlsx-v1",
+      "조 제목 가로형 detects as xlsx-v1"
+    );
+    assert(
+      detectExcelRosterFormat(
+        buildRosterTableXlsxBuffer([
+          ["foo", "bar"],
+          ["a", "b"],
+        ])
+      ) === "unknown",
+      "unrelated spreadsheet is unknown, not coerced to v2"
+    );
+    assert(
+      looksLikeRosterV2Headers([
+        "id",
+        "name",
+        "team",
+        "teamOrder",
+        "employmentStatus",
+        "phone",
+      ]) &&
+        looksLikeRosterV2Headers(["이름", "조", "순번", "재직상태", "휴대폰"]) &&
+        !looksLikeRosterV2Headers(["1조", "2조", "12조"]) &&
+        !looksLikeRosterV2Headers(["카트", "성명", "카트", "성명"]),
+      "v2 header detection accepts export/aliases and rejects v1 titles"
+    );
+    const v1Rows = parseImportFile(legacyV1Buf, "legacy.xlsx");
+    const v1Preview = buildImportPreview(v1Rows, [
+      { id: 1, name: "이영진", team: "1조" },
+    ]);
+    assert(
+      v1Preview.lines.length > 0 &&
+        JSON.stringify(v1Preview.applyPayload).includes("extras") &&
+        !isRosterImportV2ApplyFormat("xlsx-v1"),
+      "xlsx-v1 preview stays on v1 engine and is not an Apply v2 format"
+    );
+
+    const csvLostZero = parseRosterCsvV2(
+      [
+        "id,name,team,teamOrder,employmentStatus,phone",
+        "1,이영진,1조,1,ACTIVE,1011112222",
+      ].join("\n")
+    );
+    const csvLostZeroPrev = buildRosterImportPreviewV2(csvLostZero, existing);
+    assert(
+      normalizeKrMobile("1011112222") === "01011112222" &&
+        csvLostZeroPrev.lines.some(
+          (l) => l.id === 1 && l.action !== "needsReview"
+        ),
+      "CSV still 0-prefixes 10xxxxxxxx (xlsx-only guard must not change csv)"
+    );
+    const numericPhoneBuf = buildRosterTableXlsxBuffer([
+      ["id", "name", "team", "teamOrder", "employmentStatus", "phone"],
+      [1, "이영진", "1조", 1, "ACTIVE", 1011112222],
+    ]);
+    assert(
+      detectExcelRosterFormat(numericPhoneBuf) === "xlsx-v2",
+      "numeric phone table is still xlsx-v2"
+    );
+    const numericPhoneRows = parseRosterXlsxV2(numericPhoneBuf, "phone.xlsx");
+    assert(
+      (numericPhoneRows[0]?.parseErrors.length ?? 0) > 0 &&
+        String(numericPhoneRows[0]?.parseErrors[0]).includes("숫자") &&
+        (numericPhoneRows[0]?.phoneRaw === "" ||
+          numericPhoneRows[0]?.phoneRaw === undefined),
+      "xlsx numeric 10xxxxxxxx is not guess-restored to 010"
+    );
+    const numericPrev = buildRosterImportPreviewV2(numericPhoneRows, existing);
+    assert(
+      numericPrev.summary.needsReview >= 1 &&
+        numericPrev.summary.applyBlocked === true &&
+        previewCore(csvPrev) !== previewCore(numericPrev),
+      "xlsx lost-leading-zero phone is needsReview / applyBlocked, not silent 0-prefix"
+    );
+    assert(
+      !JSON.stringify(numericPrev.applyPayload.updates).includes("01011112222"),
+      "xlsx numeric phone does not land in apply payload as guessed 010"
+    );
 
     const exportCsv = buildRosterExportCsv(existing);
     const exportCsvPrev = buildRosterImportPreviewV2(
@@ -1923,27 +2022,41 @@ async function main() {
   );
   assert(
     previewRouteSrc.includes("DB 쓰기 없음") &&
+      previewRouteSrc.includes("detectExcelRosterFormat") &&
       previewRouteSrc.includes("parseRosterXlsxV2") &&
       previewRouteSrc.includes("parseRosterCsvV2") &&
-      !previewRouteSrc.includes("xlsx-v1") &&
-      !previewRouteSrc.includes("parseImportFile") &&
-      !previewRouteSrc.includes("buildImportPreview") &&
+      previewRouteSrc.includes("xlsx-v1") &&
+      previewRouteSrc.includes("xlsx-v2") &&
+      previewRouteSrc.includes("parseImportFile") &&
+      previewRouteSrc.includes("buildImportPreview") &&
       !previewRouteSrc.includes("$transaction") &&
       !previewRouteSrc.includes("prisma.caddy.update") &&
       !previewRouteSrc.includes("prisma.caddy.create"),
-    "preview route uses v2 for csv and xlsx and stays read-only"
+    "preview route detects csv-v2 / xlsx-v2 / xlsx-v1 and stays read-only"
   );
   assert(
     pageSrc.includes('accept=".csv,.xlsx,.xls') &&
       pageSrc.includes("명단 가져오기 (CSV/Excel)") &&
-      !pageSrc.includes("XLSX는 별도 경로"),
-    "manage caddies accepts csv/xlsx/xls on the same preview UI"
+      pageSrc.includes("CSV v2") &&
+      pageSrc.includes("XLSX v2") &&
+      pageSrc.includes("XLSX v1") &&
+      pageSrc.includes("rosterImportFormatLabel") &&
+      pageSrc.includes("isRosterImportV2ApplyFormat") &&
+      pageSrc.includes("조 제목형 XLSX v1로 인식"),
+    "manage caddies shows recognized format and keeps v1 preview off Apply v2"
   );
   assert(
-    applyRouteSrc.includes('forbiddenKeys') &&
+    pageSrc.includes("if (!isRosterImportV2ApplyFormat(importPreview.format)) return;") &&
+      applyUi.includes("format: importPreview.format"),
+    "Apply click only sends csv-v2 / xlsx-v2 payloads"
+  );
+  assert(
+    applyRouteSrc.includes('body?.format === "xlsx-v1"') &&
+      applyRouteSrc.includes('forbiddenKeys') &&
       applyRouteSrc.includes('"missingFromImport"') &&
+      applyRouteSrc.includes('"extras"') &&
       applyRouteSrc.includes("matchedExistingIds"),
-    "apply route still forbids client missingFromImport and forwards matched ids"
+    "apply route rejects xlsx-v1 format and v1 extras payload keys"
   );
 
   console.log(`\nDONE: ${passed} passed, ${failed} failed`);

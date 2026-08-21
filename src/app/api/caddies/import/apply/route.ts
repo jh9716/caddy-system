@@ -22,6 +22,7 @@ export const maxDuration = 90;
 
 /**
  * POST { applyPayload: { updates, creates, matchedExistingIds? } } — Import v2
+ * CSV v2 / 표 형식 XLSX v2 만 허용. 조 제목형 xlsx-v1 payload(extras) 및 format=xlsx-v1 거부.
  * - 기존 id update (team / teamOrder / employmentStatus / phone / thirdBandSubgroup)
  * - 신규 create (name+team 필수)
  * - extraFlags / missingFromImport / 삭제 / ID 재부여 는 payload 금지
@@ -81,6 +82,16 @@ export async function POST(req: NextRequest) {
       "extraFlags",
       "extras",
     ];
+    if (body?.format === "xlsx-v1") {
+      return NextResponse.json(
+        {
+          error:
+            "조 제목형 XLSX v1은 Apply v2를 지원하지 않습니다. CSV 또는 표 형식 XLSX(Export와 같은 컬럼)를 사용하세요.",
+        },
+        { status: 400 }
+      );
+    }
+
     const leaked = JSON.stringify(payload);
     for (const key of forbiddenKeys) {
       if (leaked.includes(`"${key}"`)) {
