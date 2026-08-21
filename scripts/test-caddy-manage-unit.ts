@@ -407,8 +407,12 @@ console.log("== swap B auto-preview source ==");
     "Quick Action labels remain"
   );
   assert(
-    /setPendingLiveChange\(\{\s*type: "SWAP_CADDY"/.test(board),
-    "board B tap sets SWAP preset"
+    /if \(swapKey\) \{\s*onSwapClick\(row\)/.test(board) &&
+      /const change: LiveChangeInput = \{\s*type: "SWAP_CADDY",\s*reservationKeyA: swapKey,\s*reservationKeyB: key,?\s*\}/.test(
+        board
+      ) &&
+      /void applyQuickChange\(change\)/.test(board),
+    "board B tap applies SWAP_CADDY via LiveChangeInput"
   );
 }
 

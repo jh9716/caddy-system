@@ -7,7 +7,10 @@
  * - 기존 id update만 (삭제/재생성 금지)
  * - extraFlags 미반영
  * - thirdBandSubgroup optional (6컬럼 CSV 호환). 빈칸=기존 유지, 일반=null
- * - missingInImport = 경고만 (자동 RETIRED 금지)
+ * - missingInImport = 경고만 (자동 RETIRED 금지). Apply 시에만 missingFromImport 갱신
+ * - Apply는 CSV를 최신 전체 일반(1~12조) 명단으로 처리한다. 조 범위 필터 없음.
+ *   일부 조만 올리면 파일에 없는 다른 조 재직/휴직자도 누락 후보가 된다.
+ * - 드라이빙 캐디는 일반 명단 누락 관리 대상에서 제외
  * - ACTIVE+LEAVE 슬롯 점유 기준 teamOrder 중복 시 Apply 차단 (RETIRED 제외)
  * - 신규 create는 teamOrder 필수 (max+1 자동부여 없음)
  */
@@ -77,6 +80,7 @@ export type RosterExisting = {
   phoneNormalized?: string | null;
   thirdBandSubgroup?: ThirdBandSubgroup | null;
   caddyType?: string | null;
+  missingFromImport?: boolean;
 };
 
 export type RosterCsvRow = {
@@ -141,6 +145,12 @@ export type RosterApplyPayload = {
     phone?: string;
     thirdBandSubgroup?: ThirdBandSubgroup | null;
   }>;
+  /**
+   * Preview가 산출한 정상 매칭 기존 id.
+   * Apply payload에 missingFromImport를 넣지 않고, 서버가 이 목록으로 flag를 계산한다.
+   * 생략 시 missingFromImport는 변경하지 않는다 (필드 update/create만).
+   */
+  matchedExistingIds?: number[];
 };
 
 export type RosterImportPreview = {
@@ -396,6 +406,16 @@ function empLabel(s: string | null | undefined): string | null {
   if (u === "LEAVE" || s === "휴직") return "LEAVE";
   if (u === "RETIRED" || s === "퇴사") return "RETIRED";
   return String(s);
+}
+
+function isActiveOrLeaveStatus(emp: string | null | undefined): boolean {
+  const e = empLabel(emp);
+  return e === "ACTIVE" || e === "LEAVE";
+}
+
+/** 일반 1~12조 재직/휴직. 드라이빙·RETIRED는 새 누락 후보가 아니다. */
+function isRegularMissingCandidate(e: RosterExisting): boolean {
+  return occupiesHouseThirdSlot(e) && isActiveOrLeaveStatus(e.employmentStatus);
 }
 
 function drivingRosterSkipLine(
@@ -1084,7 +1104,7 @@ export function buildRosterImportPreviewV2(
   }
 
   const missingInImport: RosterPreviewLine[] = existing
-    .filter((e) => !matchedIds.has(e.id) && occupiesHouseThirdSlot(e))
+    .filter((e) => !matchedIds.has(e.id) && isRegularMissingCandidate(e))
     .map((e) => ({
       action: "missingInImport" as const,
       id: e.id,
@@ -1175,9 +1195,14 @@ export function buildRosterImportPreviewV2(
     phoneIssues.length > 0 ||
     teamOrderConflicts.length > 0;
 
+  const matchedExistingIds = [...matchedIds].sort((a, b) => a - b);
   const applyPayload: RosterApplyPayload = applyBlocked
     ? { updates: [], creates: [] }
-    : { updates: applyUpdates, creates: applyCreates };
+    : {
+        updates: applyUpdates,
+        creates: applyCreates,
+        matchedExistingIds,
+      };
 
   // stable sort lines
   const order: Record<RosterAction, number> = {
@@ -1370,6 +1395,7 @@ type RosterCreateData = {
   phoneNormalized?: string;
   thirdBandSubgroup: ThirdBandSubgroup | null;
   caddyType: "HOUSE" | "THIRD";
+  missingFromImport: boolean;
 };
 
 type PrismaLike = {
@@ -1381,6 +1407,10 @@ type PrismaLike = {
     findMany: (args?: {
       select?: Record<string, boolean>;
     }) => Promise<RosterExisting[]>;
+    updateMany: (args: {
+      where: { id: { in: number[] } };
+      data: { missingFromImport: boolean };
+    }) => Promise<{ count: number }>;
     aggregate?: (args: {
       where: { team: string };
       _max: { teamOrder: true };
@@ -1500,9 +1530,57 @@ export function buildRosterBatchUpdateSql(
   `;
 }
 
+function resolveMissingFromImportPatches(
+  existing: RosterExisting[],
+  matchedExistingIds: number[] | undefined
+): { clearIds: number[]; flagIds: number[] } | null {
+  if (matchedExistingIds == null) return null;
+  const matched = new Set(matchedExistingIds);
+  const clearIds: number[] = [];
+  const flagIds: number[] = [];
+  for (const e of existing) {
+    if (!occupiesHouseThirdSlot(e)) continue;
+    if (matched.has(e.id)) {
+      clearIds.push(e.id);
+      continue;
+    }
+    if (isActiveOrLeaveStatus(e.employmentStatus)) {
+      flagIds.push(e.id);
+    }
+  }
+  return { clearIds, flagIds };
+}
+
+function assertMatchedExistingIds(
+  payload: RosterApplyPayload,
+  existingById: Map<number, RosterExisting>
+): void {
+  if (payload.matchedExistingIds == null) return;
+  if (!Array.isArray(payload.matchedExistingIds)) {
+    throw new RosterImportApplyError("matchedExistingIds는 배열이어야 합니다");
+  }
+  for (const id of payload.matchedExistingIds) {
+    if (!Number.isInteger(id) || id < 1) {
+      throw new RosterImportApplyError("matchedExistingIds가 올바르지 않습니다");
+    }
+    if (!existingById.has(id)) {
+      throw new RosterImportApplyError(`존재하지 않는 id: ${id}`);
+    }
+  }
+  const matched = new Set(payload.matchedExistingIds);
+  for (const u of payload.updates) {
+    if (!matched.has(u.id)) {
+      throw new RosterImportApplyError(
+        `update id=${u.id} 가 matchedExistingIds에 없습니다`
+      );
+    }
+  }
+}
+
 /**
  * Apply — 서버에서 검증 재수행 후 all-or-nothing transaction.
  * 연관 Assignment/Schedule 등 수정 없음. Caddy 행만 update/create.
+ * missingFromImport는 payload 필드가 아니라 matchedExistingIds로 서버 산출.
  */
 export async function applyRosterImportPayloadV2(
   payload: RosterApplyPayload,
@@ -1573,6 +1651,11 @@ export async function applyRosterImportPayloadV2(
     }));
 
   const existingById = new Map(existing.map((e) => [e.id, e]));
+  assertMatchedExistingIds(payload, existingById);
+  const missingPatches = resolveMissingFromImportPatches(
+    existing,
+    payload.matchedExistingIds
+  );
   for (const u of payload.updates) {
     if (u.teamOrder == null) continue;
     const cur = existingById.get(u.id);
@@ -1806,6 +1889,7 @@ export async function applyRosterImportPayloadV2(
       employmentStatus: c.employmentStatus ?? "ACTIVE",
       thirdBandSubgroup: null,
       caddyType: resolveCaddyTypeFromTeam(c.team),
+      missingFromImport: false,
     };
     if (c.phone) data.phoneNormalized = c.phone;
     try {
@@ -1852,6 +1936,21 @@ export async function applyRosterImportPayloadV2(
       );
     }
     const createdIds = createdRows.map((row) => row.id);
+
+    if (missingPatches) {
+      if (missingPatches.clearIds.length > 0) {
+        await client.caddy.updateMany({
+          where: { id: { in: missingPatches.clearIds } },
+          data: { missingFromImport: false },
+        });
+      }
+      if (missingPatches.flagIds.length > 0) {
+        await client.caddy.updateMany({
+          where: { id: { in: missingPatches.flagIds } },
+          data: { missingFromImport: true },
+        });
+      }
+    }
 
     return {
       updated,
