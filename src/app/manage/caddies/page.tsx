@@ -131,6 +131,7 @@ const V1_SAFE_KIND_LABEL: Record<string, string> = {
   needsReview: '검토필요',
   missing: '누락',
   extraOnly: '안내',
+  invalid: '무효',
 };
 
 export default function ManageCaddiesPage() {
@@ -2907,7 +2908,8 @@ export default function ManageCaddiesPage() {
         .cm-import-table tr.is-create { background: #f0fdf4; }
         .cm-import-table tr.is-move { background: #eff6ff; }
         .cm-import-table tr.is-keep { background: #f8fafc; }
-        .cm-import-table tr.is-extraOnly { background: #f8fafc; color: #64748b; }
+        .cm-import-table tr.is-extraOnly,
+        .cm-import-table tr.is-invalid { background: #f8fafc; color: #64748b; }
         .cm-import-table tr.is-phoneOnlyUpdate { background: #eff6ff; }
         .cm-import-table tr.is-missing,
         .cm-import-table tr.is-missingInImport {

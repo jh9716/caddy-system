@@ -15,7 +15,12 @@ import {
   type V1SafeResolution,
 } from "../src/lib/caddyRosterImportV1SafeShared";
 import type { RosterExisting } from "../lib/caddyRosterImportV2";
-import type { ImportRow } from "../lib/caddyImport";
+import { buildImportPreview, type ImportRow } from "../lib/caddyImport";
+import {
+  buildTestRosterXlsxBuffer,
+  parseTeamNameMatrix,
+  parseXlsxRosterBuffer,
+} from "../lib/caddyImportXlsx";
 
 let passed = 0;
 let failed = 0;
@@ -694,6 +699,121 @@ async function main() {
     "preview teamOrder comes from DB, not resolution/file"
   );
   void fakeKeepOrder;
+
+  section("numeric cart/footer is not a person name");
+  const numericAoa = [
+    ["1조", "", "2조", ""],
+    ["카트", "성명", "카트", "성명"],
+    [1, "이영진", 5, "박서진"],
+    [18, "한글신규", 19, ""],
+    ["", "23", "", ""],
+    [2, "테스트2", "", ""],
+  ];
+  const parsed = parseXlsxRosterBuffer(
+    buildTestRosterXlsxBuffer(numericAoa),
+    "ops-v1.xlsx"
+  );
+  const hangulNew = parsed.find((r) => r.name === "한글신규");
+  const footer23 = parsed.find((r) => r.name === "23");
+  assert(
+    hangulNew?.team === "1조" && hangulNew.raw?.cart === "18",
+    "parseXlsxRosterBuffer: cart 18 stays in raw.cart, name is 한글신규"
+  );
+  assert(
+    !parsed.some((r) => r.name === "18" || r.name === "19"),
+    "cart values 18/19 are not used as name"
+  );
+  assert(
+    !parsed.some((r) => r.name === String(hangulNew?.rowNumber)),
+    "rowNumber is not used as name"
+  );
+  assert(footer23?.team === "1조" && footer23.raw?.cart === "", "성명 칸의 숫자 23은 parser가 그대로 읽는다");
+  const matrixOnly = parseTeamNameMatrix(
+    numericAoa.map((r) => r.map((c) => String(c ?? "")))
+  );
+  assert(
+    matrixOnly.some((r) => r.name === "한글신규" && r.raw?.cart === "18"),
+    "matrix parser keeps Korean name next to numeric cart"
+  );
+
+  const v1Prev = buildImportPreview(parsed, [
+    { id: 1, name: "이영진", team: "1조" },
+    { id: 2, name: "박서진", team: "1조" },
+  ]);
+  assert(
+    v1Prev.creates.some((c) => c.name === "한글신규") &&
+      v1Prev.creates.some((c) => c.name === "23") &&
+      v1Prev.creates.some((c) => c.name === "테스트2"),
+    "buildImportPreview still lists unmatched 성명 cells, including numeric leftovers"
+  );
+
+  const safePrev = buildXlsxV1SafePreview(parsed, existing);
+  assert(
+    safePrev.rows.some((r) => r.kind === "create" && r.name === "한글신규"),
+    "v1-safe create keeps the real Korean name through Preview"
+  );
+  assert(
+    safePrev.importPeople.some((p) => p.name === "한글신규" && p.team === "1조"),
+    "v1-safe importPeople uses 한글신규, not cart/rowNumber"
+  );
+  assert(
+    !safePrev.importPeople.some((p) => /^\d+$/.test(p.name)),
+    "numeric-only names are excluded from importPeople"
+  );
+  assert(
+    safePrev.rows.some(
+      (r) =>
+        r.kind === "invalid" &&
+        r.name === "23" &&
+        String(r.reason ?? "").includes("숫자")
+    ),
+    "numeric-only 성명 is invalid, not create"
+  );
+  assert(
+    safePrev.rows.some((r) => r.kind === "create" && r.name === "테스트2"),
+    "trailing-digit real names like 테스트2 remain create"
+  );
+  assert(
+    v1SafeApplyReady(safePrev.rows).create >= 1 &&
+      !v1SafeApplyReady(safePrev.rows).reasons.some((s) => s.includes("23")),
+    "invalid numeric leftover does not require a create slot"
+  );
+
+  const nameKeepStore = cloneStore(new Map(existing.map((e) => [e.id, { ...e }])));
+  const nameKeepPrisma = createTransactionalPrisma(nameKeepStore, {
+    nextCreateId: 770,
+  });
+  const createdHangul = await applyXlsxV1SafePayload(
+    {
+      importPeople: [
+        { name: "이영진", team: "1조" },
+        { name: "한글신규", team: "1조" },
+      ],
+      resolutions: [{ name: "한글신규", teamOrder: 1 }],
+    },
+    nameKeepPrisma,
+    { existingForGuard: existing }
+  );
+  assert(createdHangul.created === 1, "apply creates the Korean-named caddy");
+  assert(
+    nameKeepStore.get(770)?.name === "한글신규" &&
+      nameKeepStore.get(770)?.teamOrder === 1,
+    "Apply payload/result keeps 한글신규; cart 18 is not the name"
+  );
+
+  await expectBlocked(
+    () =>
+      applyXlsxV1SafePayload(
+        {
+          importPeople: [{ name: "18", team: "1조" }],
+          resolutions: [{ name: "18", asCreate: true, teamOrder: 1 }],
+        },
+        nameKeepPrisma,
+        { existingForGuard: existing }
+      ),
+    "숫자",
+    "numeric-only name 18 cannot be created via v1 apply"
+  );
 
   console.log(`\nDONE: ${passed} passed, ${failed} failed`);
   if (failed) process.exit(1);

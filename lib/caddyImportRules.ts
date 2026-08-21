@@ -51,6 +51,14 @@ export function normalizePersonName(name: string): string {
   return name.trim().replace(/\s+/g, "");
 }
 
+/**
+ * 카트번호·행번호·조내 순번처럼 숫자만 있는 값은 성명이 아니다.
+ * 김예진1 같은 끝자리 숫자 실명은 해당하지 않는다.
+ */
+export function isNumericOnlyRosterName(name: string): boolean {
+  return /^\d+$/.test(normalizePersonName(name));
+}
+
 /** 분석/리뷰용 — 매칭 키로 쓰지 말 것 (1/2는 서로 다른 사람) */
 export function stripTrailingDigits(name: string): string {
   return normalizePersonName(name).replace(/[0-9]+$/u, "");

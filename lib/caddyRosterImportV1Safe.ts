@@ -9,6 +9,7 @@ import {
 } from "./caddyImport";
 import {
   isExtraFlag,
+  isNumericOnlyRosterName,
   isPrimaryTeam,
   normalizePersonName,
 } from "./caddyImportRules";
@@ -181,6 +182,20 @@ export function buildXlsxV1SafePreview(
   }
   for (const c of preview.creates) {
     if (!c.team || !isPrimaryTeam(compactTeam(c.team))) continue;
+    if (isNumericOnlyRosterName(c.name)) {
+      rows.push({
+        key: `invalid:${c.name}:${compactTeam(c.team)}`,
+        kind: "invalid",
+        name: c.name,
+        fileTeam: compactTeam(c.team),
+        currentId: null,
+        currentTeam: null,
+        currentTeamOrder: null,
+        reason: "성명이 아니라 숫자입니다 (카트/행번호). 신규 등록 불가",
+        candidates: [],
+      });
+      continue;
+    }
     rows.push({
       key: c.name,
       kind: "create",
@@ -328,6 +343,11 @@ export async function applyXlsxV1SafePayload(
         "importPeople는 1~12조 name/team 만 허용합니다."
       );
     }
+    if (isNumericOnlyRosterName(p.name)) {
+      throw new XlsxV1SafeApplyError(
+        `숫자만 있는 이름은 신규 등록할 수 없습니다: ${p.name}`
+      );
+    }
   }
 
   const loadExisting = async (client: typeof prisma) =>
@@ -381,7 +401,7 @@ async function applyXlsxV1SafeAgainstExisting(
   const merged = mergeV1SafeResolutions(preview.rows, resRecord);
 
   for (const row of merged) {
-    if (row.kind === "keep" || row.kind === "missing" || row.kind === "extraOnly") {
+    if (row.kind === "keep" || row.kind === "missing" || row.kind === "extraOnly" || row.kind === "invalid") {
       continue;
     }
     const res = resByName.get(normalizePersonName(row.name));
@@ -398,6 +418,11 @@ async function applyXlsxV1SafeAgainstExisting(
       continue;
     }
     if (row.kind === "create") {
+      if (isNumericOnlyRosterName(row.name)) {
+        throw new XlsxV1SafeApplyError(
+          `숫자만 있는 이름은 신규 등록할 수 없습니다: ${row.name}`
+        );
+      }
       if (res?.matchId != null) {
         throw new XlsxV1SafeApplyError(
           `${row.name}: 신규 행에 기존 id를 지정할 수 없습니다.`
@@ -420,6 +445,11 @@ async function applyXlsxV1SafeAgainstExisting(
         );
       }
       if (res.asCreate) {
+        if (isNumericOnlyRosterName(row.name)) {
+          throw new XlsxV1SafeApplyError(
+            `숫자만 있는 이름은 신규 등록할 수 없습니다: ${row.name}`
+          );
+        }
         if (res.teamOrder == null || !Number.isInteger(res.teamOrder) || res.teamOrder < 1) {
           throw new XlsxV1SafeApplyError(`${row.name}: 신규 순번이 필요합니다.`);
         }
