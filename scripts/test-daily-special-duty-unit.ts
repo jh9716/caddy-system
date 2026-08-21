@@ -27,6 +27,8 @@ import {
   type AutoAssignCaddy,
   type AutoAssignReservation,
 } from "../src/lib/autoAssignEngine";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 let passed = 0;
 let failed = 0;
@@ -553,6 +555,35 @@ section("1막 1부 anchor");
   assert(s1.map((a) => a.caddy.name).join(",") === "막A,막B", "1막 sortOrder 보존");
   assert(s1[0].reservation.course === "SKY", "SKY 06:00부터");
   assert(s1[1].reservation.course === "OCEAN", "연속 다음 자리");
+}
+
+section("특수근무 검색·3부 첫 캐디 후보는 RETIRED/LEAVE 제외");
+{
+  const specialSrc = readFileSync(
+    join(process.cwd(), "src/app/manage/assignments/SpecialDutyPanel.tsx"),
+    "utf8"
+  );
+  const pageSrc = readFileSync(
+    join(process.cwd(), "src/app/manage/assignments/page.tsx"),
+    "utf8"
+  );
+  const caddiesSrc = readFileSync(
+    join(process.cwd(), "src/app/manage/caddies/page.tsx"),
+    "utf8"
+  );
+  assert(
+    /fetch\(\s*["']\/api\/caddies["']/.test(specialSrc) &&
+      !specialSrc.includes("employment=all"),
+    "특수근무 검색은 기본 ACTIVE만"
+  );
+  assert(
+    pageSrc.includes("isInactiveEmploymentAvailability"),
+    "3부 첫 캐디 후보에서 RETIRED/LEAVE 필터"
+  );
+  assert(
+    caddiesSrc.includes("employment=all"),
+    "캐디관리 employment=all은 유지"
+  );
 }
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);

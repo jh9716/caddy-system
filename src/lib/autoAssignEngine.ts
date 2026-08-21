@@ -323,6 +323,8 @@ export type ReservationChangeEvent =
       caddyId: number;
       cause: CaddyUnavailableCause;
       note?: string | null;
+      /** 병가 적용 시작 부. 없으면 1부(종일). */
+      fromShift?: ShiftPart;
     }
   | {
       type: "SWAP_CADDY";
@@ -598,6 +600,50 @@ export function splitCaddyPools(caddies: AutoAssignCaddy[]): {
 /**
  * 오늘 1부 첫 캐디 검증 실패 — 자동으로 다음 캐디로 대체하지 않음.
  */
+export function parseAssignShiftPart(raw: unknown): ShiftPart | null {
+  const s = String(raw ?? "").trim();
+  if (s === "1" || s === "1부") return "1부";
+  if (s === "2" || s === "2부") return "2부";
+  if (s === "3" || s === "3부") return "3부";
+  return null;
+}
+
+/** 일반 reflow 후보: 재직만. RETIRED/LEAVE는 넣지 않는다. 미지정은 기존 테스트 호환으로 ACTIVE. */
+export function eligibleRegularReflowCaddies(
+  caddies: readonly AutoAssignCaddy[]
+): AutoAssignCaddy[] {
+  return dedupeCaddies([...(caddies || [])]).filter((c) => {
+    if (!(c.id > 0) || !c.name) return false;
+    return isActiveEmploymentStatus(c.employmentStatus ?? "ACTIVE");
+  });
+}
+
+export function regularCaddyPoolFromAvailabilityRows(
+  rows: Array<{
+    id: number;
+    name: string;
+    team: string;
+    teamOrder?: number;
+    caddyType?: string;
+    extraFlags?: string[] | null;
+    employmentStatus?: string;
+    thirdBandSubgroup?: string | null;
+  }>
+): AutoAssignCaddy[] {
+  return eligibleRegularReflowCaddies(
+    (rows || []).map((row) => ({
+      id: row.id,
+      name: row.name,
+      team: row.team,
+      teamOrder: Number(row.teamOrder) || 0,
+      caddyType: row.caddyType,
+      extraFlags: row.extraFlags ?? null,
+      employmentStatus: row.employmentStatus,
+      thirdBandSubgroup: row.thirdBandSubgroup ?? null,
+    }))
+  );
+}
+
 export class HouseStartCaddyError extends Error {
   status = 400;
   code = "house_start_caddy_invalid";
@@ -2001,6 +2047,13 @@ export function assignRegularSequence(input: {
    * 1부에 못 들어간 신청자는 넣지 않는다.
    */
   oneThreeForThird?: AutoAssignCaddy[];
+  /** 이미 확정된 부 배치. freezeShifts와 함께 이전 부 identity를 유지한다. */
+  seedAssignments?: AutoAssignmentRow[];
+  /** 이 부는 다시 채우지 않고 seed + 기존 spare를 유지한다. */
+  freezeShifts?: ShiftPart[];
+  seedSparesByShift?: SpareByShift[];
+  /** 캐디가 빠지는 첫 부. 그 부부터 pick/spare에서 건너뛴다. */
+  unavailableFromShift?: Map<number, ShiftPart>;
 }): {
   assignments: AutoAssignmentRow[];
   unassignedReservations: UnassignedReservationRow[];
@@ -2073,6 +2126,17 @@ export function assignRegularSequence(input: {
   /** 다음 부가 시작할 HOUSE 절대 인덱스 (스페어1 위치, wrap 없이 누적) */
   let houseStart = 0;
   const sparesByShift: SpareByShift[] = [];
+  const freezeSet = new Set(input.freezeShifts || []);
+  const seedByShift = new Map<ShiftPart, AutoAssignmentRow[]>();
+  for (const row of input.seedAssignments || []) {
+    const list = seedByShift.get(row.shift) || [];
+    list.push(row);
+    seedByShift.set(row.shift, list);
+  }
+  const seedSpareByShift = new Map(
+    (input.seedSparesByShift || []).map((s) => [s.shift, s])
+  );
+  const unavailableFrom = input.unavailableFromShift || new Map<number, ShiftPart>();
 
   for (const shift of SHIFT_PARTS) {
     const shiftReservations = reservations.filter((r) => r.shift === shift);
@@ -2081,6 +2145,47 @@ export function assignRegularSequence(input: {
     /** 3부 실제 배치 sequence + 다음 인덱스 — spare1/2는 이 연속선상에서만 계산 */
     let thirdSequence: AutoAssignCaddy[] | null = null;
     let thirdNextIdx = 0;
+
+    for (const [caddyId, from] of unavailableFrom.entries()) {
+      if (shiftRank(shift) >= shiftRank(from)) usedInShift.add(caddyId);
+    }
+    const seeded = (seedByShift.get(shift) || []).map(cloneAssignmentRow);
+    for (const row of seeded) {
+      assignments.push(row);
+      usedInShift.add(row.caddy.id);
+      if (
+        normalizeAssignCaddyType(row.caddy.caddyType) !== "DRIVING" &&
+        !isThirdBandTeam(row.caddy.team)
+      ) {
+        houseAssigned += 1;
+      }
+      byShift[shift].assigned += 1;
+    }
+
+    if (freezeSet.has(shift)) {
+      const nextCursor =
+        house.length === 0
+          ? 0
+          : ((houseStart + houseAssigned) % house.length + house.length) %
+            house.length;
+      const seedSpare = seedSpareByShift.get(shift);
+      if (seedSpare) {
+        sparesByShift.push({
+          shift,
+          spare1: seedSpare.spare1,
+          spare2: seedSpare.spare2,
+        });
+      } else {
+        const spares = pickCircularHouseSpares(house, nextCursor, usedInShift);
+        sparesByShift.push({
+          shift,
+          spare1: spares.spare1,
+          spare2: spares.spare2,
+        });
+      }
+      houseStart = nextCursor;
+      continue;
+    }
 
     if (shift === "3부") {
       const houseIds = new Set(house.map((c) => c.id));
@@ -3887,11 +3992,35 @@ function applySwapOnly(
  * 일반 예약 캔슬/추가/병가/체인지 후 순번 재계산.
  * - 예약 취소/팀 노쇼: reservation 제거, 그 캐디부터 이후 일반이 남은 슬롯으로 뒤로 밀림.
  * - 병가/결근: reservation 유지, 해당 캐디 제외, 뒤 일반이 앞으로 당김.
+ * - 2부/3부 병가는 이전 부 regular identity를 freeze하고 해당 부부터 재계산.
  * LOCK ON placement는 같은 reservation에 고정하고 건너뛴다.
  * LOCK된 reservation 자체 취소는 그 placement만 제거하고 다른 LOCK은 이동시키지 않는다.
  * assignRegularSequence(Mode A/B · Spare · THIRD)를 source of truth로 재사용.
  * teamOrder / 캐디 DB 순번은 변경하지 않음.
  */
+function freezeBeforeShiftFromEvents(
+  events: ReservationChangeEvent[]
+): ShiftPart | null {
+  if (
+    events.some(
+      (e) => e.type === "CANCEL_RESERVATION" || e.type === "ADD_RESERVATION"
+    )
+  ) {
+    return null;
+  }
+  const removes = events.filter(
+    (e): e is Extract<ReservationChangeEvent, { type: "REMOVE_CADDY" }> =>
+      e.type === "REMOVE_CADDY"
+  );
+  if (removes.length === 0) return null;
+  let minRank = 99;
+  for (const event of removes) {
+    minRank = Math.min(minRank, shiftRank(event.fromShift ?? "1부"));
+  }
+  if (minRank <= 0 || minRank > 2) return null;
+  return SHIFT_PARTS[minRank];
+}
+
 export function reflowRegularAssignments(input: {
   previous: AutoAssignResultV1;
   /** 원본 일반 available 풀 (정렬 전/후 모두 허용 — 내부에서 재정렬) */
@@ -3954,6 +4083,8 @@ export function reflowRegularAssignments(input: {
   }
 
   const unavailable = new Map<number, CaddyUnavailableCause>();
+  const unavailableFromShift = new Map<number, ShiftPart>();
+  const allDayUnavailable = new Set<number>();
   let cancelCount = 0;
   let teamNoshowCount = 0;
   let addCount = 0;
@@ -3963,11 +4094,25 @@ export function reflowRegularAssignments(input: {
     if (event.type === "REMOVE_CADDY") {
       removeCount += 1;
       unavailable.set(event.caddyId, event.cause);
+      const from = event.fromShift ?? "1부";
+      unavailableFromShift.set(event.caddyId, from);
+      if (from === "1부") allDayUnavailable.add(event.caddyId);
     }
   }
 
+  const blockedInShift = (caddyId: number, shift: string) => {
+    const from = unavailableFromShift.get(caddyId);
+    if (!from) return false;
+    return shiftRank(shift) >= shiftRank(from);
+  };
+
+  const freezeBefore = freezeBeforeShiftFromEvents(events);
+  const freezeShifts: ShiftPart[] = freezeBefore
+    ? SHIFT_PARTS.filter((s) => shiftRank(s) < shiftRank(freezeBefore))
+    : [];
+
   let lockedRows = previous.assignments
-    .filter((row) => preservePlacementOnReflow(row) && !unavailable.has(row.caddy.id))
+    .filter((row) => preservePlacementOnReflow(row) && !blockedInShift(row.caddy.id, row.shift))
     .map(cloneAssignmentRow)
     .map((row) => ({ ...row, locked: true as const }));
   const cancelledLockedKeys = new Set<string>();
@@ -3984,7 +4129,7 @@ export function reflowRegularAssignments(input: {
   );
   const unlockedSpecialByCaddy = new Map<number, AutoAssignmentRow>();
   for (const row of unlockedPrevious) {
-    if (specialTagRow(row) && !unavailable.has(row.caddy.id)) {
+    if (specialTagRow(row) && !blockedInShift(row.caddy.id, row.shift)) {
       unlockedSpecialByCaddy.set(row.caddy.id, row);
     }
   }
@@ -4057,15 +4202,34 @@ export function reflowRegularAssignments(input: {
     );
   }
 
+  const seedAssignments = previous.assignments
+    .filter(
+      (row) =>
+        freezeShifts.includes(row.shift) &&
+        !preservePlacementOnReflow(row) &&
+        !blockedInShift(row.caddy.id, row.shift)
+    )
+    .map(cloneAssignmentRow);
+  const frozenResKeys = new Set(
+    seedAssignments.map((row) => reservationKey(row.reservation))
+  );
+  for (const key of frozenResKeys) seedMap.delete(key);
+  const seedSparesByShift = (previous.sparesByShift || []).filter((s) =>
+    freezeShifts.includes(s.shift)
+  );
+
   const regularReservations = [...seedMap.values()].sort(compareReservationOrder);
 
-  const pool = dedupeCaddies([
-    ...fullPool,
-    ...unlockedPrevious
-      .filter((row) => !unavailable.has(row.caddy.id))
-      .map((row) => row.caddy),
-  ])
-    .filter((c) => !lockedCaddies.has(c.id) && !unavailable.has(c.id))
+  const extraSpecials = unlockedPrevious
+    .filter(
+      (row) =>
+        specialTagRow(row) &&
+        !allDayUnavailable.has(row.caddy.id) &&
+        !blockedInShift(row.caddy.id, row.shift)
+    )
+    .map((row) => row.caddy);
+  const pool = eligibleRegularReflowCaddies([...fullPool, ...extraSpecials])
+    .filter((c) => !lockedCaddies.has(c.id) && !allDayUnavailable.has(c.id))
     .sort(compareCaddyOrder);
   const pools = splitCaddyPools(pool);
 
@@ -4117,6 +4281,10 @@ export function reflowRegularAssignments(input: {
     thirdStartCaddyId,
     thirdRoster,
     oneThreeForThird,
+    seedAssignments,
+    freezeShifts,
+    seedSparesByShift,
+    unavailableFromShift,
   });
 
   const regularAssignments = regular.assignments.map((row) =>

@@ -6,6 +6,7 @@ import {
   assignmentOverlapsDay,
   compareAvailabilityRows,
   computeAvailability,
+  isInactiveEmploymentAvailability,
   isSpecialPlacementText,
   normalizeCaddyType,
   parseYmd,
@@ -269,6 +270,28 @@ assert(
 assert(
   af.excluded.find((r) => r.id === 21)?.excludedReasons.some((x) => x.includes("경조")),
   "FAMILY_EVENT label"
+);
+
+assert(
+  isInactiveEmploymentAvailability({ employmentStatus: "RETIRED" }),
+  "RETIRED is inactive"
+);
+assert(
+  isInactiveEmploymentAvailability({ employmentStatus: "LEAVE" }),
+  "LEAVE is inactive"
+);
+assert(
+  !isInactiveEmploymentAvailability({
+    employmentStatus: "ACTIVE",
+    excludedReasons: ["휴무"],
+  }),
+  "당일 휴무 ACTIVE는 후보에서 재직 제외가 아님"
+);
+assert(
+  isInactiveEmploymentAvailability({
+    excludedReasons: ["퇴사(RETIRED)"],
+  }),
+  "excludedReasons 퇴사도 inactive"
 );
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);

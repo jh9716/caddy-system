@@ -74,11 +74,26 @@ export type AvailabilityRow = {
   caddyType: CaddyTypeCode;
   extraFlags: ExtraFlagOption[];
   thirdBandSubgroup?: string | null;
+  employmentStatus?: string;
   bucket: AvailabilityBucket;
   excludedReasons: string[];
   specialTags: string[];
   assignmentLabels: string[];
 };
+
+/** RETIRED/LEAVE(퇴사·휴직)는 배치 후보에서 제외. 휴무/병가/당번 등 당일 상태는 별도. */
+export function isInactiveEmploymentAvailability(row: {
+  employmentStatus?: string | null;
+  excludedReasons?: readonly string[] | null;
+}): boolean {
+  const emp = String(row.employmentStatus ?? "").trim().toUpperCase();
+  if (emp === "RETIRED" || emp === "LEAVE" || emp === "퇴사" || emp === "휴직") {
+    return true;
+  }
+  if (emp === "ACTIVE") return false;
+  const text = (row.excludedReasons || []).join(" ");
+  return /퇴사\(RETIRED\)|휴직\(LEAVE\)/.test(text);
+}
 
 export type AvailabilityResult = {
   date: string;
@@ -258,6 +273,7 @@ export function computeAvailability(input: {
       caddyType,
       extraFlags,
       thirdBandSubgroup: c.thirdBandSubgroup ?? null,
+      employmentStatus: String(c.employmentStatus ?? ""),
       bucket: "excluded",
       excludedReasons: [],
       specialTags: specialMarks,

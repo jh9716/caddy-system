@@ -396,6 +396,8 @@ model DailyCaddyUnavailable {
   caddy     Caddy                        @relation(fields: [caddyId], references: [id])
   reason    DailyCaddyUnavailableReason
   note      String?
+  /// 병가가 적용되는 첫 부. "1부"|"2부"|"3부". null = 기존 종일 제외.
+  effectiveFromShift String?
   createdAt DateTime                     @default(now())
 
   @@unique([date, caddyId])
