@@ -4026,6 +4026,11 @@ export function reflowRegularAssignments(input: {
   /** 원본 일반 available 풀 (정렬 전/후 모두 허용 — 내부에서 재정렬) */
   regularCaddyPool: AutoAssignCaddy[];
   events: ReservationChangeEvent[];
+  /**
+   * 명시하면 이벤트 기반 freezeBefore를 덮어쓴다.
+   * 운영 복구처럼 REMOVE_CADDY 없이 3부 regular만 재계산할 때 ["1부","2부"].
+   */
+  freezeShifts?: ShiftPart[];
 }): RegularReflowResult {
   const previous = input.previous;
   const date = previous.date;
@@ -4107,9 +4112,12 @@ export function reflowRegularAssignments(input: {
   };
 
   const freezeBefore = freezeBeforeShiftFromEvents(events);
-  const freezeShifts: ShiftPart[] = freezeBefore
-    ? SHIFT_PARTS.filter((s) => shiftRank(s) < shiftRank(freezeBefore))
-    : [];
+  const freezeShifts: ShiftPart[] =
+    input.freezeShifts && input.freezeShifts.length > 0
+      ? [...input.freezeShifts]
+      : freezeBefore
+        ? SHIFT_PARTS.filter((s) => shiftRank(s) < shiftRank(freezeBefore))
+        : [];
 
   let lockedRows = previous.assignments
     .filter((row) => preservePlacementOnReflow(row) && !blockedInShift(row.caddy.id, row.shift))

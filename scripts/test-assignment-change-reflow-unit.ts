@@ -35,6 +35,7 @@ import {
   compareReservationOrder,
   drivingCandidateCaddies,
   isPlacementLocked,
+  reflowRegularAssignments,
   reservationKey,
   REASON,
   type AutoAssignCaddy,
@@ -2645,6 +2646,30 @@ section("저장된 당번·마샬·조장은 3부 병가/당추 reflow 후보에
   assert(
     add.after.assignments.every((a) => a.caddy.id !== 233),
     "당추 reflow에서도 당번 캐디가 regular 후보로 들어오지 않음"
+  );
+
+  const freezeOnly = reflowRegularAssignments({
+    previous,
+    regularCaddyPool: livePool,
+    events: [],
+    freezeShifts: ["1부", "2부"],
+  });
+  const frozenAfterEmpty = freezeOnly.after.assignments
+    .filter((a) => a.shift === "1부" || a.shift === "2부")
+    .map((a) => `${a.reservation.id}:${a.caddy.id}`)
+    .sort()
+    .join("|");
+  assert(frozenAfterEmpty === frozen12, "empty events + freezeShifts 1·2부 유지");
+  assert(
+    freezeOnly.after.assignments.every((a) => a.caddy.id !== 233),
+    "CADDY_SICK 없이 freeze 3부 reflow에서도 당번 캐디 제외"
+  );
+  const oceanFreeze = freezeOnly.after.assignments.find(
+    (a) => a.reservation.id === "C3"
+  );
+  assert(
+    !!oceanFreeze && oceanFreeze.caddy.id !== 233,
+    "CADDY_SICK 없이 OCEAN 17:33도 다른 캐디로 당김"
   );
 }
 
