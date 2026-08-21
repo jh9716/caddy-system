@@ -5,6 +5,10 @@ import {
   RosterImportApplyError,
   type RosterApplyPayload,
 } from "@/lib/caddyRosterImportV2";
+import {
+  applyXlsxV1SafePayload,
+  XlsxV1SafeApplyError,
+} from "@/lib/caddyRosterImportV1Safe";
 import { isNeedsReviewName } from "@/lib/caddyImportRules";
 import { maskKrMobile } from "@/lib/caddyPhone";
 import { logAudit } from "@/lib/audit";
@@ -21,10 +25,10 @@ export const runtime = "nodejs";
 export const maxDuration = 90;
 
 /**
- * POST { applyPayload: { updates, creates, matchedExistingIds? } } — Import v2
- * CSV v2 / 표 형식 XLSX v2 만 허용. 조 제목형 xlsx-v1 payload(extras) 및 format=xlsx-v1 거부.
- * - 기존 id update (team / teamOrder / employmentStatus / phone / thirdBandSubgroup)
- * - 신규 create (name+team 필수)
+ * POST Import Apply
+ * - csv-v2 / xlsx-v2: { applyPayload: { updates, creates, matchedExistingIds? } }
+ * - xlsx-v1 안전 반영: { format: "xlsx-v1", importPeople, resolutions }
+ *   조 제목형 extras payload 는 거부. 파일 순서를 teamOrder로 쓰지 않음.
  * - extraFlags / missingFromImport / 삭제 / ID 재부여 는 payload 금지
  * - missingFromImport 는 matchedExistingIds로 서버가 Apply transaction 안에서만 산출
  * - Assignment/Schedule/ShiftDuty/OffRequest/User 연관 수정 없음
@@ -35,6 +39,33 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json().catch(() => ({}));
+
+    if (body?.format === "xlsx-v1") {
+      const leaked = JSON.stringify(body);
+      if (leaked.includes('"extras"') || leaked.includes('"extraFlags"')) {
+        return NextResponse.json(
+          { error: "xlsx-v1 안전 반영 payload에 extras를 넣을 수 없습니다." },
+          { status: 400 }
+        );
+      }
+      const result = await applyXlsxV1SafePayload(
+        {
+          importPeople: body.importPeople,
+          resolutions: body.resolutions,
+        },
+        prisma
+      );
+      await logAudit({
+        action: "IMPORT_CADDIES_V1_SAFE",
+        meta: {
+          entity: "Caddy",
+          updated: result.updated,
+          created: result.created,
+        },
+      });
+      return NextResponse.json({ ok: true, ...result });
+    }
+
     const payload = body?.applyPayload as RosterApplyPayload | undefined;
 
     if (
@@ -82,15 +113,6 @@ export async function POST(req: NextRequest) {
       "extraFlags",
       "extras",
     ];
-    if (body?.format === "xlsx-v1") {
-      return NextResponse.json(
-        {
-          error:
-            "조 제목형 XLSX v1은 Apply v2를 지원하지 않습니다. CSV 또는 표 형식 XLSX(Export와 같은 컬럼)를 사용하세요.",
-        },
-        { status: 400 }
-      );
-    }
 
     const leaked = JSON.stringify(payload);
     for (const key of forbiddenKeys) {
@@ -224,6 +246,12 @@ export async function POST(req: NextRequest) {
       ...result,
     });
   } catch (e: any) {
+    if (e instanceof XlsxV1SafeApplyError) {
+      return NextResponse.json(
+        { error: e.message, code: e.code },
+        { status: e.status }
+      );
+    }
     if (e instanceof RosterImportApplyError) {
       return NextResponse.json(
         { error: e.message, code: e.code },

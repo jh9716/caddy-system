@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { buildImportPreview, parseImportFile } from "@/lib/caddyImport";
+import { parseImportFile } from "@/lib/caddyImport";
+import { buildXlsxV1SafePreview } from "@/lib/caddyRosterImportV1Safe";
 import {
   buildRosterImportPreviewV2,
   detectExcelRosterFormat,
@@ -22,7 +23,7 @@ function isExcelName(name: string): boolean {
  * DB 쓰기 없음 — preview만.
  * CSV → csv-v2 (id/teamOrder/employmentStatus/phone/thirdBandSubgroup)
  * 표 형식 XLSX/XLS → xlsx-v2 (첫 시트 → CSV v2와 동일한 검증 엔진)
- * 조 제목형 XLSX → xlsx-v1 (기존 Preview. Apply v2로 연결하지 않음)
+ * 조 제목형 XLSX → xlsx-v1 (안전 반영 Preview. 파일 순서를 teamOrder로 쓰지 않음)
  */
 export async function POST(req: NextRequest) {
   const denied = await requireAdmin(req);
@@ -100,13 +101,26 @@ export async function POST(req: NextRequest) {
             id: true,
             name: true,
             team: true,
-            status: true,
+            teamOrder: true,
+            employmentStatus: true,
             phoneNormalized: true,
+            thirdBandSubgroup: true,
+            caddyType: true,
           },
-          orderBy: { id: "asc" },
+          orderBy: [{ team: "asc" }, { teamOrder: "asc" }, { id: "asc" }],
         });
-        const preview = buildImportPreview(rows, existing);
-        return NextResponse.json({ ...preview, format: "xlsx-v1" });
+        const existingRows = existing.map((e) => ({
+          id: e.id,
+          name: e.name,
+          team: e.team,
+          teamOrder: e.teamOrder,
+          employmentStatus: String(e.employmentStatus),
+          phoneNormalized: e.phoneNormalized,
+          thirdBandSubgroup: e.thirdBandSubgroup ?? null,
+          caddyType: e.caddyType,
+        }));
+        const preview = buildXlsxV1SafePreview(rows, existingRows);
+        return NextResponse.json(preview);
       }
 
       return NextResponse.json(
