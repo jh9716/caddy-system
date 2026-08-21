@@ -64,14 +64,14 @@ const COURSE_SHORT: Record<CourseCode, string> = {
 };
 
 import { SpecialDutyPanel, type Shift1StartOption } from "./SpecialDutyPanel";
-import { BoardQuickSheet, LiveChangePanel, LockToggle, SameDayAddSheet } from "./LiveChangePanel";
+import { BoardQuickSheet, LiveChangePanel, LockToggle, SameDayAddSheet, TeamMoveSheet } from "./LiveChangePanel";
 import { isThirdBandTeam, THIRD_BAND_TEAMS } from "@/lib/caddyManage";
 import { rotateThirdQueueFromStartTeam } from "@/lib/thirdWeeklyRotation";
 import {
   LIVE_CHANGE_LABELS,
   QUICK_ACTION_CONFIRM_MESSAGE,
+  changeFromEmptyBoardCell,
   hasBlockingLiveChangeError,
-  makeAddReservationChange,
   needsQuickActionConfirm,
   previewLiveChangeFromDraft,
   shouldReconcileLivePersist,
@@ -79,6 +79,11 @@ import {
   type LiveChangeInput,
   type LiveChangePreview,
 } from "@/lib/assignmentChange";
+import {
+  emptyBoardCellAction,
+  isStableReservationMoveKey,
+  reservationMoveBlockReason,
+} from "@/lib/reservationMove";
 
 type ResultViewMode = "board" | "list";
 
@@ -122,6 +127,7 @@ const BoardAssignedSlots = memo(function BoardAssignedSlots({
   allAssignments,
   expandedKey,
   swapKey,
+  moveKey,
   onTeamTap,
   onCaddyTap,
   onToggleLock,
@@ -130,6 +136,7 @@ const BoardAssignedSlots = memo(function BoardAssignedSlots({
   allAssignments: AutoAssignmentRow[];
   expandedKey: string | null;
   swapKey: string | null;
+  moveKey: string | null;
   onTeamTap: (row: AutoAssignmentRow) => void;
   onCaddyTap: (row: AutoAssignmentRow) => void;
   onToggleLock: (row: AutoAssignmentRow, locked: boolean) => void;
@@ -140,13 +147,13 @@ const BoardAssignedSlots = memo(function BoardAssignedSlots({
         const key = reservationIdentity(row.reservation);
         const special = row.kind !== "regular";
         const marks = boardAssignmentMarks(row, allAssignments);
-        const active = expandedKey === key || swapKey === key;
+        const active = expandedKey === key || swapKey === key || moveKey === key;
         return (
           <div
             key={key}
             className={`bc-slot${active ? " active" : ""}${
               swapKey === key ? " swap-on" : ""
-            }`}
+            }${moveKey === key ? " move-on" : ""}`}
           >
             <button
               type="button"
@@ -235,6 +242,8 @@ export default function ManageAssignmentsOpsPage() {
   const [loadingLiveApply, setLoadingLiveApply] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [swapKey, setSwapKey] = useState<string | null>(null);
+  const [moveKey, setMoveKey] = useState<string | null>(null);
+  const [moveSheetOpen, setMoveSheetOpen] = useState(false);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [quickSheet, setQuickSheet] = useState<{
     mode: "team" | "caddy";
@@ -773,6 +782,8 @@ export default function ManageAssignmentsOpsPage() {
     if (!draft) return;
     const key = reservationIdentity(row.reservation);
     if (!swapKey) {
+      setMoveKey(null);
+      setMoveSheetOpen(false);
       setSwapKey(key);
       showToast("순번 바꿈 · 다른 캐디를 탭하세요");
       return;
@@ -794,6 +805,17 @@ export default function ManageAssignmentsOpsPage() {
     row: AutoAssignmentRow,
     mode: "team" | "caddy"
   ) {
+    if (moveKey) {
+      const key = reservationIdentity(row.reservation);
+      if (key === moveKey) {
+        setMoveSheetOpen(true);
+        setQuickSheet(null);
+        return;
+      }
+      showToast("빈 칸을 탭하거나 직접 입력하세요. 이동 중에는 당추/순번바꿈이 동작하지 않습니다.");
+      setQuickSheet(null);
+      return;
+    }
     if (swapKey) {
       onSwapClick(row);
       setQuickSheet(null);
@@ -809,19 +831,50 @@ export default function ManageAssignmentsOpsPage() {
       handlePlacementTap(row, "team");
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [swapKey]
+    [swapKey, moveKey]
   );
   const onCaddyTap = useCallback(
     (row: AutoAssignmentRow) => {
       handlePlacementTap(row, "caddy");
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [swapKey]
+    [swapKey, moveKey]
   );
 
+  function onStartTeamMove(row: AutoAssignmentRow) {
+    const block = reservationMoveBlockReason(row);
+    if (block) {
+      setError(block.message);
+      showToast(block.message);
+      setQuickSheet(null);
+      return;
+    }
+    const key = reservationIdentity(row.reservation);
+    if (!isStableReservationMoveKey(key)) {
+      const msg =
+        "위치가 포함된 예약 키는 이동할 수 없습니다. id가 있는 예약만 이동합니다.";
+      setError(msg);
+      showToast(msg);
+      setQuickSheet(null);
+      return;
+    }
+    setSwapKey(null);
+    setMoveKey(key);
+    setMoveSheetOpen(true);
+    setQuickSheet(null);
+    showToast("팀 이동 모드 · 빈 칸을 탭하거나 목적 티타임을 입력하세요");
+  }
+
+  function cancelTeamMove() {
+    setMoveKey(null);
+    setMoveSheetOpen(false);
+    showToast("팀 이동을 취소했습니다");
+  }
+
   function onRequestLiveChange(change: LiveChangeInput) {
-    if (change.type === "ADD_RESERVATION") {
+    if (change.type === "ADD_RESERVATION" || change.type === "MOVE_RESERVATION") {
       setLiveChangePreset(change);
+      if (change.type === "MOVE_RESERVATION") setMoveSheetOpen(false);
       return;
     }
     void applyQuickChange(change);
@@ -829,20 +882,25 @@ export default function ManageAssignmentsOpsPage() {
 
   function onEmptyBoardCellClick(course: CourseCode, teeTime: string) {
     if (!draft || shiftTab === "UNASSIGNED" || shiftTab === "CLOSED") return;
+    const change = changeFromEmptyBoardCell({
+      date: draft.date,
+      course,
+      shift: shiftTab,
+      teeTime,
+      teamName: "당추",
+      moveReservationKey: moveKey,
+    });
+    if (change.type === "MOVE_RESERVATION") {
+      setMoveSheetOpen(false);
+      setLiveChangePreset(change);
+      return;
+    }
     const courseLabel = COURSE_LABELS[course];
     const ok = window.confirm(
       `${shiftTab} ${teeTime} ${courseLabel}에 당추를 추가할까요?`
     );
     if (!ok) return;
-    setLiveChangePreset(
-      makeAddReservationChange({
-        date: draft.date,
-        course,
-        shift: shiftTab,
-        teeTime,
-        teamName: "당추",
-      })
-    );
+    setLiveChangePreset(change);
   }
 
   function onAssignUnassigned(resKey: string, caddyId: number) {
@@ -1083,13 +1141,17 @@ export default function ManageAssignmentsOpsPage() {
     }
     setLoadingLiveApply(true);
     try {
-      await persistLivePreview({
+      const ok = await persistLivePreview({
         preview,
         previous: autoResultFromDraft(current, autoResultRef.current),
         pool: excludeCaddiesById(current.caddyPool, opsDutyCaddyIds),
         successToast: "현장 변경 적용 · Reservation/Placement 저장",
         applyServerDraft: true,
       });
+      if (ok && preview.changeType === "MOVE_RESERVATION") {
+        setMoveKey(null);
+        setMoveSheetOpen(false);
+      }
     } finally {
       setLoadingLiveApply(false);
     }
@@ -1133,6 +1195,15 @@ export default function ManageAssignmentsOpsPage() {
       ) || null
     );
   }, [draft, quickSheet]);
+
+  const moveSourceRow = useMemo(() => {
+    if (!draft || !moveKey) return null;
+    return (
+      draft.assignments.find(
+        (a) => reservationIdentity(a.reservation) === moveKey
+      ) || null
+    );
+  }, [draft, moveKey]);
 
   function toggleCourse(code: CourseCode) {
     setCourseOpen((prev) => ({ ...prev, [code]: !prev[code] }));
@@ -1575,12 +1646,31 @@ export default function ManageAssignmentsOpsPage() {
                 <button
                   type="button"
                   className="ops-add-team"
-                  onClick={() => setAddTeamOpen(true)}
+                  onClick={() => {
+                    if (moveKey) return;
+                    setAddTeamOpen(true);
+                  }}
+                  disabled={!!moveKey}
                 >
-                  당추 추가
+                  {moveKey ? "이동 중" : "당추 추가"}
                 </button>
               </div>
             )}
+
+            {moveKey && moveSourceRow ? (
+              <div className="move-mode-banner" role="status">
+                <div>
+                  <strong>팀 이동 모드</strong>
+                  <span>
+                    {moveSourceRow.reservation.teamName || "팀"} · 다른 부 탭으로
+                    옮겨도 유지됩니다. 빈 칸을 탭하세요.
+                  </span>
+                </div>
+                <button type="button" className="btn tiny ghost" onClick={cancelTeamMove}>
+                  이동 취소
+                </button>
+              </div>
+            ) : null}
 
             {shiftTab !== "UNASSIGNED" &&
               shiftTab !== "CLOSED" &&
@@ -1645,18 +1735,26 @@ export default function ManageAssignmentsOpsPage() {
                                   );
                                 }
                                 if (cell.kind === "empty") {
+                                  const cellAction = emptyBoardCellAction(moveKey);
+                                  const moveDest = cellAction === "move";
                                   return (
                                     <button
                                       key={code}
                                       type="button"
-                                      className="bc-cell empty addable"
+                                      className={`bc-cell empty ${
+                                        moveDest ? "move-dest" : "addable"
+                                      }`}
                                       role="cell"
-                                      aria-label={`${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} 당추 추가`}
+                                      aria-label={
+                                        moveDest
+                                          ? `${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} 이동 목적지 선택`
+                                          : `${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} 당추 추가`
+                                      }
                                       onClick={() =>
                                         onEmptyBoardCellClick(code, tr.teeTime)
                                       }
                                     >
-                                      -
+                                      {moveDest ? "이동" : "-"}
                                     </button>
                                   );
                                 }
@@ -1673,7 +1771,9 @@ export default function ManageAssignmentsOpsPage() {
                                     reservationIdentity(r.reservation) ===
                                       expandedKey ||
                                     reservationIdentity(r.reservation) ===
-                                      swapKey
+                                      swapKey ||
+                                    reservationIdentity(r.reservation) ===
+                                      moveKey
                                 );
                                 return (
                                   <div
@@ -1692,6 +1792,7 @@ export default function ManageAssignmentsOpsPage() {
                                       allAssignments={draft.assignments}
                                       expandedKey={expandedKey}
                                       swapKey={swapKey}
+                                      moveKey={moveKey}
                                       onTeamTap={onTeamTap}
                                       onCaddyTap={onCaddyTap}
                                       onToggleLock={onToggleLock}
@@ -1719,7 +1820,7 @@ export default function ManageAssignmentsOpsPage() {
                       row,
                       draft.assignments
                     );
-                    const open = expandedKey === key || swapKey === key;
+                    const open = expandedKey === key || swapKey === key || moveKey === key;
                     const course =
                       row.reservation.courseLabel ||
                       COURSE_LABELS[row.reservation.course as CourseCode] ||
@@ -1733,7 +1834,7 @@ export default function ManageAssignmentsOpsPage() {
                           marks.limousine ? " limo" : ""
                         }${marks.driving ? " drive" : ""} ${
                           swapKey === key ? "swap-on" : ""
-                        } ${open ? "open" : ""}`}
+                        } ${moveKey === key ? "move-on" : ""} ${open ? "open" : ""}`}
                       >
                         <div className="ops-row-main">
                           <span className="col time">
@@ -1937,6 +2038,18 @@ export default function ManageAssignmentsOpsPage() {
           onClose={() => setQuickSheet(null)}
           onRequestChange={onRequestLiveChange}
           onSwapClick={() => onSwapClick(quickSheetRow)}
+          onStartTeamMove={onStartTeamMove}
+        />
+      )}
+      {moveSheetOpen && moveSourceRow && (
+        <TeamMoveSheet
+          row={moveSourceRow}
+          onClose={() => setMoveSheetOpen(false)}
+          onCancelMove={cancelTeamMove}
+          onSubmit={(change) => {
+            setMoveSheetOpen(false);
+            setLiveChangePreset(change);
+          }}
         />
       )}
 
@@ -2353,6 +2466,77 @@ const opsCss = `
     outline: 2px solid #0f172a;
     outline-offset: -2px;
   }
+  button.bc-cell.empty.move-dest {
+    cursor: pointer;
+    color: #9a3412;
+    font-size: 0.62rem;
+    font-weight: 700;
+  }
+  button.bc-cell.empty.move-dest:hover,
+  button.bc-cell.empty.move-dest:focus-visible {
+    background: #fff7ed;
+    color: #9a3412;
+    outline: 2px solid #ea580c;
+    outline-offset: -2px;
+  }
+  .move-mode-banner {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    align-items: center;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: #fff7ed;
+    border: 1px solid #fdba74;
+    color: #9a3412;
+    font-size: 0.82rem;
+  }
+  .move-mode-banner div {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+  .move-mode-banner span {
+    color: #c2410c;
+  }
+  .move-preview {
+    display: grid;
+    gap: 6px;
+    padding: 10px;
+    border-radius: 10px;
+    background: #fff7ed;
+    border: 1px solid #fdba74;
+  }
+  .move-preview-title {
+    font-weight: 700;
+    color: #9a3412;
+  }
+  .move-preview-note {
+    margin: 0;
+    font-size: 0.82rem;
+    color: #9a3412;
+  }
+  .move-preview-warn {
+    margin: 0;
+    padding: 6px 8px;
+    border-radius: 8px;
+    background: #7f1d1d;
+    color: #fecaca;
+    font-weight: 700;
+    font-size: 0.82rem;
+  }
+  .move-preview-list {
+    margin: 0;
+    padding-left: 18px;
+    font-size: 0.82rem;
+    color: #0f172a;
+  }
+  .move-sheet-copy,
+  .move-sheet-from {
+    margin: 0;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
   .bc-cell.closed {
     background: repeating-linear-gradient(
       -45deg,
@@ -2408,6 +2592,7 @@ const opsCss = `
     min-width: 0;
   }
   .bc-slot.swap-on,
+  .bc-slot.move-on,
   .bc-slot.active {
     outline: 2px solid #2563eb;
     outline-offset: -1px;
@@ -2550,7 +2735,8 @@ const opsCss = `
   .ops-row.two-work.chageun {
     box-shadow: inset 3px 0 0 #94a3b8, inset 0 -2px 0 #d6b37a;
   }
-  .ops-row.swap-on { outline: 2px solid #2563eb; }
+  .ops-row.swap-on,
+  .ops-row.move-on { outline: 2px solid #2563eb; }
   .ops-row.closed { background: #f8fafc; color: #64748b; }
   .ops-row-main {
     width: 100%;
