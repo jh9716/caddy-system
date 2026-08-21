@@ -416,6 +416,62 @@ console.log("== swap B auto-preview source ==");
   );
 }
 
+console.log("== 당추 추가는 미리보기 흐름, 빈 칸 클릭/현재 부 기본값 ==");
+{
+  const panel = fs.readFileSync(
+    path.resolve("src/app/manage/assignments/LiveChangePanel.tsx"),
+    "utf8"
+  );
+  const board = fs.readFileSync(
+    path.resolve("src/app/manage/assignments/page.tsx"),
+    "utf8"
+  );
+  const engine = fs.readFileSync(
+    path.resolve("src/lib/autoAssignEngine.ts"),
+    "utf8"
+  );
+  const change = fs.readFileSync(
+    path.resolve("src/lib/assignmentChange.ts"),
+    "utf8"
+  );
+  assert(
+    /bc-cell empty addable/.test(board) &&
+      /onEmptyBoardCellClick\(code, tr.teeTime\)/.test(board),
+    "empty board cell is clickable 당추 추가"
+  );
+  assert(
+    /당추 추가/.test(board) && /SameDayAddSheet/.test(board),
+    "per-shift 당추 추가 button + sheet"
+  );
+  assert(
+    /defaultShift=\{shiftTab\}/.test(board) &&
+      /useState<ShiftPart>\(defaultShift\)/.test(panel),
+    "당추 추가 부 기본값은 현재 탭"
+  );
+  assert(
+    /setLiveChangePreset/.test(board) &&
+      /preset=\{liveChangePreset\}/.test(board) &&
+      /onApplyPreview=\{onLiveApply\}/.test(board),
+    "당추 uses LiveChange preview/apply, not instant save"
+  );
+  assert(
+    /const canApply = !!preview && !applying && !blockingError/.test(panel),
+    "Apply disabled on blocking errors"
+  );
+  assert(
+    /level: "error"/.test(engine) &&
+      /code: "DUPLICATE_COURSE_TEETIME"/.test(engine) &&
+      /해당 코스\/티타임에 이미 예약이 있습니다/.test(engine) &&
+      /continue;/.test(engine),
+    "duplicate course/teeTime is engine hard error and does not insert"
+  );
+  assert(
+    /hasBlockingLiveChangeError/.test(change) &&
+      /makeAddReservationChange/.test(change),
+    "shared ADD_RESERVATION helpers"
+  );
+}
+
 console.log("== POST schedule/shifts exclude RETIRED only ==");
 {
   const schedule = fs.readFileSync(

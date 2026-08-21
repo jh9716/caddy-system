@@ -979,3 +979,23 @@ export function makeAddReservation(input: {
     sourceSheet: "MANUAL_ADD",
   };
 }
+
+/** 빈 보드 칸/당추 추가 폼 → 기존 ADD_RESERVATION LiveChange 입력. */
+export function makeAddReservationChange(input: {
+  date: string;
+  course: string;
+  shift: ShiftPart | string;
+  teeTime: string;
+  teamName?: string | null;
+}): LiveChangeInput {
+  return {
+    type: "ADD_RESERVATION",
+    addReservation: makeAddReservation(input),
+  };
+}
+
+export function hasBlockingLiveChangeError(
+  warnings: ReflowWarning[] | undefined | null
+): boolean {
+  return (warnings || []).some((w) => w.level === "error");
+}

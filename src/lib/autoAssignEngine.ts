@@ -13,6 +13,7 @@ import { PRIMARY_TEAMS, isThirdBandTeam } from "@/lib/caddyManage";
 import { isWeekendBandPriorityDate } from "@/lib/krHolidays";
 import {
   COURSE_CODES,
+  COURSE_LABELS,
   normalizeCourse,
   SHIFT_PARTS,
   type CourseCode,
@@ -2971,17 +2972,24 @@ function summarizeChanges(
   };
 }
 
+function courseLabelForWarning(course: string): string {
+  const code = resolveCourseCode(course);
+  return (code && COURSE_LABELS[code]) || course;
+}
+
 function courseTeeCollision(
   candidate: AutoAssignReservation,
   existing: AutoAssignReservation[]
 ): AutoAssignReservation | null {
   const course = String(candidate.course || "").toUpperCase();
   const tee = String(candidate.teeTime || "");
+  const shift = String(candidate.shift || "");
   return (
     existing.find(
       (r) =>
         String(r.course || "").toUpperCase() === course &&
         String(r.teeTime || "") === tee &&
+        String(r.shift || "") === shift &&
         reservationKey(r) !== reservationKey(candidate)
     ) || null
   );
@@ -4011,7 +4019,6 @@ export function reflowRegularAssignments(input: {
       continue;
     }
     if (event.type === "ADD_RESERVATION") {
-      addCount += 1;
       const res = event.reservation.date
         ? event.reservation
         : { ...event.reservation, date };
@@ -4029,12 +4036,14 @@ export function reflowRegularAssignments(input: {
       const hit = courseTeeCollision(res, existing);
       if (hit) {
         warnings.push({
-          level: "warn",
+          level: "error",
           code: "DUPLICATE_COURSE_TEETIME",
-          message: `동일 코스·티타임 예약이 있습니다 (${hit.course} ${hit.teeTime}).`,
+          message: `해당 코스/티타임에 이미 예약이 있습니다 (${courseLabelForWarning(hit.course)} ${hit.teeTime}).`,
           reservationKey: key,
         });
+        continue;
       }
+      addCount += 1;
       seedMap.set(key, res);
     }
   }

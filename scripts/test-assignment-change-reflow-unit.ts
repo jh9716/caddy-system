@@ -8,9 +8,11 @@ import {
   applyLiveAssignmentChange,
   buildLiveChangePersistPlan,
   emptyLiveChangeMemoryStore,
+  hasBlockingLiveChangeError,
   isSequenceReflowLiveChange,
   liveBoardSnapshot,
   makeAddReservation,
+  makeAddReservationChange,
   previewLiveAssignmentChange,
   previewLiveChangeFromDraft,
   LIVE_CHANGE_APPLY_USER_MESSAGE,
@@ -495,7 +497,74 @@ section("중간 예약 당추 → 뒤 일반 캐디가 정확히 밀림");
   assert(caddyOn(preview.after, "R3") === ordered[2].id, "R3 pushed to next caddy");
 }
 
-section("당추 동일 티타임/코스 중복 경고");
+section("빈 스카이 11:00 칸 → ADD_RESERVATION 자동 입력");
+{
+  const change = makeAddReservationChange({
+    date: "2026-08-21",
+    course: "SKY",
+    shift: "2부",
+    teeTime: "11:00",
+  });
+  assert(change.type === "ADD_RESERVATION", "empty cell is ADD_RESERVATION");
+  assert(change.addReservation?.date === "2026-08-21", "date from cell");
+  assert(change.addReservation?.course === "SKY", "course from cell");
+  assert(change.addReservation?.shift === "2부", "shift from current board");
+  assert(change.addReservation?.teeTime === "11:00", "teeTime from cell");
+  assert(change.addReservation?.teamName === "당추", "default team 당추");
+  assert(isLiveChangeReady(change), "ready for LiveChange preview");
+  assert(!isInstantQuickAction("ADD_RESERVATION"), "당추 is not instant save");
+}
+
+section("행 없는 11:00 → 당추 추가 폼은 현재 부 기본값");
+{
+  const change = makeAddReservationChange({
+    date: "2026-08-21",
+    course: "VERTHILL",
+    shift: "2부",
+    teeTime: "11:00",
+    teamName: "당추",
+  });
+  assert(change.addReservation?.shift === "2부", "form default shift is current tab, not 1부");
+  assert(change.addReservation?.teeTime === "11:00", "typed teeTime");
+}
+
+section("10:50 / 11:10 사이 11:00 당추 → 이후 캐디 순번 밀림");
+{
+  const date = "2026-08-21";
+  const pool = makeCaddies(8);
+  const ordered = [...pool].sort(compareCaddyOrder);
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      res(date, "A", { teeTime: "10:50", shift: "2부", course: "VERTHILL" }),
+      res(date, "B", { teeTime: "11:10", shift: "2부", course: "SKY" }),
+    ],
+  });
+  assert(caddyOn(previous, "A") === ordered[0].id, "before 10:50 first");
+  assert(caddyOn(previous, "B") === ordered[1].id, "before 11:10 second");
+  const preview = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: makeAddReservationChange({
+      date,
+      course: "SKY",
+      shift: "2부",
+      teeTime: "11:00",
+      teamName: "당추",
+    }),
+  });
+  const tees = preview.after.regularAssignments
+    .filter((a) => a.reservation.shift === "2부")
+    .map((a) => a.reservation.teeTime);
+  assert(tees.join(",") === "10:50,11:00,11:10", "11:00 inserted between");
+  assert(caddyOn(preview.after, "A") === ordered[0].id, "10:50 stays");
+  const mid = preview.after.assignments.find((a) => a.reservation.teeTime === "11:00");
+  assert(mid?.caddy.id === ordered[1].id, "previous 11:10 caddy shifted to 11:00");
+  assert(caddyOn(preview.after, "B") === ordered[2].id, "11:10 pushed");
+}
+
+section("당추 동일 티타임/코스 중복은 hard error");
 {
   const date = "2026-08-23";
   const pool = makeCaddies(4);
@@ -517,9 +586,345 @@ section("당추 동일 티타임/코스 중복 경고");
       }),
     },
   });
+  const dup = preview.warnings.find((w) => w.code === "DUPLICATE_COURSE_TEETIME");
+  assert(!!dup, "duplicate course/tee warning");
+  assert(dup?.level === "error", "duplicate is hard error");
   assert(
-    preview.warnings.some((w) => w.code === "DUPLICATE_COURSE_TEETIME"),
-    "duplicate course/tee warning"
+    (dup?.message || "").includes("해당 코스/티타임에 이미 예약이 있습니다"),
+    "clear duplicate message"
+  );
+  assert(hasBlockingLiveChangeError(preview.warnings), "preview blocked");
+  assert(
+    !preview.after.assignments.some((a) => String(a.reservation.id || "").startsWith("add:")),
+    "duplicate reservation is not inserted"
+  );
+}
+
+section("다른 코스 같은 시간은 당추 허용");
+{
+  const date = "2026-08-23";
+  const pool = makeCaddies(4);
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [res(date, "R1", { teeTime: "07:00", course: "OCEAN" })],
+  });
+  const preview = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: makeAddReservationChange({
+      date,
+      course: "SKY",
+      shift: "1부",
+      teeTime: "07:00",
+      teamName: "당추",
+    }),
+  });
+  assert(
+    !preview.warnings.some((w) => w.code === "DUPLICATE_COURSE_TEETIME"),
+    "other course same time allowed"
+  );
+  assert(
+    preview.after.assignments.some(
+      (a) => a.reservation.course === "SKY" && a.reservation.teeTime === "07:00"
+    ),
+    "SKY 07:00 added"
+  );
+}
+
+section("같은 코스·같은 시간이라도 다른 부는 허용");
+{
+  const date = "2026-08-23";
+  const pool = makeCaddies(6);
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      res(date, "R1", { teeTime: "11:00", course: "SKY", shift: "1부" }),
+      res(date, "R2", { teeTime: "13:00", course: "OCEAN", shift: "2부" }),
+    ],
+  });
+  const preview = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: makeAddReservationChange({
+      date,
+      course: "SKY",
+      shift: "2부",
+      teeTime: "11:00",
+    }),
+  });
+  assert(
+    !preview.warnings.some((w) => w.code === "DUPLICATE_COURSE_TEETIME"),
+    "same course/time different shift allowed"
+  );
+}
+
+section("1부 당추 → 2부 스페어/3부도 reflow");
+{
+  const date = "2026-08-18";
+  const pool = makeCaddies(16);
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      res(date, "S1A", { teeTime: "07:00", shift: "1부", course: "VERTHILL" }),
+      res(date, "S1B", { teeTime: "07:08", shift: "1부", course: "SKY" }),
+      res(date, "S2A", { teeTime: "11:20", shift: "2부", course: "VERTHILL" }),
+      res(date, "S2B", { teeTime: "11:30", shift: "2부", course: "SKY" }),
+      res(date, "S3A", { teeTime: "16:00", shift: "3부", course: "VERTHILL" }),
+      res(date, "S3B", { teeTime: "16:10", shift: "3부", course: "SKY" }),
+    ],
+  });
+  const before2 = spareSnap(previous, "2부");
+  const before3 = JSON.stringify(shiftSnap(previous, "3부"));
+  const preview = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: makeAddReservationChange({
+      date,
+      course: "OCEAN",
+      shift: "1부",
+      teeTime: "07:04",
+      teamName: "당추",
+    }),
+  });
+  assert(preview.reason === REASON.REGULAR_ADD_REFLOW, "1부 add reflow reason");
+  assert(spareSnap(preview.after, "2부") !== before2, "2부 spare recomputed");
+  assert(
+    JSON.stringify(shiftSnap(preview.after, "3부")) !== before3,
+    "3부 sequence recomputed"
+  );
+}
+
+section("2부 당추 → 이후 2부/3부 순번 reflow");
+{
+  const date = "2026-08-18";
+  const pool = makeCaddies(16);
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      res(date, "S1A", { teeTime: "07:00", shift: "1부" }),
+      res(date, "S2A", { teeTime: "11:20", shift: "2부" }),
+      res(date, "S2B", { teeTime: "11:40", shift: "2부" }),
+      res(date, "S3A", { teeTime: "16:00", shift: "3부" }),
+    ],
+  });
+  const beforeS2B = caddyOn(previous, "S2B");
+  const beforeS3A = caddyOn(previous, "S3A");
+  const preview = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: makeAddReservationChange({
+      date,
+      course: "SKY",
+      shift: "2부",
+      teeTime: "11:30",
+    }),
+  });
+  assert(caddyOn(preview.after, "S2A") === caddyOn(previous, "S2A"), "ahead 2부 stays");
+  assert(caddyOn(preview.after, "S2B") !== beforeS2B, "later 2부 pushed");
+  assert(caddyOn(preview.after, "S3A") !== beforeS3A, "3부 also reflowed");
+}
+
+section("당추 후에도 LOCK / thirdStartCaddyId 유지");
+{
+  const date = "2026-08-18";
+  const thirdStart: AutoAssignCaddy = {
+    id: 900,
+    name: "3부시작",
+    team: "10조",
+    teamOrder: 1,
+    caddyType: "THIRD",
+  };
+  const pool = [...makeCaddies(12), thirdStart];
+  const previous = stampLocks(
+    computeAutoAssignmentsV1({
+      date,
+      available: pool,
+      thirdStartCaddyId: thirdStart.id,
+      reservations: [
+        res(date, "R1", { teeTime: "07:00", shift: "1부" }),
+        res(date, "R2", { teeTime: "07:08", shift: "1부" }),
+        res(date, "R3", { teeTime: "07:16", shift: "1부" }),
+        res(date, "T1", { teeTime: "16:00", shift: "3부" }),
+        res(date, "T2", { teeTime: "16:10", shift: "3부" }),
+      ],
+    }),
+    { R2: true }
+  );
+  const lockedCaddy = caddyOn(previous, "R2");
+  assert(previous.meta.thirdStartCaddyId === thirdStart.id, "preview keeps start caddy");
+  const preview = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: makeAddReservationChange({
+      date,
+      course: "OCEAN",
+      shift: "1부",
+      teeTime: "07:04",
+    }),
+  });
+  assert(caddyOn(preview.after, "R2") === lockedCaddy, "LOCK stays on R2");
+  assert(
+    preview.after.assignments.find((a) => a.reservation.id === "R2")?.locked === true ||
+      isPlacementLocked(
+        preview.after.assignments.find((a) => a.reservation.id === "R2")!
+      ),
+    "R2 remains locked"
+  );
+  assert(
+    preview.after.meta.thirdStartCaddyId === previous.meta.thirdStartCaddyId,
+    "thirdStartCaddyId preserved"
+  );
+}
+
+section("1부 당추 후에도 3부 우선순위 spare→1·3→WEEKEND→regular 유지");
+{
+  const sat = "2026-08-22";
+  const house: AutoAssignCaddy[] = Array.from({ length: 8 }, (_, i) => ({
+    id: 1000 + i,
+    name: `H${i + 1}`,
+    team: `${(i % 8) + 1}조`,
+    teamOrder: Math.floor(i / 8) + 1,
+    caddyType: "HOUSE",
+  }));
+  const third: AutoAssignCaddy[] = [
+    {
+      id: 12,
+      name: "E",
+      team: "12조",
+      teamOrder: 1,
+      caddyType: "THIRD",
+      thirdBandSubgroup: "WEEKEND",
+    },
+    {
+      id: 9,
+      name: "F",
+      team: "9조",
+      teamOrder: 1,
+      caddyType: "THIRD",
+      thirdBandSubgroup: "WEEKEND",
+    },
+    {
+      id: 10,
+      name: "H",
+      team: "10조",
+      teamOrder: 1,
+      caddyType: "THIRD",
+      thirdBandSubgroup: "WEEKDAY",
+    },
+    { id: 11, name: "I", team: "11조", teamOrder: 1, caddyType: "THIRD" },
+  ];
+  const oneThree = [
+    { id: 50, name: "C", team: "8조", teamOrder: 1, inputOrder: 1 },
+    { id: 51, name: "D", team: "1조", teamOrder: 2, inputOrder: 2 },
+  ];
+  const available = [...house, ...third];
+  const reservations: AutoAssignReservation[] = [];
+  for (const [shift, n, hour] of [
+    ["1부", 2, 6],
+    ["2부", 2, 10],
+    ["3부", 8, 14],
+  ] as const) {
+    for (let i = 0; i < n; i++) {
+      reservations.push({
+        date: sat,
+        course: (["VERTHILL", "SKY", "OCEAN", "LAKE"] as const)[i % 4],
+        shift,
+        teeTime: `${String(hour).padStart(2, "0")}:${String(i).padStart(2, "0")}`,
+        teamName: `${shift}-${i + 1}`,
+        id: `${shift}-${i}`,
+      });
+    }
+  }
+  const previous = computeAutoAssignmentsV1({
+    date: sat,
+    available,
+    oneThreeCandidates: oneThree,
+    oneThreeAnchor: { course: "VERTHILL", teeTime: "06:00" },
+    reservations,
+    thirdStartCaddyId: 10,
+  });
+  const beforeNames = previous.assignments
+    .filter((a) => a.shift === "3부")
+    .sort((a, b) => a.reservation.teeTime.localeCompare(b.reservation.teeTime))
+    .map((a) => a.caddy.name);
+  assert(
+    beforeNames.slice(0, 7).join(",") === "H3,H4,C,D,E,F,H",
+    "before: spare → 1·3 → WEEKEND → regular"
+  );
+  const preview = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: available,
+    change: makeAddReservationChange({
+      date: sat,
+      course: "LAKE",
+      shift: "1부",
+      teeTime: "06:30",
+      teamName: "당추",
+    }),
+  });
+  const spare2 = preview.after.sparesByShift.find((s) => s.shift === "2부");
+  const afterThird = preview.after.assignments
+    .filter((a) => a.shift === "3부")
+    .sort((a, b) => a.reservation.teeTime.localeCompare(b.reservation.teeTime));
+  assert(!!spare2?.spare1 && !!spare2?.spare2, "2부 spare still calculated");
+  assert(afterThird[0]?.caddy.id === spare2?.spare1?.caddyId, "3부 first is 2부 spare1");
+  assert(afterThird[1]?.caddy.id === spare2?.spare2?.caddyId, "3부 second is 2부 spare2");
+  assert(
+    afterThird
+      .slice(2, 7)
+      .map((a) => a.caddy.name)
+      .join(",") === "C,D,E,F,H",
+    "after 1부 당추: 1·3 → WEEKEND → regular still follow spare"
+  );
+  assert(
+    preview.after.meta.thirdStartCaddyId === previous.meta.thirdStartCaddyId,
+    "thirdStartCaddyId still preserved"
+  );
+}
+
+section("당추 취소 후 reflow 정상");
+{
+  const date = "2026-08-22";
+  const pool = makeCaddies(6);
+  const ordered = [...pool].sort(compareCaddyOrder);
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      res(date, "R1", { teeTime: "07:00" }),
+      res(date, "R3", { teeTime: "07:16" }),
+    ],
+  });
+  const added = makeAddReservation({
+    date,
+    course: "SKY",
+    shift: "1부",
+    teeTime: "07:08",
+    teamName: "당추",
+  });
+  const afterAdd = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: { type: "ADD_RESERVATION", addReservation: added },
+  });
+  assert(caddyOn(afterAdd.after, "R3") === ordered[2].id, "R3 pushed after add");
+  const afterCancel = previewLiveAssignmentChange({
+    previous: afterAdd.after,
+    regularCaddyPool: pool,
+    change: {
+      type: "CANCEL_RESERVATION",
+      reservationKey: reservationKey(added),
+    },
+  });
+  assert(caddyOn(afterCancel.after, "R1") === ordered[0].id, "R1 restored");
+  assert(caddyOn(afterCancel.after, "R3") === ordered[1].id, "R3 pulled back after cancel");
+  assert(
+    !afterCancel.after.assignments.some((a) => a.reservation.teeTime === "07:08"),
+    "당추 slot removed"
   );
 }
 
@@ -2435,6 +2840,58 @@ async function runPersistTests() {
       result.ok === false && !result.message.includes("Transaction not found"),
       "no prisma stack in user message"
     );
+  }
+
+  section("중복 코스/티타임 당추 Apply는 서버에서 차단");
+  {
+    const date = "2026-09-22";
+    const pool = makeCaddies(4);
+    const previous = computeAutoAssignmentsV1({
+      date,
+      available: pool,
+      reservations: [res(date, "R1", { teeTime: "07:00", course: "OCEAN" })],
+    });
+    const store = emptyLiveChangeMemoryStore();
+    const dup = await applyLiveAssignmentChange(
+      {
+        previous,
+        regularCaddyPool: pool,
+        change: makeAddReservationChange({
+          date,
+          course: "OCEAN",
+          shift: "1부",
+          teeTime: "07:00",
+        }),
+      },
+      { memory: store }
+    );
+    assert(dup.ok === false, "duplicate apply blocked");
+    assert(
+      dup.ok === false && dup.code === "DUPLICATE_COURSE_TEETIME",
+      "duplicate apply code"
+    );
+    assert(
+      dup.ok === false &&
+        dup.message.includes("해당 코스/티타임에 이미 예약이 있습니다"),
+      "duplicate apply message"
+    );
+    assert(store.reservations.length === 0, "no reservation written");
+    assert(store.placements.length === 0, "no placement written");
+
+    const other = await applyLiveAssignmentChange(
+      {
+        previous,
+        regularCaddyPool: pool,
+        change: makeAddReservationChange({
+          date,
+          course: "SKY",
+          shift: "1부",
+          teeTime: "07:00",
+        }),
+      },
+      { memory: emptyLiveChangeMemoryStore() }
+    );
+    assert(other.ok === true, "other course same time apply ok");
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);

@@ -255,5 +255,28 @@ section("찾근: fixed+찾근 reason만, 일반/54홀은 유지");
   );
 }
 
+section("빈 스카이 11:00 칸은 empty, 행 없는 11:00은 보드에 없음");
+{
+  const rows = [
+    row("2부", "10:50", "VERTHILL", "A"),
+    row("2부", "11:00", "VERTHILL", "B"),
+    row("2부", "11:10", "SKY", "C"),
+  ];
+  const board = buildShiftBoard(rows, COURSE_CODES, "2부");
+  const t1100 = board.find((tr) => tr.teeTime === "11:00");
+  assert(!!t1100, "11:00 row exists because VERTHILL has a team");
+  assert(t1100!.cells.SKY.kind === "empty", "SKY 11:00 is empty clickable cell");
+  assert(t1100!.cells.VERTHILL.kind === "assigned", "VERTHILL 11:00 assigned");
+  const only1050 = buildShiftBoard(
+    [row("2부", "10:50", "VERTHILL", "A"), row("2부", "11:10", "OCEAN", "C")],
+    COURSE_CODES,
+    "2부"
+  );
+  assert(
+    !only1050.some((tr) => tr.teeTime === "11:00"),
+    "no 11:00 row when all four courses empty at that time"
+  );
+}
+
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
