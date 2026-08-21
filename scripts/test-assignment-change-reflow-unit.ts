@@ -41,6 +41,7 @@ import {
   type AutoAssignReservation,
   type AutoAssignResultV1,
 } from "../src/lib/autoAssignEngine";
+import { excludeCaddiesById } from "../src/lib/dailyOpsDuty";
 
 let passed = 0;
 let failed = 0;
@@ -2546,6 +2547,105 @@ section("Quick swap/리무진/LOCK 적용은 memory store에 즉시 기록");
     },
   });
   assert(swapStore.placements.length === 0, "preview still does not write");
+}
+
+section("저장된 당번·마샬·조장은 3부 병가/당추 reflow 후보에서 제외");
+{
+  const date = "2026-08-22";
+  const dutyCaddy: AutoAssignCaddy = {
+    id: 233,
+    name: "이홍택",
+    team: "5조",
+    teamOrder: 1,
+    caddyType: "HOUSE",
+    employmentStatus: "ACTIVE",
+  };
+  const spareCaddy: AutoAssignCaddy = {
+    id: 300,
+    name: "후순위",
+    team: "6조",
+    teamOrder: 1,
+    caddyType: "HOUSE",
+    employmentStatus: "ACTIVE",
+  };
+  const pool = [...makeCaddies(4), dutyCaddy, spareCaddy].sort(compareCaddyOrder);
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      res(date, "A1", { teeTime: "07:00", shift: "1부" }),
+      res(date, "B1", { teeTime: "12:00", shift: "2부" }),
+      res(date, "C1", { teeTime: "16:00", shift: "3부" }),
+      res(date, "C2", { teeTime: "16:08", shift: "3부" }),
+      res(date, "C3", { teeTime: "17:33", shift: "3부", course: "OCEAN" }),
+    ],
+  });
+  const frozen12 = previous.assignments
+    .filter((a) => a.shift === "1부" || a.shift === "2부")
+    .map((a) => `${a.reservation.id}:${a.caddy.id}`)
+    .sort()
+    .join("|");
+  const assignedDuty = previous.assignments.find((a) => a.caddy.id === 233);
+  assert(assignedDuty?.shift === "3부", "검증용: 당번 캐디가 3부에 들어가 있음");
+  assert(assignedDuty?.reservation.id === "C3", "검증용: 이홍택이 OCEAN 17:33");
+  const livePool = excludeCaddiesById(pool, [233]);
+  assert(
+    livePool.every((c) => c.id !== 233),
+    "저장 일정 제외 후 풀에 이홍택 없음"
+  );
+
+  const sickOtherId = previous.assignments.find(
+    (a) => a.shift === "3부" && a.caddy.id !== 233
+  )!.caddy.id;
+  const sickOther = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: livePool,
+    change: { type: "CADDY_SICK", caddyId: sickOtherId, shift: "3부" },
+  });
+  const frozenAfter = sickOther.after.assignments
+    .filter((a) => a.shift === "1부" || a.shift === "2부")
+    .map((a) => `${a.reservation.id}:${a.caddy.id}`)
+    .sort()
+    .join("|");
+  assert(frozenAfter === frozen12, "3부 reflow 후에도 1·2부 유지");
+  assert(
+    sickOther.after.assignments.every((a) => a.caddy.id !== 233),
+    "3부 다른 병가 reflow에서 당번 캐디가 다시 배치되지 않음"
+  );
+
+  const sickDuty = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: livePool,
+    change: { type: "CADDY_SICK", caddyId: 233, shift: "3부" },
+  });
+  assert(
+    sickDuty.after.assignments.every((a) => a.caddy.id !== 233),
+    "당번 캐디 본인 3부 병가 후에도 재배치 없음"
+  );
+  const oceanAfter = sickDuty.after.assignments.find(
+    (a) => a.reservation.id === "C3"
+  );
+  assert(!!oceanAfter && oceanAfter.caddy.id !== 233, "OCEAN 17:33은 다른 캐디로 당김");
+
+  const add = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: livePool,
+    change: {
+      type: "ADD_RESERVATION",
+      addReservation: makeAddReservation({
+        date,
+        course: "SKY",
+        shift: "3부",
+        teeTime: "17:40",
+        teamName: "당추",
+      }),
+    },
+  });
+  assert(add.reason === REASON.REGULAR_ADD_REFLOW, "당추는 REGULAR_ADD_REFLOW");
+  assert(
+    add.after.assignments.every((a) => a.caddy.id !== 233),
+    "당추 reflow에서도 당번 캐디가 regular 후보로 들어오지 않음"
+  );
 }
 
 async function runPersistTests() {

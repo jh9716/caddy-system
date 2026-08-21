@@ -25,15 +25,25 @@ export type DailyReviewItem = {
   source: "off_sheet" | "duty_excel";
 };
 
+export type DutyDuplicateDetail = {
+  name: string;
+  role: string;
+  overlappedWith: string;
+};
+
 export type DailyAvailabilitySummary = {
   baseAvailable: number;
   off: number;
+  /** 파일/저장 원본 인원 (중복 제거 전) */
   dutyAm: number;
   dutyPm: number;
   marshalAm: number;
   marshalPm: number;
   leader: number;
   duplicateExcluded: number;
+  /** 당번/마샬/조장으로 새로 빠진 인원 (휴무 등과 겹치면 여기 안 넣음) */
+  dutyAdditionalExcluded: number;
+  duplicates: DutyDuplicateDetail[];
   reviewCount: number;
   finalAvailable: number;
   reviews: DailyReviewItem[];
@@ -41,6 +51,7 @@ export type DailyAvailabilitySummary = {
 
 export type DailyAvailabilityResult = AvailabilityResult & {
   dailySummary: DailyAvailabilitySummary;
+  opsDutyCaddyIds: number[];
 };
 
 const KIND_COUNT_KEY: Record<DutyRoleKind, keyof DailyAvailabilitySummary> = {
@@ -61,6 +72,8 @@ function emptySummary(baseAvailable: number): DailyAvailabilitySummary {
     marshalPm: 0,
     leader: 0,
     duplicateExcluded: 0,
+    dutyAdditionalExcluded: 0,
+    duplicates: [],
     reviewCount: 0,
     finalAvailable: baseAvailable,
     reviews: [],
@@ -102,6 +115,8 @@ export function applyDailyExternalExclusions(input: {
   }
 
   const excludedIds = new Set<number>();
+  const opsDutyCaddyIds: number[] = [];
+  const seenDutyIds = new Set<number>();
   for (const row of byId.values()) {
     if (row.bucket === "excluded") excludedIds.add(row.id);
   }
@@ -110,7 +125,8 @@ export function applyDailyExternalExclusions(input: {
     rawName: string,
     source: "off_sheet" | "duty_excel",
     reasonLabel: string,
-    onExclude: () => void
+    onExclude: () => void,
+    onAlreadyExcluded?: (row: AvailabilityRow, name: string) => void
   ) => {
     const match = matchCaddyByExactName(rawName, input.caddies);
     if (match.status === "review" || match.status === "inactive") {
@@ -132,6 +148,7 @@ export function applyDailyExternalExclusions(input: {
     }
     if (excludedIds.has(match.caddyId) || row.bucket === "excluded") {
       summary.duplicateExcluded += 1;
+      onAlreadyExcluded?.(row, match.name);
       return;
     }
     excludedIds.add(match.caddyId);
@@ -152,10 +169,29 @@ export function applyDailyExternalExclusions(input: {
   }
   for (const entry of input.dutyEntries ?? []) {
     const label = DUTY_ROLE_LABELS[entry.kind];
-    applyOne(entry.rawName, "duty_excel", label, () => {
-      const key = KIND_COUNT_KEY[entry.kind];
-      (summary[key] as number) += 1;
-    });
+    const key = KIND_COUNT_KEY[entry.kind];
+    (summary[key] as number) += 1;
+    applyOne(
+      entry.rawName,
+      "duty_excel",
+      label,
+      () => {
+        summary.dutyAdditionalExcluded += 1;
+      },
+      (row, name) => {
+        const overlappedWith = row.excludedReasons[0] || "기타";
+        summary.duplicates.push({
+          name,
+          role: label,
+          overlappedWith,
+        });
+      }
+    );
+    const dutyMatch = matchCaddyByExactName(entry.rawName, input.caddies);
+    if (dutyMatch.status === "matched" && !seenDutyIds.has(dutyMatch.caddyId)) {
+      seenDutyIds.add(dutyMatch.caddyId);
+      opsDutyCaddyIds.push(dutyMatch.caddyId);
+    }
   }
 
   const all = [...byId.values()];
@@ -186,5 +222,6 @@ export function applyDailyExternalExclusions(input: {
       },
     },
     dailySummary: summary,
+    opsDutyCaddyIds,
   };
 }
