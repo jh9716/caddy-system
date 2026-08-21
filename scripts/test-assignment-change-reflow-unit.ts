@@ -998,6 +998,178 @@ section("병가 캐디가 당일 다중근무면 이후 근무에서도 제외")
   void ordered;
 }
 
+section("2부 병가 → 1부 identity 유지, 2·3부만 제외/reflow");
+{
+  const date = "2026-08-27";
+  const pool = makeCaddies(10);
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      res(date, "A1", { teeTime: "07:00", shift: "1부" }),
+      res(date, "A2", { teeTime: "07:08", shift: "1부" }),
+      res(date, "A3", { teeTime: "07:16", shift: "1부" }),
+      res(date, "B1", { teeTime: "12:00", shift: "2부" }),
+      res(date, "B2", { teeTime: "12:08", shift: "2부" }),
+      res(date, "B3", { teeTime: "12:16", shift: "2부" }),
+      res(date, "C1", { teeTime: "16:00", shift: "3부" }),
+      res(date, "C2", { teeTime: "16:08", shift: "3부" }),
+    ],
+  });
+  const shift1Before = previous.assignments
+    .filter((a) => a.shift === "1부")
+    .map((a) => `${a.reservation.id}:${a.caddy.id}:${a.sequenceIndex}`)
+    .sort()
+    .join("|");
+  const b1Id = caddyOn(previous, "B1")!;
+  const b2Id = caddyOn(previous, "B2")!;
+  const preview = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: { type: "CADDY_SICK", caddyId: b1Id, shift: "2부" },
+  });
+  const shift1After = preview.after.assignments
+    .filter((a) => a.shift === "1부")
+    .map((a) => `${a.reservation.id}:${a.caddy.id}:${a.sequenceIndex}`)
+    .sort()
+    .join("|");
+  assert(shift1After === shift1Before, "2부 병가 후 1부 placement identity 유지");
+  assert(
+    preview.after.assignments
+      .filter((a) => a.shift !== "1부")
+      .every((a) => a.caddy.id !== b1Id),
+    "2부 병가 캐디는 2·3부에 재등장하지 않음"
+  );
+  assert(caddyOn(preview.after, "B1") === b2Id, "2부 이후 순번 당김");
+  const shift2SpareAfter = preview.after.sparesByShift.find((s) => s.shift === "2부");
+  assert(!!shift2SpareAfter?.spare1, "2부 스페어 재계산됨");
+  assert(
+    shift2SpareAfter?.spare1?.caddyId !== b1Id &&
+      shift2SpareAfter?.spare2?.caddyId !== b1Id,
+    "2부 스페어에 병가 캐디 없음"
+  );
+  assert(
+    !preview.after.assignments.some((a) => a.shift === "3부" && a.caddy.id === b1Id),
+    "3부에 병가 캐디 없음"
+  );
+  const plan = buildLiveChangePersistPlan(preview);
+  assert(
+    plan.unavailables.some(
+      (u) => u.caddyId === b1Id && u.effectiveFromShift === "2부"
+    ),
+    "병가 effectiveFromShift=2부 저장"
+  );
+}
+
+section("3부 병가 → 1·2부 유지");
+{
+  const date = "2026-08-28";
+  const pool = makeCaddies(10);
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      res(date, "A1", { teeTime: "07:00", shift: "1부" }),
+      res(date, "A2", { teeTime: "07:08", shift: "1부" }),
+      res(date, "B1", { teeTime: "12:00", shift: "2부" }),
+      res(date, "B2", { teeTime: "12:08", shift: "2부" }),
+      res(date, "C1", { teeTime: "16:00", shift: "3부" }),
+      res(date, "C2", { teeTime: "16:08", shift: "3부" }),
+    ],
+  });
+  const frozen = previous.assignments
+    .filter((a) => a.shift === "1부" || a.shift === "2부")
+    .map((a) => `${a.reservation.id}:${a.caddy.id}:${a.sequenceIndex}`)
+    .sort()
+    .join("|");
+  const c1Id = caddyOn(previous, "C1")!;
+  const preview = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: { type: "CADDY_SICK", caddyId: c1Id, shift: "3부" },
+  });
+  const frozenAfter = preview.after.assignments
+    .filter((a) => a.shift === "1부" || a.shift === "2부")
+    .map((a) => `${a.reservation.id}:${a.caddy.id}:${a.sequenceIndex}`)
+    .sort()
+    .join("|");
+  assert(frozenAfter === frozen, "3부 병가 후 1·2부 identity 유지");
+  assert(
+    preview.after.assignments.every(
+      (a) => a.shift !== "3부" || a.caddy.id !== c1Id
+    ),
+    "3부 병가 캐디는 3부에 없음"
+  );
+}
+
+section("1부 병가 → 이후 부 정상 reflow (종일)");
+{
+  const date = "2026-08-29";
+  const pool = makeCaddies(8);
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      res(date, "A1", { teeTime: "07:00", shift: "1부" }),
+      res(date, "A2", { teeTime: "07:08", shift: "1부" }),
+      res(date, "B1", { teeTime: "12:00", shift: "2부" }),
+      res(date, "C1", { teeTime: "16:00", shift: "3부" }),
+    ],
+  });
+  const a1Id = caddyOn(previous, "A1")!;
+  const preview = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: { type: "CADDY_SICK", caddyId: a1Id, shift: "1부" },
+  });
+  assert(
+    preview.after.assignments.every((a) => a.caddy.id !== a1Id),
+    "1부 병가는 전 부에서 제외"
+  );
+  assert(caddyOn(preview.after, "A1") !== a1Id, "1부 슬롯은 다음 순번");
+}
+
+section("reflow 후보에 RETIRED/LEAVE 재투입 없음");
+{
+  const date = "2026-08-30";
+  const available = makeCaddies(6);
+  const retired: AutoAssignCaddy = {
+    id: 900,
+    name: "퇴사캐디",
+    team: "1조",
+    teamOrder: 99,
+    caddyType: "HOUSE",
+    employmentStatus: "RETIRED",
+  };
+  const leave: AutoAssignCaddy = {
+    id: 901,
+    name: "휴직캐디",
+    team: "1조",
+    teamOrder: 98,
+    caddyType: "HOUSE",
+    employmentStatus: "LEAVE",
+  };
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available,
+    reservations: [
+      res(date, "A1", { teeTime: "07:00", shift: "1부" }),
+      res(date, "A2", { teeTime: "07:08", shift: "1부" }),
+      res(date, "B1", { teeTime: "12:00", shift: "2부" }),
+    ],
+  });
+  const sickId = caddyOn(previous, "B1")!;
+  const preview = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: [...available, retired, leave],
+    change: { type: "CADDY_SICK", caddyId: sickId, shift: "2부" },
+  });
+  assert(
+    preview.after.assignments.every((a) => a.caddy.id !== 900 && a.caddy.id !== 901),
+    "RETIRED/LEAVE는 reflow 후 배정되지 않음"
+  );
+}
+
 section("LOCK ON placement는 앞 변경에도 같은 reservation 유지");
 {
   const date = "2026-08-26";

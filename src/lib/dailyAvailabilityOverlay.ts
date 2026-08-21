@@ -10,6 +10,7 @@ import {
 } from "@/lib/availabilityEngine";
 import {
   matchCaddyByExactName,
+  resolveOffSheetNameTokens,
   type NameMatchCaddy,
 } from "@/lib/dailyCaddyNameMatch";
 import {
@@ -142,9 +143,12 @@ export function applyDailyExternalExclusions(input: {
   };
 
   for (const name of input.offNames ?? []) {
-    applyOne(name, "off_sheet", "휴무", () => {
-      summary.off += 1;
-    });
+    const tokens = resolveOffSheetNameTokens(name, input.caddies);
+    for (const token of tokens) {
+      applyOne(token, "off_sheet", "휴무", () => {
+        summary.off += 1;
+      });
+    }
   }
   for (const entry of input.dutyEntries ?? []) {
     const label = DUTY_ROLE_LABELS[entry.kind];

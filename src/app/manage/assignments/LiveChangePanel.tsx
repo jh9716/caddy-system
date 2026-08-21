@@ -67,6 +67,7 @@ export function LiveChangePanel({
   const [addShift, setAddShift] = useState<ShiftPart>(defaultShift);
   const [addTeeTime, setAddTeeTime] = useState("07:00");
   const [addTeamName, setAddTeamName] = useState("당추");
+  const [sickShift, setSickShift] = useState<ShiftPart>(defaultShift);
   const [preview, setPreview] = useState<LiveChangePreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -112,6 +113,7 @@ export function LiveChangePanel({
     setChangeType(preset.type);
     setReservationKeyValue(preset.reservationKey || "");
     setCaddyId(preset.caddyId || "");
+    if (preset.shift) setSickShift(preset.shift);
     setSwapA(preset.reservationKeyA || "");
     setSwapB(preset.reservationKeyB || "");
     setLimousineOn(preset.limousineCart !== false);
@@ -151,7 +153,11 @@ export function LiveChangePanel({
     }
     if (changeType === "CADDY_SICK" || changeType === "CADDY_ATTENDANCE_NOSHOW") {
       if (!caddyId) return null;
-      return { type: changeType, caddyId: Number(caddyId) };
+      return {
+        type: changeType,
+        caddyId: Number(caddyId),
+        ...(changeType === "CADDY_SICK" ? { shift: sickShift } : {}),
+      };
     }
     if (changeType === "ADD_RESERVATION") {
       if (!/^\d{2}:\d{2}$/.test(addTeeTime)) return null;
@@ -313,22 +319,39 @@ export function LiveChangePanel({
 
         {(changeType === "CADDY_SICK" ||
           changeType === "CADDY_ATTENDANCE_NOSHOW") && (
-          <label>
-            대상 캐디
-            <select
-              value={caddyId}
-              onChange={(e) =>
-                setCaddyId(e.target.value ? Number(e.target.value) : "")
-              }
-            >
-              <option value="">선택</option>
-              {assignedCaddies.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name} (#{c.id}/{c.team})
-                </option>
-              ))}
-            </select>
-          </label>
+          <>
+            <label>
+              대상 캐디
+              <select
+                value={caddyId}
+                onChange={(e) =>
+                  setCaddyId(e.target.value ? Number(e.target.value) : "")
+                }
+              >
+                <option value="">선택</option>
+                {assignedCaddies.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} (#{c.id}/{c.team})
+                  </option>
+                ))}
+              </select>
+            </label>
+            {changeType === "CADDY_SICK" && (
+              <label>
+                적용 시작 부
+                <select
+                  value={sickShift}
+                  onChange={(e) => setSickShift(e.target.value as ShiftPart)}
+                >
+                  {SHIFT_PARTS.map((s) => (
+                    <option key={s} value={s}>
+                      {s}부터 제외
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </>
         )}
 
         {changeType === "ADD_RESERVATION" && (
@@ -908,6 +931,7 @@ export function RowLiveActions({
           onRequestChange({
             type: "CADDY_SICK",
             caddyId: row.caddy.id,
+            shift: row.shift,
           })
         }
       >
@@ -1058,7 +1082,13 @@ export function BoardQuickSheet({
             <button
               type="button"
               className="btn"
-              onClick={() => fire({ type: "CADDY_SICK", caddyId: row.caddy.id })}
+              onClick={() =>
+                fire({
+                  type: "CADDY_SICK",
+                  caddyId: row.caddy.id,
+                  shift: row.shift,
+                })
+              }
             >
               병가
             </button>

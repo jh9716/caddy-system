@@ -183,7 +183,7 @@ export function SpecialDutyPanel({
 
   async function ensureCaddies() {
     if (caddies.length) return;
-    const res = await fetch("/api/caddies?employment=all", {
+    const res = await fetch("/api/caddies", {
       credentials: "include",
     });
     const data = await res.json();

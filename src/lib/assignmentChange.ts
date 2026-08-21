@@ -17,6 +17,7 @@ import {
 } from "@/lib/assignmentDraft";
 import {
   isPlacementLocked,
+  parseAssignShiftPart,
   reflowRegularAssignments,
   reservationKey,
   type AutoAssignCaddy,
@@ -162,6 +163,8 @@ export type LiveChangeInput = {
   reservationKey?: string;
   reservationId?: string | number;
   caddyId?: number;
+  /** 병가 클릭 부. CADDY_SICK에만 사용. 없으면 1부(종일). */
+  shift?: ShiftPart;
   reservationKeyA?: string;
   reservationKeyB?: string;
   addReservation?: AutoAssignReservation;
@@ -202,6 +205,7 @@ export type PersistUnavailableRow = {
   caddyId: number;
   reason: CaddyUnavailableCause;
   note: string | null;
+  effectiveFromShift: ShiftPart | null;
 };
 
 export type LiveChangePersistPlan = {
@@ -264,12 +268,17 @@ export function eventsFromLiveChange(
       const cause: CaddyUnavailableCause =
         input.type === "CADDY_SICK" ? "SICK" : "ATTENDANCE_NOSHOW";
       if (!input.caddyId) return [];
+      const fromShift =
+        input.type === "CADDY_SICK"
+          ? parseAssignShiftPart(input.shift) ?? "1부"
+          : "1부";
       return [
         {
           type: "REMOVE_CADDY",
           caddyId: input.caddyId,
           cause,
           note: input.note,
+          fromShift,
         },
       ];
     }
@@ -538,6 +547,8 @@ export function buildLiveChangePersistPlan(
       caddyId: event.caddyId,
       reason: event.cause,
       note: event.note ?? null,
+      effectiveFromShift:
+        event.cause === "SICK" ? event.fromShift ?? "1부" : null,
     });
   }
 
@@ -555,6 +566,10 @@ export function buildLiveChangePersistPlan(
       summary: preview.summary,
       warnings: preview.warnings,
       unavailableCaddyIds: preview.unavailableCaddyIds,
+      effectiveFromShift: unavailables.map((u) => ({
+        caddyId: u.caddyId,
+        effectiveFromShift: u.effectiveFromShift,
+      })),
       sparesByShift: preview.after.sparesByShift,
       lockedPreserved: preview.lockedPreserved,
       placementDiffs: preview.placementDiffs.map((d) => ({
@@ -790,6 +805,7 @@ async function writePlanWithPrisma(
             caddyId: row.caddyId,
             reason: mapUnavailableReason(row.reason),
             note: row.note,
+            effectiveFromShift: row.effectiveFromShift,
           })),
         });
       }

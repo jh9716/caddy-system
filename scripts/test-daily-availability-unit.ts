@@ -6,6 +6,7 @@
 import {
   matchCaddyByExactName,
   normalizePersonName,
+  resolveOffSheetNameTokens,
   splitPersonNames,
 } from "../src/lib/dailyCaddyNameMatch";
 import {
@@ -244,6 +245,113 @@ section("overlay: 최종 가용 + 중복 1회 제외");
   assert(
     !over.excluded.some((r) => r.id === 4 && r.excludedReasons.includes("휴무")),
     "퇴사자는 추가 제외 사유를 얹지 않음"
+  );
+}
+
+section("붙어 있는 휴무 이름 안전 분리");
+{
+  const caddies = [
+    { id: 1, name: "김하나1", employmentStatus: "ACTIVE" },
+    { id: 2, name: "김예진1", employmentStatus: "ACTIVE" },
+    { id: 3, name: "임형규", employmentStatus: "ACTIVE" },
+    { id: 4, name: "김나경", employmentStatus: "ACTIVE" },
+    { id: 5, name: "정윤지", employmentStatus: "ACTIVE" },
+    { id: 6, name: "서승희", employmentStatus: "ACTIVE" },
+    { id: 7, name: "김하나2", employmentStatus: "ACTIVE" },
+    { id: 8, name: "퇴사하나", employmentStatus: "RETIRED" },
+  ];
+  assert(
+    splitPersonNames("김하나1 김예진1").join(",") === "김하나1,김예진1",
+    "공백 구분자는 분리"
+  );
+  assert(
+    splitPersonNames("김하나1\n김예진1").join(",") === "김하나1,김예진1",
+    "줄바꿈 구분자는 분리"
+  );
+  assert(
+    splitPersonNames("김하나1김예진1").join(",") === "김하나1김예진1",
+    "구분자 없는 셀은 parser가 자르지 않음"
+  );
+  assert(
+    resolveOffSheetNameTokens("김하나1김예진1", caddies).join(",") ===
+      "김하나1,김예진1",
+    "김하나1김예진1 unique split"
+  );
+  assert(
+    resolveOffSheetNameTokens("김하나1임형규", caddies).join(",") ===
+      "김하나1,임형규",
+    "김하나1임형규 unique split"
+  );
+  assert(
+    resolveOffSheetNameTokens("김나경김하나1", caddies).join(",") ===
+      "김나경,김하나1",
+    "김나경김하나1 unique split"
+  );
+  assert(
+    resolveOffSheetNameTokens("김예진1정윤지", caddies).join(",") ===
+      "김예진1,정윤지",
+    "김예진1정윤지 unique split"
+  );
+  assert(
+    resolveOffSheetNameTokens("서승희김예진1", caddies).join(",") ===
+      "서승희,김예진1",
+    "서승희김예진1 unique split"
+  );
+  assert(
+    resolveOffSheetNameTokens("김하나1", caddies).join(",") === "김하나1",
+    "숫자 접미 1 보존 + exact는 쪼개지 않음"
+  );
+  assert(
+    resolveOffSheetNameTokens("김하나2", caddies).join(",") === "김하나2",
+    "숫자 접미 2 보존"
+  );
+  const retiredOnly = [
+    { id: 1, name: "김하나1", employmentStatus: "RETIRED" },
+    { id: 2, name: "김예진1", employmentStatus: "RETIRED" },
+  ];
+  assert(
+    resolveOffSheetNameTokens("김하나1김예진1", retiredOnly).join(",") ===
+      "김하나1김예진1",
+    "RETIRED 이름으로 억지 segmentation하지 않음"
+  );
+  const ambiguous = [
+    { id: 1, name: "가나", employmentStatus: "ACTIVE" },
+    { id: 2, name: "다", employmentStatus: "ACTIVE" },
+    { id: 3, name: "가", employmentStatus: "ACTIVE" },
+    { id: 4, name: "나다", employmentStatus: "ACTIVE" },
+  ];
+  assert(
+    resolveOffSheetNameTokens("가나다", ambiguous).join(",") === "가나다",
+    "가능한 분해가 여러 개면 임의 선택하지 않음"
+  );
+
+  const overlayCaddies = [
+    { id: 1, name: "김하나1", team: "1조", teamOrder: 1, employmentStatus: "ACTIVE", caddyType: "HOUSE" },
+    { id: 2, name: "김예진1", team: "1조", teamOrder: 2, employmentStatus: "ACTIVE", caddyType: "HOUSE" },
+    { id: 3, name: "정윤지", team: "1조", teamOrder: 3, employmentStatus: "ACTIVE", caddyType: "HOUSE" },
+  ];
+  const glued = computeAvailability({ date: "2026-08-17", caddies: overlayCaddies });
+  const overGlued = applyDailyExternalExclusions({
+    availability: glued,
+    caddies: overlayCaddies,
+    offNames: ["김하나1김예진1"],
+  });
+  const availIds = overGlued.available.all.map((r) => r.id);
+  assert(!availIds.includes(1) && !availIds.includes(2), "두 명 모두 휴무 제외");
+  assert(availIds.includes(3), "다른 사람은 가용 유지");
+  assert(
+    !overGlued.dailySummary.reviews.some((r) => r.name.includes("김하나1김예진1")),
+    "붙어 있는 이름은 확인 필요에서 사라짐"
+  );
+  assert(overGlued.dailySummary.off === 2, "휴무 제외 2명");
+  const exactKeep = applyDailyExternalExclusions({
+    availability: computeAvailability({ date: "2026-08-17", caddies: overlayCaddies }),
+    caddies: overlayCaddies,
+    offNames: ["정윤지"],
+  });
+  assert(
+    exactKeep.available.all.map((r) => r.id).join(",") === "1,2",
+    "실제 한 사람 이름은 쪼개지 않음"
   );
 }
 

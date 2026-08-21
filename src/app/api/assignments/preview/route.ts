@@ -102,6 +102,8 @@ function availabilityRowsToCaddies(
     extraFlags: "extraFlags" in row ? row.extraFlags ?? null : null,
     thirdBandSubgroup:
       "thirdBandSubgroup" in row ? row.thirdBandSubgroup ?? null : null,
+    employmentStatus:
+      "employmentStatus" in row ? row.employmentStatus ?? undefined : undefined,
   }));
 }
 

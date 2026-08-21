@@ -25,6 +25,7 @@ import {
 import {
   drivingCandidateCaddies,
   isHouseStartCandidate,
+  regularCaddyPoolFromAvailabilityRows,
   resolveCourseCode,
   compareReservationOrder,
   type AutoAssignCaddy,
@@ -32,7 +33,11 @@ import {
   type AutoAssignResultV1,
   type AutoAssignmentRow,
 } from "@/lib/autoAssignEngine";
-import type { AvailabilityResult, AvailabilityRow } from "@/lib/availabilityEngine";
+import {
+  isInactiveEmploymentAvailability,
+  type AvailabilityResult,
+  type AvailabilityRow,
+} from "@/lib/availabilityEngine";
 import type { DailyAvailabilitySummary } from "@/lib/dailyAvailabilityOverlay";
 import {
   COURSE_CODES,
@@ -335,7 +340,7 @@ export default function ManageAssignmentsOpsPage() {
       );
   }, [availability]);
 
-  /** 오늘 3부 첫 캐디 후보: 9~12조 (가용+특수+제외). 주간 시작조 회전순 */
+  /** 오늘 3부 첫 캐디 후보: 9~12조 (가용+특수+당일 제외 ACTIVE). RETIRED/LEAVE 제외. 주간 시작조 회전순 */
   const thirdStartCandidates = useMemo(() => {
     if (!availability) return [];
     const rows: AvailabilityRow[] = [
@@ -347,6 +352,7 @@ export default function ManageAssignmentsOpsPage() {
     for (const row of rows) {
       if (!isThirdBandTeam(row.team)) continue;
       if (String(row.caddyType || "").toUpperCase() === "DRIVING") continue;
+      if (isInactiveEmploymentAvailability(row)) continue;
       if (!byId.has(row.id)) byId.set(row.id, row);
     }
     const startTeam = THIRD_BAND_TEAMS.includes(
@@ -372,11 +378,7 @@ export default function ManageAssignmentsOpsPage() {
 
   const pool: AutoAssignCaddy[] = useMemo(() => {
     if (availability) {
-      return [
-        ...availability.available.all,
-        ...availability.special,
-        ...availability.excluded,
-      ];
+      return regularCaddyPoolFromAvailabilityRows(availability.available.all);
     }
     return draft?.caddyPool || [];
   }, [availability, draft]);
@@ -507,11 +509,9 @@ export default function ManageAssignmentsOpsPage() {
           return;
         }
         setAvailability(availData as AvailabilityResult & { dailySummary?: DailyAvailabilitySummary });
-        caddyPool = [
-          ...(availData.available?.all || []),
-          ...(availData.special || []),
-          ...(availData.excluded || []),
-        ];
+        caddyPool = regularCaddyPoolFromAvailabilityRows(
+          availData.available?.all || []
+        );
       }
 
       const form = new FormData();
