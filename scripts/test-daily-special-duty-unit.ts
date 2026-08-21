@@ -524,7 +524,16 @@ section("1·3부 1부 anchor + 3부 주말반 훅 이후 앞자리");
   const s1 = result.oneThreeAssignments.find((a) => a.shift === "1부");
   const s3 = result.oneThreeAssignments.find((a) => a.shift === "3부");
   assert(s1?.reservation.course === "LAKE", "1·3 1부는 LAKE 06:00 anchor");
-  assert(s3?.reservation.teamName === "3부-1", "3부는 주말반 훅 이후 remaining 앞");
+  const s3all = result.assignments
+    .filter((a) => a.shift === "3부")
+    .sort((a, b) =>
+      compareReservationOrder(a.reservation, b.reservation)
+    );
+  const sp2 = result.sparesByShift.find((s) => s.shift === "2부")!;
+  assert(s3all[0].caddy.id === sp2.spare1?.caddyId, "3부 1 = 2부 스페어1");
+  assert(s3all[1].caddy.id === sp2.spare2?.caddyId, "3부 2 = 2부 스페어2");
+  assert(s3?.caddy.name === "일삼", "1·3 3부는 스페어 다음");
+  assert(s3?.reservation.teamName === "3부-3", "1·3 3부는 스페어 소진 후 remaining");
 }
 
 section("1막 1부 anchor");

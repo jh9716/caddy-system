@@ -310,7 +310,7 @@ section("토/일/공휴일 WEEKEND 우선, 평일은 없음");
     reservations: [
       ...res(sun, "1부", 2, 6),
       ...res(sun, "2부", 2, 10),
-      ...res(sun, "3부", 4, 14),
+      ...res(sun, "3부", 6, 14),
     ],
   });
   assert(
@@ -326,7 +326,7 @@ section("토/일/공휴일 WEEKEND 우선, 평일은 없음");
     reservations: [
       ...res(hol, "1부", 2, 6),
       ...res(hol, "2부", 2, 10),
-      ...res(hol, "3부", 4, 14),
+      ...res(hol, "3부", 6, 14),
     ],
   });
   assert(
@@ -359,7 +359,7 @@ section("토/일/공휴일 WEEKEND 우선, 평일은 없음");
   );
 }
 
-section("주말반 이후 1·3 신청자, WEEKDAY는 일반 참여");
+section("1·3 다음 WEEKEND (Mode B: 원번 완주)");
 {
   const date = "2026-08-22";
   const third = [
@@ -398,23 +398,312 @@ section("주말반 이후 1·3 신청자, WEEKDAY는 일반 참여");
     .filter((a) => a.shift === "3부")
     .sort((a, b) => a.reservation.teeTime.localeCompare(b.reservation.teeTime));
   assert(
-    s3[0].caddy.name === "W12" && s3[1].caddy.name === "W9",
-    "3부 앞은 WEEKEND 상대순서"
-  );
-  assert(
-    s3[2].caddy.name === "일삼A" && s3[3].caddy.name === "일삼B",
-    "주말반 다음 1·3은 sortOrder"
+    s3.map((a) => a.caddy.name).slice(0, 6).join(",") ===
+      "일삼A,일삼B,W12,W9,D10,N11",
+    "Mode B: 1·3 → WEEKEND → regular THIRD"
   );
   assert(
     result.oneThreeAssignments.filter((a) => a.shift === "3부").length === 2,
     "1·3 3부 2명"
   );
-  const after = s3.slice(4).map((a) => a.caddy.name);
-  assert(after.includes("D10") && after.includes("N11"), "이후 WEEKDAY/일반 THIRD");
   assert(
     !result.weekendBandAssignments.some((a) => a.caddy.name === "D10"),
     "WEEKDAY는 주말반 우선 없음"
   );
+  assert(
+    !s3.some((a) => a.caddy.caddyType === "HOUSE"),
+    "Mode B: 2부 스페어 우선 없음"
+  );
+}
+
+section("3부 우선배치: Mode A 스페어→1·3→WEEKEND→regular");
+{
+  const sat = "2026-08-22";
+  const third = [
+    caddy(12, "12조", 1, { name: "E", thirdBandSubgroup: "WEEKEND" }),
+    caddy(92, "12조", 2, { name: "F2", thirdBandSubgroup: "WEEKEND" }),
+    caddy(9, "9조", 1, { name: "F", thirdBandSubgroup: "WEEKEND" }),
+    caddy(10, "10조", 1, { name: "H", thirdBandSubgroup: "WEEKDAY" }),
+    caddy(11, "11조", 1, { name: "I" }),
+  ];
+  const oneThree = [
+    { id: 50, name: "C", team: "8조", teamOrder: 1, inputOrder: 1 },
+    { id: 51, name: "D", team: "1조", teamOrder: 2, inputOrder: 2 },
+  ];
+  const thirdOrder = (result: ReturnType<typeof computeAutoAssignmentsV1>) =>
+    result.assignments
+      .filter((a) => a.shift === "3부")
+      .sort((a, b) =>
+        a.reservation.teeTime.localeCompare(b.reservation.teeTime)
+      )
+      .map((a) => a.caddy.name);
+
+  const modeA = computeAutoAssignmentsV1({
+    date: sat,
+    available: [...housePool(8), ...third],
+    oneThreeCandidates: oneThree,
+    oneThreeAnchor: { course: "VERTHILL", teeTime: "06:00" },
+    reservations: [
+      ...res(sat, "1부", 2, 6),
+      ...res(sat, "2부", 2, 10),
+      ...res(sat, "3부", 10, 14),
+    ],
+    thirdStartCaddyId: 10,
+  });
+  const sp2 = modeA.sparesByShift.find((s) => s.shift === "2부")!;
+  assert(sp2.spare1?.name === "H3" && sp2.spare2?.name === "H4", "2부 스페어 H3,H4");
+  assert(
+    thirdOrder(modeA).slice(0, 8).join(",") === "H3,H4,C,D,E,F2,F,H",
+    "Mode A+스페어2: spare → 1·3 → WEEKEND 상대순서 → regular H"
+  );
+  assert(
+    modeA.weekendBandAssignments.map((a) => a.caddy.name).join(",") ===
+      "E,F2,F",
+    "WEEKEND 상대순서 기존 유지 (12스타트)"
+  );
+  assert(
+    new Set(thirdOrder(modeA)).size === thirdOrder(modeA).length,
+    "같은 캐디 3부 중복 없음"
+  );
+  assert(
+    !modeA.regularAssignments.some(
+      (a) => a.shift === "3부" && (a.caddy.name === "C" || a.caddy.name === "E")
+    ),
+    "1·3/WEEKEND는 regular THIRD에 재진입 없음"
+  );
+  assert(
+    sp2.spare1?.name === "H3" &&
+      modeA.assignments.some(
+        (a) => a.shift === "3부" && a.caddy.name === "H3"
+      ),
+    "2부 스페어를 3부에 넣어도 2부 spare 표시는 유지"
+  );
+  assert(modeA.meta.thirdStartCaddyId === 10, "thirdStartCaddyId 메타 유지");
+  const firstRegularThird = modeA.regularAssignments.find(
+    (a) => a.shift === "3부" && a.caddy.caddyType === "THIRD"
+  );
+  assert(firstRegularThird?.caddy.name === "H", "thirdStartCaddyId는 4순위 regular THIRD만");
+
+  const spare1 = computeAutoAssignmentsV1({
+    date: sat,
+    available: [...housePool(1), ...third],
+    oneThreeCandidates: oneThree,
+    oneThreeAnchor: { course: "VERTHILL", teeTime: "06:00" },
+    reservations: [
+      ...res(sat, "1부", 2, 6),
+      ...res(sat, "3부", 8, 14),
+    ],
+    thirdStartCaddyId: 10,
+  });
+  const sp2one = spare1.sparesByShift.find((s) => s.shift === "2부")!;
+  assert(sp2one.spare1?.name === "H1" && sp2one.spare2 == null, "스페어 1명");
+  assert(
+    thirdOrder(spare1).slice(0, 7).join(",") === "H1,C,D,E,F2,F,H",
+    "Mode A+스페어1: 한 명만 맨 앞"
+  );
+
+  const spare0 = computeAutoAssignmentsV1({
+    date: sat,
+    available: [...third],
+    oneThreeCandidates: oneThree,
+    oneThreeAnchor: { course: "VERTHILL", teeTime: "06:00" },
+    reservations: [
+      ...res(sat, "1부", 2, 6),
+      ...res(sat, "3부", 8, 14),
+    ],
+    thirdStartCaddyId: 10,
+  });
+  assert(
+    spare0.sparesByShift.find((s) => s.shift === "2부")?.spare1 == null,
+    "HOUSE 없음 → 2부 스페어 없음"
+  );
+  assert(
+    thirdOrder(spare0).slice(0, 6).join(",") === "C,D,E,F2,F,H",
+    "스페어 0: 1·3부터 시작"
+  );
+
+  const noOneThree = computeAutoAssignmentsV1({
+    date: sat,
+    available: [...housePool(8), ...third],
+    reservations: [
+      ...res(sat, "1부", 2, 6),
+      ...res(sat, "2부", 2, 10),
+      ...res(sat, "3부", 8, 14),
+    ],
+    thirdStartCaddyId: 10,
+  });
+  assert(
+    thirdOrder(noOneThree).slice(0, 6).join(",") === "H5,H6,E,F2,F,H",
+    "1·3 없음: spare → WEEKEND → regular"
+  );
+
+  const weekday = "2026-08-18";
+  const noWeekend = computeAutoAssignmentsV1({
+    date: weekday,
+    available: [...housePool(8), ...third],
+    oneThreeCandidates: oneThree,
+    oneThreeAnchor: { course: "VERTHILL", teeTime: "06:00" },
+    reservations: [
+      ...res(weekday, "1부", 2, 6),
+      ...res(weekday, "2부", 2, 10),
+      ...res(weekday, "3부", 8, 14),
+    ],
+    thirdStartCaddyId: 10,
+  });
+  assert(noWeekend.weekendBandAssignments.length === 0, "평일 WEEKEND 우선 없음");
+  assert(
+    thirdOrder(noWeekend).slice(0, 5).join(",") === "H3,H4,C,D,H",
+    "WEEKEND 없음: spare → 1·3 → regular"
+  );
+
+  const neither = computeAutoAssignmentsV1({
+    date: weekday,
+    available: [...housePool(8), ...third],
+    reservations: [
+      ...res(weekday, "1부", 2, 6),
+      ...res(weekday, "2부", 2, 10),
+      ...res(weekday, "3부", 8, 14),
+    ],
+    thirdStartCaddyId: 10,
+  });
+  assert(
+    thirdOrder(neither).slice(0, 4).join(",") === "H5,H6,H,I",
+    "1·3/WEEKEND 없음: 기존 Mode A spare → regular THIRD"
+  );
+
+  const ineligible = computeAutoAssignmentsV1({
+    date: sat,
+    available: [...housePool(8), ...third],
+    oneThreeCandidates: [
+      ...oneThree,
+      { id: 52, name: "낙방", team: "2조", teamOrder: 1, inputOrder: 3 },
+    ],
+    oneThreeAnchor: { course: "VERTHILL", teeTime: "06:00" },
+    reservations: [
+      ...res(sat, "1부", 2, 6),
+      ...res(sat, "2부", 2, 10),
+      ...res(sat, "3부", 8, 14),
+    ],
+  });
+  assert(
+    !thirdOrder(ineligible).includes("낙방"),
+    "1부 미배치 1·3 신청자는 3부에 새로 넣지 않음"
+  );
+  assert(
+    ineligible.specialUnassigned.some(
+      (u) => u.caddy.name === "낙방" && u.reason.startsWith("ONE_THREE")
+    ),
+    "1부 부족 신청자는 specialUnassigned"
+  );
+}
+
+section("LIVE reflow 후에도 3부 우선순위 유지");
+{
+  const sat = "2026-08-22";
+  const third = [
+    caddy(12, "12조", 1, { name: "E", thirdBandSubgroup: "WEEKEND" }),
+    caddy(9, "9조", 1, { name: "F", thirdBandSubgroup: "WEEKEND" }),
+    caddy(10, "10조", 1, { name: "H", thirdBandSubgroup: "WEEKDAY" }),
+    caddy(11, "11조", 1, { name: "I" }),
+  ];
+  const oneThree = [
+    { id: 50, name: "C", team: "8조", teamOrder: 1, inputOrder: 1 },
+    { id: 51, name: "D", team: "1조", teamOrder: 2, inputOrder: 2 },
+  ];
+  const available = [...housePool(8), ...third];
+  const reservations: AutoAssignReservation[] = [
+    ...res(sat, "1부", 2, 6),
+    ...res(sat, "2부", 2, 10),
+    ...res(sat, "3부", 8, 14),
+  ].map((row, i) => ({ ...row, id: `R${i}` }));
+  const previous = computeAutoAssignmentsV1({
+    date: sat,
+    available,
+    oneThreeCandidates: oneThree,
+    oneThreeAnchor: { course: "VERTHILL", teeTime: "06:00" },
+    reservations,
+    thirdStartCaddyId: 10,
+  });
+  const before = previous.assignments
+    .filter((a) => a.shift === "3부")
+    .sort((a, b) =>
+      a.reservation.teeTime.localeCompare(b.reservation.teeTime)
+    )
+    .map((a) => a.caddy.name);
+  assert(
+    before.slice(0, 7).join(",") === "H3,H4,C,D,E,F,H",
+    "preview: spare → 1·3 → WEEKEND → regular"
+  );
+
+  const lastThird = [...previous.assignments]
+    .filter((a) => a.shift === "3부")
+    .sort((a, b) =>
+      a.reservation.teeTime.localeCompare(b.reservation.teeTime)
+    )
+    .pop();
+  const afterCancel = reflowRegularAssignments({
+    previous,
+    regularCaddyPool: available,
+    events: [
+      {
+        type: "CANCEL_RESERVATION",
+        reservationKey: reservationKey(lastThird!.reservation),
+      },
+    ],
+  });
+  const cancelNames = afterCancel.after.assignments
+    .filter((a) => a.shift === "3부")
+    .sort((a, b) =>
+      a.reservation.teeTime.localeCompare(b.reservation.teeTime)
+    )
+    .map((a) => a.caddy.name);
+  assert(
+    cancelNames.slice(0, 7).join(",") === "H3,H4,C,D,E,F,H",
+    "LIVE cancel reflow 후에도 새 우선순위"
+  );
+
+  const addRes: AutoAssignReservation = {
+    date: sat,
+    course: "LAKE",
+    shift: "3부",
+    teeTime: "13:50",
+    teamName: "3부-앞추가",
+    id: "ADD-FRONT",
+  };
+  const afterAdd = reflowRegularAssignments({
+    previous,
+    regularCaddyPool: available,
+    events: [{ type: "ADD_RESERVATION", reservation: addRes }],
+  });
+  const addNames = afterAdd.after.assignments
+    .filter((a) => a.shift === "3부")
+    .sort((a, b) =>
+      a.reservation.teeTime.localeCompare(b.reservation.teeTime)
+    )
+    .map((a) => a.caddy.name);
+  assert(
+    addNames.slice(0, 7).join(",") === "H3,H4,C,D,E,F,H",
+    "LIVE 팀 추가(앞자리) 후에도 새 우선순위"
+  );
+
+  const lockedWeekend = previous.assignments.find(
+    (a) => a.shift === "3부" && a.caddy.name === "E"
+  )!;
+  const afterLock = reflowRegularAssignments({
+    previous,
+    regularCaddyPool: available,
+    events: [
+      {
+        type: "SET_LOCK",
+        reservationKey: reservationKey(lockedWeekend.reservation),
+        locked: true,
+      },
+    ],
+  });
+  const lockedRow = afterLock.after.assignments.find(
+    (a) => reservationKey(a.reservation) === reservationKey(lockedWeekend.reservation)
+  );
+  assert(lockedRow?.locked === true && lockedRow.caddy.name === "E", "명시적 LOCK은 유지");
 }
 
 section("1막/54/1·2 회귀: 주말반과 독립");

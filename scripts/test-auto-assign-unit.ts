@@ -672,9 +672,25 @@ section("1·3부: 1부 후반 + 3부 초반 정상");
         date,
         course: "SKY",
         shift: "3부",
+        teeTime: "16:00",
+        teamName: "3부-1",
+        rawRowIndex: 4,
+      },
+      {
+        date,
+        course: "SKY",
+        shift: "3부",
+        teeTime: "16:15",
+        teamName: "3부-2",
+        rawRowIndex: 5,
+      },
+      {
+        date,
+        course: "SKY",
+        shift: "3부",
         teeTime: "16:30",
         teamName: "초반3부",
-        rawRowIndex: 4,
+        rawRowIndex: 6,
       },
       {
         date,
@@ -682,7 +698,7 @@ section("1·3부: 1부 후반 + 3부 초반 정상");
         shift: "3부",
         teeTime: "17:30",
         teamName: "늦은3부",
-        rawRowIndex: 5,
+        rawRowIndex: 7,
       },
     ],
   });
@@ -691,13 +707,18 @@ section("1·3부: 1부 후반 + 3부 초반 정상");
     result.oneThreeAssignments.every((a) => a.reason === REASON.ONE_THREE_PRIORITY),
     "ONE_THREE_PRIORITY"
   );
-  const tees = result.oneThreeAssignments
-    .map((a) => a.reservation.teeTime)
-    .sort();
-  assert(tees[0] === "10:30" && tees[1] === "16:30", "후반1부+초반3부");
+  const ot1 = result.oneThreeAssignments.find((a) => a.shift === "1부");
+  const ot3 = result.oneThreeAssignments.find((a) => a.shift === "3부");
+  assert(ot1?.reservation.teeTime === "10:30", "후반1부 유지");
+  const s3 = result.assignments
+    .filter((a) => a.shift === "3부")
+    .sort((a, b) => a.reservation.teeTime.localeCompare(b.reservation.teeTime));
+  const sp2 = result.sparesByShift.find((s) => s.shift === "2부")!;
+  assert(s3[0].caddy.id === sp2.spare1?.caddyId, "3부 1번째 = 2부 스페어1");
+  assert(s3[1].caddy.id === sp2.spare2?.caddyId, "3부 2번째 = 2부 스페어2");
+  assert(ot3?.caddy.id === ot.id, "1·3 3부는 스페어 다음");
+  assert(ot3?.reservation.teeTime === "16:30", "1·3 3부 = 스페어 다음 티");
   assert(result.specialUnassigned.length === 0, "no review");
-  // remaining: 07:00 and 17:30 → regular
-  assert(result.regularAssignments.length === 2, "remaining regular");
 }
 
 section("1·3부: 6시간 미만 거절");
@@ -844,6 +865,22 @@ section("1·3부: 후보/예약 부족");
         teamName: "s3",
         rawRowIndex: 3,
       },
+      {
+        date,
+        course: "VERTHILL",
+        shift: "3부",
+        teeTime: "16:08",
+        teamName: "s3b",
+        rawRowIndex: 4,
+      },
+      {
+        date,
+        course: "VERTHILL",
+        shift: "3부",
+        teeTime: "16:16",
+        teamName: "s3c",
+        rawRowIndex: 5,
+      },
     ],
   });
   assert(shortRes.meta.oneThreeAssignedCaddyCount === 1, "1 candidate placed");
@@ -899,11 +936,23 @@ section("1·3부: 후보/예약 부족");
         teamName: "b2",
         rawRowIndex: 5,
       },
+      {
+        date,
+        course: "VERTHILL",
+        shift: "3부",
+        teeTime: "16:45",
+        teamName: "b3",
+        rawRowIndex: 6,
+      },
     ],
   });
   assert(shortCand.meta.oneThreeAssignedCaddyCount === 1, "후보 1만 배치");
   assert(shortCand.oneThreeAssignments.length === 2, "1 pair");
-  assert(shortCand.regularAssignments.length === 2, "나머지 일반");
+  assert(
+    shortCand.oneThreeAssignments.some((a) => a.shift === "3부"),
+    "1·3 3부는 2부 스페어 다음"
+  );
+  assert(shortCand.regularAssignments.length >= 2, "나머지 일반");
   assert(shortCand.meta.oneThreeCandidateCount === 1, "candidate count 1");
 }
 
@@ -995,21 +1044,43 @@ section("1·3부: 배치 후 일반 순번 정상");
         teamName: "early3",
         rawRowIndex: 5,
       },
+      {
+        date,
+        course: "OCEAN",
+        shift: "3부",
+        teeTime: "16:08",
+        teamName: "mid3",
+        rawRowIndex: 6,
+      },
+      {
+        date,
+        course: "OCEAN",
+        shift: "3부",
+        teeTime: "16:16",
+        teamName: "late3",
+        rawRowIndex: 7,
+      },
     ],
   });
   assert(result.oneThreeAssignments.length === 2, "OT pair");
+  const ot1 = result.oneThreeAssignments.find((a) => a.shift === "1부");
+  const ot3 = result.oneThreeAssignments.find((a) => a.shift === "3부");
+  assert(ot1?.reservation.teeTime === "10:00", "OT 1부 late1");
+  const s3 = result.assignments
+    .filter((a) => a.shift === "3부")
+    .sort((a, b) => a.reservation.teeTime.localeCompare(b.reservation.teeTime));
+  const sp2 = result.sparesByShift.find((s) => s.shift === "2부")!;
+  assert(s3[0].caddy.id === sp2.spare1?.caddyId, "3부 선두 2부 스페어1");
+  assert(s3[1].caddy.id === sp2.spare2?.caddyId, "3부 둘째 2부 스페어2");
+  assert(ot3?.caddy.id === 940, "OT 3부는 스페어 다음");
   assert(
-    result.oneThreeAssignments.map((a) => a.reservation.teeTime).sort().join(",") ===
-      "10:00,16:00",
-    "OT took late1+early3"
-  );
-  assert(result.regularAssignments.length === 2, "2 regular left");
-  assert(
-    result.regularAssignments[0].caddy.id === ordered[0].id,
+    result.regularAssignments.filter((a) => a.shift === "1부")[0].caddy.id ===
+      ordered[0].id,
     "pointer starts at 0"
   );
   assert(
-    result.regularAssignments[1].caddy.id === ordered[1].id,
+    result.regularAssignments.filter((a) => a.shift === "2부")[0].caddy.id ===
+      ordered[1].id,
     "pointer continues"
   );
   assert(result.meta.availableCount === 5, "OT excluded from available");
@@ -1284,6 +1355,22 @@ section("1·2부: 1·3부 충돌 시 1·3부 우선");
         teeTime: "16:00",
         teamName: "s3",
         rawRowIndex: 4,
+      },
+      {
+        date,
+        course: "OCEAN",
+        shift: "3부",
+        teeTime: "16:08",
+        teamName: "s3b",
+        rawRowIndex: 5,
+      },
+      {
+        date,
+        course: "OCEAN",
+        shift: "3부",
+        teeTime: "16:16",
+        teamName: "s3c",
+        rawRowIndex: 6,
       },
     ],
   });
