@@ -15,6 +15,7 @@ import {
   LIVE_CHANGE_TYPES,
   makeAddReservation,
   makeAddReservationChange,
+  makeMoveReservationChange,
   previewLiveChangeFromDraft,
   type LiveChangeInput,
   type LiveChangePreview,
@@ -33,6 +34,12 @@ import {
   type AutoAssignResultV1,
   type AutoAssignmentRow,
 } from "@/lib/autoAssignEngine";
+import {
+  courseLabelKo,
+  parseMoveDestination,
+  reservationMoveBlockReason,
+  summarizeReservationMove,
+} from "@/lib/reservationMove";
 
 type Props = {
   draft: AssignmentDraft;
@@ -68,6 +75,9 @@ export function LiveChangePanel({
   const [addTeeTime, setAddTeeTime] = useState("07:00");
   const [addTeamName, setAddTeamName] = useState("당추");
   const [sickShift, setSickShift] = useState<ShiftPart>(defaultShift);
+  const [moveCourse, setMoveCourse] = useState<CourseCode>("VERTHILL");
+  const [moveShift, setMoveShift] = useState<ShiftPart>(defaultShift);
+  const [moveTeeTime, setMoveTeeTime] = useState("");
   const [preview, setPreview] = useState<LiveChangePreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -130,6 +140,14 @@ export function LiveChangePanel({
       }
       if (add.teeTime) setAddTeeTime(add.teeTime);
       setAddTeamName(add.teamName || "당추");
+    }
+    if (preset.type === "MOVE_RESERVATION" && preset.to) {
+      const dest = parseMoveDestination(preset.to);
+      if (dest) {
+        setMoveCourse(dest.course);
+        setMoveShift(dest.shift);
+        setMoveTeeTime(dest.teeTime);
+      }
     }
     setError(null);
     if (isLiveChangeReady(preset)) {
@@ -207,6 +225,13 @@ export function LiveChangePanel({
         reservationKey: reservationKeyValue,
         locked: lockOn,
       };
+    }
+    if (changeType === "MOVE_RESERVATION") {
+      if (!reservationKeyValue || !/^\d{2}:\d{2}$/.test(moveTeeTime)) return null;
+      return makeMoveReservationChange({
+        reservationKey: reservationKeyValue,
+        to: { course: moveCourse, shift: moveShift, teeTime: moveTeeTime },
+      });
     }
     return null;
   }
@@ -562,6 +587,60 @@ export function LiveChangePanel({
             </label>
           </>
         )}
+
+        {changeType === "MOVE_RESERVATION" && (
+          <>
+            <label>
+              대상 예약
+              <select
+                value={reservationKeyValue}
+                onChange={(e) => setReservationKeyValue(e.target.value)}
+              >
+                <option value="">선택</option>
+                {assignedOptions.map((o) => (
+                  <option key={o.key} value={o.key}>
+                    {o.label}
+                    {isPlacementLocked(o.row) ? " · LOCK" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              목적 코스
+              <select
+                value={moveCourse}
+                onChange={(e) => setMoveCourse(e.target.value as CourseCode)}
+              >
+                {COURSE_CODES.map((c) => (
+                  <option key={c} value={c}>
+                    {COURSE_LABELS[c]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              목적 부
+              <select
+                value={moveShift}
+                onChange={(e) => setMoveShift(e.target.value as ShiftPart)}
+              >
+                {SHIFT_PARTS.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              목적 티타임
+              <input
+                value={moveTeeTime}
+                onChange={(e) => setMoveTeeTime(e.target.value)}
+                placeholder="11:00"
+              />
+            </label>
+          </>
+        )}
       </div>
 
       <div className="live-change-actions">
@@ -660,6 +739,10 @@ export function LiveChangePanel({
       )}
 
       {error && <div className="ops-error">{error}</div>}
+
+      {preview && preview.changeType === "MOVE_RESERVATION" && (
+        <MovePreviewBlock preview={preview} />
+      )}
 
       {preview && (
         <div className="live-preview-dock" role="status">
@@ -961,6 +1044,7 @@ export function BoardQuickSheet({
   onClose,
   onRequestChange,
   onSwapClick,
+  onStartTeamMove,
 }: {
   mode: "team" | "caddy";
   row: AutoAssignmentRow;
@@ -969,6 +1053,7 @@ export function BoardQuickSheet({
   onClose: () => void;
   onRequestChange: (change: LiveChangeInput) => void;
   onSwapClick: () => void;
+  onStartTeamMove: (row: AutoAssignmentRow) => void;
 }) {
   const key = reservationIdentity(row.reservation);
   const limo = row.reservation.limousineCart === true;
@@ -999,6 +1084,13 @@ export function BoardQuickSheet({
         </div>
         {mode === "team" ? (
           <div className="qa-actions">
+            <button
+              type="button"
+              className="btn"
+              onClick={() => onStartTeamMove(row)}
+            >
+              팀 이동
+            </button>
             <button
               type="button"
               className="btn"
@@ -1129,3 +1221,170 @@ export function BoardQuickSheet({
     </div>
   );
 }
+
+function MovePreviewBlock({ preview }: { preview: LiveChangePreview }) {
+  if (preview.changeType !== "MOVE_RESERVATION") return null;
+  const event = preview.events.find((e) => e.type === "MOVE_RESERVATION");
+  if (!event || event.type !== "MOVE_RESERVATION") return null;
+  const move = summarizeReservationMove({
+    before: preview.before,
+    after: preview.after,
+    event,
+    warnings: preview.warnings,
+    placementDiffs: preview.placementDiffs,
+  });
+  if (!move) return null;
+  const freezeLabel =
+    move.freezeShifts.length > 0 ? move.freezeShifts.join(" · ") : "없음 (전부 재계산)";
+  return (
+    <div className="move-preview" role="status">
+      <div className="move-preview-title">팀 이동 미리보기</div>
+      <p className="move-preview-note">
+        기존 캐디는 팀과 함께 이동하지 않으며, 아래 캐디는 순번 재계산 결과입니다.
+      </p>
+      {move.fullDayWarning ? (
+        <p className="move-preview-warn">
+          1부 이동으로 인해 1·2·3부 캐디 순번이 재계산됩니다.
+        </p>
+      ) : null}
+      <ul className="move-preview-list">
+        <li>팀명 {move.teamName || "-"}</li>
+        <li>
+          기존 {courseLabelKo(move.from.course)} {move.from.shift} {move.from.teeTime}
+        </li>
+        <li>
+          목적 {courseLabelKo(move.to.course)} {move.to.shift} {move.to.teeTime}
+        </li>
+        <li>
+          기존 캐디 {move.beforeCaddy?.name || "미배치"}
+          {move.beforeCaddy ? ` (#${move.beforeCaddy.id})` : ""}
+        </li>
+        <li>
+          이동 후 캐디 {move.afterCaddy?.name || "미배치"}
+          {move.afterCaddy ? ` (#${move.afterCaddy.id})` : ""}
+          {move.sameCaddyBySequence ? " · 순번 결과 동일" : ""}
+        </li>
+        <li>reflow {move.reflowShifts.join(" · ")}</li>
+        <li>고정되는 부 {freezeLabel}</li>
+        <li>변경되는 placement {move.placementChangeCount}건</li>
+      </ul>
+    </div>
+  );
+}
+
+export function TeamMoveSheet({
+  row,
+  onClose,
+  onCancelMove,
+  onSubmit,
+}: {
+  row: AutoAssignmentRow;
+  onClose: () => void;
+  onCancelMove: () => void;
+  onSubmit: (change: LiveChangeInput) => void;
+}) {
+  const fromShift =
+    (SHIFT_PARTS as readonly string[]).includes(String(row.shift))
+      ? (row.shift as ShiftPart)
+      : "1부";
+  const fromCourse = String(row.reservation.course || "").toUpperCase() as CourseCode;
+  const [shift, setShift] = useState<ShiftPart>(fromShift);
+  const [course, setCourse] = useState<CourseCode>(
+    (COURSE_CODES as readonly string[]).includes(fromCourse) ? fromCourse : "VERTHILL"
+  );
+  const [teeTime, setTeeTime] = useState(row.reservation.teeTime || "");
+  const [formError, setFormError] = useState<string | null>(null);
+  const block = reservationMoveBlockReason(row);
+
+  function submit() {
+    if (block) {
+      setFormError(block.message);
+      return;
+    }
+    if (!/^\d{2}:\d{2}$/.test(teeTime)) {
+      setFormError("티타임은 HH:MM 형식으로 입력하세요.");
+      return;
+    }
+    onSubmit(
+      makeMoveReservationChange({
+        reservationKey: reservationIdentity(row.reservation),
+        reservationId: row.reservation.id,
+        to: { course, shift, teeTime },
+      })
+    );
+  }
+
+  return (
+    <div className="qa-overlay" role="presentation" onClick={onClose}>
+      <div
+        className="qa-sheet"
+        role="dialog"
+        aria-label="팀 이동"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="qa-sheet-head">
+          <strong>팀 이동 · {row.reservation.teamName || "팀"}</strong>
+          <button type="button" className="btn tiny ghost" onClick={onClose}>
+            닫기
+          </button>
+        </div>
+        <div className="qa-actions same-day-add-form">
+          <p className="move-sheet-copy">
+            기본은 보드 빈 칸을 탭하세요. 보드에 없는 티타임만 직접 입력합니다.
+          </p>
+          <p className="move-sheet-from">
+            현재 {courseLabelKo(String(row.reservation.course))} {row.shift}{" "}
+            {row.reservation.teeTime}
+          </p>
+          <label>
+            목적 부
+            <select
+              value={shift}
+              onChange={(e) => setShift(e.target.value as ShiftPart)}
+            >
+              {SHIFT_PARTS.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            목적 코스
+            <select
+              value={course}
+              onChange={(e) => setCourse(e.target.value as CourseCode)}
+            >
+              {COURSE_CODES.map((c) => (
+                <option key={c} value={c}>
+                  {COURSE_LABELS[c]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            목적 티타임
+            <input
+              value={teeTime}
+              onChange={(e) => setTeeTime(e.target.value)}
+              placeholder="HH:MM"
+              inputMode="numeric"
+            />
+          </label>
+          {block ? <div className="ops-error">{block.message}</div> : null}
+          {formError ? <div className="ops-error">{formError}</div> : null}
+          <button type="button" className="btn primary" onClick={submit} disabled={!!block}>
+            미리보기
+          </button>
+          <button type="button" className="btn ghost" onClick={onClose}>
+            보드에서 빈 칸 선택
+          </button>
+          <button type="button" className="btn ghost" onClick={onCancelMove}>
+            이동 취소
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+

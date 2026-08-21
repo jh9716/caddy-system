@@ -7,12 +7,14 @@ import {
   applyLiveChangeToMemory,
   applyLiveAssignmentChange,
   buildLiveChangePersistPlan,
+  changeFromEmptyBoardCell,
   emptyLiveChangeMemoryStore,
   hasBlockingLiveChangeError,
   isSequenceReflowLiveChange,
   liveBoardSnapshot,
   makeAddReservation,
   makeAddReservationChange,
+  makeMoveReservationChange,
   previewLiveAssignmentChange,
   previewLiveChangeFromDraft,
   LIVE_CHANGE_APPLY_USER_MESSAGE,
@@ -42,6 +44,13 @@ import {
   type AutoAssignResultV1,
 } from "../src/lib/autoAssignEngine";
 import { excludeCaddiesById } from "../src/lib/dailyOpsDuty";
+import {
+  emptyBoardCellAction,
+  freezeShiftsForMove,
+  isStableReservationMoveKey,
+  reflowShiftsForMove,
+  reservationMoveBlockReason,
+} from "../src/lib/reservationMove";
 
 let passed = 0;
 let failed = 0;
@@ -2237,6 +2246,27 @@ section("Quick Action은 확인 대상만 confirm, 나머지는 즉시 타입");
   assert(isSequenceReflowLiveChange("CADDY_SICK"), "sick reflows");
   assert(isSequenceReflowLiveChange("CADDY_ATTENDANCE_NOSHOW"), "결근 reflows");
   assert(!isSequenceReflowLiveChange("SWAP_CADDY"), "swap is not sequence reflow");
+  assert(!isInstantQuickAction("MOVE_RESERVATION"), "move is not instant");
+  assert(!needsQuickActionConfirm("MOVE_RESERVATION"), "move uses preview");
+  assert(isSequenceReflowLiveChange("MOVE_RESERVATION"), "move reflows");
+  assert(shouldReconcileLivePersist("MOVE_RESERVATION"), "move reconciles");
+  assert(!isPatchableLiveChange("MOVE_RESERVATION"), "move not patchable");
+  assert(
+    isLiveChangeReady({
+      type: "MOVE_RESERVATION",
+      reservationKey: "id:12",
+      to: { course: "SKY", shift: "2부", teeTime: "11:20" },
+    }),
+    "stable id key is ready"
+  );
+  assert(
+    !isLiveChangeReady({
+      type: "MOVE_RESERVATION",
+      reservationKey: "2026|SKY|1부|07:00",
+      to: { course: "SKY", shift: "2부", teeTime: "11:20" },
+    }),
+    "legacy composite key is not ready"
+  );
   assert(shouldReconcileLivePersist("CANCEL_RESERVATION"), "cancel reconciles server");
   assert(!shouldReconcileLivePersist("SWAP_CADDY"), "swap keeps optimistic patch");
   assert(!shouldReconcileLivePersist("SET_LOCK"), "lock keeps optimistic patch");
@@ -2646,6 +2676,360 @@ section("저장된 당번·마샬·조장은 3부 병가/당추 reflow 후보에
     add.after.assignments.every((a) => a.caddy.id !== 233),
     "당추 reflow에서도 당번 캐디가 regular 후보로 들어오지 않음"
   );
+}
+
+section("MOVE_RESERVATION 헬퍼 / 빈칸은 이동 모드에서 당추가 아님");
+{
+  assert(isStableReservationMoveKey("id:12"), "id key ok");
+  assert(!isStableReservationMoveKey("2026-08-22|SKY|1부|07:00|1|팀|SHEET"), "composite blocked");
+  assert(emptyBoardCellAction(null) === "add", "empty cell is 당추 by default");
+  assert(emptyBoardCellAction("id:12") === "move", "empty cell is dest in move mode");
+  assert(
+    JSON.stringify(freezeShiftsForMove("3부", "3부")) === JSON.stringify(["1부", "2부"]),
+    "3→3 freeze 1·2"
+  );
+  assert(
+    JSON.stringify(reflowShiftsForMove("2부", "3부")) === JSON.stringify(["2부", "3부"]),
+    "2→3 reflow 2·3"
+  );
+  assert(
+    JSON.stringify(freezeShiftsForMove("1부", "2부")) === JSON.stringify([]),
+    "1→2 freeze none"
+  );
+  const addCell = changeFromEmptyBoardCell({
+    date: "2026-08-22",
+    course: "SKY",
+    shift: "2부",
+    teeTime: "11:20",
+  });
+  assert(addCell.type === "ADD_RESERVATION", "no move key → 당추");
+  const moveCell = changeFromEmptyBoardCell({
+    date: "2026-08-22",
+    course: "SKY",
+    shift: "2부",
+    teeTime: "11:20",
+    moveReservationKey: "id:44",
+  });
+  assert(moveCell.type === "MOVE_RESERVATION", "move key → MOVE not ADD");
+  assert(moveCell.to?.course === "SKY", "dest course");
+  assert(moveCell.to?.shift === "2부", "dest shift");
+  assert(moveCell.to?.teeTime === "11:20", "dest tee");
+}
+
+function threeShiftBoard(date: string, pool: AutoAssignCaddy[]) {
+  return computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      res(date, "S1A", { teeTime: "07:00", shift: "1부", course: "SKY", teamName: "이동팀" }),
+      res(date, "S1B", { teeTime: "07:07", shift: "1부", course: "OCEAN" }),
+      res(date, "S1C", { teeTime: "07:14", shift: "1부", course: "LAKE" }),
+      res(date, "S2A", { teeTime: "11:20", shift: "2부", course: "SKY" }),
+      res(date, "S2B", { teeTime: "11:30", shift: "2부", course: "OCEAN" }),
+      res(date, "S3A", { teeTime: "16:00", shift: "3부", course: "SKY" }),
+      res(date, "S3B", { teeTime: "16:10", shift: "3부", course: "OCEAN" }),
+    ],
+  });
+}
+
+function moveTo(
+  previous: AutoAssignResultV1,
+  reservationId: string,
+  to: { course: string; shift: string; teeTime: string }
+) {
+  const row = previous.assignments.find((a) => a.reservation.id === reservationId);
+  if (!row) throw new Error(`missing ${reservationId}`);
+  return makeMoveReservationChange({
+    reservationKey: reservationKey(row.reservation),
+    reservationId: row.reservation.id,
+    to,
+  });
+}
+
+function countActive(result: AutoAssignResultV1): number {
+  return (
+    result.assignments.length + (result.unassignedReservations || []).length
+  );
+}
+
+section("MOVE 같은 부 시간/코스/동시 변경 + 캐디는 따라가지 않음");
+{
+  const date = "2026-09-28";
+  const pool = makeCaddies(16);
+  const previous = threeShiftBoard(date, pool);
+  const beforeCaddy = caddyOn(previous, "S1A");
+  const beforeCount = countActive(previous);
+
+  const timeOnly = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: moveTo(previous, "S1A", { course: "SKY", shift: "1부", teeTime: "07:40" }),
+  });
+  assert(timeOnly.reason === REASON.RESERVATION_MOVE_REFLOW, "time move reason");
+  const movedTime = timeOnly.after.assignments.find((a) => a.reservation.id === "S1A");
+  assert(movedTime?.reservation.teeTime === "07:40", "same shift time changed");
+  assert(movedTime?.reservation.course === "SKY", "course unchanged");
+  assert(movedTime?.caddy.id !== beforeCaddy, "caddy not copied on later tee");
+  assert(countActive(timeOnly.after) === beforeCount, "reservation count unchanged");
+
+  const courseOnly = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: moveTo(previous, "S1A", { course: "VERTHILL", shift: "1부", teeTime: "07:00" }),
+  });
+  const movedCourse = courseOnly.after.assignments.find((a) => a.reservation.id === "S1A");
+  assert(movedCourse?.reservation.course === "VERTHILL", "course changed");
+  assert(movedCourse?.reservation.teeTime === "07:00", "time unchanged");
+  if (movedCourse?.caddy.id === beforeCaddy) {
+    assert(true, "same caddy allowed when sequence picks them again");
+  } else {
+    assert(true, "sequence may also pick a different caddy");
+  }
+
+  const both = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: moveTo(previous, "S1A", { course: "VERTHILL", shift: "1부", teeTime: "07:40" }),
+  });
+  const movedBoth = both.after.assignments.find((a) => a.reservation.id === "S1A");
+  assert(movedBoth?.reservation.course === "VERTHILL", "course+time course");
+  assert(movedBoth?.reservation.teeTime === "07:40", "course+time tee");
+  assert(movedBoth?.caddy.id !== beforeCaddy, "caddy not copied on course+time");
+}
+
+section("MOVE 부 교차 freeze / fingerprint");
+{
+  const date = "2026-09-29";
+  const pool = makeCaddies(16);
+  const previous = threeShiftBoard(date, pool);
+  const fp1 = JSON.stringify(shiftSnap(previous, "1부"));
+  const fp2 = JSON.stringify(shiftSnap(previous, "2부"));
+
+  const same3 = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: moveTo(previous, "S3A", { course: "SKY", shift: "3부", teeTime: "16:40" }),
+  });
+  assert(JSON.stringify(shiftSnap(same3.after, "1부")) === fp1, "3→3 1부 불변");
+  assert(JSON.stringify(shiftSnap(same3.after, "2부")) === fp2, "3→3 2부 불변");
+  assert(
+    same3.after.assignments.find((a) => a.reservation.id === "S3A")?.reservation.teeTime ===
+      "16:40",
+    "3→3 dest time"
+  );
+
+  const twoToThree = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: moveTo(previous, "S2A", { course: "LAKE", shift: "3부", teeTime: "16:40" }),
+  });
+  assert(JSON.stringify(shiftSnap(twoToThree.after, "1부")) === fp1, "2→3 1부 불변");
+  assert(
+    twoToThree.after.assignments.find((a) => a.reservation.id === "S2A")?.shift === "3부",
+    "2→3 landed in 3부"
+  );
+
+  const threeToTwo = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: moveTo(previous, "S3A", { course: "LAKE", shift: "2부", teeTime: "11:50" }),
+  });
+  assert(JSON.stringify(shiftSnap(threeToTwo.after, "1부")) === fp1, "3→2 1부 불변");
+  assert(
+    threeToTwo.after.assignments.find((a) => a.reservation.id === "S3A")?.shift === "2부",
+    "3→2 landed in 2부"
+  );
+
+  const oneToTwo = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: moveTo(previous, "S1A", { course: "LAKE", shift: "2부", teeTime: "11:50" }),
+  });
+  assert(oneToTwo.reason === REASON.RESERVATION_MOVE_REFLOW, "1→2 reflow reason");
+  assert(
+    oneToTwo.after.assignments.find((a) => a.reservation.id === "S1A")?.shift === "2부",
+    "1→2 landed in 2부"
+  );
+  assert(
+    oneToTwo.after.assignments.some((a) => a.shift === "1부"),
+    "1부 still has remaining teams"
+  );
+}
+
+section("MOVE는 같은 row metadata 유지 / LOCK·특수·충돌 거부");
+{
+  const date = "2026-09-30";
+  const pool = makeCaddies(16);
+  const base = threeShiftBoard(date, pool);
+  const stamped: AutoAssignResultV1 = {
+    ...base,
+    assignments: base.assignments.map((row) =>
+      row.reservation.id === "S1A"
+        ? {
+            ...row,
+            reservation: {
+              ...row.reservation,
+              hole: 1,
+              sourceSheet: "IMPORT",
+              limousineCart: true,
+              rawRowIndex: 17,
+              teamName: "이동팀",
+            },
+          }
+        : row
+    ),
+  };
+  const preview = previewLiveAssignmentChange({
+    previous: stamped,
+    regularCaddyPool: pool,
+    change: moveTo(stamped, "S1A", { course: "VERTHILL", shift: "1부", teeTime: "07:40" }),
+  });
+  const after = preview.after.assignments.find((a) => a.reservation.id === "S1A")!;
+  assert(after.reservation.id === "S1A", "id kept");
+  assert(after.reservation.teamName === "이동팀", "team kept");
+  assert(after.reservation.sourceSheet === "IMPORT", "source kept");
+  assert(after.reservation.hole === 1, "hole kept");
+  assert(after.reservation.limousineCart === true, "limo kept");
+  assert(after.reservation.rawRowIndex === 17, "rawRowIndex kept");
+  assert(reservationKey(after.reservation) === reservationKey(stamped.assignments.find((a) => a.reservation.id === "S1A")!.reservation), "stable key");
+
+  const occupied = previewLiveAssignmentChange({
+    previous: stamped,
+    regularCaddyPool: pool,
+    change: moveTo(stamped, "S1A", { course: "OCEAN", shift: "1부", teeTime: "07:07" }),
+  });
+  assert(
+    occupied.warnings.some((w) => w.code === "DUPLICATE_COURSE_TEETIME"),
+    "dest occupied blocked"
+  );
+  assert(sameLiveBoard(occupied.after, stamped), "occupied is noop");
+
+  const lockedPrev = stampLocks(stamped, { S1A: true });
+  const locked = previewLiveAssignmentChange({
+    previous: lockedPrev,
+    regularCaddyPool: pool,
+    change: moveTo(lockedPrev, "S1A", { course: "VERTHILL", shift: "1부", teeTime: "07:40" }),
+  });
+  assert(locked.warnings.some((w) => w.code === "MOVE_LOCKED"), "LOCK blocked");
+  const lockRow = lockedPrev.assignments.find((a) => a.reservation.id === "S1A")!;
+  assert(reservationMoveBlockReason(lockRow)?.code === "MOVE_LOCKED", "UI lock reason");
+
+  const specialPrev: AutoAssignResultV1 = {
+    ...stamped,
+    assignments: stamped.assignments.map((row) =>
+      row.reservation.id === "S1A" ? { ...row, kind: "oneThree" as const } : row
+    ),
+  };
+  const special = previewLiveAssignmentChange({
+    previous: specialPrev,
+    regularCaddyPool: pool,
+    change: moveTo(specialPrev, "S1A", { course: "VERTHILL", shift: "1부", teeTime: "07:40" }),
+  });
+  assert(special.warnings.some((w) => w.code === "MOVE_SPECIAL"), "special blocked");
+
+  const drivingPrev: AutoAssignResultV1 = {
+    ...stamped,
+    assignments: stamped.assignments.map((row) =>
+      row.reservation.id === "S1A" ? { ...row, kind: "driving" as const } : row
+    ),
+  };
+  const driving = previewLiveAssignmentChange({
+    previous: drivingPrev,
+    regularCaddyPool: pool,
+    change: moveTo(drivingPrev, "S1A", { course: "VERTHILL", shift: "1부", teeTime: "07:40" }),
+  });
+  assert(driving.warnings.some((w) => w.code === "MOVE_DRIVING"), "driving blocked");
+
+  const closedPrev: AutoAssignResultV1 = {
+    ...stamped,
+    openCourses: ["SKY", "OCEAN", "LAKE"],
+  };
+  const closed = previewLiveAssignmentChange({
+    previous: closedPrev,
+    regularCaddyPool: pool,
+    change: moveTo(closedPrev, "S1A", {
+      course: "VERTHILL",
+      shift: "1부",
+      teeTime: "07:40",
+    }),
+  });
+  assert(closed.warnings.some((w) => w.code === "MOVE_CLOSED_COURSE"), "closed course blocked");
+}
+
+section("MOVE 풀 제외 DailyOpsDuty/RETIRED/LEAVE + 순번바꿈/당추/병가 회귀");
+{
+  const date = "2026-10-01";
+  const retired: AutoAssignCaddy = {
+    id: 801,
+    name: "퇴사",
+    team: "9조",
+    teamOrder: 1,
+    caddyType: "HOUSE",
+    employmentStatus: "RETIRED",
+  };
+  const leave: AutoAssignCaddy = {
+    id: 802,
+    name: "휴직",
+    team: "9조",
+    teamOrder: 1,
+    caddyType: "HOUSE",
+    employmentStatus: "LEAVE",
+  };
+  const duty: AutoAssignCaddy = {
+    id: 803,
+    name: "당번",
+    team: "5조",
+    teamOrder: 1,
+    caddyType: "HOUSE",
+    employmentStatus: "ACTIVE",
+  };
+  const pool = [...makeCaddies(16), retired, leave, duty].sort(compareCaddyOrder);
+  const previous = threeShiftBoard(date, pool);
+  const livePool = excludeCaddiesById(pool, [803]).filter(
+    (c) => c.employmentStatus !== "RETIRED" && c.employmentStatus !== "LEAVE"
+  );
+  const moved = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: livePool,
+    change: moveTo(previous, "S3A", { course: "LAKE", shift: "3부", teeTime: "16:40" }),
+  });
+  assert(
+    moved.after.assignments.every((a) => ![801, 802, 803].includes(a.caddy.id)),
+    "RETIRED/LEAVE/당번 제외 유지"
+  );
+
+  const a = previous.assignments[0];
+  const b = previous.assignments[1];
+  const swapped = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: {
+      type: "SWAP_CADDY",
+      reservationKeyA: reservationKey(a.reservation),
+      reservationKeyB: reservationKey(b.reservation),
+    },
+  });
+  assert(swapped.reason === REASON.CADDY_SWAP, "swap still works");
+
+  const added = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: makeAddReservationChange({
+      date,
+      course: "VERTHILL",
+      shift: "1부",
+      teeTime: "07:40",
+    }),
+  });
+  assert(added.reason === REASON.REGULAR_ADD_REFLOW, "당추 still works");
+
+  const sickId = previous.assignments.find((row) => row.shift === "3부")!.caddy.id;
+  const sick = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: { type: "CADDY_SICK", caddyId: sickId, shift: "3부" },
+  });
+  assert(sick.reason === REASON.CADDY_UNAVAILABLE_REFLOW, "sick still works");
 }
 
 async function runPersistTests() {
@@ -3164,6 +3548,246 @@ async function runPersistTests() {
       { memory: emptyLiveChangeMemoryStore() }
     );
     assert(other.ok === true, "other course same time apply ok");
+  }
+
+  section("MOVE apply는 같은 row 유지, CANCELLED/unavailable 없음, 충돌 거부");
+  {
+    const date = "2026-10-02";
+    const pool = makeCaddies(16);
+    const previous = threeShiftBoard(date, pool);
+    const store = emptyLiveChangeMemoryStore();
+    const change = moveTo(previous, "S1A", {
+      course: "VERTHILL",
+      shift: "1부",
+      teeTime: "07:40",
+    });
+    const applied = await applyLiveAssignmentChange(
+      { previous, regularCaddyPool: pool, change },
+      { memory: store }
+    );
+    assert(applied.ok === true, "move apply ok");
+    assert(store.changes[0]?.changeType === "MOVE_RESERVATION", "change type stored");
+    const payload = store.changes[0]?.payload as { move?: { from?: unknown; to?: unknown; reservationId?: unknown } };
+    assert(payload.move?.reservationId === "S1A", "payload reservationId");
+    assert(!!payload.move?.from && !!payload.move?.to, "payload from/to");
+    assert(store.unavailables.length === 0, "no DailyCaddyUnavailable");
+    assert(
+      store.reservations.every((r) => r.status === "ACTIVE"),
+      "no CANCELLED row"
+    );
+    assert(
+      store.reservations.length ===
+        previous.assignments.length + (previous.unassignedReservations || []).length,
+      "reservation count unchanged"
+    );
+    const moved = store.reservations.find((r) => r.identityKey === "id:S1A");
+    assert(moved?.course === "VERTHILL", "memory course updated");
+    assert(moved?.teeTime === "07:40", "memory tee updated");
+    assert(moved?.teamName === "이동팀", "memory team kept");
+
+    const dup = await applyLiveAssignmentChange(
+      {
+        previous,
+        regularCaddyPool: pool,
+        change: moveTo(previous, "S1A", {
+          course: "OCEAN",
+          shift: "1부",
+          teeTime: "07:07",
+        }),
+      },
+      { memory: emptyLiveChangeMemoryStore() }
+    );
+    assert(dup.ok === false, "occupied dest apply blocked");
+    assert(dup.ok === false && dup.code === "DUPLICATE_COURSE_TEETIME", "occupied code");
+  }
+
+  section("MOVE prisma persist는 reservation delete/create 없이 update");
+  {
+    const date = "2026-10-03";
+    const pool = makeCaddies(8);
+    const previous = computeAutoAssignmentsV1({
+      date,
+      available: pool,
+      reservations: [
+        res(date, "101", { teeTime: "07:00", course: "SKY", shift: "1부" }),
+        res(date, "102", { teeTime: "07:08", course: "OCEAN", shift: "1부" }),
+      ],
+    });
+    const counts = {
+      reservationDelete: 0,
+      reservationCreate: 0,
+      reservationUpdate: 0,
+      unavailableCreate: 0,
+      placementDelete: 0,
+      placementCreateMany: 0,
+    };
+    const fakeTx = {
+      dailyPlacement: {
+        deleteMany: async () => {
+          counts.placementDelete += 1;
+          return { count: 0 };
+        },
+        createMany: async (args: { data: unknown[] }) => {
+          counts.placementCreateMany += args.data.length;
+          return { count: args.data.length };
+        },
+        update: async () => ({}),
+      },
+      dailyReservation: {
+        findMany: async () => [
+          {
+            id: 101,
+            identityKey: "import:101",
+            course: "SKY",
+            shift: "1부",
+            teeTime: "07:00",
+            status: "ACTIVE",
+            teamName: "101",
+          },
+          {
+            id: 102,
+            identityKey: "import:102",
+            course: "OCEAN",
+            shift: "1부",
+            teeTime: "07:08",
+            status: "ACTIVE",
+            teamName: "102",
+          },
+        ],
+        update: async () => {
+          counts.reservationUpdate += 1;
+          return { id: 101 };
+        },
+        deleteMany: async () => {
+          counts.reservationDelete += 1;
+          return { count: 0 };
+        },
+        createManyAndReturn: async () => {
+          counts.reservationCreate += 1;
+          return [];
+        },
+        createMany: async () => {
+          counts.reservationCreate += 1;
+          return { count: 0 };
+        },
+      },
+      dailyCaddyUnavailable: {
+        deleteMany: async () => ({ count: 0 }),
+        createMany: async () => {
+          counts.unavailableCreate += 1;
+          return { count: 0 };
+        },
+      },
+      dailyAssignmentChange: {
+        create: async (args: { data: { changeType: string } }) => {
+          assert(args.data.changeType === "MOVE_RESERVATION", "prisma change enum");
+          return { id: 7 };
+        },
+      },
+      audit: { create: async () => ({ id: 8 }) },
+      shiftDuty: { count: async () => 0 },
+    };
+    const fakePrisma = {
+      $transaction: async (fn: (tx: typeof fakeTx) => Promise<unknown>) => fn(fakeTx),
+    };
+    const result = await applyLiveAssignmentChange(
+      {
+        previous,
+        regularCaddyPool: pool,
+        change: moveTo(previous, "101", {
+          course: "VERTHILL",
+          shift: "1부",
+          teeTime: "07:40",
+        }),
+      },
+      { prisma: fakePrisma as never, updateOpsIfPresent: false }
+    );
+    assert(result.ok === true, "numeric-id move persist ok");
+    assert(counts.reservationDelete === 0, "MOVE does not delete reservations");
+    assert(counts.reservationCreate === 0, "MOVE does not create reservations");
+    assert(counts.reservationUpdate === 1, "MOVE updates the same row");
+    assert(counts.unavailableCreate === 0, "MOVE creates no unavailable");
+    assert(counts.placementDelete === 1, "placements rewritten");
+    assert(counts.placementCreateMany > 0, "placements recreated");
+  }
+
+  section("MOVE prisma persist는 트랜잭션 안 목적지 충돌을 다시 검사");
+  {
+    const date = "2026-10-04";
+    const pool = makeCaddies(8);
+    const previous = computeAutoAssignmentsV1({
+      date,
+      available: pool,
+      reservations: [
+        res(date, "201", { teeTime: "07:00", course: "SKY", shift: "1부" }),
+        res(date, "202", { teeTime: "07:08", course: "OCEAN", shift: "1부" }),
+      ],
+    });
+    const fakeTx = {
+      dailyPlacement: {
+        deleteMany: async () => ({ count: 0 }),
+        createMany: async () => ({ count: 0 }),
+      },
+      dailyReservation: {
+        findMany: async () => [
+          {
+            id: 201,
+            identityKey: "import:201",
+            course: "SKY",
+            shift: "1부",
+            teeTime: "07:00",
+            status: "ACTIVE",
+          },
+          {
+            id: 202,
+            identityKey: "import:202",
+            course: "OCEAN",
+            shift: "1부",
+            teeTime: "07:08",
+            status: "ACTIVE",
+          },
+          {
+            id: 999,
+            identityKey: "hidden",
+            course: "VERTHILL",
+            shift: "1부",
+            teeTime: "07:40",
+            status: "ACTIVE",
+          },
+        ],
+        update: async () => {
+          throw new Error("should not update on collision");
+        },
+        deleteMany: async () => ({ count: 0 }),
+      },
+      dailyCaddyUnavailable: {
+        deleteMany: async () => ({ count: 0 }),
+        createMany: async () => ({ count: 0 }),
+      },
+      dailyAssignmentChange: { create: async () => ({ id: 1 }) },
+      audit: { create: async () => ({ id: 1 }) },
+      shiftDuty: { count: async () => 0 },
+    };
+    const fakePrisma = {
+      $transaction: async (fn: (tx: typeof fakeTx) => Promise<unknown>) => fn(fakeTx),
+    };
+    const result = await applyLiveAssignmentChange(
+      {
+        previous,
+        regularCaddyPool: pool,
+        change: moveTo(previous, "201", {
+          course: "VERTHILL",
+          shift: "1부",
+          teeTime: "07:40",
+        }),
+      },
+      { prisma: fakePrisma as never, updateOpsIfPresent: false }
+    );
+    assert(result.ok === false, "tx collision blocked");
+    assert(
+      result.ok === false && result.code === "DUPLICATE_COURSE_TEETIME",
+      "tx collision reuses duplicate code"
+    );
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);

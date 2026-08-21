@@ -30,6 +30,12 @@ import {
   type ReservationChangeEvent,
 } from "@/lib/autoAssignEngine";
 import type { ShiftPart } from "@/lib/reservationParser";
+import {
+  isStableReservationMoveKey,
+  parseMoveDestination,
+  stableReservationMoveKeyFromId,
+  summarizeReservationMove,
+} from "@/lib/reservationMove";
 
 export const LIVE_CHANGE_TYPES = [
   "CANCEL_RESERVATION",
@@ -42,6 +48,7 @@ export const LIVE_CHANGE_TYPES = [
   "ASSIGN_DRIVING",
   "CLEAR_DRIVING",
   "SET_LOCK",
+  "MOVE_RESERVATION",
 ] as const;
 
 export type LiveChangeType = (typeof LIVE_CHANGE_TYPES)[number];
@@ -57,6 +64,7 @@ export const LIVE_CHANGE_LABELS: Record<LiveChangeType, string> = {
   ASSIGN_DRIVING: "드라이빙 캐디 지정",
   CLEAR_DRIVING: "드라이빙 지정 해제",
   SET_LOCK: "LOCK 변경",
+  MOVE_RESERVATION: "팀 이동",
 };
 
 export const LIVE_CHANGE_APPLY_USER_MESSAGE =
@@ -109,6 +117,7 @@ export const SEQUENCE_REFLOW_LIVE_CHANGE_TYPES: readonly LiveChangeType[] = [
   "TEAM_NOSHOW",
   "CADDY_SICK",
   "CADDY_ATTENDANCE_NOSHOW",
+  "MOVE_RESERVATION",
 ];
 
 export function isSequenceReflowLiveChange(type: LiveChangeType): boolean {
@@ -153,6 +162,12 @@ export function isLiveChangeReady(
         (!!change.reservationKey || change.reservationId != null) &&
         Number(change.caddyId) > 0
       );
+    case "MOVE_RESERVATION":
+      return (
+        (isStableReservationMoveKey(change.reservationKey) ||
+          change.reservationId != null) &&
+        !!parseMoveDestination(change.to)
+      );
     default:
       return false;
   }
@@ -171,6 +186,12 @@ export type LiveChangeInput = {
   limousineCart?: boolean;
   locked?: boolean;
   note?: string | null;
+  to?: {
+    course: string;
+    shift: string;
+    teeTime: string;
+    date?: string;
+  };
 };
 
 export type LiveChangePreview = RegularReflowResult & {
@@ -331,6 +352,43 @@ export function eventsFromLiveChange(
         },
       ];
     }
+    case "MOVE_RESERVATION": {
+      const dest = parseMoveDestination(input.to);
+      if (!dest) return [];
+      const reservationKey =
+        (isStableReservationMoveKey(input.reservationKey) &&
+          input.reservationKey) ||
+        (input.reservationId != null
+          ? stableReservationMoveKeyFromId(input.reservationId)
+          : null) ||
+        input.reservationKey;
+      if (
+        !isStableReservationMoveKey(reservationKey) &&
+        input.reservationId == null
+      ) {
+        return [
+          {
+            type: "MOVE_RESERVATION",
+            reservationKey: input.reservationKey,
+            reservationId: input.reservationId,
+            to: dest,
+          },
+        ];
+      }
+      return [
+        {
+          type: "MOVE_RESERVATION",
+          reservationKey: reservationKey || undefined,
+          reservationId: input.reservationId,
+          to: {
+            course: dest.course,
+            shift: dest.shift,
+            teeTime: dest.teeTime,
+            date: input.to?.date,
+          },
+        },
+      ];
+    }
     default:
       return [];
   }
@@ -456,6 +514,7 @@ function inferChangeType(events: ReservationChangeEvent[]): LiveChangeType {
     if (e.type === "ASSIGN_DRIVING") return "ASSIGN_DRIVING";
     if (e.type === "CLEAR_DRIVING") return "CLEAR_DRIVING";
     if (e.type === "SET_LOCK") return "SET_LOCK";
+    if (e.type === "MOVE_RESERVATION") return "MOVE_RESERVATION";
     if (e.type === "ADD_RESERVATION") return "ADD_RESERVATION";
     if (e.type === "REMOVE_CADDY") {
       return e.cause === "SICK" ? "CADDY_SICK" : "CADDY_ATTENDANCE_NOSHOW";
@@ -552,6 +611,58 @@ export function buildLiveChangePersistPlan(
     });
   }
 
+  const payload: Record<string, unknown> = {
+    changeType: preview.changeType,
+    reason: preview.reason,
+    summary: preview.summary,
+    warnings: preview.warnings,
+    unavailableCaddyIds: preview.unavailableCaddyIds,
+    effectiveFromShift: unavailables.map((u) => ({
+      caddyId: u.caddyId,
+      effectiveFromShift: u.effectiveFromShift,
+    })),
+    sparesByShift: preview.after.sparesByShift,
+    lockedPreserved: preview.lockedPreserved,
+    placementDiffs: preview.placementDiffs.map((d) => ({
+      reservationKey: d.reservationKey,
+      beforeCaddyId: d.beforeCaddy?.id ?? null,
+      afterCaddyId: d.afterCaddy?.id ?? null,
+      lockedPreserved: d.lockedPreserved,
+      course: d.reservation.course,
+      teeTime: d.reservation.teeTime,
+      shift: d.reservation.shift,
+    })),
+  };
+
+  if (preview.changeType === "MOVE_RESERVATION") {
+    const event = preview.events.find((e) => e.type === "MOVE_RESERVATION");
+    const move =
+      event && event.type === "MOVE_RESERVATION"
+        ? summarizeReservationMove({
+            before: preview.before,
+            after: preview.after,
+            event,
+            warnings: preview.warnings,
+            placementDiffs: preview.placementDiffs,
+          })
+        : null;
+    if (move) {
+      payload.move = {
+        reservationId: move.reservationId,
+        reservationKey: move.reservationKey,
+        from: move.from,
+        to: move.to,
+        placementChangeCount: move.placementChangeCount,
+        freezeShifts: move.freezeShifts,
+        reflowShifts: move.reflowShifts,
+        beforeCaddyId: move.beforeCaddy?.id ?? null,
+        afterCaddyId: move.afterCaddy?.id ?? null,
+        sameCaddyBySequence: move.sameCaddyBySequence,
+        caddyFollowsTeam: false,
+      };
+    }
+  }
+
   return {
     date,
     dateObj,
@@ -560,28 +671,7 @@ export function buildLiveChangePersistPlan(
     reservations,
     placements,
     unavailables,
-    payload: {
-      changeType: preview.changeType,
-      reason: preview.reason,
-      summary: preview.summary,
-      warnings: preview.warnings,
-      unavailableCaddyIds: preview.unavailableCaddyIds,
-      effectiveFromShift: unavailables.map((u) => ({
-        caddyId: u.caddyId,
-        effectiveFromShift: u.effectiveFromShift,
-      })),
-      sparesByShift: preview.after.sparesByShift,
-      lockedPreserved: preview.lockedPreserved,
-      placementDiffs: preview.placementDiffs.map((d) => ({
-        reservationKey: d.reservationKey,
-        beforeCaddyId: d.beforeCaddy?.id ?? null,
-        afterCaddyId: d.afterCaddy?.id ?? null,
-        lockedPreserved: d.lockedPreserved,
-        course: d.reservation.course,
-        teeTime: d.reservation.teeTime,
-        shift: d.reservation.shift,
-      })),
-    },
+    payload,
   };
 }
 
@@ -644,8 +734,152 @@ function mapChangeType(
   | "SWAP_CADDY"
   | "SET_LIMOUSINE"
   | "ASSIGN_DRIVING"
-  | "CLEAR_DRIVING" {
+  | "CLEAR_DRIVING"
+  | "MOVE_RESERVATION" {
   return type;
+}
+
+export class LiveChangePersistError extends Error {
+  code: string;
+  httpStatus: number;
+  constructor(code: string, message: string, httpStatus = 400) {
+    super(message);
+    this.name = "LiveChangePersistError";
+    this.code = code;
+    this.httpStatus = httpStatus;
+  }
+}
+
+function numericMoveReservationId(
+  event: Extract<ReservationChangeEvent, { type: "MOVE_RESERVATION" }>
+): number | null {
+  const raw =
+    event.reservationId != null && String(event.reservationId) !== ""
+      ? String(event.reservationId)
+      : isStableReservationMoveKey(event.reservationKey)
+        ? String(event.reservationKey).slice(3)
+        : "";
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) return null;
+  return n;
+}
+
+async function persistMovedReservationDay(
+  tx: Prisma.TransactionClient,
+  plan: LiveChangePersistPlan,
+  preview: LiveChangePreview
+): Promise<void> {
+  const event = preview.events.find((e) => e.type === "MOVE_RESERVATION");
+  if (!event || event.type !== "MOVE_RESERVATION") {
+    throw new LiveChangePersistError(
+      "MOVE_NOT_FOUND",
+      "이동할 예약을 찾을 수 없습니다."
+    );
+  }
+  const dest = parseMoveDestination(event.to);
+  if (!dest) {
+    throw new LiveChangePersistError(
+      "MOVE_BAD_DESTINATION",
+      "목적 코스·부·티타임을 확인하세요."
+    );
+  }
+  if (event.to.date && String(event.to.date) !== plan.date) {
+    throw new LiveChangePersistError(
+      "MOVE_DATE_CHANGE",
+      "다른 날짜로는 이동할 수 없습니다."
+    );
+  }
+
+  const existing = await tx.dailyReservation.findMany({
+    where: { date: plan.dateObj },
+  });
+  const numericId = numericMoveReservationId(event);
+  const source =
+    (numericId != null ? existing.find((row) => row.id === numericId) : null) ||
+    (isStableReservationMoveKey(event.reservationKey)
+      ? existing.find((row) => row.identityKey === event.reservationKey)
+      : null) ||
+    existing.find(
+      (row) =>
+        numericId != null && row.identityKey === `id:${numericId}`
+    );
+
+  if (!source) {
+    throw new LiveChangePersistError(
+      "MOVE_NOT_FOUND",
+      "이동할 예약을 찾을 수 없습니다."
+    );
+  }
+  if (source.status !== "ACTIVE") {
+    throw new LiveChangePersistError(
+      "MOVE_SOURCE_INACTIVE",
+      "취소/노쇼 예약은 이동할 수 없습니다."
+    );
+  }
+  if (
+    source.course === dest.course &&
+    source.shift === dest.shift &&
+    source.teeTime === dest.teeTime
+  ) {
+    throw new LiveChangePersistError(
+      "MOVE_SAME_SLOT",
+      "목적지가 현재 위치와 같습니다."
+    );
+  }
+  const collision = existing.find(
+    (row) =>
+      row.id !== source.id &&
+      row.status === "ACTIVE" &&
+      row.course === dest.course &&
+      row.shift === dest.shift &&
+      row.teeTime === dest.teeTime
+  );
+  if (collision) {
+    throw new LiveChangePersistError(
+      "DUPLICATE_COURSE_TEETIME",
+      `해당 코스/티타임에 이미 예약이 있습니다 (${collision.course} ${collision.teeTime}).`
+    );
+  }
+
+  await tx.dailyReservation.update({
+    where: { id: source.id },
+    data: {
+      course: dest.course,
+      shift: dest.shift,
+      teeTime: dest.teeTime,
+    },
+  });
+
+  const byId = new Map(existing.map((row) => [row.id, row]));
+  const byIdentity = new Map(existing.map((row) => [row.identityKey, row]));
+  const resolveExistingId = (identityKey: string): number | null => {
+    if (identityKey.startsWith("id:")) {
+      const n = Number(identityKey.slice(3));
+      if (Number.isInteger(n) && byId.has(n)) return n;
+    }
+    return byIdentity.get(identityKey)?.id ?? null;
+  };
+
+  await tx.dailyPlacement.deleteMany({ where: { date: plan.dateObj } });
+  const placementData = plan.placements
+    .map((row) => {
+      const reservationId = resolveExistingId(row.identityKey);
+      if (!reservationId) return null;
+      return {
+        date: plan.dateObj,
+        reservationId,
+        caddyId: row.caddyId,
+        kind: row.kind,
+        reason: row.reason,
+        sequenceIndex: row.sequenceIndex,
+        pairId: row.pairId,
+        locked: row.locked,
+      };
+    })
+    .filter((row): row is NonNullable<typeof row> => row != null);
+  if (placementData.length > 0) {
+    await tx.dailyPlacement.createMany({ data: placementData });
+  }
 }
 
 function mapReservationStatus(
@@ -746,6 +980,9 @@ async function writePlanWithPrisma(
     async (tx) => {
       const patched = await tryPatchLiveDay(tx, plan, preview);
       if (!patched) {
+        if (plan.changeType === "MOVE_RESERVATION") {
+          await persistMovedReservationDay(tx, plan, preview);
+        } else {
         await tx.dailyPlacement.deleteMany({ where: { date: plan.dateObj } });
         await tx.dailyReservation.deleteMany({ where: { date: plan.dateObj } });
 
@@ -791,6 +1028,7 @@ async function writePlanWithPrisma(
           .filter((row): row is NonNullable<typeof row> => row != null);
         if (placementData.length > 0) {
           await tx.dailyPlacement.createMany({ data: placementData });
+        }
         }
       }
 
@@ -965,6 +1203,14 @@ export async function applyLiveAssignmentChange(
       preview,
     };
   } catch (e: unknown) {
+    if (e instanceof LiveChangePersistError) {
+      return {
+        ok: false,
+        httpStatus: e.httpStatus,
+        code: e.code,
+        message: e.message,
+      };
+    }
     console.error("[applyLiveAssignmentChange]", e);
     return {
       ok: false,
@@ -1008,6 +1254,47 @@ export function makeAddReservationChange(input: {
     type: "ADD_RESERVATION",
     addReservation: makeAddReservation(input),
   };
+}
+
+export function makeMoveReservationChange(input: {
+  reservationKey?: string;
+  reservationId?: string | number;
+  to: { course: string; shift: string; teeTime: string; date?: string };
+}): LiveChangeInput {
+  return {
+    type: "MOVE_RESERVATION",
+    reservationKey: input.reservationKey,
+    reservationId: input.reservationId,
+    to: input.to,
+  };
+}
+
+/** 빈 보드 칸: 이동 모드면 목적지, 아니면 당추. */
+export function changeFromEmptyBoardCell(input: {
+  date: string;
+  course: string;
+  shift: ShiftPart | string;
+  teeTime: string;
+  teamName?: string | null;
+  moveReservationKey?: string | null;
+}): LiveChangeInput {
+  if (input.moveReservationKey) {
+    return makeMoveReservationChange({
+      reservationKey: input.moveReservationKey,
+      to: {
+        course: input.course,
+        shift: String(input.shift),
+        teeTime: input.teeTime,
+      },
+    });
+  }
+  return makeAddReservationChange({
+    date: input.date,
+    course: input.course,
+    shift: input.shift,
+    teeTime: input.teeTime,
+    teamName: input.teamName,
+  });
 }
 
 export function hasBlockingLiveChangeError(

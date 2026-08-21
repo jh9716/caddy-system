@@ -444,6 +444,7 @@ enum DailyAssignmentChangeType {
   SET_LIMOUSINE
   ASSIGN_DRIVING
   CLEAR_DRIVING
+  MOVE_RESERVATION
 }
 
 /// 현장 배치 변경 이력. preview는 저장하지 않고 apply 시에만 row 생성.
