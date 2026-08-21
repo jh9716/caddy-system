@@ -91,6 +91,19 @@ function formatPhoneDisplay(phoneNormalized: string | null | undefined): string 
   return maskKrMobile(phoneNormalized) ?? '—';
 }
 
+function rosterImportFormatLabel(format?: string | null): string {
+  if (format === 'xlsx-v2') return 'XLSX v2';
+  if (format === 'xlsx-v1') return 'XLSX v1';
+  if (format === 'csv-v2') return 'CSV v2';
+  return format ? String(format) : '미확인';
+}
+
+function isRosterImportV2ApplyFormat(
+  format?: string | null
+): format is 'csv-v2' | 'xlsx-v2' {
+  return format === 'csv-v2' || format === 'xlsx-v2';
+}
+
 export default function ManageCaddiesPage() {
   const [rows, setRows] = useState<Caddy[]>([]);
   const [loading, setLoading] = useState(false);
@@ -114,18 +127,26 @@ export default function ManageCaddiesPage() {
 
   /** 명단 Import v2 Preview */
   type ImportPreviewLine = {
-    action: 'update' | 'create' | 'unchanged' | 'needsReview' | 'missingInImport';
+    action:
+      | 'update'
+      | 'create'
+      | 'unchanged'
+      | 'needsReview'
+      | 'missingInImport'
+      | 'phoneOnlyUpdate'
+      | string;
     id: number | null;
     name: string;
     currentTeam: string | null;
     nextTeam: string | null;
-    currentTeamOrder: number | null;
-    nextTeamOrder: number | null;
-    currentEmploymentStatus: string | null;
-    nextEmploymentStatus: string | null;
-    phoneChanged: boolean;
-    currentMaskedPhone: string | null;
-    nextMaskedPhone: string | null;
+    currentTeamOrder?: number | null;
+    nextTeamOrder?: number | null;
+    currentEmploymentStatus?: string | null;
+    nextEmploymentStatus?: string | null;
+    phoneChanged?: boolean;
+    currentMaskedPhone?: string | null;
+    nextMaskedPhone?: string | null;
+    maskedPhone?: string | null;
     currentThirdBandSubgroup?: ThirdBandSubgroup | null;
     nextThirdBandSubgroup?: ThirdBandSubgroup | null;
     reason?: string;
@@ -133,15 +154,18 @@ export default function ManageCaddiesPage() {
   type ImportPreview = {
     format?: string;
     summary: {
-      inputPeople: number;
+      inputPeople?: number;
+      uniqueImportPeople?: number;
       update: number;
-      create: number;
+      create?: number;
+      new?: number;
       unchanged: number;
       needsReview: number;
       missingInImport: number;
-      phoneIssues: number;
-      teamOrderConflicts: number;
-      applyBlocked: boolean;
+      phoneIssues?: number;
+      teamOrderConflicts?: number;
+      applyBlocked?: boolean;
+      applyBlockedByPhone?: boolean;
       phoneColumnPresent?: boolean;
     };
     lines: ImportPreviewLine[];
@@ -1652,7 +1676,7 @@ export default function ManageCaddiesPage() {
       {viewMode === 'detail' && importOpen && (
         <section className="cm-card cm-import" aria-label="명단 가져오기">
           <div className="cm-import-head">
-            <h3>명단 가져오기 (CSV)</h3>
+            <h3>명단 가져오기 (CSV/Excel)</h3>
             <button
               type="button"
               className="cm-btn cm-btn-sm"
@@ -1668,15 +1692,16 @@ export default function ManageCaddiesPage() {
           </div>
           <p className="cm-import-help">
             컬럼: <code>id,name,team,teamOrder,employmentStatus,phone[,thirdBandSubgroup]</code>
-            · id는 선택 · 빈 선택필드는 기존 유지 · 일반=3부구분 해제 · 삭제/재생성 없음 · extraFlags 미반영
-            · 이 CSV는 최신 전체 일반 캐디(1~12조) 명단으로 처리됩니다. 일부 조만 올리면 파일에 없는 다른 조 재직/휴직자가 명단 누락으로 표시됩니다. 드라이빙은 대상이 아닙니다.
+            · CSV 또는 표 형식 XLSX/XLS (첫 시트만, 시트 병합 없음) · id는 선택 · 빈 선택필드는 기존 유지 · 일반=3부구분 해제 · 삭제/재생성 없음 · extraFlags 미반영
+            · 표 형식 CSV/XLSX는 최신 전체 일반 캐디(1~12조) 명단으로 처리됩니다. 일부 조만 올리면 파일에 없는 다른 조 재직/휴직자가 명단 누락으로 표시됩니다. 드라이빙은 대상이 아닙니다.
+            · 조 제목형 XLSX(v1)는 Preview만 가능하며 Apply v2로 반영하지 않습니다.
           </p>
           <div className="cm-import-actions">
             <label className="cm-btn cm-btn-sm cm-file-label">
-              CSV 선택
+              파일 선택
               <input
                 type="file"
-                accept=".csv,text/csv"
+                accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 hidden
                 disabled={importBusy}
                 onChange={async (e) => {
@@ -1705,12 +1730,6 @@ export default function ManageCaddiesPage() {
                       setMessage(data?.error || 'Preview 실패');
                       return;
                     }
-                    if (data.format && data.format !== 'csv-v2') {
-                      setMessage(
-                        '이 화면은 CSV v2만 지원합니다. XLSX는 별도 경로를 사용하세요.'
-                      );
-                      return;
-                    }
                     setImportPreview(data);
                   } catch {
                     setMessage('Preview 중 오류가 발생했습니다.');
@@ -1723,19 +1742,26 @@ export default function ManageCaddiesPage() {
             {importFileName && (
               <span className="cm-muted">파일: {importFileName}</span>
             )}
+            {importPreview?.format && (
+              <span className="cm-import-format">
+                인식 형식: {rosterImportFormatLabel(importPreview.format)}
+              </span>
+            )}
             <button
               type="button"
               className="cm-btn cm-btn-primary cm-btn-sm"
               disabled={
                 importBusy ||
+                !isRosterImportV2ApplyFormat(importPreview?.format) ||
                 !importPreview?.applyPayload ||
-                importPreview.summary.applyBlocked
+                !!importPreview.summary.applyBlocked
               }
               onClick={async () => {
                 if (!importPreview?.applyPayload) return;
+                if (!isRosterImportV2ApplyFormat(importPreview.format)) return;
                 if (
                   !confirm(
-                    `명단을 반영할까요?\n이 CSV는 최신 전체 일반 캐디(1~12조) 명단으로 처리됩니다.\n갱신 ${importPreview.summary.update} · 신규 ${importPreview.summary.create}\n파일에 없는 재직/휴직자는 '명단 누락'으로 표시됩니다(자동 퇴사/삭제 없음).\n일부 조만 올리면 다른 조 재직자도 누락으로 표시됩니다.`
+                    `명단을 반영할까요?\n이 파일은 최신 전체 일반 캐디(1~12조) 명단으로 처리됩니다.\n갱신 ${importPreview.summary.update} · 신규 ${importPreview.summary.create ?? 0}\n파일에 없는 재직/휴직자는 '명단 누락'으로 표시됩니다(자동 퇴사/삭제 없음).\n일부 조만 올리면 다른 조 재직자도 누락으로 표시됩니다.`
                   )
                 ) {
                   return;
@@ -1749,6 +1775,7 @@ export default function ManageCaddiesPage() {
                     headers: { 'Content-Type': 'application/json' },
                     credentials: 'include',
                     body: JSON.stringify({
+                      format: importPreview.format,
                       applyPayload: importPreview.applyPayload,
                     }),
                   });
@@ -1797,28 +1824,85 @@ export default function ManageCaddiesPage() {
                 {importApplyFailed && (
                   <span className="is-warn">Preview 미반영</span>
                 )}
-                <span>입력 {importPreview.summary.inputPeople}</span>
-                <span>갱신 {importPreview.summary.update}</span>
-                <span>신규 {importPreview.summary.create}</span>
-                <span>변경없음 {importPreview.summary.unchanged}</span>
-                <span className={importPreview.summary.needsReview ? 'is-warn' : ''}>
-                  검토필요 {importPreview.summary.needsReview}
+                <span className="cm-import-format">
+                  인식 형식: {rosterImportFormatLabel(importPreview.format)}
                 </span>
-                <span className={importPreview.summary.missingInImport ? 'is-warn' : ''}>
-                  누락경고 {importPreview.summary.missingInImport}
-                </span>
-                <span className={importPreview.summary.phoneIssues ? 'is-warn' : ''}>
-                  전화문제 {importPreview.summary.phoneIssues}
-                </span>
-                <span
-                  className={
-                    importPreview.summary.teamOrderConflicts ? 'is-warn' : ''
-                  }
-                >
-                  순번충돌 {importPreview.summary.teamOrderConflicts}
-                </span>
+                {importPreview.format === 'xlsx-v1' ? (
+                  <>
+                    <span>
+                      입력 {importPreview.summary.uniqueImportPeople ?? 0}
+                    </span>
+                    <span>갱신 {importPreview.summary.update}</span>
+                    <span>신규 {importPreview.summary.new ?? 0}</span>
+                    <span>변경없음 {importPreview.summary.unchanged}</span>
+                    <span
+                      className={
+                        importPreview.summary.needsReview ? 'is-warn' : ''
+                      }
+                    >
+                      검토필요 {importPreview.summary.needsReview}
+                    </span>
+                    <span
+                      className={
+                        importPreview.summary.missingInImport ? 'is-warn' : ''
+                      }
+                    >
+                      누락경고 {importPreview.summary.missingInImport}
+                    </span>
+                    <span
+                      className={
+                        importPreview.summary.phoneIssues ? 'is-warn' : ''
+                      }
+                    >
+                      전화문제 {importPreview.summary.phoneIssues ?? 0}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span>입력 {importPreview.summary.inputPeople ?? 0}</span>
+                    <span>갱신 {importPreview.summary.update}</span>
+                    <span>신규 {importPreview.summary.create ?? 0}</span>
+                    <span>변경없음 {importPreview.summary.unchanged}</span>
+                    <span
+                      className={
+                        importPreview.summary.needsReview ? 'is-warn' : ''
+                      }
+                    >
+                      검토필요 {importPreview.summary.needsReview}
+                    </span>
+                    <span
+                      className={
+                        importPreview.summary.missingInImport ? 'is-warn' : ''
+                      }
+                    >
+                      누락경고 {importPreview.summary.missingInImport}
+                    </span>
+                    <span
+                      className={
+                        importPreview.summary.phoneIssues ? 'is-warn' : ''
+                      }
+                    >
+                      전화문제 {importPreview.summary.phoneIssues ?? 0}
+                    </span>
+                    <span
+                      className={
+                        importPreview.summary.teamOrderConflicts ? 'is-warn' : ''
+                      }
+                    >
+                      순번충돌 {importPreview.summary.teamOrderConflicts ?? 0}
+                    </span>
+                  </>
+                )}
               </div>
-              {importPreview.summary.applyBlocked && (
+              {importPreview.format === 'xlsx-v1' && (
+                <p className="cm-import-block">
+                  조 제목형 XLSX v1로 인식되었습니다. 기존 Preview만 표시하며
+                  Apply v2(표 형식 CSV/XLSX)로 반영하지 않습니다. 반영하려면
+                  Export와 같은 세로 표 형식 CSV 또는 XLSX를 올리세요.
+                </p>
+              )}
+              {isRosterImportV2ApplyFormat(importPreview.format) &&
+                importPreview.summary.applyBlocked && (
                 <p className="cm-import-block">
                   needsReview / 전화번호 문제 / 조·순번 충돌이 있어 Apply가
                   비활성화되었습니다. 수정 후 다시 Preview 하세요. 누락 경고만으로는
@@ -1836,7 +1920,8 @@ export default function ManageCaddiesPage() {
                   ))}
                 </ul>
               )}
-              {(importPreview.teamOrderConflicts?.length ?? 0) > 0 && (
+              {isRosterImportV2ApplyFormat(importPreview.format) &&
+                (importPreview.teamOrderConflicts?.length ?? 0) > 0 && (
                 <ul className="cm-import-issues">
                   {importPreview.teamOrderConflicts!.map((c, i) => (
                     <li key={`t-${i}`}>
@@ -1846,6 +1931,61 @@ export default function ManageCaddiesPage() {
                 </ul>
               )}
               <div className="cm-import-table-wrap">
+                {importPreview.format === 'xlsx-v1' ? (
+                  <table className="cm-import-table">
+                    <thead>
+                      <tr>
+                        <th>구분</th>
+                        <th>id</th>
+                        <th>이름</th>
+                        <th>조</th>
+                        <th>휴대폰</th>
+                        <th>사유</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {importPreview.lines.map((line, idx) => {
+                        const v1ActionLabel: Record<string, string> = {
+                          update: '수정',
+                          phoneOnlyUpdate: '전화만변경',
+                          unchanged: '동일',
+                          create: '신규',
+                          needsReview: '검토필요',
+                          missingInImport: '누락경고',
+                        };
+                        const teamText =
+                          line.action === 'missingInImport'
+                            ? `${line.currentTeam ?? '—'} → (유지)`
+                            : line.currentTeam == null
+                              ? `${line.nextTeam ?? '—'}`
+                              : line.currentTeam === line.nextTeam
+                                ? String(line.nextTeam)
+                                : `${line.currentTeam}→${line.nextTeam}`;
+                        const phoneText = line.phoneChanged
+                          ? `${line.currentMaskedPhone ?? '—'}→${
+                              line.nextMaskedPhone ?? line.maskedPhone ?? '—'
+                            }`
+                          : line.currentMaskedPhone ??
+                            line.nextMaskedPhone ??
+                            line.maskedPhone ??
+                            '—';
+                        return (
+                          <tr
+                            key={`${line.action}-${line.id}-${line.name}-${idx}`}
+                            className={`is-${line.action}`}
+                          >
+                            <td>{v1ActionLabel[line.action] ?? line.action}</td>
+                            <td>{line.id ?? '—'}</td>
+                            <td>{line.name}</td>
+                            <td>{teamText}</td>
+                            <td>{phoneText}</td>
+                            <td>{line.reason ?? ''}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                ) : (
                 <table className="cm-import-table">
                   <thead>
                     <tr>
@@ -1862,7 +2002,7 @@ export default function ManageCaddiesPage() {
                   </thead>
                   <tbody>
                     {importPreview.lines.map((line, idx) => {
-                      const actionLabel: Record<ImportPreviewLine['action'], string> = {
+                      const actionLabel: Record<string, string> = {
                         update: '수정',
                         create: '신규',
                         unchanged: '동일',
@@ -1916,7 +2056,7 @@ export default function ManageCaddiesPage() {
                           key={`${line.action}-${line.id}-${line.name}-${idx}`}
                           className={`is-${line.action}`}
                         >
-                          <td>{actionLabel[line.action]}</td>
+                          <td>{actionLabel[line.action] ?? line.action}</td>
                           <td>{line.id ?? '—'}</td>
                           <td>{line.name}</td>
                           <td>{teamText}</td>
@@ -1930,6 +2070,7 @@ export default function ManageCaddiesPage() {
                     })}
                   </tbody>
                 </table>
+                )}
               </div>
             </>
           )}
@@ -2494,6 +2635,18 @@ export default function ManageCaddiesPage() {
           background: #fff1e8;
           color: #9a3412;
         }
+        .cm-import-format {
+          font-size: 0.75rem;
+          font-weight: 700;
+          padding: 4px 8px;
+          border-radius: 999px;
+          background: #e8eef7;
+          color: #1e3a5f;
+        }
+        .cm-import-summary span.cm-import-format {
+          background: #e8eef7;
+          color: #1e3a5f;
+        }
         .cm-import-block {
           margin: 0 0 8px;
           padding: 8px 10px;
@@ -2546,6 +2699,7 @@ export default function ManageCaddiesPage() {
         }
         .cm-import-table tr.is-needsReview { background: #fff7ed; }
         .cm-import-table tr.is-create { background: #f0fdf4; }
+        .cm-import-table tr.is-phoneOnlyUpdate { background: #eff6ff; }
         .cm-import-table tr.is-missingInImport {
           background: #f8fafc;
           color: #64748b;

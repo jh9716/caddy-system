@@ -3,7 +3,9 @@ import { prisma } from "@/lib/prisma";
 import { buildImportPreview, parseImportFile } from "@/lib/caddyImport";
 import {
   buildRosterImportPreviewV2,
+  detectExcelRosterFormat,
   parseRosterCsvV2,
+  parseRosterXlsxV2,
 } from "@/lib/caddyRosterImportV2";
 import { requireAdmin } from "@/lib/auth";
 
@@ -18,8 +20,9 @@ function isExcelName(name: string): boolean {
 /**
  * POST multipart file 또는 JSON { csv, filename? }
  * DB 쓰기 없음 — preview만.
- * CSV → Import v2 (id/teamOrder/employmentStatus/phone/thirdBandSubgroup)
- * XLSX → 기존 v1 preview (team/name 레이아웃)
+ * CSV → csv-v2 (id/teamOrder/employmentStatus/phone/thirdBandSubgroup)
+ * 표 형식 XLSX/XLS → xlsx-v2 (첫 시트 → CSV v2와 동일한 검증 엔진)
+ * 조 제목형 XLSX → xlsx-v1 (기존 Preview. Apply v2로 연결하지 않음)
  */
 export async function POST(req: NextRequest) {
   const denied = await requireAdmin(req);
@@ -58,25 +61,63 @@ export async function POST(req: NextRequest) {
           { status: 400 }
         );
       }
-      const rows = parseImportFile(buffer, filename);
-      const existing = await prisma.caddy.findMany({
-        select: {
-          id: true,
-          name: true,
-          team: true,
-          status: true,
-          phoneNormalized: true,
+
+      const excelFormat = detectExcelRosterFormat(buffer);
+
+      if (excelFormat === "xlsx-v2") {
+        const existing = await prisma.caddy.findMany({
+          select: {
+            id: true,
+            name: true,
+            team: true,
+            teamOrder: true,
+            employmentStatus: true,
+            phoneNormalized: true,
+            thirdBandSubgroup: true,
+            caddyType: true,
+          },
+          orderBy: [{ team: "asc" }, { teamOrder: "asc" }, { id: "asc" }],
+        });
+        const existingRows = existing.map((e) => ({
+          id: e.id,
+          name: e.name,
+          team: e.team,
+          teamOrder: e.teamOrder,
+          employmentStatus: String(e.employmentStatus),
+          phoneNormalized: e.phoneNormalized,
+          thirdBandSubgroup: e.thirdBandSubgroup ?? null,
+          caddyType: e.caddyType,
+        }));
+        const rows = parseRosterXlsxV2(buffer, filename);
+        const preview = buildRosterImportPreviewV2(rows, existingRows);
+        return NextResponse.json({ ...preview, format: "xlsx-v2" });
+      }
+
+      if (excelFormat === "xlsx-v1") {
+        const rows = parseImportFile(buffer, filename);
+        const existing = await prisma.caddy.findMany({
+          select: {
+            id: true,
+            name: true,
+            team: true,
+            status: true,
+            phoneNormalized: true,
+          },
+          orderBy: { id: "asc" },
+        });
+        const preview = buildImportPreview(rows, existing);
+        return NextResponse.json({ ...preview, format: "xlsx-v1" });
+      }
+
+      return NextResponse.json(
+        {
+          error:
+            "이 Excel 파일은 표 형식 XLSX v2(Export CSV와 같은 컬럼)도, 조 제목형 XLSX v1도 아닙니다. 잘못된 형식을 v2로 변환하지 않습니다.",
         },
-        orderBy: { id: "asc" },
-      });
-      const preview = buildImportPreview(rows, existing);
-      return NextResponse.json({ format: "xlsx-v1", ...preview });
+        { status: 400 }
+      );
     }
 
-    const text =
-      csvText ??
-      (buffer ? buffer.toString("utf8") : "");
-    const rows = parseRosterCsvV2(text);
     const existing = await prisma.caddy.findMany({
       select: {
         id: true,
@@ -86,21 +127,25 @@ export async function POST(req: NextRequest) {
         employmentStatus: true,
         phoneNormalized: true,
         thirdBandSubgroup: true,
+        caddyType: true,
       },
       orderBy: [{ team: "asc" }, { teamOrder: "asc" }, { id: "asc" }],
     });
-    const preview = buildRosterImportPreviewV2(
-      rows,
-      existing.map((e) => ({
-        id: e.id,
-        name: e.name,
-        team: e.team,
-        teamOrder: e.teamOrder,
-        employmentStatus: String(e.employmentStatus),
-        phoneNormalized: e.phoneNormalized,
-        thirdBandSubgroup: e.thirdBandSubgroup ?? null,
-      }))
+    const existingRows = existing.map((e) => ({
+      id: e.id,
+      name: e.name,
+      team: e.team,
+      teamOrder: e.teamOrder,
+      employmentStatus: String(e.employmentStatus),
+      phoneNormalized: e.phoneNormalized,
+      thirdBandSubgroup: e.thirdBandSubgroup ?? null,
+      caddyType: e.caddyType,
+    }));
+
+    const rows = parseRosterCsvV2(
+      csvText ?? (buffer ? buffer.toString("utf8") : "")
     );
+    const preview = buildRosterImportPreviewV2(rows, existingRows);
     return NextResponse.json(preview);
   } catch (e: any) {
     console.error("[POST /api/caddies/import/preview]", e?.message || e);

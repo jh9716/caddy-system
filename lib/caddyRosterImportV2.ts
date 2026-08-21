@@ -1,5 +1,5 @@
 /**
- * 캐디 명단 Import v2 (CSV)
+ * 캐디 명단 Import v2 (CSV / 표 형식 XLSX)
  *
  * 컬럼: id,name,team,teamOrder,employmentStatus,phone[,thirdBandSubgroup]
  * - id optional — 있으면 Caddy.id 매칭 후 name 일치 검증
@@ -8,14 +8,18 @@
  * - extraFlags 미반영
  * - thirdBandSubgroup optional (6컬럼 CSV 호환). 빈칸=기존 유지, 일반=null
  * - missingInImport = 경고만 (자동 RETIRED 금지). Apply 시에만 missingFromImport 갱신
- * - Apply는 CSV를 최신 전체 일반(1~12조) 명단으로 처리한다. 조 범위 필터 없음.
+ * - Apply는 CSV/XLSX를 최신 전체 일반(1~12조) 명단으로 처리한다. 조 범위 필터 없음.
  *   일부 조만 올리면 파일에 없는 다른 조 재직/휴직자도 누락 후보가 된다.
  * - 드라이빙 캐디는 일반 명단 누락 관리 대상에서 제외
  * - ACTIVE+LEAVE 슬롯 점유 기준 teamOrder 중복 시 Apply 차단 (RETIRED 제외)
  * - 신규 create는 teamOrder 필수 (max+1 자동부여 없음)
+ * - XLSX/XLS 표 형식(v2): 첫 시트만 읽고 CSV v2와 동일한 RosterCsvRow로 변환한다.
+ *   신원 매칭·슬롯·상태·missingFromImport·Apply는 CSV와 같은 엔진을 쓴다. 복제하지 않는다.
+ * - 조 제목 가로형(xlsx-v1)은 이 엔진으로 변환하지 않는다. 기존 parseXlsxRosterBuffer 유지.
  */
 
 import { Prisma } from "@prisma/client";
+import * as XLSX from "xlsx";
 import {
   CaddyPhoneError,
   isPhoneUniqueViolation,
@@ -31,6 +35,7 @@ import {
   stripTrailingDigits,
   type EmploymentStatusValue,
 } from "./caddyImportRules";
+import { parseXlsxRosterBuffer } from "./caddyImportXlsx";
 import { getConfiguredSlotCapacity } from "../src/lib/caddySlot";
 import {
   isPrimaryTeam,
@@ -226,6 +231,48 @@ function findHeader(
   return -1;
 }
 
+const TEAM_TITLE_RE = /^([1-9]|1[0-2])조$/;
+
+/** 첫 시트 첫 비어있지 않은 행이 Export/CSV v2 표 헤더인지. 조 제목 가로형은 false. */
+export function looksLikeRosterV2Headers(headers: string[]): boolean {
+  const cells = headers.map((h) => String(h ?? "").trim()).filter((h) => h.length > 0);
+  if (!cells.length) return false;
+  const titleCount = cells.filter((h) =>
+    TEAM_TITLE_RE.test(h.replace(/\s+/g, ""))
+  ).length;
+  if (titleCount >= 2) return false;
+
+  const nameIdx = findHeader(headers, ["name", "이름", "성명"]);
+  if (nameIdx === -1) return false;
+  const hasCompanion =
+    findHeader(headers, ["id"]) !== -1 ||
+    findHeader(headers, ["team", "조"]) !== -1 ||
+    findHeader(headers, ["teamorder", "teamOrder", "순번", "조내순번"]) !== -1 ||
+    findHeader(headers, [
+      "employmentstatus",
+      "employmentStatus",
+      "재직상태",
+      "상태",
+    ]) !== -1 ||
+    headers.some((h) => isPhoneHeader(h)) ||
+    findHeader(headers, [
+      "thirdBandSubgroup",
+      "thirdbandsubgroup",
+      "3부구분",
+      "3부반구분",
+      "3부반",
+    ]) !== -1;
+  return hasCompanion;
+}
+
+export type ExcelRosterFormat = "xlsx-v2" | "xlsx-v1" | "unknown";
+
+export function isRosterImportV2ApplyFormat(
+  format: string | null | undefined
+): format is "csv-v2" | "xlsx-v2" {
+  return format === "csv-v2" || format === "xlsx-v2";
+}
+
 /**
  * CSV v2 파싱. name 필수. team/id/teamOrder/employmentStatus/phone/thirdBandSubgroup optional.
  */
@@ -335,6 +382,232 @@ export function parseRosterCsvV2(text: string): RosterCsvRow[] {
     });
   }
   return rows;
+}
+
+function xlsxCellText(cell: XLSX.CellObject | undefined): string {
+  if (!cell) return "";
+  const v = cell.v;
+  if (typeof v === "number" && Number.isFinite(v) && Number.isInteger(v)) {
+    return String(v);
+  }
+  if (cell.w != null && String(cell.w).trim() !== "") {
+    return String(cell.w).trim();
+  }
+  if (v == null) return "";
+  return String(v).trim();
+}
+
+function escapeCsvField(value: string): string {
+  if (/[",\n\r]/.test(value)) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
+}
+
+function sheetToStringMatrix(sheet: XLSX.WorkSheet): string[][] {
+  const ref = sheet["!ref"];
+  if (!ref) return [];
+  const range = XLSX.utils.decode_range(ref);
+  const matrix: string[][] = [];
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    const row: string[] = [];
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const addr = XLSX.utils.encode_cell({ r, c });
+      row.push(xlsxCellText(sheet[addr]));
+    }
+    matrix.push(row);
+  }
+  return matrix;
+}
+
+function firstNonEmptyHeaderRow(matrix: string[][]): string[] | null {
+  for (const row of matrix) {
+    if (row.some((cell) => String(cell ?? "").trim().length > 0)) return row;
+  }
+  return null;
+}
+
+/**
+ * Excel 숫자 셀에서 앞자리 0이 사라진 휴대폰은 추정 복원하지 않는다.
+ * 표시 형식(w)이 0으로 시작하거나 하이픈을 포함하면 Excel 표시값을 쓴다.
+ */
+function xlsxPhoneFromCell(cell: XLSX.CellObject | undefined): {
+  phoneRaw: string;
+  parseError?: string;
+} {
+  if (!cell) return { phoneRaw: "" };
+  const formatted = cell.w != null ? String(cell.w).trim() : "";
+  const rawVal = cell.v;
+  const isNumeric = cell.t === "n" || typeof rawVal === "number";
+  if (isNumeric) {
+    if (formatted.startsWith("0") || formatted.includes("-")) {
+      return { phoneRaw: formatted };
+    }
+    const num = typeof rawVal === "number" ? rawVal : Number(rawVal);
+    const asStr = Number.isFinite(num) ? String(num) : String(rawVal ?? "");
+    const digits = asStr.replace(/\.0$/, "");
+    if (/^10\d{8}$/.test(digits) || /e/i.test(formatted) || /e/i.test(asStr)) {
+      const shown = formatted || asStr;
+      return {
+        phoneRaw: "",
+        parseError: `휴대폰이 Excel 숫자 셀로 읽혀 앞자리 0이 사라졌거나 지수 표기입니다 (${shown}). 텍스트 형식으로 저장하거나 CSV를 사용하세요. 임의로 0을 붙이지 않습니다.`,
+      };
+    }
+    return { phoneRaw: formatted || asStr };
+  }
+  const text = formatted || (rawVal == null ? "" : String(rawVal).trim());
+  return { phoneRaw: text };
+}
+
+function readFirstSheet(
+  buffer: Buffer,
+  filename: string
+): { sheetName: string; sheet: XLSX.WorkSheet } {
+  const wb = XLSX.read(buffer, {
+    type: "buffer",
+    cellDates: false,
+    cellStyles: false,
+    raw: false,
+  });
+  if (!wb.SheetNames.length) {
+    throw new Error(`${filename}: XLSX에 시트가 없습니다.`);
+  }
+  const sheetName = wb.SheetNames[0];
+  const sheet = wb.Sheets[sheetName];
+  if (!sheet) {
+    throw new Error(`${filename}: 첫 시트("${sheetName}")를 읽지 못했습니다.`);
+  }
+  return { sheetName, sheet };
+}
+
+/**
+ * 첫 시트 헤더로 표 형식 v2인지 판별. v2가 아니면 기존 조 제목 파서로 v1 여부를 본다.
+ * v2 데이터 칸에 "1조"가 있어 v1을 먼저 돌리면 오탐하므로 헤더 v2 검사를 우선한다.
+ */
+export function detectExcelRosterFormat(buffer: Buffer): ExcelRosterFormat {
+  try {
+    const { sheet } = readFirstSheet(buffer, "detect.xlsx");
+    const headerRow = firstNonEmptyHeaderRow(sheetToStringMatrix(sheet));
+    if (headerRow && looksLikeRosterV2Headers(headerRow)) {
+      return "xlsx-v2";
+    }
+  } catch {
+    /* 첫 시트 읽기 실패 → v1 시도 */
+  }
+  try {
+    const rows = parseXlsxRosterBuffer(buffer, "detect.xlsx");
+    if (rows.length > 0) return "xlsx-v1";
+  } catch {
+    /* v1 레이아웃도 아님 */
+  }
+  return "unknown";
+}
+
+/**
+ * 표 형식 XLSX/XLS → RosterCsvRow.
+ * 첫 시트만 사용. 시트 병합 없음. CSV v2와 동일한 헤더 alias·검증.
+ * 조 제목형 xlsx-v1은 변환하지 않고 throw.
+ */
+export function parseRosterXlsxV2(
+  buffer: Buffer,
+  filename = "roster.xlsx"
+): RosterCsvRow[] {
+  const { sheetName, sheet } = readFirstSheet(buffer, filename);
+  const ref = sheet["!ref"];
+  if (!ref) {
+    throw new Error(
+      `${filename} 첫 시트("${sheetName}"): CSV 헤더에 name(또는 이름/성명) 컬럼이 필요합니다. Export와 같은 표 형식(id,name,team,teamOrder,employmentStatus,phone[,thirdBandSubgroup])이어야 합니다.`
+    );
+  }
+  const range = XLSX.utils.decode_range(ref);
+  const cellRows: Array<Array<XLSX.CellObject | undefined>> = [];
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    const row: Array<XLSX.CellObject | undefined> = [];
+    let empty = true;
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const cell = sheet[XLSX.utils.encode_cell({ r, c })] as
+        | XLSX.CellObject
+        | undefined;
+      row.push(cell);
+      if (xlsxCellText(cell).trim()) empty = false;
+    }
+    if (!empty) cellRows.push(row);
+  }
+  if (cellRows.length < 2) {
+    return [];
+  }
+  const headers = cellRows[0].map((cell) => xlsxCellText(cell));
+  if (!looksLikeRosterV2Headers(headers)) {
+    throw new Error(
+      `${filename} 첫 시트("${sheetName}"): CSV 헤더에 name(또는 이름/성명) 컬럼이 필요합니다. Export와 같은 표 형식(id,name,team,teamOrder,employmentStatus,phone[,thirdBandSubgroup])이어야 합니다. 조 제목형 XLSX는 v2로 변환하지 않습니다.`
+    );
+  }
+  const phoneIdx = headers.findIndex((h) => isPhoneHeader(h));
+  const stringRows: string[][] = [headers];
+  const extraErrors: Array<string[] | undefined> = [undefined];
+  for (let i = 1; i < cellRows.length; i++) {
+    const cells = cellRows[i];
+    const texts = cells.map((cell) => xlsxCellText(cell));
+    const errs: string[] = [];
+    if (phoneIdx !== -1) {
+      const phone = xlsxPhoneFromCell(cells[phoneIdx]);
+      texts[phoneIdx] = phone.phoneRaw;
+      if (phone.parseError) errs.push(phone.parseError);
+    }
+    stringRows.push(texts);
+    extraErrors.push(errs.length ? errs : undefined);
+  }
+  const csv = stringRows
+    .map((row) => row.map(escapeCsvField).join(","))
+    .join("\n");
+  try {
+    const rows = parseRosterCsvV2(csv);
+    const nameIdx = findHeader(headers, ["name", "이름", "성명"]);
+    let parsedIdx = 0;
+    for (let i = 1; i < stringRows.length; i++) {
+      const name = normalizePersonName(
+        unescapeCsvFormulaCell(stringRows[i][nameIdx] ?? "")
+      );
+      if (!name) continue;
+      const extra = extraErrors[i];
+      if (extra?.length && rows[parsedIdx]) {
+        rows[parsedIdx].parseErrors.push(...extra);
+      }
+      parsedIdx++;
+    }
+    return rows;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(
+      `${filename} 첫 시트("${sheetName}"): ${msg} Export와 같은 표 형식(id,name,team,teamOrder,employmentStatus,phone[,thirdBandSubgroup])이어야 합니다.`
+    );
+  }
+}
+
+/** 테스트/round-trip용. extraSheets는 첫 시트 뒤에만 붙이며 parseRosterXlsxV2는 무시한다. */
+export function buildRosterTableXlsxBuffer(
+  aoa: Array<Array<string | number | boolean | null | undefined>>,
+  options?: {
+    sheetName?: string;
+    extraSheets?: Array<{
+      name: string;
+      aoa: Array<Array<string | number | boolean | null | undefined>>;
+    }>;
+  }
+): Buffer {
+  const wb = XLSX.utils.book_new();
+  const first = XLSX.utils.aoa_to_sheet(aoa);
+  XLSX.utils.book_append_sheet(
+    wb,
+    first,
+    (options?.sheetName ?? "명단").slice(0, 31)
+  );
+  for (const extra of options?.extraSheets ?? []) {
+    const ws = XLSX.utils.aoa_to_sheet(extra.aoa);
+    XLSX.utils.book_append_sheet(wb, ws, extra.name.slice(0, 31));
+  }
+  const out = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
+  return Buffer.isBuffer(out) ? out : Buffer.from(out);
 }
 
 function findNumberVariantCandidates(
