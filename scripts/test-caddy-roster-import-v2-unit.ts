@@ -152,6 +152,12 @@ async function main() {
     "never missingFromImport"
   );
   assert(
+    Array.isArray(happy.applyPayload.matchedExistingIds) &&
+      [...happy.applyPayload.matchedExistingIds].sort((a, b) => a - b).join(",") ===
+        "1,2",
+    "preview matchedExistingIds are update/unchanged matches only"
+  );
+  assert(
     !JSON.stringify(happy.applyPayload).includes("extraFlags"),
     "never extraFlags"
   );
@@ -255,6 +261,11 @@ async function main() {
   assert(store.get(2)?.phoneNormalized === "01099998888", "id2 phone kept");
   assert(store.has(30), "missing id30 still present");
   assert(store.get(30)?.employmentStatus === "ACTIVE", "missing not retired");
+  assert(store.get(1)?.missingFromImport === false, "matched id1 flag false");
+  assert(store.get(2)?.missingFromImport === false, "matched id2 flag false");
+  assert(store.get(9)?.missingFromImport === true, "unmatched id9 flag true");
+  assert(store.get(30)?.missingFromImport === true, "unmatched id30 flag true");
+  assert(store.get(100)?.missingFromImport === false, "created flag false");
   assert(
     happyTxOptions?.timeout === ROSTER_IMPORT_APPLY_TX_TIMEOUT_MS &&
       happyTxOptions?.maxWait === ROSTER_IMPORT_APPLY_TX_MAX_WAIT_MS,
@@ -730,6 +741,7 @@ async function main() {
     opts?: {
       throwOnUpdateId?: number;
       throwOnCreateIndex?: number;
+      throwOnUpdateMany?: boolean;
       nextCreateId?: number;
       metrics?: {
         executeRaw: number;
@@ -820,10 +832,30 @@ async function main() {
               (item.thirdBandSubgroup as RosterExisting["thirdBandSubgroup"]) ??
               null,
             caddyType: item.caddyType != null ? String(item.caddyType) : undefined,
+            missingFromImport: item.missingFromImport === true,
           });
           rows.push({ id });
         }
         return rows;
+      },
+      updateMany: async ({
+        where,
+        data,
+      }: {
+        where: { id: { in: number[] } };
+        data: { missingFromImport: boolean };
+      }) => {
+        if (opts?.throwOnUpdateMany) {
+          throw new Error("forced missing-flag failure");
+        }
+        let count = 0;
+        for (const id of where.id.in) {
+          const row = store.get(id);
+          if (!row) continue;
+          row.missingFromImport = data.missingFromImport;
+          count++;
+        }
+        return { count };
       },
     };
     async function transaction<T>(
@@ -1280,6 +1312,229 @@ async function main() {
     "preview→apply payload still produced after revalidation tests"
   );
 
+  section("missingFromImport apply rules");
+  {
+    const abcExisting: RosterExisting[] = [
+      {
+        id: 1,
+        name: "A",
+        team: "1조",
+        teamOrder: 1,
+        employmentStatus: "ACTIVE",
+        missingFromImport: false,
+      },
+      {
+        id: 2,
+        name: "B",
+        team: "1조",
+        teamOrder: 2,
+        employmentStatus: "ACTIVE",
+        missingFromImport: false,
+      },
+      {
+        id: 3,
+        name: "C",
+        team: "1조",
+        teamOrder: 3,
+        employmentStatus: "ACTIVE",
+        missingFromImport: false,
+      },
+      {
+        id: 4,
+        name: "휴직자",
+        team: "2조",
+        teamOrder: 1,
+        employmentStatus: "LEAVE",
+        missingFromImport: false,
+      },
+      {
+        id: 5,
+        name: "퇴사자",
+        team: "2조",
+        teamOrder: 2,
+        employmentStatus: "RETIRED",
+        missingFromImport: false,
+      },
+      {
+        id: 6,
+        name: "드라이브",
+        team: "드라이빙",
+        teamOrder: 0,
+        employmentStatus: "ACTIVE",
+        caddyType: "DRIVING",
+        missingFromImport: false,
+      },
+    ];
+
+    const previewAb = buildRosterImportPreviewV2(
+      parseRosterCsvV2(
+        [
+          "id,name,team,teamOrder,employmentStatus,phone",
+          "1,A,1조,1,ACTIVE,",
+          "2,B,1조,2,ACTIVE,",
+        ].join("\n")
+      ),
+      abcExisting
+    );
+    assert(previewAb.summary.applyBlocked === false, "A/B preview not blocked");
+    assert(
+      previewAb.missingInImport.map((m) => m.id).sort().join(",") === "3,4",
+      "preview missing = ACTIVE C + LEAVE, not RETIRED/DRIVING"
+    );
+    assert(
+      !previewAb.missingInImport.some((m) => m.id === 5 || m.id === 6),
+      "RETIRED and DRIVING are not missingInImport"
+    );
+    assert(
+      !JSON.stringify(previewAb.applyPayload).includes("missingFromImport"),
+      "applyPayload still omits missingFromImport field"
+    );
+
+    const flagBeforePreview = abcExisting.map((e) => e.missingFromImport);
+    buildRosterImportPreviewV2(
+      parseRosterCsvV2(
+        [
+          "id,name,team,teamOrder,employmentStatus,phone",
+          "1,A,1조,1,ACTIVE,",
+          "2,B,1조,2,ACTIVE,",
+        ].join("\n")
+      ),
+      abcExisting
+    );
+    assert(
+      abcExisting.every((e, i) => e.missingFromImport === flagBeforePreview[i]),
+      "preview does not mutate existing missingFromImport"
+    );
+
+    const abStore = cloneStore(
+      new Map(abcExisting.map((e) => [e.id, { ...e }]))
+    );
+    const abPrisma = createTransactionalPrisma(abStore);
+    await applyRosterImportPayloadV2(previewAb.applyPayload, abPrisma, {
+      existingForGuard: abcExisting,
+    });
+    assert(abStore.get(1)?.missingFromImport === false, "matched A false");
+    assert(abStore.get(2)?.missingFromImport === false, "matched B false");
+    assert(abStore.get(3)?.missingFromImport === true, "unmatched ACTIVE C true");
+    assert(abStore.get(4)?.missingFromImport === true, "unmatched LEAVE true");
+    assert(
+      abStore.get(5)?.missingFromImport === false,
+      "RETIRED not newly flagged"
+    );
+    assert(
+      abStore.get(6)?.missingFromImport === false &&
+        abStore.get(6)?.caddyType === "DRIVING" &&
+        abStore.get(6)?.team === "드라이빙",
+      "DRIVING flag/team untouched"
+    );
+    assert(
+      [1, 2, 3, 4, 5, 6].every((id) => abStore.has(id)),
+      "no caddy delete; ids preserved"
+    );
+
+    const previewAbc = buildRosterImportPreviewV2(
+      parseRosterCsvV2(
+        [
+          "id,name,team,teamOrder,employmentStatus,phone",
+          "1,A,1조,1,ACTIVE,",
+          "2,B,1조,2,ACTIVE,",
+          "3,C,1조,3,ACTIVE,",
+        ].join("\n")
+      ),
+      [...abStore.values()]
+    );
+    await applyRosterImportPayloadV2(previewAbc.applyPayload, abPrisma, {
+      existingForGuard: [...abStore.values()],
+    });
+    assert(abStore.get(3)?.missingFromImport === false, "C returns false on next full import");
+    assert(abStore.get(4)?.missingFromImport === true, "LEAVE still missing stays true");
+
+    const createPreview = buildRosterImportPreviewV2(
+      parseRosterCsvV2(
+        [
+          "id,name,team,teamOrder,employmentStatus,phone",
+          "1,A,1조,1,ACTIVE,",
+          "2,B,1조,2,ACTIVE,",
+          "3,C,1조,3,ACTIVE,",
+          "4,휴직자,2조,1,LEAVE,",
+          ",신입,3조,1,ACTIVE,",
+        ].join("\n")
+      ),
+      [...abStore.values()]
+    );
+    const createResult = await applyRosterImportPayloadV2(
+      createPreview.applyPayload,
+      abPrisma,
+      { existingForGuard: [...abStore.values()] }
+    );
+    const created = [...abStore.values()].find((r) => r.name === "신입");
+    assert(createResult.created === 1 && created != null, "new caddy created");
+    assert(created?.missingFromImport === false, "new caddy missingFromImport false");
+    assert(
+      createResult.createdIds[0] === created?.id && created.id !== 1,
+      "new autoincrement id, existing ids unchanged"
+    );
+
+    const omitMatched = cloneStore(
+      new Map(abcExisting.map((e) => [e.id, { ...e }]))
+    );
+    const omitPrisma = createTransactionalPrisma(omitMatched);
+    await applyRosterImportPayloadV2(
+      { updates: [{ id: 1, team: "1조", teamOrder: 1 }], creates: [] },
+      omitPrisma,
+      { existingForGuard: abcExisting }
+    );
+    assert(
+      [...omitMatched.values()].every((r) => r.missingFromImport !== true),
+      "without matchedExistingIds, flags are not written"
+    );
+
+    const failFlagStore = cloneStore(
+      new Map(abcExisting.map((e) => [e.id, { ...e, missingFromImport: false }]))
+    );
+    const failFlagPrisma = createTransactionalPrisma(failFlagStore, {
+      throwOnUpdateMany: true,
+    });
+    try {
+      await applyRosterImportPayloadV2(previewAb.applyPayload, failFlagPrisma, {
+        existingForGuard: abcExisting,
+      });
+      assert(false, "missing-flag failure should fail apply");
+    } catch (e) {
+      assert(
+        e instanceof RosterImportApplyError && e.code === "apply_failed",
+        "flag failure maps to apply_failed"
+      );
+    }
+    assert(
+      failFlagStore.get(1)?.team === "1조" &&
+        failFlagStore.get(1)?.missingFromImport === false &&
+        failFlagStore.get(3)?.missingFromImport === false,
+      "flag failure rolls back field updates and missing flags"
+    );
+
+    try {
+      await applyRosterImportPayloadV2(
+        {
+          updates: [{ id: 1, team: "1조", teamOrder: 1 }],
+          creates: [{ name: "박준형", team: "3조", teamOrder: 1 }],
+          matchedExistingIds: [1],
+        },
+        createTransactionalPrisma(
+          cloneStore(new Map(abcExisting.map((e) => [e.id, { ...e }])))
+        ),
+        { existingForGuard: abcExisting }
+      );
+      assert(false, "needsReview create should fail before flag writes");
+    } catch (e) {
+      assert(
+        e instanceof RosterImportApplyError &&
+          String(e.message).includes("needsReview"),
+        "validation failure happens before transaction"
+      );
+    }
+  }
+
   section("apply failure UX source guards");
   const root = path.join(__dirname, "..");
   const pageSrc = fs.readFileSync(
@@ -1305,6 +1560,11 @@ async function main() {
   assert(
     importLibSrc.includes("resolveCaddyTypeFromTeam"),
     "import apply forces caddyType from team"
+  );
+  assert(
+    !importLibSrc.includes("caddy.delete") &&
+      !importLibSrc.includes("deleteMany"),
+    "import apply does not delete caddies"
   );
   const assignPageSrc = fs.readFileSync(
     path.join(root, "src/app/manage/assignments/page.tsx"),
@@ -1343,6 +1603,33 @@ async function main() {
   assert(
     pageSrc.includes("cm-banner") && pageSrc.includes("is-error"),
     "top banner has error tone for apply failure"
+  );
+  assert(
+    pageSrc.includes("cm-missing-tag") &&
+      pageSrc.includes("명단 누락") &&
+      pageSrc.includes("employmentFilter === 'missing'"),
+    "manage caddies shows missing badge and 명단 누락 filter"
+  );
+  assert(
+    !pageSrc.includes("일괄 퇴사"),
+    "no bulk retire control in caddies UI"
+  );
+  const previewRouteSrc = fs.readFileSync(
+    path.join(root, "src/app/api/caddies/import/preview/route.ts"),
+    "utf8"
+  );
+  assert(
+    previewRouteSrc.includes("DB 쓰기 없음") &&
+      !previewRouteSrc.includes("$transaction") &&
+      !previewRouteSrc.includes("prisma.caddy.update") &&
+      !previewRouteSrc.includes("prisma.caddy.create"),
+    "preview route stays read-only"
+  );
+  assert(
+    applyRouteSrc.includes('forbiddenKeys') &&
+      applyRouteSrc.includes('"missingFromImport"') &&
+      applyRouteSrc.includes("matchedExistingIds"),
+    "apply route still forbids client missingFromImport and forwards matched ids"
   );
 
   console.log(`\nDONE: ${passed} passed, ${failed} failed`);

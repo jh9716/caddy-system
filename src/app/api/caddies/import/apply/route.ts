@@ -21,10 +21,11 @@ export const runtime = "nodejs";
 export const maxDuration = 90;
 
 /**
- * POST { applyPayload: { updates, creates } } — Import v2
+ * POST { applyPayload: { updates, creates, matchedExistingIds? } } — Import v2
  * - 기존 id update (team / teamOrder / employmentStatus / phone / thirdBandSubgroup)
  * - 신규 create (name+team 필수)
- * - extraFlags / missingFromImport / 삭제 / ID 재부여 금지
+ * - extraFlags / missingFromImport / 삭제 / ID 재부여 는 payload 금지
+ * - missingFromImport 는 matchedExistingIds로 서버가 Apply transaction 안에서만 산출
  * - Assignment/Schedule/ShiftDuty/OffRequest/User 연관 수정 없음
  */
 export async function POST(req: NextRequest) {
@@ -105,6 +106,10 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    const matchedExistingIds = Array.isArray(payload.matchedExistingIds)
+      ? payload.matchedExistingIds.map((id) => Number(id))
+      : undefined;
+
     const result = await applyRosterImportPayloadV2(
       {
         updates: payload.updates.map((u) => ({
@@ -145,6 +150,7 @@ export async function POST(req: NextRequest) {
             ? { thirdBandSubgroup: c.thirdBandSubgroup ?? null }
             : {}),
         })),
+        ...(matchedExistingIds ? { matchedExistingIds } : {}),
       },
       prisma,
       {

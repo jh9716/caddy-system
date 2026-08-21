@@ -96,7 +96,7 @@ export default function ManageCaddiesPage() {
   const [loading, setLoading] = useState(false);
   const [savingId, setSavingId] = useState<number | null>(null);
   const [employmentFilter, setEmploymentFilter] = useState<
-    EmploymentStatus | 'all'
+    EmploymentStatus | 'all' | 'missing'
   >('ACTIVE');
   const [teamFilter, setTeamFilter] = useState<string>('all');
   const [q, setQ] = useState('');
@@ -152,7 +152,11 @@ export default function ManageCaddiesPage() {
       names: string[];
       ids: Array<number | null>;
     }>;
-    applyPayload?: { updates: unknown[]; creates: unknown[] };
+    applyPayload?: {
+      updates: unknown[];
+      creates: unknown[];
+      matchedExistingIds?: number[];
+    };
     error?: string;
   };
   const [importOpen, setImportOpen] = useState(false);
@@ -193,7 +197,9 @@ export default function ManageCaddiesPage() {
       // 한눈에 보기: 재직/휴직/퇴사 집계를 위해 전체 로드
       const employment =
         employmentOverride ??
-        (viewMode === 'summary' ? 'all' : employmentFilter);
+        (viewMode === 'summary' || employmentFilter === 'missing'
+          ? 'all'
+          : employmentFilter);
       setLoading(true);
       setMessage(null);
       try {
@@ -241,7 +247,9 @@ export default function ManageCaddiesPage() {
     const query = q.trim();
     return rows.filter((r) => {
       if (viewMode === 'detail') {
-        if (employmentFilter !== 'all') {
+        if (employmentFilter === 'missing') {
+          if (!r.missingFromImport) return false;
+        } else if (employmentFilter !== 'all') {
           if (normalizeEmploymentStatus(r.employmentStatus) !== employmentFilter) {
             return false;
           }
@@ -913,6 +921,7 @@ export default function ManageCaddiesPage() {
                 ['ACTIVE', '재직'],
                 ['LEAVE', '휴직'],
                 ['RETIRED', '퇴사'],
+                ['missing', '명단 누락'],
               ] as const
             ).map(([value, label]) => (
               <button
@@ -952,6 +961,12 @@ export default function ManageCaddiesPage() {
             </span>
             {employmentFilter === 'ACTIVE' && (
               <span className="cm-stats-hint"> · 퇴사자는 「퇴사」 필터에서 조회·복귀</span>
+            )}
+            {employmentFilter === 'missing' && (
+              <span className="cm-stats-hint">
+                {' '}
+                · 명단 누락은 경고이며 퇴사가 아닙니다
+              </span>
             )}
           </div>
         </>
@@ -1245,6 +1260,14 @@ export default function ManageCaddiesPage() {
                             {isDriving ? (
                               <span className="cm-drive-tag">드라이빙</span>
                             ) : null}
+                            {c.missingFromImport ? (
+                              <span
+                                className="cm-missing-tag"
+                                title="최신 전체 명단에 없음. 퇴사가 아닙니다."
+                              >
+                                명단 누락
+                              </span>
+                            ) : null}
                           </td>
                           <td>{isDriving ? '—' : c.team}</td>
                           <td className="cm-num">{isDriving ? '—' : c.teamOrder}</td>
@@ -1371,6 +1394,9 @@ export default function ManageCaddiesPage() {
                     }
                   >
                     <strong className="cm-name">{c.name}</strong>
+                    {c.missingFromImport ? (
+                      <span className="cm-missing-tag">명단 누락</span>
+                    ) : null}
                     <span className="cm-meta">
                       {isDriving ? '드라이빙' : c.team}
                     </span>
@@ -1643,6 +1669,7 @@ export default function ManageCaddiesPage() {
           <p className="cm-import-help">
             컬럼: <code>id,name,team,teamOrder,employmentStatus,phone[,thirdBandSubgroup]</code>
             · id는 선택 · 빈 선택필드는 기존 유지 · 일반=3부구분 해제 · 삭제/재생성 없음 · extraFlags 미반영
+            · 이 CSV는 최신 전체 일반 캐디(1~12조) 명단으로 처리됩니다. 일부 조만 올리면 파일에 없는 다른 조 재직/휴직자가 명단 누락으로 표시됩니다. 드라이빙은 대상이 아닙니다.
           </p>
           <div className="cm-import-actions">
             <label className="cm-btn cm-btn-sm cm-file-label">
@@ -1708,7 +1735,7 @@ export default function ManageCaddiesPage() {
                 if (!importPreview?.applyPayload) return;
                 if (
                   !confirm(
-                    `명단을 반영할까요?\n갱신 ${importPreview.summary.update} · 신규 ${importPreview.summary.create}\n(누락 ${importPreview.summary.missingInImport}명은 변경하지 않습니다)`
+                    `명단을 반영할까요?\n이 CSV는 최신 전체 일반 캐디(1~12조) 명단으로 처리됩니다.\n갱신 ${importPreview.summary.update} · 신규 ${importPreview.summary.create}\n파일에 없는 재직/휴직자는 '명단 누락'으로 표시됩니다(자동 퇴사/삭제 없음).\n일부 조만 올리면 다른 조 재직자도 누락으로 표시됩니다.`
                   )
                 ) {
                   return;
@@ -1795,7 +1822,8 @@ export default function ManageCaddiesPage() {
                 <p className="cm-import-block">
                   needsReview / 전화번호 문제 / 조·순번 충돌이 있어 Apply가
                   비활성화되었습니다. 수정 후 다시 Preview 하세요. 누락 경고만으로는
-                  막지 않습니다(자동 퇴사 없음).
+                  막지 않습니다(자동 퇴사 없음). Apply 후 누락자는 목록의 「명단 누락」
+                  필터에서 확인합니다.
                 </p>
               )}
               {(importPreview.phoneIssues?.length ?? 0) > 0 && (
@@ -2017,6 +2045,15 @@ export default function ManageCaddiesPage() {
           padding: 1px 5px;
           border-radius: 4px;
         }
+        .cm-missing-tag {
+          margin-left: 6px;
+          font-size: 0.65rem;
+          font-weight: 800;
+          color: #b45309;
+          background: #fef3c7;
+          padding: 1px 5px;
+          border-radius: 4px;
+        }
           margin: 0 0 8px;
           font-family: var(--font-display);
           font-size: 1.05rem;
@@ -2024,7 +2061,7 @@ export default function ManageCaddiesPage() {
         }
         .cm-filter-bar {
           display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
+          grid-template-columns: repeat(5, minmax(0, 1fr));
           gap: 4px;
           margin: 4px 0 8px;
           padding: 8px;
