@@ -12,6 +12,7 @@ import {
   uniqueTeams,
   type OffRequestActor,
 } from "@/lib/offRequestAuth";
+import { shouldForcePasswordChange } from "@/lib/passwordPolicy";
 
 export type ResolvedAuthUser = {
   session: VerifiedSession;
@@ -23,6 +24,8 @@ export type ResolvedAuthUser = {
   sessionVersion: number;
   caddyId: number | null;
   managedTeams: string[];
+  /** env-only (uid=null)는 항상 false. DB User만 최초 변경 강제. */
+  mustChangePassword: boolean;
 };
 
 /**
@@ -53,6 +56,7 @@ export async function resolveAuthFromCookieStore(cookies: {
       sessionVersion: session.sv,
       caddyId: null,
       managedTeams: [],
+      mustChangePassword: false,
     };
   }
 
@@ -66,6 +70,7 @@ export async function resolveAuthFromCookieStore(cookies: {
         sessionVersion: true,
         caddyId: true,
         managedTeams: true,
+        mustChangePassword: true,
       },
     });
     if (!user) return null;
@@ -82,6 +87,7 @@ export async function resolveAuthFromCookieStore(cookies: {
       sessionVersion: user.sessionVersion,
       caddyId: user.caddyId ?? null,
       managedTeams: uniqueTeams(user.managedTeams ?? []),
+      mustChangePassword: user.mustChangePassword === true,
     };
   } catch (e) {
     console.error("[resolveAuthFromCookieStore]", e);
@@ -93,6 +99,16 @@ export async function resolveAuthFromCookieStore(cookies: {
  * 관리자만. 서명 세션 + (DB User면) DB role=admin + sessionVersion 일치.
  * 사용법: const guard = await requireAdmin(req); if (guard) return guard;
  */
+export function mustChangePasswordResponse(): NextResponse {
+  return NextResponse.json(
+    {
+      error: "MUST_CHANGE_PASSWORD",
+      message: "비밀번호를 변경한 뒤 이용할 수 있습니다.",
+    },
+    { status: 403 }
+  );
+}
+
 export async function requireAdmin(
   req: NextRequest
 ): Promise<NextResponse | void> {
@@ -101,6 +117,9 @@ export async function requireAdmin(
     const res = NextResponse.json({ error: "unauthorized" }, { status: 401 });
     if (!auth) clearSessionCookies(res, req);
     return res;
+  }
+  if (shouldForcePasswordChange(auth)) {
+    return mustChangePasswordResponse();
   }
 }
 
@@ -128,13 +147,23 @@ export async function resolveOffRequestActor(
 export async function requireOffRequestActor(
   req: NextRequest
 ): Promise<OffRequestActor | NextResponse> {
-  const actor = await resolveOffRequestActor(req);
-  if (!actor) {
+  const auth = await resolveAuthUser(req);
+  if (!auth) {
     const res = NextResponse.json({ error: "unauthorized" }, { status: 401 });
     clearSessionCookies(res, req);
     return res;
   }
-  return actor;
+  if (shouldForcePasswordChange(auth)) {
+    return mustChangePasswordResponse();
+  }
+
+  return {
+    role: auth.role,
+    username: auth.username,
+    userId: auth.userId,
+    caddyId: auth.caddyId,
+    managedTeams: auth.managedTeams,
+  };
 }
 
 export function isActorResponse(

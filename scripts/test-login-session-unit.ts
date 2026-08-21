@@ -280,7 +280,7 @@ async function main() {
   const envAuth = await resolveAuthFromCookieStore(
     cookieJar({ [SESSION_COOKIE_NAME]: envTok })
   );
-  assert(envAuth?.role === "admin" && envAuth.userId == null, "env signed admin ok");
+  assert(envAuth?.role === "admin" && envAuth.userId == null && envAuth.mustChangePassword === false, "env signed admin ok");
 
   console.log("== logout clears cookies ==");
   const out = NextResponse.json({ ok: true });
@@ -364,7 +364,10 @@ async function main() {
         mockDb("throw")
       );
       assert(
-        envOk.status === "ok" && envOk.source === "env" && envOk.userId === null,
+        envOk.status === "ok" &&
+          envOk.source === "env" &&
+          envOk.userId === null &&
+          envOk.mustChangePassword === false,
         "injected env admin login succeeds without DB"
       );
       const envCaddyOk = await passwordLogin(
@@ -401,8 +404,22 @@ async function main() {
         dbOk.status === "ok" &&
           dbOk.source === "db" &&
           dbOk.userId === 42 &&
-          dbOk.sessionVersion === 2,
+          dbOk.sessionVersion === 2 &&
+          dbOk.mustChangePassword === false,
         "DB User normal login"
+      );
+      const mcpRow: PasswordLoginUser = {
+        ...row,
+        mustChangePassword: true,
+      };
+      const mcpOk = await passwordLogin(
+        "db_admin_user",
+        "correct-db-pw",
+        mockDb(mcpRow)
+      );
+      assert(
+        mcpOk.status === "ok" && mcpOk.mustChangePassword === true,
+        "DB User mustChangePassword=true is returned (not dropped)"
       );
       const dbBad = await passwordLogin("db_admin_user", "wrong-pw", mockDb(row));
       assert(dbBad.status === "unauthorized", "wrong DB password → unauthorized");
@@ -478,6 +495,10 @@ async function main() {
       assert(envAdmin.status === 200, "injected env admin /api/auth/login → 200");
       const envAdminJson = await envAdmin.json();
       assert(envAdminJson.ok === true && envAdminJson.role === "admin", "env admin role");
+      assert(
+        envAdminJson.mustChangePassword === false,
+        "env admin mustChangePassword false"
+      );
       const envCookies = (envAdmin.headers.getSetCookie?.() ?? []).join("\n");
       assert(envCookies.includes(`${SESSION_COOKIE_NAME}=`), "env admin sets vh_session");
 
@@ -601,6 +622,10 @@ async function main() {
         assert(dbLogin.status === 200, "DB User /api/auth/login → 200");
         const dbLoginJson = await dbLogin.json();
         assert(dbLoginJson.ok === true && dbLoginJson.role === "admin", "DB User role admin");
+        assert(
+          dbLoginJson.mustChangePassword === false,
+          "existing DB admin mustChangePassword false"
+        );
         const dbCookies = (dbLogin.headers.getSetCookie?.() ?? []).join("\n");
         assert(dbCookies.includes(`${SESSION_COOKIE_NAME}=`), "DB User sets vh_session");
 

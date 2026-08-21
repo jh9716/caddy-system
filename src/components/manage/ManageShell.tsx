@@ -38,6 +38,11 @@ const NAV = [
     label: "계정 연결",
     match: (p: string) => p.startsWith("/manage/users"),
   },
+  {
+    href: "/manage/staff-accounts",
+    label: "직원 계정",
+    match: (p: string) => p.startsWith("/manage/staff-accounts"),
+  },
   { href: "/notice", label: "공지", match: (p: string) => p.startsWith("/notice") },
   {
     href: "/schedule",

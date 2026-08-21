@@ -9,6 +9,7 @@ export type PasswordLoginUser = {
   password: string | null;
   role: string;
   sessionVersion?: number | null;
+  mustChangePassword?: boolean | null;
 };
 
 export type PasswordLoginDb = {
@@ -27,6 +28,7 @@ export type PasswordLoginResult =
       role: AppRole;
       userId: number | null;
       sessionVersion: number;
+      mustChangePassword: boolean;
     }
   | { status: "unauthorized"; reason: "not_found" | "bad_password" | "bad_role" }
   | { status: "unavailable" };
@@ -56,6 +58,7 @@ export async function passwordLogin(
       role: env.role,
       userId: null,
       sessionVersion: 0,
+      mustChangePassword: false,
     };
   }
 
@@ -73,6 +76,7 @@ export async function passwordLogin(
       role,
       userId: row.id,
       sessionVersion: row.sessionVersion ?? 0,
+      mustChangePassword: row.mustChangePassword === true,
     };
   } catch (e) {
     console.error("[passwordLogin] db auth error", e);
