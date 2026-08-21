@@ -87,8 +87,11 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 2) 팀별 캐디 수집(근무 가능자만)
-    const all = await prisma.caddy.findMany({ orderBy: { id: 'asc' } })
+    // 2) 팀별 캐디 수집(근무 가능자만). RETIRED만 제외, LEAVE는 기존 정책 유지.
+    const all = await prisma.caddy.findMany({
+      where: { employmentStatus: { not: 'RETIRED' } },
+      orderBy: { id: 'asc' },
+    })
     // 팀 문자열이 없다면 빈 팀으로 들어갈 수 있으니 안전 처리
     const teamMap = new Map<string, { id: number; name: string; team: string | null }[]>()
     for (const t of teams) teamMap.set(t, [])
