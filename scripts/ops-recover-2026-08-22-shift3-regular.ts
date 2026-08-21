@@ -802,9 +802,6 @@ async function main() {
     if (placement.kind !== "regular") {
       throw new Error(`regular가 아닌 placement 갱신 시도 ${placement.id}`);
     }
-    if (placement.date.getTime() !== dateObj.getTime()) {
-      throw new Error(`날짜 불일치 placement ${placement.id}`);
-    }
     return {
       placementId: placement.id,
       reservationId: placement.reservationId,
@@ -819,155 +816,158 @@ async function main() {
     };
   });
 
-  const result = await silentPrisma.$transaction(async (tx) => {
-    for (const u of updates) {
-      const current = await tx.dailyPlacement.findUnique({
-        where: { id: u.placementId },
-        include: { reservation: true },
-      });
-      if (
-        !current ||
-        current.date.getTime() !== dateObj.getTime() ||
-        current.reservation.shift !== "3부" ||
-        current.locked ||
-        current.kind !== "regular" ||
-        current.caddyId !== u.fromCaddyId
-      ) {
-        throw new Error(`unsafe placement update ${u.placementId}`);
+  const result = await silentPrisma.$transaction(
+    async (tx) => {
+      for (const u of updates) {
+        const touched = await tx.dailyPlacement.updateMany({
+          where: {
+            id: u.placementId,
+            date: dateObj,
+            locked: false,
+            kind: "regular",
+            caddyId: u.fromCaddyId,
+          },
+          data: {
+            caddyId: u.toCaddyId,
+            kind: u.kind,
+            reason: u.reason,
+            sequenceIndex: u.toSeq,
+            pairId: u.pairId,
+          },
+        });
+        if (touched.count !== 1) {
+          throw new Error(
+            `placement ${u.placementId} update count=${touched.count}`
+          );
+        }
       }
-      await tx.dailyPlacement.update({
-        where: { id: u.placementId },
+
+      const [afterHong, afterDuty, afterUnavail, afterDutyRows, resCount, placeCount, allPlacements] =
+        await Promise.all([
+          tx.dailyPlacement.findMany({
+            where: { date: dateObj, caddyId: TARGET_CADDY_ID },
+            select: { id: true },
+          }),
+          tx.dailyPlacement.findMany({
+            where: { date: dateObj, caddyId: { in: dutyIds } },
+            select: { caddyId: true, id: true },
+          }),
+          tx.dailyCaddyUnavailable.findMany({
+            where: { date: dateObj, caddyId: TARGET_CADDY_ID },
+          }),
+          tx.dailyOpsDuty.findMany({
+            where: { date: dateObj },
+            select: { id: true, caddyId: true, roleKey: true },
+            orderBy: { id: "asc" },
+          }),
+          tx.dailyReservation.count({
+            where: { date: dateObj, status: "ACTIVE" },
+          }),
+          tx.dailyPlacement.count({ where: { date: dateObj } }),
+          tx.dailyPlacement.findMany({
+            where: { date: dateObj },
+            include: {
+              reservation: true,
+              caddy: { select: { id: true, employmentStatus: true } },
+            },
+          }),
+        ]);
+
+      const fp1 = allPlacements
+        .filter((p) => p.reservation.shift === "1부")
+        .map(
+          (p) =>
+            `${p.reservation.identityKey}:${p.caddyId}:${p.sequenceIndex}`
+        )
+        .sort()
+        .join("|");
+      const fp2 = allPlacements
+        .filter((p) => p.reservation.shift === "2부")
+        .map(
+          (p) =>
+            `${p.reservation.identityKey}:${p.caddyId}:${p.sequenceIndex}`
+        )
+        .sort()
+        .join("|");
+      const fp1BeforeSimple = previous.assignments
+        .filter((a) => a.shift === "1부")
+        .map(
+          (a) =>
+            `${reservationKey(a.reservation)}:${a.caddy.id}:${a.sequenceIndex}`
+        )
+        .sort()
+        .join("|");
+      const fp2BeforeSimple = previous.assignments
+        .filter((a) => a.shift === "2부")
+        .map(
+          (a) =>
+            `${reservationKey(a.reservation)}:${a.caddy.id}:${a.sequenceIndex}`
+        )
+        .sort()
+        .join("|");
+
+      const retired3 = allPlacements.filter(
+        (p) =>
+          p.reservation.shift === "3부" &&
+          !isActiveEmploymentStatus(p.caddy.employmentStatus)
+      );
+
+      if (afterHong.length !== 0) throw new Error("apply 후 이홍택 placement 잔존");
+      if (afterUnavail.length !== 0) {
+        throw new Error("apply 후 이홍택 DailyCaddyUnavailable 존재");
+      }
+      if (afterDuty.length !== 0) {
+        throw new Error("apply 후 DailyOpsDuty 대상 placement 잔존");
+      }
+      if (fp1 !== fp1BeforeSimple) throw new Error("apply 후 1부 fingerprint 변경");
+      if (fp2 !== fp2BeforeSimple) throw new Error("apply 후 2부 fingerprint 변경");
+      if (retired3.length !== 0) throw new Error("apply 후 3부 RETIRED/LEAVE 잔존");
+      if (resCount !== placeCount) {
+        throw new Error(`apply 후 예약 ${resCount} != 배치 ${placeCount}`);
+      }
+      if (afterDutyRows.length !== 8) {
+        throw new Error(`DailyOpsDuty ${afterDutyRows.length} != 8`);
+      }
+
+      const audit = await tx.audit.create({
         data: {
-          caddyId: u.toCaddyId,
-          kind: u.kind,
-          reason: u.reason,
-          sequenceIndex: u.toSeq,
-          pairId: u.pairId,
+          action: AUDIT_ACTION,
+          entity: "DailyPlacement",
+          entityId: oceanPlacementId,
+          payload: {
+            date: DATE,
+            reason:
+              "ops recovery: reflow 3부 regular with freezeShifts 1부/2부; no CADDY_SICK; no DailyCaddyUnavailable",
+            engine: "reflowRegularAssignments",
+            freezeShifts: ["1부", "2부"],
+            targetCaddyId: TARGET_CADDY_ID,
+            ocean1733: preview.ocean1733,
+            updatedPlacementIds: updates.map((u) => u.placementId),
+            changedCount: updates.length,
+            spareSource,
+            houseStartCaddyId,
+            thirdStartCaddyId,
+            thirdStartTeam,
+          } as Prisma.InputJsonValue,
         },
       });
-    }
 
-    const afterHong = await tx.dailyPlacement.findMany({
-      where: { date: dateObj, caddyId: TARGET_CADDY_ID },
-      select: { id: true },
-    });
-    const afterDuty = await tx.dailyPlacement.findMany({
-      where: { date: dateObj, caddyId: { in: dutyIds } },
-      select: { caddyId: true, id: true },
-    });
-    const afterUnavail = await tx.dailyCaddyUnavailable.findMany({
-      where: { date: dateObj, caddyId: TARGET_CADDY_ID },
-    });
-    const afterDutyRows = await tx.dailyOpsDuty.findMany({
-      where: { date: dateObj },
-      select: { id: true, caddyId: true, roleKey: true },
-      orderBy: { id: "asc" },
-    });
-    const resCount = await tx.dailyReservation.count({
-      where: { date: dateObj, status: "ACTIVE" },
-    });
-    const placeCount = await tx.dailyPlacement.count({ where: { date: dateObj } });
-    const allPlacements = await tx.dailyPlacement.findMany({
-      where: { date: dateObj },
-      include: {
-        reservation: true,
-        caddy: { select: { id: true, employmentStatus: true } },
-      },
-    });
-
-    const fp1 = allPlacements
-      .filter((p) => p.reservation.shift === "1부")
-      .map(
-        (p) =>
-          `${p.reservation.identityKey}:${p.caddyId}:${p.sequenceIndex}`
-      )
-      .sort()
-      .join("|");
-    const fp2 = allPlacements
-      .filter((p) => p.reservation.shift === "2부")
-      .map(
-        (p) =>
-          `${p.reservation.identityKey}:${p.caddyId}:${p.sequenceIndex}`
-      )
-      .sort()
-      .join("|");
-    const fp1BeforeSimple = previous.assignments
-      .filter((a) => a.shift === "1부")
-      .map(
-        (a) =>
-          `${reservationKey(a.reservation)}:${a.caddy.id}:${a.sequenceIndex}`
-      )
-      .sort()
-      .join("|");
-    const fp2BeforeSimple = previous.assignments
-      .filter((a) => a.shift === "2부")
-      .map(
-        (a) =>
-          `${reservationKey(a.reservation)}:${a.caddy.id}:${a.sequenceIndex}`
-      )
-      .sort()
-      .join("|");
-
-    const retired3 = allPlacements.filter(
-      (p) =>
-        p.reservation.shift === "3부" &&
-        !isActiveEmploymentStatus(p.caddy.employmentStatus)
-    );
-
-    if (afterHong.length !== 0) throw new Error("apply 후 이홍택 placement 잔존");
-    if (afterUnavail.length !== 0) {
-      throw new Error("apply 후 이홍택 DailyCaddyUnavailable 존재");
-    }
-    if (afterDuty.length !== 0) {
-      throw new Error("apply 후 DailyOpsDuty 대상 placement 잔존");
-    }
-    if (fp1 !== fp1BeforeSimple) throw new Error("apply 후 1부 fingerprint 변경");
-    if (fp2 !== fp2BeforeSimple) throw new Error("apply 후 2부 fingerprint 변경");
-    if (retired3.length !== 0) throw new Error("apply 후 3부 RETIRED/LEAVE 잔존");
-    if (resCount !== placeCount) {
-      throw new Error(`apply 후 예약 ${resCount} != 배치 ${placeCount}`);
-    }
-    if (afterDutyRows.length !== 8) {
-      throw new Error(`DailyOpsDuty ${afterDutyRows.length} != 8`);
-    }
-
-    const audit = await tx.audit.create({
-      data: {
-        action: AUDIT_ACTION,
-        entity: "DailyPlacement",
-        entityId: oceanPlacementId,
-        payload: {
-          date: DATE,
-          reason:
-            "ops recovery: reflow 3부 regular with freezeShifts 1부/2부; no CADDY_SICK; no DailyCaddyUnavailable",
-          engine: "reflowRegularAssignments",
-          freezeShifts: ["1부", "2부"],
-          targetCaddyId: TARGET_CADDY_ID,
-          ocean1733: preview.ocean1733,
-          updatedPlacementIds: updates.map((u) => u.placementId),
-          changedCount: updates.length,
-          spareSource,
-          houseStartCaddyId,
-          thirdStartCaddyId,
-          thirdStartTeam,
-        } as Prisma.InputJsonValue,
-      },
-    });
-
-    return {
-      auditId: audit.id,
-      updated: updates,
-      afterHong: afterHong.length,
-      afterUnavail: afterUnavail.length,
-      afterDutyPlacements: afterDuty.length,
-      opsDutyRows: afterDutyRows.length,
-      fingerprint1Equal: fp1 === fp1BeforeSimple,
-      fingerprint2Equal: fp2 === fp2BeforeSimple,
-      retired3: retired3.length,
-      activeReservations: resCount,
-      placements: placeCount,
-    };
-  });
+      return {
+        auditId: audit.id,
+        updated: updates,
+        afterHong: afterHong.length,
+        afterUnavail: afterUnavail.length,
+        afterDutyPlacements: afterDuty.length,
+        opsDutyRows: afterDutyRows.length,
+        fingerprint1Equal: fp1 === fp1BeforeSimple,
+        fingerprint2Equal: fp2 === fp2BeforeSimple,
+        retired3: retired3.length,
+        activeReservations: resCount,
+        placements: placeCount,
+      };
+    },
+    { maxWait: 10_000, timeout: 20_000 }
+  );
 
   console.log("\n=== APPLY ===");
   console.log(JSON.stringify(result, null, 2));
