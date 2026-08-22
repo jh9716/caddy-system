@@ -8,6 +8,11 @@ import { splitPersonNames } from "@/lib/dailyCaddyNameMatch";
 
 export type OffSheet = { name: string; matrix: unknown[][] };
 
+export type ParsedOffSheetNames = {
+  namesByDate: Map<string, string[]>;
+  seenDates: Set<string>;
+};
+
 const TEAM_HEADER = /^(\d{1,2})\s*조$/;
 const DATE_IN_TEXT =
   /(\d{4})\s*[.\-\/]\s*(\d{1,2})\s*[.\-\/]\s*(\d{1,2})/;
@@ -56,15 +61,18 @@ function dateForColumn(
 /**
  * 모든 시트를 스캔해 날짜 → 휴무 이름 목록.
  * 조 헤더가 아닌 열(장기휴무 등)은 버림.
+ * seenDates: 날짜 헤더가 실제 휴무 블록(이후 N조 헤더)과 연결된 ymd.
+ * namesByDate: 실제 이름이 1명 이상인 날짜만 키를 가짐.
  */
 export function parseOffSheetsToNamesByDate(
   sheets: readonly OffSheet[]
-): Map<string, string[]> {
-  const byDate = new Map<string, string[]>();
+): ParsedOffSheetNames {
+  const namesByDate = new Map<string, string[]>();
+  const seenDates = new Set<string>();
   const push = (ymd: string, name: string) => {
-    const list = byDate.get(ymd) ?? [];
+    const list = namesByDate.get(ymd) ?? [];
     if (!list.includes(name)) list.push(name);
-    byDate.set(ymd, list);
+    namesByDate.set(ymd, list);
   };
 
   for (const sheet of sheets) {
@@ -87,6 +95,7 @@ export function parseOffSheetsToNamesByDate(
         for (let c = 0; c < (row || []).length; c++) {
           if (isTeamHeader(row[c])) teamCols.set(c, cellStr(row[c]));
         }
+        for (const d of dateStarts) seenDates.add(d.ymd);
         continue;
       }
       if (teamCols.size === 0) continue;
@@ -103,7 +112,7 @@ export function parseOffSheetsToNamesByDate(
     }
   }
 
-  return byDate;
+  return { namesByDate, seenDates };
 }
 
 export function offNamesForDate(
@@ -113,7 +122,7 @@ export function offNamesForDate(
   if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
     throw new Error("date must be YYYY-MM-DD");
   }
-  const byDate = parseOffSheetsToNamesByDate(sheets);
-  const names = byDate.get(ymd) ?? [];
-  return { names, matchedSheetDates: [...byDate.keys()].sort() };
+  const { namesByDate, seenDates } = parseOffSheetsToNamesByDate(sheets);
+  const names = namesByDate.get(ymd) ?? [];
+  return { names, matchedSheetDates: [...seenDates].sort() };
 }
