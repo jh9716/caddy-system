@@ -305,7 +305,27 @@ model DailySpecialDuty {
   @@index([caddyId])
 }
 
+/// 1·3부 / 1막 1부 위치 정책. AUTO=순번 창, MANUAL=기존 course+teeTime anchor.
+enum DailySpecialPlacementMode {
+  AUTO
+  MANUAL
+}
+
+/// 날짜별 1·3부/1막 1부 위치 설정. 없으면 implicit: anchor 있음=MANUAL, 없음=AUTO R=4.
+model DailySpecialPlacementSetting {
+  id                 Int                         @id @default(autoincrement())
+  date               DateTime                    @unique
+  mode               DailySpecialPlacementMode   @default(AUTO)
+  /// 1부 끝에서 ONE_THREE/ONE_MAK을 넣지 않을 팀 수. 앱에서 0~20.
+  protectedTailCount Int                         @default(4)
+  createdAt          DateTime                    @default(now())
+  updatedAt          DateTime                    @updatedAt
+
+  @@index([date])
+}
+
 /// 1·3부 / 1막 1부 시작 예약 (코스+티타임). 54홀·1·2부는 사용하지 않음.
+/// MANUAL 모드에서만 엔진이 사용. AUTO 전환 시 row는 유지한다.
 model DailySpecialDutyAnchor {
   id        Int              @id @default(autoincrement())
   date      DateTime
