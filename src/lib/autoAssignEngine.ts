@@ -27,6 +27,16 @@ import {
   rotateThirdQueueFromStartTeam,
   automaticThirdStartTeam,
 } from "@/lib/thirdWeeklyRotation";
+import {
+  SPECIAL_WINDOW_COLLISION,
+  SPECIAL_WINDOW_OVERFLOW,
+  computeShift1SpecialWindow,
+  inferComputePlacementMode,
+  parseProtectedTailCount,
+  PROTECTED_TAIL_COUNT_DEFAULT,
+  type SpecialPlacementMode,
+  type SpecialWindowCollision,
+} from "@/lib/specialPlacement";
 
 /** 배치/표시용 코스 고정 순서 */
 export const COURSE_ORDER: readonly CourseCode[] = COURSE_CODES;
@@ -63,6 +73,8 @@ export const REASON = {
   ONE_MAK_PRIORITY: "ONE_MAK_PRIORITY",
   ONE_MAK_MISSING_ANCHOR: "ONE_MAK_MISSING_ANCHOR",
   ONE_MAK_INSUFFICIENT_RESERVATIONS: "ONE_MAK_INSUFFICIENT_RESERVATIONS",
+  SPECIAL_WINDOW_OVERFLOW,
+  SPECIAL_WINDOW_COLLISION,
   FIXED_ASSIGNMENT: "FIXED_ASSIGNMENT",
   MARSHAL_CALL: "MARSHAL_CALL",
   DUTY_CALL: "DUTY_CALL",
@@ -192,6 +204,8 @@ export type AutoAssignmentRow = {
   /**
    * 특수배치 LOCK. true면 해당 reservation에 고정되어 일반 reflow에 참여하지 않음.
    * 미지정 시 기본값: 특수 kind=ON, 일반=OFF.
+   * 1부 ONE_THREE/ONE_MAK은 AUTO 재계산 대상이라 기본 OFF.
+   * MANUAL·SET_LOCK·FIXED는 locked=true를 명시한다.
    * 3부 1·3·주말반은 기본 LOCK로 표시되지만 cancel/add reflow에서는
    * 명시적 locked=true가 아니면 3부 우선순위로 재배치한다.
    */
@@ -291,6 +305,31 @@ export type AutoAssignResultV1 = {
     /** 기준점(2026-08-17=12조)으로 계산한 자동 시작조 */
     thirdStartTeamAutomatic: string;
   };
+  /** 1·3부/1막 1부 위치 정책. live reflow가 이 값을 따른다. */
+  specialPlacement?: SpecialPlacementState;
+};
+
+export type SpecialPlacementState = {
+  mode: SpecialPlacementMode;
+  protectedTailCount: number;
+  window?: {
+    N: number;
+    specialStart: number;
+    specialEnd: number;
+    oneThreeStart: number | null;
+    oneThreeEnd: number | null;
+    oneMakStart: number | null;
+    oneMakEnd: number | null;
+  };
+  block?: SpecialWindowBlock;
+};
+
+export type SpecialWindowBlock = {
+  code: typeof SPECIAL_WINDOW_OVERFLOW | typeof SPECIAL_WINDOW_COLLISION;
+  message: string;
+  neededCount: number;
+  availableCount: number;
+  collisions: SpecialWindowCollision[];
 };
 
 export type ReservationCancelCause = "CANCEL" | "TEAM_NOSHOW";
@@ -1082,6 +1121,29 @@ function reservationsFromAnchor(
   };
 }
 
+function occupancyLookup(
+  rows: AutoAssignmentRow[]
+): Map<string, { kind: string; reason: string }> {
+  const map = new Map<string, { kind: string; reason: string }>();
+  for (const row of rows) {
+    map.set(reservationKey(row.reservation), {
+      kind: row.kind,
+      reason: row.reason,
+    });
+  }
+  return map;
+}
+
+function blockAllSpecialCandidates(
+  bag: SpecialUnassignedRow[],
+  caddies: AutoAssignCaddy[],
+  reason: string
+) {
+  for (const caddy of caddies) {
+    bag.push({ caddy, reason, review: true });
+  }
+}
+
 function findLaterWithGap(
   first: AutoAssignReservation,
   remaining: AutoAssignReservation[],
@@ -1119,11 +1181,12 @@ export type SpecialDutySlotResult = {
   assignedCaddyIds: Set<number>;
   /** 1부 1·3 배치에 성공한 신청자. 3부 우선은 regular 1·2부 이후 */
   oneThreePlaced: AutoAssignCaddy[];
+  specialPlacement: SpecialPlacementState;
 };
 
 /**
  * 관리자 특수근무 슬롯 배치 (고정/찾근 이후).
- * 1부: 앞 2자리 보호 → 54홀 → 1·2부, 1·3/1막은 1부 anchor부터.
+ * 1부: 앞 2자리 보호 → 54홀 → 1·2부, 1·3/1막은 AUTO 순번 창 또는 MANUAL anchor.
  * 2부: HOUSE 첫근무 순환이 끝나는 지점에 1·2부 삽입.
  * 3부 1·3·WEEKEND는 여기가 아니라 regular 1·2부·2부 스페어 이후 배치.
  */
@@ -1134,6 +1197,9 @@ export function assignSpecialDutySlots(input: {
   oneTwoCandidates: AutoAssignCaddy[];
   oneThreeCandidates: AutoAssignCaddy[];
   oneMakCandidates: AutoAssignCaddy[];
+  placementMode?: SpecialPlacementMode | null;
+  protectedTailCount?: number;
+  occupiedReservations?: AutoAssignmentRow[];
   oneThreeAnchor?: SpecialStartAnchor | null;
   oneMakAnchor?: SpecialStartAnchor | null;
   /** 고정 제외 전 1부 실제 sequence. 없으면 remaining으로 계산 */
@@ -1274,17 +1340,195 @@ export function assignSpecialDutySlots(input: {
     remaining = withoutTaken(remaining, taken);
   }
 
-  // 1·3부 1부: 관리자 anchor부터 연속
   const oneThreePlaced: AutoAssignCaddy[] = [];
-  {
-    if (oneThree.length && !input.oneThreeAnchor) {
-      for (const caddy of oneThree) {
-        specialUnassigned.push({
-          caddy,
-          reason: REASON.ONE_THREE_MISSING_ANCHOR,
-          review: true,
+  const placementMode = inferComputePlacementMode({
+    placementMode: input.placementMode,
+    hasAnchor: !!(input.oneThreeAnchor || input.oneMakAnchor),
+  });
+  const tailParsed = parseProtectedTailCount(
+    input.protectedTailCount ?? PROTECTED_TAIL_COUNT_DEFAULT
+  );
+  const protectedTailCount = tailParsed.ok
+    ? tailParsed.value
+    : PROTECTED_TAIL_COUNT_DEFAULT;
+  let specialPlacement: SpecialPlacementState = {
+    mode: placementMode,
+    protectedTailCount,
+  };
+
+  const lockSpecial = placementMode === "MANUAL";
+  const pushShift1Special = (
+    bag: AutoAssignmentRow[],
+    caddy: AutoAssignCaddy,
+    reservation: AutoAssignReservation,
+    reason: string,
+    kind: AssignmentKind,
+    pairId: string | null
+  ) => {
+    bag.push({
+      date,
+      shift: reservation.shift as ShiftPart,
+      sequenceIndex: -1,
+      reason,
+      reservation,
+      caddy,
+      pairId,
+      kind,
+      locked: lockSpecial,
+    });
+  };
+
+  if (placementMode === "AUTO") {
+    const window = computeShift1SpecialWindow({
+      N: originalShift1.length,
+      R: protectedTailCount,
+      A: oneThree.length,
+      B: oneMak.length,
+    });
+    if (!window.ok) {
+      blockAllSpecialCandidates(
+        specialUnassigned,
+        [...oneThree, ...oneMak],
+        REASON.SPECIAL_WINDOW_OVERFLOW
+      );
+      specialPlacement = {
+        mode: "AUTO",
+        protectedTailCount,
+        block: {
+          code: REASON.SPECIAL_WINDOW_OVERFLOW,
+          message: window.message,
+          neededCount: window.neededCount,
+          availableCount: window.availableCount,
+          collisions: [],
+        },
+      };
+    } else if (window.neededCount > 0) {
+      const occupied = occupancyLookup([
+        ...(input.occupiedReservations || []),
+        ...fiftyFourHoleAssignments,
+        ...oneTwoAssignments,
+      ]);
+      const remainingKeys = new Set(
+        shiftReservations(remaining, "1부").map(reservationKey)
+      );
+      const collisions: SpecialWindowCollision[] = [];
+      const target = originalShift1.slice(
+        window.specialStart - 1,
+        window.specialEnd
+      );
+      target.forEach((row, offset) => {
+        const key = reservationKey(row);
+        if (remainingKeys.has(key)) return;
+        const hit = occupied.get(key);
+        collisions.push({
+          index: window.specialStart + offset,
+          course: String(row.course),
+          teeTime: row.teeTime,
+          teamName: row.teamName ?? null,
+          kind: hit?.kind,
+          reason: hit?.reason,
         });
+      });
+      if (collisions.length) {
+        blockAllSpecialCandidates(
+          specialUnassigned,
+          [...oneThree, ...oneMak],
+          REASON.SPECIAL_WINDOW_COLLISION
+        );
+        specialPlacement = {
+          mode: "AUTO",
+          protectedTailCount,
+          window: {
+            N: window.N,
+            specialStart: window.specialStart,
+            specialEnd: window.specialEnd,
+            oneThreeStart: window.oneThreeStart,
+            oneThreeEnd: window.oneThreeEnd,
+            oneMakStart: window.oneMakStart,
+            oneMakEnd: window.oneMakEnd,
+          },
+          block: {
+            code: REASON.SPECIAL_WINDOW_COLLISION,
+            message: `1·3부/1막 자동 구간에 이미 다른 특수배치가 있습니다 (${collisions
+              .map(
+                (c) =>
+                  `${c.index}번째 ${c.course} ${c.teeTime}${
+                    c.kind ? ` · ${c.kind}` : ""
+                  }`
+              )
+              .join(", ")}).`,
+            neededCount: window.neededCount,
+            availableCount: window.availableCount,
+            collisions,
+          },
+        };
+      } else {
+        const taken: AutoAssignReservation[] = [];
+        oneThree.forEach((caddy, i) => {
+          const slot = target[i];
+          pushShift1Special(
+            oneThreeAssignments,
+            caddy,
+            slot,
+            REASON.ONE_THREE_PRIORITY,
+            "oneThree",
+            `13-${caddy.id}`
+          );
+          taken.push(slot);
+          oneThreePlaced.push(caddy);
+          assignedCaddyIds.add(caddy.id);
+        });
+        oneMak.forEach((caddy, i) => {
+          const slot = target[oneThree.length + i];
+          pushShift1Special(
+            oneMakAssignments,
+            caddy,
+            slot,
+            REASON.ONE_MAK_PRIORITY,
+            "oneMak",
+            null
+          );
+          taken.push(slot);
+          assignedCaddyIds.add(caddy.id);
+        });
+        remaining = withoutTaken(remaining, taken);
+        specialPlacement = {
+          mode: "AUTO",
+          protectedTailCount,
+          window: {
+            N: window.N,
+            specialStart: window.specialStart,
+            specialEnd: window.specialEnd,
+            oneThreeStart: window.oneThreeStart,
+            oneThreeEnd: window.oneThreeEnd,
+            oneMakStart: window.oneMakStart,
+            oneMakEnd: window.oneMakEnd,
+          },
+        };
       }
+    } else {
+      specialPlacement = {
+        mode: "AUTO",
+        protectedTailCount,
+        window: {
+          N: window.N,
+          specialStart: window.specialStart,
+          specialEnd: window.specialEnd,
+          oneThreeStart: null,
+          oneThreeEnd: null,
+          oneMakStart: null,
+          oneMakEnd: null,
+        },
+      };
+    }
+  } else {
+    // MANUAL: 기존 관리자 anchor부터 연속
+    if (oneThree.length && !input.oneThreeAnchor) {
+      blockAllSpecialCandidates(
+        specialUnassigned,
+        oneThree,
+        REASON.ONE_THREE_MISSING_ANCHOR
+      );
     } else if (oneThree.length && input.oneThreeAnchor) {
       const from = reservationsFromAnchor(
         shiftReservations(remaining, "1부"),
@@ -1292,21 +1536,17 @@ export function assignSpecialDutySlots(input: {
         input.oneThreeAnchor
       );
       if (!from.found) {
-        for (const caddy of oneThree) {
-          specialUnassigned.push({
-            caddy,
-            reason: REASON.ONE_THREE_MISSING_ANCHOR,
-            review: true,
-          });
-        }
+        blockAllSpecialCandidates(
+          specialUnassigned,
+          oneThree,
+          REASON.ONE_THREE_MISSING_ANCHOR
+        );
       } else if (!from.rows.length) {
-        for (const caddy of oneThree) {
-          specialUnassigned.push({
-            caddy,
-            reason: REASON.ONE_THREE_MISSING_SHIFT1,
-            review: true,
-          });
-        }
+        blockAllSpecialCandidates(
+          specialUnassigned,
+          oneThree,
+          REASON.ONE_THREE_MISSING_SHIFT1
+        );
       } else {
         const taken: AutoAssignReservation[] = [];
         let cursor = 0;
@@ -1320,7 +1560,7 @@ export function assignSpecialDutySlots(input: {
             continue;
           }
           const slot = from.rows[cursor++];
-          pushPair(
+          pushShift1Special(
             oneThreeAssignments,
             caddy,
             slot,
@@ -1335,18 +1575,13 @@ export function assignSpecialDutySlots(input: {
         remaining = withoutTaken(remaining, taken);
       }
     }
-  }
 
-  // 1막 1부: 관리자 anchor부터 연속 (찾근과 별개)
-  {
     if (oneMak.length && !input.oneMakAnchor) {
-      for (const caddy of oneMak) {
-        specialUnassigned.push({
-          caddy,
-          reason: REASON.ONE_MAK_MISSING_ANCHOR,
-          review: true,
-        });
-      }
+      blockAllSpecialCandidates(
+        specialUnassigned,
+        oneMak,
+        REASON.ONE_MAK_MISSING_ANCHOR
+      );
     } else if (oneMak.length && input.oneMakAnchor) {
       const from = reservationsFromAnchor(
         shiftReservations(remaining, "1부"),
@@ -1354,21 +1589,17 @@ export function assignSpecialDutySlots(input: {
         input.oneMakAnchor
       );
       if (!from.found) {
-        for (const caddy of oneMak) {
-          specialUnassigned.push({
-            caddy,
-            reason: REASON.ONE_MAK_MISSING_ANCHOR,
-            review: true,
-          });
-        }
+        blockAllSpecialCandidates(
+          specialUnassigned,
+          oneMak,
+          REASON.ONE_MAK_MISSING_ANCHOR
+        );
       } else if (!from.rows.length) {
-        for (const caddy of oneMak) {
-          specialUnassigned.push({
-            caddy,
-            reason: REASON.ONE_MAK_INSUFFICIENT_RESERVATIONS,
-            review: true,
-          });
-        }
+        blockAllSpecialCandidates(
+          specialUnassigned,
+          oneMak,
+          REASON.ONE_MAK_INSUFFICIENT_RESERVATIONS
+        );
       } else {
         const taken: AutoAssignReservation[] = [];
         let cursor = 0;
@@ -1382,7 +1613,7 @@ export function assignSpecialDutySlots(input: {
             continue;
           }
           const slot = from.rows[cursor++];
-          pushPair(
+          pushShift1Special(
             oneMakAssignments,
             caddy,
             slot,
@@ -1441,6 +1672,7 @@ export function assignSpecialDutySlots(input: {
     remainingReservations: remaining.sort(compareReservationOrder),
     assignedCaddyIds,
     oneThreePlaced,
+    specialPlacement,
   };
 }
 
@@ -2489,9 +2721,12 @@ export function computeAutoAssignmentsV1(input: {
   oneTwoCandidates?: AutoAssignCaddy[];
   /** 1막 신청자 후보 — 찾근_1막(fixed)과 별개 */
   oneMakCandidates?: AutoAssignCaddy[];
-  /** 1·3부 1부 시작 예약 (코스+티타임) */
+  /** 명시 시 이 모드만 사용. 없으면 anchor 있으면 MANUAL, 없으면 AUTO */
+  placementMode?: SpecialPlacementMode | null;
+  protectedTailCount?: number;
+  /** 1·3부 1부 시작 예약 (코스+티타임). MANUAL에서만 사용 */
   oneThreeAnchor?: SpecialStartAnchor | null;
-  /** 1막 1부 시작 예약 (코스+티타임) */
+  /** 1막 1부 시작 예약 (코스+티타임). MANUAL에서만 사용 */
   oneMakAnchor?: SpecialStartAnchor | null;
   /**
    * 운영 코스 Open 목록. 미지정 시 4코스 전부 ON.
@@ -2634,6 +2869,9 @@ export function computeAutoAssignmentsV1(input: {
     oneTwoCandidates,
     oneThreeCandidates,
     oneMakCandidates,
+    placementMode: input.placementMode,
+    protectedTailCount: input.protectedTailCount,
+    occupiedReservations: fixed.assignments,
     oneThreeAnchor: input.oneThreeAnchor,
     oneMakAnchor: input.oneMakAnchor,
     originalShift1,
@@ -2788,6 +3026,7 @@ export function computeAutoAssignmentsV1(input: {
       thirdStartTeam,
       thirdStartTeamAutomatic,
     },
+    specialPlacement: slotted.specialPlacement,
   };
 }
 
@@ -2837,10 +3076,18 @@ export function isWeekendBandRow(row: Pick<AutoAssignmentRow, "reason">): boolea
   );
 }
 
-/** 미지정 locked의 기본값: 특수 kind·주말반 ON, 일반 OFF */
+/** 미지정 locked의 기본값: 특수 kind·주말반 ON, 일반 OFF.
+ * 1부 ONE_THREE/ONE_MAK은 AUTO 재계산 대상이라 기본 OFF.
+ * MANUAL/SET_LOCK은 배치 시 locked=true를 명시한다. */
 export function defaultPlacementLocked(
-  row: Pick<AutoAssignmentRow, "kind" | "reason">
+  row: Pick<AutoAssignmentRow, "kind" | "reason" | "shift">
 ): boolean {
+  if (
+    (row.kind === "oneThree" || row.kind === "oneMak") &&
+    row.shift === "1부"
+  ) {
+    return false;
+  }
   if (row.kind !== "regular") return true;
   return isWeekendBandRow(row);
 }
@@ -4241,11 +4488,68 @@ function freezeBeforeShiftFromEvents(
   return SHIFT_PARTS[minRank];
 }
 
+function collectShift1SpecialCandidates(
+  previous: AutoAssignResultV1,
+  kind: "oneThree" | "oneMak"
+): AutoAssignCaddy[] {
+  const seen = new Set<number>();
+  const out: AutoAssignCaddy[] = [];
+  for (const row of previous.assignments || []) {
+    if (row.shift !== "1부" || row.kind !== kind) continue;
+    if (row.locked === true) continue;
+    if (seen.has(row.caddy.id)) continue;
+    seen.add(row.caddy.id);
+    out.push(row.caddy);
+  }
+  return out.sort(compareSpecialCandidateOrder);
+}
+
+function uniqueReservations(
+  rows: AutoAssignReservation[]
+): AutoAssignReservation[] {
+  const seen = new Set<string>();
+  const out: AutoAssignReservation[] = [];
+  for (const row of rows) {
+    const key = reservationKey(row);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+  }
+  return out;
+}
+
+function reflowPlacementPolicy(
+  input: { specialPlacement?: SpecialPlacementState | null },
+  previous: AutoAssignResultV1
+): SpecialPlacementState {
+  const src = input.specialPlacement?.mode
+    ? input.specialPlacement
+    : previous.specialPlacement?.mode
+      ? previous.specialPlacement
+      : null;
+  if (src?.mode) {
+    return {
+      mode: src.mode,
+      protectedTailCount: src.protectedTailCount,
+      window: src.window ? { ...src.window } : undefined,
+      block: src.block,
+    };
+  }
+  return {
+    mode: inferComputePlacementMode({
+      placementMode: null,
+      hasAnchor: false,
+    }),
+    protectedTailCount: PROTECTED_TAIL_COUNT_DEFAULT,
+  };
+}
+
 export function reflowRegularAssignments(input: {
   previous: AutoAssignResultV1;
   /** 원본 일반 available 풀 (정렬 전/후 모두 허용 — 내부에서 재정렬) */
   regularCaddyPool: AutoAssignCaddy[];
   events: ReservationChangeEvent[];
+  specialPlacement?: SpecialPlacementState | null;
 }): RegularReflowResult {
   const previous = input.previous;
   const date = previous.date;
@@ -4476,18 +4780,160 @@ export function reflowRegularAssignments(input: {
     freezeShifts.includes(s.shift)
   );
 
+  const placementPolicy = reflowPlacementPolicy(input, previous);
+  const shift1Frozen = freezeShifts.includes("1부");
+  const autoShift1Specials: AutoAssignmentRow[] = [];
+  let autoSpecialBlock: SpecialWindowBlock | undefined;
+  if (placementPolicy.mode === "AUTO" && !shift1Frozen) {
+    const oneThreeCands = collectShift1SpecialCandidates(previous, "oneThree");
+    const oneMakCands = collectShift1SpecialCandidates(previous, "oneMak");
+    const shift1All = uniqueReservations([
+      ...lockedRows.map((row) => row.reservation),
+      ...seedMap.values(),
+    ])
+      .filter((row) => row.shift === "1부")
+      .sort(compareReservationOrder);
+    const window = computeShift1SpecialWindow({
+      N: shift1All.length,
+      R: placementPolicy.protectedTailCount,
+      A: oneThreeCands.length,
+      B: oneMakCands.length,
+    });
+    if (!window.ok) {
+      autoSpecialBlock = {
+        code: REASON.SPECIAL_WINDOW_OVERFLOW,
+        message: window.message,
+        neededCount: window.neededCount,
+        availableCount: window.availableCount,
+        collisions: [],
+      };
+    } else if (window.neededCount > 0) {
+      const occupied = occupancyLookup(lockedRows);
+      const remainingKeys = new Set(
+        [...seedMap.values()]
+          .filter((row) => row.shift === "1부")
+          .map(reservationKey)
+      );
+      const target = shift1All.slice(window.specialStart - 1, window.specialEnd);
+      const collisions: SpecialWindowCollision[] = [];
+      target.forEach((row, offset) => {
+        const key = reservationKey(row);
+        if (remainingKeys.has(key)) return;
+        const hit = occupied.get(key);
+        collisions.push({
+          index: window.specialStart + offset,
+          course: String(row.course),
+          teeTime: row.teeTime,
+          teamName: row.teamName ?? null,
+          kind: hit?.kind,
+          reason: hit?.reason,
+        });
+      });
+      if (collisions.length) {
+        autoSpecialBlock = {
+          code: REASON.SPECIAL_WINDOW_COLLISION,
+          message: `1·3부/1막 자동 구간에 이미 다른 특수배치가 있습니다 (${collisions
+            .map(
+              (c) =>
+                `${c.index}번째 ${c.course} ${c.teeTime}${
+                  c.kind ? ` · ${c.kind}` : ""
+                }`
+            )
+            .join(", ")}).`,
+          neededCount: window.neededCount,
+          availableCount: window.availableCount,
+          collisions,
+        };
+      } else {
+        const place = (
+          caddy: AutoAssignCaddy,
+          slot: AutoAssignReservation,
+          kind: "oneThree" | "oneMak",
+          reason: string,
+          pairId: string | null
+        ) => {
+          autoShift1Specials.push({
+            date,
+            shift: slot.shift as ShiftPart,
+            sequenceIndex: -1,
+            reason,
+            reservation: slot,
+            caddy,
+            pairId,
+            kind,
+            locked: false,
+          });
+          seedMap.delete(reservationKey(slot));
+        };
+        oneThreeCands.forEach((caddy, i) =>
+          place(
+            caddy,
+            target[i],
+            "oneThree",
+            REASON.ONE_THREE_PRIORITY,
+            `13-${caddy.id}`
+          )
+        );
+        oneMakCands.forEach((caddy, i) =>
+          place(
+            caddy,
+            target[oneThreeCands.length + i],
+            "oneMak",
+            REASON.ONE_MAK_PRIORITY,
+            null
+          )
+        );
+        placementPolicy.window = {
+          N: window.N,
+          specialStart: window.specialStart,
+          specialEnd: window.specialEnd,
+          oneThreeStart: window.oneThreeStart,
+          oneThreeEnd: window.oneThreeEnd,
+          oneMakStart: window.oneMakStart,
+          oneMakEnd: window.oneMakEnd,
+        };
+      }
+    }
+  }
+  if (autoSpecialBlock) {
+    warnings.push({
+      level: "error",
+      code: autoSpecialBlock.code,
+      message: autoSpecialBlock.message,
+    });
+    return {
+      date,
+      reason: autoSpecialBlock.code,
+      before: previous,
+      after: previous,
+      changes: [],
+      placementDiffs: [],
+      lockedPreserved: [],
+      warnings,
+      unavailableCaddyIds: [...unavailable.keys()],
+      summary: emptyReflowSummary(0),
+    };
+  }
+
   const regularReservations = [...seedMap.values()].sort(compareReservationOrder);
+  const autoSpecialIds = new Set(autoShift1Specials.map((row) => row.caddy.id));
 
   const extraSpecials = unlockedPrevious
     .filter(
       (row) =>
         specialTagRow(row) &&
         !allDayUnavailable.has(row.caddy.id) &&
-        !blockedInShift(row.caddy.id, row.shift)
+        !blockedInShift(row.caddy.id, row.shift) &&
+        !autoSpecialIds.has(row.caddy.id)
     )
     .map((row) => row.caddy);
   const pool = eligibleRegularReflowCaddies([...fullPool, ...extraSpecials])
-    .filter((c) => !lockedCaddies.has(c.id) && !allDayUnavailable.has(c.id))
+    .filter(
+      (c) =>
+        !lockedCaddies.has(c.id) &&
+        !allDayUnavailable.has(c.id) &&
+        !autoSpecialIds.has(c.id)
+    )
     .sort(compareCaddyOrder);
   const pools = splitCaddyPools(pool);
 
@@ -4520,7 +4966,11 @@ export function reflowRegularAssignments(input: {
   );
   const oneThreeForThird: AutoAssignCaddy[] = [];
   const seenOneThree = new Set<number>();
-  for (const row of lockedRows) {
+  for (const row of [
+    ...lockedRows,
+    ...seedAssignments,
+    ...autoShift1Specials,
+  ]) {
     if (row.kind !== "oneThree" || row.shift !== "1부") continue;
     if (lockedThirdIds.has(row.caddy.id)) continue;
     if (seenOneThree.has(row.caddy.id)) continue;
@@ -4549,17 +4999,24 @@ export function reflowRegularAssignments(input: {
   const regularAssignments = regular.assignments.map((row) =>
     overlaySpecialTag(row, unlockedSpecialByCaddy)
   );
-  const usedRegular = new Set(regularAssignments.map((a) => a.caddy.id));
+  const usedRegular = new Set([
+    ...regularAssignments.map((a) => a.caddy.id),
+    ...autoSpecialIds,
+  ]);
   const unusedCaddies = pool.filter((c) => !usedRegular.has(c.id));
 
-  const assignments = [...lockedRows, ...regularAssignments].sort(
-    compareAssignmentOrder
-  );
+  const assignments = [
+    ...lockedRows,
+    ...autoShift1Specials,
+    ...regularAssignments,
+  ].sort(compareAssignmentOrder);
   const buckets = bucketizeAssignments(assignments);
 
   const byShift = emptyShiftMeta();
   for (const shift of SHIFT_PARTS) {
-    const lockedCount = lockedRows.filter((a) => a.shift === shift).length;
+    const lockedCount =
+      lockedRows.filter((a) => a.shift === shift).length +
+      autoShift1Specials.filter((a) => a.shift === shift).length;
     byShift[shift].reservations =
       lockedCount + regular.byShift[shift].reservations;
     byShift[shift].assigned = lockedCount + regular.byShift[shift].assigned;
@@ -4599,6 +5056,10 @@ export function reflowRegularAssignments(input: {
       drivingPoolCount: pools.driving.length,
       byShift,
       finalPointer: regular.finalPointer,
+    },
+    specialPlacement: {
+      ...placementPolicy,
+      block: autoSpecialBlock,
     },
   };
 

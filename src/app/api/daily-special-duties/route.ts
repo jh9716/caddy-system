@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { isAnchorSpecialKind, isDailySpecialKind, type DailySpecialKind } from "@/lib/dailySpecialDuty";
+import { isSpecialPlacementMode } from "@/lib/specialPlacement";
 import {
     DailySpecialDutyError,
   addDailySpecialDuties,
@@ -9,6 +10,7 @@ import {
   commitKindSpecialDuties,
   moveDailySpecialDuty,
   reorderDailySpecialDuties,
+  upsertDailySpecialPlacement,
   upsertSpecialStartAnchor,
 } from "@/lib/dailySpecialDutyService";
 
@@ -126,6 +128,20 @@ export async function PATCH(req: NextRequest) {
     const date = String(body?.date || "");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return NextResponse.json({ error: "date=YYYY-MM-DD 필요" }, { status: 400 });
+    }
+    if (body?.action === "placement") {
+      if (!isSpecialPlacementMode(body?.mode)) {
+        return NextResponse.json(
+          { error: "mode는 AUTO 또는 MANUAL이어야 합니다." },
+          { status: 400 }
+        );
+      }
+      await upsertDailySpecialPlacement({
+        date,
+        mode: body.mode,
+        protectedTailCount: body.protectedTailCount,
+      });
+      return NextResponse.json(await buildDailySpecialDutyPayload(date));
     }
     if (body?.action === "anchor") {
       if (!isAnchorSpecialKind(body?.kind)) {

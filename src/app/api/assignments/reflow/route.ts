@@ -12,6 +12,7 @@ import {
   type ReservationChangeEvent,
 } from "@/lib/autoAssignEngine";
 import { regularPoolExcludingStoredOpsDuty } from "@/lib/opsDutyLivePool";
+import { resolveDailySpecialPlacement } from "@/lib/dailySpecialDutyService";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -49,6 +50,12 @@ export async function POST(req: NextRequest) {
       previous.date,
       regularCaddyPool
     );
+    const placement = await resolveDailySpecialPlacement(previous.date);
+    const specialPlacement = {
+      mode: placement.mode,
+      protectedTailCount: placement.protectedTailCount,
+    };
+    previous.specialPlacement = specialPlacement;
 
     if (change && change.type) {
       const result = previewLiveAssignmentChange({

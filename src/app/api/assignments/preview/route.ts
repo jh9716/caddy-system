@@ -20,7 +20,10 @@ import {
   unavailableReasonsFromRows,
   type EngineSpecialBundles,
 } from "@/lib/dailySpecialDuty";
-import { loadEngineSpecialBundlesForDate } from "@/lib/dailySpecialDutyService";
+import {
+  loadEngineSpecialBundlesForDate,
+  resolveDailySpecialPlacement,
+} from "@/lib/dailySpecialDutyService";
 import { isThirdWeeklyTeam } from "@/lib/thirdWeeklyRotation";
 import { loadEffectiveThirdStartTeam } from "@/lib/thirdWeeklyStartService";
 import { regularPoolExcludingStoredOpsDuty } from "@/lib/opsDutyLivePool";
@@ -158,7 +161,7 @@ export async function POST(req: NextRequest) {
         (r) => !r.date || r.date === date
       );
       const unavailable = unavailableReasonsFromRows(availability.excluded);
-      const { bundles, anchors } = await loadEngineSpecialBundlesForDate(
+      const { bundles, anchors, placement } = await loadEngineSpecialBundlesForDate(
         date,
         unavailable
       );
@@ -228,8 +231,11 @@ export async function POST(req: NextRequest) {
         oneThreeCandidates,
         oneTwoCandidates,
         oneMakCandidates,
-        oneThreeAnchor: anchors.ONE_THREE,
-        oneMakAnchor: anchors.ONE_MAK,
+        placementMode: placement.mode,
+        protectedTailCount: placement.protectedTailCount,
+        oneThreeAnchor:
+          placement.mode === "MANUAL" ? anchors.ONE_THREE : null,
+        oneMakAnchor: placement.mode === "MANUAL" ? anchors.ONE_MAK : null,
         openCourses,
         houseStartCaddyId,
         thirdStartTeam,
@@ -287,6 +293,8 @@ export async function POST(req: NextRequest) {
       : null;
     let oneThreeAnchor = parseSpecialAnchor(body.oneThreeAnchor);
     let oneMakAnchor = parseSpecialAnchor(body.oneMakAnchor);
+    let placementMode: "AUTO" | "MANUAL" | null = null;
+    let protectedTailCount: number | undefined;
     let jsonCaddyDirectory: AutoAssignCaddy[] | undefined = Array.isArray(
       body.caddyDirectory
     )
@@ -307,10 +315,12 @@ export async function POST(req: NextRequest) {
         ...availability.excluded,
       ]);
       const unavailable = unavailableReasonsFromRows(availability.excluded);
-      const { bundles, anchors } = await loadEngineSpecialBundlesForDate(
+      const { bundles, anchors, placement } = await loadEngineSpecialBundlesForDate(
         date,
         unavailable
       );
+      placementMode = placement.mode;
+      protectedTailCount = placement.protectedTailCount;
       specialDutySkipped = bundles.skippedPlacements;
       const pools = applyBundlesToAssignPools({
         available,
@@ -332,10 +342,22 @@ export async function POST(req: NextRequest) {
       if (explicitMak == null && bundles.oneMakCandidates !== null) {
         explicitMak = bundles.oneMakCandidates;
       }
-      if (oneThreeAnchor == null) oneThreeAnchor = anchors.ONE_THREE;
-      if (oneMakAnchor == null) oneMakAnchor = anchors.ONE_MAK;
+      if (placement.mode === "AUTO") {
+        oneThreeAnchor = null;
+        oneMakAnchor = null;
+      } else {
+        if (oneThreeAnchor == null) oneThreeAnchor = anchors.ONE_THREE;
+        if (oneMakAnchor == null) oneMakAnchor = anchors.ONE_MAK;
+      }
     } else {
       available = await regularPoolExcludingStoredOpsDuty(date, available);
+      const placement = await resolveDailySpecialPlacement(date);
+      placementMode = placement.mode;
+      protectedTailCount = placement.protectedTailCount;
+      if (placement.mode === "AUTO") {
+        oneThreeAnchor = null;
+        oneMakAnchor = null;
+      }
     }
 
     const fiftyFourHole = extractFiftyFourHoleCandidates(
@@ -387,8 +409,10 @@ export async function POST(req: NextRequest) {
       oneThreeCandidates,
       oneTwoCandidates,
       oneMakCandidates,
-      oneThreeAnchor,
-      oneMakAnchor,
+      placementMode,
+      protectedTailCount,
+      oneThreeAnchor: placementMode === "AUTO" ? null : oneThreeAnchor,
+      oneMakAnchor: placementMode === "AUTO" ? null : oneMakAnchor,
       openCourses,
       houseStartCaddyId,
       thirdStartTeam: await resolvePreviewThirdStartTeam(

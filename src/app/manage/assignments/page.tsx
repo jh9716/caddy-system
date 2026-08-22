@@ -296,6 +296,7 @@ export default function ManageAssignmentsOpsPage() {
             return {
               course: row.course,
               teeTime: row.teeTime,
+              teamName: row.teamName ?? null,
               label: `${courseLabel} ${row.teeTime}${
                 row.teamName ? ` · ${row.teamName}` : ""
               }`,
@@ -1542,6 +1543,30 @@ export default function ManageAssignmentsOpsPage() {
           </div>
         )}
         {error && <div className="ops-error">{error}</div>}
+        {autoResult?.specialPlacement?.block && (
+          <div className="ops-error">
+            {autoResult.specialPlacement.block.message}
+            {autoResult.specialPlacement.block.neededCount != null && (
+              <>
+                {" "}
+                (필요 {autoResult.specialPlacement.block.neededCount} / 확보{" "}
+                {autoResult.specialPlacement.block.availableCount})
+              </>
+            )}
+            {autoResult.specialPlacement.block.collisions?.length ? (
+              <div>
+                {autoResult.specialPlacement.block.collisions.map((c, i) => (
+                  <div key={`${c.index}-${c.teeTime}-${i}`}>
+                    {c.index}번째 {c.course} {c.teeTime}
+                    {c.teamName ? ` · ${c.teamName}` : ""}
+                    {c.kind ? ` · ${c.kind}` : ""}
+                    {c.reason ? ` · ${c.reason}` : ""}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        )}
         <SpecialDutyPanel
           key={date || "no-date"}
           date={date}

@@ -20,6 +20,13 @@ import {
   type SpecialDutyRecord,
 } from "@/lib/dailySpecialDuty";
 import type { NameMatchCaddy } from "@/lib/dailyCaddyNameMatch";
+import {
+  PROTECTED_TAIL_COUNT_DEFAULT,
+  parseProtectedTailCount,
+  resolveStoredPlacementPolicy,
+  type ResolvedSpecialPlacement,
+  type SpecialPlacementMode,
+} from "@/lib/specialPlacement";
 
 const caddySelect = {
   id: true,
@@ -378,7 +385,8 @@ export async function buildDailySpecialDutyPayload(date: string) {
     items: group.items,
   }));
   const anchors = await listSpecialStartAnchors(date);
-  return { date, groups, anchors };
+  const placement = await resolveDailySpecialPlacement(date, anchors);
+  return { date, groups, anchors, placement };
 }
 
 export async function listSpecialStartAnchors(
@@ -447,15 +455,83 @@ export async function upsertSpecialStartAnchor(input: {
   return listSpecialStartAnchors(input.date);
 }
 
+export async function loadDailySpecialPlacementSetting(date: string): Promise<{
+  mode: SpecialPlacementMode;
+  protectedTailCount: number;
+} | null> {
+  const { start, end } = dateRange(date);
+  const row = await prisma.dailySpecialPlacementSetting.findFirst({
+    where: { date: { gte: start, lte: end } },
+  });
+  if (!row) return null;
+  return {
+    mode: row.mode as SpecialPlacementMode,
+    protectedTailCount: row.protectedTailCount,
+  };
+}
+
+export async function resolveDailySpecialPlacement(
+  date: string,
+  anchors?: {
+    ONE_THREE: { course: string; teeTime: string } | null;
+    ONE_MAK: { course: string; teeTime: string } | null;
+  }
+): Promise<ResolvedSpecialPlacement> {
+  const setting = await loadDailySpecialPlacementSetting(date);
+  const resolvedAnchors = anchors ?? (await listSpecialStartAnchors(date));
+  return resolveStoredPlacementPolicy({
+    setting,
+    hasAnchor: !!(resolvedAnchors.ONE_THREE || resolvedAnchors.ONE_MAK),
+  });
+}
+
+export async function upsertDailySpecialPlacement(input: {
+  date: string;
+  mode: SpecialPlacementMode;
+  protectedTailCount?: unknown;
+}): Promise<ResolvedSpecialPlacement> {
+  const parsed = parseProtectedTailCount(
+    input.protectedTailCount ?? PROTECTED_TAIL_COUNT_DEFAULT
+  );
+  if (!parsed.ok) {
+    throw new DailySpecialDutyError(parsed.message, "protected_tail_invalid");
+  }
+  const { start, end } = dateRange(input.date);
+  const existing = await prisma.dailySpecialPlacementSetting.findFirst({
+    where: { date: { gte: start, lte: end } },
+  });
+  if (existing) {
+    await prisma.dailySpecialPlacementSetting.update({
+      where: { id: existing.id },
+      data: { mode: input.mode, protectedTailCount: parsed.value },
+    });
+  } else {
+    await prisma.dailySpecialPlacementSetting.create({
+      data: {
+        date: start,
+        mode: input.mode,
+        protectedTailCount: parsed.value,
+      },
+    });
+  }
+  return {
+    mode: input.mode,
+    protectedTailCount: parsed.value,
+    source: "row",
+  };
+}
+
 export async function loadEngineSpecialBundlesForDate(
   date: string,
   unavailableById: ReadonlyMap<number, string[]>
 ) {
   const records = await listDailySpecialDutyRecords(date);
   const anchors = await listSpecialStartAnchors(date);
+  const placement = await resolveDailySpecialPlacement(date, anchors);
   return {
     records,
     anchors,
+    placement,
     bundles: buildEngineSpecialBundles(records, unavailableById),
   };
 }

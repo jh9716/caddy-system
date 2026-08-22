@@ -42,6 +42,7 @@
     "test:off-request-auth-unit": "npx tsx scripts/test-off-request-auth-unit.ts",
     "test:off-request-api-unit": "npx tsx scripts/test-off-request-api-unit.ts",
     "test:daily-special-duty-unit": "npx tsx scripts/test-daily-special-duty-unit.ts",
+    "test:special-placement-unit": "npx tsx scripts/test-special-placement-unit.ts",
     "test:daily-ops-duty-unit": "npx tsx scripts/test-daily-ops-duty-unit.ts",
     "test:third-weekly-rotation-unit": "npx tsx scripts/test-third-weekly-rotation-unit.ts"
   },
