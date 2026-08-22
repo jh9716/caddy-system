@@ -28,7 +28,8 @@ import {
   sliceShift1WindowSlots,
   type SpecialPlacementMode,
 } from "@/lib/specialPlacement";
-import { COURSE_LABELS, resolveCourseCode } from "@/lib/reservationParser";
+import { resolveCourseCode } from "@/lib/autoAssignEngine";
+import { COURSE_LABELS } from "@/lib/reservationParser";
 
 type GroupPayload = {
   kind: DailySpecialKind;
