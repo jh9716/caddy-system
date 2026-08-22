@@ -9,11 +9,15 @@ import {
   resolveOffSheetNameTokens,
   splitPersonNames,
 } from "../src/lib/dailyCaddyNameMatch";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   offNamesForDate,
   parseOffSheetDateCell,
   parseOffSheetsToNamesByDate,
+  type OffSheet,
 } from "../src/lib/offSheetParser";
+import { OffSheetError, requireOffNamesForDate } from "../src/lib/offSheetFetch";
 import {
   buildDutyMarshalLeaderTestBuffer,
   parseDutyMarshalLeaderWorkbook,
@@ -81,21 +85,164 @@ const offFixture = {
   ],
 };
 
+function emptyNameOffSheet(ymdLabel: string, name = "empty-day"): OffSheet {
+  return {
+    name,
+    matrix: [
+      [ymdLabel, "", ""],
+      ["1조", "2조", "3조"],
+      ["", "", ""],
+    ],
+  };
+}
+
+function offSheetStatus(sheets: readonly OffSheet[], ymd: string): {
+  ok: boolean;
+  names: string[];
+  status: number;
+  code: string | null;
+} {
+  try {
+    const names = requireOffNamesForDate(sheets, ymd);
+    return { ok: true, names, status: 200, code: null };
+  } catch (e) {
+    if (e instanceof OffSheetError) {
+      return { ok: false, names: [], status: e.status, code: e.code };
+    }
+    throw e;
+  }
+}
+
 section("휴무 Sheet 해당 날짜만");
 {
-  const byDate = parseOffSheetsToNamesByDate([offFixture]);
-  const d17 = byDate.get("2026-08-17") || [];
-  const d18 = byDate.get("2026-08-18") || [];
-  const d24 = byDate.get("2026-08-24") || [];
+  const { namesByDate, seenDates } = parseOffSheetsToNamesByDate([offFixture]);
+  const d17 = namesByDate.get("2026-08-17") || [];
+  const d18 = namesByDate.get("2026-08-18") || [];
+  const d24 = namesByDate.get("2026-08-24") || [];
   assert(d17.includes("정윤지") && d17.includes("양정훈"), "8/17 좌측 주 이름");
   assert(!d17.includes("김경진") && d24.includes("김경진"), "8/17과 8/24 블록 분리");
   assert(d17.includes("김청운"), "괄호 주석 이름 정규화");
   assert(d18.includes("김진희1") && !d18.includes("이용근"), "8/18만");
+  assert(seenDates.has("2026-08-17"), "8/17 seen");
+  assert(seenDates.has("2026-08-18"), "8/18 seen");
+  assert(seenDates.has("2026-08-24"), "8/24 seen");
   const picked = offNamesForDate([offFixture], "2026-08-17");
   assert(picked.matchedSheetDates.includes("2026-08-17"), "날짜 존재");
   assert(
     !picked.names.includes("김혜진"),
     "선택일 아닌 이름 제외"
+  );
+  const required = requireOffNamesForDate([offFixture], "2026-08-17");
+  assert(required.includes("정윤지") && required.includes("양정훈"), "이름 있는 날짜 require 동일");
+}
+
+section("휴무 Sheet 날짜 있음 + 휴무 0명");
+{
+  const empty21 = emptyNameOffSheet("2026.08.21 (금)", "0821-empty");
+  const parsedEmpty = parseOffSheetsToNamesByDate([empty21]);
+  assert(parsedEmpty.seenDates.has("2026-08-21"), "빈칸 날짜도 seen");
+  assert(!parsedEmpty.namesByDate.has("2026-08-21"), "0명은 namesByDate 키 없음");
+  const emptyResult = offNamesForDate([empty21], "2026-08-21");
+  assert(emptyResult.matchedSheetDates.includes("2026-08-21"), "0명 날짜는 matched");
+  assert(emptyResult.names.length === 0, "날짜 헤더 있음 + 이름 전부 빈칸 → []");
+  const emptyReq = offSheetStatus([empty21], "2026-08-21");
+  assert(emptyReq.ok && emptyReq.names.length === 0, "빈칸 날짜는 오류 없음");
+
+  const skipOnly: OffSheet = {
+    name: "skip-labels",
+    matrix: [
+      ["2026.08.21 (금)", "", ""],
+      ["1조", "2조", "3조"],
+      ["장기휴무", "장기휴가", "휴무자명단"],
+    ],
+  };
+  const skipResult = requireOffNamesForDate([skipOnly], "2026-08-21");
+  assert(skipResult.length === 0, "장기휴무 등 제외 텍스트만 있으면 []");
+
+  const otherTab: OffSheet = {
+    name: "0817~30",
+    matrix: [
+      ["2026.08.17 (월)", "", ""],
+      ["1조", "2조", "3조"],
+      ["정윤지", "이용근", ""],
+    ],
+  };
+  const multi = offSheetStatus([otherTab, empty21], "2026-08-21");
+  assert(
+    multi.ok && multi.names.length === 0,
+    "여러 탭 중 한 탭에만 해당 날짜 + 휴무 0명 → []"
+  );
+  const otherDate = requireOffNamesForDate([otherTab, empty21], "2026-08-17");
+  assert(otherDate.includes("정윤지"), "다른 탭의 이름 있는 날짜는 유지");
+
+  const missing = offSheetStatus([offFixture], "2026-09-01");
+  assert(
+    !missing.ok &&
+      missing.status === 400 &&
+      missing.code === "off_sheet_date_not_found",
+    "어느 탭에도 해당 날짜 없음 → off_sheet_date_not_found"
+  );
+  const emptyMissing = offNamesForDate([empty21], "2026-09-01");
+  assert(
+    emptyMissing.names.length === 0 &&
+      !emptyMissing.matchedSheetDates.includes("2026-09-01"),
+    "날짜 없음도 names=[]이므로 seenDates로만 구분"
+  );
+  assert(
+    !offSheetStatus([empty21], "2026-09-01").ok,
+    "names.length === 0만으로 성공 처리하지 않음"
+  );
+
+  const weekOnly: OffSheet = {
+    name: "week-title",
+    matrix: [
+      ["2026 08.17~23", "", "", "2026 08.24~30"],
+      ["1조", "2조", "3조", "4조"],
+      ["홍길동", "", "", ""],
+    ],
+  };
+  const week = offSheetStatus([weekOnly], "2026-08-17");
+  assert(
+    !week.ok && week.code === "off_sheet_date_not_found",
+    "주간 제목만 있고 실제 일자 헤더 없음 → not-found"
+  );
+  const weekParsed = parseOffSheetsToNamesByDate([weekOnly]);
+  assert(!weekParsed.seenDates.has("2026-08-17"), "주간 범위를 날짜 존재로 확장하지 않음");
+}
+
+section("loadAvailabilityForDate / preview 휴무 0명 게이트");
+{
+  const availSrc = readFileSync(
+    join(process.cwd(), "src/lib/availabilityService.ts"),
+    "utf8"
+  );
+  const previewSrc = readFileSync(
+    join(process.cwd(), "src/app/api/assignments/preview/route.ts"),
+    "utf8"
+  );
+  assert(
+    availSrc.includes("offNames = requireOffNamesForDate(sheets, ymd)"),
+    "loadAvailabilityForDate는 requireOffNamesForDate를 그대로 사용"
+  );
+  assert(
+    previewSrc.includes("loadAvailabilityForDate") &&
+      previewSrc.includes("e instanceof OffSheetError") &&
+      previewSrc.includes("status: e.status"),
+    "preview는 OffSheetError를 e.status로 반환"
+  );
+
+  const empty21 = emptyNameOffSheet("2026.08.21 (금)");
+  const availZero = offSheetStatus([empty21], "2026-08-21");
+  assert(
+    availZero.ok && availZero.status === 200 && availZero.names.length === 0,
+    "loadAvailabilityForDate에서 0명 날짜 정상"
+  );
+  assert(availZero.status !== 400, "preview에서 0명 날짜 400이 아님");
+
+  const missing = offSheetStatus([empty21], "2026-09-01");
+  assert(
+    missing.status === 400 && missing.code === "off_sheet_date_not_found",
+    "없는 날짜는 계속 400"
   );
 }
 
