@@ -686,6 +686,9 @@ export function autoResultFromDraft(
     unusedCaddies: unusedCaddies(draft),
     special: base?.special || [],
     specialUnassigned: base?.specialUnassigned || [],
+    specialPlacement: base?.specialPlacement
+      ? { ...base.specialPlacement }
+      : undefined,
     openCourses: [...(draft.openCourses || [])],
     sparesByShift: (draft.sparesByShift || []).map((s) => ({
       shift: s.shift,

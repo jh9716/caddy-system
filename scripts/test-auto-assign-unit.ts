@@ -777,8 +777,8 @@ section("1·3부: 6시간 미만 거절");
   assert(result.oneThreeAssignments.length === 0, "no 1·3 assign");
   assert(result.specialUnassigned.length === 1, "review");
   assert(
-    result.specialUnassigned[0].reason === REASON.ONE_THREE_MISSING_ANCHOR,
-    "anchor 없으면 MISSING_ANCHOR"
+    result.specialUnassigned[0].reason === REASON.SPECIAL_WINDOW_OVERFLOW,
+    "anchor 없이 1부 부족하면 AUTO 창 blocking"
   );
   assert(
     !result.regularAssignments.some((a) => a.caddy.id === 901),

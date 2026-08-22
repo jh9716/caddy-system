@@ -20,6 +20,16 @@ import {
   type SpecialDutyRecord,
   type SpecialStartAnchor,
 } from "@/lib/dailySpecialDuty";
+import {
+  computeShift1SpecialWindow,
+  formatShift1Range,
+  parseProtectedTailCount,
+  PROTECTED_TAIL_COUNT_DEFAULT,
+  sliceShift1WindowSlots,
+  type SpecialPlacementMode,
+} from "@/lib/specialPlacement";
+import { resolveCourseCode } from "@/lib/autoAssignEngine";
+import { COURSE_LABELS } from "@/lib/reservationParser";
 
 type GroupPayload = {
   kind: DailySpecialKind;
@@ -34,6 +44,10 @@ type ListPayload = {
   date: string;
   groups: GroupPayload[];
   anchors?: SpecialDutyAnchors;
+  placement?: {
+    mode: SpecialPlacementMode;
+    protectedTailCount: number;
+  };
   added?: SpecialDutyRecord[];
   reviews?: Array<{ status: string; name: string; reason?: string }>;
   duplicates?: Array<{ caddyId: number; name?: string }>;
@@ -43,6 +57,7 @@ type ListPayload = {
 export type Shift1StartOption = {
   course: string;
   teeTime: string;
+  teamName?: string | null;
   label: string;
 };
 
@@ -75,6 +90,11 @@ export function SpecialDutyPanel({
 }) {
   const [groups, setGroups] = useState<GroupPayload[]>([]);
   const [anchors, setAnchors] = useState<SpecialDutyAnchors>(EMPTY_ANCHORS);
+  const [placementMode, setPlacementMode] =
+    useState<SpecialPlacementMode>("AUTO");
+  const [protectedTailCount, setProtectedTailCount] = useState(
+    PROTECTED_TAIL_COUNT_DEFAULT
+  );
   const [openKinds, setOpenKinds] = useState<Set<DailySpecialKind>>(new Set());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -100,6 +120,13 @@ export function SpecialDutyPanel({
   const applyPayload = useCallback((data: ListPayload) => {
     setGroups(data.groups || []);
     if (data.anchors) setAnchors(data.anchors);
+    if (data.placement?.mode) {
+      setPlacementMode(data.placement.mode);
+      const parsed = parseProtectedTailCount(data.placement.protectedTailCount);
+      setProtectedTailCount(
+        parsed.ok ? parsed.value : PROTECTED_TAIL_COUNT_DEFAULT
+      );
+    }
   }, []);
 
   const load = useCallback(async () => {
@@ -134,6 +161,8 @@ export function SpecialDutyPanel({
   useEffect(() => {
     setGroups([]);
     setAnchors(EMPTY_ANCHORS);
+    setPlacementMode("AUTO");
+    setProtectedTailCount(PROTECTED_TAIL_COUNT_DEFAULT);
     setError(null);
     setSelected([]);
     setPasteWarnings(null);
@@ -366,6 +395,61 @@ export function SpecialDutyPanel({
     }
   }
 
+  async function onPlacement(
+    nextMode: SpecialPlacementMode,
+    nextTail: number
+  ) {
+    const parsed = parseProtectedTailCount(nextTail);
+    if (!parsed.ok) {
+      setError(parsed.message);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/daily-special-duties", {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "placement",
+          date,
+          mode: nextMode,
+          protectedTailCount: parsed.value,
+        }),
+      });
+      const data = (await res.json()) as ListPayload;
+      if (!res.ok) {
+        setError(data.error || "위치 설정 저장 실패");
+        return;
+      }
+      applyPayload(data);
+      showToast(
+        nextMode === "AUTO"
+          ? `자동 배치 · 끝 ${parsed.value}팀 제외`
+          : "수동 위치 지정"
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "위치 설정 저장 실패");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const eligibleCount = (kind: DailySpecialKind) =>
+    (displayGroups.find((g) => g.kind === kind)?.items || []).filter(
+      (row) => !row.conflicts?.length
+    ).length;
+
+  const windowPreview = useMemo(() => {
+    return computeShift1SpecialWindow({
+      N: shift1Options.length,
+      R: protectedTailCount,
+      A: eligibleCount("ONE_THREE"),
+      B: eligibleCount("ONE_MAK"),
+    });
+  }, [shift1Options.length, protectedTailCount, displayGroups]);
+
   async function onAnchor(kind: DailySpecialKind, value: string) {
     const [course, teeTime] = value ? value.split("@@") : ["", ""];
     setBusy(true);
@@ -425,6 +509,107 @@ export function SpecialDutyPanel({
       </div>
       {loading ? <div className="sd-hint">불러오는 중…</div> : null}
       {error ? <div className="sd-error">{error}</div> : null}
+      <div className="sd-place">
+        <div className="sd-place-title">1·3부 / 1막 1부 위치</div>
+        <label className="sd-radio">
+          <input
+            type="radio"
+            name="special-place-mode"
+            checked={placementMode === "AUTO"}
+            disabled={busy}
+            onChange={() => void onPlacement("AUTO", protectedTailCount)}
+          />
+          <span>자동 배치</span>
+        </label>
+        {placementMode === "AUTO" ? (
+          <div className="sd-auto">
+            <div className="sd-tail">
+              <span>뒤 일반순번 보호</span>
+              <button
+                type="button"
+                className="sd-step"
+                disabled={busy || protectedTailCount <= 0}
+                onClick={() => void onPlacement("AUTO", protectedTailCount - 1)}
+              >
+                −
+              </button>
+              <input
+                type="number"
+                inputMode="numeric"
+                min={0}
+                max={20}
+                className="sd-tail-input"
+                value={protectedTailCount}
+                disabled={busy}
+                onChange={(e) => {
+                  const parsed = parseProtectedTailCount(e.target.value);
+                  if (parsed.ok) setProtectedTailCount(parsed.value);
+                }}
+                onBlur={() => void onPlacement("AUTO", protectedTailCount)}
+              />
+              <button
+                type="button"
+                className="sd-step"
+                disabled={busy || protectedTailCount >= 20}
+                onClick={() => void onPlacement("AUTO", protectedTailCount + 1)}
+              >
+                +
+              </button>
+              <span>팀</span>
+            </div>
+            <div className="sd-window">
+              {shift1Options.length === 0 ? (
+                <p>1부 예약을 불러오면 순번과 코스/티타임을 표시합니다.</p>
+              ) : windowPreview.ok ? (
+                <>
+                  <p>현재 1부 {windowPreview.N}팀</p>
+                  <p>
+                    1·3부 {formatShift1Range(windowPreview.oneThreeStart, windowPreview.oneThreeEnd)} 팀
+                    {sliceShift1WindowSlots(
+                      shift1Options,
+                      windowPreview.oneThreeStart,
+                      windowPreview.oneThreeEnd
+                    ).map((slot) => (
+                      <span key={`13-${slot.index}`} className="sd-slot">
+                        {slot.index} {COURSE_LABELS[resolveCourseCode(slot.course) || "VERTHILL"] || slot.course}{" "}
+                        {slot.teeTime}
+                        {slot.teamName ? ` · ${slot.teamName}` : ""}
+                      </span>
+                    ))}
+                  </p>
+                  <p>
+                    1막 {formatShift1Range(windowPreview.oneMakStart, windowPreview.oneMakEnd)} 팀
+                    {sliceShift1WindowSlots(
+                      shift1Options,
+                      windowPreview.oneMakStart,
+                      windowPreview.oneMakEnd
+                    ).map((slot) => (
+                      <span key={`1m-${slot.index}`} className="sd-slot">
+                        {slot.index} {COURSE_LABELS[resolveCourseCode(slot.course) || "VERTHILL"] || slot.course}{" "}
+                        {slot.teeTime}
+                        {slot.teamName ? ` · ${slot.teamName}` : ""}
+                      </span>
+                    ))}
+                  </p>
+                  <p>마지막 {windowPreview.R}팀은 1·3부/1막 제외</p>
+                </>
+              ) : (
+                <p className="sd-error">{windowPreview.message}</p>
+              )}
+            </div>
+          </div>
+        ) : null}
+        <label className="sd-radio">
+          <input
+            type="radio"
+            name="special-place-mode"
+            checked={placementMode === "MANUAL"}
+            disabled={busy}
+            onChange={() => void onPlacement("MANUAL", protectedTailCount)}
+          />
+          <span>수동 위치 지정</span>
+        </label>
+      </div>
       <div className="sd-groups">
         {displayGroups.map((group) => (
           <div key={group.kind} className="sd-group">
@@ -449,7 +634,8 @@ export function SpecialDutyPanel({
             </button>
             {openKinds.has(group.kind) ? (
               <>
-                {ANCHOR_SPECIAL_KINDS.includes(
+                {placementMode === "MANUAL" &&
+                ANCHOR_SPECIAL_KINDS.includes(
                   group.kind as (typeof ANCHOR_SPECIAL_KINDS)[number]
                 ) ? (
                   <label className="sd-anchor">
@@ -711,6 +897,61 @@ export function SpecialDutyPanel({
           margin-top: 8px;
           color: #b45309;
           font-size: 0.8rem;
+        }
+        .sd-place {
+          margin-top: 10px;
+          padding: 10px 12px;
+          border: 1px solid #e2e8f0;
+          border-radius: 10px;
+          background: #fff;
+        }
+        .sd-place-title {
+          font-weight: 800;
+          margin-bottom: 8px;
+        }
+        .sd-radio {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          min-height: 40px;
+          font-weight: 700;
+        }
+        .sd-auto {
+          padding: 0 0 8px 22px;
+        }
+        .sd-tail {
+          display: flex;
+          align-items: center;
+          flex-wrap: wrap;
+          gap: 6px;
+          font-size: 0.85rem;
+        }
+        .sd-step,
+        .sd-tail-input {
+          min-height: 40px;
+          min-width: 40px;
+          border: 1px solid #cbd5e1;
+          border-radius: 8px;
+          background: #fff;
+          font-size: 1rem;
+          font-weight: 700;
+        }
+        .sd-tail-input {
+          width: 64px;
+          text-align: center;
+        }
+        .sd-window {
+          margin-top: 8px;
+          font-size: 0.8rem;
+          color: #334155;
+        }
+        .sd-window p {
+          margin: 4px 0;
+        }
+        .sd-slot {
+          display: block;
+          color: #64748b;
+          font-weight: 500;
         }
         .sd-groups {
           margin-top: 8px;
