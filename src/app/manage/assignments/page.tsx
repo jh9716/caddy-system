@@ -22,6 +22,7 @@ import {
   boardAssignmentMarks,
   buildShiftBoard,
 } from "@/lib/assignmentBoardView";
+import { formatCaddyLabel, caddyAffiliation } from "@/lib/caddyDisplay";
 import {
   drivingCandidateCaddies,
   isHouseStartCandidate,
@@ -173,6 +174,7 @@ const BoardAssignedSlots = memo(function BoardAssignedSlots({
               onClick={() => onCaddyTap(row)}
             >
               <span className="bc-name">{row.caddy.name}</span>
+              <span className="bc-affil">{caddyAffiliation(row.caddy)}</span>
               <AssignmentMarkBadges
                 twoWork={marks.twoWork}
                 chageun={marks.chageun}
@@ -1077,7 +1079,10 @@ export default function ManageAssignmentsOpsPage() {
       const b = source?.assignments.find(
         (row) => reservationIdentity(row.reservation) === change.reservationKeyB
       );
-      return swapOrderToast(a?.caddy.name || "A", b?.caddy.name || "B");
+      return swapOrderToast(
+        a ? formatCaddyLabel(a.caddy) : "A",
+        b ? formatCaddyLabel(b.caddy) : "B"
+      );
     }
     if (change.type === "SET_LIMOUSINE") {
       return change.limousineCart ? "리무진 ON" : "리무진 OFF";
@@ -1358,7 +1363,7 @@ export default function ManageAssignmentsOpsPage() {
             </option>
             {houseStartCandidates.map((c) => (
               <option key={c.id} value={c.id}>
-                {c.name} · {c.team} · {c.teamOrder}번 (id {c.id})
+                {formatCaddyLabel(c)}
               </option>
             ))}
           </select>
@@ -1419,7 +1424,7 @@ export default function ManageAssignmentsOpsPage() {
             </option>
             {thirdStartCandidates.map((c) => (
               <option key={c.id} value={c.id}>
-                {c.name} · {c.team} {c.teamOrder}번 · {thirdStartCandidateStatus(c)}
+                {formatCaddyLabel(c)} · {thirdStartCandidateStatus(c)}
               </option>
             ))}
           </select>
@@ -1635,13 +1640,13 @@ export default function ManageAssignmentsOpsPage() {
                       <div>
                         스페어 1:{" "}
                         {sp?.spare1
-                          ? `${sp.spare1.name} / ${sp.spare1.team} / ${sp.spare1.teamOrder}번`
+                          ? formatCaddyLabel(sp.spare1)
                           : "-"}
                       </div>
                       <div>
                         스페어 2:{" "}
                         {sp?.spare2
-                          ? `${sp.spare2.name} / ${sp.spare2.team} / ${sp.spare2.teamOrder}번`
+                          ? formatCaddyLabel(sp.spare2)
                           : "-"}
                       </div>
                     </div>
@@ -1884,7 +1889,7 @@ export default function ManageAssignmentsOpsPage() {
                             className="col caddy ops-row-hit"
                             onClick={() => handlePlacementTap(row, "caddy")}
                           >
-                            {row.caddy.name}
+                            {formatCaddyLabel(row.caddy)}
                             <AssignmentMarkBadges
                               twoWork={marks.twoWork}
                               chageun={marks.chageun}
@@ -1892,9 +1897,6 @@ export default function ManageAssignmentsOpsPage() {
                               driving={marks.driving}
                             />
                           </button>
-                          <span className="col meta">
-                            {row.caddy.team}·{row.caddy.teamOrder}
-                          </span>
                           <LockToggle
                             row={row}
                             onToggle={(locked) => onToggleLock(row, locked)}
@@ -1912,8 +1914,7 @@ export default function ManageAssignmentsOpsPage() {
                   <span className="lbl">스페어 1</span>
                   {shiftSpare?.spare1 ? (
                     <span>
-                      {shiftSpare.spare1.name} / {shiftSpare.spare1.team} /{" "}
-                      {shiftSpare.spare1.teamOrder}번
+                      {formatCaddyLabel(shiftSpare.spare1)}
                     </span>
                   ) : (
                     <span className="muted">-</span>
@@ -1923,8 +1924,7 @@ export default function ManageAssignmentsOpsPage() {
                   <span className="lbl">스페어 2</span>
                   {shiftSpare?.spare2 ? (
                     <span>
-                      {shiftSpare.spare2.name} / {shiftSpare.spare2.team} /{" "}
-                      {shiftSpare.spare2.teamOrder}번
+                      {formatCaddyLabel(shiftSpare.spare2)}
                     </span>
                   ) : (
                     <span className="muted">-</span>
@@ -1978,7 +1978,7 @@ export default function ManageAssignmentsOpsPage() {
                             <option value="">캐디 선택</option>
                             {freeCaddies.map((c) => (
                               <option key={c.id} value={c.id}>
-                                {c.name} (#{c.id}/{c.team})
+                                {formatCaddyLabel(c)}
                               </option>
                             ))}
                           </select>
@@ -2647,7 +2647,8 @@ const opsCss = `
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .bc-caddy .bc-name {
+  .bc-caddy .bc-name,
+  .bc-caddy .bc-affil {
     pointer-events: none;
   }
   .lock-chip {
@@ -2665,6 +2666,16 @@ const opsCss = `
     text-overflow: ellipsis;
     white-space: nowrap;
     color: #0f172a;
+  }
+  .bc-affil {
+    font-size: 0.55rem;
+    font-weight: 700;
+    color: #64748b;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 1.1;
   }
   .bc-marks {
     display: inline-flex;

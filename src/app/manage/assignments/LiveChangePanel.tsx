@@ -40,6 +40,7 @@ import {
   reservationMoveBlockReason,
   summarizeReservationMove,
 } from "@/lib/reservationMove";
+import { formatCaddyLabel } from "@/lib/caddyDisplay";
 
 type Props = {
   draft: AssignmentDraft;
@@ -86,7 +87,7 @@ export function LiveChangePanel({
     () =>
       [...draft.assignments].map((row) => ({
         key: reservationIdentity(row.reservation),
-        label: `${row.reservation.shift} ${row.reservation.teeTime} ${COURSE_LABELS[row.reservation.course as CourseCode] || row.reservation.course} · ${row.caddy.name}`,
+        label: `${row.reservation.shift} ${row.reservation.teeTime} ${COURSE_LABELS[row.reservation.course as CourseCode] || row.reservation.course} · ${formatCaddyLabel(row.caddy)}`,
         row,
       })),
     [draft.assignments]
@@ -356,7 +357,7 @@ export function LiveChangePanel({
                 <option value="">선택</option>
                 {assignedCaddies.map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.name} (#{c.id}/{c.team})
+                    {formatCaddyLabel(c)}
                   </option>
                 ))}
               </select>
@@ -531,7 +532,7 @@ export function LiveChangePanel({
                 </option>
                 {drivingCandidates.map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.name} (#{c.id}/{c.team})
+                    {formatCaddyLabel(c)}
                   </option>
                 ))}
               </select>
@@ -678,8 +679,8 @@ export function LiveChangePanel({
           <div className="live-preview-spares">
             {preview.after.sparesByShift.map((s) => (
               <div key={s.shift}>
-                {s.shift} Spare1 {s.spare1 ? `${s.spare1.name}` : "-"} / Spare2{" "}
-                {s.spare2 ? `${s.spare2.name}` : "-"}
+                {s.shift} Spare1 {s.spare1 ? formatCaddyLabel(s.spare1) : "-"} / Spare2{" "}
+                {s.spare2 ? formatCaddyLabel(s.spare2) : "-"}
               </div>
             ))}
           </div>
@@ -699,7 +700,7 @@ export function LiveChangePanel({
             <div className="live-preview-lock">
               LOCK 유지:{" "}
               {preview.lockedPreserved
-                .map((r) => `${r.caddy.name}(${r.kind})`)
+                .map((r) => `${formatCaddyLabel(r.caddy)}(${r.kind})`)
                 .join(", ")}
             </div>
           )}
@@ -714,8 +715,8 @@ export function LiveChangePanel({
               .map((d) => (
                 <li key={d.reservationKey}>
                   {d.reservation.shift} {d.reservation.teeTime}{" "}
-                  {d.reservation.course}: {d.beforeCaddy?.name || "미배치"} →{" "}
-                  {d.afterCaddy?.name || "미배치"}
+                  {d.reservation.course}: {d.beforeCaddy ? formatCaddyLabel(d.beforeCaddy) : "미배치"} →{" "}
+                  {d.afterCaddy ? formatCaddyLabel(d.afterCaddy) : "미배치"}
                   {d.lockedPreserved ? " · LOCK" : ""}
                 </li>
               ))}
@@ -952,7 +953,7 @@ export function RowLiveActions({
               <option value="">캐디 선택</option>
               {drivingCandidates.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {c.name}
+                  {formatCaddyLabel(c)}
                 </option>
               ))}
             </select>
@@ -1076,7 +1077,7 @@ export function BoardQuickSheet({
           <strong>
             {mode === "team"
               ? `${row.reservation.teeTime} ${row.reservation.teamName || "팀"}`
-              : row.caddy.name}
+              : formatCaddyLabel(row.caddy)}
           </strong>
           <button type="button" className="btn tiny ghost" onClick={onClose}>
             닫기
@@ -1141,7 +1142,7 @@ export function BoardQuickSheet({
                     <option value="">선택</option>
                     {drivingCandidates.map((c) => (
                       <option key={c.id} value={c.id}>
-                        {c.name}
+                        {formatCaddyLabel(c)}
                       </option>
                     ))}
                   </select>
@@ -1256,12 +1257,10 @@ function MovePreviewBlock({ preview }: { preview: LiveChangePreview }) {
           목적 {courseLabelKo(move.to.course)} {move.to.shift} {move.to.teeTime}
         </li>
         <li>
-          기존 캐디 {move.beforeCaddy?.name || "미배치"}
-          {move.beforeCaddy ? ` (#${move.beforeCaddy.id})` : ""}
+          기존 캐디 {move.beforeCaddy ? formatCaddyLabel(move.beforeCaddy) : "미배치"}
         </li>
         <li>
-          이동 후 캐디 {move.afterCaddy?.name || "미배치"}
-          {move.afterCaddy ? ` (#${move.afterCaddy.id})` : ""}
+          이동 후 캐디 {move.afterCaddy ? formatCaddyLabel(move.afterCaddy) : "미배치"}
           {move.sameCaddyBySequence ? " · 순번 결과 동일" : ""}
         </li>
         <li>reflow {move.reflowShifts.join(" · ")}</li>

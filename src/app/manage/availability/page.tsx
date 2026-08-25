@@ -4,6 +4,7 @@ import { useCallback, useMemo, useState } from 'react';
 import type { AvailabilityResult, AvailabilityRow } from '@/lib/availabilityEngine';
 import type { TeamSlotGrid, SlotCell } from '@/lib/availabilitySlotGrid';
 import { PRIMARY_TEAMS } from '@/lib/caddyManage';
+import { formatCaddyLabel } from '@/lib/caddyDisplay';
 
 const GLANCE_TEAMS = PRIMARY_TEAMS;
 
@@ -37,9 +38,7 @@ function DensePersonList({
         <ul className="av-dense">
           {rows.map((r) => (
             <li key={r.id} className="av-dense-row">
-              <strong>{r.name}</strong>
-              <span className="av-meta">{r.team}</span>
-              <span className="av-num">{r.teamOrder}</span>
+              <strong>{formatCaddyLabel(r)}</strong>
               <span className="av-meta muted">{r.caddyType}</span>
               {(r.extraFlags.length > 0 || r.specialTags.length > 0) && (
                 <span className="av-tags">
