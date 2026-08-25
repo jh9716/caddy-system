@@ -119,7 +119,7 @@ export default function AssignmentPage() {
         <tbody>
           {assignments.map((a) => (
             <tr key={a.id}>
-              <td className="border p-2">{a.caddy?.name}</td>
+              <td className="border p-2">{a.caddy ? formatCaddyLabel(a.caddy) : ""}</td>
               <td className="border p-2">
                 {TYPE_LABELS[(a.type as AssignmentType) || 'OFF']}
               </td>

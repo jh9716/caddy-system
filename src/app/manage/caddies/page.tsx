@@ -536,7 +536,7 @@ export default function ManageCaddiesPage() {
         : '고정 슬롯에서 제외됩니다.';
     if (
       !confirm(
-        `${c.name}을(를) 드라이빙 전담 캐디로 바꿀까요?\n${slotNote}\n기존 스케줄/계정 연결 기록은 유지되지만 이후 일반 자동배치·HOUSE/THIRD 순번에는 참여하지 않습니다.`
+        `${formatCaddyLabel(c)}을(를) 드라이빙 전담 캐디로 바꿀까요?\n${slotNote}\n기존 스케줄/계정 연결 기록은 유지되지만 이후 일반 자동배치·HOUSE/THIRD 순번에는 참여하지 않습니다.`
       )
     ) {
       return;
@@ -555,7 +555,7 @@ export default function ManageCaddiesPage() {
         return;
       }
       await load();
-      setMessage(`${c.name}: 드라이빙 캐디로 변경 (슬롯 해제)`);
+      setMessage(`${formatCaddyLabel({ ...c, caddyType: 'DRIVING' })}: 드라이빙 캐디로 변경 (슬롯 해제)`);
     } finally {
       setSavingId(null);
     }

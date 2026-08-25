@@ -202,7 +202,7 @@ export default function ManageUsersPage() {
       if (!res.ok) {
         throw new Error(data?.message || data?.error || "연결 실패");
       }
-      setMessage(`${linkUser.username} ↔ ${selectedCaddy.name} 연결 완료`);
+      setMessage(`${linkUser.username} ↔ ${formatCaddyLabel(selectedCaddy)} 연결 완료`);
       setLinkUser(null);
       await refreshAll();
     } catch (e: any) {
@@ -276,7 +276,7 @@ export default function ManageUsersPage() {
         throw new Error(adminLinkErrorMessage(data?.error, data?.message));
       }
       setMessage(
-        `${req.user.username} 요청 승인 · ${cand.name} 연결 완료`
+        `${req.user.username} 요청 승인 · ${formatCaddyLabel(cand)} 연결 완료`
       );
       await refreshAll();
     } catch (e: any) {
