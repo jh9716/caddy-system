@@ -1,8 +1,7 @@
 import "./globals.css";
-import Link from "next/link";
 import { cookies } from "next/headers";
 import { Cormorant_Garamond, Noto_Serif_KR, Source_Sans_3 } from "next/font/google";
-import LogoutButton from "@/components/LogoutButton";
+import AppHeader from "@/components/AppHeader";
 import { getVerifiedSessionFromCookies } from "@/lib/sessionCookies";
 
 export const dynamic = "force-dynamic";
@@ -38,47 +37,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       className={`${display.variable} ${displayKr.variable} ${sans.variable}`}
     >
       <body>
-        <header className="vh-header">
-          <div className="vh-header-inner">
-            <Link href="/" className="vh-brand">
-              VERTHILL <span>• Caddy</span>
-            </Link>
-
-            <nav className="vh-nav">
-              <Link className="ui-btn ui-btn-ghost" href="/">
-                홈
-              </Link>
-              <Link className="ui-btn ui-btn-ghost" href="/notice">
-                공지
-              </Link>
-              {role && (
-                <Link className="ui-btn ui-btn-ghost" href="/board">
-                  배치표
-                </Link>
-              )}
-
-              {role === "admin" && (
-                <Link className="ui-btn ui-btn-gold" href="/manage">
-                  관리자
-                </Link>
-              )}
-              {role === "caddy" && (
-                <Link className="ui-btn ui-btn-gold" href="/caddy">
-                  내 대시보드
-                </Link>
-              )}
-
-              {role ? (
-                <LogoutButton />
-              ) : (
-                <Link className="ui-btn ui-btn-primary" href="/login">
-                  로그인
-                </Link>
-              )}
-            </nav>
-          </div>
-        </header>
-
+        <AppHeader role={role} />
         <main className="vh-main">{children}</main>
       </body>
     </html>

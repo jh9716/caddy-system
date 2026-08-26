@@ -99,6 +99,13 @@ export type DailyBoardPublishedDb = {
 
 export type PublishDailyBoardDb = DailyBoardPublishedDb & DailyBoardDraftDb;
 
+export type PublishDailyBoardTimings = {
+  getDraftMs: number;
+  snapshotMs: number;
+  upsertMs: number;
+  totalMs: number;
+};
+
 function ymdFromStoredDate(date: Date): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
@@ -141,6 +148,7 @@ export async function publishDailyBoard(input: {
   publishedByUserId: number | null;
   publisherUsername?: string | null;
   db?: PublishDailyBoardDb;
+  onTimings?: (timings: PublishDailyBoardTimings) => void;
 }): Promise<DailyBoardPublishedRecord> {
   const expected = Number(input.expectedDraftVersion);
   if (!Number.isInteger(expected) || expected < 1) {
@@ -149,7 +157,9 @@ export async function publishDailyBoard(input: {
   const db =
     input.db ??
     (defaultPrisma as unknown as PublishDailyBoardDb);
+  const t0 = Date.now();
   const draft = await getDailyBoardDraft(input.date, db);
+  const t1 = Date.now();
   if (!draft) {
     throw new DailyBoardPublishNoDraftError();
   }
@@ -159,6 +169,7 @@ export async function publishDailyBoard(input: {
   const payload = buildPublishedPayloadFromDraft(draft.payload, {
     publisherUsername: input.publisherUsername ?? null,
   });
+  const t2 = Date.now();
   const key = dateKey(input.date);
   const now = new Date();
   const row = await db.dailyBoardPublished.upsert({
@@ -178,6 +189,13 @@ export async function publishDailyBoard(input: {
       publishedAt: now,
       publishedByUserId: input.publishedByUserId,
     },
+  });
+  const t3 = Date.now();
+  input.onTimings?.({
+    getDraftMs: t1 - t0,
+    snapshotMs: t2 - t1,
+    upsertMs: t3 - t2,
+    totalMs: t3 - t0,
   });
   return toRecord(row, input.date);
 }

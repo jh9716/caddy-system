@@ -260,6 +260,12 @@ a {
   color: var(--vh-ink-soft);
 }
 
+.vh-nav .ui-btn.is-current {
+  background: var(--vh-ivory-deep);
+  border-color: var(--vh-gold);
+  color: var(--vh-green-900);
+}
+
 .ui-btn-danger {
   background: #fff;
   border-color: #e2b4ba;

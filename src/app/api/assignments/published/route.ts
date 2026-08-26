@@ -15,6 +15,7 @@ import {
   DailyBoardPublishStaleError,
   getDailyBoardPublished,
   publishDailyBoard,
+  type PublishDailyBoardTimings,
 } from "@/lib/dailyBoardPublishedService";
 
 export const dynamic = "force-dynamic";
@@ -89,11 +90,23 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+    const timings: PublishDailyBoardTimings = {
+      getDraftMs: 0,
+      snapshotMs: 0,
+      upsertMs: 0,
+      totalMs: 0,
+    };
     const published = await publishDailyBoard({
       date,
       expectedDraftVersion: Number(raw.draftVersion),
       publishedByUserId: auth?.userId ?? null,
       publisherUsername: auth?.username ?? null,
+      onTimings: (t) => {
+        timings.getDraftMs = t.getDraftMs;
+        timings.snapshotMs = t.snapshotMs;
+        timings.upsertMs = t.upsertMs;
+        timings.totalMs = t.totalMs;
+      },
     });
     return NextResponse.json({
       ok: true,
@@ -107,6 +120,7 @@ export async function POST(req: NextRequest) {
         publishedByUserId: published.publishedByUserId,
         publishedByUsername: published.payload.publisherUsername,
       },
+      timings,
     });
   } catch (e: unknown) {
     if (e instanceof DailyBoardPublishStaleError) {

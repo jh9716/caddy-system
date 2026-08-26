@@ -53,6 +53,15 @@ import {
   signSessionClaims,
 } from "../src/lib/sessionCookies";
 import { drainDraftSaves } from "../src/lib/draftSaveFlush";
+import {
+  PUBLISH_BUSY_LABEL,
+  runPublishBoardFlow,
+} from "../src/lib/publishDailyBoardClient";
+import {
+  isAppNavActive,
+  shouldUseManageShellForBoard,
+} from "../src/lib/boardNav";
+import { manageNavItems } from "../src/components/manage/ManageShell";
 import { GET as publishedGET, POST as publishedPOST } from "../src/app/api/assignments/published/route";
 import {
   GET as draftGET,
@@ -711,6 +720,8 @@ async function main() {
     assert(/클라이언트 배치 JSON은 저장하지 않습니다/.test(postFn), "reject client board JSON");
     assert(/buildPublishedPayloadFromDraft/.test(service), "server draft is source of truth");
     assert(/getDailyBoardDraft/.test(service), "reads server draft");
+    assert(/onTimings/.test(service), "publish records stage timings");
+    assert(/timings/.test(postFn), "POST response includes timings");
     assert(!/shiftDuty|schedule\.create/.test(service), "publish service does not write ShiftDuty/Schedule");
 
     assert(/requireAdmin/.test(draftRoute), "Draft API still requireAdmin");
@@ -750,12 +761,26 @@ async function main() {
     assert(/row\.teeTime/.test(view) || /tr\.teeTime/.test(view), "render teeTime from payload");
     assert(/spare1\.displayLabel/.test(view), "render spare from snapshot");
 
-    const layout = readSrc("src/app/layout.tsx");
+    const header = readSrc("src/components/AppHeader.tsx");
     const nav = readSrc("src/components/NavBar.tsx");
     const shell = readSrc("src/components/manage/ManageShell.tsx");
     const caddyPage = readSrc("src/app/caddy/page.tsx");
     const boardLayout = readSrc("src/app/board/layout.tsx");
-    assert(/href="\/board"/.test(layout) && /배치표/.test(layout), "root nav has 배치표 for logged-in");
+    assert(/AppHeader/.test(readSrc("src/app/layout.tsx")), "root layout uses AppHeader");
+    assert(/href="\/board"/.test(header) && /배치표/.test(header), "root nav has 배치표 for logged-in");
+    assert(
+      /role === ['"]caddy['"]/.test(header) && /내 대시보드/.test(header),
+      "caddy AppHeader shows 내 대시보드"
+    );
+    assert(
+      /role === ['"]admin['"]/.test(header) && /관리자/.test(header),
+      "admin AppHeader shows 관리자"
+    );
+    assert(
+      /role === ['"]caddy['"]/.test(header) &&
+        !/role === ['"]caddy['"][\s\S]*href="\/manage"/.test(header),
+      "caddy AppHeader has no /manage link"
+    );
     assert(
       /role === ['"]caddy['"]/.test(nav) && /\/board/.test(nav) && /배치표/.test(nav),
       "NavBar caddy sees 배치표"
@@ -765,8 +790,39 @@ async function main() {
     assert(!/\/manage\/assignments/.test(caddyPage), "caddy dashboard has no assignments");
     assert(!/\/api\/assignments\/draft/.test(caddyPage), "caddy dashboard has no Draft API");
     assert(/canReadPublishedBoard/.test(boardLayout), "board layout allows caddy/admin");
+    assert(/shouldUseManageShellForBoard/.test(boardLayout), "board layout gates ManageShell by role");
+    assert(/ManageShell/.test(boardLayout), "admin /board reuses ManageShell");
+    assert(!/홈[\s\S]*공지[\s\S]*배치표[\s\S]*관리자/.test(readSrc("src/app/board/page.tsx")), "board page has no duplicate top nav");
+    assert(/runPublishBoardFlow/.test(page), "publish uses shared flow");
     assert(/drainDraftSaves/.test(page), "publish waits for draft drain");
-    assert(/flushStatus === "conflict"/.test(page), "publish aborts on stale flush");
+    assert(/result\.conflict/.test(page), "publish aborts on stale flush");
+    assert(/PUBLISH_BUSY_LABEL/.test(page), "busy label while publishing");
+    assert(!/pendingDraftSaveRef\.current = current/.test(page), "publish does not force duplicate Draft PUT");
+    const publishFn =
+      page.split("async function onPublishBoard")[1]?.split("async function persistLivePreview")[0] || "";
+    assert(/method: "POST"/.test(publishFn), "publish POSTs");
+    assert(!/published\?date=/.test(publishFn), "publish path does not refetch Published GET");
+  }
+
+  section("/board navigation roles");
+  {
+    assert(shouldUseManageShellForBoard("admin") === true, "admin /board uses ManageShell");
+    assert(shouldUseManageShellForBoard("caddy") === false, "caddy /board does not use ManageShell");
+    assert(shouldUseManageShellForBoard("leader") === false, "leader /board does not use ManageShell");
+    assert(isAppNavActive("/board", "/board") === true, "배치표 active on /board");
+    assert(isAppNavActive("/board", "/") === false, "홈 not active on /board");
+    assert(isAppNavActive("/", "/") === true, "홈 active on /");
+    const adminNav = manageNavItems(true).map((i) => i.href);
+    const staffNav = manageNavItems(false).map((i) => i.href);
+    assert(adminNav.includes("/board"), "admin shell includes 배치표");
+    assert(adminNav.includes("/manage/caddies"), "admin shell keeps 캐디 관리");
+    assert(adminNav.includes("/manage/assignments"), "admin shell keeps 자동배치");
+    assert(staffNav.includes("/manage/assignments"), "staff admin keeps 자동배치");
+    assert(!staffNav.includes("/manage/staff-accounts"), "staff admin hides 직원 계정");
+    const caddyHeader = readSrc("src/components/AppHeader.tsx");
+    assert(/내 대시보드/.test(caddyHeader), "caddy nav label");
+    assert(!/캐디 관리/.test(caddyHeader), "caddy header has no 캐디 관리");
+    assert(!/자동배치/.test(caddyHeader), "caddy header has no 자동배치");
   }
 
   section("publish 직전 pending Draft drain");
@@ -781,7 +837,7 @@ async function main() {
       pending = "";
       return "ok" as const;
     };
-    const p = drainDraftSaves({
+    const result = await drainDraftSaves({
       hasPending: () => Boolean(pending),
       isInFlight: () => inFlight,
       flushOnce,
@@ -790,10 +846,472 @@ async function main() {
       },
       timeoutMs: 1000,
     });
-    const status = await p;
-    assert(status === "ok", "drain ok");
+    assert(result.status === "ok", "drain ok");
     assert(calls.length === 1, "waited for in-flight then flushed once");
     assert(saved[0] === "edit-B", "latest pending flushed, not the in-flight-only older board");
+    assert(result.timings.extraFlushRan === true, "pending flush ran");
+    assert(result.timings.skippedSave === false, "did not skip when pending");
+  }
+
+  section("drain: already-saved Draft skips PUT");
+  {
+    let flushCalls = 0;
+    let slept = 0;
+    const t0 = Date.now();
+    const result = await drainDraftSaves({
+      hasPending: () => false,
+      isInFlight: () => false,
+      flushOnce: async () => {
+        flushCalls += 1;
+        return "ok";
+      },
+      sleep: async (ms) => {
+        slept += ms;
+      },
+      timeoutMs: 1000,
+    });
+    const elapsed = Date.now() - t0;
+    assert(result.status === "ok", "saved draft drain ok");
+    assert(flushCalls === 0, "no duplicate PUT when nothing pending");
+    assert(slept === 0, "no fixed sleep when nothing to save");
+    assert(result.timings.skippedSave === true, "skippedSave");
+    assert(elapsed < 50, `already-saved drain is immediate (${elapsed}ms)`);
+    assert(result.timings.totalMs < 50, "drain totalMs < 50ms when idle");
+  }
+
+  section("drain: pending debounce flushes immediately (no 1.5s wait)");
+  {
+    let pending: string | null = "edit-now";
+    let debounceWaited = 0;
+    const flushAt: number[] = [];
+    const started = Date.now();
+    const result = await drainDraftSaves({
+      hasPending: () => Boolean(pending),
+      isInFlight: () => false,
+      clearDebounceTimer: () => {
+        debounceWaited = 0;
+      },
+      flushOnce: async () => {
+        flushAt.push(Date.now() - started);
+        pending = null;
+        return "ok";
+      },
+      sleep: async (ms) => {
+        debounceWaited += ms;
+      },
+      timeoutMs: 5000,
+    });
+    assert(result.status === "ok", "pending drain ok");
+    assert(flushAt.length === 1, "flushed pending once");
+    assert(flushAt[0] < 200, `flush did not wait 1.5s debounce (${flushAt[0]}ms)`);
+    assert(debounceWaited === 0, "no debounce sleep");
+    assert(result.timings.extraFlushRan === true, "extra flush ran");
+  }
+
+  section("drain: in-flight PUT then latest pending");
+  {
+    let inFlight = true;
+    let pending = "v2";
+    const order: string[] = [];
+    let inFlightPromise!: Promise<void>;
+    inFlightPromise = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        order.push("in-flight-done");
+        inFlight = false;
+        resolve();
+      }, 40);
+    });
+    const result = await drainDraftSaves({
+      hasPending: () => Boolean(pending),
+      isInFlight: () => inFlight,
+      waitForInFlight: async () => {
+        order.push("wait-in-flight");
+        await inFlightPromise;
+      },
+      flushOnce: async () => {
+        order.push("flush:" + pending);
+        pending = "";
+        return "ok";
+      },
+      sleep: async () => {
+        throw new Error("should not poll-sleep when waitForInFlight is provided");
+      },
+      timeoutMs: 2000,
+    });
+    assert(result.status === "ok", "in-flight drain ok");
+    assert(order[0] === "wait-in-flight", "waited for in-flight first");
+    assert(order.includes("in-flight-done") && order.includes("flush:v2"), "then flushed latest pending");
+    assert(result.timings.inFlightWaitMs >= 20, "inFlightWaitMs measured");
+  }
+
+  section("drain: conflict aborts");
+  {
+    const result = await drainDraftSaves({
+      hasPending: () => true,
+      isInFlight: () => false,
+      flushOnce: async () => "conflict",
+      timeoutMs: 500,
+    });
+    assert(result.status === "conflict", "conflict status");
+  }
+
+  section("publish flow: saved draft → immediate POST");
+  {
+    const events: string[] = [];
+    let busy = false;
+    let publishedAt = "";
+    const result = await runPublishBoardFlow({
+      isBusy: () => busy,
+      setBusy: (v) => {
+        events.push(v ? "busy" : "idle");
+        busy = v;
+      },
+      drain: async () => {
+        events.push("drain");
+        return {
+          status: "ok" as const,
+          timings: {
+            totalMs: 1,
+            pendingDebounceFlushMs: 0,
+            inFlightWaitMs: 0,
+            extraFlushMs: 0,
+            extraFlushRan: false,
+            skippedSave: true,
+            pollSleepMs: 0,
+          },
+        };
+      },
+      getDraftVersion: () => 3,
+      publish: async (draftVersion) => {
+        events.push("post:" + draftVersion);
+        return {
+          ok: true,
+          status: 200,
+          published: {
+            sourceDraftVersion: draftVersion,
+            publishedAt: "2026-08-26T02:00:00.000Z",
+            publishedByUsername: "경기과",
+          },
+          message: "배치가 확정되었습니다.",
+          timings: { getDraftMs: 2, snapshotMs: 1, upsertMs: 3, totalMs: 6 },
+        };
+      },
+      applyPublished: (row) => {
+        events.push("ui");
+        publishedAt = row.publishedAt;
+      },
+    });
+    assert(result.ok === true, "saved publish ok");
+    assert(events[0] === "busy", "busy immediately");
+    assert(events.includes("drain") && events.includes("post:3") && events.includes("ui"), "drain then post then ui");
+    assert(events[events.length - 1] === "idle", "busy released");
+    assert(result.message === "배치가 확정되었습니다.", "success copy");
+    assert(publishedAt === "2026-08-26T02:00:00.000Z", "publishedAt from POST body");
+    assert(result.timings.skippedSave === true, "skipped extra PUT");
+    assert(result.timings.publishedRefetchMs === 0, "no extra Published GET");
+    assert(result.timings.server?.getDraftMs === 2, "server getDraft timing");
+    assert(result.timings.postRoundTripMs >= 0, "post round trip measured");
+  }
+
+  section("publish flow: 0s after edit includes latest pending");
+  {
+    let pending: { name: string } | null = { name: "old" };
+    const flushed: string[] = [];
+    const result = await runPublishBoardFlow({
+      isBusy: () => false,
+      setBusy: () => {},
+      drain: async () =>
+        drainDraftSaves({
+          hasPending: () => Boolean(pending),
+          isInFlight: () => false,
+          flushOnce: async () => {
+            flushed.push(pending?.name || "");
+            pending = null;
+            return "ok";
+          },
+        }),
+      getDraftVersion: () => 4,
+      publish: async (draftVersion) => ({
+        ok: true,
+        status: 200,
+        published: {
+          sourceDraftVersion: draftVersion,
+          name: flushed[0],
+          publishedAt: "t",
+          publishedByUsername: "a",
+        },
+      }),
+      applyPublished: () => {},
+    });
+    assert(result.ok === true, "edit-then-publish ok");
+    assert(flushed[0] === "old", "pending flushed immediately");
+    assert((result.published as { name: string }).name === "old", "POST uses flushed latest");
+    assert(result.timings.extraFlushRan === true, "flush ran before POST");
+  }
+
+  section("publish flow: in-flight save then publish");
+  {
+    let inFlight = true;
+    let pending: string | null = "after-inflight";
+    let version = 1;
+    const result = await runPublishBoardFlow({
+      isBusy: () => false,
+      setBusy: () => {},
+      drain: async () =>
+        drainDraftSaves({
+          hasPending: () => Boolean(pending),
+          isInFlight: () => inFlight,
+          waitForInFlight: async () => {
+            inFlight = false;
+            version = 2;
+          },
+          flushOnce: async () => {
+            version = 3;
+            pending = null;
+            return "ok";
+          },
+        }),
+      getDraftVersion: () => version,
+      publish: async (draftVersion) => ({
+        ok: true,
+        status: 200,
+        published: {
+          sourceDraftVersion: draftVersion,
+          publishedAt: "t",
+          publishedByUsername: "a",
+        },
+      }),
+      applyPublished: () => {},
+    });
+    assert(result.ok === true, "in-flight then publish ok");
+    assert((result.published as { sourceDraftVersion: number }).sourceDraftVersion === 3, "published latest after in-flight + pending");
+  }
+
+  section("publish flow: Draft conflict aborts POST");
+  {
+    let posted = false;
+    const result = await runPublishBoardFlow({
+      isBusy: () => false,
+      setBusy: () => {},
+      drain: async () => ({
+        status: "conflict" as const,
+        timings: {
+          totalMs: 5,
+          pendingDebounceFlushMs: 0,
+          inFlightWaitMs: 0,
+          extraFlushMs: 5,
+          extraFlushRan: true,
+          skippedSave: false,
+          pollSleepMs: 0,
+        },
+      }),
+      getDraftVersion: () => 1,
+      publish: async () => {
+        posted = true;
+        return { ok: true, status: 200, published: { publishedAt: "x" } };
+      },
+      applyPublished: () => {},
+    });
+    assert(result.ok === false, "conflict fails");
+    assert(result.conflict === true, "conflict flag");
+    assert(posted === false, "POST not sent on conflict");
+    assert(result.error === PUBLISH_STALE_DRAFT_MESSAGE, "conflict copy");
+  }
+
+  section("publish flow: duplicate click blocked");
+  {
+    let busy = false;
+    let posts = 0;
+    const first = runPublishBoardFlow({
+      isBusy: () => busy,
+      setBusy: (v) => {
+        busy = v;
+      },
+      drain: async () => {
+        await new Promise((r) => setTimeout(r, 40));
+        return {
+          status: "ok" as const,
+          timings: {
+            totalMs: 40,
+            pendingDebounceFlushMs: 0,
+            inFlightWaitMs: 0,
+            extraFlushMs: 0,
+            extraFlushRan: false,
+            skippedSave: true,
+            pollSleepMs: 0,
+          },
+        };
+      },
+      getDraftVersion: () => 1,
+      publish: async () => {
+        posts += 1;
+        return {
+          ok: true,
+          status: 200,
+          published: { publishedAt: "t", sourceDraftVersion: 1, publishedByUsername: "a" },
+        };
+      },
+      applyPublished: () => {},
+    });
+    await new Promise((r) => setTimeout(r, 5));
+    const second = await runPublishBoardFlow({
+      isBusy: () => busy,
+      setBusy: () => {},
+      drain: async () => {
+        throw new Error("should not drain on duplicate");
+      },
+      getDraftVersion: () => 1,
+      publish: async () => {
+        posts += 1;
+        return { ok: true, status: 200, published: { publishedAt: "t" } };
+      },
+      applyPublished: () => {},
+    });
+    assert(second.duplicateClick === true, "second click duplicate");
+    assert(second.ok === false, "duplicate not ok");
+    const firstResult = await first;
+    assert(firstResult.ok === true, "first publish succeeded");
+    assert(posts === 1, "only one POST");
+    assert(PUBLISH_BUSY_LABEL === "확정 중...", "busy label copy");
+  }
+
+  section("publish flow: republish + failure restores idle");
+  {
+    let busy = false;
+    const busyLog: boolean[] = [];
+    const fail = await runPublishBoardFlow({
+      isBusy: () => busy,
+      setBusy: (v) => {
+        busy = v;
+        busyLog.push(v);
+      },
+      drain: async () => ({
+        status: "ok" as const,
+        timings: {
+          totalMs: 0,
+          pendingDebounceFlushMs: 0,
+          inFlightWaitMs: 0,
+          extraFlushMs: 0,
+          extraFlushRan: false,
+          skippedSave: true,
+          pollSleepMs: 0,
+        },
+      }),
+      getDraftVersion: () => 2,
+      publish: async () => ({
+        ok: false,
+        status: 500,
+        error: "배치 확정 실패",
+      }),
+      applyPublished: () => {
+        throw new Error("should not apply on failure");
+      },
+    });
+    assert(fail.ok === false, "failed publish");
+    assert(fail.error === "배치 확정 실패", "error message");
+    assert(busyLog[0] === true && busyLog[busyLog.length - 1] === false, "busy then restored");
+    assert(busy === false, "idle after failure");
+
+    const again = await runPublishBoardFlow({
+      isBusy: () => busy,
+      setBusy: (v) => {
+        busy = v;
+      },
+      drain: async () => ({
+        status: "ok" as const,
+        timings: {
+          totalMs: 0,
+          pendingDebounceFlushMs: 0,
+          inFlightWaitMs: 0,
+          extraFlushMs: 0,
+          extraFlushRan: false,
+          skippedSave: true,
+          pollSleepMs: 0,
+        },
+      }),
+      getDraftVersion: () => 2,
+      publish: async (draftVersion) => ({
+        ok: true,
+        status: 200,
+        published: {
+          sourceDraftVersion: draftVersion,
+          publishedAt: "2026-08-26T03:00:00.000Z",
+          publishedByUsername: "b",
+        },
+        message: "배치가 확정되었습니다.",
+      }),
+      applyPublished: () => {},
+    });
+    assert(again.ok === true, "republish ok");
+    assert((again.published as { sourceDraftVersion: number }).sourceDraftVersion === 2, "republish version");
+  }
+
+  section("publish server snapshot/upsert timings");
+  {
+    const date = "2026-08-26";
+    const mem = createMemoryDb();
+    const big = makeDraft(date, pool(80));
+    await saveDailyBoardDraft({
+      date,
+      expectedVersion: 0,
+      payload: assignmentDraftToPayload(big),
+      updatedByUserId: 1,
+      db: mem.db,
+    });
+    let timings = { getDraftMs: -1, snapshotMs: -1, upsertMs: -1, totalMs: -1 };
+    const t0 = Date.now();
+    await publishDailyBoard({
+      date,
+      expectedDraftVersion: 1,
+      publishedByUserId: 1,
+      publisherUsername: "ops",
+      db: mem.db,
+      onTimings: (t) => {
+        timings = t;
+      },
+    });
+    const wall = Date.now() - t0;
+    assert(timings.getDraftMs >= 0, `getDraftMs=${timings.getDraftMs}`);
+    assert(timings.snapshotMs >= 0, `snapshotMs=${timings.snapshotMs}`);
+    assert(timings.upsertMs >= 0, `upsertMs=${timings.upsertMs}`);
+    assert(timings.totalMs >= 0, `server totalMs=${timings.totalMs}`);
+    console.log(
+      "  · server timings",
+      JSON.stringify({ ...timings, wallMs: wall, placements: 80 })
+    );
+    assert(wall < 2000, `local snapshot+upsert not abnormally slow (${wall}ms)`);
+  }
+
+  section("before/after: forced PUT vs skip idle save");
+  {
+    const putMs = 800;
+    const oldSleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    let oldPending = true;
+    const tOld0 = Date.now();
+    await drainDraftSaves({
+      hasPending: () => oldPending,
+      isInFlight: () => false,
+      flushOnce: async () => {
+        await oldSleep(putMs);
+        oldPending = false;
+        return "ok";
+      },
+    });
+    const oldMs = Date.now() - tOld0;
+    const tNew0 = Date.now();
+    await drainDraftSaves({
+      hasPending: () => false,
+      isInFlight: () => false,
+      flushOnce: async () => {
+        await oldSleep(putMs);
+        return "ok";
+      },
+    });
+    const newMs = Date.now() - tNew0;
+    console.log("  · before(forced PUT) ms=", oldMs, " after(skip idle) ms=", newMs);
+    assert(oldMs >= 700, `old path waited for forced PUT (${oldMs}ms)`);
+    assert(oldMs < 2000, `old path is one PUT not a 1.5s debounce (${oldMs}ms)`);
+    assert(newMs < 50, `new path no 1s+ wait (${newMs}ms)`);
   }
 
   section("Published GET empty does not leak Draft");
