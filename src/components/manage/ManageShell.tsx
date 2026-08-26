@@ -44,6 +44,11 @@ const NAV = [
     match: (p: string) => p.startsWith("/manage/staff-accounts"),
     accountManagerOnly: true,
   },
+  {
+    href: "/board",
+    label: "배치표",
+    match: (p: string) => p.startsWith("/board"),
+  },
   { href: "/notice", label: "공지", match: (p: string) => p.startsWith("/notice") },
   {
     href: "/schedule",

@@ -24,6 +24,13 @@ import {
 } from "@/lib/assignmentBoardView";
 import { formatCaddyLabel, caddyAffiliation } from "@/lib/caddyDisplay";
 import {
+  formatPublishedAt,
+  publisherDisplayName,
+  PUBLISH_STALE_DRAFT,
+  PUBLISH_STALE_DRAFT_MESSAGE,
+  PUBLISH_SUCCESS_MESSAGE,
+} from "@/lib/dailyBoardPublished";
+import {
   drivingCandidateCaddies,
   isHouseStartCandidate,
   regularCaddyPoolFromAvailabilityRows,
@@ -93,6 +100,7 @@ import {
   parseDailyBoardDraftPayload,
   payloadToAssignmentDraft,
 } from "@/lib/dailyBoardDraft";
+import { drainDraftSaves } from "@/lib/draftSaveFlush";
 
 type ResultViewMode = "board" | "list";
 
@@ -203,6 +211,11 @@ const BoardAssignedSlots = memo(function BoardAssignedSlots({
 
 type CourseOpenState = Record<CourseCode, boolean>;
 type DraftSaveState = "idle" | "saving" | "saved" | "error" | "conflict";
+type PublishedSummary = {
+  sourceDraftVersion: number;
+  publishedAt: string;
+  publishedByUsername: string | null;
+};
 
 function defaultCourseOpen(): CourseOpenState {
   return {
@@ -296,6 +309,9 @@ export default function ManageAssignmentsOpsPage() {
   const [toast, setToast] = useState<string | null>(null);
   const [draftSaveState, setDraftSaveState] = useState<DraftSaveState>("idle");
   const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
+  const [published, setPublished] = useState<PublishedSummary | null>(null);
+  const [publishing, setPublishing] = useState(false);
+  const [draftVersion, setDraftVersion] = useState(0);
   const stickyStackRef = useRef<HTMLDivElement | null>(null);
   const draftRef = useRef<AssignmentDraft | null>(null);
   const autoResultRef = useRef<RunResponse | null>(null);
@@ -314,6 +330,7 @@ export default function ManageAssignmentsOpsPage() {
     (assignmentDraft: AssignmentDraft, version: number, savedAt?: string | null) => {
       hydratingDraftRef.current = true;
       serverDraftVersionRef.current = version;
+      setDraftVersion(version);
       setDraft(assignmentDraft);
       setAutoResult(autoResultFromDraft(assignmentDraft, null) as RunResponse);
       setWarnings(detectDraftWarnings(assignmentDraft));
@@ -337,6 +354,7 @@ export default function ManageAssignmentsOpsPage() {
     }
     pendingDraftSaveRef.current = null;
     serverDraftVersionRef.current = 0;
+    setDraftVersion(0);
     setDraft(null);
     setAutoResult(null);
     setWarnings([]);
@@ -366,45 +384,60 @@ export default function ManageAssignmentsOpsPage() {
     []
   );
 
-  const flushDraftSave = useCallback(async () => {
+  const flushOnce = useCallback(async (): Promise<
+    "ok" | "conflict" | "error" | "skipped"
+  > => {
     const next = pendingDraftSaveRef.current;
     const ymd = dateRef.current;
-    if (!next || hydratingDraftRef.current) return;
-    if (next.date !== ymd) return;
-    if (draftSaveInFlightRef.current) return;
+    if (!next || hydratingDraftRef.current) return "ok";
+    if (next.date !== ymd) return "ok";
+    if (draftSaveInFlightRef.current) return "skipped";
     pendingDraftSaveRef.current = null;
     draftSaveInFlightRef.current = true;
     setDraftSaveState("saving");
-    let conflict = false;
     try {
       const { res, data } = await putAssignmentDraft(
         next,
         serverDraftVersionRef.current
       );
       if (res.status === 409 || data.code === DRAFT_VERSION_CONFLICT) {
-        conflict = true;
         pendingDraftSaveRef.current = null;
         setDraftSaveState("conflict");
-        return;
+        return "conflict";
       }
       if (!res.ok || !data.draft) {
         setDraftSaveState("error");
-        return;
+        return "error";
       }
       if (next.date === dateRef.current) {
         serverDraftVersionRef.current = Number(data.draft.version) || 0;
+        setDraftVersion(serverDraftVersionRef.current);
         setDraftSavedAt(String(data.draft.updatedAt || new Date().toISOString()));
         setDraftSaveState("saved");
       }
+      return "ok";
     } catch {
       setDraftSaveState("error");
+      return "error";
     } finally {
       draftSaveInFlightRef.current = false;
-      if (!conflict && pendingDraftSaveRef.current) {
-        void flushDraftSave();
-      }
     }
   }, []);
+
+  const flushDraftSave = useCallback(async () => {
+    return drainDraftSaves({
+      hasPending: () => {
+        const pending = pendingDraftSaveRef.current;
+        return Boolean(
+          pending &&
+            pending.date === dateRef.current &&
+            !hydratingDraftRef.current
+        );
+      },
+      isInFlight: () => draftSaveInFlightRef.current,
+      flushOnce,
+    });
+  }, [flushOnce]);
 
   const queueDraftSave = useCallback(
     (next: AssignmentDraft, immediate = false) => {
@@ -599,6 +632,7 @@ export default function ManageAssignmentsOpsPage() {
     }
     dateRef.current = date;
     serverDraftVersionRef.current = 0;
+    setDraftVersion(0);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       clearDraftBoard();
       return;
@@ -619,6 +653,7 @@ export default function ManageAssignmentsOpsPage() {
           setWarnings([]);
           setDraftSaveState("idle");
           setDraftSavedAt(null);
+          setDraftVersion(0);
           return;
         }
         const payload = parseDailyBoardDraftPayload(data.draft.payload, date);
@@ -639,6 +674,39 @@ export default function ManageAssignmentsOpsPage() {
       cancelled = true;
     };
   }, [date, applyHydratedDraft, clearDraftBoard, loadServerDraft]);
+
+  useEffect(() => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      setPublished(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/assignments/published?date=${encodeURIComponent(date)}`,
+          { credentials: "include", cache: "no-store" }
+        );
+        const data = await res.json().catch(() => ({}));
+        if (cancelled || !res.ok) return;
+        const row = data.published;
+        setPublished(
+          row
+            ? {
+                sourceDraftVersion: Number(row.sourceDraftVersion) || 0,
+                publishedAt: String(row.publishedAt || ""),
+                publishedByUsername: row.publishedByUsername ?? null,
+              }
+            : null
+        );
+      } catch {
+        if (!cancelled) setPublished(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [date]);
 
   useEffect(() => {
     if (!draft) return;
@@ -1280,6 +1348,75 @@ export default function ManageAssignmentsOpsPage() {
     }
   }
 
+  async function onPublishBoard() {
+    const current = draftRef.current;
+    if (!current) {
+      setError("확정할 작업본이 없습니다.");
+      return;
+    }
+    const ok = window.confirm(
+      published
+        ? `${current.date} 변경사항을 다시 확정할까요? 캐디에게 보이는 배치표가 이 작업본으로 바뀝니다.`
+        : `${current.date} 배치를 확정할까요? 캐디 공용 배치표에 게시됩니다.`
+    );
+    if (!ok) return;
+
+    if (draftSaveTimerRef.current) {
+      clearTimeout(draftSaveTimerRef.current);
+      draftSaveTimerRef.current = null;
+    }
+    pendingDraftSaveRef.current = current;
+    const flushStatus = await flushDraftSave();
+    if (flushStatus === "conflict") {
+      setDraftSaveState("conflict");
+      setError(PUBLISH_STALE_DRAFT_MESSAGE);
+      return;
+    }
+    if (flushStatus === "error") {
+      setError("작업본 저장에 실패했습니다. 다시 확정해 주세요.");
+      return;
+    }
+    const version = serverDraftVersionRef.current;
+    if (!version) {
+      setError("작업본이 아직 저장되지 않았습니다. 잠시 후 다시 확정해 주세요.");
+      return;
+    }
+
+    setPublishing(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/assignments/published", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          date: current.date,
+          draftVersion: version,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 409 || data.code === PUBLISH_STALE_DRAFT) {
+        setDraftSaveState("conflict");
+        setError(data.message || PUBLISH_STALE_DRAFT_MESSAGE);
+        return;
+      }
+      if (!res.ok || !data.published) {
+        setError(data.message || data.error || "배치 확정 실패");
+        return;
+      }
+      setPublished({
+        sourceDraftVersion: Number(data.published.sourceDraftVersion) || version,
+        publishedAt: String(data.published.publishedAt || ""),
+        publishedByUsername: data.published.publishedByUsername ?? null,
+      });
+      showToast(data.message || PUBLISH_SUCCESS_MESSAGE);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "배치 확정 실패");
+    } finally {
+      setPublishing(false);
+    }
+  }
+
   async function persistLivePreview(input: {
     preview: LiveChangePreview;
     previous: AutoAssignResultV1;
@@ -1507,7 +1644,7 @@ export default function ManageAssignmentsOpsPage() {
       <header className="ops-header">
         <div>
           <h1>자동배치 운영</h1>
-          <p>Excel → 자동배치 → 수동 수정 → CONFIRMED 후 운영 반영</p>
+          <p>Excel → 자동배치 → 작업본 저장 → 배치 확정 (캐디 공개)</p>
         </div>
         {draft && (
           <div className="ops-header-side">
@@ -1524,6 +1661,12 @@ export default function ManageAssignmentsOpsPage() {
               }}
               onReload={() => void reloadLatestDraft()}
             />
+            {published ? (
+              <div className="ops-published-meta">
+                확정 {formatPublishedAt(published.publishedAt)} ·{" "}
+                {publisherDisplayName(published.publishedByUsername)}
+              </div>
+            ) : null}
           </div>
         )}
       </header>
@@ -1684,10 +1827,40 @@ export default function ManageAssignmentsOpsPage() {
             className="btn apply"
             disabled={!draft || draft.status !== "CONFIRMED" || loadingApply}
             onClick={() => onApplyToOps(false)}
-            title="CONFIRMED 상태에서만 Schedule/ShiftDuty에 저장"
+            title="CONFIRMED 상태에서만 Schedule/ShiftDuty에 저장 (레거시 운영 반영)"
           >
             {loadingApply ? "반영 중…" : "운영 반영"}
           </button>
+        </div>
+        <div className="ops-publish-row">
+          <button
+            type="button"
+            className="btn primary ops-publish-btn"
+            disabled={!draft || publishing || draftSaveState === "conflict"}
+            onClick={() => void onPublishBoard()}
+          >
+            {publishing
+              ? "확정 중…"
+              : published
+                ? "변경사항 다시 확정"
+                : "배치 확정"}
+          </button>
+          {published &&
+          draft &&
+          published.sourceDraftVersion === draftVersion ? (
+            <span className="ops-published-state">
+              현재 작업본이 이미 확정되어 있습니다
+            </span>
+          ) : published ? (
+            <span className="ops-published-state">
+              확정 {formatPublishedAt(published.publishedAt)} ·{" "}
+              {publisherDisplayName(published.publishedByUsername)}
+            </span>
+          ) : (
+            <span className="ops-published-state">
+              확정하면 캐디 공용 배치표에 게시됩니다
+            </span>
+          )}
         </div>
         {availability && (
           <div className="ops-meta">
@@ -2667,6 +2840,23 @@ const opsCss = `
   .btn.primary { background: #0f172a; color: #fff; border-color: #0f172a; }
   .btn.confirm { background: #047857; color: #fff; border-color: #047857; }
   .btn.apply { background: #1d4ed8; color: #fff; border-color: #1d4ed8; }
+  .ops-publish-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    margin-top: 8px;
+  }
+  .ops-publish-btn {
+    min-height: 40px;
+    padding: 0 16px;
+    font-weight: 800;
+  }
+  .ops-published-state,
+  .ops-published-meta {
+    font-size: 0.75rem;
+    color: #64748b;
+  }
   .btn.ghost { background: #f8fafc; }
   .btn.danger {
     background: #fef2f2;

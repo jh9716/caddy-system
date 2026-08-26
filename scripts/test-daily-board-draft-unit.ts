@@ -638,8 +638,8 @@ section("source guards: API / UI / migration / live save order");
   assert(/date\s+DateTime\s+@unique/.test(schema.split("model DailyBoardDraft")[1] || ""), "date unique");
 
   assert(!/opsDuty|shiftDuty|specialDuty|thirdStart/.test(payloadLib.split("export type DailyBoardDraftPayloadV1")[1]?.split("export class")[0] || ""), "payload type omits duty/special/off");
-  assert(/CONFIRMED/.test(page) && !/Published/.test(page), "client CONFIRMED kept, no Published");
-  assert(!/캐디용 배치표/.test(page), "no caddy board menu this PR");
+  assert(/CONFIRMED/.test(page), "client CONFIRMED kept as legacy ops status");
+  assert(/배치 확정/.test(page), "Published 확정 primary action");
 }
 
 section("캐디 권한 Draft API 접근 불가 (requireAdmin 401)");

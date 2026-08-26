@@ -7,7 +7,8 @@ export const runtime = "nodejs";
 
 /**
  * POST /api/assignments/confirm
- * CONFIRMED 배치표만 Schedule / ShiftDuty / ExtraTag 에 반영
+ * CONFIRMED 배치표만 Schedule / ShiftDuty / ExtraTag 에 반영 (레거시 운영 반영)
+ * - 날짜별 캐디 공개 Published 배치표가 아니다. 공개 확정은 POST /api/assignments/published
  * - admin 권한 필수
  * - DRAFT/EDITED 거부
  * - 없는 caddyId 거부
