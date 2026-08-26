@@ -1939,31 +1939,6 @@ export default function ManageAssignmentsOpsPage() {
               </button>
             </nav>
 
-            {draft.sparesByShift?.length > 0 && (
-              <div className="ops-spares-all" aria-label="부별 스페어 현황">
-                {SHIFTS.map((s) => {
-                  const sp = draft.sparesByShift.find((x) => x.shift === s);
-                  return (
-                    <div key={s} className="ops-spares-all-col">
-                      <div className="ops-spares-all-title">{s} 스페어</div>
-                      <div>
-                        스페어 1:{" "}
-                        {sp?.spare1
-                          ? formatCaddyLabel(sp.spare1)
-                          : "-"}
-                      </div>
-                      <div>
-                        스페어 2:{" "}
-                        {sp?.spare2
-                          ? formatCaddyLabel(sp.spare2)
-                          : "-"}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
             {shiftTab !== "UNASSIGNED" && shiftTab !== "CLOSED" && (
               <div className="ops-board-tools">
                 <div className="ops-view-toggle" role="tablist" aria-label="결과 보기">
@@ -2004,6 +1979,31 @@ export default function ManageAssignmentsOpsPage() {
               <p className="ops-board-hint">
                 팀 또는 캐디 이름을 눌러 수정할 수 있습니다.
               </p>
+            )}
+
+            {draft.sparesByShift?.length > 0 && (
+              <div className="ops-spares-all" aria-label="부별 스페어 현황">
+                {SHIFTS.map((s) => {
+                  const sp = draft.sparesByShift.find((x) => x.shift === s);
+                  return (
+                    <div key={s} className="ops-spares-all-col">
+                      <div className="ops-spares-all-title">{s} 스페어</div>
+                      <div>
+                        스페어 1:{" "}
+                        {sp?.spare1
+                          ? formatCaddyLabel(sp.spare1)
+                          : "-"}
+                      </div>
+                      <div>
+                        스페어 2:{" "}
+                        {sp?.spare2
+                          ? formatCaddyLabel(sp.spare2)
+                          : "-"}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             )}
 
             {moveKey && moveSourceRow ? (
