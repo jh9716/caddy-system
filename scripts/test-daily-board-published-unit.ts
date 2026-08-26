@@ -752,6 +752,7 @@ async function main() {
     assert(!/>\s*CONFIRMED\s*</.test(actionsUi), "CONFIRMED button not in ops-actions");
     assert(!/운영 반영/.test(actionsUi), "운영 반영 button not in ops-actions");
     assert(!/<button[\s\S]*?>\s*CONFIRMED\s*</.test(page), "CONFIRMED button UI hidden");
+    assert(!/<StatusBadge/.test(page), "CONFIRMED status chip not rendered in ops header");
     assert(!/loadingApply \? "반영 중…" : "운영 반영"/.test(page), "운영 반영 button UI hidden");
     assert(/function onConfirm/.test(page), "legacy onConfirm handler kept");
     assert(/async function onApplyToOps/.test(page), "legacy onApplyToOps handler kept");

@@ -641,6 +641,8 @@ section("source guards: API / UI / migration / live save order");
   assert(/CONFIRMED/.test(page), "client CONFIRMED kept as legacy ops status");
   assert(/function onConfirm/.test(page), "legacy onConfirm handler kept");
   assert(/async function onApplyToOps/.test(page), "legacy onApplyToOps handler kept");
+  assert(/function StatusBadge/.test(page), "legacy StatusBadge helper kept");
+  assert(!/<StatusBadge/.test(page), "CONFIRMED status chip not rendered");
   assert(/\/api\/assignments\/confirm/.test(page), "legacy confirm API still in page handler");
   const actionsUi = page.split('className="ops-actions"')[1]?.split("</div>")[0] || "";
   assert(!/>\s*CONFIRMED\s*</.test(actionsUi), "CONFIRMED button not in ops-actions");

@@ -1681,11 +1681,6 @@ export default function ManageAssignmentsOpsPage() {
         </div>
         {draft && (
           <div className="ops-header-side">
-            <StatusBadge
-              status={draft.status}
-              confirmedAt={draft.confirmedAt}
-              appliedAt={draft.appliedAt ?? null}
-            />
             <DraftSaveStatus
               state={draftSaveState}
               savedAt={draftSavedAt}
@@ -2579,6 +2574,7 @@ export default function ManageAssignmentsOpsPage() {
   );
 }
 
+/** Legacy Draft status chip. Kept in source; not rendered in ops UI. */
 function StatusBadge({
   status,
   confirmedAt,
