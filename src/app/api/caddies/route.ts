@@ -28,7 +28,7 @@ import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
-/** GET: 캐디 목록 (관리자 전용. 기본: ACTIVE, ?employment=all|ACTIVE|LEAVE|RETIRED|재직|휴직|퇴사) */
+/** GET: 캐디 목록 (관리자 전용. 기본: ACTIVE, ?employment=all|ACTIVE|LEAVE|RETIRED|재직|휴직|퇴사|삭제됨) */
 export async function GET(req: NextRequest) {
   const guard = await requireAdmin(req);
   if (guard) return guard;
@@ -234,7 +234,7 @@ export async function DELETE(req: NextRequest) {
   } catch (e: any) {
     console.error("DELETE /api/caddies error:", e);
     return NextResponse.json(
-      { error: e?.message || "퇴사 처리 실패" },
+      { error: e?.message || "삭제 처리 실패" },
       { status: 500 }
     );
   }

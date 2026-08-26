@@ -11,7 +11,7 @@
  * - Production exact name 1:1만 자동 매칭, 기존 ID 유지
  * - phone은 매칭 키가 아님 (매칭 완료 후 부가 데이터)
  * - 철자 유사 / 숫자 표기 변경 = needsReview (자동 병합·생성 금지)
- * - missingInImport = 표시만 (자동 퇴사/삭제 없음)
+ * - missingInImport = 표시만 (자동 삭제 없음)
  *
  * CSV phone (optional):
  * - 헤더: phone | 휴대폰 | 전화번호 | mobile (대소문자 무시)
@@ -674,7 +674,7 @@ export function buildPreviewLines(
       currentTeam: m.team,
       nextTeam: null,
       currentMaskedPhone: m.currentMaskedPhone ?? null,
-      reason: "최신 명단에 없음 — 자동 퇴사/삭제 없음",
+      reason: "최신 명단에 없음 — 자동 삭제 없음",
     });
   }
 

@@ -255,7 +255,7 @@ export function buildXlsxV1SafePreview(
       currentId: m.id,
       currentTeam: m.team,
       currentTeamOrder: m.teamOrder,
-      reason: "이번 1~12조 명단에 없음 — 자동 퇴사/삭제 없음",
+      reason: "이번 1~12조 명단에 없음 — 자동 삭제 없음",
       candidates: [],
     });
   }

@@ -244,7 +244,9 @@ export function normalizeExtraFlags(input: unknown): ExtraFlagOption[] {
 export function normalizeEmploymentStatus(input: unknown): EmploymentStatus {
   const v = String(input ?? "").trim();
   const upper = v.toUpperCase();
-  if (upper === "RETIRED" || v === "퇴사") return "RETIRED";
+  if (upper === "RETIRED" || v === "퇴사" || v === "삭제됨" || v === "삭제") {
+    return "RETIRED";
+  }
   if (upper === "LEAVE" || v === "휴직") return "LEAVE";
   if (upper === "ACTIVE" || v === "재직") return "ACTIVE";
   return "ACTIVE";
@@ -255,7 +257,19 @@ export function employmentStatusLabel(input: unknown): string {
   return EMPLOYMENT_STATUS_LABELS[status];
 }
 
-/** 총원 집계: 재직+휴직. RETIRED(퇴사)는 제외. */
+/** 운영 UI 표시명. DB/API enum은 RETIRED 유지, 화면에서는 삭제됨. */
+export const EMPLOYMENT_STATUS_UI_LABELS: Record<EmploymentStatus, string> = {
+  ACTIVE: "재직",
+  LEAVE: "휴직",
+  RETIRED: "삭제됨",
+};
+
+export function employmentStatusUiLabel(input: unknown): string {
+  const status = normalizeEmploymentStatus(input);
+  return EMPLOYMENT_STATUS_UI_LABELS[status];
+}
+
+/** 총원 집계: 재직+휴직. RETIRED(삭제됨)는 제외. */
 export function countsTowardRosterHeadcount(input: unknown): boolean {
   const st = normalizeEmploymentStatus(input);
   return st === "ACTIVE" || st === "LEAVE";

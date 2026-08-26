@@ -421,7 +421,7 @@ export async function DELETE(
     console.error("[DELETE /api/caddies/[id]]", e);
     const status = e?.status ?? 400;
     return NextResponse.json(
-      { error: e?.message ?? "퇴사 처리 실패" },
+      { error: e?.message ?? "삭제 처리 실패" },
       { status }
     );
   }

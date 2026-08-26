@@ -4,12 +4,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   DRIVING_POOL_TEAM,
   EMPLOYMENT_STATUSES,
-  EMPLOYMENT_STATUS_LABELS,
+  EMPLOYMENT_STATUS_UI_LABELS,
   EDITABLE_EXTRA_FLAG_OPTIONS,
   PRIMARY_TEAMS,
   THIRD_BAND_SUBGROUP_LABELS,
   countsTowardRosterHeadcount,
-  employmentStatusLabel,
+  employmentStatusUiLabel,
   isDrivingCaddyType,
   rosterHeadcount,
   isThirdBandTeam,
@@ -274,7 +274,7 @@ export default function ManageCaddiesPage() {
 
   const load = useCallback(
     async (employmentOverride?: EmploymentStatus | 'all') => {
-      // 한눈에 보기: 재직/휴직/퇴사 집계를 위해 전체 로드
+      // 한눈에 보기: 재직/휴직/삭제됨 집계를 위해 전체 로드
       const employment =
         employmentOverride ??
         (viewMode === 'summary' || employmentFilter === 'missing'
@@ -640,17 +640,13 @@ export default function ManageCaddiesPage() {
   }
 
   async function setEmployment(c: Caddy, status: EmploymentStatus) {
-    const label =
+    const confirmText =
       status === 'RETIRED'
-        ? '퇴사 처리'
+        ? '이 캐디를 명단에서 삭제하시겠습니까?\n삭제하면 현재 명단과 자동배치에서 제외됩니다. 과거 배치 기록은 보존됩니다.'
         : status === 'LEAVE'
-          ? '휴직 처리'
-          : '재직 복귀';
-    if (
-      !confirm(
-        `${formatCaddyLabel(c)}을(를) ${label}할까요?\n과거 배정 기록은 유지됩니다.`
-      )
-    ) {
+          ? `${formatCaddyLabel(c)}을(를) 휴직 처리할까요?\n과거 배정 기록은 유지됩니다.`
+          : `${formatCaddyLabel(c)}을(를) 복귀시킬까요?`;
+    if (!confirm(confirmText)) {
       return;
     }
     setSavingId(c.id);
@@ -674,9 +670,9 @@ export default function ManageCaddiesPage() {
         await load('all');
       }
       setMenuCaddyId(null);
-      setMessage(
-        `${formatCaddyLabel(c)}: ${employmentStatusLabel(status)}`
-      );
+      const toast =
+        status === 'RETIRED' ? '삭제됨' : status === 'LEAVE' ? '휴직' : '복귀';
+      setMessage(`${formatCaddyLabel(c)}: ${toast}`);
     } finally {
       setSavingId(null);
     }
@@ -921,7 +917,7 @@ export default function ManageCaddiesPage() {
               >
                 {EMPLOYMENT_STATUSES.map((s) => (
                   <option key={s} value={s}>
-                    {EMPLOYMENT_STATUS_LABELS[s]}
+                    {EMPLOYMENT_STATUS_UI_LABELS[s]}
                   </option>
                 ))}
               </select>
@@ -1065,7 +1061,7 @@ export default function ManageCaddiesPage() {
                 ['all', '전체'],
                 ['ACTIVE', '재직'],
                 ['LEAVE', '휴직'],
-                ['RETIRED', '퇴사'],
+                ['RETIRED', '삭제됨'],
                 ['missing', '명단 누락'],
               ] as const
             ).map(([value, label]) => (
@@ -1106,12 +1102,12 @@ export default function ManageCaddiesPage() {
               · 표시 {stats.total}명
             </span>
             {employmentFilter === 'ACTIVE' && (
-              <span className="cm-stats-hint"> · 퇴사자는 「퇴사」 필터에서 조회·복귀</span>
+              <span className="cm-stats-hint"> · 삭제된 캐디는 「삭제됨」 필터에서 조회·복귀</span>
             )}
             {employmentFilter === 'missing' && (
               <span className="cm-stats-hint">
                 {' '}
-                · 명단 누락은 경고이며 퇴사가 아닙니다
+                · 명단 누락은 경고이며 삭제가 아닙니다
               </span>
             )}
           </div>
@@ -1281,7 +1277,7 @@ export default function ManageCaddiesPage() {
                               >
                                 {EMPLOYMENT_STATUSES.map((s) => (
                                   <option key={s} value={s}>
-                                    {EMPLOYMENT_STATUS_LABELS[s]}
+                                    {EMPLOYMENT_STATUS_UI_LABELS[s]}
                                   </option>
                                 ))}
                               </select>
@@ -1363,7 +1359,7 @@ export default function ManageCaddiesPage() {
                             {c.missingFromImport ? (
                               <span
                                 className="cm-missing-tag"
-                                title="최신 전체 명단에 없음. 퇴사가 아닙니다."
+                                title="최신 전체 명단에 없음. 삭제가 아닙니다."
                               >
                                 명단 누락
                               </span>
@@ -1381,7 +1377,7 @@ export default function ManageCaddiesPage() {
                                     : 'out'
                               }`}
                             >
-                              {employmentStatusLabel(c.employmentStatus)}
+                              {employmentStatusUiLabel(c.employmentStatus)}
                             </span>
                           </td>
                           <td className="cm-phone">
@@ -1400,7 +1396,7 @@ export default function ManageCaddiesPage() {
                               >
                                 수정
                               </button>
-                              {!isDriving && (
+                              {st !== 'RETIRED' && !isDriving && (
                                 <>
                               <button
                                 type="button"
@@ -1455,7 +1451,7 @@ export default function ManageCaddiesPage() {
                                     disabled={busy}
                                     onClick={() => setEmployment(c, 'RETIRED')}
                                   >
-                                    퇴사
+                                    삭제
                                   </button>
                                 </>
                               )}
@@ -1502,7 +1498,7 @@ export default function ManageCaddiesPage() {
                         st === 'ACTIVE' ? 'ok' : st === 'LEAVE' ? 'leave' : 'out'
                       }`}
                     >
-                      {employmentStatusLabel(c.employmentStatus)}
+                      {employmentStatusUiLabel(c.employmentStatus)}
                     </span>
                     <span className="cm-more" aria-hidden>
                       {open ? '▾' : '⋮'}
@@ -1525,7 +1521,7 @@ export default function ManageCaddiesPage() {
                           >
                             수정
                           </button>
-                          {!isDriving && (
+                          {st !== 'RETIRED' && !isDriving && (
                             <>
                           <button
                             type="button"
@@ -1560,7 +1556,7 @@ export default function ManageCaddiesPage() {
                               disabled={busy}
                               onClick={() => setEmployment(c, 'ACTIVE')}
                             >
-                              재직 복귀
+                              복귀
                             </button>
                           ) : (
                             <>
@@ -1580,7 +1576,7 @@ export default function ManageCaddiesPage() {
                                 disabled={busy}
                                 onClick={() => setEmployment(c, 'RETIRED')}
                               >
-                                퇴사
+                                삭제
                               </button>
                             </>
                           )}
@@ -1660,7 +1656,7 @@ export default function ManageCaddiesPage() {
                               >
                                 {EMPLOYMENT_STATUSES.map((s) => (
                                   <option key={s} value={s}>
-                                    {EMPLOYMENT_STATUS_LABELS[s]}
+                                    {EMPLOYMENT_STATUS_UI_LABELS[s]}
                                   </option>
                                 ))}
                               </select>
@@ -1837,7 +1833,7 @@ export default function ManageCaddiesPage() {
                   if (!v1Ready.ready) return;
                   if (
                     !confirm(
-                      `조 제목형 XLSX v1을 반영할까요?\n변경없음 ${v1Ready.autoKeep} · 조 이동 ${v1Ready.move} · 신규 ${v1Ready.create}\n기존 ID/순번은 가능한 한 유지됩니다. 파일 순서는 순번이 아닙니다.\n파일에 없는 재직/휴직자는 '명단 누락'으로 표시됩니다(자동 퇴사/삭제 없음).`
+                      `조 제목형 XLSX v1을 반영할까요?\n변경없음 ${v1Ready.autoKeep} · 조 이동 ${v1Ready.move} · 신규 ${v1Ready.create}\n기존 ID/순번은 가능한 한 유지됩니다. 파일 순서는 순번이 아닙니다.\n파일에 없는 재직/휴직자는 '명단 누락'으로 표시됩니다(자동 삭제 없음).`
                     )
                   ) {
                     return;
@@ -1891,7 +1887,7 @@ export default function ManageCaddiesPage() {
                 if (!isRosterImportV2ApplyFormat(importPreview.format)) return;
                 if (
                   !confirm(
-                    `명단을 반영할까요?\n이 파일은 최신 전체 일반 캐디(1~12조) 명단으로 처리됩니다.\n갱신 ${importPreview.summary.update} · 신규 ${importPreview.summary.create ?? 0}\n파일에 없는 재직/휴직자는 '명단 누락'으로 표시됩니다(자동 퇴사/삭제 없음).\n일부 조만 올리면 다른 조 재직자도 누락으로 표시됩니다.`
+                    `명단을 반영할까요?\n이 파일은 최신 전체 일반 캐디(1~12조) 명단으로 처리됩니다.\n갱신 ${importPreview.summary.update} · 신규 ${importPreview.summary.create ?? 0}\n파일에 없는 재직/휴직자는 '명단 누락'으로 표시됩니다(자동 삭제 없음).\n일부 조만 올리면 다른 조 재직자도 누락으로 표시됩니다.`
                   )
                 ) {
                   return;
@@ -2036,7 +2032,7 @@ export default function ManageCaddiesPage() {
                 <p className="cm-import-block">
                   needsReview / 전화번호 문제 / 조·순번 충돌이 있어 Apply가
                   비활성화되었습니다. 수정 후 다시 Preview 하세요. 누락 경고만으로는
-                  막지 않습니다(자동 퇴사 없음). Apply 후 누락자는 목록의 「명단 누락」
+                  막지 않습니다(자동 삭제 없음). Apply 후 누락자는 목록의 「명단 누락」
                   필터에서 확인합니다.
                 </p>
               )}
@@ -2411,7 +2407,7 @@ export default function ManageCaddiesPage() {
                           >
                             {EMPLOYMENT_STATUSES.map((s) => (
                               <option key={s} value={s}>
-                                {EMPLOYMENT_STATUS_LABELS[s]}
+                                {EMPLOYMENT_STATUS_UI_LABELS[s]}
                               </option>
                             ))}
                           </select>
