@@ -1089,7 +1089,7 @@ export default function ManageAssignmentsOpsPage() {
         setQuickSheet(null);
         return;
       }
-      showToast("빈 칸을 탭하거나 직접 입력하세요. 이동 중에는 당추/순번바꿈이 동작하지 않습니다.");
+      showToast("빈 칸을 탭하거나 직접 입력하세요. 이동 중에는 추가팀/순번바꿈이 동작하지 않습니다.");
       setQuickSheet(null);
       return;
     }
@@ -1164,7 +1164,7 @@ export default function ManageAssignmentsOpsPage() {
       course,
       shift: shiftTab,
       teeTime,
-      teamName: "당추",
+      teamName: "추가팀",
       moveReservationKey: moveKey,
     });
     if (change.type === "MOVE_RESERVATION") {
@@ -1174,7 +1174,7 @@ export default function ManageAssignmentsOpsPage() {
     }
     const courseLabel = COURSE_LABELS[course];
     const ok = window.confirm(
-      `${shiftTab} ${teeTime} ${courseLabel}에 당추를 추가할까요?`
+      `${shiftTab} ${teeTime} ${courseLabel}에 추가팀을 등록할까요?`
     );
     if (!ok) return;
     setLiveChangePreset(change);
@@ -1939,6 +1939,48 @@ export default function ManageAssignmentsOpsPage() {
               </button>
             </nav>
 
+            {shiftTab !== "UNASSIGNED" && shiftTab !== "CLOSED" && (
+              <div className="ops-board-tools">
+                <div className="ops-view-toggle" role="tablist" aria-label="결과 보기">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={viewMode === "board"}
+                    className={viewMode === "board" ? "on" : ""}
+                    onClick={() => setViewMode("board")}
+                  >
+                    배치표
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={viewMode === "list"}
+                    className={viewMode === "list" ? "on" : ""}
+                    onClick={() => setViewMode("list")}
+                  >
+                    목록
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  className="ops-add-team"
+                  onClick={() => {
+                    if (moveKey) return;
+                    setAddTeamOpen(true);
+                  }}
+                  disabled={!!moveKey}
+                >
+                  {moveKey ? "이동 중" : "+ 추가팀"}
+                </button>
+              </div>
+            )}
+
+            {shiftTab !== "UNASSIGNED" && shiftTab !== "CLOSED" && (
+              <p className="ops-board-hint">
+                팀 또는 캐디 이름을 눌러 수정할 수 있습니다.
+              </p>
+            )}
+
             {draft.sparesByShift?.length > 0 && (
               <div className="ops-spares-all" aria-label="부별 스페어 현황">
                 {SHIFTS.map((s) => {
@@ -1961,38 +2003,6 @@ export default function ManageAssignmentsOpsPage() {
                     </div>
                   );
                 })}
-              </div>
-            )}
-
-            {shiftTab !== "UNASSIGNED" && shiftTab !== "CLOSED" && (
-              <div className="ops-board-tools">
-                <div className="ops-view-toggle" role="group" aria-label="결과 보기">
-                  <button
-                    type="button"
-                    className={viewMode === "board" ? "on" : ""}
-                    onClick={() => setViewMode("board")}
-                  >
-                    배치표보기
-                  </button>
-                  <button
-                    type="button"
-                    className={viewMode === "list" ? "on" : ""}
-                    onClick={() => setViewMode("list")}
-                  >
-                    목록보기
-                  </button>
-                </div>
-                <button
-                  type="button"
-                  className="ops-add-team"
-                  onClick={() => {
-                    if (moveKey) return;
-                    setAddTeamOpen(true);
-                  }}
-                  disabled={!!moveKey}
-                >
-                  {moveKey ? "이동 중" : "당추 추가"}
-                </button>
               </div>
             )}
 
@@ -2087,7 +2097,7 @@ export default function ManageAssignmentsOpsPage() {
                                       aria-label={
                                         moveDest
                                           ? `${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} 이동 목적지 선택`
-                                          : `${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} 당추 추가`
+                                          : `${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} 추가팀 등록`
                                       }
                                       onClick={() =>
                                         onEmptyBoardCellClick(code, tr.teeTime)
@@ -2341,6 +2351,7 @@ export default function ManageAssignmentsOpsPage() {
           preset={liveChangePreset}
           onPresetConsumed={() => setLiveChangePreset(null)}
           onResetDraft={() => void resetStoredDraft()}
+          onRecalcOrder={() => void runAutoAssign()}
           defaultShift={
             shiftTab === "UNASSIGNED" || shiftTab === "CLOSED"
               ? "1부"
@@ -2456,7 +2467,7 @@ const opsCss = `
     max-width: 720px;
     margin: 0 auto;
     display: grid;
-    gap: 12px;
+    gap: 8px;
     padding: 0 8px 72px;
     box-sizing: border-box;
     width: 100%;
@@ -2657,6 +2668,12 @@ const opsCss = `
   .btn.confirm { background: #047857; color: #fff; border-color: #047857; }
   .btn.apply { background: #1d4ed8; color: #fff; border-color: #1d4ed8; }
   .btn.ghost { background: #f8fafc; }
+  .btn.danger {
+    background: #fef2f2;
+    color: #991b1b;
+    border-color: #fecaca;
+    font-weight: 700;
+  }
   .btn.tiny { min-height: 34px; padding: 0 10px; font-size: 0.8rem; }
   .ops-meta { font-size: 0.8rem; color: #475569; }
   .ops-duty-actions {
@@ -2734,41 +2751,54 @@ const opsCss = `
     opacity: 0.8;
   }
   .ops-view-toggle {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 6px;
-    flex: 1;
+    display: inline-flex;
+    align-items: stretch;
+    background: #e2e8f0;
+    border-radius: 8px;
+    padding: 2px;
+    flex: 0 0 auto;
   }
   .ops-board-tools {
     display: flex;
-    gap: 6px;
-    align-items: stretch;
+    gap: 8px;
+    align-items: center;
+    justify-content: space-between;
   }
   .ops-add-team {
-    min-height: 36px;
-    padding: 0 12px;
+    min-height: 32px;
+    padding: 0 10px;
     border-radius: 8px;
-    border: 1px solid #0f172a;
+    border: 0;
     background: #0f172a;
     color: #fff;
-    font-size: 0.8rem;
+    font-size: 0.78rem;
     font-weight: 700;
     cursor: pointer;
     white-space: nowrap;
+    flex: 0 0 auto;
   }
+  .ops-add-team:disabled { opacity: 0.5; cursor: not-allowed; }
   .ops-view-toggle button {
-    min-height: 36px;
-    border-radius: 8px;
-    border: 1px solid #e2e8f0;
-    background: #fff;
-    font-size: 0.8rem;
+    min-height: 28px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: #64748b;
+    font-size: 0.78rem;
     cursor: pointer;
   }
   .ops-view-toggle button.on {
-    background: #0f172a;
-    color: #fff;
-    border-color: #0f172a;
+    background: #fff;
+    color: #0f172a;
     font-weight: 700;
+    box-shadow: 0 1px 2px rgb(15 23 42 / 10%);
+  }
+  .ops-board-hint {
+    margin: 0;
+    font-size: 0.72rem;
+    color: #94a3b8;
+    line-height: 1.3;
   }
   .ops-board-head-bar {
     width: 100%;
@@ -2785,7 +2815,7 @@ const opsCss = `
   }
   /* ops-root gap(12px)을 상쇄해 헤더 바·본문 테두리가 이어지게 함 */
   .ops-sticky-stack:has(.ops-board-head-bar) + .ops-board-wrap.has-sticky-head {
-    margin-top: -12px;
+    margin-top: -8px;
   }
   .ops-board {
     width: 100%;
@@ -3295,79 +3325,47 @@ const opsCss = `
       bottom: 24px;
     }
   }
-  .live-change {
-    border: 1px solid #cbd5e1;
-    border-radius: 12px;
-    padding: 10px 12px;
-    background: #fff;
-    display: grid;
-    gap: 10px;
-  }
-  .live-change.is-collapsed {
-    padding: 8px 12px;
-    gap: 0;
-  }
-  .live-advanced-toggle {
-    width: 100%;
-    min-height: 40px;
-    border: 0;
-    border-radius: 10px;
+  .admin-tools {
+    margin-top: 4px;
+    padding: 0;
     background: transparent;
-    color: #64748b;
-    font-size: 0.82rem;
+    border: 0;
+  }
+  .admin-tools-toggle {
+    width: auto;
+    min-height: 28px;
+    border: 0;
+    background: transparent;
+    color: #94a3b8;
+    font-size: 0.75rem;
     font-weight: 600;
     text-align: left;
-    padding: 4px 2px;
+    padding: 4px 0;
+    cursor: pointer;
   }
-  .live-change.is-open .live-advanced-toggle {
-    color: #0f172a;
-    font-weight: 700;
-  }
-  .live-change-head {
-    display: grid;
-    gap: 2px;
-  }
-  .live-change-head span {
+  .admin-tools.is-open .admin-tools-toggle {
     color: #64748b;
-    font-size: 0.8rem;
   }
-  .live-draft-reset {
-    display: grid;
-    gap: 6px;
-    margin-top: 8px;
-    padding-top: 8px;
-    border-top: 1px solid #e2e8f0;
-  }
-  .live-draft-reset span {
-    color: #64748b;
-    font-size: 0.78rem;
-    line-height: 1.4;
-  }
-  .live-change-grid {
+  .admin-tools-body {
     display: grid;
     gap: 8px;
+    padding: 8px 0 4px;
   }
-  .live-change-grid label {
-    display: grid;
-    gap: 4px;
-    font-size: 0.8rem;
-    color: #334155;
-  }
-  .live-change-grid select,
-  .live-change-grid input {
-    min-height: 40px;
-    font-size: 16px;
-  }
-  .live-swap-hint {
+  .admin-tools-hint {
     margin: 0;
-    color: #64748b;
-    font-size: 0.78rem;
+    color: #94a3b8;
+    font-size: 0.72rem;
     line-height: 1.4;
   }
-  .live-change-actions {
+  .admin-tools-actions {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
+  }
+  .admin-tools-actions .btn {
+    min-height: 36px;
+    font-size: 0.8rem;
+    padding: 0 12px;
   }
   .live-preview {
     border: 1px dashed #94a3b8;

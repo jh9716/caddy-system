@@ -623,8 +623,8 @@ section("source guards: API / UI / migration / live save order");
   assert(/method: "DELETE"/.test(resetFn), "UI reset calls DELETE");
   assert(!/dailyReservation/.test(resetFn) && !/DailyPlacement/.test(resetFn), "UI reset does not touch placements");
   assert(/작업본 초기화/.test(panel), "reset in LiveChangePanel");
-  const advanced = panel.split("{advancedOpen &&")[1]?.split("{error &&")[0] || "";
-  assert(/작업본 초기화/.test(advanced), "reset only in 기타/고급");
+  const adminTools = panel.split("{adminToolsOpen &&")[1]?.split("{error &&")[0] || "";
+  assert(/작업본 초기화/.test(adminTools), "reset only in 관리 도구");
   assert(/이미 적용된 예약·배치는 남습니다/.test(panel), "reset copy: production data kept");
 
   assert(/CREATE TABLE "DailyBoardDraft"/.test(sql), "additive CREATE TABLE");

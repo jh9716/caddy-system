@@ -58,7 +58,7 @@ export const LIVE_CHANGE_LABELS: Record<LiveChangeType, string> = {
   TEAM_NOSHOW: "예약/팀 노쇼",
   CADDY_SICK: "캐디 병가",
   CADDY_ATTENDANCE_NOSHOW: "캐디 결근",
-  ADD_RESERVATION: "당추(예약 추가)",
+  ADD_RESERVATION: "추가팀 등록",
   SWAP_CADDY: "순번 바꿈",
   SET_LIMOUSINE: "리무진카트 요청",
   ASSIGN_DRIVING: "드라이빙 캐디 지정",
