@@ -85,6 +85,14 @@ import {
   isStableReservationMoveKey,
   reservationMoveBlockReason,
 } from "@/lib/reservationMove";
+import {
+  assignmentDraftToPayload,
+  DRAFT_VERSION_CONFLICT,
+  draftAutosaveCandidate,
+  formatDraftSavedAt,
+  parseDailyBoardDraftPayload,
+  payloadToAssignmentDraft,
+} from "@/lib/dailyBoardDraft";
 
 type ResultViewMode = "board" | "list";
 
@@ -193,6 +201,9 @@ const BoardAssignedSlots = memo(function BoardAssignedSlots({
   );
 });
 
+type CourseOpenState = Record<CourseCode, boolean>;
+type DraftSaveState = "idle" | "saving" | "saved" | "error" | "conflict";
+
 function defaultCourseOpen(): CourseOpenState {
   return {
     VERTHILL: true,
@@ -200,6 +211,32 @@ function defaultCourseOpen(): CourseOpenState {
     OCEAN: true,
     LAKE: true,
   };
+}
+
+function courseOpenFromList(openCourses: string[] | undefined): CourseOpenState {
+  const next = defaultCourseOpen();
+  if (!openCourses || openCourses.length === 0) return next;
+  const open = new Set(openCourses);
+  for (const code of COURSE_CODES) next[code] = open.has(code);
+  return next;
+}
+
+async function putAssignmentDraft(
+  next: AssignmentDraft,
+  expectedVersion: number
+) {
+  const res = await fetch("/api/assignments/draft", {
+    method: "PUT",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      date: next.date,
+      version: expectedVersion,
+      payload: assignmentDraftToPayload(next),
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  return { res, data };
 }
 
 export default function ManageAssignmentsOpsPage() {
@@ -257,13 +294,185 @@ export default function ManageAssignmentsOpsPage() {
   const [unavailableCaddyIds, setUnavailableCaddyIds] = useState<number[]>([]);
   const [viewMode, setViewMode] = useState<ResultViewMode>("board");
   const [toast, setToast] = useState<string | null>(null);
+  const [draftSaveState, setDraftSaveState] = useState<DraftSaveState>("idle");
+  const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
   const stickyStackRef = useRef<HTMLDivElement | null>(null);
   const draftRef = useRef<AssignmentDraft | null>(null);
   const autoResultRef = useRef<RunResponse | null>(null);
   const persistQueueRef = useRef(Promise.resolve());
   const persistGenRef = useRef(0);
+  const dateRef = useRef(date);
+  const hydratingDraftRef = useRef(false);
+  const serverDraftVersionRef = useRef(0);
+  const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingDraftSaveRef = useRef<AssignmentDraft | null>(null);
+  const draftSaveInFlightRef = useRef(false);
   draftRef.current = draft;
   autoResultRef.current = autoResult;
+
+  const applyHydratedDraft = useCallback(
+    (assignmentDraft: AssignmentDraft, version: number, savedAt?: string | null) => {
+      hydratingDraftRef.current = true;
+      serverDraftVersionRef.current = version;
+      setDraft(assignmentDraft);
+      setAutoResult(autoResultFromDraft(assignmentDraft, null) as RunResponse);
+      setWarnings(detectDraftWarnings(assignmentDraft));
+      setCourseOpen(courseOpenFromList(assignmentDraft.openCourses));
+      setDraftSaveState("saved");
+      setDraftSavedAt(savedAt ?? null);
+      setSwapKey(null);
+      setMoveKey(null);
+      setQuickSheet(null);
+      setExpandedKey(null);
+      hydratingDraftRef.current = false;
+    },
+    []
+  );
+
+  const clearDraftBoard = useCallback(() => {
+    hydratingDraftRef.current = true;
+    if (draftSaveTimerRef.current) {
+      clearTimeout(draftSaveTimerRef.current);
+      draftSaveTimerRef.current = null;
+    }
+    pendingDraftSaveRef.current = null;
+    serverDraftVersionRef.current = 0;
+    setDraft(null);
+    setAutoResult(null);
+    setWarnings([]);
+    setDraftSaveState("idle");
+    setDraftSavedAt(null);
+    hydratingDraftRef.current = false;
+  }, []);
+
+  const loadServerDraft = useCallback(
+    async (ymd: string) => {
+      const res = await fetch(
+        `/api/assignments/draft?date=${encodeURIComponent(ymd)}`,
+        { credentials: "include" }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "작업본 조회 실패");
+      }
+      return data as {
+        draft: null | {
+          version: number;
+          payload: unknown;
+          updatedAt: string;
+        };
+      };
+    },
+    []
+  );
+
+  const flushDraftSave = useCallback(async () => {
+    const next = pendingDraftSaveRef.current;
+    const ymd = dateRef.current;
+    if (!next || hydratingDraftRef.current) return;
+    if (next.date !== ymd) return;
+    if (draftSaveInFlightRef.current) return;
+    pendingDraftSaveRef.current = null;
+    draftSaveInFlightRef.current = true;
+    setDraftSaveState("saving");
+    let conflict = false;
+    try {
+      const { res, data } = await putAssignmentDraft(
+        next,
+        serverDraftVersionRef.current
+      );
+      if (res.status === 409 || data.code === DRAFT_VERSION_CONFLICT) {
+        conflict = true;
+        pendingDraftSaveRef.current = null;
+        setDraftSaveState("conflict");
+        return;
+      }
+      if (!res.ok || !data.draft) {
+        setDraftSaveState("error");
+        return;
+      }
+      if (next.date === dateRef.current) {
+        serverDraftVersionRef.current = Number(data.draft.version) || 0;
+        setDraftSavedAt(String(data.draft.updatedAt || new Date().toISOString()));
+        setDraftSaveState("saved");
+      }
+    } catch {
+      setDraftSaveState("error");
+    } finally {
+      draftSaveInFlightRef.current = false;
+      if (!conflict && pendingDraftSaveRef.current) {
+        void flushDraftSave();
+      }
+    }
+  }, []);
+
+  const queueDraftSave = useCallback(
+    (next: AssignmentDraft, immediate = false) => {
+      if (hydratingDraftRef.current) return;
+      if (next.date !== dateRef.current) return;
+      pendingDraftSaveRef.current = next;
+      if (draftSaveTimerRef.current) {
+        clearTimeout(draftSaveTimerRef.current);
+        draftSaveTimerRef.current = null;
+      }
+      if (immediate) {
+        void flushDraftSave();
+        return;
+      }
+      draftSaveTimerRef.current = setTimeout(() => {
+        draftSaveTimerRef.current = null;
+        void flushDraftSave();
+      }, 1500);
+    },
+    [flushDraftSave]
+  );
+
+  const reloadLatestDraft = useCallback(async () => {
+    const ymd = dateRef.current;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return;
+    setError(null);
+    try {
+      const data = await loadServerDraft(ymd);
+      if (!data.draft) {
+        clearDraftBoard();
+        showToast("저장된 작업본이 없습니다");
+        return;
+      }
+      applyHydratedDraft(
+        payloadToAssignmentDraft(data.draft.payload as never),
+        data.draft.version,
+        data.draft.updatedAt
+      );
+      showToast("최신 작업본을 불러왔습니다");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "작업본 조회 실패");
+    }
+  }, [applyHydratedDraft, clearDraftBoard, loadServerDraft]);
+
+  const resetStoredDraft = useCallback(async () => {
+    const ymd = dateRef.current;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return;
+    const ok = window.confirm(
+      "작업본을 초기화할까요?\n이미 적용된 예약·배치는 삭제되지 않습니다."
+    );
+    if (!ok) return;
+    try {
+      const res = await fetch(
+        `/api/assignments/draft?date=${encodeURIComponent(ymd)}`,
+        { method: "DELETE", credentials: "include" }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.error || "작업본 초기화 실패");
+        return;
+      }
+      clearDraftBoard();
+      showToast("작업본을 초기화했습니다");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "작업본 초기화 실패");
+    }
+  }, [clearDraftBoard]);
+
 
   useEffect(() => {
     if (!file || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
@@ -376,7 +585,61 @@ export default function ManageAssignmentsOpsPage() {
     };
   }, [date]);
 
-  /** 부 탭/보기 전환 시 sticky 스택 기준으로 첫 데이터 행이 보이도록 스크롤 */
+  useEffect(() => {
+    if (draftSaveTimerRef.current) {
+      clearTimeout(draftSaveTimerRef.current);
+      draftSaveTimerRef.current = null;
+    }
+    const previousDate = dateRef.current;
+    const previousVersion = serverDraftVersionRef.current;
+    const pending = pendingDraftSaveRef.current;
+    pendingDraftSaveRef.current = null;
+    if (pending && pending.date === previousDate && previousDate !== date) {
+      void putAssignmentDraft(pending, previousVersion).catch(() => {});
+    }
+    dateRef.current = date;
+    serverDraftVersionRef.current = 0;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      clearDraftBoard();
+      return;
+    }
+    let cancelled = false;
+    hydratingDraftRef.current = true;
+    setDraft(null);
+    setAutoResult(null);
+    setDraftSaveState("idle");
+    (async () => {
+      try {
+        const data = await loadServerDraft(date);
+        if (cancelled) return;
+        if (!data.draft) {
+          hydratingDraftRef.current = false;
+          setDraft(null);
+          setAutoResult(null);
+          setWarnings([]);
+          setDraftSaveState("idle");
+          setDraftSavedAt(null);
+          return;
+        }
+        const payload = parseDailyBoardDraftPayload(data.draft.payload, date);
+        applyHydratedDraft(
+          payloadToAssignmentDraft(payload),
+          data.draft.version,
+          data.draft.updatedAt
+        );
+      } catch (e: unknown) {
+        if (cancelled) return;
+        hydratingDraftRef.current = false;
+        setDraft(null);
+        setAutoResult(null);
+        setError(e instanceof Error ? e.message : "작업본 조회 실패");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [date, applyHydratedDraft, clearDraftBoard, loadServerDraft]);
+
   useEffect(() => {
     if (!draft) return;
     stickyStackRef.current?.scrollIntoView({ block: "start", behavior: "auto" });
@@ -537,10 +800,12 @@ export default function ManageAssignmentsOpsPage() {
         }));
         if (draftRef.current) {
           const current = draftRef.current;
-          setDraft({
+          const next = {
             ...current,
             caddyPool: excludeCaddiesById(current.caddyPool, dutyIds),
-          });
+          };
+          setDraft(next);
+          queueDraftSave(next);
         }
       }
       setHouseStartCaddyId("");
@@ -660,10 +925,12 @@ export default function ManageAssignmentsOpsPage() {
           : [];
         if (dutyIds.length && draftRef.current) {
           const current = draftRef.current;
-          setDraft({
+          const next = {
             ...current,
             caddyPool: excludeCaddiesById(current.caddyPool, dutyIds),
-          });
+          };
+          setDraft(next);
+          queueDraftSave(next);
         }
       }
     } catch (e: unknown) {
@@ -689,6 +956,12 @@ export default function ManageAssignmentsOpsPage() {
     if (houseStartCaddyId === "" || !Number(houseStartCaddyId)) {
       setError("오늘 1부 첫 캐디를 선택하세요.");
       return;
+    }
+    if (serverDraftVersionRef.current > 0 || draftRef.current) {
+      const ok = window.confirm(
+        "현재 저장된 작업본을 새 자동배치 결과로 다시 만들까요?"
+      );
+      if (!ok) return;
     }
     setLoadingRun(true);
     setError(null);
@@ -734,7 +1007,6 @@ export default function ManageAssignmentsOpsPage() {
       const data = (await res.json()) as RunResponse;
       if (!res.ok) {
         setAutoResult(null);
-        setDraft(null);
         setError(data.error || "자동배치 실패");
         return;
       }
@@ -750,6 +1022,7 @@ export default function ManageAssignmentsOpsPage() {
       setQuickSheet(null);
       setUnavailableCaddyIds([]);
       setShiftTab("1부");
+      queueDraftSave(next, true);
       const closedN = data.closedCourseReservations?.length ?? 0;
       showToast(
         closedN > 0
@@ -778,6 +1051,7 @@ export default function ManageAssignmentsOpsPage() {
     }
     setDraft(result.draft);
     setWarnings(result.warnings);
+    queueDraftSave(result.draft);
     showToast("캐디 교체됨");
   }
 
@@ -911,6 +1185,7 @@ export default function ManageAssignmentsOpsPage() {
     const result = assignCaddyToUnassigned(draft, resKey, caddyId);
     setDraft(result.draft);
     setWarnings(result.warnings);
+    queueDraftSave(result.draft);
     showToast("미배치에 캐디 지정");
   }
 
@@ -925,6 +1200,7 @@ export default function ManageAssignmentsOpsPage() {
     }
     setDraft(result.draft);
     setWarnings(result.warnings);
+    queueDraftSave(result.draft);
     showToast("배치 해제");
   }
 
@@ -942,7 +1218,9 @@ export default function ManageAssignmentsOpsPage() {
       );
       if (!ok) return;
     }
-    setDraft(confirmDraft(draft));
+    const confirmed = confirmDraft(draft);
+    setDraft(confirmed);
+    queueDraftSave(confirmed);
     showToast("CONFIRMED — 운영 반영 가능");
   }
 
@@ -985,11 +1263,11 @@ export default function ManageAssignmentsOpsPage() {
         return;
       }
 
-      setDraft(
-        markDraftApplied(draft, {
-          auditId: typeof data.auditId === "number" ? data.auditId : null,
-        })
-      );
+      const applied = markDraftApplied(draft, {
+        auditId: typeof data.auditId === "number" ? data.auditId : null,
+      });
+      setDraft(applied);
+      queueDraftSave(applied);
       showToast(
         data.duplicate
           ? "이미 반영된 배치 (중복 저장 생략)"
@@ -1037,6 +1315,7 @@ export default function ManageAssignmentsOpsPage() {
         showToast("저장 실패 · 이전 상태로 되돌렸습니다");
         return false;
       }
+      let savedDraft: AssignmentDraft | null = null;
       if (input.applyServerDraft !== false) {
         const current = draftRef.current;
         if (current) {
@@ -1048,7 +1327,10 @@ export default function ManageAssignmentsOpsPage() {
           if (autoResultRef.current) {
             setAutoResult({ ...autoResultRef.current, ...after });
           }
+          savedDraft = next;
         }
+      } else {
+        savedDraft = draftRef.current;
       }
       setUnavailableCaddyIds(
         Array.isArray(data.preview?.unavailableCaddyIds)
@@ -1056,6 +1338,11 @@ export default function ManageAssignmentsOpsPage() {
           : input.preview.unavailableCaddyIds || []
       );
       if (input.successToast) showToast(input.successToast);
+      const toSave = draftAutosaveCandidate({
+        mutationSucceeded: true,
+        draft: savedDraft,
+      });
+      if (toSave) queueDraftSave(toSave, true);
       return true;
     } catch (e: unknown) {
       if (input.rollbackDraft) {
@@ -1223,13 +1510,32 @@ export default function ManageAssignmentsOpsPage() {
           <p>Excel → 자동배치 → 수동 수정 → CONFIRMED 후 운영 반영</p>
         </div>
         {draft && (
-          <StatusBadge
-            status={draft.status}
-            confirmedAt={draft.confirmedAt}
-            appliedAt={draft.appliedAt ?? null}
-          />
+          <div className="ops-header-side">
+            <StatusBadge
+              status={draft.status}
+              confirmedAt={draft.confirmedAt}
+              appliedAt={draft.appliedAt ?? null}
+            />
+            <DraftSaveStatus
+              state={draftSaveState}
+              savedAt={draftSavedAt}
+              onRetry={() => {
+                if (draftRef.current) queueDraftSave(draftRef.current, true);
+              }}
+              onReload={() => void reloadLatestDraft()}
+            />
+          </div>
         )}
       </header>
+
+      {draftSaveState === "conflict" && (
+        <div className="ops-conflict" role="status">
+          다른 직원이 이 날짜 배치표를 수정했습니다. 최신 내용을 다시 불러와 주세요.
+          <button type="button" className="btn primary" onClick={() => void reloadLatestDraft()}>
+            최신 배치 불러오기
+          </button>
+        </div>
+      )}
 
       <section className="ops-panel">
         <label className="ops-field">
@@ -2034,6 +2340,7 @@ export default function ManageAssignmentsOpsPage() {
           unavailableCaddyIds={unavailableCaddyIds}
           preset={liveChangePreset}
           onPresetConsumed={() => setLiveChangePreset(null)}
+          onResetDraft={() => void resetStoredDraft()}
           defaultShift={
             shiftTab === "UNASSIGNED" || shiftTab === "CLOSED"
               ? "1부"
@@ -2106,6 +2413,44 @@ function StatusBadge({
   );
 }
 
+function DraftSaveStatus({
+  state,
+  savedAt,
+  onRetry,
+  onReload,
+}: {
+  state: DraftSaveState;
+  savedAt: string | null;
+  onRetry: () => void;
+  onReload: () => void;
+}) {
+  if (state === "saving") {
+    return <div className="ops-save-status">저장 중…</div>;
+  }
+  if (state === "saved" && savedAt) {
+    return (
+      <div className="ops-save-status">
+        자동 저장됨 {formatDraftSavedAt(savedAt)}
+      </div>
+    );
+  }
+  if (state === "error") {
+    return (
+      <button type="button" className="ops-save-status is-error" onClick={onRetry}>
+        저장 실패 · 다시 시도
+      </button>
+    );
+  }
+  if (state === "conflict") {
+    return (
+      <button type="button" className="ops-save-status is-conflict" onClick={onReload}>
+        최신 배치 불러오기
+      </button>
+    );
+  }
+  return null;
+}
+
 const opsCss = `
   .ops-root {
     max-width: 720px;
@@ -2121,6 +2466,34 @@ const opsCss = `
     justify-content: space-between;
     gap: 12px;
     align-items: flex-start;
+  }
+  .ops-header-side {
+    display: grid;
+    gap: 6px;
+    justify-items: end;
+  }
+  .ops-save-status {
+    font-size: 0.75rem;
+    color: #64748b;
+    font-weight: 600;
+  }
+  .ops-save-status.is-error,
+  .ops-save-status.is-conflict {
+    border: 0;
+    background: transparent;
+    color: #b45309;
+    cursor: pointer;
+    padding: 0;
+  }
+  .ops-conflict {
+    display: grid;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid #fdba74;
+    background: #fff7ed;
+    border-radius: 12px;
+    font-size: 0.85rem;
+    color: #9a3412;
   }
   .ops-header h1 {
     margin: 0;
@@ -2957,6 +3330,18 @@ const opsCss = `
   .live-change-head span {
     color: #64748b;
     font-size: 0.8rem;
+  }
+  .live-draft-reset {
+    display: grid;
+    gap: 6px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid #e2e8f0;
+  }
+  .live-draft-reset span {
+    color: #64748b;
+    font-size: 0.78rem;
+    line-height: 1.4;
   }
   .live-change-grid {
     display: grid;

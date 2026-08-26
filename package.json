@@ -33,6 +33,7 @@
     "test:assignment-change-reflow-unit": "npx tsx scripts/test-assignment-change-reflow-unit.ts",
     "test:assignment-board-view-unit": "npx tsx scripts/test-assignment-board-view-unit.ts",
     "test:assignment-confirm-unit": "npx tsx scripts/test-assignment-confirm-unit.ts",
+    "test:daily-board-draft-unit": "npx tsx scripts/test-daily-board-draft-unit.ts",
     "preview:roster": "npx tsx scripts/preview-roster-import.ts",
     "inspect:db-readonly": "npx tsx scripts/inspect-db-schema-readonly.ts",
     "check:migration-checksums": "npx tsx scripts/check-migration-checksums-readonly.ts",
