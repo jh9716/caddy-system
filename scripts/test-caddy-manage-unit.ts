@@ -683,6 +683,76 @@ console.log("== 총원 excludes RETIRED (source) ==");
   );
 }
 
+console.log("== caddies roster board UI source ==");
+{
+  const src = fs.readFileSync(
+    path.resolve("src/app/manage/caddies/page.tsx"),
+    "utf8"
+  );
+  const rosterBlock =
+    src.split("const rosterColumns = useMemo")[1]?.split("function startEdit")[0] ||
+    "";
+  const sheetBlock = src.split("{menuCaddy && (")[1]?.split("<style>{`")[0] || "";
+  assert(/className="cm-roster"/.test(src), "default view is horizontal roster");
+  assert(
+    /GLANCE_TEAMS\.map\(\(team\) =>/.test(rosterBlock) &&
+      /a\.teamOrder - b\.teamOrder/.test(rosterBlock),
+    "roster columns are 1~12조 sorted by teamOrder"
+  );
+  assert(
+    /normalizeEmploymentStatus\(r\.employmentStatus\) !== 'RETIRED'/.test(
+      rosterBlock
+    ),
+    "RETIRED hidden from default roster"
+  );
+  assert(
+    /leave \? \(\s*<span className="cm-leave-badge">휴직<\/span>/.test(src) ||
+      /cm-leave-badge">휴직/.test(src),
+    "LEAVE keeps slot with 휴직 badge"
+  );
+  assert(
+    /setMenuCaddyId\(c\.id\)/.test(src) &&
+      />\s*수정\s*</.test(sheetBlock) &&
+      /조\/순번 변경/.test(sheetBlock) &&
+      />\s*휴직\s*</.test(sheetBlock) &&
+      /드라이빙 전환/.test(sheetBlock) &&
+      />\s*삭제\s*</.test(sheetBlock) &&
+      />\s*복귀\s*</.test(sheetBlock),
+    "name click opens status-aware manage menu"
+  );
+  assert(
+    /function convertToDriving\(c: Caddy\)/.test(src) &&
+      /method: 'PATCH'/.test(src) &&
+      /employmentStatus: status/.test(src) &&
+      /caddyType: 'DRIVING'/.test(src) &&
+      /function saveEdit\(id: number\)/.test(src),
+    "menu reuses existing PATCH save/leave/return/driving APIs"
+  );
+  assert(
+    /신규 등록/.test(src) &&
+      /상세 관리/.test(src) &&
+      /명단 가져오기/.test(src) &&
+      /명단 Export/.test(src) &&
+      /\/api\/caddies\/export/.test(src) &&
+      /createKind === 'driving'/.test(src) &&
+      /cm-detail-tools/.test(src),
+    "create/import/export remain reachable from 상세 관리"
+  );
+  assert(
+    /min-width:\s*168px/.test(src) &&
+      /overflow-x:\s*auto/.test(src) &&
+      /position:\s*sticky/.test(src) &&
+      /min-height:\s*44px/.test(src),
+    "mobile roster has min column width, horizontal scroll, sticky headers"
+  );
+  assert(
+    /rosterPersonName\(c\)/.test(src) &&
+      !/cm-cell-name[\s\S]{0,40}\{c\.id\}/.test(src) &&
+      !/cm-ord[\s\S]{0,40}\{c\.id\}/.test(src),
+    "roster cell does not render caddyId"
+  );
+}
+
 console.log("== soft-delete API source guard ==");
 const apiFiles = [
   "src/app/api/caddies/route.ts",
