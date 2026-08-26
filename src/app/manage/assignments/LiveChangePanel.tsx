@@ -52,6 +52,7 @@ type Props = {
   unavailableCaddyIds?: number[];
   /** 고급 당추 폼의 부 기본값. 현재 보드 탭을 넘기면 무조건 1부가 되지 않는다. */
   defaultShift?: ShiftPart;
+  onResetDraft?: () => void;
 };
 
 export function LiveChangePanel({
@@ -63,6 +64,7 @@ export function LiveChangePanel({
   onPresetConsumed,
   unavailableCaddyIds,
   defaultShift = "1부",
+  onResetDraft,
 }: Props) {
   const [changeType, setChangeType] = useState<LiveChangeType>("CANCEL_RESERVATION");
   const [reservationKeyValue, setReservationKeyValue] = useState("");
@@ -739,6 +741,18 @@ export function LiveChangePanel({
           )}
         </div>
       )}
+      {onResetDraft ? (
+        <div className="live-draft-reset">
+          <button
+            type="button"
+            className="btn ghost"
+            onClick={() => onResetDraft()}
+          >
+            작업본 초기화
+          </button>
+          <span>저장된 작업본만 지웁니다. 이미 적용된 예약·배치는 남습니다.</span>
+        </div>
+      ) : null}
         </>
       )}
 

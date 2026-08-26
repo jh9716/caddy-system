@@ -480,3 +480,18 @@ model DailyAssignmentChange {
 
   @@index([date, appliedAt])
 }
+
+/// 날짜별 배치 작업본(Draft). DailyReservation/DailyPlacement와 분리.
+/// Published/캐디 공개 배치표가 아니다. updatedByUserId는 env-only admin 때문에 FK 없음.
+model DailyBoardDraft {
+  id              Int      @id @default(autoincrement())
+  date            DateTime @unique
+  payload         Json
+  schemaVersion   Int      @default(1)
+  version         Int      @default(1)
+  updatedByUserId Int?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([updatedAt])
+}
