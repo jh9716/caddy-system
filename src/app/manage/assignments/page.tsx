@@ -100,6 +100,7 @@ import {
   parseDailyBoardDraftPayload,
   payloadToAssignmentDraft,
 } from "@/lib/dailyBoardDraft";
+import { drainDraftSaves } from "@/lib/draftSaveFlush";
 
 type ResultViewMode = "board" | "list";
 
@@ -383,30 +384,30 @@ export default function ManageAssignmentsOpsPage() {
     []
   );
 
-  const flushDraftSave = useCallback(async () => {
+  const flushOnce = useCallback(async (): Promise<
+    "ok" | "conflict" | "error" | "skipped"
+  > => {
     const next = pendingDraftSaveRef.current;
     const ymd = dateRef.current;
-    if (!next || hydratingDraftRef.current) return;
-    if (next.date !== ymd) return;
-    if (draftSaveInFlightRef.current) return;
+    if (!next || hydratingDraftRef.current) return "ok";
+    if (next.date !== ymd) return "ok";
+    if (draftSaveInFlightRef.current) return "skipped";
     pendingDraftSaveRef.current = null;
     draftSaveInFlightRef.current = true;
     setDraftSaveState("saving");
-    let conflict = false;
     try {
       const { res, data } = await putAssignmentDraft(
         next,
         serverDraftVersionRef.current
       );
       if (res.status === 409 || data.code === DRAFT_VERSION_CONFLICT) {
-        conflict = true;
         pendingDraftSaveRef.current = null;
         setDraftSaveState("conflict");
-        return;
+        return "conflict";
       }
       if (!res.ok || !data.draft) {
         setDraftSaveState("error");
-        return;
+        return "error";
       }
       if (next.date === dateRef.current) {
         serverDraftVersionRef.current = Number(data.draft.version) || 0;
@@ -414,15 +415,29 @@ export default function ManageAssignmentsOpsPage() {
         setDraftSavedAt(String(data.draft.updatedAt || new Date().toISOString()));
         setDraftSaveState("saved");
       }
+      return "ok";
     } catch {
       setDraftSaveState("error");
+      return "error";
     } finally {
       draftSaveInFlightRef.current = false;
-      if (!conflict && pendingDraftSaveRef.current) {
-        void flushDraftSave();
-      }
     }
   }, []);
+
+  const flushDraftSave = useCallback(async () => {
+    return drainDraftSaves({
+      hasPending: () => {
+        const pending = pendingDraftSaveRef.current;
+        return Boolean(
+          pending &&
+            pending.date === dateRef.current &&
+            !hydratingDraftRef.current
+        );
+      },
+      isInFlight: () => draftSaveInFlightRef.current,
+      flushOnce,
+    });
+  }, [flushOnce]);
 
   const queueDraftSave = useCallback(
     (next: AssignmentDraft, immediate = false) => {
@@ -1351,7 +1366,16 @@ export default function ManageAssignmentsOpsPage() {
       draftSaveTimerRef.current = null;
     }
     pendingDraftSaveRef.current = current;
-    await flushDraftSave();
+    const flushStatus = await flushDraftSave();
+    if (flushStatus === "conflict") {
+      setDraftSaveState("conflict");
+      setError(PUBLISH_STALE_DRAFT_MESSAGE);
+      return;
+    }
+    if (flushStatus === "error") {
+      setError("작업본 저장에 실패했습니다. 다시 확정해 주세요.");
+      return;
+    }
     const version = serverDraftVersionRef.current;
     if (!version) {
       setError("작업본이 아직 저장되지 않았습니다. 잠시 후 다시 확정해 주세요.");

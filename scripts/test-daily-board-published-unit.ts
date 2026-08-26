@@ -52,6 +52,14 @@ import {
   buildSessionClaims,
   signSessionClaims,
 } from "../src/lib/sessionCookies";
+import { drainDraftSaves } from "../src/lib/draftSaveFlush";
+import { GET as publishedGET, POST as publishedPOST } from "../src/app/api/assignments/published/route";
+import {
+  GET as draftGET,
+  PUT as draftPUT,
+  DELETE as draftDELETE,
+} from "../src/app/api/assignments/draft/route";
+import { middleware } from "../src/middleware";
 import { formatCaddyLabel } from "../src/lib/caddyDisplay";
 import { COURSE_CODES } from "../src/lib/reservationParser";
 
@@ -723,9 +731,153 @@ async function main() {
     assert(/CREATE TABLE "DailyBoardPublished"/.test(sql), "additive published table");
     assert(/UNIQUE INDEX "DailyBoardPublished_date_key"/.test(sql), "unique date");
     assert(!/DROP TABLE/.test(sql), "no drops");
+    assert(!/ALTER TABLE/.test(sql), "no ALTER");
+    assert(!/REFERENCES/.test(sql), "no FK");
+    assert(!/DROP INDEX/.test(sql) && !/DROP COLUMN/.test(sql), "no drop index/column");
     assert(/model DailyBoardPublished/.test(schema), "schema model");
     assert(/publishedByUserId\s+Int\?/.test(schema), "nullable publisher");
+    assert(/date\s+DateTime\s+@unique/.test(schema.split("model DailyBoardPublished")[1] || ""), "date unique");
     assert(/\/board\/:path\*/.test(mw), "middleware gates /board");
+
+    const getFn = pubRoute.split("export async function GET")[1]?.split("export async function POST")[0] || "";
+    assert(!/getDailyBoardDraft/.test(getFn), "Published GET does not read Draft");
+    assert(!/dailyBoardDraft/.test(getFn), "Published GET has no draft table");
+    assert(/published: published/.test(getFn) || /published: published \?/.test(getFn), "GET returns published");
+    assert(!/caddy\.find/.test(service), "publish service does not re-query Caddy");
+    assert(!/prisma\.caddy/.test(service), "publish service no prisma.caddy");
+    const view = readSrc("src/components/board/PublishedBoardView.tsx");
+    assert(/row\.caddyName/.test(view) && /row\.caddyTeam/.test(view), "render from snapshot names");
+    assert(/row\.teeTime/.test(view) || /tr\.teeTime/.test(view), "render teeTime from payload");
+    assert(/spare1\.displayLabel/.test(view), "render spare from snapshot");
+
+    const layout = readSrc("src/app/layout.tsx");
+    const nav = readSrc("src/components/NavBar.tsx");
+    const shell = readSrc("src/components/manage/ManageShell.tsx");
+    const caddyPage = readSrc("src/app/caddy/page.tsx");
+    const boardLayout = readSrc("src/app/board/layout.tsx");
+    assert(/href="\/board"/.test(layout) && /배치표/.test(layout), "root nav has 배치표 for logged-in");
+    assert(
+      /role === ['"]caddy['"]/.test(nav) && /\/board/.test(nav) && /배치표/.test(nav),
+      "NavBar caddy sees 배치표"
+    );
+    assert(/href: "\/board"/.test(shell) && /배치표/.test(shell), "admin ManageShell has 배치표");
+    assert(/href="\/board"/.test(caddyPage), "caddy dashboard links /board");
+    assert(!/\/manage\/assignments/.test(caddyPage), "caddy dashboard has no assignments");
+    assert(!/\/api\/assignments\/draft/.test(caddyPage), "caddy dashboard has no Draft API");
+    assert(/canReadPublishedBoard/.test(boardLayout), "board layout allows caddy/admin");
+    assert(/drainDraftSaves/.test(page), "publish waits for draft drain");
+    assert(/flushStatus === "conflict"/.test(page), "publish aborts on stale flush");
+  }
+
+  section("publish 직전 pending Draft drain");
+  {
+    const calls: string[] = [];
+    let inFlight = true;
+    let pending = "edit-B";
+    let saved: string[] = [];
+    const flushOnce = async () => {
+      calls.push("flush:" + pending);
+      saved.push(pending);
+      pending = "";
+      return "ok" as const;
+    };
+    const p = drainDraftSaves({
+      hasPending: () => Boolean(pending),
+      isInFlight: () => inFlight,
+      flushOnce,
+      sleep: async () => {
+        inFlight = false;
+      },
+      timeoutMs: 1000,
+    });
+    const status = await p;
+    assert(status === "ok", "drain ok");
+    assert(calls.length === 1, "waited for in-flight then flushed once");
+    assert(saved[0] === "edit-B", "latest pending flushed, not the in-flight-only older board");
+  }
+
+  section("Published GET empty does not leak Draft");
+  {
+    const pubRoute = readSrc("src/app/api/assignments/published/route.ts");
+    const boardPage = readSrc("src/app/board/page.tsx");
+    const getFn = pubRoute.split("export async function GET")[1]?.split("export async function POST")[0] || "";
+    assert(/published\s*\?/.test(getFn) && /:\s*null/.test(getFn), "empty published is null");
+    assert(!/"draft"/.test(getFn), "GET JSON has no draft key");
+    assert(/아직 확정된 배치표가 없습니다/.test(boardPage), "empty UI copy");
+    assert(!/작업본/.test(boardPage), "board page never says 작업본");
+  }
+
+  section("캐디 HTTP: board/get/publish/draft");
+  {
+    async function cookieReq(role: "admin" | "caddy", url: string, init?: RequestInit) {
+      const token = await signSessionClaims(
+        buildSessionClaims({
+          userId: null,
+          username: role,
+          role,
+          sessionVersion: 0,
+        })
+      );
+      return new NextRequest(url, {
+        ...init,
+        headers: {
+          cookie: `${SESSION_COOKIE_NAME}=${token}`,
+          "content-type": "application/json",
+          ...(init?.headers || {}),
+        },
+      });
+    }
+
+    const boardMw = await middleware(
+      await cookieReq("caddy", "http://localhost/board")
+    );
+    assert(
+      !boardMw || boardMw.headers.get("location") == null || !String(boardMw.headers.get("location") || "").includes("/login"),
+      "caddy /board middleware does not redirect to login"
+    );
+    const manageMw = await middleware(
+      await cookieReq("caddy", "http://localhost/manage/assignments")
+    );
+    assert(
+      Boolean(manageMw && String(manageMw.headers.get("location") || "").includes("/login")),
+      "caddy /manage/assignments redirected"
+    );
+
+    const pubGet = await publishedGET(
+      await cookieReq("caddy", "http://localhost/api/assignments/published?date=2026-08-26")
+    );
+    assert(pubGet.status === 200, `caddy Published GET 200 (status ${pubGet.status})`);
+    const body = await pubGet.json();
+    assert(body.ok === true, "caddy Published GET 200 ok");
+    assert(body.published === null || typeof body.published === "object", "published or null");
+    assert(!("draft" in body), "GET body has no draft field");
+
+    const pubPost = await publishedPOST(
+      await cookieReq("caddy", "http://localhost/api/assignments/published", {
+        method: "POST",
+        body: JSON.stringify({ date: "2026-08-26", draftVersion: 1 }),
+      })
+    );
+    assert(
+      pubPost.status === 401 || pubPost.status === 403,
+      `caddy publish POST blocked (${pubPost.status})`
+    );
+
+    const dGet = await draftGET(
+      await cookieReq("caddy", "http://localhost/api/assignments/draft?date=2026-08-26")
+    );
+    const dPut = await draftPUT(
+      await cookieReq("caddy", "http://localhost/api/assignments/draft", {
+        method: "PUT",
+        body: JSON.stringify({ date: "2026-08-26", version: 1, payload: {} }),
+      })
+    );
+    const dDel = await draftDELETE(
+      await cookieReq("caddy", "http://localhost/api/assignments/draft?date=2026-08-26")
+    );
+    assert(dGet.status === 401 || dGet.status === 403, `caddy Draft GET blocked (${dGet.status})`);
+    assert(dPut.status === 401 || dPut.status === 403, `caddy Draft PUT blocked (${dPut.status})`);
+    assert(dDel.status === 401 || dDel.status === 403, `caddy Draft DELETE blocked (${dDel.status})`);
   }
 
   section("today/yesterday helpers");
