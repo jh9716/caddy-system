@@ -51,6 +51,11 @@ export default async function RootLayout({ children }: { children: React.ReactNo
               <Link className="ui-btn ui-btn-ghost" href="/notice">
                 공지
               </Link>
+              {role && (
+                <Link className="ui-btn ui-btn-ghost" href="/board">
+                  배치표
+                </Link>
+              )}
 
               {role === "admin" && (
                 <Link className="ui-btn ui-btn-gold" href="/manage">

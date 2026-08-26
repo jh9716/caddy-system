@@ -36,6 +36,7 @@
     "test:assignment-board-view-unit": "bash scripts/tsx-safe.sh scripts/test-assignment-board-view-unit.ts",
     "test:assignment-confirm-unit": "bash scripts/tsx-safe.sh scripts/test-assignment-confirm-unit.ts",
     "test:daily-board-draft-unit": "bash scripts/tsx-safe.sh scripts/test-daily-board-draft-unit.ts",
+    "test:daily-board-published-unit": "bash scripts/tsx-safe.sh scripts/test-daily-board-published-unit.ts",
     "preview:roster": "bash scripts/tsx-safe.sh scripts/preview-roster-import.ts",
     "inspect:db-readonly": "bash scripts/tsx-safe.sh scripts/inspect-db-schema-readonly.ts",
     "check:migration-checksums": "bash scripts/tsx-safe.sh scripts/check-migration-checksums-readonly.ts",

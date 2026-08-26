@@ -110,11 +110,35 @@ export function mustChangePasswordResponse(): NextResponse {
   );
 }
 
+export function canPublishDailyBoard(role: AppRole | null | undefined): boolean {
+  return role === "admin";
+}
+
+/** 공용 배치표(Published) 조회. Draft/publish 쓰기는 포함하지 않는다. */
+export function canReadPublishedBoard(role: AppRole | null | undefined): boolean {
+  return role === "admin" || role === "caddy" || role === "leader";
+}
+
 export async function requireAdmin(
   req: NextRequest
 ): Promise<NextResponse | void> {
   const auth = await resolveAuthUser(req);
   if (!auth || auth.role !== "admin") {
+    const res = NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    if (!auth) clearSessionCookies(res, req);
+    return res;
+  }
+  if (shouldForcePasswordChange(auth)) {
+    return mustChangePasswordResponse();
+  }
+}
+
+/** 로그인 경기과/캐디/조장 — Published GET 전용. Draft API에는 쓰지 말 것. */
+export async function requirePublishedReader(
+  req: NextRequest
+): Promise<NextResponse | void> {
+  const auth = await resolveAuthUser(req);
+  if (!auth || !canReadPublishedBoard(auth.role)) {
     const res = NextResponse.json({ error: "unauthorized" }, { status: 401 });
     if (!auth) clearSessionCookies(res, req);
     return res;

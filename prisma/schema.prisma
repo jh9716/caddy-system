@@ -495,3 +495,19 @@ model DailyBoardDraft {
 
   @@index([updatedAt])
 }
+
+/// 날짜별 최종 확정 배치표 snapshot. Draft / Schedule / ShiftDuty 와 분리.
+/// 같은 날짜를 다시 확정하면 이 row만 갱신한다. 다른 날짜는 덮어쓰지 않는다.
+model DailyBoardPublished {
+  id                 Int      @id @default(autoincrement())
+  date               DateTime @unique
+  payload            Json
+  schemaVersion      Int      @default(1)
+  sourceDraftVersion Int
+  publishedAt        DateTime
+  publishedByUserId  Int?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([publishedAt])
+}

@@ -70,6 +70,25 @@ export default function CaddyPage() {
           </div>
 
           <div style={{ marginTop: 28 }}>
+            <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>배치표</h3>
+            <a
+              href="/board"
+              style={{
+                display: "inline-block",
+                padding: "10px 14px",
+                borderRadius: 10,
+                border: "1px solid #e5e7eb",
+                background: "#0f172a",
+                color: "#fff",
+                textDecoration: "none",
+                fontWeight: 700,
+              }}
+            >
+              공용 배치표 보기
+            </a>
+          </div>
+
+          <div style={{ marginTop: 28 }}>
             <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>최근 공지</h3>
             <ul style={{ border: '1px solid #e5e7eb', borderRadius: 10, overflow: 'hidden' }}>
               {summary.latestNotices.length === 0 && (

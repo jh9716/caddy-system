@@ -40,7 +40,7 @@ export async function middleware(req: NextRequest) {
     }
   }
 
-  if (pathname.startsWith("/caddy")) {
+  if (pathname.startsWith("/caddy") || pathname.startsWith("/board")) {
     if (
       !session ||
       (session.role !== "caddy" &&
@@ -58,5 +58,5 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/manage/:path*", "/caddy/:path*"],
+  matcher: ["/manage/:path*", "/caddy/:path*", "/board/:path*"],
 };

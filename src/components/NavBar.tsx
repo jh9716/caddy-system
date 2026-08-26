@@ -21,6 +21,7 @@ export default function NavBar() {
   const common = [
     { href: '/', label: '홈' },
     { href: '/notice', label: '공지' },
+    { href: '/board', label: '배치표' },
   ]
   const adminOnly = [
     { href: '/manage', label: '관리대시보드' },
@@ -36,7 +37,7 @@ export default function NavBar() {
     ? [...common, ...adminOnly]
     : role === 'caddy'
       ? [...common, ...caddyOnly]
-      : [...common, { href:'/login', label:'로그인' }]
+      : [{ href: '/', label: '홈' }, { href: '/notice', label: '공지' }, { href:'/login', label:'로그인' }]
 
   return (
     <header style={{
