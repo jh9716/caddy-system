@@ -5,6 +5,7 @@ import {
   adminLinkErrorMessage,
   initialAdminSelectedCaddyId,
 } from "@/lib/caddyLinkRequestUi";
+import { formatCaddyLabel } from "@/lib/caddyDisplay";
 
 type LinkedCaddy = {
   id: number;
@@ -183,7 +184,7 @@ export default function ManageUsersPage() {
     if (!linkUser || selectedCaddyId == null || !selectedCaddy) return;
     const ok = window.confirm(
       `${linkUser.username} 계정을 아래 캐디와 연결할까요?\n\n` +
-        `${selectedCaddy.name} / ${selectedCaddy.team} / 순번 ${selectedCaddy.teamOrder} / id ${selectedCaddy.id}\n\n` +
+        `${formatCaddyLabel(selectedCaddy)}\n\n` +
         `연결 후 이 계정으로 해당 캐디의 휴무 신청이 가능해집니다.`
     );
     if (!ok) return;
@@ -201,7 +202,7 @@ export default function ManageUsersPage() {
       if (!res.ok) {
         throw new Error(data?.message || data?.error || "연결 실패");
       }
-      setMessage(`${linkUser.username} ↔ ${selectedCaddy.name} 연결 완료`);
+      setMessage(`${linkUser.username} ↔ ${formatCaddyLabel(selectedCaddy)} 연결 완료`);
       setLinkUser(null);
       await refreshAll();
     } catch (e: any) {
@@ -215,7 +216,7 @@ export default function ManageUsersPage() {
     if (!user.caddy) return;
     const ok = window.confirm(
       `${user.username} 계정과 캐디 연결을 해제할까요?\n\n` +
-        `${user.caddy.name} / ${user.caddy.team} / 순번 ${user.caddy.teamOrder}\n\n` +
+        `${formatCaddyLabel(user.caddy)}\n\n` +
         `해제 후 이 계정은 휴무 신청을 할 수 없습니다.`
     );
     if (!ok) return;
@@ -256,7 +257,7 @@ export default function ManageUsersPage() {
         `계정: ${req.user.username}\n` +
         `제출 이름: ${req.submittedName}\n` +
         `휴대폰: ${req.maskedPhone || "010-****-****"}\n` +
-        `연결 캐디: ${cand.name} / ${cand.team} / 순번 ${cand.teamOrder} / id ${cand.id}\n\n` +
+        `연결 캐디: ${formatCaddyLabel(cand)}\n\n` +
         `승인 시 계정-캐디 연결과 휴대폰번호가 함께 반영됩니다.`
     );
     if (!ok) return;
@@ -275,7 +276,7 @@ export default function ManageUsersPage() {
         throw new Error(adminLinkErrorMessage(data?.error, data?.message));
       }
       setMessage(
-        `${req.user.username} 요청 승인 · ${cand.name} 연결 완료`
+        `${req.user.username} 요청 승인 · ${formatCaddyLabel(cand)} 연결 완료`
       );
       await refreshAll();
     } catch (e: any) {
@@ -448,8 +449,10 @@ export default function ManageUsersPage() {
                               }
                             />
                             <span>
-                              <strong>{c.name}</strong> · {c.team} · 순번{" "}
-                              {c.teamOrder} · id {c.id} · {c.employmentStatus}
+                              <strong>{formatCaddyLabel(c)}</strong>
+                              {c.employmentStatus && c.employmentStatus !== "ACTIVE"
+                                ? ` · ${c.employmentStatus}`
+                                : ""}
                             </span>
                           </label>
                         );
@@ -511,9 +514,7 @@ export default function ManageUsersPage() {
                       <td>
                         {u.caddy ? (
                           <>
-                            {u.caddy.name} / {u.caddy.team} / 순번{" "}
-                            {u.caddy.teamOrder}{" "}
-                            <span className="us-uid">(id {u.caddy.id})</span>
+                            {formatCaddyLabel(u.caddy)}
                           </>
                         ) : (
                           <span className="us-muted">—</span>
@@ -559,7 +560,7 @@ export default function ManageUsersPage() {
                   </div>
                   <div className="us-user-sub">
                     {u.caddy
-                      ? `${u.caddy.name} / ${u.caddy.team} / 순번 ${u.caddy.teamOrder}`
+                      ? formatCaddyLabel(u.caddy)
                       : "연결된 캐디 없음"}
                   </div>
                   <div className="us-user-actions">
@@ -602,7 +603,7 @@ export default function ManageUsersPage() {
               className="us-input"
               value={caddyQuery}
               onChange={(e) => setCaddyQuery(e.target.value)}
-              placeholder="이름 / 조 / 순번 / id 검색"
+              placeholder="이름 / 조 검색"
             />
             <div className="us-modal-list">
               {filteredCaddies.length === 0 ? (
@@ -619,8 +620,7 @@ export default function ManageUsersPage() {
                       className={`us-modal-item${selected ? " is-selected" : ""}`}
                       onClick={() => setSelectedCaddyId(c.id)}
                     >
-                      <strong>{c.name}</strong> · {c.team} · 순번 {c.teamOrder}{" "}
-                      · id {c.id}
+                      <strong>{formatCaddyLabel(c)}</strong>
                     </button>
                   );
                 })

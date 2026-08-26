@@ -22,7 +22,7 @@
     "test:roster-import-v1-safe-unit": "npx tsx scripts/test-caddy-roster-import-v1-safe-unit.ts",
     "test:roster-import-v2-db": "npx tsx scripts/test-caddy-roster-import-v2-db.ts",
     "test:slot-unit": "npx tsx scripts/test-caddy-slot-unit.ts",
-    "test:manage-unit": "npx tsx scripts/test-caddy-manage-unit.ts",
+    "test:caddy-display-unit": "npx tsx scripts/test-caddy-display-unit.ts",
     "test:login-unit": "npx tsx scripts/test-login-session-unit.ts",
     "test:staff-admin-unit": "npx tsx scripts/test-staff-admin-password-unit.ts",
     "test:login-speed-unit": "npx tsx scripts/test-login-speed-unit.ts",

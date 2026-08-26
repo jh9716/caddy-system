@@ -20,6 +20,7 @@ import {
   type SpecialDutyRecord,
   type SpecialStartAnchor,
 } from "@/lib/dailySpecialDuty";
+import { formatCaddyLabel } from "@/lib/caddyDisplay";
 import {
   computeShift1SpecialWindow,
   formatShift1Range,
@@ -680,10 +681,7 @@ export function SpecialDutyPanel({
                       <div className="sd-row">
                         <span className="sd-pri">{item.sortOrder}</span>
                         <div className="sd-who">
-                          <strong>{item.name}</strong>
-                          <span>
-                            {item.team} {item.teamOrder}번
-                          </span>
+                          <strong>{formatCaddyLabel(item)}</strong>
                           {item.conflicts?.length
                             ? item.conflicts.map((c, i) => (
                                 <em key={`${c.code}-${i}`} className="sd-warn">
@@ -775,7 +773,7 @@ export function SpecialDutyPanel({
                 {hits.map((c) => (
                   <li key={c.id}>
                     <button type="button" onClick={() => onPick(c)}>
-                      {c.name} · {c.team} {c.teamOrder}번
+                      {formatCaddyLabel(c)}
                     </button>
                   </li>
                 ))}
@@ -792,10 +790,7 @@ export function SpecialDutyPanel({
                       <div className="sd-row">
                         <span className="sd-pri">{index + 1}</span>
                         <div className="sd-who">
-                          <strong>{row.name}</strong>
-                          <span>
-                            {row.team || ""} {row.teamOrder ?? ""}
-                          </span>
+                          <strong>{formatCaddyLabel(row)}</strong>
                         </div>
                         <div className="sd-ops">
                           <button

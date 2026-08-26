@@ -5,6 +5,7 @@ import {
   compareAssignmentOrder,
   type AutoAssignResultV1,
 } from "@/lib/autoAssignEngine";
+import { formatCaddyLabel } from "@/lib/caddyDisplay";
 
 type PreviewResponse = AutoAssignResultV1 & {
   error?: string;
@@ -262,8 +263,6 @@ export default function AutoAssignPreviewPage() {
                 "코스",
                 "예약",
                 "캐디",
-                "조",
-                "순번idx",
                 "reason",
               ]}
               rows={(tab === "assigned"
@@ -297,9 +296,7 @@ export default function AutoAssignPreviewPage() {
                   a.reservation.teeTime,
                   a.reservation.courseLabel || a.reservation.course,
                   a.reservation.teamName || "-",
-                  `${a.caddy.name}(#${a.caddy.id})`,
-                  a.caddy.team,
-                  String(a.sequenceIndex),
+                  formatCaddyLabel(a.caddy),
                   a.reason,
                 ])}
             />
@@ -320,24 +317,16 @@ export default function AutoAssignPreviewPage() {
 
           {tab === "unused" && (
             <Table
-              headers={["ID", "이름", "조", "teamOrder"]}
-              rows={result.unusedCaddies.map((c) => [
-                String(c.id),
-                c.name,
-                c.team,
-                String(c.teamOrder),
-              ])}
+              headers={["캐디"]}
+              rows={result.unusedCaddies.map((c) => [formatCaddyLabel(c)])}
             />
           )}
 
           {tab === "special" && (
             <Table
-              headers={["ID", "이름", "조", "teamOrder", "비고"]}
+              headers={["캐디", "비고"]}
               rows={result.special.map((c) => [
-                String(c.id),
-                c.name,
-                c.team,
-                String(c.teamOrder),
+                formatCaddyLabel(c),
                 "v1 미배치",
               ])}
             />
@@ -345,11 +334,9 @@ export default function AutoAssignPreviewPage() {
 
           {tab === "specialUnassigned" && (
             <Table
-              headers={["ID", "이름", "조", "reason", "review"]}
+              headers={["캐디", "reason", "review"]}
               rows={(result.specialUnassigned || []).map((u) => [
-                String(u.caddy.id),
-                u.caddy.name,
-                u.caddy.team,
+                formatCaddyLabel(u.caddy),
                 u.reason,
                 u.review ? "Y" : "N",
               ])}

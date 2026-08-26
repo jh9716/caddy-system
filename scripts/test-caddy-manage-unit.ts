@@ -467,8 +467,16 @@ console.log("== 당추 추가는 미리보기 흐름, 빈 칸 클릭/현재 부 
     "utf8"
   );
   assert(
-    /bc-cell empty addable/.test(board) &&
-      /onEmptyBoardCellClick\(code, tr.teeTime\)/.test(board),
+    /cell\.kind === "empty"/.test(board) &&
+      /<button/.test(board) &&
+      /className=\{`bc-cell empty \$\{/.test(board) &&
+      /moveDest \? "move-dest" : "addable"/.test(board) &&
+      /onEmptyBoardCellClick\(code, tr\.teeTime\)/.test(board) &&
+      /function onEmptyBoardCellClick/.test(board) &&
+      /changeFromEmptyBoardCell\(/.test(board) &&
+      /teamName: "당추"/.test(board) &&
+      /당추를 추가할까요\?/.test(board) &&
+      /setLiveChangePreset\(change\)/.test(board),
     "empty board cell is clickable 당추 추가"
   );
   assert(

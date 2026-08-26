@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect } from 'react'
+import { formatCaddyLabel } from '@/lib/caddyDisplay'
 
 type AssignmentType = 'OFF' | 'SICK' | 'LONG_SICK' | 'DUTY' | 'MARSHAL'
 
@@ -70,7 +71,7 @@ export default function AssignmentPage() {
           <option value="">캐디 선택</option>
           {caddies.map((c) => (
             <option key={c.id} value={c.id}>
-              {c.name}
+              {formatCaddyLabel(c)}
             </option>
           ))}
         </select>
@@ -118,7 +119,7 @@ export default function AssignmentPage() {
         <tbody>
           {assignments.map((a) => (
             <tr key={a.id}>
-              <td className="border p-2">{a.caddy?.name}</td>
+              <td className="border p-2">{a.caddy ? formatCaddyLabel(a.caddy) : ""}</td>
               <td className="border p-2">
                 {TYPE_LABELS[(a.type as AssignmentType) || 'OFF']}
               </td>

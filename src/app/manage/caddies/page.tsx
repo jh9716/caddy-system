@@ -19,6 +19,7 @@ import {
   type EmploymentStatus,
   type ThirdBandSubgroup,
 } from '@/lib/caddyManage';
+import { formatCaddyLabel } from '@/lib/caddyDisplay';
 import { maskKrMobile } from '@/lib/caddyPhone';
 import {
   listSelectableEmptySlots,
@@ -472,7 +473,7 @@ export default function ManageCaddiesPage() {
         }
         setEditingId(null);
         await load();
-        setMessage(`#${id} 드라이빙 캐디 저장됨 (ID 유지)`);
+        setMessage(`${formatCaddyLabel({ ...draft, caddyType: 'DRIVING' })} 저장됨`);
       } finally {
         setSavingId(null);
       }
@@ -491,7 +492,7 @@ export default function ManageCaddiesPage() {
     if (teamChanging) {
       if (
         !confirm(
-          `${original?.name}: ${original?.team} ${original?.teamOrder}번 → ${draft.team} ${slot}번으로 이동할까요?\n기존 슬롯은 빈자리가 됩니다.`
+          `${formatCaddyLabel(original)}: ${original?.team} ${original?.teamOrder}번 → ${draft.team} ${slot}번으로 이동할까요?\n기존 슬롯은 빈자리가 됩니다.`
         )
       ) {
         return;
@@ -522,7 +523,7 @@ export default function ManageCaddiesPage() {
       }
       setEditingId(null);
       await load();
-      setMessage(`#${id} 저장됨 (ID 유지)`);
+      setMessage(`${formatCaddyLabel(draft)} 저장됨`);
     } finally {
       setSavingId(null);
     }
@@ -535,7 +536,7 @@ export default function ManageCaddiesPage() {
         : '고정 슬롯에서 제외됩니다.';
     if (
       !confirm(
-        `${c.name}을(를) 드라이빙 전담 캐디로 바꿀까요?\n${slotNote}\n기존 스케줄/계정 연결 기록은 유지되지만 이후 일반 자동배치·HOUSE/THIRD 순번에는 참여하지 않습니다.`
+        `${formatCaddyLabel(c)}을(를) 드라이빙 전담 캐디로 바꿀까요?\n${slotNote}\n기존 스케줄/계정 연결 기록은 유지되지만 이후 일반 자동배치·HOUSE/THIRD 순번에는 참여하지 않습니다.`
       )
     ) {
       return;
@@ -554,7 +555,7 @@ export default function ManageCaddiesPage() {
         return;
       }
       await load();
-      setMessage(`${c.name}: 드라이빙 캐디로 변경 (슬롯 해제)`);
+      setMessage(`${formatCaddyLabel({ ...c, caddyType: 'DRIVING' })}: 드라이빙 캐디로 변경 (슬롯 해제)`);
     } finally {
       setSavingId(null);
     }
@@ -597,7 +598,7 @@ export default function ManageCaddiesPage() {
           : '재직 복귀';
     if (
       !confirm(
-        `${c.name}을(를) ${label}할까요?\n물리 삭제 없음 · ID(#${c.id})·배정 기록 유지`
+        `${formatCaddyLabel(c)}을(를) ${label}할까요?\n과거 배정 기록은 유지됩니다.`
       )
     ) {
       return;
@@ -619,7 +620,7 @@ export default function ManageCaddiesPage() {
       setEmploymentFilter(status);
       await load(status);
       setMessage(
-        `${c.name}: ${employmentStatusLabel(status)} (id=${c.id}, 물리삭제 아님)`
+        `${formatCaddyLabel(c)}: ${employmentStatusLabel(status)}`
       );
     } finally {
       setSavingId(null);
@@ -655,7 +656,7 @@ export default function ManageCaddiesPage() {
         setCreateKind('regular');
         setCreateOpen(false);
         await load();
-        setMessage(`드라이빙 캐디 등록: ${data.name} (id=${data.id}, 조/순번 없음)`);
+        setMessage(`드라이빙 캐디 등록: ${formatCaddyLabel({ ...data, caddyType: 'DRIVING' })}`);
       } finally {
         setCreating(false);
       }
@@ -698,7 +699,7 @@ export default function ManageCaddiesPage() {
       setCreateOpen(false);
       await load();
       setMessage(
-        `신규 등록: ${data.name} → ${data.team} ${data.teamOrder}번 (id=${data.id})`
+        `신규 등록: ${formatCaddyLabel(data)}`
       );
     } finally {
       setCreating(false);
@@ -1030,7 +1031,7 @@ export default function ManageCaddiesPage() {
           <section className="cm-toolbar">
             <input
               className="cm-search"
-              placeholder="이름 / ID 검색"
+              placeholder="이름 검색"
               value={q}
               onChange={(e) => setQ(e.target.value)}
             />
@@ -1349,11 +1350,7 @@ export default function ManageCaddiesPage() {
                       ) : (
                         <>
                           <td>
-                            <strong className="cm-name">{c.name}</strong>
-                            <span className="cm-id-inline">#{c.id}</span>
-                            {isDriving ? (
-                              <span className="cm-drive-tag">드라이빙</span>
-                            ) : null}
+                            <strong className="cm-name">{formatCaddyLabel(c)}</strong>
                             {c.missingFromImport ? (
                               <span
                                 className="cm-missing-tag"
@@ -1487,14 +1484,10 @@ export default function ManageCaddiesPage() {
                       setExpandedId((id) => (id === c.id ? null : c.id))
                     }
                   >
-                    <strong className="cm-name">{c.name}</strong>
+                    <strong className="cm-name">{formatCaddyLabel(c)}</strong>
                     {c.missingFromImport ? (
                       <span className="cm-missing-tag">명단 누락</span>
                     ) : null}
-                    <span className="cm-meta">
-                      {isDriving ? '드라이빙' : c.team}
-                    </span>
-                    <span className="cm-num">{isDriving ? '—' : c.teamOrder}</span>
                     <span
                       className={`cm-status ${
                         st === 'ACTIVE' ? 'ok' : st === 'LEAVE' ? 'leave' : 'out'
@@ -2144,7 +2137,7 @@ export default function ManageCaddiesPage() {
                               <option value="">기존 캐디/신규 선택</option>
                               {row.candidates.map((c) => (
                                 <option key={c.id} value={c.id}>
-                                  {c.name} (id={c.id}, {c.team} {c.teamOrder}번)
+                                  {formatCaddyLabel(c)}
                                 </option>
                               ))}
                               <option value="create">정말 신규인 경우 신규로 등록</option>
