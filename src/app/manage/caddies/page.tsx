@@ -102,6 +102,15 @@ function formatPhoneDisplay(phoneNormalized: string | null | undefined): string 
   return maskKrMobile(phoneNormalized) ?? '—';
 }
 
+function isDrivingCaddy(c: { caddyType?: string | null; team?: string | null }): boolean {
+  return isDrivingCaddyType(c.caddyType) || c.team === DRIVING_POOL_TEAM;
+}
+
+/** 현장표 성명. 조 접두어는 열 헤더에 있으므로 이름만 쓴다. */
+function rosterPersonName(c: { name?: string | null }): string {
+  return String(c.name ?? '').trim() || '이름없음';
+}
+
 function rosterImportFormatLabel(format?: string | null): string {
   if (format === 'xlsx-v2') return 'XLSX v2';
   if (format === 'xlsx-v1') return 'XLSX v1';
@@ -157,6 +166,8 @@ export default function ManageCaddiesPage() {
   const [viewMode, setViewMode] = useState<'summary' | 'detail'>('summary');
   /** 모바일 상세: 액션 펼침 */
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  /** 현장표 이름 클릭 메뉴 */
+  const [menuCaddyId, setMenuCaddyId] = useState<number | null>(null);
 
   /** 명단 Import v2 Preview */
   type ImportPreviewLine = {
@@ -380,14 +391,6 @@ export default function ManageCaddiesPage() {
     };
   }, [rows]);
 
-  const drivingRows = useMemo(
-    () =>
-      rows.filter(
-        (r) => isDrivingCaddyType(r.caddyType) || r.team === DRIVING_POOL_TEAM
-      ),
-    [rows]
-  );
-
   const stats = useMemo(() => {
     const byTeam = new Map<string, number>();
     for (const r of filtered) {
@@ -416,6 +419,50 @@ export default function ManageCaddiesPage() {
     }
     return GLANCE_TEAMS.map((t) => map.get(t)!);
   }, [rows]);
+
+  const menuCaddy = useMemo(
+    () => rows.find((r) => r.id === menuCaddyId) ?? null,
+    [rows, menuCaddyId]
+  );
+
+  const rosterColumns = useMemo(() => {
+    const query = q.trim();
+    const columns = GLANCE_TEAMS.map((team) => {
+      const summary = teamSummaries.find((t) => t.team === team);
+      const members = rows
+        .filter(
+          (r) =>
+            !isDrivingCaddy(r) &&
+            r.team === team &&
+            normalizeEmploymentStatus(r.employmentStatus) !== 'RETIRED'
+        )
+        .filter((r) => !query || r.name.includes(query))
+        .sort((a, b) => a.teamOrder - b.teamOrder || a.id - b.id);
+      return {
+        key: team,
+        title: team,
+        count: summary?.total ?? 0,
+        driving: false,
+        members,
+      };
+    });
+    const drivingMembers = rows
+      .filter(
+        (r) =>
+          isDrivingCaddy(r) &&
+          normalizeEmploymentStatus(r.employmentStatus) !== 'RETIRED'
+      )
+      .filter((r) => !query || r.name.includes(query))
+      .sort((a, b) => a.name.localeCompare(b.name, 'ko') || a.id - b.id);
+    columns.push({
+      key: DRIVING_POOL_TEAM,
+      title: '드라이빙',
+      count: rosterCounts.drivingHeadcount,
+      driving: true,
+      members: drivingMembers,
+    });
+    return columns;
+  }, [rows, q, teamSummaries, rosterCounts.drivingHeadcount]);
 
   function startEdit(c: Caddy) {
     setEditingId(c.id);
@@ -472,6 +519,7 @@ export default function ManageCaddiesPage() {
           return;
         }
         setEditingId(null);
+        setMenuCaddyId(null);
         await load();
         setMessage(`${formatCaddyLabel({ ...draft, caddyType: 'DRIVING' })} 저장됨`);
       } finally {
@@ -522,6 +570,7 @@ export default function ManageCaddiesPage() {
         return;
       }
       setEditingId(null);
+      setMenuCaddyId(null);
       await load();
       setMessage(`${formatCaddyLabel(draft)} 저장됨`);
     } finally {
@@ -555,6 +604,7 @@ export default function ManageCaddiesPage() {
         return;
       }
       await load();
+      setMenuCaddyId(null);
       setMessage(`${formatCaddyLabel({ ...c, caddyType: 'DRIVING' })}: 드라이빙 캐디로 변경 (슬롯 해제)`);
     } finally {
       setSavingId(null);
@@ -616,9 +666,14 @@ export default function ManageCaddiesPage() {
         alert(data?.error || '상태 변경 실패');
         return;
       }
-      // 퇴사/휴직/복귀 직후 해당 필터로 전환해 목록에서 바로 확인·복귀 가능
-      setEmploymentFilter(status);
-      await load(status);
+      // 상세 관리에서는 해당 필터로 전환. 현장표는 전체 로드를 유지한다.
+      if (viewMode === 'detail') {
+        setEmploymentFilter(status);
+        await load(status);
+      } else {
+        await load('all');
+      }
+      setMenuCaddyId(null);
       setMessage(
         `${formatCaddyLabel(c)}: ${employmentStatusLabel(status)}`
       );
@@ -728,108 +783,39 @@ export default function ManageCaddiesPage() {
       <header className="cm-header">
         <div>
           <h1 className="cm-title">캐디 관리</h1>
+          <p className="cm-headcount">총원 {rosterCounts.headcount}명</p>
         </div>
         <div className="cm-header-actions">
           <button
             type="button"
             className="cm-btn cm-btn-primary cm-btn-sm"
             onClick={() => {
-              setViewMode('detail');
               setCreateKind('regular');
               setCreateOpen(true);
             }}
           >
             신규 등록
           </button>
+          {viewMode === 'summary' ? (
+            <input
+              className="cm-search cm-header-search"
+              placeholder="이름 검색"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              aria-label="이름 검색"
+            />
+          ) : null}
           <button
             type="button"
-            className="cm-btn cm-btn-sm"
-            onClick={() => {
-              setViewMode('detail');
-              setCreateKind('driving');
-              setCreateOpen(true);
-            }}
+            className={`cm-btn cm-btn-sm ${viewMode === 'detail' ? 'cm-btn-primary' : ''}`}
+            onClick={() =>
+              setViewMode((mode) => (mode === 'detail' ? 'summary' : 'detail'))
+            }
           >
-            드라이빙 추가
-          </button>
-          <button
-            type="button"
-            className="cm-btn cm-btn-sm"
-            onClick={() => {
-              setViewMode('detail');
-              setImportOpen(true);
-              setImportApplyFailed(false);
-            }}
-          >
-            명단 가져오기
-          </button>
-          <button
-            type="button"
-            className="cm-btn cm-btn-sm"
-            onClick={async () => {
-              setMessage(null);
-              try {
-                const res = await fetch('/api/caddies/export', {
-                  credentials: 'include',
-                });
-                if (res.status === 401 || res.status === 403) {
-                  location.href = '/login?callbackUrl=/manage/caddies';
-                  return;
-                }
-                if (!res.ok) {
-                  const data = await res.json().catch(() => ({}));
-                  setMessage(data?.error || 'Export 실패');
-                  return;
-                }
-                const blob = await res.blob();
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download =
-                  res.headers
-                    .get('Content-Disposition')
-                    ?.match(/filename="([^"]+)"/)?.[1] || 'caddy-roster.csv';
-                a.click();
-                URL.revokeObjectURL(url);
-                setMessage('명단 CSV를 다운로드했습니다. (관리자 전용 · 휴대폰 원문 포함)');
-              } catch {
-                setMessage('Export 중 오류가 발생했습니다.');
-              }
-            }}
-          >
-            명단 Export
-          </button>
-          <button
-            type="button"
-            className="cm-btn cm-btn-sm"
-            onClick={() => load()}
-            disabled={loading}
-          >
-            새로고침
+            {viewMode === 'detail' ? '현장표' : '상세 관리'}
           </button>
         </div>
       </header>
-
-      <div className="cm-tabs" role="tablist" aria-label="보기 모드">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={viewMode === 'summary'}
-          className={viewMode === 'summary' ? 'is-active' : ''}
-          onClick={() => setViewMode('summary')}
-        >
-          한눈에 보기
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={viewMode === 'detail'}
-          className={viewMode === 'detail' ? 'is-active' : ''}
-          onClick={() => setViewMode('detail')}
-        >
-          상세 보기
-        </button>
-      </div>
 
       {message && (
         <div
@@ -841,7 +827,7 @@ export default function ManageCaddiesPage() {
         </div>
       )}
 
-      {createOpen && viewMode === 'detail' && (
+      {createOpen && (
         <section className="cm-card cm-create">
           <h3>
             {createKind === 'driving' ? '드라이빙 캐디 등록' : '신규 캐디 등록'}
@@ -1006,6 +992,73 @@ export default function ManageCaddiesPage() {
 
       {viewMode === 'detail' && (
         <>
+          <section className="cm-detail-tools" aria-label="상세 관리 도구">
+            <button
+              type="button"
+              className="cm-btn cm-btn-sm"
+              onClick={() => {
+                setCreateKind('driving');
+                setCreateOpen(true);
+              }}
+            >
+              드라이빙 추가
+            </button>
+            <button
+              type="button"
+              className="cm-btn cm-btn-sm"
+              onClick={() => {
+                setImportOpen(true);
+                setImportApplyFailed(false);
+              }}
+            >
+              명단 가져오기
+            </button>
+            <button
+              type="button"
+              className="cm-btn cm-btn-sm"
+              onClick={async () => {
+                setMessage(null);
+                try {
+                  const res = await fetch('/api/caddies/export', {
+                    credentials: 'include',
+                  });
+                  if (res.status === 401 || res.status === 403) {
+                    location.href = '/login?callbackUrl=/manage/caddies';
+                    return;
+                  }
+                  if (!res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    setMessage(data?.error || 'Export 실패');
+                    return;
+                  }
+                  const blob = await res.blob();
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download =
+                    res.headers
+                      .get('Content-Disposition')
+                      ?.match(/filename="([^"]+)"/)?.[1] || 'caddy-roster.csv';
+                  a.click();
+                  URL.revokeObjectURL(url);
+                  setMessage('명단 CSV를 다운로드했습니다. (관리자 전용 · 휴대폰 원문 포함)');
+                } catch {
+                  setMessage('Export 중 오류가 발생했습니다.');
+                }
+              }}
+            >
+              명단 Export
+            </button>
+            <button
+              type="button"
+              className="cm-btn cm-btn-sm"
+              onClick={() => load()}
+              disabled={loading}
+            >
+              새로고침
+            </button>
+          </section>
+
           <section className="cm-filter-bar" aria-label="재직상태 필터">
             {(
               [
@@ -1068,101 +1121,57 @@ export default function ManageCaddiesPage() {
       {loading ? (
         <p className="cm-muted">불러오는 중…</p>
       ) : viewMode === 'summary' ? (
-        <div className="cm-summary-grid">
-          <button
-            type="button"
-            className="cm-team-card cm-driving-card"
-            onClick={() => {
-              setTeamFilter(DRIVING_POOL_TEAM);
-              setEmploymentFilter('all');
-              setViewMode('detail');
-            }}
-          >
-            <div className="cm-team-head">
-              <span className="cm-team-name">드라이빙 캐디</span>
-              <span className="cm-team-chevron" aria-hidden>›</span>
-            </div>
-            <ul className="cm-team-status">
-              <li>
-                <span className="dot active" />
-                <span className="lbl">재직</span>{' '}
-                <strong>
-                  {
-                    drivingRows.filter(
-                      (r) =>
-                        normalizeEmploymentStatus(r.employmentStatus) ===
-                        'ACTIVE'
-                    ).length
-                  }
-                </strong>
-              </li>
-              <li>
-                <span className="dot leave" />
-                <span className="lbl">휴직</span>{' '}
-                <strong>
-                  {
-                    drivingRows.filter(
-                      (r) =>
-                        normalizeEmploymentStatus(r.employmentStatus) ===
-                        'LEAVE'
-                    ).length
-                  }
-                </strong>
-              </li>
-              <li>
-                <span className="dot retired" />
-                <span className="lbl">퇴사</span>{' '}
-                <strong>
-                  {
-                    drivingRows.filter(
-                      (r) =>
-                        normalizeEmploymentStatus(r.employmentStatus) ===
-                        'RETIRED'
-                    ).length
-                  }
-                </strong>
-              </li>
-            </ul>
-            <div className="cm-team-foot">
-              총 {rosterCounts.drivingHeadcount}명 · 조/순번 없음
-            </div>
-          </button>
-          {teamSummaries.map((t) => (
-            <button
-              key={t.team}
-              type="button"
-              className="cm-team-card"
-              onClick={() => {
-                setTeamFilter(t.team);
-                setEmploymentFilter('all');
-                setViewMode('detail');
-              }}
-            >
-              <div className="cm-team-head">
-                <span className="cm-team-name">{t.team}</span>
-                <span className="cm-team-chevron" aria-hidden>›</span>
-              </div>
-              <ul className="cm-team-status">
-                <li>
-                  <span className="dot active" />
-                  <span className="lbl">재직</span> <strong>{t.active}</strong>
-                </li>
-                <li>
-                  <span className="dot leave" />
-                  <span className="lbl">휴직</span> <strong>{t.leave}</strong>
-                </li>
-                <li>
-                  <span className="dot retired" />
-                  <span className="lbl">퇴사</span> <strong>{t.retired}</strong>
-                </li>
-                <li>
-                  <span className="dot other" />
-                  <span className="lbl">기타</span> <strong>{t.other}</strong>
-                </li>
-              </ul>
-              <div className="cm-team-foot">총 {t.total}명</div>
-            </button>
-          ))}
+        <div className="cm-roster-scroll" aria-label="조별 현장표">
+          <div className="cm-roster">
+            {rosterColumns.map((col) => (
+              <section
+                key={col.key}
+                className={`cm-roster-col ${col.driving ? 'is-driving' : ''}`}
+              >
+                <header className="cm-roster-col-head">
+                  <span className="cm-roster-col-title">{col.title}</span>
+                  <span className="cm-roster-col-count">{col.count}명</span>
+                </header>
+                <ul className="cm-roster-list">
+                  {col.members.length === 0 ? (
+                    <li className="cm-roster-empty">없음</li>
+                  ) : (
+                    col.members.map((c) => {
+                      const st = normalizeEmploymentStatus(c.employmentStatus);
+                      const leave = st === 'LEAVE';
+                      return (
+                        <li key={c.id}>
+                          <button
+                            type="button"
+                            className={`cm-roster-cell ${leave ? 'is-leave' : ''}`}
+                            onClick={() => {
+                              setEditingId(null);
+                              setMenuCaddyId(c.id);
+                            }}
+                          >
+                            {!col.driving ? (
+                              <span className="cm-ord">{c.teamOrder}</span>
+                            ) : null}
+                            {!col.driving ? (
+                              <span className="cm-ord-sep" aria-hidden>
+                                |
+                              </span>
+                            ) : null}
+                            <span className="cm-cell-name">
+                              {rosterPersonName(c)}
+                            </span>
+                            {leave ? (
+                              <span className="cm-leave-badge">휴직</span>
+                            ) : null}
+                          </button>
+                        </li>
+                      );
+                    })
+                  )}
+                </ul>
+              </section>
+            ))}
+          </div>
         </div>
       ) : filtered.length === 0 ? (
         <p className="cm-muted">조건에 맞는 캐디가 없습니다.</p>
@@ -2284,9 +2293,280 @@ export default function ManageCaddiesPage() {
         </section>
       )}
 
+      {menuCaddy && (
+        <div
+          className="cm-sheet-overlay"
+          role="presentation"
+          onClick={() => {
+            setMenuCaddyId(null);
+            if (editingId === menuCaddy.id) cancelEdit();
+          }}
+        >
+          <div
+            className="cm-sheet"
+            role="dialog"
+            aria-label={formatCaddyLabel(menuCaddy)}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="cm-sheet-head">
+              <div className="cm-sheet-title">
+                <strong>{formatCaddyLabel(menuCaddy)}</strong>
+                {!isDrivingCaddy(menuCaddy) ? (
+                  <span className="cm-sheet-sub">
+                    {menuCaddy.teamOrder}번
+                  </span>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                className="cm-btn cm-btn-sm"
+                onClick={() => {
+                  setMenuCaddyId(null);
+                  if (editingId === menuCaddy.id) cancelEdit();
+                }}
+              >
+                닫기
+              </button>
+            </div>
+            {editingId === menuCaddy.id ? (
+              <div className="cm-sheet-edit">
+                {(() => {
+                  const c = menuCaddy;
+                  const draft = drafts[c.id] ?? toDraft(c);
+                  const busy = savingId === c.id;
+                  const isDriving = isDrivingCaddy(c);
+                  return (
+                    <>
+                      <div className="cm-form-grid">
+                        <label>
+                          이름
+                          <input
+                            value={draft.name}
+                            onChange={(e) =>
+                              updateDraft(c.id, { name: e.target.value })
+                            }
+                          />
+                        </label>
+                        {!isDriving && (
+                          <label>
+                            조
+                            <select
+                              value={draft.team}
+                              onChange={(e) => {
+                                const team = e.target.value;
+                                updateDraft(c.id, {
+                                  team,
+                                  teamOrder:
+                                    team === c.team ? draft.teamOrder : 0,
+                                  thirdBandSubgroup: isThirdBandTeam(team)
+                                    ? draft.thirdBandSubgroup
+                                    : null,
+                                });
+                              }}
+                            >
+                              {!(PRIMARY_TEAMS as readonly string[]).includes(
+                                draft.team
+                              ) && (
+                                <option value={draft.team}>{draft.team}</option>
+                              )}
+                              {PRIMARY_TEAMS.map((t) => (
+                                <option key={t} value={t}>
+                                  {t}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        )}
+                        {!isDriving && (
+                          <label>
+                            순번
+                            <select
+                              value={draft.teamOrder || ''}
+                              onChange={(e) =>
+                                updateDraft(c.id, {
+                                  teamOrder: Number(e.target.value) || 0,
+                                })
+                              }
+                            >
+                              <option value="">선택…</option>
+                              {editEmptySlots.map((n) => (
+                                <option key={n} value={n}>
+                                  {n}번
+                                  {draft.team !== c.team ? ' (이동)' : ''}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        )}
+                        <label>
+                          재직상태
+                          <select
+                            value={draft.employmentStatus}
+                            onChange={(e) =>
+                              updateDraft(c.id, {
+                                employmentStatus: e.target
+                                  .value as EmploymentStatus,
+                              })
+                            }
+                          >
+                            {EMPLOYMENT_STATUSES.map((s) => (
+                              <option key={s} value={s}>
+                                {EMPLOYMENT_STATUS_LABELS[s]}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          휴대폰
+                          <input
+                            type="tel"
+                            value={draft.phone}
+                            onChange={(e) =>
+                              updateDraft(c.id, { phone: e.target.value })
+                            }
+                          />
+                        </label>
+                        {!isDriving && isThirdBandTeam(draft.team) && (
+                          <label>
+                            3부반 구분
+                            <select
+                              value={draft.thirdBandSubgroup ?? ''}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                updateDraft(c.id, {
+                                  thirdBandSubgroup:
+                                    v === 'WEEKDAY' || v === 'WEEKEND'
+                                      ? v
+                                      : null,
+                                });
+                              }}
+                            >
+                              <option value="">일반</option>
+                              <option value="WEEKDAY">
+                                {THIRD_BAND_SUBGROUP_LABELS.WEEKDAY}
+                              </option>
+                              <option value="WEEKEND">
+                                {THIRD_BAND_SUBGROUP_LABELS.WEEKEND}
+                              </option>
+                            </select>
+                          </label>
+                        )}
+                      </div>
+                      {!isDriving && (
+                        <fieldset className="cm-flags">
+                          <legend>추가 속성</legend>
+                          {EDITABLE_EXTRA_FLAG_OPTIONS.map((flag) => (
+                            <label key={flag} className="cm-check">
+                              <input
+                                type="checkbox"
+                                checked={draft.extraFlags.includes(flag)}
+                                onChange={() => toggleFlag(c.id, flag)}
+                              />
+                              {flag}
+                            </label>
+                          ))}
+                        </fieldset>
+                      )}
+                      <div className="cm-sheet-actions">
+                        <button
+                          type="button"
+                          className="cm-btn cm-btn-primary"
+                          disabled={busy}
+                          onClick={() => saveEdit(c.id)}
+                        >
+                          {busy ? '저장 중…' : '저장'}
+                        </button>
+                        <button
+                          type="button"
+                          className="cm-btn"
+                          disabled={busy}
+                          onClick={cancelEdit}
+                        >
+                          취소
+                        </button>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            ) : (
+              <div className="cm-sheet-actions">
+                {(() => {
+                  const c = menuCaddy;
+                  const busy = savingId === c.id;
+                  const st = normalizeEmploymentStatus(c.employmentStatus);
+                  const isDriving = isDrivingCaddy(c);
+                  const leave = st === 'LEAVE';
+                  return (
+                    <>
+                      {leave ? (
+                        <button
+                          type="button"
+                          className="cm-btn cm-btn-primary"
+                          disabled={busy}
+                          onClick={() => setEmployment(c, 'ACTIVE')}
+                        >
+                          복귀
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="cm-btn"
+                        disabled={busy}
+                        onClick={() => startEdit(c)}
+                      >
+                        수정
+                      </button>
+                      {!isDriving && !leave ? (
+                        <button
+                          type="button"
+                          className="cm-btn"
+                          disabled={busy}
+                          onClick={() => startEdit(c)}
+                        >
+                          조/순번 변경
+                        </button>
+                      ) : null}
+                      {!leave ? (
+                        <button
+                          type="button"
+                          className="cm-btn"
+                          disabled={busy}
+                          onClick={() => setEmployment(c, 'LEAVE')}
+                        >
+                          휴직
+                        </button>
+                      ) : null}
+                      {!isDriving && !leave ? (
+                        <button
+                          type="button"
+                          className="cm-btn"
+                          disabled={busy}
+                          onClick={() => convertToDriving(c)}
+                        >
+                          드라이빙 전환
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="cm-btn cm-btn-danger"
+                        disabled={busy}
+                        onClick={() => setEmployment(c, 'RETIRED')}
+                      >
+                        삭제
+                      </button>
+                    </>
+                  );
+                })()}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <style>{`
         .caddy-manage {
-          max-width: 1280px;
+          max-width: 100%;
           margin: 0 auto;
         }
         .cm-header {
@@ -2304,6 +2584,22 @@ export default function ManageCaddiesPage() {
           flex-wrap: wrap;
           gap: 6px;
           align-items: center;
+        }
+        .cm-header-search {
+          min-width: min(220px, 100%);
+          flex: 1 1 160px;
+        }
+        .cm-headcount {
+          margin: 4px 0 0;
+          font-size: 0.82rem;
+          color: var(--vh-muted);
+          font-weight: 600;
+        }
+        .cm-detail-tools {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+          margin: 0 0 10px;
         }
         .cm-title {
           margin: 0;
@@ -2461,6 +2757,165 @@ export default function ManageCaddiesPage() {
         }
         .cm-stats-hint {
           color: var(--vh-warn);
+        }
+        .cm-roster-scroll {
+          overflow-x: auto;
+          overflow-y: auto;
+          max-height: calc(100dvh - 170px);
+          -webkit-overflow-scrolling: touch;
+          border: 1px solid var(--vh-border);
+          border-radius: var(--vh-radius-sm);
+          background: var(--vh-paper);
+        }
+        .cm-roster {
+          display: flex;
+          align-items: flex-start;
+          min-width: max-content;
+        }
+        .cm-roster-col {
+          flex: 0 0 168px;
+          min-width: 168px;
+          border-right: 1px solid var(--vh-border);
+        }
+        .cm-roster-col:last-child {
+          border-right: 0;
+        }
+        .cm-roster-col.is-driving {
+          background: #faf8ff;
+        }
+        .cm-roster-col-head {
+          position: sticky;
+          top: 0;
+          z-index: 2;
+          display: flex;
+          align-items: baseline;
+          justify-content: space-between;
+          gap: 6px;
+          min-height: 44px;
+          padding: 8px 10px;
+          background: var(--vh-green-900);
+          color: #fff;
+          font-weight: 700;
+        }
+        .cm-roster-col.is-driving .cm-roster-col-head {
+          background: #5b21b6;
+        }
+        .cm-roster-col-title {
+          font-size: 0.92rem;
+        }
+        .cm-roster-col-count {
+          font-size: 0.75rem;
+          font-weight: 600;
+          opacity: 0.9;
+          white-space: nowrap;
+        }
+        .cm-roster-list {
+          list-style: none;
+          margin: 0;
+          padding: 4px 0 8px;
+        }
+        .cm-roster-empty {
+          padding: 12px 10px;
+          color: var(--vh-muted);
+          font-size: 0.8rem;
+        }
+        .cm-roster-cell {
+          width: 100%;
+          min-height: 44px;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          padding: 6px 10px;
+          border: 0;
+          background: transparent;
+          text-align: left;
+          font: inherit;
+          cursor: pointer;
+          color: inherit;
+        }
+        .cm-roster-cell:hover,
+        .cm-roster-cell:focus-visible {
+          background: #fff7e6;
+        }
+        .cm-roster-cell.is-leave {
+          opacity: 0.72;
+          color: #78716c;
+        }
+        .cm-ord {
+          flex: 0 0 1.6em;
+          font-variant-numeric: tabular-nums;
+          font-weight: 800;
+          font-size: 0.92rem;
+          color: var(--vh-green-900);
+          text-align: right;
+        }
+        .cm-ord-sep {
+          color: #cbd5e1;
+          font-weight: 600;
+        }
+        .cm-cell-name {
+          flex: 1 1 auto;
+          min-width: 0;
+          font-size: 0.95rem;
+          font-weight: 700;
+          line-height: 1.25;
+        }
+        .cm-leave-badge {
+          flex: 0 0 auto;
+          font-size: 0.65rem;
+          font-weight: 800;
+          color: #92400e;
+          background: #fef3c7;
+          border-radius: 4px;
+          padding: 1px 5px;
+        }
+        .cm-sheet-overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(15, 23, 42, 0.45);
+          z-index: 80;
+          display: flex;
+          align-items: flex-end;
+          justify-content: center;
+        }
+        .cm-sheet {
+          width: 100%;
+          max-width: 480px;
+          background: #fff;
+          border-radius: 16px 16px 0 0;
+          padding: 12px 14px calc(20px + env(safe-area-inset-bottom, 0px));
+          max-height: 85vh;
+          overflow: auto;
+          box-shadow: 0 -8px 24px rgba(15, 23, 42, 0.18);
+        }
+        .cm-sheet-head {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 8px;
+          margin-bottom: 10px;
+        }
+        .cm-sheet-title {
+          display: grid;
+          gap: 2px;
+        }
+        .cm-sheet-title strong {
+          font-size: 1.08rem;
+        }
+        .cm-sheet-sub {
+          font-size: 0.82rem;
+          color: var(--vh-muted);
+        }
+        .cm-sheet-actions {
+          display: grid;
+          gap: 8px;
+        }
+        .cm-sheet-actions .cm-btn {
+          min-height: 48px;
+          width: 100%;
+          justify-content: flex-start;
+          font-size: 1rem;
+          font-weight: 700;
         }
         .cm-summary-grid {
           display: grid;
