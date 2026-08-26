@@ -6,6 +6,34 @@ import {
 } from "@/lib/dailyBoardPublished";
 
 export const PUBLISH_BUSY_LABEL = "확정 중...";
+export const PUBLISH_ACTION_LABEL = "배치 확정";
+export const PUBLISH_AGAIN_LABEL = "변경사항 다시 확정";
+export const PUBLISH_CURRENT_LABEL = "현재 배치 확정됨";
+export const PUBLISH_HINT = "확정하면 캐디 공용 배치표에 게시됩니다.";
+
+export function publishBoardActionState(input: {
+  publishing: boolean;
+  hasDraft: boolean;
+  published: { sourceDraftVersion: number } | null;
+  draftVersion: number;
+  conflict?: boolean;
+}): { label: string; disabled: boolean; alreadyCurrent: boolean } {
+  if (input.publishing) {
+    return { label: PUBLISH_BUSY_LABEL, disabled: true, alreadyCurrent: false };
+  }
+  const alreadyCurrent = Boolean(
+    input.published && input.published.sourceDraftVersion === input.draftVersion
+  );
+  const disabled =
+    !input.hasDraft || Boolean(input.conflict) || alreadyCurrent;
+  if (alreadyCurrent) {
+    return { label: PUBLISH_CURRENT_LABEL, disabled, alreadyCurrent: true };
+  }
+  if (input.published) {
+    return { label: PUBLISH_AGAIN_LABEL, disabled, alreadyCurrent: false };
+  }
+  return { label: PUBLISH_ACTION_LABEL, disabled, alreadyCurrent: false };
+}
 
 export type PublishServerTimings = {
   getDraftMs: number;

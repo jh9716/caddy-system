@@ -54,7 +54,12 @@ import {
 } from "../src/lib/sessionCookies";
 import { drainDraftSaves } from "../src/lib/draftSaveFlush";
 import {
+  PUBLISH_AGAIN_LABEL,
+  PUBLISH_ACTION_LABEL,
   PUBLISH_BUSY_LABEL,
+  PUBLISH_CURRENT_LABEL,
+  PUBLISH_HINT,
+  publishBoardActionState,
   runPublishBoardFlow,
 } from "../src/lib/publishDailyBoardClient";
 import {
@@ -734,8 +739,24 @@ async function main() {
 
     assert(/\/api\/assignments\/published/.test(page), "manage page calls published API");
     assert(/배치 확정/.test(page), "배치 확정 button");
-    assert(/변경사항 다시 확정/.test(page), "republish label");
-    assert(/현재 작업본이 이미 확정되어 있습니다/.test(page), "already-published state");
+    const client = readSrc("src/lib/publishDailyBoardClient.ts");
+    assert(/변경사항 다시 확정/.test(client), "republish label");
+    assert(/현재 배치 확정됨/.test(client), "already-published state");
+    assert(/확정하면 캐디 공용 배치표에 게시됩니다/.test(client), "publish hint");
+    assert(/publishBoardActionState/.test(page), "page uses publishBoardActionState");
+    assert(/PUBLISH_HINT/.test(page), "page renders publish hint");
+    assert(/className="ops-publish"/.test(page), "publish is dedicated primary section");
+    const actionsUi = page.split('className="ops-actions"')[1]?.split("</div>")[0] || "";
+    assert(/가용 캐디 불러오기/.test(actionsUi), "availability action kept");
+    assert(/자동배치 실행/.test(actionsUi), "auto-assign action kept");
+    assert(!/>\s*CONFIRMED\s*</.test(actionsUi), "CONFIRMED button not in ops-actions");
+    assert(!/운영 반영/.test(actionsUi), "운영 반영 button not in ops-actions");
+    assert(!/<button[\s\S]*?>\s*CONFIRMED\s*</.test(page), "CONFIRMED button UI hidden");
+    assert(!/<StatusBadge/.test(page), "CONFIRMED status chip not rendered in ops header");
+    assert(!/loadingApply \? "반영 중…" : "운영 반영"/.test(page), "운영 반영 button UI hidden");
+    assert(/function onConfirm/.test(page), "legacy onConfirm handler kept");
+    assert(/async function onApplyToOps/.test(page), "legacy onApplyToOps handler kept");
+    assert(/\/api\/assignments\/confirm/.test(page), "legacy confirm API still in page handler");
     assert(!/\/manage\/assignments/.test(boardPage), "public board does not link manage assignments");
     assert(/아직 확정된 배치표가 없습니다/.test(boardPage), "public empty state");
 
@@ -796,7 +817,7 @@ async function main() {
     assert(/runPublishBoardFlow/.test(page), "publish uses shared flow");
     assert(/drainDraftSaves/.test(page), "publish waits for draft drain");
     assert(/result\.conflict/.test(page), "publish aborts on stale flush");
-    assert(/PUBLISH_BUSY_LABEL/.test(page), "busy label while publishing");
+    assert(/publishBoardActionState/.test(page), "busy label while publishing");
     assert(!/pendingDraftSaveRef\.current = current/.test(page), "publish does not force duplicate Draft PUT");
     const publishFn =
       page.split("async function onPublishBoard")[1]?.split("async function persistLivePreview")[0] || "";
@@ -1396,6 +1417,43 @@ async function main() {
     assert(dGet.status === 401 || dGet.status === 403, `caddy Draft GET blocked (${dGet.status})`);
     assert(dPut.status === 401 || dPut.status === 403, `caddy Draft PUT blocked (${dPut.status})`);
     assert(dDel.status === 401 || dDel.status === 403, `caddy Draft DELETE blocked (${dDel.status})`);
+  }
+
+  section("publish action labels");
+  {
+    const idle = publishBoardActionState({
+      publishing: false,
+      hasDraft: true,
+      published: null,
+      draftVersion: 1,
+    });
+    assert(idle.label === PUBLISH_ACTION_LABEL, "draft → 배치 확정");
+    assert(idle.disabled === false, "draft publish enabled");
+    const again = publishBoardActionState({
+      publishing: false,
+      hasDraft: true,
+      published: { sourceDraftVersion: 1 },
+      draftVersion: 2,
+    });
+    assert(again.label === PUBLISH_AGAIN_LABEL, "changed draft → 변경사항 다시 확정");
+    assert(again.disabled === false, "republish enabled");
+    const current = publishBoardActionState({
+      publishing: false,
+      hasDraft: true,
+      published: { sourceDraftVersion: 3 },
+      draftVersion: 3,
+    });
+    assert(current.label === PUBLISH_CURRENT_LABEL, "current → 현재 배치 확정됨");
+    assert(current.disabled === true, "current publish disabled");
+    const busy = publishBoardActionState({
+      publishing: true,
+      hasDraft: true,
+      published: null,
+      draftVersion: 1,
+    });
+    assert(busy.label === PUBLISH_BUSY_LABEL, "busy label");
+    assert(busy.disabled === true, "busy disabled");
+    assert(PUBLISH_HINT.includes("캐디 공용 배치표"), "hint copy");
   }
 
   section("today/yesterday helpers");

@@ -101,7 +101,8 @@ import {
 } from "@/lib/dailyBoardDraft";
 import { drainDraftSaves } from "@/lib/draftSaveFlush";
 import {
-  PUBLISH_BUSY_LABEL,
+  PUBLISH_HINT,
+  publishBoardActionState,
   runPublishBoardFlow,
 } from "@/lib/publishDailyBoardClient";
 
@@ -1635,6 +1636,14 @@ export default function ManageAssignmentsOpsPage() {
     return COURSE_CODES.filter((c) => open.has(c));
   }, [draft]);
 
+  const publishAction = publishBoardActionState({
+    publishing,
+    hasDraft: Boolean(draft),
+    published,
+    draftVersion,
+    conflict: draftSaveState === "conflict",
+  });
+
   const boardRows = useMemo(() => {
     if (shiftTab === "UNASSIGNED" || shiftTab === "CLOSED") return [];
     // 선택된 부 내부에서만 matrix — reservation.shift 기준으로 재검증
@@ -1668,15 +1677,10 @@ export default function ManageAssignmentsOpsPage() {
       <header className="ops-header">
         <div>
           <h1>자동배치 운영</h1>
-          <p>Excel → 자동배치 → 작업본 저장 → 배치 확정 (캐디 공개)</p>
+          <p>가용 캐디 불러오기 → 자동배치 실행 → 배치 수정/자동저장 → 배치 확정</p>
         </div>
         {draft && (
           <div className="ops-header-side">
-            <StatusBadge
-              status={draft.status}
-              confirmedAt={draft.confirmedAt}
-              appliedAt={draft.appliedAt ?? null}
-            />
             <DraftSaveStatus
               state={draftSaveState}
               savedAt={draftSavedAt}
@@ -1834,57 +1838,6 @@ export default function ManageAssignmentsOpsPage() {
           >
             {loadingRun ? "배치 중…" : "자동배치 실행"}
           </button>
-          <button
-            type="button"
-            className="btn confirm"
-            disabled={
-              !draft ||
-              draft.status === "CONFIRMED" ||
-              draft.status === "APPLIED"
-            }
-            onClick={onConfirm}
-          >
-            CONFIRMED
-          </button>
-          <button
-            type="button"
-            className="btn apply"
-            disabled={!draft || draft.status !== "CONFIRMED" || loadingApply}
-            onClick={() => onApplyToOps(false)}
-            title="CONFIRMED 상태에서만 Schedule/ShiftDuty에 저장 (레거시 운영 반영)"
-          >
-            {loadingApply ? "반영 중…" : "운영 반영"}
-          </button>
-        </div>
-        <div className="ops-publish-row">
-          <button
-            type="button"
-            className="btn primary ops-publish-btn"
-            disabled={!draft || publishing || draftSaveState === "conflict"}
-            onClick={() => void onPublishBoard()}
-          >
-            {publishing
-              ? PUBLISH_BUSY_LABEL
-              : published
-                ? "변경사항 다시 확정"
-                : "배치 확정"}
-          </button>
-          {published &&
-          draft &&
-          published.sourceDraftVersion === draftVersion ? (
-            <span className="ops-published-state">
-              현재 작업본이 이미 확정되어 있습니다
-            </span>
-          ) : published ? (
-            <span className="ops-published-state">
-              확정 {formatPublishedAt(published.publishedAt)} ·{" "}
-              {publisherDisplayName(published.publishedByUsername)}
-            </span>
-          ) : (
-            <span className="ops-published-state">
-              확정하면 캐디 공용 배치표에 게시됩니다
-            </span>
-          )}
         </div>
         {availability && (
           <div className="ops-meta">
@@ -2539,6 +2492,26 @@ export default function ManageAssignmentsOpsPage() {
       )}
 
       {draft && (
+        <section className="ops-publish" aria-label="배치 확정">
+          <button
+            type="button"
+            className="btn primary ops-publish-btn"
+            disabled={publishAction.disabled}
+            onClick={() => void onPublishBoard()}
+          >
+            {publishAction.label}
+          </button>
+          <p className="ops-publish-hint">{PUBLISH_HINT}</p>
+          {published ? (
+            <p className="ops-published-state">
+              확정 {formatPublishedAt(published.publishedAt)} ·{" "}
+              {publisherDisplayName(published.publishedByUsername)}
+            </p>
+          ) : null}
+        </section>
+      )}
+
+      {draft && (
         <LiveChangePanel
           draft={draft}
           previous={autoResultFromDraft(draft, autoResult)}
@@ -2601,6 +2574,7 @@ export default function ManageAssignmentsOpsPage() {
   );
 }
 
+/** Legacy Draft status chip. Kept in source; not rendered in ops UI. */
 function StatusBadge({
   status,
   confirmedAt,
@@ -2849,9 +2823,6 @@ const opsCss = `
   @media (min-width: 560px) {
     .ops-actions { grid-template-columns: repeat(2, 1fr); }
   }
-  @media (min-width: 720px) {
-    .ops-actions { grid-template-columns: repeat(4, 1fr); }
-  }
   .btn {
     min-height: 42px;
     border-radius: 10px;
@@ -2864,21 +2835,26 @@ const opsCss = `
   .btn.primary { background: #0f172a; color: #fff; border-color: #0f172a; }
   .btn.confirm { background: #047857; color: #fff; border-color: #047857; }
   .btn.apply { background: #1d4ed8; color: #fff; border-color: #1d4ed8; }
-  .ops-publish-row {
-    display: flex;
-    flex-wrap: wrap;
+  .ops-publish {
+    display: grid;
     gap: 8px;
-    align-items: center;
-    margin-top: 8px;
+    padding: 14px 12px 16px;
+    border: 1px solid #e5e7eb;
+    border-radius: 14px;
+    background: #fff;
   }
   .ops-publish-btn {
-    min-height: 40px;
-    padding: 0 16px;
+    width: 100%;
+    min-height: 48px;
+    padding: 12px 16px;
+    font-size: 1rem;
     font-weight: 800;
   }
+  .ops-publish-hint,
   .ops-published-state,
   .ops-published-meta {
-    font-size: 0.75rem;
+    margin: 0;
+    font-size: 0.8rem;
     color: #64748b;
   }
   .btn.ghost { background: #f8fafc; }
