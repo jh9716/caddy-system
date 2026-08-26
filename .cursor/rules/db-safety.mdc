@@ -1,0 +1,15 @@
+---
+description: Production database write safety for agents and tests
+alwaysApply: true
+---
+
+# Production DB write 금지
+
+- browser/computerUse 테스트 중 production DB write 금지.
+- 테스트 fixture를 만들기 위해 production DB를 수정하지 말 것.
+- UI가 missing fixture(없는 caddyId 등)로 실패하면 production에 데이터를 만들지 말고 **local fixture** (`caddy_local`, 미래 날짜 2099 등)를 고칠 것.
+- `DATABASE_URL="$PRODUCTION_DATABASE_URL"` 또는 Neon URL로 `npx tsx` / Prisma `create` 하지 말 것.
+- production write는 사용자의 **명시적 요청**이 있을 때만, `scripts/maintenance/` 경로와 `PROD_MAINTENANCE_CONFIRM=<task-id>` 로 실행.
+- `ALLOW_PROD_DB=1` 같은 범용 스위치는 쓰지 말 것.
+- 일반 개발/브라우저 테스트는 `DATABASE_URL=postgresql://caddy:caddy@localhost:5432/caddy_local`.
+- production 확인은 read-only inspect 스크립트만. write credential을 테스트 환경 기본 env에 두지 말 것.

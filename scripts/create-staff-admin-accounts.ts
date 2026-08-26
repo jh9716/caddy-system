@@ -6,11 +6,13 @@
  * - 평문 임시 비밀번호는 stdout에 한 번만 출력 (파일/git에 쓰지 말 것)
  *
  * 로컬:
- *   ALLOW_STAFF_ACCOUNT_CREATE=1 DATABASE_URL=postgresql://... \
+ *   ALLOW_STAFF_ACCOUNT_CREATE=1 DATABASE_URL=postgresql://caddy:caddy@localhost:5432/caddy_local \
  *     npx tsx scripts/create-staff-admin-accounts.ts
  *
- * 운영 DB는 이 에이전트가 임의로 실행하지 않는다. 배포·migrate 이후
- * 운영 담당자가 위 명령으로 생성한다.
+ * 운영:
+ *   사용자 명시 승인 후
+ *   PROD_MAINTENANCE_CONFIRM=CREATE_STAFF_ADMIN_ACCOUNTS ALLOW_STAFF_ACCOUNT_CREATE=1 \
+ *     DATABASE_URL=... npx tsx scripts/create-staff-admin-accounts.ts
  */
 import { PrismaClient } from "@prisma/client";
 import { STAFF_ADMIN_USERNAMES } from "../src/lib/staffAdminAccounts";
@@ -18,28 +20,11 @@ import {
   generateDistinctTempNumericPasswords,
   hashPassword,
 } from "../src/lib/userPassword";
-
-function assertSafeDatabaseUrl(url: string) {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new Error("DATABASE_URL parse 실패");
-  }
-  const host = parsed.hostname || "";
-  if (process.env.CREATE_STAFF_ON_PRODUCTION === "1") return;
-  const blocked =
-    host.includes("neon.tech") ||
-    host.includes("vercel-storage") ||
-    host.includes("amazonaws.com") ||
-    host.includes("verthill") ||
-    process.env.PRODUCTION_DATABASE_URL === url;
-  if (blocked) {
-    throw new Error(
-      `운영/원격 DB write 차단: host=${host}. 운영 생성이 필요하면 CREATE_STAFF_ON_PRODUCTION=1 을 명시한다.`
-    );
-  }
-}
+import {
+  assertLocalDatabaseUrl,
+  isProductionDatabaseUrl,
+} from "./assertLocalDatabaseUrl";
+import { requireProdMaintenance } from "./requireProdMaintenance";
 
 async function main() {
   if (process.env.ALLOW_STAFF_ACCOUNT_CREATE !== "1") {
@@ -53,7 +38,11 @@ async function main() {
     console.error("DATABASE_URL 이 없습니다.");
     process.exit(2);
   }
-  assertSafeDatabaseUrl(url);
+  if (isProductionDatabaseUrl(url)) {
+    requireProdMaintenance("CREATE_STAFF_ADMIN_ACCOUNTS");
+  } else {
+    assertLocalDatabaseUrl(url);
+  }
 
   const prisma = new PrismaClient();
   try {

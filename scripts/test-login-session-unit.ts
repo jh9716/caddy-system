@@ -32,6 +32,7 @@ import {
   type PasswordLoginDb,
   type PasswordLoginUser,
 } from "../src/lib/passwordLogin";
+import { assertLocalDatabaseUrl } from "./assertLocalDatabaseUrl";
 
 let passed = 0;
 let failed = 0;
@@ -113,27 +114,6 @@ function jsonReq(url: string, body: unknown) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-}
-
-function assertLocalDatabaseUrl(url: string) {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new Error("DATABASE_URL parse 실패 — 로컬 테스트 중단");
-  }
-  const host = parsed.hostname;
-  const blocked =
-    host.includes("neon.tech") ||
-    host.includes("vercel-storage") ||
-    host.includes("amazonaws.com") ||
-    host.includes("verthill") ||
-    process.env.PRODUCTION_DATABASE_URL === url;
-  if (blocked || (host !== "localhost" && host !== "127.0.0.1")) {
-    throw new Error(
-      `⛔ Production/원격 DB write 차단: host=${host}. localhost 테스트 DB만 허용.`
-    );
-  }
 }
 
 function walkSourceFiles(dir: string, acc: string[] = []) {

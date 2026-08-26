@@ -7,6 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { PrismaClient, Prisma } from "@prisma/client";
+import { isLocalDatabaseUrl } from "./assertLocalDatabaseUrl";
 
 let passed = 0;
 let failed = 0;
@@ -23,20 +24,6 @@ function assert(cond: unknown, msg: string) {
 
 function section(title: string) {
   console.log("\n==", title, "==");
-}
-
-function isLocalDatabaseUrl(url: string | undefined): boolean {
-  if (!url) return false;
-  try {
-    const u = new URL(url.replace(/^postgres(ql)?:/i, "http:"));
-    return (
-      u.hostname === "localhost" ||
-      u.hostname === "127.0.0.1" ||
-      u.hostname === "::1"
-    );
-  } catch {
-    return false;
-  }
 }
 
 section("migration SQL static");

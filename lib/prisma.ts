@@ -1,4 +1,7 @@
 import { PrismaClient } from '@prisma/client'
+import { assertAppDatabaseUrl } from '../src/lib/dbSafety'
+
+assertAppDatabaseUrl(process.env.DATABASE_URL)
 
 const globalForPrisma = global as unknown as { prisma: PrismaClient }
 

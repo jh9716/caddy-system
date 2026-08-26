@@ -1,4 +1,5 @@
-// prisma/seed.js
+// prisma/seed.js — local/test DB only unless explicit maintenance confirm
+require('../scripts/guard-prod-db.cjs');
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
 

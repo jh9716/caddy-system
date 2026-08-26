@@ -34,7 +34,9 @@ DB 없는 단위 테스트: node --experimental-strip-types scripts/test-caddy-r
 import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
 import { buildImportPreview, parseImportFile, applyImportPayload } from '../lib/caddyImport';
+import { assertLocalDatabaseUrl } from './assertLocalDatabaseUrl';
 
+assertLocalDatabaseUrl(process.env.DATABASE_URL);
 const prisma = new PrismaClient();
 
 async function counts() {
