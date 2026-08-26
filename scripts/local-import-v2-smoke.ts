@@ -7,19 +7,13 @@ import {
   buildRosterImportPreviewV2,
   parseRosterCsvV2,
 } from "../lib/caddyRosterImportV2";
+import { assertLocalFixtureDatabase } from "./assertLocalDatabaseUrl";
 
 const prisma = new PrismaClient();
 const TAG = "__IMPORT_V2_TEST__";
 
 async function main() {
-  const url = process.env.DATABASE_URL || "";
-  if (
-    !url.includes("localhost") &&
-    !url.includes("127.0.0.1") &&
-    !url.includes("caddy_local")
-  ) {
-    throw new Error("Refusing non-local DATABASE_URL");
-  }
+  assertLocalFixtureDatabase(process.env.DATABASE_URL);
 
   await prisma.caddy.deleteMany({ where: { name: { startsWith: TAG } } });
 

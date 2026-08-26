@@ -9,6 +9,7 @@ import {
   RosterImportApplyError,
   type RosterExisting,
 } from "../lib/caddyRosterImportV2";
+import { assertLocalDatabaseUrl } from "./assertLocalDatabaseUrl";
 
 const TAG = "__IMPORT_V2_BATCH_TEST__";
 const prisma = new PrismaClient({
@@ -27,14 +28,7 @@ function assert(condition: unknown, message: string): asserts condition {
 }
 
 function localDatabaseOnly() {
-  const url = process.env.DATABASE_URL ?? "";
-  if (
-    !url.includes("localhost") &&
-    !url.includes("127.0.0.1") &&
-    !url.includes("caddy_local")
-  ) {
-    throw new Error("Refusing non-local DATABASE_URL");
-  }
+  assertLocalDatabaseUrl(process.env.DATABASE_URL);
 }
 
 function phoneFor(i: number): string {

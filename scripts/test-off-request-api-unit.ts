@@ -29,6 +29,7 @@ import {
   serializeOffRequest,
   submitOffRequest,
 } from "../src/lib/offRequestService";
+import { assertLocalDatabaseUrl } from "./assertLocalDatabaseUrl";
 
 let passed = 0;
 let failed = 0;
@@ -45,25 +46,6 @@ function assert(cond: unknown, msg: string) {
 
 function section(title: string) {
   console.log("\n==", title, "==");
-}
-
-function assertLocalDatabaseUrl(url: string) {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new Error("DATABASE_URL parse 실패");
-  }
-  const host = parsed.hostname;
-  const blocked =
-    host.includes("neon.tech") ||
-    host.includes("vercel-storage") ||
-    host.includes("amazonaws.com") ||
-    host.includes("verthill") ||
-    process.env.PRODUCTION_DATABASE_URL === url;
-  if (blocked || (host !== "localhost" && host !== "127.0.0.1")) {
-    throw new Error(`⛔ Production/원격 DB write 차단: host=${host}`);
-  }
 }
 
 async function main() {

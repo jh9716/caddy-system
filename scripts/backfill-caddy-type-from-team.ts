@@ -15,6 +15,8 @@
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { THIRD_BAND_TEAMS } from "../src/lib/caddyManage";
+import { isProductionDatabaseUrl } from "./assertLocalDatabaseUrl";
+import { requireProdMaintenance } from "./requireProdMaintenance";
 
 const WRITE_CONFIRM = "THIRD_TEAMS_9_12";
 const TEAMS = [...THIRD_BAND_TEAMS];
@@ -34,6 +36,9 @@ async function main() {
 
   const write = wantsWrite();
   if (write) {
+    if (isProductionDatabaseUrl(process.env.DATABASE_URL)) {
+      requireProdMaintenance("CADDY_TYPE_BACKFILL");
+    }
     console.error(
       "WRITE MODE: 9~12조 HOUSE → THIRD 만 갱신합니다. thirdBandSubgroup 보존."
     );
