@@ -426,18 +426,19 @@ console.log("== swap B auto-preview source ==");
   );
   assert(/function previewSwap\(/.test(panel), "panel previewSwap helper");
   assert(
-    /changeType !== "SWAP_CADDY"/.test(panel),
-    "SWAP skips 배치 다시 맞추기 button"
+    /function buildChange\(/.test(panel) && /function onReflow\(/.test(panel),
+    "generic live-change handlers kept"
   );
   assert(
     /useState\(false\)/.test(panel) &&
-      /기타 배치 설정/.test(panel) &&
-      /aria-expanded=\{advancedOpen\}/.test(panel),
-    "advanced live-change form starts collapsed"
+      /관리 도구/.test(panel) &&
+      /aria-expanded=\{adminToolsOpen\}/.test(panel),
+    "admin tools start collapsed"
   );
   assert(
-    !/setAdvancedOpen\(true\)/.test(panel),
-    "Quick Action preset does not auto-open advanced form"
+    !/setAdminToolsOpen\(true\)/.test(panel) &&
+      !/setAdvancedOpen\(true\)/.test(panel),
+    "Quick Action preset does not auto-open admin tools"
   );
   assert(
     /예약 취소/.test(panel) &&
@@ -456,7 +457,7 @@ console.log("== swap B auto-preview source ==");
   );
 }
 
-console.log("== 당추 추가는 미리보기 흐름, 빈 칸 클릭/현재 부 기본값 ==");
+console.log("== 추가팀 등록은 미리보기 흐름, 빈 칸 클릭/현재 부 기본값 ==");
 {
   const panel = fs.readFileSync(
     path.resolve("src/app/manage/assignments/LiveChangePanel.tsx"),
@@ -482,25 +483,25 @@ console.log("== 당추 추가는 미리보기 흐름, 빈 칸 클릭/현재 부 
       /onEmptyBoardCellClick\(code, tr\.teeTime\)/.test(board) &&
       /function onEmptyBoardCellClick/.test(board) &&
       /changeFromEmptyBoardCell\(/.test(board) &&
-      /teamName: "당추"/.test(board) &&
-      /당추를 추가할까요\?/.test(board) &&
+      /teamName: "추가팀"/.test(board) &&
+      /추가팀을 등록할까요\?/.test(board) &&
       /setLiveChangePreset\(change\)/.test(board),
-    "empty board cell is clickable 당추 추가"
+    "empty board cell is clickable 추가팀 등록"
   );
   assert(
-    /당추 추가/.test(board) && /SameDayAddSheet/.test(board),
-    "per-shift 당추 추가 button + sheet"
+    /\+\s*추가팀/.test(board) && /SameDayAddSheet/.test(board),
+    "per-shift + 추가팀 button + sheet"
   );
   assert(
     /defaultShift=\{shiftTab\}/.test(board) &&
       /useState<ShiftPart>\(defaultShift\)/.test(panel),
-    "당추 추가 부 기본값은 현재 탭"
+    "추가팀 등록 부 기본값은 현재 탭"
   );
   assert(
     /setLiveChangePreset/.test(board) &&
       /preset=\{liveChangePreset\}/.test(board) &&
       /onApplyPreview=\{onLiveApply\}/.test(board),
-    "당추 uses LiveChange preview/apply, not instant save"
+    "추가팀 uses LiveChange preview/apply, not instant save"
   );
   assert(
     /const canApply = !!preview && !applying && !blockingError/.test(panel),
@@ -540,8 +541,8 @@ console.log("== ops menu simplify: one place per daily action ==");
   const caddyActions =
     sheet.split("qa-caddy-actions")[1]?.split("function MovePreviewBlock")[0] ||
     "";
-  const advancedBlock =
-    panel.split("{advancedOpen && (")[1]?.split("{error &&")[0] || "";
+  const adminTools =
+    panel.split("{adminToolsOpen && (")[1]?.split("{error &&")[0] || "";
 
   assert(
     /\$\{teamName\} 팀/.test(sheet) && /className="qa-title"/.test(sheet),
@@ -570,11 +571,25 @@ console.log("== ops menu simplify: one place per daily action ==");
     "caddy menu does not expose LOCK"
   );
   assert(
-    /기타 배치 설정/.test(panel) &&
-      /일상 작업은 보드에서/.test(advancedBlock) &&
-      /LIVE_CHANGE_TYPES\.map/.test(advancedBlock) &&
+    /관리 도구/.test(panel) &&
+      /배치 다시 맞추기/.test(adminTools) &&
+      /작업본 초기화/.test(adminTools) &&
+      !/변경 유형/.test(adminTools) &&
+      !/LIVE_CHANGE_TYPES\.map/.test(panel) &&
       /function buildChange\(/.test(panel),
-    "daily types stay in collapsed diagnostic form, handlers not deleted"
+    "admin tools keep recalc/reset; generic type select removed; handlers kept"
+  );
+  assert(
+    !/기타 배치 설정/.test(panel) && !/기타 배치 설정/.test(board),
+    "기타 배치 설정 card removed from UI"
+  );
+  assert(
+    !/당추/.test(panel) && !/당추/.test(board),
+    "no 당추 copy on assignment UI"
+  );
+  assert(
+    /ADD_RESERVATION: "추가팀 등록"/.test(change),
+    "ADD_RESERVATION user label is 추가팀 등록"
   );
   assert(
     /export const LIVE_CHANGE_TYPES/.test(change) &&
@@ -584,12 +599,21 @@ console.log("== ops menu simplify: one place per daily action ==");
     "LiveChange types/API unchanged"
   );
   assert(
-    /당추 추가/.test(board) &&
+    /role="tablist"/.test(board) &&
+      />\s*배치표\s*</.test(board) &&
+      />\s*목록\s*</.test(board) &&
+      !/배치표보기/.test(board) &&
+      !/목록보기/.test(board) &&
+      /ops-add-team/.test(board),
+    "compact 배치표/목록 tabs + +추가팀 action"
+  );
+  assert(
+    /\+\s*추가팀/.test(board) &&
       /SameDayAddSheet/.test(board) &&
       /onEmptyBoardCellClick/.test(board) &&
       /ops-date-settings/.test(board) &&
       /날짜 설정 \(당번·마샬, 특수근무, 코스\)/.test(board),
-    "당추 entry points and date settings remain"
+    "추가팀 entry points and date settings remain"
   );
 
   const firstCaddyAt = board.indexOf("오늘 1부 첫 캐디");

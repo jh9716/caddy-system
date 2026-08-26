@@ -12,7 +12,6 @@ import {
   hasBlockingLiveChangeError,
   isLiveChangeReady,
   LIVE_CHANGE_LABELS,
-  LIVE_CHANGE_TYPES,
   makeAddReservation,
   makeAddReservationChange,
   makeMoveReservationChange,
@@ -29,7 +28,6 @@ import {
 import {
   isDrivingPlacement,
   drivingCandidateCaddies,
-  reservationKey,
   type AutoAssignCaddy,
   type AutoAssignResultV1,
   type AutoAssignmentRow,
@@ -50,9 +48,11 @@ type Props = {
   preset?: LiveChangeInput | null;
   onPresetConsumed?: () => void;
   unavailableCaddyIds?: number[];
-  /** 고급 당추 폼의 부 기본값. 현재 보드 탭을 넘기면 무조건 1부가 되지 않는다. */
+  /** 추가팀 폼의 부 기본값. 현재 보드 탭을 넘기면 무조건 1부가 되지 않는다. */
   defaultShift?: ShiftPart;
   onResetDraft?: () => void;
+  /** 관리 도구 · 현재 조건으로 순번 재계산 (기존 자동배치 실행). */
+  onRecalcOrder?: () => void;
 };
 
 export function LiveChangePanel({
@@ -65,6 +65,7 @@ export function LiveChangePanel({
   unavailableCaddyIds,
   defaultShift = "1부",
   onResetDraft,
+  onRecalcOrder,
 }: Props) {
   const [changeType, setChangeType] = useState<LiveChangeType>("CANCEL_RESERVATION");
   const [reservationKeyValue, setReservationKeyValue] = useState("");
@@ -76,14 +77,14 @@ export function LiveChangePanel({
   const [addCourse, setAddCourse] = useState<CourseCode>("VERTHILL");
   const [addShift, setAddShift] = useState<ShiftPart>(defaultShift);
   const [addTeeTime, setAddTeeTime] = useState("07:00");
-  const [addTeamName, setAddTeamName] = useState("당추");
+  const [addTeamName, setAddTeamName] = useState("추가팀");
   const [sickShift, setSickShift] = useState<ShiftPart>(defaultShift);
   const [moveCourse, setMoveCourse] = useState<CourseCode>("VERTHILL");
   const [moveShift, setMoveShift] = useState<ShiftPart>(defaultShift);
   const [moveTeeTime, setMoveTeeTime] = useState("");
   const [preview, setPreview] = useState<LiveChangePreview | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [adminToolsOpen, setAdminToolsOpen] = useState(false);
 
   const assignedOptions = useMemo(
     () =>
@@ -142,7 +143,7 @@ export function LiveChangePanel({
         setAddShift(shift);
       }
       if (add.teeTime) setAddTeeTime(add.teeTime);
-      setAddTeamName(add.teamName || "당추");
+      setAddTeamName(add.teamName || "추가팀");
     }
     if (preset.type === "MOVE_RESERVATION" && preset.to) {
       const dest = parseMoveDestination(preset.to);
@@ -189,7 +190,7 @@ export function LiveChangePanel({
           course: addCourse,
           shift: addShift,
           teeTime: addTeeTime,
-          teamName: addTeamName || "당추",
+          teamName: addTeamName || "추가팀",
         }),
       };
     }
@@ -259,6 +260,10 @@ export function LiveChangePanel({
   }
 
   function onReflow() {
+    if (onRecalcOrder) {
+      onRecalcOrder();
+      return;
+    }
     setError(null);
     const change = buildChange();
     if (!change) {
@@ -290,470 +295,43 @@ export function LiveChangePanel({
 
   return (
     <section
-      className={`live-change ${advancedOpen ? "is-open" : "is-collapsed"}`}
-      aria-label="기타 배치 설정"
+      className={`admin-tools ${adminToolsOpen ? "is-open" : "is-collapsed"}`}
+      aria-label="관리 도구"
     >
       <button
         type="button"
-        className="live-advanced-toggle"
-        aria-expanded={advancedOpen}
-        onClick={() => setAdvancedOpen((open) => !open)}
+        className="admin-tools-toggle"
+        aria-expanded={adminToolsOpen}
+        onClick={() => setAdminToolsOpen((open) => !open)}
       >
-        {advancedOpen ? "기타 배치 설정 닫기" : "기타 배치 설정"}
+        관리 도구 {adminToolsOpen ? "▴" : "▾"}
       </button>
 
-      {advancedOpen && (
-        <>
-      <div className="live-change-head">
-        <strong>기타 배치 설정</strong>
-        <span>
-          일상 작업은 보드에서 팀 이름·캐디 이름을 누르세요. 당추는 빈 칸 또는
-          당추 추가를 사용하세요. 여기는 예외·진단용입니다.
-        </span>
-      </div>
-
-      <div className="live-change-grid">
-        <label>
-          변경 유형
-          <select
-            value={changeType}
-            onChange={(e) => {
-              setChangeType(e.target.value as LiveChangeType);
-              setPreview(null);
-            }}
-          >
-            {LIVE_CHANGE_TYPES.map((t) => (
-              <option key={t} value={t}>
-                {LIVE_CHANGE_LABELS[t]}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        {(changeType === "CANCEL_RESERVATION" || changeType === "TEAM_NOSHOW") && (
-          <label>
-            대상 예약
-            <select
-              value={reservationKeyValue}
-              onChange={(e) => setReservationKeyValue(e.target.value)}
-            >
-              <option value="">선택</option>
-              {assignedOptions.map((o) => (
-                <option key={o.key} value={o.key}>
-                  {o.label}
-                  {isPlacementLocked(o.row) ? " · LOCK" : ""}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-
-        {(changeType === "CADDY_SICK" ||
-          changeType === "CADDY_ATTENDANCE_NOSHOW") && (
-          <>
-            <label>
-              대상 캐디
-              <select
-                value={caddyId}
-                onChange={(e) =>
-                  setCaddyId(e.target.value ? Number(e.target.value) : "")
-                }
+      {adminToolsOpen && (
+        <div className="admin-tools-body">
+          <p className="admin-tools-hint">
+            현재 조건으로 캐디 순번을 다시 계산합니다
+          </p>
+          <div className="admin-tools-actions">
+            <button type="button" className="btn ghost" onClick={onReflow}>
+              배치 다시 맞추기
+            </button>
+            {onResetDraft ? (
+              <button
+                type="button"
+                className="btn danger"
+                onClick={() => onResetDraft()}
               >
-                <option value="">선택</option>
-                {assignedCaddies.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {formatCaddyLabel(c)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {changeType === "CADDY_SICK" && (
-              <label>
-                적용 시작 부
-                <select
-                  value={sickShift}
-                  onChange={(e) => setSickShift(e.target.value as ShiftPart)}
-                >
-                  {SHIFT_PARTS.map((s) => (
-                    <option key={s} value={s}>
-                      {s}부터 제외
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-          </>
-        )}
-
-        {changeType === "ADD_RESERVATION" && (
-          <>
-            <label>
-              코스
-              <select
-                value={addCourse}
-                onChange={(e) => setAddCourse(e.target.value as CourseCode)}
-              >
-                {COURSE_CODES.map((c) => (
-                  <option key={c} value={c}>
-                    {COURSE_LABELS[c]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              부
-              <select
-                value={addShift}
-                onChange={(e) => setAddShift(e.target.value as ShiftPart)}
-              >
-                {SHIFT_PARTS.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              티타임
-              <input
-                value={addTeeTime}
-                onChange={(e) => setAddTeeTime(e.target.value)}
-                placeholder="07:00"
-              />
-            </label>
-            <label>
-              팀명
-              <input
-                value={addTeamName}
-                onChange={(e) => setAddTeamName(e.target.value)}
-              />
-            </label>
-          </>
-        )}
-
-        {changeType === "SWAP_CADDY" && (
-          <>
-            <label>
-              캐디 A 예약
-              <select
-                value={swapA}
-                onChange={(e) => {
-                  const nextA = e.target.value;
-                  setSwapA(nextA);
-                  previewSwap(nextA, swapB);
-                }}
-              >
-                <option value="">선택</option>
-                {assignedOptions.map((o) => (
-                  <option key={o.key} value={o.key}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              캐디 B 예약
-              <select
-                value={swapB}
-                onChange={(e) => {
-                  const nextB = e.target.value;
-                  setSwapB(nextB);
-                  previewSwap(swapA, nextB);
-                }}
-              >
-                <option value="">선택</option>
-                {assignedOptions.map((o) => (
-                  <option key={o.key} value={o.key}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <p className="live-swap-hint">
-              B를 고르면 미리보기가 바로 열립니다. 고급 변경만 이대로 적용으로 저장합니다. 보드는 탭 즉시 저장입니다.
+                작업본 초기화
+              </button>
+            ) : null}
+          </div>
+          {onResetDraft ? (
+            <p className="admin-tools-hint">
+              저장된 작업본만 지웁니다. 이미 적용된 예약·배치는 남습니다.
             </p>
-          </>
-        )}
-
-        {changeType === "SET_LIMOUSINE" && (
-          <>
-            <label>
-              대상 예약
-              <select
-                value={reservationKeyValue}
-                onChange={(e) => setReservationKeyValue(e.target.value)}
-              >
-                <option value="">선택</option>
-                {assignedOptions.map((o) => (
-                  <option key={o.key} value={o.key}>
-                    {o.label}
-                    {o.row.reservation.limousineCart ? " · 리무진" : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              리무진카트
-              <select
-                value={limousineOn ? "on" : "off"}
-                onChange={(e) => setLimousineOn(e.target.value === "on")}
-              >
-                <option value="on">ON</option>
-                <option value="off">OFF</option>
-              </select>
-            </label>
-          </>
-        )}
-
-        {changeType === "ASSIGN_DRIVING" && (
-          <>
-            <label>
-              3부 예약
-              <select
-                value={reservationKeyValue}
-                onChange={(e) => setReservationKeyValue(e.target.value)}
-              >
-                <option value="">선택</option>
-                {shift3Options.map((o) => (
-                  <option key={o.key} value={o.key}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              드라이빙 캐디
-              <select
-                value={caddyId}
-                onChange={(e) =>
-                  setCaddyId(e.target.value ? Number(e.target.value) : "")
-                }
-                disabled={drivingCandidates.length === 0}
-              >
-                <option value="">
-                  {drivingCandidates.length === 0
-                    ? "등록된 드라이빙 캐디가 없습니다"
-                    : "드라이빙 캐디 선택"}
-                </option>
-                {drivingCandidates.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {formatCaddyLabel(c)}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </>
-        )}
-
-        {changeType === "CLEAR_DRIVING" && (
-          <label>
-            드라이빙 예약
-            <select
-              value={reservationKeyValue}
-              onChange={(e) => setReservationKeyValue(e.target.value)}
-            >
-              <option value="">선택</option>
-              {assignedOptions
-                .filter((o) => isDrivingPlacement(o.row))
-                .map((o) => (
-                  <option key={o.key} value={o.key}>
-                    {o.label}
-                  </option>
-                ))}
-            </select>
-          </label>
-        )}
-
-        {changeType === "SET_LOCK" && (
-          <>
-            <label>
-              대상 예약
-              <select
-                value={reservationKeyValue}
-                onChange={(e) => setReservationKeyValue(e.target.value)}
-              >
-                <option value="">선택</option>
-                {assignedOptions.map((o) => (
-                  <option key={o.key} value={o.key}>
-                    {o.label}
-                    {isPlacementLocked(o.row) ? " · LOCK" : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              LOCK
-              <select
-                value={lockOn ? "on" : "off"}
-                onChange={(e) => setLockOn(e.target.value === "on")}
-              >
-                <option value="on">ON</option>
-                <option value="off">OFF</option>
-              </select>
-            </label>
-          </>
-        )}
-
-        {changeType === "MOVE_RESERVATION" && (
-          <>
-            <label>
-              대상 예약
-              <select
-                value={reservationKeyValue}
-                onChange={(e) => setReservationKeyValue(e.target.value)}
-              >
-                <option value="">선택</option>
-                {assignedOptions.map((o) => (
-                  <option key={o.key} value={o.key}>
-                    {o.label}
-                    {isPlacementLocked(o.row) ? " · LOCK" : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              목적 코스
-              <select
-                value={moveCourse}
-                onChange={(e) => setMoveCourse(e.target.value as CourseCode)}
-              >
-                {COURSE_CODES.map((c) => (
-                  <option key={c} value={c}>
-                    {COURSE_LABELS[c]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              목적 부
-              <select
-                value={moveShift}
-                onChange={(e) => setMoveShift(e.target.value as ShiftPart)}
-              >
-                {SHIFT_PARTS.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              목적 티타임
-              <input
-                value={moveTeeTime}
-                onChange={(e) => setMoveTeeTime(e.target.value)}
-                placeholder="11:00"
-              />
-            </label>
-          </>
-        )}
-      </div>
-
-      <div className="live-change-actions">
-        {changeType !== "SWAP_CADDY" && (
-          <button type="button" className="btn primary" onClick={onReflow}>
-            배치 다시 맞추기
-          </button>
-        )}
-        <button
-          type="button"
-          className="btn ghost"
-          disabled={!preview}
-          onClick={onCancelPreview}
-        >
-          취소
-        </button>
-        <button
-          type="button"
-          className="btn apply"
-          disabled={!canApply}
-          onClick={() => void onApply()}
-        >
-          {applying ? "적용 중…" : "이대로 적용"}
-        </button>
-      </div>
-
-      {preview && (
-        <div className="live-preview">
-          <div className="live-preview-title">변경 미리보기 (아직 저장되지 않음)</div>
-          <div className="live-preview-meta">
-            당겨진 인원 {preview.summary.pulledCount} · 밀린 인원{" "}
-            {preview.summary.pushedCount} · LOCK 유지{" "}
-            {preview.summary.lockedPreservedCount}
-          </div>
-          <div className="live-preview-spares">
-            {preview.after.sparesByShift.map((s) => (
-              <div key={s.shift}>
-                {s.shift} Spare1 {s.spare1 ? formatCaddyLabel(s.spare1) : "-"} / Spare2{" "}
-                {s.spare2 ? formatCaddyLabel(s.spare2) : "-"}
-              </div>
-            ))}
-          </div>
-          {preview.warnings.length > 0 && (
-            <ul className="live-preview-warn">
-              {preview.warnings.map((w, i) => (
-                <li
-                  key={`${w.code}-${i}`}
-                  className={w.level === "error" ? "error" : ""}
-                >
-                  {w.level === "error" ? "⚠" : "ℹ"} {w.message}
-                </li>
-              ))}
-            </ul>
-          )}
-          {preview.lockedPreserved.length > 0 && (
-            <div className="live-preview-lock">
-              LOCK 유지:{" "}
-              {preview.lockedPreserved
-                .map((r) => `${formatCaddyLabel(r.caddy)}(${r.kind})`)
-                .join(", ")}
-            </div>
-          )}
-          <ul className="live-preview-diff">
-            {preview.placementDiffs
-              .filter(
-                (d) =>
-                  (d.beforeCaddy?.id ?? null) !== (d.afterCaddy?.id ?? null) ||
-                  d.lockedPreserved
-              )
-              .slice(0, 40)
-              .map((d) => (
-                <li key={d.reservationKey}>
-                  {d.reservation.shift} {d.reservation.teeTime}{" "}
-                  {d.reservation.course}: {d.beforeCaddy ? formatCaddyLabel(d.beforeCaddy) : "미배치"} →{" "}
-                  {d.afterCaddy ? formatCaddyLabel(d.afterCaddy) : "미배치"}
-                  {d.lockedPreserved ? " · LOCK" : ""}
-                </li>
-              ))}
-          </ul>
-          {(preview.after.unassignedReservations || []).length > 0 && (
-            <div className="live-preview-unassigned">
-              미배치 {preview.after.unassignedReservations.length}건
-              <ul>
-                {preview.after.unassignedReservations.slice(0, 8).map((u) => (
-                  <li key={reservationKey(u.reservation)}>
-                    {u.reservation.shift} {u.reservation.teeTime}{" "}
-                    {u.reservation.course} · {u.reason}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+          ) : null}
         </div>
-      )}
-      {onResetDraft ? (
-        <div className="live-draft-reset">
-          <button
-            type="button"
-            className="btn ghost"
-            onClick={() => onResetDraft()}
-          >
-            작업본 초기화
-          </button>
-          <span>저장된 작업본만 지웁니다. 이미 적용된 예약·배치는 남습니다.</span>
-        </div>
-      ) : null}
-        </>
       )}
 
       {error && <div className="ops-error">{error}</div>}
@@ -801,7 +379,7 @@ export function SameDayAddSheet({
   const [shift, setShift] = useState<ShiftPart>(defaultShift);
   const [course, setCourse] = useState<CourseCode>("VERTHILL");
   const [teeTime, setTeeTime] = useState("");
-  const [teamName, setTeamName] = useState("당추");
+  const [teamName, setTeamName] = useState("추가팀");
   const [formError, setFormError] = useState<string | null>(null);
 
   function submit() {
@@ -815,7 +393,7 @@ export function SameDayAddSheet({
         course,
         shift,
         teeTime,
-        teamName: teamName.trim() || "당추",
+        teamName: teamName.trim() || "추가팀",
       })
     );
     onClose();
@@ -826,11 +404,11 @@ export function SameDayAddSheet({
       <div
         className="qa-sheet"
         role="dialog"
-        aria-label="당추 추가"
+        aria-label="추가팀 등록"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="qa-sheet-head">
-          <strong>당추 추가</strong>
+          <strong>추가팀 등록</strong>
           <button type="button" className="btn tiny ghost" onClick={onClose}>
             닫기
           </button>

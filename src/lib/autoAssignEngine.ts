@@ -4719,7 +4719,7 @@ export function reflowRegularAssignments(input: {
         warnings.push({
           level: "warn",
           code: "ADD_LOCKED_SLOT",
-          message: "LOCK ON 특수배치 슬롯에는 당추할 수 없습니다.",
+          message: "LOCK ON 특수배치 슬롯에는 추가팀을 등록할 수 없습니다.",
           reservationKey: key,
         });
         continue;
