@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   employmentStatusLabel,
+  employmentStatusUiLabel,
   isDrivingCaddyType,
   isThirdBandTeam,
   normalizeEmploymentStatus,
@@ -44,6 +45,8 @@ console.log("== caddyManage ==");
 assert(normalizeEmploymentStatus("재직") === "ACTIVE", "재직→ACTIVE");
 assert(normalizeEmploymentStatus("휴직") === "LEAVE", "휴직→LEAVE");
 assert(normalizeEmploymentStatus("퇴사") === "RETIRED", "퇴사→RETIRED");
+assert(normalizeEmploymentStatus("삭제됨") === "RETIRED", "삭제됨→RETIRED");
+assert(normalizeEmploymentStatus("삭제") === "RETIRED", "삭제→RETIRED");
 assert(normalizeEmploymentStatus("ACTIVE") === "ACTIVE", "ACTIVE");
 assert(normalizeEmploymentStatus("LEAVE") === "LEAVE", "LEAVE");
 assert(normalizeEmploymentStatus("RETIRED") === "RETIRED", "RETIRED");
@@ -51,6 +54,9 @@ assert(normalizeEmploymentStatus("retired") === "RETIRED", "retired→RETIRED");
 assert(employmentStatusLabel("ACTIVE") === "재직", "label ACTIVE");
 assert(employmentStatusLabel("LEAVE") === "휴직", "label LEAVE");
 assert(employmentStatusLabel("RETIRED") === "퇴사", "label RETIRED");
+assert(employmentStatusUiLabel("RETIRED") === "삭제됨", "UI label RETIRED=삭제됨");
+assert(employmentStatusUiLabel("ACTIVE") === "재직", "UI label ACTIVE");
+assert(employmentStatusUiLabel("LEAVE") === "휴직", "UI label LEAVE");
 assert(
   countsTowardRosterHeadcount("ACTIVE") === true,
   "ACTIVE counts toward 총원"
@@ -84,6 +90,8 @@ assert(
 assert(parseEmploymentFilter("재직") === "ACTIVE", "filter 재직");
 assert(parseEmploymentFilter("all") === "all", "filter all");
 assert(parseEmploymentFilter("RETIRED") === "RETIRED", "filter RETIRED");
+assert(parseEmploymentFilter("삭제됨") === "RETIRED", "filter 삭제됨");
+assert(parseEmploymentFilter("삭제") === "RETIRED", "filter 삭제");
 assert(normalizeTeamOrder(-3) === 0, "teamOrder floor at 0");
 assert(normalizeTeamOrder(2.9) === 2, "teamOrder int");
 assert(
@@ -750,6 +758,98 @@ console.log("== caddies roster board UI source ==");
       !/cm-cell-name[\s\S]{0,40}\{c\.id\}/.test(src) &&
       !/cm-ord[\s\S]{0,40}\{c\.id\}/.test(src),
     "roster cell does not render caddyId"
+  );
+}
+
+console.log("== caddy delete UX (soft-retire, 삭제/삭제됨/복귀) ==");
+{
+  const src = fs.readFileSync(
+    path.resolve("src/app/manage/caddies/page.tsx"),
+    "utf8"
+  );
+  const sheetBlock = src.split("{menuCaddy && (")[1]?.split("<style>{`")[0] || "";
+  const idRoute = fs.readFileSync(
+    path.resolve("src/app/api/caddies/[id]/route.ts"),
+    "utf8"
+  );
+  const listRoute = fs.readFileSync(
+    path.resolve("src/app/api/caddies/route.ts"),
+    "utf8"
+  );
+  const dash = fs.readFileSync(path.resolve("src/app/manage/page.tsx"), "utf8");
+  assert(
+    /이 캐디를 명단에서 삭제하시겠습니까\?/.test(src) &&
+      /삭제하면 현재 명단과 자동배치에서 제외됩니다\. 과거 배치 기록은 보존됩니다\./.test(
+        src
+      ),
+    "delete confirm uses simple 명단 삭제 copy"
+  );
+  assert(
+    !src.includes("퇴사") &&
+      !src.includes("영구삭제") &&
+      !src.includes("영구 삭제") &&
+      !src.includes("soft delete") &&
+      !src.includes("soft-delete") &&
+      !src.includes("FK"),
+    "caddies page does not expose 퇴사/영구삭제/soft delete"
+  );
+  assert(
+    /\['RETIRED', '삭제됨'\]/.test(src) &&
+      /employmentStatusUiLabel/.test(src) &&
+      /EMPLOYMENT_STATUS_UI_LABELS/.test(src) &&
+      /삭제된 캐디는 「삭제됨」 필터에서 조회·복귀/.test(src),
+    "상세 관리 filter/status uses 삭제됨"
+  );
+  assert(
+    /setEmployment\(c, 'RETIRED'\)/.test(src) &&
+      /body: JSON\.stringify\(\{ employmentStatus: status \}\)/.test(src) &&
+      /method: 'PATCH'/.test(src),
+    "삭제 reuses existing employmentStatus PATCH (RETIRED)"
+  );
+  assert(
+    /setEmployment\(c, 'ACTIVE'\)/.test(src) &&
+      /st === 'RETIRED' \? \(\s*<button[\s\S]*?복귀/.test(src),
+    "삭제됨 list restore is 복귀 via ACTIVE PATCH"
+  );
+  assert(
+    /st !== 'RETIRED' && !isDriving/.test(src),
+    "삭제됨 상세 목록 hides slot/driving actions"
+  );
+  assert(
+    /leave \? \(\s*<button[\s\S]*?복귀/.test(sheetBlock) &&
+      !/st === 'RETIRED'[\s\S]{0,200}복귀/.test(sheetBlock),
+    "default roster 복귀 is LEAVE only, not deleted caddies"
+  );
+  assert(
+    /normalizeEmploymentStatus\(r\.employmentStatus\) !== 'RETIRED'/.test(src) &&
+      /cm-leave-badge">휴직/.test(src),
+    "RETIRED hidden from roster; LEAVE stays as 휴직"
+  );
+  assert(
+    dash.includes('title="삭제됨"') && !dash.includes('title="퇴사"'),
+    "dashboard retired count tooltip is 삭제됨"
+  );
+  assert(
+    idRoute.includes("requireAdmin") &&
+      listRoute.includes("requireAdmin") &&
+      !idRoute.includes("requireSuperAdmin") &&
+      !listRoute.includes("requireSuperAdmin"),
+    "caddy delete/restore stay on staff requireAdmin"
+  );
+  assert(
+    !/prisma\.assignment\.delete/.test(idRoute) &&
+      !/prisma\.dailyPlacement\.delete/.test(idRoute) &&
+      !/prisma\.schedule\.delete/.test(idRoute) &&
+      !/prisma\.offRequest\.delete/.test(idRoute) &&
+      !/prisma\.caddy\.delete(Many)?\s*\(/.test(idRoute) &&
+      !/prisma\.caddy\.delete(Many)?\s*\(/.test(listRoute),
+    "delete path does not hard-delete caddy or history"
+  );
+  assert(
+    idRoute.includes('employmentStatus: "RETIRED"') &&
+      listRoute.includes('employmentStatus: "RETIRED"') &&
+      !fs.existsSync(path.resolve("src/app/api/caddies/[id]/hard-delete/route.ts")),
+    "API still soft-retires; no hard-delete route"
   );
 }
 

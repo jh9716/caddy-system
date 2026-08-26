@@ -1393,7 +1393,7 @@ export function buildRosterImportPreviewV2(
       nextMaskedPhone: null,
       currentThirdBandSubgroup: e.thirdBandSubgroup ?? null,
       nextThirdBandSubgroup: e.thirdBandSubgroup ?? null,
-      reason: "최신 명단에 없음 — 자동 퇴사/삭제 없음 (경고만)",
+      reason: "최신 명단에 없음 — 자동 삭제 없음 (경고만)",
     }));
 
   lines.push(...missingInImport);

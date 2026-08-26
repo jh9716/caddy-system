@@ -259,7 +259,7 @@ function ManageDashboardChrome({
                 <span className="dot leave" title="휴직">
                   {t.leave ?? "—"}
                 </span>
-                <span className="dot retired" title="퇴사">
+                <span className="dot retired" title="삭제됨">
                   {t.retired ?? "—"}
                 </span>
                 <span className="dot other" title="기타">
