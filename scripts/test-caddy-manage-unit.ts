@@ -423,7 +423,7 @@ console.log("== swap B auto-preview source ==");
   );
   assert(
     /useState\(false\)/.test(panel) &&
-      /고급 배치 변경 열기/.test(panel) &&
+      /기타 배치 설정/.test(panel) &&
       /aria-expanded=\{advancedOpen\}/.test(panel),
     "advanced live-change form starts collapsed"
   );
@@ -433,8 +433,8 @@ console.log("== swap B auto-preview source ==");
   );
   assert(
     /예약 취소/.test(panel) &&
-      /팀 노쇼/.test(panel) &&
-      /캐디 결근/.test(panel) &&
+      /TEAM_NOSHOW/.test(panel) &&
+      /CADDY_ATTENDANCE_NOSHOW/.test(panel) &&
       /순번 바꿈/.test(panel),
     "Quick Action labels remain"
   );
@@ -509,6 +509,97 @@ console.log("== 당추 추가는 미리보기 흐름, 빈 칸 클릭/현재 부 
     /hasBlockingLiveChangeError/.test(change) &&
       /makeAddReservationChange/.test(change),
     "shared ADD_RESERVATION helpers"
+  );
+}
+
+console.log("== ops menu simplify: one place per daily action ==");
+{
+  const panel = fs.readFileSync(
+    path.resolve("src/app/manage/assignments/LiveChangePanel.tsx"),
+    "utf8"
+  );
+  const board = fs.readFileSync(
+    path.resolve("src/app/manage/assignments/page.tsx"),
+    "utf8"
+  );
+  const change = fs.readFileSync(
+    path.resolve("src/lib/assignmentChange.ts"),
+    "utf8"
+  );
+  const sheet = panel.split("export function BoardQuickSheet")[1] || "";
+  const teamActions =
+    sheet.split("qa-team-actions")[1]?.split("qa-caddy-actions")[0] || "";
+  const caddyActions =
+    sheet.split("qa-caddy-actions")[1]?.split("function MovePreviewBlock")[0] ||
+    "";
+  const advancedBlock =
+    panel.split("{advancedOpen && (")[1]?.split("{error &&")[0] || "";
+
+  assert(
+    /\$\{teamName\} 팀/.test(sheet) && /className="qa-title"/.test(sheet),
+    "team click title is '{name} 팀'"
+  );
+  assert(
+    /팀 이동/.test(teamActions) &&
+      /예약 취소/.test(teamActions) &&
+      />\s*노쇼\s*</.test(teamActions) &&
+      /리무진/.test(teamActions) &&
+      /드라이빙/.test(teamActions) &&
+      /SET_LOCK/.test(teamActions) &&
+      /LOCK ON/.test(teamActions),
+    "team menu exposes move/cancel/noshow/limo/driving/LOCK"
+  );
+  assert(
+    /CADDY_SICK/.test(caddyActions) &&
+      /CADDY_ATTENDANCE_NOSHOW/.test(caddyActions) &&
+      /순번 바꿈/.test(caddyActions) &&
+      />\s*병가\s*</.test(caddyActions) &&
+      />\s*결근\s*</.test(caddyActions),
+    "caddy menu exposes sick/noshow/swap"
+  );
+  assert(
+    !/SET_LOCK/.test(caddyActions) && !/LOCK ON/.test(caddyActions),
+    "caddy menu does not expose LOCK"
+  );
+  assert(
+    /기타 배치 설정/.test(panel) &&
+      /일상 작업은 보드에서/.test(advancedBlock) &&
+      /LIVE_CHANGE_TYPES\.map/.test(advancedBlock) &&
+      /function buildChange\(/.test(panel),
+    "daily types stay in collapsed diagnostic form, handlers not deleted"
+  );
+  assert(
+    /export const LIVE_CHANGE_TYPES/.test(change) &&
+      /MOVE_RESERVATION/.test(change) &&
+      /ADD_RESERVATION/.test(change) &&
+      /SET_LOCK/.test(change),
+    "LiveChange types/API unchanged"
+  );
+  assert(
+    /당추 추가/.test(board) &&
+      /SameDayAddSheet/.test(board) &&
+      /onEmptyBoardCellClick/.test(board) &&
+      /ops-date-settings/.test(board) &&
+      /날짜 설정 \(당번·마샬, 특수근무, 코스\)/.test(board),
+    "당추 entry points and date settings remain"
+  );
+
+  const firstCaddyAt = board.indexOf("오늘 1부 첫 캐디");
+  const dateSettingsAt = board.indexOf("날짜 설정 (당번·마샬, 특수근무, 코스)");
+  const dutyAt = board.indexOf("당번·마샬·조장 Excel");
+  const livePanelAt = board.indexOf("<LiveChangePanel");
+  const boardToolsAt = board.indexOf("ops-board-tools");
+  assert(
+    firstCaddyAt > 0 &&
+      dateSettingsAt > firstCaddyAt &&
+      dutyAt > dateSettingsAt &&
+      boardToolsAt > 0 &&
+      livePanelAt > boardToolsAt,
+    "first screen: date/caddy/run before date settings; 기타 after board"
+  );
+  assert(
+    /min-height:\s*48px/.test(board) && /className="qa-title"/.test(panel),
+    "mobile sheet buttons and titles are large enough"
   );
 }
 

@@ -289,7 +289,7 @@ export function LiveChangePanel({
   return (
     <section
       className={`live-change ${advancedOpen ? "is-open" : "is-collapsed"}`}
-      aria-label="고급 배치 변경"
+      aria-label="기타 배치 설정"
     >
       <button
         type="button"
@@ -297,14 +297,17 @@ export function LiveChangePanel({
         aria-expanded={advancedOpen}
         onClick={() => setAdvancedOpen((open) => !open)}
       >
-        {advancedOpen ? "고급 배치 변경 접기" : "고급 배치 변경 열기"}
+        {advancedOpen ? "기타 배치 설정 닫기" : "기타 배치 설정"}
       </button>
 
       {advancedOpen && (
         <>
       <div className="live-change-head">
-        <strong>고급 배치 변경</strong>
-        <span>예외 처리용입니다. 현장 Quick Action은 즉시 저장됩니다. 여기서만 미리보기 후 이대로 적용합니다.</span>
+        <strong>기타 배치 설정</strong>
+        <span>
+          일상 작업은 보드에서 팀 이름·캐디 이름을 누르세요. 당추는 빈 칸 또는
+          당추 추가를 사용하세요. 여기는 예외·진단용입니다.
+        </span>
       </div>
 
       <div className="live-change-grid">
@@ -1061,6 +1064,8 @@ export function BoardQuickSheet({
   const driving = isDrivingPlacement(row);
   const shift3 = String(row.reservation.shift) === "3부";
   const locked = isPlacementLocked(row);
+  const teamName = String(row.reservation.teamName || "").trim();
+  const teamTitle = teamName ? `${teamName} 팀` : "팀";
   function fire(change: LiveChangeInput) {
     onRequestChange(change);
     onClose();
@@ -1070,21 +1075,24 @@ export function BoardQuickSheet({
       <div
         className="qa-sheet"
         role="dialog"
-        aria-label={mode === "team" ? "예약팀 변경" : "캐디 변경"}
+        aria-label={mode === "team" ? teamTitle : formatCaddyLabel(row.caddy)}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="qa-sheet-head">
-          <strong>
-            {mode === "team"
-              ? `${row.reservation.teeTime} ${row.reservation.teamName || "팀"}`
-              : formatCaddyLabel(row.caddy)}
-          </strong>
+          <div className="qa-sheet-title">
+            <strong className="qa-title">
+              {mode === "team" ? teamTitle : formatCaddyLabel(row.caddy)}
+            </strong>
+            <span className="qa-sub">
+              {row.reservation.shift} {row.reservation.teeTime}
+            </span>
+          </div>
           <button type="button" className="btn tiny ghost" onClick={onClose}>
             닫기
           </button>
         </div>
         {mode === "team" ? (
-          <div className="qa-actions">
+          <div className="qa-actions qa-team-actions">
             <button
               type="button"
               className="btn"
@@ -1106,7 +1114,7 @@ export function BoardQuickSheet({
               className="btn"
               onClick={() => fire({ type: "TEAM_NOSHOW", reservationKey: key })}
             >
-              팀 노쇼
+              노쇼
             </button>
             <button
               type="button"
@@ -1119,14 +1127,14 @@ export function BoardQuickSheet({
                 })
               }
             >
-              리무진카트 {limo ? "OFF" : "ON"}
+              리무진 {limo ? "OFF" : "ON"}
             </button>
             {shift3 && !driving && (
               drivingCandidates.length === 0 ? (
                 <div className="qa-empty">등록된 드라이빙 캐디가 없습니다</div>
               ) : (
                 <label className="inline">
-                  드라이빙 캐디 지정
+                  드라이빙 지정
                   <select
                     defaultValue=""
                     onChange={(e) => {
@@ -1167,11 +1175,11 @@ export function BoardQuickSheet({
                 fire({ type: "SET_LOCK", reservationKey: key, locked: !locked })
               }
             >
-              {locked ? "🔒 LOCK → OFF" : "🔓 일반 → LOCK ON"}
+              {locked ? "LOCK OFF" : "LOCK ON"}
             </button>
           </div>
         ) : (
-          <div className="qa-actions">
+          <div className="qa-actions qa-caddy-actions">
             <button
               type="button"
               className="btn"
@@ -1195,7 +1203,7 @@ export function BoardQuickSheet({
                 })
               }
             >
-              캐디 결근
+              결근
             </button>
             <button
               type="button"
@@ -1206,15 +1214,6 @@ export function BoardQuickSheet({
               }}
             >
               {swapSelected ? "상대 캐디를 탭하세요" : "순번 바꿈"}
-            </button>
-            <button
-              type="button"
-              className="btn"
-              onClick={() =>
-                fire({ type: "SET_LOCK", reservationKey: key, locked: !locked })
-              }
-            >
-              {locked ? "🔒 LOCK → OFF" : "🔓 일반 → LOCK ON"}
             </button>
           </div>
         )}
