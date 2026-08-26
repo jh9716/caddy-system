@@ -1253,97 +1253,6 @@ export default function ManageAssignmentsOpsPage() {
             onChange={(e) => setFile(e.target.files?.[0] || null)}
           />
         </label>
-        <label className="ops-field">
-          <span>당번·마샬·조장 Excel (xlsx/xlsm)</span>
-          <input
-            type="file"
-            accept=".xlsx,.xlsm"
-            onChange={(e) => {
-              setDutyFile(e.target.files?.[0] || null);
-              setOpsDutyPreview(null);
-            }}
-          />
-          <div className="ops-duty-actions">
-            <button
-              type="button"
-              className="ghost"
-              onClick={previewOpsDutyFile}
-              disabled={loadingDutyPreview || !dutyFile}
-            >
-              {loadingDutyPreview ? "미리보기…" : "일정 미리보기"}
-            </button>
-            <button
-              type="button"
-              onClick={applyOpsDutyFile}
-              disabled={loadingDutyApply || !dutyFile}
-            >
-              {loadingDutyApply
-                ? "저장…"
-                : opsDutyPreview?.replaceRequired
-                  ? "이 날짜 일정 교체 저장"
-                  : "이 날짜 일정 저장"}
-            </button>
-          </div>
-          {opsDutyStored && (
-            <div className="ops-meta">
-              서버 저장 {opsDutyStored.count}명
-              {opsDutyStored.count > 0
-                ? " · 파일 없이 가용/자동배치/reflow에 반영"
-                : " · 아직 없음"}
-              {opsDutyStored.byRole && opsDutyStored.count > 0 ? (
-                <div>
-                  조출당번 {opsDutyStored.byRole.DUTY_AM ?? 0} / 후출당번{" "}
-                  {opsDutyStored.byRole.DUTY_PM ?? 0} / 조출마샬{" "}
-                  {opsDutyStored.byRole.MARSHAL_AM ?? 0} / 후출마샬{" "}
-                  {opsDutyStored.byRole.MARSHAL_PM ?? 0} / 조장{" "}
-                  {opsDutyStored.byRole.LEADER ?? 0}
-                </div>
-              ) : null}
-            </div>
-          )}
-          {opsDutyPreview && (
-            <div className="ops-daily">
-              <div className="ops-daily-title">당번 일정 미리보기</div>
-              <ul className="ops-daily-list">
-                <li>매칭 {opsDutyPreview.matchedCount}명</li>
-                <li>확인 필요 {opsDutyPreview.reviewCount}</li>
-                <li>기존 저장 {opsDutyPreview.existingCount}건</li>
-              </ul>
-              {opsDutyPreview.reviews.length > 0 && (
-                <div className="ops-daily-reviews">
-                  <ul>
-                    {opsDutyPreview.reviews.map((r, i) => (
-                      <li key={`${r.rawName}-${i}`}>
-                        <strong>{r.rawName}</strong> — {r.reason}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          )}
-        </label>
-        <div className="ops-courses" aria-label="코스 Open/Close">
-          <div className="ops-courses-label">
-            코스 운영 (기본 전부 ON · OFF 코스는 배치 제외)
-          </div>
-          <div className="ops-courses-toggles">
-            {COURSE_CODES.map((code) => (
-              <button
-                key={code}
-                type="button"
-                className={`course-toggle ${courseOpen[code] ? "on" : "off"}`}
-                onClick={() => toggleCourse(code)}
-                aria-pressed={courseOpen[code]}
-              >
-                <span className="course-name">{COURSE_LABELS[code]}</span>
-                <span className="course-state">
-                  {courseOpen[code] ? "ON" : "OFF"}
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
         <label className="ops-field ops-first-caddy">
           <span>오늘 1부 첫 캐디 (필수)</span>
           <select
@@ -1572,12 +1481,106 @@ export default function ManageAssignmentsOpsPage() {
             ) : null}
           </div>
         )}
-        <SpecialDutyPanel
-          key={date || "no-date"}
-          date={date}
-          excludedRows={availability?.excluded}
-          shift1Options={shift1Options}
-        />
+        <details className="ops-date-settings">
+          <summary>날짜 설정 (당번·마샬, 특수근무, 코스)</summary>
+          <label className="ops-field">
+            <span>당번·마샬·조장 Excel (xlsx/xlsm)</span>
+            <input
+              type="file"
+              accept=".xlsx,.xlsm"
+              onChange={(e) => {
+                setDutyFile(e.target.files?.[0] || null);
+                setOpsDutyPreview(null);
+              }}
+            />
+            <div className="ops-duty-actions">
+              <button
+                type="button"
+                className="ghost"
+                onClick={previewOpsDutyFile}
+                disabled={loadingDutyPreview || !dutyFile}
+              >
+                {loadingDutyPreview ? "미리보기…" : "일정 미리보기"}
+              </button>
+              <button
+                type="button"
+                onClick={applyOpsDutyFile}
+                disabled={loadingDutyApply || !dutyFile}
+              >
+                {loadingDutyApply
+                  ? "저장…"
+                  : opsDutyPreview?.replaceRequired
+                    ? "이 날짜 일정 교체 저장"
+                    : "이 날짜 일정 저장"}
+              </button>
+            </div>
+            {opsDutyStored && (
+              <div className="ops-meta">
+                서버 저장 {opsDutyStored.count}명
+                {opsDutyStored.count > 0
+                  ? " · 파일 없이 가용/자동배치/reflow에 반영"
+                  : " · 아직 없음"}
+                {opsDutyStored.byRole && opsDutyStored.count > 0 ? (
+                  <div>
+                    조출당번 {opsDutyStored.byRole.DUTY_AM ?? 0} / 후출당번{" "}
+                    {opsDutyStored.byRole.DUTY_PM ?? 0} / 조출마샬{" "}
+                    {opsDutyStored.byRole.MARSHAL_AM ?? 0} / 후출마샬{" "}
+                    {opsDutyStored.byRole.MARSHAL_PM ?? 0} / 조장{" "}
+                    {opsDutyStored.byRole.LEADER ?? 0}
+                  </div>
+                ) : null}
+              </div>
+            )}
+            {opsDutyPreview && (
+              <div className="ops-daily">
+                <div className="ops-daily-title">당번 일정 미리보기</div>
+                <ul className="ops-daily-list">
+                  <li>매칭 {opsDutyPreview.matchedCount}명</li>
+                  <li>확인 필요 {opsDutyPreview.reviewCount}</li>
+                  <li>기존 저장 {opsDutyPreview.existingCount}건</li>
+                </ul>
+                {opsDutyPreview.reviews.length > 0 && (
+                  <div className="ops-daily-reviews">
+                    <ul>
+                      {opsDutyPreview.reviews.map((r, i) => (
+                        <li key={`${r.rawName}-${i}`}>
+                          <strong>{r.rawName}</strong> — {r.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+          </label>
+          <div className="ops-courses" aria-label="코스 Open/Close">
+            <div className="ops-courses-label">
+              코스 운영 (기본 전부 ON · OFF 코스는 배치 제외)
+            </div>
+            <div className="ops-courses-toggles">
+              {COURSE_CODES.map((code) => (
+                <button
+                  key={code}
+                  type="button"
+                  className={`course-toggle ${courseOpen[code] ? "on" : "off"}`}
+                  onClick={() => toggleCourse(code)}
+                  aria-pressed={courseOpen[code]}
+                >
+                  <span className="course-name">{COURSE_LABELS[code]}</span>
+                  <span className="course-state">
+                    {courseOpen[code] ? "ON" : "OFF"}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <SpecialDutyPanel
+            key={date || "no-date"}
+            date={date}
+            excludedRows={availability?.excluded}
+            shift1Options={shift1Options}
+          />
+        </details>
       </section>
 
       {liveWarnings.length > 0 && (
@@ -2933,12 +2936,18 @@ const opsCss = `
   }
   .live-advanced-toggle {
     width: 100%;
-    min-height: 44px;
-    border: 1px solid #cbd5e1;
+    min-height: 40px;
+    border: 0;
     border-radius: 10px;
-    background: #f8fafc;
+    background: transparent;
+    color: #64748b;
+    font-size: 0.82rem;
+    font-weight: 600;
+    text-align: left;
+    padding: 4px 2px;
+  }
+  .live-change.is-open .live-advanced-toggle {
     color: #0f172a;
-    font-size: 0.9rem;
     font-weight: 700;
   }
   .live-change-head {
@@ -3044,7 +3053,7 @@ const opsCss = `
     max-width: 480px;
     background: #fff;
     border-radius: 16px 16px 0 0;
-    padding: 12px 14px 24px;
+    padding: 12px 14px calc(24px + env(safe-area-inset-bottom, 0px));
     max-height: 80vh;
     overflow: auto;
     box-shadow: 0 -8px 24px rgba(15, 23, 42, 0.18);
@@ -3052,16 +3061,44 @@ const opsCss = `
   .qa-sheet-head {
     display: flex;
     justify-content: space-between;
-    align-items: center;
+    align-items: flex-start;
     gap: 8px;
     margin-bottom: 10px;
+  }
+  .qa-sheet-title {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+  .qa-title {
+    display: block;
+    font-size: 1.12rem;
+    font-weight: 800;
+    line-height: 1.25;
+  }
+  .qa-sub {
+    display: block;
+    font-size: 0.82rem;
+    font-weight: 500;
+    color: #64748b;
   }
   .qa-actions {
     display: grid;
     gap: 8px;
   }
   .qa-actions .btn {
-    min-height: 44px;
+    min-height: 48px;
+    width: 100%;
+    justify-content: flex-start;
+    font-size: 1rem;
+    font-weight: 700;
+  }
+  .qa-actions.qa-team-actions .inline,
+  .qa-actions.qa-caddy-actions .inline {
+    display: grid;
+    gap: 6px;
+    font-size: 0.9rem;
+    font-weight: 700;
   }
   .qa-empty {
     padding: 10px 8px;
@@ -3069,5 +3106,30 @@ const opsCss = `
     font-size: 0.85rem;
     background: #f8fafc;
     border-radius: 8px;
+  }
+  .ops-date-settings {
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 8px 12px 12px;
+    background: #f8fafc;
+    display: grid;
+    gap: 12px;
+  }
+  .ops-date-settings > summary {
+    cursor: pointer;
+    list-style: none;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    font-size: 0.92rem;
+    font-weight: 700;
+    color: #334155;
+  }
+  .ops-date-settings > summary::-webkit-details-marker {
+    display: none;
+  }
+  .ops-date-settings:not([open]) {
+    padding-bottom: 8px;
+    gap: 0;
   }
 `;
