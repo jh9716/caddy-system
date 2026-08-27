@@ -167,6 +167,11 @@ section("특수 설정 변경 안내/재배치 진입");
     /setSpecialSettingsStale\(false\)/.test(page.split("queueDraftSave(next, true)")[1] || page),
     "재배치 성공 후 안내 해제"
   );
+  assert(
+    /availability\?\.available\?\.all\?\.length/.test(page) &&
+      /draft\?\.caddyPool/.test(page.split("houseStartCandidates")[1] || ""),
+    "Draft가 있으면 가용 로드 전에도 1부 첫 캐디를 고를 수 있음"
+  );
 }
 
 console.log(`\nOK ${passed}/${passed + failed}`);

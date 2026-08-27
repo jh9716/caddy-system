@@ -766,9 +766,12 @@ export default function ManageAssignmentsOpsPage() {
     [courseOpen]
   );
 
-  /** 오늘 1부 첫 캐디 후보: 당일 일반 가용 1~8조 HOUSE만 (9~12조·special/제외 제외) */
+  /** 오늘 1부 첫 캐디 후보: 당일 일반 가용 1~8조 HOUSE만 (9~12조·special/제외 제외).
+   * Draft가 있으면 가용 로드 전에도 작업본 풀에서 고를 수 있다 (관리 도구 재배치). */
   const houseStartCandidates = useMemo(() => {
-    const rows = availability?.available?.all || [];
+    const rows = availability?.available?.all?.length
+      ? availability.available.all
+      : draft?.caddyPool || [];
     return rows
       .filter((r) => isHouseStartCandidate(r))
       .slice()
@@ -778,7 +781,7 @@ export default function ManageAssignmentsOpsPage() {
           (Number(a.teamOrder) || 0) - (Number(b.teamOrder) || 0) ||
           a.id - b.id
       );
-  }, [availability]);
+  }, [availability, draft]);
 
   /** 오늘 3부 첫 캐디 후보: 9~12조 (가용+특수+당일 제외 ACTIVE). RETIRED/LEAVE 제외. 주간 시작조 회전순 */
   const thirdStartCandidates = useMemo(() => {
@@ -1087,23 +1090,27 @@ export default function ManageAssignmentsOpsPage() {
     try {
       let caddyPool = pool;
       if (!availability) {
-        const availForm = new FormData();
-        availForm.append("date", date);
-        if (dutyFile) availForm.append("dutyFile", dutyFile);
-        const availRes = await fetch("/api/availability", {
-          method: "POST",
-          body: availForm,
-          credentials: "include",
-        });
-        const availData = await availRes.json();
-        if (!availRes.ok) {
-          setError(availData.error || "가용 불러오기 실패");
-          return;
+        if (draftRef.current?.caddyPool?.length) {
+          caddyPool = draftRef.current.caddyPool;
+        } else {
+          const availForm = new FormData();
+          availForm.append("date", date);
+          if (dutyFile) availForm.append("dutyFile", dutyFile);
+          const availRes = await fetch("/api/availability", {
+            method: "POST",
+            body: availForm,
+            credentials: "include",
+          });
+          const availData = await availRes.json();
+          if (!availRes.ok) {
+            setError(availData.error || "가용 불러오기 실패");
+            return;
+          }
+          setAvailability(availData as AvailabilityResult & { dailySummary?: DailyAvailabilitySummary });
+          caddyPool = regularCaddyPoolFromAvailabilityRows(
+            availData.available?.all || []
+          );
         }
-        setAvailability(availData as AvailabilityResult & { dailySummary?: DailyAvailabilitySummary });
-        caddyPool = regularCaddyPoolFromAvailabilityRows(
-          availData.available?.all || []
-        );
       }
 
       let res: Response;
@@ -1794,14 +1801,14 @@ export default function ManageAssignmentsOpsPage() {
               const v = e.target.value;
               setHouseStartCaddyId(v ? Number(v) : "");
             }}
-            disabled={!availability || houseStartCandidates.length === 0}
+            disabled={houseStartCandidates.length === 0}
           >
             <option value="">
-              {!availability
-                ? "먼저 가용 캐디를 불러오세요"
-                : houseStartCandidates.length === 0
-                  ? "선택 가능한 HOUSE 가용 캐디 없음"
-                  : "HOUSE 가용 캐디 선택…"}
+              {houseStartCandidates.length === 0
+                ? !availability
+                  ? "먼저 가용 캐디를 불러오세요"
+                  : "선택 가능한 HOUSE 가용 캐디 없음"
+                : "HOUSE 가용 캐디 선택…"}
             </option>
             {houseStartCandidates.map((c) => (
               <option key={c.id} value={c.id}>
