@@ -76,7 +76,9 @@ export function createDraftFromAutoResult(
     caddyPool && caddyPool.length > 0
       ? caddyPool
       : dedupePool([
-          ...result.assignments.map((a) => a.caddy),
+          ...result.assignments
+            .filter((a) => a.kind !== "specialSupport")
+            .map((a) => a.caddy),
           ...result.unusedCaddies,
           ...result.special,
           ...result.specialUnassigned.map((u) => u.caddy),
@@ -689,6 +691,7 @@ export function autoResultFromDraft(
     specialPlacement: base?.specialPlacement
       ? { ...base.specialPlacement }
       : undefined,
+    specialSupportByShift: base?.specialSupportByShift,
     openCourses: [...(draft.openCourses || [])],
     sparesByShift: (draft.sparesByShift || []).map((s) => ({
       shift: s.shift,

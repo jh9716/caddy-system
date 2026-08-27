@@ -190,6 +190,7 @@ export const publishedBoardCss = `
   }
   .bc-badge.two { color: #334155; background: #e2e8f0; }
   .bc-badge.call { color: #7c5a1e; background: #f4ead6; }
+  .bc-badge.support { color: #1e3a8a; background: #dbeafe; }
   .bc-badge.limo {
     color: #9a3412;
     background: #fb923c;

@@ -27,6 +27,7 @@ import {
 import { isThirdWeeklyTeam } from "@/lib/thirdWeeklyRotation";
 import { loadEffectiveThirdStartTeam } from "@/lib/thirdWeeklyStartService";
 import { regularPoolExcludingStoredOpsDuty } from "@/lib/opsDutyLivePool";
+import { loadSpecialSupportQueuesForDate } from "@/lib/dailySpecialSupportService";
 
 function parseThirdStartTeam(raw: unknown): string | null {
   const value = String(raw ?? "").trim();
@@ -221,6 +222,7 @@ export async function POST(req: NextRequest) {
         ...availability.special,
         ...availability.excluded,
       ]);
+      const specialSupportByShift = await loadSpecialSupportQueuesForDate(date);
 
       const result = computeAutoAssignmentsV1({
         date,
@@ -241,6 +243,7 @@ export async function POST(req: NextRequest) {
         thirdStartTeam,
         thirdStartCaddyId,
         caddyDirectory,
+        specialSupportByShift,
       });
 
       return NextResponse.json({
@@ -421,6 +424,7 @@ export async function POST(req: NextRequest) {
       ),
       thirdStartCaddyId: parseOptionalThirdStartCaddyId(body.thirdStartCaddyId),
       caddyDirectory: jsonCaddyDirectory,
+      specialSupportByShift: await loadSpecialSupportQueuesForDate(date),
     });
 
     return NextResponse.json({

@@ -13,6 +13,7 @@ import {
 } from "@/lib/autoAssignEngine";
 import { regularPoolExcludingStoredOpsDuty } from "@/lib/opsDutyLivePool";
 import { resolveDailySpecialPlacement } from "@/lib/dailySpecialDutyService";
+import { loadSpecialSupportQueuesForDate } from "@/lib/dailySpecialSupportService";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -56,12 +57,16 @@ export async function POST(req: NextRequest) {
       protectedTailCount: placement.protectedTailCount,
     };
     previous.specialPlacement = specialPlacement;
+    const specialSupportByShift = await loadSpecialSupportQueuesForDate(
+      previous.date
+    );
 
     if (change && change.type) {
       const result = previewLiveAssignmentChange({
         previous,
         regularCaddyPool: pool,
         change,
+        specialSupportByShift,
       });
       return NextResponse.json({ mode: "reflow-preview", persisted: false, ...result });
     }
@@ -80,8 +85,14 @@ export async function POST(req: NextRequest) {
           previous,
           regularCaddyPool: pool,
           events,
+          specialSupportByShift,
         })
-      : reflowRegularAssignments({ previous, regularCaddyPool: pool, events });
+      : reflowRegularAssignments({
+          previous,
+          regularCaddyPool: pool,
+          events,
+          specialSupportByShift,
+        });
 
     return NextResponse.json({ mode: "reflow", persisted: false, ...result });
   } catch (e: unknown) {

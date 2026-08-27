@@ -584,6 +584,13 @@ section("특수근무 검색·3부 첫 캐디 후보는 RETIRED/LEAVE 제외");
     caddiesSrc.includes("employment=all"),
     "캐디관리 employment=all은 유지"
   );
+  assert(/DAILY_SPECIAL_KIND_UI/.test(specialSrc), "운영 등록 탭은 UI kinds");
+  assert(
+    /DAILY_SPECIAL_KIND_UI\.map/.test(specialSrc) &&
+      !/DAILY_SPECIAL_KINDS\.map/.test(specialSrc),
+    "찾근 탭은 등록 modal에서 제거"
+  );
+  assert(/레거시 찾근/.test(specialSrc), "기존 CHAGEUN row는 레거시로만 표시");
 }
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);

@@ -53,6 +53,7 @@ type Props = {
   onResetDraft?: () => void;
   /** 관리 도구 · 현재 조건으로 순번 재계산 (기존 자동배치 실행). */
   onRecalcOrder?: () => void;
+  specialSupportByShift?: Record<ShiftPart, AutoAssignCaddy[]>;
 };
 
 export function LiveChangePanel({
@@ -66,6 +67,7 @@ export function LiveChangePanel({
   defaultShift = "1부",
   onResetDraft,
   onRecalcOrder,
+  specialSupportByShift,
 }: Props) {
   const [changeType, setChangeType] = useState<LiveChangeType>("CANCEL_RESERVATION");
   const [reservationKeyValue, setReservationKeyValue] = useState("");
@@ -159,6 +161,7 @@ export function LiveChangePanel({
         draft,
         base: previous,
         change: preset,
+        specialSupportByShift,
       });
       setPreview(next);
     } else {
@@ -255,6 +258,7 @@ export function LiveChangePanel({
           reservationKeyA,
           reservationKeyB,
         },
+        specialSupportByShift,
       })
     );
   }
@@ -274,6 +278,7 @@ export function LiveChangePanel({
       draft,
       base: previous,
       change,
+      specialSupportByShift,
     });
     setPreview(next);
   }

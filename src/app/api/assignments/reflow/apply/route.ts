@@ -11,6 +11,7 @@ import type {
   ReservationChangeEvent,
 } from "@/lib/autoAssignEngine";
 import { regularPoolExcludingStoredOpsDuty } from "@/lib/opsDutyLivePool";
+import { loadSpecialSupportQueuesForDate } from "@/lib/dailySpecialSupportService";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -54,9 +55,12 @@ export async function POST(req: NextRequest) {
       previous.date,
       regularCaddyPool
     );
+    const specialSupportByShift = await loadSpecialSupportQueuesForDate(
+      previous.date
+    );
 
     const result = await applyLiveAssignmentChange(
-      { previous, regularCaddyPool: pool, events, change },
+      { previous, regularCaddyPool: pool, events, change, specialSupportByShift },
       { ip, updateOpsIfPresent: true }
     );
 
