@@ -438,11 +438,10 @@ section("평일 WEEKEND 3부 완전 제외 / 토·일·공휴일 우선");
         regularThirdWeekendCount(modeB) === 0,
       `${date} ${label} Mode B: WEEKEND final assignment 0`
     );
+    const modeBThird = thirdShiftNames(modeB);
     assert(
-      !modeB.assignments.some(
-        (a) => a.shift === "3부" && a.caddy.caddyType === "HOUSE"
-      ),
-      `${date} ${label} Mode B: HOUSE 선행 없음`
+      modeBThird[0] === "D10" && modeBThird[1] === "N11",
+      `${date} ${label} Mode B: 2부 spare 없이 regular THIRD부터 (WEEKEND 제외)`
     );
   }
 
@@ -1305,9 +1304,10 @@ section("UI: 3부 첫 캐디 선택 optional · 날짜 변경 시 초기화");
     pageSrc.includes("선택 안 함 (주간 시작조 첫 가용)"),
     "미선택 시 자동배치 가능 안내"
   );
+  const runLabel = pageSrc.lastIndexOf("자동배치 실행");
   const runBtn = pageSrc.slice(
-    pageSrc.indexOf('className="btn primary"'),
-    pageSrc.indexOf("자동배치 실행")
+    pageSrc.lastIndexOf('className="btn primary"', runLabel),
+    runLabel
   );
   assert(
     runBtn.includes("houseStartCaddyId") && !runBtn.includes("thirdStartCaddyId"),
