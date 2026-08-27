@@ -510,6 +510,126 @@ section("Draft round-trip / Published snapshot");
   assert(marks.specialSupport === true && marks.chageun === false, "관리 보드 지원 표시");
 }
 
+section("OFF/DUTY/MARSHAL 지원 overflow + 타부 금지 + 충분 시 대기");
+{
+  const date = "2026-08-26";
+  const off = {
+    ...supportCaddy(4, "박서진2"),
+    extraFlags: ["OFF"],
+    employmentStatus: "ACTIVE" as const,
+  };
+  const duty = {
+    ...supportCaddy(190, "강보미"),
+    extraFlags: ["DUTY"],
+    employmentStatus: "ACTIVE" as const,
+  };
+  const marshal = {
+    ...supportCaddy(91, "마샬3", "9조"),
+    extraFlags: ["MARSHAL"],
+    employmentStatus: "ACTIVE" as const,
+  };
+  const overflow = computeAutoAssignmentsV1({
+    date,
+    available: [house(1, 1), house(2, 2), third(11, 1)],
+    reservations: [
+      ...shiftRes(date, "1부", 3),
+      ...shiftRes(date, "2부", 3),
+      ...shiftRes(date, "3부", 4),
+    ],
+    specialSupportByShift: {
+      "1부": [off],
+      "2부": [duty],
+      "3부": [marshal],
+    },
+  });
+  const supportOf = (shift: "1부" | "2부" | "3부", id: number) =>
+    overflow.assignments.some(
+      (a) => a.shift === shift && a.kind === "specialSupport" && a.caddy.id === id
+    );
+  assert(supportOf("1부", 4), "OFF ACTIVE + 1부 support → 1부 overflow");
+  assert(supportOf("2부", 190), "DUTY ACTIVE + 2부 support → 2부 overflow");
+  assert(supportOf("3부", 91), "MARSHAL ACTIVE + 3부 support → 3부 overflow");
+  assert(
+    overflow.assignments.every((a) => a.caddy.id !== 4 || a.shift === "1부"),
+    "1부 지원은 다른 부에 배치되지 않음"
+  );
+  assert(
+    overflow.assignments.every((a) => a.caddy.id !== 190 || a.shift === "2부"),
+    "2부 지원은 다른 부에 배치되지 않음"
+  );
+  assert(
+    overflow.assignments.every((a) => a.caddy.id !== 91 || a.shift === "3부"),
+    "3부 지원은 다른 부에 배치되지 않음"
+  );
+
+  const enough = computeAutoAssignmentsV1({
+    date,
+    available: [
+      house(1, 1),
+      house(2, 2),
+      house(3, 3),
+      house(4, 4),
+      third(11, 1),
+      third(12, 2),
+      third(13, 3),
+    ],
+    reservations: [
+      ...shiftRes(date, "1부", 2),
+      ...shiftRes(date, "2부", 2),
+      ...shiftRes(date, "3부", 2),
+    ],
+    specialSupportByShift: {
+      "1부": [off],
+      "2부": [duty],
+      "3부": [marshal],
+    },
+  });
+  assert(
+    !enough.assignments.some((a) => a.kind === "specialSupport"),
+    "정상 후보가 충분하면 support는 대기하고 사용되지 않음"
+  );
+}
+
+section("SICK / RETIRED / LEAVE는 support로도 배치되지 않음");
+{
+  const date = "2026-08-26";
+  const sick = {
+    ...supportCaddy(80, "병가"),
+    employmentStatus: "ACTIVE" as const,
+    excludedReasons: ["병가"],
+  };
+  const retired = {
+    ...supportCaddy(81, "퇴사"),
+    employmentStatus: "RETIRED" as const,
+  };
+  const leave = {
+    ...supportCaddy(82, "휴직"),
+    employmentStatus: "LEAVE" as const,
+  };
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: [house(1, 1)],
+    reservations: [
+      ...shiftRes(date, "1부", 3),
+      ...shiftRes(date, "2부", 2),
+      ...shiftRes(date, "3부", 2),
+    ],
+    specialSupportByShift: {
+      "1부": [sick],
+      "2부": [retired],
+      "3부": [leave],
+    },
+  });
+  assert(
+    !result.assignments.some((a) => [80, 81, 82].includes(a.caddy.id)),
+    "SICK/RETIRED/LEAVE는 지원으로도 배치되지 않음"
+  );
+  assert(
+    result.assignments.filter((a) => a.kind === "specialSupport").length === 0,
+    "hard exclusion 지원 배정 0"
+  );
+}
+
 section("source / UI / migration / 권한");
 {
   const sql = readSrc(
@@ -545,10 +665,21 @@ section("source / UI / migration / 권한");
   assert(/ss-kinds/.test(supportUi), "mobile 3부 탭");
   assert(/SpecialSupportPanel/.test(page), "날짜 설정에 특수지원");
   assert(
+    !/\/api\/daily-special-supports/.test(page),
+    "assignments page는 특수지원 GET을 중복하지 않음 (패널 1회)"
+  );
+  assert(/reservationsFromAssignmentDraft/.test(page), "엑셀 없이 Draft 예약으로 재실행");
+  assert(/onLoaded=\{onSpecialSupportLoaded\}/.test(page), "패널 onLoaded로 큐 전달");
+  assert(
     /isThirdBandTeam, THIRD_BAND_TEAMS/.test(page),
     "THIRD_BAND_TEAMS import 유지"
   );
   assert(/requireAdmin/.test(route), "API requireAdmin");
+  assert(/includeCandidates/.test(route), "후보 목록은 includeCandidates일 때만");
+  assert(
+    /qs\.set\("includeCandidates", "1"\)/.test(supportUi),
+    "모달 열 때만 후보 재조회"
+  );
   assert(/kind: "specialSupport"/.test(engine), "assignment kind");
   assert(/pickNextSpecialSupport/.test(engine), "보충 큐 사용");
   assert(/houseAssigned \+= 1/.test(engine), "정상 houseAssigned 유지");

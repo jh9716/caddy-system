@@ -785,6 +785,40 @@ export function rotateHouseQueueFromStart(
   return [...sortedHouse.slice(idx), ...sortedHouse.slice(0, idx)];
 }
 
+/**
+ * 오늘 1부 첫 캐디가 특수근무(1막/1·2/1·3/54홀/고정)로 일반 HOUSE에서
+ * 빠진 경우, 원본 HOUSE를 회전한 뒤 특수 제외 id만 빼고 일반 순번을 이어간다.
+ * 처음부터 HOUSE 가용 풀에 없던 시작점은 기존처럼 HouseStartCaddyError.
+ */
+export function resolveRegularHouseQueue(input: {
+  originalHouse: AutoAssignCaddy[];
+  remainingHouse: AutoAssignCaddy[];
+  specialExcludeIds: Iterable<number>;
+  houseStartCaddyId?: number | null;
+}): { house: AutoAssignCaddy[]; houseStartCaddyId: number | null } {
+  const remaining = [...input.remainingHouse];
+  const startRaw = input.houseStartCaddyId;
+  if (startRaw == null || startRaw === undefined) {
+    return { house: remaining, houseStartCaddyId: null };
+  }
+  const startId = Number(startRaw);
+  const original = [...input.originalHouse];
+  const inOriginal = original.some((caddy) => caddy.id === startId);
+  if (!inOriginal) {
+    rotateHouseQueueFromStart(remaining, startId);
+    return { house: remaining, houseStartCaddyId: startId };
+  }
+  const exclude = new Set([...input.specialExcludeIds].map(Number));
+  if (exclude.has(startId)) {
+    const rotated = rotateHouseQueueFromStart(original, startId);
+    return {
+      house: rotated.filter((caddy) => !exclude.has(caddy.id)),
+      houseStartCaddyId: null,
+    };
+  }
+  return { house: remaining, houseStartCaddyId: startId };
+}
+
 function toSpareInfo(caddy: AutoAssignCaddy | null | undefined): SpareCaddyInfo | null {
   if (!caddy) return null;
   return {
@@ -2927,10 +2961,18 @@ export function computeAutoAssignmentsV1(input: {
     .filter((c) => !specialExclude.has(c.id))
     .sort(compareCaddyOrder);
 
-  const available = dedupeCaddies([...(input.available || [])])
-    .filter((c) => !specialExclude.has(c.id))
-    .sort(compareCaddyOrder);
+  const availableAll = dedupeCaddies([...(input.available || [])]).sort(
+    compareCaddyOrder
+  );
+  const originalHouse = splitCaddyPools(availableAll).house;
+  const available = availableAll.filter((c) => !specialExclude.has(c.id));
   const pools = splitCaddyPools(available);
+  const regularHouse = resolveRegularHouseQueue({
+    originalHouse,
+    remainingHouse: pools.house,
+    specialExcludeIds: specialExclude,
+    houseStartCaddyId: input.houseStartCaddyId,
+  });
   const thirdStartTeam = resolveThirdStartTeam(input.thirdStartTeam, date);
   const thirdStartTeamAutomatic = automaticThirdStartTeam(date);
 
@@ -2964,14 +3006,15 @@ export function computeAutoAssignmentsV1(input: {
   );
 
   // 4) 일반 순번 — 1·2부 후 3부: 2부 스페어 → 1·3 → WEEKEND → regular
-  // houseStartCaddyId는 여기(특수 제외 후 HOUSE 풀)에서만 적용·검증
+  // houseStartCaddyId는 일반 HOUSE에서 적용. 시작점이 특수근무로 빠지면
+  // 원본 HOUSE 회전 후 특수 id만 제외하고 이어간다 (전체 abort 없음).
   const regular = assignRegularSequence({
     date,
-    house: pools.house,
+    house: regularHouse.house,
     third: pools.third,
     reservations: remainingEligible,
     reasonCode: REASON.REGULAR_SEQUENCE,
-    houseStartCaddyId: input.houseStartCaddyId,
+    houseStartCaddyId: regularHouse.houseStartCaddyId,
     thirdStartTeam,
     thirdStartCaddyId: input.thirdStartCaddyId,
     thirdRoster: caddyDirectory,

@@ -557,6 +557,75 @@ section("1막 1부 anchor");
   assert(s1[1].reservation.course === "OCEAN", "연속 다음 자리");
 }
 
+section("1·2부 2명이 오늘 1부 첫 캐디여도 배치되고 전체가 abort되지 않음");
+{
+  const date = "2026-08-27";
+  const start: AutoAssignCaddy = {
+    id: 167,
+    name: "신정훈",
+    team: "7조",
+    teamOrder: 1,
+    caddyType: "HOUSE",
+    employmentStatus: "ACTIVE",
+  };
+  const partner: AutoAssignCaddy = {
+    id: 114,
+    name: "노준영",
+    team: "7조",
+    teamOrder: 2,
+    caddyType: "HOUSE",
+    employmentStatus: "ACTIVE",
+  };
+  const house = [start, partner, ...housePool(8, 201)];
+  let threw: unknown = null;
+  let result: ReturnType<typeof computeAutoAssignmentsV1> | null = null;
+  try {
+    result = computeAutoAssignmentsV1({
+      date,
+      available: house,
+      oneTwoCandidates: [
+        { ...start, inputOrder: 1 },
+        { ...partner, inputOrder: 2 },
+      ],
+      houseStartCaddyId: 167,
+      reservations: [
+        ...board(date, "1부", 10, "06:00"),
+        ...board(date, "2부", 12, "12:10", 20),
+      ],
+    });
+  } catch (e) {
+    threw = e;
+  }
+  assert(threw == null, "1부 첫 캐디가 1·2부여도 HouseStartCaddyError 없음");
+  const oneTwoIds = new Set(
+    (result?.oneTwoAssignments || []).map((row) => row.caddy.id)
+  );
+  assert(oneTwoIds.has(167) && oneTwoIds.has(114), "두 명 모두 oneTwo 배치");
+  assert(
+    (result?.oneTwoAssignments || []).filter((row) => row.shift === "1부")
+      .length === 2,
+    "1부 1·2부 2자리"
+  );
+  assert(
+    (result?.oneTwoAssignments || []).filter((row) => row.shift === "2부")
+      .length === 2,
+    "2부 1·2부 2자리"
+  );
+  assert(
+    !(result?.regularAssignments || []).some(
+      (row) => row.caddy.id === 167 || row.caddy.id === 114
+    ),
+    "1·2부 캐디가 일반 순번에 중복되지 않음"
+  );
+  const firstRegular = (result?.regularAssignments || []).find(
+    (row) => row.shift === "1부"
+  );
+  assert(
+    firstRegular?.caddy.id === 201,
+    "특수근무 제외 후 일반 1부는 다음 HOUSE부터"
+  );
+}
+
 section("특수근무 검색·3부 첫 캐디 후보는 RETIRED/LEAVE 제외");
 {
   const specialSrc = readFileSync(
@@ -591,6 +660,22 @@ section("특수근무 검색·3부 첫 캐디 후보는 RETIRED/LEAVE 제외");
     "찾근 탭은 등록 modal에서 제거"
   );
   assert(/레거시 찾근/.test(specialSrc), "기존 CHAGEUN row는 레거시로만 표시");
+  const engineSrc = readFileSync(
+    join(process.cwd(), "src/lib/autoAssignEngine.ts"),
+    "utf8"
+  );
+  assert(
+    /export function resolveRegularHouseQueue/.test(engineSrc),
+    "1부 첫 캐디가 특수근무여도 원본 HOUSE 회전 후 이어감"
+  );
+  assert(
+    /SPECIAL_DUTY_CHANGED_MESSAGE/.test(specialSrc),
+    "특수근무 저장 후 재실행 안내"
+  );
+  assert(
+    /reservationsFromAssignmentDraft/.test(pageSrc),
+    "배치 다시 맞추기는 Draft 예약 JSON preview 가능"
+  );
 }
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);

@@ -33,7 +33,12 @@ export async function GET(req: NextRequest) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return NextResponse.json({ error: "date=YYYY-MM-DD 필요" }, { status: 400 });
     }
-    return NextResponse.json(await buildDailySpecialSupportPayload(date));
+    const includeCandidates =
+      req.nextUrl.searchParams.get("includeCandidates") === "1" ||
+      req.nextUrl.searchParams.get("includeCandidates") === "true";
+    return NextResponse.json(
+      await buildDailySpecialSupportPayload(date, { includeCandidates })
+    );
   } catch (e) {
     return errorResponse(e);
   }

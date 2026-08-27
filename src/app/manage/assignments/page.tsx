@@ -12,6 +12,7 @@ import {
   markDraftApplied,
   replaceAssignmentCaddy,
   reservationIdentity,
+  reservationsFromAssignmentDraft,
   unassignReservation,
   unusedCaddies,
   type AssignmentDraft,
@@ -58,6 +59,7 @@ type RunResponse = AutoAssignResultV1 & {
   error?: string;
   filename?: string;
   availabilityCounts?: { available: number; special: number; excluded: number };
+  specialDutySkipped?: Array<{ caddyId?: number; name?: string }>;
 };
 
 const SHIFTS: ShiftPart[] = ["1부", "2부", "3부"];
@@ -543,46 +545,12 @@ export default function ManageAssignmentsOpsPage() {
     }
   }, [clearDraftBoard]);
 
-  useEffect(() => {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      setSpecialSupportByShift(emptySpecialSupportByShift());
-      return;
-    }
-    let cancelled = false;
-    void fetch(
-      `/api/daily-special-supports?date=${encodeURIComponent(date)}`,
-      { credentials: "include" }
-    )
-      .then((res) => res.json())
-      .then((data) => {
-        if (cancelled || !data?.byShift) return;
-        const next = emptySpecialSupportByShift();
-        for (const part of ["1부", "2부", "3부"] as const) {
-          next[part] = (data.byShift[part] || [])
-            .filter((row: { blocked?: boolean }) => !row.blocked)
-            .map(
-              (row: {
-                caddyId: number;
-                name?: string;
-                team?: string;
-                teamOrder?: number;
-              }) => ({
-                id: row.caddyId,
-                name: row.name || "",
-                team: row.team || "",
-                teamOrder: row.teamOrder || 0,
-              })
-            );
-        }
-        setSpecialSupportByShift(next);
-      })
-      .catch(() => {
-        if (!cancelled) setSpecialSupportByShift(emptySpecialSupportByShift());
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [date]);
+  const onSpecialSupportLoaded = useCallback(
+    (byShift: ReturnType<typeof emptySpecialSupportByShift>) => {
+      setSpecialSupportByShift(byShift);
+    },
+    []
+  );
 
   useEffect(() => {
     if (!file || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
@@ -1090,7 +1058,10 @@ export default function ManageAssignmentsOpsPage() {
       setError("날짜를 선택하세요.");
       return;
     }
-    if (!file) {
+    const draftReservations = draftRef.current
+      ? reservationsFromAssignmentDraft(draftRef.current)
+      : [];
+    if (!file && draftReservations.length === 0) {
       setError("예약 Excel 파일을 선택하세요.");
       return;
     }
@@ -1132,23 +1103,43 @@ export default function ManageAssignmentsOpsPage() {
         );
       }
 
-      const form = new FormData();
-      form.append("date", date);
-      form.append("file", file);
-      if (dutyFile) form.append("dutyFile", dutyFile);
-      form.append("openCourses", JSON.stringify(openCourseList));
-      form.append("houseStartCaddyId", String(houseStartCaddyId));
-      if (thirdWeekly?.startTeam) {
-        form.append("thirdStartTeam", thirdWeekly.startTeam);
+      let res: Response;
+      if (file) {
+        const form = new FormData();
+        form.append("date", date);
+        form.append("file", file);
+        if (dutyFile) form.append("dutyFile", dutyFile);
+        form.append("openCourses", JSON.stringify(openCourseList));
+        form.append("houseStartCaddyId", String(houseStartCaddyId));
+        if (thirdWeekly?.startTeam) {
+          form.append("thirdStartTeam", thirdWeekly.startTeam);
+        }
+        if (thirdStartCaddyId !== "" && Number(thirdStartCaddyId)) {
+          form.append("thirdStartCaddyId", String(thirdStartCaddyId));
+        }
+        res = await fetch("/api/assignments/preview", {
+          method: "POST",
+          body: form,
+          credentials: "include",
+        });
+      } else {
+        res = await fetch("/api/assignments/preview", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            date,
+            reservations: draftReservations,
+            openCourses: openCourseList,
+            houseStartCaddyId,
+            thirdStartTeam: thirdWeekly?.startTeam || undefined,
+            thirdStartCaddyId:
+              thirdStartCaddyId !== "" && Number(thirdStartCaddyId)
+                ? Number(thirdStartCaddyId)
+                : undefined,
+          }),
+        });
       }
-      if (thirdStartCaddyId !== "" && Number(thirdStartCaddyId)) {
-        form.append("thirdStartCaddyId", String(thirdStartCaddyId));
-      }
-      const res = await fetch("/api/assignments/preview", {
-        method: "POST",
-        body: form,
-        credentials: "include",
-      });
       const data = (await res.json()) as RunResponse;
       if (!res.ok) {
         setAutoResult(null);
@@ -1169,11 +1160,19 @@ export default function ManageAssignmentsOpsPage() {
       setShiftTab("1부");
       queueDraftSave(next, true);
       const closedN = data.closedCourseReservations?.length ?? 0;
-      showToast(
-        closedN > 0
-          ? `자동배치 완료 · DRAFT (닫힌 코스 ${closedN}건 제외)`
-          : "자동배치 완료 · DRAFT"
-      );
+      const skippedDuty = (data.specialDutySkipped || []).length;
+      const unassignedSpecial = (data.specialUnassigned || []).length;
+      if (skippedDuty + unassignedSpecial > 0) {
+        showToast(
+          `자동배치 완료 · 특수근무 미배치 ${skippedDuty + unassignedSpecial}명`
+        );
+      } else {
+        showToast(
+          closedN > 0
+            ? `자동배치 완료 · DRAFT (닫힌 코스 ${closedN}건 제외)`
+            : "자동배치 완료 · DRAFT"
+        );
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "자동배치 요청 실패");
     } finally {
@@ -2087,34 +2086,15 @@ export default function ManageAssignmentsOpsPage() {
             date={date}
             excludedRows={availability?.excluded}
             shift1Options={shift1Options}
+            hasDraft={Boolean(draft || serverDraftVersionRef.current > 0)}
           />
           <SpecialSupportPanel
             date={date}
             excludedRows={availability?.excluded}
             hasDraft={Boolean(draft || serverDraftVersionRef.current > 0)}
+            onLoaded={onSpecialSupportLoaded}
             onChanged={() => {
               showToast(SPECIAL_SUPPORT_CHANGED_MESSAGE);
-              void fetch(
-                `/api/daily-special-supports?date=${encodeURIComponent(date)}`,
-                { credentials: "include" }
-              )
-                .then((res) => res.json())
-                .then((data) => {
-                  if (!data?.byShift) return;
-                  const next = emptySpecialSupportByShift();
-                  for (const part of ["1부", "2부", "3부"] as const) {
-                    next[part] = (data.byShift[part] || [])
-                      .filter((row: { blocked?: boolean }) => !row.blocked)
-                      .map((row: { caddyId: number; name?: string; team?: string; teamOrder?: number }) => ({
-                        id: row.caddyId,
-                        name: row.name || "",
-                        team: row.team || "",
-                        teamOrder: row.teamOrder || 0,
-                      }));
-                  }
-                  setSpecialSupportByShift(next);
-                })
-                .catch(() => {});
             }}
           />
         </details>

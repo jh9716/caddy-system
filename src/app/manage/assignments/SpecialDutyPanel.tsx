@@ -13,6 +13,7 @@ import {
   moveItemIndex,
   renumberSortOrders,
   unavailableReasonsFromRows,
+  SPECIAL_DUTY_CHANGED_MESSAGE,
   type DailySpecialKind,
   type SpecialDutyAnchors,
   type SpecialDutyConflict,
@@ -84,10 +85,12 @@ export function SpecialDutyPanel({
   date,
   excludedRows,
   shift1Options = [],
+  hasDraft,
 }: {
   date: string;
   excludedRows?: Array<{ id: number; excludedReasons?: string[] | null }>;
   shift1Options?: Shift1StartOption[];
+  hasDraft?: boolean;
 }) {
   const [groups, setGroups] = useState<GroupPayload[]>([]);
   const [anchors, setAnchors] = useState<SpecialDutyAnchors>(EMPTY_ANCHORS);
@@ -112,6 +115,7 @@ export function SpecialDutyPanel({
     Partial<Record<DailySpecialKind, number[]>>
   >({});
   const [dirtyKinds, setDirtyKinds] = useState<Set<DailySpecialKind>>(new Set());
+  const [draftNotice, setDraftNotice] = useState<string | null>(null);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -266,6 +270,7 @@ export function SpecialDutyPanel({
       if (dup) bits.push(`중복 ${dup}`);
       if (reviews) bits.push(`확인 ${reviews}`);
       showToast(bits.join(" · "));
+      if (hasDraft) setDraftNotice(SPECIAL_DUTY_CHANGED_MESSAGE);
       if (data.reviews?.length) {
         setError(
           data.reviews
@@ -394,6 +399,7 @@ export function SpecialDutyPanel({
         return next;
       });
       showToast(`${DAILY_SPECIAL_KIND_LABELS[kind]} 저장`);
+      if (hasDraft) setDraftNotice(SPECIAL_DUTY_CHANGED_MESSAGE);
     } catch (e) {
       setError(e instanceof Error ? e.message : "저장 실패");
     } finally {
@@ -435,6 +441,7 @@ export function SpecialDutyPanel({
           ? `자동 배치 · 끝 ${parsed.value}팀 제외`
           : "수동 위치 지정"
       );
+      if (hasDraft) setDraftNotice(SPECIAL_DUTY_CHANGED_MESSAGE);
     } catch (e) {
       setError(e instanceof Error ? e.message : "위치 설정 저장 실패");
     } finally {
@@ -515,6 +522,7 @@ export function SpecialDutyPanel({
       </div>
       {loading ? <div className="sd-hint">불러오는 중…</div> : null}
       {error ? <div className="sd-error">{error}</div> : null}
+      {draftNotice ? <p className="sd-draft">{draftNotice}</p> : null}
       <div className="sd-place">
         <div className="sd-place-title">1·3부 / 1막 1부 위치</div>
         <label className="sd-radio">
@@ -881,6 +889,12 @@ export function SpecialDutyPanel({
         .sd-hint {
           margin: 4px 0 0;
           color: #64748b;
+          font-size: 0.78rem;
+          line-height: 1.4;
+        }
+        .sd-draft {
+          margin: 8px 0 0;
+          color: #b45309;
           font-size: 0.78rem;
           line-height: 1.4;
         }
