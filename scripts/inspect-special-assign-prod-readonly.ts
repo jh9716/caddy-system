@@ -55,23 +55,47 @@ async function main() {
   const { start, end } = parseYmd(DATE);
   try {
     const [duties, supports, draft] = await Promise.all([
-      prisma.dailySpecialDuty.findMany({
-        where: { date: { gte: start, lte: end } },
-        include: { caddy: { select: { id: true, name: true, team: true, caddyType: true, employmentStatus: true } } },
-        orderBy: [{ kind: "asc" }, { sortOrder: "asc" }],
-      }),
-      prisma.dailySpecialSupport.findMany({
-        where: { date: { gte: start, lte: end } },
-        include: { caddy: { select: { id: true, name: true, team: true, employmentStatus: true } } },
-        orderBy: [{ shift: "asc" }, { id: "asc" }],
-      }),
-      prisma.dailyBoardDraft.findFirst({
-        where: { date: { gte: start, lte: end } },
-        select: { version: true, updatedAt: true, payload: true },
-      }),
+      prisma.$queryRaw<
+        Array<{
+          kind: string;
+          caddyId: number;
+          name: string;
+          team: string;
+          createdAt: Date;
+        }>
+      >`
+        SELECT d.kind, d."caddyId", c.name, c.team, d."createdAt"
+        FROM "DailySpecialDuty" d
+        JOIN "Caddy" c ON c.id = d."caddyId"
+        WHERE d.date >= ${start} AND d.date <= ${end}
+        ORDER BY d.kind, d."sortOrder", d.id
+      `,
+      prisma.$queryRaw<
+        Array<{
+          shift: string;
+          caddyId: number;
+          name: string;
+          createdAt: Date;
+        }>
+      >`
+        SELECT s.shift, s."caddyId", c.name, s."createdAt"
+        FROM "DailySpecialSupport" s
+        JOIN "Caddy" c ON c.id = s."caddyId"
+        WHERE s.date >= ${start} AND s.date <= ${end}
+        ORDER BY s.shift, s.id
+      `,
+      prisma.$queryRaw<
+        Array<{ version: number; updatedAt: Date; payload: unknown }>
+      >`
+        SELECT version, "updatedAt", payload
+        FROM "DailyBoardDraft"
+        WHERE date >= ${start} AND date <= ${end}
+        LIMIT 1
+      `,
     ]);
+    const draftRow = draft[0] || null;
 
-    const draftSummary = draft ? summarizeAssignments(draft.payload) : null;
+    const draftSummary = draftRow ? summarizeAssignments(draftRow.payload) : null;
     const dutyIds = duties.map((d) => d.caddyId);
     const supportIds = supports.map((s) => s.caddyId);
     const dutyOnBoard = dutyIds.filter((id) => draftSummary?.assignedIds.has(id));
@@ -84,20 +108,20 @@ async function main() {
       dailySpecialDuty: duties.map((d) => ({
         kind: d.kind,
         caddyId: d.caddyId,
-        name: d.caddy.name,
-        team: d.caddy.team,
+        name: d.name,
+        team: d.team,
         createdAt: d.createdAt,
       })),
       dailySpecialSupport: supports.map((s) => ({
         shift: s.shift,
         caddyId: s.caddyId,
-        name: s.caddy.name,
+        name: s.name,
         createdAt: s.createdAt,
       })),
-      draft: draft
+      draft: draftRow
         ? {
-            version: draft.version,
-            updatedAt: draft.updatedAt,
+            version: draftRow.version,
+            updatedAt: draftRow.updatedAt,
             assignmentCount: draftSummary?.assignmentCount,
             kinds: draftSummary?.kinds,
           }
