@@ -540,6 +540,7 @@ section("source / UI / migration / 권한");
   assert(/createdByUserId\s+Int\?/.test(schema), "nullable createdByUserId");
   assert(/DAILY_SPECIAL_KIND_UI\.map/.test(panel), "찾근 탭 제거");
   assert(/특수지원 등록/.test(supportUi), "특수지원 등록 액션");
+  assert(/const \[busy, setBusy\]/.test(supportUi), "저장 busy state");
   assert(/1부 지원/.test(supportUi), "부별 인원 요약");
   assert(/ss-kinds/.test(supportUi), "mobile 3부 탭");
   assert(/SpecialSupportPanel/.test(page), "날짜 설정에 특수지원");

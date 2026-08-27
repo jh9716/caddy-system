@@ -59,6 +59,7 @@ export function SpecialSupportPanel({
   const [shift, setShift] = useState<ShiftPart>("1부");
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
