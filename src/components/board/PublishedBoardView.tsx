@@ -16,10 +16,11 @@ import {
 import { publishedBoardCss } from "@/components/board/publishedBoardCss";
 
 function Marks({ row }: { row: PublishedPlacementV1 }) {
-  const special = row.kind !== "regular";
+  const special = row.kind !== "regular" && row.kind !== "specialSupport";
   if (
     !row.twoWork &&
     !row.chageun &&
+    !row.specialSupport &&
     !special &&
     !row.limousine &&
     !row.driving
@@ -31,6 +32,9 @@ function Marks({ row }: { row: PublishedPlacementV1 }) {
       {row.limousine ? <span className="bc-badge limo">리무진</span> : null}
       {row.driving ? <span className="bc-badge drive">드라이빙</span> : null}
       {row.twoWork ? <span className="bc-badge two">투</span> : null}
+      {row.specialSupport ? (
+        <span className="bc-badge support">지원</span>
+      ) : null}
       {row.chageun ? (
         <span className="bc-badge call">찾근</span>
       ) : special && !row.driving ? (

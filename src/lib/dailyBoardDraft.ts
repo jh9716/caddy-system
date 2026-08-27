@@ -39,6 +39,7 @@ const ASSIGNMENT_KINDS = [
   "oneMak",
   "fixed",
   "driving",
+  "specialSupport",
 ] as const;
 
 export type DailyBoardDraftPayloadV1 = {

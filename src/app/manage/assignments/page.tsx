@@ -71,8 +71,9 @@ const COURSE_SHORT: Record<CourseCode, string> = {
 };
 
 import { SpecialDutyPanel, type Shift1StartOption } from "./SpecialDutyPanel";
+import { SpecialSupportPanel } from "./SpecialSupportPanel";
 import { BoardQuickSheet, LiveChangePanel, LockToggle, SameDayAddSheet, TeamMoveSheet } from "./LiveChangePanel";
-import { isThirdBandTeam, THIRD_BAND_TEAMS } from "@/lib/caddyManage";
+import { emptySpecialSupportByShift, SPECIAL_SUPPORT_CHANGED_MESSAGE } from "@/lib/dailySpecialSupport";
 import { rotateThirdQueueFromStartTeam } from "@/lib/thirdWeeklyRotation";
 import {
   LIVE_CHANGE_LABELS,
@@ -118,25 +119,30 @@ type ThirdWeeklyStartState = {
 function AssignmentMarkBadges({
   twoWork,
   chageun,
+  specialSupport,
   special,
   limousine,
   driving,
 }: {
   twoWork: boolean;
   chageun: boolean;
+  specialSupport?: boolean;
   special?: boolean;
   limousine?: boolean;
   driving?: boolean;
 }) {
-  if (!twoWork && !chageun && !special && !limousine && !driving) return null;
+  if (!twoWork && !chageun && !specialSupport && !special && !limousine && !driving) {
+    return null;
+  }
   return (
     <span className="bc-marks">
       {limousine ? <span className="bc-badge limo">리무진</span> : null}
       {driving ? <span className="bc-badge drive">드라이빙</span> : null}
       {twoWork ? <span className="bc-badge two">투</span> : null}
+      {specialSupport ? <span className="bc-badge support">지원</span> : null}
       {chageun ? (
         <span className="bc-badge call">찾근</span>
-      ) : special && !driving ? (
+      ) : special && !driving && !specialSupport ? (
         <span className="bc-special">S</span>
       ) : null}
     </span>
@@ -198,7 +204,8 @@ const BoardAssignedSlots = memo(function BoardAssignedSlots({
               <AssignmentMarkBadges
                 twoWork={marks.twoWork}
                 chageun={marks.chageun}
-                special={special}
+                specialSupport={marks.specialSupport}
+                special={special && row.kind !== "specialSupport"}
                 driving={marks.driving}
               />
             </button>
@@ -258,6 +265,9 @@ async function putAssignmentDraft(
 
 export default function ManageAssignmentsOpsPage() {
   const [date, setDate] = useState("");
+  const [specialSupportByShift, setSpecialSupportByShift] = useState(
+    emptySpecialSupportByShift
+  );
   const [file, setFile] = useState<File | null>(null);
   const [dutyFile, setDutyFile] = useState<File | null>(null);
   const [opsDutyStored, setOpsDutyStored] = useState<{
@@ -532,6 +542,46 @@ export default function ManageAssignmentsOpsPage() {
     }
   }, [clearDraftBoard]);
 
+  useEffect(() => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      setSpecialSupportByShift(emptySpecialSupportByShift());
+      return;
+    }
+    let cancelled = false;
+    void fetch(
+      `/api/daily-special-supports?date=${encodeURIComponent(date)}`,
+      { credentials: "include" }
+    )
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled || !data?.byShift) return;
+        const next = emptySpecialSupportByShift();
+        for (const part of ["1부", "2부", "3부"] as const) {
+          next[part] = (data.byShift[part] || [])
+            .filter((row: { blocked?: boolean }) => !row.blocked)
+            .map(
+              (row: {
+                caddyId: number;
+                name?: string;
+                team?: string;
+                teamOrder?: number;
+              }) => ({
+                id: row.caddyId,
+                name: row.name || "",
+                team: row.team || "",
+                teamOrder: row.teamOrder || 0,
+              })
+            );
+        }
+        setSpecialSupportByShift(next);
+      })
+      .catch(() => {
+        if (!cancelled) setSpecialSupportByShift(emptySpecialSupportByShift());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [date]);
 
   useEffect(() => {
     if (!file || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
@@ -1554,6 +1604,7 @@ export default function ManageAssignmentsOpsPage() {
       draft: { ...current, caddyPool: livePool },
       base: autoResultRef.current,
       change,
+      specialSupportByShift,
     });
     const blocking = preview.warnings.find((w) => w.level === "error");
     if (blocking) {
@@ -2036,6 +2087,35 @@ export default function ManageAssignmentsOpsPage() {
             excludedRows={availability?.excluded}
             shift1Options={shift1Options}
           />
+          <SpecialSupportPanel
+            date={date}
+            excludedRows={availability?.excluded}
+            hasDraft={Boolean(draft || serverDraftVersionRef.current > 0)}
+            onChanged={() => {
+              showToast(SPECIAL_SUPPORT_CHANGED_MESSAGE);
+              void fetch(
+                `/api/daily-special-supports?date=${encodeURIComponent(date)}`,
+                { credentials: "include" }
+              )
+                .then((res) => res.json())
+                .then((data) => {
+                  if (!data?.byShift) return;
+                  const next = emptySpecialSupportByShift();
+                  for (const part of ["1부", "2부", "3부"] as const) {
+                    next[part] = (data.byShift[part] || [])
+                      .filter((row: { blocked?: boolean }) => !row.blocked)
+                      .map((row: { caddyId: number; name?: string; team?: string; teamOrder?: number }) => ({
+                        id: row.caddyId,
+                        name: row.name || "",
+                        team: row.team || "",
+                        teamOrder: row.teamOrder || 0,
+                      }));
+                  }
+                  setSpecialSupportByShift(next);
+                })
+                .catch(() => {});
+            }}
+          />
         </details>
       </section>
 
@@ -2348,7 +2428,10 @@ export default function ManageAssignmentsOpsPage() {
                             {marks.limousine ? (
                               <span className="bc-badge limo">리무진</span>
                             ) : null}
-                            {special && !marks.chageun && !marks.driving ? (
+                            {special &&
+                            !marks.chageun &&
+                            !marks.driving &&
+                            !marks.specialSupport ? (
                               <em className="tag-s">{row.kind}</em>
                             ) : null}
                           </button>
@@ -2362,7 +2445,8 @@ export default function ManageAssignmentsOpsPage() {
                             <AssignmentMarkBadges
                               twoWork={marks.twoWork}
                               chageun={marks.chageun}
-                              special={special}
+                              specialSupport={marks.specialSupport}
+                              special={special && row.kind !== "specialSupport"}
                               driving={marks.driving}
                             />
                           </button>
@@ -2522,6 +2606,7 @@ export default function ManageAssignmentsOpsPage() {
           onPresetConsumed={() => setLiveChangePreset(null)}
           onResetDraft={() => void resetStoredDraft()}
           onRecalcOrder={() => void runAutoAssign()}
+          specialSupportByShift={specialSupportByShift}
           defaultShift={
             shiftTab === "UNASSIGNED" || shiftTab === "CLOSED"
               ? "1부"
@@ -3297,6 +3382,10 @@ const opsCss = `
   .bc-badge.call {
     color: #7c5a1e;
     background: #f4ead6;
+  }
+  .bc-badge.support {
+    color: #1e3a8a;
+    background: #dbeafe;
   }
   .bc-badge.limo {
     color: #9a3412;

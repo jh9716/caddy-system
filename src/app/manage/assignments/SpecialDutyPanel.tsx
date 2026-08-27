@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { normalizePersonName } from "@/lib/dailyCaddyNameMatch";
 import {
-  DAILY_SPECIAL_KINDS,
+  DAILY_SPECIAL_KIND_UI,
   DAILY_SPECIAL_KIND_LABELS,
   ANCHOR_SPECIAL_KINDS,
   annotateSpecialDutyConflicts,
@@ -199,9 +199,11 @@ export function SpecialDutyPanel({
   }, [date, applyPayload]);
 
   const displayGroups = useMemo(() => {
-    if (!excludedRows?.length) return groups;
-    const extra = unavailableReasonsFromRows(excludedRows);
-    return groups.map((group) => {
+    const extra = excludedRows?.length
+      ? unavailableReasonsFromRows(excludedRows)
+      : null;
+    const mapped = groups.map((group) => {
+      if (!extra) return group;
       const annotated = annotateSpecialDutyConflicts(
         groups.flatMap((g) => g.items),
         extra
@@ -209,6 +211,9 @@ export function SpecialDutyPanel({
       const items = annotated.filter((row) => row.kind === group.kind);
       return { ...group, items, count: items.length };
     });
+    return mapped.filter(
+      (group) => group.kind !== "CHAGEUN" || group.count > 0
+    );
   }, [groups, excludedRows]);
 
   async function ensureCaddies() {
@@ -627,7 +632,8 @@ export function SpecialDutyPanel({
               }
             >
               <span>
-                {group.label} {group.count}명
+                {group.kind === "CHAGEUN" ? "레거시 찾근" : group.label}{" "}
+                {group.count}명
               </span>
               <span className="sd-caret">
                 {openKinds.has(group.kind) ? "▾" : "▸"}
@@ -748,7 +754,7 @@ export function SpecialDutyPanel({
               </button>
             </div>
             <div className="sd-kinds">
-              {DAILY_SPECIAL_KINDS.map((k) => (
+              {DAILY_SPECIAL_KIND_UI.map((k) => (
                 <button
                   key={k}
                   type="button"

@@ -73,9 +73,17 @@ export function isChageunAssignment(row: AutoAssignmentRow): boolean {
   );
 }
 
+export function isSpecialSupportAssignment(row: AutoAssignmentRow): boolean {
+  return (
+    row.kind === "specialSupport" ||
+    String(row.reason || "").startsWith("SPECIAL_SUPPORT")
+  );
+}
+
 export type BoardAssignmentMarks = {
   twoWork: boolean;
   chageun: boolean;
+  specialSupport: boolean;
   limousine: boolean;
   driving: boolean;
 };
@@ -87,6 +95,7 @@ export function boardAssignmentMarks(
   return {
     twoWork: isTwoWorkAssignment(row, allRows),
     chageun: isChageunAssignment(row),
+    specialSupport: isSpecialSupportAssignment(row),
     limousine: row.reservation?.limousineCart === true,
     driving: row.kind === "driving",
   };

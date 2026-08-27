@@ -20,6 +20,14 @@ export const DAILY_SPECIAL_KINDS = [
   "CHAGEUN",
 ] as const;
 
+/** 운영 등록 UI. 찾근(CHAGEUN)은 레거시 row 표시/삭제만 허용. */
+export const DAILY_SPECIAL_KIND_UI = [
+  "ONE_MAK",
+  "ONE_TWO",
+  "ONE_THREE",
+  "FIFTY_FOUR",
+] as const;
+
 export type DailySpecialKind = (typeof DAILY_SPECIAL_KINDS)[number];
 
 export const DAILY_SPECIAL_KIND_LABELS: Record<DailySpecialKind, string> = {

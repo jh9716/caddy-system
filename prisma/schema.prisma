@@ -90,6 +90,7 @@ model Caddy {
   shiftDuties       ShiftDuty[]
   offRequests       OffRequest[]
   dailySpecialDuties DailySpecialDuty[]
+  dailySpecialSupports DailySpecialSupport[]
   dailyPlacements    DailyPlacement[]
   dailyUnavailables  DailyCaddyUnavailable[]
   dailyOpsDuties     DailyOpsDuty[]
@@ -494,6 +495,24 @@ model DailyBoardDraft {
   updatedAt       DateTime @updatedAt
 
   @@index([updatedAt])
+}
+
+/// 날짜·부별 특수지원. 자동가용에서 제외된 ACTIVE 캐디가 특정 부에만 보충 근무.
+/// DailySpecialDuty(1막/1·2/1·3/54홀/CHAGEUN)와 분리. CHAGEUN을 재사용하지 않는다.
+/// shift는 예약부와 같은 "1부"|"2부"|"3부" 문자열. Schedule ShiftPart(ONE/TWO/THREE)와 의미가 달라 공유하지 않는다.
+model DailySpecialSupport {
+  id              Int      @id @default(autoincrement())
+  date            DateTime
+  caddyId         Int
+  caddy           Caddy    @relation(fields: [caddyId], references: [id])
+  shift           String
+  createdByUserId Int?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([date, caddyId, shift])
+  @@index([date, shift])
+  @@index([caddyId])
 }
 
 /// 날짜별 최종 확정 배치표 snapshot. Draft / Schedule / ShiftDuty 와 분리.

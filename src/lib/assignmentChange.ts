@@ -399,12 +399,14 @@ export function previewLiveAssignmentChange(input: {
   previous: AutoAssignResultV1;
   regularCaddyPool: AutoAssignCaddy[];
   change: LiveChangeInput;
+  specialSupportByShift?: Record<ShiftPart, AutoAssignCaddy[]>;
 }): LiveChangePreview {
   const events = eventsFromLiveChange(input.change);
   const reflow = reflowRegularAssignments({
     previous: input.previous,
     regularCaddyPool: input.regularCaddyPool,
     events,
+    specialSupportByShift: input.specialSupportByShift,
   });
   return {
     ...reflow,
@@ -418,11 +420,13 @@ export function previewLiveChangeFromDraft(input: {
   draft: AssignmentDraft;
   base?: AutoAssignResultV1 | null;
   change: LiveChangeInput;
+  specialSupportByShift?: Record<ShiftPart, AutoAssignCaddy[]>;
 }): LiveChangePreview {
   return previewLiveAssignmentChange({
     previous: autoResultFromDraft(input.draft, input.base ?? null),
     regularCaddyPool: input.draft.caddyPool,
     change: input.change,
+    specialSupportByShift: input.specialSupportByShift,
   });
 }
 
@@ -493,11 +497,13 @@ export function previewLiveAssignmentEvents(input: {
   regularCaddyPool: AutoAssignCaddy[];
   events: ReservationChangeEvent[];
   changeType?: LiveChangeType;
+  specialSupportByShift?: Record<ShiftPart, AutoAssignCaddy[]>;
 }): LiveChangePreview {
   const reflow = reflowRegularAssignments({
     previous: input.previous,
     regularCaddyPool: input.regularCaddyPool,
     events: input.events,
+    specialSupportByShift: input.specialSupportByShift,
   });
   return {
     ...reflow,
@@ -1138,6 +1144,7 @@ export async function applyLiveAssignmentChange(
     change?: LiveChangeInput;
     events?: ReservationChangeEvent[];
     changeType?: LiveChangeType;
+    specialSupportByShift?: Record<ShiftPart, AutoAssignCaddy[]>;
   },
   options: {
     prisma?: PrismaClient;
@@ -1164,6 +1171,7 @@ export async function applyLiveAssignmentChange(
     regularCaddyPool: input.regularCaddyPool,
     events,
     changeType: input.changeType || input.change?.type,
+    specialSupportByShift: input.specialSupportByShift,
   });
   const blocking = preview.warnings.filter((w) => w.level === "error");
   if (blocking.length > 0) {

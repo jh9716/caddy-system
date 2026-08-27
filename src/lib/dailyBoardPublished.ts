@@ -41,6 +41,7 @@ const ASSIGNMENT_KINDS: AssignmentKind[] = [
   "oneMak",
   "fixed",
   "driving",
+  "specialSupport",
 ];
 
 const UI_ONLY_KEYS = [
@@ -82,6 +83,7 @@ export type PublishedPlacementV1 = {
   driving: boolean;
   twoWork: boolean;
   chageun: boolean;
+  specialSupport: boolean;
   sequenceIndex: number;
 };
 
@@ -212,6 +214,8 @@ function parsePlacement(raw: unknown, label: string): PublishedPlacementV1 {
     driving: o.driving === true || String(o.kind) === "driving",
     twoWork: o.twoWork === true,
     chageun: o.chageun === true,
+    specialSupport:
+      o.specialSupport === true || String(o.kind) === "specialSupport",
     sequenceIndex: asFiniteInt(o.sequenceIndex ?? 0, `${label}.sequenceIndex`),
   };
 }
@@ -320,6 +324,7 @@ function placementFromAssignment(
     driving: marks.driving,
     twoWork: marks.twoWork,
     chageun: marks.chageun,
+    specialSupport: marks.specialSupport,
     sequenceIndex: Number.isInteger(row.sequenceIndex) ? row.sequenceIndex : 0,
   };
 }

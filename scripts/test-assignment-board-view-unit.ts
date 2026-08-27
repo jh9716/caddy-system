@@ -9,6 +9,7 @@ import {
   countBoardAssignments,
   filterAssignmentsByShift,
   isChageunAssignment,
+  isSpecialSupportAssignment,
   isTwoWorkAssignment,
 } from "../src/lib/assignmentBoardView";
 import type { AutoAssignmentRow } from "../src/lib/autoAssignEngine";
@@ -248,6 +249,14 @@ section("찾근: fixed+찾근 reason만, 일반/54홀은 유지");
   assert(isChageunAssignment(marshal) === true, "마샬찾근 = 찾근");
   assert(isChageunAssignment(fiftyFour) === false, "54홀은 찾근 아님");
   assert(isChageunAssignment(regular) === false, "일반 원번은 찾근 아님");
+  const support = row("1부", "06:21", "LAKE", "C5", {
+    caddyId: 24,
+    kind: "specialSupport",
+    reason: REASON.SPECIAL_SUPPORT,
+  });
+  assert(isChageunAssignment(support) === false, "특수지원은 찾근 아님");
+  assert(isSpecialSupportAssignment(support) === true, "특수지원 표시");
+  assert(boardAssignmentMarks(support, [support]).specialSupport === true, "marks.specialSupport");
   assert(
     boardAssignmentMarks(call, [call]).chageun === true &&
       boardAssignmentMarks(regular, [regular]).chageun === false,
