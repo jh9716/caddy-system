@@ -61,6 +61,7 @@ function caddy(
     teamOrder,
     caddyType: extra?.caddyType || "THIRD",
     thirdBandSubgroup: extra?.thirdBandSubgroup ?? null,
+    extraFlags: extra?.extraFlags,
     inputOrder: extra?.inputOrder,
   };
 }
@@ -349,13 +350,247 @@ section("토/일/공휴일 WEEKEND 우선, 평일은 없음");
     wdResult.weekendBandAssignments.length === 0,
     "평일 WEEKEND 우선 없음"
   );
-  const wdThird = wdResult.regularAssignments
+  const wdThirdNames = wdResult.assignments
     .filter((a) => a.shift === "3부")
-    .slice(2)
     .map((a) => a.caddy.name);
   assert(
-    wdThird[0] === "W12" && wdThird.includes("D10"),
-    "평일 WEEKEND는 일반 THIRD rotation에 참여"
+    !wdThirdNames.some((n) => n === "W12" || n === "W12b" || n === "W9"),
+    "평일 WEEKEND는 3부 최종 배치 0"
+  );
+  const wdRegularThird = wdResult.regularAssignments
+    .filter((a) => a.shift === "3부" && a.caddy.caddyType === "THIRD")
+    .map((a) => a.caddy.name);
+  assert(
+    wdRegularThird[0] === "D10" && wdRegularThird.includes("N11"),
+    "평일 regular THIRD는 WEEKEND 제거 후 D10부터"
+  );
+}
+
+function weekendNamesOf(names: string[]): string[] {
+  return names.filter((n) => n === "W12" || n === "W12b" || n === "W9");
+}
+
+function weekendPool(): AutoAssignCaddy[] {
+  return [
+    caddy(12, "12조", 1, { name: "W12", thirdBandSubgroup: "WEEKEND" }),
+    caddy(9, "9조", 1, { name: "W9", thirdBandSubgroup: "WEEKEND" }),
+    caddy(10, "10조", 1, { name: "D10", thirdBandSubgroup: "WEEKDAY" }),
+    caddy(11, "11조", 1, { name: "N11" }),
+  ];
+}
+
+function thirdShiftNames(result: ReturnType<typeof computeAutoAssignmentsV1>): string[] {
+  return result.assignments
+    .filter((a) => a.shift === "3부")
+    .sort((a, b) => a.reservation.teeTime.localeCompare(b.reservation.teeTime))
+    .map((a) => a.caddy.name);
+}
+
+function regularThirdWeekendCount(
+  result: ReturnType<typeof computeAutoAssignmentsV1>
+): number {
+  return result.regularAssignments.filter(
+    (a) =>
+      a.shift === "3부" &&
+      String(a.caddy.thirdBandSubgroup || "").toUpperCase() === "WEEKEND"
+  ).length;
+}
+
+section("평일 WEEKEND 3부 완전 제외 / 토·일·공휴일 우선");
+{
+  const pool = weekendPool();
+  const weekendIdSet = new Set(
+    pool.filter((c) => c.thirdBandSubgroup === "WEEKEND").map((c) => c.id)
+  );
+
+  const weekdayDates = [
+    ["2026-08-27", "목"],
+    ["2026-08-28", "금"],
+  ] as const;
+  for (const [date, label] of weekdayDates) {
+    const modeA = computeAutoAssignmentsV1({
+      date,
+      available: [...housePool(8), ...pool],
+      reservations: [
+        ...res(date, "1부", 2, 6),
+        ...res(date, "2부", 2, 10),
+        ...res(date, "3부", 8, 14),
+      ],
+    });
+    const modeB = computeAutoAssignmentsV1({
+      date,
+      available: [...housePool(8), ...pool],
+      reservations: [
+        ...res(date, "1부", 8, 6),
+        ...res(date, "2부", 2, 10),
+        ...res(date, "3부", 6, 14),
+      ],
+    });
+    assert(
+      modeA.weekendBandAssignments.length === 0 &&
+        weekendNamesOf(thirdShiftNames(modeA)).length === 0 &&
+        regularThirdWeekendCount(modeA) === 0,
+      `${date} ${label} Mode A: WEEKEND final assignment 0`
+    );
+    assert(
+      modeB.weekendBandAssignments.length === 0 &&
+        weekendNamesOf(thirdShiftNames(modeB)).length === 0 &&
+        regularThirdWeekendCount(modeB) === 0,
+      `${date} ${label} Mode B: WEEKEND final assignment 0`
+    );
+    const modeBThird = thirdShiftNames(modeB);
+    assert(
+      modeBThird[0] === "D10" && modeBThird[1] === "N11",
+      `${date} ${label} Mode B: 2부 spare 없이 regular THIRD부터 (WEEKEND 제외)`
+    );
+  }
+
+  const weekendDates = [
+    ["2026-08-29", "토"],
+    ["2026-08-30", "일"],
+  ] as const;
+  for (const [date, label] of weekendDates) {
+    const modeA = computeAutoAssignmentsV1({
+      date,
+      available: [...housePool(8), ...pool],
+      reservations: [
+        ...res(date, "1부", 2, 6),
+        ...res(date, "2부", 2, 10),
+        ...res(date, "3부", 8, 14),
+      ],
+    });
+    const modeB = computeAutoAssignmentsV1({
+      date,
+      available: [...housePool(8), ...pool],
+      reservations: [
+        ...res(date, "1부", 8, 6),
+        ...res(date, "2부", 2, 10),
+        ...res(date, "3부", 6, 14),
+      ],
+    });
+    for (const [mode, result] of [
+      ["Mode A", modeA],
+      ["Mode B", modeB],
+    ] as const) {
+      const weekendPlaced = result.weekendBandAssignments.map((a) => a.caddy.name);
+      assert(
+        weekendPlaced.join(",") === "W9,W12",
+        `${date} ${label} ${mode}: WEEKEND 우선단계 배치 (9조 주)`
+      );
+      assert(
+        result.weekendBandAssignments.every(
+          (a) => a.reason === REASON.WEEKEND_BAND_PRIORITY && a.shift === "3부"
+        ),
+        `${date} ${label} ${mode}: WEEKEND reason/3부`
+      );
+      assert(
+        regularThirdWeekendCount(result) === 0,
+        `${date} ${label} ${mode}: regular THIRD에 WEEKEND 0`
+      );
+      const ids = result.assignments
+        .filter((a) => a.shift === "3부")
+        .map((a) => a.caddy.id);
+      assert(new Set(ids).size === ids.length, `${date} ${label} ${mode}: 3부 id 중복 없음`);
+      assert(
+        !result.regularAssignments.some(
+          (a) => a.shift === "3부" && weekendIdSet.has(a.caddy.id)
+        ),
+        `${date} ${label} ${mode}: weekend id가 regular THIRD에 재진입 없음`
+      );
+    }
+  }
+
+  const holidayDates = [
+    ["2026-08-17", "대체휴일(월)"],
+    ["2026-12-25", "기독탄신일"],
+  ] as const;
+  for (const [date, label] of holidayDates) {
+    assert(isKrPublicHoliday(date), `${date} ${label} 공휴일 판정`);
+    assert(isWeekendBandPriorityDate(date), `${date} ${label} WEEKEND 우선일`);
+    const modeA = computeAutoAssignmentsV1({
+      date,
+      available: [...housePool(8), ...pool],
+      reservations: [
+        ...res(date, "1부", 2, 6),
+        ...res(date, "2부", 2, 10),
+        ...res(date, "3부", 8, 14),
+      ],
+    });
+    const modeB = computeAutoAssignmentsV1({
+      date,
+      available: [...housePool(8), ...pool],
+      reservations: [
+        ...res(date, "1부", 8, 6),
+        ...res(date, "2부", 2, 10),
+        ...res(date, "3부", 6, 14),
+      ],
+    });
+    for (const [mode, result] of [
+      ["Mode A", modeA],
+      ["Mode B", modeB],
+    ] as const) {
+      assert(
+        result.weekendBandAssignments.length === 2 &&
+          result.weekendBandAssignments.every(
+            (a) => a.caddy.thirdBandSubgroup === "WEEKEND"
+          ),
+        `${date} ${label} ${mode}: WEEKEND 우선 적용`
+      );
+      assert(
+        regularThirdWeekendCount(result) === 0,
+        `${date} ${label} ${mode}: regular THIRD에 WEEKEND 0`
+      );
+    }
+  }
+
+  const thu = "2026-08-27";
+  const startOnWeekend = computeAutoAssignmentsV1({
+    date: thu,
+    available: [...housePool(8), ...pool],
+    reservations: [
+      ...res(thu, "1부", 2, 6),
+      ...res(thu, "2부", 2, 10),
+      ...res(thu, "3부", 8, 14),
+    ],
+    thirdStartCaddyId: 12,
+  });
+  const thuThird = startOnWeekend.assignments.filter((a) => a.shift === "3부");
+  assert(
+    !thuThird.some((a) => a.caddy.id === 12 || a.caddy.id === 9),
+    "평일 thirdStartCaddyId=WEEKEND id여도 그 캐디 3부 배치 금지"
+  );
+  const firstRegular = startOnWeekend.regularAssignments.find(
+    (a) => a.shift === "3부" && a.caddy.caddyType === "THIRD"
+  );
+  assert(
+    firstRegular?.caddy.name === "D10",
+    "평일 WEEKEND start id → 다음 regular THIRD D10부터"
+  );
+  assert(
+    startOnWeekend.weekendBandAssignments.length === 0,
+    "평일 WEEKEND start id → 우선단계도 비움"
+  );
+
+  const extraOnly = computeAutoAssignmentsV1({
+    date: "2026-08-29",
+    available: [
+      ...housePool(8),
+      caddy(80, "12조", 1, {
+        name: "FlagOnly",
+        extraFlags: ["주말반"],
+        thirdBandSubgroup: null,
+      }),
+      ...pool,
+    ],
+    reservations: [
+      ...res("2026-08-29", "1부", 2, 6),
+      ...res("2026-08-29", "2부", 2, 10),
+      ...res("2026-08-29", "3부", 8, 14),
+    ],
+  });
+  assert(
+    extraOnly.weekendBandAssignments.every((a) => a.caddy.name !== "FlagOnly"),
+    "extraFlags-only 주말반은 WEEKEND 우선으로 승격하지 않음"
   );
 }
 
@@ -553,7 +788,11 @@ section("3부 우선배치: Mode A 스페어→1·3→WEEKEND→regular");
   assert(noWeekend.weekendBandAssignments.length === 0, "평일 WEEKEND 우선 없음");
   assert(
     thirdOrder(noWeekend).slice(0, 5).join(",") === "H3,H4,C,D,H",
-    "WEEKEND 없음: spare → 1·3 → regular"
+    "평일: spare → 1·3 → regular THIRD (WEEKEND 제외)"
+  );
+  assert(
+    !thirdOrder(noWeekend).some((n) => n === "E" || n === "F2" || n === "F"),
+    "평일 Mode A: WEEKEND 캐디는 3부 0"
   );
 
   const neither = computeAutoAssignmentsV1({
@@ -568,7 +807,11 @@ section("3부 우선배치: Mode A 스페어→1·3→WEEKEND→regular");
   });
   assert(
     thirdOrder(neither).slice(0, 4).join(",") === "H5,H6,H,I",
-    "1·3/WEEKEND 없음: 기존 Mode A spare → regular THIRD"
+    "평일 1·3 없음: spare → regular THIRD (WEEKEND 제외)"
+  );
+  assert(
+    !thirdOrder(neither).some((n) => n === "E" || n === "F2" || n === "F"),
+    "평일 Mode A(1·3 없음): WEEKEND 캐디는 3부 0"
   );
 
   const ineligible = computeAutoAssignmentsV1({
@@ -972,6 +1215,32 @@ section("thirdStartCaddyId는 특수 3부/Mode A HOUSE 선행을 바꾸지 않�
   );
   const firstThird = s3.find((a) => a.caddy.caddyType === "THIRD");
   assert(firstThird?.caddy.name === "D10", "Mode A 이후 regular THIRD는 선택자부터");
+  assert(
+    !s3.some(
+      (a) => String(a.caddy.thirdBandSubgroup || "").toUpperCase() === "WEEKEND"
+    ),
+    "평일 Mode A: WEEKEND id가 regular THIRD에 없음"
+  );
+
+  const weekdayWeekendStart = computeAutoAssignmentsV1({
+    date: weekday,
+    available: [...housePool(6), ...third],
+    reservations: [
+      ...res(weekday, "1부", 2, 6),
+      ...res(weekday, "2부", 2, 10),
+      ...res(weekday, "3부", 6, 14),
+    ],
+    thirdStartCaddyId: 12,
+  });
+  const s3w = weekdayWeekendStart.assignments.filter((a) => a.shift === "3부");
+  assert(
+    !s3w.some((a) => a.caddy.id === 12 || a.caddy.id === 9),
+    "평일 Mode A: thirdStartCaddyId=W12여도 WEEKEND 3부 0"
+  );
+  assert(
+    s3w.find((a) => a.caddy.caddyType === "THIRD")?.caddy.name === "D10",
+    "평일 Mode A: WEEKEND start → 다음 regular D10"
+  );
 }
 
 section("LIVE reflow가 thirdStartCaddyId를 유지");
@@ -1035,9 +1304,10 @@ section("UI: 3부 첫 캐디 선택 optional · 날짜 변경 시 초기화");
     pageSrc.includes("선택 안 함 (주간 시작조 첫 가용)"),
     "미선택 시 자동배치 가능 안내"
   );
+  const runLabel = pageSrc.lastIndexOf("자동배치 실행");
   const runBtn = pageSrc.slice(
-    pageSrc.indexOf('className="btn primary"'),
-    pageSrc.indexOf("자동배치 실행")
+    pageSrc.lastIndexOf('className="btn primary"', runLabel),
+    runLabel
   );
   assert(
     runBtn.includes("houseStartCaddyId") && !runBtn.includes("thirdStartCaddyId"),

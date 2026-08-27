@@ -3,8 +3,9 @@
  * - 순수 함수: DB write 없음
  * - 우선순위: 고정/특별찾근 → 54홀 → 1·3부 → 1·2부 → 일반 순번
  * - 일반: HOUSE 순번 + 부별 스페어1·2
- * - 3부: Mode A(원번 미완주) 2부 스페어 HOUSE → 1·3 → WEEKEND → regular THIRD
- *        Mode B(원번 완주) 1·3 → WEEKEND → regular THIRD
+ * - 3부: Mode A(원번 미완주) 2부 스페어 HOUSE → 1·3 → WEEKEND(토/일/공휴일만) → regular THIRD
+ *        Mode B(원번 완주) 1·3 → WEEKEND(토/일/공휴일만) → regular THIRD
+ *        thirdBandSubgroup=WEEKEND는 평일(비공휴일) 3부 어디에든 넣지 않음
  * - DRIVING은 일반 HOUSE/THIRD 순번에 섞지 않음
  * - 8단계: 일반 예약 캔슬/추가 시 regular reflow (special 보호, 스페어·3부 재계산)
  */
@@ -144,7 +145,7 @@ export type AutoAssignCaddy = {
   caddyType?: string;
   extraFlags?: string[] | null;
   employmentStatus?: string;
-  /** 3부반 주중/주말. WEEKEND는 토·일·공휴일 3부 우선에만 사용 */
+  /** 3부반 주중/주말. WEEKEND는 토·일·공휴일 3부 우선, 평일 비공휴일 3부 제외 */
   thirdBandSubgroup?: string | null;
   /**
    * 관리자 특수근무 입력 순서 (같은 유형 내부 우선순위).
@@ -2258,11 +2259,13 @@ export function assignOneTwoPriority(input: {
  * - 다음 부 HOUSE 시작 = 직전 부 스페어1 (= N)
  * - 3부 (실제 1·2부 배치 결과 기준):
  *   A) HOUSE 원번 잔여(1·2부 미근무 HOUSE 존재):
- *      2부 스페어 HOUSE(최대 2, sparesByShift["2부"]) → 1·3 신청자 → WEEKEND
- *      → THIRD(thirdStartCaddyId는 여기부터) → 남은 미근무 HOUSE → (부족 시) 기근무 wrap
+ *      2부 스페어 HOUSE(최대 2, sparesByShift["2부"]) → 1·3 신청자 → WEEKEND(토/일/공휴일만)
+ *      → THIRD(thirdStartCaddyId는 WEEKEND 제외 후 여기부터) → 남은 미근무 HOUSE → (부족 시) 기근무 wrap
  *   B) HOUSE 소진(전원이 1·2부 중 ≥1회 실근무):
- *      1·3 신청자 → WEEKEND → THIRD → (1부 미근무 ∩ 2부 실근무) HOUSE, 단 1부 spare1·2 제외
+ *      1·3 신청자 → WEEKEND(토/일/공휴일만) → THIRD → (1부 미근무 ∩ 2부 실근무) HOUSE, 단 1부 spare1·2 제외
  *      (2부 스페어 우선 없음. 2부 spare 표시/계산은 유지)
+ *   WEEKEND(thirdBandSubgroup)는 날짜와 관계없이 regular THIRD에서 먼저 분리한다.
+ *   토/일/한국 공휴일에만 weekendBand로 쓰고, 평일 비공휴일은 그날 3부에 배치하지 않는다.
  * - 3부 spare1·2 = 당일 3부 최종 배치 sequence에서 마지막 배치자 다음 가용 2명
  *   (별도 HOUSE queue에서 새로 뽑지 않음. Mode A/B 동일. 순환 시 해당 3부 sequence 유지)
  * - DRIVING은 일반 순번에 섞지 않음
@@ -2327,12 +2330,12 @@ export function assignRegularSequence(input: {
       : pools.house;
   const thirdStartTeam = resolveThirdStartTeam(input.thirdStartTeam, input.date);
   let third = rotateThirdQueueFromStartTeam(pools.third, thirdStartTeam);
-  let weekendBand: AutoAssignCaddy[] = [];
-  if (isWeekendBandPriorityDate(input.date)) {
-    weekendBand = extractWeekendBandInRotationOrder(third);
-    const weekendIds = new Set(weekendBand.map((c) => c.id));
-    third = third.filter((c) => !weekendIds.has(c.id));
-  }
+  const weekendSeparated = extractWeekendBandInRotationOrder(third);
+  const weekendIds = new Set(weekendSeparated.map((c) => c.id));
+  third = third.filter((caddy) => !weekendIds.has(caddy.id));
+  const weekendBand = isWeekendBandPriorityDate(input.date)
+    ? weekendSeparated
+    : [];
   const oneThreeForThird = dedupeCaddies([...(input.oneThreeForThird || [])]);
   const thirdStartCaddyId =
     input.thirdStartCaddyId != null && input.thirdStartCaddyId !== undefined
