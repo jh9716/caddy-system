@@ -38,6 +38,9 @@ export const DAILY_SPECIAL_KIND_LABELS: Record<DailySpecialKind, string> = {
   CHAGEUN: "찾근",
 };
 
+export const SPECIAL_DUTY_CHANGED_MESSAGE =
+  "특수근무 설정이 변경되었습니다. 현재 작업본에 반영하려면 자동배치를 다시 실행하세요.";
+
 /** 엔진 후보 배열에 연결되는 유형 */
 export const ENGINE_SPECIAL_KINDS = [
   "ONE_MAK",

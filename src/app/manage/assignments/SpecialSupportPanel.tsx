@@ -5,6 +5,7 @@ import { formatCaddyLabel } from "@/lib/caddyDisplay";
 import {
   SPECIAL_SUPPORT_CHANGED_MESSAGE,
   SPECIAL_SUPPORT_SHIFTS,
+  engineQueuesFromSupportRecords,
   isEligibleSpecialSupportCandidate,
   type SpecialSupportRecord,
 } from "@/lib/dailySpecialSupport";
@@ -39,6 +40,7 @@ export function SpecialSupportPanel({
   excludedRows,
   hasDraft,
   onChanged,
+  onLoaded,
 }: {
   date: string;
   excludedRows?: Array<{
@@ -51,6 +53,7 @@ export function SpecialSupportPanel({
   }>;
   hasDraft?: boolean;
   onChanged?: () => void;
+  onLoaded?: (byShift: ReturnType<typeof engineQueuesFromSupportRecords>) => void;
 }) {
   const [payload, setPayload] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(false);
@@ -61,31 +64,43 @@ export function SpecialSupportPanel({
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (opts?: { includeCandidates?: boolean }) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       setPayload(null);
-      return;
+      onLoaded?.(engineQueuesFromSupportRecords(null));
+      return null as Payload | null;
     }
     setLoading(true);
     setError(null);
     try {
+      const qs = new URLSearchParams({ date });
+      if (opts?.includeCandidates) qs.set("includeCandidates", "1");
       const res = await fetch(
-        `/api/daily-special-supports?date=${encodeURIComponent(date)}`,
+        `/api/daily-special-supports?${qs.toString()}`,
         { credentials: "include" }
       );
       const data = (await res.json()) as Payload;
-      if (data.date && data.date !== date) return;
+      if (data.date && data.date !== date) return null;
       if (!res.ok) {
         setError(data.error || "특수지원 조회 실패");
-        return;
+        return null;
       }
-      setPayload(data);
+      setPayload((prev) => ({
+        ...data,
+        candidates:
+          data.candidates && data.candidates.length
+            ? data.candidates
+            : prev?.candidates,
+      }));
+      onLoaded?.(engineQueuesFromSupportRecords(data.byShift));
+      return data;
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "특수지원 조회 실패");
+      return null;
     } finally {
       setLoading(false);
     }
-  }, [date]);
+  }, [date, onLoaded]);
 
   useEffect(() => {
     void load();
@@ -113,12 +128,15 @@ export function SpecialSupportPanel({
     "3부": payload?.byShift?.["3부"]?.length || 0,
   };
 
-  function openModal() {
+  async function openModal() {
     const current = new Set(
       (payload?.byShift?.[shift] || []).map((row) => row.caddyId)
     );
     setSelected(current);
     setModalOpen(true);
+    if (!(payload?.candidates && payload.candidates.length)) {
+      await load({ includeCandidates: true });
+    }
   }
 
   function toggle(id: number) {
@@ -149,9 +167,16 @@ export function SpecialSupportPanel({
         setError(data.error || "특수지원 저장 실패");
         return;
       }
-      setPayload(data);
+      setPayload((prev) => ({
+        ...data,
+        candidates:
+          (data.candidates && data.candidates.length
+            ? data.candidates
+            : prev?.candidates) || [],
+      }));
       setModalOpen(false);
       if (hasDraft) setNotice(SPECIAL_SUPPORT_CHANGED_MESSAGE);
+      onLoaded?.(engineQueuesFromSupportRecords(data.byShift));
       onChanged?.();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "특수지원 저장 실패");

@@ -182,6 +182,27 @@ export function groupSupportRecordsByShift(
   return out;
 }
 
+/** UI byShift 레코드를 엔진 보충 큐로 변환. blocked 행은 제외. */
+export function engineQueuesFromSupportRecords(
+  byShift:
+    | Partial<Record<ShiftPart, readonly SpecialSupportRecord[]>>
+    | null
+    | undefined
+): Record<ShiftPart, AutoAssignCaddy[]> {
+  const next = emptySpecialSupportByShift();
+  for (const part of SHIFT_PARTS) {
+    next[part] = (byShift?.[part] || [])
+      .filter((row) => !row.blocked)
+      .map((row) => ({
+        id: row.caddyId,
+        name: row.name || "",
+        team: row.team || "",
+        teamOrder: Number(row.teamOrder) || 0,
+      }));
+  }
+  return next;
+}
+
 export function uniqueCaddyIds(ids: readonly unknown[]): number[] {
   const out: number[] = [];
   const seen = new Set<number>();

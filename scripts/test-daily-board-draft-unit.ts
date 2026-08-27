@@ -23,6 +23,7 @@ import {
 } from "../src/lib/dailyBoardDraftService";
 import {
   createDraftFromAutoResult,
+  reservationsFromAssignmentDraft,
   type AssignmentDraft,
 } from "../src/lib/assignmentDraft";
 import {
@@ -246,6 +247,18 @@ section("payload: canonical AssignmentDraft only");
   assert(resolveDraftRequestDate("2026-08-26", "2026-08-25") === null, "URL/body date mismatch");
   assert(resolveDraftRequestDate("2026-08-26", "2026-08-26") === "2026-08-26", "matching dates");
   assert(resolveDraftRequestDate(null, "2026-08-26") === "2026-08-26", "body date only");
+}
+
+section("Draft 예약으로 자동배치 JSON 재실행 입력");
+{
+  const date = "2026-08-26";
+  const draft = makeDraft(date);
+  const rows = reservationsFromAssignmentDraft(draft);
+  assert(rows.length === draft.assignments.length, "assignment 예약을 모음");
+  assert(
+    new Set(rows.map((r) => reservationKey(r))).size === rows.length,
+    "예약 키 중복 없음"
+  );
 }
 
 section("자동배치 → Draft 생성 + 새로고침 hydrate");

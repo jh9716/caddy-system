@@ -167,11 +167,15 @@ export async function listSpecialSupportCandidates(
     .filter((row) => isEligibleSpecialSupportCandidate(row));
 }
 
-export async function buildDailySpecialSupportPayload(ymd: string) {
-  const [items, candidates] = await Promise.all([
-    listDailySpecialSupportRecords(ymd),
-    listSpecialSupportCandidates(ymd),
-  ]);
+export async function buildDailySpecialSupportPayload(
+  ymd: string,
+  options?: { includeCandidates?: boolean }
+) {
+  const includeCandidates = options?.includeCandidates === true;
+  const items = await listDailySpecialSupportRecords(ymd);
+  const candidates = includeCandidates
+    ? await listSpecialSupportCandidates(ymd)
+    : [];
   return {
     date: ymd,
     items,
@@ -243,8 +247,13 @@ export async function replaceDailySpecialSupports(input: {
   return { items, added: addIds.length, removed: removeIds.length };
 }
 
+/**
+ * 한 날짜 특수지원 큐를 한 번에 읽는다.
+ * course/team/shift 루프에서 호출하지 말 것 — preview/reflow 요청당 1회.
+ */
 export async function loadSpecialSupportQueuesForDate(
-  ymd: string
+  ymd: string,
+  options?: { unavailables?: SpecialSupportUnavailable[] }
 ): Promise<Record<ShiftPart, AutoAssignCaddy[]>> {
   parseYmd(ymd);
   const { start } = parseYmd(ymd);
@@ -254,7 +263,9 @@ export async function loadSpecialSupportQueuesForDate(
       include: { caddy: { select: caddySelect } },
       orderBy: [{ id: "asc" }],
     }),
-    loadUnavailables(ymd),
+    options?.unavailables
+      ? Promise.resolve(options.unavailables)
+      : loadUnavailables(ymd),
   ]);
   const blocked = unavailableReasonsMap(unavailables);
   const out = emptySpecialSupportByShift();

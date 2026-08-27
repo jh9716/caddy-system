@@ -178,6 +178,25 @@ export function unusedCaddies(draft: AssignmentDraft): AutoAssignCaddy[] {
   return draft.caddyPool.filter((c) => !used.has(c.id) && c.id > 0 && c.name);
 }
 
+/** Draft에 들어 있는 예약을 자동배치 JSON preview 입력으로 재사용. */
+export function reservationsFromAssignmentDraft(
+  draft: AssignmentDraft
+): AutoAssignReservation[] {
+  const seen = new Set<string>();
+  const out: AutoAssignReservation[] = [];
+  const push = (reservation: AutoAssignReservation | undefined | null) => {
+    if (!reservation) return;
+    const key = reservationKey(reservation);
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ ...reservation });
+  };
+  for (const row of draft.assignments || []) push(row.reservation);
+  for (const row of draft.unassignedReservations || []) push(row.reservation);
+  for (const row of draft.closedCourseReservations || []) push(row.reservation);
+  return out;
+}
+
 export function assignmentsByShift(
   draft: AssignmentDraft,
   shift: ShiftPart
