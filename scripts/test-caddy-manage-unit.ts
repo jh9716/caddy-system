@@ -430,13 +430,14 @@ console.log("== swap B auto-preview source ==");
     "generic live-change handlers kept"
   );
   assert(
-    /useState\(false\)/.test(panel) &&
-      /관리 도구/.test(panel) &&
-      /aria-expanded=\{adminToolsOpen\}/.test(panel),
+    /<details[\s\S]*className="admin-tools-details"/.test(panel) &&
+      /<summary[\s\S]*className="admin-tools-toggle"/.test(panel) &&
+      /관리 도구/.test(panel),
     "admin tools start collapsed"
   );
   assert(
-    !/setAdminToolsOpen\(true\)/.test(panel) &&
+    !/adminToolsOpen &&/.test(panel) &&
+      !/setAdminToolsOpen\(true\)/.test(panel) &&
       !/setAdvancedOpen\(true\)/.test(panel),
     "Quick Action preset does not auto-open admin tools"
   );
@@ -542,7 +543,8 @@ console.log("== ops menu simplify: one place per daily action ==");
     sheet.split("qa-caddy-actions")[1]?.split("function MovePreviewBlock")[0] ||
     "";
   const adminTools =
-    panel.split("{adminToolsOpen && (")[1]?.split("{error &&")[0] || "";
+    panel.split("<div className=\"admin-tools-body\">")[1]?.split("{error &&")[0] ||
+    "";
 
   assert(
     /\$\{teamName\} 팀/.test(sheet) && /className="qa-title"/.test(sheet),

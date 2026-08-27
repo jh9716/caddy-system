@@ -75,7 +75,8 @@ const COURSE_SHORT: Record<CourseCode, string> = {
 import { SpecialDutyPanel, type Shift1StartOption } from "./SpecialDutyPanel";
 import { SpecialSupportPanel } from "./SpecialSupportPanel";
 import { BoardQuickSheet, LiveChangePanel, LockToggle, SameDayAddSheet, TeamMoveSheet } from "./LiveChangePanel";
-import { emptySpecialSupportByShift, SPECIAL_SUPPORT_CHANGED_MESSAGE } from "@/lib/dailySpecialSupport";
+import { emptySpecialSupportByShift } from "@/lib/dailySpecialSupport";
+import { SPECIAL_SETTINGS_STALE_MESSAGE } from "@/lib/dailySpecialDuty";
 import { isThirdBandTeam, THIRD_BAND_TEAMS } from "@/lib/caddyManage";
 import { rotateThirdQueueFromStartTeam } from "@/lib/thirdWeeklyRotation";
 import {
@@ -271,6 +272,7 @@ export default function ManageAssignmentsOpsPage() {
   const [specialSupportByShift, setSpecialSupportByShift] = useState(
     emptySpecialSupportByShift
   );
+  const [specialSettingsStale, setSpecialSettingsStale] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [dutyFile, setDutyFile] = useState<File | null>(null);
   const [opsDutyStored, setOpsDutyStored] = useState<{
@@ -539,6 +541,7 @@ export default function ManageAssignmentsOpsPage() {
         return;
       }
       clearDraftBoard();
+      setSpecialSettingsStale(false);
       showToast("작업본을 초기화했습니다");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "작업본 초기화 실패");
@@ -763,9 +766,12 @@ export default function ManageAssignmentsOpsPage() {
     [courseOpen]
   );
 
-  /** 오늘 1부 첫 캐디 후보: 당일 일반 가용 1~8조 HOUSE만 (9~12조·special/제외 제외) */
+  /** 오늘 1부 첫 캐디 후보: 당일 일반 가용 1~8조 HOUSE만 (9~12조·special/제외 제외).
+   * Draft가 있으면 가용 로드 전에도 작업본 풀에서 고를 수 있다 (관리 도구 재배치). */
   const houseStartCandidates = useMemo(() => {
-    const rows = availability?.available?.all || [];
+    const rows = availability?.available?.all?.length
+      ? availability.available.all
+      : draft?.caddyPool || [];
     return rows
       .filter((r) => isHouseStartCandidate(r))
       .slice()
@@ -775,7 +781,7 @@ export default function ManageAssignmentsOpsPage() {
           (Number(a.teamOrder) || 0) - (Number(b.teamOrder) || 0) ||
           a.id - b.id
       );
-  }, [availability]);
+  }, [availability, draft]);
 
   /** 오늘 3부 첫 캐디 후보: 9~12조 (가용+특수+당일 제외 ACTIVE). RETIRED/LEAVE 제외. 주간 시작조 회전순 */
   const thirdStartCandidates = useMemo(() => {
@@ -1084,23 +1090,27 @@ export default function ManageAssignmentsOpsPage() {
     try {
       let caddyPool = pool;
       if (!availability) {
-        const availForm = new FormData();
-        availForm.append("date", date);
-        if (dutyFile) availForm.append("dutyFile", dutyFile);
-        const availRes = await fetch("/api/availability", {
-          method: "POST",
-          body: availForm,
-          credentials: "include",
-        });
-        const availData = await availRes.json();
-        if (!availRes.ok) {
-          setError(availData.error || "가용 불러오기 실패");
-          return;
+        if (draftRef.current?.caddyPool?.length) {
+          caddyPool = draftRef.current.caddyPool;
+        } else {
+          const availForm = new FormData();
+          availForm.append("date", date);
+          if (dutyFile) availForm.append("dutyFile", dutyFile);
+          const availRes = await fetch("/api/availability", {
+            method: "POST",
+            body: availForm,
+            credentials: "include",
+          });
+          const availData = await availRes.json();
+          if (!availRes.ok) {
+            setError(availData.error || "가용 불러오기 실패");
+            return;
+          }
+          setAvailability(availData as AvailabilityResult & { dailySummary?: DailyAvailabilitySummary });
+          caddyPool = regularCaddyPoolFromAvailabilityRows(
+            availData.available?.all || []
+          );
         }
-        setAvailability(availData as AvailabilityResult & { dailySummary?: DailyAvailabilitySummary });
-        caddyPool = regularCaddyPoolFromAvailabilityRows(
-          availData.available?.all || []
-        );
       }
 
       let res: Response;
@@ -1159,6 +1169,7 @@ export default function ManageAssignmentsOpsPage() {
       setUnavailableCaddyIds([]);
       setShiftTab("1부");
       queueDraftSave(next, true);
+      setSpecialSettingsStale(false);
       const closedN = data.closedCourseReservations?.length ?? 0;
       const skippedDuty = (data.specialDutySkipped || []).length;
       const unassignedSpecial = (data.specialUnassigned || []).length;
@@ -1770,6 +1781,7 @@ export default function ManageAssignmentsOpsPage() {
               setHouseStartCaddyId("");
               setThirdStartCaddyId("");
               setAvailability(null);
+              setSpecialSettingsStale(false);
             }}
           />
         </label>
@@ -1789,14 +1801,14 @@ export default function ManageAssignmentsOpsPage() {
               const v = e.target.value;
               setHouseStartCaddyId(v ? Number(v) : "");
             }}
-            disabled={!availability || houseStartCandidates.length === 0}
+            disabled={houseStartCandidates.length === 0}
           >
             <option value="">
-              {!availability
-                ? "먼저 가용 캐디를 불러오세요"
-                : houseStartCandidates.length === 0
-                  ? "선택 가능한 HOUSE 가용 캐디 없음"
-                  : "HOUSE 가용 캐디 선택…"}
+              {houseStartCandidates.length === 0
+                ? !availability
+                  ? "먼저 가용 캐디를 불러오세요"
+                  : "선택 가능한 HOUSE 가용 캐디 없음"
+                : "HOUSE 가용 캐디 선택…"}
             </option>
             {houseStartCandidates.map((c) => (
               <option key={c.id} value={c.id}>
@@ -2087,6 +2099,10 @@ export default function ManageAssignmentsOpsPage() {
             excludedRows={availability?.excluded}
             shift1Options={shift1Options}
             hasDraft={Boolean(draft || serverDraftVersionRef.current > 0)}
+            onChanged={() => {
+              setSpecialSettingsStale(true);
+              showToast(SPECIAL_SETTINGS_STALE_MESSAGE);
+            }}
           />
           <SpecialSupportPanel
             date={date}
@@ -2094,11 +2110,26 @@ export default function ManageAssignmentsOpsPage() {
             hasDraft={Boolean(draft || serverDraftVersionRef.current > 0)}
             onLoaded={onSpecialSupportLoaded}
             onChanged={() => {
-              showToast(SPECIAL_SUPPORT_CHANGED_MESSAGE);
+              setSpecialSettingsStale(true);
+              showToast(SPECIAL_SETTINGS_STALE_MESSAGE);
             }}
           />
         </details>
       </section>
+
+      {draft && specialSettingsStale ? (
+        <section className="ops-special-stale" role="status">
+          <p>{SPECIAL_SETTINGS_STALE_MESSAGE}</p>
+          <button
+            type="button"
+            className="btn primary"
+            disabled={loadingRun}
+            onClick={() => void runAutoAssign()}
+          >
+            {loadingRun ? "배치 중…" : "배치 다시 맞추기"}
+          </button>
+        </section>
+      ) : null}
 
       {liveWarnings.length > 0 && (
         <section className="ops-warnings">
@@ -3586,30 +3617,74 @@ const opsCss = `
     }
   }
   .admin-tools {
-    margin-top: 4px;
+    position: relative;
+    z-index: 6;
+    margin-top: 8px;
+    /* 모바일 하단 탭(z-index 35) + home indicator 아래로 토글이 깔리지 않게 */
+    margin-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
     padding: 0;
     background: transparent;
     border: 0;
   }
-  .admin-tools-toggle {
-    width: auto;
-    min-height: 28px;
-    border: 0;
-    background: transparent;
-    color: #94a3b8;
-    font-size: 0.75rem;
-    font-weight: 600;
-    text-align: left;
-    padding: 4px 0;
-    cursor: pointer;
+  .admin-tools-details {
+    margin: 0;
   }
-  .admin-tools.is-open .admin-tools-toggle {
+  .admin-tools-toggle {
+    display: block;
+    width: 100%;
+    min-height: 44px;
+    cursor: pointer;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    background: #fff;
+    color: #334155;
+    font-size: 0.9rem;
+    font-weight: 700;
+    text-align: left;
+    padding: 0;
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .admin-tools-toggle::-webkit-details-marker,
+  .admin-tools-toggle::marker {
+    display: none;
+    content: "";
+  }
+  .admin-tools-toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    min-height: 44px;
+    padding: 8px 12px;
+    box-sizing: border-box;
+    pointer-events: none;
+  }
+  .admin-tools-toggle-row::after {
+    content: "▾";
     color: #64748b;
+    font-weight: 700;
+    pointer-events: none;
+  }
+  .admin-tools-details[open] .admin-tools-toggle-row::after {
+    content: "▴";
+  }
+  .admin-tools-details[open] .admin-tools-toggle {
+    color: #0f172a;
+    border-color: #cbd5e1;
+  }
+  @media (min-width: 960px) {
+    .admin-tools {
+      margin-bottom: 12px;
+    }
+    .admin-tools-toggle {
+      min-height: 44px;
+    }
   }
   .admin-tools-body {
     display: grid;
     gap: 8px;
-    padding: 8px 0 4px;
+    padding: 10px 4px 8px;
   }
   .admin-tools-hint {
     margin: 0;
@@ -3623,9 +3698,28 @@ const opsCss = `
     gap: 8px;
   }
   .admin-tools-actions .btn {
-    min-height: 36px;
-    font-size: 0.8rem;
-    padding: 0 12px;
+    min-height: 44px;
+    font-size: 0.85rem;
+    padding: 0 14px;
+  }
+  .ops-special-stale {
+    display: grid;
+    gap: 8px;
+    padding: 12px;
+    border: 1px solid #fcd34d;
+    background: #fffbeb;
+    border-radius: 12px;
+  }
+  .ops-special-stale p {
+    margin: 0;
+    color: #92400e;
+    font-size: 0.85rem;
+    font-weight: 600;
+    line-height: 1.4;
+  }
+  .ops-special-stale .btn {
+    width: 100%;
+    min-height: 44px;
   }
   .live-preview {
     border: 1px dashed #94a3b8;
