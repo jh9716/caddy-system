@@ -102,14 +102,37 @@ section("배치 다시 맞추기 실행");
   assert(/배치 다시 맞추기/.test(body), "관리 도구 본문에 재배치");
   assert(/onClick=\{onReflow\}/.test(body), "재배치는 onReflow");
   assert(
-    /onRecalcOrder=\{\(\) => void runAutoAssign\(\)\}/.test(page),
-    "페이지가 기존 자동배치 실행에 연결"
+    /onRecalcOrder=\{\(\) => void runRecalcDraft\(\)\}/.test(page),
+    "관리 도구가 runRecalcDraft에 연결"
   );
   assert(
     /function onReflow\(/.test(panel) &&
       /if \(onRecalcOrder\) \{\s*onRecalcOrder\(\);/.test(panel),
-    "onReflow가 runAutoAssign을 호출"
+    "onReflow가 onRecalcOrder를 호출"
   );
+  const recalcFn = page.split("async function runRecalcDraft()")[1]?.split("function onReplace")[0] || "";
+  assert(
+    recalcFn.indexOf("window.confirm(RECALC_CONFIRM_MESSAGE)") <
+      recalcFn.indexOf("setLoadingRun(true)"),
+    "confirm이 loading보다 먼저"
+  );
+  assert(
+    /RECALC_RUNNING_LABEL/.test(body) && /disabled=\{recalcBusy\}/.test(body),
+    "관리 도구 실행 중 라벨+disabled"
+  );
+  assert(
+    /function failRecalc\(/.test(page) &&
+      /setRecalcNotice\(\{ tone: "error"/.test(page) &&
+      /showToast\(message, 6000\)/.test(page),
+    "실패는 상단 error만이 아니라 notice+toast"
+  );
+  assert(
+    /putAssignmentDraft\(/.test(recalcFn) &&
+      /applyHydratedDraft\(/.test(recalcFn) &&
+      recalcFn.indexOf("putAssignmentDraft") < recalcFn.indexOf("applyHydratedDraft"),
+    "preview 후 Draft PUT 성공 시에만 화면 갱신"
+  );
+  assert(/RECALC_SUCCESS_MESSAGE/.test(recalcFn), "성공 메시지");
 }
 
 section("작업본 초기화");
@@ -137,12 +160,12 @@ section("특수 설정 변경 안내/재배치 진입");
   );
   assert(/ops-special-stale/.test(page), "배치표 상단 안내 영역");
   assert(
-    /specialSettingsStale \? \(/.test(page) &&
+    /specialSettingsStale \|\| recalcNotice/.test(page) &&
       /SPECIAL_SETTINGS_STALE_MESSAGE/.test(page) &&
-      /onClick=\{\(\) => void runAutoAssign\(\)\}/.test(
+      /onClick=\{\(\) => void runRecalcDraft\(\)\}/.test(
         page.split("ops-special-stale")[1] || ""
       ),
-    "안내에 배치 다시 맞추기 버튼"
+    "안내에 배치 다시 맞추기 버튼이 runRecalcDraft"
   );
   const dutyChanged = page.split("SpecialDutyPanel")[2] || page;
   assert(
@@ -164,7 +187,9 @@ section("특수 설정 변경 안내/재배치 진입");
     "설정 변경 시 Draft를 자동 재계산하지 않음"
   );
   assert(
-    /setSpecialSettingsStale\(false\)/.test(page.split("queueDraftSave(next, true)")[1] || page),
+    /setSpecialSettingsStale\(false\)/.test(
+      page.split("async function runRecalcDraft()")[1] || page
+    ),
     "재배치 성공 후 안내 해제"
   );
   assert(

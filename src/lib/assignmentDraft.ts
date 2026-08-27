@@ -14,6 +14,7 @@ import {
   MIN_ONE_TWO_GAP_MINUTES,
   minutesBetweenReservations,
   reservationKey,
+  isHouseStartCandidate,
   type AutoAssignCaddy,
   type AutoAssignReservation,
   type AutoAssignResultV1,
@@ -195,6 +196,52 @@ export function reservationsFromAssignmentDraft(
   for (const row of draft.unassignedReservations || []) push(row.reservation);
   for (const row of draft.closedCourseReservations || []) push(row.reservation);
   return out;
+}
+
+export const RECALC_CONFIRM_MESSAGE =
+  "현재 저장된 작업본을 새 자동배치 결과로 다시 만들까요?";
+export const RECALC_RUNNING_LABEL = "배치 맞추는 중...";
+export const RECALC_SUCCESS_MESSAGE = "배치를 다시 맞췄습니다.";
+export const RECALC_NEED_HOUSE_START_MESSAGE =
+  "오늘 1부 첫 캐디를 확인할 수 없습니다. 상단에서 HOUSE 캐디를 선택한 뒤 다시 눌러 주세요.";
+export const RECALC_NEED_RESERVATIONS_MESSAGE =
+  "작업본에 예약이 없습니다. 예약 Excel을 선택한 뒤 다시 맞춰 주세요.";
+export const RECALC_NEED_DATE_MESSAGE = "날짜를 선택하세요.";
+export const RECALC_NEED_COURSE_MESSAGE = "최소 1개 코스를 ON으로 선택하세요.";
+export const RECALC_SAVE_FAILED_MESSAGE =
+  "배치는 계산됐지만 작업본 저장에 실패했습니다. 화면은 이전 작업본을 유지합니다.";
+
+function asPositiveId(value: unknown): number | null {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1) return null;
+  return n;
+}
+
+/**
+ * 배치 다시 맞추기용 1부 첫 캐디.
+ * 페이지를 다시 열면 houseStart 선택값이 비므로, Draft에서 복구한다.
+ * 우선순위: 현재 선택 → autoResult.meta → 1부 첫 regular HOUSE → caddyPool HOUSE.
+ */
+export function resolveHouseStartCaddyIdForRecalc(input: {
+  selectedId?: number | "" | null;
+  metaId?: number | null;
+  draft?: AssignmentDraft | null;
+}): { caddyId: number; source: "selected" | "meta" | "draftRegular" | "pool" } | null {
+  const selected = asPositiveId(input.selectedId);
+  if (selected) return { caddyId: selected, source: "selected" };
+  const meta = asPositiveId(input.metaId);
+  if (meta) return { caddyId: meta, source: "meta" };
+  const draft = input.draft;
+  if (!draft) return null;
+  const firstRegular = assignmentsByShift(draft, "1부").find(
+    (row) => row.kind === "regular" && isHouseStartCandidate(row.caddy)
+  );
+  if (firstRegular?.caddy?.id) {
+    return { caddyId: firstRegular.caddy.id, source: "draftRegular" };
+  }
+  const poolHouse = (draft.caddyPool || []).find((c) => isHouseStartCandidate(c));
+  if (poolHouse?.id) return { caddyId: poolHouse.id, source: "pool" };
+  return null;
 }
 
 export function assignmentsByShift(

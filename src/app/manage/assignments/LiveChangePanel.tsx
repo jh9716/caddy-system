@@ -39,6 +39,7 @@ import {
   summarizeReservationMove,
 } from "@/lib/reservationMove";
 import { formatCaddyLabel } from "@/lib/caddyDisplay";
+import { RECALC_RUNNING_LABEL } from "@/lib/assignmentDraft";
 
 type Props = {
   draft: AssignmentDraft;
@@ -53,6 +54,8 @@ type Props = {
   onResetDraft?: () => void;
   /** 관리 도구 · 현재 조건으로 순번 재계산 (기존 자동배치 실행). */
   onRecalcOrder?: () => void;
+  recalcBusy?: boolean;
+  recalcNotice?: { tone: "error" | "success" | "running"; text: string } | null;
   specialSupportByShift?: Record<ShiftPart, AutoAssignCaddy[]>;
 };
 
@@ -67,6 +70,8 @@ export function LiveChangePanel({
   defaultShift = "1부",
   onResetDraft,
   onRecalcOrder,
+  recalcBusy,
+  recalcNotice,
   specialSupportByShift,
 }: Props) {
   const [changeType, setChangeType] = useState<LiveChangeType>("CANCEL_RESERVATION");
@@ -323,9 +328,17 @@ export function LiveChangePanel({
           <p className="admin-tools-hint">
             현재 조건으로 캐디 순번을 다시 계산합니다
           </p>
+          {recalcNotice ? (
+            <p className={`recalc-notice is-${recalcNotice.tone}`}>{recalcNotice.text}</p>
+          ) : null}
           <div className="admin-tools-actions">
-            <button type="button" className="btn ghost" onClick={onReflow}>
-              배치 다시 맞추기
+            <button
+              type="button"
+              className="btn ghost"
+              disabled={recalcBusy}
+              onClick={onReflow}
+            >
+              {recalcBusy ? RECALC_RUNNING_LABEL : "배치 다시 맞추기"}
             </button>
             {onResetDraft ? (
               <button

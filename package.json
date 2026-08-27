@@ -50,7 +50,8 @@
     "test:special-placement-unit": "bash scripts/tsx-safe.sh scripts/test-special-placement-unit.ts",
     "test:daily-ops-duty-unit": "bash scripts/tsx-safe.sh scripts/test-daily-ops-duty-unit.ts",
     "test:third-weekly-rotation-unit": "bash scripts/tsx-safe.sh scripts/test-third-weekly-rotation-unit.ts",
-    "test:admin-tools-unit": "bash scripts/tsx-safe.sh scripts/test-admin-tools-unit.ts"
+    "test:admin-tools-unit": "bash scripts/tsx-safe.sh scripts/test-admin-tools-unit.ts",
+    "test:reflow-feedback-unit": "bash scripts/tsx-safe.sh scripts/test-reflow-feedback-unit.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",

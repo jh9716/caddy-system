@@ -13,6 +13,15 @@ import {
   replaceAssignmentCaddy,
   reservationIdentity,
   reservationsFromAssignmentDraft,
+  resolveHouseStartCaddyIdForRecalc,
+  RECALC_CONFIRM_MESSAGE,
+  RECALC_NEED_COURSE_MESSAGE,
+  RECALC_NEED_DATE_MESSAGE,
+  RECALC_NEED_HOUSE_START_MESSAGE,
+  RECALC_NEED_RESERVATIONS_MESSAGE,
+  RECALC_RUNNING_LABEL,
+  RECALC_SAVE_FAILED_MESSAGE,
+  RECALC_SUCCESS_MESSAGE,
   unassignReservation,
   unusedCaddies,
   type AssignmentDraft,
@@ -99,6 +108,7 @@ import {
 import {
   assignmentDraftToPayload,
   DRAFT_VERSION_CONFLICT,
+  DRAFT_VERSION_CONFLICT_MESSAGE,
   draftAutosaveCandidate,
   formatDraftSavedAt,
   parseDailyBoardDraftPayload,
@@ -273,6 +283,10 @@ export default function ManageAssignmentsOpsPage() {
     emptySpecialSupportByShift
   );
   const [specialSettingsStale, setSpecialSettingsStale] = useState(false);
+  const [recalcNotice, setRecalcNotice] = useState<{
+    tone: "error" | "success" | "running";
+    text: string;
+  } | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [dutyFile, setDutyFile] = useState<File | null>(null);
   const [opsDutyStored, setOpsDutyStored] = useState<{
@@ -356,6 +370,12 @@ export default function ManageAssignmentsOpsPage() {
       setAutoResult(autoResultFromDraft(assignmentDraft, null) as RunResponse);
       setWarnings(detectDraftWarnings(assignmentDraft));
       setCourseOpen(courseOpenFromList(assignmentDraft.openCourses));
+      const restoredStart = resolveHouseStartCaddyIdForRecalc({
+        selectedId: "",
+        metaId: null,
+        draft: assignmentDraft,
+      });
+      if (restoredStart) setHouseStartCaddyId(restoredStart.caddyId);
       setDraftSaveState("saved");
       setDraftSavedAt(savedAt ?? null);
       setSwapKey(null);
@@ -847,9 +867,9 @@ export default function ManageAssignmentsOpsPage() {
       ? draft.sparesByShift?.find((s) => s.shift === shiftTab) || null
       : null;
 
-  function showToast(msg: string) {
+  function showToast(msg: string, ms = 2200) {
     setToast(msg);
-    setTimeout(() => setToast(null), 2200);
+    setTimeout(() => setToast(null), ms);
   }
 
   async function persistThirdWeeklyStart(startTeam: string | null) {
@@ -1186,6 +1206,114 @@ export default function ManageAssignmentsOpsPage() {
       }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "자동배치 요청 실패");
+    } finally {
+      setLoadingRun(false);
+    }
+  }
+
+  function failRecalc(message: string) {
+    setError(message);
+    setRecalcNotice({ tone: "error", text: message });
+    showToast(message, 6000);
+  }
+
+  /** 배너/관리 도구 「배치 다시 맞추기」. confirm을 첫 줄에 두어 모바일 제스처를 유지한다. */
+  async function runRecalcDraft() {
+    const ok = window.confirm(RECALC_CONFIRM_MESSAGE);
+    if (!ok) return;
+
+    if (!date) {
+      failRecalc(RECALC_NEED_DATE_MESSAGE);
+      return;
+    }
+    const current = draftRef.current;
+    const draftReservations = current
+      ? reservationsFromAssignmentDraft(current)
+      : [];
+    if (draftReservations.length === 0) {
+      failRecalc(RECALC_NEED_RESERVATIONS_MESSAGE);
+      return;
+    }
+    if (openCourseList.length === 0) {
+      failRecalc(RECALC_NEED_COURSE_MESSAGE);
+      return;
+    }
+    const resolved = resolveHouseStartCaddyIdForRecalc({
+      selectedId: houseStartCaddyId,
+      metaId: autoResultRef.current?.meta?.houseStartCaddyId ?? null,
+      draft: current,
+    });
+    if (!resolved) {
+      failRecalc(RECALC_NEED_HOUSE_START_MESSAGE);
+      return;
+    }
+    setHouseStartCaddyId(resolved.caddyId);
+
+    setLoadingRun(true);
+    setRecalcNotice({ tone: "running", text: RECALC_RUNNING_LABEL });
+    setError(null);
+    try {
+      let caddyPool = pool;
+      if (!availability && current?.caddyPool?.length) {
+        caddyPool = current.caddyPool;
+      }
+
+      const res = await fetch("/api/assignments/preview", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          date,
+          reservations: draftReservations,
+          openCourses: openCourseList,
+          houseStartCaddyId: resolved.caddyId,
+          thirdStartTeam: thirdWeekly?.startTeam || undefined,
+          thirdStartCaddyId:
+            thirdStartCaddyId !== "" && Number(thirdStartCaddyId)
+              ? Number(thirdStartCaddyId)
+              : undefined,
+        }),
+      });
+      const data = (await res.json()) as RunResponse;
+      if (!res.ok) {
+        failRecalc(data.error || `자동배치 실패 (${res.status})`);
+        return;
+      }
+      const next = createDraftFromAutoResult(
+        data,
+        caddyPool.length ? caddyPool : undefined
+      );
+      const { res: saveRes, data: saveData } = await putAssignmentDraft(
+        next,
+        serverDraftVersionRef.current
+      );
+      if (saveRes.status === 409 || saveData.code === DRAFT_VERSION_CONFLICT) {
+        failRecalc(DRAFT_VERSION_CONFLICT_MESSAGE);
+        return;
+      }
+      if (!saveRes.ok || !saveData.draft) {
+        failRecalc(
+          saveData.error || `${RECALC_SAVE_FAILED_MESSAGE} (${saveRes.status})`
+        );
+        return;
+      }
+      applyHydratedDraft(
+        next,
+        Number(saveData.draft.version) || 0,
+        String(saveData.draft.updatedAt || "")
+      );
+      setAutoResult(data);
+      setHouseStartCaddyId(resolved.caddyId);
+      setWarnings(detectDraftWarnings(next));
+      setSwapKey(null);
+      setExpandedKey(null);
+      setQuickSheet(null);
+      setShiftTab("1부");
+      setSpecialSettingsStale(false);
+      setRecalcNotice({ tone: "success", text: RECALC_SUCCESS_MESSAGE });
+      showToast(RECALC_SUCCESS_MESSAGE, 5000);
+    } catch (e: unknown) {
+      failRecalc(e instanceof Error ? e.message : "자동배치 요청 실패");
     } finally {
       setLoadingRun(false);
     }
@@ -1782,6 +1910,7 @@ export default function ManageAssignmentsOpsPage() {
               setThirdStartCaddyId("");
               setAvailability(null);
               setSpecialSettingsStale(false);
+              setRecalcNotice(null);
             }}
           />
         </label>
@@ -2117,16 +2246,19 @@ export default function ManageAssignmentsOpsPage() {
         </details>
       </section>
 
-      {draft && specialSettingsStale ? (
+      {draft && (specialSettingsStale || recalcNotice) ? (
         <section className="ops-special-stale" role="status">
-          <p>{SPECIAL_SETTINGS_STALE_MESSAGE}</p>
+          {specialSettingsStale ? <p>{SPECIAL_SETTINGS_STALE_MESSAGE}</p> : null}
+          {recalcNotice ? (
+            <p className={`recalc-notice is-${recalcNotice.tone}`}>{recalcNotice.text}</p>
+          ) : null}
           <button
             type="button"
             className="btn primary"
             disabled={loadingRun}
-            onClick={() => void runAutoAssign()}
+            onClick={() => void runRecalcDraft()}
           >
-            {loadingRun ? "배치 중…" : "배치 다시 맞추기"}
+            {loadingRun ? RECALC_RUNNING_LABEL : "배치 다시 맞추기"}
           </button>
         </section>
       ) : null}
@@ -2617,7 +2749,9 @@ export default function ManageAssignmentsOpsPage() {
           preset={liveChangePreset}
           onPresetConsumed={() => setLiveChangePreset(null)}
           onResetDraft={() => void resetStoredDraft()}
-          onRecalcOrder={() => void runAutoAssign()}
+          onRecalcOrder={() => void runRecalcDraft()}
+          recalcBusy={loadingRun}
+          recalcNotice={recalcNotice}
           specialSupportByShift={specialSupportByShift}
           defaultShift={
             shiftTab === "UNASSIGNED" || shiftTab === "CLOSED"
@@ -3721,6 +3855,15 @@ const opsCss = `
     width: 100%;
     min-height: 44px;
   }
+  .recalc-notice {
+    margin: 0;
+    font-size: 0.85rem;
+    font-weight: 700;
+    line-height: 1.4;
+  }
+  .recalc-notice.is-running { color: #1d4ed8; }
+  .recalc-notice.is-success { color: #047857; }
+  .recalc-notice.is-error { color: #b91c1c; }
   .live-preview {
     border: 1px dashed #94a3b8;
     border-radius: 8px;
