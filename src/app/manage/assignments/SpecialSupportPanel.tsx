@@ -175,9 +175,11 @@ export function SpecialSupportPanel({
             : prev?.candidates) || [],
       }));
       setModalOpen(false);
-      if (hasDraft) setNotice(SPECIAL_SUPPORT_CHANGED_MESSAGE);
+      if (hasDraft) {
+        setNotice(SPECIAL_SUPPORT_CHANGED_MESSAGE);
+        onChanged?.();
+      }
       onLoaded?.(engineQueuesFromSupportRecords(data.byShift));
-      onChanged?.();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "특수지원 저장 실패");
     } finally {

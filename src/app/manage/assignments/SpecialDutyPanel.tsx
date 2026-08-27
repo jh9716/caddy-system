@@ -86,11 +86,13 @@ export function SpecialDutyPanel({
   excludedRows,
   shift1Options = [],
   hasDraft,
+  onChanged,
 }: {
   date: string;
   excludedRows?: Array<{ id: number; excludedReasons?: string[] | null }>;
   shift1Options?: Shift1StartOption[];
   hasDraft?: boolean;
+  onChanged?: () => void;
 }) {
   const [groups, setGroups] = useState<GroupPayload[]>([]);
   const [anchors, setAnchors] = useState<SpecialDutyAnchors>(EMPTY_ANCHORS);
@@ -270,7 +272,10 @@ export function SpecialDutyPanel({
       if (dup) bits.push(`중복 ${dup}`);
       if (reviews) bits.push(`확인 ${reviews}`);
       showToast(bits.join(" · "));
-      if (hasDraft) setDraftNotice(SPECIAL_DUTY_CHANGED_MESSAGE);
+      if (hasDraft) {
+        setDraftNotice(SPECIAL_DUTY_CHANGED_MESSAGE);
+        onChanged?.();
+      }
       if (data.reviews?.length) {
         setError(
           data.reviews
@@ -399,7 +404,10 @@ export function SpecialDutyPanel({
         return next;
       });
       showToast(`${DAILY_SPECIAL_KIND_LABELS[kind]} 저장`);
-      if (hasDraft) setDraftNotice(SPECIAL_DUTY_CHANGED_MESSAGE);
+      if (hasDraft) {
+        setDraftNotice(SPECIAL_DUTY_CHANGED_MESSAGE);
+        onChanged?.();
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "저장 실패");
     } finally {
@@ -441,7 +449,10 @@ export function SpecialDutyPanel({
           ? `자동 배치 · 끝 ${parsed.value}팀 제외`
           : "수동 위치 지정"
       );
-      if (hasDraft) setDraftNotice(SPECIAL_DUTY_CHANGED_MESSAGE);
+      if (hasDraft) {
+        setDraftNotice(SPECIAL_DUTY_CHANGED_MESSAGE);
+        onChanged?.();
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "위치 설정 저장 실패");
     } finally {

@@ -41,6 +41,10 @@ export const DAILY_SPECIAL_KIND_LABELS: Record<DailySpecialKind, string> = {
 export const SPECIAL_DUTY_CHANGED_MESSAGE =
   "특수근무 설정이 변경되었습니다. 현재 작업본에 반영하려면 자동배치를 다시 실행하세요.";
 
+/** 배치표 상단에 바로 노출하는 재배치 안내. 자동 재계산하지 않음. */
+export const SPECIAL_SETTINGS_STALE_MESSAGE =
+  "특수 설정이 변경되었습니다. 현재 작업본에 반영하려면 배치를 다시 맞춰 주세요.";
+
 /** 엔진 후보 배열에 연결되는 유형 */
 export const ENGINE_SPECIAL_KINDS = [
   "ONE_MAK",

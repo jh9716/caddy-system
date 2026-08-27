@@ -86,7 +86,6 @@ export function LiveChangePanel({
   const [moveTeeTime, setMoveTeeTime] = useState("");
   const [preview, setPreview] = useState<LiveChangePreview | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [adminToolsOpen, setAdminToolsOpen] = useState(false);
 
   const assignedOptions = useMemo(
     () =>
@@ -299,20 +298,27 @@ export function LiveChangePanel({
   }
 
   return (
-    <section
-      className={`admin-tools ${adminToolsOpen ? "is-open" : "is-collapsed"}`}
-      aria-label="관리 도구"
-    >
-      <button
-        type="button"
-        className="admin-tools-toggle"
-        aria-expanded={adminToolsOpen}
-        onClick={() => setAdminToolsOpen((open) => !open)}
+    <section className="admin-tools" aria-label="관리 도구">
+      <details
+        className="admin-tools-details"
+        onToggle={(e) => {
+          if (e.currentTarget.open) {
+            e.currentTarget.scrollIntoView({ block: "nearest", behavior: "smooth" });
+          }
+        }}
       >
-        관리 도구 {adminToolsOpen ? "▴" : "▾"}
-      </button>
-
-      {adminToolsOpen && (
+        {/* summary는 display:flex 금지 — iOS/Safari에서 details 토글이 먹통이 됨 */}
+        <summary
+          className="admin-tools-toggle"
+          onClick={(e) => {
+            const details = e.currentTarget.parentElement;
+            if (!(details instanceof HTMLDetailsElement)) return;
+            e.preventDefault();
+            details.open = !details.open;
+          }}
+        >
+          <span className="admin-tools-toggle-row">관리 도구</span>
+        </summary>
         <div className="admin-tools-body">
           <p className="admin-tools-hint">
             현재 조건으로 캐디 순번을 다시 계산합니다
@@ -337,7 +343,7 @@ export function LiveChangePanel({
             </p>
           ) : null}
         </div>
-      )}
+      </details>
 
       {error && <div className="ops-error">{error}</div>}
 
