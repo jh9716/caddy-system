@@ -544,6 +544,10 @@ section("source / UI / migration / 권한");
   assert(/1부 지원/.test(supportUi), "부별 인원 요약");
   assert(/ss-kinds/.test(supportUi), "mobile 3부 탭");
   assert(/SpecialSupportPanel/.test(page), "날짜 설정에 특수지원");
+  assert(
+    /isThirdBandTeam, THIRD_BAND_TEAMS/.test(page),
+    "THIRD_BAND_TEAMS import 유지"
+  );
   assert(/requireAdmin/.test(route), "API requireAdmin");
   assert(/kind: "specialSupport"/.test(engine), "assignment kind");
   assert(/pickNextSpecialSupport/.test(engine), "보충 큐 사용");

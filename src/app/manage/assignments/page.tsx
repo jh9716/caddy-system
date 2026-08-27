@@ -74,6 +74,7 @@ import { SpecialDutyPanel, type Shift1StartOption } from "./SpecialDutyPanel";
 import { SpecialSupportPanel } from "./SpecialSupportPanel";
 import { BoardQuickSheet, LiveChangePanel, LockToggle, SameDayAddSheet, TeamMoveSheet } from "./LiveChangePanel";
 import { emptySpecialSupportByShift, SPECIAL_SUPPORT_CHANGED_MESSAGE } from "@/lib/dailySpecialSupport";
+import { isThirdBandTeam, THIRD_BAND_TEAMS } from "@/lib/caddyManage";
 import { rotateThirdQueueFromStartTeam } from "@/lib/thirdWeeklyRotation";
 import {
   LIVE_CHANGE_LABELS,
