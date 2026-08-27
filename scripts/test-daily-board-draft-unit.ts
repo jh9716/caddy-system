@@ -27,6 +27,7 @@ import {
 } from "../src/lib/assignmentDraft";
 import {
   computeAutoAssignmentsV1,
+  REASON,
   reservationKey,
   type AutoAssignCaddy,
   type AutoAssignReservation,
@@ -650,6 +651,111 @@ section("source guards: API / UI / migration / live save order");
   assert(/배치 확정/.test(page), "Published 확정 primary action");
   assert(/publishBoardActionState/.test(page), "already-current publish label");
   assert(/PUBLISH_HINT/.test(page), "publish hint copy");
+}
+
+section("저장된 평일 Draft는 엔진 수정만으로 자동 교정되지 않음");
+{
+  const date = "2026-08-27";
+  const weekend: AutoAssignCaddy = {
+    id: 12,
+    name: "W12",
+    team: "12조",
+    teamOrder: 1,
+    caddyType: "THIRD",
+    thirdBandSubgroup: "WEEKEND",
+    employmentStatus: "ACTIVE",
+  };
+  const weekdayThird: AutoAssignCaddy = {
+    id: 10,
+    name: "D10",
+    team: "10조",
+    teamOrder: 1,
+    caddyType: "THIRD",
+    thirdBandSubgroup: "WEEKDAY",
+    employmentStatus: "ACTIVE",
+  };
+  const available = [...pool(8), weekend, weekdayThird];
+  const fresh = computeAutoAssignmentsV1({
+    date,
+    available,
+    reservations: [
+      ...reservations(date),
+      {
+        id: "T1",
+        date,
+        course: "LAKE",
+        shift: "3부",
+        teeTime: "14:00",
+        teamName: "3부-1",
+      },
+    ],
+  });
+  assert(
+    !fresh.assignments.some(
+      (a) => a.shift === "3부" && a.caddy.id === 12
+    ),
+    "엔진 재실행: 평일 WEEKEND 3부 0"
+  );
+
+  const staleDraft = createDraftFromAutoResult(fresh, available);
+  staleDraft.assignments = [
+    ...staleDraft.assignments,
+    {
+      date,
+      shift: "3부",
+      sequenceIndex: 99,
+      reason: REASON.REGULAR_SEQUENCE,
+      reservation: {
+        id: "STALE-W12",
+        date,
+        course: "LAKE",
+        shift: "3부",
+        teeTime: "15:00",
+        teamName: "버그초안",
+      },
+      caddy: weekend,
+      kind: "regular",
+    },
+  ];
+  const { db } = createMemoryDraftDb();
+  await saveDailyBoardDraft({
+    date,
+    expectedVersion: 0,
+    payload: assignmentDraftToPayload(staleDraft),
+    updatedByUserId: null,
+    db,
+  });
+  const hydrated = await getDailyBoardDraft(date, db);
+  const restored = payloadToAssignmentDraft(hydrated!.payload);
+  assert(
+    restored.assignments.some(
+      (a) => a.shift === "3부" && a.caddy.id === 12 && a.caddy.name === "W12"
+    ),
+    "hydrate는 저장된 평일 WEEKEND 3부 행을 그대로 둠"
+  );
+  const parsed = parseDailyBoardDraftPayload(hydrated!.payload, date);
+  assert(
+    parsed.assignments.some((a) => a.caddy.id === 12),
+    "parseDailyBoardDraftPayload는 엔진을 다시 돌리지 않음"
+  );
+
+  const replaced = createDraftFromAutoResult(fresh, available);
+  assert(
+    !replaced.assignments.some((a) => a.caddy.id === 12),
+    "자동배치를 다시 실행하면 평일 WEEKEND 3부가 빠짐"
+  );
+
+  const draftRoute = readSrc("src/app/api/assignments/draft/route.ts");
+  assert(
+    !/computeAutoAssignmentsV1/.test(draftRoute),
+    "GET/PUT Draft API는 엔진 재계산 없음"
+  );
+  const page = readSrc("src/app/manage/assignments/page.tsx");
+  assert(
+    /현재 저장된 작업본을 새 자동배치 결과로 다시 만들까요/.test(page) &&
+      /queueDraftSave\(next, true\)/.test(page),
+    "직원이 자동배치 실행 시 저장된 Draft를 새 결과로 교체"
+  );
 }
 
 section("캐디 권한 Draft API 접근 불가 (requireAdmin 401)");
