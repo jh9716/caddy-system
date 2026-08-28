@@ -192,6 +192,45 @@ export function emptyBoardCellAction(
   return String(moveReservationKey || "").trim() ? "move" : "add";
 }
 
+export const TEAM_MOVED_TOAST = "팀을 이동했습니다.";
+export const TEAM_MOVE_UNDONE_TOAST = "팀 이동을 되돌렸습니다.";
+export const TEAM_MOVING_LABEL = "이동 중...";
+export const TEAM_MOVE_UNDO_LABEL = "되돌리기";
+
+export type ReservationMoveUndoPayload = {
+  reservationKey?: string;
+  reservationId?: string | number;
+  to: ReservationMoveDest;
+};
+
+/** 성공한 MOVE의 원래 위치를 목적지로 하는 1회 Undo payload. */
+export function reservationMoveUndoPayload(input: {
+  reservationKey?: string;
+  reservationId?: string | number;
+  from: { course: string; shift: string; teeTime: string };
+}): ReservationMoveUndoPayload | null {
+  const dest = parseMoveDestination(input.from);
+  if (!dest) return null;
+  return {
+    reservationKey: input.reservationKey,
+    reservationId: input.reservationId,
+    to: dest,
+  };
+}
+
+export function isPendingMoveDest(
+  pending: { course: string; shift: string; teeTime: string } | null | undefined,
+  cell: { course: string; shift: string; teeTime: string }
+): boolean {
+  if (!pending) return false;
+  return (
+    resolveCourseCode(String(pending.course)) ===
+      resolveCourseCode(String(cell.course)) &&
+    parseAssignShiftPart(pending.shift) === parseAssignShiftPart(cell.shift) &&
+    String(pending.teeTime) === String(cell.teeTime)
+  );
+}
+
 export function courseLabelKo(course: string): string {
   const code = resolveCourseCode(course);
   return (code && COURSE_LABELS[code]) || course;

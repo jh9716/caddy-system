@@ -891,11 +891,13 @@ export function TeamMoveSheet({
   onClose,
   onCancelMove,
   onSubmit,
+  applying = false,
 }: {
   row: AutoAssignmentRow;
   onClose: () => void;
   onCancelMove: () => void;
   onSubmit: (change: LiveChangeInput) => void;
+  applying?: boolean;
 }) {
   const fromShift =
     (SHIFT_PARTS as readonly string[]).includes(String(row.shift))
@@ -987,8 +989,13 @@ export function TeamMoveSheet({
           </label>
           {block ? <div className="ops-error">{block.message}</div> : null}
           {formError ? <div className="ops-error">{formError}</div> : null}
-          <button type="button" className="btn primary" onClick={submit} disabled={!!block}>
-            미리보기
+          <button
+            type="button"
+            className="btn primary"
+            onClick={submit}
+            disabled={!!block || applying}
+          >
+            {applying ? "이동 중..." : "이동"}
           </button>
           <button type="button" className="btn ghost" onClick={onClose}>
             보드에서 빈 칸 선택
