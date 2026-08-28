@@ -93,7 +93,6 @@ import {
   QUICK_ACTION_CONFIRM_MESSAGE,
   changeFromEmptyBoardCell,
   hasBlockingLiveChangeError,
-  makeMoveReservationChange,
   needsQuickActionConfirm,
   previewLiveChangeFromDraft,
   shouldReconcileLivePersist,
@@ -106,9 +105,6 @@ import {
   isPendingMoveDest,
   parseMoveDestination,
   reservationMoveBlockReason,
-  reservationMoveUndoPayload,
-  TEAM_MOVE_UNDO_LABEL,
-  TEAM_MOVE_UNDONE_TOAST,
   TEAM_MOVED_TOAST,
   TEAM_MOVING_LABEL,
 } from "@/lib/reservationMove";
@@ -342,10 +338,6 @@ export default function ManageAssignmentsOpsPage() {
     shift: ShiftPart;
     teeTime: string;
   } | null>(null);
-  const [toastAction, setToastAction] = useState<{
-    label: string;
-    onClick: () => void;
-  } | null>(null);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [quickSheet, setQuickSheet] = useState<{
     mode: "team" | "caddy";
@@ -376,7 +368,6 @@ export default function ManageAssignmentsOpsPage() {
   const draftSaveInFlightPromiseRef = useRef<Promise<unknown> | null>(null);
   const publishingRef = useRef(false);
   const moveApplyingRef = useRef(false);
-  const pendingUndoRef = useRef<LiveChangeInput | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const boardWrapRef = useRef<HTMLDivElement | null>(null);
   draftRef.current = draft;
@@ -891,17 +882,11 @@ export default function ManageAssignmentsOpsPage() {
       ? draft.sparesByShift?.find((s) => s.shift === shiftTab) || null
       : null;
 
-  function showToast(
-    msg: string,
-    ms = 2200,
-    action?: { label: string; onClick: () => void } | null
-  ) {
+  function showToast(msg: string, ms = 2200) {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     setToast(msg);
-    setToastAction(action ?? null);
     toastTimerRef.current = setTimeout(() => {
       setToast(null);
-      setToastAction(null);
       toastTimerRef.current = null;
     }, ms);
   }
@@ -1472,10 +1457,7 @@ export default function ManageAssignmentsOpsPage() {
     });
   }
 
-  async function applyReservationMove(
-    change: LiveChangeInput,
-    options?: { isUndo?: boolean }
-  ) {
+  async function applyReservationMove(change: LiveChangeInput) {
     if (change.type !== "MOVE_RESERVATION") return;
     if (moveApplyingRef.current) return;
     const current = draftRef.current;
@@ -1521,23 +1503,6 @@ export default function ManageAssignmentsOpsPage() {
       return;
     }
 
-    const sourceRow = current.assignments.find((row) =>
-      reservationIdentity(row.reservation) ===
-      (change.reservationKey || moveKey || "")
-    );
-    const undoPayload =
-      !options?.isUndo && sourceRow
-        ? reservationMoveUndoPayload({
-            reservationKey: change.reservationKey,
-            reservationId: change.reservationId ?? sourceRow.reservation.id,
-            from: {
-              course: String(sourceRow.reservation.course),
-              shift: String(sourceRow.shift || sourceRow.reservation.shift),
-              teeTime: sourceRow.reservation.teeTime,
-            },
-          })
-        : null;
-
     try {
       let ok = false;
       const gen = persistGenRef.current;
@@ -1555,26 +1520,7 @@ export default function ManageAssignmentsOpsPage() {
       if (ok) {
         setMoveKey(null);
         setMoveSheetOpen(false);
-        if (options?.isUndo) {
-          pendingUndoRef.current = null;
-          showToast(TEAM_MOVE_UNDONE_TOAST, 2800);
-        } else if (undoPayload) {
-          const reverse = makeMoveReservationChange(undoPayload);
-          pendingUndoRef.current = reverse;
-          showToast(TEAM_MOVED_TOAST, 6000, {
-            label: TEAM_MOVE_UNDO_LABEL,
-            onClick: () => {
-              const next = pendingUndoRef.current;
-              pendingUndoRef.current = null;
-              setToast(null);
-              setToastAction(null);
-              if (next) void applyReservationMove(next, { isUndo: true });
-            },
-          });
-        } else {
-          pendingUndoRef.current = null;
-          showToast(TEAM_MOVED_TOAST, 2800);
-        }
+        showToast(TEAM_MOVED_TOAST, 2800);
         restoreBoardScroll(wrap, scrollTop);
       } else {
         restoreBoardScroll(wrap, scrollTop);
@@ -2949,16 +2895,7 @@ export default function ManageAssignmentsOpsPage() {
 
       {toast && (
         <div className="ops-toast vh-manage-toast" role="status">
-          <span>{toast}</span>
-          {toastAction ? (
-            <button
-              type="button"
-              className="ops-toast-action"
-              onClick={toastAction.onClick}
-            >
-              {toastAction.label}
-            </button>
-          ) : null}
+          {toast}
         </div>
       )}
       {addTeamOpen &&
@@ -3929,17 +3866,6 @@ const opsCss = `
     align-items: center;
     justify-content: center;
     gap: 10px;
-  }
-  .ops-toast-action {
-    appearance: none;
-    background: #fff;
-    color: #0f172a;
-    border: 0;
-    border-radius: 999px;
-    padding: 6px 12px;
-    font-size: 0.8rem;
-    font-weight: 700;
-    cursor: pointer;
   }
   .live-preview-dock {
     position: fixed;

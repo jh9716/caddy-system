@@ -563,10 +563,10 @@ console.log("== 보드 팀 이동은 미리보기 없이 즉시 apply ==");
   );
   assert(
     /TEAM_MOVED_TOAST/.test(moveFn) &&
-      /TEAM_MOVE_UNDO_LABEL/.test(moveFn) &&
-      /isUndo/.test(moveFn) &&
-      /reservationMoveUndoPayload/.test(moveFn),
-    "successful quick move offers server-side Undo"
+      !/TEAM_MOVE_UNDO_LABEL/.test(moveFn) &&
+      !/isUndo/.test(moveFn) &&
+      !/reservationMoveUndoPayload/.test(moveFn),
+    "successful quick move toasts without unverified Undo"
   );
   assert(
     /moveApplyingRef\.current/.test(emptyFn) &&
@@ -586,8 +586,32 @@ console.log("== 보드 팀 이동은 미리보기 없이 즉시 apply ==");
   );
   assert(
     /export const TEAM_MOVED_TOAST = "팀을 이동했습니다."/.test(moveLib) &&
-      /export function reservationMoveUndoPayload/.test(moveLib),
-    "undo/toast copy lives in reservationMove helpers"
+      !/되돌리기/.test(moveLib),
+    "moved toast copy without Undo action"
+  );
+  assert(
+    /rollbackDraft: current/.test(moveFn) &&
+      /applyServerDraft: true/.test(moveFn),
+    "quick move persist uses pre-move Draft as rollback snapshot"
+  );
+  const persistFn =
+    board.split("async function persistLivePreview")[1]?.split("function quickActionToast")[0] ||
+    "";
+  const persistFail =
+    persistFn.split("if (!res.ok)")[1]?.split("let savedDraft")[0] || "";
+  assert(
+    /setDraft\(input\.rollbackDraft\)/.test(persistFail) &&
+      /setError\(/.test(persistFail) &&
+      /showToast\(/.test(persistFail) &&
+      /data\.error/.test(persistFail) &&
+      !/queueDraftSave/.test(persistFail),
+    "failed apply restores previous Draft, shows server error, does not save"
+  );
+  assert(
+    /setError\(blocking\.message\)/.test(moveFn) &&
+      /showToast\(blocking\.message\)/.test(moveFn) &&
+      /moveApplyingRef\.current = false/.test(moveFn),
+    "client-blocked quick move keeps Draft and surfaces the error"
   );
   assert(
     /이대로 적용/.test(panel) && /setLiveChangePreset\(change\)/.test(emptyFn),

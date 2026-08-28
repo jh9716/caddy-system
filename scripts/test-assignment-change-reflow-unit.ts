@@ -51,10 +51,7 @@ import {
   isStableReservationMoveKey,
   reflowShiftsForMove,
   reservationMoveBlockReason,
-  reservationMoveUndoPayload,
   TEAM_MOVED_TOAST,
-  TEAM_MOVE_UNDO_LABEL,
-  TEAM_MOVE_UNDONE_TOAST,
   TEAM_MOVING_LABEL,
 } from "../src/lib/reservationMove";
 import {
@@ -2751,22 +2748,6 @@ section("MOVE_RESERVATION 헬퍼 / 빈칸은 이동 모드에서 당추가 아�
     moveReservationKey: "uid:xlsx.2026-08-22.예약.3",
   });
   assert(uidMoveCell.type === "MOVE_RESERVATION", "uid move key → MOVE not ADD");
-  const undo = reservationMoveUndoPayload({
-    reservationKey: "id:44",
-    reservationId: 44,
-    from: { course: "VERTHILL", shift: "1부", teeTime: "07:00" },
-  });
-  assert(undo?.reservationKey === "id:44", "undo keeps stable key");
-  assert(undo?.to.course === "VERTHILL", "undo dest is original course");
-  assert(undo?.to.shift === "1부", "undo dest is original shift");
-  assert(undo?.to.teeTime === "07:00", "undo dest is original tee");
-  assert(
-    reservationMoveUndoPayload({
-      reservationKey: "id:1",
-      from: { course: "NOPE", shift: "1부", teeTime: "07:00" },
-    }) === null,
-    "undo payload rejects invalid dest"
-  );
   assert(
     isPendingMoveDest(
       { course: "SKY", shift: "2부", teeTime: "11:20" },
@@ -2782,9 +2763,7 @@ section("MOVE_RESERVATION 헬퍼 / 빈칸은 이동 모드에서 당추가 아�
     "pending dest ignores other course"
   );
   assert(TEAM_MOVED_TOAST === "팀을 이동했습니다.", "moved toast copy");
-  assert(TEAM_MOVE_UNDONE_TOAST === "팀 이동을 되돌렸습니다.", "undone toast copy");
   assert(TEAM_MOVING_LABEL === "이동 중...", "pending label");
-  assert(TEAM_MOVE_UNDO_LABEL === "되돌리기", "undo action copy");
 }
 
 function excelRes(
