@@ -192,6 +192,22 @@ export function emptyBoardCellAction(
   return String(moveReservationKey || "").trim() ? "move" : "add";
 }
 
+export const TEAM_MOVED_TOAST = "팀을 이동했습니다.";
+export const TEAM_MOVING_LABEL = "이동 중...";
+
+export function isPendingMoveDest(
+  pending: { course: string; shift: string; teeTime: string } | null | undefined,
+  cell: { course: string; shift: string; teeTime: string }
+): boolean {
+  if (!pending) return false;
+  return (
+    resolveCourseCode(String(pending.course)) ===
+      resolveCourseCode(String(cell.course)) &&
+    parseAssignShiftPart(pending.shift) === parseAssignShiftPart(cell.shift) &&
+    String(pending.teeTime) === String(cell.teeTime)
+  );
+}
+
 export function courseLabelKo(course: string): string {
   const code = resolveCourseCode(course);
   return (code && COURSE_LABELS[code]) || course;

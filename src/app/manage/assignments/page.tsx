@@ -102,7 +102,11 @@ import {
 } from "@/lib/assignmentChange";
 import {
   emptyBoardCellAction,
+  isPendingMoveDest,
+  parseMoveDestination,
   reservationMoveBlockReason,
+  TEAM_MOVED_TOAST,
+  TEAM_MOVING_LABEL,
 } from "@/lib/reservationMove";
 import {
   assignmentDraftToPayload,
@@ -328,6 +332,12 @@ export default function ManageAssignmentsOpsPage() {
   const [swapKey, setSwapKey] = useState<string | null>(null);
   const [moveKey, setMoveKey] = useState<string | null>(null);
   const [moveSheetOpen, setMoveSheetOpen] = useState(false);
+  const [moveApplying, setMoveApplying] = useState(false);
+  const [movePendingDest, setMovePendingDest] = useState<{
+    course: CourseCode;
+    shift: ShiftPart;
+    teeTime: string;
+  } | null>(null);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [quickSheet, setQuickSheet] = useState<{
     mode: "team" | "caddy";
@@ -357,6 +367,9 @@ export default function ManageAssignmentsOpsPage() {
   const draftSaveInFlightRef = useRef(false);
   const draftSaveInFlightPromiseRef = useRef<Promise<unknown> | null>(null);
   const publishingRef = useRef(false);
+  const moveApplyingRef = useRef(false);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const boardWrapRef = useRef<HTMLDivElement | null>(null);
   draftRef.current = draft;
   autoResultRef.current = autoResult;
 
@@ -379,6 +392,9 @@ export default function ManageAssignmentsOpsPage() {
       setDraftSavedAt(savedAt ?? null);
       setSwapKey(null);
       setMoveKey(null);
+      setMoveSheetOpen(false);
+      setMoveApplying(false);
+      setMovePendingDest(null);
       setQuickSheet(null);
       setExpandedKey(null);
       hydratingDraftRef.current = false;
@@ -867,8 +883,12 @@ export default function ManageAssignmentsOpsPage() {
       : null;
 
   function showToast(msg: string, ms = 2200) {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     setToast(msg);
-    setTimeout(() => setToast(null), ms);
+    toastTimerRef.current = setTimeout(() => {
+      setToast(null);
+      toastTimerRef.current = null;
+    }, ms);
   }
 
   async function persistThirdWeeklyStart(startTeam: string | null) {
@@ -1365,6 +1385,10 @@ export default function ManageAssignmentsOpsPage() {
     mode: "team" | "caddy"
   ) {
     if (moveKey) {
+      if (moveApplyingRef.current) {
+        setQuickSheet(null);
+        return;
+      }
       const key = reservationIdentity(row.reservation);
       if (key === moveKey) {
         setMoveSheetOpen(true);
@@ -1401,6 +1425,7 @@ export default function ManageAssignmentsOpsPage() {
   );
 
   function onStartTeamMove(row: AutoAssignmentRow) {
+    if (moveApplyingRef.current) return;
     const block = reservationMoveBlockReason(row);
     if (block) {
       setError(block.message);
@@ -1417,15 +1442,103 @@ export default function ManageAssignmentsOpsPage() {
   }
 
   function cancelTeamMove() {
+    if (moveApplyingRef.current) return;
     setMoveKey(null);
     setMoveSheetOpen(false);
+    setMovePendingDest(null);
     showToast("팀 이동을 취소했습니다");
   }
 
+  function restoreBoardScroll(wrap: HTMLDivElement | null, scrollTop: number) {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (wrap) wrap.scrollTop = scrollTop;
+      });
+    });
+  }
+
+  async function applyReservationMove(change: LiveChangeInput) {
+    if (change.type !== "MOVE_RESERVATION") return;
+    if (moveApplyingRef.current) return;
+    const current = draftRef.current;
+    if (!current) return;
+
+    const dest = parseMoveDestination(change.to);
+    if (!dest) {
+      const msg = "목적 부/코스/티타임을 확인하세요.";
+      setError(msg);
+      showToast(msg);
+      return;
+    }
+
+    moveApplyingRef.current = true;
+    setMoveApplying(true);
+    setMoveSheetOpen(false);
+    setLiveChangePreset(null);
+    setMovePendingDest({
+      course: dest.course,
+      shift: dest.shift,
+      teeTime: dest.teeTime,
+    });
+    setError(null);
+
+    const wrap = boardWrapRef.current;
+    const scrollTop = wrap?.scrollTop ?? 0;
+    const livePool = excludeCaddiesById(current.caddyPool, opsDutyCaddyIds);
+    const previous = autoResultFromDraft(current, autoResultRef.current);
+    const preview = previewLiveChangeFromDraft({
+      draft: { ...current, caddyPool: livePool },
+      base: autoResultRef.current,
+      change,
+      specialSupportByShift,
+    });
+    const blocking = preview.warnings.find((w) => w.level === "error");
+    if (blocking) {
+      moveApplyingRef.current = false;
+      setMoveApplying(false);
+      setMovePendingDest(null);
+      setError(blocking.message);
+      showToast(blocking.message);
+      restoreBoardScroll(wrap, scrollTop);
+      return;
+    }
+
+    try {
+      let ok = false;
+      const gen = persistGenRef.current;
+      await (persistQueueRef.current = persistQueueRef.current.then(async () => {
+        if (gen !== persistGenRef.current) return;
+        ok = await persistLivePreview({
+          preview,
+          previous,
+          pool: livePool,
+          applyServerDraft: true,
+          rollbackDraft: current,
+        });
+        if (!ok) persistGenRef.current += 1;
+      }));
+      if (ok) {
+        setMoveKey(null);
+        setMoveSheetOpen(false);
+        showToast(TEAM_MOVED_TOAST, 2800);
+        restoreBoardScroll(wrap, scrollTop);
+      } else {
+        restoreBoardScroll(wrap, scrollTop);
+      }
+    } finally {
+      moveApplyingRef.current = false;
+      setMoveApplying(false);
+      setMovePendingDest(null);
+    }
+  }
+
   function onRequestLiveChange(change: LiveChangeInput) {
-    if (change.type === "ADD_RESERVATION" || change.type === "MOVE_RESERVATION") {
+    if (change.type === "ADD_RESERVATION") {
       setLiveChangePreset(change);
-      if (change.type === "MOVE_RESERVATION") setMoveSheetOpen(false);
+      return;
+    }
+    if (change.type === "MOVE_RESERVATION") {
+      void applyReservationMove(change);
       return;
     }
     void applyQuickChange(change);
@@ -1433,6 +1546,7 @@ export default function ManageAssignmentsOpsPage() {
 
   function onEmptyBoardCellClick(course: CourseCode, teeTime: string) {
     if (!draft || shiftTab === "UNASSIGNED" || shiftTab === "CLOSED") return;
+    if (moveApplyingRef.current) return;
     const change = changeFromEmptyBoardCell({
       date: draft.date,
       course,
@@ -1442,8 +1556,7 @@ export default function ManageAssignmentsOpsPage() {
       moveReservationKey: moveKey,
     });
     if (change.type === "MOVE_RESERVATION") {
-      setMoveSheetOpen(false);
-      setLiveChangePreset(change);
+      void applyReservationMove(change);
       return;
     }
     const courseLabel = COURSE_LABELS[course];
@@ -1654,7 +1767,11 @@ export default function ManageAssignmentsOpsPage() {
             data.message ||
             "배치 저장 중 오류가 발생했습니다. 다시 시도해주세요."
         );
-        showToast("저장 실패 · 이전 상태로 되돌렸습니다");
+        showToast(
+          data.error ||
+            data.message ||
+            "저장 실패 · 이전 상태로 되돌렸습니다"
+        );
         return false;
       }
       let savedDraft: AssignmentDraft | null = null;
@@ -1684,7 +1801,20 @@ export default function ManageAssignmentsOpsPage() {
         mutationSucceeded: true,
         draft: savedDraft,
       });
-      if (toSave) queueDraftSave(toSave, true);
+      if (toSave) {
+        queueDraftSave(toSave, true);
+        const flushed = await flushDraftSave();
+        if (flushed.status === "conflict") {
+          setError(DRAFT_VERSION_CONFLICT_MESSAGE);
+          showToast(DRAFT_VERSION_CONFLICT_MESSAGE);
+          return false;
+        }
+        if (flushed.status !== "ok") {
+          setError("작업본 저장에 실패했습니다. 다시 시도해주세요.");
+          showToast("저장 실패 · 다시 시도");
+          return false;
+        }
+      }
       return true;
     } catch (e: unknown) {
       if (input.rollbackDraft) {
@@ -1692,7 +1822,9 @@ export default function ManageAssignmentsOpsPage() {
         setWarnings(detectDraftWarnings(input.rollbackDraft));
       }
       setError(e instanceof Error ? e.message : "현장 변경 적용 실패");
-      showToast("저장 실패 · 이전 상태로 되돌렸습니다");
+      showToast(
+        e instanceof Error ? e.message : "저장 실패 · 이전 상태로 되돌렸습니다"
+      );
       return false;
     }
   }
@@ -2333,7 +2465,7 @@ export default function ManageAssignmentsOpsPage() {
                     if (moveKey) return;
                     setAddTeamOpen(true);
                   }}
-                  disabled={!!moveKey}
+                  disabled={!!moveKey || moveApplying}
                 >
                   {moveKey ? "이동 중" : "+ 추가팀"}
                 </button>
@@ -2380,7 +2512,12 @@ export default function ManageAssignmentsOpsPage() {
                     옮겨도 유지됩니다. 빈 칸을 탭하세요.
                   </span>
                 </div>
-                <button type="button" className="btn tiny ghost" onClick={cancelTeamMove}>
+                <button
+                  type="button"
+                  className="btn tiny ghost"
+                  onClick={cancelTeamMove}
+                  disabled={moveApplying}
+                >
                   이동 취소
                 </button>
               </div>
@@ -2420,6 +2557,7 @@ export default function ManageAssignmentsOpsPage() {
             <>
               {viewMode === "board" && (
                 <div
+                  ref={boardWrapRef}
                   className={`ops-board-wrap${
                     boardRows.length > 0 ? " has-sticky-head" : ""
                   }`}
@@ -2451,16 +2589,28 @@ export default function ManageAssignmentsOpsPage() {
                                 if (cell.kind === "empty") {
                                   const cellAction = emptyBoardCellAction(moveKey);
                                   const moveDest = cellAction === "move";
+                                  const pendingDest = isPendingMoveDest(
+                                    movePendingDest,
+                                    {
+                                      course: code,
+                                      shift: shiftTab,
+                                      teeTime: tr.teeTime,
+                                    }
+                                  );
                                   return (
                                     <button
                                       key={code}
                                       type="button"
                                       className={`bc-cell empty ${
                                         moveDest ? "move-dest" : "addable"
-                                      }`}
+                                      }${pendingDest ? " pending" : ""}`}
                                       role="cell"
+                                      disabled={moveApplying}
+                                      aria-busy={pendingDest}
                                       aria-label={
-                                        moveDest
+                                        pendingDest
+                                          ? `${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} ${TEAM_MOVING_LABEL}`
+                                          : moveDest
                                           ? `${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} 이동 목적지 선택`
                                           : `${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} 추가팀 등록`
                                       }
@@ -2468,7 +2618,11 @@ export default function ManageAssignmentsOpsPage() {
                                         onEmptyBoardCellClick(code, tr.teeTime)
                                       }
                                     >
-                                      {moveDest ? "이동" : "-"}
+                                      {pendingDest
+                                        ? TEAM_MOVING_LABEL
+                                        : moveDest
+                                          ? "이동"
+                                          : "-"}
                                     </button>
                                   );
                                 }
@@ -2752,7 +2906,11 @@ export default function ManageAssignmentsOpsPage() {
         />
       )}
 
-      {toast && <div className="ops-toast vh-manage-toast">{toast}</div>}
+      {toast && (
+        <div className="ops-toast vh-manage-toast" role="status">
+          {toast}
+        </div>
+      )}
       {addTeamOpen &&
         draft &&
         shiftTab !== "UNASSIGNED" &&
@@ -2782,11 +2940,13 @@ export default function ManageAssignmentsOpsPage() {
       {moveSheetOpen && moveSourceRow && (
         <TeamMoveSheet
           row={moveSourceRow}
-          onClose={() => setMoveSheetOpen(false)}
+          applying={moveApplying}
+          onClose={() => {
+            if (!moveApplyingRef.current) setMoveSheetOpen(false);
+          }}
           onCancelMove={cancelTeamMove}
           onSubmit={(change) => {
-            setMoveSheetOpen(false);
-            setLiveChangePreset(change);
+            void applyReservationMove(change);
           }}
         />
       )}
@@ -3314,6 +3474,9 @@ const opsCss = `
     color: #9a3412;
     font-size: 0.62rem;
     font-weight: 700;
+    min-height: 72px;
+    width: 100%;
+    -webkit-tap-highlight-color: transparent;
   }
   button.bc-cell.empty.move-dest:hover,
   button.bc-cell.empty.move-dest:focus-visible {
@@ -3321,6 +3484,17 @@ const opsCss = `
     color: #9a3412;
     outline: 2px solid #ea580c;
     outline-offset: -2px;
+  }
+  button.bc-cell.empty.move-dest.pending,
+  button.bc-cell.empty.move-dest:disabled {
+    cursor: wait;
+    color: #c2410c;
+    background: #fff7ed;
+  }
+  @media (max-width: 640px) {
+    button.bc-cell.empty.move-dest {
+      min-height: 88px;
+    }
   }
   .move-mode-banner {
     display: flex;
@@ -3701,6 +3875,10 @@ const opsCss = `
     border-radius: 999px;
     font-size: 0.85rem;
     text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
   }
   .live-preview-dock {
     position: fixed;

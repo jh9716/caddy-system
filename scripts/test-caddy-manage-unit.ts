@@ -522,6 +522,109 @@ console.log("== 추가팀 등록은 미리보기 흐름, 빈 칸 클릭/현재 �
   );
 }
 
+console.log("== 보드 팀 이동은 미리보기 없이 즉시 apply ==");
+{
+  const panel = fs.readFileSync(
+    path.resolve("src/app/manage/assignments/LiveChangePanel.tsx"),
+    "utf8"
+  );
+  const board = fs.readFileSync(
+    path.resolve("src/app/manage/assignments/page.tsx"),
+    "utf8"
+  );
+  const moveLib = fs.readFileSync(
+    path.resolve("src/lib/reservationMove.ts"),
+    "utf8"
+  );
+  const emptyFn =
+    board.split("function onEmptyBoardCellClick")[1]?.split("function onAssignUnassigned")[0] ||
+    "";
+  const moveFn =
+    board.split("async function applyReservationMove")[1]?.split("function onRequestLiveChange")[0] ||
+    "";
+  const sheet =
+    panel.split("export function TeamMoveSheet")[1]?.split("export function SameDayAddSheet")[0] ||
+    panel.split("export function TeamMoveSheet")[1] ||
+    "";
+  const moveBranch =
+    emptyFn.split('if (change.type === "MOVE_RESERVATION")')[1]?.split("const courseLabel")[0] ||
+    "";
+  assert(
+    /if \(change\.type === "MOVE_RESERVATION"\)/.test(emptyFn) &&
+      /applyReservationMove\(change\)/.test(moveBranch) &&
+      !/setLiveChangePreset\(change\)/.test(moveBranch),
+    "empty-cell MOVE applies immediately, no preview dock"
+  );
+  assert(
+    /persistLivePreview\(/.test(moveFn) &&
+      /previewLiveChangeFromDraft\(/.test(moveFn) &&
+      !/fetch\(\s*"\/api\/assignments\/reflow\/preview"/.test(moveFn),
+    "quick move validates locally then persistLivePreview (single apply HTTP)"
+  );
+  assert(
+    /TEAM_MOVED_TOAST/.test(moveFn) &&
+      !/TEAM_MOVE_UNDO_LABEL/.test(moveFn) &&
+      !/isUndo/.test(moveFn) &&
+      !/reservationMoveUndoPayload/.test(moveFn),
+    "successful quick move toasts without unverified Undo"
+  );
+  assert(
+    /moveApplyingRef\.current/.test(emptyFn) &&
+      /disabled=\{moveApplying\}/.test(board) &&
+      /TEAM_MOVING_LABEL/.test(board),
+    "in-flight move blocks extra taps and shows 이동 중..."
+  );
+  assert(
+    /보드에서 빈 칸 선택/.test(sheet) &&
+      /applying \? "이동 중\.\.\." : "이동"/.test(sheet) &&
+      !/>\s*미리보기\s*</.test(sheet),
+    "TeamMoveSheet typed dest uses 이동, keeps empty-cell picker"
+  );
+  assert(
+    /void applyReservationMove\(change\)/.test(board),
+    "typed dest submits through applyReservationMove"
+  );
+  assert(
+    /export const TEAM_MOVED_TOAST = "팀을 이동했습니다."/.test(moveLib) &&
+      !/되돌리기/.test(moveLib),
+    "moved toast copy without Undo action"
+  );
+  assert(
+    /rollbackDraft: current/.test(moveFn) &&
+      /applyServerDraft: true/.test(moveFn),
+    "quick move persist uses pre-move Draft as rollback snapshot"
+  );
+  const persistFn =
+    board.split("async function persistLivePreview")[1]?.split("function quickActionToast")[0] ||
+    "";
+  const persistFail =
+    persistFn.split("if (!res.ok)")[1]?.split("let savedDraft")[0] || "";
+  assert(
+    /setDraft\(input\.rollbackDraft\)/.test(persistFail) &&
+      /setError\(/.test(persistFail) &&
+      /showToast\(/.test(persistFail) &&
+      /data\.error/.test(persistFail) &&
+      !/queueDraftSave/.test(persistFail),
+    "failed apply restores previous Draft, shows server error, does not save"
+  );
+  assert(
+    /setError\(blocking\.message\)/.test(moveFn) &&
+      /showToast\(blocking\.message\)/.test(moveFn) &&
+      /moveApplyingRef\.current = false/.test(moveFn),
+    "client-blocked quick move keeps Draft and surfaces the error"
+  );
+  assert(
+    /queueDraftSave\(toSave, true\)/.test(persistFn) &&
+      /await flushDraftSave\(\)/.test(persistFn) &&
+      /flushed\.status === "conflict"/.test(persistFn),
+    "quick move apply 200 waits for Draft PUT; 409 is not treated as success"
+  );
+  assert(
+    /이대로 적용/.test(panel) && /setLiveChangePreset\(change\)/.test(emptyFn),
+    "추가팀 still uses preview confirmation"
+  );
+}
+
 console.log("== ops menu simplify: one place per daily action ==");
 {
   const panel = fs.readFileSync(

@@ -47,9 +47,12 @@ import { excludeCaddiesById } from "../src/lib/dailyOpsDuty";
 import {
   emptyBoardCellAction,
   freezeShiftsForMove,
+  isPendingMoveDest,
   isStableReservationMoveKey,
   reflowShiftsForMove,
   reservationMoveBlockReason,
+  TEAM_MOVED_TOAST,
+  TEAM_MOVING_LABEL,
 } from "../src/lib/reservationMove";
 import {
   deriveReservationUid,
@@ -2251,8 +2254,8 @@ section("Quick Action은 확인 대상만 confirm, 나머지는 즉시 타입");
   assert(isSequenceReflowLiveChange("CADDY_SICK"), "sick reflows");
   assert(isSequenceReflowLiveChange("CADDY_ATTENDANCE_NOSHOW"), "결근 reflows");
   assert(!isSequenceReflowLiveChange("SWAP_CADDY"), "swap is not sequence reflow");
-  assert(!isInstantQuickAction("MOVE_RESERVATION"), "move is not instant");
-  assert(!needsQuickActionConfirm("MOVE_RESERVATION"), "move uses preview");
+  assert(!isInstantQuickAction("MOVE_RESERVATION"), "move is not optimistic quick-action");
+  assert(!needsQuickActionConfirm("MOVE_RESERVATION"), "move has no extra confirm type");
   assert(isSequenceReflowLiveChange("MOVE_RESERVATION"), "move reflows");
   assert(shouldReconcileLivePersist("MOVE_RESERVATION"), "move reconciles");
   assert(!isPatchableLiveChange("MOVE_RESERVATION"), "move not patchable");
@@ -2745,6 +2748,22 @@ section("MOVE_RESERVATION 헬퍼 / 빈칸은 이동 모드에서 당추가 아�
     moveReservationKey: "uid:xlsx.2026-08-22.예약.3",
   });
   assert(uidMoveCell.type === "MOVE_RESERVATION", "uid move key → MOVE not ADD");
+  assert(
+    isPendingMoveDest(
+      { course: "SKY", shift: "2부", teeTime: "11:20" },
+      { course: "SKY", shift: "2부", teeTime: "11:20" }
+    ),
+    "pending dest matches cell"
+  );
+  assert(
+    !isPendingMoveDest(
+      { course: "SKY", shift: "2부", teeTime: "11:20" },
+      { course: "LAKE", shift: "2부", teeTime: "11:20" }
+    ),
+    "pending dest ignores other course"
+  );
+  assert(TEAM_MOVED_TOAST === "팀을 이동했습니다.", "moved toast copy");
+  assert(TEAM_MOVING_LABEL === "이동 중...", "pending label");
 }
 
 function excelRes(
