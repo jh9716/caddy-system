@@ -1801,7 +1801,20 @@ export default function ManageAssignmentsOpsPage() {
         mutationSucceeded: true,
         draft: savedDraft,
       });
-      if (toSave) queueDraftSave(toSave, true);
+      if (toSave) {
+        queueDraftSave(toSave, true);
+        const flushed = await flushDraftSave();
+        if (flushed.status === "conflict") {
+          setError(DRAFT_VERSION_CONFLICT_MESSAGE);
+          showToast(DRAFT_VERSION_CONFLICT_MESSAGE);
+          return false;
+        }
+        if (flushed.status !== "ok") {
+          setError("작업본 저장에 실패했습니다. 다시 시도해주세요.");
+          showToast("저장 실패 · 다시 시도");
+          return false;
+        }
+      }
       return true;
     } catch (e: unknown) {
       if (input.rollbackDraft) {

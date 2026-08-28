@@ -524,6 +524,64 @@ section("MOVE_RESERVATION 성공 후 Draft 최신화");
   assert(moved?.reservation.teeTime === "09:00", "MOVE tee saved");
 }
 
+section("reflow/apply 이후 PUT은 이동 직전 Draft version을 쓴다");
+{
+  const date = "2026-08-26";
+  const { db } = createMemoryDraftDb();
+  const draft = makeDraft(date);
+  const created = await saveDailyBoardDraft({
+    date,
+    expectedVersion: 0,
+    payload: assignmentDraftToPayload(draft),
+    updatedByUserId: 1,
+    db,
+  });
+  const source = draft.assignments[0];
+  const preview = previewLiveChangeFromDraft({
+    draft,
+    change: makeMoveReservationChange({
+      reservationKey: reservationKey(source.reservation),
+      to: { course: "LAKE", shift: "1부", teeTime: "09:00", date },
+    }),
+  });
+  const next = applyLiveChangePreviewToDraft(draft, preview);
+  const afterApply = await getDailyBoardDraft(date, db);
+  assert(
+    afterApply?.version === created.version,
+    "apply 경로(Draft 미기록) 직후 version 불변"
+  );
+  const saved = await saveDailyBoardDraft({
+    date,
+    expectedVersion: created.version,
+    payload: assignmentDraftToPayload(next),
+    updatedByUserId: 1,
+    db,
+  });
+  assert(saved.version === created.version + 1, "pre-apply version PUT succeeds and bumps");
+  let conflict: DailyBoardDraftConflictError | null = null;
+  try {
+    await saveDailyBoardDraft({
+      date,
+      expectedVersion: created.version,
+      payload: assignmentDraftToPayload(next),
+      updatedByUserId: 1,
+      db,
+    });
+  } catch (e) {
+    if (e instanceof DailyBoardDraftConflictError) conflict = e;
+  }
+  assert(!!conflict, "same expectedVersion PUT 409s after version already bumped");
+  assert(conflict?.current?.version === saved.version, "409 body current is latest Draft");
+  const retried = await saveDailyBoardDraft({
+    date,
+    expectedVersion: saved.version,
+    payload: assignmentDraftToPayload(next),
+    updatedByUserId: 1,
+    db,
+  });
+  assert(retried.version === saved.version + 1, "drain-style retry with current version succeeds");
+}
+
 section("id 없는 Excel Draft hydrate/MOVE 후 uid 유지");
 {
   const date = "2026-08-27";
@@ -692,10 +750,18 @@ section("source guards: API / UI / migration / live save order");
 
   const persist = page.split("async function persistLivePreview")[1]?.split("function quickActionToast")[0] || "";
   const failBlock = persist.split("if (!res.ok)")[1]?.split("let savedDraft")[0] || "";
+  const applyRoute = readSrc("src/app/api/assignments/reflow/apply/route.ts");
   assert(!/queueDraftSave/.test(failBlock), "failed live mutation block has no queueDraftSave");
   assert(/draftAutosaveCandidate/.test(persist), "success path uses draftAutosaveCandidate");
   assert(/queueDraftSave\(toSave, true\)/.test(persist), "success saves latest draft immediately");
+  assert(/await flushDraftSave\(\)/.test(persist), "live apply waits for Draft PUT before success");
   assert(/\/api\/assignments\/reflow\/apply/.test(persist.split("if (!res.ok)")[0] || persist), "live apply API before draft save");
+  assert(
+    !/saveDailyBoardDraft/.test(applyRoute) &&
+      !/DailyBoardDraft/.test(applyRoute) &&
+      !/\bversion\b/.test(applyRoute),
+    "reflow/apply does not persist or version DailyBoardDraft"
+  );
 
   const run = page.split("async function runAutoAssign")[1]?.split("function onReplace")[0] || "";
   const runFail = run.split("if (!res.ok)")[1]?.split("setAutoResult(data)")[0] || "";

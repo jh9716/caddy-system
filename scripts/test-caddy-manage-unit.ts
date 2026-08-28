@@ -614,6 +614,12 @@ console.log("== 보드 팀 이동은 미리보기 없이 즉시 apply ==");
     "client-blocked quick move keeps Draft and surfaces the error"
   );
   assert(
+    /queueDraftSave\(toSave, true\)/.test(persistFn) &&
+      /await flushDraftSave\(\)/.test(persistFn) &&
+      /flushed\.status === "conflict"/.test(persistFn),
+    "quick move apply 200 waits for Draft PUT; 409 is not treated as success"
+  );
+  assert(
     /이대로 적용/.test(panel) && /setLiveChangePreset\(change\)/.test(emptyFn),
     "추가팀 still uses preview confirmation"
   );
