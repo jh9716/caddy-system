@@ -836,10 +836,10 @@ async function persistMovedReservationDay(
     null;
 
   if (!source) {
-    throw new LiveChangePersistError(
-      "MOVE_NOT_FOUND",
-      "이동할 예약을 찾을 수 없습니다."
-    );
+    // Draft/engine already validated the move. DailyReservation may be empty
+    // or missing this Excel/uid row (unpublished or stale persist). Rewrite.
+    await rewriteDailyReservationsAndPlacements(tx, plan);
+    return;
   }
   if (source.status !== "ACTIVE") {
     throw new LiveChangePersistError(
@@ -847,24 +847,22 @@ async function persistMovedReservationDay(
       "취소/노쇼 예약은 이동할 수 없습니다."
     );
   }
-  if (
+  const alreadyAtDest =
     source.course === dest.course &&
     source.shift === dest.shift &&
-    source.teeTime === dest.teeTime
-  ) {
-    throw new LiveChangePersistError(
-      "MOVE_SAME_SLOT",
-      "목적지가 현재 위치와 같습니다."
-    );
-  }
-  const collision = existing.find(
-    (row) =>
-      row.id !== source.id &&
-      row.status === "ACTIVE" &&
-      row.course === dest.course &&
-      row.shift === dest.shift &&
-      row.teeTime === dest.teeTime
-  );
+    source.teeTime === dest.teeTime;
+  // DailyReservation already at dest is a persist no-op (Draft may be stale),
+  // not an apply failure. Engine-level same-slot is still blocked earlier.
+  const collision = alreadyAtDest
+    ? undefined
+    : existing.find(
+        (row) =>
+          row.id !== source.id &&
+          row.status === "ACTIVE" &&
+          row.course === dest.course &&
+          row.shift === dest.shift &&
+          row.teeTime === dest.teeTime
+      );
   if (collision) {
     throw new LiveChangePersistError(
       "DUPLICATE_COURSE_TEETIME",

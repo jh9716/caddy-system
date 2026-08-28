@@ -4090,6 +4090,138 @@ async function runPersistTests() {
     );
   }
 
+  section("MOVE persist: DailyReservation already at dest is no-op success");
+  {
+    const date = "2026-10-05";
+    const pool = makeCaddies(8);
+    const previous = excelBoard(date, pool);
+    const source = previous.assignments.find(
+      (row) => row.reservation.teamName === "엑셀이동팀"
+    );
+    if (!source) throw new Error("missing excel source");
+    const key = reservationKey(source.reservation);
+    let reservationUpdate = 0;
+    const fakeTx = {
+      dailyPlacement: {
+        deleteMany: async () => ({ count: 0 }),
+        createMany: async () => ({ count: 0 }),
+      },
+      dailyReservation: {
+        findMany: async () => [
+          {
+            id: 11,
+            identityKey: key,
+            course: "VERTHILL",
+            shift: "1부",
+            teeTime: "07:40",
+            status: "ACTIVE",
+            teamName: "엑셀이동팀",
+          },
+        ],
+        update: async () => {
+          reservationUpdate += 1;
+          return { id: 11 };
+        },
+        deleteMany: async () => {
+          throw new Error("should not rewrite when source exists at dest");
+        },
+      },
+      dailyCaddyUnavailable: {
+        deleteMany: async () => ({ count: 0 }),
+        createMany: async () => ({ count: 0 }),
+      },
+      dailyAssignmentChange: { create: async () => ({ id: 1 }) },
+      audit: { create: async () => ({ id: 1 }) },
+      shiftDuty: { count: async () => 0 },
+    };
+    const fakePrisma = {
+      $transaction: async (fn: (tx: typeof fakeTx) => Promise<unknown>) => fn(fakeTx),
+    };
+    const result = await applyLiveAssignmentChange(
+      {
+        previous,
+        regularCaddyPool: pool,
+        change: {
+          type: "MOVE_RESERVATION",
+          reservationKey: key,
+          to: { course: "VERTHILL", shift: "1부", teeTime: "07:40" },
+        },
+      },
+      { prisma: fakePrisma as never, updateOpsIfPresent: false }
+    );
+    assert(result.ok === true, "stale dest persist is success");
+    assert(reservationUpdate === 1, "same row updated as no-op");
+  }
+
+  section("MOVE persist: missing DailyReservation source falls back to rewrite");
+  {
+    const date = "2026-10-06";
+    const pool = makeCaddies(8);
+    const previous = excelBoard(date, pool);
+    const source = previous.assignments.find(
+      (row) => row.reservation.teamName === "엑셀이동팀"
+    );
+    if (!source) throw new Error("missing excel source");
+    const key = reservationKey(source.reservation);
+    const counts = { deleted: 0, created: 0, updated: 0 };
+    const fakeTx = {
+      dailyPlacement: {
+        deleteMany: async () => ({ count: 0 }),
+        createMany: async () => ({ count: 0 }),
+      },
+      dailyReservation: {
+        findMany: async () => [
+          {
+            id: 99,
+            identityKey: "id:other",
+            course: "LAKE",
+            shift: "1부",
+            teeTime: "08:00",
+            status: "ACTIVE",
+          },
+        ],
+        update: async () => {
+          counts.updated += 1;
+          throw new Error("should rewrite not update");
+        },
+        deleteMany: async () => {
+          counts.deleted += 1;
+          return { count: 1 };
+        },
+        createManyAndReturn: async (args: { data: Array<{ identityKey: string }> }) => {
+          counts.created += args.data.length;
+          return args.data.map((row, i) => ({ id: i + 1, identityKey: row.identityKey }));
+        },
+      },
+      dailyCaddyUnavailable: {
+        deleteMany: async () => ({ count: 0 }),
+        createMany: async () => ({ count: 0 }),
+      },
+      dailyAssignmentChange: { create: async () => ({ id: 1 }) },
+      audit: { create: async () => ({ id: 1 }) },
+      shiftDuty: { count: async () => 0 },
+    };
+    const fakePrisma = {
+      $transaction: async (fn: (tx: typeof fakeTx) => Promise<unknown>) => fn(fakeTx),
+    };
+    const result = await applyLiveAssignmentChange(
+      {
+        previous,
+        regularCaddyPool: pool,
+        change: {
+          type: "MOVE_RESERVATION",
+          reservationKey: key,
+          to: { course: "VERTHILL", shift: "1부", teeTime: "07:40" },
+        },
+      },
+      { prisma: fakePrisma as never, updateOpsIfPresent: false }
+    );
+    assert(result.ok === true, "missing source persist rewrites");
+    assert(counts.updated === 0, "did not update missing source");
+    assert(counts.deleted === 1, "rewrote reservations");
+    assert(counts.created > 0, "recreated reservations");
+  }
+
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);
 }
