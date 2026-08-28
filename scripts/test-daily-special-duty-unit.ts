@@ -8,6 +8,7 @@ import {
   applyBundlesToAssignPools,
   buildEngineSpecialBundles,
   detectCrossKindConflicts,
+  eligibleForSpecialDutyEngine,
   hasDuplicateKind,
   isSpecialDutyPayloadForSelectedDate,
   appendSpecialDutyPick,
@@ -18,6 +19,8 @@ import {
   renumberSortOrders,
   resolvePastedSpecialNames,
   splitPastedSpecialNames,
+  SPECIAL_DUTY_HARD_BLOCK_MESSAGE_SUFFIX,
+  SPECIAL_DUTY_SOFT_OVERRIDE_MESSAGE_SUFFIX,
   type SpecialDutyRecord,
 } from "../src/lib/dailySpecialDuty";
 import {
@@ -123,7 +126,7 @@ section("duplicate 방지");
   );
 }
 
-section("휴무/당번 등 비가용 충돌 — 강행하지 않음");
+section("휴무 등 soft exclusion은 특수근무 우선, hard는 차단");
 {
   const rows = [
     rec("ONE_TWO", 1, 1, "휴무A"),
@@ -136,23 +139,50 @@ section("휴무/당번 등 비가용 충돌 — 강행하지 않음");
   ]);
   const annotated = annotateSpecialDutyConflicts(rows, unavailable);
   assert(
-    annotated[0].conflicts.some((c) => c.code === "UNAVAILABLE"),
-    "휴무 충돌 표시"
+    annotated[0].conflicts.some(
+      (c) =>
+        c.code === "SOFT_OVERRIDE" &&
+        c.message === `휴무${SPECIAL_DUTY_SOFT_OVERRIDE_MESSAGE_SUFFIX}`
+    ),
+    "휴무 → 특수근무로 배치 표시"
   );
   assert(
-    annotated[2].conflicts.some((c) => c.code === "INACTIVE"),
+    annotated[2].conflicts.some(
+      (c) =>
+        c.code === "INACTIVE" &&
+        c.message.includes(SPECIAL_DUTY_HARD_BLOCK_MESSAGE_SUFFIX)
+    ),
     "RETIRED 충돌 표시"
   );
   const bundles = buildEngineSpecialBundles(rows, unavailable);
   assert(
-    bundles.oneTwoCandidates?.map((c) => c.name).join(",") === "가용B",
-    "비가용 1·2는 엔진 후보에서 제외"
+    bundles.oneTwoCandidates?.map((c) => c.name).join(",") === "휴무A,가용B",
+    "휴무 1·2는 엔진 후보에 유지"
   );
   assert(
-    bundles.skippedPlacements.some((s) => s.caddyId === 1),
-    "휴무 스킵 기록"
+    !bundles.skippedPlacements.some((s) => s.caddyId === 1),
+    "휴무는 skippedPlacements에 안 넣음"
+  );
+  assert(bundles.skipFromAvailableIds.includes(1), "휴무 특수근무는 일반 pool skip");
+  assert(
+    (buildEngineSpecialBundles(
+      [rec("FIFTY_FOUR", 9, 1, "오십")],
+      new Map([[9, ["휴무"]]])
+    ).fiftyFourHole || []).some((c) => c.id === 9),
+    "OFF + 54홀 후보 유지"
+  );
+  assert(
+    (buildEngineSpecialBundles(
+      [rec("ONE_MAK", 8, 1, "일막")],
+      new Map([[8, ["휴무"]]])
+    ).oneMakCandidates || []).some((c) => c.id === 8),
+    "OFF + 1막 후보 유지"
   );
   assert(bundles.extraSpecial.length === 0, "퇴사 찾근은 강행하지 않음");
+  assert(
+    bundles.skippedPlacements.some((s) => s.caddyId === 3),
+    "RETIRED는 skip"
+  );
 }
 
 section("날짜별 데이터 분리");
@@ -626,6 +656,240 @@ section("1·2부 2명이 오늘 1부 첫 캐디여도 배치되고 전체가 abo
   );
 }
 
+section("soft/hard 우선순위 regression");
+{
+  const date = "2026-08-28";
+  const house = housePool(24, 201);
+
+  function run(
+    kind: SpecialDutyRecord["kind"],
+    reason: string
+  ) {
+    const special: AutoAssignCaddy = {
+      id: 77,
+      name: "지정자",
+      team: "1조",
+      teamOrder: 1,
+      caddyType: "HOUSE",
+      employmentStatus: "ACTIVE",
+    };
+    const rows = [rec(kind, 77, 1, "지정자", "1조", 1)];
+    const unavailable = new Map<number, string[]>([[77, [reason]]]);
+    const bundles = buildEngineSpecialBundles(rows, unavailable);
+    const pools = applyBundlesToAssignPools({
+      available: [special, ...house],
+      special: [],
+      extraSpecial: bundles.extraSpecial,
+      skipFromAvailableIds: bundles.skipFromAvailableIds,
+    });
+    const result = computeAutoAssignmentsV1({
+      date,
+      available: pools.available,
+      oneThreeCandidates: bundles.oneThreeCandidates || undefined,
+      oneTwoCandidates: bundles.oneTwoCandidates || undefined,
+      oneMakCandidates: bundles.oneMakCandidates || undefined,
+      fiftyFourHole: bundles.fiftyFourHole || undefined,
+      placementMode: "AUTO",
+      protectedTailCount: 3,
+      reservations: [
+        ...board(date, "1부", 16, "06:00"),
+        ...board(date, "2부", 12, "12:10", 20),
+        ...board(date, "3부", 12, "16:00", 40),
+      ],
+    });
+    return { bundles, result };
+  }
+
+  const off13 = run("ONE_THREE", "휴무");
+  assert(
+    eligibleForSpecialDutyEngine({ caddyId: 77 }, new Map([[77, ["휴무"]]])),
+    "OFF eligible"
+  );
+  assert(
+    (off13.bundles.oneThreeCandidates || []).some((c) => c.id === 77),
+    "OFF + ONE_THREE 후보 유지"
+  );
+  const off13Rows = off13.result.oneThreeAssignments.filter((a) => a.caddy.id === 77);
+  assert(off13Rows.some((a) => a.shift === "1부"), "OFF + ONE_THREE 1부 배치");
+  assert(off13Rows.some((a) => a.shift === "3부"), "OFF + ONE_THREE 3부 배치");
+  assert(
+    !off13.result.regularAssignments.some((a) => a.caddy.id === 77),
+    "OFF 특수근무자 일반 순번 중복 없음"
+  );
+
+  const duty12 = run("ONE_TWO", "당번");
+  const duty12Rows = duty12.result.oneTwoAssignments.filter((a) => a.caddy.id === 77);
+  assert(duty12Rows.some((a) => a.shift === "1부"), "DUTY + ONE_TWO 1부 배치");
+  assert(duty12Rows.some((a) => a.shift === "2부"), "DUTY + ONE_TWO 2부 배치");
+  assert(
+    annotateSpecialDutyConflicts(
+      [rec("ONE_TWO", 77, 1, "지정자")],
+      new Map([[77, ["당번"]]])
+    )[0].conflicts.some(
+      (c) =>
+        c.code === "SOFT_OVERRIDE" &&
+        c.message === `당번${SPECIAL_DUTY_SOFT_OVERRIDE_MESSAGE_SUFFIX}`
+    ),
+    "당번 → 특수근무로 배치 표시"
+  );
+
+  const marshal13 = run("ONE_THREE", "마샬");
+  const marshal13Rows = marshal13.result.oneThreeAssignments.filter(
+    (a) => a.caddy.id === 77
+  );
+  assert(marshal13Rows.some((a) => a.shift === "1부"), "MARSHAL + ONE_THREE 1부");
+  assert(marshal13Rows.some((a) => a.shift === "3부"), "MARSHAL + ONE_THREE 3부");
+  assert(
+    annotateSpecialDutyConflicts(
+      [rec("ONE_THREE", 77, 1, "지정자")],
+      new Map([[77, ["마샬"]]])
+    )[0].conflicts.some(
+      (c) =>
+        c.code === "SOFT_OVERRIDE" &&
+        c.message === `마샬${SPECIAL_DUTY_SOFT_OVERRIDE_MESSAGE_SUFFIX}`
+    ),
+    "마샬 → 특수근무로 배치 표시"
+  );
+
+  const leader12 = run("ONE_TWO", "조장");
+  const leaderRows = leader12.result.oneTwoAssignments.filter((a) => a.caddy.id === 77);
+  assert(leaderRows.length >= 2, "LEADER + 특수근무 배치");
+  assert(
+    annotateSpecialDutyConflicts(
+      [rec("ONE_TWO", 77, 1, "지정자")],
+      new Map([[77, ["조장"]]])
+    )[0].conflicts.some(
+      (c) =>
+        c.code === "SOFT_OVERRIDE" &&
+        c.message === `조장${SPECIAL_DUTY_SOFT_OVERRIDE_MESSAGE_SUFFIX}`
+    ),
+    "조장 → 특수근무로 배치 표시"
+  );
+
+  const sick = run("ONE_THREE", "병가");
+  assert(
+    (sick.bundles.oneThreeCandidates || []).every((c) => c.id !== 77),
+    "SICK + 특수근무 후보 제외"
+  );
+  assert(
+    sick.bundles.skippedPlacements.some((s) => s.caddyId === 77),
+    "SICK skippedPlacements"
+  );
+  assert(
+    sick.result.oneThreeAssignments.every((a) => a.caddy.id !== 77),
+    "SICK + 특수근무 배치 금지"
+  );
+  const noshow = run("ONE_THREE", "결근");
+  assert(
+    noshow.result.oneThreeAssignments.every((a) => a.caddy.id !== 77),
+    "결근 + 특수근무 배치 금지"
+  );
+  const sickAnno = annotateSpecialDutyConflicts(
+    [rec("ONE_THREE", 77, 1, "지정자")],
+    new Map([[77, ["병가"]]])
+  );
+  assert(
+    sickAnno[0].conflicts.some(
+      (c) => c.message === `병가${SPECIAL_DUTY_HARD_BLOCK_MESSAGE_SUFFIX}`
+    ),
+    "병가 — 특수근무 배치 불가"
+  );
+
+  const leave = run("ONE_TWO", "휴직(LEAVE)");
+  assert(
+    (leave.bundles.oneTwoCandidates || []).every((c) => c.id !== 77),
+    "LEAVE 배치 금지"
+  );
+  const retiredRow = rec("FIFTY_FOUR", 88, 1, "퇴사D");
+  retiredRow.employmentStatus = "RETIRED";
+  const retiredBundles = buildEngineSpecialBundles([retiredRow], new Map());
+  assert(
+    (retiredBundles.fiftyFourHole || []).every((c) => c.id !== 88),
+    "RETIRED employment 배치 금지"
+  );
+}
+
+section("ONE_THREE 3명 중 3번째만 OFF — 2026-08-28 사례");
+{
+  const date = "2026-08-28";
+  const shin: AutoAssignCaddy = {
+    id: 167,
+    name: "신정훈",
+    team: "7조",
+    teamOrder: 10,
+    caddyType: "HOUSE",
+    employmentStatus: "ACTIVE",
+  };
+  const han: AutoAssignCaddy = {
+    id: 115,
+    name: "한상준",
+    team: "7조",
+    teamOrder: 12,
+    caddyType: "HOUSE",
+    employmentStatus: "ACTIVE",
+  };
+  const noh: AutoAssignCaddy = {
+    id: 114,
+    name: "노준영",
+    team: "7조",
+    teamOrder: 11,
+    caddyType: "HOUSE",
+    employmentStatus: "ACTIVE",
+  };
+  const rows = [
+    rec("ONE_THREE", 167, 1, "신정훈", "7조", 10),
+    rec("ONE_THREE", 115, 2, "한상준", "7조", 12),
+    rec("ONE_THREE", 114, 3, "노준영", "7조", 11),
+  ];
+  const unavailable = new Map<number, string[]>([[114, ["휴무"]]]);
+  const bundles = buildEngineSpecialBundles(rows, unavailable);
+  assert(
+    (bundles.oneThreeCandidates || []).map((c) => c.id).join(",") ===
+      "167,115,114",
+    "3명 모두 후보 (입력 순서)"
+  );
+  assert(
+    !bundles.skippedPlacements.some((s) => s.caddyId === 114),
+    "노준영 휴무는 skip 아님"
+  );
+  const pools = applyBundlesToAssignPools({
+    available: [shin, han, noh, ...housePool(24, 201)],
+    special: [],
+    extraSpecial: bundles.extraSpecial,
+    skipFromAvailableIds: bundles.skipFromAvailableIds,
+  });
+  assert(
+    !pools.available.some((c) => c.id === 167 || c.id === 115 || c.id === 114),
+    "세 명 모두 일반 pool에서 skip"
+  );
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: pools.available,
+    oneThreeCandidates: bundles.oneThreeCandidates || undefined,
+    placementMode: "AUTO",
+    protectedTailCount: 3,
+    reservations: [
+      ...board(date, "1부", 16, "06:00"),
+      ...board(date, "2부", 12, "12:10", 20),
+      ...board(date, "3부", 12, "16:00", 40),
+    ],
+  });
+  assert(result.oneThreeAssignments.length === 6, "oneThree=6 (3명×2부)");
+  for (const id of [167, 115, 114]) {
+    const rowsFor = result.oneThreeAssignments.filter((a) => a.caddy.id === id);
+    assert(rowsFor.some((a) => a.shift === "1부"), `${id} 1부 oneThree`);
+    assert(rowsFor.some((a) => a.shift === "3부"), `${id} 3부 oneThree`);
+    assert(
+      !result.regularAssignments.some((a) => a.caddy.id === id),
+      `${id} 일반 중복 없음`
+    );
+  }
+  const noh1 = result.oneThreeAssignments.find(
+    (a) => a.caddy.id === 114 && a.shift === "1부"
+  );
+  assert(noh1?.kind === "oneThree", "노준영 1부 kind=oneThree");
+}
+
 section("특수근무 검색·3부 첫 캐디 후보는 RETIRED/LEAVE 제외");
 {
   const specialSrc = readFileSync(
@@ -660,6 +924,8 @@ section("특수근무 검색·3부 첫 캐디 후보는 RETIRED/LEAVE 제외");
     "찾근 탭은 등록 modal에서 제거"
   );
   assert(/레거시 찾근/.test(specialSrc), "기존 CHAGEUN row는 레거시로만 표시");
+  assert(/SOFT_OVERRIDE/.test(specialSrc), "soft override 충돌을 UI에 표시");
+  assert(/sd-override/.test(specialSrc), "휴무 오버라이드는 숨기지 않고 별도 스타일");
   const engineSrc = readFileSync(
     join(process.cwd(), "src/lib/autoAssignEngine.ts"),
     "utf8"

@@ -85,7 +85,14 @@ export type SpecialDutyAnchors = {
   ONE_MAK: SpecialStartAnchor | null;
 };
 
-export type SpecialDutyConflictCode = "CROSS_KIND" | "UNAVAILABLE" | "INACTIVE";
+export type SpecialDutyConflictCode =
+  | "CROSS_KIND"
+  | "UNAVAILABLE"
+  | "INACTIVE"
+  | "SOFT_OVERRIDE";
+
+export const SPECIAL_DUTY_SOFT_OVERRIDE_MESSAGE_SUFFIX = " → 특수근무로 배치";
+export const SPECIAL_DUTY_HARD_BLOCK_MESSAGE_SUFFIX = " — 특수근무 배치 불가";
 
 export type SpecialDutyConflict = {
   code: SpecialDutyConflictCode;
@@ -235,19 +242,122 @@ export function detectCrossKindConflicts(
     }));
 }
 
+const HARD_SPECIAL_DUTY_REASON_PATTERNS = [
+  /장기병가/,
+  /병가/,
+  /\bLONG_SICK\b/i,
+  /\bSICK\b/i,
+  /결근/,
+  /미출근/,
+  /\bATTENDANCE/,
+  /\bNOSHOW\b/i,
+  /휴직/,
+  /퇴사/,
+  /\bLEAVE\b/,
+  /\bRETIRED\b/,
+  /재직상태 아님/,
+];
+
+const SOFT_SPECIAL_DUTY_REASON_PATTERNS = [
+  /휴무/,
+  /\bOFF\b/,
+  /당번/,
+  /\bDUTY\b/,
+  /마샬/,
+  /\bMARSHAL\b/,
+  /조장/,
+  /\bLEADER\b/,
+];
+
+export function isHardSpecialDutyEmploymentStatus(status: unknown): boolean {
+  const raw = String(status ?? "").trim();
+  if (!raw) return false;
+  const up = raw.toUpperCase();
+  if (up === "ACTIVE" || raw === "재직") return false;
+  return true;
+}
+
+export function reasonsHaveHardSpecialDutyExclusion(
+  reasons: readonly string[] | null | undefined
+): boolean {
+  for (const reason of reasons || []) {
+    const text = String(reason || "").trim();
+    if (!text) continue;
+    if (HARD_SPECIAL_DUTY_REASON_PATTERNS.some((re) => re.test(text))) return true;
+  }
+  return false;
+}
+
+export function reasonsHaveSoftSpecialDutyExclusion(
+  reasons: readonly string[] | null | undefined
+): boolean {
+  let sawAny = false;
+  for (const reason of reasons || []) {
+    const text = String(reason || "").trim();
+    if (!text) continue;
+    sawAny = true;
+    if (HARD_SPECIAL_DUTY_REASON_PATTERNS.some((re) => re.test(text))) return false;
+  }
+  if (!sawAny) return false;
+  return (reasons || []).some((reason) =>
+    SOFT_SPECIAL_DUTY_REASON_PATTERNS.some((re) => re.test(String(reason || "")))
+  );
+}
+
+/** 관리자 특수근무를 엔진에 넣을지. soft(휴무/당번/마샬/조장)는 통과, hard는 차단. */
+export function eligibleForSpecialDutyEngine(
+  row: Pick<SpecialDutyRecord, "caddyId" | "employmentStatus">,
+  unavailableById: ReadonlyMap<number, string[]>
+): boolean {
+  if (isHardSpecialDutyEmploymentStatus(row.employmentStatus)) return false;
+  const reasons = unavailableById.get(row.caddyId) || [];
+  if (reasonsHaveHardSpecialDutyExclusion(reasons)) return false;
+  if (reasons.length === 0) return true;
+  if (reasonsHaveSoftSpecialDutyExclusion(reasons)) return true;
+  return false;
+}
+
+function primaryUnavailableLabel(reasons: readonly string[]): string {
+  const cleaned = reasons.map((r) => String(r || "").trim()).filter(Boolean);
+  return cleaned[0] || "제외";
+}
+
 export function detectUnavailableConflicts(
   caddyId: number,
-  unavailableById: ReadonlyMap<number, string[]>
+  unavailableById: ReadonlyMap<number, string[]>,
+  employmentStatus?: string | null
 ): SpecialDutyConflict[] {
-  const reasons = unavailableById.get(caddyId);
-  if (!reasons?.length) return [];
-  const inactive = reasons.some((reason) =>
-    /퇴사|휴직|RETIRED|LEAVE|재직상태 아님/i.test(reason)
-  );
+  const reasons = unavailableById.get(caddyId) || [];
+  const hardEmployment = isHardSpecialDutyEmploymentStatus(employmentStatus);
+  if (!reasons.length && !hardEmployment) return [];
+  if (hardEmployment || reasonsHaveHardSpecialDutyExclusion(reasons)) {
+    const inactive =
+      hardEmployment ||
+      reasons.some((reason) =>
+        /퇴사|휴직|RETIRED|LEAVE|재직상태 아님/i.test(reason)
+      );
+    const label = hardEmployment
+      ? String(employmentStatus || "재직상태 아님")
+      : primaryUnavailableLabel(reasons);
+    return [
+      {
+        code: inactive ? "INACTIVE" : "UNAVAILABLE",
+        message: `${label}${SPECIAL_DUTY_HARD_BLOCK_MESSAGE_SUFFIX}`,
+      },
+    ];
+  }
+  if (reasonsHaveSoftSpecialDutyExclusion(reasons)) {
+    return [
+      {
+        code: "SOFT_OVERRIDE",
+        message: `${primaryUnavailableLabel(reasons)}${SPECIAL_DUTY_SOFT_OVERRIDE_MESSAGE_SUFFIX}`,
+      },
+    ];
+  }
   return [
     {
-      code: inactive ? "INACTIVE" : "UNAVAILABLE",
-      message: `${reasons.join(", ")} — 특수배치 강행 안 함`,
+      code: "UNAVAILABLE",
+      message: `${primaryUnavailableLabel(reasons)}${SPECIAL_DUTY_HARD_BLOCK_MESSAGE_SUFFIX}`,
     },
   ];
 }
@@ -259,7 +369,11 @@ export function annotateSpecialDutyConflicts(
   return records.map((row) => {
     const conflicts = [
       ...detectCrossKindConflicts(records, row.kind, row.caddyId),
-      ...detectUnavailableConflicts(row.caddyId, unavailableById),
+      ...detectUnavailableConflicts(
+        row.caddyId,
+        unavailableById,
+        row.employmentStatus
+      ),
     ];
     return { ...row, conflicts };
   });
@@ -335,7 +449,7 @@ function eligibleForEngine(
   row: SpecialDutyRecord,
   unavailableById: ReadonlyMap<number, string[]>
 ): boolean {
-  return !unavailableById.has(row.caddyId);
+  return eligibleForSpecialDutyEngine(row, unavailableById);
 }
 
 function orderedKind(

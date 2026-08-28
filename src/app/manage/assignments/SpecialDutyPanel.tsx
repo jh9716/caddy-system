@@ -709,7 +709,14 @@ export function SpecialDutyPanel({
                           <strong>{formatCaddyLabel(item)}</strong>
                           {item.conflicts?.length
                             ? item.conflicts.map((c, i) => (
-                                <em key={`${c.code}-${i}`} className="sd-warn">
+                                <em
+                                  key={`${c.code}-${i}`}
+                                  className={
+                                    c.code === "SOFT_OVERRIDE"
+                                      ? "sd-override"
+                                      : "sd-warn"
+                                  }
+                                >
                                   {c.message}
                                 </em>
                               ))
@@ -1052,6 +1059,11 @@ export function SpecialDutyPanel({
         }
         .sd-warn {
           color: #b45309;
+          font-style: normal;
+          font-size: 0.72rem;
+        }
+        .sd-override {
+          color: #0369a1;
           font-style: normal;
           font-size: 0.72rem;
         }
