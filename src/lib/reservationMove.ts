@@ -14,9 +14,9 @@ import {
   type AutoAssignmentRow,
   type AutoAssignResultV1,
   type PlacementDiff,
-  type ReflowWarning,
   type ReservationChangeEvent,
 } from "@/lib/autoAssignEngine";
+import { reservationMatchesIdentity } from "@/lib/reservationIdentity";
 import {
   COURSE_CODES,
   COURSE_LABELS,
@@ -54,22 +54,10 @@ const SHIFT_RANK: Record<ShiftPart, number> = {
   "3부": 2,
 };
 
-/** `id:<id>` 만 허용. 위치가 들어간 composite key(`a|b|c`)는 거부. */
-export function isStableReservationMoveKey(key: unknown): boolean {
-  const raw = String(key ?? "").trim();
-  if (!raw.startsWith("id:")) return false;
-  const rest = raw.slice(3);
-  if (!rest || rest.includes("|")) return false;
-  return true;
-}
-
-export function stableReservationMoveKeyFromId(
-  id: string | number
-): string | null {
-  const raw = String(id ?? "").trim();
-  if (!raw || raw.includes("|")) return null;
-  return `id:${raw}`;
-}
+export {
+  isStableReservationMoveKey,
+  stableReservationMoveKeyFromId,
+} from "@/lib/reservationIdentity";
 
 export function parseMoveDestination(to: {
   course?: unknown;
@@ -143,13 +131,6 @@ export function reservationMoveBlockReason(
       message: "취소/노쇼 예약은 이동할 수 없습니다.",
     };
   }
-  if (!isStableReservationMoveKey(reservationKey(row.reservation))) {
-    return {
-      code: "MOVE_UNSTABLE_KEY",
-      message:
-        "위치가 포함된 예약 키는 이동할 수 없습니다. id가 있는 예약만 이동합니다.",
-    };
-  }
   if (isDrivingPlacement(row) || row.kind === "driving") {
     return {
       code: "MOVE_DRIVING",
@@ -207,7 +188,8 @@ export function reservationMoveBlockReason(
 export function emptyBoardCellAction(
   moveReservationKey: string | null | undefined
 ): "move" | "add" {
-  return moveReservationKey ? "move" : "add";
+  // MOVE_RESERVATION 활성 상태가 ADD_RESERVATION보다 우선.
+  return String(moveReservationKey || "").trim() ? "move" : "add";
 }
 
 export function courseLabelKo(course: string): string {
@@ -240,16 +222,12 @@ export function summarizeReservationMove(input: {
   const key = input.event.reservationKey;
   const id = input.event.reservationId;
   const beforeRow =
-    input.before.assignments.find(
-      (row) =>
-        (key && reservationKey(row.reservation) === key) ||
-        (id != null && String(row.reservation.id ?? "") === String(id))
+    input.before.assignments.find((row) =>
+      reservationMatchesIdentity(row.reservation, key, id)
     ) || null;
   const afterRow =
-    input.after.assignments.find(
-      (row) =>
-        (key && reservationKey(row.reservation) === key) ||
-        (id != null && String(row.reservation.id ?? "") === String(id))
+    input.after.assignments.find((row) =>
+      reservationMatchesIdentity(row.reservation, key, id)
     ) || null;
   const from = beforeRow
     ? {

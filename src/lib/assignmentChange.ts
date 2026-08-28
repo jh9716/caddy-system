@@ -36,6 +36,10 @@ import {
   stableReservationMoveKeyFromId,
   summarizeReservationMove,
 } from "@/lib/reservationMove";
+import {
+  legacyCompositeReservationKey,
+  reservationMatchesIdentity,
+} from "@/lib/reservationIdentity";
 
 export const LIVE_CHANGE_TYPES = [
   "CANCEL_RESERVATION",
@@ -164,7 +168,7 @@ export function isLiveChangeReady(
       );
     case "MOVE_RESERVATION":
       return (
-        (isStableReservationMoveKey(change.reservationKey) ||
+        (!!String(change.reservationKey || "").trim() ||
           change.reservationId != null) &&
         !!parseMoveDestination(change.to)
       );
@@ -362,19 +366,6 @@ export function eventsFromLiveChange(
           ? stableReservationMoveKeyFromId(input.reservationId)
           : null) ||
         input.reservationKey;
-      if (
-        !isStableReservationMoveKey(reservationKey) &&
-        input.reservationId == null
-      ) {
-        return [
-          {
-            type: "MOVE_RESERVATION",
-            reservationKey: input.reservationKey,
-            reservationId: input.reservationId,
-            to: dest,
-          },
-        ];
-      }
       return [
         {
           type: "MOVE_RESERVATION",
@@ -759,15 +750,46 @@ export class LiveChangePersistError extends Error {
 function numericMoveReservationId(
   event: Extract<ReservationChangeEvent, { type: "MOVE_RESERVATION" }>
 ): number | null {
-  const raw =
+  const fromId =
     event.reservationId != null && String(event.reservationId) !== ""
       ? String(event.reservationId)
-      : isStableReservationMoveKey(event.reservationKey)
-        ? String(event.reservationKey).slice(3)
-        : "";
+      : "";
+  const key = String(event.reservationKey || "").trim();
+  const fromKey = key.startsWith("id:") ? key.slice(3) : "";
+  const raw = fromId || fromKey;
   const n = Number(raw);
   if (!Number.isInteger(n) || n <= 0) return null;
   return n;
+}
+
+function moveSourceFromPreview(
+  preview: LiveChangePreview,
+  event: Extract<ReservationChangeEvent, { type: "MOVE_RESERVATION" }>
+) {
+  return (
+    preview.before.assignments.find((row) =>
+      reservationMatchesIdentity(
+        row.reservation,
+        event.reservationKey,
+        event.reservationId
+      )
+    ) || null
+  );
+}
+
+function movedReservationFromPreview(
+  preview: LiveChangePreview,
+  event: Extract<ReservationChangeEvent, { type: "MOVE_RESERVATION" }>
+) {
+  return (
+    preview.after.assignments.find((row) =>
+      reservationMatchesIdentity(
+        row.reservation,
+        event.reservationKey,
+        event.reservationId
+      )
+    ) || null
+  );
 }
 
 async function persistMovedReservationDay(
@@ -800,15 +822,18 @@ async function persistMovedReservationDay(
     where: { date: plan.dateObj },
   });
   const numericId = numericMoveReservationId(event);
+  const beforeRow = moveSourceFromPreview(preview, event);
+  const afterRow = movedReservationFromPreview(preview, event);
+  const lookupKeys = [
+    event.reservationKey,
+    beforeRow ? reservationKey(beforeRow.reservation) : "",
+    beforeRow ? legacyCompositeReservationKey(beforeRow.reservation) : "",
+    numericId != null ? `id:${numericId}` : "",
+  ].filter(Boolean);
   const source =
     (numericId != null ? existing.find((row) => row.id === numericId) : null) ||
-    (isStableReservationMoveKey(event.reservationKey)
-      ? existing.find((row) => row.identityKey === event.reservationKey)
-      : null) ||
-    existing.find(
-      (row) =>
-        numericId != null && row.identityKey === `id:${numericId}`
-    );
+    existing.find((row) => lookupKeys.includes(row.identityKey)) ||
+    null;
 
   if (!source) {
     throw new LiveChangePersistError(
@@ -847,17 +872,31 @@ async function persistMovedReservationDay(
     );
   }
 
+  const nextIdentity = afterRow
+    ? reservationKey(afterRow.reservation)
+    : event.reservationKey || source.identityKey;
+  const identityTaken = existing.some(
+    (row) => row.id !== source.id && row.identityKey === nextIdentity
+  );
+
   await tx.dailyReservation.update({
     where: { id: source.id },
     data: {
       course: dest.course,
       shift: dest.shift,
       teeTime: dest.teeTime,
+      ...(!identityTaken && nextIdentity !== source.identityKey
+        ? { identityKey: nextIdentity }
+        : {}),
     },
   });
 
   const byId = new Map(existing.map((row) => [row.id, row]));
   const byIdentity = new Map(existing.map((row) => [row.identityKey, row]));
+  if (!identityTaken && nextIdentity && nextIdentity !== source.identityKey) {
+    byIdentity.delete(source.identityKey);
+    byIdentity.set(nextIdentity, source);
+  }
   const resolveExistingId = (identityKey: string): number | null => {
     if (identityKey.startsWith("id:")) {
       const n = Number(identityKey.slice(3));
@@ -973,6 +1012,58 @@ async function tryPatchLiveDay(
   return false;
 }
 
+async function rewriteDailyReservationsAndPlacements(
+  tx: Prisma.TransactionClient,
+  plan: LiveChangePersistPlan
+): Promise<void> {
+  await tx.dailyPlacement.deleteMany({ where: { date: plan.dateObj } });
+  await tx.dailyReservation.deleteMany({ where: { date: plan.dateObj } });
+
+  const reservationData = plan.reservations.map((row) => ({
+    date: plan.dateObj,
+    course: row.course,
+    shift: row.shift,
+    teeTime: row.teeTime,
+    teamName: row.teamName,
+    hole: row.hole,
+    source: row.source,
+    status: mapReservationStatus(row.status),
+    identityKey: row.identityKey,
+    rawRowIndex: row.rawRowIndex,
+    limousineCart: row.limousineCart,
+  }));
+  const createdRows =
+    reservationData.length > 0
+      ? await tx.dailyReservation.createManyAndReturn({
+          data: reservationData,
+          select: { id: true, identityKey: true },
+        })
+      : [];
+  const created = new Map(
+    createdRows.map((row) => [row.identityKey, row.id])
+  );
+
+  const placementData = plan.placements
+    .map((row) => {
+      const reservationId = created.get(row.identityKey);
+      if (!reservationId) return null;
+      return {
+        date: plan.dateObj,
+        reservationId,
+        caddyId: row.caddyId,
+        kind: row.kind,
+        reason: row.reason,
+        sequenceIndex: row.sequenceIndex,
+        pairId: row.pairId,
+        locked: row.locked,
+      };
+    })
+    .filter((row): row is NonNullable<typeof row> => row != null);
+  if (placementData.length > 0) {
+    await tx.dailyPlacement.createMany({ data: placementData });
+  }
+}
+
 async function writePlanWithPrisma(
   db: PrismaClient,
   plan: LiveChangePersistPlan,
@@ -987,54 +1078,17 @@ async function writePlanWithPrisma(
       const patched = await tryPatchLiveDay(tx, plan, preview);
       if (!patched) {
         if (plan.changeType === "MOVE_RESERVATION") {
-          await persistMovedReservationDay(tx, plan, preview);
+          const existingRows = await tx.dailyReservation.findMany({
+            where: { date: plan.dateObj },
+            select: { id: true },
+          });
+          if (existingRows.length > 0) {
+            await persistMovedReservationDay(tx, plan, preview);
+          } else {
+            await rewriteDailyReservationsAndPlacements(tx, plan);
+          }
         } else {
-        await tx.dailyPlacement.deleteMany({ where: { date: plan.dateObj } });
-        await tx.dailyReservation.deleteMany({ where: { date: plan.dateObj } });
-
-        const reservationData = plan.reservations.map((row) => ({
-          date: plan.dateObj,
-          course: row.course,
-          shift: row.shift,
-          teeTime: row.teeTime,
-          teamName: row.teamName,
-          hole: row.hole,
-          source: row.source,
-          status: mapReservationStatus(row.status),
-          identityKey: row.identityKey,
-          rawRowIndex: row.rawRowIndex,
-          limousineCart: row.limousineCart,
-        }));
-        const createdRows =
-          reservationData.length > 0
-            ? await tx.dailyReservation.createManyAndReturn({
-                data: reservationData,
-                select: { id: true, identityKey: true },
-              })
-            : [];
-        const created = new Map(
-          createdRows.map((row) => [row.identityKey, row.id])
-        );
-
-        const placementData = plan.placements
-          .map((row) => {
-            const reservationId = created.get(row.identityKey);
-            if (!reservationId) return null;
-            return {
-              date: plan.dateObj,
-              reservationId,
-              caddyId: row.caddyId,
-              kind: row.kind,
-              reason: row.reason,
-              sequenceIndex: row.sequenceIndex,
-              pairId: row.pairId,
-              locked: row.locked,
-            };
-          })
-          .filter((row): row is NonNullable<typeof row> => row != null);
-        if (placementData.length > 0) {
-          await tx.dailyPlacement.createMany({ data: placementData });
-        }
+          await rewriteDailyReservationsAndPlacements(tx, plan);
         }
       }
 
