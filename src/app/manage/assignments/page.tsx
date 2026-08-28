@@ -102,7 +102,6 @@ import {
 } from "@/lib/assignmentChange";
 import {
   emptyBoardCellAction,
-  isStableReservationMoveKey,
   reservationMoveBlockReason,
 } from "@/lib/reservationMove";
 import {
@@ -1410,14 +1409,6 @@ export default function ManageAssignmentsOpsPage() {
       return;
     }
     const key = reservationIdentity(row.reservation);
-    if (!isStableReservationMoveKey(key)) {
-      const msg =
-        "위치가 포함된 예약 키는 이동할 수 없습니다. id가 있는 예약만 이동합니다.";
-      setError(msg);
-      showToast(msg);
-      setQuickSheet(null);
-      return;
-    }
     setSwapKey(null);
     setMoveKey(key);
     setMoveSheetOpen(true);

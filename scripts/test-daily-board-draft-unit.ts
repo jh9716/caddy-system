@@ -498,36 +498,137 @@ section("MOVE_RESERVATION 성공 후 Draft 최신화");
     db,
   });
   const source = draft.assignments[0];
+  const sourceKey = reservationKey(source.reservation);
   const preview = previewLiveChangeFromDraft({
     draft,
     change: makeMoveReservationChange({
-      reservationKey: reservationKey(source.reservation),
+      reservationKey: sourceKey,
       to: { course: "LAKE", shift: "1부", teeTime: "09:00", date },
     }),
   });
-  if (hasBlockingLiveChangeError(preview.warnings)) {
-    assert(true, "move blocked by engine — skip persist (not a draft save)");
-  } else {
-    const next = applyLiveChangePreviewToDraft(draft, preview);
-    const saved = await saveDailyBoardDraft({
+  assert(!hasBlockingLiveChangeError(preview.warnings), "id draft move not blocked");
+  const next = applyLiveChangePreviewToDraft(draft, preview);
+  const saved = await saveDailyBoardDraft({
+    date,
+    expectedVersion: 1,
+    payload: assignmentDraftToPayload(next),
+    updatedByUserId: 1,
+    db,
+  });
+  assert(saved.version === 2, "MOVE version++");
+  const moved = saved.payload.assignments.find(
+    (row) => reservationKey(row.reservation) === sourceKey
+  );
+  assert(!!moved, "same identity after MOVE save");
+  assert(moved?.reservation.course === "LAKE", "MOVE 결과가 Draft에 반영");
+  assert(moved?.reservation.teeTime === "09:00", "MOVE tee saved");
+}
+
+section("id 없는 Excel Draft hydrate/MOVE 후 uid 유지");
+{
+  const date = "2026-08-27";
+  const available = pool(12);
+  const excelReservations: AutoAssignReservation[] = [
+    {
       date,
-      expectedVersion: 1,
-      payload: assignmentDraftToPayload(next),
-      updatedByUserId: 1,
-      db,
-    });
-    assert(saved.version === 2, "MOVE version++");
-    assert(
-      saved.payload.assignments.some(
-        (row) =>
-          reservationKey(row.reservation) !== reservationKey(source.reservation) ||
-          row.reservation.course === "LAKE" ||
-          row.reservation.teeTime === "09:00"
-      ) ||
-        saved.payload.assignments.some((row) => row.reservation.course === "LAKE"),
-      "MOVE 결과가 Draft에 반영"
-    );
-  }
+      course: "SKY",
+      shift: "1부",
+      teeTime: "07:00",
+      teamName: "엑셀팀",
+      rawRowIndex: 8,
+      sourceSheet: "예약표",
+    },
+    {
+      date,
+      course: "OCEAN",
+      shift: "1부",
+      teeTime: "07:08",
+      teamName: "엑셀B",
+      rawRowIndex: 9,
+      sourceSheet: "예약표",
+    },
+    {
+      date,
+      course: "LAKE",
+      shift: "1부",
+      teeTime: "07:16",
+      teamName: "엑셀C",
+      rawRowIndex: 10,
+      sourceSheet: "예약표",
+    },
+    {
+      date,
+      course: "SKY",
+      shift: "2부",
+      teeTime: "13:00",
+      teamName: "엑셀D",
+      rawRowIndex: 11,
+      sourceSheet: "예약표",
+    },
+  ];
+  const result = computeAutoAssignmentsV1({
+    date,
+    available,
+    reservations: excelReservations,
+  });
+  const draft = createDraftFromAutoResult(result, available);
+  const source = draft.assignments.find((row) => row.reservation.teamName === "엑셀팀");
+  assert(!!source, "excel source in draft");
+  const sourceKey = reservationKey(source!.reservation);
+  assert(sourceKey.startsWith("uid:"), "createDraft stamps uid");
+
+  const legacyPayload = assignmentDraftToPayload(draft);
+  legacyPayload.assignments = legacyPayload.assignments.map((row) => {
+    if (row.reservation.teamName !== "엑셀팀") return row;
+    const { uid: _uid, id: _id, ...rest } = row.reservation as AutoAssignReservation & {
+      uid?: string;
+      id?: string | number;
+    };
+    return { ...row, reservation: rest };
+  });
+  const hydrated = parseDailyBoardDraftPayload(legacyPayload, date);
+  const hydratedRow = hydrated.assignments.find(
+    (row) => row.reservation.teamName === "엑셀팀"
+  );
+  assert(!!hydratedRow?.reservation.uid, "old Draft hydrate stamps uid");
+  assert(
+    reservationKey(hydratedRow!.reservation) === sourceKey,
+    "hydrate uid matches createDraft uid"
+  );
+
+  const { db } = createMemoryDraftDb();
+  await saveDailyBoardDraft({
+    date,
+    expectedVersion: 0,
+    payload: assignmentDraftToPayload(draft),
+    updatedByUserId: 1,
+    db,
+  });
+  const preview = previewLiveChangeFromDraft({
+    draft,
+    change: makeMoveReservationChange({
+      reservationKey: sourceKey,
+      to: { course: "VERTHILL", shift: "1부", teeTime: "07:40" },
+    }),
+  });
+  assert(!hasBlockingLiveChangeError(preview.warnings), "excel draft move ok");
+  const next = applyLiveChangePreviewToDraft(draft, preview);
+  const saved = await saveDailyBoardDraft({
+    date,
+    expectedVersion: 1,
+    payload: assignmentDraftToPayload(next),
+    updatedByUserId: 1,
+    db,
+  });
+  assert(saved.version === 2, "excel MOVE version++");
+  const loaded = await getDailyBoardDraft(date, db);
+  const loadedRow = loaded?.payload.assignments.find(
+    (row) => reservationKey(row.reservation) === sourceKey
+  );
+  assert(!!loadedRow, "reload keeps same uid");
+  assert(loadedRow?.reservation.course === "VERTHILL", "reload keeps moved course");
+  assert(loadedRow?.reservation.teeTime === "07:40", "reload keeps moved tee");
+  assert(loadedRow?.reservation.uid, "uid stored in Draft JSON");
 }
 
 section("실패한 live mutation은 Draft 저장하지 않음");

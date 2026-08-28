@@ -28,6 +28,7 @@ import { isThirdWeeklyTeam } from "@/lib/thirdWeeklyRotation";
 import { loadEffectiveThirdStartTeam } from "@/lib/thirdWeeklyStartService";
 import { regularPoolExcludingStoredOpsDuty } from "@/lib/opsDutyLivePool";
 import { loadSpecialSupportQueuesForDate } from "@/lib/dailySpecialSupportService";
+import { stampReservationIdentities } from "@/lib/reservationIdentity";
 
 function parseThirdStartTeam(raw: unknown): string | null {
   const value = String(raw ?? "").trim();
@@ -158,8 +159,24 @@ export async function POST(req: NextRequest) {
         dutyWorkbook = Buffer.from(await dutyFile.arrayBuffer());
       }
       const availability = await loadAvailabilityForDate(date, { dutyWorkbook });
-      const reservations: AutoAssignReservation[] = parsed.reservations.filter(
-        (r) => !r.date || r.date === date
+      const reservations: AutoAssignReservation[] = stampReservationIdentities(
+        parsed.reservations
+          .filter((r) => !r.date || r.date === date)
+          .map((r) => ({
+            date: r.date,
+            course: r.course || "",
+            courseLabel: r.courseLabel,
+            shift: r.shift || "",
+            teeTime: r.teeTime,
+            teamName: r.teamName,
+            hole: r.hole,
+            startingHole: r.startingHole,
+            sourceSheet: r.sourceSheet,
+            rawRowIndex: r.rawRowIndex,
+            needsReview: r.needsReview,
+            isDuplicate: r.isDuplicate,
+            reviewReasons: r.reviewReasons,
+          }))
       );
       const unavailable = unavailableReasonsFromRows(availability.excluded);
       const { bundles, anchors, placement } = await loadEngineSpecialBundlesForDate(
@@ -277,7 +294,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const reservations = (body.reservations || []) as AutoAssignReservation[];
+    const reservations = stampReservationIdentities(
+      (body.reservations || []) as AutoAssignReservation[]
+    );
     let available = (body.available || []) as AutoAssignCaddy[];
     let special = (body.special || []) as AutoAssignCaddy[];
     let specialRows: AvailabilityRow[] = [];

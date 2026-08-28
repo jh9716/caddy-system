@@ -23,6 +23,7 @@ import {
   type SpareByShift,
   type UnassignedReservationRow,
 } from "@/lib/autoAssignEngine";
+import { ensureReservationUid } from "@/lib/reservationIdentity";
 import type { CourseCode, ShiftPart } from "@/lib/reservationParser";
 
 export type DraftStatus = "DRAFT" | "EDITED" | "CONFIRMED" | "APPLIED";
@@ -85,19 +86,28 @@ export function createDraftFromAutoResult(
           ...result.specialUnassigned.map((u) => u.caddy),
         ]);
 
+  const used = new Set<string>();
+  const stamp = (reservation: AutoAssignReservation) =>
+    ensureReservationUid(reservation, used);
+
   return {
     date: result.date,
     status: "DRAFT",
-    assignments: result.assignments.map(cloneRow).sort(compareAssignmentOrder),
+    assignments: result.assignments
+      .map((row) => ({
+        ...cloneRow(row),
+        reservation: stamp(row.reservation),
+      }))
+      .sort(compareAssignmentOrder),
     unassignedReservations: result.unassignedReservations
       .map((u) => ({
-        reservation: { ...u.reservation },
+        reservation: stamp({ ...u.reservation }),
         reason: u.reason,
       }))
       .sort((a, b) => compareReservationOrder(a.reservation, b.reservation)),
     closedCourseReservations: (result.closedCourseReservations || [])
       .map((u) => ({
-        reservation: { ...u.reservation },
+        reservation: stamp({ ...u.reservation }),
         reason: u.reason,
       }))
       .sort((a, b) => compareReservationOrder(a.reservation, b.reservation)),

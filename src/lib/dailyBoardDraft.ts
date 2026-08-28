@@ -7,10 +7,12 @@
 import type { AssignmentDraft, DraftStatus } from "@/lib/assignmentDraft";
 import type {
   AutoAssignCaddy,
+  AutoAssignReservation,
   AutoAssignmentRow,
   SpareByShift,
   UnassignedReservationRow,
 } from "@/lib/autoAssignEngine";
+import { ensureReservationUid } from "@/lib/reservationIdentity";
 import {
   COURSE_CODES,
   type CourseCode,
@@ -195,6 +197,9 @@ function parseReservation(raw: unknown, label: string) {
   }
   return {
     ...(o.id !== undefined ? { id: o.id as string | number } : {}),
+    ...(o.uid != null && String(o.uid).trim() !== ""
+      ? { uid: String(o.uid).trim() }
+      : {}),
     date,
     course: String(o.course ?? ""),
     ...(o.courseLabel != null ? { courseLabel: String(o.courseLabel) } : {}),
@@ -292,6 +297,29 @@ const UI_ONLY_KEYS = [
   "dutyFile",
 ];
 
+function stampPayloadReservationIdentities(
+  payload: DailyBoardDraftPayloadV1
+): DailyBoardDraftPayloadV1 {
+  const used = new Set<string>();
+  const stamp = (reservation: AutoAssignReservation) =>
+    ensureReservationUid(reservation, used);
+  return {
+    ...payload,
+    assignments: payload.assignments.map((row) => ({
+      ...row,
+      reservation: stamp(row.reservation),
+    })),
+    unassignedReservations: payload.unassignedReservations.map((row) => ({
+      ...row,
+      reservation: stamp(row.reservation),
+    })),
+    closedCourseReservations: payload.closedCourseReservations.map((row) => ({
+      ...row,
+      reservation: stamp(row.reservation),
+    })),
+  };
+}
+
 export function parseDailyBoardDraftPayload(
   raw: unknown,
   expectedDate: string
@@ -338,7 +366,7 @@ export function parseDailyBoardDraftPayload(
   if (assignments.length > 2500) {
     throw new DailyBoardDraftPayloadError("assignments가 너무 많습니다.");
   }
-  return {
+  return stampPayloadReservationIdentities({
     schemaVersion: DAILY_BOARD_DRAFT_SCHEMA_VERSION,
     date: expectedDate,
     status,
@@ -368,7 +396,7 @@ export function parseDailyBoardDraftPayload(
       o.applyAuditId == null || o.applyAuditId === ""
         ? null
         : asFiniteInt(o.applyAuditId, "applyAuditId"),
-  };
+  });
 }
 
 export function formatDraftSavedAt(iso: string | Date): string {

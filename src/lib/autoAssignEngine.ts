@@ -29,6 +29,12 @@ import {
   automaticThirdStartTeam,
 } from "@/lib/thirdWeeklyRotation";
 import {
+  ensureReservationUid,
+  legacyCompositeReservationKey,
+  reservationKey as identityReservationKey,
+  reservationMatchesIdentity,
+} from "@/lib/reservationIdentity";
+import {
   SPECIAL_WINDOW_COLLISION,
   SPECIAL_WINDOW_OVERFLOW,
   computeShift1SpecialWindow,
@@ -163,6 +169,11 @@ export type AutoAssignCaddy = {
 export type AutoAssignReservation = {
   /** 선택적 안정 식별자 (고정배치 reservationId 매칭용) */
   id?: string | number;
+  /**
+   * Draft/JSON 안정 identity. 위치(course/shift/teeTime)에 의존하지 않는다.
+   * reservationKey는 id가 없으면 `uid:<uid>` 를 쓴다.
+   */
+  uid?: string;
   date: string;
   course: string;
   courseLabel?: string;
@@ -1087,16 +1098,7 @@ export function findOneThreePair(
 }
 
 export function reservationKey(r: AutoAssignReservation): string {
-  if (r.id != null && String(r.id) !== "") return `id:${r.id}`;
-  return [
-    r.date,
-    r.course,
-    r.shift,
-    r.teeTime,
-    r.rawRowIndex ?? "",
-    r.teamName ?? "",
-    r.sourceSheet ?? "",
-  ].join("|");
+  return identityReservationKey(r);
 }
 
 function shiftReservations(
@@ -3538,11 +3540,32 @@ function resolveReflowReason(input: {
   return REASON.REGULAR_CANCEL_REFLOW;
 }
 
-function isStableReservationMoveKey(key: unknown): boolean {
-  const raw = String(key ?? "").trim();
-  if (!raw.startsWith("id:")) return false;
-  const rest = raw.slice(3);
-  return !!rest && !rest.includes("|");
+function stampResultReservationIdentities(
+  previous: AutoAssignResultV1
+): AutoAssignResultV1 {
+  const used = new Set<string>();
+  return patchResultReservations(previous, (reservation) =>
+    ensureReservationUid(reservation, used)
+  );
+}
+
+function stabilizeMoveReservationIdentities(
+  previous: AutoAssignResultV1,
+  events: ReservationChangeEvent[]
+): { previous: AutoAssignResultV1; events: ReservationChangeEvent[] } {
+  const stampedPrevious = stampResultReservationIdentities(previous);
+  const nextEvents = events.map((event) => {
+    if (event.type !== "MOVE_RESERVATION") return event;
+    const row =
+      findMoveSourceRow(stampedPrevious, event) ||
+      findMoveSourceRow(previous, event);
+    if (!row) return event;
+    const stamped = ensureReservationUid(row.reservation);
+    const stableKey = reservationKey(stamped);
+    if (event.reservationKey === stableKey) return event;
+    return { ...event, reservationKey: stableKey };
+  });
+  return { previous: stampedPrevious, events: nextEvents };
 }
 
 function parseMoveEventDestination(to: {
@@ -3563,15 +3586,18 @@ function findMoveSourceRow(
   event: Extract<ReservationChangeEvent, { type: "MOVE_RESERVATION" }>
 ): AutoAssignmentRow | null {
   if (event.reservationId != null && String(event.reservationId) !== "") {
-    const byId = previous.assignments.find(
-      (row) => String(row.reservation.id ?? "") === String(event.reservationId)
+    const byId = previous.assignments.find((row) =>
+      reservationMatchesIdentity(row.reservation, null, event.reservationId)
     );
     if (byId) return byId;
   }
   if (event.reservationKey) {
-    if (!isStableReservationMoveKey(event.reservationKey)) return null;
-    const byKey = previous.assignments.find(
-      (row) => reservationKey(row.reservation) === event.reservationKey
+    const byKey = previous.assignments.find((row) =>
+      reservationMatchesIdentity(
+        row.reservation,
+        event.reservationKey,
+        event.reservationId
+      )
     );
     if (byKey) return byKey;
   }
@@ -3601,20 +3627,6 @@ function validateReservationMoveEvents(
     )
   );
   for (const event of events) {
-    if (
-      event.reservationKey &&
-      !isStableReservationMoveKey(event.reservationKey) &&
-      (event.reservationId == null || String(event.reservationId) === "")
-    ) {
-      warnings.push({
-        level: "error",
-        code: "MOVE_UNSTABLE_KEY",
-        message:
-          "위치가 포함된 예약 키는 이동할 수 없습니다. id가 있는 예약만 이동합니다.",
-        reservationKey: event.reservationKey,
-      });
-      continue;
-    }
     const dest = parseMoveEventDestination(event.to);
     if (!dest) {
       warnings.push({
@@ -3641,16 +3653,6 @@ function validateReservationMoveEvents(
         code: "MOVE_NOT_FOUND",
         message: "이동할 예약을 찾을 수 없습니다.",
         reservationKey: event.reservationKey,
-      });
-      continue;
-    }
-    if (!isStableReservationMoveKey(reservationKey(row.reservation))) {
-      warnings.push({
-        level: "error",
-        code: "MOVE_UNSTABLE_KEY",
-        message:
-          "위치가 포함된 예약 키는 이동할 수 없습니다. id가 있는 예약만 이동합니다.",
-        reservationKey: reservationKey(row.reservation),
       });
       continue;
     }
@@ -3729,11 +3731,7 @@ function reservationMatchesKey(
   key?: string,
   id?: string | number
 ): boolean {
-  if (key && reservationKey(reservation) === key) return true;
-  if (id != null && String(id) !== "" && String(reservation.id ?? "") === String(id)) {
-    return true;
-  }
-  return false;
+  return reservationMatchesIdentity(reservation, key, id);
 }
 
 function patchResultReservations(
@@ -4688,9 +4686,9 @@ export function reflowRegularAssignments(input: {
   /** 서버에서 다시 읽은 특수지원 큐. caddyPool에 넣지 않는다. */
   specialSupportByShift?: Record<ShiftPart, AutoAssignCaddy[]>;
 }): RegularReflowResult {
-  const previous = input.previous;
+  let previous = input.previous;
   const date = previous.date;
-  const events = input.events || [];
+  let events = input.events || [];
   const warnings: ReflowWarning[] = [];
   const fullPool = dedupeCaddies([...(input.regularCaddyPool || [])]);
 
@@ -4714,7 +4712,7 @@ export function reflowRegularAssignments(input: {
     (e): e is Extract<ReservationChangeEvent, { type: "SET_LOCK" }> =>
       e.type === "SET_LOCK"
   );
-  const moveEvents = events.filter(
+  let moveEvents = events.filter(
     (e): e is Extract<ReservationChangeEvent, { type: "MOVE_RESERVATION" }> =>
       e.type === "MOVE_RESERVATION"
   );
@@ -4740,6 +4738,13 @@ export function reflowRegularAssignments(input: {
     return applyLockOnly(previous, lockEvents[0], fullPool);
   }
   if (moveEvents.length > 0) {
+    const stabilized = stabilizeMoveReservationIdentities(previous, events);
+    previous = stabilized.previous;
+    events = stabilized.events;
+    moveEvents = events.filter(
+      (e): e is Extract<ReservationChangeEvent, { type: "MOVE_RESERVATION" }> =>
+        e.type === "MOVE_RESERVATION"
+    );
     const moveWarnings = validateReservationMoveEvents(previous, moveEvents);
     warnings.push(...moveWarnings);
     if (moveWarnings.some((w) => w.level === "error")) {
@@ -4881,10 +4886,21 @@ export function reflowRegularAssignments(input: {
       const dest = parseMoveEventDestination(event.to);
       const sourceRow = findMoveSourceRow(previous, event);
       if (!dest || !sourceRow) continue;
-      const key = reservationKey(sourceRow.reservation);
-      const existing = seedMap.get(key) || sourceRow.reservation;
-      seedMap.set(key, {
-        ...existing,
+      const original =
+        seedMap.get(reservationKey(sourceRow.reservation)) ||
+        seedMap.get(legacyCompositeReservationKey(sourceRow.reservation)) ||
+        sourceRow.reservation;
+      const stamped = ensureReservationUid(original);
+      const nextKey = reservationKey(stamped);
+      for (const oldKey of [
+        reservationKey(original),
+        legacyCompositeReservationKey(original),
+        reservationKey(sourceRow.reservation),
+      ]) {
+        seedMap.delete(oldKey);
+      }
+      seedMap.set(nextKey, {
+        ...stamped,
         course: dest.course,
         shift: dest.shift,
         teeTime: dest.teeTime,
