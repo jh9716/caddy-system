@@ -101,7 +101,7 @@ export async function POST(req: NextRequest) {
           error: hideDetails
             ? LIVE_CHANGE_APPLY_USER_MESSAGE
             : result.message,
-          code: result.code,
+          code: hideDetails ? "APPLY_FAILED" : result.code,
           message: hideDetails ? undefined : result.message,
           warnings: result.warnings,
         },
