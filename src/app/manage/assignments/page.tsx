@@ -1515,13 +1515,12 @@ export default function ManageAssignmentsOpsPage() {
       const gen = persistGenRef.current;
       await (persistQueueRef.current = persistQueueRef.current.then(async () => {
         if (gen !== persistGenRef.current) return;
-        ok = await persistLivePreview({
+        ok = await persistQuickReservationMove({
           preview,
           previous,
           pool: livePool,
-          applyServerDraft: true,
+          painted,
           rollbackDraft: current,
-          failToast: TEAM_MOVE_SAVE_FAILED_TOAST,
         });
         if (!ok) persistGenRef.current += 1;
       }));
@@ -1735,6 +1734,81 @@ export default function ManageAssignmentsOpsPage() {
     showToast(result.message || PUBLISH_SUCCESS_MESSAGE);
     if (process.env.NODE_ENV !== "production") {
       console.debug("[publish timings]", result.timings);
+    }
+  }
+
+  async function persistQuickReservationMove(input: {
+    preview: LiveChangePreview;
+    previous: AutoAssignResultV1;
+    pool: AutoAssignCaddy[];
+    painted: AssignmentDraft;
+    rollbackDraft: AssignmentDraft;
+  }): Promise<boolean> {
+    setError(null);
+    const rollbackOptimistic = () => {
+      setDraft(input.rollbackDraft);
+      setWarnings(detectDraftWarnings(input.rollbackDraft));
+    };
+    try {
+      const res = await fetch("/api/assignments/reflow/quick-move", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          previous: input.previous,
+          regularCaddyPool: input.pool,
+          events: input.preview.events,
+          changeType: input.preview.changeType,
+          draft: {
+            date: input.painted.date,
+            version: serverDraftVersionRef.current,
+            payload: assignmentDraftToPayload(input.painted),
+          },
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        rollbackOptimistic();
+        setDraftSaveState(res.status === 409 ? "conflict" : "error");
+        setError(
+          data.error ||
+            data.message ||
+            (res.status === 409
+              ? DRAFT_VERSION_CONFLICT_MESSAGE
+              : "배치 저장 중 오류가 발생했습니다. 다시 시도해주세요.")
+        );
+        showToast(TEAM_MOVE_SAVE_FAILED_TOAST);
+        return false;
+      }
+      const after = (data.preview?.after ||
+        input.preview.after) as typeof input.preview.after;
+      const next = applyLiveResultToDraft(input.painted, after);
+      setDraft(next);
+      setWarnings(detectDraftWarnings(next));
+      if (autoResultRef.current) {
+        setAutoResult({ ...autoResultRef.current, ...after });
+      }
+      setUnavailableCaddyIds(
+        Array.isArray(data.preview?.unavailableCaddyIds)
+          ? data.preview.unavailableCaddyIds
+          : input.preview.unavailableCaddyIds || []
+      );
+      const savedVersion = Number(data.draft?.version);
+      if (Number.isInteger(savedVersion) && savedVersion > 0) {
+        serverDraftVersionRef.current = savedVersion;
+        setDraftVersion(savedVersion);
+        setDraftSavedAt(
+          String(data.draft?.updatedAt || new Date().toISOString())
+        );
+      }
+      setDraftSaveState("saved");
+      return true;
+    } catch (e: unknown) {
+      rollbackOptimistic();
+      setDraftSaveState("error");
+      setError(e instanceof Error ? e.message : "현장 변경 적용 실패");
+      showToast(TEAM_MOVE_SAVE_FAILED_TOAST);
+      return false;
     }
   }
 

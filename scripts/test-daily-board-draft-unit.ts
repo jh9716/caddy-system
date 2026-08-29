@@ -751,6 +751,14 @@ section("source guards: API / UI / migration / live save order");
   const persist = page.split("async function persistLivePreview")[1]?.split("function quickActionToast")[0] || "";
   const failBlock = persist.split("if (!res.ok)")[1]?.split("let savedDraft")[0] || "";
   const applyRoute = readSrc("src/app/api/assignments/reflow/apply/route.ts");
+  const quickMoveRoute = readSrc("src/app/api/assignments/reflow/quick-move/route.ts");
+  const quickMoveApply = readSrc("src/lib/quickReservationMoveApply.ts");
+  const moveFn =
+    page.split("async function applyReservationMove")[1]?.split("function onRequestLiveChange")[0] ||
+    "";
+  const quickPersist =
+    page.split("async function persistQuickReservationMove")[1]?.split("async function persistLivePreview")[0] ||
+    "";
   assert(!/queueDraftSave/.test(failBlock), "failed live mutation block has no queueDraftSave");
   assert(/draftAutosaveCandidate/.test(persist), "success path uses draftAutosaveCandidate");
   assert(/queueDraftSave\(toSave, true\)/.test(persist), "success saves latest draft immediately");
@@ -763,12 +771,35 @@ section("source guards: API / UI / migration / live save order");
     "reflow/apply does not persist or version DailyBoardDraft"
   );
   assert(
+    /applyQuickReservationMove/.test(quickMoveRoute) &&
+      /\$transaction/.test(quickMoveApply) &&
+      /writeLiveChangePlan/.test(quickMoveApply) &&
+      /saveDailyBoardDraftOnDb/.test(quickMoveApply) &&
+      quickMoveApply.indexOf("writeLiveChangePlan") <
+        quickMoveApply.indexOf("saveDailyBoardDraftOnDb"),
+    "quick-move persists live + Draft in one transaction"
+  );
+  assert(
+    /persistQuickReservationMove/.test(moveFn) &&
+      /\/api\/assignments\/reflow\/quick-move/.test(quickPersist) &&
+      !/\/api\/assignments\/reflow\/apply/.test(quickPersist) &&
+      !/queueDraftSave/.test(quickPersist),
+    "board MOVE uses atomic quick-move, not apply+Draft PUT"
+  );
+  assert(
     !/loadAvailabilityForDate/.test(applyRoute) &&
       !/offSheetFetch/.test(applyRoute) &&
       !/fetchPublishedOffSheets/.test(applyRoute) &&
       /Promise\.all/.test(applyRoute) &&
       /offSheetHttp: false/.test(applyRoute),
     "reflow/apply skips off-sheet/availability and loads duty+support in parallel"
+  );
+  assert(
+    !/loadAvailabilityForDate/.test(quickMoveRoute) &&
+      !/offSheetFetch/.test(quickMoveRoute) &&
+      !/fetchPublishedOffSheets/.test(quickMoveRoute) &&
+      /offSheetHttp: false/.test(quickMoveRoute),
+    "quick-move skips off-sheet/availability"
   );
   assert(/rollbackOptimistic\(\)/.test(persist), "persist rolls back optimistic Draft on apply/PUT fail");
 

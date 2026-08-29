@@ -1068,17 +1068,12 @@ async function rewriteDailyReservationsAndPlacements(
   }
 }
 
-async function writePlanWithPrisma(
-  db: PrismaClient,
+export async function writeLiveChangePlan(
+  tx: Prisma.TransactionClient,
   plan: LiveChangePersistPlan,
   preview: LiveChangePreview,
   opts: { ip?: string | null; updateOpsIfPresent?: boolean }
 ): Promise<{ changeId: number; opsUpdated: boolean }> {
-  // 계산은 이미 plan에 완료. tx 안에서는 날짜 단위 delete + createMany 몇 번만.
-  // 244건을 하나씩 create 하면 Prisma interactive tx(기본 5s)가 닫혀
-  // "Transaction not found / Transaction ID is invalid" 가 난다.
-  return db.$transaction(
-    async (tx) => {
       const patched = await tryPatchLiveDay(tx, plan, preview);
       if (!patched) {
         if (plan.changeType === "MOVE_RESERVATION") {
@@ -1186,8 +1181,18 @@ async function writePlanWithPrisma(
         }
       }
 
-      return { changeId, opsUpdated };
-    },
+  return { changeId, opsUpdated };
+}
+
+async function writePlanWithPrisma(
+  db: PrismaClient,
+  plan: LiveChangePersistPlan,
+  preview: LiveChangePreview,
+  opts: { ip?: string | null; updateOpsIfPresent?: boolean }
+): Promise<{ changeId: number; opsUpdated: boolean }> {
+  // 계산은 이미 plan에 완료. tx 안에서는 날짜 단위 delete + createMany 몇 번만.
+  return db.$transaction(
+    async (tx) => writeLiveChangePlan(tx, plan, preview, opts),
     {
       maxWait: 10_000,
       timeout: 20_000,

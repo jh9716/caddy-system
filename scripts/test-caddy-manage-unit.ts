@@ -556,10 +556,11 @@ console.log("== 보드 팀 이동은 미리보기 없이 즉시 apply ==");
     "empty-cell MOVE applies immediately, no preview dock"
   );
   assert(
-    /persistLivePreview\(/.test(moveFn) &&
+    /persistQuickReservationMove\(/.test(moveFn) &&
       /previewLiveChangeFromDraft\(/.test(moveFn) &&
+      !/persistLivePreview\(/.test(moveFn) &&
       !/fetch\(\s*"\/api\/assignments\/reflow\/preview"/.test(moveFn),
-    "quick move validates locally then persistLivePreview (single apply HTTP)"
+    "quick move validates locally then persistQuickReservationMove (atomic HTTP)"
   );
   assert(
     /TEAM_MOVED_TOAST/.test(moveFn) &&
@@ -577,7 +578,7 @@ console.log("== 보드 팀 이동은 미리보기 없이 즉시 apply ==");
   );
   assert(
     /applyLiveResultToDraft\(current, preview\.after\)/.test(moveFn) &&
-      moveFn.indexOf("setDraft(painted)") < moveFn.indexOf("persistLivePreview") &&
+      moveFn.indexOf("setDraft(painted)") < moveFn.indexOf("persistQuickReservationMove") &&
       /setDraftSaveState\("saving"\)/.test(moveFn) &&
       !/setMovePendingDest\(\{/.test(moveFn),
     "quick move paints client preview before persist, no dest 이동 중 overlay"
@@ -602,8 +603,8 @@ console.log("== 보드 팀 이동은 미리보기 없이 즉시 apply ==");
   );
   assert(
     /rollbackDraft: current/.test(moveFn) &&
-      /applyServerDraft: true/.test(moveFn) &&
-      /failToast: TEAM_MOVE_SAVE_FAILED_TOAST/.test(moveFn),
+      /painted/.test(moveFn) &&
+      /TEAM_MOVE_SAVE_FAILED_TOAST/.test(board),
     "quick move persist uses pre-move Draft as rollback snapshot"
   );
   const persistFn =
@@ -632,11 +633,24 @@ console.log("== 보드 팀 이동은 미리보기 없이 즉시 apply ==");
       /moveApplyingRef\.current = false/.test(moveFn),
     "client-blocked quick move keeps Draft and surfaces the error"
   );
+  const quickPersist =
+    board.split("async function persistQuickReservationMove")[1]?.split("async function persistLivePreview")[0] ||
+    "";
+  assert(
+    /\/api\/assignments\/reflow\/quick-move/.test(quickPersist) &&
+      /assignmentDraftToPayload\(input\.painted\)/.test(quickPersist) &&
+      /serverDraftVersionRef\.current/.test(quickPersist) &&
+      /rollbackOptimistic\(\)/.test(quickPersist) &&
+      !/\/api\/assignments\/reflow\/apply/.test(quickPersist) &&
+      !/queueDraftSave/.test(quickPersist) &&
+      !/flushDraftSave/.test(quickPersist),
+    "quick move uses atomic quick-move endpoint; no follow-up Draft PUT"
+  );
   assert(
     /queueDraftSave\(toSave, true\)/.test(persistFn) &&
       /await flushDraftSave\(\)/.test(persistFn) &&
       /flushed\.status === "conflict"/.test(persistFn),
-    "quick move apply 200 waits for Draft PUT; 409 is not treated as success"
+    "non-MOVE persistLivePreview still waits for Draft PUT; 409 is not treated as success"
   );
   assert(
     /이대로 적용/.test(panel) && /setLiveChangePreset\(change\)/.test(emptyFn),
