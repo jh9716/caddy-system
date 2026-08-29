@@ -584,6 +584,13 @@ console.log("== 보드 팀 이동은 미리보기 없이 즉시 apply ==");
     "quick move paints client preview before persist, no dest 이동 중 overlay"
   );
   assert(
+    moveFn.indexOf("moveApplyingRef.current = false") <
+      moveFn.indexOf("persistQuickReservationMove") &&
+      !/await \(persistQueueRef/.test(moveFn) &&
+      /persistQueueRef\.current = persistQueueRef\.current\.then/.test(moveFn),
+    "after optimistic paint, next team can be selected while persist stays serial"
+  );
+  assert(
     /보드에서 빈 칸 선택/.test(sheet) &&
       /applying \? "이동 중\.\.\." : "이동"/.test(sheet) &&
       !/>\s*미리보기\s*</.test(sheet),
@@ -645,6 +652,10 @@ console.log("== 보드 팀 이동은 미리보기 없이 즉시 apply ==");
       !/queueDraftSave/.test(quickPersist) &&
       !/flushDraftSave/.test(quickPersist),
     "quick move uses atomic quick-move endpoint; no follow-up Draft PUT"
+  );
+  assert(
+    /if \(draftRef\.current === input\.painted\)/.test(quickPersist),
+    "older persist does not overwrite a newer optimistic Draft"
   );
   assert(
     /queueDraftSave\(toSave, true\)/.test(persistFn) &&
