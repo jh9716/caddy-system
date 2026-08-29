@@ -591,6 +591,13 @@ console.log("== 보드 팀 이동은 미리보기 없이 즉시 apply ==");
     "after optimistic paint, next team can be selected while persist stays serial"
   );
   assert(
+    /shouldRunQueuedPersist\(gen, persistGenRef\.current\)/.test(moveFn) &&
+      /bumpPersistGeneration\(persistGenRef\.current\)/.test(moveFn) &&
+      /lastSuccessfulMoveDraftRef/.test(board) &&
+      /TEAM_MOVE_QUEUE_STOPPED_TOAST/.test(board),
+    "failed queued MOVE bumps gen, rolls back to last success, stops later moves"
+  );
+  assert(
     /보드에서 빈 칸 선택/.test(sheet) &&
       /applying \? "이동 중\.\.\." : "이동"/.test(sheet) &&
       !/>\s*미리보기\s*</.test(sheet),
@@ -611,7 +618,7 @@ console.log("== 보드 팀 이동은 미리보기 없이 즉시 apply ==");
   assert(
     /rollbackDraft: current/.test(moveFn) &&
       /painted/.test(moveFn) &&
-      /TEAM_MOVE_SAVE_FAILED_TOAST/.test(board),
+      /TEAM_MOVE_QUEUE_STOPPED_TOAST/.test(board),
     "quick move persist uses pre-move Draft as rollback snapshot"
   );
   const persistFn =

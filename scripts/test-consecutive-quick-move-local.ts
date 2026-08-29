@@ -34,6 +34,11 @@ import {
   previewLiveChangeFromDraft,
 } from "../src/lib/assignmentChange";
 import { applyQuickReservationMove } from "../src/lib/quickReservationMoveApply";
+import {
+  bumpPersistGeneration,
+  rollbackDraftAfterQueuedMoveFailure,
+  shouldRunQueuedPersist,
+} from "../src/lib/quickMovePersistQueue";
 
 const DATE = "2099-12-16";
 const day = parseYmd(DATE).start;
@@ -243,6 +248,128 @@ async function main() {
   assert(liveSlot("연속A-uid") === "VERTHILL 1부 07:00", "live A dest");
   assert(liveSlot("연속B-id") === "SKY 1부 07:16", "live B dest");
   assert(liveSlot("연속C-uid") === "OCEAN 1부 07:16", "live C dest");
+
+  console.log("\n== move1 ok → move2 409 → move3 cancelled ==");
+  {
+    const seededFail = await seedFixture();
+    let persistGen = 0;
+    const lastSuccessful = { draft: seededFail.draft };
+
+    const move1 = {
+      team: "연속A-uid",
+      dest: { course: "VERTHILL", shift: "1부", teeTime: "07:00" as const },
+    };
+    const row1 = teamRow(seededFail.draft, move1.team);
+    const change1 = makeMoveReservationChange({
+      reservationKey: reservationIdentity(row1.reservation),
+      reservationId: row1.reservation.id,
+      to: { ...move1.dest, date: DATE },
+    });
+    const preview1 = previewLiveChangeFromDraft({
+      draft: seededFail.draft,
+      change: change1,
+    });
+    const painted1 = applyLiveResultToDraft(seededFail.draft, preview1.after);
+    const gen1 = persistGen;
+    const result1 = await applyQuickReservationMove({
+      previous: autoResultFromDraft(seededFail.draft, null),
+      regularCaddyPool: seededFail.draft.caddyPool,
+      events: preview1.events,
+      changeType: "MOVE_RESERVATION",
+      draft: {
+        date: DATE,
+        expectedVersion: seededFail.version,
+        payload: assignmentDraftToPayload(painted1),
+      },
+      updatedByUserId: null,
+    });
+    assert(result1.ok === true, "move1 persist ok");
+    if (!result1.ok) throw new Error("move1 failed");
+    lastSuccessful.draft = payloadToAssignmentDraft(result1.draft.payload);
+    let version = result1.draft.version;
+
+    const row2 = teamRow(painted1, "연속B-id");
+    const change2 = makeMoveReservationChange({
+      reservationKey: reservationIdentity(row2.reservation),
+      reservationId: row2.reservation.id,
+      to: { course: "SKY", shift: "1부", teeTime: "07:16", date: DATE },
+    });
+    const preview2 = previewLiveChangeFromDraft({ draft: painted1, change: change2 });
+    const painted2 = applyLiveResultToDraft(painted1, preview2.after);
+    const gen2 = persistGen;
+    const result2 = await applyQuickReservationMove({
+      previous: autoResultFromDraft(painted1, null),
+      regularCaddyPool: painted1.caddyPool,
+      events: preview2.events,
+      changeType: "MOVE_RESERVATION",
+      draft: {
+        date: DATE,
+        expectedVersion: version + 9,
+        payload: assignmentDraftToPayload(painted2),
+      },
+      updatedByUserId: null,
+    });
+    assert(result2.ok === false, "move2 persist 409/fail");
+    if (shouldRunQueuedPersist(gen2, persistGen) && !result2.ok) {
+      persistGen = bumpPersistGeneration(persistGen);
+    }
+    const rolled = rollbackDraftAfterQueuedMoveFailure({
+      lastSuccessfulDraft: lastSuccessful.draft,
+      failedMoveRollbackDraft: painted1,
+    });
+    assert(slotOf(rolled, "연속A-uid") === "VERTHILL 1부 07:00", "rollback keeps move1");
+    assert(slotOf(rolled, "연속B-id") === "OCEAN 1부 07:00", "move2 optimistic rolled back");
+
+    const row3 = teamRow(painted2, "연속C-uid");
+    const change3 = makeMoveReservationChange({
+      reservationKey: reservationIdentity(row3.reservation),
+      reservationId: row3.reservation.id,
+      to: { course: "OCEAN", shift: "1부", teeTime: "07:16", date: DATE },
+    });
+    const preview3 = previewLiveChangeFromDraft({ draft: painted2, change: change3 });
+    const painted3 = applyLiveResultToDraft(painted2, preview3.after);
+    const gen3 = gen2;
+    assert(
+      !shouldRunQueuedPersist(gen3, persistGen),
+      "move3 queue aborted after move2 fail"
+    );
+    if (shouldRunQueuedPersist(gen3, persistGen)) {
+      await applyQuickReservationMove({
+        previous: autoResultFromDraft(painted2, null),
+        regularCaddyPool: painted2.caddyPool,
+        events: preview3.events,
+        changeType: "MOVE_RESERVATION",
+        draft: {
+          date: DATE,
+          expectedVersion: version,
+          payload: assignmentDraftToPayload(painted3),
+        },
+        updatedByUserId: null,
+      });
+    }
+
+    const stored = await getDailyBoardDraft(DATE);
+    const storedDraft = stored ? payloadToAssignmentDraft(stored.payload) : null;
+    assert(!!storedDraft, "draft still present");
+    assert(slotOf(storedDraft!, "연속A-uid") === "VERTHILL 1부 07:00", "server Draft keeps move1");
+    assert(slotOf(storedDraft!, "연속B-id") === "OCEAN 1부 07:00", "server Draft has no move2");
+    assert(slotOf(storedDraft!, "연속C-uid") === "LAKE 1부 07:08", "server Draft has no move3");
+    assert(stored?.version === version, "Draft version stayed at move1");
+
+    const liveFail = await prisma.dailyReservation.findMany({
+      where: { date: day, teamName: { in: ["연속A-uid", "연속B-id", "연속C-uid"] } },
+    });
+    const liveFailSlot = (name: string) => {
+      const row = liveFail.find((r) => r.teamName === name);
+      return row ? `${row.course} ${row.shift} ${row.teeTime}` : null;
+    };
+    assert(liveFailSlot("연속A-uid") === "VERTHILL 1부 07:00", "live keeps move1");
+    assert(liveFailSlot("연속B-id") === "OCEAN 1부 07:00", "live has no move2");
+    assert(liveFailSlot("연속C-uid") === "LAKE 1부 07:08", "live has no move3");
+    const placeCount = await prisma.dailyPlacement.count({ where: { date: day } });
+    assert(placeCount === 3, "placements stay at 3 rows");
+    assert(shouldRunQueuedPersist(gen1, persistGen) === false, "failed gen blocks old captures");
+  }
 
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exitCode = 1;
