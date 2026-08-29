@@ -3351,6 +3351,155 @@ section("MOVE 풀 제외 DailyOpsDuty/RETIRED/LEAVE + 순번바꿈/당추/병가
   assert(sick.reason === REASON.CADDY_UNAVAILABLE_REFLOW, "sick still works");
 }
 
+section("병가 reflow는 house start 다음 순번을 당기고 스페어를 갱신한다");
+{
+  const date = "2026-08-28";
+  const 김예진1: AutoAssignCaddy = {
+    id: 101,
+    name: "김예진1",
+    team: "1조",
+    teamOrder: 1,
+    caddyType: "HOUSE",
+    employmentStatus: "ACTIVE",
+  };
+  const 서승희: AutoAssignCaddy = {
+    id: 205,
+    name: "서승희",
+    team: "5조",
+    teamOrder: 10,
+    caddyType: "HOUSE",
+    employmentStatus: "ACTIVE",
+  };
+  const 김하나1: AutoAssignCaddy = {
+    id: 206,
+    name: "김하나1",
+    team: "5조",
+    teamOrder: 11,
+    caddyType: "HOUSE",
+    employmentStatus: "ACTIVE",
+  };
+  const rest: AutoAssignCaddy[] = ["C", "D", "S1", "S2", "X"].map((name, i) => ({
+    id: 300 + i,
+    name,
+    team: "6조",
+    teamOrder: 20 + i,
+    caddyType: "HOUSE",
+    employmentStatus: "ACTIVE",
+  }));
+  const pool = [김예진1, 서승희, 김하나1, ...rest];
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    houseStartCaddyId: 서승희.id,
+    reservations: [
+      res(date, "R1", { course: "SKY", teeTime: "06:14" }),
+      res(date, "R2", { course: "OCEAN", teeTime: "06:22" }),
+      res(date, "R3", { course: "LAKE", teeTime: "06:30" }),
+      res(date, "R4", { course: "VERTHILL", teeTime: "06:38" }),
+    ],
+  });
+  assert(caddyOn(previous, "R1") === 서승희.id, "before: 06:14 SKY = 서승희");
+  assert(caddyOn(previous, "R2") === 김하나1.id, "before: next = 김하나1");
+  assert(caddyOn(previous, "R3") === rest[0].id, "before: C");
+  assert(caddyOn(previous, "R4") === rest[1].id, "before: D");
+  const spareBefore = previous.sparesByShift.find((s) => s.shift === "1부");
+  assert(spareBefore?.spare1?.caddyId === rest[2].id, "before spare1=S1");
+  assert(spareBefore?.spare2?.caddyId === rest[3].id, "before spare2=S2");
+  assert(
+    !previous.assignments.some((row) => row.caddy.id === 김예진1.id),
+    "김예진1 is not in the 서승희-start window"
+  );
+
+  const hydrated = autoResultFromDraft(createDraftFromAutoResult(previous, pool), null);
+  assert(
+    hydrated.meta.houseStartCaddyId === 서승희.id,
+    "Draft hydrate infers house start from first 1부 regular"
+  );
+  delete (hydrated.meta as { houseStartCaddyId?: number }).houseStartCaddyId;
+  const sick = previewLiveAssignmentChange({
+    previous: hydrated,
+    regularCaddyPool: pool,
+    change: { type: "CADDY_SICK", caddyId: 서승희.id, shift: "1부" },
+  });
+  assert(caddyOn(sick.after, "R1") === 김하나1.id, "서승희 병가 → 김하나1이 06:14로 당김");
+  assert(caddyOn(sick.after, "R2") === rest[0].id, "C가 김하나1 자리로");
+  assert(caddyOn(sick.after, "R3") === rest[1].id, "D가 C 자리로");
+  assert(caddyOn(sick.after, "R4") === rest[2].id, "S1이 마지막 팀에 투입");
+  assert(
+    sick.after.assignments.every((row) => row.caddy.id !== 김예진1.id),
+    "김예진1 must not jump into the hole"
+  );
+  assert(
+    sick.after.assignments.every((row) => row.caddy.id !== 서승희.id),
+    "서승희 removed"
+  );
+  const spareAfter = sick.after.sparesByShift.find((s) => s.shift === "1부");
+  assert(spareAfter?.spare1?.caddyId === rest[3].id, "new spare1=S2");
+  assert(spareAfter?.spare2?.caddyId === rest[4].id, "new spare2=X");
+
+  const shift2Prev = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    houseStartCaddyId: 서승희.id,
+    reservations: [
+      res(date, "A1", { course: "SKY", teeTime: "06:14", shift: "1부" }),
+      res(date, "A2", { course: "OCEAN", teeTime: "06:22", shift: "1부" }),
+      res(date, "B1", { course: "SKY", teeTime: "13:00", shift: "2부" }),
+      res(date, "B2", { course: "OCEAN", teeTime: "13:08", shift: "2부" }),
+      res(date, "B3", { course: "LAKE", teeTime: "13:16", shift: "2부" }),
+      res(date, "B4", { course: "VERTHILL", teeTime: "13:24", shift: "2부" }),
+    ],
+  });
+  const shift2First = shift2Prev.assignments.find((row) => row.reservation.id === "B1")!;
+  const shift2Hydrated = autoResultFromDraft(
+    createDraftFromAutoResult(shift2Prev, pool),
+    null
+  );
+  const shift2Sick = previewLiveAssignmentChange({
+    previous: shift2Hydrated,
+    regularCaddyPool: pool,
+    change: { type: "CADDY_SICK", caddyId: shift2First.caddy.id, shift: "2부" },
+  });
+  const afterB = ["B1", "B2", "B3", "B4"].map((id) => caddyOn(shift2Sick.after, id));
+  const beforeB = ["B1", "B2", "B3", "B4"].map((id) => caddyOn(shift2Prev, id));
+  assert(afterB[0] === beforeB[1], "2부: B가 A 자리로 당김");
+  assert(afterB[1] === beforeB[2], "2부: C가 B 자리로");
+  assert(afterB[2] === beforeB[3], "2부: D가 C 자리로");
+  assert(afterB[0] !== 김예진1.id, "2부 hole is not 김예진1");
+  assert(
+    caddyOn(shift2Sick.after, "A1") === caddyOn(shift2Prev, "A1") &&
+      caddyOn(shift2Sick.after, "A2") === caddyOn(shift2Prev, "A2"),
+    "2부 병가는 1부 identity 유지"
+  );
+
+  const shift3Prev = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    houseStartCaddyId: 서승희.id,
+    reservations: [
+      res(date, "S1A", { course: "SKY", teeTime: "06:14", shift: "1부" }),
+      res(date, "S3A", { course: "SKY", teeTime: "16:30", shift: "3부" }),
+      res(date, "S3B", { course: "OCEAN", teeTime: "16:38", shift: "3부" }),
+    ],
+  });
+  const s3a = shift3Prev.assignments.find((row) => row.reservation.id === "S3A");
+  if (s3a && s3a.kind === "regular") {
+    const shift3Sick = previewLiveAssignmentChange({
+      previous: shift3Prev,
+      regularCaddyPool: pool,
+      change: { type: "CADDY_SICK", caddyId: s3a.caddy.id, shift: "3부" },
+    });
+    assert(
+      caddyOn(shift3Sick.after, "S3A") !== s3a.caddy.id,
+      "3부 병가 후 해당 슬롯은 다음 후보"
+    );
+    assert(
+      caddyOn(shift3Sick.after, "S1A") === caddyOn(shift3Prev, "S1A"),
+      "3부 병가는 1부 identity 유지"
+    );
+  }
+}
+
 async function runPersistTests() {
   section("Quick swap/리무진/LOCK/확인형 변경 apply는 memory DB write");
   {

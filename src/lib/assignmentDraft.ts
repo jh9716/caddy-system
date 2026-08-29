@@ -15,6 +15,7 @@ import {
   minutesBetweenReservations,
   reservationKey,
   isHouseStartCandidate,
+  inferHouseStartCaddyId,
   type AutoAssignCaddy,
   type AutoAssignReservation,
   type AutoAssignResultV1,
@@ -703,6 +704,10 @@ export function autoResultFromDraft(
   const regularAssignments = assignments.filter(
     (a) => a.kind === "regular" && !isWeekendBandRow(a)
   );
+  const inferredHouseStart = inferHouseStartCaddyId(
+    assignments,
+    base?.meta.houseStartCaddyId
+  );
   const fallbackMeta = {
     availableCount: draft.caddyPool.length,
     reservationCount: assignments.length + draft.unassignedReservations.length,
@@ -736,8 +741,8 @@ export function autoResultFromDraft(
     finalPointer: 0,
     thirdStartTeam: base?.meta.thirdStartTeam || "",
     thirdStartTeamAutomatic: base?.meta.thirdStartTeamAutomatic || "",
-    ...(base?.meta.houseStartCaddyId != null
-      ? { houseStartCaddyId: Number(base.meta.houseStartCaddyId) }
+    ...(inferredHouseStart != null
+      ? { houseStartCaddyId: inferredHouseStart }
       : {}),
     ...(base?.meta.thirdStartCaddyId != null
       ? { thirdStartCaddyId: Number(base.meta.thirdStartCaddyId) }
