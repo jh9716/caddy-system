@@ -5115,17 +5115,32 @@ export function reflowRegularAssignments(input: {
   const metaStart = inferHouseStartCaddyId(null, previous.meta.houseStartCaddyId);
   const boardStart = inferHouseStartCaddyId(previous.assignments, null);
   const startForExclude = metaStart ?? boardStart;
+  const startOnBoard =
+    startForExclude != null &&
+    previous.assignments.some((row) => {
+      const shift = String(row.reservation?.shift || row.shift || "");
+      return (
+        row.caddy.id === startForExclude &&
+        shift === "1부" &&
+        row.kind === "regular"
+      );
+    });
   const startUnavailable =
-    startForExclude != null && allDayUnavailable.has(startForExclude);
+    startForExclude != null &&
+    (allDayUnavailable.has(startForExclude) || !startOnBoard);
+  const houseExcludeIds = new Set(allDayUnavailable);
+  if (startForExclude != null && !startOnBoard) {
+    houseExcludeIds.add(startForExclude);
+  }
   const startCaddy =
     startUnavailable && startForExclude != null
       ? previous.assignments.find((row) => row.caddy.id === startForExclude)?.caddy ||
         fullPool.find((c) => c.id === startForExclude) ||
         null
       : null;
-  // 병가/결근으로 1부 시작점이 빠지면 원본 HOUSE를 그 자리에서 회전한 뒤
-  // 제외 id만 빼고 한 칸씩 당긴다. meta가 없는 Draft도 현재 1부 첫 배치로 복원한다.
-  // 시작점이 아직 풀에 있으면 기존처럼 meta start만 회전한다(LOCK OFF 특수 등).
+  // 병가/결근이거나 저장된 start가 1부 regular에서 빠졌으면 원본 HOUSE를
+  // 그 자리에서 회전한 뒤 제외 id만 빼고 한 칸씩 당긴다.
+  // 시작점이 아직 1부 regular면 기존처럼 meta start만 회전한다.
   const originalHouse = splitCaddyPools(
     eligibleRegularReflowCaddies([
       ...pools.house,
@@ -5137,11 +5152,21 @@ export function reflowRegularAssignments(input: {
     : metaStart != null && pools.house.some((caddy) => caddy.id === metaStart)
       ? metaStart
       : null;
+  const startInOriginal =
+    rotationStart != null &&
+    originalHouse.some((caddy) => caddy.id === rotationStart);
+  const safeRotationStart = startInOriginal
+    ? rotationStart
+    : startUnavailable &&
+        boardStart != null &&
+        pools.house.some((caddy) => caddy.id === boardStart)
+      ? boardStart
+      : null;
   const regularHouse = resolveRegularHouseQueue({
     originalHouse,
     remainingHouse: pools.house,
-    specialExcludeIds: allDayUnavailable,
-    houseStartCaddyId: rotationStart,
+    specialExcludeIds: houseExcludeIds,
+    houseStartCaddyId: safeRotationStart,
   });
 
   const reasonCode = resolveReflowReason({
@@ -5257,7 +5282,7 @@ export function reflowRegularAssignments(input: {
       emptySpecialSupportByShift(),
     meta: {
       ...previous.meta,
-      ...(startUnavailable && startForExclude != null
+      ...(startForExclude != null
         ? { houseStartCaddyId: startForExclude }
         : {}),
       availableCount: pool.length,

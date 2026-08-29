@@ -42,6 +42,10 @@ export type AssignmentDraft = {
   confirmedAt: string | null;
   appliedAt?: string | null;
   applyAuditId?: number | null;
+  /** 오늘 선택한 1부 HOUSE 시작점. payload에 저장. 없으면 hydrate 시 추론. */
+  houseStartCaddyId?: number | null;
+  /** Preview에서 고른 3부 첫 캐디. 있으면 payload에 저장. */
+  thirdStartCaddyId?: number | null;
 };
 
 export type DraftWarning = {
@@ -122,6 +126,12 @@ export function createDraftFromAutoResult(
     confirmedAt: null,
     appliedAt: null,
     applyAuditId: null,
+    ...(asPositiveId(result.meta.houseStartCaddyId) != null
+      ? { houseStartCaddyId: asPositiveId(result.meta.houseStartCaddyId) }
+      : {}),
+    ...(asPositiveId(result.meta.thirdStartCaddyId) != null
+      ? { thirdStartCaddyId: asPositiveId(result.meta.thirdStartCaddyId) }
+      : {}),
   };
 }
 
@@ -229,17 +239,30 @@ function asPositiveId(value: unknown): number | null {
 }
 
 /**
+ * Draft에 저장된 HOUSE cursor. 없으면 null (legacy는 호출측에서 추론).
+ */
+export function storedDraftHouseStartCaddyId(
+  draft: AssignmentDraft | null | undefined
+): number | null {
+  return asPositiveId(draft?.houseStartCaddyId);
+}
+
+/**
  * 배치 다시 맞추기용 1부 첫 캐디.
- * 페이지를 다시 열면 houseStart 선택값이 비므로, Draft에서 복구한다.
- * 우선순위: 현재 선택 → autoResult.meta → 1부 첫 regular HOUSE → caddyPool HOUSE.
+ * 우선순위: 현재 선택 → Draft 저장값 → autoResult.meta → 1부 첫 regular HOUSE → pool.
  */
 export function resolveHouseStartCaddyIdForRecalc(input: {
   selectedId?: number | "" | null;
   metaId?: number | null;
   draft?: AssignmentDraft | null;
-}): { caddyId: number; source: "selected" | "meta" | "draftRegular" | "pool" } | null {
+}): {
+  caddyId: number;
+  source: "selected" | "draftStored" | "meta" | "draftRegular" | "pool";
+} | null {
   const selected = asPositiveId(input.selectedId);
   if (selected) return { caddyId: selected, source: "selected" };
+  const stored = storedDraftHouseStartCaddyId(input.draft);
+  if (stored) return { caddyId: stored, source: "draftStored" };
   const meta = asPositiveId(input.metaId);
   if (meta) return { caddyId: meta, source: "meta" };
   const draft = input.draft;
@@ -704,9 +727,10 @@ export function autoResultFromDraft(
   const regularAssignments = assignments.filter(
     (a) => a.kind === "regular" && !isWeekendBandRow(a)
   );
+  const storedHouseStart = storedDraftHouseStartCaddyId(draft);
   const inferredHouseStart = inferHouseStartCaddyId(
     assignments,
-    base?.meta.houseStartCaddyId
+    storedHouseStart ?? base?.meta.houseStartCaddyId
   );
   const fallbackMeta = {
     availableCount: draft.caddyPool.length,
@@ -744,9 +768,11 @@ export function autoResultFromDraft(
     ...(inferredHouseStart != null
       ? { houseStartCaddyId: inferredHouseStart }
       : {}),
-    ...(base?.meta.thirdStartCaddyId != null
-      ? { thirdStartCaddyId: Number(base.meta.thirdStartCaddyId) }
-      : {}),
+    ...(asPositiveId(draft.thirdStartCaddyId) != null
+      ? { thirdStartCaddyId: asPositiveId(draft.thirdStartCaddyId) }
+      : base?.meta.thirdStartCaddyId != null
+        ? { thirdStartCaddyId: Number(base.meta.thirdStartCaddyId) }
+        : {}),
   };
   return {
     date: draft.date,
@@ -779,12 +805,17 @@ export function autoResultFromDraft(
       spare1: s.spare1 ? { ...s.spare1 } : null,
       spare2: s.spare2 ? { ...s.spare2 } : null,
     })),
-    meta: { ...fallbackMeta, ...(base?.meta || {}), ...{
+    meta: {
+      ...fallbackMeta,
+      ...(base?.meta || {}),
       assignedCount: assignments.length,
       unassignedCount: draft.unassignedReservations.length,
       closedCourseCount: draft.closedCourseReservations.length,
       unusedCount: unusedCaddies(draft).length,
-    } },
+      ...(inferredHouseStart != null
+        ? { houseStartCaddyId: inferredHouseStart }
+        : {}),
+    },
   };
 }
 

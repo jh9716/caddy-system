@@ -28,9 +28,15 @@ import {
   swapOrderToast,
 } from "../src/lib/assignmentChange";
 import {
+  applyLiveResultToDraft,
   autoResultFromDraft,
   createDraftFromAutoResult,
 } from "../src/lib/assignmentDraft";
+import {
+  assignmentDraftToPayload,
+  parseDailyBoardDraftPayload,
+  payloadToAssignmentDraft,
+} from "../src/lib/dailyBoardDraft";
 import {
   computeAutoAssignmentsV1,
   compareCaddyOrder,
@@ -3410,12 +3416,33 @@ section("병가 reflow는 house start 다음 순번을 당기고 스페어를 �
     "김예진1 is not in the 서승희-start window"
   );
 
-  const hydrated = autoResultFromDraft(createDraftFromAutoResult(previous, pool), null);
+  const createdDraft = createDraftFromAutoResult(previous, pool);
+  assert(createdDraft.houseStartCaddyId === 서승희.id, "new Draft stores houseStartCaddyId");
+  const savedPayload = assignmentDraftToPayload(createdDraft);
+  assert(savedPayload.houseStartCaddyId === 서승희.id, "payload persists houseStartCaddyId");
+  const reloadedDraft = payloadToAssignmentDraft(
+    parseDailyBoardDraftPayload(savedPayload, date)
+  );
+  assert(
+    reloadedDraft.houseStartCaddyId === 서승희.id,
+    "reload restores stored houseStartCaddyId"
+  );
+  const hydrated = autoResultFromDraft(reloadedDraft, null);
   assert(
     hydrated.meta.houseStartCaddyId === 서승희.id,
-    "Draft hydrate infers house start from first 1부 regular"
+    "hydrate uses stored houseStartCaddyId"
   );
-  delete (hydrated.meta as { houseStartCaddyId?: number }).houseStartCaddyId;
+
+  const legacyPayload = { ...savedPayload };
+  delete legacyPayload.houseStartCaddyId;
+  const legacyDraft = payloadToAssignmentDraft(
+    parseDailyBoardDraftPayload(legacyPayload, date)
+  );
+  assert(legacyDraft.houseStartCaddyId == null, "legacy payload has no houseStart");
+  assert(
+    autoResultFromDraft(legacyDraft, null).meta.houseStartCaddyId === 서승희.id,
+    "legacy Draft falls back to first 1부 regular HOUSE"
+  );
   const sick = previewLiveAssignmentChange({
     previous: hydrated,
     regularCaddyPool: pool,
@@ -3436,6 +3463,85 @@ section("병가 reflow는 house start 다음 순번을 당기고 스페어를 �
   const spareAfter = sick.after.sparesByShift.find((s) => s.shift === "1부");
   assert(spareAfter?.spare1?.caddyId === rest[3].id, "new spare1=S2");
   assert(spareAfter?.spare2?.caddyId === rest[4].id, "new spare2=X");
+  assert(sick.after.meta.houseStartCaddyId === 서승희.id, "sick keeps stored HOUSE cursor");
+
+  const afterSickDraft = applyLiveResultToDraft(reloadedDraft, sick.after);
+  assert(
+    afterSickDraft.houseStartCaddyId === 서승희.id,
+    "Draft after sick still stores original cursor"
+  );
+  const reloadedAfterSick = autoResultFromDraft(
+    payloadToAssignmentDraft(
+      parseDailyBoardDraftPayload(assignmentDraftToPayload(afterSickDraft), date)
+    ),
+    null
+  );
+  assert(
+    reloadedAfterSick.meta.houseStartCaddyId === 서승희.id,
+    "reload after sick does not reset cursor to 1조"
+  );
+  const sick2 = previewLiveAssignmentChange({
+    previous: reloadedAfterSick,
+    regularCaddyPool: pool,
+    change: { type: "CADDY_SICK", caddyId: 김하나1.id, shift: "1부" },
+  });
+  assert(caddyOn(sick2.after, "R1") === rest[0].id, "두 번째 병가 → C가 06:14");
+  assert(
+    sick2.after.assignments.every((row) => row.caddy.id !== 김예진1.id),
+    "reload+병가에도 김예진1이 cursor를 뺏지 않음"
+  );
+  assert(sick2.after.meta.houseStartCaddyId === 서승희.id, "second sick keeps cursor");
+
+  const specialFront = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    houseStartCaddyId: 서승희.id,
+    fiftyFourHole: [
+      {
+        id: 880,
+        name: "54홀앞",
+        team: "3조",
+        teamOrder: 1,
+        caddyType: "HOUSE",
+        employmentStatus: "ACTIVE",
+      },
+    ],
+    reservations: [
+      res(date, "G1", { course: "SKY", teeTime: "07:00" }),
+      res(date, "G2", { course: "SKY", teeTime: "07:08" }),
+      res(date, "R1", { course: "LAKE", teeTime: "10:00" }),
+      res(date, "F2", { course: "SKY", teeTime: "16:10", shift: "3부" }),
+    ],
+  });
+  assert(specialFront.fiftyFourHoleAssignments.length === 2, "54홀 pair assigned");
+  const specialDraft = createDraftFromAutoResult(specialFront, pool);
+  assert(
+    specialDraft.houseStartCaddyId === 서승희.id,
+    "특수근무가 1부 앞이어도 stored cursor는 서승희"
+  );
+  const specialReload = autoResultFromDraft(
+    payloadToAssignmentDraft(
+      parseDailyBoardDraftPayload(assignmentDraftToPayload(specialDraft), date)
+    ),
+    null
+  );
+  assert(
+    specialReload.meta.houseStartCaddyId === 서승희.id,
+    "특수근무 섞인 Draft reload도 cursor 유지"
+  );
+  assert(
+    specialReload.assignments.some(
+      (row) => row.kind === "regular" && row.caddy.id === 서승희.id
+    ) ||
+      specialReload.assignments.some((row) => row.caddy.id === 김하나1.id),
+    "regular window stays in 서승희-start sequence"
+  );
+  assert(
+    !specialReload.assignments.some(
+      (row) => row.kind === "regular" && row.caddy.id === 김예진1.id
+    ),
+    "특수근무 앞/중간에서도 김예진1로 cursor 리셋 없음"
+  );
 
   const shift2Prev = computeAutoAssignmentsV1({
     date,
