@@ -249,28 +249,6 @@ section("payload: canonical AssignmentDraft only");
   assert(resolveDraftRequestDate(null, "2026-08-26") === "2026-08-26", "body date only");
 }
 
-section("payload stores houseStartCaddyId without schema bump");
-{
-  const date = "2026-08-26";
-  const available = pool(8);
-  const result = computeAutoAssignmentsV1({
-    date,
-    available,
-    houseStartCaddyId: available[3].id,
-    reservations: reservations(date),
-  });
-  const draft = createDraftFromAutoResult(result, available);
-  assert(draft.houseStartCaddyId === available[3].id, "createDraft copies houseStart");
-  const payload = assignmentDraftToPayload(draft);
-  assert(payload.schemaVersion === 1, "no schemaVersion bump");
-  assert(payload.houseStartCaddyId === available[3].id, "payload has houseStart");
-  const parsed = parseDailyBoardDraftPayload(payload, date);
-  assert(parsed.houseStartCaddyId === available[3].id, "parse keeps houseStart");
-  const { houseStartCaddyId: _drop, ...legacy } = payload;
-  const legacyParsed = parseDailyBoardDraftPayload(legacy, date);
-  assert(legacyParsed.houseStartCaddyId == null, "legacy omit houseStart ok");
-}
-
 section("Draft 예약으로 자동배치 JSON 재실행 입력");
 {
   const date = "2026-08-26";
@@ -880,20 +858,7 @@ section("source guards: API / UI / migration / live save order");
   assert(/updatedByUserId\s+Int\?/.test(schema), "nullable updatedByUserId");
   assert(/date\s+DateTime\s+@unique/.test(schema.split("model DailyBoardDraft")[1] || ""), "date unique");
 
-  assert(
-    !/opsDuty|shiftDuty|specialDuty|thirdWeekly|offRequest/.test(
-      payloadLib.split("export type DailyBoardDraftPayloadV1")[1]?.split("export class")[0] ||
-        ""
-    ),
-    "payload type omits duty/special/off"
-  );
-  assert(
-    /houseStartCaddyId\?: number/.test(
-      payloadLib.split("export type DailyBoardDraftPayloadV1")[1]?.split("export class")[0] ||
-        ""
-    ),
-    "payload type includes optional houseStartCaddyId"
-  );
+  assert(!/opsDuty|shiftDuty|specialDuty|thirdStart/.test(payloadLib.split("export type DailyBoardDraftPayloadV1")[1]?.split("export class")[0] || ""), "payload type omits duty/special/off");
   assert(/CONFIRMED/.test(page), "client CONFIRMED kept as legacy ops status");
   assert(/function onConfirm/.test(page), "legacy onConfirm handler kept");
   assert(/async function onApplyToOps/.test(page), "legacy onApplyToOps handler kept");

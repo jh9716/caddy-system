@@ -57,8 +57,6 @@ export type DailyBoardDraftPayloadV1 = {
   confirmedAt: string | null;
   appliedAt: string | null;
   applyAuditId: number | null;
-  houseStartCaddyId?: number;
-  thirdStartCaddyId?: number;
 };
 
 export class DailyBoardDraftPayloadError extends Error {
@@ -124,14 +122,6 @@ export function assignmentDraftToPayload(
     confirmedAt: draft.confirmedAt ?? null,
     appliedAt: draft.appliedAt ?? null,
     applyAuditId: draft.applyAuditId ?? null,
-    ...(Number.isInteger(draft.houseStartCaddyId) &&
-    Number(draft.houseStartCaddyId) > 0
-      ? { houseStartCaddyId: Number(draft.houseStartCaddyId) }
-      : {}),
-    ...(Number.isInteger(draft.thirdStartCaddyId) &&
-    Number(draft.thirdStartCaddyId) > 0
-      ? { thirdStartCaddyId: Number(draft.thirdStartCaddyId) }
-      : {}),
   };
 }
 
@@ -150,12 +140,6 @@ export function payloadToAssignmentDraft(
     confirmedAt: payload.confirmedAt,
     appliedAt: payload.appliedAt,
     applyAuditId: payload.applyAuditId,
-    ...(payload.houseStartCaddyId != null
-      ? { houseStartCaddyId: payload.houseStartCaddyId }
-      : {}),
-    ...(payload.thirdStartCaddyId != null
-      ? { thirdStartCaddyId: payload.thirdStartCaddyId }
-      : {}),
   };
 }
 
@@ -171,18 +155,6 @@ function asArray(value: unknown, label: string): unknown[] {
     throw new DailyBoardDraftPayloadError(`${label} 배열이 필요합니다.`);
   }
   return value;
-}
-
-function parseOptionalStartCaddyId(
-  value: unknown,
-  label: string
-): number | null {
-  if (value == null || value === "") return null;
-  const n = asFiniteInt(value, label);
-  if (n < 1) {
-    throw new DailyBoardDraftPayloadError(`${label}가 올바르지 않습니다.`);
-  }
-  return n;
 }
 
 function asFiniteInt(value: unknown, label: string): number {
@@ -424,24 +396,6 @@ export function parseDailyBoardDraftPayload(
       o.applyAuditId == null || o.applyAuditId === ""
         ? null
         : asFiniteInt(o.applyAuditId, "applyAuditId"),
-    ...(parseOptionalStartCaddyId(o.houseStartCaddyId, "houseStartCaddyId") !=
-    null
-      ? {
-          houseStartCaddyId: parseOptionalStartCaddyId(
-            o.houseStartCaddyId,
-            "houseStartCaddyId"
-          )!,
-        }
-      : {}),
-    ...(parseOptionalStartCaddyId(o.thirdStartCaddyId, "thirdStartCaddyId") !=
-    null
-      ? {
-          thirdStartCaddyId: parseOptionalStartCaddyId(
-            o.thirdStartCaddyId,
-            "thirdStartCaddyId"
-          )!,
-        }
-      : {}),
   });
 }
 

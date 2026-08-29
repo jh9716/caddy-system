@@ -42,7 +42,7 @@ function isDeployedApp() {
 
 function isReadonlyInspectArgv() {
   const s = process.argv.join(" ");
-  return /inspect-db-schema-readonly|check-migration-checksums-readonly|export-caddies-snapshot|preview-roster-import|inspect-special-assign-prod-readonly|inspect-reflow-prod-readonly|inspect-sick-reflow-prod-readonly/.test(
+  return /inspect-db-schema-readonly|check-migration-checksums-readonly|export-caddies-snapshot|preview-roster-import|inspect-special-assign-prod-readonly|inspect-reflow-prod-readonly/.test(
     s
   );
 }
