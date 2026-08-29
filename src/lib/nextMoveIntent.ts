@@ -221,12 +221,16 @@ export function prepareNextMoveOnConfirmedDraft(input: {
   };
 }
 
+function allowQuickMoveTestKnobs(host: string): boolean {
+  if (host === "localhost" || host === "127.0.0.1") return true;
+  return typeof process === "undefined" || process.env.NODE_ENV !== "production";
+}
+
 export function readQuickMoveTestDelayMs(
-  search = typeof window !== "undefined" ? window.location.search : ""
+  search = typeof window !== "undefined" ? window.location.search : "",
+  host = typeof window !== "undefined" ? window.location.hostname : ""
 ): number {
-  if (typeof process !== "undefined" && process.env.NODE_ENV === "production") {
-    return 0;
-  }
+  if (!allowQuickMoveTestKnobs(host)) return 0;
   const fromQuery = Number(new URLSearchParams(search).get("quickMoveDelay"));
   if (Number.isFinite(fromQuery) && fromQuery > 0 && fromQuery <= 5000) {
     return Math.floor(fromQuery);
@@ -241,11 +245,10 @@ export function readQuickMoveTestDelayMs(
 }
 
 export function readQuickMoveTestFail(
-  search = typeof window !== "undefined" ? window.location.search : ""
+  search = typeof window !== "undefined" ? window.location.search : "",
+  host = typeof window !== "undefined" ? window.location.hostname : ""
 ): "error" | null {
-  if (typeof process !== "undefined" && process.env.NODE_ENV === "production") {
-    return null;
-  }
+  if (!allowQuickMoveTestKnobs(host)) return null;
   const raw = String(
     new URLSearchParams(search).get("quickMoveFail") || ""
   ).trim();

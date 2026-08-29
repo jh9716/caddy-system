@@ -2216,7 +2216,10 @@ export default function ManageAssignmentsOpsPage() {
   }
 
   return (
-    <div className="ops-root">
+    <div
+      className="ops-root"
+      data-quick-move-delay={readQuickMoveTestDelayMs() || undefined}
+    >
       <header className="ops-header">
         <div>
           <h1>자동배치 운영</h1>

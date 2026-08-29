@@ -274,8 +274,18 @@ console.log("== local-only test knobs ==");
   assert(readQuickMoveTestDelayMs("?quickMoveDelay=1500") === 1500, "delay query is 1500");
   assert(readQuickMoveTestFail("?quickMoveFail=1") === "error", "fail query is live error");
   process.env.NODE_ENV = "production";
-  assert(readQuickMoveTestDelayMs("?quickMoveDelay=1500") === 0, "production ignores delay query");
-  assert(readQuickMoveTestFail("?quickMoveFail=1") === null, "production ignores fail query");
+  assert(
+    readQuickMoveTestDelayMs("?quickMoveDelay=1500", "example.com") === 0,
+    "production host ignores delay query"
+  );
+  assert(
+    readQuickMoveTestFail("?quickMoveFail=1", "example.com") === null,
+    "production host ignores fail query"
+  );
+  assert(
+    readQuickMoveTestDelayMs("?quickMoveDelay=1500", "127.0.0.1") === 1500,
+    "localhost still honors delay query"
+  );
   process.env.NODE_ENV = prev;
 }
 
