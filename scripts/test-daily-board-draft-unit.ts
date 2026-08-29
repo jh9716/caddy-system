@@ -762,6 +762,15 @@ section("source guards: API / UI / migration / live save order");
       !/\bversion\b/.test(applyRoute),
     "reflow/apply does not persist or version DailyBoardDraft"
   );
+  assert(
+    !/loadAvailabilityForDate/.test(applyRoute) &&
+      !/offSheetFetch/.test(applyRoute) &&
+      !/fetchPublishedOffSheets/.test(applyRoute) &&
+      /Promise\.all/.test(applyRoute) &&
+      /offSheetHttp: false/.test(applyRoute),
+    "reflow/apply skips off-sheet/availability and loads duty+support in parallel"
+  );
+  assert(/rollbackOptimistic\(\)/.test(persist), "persist rolls back optimistic Draft on apply/PUT fail");
 
   const run = page.split("async function runAutoAssign")[1]?.split("function onReplace")[0] || "";
   const runFail = run.split("if (!res.ok)")[1]?.split("setAutoResult(data)")[0] || "";
