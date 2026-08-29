@@ -106,6 +106,7 @@ import {
   parseMoveDestination,
   reservationMoveBlockReason,
   TEAM_MOVED_TOAST,
+  TEAM_MOVE_SAVE_FAILED_TOAST,
   TEAM_MOVING_LABEL,
 } from "@/lib/reservationMove";
 import {
@@ -1475,11 +1476,7 @@ export default function ManageAssignmentsOpsPage() {
     setMoveApplying(true);
     setMoveSheetOpen(false);
     setLiveChangePreset(null);
-    setMovePendingDest({
-      course: dest.course,
-      shift: dest.shift,
-      teeTime: dest.teeTime,
-    });
+    setMovePendingDest(null);
     setError(null);
 
     const wrap = boardWrapRef.current;
@@ -1496,39 +1493,44 @@ export default function ManageAssignmentsOpsPage() {
     if (blocking) {
       moveApplyingRef.current = false;
       setMoveApplying(false);
-      setMovePendingDest(null);
       setError(blocking.message);
       showToast(blocking.message);
       restoreBoardScroll(wrap, scrollTop);
       return;
     }
 
+    const painted = applyLiveResultToDraft(current, preview.after);
+    setDraft(painted);
+    setWarnings(detectDraftWarnings(painted));
+    setUnavailableCaddyIds(preview.unavailableCaddyIds || []);
+    if (autoResultRef.current) {
+      setAutoResult({ ...autoResultRef.current, ...preview.after });
+    }
+    setMoveKey(null);
+    setDraftSaveState("saving");
+    restoreBoardScroll(wrap, scrollTop);
+
     try {
       let ok = false;
       const gen = persistGenRef.current;
       await (persistQueueRef.current = persistQueueRef.current.then(async () => {
         if (gen !== persistGenRef.current) return;
-        ok = await persistLivePreview({
+        ok = await persistQuickReservationMove({
           preview,
           previous,
           pool: livePool,
-          applyServerDraft: true,
+          painted,
           rollbackDraft: current,
         });
         if (!ok) persistGenRef.current += 1;
       }));
       if (ok) {
-        setMoveKey(null);
         setMoveSheetOpen(false);
         showToast(TEAM_MOVED_TOAST, 2800);
-        restoreBoardScroll(wrap, scrollTop);
-      } else {
-        restoreBoardScroll(wrap, scrollTop);
       }
     } finally {
       moveApplyingRef.current = false;
       setMoveApplying(false);
-      setMovePendingDest(null);
     }
   }
 
@@ -1735,15 +1737,98 @@ export default function ManageAssignmentsOpsPage() {
     }
   }
 
+  async function persistQuickReservationMove(input: {
+    preview: LiveChangePreview;
+    previous: AutoAssignResultV1;
+    pool: AutoAssignCaddy[];
+    painted: AssignmentDraft;
+    rollbackDraft: AssignmentDraft;
+  }): Promise<boolean> {
+    setError(null);
+    const rollbackOptimistic = () => {
+      setDraft(input.rollbackDraft);
+      setWarnings(detectDraftWarnings(input.rollbackDraft));
+    };
+    try {
+      const res = await fetch("/api/assignments/reflow/quick-move", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          previous: input.previous,
+          regularCaddyPool: input.pool,
+          events: input.preview.events,
+          changeType: input.preview.changeType,
+          draft: {
+            date: input.painted.date,
+            version: serverDraftVersionRef.current,
+            payload: assignmentDraftToPayload(input.painted),
+          },
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        rollbackOptimistic();
+        setDraftSaveState(res.status === 409 ? "conflict" : "error");
+        setError(
+          data.error ||
+            data.message ||
+            (res.status === 409
+              ? DRAFT_VERSION_CONFLICT_MESSAGE
+              : "배치 저장 중 오류가 발생했습니다. 다시 시도해주세요.")
+        );
+        showToast(TEAM_MOVE_SAVE_FAILED_TOAST);
+        return false;
+      }
+      const after = (data.preview?.after ||
+        input.preview.after) as typeof input.preview.after;
+      const next = applyLiveResultToDraft(input.painted, after);
+      setDraft(next);
+      setWarnings(detectDraftWarnings(next));
+      if (autoResultRef.current) {
+        setAutoResult({ ...autoResultRef.current, ...after });
+      }
+      setUnavailableCaddyIds(
+        Array.isArray(data.preview?.unavailableCaddyIds)
+          ? data.preview.unavailableCaddyIds
+          : input.preview.unavailableCaddyIds || []
+      );
+      const savedVersion = Number(data.draft?.version);
+      if (Number.isInteger(savedVersion) && savedVersion > 0) {
+        serverDraftVersionRef.current = savedVersion;
+        setDraftVersion(savedVersion);
+        setDraftSavedAt(
+          String(data.draft?.updatedAt || new Date().toISOString())
+        );
+      }
+      setDraftSaveState("saved");
+      return true;
+    } catch (e: unknown) {
+      rollbackOptimistic();
+      setDraftSaveState("error");
+      setError(e instanceof Error ? e.message : "현장 변경 적용 실패");
+      showToast(TEAM_MOVE_SAVE_FAILED_TOAST);
+      return false;
+    }
+  }
+
   async function persistLivePreview(input: {
     preview: LiveChangePreview;
     previous: AutoAssignResultV1;
     pool: AutoAssignCaddy[];
     successToast?: string;
+    failToast?: string;
     applyServerDraft?: boolean;
     rollbackDraft?: AssignmentDraft | null;
   }): Promise<boolean> {
     setError(null);
+    const failToast =
+      input.failToast || "저장 실패 · 이전 상태로 되돌렸습니다";
+    const rollbackOptimistic = () => {
+      if (!input.rollbackDraft) return;
+      setDraft(input.rollbackDraft);
+      setWarnings(detectDraftWarnings(input.rollbackDraft));
+    };
     try {
       const res = await fetch("/api/assignments/reflow/apply", {
         method: "POST",
@@ -1758,20 +1843,13 @@ export default function ManageAssignmentsOpsPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        if (input.rollbackDraft) {
-          setDraft(input.rollbackDraft);
-          setWarnings(detectDraftWarnings(input.rollbackDraft));
-        }
+        rollbackOptimistic();
         setError(
           data.error ||
             data.message ||
             "배치 저장 중 오류가 발생했습니다. 다시 시도해주세요."
         );
-        showToast(
-          data.error ||
-            data.message ||
-            "저장 실패 · 이전 상태로 되돌렸습니다"
-        );
+        showToast(failToast);
         return false;
       }
       let savedDraft: AssignmentDraft | null = null;
@@ -1805,26 +1883,24 @@ export default function ManageAssignmentsOpsPage() {
         queueDraftSave(toSave, true);
         const flushed = await flushDraftSave();
         if (flushed.status === "conflict") {
+          rollbackOptimistic();
+          setDraftSaveState("conflict");
           setError(DRAFT_VERSION_CONFLICT_MESSAGE);
-          showToast(DRAFT_VERSION_CONFLICT_MESSAGE);
+          showToast(failToast);
           return false;
         }
         if (flushed.status !== "ok") {
+          rollbackOptimistic();
           setError("작업본 저장에 실패했습니다. 다시 시도해주세요.");
-          showToast("저장 실패 · 다시 시도");
+          showToast(failToast);
           return false;
         }
       }
       return true;
     } catch (e: unknown) {
-      if (input.rollbackDraft) {
-        setDraft(input.rollbackDraft);
-        setWarnings(detectDraftWarnings(input.rollbackDraft));
-      }
+      rollbackOptimistic();
       setError(e instanceof Error ? e.message : "현장 변경 적용 실패");
-      showToast(
-        e instanceof Error ? e.message : "저장 실패 · 이전 상태로 되돌렸습니다"
-      );
+      showToast(failToast);
       return false;
     }
   }
@@ -2605,7 +2681,6 @@ export default function ManageAssignmentsOpsPage() {
                                         moveDest ? "move-dest" : "addable"
                                       }${pendingDest ? " pending" : ""}`}
                                       role="cell"
-                                      disabled={moveApplying}
                                       aria-busy={pendingDest}
                                       aria-label={
                                         pendingDest

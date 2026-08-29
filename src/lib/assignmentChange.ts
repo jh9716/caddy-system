@@ -697,6 +697,11 @@ export function applyLiveChangeToMemory(
   return { changeId };
 }
 
+export type ApplyLiveChangeTimings = {
+  computeMs: number;
+  persistMs: number;
+};
+
 export type ApplyLiveChangeResult =
   | {
       ok: true;
@@ -705,6 +710,7 @@ export type ApplyLiveChangeResult =
       opsUpdated: boolean;
       duplicate?: boolean;
       preview: LiveChangePreview;
+      timings?: ApplyLiveChangeTimings;
     }
   | {
       ok: false;
@@ -1062,17 +1068,12 @@ async function rewriteDailyReservationsAndPlacements(
   }
 }
 
-async function writePlanWithPrisma(
-  db: PrismaClient,
+export async function writeLiveChangePlan(
+  tx: Prisma.TransactionClient,
   plan: LiveChangePersistPlan,
   preview: LiveChangePreview,
   opts: { ip?: string | null; updateOpsIfPresent?: boolean }
 ): Promise<{ changeId: number; opsUpdated: boolean }> {
-  // 계산은 이미 plan에 완료. tx 안에서는 날짜 단위 delete + createMany 몇 번만.
-  // 244건을 하나씩 create 하면 Prisma interactive tx(기본 5s)가 닫혀
-  // "Transaction not found / Transaction ID is invalid" 가 난다.
-  return db.$transaction(
-    async (tx) => {
       const patched = await tryPatchLiveDay(tx, plan, preview);
       if (!patched) {
         if (plan.changeType === "MOVE_RESERVATION") {
@@ -1180,8 +1181,18 @@ async function writePlanWithPrisma(
         }
       }
 
-      return { changeId, opsUpdated };
-    },
+  return { changeId, opsUpdated };
+}
+
+async function writePlanWithPrisma(
+  db: PrismaClient,
+  plan: LiveChangePersistPlan,
+  preview: LiveChangePreview,
+  opts: { ip?: string | null; updateOpsIfPresent?: boolean }
+): Promise<{ changeId: number; opsUpdated: boolean }> {
+  // 계산은 이미 plan에 완료. tx 안에서는 날짜 단위 delete + createMany 몇 번만.
+  return db.$transaction(
+    async (tx) => writeLiveChangePlan(tx, plan, preview, opts),
     {
       maxWait: 10_000,
       timeout: 20_000,
@@ -1218,6 +1229,7 @@ export async function applyLiveAssignmentChange(
     };
   }
 
+  const computeStarted = Date.now();
   const preview = previewLiveAssignmentEvents({
     previous: input.previous,
     regularCaddyPool: input.regularCaddyPool,
@@ -1225,6 +1237,7 @@ export async function applyLiveAssignmentChange(
     changeType: input.changeType || input.change?.type,
     specialSupportByShift: input.specialSupportByShift,
   });
+  const computeMs = Date.now() - computeStarted;
   const blocking = preview.warnings.filter((w) => w.level === "error");
   if (blocking.length > 0) {
     return {
@@ -1239,6 +1252,7 @@ export async function applyLiveAssignmentChange(
   const plan = buildLiveChangePersistPlan(preview);
 
   if (options.memory) {
+    const persistStarted = Date.now();
     const { changeId } = applyLiveChangeToMemory(options.memory, plan);
     return {
       ok: true,
@@ -1246,11 +1260,13 @@ export async function applyLiveAssignmentChange(
       date: plan.date,
       opsUpdated: false,
       preview,
+      timings: { computeMs, persistMs: Date.now() - persistStarted },
     };
   }
 
   const db = options.prisma ?? defaultPrisma;
   try {
+    const persistStarted = Date.now();
     const written = await writePlanWithPrisma(db, plan, preview, {
       ip: options.ip,
       updateOpsIfPresent: options.updateOpsIfPresent !== false,
@@ -1261,6 +1277,7 @@ export async function applyLiveAssignmentChange(
       date: plan.date,
       opsUpdated: written.opsUpdated,
       preview,
+      timings: { computeMs, persistMs: Date.now() - persistStarted },
     };
   } catch (e: unknown) {
     if (e instanceof LiveChangePersistError) {

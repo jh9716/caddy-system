@@ -194,6 +194,7 @@ export function emptyBoardCellAction(
 
 export const TEAM_MOVED_TOAST = "팀을 이동했습니다.";
 export const TEAM_MOVING_LABEL = "이동 중...";
+export const TEAM_MOVE_SAVE_FAILED_TOAST = "이동을 저장하지 못했습니다.";
 
 export function isPendingMoveDest(
   pending: { course: string; shift: string; teeTime: string } | null | undefined,

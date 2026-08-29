@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, resolveAuthUser } from "@/lib/auth";
 import {
-  applyLiveAssignmentChange,
   LIVE_CHANGE_APPLY_USER_MESSAGE,
   type LiveChangeInput,
+  type LiveChangeType,
 } from "@/lib/assignmentChange";
 import type {
   AutoAssignCaddy,
@@ -12,15 +12,15 @@ import type {
 } from "@/lib/autoAssignEngine";
 import { regularPoolExcludingStoredOpsDuty } from "@/lib/opsDutyLivePool";
 import { loadSpecialSupportQueuesForDate } from "@/lib/dailySpecialSupportService";
+import { applyQuickReservationMove } from "@/lib/quickReservationMoveApply";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 /**
- * POST /api/assignments/reflow/apply
- * 미리보기와 동일한 입력을 서버에서 재계산한 뒤 Reservation/Placement에 저장.
- * preview 엔드포인트는 이 경로를 호출하지 않음.
- * availability/off-sheet HTTP는 호출하지 않는다 — 저장된 당번·특수지원만 읽는다.
+ * POST /api/assignments/reflow/quick-move
+ * MOVE only: Reservation/Placement + Draft version check/save in one transaction.
+ * General reflow/apply is unchanged.
  */
 export async function POST(req: NextRequest) {
   const started = Date.now();
@@ -28,6 +28,7 @@ export async function POST(req: NextRequest) {
   const guard = await requireAdmin(req);
   const authMs = Date.now() - tAuth;
   if (guard) return guard;
+  const auth = await resolveAuthUser(req);
 
   try {
     const tParse = Date.now();
@@ -41,6 +42,8 @@ export async function POST(req: NextRequest) {
     const regularCaddyPool = body.regularCaddyPool as AutoAssignCaddy[] | undefined;
     const events = body.events as ReservationChangeEvent[] | undefined;
     const change = body.change as LiveChangeInput | undefined;
+    const draft = (body as { draft?: { date?: unknown; version?: unknown; payload?: unknown } })
+      .draft;
 
     if (!previous || !previous.date) {
       return NextResponse.json({ error: "previous 결과 필요" }, { status: 400 });
@@ -50,6 +53,9 @@ export async function POST(req: NextRequest) {
         { error: "regularCaddyPool[] 필요" },
         { status: 400 }
       );
+    }
+    if (!draft || typeof draft !== "object") {
+      return NextResponse.json({ error: "draft { date, version, payload } 필요" }, { status: 400 });
     }
 
     const ip =
@@ -69,16 +75,23 @@ export async function POST(req: NextRequest) {
       })),
     ]);
 
-    const result = await applyLiveAssignmentChange(
-      {
-        previous,
-        regularCaddyPool: poolResult.pool,
-        events,
-        change,
-        specialSupportByShift: supportResult.specialSupportByShift,
+    const result = await applyQuickReservationMove({
+      previous,
+      regularCaddyPool: poolResult.pool,
+      events,
+      change,
+      changeType: (body as { changeType?: LiveChangeType }).changeType,
+      specialSupportByShift: supportResult.specialSupportByShift,
+      draft: {
+        date: String(draft.date || previous.date),
+        expectedVersion: Number(draft.version),
+        payload: draft.payload,
       },
-      { ip, updateOpsIfPresent: true }
-    );
+      updatedByUserId: auth?.userId ?? null,
+      ip,
+      testFailLive: (body as { testFailLive?: "error" | null }).testFailLive,
+      testFailDraft: (body as { testFailDraft?: "error" | null }).testFailDraft,
+    });
 
     if (!result.ok) {
       const hideDetails =
@@ -88,7 +101,8 @@ export async function POST(req: NextRequest) {
           error: hideDetails
             ? LIVE_CHANGE_APPLY_USER_MESSAGE
             : result.message,
-          code: result.code,
+          code: hideDetails ? "APPLY_FAILED" : result.code,
+          message: hideDetails ? undefined : result.message,
           warnings: result.warnings,
         },
         { status: result.httpStatus }
@@ -102,6 +116,7 @@ export async function POST(req: NextRequest) {
       date: result.date,
       opsUpdated: result.opsUpdated,
       preview: result.preview,
+      draft: result.draft,
       timings: {
         authMs,
         parseMs,
@@ -115,9 +130,9 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (e: unknown) {
-    console.error("[POST /api/assignments/reflow/apply]", e);
+    console.error("[POST /api/assignments/reflow/quick-move]", e);
     return NextResponse.json(
-      { error: LIVE_CHANGE_APPLY_USER_MESSAGE },
+      { error: LIVE_CHANGE_APPLY_USER_MESSAGE, code: "APPLY_FAILED" },
       { status: 500 }
     );
   }

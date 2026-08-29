@@ -120,6 +120,67 @@ export async function getDailyBoardDraft(
   return toRecord(row, ymd);
 }
 
+export type DailyBoardDraftWriter = Pick<DailyBoardDraftDb, "dailyBoardDraft">;
+
+export async function saveDailyBoardDraftOnDb(
+  tx: DailyBoardDraftWriter,
+  input: {
+    date: string;
+    expectedVersion: number;
+    payload: DailyBoardDraftPayloadV1;
+    updatedByUserId: number | null;
+  }
+): Promise<DailyBoardDraftRecord> {
+  const ymd = input.date;
+  const expectedVersion = Number(input.expectedVersion);
+  const key = dateKey(ymd);
+  const existing = await tx.dailyBoardDraft.findUnique({
+    where: { date: key },
+  });
+  if (!existing) {
+    if (expectedVersion !== 0) {
+      throw new DailyBoardDraftConflictError(null);
+    }
+    const created = await tx.dailyBoardDraft.create({
+      data: {
+        date: key,
+        payload: input.payload,
+        schemaVersion: DAILY_BOARD_DRAFT_SCHEMA_VERSION,
+        version: 1,
+        updatedByUserId: input.updatedByUserId,
+      },
+    });
+    return toRecord(created, ymd);
+  }
+  if (existing.version !== expectedVersion) {
+    throw new DailyBoardDraftConflictError(toRecord(existing, ymd));
+  }
+  const updated = await tx.dailyBoardDraft.updateMany({
+    where: { date: key, version: expectedVersion },
+    data: {
+      payload: input.payload,
+      schemaVersion: DAILY_BOARD_DRAFT_SCHEMA_VERSION,
+      version: expectedVersion + 1,
+      updatedByUserId: input.updatedByUserId,
+    },
+  });
+  if (updated.count !== 1) {
+    const latest = await tx.dailyBoardDraft.findUnique({
+      where: { date: key },
+    });
+    throw new DailyBoardDraftConflictError(
+      latest ? toRecord(latest, ymd) : null
+    );
+  }
+  const latest = await tx.dailyBoardDraft.findUnique({
+    where: { date: key },
+  });
+  if (!latest) {
+    throw new DailyBoardDraftConflictError(null);
+  }
+  return toRecord(latest, ymd);
+}
+
 export async function saveDailyBoardDraft(input: {
   date: string;
   expectedVersion: number;
@@ -134,61 +195,21 @@ export async function saveDailyBoardDraft(input: {
   }
   const payload = parseDailyBoardDraftPayload(input.payload, ymd);
   const db = input.db ?? (defaultPrisma as unknown as DailyBoardDraftDb);
-  const key = dateKey(ymd);
 
   try {
-    return await db.$transaction(async (tx) => {
-      const existing = await tx.dailyBoardDraft.findUnique({
-        where: { date: key },
-      });
-      if (!existing) {
-        if (expectedVersion !== 0) {
-          throw new DailyBoardDraftConflictError(null);
-        }
-        const created = await tx.dailyBoardDraft.create({
-          data: {
-            date: key,
-            payload,
-            schemaVersion: DAILY_BOARD_DRAFT_SCHEMA_VERSION,
-            version: 1,
-            updatedByUserId: input.updatedByUserId,
-          },
-        });
-        return toRecord(created, ymd);
-      }
-      if (existing.version !== expectedVersion) {
-        throw new DailyBoardDraftConflictError(toRecord(existing, ymd));
-      }
-      const updated = await tx.dailyBoardDraft.updateMany({
-        where: { date: key, version: expectedVersion },
-        data: {
-          payload,
-          schemaVersion: DAILY_BOARD_DRAFT_SCHEMA_VERSION,
-          version: expectedVersion + 1,
-          updatedByUserId: input.updatedByUserId,
-        },
-      });
-      if (updated.count !== 1) {
-        const latest = await tx.dailyBoardDraft.findUnique({
-          where: { date: key },
-        });
-        throw new DailyBoardDraftConflictError(
-          latest ? toRecord(latest, ymd) : null
-        );
-      }
-      const latest = await tx.dailyBoardDraft.findUnique({
-        where: { date: key },
-      });
-      if (!latest) {
-        throw new DailyBoardDraftConflictError(null);
-      }
-      return toRecord(latest, ymd);
-    });
+    return await db.$transaction(async (tx) =>
+      saveDailyBoardDraftOnDb(tx, {
+        date: ymd,
+        expectedVersion,
+        payload,
+        updatedByUserId: input.updatedByUserId,
+      })
+    );
   } catch (e) {
     if (e instanceof DailyBoardDraftConflictError) throw e;
     if (isUniqueViolation(e)) {
       const latest = await db.dailyBoardDraft.findUnique({
-        where: { date: key },
+        where: { date: dateKey(ymd) },
       });
       throw new DailyBoardDraftConflictError(
         latest ? toRecord(latest, ymd) : null
