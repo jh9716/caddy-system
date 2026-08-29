@@ -142,7 +142,7 @@ export async function applyQuickReservationMove(input: {
   const delayMs = Number(input.testDelayMs || 0);
   if (delayMs > 0 && allowLocalTestFail()) {
     await new Promise((resolve) =>
-      setTimeout(resolve, Math.min(Math.floor(delayMs), 5000))
+      setTimeout(resolve, Math.min(Math.floor(delayMs), 10000))
     );
   }
   const persistStarted = Date.now();

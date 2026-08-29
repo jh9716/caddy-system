@@ -286,6 +286,10 @@ console.log("== local-only test knobs ==");
     readQuickMoveTestDelayMs("?quickMoveDelay=1500", "127.0.0.1") === 1500,
     "localhost still honors delay query"
   );
+  assert(
+    readQuickMoveTestDelayMs("?quickMoveDelay=8000", "127.0.0.1") === 8000,
+    "localhost allows 8s gate delay"
+  );
   process.env.NODE_ENV = prev;
 }
 

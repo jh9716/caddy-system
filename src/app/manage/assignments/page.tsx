@@ -1899,9 +1899,6 @@ export default function ManageAssignmentsOpsPage() {
     };
     try {
       const delayMs = readQuickMoveTestDelayMs();
-      if (delayMs > 0) {
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-      }
       const testFailLive = readQuickMoveTestFail();
       const res = await fetch("/api/assignments/reflow/quick-move", {
         method: "POST",
@@ -1918,6 +1915,7 @@ export default function ManageAssignmentsOpsPage() {
             payload: assignmentDraftToPayload(input.painted),
           },
           ...(testFailLive ? { testFailLive } : {}),
+          ...(delayMs > 0 ? { testDelayMs: delayMs } : {}),
         }),
       });
       const data = await res.json().catch(() => ({}));

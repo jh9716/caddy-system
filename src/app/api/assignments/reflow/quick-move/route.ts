@@ -91,6 +91,9 @@ export async function POST(req: NextRequest) {
       ip,
       testFailLive: (body as { testFailLive?: "error" | null }).testFailLive,
       testFailDraft: (body as { testFailDraft?: "error" | null }).testFailDraft,
+      testDelayMs: Number(
+        (body as { testDelayMs?: unknown }).testDelayMs || 0
+      ),
     });
 
     if (!result.ok) {

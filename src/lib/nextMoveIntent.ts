@@ -232,13 +232,13 @@ export function readQuickMoveTestDelayMs(
 ): number {
   if (!allowQuickMoveTestKnobs(host)) return 0;
   const fromQuery = Number(new URLSearchParams(search).get("quickMoveDelay"));
-  if (Number.isFinite(fromQuery) && fromQuery > 0 && fromQuery <= 5000) {
+  if (Number.isFinite(fromQuery) && fromQuery > 0 && fromQuery <= 10000) {
     return Math.floor(fromQuery);
   }
   const fromEnv = Number(
     typeof process !== "undefined" ? process.env.QUICK_MOVE_TEST_DELAY_MS || 0 : 0
   );
-  if (Number.isFinite(fromEnv) && fromEnv > 0 && fromEnv <= 5000) {
+  if (Number.isFinite(fromEnv) && fromEnv > 0 && fromEnv <= 10000) {
     return Math.floor(fromEnv);
   }
   return 0;
