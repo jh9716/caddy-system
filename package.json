@@ -37,6 +37,8 @@
     "test:assignment-confirm-unit": "bash scripts/tsx-safe.sh scripts/test-assignment-confirm-unit.ts",
     "test:daily-board-draft-unit": "bash scripts/tsx-safe.sh scripts/test-daily-board-draft-unit.ts",
     "test:quick-move-atomicity-local": "bash scripts/tsx-safe.sh scripts/test-quick-move-atomicity-local.ts",
+    "test:next-move-intent-unit": "bash scripts/tsx-safe.sh scripts/test-next-move-intent-unit.ts",
+    "test:next-move-intent-local": "bash scripts/tsx-safe.sh scripts/test-next-move-intent-local.ts",
     "test:daily-board-published-unit": "bash scripts/tsx-safe.sh scripts/test-daily-board-published-unit.ts",
     "preview:roster": "bash scripts/tsx-safe.sh scripts/preview-roster-import.ts",
     "inspect:db-readonly": "bash scripts/tsx-safe.sh scripts/inspect-db-schema-readonly.ts",
