@@ -822,12 +822,35 @@ export function resolveRegularHouseQueue(input: {
   const exclude = new Set([...input.specialExcludeIds].map(Number));
   if (exclude.has(startId)) {
     const rotated = rotateHouseQueueFromStart(original, startId);
+    const house = rotated.filter((caddy) => !exclude.has(caddy.id));
+    // assignRegularSequence는 house를 다시 정렬하므로, 이미 회전된 큐를
+    // start=null로 넘기면 1조부터 다시 시작한다. 다음 정상 후보를 start로 둔다.
     return {
-      house: rotated.filter((caddy) => !exclude.has(caddy.id)),
-      houseStartCaddyId: null,
+      house,
+      houseStartCaddyId: house[0]?.id ?? null,
     };
   }
   return { house: remaining, houseStartCaddyId: startId };
+}
+
+/** 1부 첫 일반 HOUSE. meta가 없으면 현재 1부 regular 배치에서 복원한다. */
+export function inferHouseStartCaddyId(
+  assignments: readonly AutoAssignmentRow[] | null | undefined,
+  metaId?: number | null
+): number | null {
+  if (Number.isInteger(metaId) && Number(metaId) > 0) return Number(metaId);
+  const first = [...(assignments || [])]
+    .filter((row) => {
+      const shift = String(row.reservation?.shift || row.shift || "");
+      return (
+        shift === "1부" &&
+        row.kind === "regular" &&
+        isHouseStartCandidate(row.caddy)
+      );
+    })
+    .sort(compareAssignmentOrder)[0];
+  const id = first?.caddy?.id;
+  return Number.isInteger(id) && Number(id) > 0 ? Number(id) : null;
 }
 
 function toSpareInfo(caddy: AutoAssignCaddy | null | undefined): SpareCaddyInfo | null {
@@ -5089,6 +5112,62 @@ export function reflowRegularAssignments(input: {
     )
     .sort(compareCaddyOrder);
   const pools = splitCaddyPools(pool);
+  const metaStart = inferHouseStartCaddyId(null, previous.meta.houseStartCaddyId);
+  const boardStart = inferHouseStartCaddyId(previous.assignments, null);
+  const startForExclude = metaStart ?? boardStart;
+  const startOnBoard =
+    startForExclude != null &&
+    previous.assignments.some((row) => {
+      const shift = String(row.reservation?.shift || row.shift || "");
+      return (
+        row.caddy.id === startForExclude &&
+        shift === "1부" &&
+        row.kind === "regular"
+      );
+    });
+  const startUnavailable =
+    startForExclude != null &&
+    (allDayUnavailable.has(startForExclude) || !startOnBoard);
+  const houseExcludeIds = new Set(allDayUnavailable);
+  if (startForExclude != null && !startOnBoard) {
+    houseExcludeIds.add(startForExclude);
+  }
+  const startCaddy =
+    startUnavailable && startForExclude != null
+      ? previous.assignments.find((row) => row.caddy.id === startForExclude)?.caddy ||
+        fullPool.find((c) => c.id === startForExclude) ||
+        null
+      : null;
+  // 병가/결근이거나 저장된 start가 1부 regular에서 빠졌으면 원본 HOUSE를
+  // 그 자리에서 회전한 뒤 제외 id만 빼고 한 칸씩 당긴다.
+  // 시작점이 아직 1부 regular면 기존처럼 meta start만 회전한다.
+  const originalHouse = splitCaddyPools(
+    eligibleRegularReflowCaddies([
+      ...pools.house,
+      ...(startCaddy && isHouseStartCandidate(startCaddy) ? [startCaddy] : []),
+    ])
+  ).house;
+  const rotationStart = startUnavailable
+    ? startForExclude
+    : metaStart != null && pools.house.some((caddy) => caddy.id === metaStart)
+      ? metaStart
+      : null;
+  const startInOriginal =
+    rotationStart != null &&
+    originalHouse.some((caddy) => caddy.id === rotationStart);
+  const safeRotationStart = startInOriginal
+    ? rotationStart
+    : startUnavailable &&
+        boardStart != null &&
+        pools.house.some((caddy) => caddy.id === boardStart)
+      ? boardStart
+      : null;
+  const regularHouse = resolveRegularHouseQueue({
+    originalHouse,
+    remainingHouse: pools.house,
+    specialExcludeIds: houseExcludeIds,
+    houseStartCaddyId: safeRotationStart,
+  });
 
   const reasonCode = resolveReflowReason({
     swapCount: 0,
@@ -5099,11 +5178,7 @@ export function reflowRegularAssignments(input: {
     moveCount,
   });
 
-  const startId = previous.meta.houseStartCaddyId;
-  const houseStartCaddyId =
-    startId != null && pools.house.some((c) => c.id === startId)
-      ? startId
-      : null;
+  const houseStartCaddyId = regularHouse.houseStartCaddyId;
 
   const thirdStartCaddyId =
     previous.meta.thirdStartCaddyId != null
@@ -5133,7 +5208,7 @@ export function reflowRegularAssignments(input: {
 
   const regular = assignRegularSequence({
     date,
-    house: pools.house,
+    house: regularHouse.house,
     third: pools.third,
     reservations: regularReservations,
     reasonCode,
@@ -5207,6 +5282,9 @@ export function reflowRegularAssignments(input: {
       emptySpecialSupportByShift(),
     meta: {
       ...previous.meta,
+      ...(startForExclude != null
+        ? { houseStartCaddyId: startForExclude }
+        : {}),
       availableCount: pool.length,
       reservationCount: lockedRows.length + regularReservations.length,
       assignedCount: assignments.length,
