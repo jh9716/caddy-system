@@ -54,6 +54,10 @@ export type DailyBoardDraftPayloadV1 = {
   openCourses: CourseCode[];
   caddyPool: AutoAssignCaddy[];
   sparesByShift: SpareByShift[];
+  /** optional: 1부 HOUSE 회전 시작점. legacy payload에는 없음. */
+  houseStartCaddyId?: number;
+  /** optional: 3부 시작 캐디. legacy payload에는 없음. */
+  thirdStartCaddyId?: number;
   confirmedAt: string | null;
   appliedAt: string | null;
   applyAuditId: number | null;
@@ -122,6 +126,14 @@ export function assignmentDraftToPayload(
     confirmedAt: draft.confirmedAt ?? null,
     appliedAt: draft.appliedAt ?? null,
     applyAuditId: draft.applyAuditId ?? null,
+    ...(Number.isInteger(Number(draft.houseStartCaddyId)) &&
+    Number(draft.houseStartCaddyId) > 0
+      ? { houseStartCaddyId: Number(draft.houseStartCaddyId) }
+      : {}),
+    ...(Number.isInteger(Number(draft.thirdStartCaddyId)) &&
+    Number(draft.thirdStartCaddyId) > 0
+      ? { thirdStartCaddyId: Number(draft.thirdStartCaddyId) }
+      : {}),
   };
 }
 
@@ -140,6 +152,12 @@ export function payloadToAssignmentDraft(
     confirmedAt: payload.confirmedAt,
     appliedAt: payload.appliedAt,
     applyAuditId: payload.applyAuditId,
+    ...(payload.houseStartCaddyId != null
+      ? { houseStartCaddyId: payload.houseStartCaddyId }
+      : {}),
+    ...(payload.thirdStartCaddyId != null
+      ? { thirdStartCaddyId: payload.thirdStartCaddyId }
+      : {}),
   };
 }
 
@@ -396,6 +414,12 @@ export function parseDailyBoardDraftPayload(
       o.applyAuditId == null || o.applyAuditId === ""
         ? null
         : asFiniteInt(o.applyAuditId, "applyAuditId"),
+    ...(o.houseStartCaddyId != null && o.houseStartCaddyId !== ""
+      ? { houseStartCaddyId: asFiniteInt(o.houseStartCaddyId, "houseStartCaddyId") }
+      : {}),
+    ...(o.thirdStartCaddyId != null && o.thirdStartCaddyId !== ""
+      ? { thirdStartCaddyId: asFiniteInt(o.thirdStartCaddyId, "thirdStartCaddyId") }
+      : {}),
   });
 }
 

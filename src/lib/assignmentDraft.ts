@@ -38,6 +38,10 @@ export type AssignmentDraft = {
   caddyPool: AutoAssignCaddy[];
   /** 부별 스페어 (대기 — confirm 저장 대상 아님) */
   sparesByShift: SpareByShift[];
+  /** 저장된 1부 HOUSE 회전 시작점. reload 후에도 유지. */
+  houseStartCaddyId?: number | null;
+  /** 저장된 3부 시작 캐디. reload 후에도 유지. */
+  thirdStartCaddyId?: number | null;
   confirmedAt: string | null;
   appliedAt?: string | null;
   applyAuditId?: number | null;
@@ -121,6 +125,12 @@ export function createDraftFromAutoResult(
     confirmedAt: null,
     appliedAt: null,
     applyAuditId: null,
+    ...(result.meta.houseStartCaddyId != null
+      ? { houseStartCaddyId: Number(result.meta.houseStartCaddyId) }
+      : {}),
+    ...(result.meta.thirdStartCaddyId != null
+      ? { thirdStartCaddyId: Number(result.meta.thirdStartCaddyId) }
+      : {}),
   };
 }
 
@@ -229,16 +239,22 @@ function asPositiveId(value: unknown): number | null {
 
 /**
  * 배치 다시 맞추기용 1부 첫 캐디.
- * 페이지를 다시 열면 houseStart 선택값이 비므로, Draft에서 복구한다.
- * 우선순위: 현재 선택 → autoResult.meta → 1부 첫 regular HOUSE → caddyPool HOUSE.
+ * 저장된 Draft.houseStartCaddyId가 있으면 그게 authoritative.
+ * legacy Draft에 필드가 없을 때만 board/pool에서 inference.
+ * 우선순위: 현재 선택 → Draft 저장값 → autoResult.meta → 1부 첫 regular HOUSE → caddyPool HOUSE.
  */
 export function resolveHouseStartCaddyIdForRecalc(input: {
   selectedId?: number | "" | null;
   metaId?: number | null;
   draft?: AssignmentDraft | null;
-}): { caddyId: number; source: "selected" | "meta" | "draftRegular" | "pool" } | null {
+}): {
+  caddyId: number;
+  source: "selected" | "draftStored" | "meta" | "draftRegular" | "pool";
+} | null {
   const selected = asPositiveId(input.selectedId);
   if (selected) return { caddyId: selected, source: "selected" };
+  const stored = asPositiveId(input.draft?.houseStartCaddyId);
+  if (stored) return { caddyId: stored, source: "draftStored" };
   const meta = asPositiveId(input.metaId);
   if (meta) return { caddyId: meta, source: "meta" };
   const draft = input.draft;
@@ -736,12 +752,16 @@ export function autoResultFromDraft(
     finalPointer: 0,
     thirdStartTeam: base?.meta.thirdStartTeam || "",
     thirdStartTeamAutomatic: base?.meta.thirdStartTeamAutomatic || "",
-    ...(base?.meta.houseStartCaddyId != null
-      ? { houseStartCaddyId: Number(base.meta.houseStartCaddyId) }
-      : {}),
-    ...(base?.meta.thirdStartCaddyId != null
-      ? { thirdStartCaddyId: Number(base.meta.thirdStartCaddyId) }
-      : {}),
+    ...(asPositiveId(draft.houseStartCaddyId) != null
+      ? { houseStartCaddyId: asPositiveId(draft.houseStartCaddyId)! }
+      : base?.meta.houseStartCaddyId != null
+        ? { houseStartCaddyId: Number(base.meta.houseStartCaddyId) }
+        : {}),
+    ...(asPositiveId(draft.thirdStartCaddyId) != null
+      ? { thirdStartCaddyId: asPositiveId(draft.thirdStartCaddyId)! }
+      : base?.meta.thirdStartCaddyId != null
+        ? { thirdStartCaddyId: Number(base.meta.thirdStartCaddyId) }
+        : {}),
   };
   return {
     date: draft.date,
@@ -795,6 +815,10 @@ export function applyLiveResultToDraft(
     confirmedAt: resetConfirm ? null : draft.confirmedAt,
     appliedAt: null,
     applyAuditId: null,
+    houseStartCaddyId:
+      next.houseStartCaddyId ?? draft.houseStartCaddyId ?? null,
+    thirdStartCaddyId:
+      next.thirdStartCaddyId ?? draft.thirdStartCaddyId ?? null,
   };
 }
 

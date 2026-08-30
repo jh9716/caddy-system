@@ -830,6 +830,41 @@ export function resolveRegularHouseQueue(input: {
   return { house: remaining, houseStartCaddyId: startId };
 }
 
+/**
+ * Reflow용 HOUSE 큐. 시작 캐디가 병가/결근으로 remaining에서 빠져도
+ * 원래 회전 기준은 유지하고 그 캐디만 건너뛴다.
+ * assignRegularSequence에 넘길 house는 이미 회전됐을 수 있으므로
+ * 그 경우 houseStartCaddyId는 null(재회전 금지).
+ */
+export function resolveHouseQueueKeepingOrigin(input: {
+  remainingHouse: AutoAssignCaddy[];
+  originalHouse: AutoAssignCaddy[];
+  houseStartCaddyId?: number | null;
+}): { house: AutoAssignCaddy[]; houseStartCaddyId: number | null } {
+  const remaining = [...input.remainingHouse];
+  const startRaw = input.houseStartCaddyId;
+  if (startRaw == null || startRaw === undefined) {
+    return { house: remaining, houseStartCaddyId: null };
+  }
+  const startId = Number(startRaw);
+  if (!Number.isInteger(startId) || startId < 1) {
+    return { house: remaining, houseStartCaddyId: null };
+  }
+  if (remaining.some((caddy) => caddy.id === startId)) {
+    return { house: remaining, houseStartCaddyId: startId };
+  }
+  const original = [...input.originalHouse];
+  if (!original.some((caddy) => caddy.id === startId)) {
+    return { house: remaining, houseStartCaddyId: null };
+  }
+  const remainingIds = new Set(remaining.map((caddy) => caddy.id));
+  const rotated = rotateHouseQueueFromStart(original, startId);
+  return {
+    house: rotated.filter((caddy) => remainingIds.has(caddy.id)),
+    houseStartCaddyId: null,
+  };
+}
+
 function toSpareInfo(caddy: AutoAssignCaddy | null | undefined): SpareCaddyInfo | null {
   if (!caddy) return null;
   return {
@@ -5089,6 +5124,11 @@ export function reflowRegularAssignments(input: {
     )
     .sort(compareCaddyOrder);
   const pools = splitCaddyPools(pool);
+  const originalHouse = splitCaddyPools(
+    eligibleRegularReflowCaddies([...fullPool, ...extraSpecials])
+      .filter((c) => !lockedCaddies.has(c.id) && !autoSpecialIds.has(c.id))
+      .sort(compareCaddyOrder)
+  ).house;
 
   const reasonCode = resolveReflowReason({
     swapCount: 0,
@@ -5100,10 +5140,13 @@ export function reflowRegularAssignments(input: {
   });
 
   const startId = previous.meta.houseStartCaddyId;
-  const houseStartCaddyId =
-    startId != null && pools.house.some((c) => c.id === startId)
-      ? startId
-      : null;
+  const resolvedHouse = resolveHouseQueueKeepingOrigin({
+    remainingHouse: pools.house,
+    originalHouse,
+    houseStartCaddyId: startId,
+  });
+  const houseStartCaddyId = resolvedHouse.houseStartCaddyId;
+  pools.house = resolvedHouse.house;
 
   const thirdStartCaddyId =
     previous.meta.thirdStartCaddyId != null
