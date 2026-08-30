@@ -124,6 +124,20 @@ import {
   publishBoardActionState,
   runPublishBoardFlow,
 } from "@/lib/publishDailyBoardClient";
+import {
+  PIPELINE_LEADING_FAIL_TOAST,
+  PIPELINE_SAVING_FULL,
+  PIPELINE_SAVING_LABEL,
+  changeFromPipelinePreview,
+  dropIntent,
+  isPipelineMutation,
+  makeMutationIntent,
+  prepareIntentOnConfirmedDraft,
+  projectPendingIntents,
+  readPipelineTestDelayMs,
+  readPipelineTestFail,
+  type BoardMutationIntent,
+} from "@/lib/boardMutationPipeline";
 
 type ResultViewMode = "board" | "list";
 
@@ -369,26 +383,52 @@ export default function ManageAssignmentsOpsPage() {
   const draftSaveInFlightPromiseRef = useRef<Promise<unknown> | null>(null);
   const publishingRef = useRef(false);
   const moveApplyingRef = useRef(false);
+  const persistInFlightRef = useRef(false);
+  const [persistInFlight, setPersistInFlight] = useState(false);
+  const [pendingIntentCount, setPendingIntentCount] = useState(0);
+  const confirmedDraftRef = useRef<AssignmentDraft | null>(null);
+  const pendingIntentsRef = useRef<BoardMutationIntent[]>([]);
+  const intentSeqRef = useRef(0);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const boardWrapRef = useRef<HTMLDivElement | null>(null);
   draftRef.current = draft;
   autoResultRef.current = autoResult;
 
   const applyHydratedDraft = useCallback(
-    (assignmentDraft: AssignmentDraft, version: number, savedAt?: string | null) => {
+    (
+      assignmentDraft: AssignmentDraft,
+      version: number,
+      savedAt?: string | null,
+      unavailableIds?: number[]
+    ) => {
       hydratingDraftRef.current = true;
       serverDraftVersionRef.current = version;
       setDraftVersion(version);
-      setDraft(assignmentDraft);
-      setAutoResult(autoResultFromDraft(assignmentDraft, null) as RunResponse);
-      setWarnings(detectDraftWarnings(assignmentDraft));
-      setCourseOpen(courseOpenFromList(assignmentDraft.openCourses));
+      const hydrated: AssignmentDraft = {
+        ...assignmentDraft,
+        unavailableCaddyIds: Array.from(
+          new Set([
+            ...(assignmentDraft.unavailableCaddyIds || []),
+            ...(unavailableIds || []),
+          ])
+        ).filter((id) => Number.isInteger(id) && id > 0),
+      };
+      setDraft(hydrated);
+      confirmedDraftRef.current = hydrated;
+      pendingIntentsRef.current = [];
+      setPendingIntentCount(0);
+      persistInFlightRef.current = false;
+      setPersistInFlight(false);
+      setAutoResult(autoResultFromDraft(hydrated, null) as RunResponse);
+      setWarnings(detectDraftWarnings(hydrated));
+      setCourseOpen(courseOpenFromList(hydrated.openCourses));
       const restoredStart = resolveHouseStartCaddyIdForRecalc({
         selectedId: "",
         metaId: null,
-        draft: assignmentDraft,
+        draft: hydrated,
       });
       if (restoredStart) setHouseStartCaddyId(restoredStart.caddyId);
+      setUnavailableCaddyIds(hydrated.unavailableCaddyIds || []);
       setDraftSaveState("saved");
       setDraftSavedAt(savedAt ?? null);
       setSwapKey(null);
@@ -436,6 +476,7 @@ export default function ManageAssignmentsOpsPage() {
           payload: unknown;
           updatedAt: string;
         };
+        unavailableCaddyIds?: number[];
       };
     },
     []
@@ -551,7 +592,8 @@ export default function ManageAssignmentsOpsPage() {
       applyHydratedDraft(
         payloadToAssignmentDraft(data.draft.payload as never),
         data.draft.version,
-        data.draft.updatedAt
+        data.draft.updatedAt,
+        Array.isArray(data.unavailableCaddyIds) ? data.unavailableCaddyIds : []
       );
       showToast("최신 작업본을 불러왔습니다");
     } catch (e: unknown) {
@@ -744,7 +786,8 @@ export default function ManageAssignmentsOpsPage() {
         applyHydratedDraft(
           payloadToAssignmentDraft(payload),
           data.draft.version,
-          data.draft.updatedAt
+          data.draft.updatedAt,
+          Array.isArray(data.unavailableCaddyIds) ? data.unavailableCaddyIds : []
         );
       } catch (e: unknown) {
         if (cancelled) return;
@@ -1202,6 +1245,9 @@ export default function ManageAssignmentsOpsPage() {
         caddyPool.length ? caddyPool : undefined
       );
       setDraft(next);
+      confirmedDraftRef.current = next;
+      pendingIntentsRef.current = [];
+      setPendingIntentCount(0);
       setWarnings(detectDraftWarnings(next));
       setSwapKey(null);
       setExpandedKey(null);
@@ -1458,80 +1504,249 @@ export default function ManageAssignmentsOpsPage() {
     });
   }
 
-  async function applyReservationMove(change: LiveChangeInput) {
-    if (change.type !== "MOVE_RESERVATION") return;
-    if (moveApplyingRef.current) return;
-    const current = draftRef.current;
-    if (!current) return;
+  function paintProjectedDraft(next: AssignmentDraft, unavailable?: number[]) {
+    setDraft(next);
+    setWarnings(detectDraftWarnings(next));
+    setUnavailableCaddyIds(
+      unavailable || next.unavailableCaddyIds || []
+    );
+    const projected = autoResultFromDraft(next, autoResultRef.current);
+    setAutoResult(projected as RunResponse);
+  }
 
-    const dest = parseMoveDestination(change.to);
-    if (!dest) {
-      const msg = "목적 부/코스/티타임을 확인하세요.";
-      setError(msg);
-      showToast(msg);
-      return;
+  function enqueuePipelineMutation(change: LiveChangeInput) {
+    const confirmed = confirmedDraftRef.current || draftRef.current;
+    if (!confirmed) return;
+    if (change.type === "MOVE_RESERVATION") {
+      const dest = parseMoveDestination(change.to);
+      if (!dest) {
+        const msg = "목적 부/코스/티타임을 확인하세요.";
+        setError(msg);
+        showToast(msg);
+        return;
+      }
     }
-
-    moveApplyingRef.current = true;
-    setMoveApplying(true);
-    setMoveSheetOpen(false);
-    setLiveChangePreset(null);
-    setMovePendingDest(null);
-    setError(null);
-
+    if (needsQuickActionConfirm(change.type)) {
+      if (!window.confirm(QUICK_ACTION_CONFIRM_MESSAGE)) return;
+    }
+    const intent = makeMutationIntent(
+      change,
+      `m${++intentSeqRef.current}-${Date.now()}`
+    );
+    if (!intent) return;
     const wrap = boardWrapRef.current;
     const scrollTop = wrap?.scrollTop ?? 0;
-    const livePool = excludeCaddiesById(current.caddyPool, opsDutyCaddyIds);
-    const previous = autoResultFromDraft(current, autoResultRef.current);
-    const preview = previewLiveChangeFromDraft({
-      draft: { ...current, caddyPool: livePool },
-      base: autoResultRef.current,
-      change,
+    const projected = projectPendingIntents({
+      confirmedDraft: confirmed,
+      pending: [...pendingIntentsRef.current, intent],
       specialSupportByShift,
+      base: autoResultRef.current,
     });
-    const blocking = preview.warnings.find((w) => w.level === "error");
-    if (blocking) {
-      moveApplyingRef.current = false;
-      setMoveApplying(false);
-      setError(blocking.message);
-      showToast(blocking.message);
+    if (projected.dropped.some((row) => row.intent.id === intent.id)) {
+      const drop = projected.dropped.find((row) => row.intent.id === intent.id);
+      setError(drop?.message || PIPELINE_LEADING_FAIL_TOAST);
+      showToast(drop?.message || PIPELINE_LEADING_FAIL_TOAST);
       restoreBoardScroll(wrap, scrollTop);
       return;
     }
-
-    const painted = applyLiveResultToDraft(current, preview.after);
-    setDraft(painted);
-    setWarnings(detectDraftWarnings(painted));
-    setUnavailableCaddyIds(preview.unavailableCaddyIds || []);
-    if (autoResultRef.current) {
-      setAutoResult({ ...autoResultRef.current, ...preview.after });
-    }
+    pendingIntentsRef.current = projected.applied;
+    setPendingIntentCount(projected.applied.length);
+    paintProjectedDraft(projected.draft);
     setMoveKey(null);
+    setMoveSheetOpen(false);
+    setMoveApplying(false);
+    moveApplyingRef.current = false;
+    setLiveChangePreset(null);
+    setMovePendingDest(null);
+    setQuickSheet(null);
     setDraftSaveState("saving");
     restoreBoardScroll(wrap, scrollTop);
+    if (change.type === "MOVE_RESERVATION") {
+      showToast(TEAM_MOVED_TOAST, 1800);
+    } else {
+      showToast(quickActionToast(change, confirmed), 1800);
+    }
+    void flushPipelineWrites();
+  }
 
+  async function persistPipelineIntent(input: {
+    preview: LiveChangePreview;
+    previous: AutoAssignResultV1;
+    painted: AssignmentDraft;
+    change: LiveChangeInput;
+  }): Promise<
+    | {
+        ok: true;
+        draft: AssignmentDraft;
+        version: number;
+        updatedAt: string;
+        after: AutoAssignResultV1;
+        unavailableCaddyIds: number[];
+      }
+    | { ok: false; message: string; status: number }
+  > {
+    const delayMs = readPipelineTestDelayMs();
+    const failKnob = readPipelineTestFail();
+    const testFailLive =
+      failKnob === "error" ||
+      (failKnob === "move" && input.change.type === "MOVE_RESERVATION") ||
+      (failKnob === "sick" &&
+        (input.change.type === "CADDY_SICK" ||
+          input.change.type === "CADDY_ATTENDANCE_NOSHOW"))
+        ? "error"
+        : null;
+    const res = await fetch("/api/assignments/reflow/quick-mutation", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        previous: input.previous,
+        regularCaddyPool: excludeCaddiesById(
+          input.painted.caddyPool,
+          opsDutyCaddyIds
+        ),
+        events: input.preview.events,
+        changeType: input.preview.changeType,
+        change: input.change,
+        draft: {
+          date: input.painted.date,
+          version: serverDraftVersionRef.current,
+          payload: assignmentDraftToPayload(input.painted),
+        },
+        ...(testFailLive ? { testFailLive } : {}),
+        ...(delayMs > 0 ? { testDelayMs: delayMs } : {}),
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return {
+        ok: false,
+        status: res.status,
+        message:
+          data.error ||
+          data.message ||
+          (res.status === 409
+            ? DRAFT_VERSION_CONFLICT_MESSAGE
+            : "배치 저장 중 오류가 발생했습니다. 다시 시도해주세요."),
+      };
+    }
+    const after = (data.preview?.after ||
+      input.preview.after) as AutoAssignResultV1;
+    const next = applyLiveResultToDraft(input.painted, after);
+    const savedVersion = Number(data.draft?.version);
+    const unavailableCaddyIds = Array.isArray(data.preview?.unavailableCaddyIds)
+      ? data.preview.unavailableCaddyIds
+      : input.preview.unavailableCaddyIds || [];
+    return {
+      ok: true,
+      draft: next,
+      version:
+        Number.isInteger(savedVersion) && savedVersion > 0
+          ? savedVersion
+          : serverDraftVersionRef.current,
+      updatedAt: String(data.draft?.updatedAt || new Date().toISOString()),
+      after,
+      unavailableCaddyIds,
+    };
+  }
+
+  async function flushPipelineWrites() {
+    if (persistInFlightRef.current) return;
+    persistInFlightRef.current = true;
+    setPersistInFlight(true);
     try {
-      let ok = false;
-      const gen = persistGenRef.current;
-      await (persistQueueRef.current = persistQueueRef.current.then(async () => {
-        if (gen !== persistGenRef.current) return;
-        ok = await persistQuickReservationMove({
-          preview,
-          previous,
-          pool: livePool,
-          painted,
-          rollbackDraft: current,
+      while (pendingIntentsRef.current.length > 0) {
+        const confirmed = confirmedDraftRef.current || draftRef.current;
+        if (!confirmed) break;
+        const intent = pendingIntentsRef.current[0];
+        const prepared = prepareIntentOnConfirmedDraft({
+          confirmedDraft: confirmed,
+          intent,
+          specialSupportByShift,
+          base: autoResultRef.current,
         });
-        if (!ok) persistGenRef.current += 1;
-      }));
-      if (ok) {
-        setMoveSheetOpen(false);
-        showToast(TEAM_MOVED_TOAST, 2800);
+        if (!prepared.ok) {
+          pendingIntentsRef.current = dropIntent(
+            pendingIntentsRef.current,
+            intent.id
+          );
+          setPendingIntentCount(pendingIntentsRef.current.length);
+          showToast(prepared.message);
+          const rest = projectPendingIntents({
+            confirmedDraft: confirmed,
+            pending: pendingIntentsRef.current,
+            specialSupportByShift,
+            base: autoResultRef.current,
+          });
+          pendingIntentsRef.current = rest.applied;
+          setPendingIntentCount(rest.applied.length);
+          paintProjectedDraft(rest.draft);
+          continue;
+        }
+        const persist = await persistPipelineIntent({
+          preview: prepared.preview,
+          previous: prepared.previous,
+          painted: prepared.painted,
+          change: intent.change,
+        });
+        if (!persist.ok) {
+          pendingIntentsRef.current = dropIntent(
+            pendingIntentsRef.current,
+            intent.id
+          );
+          setError(persist.message);
+          showToast(PIPELINE_LEADING_FAIL_TOAST);
+          setDraftSaveState(persist.status === 409 ? "conflict" : "error");
+          const rest = projectPendingIntents({
+            confirmedDraft: confirmed,
+            pending: pendingIntentsRef.current,
+            specialSupportByShift,
+            base: autoResultRef.current,
+          });
+          pendingIntentsRef.current = rest.applied;
+          setPendingIntentCount(rest.applied.length);
+          paintProjectedDraft(rest.draft);
+          continue;
+        }
+        confirmedDraftRef.current = persist.draft;
+        serverDraftVersionRef.current = persist.version;
+        setDraftVersion(persist.version);
+        setDraftSavedAt(persist.updatedAt);
+        setDraftSaveState("saved");
+        if (autoResultRef.current) {
+          setAutoResult({ ...autoResultRef.current, ...persist.after });
+        }
+        pendingIntentsRef.current = dropIntent(
+          pendingIntentsRef.current,
+          intent.id
+        );
+        const rest = projectPendingIntents({
+          confirmedDraft: persist.draft,
+          pending: pendingIntentsRef.current,
+          specialSupportByShift,
+          base: persist.after,
+        });
+        for (const dropped of rest.dropped) {
+          showToast(dropped.message);
+        }
+        pendingIntentsRef.current = rest.applied;
+        setPendingIntentCount(rest.applied.length);
+        paintProjectedDraft(rest.draft, persist.unavailableCaddyIds);
       }
     } finally {
-      moveApplyingRef.current = false;
-      setMoveApplying(false);
+      persistInFlightRef.current = false;
+      setPersistInFlight(false);
+      if (pendingIntentsRef.current.length > 0) {
+        void flushPipelineWrites();
+      } else {
+        setDraftSaveState("saved");
+      }
     }
+  }
+
+  async function applyReservationMove(change: LiveChangeInput) {
+    if (change.type !== "MOVE_RESERVATION") return;
+    enqueuePipelineMutation(change);
   }
 
   function onRequestLiveChange(change: LiveChangeInput) {
@@ -1539,8 +1754,8 @@ export default function ManageAssignmentsOpsPage() {
       setLiveChangePreset(change);
       return;
     }
-    if (change.type === "MOVE_RESERVATION") {
-      void applyReservationMove(change);
+    if (isPipelineMutation(change.type)) {
+      enqueuePipelineMutation(change);
       return;
     }
     void applyQuickChange(change);
@@ -1737,81 +1952,6 @@ export default function ManageAssignmentsOpsPage() {
     }
   }
 
-  async function persistQuickReservationMove(input: {
-    preview: LiveChangePreview;
-    previous: AutoAssignResultV1;
-    pool: AutoAssignCaddy[];
-    painted: AssignmentDraft;
-    rollbackDraft: AssignmentDraft;
-  }): Promise<boolean> {
-    setError(null);
-    const rollbackOptimistic = () => {
-      setDraft(input.rollbackDraft);
-      setWarnings(detectDraftWarnings(input.rollbackDraft));
-    };
-    try {
-      const res = await fetch("/api/assignments/reflow/quick-move", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          previous: input.previous,
-          regularCaddyPool: input.pool,
-          events: input.preview.events,
-          changeType: input.preview.changeType,
-          draft: {
-            date: input.painted.date,
-            version: serverDraftVersionRef.current,
-            payload: assignmentDraftToPayload(input.painted),
-          },
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        rollbackOptimistic();
-        setDraftSaveState(res.status === 409 ? "conflict" : "error");
-        setError(
-          data.error ||
-            data.message ||
-            (res.status === 409
-              ? DRAFT_VERSION_CONFLICT_MESSAGE
-              : "배치 저장 중 오류가 발생했습니다. 다시 시도해주세요.")
-        );
-        showToast(TEAM_MOVE_SAVE_FAILED_TOAST);
-        return false;
-      }
-      const after = (data.preview?.after ||
-        input.preview.after) as typeof input.preview.after;
-      const next = applyLiveResultToDraft(input.painted, after);
-      setDraft(next);
-      setWarnings(detectDraftWarnings(next));
-      if (autoResultRef.current) {
-        setAutoResult({ ...autoResultRef.current, ...after });
-      }
-      setUnavailableCaddyIds(
-        Array.isArray(data.preview?.unavailableCaddyIds)
-          ? data.preview.unavailableCaddyIds
-          : input.preview.unavailableCaddyIds || []
-      );
-      const savedVersion = Number(data.draft?.version);
-      if (Number.isInteger(savedVersion) && savedVersion > 0) {
-        serverDraftVersionRef.current = savedVersion;
-        setDraftVersion(savedVersion);
-        setDraftSavedAt(
-          String(data.draft?.updatedAt || new Date().toISOString())
-        );
-      }
-      setDraftSaveState("saved");
-      return true;
-    } catch (e: unknown) {
-      rollbackOptimistic();
-      setDraftSaveState("error");
-      setError(e instanceof Error ? e.message : "현장 변경 적용 실패");
-      showToast(TEAM_MOVE_SAVE_FAILED_TOAST);
-      return false;
-    }
-  }
-
   async function persistLivePreview(input: {
     preview: LiveChangePreview;
     previous: AutoAssignResultV1;
@@ -1983,6 +2123,11 @@ export default function ManageAssignmentsOpsPage() {
       showToast(msg);
       return;
     }
+    const pipelineChange = changeFromPipelinePreview(preview);
+    if (pipelineChange) {
+      enqueuePipelineMutation(pipelineChange);
+      return;
+    }
     setLoadingLiveApply(true);
     try {
       const ok = await persistLivePreview({
@@ -2070,6 +2215,17 @@ export default function ManageAssignmentsOpsPage() {
         </div>
         {draft && (
           <div className="ops-header-side">
+            {persistInFlight || pendingIntentCount > 0 ? (
+              <div
+                className="ops-pipeline-saving"
+                role="status"
+                data-pipeline-saving="1"
+              >
+                {PIPELINE_SAVING_LABEL}{" "}
+                {Math.max(1, pendingIntentCount || (persistInFlight ? 1 : 0))}
+                <span> · {PIPELINE_SAVING_FULL}</span>
+              </div>
+            ) : null}
             <DraftSaveStatus
               state={draftSaveState}
               savedAt={draftSavedAt}
@@ -3110,6 +3266,11 @@ const opsCss = `
     display: grid;
     gap: 6px;
     justify-items: end;
+  }
+  .ops-pipeline-saving {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: #0f172a;
   }
   .ops-save-status {
     font-size: 0.75rem;

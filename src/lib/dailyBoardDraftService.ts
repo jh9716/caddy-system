@@ -219,6 +219,14 @@ export async function saveDailyBoardDraft(input: {
   }
 }
 
+export async function listUnavailableCaddyIds(ymd: string): Promise<number[]> {
+  const rows = await defaultPrisma.dailyCaddyUnavailable.findMany({
+    where: { date: dateKey(ymd) },
+    select: { caddyId: true },
+  });
+  return rows.map((row) => row.caddyId);
+}
+
 /** Draft row만 삭제. DailyReservation / DailyPlacement 는 건드리지 않는다. */
 export async function resetDailyBoardDraft(
   ymd: string,

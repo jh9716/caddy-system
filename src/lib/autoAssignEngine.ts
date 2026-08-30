@@ -328,6 +328,8 @@ export type AutoAssignResultV1 = {
   };
   /** 1·3부/1막 1부 위치 정책. live reflow가 이 값을 따른다. */
   specialPlacement?: SpecialPlacementState;
+  /** 이미 병가/결근 처리된 캐디. 이후 MOVE/reflow가 다시 넣으면 안 된다. */
+  unavailableCaddyIds?: number[];
 };
 
 export type SpecialPlacementState = {
@@ -828,6 +830,41 @@ export function resolveRegularHouseQueue(input: {
     };
   }
   return { house: remaining, houseStartCaddyId: startId };
+}
+
+/**
+ * Reflow용 HOUSE 큐. 시작 캐디가 병가/결근으로 remaining에서 빠져도
+ * 원래 회전 기준은 유지하고 그 캐디만 건너뛴다.
+ * assignRegularSequence에 넘길 house는 이미 회전됐을 수 있으므로
+ * 그 경우 houseStartCaddyId는 null(재회전 금지).
+ */
+export function resolveHouseQueueKeepingOrigin(input: {
+  remainingHouse: AutoAssignCaddy[];
+  originalHouse: AutoAssignCaddy[];
+  houseStartCaddyId?: number | null;
+}): { house: AutoAssignCaddy[]; houseStartCaddyId: number | null } {
+  const remaining = [...input.remainingHouse];
+  const startRaw = input.houseStartCaddyId;
+  if (startRaw == null || startRaw === undefined) {
+    return { house: remaining, houseStartCaddyId: null };
+  }
+  const startId = Number(startRaw);
+  if (!Number.isInteger(startId) || startId < 1) {
+    return { house: remaining, houseStartCaddyId: null };
+  }
+  if (remaining.some((caddy) => caddy.id === startId)) {
+    return { house: remaining, houseStartCaddyId: startId };
+  }
+  const original = [...input.originalHouse];
+  if (!original.some((caddy) => caddy.id === startId)) {
+    return { house: remaining, houseStartCaddyId: null };
+  }
+  const remainingIds = new Set(remaining.map((caddy) => caddy.id));
+  const rotated = rotateHouseQueueFromStart(original, startId);
+  return {
+    house: rotated.filter((caddy) => remainingIds.has(caddy.id)),
+    houseStartCaddyId: null,
+  };
 }
 
 function toSpareInfo(caddy: AutoAssignCaddy | null | undefined): SpareCaddyInfo | null {
@@ -4773,6 +4810,13 @@ export function reflowRegularAssignments(input: {
   const unavailable = new Map<number, CaddyUnavailableCause>();
   const unavailableFromShift = new Map<number, ShiftPart>();
   const allDayUnavailable = new Set<number>();
+  for (const rawId of previous.unavailableCaddyIds || []) {
+    const id = Number(rawId);
+    if (!Number.isInteger(id) || id < 1) continue;
+    unavailable.set(id, "SICK");
+    unavailableFromShift.set(id, "1부");
+    allDayUnavailable.add(id);
+  }
   let cancelCount = 0;
   let teamNoshowCount = 0;
   let addCount = 0;
@@ -5089,6 +5133,11 @@ export function reflowRegularAssignments(input: {
     )
     .sort(compareCaddyOrder);
   const pools = splitCaddyPools(pool);
+  const originalHouse = splitCaddyPools(
+    eligibleRegularReflowCaddies([...fullPool, ...extraSpecials])
+      .filter((c) => !lockedCaddies.has(c.id) && !autoSpecialIds.has(c.id))
+      .sort(compareCaddyOrder)
+  ).house;
 
   const reasonCode = resolveReflowReason({
     swapCount: 0,
@@ -5100,10 +5149,13 @@ export function reflowRegularAssignments(input: {
   });
 
   const startId = previous.meta.houseStartCaddyId;
-  const houseStartCaddyId =
-    startId != null && pools.house.some((c) => c.id === startId)
-      ? startId
-      : null;
+  const resolvedHouse = resolveHouseQueueKeepingOrigin({
+    remainingHouse: pools.house,
+    originalHouse,
+    houseStartCaddyId: startId,
+  });
+  const houseStartCaddyId = resolvedHouse.houseStartCaddyId;
+  pools.house = resolvedHouse.house;
 
   const thirdStartCaddyId =
     previous.meta.thirdStartCaddyId != null
@@ -5223,6 +5275,7 @@ export function reflowRegularAssignments(input: {
       ...placementPolicy,
       block: autoSpecialBlock,
     },
+    unavailableCaddyIds: [...unavailable.keys()],
   };
 
   const lockedPreserved: LockedPreservedRow[] = lockedRows.map((row) => ({
