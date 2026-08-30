@@ -138,6 +138,18 @@ import {
   readPipelineTestFail,
   type BoardMutationIntent,
 } from "@/lib/boardMutationPipeline";
+import {
+  PIPELINE_DIRTY_RELOAD_TOAST,
+  PIPELINE_UNLOAD_HINT,
+  PIPELINE_UNLOAD_MESSAGE,
+  PIPELINE_UNLOAD_TOAST,
+  clearPipelineDirty,
+  consumePipelineDirty,
+  markPipelineDirty,
+  pipelineHasUnsavedWork,
+  shouldBlockAnchorNavigation,
+  shouldClearPipelineDirty,
+} from "@/lib/pipelineUnloadGuard";
 
 type ResultViewMode = "board" | "list";
 
@@ -789,6 +801,8 @@ export default function ManageAssignmentsOpsPage() {
           data.draft.updatedAt,
           Array.isArray(data.unavailableCaddyIds) ? data.unavailableCaddyIds : []
         );
+        const leftover = consumePipelineDirty(window.sessionStorage);
+        if (leftover) setToast(PIPELINE_DIRTY_RELOAD_TOAST);
       } catch (e: unknown) {
         if (cancelled) return;
         hydratingDraftRef.current = false;
@@ -834,6 +848,49 @@ export default function ManageAssignmentsOpsPage() {
       cancelled = true;
     };
   }, [date]);
+
+  useEffect(() => {
+    const dirty = () =>
+      pipelineHasUnsavedWork({
+        pendingIntentCount: pendingIntentsRef.current.length,
+        persistInFlight: persistInFlightRef.current,
+      });
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (!dirty()) return;
+      e.preventDefault();
+      e.returnValue = PIPELINE_UNLOAD_MESSAGE;
+    };
+    const onClick = (e: MouseEvent) => {
+      if (!dirty()) return;
+      if (e.defaultPrevented) return;
+      const a = (e.target as Element | null)?.closest?.(
+        "a[href]"
+      ) as HTMLAnchorElement | null;
+      if (!a) return;
+      if (
+        !shouldBlockAnchorNavigation({
+          href: a.getAttribute("href"),
+          target: a.getAttribute("target"),
+          button: e.button,
+          metaKey: e.metaKey,
+          ctrlKey: e.ctrlKey,
+          shiftKey: e.shiftKey,
+          altKey: e.altKey,
+        })
+      ) {
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      setToast(PIPELINE_UNLOAD_TOAST);
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    document.addEventListener("click", onClick, true);
+    return () => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      document.removeEventListener("click", onClick, true);
+    };
+  }, []);
 
   useEffect(() => {
     if (!draft) return;
@@ -1551,6 +1608,10 @@ export default function ManageAssignmentsOpsPage() {
     }
     pendingIntentsRef.current = projected.applied;
     setPendingIntentCount(projected.applied.length);
+    markPipelineDirty(window.sessionStorage, {
+      date: confirmed.date,
+      count: projected.applied.length,
+    });
     paintProjectedDraft(projected.draft);
     setMoveKey(null);
     setMoveSheetOpen(false);
@@ -1598,6 +1659,7 @@ export default function ManageAssignmentsOpsPage() {
     const res = await fetch("/api/assignments/reflow/quick-mutation", {
       method: "POST",
       credentials: "include",
+      keepalive: true,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         previous: input.previous,
@@ -1654,6 +1716,7 @@ export default function ManageAssignmentsOpsPage() {
     if (persistInFlightRef.current) return;
     persistInFlightRef.current = true;
     setPersistInFlight(true);
+    let flushHadFailure = false;
     try {
       while (pendingIntentsRef.current.length > 0) {
         const confirmed = confirmedDraftRef.current || draftRef.current;
@@ -1690,6 +1753,7 @@ export default function ManageAssignmentsOpsPage() {
           change: intent.change,
         });
         if (!persist.ok) {
+          flushHadFailure = true;
           pendingIntentsRef.current = dropIntent(
             pendingIntentsRef.current,
             intent.id
@@ -1737,8 +1801,18 @@ export default function ManageAssignmentsOpsPage() {
       persistInFlightRef.current = false;
       setPersistInFlight(false);
       if (pendingIntentsRef.current.length > 0) {
+        markPipelineDirty(window.sessionStorage, {
+          date: dateRef.current,
+          count: pendingIntentsRef.current.length,
+        });
         void flushPipelineWrites();
-      } else {
+      } else if (
+        shouldClearPipelineDirty({
+          pendingIntentCount: 0,
+          flushHadFailure,
+        })
+      ) {
+        clearPipelineDirty(window.sessionStorage);
         setDraftSaveState("saved");
       }
     }
@@ -2224,6 +2298,10 @@ export default function ManageAssignmentsOpsPage() {
                 {PIPELINE_SAVING_LABEL}{" "}
                 {Math.max(1, pendingIntentCount || (persistInFlight ? 1 : 0))}
                 <span> · {PIPELINE_SAVING_FULL}</span>
+                <span className="ops-pipeline-saving-warn">
+                  {" "}
+                  · {PIPELINE_UNLOAD_HINT}
+                </span>
               </div>
             ) : null}
             <DraftSaveStatus
@@ -3271,6 +3349,9 @@ const opsCss = `
     font-size: 0.75rem;
     font-weight: 700;
     color: #0f172a;
+  }
+  .ops-pipeline-saving-warn {
+    color: #b45309;
   }
   .ops-save-status {
     font-size: 0.75rem;
