@@ -58,6 +58,8 @@ export type DailyBoardDraftPayloadV1 = {
   houseStartCaddyId?: number;
   /** optional: 3부 시작 캐디. legacy payload에는 없음. */
   thirdStartCaddyId?: number;
+  /** optional: 병가/결근 캐디. legacy payload에는 없음. */
+  unavailableCaddyIds?: number[];
   confirmedAt: string | null;
   appliedAt: string | null;
   applyAuditId: number | null;
@@ -134,6 +136,14 @@ export function assignmentDraftToPayload(
     Number(draft.thirdStartCaddyId) > 0
       ? { thirdStartCaddyId: Number(draft.thirdStartCaddyId) }
       : {}),
+    ...(Array.isArray(draft.unavailableCaddyIds) &&
+    draft.unavailableCaddyIds.length > 0
+      ? {
+          unavailableCaddyIds: draft.unavailableCaddyIds
+            .map((id) => Number(id))
+            .filter((id) => Number.isInteger(id) && id > 0),
+        }
+      : {}),
   };
 }
 
@@ -157,6 +167,9 @@ export function payloadToAssignmentDraft(
       : {}),
     ...(payload.thirdStartCaddyId != null
       ? { thirdStartCaddyId: payload.thirdStartCaddyId }
+      : {}),
+    ...(payload.unavailableCaddyIds?.length
+      ? { unavailableCaddyIds: [...payload.unavailableCaddyIds] }
       : {}),
   };
 }
@@ -419,6 +432,13 @@ export function parseDailyBoardDraftPayload(
       : {}),
     ...(o.thirdStartCaddyId != null && o.thirdStartCaddyId !== ""
       ? { thirdStartCaddyId: asFiniteInt(o.thirdStartCaddyId, "thirdStartCaddyId") }
+      : {}),
+    ...(Array.isArray(o.unavailableCaddyIds)
+      ? {
+          unavailableCaddyIds: o.unavailableCaddyIds.map((id, i) =>
+            asFiniteInt(id, `unavailableCaddyIds[${i}]`)
+          ),
+        }
       : {}),
   });
 }

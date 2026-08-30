@@ -164,6 +164,41 @@ section("resolveHouseQueueKeepingOrigin");
   assert(still.houseStartCaddyId === 서승희.id, "start still present → keep id");
 }
 
+section("SICK then MOVE does not revive");
+{
+  const draft = fixtureDraft();
+  const sick = projectPendingIntents({
+    confirmedDraft: draft,
+    pending: [
+      makeMutationIntent(
+        { type: "CADDY_SICK", caddyId: 서승희.id, shift: "1부" },
+        "s1"
+      )!,
+    ],
+  });
+  assert(!sick.draft.assignments.some((a) => a.caddy.id === 서승희.id), "sick removes 서승희");
+  const aKey = reservationKey(
+    sick.draft.assignments.find((a) => a.reservation.teamName === "A팀")!.reservation
+  );
+  const moved = projectPendingIntents({
+    confirmedDraft: sick.draft,
+    pending: [
+      makeMutationIntent(
+        makeMoveReservationChange({
+          reservationKey: aKey,
+          to: { course: "VERTHILL", shift: "1부", teeTime: "07:00" },
+        }),
+        "m1"
+      )!,
+    ],
+  });
+  assert(moved.applied.length === 1, "MOVE after sick applies");
+  assert(
+    !moved.draft.assignments.some((a) => a.caddy.id === 서승희.id),
+    "MOVE must not revive 서승희"
+  );
+}
+
 section("pending projection + drop invalid");
 {
   const draft = fixtureDraft();

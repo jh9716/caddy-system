@@ -106,14 +106,15 @@ async function seed() {
     where: { id: { in: wanted }, employmentStatus: "ACTIVE", caddyType: "HOUSE" },
   });
   const byId = new Map(caddies.map((c) => [c.id, c]));
+  const order = new Map(wanted.map((id, i) => [id, i]));
   const pool: AutoAssignCaddy[] = wanted
     .map((id) => byId.get(id))
     .filter((c): c is NonNullable<typeof c> => !!c)
     .map((c) => ({
       id: c.id,
       name: c.name,
-      team: c.team,
-      teamOrder: c.teamOrder,
+      team: `${order.get(c.id) ?? c.teamOrder}조`,
+      teamOrder: order.get(c.id) ?? c.teamOrder,
       caddyType: String(c.caddyType),
       employmentStatus: String(c.employmentStatus),
     }));
@@ -395,7 +396,10 @@ async function main() {
       }),
       version
     );
-    assert(occupied.persist?.ok === false, "occupied dest blocked");
+    assert(
+      occupied.prepared.ok === false || occupied.persist?.ok === false,
+      "occupied dest blocked"
+    );
     const reloaded = await reloadDraft();
     assert(!names(reloaded.draft).includes("서승희"), "sick kept after blocked MOVE");
   }

@@ -42,6 +42,8 @@ export type AssignmentDraft = {
   houseStartCaddyId?: number | null;
   /** 저장된 3부 시작 캐디. reload 후에도 유지. */
   thirdStartCaddyId?: number | null;
+  /** 병가/결근으로 빠진 캐디. 이후 mutation이 다시 넣지 못하게 한다. */
+  unavailableCaddyIds?: number[];
   confirmedAt: string | null;
   appliedAt?: string | null;
   applyAuditId?: number | null;
@@ -130,6 +132,9 @@ export function createDraftFromAutoResult(
       : {}),
     ...(result.meta.thirdStartCaddyId != null
       ? { thirdStartCaddyId: Number(result.meta.thirdStartCaddyId) }
+      : {}),
+    ...(uniquePositiveIds(result.unavailableCaddyIds).length > 0
+      ? { unavailableCaddyIds: uniquePositiveIds(result.unavailableCaddyIds) }
       : {}),
   };
 }
@@ -235,6 +240,19 @@ function asPositiveId(value: unknown): number | null {
   const n = Number(value);
   if (!Number.isInteger(n) || n < 1) return null;
   return n;
+}
+
+function uniquePositiveIds(values: unknown): number[] {
+  if (!Array.isArray(values)) return [];
+  const out: number[] = [];
+  const seen = new Set<number>();
+  for (const value of values) {
+    const id = asPositiveId(value);
+    if (id == null || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
 }
 
 /**
@@ -763,6 +781,10 @@ export function autoResultFromDraft(
         ? { thirdStartCaddyId: Number(base.meta.thirdStartCaddyId) }
         : {}),
   };
+  const unavailableCaddyIds = uniquePositiveIds([
+    ...(draft.unavailableCaddyIds || []),
+    ...(base?.unavailableCaddyIds || []),
+  ]);
   return {
     date: draft.date,
     assignments,
@@ -782,6 +804,7 @@ export function autoResultFromDraft(
       reason: u.reason,
     })),
     unusedCaddies: unusedCaddies(draft),
+    unavailableCaddyIds,
     special: base?.special || [],
     specialUnassigned: base?.specialUnassigned || [],
     specialPlacement: base?.specialPlacement
@@ -819,6 +842,11 @@ export function applyLiveResultToDraft(
       next.houseStartCaddyId ?? draft.houseStartCaddyId ?? null,
     thirdStartCaddyId:
       next.thirdStartCaddyId ?? draft.thirdStartCaddyId ?? null,
+    unavailableCaddyIds: uniquePositiveIds([
+      ...(next.unavailableCaddyIds || []),
+      ...(after.unavailableCaddyIds || []),
+      ...(draft.unavailableCaddyIds || []),
+    ]),
   };
 }
 

@@ -6,6 +6,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { prisma as defaultPrisma } from "@/lib/prisma";
 import { isLocalDatabaseUrl } from "@/lib/dbSafety";
+import { parseYmd } from "@/lib/availabilityEngine";
 import {
   LIVE_CHANGE_APPLY_USER_MESSAGE,
   LiveChangePersistError,
@@ -97,8 +98,25 @@ export async function applyQuickBoardMutation(input: {
   }
 
   const computeStarted = Date.now();
+  const db = input.prisma ?? defaultPrisma;
+  const storedUnavailable =
+    typeof db.dailyCaddyUnavailable?.findMany === "function"
+      ? await db.dailyCaddyUnavailable.findMany({
+          where: { date: parseYmd(input.previous.date).start },
+          select: { caddyId: true },
+        })
+      : [];
+  const previous = {
+    ...input.previous,
+    unavailableCaddyIds: [
+      ...new Set([
+        ...(input.previous.unavailableCaddyIds || []),
+        ...storedUnavailable.map((row) => Number(row.caddyId)),
+      ]),
+    ].filter((id) => Number.isInteger(id) && id > 0),
+  };
   const preview = previewLiveAssignmentEvents({
-    previous: input.previous,
+    previous,
     regularCaddyPool: input.regularCaddyPool,
     events,
     changeType: input.changeType || input.change?.type,
@@ -142,7 +160,6 @@ export async function applyQuickBoardMutation(input: {
   }
 
   const plan = buildLiveChangePersistPlan(preview);
-  const db = input.prisma ?? defaultPrisma;
   const delayMs = Number(input.testDelayMs || 0);
   if (delayMs > 0 && isLocalDatabaseUrl(process.env.DATABASE_URL)) {
     await new Promise((resolve) =>

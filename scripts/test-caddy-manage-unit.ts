@@ -555,15 +555,17 @@ console.log("== 보드 팀 이동은 미리보기 없이 즉시 apply ==");
       !/setLiveChangePreset\(change\)/.test(moveBranch),
     "empty-cell MOVE applies immediately, no preview dock"
   );
+  const enqueueFn =
+    board.split("function enqueuePipelineMutation")[1]?.split("async function persistPipelineIntent")[0] ||
+    "";
   assert(
-    /persistQuickReservationMove\(/.test(moveFn) &&
-      /previewLiveChangeFromDraft\(/.test(moveFn) &&
+    /enqueuePipelineMutation\(change\)/.test(moveFn) &&
       !/persistLivePreview\(/.test(moveFn) &&
       !/fetch\(\s*"\/api\/assignments\/reflow\/preview"/.test(moveFn),
-    "quick move validates locally then persistQuickReservationMove (atomic HTTP)"
+    "quick move goes through mutation pipeline, not apply+preview HTTP"
   );
   assert(
-    /TEAM_MOVED_TOAST/.test(moveFn) &&
+    /TEAM_MOVED_TOAST/.test(enqueueFn) &&
       !/TEAM_MOVE_UNDO_LABEL/.test(moveFn) &&
       !/isUndo/.test(moveFn) &&
       !/reservationMoveUndoPayload/.test(moveFn),
@@ -571,17 +573,18 @@ console.log("== 보드 팀 이동은 미리보기 없이 즉시 apply ==");
   );
   assert(
     /moveApplyingRef\.current/.test(emptyFn) &&
-      /moveApplyingRef\.current/.test(moveFn) &&
+      /moveApplyingRef\.current = false/.test(enqueueFn) &&
       !/disabled=\{moveApplying\}/.test(emptyFn) &&
       /TEAM_MOVING_LABEL/.test(board),
     "duplicate MOVE is blocked; empty cells stay enabled"
   );
   assert(
-    /applyLiveResultToDraft\(current, preview\.after\)/.test(moveFn) &&
-      moveFn.indexOf("setDraft(painted)") < moveFn.indexOf("persistQuickReservationMove") &&
-      /setDraftSaveState\("saving"\)/.test(moveFn) &&
-      !/setMovePendingDest\(\{/.test(moveFn),
-    "quick move paints client preview before persist, no dest 이동 중 overlay"
+    /projectPendingIntents\(/.test(enqueueFn) &&
+      /paintProjectedDraft\(/.test(enqueueFn) &&
+      enqueueFn.indexOf("paintProjectedDraft") < enqueueFn.indexOf("flushPipelineWrites") &&
+      /setDraftSaveState\("saving"\)/.test(enqueueFn) &&
+      !/setMovePendingDest\(\{/.test(enqueueFn),
+    "pipeline paints optimistic projection before persist, no dest 이동 중 overlay"
   );
   assert(
     /보드에서 빈 칸 선택/.test(sheet) &&
@@ -602,10 +605,10 @@ console.log("== 보드 팀 이동은 미리보기 없이 즉시 apply ==");
     "moved toast copy without Undo action"
   );
   assert(
-    /rollbackDraft: current/.test(moveFn) &&
-      /painted/.test(moveFn) &&
-      /TEAM_MOVE_SAVE_FAILED_TOAST/.test(board),
-    "quick move persist uses pre-move Draft as rollback snapshot"
+    /confirmedDraftRef/.test(board) &&
+      /pendingIntentsRef/.test(board) &&
+      /PIPELINE_LEADING_FAIL_TOAST/.test(board),
+    "failed pipeline intent drops without restoring an old snapshot"
   );
   const persistFn =
     board.split("async function persistLivePreview")[1]?.split("function quickActionToast")[0] ||
@@ -628,23 +631,21 @@ console.log("== 보드 팀 이동은 미리보기 없이 즉시 apply ==");
     "Draft PUT 409 rolls back optimistic Draft"
   );
   assert(
-    /setError\(blocking\.message\)/.test(moveFn) &&
-      /showToast\(blocking\.message\)/.test(moveFn) &&
-      /moveApplyingRef\.current = false/.test(moveFn),
-    "client-blocked quick move keeps Draft and surfaces the error"
+    /setError\(drop\?\.message/.test(enqueueFn) &&
+      /moveApplyingRef\.current = false/.test(enqueueFn),
+    "client-blocked pipeline intent keeps confirmed Draft and surfaces the error"
   );
-  const quickPersist =
-    board.split("async function persistQuickReservationMove")[1]?.split("async function persistLivePreview")[0] ||
+  const pipelinePersist =
+    board.split("async function persistPipelineIntent")[1]?.split("async function flushPipelineWrites")[0] ||
     "";
   assert(
-    /\/api\/assignments\/reflow\/quick-move/.test(quickPersist) &&
-      /assignmentDraftToPayload\(input\.painted\)/.test(quickPersist) &&
-      /serverDraftVersionRef\.current/.test(quickPersist) &&
-      /rollbackOptimistic\(\)/.test(quickPersist) &&
-      !/\/api\/assignments\/reflow\/apply/.test(quickPersist) &&
-      !/queueDraftSave/.test(quickPersist) &&
-      !/flushDraftSave/.test(quickPersist),
-    "quick move uses atomic quick-move endpoint; no follow-up Draft PUT"
+    /\/api\/assignments\/reflow\/quick-mutation/.test(pipelinePersist) &&
+      /assignmentDraftToPayload\(input\.painted\)/.test(pipelinePersist) &&
+      /serverDraftVersionRef\.current/.test(pipelinePersist) &&
+      !/\/api\/assignments\/reflow\/apply/.test(pipelinePersist) &&
+      !/queueDraftSave/.test(pipelinePersist) &&
+      !/flushDraftSave/.test(pipelinePersist),
+    "pipeline uses atomic quick-mutation endpoint; no follow-up Draft PUT"
   );
   assert(
     /queueDraftSave\(toSave, true\)/.test(persistFn) &&

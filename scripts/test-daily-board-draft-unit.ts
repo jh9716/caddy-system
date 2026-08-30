@@ -756,9 +756,12 @@ section("source guards: API / UI / migration / live save order");
   const moveFn =
     page.split("async function applyReservationMove")[1]?.split("function onRequestLiveChange")[0] ||
     "";
+  const pipelinePersist =
+    page.split("async function persistPipelineIntent")[1]?.split("async function flushPipelineWrites")[0] ||
+    "";
   const quickPersist =
     page.split("async function persistQuickReservationMove")[1]?.split("async function persistLivePreview")[0] ||
-    "";
+    pipelinePersist;
   assert(!/queueDraftSave/.test(failBlock), "failed live mutation block has no queueDraftSave");
   assert(/draftAutosaveCandidate/.test(persist), "success path uses draftAutosaveCandidate");
   assert(/queueDraftSave\(toSave, true\)/.test(persist), "success saves latest draft immediately");
@@ -780,11 +783,11 @@ section("source guards: API / UI / migration / live save order");
     "quick-move persists live + Draft in one transaction"
   );
   assert(
-    /persistQuickReservationMove/.test(moveFn) &&
-      /\/api\/assignments\/reflow\/quick-move/.test(quickPersist) &&
-      !/\/api\/assignments\/reflow\/apply/.test(quickPersist) &&
-      !/queueDraftSave/.test(quickPersist),
-    "board MOVE uses atomic quick-move, not apply+Draft PUT"
+    /enqueuePipelineMutation/.test(moveFn) &&
+      /\/api\/assignments\/reflow\/quick-mutation/.test(pipelinePersist) &&
+      !/\/api\/assignments\/reflow\/apply/.test(pipelinePersist) &&
+      !/queueDraftSave/.test(pipelinePersist),
+    "board MOVE uses atomic pipeline persist, not apply+Draft PUT"
   );
   assert(
     !/loadAvailabilityForDate/.test(applyRoute) &&
@@ -862,6 +865,7 @@ section("source guards: API / UI / migration / live save order");
   assert(!/opsDuty|shiftDuty|specialDuty/.test(payloadType), "payload type omits duty/special/off");
   assert(/houseStartCaddyId\?:/.test(payloadType), "payload stores optional houseStartCaddyId");
   assert(/thirdStartCaddyId\?:/.test(payloadType), "payload stores optional thirdStartCaddyId");
+  assert(/unavailableCaddyIds\?:/.test(payloadType), "payload stores optional unavailableCaddyIds");
   assert(/CONFIRMED/.test(page), "client CONFIRMED kept as legacy ops status");
   assert(/function onConfirm/.test(page), "legacy onConfirm handler kept");
   assert(/async function onApplyToOps/.test(page), "legacy onApplyToOps handler kept");
