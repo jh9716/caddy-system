@@ -556,11 +556,11 @@ console.log("== 보드 팀 이동은 미리보기 없이 즉시 apply ==");
     "empty-cell MOVE applies immediately, no preview dock"
   );
   assert(
-    /persistQuickReservationMove\(/.test(moveFn) &&
+    /persistQueuedQuickMove\(/.test(moveFn) &&
       /previewLiveChangeFromDraft\(/.test(moveFn) &&
       !/persistLivePreview\(/.test(moveFn) &&
       !/fetch\(\s*"\/api\/assignments\/reflow\/preview"/.test(moveFn),
-    "quick move validates locally then persistQuickReservationMove (atomic HTTP)"
+    "quick move validates locally then persistQueuedQuickMove (atomic HTTP)"
   );
   assert(
     /TEAM_MOVED_TOAST/.test(moveFn) &&
@@ -571,17 +571,29 @@ console.log("== 보드 팀 이동은 미리보기 없이 즉시 apply ==");
   );
   assert(
     /moveApplyingRef\.current/.test(emptyFn) &&
-      /moveApplyingRef\.current/.test(moveFn) &&
+      /persistInFlightRef/.test(moveFn) &&
+      /bufferNextMoveIntent/.test(moveFn) &&
       !/disabled=\{moveApplying\}/.test(emptyFn) &&
-      /TEAM_MOVING_LABEL/.test(board),
-    "duplicate MOVE is blocked; empty cells stay enabled"
+      /NEXT_MOVE_WAITING_LABEL/.test(board),
+    "in-flight persist buffers next dest; empty cells stay enabled"
   );
+  const afterPaint = moveFn.split("setDraft(painted)")[1] || "";
   assert(
     /applyLiveResultToDraft\(current, preview\.after\)/.test(moveFn) &&
-      moveFn.indexOf("setDraft(painted)") < moveFn.indexOf("persistQuickReservationMove") &&
+      afterPaint.indexOf("setMoveApplying(false)") >= 0 &&
+      afterPaint.indexOf("persistInFlightRef.current = true") >= 0 &&
+      afterPaint.indexOf("setMoveApplying(false)") <
+        afterPaint.indexOf("persistQueuedQuickMove") &&
       /setDraftSaveState\("saving"\)/.test(moveFn) &&
       !/setMovePendingDest\(\{/.test(moveFn),
-    "quick move paints client preview before persist, no dest 이동 중 overlay"
+    "unlock selection after optimistic paint; persist stays in-flight"
+  );
+  assert(
+    /prepareNextMoveOnConfirmedDraft/.test(board) &&
+      /flushPendingNextMoves/.test(board) &&
+      /NEXT_MOVE_CANCELLED_AFTER_FAIL_TOAST/.test(board) &&
+      !/quickMovePersistQueue/.test(board),
+    "next-move intent buffer uses confirmed Draft; no persist-queue module"
   );
   assert(
     /보드에서 빈 칸 선택/.test(sheet) &&

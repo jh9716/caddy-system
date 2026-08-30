@@ -74,6 +74,7 @@ export async function applyQuickReservationMove(input: {
   ip?: string | null;
   testFailLive?: "error" | null;
   testFailDraft?: "error" | null;
+  testDelayMs?: number;
   prisma?: PrismaClient;
 }): Promise<QuickMoveApplyResult> {
   const events =
@@ -138,6 +139,13 @@ export async function applyQuickReservationMove(input: {
 
   const plan = buildLiveChangePersistPlan(preview);
   const db = input.prisma ?? defaultPrisma;
+  const delayMs = Number(input.testDelayMs || 0);
+  if (delayMs > 0 && isLocalDatabaseUrl(process.env.DATABASE_URL)) {
+    console.info("[quick-move] testDelayMs", delayMs);
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.min(Math.floor(delayMs), 10000))
+    );
+  }
   const persistStarted = Date.now();
   try {
     const written = await db.$transaction(
