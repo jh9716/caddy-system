@@ -107,19 +107,8 @@ import {
   reservationMoveBlockReason,
   TEAM_MOVED_TOAST,
   TEAM_MOVE_SAVE_FAILED_TOAST,
+  TEAM_MOVING_LABEL,
 } from "@/lib/reservationMove";
-import {
-  NEXT_MOVE_CANCELLED_AFTER_FAIL_TOAST,
-  NEXT_MOVE_PENDING_CANCELLED_TOAST,
-  NEXT_MOVE_WAITING_FULL,
-  NEXT_MOVE_WAITING_LABEL,
-  nextMoveIntentFromChange,
-  prepareNextMoveOnConfirmedDraft,
-  readQuickMoveTestDelayMs,
-  readQuickMoveTestFail,
-  resolvePendingAfterLeadingPersist,
-  type NextMoveIntent,
-} from "@/lib/nextMoveIntent";
 import {
   assignmentDraftToPayload,
   DRAFT_VERSION_CONFLICT,
@@ -345,9 +334,6 @@ export default function ManageAssignmentsOpsPage() {
   const [moveKey, setMoveKey] = useState<string | null>(null);
   const [moveSheetOpen, setMoveSheetOpen] = useState(false);
   const [moveApplying, setMoveApplying] = useState(false);
-  const [pendingNextMove, setPendingNextMove] = useState<NextMoveIntent | null>(
-    null
-  );
   const [movePendingDest, setMovePendingDest] = useState<{
     course: CourseCode;
     shift: ShiftPart;
@@ -383,9 +369,6 @@ export default function ManageAssignmentsOpsPage() {
   const draftSaveInFlightPromiseRef = useRef<Promise<unknown> | null>(null);
   const publishingRef = useRef(false);
   const moveApplyingRef = useRef(false);
-  const persistInFlightRef = useRef(false);
-  const [persistInFlight, setPersistInFlight] = useState(false);
-  const pendingNextMoveRef = useRef<NextMoveIntent | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const boardWrapRef = useRef<HTMLDivElement | null>(null);
   draftRef.current = draft;
@@ -412,8 +395,6 @@ export default function ManageAssignmentsOpsPage() {
       setMoveKey(null);
       setMoveSheetOpen(false);
       setMoveApplying(false);
-      pendingNextMoveRef.current = null;
-      setPendingNextMove(null);
       setMovePendingDest(null);
       setQuickSheet(null);
       setExpandedKey(null);
@@ -1465,77 +1446,8 @@ export default function ManageAssignmentsOpsPage() {
     if (moveApplyingRef.current) return;
     setMoveKey(null);
     setMoveSheetOpen(false);
+    setMovePendingDest(null);
     showToast("팀 이동을 취소했습니다");
-  }
-
-  function qmGate(event: string, extra?: Record<string, unknown>) {
-    if (typeof window === "undefined") return;
-    if (readQuickMoveTestDelayMs() <= 0) return;
-    const w = window as Window & {
-      __quickMoveGate?: Array<Record<string, unknown>>;
-    };
-    w.__quickMoveGate = w.__quickMoveGate || [];
-    const row = { t: Date.now(), event, ...extra };
-    w.__quickMoveGate.push(row);
-    console.info("[qm-gate]", row);
-  }
-
-  function setPendingNextMoveIntent(intent: NextMoveIntent | null) {
-    pendingNextMoveRef.current = intent;
-    setPendingNextMove(intent);
-    setMovePendingDest(intent ? intent.dest : null);
-    qmGate(intent ? "pending" : "pending-clear", {
-      dest: intent?.dest ?? null,
-      sourceKey: intent?.sourceKey ?? null,
-    });
-  }
-
-  function clearPendingNextMove() {
-    setPendingNextMoveIntent(null);
-  }
-
-  function cancelPendingNextMove() {
-    if (!pendingNextMoveRef.current) return;
-    clearPendingNextMove();
-    showToast(NEXT_MOVE_PENDING_CANCELLED_TOAST);
-  }
-
-  function cancelPendingAfterLeadingFail() {
-    const resolved = resolvePendingAfterLeadingPersist({
-      leadingOk: false,
-      pending: pendingNextMoveRef.current,
-    });
-    if (resolved.toast) {
-      clearPendingNextMove();
-      showToast(resolved.toast);
-    }
-  }
-
-  function bufferNextMoveIntent(change: LiveChangeInput) {
-    const intent = nextMoveIntentFromChange(change);
-    if (!intent) {
-      const msg = "목적 부/코스/티타임을 확인하세요.";
-      setError(msg);
-      showToast(msg);
-      return;
-    }
-    const current = draftRef.current;
-    if (current) {
-      const prepared = prepareNextMoveOnConfirmedDraft({
-        confirmedDraft: current,
-        intent,
-        specialSupportByShift,
-      });
-      if (!prepared.ok) {
-        setError(prepared.message);
-        showToast(prepared.message);
-        return;
-      }
-    }
-    setPendingNextMoveIntent(intent);
-    setMoveKey(null);
-    setMoveSheetOpen(false);
-    setQuickSheet(null);
   }
 
   function restoreBoardScroll(wrap: HTMLDivElement | null, scrollTop: number) {
@@ -1546,78 +1458,8 @@ export default function ManageAssignmentsOpsPage() {
     });
   }
 
-  async function persistQueuedQuickMove(input: {
-    preview: LiveChangePreview;
-    previous: AutoAssignResultV1;
-    pool: AutoAssignCaddy[];
-    painted: AssignmentDraft;
-    rollbackDraft: AssignmentDraft;
-  }): Promise<{ ok: true; draft: AssignmentDraft } | { ok: false }> {
-    let persistResult: { ok: true; draft: AssignmentDraft } | { ok: false } = {
-      ok: false,
-    };
-    const gen = persistGenRef.current;
-    await (persistQueueRef.current = persistQueueRef.current.then(async () => {
-      if (gen !== persistGenRef.current) return;
-      persistResult = await persistQuickReservationMove(input);
-      if (!persistResult.ok) persistGenRef.current += 1;
-    }));
-    return persistResult;
-  }
-
-  async function flushPendingNextMoves(confirmedDraft: AssignmentDraft) {
-    let base = confirmedDraft;
-    while (pendingNextMoveRef.current) {
-      const intent = pendingNextMoveRef.current;
-      const resolved = resolvePendingAfterLeadingPersist({
-        leadingOk: true,
-        pending: intent,
-      });
-      if (!resolved.autoRun || !resolved.pending) break;
-      clearPendingNextMove();
-      const livePool = excludeCaddiesById(base.caddyPool, opsDutyCaddyIds);
-      const prepared = prepareNextMoveOnConfirmedDraft({
-        confirmedDraft: { ...base, caddyPool: livePool },
-        intent: resolved.pending,
-        specialSupportByShift,
-      });
-      if (!prepared.ok) {
-        setError(prepared.message);
-        showToast(prepared.message);
-        break;
-      }
-      const wrap = boardWrapRef.current;
-      const scrollTop = wrap?.scrollTop ?? 0;
-      setDraft(prepared.painted);
-      setWarnings(detectDraftWarnings(prepared.painted));
-      setUnavailableCaddyIds(prepared.preview.unavailableCaddyIds || []);
-      if (autoResultRef.current) {
-        setAutoResult({ ...autoResultRef.current, ...prepared.preview.after });
-      }
-      setDraftSaveState("saving");
-      restoreBoardScroll(wrap, scrollTop);
-      const persistResult = await persistQueuedQuickMove({
-        preview: prepared.preview,
-        previous: prepared.previous,
-        pool: livePool,
-        painted: prepared.painted,
-        rollbackDraft: base,
-      });
-      if (!persistResult.ok) {
-        cancelPendingAfterLeadingFail();
-        break;
-      }
-      showToast(TEAM_MOVED_TOAST, 2800);
-      base = persistResult.draft;
-    }
-  }
-
   async function applyReservationMove(change: LiveChangeInput) {
     if (change.type !== "MOVE_RESERVATION") return;
-    if (persistInFlightRef.current) {
-      bufferNextMoveIntent(change);
-      return;
-    }
     if (moveApplyingRef.current) return;
     const current = draftRef.current;
     if (!current) return;
@@ -1634,6 +1476,7 @@ export default function ManageAssignmentsOpsPage() {
     setMoveApplying(true);
     setMoveSheetOpen(false);
     setLiveChangePreset(null);
+    setMovePendingDest(null);
     setError(null);
 
     const wrap = boardWrapRef.current;
@@ -1666,29 +1509,26 @@ export default function ManageAssignmentsOpsPage() {
     setMoveKey(null);
     setDraftSaveState("saving");
     restoreBoardScroll(wrap, scrollTop);
-    persistInFlightRef.current = true;
-    setPersistInFlight(true);
-    moveApplyingRef.current = false;
-    setMoveApplying(false);
 
     try {
-      const persistResult = await persistQueuedQuickMove({
-        preview,
-        previous,
-        pool: livePool,
-        painted,
-        rollbackDraft: current,
-      });
-      if (persistResult.ok) {
+      let ok = false;
+      const gen = persistGenRef.current;
+      await (persistQueueRef.current = persistQueueRef.current.then(async () => {
+        if (gen !== persistGenRef.current) return;
+        ok = await persistQuickReservationMove({
+          preview,
+          previous,
+          pool: livePool,
+          painted,
+          rollbackDraft: current,
+        });
+        if (!ok) persistGenRef.current += 1;
+      }));
+      if (ok) {
         setMoveSheetOpen(false);
         showToast(TEAM_MOVED_TOAST, 2800);
-        await flushPendingNextMoves(persistResult.draft);
-      } else {
-        cancelPendingAfterLeadingFail();
       }
     } finally {
-      persistInFlightRef.current = false;
-      setPersistInFlight(false);
       moveApplyingRef.current = false;
       setMoveApplying(false);
     }
@@ -1718,13 +1558,6 @@ export default function ManageAssignmentsOpsPage() {
       moveReservationKey: moveKey,
     });
     if (change.type === "MOVE_RESERVATION") {
-      const sourceRow =
-        draft.assignments.find(
-          (a) => reservationIdentity(a.reservation) === moveKey
-        ) || null;
-      if (sourceRow?.reservation.id != null) {
-        change.reservationId = sourceRow.reservation.id;
-      }
       void applyReservationMove(change);
       return;
     }
@@ -1910,22 +1743,13 @@ export default function ManageAssignmentsOpsPage() {
     pool: AutoAssignCaddy[];
     painted: AssignmentDraft;
     rollbackDraft: AssignmentDraft;
-  }): Promise<{ ok: true; draft: AssignmentDraft } | { ok: false }> {
+  }): Promise<boolean> {
     setError(null);
     const rollbackOptimistic = () => {
       setDraft(input.rollbackDraft);
       setWarnings(detectDraftWarnings(input.rollbackDraft));
     };
     try {
-      const delayMs = readQuickMoveTestDelayMs();
-      const testFailLive = readQuickMoveTestFail();
-      if (delayMs > 0) {
-        console.info("[quick-move] sending testDelayMs", delayMs);
-      }
-      qmGate("request-start", {
-        version: serverDraftVersionRef.current,
-        delayMs,
-      });
       const res = await fetch("/api/assignments/reflow/quick-move", {
         method: "POST",
         credentials: "include",
@@ -1940,12 +1764,9 @@ export default function ManageAssignmentsOpsPage() {
             version: serverDraftVersionRef.current,
             payload: assignmentDraftToPayload(input.painted),
           },
-          ...(testFailLive ? { testFailLive } : {}),
-          ...(delayMs > 0 ? { testDelayMs: delayMs } : {}),
         }),
       });
       const data = await res.json().catch(() => ({}));
-      qmGate("request-end", { status: res.status });
       if (!res.ok) {
         rollbackOptimistic();
         setDraftSaveState(res.status === 409 ? "conflict" : "error");
@@ -1957,7 +1778,7 @@ export default function ManageAssignmentsOpsPage() {
               : "배치 저장 중 오류가 발생했습니다. 다시 시도해주세요.")
         );
         showToast(TEAM_MOVE_SAVE_FAILED_TOAST);
-        return { ok: false };
+        return false;
       }
       const after = (data.preview?.after ||
         input.preview.after) as typeof input.preview.after;
@@ -1981,13 +1802,13 @@ export default function ManageAssignmentsOpsPage() {
         );
       }
       setDraftSaveState("saved");
-      return { ok: true, draft: next };
+      return true;
     } catch (e: unknown) {
       rollbackOptimistic();
       setDraftSaveState("error");
       setError(e instanceof Error ? e.message : "현장 변경 적용 실패");
       showToast(TEAM_MOVE_SAVE_FAILED_TOAST);
-      return { ok: false };
+      return false;
     }
   }
 
@@ -2241,10 +2062,7 @@ export default function ManageAssignmentsOpsPage() {
   }
 
   return (
-    <div
-      className="ops-root"
-      data-quick-move-delay={readQuickMoveTestDelayMs() || undefined}
-    >
+    <div className="ops-root">
       <header className="ops-header">
         <div>
           <h1>자동배치 운영</h1>
@@ -2781,52 +2599,6 @@ export default function ManageAssignmentsOpsPage() {
               </div>
             ) : null}
 
-            {readQuickMoveTestDelayMs() > 0 ? (
-              <pre
-                id="qm-gate-hud"
-                data-persist-in-flight={persistInFlight ? "1" : "0"}
-                data-pending={pendingNextMove ? "1" : "0"}
-                style={{
-                  margin: "8px 0",
-                  padding: 8,
-                  fontSize: 12,
-                  background: "#111827",
-                  color: "#f9fafb",
-                  borderRadius: 8,
-                }}
-              >
-                {`delay=${readQuickMoveTestDelayMs()} persistInFlight=${persistInFlight ? "1" : "0"} pending=${
-                  pendingNextMove
-                    ? `${pendingNextMove.dest.shift} ${pendingNextMove.dest.teeTime} ${pendingNextMove.dest.course}`
-                    : "none"
-                }`}
-              </pre>
-            ) : null}
-
-            {pendingNextMove ? (
-              <div
-                className="move-mode-banner pending-next-banner"
-                role="status"
-                data-pending-next-move="1"
-              >
-                <div>
-                  <strong>{NEXT_MOVE_WAITING_FULL}</strong>
-                  <span>
-                    {pendingNextMove.dest.shift} {pendingNextMove.dest.teeTime}{" "}
-                    {COURSE_LABELS[pendingNextMove.dest.course]} · 앞선 이동이
-                    저장되면 적용합니다.
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  className="btn tiny ghost"
-                  onClick={cancelPendingNextMove}
-                >
-                  대기 취소
-                </button>
-              </div>
-            ) : null}
-
             {shiftTab !== "UNASSIGNED" &&
               shiftTab !== "CLOSED" &&
               viewMode === "board" &&
@@ -2907,29 +2679,22 @@ export default function ManageAssignmentsOpsPage() {
                                       type="button"
                                       className={`bc-cell empty ${
                                         moveDest ? "move-dest" : "addable"
-                                      }${pendingDest ? " pending pending-next" : ""}`}
+                                      }${pendingDest ? " pending" : ""}`}
                                       role="cell"
                                       aria-busy={pendingDest}
-                                      data-pending-next-dest={
-                                        pendingDest ? "1" : undefined
-                                      }
                                       aria-label={
                                         pendingDest
-                                          ? `${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} ${NEXT_MOVE_WAITING_FULL}`
+                                          ? `${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} ${TEAM_MOVING_LABEL}`
                                           : moveDest
                                           ? `${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} 이동 목적지 선택`
                                           : `${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} 추가팀 등록`
                                       }
-                                      onClick={() => {
-                                        if (pendingDest && !moveKey) {
-                                          cancelPendingNextMove();
-                                          return;
-                                        }
-                                        onEmptyBoardCellClick(code, tr.teeTime);
-                                      }}
+                                      onClick={() =>
+                                        onEmptyBoardCellClick(code, tr.teeTime)
+                                      }
                                     >
                                       {pendingDest
-                                        ? NEXT_MOVE_WAITING_LABEL
+                                        ? TEAM_MOVING_LABEL
                                         : moveDest
                                           ? "이동"
                                           : "-"}
@@ -3796,18 +3561,10 @@ const opsCss = `
     outline-offset: -2px;
   }
   button.bc-cell.empty.move-dest.pending,
-  button.bc-cell.empty.move-dest:disabled,
-  button.bc-cell.empty.pending-next {
-    cursor: pointer;
+  button.bc-cell.empty.move-dest:disabled {
+    cursor: wait;
     color: #c2410c;
     background: #fff7ed;
-    font-size: 0.55rem;
-    font-weight: 700;
-  }
-  .pending-next-banner {
-    background: #fffbeb;
-    border-color: #fcd34d;
-    color: #92400e;
   }
   @media (max-width: 640px) {
     button.bc-cell.empty.move-dest {
