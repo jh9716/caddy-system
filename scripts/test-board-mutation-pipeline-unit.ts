@@ -12,6 +12,14 @@ import {
   readPipelineTestDelayMs,
   readPipelineTestFail,
 } from "../src/lib/boardMutationPipeline";
+import {
+  PIPELINE_DIRTY_STORAGE_KEY,
+  clearPipelineDirty,
+  consumePipelineDirty,
+  markPipelineDirty,
+  pipelineHasUnsavedWork,
+  shouldBlockAnchorNavigation,
+} from "../src/lib/pipelineUnloadGuard";
 import { resolveHouseQueueKeepingOrigin } from "../src/lib/autoAssignEngine";
 import {
   autoResultFromDraft,
@@ -283,6 +291,45 @@ section("dock preview reconstructs pipeline change");
   assert(change && "caddyId" in change && change.caddyId === 서승희.id, "keeps caddyId");
 }
 
+section("unload guard");
+{
+  assert(pipelineHasUnsavedWork({ pendingIntentCount: 0, persistInFlight: false }) === false, "idle is clean");
+  assert(pipelineHasUnsavedWork({ pendingIntentCount: 2, persistInFlight: false }) === true, "queued intents dirty");
+  assert(pipelineHasUnsavedWork({ pendingIntentCount: 0, persistInFlight: true }) === true, "in-flight dirty");
+  assert(
+    shouldBlockAnchorNavigation({ href: "/manage", target: null, button: 0 }) === true,
+    "blocks same-tab nav"
+  );
+  assert(
+    shouldBlockAnchorNavigation({ href: "/manage", target: "_blank", button: 0 }) === false,
+    "allows new tab"
+  );
+  assert(
+    shouldBlockAnchorNavigation({ href: "/manage", button: 0, metaKey: true }) === false,
+    "allows modified click"
+  );
+  const mem = new Map<string, string>();
+  const storage = {
+    setItem(k: string, v: string) {
+      mem.set(k, v);
+    },
+    getItem(k: string) {
+      return mem.get(k) ?? null;
+    },
+    removeItem(k: string) {
+      mem.delete(k);
+    },
+  };
+  markPipelineDirty(storage, { date: "2099-12-21", count: 2 });
+  assert(mem.has(PIPELINE_DIRTY_STORAGE_KEY), "marks dirty");
+  const left = consumePipelineDirty(storage);
+  assert(left?.date === "2099-12-21" && left.count === 2, "consumes dirty once");
+  assert(consumePipelineDirty(storage) === null, "second consume empty");
+  markPipelineDirty(storage, { date: "2099-12-21", count: 1 });
+  clearPipelineDirty(storage);
+  assert(consumePipelineDirty(storage) === null, "clear removes dirty");
+}
+
 section("source contracts");
 {
   const page = readFileSync(join(process.cwd(), "src/app/manage/assignments/page.tsx"), "utf8");
@@ -292,6 +339,9 @@ section("source contracts");
   assert(page.includes("/api/assignments/reflow/quick-mutation"), "page uses atomic mutation route");
   assert(page.includes("changeFromPipelinePreview"), "dock apply joins pipeline");
   assert(page.includes("pendingIntentsRef.current.length > 0"), "flush restarts if more pending");
+  assert(page.includes("keepalive: true"), "pipeline fetch uses keepalive");
+  assert(page.includes("beforeunload"), "page blocks refresh while dirty");
+  assert(page.includes("PIPELINE_UNLOAD_TOAST"), "in-app nav toast while dirty");
   assert(!page.includes("nextMoveIntent"), "no leftover next-move intent");
   assert(apply.includes("CADDY_SICK"), "atomic persist includes sick");
   assert(apply.includes("$transaction"), "atomic persist is one transaction");
