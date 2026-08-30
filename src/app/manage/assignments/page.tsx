@@ -384,6 +384,7 @@ export default function ManageAssignmentsOpsPage() {
   const publishingRef = useRef(false);
   const moveApplyingRef = useRef(false);
   const persistInFlightRef = useRef(false);
+  const [persistInFlight, setPersistInFlight] = useState(false);
   const pendingNextMoveRef = useRef<NextMoveIntent | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const boardWrapRef = useRef<HTMLDivElement | null>(null);
@@ -1467,10 +1468,26 @@ export default function ManageAssignmentsOpsPage() {
     showToast("팀 이동을 취소했습니다");
   }
 
+  function qmGate(event: string, extra?: Record<string, unknown>) {
+    if (typeof window === "undefined") return;
+    if (readQuickMoveTestDelayMs() <= 0) return;
+    const w = window as Window & {
+      __quickMoveGate?: Array<Record<string, unknown>>;
+    };
+    w.__quickMoveGate = w.__quickMoveGate || [];
+    const row = { t: Date.now(), event, ...extra };
+    w.__quickMoveGate.push(row);
+    console.info("[qm-gate]", row);
+  }
+
   function setPendingNextMoveIntent(intent: NextMoveIntent | null) {
     pendingNextMoveRef.current = intent;
     setPendingNextMove(intent);
     setMovePendingDest(intent ? intent.dest : null);
+    qmGate(intent ? "pending" : "pending-clear", {
+      dest: intent?.dest ?? null,
+      sourceKey: intent?.sourceKey ?? null,
+    });
   }
 
   function clearPendingNextMove() {
@@ -1650,6 +1667,7 @@ export default function ManageAssignmentsOpsPage() {
     setDraftSaveState("saving");
     restoreBoardScroll(wrap, scrollTop);
     persistInFlightRef.current = true;
+    setPersistInFlight(true);
     moveApplyingRef.current = false;
     setMoveApplying(false);
 
@@ -1670,6 +1688,7 @@ export default function ManageAssignmentsOpsPage() {
       }
     } finally {
       persistInFlightRef.current = false;
+      setPersistInFlight(false);
       moveApplyingRef.current = false;
       setMoveApplying(false);
     }
@@ -1903,6 +1922,10 @@ export default function ManageAssignmentsOpsPage() {
       if (delayMs > 0) {
         console.info("[quick-move] sending testDelayMs", delayMs);
       }
+      qmGate("request-start", {
+        version: serverDraftVersionRef.current,
+        delayMs,
+      });
       const res = await fetch("/api/assignments/reflow/quick-move", {
         method: "POST",
         credentials: "include",
@@ -1922,6 +1945,7 @@ export default function ManageAssignmentsOpsPage() {
         }),
       });
       const data = await res.json().catch(() => ({}));
+      qmGate("request-end", { status: res.status });
       if (!res.ok) {
         rollbackOptimistic();
         setDraftSaveState(res.status === 409 ? "conflict" : "error");
@@ -2755,6 +2779,28 @@ export default function ManageAssignmentsOpsPage() {
                   이동 취소
                 </button>
               </div>
+            ) : null}
+
+            {readQuickMoveTestDelayMs() > 0 ? (
+              <pre
+                id="qm-gate-hud"
+                data-persist-in-flight={persistInFlight ? "1" : "0"}
+                data-pending={pendingNextMove ? "1" : "0"}
+                style={{
+                  margin: "8px 0",
+                  padding: 8,
+                  fontSize: 12,
+                  background: "#111827",
+                  color: "#f9fafb",
+                  borderRadius: 8,
+                }}
+              >
+                {`delay=${readQuickMoveTestDelayMs()} persistInFlight=${persistInFlight ? "1" : "0"} pending=${
+                  pendingNextMove
+                    ? `${pendingNextMove.dest.shift} ${pendingNextMove.dest.teeTime} ${pendingNextMove.dest.course}`
+                    : "none"
+                }`}
+              </pre>
             ) : null}
 
             {pendingNextMove ? (
