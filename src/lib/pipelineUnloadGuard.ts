@@ -21,6 +21,14 @@ export function pipelineHasUnsavedWork(input: {
   return Boolean(input.persistInFlight) || Number(input.pendingIntentCount) > 0;
 }
 
+/** Clean only after the queue drained and every persist in this flush succeeded. */
+export function shouldClearPipelineDirty(input: {
+  pendingIntentCount: number;
+  flushHadFailure: boolean;
+}): boolean {
+  return Number(input.pendingIntentCount) === 0 && !input.flushHadFailure;
+}
+
 export function shouldBlockAnchorNavigation(input: {
   href: string | null | undefined;
   target?: string | null;

@@ -19,6 +19,7 @@ import {
   markPipelineDirty,
   pipelineHasUnsavedWork,
   shouldBlockAnchorNavigation,
+  shouldClearPipelineDirty,
 } from "../src/lib/pipelineUnloadGuard";
 import { resolveHouseQueueKeepingOrigin } from "../src/lib/autoAssignEngine";
 import {
@@ -328,6 +329,18 @@ section("unload guard");
   markPipelineDirty(storage, { date: "2099-12-21", count: 1 });
   clearPipelineDirty(storage);
   assert(consumePipelineDirty(storage) === null, "clear removes dirty");
+  assert(
+    shouldClearPipelineDirty({ pendingIntentCount: 0, flushHadFailure: false }) === true,
+    "clear after successful drain"
+  );
+  assert(
+    shouldClearPipelineDirty({ pendingIntentCount: 1, flushHadFailure: false }) === false,
+    "keep dirty while pending remain"
+  );
+  assert(
+    shouldClearPipelineDirty({ pendingIntentCount: 0, flushHadFailure: true }) === false,
+    "keep dirty after persist failure"
+  );
 }
 
 section("source contracts");
@@ -342,6 +355,7 @@ section("source contracts");
   assert(page.includes("keepalive: true"), "pipeline fetch uses keepalive");
   assert(page.includes("beforeunload"), "page blocks refresh while dirty");
   assert(page.includes("PIPELINE_UNLOAD_TOAST"), "in-app nav toast while dirty");
+  assert(page.includes("shouldClearPipelineDirty"), "page clears dirty only after successful drain");
   assert(!page.includes("nextMoveIntent"), "no leftover next-move intent");
   assert(apply.includes("CADDY_SICK"), "atomic persist includes sick");
   assert(apply.includes("$transaction"), "atomic persist is one transaction");

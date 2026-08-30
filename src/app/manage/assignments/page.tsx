@@ -148,6 +148,7 @@ import {
   markPipelineDirty,
   pipelineHasUnsavedWork,
   shouldBlockAnchorNavigation,
+  shouldClearPipelineDirty,
 } from "@/lib/pipelineUnloadGuard";
 
 type ResultViewMode = "board" | "list";
@@ -1715,6 +1716,7 @@ export default function ManageAssignmentsOpsPage() {
     if (persistInFlightRef.current) return;
     persistInFlightRef.current = true;
     setPersistInFlight(true);
+    let flushHadFailure = false;
     try {
       while (pendingIntentsRef.current.length > 0) {
         const confirmed = confirmedDraftRef.current || draftRef.current;
@@ -1751,6 +1753,7 @@ export default function ManageAssignmentsOpsPage() {
           change: intent.change,
         });
         if (!persist.ok) {
+          flushHadFailure = true;
           pendingIntentsRef.current = dropIntent(
             pendingIntentsRef.current,
             intent.id
@@ -1803,7 +1806,12 @@ export default function ManageAssignmentsOpsPage() {
           count: pendingIntentsRef.current.length,
         });
         void flushPipelineWrites();
-      } else {
+      } else if (
+        shouldClearPipelineDirty({
+          pendingIntentCount: 0,
+          flushHadFailure,
+        })
+      ) {
         clearPipelineDirty(window.sessionStorage);
         setDraftSaveState("saved");
       }
