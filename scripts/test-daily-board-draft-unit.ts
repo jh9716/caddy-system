@@ -858,7 +858,10 @@ section("source guards: API / UI / migration / live save order");
   assert(/updatedByUserId\s+Int\?/.test(schema), "nullable updatedByUserId");
   assert(/date\s+DateTime\s+@unique/.test(schema.split("model DailyBoardDraft")[1] || ""), "date unique");
 
-  assert(!/opsDuty|shiftDuty|specialDuty|thirdStart/.test(payloadLib.split("export type DailyBoardDraftPayloadV1")[1]?.split("export class")[0] || ""), "payload type omits duty/special/off");
+  const payloadType = payloadLib.split("export type DailyBoardDraftPayloadV1")[1]?.split("export class")[0] || "";
+  assert(!/opsDuty|shiftDuty|specialDuty/.test(payloadType), "payload type omits duty/special/off");
+  assert(/houseStartCaddyId\?:/.test(payloadType), "payload stores optional houseStartCaddyId");
+  assert(/thirdStartCaddyId\?:/.test(payloadType), "payload stores optional thirdStartCaddyId");
   assert(/CONFIRMED/.test(page), "client CONFIRMED kept as legacy ops status");
   assert(/function onConfirm/.test(page), "legacy onConfirm handler kept");
   assert(/async function onApplyToOps/.test(page), "legacy onApplyToOps handler kept");
