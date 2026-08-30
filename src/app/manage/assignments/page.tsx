@@ -1900,6 +1900,9 @@ export default function ManageAssignmentsOpsPage() {
     try {
       const delayMs = readQuickMoveTestDelayMs();
       const testFailLive = readQuickMoveTestFail();
+      if (delayMs > 0) {
+        console.info("[quick-move] sending testDelayMs", delayMs);
+      }
       const res = await fetch("/api/assignments/reflow/quick-move", {
         method: "POST",
         credentials: "include",
