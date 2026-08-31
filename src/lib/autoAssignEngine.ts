@@ -5134,7 +5134,12 @@ export function reflowRegularAssignments(input: {
     .sort(compareCaddyOrder);
   const pools = splitCaddyPools(pool);
   const originalHouse = splitCaddyPools(
-    eligibleRegularReflowCaddies([...fullPool, ...extraSpecials])
+    eligibleRegularReflowCaddies([
+      ...fullPool,
+      ...extraSpecials,
+      ...previous.assignments.map((row) => row.caddy),
+      ...(previous.unusedCaddies || []),
+    ])
       .filter((c) => !lockedCaddies.has(c.id) && !autoSpecialIds.has(c.id))
       .sort(compareCaddyOrder)
   ).house;

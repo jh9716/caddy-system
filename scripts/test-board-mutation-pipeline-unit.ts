@@ -162,6 +162,24 @@ section("서승희 병가 pull-forward");
   assert(after.meta.houseStartCaddyId === 서승희.id, "병가 후에도 원래 HOUSE 시작점 유지");
 }
 
+section("canonical compute pool SICK of houseStart keeps origin");
+{
+  const draft = fixtureDraft();
+  const computeWithoutStart = pool.filter((c) => c.id !== 서승희.id);
+  const preview = previewLiveChangeFromDraft({
+    draft,
+    change: { type: "CADDY_SICK", caddyId: 서승희.id, shift: "1부" },
+    regularCaddyPool: computeWithoutStart,
+  });
+  const names = preview.after.assignments
+    .filter((a) => a.shift === "1부" && a.kind === "regular")
+    .sort((a, b) => a.sequenceIndex - b.sequenceIndex)
+    .map((a) => a.caddy.name);
+  assert(names[0] === "김하나1", "persist-style pool still pull-forwards to 김하나1");
+  assert(!names.includes("서승희"), "victim out of persist-style pool reflow");
+  assert(!names.includes("김예진1"), "canonical SICK of start does not reset to 1조 first");
+}
+
 section("resolveHouseQueueKeepingOrigin");
 {
   const remaining = [김하나1, nextH, s1];
