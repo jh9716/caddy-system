@@ -42,7 +42,7 @@ import {
   snapshotComputePool,
 } from "../src/lib/caddyPoolCanonical";
 import { snapshotComputePoolFromDraft } from "../src/lib/assignmentDraft";
-import { peekCachedOffSheets, seedOffSheetCacheForTests, invalidateOffSheetCache } from "../src/lib/offSheetFetch";
+import { peekCachedOffSheets, peekCachedOffSheetsForDate, seedOffSheetCacheForTests, invalidateOffSheetCache } from "../src/lib/offSheetFetch";
 import type { ShiftPart } from "../src/lib/reservationParser";
 import { readFileSync } from "fs";
 import { join } from "path";
@@ -560,6 +560,10 @@ section("off-sheet cache peek never fetches");
   seedOffSheetCacheForTests([{ name: "0817~30", matrix: [["날짜"], ["0828"]] }]);
   const peeked = peekCachedOffSheets();
   assert(!!peeked && peeked[0]?.name === "0817~30", "peek returns seeded cache");
+  assert(
+    peekCachedOffSheetsForDate("2026-08-28") === null,
+    "workbook without today's header is not date-safe"
+  );
   invalidateOffSheetCache();
 }
 

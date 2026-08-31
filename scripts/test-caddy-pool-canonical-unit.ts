@@ -504,6 +504,41 @@ section("2026-08-28 corrupted 84/93 fixture");
   assert(!!fixedSpare?.spare1 && !!fixedSpare?.spare2, "fixed spare1+spare2 exist");
   assert(fixed.unassignedReservations.length === 0, "no unassigned after recovery");
 
+  const victim = fixed.assignments.find((a) => a.shift === "2부" && a.kind === "regular")!;
+  const afterSick = reflowRegularAssignments({
+    previous: fixed,
+    regularCaddyPool: recoveredPool.filter((c) => c.id !== victim.caddy.id),
+    events: [
+      {
+        type: "REMOVE_CADDY",
+        caddyId: victim.caddy.id,
+        cause: "SICK",
+        fromShift: "2부",
+      },
+    ],
+  });
+  const sickSpare = spareForShift(afterSick.after.sparesByShift, "2부");
+  assert(
+    !afterSick.after.assignments.some((a) => a.caddy.id === victim.caddy.id),
+    "SICK victim removed from 84-team board"
+  );
+  assert(
+    UNJUST_IDS.filter((id) => id !== victim.caddy.id).every((id) =>
+      recoveredPool.some((x) => x.id === id)
+    ),
+    "누락 8 remain in compute pool after SICK"
+  );
+  assert(
+    ![...off, ...sick].some((c) =>
+      afterSick.after.assignments.some((a) => a.caddy.id === c.id) ||
+      sickSpare?.spare1?.caddyId === c.id ||
+      sickSpare?.spare2?.caddyId === c.id
+    ),
+    "OFF/SICK stay out of placements and spares after mutation"
+  );
+  checkSpares(afterSick.after, "2부", 92, 84);
+  assert(!!sickSpare?.spare1 && !!sickSpare?.spare2, "after SICK spare1+spare2 remain (R=8)");
+
   const recoveredBaseline = mergeRosterBaseline(corruptedPool, usable);
   const staleDraft = createDraftFromAutoResult(broken, corruptedPool);
   staleDraft.unavailableCaddyIds = [...sick.map((c) => c.id), 27, 8];
@@ -628,9 +663,9 @@ section("source: no stale unavailable union / no destructive pool shrink");
   assert(
     /resolveCanonicalUnavailableIds/.test(apply) &&
       /loadCanonicalReflowState/.test(apply) &&
-      /offSheetMode:\s*"cache"/.test(apply) &&
+      /offSheetMode:\s*"cache-or-fetch"/.test(apply) &&
       /skipCanonicalReload/.test(apply),
-    "quick mutation rebuilds SoT from cache-only canonical, no double fetch"
+    "quick mutation rebuilds SoT from cache-or-fetch canonical, no double fetch"
   );
   assert(
     /uniquePositiveIds\(after\.unavailableCaddyIds/.test(draft),
@@ -659,17 +694,17 @@ section("source: no stale unavailable union / no destructive pool shrink");
   const offFetch = read("src/lib/offSheetFetch.ts");
   const service = read("src/lib/caddyPoolCanonicalService.ts");
   const route = read("src/app/api/assignments/reflow/quick-mutation/route.ts");
-  assert(/peekCachedOffSheets/.test(offFetch), "off-sheet cache can be peeked");
+  assert(/peekCachedOffSheetsForDate/.test(offFetch), "off-sheet cache is date-safe");
   assert(
-    /offSheetMode === "cache"/.test(service) &&
-      /peekCachedOffSheets/.test(service),
-    "canonical cache mode does not call Google"
+    /cache-or-fetch/.test(service) &&
+      /peekCachedOffSheetsForDate/.test(service),
+    "persist peeks date-matched cache then fetches on miss"
   );
   assert(
-    /offSheetMode:\s*"cache"/.test(route) &&
+    /offSheetMode:\s*"cache-or-fetch"/.test(route) &&
       /skipCanonicalReload:\s*true/.test(route) &&
       !/fetchPublishedOffSheets/.test(route),
-    "quick-mutation route is cache-only and single-load"
+    "quick-mutation route is cache-or-fetch and single-load"
   );
   assert(
     /resolved\.unavailableIds/.test(reflow),

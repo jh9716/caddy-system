@@ -72,7 +72,7 @@ export async function POST(req: NextRequest) {
     const tSupport = Date.now();
     const [poolResult, supportResult] = await Promise.all([
       resolveCanonicalLivePool(previous.date, regularCaddyPool, {
-        offSheetMode: "cache",
+        offSheetMode: "cache-or-fetch",
         rosterClientPool: payloadPool,
         computeClientPool: regularCaddyPool,
       }).then((resolved) => {
@@ -142,7 +142,7 @@ export async function POST(req: NextRequest) {
         computeMs: result.timings?.computeMs ?? null,
         persistMs: result.timings?.persistMs ?? null,
         totalMs: Date.now() - started,
-        offSheetHttp: false,
+        offSheetHttp: poolResult.canonical.offSheetSource === "fetch",
         offSheetSource: poolResult.canonical.offSheetSource,
         availabilityReload: false,
       },

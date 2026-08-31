@@ -12,6 +12,7 @@ import {
 import {
   fetchPublishedOffSheets,
   peekCachedOffSheets,
+  peekCachedOffSheetsForDate,
 } from "@/lib/offSheetFetch";
 import { offNamesForDate } from "@/lib/offSheetParser";
 import { listDailyOpsDutyCaddyIds, loadStoredDutyEntries } from "@/lib/dailyOpsDutyService";
@@ -30,7 +31,7 @@ import {
   type AutoAssignCaddy,
 } from "@/lib/autoAssignEngine";
 
-export type CanonicalOffSheetMode = "cache" | "fetch";
+export type CanonicalOffSheetMode = "cache" | "fetch" | "cache-or-fetch";
 
 export type CanonicalReflowState = {
   rosterBaseline: AutoAssignCaddy[];
@@ -47,6 +48,53 @@ export type LoadCanonicalReflowOptions = {
   /** Recover compute from this pool. Roster baseline still uses clientPool. */
   computeClientPool?: readonly AutoAssignCaddy[] | null;
 };
+
+export async function resolveCanonicalOffSheet(
+  ymd: string,
+  mode: CanonicalOffSheetMode = "fetch"
+): Promise<{
+  matched: boolean;
+  names: string[];
+  source: CanonicalReflowState["offSheetSource"];
+}> {
+  const year = Number(ymd.slice(0, 4));
+  if (!Number.isInteger(year) || year >= 2090) {
+    return { matched: false, names: [], source: "skipped" };
+  }
+
+  const fromSheets = (sheets: Awaited<ReturnType<typeof fetchPublishedOffSheets>>, source: CanonicalReflowState["offSheetSource"]) => {
+    const parsed = offNamesForDate(sheets, ymd);
+    const matched = parsed.matchedSheetDates.includes(ymd);
+    return {
+      matched,
+      names: matched ? parsed.names : [],
+      source,
+    };
+  };
+
+  if (mode === "cache" || mode === "cache-or-fetch") {
+    const cached = peekCachedOffSheetsForDate(ymd);
+    if (cached) {
+      return fromSheets(cached, "cache");
+    }
+    if (mode === "cache") {
+      return { matched: false, names: [], source: "miss" };
+    }
+  }
+
+  try {
+    const staleWorkbook = peekCachedOffSheets() !== null;
+    const sheets = await Promise.race([
+      fetchPublishedOffSheets({ force: staleWorkbook }),
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error("off-sheet-timeout")), 4000);
+      }),
+    ]);
+    return fromSheets(sheets, "fetch");
+  } catch {
+    return { matched: false, names: [], source: "miss" };
+  }
+}
 
 function asCaddyDb(db: unknown): {
   caddy: { findMany: (args: unknown) => Promise<RosterBaselineRow[]> };
@@ -137,39 +185,13 @@ export async function loadCanonicalReflowState(
   let offSheetMatched = false;
   let offNames: string[] = [];
   let offSheetSource: CanonicalReflowState["offSheetSource"] = "skipped";
-  const year = Number(ymd.slice(0, 4));
-  if (Number.isInteger(year) && year < 2090) {
-    if (opts?.offSheetMode === "cache") {
-      const sheets = peekCachedOffSheets();
-      if (sheets) {
-        const parsed = offNamesForDate(sheets, ymd);
-        offSheetMatched = parsed.matchedSheetDates.includes(ymd);
-        offNames = offSheetMatched ? parsed.names : [];
-        offSheetSource = "cache";
-      } else {
-        offSheetMatched = false;
-        offNames = [];
-        offSheetSource = "miss";
-      }
-    } else {
-      try {
-        const sheets = await Promise.race([
-          fetchPublishedOffSheets(),
-          new Promise<never>((_, reject) => {
-            setTimeout(() => reject(new Error("off-sheet-timeout")), 4000);
-          }),
-        ]);
-        const parsed = offNamesForDate(sheets, ymd);
-        offSheetMatched = parsed.matchedSheetDates.includes(ymd);
-        offNames = offSheetMatched ? parsed.names : [];
-        offSheetSource = "fetch";
-      } catch {
-        offSheetMatched = false;
-        offNames = [];
-        offSheetSource = "miss";
-      }
-    }
-  }
+  const resolvedOff = await resolveCanonicalOffSheet(
+    ymd,
+    opts?.offSheetMode ?? "fetch"
+  );
+  offSheetMatched = resolvedOff.matched;
+  offNames = resolvedOff.names;
+  offSheetSource = resolvedOff.source;
 
   let dutyEntries: Awaited<ReturnType<typeof loadStoredDutyEntries>> = [];
   try {

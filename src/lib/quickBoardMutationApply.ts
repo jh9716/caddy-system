@@ -119,7 +119,7 @@ export async function applyQuickBoardMutation(input: {
         input.previous.date,
         input.regularCaddyPool,
         db,
-        { offSheetMode: "cache" }
+        { offSheetMode: "cache-or-fetch" }
       );
       computePool = canonical.computePool;
       rosterBaseline = canonical.rosterBaseline;
