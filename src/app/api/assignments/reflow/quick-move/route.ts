@@ -10,7 +10,7 @@ import type {
   AutoAssignResultV1,
   ReservationChangeEvent,
 } from "@/lib/autoAssignEngine";
-import { regularPoolExcludingStoredOpsDuty } from "@/lib/opsDutyLivePool";
+import { resolveCanonicalLivePool } from "@/lib/opsDutyLivePool";
 import { loadSpecialSupportQueuesForDate } from "@/lib/dailySpecialSupportService";
 import { applyQuickReservationMove } from "@/lib/quickReservationMoveApply";
 
@@ -66,8 +66,15 @@ export async function POST(req: NextRequest) {
     const tPool = Date.now();
     const tSupport = Date.now();
     const [poolResult, supportResult] = await Promise.all([
-      regularPoolExcludingStoredOpsDuty(previous.date, regularCaddyPool).then(
-        (pool) => ({ pool, ms: Date.now() - tPool })
+      resolveCanonicalLivePool(previous.date, regularCaddyPool).then(
+        (resolved) => {
+          previous.unavailableCaddyIds = resolved.unavailableIds;
+          return {
+            pool: resolved.computePool,
+            rosterBaseline: resolved.rosterBaseline,
+            ms: Date.now() - tPool,
+          };
+        }
       ),
       loadSpecialSupportQueuesForDate(previous.date).then((specialSupportByShift) => ({
         specialSupportByShift,
@@ -78,6 +85,7 @@ export async function POST(req: NextRequest) {
     const result = await applyQuickReservationMove({
       previous,
       regularCaddyPool: poolResult.pool,
+      rosterBaseline: poolResult.rosterBaseline,
       events,
       change,
       changeType: (body as { changeType?: LiveChangeType }).changeType,

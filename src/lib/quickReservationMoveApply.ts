@@ -61,6 +61,7 @@ function allowLocalTestFail(): boolean {
 export async function applyQuickReservationMove(input: {
   previous: AutoAssignResultV1;
   regularCaddyPool: AutoAssignCaddy[];
+  rosterBaseline?: AutoAssignCaddy[];
   events?: ReservationChangeEvent[];
   change?: LiveChangeInput;
   changeType?: LiveChangeType;
@@ -127,6 +128,14 @@ export async function applyQuickReservationMove(input: {
   let payload: DailyBoardDraftPayloadV1;
   try {
     payload = parseDailyBoardDraftPayload(input.draft.payload, input.draft.date);
+    const baseline = input.rosterBaseline || input.regularCaddyPool;
+    payload = {
+      ...payload,
+      caddyPool: baseline.length > 0 ? baseline : payload.caddyPool,
+      ...(input.previous.unavailableCaddyIds?.length
+        ? { unavailableCaddyIds: [...input.previous.unavailableCaddyIds] }
+        : { unavailableCaddyIds: [] }),
+    };
   } catch (e) {
     return {
       ok: false,

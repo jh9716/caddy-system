@@ -29,6 +29,7 @@ import { loadEffectiveThirdStartTeam } from "@/lib/thirdWeeklyStartService";
 import { regularPoolExcludingStoredOpsDuty } from "@/lib/opsDutyLivePool";
 import { loadSpecialSupportQueuesForDate } from "@/lib/dailySpecialSupportService";
 import { stampReservationIdentities } from "@/lib/reservationIdentity";
+import { rosterBaselineFromAvailability } from "@/lib/caddyPoolCanonical";
 
 function parseThirdStartTeam(raw: unknown): string | null {
   const value = String(raw ?? "").trim();
@@ -274,6 +275,7 @@ export async function POST(req: NextRequest) {
         availabilityCounts: availability.counts,
         dailySummary: availability.dailySummary,
         specialDutySkipped: bundles.skippedPlacements,
+        rosterBaseline: rosterBaselineFromAvailability(availability),
         ...result,
       });
     }
@@ -297,6 +299,7 @@ export async function POST(req: NextRequest) {
     const reservations = stampReservationIdentities(
       (body.reservations || []) as AutoAssignReservation[]
     );
+    let rosterBaseline: AutoAssignCaddy[] = [];
     let available = (body.available || []) as AutoAssignCaddy[];
     let special = (body.special || []) as AutoAssignCaddy[];
     let specialRows: AvailabilityRow[] = [];
@@ -327,6 +330,7 @@ export async function POST(req: NextRequest) {
     if (!Array.isArray(body.available)) {
       const availability = await loadAvailabilityForDate(date);
       available = availability.available.all;
+      rosterBaseline = rosterBaselineFromAvailability(availability);
       if (!Array.isArray(body.special)) {
         special = availability.special;
         specialRows = availability.special;
@@ -449,6 +453,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       mode: Array.isArray(body.available) ? "json" : "json+db-availability",
       specialDutySkipped,
+      rosterBaseline,
       ...result,
     });
   } catch (e: unknown) {

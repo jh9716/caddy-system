@@ -25,6 +25,7 @@ import {
 } from "@/lib/autoAssignEngine";
 import { ensureReservationUid } from "@/lib/reservationIdentity";
 import type { CourseCode, ShiftPart } from "@/lib/reservationParser";
+import { mergeRosterBaseline } from "@/lib/caddyPoolCanonical";
 
 export type DraftStatus = "DRAFT" | "EDITED" | "CONFIRMED" | "APPLIED";
 
@@ -80,17 +81,15 @@ export function createDraftFromAutoResult(
   result: AutoAssignResultV1,
   caddyPool?: AutoAssignCaddy[]
 ): AssignmentDraft {
-  const pool =
-    caddyPool && caddyPool.length > 0
-      ? caddyPool
-      : dedupePool([
-          ...result.assignments
-            .filter((a) => a.kind !== "specialSupport")
-            .map((a) => a.caddy),
-          ...result.unusedCaddies,
-          ...result.special,
-          ...result.specialUnassigned.map((u) => u.caddy),
-        ]);
+  const fromResult = dedupePool([
+    ...result.assignments
+      .filter((a) => a.kind !== "specialSupport")
+      .map((a) => a.caddy),
+    ...result.unusedCaddies,
+    ...result.special,
+    ...result.specialUnassigned.map((u) => u.caddy),
+  ]);
+  const pool = mergeRosterBaseline(caddyPool, fromResult);
 
   const used = new Set<string>();
   const stamp = (reservation: AutoAssignReservation) =>
@@ -781,10 +780,7 @@ export function autoResultFromDraft(
         ? { thirdStartCaddyId: Number(base.meta.thirdStartCaddyId) }
         : {}),
   };
-  const unavailableCaddyIds = uniquePositiveIds([
-    ...(draft.unavailableCaddyIds || []),
-    ...(base?.unavailableCaddyIds || []),
-  ]);
+  const unavailableCaddyIds = uniquePositiveIds(draft.unavailableCaddyIds || []);
   return {
     date: draft.date,
     assignments,
@@ -842,11 +838,7 @@ export function applyLiveResultToDraft(
       next.houseStartCaddyId ?? draft.houseStartCaddyId ?? null,
     thirdStartCaddyId:
       next.thirdStartCaddyId ?? draft.thirdStartCaddyId ?? null,
-    unavailableCaddyIds: uniquePositiveIds([
-      ...(next.unavailableCaddyIds || []),
-      ...(after.unavailableCaddyIds || []),
-      ...(draft.unavailableCaddyIds || []),
-    ]),
+    unavailableCaddyIds: uniquePositiveIds(after.unavailableCaddyIds || []),
   };
 }
 

@@ -51,6 +51,11 @@ import {
   type AutoAssignmentRow,
 } from "@/lib/autoAssignEngine";
 import {
+  mergeRosterBaseline,
+  rosterBaselineFromAvailability,
+  usableComputePool,
+} from "@/lib/caddyPoolCanonical";
+import {
   isInactiveEmploymentAvailability,
   type AvailabilityResult,
   type AvailabilityRow,
@@ -69,6 +74,7 @@ type RunResponse = AutoAssignResultV1 & {
   filename?: string;
   availabilityCounts?: { available: number; special: number; excluded: number };
   specialDutySkipped?: Array<{ caddyId?: number; name?: string }>;
+  rosterBaseline?: AutoAssignCaddy[];
 };
 
 const SHIFTS: ShiftPart[] = ["1부", "2부", "3부"];
@@ -418,11 +424,10 @@ export default function ManageAssignmentsOpsPage() {
       setDraftVersion(version);
       const hydrated: AssignmentDraft = {
         ...assignmentDraft,
-        unavailableCaddyIds: Array.from(
-          new Set([
-            ...(assignmentDraft.unavailableCaddyIds || []),
-            ...(unavailableIds || []),
-          ])
+        unavailableCaddyIds: (
+          unavailableIds !== undefined
+            ? unavailableIds
+            : assignmentDraft.unavailableCaddyIds || []
         ).filter((id) => Number.isInteger(id) && id > 0),
       };
       setDraft(hydrated);
@@ -957,11 +962,14 @@ export default function ManageAssignmentsOpsPage() {
 
   const opsDutyCaddyIds = opsDutyStored?.caddyIds || [];
   const pool: AutoAssignCaddy[] = useMemo(() => {
-    const raw = availability
-      ? regularCaddyPoolFromAvailabilityRows(availability.available.all)
-      : draft?.caddyPool || [];
-    return excludeCaddiesById(raw, opsDutyCaddyIds);
-  }, [availability, draft, opsDutyCaddyIds]);
+    if (availability) {
+      return mergeRosterBaseline(
+        draft?.caddyPool,
+        rosterBaselineFromAvailability(availability)
+      );
+    }
+    return draft?.caddyPool || [];
+  }, [availability, draft]);
 
   const freeCaddies = draft ? unusedCaddies(draft) : [];
   const drivingCandidates = draft
@@ -1061,7 +1069,10 @@ export default function ManageAssignmentsOpsPage() {
           const current = draftRef.current;
           const next = {
             ...current,
-            caddyPool: excludeCaddiesById(current.caddyPool, dutyIds),
+            caddyPool: mergeRosterBaseline(
+              current.caddyPool,
+              rosterBaselineFromAvailability(data as AvailabilityResult)
+            ),
           };
           setDraft(next);
           queueDraftSave(next);
@@ -1182,11 +1193,16 @@ export default function ManageAssignmentsOpsPage() {
         const dutyIds = Array.isArray(availData.opsDutyCaddyIds)
           ? (availData.opsDutyCaddyIds as number[])
           : [];
-        if (dutyIds.length && draftRef.current) {
+        if (draftRef.current) {
           const current = draftRef.current;
           const next = {
             ...current,
-            caddyPool: excludeCaddiesById(current.caddyPool, dutyIds),
+            caddyPool: mergeRosterBaseline(
+              current.caddyPool,
+              rosterBaselineFromAvailability(
+                availData as AvailabilityResult
+              )
+            ),
           };
           setDraft(next);
           queueDraftSave(next);
@@ -1299,7 +1315,7 @@ export default function ManageAssignmentsOpsPage() {
       setAutoResult(data);
       const next = createDraftFromAutoResult(
         data,
-        caddyPool.length ? caddyPool : undefined
+        mergeRosterBaseline(caddyPool, data.rosterBaseline)
       );
       setDraft(next);
       confirmedDraftRef.current = next;
@@ -1404,7 +1420,7 @@ export default function ManageAssignmentsOpsPage() {
       }
       const next = createDraftFromAutoResult(
         data,
-        caddyPool.length ? caddyPool : undefined
+        mergeRosterBaseline(caddyPool, data.rosterBaseline)
       );
       const { res: saveRes, data: saveData } = await putAssignmentDraft(
         next,
@@ -1420,10 +1436,12 @@ export default function ManageAssignmentsOpsPage() {
         );
         return;
       }
+      const latest = await loadServerDraft(date);
       applyHydratedDraft(
         next,
         Number(saveData.draft.version) || 0,
-        String(saveData.draft.updatedAt || "")
+        String(saveData.draft.updatedAt || ""),
+        Array.isArray(latest.unavailableCaddyIds) ? latest.unavailableCaddyIds : []
       );
       setAutoResult(data);
       setHouseStartCaddyId(resolved.caddyId);
@@ -1663,10 +1681,14 @@ export default function ManageAssignmentsOpsPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         previous: input.previous,
-        regularCaddyPool: excludeCaddiesById(
-          input.painted.caddyPool,
-          opsDutyCaddyIds
-        ),
+        regularCaddyPool: usableComputePool({
+          rosterBaseline: input.painted.caddyPool,
+          unavailableIds: [
+            ...(input.painted.unavailableCaddyIds || []),
+            ...unavailableCaddyIds,
+          ],
+          opsDutyIds: opsDutyCaddyIds,
+        }),
         events: input.preview.events,
         changeType: input.preview.changeType,
         change: input.change,
@@ -2151,7 +2173,14 @@ export default function ManageAssignmentsOpsPage() {
       if (!window.confirm(QUICK_ACTION_CONFIRM_MESSAGE)) return;
     }
     const previous = autoResultFromDraft(current, autoResultRef.current);
-    const livePool = excludeCaddiesById(current.caddyPool, opsDutyCaddyIds);
+    const livePool = usableComputePool({
+      rosterBaseline: current.caddyPool,
+      unavailableIds: [
+        ...(current.unavailableCaddyIds || []),
+        ...unavailableCaddyIds,
+      ],
+      opsDutyIds: opsDutyCaddyIds,
+    });
     const preview = previewLiveChangeFromDraft({
       draft: { ...current, caddyPool: livePool },
       base: autoResultRef.current,
@@ -2207,7 +2236,14 @@ export default function ManageAssignmentsOpsPage() {
       const ok = await persistLivePreview({
         preview,
         previous: autoResultFromDraft(current, autoResultRef.current),
-        pool: excludeCaddiesById(current.caddyPool, opsDutyCaddyIds),
+        pool: usableComputePool({
+          rosterBaseline: current.caddyPool,
+          unavailableIds: [
+            ...(current.unavailableCaddyIds || []),
+            ...unavailableCaddyIds,
+          ],
+          opsDutyIds: opsDutyCaddyIds,
+        }),
         successToast: "현장 변경 적용 · Reservation/Placement 저장",
         applyServerDraft: true,
       });
