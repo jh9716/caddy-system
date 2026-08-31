@@ -10,7 +10,7 @@ import type {
   AutoAssignResultV1,
   ReservationChangeEvent,
 } from "@/lib/autoAssignEngine";
-import { regularPoolExcludingStoredOpsDuty } from "@/lib/opsDutyLivePool";
+import { resolveCanonicalLivePool } from "@/lib/opsDutyLivePool";
 import { loadSpecialSupportQueuesForDate } from "@/lib/dailySpecialSupportService";
 
 export const dynamic = "force-dynamic";
@@ -20,7 +20,7 @@ export const runtime = "nodejs";
  * POST /api/assignments/reflow/apply
  * 미리보기와 동일한 입력을 서버에서 재계산한 뒤 Reservation/Placement에 저장.
  * preview 엔드포인트는 이 경로를 호출하지 않음.
- * availability/off-sheet HTTP는 호출하지 않는다 — 저장된 당번·특수지원만 읽는다.
+ * 현재 날짜 canonical pool/unavailable을 다시 구성한다. 2090+ fixture 날짜는 off-sheet HTTP를 건너뛴다.
  */
 export async function POST(req: NextRequest) {
   const started = Date.now();
@@ -60,8 +60,11 @@ export async function POST(req: NextRequest) {
     const tPool = Date.now();
     const tSupport = Date.now();
     const [poolResult, supportResult] = await Promise.all([
-      regularPoolExcludingStoredOpsDuty(previous.date, regularCaddyPool).then(
-        (pool) => ({ pool, ms: Date.now() - tPool })
+      resolveCanonicalLivePool(previous.date, regularCaddyPool).then(
+        (resolved) => {
+          previous.unavailableCaddyIds = resolved.unavailableIds;
+          return { pool: resolved.computePool, ms: Date.now() - tPool };
+        }
       ),
       loadSpecialSupportQueuesForDate(previous.date).then((specialSupportByShift) => ({
         specialSupportByShift,

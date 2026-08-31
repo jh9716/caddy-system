@@ -11,7 +11,7 @@ import {
   type AutoAssignResultV1,
   type ReservationChangeEvent,
 } from "@/lib/autoAssignEngine";
-import { regularPoolExcludingStoredOpsDuty } from "@/lib/opsDutyLivePool";
+import { resolveCanonicalLivePool } from "@/lib/opsDutyLivePool";
 import { resolveDailySpecialPlacement } from "@/lib/dailySpecialDutyService";
 import { loadSpecialSupportQueuesForDate } from "@/lib/dailySpecialSupportService";
 
@@ -47,10 +47,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const pool = await regularPoolExcludingStoredOpsDuty(
+    const resolved = await resolveCanonicalLivePool(
       previous.date,
       regularCaddyPool
     );
+    const pool = resolved.computePool;
+    previous.unavailableCaddyIds = resolved.unavailableIds;
     const placement = await resolveDailySpecialPlacement(previous.date);
     const specialPlacement = {
       mode: placement.mode,

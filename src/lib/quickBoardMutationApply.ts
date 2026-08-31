@@ -43,6 +43,8 @@ import {
   QUICK_MOVE_LIVE_FORCE_FAIL,
   type QuickMoveApplyResult,
 } from "@/lib/quickReservationMoveApply";
+import { loadCanonicalReflowState } from "@/lib/caddyPoolCanonicalService";
+import { resolveCanonicalUnavailableIds } from "@/lib/caddyPoolCanonical";
 
 export const QUICK_MUTATION_TYPES: PipelineMutationType[] = [
   "MOVE_RESERVATION",
@@ -99,25 +101,38 @@ export async function applyQuickBoardMutation(input: {
 
   const computeStarted = Date.now();
   const db = input.prisma ?? defaultPrisma;
-  const storedUnavailable =
-    typeof db.dailyCaddyUnavailable?.findMany === "function"
-      ? await db.dailyCaddyUnavailable.findMany({
-          where: { date: parseYmd(input.previous.date).start },
-          select: { caddyId: true },
-        })
-      : [];
+  let computePool = input.regularCaddyPool;
+  let rosterBaseline = input.regularCaddyPool;
+  let storedUnavailable: number[] = [];
+  try {
+    const canonical = await loadCanonicalReflowState(
+      input.previous.date,
+      input.regularCaddyPool,
+      db
+    );
+    computePool = canonical.computePool;
+    rosterBaseline = canonical.rosterBaseline;
+    storedUnavailable = canonical.unavailableIds;
+  } catch {
+    storedUnavailable =
+      typeof db.dailyCaddyUnavailable?.findMany === "function"
+        ? (
+            await db.dailyCaddyUnavailable.findMany({
+              where: { date: parseYmd(input.previous.date).start },
+              select: { caddyId: true },
+            })
+          ).map((row) => Number(row.caddyId))
+        : [];
+  }
   const previous = {
     ...input.previous,
-    unavailableCaddyIds: [
-      ...new Set([
-        ...(input.previous.unavailableCaddyIds || []),
-        ...storedUnavailable.map((row) => Number(row.caddyId)),
-      ]),
-    ].filter((id) => Number.isInteger(id) && id > 0),
+    unavailableCaddyIds: resolveCanonicalUnavailableIds({
+      dailyUnavailableIds: storedUnavailable,
+    }),
   };
   const preview = previewLiveAssignmentEvents({
     previous,
-    regularCaddyPool: input.regularCaddyPool,
+    regularCaddyPool: computePool,
     events,
     changeType: input.changeType || input.change?.type,
     specialSupportByShift: input.specialSupportByShift,
@@ -150,6 +165,13 @@ export async function applyQuickBoardMutation(input: {
   let payload: DailyBoardDraftPayloadV1;
   try {
     payload = parseDailyBoardDraftPayload(input.draft.payload, input.draft.date);
+    payload = {
+      ...payload,
+      caddyPool: rosterBaseline.length > 0 ? rosterBaseline : payload.caddyPool,
+      ...(preview.unavailableCaddyIds.length > 0
+        ? { unavailableCaddyIds: preview.unavailableCaddyIds }
+        : { unavailableCaddyIds: [] }),
+    };
   } catch (e) {
     return {
       ok: false,
