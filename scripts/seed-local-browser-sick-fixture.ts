@@ -18,7 +18,6 @@ const DATE = "2026-09-15";
 const day = parseYmd(DATE).start;
 const OFF_ID = 25;
 const HOUSE_START = 13;
-const IDS = [1, 13, 19, 20, 21, 22, 23, 14, 15, 24, 2, 3, 4, 5, 6, OFF_ID];
 
 function shiftRows(shift: ShiftPart, count: number, hour: number, prefix: string) {
   const courses = ["VERTHILL", "SKY", "OCEAN", "LAKE"] as const;
@@ -35,20 +34,20 @@ function shiftRows(shift: ShiftPart, count: number, hour: number, prefix: string
 
 async function main() {
   const rows = await prisma.caddy.findMany({
-    where: { id: { in: IDS }, employmentStatus: "ACTIVE", caddyType: "HOUSE" },
+    where: { employmentStatus: "ACTIVE", caddyType: "HOUSE" },
+    orderBy: [{ team: "asc" }, { teamOrder: "asc" }, { id: "asc" }],
   });
-  const byId = new Map(rows.map((c) => [c.id, c]));
-  const pool: AutoAssignCaddy[] = IDS.filter((id) => id !== OFF_ID)
-    .map((id) => byId.get(id))
-    .filter((c): c is NonNullable<typeof c> => !!c)
-    .map((c, i) => ({
+  const pool: AutoAssignCaddy[] = rows
+    .filter((c) => c.id !== OFF_ID)
+    .map((c) => ({
       id: c.id,
       name: c.name,
       team: String(c.team),
-      teamOrder: i,
+      teamOrder: Number(c.teamOrder) || 0,
       caddyType: "HOUSE",
       employmentStatus: "ACTIVE",
     }));
+  const offRow = rows.find((c) => c.id === OFF_ID);
   const result = computeAutoAssignmentsV1({
     date: DATE,
     available: pool,
@@ -60,7 +59,7 @@ async function main() {
       ...shiftRows("3부", 4, 17, "C"),
     ],
   });
-  const off = byId.get(OFF_ID);
+  const off = offRow;
   const draft = createDraftFromAutoResult(result, [
     ...pool,
     ...(off
