@@ -701,6 +701,11 @@ section("source: no stale unavailable union / no destructive pool shrink");
     "persist peeks date-matched cache then fetches on miss"
   );
   assert(
+    /OFF_SHEET_RESOLVE_TIMEOUT_MS/.test(service) &&
+      !/off-sheet-timeout"\), 4000/.test(service),
+    "persist OFF fetch timeout is longer than 4s"
+  );
+  assert(
     /offSheetMode:\s*"cache-or-fetch"/.test(route) &&
       /skipCanonicalReload:\s*true/.test(route) &&
       !/fetchPublishedOffSheets/.test(route),

@@ -7,6 +7,7 @@ import {
   uniquePositiveIds,
 } from "../src/lib/caddyPoolCanonical";
 import {
+  OFF_SHEET_RESOLVE_TIMEOUT_MS,
   resolveCanonicalOffSheet,
 } from "../src/lib/caddyPoolCanonicalService";
 import {
@@ -130,6 +131,36 @@ async function main() {
     assert(resolved.names.includes(offCaddy.name), "today OFF not yesterday's name");
     assert(!resolved.names.includes("어제휴무"), "stale other-date names dropped");
     assert(getOffSheetHttpFetchCount() === 1, "stale date miss fetches once");
+  }
+
+  section("4s OFF fetch delay is not a timeout miss");
+  {
+    invalidateOffSheetCache();
+    resetOffSheetHttpStatsForTests();
+    assert(
+      OFF_SHEET_RESOLVE_TIMEOUT_MS > 4000,
+      "persist timeout allows a 4s OFF fetch"
+    );
+    setPublishedOffSheetLoaderForTests(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 4100));
+      return [offSheetForDate(DATE, [offCaddy.name])];
+    });
+    const started = Date.now();
+    const resolved = await resolveCanonicalOffSheet(DATE, "cache-or-fetch");
+    const elapsed = Date.now() - started;
+    assert(elapsed >= 4000, `persist waited for slow OFF fetch (${elapsed}ms)`);
+    assert(elapsed < OFF_SHEET_RESOLVE_TIMEOUT_MS, "4s fetch did not hit timeout");
+    assert(resolved.source === "fetch", "slow fetch is not timeout miss");
+    assert(resolved.matched, "workbook still date-matched after 4s");
+    assert(resolved.names.includes(offCaddy.name), "today OFF SoT after 4s delay");
+    assert(getOffSheetHttpFetchCount() === 1, "slow fetch is still one HTTP");
+    const compute = recoverComputePool({
+      clientPool: clientPolluted,
+      sotUsable,
+      offSheetMatched: resolved.matched,
+      unavailableIds: [sick.id],
+    });
+    assert(!compute.some((c) => c.id === offCaddy.id), "OFF stays out after slow fetch");
   }
 
   section("same-request skipCanonicalReload does not fetch twice");

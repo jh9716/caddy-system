@@ -33,6 +33,9 @@ import {
 
 export type CanonicalOffSheetMode = "cache" | "fetch" | "cache-or-fetch";
 
+/** Persist may wait 1–4s for OFF SoT. UI does not wait; do not treat 4s as miss. */
+export const OFF_SHEET_RESOLVE_TIMEOUT_MS = 15_000;
+
 export type CanonicalReflowState = {
   rosterBaseline: AutoAssignCaddy[];
   computePool: AutoAssignCaddy[];
@@ -84,12 +87,24 @@ export async function resolveCanonicalOffSheet(
 
   try {
     const staleWorkbook = peekCachedOffSheets() !== null;
-    const sheets = await Promise.race([
-      fetchPublishedOffSheets({ force: staleWorkbook }),
-      new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error("off-sheet-timeout")), 4000);
-      }),
-    ]);
+    const sheets = await new Promise<Awaited<ReturnType<typeof fetchPublishedOffSheets>>>(
+      (resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error("off-sheet-timeout")),
+          OFF_SHEET_RESOLVE_TIMEOUT_MS
+        );
+        fetchPublishedOffSheets({ force: staleWorkbook }).then(
+          (value) => {
+            clearTimeout(timer);
+            resolve(value);
+          },
+          (err) => {
+            clearTimeout(timer);
+            reject(err);
+          }
+        );
+      }
+    );
     return fromSheets(sheets, "fetch");
   } catch {
     return { matched: false, names: [], source: "miss" };
