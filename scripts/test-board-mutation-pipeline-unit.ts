@@ -180,6 +180,51 @@ section("canonical compute pool SICK of houseStart keeps origin");
   assert(!names.includes("김예진1"), "canonical SICK of start does not reset to 1조 first");
 }
 
+section("same-team teamOrder 0 houseStart SICK does not reset to lowest id");
+{
+  const a = house(1, "이영진", 1);
+  a.team = "1조";
+  a.teamOrder = 0;
+  const start = house(13, "서승희", 1);
+  start.team = "1조";
+  start.teamOrder = 0;
+  const b = house(14, "김지운", 1);
+  b.team = "1조";
+  b.teamOrder = 0;
+  const c = house(15, "이강우", 1);
+  c.team = "1조";
+  c.teamOrder = 0;
+  const d = house(16, "엄진순", 1);
+  d.team = "1조";
+  d.teamOrder = 0;
+  const sameTeamPool = [a, start, b, c, d];
+  const result = computeAutoAssignmentsV1({
+    date: "2099-12-21",
+    available: sameTeamPool,
+    openCourses: ["VERTHILL", "SKY", "OCEAN", "LAKE"],
+    houseStartCaddyId: start.id,
+    reservations: [
+      { date: "2099-12-21", course: "SKY", shift: "1부", teeTime: "07:00", teamName: "A팀", rawRowIndex: 1, sourceSheet: "예약1부" },
+      { date: "2099-12-21", course: "OCEAN", shift: "1부", teeTime: "07:08", teamName: "B팀", rawRowIndex: 2, sourceSheet: "예약1부" },
+      { date: "2099-12-21", course: "LAKE", shift: "1부", teeTime: "07:16", teamName: "C팀", rawRowIndex: 3, sourceSheet: "예약1부" },
+      { date: "2099-12-21", course: "VERTHILL", shift: "1부", teeTime: "07:24", teamName: "D팀", rawRowIndex: 4, sourceSheet: "예약1부" },
+    ],
+  });
+  const draft = createDraftFromAutoResult(result, sameTeamPool);
+  const preview = previewLiveChangeFromDraft({
+    draft,
+    change: { type: "CADDY_SICK", caddyId: start.id, shift: "1부" },
+    regularCaddyPool: sameTeamPool.filter((x) => x.id !== start.id),
+  });
+  const names = preview.after.assignments
+    .filter((row) => row.shift === "1부" && row.kind === "regular")
+    .sort((x, y) => x.sequenceIndex - y.sequenceIndex)
+    .map((row) => row.caddy.name);
+  assert(names[0] === "김지운", "same-team SICK of start pull-forwards to next id");
+  assert(!names.includes("서승희"), "start victim gone");
+  assert(names[0] !== "이영진", "do not rewind to lowest id after pre-rotated house");
+}
+
 section("resolveHouseQueueKeepingOrigin");
 {
   const remaining = [김하나1, nextH, s1];

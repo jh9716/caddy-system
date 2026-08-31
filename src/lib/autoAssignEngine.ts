@@ -2408,9 +2408,7 @@ export function assignRegularSequence(input: {
   const pools =
     input.house != null
       ? {
-          house: withoutDrivingCaddies(
-            dedupeCaddies([...(input.house || [])]).sort(compareCaddyOrder)
-          ),
+          house: withoutDrivingCaddies(dedupeCaddies([...(input.house || [])])),
           third: withoutDrivingCaddies(dedupeCaddies([...(input.third || [])])),
           driving: [] as AutoAssignCaddy[],
         }
@@ -2418,7 +2416,10 @@ export function assignRegularSequence(input: {
 
   const house =
     input.houseStartCaddyId != null && input.houseStartCaddyId !== undefined
-      ? rotateHouseQueueFromStart(pools.house, Number(input.houseStartCaddyId))
+      ? rotateHouseQueueFromStart(
+          [...pools.house].sort(compareCaddyOrder),
+          Number(input.houseStartCaddyId)
+        )
       : pools.house;
   const thirdStartTeam = resolveThirdStartTeam(input.thirdStartTeam, input.date);
   let third = rotateThirdQueueFromStartTeam(pools.third, thirdStartTeam);
