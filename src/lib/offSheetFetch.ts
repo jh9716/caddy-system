@@ -71,6 +71,25 @@ export function invalidateOffSheetCache() {
   offSheetCache = null;
 }
 
+/** Same-date mutation persist: reuse already-fetched sheets. No Google HTTP. */
+export function peekCachedOffSheets(): OffSheet[] | null {
+  const id = sheetId();
+  const now = Date.now();
+  if (
+    offSheetCache &&
+    offSheetCache.id === id &&
+    now - offSheetCache.at < OFF_SHEET_CACHE_MS
+  ) {
+    return offSheetCache.sheets;
+  }
+  return null;
+}
+
+export function seedOffSheetCacheForTests(sheets: OffSheet[]) {
+  if (process.env.NODE_ENV === "production") return;
+  offSheetCache = { id: sheetId(), at: Date.now(), sheets };
+}
+
 export async function fetchPublishedOffSheets(opts?: {
   force?: boolean;
 }): Promise<OffSheet[]> {

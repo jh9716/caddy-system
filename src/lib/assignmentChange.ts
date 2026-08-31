@@ -13,6 +13,7 @@ import {
 import {
   applyLiveResultToDraft,
   autoResultFromDraft,
+  snapshotComputePoolFromDraft,
   type AssignmentDraft,
 } from "@/lib/assignmentDraft";
 import {
@@ -412,10 +413,14 @@ export function previewLiveChangeFromDraft(input: {
   base?: AutoAssignResultV1 | null;
   change: LiveChangeInput;
   specialSupportByShift?: Record<ShiftPart, AutoAssignCaddy[]>;
+  regularCaddyPool?: AutoAssignCaddy[];
 }): LiveChangePreview {
+  const pool =
+    input.regularCaddyPool ||
+    snapshotComputePoolFromDraft(input.draft, input.base ?? null);
   return previewLiveAssignmentChange({
     previous: autoResultFromDraft(input.draft, input.base ?? null),
-    regularCaddyPool: input.draft.caddyPool,
+    regularCaddyPool: pool,
     change: input.change,
     specialSupportByShift: input.specialSupportByShift,
   });

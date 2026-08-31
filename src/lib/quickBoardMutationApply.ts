@@ -43,7 +43,10 @@ import {
   QUICK_MOVE_LIVE_FORCE_FAIL,
   type QuickMoveApplyResult,
 } from "@/lib/quickReservationMoveApply";
-import { loadCanonicalReflowState } from "@/lib/caddyPoolCanonicalService";
+import {
+  loadCanonicalReflowState,
+  type CanonicalReflowState,
+} from "@/lib/caddyPoolCanonicalService";
 import { resolveCanonicalUnavailableIds } from "@/lib/caddyPoolCanonical";
 
 export const QUICK_MUTATION_TYPES: PipelineMutationType[] = [
@@ -78,6 +81,8 @@ export async function applyQuickBoardMutation(input: {
   testDelayMs?: number;
   allowedTypes?: PipelineMutationType[];
   prisma?: PrismaClient;
+  canonical?: CanonicalReflowState;
+  skipCanonicalReload?: boolean;
 }): Promise<QuickMoveApplyResult> {
   const events =
     input.events ||
@@ -104,25 +109,32 @@ export async function applyQuickBoardMutation(input: {
   let computePool = input.regularCaddyPool;
   let rosterBaseline = input.regularCaddyPool;
   let storedUnavailable: number[] = [];
-  try {
-    const canonical = await loadCanonicalReflowState(
-      input.previous.date,
-      input.regularCaddyPool,
-      db
-    );
-    computePool = canonical.computePool;
-    rosterBaseline = canonical.rosterBaseline;
-    storedUnavailable = canonical.unavailableIds;
-  } catch {
-    storedUnavailable =
-      typeof db.dailyCaddyUnavailable?.findMany === "function"
-        ? (
-            await db.dailyCaddyUnavailable.findMany({
-              where: { date: parseYmd(input.previous.date).start },
-              select: { caddyId: true },
-            })
-          ).map((row) => Number(row.caddyId))
-        : [];
+  if (input.skipCanonicalReload && input.canonical) {
+    computePool = input.canonical.computePool;
+    rosterBaseline = input.canonical.rosterBaseline;
+    storedUnavailable = input.canonical.unavailableIds;
+  } else {
+    try {
+      const canonical = await loadCanonicalReflowState(
+        input.previous.date,
+        input.regularCaddyPool,
+        db,
+        { offSheetMode: "cache" }
+      );
+      computePool = canonical.computePool;
+      rosterBaseline = canonical.rosterBaseline;
+      storedUnavailable = canonical.unavailableIds;
+    } catch {
+      storedUnavailable =
+        typeof db.dailyCaddyUnavailable?.findMany === "function"
+          ? (
+              await db.dailyCaddyUnavailable.findMany({
+                where: { date: parseYmd(input.previous.date).start },
+                select: { caddyId: true },
+              })
+            ).map((row) => Number(row.caddyId))
+          : [];
+    }
   }
   const previous = {
     ...input.previous,

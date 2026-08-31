@@ -25,7 +25,10 @@ import {
 } from "@/lib/autoAssignEngine";
 import { ensureReservationUid } from "@/lib/reservationIdentity";
 import type { CourseCode, ShiftPart } from "@/lib/reservationParser";
-import { mergeRosterBaseline } from "@/lib/caddyPoolCanonical";
+import {
+  mergeRosterBaseline,
+  snapshotComputePool,
+} from "@/lib/caddyPoolCanonical";
 
 export type DraftStatus = "DRAFT" | "EDITED" | "CONFIRMED" | "APPLIED";
 
@@ -201,6 +204,38 @@ export function usedCaddyIds(draft: AssignmentDraft): Set<number> {
 export function unusedCaddies(draft: AssignmentDraft): AutoAssignCaddy[] {
   const used = usedCaddyIds(draft);
   return draft.caddyPool.filter((c) => !used.has(c.id) && c.id > 0 && c.name);
+}
+
+export function spareIdsFromDraft(draft: AssignmentDraft): number[] {
+  const ids: number[] = [];
+  for (const row of draft.sparesByShift || []) {
+    if (row?.spare1?.caddyId) ids.push(row.spare1.caddyId);
+    if (row?.spare2?.caddyId) ids.push(row.spare2.caddyId);
+  }
+  return ids;
+}
+
+/** Confirmed snapshot compute pool. Does not wait for SoT / OFF sheet. */
+export function snapshotComputePoolFromDraft(
+  draft: AssignmentDraft,
+  base?: AutoAssignResultV1 | null,
+  extra?: {
+    extraUsable?: readonly AutoAssignCaddy[] | null;
+    unavailableIds?: Iterable<unknown>;
+    opsDutyIds?: Iterable<unknown>;
+    specialSkipIds?: Iterable<unknown>;
+  }
+): AutoAssignCaddy[] {
+  return snapshotComputePool({
+    rosterBaseline: draft.caddyPool,
+    assigned: draft.assignments.map((row) => row.caddy),
+    spareIds: spareIdsFromDraft(draft),
+    engineUnused: base?.unusedCaddies,
+    extraUsable: extra?.extraUsable,
+    unavailableIds: extra?.unavailableIds ?? draft.unavailableCaddyIds,
+    opsDutyIds: extra?.opsDutyIds,
+    specialSkipIds: extra?.specialSkipIds,
+  });
 }
 
 /** Draft에 들어 있는 예약을 자동배치 JSON preview 입력으로 재사용. */

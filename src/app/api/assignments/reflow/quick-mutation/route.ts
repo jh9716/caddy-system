@@ -62,15 +62,27 @@ export async function POST(req: NextRequest) {
       req.headers.get("x-real-ip") ||
       null;
 
+    const payloadPool = Array.isArray(
+      (draft.payload as { caddyPool?: unknown } | undefined)?.caddyPool
+    )
+      ? ((draft.payload as { caddyPool: AutoAssignCaddy[] }).caddyPool)
+      : regularCaddyPool;
+
     const tPool = Date.now();
     const tSupport = Date.now();
     const [poolResult, supportResult] = await Promise.all([
-      resolveCanonicalLivePool(previous.date, regularCaddyPool).then(
-        (resolved) => {
-          previous.unavailableCaddyIds = resolved.unavailableIds;
-          return { pool: resolved.computePool, ms: Date.now() - tPool };
-        }
-      ),
+      resolveCanonicalLivePool(previous.date, regularCaddyPool, {
+        offSheetMode: "cache",
+        rosterClientPool: payloadPool,
+        computeClientPool: regularCaddyPool,
+      }).then((resolved) => {
+        previous.unavailableCaddyIds = resolved.unavailableIds;
+        return {
+          canonical: resolved,
+          pool: resolved.computePool,
+          ms: Date.now() - tPool,
+        };
+      }),
       loadSpecialSupportQueuesForDate(previous.date).then((specialSupportByShift) => ({
         specialSupportByShift,
         ms: Date.now() - tSupport,
@@ -80,6 +92,8 @@ export async function POST(req: NextRequest) {
     const result = await applyQuickBoardMutation({
       previous,
       regularCaddyPool: poolResult.pool,
+      canonical: poolResult.canonical,
+      skipCanonicalReload: true,
       events,
       change,
       changeType: (body as { changeType?: LiveChangeType }).changeType,
@@ -129,6 +143,7 @@ export async function POST(req: NextRequest) {
         persistMs: result.timings?.persistMs ?? null,
         totalMs: Date.now() - started,
         offSheetHttp: false,
+        offSheetSource: poolResult.canonical.offSheetSource,
         availabilityReload: false,
       },
     });

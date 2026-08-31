@@ -18,10 +18,13 @@ import {
 import {
   assertSpareMatchesBalance,
   houseUsableCount,
+  isRosterSizedPool,
+  isRosterSizedUnused,
   mergeRosterBaseline,
   recoverComputePool,
   resolveCanonicalUnavailableIds,
   rosterBaselineFromAvailabilityRows,
+  snapshotComputePool,
   spareBalance,
   spareForShift,
   usableComputePool,
@@ -537,6 +540,77 @@ section("roster baseline keeps temporarily excluded people");
   assert(!baseline.some((c) => c.id === 4), "LEAVE out of baseline");
 }
 
+section("snapshotComputePool ignores baseline-sized unused");
+{
+  const assigned = Array.from({ length: 84 }, (_, i) => houseCaddy(i + 1));
+  const leftover = Array.from({ length: 9 }, (_, i) => houseCaddy(200 + i));
+  const off = Array.from({ length: 80 }, (_, i) => houseCaddy(400 + i));
+  const baseline = [...assigned, ...leftover, ...off];
+  const polluted = [...leftover, ...off];
+  assert(
+    isRosterSizedUnused({
+      rosterBaselineCount: baseline.length,
+      assignedCount: assigned.length,
+      unusedCount: polluted.length,
+    }),
+    "baseline-minus-assigned unused is polluted"
+  );
+  assert(
+    !isRosterSizedUnused({
+      rosterBaselineCount: baseline.length,
+      assignedCount: assigned.length,
+      unusedCount: leftover.length,
+    }),
+    "engine leftover is not polluted"
+  );
+  assert(!isRosterSizedPool(93, 173), "93-usable is not roster-sized vs 173");
+  assert(isRosterSizedPool(173, 173), "full baseline is roster-sized");
+  const fromEngine = snapshotComputePool({
+    rosterBaseline: baseline,
+    assigned,
+    spareIds: [leftover[0].id, leftover[1].id],
+    engineUnused: leftover,
+  });
+  assert(fromEngine.length <= 93, "engine snapshot stays compute-sized");
+  assert(
+    leftover.every((c) => fromEngine.some((x) => x.id === c.id)),
+    "engine leftover stays in snapshot"
+  );
+  assert(
+    !fromEngine.some((c) => c.id === off[0].id),
+    "휴무 not admitted from polluted unused"
+  );
+  const fromPolluted = snapshotComputePool({
+    rosterBaseline: baseline,
+    assigned,
+    spareIds: [leftover[0].id],
+    engineUnused: polluted,
+  });
+  assert(
+    !fromPolluted.some((c) => c.id === off[0].id),
+    "polluted unused does not resurrect 휴무"
+  );
+  assert(
+    fromPolluted.some((c) => c.id === leftover[0].id),
+    "spare from polluted fallback is kept"
+  );
+  const extraUsable = [...assigned, ...leftover];
+  const fromAvail = snapshotComputePool({
+    rosterBaseline: baseline,
+    assigned,
+    extraUsable,
+    unavailableIds: [assigned[0].id],
+  });
+  assert(
+    !fromAvail.some((c) => c.id === assigned[0].id),
+    "snapshot drops current unavailable"
+  );
+  assert(
+    !fromAvail.some((c) => c.id === off[0].id),
+    "availability usable does not include 휴무"
+  );
+}
+
 section("source: no stale unavailable union / no destructive pool shrink");
 {
   const fs = require("node:fs") as typeof import("node:fs");
@@ -553,8 +627,10 @@ section("source: no stale unavailable union / no destructive pool shrink");
   );
   assert(
     /resolveCanonicalUnavailableIds/.test(apply) &&
-      /loadCanonicalReflowState/.test(apply),
-    "quick mutation rebuilds unavailable + pool from canonical SoT"
+      /loadCanonicalReflowState/.test(apply) &&
+      /offSheetMode:\s*"cache"/.test(apply) &&
+      /skipCanonicalReload/.test(apply),
+    "quick mutation rebuilds SoT from cache-only canonical, no double fetch"
   );
   assert(
     /uniquePositiveIds\(after\.unavailableCaddyIds/.test(draft),
@@ -575,8 +651,25 @@ section("source: no stale unavailable union / no destructive pool shrink");
     "hydrate prefers server DailyCaddyUnavailable"
   );
   assert(
-    /mergeRosterBaseline/.test(page) && /usableComputePool/.test(page),
-    "client keeps baseline pool and computes exclusions separately"
+    /mergeRosterBaseline/.test(page) &&
+      /snapshotComputePoolFromDraft/.test(page) &&
+      /scheduleAfterPaint/.test(page),
+    "client keeps baseline and projects from snapshot after paint"
+  );
+  const offFetch = read("src/lib/offSheetFetch.ts");
+  const service = read("src/lib/caddyPoolCanonicalService.ts");
+  const route = read("src/app/api/assignments/reflow/quick-mutation/route.ts");
+  assert(/peekCachedOffSheets/.test(offFetch), "off-sheet cache can be peeked");
+  assert(
+    /offSheetMode === "cache"/.test(service) &&
+      /peekCachedOffSheets/.test(service),
+    "canonical cache mode does not call Google"
+  );
+  assert(
+    /offSheetMode:\s*"cache"/.test(route) &&
+      /skipCanonicalReload:\s*true/.test(route) &&
+      !/fetchPublishedOffSheets/.test(route),
+    "quick-mutation route is cache-only and single-load"
   );
   assert(
     /resolved\.unavailableIds/.test(reflow),

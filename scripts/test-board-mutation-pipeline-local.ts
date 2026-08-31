@@ -496,6 +496,92 @@ async function main() {
     assert(Date.now() - t0 < 100, "next projection <100ms");
   }
 
+  section("3부 HOUSE SICK persist+reload");
+  {
+    const wanted = [RESET_TRAP, HOUSE_START, PULL, 20, 21, 22, 23, 14, 15];
+    const caddies = await prisma.caddy.findMany({
+      where: { id: { in: wanted }, employmentStatus: "ACTIVE", caddyType: "HOUSE" },
+    });
+    const byId = new Map(caddies.map((c) => [c.id, c]));
+    const pool: AutoAssignCaddy[] = wanted
+      .map((id) => byId.get(id))
+      .filter((c): c is NonNullable<typeof c> => !!c)
+      .map((c, i) => ({
+        id: c.id,
+        name: c.name,
+        team: `${i}조`,
+        teamOrder: i,
+        caddyType: String(c.caddyType),
+        employmentStatus: String(c.employmentStatus),
+      }));
+    const result = computeAutoAssignmentsV1({
+      date: DATE,
+      available: pool,
+      openCourses: ["VERTHILL", "SKY", "OCEAN", "LAKE"],
+      houseStartCaddyId: HOUSE_START,
+      reservations: [
+        { date: DATE, course: "SKY", shift: "1부", teeTime: "07:00", teamName: "A팀", rawRowIndex: 1, sourceSheet: "예약1부" },
+        { date: DATE, course: "OCEAN", shift: "1부", teeTime: "07:00", teamName: "B팀", rawRowIndex: 2, sourceSheet: "예약1부" },
+        { date: DATE, course: "SKY", shift: "3부", teeTime: "17:00", teamName: "3A", rawRowIndex: 10, sourceSheet: "예약3부" },
+        { date: DATE, course: "OCEAN", shift: "3부", teeTime: "17:00", teamName: "3B", rawRowIndex: 11, sourceSheet: "예약3부" },
+        { date: DATE, course: "LAKE", shift: "3부", teeTime: "17:08", teamName: "3C", rawRowIndex: 12, sourceSheet: "예약3부" },
+        { date: DATE, course: "VERTHILL", shift: "3부", teeTime: "17:08", teamName: "3D", rawRowIndex: 13, sourceSheet: "예약3부" },
+      ],
+    });
+    const thirdDraft = createDraftFromAutoResult(result, pool);
+    const thirdVersion = await persistLiveFromDraft(thirdDraft);
+    const thirdNames = (d: AssignmentDraft) =>
+      d.assignments
+        .filter((a) => a.shift === "3부" && a.kind === "regular")
+        .sort((a, b) => a.sequenceIndex - b.sequenceIndex)
+        .map((a) => a.caddy.name);
+    const victim = thirdDraft.assignments.find(
+      (a) => a.shift === "3부" && a.kind === "regular"
+    );
+    assert(!!victim, "3부 HOUSE victim exists");
+    if (!victim) throw new Error("no 3부 victim");
+    const before = thirdNames(thirdDraft);
+    const t0 = Date.now();
+    const projected = projectPendingIntents({
+      confirmedDraft: thirdDraft,
+      pending: [
+        makeMutationIntent(
+          { type: "CADDY_SICK", caddyId: victim.caddy.id, shift: "3부" },
+          "3sick"
+        )!,
+      ],
+    });
+    const paintMs = Date.now() - t0;
+    assert(paintMs < 100, `3부 click→paint ${paintMs}ms < 100`);
+    assert(
+      !projected.draft.assignments.some((a) => a.caddy.id === victim.caddy.id),
+      "3부 victim gone on optimistic paint"
+    );
+    const afterNames = thirdNames(projected.draft);
+    if (before.length > 1) {
+      assert(
+        afterNames[0] === before[1] || afterNames.includes(before[1]),
+        "3부 pull-forward"
+      );
+    }
+    const persist = await applyIntent(
+      thirdDraft,
+      { type: "CADDY_SICK", caddyId: victim.caddy.id, shift: "3부" },
+      thirdVersion
+    );
+    assert(persist.persist?.ok === true, "3부 sick persist 200");
+    const reloaded = await reloadDraft();
+    assert(
+      !reloaded.draft.assignments.some((a) => a.caddy.id === victim.caddy.id),
+      "3부 sick held after reload"
+    );
+    const unavail = await prisma.dailyCaddyUnavailable.findMany({ where: { date: day } });
+    assert(
+      unavail.some((u) => u.caddyId === victim.caddy.id),
+      "3부 unavailable written"
+    );
+  }
+
   await prisma.$disconnect();
   console.log(`\nDONE: ${passed} passed, ${failed} failed`);
   if (failed) process.exit(1);

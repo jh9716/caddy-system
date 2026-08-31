@@ -23,6 +23,7 @@ import {
   RECALC_SAVE_FAILED_MESSAGE,
   RECALC_SUCCESS_MESSAGE,
   unassignReservation,
+  snapshotComputePoolFromDraft,
   unusedCaddies,
   type AssignmentDraft,
   type DraftWarning,
@@ -53,7 +54,6 @@ import {
 import {
   mergeRosterBaseline,
   rosterBaselineFromAvailability,
-  usableComputePool,
 } from "@/lib/caddyPoolCanonical";
 import {
   isInactiveEmploymentAvailability,
@@ -136,10 +136,12 @@ import {
   PIPELINE_SAVING_LABEL,
   changeFromPipelinePreview,
   dropIntent,
+  isDuplicateCaddyAbsenceIntent,
   isPipelineMutation,
   makeMutationIntent,
   prepareIntentOnConfirmedDraft,
   projectPendingIntents,
+  scheduleAfterPaint,
   readPipelineTestDelayMs,
   readPipelineTestFail,
   type BoardMutationIntent,
@@ -406,6 +408,7 @@ export default function ManageAssignmentsOpsPage() {
   const [pendingIntentCount, setPendingIntentCount] = useState(0);
   const confirmedDraftRef = useRef<AssignmentDraft | null>(null);
   const pendingIntentsRef = useRef<BoardMutationIntent[]>([]);
+  const computePoolRef = useRef<AutoAssignCaddy[]>([]);
   const intentSeqRef = useRef(0);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const boardWrapRef = useRef<HTMLDivElement | null>(null);
@@ -432,6 +435,7 @@ export default function ManageAssignmentsOpsPage() {
       };
       setDraft(hydrated);
       confirmedDraftRef.current = hydrated;
+      computePoolRef.current = snapshotComputePoolFromDraft(hydrated, null);
       pendingIntentsRef.current = [];
       setPendingIntentCount(0);
       persistInFlightRef.current = false;
@@ -1579,6 +1583,22 @@ export default function ManageAssignmentsOpsPage() {
     });
   }
 
+  function liveSnapshotPool(source: AssignmentDraft): AutoAssignCaddy[] {
+    const extraUsable = availability?.available?.all?.length
+      ? regularCaddyPoolFromAvailabilityRows(availability.available.all)
+      : computePoolRef.current;
+    const pool = snapshotComputePoolFromDraft(source, autoResultRef.current, {
+      extraUsable: extraUsable.length ? extraUsable : undefined,
+      unavailableIds: [
+        ...(source.unavailableCaddyIds || []),
+        ...unavailableCaddyIds,
+      ],
+      opsDutyIds: opsDutyCaddyIds,
+    });
+    computePoolRef.current = pool;
+    return pool;
+  }
+
   function paintProjectedDraft(next: AssignmentDraft, unavailable?: number[]) {
     setDraft(next);
     setWarnings(detectDraftWarnings(next));
@@ -1604,6 +1624,10 @@ export default function ManageAssignmentsOpsPage() {
     if (needsQuickActionConfirm(change.type)) {
       if (!window.confirm(QUICK_ACTION_CONFIRM_MESSAGE)) return;
     }
+    if (isDuplicateCaddyAbsenceIntent(pendingIntentsRef.current, change)) {
+      setQuickSheet(null);
+      return;
+    }
     const intent = makeMutationIntent(
       change,
       `m${++intentSeqRef.current}-${Date.now()}`
@@ -1611,11 +1635,14 @@ export default function ManageAssignmentsOpsPage() {
     if (!intent) return;
     const wrap = boardWrapRef.current;
     const scrollTop = wrap?.scrollTop ?? 0;
+    setQuickSheet(null);
+    const computePool = liveSnapshotPool(confirmed);
     const projected = projectPendingIntents({
       confirmedDraft: confirmed,
       pending: [...pendingIntentsRef.current, intent],
       specialSupportByShift,
       base: autoResultRef.current,
+      regularCaddyPool: computePool,
     });
     if (projected.dropped.some((row) => row.intent.id === intent.id)) {
       const drop = projected.dropped.find((row) => row.intent.id === intent.id);
@@ -1637,7 +1664,6 @@ export default function ManageAssignmentsOpsPage() {
     moveApplyingRef.current = false;
     setLiveChangePreset(null);
     setMovePendingDest(null);
-    setQuickSheet(null);
     setDraftSaveState("saving");
     restoreBoardScroll(wrap, scrollTop);
     if (change.type === "MOVE_RESERVATION") {
@@ -1645,7 +1671,9 @@ export default function ManageAssignmentsOpsPage() {
     } else {
       showToast(quickActionToast(change, confirmed), 1800);
     }
-    void flushPipelineWrites();
+    scheduleAfterPaint(() => {
+      void flushPipelineWrites();
+    });
   }
 
   async function persistPipelineIntent(input: {
@@ -1681,14 +1709,10 @@ export default function ManageAssignmentsOpsPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         previous: input.previous,
-        regularCaddyPool: usableComputePool({
-          rosterBaseline: input.painted.caddyPool,
-          unavailableIds: [
-            ...(input.painted.unavailableCaddyIds || []),
-            ...unavailableCaddyIds,
-          ],
-          opsDutyIds: opsDutyCaddyIds,
-        }),
+        regularCaddyPool:
+          computePoolRef.current.length > 0
+            ? computePoolRef.current
+            : liveSnapshotPool(input.painted),
         events: input.preview.events,
         changeType: input.preview.changeType,
         change: input.change,
@@ -1749,6 +1773,10 @@ export default function ManageAssignmentsOpsPage() {
           intent,
           specialSupportByShift,
           base: autoResultRef.current,
+          regularCaddyPool:
+            computePoolRef.current.length > 0
+              ? computePoolRef.current
+              : liveSnapshotPool(confirmed),
         });
         if (!prepared.ok) {
           pendingIntentsRef.current = dropIntent(
@@ -1762,6 +1790,7 @@ export default function ManageAssignmentsOpsPage() {
             pending: pendingIntentsRef.current,
             specialSupportByShift,
             base: autoResultRef.current,
+            regularCaddyPool: computePoolRef.current,
           });
           pendingIntentsRef.current = rest.applied;
           setPendingIntentCount(rest.applied.length);
@@ -1788,6 +1817,7 @@ export default function ManageAssignmentsOpsPage() {
             pending: pendingIntentsRef.current,
             specialSupportByShift,
             base: autoResultRef.current,
+            regularCaddyPool: computePoolRef.current,
           });
           pendingIntentsRef.current = rest.applied;
           setPendingIntentCount(rest.applied.length);
@@ -1795,6 +1825,15 @@ export default function ManageAssignmentsOpsPage() {
           continue;
         }
         confirmedDraftRef.current = persist.draft;
+        computePoolRef.current = snapshotComputePoolFromDraft(
+          persist.draft,
+          persist.after,
+          {
+            extraUsable: computePoolRef.current,
+            unavailableIds: persist.unavailableCaddyIds,
+            opsDutyIds: opsDutyCaddyIds,
+          }
+        );
         serverDraftVersionRef.current = persist.version;
         setDraftVersion(persist.version);
         setDraftSavedAt(persist.updatedAt);
@@ -1811,6 +1850,15 @@ export default function ManageAssignmentsOpsPage() {
           pending: pendingIntentsRef.current,
           specialSupportByShift,
           base: persist.after,
+          regularCaddyPool: snapshotComputePoolFromDraft(
+            persist.draft,
+            persist.after,
+            {
+              extraUsable: computePoolRef.current,
+              unavailableIds: persist.unavailableCaddyIds,
+              opsDutyIds: opsDutyCaddyIds,
+            }
+          ),
         });
         for (const dropped of rest.dropped) {
           showToast(dropped.message);
@@ -2173,19 +2221,13 @@ export default function ManageAssignmentsOpsPage() {
       if (!window.confirm(QUICK_ACTION_CONFIRM_MESSAGE)) return;
     }
     const previous = autoResultFromDraft(current, autoResultRef.current);
-    const livePool = usableComputePool({
-      rosterBaseline: current.caddyPool,
-      unavailableIds: [
-        ...(current.unavailableCaddyIds || []),
-        ...unavailableCaddyIds,
-      ],
-      opsDutyIds: opsDutyCaddyIds,
-    });
+    const livePool = liveSnapshotPool(current);
     const preview = previewLiveChangeFromDraft({
-      draft: { ...current, caddyPool: livePool },
+      draft: current,
       base: autoResultRef.current,
       change,
       specialSupportByShift,
+      regularCaddyPool: livePool,
     });
     const blocking = preview.warnings.find((w) => w.level === "error");
     if (blocking) {
@@ -2236,14 +2278,7 @@ export default function ManageAssignmentsOpsPage() {
       const ok = await persistLivePreview({
         preview,
         previous: autoResultFromDraft(current, autoResultRef.current),
-        pool: usableComputePool({
-          rosterBaseline: current.caddyPool,
-          unavailableIds: [
-            ...(current.unavailableCaddyIds || []),
-            ...unavailableCaddyIds,
-          ],
-          opsDutyIds: opsDutyCaddyIds,
-        }),
+        pool: liveSnapshotPool(current),
         successToast: "현장 변경 적용 · Reservation/Placement 저장",
         applyServerDraft: true,
       });
