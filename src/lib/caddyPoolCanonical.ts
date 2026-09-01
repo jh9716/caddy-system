@@ -112,6 +112,45 @@ export function pendingRemoveCaddyIdsFromEvents(
   );
 }
 
+/** Assigned + spare ids currently on the confirmed board. */
+export function placedCaddyIdsFromBoard(input: {
+  assignments?: Array<{ caddy?: { id?: number } | null } | null> | null;
+  sparesByShift?: Array<{
+    spare1?: { caddyId?: number } | null;
+    spare2?: { caddyId?: number } | null;
+  } | null> | null;
+}): Set<number> {
+  const ids = new Set<number>();
+  for (const row of input.assignments || []) {
+    const id = Number(row?.caddy?.id);
+    if (Number.isInteger(id) && id > 0) ids.add(id);
+  }
+  for (const spare of input.sparesByShift || []) {
+    const s1 = Number(spare?.spare1?.caddyId);
+    const s2 = Number(spare?.spare2?.caddyId);
+    if (Number.isInteger(s1) && s1 > 0) ids.add(s1);
+    if (Number.isInteger(s2) && s2 > 0) ids.add(s2);
+  }
+  return ids;
+}
+
+/**
+ * Live DailyCaddyUnavailable overlay for click/persist reflow.
+ * Still-placed HOUSE stay on the board; leftover live SICK rows do not
+ * pull-forward until a REMOVE_CADDY event (this click / pending intents).
+ */
+export function overlayUnavailableIdsKeepingPlaced(input: {
+  dailyUnavailableIds?: Iterable<unknown>;
+  pendingRemoveCaddyIds?: Iterable<unknown>;
+  placedIds: Iterable<unknown>;
+}): number[] {
+  const placed = new Set(uniquePositiveIds(input.placedIds));
+  return resolveCanonicalUnavailableIds({
+    dailyUnavailableIds: input.dailyUnavailableIds,
+    pendingRemoveCaddyIds: input.pendingRemoveCaddyIds,
+  }).filter((id) => !placed.has(id));
+}
+
 /** True when unused looks like (baseline − assigned), not engine leftover. */
 export function isRosterSizedUnused(input: {
   rosterBaselineCount: number;

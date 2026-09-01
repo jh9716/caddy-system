@@ -51,18 +51,14 @@ import {
   loadCanonicalReflowState,
   type CanonicalReflowState,
 } from "@/lib/caddyPoolCanonicalService";
-import { resolveCanonicalUnavailableIds, snapshotComputePool } from "@/lib/caddyPoolCanonical";
+import {
+  overlayUnavailableIdsKeepingPlaced,
+  placedCaddyIdsFromBoard,
+  snapshotComputePool,
+} from "@/lib/caddyPoolCanonical";
 
 function placedCaddyIds(previous: AutoAssignResultV1): Set<number> {
-  const ids = new Set<number>();
-  for (const row of previous.assignments || []) {
-    if (row.caddy?.id > 0) ids.add(row.caddy.id);
-  }
-  for (const spare of previous.sparesByShift || []) {
-    if (spare.spare1?.caddyId) ids.add(spare.spare1.caddyId);
-    if (spare.spare2?.caddyId) ids.add(spare.spare2.caddyId);
-  }
-  return ids;
+  return placedCaddyIdsFromBoard(previous);
 }
 
 export const QUICK_MUTATION_TYPES: PipelineMutationType[] = [
@@ -161,9 +157,10 @@ export async function applyQuickBoardMutation(input: {
     }
   }
   const placed = placedCaddyIds(input.previous);
-  const overlayUnavail = resolveCanonicalUnavailableIds({
+  const overlayUnavail = overlayUnavailableIdsKeepingPlaced({
     dailyUnavailableIds: storedUnavailable,
-  }).filter((id) => !placed.has(id));
+    placedIds: placed,
+  });
   const previous = {
     ...input.previous,
     unavailableCaddyIds: overlayUnavail,

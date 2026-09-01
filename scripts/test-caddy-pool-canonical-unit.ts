@@ -21,6 +21,7 @@ import {
   isRosterSizedPool,
   isRosterSizedUnused,
   mergeRosterBaseline,
+  overlayUnavailableIdsKeepingPlaced,
   recoverComputePool,
   resolveCanonicalUnavailableIds,
   rosterBaselineFromAvailabilityRows,
@@ -131,6 +132,21 @@ section("stale unavailable cleanup");
   });
   assert(ids.includes(1) && ids.includes(2) && ids.includes(3), "SoT + pending kept");
   assert(!ids.includes(27) && !ids.includes(8), "stale 손지연/임형규 ids dropped");
+}
+
+section("overlay keeps still-placed live SICK");
+{
+  const overlay = overlayUnavailableIdsKeepingPlaced({
+    dailyUnavailableIds: [14, 192, 113, 112],
+    placedIds: [14, 192, 113, 146, 141],
+  });
+  assert(!overlay.includes(14) && !overlay.includes(192) && !overlay.includes(113), "placed live SICK not excluded");
+  assert(overlay.includes(112), "unplaced victim stays excluded");
+  const empty = overlayUnavailableIdsKeepingPlaced({
+    dailyUnavailableIds: [14, 192, 113],
+    placedIds: [14, 192, 113],
+  });
+  assert(empty.length === 0, "all-placed live SICK overlay is empty");
 }
 
 section("missing pool member recovery");
@@ -671,7 +687,7 @@ section("source: no stale unavailable union / no destructive pool shrink");
     "quick mutation does not seed from previous unavailable before SoT"
   );
   assert(
-    /resolveCanonicalUnavailableIds/.test(apply) &&
+    /overlayUnavailableIdsKeepingPlaced/.test(apply) &&
       /loadCanonicalReflowState/.test(apply) &&
       /offSheetMode:\s*"cache-or-fetch"/.test(apply) &&
       /skipCanonicalReload/.test(apply),
@@ -684,7 +700,7 @@ section("source: no stale unavailable union / no destructive pool shrink");
   );
   assert(
     /overlayUnavail/.test(apply) &&
-      /!placed\.has\(id\)/.test(apply) &&
+      /overlayUnavailableIdsKeepingPlaced/.test(apply) &&
       /snapshotComputePool\(/.test(apply),
     "persist does not drop still-placed HOUSE for leftover DailyCaddyUnavailable"
   );
@@ -708,9 +724,14 @@ section("source: no stale unavailable union / no destructive pool shrink");
   );
   assert(
     /mergeRosterBaseline/.test(page) &&
-      /snapshotComputePoolFromDraft/.test(page) &&
+      /snapshotComputePoolFromDraftKeepingPlaced/.test(page) &&
       /scheduleAfterPaint/.test(page),
     "client keeps baseline and projects from snapshot after paint"
+  );
+  assert(
+    /data\.draft\?\.payload/.test(page) &&
+      /confirmedDraftRef\.current \|\| input\.painted/.test(page),
+    "persist success promotes server canonical Draft, not painted-only"
   );
   const offFetch = read("src/lib/offSheetFetch.ts");
   const service = read("src/lib/caddyPoolCanonicalService.ts");

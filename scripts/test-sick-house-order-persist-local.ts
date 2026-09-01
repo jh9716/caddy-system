@@ -18,7 +18,7 @@ import { parseYmd } from "../src/lib/availabilityEngine";
 import { compareCaddyOrder, reservationKey, type AutoAssignCaddy } from "../src/lib/autoAssignEngine";
 import {
   applyLiveResultToDraft,
-  snapshotComputePoolFromDraft,
+  snapshotComputePoolFromDraftKeepingPlaced,
   type AssignmentDraft,
 } from "../src/lib/assignmentDraft";
 import {
@@ -230,7 +230,10 @@ async function main() {
   const extraUsable = draft0.caddyPool
     .filter((c) => (c.caddyType || "HOUSE") === "HOUSE" && used.has(c.id) && !LIVE_SICK.includes(c.id))
     .sort(compareCaddyOrder);
-  const clickPool = snapshotComputePoolFromDraft(draft0, null, { extraUsable });
+  const clickPool = snapshotComputePoolFromDraftKeepingPlaced(draft0, null, {
+    extraUsable,
+    liveUnavailableIds: LIVE_SICK,
+  });
 
   invalidateOffSheetCache();
   resetOffSheetHttpStatsForTests();
@@ -371,7 +374,10 @@ async function main() {
   console.log("\n== consecutive second SICK ==");
   const afterFirst = payloadToAssignmentDraft((await getDailyBoardDraft(DATE))!.payload as never);
   const v2 = (await getDailyBoardDraft(DATE))!.version;
-  const pool2 = snapshotComputePoolFromDraft(afterFirst, null, { extraUsable });
+  const pool2 = snapshotComputePoolFromDraftKeepingPlaced(afterFirst, null, {
+    extraUsable,
+    liveUnavailableIds: [...LIVE_SICK, VICTIM],
+  });
   const click2 = projectPendingIntents({
     confirmedDraft: afterFirst,
     pending: [makeMutationIntent({ type: "CADDY_SICK", caddyId: SECOND, shift: "1부" }, "s2")!],
