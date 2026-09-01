@@ -65,11 +65,38 @@ export function makeMutationIntent(
   return { id, change };
 }
 
+export function isDuplicateCaddyAbsenceIntent(
+  pending: readonly BoardMutationIntent[],
+  change: LiveChangeInput
+): boolean {
+  if (change.type !== "CADDY_SICK" && change.type !== "CADDY_ATTENDANCE_NOSHOW") {
+    return false;
+  }
+  const caddyId = Number(change.caddyId);
+  if (!(caddyId > 0)) return false;
+  return pending.some((row) => {
+    const type = row.change.type;
+    if (type !== "CADDY_SICK" && type !== "CADDY_ATTENDANCE_NOSHOW") return false;
+    return Number(row.change.caddyId) === caddyId;
+  });
+}
+
+export function scheduleAfterPaint(fn: () => void): void {
+  if (typeof requestAnimationFrame === "function") {
+    requestAnimationFrame(() => {
+      setTimeout(fn, 0);
+    });
+    return;
+  }
+  setTimeout(fn, 0);
+}
+
 export function prepareIntentOnConfirmedDraft(input: {
   confirmedDraft: AssignmentDraft;
   intent: BoardMutationIntent;
   specialSupportByShift?: Record<ShiftPart, AutoAssignCaddy[]>;
   base?: AutoAssignResultV1 | null;
+  regularCaddyPool?: AutoAssignCaddy[];
 }): PrepareIntentResult {
   const change = input.intent.change;
   if (change.type === "CADDY_SICK" || change.type === "CADDY_ATTENDANCE_NOSHOW") {
@@ -95,6 +122,7 @@ export function prepareIntentOnConfirmedDraft(input: {
     base: input.base ?? null,
     change: input.intent.change,
     specialSupportByShift: input.specialSupportByShift,
+    regularCaddyPool: input.regularCaddyPool,
   });
   const blocking = preview.warnings.find((w) => w.level === "error");
   if (blocking) {
@@ -119,6 +147,7 @@ export function projectPendingIntents(input: {
   pending: BoardMutationIntent[];
   specialSupportByShift?: Record<ShiftPart, AutoAssignCaddy[]>;
   base?: AutoAssignResultV1 | null;
+  regularCaddyPool?: AutoAssignCaddy[];
 }): {
   draft: AssignmentDraft;
   applied: BoardMutationIntent[];
@@ -133,6 +162,7 @@ export function projectPendingIntents(input: {
       intent,
       specialSupportByShift: input.specialSupportByShift,
       base: input.base ?? null,
+      regularCaddyPool: input.regularCaddyPool,
     });
     if (!prepared.ok) {
       dropped.push({ intent, message: prepared.message });

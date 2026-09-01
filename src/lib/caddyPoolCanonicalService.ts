@@ -9,7 +9,11 @@ import { computeAvailability } from "@/lib/availabilityEngine";
 import {
   applyDailyExternalExclusions,
 } from "@/lib/dailyAvailabilityOverlay";
-import { fetchPublishedOffSheets } from "@/lib/offSheetFetch";
+import {
+  fetchPublishedOffSheets,
+  peekCachedOffSheets,
+  peekCachedOffSheetsForDate,
+} from "@/lib/offSheetFetch";
 import { offNamesForDate } from "@/lib/offSheetParser";
 import { listDailyOpsDutyCaddyIds, loadStoredDutyEntries } from "@/lib/dailyOpsDutyService";
 import { listDailySpecialDutyRecords } from "@/lib/dailySpecialDutyService";
@@ -27,6 +31,11 @@ import {
   type AutoAssignCaddy,
 } from "@/lib/autoAssignEngine";
 
+export type CanonicalOffSheetMode = "cache" | "fetch" | "cache-or-fetch";
+
+/** Persist may wait 1–4s for OFF SoT. UI does not wait; do not treat 4s as miss. */
+export const OFF_SHEET_RESOLVE_TIMEOUT_MS = 15_000;
+
 export type CanonicalReflowState = {
   rosterBaseline: AutoAssignCaddy[];
   computePool: AutoAssignCaddy[];
@@ -34,7 +43,73 @@ export type CanonicalReflowState = {
   opsDutyIds: number[];
   specialSkipIds: number[];
   offSheetMatched: boolean;
+  offSheetSource: "cache" | "miss" | "fetch" | "skipped";
 };
+
+export type LoadCanonicalReflowOptions = {
+  offSheetMode?: CanonicalOffSheetMode;
+  /** Recover compute from this pool. Roster baseline still uses clientPool. */
+  computeClientPool?: readonly AutoAssignCaddy[] | null;
+};
+
+export async function resolveCanonicalOffSheet(
+  ymd: string,
+  mode: CanonicalOffSheetMode = "fetch"
+): Promise<{
+  matched: boolean;
+  names: string[];
+  source: CanonicalReflowState["offSheetSource"];
+}> {
+  const year = Number(ymd.slice(0, 4));
+  if (!Number.isInteger(year) || year >= 2090) {
+    return { matched: false, names: [], source: "skipped" };
+  }
+
+  const fromSheets = (sheets: Awaited<ReturnType<typeof fetchPublishedOffSheets>>, source: CanonicalReflowState["offSheetSource"]) => {
+    const parsed = offNamesForDate(sheets, ymd);
+    const matched = parsed.matchedSheetDates.includes(ymd);
+    return {
+      matched,
+      names: matched ? parsed.names : [],
+      source,
+    };
+  };
+
+  if (mode === "cache" || mode === "cache-or-fetch") {
+    const cached = peekCachedOffSheetsForDate(ymd);
+    if (cached) {
+      return fromSheets(cached, "cache");
+    }
+    if (mode === "cache") {
+      return { matched: false, names: [], source: "miss" };
+    }
+  }
+
+  try {
+    const staleWorkbook = peekCachedOffSheets() !== null;
+    const sheets = await new Promise<Awaited<ReturnType<typeof fetchPublishedOffSheets>>>(
+      (resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error("off-sheet-timeout")),
+          OFF_SHEET_RESOLVE_TIMEOUT_MS
+        );
+        fetchPublishedOffSheets({ force: staleWorkbook }).then(
+          (value) => {
+            clearTimeout(timer);
+            resolve(value);
+          },
+          (err) => {
+            clearTimeout(timer);
+            reject(err);
+          }
+        );
+      }
+    );
+    return fromSheets(sheets, "fetch");
+  } catch {
+    return { matched: false, names: [], source: "miss" };
+  }
+}
 
 function asCaddyDb(db: unknown): {
   caddy: { findMany: (args: unknown) => Promise<RosterBaselineRow[]> };
@@ -58,7 +133,8 @@ function asCaddyDb(db: unknown): {
 export async function loadCanonicalReflowState(
   ymd: string,
   clientPool: readonly AutoAssignCaddy[] | null | undefined,
-  db: unknown = defaultPrisma
+  db: unknown = defaultPrisma,
+  opts?: LoadCanonicalReflowOptions
 ): Promise<CanonicalReflowState> {
   const prisma = asCaddyDb(db);
   const { start, end } = parseYmd(ymd);
@@ -123,23 +199,14 @@ export async function loadCanonicalReflowState(
 
   let offSheetMatched = false;
   let offNames: string[] = [];
-  const year = Number(ymd.slice(0, 4));
-  if (Number.isInteger(year) && year < 2090) {
-    try {
-      const sheets = await Promise.race([
-        fetchPublishedOffSheets(),
-        new Promise<never>((_, reject) => {
-          setTimeout(() => reject(new Error("off-sheet-timeout")), 4000);
-        }),
-      ]);
-      const parsed = offNamesForDate(sheets, ymd);
-      offSheetMatched = parsed.matchedSheetDates.includes(ymd);
-      offNames = offSheetMatched ? parsed.names : [];
-    } catch {
-      offSheetMatched = false;
-      offNames = [];
-    }
-  }
+  let offSheetSource: CanonicalReflowState["offSheetSource"] = "skipped";
+  const resolvedOff = await resolveCanonicalOffSheet(
+    ymd,
+    opts?.offSheetMode ?? "fetch"
+  );
+  offSheetMatched = resolvedOff.matched;
+  offNames = resolvedOff.names;
+  offSheetSource = resolvedOff.source;
 
   let dutyEntries: Awaited<ReturnType<typeof loadStoredDutyEntries>> = [];
   try {
@@ -165,7 +232,7 @@ export async function loadCanonicalReflowState(
     offSheetMatched,
   });
   const computePool = recoverComputePool({
-    clientPool,
+    clientPool: opts?.computeClientPool ?? clientPool,
     sotUsable: usableComputePool({
       rosterBaseline: sotUsable,
       unavailableIds,
@@ -185,5 +252,6 @@ export async function loadCanonicalReflowState(
     opsDutyIds,
     specialSkipIds,
     offSheetMatched,
+    offSheetSource,
   };
 }

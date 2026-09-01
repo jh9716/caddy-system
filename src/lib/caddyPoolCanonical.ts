@@ -108,6 +108,86 @@ export function pendingRemoveCaddyIdsFromEvents(
   );
 }
 
+/** True when unused looks like (baseline − assigned), not engine leftover. */
+export function isRosterSizedUnused(input: {
+  rosterBaselineCount: number;
+  assignedCount: number;
+  unusedCount: number;
+}): boolean {
+  const { rosterBaselineCount, assignedCount, unusedCount } = input;
+  if (unusedCount <= 0 || rosterBaselineCount <= 0) return false;
+  const covered = assignedCount + unusedCount;
+  return (
+    covered >= Math.floor(rosterBaselineCount * 0.8) &&
+    unusedCount >= Math.max(20, Math.floor(assignedCount * 0.2))
+  );
+}
+
+export function isRosterSizedPool(
+  poolCount: number,
+  rosterBaselineCount: number
+): boolean {
+  if (poolCount <= 0 || rosterBaselineCount <= 0) return false;
+  return poolCount >= Math.max(40, Math.floor(rosterBaselineCount * 0.8));
+}
+
+/**
+ * Click-path compute pool from the already-confirmed snapshot.
+ * Never uses a full roster baseline (휴무 included) as reflow candidates.
+ */
+export function snapshotComputePool(input: {
+  rosterBaseline: readonly AutoAssignCaddy[];
+  assigned: readonly AutoAssignCaddy[];
+  spareIds?: Iterable<unknown>;
+  engineUnused?: readonly AutoAssignCaddy[] | null;
+  extraUsable?: readonly AutoAssignCaddy[] | null;
+  unavailableIds?: Iterable<unknown>;
+  opsDutyIds?: Iterable<unknown>;
+  specialSkipIds?: Iterable<unknown>;
+  offSheetIds?: Iterable<unknown>;
+}): AutoAssignCaddy[] {
+  const exclusions = {
+    unavailableIds: input.unavailableIds,
+    opsDutyIds: input.opsDutyIds,
+    specialSkipIds: input.specialSkipIds,
+    offSheetIds: input.offSheetIds,
+  };
+  const extra = eligibleRegularReflowCaddies([...(input.extraUsable || [])]);
+  if (
+    extra.length > 0 &&
+    !isRosterSizedPool(extra.length, input.rosterBaseline.length)
+  ) {
+    return usableComputePool({
+      rosterBaseline: extra,
+      ...exclusions,
+    });
+  }
+
+  const unused = eligibleRegularReflowCaddies([...(input.engineUnused || [])]);
+  const unusedPolluted = isRosterSizedUnused({
+    rosterBaselineCount: input.rosterBaseline.length,
+    assignedCount: input.assigned.length,
+    unusedCount: unused.length,
+  });
+  const assigned = eligibleRegularReflowCaddies([...(input.assigned || [])]);
+  const byId = new Map<number, AutoAssignCaddy>();
+  for (const caddy of [...input.rosterBaseline, ...assigned, ...unused]) {
+    if (caddy?.id > 0 && !byId.has(caddy.id)) byId.set(caddy.id, caddy);
+  }
+  const spares: AutoAssignCaddy[] = [];
+  for (const raw of uniquePositiveIds(input.spareIds || [])) {
+    const found = byId.get(raw);
+    if (found) spares.push(found);
+  }
+  const seed = unusedPolluted
+    ? mergeCaddyRoster(assigned, spares)
+    : mergeCaddyRoster(assigned, unused, spares);
+  return usableComputePool({
+    rosterBaseline: seed,
+    ...exclusions,
+  });
+}
+
 export function usableComputePool(input: {
   rosterBaseline: readonly AutoAssignCaddy[];
   unavailableIds?: Iterable<unknown>;

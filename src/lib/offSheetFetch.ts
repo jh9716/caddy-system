@@ -7,6 +7,7 @@ import {
   offNamesForDate,
   type OffSheet,
 } from "@/lib/offSheetParser";
+import { isLocalDatabaseUrl } from "@/lib/dbSafety";
 
 export const DEFAULT_OFF_SHEET_ID = "1KIYkXrNQi004qkkyFWRYQqVxPkpi87EwcbDzIOUfRIw";
 
@@ -66,9 +67,76 @@ export function workbookToOffSheets(buffer: Buffer): OffSheet[] {
 
 const OFF_SHEET_CACHE_MS = 45_000;
 let offSheetCache: { id: string; at: number; sheets: OffSheet[] } | null = null;
+let offSheetHttpFetchCount = 0;
+let testOffSheetLoader: ((opts?: { force?: boolean }) => Promise<OffSheet[]>) | null =
+  null;
 
 export function invalidateOffSheetCache() {
   offSheetCache = null;
+}
+
+export function getOffSheetHttpFetchCount(): number {
+  return offSheetHttpFetchCount;
+}
+
+export function resetOffSheetHttpStatsForTests() {
+  if (process.env.NODE_ENV === "production") return;
+  offSheetHttpFetchCount = 0;
+}
+
+export function setPublishedOffSheetLoaderForTests(
+  loader: ((opts?: { force?: boolean }) => Promise<OffSheet[]>) | null
+) {
+  if (process.env.NODE_ENV === "production") return;
+  testOffSheetLoader = loader;
+}
+
+/** Process cache only. Not date-safe by itself. */
+export function peekCachedOffSheets(): OffSheet[] | null {
+  const id = sheetId();
+  const now = Date.now();
+  if (
+    offSheetCache &&
+    offSheetCache.id === id &&
+    now - offSheetCache.at < OFF_SHEET_CACHE_MS
+  ) {
+    return offSheetCache.sheets;
+  }
+  return null;
+}
+
+/** Cache hit only when this ymd exists in the cached workbook. */
+export function peekCachedOffSheetsForDate(ymd: string): OffSheet[] | null {
+  const sheets = peekCachedOffSheets();
+  if (!sheets) return null;
+  try {
+    const parsed = offNamesForDate(sheets, ymd);
+    if (!parsed.matchedSheetDates.includes(ymd)) return null;
+    return sheets;
+  } catch {
+    return null;
+  }
+}
+
+export function seedOffSheetCacheForTests(sheets: OffSheet[]) {
+  if (process.env.NODE_ENV === "production") return;
+  offSheetCache = { id: sheetId(), at: Date.now(), sheets };
+}
+
+function allowLocalOffSheetTestHooks(): boolean {
+  return (
+    process.env.NODE_ENV !== "production" &&
+    isLocalDatabaseUrl(process.env.DATABASE_URL)
+  );
+}
+
+async function applyLocalOffSheetTestDelay() {
+  if (!allowLocalOffSheetTestHooks()) return;
+  const delay = Number(process.env.OFF_SHEET_TEST_DELAY_MS || 0);
+  if (!Number.isFinite(delay) || delay <= 0) return;
+  await new Promise((resolve) =>
+    setTimeout(resolve, Math.min(Math.floor(delay), 10_000))
+  );
 }
 
 export async function fetchPublishedOffSheets(opts?: {
@@ -84,8 +152,38 @@ export async function fetchPublishedOffSheets(opts?: {
   ) {
     return offSheetCache.sheets;
   }
+  await applyLocalOffSheetTestDelay();
+  if (testOffSheetLoader) {
+    offSheetHttpFetchCount += 1;
+    const sheets = await testOffSheetLoader(opts);
+    if (!sheets.length) {
+      throw new OffSheetError(
+        "휴무 Google Sheet에 시트가 없습니다.",
+        "off_sheet_empty",
+        502
+      );
+    }
+    offSheetCache = { id, at: Date.now(), sheets };
+    return sheets;
+  }
+  const testFile = process.env.OFF_SHEET_TEST_FILE?.trim();
+  if (testFile && allowLocalOffSheetTestHooks()) {
+    offSheetHttpFetchCount += 1;
+    const { readFileSync } = await import("node:fs");
+    const sheets = JSON.parse(readFileSync(testFile, "utf8")) as OffSheet[];
+    if (!Array.isArray(sheets) || sheets.length === 0) {
+      throw new OffSheetError(
+        "휴무 Google Sheet에 시트가 없습니다.",
+        "off_sheet_empty",
+        502
+      );
+    }
+    offSheetCache = { id, at: Date.now(), sheets };
+    return sheets;
+  }
   const url = exportUrl(id);
   let res: Response;
+  offSheetHttpFetchCount += 1;
   try {
     res = await fetch(url, {
       headers: { "User-Agent": "caddy-system-off-sheet/1.0" },

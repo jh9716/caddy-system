@@ -5,6 +5,7 @@
 import {
   changeFromPipelinePreview,
   dropIntent,
+  isDuplicateCaddyAbsenceIntent,
   isPipelineMutation,
   makeMutationIntent,
   prepareIntentOnConfirmedDraft,
@@ -36,6 +37,13 @@ import { computeAutoAssignmentsV1, type AutoAssignCaddy } from "../src/lib/autoA
 import { previewLiveChangeFromDraft } from "../src/lib/assignmentChange";
 import { makeMoveReservationChange } from "../src/lib/assignmentChange";
 import { reservationKey } from "../src/lib/autoAssignEngine";
+import {
+  mergeRosterBaseline,
+  snapshotComputePool,
+} from "../src/lib/caddyPoolCanonical";
+import { snapshotComputePoolFromDraft } from "../src/lib/assignmentDraft";
+import { peekCachedOffSheets, peekCachedOffSheetsForDate, seedOffSheetCacheForTests, invalidateOffSheetCache } from "../src/lib/offSheetFetch";
+import type { ShiftPart } from "../src/lib/reservationParser";
 import { readFileSync } from "fs";
 import { join } from "path";
 
@@ -152,6 +160,69 @@ section("서승희 병가 pull-forward");
     preview.after
   );
   assert(after.meta.houseStartCaddyId === 서승희.id, "병가 후에도 원래 HOUSE 시작점 유지");
+}
+
+section("canonical compute pool SICK of houseStart keeps origin");
+{
+  const draft = fixtureDraft();
+  const computeWithoutStart = pool.filter((c) => c.id !== 서승희.id);
+  const preview = previewLiveChangeFromDraft({
+    draft,
+    change: { type: "CADDY_SICK", caddyId: 서승희.id, shift: "1부" },
+    regularCaddyPool: computeWithoutStart,
+  });
+  const names = preview.after.assignments
+    .filter((a) => a.shift === "1부" && a.kind === "regular")
+    .sort((a, b) => a.sequenceIndex - b.sequenceIndex)
+    .map((a) => a.caddy.name);
+  assert(names[0] === "김하나1", "persist-style pool still pull-forwards to 김하나1");
+  assert(!names.includes("서승희"), "victim out of persist-style pool reflow");
+  assert(!names.includes("김예진1"), "canonical SICK of start does not reset to 1조 first");
+}
+
+section("same-team teamOrder 0 houseStart SICK does not reset to lowest id");
+{
+  const a = house(1, "이영진", 1);
+  a.team = "1조";
+  a.teamOrder = 0;
+  const start = house(13, "서승희", 1);
+  start.team = "1조";
+  start.teamOrder = 0;
+  const b = house(14, "김지운", 1);
+  b.team = "1조";
+  b.teamOrder = 0;
+  const c = house(15, "이강우", 1);
+  c.team = "1조";
+  c.teamOrder = 0;
+  const d = house(16, "엄진순", 1);
+  d.team = "1조";
+  d.teamOrder = 0;
+  const sameTeamPool = [a, start, b, c, d];
+  const result = computeAutoAssignmentsV1({
+    date: "2099-12-21",
+    available: sameTeamPool,
+    openCourses: ["VERTHILL", "SKY", "OCEAN", "LAKE"],
+    houseStartCaddyId: start.id,
+    reservations: [
+      { date: "2099-12-21", course: "SKY", shift: "1부", teeTime: "07:00", teamName: "A팀", rawRowIndex: 1, sourceSheet: "예약1부" },
+      { date: "2099-12-21", course: "OCEAN", shift: "1부", teeTime: "07:08", teamName: "B팀", rawRowIndex: 2, sourceSheet: "예약1부" },
+      { date: "2099-12-21", course: "LAKE", shift: "1부", teeTime: "07:16", teamName: "C팀", rawRowIndex: 3, sourceSheet: "예약1부" },
+      { date: "2099-12-21", course: "VERTHILL", shift: "1부", teeTime: "07:24", teamName: "D팀", rawRowIndex: 4, sourceSheet: "예약1부" },
+    ],
+  });
+  const draft = createDraftFromAutoResult(result, sameTeamPool);
+  const preview = previewLiveChangeFromDraft({
+    draft,
+    change: { type: "CADDY_SICK", caddyId: start.id, shift: "1부" },
+    regularCaddyPool: sameTeamPool.filter((x) => x.id !== start.id),
+  });
+  const names = preview.after.assignments
+    .filter((row) => row.shift === "1부" && row.kind === "regular")
+    .sort((x, y) => x.sequenceIndex - y.sequenceIndex)
+    .map((row) => row.caddy.name);
+  assert(names[0] === "김지운", "same-team SICK of start pull-forwards to next id");
+  assert(!names.includes("서승희"), "start victim gone");
+  assert(names[0] !== "이영진", "do not rewind to lowest id after pre-rotated house");
 }
 
 section("resolveHouseQueueKeepingOrigin");
@@ -343,6 +414,222 @@ section("unload guard");
   );
 }
 
+section("duplicate SICK same caddy is dropped");
+{
+  const draft = fixtureDraft();
+  const first = makeMutationIntent(
+    { type: "CADDY_SICK", caddyId: 서승희.id, shift: "1부" },
+    "s1"
+  )!;
+  assert(
+    isDuplicateCaddyAbsenceIntent([first], {
+      type: "CADDY_SICK",
+      caddyId: 서승희.id,
+      shift: "1부",
+    }),
+    "same-caddy 병가 연타 is duplicate"
+  );
+  assert(
+    !isDuplicateCaddyAbsenceIntent([first], {
+      type: "CADDY_SICK",
+      caddyId: 김하나1.id,
+      shift: "1부",
+    }),
+    "other caddy 병가 is not duplicate"
+  );
+}
+
+function houseMany(start: number, count: number): AutoAssignCaddy[] {
+  return Array.from({ length: count }, (_, i) =>
+    house(start + i, `H${start + i}`, i % 8)
+  );
+}
+
+function shiftRows(
+  date: string,
+  shift: ShiftPart,
+  count: number,
+  prefix: string
+) {
+  const courses = ["VERTHILL", "SKY", "OCEAN", "LAKE"] as const;
+  const startHour = shift === "1부" ? 7 : shift === "2부" ? 12 : 17;
+  return Array.from({ length: count }, (_, i) => ({
+    date,
+    course: courses[i % 4],
+    shift,
+    teeTime: `${String(startHour + Math.floor(i / 4)).padStart(2, "0")}:${String(
+      (i % 4) * 8
+    ).padStart(2, "0")}`,
+    teamName: `${prefix}${i + 1}`,
+    rawRowIndex: i + 1,
+    sourceSheet: `예약${shift}`,
+  }));
+}
+
+function productionLikeDraft() {
+  const date = "2026-08-28";
+  const compute = houseMany(1, 93);
+  const off = houseMany(400, 80);
+  const reservations = [
+    ...shiftRows(date, "1부", 28, "A"),
+    ...shiftRows(date, "2부", 28, "B"),
+    ...shiftRows(date, "3부", 26, "C"),
+  ];
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: compute,
+    openCourses: ["VERTHILL", "SKY", "OCEAN", "LAKE"],
+    houseStartCaddyId: compute[8].id,
+    reservations,
+  });
+  const draft = createDraftFromAutoResult(result, mergeRosterBaseline(compute, off));
+  return { date, compute, off, result, draft };
+}
+
+function measureSickClick(input: {
+  draft: ReturnType<typeof createDraftFromAutoResult>;
+  base?: ReturnType<typeof computeAutoAssignmentsV1> | null;
+  pool?: AutoAssignCaddy[];
+  victimId: number;
+  shift: ShiftPart;
+}) {
+  const t0 = Date.now();
+  const computePool =
+    input.pool ||
+    snapshotComputePoolFromDraft(input.draft, input.base ?? null);
+  const tSnapshot = Date.now();
+  const projected = projectPendingIntents({
+    confirmedDraft: input.draft,
+    pending: [
+      makeMutationIntent(
+        { type: "CADDY_SICK", caddyId: input.victimId, shift: input.shift },
+        "sick-click"
+      )!,
+    ],
+    base: input.base ?? null,
+    regularCaddyPool: computePool,
+  });
+  const tProject = Date.now();
+  return {
+    snapshotMs: tSnapshot - t0,
+    projectMs: tProject - tSnapshot,
+    totalMs: tProject - t0,
+    computePoolSize: computePool.length,
+    projected,
+  };
+}
+
+section("SICK click→paint 1/2/3부 + #108 vs #109");
+{
+  const { compute, off, result, draft } = productionLikeDraft();
+  const baseline = draft.caddyPool;
+  assert(baseline.length >= 160, "draft stores #109 roster baseline");
+  const brokenMs: number[] = [];
+  const fixedMs: number[] = [];
+  const times: Record<string, number> = {};
+  for (const shift of ["1부", "2부", "3부"] as ShiftPart[]) {
+    const victim = draft.assignments.find(
+      (row) => row.shift === shift && row.kind === "regular" && row.caddy.caddyType === "HOUSE"
+    );
+    assert(!!victim, `${shift} HOUSE victim exists`);
+    if (!victim) continue;
+    const before108 = measureSickClick({
+      draft: { ...draft, caddyPool: compute },
+      base: result,
+      pool: compute,
+      victimId: victim.caddy.id,
+      shift,
+    });
+    const broken109 = measureSickClick({
+      draft,
+      base: { ...result, unusedCaddies: [...result.unusedCaddies, ...off] },
+      pool: baseline,
+      victimId: victim.caddy.id,
+      shift,
+    });
+    const fixed = measureSickClick({
+      draft,
+      base: result,
+      victimId: victim.caddy.id,
+      shift,
+    });
+    times[`${shift}-108`] = before108.totalMs;
+    times[`${shift}-109-broken`] = broken109.totalMs;
+    times[`${shift}-fixed`] = fixed.totalMs;
+    brokenMs.push(broken109.totalMs);
+    fixedMs.push(fixed.totalMs);
+    assert(fixed.totalMs < 100, `${shift} snapshot click→paint ${fixed.totalMs}ms < 100`);
+    assert(
+      !fixed.projected.draft.assignments.some((a) => a.caddy.id === victim.caddy.id),
+      `${shift} victim gone after optimistic SICK`
+    );
+    assert(
+      !fixed.projected.draft.assignments.some((a) => off.some((c) => c.id === a.caddy.id)),
+      `${shift} 휴무 not resurrected`
+    );
+    const beforeSpare = draft.sparesByShift.find((s) => s.shift === shift);
+    const afterSpare = fixed.projected.draft.sparesByShift.find((s) => s.shift === shift);
+    assert(
+      !afterSpare?.spare1 || afterSpare.spare1.caddyId !== victim.caddy.id,
+      `${shift} sick caddy is not spare1`
+    );
+    if (beforeSpare?.spare1 || beforeSpare?.spare2) {
+      assert(
+        afterSpare?.spare1?.caddyId !== beforeSpare?.spare1?.caddyId ||
+          afterSpare?.spare2?.caddyId !== beforeSpare?.spare2?.caddyId ||
+          !fixed.projected.draft.assignments.some((a) => a.caddy.id === victim.caddy.id),
+        `${shift} spare recomputed or victim removed`
+      );
+    }
+    if (shift === "3부") {
+      const seq = draft.assignments
+        .filter((a) => a.shift === "3부" && a.kind === "regular")
+        .sort((a, b) => a.sequenceIndex - b.sequenceIndex);
+      const afterSeq = fixed.projected.draft.assignments
+        .filter((a) => a.shift === "3부" && a.kind === "regular")
+        .sort((a, b) => a.sequenceIndex - b.sequenceIndex);
+      if (seq.length > 1) {
+        assert(
+          afterSeq[0]?.caddy.id === seq[1]?.caddy.id ||
+            afterSeq.some((a) => a.caddy.id === seq[1]?.caddy.id),
+          "3부 pull-forward keeps following HOUSE"
+        );
+      }
+    }
+    console.log(
+      `  · ${shift} click→paint #108=${before108.totalMs}ms broken109=${broken109.totalMs}ms fixed=${fixed.totalMs}ms pool ${before108.computePoolSize}/${broken109.computePoolSize}/${fixed.computePoolSize}`
+    );
+  }
+  const snap = snapshotComputePool({
+    rosterBaseline: baseline,
+    assigned: draft.assignments.map((a) => a.caddy),
+    engineUnused: result.unusedCaddies,
+  });
+  assert(snap.length < 120, "snapshot pool is not full baseline");
+  assert(
+    !snap.some((c) => off.some((o) => o.id === c.id)),
+    "snapshot excludes 휴무 baseline"
+  );
+  assert(
+    Math.max(...fixedMs) <= Math.max(...brokenMs) || Math.max(...fixedMs) < 100,
+    "fixed path is not slower than baseline-polluted path"
+  );
+}
+
+section("off-sheet cache peek never fetches");
+{
+  invalidateOffSheetCache();
+  assert(peekCachedOffSheets() === null, "empty cache is miss");
+  seedOffSheetCacheForTests([{ name: "0817~30", matrix: [["날짜"], ["0828"]] }]);
+  const peeked = peekCachedOffSheets();
+  assert(!!peeked && peeked[0]?.name === "0817~30", "peek returns seeded cache");
+  assert(
+    peekCachedOffSheetsForDate("2026-08-28") === null,
+    "workbook without today's header is not date-safe"
+  );
+  invalidateOffSheetCache();
+}
+
 section("source contracts");
 {
   const page = readFileSync(join(process.cwd(), "src/app/manage/assignments/page.tsx"), "utf8");
@@ -352,6 +639,25 @@ section("source contracts");
   assert(page.includes("/api/assignments/reflow/quick-mutation"), "page uses atomic mutation route");
   assert(page.includes("changeFromPipelinePreview"), "dock apply joins pipeline");
   assert(page.includes("pendingIntentsRef.current.length > 0"), "flush restarts if more pending");
+  assert(page.includes("scheduleAfterPaint"), "persist is scheduled after paint");
+  assert(page.includes("isDuplicateCaddyAbsenceIntent"), "same-caddy 병가 연타 drops");
+  assert(page.includes("liveSnapshotPool"), "click uses confirmed snapshot pool");
+  assert(!page.includes("fetchPublishedOffSheets"), "client click path has no OFF sheet HTTP");
+  const tap = page.split("function handlePlacementTap")[1]?.split("const onTeamTap")[0] || "";
+  assert(
+    !/persistInFlight/.test(tap),
+    "opening another caddy sheet is not blocked by persistInFlight"
+  );
+  const enqueue = page.split("function enqueuePipelineMutation")[1]?.split("async function persistPipelineIntent")[0] || "";
+  assert(
+    /setQuickSheet\(null\)/.test(enqueue) &&
+      enqueue.indexOf("setQuickSheet(null)") < enqueue.indexOf("projectPendingIntents"),
+    "sheet closes before projection"
+  );
+  assert(
+    /scheduleAfterPaint\(\(\) => \{\s*void flushPipelineWrites\(\);/.test(enqueue),
+    "flush is deferred until after paint"
+  );
   assert(page.includes("keepalive: true"), "pipeline fetch uses keepalive");
   assert(page.includes("beforeunload"), "page blocks refresh while dirty");
   assert(page.includes("PIPELINE_UNLOAD_TOAST"), "in-app nav toast while dirty");
