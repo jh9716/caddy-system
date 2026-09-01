@@ -668,6 +668,11 @@ section("source: no stale unavailable union / no destructive pool shrink");
     "quick mutation rebuilds SoT from cache-or-fetch canonical, no double fetch"
   );
   assert(
+    /applyLiveResultToDraft\(/.test(apply) &&
+      /assignmentDraftToPayload\(synced\)/.test(apply),
+    "persist writes canonical preview.after, not client-painted OFF spare"
+  );
+  assert(
     /uniquePositiveIds\(after\.unavailableCaddyIds/.test(draft),
     "applyLiveResultToDraft uses after unavailable only"
   );

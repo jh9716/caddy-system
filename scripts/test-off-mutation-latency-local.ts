@@ -195,6 +195,7 @@ async function persistSick(
     regularCaddyPool: pool,
   });
   if (!prepared.ok) throw new Error(prepared.message);
+  const preparedHasOff = usedIds(prepared.painted).includes(OFF_ID);
   const offStart = Date.now();
   const canonical = await resolveCanonicalLivePool(DATE, pool, {
     offSheetMode: "cache-or-fetch",
@@ -224,6 +225,7 @@ async function persistSick(
     persistMs: Date.now() - persistStart,
     dbMs: persist.timings?.persistMs ?? 0,
     source: canonical.offSheetSource,
+    preparedHasOff,
     version: Number(persist.draft?.version),
     painted: payloadToAssignmentDraft(persist.draft!.payload as never),
   };
@@ -266,10 +268,10 @@ async function main() {
     const second = await persistSick(first.painted, pool, first.version, SICK_B);
     const drainMs = Date.now() - drainStart;
     console.log(
-      `  · first off=${first.offMs}ms persist=${first.persistMs}ms db=${first.dbMs}ms source=${first.source}`
+      `  · first off=${first.offMs}ms persist=${first.persistMs}ms db=${first.dbMs}ms source=${first.source} paintedOff=${first.preparedHasOff}`
     );
     console.log(
-      `  · second off=${second.offMs}ms persist=${second.persistMs}ms db=${second.dbMs}ms source=${second.source}`
+      `  · second off=${second.offMs}ms persist=${second.persistMs}ms db=${second.dbMs}ms source=${second.source} paintedOff=${second.preparedHasOff}`
     );
     console.log(`  · drain=${drainMs}ms http=${getOffSheetHttpFetchCount()}`);
     assert(getOffSheetHttpFetchCount() === 1, "sequential 2 SICK is 1 HTTP");
@@ -279,6 +281,8 @@ async function main() {
     assert(second.offMs < 200, `second did not fetch again (${second.offMs}ms)`);
     assert(seeded.version === 1 && first.version === 2 && second.version === 3, "Draft 1→2→3");
     const reloaded = payloadToAssignmentDraft((await getDailyBoardDraft(DATE))!.payload);
+    assert(!usedIds(first.painted).includes(OFF_ID), "persist1: OFF not in Draft used");
+    assert(!usedIds(second.painted).includes(OFF_ID), "persist2: OFF not in Draft used");
     assert(!usedIds(reloaded).includes(SICK_A), "reload: first SICK gone");
     assert(!usedIds(reloaded).includes(SICK_B), "reload: second SICK gone");
     assert(!usedIds(reloaded).includes(OFF_ID), "reload: OFF not resurrected");
