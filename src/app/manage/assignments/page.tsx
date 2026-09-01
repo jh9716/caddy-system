@@ -133,6 +133,7 @@ import {
 } from "@/lib/publishDailyBoardClient";
 import {
   PIPELINE_LEADING_FAIL_TOAST,
+  PIPELINE_PERSIST_WATCHDOG_MS,
   PIPELINE_SAVING_FULL,
   PIPELINE_SAVING_LABEL,
   changeFromPipelinePreview,
@@ -140,6 +141,8 @@ import {
   isDuplicateCaddyAbsenceIntent,
   isPipelineMutation,
   makeMutationIntent,
+  persistFetchWithWatchdog,
+  persistWatchdogFailure,
   prepareIntentOnConfirmedDraft,
   projectEnqueuedIntents,
   projectPendingIntents,
@@ -1730,31 +1733,40 @@ export default function ManageAssignmentsOpsPage() {
           input.change.type === "CADDY_ATTENDANCE_NOSHOW"))
         ? "error"
         : null;
-    const res = await fetch("/api/assignments/reflow/quick-mutation", {
-      method: "POST",
-      credentials: "include",
-      keepalive: true,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        previous: input.previous,
-        regularCaddyPool:
-          computePoolRef.current.length > 0
-            ? computePoolRef.current
-            : liveSnapshotPool(confirmedDraftRef.current || input.painted),
-        events: input.preview.events,
-        changeType: input.preview.changeType,
-        change: input.change,
-        draft: {
-          date: (confirmedDraftRef.current || input.painted).date,
-          version: serverDraftVersionRef.current,
-          payload: assignmentDraftToPayload(
-            confirmedDraftRef.current || input.painted
-          ),
+    let res: Response;
+    try {
+      res = await persistFetchWithWatchdog(
+        "/api/assignments/reflow/quick-mutation",
+        {
+          method: "POST",
+          credentials: "include",
+          keepalive: true,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            previous: input.previous,
+            regularCaddyPool:
+              computePoolRef.current.length > 0
+                ? computePoolRef.current
+                : liveSnapshotPool(confirmedDraftRef.current || input.painted),
+            events: input.preview.events,
+            changeType: input.preview.changeType,
+            change: input.change,
+            draft: {
+              date: (confirmedDraftRef.current || input.painted).date,
+              version: serverDraftVersionRef.current,
+              payload: assignmentDraftToPayload(
+                confirmedDraftRef.current || input.painted
+              ),
+            },
+            ...(testFailLive ? { testFailLive } : {}),
+            ...(delayMs > 0 ? { testDelayMs: delayMs } : {}),
+          }),
         },
-        ...(testFailLive ? { testFailLive } : {}),
-        ...(delayMs > 0 ? { testDelayMs: delayMs } : {}),
-      }),
-    });
+        PIPELINE_PERSIST_WATCHDOG_MS
+      );
+    } catch (error) {
+      return persistWatchdogFailure(error);
+    }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       return {
@@ -1839,12 +1851,17 @@ export default function ManageAssignmentsOpsPage() {
           paintProjectedDraft(rest.draft);
           continue;
         }
-        const persist = await persistPipelineIntent({
-          preview: prepared.preview,
-          previous: prepared.previous,
-          painted: prepared.painted,
-          change: intent.change,
-        });
+        let persist: Awaited<ReturnType<typeof persistPipelineIntent>>;
+        try {
+          persist = await persistPipelineIntent({
+            preview: prepared.preview,
+            previous: prepared.previous,
+            painted: prepared.painted,
+            change: intent.change,
+          });
+        } catch (error) {
+          persist = persistWatchdogFailure(error);
+        }
         if (!persist.ok) {
           flushHadFailure = true;
           pendingIntentsRef.current = dropIntent(

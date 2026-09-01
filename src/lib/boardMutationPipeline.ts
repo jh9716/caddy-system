@@ -18,6 +18,7 @@ import {
 } from "@/lib/assignmentChange";
 import type { AutoAssignCaddy, AutoAssignResultV1 } from "@/lib/autoAssignEngine";
 import type { ShiftPart } from "@/lib/reservationParser";
+import { OFF_SHEET_UNRESOLVED_USER_MESSAGE } from "@/lib/caddyPoolCanonical";
 
 export const PIPELINE_MUTATION_TYPES = [
   "MOVE_RESERVATION",
@@ -48,6 +49,8 @@ export const PIPELINE_INTENT_DROPPED_TOAST =
   "앞선 저장 이후 이 변경은 적용할 수 없어 취소했습니다.";
 export const PIPELINE_LEADING_FAIL_TOAST =
   "이 변경은 저장하지 못했습니다. 이미 확정된 배치는 유지합니다.";
+/** Client persist abort after server 15s OFF timeout, with slack. */
+export const PIPELINE_PERSIST_WATCHDOG_MS = 20_000;
 
 export function isPipelineMutation(
   type: string | undefined | null
@@ -221,6 +224,54 @@ export function dropIntent(
   intentId: string
 ): BoardMutationIntent[] {
   return pending.filter((row) => row.id !== intentId);
+}
+
+export function createPersistWatchdog(timeoutMs = PIPELINE_PERSIST_WATCHDOG_MS): {
+  signal: AbortSignal;
+  dispose: () => void;
+} {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return {
+    signal: controller.signal,
+    dispose() {
+      clearTimeout(timer);
+    },
+  };
+}
+
+export async function persistFetchWithWatchdog(
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+  timeoutMs = PIPELINE_PERSIST_WATCHDOG_MS
+): Promise<Response> {
+  const watchdog = createPersistWatchdog(timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: watchdog.signal });
+  } finally {
+    watchdog.dispose();
+  }
+}
+
+function isPersistAbortError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const name = String((error as { name?: unknown }).name || "");
+  const message = String((error as { message?: unknown }).message || "");
+  return name === "AbortError" || name === "TimeoutError" || /aborted|abort/i.test(message);
+}
+
+export function persistWatchdogFailure(error: unknown): {
+  ok: false;
+  message: string;
+  status: number;
+} {
+  return {
+    ok: false,
+    status: 0,
+    message: isPersistAbortError(error)
+      ? OFF_SHEET_UNRESOLVED_USER_MESSAGE
+      : PIPELINE_LEADING_FAIL_TOAST,
+  };
 }
 
 /** Dock preview has events + changeType, not the original LiveChangeInput. */

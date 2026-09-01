@@ -759,9 +759,18 @@ section("source: no stale unavailable union / no destructive pool shrink");
   assert(
     /class OffSheetUnresolvedError/.test(service) &&
       /throw new OffSheetUnresolvedError/.test(service) &&
-      /fetchPublishedOffSheets\(\{ force: staleWorkbook \}\)/.test(fetchFn) &&
+      /fetchPublishedOffSheets\(\{\s*force: staleWorkbook,\s*timeoutMs,/.test(
+        fetchFn
+      ) &&
       !/source: "miss"/.test(fetchFn),
     "persist fetch failure throws instead of miss fallback"
+  );
+  assert(
+    /new AbortController/.test(offFetch) &&
+      /controller\.abort\(\)/.test(offFetch) &&
+      /cache:\s*"no-store"/.test(offFetch) &&
+      /signal/.test(offFetch),
+    "Google export fetch is abortable and not next.revalidate"
   );
   assert(
     /offDateInflight/.test(service) && /prewarmCanonicalOffSheet/.test(service),
