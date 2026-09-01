@@ -12,6 +12,8 @@ import type {
 } from "@/lib/autoAssignEngine";
 import { resolveCanonicalLivePool } from "@/lib/opsDutyLivePool";
 import { loadSpecialSupportQueuesForDate } from "@/lib/dailySpecialSupportService";
+import { isOffSheetUnresolvedError } from "@/lib/caddyPoolCanonicalService";
+import { OFF_SHEET_UNRESOLVED_CODE } from "@/lib/caddyPoolCanonical";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -85,7 +87,8 @@ export async function POST(req: NextRequest) {
 
     if (!result.ok) {
       const hideDetails =
-        result.httpStatus >= 500 || result.code === "APPLY_FAILED";
+        result.code !== OFF_SHEET_UNRESOLVED_CODE &&
+        (result.httpStatus >= 500 || result.code === "APPLY_FAILED");
       return NextResponse.json(
         {
           error: hideDetails
@@ -118,6 +121,12 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (e: unknown) {
+    if (isOffSheetUnresolvedError(e)) {
+      return NextResponse.json(
+        { error: e.message, code: e.code, message: e.message },
+        { status: e.status }
+      );
+    }
     console.error("[POST /api/assignments/reflow/apply]", e);
     return NextResponse.json(
       { error: LIVE_CHANGE_APPLY_USER_MESSAGE },

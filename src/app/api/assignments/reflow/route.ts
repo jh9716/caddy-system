@@ -12,6 +12,7 @@ import {
   type ReservationChangeEvent,
 } from "@/lib/autoAssignEngine";
 import { resolveCanonicalLivePool } from "@/lib/opsDutyLivePool";
+import { isOffSheetUnresolvedError } from "@/lib/caddyPoolCanonicalService";
 import { resolveDailySpecialPlacement } from "@/lib/dailySpecialDutyService";
 import { loadSpecialSupportQueuesForDate } from "@/lib/dailySpecialSupportService";
 
@@ -98,6 +99,12 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ mode: "reflow", persisted: false, ...result });
   } catch (e: unknown) {
+    if (isOffSheetUnresolvedError(e)) {
+      return NextResponse.json(
+        { error: e.message, code: e.code, message: e.message },
+        { status: e.status }
+      );
+    }
     const message = e instanceof Error ? e.message : "reflow 실패";
     console.error("[POST /api/assignments/reflow]", e);
     return NextResponse.json({ error: message }, { status: 400 });

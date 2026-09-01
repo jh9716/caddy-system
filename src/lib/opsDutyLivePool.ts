@@ -2,6 +2,7 @@ import { listDailyOpsDutyCaddyIds } from "@/lib/dailyOpsDutyService";
 import { excludeCaddiesById } from "@/lib/dailyOpsDuty";
 import type { AutoAssignCaddy } from "@/lib/autoAssignEngine";
 import {
+  isOffSheetUnresolvedError,
   loadCanonicalReflowState,
   type CanonicalReflowState,
   type LoadCanonicalReflowOptions,
@@ -52,7 +53,8 @@ export async function resolveCanonicalLivePool(
         computeClientPool: opts?.computeClientPool ?? pool,
       }
     );
-  } catch {
+  } catch (error) {
+    if (isOffSheetUnresolvedError(error)) throw error;
     const ids = await listDailyOpsDutyCaddyIds(date);
     return {
       ...empty,

@@ -14,6 +14,7 @@ import type { AvailabilityRow } from "@/lib/availabilityEngine";
 import { loadAvailabilityForDate } from "@/lib/availabilityService";
 import { parseReservationWorkbook } from "@/lib/reservationImportXlsx";
 import { OffSheetError } from "@/lib/offSheetFetch";
+import { isOffSheetUnresolvedError } from "@/lib/caddyPoolCanonicalService";
 import { DutyExcelError } from "@/lib/dutyMarshalLeaderParser";
 import {
   applyBundlesToAssignPools,
@@ -460,6 +461,12 @@ export async function POST(req: NextRequest) {
     if (e instanceof HouseStartCaddyError || e instanceof ThirdStartCaddyError) {
       return NextResponse.json(
         { error: e.message, code: e.code },
+        { status: e.status }
+      );
+    }
+    if (isOffSheetUnresolvedError(e)) {
+      return NextResponse.json(
+        { error: e.message, code: e.code, message: e.message },
         { status: e.status }
       );
     }

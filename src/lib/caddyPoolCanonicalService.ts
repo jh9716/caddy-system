@@ -1,6 +1,7 @@
 /**
  * Server SoT loader for caddyPool / unavailable.
  * Production writes: none. Off-sheet miss does not expand the pool.
+ * Persist fetch/timeout cannot confirm today's OFF SoT: fail closed.
  */
 
 import { prisma as defaultPrisma } from "@/lib/prisma";
@@ -18,6 +19,8 @@ import { offNamesForDate } from "@/lib/offSheetParser";
 import { listDailyOpsDutyCaddyIds, loadStoredDutyEntries } from "@/lib/dailyOpsDutyService";
 import { listDailySpecialDutyRecords } from "@/lib/dailySpecialDutyService";
 import {
+  OFF_SHEET_UNRESOLVED_CODE,
+  OFF_SHEET_UNRESOLVED_USER_MESSAGE,
   recoverComputePool,
   recoverRosterBaseline,
   resolveCanonicalUnavailableIds,
@@ -35,6 +38,34 @@ export type CanonicalOffSheetMode = "cache" | "fetch" | "cache-or-fetch";
 
 /** Persist may wait 1–4s for OFF SoT. UI does not wait; do not treat 4s as miss. */
 export const OFF_SHEET_RESOLVE_TIMEOUT_MS = 15_000;
+
+export class OffSheetUnresolvedError extends Error {
+  status = 503;
+  code = OFF_SHEET_UNRESOLVED_CODE;
+  constructor(message = OFF_SHEET_UNRESOLVED_USER_MESSAGE) {
+    super(message);
+    this.name = "OffSheetUnresolvedError";
+  }
+}
+
+export function isOffSheetUnresolvedError(
+  error: unknown
+): error is OffSheetUnresolvedError {
+  return error instanceof OffSheetUnresolvedError;
+}
+
+export function offSheetResolveTimeoutMs(override?: number): number {
+  if (typeof override === "number" && Number.isFinite(override) && override > 0) {
+    return Math.floor(override);
+  }
+  if (process.env.NODE_ENV !== "production") {
+    const fromEnv = Number(process.env.OFF_SHEET_RESOLVE_TIMEOUT_MS);
+    if (Number.isFinite(fromEnv) && fromEnv > 0) {
+      return Math.floor(fromEnv);
+    }
+  }
+  return OFF_SHEET_RESOLVE_TIMEOUT_MS;
+}
 
 export type CanonicalReflowState = {
   rosterBaseline: AutoAssignCaddy[];
@@ -54,7 +85,8 @@ export type LoadCanonicalReflowOptions = {
 
 export async function resolveCanonicalOffSheet(
   ymd: string,
-  mode: CanonicalOffSheetMode = "fetch"
+  mode: CanonicalOffSheetMode = "fetch",
+  opts?: { timeoutMs?: number }
 ): Promise<{
   matched: boolean;
   names: string[];
@@ -87,11 +119,12 @@ export async function resolveCanonicalOffSheet(
 
   try {
     const staleWorkbook = peekCachedOffSheets() !== null;
+    const timeoutMs = offSheetResolveTimeoutMs(opts?.timeoutMs);
     const sheets = await new Promise<Awaited<ReturnType<typeof fetchPublishedOffSheets>>>(
       (resolve, reject) => {
         const timer = setTimeout(
           () => reject(new Error("off-sheet-timeout")),
-          OFF_SHEET_RESOLVE_TIMEOUT_MS
+          timeoutMs
         );
         fetchPublishedOffSheets({ force: staleWorkbook }).then(
           (value) => {
@@ -106,8 +139,9 @@ export async function resolveCanonicalOffSheet(
       }
     );
     return fromSheets(sheets, "fetch");
-  } catch {
-    return { matched: false, names: [], source: "miss" };
+  } catch (error) {
+    if (isOffSheetUnresolvedError(error)) throw error;
+    throw new OffSheetUnresolvedError();
   }
 }
 

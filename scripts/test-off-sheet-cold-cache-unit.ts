@@ -3,16 +3,21 @@
  * 실행: npx tsx scripts/test-off-sheet-cold-cache-unit.ts
  */
 import {
+  OFF_SHEET_UNRESOLVED_CODE,
+  OFF_SHEET_UNRESOLVED_USER_MESSAGE,
   recoverComputePool,
   uniquePositiveIds,
 } from "../src/lib/caddyPoolCanonical";
 import {
   OFF_SHEET_RESOLVE_TIMEOUT_MS,
+  isOffSheetUnresolvedError,
   resolveCanonicalOffSheet,
 } from "../src/lib/caddyPoolCanonicalService";
+import { resolveCanonicalLivePool } from "../src/lib/opsDutyLivePool";
 import {
   getOffSheetHttpFetchCount,
   invalidateOffSheetCache,
+  OffSheetError,
   peekCachedOffSheetsForDate,
   resetOffSheetHttpStatsForTests,
   seedOffSheetCacheForTests,
@@ -161,6 +166,111 @@ async function main() {
       unavailableIds: [sick.id],
     });
     assert(!compute.some((c) => c.id === offCaddy.id), "OFF stays out after slow fetch");
+  }
+
+  section("forced OFF HTTP 500 fails closed — no client pool fallback");
+  {
+    invalidateOffSheetCache();
+    resetOffSheetHttpStatsForTests();
+    setPublishedOffSheetLoaderForTests(async () => {
+      throw new OffSheetError("forced 500", "off_sheet_fetch_failed", 500);
+    });
+    let thrown: unknown = null;
+    try {
+      await resolveCanonicalOffSheet(DATE, "cache-or-fetch");
+    } catch (error) {
+      thrown = error;
+    }
+    assert(isOffSheetUnresolvedError(thrown), "500 becomes OffSheetUnresolvedError");
+    assert(
+      thrown instanceof Error && thrown.message === OFF_SHEET_UNRESOLVED_USER_MESSAGE,
+      "500 uses persist fail-safe user message"
+    );
+    assert(
+      isOffSheetUnresolvedError(thrown) && thrown.code === OFF_SHEET_UNRESOLVED_CODE,
+      "500 code is OFF_SHEET_UNRESOLVED"
+    );
+    let liveThrown: unknown = null;
+    try {
+      await resolveCanonicalLivePool(DATE, clientPolluted, {
+        offSheetMode: "cache-or-fetch",
+        computeClientPool: clientPolluted,
+      });
+    } catch (error) {
+      liveThrown = error;
+    }
+    assert(
+      isOffSheetUnresolvedError(liveThrown),
+      "live pool does not swallow OFF 500 into client fallback"
+    );
+    assert(getOffSheetHttpFetchCount() >= 1, "500 path still attempted HTTP");
+  }
+
+  section("OFF fetch past timeout fails closed — no client pool fallback");
+  {
+    invalidateOffSheetCache();
+    resetOffSheetHttpStatsForTests();
+    assert(OFF_SHEET_RESOLVE_TIMEOUT_MS === 15_000, "production persist timeout stays 15s");
+    setPublishedOffSheetLoaderForTests(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 180));
+      return [offSheetForDate(DATE, [offCaddy.name])];
+    });
+    const started = Date.now();
+    let thrown: unknown = null;
+    try {
+      await resolveCanonicalOffSheet(DATE, "cache-or-fetch", { timeoutMs: 60 });
+    } catch (error) {
+      thrown = error;
+    }
+    const elapsed = Date.now() - started;
+    assert(isOffSheetUnresolvedError(thrown), "timeout is OffSheetUnresolvedError");
+    assert(
+      thrown instanceof Error && thrown.message === OFF_SHEET_UNRESOLVED_USER_MESSAGE,
+      "timeout uses persist fail-safe user message"
+    );
+    assert(elapsed >= 60, `timeout waited at least the limit (${elapsed}ms)`);
+    assert(elapsed < 1500, `timeout did not wait for the late fetch (${elapsed}ms)`);
+    invalidateOffSheetCache();
+    process.env.OFF_SHEET_RESOLVE_TIMEOUT_MS = "60";
+    let liveThrown: unknown = null;
+    try {
+      try {
+        await resolveCanonicalLivePool(DATE, clientPolluted, {
+          offSheetMode: "cache-or-fetch",
+          computeClientPool: clientPolluted,
+        });
+      } catch (error) {
+        liveThrown = error;
+      }
+    } finally {
+      delete process.env.OFF_SHEET_RESOLVE_TIMEOUT_MS;
+    }
+    assert(
+      isOffSheetUnresolvedError(liveThrown),
+      "live pool does not admit OFF after timeout"
+    );
+  }
+
+  section("date-matched cache hit stays local and fast");
+  {
+    invalidateOffSheetCache();
+    resetOffSheetHttpStatsForTests();
+    seedOffSheetCacheForTests([offSheetForDate(DATE, [offCaddy.name])]);
+    const started = Date.now();
+    const resolved = await resolveCanonicalOffSheet(DATE, "cache-or-fetch");
+    const elapsed = Date.now() - started;
+    assert(resolved.source === "cache", "date-matched cache is a hit");
+    assert(resolved.matched, "cache hit is date-matched");
+    assert(resolved.names.includes(offCaddy.name), "cache hit keeps today OFF names");
+    assert(getOffSheetHttpFetchCount() === 0, "cache hit does 0 HTTP");
+    assert(elapsed < 20, `cache hit stays fast (${elapsed}ms)`);
+    const compute = recoverComputePool({
+      clientPool: clientPolluted,
+      sotUsable,
+      offSheetMatched: resolved.matched,
+      unavailableIds: [sick.id],
+    });
+    assert(!compute.some((c) => c.id === offCaddy.id), "cache hit keeps OFF out");
   }
 
   section("same-request skipCanonicalReload does not fetch twice");

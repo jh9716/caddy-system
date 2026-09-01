@@ -1810,7 +1810,7 @@ export default function ManageAssignmentsOpsPage() {
             intent.id
           );
           setError(persist.message);
-          showToast(PIPELINE_LEADING_FAIL_TOAST);
+          showToast(persist.message || PIPELINE_LEADING_FAIL_TOAST);
           setDraftSaveState(persist.status === 409 ? "conflict" : "error");
           const rest = projectPendingIntents({
             confirmedDraft: confirmed,
