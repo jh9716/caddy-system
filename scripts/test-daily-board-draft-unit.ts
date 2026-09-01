@@ -244,6 +244,24 @@ section("payload: canonical AssignmentDraft only");
     dateThrew = true;
   }
   assert(dateThrew, "reject mismatched payload.date");
+  assert(parsed.offSnapshot == null, "legacy payload has no offSnapshot");
+  const withSnap = assignmentDraftToPayload({
+    ...draft,
+    offSnapshot: {
+      date,
+      fetchedAt: "2026-08-26T00:00:00.000Z",
+      version: 1,
+      sourceHash: "off:v1:12",
+      caddyIds: [12],
+    },
+  });
+  const parsedSnap = parseDailyBoardDraftPayload(withSnap, date);
+  assert(parsedSnap.offSnapshot?.caddyIds.join(",") === "12", "optional offSnapshot roundtrip");
+  const wrongDate = parseDailyBoardDraftPayload(
+    { ...withSnap, offSnapshot: { ...withSnap.offSnapshot, date: "2026-01-01" } },
+    date
+  );
+  assert(wrongDate.offSnapshot == null, "wrong-date offSnapshot is dropped");
   assert(resolveDraftRequestDate("2026-08-26", "2026-08-25") === null, "URL/body date mismatch");
   assert(resolveDraftRequestDate("2026-08-26", "2026-08-26") === "2026-08-26", "matching dates");
   assert(resolveDraftRequestDate(null, "2026-08-26") === "2026-08-26", "body date only");
@@ -866,6 +884,7 @@ section("source guards: API / UI / migration / live save order");
   assert(/houseStartCaddyId\?:/.test(payloadType), "payload stores optional houseStartCaddyId");
   assert(/thirdStartCaddyId\?:/.test(payloadType), "payload stores optional thirdStartCaddyId");
   assert(/unavailableCaddyIds\?:/.test(payloadType), "payload stores optional unavailableCaddyIds");
+  assert(/offSnapshot\?:/.test(payloadType), "payload stores optional offSnapshot without migration");
   assert(/CONFIRMED/.test(page), "client CONFIRMED kept as legacy ops status");
   assert(/function onConfirm/.test(page), "legacy onConfirm handler kept");
   assert(/async function onApplyToOps/.test(page), "legacy onApplyToOps handler kept");

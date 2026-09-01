@@ -127,6 +127,13 @@ import {
 } from "@/lib/dailyBoardDraft";
 import { drainDraftSaves } from "@/lib/draftSaveFlush";
 import {
+  buildOffSnapshot,
+  isUsableOffSnapshot,
+  offCaddyIdsFromAvailability,
+  pipelineMutationOffSnapshotBlock,
+  type DraftOffSnapshot,
+} from "@/lib/offSnapshot";
+import {
   PUBLISH_HINT,
   publishBoardActionState,
   runPublishBoardFlow,
@@ -164,14 +171,38 @@ import {
   shouldClearPipelineDirty,
 } from "@/lib/pipelineUnloadGuard";
 
-function prewarmOffSheetForDate(ymd: string) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return;
+async function fetchOffSnapshotForDate(
+  ymd: string
+): Promise<DraftOffSnapshot | null> {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return null;
   const year = Number(ymd.slice(0, 4));
-  if (!Number.isInteger(year) || year >= 2090) return;
-  void fetch(
-    `/api/assignments/off-sheet/prewarm?date=${encodeURIComponent(ymd)}`,
-    { credentials: "include", keepalive: true }
-  ).catch(() => {});
+  if (!Number.isInteger(year) || year >= 2090) return null;
+  try {
+    const res = await fetch(
+      `/api/assignments/off-sheet/prewarm?date=${encodeURIComponent(ymd)}`,
+      { credentials: "include", keepalive: true }
+    );
+    const data = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      matched?: boolean;
+      caddyIds?: unknown;
+    };
+    if (!res.ok || !data.ok || !data.matched || !Array.isArray(data.caddyIds)) {
+      return null;
+    }
+    return buildOffSnapshot({ date: ymd, caddyIds: data.caddyIds });
+  } catch {
+    return null;
+  }
+}
+
+function prewarmOffSheetForDate(
+  ymd: string,
+  onSnapshot?: (snap: DraftOffSnapshot) => void
+) {
+  void fetchOffSnapshotForDate(ymd).then((snap) => {
+    if (snap) onSnapshot?.(snap);
+  });
 }
 
 type ResultViewMode = "board" | "list";
@@ -422,6 +453,7 @@ export default function ManageAssignmentsOpsPage() {
   const [persistInFlight, setPersistInFlight] = useState(false);
   const [pendingIntentCount, setPendingIntentCount] = useState(0);
   const confirmedDraftRef = useRef<AssignmentDraft | null>(null);
+  const offSnapshotRef = useRef<DraftOffSnapshot | null>(null);
   const pendingIntentsRef = useRef<BoardMutationIntent[]>([]);
   const computePoolRef = useRef<AutoAssignCaddy[]>([]);
   const intentSeqRef = useRef(0);
@@ -820,7 +852,12 @@ export default function ManageAssignmentsOpsPage() {
           setDraftSaveState("idle");
           setDraftSavedAt(null);
           setDraftVersion(0);
-          scheduleAfterPaint(() => prewarmOffSheetForDate(date));
+          scheduleAfterPaint(() =>
+            prewarmOffSheetForDate(date, (snap) => {
+              if (cancelled) return;
+              offSnapshotRef.current = snap;
+            })
+          );
           return;
         }
         const payload = parseDailyBoardDraftPayload(data.draft.payload, date);
@@ -830,7 +867,24 @@ export default function ManageAssignmentsOpsPage() {
           data.draft.updatedAt,
           Array.isArray(data.unavailableCaddyIds) ? data.unavailableCaddyIds : []
         );
-        scheduleAfterPaint(() => prewarmOffSheetForDate(date));
+        if (payload.offSnapshot) offSnapshotRef.current = payload.offSnapshot;
+        scheduleAfterPaint(() =>
+          prewarmOffSheetForDate(date, (snap) => {
+            if (cancelled) return;
+            offSnapshotRef.current = snap;
+            const current = draftRef.current;
+            if (!current || current.date !== snap.date) return;
+            const next = { ...current, offSnapshot: snap };
+            setDraft(next);
+            if (confirmedDraftRef.current?.date === snap.date) {
+              confirmedDraftRef.current = {
+                ...confirmedDraftRef.current,
+                offSnapshot: snap,
+              };
+            }
+            queueDraftSave(next);
+          })
+        );
         const leftover = consumePipelineDirty(window.sessionStorage);
         if (leftover) setToast(PIPELINE_DIRTY_RELOAD_TOAST);
       } catch (e: unknown) {
@@ -1081,6 +1135,11 @@ export default function ManageAssignmentsOpsPage() {
         return;
       }
       setAvailability(data as AvailabilityResult & { dailySummary?: DailyAvailabilitySummary });
+      const offSnapshot = buildOffSnapshot({
+        date,
+        caddyIds: offCaddyIdsFromAvailability(data),
+      });
+      offSnapshotRef.current = offSnapshot;
       scheduleAfterPaint(() => prewarmOffSheetForDate(date));
       const dutyIds = Array.isArray((data as { opsDutyCaddyIds?: number[] }).opsDutyCaddyIds)
         ? ((data as { opsDutyCaddyIds?: number[] }).opsDutyCaddyIds as number[])
@@ -1091,18 +1150,30 @@ export default function ManageAssignmentsOpsPage() {
           byRole: prev?.byRole,
           caddyIds: dutyIds,
         }));
-        if (draftRef.current) {
-          const current = draftRef.current;
-          const next = {
-            ...current,
-            caddyPool: mergeRosterBaseline(
-              current.caddyPool,
-              rosterBaselineFromAvailability(data as AvailabilityResult)
-            ),
+      }
+      if (draftRef.current && draftRef.current.date === date) {
+        const current = draftRef.current;
+        const next = {
+          ...current,
+          ...(dutyIds.length
+            ? {
+                caddyPool: mergeRosterBaseline(
+                  current.caddyPool,
+                  rosterBaselineFromAvailability(data as AvailabilityResult)
+                ),
+              }
+            : {}),
+          offSnapshot,
+        };
+        setDraft(next);
+        if (confirmedDraftRef.current?.date === date) {
+          confirmedDraftRef.current = {
+            ...confirmedDraftRef.current,
+            offSnapshot,
+            ...(dutyIds.length ? { caddyPool: next.caddyPool } : {}),
           };
-          setDraft(next);
-          queueDraftSave(next);
         }
+        queueDraftSave(next);
       }
       setHouseStartCaddyId("");
       showToast(`최종 가용 ${data.counts?.available ?? 0}명 로드`);
@@ -1289,6 +1360,10 @@ export default function ManageAssignmentsOpsPage() {
             return;
           }
           setAvailability(availData as AvailabilityResult & { dailySummary?: DailyAvailabilitySummary });
+          offSnapshotRef.current = buildOffSnapshot({
+            date,
+            caddyIds: offCaddyIdsFromAvailability(availData),
+          });
           caddyPool = regularCaddyPoolFromAvailabilityRows(
             availData.available?.all || []
           );
@@ -1343,17 +1418,21 @@ export default function ManageAssignmentsOpsPage() {
         data,
         mergeRosterBaseline(caddyPool, data.rosterBaseline)
       );
-      setDraft(next);
-      confirmedDraftRef.current = next;
+      const seeded =
+        isUsableOffSnapshot(offSnapshotRef.current, next.date)
+          ? { ...next, offSnapshot: offSnapshotRef.current }
+          : next;
+      setDraft(seeded);
+      confirmedDraftRef.current = seeded;
       pendingIntentsRef.current = [];
       setPendingIntentCount(0);
-      setWarnings(detectDraftWarnings(next));
+      setWarnings(detectDraftWarnings(seeded));
       setSwapKey(null);
       setExpandedKey(null);
       setQuickSheet(null);
       setUnavailableCaddyIds([]);
       setShiftTab("1부");
-      queueDraftSave(next, true);
+      queueDraftSave(seeded, true);
       setSpecialSettingsStale(false);
       const closedN = data.closedCourseReservations?.length ?? 0;
       const skippedDuty = (data.specialDutySkipped || []).length;
@@ -1444,10 +1523,13 @@ export default function ManageAssignmentsOpsPage() {
         failRecalc(data.error || `자동배치 실패 (${res.status})`);
         return;
       }
-      const next = createDraftFromAutoResult(
+      const created = createDraftFromAutoResult(
         data,
         mergeRosterBaseline(caddyPool, data.rosterBaseline)
       );
+      const next = isUsableOffSnapshot(offSnapshotRef.current, created.date)
+        ? { ...created, offSnapshot: offSnapshotRef.current }
+        : created;
       const { res: saveRes, data: saveData } = await putAssignmentDraft(
         next,
         serverDraftVersionRef.current
@@ -1635,6 +1717,12 @@ export default function ManageAssignmentsOpsPage() {
   function enqueuePipelineMutation(change: LiveChangeInput) {
     const confirmed = confirmedDraftRef.current || draftRef.current;
     if (!confirmed) return;
+    const snapshotBlock = pipelineMutationOffSnapshotBlock(confirmed);
+    if (snapshotBlock) {
+      setError(snapshotBlock);
+      showToast(snapshotBlock);
+      return;
+    }
     if (change.type === "MOVE_RESERVATION") {
       const dest = parseMoveDestination(change.to);
       if (!dest) {

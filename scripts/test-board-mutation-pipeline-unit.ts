@@ -661,6 +661,12 @@ section("source contracts");
   );
   const enqueue = page.split("function enqueuePipelineMutation")[1]?.split("async function persistPipelineIntent")[0] || "";
   assert(
+    enqueue.includes("pipelineMutationOffSnapshotBlock") &&
+      enqueue.indexOf("pipelineMutationOffSnapshotBlock") <
+        enqueue.indexOf("projectEnqueuedIntents"),
+    "missing offSnapshot blocks persist before optimistic paint"
+  );
+  assert(
     !enqueue.includes("prewarmOffSheetForDate") &&
       !enqueue.includes("off-sheet/prewarm"),
     "click enqueue does not wait for OFF prewarm"

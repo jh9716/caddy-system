@@ -38,6 +38,8 @@
     "test:sick-house-order-persist-local": "bash scripts/tsx-safe.sh scripts/test-sick-house-order-persist-local.ts",
     "test:off-sheet-cold-cache-unit": "bash scripts/tsx-safe.sh scripts/test-off-sheet-cold-cache-unit.ts",
     "test:off-sheet-mutation-local": "bash scripts/tsx-safe.sh scripts/test-off-sheet-mutation-local.ts",
+    "test:off-snapshot-unit": "bash scripts/tsx-safe.sh scripts/test-off-snapshot-unit.ts",
+    "test:off-snapshot-sick-local": "bash scripts/tsx-safe.sh scripts/test-sick-house-order-persist-local.ts",
     "test:off-mutation-latency-local": "bash scripts/tsx-safe.sh scripts/test-off-mutation-latency-local.ts",
     "measure:off-mutation-latency-local": "bash scripts/tsx-safe.sh scripts/measure-off-mutation-latency-local.ts",
     "test:assignment-board-view-unit": "bash scripts/tsx-safe.sh scripts/test-assignment-board-view-unit.ts",

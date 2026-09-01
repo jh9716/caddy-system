@@ -32,11 +32,17 @@ import {
   type RosterBaselineRow,
 } from "@/lib/caddyPoolCanonical";
 import {
+  isUsableOffSnapshot,
+  OffSnapshotRequiredError,
+  offNamesFromCaddyIds,
+  type DraftOffSnapshot,
+} from "@/lib/offSnapshot";
+import {
   regularCaddyPoolFromAvailabilityRows,
   type AutoAssignCaddy,
 } from "@/lib/autoAssignEngine";
 
-export type CanonicalOffSheetMode = "cache" | "fetch" | "cache-or-fetch";
+export type CanonicalOffSheetMode = "cache" | "fetch" | "cache-or-fetch" | "snapshot";
 
 /** Persist may wait 1–4s for OFF SoT. UI does not wait; do not treat 4s as miss. */
 export const OFF_SHEET_RESOLVE_TIMEOUT_MS = 15_000;
@@ -76,7 +82,7 @@ export type CanonicalReflowState = {
   opsDutyIds: number[];
   specialSkipIds: number[];
   offSheetMatched: boolean;
-  offSheetSource: "cache" | "miss" | "fetch" | "skipped";
+  offSheetSource: "cache" | "miss" | "fetch" | "skipped" | "snapshot";
   offResolveMs?: number;
 };
 
@@ -84,6 +90,8 @@ export type LoadCanonicalReflowOptions = {
   offSheetMode?: CanonicalOffSheetMode;
   /** Recover compute from this pool. Roster baseline still uses clientPool. */
   computeClientPool?: readonly AutoAssignCaddy[] | null;
+  /** Date-matched Draft OFF snapshot. Mutation uses this and never hits Google. */
+  offSnapshot?: DraftOffSnapshot | null;
 };
 
 export type CanonicalOffSheetResult = {
@@ -298,14 +306,24 @@ export async function loadCanonicalReflowState(
   let offSheetMatched = false;
   let offNames: string[] = [];
   let offSheetSource: CanonicalReflowState["offSheetSource"] = "skipped";
-  const resolvedOff = await resolveCanonicalOffSheet(
-    ymd,
-    opts?.offSheetMode ?? "fetch"
-  );
-  offSheetMatched = resolvedOff.matched;
-  offNames = resolvedOff.names;
-  offSheetSource = resolvedOff.source;
-  const offResolveMs = resolvedOff.resolveMs;
+  let offResolveMs = 0;
+  const offSnapshot = opts?.offSnapshot;
+  if (isUsableOffSnapshot(offSnapshot, ymd)) {
+    offSheetMatched = true;
+    offNames = offNamesFromCaddyIds(caddies, offSnapshot.caddyIds);
+    offSheetSource = "snapshot";
+  } else if (opts?.offSheetMode === "snapshot") {
+    throw new OffSnapshotRequiredError();
+  } else {
+    const resolvedOff = await resolveCanonicalOffSheet(
+      ymd,
+      opts?.offSheetMode ?? "fetch"
+    );
+    offSheetMatched = resolvedOff.matched;
+    offNames = resolvedOff.names;
+    offSheetSource = resolvedOff.source;
+    offResolveMs = resolvedOff.resolveMs;
+  }
 
   let dutyEntries: Awaited<ReturnType<typeof loadStoredDutyEntries>> = [];
   try {

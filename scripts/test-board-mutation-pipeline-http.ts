@@ -29,6 +29,15 @@ import {
   makeMutationIntent,
   prepareIntentOnConfirmedDraft,
 } from "../src/lib/boardMutationPipeline";
+import { buildOffSnapshot, isUsableOffSnapshot } from "../src/lib/offSnapshot";
+
+function withOffSnapshot(draft: AssignmentDraft): AssignmentDraft {
+  if (isUsableOffSnapshot(draft.offSnapshot, draft.date)) return draft;
+  return {
+    ...draft,
+    offSnapshot: buildOffSnapshot({ date: draft.date, caddyIds: [] }),
+  };
+}
 
 const BASE = "http://localhost:3000";
 const DATE = "2099-12-21";
@@ -134,7 +143,7 @@ async function persistLiveFromDraft(draft: AssignmentDraft) {
   return saveDailyBoardDraft({
     date: DATE,
     expectedVersion: 0,
-    payload: assignmentDraftToPayload(draft),
+    payload: assignmentDraftToPayload(withOffSnapshot(draft)),
     updatedByUserId: null,
   });
 }
@@ -201,7 +210,7 @@ async function postMutation(
       draft: {
         date: DATE,
         version,
-        payload: assignmentDraftToPayload(prepared.painted),
+        payload: assignmentDraftToPayload(withOffSnapshot(prepared.painted)),
       },
       testDelayMs: extra.testDelayMs ?? 0,
       testFailLive: extra.testFailLive ?? null,
