@@ -788,8 +788,10 @@ section("source: no stale unavailable union / no destructive pool shrink");
   );
   const livePool = read("src/lib/opsDutyLivePool.ts");
   assert(
-    /isOffSheetUnresolvedError\(error\)\)\s*throw error/.test(livePool),
-    "live pool rethrows OFF unresolved and does not use client fallback"
+    /isOffSheetUnresolvedError\(error\) \|\| isOffSnapshotRequiredError\(error\)/.test(
+      livePool
+    ) && /throw error/.test(livePool),
+    "live pool rethrows OFF unresolved / missing snapshot and does not use client fallback"
   );
   assert(
     /resolved\.unavailableIds/.test(reflow),

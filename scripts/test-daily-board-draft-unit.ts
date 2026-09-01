@@ -831,7 +831,10 @@ section("source guards: API / UI / migration / live save order");
     /현재 저장된 작업본을 새 자동배치 결과로 다시 만들까요\?/.test(run),
     "overwrite confirm when stored draft exists"
   );
-  assert(/queueDraftSave\(next, true\)/.test(run), "auto-assign result saves immediately");
+  assert(
+    /queueDraftSave\((next|seeded), true\)/.test(run),
+    "auto-assign result saves immediately"
+  );
 
   assert(/1500/.test(page) && /queueDraftSave/.test(page), "1.5s debounce autosave");
   assert(/저장 중…/.test(page), "saving UI");
@@ -999,7 +1002,7 @@ section("저장된 평일 Draft는 엔진 수정만으로 자동 교정되지 �
   const page = readSrc("src/app/manage/assignments/page.tsx");
   assert(
     /현재 저장된 작업본을 새 자동배치 결과로 다시 만들까요/.test(page) &&
-      /queueDraftSave\(next, true\)/.test(page),
+      /queueDraftSave\((next|seeded), true\)/.test(page),
     "직원이 자동배치 실행 시 저장된 Draft를 새 결과로 교체"
   );
 }

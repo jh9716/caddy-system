@@ -177,6 +177,16 @@ async function applyIntent(
     events: prepared.preview.events,
     changeType: prepared.preview.changeType,
     change,
+    skipCanonicalReload: true,
+    canonical: {
+      computePool: confirmed.caddyPool,
+      rosterBaseline: confirmed.caddyPool,
+      unavailableIds: confirmed.unavailableCaddyIds || [],
+      opsDutyIds: [],
+      specialSkipIds: [],
+      offSheetMatched: true,
+      offSheetSource: "snapshot",
+    },
     draft: {
       date: DATE,
       expectedVersion: version,
@@ -460,6 +470,16 @@ async function main() {
         events: sickPrepared.preview.events,
         changeType: sickPrepared.preview.changeType,
         change: { type: "CADDY_SICK", caddyId: HOUSE_START, shift: "1부" },
+        skipCanonicalReload: true,
+        canonical: {
+          computePool: confirmed.caddyPool,
+          rosterBaseline: confirmed.caddyPool,
+          unavailableIds: confirmed.unavailableCaddyIds || [],
+          opsDutyIds: [],
+          specialSkipIds: [],
+          offSheetMatched: true,
+          offSheetSource: "snapshot",
+        },
         draft: {
           date: DATE,
           expectedVersion: move.persist.draft.version,
