@@ -579,7 +579,7 @@ console.log("== 보드 팀 이동은 미리보기 없이 즉시 apply ==");
     "duplicate MOVE is blocked; empty cells stay enabled"
   );
   assert(
-    /projectPendingIntents\(/.test(enqueueFn) &&
+    /projectEnqueuedIntents\(/.test(enqueueFn) &&
       /paintProjectedDraft\(/.test(enqueueFn) &&
       enqueueFn.indexOf("paintProjectedDraft") < enqueueFn.indexOf("flushPipelineWrites") &&
       /setDraftSaveState\("saving"\)/.test(enqueueFn) &&

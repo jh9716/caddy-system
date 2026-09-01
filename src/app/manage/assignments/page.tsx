@@ -141,6 +141,7 @@ import {
   isPipelineMutation,
   makeMutationIntent,
   prepareIntentOnConfirmedDraft,
+  projectEnqueuedIntents,
   projectPendingIntents,
   scheduleAfterPaint,
   readPipelineTestDelayMs,
@@ -1655,14 +1656,22 @@ export default function ManageAssignmentsOpsPage() {
     const wrap = boardWrapRef.current;
     const scrollTop = wrap?.scrollTop ?? 0;
     setQuickSheet(null);
-    const computePool = liveSnapshotPool(confirmed);
-    const projected = projectPendingIntents({
+    const extraUsable = availability?.available?.all?.length
+      ? regularCaddyPoolFromAvailabilityRows(availability.available.all)
+      : computePoolRef.current;
+    const projected = projectEnqueuedIntents({
       confirmedDraft: confirmed,
       pending: [...pendingIntentsRef.current, intent],
+      extraUsable: extraUsable.length ? extraUsable : undefined,
+      liveUnavailableIds: [
+        ...(confirmed.unavailableCaddyIds || []),
+        ...unavailableCaddyIds,
+      ],
       specialSupportByShift,
       base: autoResultRef.current,
-      regularCaddyPool: computePool,
+      opsDutyIds: opsDutyCaddyIds,
     });
+    computePoolRef.current = projected.regularCaddyPool;
     if (projected.dropped.some((row) => row.intent.id === intent.id)) {
       const drop = projected.dropped.find((row) => row.intent.id === intent.id);
       setError(drop?.message || PIPELINE_LEADING_FAIL_TOAST);

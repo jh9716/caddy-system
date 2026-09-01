@@ -182,6 +182,40 @@ export function projectPendingIntents(input: {
   return { draft, applied, dropped };
 }
 
+/**
+ * /manage/assignments enqueuePipelineMutation projection.
+ * Builds the keeping-placed click pool, then projects pending intents.
+ */
+export function projectEnqueuedIntents(input: {
+  confirmedDraft: AssignmentDraft;
+  pending: BoardMutationIntent[];
+  extraUsable?: readonly AutoAssignCaddy[] | null;
+  liveUnavailableIds?: Iterable<unknown>;
+  specialSupportByShift?: Record<ShiftPart, AutoAssignCaddy[]>;
+  base?: AutoAssignResultV1 | null;
+  opsDutyIds?: Iterable<unknown>;
+}): {
+  draft: AssignmentDraft;
+  applied: BoardMutationIntent[];
+  dropped: Array<{ intent: BoardMutationIntent; message: string }>;
+  regularCaddyPool: AutoAssignCaddy[];
+} {
+  const regularCaddyPool = liveClickSnapshotPool(input.confirmedDraft, {
+    extraUsable: input.extraUsable,
+    liveUnavailableIds: input.liveUnavailableIds,
+    base: input.base ?? null,
+    opsDutyIds: input.opsDutyIds,
+  });
+  const projected = projectPendingIntents({
+    confirmedDraft: input.confirmedDraft,
+    pending: input.pending,
+    specialSupportByShift: input.specialSupportByShift,
+    base: input.base ?? null,
+    regularCaddyPool,
+  });
+  return { ...projected, regularCaddyPool };
+}
+
 export function dropIntent(
   pending: BoardMutationIntent[],
   intentId: string

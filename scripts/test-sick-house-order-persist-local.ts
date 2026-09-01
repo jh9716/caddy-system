@@ -19,7 +19,6 @@ import { compareCaddyOrder, reservationKey, type AutoAssignCaddy } from "../src/
 import {
   applyLiveResultToDraft,
   confirmedDraftKeepingPlacedUnavailable,
-  liveClickSnapshotPool,
   type AssignmentDraft,
 } from "../src/lib/assignmentDraft";
 import {
@@ -32,7 +31,7 @@ import { applyQuickBoardMutation } from "../src/lib/quickBoardMutationApply";
 import {
   makeMutationIntent,
   prepareIntentOnConfirmedDraft,
-  projectPendingIntents,
+  projectEnqueuedIntents,
 } from "../src/lib/boardMutationPipeline";
 import { resolveCanonicalLivePool } from "../src/lib/opsDutyLivePool";
 import {
@@ -233,10 +232,6 @@ async function main() {
     .sort(compareCaddyOrder);
   const incoming: AssignmentDraft = { ...draft0, unavailableCaddyIds: LIVE_SICK };
   const confirmed = confirmedDraftKeepingPlacedUnavailable(incoming);
-  const clickPool = liveClickSnapshotPool(confirmed, {
-    extraUsable,
-    liveUnavailableIds: LIVE_SICK,
-  });
 
   invalidateOffSheetCache();
   resetOffSheetHttpStatsForTests();
@@ -271,11 +266,13 @@ async function main() {
     (confirmed.unavailableCaddyIds || []).length === 0,
     "hydrate overlay drops still-placed live SICK from confirmed Draft"
   );
-  const click = projectPendingIntents({
+  const click = projectEnqueuedIntents({
     confirmedDraft: confirmed,
     pending: [makeMutationIntent({ type: "CADDY_SICK", caddyId: VICTIM, shift: "1부" }, "click")!],
-    regularCaddyPool: clickPool,
+    extraUsable,
+    liveUnavailableIds: LIVE_SICK,
   });
+  const clickPool = click.regularCaddyPool;
   expectPullForward(draft0, click.draft, VICTIM);
   const clickFp = fp(click.draft);
   assert(clickFp.spare["1부"][0] === SPARE2 && clickFp.spare["1부"][1] === NEXT_UNUSED, `click spare ${clickFp.spare["1부"]}`);
@@ -387,15 +384,13 @@ async function main() {
     unavailableCaddyIds: [...LIVE_SICK, VICTIM],
   };
   const afterConfirmed = confirmedDraftKeepingPlacedUnavailable(afterIncoming);
-  const pool2 = liveClickSnapshotPool(afterConfirmed, {
+  const click2 = projectEnqueuedIntents({
+    confirmedDraft: afterConfirmed,
+    pending: [makeMutationIntent({ type: "CADDY_SICK", caddyId: SECOND, shift: "1부" }, "s2")!],
     extraUsable,
     liveUnavailableIds: [...LIVE_SICK, VICTIM],
   });
-  const click2 = projectPendingIntents({
-    confirmedDraft: afterConfirmed,
-    pending: [makeMutationIntent({ type: "CADDY_SICK", caddyId: SECOND, shift: "1부" }, "s2")!],
-    regularCaddyPool: pool2,
-  });
+  const pool2 = click2.regularCaddyPool;
   assert(!regularIds(click2.draft, "1부").includes(VICTIM), "second click: first victim stays gone");
   assert(!regularIds(click2.draft, "1부").includes(SECOND), "second click: second victim gone");
   const prepared3 = prepareIntentOnConfirmedDraft({

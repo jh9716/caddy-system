@@ -643,6 +643,7 @@ section("source contracts");
   assert(page.includes("/api/assignments/off-sheet/prewarm"), "date entry prewarms OFF");
   assert(page.includes("isDuplicateCaddyAbsenceIntent"), "same-caddy 병가 연타 drops");
   assert(page.includes("liveSnapshotPool"), "click uses confirmed snapshot pool");
+  assert(page.includes("projectEnqueuedIntents"), "SICK click enqueue uses shared projection");
   assert(page.includes("liveClickSnapshotPool"), "click pool is keeping-placed liveClickSnapshotPool");
   assert(page.includes("confirmedDraftKeepingPlacedUnavailable"), "hydrate overlays still-placed live SICK");
   assert(page.includes("data.draft?.payload"), "persist success reads server Draft payload");
@@ -660,8 +661,12 @@ section("source contracts");
   );
   assert(
     /setQuickSheet\(null\)/.test(enqueue) &&
-      enqueue.indexOf("setQuickSheet(null)") < enqueue.indexOf("projectPendingIntents"),
+      enqueue.indexOf("setQuickSheet(null)") < enqueue.indexOf("projectEnqueuedIntents"),
     "sheet closes before projection"
+  );
+  assert(
+    /projectEnqueuedIntents\(/.test(enqueue) && /liveUnavailableIds/.test(enqueue),
+    "enqueue projects through keeping-placed click pool"
   );
   assert(
     /scheduleAfterPaint\(\(\) => \{\s*void flushPipelineWrites\(\);/.test(enqueue),

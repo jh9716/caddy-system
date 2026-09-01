@@ -10,7 +10,6 @@ import {
   applyLiveResultToDraft,
   confirmedDraftKeepingPlacedUnavailable,
   createDraftFromAutoResult,
-  liveClickSnapshotPool,
   snapshotComputePoolFromDraft,
   type AssignmentDraft,
 } from "../src/lib/assignmentDraft";
@@ -25,6 +24,7 @@ import {
 import {
   makeMutationIntent,
   prepareIntentOnConfirmedDraft,
+  projectEnqueuedIntents,
   projectPendingIntents,
 } from "../src/lib/boardMutationPipeline";
 
@@ -87,7 +87,7 @@ function spareIds(spares: Array<{ shift: string; spare1?: { caddyId?: number } |
   return [row?.spare1?.caddyId || null, row?.spare2?.caddyId || null] as const;
 }
 
-/** Same call chain as applyHydratedDraft → enqueuePipelineMutation → liveSnapshotPool → projectPendingIntents. */
+/** Same function /manage/assignments enqueuePipelineMutation uses after confirm. */
 function uiHydrateAndEnqueueSick(input: {
   payloadDraft: AssignmentDraft;
   liveUnavailableIds: number[];
@@ -100,28 +100,24 @@ function uiHydrateAndEnqueueSick(input: {
     unavailableCaddyIds: input.liveUnavailableIds,
   };
   const confirmed = confirmedDraftKeepingPlacedUnavailable(incoming);
-  liveClickSnapshotPool(incoming, {
-    extraUsable: input.extraUsable,
-    liveUnavailableIds: input.liveUnavailableIds,
-  });
-  const computePool = liveClickSnapshotPool(confirmed, {
-    extraUsable: input.extraUsable,
-    liveUnavailableIds: [
-      ...(confirmed.unavailableCaddyIds || []),
-      ...input.liveUnavailableIds,
-    ],
-  });
-  const click = projectPendingIntents({
+  const click = projectEnqueuedIntents({
     confirmedDraft: confirmed,
     pending: [makeMutationIntent(input.change, input.id)!],
-    regularCaddyPool: computePool,
+    extraUsable: input.extraUsable,
+    liveUnavailableIds: input.liveUnavailableIds,
   });
   const prepared = prepareIntentOnConfirmedDraft({
     confirmedDraft: confirmed,
     intent: makeMutationIntent(input.change, `${input.id}-persist`)!,
-    regularCaddyPool: computePool,
+    regularCaddyPool: click.regularCaddyPool,
   });
-  return { incoming, confirmed, computePool, click, prepared };
+  return {
+    incoming,
+    confirmed,
+    computePool: click.regularCaddyPool,
+    click,
+    prepared,
+  };
 }
 
 section("golden A→B→C→D→E→S1→S2→X, B 병가");
@@ -325,14 +321,11 @@ section("production v51 live SICK overlay: click = persist overlay, not 94/106")
   );
 
   const dirtyConfirmed: AssignmentDraft = { ...draft, unavailableCaddyIds: LIVE_SICK };
-  const dirtyPool = liveClickSnapshotPool(dirtyConfirmed, {
-    extraUsable,
-    liveUnavailableIds: LIVE_SICK,
-  });
-  const dirtyClick = projectPendingIntents({
+  const dirtyClick = projectEnqueuedIntents({
     confirmedDraft: dirtyConfirmed,
     pending: [makeMutationIntent({ type: "CADDY_SICK", caddyId: VICTIM, shift: "1부" }, "dirty")!],
-    regularCaddyPool: dirtyPool,
+    extraUsable,
+    liveUnavailableIds: LIVE_SICK,
   });
 
   const persistPool = snapshotComputePool({
@@ -421,19 +414,17 @@ section("production v51 live SICK overlay: click = persist overlay, not 94/106")
   for (const id of LIVE_SICK) {
     if (b1.includes(id)) assert(a1.includes(id), `second click did not mass-drop live SICK ${id}`);
   }
-  const pendingTwo = projectPendingIntents({
+  const pendingTwo = projectEnqueuedIntents({
     confirmedDraft: ui.confirmed,
     pending: [
       makeMutationIntent({ type: "CADDY_SICK", caddyId: VICTIM, shift: "1부" }, "p1")!,
       makeMutationIntent({ type: "CADDY_SICK", caddyId: SECOND, shift: "1부" }, "p2")!,
     ],
-    regularCaddyPool: liveClickSnapshotPool(ui.confirmed, {
-      extraUsable,
-      liveUnavailableIds: LIVE_SICK,
-    }),
+    extraUsable,
+    liveUnavailableIds: LIVE_SICK,
   });
   const two1 = regularIds(pendingTwo.draft.assignments, "1부");
-  assert(!two1.includes(VICTIM) && !two1.includes(SECOND), "pending 2 SICK via projectPendingIntents");
+  assert(!two1.includes(VICTIM) && !two1.includes(SECOND), "pending 2 SICK via enqueue projection");
   for (const id of LIVE_SICK) {
     if (regularIds(draft.assignments, "1부").includes(id)) {
       assert(two1.includes(id), `pending 2 SICK did not mass-drop live SICK ${id}`);
@@ -454,15 +445,16 @@ assert(
   "click/persist overlay keeps still-placed HOUSE"
 );
 assert(
-  /liveClickSnapshotPool\(/.test(page) &&
+  /projectEnqueuedIntents\(/.test(page) &&
     /confirmedDraftKeepingPlacedUnavailable\(incoming\)/.test(page) &&
     /function liveSnapshotPool/.test(page),
-  "UI hydrate+click uses keeping-placed snapshot, not raw live unavailable"
+  "UI hydrate+enqueue uses keeping-placed snapshot, not raw live unavailable"
 );
 assert(
-  /confirmedDraftKeepingPlacedUnavailable\(/.test(pipeline) &&
+  /export function projectEnqueuedIntents/.test(pipeline) &&
+    /confirmedDraftKeepingPlacedUnavailable\(/.test(pipeline) &&
     /liveClickSnapshotPool\(/.test(pipeline),
-  "prepareIntentOnConfirmedDraft overlays placed live SICK before reflow"
+  "enqueue projection overlays placed live SICK before reflow"
 );
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);
