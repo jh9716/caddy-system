@@ -11,6 +11,7 @@ import {
 import {
   OFF_SHEET_RESOLVE_TIMEOUT_MS,
   isOffSheetUnresolvedError,
+  peekOffDateInflightCountForTests,
   resetOffDateInflightForTests,
   resolveCanonicalOffSheet,
 } from "../src/lib/caddyPoolCanonicalService";
@@ -20,6 +21,7 @@ import {
   invalidateOffSheetCache,
   OffSheetError,
   peekCachedOffSheetsForDate,
+  peekWorkbookInflightCountForTests,
   resetOffSheetHttpStatsForTests,
   seedOffSheetCacheForTests,
   setPublishedOffSheetLoaderForTests,
@@ -212,8 +214,18 @@ async function main() {
     invalidateOffSheetCache();
     resetOffSheetHttpStatsForTests();
     assert(OFF_SHEET_RESOLVE_TIMEOUT_MS === 15_000, "production persist timeout stays 15s");
-    setPublishedOffSheetLoaderForTests(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 180));
+    setPublishedOffSheetLoaderForTests(async ({ signal } = {}) => {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, 180);
+        const onAbort = () => {
+          clearTimeout(timer);
+          const err = new Error("aborted");
+          err.name = "AbortError";
+          reject(err);
+        };
+        if (signal?.aborted) return onAbort();
+        signal?.addEventListener("abort", onAbort, { once: true });
+      });
       return [offSheetForDate(DATE, [offCaddy.name])];
     });
     const started = Date.now();
@@ -231,6 +243,8 @@ async function main() {
     );
     assert(elapsed >= 60, `timeout waited at least the limit (${elapsed}ms)`);
     assert(elapsed < 1500, `timeout did not wait for the late fetch (${elapsed}ms)`);
+    assert(peekWorkbookInflightCountForTests() === 0, "timeout clears workbook inflight");
+    assert(peekOffDateInflightCountForTests() === 0, "timeout clears date inflight");
     invalidateOffSheetCache();
     process.env.OFF_SHEET_RESOLVE_TIMEOUT_MS = "60";
     let liveThrown: unknown = null;
@@ -309,6 +323,107 @@ async function main() {
     assert(first.source === "fetch" && reused.source === "cache", "route fetch + apply cache");
     assert(getOffSheetHttpFetchCount() === 1, "skip second load: 1 HTTP total");
     assert(uniquePositiveIds([sick.id]).includes(2), "unavailable helper still works");
+  }
+
+  section("C. forever-pending Google fetch aborts and leaves no inflight");
+  {
+    invalidateOffSheetCache();
+    resetOffSheetHttpStatsForTests();
+    resetOffDateInflightForTests();
+    let continuedAfterAbort = false;
+    setPublishedOffSheetLoaderForTests(async ({ signal } = {}) => {
+      await new Promise<void>((_resolve, reject) => {
+        const fail = () => {
+          const err = new Error("aborted");
+          err.name = "AbortError";
+          reject(err);
+        };
+        if (signal?.aborted) return fail();
+        signal?.addEventListener("abort", fail, { once: true });
+      });
+      continuedAfterAbort = true;
+      return [offSheetForDate(DATE, [offCaddy.name])];
+    });
+    const started = Date.now();
+    let thrown: unknown = null;
+    try {
+      await resolveCanonicalOffSheet(DATE, "cache-or-fetch", { timeoutMs: 80 });
+    } catch (error) {
+      thrown = error;
+    }
+    const elapsed = Date.now() - started;
+    assert(isOffSheetUnresolvedError(thrown), "hang abort is OffSheetUnresolvedError");
+    assert(elapsed >= 80, `abort waited ~timeout (${elapsed}ms)`);
+    assert(elapsed < 800, `abort did not leave HTTP pending (${elapsed}ms)`);
+    assert(!continuedAfterAbort, "aborted loader did not continue into cache");
+    assert(peekWorkbookInflightCountForTests() === 0, "hang abort clears workbook inflight");
+    assert(peekOffDateInflightCountForTests() === 0, "hang abort clears date inflight");
+  }
+
+  section("C15. production 15s abort 실측");
+  {
+    invalidateOffSheetCache();
+    resetOffSheetHttpStatsForTests();
+    resetOffDateInflightForTests();
+    setPublishedOffSheetLoaderForTests(async ({ signal } = {}) => {
+      await new Promise<void>((_resolve, reject) => {
+        const fail = () => {
+          const err = new Error("aborted");
+          err.name = "AbortError";
+          reject(err);
+        };
+        if (signal?.aborted) return fail();
+        signal?.addEventListener("abort", fail, { once: true });
+      });
+      return [offSheetForDate(DATE, [offCaddy.name])];
+    });
+    const started = Date.now();
+    let thrown: unknown = null;
+    try {
+      await resolveCanonicalOffSheet(DATE, "cache-or-fetch");
+    } catch (error) {
+      thrown = error;
+    }
+    const elapsed = Date.now() - started;
+    console.log(`  server abort 실측 ${elapsed}ms`);
+    assert(isOffSheetUnresolvedError(thrown), "15s hang abort is OFF_SHEET_UNRESOLVED");
+    assert(elapsed >= 14_500, `15s abort fired (${elapsed}ms)`);
+    assert(elapsed < 17_000, `15s abort closed the request (${elapsed}ms)`);
+    assert(peekWorkbookInflightCountForTests() === 0, "15s abort has no dangling inflight");
+    assert(peekOffDateInflightCountForTests() === 0, "15s abort has no dangling date inflight");
+  }
+
+  section("D. abort then next mutation can fetch again");
+  {
+    invalidateOffSheetCache();
+    resetOffSheetHttpStatsForTests();
+    resetOffDateInflightForTests();
+    setPublishedOffSheetLoaderForTests(async ({ signal } = {}) => {
+      await new Promise<void>((_resolve, reject) => {
+        const fail = () => {
+          const err = new Error("aborted");
+          err.name = "AbortError";
+          reject(err);
+        };
+        if (signal?.aborted) return fail();
+        signal?.addEventListener("abort", fail, { once: true });
+      });
+      return [offSheetForDate(DATE, [offCaddy.name])];
+    });
+    let first: unknown = null;
+    try {
+      await resolveCanonicalOffSheet(DATE, "cache-or-fetch", { timeoutMs: 60 });
+    } catch (error) {
+      first = error;
+    }
+    assert(isOffSheetUnresolvedError(first), "first mutation aborted");
+    setPublishedOffSheetLoaderForTests(async () => [
+      offSheetForDate(DATE, [offCaddy.name]),
+    ]);
+    const retry = await resolveCanonicalOffSheet(DATE, "cache-or-fetch");
+    assert(retry.source === "fetch" && retry.matched, "retry starts a new OFF fetch");
+    assert(retry.names.includes(offCaddy.name), "retry persist sees today OFF");
+    assert(peekWorkbookInflightCountForTests() === 0, "retry does not reuse failed inflight");
   }
 
   setPublishedOffSheetLoaderForTests(null);

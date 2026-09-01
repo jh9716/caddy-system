@@ -79,8 +79,9 @@ let offSheetCacheGeneration = 0;
 const offDateSnapshots = new Map<string, OffDateSnapshot>();
 const workbookInflight = new Map<string, Promise<OffSheet[]>>();
 let offSheetHttpFetchCount = 0;
-let testOffSheetLoader: ((opts?: { force?: boolean }) => Promise<OffSheet[]>) | null =
-  null;
+let testOffSheetLoader: ((
+  opts?: { force?: boolean; signal?: AbortSignal }
+) => Promise<OffSheet[]>) | null = null;
 
 export function invalidateOffSheetCache() {
   offSheetCacheGeneration += 1;
@@ -100,10 +101,28 @@ export function resetOffSheetHttpStatsForTests() {
 }
 
 export function setPublishedOffSheetLoaderForTests(
-  loader: ((opts?: { force?: boolean }) => Promise<OffSheet[]>) | null
+  loader: ((
+    opts?: { force?: boolean; signal?: AbortSignal }
+  ) => Promise<OffSheet[]>) | null
 ) {
   if (process.env.NODE_ENV === "production") return;
   testOffSheetLoader = loader;
+}
+
+export function peekWorkbookInflightCountForTests(): number {
+  if (process.env.NODE_ENV === "production") return 0;
+  return workbookInflight.size;
+}
+
+export function isOffSheetAbortError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const name = String((error as { name?: unknown }).name || "");
+  const message = String((error as { message?: unknown }).message || "");
+  return (
+    name === "AbortError" ||
+    name === "TimeoutError" ||
+    /aborted|abort|off-sheet-timeout/i.test(message)
+  );
 }
 
 /** Process cache only. Not date-safe by itself. */
@@ -185,8 +204,33 @@ async function applyLocalOffSheetTestDelay() {
   );
 }
 
+function abortError(): Error {
+  const error = new Error("off-sheet-timeout");
+  error.name = "AbortError";
+  return error;
+}
+
+function rejectWhenAborted<T>(signal: AbortSignal, work: Promise<T>): Promise<T> {
+  if (signal.aborted) return Promise.reject(abortError());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortError());
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      }
+    );
+  });
+}
+
 async function loadPublishedOffSheetsUncached(opts?: {
   force?: boolean;
+  timeoutMs?: number;
 }): Promise<OffSheet[]> {
   const id = sheetId();
   const generation = offSheetCacheGeneration;
@@ -194,91 +238,122 @@ async function loadPublishedOffSheetsUncached(opts?: {
     if (generation !== offSheetCacheGeneration) return;
     offSheetCache = { id, at: Date.now(), sheets };
   };
-  await applyLocalOffSheetTestDelay();
-  if (testOffSheetLoader) {
-    offSheetHttpFetchCount += 1;
-    const sheets = await testOffSheetLoader(opts);
-    if (!sheets.length) {
-      throw new OffSheetError(
-        "휴무 Google Sheet에 시트가 없습니다.",
-        "off_sheet_empty",
-        502
-      );
-    }
-    commitCache(sheets);
-    return sheets;
-  }
-  const testFile = process.env.OFF_SHEET_TEST_FILE?.trim();
-  if (testFile && allowLocalOffSheetTestHooks()) {
-    offSheetHttpFetchCount += 1;
-    const { readFileSync } = await import("node:fs");
-    const sheets = JSON.parse(readFileSync(testFile, "utf8")) as OffSheet[];
-    if (!Array.isArray(sheets) || sheets.length === 0) {
-      throw new OffSheetError(
-        "휴무 Google Sheet에 시트가 없습니다.",
-        "off_sheet_empty",
-        502
-      );
-    }
-    commitCache(sheets);
-    return sheets;
-  }
-  const url = exportUrl(id);
-  let res: Response;
-  offSheetHttpFetchCount += 1;
+  const controller = new AbortController();
+  const timeoutMs = Number(opts?.timeoutMs || 0);
+  const timer =
+    timeoutMs > 0
+      ? setTimeout(() => controller.abort(), timeoutMs)
+      : undefined;
+  const signal = controller.signal;
   try {
-    res = await fetch(url, {
-      headers: { "User-Agent": "caddy-system-off-sheet/1.0" },
-      redirect: "follow",
-      ...(opts?.force
-        ? { cache: "no-store" as const }
-        : { next: { revalidate: Math.floor(OFF_SHEET_CACHE_MS / 1000) } }),
-    });
-  } catch (e) {
-    throw new OffSheetError(
-      `휴무 Google Sheet에 연결하지 못했습니다. (${e instanceof Error ? e.message : "network"})`,
-      "off_sheet_fetch_failed",
-      502
-    );
-  }
-  if (!res.ok) {
-    throw new OffSheetError(
-      `휴무 Google Sheet를 읽지 못했습니다. (HTTP ${res.status}) 공개 htmlview/내보내기 권한을 확인해주세요.`,
-      "off_sheet_fetch_failed",
-      502
-    );
-  }
-  const buf = Buffer.from(await res.arrayBuffer());
-  if (buf.length < 32) {
-    throw new OffSheetError(
-      "휴무 Google Sheet 응답이 비어 있습니다.",
-      "off_sheet_empty",
-      502
-    );
-  }
-  try {
-    const sheets = workbookToOffSheets(buf);
-    if (sheets.length === 0) {
+    await applyLocalOffSheetTestDelay();
+    if (signal.aborted) throw abortError();
+    if (testOffSheetLoader) {
+      offSheetHttpFetchCount += 1;
+      const sheets = await rejectWhenAborted(
+        signal,
+        testOffSheetLoader({ force: opts?.force, signal })
+      );
+      if (!sheets.length) {
+        throw new OffSheetError(
+          "휴무 Google Sheet에 시트가 없습니다.",
+          "off_sheet_empty",
+          502
+        );
+      }
+      commitCache(sheets);
+      return sheets;
+    }
+    const testFile = process.env.OFF_SHEET_TEST_FILE?.trim();
+    if (testFile && allowLocalOffSheetTestHooks()) {
+      offSheetHttpFetchCount += 1;
+      const { readFileSync } = await import("node:fs");
+      const sheets = JSON.parse(readFileSync(testFile, "utf8")) as OffSheet[];
+      if (!Array.isArray(sheets) || sheets.length === 0) {
+        throw new OffSheetError(
+          "휴무 Google Sheet에 시트가 없습니다.",
+          "off_sheet_empty",
+          502
+        );
+      }
+      commitCache(sheets);
+      return sheets;
+    }
+    const url = exportUrl(id);
+    offSheetHttpFetchCount += 1;
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        headers: { "User-Agent": "caddy-system-off-sheet/1.0" },
+        redirect: "follow",
+        cache: "no-store",
+        signal,
+      });
+    } catch (e) {
+      if (signal.aborted || isOffSheetAbortError(e)) {
+        throw new OffSheetError(
+          "휴무 Google Sheet 요청이 시간 초과되었습니다.",
+          "off_sheet_timeout",
+          503
+        );
+      }
       throw new OffSheetError(
-        "휴무 Google Sheet에 시트가 없습니다.",
+        `휴무 Google Sheet에 연결하지 못했습니다. (${e instanceof Error ? e.message : "network"})`,
+        "off_sheet_fetch_failed",
+        502
+      );
+    }
+    if (!res.ok) {
+      throw new OffSheetError(
+        `휴무 Google Sheet를 읽지 못했습니다. (HTTP ${res.status}) 공개 htmlview/내보내기 권한을 확인해주세요.`,
+        "off_sheet_fetch_failed",
+        502
+      );
+    }
+    const buf = Buffer.from(await rejectWhenAborted(signal, res.arrayBuffer()));
+    if (buf.length < 32) {
+      throw new OffSheetError(
+        "휴무 Google Sheet 응답이 비어 있습니다.",
         "off_sheet_empty",
         502
       );
     }
-    commitCache(sheets);
-    return sheets;
+    try {
+      const sheets = workbookToOffSheets(buf);
+      if (sheets.length === 0) {
+        throw new OffSheetError(
+          "휴무 Google Sheet에 시트가 없습니다.",
+          "off_sheet_empty",
+          502
+        );
+      }
+      commitCache(sheets);
+      return sheets;
+    } catch (e) {
+      if (e instanceof OffSheetError) throw e;
+      throw new OffSheetError(
+        `휴무 Google Sheet 형식을 해석하지 못했습니다. (${e instanceof Error ? e.message : "parse"})`,
+        "off_sheet_parse_failed",
+        502
+      );
+    }
   } catch (e) {
-    if (e instanceof OffSheetError) throw e;
-    throw new OffSheetError(
-      `휴무 Google Sheet 형식을 해석하지 못했습니다. (${e instanceof Error ? e.message : "parse"})`,
-      "off_sheet_parse_failed",
-      502
-    );
+    if (signal.aborted || isOffSheetAbortError(e)) {
+      throw new OffSheetError(
+        "휴무 Google Sheet 요청이 시간 초과되었습니다.",
+        "off_sheet_timeout",
+        503
+      );
+    }
+    throw e;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
 export async function fetchPublishedOffSheets(opts?: {
   force?: boolean;
+  timeoutMs?: number;
 }): Promise<OffSheet[]> {
   const id = sheetId();
   const cached = peekCachedOffSheets();
@@ -291,7 +366,10 @@ export async function fetchPublishedOffSheets(opts?: {
     if (workbookInflight.get(id) === pending) workbookInflight.delete(id);
   });
   workbookInflight.set(id, pending);
-  return pending;
+  return pending.catch((error) => {
+    if (workbookInflight.get(id) === pending) workbookInflight.delete(id);
+    throw error;
+  });
 }
 
 export function requireOffNamesForDate(

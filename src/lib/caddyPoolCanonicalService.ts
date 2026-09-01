@@ -100,6 +100,11 @@ export function resetOffDateInflightForTests() {
   offDateInflight.clear();
 }
 
+export function peekOffDateInflightCountForTests(): number {
+  if (process.env.NODE_ENV === "production") return 0;
+  return offDateInflight.size;
+}
+
 function fromOffSheets(
   ymd: string,
   sheets: Awaited<ReturnType<typeof fetchPublishedOffSheets>>,
@@ -122,21 +127,9 @@ async function fetchOffSheetsForDate(
 ): Promise<Awaited<ReturnType<typeof fetchPublishedOffSheets>>> {
   const dateMatched = peekCachedOffSheetsForDate(ymd) !== null;
   const staleWorkbook = peekCachedOffSheets() !== null && !dateMatched;
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error("off-sheet-timeout")),
-      timeoutMs
-    );
-    fetchPublishedOffSheets({ force: staleWorkbook }).then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (err) => {
-        clearTimeout(timer);
-        reject(err);
-      }
-    );
+  return fetchPublishedOffSheets({
+    force: staleWorkbook,
+    timeoutMs,
   });
 }
 
@@ -178,12 +171,18 @@ export async function resolveCanonicalOffSheet(
 
   const existing = offDateInflight.get(ymd);
   if (existing) {
-    const shared = await existing;
-    return withMs({
-      matched: shared.matched,
-      names: shared.names,
-      source: shared.source === "fetch" ? "fetch" : shared.source,
-    });
+    try {
+      const shared = await existing;
+      return withMs({
+        matched: shared.matched,
+        names: shared.names,
+        source: shared.source === "fetch" ? "fetch" : shared.source,
+      });
+    } catch (error) {
+      if (offDateInflight.get(ymd) === existing) offDateInflight.delete(ymd);
+      if (isOffSheetUnresolvedError(error)) throw error;
+      throw new OffSheetUnresolvedError();
+    }
   }
 
   const pending = (async () => {
@@ -197,11 +196,13 @@ export async function resolveCanonicalOffSheet(
       if (isOffSheetUnresolvedError(error)) throw error;
       throw new OffSheetUnresolvedError();
     }
-  })().finally(() => {
-    if (offDateInflight.get(ymd) === pending) offDateInflight.delete(ymd);
-  });
+  })();
   offDateInflight.set(ymd, pending);
-  return pending;
+  try {
+    return await pending;
+  } finally {
+    if (offDateInflight.get(ymd) === pending) offDateInflight.delete(ymd);
+  }
 }
 
 export async function prewarmCanonicalOffSheet(ymd: string): Promise<CanonicalOffSheetResult> {

@@ -316,8 +316,16 @@ async function main() {
       || seeded.draft.assignments.find((a) => a.shift === "1부")!;
     invalidateOffSheetCache();
     resetOffSheetHttpStatsForTests();
-    setPublishedOffSheetLoaderForTests(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 180));
+    setPublishedOffSheetLoaderForTests(async ({ signal } = {}) => {
+      await new Promise<void>((_resolve, reject) => {
+        const fail = () => {
+          const err = new Error("aborted");
+          err.name = "AbortError";
+          reject(err);
+        };
+        if (signal?.aborted) return fail();
+        signal?.addEventListener("abort", fail, { once: true });
+      });
       return [offSheetForDate(DATE, [offCaddy.name])];
     });
     process.env.OFF_SHEET_RESOLVE_TIMEOUT_MS = "60";

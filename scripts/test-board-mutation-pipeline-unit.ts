@@ -8,11 +8,15 @@ import {
   isDuplicateCaddyAbsenceIntent,
   isPipelineMutation,
   makeMutationIntent,
+  persistFetchWithWatchdog,
+  persistWatchdogFailure,
+  PIPELINE_PERSIST_WATCHDOG_MS,
   prepareIntentOnConfirmedDraft,
   projectPendingIntents,
   readPipelineTestDelayMs,
   readPipelineTestFail,
 } from "../src/lib/boardMutationPipeline";
+import { OFF_SHEET_UNRESOLVED_USER_MESSAGE } from "../src/lib/caddyPoolCanonical";
 import {
   PIPELINE_DIRTY_STORAGE_KEY,
   clearPipelineDirty,
@@ -414,6 +418,8 @@ section("unload guard");
   );
 }
 
+assert(PIPELINE_PERSIST_WATCHDOG_MS === 20_000, "client watchdog is 20s > server 15s");
+
 section("duplicate SICK same caddy is dropped");
 {
   const draft = fixtureDraft();
@@ -677,6 +683,9 @@ section("source contracts");
     "persist failure toast prefers the server message"
   );
   assert(page.includes("keepalive: true"), "pipeline fetch uses keepalive");
+  assert(page.includes("persistFetchWithWatchdog"), "persist fetch uses client watchdog");
+  assert(page.includes("persistWatchdogFailure"), "persist abort reconciles as failure");
+  assert(page.includes("PIPELINE_PERSIST_WATCHDOG_MS"), "watchdog slack is the 20s constant");
   assert(page.includes("beforeunload"), "page blocks refresh while dirty");
   assert(page.includes("PIPELINE_UNLOAD_TOAST"), "in-app nav toast while dirty");
   assert(page.includes("shouldClearPipelineDirty"), "page clears dirty only after successful drain");
@@ -685,5 +694,67 @@ section("source contracts");
   assert(apply.includes("$transaction"), "atomic persist is one transaction");
 }
 
-console.log(`\nDONE: ${passed} passed, ${failed} failed`);
-if (failed) process.exit(1);
+async function hangWatchdogTests() {
+  section("E. persist watchdog isolates failed SICK and does not hang queue");
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((_url: RequestInfo | URL, init?: RequestInit) =>
+    new Promise<Response>((_resolve, reject) => {
+      const fail = () => {
+        const err = new Error("aborted");
+        err.name = "AbortError";
+        reject(err);
+      };
+      if (init?.signal?.aborted) return fail();
+      init?.signal?.addEventListener("abort", fail, { once: true });
+    })) as typeof fetch;
+  let pending = [
+    makeMutationIntent({ type: "CADDY_SICK", caddyId: 1, shift: "1부" }, "s1")!,
+    makeMutationIntent({ type: "CADDY_SICK", caddyId: 2, shift: "1부" }, "s2")!,
+  ];
+  let persistInFlight = true;
+  let flushHadFailure = false;
+  const started = Date.now();
+  try {
+    const first = pending[0];
+    try {
+      await persistFetchWithWatchdog(
+        "/api/assignments/reflow/quick-mutation",
+        { method: "POST" },
+        40
+      );
+      assert(false, "hanging persist must abort");
+    } catch (error) {
+      const fail = persistWatchdogFailure(error);
+      assert(fail.ok === false, "watchdog returns persist failure");
+      assert(
+        fail.message === OFF_SHEET_UNRESOLVED_USER_MESSAGE,
+        "watchdog uses OFF_SHEET_UNRESOLVED message"
+      );
+      flushHadFailure = true;
+      pending = dropIntent(pending, first.id);
+    }
+    assert(pending.length === 1 && pending[0].id === "s2", "only failed intent removed");
+    pending = dropIntent(pending, "s2");
+  } finally {
+    persistInFlight = false;
+    globalThis.fetch = originalFetch;
+  }
+  const elapsed = Date.now() - started;
+  assert(pending.length === 0, "queue drained after isolated fail + second intent");
+  assert(persistInFlight === false, "inFlight false after flush finally");
+  assert(elapsed < 500, `no 저장 중 2 hang (${elapsed}ms)`);
+  assert(
+    shouldClearPipelineDirty({ pendingIntentCount: 0, flushHadFailure }) === false,
+    "dirty stays after isolated persist fail"
+  );
+}
+
+hangWatchdogTests()
+  .then(() => {
+    console.log(`\nDONE: ${passed} passed, ${failed} failed`);
+    if (failed) process.exit(1);
+  })
+  .catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
