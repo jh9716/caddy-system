@@ -139,11 +139,21 @@ function expectPullForward(before: AssignmentDraft, after: AssignmentDraft, vict
     assert(a2.join(",") === expected2.join(","), "2부 pull-forward");
     assert(spareIds(after, "2부")[0] === s2, "2부 spare2→spare1");
   }
-  assert(
-    regularIds(after, "3부").join(",") === regularIds(before, "3부").join(",") &&
-      spareIds(after, "3부").join("/") === spareIds(before, "3부").join("/"),
-    "3부 frozen"
-  );
+  const thirdBefore = before.assignments
+    .filter(
+      (row) =>
+        (row.reservation?.shift || row.shift) === "3부" &&
+        !(row.kind === "regular" && (row.caddy.caddyType || "HOUSE") === "HOUSE")
+    )
+    .map((row) => row.caddy.id);
+  const thirdAfter = after.assignments
+    .filter(
+      (row) =>
+        (row.reservation?.shift || row.shift) === "3부" &&
+        !(row.kind === "regular" && (row.caddy.caddyType || "HOUSE") === "HOUSE")
+    )
+    .map((row) => row.caddy.id);
+  assert(thirdAfter.join(",") === thirdBefore.join(","), "3부 1·3/THIRD identity kept");
 }
 
 async function resetDate() {
@@ -277,6 +287,11 @@ async function main() {
   const clickFp = fp(click.draft);
   assert(clickFp.spare["1부"][0] === SPARE2 && clickFp.spare["1부"][1] === NEXT_UNUSED, `click spare ${clickFp.spare["1부"]}`);
   assert(clickFp.spare["1부"][0] !== BAD1 && clickFp.spare["1부"][1] !== BAD2, "94/106 FAIL gate");
+  assert(
+    clickFp["3부"].join(",") === [157, 149, 143, 144, 148, 204, 153, 142].join(","),
+    `click 3부 HOUSE leftover ${clickFp["3부"]}`
+  );
+  assert(clickFp.spare["3부"][0] === 96 && clickFp.spare["3부"][1] === 94, `click 3부 HOUSE spare ${clickFp.spare["3부"]}`);
 
   console.log("\n== persist skipCanonical + click pool / live 12 sick overlay ==");
   const intent = makeMutationIntent({ type: "CADDY_SICK", caddyId: VICTIM, shift: "1부" }, "persist")!;
