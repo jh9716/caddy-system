@@ -722,7 +722,7 @@ section("source: no stale unavailable union / no destructive pool shrink");
   );
   const livePool = read("src/lib/opsDutyLivePool.ts");
   assert(
-    /isOffSheetUnresolvedError\(error\) throw error/.test(livePool.replace(/\s+/g, " ")),
+    /isOffSheetUnresolvedError\(error\)\)\s*throw error/.test(livePool),
     "live pool rethrows OFF unresolved and does not use client fallback"
   );
   assert(

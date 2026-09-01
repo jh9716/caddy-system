@@ -35,7 +35,7 @@ import {
 import type { OffSheet } from "../src/lib/offSheetParser";
 import type { ShiftPart } from "../src/lib/reservationParser";
 
-const DATE = "2026-09-15";
+const DATE = "2026-09-16";
 const day = parseYmd(DATE).start;
 const OFF_ID = 25; // 손지연
 const SICK_1 = 13; // 서승희
