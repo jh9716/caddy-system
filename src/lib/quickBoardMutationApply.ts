@@ -44,6 +44,7 @@ import {
   type QuickMoveApplyResult,
 } from "@/lib/quickReservationMoveApply";
 import {
+  isOffSheetUnresolvedError,
   loadCanonicalReflowState,
   type CanonicalReflowState,
 } from "@/lib/caddyPoolCanonicalService";
@@ -124,7 +125,15 @@ export async function applyQuickBoardMutation(input: {
       computePool = canonical.computePool;
       rosterBaseline = canonical.rosterBaseline;
       storedUnavailable = canonical.unavailableIds;
-    } catch {
+    } catch (error) {
+      if (isOffSheetUnresolvedError(error)) {
+        return {
+          ok: false,
+          httpStatus: error.status,
+          code: error.code,
+          message: error.message,
+        };
+      }
       storedUnavailable =
         typeof db.dailyCaddyUnavailable?.findMany === "function"
           ? (

@@ -658,6 +658,10 @@ section("source contracts");
     /scheduleAfterPaint\(\(\) => \{\s*void flushPipelineWrites\(\);/.test(enqueue),
     "flush is deferred until after paint"
   );
+  assert(
+    /showToast\(persist\.message \|\| PIPELINE_LEADING_FAIL_TOAST\)/.test(page),
+    "persist failure toast prefers the server message"
+  );
   assert(page.includes("keepalive: true"), "pipeline fetch uses keepalive");
   assert(page.includes("beforeunload"), "page blocks refresh while dirty");
   assert(page.includes("PIPELINE_UNLOAD_TOAST"), "in-app nav toast while dirty");

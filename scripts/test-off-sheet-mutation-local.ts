@@ -20,8 +20,14 @@ import { applyQuickBoardMutation } from "../src/lib/quickBoardMutationApply";
 import { makeMutationIntent, prepareIntentOnConfirmedDraft } from "../src/lib/boardMutationPipeline";
 import { resolveCanonicalLivePool } from "../src/lib/opsDutyLivePool";
 import {
+  OFF_SHEET_UNRESOLVED_CODE,
+  OFF_SHEET_UNRESOLVED_USER_MESSAGE,
+} from "../src/lib/caddyPoolCanonical";
+import { isOffSheetUnresolvedError } from "../src/lib/caddyPoolCanonicalService";
+import {
   getOffSheetHttpFetchCount,
   invalidateOffSheetCache,
+  OffSheetError,
   resetOffSheetHttpStatsForTests,
   seedOffSheetCacheForTests,
   setPublishedOffSheetLoaderForTests,
@@ -233,6 +239,126 @@ async function main() {
         (u) => u.caddyId === victim1.caddy.id
       ),
       "unavailable written"
+    );
+  }
+
+  section("OFF HTTP 500 fails persist and keeps confirmed Draft/live");
+  {
+    const seeded = await seedBoard();
+    const before = await getDailyBoardDraft(DATE);
+    const beforeVersion = before!.version;
+    const beforeIds = usedIds(payloadToAssignmentDraft(before!.payload));
+    const victim = seeded.draft.assignments.find((a) => a.caddy.id === SICK_1)
+      || seeded.draft.assignments.find((a) => a.shift === "1부")!;
+    invalidateOffSheetCache();
+    resetOffSheetHttpStatsForTests();
+    setPublishedOffSheetLoaderForTests(async () => {
+      throw new OffSheetError("forced 500", "off_sheet_fetch_failed", 500);
+    });
+    let liveThrown: unknown = null;
+    try {
+      await resolveCanonicalLivePool(DATE, [...seeded.pool, offCaddy], {
+        offSheetMode: "cache-or-fetch",
+        rosterClientPool: seeded.draft.caddyPool,
+        computeClientPool: [...seeded.pool, offCaddy],
+      });
+    } catch (error) {
+      liveThrown = error;
+    }
+    assert(isOffSheetUnresolvedError(liveThrown), "500 does not build a client-fallback pool");
+    const persist = await applyQuickBoardMutation({
+      previous: seeded.result,
+      regularCaddyPool: [...seeded.pool, offCaddy],
+      events: [
+        {
+          type: "REMOVE_CADDY",
+          caddyId: victim.caddy.id,
+          cause: "SICK",
+          fromShift: "1부",
+        },
+      ],
+      changeType: "CADDY_SICK",
+      change: { type: "CADDY_SICK", caddyId: victim.caddy.id, shift: "1부" },
+      draft: {
+        date: DATE,
+        expectedVersion: seeded.version,
+        payload: assignmentDraftToPayload(seeded.draft),
+      },
+      updatedByUserId: null,
+    });
+    assert(persist.ok === false, "500 persist does not save");
+    assert(persist.code === OFF_SHEET_UNRESOLVED_CODE, "500 persist code");
+    assert(persist.message === OFF_SHEET_UNRESOLVED_USER_MESSAGE, "500 persist user message");
+    const after = await getDailyBoardDraft(DATE);
+    const reloaded = payloadToAssignmentDraft(after!.payload);
+    assert(after!.version === beforeVersion, "confirmed Draft version unchanged after 500");
+    assert(
+      usedIds(reloaded).join(",") === beforeIds.join(","),
+      "confirmed live placement/spare unchanged after 500"
+    );
+    assert(!usedIds(reloaded).includes(OFF_ID), "OFF caddy did not re-enter after 500");
+    assert(
+      reloaded.assignments.some((a) => a.caddy.id === victim.caddy.id),
+      "SICK victim remains on confirmed board after 500"
+    );
+    assert(
+      (await prisma.dailyCaddyUnavailable.findMany({ where: { date: day } })).length === 0,
+      "500 did not write unavailable"
+    );
+  }
+
+  section("OFF fetch timeout fails persist and keeps confirmed Draft/live");
+  {
+    const seeded = await seedBoard();
+    const before = await getDailyBoardDraft(DATE);
+    const beforeVersion = before!.version;
+    const victim = seeded.draft.assignments.find((a) => a.caddy.id === SICK_1)
+      || seeded.draft.assignments.find((a) => a.shift === "1부")!;
+    invalidateOffSheetCache();
+    resetOffSheetHttpStatsForTests();
+    setPublishedOffSheetLoaderForTests(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 180));
+      return [offSheetForDate(DATE, [offCaddy.name])];
+    });
+    process.env.OFF_SHEET_RESOLVE_TIMEOUT_MS = "60";
+    let persist;
+    try {
+      persist = await applyQuickBoardMutation({
+        previous: seeded.result,
+        regularCaddyPool: [...seeded.pool, offCaddy],
+        events: [
+          {
+            type: "REMOVE_CADDY",
+            caddyId: victim.caddy.id,
+            cause: "SICK",
+            fromShift: "1부",
+          },
+        ],
+        changeType: "CADDY_SICK",
+        change: { type: "CADDY_SICK", caddyId: victim.caddy.id, shift: "1부" },
+        draft: {
+          date: DATE,
+          expectedVersion: seeded.version,
+          payload: assignmentDraftToPayload(seeded.draft),
+        },
+        updatedByUserId: null,
+      });
+    } finally {
+      delete process.env.OFF_SHEET_RESOLVE_TIMEOUT_MS;
+    }
+    assert(persist.ok === false, "timeout persist does not save");
+    assert(persist.code === OFF_SHEET_UNRESOLVED_CODE, "timeout persist code");
+    assert(
+      persist.message === OFF_SHEET_UNRESOLVED_USER_MESSAGE,
+      "timeout persist user message"
+    );
+    const after = await getDailyBoardDraft(DATE);
+    const reloaded = payloadToAssignmentDraft(after!.payload);
+    assert(after!.version === beforeVersion, "confirmed Draft version unchanged after timeout");
+    assert(!usedIds(reloaded).includes(OFF_ID), "OFF caddy did not re-enter after timeout");
+    assert(
+      reloaded.assignments.some((a) => a.caddy.id === victim.caddy.id),
+      "SICK victim remains on confirmed board after timeout"
     );
   }
 

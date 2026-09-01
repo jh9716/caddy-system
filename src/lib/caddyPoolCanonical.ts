@@ -30,6 +30,10 @@ export type RosterBaselineRow = {
   excludedReasons?: readonly string[] | null;
 };
 
+export const OFF_SHEET_UNRESOLVED_CODE = "OFF_SHEET_UNRESOLVED";
+export const OFF_SHEET_UNRESOLVED_USER_MESSAGE =
+  "휴무 정보를 확인하지 못해 저장하지 못했습니다. 다시 시도해 주세요.";
+
 export function uniquePositiveIds(ids: Iterable<unknown>): number[] {
   const out: number[] = [];
   const seen = new Set<number>();

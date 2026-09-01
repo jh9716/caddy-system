@@ -706,10 +706,24 @@ section("source: no stale unavailable union / no destructive pool shrink");
     "persist OFF fetch timeout is longer than 4s"
   );
   assert(
+    /class OffSheetUnresolvedError/.test(service) &&
+      /throw new OffSheetUnresolvedError/.test(service) &&
+      !/source: "miss"/.test(
+        service.split("fetchPublishedOffSheets({ force: staleWorkbook })")[1] || ""
+      ),
+    "persist fetch failure throws instead of miss fallback"
+  );
+  assert(
     /offSheetMode:\s*"cache-or-fetch"/.test(route) &&
       /skipCanonicalReload:\s*true/.test(route) &&
-      !/fetchPublishedOffSheets/.test(route),
+      !/fetchPublishedOffSheets/.test(route) &&
+      /isOffSheetUnresolvedError/.test(route),
     "quick-mutation route is cache-or-fetch and single-load"
+  );
+  const livePool = read("src/lib/opsDutyLivePool.ts");
+  assert(
+    /isOffSheetUnresolvedError\(error\) throw error/.test(livePool.replace(/\s+/g, " ")),
+    "live pool rethrows OFF unresolved and does not use client fallback"
   );
   assert(
     /resolved\.unavailableIds/.test(reflow),
