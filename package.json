@@ -35,6 +35,7 @@
     "test:assignment-change-reflow-unit": "bash scripts/tsx-safe.sh scripts/test-assignment-change-reflow-unit.ts",
     "test:caddy-pool-canonical-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-pool-canonical-unit.ts",
     "test:sick-house-order-unit": "bash scripts/tsx-safe.sh scripts/test-sick-house-order-unit.ts",
+    "test:sick-house-order-persist-local": "bash scripts/tsx-safe.sh scripts/test-sick-house-order-persist-local.ts",
     "test:off-sheet-cold-cache-unit": "bash scripts/tsx-safe.sh scripts/test-off-sheet-cold-cache-unit.ts",
     "test:off-sheet-mutation-local": "bash scripts/tsx-safe.sh scripts/test-off-sheet-mutation-local.ts",
     "test:off-mutation-latency-local": "bash scripts/tsx-safe.sh scripts/test-off-mutation-latency-local.ts",

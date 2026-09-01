@@ -683,6 +683,12 @@ section("source: no stale unavailable union / no destructive pool shrink");
     "persist writes canonical preview.after, not client-painted OFF spare"
   );
   assert(
+    /overlayUnavail/.test(apply) &&
+      /!placed\.has\(id\)/.test(apply) &&
+      /snapshotComputePool\(/.test(apply),
+    "persist does not drop still-placed HOUSE for leftover DailyCaddyUnavailable"
+  );
+  assert(
     /uniquePositiveIds\(after\.unavailableCaddyIds/.test(draft),
     "applyLiveResultToDraft uses after unavailable only"
   );

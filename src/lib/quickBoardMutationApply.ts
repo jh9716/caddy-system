@@ -51,7 +51,19 @@ import {
   loadCanonicalReflowState,
   type CanonicalReflowState,
 } from "@/lib/caddyPoolCanonicalService";
-import { resolveCanonicalUnavailableIds } from "@/lib/caddyPoolCanonical";
+import { resolveCanonicalUnavailableIds, snapshotComputePool } from "@/lib/caddyPoolCanonical";
+
+function placedCaddyIds(previous: AutoAssignResultV1): Set<number> {
+  const ids = new Set<number>();
+  for (const row of previous.assignments || []) {
+    if (row.caddy?.id > 0) ids.add(row.caddy.id);
+  }
+  for (const spare of previous.sparesByShift || []) {
+    if (spare.spare1?.caddyId) ids.add(spare.spare1.caddyId);
+    if (spare.spare2?.caddyId) ids.add(spare.spare2.caddyId);
+  }
+  return ids;
+}
 
 export const QUICK_MUTATION_TYPES: PipelineMutationType[] = [
   "MOVE_RESERVATION",
@@ -148,15 +160,24 @@ export async function applyQuickBoardMutation(input: {
           : [];
     }
   }
+  const placed = placedCaddyIds(input.previous);
+  const overlayUnavail = resolveCanonicalUnavailableIds({
+    dailyUnavailableIds: storedUnavailable,
+  }).filter((id) => !placed.has(id));
   const previous = {
     ...input.previous,
-    unavailableCaddyIds: resolveCanonicalUnavailableIds({
-      dailyUnavailableIds: storedUnavailable,
-    }),
+    unavailableCaddyIds: overlayUnavail,
   };
+  const persistPool = snapshotComputePool({
+    rosterBaseline: rosterBaseline.length ? rosterBaseline : computePool,
+    assigned: input.previous.assignments.map((row) => row.caddy),
+    spareIds: placed,
+    extraUsable: computePool,
+    unavailableIds: overlayUnavail,
+  });
   const preview = previewLiveAssignmentEvents({
     previous,
-    regularCaddyPool: computePool,
+    regularCaddyPool: persistPool,
     events,
     changeType: input.changeType || input.change?.type,
     specialSupportByShift: input.specialSupportByShift,
