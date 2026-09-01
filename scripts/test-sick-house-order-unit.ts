@@ -208,7 +208,6 @@ section("production-like 2026-08-28 anonymous Draft + extraUsable 93");
   const draft = payloadToAssignmentDraft(parsed);
   const before1 = regularIds(draft.assignments, "1부");
   const [bS1, bS2] = spareIds(draft.sparesByShift, "1부");
-  const [b3s1, b3s2] = spareIds(draft.sparesByShift, "3부");
   assert(before1[0] === VICTIM, "draft starts at victim");
   assert(bS1 === SPARE1 && bS2 === SPARE2, `draft spare ${bS1}/${bS2}`);
   const sick = new Set([14, 192, 113, 40, 193, 15, 277, 12, 9, 51, 56, 235]);
@@ -245,8 +244,26 @@ section("production-like 2026-08-28 anonymous Draft + extraUsable 93");
   assert(aS1 !== BAD_SPARE1 && aS2 !== BAD_SPARE2, "availability team-sort spare 94/106 금지");
   assert(after2[0] === NEXT1, `2부 first ${after2[0]} (same origin pull-forward)`);
   assert(!after2.includes(VICTIM), "victim removed from 2부");
-  assert(a3s1 === b3s1 && a3s2 === b3s2, `3부 spare frozen ${a3s1}/${a3s2}`);
-  assert(after3.join("→") === regularIds(draft.assignments, "3부").join("→"), "3부 HOUSE order unchanged");
+  const before3 = regularIds(draft.assignments, "3부");
+  const leftover3 = [157, 149, 143, 144, 148, 204, 153, 142];
+  assert(after3.join(",") === leftover3.join(","), `3부 HOUSE leftover ${after3.join(",")}`);
+  assert(after3.join(",") !== before3.join(","), "3부 HOUSE leftover is not pre-SICK freeze");
+  assert(a3s1 === 96 && a3s2 === 94, `3부 HOUSE spare leftover ${a3s1}/${a3s2}`);
+  const thirdBefore = draft.assignments
+    .filter(
+      (row) =>
+        (row.reservation?.shift || row.shift) === "3부" &&
+        !(row.kind === "regular" && (row.caddy.caddyType || "HOUSE") === "HOUSE")
+    )
+    .map((row) => row.caddy.id);
+  const thirdAfter = preview.after.assignments
+    .filter(
+      (row) =>
+        (row.reservation?.shift || row.shift) === "3부" &&
+        !(row.kind === "regular" && (row.caddy.caddyType || "HOUSE") === "HOUSE")
+    )
+    .map((row) => row.caddy.id);
+  assert(thirdAfter.join(",") === thirdBefore.join(","), "3부 1·3/THIRD identity kept");
 }
 
 section("production v51 live SICK overlay: click = persist overlay, not 94/106");
@@ -357,7 +374,6 @@ section("production v51 live SICK overlay: click = persist overlay, not 94/106")
   const [pS1, pS2] = spareIds(persistDraft.sparesByShift, "1부");
   const [svS1, svS2] = spareIds(serverDraft.sparesByShift, "1부");
   const before3 = regularIds(draft.assignments, "3부");
-  const [b3s1, b3s2] = spareIds(draft.sparesByShift, "3부");
   const [c3s1, c3s2] = spareIds(ui.click.draft.sparesByShift, "3부");
   const [p3s1, p3s2] = spareIds(persistDraft.sparesByShift, "3부");
   const before2 = regularIds(draft.assignments, "2부");
@@ -393,8 +409,30 @@ section("production v51 live SICK overlay: click = persist overlay, not 94/106")
   assert(persist2.join(",") === expected2.join(","), "2부 persist matches click");
   const [c2s1] = spareIds(ui.click.draft.sparesByShift, "2부");
   assert(c2s1 === b2s2, "2부 spare2→spare1");
-  assert(regularIds(ui.click.draft.assignments, "3부").join(",") === before3.join(","), "3부 HOUSE frozen");
-  assert(c3s1 === b3s1 && c3s2 === b3s2 && p3s1 === 142 && p3s2 === 96, `3부 spare frozen ${c3s1}/${c3s2}`);
+  const leftover3 = [157, 149, 143, 144, 148, 204, 153, 142];
+  const click3 = regularIds(ui.click.draft.assignments, "3부");
+  const persist3 = regularIds(persistDraft.assignments, "3부");
+  const server3 = regularIds(serverDraft.assignments, "3부");
+  assert(click3.join(",") === leftover3.join(","), `click 3부 HOUSE leftover ${click3.join(",")}`);
+  assert(persist3.join(",") === leftover3.join(","), "persist 3부 HOUSE leftover");
+  assert(server3.join(",") === leftover3.join(","), "server 3부 HOUSE leftover");
+  assert(click3.join(",") !== before3.join(","), "3부 HOUSE leftover is not pre-SICK freeze");
+  assert(c3s1 === 96 && c3s2 === 94 && p3s1 === 96 && p3s2 === 94, `3부 HOUSE spare leftover ${c3s1}/${c3s2}`);
+  const thirdBefore = draft.assignments
+    .filter(
+      (row) =>
+        (row.reservation?.shift || row.shift) === "3부" &&
+        !(row.kind === "regular" && (row.caddy.caddyType || "HOUSE") === "HOUSE")
+    )
+    .map((row) => row.caddy.id);
+  const thirdClick = ui.click.draft.assignments
+    .filter(
+      (row) =>
+        (row.reservation?.shift || row.shift) === "3부" &&
+        !(row.kind === "regular" && (row.caddy.caddyType || "HOUSE") === "HOUSE")
+    )
+    .map((row) => row.caddy.id);
+  assert(thirdClick.join(",") === thirdBefore.join(","), "click keeps 3부 1·3/THIRD identity");
 
   const afterFirst = persistDraft;
   const second = uiHydrateAndEnqueueSick({

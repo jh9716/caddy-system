@@ -4698,6 +4698,11 @@ function shiftUsesCaddy(
   );
 }
 
+/**
+ * 1부/2부 REMOVE_CADDY가 3부 board에 없어도 3부를 통째로 재계산하지는 않는다.
+ * HOUSE leftover 구간과 HOUSE spare는 assignRemoveOnlyKeepingShiftOrder가
+ * refillFrozenThirdHouseLeftover로 새 remaining을 반영한다.
+ */
 function freezeShiftsWithoutRemovedCaddies(
   previous: AutoAssignResultV1,
   events: ReservationChangeEvent[]
@@ -4775,6 +4780,170 @@ function emptyRegularSequenceResult(): ReturnType<typeof assignRegularSequence> 
   };
 }
 
+function isHouseRegularCaddy(caddy: AutoAssignCaddy): boolean {
+  if (isThirdBandTeam(caddy.team)) return false;
+  return normalizeAssignCaddyType(caddy.caddyType) === "HOUSE";
+}
+
+/**
+ * 1·2부 소비 이후 3부에 들어가는 HOUSE leftover 큐.
+ * Mode A: 원번 미완주 → 2부 spare HOUSE → 미근무 → wrap.
+ * Mode B: 원번 완주 → 1부 미근무 ∩ 2부 실근무 (1부 spare1·2 제외) → wrap.
+ */
+function thirdHouseLeftoverQueue(input: {
+  house: AutoAssignCaddy[];
+  assignments: AutoAssignmentRow[];
+  sparesByShift: SpareByShift[];
+  excludeIds?: Iterable<number>;
+}): AutoAssignCaddy[] {
+  const excluded = new Set(input.excludeIds || []);
+  const known = new Set<number>();
+  for (const row of input.assignments) {
+    if (isHouseRegularCaddy(row.caddy)) known.add(row.caddy.id);
+  }
+  for (const spare of input.sparesByShift) {
+    if (spare.spare1?.caddyId) known.add(spare.spare1.caddyId);
+    if (spare.spare2?.caddyId) known.add(spare.spare2.caddyId);
+  }
+  const house = input.house.filter(
+    (caddy) => known.has(caddy.id) && !excluded.has(caddy.id)
+  );
+  const houseIds = new Set(house.map((caddy) => caddy.id));
+  const workedShift1 = new Set<number>();
+  const workedShift2 = new Set<number>();
+  for (const row of input.assignments) {
+    if (!houseIds.has(row.caddy.id) || !isHouseRegularCaddy(row.caddy)) continue;
+    if (row.shift === "1부") workedShift1.add(row.caddy.id);
+    else if (row.shift === "2부") workedShift2.add(row.caddy.id);
+  }
+  const worked12 = new Set<number>([...workedShift1, ...workedShift2]);
+  const neverWorked = house.filter((caddy) => !worked12.has(caddy.id));
+  const seen = new Set<number>();
+  const ordered: AutoAssignCaddy[] = [];
+  const push = (caddy: AutoAssignCaddy | undefined) => {
+    if (!caddy || !houseIds.has(caddy.id) || seen.has(caddy.id)) return;
+    seen.add(caddy.id);
+    ordered.push(caddy);
+  };
+  if (neverWorked.length > 0) {
+    for (const caddy of shift2SpareCaddiesFromSpares(house, input.sparesByShift)) {
+      push(caddy);
+    }
+    for (const caddy of neverWorked) push(caddy);
+    for (const caddy of house) {
+      if (worked12.has(caddy.id)) push(caddy);
+    }
+    return ordered;
+  }
+  const shift1Spare = input.sparesByShift.find((row) => row.shift === "1부");
+  const exclude = new Set<number>();
+  if (shift1Spare?.spare1?.caddyId != null) exclude.add(shift1Spare.spare1.caddyId);
+  if (shift1Spare?.spare2?.caddyId != null) exclude.add(shift1Spare.spare2.caddyId);
+  for (const caddy of house) {
+    if (
+      !workedShift1.has(caddy.id) &&
+      workedShift2.has(caddy.id) &&
+      !exclude.has(caddy.id)
+    ) {
+      push(caddy);
+    }
+  }
+  for (const caddy of house) push(caddy);
+  return ordered;
+}
+
+/**
+ * REMOVE_CADDY가 3부 board에 없으면 freezeShiftsWithoutRemovedCaddies가 3부를 동결한다.
+ * 1·3 / WEEKEND / regular THIRD / 고정·특수 슬롯은 유지하고,
+ * HOUSE leftover 구간과 HOUSE spare만 새 1·2부 remaining으로 다시 채운다.
+ */
+function refillFrozenThirdHouseLeftover(input: {
+  house: AutoAssignCaddy[];
+  assignments: AutoAssignmentRow[];
+  sparesByShift: SpareByShift[];
+  excludeIds?: Iterable<number>;
+}): {
+  assignments: AutoAssignmentRow[];
+  sparesByShift: SpareByShift[];
+} {
+  const houseSlots = input.assignments
+    .filter(
+      (row) =>
+        row.shift === "3부" &&
+        row.kind === "regular" &&
+        isHouseRegularCaddy(row.caddy)
+    )
+    .sort((a, b) => a.sequenceIndex - b.sequenceIndex);
+  if (houseSlots.length === 0) {
+    return {
+      assignments: input.assignments,
+      sparesByShift: input.sparesByShift,
+    };
+  }
+  const keepIds = new Set(
+    input.assignments
+      .filter(
+        (row) =>
+          row.shift === "3부" &&
+          !(
+            row.kind === "regular" &&
+            isHouseRegularCaddy(row.caddy)
+          )
+      )
+      .map((row) => row.caddy.id)
+  );
+  const leftover = thirdHouseLeftoverQueue({
+    house: input.house,
+    assignments: input.assignments,
+    sparesByShift: input.sparesByShift,
+    excludeIds: input.excludeIds,
+  }).filter((caddy) => !keepIds.has(caddy.id));
+  const nextByKey = new Map<string, AutoAssignCaddy>();
+  const used = new Set(keepIds);
+  let cursor = 0;
+  for (const slot of houseSlots) {
+    while (cursor < leftover.length && used.has(leftover[cursor].id)) cursor += 1;
+    const next = leftover[cursor];
+    if (!next) break;
+    cursor += 1;
+    used.add(next.id);
+    nextByKey.set(reservationKey(slot.reservation), next);
+  }
+  const assignments = input.assignments.map((row) => {
+    if (
+      row.shift !== "3부" ||
+      row.kind !== "regular" ||
+      !isHouseRegularCaddy(row.caddy)
+    ) {
+      return row;
+    }
+    const next = nextByKey.get(reservationKey(row.reservation));
+    if (!next) return row;
+    return {
+      ...cloneAssignmentRow(row),
+      caddy: next,
+    };
+  });
+  const usedThird = new Set(
+    assignments.filter((row) => row.shift === "3부").map((row) => row.caddy.id)
+  );
+  const spareQueue = leftover.filter((caddy) => !usedThird.has(caddy.id));
+  const spares = pickCircularHouseSpares(spareQueue, 0, usedThird);
+  const sparesByShift = input.sparesByShift.map((row) =>
+    row.shift === "3부"
+      ? { shift: "3부" as const, spare1: spares.spare1, spare2: spares.spare2 }
+      : row
+  );
+  if (!sparesByShift.some((row) => row.shift === "3부")) {
+    sparesByShift.push({
+      shift: "3부",
+      spare1: spares.spare1,
+      spare2: spares.spare2,
+    });
+  }
+  return { assignments, sparesByShift };
+}
+
 function assignRemoveOnlyKeepingShiftOrder(input: {
   date: string;
   previous: AutoAssignResultV1;
@@ -4837,6 +5006,21 @@ function assignRemoveOnlyKeepingShiftOrder(input: {
     combined.specialUnassigned.push(...seq.specialUnassigned);
     combined.byShift[shift] = seq.byShift[shift];
     combined.finalPointer = seq.finalPointer;
+  }
+  if (freezeSet.has("3부")) {
+    const house = splitCaddyPoolsPreservingOrder(input.pool).house;
+    const excludeIds: number[] = [];
+    for (const [caddyId, from] of input.unavailableFromShift.entries()) {
+      if (shiftRank("3부") >= shiftRank(from)) excludeIds.push(caddyId);
+    }
+    const refilled = refillFrozenThirdHouseLeftover({
+      house,
+      assignments: combined.assignments,
+      sparesByShift: combined.sparesByShift,
+      excludeIds,
+    });
+    combined.assignments = refilled.assignments;
+    combined.sparesByShift = refilled.sparesByShift;
   }
   return combined;
 }
