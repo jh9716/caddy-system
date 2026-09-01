@@ -1828,7 +1828,6 @@ export default function ManageAssignmentsOpsPage() {
         {
           method: "POST",
           credentials: "include",
-          keepalive: true,
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             previous: input.previous,

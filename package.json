@@ -49,6 +49,7 @@
     "test:board-mutation-pipeline-unit": "bash scripts/tsx-safe.sh scripts/test-board-mutation-pipeline-unit.ts",
     "test:board-mutation-pipeline-local": "bash scripts/tsx-safe.sh scripts/test-board-mutation-pipeline-local.ts",
     "test:board-mutation-pipeline-http": "bash scripts/tsx-safe.sh scripts/test-board-mutation-pipeline-http.ts",
+    "test:persist-keepalive-chromium": "bash scripts/tsx-safe.sh scripts/test-persist-keepalive-chromium.ts",
     "test:daily-board-published-unit": "bash scripts/tsx-safe.sh scripts/test-daily-board-published-unit.ts",
     "preview:roster": "bash scripts/tsx-safe.sh scripts/preview-roster-import.ts",
     "inspect:db-readonly": "bash scripts/tsx-safe.sh scripts/inspect-db-schema-readonly.ts",

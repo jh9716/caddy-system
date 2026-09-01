@@ -247,7 +247,13 @@ export async function persistFetchWithWatchdog(
 ): Promise<Response> {
   const watchdog = createPersistWatchdog(timeoutMs);
   try {
-    return await fetch(input, { ...init, signal: watchdog.signal });
+    // Mutation bodies are ~488 KiB. Chromium rejects keepalive fetch > 64 KiB
+    // with TypeError: Failed to fetch before the request leaves the browser.
+    return await fetch(input, {
+      ...init,
+      keepalive: false,
+      signal: watchdog.signal,
+    });
   } finally {
     watchdog.dispose();
   }

@@ -688,7 +688,20 @@ section("source contracts");
     /showToast\(persist\.message \|\| PIPELINE_LEADING_FAIL_TOAST\)/.test(page),
     "persist failure toast prefers the server message"
   );
-  assert(page.includes("keepalive: true"), "pipeline fetch uses keepalive");
+  const persistFn =
+    page.split("async function persistPipelineIntent")[1]?.split(
+      "async function flushPipelineWrites"
+    )[0] || "";
+  assert(
+    !/keepalive:\s*true/.test(persistFn),
+    "persistPipelineIntent does not set keepalive true"
+  );
+  assert(
+    readFileSync(join(process.cwd(), "src/lib/boardMutationPipeline.ts"), "utf8").includes(
+      "keepalive: false"
+    ),
+    "persistFetchWithWatchdog forces keepalive false after init spread"
+  );
   assert(page.includes("persistFetchWithWatchdog"), "persist fetch uses client watchdog");
   assert(page.includes("persistWatchdogFailure"), "persist abort reconciles as failure");
   assert(page.includes("PIPELINE_PERSIST_WATCHDOG_MS"), "watchdog slack is the 20s constant");
@@ -755,7 +768,29 @@ async function hangWatchdogTests() {
   );
 }
 
-hangWatchdogTests()
+async function keepaliveForcedFalseTests() {
+  section("F. persistFetchWithWatchdog forces keepalive false");
+  const originalFetch = globalThis.fetch;
+  let seen: RequestInit | undefined;
+  globalThis.fetch = ((_url: RequestInfo | URL, init?: RequestInit) => {
+    seen = init;
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  }) as typeof fetch;
+  try {
+    await persistFetchWithWatchdog(
+      "/api/assignments/reflow/quick-mutation",
+      { method: "POST", keepalive: true, body: "{\"pad\":1}" },
+      1000
+    );
+    assert(seen?.keepalive === false, "init keepalive true cannot survive spread");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+Promise.resolve()
+  .then(() => hangWatchdogTests())
+  .then(() => keepaliveForcedFalseTests())
   .then(() => {
     console.log(`\nDONE: ${passed} passed, ${failed} failed`);
     if (failed) process.exit(1);
