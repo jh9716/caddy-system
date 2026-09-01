@@ -125,7 +125,10 @@ import {
   parseDailyBoardDraftPayload,
   payloadToAssignmentDraft,
 } from "@/lib/dailyBoardDraft";
-import { drainDraftSaves } from "@/lib/draftSaveFlush";
+import {
+  drainDraftSaves,
+  persistAfterOwnDraftFlush,
+} from "@/lib/draftSaveFlush";
 import {
   buildOffSnapshot,
   isUsableOffSnapshot,
@@ -585,6 +588,17 @@ export default function ManageAssignmentsOpsPage() {
           setDraftVersion(serverDraftVersionRef.current);
           setDraftSavedAt(String(data.draft.updatedAt || new Date().toISOString()));
           setDraftSaveState("saved");
+          if (
+            confirmedDraftRef.current?.date === next.date &&
+            pendingIntentsRef.current.length === 0
+          ) {
+            confirmedDraftRef.current = {
+              ...confirmedDraftRef.current,
+              ...(isUsableOffSnapshot(next.offSnapshot, next.date)
+                ? { offSnapshot: next.offSnapshot }
+                : {}),
+            };
+          }
         }
         return "ok";
       } catch {
@@ -1905,6 +1919,14 @@ export default function ManageAssignmentsOpsPage() {
     setPersistInFlight(true);
     let flushHadFailure = false;
     try {
+      const drained = await flushDraftSave();
+      if (persistAfterOwnDraftFlush(drained.status) === "conflict") {
+        flushHadFailure = true;
+        setDraftSaveState("conflict");
+        setError(DRAFT_VERSION_CONFLICT_MESSAGE);
+        showToast(DRAFT_VERSION_CONFLICT_MESSAGE);
+        return;
+      }
       while (pendingIntentsRef.current.length > 0) {
         const confirmed = confirmedDraftRef.current || draftRef.current;
         if (!confirmed) break;

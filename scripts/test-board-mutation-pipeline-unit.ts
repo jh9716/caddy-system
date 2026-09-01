@@ -17,6 +17,7 @@ import {
   readPipelineTestFail,
 } from "../src/lib/boardMutationPipeline";
 import { OFF_SHEET_UNRESOLVED_USER_MESSAGE } from "../src/lib/caddyPoolCanonical";
+import { persistAfterOwnDraftFlush } from "../src/lib/draftSaveFlush";
 import {
   PIPELINE_DIRTY_STORAGE_KEY,
   clearPipelineDirty,
@@ -683,6 +684,23 @@ section("source contracts");
   assert(
     /scheduleAfterPaint\(\(\) => \{\s*void flushPipelineWrites\(\);/.test(enqueue),
     "flush is deferred until after paint"
+  );
+  const flushWrites =
+    page.split("async function flushPipelineWrites")[1]?.split(
+      "async function applyReservationMove"
+    )[0] || "";
+  assert(
+    flushWrites.includes("flushDraftSave") &&
+      flushWrites.includes("persistAfterOwnDraftFlush") &&
+      flushWrites.indexOf("flushDraftSave") <
+        flushWrites.indexOf("persistPipelineIntent"),
+    "pipeline persist drains own offSnapshot Draft save before mutation version"
+  );
+  assert(
+    persistAfterOwnDraftFlush("ok") === "persist" &&
+      persistAfterOwnDraftFlush("error") === "persist" &&
+      persistAfterOwnDraftFlush("conflict") === "conflict",
+    "own draft flush conflict is the only persist block; error still tries mutation"
   );
   assert(
     /showToast\(persist\.message \|\| PIPELINE_LEADING_FAIL_TOAST\)/.test(page),
