@@ -720,68 +720,65 @@ section("1·2부 투대기 1부 SICK: 2부 start +1부소비 + 결원 = 2칸");
   );
   assert(o2s1 === "지선영" && o2s2 === "홍정자", `단일 2부 spare ${o2s1}/${o2s2}`);
 
-  const ui = uiHydrateAndEnqueueSick({
-    payloadDraft: draft,
-    liveUnavailableIds: [],
-    extraUsable,
-    change: { type: "CADDY_SICK", caddyId: V.id, shift: "1부" },
-    id: "dual",
-  });
-  const persistDraft = applyLiveResultToDraft(ui.confirmed, ui.prepared.ok ? ui.prepared.preview.after : preview.after);
-  const serverPreview = previewLiveChangeFromDraft({
-    draft: ui.confirmed,
-    change: { type: "CADDY_SICK", caddyId: V.id, shift: "1부" },
-    regularCaddyPool: compute,
-  });
-  const serverDraft = applyLiveResultToDraft(ui.confirmed, serverPreview.after);
-  const stages = {
-    before: { "1부": before1, "2부": before2, spare1: [b1s1, b1s2], spare2: [b2s1, b2s2] },
-    click: {
-      "1부": regularNames(ui.click.draft.assignments, "1부"),
-      "2부": regularNames(ui.click.draft.assignments, "2부"),
-      spare1: spareNames(ui.click.draft.sparesByShift, "1부"),
-      spare2: spareNames(ui.click.draft.sparesByShift, "2부"),
-    },
-    server: {
-      "1부": regularNames(serverDraft.assignments, "1부"),
-      "2부": regularNames(serverDraft.assignments, "2부"),
-      spare1: spareNames(serverDraft.sparesByShift, "1부"),
-      spare2: spareNames(serverDraft.sparesByShift, "2부"),
-    },
-    persist: {
-      "1부": regularNames(persistDraft.assignments, "1부"),
-      "2부": regularNames(persistDraft.assignments, "2부"),
-      spare1: spareNames(persistDraft.sparesByShift, "1부"),
-      spare2: spareNames(persistDraft.sparesByShift, "2부"),
-    },
+  function dualSickFingerprint(shift: "1부" | "2부", id: string) {
+    const ui = uiHydrateAndEnqueueSick({
+      payloadDraft: draft,
+      liveUnavailableIds: [],
+      extraUsable,
+      change: { type: "CADDY_SICK", caddyId: V.id, shift },
+      id,
+    });
+    const after = ui.prepared.ok ? ui.prepared.preview.after : preview.after;
+    const persistDraft = applyLiveResultToDraft(ui.confirmed, after);
+    const serverPreview = previewLiveChangeFromDraft({
+      draft: ui.confirmed,
+      change: { type: "CADDY_SICK", caddyId: V.id, shift },
+      regularCaddyPool: compute,
+    });
+    const serverDraft = applyLiveResultToDraft(ui.confirmed, serverPreview.after);
+    const fpOf = (d: AssignmentDraft) => ({
+      "1부": regularNames(d.assignments, "1부"),
+      spare1: spareNames(d.sparesByShift, "1부"),
+      "2부": regularNames(d.assignments, "2부"),
+      spare2: spareNames(d.sparesByShift, "2부"),
+      "3부": regularNames(d.assignments, "3부"),
+      spare3: spareNames(d.sparesByShift, "3부"),
+    });
+    const click = fpOf(ui.click.draft);
+    const server = fpOf(serverDraft);
+    const persist = fpOf(persistDraft);
+    const reload = fpOf(persistDraft);
+    return { click, server, persist, reload };
+  }
+  const caseA = dualSickFingerprint("1부", "case-a");
+  const caseB = dualSickFingerprint("2부", "case-b");
+  const expected = {
+    "1부": ["A", "B", "C", "D", "E", "조정혜"],
+    spare1: ["장혜원", "지석준"],
+    "2부": ["B", "C", "D", "E", "조정혜", "장혜원", "지석준", "윤숙영", "지선영"],
+    spare2: ["홍정자", "다음"],
   };
-  const reload = persistDraft;
-  assert(
-    JSON.stringify(stages.click) === JSON.stringify(stages.server),
-    "click = server preview.after"
-  );
-  assert(
-    JSON.stringify(stages.click) === JSON.stringify(stages.persist),
-    "click = persist"
-  );
-  assert(
-    regularNames(reload.assignments, "2부").join("→") === stages.persist["2부"].join("→"),
-    "reload keeps 2부"
-  );
-  console.log(
-    "  fingerprint",
-    JSON.stringify({
-      ...stages,
-      reload: {
-        "1부": regularNames(reload.assignments, "1부"),
-        "2부": regularNames(reload.assignments, "2부"),
-        spare1: spareNames(reload.sparesByShift, "1부"),
-        spare2: spareNames(reload.sparesByShift, "2부"),
-        "3부": regularNames(reload.assignments, "3부"),
-        spare3: spareNames(reload.sparesByShift, "3부"),
-      },
-    })
-  );
+  for (const [label, stages] of [
+    ["CASE A 1부 셀", caseA],
+    ["CASE B 2부 셀", caseB],
+  ] as const) {
+    for (const stage of ["click", "server", "persist", "reload"] as const) {
+      const fp = stages[stage];
+      assert(fp["1부"].join("→") === expected["1부"].join("→"), `${label} ${stage} 1부 HOUSE`);
+      assert(fp.spare1[0] === expected.spare1[0] && fp.spare1[1] === expected.spare1[1], `${label} ${stage} 1부 spare`);
+      assert(fp["2부"].join("→") === expected["2부"].join("→"), `${label} ${stage} 2부 HOUSE`);
+      assert(fp.spare2[0] === expected.spare2[0] && fp.spare2[1] === expected.spare2[1], `${label} ${stage} 2부 spare`);
+    }
+    assert(
+      JSON.stringify(stages.click) === JSON.stringify(stages.server) &&
+        JSON.stringify(stages.click) === JSON.stringify(stages.persist) &&
+        JSON.stringify(stages.click) === JSON.stringify(stages.reload),
+      `${label} click=server=persist=reload`
+    );
+  }
+  assert(JSON.stringify(caseA) === JSON.stringify(caseB), "CASE A = CASE B 전부 동일");
+  console.log("  CASE A", JSON.stringify(caseA.click));
+  console.log("  CASE B", JSON.stringify(caseB.click));
 }
 
 const fs = require("node:fs") as typeof import("node:fs");

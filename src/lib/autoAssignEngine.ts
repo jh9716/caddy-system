@@ -4655,7 +4655,12 @@ function freezeBeforeShiftFromEvents(
   for (const event of events) {
     if (event.type === "REMOVE_CADDY") {
       any = true;
-      minRank = Math.min(minRank, shiftRank(event.fromShift ?? "1부"));
+      minRank = Math.min(
+        minRank,
+        shiftRank(
+          removeCaddyEffectiveFromShift(previous, event.caddyId, event.fromShift)
+        )
+      );
       continue;
     }
     if (event.type !== "MOVE_RESERVATION") continue;
@@ -4944,39 +4949,56 @@ function refillFrozenThirdHouseLeftover(input: {
   return { assignments, sparesByShift };
 }
 
-function regularBoardHasCaddy(
+function regularHouseConsumeCount(
   previous: AutoAssignResultV1,
   shift: ShiftPart,
   caddyId: number
-): boolean {
-  return previous.assignments.some(
-    (row) =>
-      row.shift === shift &&
-      row.kind === "regular" &&
-      row.caddy.id === caddyId
-  );
-}
-
-/**
- * 1·2부 둘 다 실배치된 캐디를 1부에서 빼면 1부가 HOUSE 1명을 추가 소비한다.
- * 부마다 houseStart=0이면 그 소비가 2부에 전달되지 않는다.
- * 단일 1부/단일 2부 병가는 0 — 기존 per-shift pull-forward 유지.
- */
-function dualShift1To2HouseConsumeCount(
-  previous: AutoAssignResultV1,
-  unavailableFromShift: Map<number, ShiftPart>
 ): number {
   let count = 0;
-  for (const [caddyId, from] of unavailableFromShift.entries()) {
-    if (from !== "1부") continue;
+  for (const row of previous.assignments) {
     if (
-      regularBoardHasCaddy(previous, "1부", caddyId) &&
-      regularBoardHasCaddy(previous, "2부", caddyId)
+      row.shift === shift &&
+      row.kind === "regular" &&
+      row.caddy.id === caddyId &&
+      isHouseRegularCaddy(row.caddy)
     ) {
       count += 1;
     }
   }
   return count;
+}
+
+/**
+ * SICK/결근은 클릭한 셀의 fromShift가 아니라
+ * 기존 보드 1·2부 regular HOUSE 실소비로 유효 시작 부를 정한다.
+ * 1·2부 둘 다 소비된 투대기는 종일(1부부터). 단일 2부는 기존처럼 2부부터.
+ */
+function removeCaddyEffectiveFromShift(
+  previous: AutoAssignResultV1,
+  caddyId: number,
+  eventFrom?: ShiftPart
+): ShiftPart {
+  const shift1 = regularHouseConsumeCount(previous, "1부", caddyId);
+  const shift2 = regularHouseConsumeCount(previous, "2부", caddyId);
+  if (shift1 > 0 && shift2 > 0) return "1부";
+  return eventFrom ?? "1부";
+}
+
+/**
+ * 1·2부 둘 다 regular HOUSE로 소비된 캐디 1명 = 1부 추가 소비 1칸.
+ * 클릭 shift/fromShift는 쓰지 않는다. 단일 1부·단일 2부는 0.
+ */
+function dualShift1To2HouseConsumeCount(
+  previous: AutoAssignResultV1,
+  removedCaddyIds: Iterable<number>
+): number {
+  let extra = 0;
+  for (const caddyId of removedCaddyIds) {
+    const shift1 = regularHouseConsumeCount(previous, "1부", caddyId);
+    const shift2 = regularHouseConsumeCount(previous, "2부", caddyId);
+    if (shift1 > 0 && shift2 > 0) extra += shift1;
+  }
+  return extra;
 }
 
 function assignRemoveOnlyKeepingShiftOrder(input: {
@@ -5002,7 +5024,7 @@ function assignRemoveOnlyKeepingShiftOrder(input: {
   combined.sparesByShift = [...input.seedSparesByShift];
   const dualConsume = dualShift1To2HouseConsumeCount(
     input.previous,
-    input.unavailableFromShift
+    input.unavailableFromShift.keys()
   );
   for (const shift of SHIFT_PARTS) {
     if (freezeSet.has(shift)) {
@@ -5237,7 +5259,11 @@ export function reflowRegularAssignments(input: {
     if (event.type === "REMOVE_CADDY") {
       removeCount += 1;
       unavailable.set(event.caddyId, event.cause);
-      const from = event.fromShift ?? "1부";
+      const from = removeCaddyEffectiveFromShift(
+        previous,
+        event.caddyId,
+        event.fromShift
+      );
       unavailableFromShift.set(event.caddyId, from);
       if (from === "1부") allDayUnavailable.add(event.caddyId);
     }
