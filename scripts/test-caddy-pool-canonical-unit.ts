@@ -668,6 +668,11 @@ section("source: no stale unavailable union / no destructive pool shrink");
     "quick mutation rebuilds SoT from cache-or-fetch canonical, no double fetch"
   );
   assert(
+    /applyLiveResultToDraft\(/.test(apply) &&
+      /assignmentDraftToPayload\(synced\)/.test(apply),
+    "persist writes canonical preview.after, not client-painted OFF spare"
+  );
+  assert(
     /uniquePositiveIds\(after\.unavailableCaddyIds/.test(draft),
     "applyLiveResultToDraft uses after unavailable only"
   );
@@ -696,6 +701,10 @@ section("source: no stale unavailable union / no destructive pool shrink");
   const route = read("src/app/api/assignments/reflow/quick-mutation/route.ts");
   assert(/peekCachedOffSheetsForDate/.test(offFetch), "off-sheet cache is date-safe");
   assert(
+    /workbookInflight/.test(offFetch) && /rememberOffSheetsForDate/.test(offFetch),
+    "OFF workbook is single-flight and date-snapshotted"
+  );
+  assert(
     /cache-or-fetch/.test(service) &&
       /peekCachedOffSheetsForDate/.test(service),
     "persist peeks date-matched cache then fetches on miss"
@@ -705,13 +714,20 @@ section("source: no stale unavailable union / no destructive pool shrink");
       !/off-sheet-timeout"\), 4000/.test(service),
     "persist OFF fetch timeout is longer than 4s"
   );
+  const fetchFn =
+    service.split("async function fetchOffSheetsForDate")[1]?.split(
+      "export async function resolveCanonicalOffSheet"
+    )[0] || "";
   assert(
     /class OffSheetUnresolvedError/.test(service) &&
       /throw new OffSheetUnresolvedError/.test(service) &&
-      !/source: "miss"/.test(
-        service.split("fetchPublishedOffSheets({ force: staleWorkbook })")[1] || ""
-      ),
+      /fetchPublishedOffSheets\(\{ force: staleWorkbook \}\)/.test(fetchFn) &&
+      !/source: "miss"/.test(fetchFn),
     "persist fetch failure throws instead of miss fallback"
+  );
+  assert(
+    /offDateInflight/.test(service) && /prewarmCanonicalOffSheet/.test(service),
+    "date-keyed OFF resolve is single-flight and prewarmable"
   );
   assert(
     /offSheetMode:\s*"cache-or-fetch"/.test(route) &&

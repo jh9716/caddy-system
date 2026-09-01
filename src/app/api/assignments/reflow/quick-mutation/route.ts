@@ -147,6 +147,7 @@ export async function POST(req: NextRequest) {
         totalMs: Date.now() - started,
         offSheetHttp: poolResult.canonical.offSheetSource === "fetch",
         offSheetSource: poolResult.canonical.offSheetSource,
+        offSheetMs: poolResult.canonical.offResolveMs ?? null,
         availabilityReload: false,
       },
     });

@@ -30,8 +30,11 @@ import {
   saveDailyBoardDraftOnDb,
   type DailyBoardDraftRecord,
 } from "@/lib/dailyBoardDraftService";
+import { applyLiveResultToDraft } from "@/lib/assignmentDraft";
 import {
+  assignmentDraftToPayload,
   parseDailyBoardDraftPayload,
+  payloadToAssignmentDraft,
   type DailyBoardDraftPayloadV1,
 } from "@/lib/dailyBoardDraft";
 import {
@@ -186,9 +189,13 @@ export async function applyQuickBoardMutation(input: {
   let payload: DailyBoardDraftPayloadV1;
   try {
     payload = parseDailyBoardDraftPayload(input.draft.payload, input.draft.date);
+    const synced = applyLiveResultToDraft(
+      payloadToAssignmentDraft(payload),
+      preview.after
+    );
     payload = {
-      ...payload,
-      caddyPool: rosterBaseline.length > 0 ? rosterBaseline : payload.caddyPool,
+      ...assignmentDraftToPayload(synced),
+      caddyPool: rosterBaseline.length > 0 ? rosterBaseline : synced.caddyPool,
       ...(preview.unavailableCaddyIds.length > 0
         ? { unavailableCaddyIds: preview.unavailableCaddyIds }
         : { unavailableCaddyIds: [] }),

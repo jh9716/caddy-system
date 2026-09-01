@@ -65,14 +65,28 @@ export function workbookToOffSheets(buffer: Buffer): OffSheet[] {
   });
 }
 
-const OFF_SHEET_CACHE_MS = 45_000;
+export const OFF_SHEET_CACHE_MS = 45_000;
+
+type OffDateSnapshot = {
+  ymd: string;
+  matched: boolean;
+  names: string[];
+  at: number;
+};
+
 let offSheetCache: { id: string; at: number; sheets: OffSheet[] } | null = null;
+let offSheetCacheGeneration = 0;
+const offDateSnapshots = new Map<string, OffDateSnapshot>();
+const workbookInflight = new Map<string, Promise<OffSheet[]>>();
 let offSheetHttpFetchCount = 0;
 let testOffSheetLoader: ((opts?: { force?: boolean }) => Promise<OffSheet[]>) | null =
   null;
 
 export function invalidateOffSheetCache() {
+  offSheetCacheGeneration += 1;
   offSheetCache = null;
+  offDateSnapshots.clear();
+  workbookInflight.clear();
 }
 
 export function getOffSheetHttpFetchCount(): number {
@@ -82,6 +96,7 @@ export function getOffSheetHttpFetchCount(): number {
 export function resetOffSheetHttpStatsForTests() {
   if (process.env.NODE_ENV === "production") return;
   offSheetHttpFetchCount = 0;
+  workbookInflight.clear();
 }
 
 export function setPublishedOffSheetLoaderForTests(
@@ -121,6 +136,37 @@ export function peekCachedOffSheetsForDate(ymd: string): OffSheet[] | null {
 export function seedOffSheetCacheForTests(sheets: OffSheet[]) {
   if (process.env.NODE_ENV === "production") return;
   offSheetCache = { id: sheetId(), at: Date.now(), sheets };
+  offDateSnapshots.clear();
+}
+
+export function peekOffDateSnapshot(ymd: string): OffDateSnapshot | null {
+  const snap = offDateSnapshots.get(ymd);
+  if (!snap) return null;
+  if (Date.now() - snap.at >= OFF_SHEET_CACHE_MS) {
+    offDateSnapshots.delete(ymd);
+    return null;
+  }
+  return snap;
+}
+
+export function rememberOffSheetsForDate(ymd: string, sheets: OffSheet[]) {
+  offSheetCache = { id: sheetId(), at: Date.now(), sheets };
+  try {
+    const parsed = offNamesForDate(sheets, ymd);
+    const matched = parsed.matchedSheetDates.includes(ymd);
+    if (!matched) {
+      offDateSnapshots.delete(ymd);
+      return;
+    }
+    offDateSnapshots.set(ymd, {
+      ymd,
+      matched: true,
+      names: parsed.names,
+      at: Date.now(),
+    });
+  } catch {
+    offDateSnapshots.delete(ymd);
+  }
 }
 
 function allowLocalOffSheetTestHooks(): boolean {
@@ -139,19 +185,15 @@ async function applyLocalOffSheetTestDelay() {
   );
 }
 
-export async function fetchPublishedOffSheets(opts?: {
+async function loadPublishedOffSheetsUncached(opts?: {
   force?: boolean;
 }): Promise<OffSheet[]> {
   const id = sheetId();
-  const now = Date.now();
-  if (
-    !opts?.force &&
-    offSheetCache &&
-    offSheetCache.id === id &&
-    now - offSheetCache.at < OFF_SHEET_CACHE_MS
-  ) {
-    return offSheetCache.sheets;
-  }
+  const generation = offSheetCacheGeneration;
+  const commitCache = (sheets: OffSheet[]) => {
+    if (generation !== offSheetCacheGeneration) return;
+    offSheetCache = { id, at: Date.now(), sheets };
+  };
   await applyLocalOffSheetTestDelay();
   if (testOffSheetLoader) {
     offSheetHttpFetchCount += 1;
@@ -163,7 +205,7 @@ export async function fetchPublishedOffSheets(opts?: {
         502
       );
     }
-    offSheetCache = { id, at: Date.now(), sheets };
+    commitCache(sheets);
     return sheets;
   }
   const testFile = process.env.OFF_SHEET_TEST_FILE?.trim();
@@ -178,7 +220,7 @@ export async function fetchPublishedOffSheets(opts?: {
         502
       );
     }
-    offSheetCache = { id, at: Date.now(), sheets };
+    commitCache(sheets);
     return sheets;
   }
   const url = exportUrl(id);
@@ -188,7 +230,9 @@ export async function fetchPublishedOffSheets(opts?: {
     res = await fetch(url, {
       headers: { "User-Agent": "caddy-system-off-sheet/1.0" },
       redirect: "follow",
-      cache: "no-store",
+      ...(opts?.force
+        ? { cache: "no-store" as const }
+        : { next: { revalidate: Math.floor(OFF_SHEET_CACHE_MS / 1000) } }),
     });
   } catch (e) {
     throw new OffSheetError(
@@ -221,7 +265,7 @@ export async function fetchPublishedOffSheets(opts?: {
         502
       );
     }
-    offSheetCache = { id, at: Date.now(), sheets };
+    commitCache(sheets);
     return sheets;
   } catch (e) {
     if (e instanceof OffSheetError) throw e;
@@ -231,6 +275,23 @@ export async function fetchPublishedOffSheets(opts?: {
       502
     );
   }
+}
+
+export async function fetchPublishedOffSheets(opts?: {
+  force?: boolean;
+}): Promise<OffSheet[]> {
+  const id = sheetId();
+  const cached = peekCachedOffSheets();
+  if (!opts?.force && cached) {
+    return cached;
+  }
+  const existing = workbookInflight.get(id);
+  if (existing) return existing;
+  const pending = loadPublishedOffSheetsUncached(opts).finally(() => {
+    if (workbookInflight.get(id) === pending) workbookInflight.delete(id);
+  });
+  workbookInflight.set(id, pending);
+  return pending;
 }
 
 export function requireOffNamesForDate(

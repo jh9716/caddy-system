@@ -159,6 +159,16 @@ import {
   shouldClearPipelineDirty,
 } from "@/lib/pipelineUnloadGuard";
 
+function prewarmOffSheetForDate(ymd: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return;
+  const year = Number(ymd.slice(0, 4));
+  if (!Number.isInteger(year) || year >= 2090) return;
+  void fetch(
+    `/api/assignments/off-sheet/prewarm?date=${encodeURIComponent(ymd)}`,
+    { credentials: "include", keepalive: true }
+  ).catch(() => {});
+}
+
 type ResultViewMode = "board" | "list";
 
 type ThirdWeeklyStartState = {
@@ -801,6 +811,7 @@ export default function ManageAssignmentsOpsPage() {
           setDraftSaveState("idle");
           setDraftSavedAt(null);
           setDraftVersion(0);
+          scheduleAfterPaint(() => prewarmOffSheetForDate(date));
           return;
         }
         const payload = parseDailyBoardDraftPayload(data.draft.payload, date);
@@ -810,6 +821,7 @@ export default function ManageAssignmentsOpsPage() {
           data.draft.updatedAt,
           Array.isArray(data.unavailableCaddyIds) ? data.unavailableCaddyIds : []
         );
+        scheduleAfterPaint(() => prewarmOffSheetForDate(date));
         const leftover = consumePipelineDirty(window.sessionStorage);
         if (leftover) setToast(PIPELINE_DIRTY_RELOAD_TOAST);
       } catch (e: unknown) {
@@ -1060,6 +1072,7 @@ export default function ManageAssignmentsOpsPage() {
         return;
       }
       setAvailability(data as AvailabilityResult & { dailySummary?: DailyAvailabilitySummary });
+      scheduleAfterPaint(() => prewarmOffSheetForDate(date));
       const dutyIds = Array.isArray((data as { opsDutyCaddyIds?: number[] }).opsDutyCaddyIds)
         ? ((data as { opsDutyCaddyIds?: number[] }).opsDutyCaddyIds as number[])
         : [];

@@ -39,6 +39,7 @@ export async function resolveCanonicalLivePool(
     specialSkipIds: [],
     offSheetMatched: false,
     offSheetSource: "skipped",
+    offResolveMs: 0,
   };
   if (!date || !Array.isArray(pool)) {
     return empty;

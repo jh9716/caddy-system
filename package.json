@@ -36,6 +36,8 @@
     "test:caddy-pool-canonical-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-pool-canonical-unit.ts",
     "test:off-sheet-cold-cache-unit": "bash scripts/tsx-safe.sh scripts/test-off-sheet-cold-cache-unit.ts",
     "test:off-sheet-mutation-local": "bash scripts/tsx-safe.sh scripts/test-off-sheet-mutation-local.ts",
+    "test:off-mutation-latency-local": "bash scripts/tsx-safe.sh scripts/test-off-mutation-latency-local.ts",
+    "measure:off-mutation-latency-local": "bash scripts/tsx-safe.sh scripts/measure-off-mutation-latency-local.ts",
     "test:assignment-board-view-unit": "bash scripts/tsx-safe.sh scripts/test-assignment-board-view-unit.ts",
     "test:assignment-confirm-unit": "bash scripts/tsx-safe.sh scripts/test-assignment-confirm-unit.ts",
     "test:daily-board-draft-unit": "bash scripts/tsx-safe.sh scripts/test-daily-board-draft-unit.ts",

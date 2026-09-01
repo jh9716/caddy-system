@@ -17,6 +17,7 @@ import {
 } from "@/lib/dailyAvailabilityOverlay";
 import {
   fetchPublishedOffSheets,
+  rememberOffSheetsForDate,
   requireOffNamesForDate,
 } from "@/lib/offSheetFetch";
 import type { OffSheet } from "@/lib/offSheetParser";
@@ -112,6 +113,7 @@ export async function loadAvailabilityForDate(
     const sheets =
       options?.offSheets ??
       (await fetchPublishedOffSheets({ force: options?.forceOffSheet === true }));
+    rememberOffSheetsForDate(ymd, sheets);
     offNames = requireOffNamesForDate(sheets, ymd);
   }
 
