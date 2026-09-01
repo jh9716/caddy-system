@@ -6,10 +6,24 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { computeAutoAssignmentsV1, type AutoAssignCaddy } from "../src/lib/autoAssignEngine";
-import { createDraftFromAutoResult, snapshotComputePoolFromDraft } from "../src/lib/assignmentDraft";
+import {
+  applyLiveResultToDraft,
+  createDraftFromAutoResult,
+  snapshotComputePoolFromDraft,
+  snapshotComputePoolFromDraftKeepingPlaced,
+} from "../src/lib/assignmentDraft";
 import { previewLiveChangeFromDraft } from "../src/lib/assignmentChange";
 import { parseDailyBoardDraftPayload, payloadToAssignmentDraft } from "../src/lib/dailyBoardDraft";
 import { compareCaddyOrder } from "../src/lib/autoAssignEngine";
+import {
+  overlayUnavailableIdsKeepingPlaced,
+  placedCaddyIdsFromBoard,
+  snapshotComputePool,
+} from "../src/lib/caddyPoolCanonical";
+import {
+  makeMutationIntent,
+  projectPendingIntents,
+} from "../src/lib/boardMutationPipeline";
 
 let passed = 0;
 let failed = 0;
@@ -199,11 +213,148 @@ section("production-like 2026-08-28 anonymous Draft + extraUsable 93");
   assert(after3.join("→") === regularIds(draft.assignments, "3부").join("→"), "3부 HOUSE order unchanged");
 }
 
+section("production v51 live SICK overlay: click = persist overlay, not 94/106");
+{
+  const VICTIM = 112;
+  const SECOND = 190;
+  const NEXT2 = 113;
+  const SPARE1 = 146;
+  const SPARE2 = 141;
+  const NEXT_UNUSED = 152;
+  const BAD_SPARE1 = 94;
+  const BAD_SPARE2 = 106;
+  const LIVE_SICK = [14, 192, 113, 40, 193, 15, 277, 12, 9, 51, 56, 235];
+  const raw = JSON.parse(
+    readFileSync(join(process.cwd(), "scripts/fixtures/prod-2026-08-28-choi-sick.json"), "utf8")
+  );
+  const parsed = parseDailyBoardDraftPayload({ ...raw, schemaVersion: 1 }, "2026-08-28");
+  const draft = payloadToAssignmentDraft(parsed);
+  assert(!(draft.unavailableCaddyIds || []).length, "v51 unavailableCaddyIds=[]");
+  const placed = placedCaddyIdsFromBoard(draft);
+  for (const id of LIVE_SICK) {
+    assert(placed.has(id), `live SICK ${id} still placed on v51 Draft`);
+  }
+  const used = new Set<number>();
+  for (const row of draft.assignments) if (row.kind === "regular") used.add(row.caddy.id);
+  for (const s of draft.sparesByShift || []) {
+    if (s.spare1?.caddyId) used.add(s.spare1.caddyId);
+    if (s.spare2?.caddyId) used.add(s.spare2.caddyId);
+  }
+  const extraUsable = draft.caddyPool
+    .filter(
+      (c) => (c.caddyType || "HOUSE") === "HOUSE" && used.has(c.id) && !LIVE_SICK.includes(c.id)
+    )
+    .sort(compareCaddyOrder);
+  const overlay = overlayUnavailableIdsKeepingPlaced({
+    dailyUnavailableIds: LIVE_SICK,
+    placedIds: placed,
+  });
+  assert(overlay.length === 0, `overlay drops still-placed live SICK (got ${overlay.join(",")})`);
+
+  const badPool = snapshotComputePoolFromDraft(draft, null, {
+    extraUsable,
+    unavailableIds: LIVE_SICK,
+  });
+  const badPreview = previewLiveChangeFromDraft({
+    draft,
+    change: { type: "CADDY_SICK", caddyId: VICTIM, shift: "1부" },
+    regularCaddyPool: badPool,
+  });
+  const [badS1, badS2] = spareIds(badPreview.after.sparesByShift, "1부");
+  assert(badS1 === BAD_SPARE1 && badS2 === BAD_SPARE2, `unfiltered live 12 still 94/106 (${badS1}/${badS2})`);
+
+  const clickPool = snapshotComputePoolFromDraftKeepingPlaced(draft, null, {
+    extraUsable,
+    liveUnavailableIds: LIVE_SICK,
+  });
+  const click = projectPendingIntents({
+    confirmedDraft: draft,
+    pending: [makeMutationIntent({ type: "CADDY_SICK", caddyId: VICTIM, shift: "1부" }, "click")!],
+    regularCaddyPool: clickPool,
+  });
+  const persistPool = snapshotComputePool({
+    rosterBaseline: draft.caddyPool,
+    assigned: draft.assignments.map((row) => row.caddy),
+    spareIds: placed,
+    extraUsable: clickPool,
+    unavailableIds: overlay,
+  });
+  const persistPreview = previewLiveChangeFromDraft({
+    draft,
+    change: { type: "CADDY_SICK", caddyId: VICTIM, shift: "1부" },
+    regularCaddyPool: persistPool,
+  });
+  const persistDraft = applyLiveResultToDraft(draft, persistPreview.after);
+  const click1 = regularIds(click.draft.assignments, "1부");
+  const persist1 = regularIds(persistDraft.assignments, "1부");
+  const reload1 = regularIds(persistDraft.assignments, "1부");
+  const [cS1, cS2] = spareIds(click.draft.sparesByShift, "1부");
+  const [pS1, pS2] = spareIds(persistDraft.sparesByShift, "1부");
+  const before3 = regularIds(draft.assignments, "3부");
+  const [b3s1, b3s2] = spareIds(draft.sparesByShift, "3부");
+  const [c3s1, c3s2] = spareIds(click.draft.sparesByShift, "3부");
+  const [p3s1, p3s2] = spareIds(persistDraft.sparesByShift, "3부");
+  const before2 = regularIds(draft.assignments, "2부");
+  const click2 = regularIds(click.draft.assignments, "2부");
+  const persist2 = regularIds(persistDraft.assignments, "2부");
+  const i2 = before2.indexOf(VICTIM);
+  const [b2s1, b2s2] = spareIds(draft.sparesByShift, "2부");
+  const expected2 = [...before2.slice(0, i2), ...before2.slice(i2 + 1), b2s1].filter(
+    (id): id is number => typeof id === "number"
+  );
+
+  assert(click1.join(",") === persist1.join(","), "click HOUSE 1부 = persist overlay");
+  assert(persist1.join(",") === reload1.join(","), "persist overlay = reload Draft");
+  assert(cS1 === pS1 && cS2 === pS2, "click spare = persist spare");
+  assert(click1[1] === NEXT2, "1부 keeps 이연호 relative order");
+  assert(click1[click1.length - 1] === SPARE1, "1부 last is spare1 pull-forward");
+  assert(cS1 === SPARE2 && cS2 === NEXT_UNUSED, `click spare ${cS1}/${cS2}`);
+  assert(cS1 !== BAD_SPARE1 && cS2 !== BAD_SPARE2, "94/106 FAIL gate");
+  assert(LIVE_SICK.filter((id) => id !== VICTIM).every((id) => click1.includes(id) || !placed.has(id) || !regularIds(draft.assignments, "1부").includes(id)), "live SICK still on 1부 stay except victim");
+  for (const id of LIVE_SICK) {
+    if (regularIds(draft.assignments, "1부").includes(id)) {
+      assert(click1.includes(id), `1부 still has placed live SICK ${id}`);
+    }
+  }
+  assert(!click1.includes(VICTIM), "최루비 removed from 1부");
+  assert(click2.join(",") === expected2.join(","), "2부 one-slot pull-forward");
+  assert(persist2.join(",") === expected2.join(","), "2부 persist matches click");
+  const [c2s1, c2s2] = spareIds(click.draft.sparesByShift, "2부");
+  assert(c2s1 === b2s2, "2부 spare2→spare1");
+  assert(regularIds(click.draft.assignments, "3부").join(",") === before3.join(","), "3부 HOUSE frozen");
+  assert(c3s1 === b3s1 && c3s2 === b3s2 && p3s1 === 142 && p3s2 === 96, `3부 spare frozen ${c3s1}/${c3s2}`);
+
+  const afterFirst = persistDraft;
+  const pool2 = snapshotComputePoolFromDraftKeepingPlaced(afterFirst, null, {
+    extraUsable,
+    liveUnavailableIds: [...LIVE_SICK, VICTIM],
+  });
+  const click2nd = projectPendingIntents({
+    confirmedDraft: afterFirst,
+    pending: [makeMutationIntent({ type: "CADDY_SICK", caddyId: SECOND, shift: "1부" }, "s2")!],
+    regularCaddyPool: pool2,
+  });
+  const a1 = regularIds(click2nd.draft.assignments, "1부");
+  const b1 = regularIds(afterFirst.assignments, "1부");
+  const i = b1.indexOf(SECOND);
+  const [s1] = spareIds(afterFirst.sparesByShift, "1부");
+  assert(!a1.includes(VICTIM), "second click: first victim stays gone");
+  assert(!a1.includes(SECOND), "second click: second victim gone");
+  assert(a1.join(",") === [...b1.slice(0, i), ...b1.slice(i + 1), s1].join(","), "consecutive SICK is 1-slot only");
+  for (const id of LIVE_SICK) {
+    if (b1.includes(id)) assert(a1.includes(id), `second click did not mass-drop live SICK ${id}`);
+  }
+}
+
 const fs = require("node:fs") as typeof import("node:fs");
 const canonical = fs.readFileSync("src/lib/caddyPoolCanonical.ts", "utf8");
 assert(
   !/return usableComputePool\(\{\s*rosterBaseline: extra/.test(canonical),
   "snapshotComputePool does not replace assigned order with extraUsable"
+);
+assert(
+  /overlayUnavailableIdsKeepingPlaced/.test(canonical) && /!placed\.has\(id\)/.test(canonical),
+  "click/persist overlay keeps still-placed HOUSE"
 );
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);

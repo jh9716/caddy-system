@@ -27,6 +27,8 @@ import { ensureReservationUid } from "@/lib/reservationIdentity";
 import type { CourseCode, ShiftPart } from "@/lib/reservationParser";
 import {
   mergeRosterBaseline,
+  overlayUnavailableIdsKeepingPlaced,
+  placedCaddyIdsFromBoard,
   snapshotComputePool,
 } from "@/lib/caddyPoolCanonical";
 
@@ -233,6 +235,32 @@ export function snapshotComputePoolFromDraft(
     engineUnused: base?.unusedCaddies,
     extraUsable: extra?.extraUsable,
     unavailableIds: extra?.unavailableIds ?? draft.unavailableCaddyIds,
+    opsDutyIds: extra?.opsDutyIds,
+    specialSkipIds: extra?.specialSkipIds,
+  });
+}
+
+/**
+ * Click-path compute pool matching persist overlay:
+ * leftover DailyCaddyUnavailable must not drop HOUSE still painted on Draft.
+ * New SICK/NOSHOW exclusions come from REMOVE_CADDY events, not this overlay.
+ */
+export function snapshotComputePoolFromDraftKeepingPlaced(
+  draft: AssignmentDraft,
+  base?: AutoAssignResultV1 | null,
+  extra?: {
+    extraUsable?: readonly AutoAssignCaddy[] | null;
+    liveUnavailableIds?: Iterable<unknown>;
+    opsDutyIds?: Iterable<unknown>;
+    specialSkipIds?: Iterable<unknown>;
+  }
+): AutoAssignCaddy[] {
+  return snapshotComputePoolFromDraft(draft, base, {
+    extraUsable: extra?.extraUsable,
+    unavailableIds: overlayUnavailableIdsKeepingPlaced({
+      dailyUnavailableIds: extra?.liveUnavailableIds ?? draft.unavailableCaddyIds,
+      placedIds: placedCaddyIdsFromBoard(draft),
+    }),
     opsDutyIds: extra?.opsDutyIds,
     specialSkipIds: extra?.specialSkipIds,
   });

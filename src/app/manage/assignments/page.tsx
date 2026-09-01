@@ -24,6 +24,7 @@ import {
   RECALC_SUCCESS_MESSAGE,
   unassignReservation,
   snapshotComputePoolFromDraft,
+  snapshotComputePoolFromDraftKeepingPlaced,
   unusedCaddies,
   type AssignmentDraft,
   type DraftWarning,
@@ -1600,9 +1601,9 @@ export default function ManageAssignmentsOpsPage() {
     const extraUsable = availability?.available?.all?.length
       ? regularCaddyPoolFromAvailabilityRows(availability.available.all)
       : computePoolRef.current;
-    const pool = snapshotComputePoolFromDraft(source, autoResultRef.current, {
+    const pool = snapshotComputePoolFromDraftKeepingPlaced(source, autoResultRef.current, {
       extraUsable: extraUsable.length ? extraUsable : undefined,
-      unavailableIds: [
+      liveUnavailableIds: [
         ...(source.unavailableCaddyIds || []),
         ...unavailableCaddyIds,
       ],
@@ -1725,14 +1726,16 @@ export default function ManageAssignmentsOpsPage() {
         regularCaddyPool:
           computePoolRef.current.length > 0
             ? computePoolRef.current
-            : liveSnapshotPool(input.painted),
+            : liveSnapshotPool(confirmedDraftRef.current || input.painted),
         events: input.preview.events,
         changeType: input.preview.changeType,
         change: input.change,
         draft: {
-          date: input.painted.date,
+          date: (confirmedDraftRef.current || input.painted).date,
           version: serverDraftVersionRef.current,
-          payload: assignmentDraftToPayload(input.painted),
+          payload: assignmentDraftToPayload(
+            confirmedDraftRef.current || input.painted
+          ),
         },
         ...(testFailLive ? { testFailLive } : {}),
         ...(delayMs > 0 ? { testDelayMs: delayMs } : {}),
@@ -1753,11 +1756,23 @@ export default function ManageAssignmentsOpsPage() {
     }
     const after = (data.preview?.after ||
       input.preview.after) as AutoAssignResultV1;
-    const next = applyLiveResultToDraft(input.painted, after);
+    const confirmed = confirmedDraftRef.current || input.painted;
+    let next: AssignmentDraft;
+    try {
+      if (data.draft?.payload) {
+        next = payloadToAssignmentDraft(
+          parseDailyBoardDraftPayload(data.draft.payload, confirmed.date)
+        );
+      } else {
+        next = applyLiveResultToDraft(confirmed, after);
+      }
+    } catch {
+      next = applyLiveResultToDraft(confirmed, after);
+    }
     const savedVersion = Number(data.draft?.version);
     const unavailableCaddyIds = Array.isArray(data.preview?.unavailableCaddyIds)
       ? data.preview.unavailableCaddyIds
-      : input.preview.unavailableCaddyIds || [];
+      : after.unavailableCaddyIds || [];
     return {
       ok: true,
       draft: next,
@@ -1838,12 +1853,12 @@ export default function ManageAssignmentsOpsPage() {
           continue;
         }
         confirmedDraftRef.current = persist.draft;
-        computePoolRef.current = snapshotComputePoolFromDraft(
+        computePoolRef.current = snapshotComputePoolFromDraftKeepingPlaced(
           persist.draft,
           persist.after,
           {
             extraUsable: computePoolRef.current,
-            unavailableIds: persist.unavailableCaddyIds,
+            liveUnavailableIds: persist.unavailableCaddyIds,
             opsDutyIds: opsDutyCaddyIds,
           }
         );
@@ -1863,12 +1878,12 @@ export default function ManageAssignmentsOpsPage() {
           pending: pendingIntentsRef.current,
           specialSupportByShift,
           base: persist.after,
-          regularCaddyPool: snapshotComputePoolFromDraft(
+          regularCaddyPool: snapshotComputePoolFromDraftKeepingPlaced(
             persist.draft,
             persist.after,
             {
               extraUsable: computePoolRef.current,
-              unavailableIds: persist.unavailableCaddyIds,
+              liveUnavailableIds: persist.unavailableCaddyIds,
               opsDutyIds: opsDutyCaddyIds,
             }
           ),
