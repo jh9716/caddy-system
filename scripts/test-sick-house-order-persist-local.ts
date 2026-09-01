@@ -136,13 +136,14 @@ function expectPullForward(before: AssignmentDraft, after: AssignmentDraft, vict
   const b2 = regularIds(before, "2부");
   const a2 = regularIds(after, "2부");
   if (b2.includes(victim)) {
-    const i2 = b2.indexOf(victim);
     const [s1, s2] = spareIds(before, "2부");
-    const expected2 = [...b2.slice(0, i2), ...b2.slice(i2 + 1), s1].filter(
+    const without = b2.filter((id) => id !== victim);
+    const expected2 = [...without.slice(1), s1, s2].filter(
       (id): id is number => typeof id === "number"
     );
-    assert(a2.join(",") === expected2.join(","), "2부 pull-forward");
-    assert(spareIds(after, "2부")[0] === s2, "2부 spare2→spare1");
+    assert(a2.join(",") === expected2.join(","), "2부 1부-consume+결원 2칸");
+    const [as21] = spareIds(after, "2부");
+    assert(as21 !== s1 && as21 !== s2, "2부 spare advanced 2 slots");
   }
   const thirdBefore = before.assignments
     .filter(

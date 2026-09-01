@@ -4944,6 +4944,41 @@ function refillFrozenThirdHouseLeftover(input: {
   return { assignments, sparesByShift };
 }
 
+function regularBoardHasCaddy(
+  previous: AutoAssignResultV1,
+  shift: ShiftPart,
+  caddyId: number
+): boolean {
+  return previous.assignments.some(
+    (row) =>
+      row.shift === shift &&
+      row.kind === "regular" &&
+      row.caddy.id === caddyId
+  );
+}
+
+/**
+ * 1·2부 둘 다 실배치된 캐디를 1부에서 빼면 1부가 HOUSE 1명을 추가 소비한다.
+ * 부마다 houseStart=0이면 그 소비가 2부에 전달되지 않는다.
+ * 단일 1부/단일 2부 병가는 0 — 기존 per-shift pull-forward 유지.
+ */
+function dualShift1To2HouseConsumeCount(
+  previous: AutoAssignResultV1,
+  unavailableFromShift: Map<number, ShiftPart>
+): number {
+  let count = 0;
+  for (const [caddyId, from] of unavailableFromShift.entries()) {
+    if (from !== "1부") continue;
+    if (
+      regularBoardHasCaddy(previous, "1부", caddyId) &&
+      regularBoardHasCaddy(previous, "2부", caddyId)
+    ) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 function assignRemoveOnlyKeepingShiftOrder(input: {
   date: string;
   previous: AutoAssignResultV1;
@@ -4965,6 +5000,10 @@ function assignRemoveOnlyKeepingShiftOrder(input: {
   const combined = emptyRegularSequenceResult();
   combined.assignments = [...input.seedAssignments];
   combined.sparesByShift = [...input.seedSparesByShift];
+  const dualConsume = dualShift1To2HouseConsumeCount(
+    input.previous,
+    input.unavailableFromShift
+  );
   for (const shift of SHIFT_PARTS) {
     if (freezeSet.has(shift)) {
       const seeded = input.seedAssignments.filter((row) => row.shift === shift);
@@ -4974,13 +5013,17 @@ function assignRemoveOnlyKeepingShiftOrder(input: {
     }
     const shiftHouse = houseQueueForShift(input.previous, input.pool, shift);
     const shiftPools = splitCaddyPoolsPreservingOrder(shiftHouse);
+    const startAfterConsume =
+      shift === "2부" && dualConsume > 0
+        ? shiftPools.house[dualConsume]
+        : undefined;
     const seq = assignRegularSequence({
       date: input.date,
       house: shiftPools.house,
       third: shiftPools.third,
       reservations: input.regularReservations.filter((row) => row.shift === shift),
       reasonCode: input.reasonCode,
-      houseStartCaddyId: null,
+      houseStartCaddyId: startAfterConsume?.id ?? null,
       thirdStartTeam: input.thirdStartTeam,
       thirdStartCaddyId: shift === "3부" ? input.thirdStartCaddyId : null,
       thirdRoster: input.thirdRoster,
