@@ -11,6 +11,7 @@ import {
 import {
   OFF_SHEET_RESOLVE_TIMEOUT_MS,
   isOffSheetUnresolvedError,
+  resetOffDateInflightForTests,
   resolveCanonicalOffSheet,
 } from "../src/lib/caddyPoolCanonicalService";
 import { resolveCanonicalLivePool } from "../src/lib/opsDutyLivePool";
@@ -271,6 +272,29 @@ async function main() {
       unavailableIds: [sick.id],
     });
     assert(!compute.some((c) => c.id === offCaddy.id), "cache hit keeps OFF out");
+  }
+
+  section("overlapping cache-or-fetch shares one in-flight HTTP");
+  {
+    invalidateOffSheetCache();
+    resetOffSheetHttpStatsForTests();
+    resetOffDateInflightForTests();
+    setPublishedOffSheetLoaderForTests(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      return [offSheetForDate(DATE, [offCaddy.name])];
+    });
+    const started = Date.now();
+    const [a, b] = await Promise.all([
+      resolveCanonicalOffSheet(DATE, "cache-or-fetch"),
+      resolveCanonicalOffSheet(DATE, "cache-or-fetch"),
+    ]);
+    const elapsed = Date.now() - started;
+    assert(a.matched && b.matched, "both waiters get today's OFF");
+    assert(getOffSheetHttpFetchCount() === 1, "overlap single-flight is 1 HTTP");
+    assert(elapsed < 1500, `overlap waited once (${elapsed}ms)`);
+    const third = await resolveCanonicalOffSheet(DATE, "cache-or-fetch");
+    assert(third.source === "cache", "verified date snapshot reused after flight");
+    assert(getOffSheetHttpFetchCount() === 1, "post-flight persist does not HTTP");
   }
 
   section("same-request skipCanonicalReload does not fetch twice");

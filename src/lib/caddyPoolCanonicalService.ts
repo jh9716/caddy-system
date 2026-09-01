@@ -14,6 +14,8 @@ import {
   fetchPublishedOffSheets,
   peekCachedOffSheets,
   peekCachedOffSheetsForDate,
+  peekOffDateSnapshot,
+  rememberOffSheetsForDate,
 } from "@/lib/offSheetFetch";
 import { offNamesForDate } from "@/lib/offSheetParser";
 import { listDailyOpsDutyCaddyIds, loadStoredDutyEntries } from "@/lib/dailyOpsDutyService";
@@ -75,6 +77,7 @@ export type CanonicalReflowState = {
   specialSkipIds: number[];
   offSheetMatched: boolean;
   offSheetSource: "cache" | "miss" | "fetch" | "skipped";
+  offResolveMs?: number;
 };
 
 export type LoadCanonicalReflowOptions = {
@@ -83,66 +86,126 @@ export type LoadCanonicalReflowOptions = {
   computeClientPool?: readonly AutoAssignCaddy[] | null;
 };
 
+export type CanonicalOffSheetResult = {
+  matched: boolean;
+  names: string[];
+  source: CanonicalReflowState["offSheetSource"];
+  resolveMs: number;
+};
+
+const offDateInflight = new Map<string, Promise<CanonicalOffSheetResult>>();
+
+export function resetOffDateInflightForTests() {
+  if (process.env.NODE_ENV === "production") return;
+  offDateInflight.clear();
+}
+
+function fromOffSheets(
+  ymd: string,
+  sheets: Awaited<ReturnType<typeof fetchPublishedOffSheets>>,
+  source: CanonicalReflowState["offSheetSource"]
+): Omit<CanonicalOffSheetResult, "resolveMs"> {
+  const parsed = offNamesForDate(sheets, ymd);
+  const matched = parsed.matchedSheetDates.includes(ymd);
+  const result = {
+    matched,
+    names: matched ? parsed.names : [],
+    source,
+  };
+  rememberOffSheetsForDate(ymd, sheets);
+  return result;
+}
+
+async function fetchOffSheetsForDate(
+  ymd: string,
+  timeoutMs: number
+): Promise<Awaited<ReturnType<typeof fetchPublishedOffSheets>>> {
+  const dateMatched = peekCachedOffSheetsForDate(ymd) !== null;
+  const staleWorkbook = peekCachedOffSheets() !== null && !dateMatched;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error("off-sheet-timeout")),
+      timeoutMs
+    );
+    fetchPublishedOffSheets({ force: staleWorkbook }).then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
 export async function resolveCanonicalOffSheet(
   ymd: string,
   mode: CanonicalOffSheetMode = "fetch",
   opts?: { timeoutMs?: number }
-): Promise<{
-  matched: boolean;
-  names: string[];
-  source: CanonicalReflowState["offSheetSource"];
-}> {
+): Promise<CanonicalOffSheetResult> {
+  const started = Date.now();
   const year = Number(ymd.slice(0, 4));
   if (!Number.isInteger(year) || year >= 2090) {
-    return { matched: false, names: [], source: "skipped" };
+    return { matched: false, names: [], source: "skipped", resolveMs: 0 };
   }
 
-  const fromSheets = (sheets: Awaited<ReturnType<typeof fetchPublishedOffSheets>>, source: CanonicalReflowState["offSheetSource"]) => {
-    const parsed = offNamesForDate(sheets, ymd);
-    const matched = parsed.matchedSheetDates.includes(ymd);
-    return {
-      matched,
-      names: matched ? parsed.names : [],
-      source,
-    };
-  };
+  const withMs = (
+    result: Omit<CanonicalOffSheetResult, "resolveMs">
+  ): CanonicalOffSheetResult => ({
+    ...result,
+    resolveMs: Date.now() - started,
+  });
 
   if (mode === "cache" || mode === "cache-or-fetch") {
+    const snap = peekOffDateSnapshot(ymd);
+    if (snap) {
+      return withMs({
+        matched: snap.matched,
+        names: snap.names,
+        source: "cache",
+      });
+    }
     const cached = peekCachedOffSheetsForDate(ymd);
     if (cached) {
-      return fromSheets(cached, "cache");
+      return withMs(fromOffSheets(ymd, cached, "cache"));
     }
     if (mode === "cache") {
-      return { matched: false, names: [], source: "miss" };
+      return withMs({ matched: false, names: [], source: "miss" });
     }
   }
 
-  try {
-    const staleWorkbook = peekCachedOffSheets() !== null;
-    const timeoutMs = offSheetResolveTimeoutMs(opts?.timeoutMs);
-    const sheets = await new Promise<Awaited<ReturnType<typeof fetchPublishedOffSheets>>>(
-      (resolve, reject) => {
-        const timer = setTimeout(
-          () => reject(new Error("off-sheet-timeout")),
-          timeoutMs
-        );
-        fetchPublishedOffSheets({ force: staleWorkbook }).then(
-          (value) => {
-            clearTimeout(timer);
-            resolve(value);
-          },
-          (err) => {
-            clearTimeout(timer);
-            reject(err);
-          }
-        );
-      }
-    );
-    return fromSheets(sheets, "fetch");
-  } catch (error) {
-    if (isOffSheetUnresolvedError(error)) throw error;
-    throw new OffSheetUnresolvedError();
+  const existing = offDateInflight.get(ymd);
+  if (existing) {
+    const shared = await existing;
+    return withMs({
+      matched: shared.matched,
+      names: shared.names,
+      source: shared.source === "fetch" ? "fetch" : shared.source,
+    });
   }
+
+  const pending = (async () => {
+    try {
+      const sheets = await fetchOffSheetsForDate(
+        ymd,
+        offSheetResolveTimeoutMs(opts?.timeoutMs)
+      );
+      return withMs(fromOffSheets(ymd, sheets, "fetch"));
+    } catch (error) {
+      if (isOffSheetUnresolvedError(error)) throw error;
+      throw new OffSheetUnresolvedError();
+    }
+  })().finally(() => {
+    if (offDateInflight.get(ymd) === pending) offDateInflight.delete(ymd);
+  });
+  offDateInflight.set(ymd, pending);
+  return pending;
+}
+
+export async function prewarmCanonicalOffSheet(ymd: string): Promise<CanonicalOffSheetResult> {
+  return resolveCanonicalOffSheet(ymd, "cache-or-fetch");
 }
 
 function asCaddyDb(db: unknown): {
@@ -241,6 +304,7 @@ export async function loadCanonicalReflowState(
   offSheetMatched = resolvedOff.matched;
   offNames = resolvedOff.names;
   offSheetSource = resolvedOff.source;
+  const offResolveMs = resolvedOff.resolveMs;
 
   let dutyEntries: Awaited<ReturnType<typeof loadStoredDutyEntries>> = [];
   try {
@@ -287,5 +351,6 @@ export async function loadCanonicalReflowState(
     specialSkipIds,
     offSheetMatched,
     offSheetSource,
+    offResolveMs,
   };
 }

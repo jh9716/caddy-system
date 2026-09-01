@@ -640,6 +640,7 @@ section("source contracts");
   assert(page.includes("changeFromPipelinePreview"), "dock apply joins pipeline");
   assert(page.includes("pendingIntentsRef.current.length > 0"), "flush restarts if more pending");
   assert(page.includes("scheduleAfterPaint"), "persist is scheduled after paint");
+  assert(page.includes("/api/assignments/off-sheet/prewarm"), "date entry prewarms OFF");
   assert(page.includes("isDuplicateCaddyAbsenceIntent"), "same-caddy 병가 연타 drops");
   assert(page.includes("liveSnapshotPool"), "click uses confirmed snapshot pool");
   assert(!page.includes("fetchPublishedOffSheets"), "client click path has no OFF sheet HTTP");
@@ -649,6 +650,11 @@ section("source contracts");
     "opening another caddy sheet is not blocked by persistInFlight"
   );
   const enqueue = page.split("function enqueuePipelineMutation")[1]?.split("async function persistPipelineIntent")[0] || "";
+  assert(
+    !enqueue.includes("prewarmOffSheetForDate") &&
+      !enqueue.includes("off-sheet/prewarm"),
+    "click enqueue does not wait for OFF prewarm"
+  );
   assert(
     /setQuickSheet\(null\)/.test(enqueue) &&
       enqueue.indexOf("setQuickSheet(null)") < enqueue.indexOf("projectPendingIntents"),
