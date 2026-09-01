@@ -48,7 +48,7 @@ function regularNames(assignments: Array<{ shift?: string; kind?: string; caddy:
     .map((row) => row.caddy.name);
 }
 
-function regularIds(assignments: Array<{ shift?: string; kind?: string; caddy: AutoAssignCaddy; reservation?: { shift?: string } }>, shift: string) {
+function regularIds(assignments: Array<{ shift?: string; kind?: string; sequenceIndex?: number; caddy: AutoAssignCaddy; reservation?: { shift?: string } }>, shift: string) {
   return assignments
     .filter(
       (row) =>
@@ -56,6 +56,7 @@ function regularIds(assignments: Array<{ shift?: string; kind?: string; caddy: A
         row.kind === "regular" &&
         (row.caddy.caddyType || "HOUSE") === "HOUSE"
     )
+    .sort((a, b) => (a.sequenceIndex || 0) - (b.sequenceIndex || 0))
     .map((row) => row.caddy.id);
 }
 
