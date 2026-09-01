@@ -672,6 +672,30 @@ export function splitCaddyPools(caddies: AutoAssignCaddy[]): {
   return { house, third, driving };
 }
 
+/** Same partition as splitCaddyPools, but keep the caller’s relative order. */
+function splitCaddyPoolsPreservingOrder(caddies: AutoAssignCaddy[]): {
+  house: AutoAssignCaddy[];
+  third: AutoAssignCaddy[];
+  driving: AutoAssignCaddy[];
+} {
+  const house: AutoAssignCaddy[] = [];
+  const third: AutoAssignCaddy[] = [];
+  const driving: AutoAssignCaddy[] = [];
+  for (const c of dedupeCaddies(caddies || [])) {
+    const t = normalizeAssignCaddyType(c.caddyType);
+    if (t === "DRIVING") {
+      driving.push(c);
+      continue;
+    }
+    if (isThirdBandTeam(c.team) || t === "THIRD") {
+      third.push(c);
+      continue;
+    }
+    house.push(c);
+  }
+  return { house, third, driving };
+}
+
 /**
  * 오늘 1부 첫 캐디 검증 실패 — 자동으로 다음 캐디로 대체하지 않음.
  */
@@ -2394,6 +2418,8 @@ export function assignRegularSequence(input: {
    * usedInShift에만 넣고 이 함수 결과 row로는 다시 내보내지 않는다.
    */
   occupiedAssignments?: AutoAssignmentRow[];
+  /** 1·2부는 매 부 house[0]부터. 병가 pull-forward가 1부 잔여 커서로 2부를 다시 깔지 않게 한다. */
+  restartHouseEachDayShift?: boolean;
 }): {
   assignments: AutoAssignmentRow[];
   unassignedReservations: UnassignedReservationRow[];
@@ -2416,10 +2442,7 @@ export function assignRegularSequence(input: {
 
   const house =
     input.houseStartCaddyId != null && input.houseStartCaddyId !== undefined
-      ? rotateHouseQueueFromStart(
-          [...pools.house].sort(compareCaddyOrder),
-          Number(input.houseStartCaddyId)
-        )
+      ? rotateHouseQueueFromStart(pools.house, Number(input.houseStartCaddyId))
       : pools.house;
   const thirdStartTeam = resolveThirdStartTeam(input.thirdStartTeam, input.date);
   let third = rotateThirdQueueFromStartTeam(pools.third, thirdStartTeam);
@@ -2468,6 +2491,7 @@ export function assignRegularSequence(input: {
   let houseStart = 0;
   const sparesByShift: SpareByShift[] = [];
   const freezeSet = new Set(input.freezeShifts || []);
+  const restartHouseEachDayShift = Boolean(input.restartHouseEachDayShift);
   const seedByShift = new Map<ShiftPart, AutoAssignmentRow[]>();
   for (const row of input.seedAssignments || []) {
     const list = seedByShift.get(row.shift) || [];
@@ -2494,6 +2518,9 @@ export function assignRegularSequence(input: {
   ]);
 
   for (const shift of SHIFT_PARTS) {
+    if (restartHouseEachDayShift && (shift === "1부" || shift === "2부")) {
+      houseStart = 0;
+    }
     const shiftReservations = reservations.filter((r) => r.shift === shift);
     const usedInShift = new Set<number>(occupiedByShift.get(shift) || []);
     let houseAssigned = 0;
@@ -4659,6 +4686,64 @@ function freezeBeforeShiftFromEvents(
   return SHIFT_PARTS[minRank];
 }
 
+function shiftUsesCaddy(
+  previous: AutoAssignResultV1,
+  shift: ShiftPart,
+  caddyId: number
+): boolean {
+  if (
+    previous.assignments.some(
+      (row) => row.shift === shift && row.caddy.id === caddyId
+    )
+  ) {
+    return true;
+  }
+  const spare = (previous.sparesByShift || []).find((row) => row.shift === shift);
+  return (
+    spare?.spare1?.caddyId === caddyId || spare?.spare2?.caddyId === caddyId
+  );
+}
+
+function freezeShiftsWithoutRemovedCaddies(
+  previous: AutoAssignResultV1,
+  events: ReservationChangeEvent[]
+): ShiftPart[] {
+  if (events.length === 0 || events.some((event) => event.type !== "REMOVE_CADDY")) {
+    return [];
+  }
+  const ids = events.map((event) => event.caddyId);
+  return SHIFT_PARTS.filter(
+    (shift) => !ids.some((id) => shiftUsesCaddy(previous, shift, id))
+  );
+}
+
+function houseQueueFromPreviousBoard(
+  previous: AutoAssignResultV1,
+  pool: AutoAssignCaddy[]
+): AutoAssignCaddy[] {
+  const allow = new Map(pool.map((caddy) => [caddy.id, caddy]));
+  const ordered: AutoAssignCaddy[] = [];
+  const seen = new Set<number>();
+  const push = (caddy: AutoAssignCaddy | null | undefined) => {
+    if (!caddy || !allow.has(caddy.id) || seen.has(caddy.id)) return;
+    seen.add(caddy.id);
+    ordered.push(allow.get(caddy.id) || caddy);
+  };
+  for (const shift of SHIFT_PARTS) {
+    const rows = previous.assignments
+      .filter((row) => row.shift === shift && row.kind === "regular")
+      .sort((a, b) => a.sequenceIndex - b.sequenceIndex);
+    for (const row of rows) push(row.caddy);
+    const spare = (previous.sparesByShift || []).find((row) => row.shift === shift);
+    for (const slot of [spare?.spare1, spare?.spare2]) {
+      if (!slot?.caddyId) continue;
+      push(allow.get(slot.caddyId));
+    }
+  }
+  for (const caddy of pool) push(caddy);
+  return ordered;
+}
+
 function collectShift1SpecialCandidates(
   previous: AutoAssignResultV1,
   kind: "oneThree" | "oneMak"
@@ -4841,9 +4926,14 @@ export function reflowRegularAssignments(input: {
   };
 
   const freezeBefore = freezeBeforeShiftFromEvents(events, previous);
-  const freezeShifts: ShiftPart[] = freezeBefore
-    ? SHIFT_PARTS.filter((s) => shiftRank(s) < shiftRank(freezeBefore))
-    : [];
+  const freezeShifts: ShiftPart[] = [
+    ...SHIFT_PARTS.filter(
+      (shift) => freezeBefore && shiftRank(shift) < shiftRank(freezeBefore)
+    ),
+    ...freezeShiftsWithoutRemovedCaddies(previous, events),
+  ].filter((shift, i, all) => all.indexOf(shift) === i);
+  const removeOnly =
+    events.length > 0 && events.every((event) => event.type === "REMOVE_CADDY");
 
   let lockedRows = previous.assignments
     .filter((row) => preservePlacementOnReflow(row) && !blockedInShift(row.caddy.id, row.shift))
@@ -5125,24 +5215,35 @@ export function reflowRegularAssignments(input: {
         !autoSpecialIds.has(row.caddy.id)
     )
     .map((row) => row.caddy);
-  const pool = eligibleRegularReflowCaddies([...fullPool, ...extraSpecials])
-    .filter(
-      (c) =>
-        !lockedCaddies.has(c.id) &&
-        !allDayUnavailable.has(c.id) &&
-        !autoSpecialIds.has(c.id)
-    )
-    .sort(compareCaddyOrder);
-  const pools = splitCaddyPools(pool);
-  const originalHouse = splitCaddyPools(
-    eligibleRegularReflowCaddies([
-      ...fullPool,
-      ...extraSpecials,
-      ...previous.assignments.map((row) => row.caddy),
-      ...(previous.unusedCaddies || []),
-    ])
-      .filter((c) => !lockedCaddies.has(c.id) && !autoSpecialIds.has(c.id))
-      .sort(compareCaddyOrder)
+  const remainingSource = eligibleRegularReflowCaddies([
+    ...fullPool,
+    ...extraSpecials,
+  ]).filter(
+    (c) =>
+      !lockedCaddies.has(c.id) &&
+      !allDayUnavailable.has(c.id) &&
+      !autoSpecialIds.has(c.id)
+  );
+  const originalSource = eligibleRegularReflowCaddies([
+    ...fullPool,
+    ...extraSpecials,
+    ...previous.assignments.map((row) => row.caddy),
+    ...(previous.unusedCaddies || []),
+  ]).filter((c) => !lockedCaddies.has(c.id) && !autoSpecialIds.has(c.id));
+  // SICK/absent: keep the previous board’s HOUSE relative order.
+  // Other reflows keep the historical team-order rebuild.
+  const pool = removeOnly
+    ? houseQueueFromPreviousBoard(previous, remainingSource)
+    : [...remainingSource].sort(compareCaddyOrder);
+  const pools = removeOnly
+    ? splitCaddyPoolsPreservingOrder(pool)
+    : splitCaddyPools(pool);
+  const originalHouse = (
+    removeOnly
+      ? splitCaddyPoolsPreservingOrder(
+          houseQueueFromPreviousBoard(previous, originalSource)
+        )
+      : splitCaddyPools([...originalSource].sort(compareCaddyOrder))
   ).house;
 
   const reasonCode = resolveReflowReason({
@@ -5205,6 +5306,7 @@ export function reflowRegularAssignments(input: {
     freezeShifts,
     seedSparesByShift,
     unavailableFromShift,
+    restartHouseEachDayShift: removeOnly,
     specialSupportByShift:
       input.specialSupportByShift ||
       previous.specialSupportByShift ||
