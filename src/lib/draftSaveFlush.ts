@@ -8,6 +8,17 @@
 
 export type DraftFlushStatus = "ok" | "conflict" | "error";
 
+/**
+ * Own background Draft PUT (offSnapshot attach) must finish before SICK/MOVE
+ * persist so the mutation uses the new version. A conflict here is a real
+ * other-client write — do not persist on the stale version.
+ */
+export function persistAfterOwnDraftFlush(
+  status: DraftFlushStatus
+): "persist" | "conflict" {
+  return status === "conflict" ? "conflict" : "persist";
+}
+
 export type DrainDraftSavesTimings = {
   totalMs: number;
   /** Debounce timer clear only — never a 1.5s wait. */
