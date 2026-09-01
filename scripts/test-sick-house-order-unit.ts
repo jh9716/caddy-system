@@ -8,11 +8,12 @@ import { join } from "node:path";
 import { computeAutoAssignmentsV1, type AutoAssignCaddy } from "../src/lib/autoAssignEngine";
 import {
   applyLiveResultToDraft,
+  confirmedDraftKeepingPlacedUnavailable,
   createDraftFromAutoResult,
   snapshotComputePoolFromDraft,
-  snapshotComputePoolFromDraftKeepingPlaced,
+  type AssignmentDraft,
 } from "../src/lib/assignmentDraft";
-import { previewLiveChangeFromDraft } from "../src/lib/assignmentChange";
+import { previewLiveChangeFromDraft, type LiveChangeInput } from "../src/lib/assignmentChange";
 import { parseDailyBoardDraftPayload, payloadToAssignmentDraft } from "../src/lib/dailyBoardDraft";
 import { compareCaddyOrder } from "../src/lib/autoAssignEngine";
 import {
@@ -22,6 +23,8 @@ import {
 } from "../src/lib/caddyPoolCanonical";
 import {
   makeMutationIntent,
+  prepareIntentOnConfirmedDraft,
+  projectEnqueuedIntents,
   projectPendingIntents,
 } from "../src/lib/boardMutationPipeline";
 
@@ -82,6 +85,39 @@ function spareNames(spares: Array<{ shift: string; spare1?: { name?: string } | 
 function spareIds(spares: Array<{ shift: string; spare1?: { caddyId?: number } | null; spare2?: { caddyId?: number } | null }>, shift: string) {
   const row = spares.find((s) => s.shift === shift);
   return [row?.spare1?.caddyId || null, row?.spare2?.caddyId || null] as const;
+}
+
+/** Same function /manage/assignments enqueuePipelineMutation uses after confirm. */
+function uiHydrateAndEnqueueSick(input: {
+  payloadDraft: AssignmentDraft;
+  liveUnavailableIds: number[];
+  extraUsable: AutoAssignCaddy[];
+  change: LiveChangeInput;
+  id: string;
+}) {
+  const incoming: AssignmentDraft = {
+    ...input.payloadDraft,
+    unavailableCaddyIds: input.liveUnavailableIds,
+  };
+  const confirmed = confirmedDraftKeepingPlacedUnavailable(incoming);
+  const click = projectEnqueuedIntents({
+    confirmedDraft: confirmed,
+    pending: [makeMutationIntent(input.change, input.id)!],
+    extraUsable: input.extraUsable,
+    liveUnavailableIds: input.liveUnavailableIds,
+  });
+  const prepared = prepareIntentOnConfirmedDraft({
+    confirmedDraft: confirmed,
+    intent: makeMutationIntent(input.change, `${input.id}-persist`)!,
+    regularCaddyPool: click.regularCaddyPool,
+  });
+  return {
+    incoming,
+    confirmed,
+    computePool: click.regularCaddyPool,
+    click,
+    prepared,
+  };
 }
 
 section("golden A→B→C→D→E→S1→S2→X, B 병가");
@@ -251,51 +287,81 @@ section("production v51 live SICK overlay: click = persist overlay, not 94/106")
   });
   assert(overlay.length === 0, `overlay drops still-placed live SICK (got ${overlay.join(",")})`);
 
-  const badPool = snapshotComputePoolFromDraft(draft, null, {
+  const [beforeS1, beforeS2] = spareIds(draft.sparesByShift, "1부");
+  assert(beforeS1 === SPARE1 && beforeS2 === SPARE2, `before spare ${beforeS1}/${beforeS2}`);
+
+  const badIncoming: AssignmentDraft = { ...draft, unavailableCaddyIds: LIVE_SICK };
+  const badPool = snapshotComputePoolFromDraft(badIncoming, null, {
     extraUsable,
     unavailableIds: LIVE_SICK,
   });
-  const badPreview = previewLiveChangeFromDraft({
-    draft,
-    change: { type: "CADDY_SICK", caddyId: VICTIM, shift: "1부" },
+  const badClick = projectPendingIntents({
+    confirmedDraft: badIncoming,
+    pending: [makeMutationIntent({ type: "CADDY_SICK", caddyId: VICTIM, shift: "1부" }, "bad")!],
     regularCaddyPool: badPool,
   });
-  const [badS1, badS2] = spareIds(badPreview.after.sparesByShift, "1부");
-  assert(badS1 === BAD_SPARE1 && badS2 === BAD_SPARE2, `unfiltered live 12 still 94/106 (${badS1}/${badS2})`);
+  const [badS1, badS2] = spareIds(badClick.draft.sparesByShift, "1부");
+  assert(
+    badS1 === BAD_SPARE1 && badS2 === BAD_SPARE2,
+    `unfiltered live 12 pool still 94/106 (${badS1}/${badS2})`
+  );
 
-  const clickPool = snapshotComputePoolFromDraftKeepingPlaced(draft, null, {
+  const ui = uiHydrateAndEnqueueSick({
+    payloadDraft: draft,
+    liveUnavailableIds: LIVE_SICK,
+    extraUsable,
+    change: { type: "CADDY_SICK", caddyId: VICTIM, shift: "1부" },
+    id: "click",
+  });
+  assert(ui.confirmed.unavailableCaddyIds?.length === 0, "hydrate overlay drops still-placed live SICK");
+  const liveStillInClickPool = LIVE_SICK.filter((id) => ui.computePool.some((c) => c.id === id));
+  assert(
+    liveStillInClickPool.length === LIVE_SICK.length,
+    `click pool keeps placed live SICK (${liveStillInClickPool.length}/${LIVE_SICK.length})`
+  );
+
+  const dirtyConfirmed: AssignmentDraft = { ...draft, unavailableCaddyIds: LIVE_SICK };
+  const dirtyClick = projectEnqueuedIntents({
+    confirmedDraft: dirtyConfirmed,
+    pending: [makeMutationIntent({ type: "CADDY_SICK", caddyId: VICTIM, shift: "1부" }, "dirty")!],
     extraUsable,
     liveUnavailableIds: LIVE_SICK,
   });
-  const click = projectPendingIntents({
-    confirmedDraft: draft,
-    pending: [makeMutationIntent({ type: "CADDY_SICK", caddyId: VICTIM, shift: "1부" }, "click")!],
-    regularCaddyPool: clickPool,
-  });
+
   const persistPool = snapshotComputePool({
     rosterBaseline: draft.caddyPool,
     assigned: draft.assignments.map((row) => row.caddy),
     spareIds: placed,
-    extraUsable: clickPool,
+    extraUsable: ui.computePool,
     unavailableIds: overlay,
   });
-  const persistPreview = previewLiveChangeFromDraft({
-    draft,
+  const persistPrepared = ui.prepared;
+  assert(persistPrepared.ok, "prepareIntentOnConfirmedDraft ok");
+  if (!persistPrepared.ok) throw new Error(persistPrepared.message);
+  const persistPreview = persistPrepared.preview;
+  const persistDraft = applyLiveResultToDraft(ui.confirmed, persistPreview.after);
+  const serverPreview = previewLiveChangeFromDraft({
+    draft: ui.confirmed,
     change: { type: "CADDY_SICK", caddyId: VICTIM, shift: "1부" },
     regularCaddyPool: persistPool,
   });
-  const persistDraft = applyLiveResultToDraft(draft, persistPreview.after);
-  const click1 = regularIds(click.draft.assignments, "1부");
+  const serverDraft = applyLiveResultToDraft(ui.confirmed, serverPreview.after);
+
+  const click1 = regularIds(ui.click.draft.assignments, "1부");
+  const dirty1 = regularIds(dirtyClick.draft.assignments, "1부");
   const persist1 = regularIds(persistDraft.assignments, "1부");
+  const server1 = regularIds(serverDraft.assignments, "1부");
   const reload1 = regularIds(persistDraft.assignments, "1부");
-  const [cS1, cS2] = spareIds(click.draft.sparesByShift, "1부");
+  const [cS1, cS2] = spareIds(ui.click.draft.sparesByShift, "1부");
+  const [dS1, dS2] = spareIds(dirtyClick.draft.sparesByShift, "1부");
   const [pS1, pS2] = spareIds(persistDraft.sparesByShift, "1부");
+  const [svS1, svS2] = spareIds(serverDraft.sparesByShift, "1부");
   const before3 = regularIds(draft.assignments, "3부");
   const [b3s1, b3s2] = spareIds(draft.sparesByShift, "3부");
-  const [c3s1, c3s2] = spareIds(click.draft.sparesByShift, "3부");
+  const [c3s1, c3s2] = spareIds(ui.click.draft.sparesByShift, "3부");
   const [p3s1, p3s2] = spareIds(persistDraft.sparesByShift, "3부");
   const before2 = regularIds(draft.assignments, "2부");
-  const click2 = regularIds(click.draft.assignments, "2부");
+  const click2 = regularIds(ui.click.draft.assignments, "2부");
   const persist2 = regularIds(persistDraft.assignments, "2부");
   const i2 = before2.indexOf(VICTIM);
   const [b2s1, b2s2] = spareIds(draft.sparesByShift, "2부");
@@ -303,13 +369,19 @@ section("production v51 live SICK overlay: click = persist overlay, not 94/106")
     (id): id is number => typeof id === "number"
   );
 
+  assert(cS1 === SPARE2 && cS2 === NEXT_UNUSED, `click spare ${cS1}/${cS2}`);
+  assert(dS1 === SPARE2 && dS2 === NEXT_UNUSED, `dirty-confirmed click spare ${dS1}/${dS2}`);
+  assert(svS1 === SPARE2 && svS2 === NEXT_UNUSED, `server spare ${svS1}/${svS2}`);
+  assert(pS1 === SPARE2 && pS2 === NEXT_UNUSED, `persist spare ${pS1}/${pS2}`);
+  assert(cS1 !== BAD_SPARE1 && cS2 !== BAD_SPARE2, "94/106 FAIL gate");
+  assert(dS1 !== BAD_SPARE1 && dS2 !== BAD_SPARE2, "dirty-confirmed 94/106 FAIL gate");
+  assert(click1.join(",") === dirty1.join(","), "hydrate overlay click = dirty-confirmed click");
   assert(click1.join(",") === persist1.join(","), "click HOUSE 1부 = persist overlay");
+  assert(click1.join(",") === server1.join(","), "click HOUSE 1부 = server overlay");
   assert(persist1.join(",") === reload1.join(","), "persist overlay = reload Draft");
-  assert(cS1 === pS1 && cS2 === pS2, "click spare = persist spare");
+  assert(cS1 === pS1 && cS2 === pS2 && cS1 === svS1 && cS2 === svS2, "click spare = server = persist spare");
   assert(click1[1] === NEXT2, "1부 keeps 이연호 relative order");
   assert(click1[click1.length - 1] === SPARE1, "1부 last is spare1 pull-forward");
-  assert(cS1 === SPARE2 && cS2 === NEXT_UNUSED, `click spare ${cS1}/${cS2}`);
-  assert(cS1 !== BAD_SPARE1 && cS2 !== BAD_SPARE2, "94/106 FAIL gate");
   assert(LIVE_SICK.filter((id) => id !== VICTIM).every((id) => click1.includes(id) || !placed.has(id) || !regularIds(draft.assignments, "1부").includes(id)), "live SICK still on 1부 stay except victim");
   for (const id of LIVE_SICK) {
     if (regularIds(draft.assignments, "1부").includes(id)) {
@@ -319,22 +391,20 @@ section("production v51 live SICK overlay: click = persist overlay, not 94/106")
   assert(!click1.includes(VICTIM), "최루비 removed from 1부");
   assert(click2.join(",") === expected2.join(","), "2부 one-slot pull-forward");
   assert(persist2.join(",") === expected2.join(","), "2부 persist matches click");
-  const [c2s1, c2s2] = spareIds(click.draft.sparesByShift, "2부");
+  const [c2s1] = spareIds(ui.click.draft.sparesByShift, "2부");
   assert(c2s1 === b2s2, "2부 spare2→spare1");
-  assert(regularIds(click.draft.assignments, "3부").join(",") === before3.join(","), "3부 HOUSE frozen");
+  assert(regularIds(ui.click.draft.assignments, "3부").join(",") === before3.join(","), "3부 HOUSE frozen");
   assert(c3s1 === b3s1 && c3s2 === b3s2 && p3s1 === 142 && p3s2 === 96, `3부 spare frozen ${c3s1}/${c3s2}`);
 
   const afterFirst = persistDraft;
-  const pool2 = snapshotComputePoolFromDraftKeepingPlaced(afterFirst, null, {
-    extraUsable,
+  const second = uiHydrateAndEnqueueSick({
+    payloadDraft: afterFirst,
     liveUnavailableIds: [...LIVE_SICK, VICTIM],
+    extraUsable,
+    change: { type: "CADDY_SICK", caddyId: SECOND, shift: "1부" },
+    id: "s2",
   });
-  const click2nd = projectPendingIntents({
-    confirmedDraft: afterFirst,
-    pending: [makeMutationIntent({ type: "CADDY_SICK", caddyId: SECOND, shift: "1부" }, "s2")!],
-    regularCaddyPool: pool2,
-  });
-  const a1 = regularIds(click2nd.draft.assignments, "1부");
+  const a1 = regularIds(second.click.draft.assignments, "1부");
   const b1 = regularIds(afterFirst.assignments, "1부");
   const i = b1.indexOf(SECOND);
   const [s1] = spareIds(afterFirst.sparesByShift, "1부");
@@ -344,10 +414,28 @@ section("production v51 live SICK overlay: click = persist overlay, not 94/106")
   for (const id of LIVE_SICK) {
     if (b1.includes(id)) assert(a1.includes(id), `second click did not mass-drop live SICK ${id}`);
   }
+  const pendingTwo = projectEnqueuedIntents({
+    confirmedDraft: ui.confirmed,
+    pending: [
+      makeMutationIntent({ type: "CADDY_SICK", caddyId: VICTIM, shift: "1부" }, "p1")!,
+      makeMutationIntent({ type: "CADDY_SICK", caddyId: SECOND, shift: "1부" }, "p2")!,
+    ],
+    extraUsable,
+    liveUnavailableIds: LIVE_SICK,
+  });
+  const two1 = regularIds(pendingTwo.draft.assignments, "1부");
+  assert(!two1.includes(VICTIM) && !two1.includes(SECOND), "pending 2 SICK via enqueue projection");
+  for (const id of LIVE_SICK) {
+    if (regularIds(draft.assignments, "1부").includes(id)) {
+      assert(two1.includes(id), `pending 2 SICK did not mass-drop live SICK ${id}`);
+    }
+  }
 }
 
 const fs = require("node:fs") as typeof import("node:fs");
 const canonical = fs.readFileSync("src/lib/caddyPoolCanonical.ts", "utf8");
+const page = fs.readFileSync("src/app/manage/assignments/page.tsx", "utf8");
+const pipeline = fs.readFileSync("src/lib/boardMutationPipeline.ts", "utf8");
 assert(
   !/return usableComputePool\(\{\s*rosterBaseline: extra/.test(canonical),
   "snapshotComputePool does not replace assigned order with extraUsable"
@@ -355,6 +443,18 @@ assert(
 assert(
   /overlayUnavailableIdsKeepingPlaced/.test(canonical) && /!placed\.has\(id\)/.test(canonical),
   "click/persist overlay keeps still-placed HOUSE"
+);
+assert(
+  /projectEnqueuedIntents\(/.test(page) &&
+    /confirmedDraftKeepingPlacedUnavailable\(incoming\)/.test(page) &&
+    /function liveSnapshotPool/.test(page),
+  "UI hydrate+enqueue uses keeping-placed snapshot, not raw live unavailable"
+);
+assert(
+  /export function projectEnqueuedIntents/.test(pipeline) &&
+    /confirmedDraftKeepingPlacedUnavailable\(/.test(pipeline) &&
+    /liveClickSnapshotPool\(/.test(pipeline),
+  "enqueue projection overlays placed live SICK before reflow"
 );
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);

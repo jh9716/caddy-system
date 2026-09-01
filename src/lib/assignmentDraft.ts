@@ -266,6 +266,56 @@ export function snapshotComputePoolFromDraftKeepingPlaced(
   });
 }
 
+/**
+ * Hydrate/click: leftover live DailyCaddyUnavailable must not become
+ * previous.unavailableCaddyIds while those people are still painted.
+ */
+export function confirmedDraftKeepingPlacedUnavailable(
+  draft: AssignmentDraft,
+  liveUnavailableIds?: Iterable<unknown>
+): AssignmentDraft {
+  return {
+    ...draft,
+    unavailableCaddyIds: overlayUnavailableIdsKeepingPlaced({
+      dailyUnavailableIds: [
+        ...uniquePositiveIds(draft.unavailableCaddyIds),
+        ...uniquePositiveIds(liveUnavailableIds),
+      ],
+      placedIds: placedCaddyIdsFromBoard(draft),
+    }),
+  };
+}
+
+/**
+ * UI click compute pool. Same helper liveSnapshotPool / enqueuePipelineMutation use.
+ * extraUsable may append unused people; it must not strip still-placed HOUSE.
+ */
+export function liveClickSnapshotPool(
+  source: AssignmentDraft,
+  extra?: {
+    extraUsable?: readonly AutoAssignCaddy[] | null;
+    liveUnavailableIds?: Iterable<unknown>;
+    base?: AutoAssignResultV1 | null;
+    opsDutyIds?: Iterable<unknown>;
+    specialSkipIds?: Iterable<unknown>;
+  }
+): AutoAssignCaddy[] {
+  const liveUnavailableIds = [
+    ...uniquePositiveIds(source.unavailableCaddyIds),
+    ...uniquePositiveIds(extra?.liveUnavailableIds),
+  ];
+  const confirmed = confirmedDraftKeepingPlacedUnavailable(
+    source,
+    liveUnavailableIds
+  );
+  return snapshotComputePoolFromDraftKeepingPlaced(confirmed, extra?.base ?? null, {
+    extraUsable: extra?.extraUsable,
+    liveUnavailableIds,
+    opsDutyIds: extra?.opsDutyIds,
+    specialSkipIds: extra?.specialSkipIds,
+  });
+}
+
 /** Draft에 들어 있는 예약을 자동배치 JSON preview 입력으로 재사용. */
 export function reservationsFromAssignmentDraft(
   draft: AssignmentDraft
