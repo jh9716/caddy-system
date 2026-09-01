@@ -7,6 +7,7 @@ import {
   type CanonicalReflowState,
   type LoadCanonicalReflowOptions,
 } from "@/lib/caddyPoolCanonicalService";
+import { isOffSnapshotRequiredError } from "@/lib/offSnapshot";
 
 /** 라이브 reflow/apply 서버 경로: 저장된 당번·마샬·조장을 후보에서 강제 제외 */
 export async function regularPoolExcludingStoredOpsDuty(
@@ -52,10 +53,13 @@ export async function resolveCanonicalLivePool(
       {
         offSheetMode: opts?.offSheetMode,
         computeClientPool: opts?.computeClientPool ?? pool,
+        offSnapshot: opts?.offSnapshot,
       }
     );
   } catch (error) {
-    if (isOffSheetUnresolvedError(error)) throw error;
+    if (isOffSheetUnresolvedError(error) || isOffSnapshotRequiredError(error)) {
+      throw error;
+    }
     const ids = await listDailyOpsDutyCaddyIds(date);
     return {
       ...empty,

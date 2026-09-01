@@ -4,6 +4,8 @@ import {
   isOffSheetUnresolvedError,
   prewarmCanonicalOffSheet,
 } from "@/lib/caddyPoolCanonicalService";
+import { offCaddyIdsFromNames } from "@/lib/offSnapshot";
+import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -11,6 +13,7 @@ export const runtime = "nodejs";
 /**
  * GET /api/assignments/off-sheet/prewarm?date=YYYY-MM-DD
  * Background date-matched OFF SoT warm. UI must not wait.
+ * On match, returns caddyIds so the client can store Draft.offSnapshot.
  */
 export async function GET(req: NextRequest) {
   const guard = await requireAdmin(req);
@@ -23,12 +26,21 @@ export async function GET(req: NextRequest) {
 
   try {
     const resolved = await prewarmCanonicalOffSheet(date);
+    let caddyIds: number[] = [];
+    if (resolved.matched) {
+      const caddies = await prisma.caddy.findMany({
+        select: { id: true, name: true, employmentStatus: true },
+      });
+      caddyIds = offCaddyIdsFromNames(resolved.names, caddies);
+    }
     return NextResponse.json({
       ok: true,
       date,
       matched: resolved.matched,
       source: resolved.source,
       resolveMs: resolved.resolveMs,
+      names: resolved.names,
+      caddyIds,
     });
   } catch (e: unknown) {
     if (isOffSheetUnresolvedError(e)) {

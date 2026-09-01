@@ -37,6 +37,15 @@ import {
   makeMutationIntent,
 } from "../src/lib/boardMutationPipeline";
 import { QUICK_MOVE_LIVE_FORCE_FAIL } from "../src/lib/quickReservationMoveApply";
+import { buildOffSnapshot, isUsableOffSnapshot } from "../src/lib/offSnapshot";
+
+function withOffSnapshot(draft: AssignmentDraft): AssignmentDraft {
+  if (isUsableOffSnapshot(draft.offSnapshot, draft.date)) return draft;
+  return {
+    ...draft,
+    offSnapshot: buildOffSnapshot({ date: draft.date, caddyIds: [] }),
+  };
+}
 
 const DATE = "2099-12-21";
 const day = parseYmd(DATE).start;
@@ -94,7 +103,7 @@ async function persistLiveFromDraft(draft: AssignmentDraft) {
   const saved = await saveDailyBoardDraft({
     date: DATE,
     expectedVersion: 0,
-    payload: assignmentDraftToPayload(draft),
+    payload: assignmentDraftToPayload(withOffSnapshot(draft)),
     updatedByUserId: null,
   });
   return saved.version;
@@ -168,10 +177,20 @@ async function applyIntent(
     events: prepared.preview.events,
     changeType: prepared.preview.changeType,
     change,
+    skipCanonicalReload: true,
+    canonical: {
+      computePool: confirmed.caddyPool,
+      rosterBaseline: confirmed.caddyPool,
+      unavailableIds: confirmed.unavailableCaddyIds || [],
+      opsDutyIds: [],
+      specialSkipIds: [],
+      offSheetMatched: true,
+      offSheetSource: "snapshot",
+    },
     draft: {
       date: DATE,
       expectedVersion: version,
-      payload: assignmentDraftToPayload(prepared.painted),
+      payload: assignmentDraftToPayload(withOffSnapshot(prepared.painted)),
     },
     updatedByUserId: null,
     testFailLive: testFailLive ?? null,
@@ -451,10 +470,20 @@ async function main() {
         events: sickPrepared.preview.events,
         changeType: sickPrepared.preview.changeType,
         change: { type: "CADDY_SICK", caddyId: HOUSE_START, shift: "1부" },
+        skipCanonicalReload: true,
+        canonical: {
+          computePool: confirmed.caddyPool,
+          rosterBaseline: confirmed.caddyPool,
+          unavailableIds: confirmed.unavailableCaddyIds || [],
+          opsDutyIds: [],
+          specialSkipIds: [],
+          offSheetMatched: true,
+          offSheetSource: "snapshot",
+        },
         draft: {
           date: DATE,
           expectedVersion: move.persist.draft.version,
-          payload: assignmentDraftToPayload(sickPrepared.painted),
+          payload: assignmentDraftToPayload(withOffSnapshot(sickPrepared.painted)),
         },
         updatedByUserId: null,
       });

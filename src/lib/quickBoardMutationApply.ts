@@ -52,6 +52,13 @@ import {
   type CanonicalReflowState,
 } from "@/lib/caddyPoolCanonicalService";
 import {
+  isOffSnapshotRequiredError,
+  isUsableOffSnapshot,
+  OFF_SNAPSHOT_REQUIRED_CODE,
+  OFF_SNAPSHOT_REQUIRED_USER_MESSAGE,
+  parseOffSnapshot,
+} from "@/lib/offSnapshot";
+import {
   overlayUnavailableIdsKeepingPlaced,
   placedCaddyIdsFromBoard,
   snapshotComputePool,
@@ -126,18 +133,29 @@ export async function applyQuickBoardMutation(input: {
     rosterBaseline = input.canonical.rosterBaseline;
     storedUnavailable = input.canonical.unavailableIds;
   } else {
+    const offSnapshot = parseOffSnapshot(
+      (input.draft.payload as { offSnapshot?: unknown } | undefined)?.offSnapshot
+    );
+    if (!isUsableOffSnapshot(offSnapshot, input.previous.date)) {
+      return {
+        ok: false,
+        httpStatus: 400,
+        code: OFF_SNAPSHOT_REQUIRED_CODE,
+        message: OFF_SNAPSHOT_REQUIRED_USER_MESSAGE,
+      };
+    }
     try {
       const canonical = await loadCanonicalReflowState(
         input.previous.date,
         input.regularCaddyPool,
         db,
-        { offSheetMode: "cache-or-fetch" }
+        { offSheetMode: "snapshot", offSnapshot }
       );
       computePool = canonical.computePool;
       rosterBaseline = canonical.rosterBaseline;
       storedUnavailable = canonical.unavailableIds;
     } catch (error) {
-      if (isOffSheetUnresolvedError(error)) {
+      if (isOffSheetUnresolvedError(error) || isOffSnapshotRequiredError(error)) {
         return {
           ok: false,
           httpStatus: error.status,

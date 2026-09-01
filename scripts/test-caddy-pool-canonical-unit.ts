@@ -689,9 +689,9 @@ section("source: no stale unavailable union / no destructive pool shrink");
   assert(
     /overlayUnavailableIdsKeepingPlaced/.test(apply) &&
       /loadCanonicalReflowState/.test(apply) &&
-      /offSheetMode:\s*"cache-or-fetch"/.test(apply) &&
+      /offSheetMode:\s*"snapshot"/.test(apply) &&
       /skipCanonicalReload/.test(apply),
-    "quick mutation rebuilds SoT from cache-or-fetch canonical, no double fetch"
+    "quick mutation rebuilds SoT from Draft offSnapshot, no Google fetch"
   );
   assert(
     /applyLiveResultToDraft\(/.test(apply) &&
@@ -744,8 +744,10 @@ section("source: no stale unavailable union / no destructive pool shrink");
   );
   assert(
     /cache-or-fetch/.test(service) &&
-      /peekCachedOffSheetsForDate/.test(service),
-    "persist peeks date-matched cache then fetches on miss"
+      /peekCachedOffSheetsForDate/.test(service) &&
+      /offSheetMode === "snapshot"/.test(service) &&
+      /offSheetSource = "snapshot"/.test(service),
+    "availability still cache-or-fetch; mutation uses Draft offSnapshot"
   );
   assert(
     /OFF_SHEET_RESOLVE_TIMEOUT_MS/.test(service) &&
@@ -777,16 +779,19 @@ section("source: no stale unavailable union / no destructive pool shrink");
     "date-keyed OFF resolve is single-flight and prewarmable"
   );
   assert(
-    /offSheetMode:\s*"cache-or-fetch"/.test(route) &&
+    /offSheetMode:\s*"snapshot"/.test(route) &&
+      /OFF_SNAPSHOT_REQUIRED/.test(route) &&
       /skipCanonicalReload:\s*true/.test(route) &&
       !/fetchPublishedOffSheets/.test(route) &&
-      /isOffSheetUnresolvedError/.test(route),
-    "quick-mutation route is cache-or-fetch and single-load"
+      !/offSheetMode:\s*"cache-or-fetch"/.test(route),
+    "quick-mutation route is snapshot-only and never Google-fetches"
   );
   const livePool = read("src/lib/opsDutyLivePool.ts");
   assert(
-    /isOffSheetUnresolvedError\(error\)\)\s*throw error/.test(livePool),
-    "live pool rethrows OFF unresolved and does not use client fallback"
+    /isOffSheetUnresolvedError\(error\) \|\| isOffSnapshotRequiredError\(error\)/.test(
+      livePool
+    ) && /throw error/.test(livePool),
+    "live pool rethrows OFF unresolved / missing snapshot and does not use client fallback"
   );
   assert(
     /resolved\.unavailableIds/.test(reflow),

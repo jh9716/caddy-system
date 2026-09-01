@@ -15,6 +15,13 @@ import { loadSpecialSupportQueuesForDate } from "@/lib/dailySpecialSupportServic
 import { applyQuickBoardMutation } from "@/lib/quickBoardMutationApply";
 import { isOffSheetUnresolvedError } from "@/lib/caddyPoolCanonicalService";
 import { OFF_SHEET_UNRESOLVED_CODE } from "@/lib/caddyPoolCanonical";
+import {
+  isOffSnapshotRequiredError,
+  isUsableOffSnapshot,
+  OFF_SNAPSHOT_REQUIRED_CODE,
+  OFF_SNAPSHOT_REQUIRED_USER_MESSAGE,
+  parseOffSnapshot,
+} from "@/lib/offSnapshot";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -70,11 +77,26 @@ export async function POST(req: NextRequest) {
       ? ((draft.payload as { caddyPool: AutoAssignCaddy[] }).caddyPool)
       : regularCaddyPool;
 
+    const offSnapshot = parseOffSnapshot(
+      (draft.payload as { offSnapshot?: unknown } | undefined)?.offSnapshot
+    );
+    if (!isUsableOffSnapshot(offSnapshot, previous.date)) {
+      return NextResponse.json(
+        {
+          error: OFF_SNAPSHOT_REQUIRED_USER_MESSAGE,
+          code: OFF_SNAPSHOT_REQUIRED_CODE,
+          message: OFF_SNAPSHOT_REQUIRED_USER_MESSAGE,
+        },
+        { status: 400 }
+      );
+    }
+
     const tPool = Date.now();
     const tSupport = Date.now();
     const [poolResult, supportResult] = await Promise.all([
       resolveCanonicalLivePool(previous.date, regularCaddyPool, {
-        offSheetMode: "cache-or-fetch",
+        offSheetMode: "snapshot",
+        offSnapshot,
         rosterClientPool: payloadPool,
         computeClientPool: regularCaddyPool,
       }).then((resolved) => {
@@ -115,6 +137,7 @@ export async function POST(req: NextRequest) {
     if (!result.ok) {
       const hideDetails =
         result.code !== OFF_SHEET_UNRESOLVED_CODE &&
+        result.code !== OFF_SNAPSHOT_REQUIRED_CODE &&
         (result.httpStatus >= 500 || result.code === "APPLY_FAILED");
       return NextResponse.json(
         {
@@ -152,7 +175,7 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (e: unknown) {
-    if (isOffSheetUnresolvedError(e)) {
+    if (isOffSheetUnresolvedError(e) || isOffSnapshotRequiredError(e)) {
       return NextResponse.json(
         { error: e.message, code: e.code, message: e.message },
         { status: e.status }

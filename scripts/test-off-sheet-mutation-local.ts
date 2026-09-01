@@ -19,11 +19,12 @@ import { getDailyBoardDraft, saveDailyBoardDraft } from "../src/lib/dailyBoardDr
 import { applyQuickBoardMutation } from "../src/lib/quickBoardMutationApply";
 import { makeMutationIntent, prepareIntentOnConfirmedDraft } from "../src/lib/boardMutationPipeline";
 import { resolveCanonicalLivePool } from "../src/lib/opsDutyLivePool";
-import {
-  OFF_SHEET_UNRESOLVED_CODE,
-  OFF_SHEET_UNRESOLVED_USER_MESSAGE,
-} from "../src/lib/caddyPoolCanonical";
 import { isOffSheetUnresolvedError } from "../src/lib/caddyPoolCanonicalService";
+import {
+  buildOffSnapshot,
+  OFF_SNAPSHOT_REQUIRED_CODE,
+  OFF_SNAPSHOT_REQUIRED_USER_MESSAGE,
+} from "../src/lib/offSnapshot";
 import {
   getOffSheetHttpFetchCount,
   invalidateOffSheetCache,
@@ -242,7 +243,7 @@ async function main() {
     );
   }
 
-  section("OFF HTTP 500 fails persist and keeps confirmed Draft/live");
+  section("no offSnapshot blocks persist immediately without Google");
   {
     const seeded = await seedBoard();
     const before = await getDailyBoardDraft(DATE);
@@ -255,17 +256,7 @@ async function main() {
     setPublishedOffSheetLoaderForTests(async () => {
       throw new OffSheetError("forced 500", "off_sheet_fetch_failed", 500);
     });
-    let liveThrown: unknown = null;
-    try {
-      await resolveCanonicalLivePool(DATE, [...seeded.pool, offCaddy], {
-        offSheetMode: "cache-or-fetch",
-        rosterClientPool: seeded.draft.caddyPool,
-        computeClientPool: [...seeded.pool, offCaddy],
-      });
-    } catch (error) {
-      liveThrown = error;
-    }
-    assert(isOffSheetUnresolvedError(liveThrown), "500 does not build a client-fallback pool");
+    const t0 = Date.now();
     const persist = await applyQuickBoardMutation({
       previous: seeded.result,
       regularCaddyPool: [...seeded.pool, offCaddy],
@@ -286,88 +277,92 @@ async function main() {
       },
       updatedByUserId: null,
     });
-    assert(persist.ok === false, "500 persist does not save");
-    assert(persist.code === OFF_SHEET_UNRESOLVED_CODE, "500 persist code");
-    assert(persist.message === OFF_SHEET_UNRESOLVED_USER_MESSAGE, "500 persist user message");
+    const elapsed = Date.now() - t0;
+    assert(persist.ok === false, "missing snapshot does not save");
+    assert(persist.code === OFF_SNAPSHOT_REQUIRED_CODE, "missing snapshot code");
+    assert(
+      persist.message === OFF_SNAPSHOT_REQUIRED_USER_MESSAGE,
+      "missing snapshot user message"
+    );
+    assert(elapsed < 500, `no-snapshot persist is immediate (${elapsed}ms)`);
+    assert(getOffSheetHttpFetchCount() === 0, "mutation did not hit Google");
     const after = await getDailyBoardDraft(DATE);
     const reloaded = payloadToAssignmentDraft(after!.payload);
-    assert(after!.version === beforeVersion, "confirmed Draft version unchanged after 500");
+    assert(after!.version === beforeVersion, "confirmed Draft version unchanged");
     assert(
       usedIds(reloaded).join(",") === beforeIds.join(","),
-      "confirmed live placement/spare unchanged after 500"
+      "confirmed live placement/spare unchanged"
     );
-    assert(!usedIds(reloaded).includes(OFF_ID), "OFF caddy did not re-enter after 500");
     assert(
       reloaded.assignments.some((a) => a.caddy.id === victim.caddy.id),
-      "SICK victim remains on confirmed board after 500"
-    );
-    assert(
-      (await prisma.dailyCaddyUnavailable.findMany({ where: { date: day } })).length === 0,
-      "500 did not write unavailable"
+      "SICK victim remains on confirmed board"
     );
   }
 
-  section("OFF fetch timeout fails persist and keeps confirmed Draft/live");
+  section("snapshot persist succeeds while Google 500/timeout");
   {
     const seeded = await seedBoard();
-    const before = await getDailyBoardDraft(DATE);
-    const beforeVersion = before!.version;
     const victim = seeded.draft.assignments.find((a) => a.caddy.id === SICK_1)
       || seeded.draft.assignments.find((a) => a.shift === "1부")!;
+    const snap = buildOffSnapshot({ date: DATE, caddyIds: [OFF_ID] });
+    const draftWithSnap = { ...seeded.draft, offSnapshot: snap };
     invalidateOffSheetCache();
     resetOffSheetHttpStatsForTests();
-    setPublishedOffSheetLoaderForTests(async ({ signal } = {}) => {
-      await new Promise<void>((_resolve, reject) => {
-        const fail = () => {
-          const err = new Error("aborted");
-          err.name = "AbortError";
-          reject(err);
-        };
-        if (signal?.aborted) return fail();
-        signal?.addEventListener("abort", fail, { once: true });
-      });
-      return [offSheetForDate(DATE, [offCaddy.name])];
+    setPublishedOffSheetLoaderForTests(async () => {
+      throw new OffSheetError("forced 500", "off_sheet_fetch_failed", 500);
     });
-    process.env.OFF_SHEET_RESOLVE_TIMEOUT_MS = "60";
-    let persist;
+    let liveThrown: unknown = null;
     try {
-      persist = await applyQuickBoardMutation({
-        previous: seeded.result,
-        regularCaddyPool: [...seeded.pool, offCaddy],
-        events: [
-          {
-            type: "REMOVE_CADDY",
-            caddyId: victim.caddy.id,
-            cause: "SICK",
-            fromShift: "1부",
-          },
-        ],
-        changeType: "CADDY_SICK",
-        change: { type: "CADDY_SICK", caddyId: victim.caddy.id, shift: "1부" },
-        draft: {
-          date: DATE,
-          expectedVersion: seeded.version,
-          payload: assignmentDraftToPayload(seeded.draft),
-        },
-        updatedByUserId: null,
+      await resolveCanonicalLivePool(DATE, [...seeded.pool, offCaddy], {
+        offSheetMode: "cache-or-fetch",
+        rosterClientPool: seeded.draft.caddyPool,
+        computeClientPool: [...seeded.pool, offCaddy],
       });
-    } finally {
-      delete process.env.OFF_SHEET_RESOLVE_TIMEOUT_MS;
+    } catch (error) {
+      liveThrown = error;
     }
-    assert(persist.ok === false, "timeout persist does not save");
-    assert(persist.code === OFF_SHEET_UNRESOLVED_CODE, "timeout persist code");
+    assert(isOffSheetUnresolvedError(liveThrown), "availability path still fail-closed");
+    const canonical = await resolveCanonicalLivePool(DATE, [...seeded.pool, offCaddy], {
+      offSheetMode: "snapshot",
+      offSnapshot: snap,
+      rosterClientPool: draftWithSnap.caddyPool,
+      computeClientPool: [...seeded.pool, offCaddy],
+    });
+    assert(canonical.offSheetSource === "snapshot", "mutation pool from snapshot");
+    assert(!canonical.computePool.some((c) => c.id === OFF_ID), "snapshot keeps OFF out");
+    const persist = await applyQuickBoardMutation({
+      previous: seeded.result,
+      regularCaddyPool: canonical.computePool,
+      canonical,
+      skipCanonicalReload: true,
+      events: [
+        {
+          type: "REMOVE_CADDY",
+          caddyId: victim.caddy.id,
+          cause: "SICK",
+          fromShift: "1부",
+        },
+      ],
+      changeType: "CADDY_SICK",
+      change: { type: "CADDY_SICK", caddyId: victim.caddy.id, shift: "1부" },
+      draft: {
+        date: DATE,
+        expectedVersion: seeded.version,
+        payload: assignmentDraftToPayload(draftWithSnap),
+      },
+      updatedByUserId: null,
+    });
+    assert(persist.ok === true, "snapshot SICK persist 200 while Google 500");
+    assert(getOffSheetHttpFetchCount() <= 1, "mutation persist did not add Google HTTP");
+    const row = await getDailyBoardDraft(DATE);
+    const reloaded = payloadToAssignmentDraft(row!.payload);
+    assert(row!.version === seeded.version + 1, "Draft version incremented");
+    assert(!usedIds(reloaded).includes(OFF_ID), "reload: OFF not placement/spare");
     assert(
-      persist.message === OFF_SHEET_UNRESOLVED_USER_MESSAGE,
-      "timeout persist user message"
+      !reloaded.assignments.some((a) => a.caddy.id === victim.caddy.id),
+      "reload: sick victim gone"
     );
-    const after = await getDailyBoardDraft(DATE);
-    const reloaded = payloadToAssignmentDraft(after!.payload);
-    assert(after!.version === beforeVersion, "confirmed Draft version unchanged after timeout");
-    assert(!usedIds(reloaded).includes(OFF_ID), "OFF caddy did not re-enter after timeout");
-    assert(
-      reloaded.assignments.some((a) => a.caddy.id === victim.caddy.id),
-      "SICK victim remains on confirmed board after timeout"
-    );
+    assert(reloaded.offSnapshot?.date === DATE, "persist keeps offSnapshot");
   }
 
   section("stale other-date cache fetches today");

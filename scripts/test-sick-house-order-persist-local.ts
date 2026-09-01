@@ -36,9 +36,14 @@ import {
 import { resolveCanonicalLivePool } from "../src/lib/opsDutyLivePool";
 import {
   invalidateOffSheetCache,
+  OffSheetError,
   resetOffSheetHttpStatsForTests,
   setPublishedOffSheetLoaderForTests,
 } from "../src/lib/offSheetFetch";
+import {
+  buildOffSnapshot,
+  OFF_SNAPSHOT_REQUIRED_CODE,
+} from "../src/lib/offSnapshot";
 
 const DATE = "2026-08-28";
 const day = parseYmd(DATE).start;
@@ -229,7 +234,11 @@ async function main() {
     readFileSync(join(process.cwd(), "scripts/fixtures/prod-2026-08-28-choi-sick.json"), "utf8")
   );
   const parsed = parseDailyBoardDraftPayload({ ...raw, schemaVersion: 1 }, DATE);
-  const draft0 = payloadToAssignmentDraft(parsed);
+  const offSnap = buildOffSnapshot({ date: DATE, caddyIds: [] });
+  const draft0: AssignmentDraft = {
+    ...payloadToAssignmentDraft(parsed),
+    offSnapshot: offSnap,
+  };
 
   const used = new Set<number>();
   for (const row of draft0.assignments) if (row.kind === "regular") used.add(row.caddy.id);
@@ -353,7 +362,8 @@ async function main() {
   try {
     const t0 = Date.now();
     const canonical = await resolveCanonicalLivePool(DATE, clickPool, {
-      offSheetMode: "cache-or-fetch",
+      offSheetMode: "snapshot",
+      offSnapshot: offSnap,
       rosterClientPool: draft0.caddyPool,
       computeClientPool: clickPool,
     });
@@ -450,6 +460,75 @@ async function main() {
     const [s1] = spareIds(afterFirst, "1부");
     const expected = [...b1.slice(0, i), ...b1.slice(i + 1), s1];
     assert(a1.join(",") === expected.join(","), "second sick is 1-slot pull-forward not full re-sort");
+  }
+
+  console.log("\n== Google down after snapshot: SICK persist still 200 ==");
+  await resetDate();
+  await prisma.dailyCaddyUnavailable.createMany({
+    data: LIVE_SICK.map((caddyId) => ({ date: day, caddyId, reason: "SICK" as const })),
+  });
+  version = await seedDraft(draft0);
+  invalidateOffSheetCache();
+  resetOffSheetHttpStatsForTests();
+  setPublishedOffSheetLoaderForTests(async () => {
+    throw new OffSheetError("forced 500", "off_sheet_fetch_failed", 500);
+  });
+  {
+    const canonical = await resolveCanonicalLivePool(DATE, clickPool, {
+      offSheetMode: "snapshot",
+      offSnapshot: offSnap,
+      rosterClientPool: draft0.caddyPool,
+      computeClientPool: clickPool,
+    });
+    assert(canonical.offSheetSource === "snapshot", "Google-down pool uses snapshot");
+    const preparedG = prepareIntentOnConfirmedDraft({
+      confirmedDraft: confirmed,
+      intent: makeMutationIntent({ type: "CADDY_SICK", caddyId: VICTIM, shift: "1부" }, "g")!,
+      regularCaddyPool: canonical.computePool,
+    });
+    if (!preparedG.ok) throw new Error(preparedG.message);
+    const persistG = await applyQuickBoardMutation({
+      previous: preparedG.previous,
+      regularCaddyPool: canonical.computePool,
+      canonical,
+      skipCanonicalReload: true,
+      events: preparedG.preview.events,
+      changeType: preparedG.preview.changeType,
+      draft: {
+        date: DATE,
+        expectedVersion: version,
+        payload: assignmentDraftToPayload(preparedG.painted),
+      },
+      updatedByUserId: null,
+    });
+    assert(persistG.ok === true, "Google 500 + snapshot SICK persist 200");
+    if (persistG.ok) {
+      const afterG = applyLiveResultToDraft(confirmed, persistG.preview.after);
+      sameFp(clickFp, fp(afterG), "Google-down: click vs persist");
+      const reloadG = payloadToAssignmentDraft((await getDailyBoardDraft(DATE))!.payload as never);
+      sameFp(clickFp, fp(reloadG), "Google-down: click vs reload");
+      assert(reloadG.offSnapshot?.date === DATE, "Google-down reload keeps offSnapshot");
+    }
+  }
+
+  console.log("\n== no snapshot: persist not attempted ==");
+  {
+    const draftBare = { ...draft0 };
+    delete draftBare.offSnapshot;
+    const persistBare = await applyQuickBoardMutation({
+      previous: prepared.previous,
+      regularCaddyPool: clickPool,
+      events: prepared.preview.events,
+      changeType: prepared.preview.changeType,
+      draft: {
+        date: DATE,
+        expectedVersion: 999999,
+        payload: assignmentDraftToPayload(draftBare),
+      },
+      updatedByUserId: null,
+    });
+    assert(persistBare.ok === false, "no snapshot does not persist");
+    assert(persistBare.code === OFF_SNAPSHOT_REQUIRED_CODE, "no snapshot code");
   }
 
   await resetDate();

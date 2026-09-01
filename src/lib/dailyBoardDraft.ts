@@ -5,6 +5,11 @@
  */
 
 import type { AssignmentDraft, DraftStatus } from "@/lib/assignmentDraft";
+import {
+  isUsableOffSnapshot,
+  parseOffSnapshot,
+  type DraftOffSnapshot,
+} from "@/lib/offSnapshot";
 import type {
   AutoAssignCaddy,
   AutoAssignReservation,
@@ -60,6 +65,8 @@ export type DailyBoardDraftPayloadV1 = {
   thirdStartCaddyId?: number;
   /** optional: 병가/결근 캐디. legacy payload에는 없음. */
   unavailableCaddyIds?: number[];
+  /** optional: 검증된 날짜 휴무. legacy payload에는 없음. migration 없음. */
+  offSnapshot?: DraftOffSnapshot;
   confirmedAt: string | null;
   appliedAt: string | null;
   applyAuditId: number | null;
@@ -144,6 +151,9 @@ export function assignmentDraftToPayload(
             .filter((id) => Number.isInteger(id) && id > 0),
         }
       : {}),
+    ...(isUsableOffSnapshot(draft.offSnapshot, draft.date)
+      ? { offSnapshot: draft.offSnapshot }
+      : {}),
   };
 }
 
@@ -170,6 +180,9 @@ export function payloadToAssignmentDraft(
       : {}),
     ...(payload.unavailableCaddyIds?.length
       ? { unavailableCaddyIds: [...payload.unavailableCaddyIds] }
+      : {}),
+    ...(isUsableOffSnapshot(payload.offSnapshot, payload.date)
+      ? { offSnapshot: payload.offSnapshot }
       : {}),
   };
 }
@@ -397,6 +410,7 @@ export function parseDailyBoardDraftPayload(
   if (assignments.length > 2500) {
     throw new DailyBoardDraftPayloadError("assignments가 너무 많습니다.");
   }
+  const offSnapshot = parseOffSnapshot(o.offSnapshot);
   return stampPayloadReservationIdentities({
     schemaVersion: DAILY_BOARD_DRAFT_SCHEMA_VERSION,
     date: expectedDate,
@@ -439,6 +453,9 @@ export function parseDailyBoardDraftPayload(
             asFiniteInt(id, `unavailableCaddyIds[${i}]`)
           ),
         }
+      : {}),
+    ...(isUsableOffSnapshot(offSnapshot, expectedDate)
+      ? { offSnapshot }
       : {}),
   });
 }

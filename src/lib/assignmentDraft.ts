@@ -31,6 +31,10 @@ import {
   placedCaddyIdsFromBoard,
   snapshotComputePool,
 } from "@/lib/caddyPoolCanonical";
+import {
+  isUsableOffSnapshot,
+  type DraftOffSnapshot,
+} from "@/lib/offSnapshot";
 
 export type DraftStatus = "DRAFT" | "EDITED" | "CONFIRMED" | "APPLIED";
 
@@ -50,6 +54,8 @@ export type AssignmentDraft = {
   thirdStartCaddyId?: number | null;
   /** 병가/결근으로 빠진 캐디. 이후 mutation이 다시 넣지 못하게 한다. */
   unavailableCaddyIds?: number[];
+  /** 날짜 검증된 휴무 snapshot. mutation은 이것만 쓰고 Google을 치지 않는다. */
+  offSnapshot?: DraftOffSnapshot;
   confirmedAt: string | null;
   appliedAt?: string | null;
   applyAuditId?: number | null;
@@ -952,6 +958,9 @@ export function applyLiveResultToDraft(
     thirdStartCaddyId:
       next.thirdStartCaddyId ?? draft.thirdStartCaddyId ?? null,
     unavailableCaddyIds: uniquePositiveIds(after.unavailableCaddyIds || []),
+    ...(isUsableOffSnapshot(draft.offSnapshot, next.date)
+      ? { offSnapshot: draft.offSnapshot }
+      : {}),
   };
 }
 
