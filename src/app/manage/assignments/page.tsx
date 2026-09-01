@@ -23,8 +23,8 @@ import {
   RECALC_SAVE_FAILED_MESSAGE,
   RECALC_SUCCESS_MESSAGE,
   unassignReservation,
-  snapshotComputePoolFromDraft,
-  snapshotComputePoolFromDraftKeepingPlaced,
+  confirmedDraftKeepingPlacedUnavailable,
+  liveClickSnapshotPool,
   unusedCaddies,
   type AssignmentDraft,
   type DraftWarning,
@@ -436,17 +436,21 @@ export default function ManageAssignmentsOpsPage() {
       hydratingDraftRef.current = true;
       serverDraftVersionRef.current = version;
       setDraftVersion(version);
-      const hydrated: AssignmentDraft = {
+      const liveUnavailableIds = (
+        unavailableIds !== undefined
+          ? unavailableIds
+          : assignmentDraft.unavailableCaddyIds || []
+      ).filter((id) => Number.isInteger(id) && id > 0);
+      const incoming: AssignmentDraft = {
         ...assignmentDraft,
-        unavailableCaddyIds: (
-          unavailableIds !== undefined
-            ? unavailableIds
-            : assignmentDraft.unavailableCaddyIds || []
-        ).filter((id) => Number.isInteger(id) && id > 0),
+        unavailableCaddyIds: liveUnavailableIds,
       };
+      const hydrated = confirmedDraftKeepingPlacedUnavailable(incoming);
       setDraft(hydrated);
       confirmedDraftRef.current = hydrated;
-      computePoolRef.current = snapshotComputePoolFromDraft(hydrated, null);
+      computePoolRef.current = liveClickSnapshotPool(incoming, {
+        liveUnavailableIds,
+      });
       pendingIntentsRef.current = [];
       setPendingIntentCount(0);
       persistInFlightRef.current = false;
@@ -1601,12 +1605,13 @@ export default function ManageAssignmentsOpsPage() {
     const extraUsable = availability?.available?.all?.length
       ? regularCaddyPoolFromAvailabilityRows(availability.available.all)
       : computePoolRef.current;
-    const pool = snapshotComputePoolFromDraftKeepingPlaced(source, autoResultRef.current, {
+    const pool = liveClickSnapshotPool(source, {
       extraUsable: extraUsable.length ? extraUsable : undefined,
       liveUnavailableIds: [
         ...(source.unavailableCaddyIds || []),
         ...unavailableCaddyIds,
       ],
+      base: autoResultRef.current,
       opsDutyIds: opsDutyCaddyIds,
     });
     computePoolRef.current = pool;
@@ -1853,15 +1858,12 @@ export default function ManageAssignmentsOpsPage() {
           continue;
         }
         confirmedDraftRef.current = persist.draft;
-        computePoolRef.current = snapshotComputePoolFromDraftKeepingPlaced(
-          persist.draft,
-          persist.after,
-          {
-            extraUsable: computePoolRef.current,
-            liveUnavailableIds: persist.unavailableCaddyIds,
-            opsDutyIds: opsDutyCaddyIds,
-          }
-        );
+        computePoolRef.current = liveClickSnapshotPool(persist.draft, {
+          extraUsable: computePoolRef.current,
+          liveUnavailableIds: persist.unavailableCaddyIds,
+          base: persist.after,
+          opsDutyIds: opsDutyCaddyIds,
+        });
         serverDraftVersionRef.current = persist.version;
         setDraftVersion(persist.version);
         setDraftSavedAt(persist.updatedAt);
@@ -1878,15 +1880,12 @@ export default function ManageAssignmentsOpsPage() {
           pending: pendingIntentsRef.current,
           specialSupportByShift,
           base: persist.after,
-          regularCaddyPool: snapshotComputePoolFromDraftKeepingPlaced(
-            persist.draft,
-            persist.after,
-            {
-              extraUsable: computePoolRef.current,
-              liveUnavailableIds: persist.unavailableCaddyIds,
-              opsDutyIds: opsDutyCaddyIds,
-            }
-          ),
+          regularCaddyPool: liveClickSnapshotPool(persist.draft, {
+            extraUsable: computePoolRef.current,
+            liveUnavailableIds: persist.unavailableCaddyIds,
+            base: persist.after,
+            opsDutyIds: opsDutyCaddyIds,
+          }),
         });
         for (const dropped of rest.dropped) {
           showToast(dropped.message);

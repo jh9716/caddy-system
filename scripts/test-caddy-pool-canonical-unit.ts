@@ -724,9 +724,10 @@ section("source: no stale unavailable union / no destructive pool shrink");
   );
   assert(
     /mergeRosterBaseline/.test(page) &&
-      /snapshotComputePoolFromDraftKeepingPlaced/.test(page) &&
+      /liveClickSnapshotPool/.test(page) &&
+      /confirmedDraftKeepingPlacedUnavailable/.test(page) &&
       /scheduleAfterPaint/.test(page),
-    "client keeps baseline and projects from snapshot after paint"
+    "client keeps baseline and projects from keeping-placed snapshot after paint"
   );
   assert(
     /data\.draft\?\.payload/.test(page) &&

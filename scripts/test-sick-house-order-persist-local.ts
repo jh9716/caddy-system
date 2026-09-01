@@ -18,7 +18,8 @@ import { parseYmd } from "../src/lib/availabilityEngine";
 import { compareCaddyOrder, reservationKey, type AutoAssignCaddy } from "../src/lib/autoAssignEngine";
 import {
   applyLiveResultToDraft,
-  snapshotComputePoolFromDraftKeepingPlaced,
+  confirmedDraftKeepingPlacedUnavailable,
+  liveClickSnapshotPool,
   type AssignmentDraft,
 } from "../src/lib/assignmentDraft";
 import {
@@ -230,7 +231,9 @@ async function main() {
   const extraUsable = draft0.caddyPool
     .filter((c) => (c.caddyType || "HOUSE") === "HOUSE" && used.has(c.id) && !LIVE_SICK.includes(c.id))
     .sort(compareCaddyOrder);
-  const clickPool = snapshotComputePoolFromDraftKeepingPlaced(draft0, null, {
+  const incoming: AssignmentDraft = { ...draft0, unavailableCaddyIds: LIVE_SICK };
+  const confirmed = confirmedDraftKeepingPlacedUnavailable(incoming);
+  const clickPool = liveClickSnapshotPool(confirmed, {
     extraUsable,
     liveUnavailableIds: LIVE_SICK,
   });
@@ -264,19 +267,24 @@ async function main() {
   let version = await seedDraft(draft0);
 
   console.log("\n== click optimistic ==");
+  assert(
+    (confirmed.unavailableCaddyIds || []).length === 0,
+    "hydrate overlay drops still-placed live SICK from confirmed Draft"
+  );
   const click = projectPendingIntents({
-    confirmedDraft: draft0,
+    confirmedDraft: confirmed,
     pending: [makeMutationIntent({ type: "CADDY_SICK", caddyId: VICTIM, shift: "1부" }, "click")!],
     regularCaddyPool: clickPool,
   });
   expectPullForward(draft0, click.draft, VICTIM);
   const clickFp = fp(click.draft);
   assert(clickFp.spare["1부"][0] === SPARE2 && clickFp.spare["1부"][1] === NEXT_UNUSED, `click spare ${clickFp.spare["1부"]}`);
+  assert(clickFp.spare["1부"][0] !== BAD1 && clickFp.spare["1부"][1] !== BAD2, "94/106 FAIL gate");
 
   console.log("\n== persist skipCanonical + click pool / live 12 sick overlay ==");
   const intent = makeMutationIntent({ type: "CADDY_SICK", caddyId: VICTIM, shift: "1부" }, "persist")!;
   const prepared = prepareIntentOnConfirmedDraft({
-    confirmedDraft: draft0,
+    confirmedDraft: confirmed,
     intent,
     regularCaddyPool: clickPool,
   });
@@ -309,7 +317,7 @@ async function main() {
     process.exit(1);
   }
   version = persist.draft.version;
-  const persistDraft = applyLiveResultToDraft(draft0, persist.preview.after);
+  const persistDraft = applyLiveResultToDraft(confirmed, persist.preview.after);
   const persistFp = fp(persistDraft);
   sameFp(clickFp, persistFp, "click vs persist preview.after");
 
@@ -374,19 +382,24 @@ async function main() {
   console.log("\n== consecutive second SICK ==");
   const afterFirst = payloadToAssignmentDraft((await getDailyBoardDraft(DATE))!.payload as never);
   const v2 = (await getDailyBoardDraft(DATE))!.version;
-  const pool2 = snapshotComputePoolFromDraftKeepingPlaced(afterFirst, null, {
+  const afterIncoming: AssignmentDraft = {
+    ...afterFirst,
+    unavailableCaddyIds: [...LIVE_SICK, VICTIM],
+  };
+  const afterConfirmed = confirmedDraftKeepingPlacedUnavailable(afterIncoming);
+  const pool2 = liveClickSnapshotPool(afterConfirmed, {
     extraUsable,
     liveUnavailableIds: [...LIVE_SICK, VICTIM],
   });
   const click2 = projectPendingIntents({
-    confirmedDraft: afterFirst,
+    confirmedDraft: afterConfirmed,
     pending: [makeMutationIntent({ type: "CADDY_SICK", caddyId: SECOND, shift: "1부" }, "s2")!],
     regularCaddyPool: pool2,
   });
   assert(!regularIds(click2.draft, "1부").includes(VICTIM), "second click: first victim stays gone");
   assert(!regularIds(click2.draft, "1부").includes(SECOND), "second click: second victim gone");
   const prepared3 = prepareIntentOnConfirmedDraft({
-    confirmedDraft: afterFirst,
+    confirmedDraft: afterConfirmed,
     intent: makeMutationIntent({ type: "CADDY_SICK", caddyId: SECOND, shift: "1부" }, "s2p")!,
     regularCaddyPool: pool2,
   });

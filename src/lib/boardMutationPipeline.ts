@@ -7,6 +7,8 @@
 import {
   applyLiveResultToDraft,
   autoResultFromDraft,
+  confirmedDraftKeepingPlacedUnavailable,
+  liveClickSnapshotPool,
   type AssignmentDraft,
 } from "@/lib/assignmentDraft";
 import {
@@ -113,16 +115,22 @@ export function prepareIntentOnConfirmedDraft(input: {
       };
     }
   }
-  const previous = autoResultFromDraft(
-    input.confirmedDraft,
-    input.base ?? null
+  const confirmedDraft = confirmedDraftKeepingPlacedUnavailable(
+    input.confirmedDraft
   );
+  const previous = autoResultFromDraft(confirmedDraft, input.base ?? null);
+  const regularCaddyPool =
+    input.regularCaddyPool ??
+    liveClickSnapshotPool(input.confirmedDraft, {
+      base: input.base ?? null,
+      liveUnavailableIds: input.confirmedDraft.unavailableCaddyIds,
+    });
   const preview = previewLiveChangeFromDraft({
-    draft: input.confirmedDraft,
+    draft: confirmedDraft,
     base: input.base ?? null,
     change: input.intent.change,
     specialSupportByShift: input.specialSupportByShift,
-    regularCaddyPool: input.regularCaddyPool,
+    regularCaddyPool,
   });
   const blocking = preview.warnings.find((w) => w.level === "error");
   if (blocking) {
@@ -137,7 +145,7 @@ export function prepareIntentOnConfirmedDraft(input: {
     ok: true,
     intent: input.intent,
     preview,
-    painted: applyLiveResultToDraft(input.confirmedDraft, preview.after),
+    painted: applyLiveResultToDraft(confirmedDraft, preview.after),
     previous,
   };
 }
