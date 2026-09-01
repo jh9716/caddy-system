@@ -138,6 +138,7 @@ export function isRosterSizedPool(
 /**
  * Click-path compute pool from the already-confirmed snapshot.
  * Never uses a full roster baseline (휴무 included) as reflow candidates.
+ * extraUsable may only append unused people — it must not replace assigned order.
  */
 export function snapshotComputePool(input: {
   rosterBaseline: readonly AutoAssignCaddy[];
@@ -157,16 +158,6 @@ export function snapshotComputePool(input: {
     offSheetIds: input.offSheetIds,
   };
   const extra = eligibleRegularReflowCaddies([...(input.extraUsable || [])]);
-  if (
-    extra.length > 0 &&
-    !isRosterSizedPool(extra.length, input.rosterBaseline.length)
-  ) {
-    return usableComputePool({
-      rosterBaseline: extra,
-      ...exclusions,
-    });
-  }
-
   const unused = eligibleRegularReflowCaddies([...(input.engineUnused || [])]);
   const unusedPolluted = isRosterSizedUnused({
     rosterBaselineCount: input.rosterBaseline.length,
@@ -175,7 +166,7 @@ export function snapshotComputePool(input: {
   });
   const assigned = eligibleRegularReflowCaddies([...(input.assigned || [])]);
   const byId = new Map<number, AutoAssignCaddy>();
-  for (const caddy of [...input.rosterBaseline, ...assigned, ...unused]) {
+  for (const caddy of [...input.rosterBaseline, ...assigned, ...unused, ...extra]) {
     if (caddy?.id > 0 && !byId.has(caddy.id)) byId.set(caddy.id, caddy);
   }
   const spares: AutoAssignCaddy[] = [];
@@ -184,8 +175,8 @@ export function snapshotComputePool(input: {
     if (found) spares.push(found);
   }
   const seed = unusedPolluted
-    ? mergeCaddyRoster(assigned, spares)
-    : mergeCaddyRoster(assigned, unused, spares);
+    ? mergeCaddyRoster(assigned, spares, extra)
+    : mergeCaddyRoster(assigned, unused, spares, extra);
   return usableComputePool({
     rosterBaseline: seed,
     ...exclusions,

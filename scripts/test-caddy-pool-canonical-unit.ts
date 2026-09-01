@@ -644,6 +644,16 @@ section("snapshotComputePool ignores baseline-sized unused");
     !fromAvail.some((c) => c.id === off[0].id),
     "availability usable does not include 휴무"
   );
+  const scrambled = [...leftover, ...assigned.slice().reverse()];
+  const fromScrambled = snapshotComputePool({
+    rosterBaseline: baseline,
+    assigned,
+    extraUsable: scrambled,
+  });
+  assert(
+    fromScrambled.slice(0, 3).map((c) => c.id).join(",") === "1,2,3",
+    "extraUsable scramble does not replace assigned HOUSE order"
+  );
 }
 
 section("source: no stale unavailable union / no destructive pool shrink");
@@ -671,6 +681,12 @@ section("source: no stale unavailable union / no destructive pool shrink");
     /applyLiveResultToDraft\(/.test(apply) &&
       /assignmentDraftToPayload\(synced\)/.test(apply),
     "persist writes canonical preview.after, not client-painted OFF spare"
+  );
+  assert(
+    /overlayUnavail/.test(apply) &&
+      /!placed\.has\(id\)/.test(apply) &&
+      /snapshotComputePool\(/.test(apply),
+    "persist does not drop still-placed HOUSE for leftover DailyCaddyUnavailable"
   );
   assert(
     /uniquePositiveIds\(after\.unavailableCaddyIds/.test(draft),
