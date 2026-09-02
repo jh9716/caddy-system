@@ -14,15 +14,19 @@ import {
 import type { AutoAssignmentRow } from "@/lib/autoAssignEngine";
 import type { SpareByShift } from "@/lib/autoAssignEngine";
 import { formatCaddyLabel } from "@/lib/caddyDisplay";
-import { COURSE_CODES, type CourseCode, type ShiftPart } from "@/lib/reservationParser";
+import type { DailyBoardPublishedPayloadV1 } from "@/lib/dailyBoardPublished";
+import {
+  COURSE_CODES,
+  COURSE_LABELS,
+  type CourseCode,
+  type ShiftPart,
+} from "@/lib/reservationParser";
 
 export const BOARD_EXPORT_SHIFTS: ShiftPart[] = ["1부", "2부", "3부"];
 
-export const BOARD_EXPORT_COURSE_SHORT: Record<CourseCode, string> = {
-  VERTHILL: "베",
-  SKY: "스",
-  OCEAN: "오",
-  LAKE: "레",
+/** 720px export 헤더용 코스명. 베/스/오/레 단축은 쓰지 않는다. */
+export const BOARD_EXPORT_COURSE_LABELS: Record<CourseCode, string> = {
+  ...COURSE_LABELS,
 };
 
 export type BoardExportSpare = {
@@ -52,7 +56,74 @@ export function spareLabelsFromShift(spare: SpareByShift | null | undefined): Bo
   };
 }
 
-/** /manage/assignments 배치표와 동일한 draft source */
+/**
+ * 최종 배치표(/board) payload → export가 재사용하는 draft shape.
+ * Published/Draft write 없음. 화면의 최신 payload만 읽는다.
+ */
+export function assignmentDraftFromPublishedPayload(
+  payload: DailyBoardPublishedPayloadV1
+): AssignmentDraft {
+  const assignments: AutoAssignmentRow[] = payload.placements.map((p, i) => {
+    const kind = p.chageun ? "fixed" : p.driving ? "driving" : p.kind;
+    return {
+      date: payload.date,
+      shift: p.shift,
+      sequenceIndex: p.sequenceIndex,
+      reason: p.chageun ? "찾근" : p.specialSupport ? "SPECIAL_SUPPORT" : "PUBLISHED",
+      kind,
+      locked: p.locked,
+      pairId: null,
+      reservation: {
+        id: p.reservationId ?? p.reservationKey ?? `pub-${i}`,
+        date: payload.date,
+        course: p.course,
+        shift: p.shift,
+        teeTime: p.teeTime,
+        teamName: p.teamName,
+        rawRowIndex: i + 1,
+        limousineCart: p.limousine === true,
+      },
+      caddy: {
+        id: Number.isInteger(p.caddyId) ? (p.caddyId as number) : -(i + 1),
+        name: p.caddyName,
+        team: p.caddyTeam,
+        teamOrder: 0,
+      },
+    };
+  });
+  const sparesByShift: SpareByShift[] = payload.sparesByShift.map((s) => ({
+    shift: s.shift,
+    spare1: s.spare1
+      ? {
+          caddyId: s.spare1.caddyId,
+          name: s.spare1.name,
+          team: s.spare1.team,
+          teamOrder: 0,
+        }
+      : null,
+    spare2: s.spare2
+      ? {
+          caddyId: s.spare2.caddyId,
+          name: s.spare2.name,
+          team: s.spare2.team,
+          teamOrder: 0,
+        }
+      : null,
+  }));
+  return {
+    date: payload.date,
+    status: "CONFIRMED",
+    assignments,
+    unassignedReservations: [],
+    closedCourseReservations: [],
+    openCourses: [...payload.openCourses],
+    caddyPool: [],
+    sparesByShift,
+    confirmedAt: null,
+  };
+}
+
+/** /manage/assignments 와 /board 가 넘긴 최신 board state */
 export function buildBoardExportSlice(
   draft: AssignmentDraft,
   shift: ShiftPart

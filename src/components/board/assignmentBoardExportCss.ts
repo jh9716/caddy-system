@@ -66,17 +66,18 @@ export const assignmentBoardExportCss = `
 }
 .bx-board-head {
   display: grid;
-  grid-template-columns: 52px repeat(4, minmax(0, 1fr));
+  grid-template-columns: 64px repeat(4, minmax(0, 1fr));
   background: #0f172a;
   color: #fff;
   border-radius: 8px 8px 0 0;
   overflow: hidden;
 }
 .bx-board-head > div {
-  padding: 8px 2px;
+  padding: 8px 1px;
   text-align: center;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 800;
+  letter-spacing: -0.02em;
 }
 .bx-board-head .closed {
   color: #94a3b8;
@@ -91,7 +92,7 @@ export const assignmentBoardExportCss = `
 }
 .bx-row {
   display: grid;
-  grid-template-columns: 52px repeat(4, minmax(0, 1fr));
+  grid-template-columns: 64px repeat(4, minmax(0, 1fr));
   border-top: 1px solid #e2e8f0;
 }
 .bx-row:first-child { border-top: 0; }
@@ -99,10 +100,10 @@ export const assignmentBoardExportCss = `
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
+  font-size: 16px;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
-  color: #334155;
+  color: #0f172a;
   background: #f8fafc;
   border-right: 1px solid #e2e8f0;
   min-height: 44px;
@@ -160,15 +161,6 @@ export const assignmentBoardExportCss = `
   width: 100%;
   min-width: 0;
   gap: 1px;
-}
-.bx-team {
-  font-size: 11px;
-  font-weight: 700;
-  color: #475569;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .bx-name {
   font-weight: 800;

@@ -1,6 +1,6 @@
 import React from "react";
 import {
-  BOARD_EXPORT_COURSE_SHORT,
+  BOARD_EXPORT_COURSE_LABELS,
   type BoardExportSlice,
 } from "@/lib/assignmentBoardExport";
 import { boardAssignmentMarks } from "@/lib/assignmentBoardView";
@@ -79,7 +79,7 @@ export function AssignmentBoardExportView({
             className={open.has(code) ? "" : "closed"}
             title={COURSE_LABELS[code]}
           >
-            {BOARD_EXPORT_COURSE_SHORT[code]}
+            {BOARD_EXPORT_COURSE_LABELS[code]}
           </div>
         ))}
       </div>
@@ -129,9 +129,6 @@ export function AssignmentBoardExportView({
                         key={`${row.reservation.id}-${row.caddy.id}`}
                         className="bx-slot"
                       >
-                        <span className="bx-team">
-                          {row.reservation.teamName || "팀"}
-                        </span>
                         <span className="bx-name">{row.caddy.name}</span>
                         <span className="bx-affil">{caddyAffiliation(row.caddy)}</span>
                         <ExportMarks row={row} allAssignments={allAssignments} />
