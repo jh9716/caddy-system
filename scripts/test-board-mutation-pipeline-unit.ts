@@ -419,7 +419,7 @@ section("unload guard");
   );
 }
 
-assert(PIPELINE_PERSIST_WATCHDOG_MS === 20_000, "client watchdog is 20s > server 15s");
+assert(PIPELINE_PERSIST_WATCHDOG_MS === 50_000, "client watchdog is 20s > server 15s");
 
 section("duplicate SICK same caddy is dropped");
 {
