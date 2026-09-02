@@ -4984,23 +4984,6 @@ function removeCaddyEffectiveFromShift(
   return eventFrom ?? "1부";
 }
 
-/**
- * 1·2부 둘 다 regular HOUSE로 소비된 캐디 1명 = 1부 추가 소비 1칸.
- * 클릭 shift/fromShift는 쓰지 않는다. 단일 1부·단일 2부는 0.
- */
-function dualShift1To2HouseConsumeCount(
-  previous: AutoAssignResultV1,
-  removedCaddyIds: Iterable<number>
-): number {
-  let extra = 0;
-  for (const caddyId of removedCaddyIds) {
-    const shift1 = regularHouseConsumeCount(previous, "1부", caddyId);
-    const shift2 = regularHouseConsumeCount(previous, "2부", caddyId);
-    if (shift1 > 0 && shift2 > 0) extra += shift1;
-  }
-  return extra;
-}
-
 function assignRemoveOnlyKeepingShiftOrder(input: {
   date: string;
   previous: AutoAssignResultV1;
@@ -5022,10 +5005,6 @@ function assignRemoveOnlyKeepingShiftOrder(input: {
   const combined = emptyRegularSequenceResult();
   combined.assignments = [...input.seedAssignments];
   combined.sparesByShift = [...input.seedSparesByShift];
-  const dualConsume = dualShift1To2HouseConsumeCount(
-    input.previous,
-    input.unavailableFromShift.keys()
-  );
   for (const shift of SHIFT_PARTS) {
     if (freezeSet.has(shift)) {
       const seeded = input.seedAssignments.filter((row) => row.shift === shift);
@@ -5035,17 +5014,13 @@ function assignRemoveOnlyKeepingShiftOrder(input: {
     }
     const shiftHouse = houseQueueForShift(input.previous, input.pool, shift);
     const shiftPools = splitCaddyPoolsPreservingOrder(shiftHouse);
-    const startAfterConsume =
-      shift === "2부" && dualConsume > 0
-        ? shiftPools.house[dualConsume]
-        : undefined;
     const seq = assignRegularSequence({
       date: input.date,
       house: shiftPools.house,
       third: shiftPools.third,
       reservations: input.regularReservations.filter((row) => row.shift === shift),
       reasonCode: input.reasonCode,
-      houseStartCaddyId: startAfterConsume?.id ?? null,
+      houseStartCaddyId: null,
       thirdStartTeam: input.thirdStartTeam,
       thirdStartCaddyId: shift === "3부" ? input.thirdStartCaddyId : null,
       thirdRoster: input.thirdRoster,
