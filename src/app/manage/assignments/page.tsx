@@ -414,6 +414,10 @@ export default function ManageAssignmentsOpsPage() {
   } | null>(null);
   const [loadingDutySheetPreview, setLoadingDutySheetPreview] = useState(false);
   const [loadingDutySheetApply, setLoadingDutySheetApply] = useState(false);
+  const [opsDutySyncNotice, setOpsDutySyncNotice] = useState<{
+    tone: "ok" | "review" | "fetch_failed";
+    text: string;
+  } | null>(null);
   const [shift1Options, setShift1Options] = useState<Shift1StartOption[]>([]);
   const [availability, setAvailability] = useState<
     (AvailabilityResult & { dailySummary?: DailyAvailabilitySummary }) | null
@@ -485,6 +489,7 @@ export default function ManageAssignmentsOpsPage() {
   const intentSeqRef = useRef(0);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const boardWrapRef = useRef<HTMLDivElement | null>(null);
+  const dateSettingsRef = useRef<HTMLDetailsElement | null>(null);
   draftRef.current = draft;
   autoResultRef.current = autoResult;
 
@@ -792,6 +797,7 @@ export default function ManageAssignmentsOpsPage() {
   }, [file, date]);
 
   useEffect(() => {
+    setOpsDutySyncNotice(null);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       setOpsDutyStored(null);
       setOpsDutyPreview(null);
@@ -1161,6 +1167,7 @@ export default function ManageAssignmentsOpsPage() {
     try {
       const form = new FormData();
       form.append("date", date);
+      form.append("syncOpsDutySheet", "1");
       if (dutyFile) form.append("dutyFile", dutyFile);
       const res = await fetch("/api/availability", {
         method: "POST",
@@ -1189,6 +1196,69 @@ export default function ManageAssignmentsOpsPage() {
           caddyIds: dutyIds,
         }));
       }
+      const sync = (
+        data as {
+          opsDutySync?: {
+            status: "synced" | "review" | "fetch_failed";
+            message: string;
+            savedCount?: number;
+            byRole?: Record<string, number>;
+            caddyIds?: number[];
+            preview?: {
+              sheetName?: string;
+              matchedCount: number;
+              reviewCount: number;
+              existingCount: number;
+              replaceRequired: boolean;
+              canApply: boolean;
+              applyBlockReason: string | null;
+              error?: string;
+              reviews: Array<{ rawName: string; reason: string; role?: string; roleKey?: string }>;
+              matched: Array<{ name: string; rawName: string; role: string; roleKey: string }>;
+              slots: Array<{
+                roleKey: string;
+                label: string;
+                rawName: string;
+                matchedName: string | null;
+                caddyId: number | null;
+                status: "empty" | "matched" | "review";
+                reason: string | null;
+              }>;
+            } | null;
+          };
+        }
+      ).opsDutySync;
+      const finalAvailable =
+        Number(data.dailySummary?.finalAvailable ?? data.counts?.available ?? 0);
+      if (sync?.status === "synced") {
+        setOpsDutyStored({
+          count: Number(sync.savedCount) || dutyIds.length,
+          byRole: sync.byRole,
+          caddyIds: Array.isArray(sync.caddyIds) ? sync.caddyIds : dutyIds,
+        });
+        const text = `${sync.message} · 최종 가용 ${finalAvailable}명`;
+        setOpsDutySyncNotice({ tone: "ok", text });
+        showToast(text);
+      } else if (sync?.status === "review") {
+        setOpsDutySyncNotice({ tone: "review", text: "운영배치 확인 필요" });
+        if (sync.preview) setOpsDutySheetPreview(sync.preview);
+        showToast("운영배치 확인 필요");
+        requestAnimationFrame(() => {
+          if (dateSettingsRef.current) dateSettingsRef.current.open = true;
+          document
+            .getElementById("ops-duty-sheet-block")
+            ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        });
+      } else if (sync?.status === "fetch_failed") {
+        setOpsDutySyncNotice({
+          tone: "fetch_failed",
+          text: sync.message || "운영배치 Spreadsheet를 읽지 못해 기존 일정을 유지합니다.",
+        });
+        showToast(`최종 가용 ${finalAvailable}명 로드`);
+      } else {
+        setOpsDutySyncNotice(null);
+        showToast(`최종 가용 ${finalAvailable}명 로드`);
+      }
       if (draftRef.current && draftRef.current.date === date) {
         const current = draftRef.current;
         const next = {
@@ -1214,7 +1284,6 @@ export default function ManageAssignmentsOpsPage() {
         queueDraftSave(next);
       }
       setHouseStartCaddyId("");
-      showToast(`최종 가용 ${data.counts?.available ?? 0}명 로드`);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "가용 요청 실패");
     } finally {
@@ -2882,6 +2951,36 @@ export default function ManageAssignmentsOpsPage() {
                 최종 가용 {availability.dailySummary.finalAvailable}
               </li>
             </ul>
+            {opsDutySyncNotice && (
+              <div
+                className={
+                  opsDutySyncNotice.tone === "review"
+                    ? "ops-error"
+                    : "ops-meta"
+                }
+              >
+                {opsDutySyncNotice.text}
+                {opsDutySyncNotice.tone === "review" ? (
+                  <>
+                    {" "}
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => {
+                        if (dateSettingsRef.current) {
+                          dateSettingsRef.current.open = true;
+                        }
+                        document
+                          .getElementById("ops-duty-sheet-block")
+                          ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                      }}
+                    >
+                      운영배치 불러오기에서 확인
+                    </button>
+                  </>
+                ) : null}
+              </div>
+            )}
             {(availability.dailySummary.duplicates || []).length > 0 && (
               <div className="ops-daily-reviews">
                 <div className="ops-daily-title">중복 상세</div>
@@ -2947,7 +3046,7 @@ export default function ManageAssignmentsOpsPage() {
             ) : null}
           </div>
         )}
-        <details className="ops-date-settings">
+        <details className="ops-date-settings" ref={dateSettingsRef}>
           <summary>날짜 설정 (당번·마샬, 특수근무, 코스)</summary>
           <label className="ops-field">
             <span>당번·마샬·조장 Excel (xlsx/xlsm)</span>
@@ -3019,7 +3118,7 @@ export default function ManageAssignmentsOpsPage() {
               </div>
             )}
           </label>
-          <div className="ops-field">
+          <div className="ops-field" id="ops-duty-sheet-block">
             <span>당번·마샬·조장 Google Spreadsheet</span>
             <div className="ops-duty-actions">
               <button

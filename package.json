@@ -65,6 +65,7 @@
     "test:special-placement-unit": "bash scripts/tsx-safe.sh scripts/test-special-placement-unit.ts",
     "test:daily-ops-duty-unit": "bash scripts/tsx-safe.sh scripts/test-daily-ops-duty-unit.ts",
     "test:ops-duty-sheet-unit": "bash scripts/tsx-safe.sh scripts/test-ops-duty-sheet-unit.ts",
+    "test:ops-duty-sheet-autosync-unit": "bash scripts/tsx-safe.sh scripts/test-ops-duty-sheet-autosync-unit.ts",
     "test:third-weekly-rotation-unit": "bash scripts/tsx-safe.sh scripts/test-third-weekly-rotation-unit.ts",
     "test:admin-tools-unit": "bash scripts/tsx-safe.sh scripts/test-admin-tools-unit.ts",
     "test:reflow-feedback-unit": "bash scripts/tsx-safe.sh scripts/test-reflow-feedback-unit.ts"
