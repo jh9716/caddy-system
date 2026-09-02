@@ -391,6 +391,29 @@ export default function ManageAssignmentsOpsPage() {
   } | null>(null);
   const [loadingDutyPreview, setLoadingDutyPreview] = useState(false);
   const [loadingDutyApply, setLoadingDutyApply] = useState(false);
+  const [opsDutySheetPreview, setOpsDutySheetPreview] = useState<{
+    sheetName?: string;
+    matchedCount: number;
+    reviewCount: number;
+    existingCount: number;
+    replaceRequired: boolean;
+    canApply: boolean;
+    applyBlockReason: string | null;
+    error?: string;
+    reviews: Array<{ rawName: string; reason: string; role?: string; roleKey?: string }>;
+    matched: Array<{ name: string; rawName: string; role: string; roleKey: string }>;
+    slots: Array<{
+      roleKey: string;
+      label: string;
+      rawName: string;
+      matchedName: string | null;
+      caddyId: number | null;
+      status: "empty" | "matched" | "review";
+      reason: string | null;
+    }>;
+  } | null>(null);
+  const [loadingDutySheetPreview, setLoadingDutySheetPreview] = useState(false);
+  const [loadingDutySheetApply, setLoadingDutySheetApply] = useState(false);
   const [shift1Options, setShift1Options] = useState<Shift1StartOption[]>([]);
   const [availability, setAvailability] = useState<
     (AvailabilityResult & { dailySummary?: DailyAvailabilitySummary }) | null
@@ -772,6 +795,7 @@ export default function ManageAssignmentsOpsPage() {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       setOpsDutyStored(null);
       setOpsDutyPreview(null);
+      setOpsDutySheetPreview(null);
       return;
     }
     let cancelled = false;
@@ -1323,6 +1347,134 @@ export default function ManageAssignmentsOpsPage() {
       setError(e instanceof Error ? e.message : "당번 일정 저장 실패");
     } finally {
       setLoadingDutyApply(false);
+    }
+  }
+
+  async function previewOpsDutySheet() {
+    if (!date) {
+      setError("날짜를 선택하세요.");
+      return;
+    }
+    setLoadingDutySheetPreview(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/daily-ops-duties/sheet-preview?date=${encodeURIComponent(date)}`,
+        { credentials: "include" }
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        setOpsDutySheetPreview({
+          matchedCount: 0,
+          reviewCount: 0,
+          existingCount: 0,
+          replaceRequired: false,
+          canApply: false,
+          applyBlockReason: data.error || "운영배치 불러오기 실패",
+          error: data.error || "운영배치 불러오기 실패",
+          reviews: Array.isArray(data.reviews) ? data.reviews : [],
+          matched: Array.isArray(data.matched) ? data.matched : [],
+          slots: Array.isArray(data.slots) ? data.slots : [],
+        });
+        setError(data.error || "운영배치 불러오기 실패");
+        return;
+      }
+      setOpsDutySheetPreview({
+        sheetName: data.sheetName,
+        matchedCount: Number(data.matchedCount) || 0,
+        reviewCount: Number(data.reviewCount) || 0,
+        existingCount: Number(data.existingCount) || 0,
+        replaceRequired: Boolean(data.replaceRequired),
+        canApply: Boolean(data.canApply),
+        applyBlockReason: data.applyBlockReason || null,
+        reviews: Array.isArray(data.reviews) ? data.reviews : [],
+        matched: Array.isArray(data.matched) ? data.matched : [],
+        slots: Array.isArray(data.slots) ? data.slots : [],
+      });
+      showToast(
+        `운영배치 미리보기 ${data.matchedCount}명` +
+          (data.existingCount ? ` · 기존 ${data.existingCount}건 교체 필요` : "")
+      );
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "운영배치 불러오기 실패");
+    } finally {
+      setLoadingDutySheetPreview(false);
+    }
+  }
+
+  async function applyOpsDutySheet() {
+    if (!date) {
+      setError("날짜를 선택하세요.");
+      return;
+    }
+    if (!opsDutySheetPreview?.canApply) {
+      setError(
+        opsDutySheetPreview?.applyBlockReason ||
+          opsDutySheetPreview?.error ||
+          "운영배치를 적용할 수 없습니다. 미리보기를 확인하세요."
+      );
+      return;
+    }
+    if (opsDutySheetPreview.replaceRequired) {
+      const ok = window.confirm(
+        `이 날짜에 이미 당번·마샬·조장 일정 ${opsDutySheetPreview.existingCount}건이 있습니다. Spreadsheet 내용으로 교체할까요?`
+      );
+      if (!ok) return;
+    }
+    setLoadingDutySheetApply(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/daily-ops-duties/sheet-apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ date, confirmReplace: true }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "운영배치 적용 실패");
+        return;
+      }
+      setOpsDutyStored({
+        count: Number(data.savedCount) || 0,
+        byRole: data.byRole,
+        caddyIds: Array.isArray(data.saved)
+          ? data.saved.map((r: { caddyId: number }) => r.caddyId)
+          : [],
+      });
+      setOpsDutySheetPreview(null);
+      showToast(`운영배치 ${data.savedCount}명 적용`);
+      const availForm = new FormData();
+      availForm.append("date", date);
+      const availRes = await fetch("/api/availability", {
+        method: "POST",
+        body: availForm,
+        credentials: "include",
+      });
+      const availData = await availRes.json();
+      if (availRes.ok) {
+        setAvailability(
+          availData as AvailabilityResult & { dailySummary?: DailyAvailabilitySummary }
+        );
+        if (draftRef.current) {
+          const current = draftRef.current;
+          const next = {
+            ...current,
+            caddyPool: mergeRosterBaseline(
+              current.caddyPool,
+              rosterBaselineFromAvailability(
+                availData as AvailabilityResult
+              )
+            ),
+          };
+          setDraft(next);
+          queueDraftSave(next);
+        }
+      }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "운영배치 적용 실패");
+    } finally {
+      setLoadingDutySheetApply(false);
     }
   }
 
@@ -2867,6 +3019,81 @@ export default function ManageAssignmentsOpsPage() {
               </div>
             )}
           </label>
+          <div className="ops-field">
+            <span>당번·마샬·조장 Google Spreadsheet</span>
+            <div className="ops-duty-actions">
+              <button
+                type="button"
+                className="ghost"
+                onClick={previewOpsDutySheet}
+                disabled={loadingDutySheetPreview || !date}
+              >
+                {loadingDutySheetPreview ? "불러오는 중…" : "운영배치 불러오기"}
+              </button>
+              <button
+                type="button"
+                onClick={applyOpsDutySheet}
+                disabled={
+                  loadingDutySheetApply ||
+                  !opsDutySheetPreview?.canApply
+                }
+              >
+                {loadingDutySheetApply
+                  ? "적용…"
+                  : opsDutySheetPreview?.replaceRequired
+                    ? "운영배치 교체 적용"
+                    : "적용"}
+              </button>
+            </div>
+            {opsDutySheetPreview && (
+              <div className="ops-daily">
+                <div className="ops-daily-title">
+                  운영배치 Spreadsheet 미리보기
+                  {opsDutySheetPreview.sheetName
+                    ? ` · ${opsDutySheetPreview.sheetName}`
+                    : ""}
+                </div>
+                {opsDutySheetPreview.error && (
+                  <div className="ops-error">{opsDutySheetPreview.error}</div>
+                )}
+                {!opsDutySheetPreview.error && opsDutySheetPreview.applyBlockReason && (
+                  <div className="ops-error">{opsDutySheetPreview.applyBlockReason}</div>
+                )}
+                <ul className="ops-duty-slots">
+                  {opsDutySheetPreview.slots.map((slot) => (
+                    <li
+                      key={slot.roleKey}
+                      className={`ops-duty-slot ${slot.status}`}
+                    >
+                      <span className="ops-duty-slot-role">{slot.label}</span>
+                      <span className="ops-duty-slot-names">
+                        <span className="ops-duty-slot-raw">
+                          {slot.rawName || "—"}
+                        </span>
+                        {slot.matchedName ? (
+                          <span className="ops-duty-slot-matched">
+                            → {slot.matchedName}
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className={`ops-duty-slot-status ${slot.status}`}>
+                        {slot.status === "matched"
+                          ? "매칭 성공"
+                          : slot.status === "review"
+                            ? `확인 필요${slot.reason ? ` · ${slot.reason}` : ""}`
+                            : "없음"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <ul className="ops-daily-list">
+                  <li>매칭 {opsDutySheetPreview.matchedCount}명</li>
+                  <li>확인 필요 {opsDutySheetPreview.reviewCount}</li>
+                  <li>기존 저장 {opsDutySheetPreview.existingCount}건</li>
+                </ul>
+              </div>
+            )}
+          </div>
           <div className="ops-courses" aria-label="코스 Open/Close">
             <div className="ops-courses-label">
               코스 운영 (기본 전부 ON · OFF 코스는 배치 제외)
@@ -3804,6 +4031,48 @@ const opsCss = `
     gap: 8px;
     margin-top: 8px;
   }
+  .ops-duty-actions button {
+    min-height: 42px;
+    padding: 0 12px;
+    border-radius: 10px;
+    border: 1px solid #cbd5e1;
+    background: #fff;
+    font-size: 0.9rem;
+    cursor: pointer;
+  }
+  .ops-duty-actions button.ghost {
+    background: #f8fafc;
+  }
+  .ops-duty-actions button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .ops-duty-slots {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 6px;
+  }
+  .ops-duty-slot {
+    display: grid;
+    grid-template-columns: 7.2rem minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: start;
+    font-size: 0.8rem;
+  }
+  .ops-duty-slot-role { font-weight: 700; color: #1c1917; }
+  .ops-duty-slot-names {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    min-width: 0;
+  }
+  .ops-duty-slot-raw { color: #334155; }
+  .ops-duty-slot-matched { color: #14532d; font-weight: 700; }
+  .ops-duty-slot-status.matched { color: #14532d; font-weight: 700; }
+  .ops-duty-slot-status.review { color: #9a3412; font-weight: 700; }
+  .ops-duty-slot-status.empty { color: #78716c; }
   .ops-daily {
     border: 1px solid #e7e5e4;
     background: #fafaf9;
