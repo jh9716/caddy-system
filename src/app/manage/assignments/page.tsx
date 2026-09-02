@@ -34,6 +34,7 @@ import {
   boardAssignmentMarks,
   buildShiftBoard,
 } from "@/lib/assignmentBoardView";
+import { BoardImageExportMenu } from "@/components/board/BoardImageExportMenu";
 import { formatCaddyLabel, caddyAffiliation } from "@/lib/caddyDisplay";
 import {
   formatPublishedAt,
@@ -3327,17 +3328,20 @@ export default function ManageAssignmentsOpsPage() {
                     목록
                   </button>
                 </div>
-                <button
-                  type="button"
-                  className="ops-add-team"
-                  onClick={() => {
-                    if (moveKey) return;
-                    setAddTeamOpen(true);
-                  }}
-                  disabled={!!moveKey || moveApplying}
-                >
-                  {moveKey ? "이동 중" : "+ 추가팀"}
-                </button>
+                <div className="ops-board-tools-end">
+                  <BoardImageExportMenu draft={draft} onNotice={showToast} />
+                  <button
+                    type="button"
+                    className="ops-add-team"
+                    onClick={() => {
+                      if (moveKey) return;
+                      setAddTeamOpen(true);
+                    }}
+                    disabled={!!moveKey || moveApplying}
+                  >
+                    {moveKey ? "이동 중" : "+ 추가팀"}
+                  </button>
+                </div>
               </div>
             )}
 
@@ -4254,6 +4258,51 @@ const opsCss = `
     align-items: center;
     justify-content: space-between;
   }
+  .ops-board-tools-end {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex: 0 0 auto;
+  }
+  .bx-export-menu { position: relative; }
+  .bx-export-btn {
+    min-height: 32px;
+    padding: 0 10px;
+    border-radius: 8px;
+    border: 1px solid #cbd5e1;
+    background: #fff;
+    color: #0f172a;
+    font-size: 0.78rem;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .bx-export-btn:disabled { opacity: 0.55; cursor: wait; }
+  .bx-export-pop {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 4px);
+    z-index: 8;
+    min-width: 168px;
+    display: grid;
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    box-shadow: 0 10px 24px rgb(15 23 42 / 12%);
+    overflow: hidden;
+  }
+  .bx-export-pop button {
+    border: 0;
+    background: #fff;
+    text-align: left;
+    padding: 10px 12px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: #0f172a;
+    cursor: pointer;
+  }
+  .bx-export-pop button + button { border-top: 1px solid #f1f5f9; }
+  .bx-export-pop button:hover { background: #f8fafc; }
   .ops-add-team {
     min-height: 32px;
     padding: 0 10px;
