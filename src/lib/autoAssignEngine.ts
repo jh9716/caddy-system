@@ -4731,7 +4731,7 @@ function freezeShiftsWithoutRemovedCaddies(
 
 /**
  * SICK removeOnly용 원형 HOUSE 큐.
- * 1부 regular 보드 순서 + 당일 spare + 보드 leftover를 origin으로 유지한다.
+ * 1부 regular 보드 순서 + 1부 spare + 보드 leftover를 origin으로 유지한다.
  * leftover unused는 당일 snapshot(previous.unusedCaddies)에서만 붙인다.
  * recoverComputePool / DB ACTIVE extra(board·unused에 없는 pool HOUSE)는 tail로 쓰지 않는다.
  * pool 밖의 OFF/SICK/unavailable/RETIRED는 allow-map에서 걸러진다.
