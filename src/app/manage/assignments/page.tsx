@@ -4031,6 +4031,22 @@ const opsCss = `
     gap: 8px;
     margin-top: 8px;
   }
+  .ops-duty-actions button {
+    min-height: 42px;
+    padding: 0 12px;
+    border-radius: 10px;
+    border: 1px solid #cbd5e1;
+    background: #fff;
+    font-size: 0.9rem;
+    cursor: pointer;
+  }
+  .ops-duty-actions button.ghost {
+    background: #f8fafc;
+  }
+  .ops-duty-actions button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
   .ops-duty-slots {
     margin: 0;
     padding: 0;
