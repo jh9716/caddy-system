@@ -5,7 +5,13 @@
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { computeAutoAssignmentsV1, assignRegularSequence, type AutoAssignCaddy } from "../src/lib/autoAssignEngine";
+import {
+  assignRegularSequence,
+  compareCaddyOrder,
+  compareReservationOrder,
+  computeAutoAssignmentsV1,
+  type AutoAssignCaddy,
+} from "../src/lib/autoAssignEngine";
 import {
   applyLiveResultToDraft,
   confirmedDraftKeepingPlacedUnavailable,
@@ -15,7 +21,6 @@ import {
 } from "../src/lib/assignmentDraft";
 import { previewLiveChangeFromDraft, type LiveChangeInput } from "../src/lib/assignmentChange";
 import { parseDailyBoardDraftPayload, payloadToAssignmentDraft } from "../src/lib/dailyBoardDraft";
-import { compareCaddyOrder } from "../src/lib/autoAssignEngine";
 import {
   overlayUnavailableIdsKeepingPlaced,
   placedCaddyIdsFromBoard,
@@ -73,7 +78,12 @@ function regularIds(assignments: Array<{ shift?: string; kind?: string; sequence
         row.kind === "regular" &&
         (row.caddy.caddyType || "HOUSE") === "HOUSE"
     )
-    .sort((a, b) => (a.sequenceIndex || 0) - (b.sequenceIndex || 0))
+    .sort((a, b) => {
+      if (a.reservation && b.reservation) {
+        return compareReservationOrder(a.reservation as never, b.reservation as never);
+      }
+      return (a.sequenceIndex || 0) - (b.sequenceIndex || 0);
+    })
     .map((row) => row.caddy.id);
 }
 
@@ -414,8 +424,8 @@ section("CASE D/E: 단일 1부·단일 2부 HOUSE SICK keeps circular cursor");
   assert(d2[0] === 141, "CASE D 1부 extra consume → 2부 first 안한빛");
   assert(d2[0] !== d1[0], "CASE D 2부 first not reset");
   assert(wrapIndex(d2, d1) > 0, "CASE D leftover prefix");
-  const only2 = 198;
-  assert(!before1.includes(only2), "이지현 not in 1부 regular");
+  const only2 = 152;
+  assert(!before1.includes(only2), "남궁정호 is 2부 leftover, not 1부 regular");
   const e = previewLiveChangeFromDraft({
     draft,
     change: { type: "CADDY_SICK", caddyId: only2, shift: "2부" },

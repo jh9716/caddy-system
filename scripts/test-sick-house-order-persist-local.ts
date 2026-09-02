@@ -15,7 +15,12 @@ assertLocalFixtureDatabase(process.env.DATABASE_URL);
 
 import { prisma } from "../src/lib/prisma";
 import { parseYmd } from "../src/lib/availabilityEngine";
-import { compareCaddyOrder, reservationKey, type AutoAssignCaddy } from "../src/lib/autoAssignEngine";
+import {
+  compareAssignmentOrder,
+  compareCaddyOrder,
+  reservationKey,
+  type AutoAssignCaddy,
+} from "../src/lib/autoAssignEngine";
 import {
   applyLiveResultToDraft,
   confirmedDraftKeepingPlacedUnavailable,
@@ -78,7 +83,7 @@ function regularIds(draft: AssignmentDraft, shift: string) {
         row.kind === "regular" &&
         (row.caddy.caddyType || "HOUSE") === "HOUSE"
     )
-    .sort((a, b) => a.sequenceIndex - b.sequenceIndex)
+    .sort(compareAssignmentOrder)
     .map((row) => row.caddy.id);
 }
 

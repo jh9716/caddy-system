@@ -2529,10 +2529,9 @@ export function assignRegularSequence(input: {
     for (const row of seeded) {
       assignments.push(row);
       usedInShift.add(row.caddy.id);
-      if (
-        normalizeAssignCaddyType(row.caddy.caddyType) !== "DRIVING" &&
-        !isThirdBandTeam(row.caddy.team)
-      ) {
+      // Cursor follows regular HOUSE consume only. 1막/1·2/1·3/54홀/fixed
+      // are non-consumers even if they are seeded on a frozen shift.
+      if (row.kind === "regular" && isHouseRegularCaddy(row.caddy)) {
         houseAssigned += 1;
       }
       byShift[shift].assigned += 1;
@@ -4733,8 +4732,10 @@ function freezeShiftsWithoutRemovedCaddies(
 /**
  * SICK removeOnly용 원형 HOUSE 큐.
  * 1부 regular 보드 순서 + 1부 스페어를 유지한 뒤, 남은 HOUSE는
- * canonical(team-order) leftover로 붙인다. 잘못된 2부 보드(1부 first로
- * 리셋된 상태)는 쓰지 않는다. 큐[0]이 이미 1부 origin이므로 재회전하지 않는다.
+ * 기존 보드(1·2·3부 regular+spare) 안의 canonical leftover만 붙인다.
+ * 풀에만 있고 보드에 없던 HOUSE는 끼워 넣지 않는다. 잘못된 2부 보드
+ * (sequenceIndex 원점 리셋)는 쓰지 않는다. 큐[0]이 이미 1부 origin이므로
+ * 재회전하지 않는다.
  */
 function circularHouseFromBoardAndCanonical(
   previous: AutoAssignResultV1,
@@ -4762,7 +4763,23 @@ function circularHouseFromBoardAndCanonical(
     if (!slot?.caddyId) continue;
     push(allow.get(slot.caddyId));
   }
-  for (const caddy of splitCaddyPools(pool).house) push(caddy);
+  const usable = new Set<number>();
+  for (const row of previous.assignments) {
+    if (row.kind === "regular" && isHouseRegularCaddy(row.caddy)) {
+      usable.add(row.caddy.id);
+    }
+  }
+  for (const row of previous.sparesByShift || []) {
+    if (row.spare1?.caddyId) usable.add(row.spare1.caddyId);
+    if (row.spare2?.caddyId) usable.add(row.spare2.caddyId);
+  }
+  for (const caddy of splitCaddyPools(pool).house) {
+    if (usable.has(caddy.id)) push(caddy);
+  }
+  const unusedHouse = (previous.unusedCaddies || []).filter(isHouseRegularCaddy);
+  if (unusedHouse.length > 0 && unusedHouse.length <= 8) {
+    for (const caddy of unusedHouse) push(caddy);
+  }
   return ordered;
 }
 
