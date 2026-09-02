@@ -50,7 +50,7 @@ export const PIPELINE_INTENT_DROPPED_TOAST =
 export const PIPELINE_LEADING_FAIL_TOAST =
   "이 변경은 저장하지 못했습니다. 이미 확정된 배치는 유지합니다.";
 /** Client persist abort after server 15s OFF timeout, with slack. */
-export const PIPELINE_PERSIST_WATCHDOG_MS = 20_000;
+export const PIPELINE_PERSIST_WATCHDOG_MS = 50_000;
 
 export function isPipelineMutation(
   type: string | undefined | null

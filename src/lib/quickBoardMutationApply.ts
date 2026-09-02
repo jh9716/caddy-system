@@ -280,7 +280,7 @@ export async function applyQuickBoardMutation(input: {
         });
         return { live, draft };
       },
-      { maxWait: 10_000, timeout: 20_000 }
+      { maxWait: 10_000, timeout: 40_000 }
     );
     return {
       ok: true,
