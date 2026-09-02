@@ -4758,11 +4758,10 @@ function circularHouseFromBoardAndCanonical(
     )
     .sort((a, b) => a.sequenceIndex - b.sequenceIndex);
   for (const row of rows) push(row.caddy);
-  for (const row of previous.sparesByShift || []) {
-    for (const slot of [row.spare1, row.spare2]) {
-      if (!slot?.caddyId) continue;
-      push(allow.get(slot.caddyId));
-    }
+  const shift1Spare = (previous.sparesByShift || []).find((row) => row.shift === "1부");
+  for (const slot of [shift1Spare?.spare1, shift1Spare?.spare2]) {
+    if (!slot?.caddyId) continue;
+    push(allow.get(slot.caddyId));
   }
   const onBoard = new Set<number>();
   for (const row of previous.assignments) {
