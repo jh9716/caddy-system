@@ -2529,10 +2529,9 @@ export function assignRegularSequence(input: {
     for (const row of seeded) {
       assignments.push(row);
       usedInShift.add(row.caddy.id);
-      if (
-        normalizeAssignCaddyType(row.caddy.caddyType) !== "DRIVING" &&
-        !isThirdBandTeam(row.caddy.team)
-      ) {
+      // Cursor follows regular HOUSE consume only. 1막/1·2/1·3/54홀/fixed
+      // are non-consumers even if they are seeded on a frozen shift.
+      if (row.kind === "regular" && isHouseRegularCaddy(row.caddy)) {
         houseAssigned += 1;
       }
       byShift[shift].assigned += 1;
@@ -4707,6 +4706,10 @@ function shiftUsesCaddy(
  * 1부/2부 REMOVE_CADDY가 3부 board에 없어도 3부를 통째로 재계산하지는 않는다.
  * HOUSE leftover 구간과 HOUSE spare는 assignRemoveOnlyKeepingShiftOrder가
  * refillFrozenThirdHouseLeftover로 새 remaining을 반영한다.
+ *
+ * 1·2부는 하나의 원형 HOUSE 큐다. 1부만 빠진 경우 2부를 동결하면
+ * 1부 추가 소비가 2부 시작점으로 전달되지 않고, freeze 예약이 seedMap에서
+ * 빠져 2부를 재배치할 수도 없다. 2부는 1·2 모두 안 건드린 때만 동결한다.
  */
 function freezeShiftsWithoutRemovedCaddies(
   previous: AutoAssignResultV1,
@@ -4716,12 +4719,25 @@ function freezeShiftsWithoutRemovedCaddies(
     return [];
   }
   const ids = events.map((event) => event.caddyId);
-  return SHIFT_PARTS.filter(
-    (shift) => !ids.some((id) => shiftUsesCaddy(previous, shift, id))
-  );
+  const used1 = ids.some((id) => shiftUsesCaddy(previous, "1부", id));
+  const used2 = ids.some((id) => shiftUsesCaddy(previous, "2부", id));
+  const used3 = ids.some((id) => shiftUsesCaddy(previous, "3부", id));
+  const freeze: ShiftPart[] = [];
+  if (!used1) freeze.push("1부");
+  if (!used1 && !used2) freeze.push("2부");
+  if (!used3) freeze.push("3부");
+  return freeze;
 }
 
-function houseQueueFromPreviousBoard(
+/**
+ * SICK removeOnly용 원형 HOUSE 큐.
+ * 1부 regular 보드 순서 + 1부 spare + 보드 leftover를 origin으로 유지한다.
+ * leftover unused는 당일 snapshot(previous.unusedCaddies)에서만 붙인다.
+ * recoverComputePool / DB ACTIVE extra(board·unused에 없는 pool HOUSE)는 tail로 쓰지 않는다.
+ * pool 밖의 OFF/SICK/unavailable/RETIRED는 allow-map에서 걸러진다.
+ * 큐[0]이 이미 1부 origin이므로 재회전하지 않는다.
+ */
+function circularHouseFromBoardAndCanonical(
   previous: AutoAssignResultV1,
   pool: AutoAssignCaddy[]
 ): AutoAssignCaddy[] {
@@ -4733,44 +4749,43 @@ function houseQueueFromPreviousBoard(
     seen.add(caddy.id);
     ordered.push(allow.get(caddy.id) || caddy);
   };
-  for (const shift of SHIFT_PARTS) {
-    const rows = previous.assignments
-      .filter((row) => row.shift === shift && row.kind === "regular")
-      .sort((a, b) => a.sequenceIndex - b.sequenceIndex);
-    for (const row of rows) push(row.caddy);
-    const spare = (previous.sparesByShift || []).find((row) => row.shift === shift);
-    for (const slot of [spare?.spare1, spare?.spare2]) {
-      if (!slot?.caddyId) continue;
-      push(allow.get(slot.caddyId));
-    }
-  }
-  for (const caddy of pool) push(caddy);
-  return ordered;
-}
-
-function houseQueueForShift(
-  previous: AutoAssignResultV1,
-  pool: AutoAssignCaddy[],
-  shift: ShiftPart
-): AutoAssignCaddy[] {
-  const allow = new Map(pool.map((caddy) => [caddy.id, caddy]));
-  const ordered: AutoAssignCaddy[] = [];
-  const seen = new Set<number>();
-  const push = (caddy: AutoAssignCaddy | null | undefined) => {
-    if (!caddy || !allow.has(caddy.id) || seen.has(caddy.id)) return;
-    seen.add(caddy.id);
-    ordered.push(allow.get(caddy.id) || caddy);
-  };
   const rows = previous.assignments
-    .filter((row) => row.shift === shift && row.kind === "regular")
+    .filter(
+      (row) =>
+        row.shift === "1부" &&
+        row.kind === "regular" &&
+        isHouseRegularCaddy(row.caddy)
+    )
     .sort((a, b) => a.sequenceIndex - b.sequenceIndex);
   for (const row of rows) push(row.caddy);
-  const spare = (previous.sparesByShift || []).find((row) => row.shift === shift);
-  for (const slot of [spare?.spare1, spare?.spare2]) {
+  const shift1Spare = (previous.sparesByShift || []).find((row) => row.shift === "1부");
+  for (const slot of [shift1Spare?.spare1, shift1Spare?.spare2]) {
     if (!slot?.caddyId) continue;
     push(allow.get(slot.caddyId));
   }
-  for (const caddy of pool) push(caddy);
+  const onBoard = new Set<number>();
+  for (const row of previous.assignments) {
+    if (row.kind === "regular" && isHouseRegularCaddy(row.caddy)) {
+      onBoard.add(row.caddy.id);
+    }
+  }
+  for (const row of previous.sparesByShift || []) {
+    if (row.spare1?.caddyId) onBoard.add(row.spare1.caddyId);
+    if (row.spare2?.caddyId) onBoard.add(row.spare2.caddyId);
+  }
+  for (const caddy of splitCaddyPools(pool).house) {
+    if (onBoard.has(caddy.id)) push(caddy);
+  }
+  const unusedHouse = (previous.unusedCaddies || []).filter(isHouseRegularCaddy);
+  const unusedIds = new Set(unusedHouse.map((caddy) => caddy.id));
+  // Pool HOUSE that are on neither the board nor unused snapshot exist
+  // only because recoverComputePool merged roster/SoT extras.
+  const poolHasRecoverExtras = splitCaddyPools(pool).house.some(
+    (caddy) => !onBoard.has(caddy.id) && !unusedIds.has(caddy.id)
+  );
+  if (!poolHasRecoverExtras) {
+    for (const caddy of unusedHouse) push(caddy);
+  }
   return ordered;
 }
 
@@ -4984,33 +4999,18 @@ function removeCaddyEffectiveFromShift(
   return eventFrom ?? "1부";
 }
 
-/**
- * 1·2부 둘 다 regular HOUSE로 소비된 캐디 1명 = 1부 추가 소비 1칸.
- * 클릭 shift/fromShift는 쓰지 않는다. 단일 1부·단일 2부는 0.
- */
-function dualShift1To2HouseConsumeCount(
-  previous: AutoAssignResultV1,
-  removedCaddyIds: Iterable<number>
-): number {
-  let extra = 0;
-  for (const caddyId of removedCaddyIds) {
-    const shift1 = regularHouseConsumeCount(previous, "1부", caddyId);
-    const shift2 = regularHouseConsumeCount(previous, "2부", caddyId);
-    if (shift1 > 0 && shift2 > 0) extra += shift1;
-  }
-  return extra;
-}
-
 function assignRemoveOnlyKeepingShiftOrder(input: {
   date: string;
   previous: AutoAssignResultV1;
-  pool: AutoAssignCaddy[];
+  house: AutoAssignCaddy[];
+  third: AutoAssignCaddy[];
   regularReservations: AutoAssignReservation[];
   reasonCode: string;
   freezeShifts: ShiftPart[];
   seedAssignments: AutoAssignmentRow[];
   seedSparesByShift: SpareByShift[];
   unavailableFromShift: Map<number, ShiftPart>;
+  houseStartCaddyId?: number | null;
   thirdStartTeam: string;
   thirdStartCaddyId: number | null;
   thirdRoster: AutoAssignCaddy[];
@@ -5022,70 +5022,120 @@ function assignRemoveOnlyKeepingShiftOrder(input: {
   const combined = emptyRegularSequenceResult();
   combined.assignments = [...input.seedAssignments];
   combined.sparesByShift = [...input.seedSparesByShift];
-  const dualConsume = dualShift1To2HouseConsumeCount(
-    input.previous,
-    input.unavailableFromShift.keys()
-  );
-  for (const shift of SHIFT_PARTS) {
-    if (freezeSet.has(shift)) {
-      const seeded = input.seedAssignments.filter((row) => row.shift === shift);
-      combined.byShift[shift].reservations = seeded.length;
-      combined.byShift[shift].assigned = seeded.length;
-      continue;
-    }
-    const shiftHouse = houseQueueForShift(input.previous, input.pool, shift);
-    const shiftPools = splitCaddyPoolsPreservingOrder(shiftHouse);
-    const startAfterConsume =
-      shift === "2부" && dualConsume > 0
-        ? shiftPools.house[dualConsume]
-        : undefined;
+  const circular = {
+    house: input.house,
+    third: input.third,
+  };
+  const freeze1And2 = freezeSet.has("1부") && freezeSet.has("2부");
+  if (!freeze1And2) {
+    const freeze12: ShiftPart[] = freezeSet.has("1부") ? ["1부"] : [];
     const seq = assignRegularSequence({
       date: input.date,
-      house: shiftPools.house,
-      third: shiftPools.third,
-      reservations: input.regularReservations.filter((row) => row.shift === shift),
+      house: circular.house,
+      third: circular.third,
+      reservations: input.regularReservations.filter(
+        (row) => row.shift === "1부" || row.shift === "2부"
+      ),
       reasonCode: input.reasonCode,
-      houseStartCaddyId: startAfterConsume?.id ?? null,
+      houseStartCaddyId: input.houseStartCaddyId ?? null,
       thirdStartTeam: input.thirdStartTeam,
-      thirdStartCaddyId: shift === "3부" ? input.thirdStartCaddyId : null,
+      thirdStartCaddyId: null,
       thirdRoster: input.thirdRoster,
-      oneThreeForThird: shift === "3부" ? input.oneThreeForThird : [],
-      seedAssignments: [],
-      freezeShifts: [],
-      seedSparesByShift: [],
+      oneThreeForThird: [],
+      seedAssignments: input.seedAssignments.filter((row) =>
+        freeze12.includes(row.shift)
+      ),
+      freezeShifts: freeze12,
+      seedSparesByShift: input.seedSparesByShift.filter((row) =>
+        freeze12.includes(row.shift)
+      ),
       unavailableFromShift: input.unavailableFromShift,
       specialSupportByShift: input.specialSupportByShift,
       occupiedAssignments: input.occupiedAssignments.filter(
-        (row) => row.shift === shift
+        (row) => row.shift === "1부" || row.shift === "2부"
       ),
     });
     combined.assignments = [
-      ...combined.assignments.filter((row) => row.shift !== shift),
-      ...seq.assignments.filter((row) => row.shift === shift),
+      ...combined.assignments.filter(
+        (row) => row.shift !== "1부" && row.shift !== "2부"
+      ),
+      ...seq.assignments.filter((row) => row.shift === "1부" || row.shift === "2부"),
     ];
     combined.sparesByShift = [
-      ...combined.sparesByShift.filter((row) => row.shift !== shift),
-      ...seq.sparesByShift.filter((row) => row.shift === shift),
+      ...combined.sparesByShift.filter(
+        (row) => row.shift !== "1부" && row.shift !== "2부"
+      ),
+      ...seq.sparesByShift.filter((row) => row.shift === "1부" || row.shift === "2부"),
     ];
-    combined.unassignedReservations.push(...seq.unassignedReservations);
+    combined.unassignedReservations.push(
+      ...seq.unassignedReservations.filter(
+        (row) => row.reservation.shift === "1부" || row.reservation.shift === "2부"
+      )
+    );
     combined.specialUnassigned.push(...seq.specialUnassigned);
-    combined.byShift[shift] = seq.byShift[shift];
+    combined.byShift["1부"] = seq.byShift["1부"];
+    combined.byShift["2부"] = seq.byShift["2부"];
     combined.finalPointer = seq.finalPointer;
+  } else {
+    for (const shift of ["1부", "2부"] as const) {
+      const seeded = input.seedAssignments.filter((row) => row.shift === shift);
+      combined.byShift[shift].reservations = seeded.length;
+      combined.byShift[shift].assigned = seeded.length;
+    }
   }
   if (freezeSet.has("3부")) {
-    const house = splitCaddyPoolsPreservingOrder(input.pool).house;
     const excludeIds: number[] = [];
     for (const [caddyId, from] of input.unavailableFromShift.entries()) {
       if (shiftRank("3부") >= shiftRank(from)) excludeIds.push(caddyId);
     }
     const refilled = refillFrozenThirdHouseLeftover({
-      house,
+      house: circular.house,
       assignments: combined.assignments,
       sparesByShift: combined.sparesByShift,
       excludeIds,
     });
     combined.assignments = refilled.assignments;
     combined.sparesByShift = refilled.sparesByShift;
+    const seeded = input.seedAssignments.filter((row) => row.shift === "3부");
+    combined.byShift["3부"].reservations = seeded.length;
+    combined.byShift["3부"].assigned = seeded.length;
+  } else {
+    const seq3 = assignRegularSequence({
+      date: input.date,
+      house: circular.house,
+      third: circular.third,
+      reservations: input.regularReservations.filter((row) => row.shift === "3부"),
+      reasonCode: input.reasonCode,
+      houseStartCaddyId: input.houseStartCaddyId ?? null,
+      thirdStartTeam: input.thirdStartTeam,
+      thirdStartCaddyId: input.thirdStartCaddyId,
+      thirdRoster: input.thirdRoster,
+      oneThreeForThird: input.oneThreeForThird,
+      seedAssignments: combined.assignments.filter(
+        (row) => row.shift === "1부" || row.shift === "2부"
+      ),
+      freezeShifts: ["1부", "2부"],
+      seedSparesByShift: combined.sparesByShift.filter(
+        (row) => row.shift === "1부" || row.shift === "2부"
+      ),
+      unavailableFromShift: input.unavailableFromShift,
+      specialSupportByShift: input.specialSupportByShift,
+      occupiedAssignments: input.occupiedAssignments.filter(
+        (row) => row.shift === "3부"
+      ),
+    });
+    combined.assignments = [
+      ...combined.assignments.filter((row) => row.shift !== "3부"),
+      ...seq3.assignments.filter((row) => row.shift === "3부"),
+    ];
+    combined.sparesByShift = [
+      ...combined.sparesByShift.filter((row) => row.shift !== "3부"),
+      ...seq3.sparesByShift.filter((row) => row.shift === "3부"),
+    ];
+    combined.unassignedReservations.push(...seq3.unassignedReservations);
+    combined.specialUnassigned.push(...seq3.specialUnassigned);
+    combined.byShift["3부"] = seq3.byShift["3부"];
+    combined.finalPointer = seq3.finalPointer;
   }
   return combined;
 }
@@ -5580,20 +5630,13 @@ export function reflowRegularAssignments(input: {
     ...previous.assignments.map((row) => row.caddy),
     ...(previous.unusedCaddies || []),
   ]).filter((c) => !lockedCaddies.has(c.id) && !autoSpecialIds.has(c.id));
-  // SICK/absent: keep the previous board’s HOUSE relative order.
-  // Other reflows keep the historical team-order rebuild.
-  const pool = removeOnly
-    ? houseQueueFromPreviousBoard(previous, remainingSource)
-    : [...remainingSource].sort(compareCaddyOrder);
-  const pools = removeOnly
-    ? splitCaddyPoolsPreservingOrder(pool)
-    : splitCaddyPools(pool);
-  const originalHouse = (
-    removeOnly
-      ? splitCaddyPoolsPreservingOrder(
-          houseQueueFromPreviousBoard(previous, originalSource)
-        )
-      : splitCaddyPools([...originalSource].sort(compareCaddyOrder))
+  // Non-SICK reflow: historical team-order rebuild + origin rotate.
+  // SICK removeOnly: 1부 보드 순서 + leftover. Do not team-sort the
+  // whole queue and do not rebuild 2부 from its (possibly reset) board.
+  const pool = [...remainingSource].sort(compareCaddyOrder);
+  const pools = splitCaddyPools(pool);
+  const originalHouse = splitCaddyPools(
+    [...originalSource].sort(compareCaddyOrder)
   ).house;
 
   const reasonCode = resolveReflowReason({
@@ -5606,13 +5649,20 @@ export function reflowRegularAssignments(input: {
   });
 
   const startId = previous.meta.houseStartCaddyId;
-  const resolvedHouse = resolveHouseQueueKeepingOrigin({
-    remainingHouse: pools.house,
-    originalHouse,
-    houseStartCaddyId: startId,
-  });
-  const houseStartCaddyId = resolvedHouse.houseStartCaddyId;
-  pools.house = resolvedHouse.house;
+  let houseStartCaddyId: number | null;
+  if (removeOnly) {
+    pools.house = circularHouseFromBoardAndCanonical(previous, remainingSource);
+    pools.third = splitCaddyPoolsPreservingOrder(remainingSource).third;
+    houseStartCaddyId = null;
+  } else {
+    const resolvedHouse = resolveHouseQueueKeepingOrigin({
+      remainingHouse: pools.house,
+      originalHouse,
+      houseStartCaddyId: startId,
+    });
+    houseStartCaddyId = resolvedHouse.houseStartCaddyId;
+    pools.house = resolvedHouse.house;
+  }
 
   const thirdStartCaddyId =
     previous.meta.thirdStartCaddyId != null
@@ -5644,13 +5694,15 @@ export function reflowRegularAssignments(input: {
     ? assignRemoveOnlyKeepingShiftOrder({
         date,
         previous,
-        pool,
+        house: pools.house,
+        third: pools.third,
         regularReservations,
         reasonCode,
         freezeShifts,
         seedAssignments,
         seedSparesByShift,
         unavailableFromShift,
+        houseStartCaddyId,
         thirdStartTeam:
           previous.meta.thirdStartTeam || automaticThirdStartTeam(date),
         thirdStartCaddyId,
