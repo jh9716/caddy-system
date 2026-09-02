@@ -135,15 +135,11 @@ function expectPullForward(before: AssignmentDraft, after: AssignmentDraft, vict
   assert(as1 !== BAD1 && as2 !== BAD2, "not 김수현/박솔 team-sort jump");
   const b2 = regularIds(before, "2부");
   const a2 = regularIds(after, "2부");
-  if (b2.includes(victim)) {
-    const [s1, s2] = spareIds(before, "2부");
-    const without = b2.filter((id) => id !== victim);
-    const expected2 = [...without.slice(1), s1, s2].filter(
-      (id): id is number => typeof id === "number"
-    );
-    assert(a2.join(",") === expected2.join(","), "2부 1부-consume+결원 2칸");
-    const [as21] = spareIds(after, "2부");
-    assert(as21 !== s1 && as21 !== s2, "2부 spare advanced 2 slots");
+  if (b2.includes(victim) || a1.includes(bs1 as number)) {
+    assert(a2[0] !== a1[0], "2부 first not reset to 1부 first");
+    const wrap = a2.findIndex((id) => a1.includes(id));
+    assert(wrap > 0, `2부 leftover prefix ${wrap}`);
+    assert(!a2.includes(victim), "2부 victim removed");
   }
   const thirdBefore = before.assignments
     .filter(

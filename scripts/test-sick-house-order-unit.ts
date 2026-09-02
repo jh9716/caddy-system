@@ -5,7 +5,7 @@
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { computeAutoAssignmentsV1, type AutoAssignCaddy } from "../src/lib/autoAssignEngine";
+import { computeAutoAssignmentsV1, assignRegularSequence, type AutoAssignCaddy } from "../src/lib/autoAssignEngine";
 import {
   applyLiveResultToDraft,
   confirmedDraftKeepingPlacedUnavailable,
@@ -87,17 +87,34 @@ function spareIds(spares: Array<{ shift: string; spare1?: { caddyId?: number } |
   return [row?.spare1?.caddyId || null, row?.spare2?.caddyId || null] as const;
 }
 
-/** 1·2부 투대기 1부 SICK: 2부 = victim 결원 + 1부 소비분 → 시작 cursor 1칸. */
-function dualShift2After1Consume(
-  before2: number[],
-  victim: number,
-  spare1: number | null,
-  spare2: number | null
-) {
-  const without = before2.filter((id) => id !== victim);
-  return [...without.slice(1), spare1, spare2].filter(
-    (id): id is number => typeof id === "number"
+/** 2부 wrap = 1부 캐디가 처음 재등장하는 위치. leftover 존재 시 first 리셋이면 FAIL. */
+function wrapIndex(shift2: number[], shift1: number[]) {
+  return shift2.findIndex((id) => shift1.includes(id));
+}
+
+function loadChoiFixtureDraft() {
+  const raw = JSON.parse(
+    readFileSync(join(process.cwd(), "scripts/fixtures/prod-2026-08-28-choi-sick.json"), "utf8")
   );
+  const parsed = parseDailyBoardDraftPayload({ ...raw, schemaVersion: 1 }, "2026-08-28");
+  return payloadToAssignmentDraft(parsed);
+}
+
+function fixtureUsedHouse(draft: AssignmentDraft, extraSick: number[] = []) {
+  const used = new Set<number>();
+  for (const row of draft.assignments) {
+    if (row.kind === "regular") used.add(row.caddy.id);
+  }
+  for (const s of draft.sparesByShift || []) {
+    if (s.spare1?.caddyId) used.add(s.spare1.caddyId);
+    if (s.spare2?.caddyId) used.add(s.spare2.caddyId);
+  }
+  const sick = new Set(extraSick);
+  return draft.caddyPool
+    .filter(
+      (c) => (c.caddyType || "HOUSE") === "HOUSE" && used.has(c.id) && !sick.has(c.id)
+    )
+    .sort(compareCaddyOrder);
 }
 
 /** Same function /manage/assignments enqueuePipelineMutation uses after confirm. */
@@ -201,10 +218,50 @@ section("golden A→B→C→D→E→S1→S2→X, B 병가");
   assert(after[0] === "A", "다른 조 첫 순번으로 reset 금지");
 }
 
-section("production-like 2026-08-28 anonymous Draft + extraUsable 93");
+section("CASE A: clean auto-assignment leftover-first 2부");
 {
-  // Original names (anonymized in fixture): 112 최루비, 190 강보미, 113 이연호,
-  // 191 정윤지, 146 김현정1, 141 안한빛, 152 남궁정호, 94 김수현, 106 박솔.
+  const draft = loadChoiFixtureDraft();
+  const house = fixtureUsedHouse(draft);
+  assert(house.length === 104, `usable circular HOUSE ${house.length}`);
+  const start = 112;
+  const n1 = regularIds(draft.assignments, "1부").length;
+  const n2 = regularIds(draft.assignments, "2부").length;
+  assert(n1 === 67, `1부 regular HOUSE ${n1}`);
+  const occupied = draft.assignments.filter((row) => row.kind !== "regular");
+  const reservations = draft.assignments
+    .filter(
+      (row) =>
+        row.kind === "regular" &&
+        ((row.reservation?.shift || row.shift) === "1부" ||
+          (row.reservation?.shift || row.shift) === "2부")
+    )
+    .map((row) => row.reservation);
+  const seq = assignRegularSequence({
+    date: "2026-08-28",
+    house,
+    third: [],
+    reservations,
+    houseStartCaddyId: start,
+    occupiedAssignments: occupied,
+  });
+  const after1 = regularIds(seq.assignments, "1부");
+  const after2 = regularIds(seq.assignments, "2부");
+  const wrap = wrapIndex(after2, after1);
+  const [s1, s2] = spareIds(seq.sparesByShift, "1부");
+  assert(after1[0] === 112, "CASE A 1부 first 최루비");
+  assert(after1[0] !== after2[0], "CASE A 1부 first ≠ 2부 first");
+  assert(after2[0] === 146, "CASE A 2부 first = 1부 소비 다음 usable 김현정1");
+  assert(s1 === 146 && s2 === 141, "CASE A 1부 spare 김현정1/안한빛");
+  assert(wrap === 37, `CASE A wrap idx ${wrap}`);
+  assert(after2[wrap] === 112, "CASE A wrap first 최루비");
+  assert(
+    after2.slice(0, wrap).every((id) => !after1.includes(id)),
+    "CASE A wrap 전 1부 앞순번 재등장 금지"
+  );
+}
+
+section("production-like 2026-08-28 최루비 SICK circular 2부");
+{
   const VICTIM = 112;
   const NEXT1 = 190;
   const NEXT2 = 113;
@@ -214,29 +271,13 @@ section("production-like 2026-08-28 anonymous Draft + extraUsable 93");
   const NEXT_UNUSED = 152;
   const BAD_SPARE1 = 94;
   const BAD_SPARE2 = 106;
-  const raw = JSON.parse(
-    readFileSync(join(process.cwd(), "scripts/fixtures/prod-2026-08-28-choi-sick.json"), "utf8")
-  );
-  const parsed = parseDailyBoardDraftPayload({ ...raw, schemaVersion: 1 }, "2026-08-28");
-  const draft = payloadToAssignmentDraft(parsed);
+  const draft = loadChoiFixtureDraft();
   const before1 = regularIds(draft.assignments, "1부");
   const [bS1, bS2] = spareIds(draft.sparesByShift, "1부");
   assert(before1[0] === VICTIM, "draft starts at victim");
   assert(bS1 === SPARE1 && bS2 === SPARE2, `draft spare ${bS1}/${bS2}`);
-  const sick = new Set([14, 192, 113, 40, 193, 15, 277, 12, 9, 51, 56, 235]);
-  const used = new Set<number>();
-  for (const row of draft.assignments) {
-    if (row.kind === "regular") used.add(row.caddy.id);
-  }
-  for (const s of draft.sparesByShift || []) {
-    if (s.spare1?.caddyId) used.add(s.spare1.caddyId);
-    if (s.spare2?.caddyId) used.add(s.spare2.caddyId);
-  }
-  const extraUsable = draft.caddyPool
-    .filter(
-      (c) => (c.caddyType || "HOUSE") === "HOUSE" && used.has(c.id) && !sick.has(c.id)
-    )
-    .sort(compareCaddyOrder);
+  const sick = [14, 192, 113, 40, 193, 15, 277, 12, 9, 51, 56, 235];
+  const extraUsable = fixtureUsedHouse(draft, sick);
   assert(extraUsable.length === 93, `extraUsable 93 (got ${extraUsable.length})`);
   const compute = snapshotComputePoolFromDraft(draft, null, { extraUsable });
   const preview = previewLiveChangeFromDraft({
@@ -255,16 +296,14 @@ section("production-like 2026-08-28 anonymous Draft + extraUsable 93");
   assert(after1[after1.length - 1] === SPARE1, `1부 last pulled spare1 ${after1[after1.length - 1]}`);
   assert(aS1 === SPARE2 && aS2 === NEXT_UNUSED, `1부 spare ${aS1}/${aS2}`);
   assert(aS1 !== BAD_SPARE1 && aS2 !== BAD_SPARE2, "availability team-sort spare 94/106 금지");
-  const before2 = regularIds(draft.assignments, "2부");
-  const [b2s1, b2s2] = spareIds(draft.sparesByShift, "2부");
-  const expected2 = dualShift2After1Consume(before2, VICTIM, b2s1, b2s2);
-  assert(after2.join(",") === expected2.join(","), `2부 1부-consume+결원 2칸 ${after2.slice(0, 3)}`);
-  assert(after2[0] === NEXT2, `2부 first ${after2[0]} (start cursor +1 after 1부 consume)`);
+  assert(after2[0] === SPARE2, `2부 first leftover ${after2[0]} 안한빛`);
+  assert(after2[0] !== after1[0], "2부 first must not reset to 1부 first");
   assert(!after2.includes(VICTIM), "victim removed from 2부");
-  const before3 = regularIds(draft.assignments, "3부");
+  const wrap = wrapIndex(after2, after1);
+  assert(wrap > 0, `2부 leftover prefix ${wrap}`);
+  assert(after2[wrap] === NEXT1, "wrap first is new 1부 origin 강보미");
   const leftover3 = [157, 149, 143, 144, 148, 204, 153, 142];
   assert(after3.join(",") === leftover3.join(","), `3부 HOUSE leftover ${after3.join(",")}`);
-  assert(after3.join(",") !== before3.join(","), "3부 HOUSE leftover is not pre-SICK freeze");
   assert(a3s1 === 96 && a3s2 === 94, `3부 HOUSE spare leftover ${a3s1}/${a3s2}`);
   const thirdBefore = draft.assignments
     .filter(
@@ -283,82 +322,141 @@ section("production-like 2026-08-28 anonymous Draft + extraUsable 93");
   assert(thirdAfter.join(",") === thirdBefore.join(","), "3부 1·3/THIRD identity kept");
 }
 
-section("production-like 정윤지 191 dual 1·2 SICK fingerprints");
+section("CASE B/C: 정윤지 1부·2부 셀 SICK circular fingerprints");
 {
   const VICTIM = 191;
-  const raw = JSON.parse(
-    readFileSync(join(process.cwd(), "scripts/fixtures/prod-2026-08-28-choi-sick.json"), "utf8")
-  );
-  const parsed = parseDailyBoardDraftPayload({ ...raw, schemaVersion: 1 }, "2026-08-28");
-  const draft = payloadToAssignmentDraft(parsed);
-  const sick = new Set([14, 192, 113, 40, 193, 15, 277, 12, 9, 51, 56, 235]);
-  const used = new Set<number>();
-  for (const row of draft.assignments) {
-    if (row.kind === "regular") used.add(row.caddy.id);
+  const draft = loadChoiFixtureDraft();
+  const extraUsable = fixtureUsedHouse(draft);
+  assert(extraUsable.length === 104, `usable ${extraUsable.length}`);
+  const leftover3 = [157, 149, 143, 144, 148, 204, 153, 142];
+  function fpOf(d: AssignmentDraft) {
+    return {
+      "1부": regularIds(d.assignments, "1부"),
+      "2부": regularIds(d.assignments, "2부"),
+      "3부": regularIds(d.assignments, "3부"),
+      spare: {
+        "1부": spareIds(d.sparesByShift, "1부"),
+        "2부": spareIds(d.sparesByShift, "2부"),
+        "3부": spareIds(d.sparesByShift, "3부"),
+      },
+    };
   }
-  for (const s of draft.sparesByShift || []) {
-    if (s.spare1?.caddyId) used.add(s.spare1.caddyId);
-    if (s.spare2?.caddyId) used.add(s.spare2.caddyId);
+  function run(shift: "1부" | "2부", id: string) {
+    const ui = uiHydrateAndEnqueueSick({
+      payloadDraft: draft,
+      liveUnavailableIds: [],
+      extraUsable,
+      change: { type: "CADDY_SICK", caddyId: VICTIM, shift },
+      id,
+    });
+    assert(ui.prepared.ok, `${id} prepare ok`);
+    const persistDraft = applyLiveResultToDraft(
+      ui.confirmed,
+      ui.prepared.ok ? ui.prepared.preview.after : ui.click.draft
+    );
+    const serverPreview = previewLiveChangeFromDraft({
+      draft: ui.confirmed,
+      change: { type: "CADDY_SICK", caddyId: VICTIM, shift },
+      regularCaddyPool: ui.computePool,
+    });
+    return {
+      click: fpOf(ui.click.draft),
+      server: fpOf(applyLiveResultToDraft(ui.confirmed, serverPreview.after)),
+      persist: fpOf(persistDraft),
+      reload: fpOf(persistDraft),
+    };
   }
-  const extraUsable = draft.caddyPool
-    .filter(
-      (c) => (c.caddyType || "HOUSE") === "HOUSE" && used.has(c.id) && !sick.has(c.id)
-    )
-    .sort(compareCaddyOrder);
-  const ui = uiHydrateAndEnqueueSick({
-    payloadDraft: draft,
-    liveUnavailableIds: [...sick],
-    extraUsable,
-    change: { type: "CADDY_SICK", caddyId: VICTIM, shift: "1부" },
-    id: "jung",
+  const caseB = run("1부", "case-b");
+  const caseC = run("2부", "case-c");
+  for (const [label, stages] of [
+    ["CASE B 1부 셀", caseB],
+    ["CASE C 2부 셀", caseC],
+  ] as const) {
+    for (const stage of ["click", "server", "persist", "reload"] as const) {
+      const fp = stages[stage];
+      const wrap = wrapIndex(fp["2부"], fp["1부"]);
+      assert(fp["1부"][0] === 112, `${label} ${stage} 1부 first 최루비`);
+      assert(!fp["1부"].includes(VICTIM) && !fp["2부"].includes(VICTIM), `${label} ${stage} 정윤지 제거`);
+      assert(fp["1부"][fp["1부"].length - 1] === 146, `${label} ${stage} 1부 last 김현정1`);
+      assert(fp.spare["1부"][0] === 141 && fp.spare["1부"][1] === 152, `${label} ${stage} 1부 spare 안한빛/남궁정호`);
+      assert(fp["2부"][0] === 141, `${label} ${stage} 2부 first 안한빛`);
+      assert(fp["2부"][0] !== fp["1부"][0], `${label} ${stage} 2부 first not reset`);
+      assert(wrap === 36, `${label} ${stage} wrap idx ${wrap}`);
+      assert(fp["2부"][wrap] === 112, `${label} ${stage} wrap first 최루비`);
+      assert(fp["3부"].join(",") === leftover3.join(","), `${label} ${stage} 3부 leftover`);
+      assert(fp.spare["3부"][0] === 96 && fp.spare["3부"][1] === 94, `${label} ${stage} 3부 spare`);
+    }
+    assert(
+      JSON.stringify(stages.click) === JSON.stringify(stages.server) &&
+        JSON.stringify(stages.click) === JSON.stringify(stages.persist) &&
+        JSON.stringify(stages.click) === JSON.stringify(stages.reload),
+      `${label} click = server preview.after = persist = reload`
+    );
+  }
+  assert(JSON.stringify(caseB) === JSON.stringify(caseC), "CASE B = CASE C");
+}
+
+section("CASE D/E: 단일 1부·단일 2부 HOUSE SICK keeps circular cursor");
+{
+  const draft = loadChoiFixtureDraft();
+  const extraUsable = fixtureUsedHouse(draft);
+  const before1 = regularIds(draft.assignments, "1부");
+  const only1 = 145;
+  assert(before1.includes(only1) && !regularIds(draft.assignments, "2부").includes(only1), "이연주 1부 only");
+  const d = previewLiveChangeFromDraft({
+    draft,
+    change: { type: "CADDY_SICK", caddyId: only1, shift: "1부" },
+    regularCaddyPool: snapshotComputePoolFromDraft(draft, null, { extraUsable }),
   });
-  assert(ui.prepared.ok, "정윤지 prepare ok");
-  const persistDraft = applyLiveResultToDraft(
-    ui.confirmed,
-    ui.prepared.ok ? ui.prepared.preview.after : ui.click.draft
-  );
-  const serverPreview = previewLiveChangeFromDraft({
-    draft: ui.confirmed,
-    change: { type: "CADDY_SICK", caddyId: VICTIM, shift: "1부" },
-    regularCaddyPool: ui.computePool,
+  const d1 = regularIds(d.after.assignments, "1부");
+  const d2 = regularIds(d.after.assignments, "2부");
+  assert(d1[0] === 112, "CASE D 1부 first 최루비");
+  assert(d2[0] === 141, "CASE D 1부 extra consume → 2부 first 안한빛");
+  assert(d2[0] !== d1[0], "CASE D 2부 first not reset");
+  assert(wrapIndex(d2, d1) > 0, "CASE D leftover prefix");
+  const only2 = 198;
+  assert(!before1.includes(only2), "이지현 not in 1부 regular");
+  const e = previewLiveChangeFromDraft({
+    draft,
+    change: { type: "CADDY_SICK", caddyId: only2, shift: "2부" },
+    regularCaddyPool: snapshotComputePoolFromDraft(draft, null, { extraUsable }),
   });
-  const stageFp = (d: AssignmentDraft) => ({
-    "1부": regularIds(d.assignments, "1부"),
-    "2부": regularIds(d.assignments, "2부"),
-    "3부": regularIds(d.assignments, "3부"),
-    spare: {
-      "1부": spareIds(d.sparesByShift, "1부"),
-      "2부": spareIds(d.sparesByShift, "2부"),
-      "3부": spareIds(d.sparesByShift, "3부"),
-    },
+  const e1 = regularIds(e.after.assignments, "1부");
+  const e2 = regularIds(e.after.assignments, "2부");
+  assert(e1.join(",") === before1.join(","), "CASE E 1부 identity");
+  assert(e2[0] === 146, "CASE E 2부 first stays leftover 김현정1");
+  assert(!e2.includes(only2), "CASE E 2부 victim removed");
+  assert(wrapIndex(e2, e1) > 0, "CASE E leftover prefix");
+}
+
+section("CASE F: 연속 SICK 2건 circular");
+{
+  const draft = loadChoiFixtureDraft();
+  const extraUsable = fixtureUsedHouse(draft);
+  const first = previewLiveChangeFromDraft({
+    draft,
+    change: { type: "CADDY_SICK", caddyId: 191, shift: "1부" },
+    regularCaddyPool: snapshotComputePoolFromDraft(draft, null, { extraUsable }),
   });
-  const before = stageFp(draft);
-  const click = stageFp(ui.click.draft);
-  const server = stageFp(applyLiveResultToDraft(ui.confirmed, serverPreview.after));
-  const persist = stageFp(persistDraft);
-  const expected2 = dualShift2After1Consume(
-    before["2부"],
-    VICTIM,
-    before.spare["2부"][0],
-    before.spare["2부"][1]
-  );
-  assert(before["1부"].includes(VICTIM) && before["2부"].includes(VICTIM), "정윤지 1·2 투대기");
-  assert(!click["1부"].includes(VICTIM) && !click["2부"].includes(VICTIM), "click removes 정윤지");
-  assert(click["2부"].join(",") === expected2.join(","), "정윤지 2부 2칸");
-  assert(JSON.stringify(click) === JSON.stringify(server), "정윤지 click = server");
-  assert(JSON.stringify(click) === JSON.stringify(persist), "정윤지 click = persist/reload");
-  console.log(
-    "  정윤지 fingerprint spare",
-    JSON.stringify({
-      before: before.spare,
-      click: click.spare,
-      server: server.spare,
-      persist: persist.spare,
-      "1부_head": { before: before["1부"].slice(0, 5), after: click["1부"].slice(0, 5) },
-      "2부_head": { before: before["2부"].slice(0, 5), after: click["2부"].slice(0, 5) },
-      "3부": { before: before["3부"], after: click["3부"] },
-    })
-  );
+  const mid = applyLiveResultToDraft(draft, first.after);
+  const second = previewLiveChangeFromDraft({
+    draft: mid,
+    change: { type: "CADDY_SICK", caddyId: 190, shift: "1부" },
+    regularCaddyPool: snapshotComputePoolFromDraft(mid, null, {
+      extraUsable: extraUsable.filter((c) => c.id !== 191),
+    }),
+  });
+  const a1 = regularIds(first.after.assignments, "1부");
+  const a2 = regularIds(first.after.assignments, "2부");
+  const b1 = regularIds(second.after.assignments, "1부");
+  const b2 = regularIds(second.after.assignments, "2부");
+  assert(a2[0] === 141, "CASE F after 정윤지 2부 first 안한빛");
+  assert(!b1.includes(191) && !b1.includes(190), "CASE F both victims gone from 1부");
+  assert(!b2.includes(191) && !b2.includes(190), "CASE F both victims gone from 2부");
+  assert(b1[0] === 112, "CASE F 1부 first 최루비");
+  assert(b2[0] !== b1[0], "CASE F 2부 first not reset");
+  assert(b2[0] !== a2[0], "CASE F second SICK advances 2부 start");
+  assert(wrapIndex(b2, b1) > 0, "CASE F leftover prefix");
 }
 
 section("production v51 live SICK overlay: click = persist overlay, not 94/106");
@@ -471,11 +569,9 @@ section("production v51 live SICK overlay: click = persist overlay, not 94/106")
   const before3 = regularIds(draft.assignments, "3부");
   const [c3s1, c3s2] = spareIds(ui.click.draft.sparesByShift, "3부");
   const [p3s1, p3s2] = spareIds(persistDraft.sparesByShift, "3부");
-  const before2 = regularIds(draft.assignments, "2부");
   const click2 = regularIds(ui.click.draft.assignments, "2부");
   const persist2 = regularIds(persistDraft.assignments, "2부");
-  const [b2s1, b2s2] = spareIds(draft.sparesByShift, "2부");
-  const expected2 = dualShift2After1Consume(before2, VICTIM, b2s1, b2s2);
+  const wrap2 = wrapIndex(click2, click1);
 
   assert(cS1 === SPARE2 && cS2 === NEXT_UNUSED, `click spare ${cS1}/${cS2}`);
   assert(dS1 === SPARE2 && dS2 === NEXT_UNUSED, `dirty-confirmed click spare ${dS1}/${dS2}`);
@@ -497,11 +593,10 @@ section("production v51 live SICK overlay: click = persist overlay, not 94/106")
     }
   }
   assert(!click1.includes(VICTIM), "최루비 removed from 1부");
-  assert(click2.join(",") === expected2.join(","), "2부 1부-consume+결원 2칸");
-  assert(persist2.join(",") === expected2.join(","), "2부 persist matches click");
-  const [c2s1, c2s2] = spareIds(ui.click.draft.sparesByShift, "2부");
-  assert(c2s1 !== b2s1 && c2s1 !== b2s2, "2부 spare advanced 2 slots, not spare2→spare1");
-  assert(c2s2 != null, "2부 spare2 filled");
+  assert(click2[0] === SPARE2, "2부 first leftover 안한빛");
+  assert(click2[0] !== click1[0], "2부 first not reset to 1부 first");
+  assert(wrap2 > 0, "2부 leftover prefix");
+  assert(persist2.join(",") === click2.join(","), "2부 persist matches click");
   const leftover3 = [157, 149, 143, 144, 148, 204, 153, 142];
   const click3 = regularIds(ui.click.draft.assignments, "3부");
   const persist3 = regularIds(persistDraft.assignments, "3부");
@@ -582,7 +677,7 @@ function shiftReservations(
   }));
 }
 
-section("1·2부 투대기 1부 SICK: 2부 start +1부소비 + 결원 = 2칸");
+section("synthetic circular HOUSE: leftover then wrap, dual SICK");
 {
   const date = "2099-12-22";
   const names = [
@@ -604,59 +699,28 @@ section("1·2부 투대기 1부 SICK: 2부 start +1부소비 + 결원 = 2칸");
   const pool = names.map((name, i) => house(300 + i, name, i));
   const V = pool[3];
   const r1 = shiftReservations(date, "1부", 6, "A");
-  const r2 = shiftReservations(date, "2부", 9, "B");
+  const r2 = shiftReservations(date, "2부", 12, "B");
   const r3 = shiftReservations(date, "3부", 2, "C");
-  const s1 = computeAutoAssignmentsV1({
+  const previous = computeAutoAssignmentsV1({
     date,
     available: pool,
     openCourses: ["VERTHILL", "SKY", "OCEAN", "LAKE"],
     houseStartCaddyId: pool[0].id,
-    reservations: r1,
+    reservations: [...r1, ...r2, ...r3],
   });
-  const s2 = computeAutoAssignmentsV1({
-    date,
-    available: pool,
-    openCourses: ["VERTHILL", "SKY", "OCEAN", "LAKE"],
-    houseStartCaddyId: pool[0].id,
-    reservations: r2,
-  });
-  const s3 = computeAutoAssignmentsV1({
-    date,
-    available: pool,
-    openCourses: ["VERTHILL", "SKY", "OCEAN", "LAKE"],
-    houseStartCaddyId: pool[0].id,
-    reservations: r3,
-  });
-  const previous = {
-    ...s1,
-    assignments: [
-      ...s1.assignments.filter((row) => row.shift === "1부"),
-      ...s2.assignments.filter((row) => row.shift === "2부"),
-      ...s3.assignments.filter((row) => row.shift === "3부"),
-    ],
-    regularAssignments: [
-      ...s1.regularAssignments.filter((row) => row.shift === "1부"),
-      ...s2.regularAssignments.filter((row) => row.shift === "2부"),
-      ...s3.regularAssignments.filter((row) => row.shift === "3부"),
-    ],
-    sparesByShift: [
-      s1.sparesByShift.find((s) => s.shift === "1부")!,
-      s2.sparesByShift.find((s) => s.shift === "2부")!,
-      s3.sparesByShift.find((s) => s.shift === "3부")!,
-    ],
-  };
   const draft = createDraftFromAutoResult(previous, pool);
   const before1 = regularNames(draft.assignments, "1부");
   const before2 = regularNames(draft.assignments, "2부");
+  const before1Ids = regularIds(draft.assignments, "1부");
+  const before2Ids = regularIds(draft.assignments, "2부");
+  const wrap0 = wrapIndex(before2Ids, before1Ids);
   const [b1s1, b1s2] = spareNames(draft.sparesByShift, "1부");
-  const [b2s1, b2s2] = spareNames(draft.sparesByShift, "2부");
   assert(before1.join("→") === "A→B→C→정윤지→D→E", `before 1부 ${before1.join("→")}`);
-  assert(
-    before2.join("→") === "A→B→C→정윤지→D→E→조정혜→장혜원→지석준",
-    `before 2부 ${before2.join("→")}`
-  );
+  assert(before1[0] !== before2[0], "clean 1부 first ≠ 2부 first");
+  assert(before2[0] === "조정혜", `before 2부 first leftover ${before2[0]}`);
+  assert(wrap0 === 8 && before2[wrap0] === "A", `before wrap ${wrap0} ${before2[wrap0]}`);
+  assert(before2.includes("정윤지"), "정윤지 in wrap 투");
   assert(b1s1 === "조정혜" && b1s2 === "장혜원", `before 1부 spare ${b1s1}/${b1s2}`);
-  assert(b2s1 === "윤숙영" && b2s2 === "지선영", `before 2부 spare ${b2s1}/${b2s2}`);
   const extraUsable = pool.filter((c) => c.id !== V.id);
   const compute = snapshotComputePoolFromDraft(draft, previous, { extraUsable });
   const preview = previewLiveChangeFromDraft({
@@ -666,41 +730,30 @@ section("1·2부 투대기 1부 SICK: 2부 start +1부소비 + 결원 = 2칸");
   });
   const after1 = regularNames(preview.after.assignments, "1부");
   const after2 = regularNames(preview.after.assignments, "2부");
+  const after1Ids = regularIds(preview.after.assignments, "1부");
+  const after2Ids = regularIds(preview.after.assignments, "2부");
+  const wrap1 = wrapIndex(after2Ids, after1Ids);
   const [a1s1, a1s2] = spareNames(preview.after.sparesByShift, "1부");
-  const [a2s1, a2s2] = spareNames(preview.after.sparesByShift, "2부");
   assert(after1.join("→") === "A→B→C→D→E→조정혜", `after 1부 ${after1.join("→")}`);
   assert(a1s1 === "장혜원" && a1s2 === "지석준", `after 1부 spare ${a1s1}/${a1s2}`);
-  assert(
-    after2.join("→") === "B→C→D→E→조정혜→장혜원→지석준→윤숙영→지선영",
-    `after 2부 ${after2.join("→")}`
-  );
-  assert(a2s1 === "홍정자" && a2s2 === "다음", `after 2부 spare ${a2s1}/${a2s2}`);
-  assert(!after2.includes("정윤지"), "2부 victim gone");
-  assert(after2[0] === "B", "2부 start cursor +1 keeps relative tail");
+  assert(after2[0] === "장혜원", `after 2부 first ${after2[0]}`);
+  assert(after2[0] !== after1[0], "after 2부 first not reset");
+  assert(!after2.includes("정윤지"), "2부 wrap victim gone");
+  assert(wrap1 === 7 && after2[wrap1] === "A", `after wrap ${wrap1}`);
 
   const only1Victim = pool.find((c) => c.name === "E")!;
-  const only1Draft = createDraftFromAutoResult(
-    {
-      ...previous,
-      assignments: previous.assignments.filter(
-        (row) => !(row.shift === "2부" && row.caddy.id === only1Victim.id)
-      ),
-    },
-    pool
-  );
-  const only1Before2 = regularNames(only1Draft.assignments, "2부");
   const only1Preview = previewLiveChangeFromDraft({
-    draft: only1Draft,
+    draft,
     change: { type: "CADDY_SICK", caddyId: only1Victim.id, shift: "1부" },
-    regularCaddyPool: snapshotComputePoolFromDraft(only1Draft, null, {
+    regularCaddyPool: snapshotComputePoolFromDraft(draft, previous, {
       extraUsable: pool.filter((c) => c.id !== only1Victim.id),
     }),
   });
+  const only1After1 = regularNames(only1Preview.after.assignments, "1부");
   const only1After2 = regularNames(only1Preview.after.assignments, "2부");
-  assert(
-    only1After2.join("→") === only1Before2.join("→"),
-    `단일 1부 병가 2부 identity ${only1After2.join("→")}`
-  );
+  assert(only1After1[0] === "A", "단일 1부 병가 1부 first 유지");
+  assert(only1After2[0] === "장혜원", "단일 1부 병가 2부 start 전진");
+  assert(only1After2[0] !== only1After1[0], "단일 1부 병가 2부 first not reset");
 
   const only2Victim = pool.find((c) => c.name === "장혜원")!;
   const only2Preview = previewLiveChangeFromDraft({
@@ -712,13 +765,9 @@ section("1·2부 투대기 1부 SICK: 2부 start +1부소비 + 결원 = 2칸");
   });
   const only2After1 = regularNames(only2Preview.after.assignments, "1부");
   const only2After2 = regularNames(only2Preview.after.assignments, "2부");
-  const [o2s1, o2s2] = spareNames(only2Preview.after.sparesByShift, "2부");
   assert(only2After1.join("→") === before1.join("→"), "단일 2부 병가 1부 identity");
-  assert(
-    only2After2.join("→") === "A→B→C→정윤지→D→E→조정혜→지석준→윤숙영",
-    `단일 2부 병가 1칸 ${only2After2.join("→")}`
-  );
-  assert(o2s1 === "지선영" && o2s2 === "홍정자", `단일 2부 spare ${o2s1}/${o2s2}`);
+  assert(only2After2[0] === "조정혜", "단일 2부 병가 leftover first 유지");
+  assert(!only2After2.includes("장혜원"), "단일 2부 victim gone");
 
   function dualSickFingerprint(shift: "1부" | "2부", id: string) {
     const ui = uiHydrateAndEnqueueSick({
@@ -741,44 +790,39 @@ section("1·2부 투대기 1부 SICK: 2부 start +1부소비 + 결원 = 2칸");
       spare1: spareNames(d.sparesByShift, "1부"),
       "2부": regularNames(d.assignments, "2부"),
       spare2: spareNames(d.sparesByShift, "2부"),
-      "3부": regularNames(d.assignments, "3부"),
-      spare3: spareNames(d.sparesByShift, "3부"),
     });
-    const click = fpOf(ui.click.draft);
-    const server = fpOf(serverDraft);
-    const persist = fpOf(persistDraft);
-    const reload = fpOf(persistDraft);
-    return { click, server, persist, reload };
+    return {
+      click: fpOf(ui.click.draft),
+      server: fpOf(serverDraft),
+      persist: fpOf(persistDraft),
+      reload: fpOf(persistDraft),
+    };
   }
-  const caseA = dualSickFingerprint("1부", "case-a");
-  const caseB = dualSickFingerprint("2부", "case-b");
+  const synB = dualSickFingerprint("1부", "syn-b");
+  const synC = dualSickFingerprint("2부", "syn-c");
   const expected = {
     "1부": ["A", "B", "C", "D", "E", "조정혜"],
     spare1: ["장혜원", "지석준"],
-    "2부": ["B", "C", "D", "E", "조정혜", "장혜원", "지석준", "윤숙영", "지선영"],
-    spare2: ["홍정자", "다음"],
+    "2부": ["장혜원", "지석준", "윤숙영", "지선영", "홍정자", "다음", "X", "A", "B", "C", "D", "E"],
   };
   for (const [label, stages] of [
-    ["CASE A 1부 셀", caseA],
-    ["CASE B 2부 셀", caseB],
+    ["synthetic B", synB],
+    ["synthetic C", synC],
   ] as const) {
     for (const stage of ["click", "server", "persist", "reload"] as const) {
       const fp = stages[stage];
-      assert(fp["1부"].join("→") === expected["1부"].join("→"), `${label} ${stage} 1부 HOUSE`);
+      assert(fp["1부"].join("→") === expected["1부"].join("→"), `${label} ${stage} 1부`);
       assert(fp.spare1[0] === expected.spare1[0] && fp.spare1[1] === expected.spare1[1], `${label} ${stage} 1부 spare`);
-      assert(fp["2부"].join("→") === expected["2부"].join("→"), `${label} ${stage} 2부 HOUSE`);
-      assert(fp.spare2[0] === expected.spare2[0] && fp.spare2[1] === expected.spare2[1], `${label} ${stage} 2부 spare`);
+      assert(fp["2부"].join("→") === expected["2부"].join("→"), `${label} ${stage} 2부`);
+      assert(fp["2부"][0] !== fp["1부"][0], `${label} ${stage} 2부 first not reset`);
     }
     assert(
       JSON.stringify(stages.click) === JSON.stringify(stages.server) &&
-        JSON.stringify(stages.click) === JSON.stringify(stages.persist) &&
-        JSON.stringify(stages.click) === JSON.stringify(stages.reload),
+        JSON.stringify(stages.click) === JSON.stringify(stages.persist),
       `${label} click=server=persist=reload`
     );
   }
-  assert(JSON.stringify(caseA) === JSON.stringify(caseB), "CASE A = CASE B 전부 동일");
-  console.log("  CASE A", JSON.stringify(caseA.click));
-  console.log("  CASE B", JSON.stringify(caseB.click));
+  assert(JSON.stringify(synB) === JSON.stringify(synC), "synthetic B = C");
 }
 
 const fs = require("node:fs") as typeof import("node:fs");
