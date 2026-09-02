@@ -4733,8 +4733,7 @@ function freezeShiftsWithoutRemovedCaddies(
  * SICK removeOnly용 원형 HOUSE 큐.
  * 1부 regular 보드 순서 + 당일 spare + 보드 leftover를 origin으로 유지한다.
  * leftover unused는 당일 snapshot(previous.unusedCaddies)에서만 붙인다.
- * recoverComputePool / DB ACTIVE superset(pool 전 인원)은 tail로 쓰지 않는다.
- * roster-sized unused(caddyPool − assigned)는 snapshot leftover가 아니다.
+ * recoverComputePool / DB ACTIVE extra(board·unused에 없는 pool HOUSE)는 tail로 쓰지 않는다.
  * pool 밖의 OFF/SICK/unavailable/RETIRED는 allow-map에서 걸러진다.
  * 큐[0]이 이미 1부 origin이므로 재회전하지 않는다.
  */
@@ -4778,22 +4777,14 @@ function circularHouseFromBoardAndCanonical(
   for (const caddy of splitCaddyPools(pool).house) {
     if (onBoard.has(caddy.id)) push(caddy);
   }
-  const unusedAll = previous.unusedCaddies || [];
-  const unusedHouse = unusedAll.filter(isHouseRegularCaddy);
-  const assignedCount = (previous.assignments || []).length;
-  const unusedCount = unusedAll.length;
-  const baselineCount =
-    Number(previous.meta?.availableCount) > 0
-      ? Number(previous.meta.availableCount)
-      : 0;
-  // Same unused-pollution rule as snapshotComputePool: roster dump
-  // (caddyPool − assigned) is not the day's circular leftover.
-  const unusedIsRosterDump =
-    unusedCount > 0 &&
-    baselineCount > 0 &&
-    assignedCount + unusedCount >= Math.floor(baselineCount * 0.8) &&
-    unusedCount >= Math.max(20, Math.floor(assignedCount * 0.2));
-  if (!unusedIsRosterDump) {
+  const unusedHouse = (previous.unusedCaddies || []).filter(isHouseRegularCaddy);
+  const unusedIds = new Set(unusedHouse.map((caddy) => caddy.id));
+  // Pool HOUSE that are on neither the board nor unused snapshot exist
+  // only because recoverComputePool merged roster/SoT extras.
+  const poolHasRecoverExtras = splitCaddyPools(pool).house.some(
+    (caddy) => !onBoard.has(caddy.id) && !unusedIds.has(caddy.id)
+  );
+  if (!poolHasRecoverExtras) {
     for (const caddy of unusedHouse) push(caddy);
   }
   return ordered;
