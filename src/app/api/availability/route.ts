@@ -3,6 +3,7 @@ import { requireAdmin } from "@/lib/auth";
 import { loadAvailabilityForDate } from "@/lib/availabilityService";
 import { OffSheetError } from "@/lib/offSheetFetch";
 import { DutyExcelError } from "@/lib/dutyMarshalLeaderParser";
+import { syncOpsDutySheetOnAvailabilityLoad } from "@/lib/opsDutySheetSync";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -78,11 +79,24 @@ export async function POST(req: NextRequest) {
       );
     }
     const dutyWorkbook = await dutyBufferFromForm(form);
+    const syncRequested =
+      String(form.get("syncOpsDutySheet") || "") === "1" && !dutyWorkbook;
+    const opsDutySync = syncRequested
+      ? await syncOpsDutySheetOnAvailabilityLoad({
+          date,
+          ip:
+            req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+            req.headers.get("x-real-ip") ||
+            null,
+        })
+      : undefined;
     const result = await loadAvailabilityForDate(date, {
       dutyWorkbook,
       forceOffSheet: true,
     });
-    return NextResponse.json(result);
+    return NextResponse.json(
+      opsDutySync ? { ...result, opsDutySync } : result
+    );
   } catch (e: unknown) {
     return errorResponse(e);
   }

@@ -431,6 +431,19 @@ export function opsDutySheetApplyBlockReason(input: {
   return null;
 }
 
+/** 가용 불러오기 자동동기화: 8슬롯 전부 exact ACTIVE, 리뷰 없음. */
+export function isOpsDutySheetAutoApplyReady(input: {
+  entries: readonly DutyExcelEntry[];
+  matched: readonly MatchedOpsDutyRow[];
+  reviews: readonly OpsDutyReview[];
+}): boolean {
+  if (input.reviews.length > 0) return false;
+  if (input.matched.length !== OPS_DUTY_SHEET_SLOT_DEFS.length) return false;
+  if (input.entries.length !== OPS_DUTY_SHEET_SLOT_DEFS.length) return false;
+  const matchedKeys = new Set(input.matched.map((row) => row.roleKey));
+  return OPS_DUTY_SHEET_SLOT_DEFS.every((def) => matchedKeys.has(def.roleKey));
+}
+
 export type OpsDutySheetTestDayNames = Partial<Record<string, string>>;
 
 export type OpsDutySheetTestTab = {
