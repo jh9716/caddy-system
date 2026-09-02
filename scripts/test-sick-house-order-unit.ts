@@ -87,15 +87,15 @@ function spareIds(spares: Array<{ shift: string; spare1?: { caddyId?: number } |
   return [row?.spare1?.caddyId || null, row?.spare2?.caddyId || null] as const;
 }
 
-/** 1·2부 투대기 1부 SICK: 2부 = victim 결원 + 1부 소비분 → 시작 cursor 1칸. */
-function dualShift2After1Consume(
-  before2: number[],
+/** 같은 원번 1·2부: 해당 부에서 victim만 빼고 1칸 pull-forward. 시작 cursor 전역 +1 금지. */
+function oneSlotPullForward(
+  before: number[],
   victim: number,
-  spare1: number | null,
-  spare2: number | null
+  spare1: number | null
 ) {
-  const without = before2.filter((id) => id !== victim);
-  return [...without.slice(1), spare1, spare2].filter(
+  const idx = before.indexOf(victim);
+  if (idx < 0) return before;
+  return [...before.slice(0, idx), ...before.slice(idx + 1), spare1].filter(
     (id): id is number => typeof id === "number"
   );
 }
@@ -257,9 +257,9 @@ section("production-like 2026-08-28 anonymous Draft + extraUsable 93");
   assert(aS1 !== BAD_SPARE1 && aS2 !== BAD_SPARE2, "availability team-sort spare 94/106 금지");
   const before2 = regularIds(draft.assignments, "2부");
   const [b2s1, b2s2] = spareIds(draft.sparesByShift, "2부");
-  const expected2 = dualShift2After1Consume(before2, VICTIM, b2s1, b2s2);
-  assert(after2.join(",") === expected2.join(","), `2부 1부-consume+결원 2칸 ${after2.slice(0, 3)}`);
-  assert(after2[0] === NEXT2, `2부 first ${after2[0]} (start cursor +1 after 1부 consume)`);
+  const expected2 = oneSlotPullForward(before2, VICTIM, b2s1);
+  assert(after2.join(",") === expected2.join(","), `2부 1칸 pull-forward ${after2.slice(0, 3)}`);
+  assert(after2[0] === NEXT1, `2부 first ${after2[0]} (same-origin, not global +1)`);
   assert(!after2.includes(VICTIM), "victim removed from 2부");
   const before3 = regularIds(draft.assignments, "3부");
   const leftover3 = [157, 149, 143, 144, 148, 204, 153, 142];
@@ -285,6 +285,8 @@ section("production-like 2026-08-28 anonymous Draft + extraUsable 93");
 
 section("production-like 정윤지 191 dual 1·2 SICK fingerprints");
 {
+  // Same-origin 투대기: 1·2부 first 모두 112(최루비). 2부는 leftover-start가 아님.
+  // Fixture spare IDs = 운영 기대 슬롯(조정혜/장혜원, 윤숙영/지선영)의 1칸 전진.
   const VICTIM = 191;
   const raw = JSON.parse(
     readFileSync(join(process.cwd(), "scripts/fixtures/prod-2026-08-28-choi-sick.json"), "utf8")
@@ -336,15 +338,21 @@ section("production-like 정윤지 191 dual 1·2 SICK fingerprints");
   const click = stageFp(ui.click.draft);
   const server = stageFp(applyLiveResultToDraft(ui.confirmed, serverPreview.after));
   const persist = stageFp(persistDraft);
-  const expected2 = dualShift2After1Consume(
+  const expected2 = oneSlotPullForward(
     before["2부"],
     VICTIM,
-    before.spare["2부"][0],
-    before.spare["2부"][1]
+    before.spare["2부"][0]
   );
   assert(before["1부"].includes(VICTIM) && before["2부"].includes(VICTIM), "정윤지 1·2 투대기");
+  assert(before["1부"][0] === 112 && before["2부"][0] === 112, "1·2부 first 동일 최루비");
+  assert(before.spare["1부"][0] === 146 && before.spare["1부"][1] === 141, "병가 전 1부 spare");
+  assert(before.spare["2부"][0] === 198 && before.spare["2부"][1] === 125, "병가 전 2부 spare");
+  assert(click["1부"][0] === 112 && click["2부"][0] === 112, "SICK 후 1·2부 first 최루비 유지");
   assert(!click["1부"].includes(VICTIM) && !click["2부"].includes(VICTIM), "click removes 정윤지");
-  assert(click["2부"].join(",") === expected2.join(","), "정윤지 2부 2칸");
+  assert(click["1부"].join(",") === oneSlotPullForward(before["1부"], VICTIM, before.spare["1부"][0]).join(","), "정윤지 1부 1칸");
+  assert(click["2부"].join(",") === expected2.join(","), "정윤지 2부 1칸");
+  assert(click.spare["1부"][0] === 141 && click.spare["1부"][1] === 152, "1부 spare 1칸");
+  assert(click.spare["2부"][0] === 125 && click.spare["2부"][1] === 199, "2부 spare 1칸");
   assert(JSON.stringify(click) === JSON.stringify(server), "정윤지 click = server");
   assert(JSON.stringify(click) === JSON.stringify(persist), "정윤지 click = persist/reload");
   console.log(
@@ -475,7 +483,7 @@ section("production v51 live SICK overlay: click = persist overlay, not 94/106")
   const click2 = regularIds(ui.click.draft.assignments, "2부");
   const persist2 = regularIds(persistDraft.assignments, "2부");
   const [b2s1, b2s2] = spareIds(draft.sparesByShift, "2부");
-  const expected2 = dualShift2After1Consume(before2, VICTIM, b2s1, b2s2);
+  const expected2 = oneSlotPullForward(before2, VICTIM, b2s1);
 
   assert(cS1 === SPARE2 && cS2 === NEXT_UNUSED, `click spare ${cS1}/${cS2}`);
   assert(dS1 === SPARE2 && dS2 === NEXT_UNUSED, `dirty-confirmed click spare ${dS1}/${dS2}`);
@@ -497,11 +505,10 @@ section("production v51 live SICK overlay: click = persist overlay, not 94/106")
     }
   }
   assert(!click1.includes(VICTIM), "최루비 removed from 1부");
-  assert(click2.join(",") === expected2.join(","), "2부 1부-consume+결원 2칸");
+  assert(click2.join(",") === expected2.join(","), "2부 1칸 pull-forward");
   assert(persist2.join(",") === expected2.join(","), "2부 persist matches click");
-  const [c2s1, c2s2] = spareIds(ui.click.draft.sparesByShift, "2부");
-  assert(c2s1 !== b2s1 && c2s1 !== b2s2, "2부 spare advanced 2 slots, not spare2→spare1");
-  assert(c2s2 != null, "2부 spare2 filled");
+  const [c2s1] = spareIds(ui.click.draft.sparesByShift, "2부");
+  assert(c2s1 === b2s2, "2부 spare2→spare1");
   const leftover3 = [157, 149, 143, 144, 148, 204, 153, 142];
   const click3 = regularIds(ui.click.draft.assignments, "3부");
   const persist3 = regularIds(persistDraft.assignments, "3부");
@@ -582,7 +589,7 @@ function shiftReservations(
   }));
 }
 
-section("1·2부 투대기 1부 SICK: 2부 start +1부소비 + 결원 = 2칸");
+section("1·2부 동일 원번 투대기: 각 부 1칸 pull-forward");
 {
   const date = "2099-12-22";
   const names = [
@@ -671,12 +678,12 @@ section("1·2부 투대기 1부 SICK: 2부 start +1부소비 + 결원 = 2칸");
   assert(after1.join("→") === "A→B→C→D→E→조정혜", `after 1부 ${after1.join("→")}`);
   assert(a1s1 === "장혜원" && a1s2 === "지석준", `after 1부 spare ${a1s1}/${a1s2}`);
   assert(
-    after2.join("→") === "B→C→D→E→조정혜→장혜원→지석준→윤숙영→지선영",
+    after2.join("→") === "A→B→C→D→E→조정혜→장혜원→지석준→윤숙영",
     `after 2부 ${after2.join("→")}`
   );
-  assert(a2s1 === "홍정자" && a2s2 === "다음", `after 2부 spare ${a2s1}/${a2s2}`);
+  assert(a2s1 === "지선영" && a2s2 === "홍정자", `after 2부 spare ${a2s1}/${a2s2}`);
   assert(!after2.includes("정윤지"), "2부 victim gone");
-  assert(after2[0] === "B", "2부 start cursor +1 keeps relative tail");
+  assert(after2[0] === "A", "2부 first 유지 (전역 cursor +1 금지)");
 
   const only1Victim = pool.find((c) => c.name === "E")!;
   const only1Draft = createDraftFromAutoResult(
@@ -755,8 +762,8 @@ section("1·2부 투대기 1부 SICK: 2부 start +1부소비 + 결원 = 2칸");
   const expected = {
     "1부": ["A", "B", "C", "D", "E", "조정혜"],
     spare1: ["장혜원", "지석준"],
-    "2부": ["B", "C", "D", "E", "조정혜", "장혜원", "지석준", "윤숙영", "지선영"],
-    spare2: ["홍정자", "다음"],
+    "2부": ["A", "B", "C", "D", "E", "조정혜", "장혜원", "지석준", "윤숙영"],
+    spare2: ["지선영", "홍정자"],
   };
   for (const [label, stages] of [
     ["CASE A 1부 셀", caseA],
