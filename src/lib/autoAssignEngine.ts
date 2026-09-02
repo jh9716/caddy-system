@@ -4731,11 +4731,11 @@ function freezeShiftsWithoutRemovedCaddies(
 
 /**
  * SICK removeOnly용 원형 HOUSE 큐.
- * 1부 regular 보드 순서 + 1부 스페어를 origin으로 유지한 뒤,
- * 당일 usable HOUSE pool에 남은 캐디를 canonical 순번으로 붙인다.
- * 보드에 아직 없는 leftover tail도 pool에 있으면 버리지 않는다.
- * pool 밖의 OFF/SICK/unavailable/RETIRED/제외 인원은 넣지 않는다.
- * unused 개수 heuristic으로 usable tail을 자르지 않는다.
+ * 1부 regular 보드 순서 + 당일 spare + 보드 leftover를 origin으로 유지한다.
+ * leftover unused는 당일 snapshot(previous.unusedCaddies)에서만 붙인다.
+ * recoverComputePool / DB ACTIVE superset(pool 전 인원)은 tail로 쓰지 않는다.
+ * roster-sized unused(caddyPool − assigned)는 snapshot leftover가 아니다.
+ * pool 밖의 OFF/SICK/unavailable/RETIRED는 allow-map에서 걸러진다.
  * 큐[0]이 이미 1부 origin이므로 재회전하지 않는다.
  */
 function circularHouseFromBoardAndCanonical(
@@ -4759,13 +4759,42 @@ function circularHouseFromBoardAndCanonical(
     )
     .sort((a, b) => a.sequenceIndex - b.sequenceIndex);
   for (const row of rows) push(row.caddy);
-  const spare = (previous.sparesByShift || []).find((row) => row.shift === "1부");
-  for (const slot of [spare?.spare1, spare?.spare2]) {
-    if (!slot?.caddyId) continue;
-    push(allow.get(slot.caddyId));
+  for (const row of previous.sparesByShift || []) {
+    for (const slot of [row.spare1, row.spare2]) {
+      if (!slot?.caddyId) continue;
+      push(allow.get(slot.caddyId));
+    }
+  }
+  const onBoard = new Set<number>();
+  for (const row of previous.assignments) {
+    if (row.kind === "regular" && isHouseRegularCaddy(row.caddy)) {
+      onBoard.add(row.caddy.id);
+    }
+  }
+  for (const row of previous.sparesByShift || []) {
+    if (row.spare1?.caddyId) onBoard.add(row.spare1.caddyId);
+    if (row.spare2?.caddyId) onBoard.add(row.spare2.caddyId);
   }
   for (const caddy of splitCaddyPools(pool).house) {
-    push(caddy);
+    if (onBoard.has(caddy.id)) push(caddy);
+  }
+  const unusedAll = previous.unusedCaddies || [];
+  const unusedHouse = unusedAll.filter(isHouseRegularCaddy);
+  const assignedCount = (previous.assignments || []).length;
+  const unusedCount = unusedAll.length;
+  const baselineCount =
+    Number(previous.meta?.availableCount) > 0
+      ? Number(previous.meta.availableCount)
+      : 0;
+  // Same unused-pollution rule as snapshotComputePool: roster dump
+  // (caddyPool − assigned) is not the day's circular leftover.
+  const unusedIsRosterDump =
+    unusedCount > 0 &&
+    baselineCount > 0 &&
+    assignedCount + unusedCount >= Math.floor(baselineCount * 0.8) &&
+    unusedCount >= Math.max(20, Math.floor(assignedCount * 0.2));
+  if (!unusedIsRosterDump) {
+    for (const caddy of unusedHouse) push(caddy);
   }
   return ordered;
 }
