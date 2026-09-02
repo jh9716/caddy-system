@@ -265,6 +265,31 @@ function parseOneOperationalSheet(
   return { entriesByDateCol, dates };
 }
 
+/** 운영/제외 탭의 날짜 셀만 수집. 역할 중복은 throw하지 않는다. */
+export function scanOpsDutySheetDates(
+  sheets: readonly OpsDutySheet[],
+  selectedYmd: string
+): {
+  operational: OpsDutySheetDateLocation[];
+  skipped: OpsDutySheetDateLocation[];
+} {
+  const operational: OpsDutySheetDateLocation[] = [];
+  const skipped: OpsDutySheetDateLocation[] = [];
+  for (const sheet of sheets) {
+    const matrix = sheet.matrix || [];
+    const dates: OpsDutySheetDateLocation[] = [];
+    for (let r = 0; r < matrix.length; r++) {
+      if (!isDateHeaderRow(matrix[r], selectedYmd)) continue;
+      for (const hit of dateHitsInRow(matrix[r], selectedYmd)) {
+        dates.push({ sheetName: sheet.name, row: r, col: hit.col, ymd: hit.ymd });
+      }
+    }
+    if (isSkippedOpsDutyTabName(sheet.name)) skipped.push(...dates);
+    else operational.push(...dates);
+  }
+  return { operational, skipped };
+}
+
 export function parseOpsDutySheetsForDate(
   sheets: readonly OpsDutySheet[],
   selectedYmd: string

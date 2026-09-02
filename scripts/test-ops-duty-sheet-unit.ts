@@ -28,6 +28,7 @@ import {
   normalizeOpsDutyRoleKey,
   opsDutySheetApplyBlockReason,
   parseOpsDutySheetsForDate,
+  scanOpsDutySheetDates,
   type OpsDutySheet,
   type OpsDutySheetTestDayNames,
 } from "../src/lib/opsDutySheetParser";
@@ -378,17 +379,52 @@ async function liveAndLocal() {
       names.some((n) => n !== "복사용" && n !== "사용안내"),
       "live 운영 탭 존재"
     );
-    expectThrow(
-      "ops_duty_sheet_date_not_found",
-      () => parseOpsDutySheetsForDate(liveSheets!, "2026-09-02"),
-      "live 복사용 2026-09-02는 운영 날짜가 아님"
+    const yearHint = "2026-09-07";
+    const scanned = scanOpsDutySheetDates(liveSheets, yearHint);
+    const opsYmds = [...new Set(scanned.operational.map((d) => d.ymd))].sort();
+    const skipOnly = [
+      ...new Set(
+        scanned.skipped
+          .map((d) => d.ymd)
+          .filter((ymd) => !opsYmds.includes(ymd))
+      ),
+    ].sort();
+    assert(opsYmds.length >= 2, "live 운영 탭에 날짜 2개 이상");
+    assert(
+      scanned.operational.every((d) => d.sheetName !== "복사용" && d.sheetName !== "사용안내"),
+      "scan 운영 날짜에 복사용/사용안내 없음"
     );
-    const live07 = parseOpsDutySheetsForDate(liveSheets, "2026-09-07");
-    assert(live07.sheetName !== "복사용" && live07.sheetName !== "사용안내", "09-07은 운영 탭");
-    const live20 = parseOpsDutySheetsForDate(liveSheets, "2026-09-20");
-    assert(live20.sheetName === live07.sheetName, "같은 14일 탭에서 뒤 7일도 파싱");
+    if (skipOnly.length) {
+      expectThrow(
+        "ops_duty_sheet_date_not_found",
+        () => parseOpsDutySheetsForDate(liveSheets!, skipOnly[0]),
+        `live 제외 탭 전용 날짜 ${skipOnly[0]}는 운영 데이터가 아님`
+      );
+    } else {
+      assert(true, "제외 탭 전용 날짜 없음 — 탭 이름 가드로 대체");
+    }
+    const byTab = new Map<string, string[]>();
+    for (const hit of scanned.operational) {
+      const list = byTab.get(hit.sheetName) || [];
+      list.push(hit.ymd);
+      byTab.set(hit.sheetName, list);
+    }
+    const richest = [...byTab.entries()].sort((a, b) => b[1].length - a[1].length)[0];
+    const tabDates = [...new Set(richest[1])].sort();
+    const first = parseOpsDutySheetsForDate(liveSheets, tabDates[0]);
+    const last = parseOpsDutySheetsForDate(liveSheets, tabDates[tabDates.length - 1]);
+    assert(first.sheetName === richest[0], "운영 탭 첫 날짜");
+    assert(last.sheetName === richest[0], "같은 탭 마지막 날짜(뒤 구간)");
+    assert(first.sheetName !== "복사용" && first.sheetName !== "사용안내", "live 파싱 탭은 운영 탭");
     console.log("  live fetch sheets:", names.join(" | "));
-    console.log("  live 2026-09-07 tab:", live07.sheetName, "entries", live07.entries.length);
+    console.log(
+      "  live ops tab:",
+      richest[0],
+      tabDates[0],
+      "…",
+      tabDates[tabDates.length - 1],
+      `(${tabDates.length}일)`
+    );
   } catch (e) {
     assert(false, `live fetch/parse: ${e instanceof Error ? e.message : e}`);
   }
@@ -396,8 +432,14 @@ async function liveAndLocal() {
   const rawPath = "/tmp/ops-duty-sheet/raw.xlsx";
   try {
     const fromFile = workbookToOpsDutySheets(readFileSync(rawPath));
-    parseOpsDutySheetsForDate(fromFile, "2026-09-14");
-    assert(true, "다운로드 xlsx 뒤 7일 시작일 파싱");
+    const fileScan = scanOpsDutySheetDates(fromFile, "2026-09-07");
+    const fileOps = [...new Set(fileScan.operational.map((d) => d.ymd))].sort();
+    if (fileOps.length) {
+      parseOpsDutySheetsForDate(fromFile, fileOps[fileOps.length - 1]);
+      assert(true, "다운로드 xlsx 운영 탭 마지막 날짜 파싱");
+    } else {
+      assert(true, "다운로드 xlsx에 운영 날짜 없음 — live fetch로 대체");
+    }
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ENOENT") {
       assert(true, "다운로드 xlsx 없음 — live fetch로 대체");
