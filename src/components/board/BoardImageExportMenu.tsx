@@ -6,10 +6,12 @@ import {
   buildBoardExportSlice,
 } from "@/lib/assignmentBoardExport";
 import {
+  BOARD_EXPORT_MULTI_DOWNLOAD_BLOCKED,
   BOARD_EXPORT_MULTI_DOWNLOAD_HINT,
+  BOARD_EXPORT_SHARE_ALL_UNSUPPORTED,
   BOARD_EXPORT_SHARE_UNSUPPORTED,
   canShareBoardPngFiles,
-  downloadBoardPngBlob,
+  downloadBoardPngFilesSequentially,
   exportAndDownloadShiftPng,
   makeBoardExportPngFile,
   renderBoardExportPng,
@@ -65,12 +67,16 @@ export function BoardImageExportMenu({
     setBusy(true);
     closeMenu();
     try {
+      const files: File[] = [];
       for (const shift of BOARD_EXPORT_SHIFTS) {
-        const file = await buildShiftFile(shift);
-        downloadBoardPngBlob(file, file.name);
-        await new Promise((r) => window.setTimeout(r, 350));
+        files.push(await buildShiftFile(shift));
       }
-      onNotice(BOARD_EXPORT_MULTI_DOWNLOAD_HINT);
+      const result = await downloadBoardPngFilesSequentially(files);
+      onNotice(
+        result.warnedBlocked
+          ? BOARD_EXPORT_MULTI_DOWNLOAD_BLOCKED
+          : BOARD_EXPORT_MULTI_DOWNLOAD_HINT
+      );
     } catch (e) {
       onNotice(e instanceof Error ? e.message : "전체 PNG 다운로드에 실패했습니다.");
     } finally {
@@ -108,7 +114,11 @@ export function BoardImageExportMenu({
         files.push(await buildShiftFile(shift));
       }
       if (!canShareBoardPngFiles(files)) {
-        onNotice(BOARD_EXPORT_SHARE_UNSUPPORTED);
+        onNotice(
+          files.some((file) => canShareBoardPngFiles([file]))
+            ? BOARD_EXPORT_SHARE_ALL_UNSUPPORTED
+            : BOARD_EXPORT_SHARE_UNSUPPORTED
+        );
         return;
       }
       await shareBoardPngFiles(files, `VERTHILL 배치표 ${draft.date}`);

@@ -43,7 +43,7 @@ export async function renderBoardExportPng(slice: BoardExportSlice): Promise<Blo
     `width:${BOARD_EXPORT_WIDTH_PX}px`,
     "pointer-events:none",
     "z-index:-1",
-    "background:#fff",
+    "background:#fbf7ee",
   ].join(";");
   document.body.appendChild(host);
 
@@ -58,7 +58,7 @@ export async function renderBoardExportPng(slice: BoardExportSlice): Promise<Blo
     }
     const dataUrl = await toPng(node, {
       pixelRatio: BOARD_EXPORT_PIXEL_RATIO,
-      backgroundColor: "#ffffff",
+      backgroundColor: "#fbf7ee",
       cacheBust: true,
       width: BOARD_EXPORT_WIDTH_PX,
     });
@@ -72,14 +72,26 @@ export async function renderBoardExportPng(slice: BoardExportSlice): Promise<Blo
 export const BOARD_EXPORT_SHARE_UNSUPPORTED =
   "이 기기에서는 공유를 지원하지 않습니다. PNG 다운로드를 이용해 주세요.";
 
+export const BOARD_EXPORT_SHARE_ALL_UNSUPPORTED =
+  "이 기기에서는 여러 장 공유를 지원하지 않습니다. 부를 따로 공유하거나 PNG 다운로드를 이용해 주세요.";
+
+export const BOARD_EXPORT_MULTI_DOWNLOAD_BLOCKED =
+  "브라우저가 여러 파일 다운로드를 차단했습니다. 개별 다운로드를 이용해 주세요.";
+
 export const BOARD_EXPORT_MULTI_DOWNLOAD_HINT =
-  "1부·2부·3부 PNG를 다운로드했습니다. 브라우저가 여러 파일 다운로드를 막으면 각 부를 따로 받아 주세요.";
+  "1부·2부·3부 PNG를 순서대로 저장했습니다. 파일이 1장만 보이면 브라우저가 여러 파일 다운로드를 차단했습니다. 개별 다운로드를 이용해 주세요.";
+
+export const BOARD_EXPORT_DOWNLOAD_GAP_MS = 1100;
 
 export function makeBoardExportPngFile(blob: Blob, filename: string): File {
   return new File([blob], filename, { type: "image/png" });
 }
 
-export function downloadBoardPngBlob(blob: Blob, filename: string) {
+export function downloadBoardPngBlob(
+  blob: Blob,
+  filename: string,
+  opts?: { revokeMs?: number }
+) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -88,7 +100,47 @@ export function downloadBoardPngBlob(blob: Blob, filename: string) {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 4000);
+  window.setTimeout(() => URL.revokeObjectURL(url), opts?.revokeMs ?? 8000);
+}
+
+export function shouldWarnMultipleDownloadBlock(
+  nav?: { userActivation?: { isActive: boolean } }
+): boolean {
+  const n =
+    nav ??
+    (typeof navigator === "undefined"
+      ? undefined
+      : (navigator as { userActivation?: { isActive: boolean } }));
+  if (!n?.userActivation) return false;
+  return n.userActivation.isActive === false;
+}
+
+export async function downloadBoardPngFilesSequentially(
+  files: File[],
+  opts?: {
+    gapMs?: number;
+    wait?: (ms: number) => Promise<void>;
+    nav?: { userActivation?: { isActive: boolean } };
+    download?: (blob: Blob, filename: string) => void;
+  }
+): Promise<{ count: number; warnedBlocked: boolean }> {
+  const gap = opts?.gapMs ?? BOARD_EXPORT_DOWNLOAD_GAP_MS;
+  const wait =
+    opts?.wait ??
+    ((ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms)));
+  const download =
+    opts?.download ??
+    ((blob: Blob, filename: string) =>
+      downloadBoardPngBlob(blob, filename, { revokeMs: 12000 }));
+  let warnedBlocked = false;
+  for (let i = 0; i < files.length; i++) {
+    if (i > 0) {
+      if (shouldWarnMultipleDownloadBlock(opts?.nav)) warnedBlocked = true;
+      await wait(gap);
+    }
+    download(files[i], files[i].name);
+  }
+  return { count: files.length, warnedBlocked };
 }
 
 export async function exportAndDownloadShiftPng(slice: BoardExportSlice) {
