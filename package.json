@@ -53,6 +53,7 @@
     "test:off-snapshot-save-version-http": "bash scripts/tsx-safe.sh scripts/test-off-snapshot-save-version-http.ts",
     "test:persist-keepalive-chromium": "bash scripts/tsx-safe.sh scripts/test-persist-keepalive-chromium.ts",
     "test:daily-board-published-unit": "bash scripts/tsx-safe.sh scripts/test-daily-board-published-unit.ts",
+    "test:published-board-privacy-unit": "bash scripts/tsx-safe.sh scripts/test-published-board-privacy-unit.ts",
     "preview:roster": "bash scripts/tsx-safe.sh scripts/preview-roster-import.ts",
     "inspect:db-readonly": "bash scripts/tsx-safe.sh scripts/inspect-db-schema-readonly.ts",
     "check:migration-checksums": "bash scripts/tsx-safe.sh scripts/check-migration-checksums-readonly.ts",

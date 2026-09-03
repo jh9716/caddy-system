@@ -17,6 +17,7 @@ import {
   publishDailyBoard,
   type PublishDailyBoardTimings,
 } from "@/lib/dailyBoardPublishedService";
+import { publishedPayloadForReader } from "@/lib/publishedBoardPrivacy";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -32,6 +33,7 @@ function dateFromRequest(req: NextRequest, bodyDate?: unknown): string | null {
 export async function GET(req: NextRequest) {
   const guard = await requirePublishedReader(req);
   if (guard) return guard;
+  const auth = await resolveAuthUser(req);
   const date = dateFromRequest(req);
   if (!date || !isYmd(date)) {
     return NextResponse.json({ error: "date=YYYY-MM-DD 필요" }, { status: 400 });
@@ -46,7 +48,7 @@ export async function GET(req: NextRequest) {
             date: published.date,
             schemaVersion: published.schemaVersion,
             sourceDraftVersion: published.sourceDraftVersion,
-            payload: published.payload,
+            payload: publishedPayloadForReader(published.payload, auth?.role ?? null),
             publishedAt: published.publishedAt,
             publishedByUserId: published.publishedByUserId,
             publishedByUsername: published.payload.publisherUsername,
