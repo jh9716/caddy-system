@@ -16,7 +16,7 @@ import {
   type DailyOpsDutyRole,
   isDailyOpsDutyRole,
 } from "@/lib/dailyOpsDuty";
-import { normalizeEmploymentStatus } from "@/lib/caddyManage";
+import { PRIMARY_TEAMS, normalizeEmploymentStatus } from "@/lib/caddyManage";
 
 export const ADMIN_OPS_DASHBOARD_ROLES = DAILY_OPS_DUTY_ROLES;
 
@@ -63,6 +63,15 @@ export type AdminOpsReasonCount = {
   count: number;
 };
 
+export type AdminOpsStatusTone =
+  | "available"
+  | "off"
+  | "sick"
+  | "duty"
+  | "marshal"
+  | "leader"
+  | "other";
+
 export type AdminOpsCaddyRow = {
   id: number;
   name: string;
@@ -72,7 +81,13 @@ export type AdminOpsCaddyRow = {
   bucket: AvailabilityBucket;
   status: "available" | "excluded";
   statusLabel: string;
+  statusTone: AdminOpsStatusTone;
   reasons: string[];
+};
+
+export type AdminOpsTeamGroup = {
+  team: string;
+  rows: AdminOpsCaddyRow[];
 };
 
 export type AdminOpsDashboardPayload = {
@@ -85,6 +100,8 @@ export type AdminOpsDashboardPayload = {
   };
   availability: {
     finalAvailable: number;
+    houseAvailable: number;
+    thirdAvailable: number;
     offCount: number;
     reasonCounts: AdminOpsReasonCount[];
   };
@@ -177,8 +194,54 @@ export function groupOpsDutyNames(
   }));
 }
 
+const TONE_PRIORITY: AdminOpsStatusTone[] = [
+  "sick",
+  "duty",
+  "marshal",
+  "leader",
+  "off",
+  "other",
+];
+
+function toneFromOneReason(reason: string): AdminOpsStatusTone | null {
+  const r = String(reason ?? "").trim();
+  if (!r) return null;
+  if (r === "병가" || r.startsWith("병가(") || r === "장기병가" || r.startsWith("장기병가(")) {
+    return "sick";
+  }
+  if (r === "당번" || r.startsWith("당번(") || r === "조출당번" || r === "후출당번") {
+    return "duty";
+  }
+  if (r === "마샬" || r.startsWith("마샬(") || r === "조출마샬" || r === "후출마샬") {
+    return "marshal";
+  }
+  if (r === "조장" || r.startsWith("조장(")) return "leader";
+  if (r === "휴무" || r.startsWith("휴무(")) return "off";
+  return "other";
+}
+
+export function statusToneFromReasons(
+  status: "available" | "excluded",
+  reasons: readonly string[]
+): AdminOpsStatusTone {
+  if (status !== "excluded") return "available";
+  let best: AdminOpsStatusTone = "other";
+  let bestRank = TONE_PRIORITY.length;
+  for (const reason of reasons) {
+    const tone = toneFromOneReason(reason);
+    if (!tone) continue;
+    const rank = TONE_PRIORITY.indexOf(tone);
+    if (rank >= 0 && rank < bestRank) {
+      best = tone;
+      bestRank = rank;
+    }
+  }
+  return best;
+}
+
 export function toAdminOpsCaddyRow(row: AvailabilityRow): AdminOpsCaddyRow {
   const excluded = row.bucket === "excluded";
+  const reasons = excluded ? [...row.excludedReasons] : [];
   return {
     id: row.id,
     name: row.name,
@@ -188,7 +251,8 @@ export function toAdminOpsCaddyRow(row: AvailabilityRow): AdminOpsCaddyRow {
     bucket: row.bucket,
     status: excluded ? "excluded" : "available",
     statusLabel: excluded ? "제외" : "가용",
-    reasons: excluded ? [...row.excludedReasons] : [],
+    statusTone: statusToneFromReasons(excluded ? "excluded" : "available", reasons),
+    reasons,
   };
 }
 
@@ -203,6 +267,34 @@ export function filterDashboardCaddies(
   query: string
 ): AdminOpsCaddyRow[] {
   return rows.filter((row) => matchesCaddyNameQuery(row.name, query));
+}
+
+export function groupCaddiesByPrimaryTeam(
+  rows: readonly AdminOpsCaddyRow[]
+): AdminOpsTeamGroup[] {
+  const byTeam = new Map<string, AdminOpsCaddyRow[]>();
+  for (const team of PRIMARY_TEAMS) byTeam.set(team, []);
+  const extras: AdminOpsCaddyRow[] = [];
+  for (const row of rows) {
+    const list = byTeam.get(row.team);
+    if (list) list.push(row);
+    else extras.push(row);
+  }
+  const groups: AdminOpsTeamGroup[] = PRIMARY_TEAMS.map((team) => ({
+    team,
+    rows: byTeam.get(team) ?? [],
+  }));
+  if (extras.length > 0) {
+    const extraTeams = [...new Set(extras.map((r) => r.team))];
+    extraTeams.sort((a, b) => a.localeCompare(b, "ko"));
+    for (const team of extraTeams) {
+      groups.push({
+        team,
+        rows: extras.filter((r) => r.team === team),
+      });
+    }
+  }
+  return groups;
 }
 
 export function buildAdminOpsDashboard(input: {
@@ -225,6 +317,8 @@ export function buildAdminOpsDashboard(input: {
     roster: countActiveRoster(rows),
     availability: {
       finalAvailable: input.availability.dailySummary.finalAvailable,
+      houseAvailable: input.availability.counts.byType.HOUSE,
+      thirdAvailable: input.availability.counts.byType.THIRD,
       offCount: countOffFromReasons(rows),
       reasonCounts: countExistingReasons(input.availability.excluded),
     },

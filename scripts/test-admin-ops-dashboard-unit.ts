@@ -15,12 +15,15 @@ import {
   countActiveRoster,
   countOffFromReasons,
   filterDashboardCaddies,
+  groupCaddiesByPrimaryTeam,
   groupOpsDutyNames,
+  statusToneFromReasons,
 } from "../src/lib/adminOpsDashboard";
 import { computeAvailability } from "../src/lib/availabilityEngine";
 import { applyDailyExternalExclusions } from "../src/lib/dailyAvailabilityOverlay";
-import { AdminOpsCaddyGrid } from "../src/components/manage/AdminOpsDashboard";
+import { AdminOpsTeamBoard } from "../src/components/manage/AdminOpsDashboard";
 import { addDaysYmd } from "../src/lib/dailyBoardPublished";
+import { PRIMARY_TEAMS } from "../src/lib/caddyManage";
 
 let passed = 0;
 let failed = 0;
@@ -140,6 +143,8 @@ section("선택 날짜 availability summary + OFF");
   });
   assert(dash.date === date, "payload 날짜");
   assert(dash.availability.finalAvailable === av.dailySummary.finalAvailable, "finalAvailable 재사용");
+  assert(dash.availability.houseAvailable === av.counts.byType.HOUSE, "HOUSE 가용은 counts.byType 재사용");
+  assert(dash.availability.thirdAvailable === av.counts.byType.THIRD, "3부반 가용은 counts.byType 재사용");
   assert(dash.availability.offCount === 1, "휴무 1명");
   assert(countOffFromReasons(av.excluded) === 1, "OFF reason 집계");
   assert(
@@ -164,7 +169,7 @@ section("DailyOpsDuty role/name");
   assert(groups.find((g) => g.role === "LEADER")?.names[0] === "박3부", "조장 이름");
 }
 
-section("전체 캐디 grid 가용/제외");
+section("전체 캐디 조별 현황판 가용/제외");
 {
   const dash = buildAdminOpsDashboard({
     date: "2026-09-16",
@@ -174,22 +179,35 @@ section("전체 캐디 grid 가용/제외");
       { role: "LEADER", name: "박3부" },
     ],
   });
-  assert(!dash.caddies.some((c) => c.name === "오퇴사"), "RETIRED는 grid에서 제외");
+  assert(!dash.caddies.some((c) => c.name === "오퇴사"), "RETIRED는 현황에서 제외");
   const off = dash.caddies.find((c) => c.name === "이휴무")!;
   const duty = dash.caddies.find((c) => c.name === "김가용")!;
   const sick = dash.caddies.find((c) => c.name === "최병가")!;
   const leave = dash.caddies.find((c) => c.name === "강휴직")!;
+  const leader = dash.caddies.find((c) => c.name === "박3부")!;
   assert(off.status === "excluded" && off.reasons.includes("휴무"), "휴무 제외");
+  assert(off.statusTone === "off", "휴무 tone");
   assert(duty.status === "excluded" && duty.reasons.includes("조출당번"), "당번 제외 reason");
+  assert(duty.statusTone === "duty", "당번 tone");
   assert(sick.status === "excluded" && sick.reasons.includes("병가"), "병가 제외");
+  assert(sick.statusTone === "sick", "병가 tone");
+  assert(leader.statusTone === "leader", "조장 tone");
   assert(leave.status === "excluded", "휴직 제외");
+  assert(statusToneFromReasons("available", []) === "available", "가용 tone");
+  assert(statusToneFromReasons("excluded", ["조출마샬"]) === "marshal", "마샬 tone");
+  const teams = groupCaddiesByPrimaryTeam(dash.caddies);
+  assert(PRIMARY_TEAMS.every((t, i) => teams[i]?.team === t), "1조~12조 고정 컬럼");
+  assert(teams[0].rows.some((r) => r.name === "김가용"), "1조에 김가용");
+  assert(teams[8].rows.some((r) => r.name === "박3부"), "9조에 박3부");
   const html = renderToStaticMarkup(
-    createElement(AdminOpsCaddyGrid, { rows: dash.caddies })
+    createElement(AdminOpsTeamBoard, { groups: teams })
   );
-  assert(html.includes("이휴무") && html.includes("휴무"), "grid에 이름/reason");
-  assert(html.includes("data-status=\"excluded\""), "제외 badge");
+  assert(html.includes("이휴무") && html.includes("휴무"), "현황판에 이름/reason");
+  assert(html.includes("data-tone=\"off\""), "휴무 색상 tone");
+  assert(html.includes("data-team=\"1조\"") && html.includes("data-team=\"12조\""), "조별 섹션");
   assert(html.includes("3부반"), "HOUSE/3부반 표시");
-  assert(html.includes("dash-caddy-grid"), "grid class");
+  assert(html.includes("dash-team-board"), "조별 현황판 class");
+  assert(!html.includes("dash-caddy-grid"), "사람 카드 grid 제거");
   const named = filterDashboardCaddies(dash.caddies, "김");
   assert(named.length === 1 && named[0].name === "김가용", "이름 검색만");
 }
@@ -247,9 +265,18 @@ section("모바일 폭 rendering 구조");
 {
   const css = readSrc("src/app/globals.css");
   const ui = readSrc("src/components/manage/AdminOpsDashboard.tsx");
-  assert(/\.dash-caddy-grid\s*\{[^}]*repeat\(2/.test(css), "모바일 2열 grid");
-  assert(/@media \(min-width: 720px\)[\s\S]*dash-caddy-grid[\s\S]*repeat\(4/.test(css), "PC 4열");
-  assert(/@media \(min-width: 1100px\)[\s\S]*dash-caddy-grid[\s\S]*repeat\(6/.test(css), "넓은 PC 6열");
+  assert(/dash-kpi-ops/.test(ui) && /재직 캐디/.test(ui) && /해당일 가용 캐디/.test(ui), "상단 3카드");
+  assert(/하우스 /.test(ui) && /3부반 /.test(ui) && /하우스 가용/.test(ui), "카드 보조 HOUSE/3부반");
+  assert(!/label: "HOUSE"/.test(ui) && !/label: "최종 가용"/.test(ui), "구 5카드 분리 제거");
+  assert(/AdminOpsTeamBoard/.test(ui) && !/AdminOpsCaddyGrid/.test(ui), "조별 현황판으로 교체");
+  assert(/dash-duty-title/.test(ui), "당번 영역 큰 제목");
+  assert(/\.dash-team-board\s*\{[^}]*repeat\(2/.test(css), "모바일 조별 2열");
+  assert(/@media \(min-width: 720px\)[\s\S]*dash-team-board[\s\S]*repeat\(4/.test(css), "PC 조별 4열");
+  assert(/@media \(min-width: 1100px\)[\s\S]*dash-team-board[\s\S]*repeat\(6/.test(css), "넓은 PC 조별 6열");
+  assert(/\.dash-kpi-ops\s*\{[^}]*minmax\(0, 1fr\)/.test(css), "모바일 요약 1열");
+  assert(/@media \(min-width: 720px\)[\s\S]*dash-kpi-ops[\s\S]*repeat\(3/.test(css), "PC 요약 3열");
+  assert(/is-off/.test(css) && /is-sick/.test(css) && /is-duty/.test(css), "휴무/병가/당번 색");
+  assert(/is-marshal/.test(css) && /is-leader/.test(css) && /is-available/.test(css), "마샬/조장/가용 색");
   assert(/addDays\(/.test(ui) && /이전/.test(ui) && /type="date"/.test(ui), "날짜 이전/다음/input");
   assert(/캐디 이름 검색/.test(ui), "이름 검색만");
   assert(!/전화번호|차량번호/.test(ui), "전화/차량 검색 없음");
