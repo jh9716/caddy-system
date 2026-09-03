@@ -99,17 +99,46 @@ section("권한별 redaction");
 
   assert(admin.placements[0].teamName === "고객홍길동", "admin teamName 유지");
   assert(leader.placements[0].teamName === "고객홍길동", "leader teamName 유지");
+  assert(admin.placements[0].reservationId === "r1", "admin reservationId 유지");
+  assert(leader.placements[0].reservationId === "r1", "leader reservationId 유지");
+  assert(admin.placements[0].reservationKey === "r1", "admin reservationKey 유지");
+  assert(leader.placements[0].reservationKey === "r1", "leader reservationKey 유지");
   assert(admin === src, "admin은 원본 payload 참조");
   assert(caddy.placements[0].teamName === null, "caddy teamName 제거");
   assert(anon.placements[0].teamName === null, "anonymous helper도 teamName 제거");
-  assert(src.placements[0].teamName === "고객홍길동", "원본 payload 미변경");
+  assert(!("reservationId" in caddy.placements[0]), "caddy reservationId omit");
+  assert(!("reservationKey" in caddy.placements[0]), "caddy reservationKey omit");
+  assert(!("reservationId" in anon.placements[0]), "미확인 role reservationId omit");
+  assert(!("reservationKey" in anon.placements[0]), "미확인 role reservationKey omit");
+  {
+    const staff = publishedPayloadForReader(src, normalizeAppRole("staff"));
+    assert(staff.placements[0].teamName === null, "staff teamName 제거");
+    assert(!("reservationId" in staff.placements[0]), "staff reservationId omit");
+    assert(!("reservationKey" in staff.placements[0]), "staff reservationKey omit");
+  }
+  assert(src.placements[0].teamName === "고객홍길동", "원본 payload teamName 미변경");
+  assert(src.placements[0].reservationId === "r1", "원본 payload reservationId 미변경");
+  assert(src.placements[0].reservationKey === "r1", "원본 payload reservationKey 미변경");
   assert(
     !JSON.stringify(caddy).includes("고객홍길동"),
     "caddy JSON에 고객 문자열 없음"
   );
   assert(
+    !JSON.stringify(caddy).includes('"reservationId"'),
+    "caddy JSON에 reservationId 키 없음"
+  );
+  assert(
+    !JSON.stringify(caddy).includes('"reservationKey"'),
+    "caddy JSON에 reservationKey 키 없음"
+  );
+  assert(
     JSON.stringify(admin).includes("고객홍길동"),
     "admin JSON에 고객명 유지"
+  );
+  assert(
+    JSON.stringify(admin).includes('"reservationId"') &&
+      JSON.stringify(admin).includes('"reservationKey"'),
+    "admin JSON에 reservation 키 유지"
   );
 }
 
@@ -123,10 +152,48 @@ section("캐디 응답 유지 필드 / 제거 필드");
   assert(row.course === "VERTHILL", "코스 유지");
   assert(row.caddyId === 11, "캐디 ID 유지");
   assert(row.locked === true && row.chageun === true, "LOCK/찾근 유지");
-  assert(row.reservationId === "r1" && row.reservationKey === "r1", "배치 식별자 유지");
+  assert(!("reservationId" in row), "reservationId 키 자체 omit");
+  assert(!("reservationKey" in row), "reservationKey 키 자체 omit");
   assert(caddy.sparesByShift[0].spare1?.name === "대기갑", "스페어 유지");
   assert(!("customerName" in row) && !("reservationName" in row), "추측 필드 없음");
-  assert(row.teamName === null, "실제 고객 필드는 teamName만 제거");
+  assert(row.teamName === null, "teamName은 null로 복사");
+}
+
+section("레거시 reservationKey composite에 teamName 포함");
+{
+  const src = samplePayload();
+  src.placements[0].reservationKey = "2026-09-16|VERTHILL|1부|06:00|0|고객홍길동|sheet";
+  const admin = publishedPayloadForReader(src, "admin");
+  const caddy = publishedPayloadForReader(src, "caddy");
+  assert(
+    admin.placements[0].reservationKey === src.placements[0].reservationKey,
+    "admin은 레거시 reservationKey 유지"
+  );
+  assert(!("reservationKey" in caddy.placements[0]), "caddy는 레거시 reservationKey omit");
+  assert(
+    !JSON.stringify(caddy).includes("고객홍길동"),
+    "caddy JSON에 레거시 key의 teamName 없음"
+  );
+  assert(
+    src.placements[0].reservationKey.includes("고객홍길동"),
+    "원본 레거시 reservationKey 미변경"
+  );
+}
+
+section("teamName이 이미 null이어도 reservation 필드 omit");
+{
+  const src = samplePayload();
+  src.placements[0].teamName = null;
+  src.placements[0].reservationKey = "2026-09-16|VERTHILL|1부|06:00|0|고객홍길동|sheet";
+  const caddy = publishedPayloadForReader(src, "caddy");
+  assert(caddy.placements[0].teamName === null, "teamName null 유지");
+  assert(!("reservationId" in caddy.placements[0]), "teamName null이어도 reservationId omit");
+  assert(!("reservationKey" in caddy.placements[0]), "teamName null이어도 reservationKey omit");
+  assert(
+    !JSON.stringify(caddy).includes("고객홍길동"),
+    "teamName null이어도 레거시 key의 teamName 미노출"
+  );
+  assert(src.placements[0].reservationKey.includes("고객홍길동"), "원본 reservationKey 미변경");
 }
 
 section("/board redacted payload 렌더 + 관리자 regression");

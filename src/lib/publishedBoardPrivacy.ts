@@ -9,7 +9,7 @@ import type {
 } from "@/lib/dailyBoardPublished";
 import type { AppRole } from "@/lib/sessionCookies";
 
-/** admin·leader(조장)는 운영 조회. caddy 및 미확인 role만 고객명 제거. */
+/** admin·leader(조장)는 운영 조회. caddy/staff 및 미확인 role은 고객 식별 필드 제거. */
 export function shouldRedactPublishedGuestNames(
   role: AppRole | null | undefined
 ): boolean {
@@ -19,8 +19,8 @@ export function shouldRedactPublishedGuestNames(
 export function redactPublishedPlacementGuestNames(
   row: PublishedPlacementV1
 ): PublishedPlacementV1 {
-  if (row.teamName == null) return row;
-  return { ...row, teamName: null };
+  const { reservationId: _id, reservationKey: _key, ...rest } = row;
+  return { ...rest, teamName: null } as PublishedPlacementV1;
 }
 
 export function redactPublishedPayloadGuestNames(
