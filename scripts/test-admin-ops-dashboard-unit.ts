@@ -21,7 +21,7 @@ import {
 } from "../src/lib/adminOpsDashboard";
 import { computeAvailability } from "../src/lib/availabilityEngine";
 import { applyDailyExternalExclusions } from "../src/lib/dailyAvailabilityOverlay";
-import { AdminOpsTeamBoard, TeamBoardPerson } from "../src/components/manage/AdminOpsDashboard";
+import { AdminOpsDutyBoard, AdminOpsTeamBoard, TeamBoardPerson } from "../src/components/manage/AdminOpsDashboard";
 import { addDaysYmd } from "../src/lib/dailyBoardPublished";
 import { PRIMARY_TEAMS } from "../src/lib/caddyManage";
 
@@ -167,6 +167,14 @@ section("DailyOpsDuty role/name");
   assert(am.names.join(" · ") === "김가용 · 정조출", "역할별 이름 나열");
   assert(groups.find((g) => g.role === "DUTY_PM")?.names.length === 0, "빈 역할은 0명");
   assert(groups.find((g) => g.role === "LEADER")?.names[0] === "박3부", "조장 이름");
+  const dutyHtml = renderToStaticMarkup(createElement(AdminOpsDutyBoard, { groups }));
+  assert(dutyHtml.includes("dash-ops-board") && dutyHtml.includes("dash-ops-row"), "compact 운영판");
+  assert(dutyHtml.includes("조출 당번") && dutyHtml.includes("후출 당번"), "당번 한 행");
+  assert(dutyHtml.includes("조출 마샬") && dutyHtml.includes("후출 마샬"), "마샬 한 행");
+  assert(dutyHtml.includes("조장") && dutyHtml.includes("is-single"), "조장 단독 행");
+  assert(dutyHtml.includes("김가용 · 정조출"), "당번 이름 나열");
+  assert(dutyHtml.includes("2명") && dutyHtml.includes("dash-ops-count"), "인원은 보조");
+  assert(!dutyHtml.includes("dash-duty-card") && !dutyHtml.includes("dash-duty-grid"), "큰 카드 5개 아님");
 }
 
 section("전체 캐디 조별 현황판 가용/제외");
@@ -312,14 +320,17 @@ section("모바일 폭 rendering 구조");
   assert(!/label: "HOUSE"/.test(ui) && !/label: "최종 가용"/.test(ui), "구 5카드 분리 제거");
   assert(/AdminOpsTeamBoard/.test(ui) && !/AdminOpsCaddyGrid/.test(ui), "조별 현황판으로 교체");
   assert(/dash-duty-title/.test(ui), "당번 영역 큰 제목");
+  assert(/AdminOpsDutyBoard/.test(ui) && /dash-ops-board/.test(ui), "당번 compact 운영판");
+  assert(!/dash-duty-grid/.test(ui) && !/dash-duty-card/.test(ui), "당번 큰 카드 5개 제거");
   assert(/\.dash-team-board\s*\{[^}]*repeat\(4/.test(css), "모바일 조별 4열");
   assert(/minmax\(4\.5rem/.test(css), "조 column 최소폭 4.5rem");
   assert(/@media \(min-width: 720px\)[\s\S]*dash-team-board[\s\S]*repeat\(8/.test(css), "PC 조별 8열");
   assert(/@media \(min-width: 1100px\)[\s\S]*dash-team-board[\s\S]*repeat\(12/.test(css), "넓은 PC 12열");
   assert(/grid-template-rows:\s*auto auto/.test(css), "캐디 카드 2줄");
   assert(!/dash-team-person-sep/.test(css), "한 줄 구분자 없음");
-  assert(/\.dash-kpi-ops\s*\{[^}]*minmax\(0, 1fr\)/.test(css), "모바일 요약 1열");
-  assert(/@media \(min-width: 720px\)[\s\S]*dash-kpi-ops[\s\S]*repeat\(3/.test(css), "PC 요약 3열");
+  assert(/\.dash-kpi(?:\.dash-kpi-ops|-ops)\s*\{[^}]*repeat\(3,\s*minmax\(0, 1fr\)/.test(css), "요약 3열 전체 폭");
+  assert(/@media \(min-width: 560px\)[\s\S]*dash-ops-row[\s\S]*minmax\(0, 1fr\) minmax\(0, 1fr\)/.test(css), "PC 당번/마샬 2열");
+  assert(!/dash-duty-grid/.test(css), "당번 5열 카드 없음");
   assert(/is-off/.test(css) && /is-sick/.test(css) && /is-duty/.test(css), "휴무/병가/당번 색");
   assert(/is-marshal/.test(css) && /is-leader/.test(css) && /is-available/.test(css), "마샬/조장/가용 색");
   assert(/addDays\(/.test(ui) && /이전/.test(ui) && /type="date"/.test(ui), "날짜 이전/다음/input");

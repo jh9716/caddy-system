@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
+  OPS_DUTY_DASHBOARD_LABELS,
   filterDashboardCaddies,
   groupCaddiesByPrimaryTeam,
   type AdminOpsCaddyRow,
@@ -9,6 +10,7 @@ import {
   type AdminOpsDutyGroup,
   type AdminOpsTeamGroup,
 } from "@/lib/adminOpsDashboard";
+import type { DailyOpsDutyRole } from "@/lib/dailyOpsDuty";
 import { addDays } from "@/lib/krHolidays";
 
 type DashboardResponse = AdminOpsDashboardPayload & { ok?: boolean; error?: string };
@@ -26,13 +28,48 @@ function formatNames(names: string[]): string {
   return names.join(" · ");
 }
 
-function DutyCard({ group }: { group: AdminOpsDutyGroup }) {
+function dutyGroupOrEmpty(
+  groups: readonly AdminOpsDutyGroup[],
+  role: DailyOpsDutyRole
+): AdminOpsDutyGroup {
   return (
-    <article className="dash-duty-card" data-role={group.role}>
-      <div className="dash-duty-label">{group.label}</div>
-      <div className="dash-duty-count">{group.names.length}명</div>
-      <div className="dash-duty-names">{formatNames(group.names)}</div>
-    </article>
+    groups.find((group) => group.role === role) ?? {
+      role,
+      label: OPS_DUTY_DASHBOARD_LABELS[role],
+      names: [],
+    }
+  );
+}
+
+export function OpsDutyCell({ group }: { group: AdminOpsDutyGroup }) {
+  return (
+    <div className="dash-ops-cell" data-role={group.role}>
+      <span className="dash-ops-role">{group.label}</span>
+      <span className="dash-ops-names">{formatNames(group.names)}</span>
+      <span className="dash-ops-count">{group.names.length}명</span>
+    </div>
+  );
+}
+
+export function AdminOpsDutyBoard({
+  groups,
+}: {
+  groups: readonly AdminOpsDutyGroup[];
+}) {
+  return (
+    <div className="dash-ops-board">
+      <div className="dash-ops-row">
+        <OpsDutyCell group={dutyGroupOrEmpty(groups, "DUTY_AM")} />
+        <OpsDutyCell group={dutyGroupOrEmpty(groups, "DUTY_PM")} />
+      </div>
+      <div className="dash-ops-row">
+        <OpsDutyCell group={dutyGroupOrEmpty(groups, "MARSHAL_AM")} />
+        <OpsDutyCell group={dutyGroupOrEmpty(groups, "MARSHAL_PM")} />
+      </div>
+      <div className="dash-ops-row is-single">
+        <OpsDutyCell group={dutyGroupOrEmpty(groups, "LEADER")} />
+      </div>
+    </div>
   );
 }
 
@@ -221,10 +258,7 @@ export default function AdminOpsDashboard() {
           value={data?.roster.activeCount ?? "—"}
           lines={
             data
-              ? [
-                  `하우스 ${data.roster.houseCount}명`,
-                  `3부반 ${data.roster.thirdCount}명`,
-                ]
+              ? [`하우스 ${data.roster.houseCount} · 3부반 ${data.roster.thirdCount}`]
               : undefined
           }
         />
@@ -235,8 +269,7 @@ export default function AdminOpsDashboard() {
           lines={
             data
               ? [
-                  `하우스 가용 ${data.availability.houseAvailable}명`,
-                  `3부반 가용 ${data.availability.thirdAvailable}명`,
+                  `하우스 가용 ${data.availability.houseAvailable} · 3부반 가용 ${data.availability.thirdAvailable}`,
                 ]
               : undefined
           }
@@ -260,11 +293,7 @@ export default function AdminOpsDashboard() {
 
       <section className="dash-duty" aria-label="운영 당번·마샬·조장">
         <h2 className="dash-duty-title">운영 당번 · 마샬 · 조장</h2>
-        <div className="dash-duty-grid">
-          {(data?.opsDuties ?? []).map((group) => (
-            <DutyCard key={group.role} group={group} />
-          ))}
-        </div>
+        <AdminOpsDutyBoard groups={data?.opsDuties ?? []} />
       </section>
 
       <section className="dash-caddies" aria-label="조별 캐디 현황">
