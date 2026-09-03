@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   filterDashboardCaddies,
-  formatTeamPersonLine,
   groupCaddiesByPrimaryTeam,
   type AdminOpsCaddyRow,
   type AdminOpsDashboardPayload,
@@ -67,25 +66,16 @@ function SummaryCard({
 }
 
 export function TeamBoardPerson({ row }: { row: AdminOpsCaddyRow }) {
-  const excluded = row.status === "excluded";
-  const reason = excluded ? row.reasons[0] || "" : "";
+  const reason = row.reasons[0] || row.statusLabel;
   return (
     <li
       className={`dash-team-person is-${row.statusTone}`}
       data-caddy-id={row.id}
       data-status={row.status}
       data-tone={row.statusTone}
-      title={formatTeamPersonLine(row)}
     >
       <span className="dash-team-person-name">{row.name}</span>
-      {reason ? (
-        <>
-          <span className="dash-team-person-sep" aria-hidden>
-            ·
-          </span>
-          <span className="dash-team-person-reason">{reason}</span>
-        </>
-      ) : null}
+      <span className="dash-team-person-reason">{reason}</span>
     </li>
   );
 }
