@@ -71,6 +71,7 @@
     "test:third-weekly-rotation-unit": "bash scripts/tsx-safe.sh scripts/test-third-weekly-rotation-unit.ts",
     "test:admin-tools-unit": "bash scripts/tsx-safe.sh scripts/test-admin-tools-unit.ts",
     "test:admin-ops-dashboard-unit": "bash scripts/tsx-safe.sh scripts/test-admin-ops-dashboard-unit.ts",
+    "test:daily-ops-snapshot-unit": "bash scripts/tsx-safe.sh scripts/test-daily-ops-snapshot-unit.ts",
     "test:reflow-feedback-unit": "bash scripts/tsx-safe.sh scripts/test-reflow-feedback-unit.ts"
   },
   "dependencies": {

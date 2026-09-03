@@ -309,6 +309,7 @@ section("dashboard 조회 write/sync 없음");
   assert(/method: "GET"/.test(ui), "클라이언트도 GET만");
   assert(!/prisma\.(create|update|upsert|delete)/.test(getFn), "GET에 prisma write 없음");
   assert(/loadAdminOpsDashboard/.test(getFn), "GET이 read helper 사용");
+  assert(!/captureDailyOpsSnapshot/.test(api), "GET이 snapshot write 안 함");
 }
 
 section("모바일 폭 rendering 구조");

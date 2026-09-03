@@ -6,14 +6,27 @@ import {
   filterDashboardCaddies,
   groupCaddiesByPrimaryTeam,
   type AdminOpsCaddyRow,
-  type AdminOpsDashboardPayload,
   type AdminOpsDutyGroup,
   type AdminOpsTeamGroup,
 } from "@/lib/adminOpsDashboard";
+import type { AdminOpsDashboardView } from "@/lib/dailyOpsSnapshot";
+import { formatCapturedAtKst } from "@/lib/kstDate";
 import type { DailyOpsDutyRole } from "@/lib/dailyOpsDuty";
 import { addDays } from "@/lib/krHolidays";
 
-type DashboardResponse = AdminOpsDashboardPayload & { ok?: boolean; error?: string };
+type DashboardResponse = AdminOpsDashboardView & { ok?: boolean; error?: string };
+
+export function dashboardSourceLine(
+  data: Pick<AdminOpsDashboardView, "source" | "snapshotAvailable" | "capturedAt" | "isPastDate"> | null
+): string {
+  if (data?.source === "snapshot" && data.capturedAt) {
+    return `저장된 운영기록 · ${formatCapturedAtKst(data.capturedAt)} 저장`;
+  }
+  if (data?.isPastDate) {
+    return "저장된 과거기록 없음 · 현재 DB 기준 재구성";
+  }
+  return "선택일 운영현황 · 현재 DB 기준";
+}
 
 function todayYmd() {
   const d = new Date();
@@ -210,7 +223,7 @@ export default function AdminOpsDashboard() {
       <header className="dash-top">
         <div>
           <h1 className="dash-title">관리자 대시보드</h1>
-          <p className="dash-date">선택일 운영현황 · 현재 DB 기준 재구성</p>
+          <p className="dash-date">{dashboardSourceLine(data)}</p>
         </div>
         <div className="dash-date-nav" role="group" aria-label="날짜 선택">
           <button
