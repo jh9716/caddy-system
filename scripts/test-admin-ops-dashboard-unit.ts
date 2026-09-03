@@ -15,6 +15,7 @@ import {
   countActiveRoster,
   countOffFromReasons,
   filterDashboardCaddies,
+  formatTeamPersonLine,
   groupCaddiesByPrimaryTeam,
   groupOpsDutyNames,
   statusToneFromReasons,
@@ -203,13 +204,42 @@ section("전체 캐디 조별 현황판 가용/제외");
     createElement(AdminOpsTeamBoard, { groups: teams })
   );
   assert(html.includes("이휴무") && html.includes("휴무"), "현황판에 이름/reason");
+  assert(formatTeamPersonLine(off) === "이휴무 · 휴무", "비가용 compact 한 줄");
+  assert(formatTeamPersonLine(duty) === "김가용 · 조출당번", "당번 compact 한 줄");
   assert(html.includes("data-tone=\"off\""), "휴무 색상 tone");
   assert(html.includes("data-team=\"1조\"") && html.includes("data-team=\"12조\""), "조별 섹션");
-  assert(html.includes("3부반"), "HOUSE/3부반 표시");
+  assert(!html.includes("dash-team-person-type"), "row에서 HOUSE/3부반 제거");
+  assert(!html.includes("3부반"), "조별 현황에 3부반 반복 없음");
+  assert(!html.includes("dash-team-person-reason\">가용"), "가용 텍스트 제거");
   assert(html.includes("dash-team-board"), "조별 현황판 class");
   assert(!html.includes("dash-caddy-grid"), "사람 카드 grid 제거");
   const named = filterDashboardCaddies(dash.caddies, "김");
   assert(named.length === 1 && named[0].name === "김가용", "이름 검색만");
+}
+
+section("휴무 count source (Assignment OFF, not sheet)");
+{
+  const date = "2026-09-03";
+  const emptyAssign = computeAvailability({ date, caddies, assignments: [] });
+  const storedOnly = applyDailyExternalExclusions({
+    availability: emptyAssign,
+    caddies,
+    offNames: [],
+    dutyEntries: [],
+  });
+  const sheetOverlay = applyDailyExternalExclusions({
+    availability: emptyAssign,
+    caddies,
+    offNames: ["이휴무"],
+    dutyEntries: [],
+  });
+  const noOff = buildAdminOpsDashboard({ date, availability: storedOnly });
+  const withSheetNames = buildAdminOpsDashboard({ date, availability: sheetOverlay });
+  assert(noOff.availability.offCount === 0, "Assignment OFF 없으면 휴무 0");
+  assert(withSheetNames.availability.offCount === 1, "offNames overlay가 있을 때만 시트 휴무 반영");
+  const service = readSrc("src/lib/adminOpsDashboardService.ts");
+  assert(/includeOffSheet: false/.test(service), "dashboard loader는 휴무 Sheet를 읽지 않음");
+  assert(/countOffFromReasons/.test(readSrc("src/lib/adminOpsDashboard.ts")), "휴무 카드는 휴무 reason 집계");
 }
 
 section("날짜 변경 시 해당 날짜 데이터");
@@ -270,9 +300,10 @@ section("모바일 폭 rendering 구조");
   assert(!/label: "HOUSE"/.test(ui) && !/label: "최종 가용"/.test(ui), "구 5카드 분리 제거");
   assert(/AdminOpsTeamBoard/.test(ui) && !/AdminOpsCaddyGrid/.test(ui), "조별 현황판으로 교체");
   assert(/dash-duty-title/.test(ui), "당번 영역 큰 제목");
-  assert(/\.dash-team-board\s*\{[^}]*repeat\(2/.test(css), "모바일 조별 2열");
-  assert(/@media \(min-width: 720px\)[\s\S]*dash-team-board[\s\S]*repeat\(4/.test(css), "PC 조별 4열");
-  assert(/@media \(min-width: 1100px\)[\s\S]*dash-team-board[\s\S]*repeat\(6/.test(css), "넓은 PC 조별 6열");
+  assert(/\.dash-team-board\s*\{[^}]*repeat\(3/.test(css), "모바일 조별 3열");
+  assert(/@media \(min-width: 720px\)[\s\S]*dash-team-board[\s\S]*repeat\(6/.test(css), "PC 조별 6열");
+  assert(/@media \(min-width: 960px\)[\s\S]*dash-team-board[\s\S]*repeat\(8/.test(css), "PC 조별 8열");
+  assert(/@media \(min-width: 1280px\)[\s\S]*dash-team-board[\s\S]*repeat\(12/.test(css), "넓은 PC 12열");
   assert(/\.dash-kpi-ops\s*\{[^}]*minmax\(0, 1fr\)/.test(css), "모바일 요약 1열");
   assert(/@media \(min-width: 720px\)[\s\S]*dash-kpi-ops[\s\S]*repeat\(3/.test(css), "PC 요약 3열");
   assert(/is-off/.test(css) && /is-sick/.test(css) && /is-duty/.test(css), "휴무/병가/당번 색");

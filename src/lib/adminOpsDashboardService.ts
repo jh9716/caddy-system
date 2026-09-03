@@ -12,6 +12,7 @@ import {
 } from "@/lib/adminOpsDashboard";
 
 export const ADMIN_OPS_DASHBOARD_LOAD_OPTIONS = {
+  /** 대시보드 휴무는 Assignment(OFF) reason만. Google 휴무 Sheet는 읽지 않음. */
   includeOffSheet: false,
   includeStoredOpsDuty: true,
 } as const;

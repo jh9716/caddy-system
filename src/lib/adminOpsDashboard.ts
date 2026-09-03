@@ -256,6 +256,12 @@ export function toAdminOpsCaddyRow(row: AvailabilityRow): AdminOpsCaddyRow {
   };
 }
 
+export function formatTeamPersonLine(row: Pick<AdminOpsCaddyRow, "name" | "status" | "reasons">): string {
+  if (row.status !== "excluded") return row.name;
+  const reason = row.reasons.find((r) => String(r).trim()) || "";
+  return reason ? `${row.name} · ${reason}` : row.name;
+}
+
 export function matchesCaddyNameQuery(name: string, query: string): boolean {
   const q = String(query ?? "").trim().toLowerCase();
   if (!q) return true;
