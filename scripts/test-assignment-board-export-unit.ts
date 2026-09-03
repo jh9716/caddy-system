@@ -14,13 +14,19 @@ import {
   assignmentDraftFromPublishedPayload,
   boardExportPngFilename,
   buildBoardExportSlice,
+  redactGuestNameFromAssignment,
 } from "../src/lib/assignmentBoardExport";
 import {
+  BOARD_EXPORT_DOWNLOAD_GAP_MS,
+  BOARD_EXPORT_MULTI_DOWNLOAD_BLOCKED,
   BOARD_EXPORT_MULTI_DOWNLOAD_HINT,
+  BOARD_EXPORT_SHARE_ALL_UNSUPPORTED,
   BOARD_EXPORT_SHARE_UNSUPPORTED,
   canShareBoardPngFiles,
+  downloadBoardPngFilesSequentially,
   isAndroidUserAgent,
   makeBoardExportPngFile,
+  shouldWarnMultipleDownloadBlock,
 } from "../src/lib/assignmentBoardExportPng";
 import type { AssignmentDraft } from "../src/lib/assignmentDraft";
 import type { AutoAssignmentRow } from "../src/lib/autoAssignEngine";
@@ -257,7 +263,10 @@ section("export가 Draft/DB write를 발생시키지 않음");
   assert(!/붙여넣을 수 있습니다/.test(menu), "clipboard 안내 없음");
   assert(
     /BOARD_EXPORT_SHARE_UNSUPPORTED/.test(menu) &&
-      /BOARD_EXPORT_MULTI_DOWNLOAD_HINT/.test(menu),
+      /BOARD_EXPORT_MULTI_DOWNLOAD_HINT/.test(menu) &&
+      /downloadBoardPngFilesSequentially/.test(menu) &&
+      /BOARD_EXPORT_MULTI_DOWNLOAD_BLOCKED/.test(menu) &&
+      /BOARD_EXPORT_SHARE_ALL_UNSUPPORTED/.test(menu),
     "다운로드/공유 경로 분리"
   );
   assert(/html-to-image/.test(png), "html-to-image 사용");
@@ -331,6 +340,17 @@ section("최종 배치표 최신 board state가 export에 반영");
   assert(html2.includes("박이동") && html2.includes("07:10"), "수정 후 최신 payload 반영");
   assert(!html2.includes("김철수") && !html2.includes("06:00"), "이전 배치가 PNG에 남지 않음");
   assert(html2.includes("2조") && html2.includes("대기갑"), "조·스페어 유지");
+  const publishedDraft = assignmentDraftFromPublishedPayload(
+    payload("김철수", "06:00")
+  );
+  assert(
+    publishedDraft.assignments.every((r) => r.reservation.teamName == null),
+    "/board export source에서 teamName redaction"
+  );
+  assert(
+    payload("김철수", "06:00").placements[0].teamName === "고객홍길동",
+    "Published payload 원본은 유지"
+  );
 }
 
 section("PNG에 고객/예약 관련 문자열 없음");
@@ -345,6 +365,20 @@ section("PNG에 고객/예약 관련 문자열 없음");
   assert(html.includes("이진") && html.includes("최씨"), "캐디명 유지");
   const view = readFileSync(join(process.cwd(), "src/components/board/AssignmentBoardExportView.tsx"), "utf8");
   assert(!/reservation\.teamName/.test(view), "export view가 teamName을 렌더하지 않음");
+  const slice = buildBoardExportSlice(draft, "2부");
+  assert(
+    slice.allAssignments.every((r) => r.reservation.teamName == null),
+    "자동배치 export slice source에서 teamName 제거"
+  );
+  assert(
+    draft.assignments.some((r) => r.reservation.teamName === "2부팀A"),
+    "운영 draft 원본 teamName은 유지"
+  );
+  assert(
+    redactGuestNameFromAssignment(draft.assignments.find((r) => r.reservation.teamName === "2부팀A")!)
+      .reservation.teamName == null,
+    "redact helper"
+  );
 }
 
 section("헤더 베르힐/스카이/오션/레이크 + 시간 확대 CSS");
@@ -366,37 +400,81 @@ section("헤더 베르힐/스카이/오션/레이크 + 시간 확대 CSS");
       BOARD_EXPORT_COURSE_LABELS.LAKE === "레이크",
     "코스 라벨 상수"
   );
-  assert(/\.bx-time[\s\S]*font-size: 16px/.test(css), "티타임 font-size 확대");
+  assert(/\.bx-time[\s\S]*font-size: 17px/.test(css), "티타임 font-size 확대");
   assert(/\.bx-time[\s\S]*font-weight: 800/.test(css), "티타임 font-weight");
   assert(/\.bx-board-head > div[\s\S]*font-size: 12px/.test(css), "헤더 font-size 조정");
+  assert(/#8a6d2f/.test(css) && /#3d3420/.test(css), "dark gold 헤더/구분 바");
+  assert(/border-top: 1\.5px solid #b6a57a/.test(css), "행 구분선 강화");
 }
 
-section("PNG 다운로드 File / Web Share fallback");
-{
-  const blob = new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" });
-  const file = makeBoardExportPngFile(blob, boardExportPngFilename("2026-09-07", "1부"));
-  assert(file instanceof File, "File 생성");
-  assert(file.type === "image/png", "image/png MIME");
-  assert(file.name === "VERTHILL_배치표_2026-09-07_1부.png", "다운로드 파일명");
-  assert(canShareBoardPngFiles([file]) === false, "Node/미지원 canShare=false");
-  assert(
-    canShareBoardPngFiles([file], { canShare: () => true }) === true,
-    "지원 기기는 share File"
-  );
-  assert(
-    canShareBoardPngFiles([file], {
-      canShare: () => {
-        throw new Error("no");
-      },
-    }) === false,
-    "canShare 예외는 unsupported"
-  );
-  assert(
-    BOARD_EXPORT_SHARE_UNSUPPORTED.includes("PNG 다운로드를 이용해 주세요"),
-    "미지원 fallback 문구"
-  );
-  assert(BOARD_EXPORT_MULTI_DOWNLOAD_HINT.includes("각 부를 따로"), "다중 다운로드 안내");
-}
+void (async () => {
+  section("PNG 다운로드 File / Web Share fallback");
+  {
+    const blob = new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" });
+    const file = makeBoardExportPngFile(blob, boardExportPngFilename("2026-09-07", "1부"));
+    assert(file instanceof File, "File 생성");
+    assert(file.type === "image/png", "image/png MIME");
+    assert(file.name === "VERTHILL_배치표_2026-09-07_1부.png", "다운로드 파일명");
+    assert(canShareBoardPngFiles([file]) === false, "Node/미지원 canShare=false");
+    assert(
+      canShareBoardPngFiles([file], { canShare: () => true }) === true,
+      "지원 기기는 share File"
+    );
+    assert(
+      canShareBoardPngFiles([file], {
+        canShare: () => {
+          throw new Error("no");
+        },
+      }) === false,
+      "canShare 예외는 unsupported"
+    );
+    assert(
+      BOARD_EXPORT_SHARE_UNSUPPORTED.includes("PNG 다운로드를 이용해 주세요"),
+      "미지원 fallback 문구"
+    );
+    assert(
+      BOARD_EXPORT_MULTI_DOWNLOAD_BLOCKED ===
+        "브라우저가 여러 파일 다운로드를 차단했습니다. 개별 다운로드를 이용해 주세요.",
+      "다중 다운로드 차단 안내"
+    );
+    assert(
+      BOARD_EXPORT_MULTI_DOWNLOAD_HINT.includes("개별 다운로드를 이용해 주세요"),
+      "전체 저장 후 차단 안내"
+    );
+    assert(BOARD_EXPORT_DOWNLOAD_GAP_MS >= 1000, "전체 다운로드 간격");
+    assert(
+      BOARD_EXPORT_SHARE_ALL_UNSUPPORTED.includes("부를 따로 공유"),
+      "전체 공유 미지원 안내"
+    );
+    assert(shouldWarnMultipleDownloadBlock() === false, "Node는 userActivation 없음");
+    assert(
+      shouldWarnMultipleDownloadBlock({ userActivation: { isActive: false } }) === true,
+      "activation 소진 시 차단 경고"
+    );
+    const waits: number[] = [];
+    const names: string[] = [];
+    const seq = await downloadBoardPngFilesSequentially(
+      [
+        makeBoardExportPngFile(blob, "a.png"),
+        makeBoardExportPngFile(blob, "b.png"),
+        makeBoardExportPngFile(blob, "c.png"),
+      ],
+      {
+        gapMs: 25,
+        wait: async (ms) => {
+          waits.push(ms);
+        },
+        nav: { userActivation: { isActive: false } },
+        download: (_blob, filename) => {
+          names.push(filename);
+        },
+      }
+    );
+    assert(seq.count === 3 && names.join(",") === "a.png,b.png,c.png", "순차 다운로드 3장");
+    assert(waits.length === 2 && waits.every((ms) => ms === 25), "1→2→3 사이 interval");
+    assert(seq.warnedBlocked === true, "2번째부터 차단 경고");
+  }
 
-console.log(`\nDONE: ${passed} passed, ${failed} failed`);
-if (failed > 0) process.exit(1);
+  console.log(`\nDONE: ${passed} passed, ${failed} failed`);
+  if (failed > 0) process.exit(1);
+})();

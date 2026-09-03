@@ -79,7 +79,7 @@ export function assignmentDraftFromPublishedPayload(
         course: p.course,
         shift: p.shift,
         teeTime: p.teeTime,
-        teamName: p.teamName,
+        teamName: null, // /board export source redaction. 화면 payload는 그대로.
         rawRowIndex: i + 1,
         limousineCart: p.limousine === true,
       },
@@ -123,13 +123,26 @@ export function assignmentDraftFromPublishedPayload(
   };
 }
 
-/** /manage/assignments 와 /board 가 넘긴 최신 board state */
+/** PNG/export 전용. 원본 Draft/Published payload는 바꾸지 않는다. */
+export function redactGuestNameFromAssignment(
+  row: AutoAssignmentRow
+): AutoAssignmentRow {
+  if (row.reservation.teamName == null) return row;
+  return {
+    ...row,
+    reservation: { ...row.reservation, teamName: null },
+  };
+}
+
+/** /manage/assignments 와 /board 가 넘긴 최신 board state (고객명 redaction 포함) */
 export function buildBoardExportSlice(
   draft: AssignmentDraft,
   shift: ShiftPart
 ): BoardExportSlice {
   const openCourses = boardOpenCoursesFromDraft(draft);
-  const shiftRows = assignmentsByShift(draft, shift);
+  const shiftRows = assignmentsByShift(draft, shift).map(
+    redactGuestNameFromAssignment
+  );
   return {
     date: draft.date,
     shift,
@@ -138,7 +151,7 @@ export function buildBoardExportSlice(
     spare: spareLabelsFromShift(
       draft.sparesByShift?.find((row) => row.shift === shift) || null
     ),
-    allAssignments: draft.assignments,
+    allAssignments: draft.assignments.map(redactGuestNameFromAssignment),
   };
 }
 
