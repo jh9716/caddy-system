@@ -69,6 +69,16 @@ export async function renderBoardExportPng(slice: BoardExportSlice): Promise<Blo
   }
 }
 
+export const BOARD_EXPORT_SHARE_UNSUPPORTED =
+  "이 기기에서는 공유를 지원하지 않습니다. PNG 다운로드를 이용해 주세요.";
+
+export const BOARD_EXPORT_MULTI_DOWNLOAD_HINT =
+  "1부·2부·3부 PNG를 다운로드했습니다. 브라우저가 여러 파일 다운로드를 막으면 각 부를 따로 받아 주세요.";
+
+export function makeBoardExportPngFile(blob: Blob, filename: string): File {
+  return new File([blob], filename, { type: "image/png" });
+}
+
 export function downloadBoardPngBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -87,23 +97,38 @@ export async function exportAndDownloadShiftPng(slice: BoardExportSlice) {
   return blob;
 }
 
-export function canShareBoardPngFiles(files: File[]): boolean {
-  const nav = navigator as Navigator & {
-    canShare?: (data: ShareData) => boolean;
-  };
-  if (typeof nav.canShare !== "function") return false;
+type ShareNav = {
+  canShare?: (data: ShareData) => boolean;
+  share?: (data: ShareData) => Promise<void>;
+};
+
+export function canShareBoardPngFiles(
+  files: File[],
+  nav?: ShareNav
+): boolean {
+  const n =
+    nav ??
+    (typeof navigator === "undefined" ? undefined : (navigator as ShareNav));
+  if (typeof n?.canShare !== "function") return false;
   try {
-    return nav.canShare({ files });
+    return n.canShare({ files });
   } catch {
     return false;
   }
 }
 
-export async function shareBoardPngFiles(files: File[], title: string) {
-  if (typeof navigator.share !== "function") {
-    throw new Error("이 브라우저는 공유를 지원하지 않습니다.");
+export async function shareBoardPngFiles(
+  files: File[],
+  title: string,
+  nav?: ShareNav
+) {
+  const n =
+    nav ??
+    (typeof navigator === "undefined" ? undefined : (navigator as ShareNav));
+  if (typeof n?.share !== "function") {
+    throw new Error(BOARD_EXPORT_SHARE_UNSUPPORTED);
   }
-  await navigator.share({ files, title });
+  await n.share({ files, title });
 }
 
 export function isAndroidUserAgent(ua = ""): boolean {

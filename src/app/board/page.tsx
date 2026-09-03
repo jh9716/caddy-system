@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { BoardImageExportMenu } from "@/components/board/BoardImageExportMenu";
 import PublishedBoardView from "@/components/board/PublishedBoardView";
+import { assignmentDraftFromPublishedPayload } from "@/lib/assignmentBoardExport";
 import {
   addDaysYmd,
   formatPublishedAt,
@@ -29,6 +31,15 @@ export default function PublishedBoardPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [published, setPublished] = useState<PublishedResponse["published"]>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const exportDraft = useMemo(
+    () =>
+      published?.payload
+        ? assignmentDraftFromPublishedPayload(published.payload)
+        : null,
+    [published]
+  );
 
   const today = useMemo(() => todayYmd(), []);
   const yesterday = useMemo(() => addDaysYmd(today, -1), [today]);
@@ -121,9 +132,15 @@ export default function PublishedBoardPage() {
       ) : null}
       {!loading && published ? (
         <>
-          <p className="pub-meta">
-            {published.date} · {formatPublishedAt(published.publishedAt)} 확정
-          </p>
+          <div className="pub-tools">
+            <p className="pub-meta">
+              {published.date} · {formatPublishedAt(published.publishedAt)} 확정
+            </p>
+            {exportDraft ? (
+              <BoardImageExportMenu draft={exportDraft} onNotice={setNotice} />
+            ) : null}
+          </div>
+          {notice ? <p className="pub-notice">{notice}</p> : null}
           <PublishedBoardView payload={published.payload} shift={shift} />
         </>
       ) : null}
@@ -180,13 +197,20 @@ export default function PublishedBoardPage() {
           border-radius: 8px;
           padding: 0 8px;
         }
-        .pub-msg, .pub-empty, .pub-meta {
+        .pub-msg, .pub-empty, .pub-meta, .pub-notice {
           margin: 0;
           font-size: 0.9rem;
         }
         .pub-empty { color: #475569; padding: 24px 4px; }
         .pub-msg.error { color: #b91c1c; }
         .pub-meta { color: #64748b; }
+        .pub-tools {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+        }
+        .pub-notice { color: #334155; }
       `}</style>
     </div>
   );
