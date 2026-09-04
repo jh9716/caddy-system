@@ -23,8 +23,11 @@ import {
   resolveThirdBandSubgroup,
   drivingPersistFields,
   DRIVING_POOL_TEAM,
+  HOUSE_TEAMS,
   ThirdBandSubgroupError,
   EDITABLE_EXTRA_FLAG_OPTIONS,
+  isHouseTeam,
+  shouldPersistAsDriving,
 } from "../src/lib/caddyManage";
 import { caddyCreateSchema, caddyUpdateSchema } from "../src/lib/caddySchema";
 
@@ -198,6 +201,94 @@ assert(
   resolveCaddyTypeFromTeam("9조") === "THIRD" &&
     resolveCaddyTypeFromTeam("8조") === "HOUSE",
   "9→8 이동 시 HOUSE"
+);
+assert(HOUSE_TEAMS.length === 8 && isHouseTeam("1조") && isHouseTeam("8조"), "HOUSE 1~8");
+assert(!isHouseTeam("9조") && !isHouseTeam("드라이빙"), "9조/드라이빙 not HOUSE");
+
+console.log("== affiliation persist (소속/조 전환) ==");
+assert(
+  shouldPersistAsDriving({
+    currentCaddyType: "HOUSE",
+    requestedCaddyType: "DRIVING",
+  }),
+  "HOUSE → DRIVING via caddyType"
+);
+assert(
+  shouldPersistAsDriving({
+    currentCaddyType: "THIRD",
+    requestedCaddyType: "DRIVING",
+  }),
+  "THIRD → DRIVING via caddyType"
+);
+assert(
+  !shouldPersistAsDriving({
+    currentCaddyType: "DRIVING",
+    requestedTeam: "1조",
+  }),
+  "DRIVING → HOUSE via 1조"
+);
+assert(
+  !shouldPersistAsDriving({
+    currentCaddyType: "DRIVING",
+    requestedTeam: "9조",
+    requestedCaddyType: "THIRD",
+  }),
+  "DRIVING → THIRD via 9조"
+);
+assert(
+  !shouldPersistAsDriving({
+    currentCaddyType: "HOUSE",
+    requestedTeam: "3조",
+  }),
+  "HOUSE ↔ HOUSE team move stays on slot persist"
+);
+assert(
+  !shouldPersistAsDriving({
+    currentCaddyType: "THIRD",
+    requestedTeam: "11조",
+  }),
+  "THIRD ↔ THIRD team move stays on slot persist"
+);
+assert(
+  !shouldPersistAsDriving({
+    currentCaddyType: "HOUSE",
+    requestedTeam: "10조",
+  }),
+  "HOUSE → THIRD via 10조"
+);
+assert(
+  !shouldPersistAsDriving({
+    currentCaddyType: "THIRD",
+    requestedTeam: "2조",
+  }),
+  "THIRD → HOUSE via 2조"
+);
+assert(
+  shouldPersistAsDriving({
+    currentCaddyType: "DRIVING",
+    requestedCaddyType: undefined,
+  }),
+  "DRIVING name-only edit stays driving"
+);
+assert(
+  shouldPersistAsDriving({
+    currentCaddyType: "HOUSE",
+    requestedTeam: DRIVING_POOL_TEAM,
+  }),
+  "team=드라이빙 → driving persist"
+);
+assert(
+  drivingPersistFields().thirdBandSubgroup === null &&
+    drivingPersistFields().teamOrder === 0,
+  "DRIVING persist clears subgroup + slot"
+);
+assert(
+  resolveThirdBandSubgroup({
+    team: "3조",
+    requested: null,
+    current: "WEEKDAY",
+  }) === null,
+  "THIRD → HOUSE clears thirdBandSubgroup"
 );
 
 console.log("== thirdBandSubgroup ==");
@@ -885,7 +976,7 @@ console.log("== caddies roster board UI source ==");
   assert(
     /setMenuCaddyId\(c\.id\)/.test(src) &&
       />\s*수정\s*</.test(sheetBlock) &&
-      /조\/순번 변경/.test(sheetBlock) &&
+      /소속\/조 변경/.test(sheetBlock) &&
       />\s*휴직\s*</.test(sheetBlock) &&
       /드라이빙 전환/.test(sheetBlock) &&
       />\s*삭제\s*</.test(sheetBlock) &&
@@ -897,8 +988,20 @@ console.log("== caddies roster board UI source ==");
       /method: 'PATCH'/.test(src) &&
       /employmentStatus: status/.test(src) &&
       /caddyType: 'DRIVING'/.test(src) &&
-      /function saveEdit\(id: number\)/.test(src),
+      /function saveEdit\(id: number\)/.test(src) &&
+      /function AffiliationTeamFields\(/.test(src) &&
+      /caddyType: isThirdBandTeam\(draft\.team\) \? 'THIRD' : 'HOUSE'/.test(src) &&
+      /originalDriving \|\| \(original != null && draft\.team !== original\.team\)/.test(
+        src
+      ),
     "menu reuses existing PATCH save/leave/return/driving APIs"
+  );
+  assert(
+    /option value="HOUSE">HOUSE \(1~8조\)/.test(src) &&
+      /option value="THIRD">3부반 \(9~12조\)/.test(src) &&
+      /option value="DRIVING">드라이빙/.test(src) &&
+      /!leave \? \(\s*<button[\s\S]*?소속\/조 변경/.test(sheetBlock),
+    "driving caddies can open 소속/조 변경"
   );
   assert(
     /신규 등록/.test(src) &&
@@ -1035,6 +1138,20 @@ for (const rel of apiFiles) {
   assert(
     src.includes("resolveCaddyTypeFromTeam"),
     `${rel} forces caddyType from team`
+  );
+}
+{
+  const idRoute = fs.readFileSync(
+    path.resolve("src/app/api/caddies/[id]/route.ts"),
+    "utf8"
+  );
+  assert(
+    idRoute.includes("shouldPersistAsDriving") &&
+      idRoute.includes("drivingPersistFields") &&
+      idRoute.includes("resolveThirdBandSubgroup") &&
+      /prisma\.caddy\.update/.test(idRoute) &&
+      !/prisma\.caddy\.create/.test(idRoute),
+    "PATCH affiliation transfer updates existing caddy, no recreate"
   );
 }
 

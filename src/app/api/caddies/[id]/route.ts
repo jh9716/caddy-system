@@ -13,6 +13,7 @@ import {
   normalizeTeamOrder,
   resolveCaddyTypeFromTeam,
   resolveThirdBandSubgroup,
+  shouldPersistAsDriving,
 } from "@/lib/caddyManage";
 import {
   CaddyPhoneError,
@@ -118,11 +119,11 @@ export async function PATCH(
       return NextResponse.json(updated);
     }
 
-    const nextIsDriving =
-      data.caddyType === "DRIVING" ||
-      (isDrivingCaddyType(current.caddyType) &&
-        data.caddyType !== "HOUSE" &&
-        data.caddyType !== "THIRD");
+    const nextIsDriving = shouldPersistAsDriving({
+      currentCaddyType: current.caddyType,
+      requestedCaddyType: data.caddyType,
+      requestedTeam: data.team,
+    });
 
     if (nextIsDriving) {
       const driving = drivingPersistFields();
