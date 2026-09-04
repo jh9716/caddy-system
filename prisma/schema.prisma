@@ -530,3 +530,17 @@ model DailyBoardPublished {
 
   @@index([publishedAt])
 }
+
+/// 날짜별 관리자 운영현황 snapshot. 과거 /manage 화면 보존용.
+/// 한 날짜 1개. 자동 capture는 기존 historical row를 덮어쓰지 않는다.
+model DailyOpsSnapshot {
+  id            Int      @id @default(autoincrement())
+  date          DateTime @unique
+  payload       Json
+  schemaVersion Int      @default(1)
+  capturedAt    DateTime
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([capturedAt])
+}

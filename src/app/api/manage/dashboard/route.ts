@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
-import { loadAdminOpsDashboard } from "@/lib/adminOpsDashboardService";
+import { loadAdminOpsDashboardView } from "@/lib/dailyOpsSnapshotService";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 /**
  * GET /api/manage/dashboard?date=YYYY-MM-DD
- * 관리자 대시보드 V2 Phase 1. 저장된 roster/OFF/DailyOpsDuty만 읽는다.
+ * 오늘/미래: live. 과거+snapshot: 저장된 payload. write 없음.
  */
 export async function GET(req: NextRequest) {
   const guard = await requireAdmin(req);
@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return NextResponse.json({ error: "date=YYYY-MM-DD 필요" }, { status: 400 });
     }
-    const payload = await loadAdminOpsDashboard(date);
+    const payload = await loadAdminOpsDashboardView(date);
     return NextResponse.json({ ok: true, ...payload });
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : "대시보드 조회 실패";
