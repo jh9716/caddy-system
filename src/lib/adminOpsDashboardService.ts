@@ -1,33 +1,28 @@
 /**
- * 관리자 대시보드 V2 Phase 1 로더 (READ ONLY).
- * Google sheet / autosync / DailyOpsDuty write / Draft·Published write 없음.
+ * 관리자 대시보드 V2 로더 (READ ONLY).
+ * OFF/운영배치 Sheet fetch는 허용. autosync / DailyOpsDuty write / Draft·Published write 없음.
  */
 
-import { loadAvailabilityForDate } from "@/lib/availabilityService";
-import { listDailyOpsDuties } from "@/lib/dailyOpsDutyService";
 import { parseYmd } from "@/lib/availabilityEngine";
+import { type AdminOpsDashboardPayload } from "@/lib/adminOpsDashboard";
 import {
-  buildAdminOpsDashboard,
-  type AdminOpsDashboardPayload,
-} from "@/lib/adminOpsDashboard";
-
-export const ADMIN_OPS_DASHBOARD_LOAD_OPTIONS = {
-  /** 대시보드 휴무는 Assignment(OFF) reason만. Google 휴무 Sheet는 읽지 않음. */
-  includeOffSheet: false,
-  includeStoredOpsDuty: true,
-} as const;
+  loadAdminOpsDashboardSource,
+  type AdminOpsDashboardSourceDeps,
+  type AdminOpsDashboardSourceResult,
+} from "@/lib/adminOpsDashboardSource";
 
 export async function loadAdminOpsDashboard(
-  ymd: string
+  ymd: string,
+  deps?: AdminOpsDashboardSourceDeps
 ): Promise<AdminOpsDashboardPayload> {
+  const loaded = await loadAdminOpsDashboardWithSource(ymd, deps);
+  return loaded.dashboard;
+}
+
+export async function loadAdminOpsDashboardWithSource(
+  ymd: string,
+  deps?: AdminOpsDashboardSourceDeps
+): Promise<AdminOpsDashboardSourceResult> {
   parseYmd(ymd);
-  const [availability, opsDuties] = await Promise.all([
-    loadAvailabilityForDate(ymd, { ...ADMIN_OPS_DASHBOARD_LOAD_OPTIONS }),
-    listDailyOpsDuties(ymd),
-  ]);
-  return buildAdminOpsDashboard({
-    date: ymd,
-    availability,
-    opsDuties,
-  });
+  return loadAdminOpsDashboardSource(ymd, deps);
 }

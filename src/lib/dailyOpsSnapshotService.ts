@@ -1,10 +1,13 @@
 /**
  * 관리자 대시보드 V2 Phase 2 snapshot 저장/조회.
- * GET 경로에서 호출하지 않는 capture만 write. sheet/autosync/DailyOpsDuty write 없음.
+ * GET 경로는 write 없음. capture만 insert. sheet autosync/DailyOpsDuty write 없음.
  */
 
 import { parseYmd } from "@/lib/availabilityEngine";
-import { loadAdminOpsDashboard } from "@/lib/adminOpsDashboardService";
+import {
+  loadAdminOpsDashboardWithSource,
+} from "@/lib/adminOpsDashboardService";
+import type { AdminOpsDashboardSourceDeps } from "@/lib/adminOpsDashboardSource";
 import {
   DAILY_OPS_SNAPSHOT_SCHEMA_VERSION,
   dashboardViewFromLive,
@@ -39,9 +42,10 @@ export type DailyOpsSnapshotDb = {
 };
 
 export type CaptureDailyOpsSnapshotResult = {
-  status: "created" | "exists";
+  status: "created" | "exists" | "skipped";
   date: string;
   capturedAt: string | null;
+  reason?: string | null;
 };
 
 function dateKey(ymd: string): Date {
@@ -84,12 +88,11 @@ export async function captureDailyOpsSnapshot(
   options?: {
     now?: Date;
     db?: DailyOpsSnapshotDb;
-    loadLive?: typeof loadAdminOpsDashboard;
+    sourceDeps?: AdminOpsDashboardSourceDeps;
   }
 ): Promise<CaptureDailyOpsSnapshotResult> {
   parseYmd(ymd);
   const db = options?.db ?? (defaultPrisma as unknown as DailyOpsSnapshotDb);
-  const loadLive = options?.loadLive ?? loadAdminOpsDashboard;
   const existing = await db.dailyOpsSnapshot.findUnique({
     where: { date: dateKey(ymd) },
   });
@@ -101,8 +104,17 @@ export async function captureDailyOpsSnapshot(
     };
   }
 
-  const live = await loadLive(ymd);
-  const payload = toDailyOpsSnapshotPayload(live);
+  const loaded = await loadAdminOpsDashboardWithSource(ymd, options?.sourceDeps);
+  if (!loaded.completeForSnapshot) {
+    return {
+      status: "skipped",
+      date: ymd,
+      capturedAt: null,
+      reason: loaded.skipReason,
+    };
+  }
+
+  const payload = toDailyOpsSnapshotPayload(loaded.dashboard);
   const capturedAt = options?.now ?? new Date();
   try {
     const row = await db.dailyOpsSnapshot.create({
@@ -132,36 +144,35 @@ export async function captureDailyOpsSnapshot(
 }
 
 /**
- * 대시보드 GET용. 오늘/미래는 snapshot을 조회하지 않고 live만 반환.
- * write 없음.
+ * 대시보드 GET용. 오늘/미래와 과거-무snapshot은 live source.
+ * 과거+snapshot은 Sheet를 읽지 않는다. write 없음.
  */
 export async function loadAdminOpsDashboardView(
   ymd: string,
   options?: {
     now?: Date;
     db?: DailyOpsSnapshotDb;
-    loadLive?: typeof loadAdminOpsDashboard;
+    sourceDeps?: AdminOpsDashboardSourceDeps;
   }
 ): Promise<AdminOpsDashboardView> {
   parseYmd(ymd);
   const now = options?.now ?? new Date();
-  const loadLive = options?.loadLive ?? loadAdminOpsDashboard;
   const past = isPastKstYmd(ymd, now);
 
-  if (!past) {
-    return dashboardViewFromLive(await loadLive(ymd), false);
+  if (past) {
+    const db = options?.db ?? (defaultPrisma as unknown as DailyOpsSnapshotDb);
+    const snap = await findDailyOpsSnapshot(ymd, db);
+    if (snap) {
+      return dashboardViewFromSnapshot({
+        ymd,
+        payload: snap.payload,
+        capturedAt: snap.capturedAt,
+      });
+    }
   }
 
-  const db = options?.db ?? (defaultPrisma as unknown as DailyOpsSnapshotDb);
-  const snap = await findDailyOpsSnapshot(ymd, db);
-  if (snap) {
-    return dashboardViewFromSnapshot({
-      ymd,
-      payload: snap.payload,
-      capturedAt: snap.capturedAt,
-    });
-  }
-  return dashboardViewFromLive(await loadLive(ymd), true);
+  const loaded = await loadAdminOpsDashboardWithSource(ymd, options?.sourceDeps);
+  return dashboardViewFromLive(loaded.dashboard, past, loaded.quality);
 }
 
 export function todayKstYmd(now: Date = new Date()): string {

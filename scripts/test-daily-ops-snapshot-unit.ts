@@ -27,6 +27,10 @@ import {
   type DailyOpsSnapshotDb,
   type DailyOpsSnapshotRow,
 } from "../src/lib/dailyOpsSnapshotService";
+import type { AdminOpsDashboardSourceDeps } from "../src/lib/adminOpsDashboardSource";
+import type { StoredOpsDutyRow } from "../src/lib/dailyOpsDutyService";
+import { offNamesForDate, type OffSheet } from "../src/lib/offSheetParser";
+import { buildOpsDutySheetTestSheets } from "../src/lib/opsDutySheetParser";
 import { formatCapturedAtKst, kstYmd, previousKstYmd } from "../src/lib/kstDate";
 
 let passed = 0;
@@ -68,6 +72,100 @@ const caddies = [
     caddyType: "HOUSE" as const,
   },
 ];
+
+function offSheetForDate(ymd: string, names: string[]): OffSheet {
+  const [y, m, d] = ymd.split("-");
+  return {
+    name: `${m}${d}`,
+    matrix: [
+      [`${y}.${m}.${d} (월)`, "", ""],
+      ["1조", "2조", "3조"],
+      [names[0] || "", names[1] || "", names[2] || ""],
+    ],
+  };
+}
+
+function opsSheetsForDate(
+  ymd: string,
+  names: { duty?: string; marshal?: string; leader?: string } = {}
+) {
+  return buildOpsDutySheetTestSheets([
+    {
+      name: "0901~0914",
+      startDate: ymd,
+      week1Dates: [ymd, "2099-01-02", "2099-01-03", "2099-01-04", "2099-01-05", "2099-01-06", "2099-01-07"],
+      week2Dates: ["2099-01-08", "2099-01-09", "2099-01-10", "2099-01-11", "2099-01-12", "2099-01-13", "2099-01-14"],
+      week1Names: [
+        {
+          당번_조출_1: names.duty ?? "이제이",
+          마샬_조출_1: names.marshal ?? "김지윤",
+          조장_1: names.leader ?? "이제이",
+        },
+      ],
+    },
+  ]);
+}
+
+function storedDuty(name: string): StoredOpsDutyRow {
+  return {
+    id: 1,
+    role: "DUTY_AM",
+    roleKey: "당번_조출_1",
+    caddyId: 1,
+    rawName: name,
+    name,
+    team: "1조",
+    employmentStatus: "ACTIVE",
+  };
+}
+
+function mockLoadAvailability() {
+  return async (
+    ymd: string,
+    options?: {
+      includeOffSheet?: boolean;
+      offSheets?: OffSheet[];
+      dutyEntries?: { kind: string; roleKey: string; rawName: string }[];
+    }
+  ) => {
+    const base = computeAvailability({ date: ymd, caddies, assignments: [] });
+    const offNames =
+      options?.includeOffSheet && options.offSheets
+        ? offNamesForDate(options.offSheets, ymd).names
+        : [];
+    return applyDailyExternalExclusions({
+      availability: base,
+      caddies,
+      offNames,
+      dutyEntries: options?.dutyEntries ?? [],
+    });
+  };
+}
+
+function completeSourceDeps(
+  ymd: string,
+  extras?: {
+    onOffFetch?: () => void;
+    onOpsFetch?: () => void;
+    onAvail?: () => void;
+  }
+): AdminOpsDashboardSourceDeps {
+  return {
+    loadAvailability: async (date, options) => {
+      extras?.onAvail?.();
+      return mockLoadAvailability()(date, options);
+    },
+    listDuties: async () => [storedDuty("이제이")],
+    fetchOffSheets: async () => {
+      extras?.onOffFetch?.();
+      return [offSheetForDate(ymd, ["김지윤"])];
+    },
+    fetchOpsDutySheets: async () => {
+      extras?.onOpsFetch?.();
+      return [];
+    },
+  };
+}
 
 function liveDashboard(date: string) {
   const start = new Date(`${date}T00:00:00`);
@@ -147,44 +245,59 @@ section("phone/vehicle/customer/reservation 없음");
   assert(!/phone|vehicle|reservation|전화번호|차량번호|customer/i.test(json), "JSON에 개인정보 필드 없음");
 }
 
-section("같은 date 중복 capture / overwrite 금지");
+section("complete source → snapshot 생성 / overwrite 금지");
 {
-  const first = liveDashboard("2026-09-03");
   const db = memoryDb();
+  let offFetches = 0;
   const created = await captureDailyOpsSnapshot("2026-09-03", {
     db,
     now: new Date("2026-09-04T00:30:00+09:00"),
-    loadLive: async () => first,
+    sourceDeps: completeSourceDeps("2026-09-03", { onOffFetch: () => { offFetches += 1; } }),
   });
-  assert(created.status === "created", "첫 capture 생성");
+  assert(created.status === "created", "complete source → snapshot 생성");
+  assert(offFetches === 1, "생성 시 OFF Sheet를 읽음");
 
-  const renamed = {
-    ...first,
-    caddies: first.caddies.map((row) =>
-      row.id === 1 ? { ...row, name: "개명됨", team: "12조" } : row
-    ),
-  };
+  const saved = await db.dailyOpsSnapshot.findUnique({
+    where: { date: new Date("2026-09-03T00:00:00") },
+  });
+  const firstName = (saved?.payload as { caddies?: { name: string }[] })?.caddies?.[0]?.name;
+
+  let secondFetches = 0;
   const second = await captureDailyOpsSnapshot("2026-09-03", {
     db,
     now: new Date("2026-09-05T00:30:00+09:00"),
-    loadLive: async () => renamed,
+    sourceDeps: completeSourceDeps("2026-09-03", { onOffFetch: () => { secondFetches += 1; } }),
   });
-  assert(second.status === "exists", "두 번째 capture는 exists");
+  assert(second.status === "exists", "기존 Snapshot overwrite 금지");
   assert(second.capturedAt === created.capturedAt, "capturedAt 유지");
+  assert(secondFetches === 0, "이미 있으면 Sheet를 다시 읽지 않음");
+  const again = await db.dailyOpsSnapshot.findUnique({
+    where: { date: new Date("2026-09-03T00:00:00") },
+  });
+  assert(
+    (again?.payload as { caddies?: { name: string }[] })?.caddies?.[0]?.name === firstName,
+    "payload 유지"
+  );
 
+  const first = liveDashboard("2026-09-03");
   const raced = memoryDb();
+  let finds = 0;
+  raced.dailyOpsSnapshot.findUnique = async () => {
+    finds += 1;
+    if (finds === 1) return null;
+    return {
+      date: new Date("2026-09-03T00:00:00"),
+      payload: toDailyOpsSnapshotPayload(first),
+      schemaVersion: 1,
+      capturedAt: new Date("2026-09-04T00:30:00+09:00"),
+    };
+  };
   raced.dailyOpsSnapshot.create = async () => {
     throw { code: "P2002" };
   };
-  raced.dailyOpsSnapshot.findUnique = async () => ({
-    date: new Date("2026-09-03T00:00:00"),
-    payload: toDailyOpsSnapshotPayload(first),
-    schemaVersion: 1,
-    capturedAt: new Date("2026-09-04T00:30:00+09:00"),
-  });
   const dup = await captureDailyOpsSnapshot("2026-09-03", {
     db: raced,
-    loadLive: async () => renamed,
+    sourceDeps: completeSourceDeps("2026-09-03"),
   });
   assert(dup.status === "exists", "P2002 race는 exists");
 }
@@ -192,9 +305,7 @@ section("같은 date 중복 capture / overwrite 금지");
 section("오늘 live / 과거 snapshot / 과거 없음");
 {
   const now = new Date("2026-09-04T12:00:00+09:00");
-  const todayDash = liveDashboard("2026-09-04");
   const pastDash = liveDashboard("2026-09-03");
-  const olderDash = liveDashboard("2026-09-01");
   const db = memoryDb([
     {
       date: new Date("2026-09-03T00:00:00"),
@@ -204,26 +315,34 @@ section("오늘 live / 과거 snapshot / 과거 없음");
     },
   ]);
 
-  let liveCalls = 0;
-  const loadLive = async (ymd: string) => {
-    liveCalls += 1;
-    if (ymd === "2026-09-04") return todayDash;
-    if (ymd === "2026-09-03") return { ...pastDash, caddies: [] };
-    return olderDash;
-  };
+  let sheetFetches = 0;
+  const sourceFor = (ymd: string): AdminOpsDashboardSourceDeps => ({
+    ...completeSourceDeps(ymd, { onOffFetch: () => { sheetFetches += 1; } }),
+  });
 
-  const today = await loadAdminOpsDashboardView("2026-09-04", { now, db, loadLive });
+  const today = await loadAdminOpsDashboardView("2026-09-04", {
+    now,
+    db,
+    sourceDeps: sourceFor("2026-09-04"),
+  });
   assert(today.source === "live" && today.snapshotAvailable === false, "오늘 → live");
+  assert(today.sourceQuality === "complete", "오늘 complete source");
   assert(today.caddies.some((c) => c.name === "이제이"), "오늘 live 데이터");
   assert(today.isPastDate === false, "오늘은 과거 아님");
+  assert(sheetFetches === 1, "오늘 live는 OFF Sheet를 읽음");
 
-  const liveBefore = liveCalls;
-  const hist = await loadAdminOpsDashboardView("2026-09-03", { now, db, loadLive });
+  const fetchesBeforeHist = sheetFetches;
+  const hist = await loadAdminOpsDashboardView("2026-09-03", {
+    now,
+    db,
+    sourceDeps: sourceFor("2026-09-03"),
+  });
   assert(hist.source === "snapshot" && hist.snapshotAvailable === true, "과거+snapshot → snapshot");
+  assert(hist.sourceQuality === "snapshot", "snapshot quality");
   assert(hist.capturedAt?.startsWith("2026-09-03T15:30:00"), "capturedAt 제공");
   assert(hist.caddies.some((c) => c.id === 1 && c.name === "이제이" && c.team === "1조"), "snapshot 이름/조");
   assert(hist.caddies.some((c) => c.name === "김지윤" && c.status === "excluded"), "snapshot status");
-  assert(liveCalls === liveBefore, "snapshot hit 시 live 재계산 없음");
+  assert(sheetFetches === fetchesBeforeHist, "과거 snapshot 있음 → Sheet fetch 없음");
 
   const unmigrated: DailyOpsSnapshotDb = {
     dailyOpsSnapshot: {
@@ -235,16 +354,20 @@ section("오늘 live / 과거 snapshot / 과거 없음");
       },
     },
   };
-  const beforeTable = liveCalls;
+  const beforeTable = sheetFetches;
   const noTable = await loadAdminOpsDashboardView("2026-09-01", {
     now,
     db: unmigrated,
-    loadLive,
+    sourceDeps: sourceFor("2026-09-01"),
   });
   assert(noTable.source === "live" && noTable.isPastDate === true, "미적용 migration → live fallback");
-  assert(liveCalls === beforeTable + 1, "P2021 후 live reconstruction");
+  assert(sheetFetches === beforeTable + 1, "P2021 후 live reconstruction");
 
-  const missing = await loadAdminOpsDashboardView("2026-09-01", { now, db, loadLive });
+  const missing = await loadAdminOpsDashboardView("2026-09-01", {
+    now,
+    db,
+    sourceDeps: sourceFor("2026-09-01"),
+  });
   assert(missing.source === "live" && missing.snapshotAvailable === false, "과거+없음 → live");
   assert(missing.isPastDate === true, "과거 metadata");
   assert(missing.reconstructedFromCurrentRoster === true, "재구성 표시");
@@ -258,11 +381,109 @@ section("KST 전날 계산");
   assert(formatCapturedAtKst("2026-09-03T15:30:00.000Z") === "2026.09.04 00:30", "저장시각 KST 표기");
 }
 
-section("dashboard GET write 없음 / cron 인증 / sheet 없음");
+section("OFF/ops 불완전 → snapshot skip");
+{
+  const db = memoryDb();
+  const offFail = await captureDailyOpsSnapshot("2026-09-03", {
+    db,
+    sourceDeps: {
+      loadAvailability: mockLoadAvailability(),
+      listDuties: async () => [storedDuty("이제이")],
+      fetchOffSheets: async () => {
+        throw new Error("off_sheet_fetch_failed");
+      },
+    },
+  });
+  assert(offFail.status === "skipped", "OFF Sheet fetch 실패 → snapshot skip");
+  assert(offFail.reason === "off_sheet_fetch_failed", "OFF 실패 reason");
+  assert(
+    (await db.dailyOpsSnapshot.findUnique({ where: { date: new Date("2026-09-03T00:00:00") } })) === null,
+    "불완전 데이터 freeze 안 함"
+  );
+
+  const offMissingDate = await captureDailyOpsSnapshot("2026-09-03", {
+    db,
+    sourceDeps: {
+      loadAvailability: mockLoadAvailability(),
+      listDuties: async () => [storedDuty("이제이")],
+      fetchOffSheets: async () => [offSheetForDate("2026-08-01", ["김지윤"])],
+    },
+  });
+  assert(offMissingDate.status === "skipped", "OFF 날짜 없음 → skip");
+  assert(offMissingDate.reason === "off_sheet_date_not_found", "OFF 날짜 미발견 reason");
+
+  const dutyEmpty = await captureDailyOpsSnapshot("2026-09-03", {
+    db,
+    sourceDeps: {
+      loadAvailability: mockLoadAvailability(),
+      listDuties: async () => [],
+      fetchOffSheets: async () => [offSheetForDate("2026-09-03", ["김지윤"])],
+      fetchOpsDutySheets: async () =>
+        buildOpsDutySheetTestSheets([
+          {
+            name: "0901~0914",
+            startDate: "2026-09-03",
+            week1Dates: ["2026-09-03", "2099-01-02", "2099-01-03", "2099-01-04", "2099-01-05", "2099-01-06", "2099-01-07"],
+            week2Dates: ["2099-01-08", "2099-01-09", "2099-01-10", "2099-01-11", "2099-01-12", "2099-01-13", "2099-01-14"],
+            week1Names: [{}],
+          },
+        ]),
+    },
+  });
+  assert(dutyEmpty.status === "skipped", "운영배치 Sheet 비어 있으면 skip");
+  assert(dutyEmpty.reason === "ops_duty_sheet_empty", "duty empty reason");
+
+  const dutyFail = await captureDailyOpsSnapshot("2026-09-03", {
+    db,
+    sourceDeps: {
+      loadAvailability: mockLoadAvailability(),
+      listDuties: async () => [],
+      fetchOffSheets: async () => [offSheetForDate("2026-09-03", ["김지윤"])],
+      fetchOpsDutySheets: async () => {
+        throw new Error("ops_duty_sheet_failed");
+      },
+    },
+  });
+  assert(dutyFail.status === "skipped", "운영배치 Sheet fetch 실패 → skip");
+  assert(dutyFail.reason === "ops_duty_sheet_failed", "duty fetch reason");
+
+  const fromSheet = await captureDailyOpsSnapshot("2026-09-03", {
+    db,
+    now: new Date("2026-09-04T00:30:00+09:00"),
+    sourceDeps: {
+      loadAvailability: mockLoadAvailability(),
+      listDuties: async () => [],
+      fetchOffSheets: async () => [offSheetForDate("2026-09-03", ["김지윤"])],
+      fetchOpsDutySheets: async () => opsSheetsForDate("2026-09-03"),
+    },
+  });
+  assert(fromSheet.status === "created", "운영배치 Sheet read-only로도 capture 가능");
+}
+
+section("live Sheet 실패 → fallback metadata");
+{
+  const now = new Date("2026-09-04T12:00:00+09:00");
+  const view = await loadAdminOpsDashboardView("2026-09-04", {
+    now,
+    db: memoryDb(),
+    sourceDeps: {
+      loadAvailability: mockLoadAvailability(),
+      listDuties: async () => [storedDuty("이제이")],
+      fetchOffSheets: async () => {
+        throw new Error("off_sheet_fetch_failed");
+      },
+    },
+  });
+  assert(view.source === "live" && view.sourceQuality === "fallback", "dashboard Sheet 실패 → fallback");
+  assert(view.snapshotAvailable === false, "live fallback은 snapshot 아님");
+}
+
+section("dashboard GET write 없음 / cron 인증 / sheet read-only");
 {
   const get = readSrc("src/app/api/manage/dashboard/route.ts");
   const cron = readSrc("src/app/api/cron/daily-ops-snapshot/route.ts");
   const service = readSrc("src/lib/dailyOpsSnapshotService.ts");
+  const source = readSrc("src/lib/adminOpsDashboardSource.ts");
   const live = readSrc("src/lib/adminOpsDashboardService.ts");
   const vercel = readSrc("vercel.json");
   const schema = readSrc("prisma/schema.prisma");
@@ -274,13 +495,16 @@ section("dashboard GET write 없음 / cron 인증 / sheet 없음");
   assert(!/captureDailyOpsSnapshot/.test(get), "GET이 snapshot 생성 안 함");
   assert(!/prisma\.(create|update|upsert|delete)/.test(getFn), "GET에 prisma write 없음");
   assert(/requireAdmin/.test(get), "dashboard GET requireAdmin");
-  assert(/includeOffSheet: false/.test(live), "live loader sheet 끔");
-  assert(!/fetchPublishedOffSheets|syncOpsDutySheet|replaceDailyOpsDuties/.test(service + cron), "capture에 sheet/duty write 없음");
+  assert(/fetchPublishedOffSheets/.test(source) && /fetchPublishedOpsDutySheets/.test(source), "source가 Sheet read");
+  assert(/completeForSnapshot/.test(service) && /status: "skipped"/.test(service), "불완전 source는 skip");
+  assert(/loadAdminOpsDashboardSource/.test(live), "live service가 공통 source 사용");
+  assert(!/syncOpsDutySheet|replaceDailyOpsDuties|applyDailyOpsDutySheet/.test(service + cron + source), "capture에 duty write 없음");
   assert(/authorizeCronRequest/.test(cron) && /previousKstYmd/.test(cron), "cron 인증+전날");
   assert(/30 15 \* \* \*/.test(vercel), "15:30 UTC = 00:30 KST");
   assert(/model DailyOpsSnapshot/.test(schema) && /date\s+DateTime\s+@unique/.test(schema), "date unique");
   assert(/CREATE TABLE "DailyOpsSnapshot"/.test(sql) && !/DROP TABLE/.test(sql), "additive migration");
-  assert(/저장된 운영기록/.test(ui) && /저장된 과거기록 없음/.test(ui) && /현재 DB 기준/.test(ui), "metadata 문구");
+  assert(/저장된 운영기록/.test(ui) && /저장된 과거기록 없음/.test(ui) && /현재 운영자료 기준/.test(ui), "metadata 문구");
+  assert(/Sheet 일부 미반영/.test(ui), "fallback metadata 문구");
 }
 
 section("UI metadata / cron auth");
@@ -304,12 +528,14 @@ section("UI metadata / cron auth");
       snapshotAvailable: true,
       capturedAt: "2026-09-03T15:30:00.000Z",
       isPastDate: true,
+      sourceQuality: "snapshot",
     }).includes("저장된 운영기록") &&
       dashboardSourceLine({
         source: "snapshot",
         snapshotAvailable: true,
         capturedAt: "2026-09-03T15:30:00.000Z",
         isPastDate: true,
+        sourceQuality: "snapshot",
       }).includes("2026.09.04 00:30"),
     "snapshot 상태 문구"
   );
@@ -319,7 +545,8 @@ section("UI metadata / cron auth");
       snapshotAvailable: false,
       capturedAt: null,
       isPastDate: true,
-    }) === "저장된 과거기록 없음 · 현재 DB 기준 재구성",
+      sourceQuality: "fallback",
+    }) === "저장된 과거기록 없음 · 현재 자료 기준 재구성",
     "snapshot 없는 과거 문구"
   );
   assert(
@@ -328,8 +555,19 @@ section("UI metadata / cron auth");
       snapshotAvailable: false,
       capturedAt: null,
       isPastDate: false,
-    }) === "선택일 운영현황 · 현재 DB 기준",
-    "오늘 문구"
+      sourceQuality: "complete",
+    }) === "선택일 운영현황 · 현재 운영자료 기준",
+    "오늘 complete 문구"
+  );
+  assert(
+    dashboardSourceLine({
+      source: "live",
+      snapshotAvailable: false,
+      capturedAt: null,
+      isPastDate: false,
+      sourceQuality: "fallback",
+    }) === "선택일 운영현황 · 현재 자료 기준 (Sheet 일부 미반영)",
+    "오늘 fallback 문구"
   );
   const parsed = parseDailyOpsSnapshotPayload(
     { date: "2026-09-03", caddies: [{ caddyId: 9, name: "보존", team: "3조", status: "available" }] },

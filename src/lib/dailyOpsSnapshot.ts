@@ -61,6 +61,7 @@ export type AdminOpsDashboardView = Omit<
   capturedAt: string | null;
   source: "live" | "snapshot";
   isPastDate: boolean;
+  sourceQuality: "complete" | "fallback" | "snapshot";
 };
 
 function asCaddyType(value: unknown): CaddyTypeCode {
@@ -235,6 +236,7 @@ export function dashboardViewFromSnapshot(input: {
     capturedAt,
     source: "snapshot",
     isPastDate: true,
+    sourceQuality: "snapshot",
     roster: body.roster,
     availability: body.availability,
     opsDuties: body.opsDuties,
@@ -244,7 +246,8 @@ export function dashboardViewFromSnapshot(input: {
 
 export function dashboardViewFromLive(
   dash: AdminOpsDashboardPayload,
-  isPastDate: boolean
+  isPastDate: boolean,
+  sourceQuality: "complete" | "fallback" = "complete"
 ): AdminOpsDashboardView {
   return {
     ...dash,
@@ -253,6 +256,7 @@ export function dashboardViewFromLive(
     capturedAt: null,
     source: "live",
     isPastDate,
+    sourceQuality,
   };
 }
 

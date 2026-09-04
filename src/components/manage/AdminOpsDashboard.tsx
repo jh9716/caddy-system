@@ -17,15 +17,21 @@ import { addDays } from "@/lib/krHolidays";
 type DashboardResponse = AdminOpsDashboardView & { ok?: boolean; error?: string };
 
 export function dashboardSourceLine(
-  data: Pick<AdminOpsDashboardView, "source" | "snapshotAvailable" | "capturedAt" | "isPastDate"> | null
+  data: Pick<
+    AdminOpsDashboardView,
+    "source" | "snapshotAvailable" | "capturedAt" | "isPastDate" | "sourceQuality"
+  > | null
 ): string {
   if (data?.source === "snapshot" && data.capturedAt) {
     return `저장된 운영기록 · ${formatCapturedAtKst(data.capturedAt)} 저장`;
   }
   if (data?.isPastDate) {
-    return "저장된 과거기록 없음 · 현재 DB 기준 재구성";
+    return "저장된 과거기록 없음 · 현재 자료 기준 재구성";
   }
-  return "선택일 운영현황 · 현재 DB 기준";
+  if (data?.sourceQuality === "fallback") {
+    return "선택일 운영현황 · 현재 자료 기준 (Sheet 일부 미반영)";
+  }
+  return "선택일 운영현황 · 현재 운영자료 기준";
 }
 
 function todayYmd() {

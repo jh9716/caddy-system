@@ -38,6 +38,8 @@ export type LoadAvailabilityOptions = {
   offSheets?: OffSheet[];
   /** 당번·마샬·조장 파일 버퍼. 있으면 이번 요청 overlay에만 사용(미리보기). 저장은 별도 apply. */
   dutyWorkbook?: Buffer | ArrayBuffer | Uint8Array | null;
+  /** 이미 파싱된 당번·마샬·조장. workbook보다 우선하지 않음. 저장/apply 없음. */
+  dutyEntries?: DutyExcelEntry[];
   /** false면 저장된 당번·마샬·조장 일정을 읽지 않음 (기본 true) */
   includeStoredOpsDuty?: boolean;
   /** false면 휴무 Sheet를 읽지 않음 (기본 true) */
@@ -122,6 +124,9 @@ export async function loadAvailabilityForDate(
   if (options?.dutyWorkbook) {
     dutyEntries = parseDutyMarshalLeaderWorkbook(options.dutyWorkbook, ymd)
       .entries;
+    dutySource = "file";
+  } else if (options?.dutyEntries && options.dutyEntries.length > 0) {
+    dutyEntries = options.dutyEntries;
     dutySource = "file";
   } else if (options?.includeStoredOpsDuty !== false) {
     dutyEntries = await loadStoredDutyEntries(ymd);

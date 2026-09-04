@@ -19,11 +19,17 @@ import {
   groupOpsDutyNames,
   statusToneFromReasons,
 } from "../src/lib/adminOpsDashboard";
+import { loadAdminOpsDashboardSource } from "../src/lib/adminOpsDashboardSource";
 import { computeAvailability } from "../src/lib/availabilityEngine";
 import { applyDailyExternalExclusions } from "../src/lib/dailyAvailabilityOverlay";
 import { AdminOpsDutyBoard, AdminOpsTeamBoard, TeamBoardPerson } from "../src/components/manage/AdminOpsDashboard";
 import { addDaysYmd } from "../src/lib/dailyBoardPublished";
 import { PRIMARY_TEAMS } from "../src/lib/caddyManage";
+import type { StoredOpsDutyRow } from "../src/lib/dailyOpsDutyService";
+import { offNamesForDate, type OffSheet } from "../src/lib/offSheetParser";
+import {
+  buildOpsDutySheetTestSheets,
+} from "../src/lib/opsDutySheetParser";
 
 let passed = 0;
 let failed = 0;
@@ -97,6 +103,51 @@ const caddies = [
   },
 ];
 
+function offSheetForDate(ymd: string, names: string[]): OffSheet {
+  const [y, m, d] = ymd.split("-");
+  return {
+    name: `${m}${d}`,
+    matrix: [
+      [`${y}.${m}.${d} (월)`, "", ""],
+      ["1조", "2조", "3조"],
+      [names[0] || "", names[1] || "", names[2] || ""],
+    ],
+  };
+}
+
+function storedDuty(name: string, role: StoredOpsDutyRow["role"] = "DUTY_AM"): StoredOpsDutyRow {
+  return {
+    id: 1,
+    role,
+    roleKey: role === "DUTY_AM" ? "당번_조출_1" : "조장_1",
+    caddyId: 1,
+    rawName: name,
+    name,
+    team: "1조",
+    employmentStatus: "ACTIVE",
+  };
+}
+
+function mockLoadAvailability(list = caddies) {
+  return async (ymd: string, options?: {
+    includeOffSheet?: boolean;
+    offSheets?: OffSheet[];
+    dutyEntries?: { kind: string; roleKey: string; rawName: string }[];
+  }) => {
+    const base = computeAvailability({ date: ymd, caddies: list, assignments: [] });
+    const offNames =
+      options?.includeOffSheet && options.offSheets
+        ? offNamesForDate(options.offSheets, ymd).names
+        : [];
+    return applyDailyExternalExclusions({
+      availability: base,
+      caddies: list,
+      offNames,
+      dutyEntries: options?.dutyEntries ?? [],
+    });
+  };
+}
+
 function availabilityFor(date: string) {
   const start = new Date(`${date}T00:00:00`);
   const end = new Date(`${date}T23:59:59.999`);
@@ -119,6 +170,7 @@ function availabilityFor(date: string) {
   });
 }
 
+async function main() {
 section("ACTIVE / HOUSE / 3부반 집계");
 {
   const av = availabilityFor("2026-09-16");
@@ -237,7 +289,7 @@ section("전체 캐디 조별 현황판 가용/제외");
   assert(named.length === 1 && named[0].name === "김가용", "이름 검색만");
 }
 
-section("휴무 count source (Assignment OFF, not sheet)");
+section("휴무 count source (OFF Sheet overlay + Assignment)");
 {
   const date = "2026-09-03";
   const emptyAssign = computeAvailability({ date, caddies, assignments: [] });
@@ -255,10 +307,11 @@ section("휴무 count source (Assignment OFF, not sheet)");
   });
   const noOff = buildAdminOpsDashboard({ date, availability: storedOnly });
   const withSheetNames = buildAdminOpsDashboard({ date, availability: sheetOverlay });
-  assert(noOff.availability.offCount === 0, "Assignment OFF 없으면 휴무 0");
-  assert(withSheetNames.availability.offCount === 1, "offNames overlay가 있을 때만 시트 휴무 반영");
-  const service = readSrc("src/lib/adminOpsDashboardService.ts");
-  assert(/includeOffSheet: false/.test(service), "dashboard loader는 휴무 Sheet를 읽지 않음");
+  assert(noOff.availability.offCount === 0, "Assignment OFF 없으면 overlay 전 휴무 0");
+  assert(withSheetNames.availability.offCount === 1, "offNames overlay가 시트 휴무를 반영");
+  const source = readSrc("src/lib/adminOpsDashboardSource.ts");
+  assert(/fetchPublishedOffSheets/.test(source), "dashboard source는 휴무 Sheet를 읽음");
+  assert(/includeOffSheet: offOk/.test(source), "OFF 날짜를 찾은 경우에만 overlay");
   assert(/countOffFromReasons/.test(readSrc("src/lib/adminOpsDashboard.ts")), "휴무 카드는 휴무 reason 집계");
 }
 
@@ -286,24 +339,121 @@ section("날짜 변경 시 해당 날짜 데이터");
   assert(p2.availability.finalAvailable > p1.availability.finalAvailable, "날짜별 가용 갱신");
 }
 
+section("read-only OFF/ops source overlay");
+{
+  const date = "2026-09-03";
+  const writes: string[] = [];
+  const loaded = await loadAdminOpsDashboardSource(date, {
+    loadAvailability: mockLoadAvailability(),
+    listDuties: async () => [storedDuty("김가용")],
+    fetchOffSheets: async () => [offSheetForDate(date, ["이휴무"])],
+    fetchOpsDutySheets: async () => {
+      writes.push("unexpected_ops_fetch");
+      return [];
+    },
+  });
+  assert(loaded.dashboard.availability.offCount === 1, "OFF Sheet 휴무가 offCount에 반영");
+  const offCaddy = loaded.dashboard.caddies.find((c) => c.name === "이휴무");
+  assert(offCaddy?.status === "excluded" && offCaddy.statusTone === "off", "OFF Sheet 휴무가 캐디 상태에 반영");
+  assert(loaded.offSource === "sheet" && loaded.quality === "complete", "OFF Sheet source complete");
+  assert(writes.length === 0, "저장된 DailyOpsDuty가 있으면 운영배치 Sheet를 읽지 않음");
+}
+
+section("Sheet overlay는 DB write / apply 없음");
+{
+  const date = "2026-09-03";
+  await loadAdminOpsDashboardSource(date, {
+    loadAvailability: mockLoadAvailability(),
+    listDuties: async () => [],
+    fetchOffSheets: async () => [offSheetForDate(date, ["이휴무"])],
+    fetchOpsDutySheets: async () =>
+      buildOpsDutySheetTestSheets([
+        {
+          name: "0901~0914",
+          startDate: date,
+          week1Dates: [date, "2099-01-02", "2099-01-03", "2099-01-04", "2099-01-05", "2099-01-06", "2099-01-07"],
+          week2Dates: ["2099-01-08", "2099-01-09", "2099-01-10", "2099-01-11", "2099-01-12", "2099-01-13", "2099-01-14"],
+          week1Names: [{ 당번_조출_1: "김가용", 마샬_조출_1: "최병가", 조장_1: "박3부" }],
+        },
+      ]),
+  });
+  const src = readSrc("src/lib/adminOpsDashboardSource.ts") + readSrc("src/lib/adminOpsDashboardService.ts");
+  assert(!/replaceDailyOpsDuties/.test(src), "replaceDailyOpsDuties 미사용");
+  assert(!/applyDailyOpsDutySheet/.test(src), "applyDailyOpsDutySheet 미사용");
+  assert(!/syncOpsDutySheet/.test(src), "syncOpsDutySheet 미사용");
+  assert(!/prisma\.(create|update|upsert|delete|createMany)/.test(src), "source/service prisma write 없음");
+}
+
+section("DailyOpsDuty 없이 운영배치 Sheet read-only");
+{
+  const date = "2026-09-03";
+  let opsFetch = 0;
+  const loaded = await loadAdminOpsDashboardSource(date, {
+    loadAvailability: mockLoadAvailability(),
+    listDuties: async () => [],
+    fetchOffSheets: async () => [offSheetForDate(date, ["이휴무"])],
+    fetchOpsDutySheets: async () => {
+      opsFetch += 1;
+      return buildOpsDutySheetTestSheets([
+        {
+          name: "0901~0914",
+          startDate: date,
+          week1Dates: [date, "2099-01-02", "2099-01-03", "2099-01-04", "2099-01-05", "2099-01-06", "2099-01-07"],
+          week2Dates: ["2099-01-08", "2099-01-09", "2099-01-10", "2099-01-11", "2099-01-12", "2099-01-13", "2099-01-14"],
+          week1Names: [{ 당번_조출_1: "김가용", 마샬_조출_1: "최병가", 조장_1: "박3부" }],
+        },
+      ]);
+    },
+  });
+  assert(opsFetch === 1, "저장된 duty가 없으면 운영배치 Sheet를 읽음");
+  assert(loaded.dutySource === "sheet" && loaded.completeForSnapshot, "sheet duty로 snapshot 가능");
+  const duty = loaded.dashboard.opsDuties.find((g) => g.role === "DUTY_AM");
+  const marshal = loaded.dashboard.opsDuties.find((g) => g.role === "MARSHAL_AM");
+  const leader = loaded.dashboard.opsDuties.find((g) => g.role === "LEADER");
+  assert(duty?.names.includes("김가용"), "Sheet 당번 표시");
+  assert(marshal?.names.includes("최병가"), "Sheet 마샬 표시");
+  assert(leader?.names.includes("박3부"), "Sheet 조장 표시");
+}
+
+section("Sheet fetch 실패 시 DB fallback + incomplete metadata");
+{
+  const date = "2026-09-03";
+  const loaded = await loadAdminOpsDashboardSource(date, {
+    loadAvailability: mockLoadAvailability(),
+    listDuties: async () => [storedDuty("김가용")],
+    fetchOffSheets: async () => {
+      throw new Error("off_sheet_fetch_failed");
+    },
+    fetchOpsDutySheets: async () => {
+      throw new Error("ops should not run when stored duty exists");
+    },
+  });
+  assert(loaded.quality === "fallback", "OFF fetch 실패 → fallback");
+  assert(loaded.completeForSnapshot === false, "불완전 source는 snapshot 불가");
+  assert(loaded.offSource === "assignment_only", "OFF는 Assignment만");
+  assert(loaded.dashboard.availability.offCount === 0, "Sheet 실패 시 시트 휴무 0, 화면은 유지");
+  assert(loaded.skipReason === "off_sheet_fetch_failed", "skipReason 노출");
+}
+
 section("dashboard 조회 write/sync 없음");
 {
   const service = readSrc("src/lib/adminOpsDashboardService.ts");
+  const source = readSrc("src/lib/adminOpsDashboardSource.ts");
   const api = readSrc("src/app/api/manage/dashboard/route.ts");
   const helper = readSrc("src/lib/adminOpsDashboard.ts");
   const page = readSrc("src/app/manage/page.tsx");
   const ui = readSrc("src/components/manage/AdminOpsDashboard.tsx");
   const getFn = api.split("export async function GET")[1] || "";
 
-  assert(/includeOffSheet: false/.test(service), "휴무 Sheet fetch 끔");
-  assert(/includeStoredOpsDuty: true/.test(service), "저장된 DailyOpsDuty만 읽음");
-  assert(/loadAvailabilityForDate/.test(service), "기존 availability loader 재사용");
-  assert(/listDailyOpsDuties/.test(service), "기존 ops duty read helper");
-  assert(!/fetchPublishedOffSheets/.test(service), "service가 sheet fetch 안 함");
-  assert(!/syncOpsDutySheet/.test(service + api + helper + page + ui), "autosync 없음");
-  assert(!/replaceDailyOpsDuties/.test(service + api + helper), "DailyOpsDuty write 없음");
-  assert(!/publishDailyBoard/.test(service + api + helper), "Published write 없음");
-  assert(!/autoAssignEngine/.test(service + api + helper + ui), "autoAssignEngine 미사용");
+  assert(/loadAdminOpsDashboardSource/.test(service), "service가 공통 source 사용");
+  assert(/fetchPublishedOffSheets/.test(source), "OFF Sheet read-only fetch");
+  assert(/fetchPublishedOpsDutySheets/.test(source), "운영배치 Sheet read-only fetch");
+  assert(/listDailyOpsDuties/.test(source), "기존 ops duty read helper");
+  assert(/loadAvailabilityForDate/.test(source), "기존 availability loader 재사용");
+  assert(!/syncOpsDutySheet/.test(source + service + api + helper + page + ui), "autosync 없음");
+  assert(!/replaceDailyOpsDuties/.test(source + service + api + helper), "DailyOpsDuty write 없음");
+  assert(!/publishDailyBoard/.test(source + service + api + helper), "Published write 없음");
+  assert(!/autoAssignEngine/.test(source + service + api + helper + ui), "autoAssignEngine 미사용");
   assert(!/dailyBoardPublished/.test(ui), "dashboard UI가 published payload를 쓰지 않음");
   assert(!/export async function POST/.test(api), "dashboard API는 GET만");
   assert(/method: "GET"/.test(ui), "클라이언트도 GET만");
@@ -354,3 +504,9 @@ section("기존 관리자 dashboard access policy");
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
+}
+
+void main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
