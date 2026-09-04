@@ -19,9 +19,17 @@ export function isPrimaryTeam(team: string): boolean {
   return (PRIMARY_TEAMS as readonly string[]).includes(String(team ?? "").trim());
 }
 
+/** HOUSE 조 (1~8). 3부반·드라이빙과 구분. */
+export const HOUSE_TEAMS = ["1조", "2조", "3조", "4조", "5조", "6조", "7조", "8조"] as const;
+export type HouseTeam = (typeof HOUSE_TEAMS)[number];
+
 /** 3부반 조 (주중/주말 세부구분 허용) */
 export const THIRD_BAND_TEAMS = ["9조", "10조", "11조", "12조"] as const;
 export type ThirdBandTeam = (typeof THIRD_BAND_TEAMS)[number];
+
+export function isHouseTeam(team: string): boolean {
+  return (HOUSE_TEAMS as readonly string[]).includes(String(team ?? "").trim());
+}
 
 /** Prisma ThirdBandSubgroup — DRIVING 포함 금지 */
 export const THIRD_BAND_SUBGROUPS = ["WEEKDAY", "WEEKEND"] as const;
@@ -78,6 +86,30 @@ export type TeamCaddyType = "HOUSE" | "THIRD";
  */
 export function resolveCaddyTypeFromTeam(team: string): TeamCaddyType {
   return isThirdBandTeam(team) ? "THIRD" : "HOUSE";
+}
+
+export type AffiliationKind = "HOUSE" | "THIRD" | "DRIVING";
+
+/**
+ * PATCH 소속 전환 판정.
+ * - 명시 DRIVING 또는 team=드라이빙 → 드라이빙 persist
+ * - 1~12조 team 또는 명시 HOUSE/THIRD → 조 슬롯 persist (DRIVING 해제)
+ * - 그 외에는 현재 caddyType 유지 (이름/전화만 수정해도 드라이빙 유지)
+ */
+export function shouldPersistAsDriving(input: {
+  currentCaddyType?: string | null;
+  requestedCaddyType?: string | null;
+  requestedTeam?: string | null;
+}): boolean {
+  const requestedType = String(input.requestedCaddyType ?? "")
+    .trim()
+    .toUpperCase();
+  if (requestedType === "DRIVING") return true;
+  const requestedTeam = String(input.requestedTeam ?? "").trim();
+  if (requestedTeam === DRIVING_POOL_TEAM) return true;
+  if (isPrimaryTeam(requestedTeam)) return false;
+  if (requestedType === "HOUSE" || requestedType === "THIRD") return false;
+  return isDrivingCaddyType(input.currentCaddyType);
 }
 
 export class ThirdBandSubgroupError extends Error {

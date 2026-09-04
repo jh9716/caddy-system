@@ -6,15 +6,19 @@ import {
   EMPLOYMENT_STATUSES,
   EMPLOYMENT_STATUS_UI_LABELS,
   EDITABLE_EXTRA_FLAG_OPTIONS,
+  HOUSE_TEAMS,
   PRIMARY_TEAMS,
   THIRD_BAND_SUBGROUP_LABELS,
+  THIRD_BAND_TEAMS,
   countsTowardRosterHeadcount,
   employmentStatusUiLabel,
   isDrivingCaddyType,
   rosterHeadcount,
+  isHouseTeam,
   isThirdBandTeam,
   normalizeEmploymentStatus,
   thirdBandSubgroupCsvLabel,
+  type AffiliationKind,
   type ExtraFlagOption,
   type EmploymentStatus,
   type ThirdBandSubgroup,
@@ -60,6 +64,7 @@ type Caddy = {
 
 type Draft = {
   name: string;
+  affiliation: AffiliationKind;
   team: string;
   teamOrder: number;
   employmentStatus: EmploymentStatus;
@@ -72,6 +77,7 @@ type Draft = {
 
 const emptyDraft = (): Draft => ({
   name: '',
+  affiliation: 'HOUSE',
   team: '1조',
   teamOrder: 0,
   employmentStatus: 'ACTIVE',
@@ -80,21 +86,65 @@ const emptyDraft = (): Draft => ({
   thirdBandSubgroup: null,
 });
 
+function affiliationFromCaddy(c: {
+  caddyType?: string | null;
+  team?: string | null;
+}): AffiliationKind {
+  if (isDrivingCaddyType(c.caddyType) || c.team === DRIVING_POOL_TEAM) {
+    return 'DRIVING';
+  }
+  if (isThirdBandTeam(String(c.team ?? ''))) return 'THIRD';
+  return 'HOUSE';
+}
+
+function applyAffiliationChange(
+  current: Draft,
+  next: AffiliationKind
+): Partial<Draft> {
+  if (next === 'DRIVING') {
+    return {
+      affiliation: 'DRIVING',
+      team: DRIVING_POOL_TEAM,
+      teamOrder: 0,
+      thirdBandSubgroup: null,
+    };
+  }
+  if (next === 'HOUSE') {
+    const keep = isHouseTeam(current.team);
+    return {
+      affiliation: 'HOUSE',
+      team: keep ? current.team : '1조',
+      teamOrder: keep ? current.teamOrder : 0,
+      thirdBandSubgroup: null,
+    };
+  }
+  const keep = isThirdBandTeam(current.team);
+  return {
+    affiliation: 'THIRD',
+    team: keep ? current.team : '9조',
+    teamOrder: keep ? current.teamOrder : 0,
+    thirdBandSubgroup: keep ? current.thirdBandSubgroup : null,
+  };
+}
+
 function toDraft(c: Caddy): Draft {
   const subgroup =
     c.thirdBandSubgroup === 'WEEKDAY' || c.thirdBandSubgroup === 'WEEKEND'
       ? c.thirdBandSubgroup
       : null;
+  const affiliation = affiliationFromCaddy(c);
   return {
     name: c.name,
-    team: c.team,
-    teamOrder: c.teamOrder ?? 0,
+    affiliation,
+    team: affiliation === 'DRIVING' ? DRIVING_POOL_TEAM : c.team,
+    teamOrder: affiliation === 'DRIVING' ? 0 : c.teamOrder ?? 0,
     employmentStatus: normalizeEmploymentStatus(c.employmentStatus),
     extraFlags: (c.extraFlags ?? []).filter((f): f is ExtraFlagOption =>
       (EDITABLE_EXTRA_FLAG_OPTIONS as readonly string[]).includes(f)
     ),
     phone: c.phoneNormalized ?? '',
-    thirdBandSubgroup: isThirdBandTeam(c.team) ? subgroup : null,
+    thirdBandSubgroup:
+      affiliation === 'THIRD' && isThirdBandTeam(c.team) ? subgroup : null,
   };
 }
 
@@ -104,6 +154,111 @@ function formatPhoneDisplay(phoneNormalized: string | null | undefined): string 
 
 function isDrivingCaddy(c: { caddyType?: string | null; team?: string | null }): boolean {
   return isDrivingCaddyType(c.caddyType) || c.team === DRIVING_POOL_TEAM;
+}
+
+function AffiliationTeamFields({
+  draft,
+  original,
+  emptySlots,
+  slotLabel,
+  onChange,
+}: {
+  draft: Draft;
+  original: Caddy;
+  emptySlots: number[];
+  slotLabel: string;
+  onChange: (patch: Partial<Draft>) => void;
+}) {
+  const nextDriving = draft.affiliation === 'DRIVING';
+  const teamOptions =
+    draft.affiliation === 'THIRD' ? THIRD_BAND_TEAMS : HOUSE_TEAMS;
+  return (
+    <>
+      <label>
+        소속
+        <select
+          value={draft.affiliation}
+          onChange={(e) => {
+            const next = e.target.value as AffiliationKind;
+            if (next === 'HOUSE' || next === 'THIRD' || next === 'DRIVING') {
+              onChange(applyAffiliationChange(draft, next));
+            }
+          }}
+        >
+          <option value="HOUSE">HOUSE (1~8조)</option>
+          <option value="THIRD">3부반 (9~12조)</option>
+          <option value="DRIVING">드라이빙</option>
+        </select>
+      </label>
+      {!nextDriving && (
+        <label>
+          조
+          <select
+            value={draft.team}
+            onChange={(e) => {
+              const team = e.target.value;
+              onChange({
+                team,
+                teamOrder: team === original.team ? draft.teamOrder : 0,
+                thirdBandSubgroup: isThirdBandTeam(team)
+                  ? draft.thirdBandSubgroup
+                  : null,
+              });
+            }}
+          >
+            {!(teamOptions as readonly string[]).includes(draft.team) && (
+              <option value={draft.team}>{draft.team}</option>
+            )}
+            {teamOptions.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {!nextDriving && (
+        <label>
+          {slotLabel}
+          <select
+            value={draft.teamOrder || ''}
+            onChange={(e) =>
+              onChange({
+                teamOrder: Number(e.target.value) || 0,
+              })
+            }
+          >
+            <option value="">선택…</option>
+            {emptySlots.map((n) => (
+              <option key={n} value={n}>
+                {n}번
+                {draft.team !== original.team ? ' (이동)' : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {!nextDriving && isThirdBandTeam(draft.team) && (
+        <label>
+          3부반 구분
+          <select
+            value={draft.thirdBandSubgroup ?? ''}
+            onChange={(e) => {
+              const v = e.target.value;
+              onChange({
+                thirdBandSubgroup:
+                  v === 'WEEKDAY' || v === 'WEEKEND' ? v : null,
+              });
+            }}
+          >
+            <option value="">일반</option>
+            <option value="WEEKDAY">{THIRD_BAND_SUBGROUP_LABELS.WEEKDAY}</option>
+            <option value="WEEKEND">{THIRD_BAND_SUBGROUP_LABELS.WEEKEND}</option>
+          </select>
+        </label>
+      )}
+    </>
+  );
 }
 
 /** 현장표 성명. 조 접두어는 열 헤더에 있으므로 이름만 쓴다. */
@@ -490,14 +645,26 @@ export default function ManageCaddiesPage() {
     const draft = drafts[id];
     if (!draft) return;
     const original = rows.find((r) => r.id === id);
-    const originalDriving = original
-      ? isDrivingCaddyType(original.caddyType) ||
-        original.team === DRIVING_POOL_TEAM
-      : false;
-    if (originalDriving) {
+    const originalDriving = original ? isDrivingCaddy(original) : false;
+    const nextDriving = draft.affiliation === 'DRIVING';
+
+    if (nextDriving) {
       if (!draft.name.trim()) {
         alert('이름은 필수입니다.');
         return;
+      }
+      if (!originalDriving && original) {
+        const slotNote =
+          original.team && Number(original.teamOrder) >= 1
+            ? `${original.team} ${original.teamOrder}번 고정 슬롯은 빈자리가 됩니다.`
+            : '고정 슬롯에서 제외됩니다.';
+        if (
+          !confirm(
+            `${formatCaddyLabel(original)}을(를) 드라이빙 전담 캐디로 바꿀까요?\n${slotNote}\n기존 ID/계정과 스케줄 기록은 유지됩니다.`
+          )
+        ) {
+          return;
+        }
       }
       setSavingId(id);
       try {
@@ -527,20 +694,25 @@ export default function ManageCaddiesPage() {
       }
       return;
     }
+
     if (!draft.name.trim() || !draft.team.trim()) {
       alert('이름과 조는 필수입니다.');
       return;
     }
-    const teamChanging = original && draft.team !== original.team;
     const slot = Number(draft.teamOrder) || 0;
     if (slot < 1) {
       alert('고정 슬롯(조내순번)은 1 이상이어야 합니다.');
       return;
     }
-    if (teamChanging) {
+    const teamChanging =
+      originalDriving || (original != null && draft.team !== original.team);
+    if (teamChanging && original) {
+      const from = originalDriving
+        ? '드라이빙'
+        : `${original.team} ${original.teamOrder}번`;
       if (
         !confirm(
-          `${formatCaddyLabel(original)}: ${original?.team} ${original?.teamOrder}번 → ${draft.team} ${slot}번으로 이동할까요?\n기존 슬롯은 빈자리가 됩니다.`
+          `${formatCaddyLabel(original)}: ${from} → ${draft.team} ${slot}번으로 소속/조를 바꿀까요?\n기존 ID/계정은 유지되고, 이전 슬롯은 빈자리가 됩니다.`
         )
       ) {
         return;
@@ -556,6 +728,7 @@ export default function ManageCaddiesPage() {
           name: draft.name.trim(),
           team: draft.team,
           teamOrder: slot,
+          caddyType: isThirdBandTeam(draft.team) ? 'THIRD' : 'HOUSE',
           employmentStatus: draft.employmentStatus,
           extraFlags: draft.extraFlags,
           thirdBandSubgroup: isThirdBandTeam(draft.team)
@@ -1213,57 +1386,13 @@ export default function ManageCaddiesPage() {
                                 }
                               />
                             </label>
-                            {!isDriving && (
-                            <label>
-                              조
-                              <select
-                                value={draft.team}
-                                onChange={(e) => {
-                                  const team = e.target.value;
-                                  updateDraft(c.id, {
-                                    team,
-                                    teamOrder:
-                                      team === c.team ? draft.teamOrder : 0,
-                                    thirdBandSubgroup: isThirdBandTeam(team)
-                                      ? draft.thirdBandSubgroup
-                                      : null,
-                                  });
-                                }}
-                              >
-                                {!(PRIMARY_TEAMS as readonly string[]).includes(
-                                  draft.team
-                                ) && (
-                                  <option value={draft.team}>{draft.team}</option>
-                                )}
-                                {PRIMARY_TEAMS.map((t) => (
-                                  <option key={t} value={t}>
-                                    {t}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                            )}
-                            {!isDriving && (
-                            <label>
-                              슬롯
-                              <select
-                                value={draft.teamOrder || ''}
-                                onChange={(e) =>
-                                  updateDraft(c.id, {
-                                    teamOrder: Number(e.target.value) || 0,
-                                  })
-                                }
-                              >
-                                <option value="">선택…</option>
-                                {editEmptySlots.map((n) => (
-                                  <option key={n} value={n}>
-                                    {n}번
-                                    {draft.team !== c.team ? ' (이동)' : ''}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                            )}
+                            <AffiliationTeamFields
+                              draft={draft}
+                              original={c}
+                              emptySlots={editEmptySlots}
+                              slotLabel="슬롯"
+                              onChange={(patch) => updateDraft(c.id, patch)}
+                            />
                             <label>
                               재직상태
                               <select
@@ -1292,33 +1421,8 @@ export default function ManageCaddiesPage() {
                                 }
                               />
                             </label>
-                            {!isDriving && isThirdBandTeam(draft.team) && (
-                              <label>
-                                3부반 구분
-                                <select
-                                  value={draft.thirdBandSubgroup ?? ''}
-                                  onChange={(e) => {
-                                    const v = e.target.value;
-                                    updateDraft(c.id, {
-                                      thirdBandSubgroup:
-                                        v === 'WEEKDAY' || v === 'WEEKEND'
-                                          ? v
-                                          : null,
-                                    });
-                                  }}
-                                >
-                                  <option value="">일반</option>
-                                  <option value="WEEKDAY">
-                                    {THIRD_BAND_SUBGROUP_LABELS.WEEKDAY}
-                                  </option>
-                                  <option value="WEEKEND">
-                                    {THIRD_BAND_SUBGROUP_LABELS.WEEKEND}
-                                  </option>
-                                </select>
-                              </label>
-                            )}
                           </div>
-                          {!isDriving && (
+                          {draft.affiliation !== 'DRIVING' && (
                           <fieldset className="cm-flags">
                             <legend>추가 속성</legend>
                             {EDITABLE_EXTRA_FLAG_OPTIONS.map((flag) => (
@@ -1593,56 +1697,13 @@ export default function ManageCaddiesPage() {
                                 }
                               />
                             </label>
-                            {!isDriving && (
-                            <label>
-                              조
-                              <select
-                                value={draft.team}
-                                onChange={(e) => {
-                                  const team = e.target.value;
-                                  updateDraft(c.id, {
-                                    team,
-                                    teamOrder:
-                                      team === c.team ? draft.teamOrder : 0,
-                                    thirdBandSubgroup: isThirdBandTeam(team)
-                                      ? draft.thirdBandSubgroup
-                                      : null,
-                                  });
-                                }}
-                              >
-                                {!(PRIMARY_TEAMS as readonly string[]).includes(
-                                  draft.team
-                                ) && (
-                                  <option value={draft.team}>{draft.team}</option>
-                                )}
-                                {PRIMARY_TEAMS.map((t) => (
-                                  <option key={t} value={t}>
-                                    {t}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                            )}
-                            {!isDriving && (
-                            <label>
-                              슬롯
-                              <select
-                                value={draft.teamOrder || ''}
-                                onChange={(e) =>
-                                  updateDraft(c.id, {
-                                    teamOrder: Number(e.target.value) || 0,
-                                  })
-                                }
-                              >
-                                <option value="">선택…</option>
-                                {editEmptySlots.map((n) => (
-                                  <option key={n} value={n}>
-                                    {n}번
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                            )}
+                            <AffiliationTeamFields
+                              draft={draft}
+                              original={c}
+                              emptySlots={editEmptySlots}
+                              slotLabel="슬롯"
+                              onChange={(patch) => updateDraft(c.id, patch)}
+                            />
                             <label>
                               상태
                               <select
@@ -1671,33 +1732,8 @@ export default function ManageCaddiesPage() {
                                 }
                               />
                             </label>
-                            {!isDriving && isThirdBandTeam(draft.team) && (
-                              <label>
-                                3부반 구분
-                                <select
-                                  value={draft.thirdBandSubgroup ?? ''}
-                                  onChange={(e) => {
-                                    const v = e.target.value;
-                                    updateDraft(c.id, {
-                                      thirdBandSubgroup:
-                                        v === 'WEEKDAY' || v === 'WEEKEND'
-                                          ? v
-                                          : null,
-                                    });
-                                  }}
-                                >
-                                  <option value="">일반</option>
-                                  <option value="WEEKDAY">
-                                    {THIRD_BAND_SUBGROUP_LABELS.WEEKDAY}
-                                  </option>
-                                  <option value="WEEKEND">
-                                    {THIRD_BAND_SUBGROUP_LABELS.WEEKEND}
-                                  </option>
-                                </select>
-                              </label>
-                            )}
                           </div>
-                          {!isDriving && (
+                          {draft.affiliation !== 'DRIVING' && (
                           <fieldset className="cm-flags">
                             <legend>추가 속성</legend>
                             {EDITABLE_EXTRA_FLAG_OPTIONS.map((flag) => (
@@ -2330,7 +2366,6 @@ export default function ManageCaddiesPage() {
                   const c = menuCaddy;
                   const draft = drafts[c.id] ?? toDraft(c);
                   const busy = savingId === c.id;
-                  const isDriving = isDrivingCaddy(c);
                   return (
                     <>
                       <div className="cm-form-grid">
@@ -2343,57 +2378,13 @@ export default function ManageCaddiesPage() {
                             }
                           />
                         </label>
-                        {!isDriving && (
-                          <label>
-                            조
-                            <select
-                              value={draft.team}
-                              onChange={(e) => {
-                                const team = e.target.value;
-                                updateDraft(c.id, {
-                                  team,
-                                  teamOrder:
-                                    team === c.team ? draft.teamOrder : 0,
-                                  thirdBandSubgroup: isThirdBandTeam(team)
-                                    ? draft.thirdBandSubgroup
-                                    : null,
-                                });
-                              }}
-                            >
-                              {!(PRIMARY_TEAMS as readonly string[]).includes(
-                                draft.team
-                              ) && (
-                                <option value={draft.team}>{draft.team}</option>
-                              )}
-                              {PRIMARY_TEAMS.map((t) => (
-                                <option key={t} value={t}>
-                                  {t}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                        )}
-                        {!isDriving && (
-                          <label>
-                            순번
-                            <select
-                              value={draft.teamOrder || ''}
-                              onChange={(e) =>
-                                updateDraft(c.id, {
-                                  teamOrder: Number(e.target.value) || 0,
-                                })
-                              }
-                            >
-                              <option value="">선택…</option>
-                              {editEmptySlots.map((n) => (
-                                <option key={n} value={n}>
-                                  {n}번
-                                  {draft.team !== c.team ? ' (이동)' : ''}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                        )}
+                        <AffiliationTeamFields
+                          draft={draft}
+                          original={c}
+                          emptySlots={editEmptySlots}
+                          slotLabel="순번"
+                          onChange={(patch) => updateDraft(c.id, patch)}
+                        />
                         <label>
                           재직상태
                           <select
@@ -2422,33 +2413,8 @@ export default function ManageCaddiesPage() {
                             }
                           />
                         </label>
-                        {!isDriving && isThirdBandTeam(draft.team) && (
-                          <label>
-                            3부반 구분
-                            <select
-                              value={draft.thirdBandSubgroup ?? ''}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                updateDraft(c.id, {
-                                  thirdBandSubgroup:
-                                    v === 'WEEKDAY' || v === 'WEEKEND'
-                                      ? v
-                                      : null,
-                                });
-                              }}
-                            >
-                              <option value="">일반</option>
-                              <option value="WEEKDAY">
-                                {THIRD_BAND_SUBGROUP_LABELS.WEEKDAY}
-                              </option>
-                              <option value="WEEKEND">
-                                {THIRD_BAND_SUBGROUP_LABELS.WEEKEND}
-                              </option>
-                            </select>
-                          </label>
-                        )}
                       </div>
-                      {!isDriving && (
+                      {draft.affiliation !== 'DRIVING' && (
                         <fieldset className="cm-flags">
                           <legend>추가 속성</legend>
                           {EDITABLE_EXTRA_FLAG_OPTIONS.map((flag) => (
@@ -2513,14 +2479,14 @@ export default function ManageCaddiesPage() {
                       >
                         수정
                       </button>
-                      {!isDriving && !leave ? (
+                      {!leave ? (
                         <button
                           type="button"
                           className="cm-btn"
                           disabled={busy}
                           onClick={() => startEdit(c)}
                         >
-                          조/순번 변경
+                          소속/조 변경
                         </button>
                       ) : null}
                       {!leave ? (
