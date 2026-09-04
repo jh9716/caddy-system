@@ -20,7 +20,7 @@ export function kstYmd(now: Date = new Date()): string {
   return `${y}-${m}-${d}`;
 }
 
-/** 매일 00:30 KST cron이 보존하는 대상: 방금 끝난 전날. */
+/** 00:30/01:30/02:30 KST cron이 보존하는 대상: 방금 끝난 전날. */
 export function previousKstYmd(now: Date = new Date()): string {
   return addDays(kstYmd(now), -1);
 }

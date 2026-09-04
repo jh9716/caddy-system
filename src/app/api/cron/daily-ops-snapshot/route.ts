@@ -9,8 +9,11 @@ export const maxDuration = 60;
 
 /**
  * GET /api/cron/daily-ops-snapshot
- * 00:30 KST (= 15:30 UTC) — 전날 운영현황을 1회 보존.
- * 같은 날짜가 이미 있으면 overwrite 없이 exists.
+ * 같은 전날 날짜를 최대 3회 시도:
+ *   00:30 KST = 15:30 UTC
+ *   01:30 KST = 16:30 UTC
+ *   02:30 KST = 17:30 UTC
+ * 이미 Snapshot이 있으면 Sheet fetch 없이 exists. overwrite 없음.
  */
 export async function GET(req: NextRequest) {
   if (!authorizeCronRequest(req)) {

@@ -377,6 +377,8 @@ section("KST 전날 계산");
 {
   assert(kstYmd(new Date("2026-09-03T15:29:00.000Z")) === "2026-09-04", "15:29 UTC = 00:29 KST 다음날");
   assert(previousKstYmd(new Date("2026-09-03T15:30:00.000Z")) === "2026-09-03", "00:30 KST cron 대상 = 전날");
+  assert(previousKstYmd(new Date("2026-09-03T16:30:00.000Z")) === "2026-09-03", "01:30 KST 재시도도 같은 전날");
+  assert(previousKstYmd(new Date("2026-09-03T17:30:00.000Z")) === "2026-09-03", "02:30 KST 재시도도 같은 전날");
   assert(previousKstYmd(new Date("2026-09-03T14:59:00.000Z")) === "2026-09-02", "23:59 KST 전날");
   assert(formatCapturedAtKst("2026-09-03T15:30:00.000Z") === "2026.09.04 00:30", "저장시각 KST 표기");
 }
@@ -500,7 +502,8 @@ section("dashboard GET write 없음 / cron 인증 / sheet read-only");
   assert(/loadAdminOpsDashboardSource/.test(live), "live service가 공통 source 사용");
   assert(!/syncOpsDutySheet|replaceDailyOpsDuties|applyDailyOpsDutySheet/.test(service + cron + source), "capture에 duty write 없음");
   assert(/authorizeCronRequest/.test(cron) && /previousKstYmd/.test(cron), "cron 인증+전날");
-  assert(/30 15 \* \* \*/.test(vercel), "15:30 UTC = 00:30 KST");
+  assert(/30 15 \* \* \*/.test(vercel) && /30 16 \* \* \*/.test(vercel) && /30 17 \* \* \*/.test(vercel), "15/16/17:30 UTC = 00/01/02:30 KST");
+  assert((vercel.match(/daily-ops-snapshot/g) || []).length === 3, "같은 path 최대 3회");
   assert(/model DailyOpsSnapshot/.test(schema) && /date\s+DateTime\s+@unique/.test(schema), "date unique");
   assert(/CREATE TABLE "DailyOpsSnapshot"/.test(sql) && !/DROP TABLE/.test(sql), "additive migration");
   assert(/저장된 운영기록/.test(ui) && /저장된 과거기록 없음/.test(ui) && /현재 운영자료 기준/.test(ui), "metadata 문구");

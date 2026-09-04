@@ -204,6 +204,17 @@ section("선택 날짜 availability summary + OFF");
     "기존 병가 reason만 표시"
   );
   assert(!dash.availability.reasonCounts.some((r) => r.reason === "미출근"), "임의 운영상태 없음");
+  assert(
+    av.excluded.some((row) =>
+      row.excludedReasons.some((reason) => /퇴사|RETIRED/.test(reason))
+    ),
+    "availability excluded에는 RETIRED 사유가 남아 있음"
+  );
+  assert(
+    !dash.availability.reasonCounts.some((r) => /퇴사|RETIRED/.test(r.reason)),
+    "요약 chip에서 RETIRED 제외"
+  );
+  assert(dash.roster.activeCount === 4, "ACTIVE 재직 수는 RETIRED 제외 유지");
 }
 
 section("DailyOpsDuty role/name");

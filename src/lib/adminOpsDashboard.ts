@@ -146,6 +146,12 @@ export function countOffFromReasons(rows: readonly Pick<AvailabilityRow, "exclud
   ).length;
 }
 
+/** 재직상태 사유. 당일 운영 제외 chip이 아님. */
+function isRetiredEmploymentReason(reason: string): boolean {
+  const r = reason.trim();
+  return r === "퇴사(RETIRED)" || r === "퇴사" || r === "RETIRED" || /\bRETIRED\b/.test(r);
+}
+
 export function countExistingReasons(
   rows: readonly Pick<AvailabilityRow, "excludedReasons">[]
 ): AdminOpsReasonCount[] {
@@ -154,7 +160,7 @@ export function countExistingReasons(
     const seen = new Set<string>();
     for (const raw of row.excludedReasons) {
       const reason = String(raw ?? "").trim();
-      if (!reason || seen.has(reason)) continue;
+      if (!reason || seen.has(reason) || isRetiredEmploymentReason(reason)) continue;
       seen.add(reason);
       counts.set(reason, (counts.get(reason) ?? 0) + 1);
     }

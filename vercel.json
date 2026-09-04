@@ -3,6 +3,14 @@
     {
       "path": "/api/cron/daily-ops-snapshot",
       "schedule": "30 15 * * *"
+    },
+    {
+      "path": "/api/cron/daily-ops-snapshot",
+      "schedule": "30 16 * * *"
+    },
+    {
+      "path": "/api/cron/daily-ops-snapshot",
+      "schedule": "30 17 * * *"
     }
   ]
 }

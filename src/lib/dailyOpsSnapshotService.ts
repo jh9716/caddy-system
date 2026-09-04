@@ -97,6 +97,7 @@ export async function captureDailyOpsSnapshot(
     where: { date: dateKey(ymd) },
   });
   if (existing) {
+    // Sheet fetch / source load 전에 종료. 재시도 cron은 여기서 끝난다.
     return {
       status: "exists",
       date: ymd,
