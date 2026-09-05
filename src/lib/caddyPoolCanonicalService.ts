@@ -23,6 +23,7 @@ import { listDailySpecialDutyRecords } from "@/lib/dailySpecialDutyService";
 import {
   OFF_SHEET_UNRESOLVED_CODE,
   OFF_SHEET_UNRESOLVED_USER_MESSAGE,
+  parseUnavailableFromShift,
   recoverComputePool,
   recoverRosterBaseline,
   resolveCanonicalUnavailableIds,
@@ -40,6 +41,7 @@ import {
 import {
   regularCaddyPoolFromAvailabilityRows,
   type AutoAssignCaddy,
+  type UnavailableFromShiftRow,
 } from "@/lib/autoAssignEngine";
 
 export type CanonicalOffSheetMode = "cache" | "fetch" | "cache-or-fetch" | "snapshot";
@@ -79,6 +81,7 @@ export type CanonicalReflowState = {
   rosterBaseline: AutoAssignCaddy[];
   computePool: AutoAssignCaddy[];
   unavailableIds: number[];
+  unavailableFromShift: UnavailableFromShiftRow[];
   opsDutyIds: number[];
   specialSkipIds: number[];
   offSheetMatched: boolean;
@@ -231,7 +234,10 @@ function asCaddyDb(db: unknown): {
     tag: string;
     date: Date;
   }>> };
-  dailyCaddyUnavailable: { findMany: (args: unknown) => Promise<Array<{ caddyId: number }>> };
+  dailyCaddyUnavailable: { findMany: (args: unknown) => Promise<Array<{
+    caddyId: number;
+    effectiveFromShift?: string | null;
+  }>> };
 } {
   return db as ReturnType<typeof asCaddyDb>;
 }
@@ -276,14 +282,20 @@ export async function loadCanonicalReflowState(
       }),
       prisma.dailyCaddyUnavailable.findMany({
         where: { date: start },
-        select: { caddyId: true },
+        select: { caddyId: true, effectiveFromShift: true },
       }),
       listDailyOpsDutyCaddyIds(ymd).catch(() => [] as number[]),
       listDailySpecialDutyRecords(ymd).catch(() => [] as Array<{ caddyId: number }>),
     ]);
 
+  const unavailableFromShift: UnavailableFromShiftRow[] = unavailableRows
+    .map((row) => ({
+      caddyId: Number(row.caddyId),
+      effectiveFromShift: parseUnavailableFromShift(row.effectiveFromShift),
+    }))
+    .filter((row) => Number.isInteger(row.caddyId) && row.caddyId > 0);
   const unavailableIds = resolveCanonicalUnavailableIds({
-    dailyUnavailableIds: unavailableRows.map((row) => row.caddyId),
+    dailyUnavailableIds: unavailableFromShift.map((row) => row.caddyId),
   });
   const specialSkipIds = uniquePositiveIds(specialRows.map((row) => row.caddyId));
 
@@ -366,6 +378,7 @@ export async function loadCanonicalReflowState(
     rosterBaseline,
     computePool,
     unavailableIds,
+    unavailableFromShift,
     opsDutyIds,
     specialSkipIds,
     offSheetMatched,

@@ -261,6 +261,11 @@ export type SpareByShift = {
   spare2: SpareCaddyInfo | null;
 };
 
+export type UnavailableFromShiftRow = {
+  caddyId: number;
+  effectiveFromShift: ShiftPart;
+};
+
 export type AutoAssignResultV1 = {
   date: string;
   /** 전체 배치 (고정/찾근 + 54홀 + 1·3부 + 1·2부 + 일반) */
@@ -330,6 +335,8 @@ export type AutoAssignResultV1 = {
   specialPlacement?: SpecialPlacementState;
   /** 이미 병가/결근 처리된 캐디. 이후 MOVE/reflow가 다시 넣으면 안 된다. */
   unavailableCaddyIds?: number[];
+  /** 병가 유효 시작 부. 없으면 unavailableCaddyIds는 종일(1부)로 해석. */
+  unavailableFromShift?: UnavailableFromShiftRow[];
 };
 
 export type SpecialPlacementState = {
@@ -5196,6 +5203,68 @@ function reflowPlacementPolicy(
   };
 }
 
+function specialSupportExcludeIds(
+  previous: AutoAssignResultV1,
+  queues?: Record<ShiftPart, AutoAssignCaddy[]> | null
+): Set<number> {
+  const ids = new Set<number>();
+  const byShift = queues || previous.specialSupportByShift;
+  if (byShift) {
+    for (const shift of SHIFT_PARTS) {
+      for (const caddy of byShift[shift] || []) {
+        if (caddy?.id > 0) ids.add(caddy.id);
+      }
+    }
+  }
+  for (const row of previous.assignments) {
+    if (row.kind === "specialSupport" && row.caddy.id > 0) {
+      ids.add(row.caddy.id);
+    }
+  }
+  return ids;
+}
+
+export function serializeUnavailableFromShift(
+  map: Map<number, ShiftPart>
+): UnavailableFromShiftRow[] {
+  return [...map.entries()]
+    .filter(([caddyId]) => Number.isInteger(caddyId) && caddyId > 0)
+    .map(([caddyId, effectiveFromShift]) => ({
+      caddyId,
+      effectiveFromShift,
+    }));
+}
+
+function seedUnavailableFromPrevious(previous: AutoAssignResultV1): {
+  unavailable: Map<number, CaddyUnavailableCause>;
+  unavailableFromShift: Map<number, ShiftPart>;
+  allDayUnavailable: Set<number>;
+} {
+  const unavailable = new Map<number, CaddyUnavailableCause>();
+  const unavailableFromShift = new Map<number, ShiftPart>();
+  const allDayUnavailable = new Set<number>();
+  const fromRows =
+    previous.unavailableFromShift && previous.unavailableFromShift.length > 0
+      ? previous.unavailableFromShift
+      : [];
+  for (const row of fromRows) {
+    const id = Number(row.caddyId);
+    if (!Number.isInteger(id) || id < 1) continue;
+    const from = parseAssignShiftPart(row.effectiveFromShift) ?? "1부";
+    unavailable.set(id, "SICK");
+    unavailableFromShift.set(id, from);
+    if (from === "1부") allDayUnavailable.add(id);
+  }
+  for (const rawId of previous.unavailableCaddyIds || []) {
+    const id = Number(rawId);
+    if (!Number.isInteger(id) || id < 1 || unavailable.has(id)) continue;
+    unavailable.set(id, "SICK");
+    unavailableFromShift.set(id, "1부");
+    allDayUnavailable.add(id);
+  }
+  return { unavailable, unavailableFromShift, allDayUnavailable };
+}
+
 export function reflowRegularAssignments(input: {
   previous: AutoAssignResultV1;
   /** 원본 일반 available 풀 (정렬 전/후 모두 허용 — 내부에서 재정렬) */
@@ -5289,16 +5358,10 @@ export function reflowRegularAssignments(input: {
     });
   }
 
-  const unavailable = new Map<number, CaddyUnavailableCause>();
-  const unavailableFromShift = new Map<number, ShiftPart>();
-  const allDayUnavailable = new Set<number>();
-  for (const rawId of previous.unavailableCaddyIds || []) {
-    const id = Number(rawId);
-    if (!Number.isInteger(id) || id < 1) continue;
-    unavailable.set(id, "SICK");
-    unavailableFromShift.set(id, "1부");
-    allDayUnavailable.add(id);
-  }
+  const unavailableState = seedUnavailableFromPrevious(previous);
+  const unavailable = unavailableState.unavailable;
+  const unavailableFromShift = unavailableState.unavailableFromShift;
+  const allDayUnavailable = unavailableState.allDayUnavailable;
   let cancelCount = 0;
   let teamNoshowCount = 0;
   let addCount = 0;
@@ -5615,6 +5678,10 @@ export function reflowRegularAssignments(input: {
         !autoSpecialIds.has(row.caddy.id)
     )
     .map((row) => row.caddy);
+  const supportExcludeIds = specialSupportExcludeIds(
+    previous,
+    input.specialSupportByShift
+  );
   const remainingSource = eligibleRegularReflowCaddies([
     ...fullPool,
     ...extraSpecials,
@@ -5622,14 +5689,20 @@ export function reflowRegularAssignments(input: {
     (c) =>
       !lockedCaddies.has(c.id) &&
       !allDayUnavailable.has(c.id) &&
-      !autoSpecialIds.has(c.id)
+      !autoSpecialIds.has(c.id) &&
+      !supportExcludeIds.has(c.id)
   );
   const originalSource = eligibleRegularReflowCaddies([
     ...fullPool,
     ...extraSpecials,
     ...previous.assignments.map((row) => row.caddy),
     ...(previous.unusedCaddies || []),
-  ]).filter((c) => !lockedCaddies.has(c.id) && !autoSpecialIds.has(c.id));
+  ]).filter(
+    (c) =>
+      !lockedCaddies.has(c.id) &&
+      !autoSpecialIds.has(c.id) &&
+      !supportExcludeIds.has(c.id)
+  );
   // Non-SICK reflow: historical team-order rebuild + origin rotate.
   // SICK removeOnly: 1부 보드 순서 + leftover. Do not team-sort the
   // whole queue and do not rebuild 2부 from its (possibly reset) board.
@@ -5807,6 +5880,7 @@ export function reflowRegularAssignments(input: {
       block: autoSpecialBlock,
     },
     unavailableCaddyIds: [...unavailable.keys()],
+    unavailableFromShift: serializeUnavailableFromShift(unavailableFromShift),
   };
 
   const lockedPreserved: LockedPreservedRow[] = lockedRows.map((row) => ({

@@ -522,8 +522,8 @@ section("production v51 live SICK overlay: click = persist overlay, not 94/106")
   });
   const [badS1, badS2] = spareIds(badClick.draft.sparesByShift, "1부");
   assert(
-    badS1 === BAD_SPARE1 && badS2 === BAD_SPARE2,
-    `unfiltered live 12 pool still 94/106 (${badS1}/${badS2})`
+    badS1 === SPARE2 && badS2 === NEXT_UNUSED,
+    `snapshotComputePoolFromDraft overlays placed live SICK (${badS1}/${badS2})`
   );
 
   const ui = uiHydrateAndEnqueueSick({

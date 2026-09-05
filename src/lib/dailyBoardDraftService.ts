@@ -14,6 +14,8 @@ import {
   DAILY_BOARD_DRAFT_SCHEMA_VERSION,
 } from "@/lib/dailyBoardDraft";
 import { prisma as defaultPrisma } from "@/lib/prisma";
+import { parseUnavailableFromShift } from "@/lib/caddyPoolCanonical";
+import type { UnavailableFromShiftRow } from "@/lib/autoAssignEngine";
 
 export { DRAFT_VERSION_CONFLICT, DRAFT_VERSION_CONFLICT_MESSAGE };
 
@@ -220,11 +222,23 @@ export async function saveDailyBoardDraft(input: {
 }
 
 export async function listUnavailableCaddyIds(ymd: string): Promise<number[]> {
+  const rows = await listUnavailableFromShift(ymd);
+  return rows.map((row) => row.caddyId);
+}
+
+export async function listUnavailableFromShift(
+  ymd: string
+): Promise<UnavailableFromShiftRow[]> {
   const rows = await defaultPrisma.dailyCaddyUnavailable.findMany({
     where: { date: dateKey(ymd) },
-    select: { caddyId: true },
+    select: { caddyId: true, effectiveFromShift: true },
   });
-  return rows.map((row) => row.caddyId);
+  return rows
+    .map((row) => ({
+      caddyId: Number(row.caddyId),
+      effectiveFromShift: parseUnavailableFromShift(row.effectiveFromShift),
+    }))
+    .filter((row) => Number.isInteger(row.caddyId) && row.caddyId > 0);
 }
 
 /** Draft row만 삭제. DailyReservation / DailyPlacement 는 건드리지 않는다. */

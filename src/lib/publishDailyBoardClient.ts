@@ -17,6 +17,7 @@ export function publishBoardActionState(input: {
   published: { sourceDraftVersion: number } | null;
   draftVersion: number;
   conflict?: boolean;
+  blocked?: boolean;
 }): { label: string; disabled: boolean; alreadyCurrent: boolean } {
   if (input.publishing) {
     return { label: PUBLISH_BUSY_LABEL, disabled: true, alreadyCurrent: false };
@@ -25,7 +26,10 @@ export function publishBoardActionState(input: {
     input.published && input.published.sourceDraftVersion === input.draftVersion
   );
   const disabled =
-    !input.hasDraft || Boolean(input.conflict) || alreadyCurrent;
+    !input.hasDraft ||
+    Boolean(input.conflict) ||
+    Boolean(input.blocked) ||
+    alreadyCurrent;
   if (alreadyCurrent) {
     return { label: PUBLISH_CURRENT_LABEL, disabled, alreadyCurrent: true };
   }

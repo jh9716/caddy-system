@@ -214,3 +214,83 @@ export function uniqueCaddyIds(ids: readonly unknown[]): number[] {
   }
   return out;
 }
+
+export type SpecialSupportShiftEntry = {
+  caddyId: number;
+  shift: ShiftPart;
+};
+
+export function specialSupportPlacementEntries(
+  assignments:
+    | ReadonlyArray<{ kind?: string; shift?: string; caddy?: { id?: number } }>
+    | null
+    | undefined
+): SpecialSupportShiftEntry[] {
+  const out: SpecialSupportShiftEntry[] = [];
+  const seen = new Set<string>();
+  for (const row of assignments || []) {
+    if (row.kind !== "specialSupport") continue;
+    if (!isSpecialSupportShift(row.shift)) continue;
+    const caddyId = Number(row.caddy?.id);
+    if (!Number.isInteger(caddyId) || caddyId < 1) continue;
+    const key = `${caddyId}:${row.shift}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ caddyId, shift: row.shift });
+  }
+  return out.sort((a, b) =>
+    a.shift === b.shift ? a.caddyId - b.caddyId : a.shift.localeCompare(b.shift)
+  );
+}
+
+export function specialSupportQueueEntries(
+  byShift:
+    | Partial<Record<ShiftPart, ReadonlyArray<{ id?: number }>>>
+    | null
+    | undefined
+): SpecialSupportShiftEntry[] {
+  const out: SpecialSupportShiftEntry[] = [];
+  const seen = new Set<string>();
+  for (const shift of SHIFT_PARTS) {
+    for (const caddy of byShift?.[shift] || []) {
+      const caddyId = Number(caddy?.id);
+      if (!Number.isInteger(caddyId) || caddyId < 1) continue;
+      const key = `${caddyId}:${shift}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ caddyId, shift });
+    }
+  }
+  return out.sort((a, b) =>
+    a.shift === b.shift ? a.caddyId - b.caddyId : a.shift.localeCompare(b.shift)
+  );
+}
+
+function supportEntryKey(row: SpecialSupportShiftEntry): string {
+  return `${row.caddyId}:${row.shift}`;
+}
+
+export function isSpecialSupportDraftStale(
+  queues:
+    | Partial<Record<ShiftPart, ReadonlyArray<{ id?: number }>>>
+    | null
+    | undefined,
+  assignments:
+    | ReadonlyArray<{ kind?: string; shift?: string; caddy?: { id?: number } }>
+    | null
+    | undefined
+): boolean {
+  const settings = specialSupportQueueEntries(queues)
+    .map(supportEntryKey)
+    .join("|");
+  const placed = specialSupportPlacementEntries(assignments)
+    .map(supportEntryKey)
+    .join("|");
+  return settings !== placed;
+}
+
+export function isSpecialSupportStalePipelineBlock(
+  type: string | undefined | null
+): boolean {
+  return type === "CADDY_SICK" || type === "MOVE_RESERVATION";
+}

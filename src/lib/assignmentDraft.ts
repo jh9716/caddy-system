@@ -22,14 +22,17 @@ import {
   type AssignmentKind,
   type SpareByShift,
   type UnassignedReservationRow,
+  type UnavailableFromShiftRow,
 } from "@/lib/autoAssignEngine";
 import { ensureReservationUid } from "@/lib/reservationIdentity";
 import type { CourseCode, ShiftPart } from "@/lib/reservationParser";
 import {
   mergeRosterBaseline,
   overlayUnavailableIdsKeepingPlaced,
+  overlayUnavailableKeepingShift,
   placedCaddyIdsFromBoard,
   snapshotComputePool,
+  mergeUnavailableShiftEntries,
 } from "@/lib/caddyPoolCanonical";
 import {
   isUsableOffSnapshot,
@@ -54,6 +57,8 @@ export type AssignmentDraft = {
   thirdStartCaddyId?: number | null;
   /** 병가/결근으로 빠진 캐디. 이후 mutation이 다시 넣지 못하게 한다. */
   unavailableCaddyIds?: number[];
+  /** 병가 유효 시작 부. 없으면 unavailableCaddyIds는 종일(1부)로 해석. */
+  unavailableFromShift?: UnavailableFromShiftRow[];
   /** 날짜 검증된 휴무 snapshot. mutation은 이것만 쓰고 Google을 치지 않는다. */
   offSnapshot?: DraftOffSnapshot;
   confirmedAt: string | null;
@@ -146,6 +151,15 @@ export function createDraftFromAutoResult(
     ...(uniquePositiveIds(result.unavailableCaddyIds).length > 0
       ? { unavailableCaddyIds: uniquePositiveIds(result.unavailableCaddyIds) }
       : {}),
+    ...(Array.isArray(result.unavailableFromShift) &&
+    result.unavailableFromShift.length > 0
+      ? {
+          unavailableFromShift: result.unavailableFromShift.map((row) => ({
+            caddyId: row.caddyId,
+            effectiveFromShift: row.effectiveFromShift,
+          })),
+        }
+      : {}),
   };
 }
 
@@ -236,11 +250,16 @@ export function snapshotComputePoolFromDraft(
 ): AutoAssignCaddy[] {
   return snapshotComputePool({
     rosterBaseline: draft.caddyPool,
-    assigned: draft.assignments.map((row) => row.caddy),
+    assigned: draft.assignments
+      .filter((row) => row.kind !== "specialSupport")
+      .map((row) => row.caddy),
     spareIds: spareIdsFromDraft(draft),
     engineUnused: base?.unusedCaddies,
     extraUsable: extra?.extraUsable,
-    unavailableIds: extra?.unavailableIds ?? draft.unavailableCaddyIds,
+    unavailableIds: overlayUnavailableIdsKeepingPlaced({
+      dailyUnavailableIds: extra?.unavailableIds ?? draft.unavailableCaddyIds,
+      placedIds: placedCaddyIdsFromBoard(draft),
+    }),
     opsDutyIds: extra?.opsDutyIds,
     specialSkipIds: extra?.specialSkipIds,
   });
@@ -278,17 +297,22 @@ export function snapshotComputePoolFromDraftKeepingPlaced(
  */
 export function confirmedDraftKeepingPlacedUnavailable(
   draft: AssignmentDraft,
-  liveUnavailableIds?: Iterable<unknown>
+  liveUnavailableIds?: Iterable<unknown>,
+  liveUnavailableFromShift?: Iterable<UnavailableFromShiftRow>
 ): AssignmentDraft {
+  const overlayRows = overlayUnavailableKeepingShift({
+    dailyUnavailable: mergeUnavailableShiftEntries(
+      draft.unavailableCaddyIds,
+      liveUnavailableIds,
+      draft.unavailableFromShift,
+      liveUnavailableFromShift
+    ),
+    placedIds: placedCaddyIdsFromBoard(draft),
+  });
   return {
     ...draft,
-    unavailableCaddyIds: overlayUnavailableIdsKeepingPlaced({
-      dailyUnavailableIds: [
-        ...uniquePositiveIds(draft.unavailableCaddyIds),
-        ...uniquePositiveIds(liveUnavailableIds),
-      ],
-      placedIds: placedCaddyIdsFromBoard(draft),
-    }),
+    unavailableCaddyIds: overlayRows.map((row) => row.caddyId),
+    unavailableFromShift: overlayRows,
   };
 }
 
@@ -900,6 +924,12 @@ export function autoResultFromDraft(
         : {}),
   };
   const unavailableCaddyIds = uniquePositiveIds(draft.unavailableCaddyIds || []);
+  const unavailableFromShift = Array.isArray(draft.unavailableFromShift)
+    ? draft.unavailableFromShift.map((row) => ({
+        caddyId: row.caddyId,
+        effectiveFromShift: row.effectiveFromShift,
+      }))
+    : [];
   return {
     date: draft.date,
     assignments,
@@ -920,6 +950,7 @@ export function autoResultFromDraft(
     })),
     unusedCaddies: unusedCaddies(draft),
     unavailableCaddyIds,
+    ...(unavailableFromShift.length > 0 ? { unavailableFromShift } : {}),
     special: base?.special || [],
     specialUnassigned: base?.specialUnassigned || [],
     specialPlacement: base?.specialPlacement
@@ -958,6 +989,15 @@ export function applyLiveResultToDraft(
     thirdStartCaddyId:
       next.thirdStartCaddyId ?? draft.thirdStartCaddyId ?? null,
     unavailableCaddyIds: uniquePositiveIds(after.unavailableCaddyIds || []),
+    ...(Array.isArray(after.unavailableFromShift) &&
+    after.unavailableFromShift.length > 0
+      ? {
+          unavailableFromShift: after.unavailableFromShift.map((row) => ({
+            caddyId: row.caddyId,
+            effectiveFromShift: row.effectiveFromShift,
+          })),
+        }
+      : {}),
     ...(isUsableOffSnapshot(draft.offSnapshot, next.date)
       ? { offSnapshot: draft.offSnapshot }
       : {}),

@@ -52,6 +52,7 @@ import {
   type AutoAssignReservation,
   type AutoAssignResultV1,
   type AutoAssignmentRow,
+  type UnavailableFromShiftRow,
 } from "@/lib/autoAssignEngine";
 import {
   mergeRosterBaseline,
@@ -92,7 +93,7 @@ const COURSE_SHORT: Record<CourseCode, string> = {
 import { SpecialDutyPanel, type Shift1StartOption } from "./SpecialDutyPanel";
 import { SpecialSupportPanel } from "./SpecialSupportPanel";
 import { BoardQuickSheet, LiveChangePanel, LockToggle, SameDayAddSheet, TeamMoveSheet } from "./LiveChangePanel";
-import { emptySpecialSupportByShift } from "@/lib/dailySpecialSupport";
+import { emptySpecialSupportByShift, isSpecialSupportDraftStale, isSpecialSupportStalePipelineBlock } from "@/lib/dailySpecialSupport";
 import { SPECIAL_SETTINGS_STALE_MESSAGE } from "@/lib/dailySpecialDuty";
 import { isThirdBandTeam, THIRD_BAND_TEAMS } from "@/lib/caddyManage";
 import { rotateThirdQueueFromStartTeam } from "@/lib/thirdWeeklyRotation";
@@ -370,6 +371,9 @@ export default function ManageAssignmentsOpsPage() {
   const [specialSupportByShift, setSpecialSupportByShift] = useState(
     emptySpecialSupportByShift
   );
+  const specialSupportByShiftRef = useRef(specialSupportByShift);
+  const specialSupportHydratedRef = useRef(false);
+  specialSupportByShiftRef.current = specialSupportByShift;
   const [specialSettingsStale, setSpecialSettingsStale] = useState(false);
   const [recalcNotice, setRecalcNotice] = useState<{
     tone: "error" | "success" | "running";
@@ -499,7 +503,8 @@ export default function ManageAssignmentsOpsPage() {
       assignmentDraft: AssignmentDraft,
       version: number,
       savedAt?: string | null,
-      unavailableIds?: number[]
+      unavailableIds?: number[],
+      unavailableFromShift?: UnavailableFromShiftRow[]
     ) => {
       hydratingDraftRef.current = true;
       serverDraftVersionRef.current = version;
@@ -512,6 +517,11 @@ export default function ManageAssignmentsOpsPage() {
       const incoming: AssignmentDraft = {
         ...assignmentDraft,
         unavailableCaddyIds: liveUnavailableIds,
+        ...(unavailableFromShift && unavailableFromShift.length > 0
+          ? { unavailableFromShift }
+          : assignmentDraft.unavailableFromShift
+            ? { unavailableFromShift: assignmentDraft.unavailableFromShift }
+            : {}),
       };
       const hydrated = confirmedDraftKeepingPlacedUnavailable(incoming);
       setDraft(hydrated);
@@ -542,6 +552,14 @@ export default function ManageAssignmentsOpsPage() {
       setMovePendingDest(null);
       setQuickSheet(null);
       setExpandedKey(null);
+      if (specialSupportHydratedRef.current) {
+        setSpecialSettingsStale(
+          isSpecialSupportDraftStale(
+            specialSupportByShiftRef.current,
+            hydrated.assignments
+          )
+        );
+      }
       hydratingDraftRef.current = false;
     },
     []
@@ -581,6 +599,7 @@ export default function ManageAssignmentsOpsPage() {
           updatedAt: string;
         };
         unavailableCaddyIds?: number[];
+        unavailableFromShift?: UnavailableFromShiftRow[];
       };
     },
     []
@@ -708,7 +727,10 @@ export default function ManageAssignmentsOpsPage() {
         payloadToAssignmentDraft(data.draft.payload as never),
         data.draft.version,
         data.draft.updatedAt,
-        Array.isArray(data.unavailableCaddyIds) ? data.unavailableCaddyIds : []
+        Array.isArray(data.unavailableCaddyIds) ? data.unavailableCaddyIds : [],
+        Array.isArray(data.unavailableFromShift)
+          ? data.unavailableFromShift
+          : undefined
       );
       showToast("최신 작업본을 불러왔습니다");
     } catch (e: unknown) {
@@ -743,7 +765,14 @@ export default function ManageAssignmentsOpsPage() {
 
   const onSpecialSupportLoaded = useCallback(
     (byShift: ReturnType<typeof emptySpecialSupportByShift>) => {
+      specialSupportHydratedRef.current = true;
+      specialSupportByShiftRef.current = byShift;
       setSpecialSupportByShift(byShift);
+      const current = draftRef.current;
+      if (!current) return;
+      setSpecialSettingsStale(
+        isSpecialSupportDraftStale(byShift, current.assignments)
+      );
     },
     []
   );
@@ -876,6 +905,8 @@ export default function ManageAssignmentsOpsPage() {
     dateRef.current = date;
     serverDraftVersionRef.current = 0;
     setDraftVersion(0);
+    specialSupportHydratedRef.current = false;
+    setSpecialSettingsStale(false);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       clearDraftBoard();
       return;
@@ -910,7 +941,10 @@ export default function ManageAssignmentsOpsPage() {
           payloadToAssignmentDraft(payload),
           data.draft.version,
           data.draft.updatedAt,
-          Array.isArray(data.unavailableCaddyIds) ? data.unavailableCaddyIds : []
+          Array.isArray(data.unavailableCaddyIds) ? data.unavailableCaddyIds : [],
+          Array.isArray(data.unavailableFromShift)
+            ? data.unavailableFromShift
+            : undefined
         );
         if (payload.offSnapshot) offSnapshotRef.current = payload.offSnapshot;
         scheduleAfterPaint(() =>
@@ -1785,7 +1819,10 @@ export default function ManageAssignmentsOpsPage() {
         next,
         Number(saveData.draft.version) || 0,
         String(saveData.draft.updatedAt || ""),
-        Array.isArray(latest.unavailableCaddyIds) ? latest.unavailableCaddyIds : []
+        Array.isArray(latest.unavailableCaddyIds) ? latest.unavailableCaddyIds : [],
+        Array.isArray(latest.unavailableFromShift)
+          ? latest.unavailableFromShift
+          : undefined
       );
       setAutoResult(data);
       setHouseStartCaddyId(resolved.caddyId);
@@ -1957,6 +1994,11 @@ export default function ManageAssignmentsOpsPage() {
     if (snapshotBlock) {
       setError(snapshotBlock);
       showToast(snapshotBlock);
+      return;
+    }
+    if (specialSettingsStale && isSpecialSupportStalePipelineBlock(change.type)) {
+      setError(SPECIAL_SETTINGS_STALE_MESSAGE);
+      showToast(SPECIAL_SETTINGS_STALE_MESSAGE);
       return;
     }
     if (change.type === "MOVE_RESERVATION") {
@@ -2418,6 +2460,11 @@ export default function ManageAssignmentsOpsPage() {
       setError("확정할 작업본이 없습니다.");
       return;
     }
+    if (specialSettingsStale) {
+      setError(SPECIAL_SETTINGS_STALE_MESSAGE);
+      showToast(SPECIAL_SETTINGS_STALE_MESSAGE);
+      return;
+    }
     if (publishingRef.current) return;
     const ok = window.confirm(
       published
@@ -2705,6 +2752,7 @@ export default function ManageAssignmentsOpsPage() {
     published,
     draftVersion,
     conflict: draftSaveState === "conflict",
+    blocked: specialSettingsStale,
   });
 
   const boardRows = useMemo(() => {
