@@ -248,11 +248,13 @@ section("3. 특수지원 재맞추기는 main과 같이 정상 순번/스페어�
     date,
     available,
     reservations: reservations.filter((row) => row.id !== "A4"),
+    protectedTailCount: 0,
   });
   const withSupport = computeAutoAssignmentsV1({
     date,
     available,
     reservations,
+    protectedTailCount: 0,
     specialSupportByShift: { ...emptySpecialSupportByShift(), "1부": [off] },
   });
   assert(
@@ -514,6 +516,7 @@ section("8. 기존 정상: 종일 병가 / 빈칸 MOVE / specialSupport");
       res(date, "S2", { teeTime: "07:08", shift: "1부" }),
       res(date, "S3", { teeTime: "07:16", shift: "1부" }),
     ],
+    protectedTailCount: 0,
     specialSupportByShift: { ...emptySpecialSupportByShift(), "1부": [off] },
   });
   assert(
@@ -550,6 +553,7 @@ section("C. 특수지원 저장 → stale → 재맞추기 version은 자기 aut
       res(date, "S2", { teeTime: "07:08", shift: "1부" }),
       res(date, "S3", { teeTime: "07:16", shift: "1부" }),
     ],
+    protectedTailCount: 0,
     specialSupportByShift: queues,
   });
   assert(

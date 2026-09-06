@@ -127,8 +127,17 @@ section("공식");
   assert(b0.ok && b0.oneMakStart == null && b0.oneThreeEnd === 46, "B=0 1·3만");
   const none = computeShift1SpecialWindow({ N: 50, R: 4, A: 0, B: 0 });
   assert(none.ok && none.neededCount === 0, "A=B=0");
-  const block = computeShift1SpecialWindow({ N: 50, R: 4, A: 40, B: 10 });
-  assert(!block.ok && block.code === SPECIAL_WINDOW_OVERFLOW, "A+B > N-R blocking");
+  const noneS = computeShift1SpecialWindow({ N: 10, R: 3, A: 1, B: 1, S: 0 });
+  assert(
+    noneS.ok && noneS.specialStart === 6 && noneS.oneMakEnd === 7,
+    "S=0이면 기존 1·3/1막 창"
+  );
+  const withS = computeShift1SpecialWindow({ N: 10, R: 3, A: 1, B: 1, S: 2 });
+  assert(withS.ok && withS.specialStart === 4 && withS.specialEnd === 7, "S 포함 창 4~7");
+  assert(withS.ok && withS.oneThreeStart === 4 && withS.oneMakStart === 5, "1·3 다음 1막");
+  assert(withS.ok && withS.supportStart === 6 && withS.supportEnd === 7, "지원은 R 직전");
+  const overflowS = computeShift1SpecialWindow({ N: 10, R: 3, A: 4, B: 3, S: 2 });
+  assert(!overflowS.ok && overflowS.code === SPECIAL_WINDOW_OVERFLOW, "A+B+S > N-R blocking");
 }
 
 section("설정 없는 날짜 하위호환");
@@ -199,6 +208,93 @@ section("AUTO 50/R3/A5/B2 실제 슬롯");
       (a) => a.shift === "3부" && a.kind === "oneThree" && a.caddy.name.startsWith("13")
     ),
     "성공 1부 1·3이 3부 oneThreeForThird"
+  );
+}
+
+section("AUTO N=10 R=3: 특수지원은 뒤 일반순번 보호 직전");
+{
+  const date = "2026-09-06";
+  const available = housePool(12);
+  const oneThree = applicants("13", 1, 501);
+  const oneMak = applicants("1m", 1, 601);
+  const support = [
+    {
+      id: 901,
+      name: "SX",
+      team: "7조",
+      teamOrder: 1,
+      extraFlags: ["OFF"],
+    },
+    {
+      id: 902,
+      name: "SY",
+      team: "7조",
+      teamOrder: 2,
+      extraFlags: ["OFF"],
+    },
+  ];
+  const reservations = board(date, "1부", 10, "07:00");
+  const shared = {
+    date,
+    available,
+    oneThreeCandidates: oneThree,
+    oneMakCandidates: oneMak,
+    placementMode: "AUTO" as const,
+    protectedTailCount: 3,
+    reservations,
+  };
+  const without = computeAutoAssignmentsV1({
+    ...shared,
+    specialSupportByShift: { "1부": [], "2부": [], "3부": [] },
+  });
+  const withSupport = computeAutoAssignmentsV1({
+    ...shared,
+    specialSupportByShift: { "1부": support, "2부": [], "3부": [] },
+  });
+  const shift1 = (
+    result: ReturnType<typeof computeAutoAssignmentsV1>
+  ) =>
+    result.assignments
+      .filter((a) => a.shift === "1부")
+      .sort((a, b) => compareReservationOrder(a.reservation, b.reservation));
+  const noS = shift1(without);
+  const yesS = shift1(withSupport);
+  assert(noS.length === 10 && yesS.length === 10, "1부 capacity 10");
+  assert(
+    noS.map((a) => a.kind).join(",") ===
+      "regular,regular,regular,regular,regular,oneThree,oneMak,regular,regular,regular",
+    "지원 없음: 기존 1·3/1막/R 보호"
+  );
+  assert(
+    yesS.map((a) => a.kind).join(",") ===
+      "regular,regular,regular,oneThree,oneMak,specialSupport,specialSupport,regular,regular,regular",
+    "regular → 1·3 → 1막 → 지원2 → 보호 regular3"
+  );
+  assert(
+    yesS.slice(7).every((a) => a.kind === "regular"),
+    "마지막 R=3은 모두 regular"
+  );
+  assert(
+    yesS.slice(7).map((a) => a.caddy.id).join(",") ===
+      noS.slice(7).map((a) => a.caddy.id).join(","),
+    "보호 R팀 캐디 identity 불변"
+  );
+  assert(yesS[3]!.caddy.id === 501 && yesS[4]!.caddy.id === 601, "1·3 다음 1막");
+  assert(yesS[5]!.caddy.id === 901 && yesS[6]!.caddy.id === 902, "지원 2명 R 직전");
+  const noSRegularIds = noS.filter((a) => a.kind === "regular").map((a) => a.caddy.id);
+  const yesSRegularIds = new Set(
+    yesS.filter((a) => a.kind === "regular").map((a) => a.caddy.id)
+  );
+  const unconsumed = noSRegularIds.filter((id) => !yesSRegularIds.has(id));
+  const protectedIds = new Set(noS.slice(7).map((a) => a.caddy.id));
+  assert(unconsumed.length === 2, "지원 2명만큼 normal 미소모");
+  assert(
+    unconsumed.every((id) => !protectedIds.has(id)),
+    "미소모 normal은 보호 R팀이 아니라 앞쪽"
+  );
+  assert(
+    unconsumed.includes(noS[3]!.caddy.id) && unconsumed.includes(noS[4]!.caddy.id),
+    "미소모는 기존 앞쪽 regular 2명"
   );
 }
 

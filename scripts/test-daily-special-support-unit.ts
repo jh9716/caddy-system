@@ -6,6 +6,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  compareReservationOrder,
   computeAutoAssignmentsV1,
   REASON,
   reflowRegularAssignments,
@@ -236,6 +237,7 @@ section("정상 HOUSE 6 + 지원 1 + capacity 6 → normal 5 + support 1");
     date,
     available,
     reservations: shiftRes(date, "1부", 6),
+    protectedTailCount: 0,
     specialSupportByShift: { ...emptySpecialSupportByShift(), "1부": [off] },
   });
   const s1 = withSupport.assignments
@@ -281,6 +283,7 @@ section("특수지원 2명이면 normal 소비 2명 감소");
     date,
     available,
     reservations: shiftRes(date, "1부", 6),
+    protectedTailCount: 0,
     specialSupportByShift: {
       ...emptySpecialSupportByShift(),
       "1부": [supportCaddy(90, "X"), supportCaddy(91, "Y")],
@@ -329,6 +332,7 @@ section("지원 없으면 기존 regular 순번/스페어 동일");
     date,
     available,
     reservations,
+    protectedTailCount: 0,
     specialSupportByShift: emptySpecialSupportByShift(),
   });
   const snap = (result: typeof omitted) =>
@@ -365,6 +369,7 @@ section("휴무자 1부 지원은 정상 후보 뒤에만");
     date,
     available,
     reservations,
+    protectedTailCount: 0,
     specialSupportByShift: { ...emptySpecialSupportByShift(), "1부": [off] },
   });
   const s1Without = without.assignments.filter((a) => a.shift === "1부");
@@ -397,6 +402,7 @@ section("마샬 3부 지원 / 조장·당번 특정 부 / 여러 부");
     date,
     available,
     reservations,
+    protectedTailCount: 0,
     specialSupportByShift: {
       "1부": [duty],
       "2부": [leader],
@@ -438,6 +444,7 @@ section("실제 웹형: available.all에 X가 있어도 specialSupport");
     date,
     available,
     reservations: shiftRes(date, "1부", 6),
+    protectedTailCount: 0,
     specialSupportByShift: { ...emptySpecialSupportByShift(), "1부": [x] },
   });
   const s1 = withSupport.assignments
@@ -500,6 +507,7 @@ section("available에 있어도 휴무 지원 가능 / SICK·결근은 불가");
       off,
     ],
     reservations: shiftRes(date, "1부", 6),
+    protectedTailCount: 0,
     specialSupportByShift: { ...emptySpecialSupportByShift(), "1부": [off] },
   });
   const offRow = offResult.assignments.find((row) => row.caddy.id === 90);
@@ -534,6 +542,7 @@ section("available에 있어도 휴무 지원 가능 / SICK·결근은 불가");
       noshow,
     ],
     reservations: shiftRes(date, "1부", 6),
+    protectedTailCount: 0,
     specialSupportByShift: {
       ...emptySpecialSupportByShift(),
       "1부": [sick, noshow],
@@ -575,6 +584,7 @@ section("실제 웹형 지원 2명: available에 X,Y 포함해도 normal 2명 �
       y,
     ],
     reservations: shiftRes(date, "1부", 6),
+    protectedTailCount: 0,
     specialSupportByShift: {
       ...emptySpecialSupportByShift(),
       "1부": [x, y],
@@ -612,6 +622,7 @@ section("지원자 때문에 다음 부 normal cursor가 변하지 않음");
     date,
     available,
     reservations: [...baseRes, extra],
+    protectedTailCount: 0,
     specialSupportByShift: { ...emptySpecialSupportByShift(), "1부": [off] },
   });
   const first2Without = without.assignments.find((a) => a.shift === "2부")?.caddy.id;
@@ -647,6 +658,7 @@ section("지원자 때문에 THIRD 앞 순번은 유지되고 꼬리만 지원")
     date,
     available,
     reservations,
+    protectedTailCount: 0,
     specialSupportByShift: { ...emptySpecialSupportByShift(), "3부": [marshal] },
   });
   const thirdWithout = without.assignments
@@ -675,6 +687,7 @@ section("지원 포함 시 그 부 spare는 줄어든 HOUSE 소비 기준");
     date,
     available,
     reservations,
+    protectedTailCount: 0,
     specialSupportByShift: { ...emptySpecialSupportByShift(), "1부": [off] },
   });
   const spWithout = without.sparesByShift.find((s) => s.shift === "1부");
@@ -700,6 +713,7 @@ section("1막 / 1·2 / 1·3 / 54홀 우선순위 유지");
     available,
     oneMakCandidates: [oneMak],
     reservations: shiftRes(date, "1부", 6),
+    protectedTailCount: 0,
     specialSupportByShift: { ...emptySpecialSupportByShift(), "1부": [off] },
   });
   const firstMak = result.assignments.find((a) => a.kind === "oneMak");
@@ -731,6 +745,7 @@ section("WEEKEND 평일 규칙 유지");
       ...shiftRes(date, "2부", 2),
       ...shiftRes(date, "3부", 2),
     ],
+    protectedTailCount: 0,
     specialSupportByShift: {
       ...emptySpecialSupportByShift(),
       "3부": [supportCaddy(90, "휴무3부")],
@@ -762,6 +777,7 @@ section("Mode A/B 뒤에만 지원");
     date,
     available,
     reservations,
+    protectedTailCount: 0,
     specialSupportByShift: { ...emptySpecialSupportByShift(), "3부": [marshal] },
   });
   const s3 = result.assignments.filter((a) => a.shift === "3부");
@@ -786,6 +802,7 @@ section("reflow 시 지정 부에만 남음");
     date,
     available,
     reservations,
+    protectedTailCount: 0,
     specialSupportByShift: { ...emptySpecialSupportByShift(), "1부": [off] },
   });
   const cancel = previous.assignments.find(
@@ -801,6 +818,7 @@ section("reflow 시 지정 부에만 남음");
         reservationKey: reservationKey(cancel!.reservation),
       },
     ],
+    protectedTailCount: 0,
     specialSupportByShift: { ...emptySpecialSupportByShift(), "1부": [off] },
   });
   assert(
@@ -826,6 +844,7 @@ section("Draft round-trip / Published snapshot");
     date,
     available,
     reservations: shiftRes(date, "1부", 3),
+    protectedTailCount: 0,
     specialSupportByShift: { ...emptySpecialSupportByShift(), "1부": [off] },
   });
   const draft = draftFromResult(result, available);
@@ -873,6 +892,7 @@ section("OFF/DUTY/MARSHAL 지원은 지정 부에 포함되고 타부로 새지 
       ...shiftRes(date, "2부", 3),
       ...shiftRes(date, "3부", 4),
     ],
+    protectedTailCount: 0,
     specialSupportByShift: {
       "1부": [off],
       "2부": [duty],
@@ -915,6 +935,7 @@ section("OFF/DUTY/MARSHAL 지원은 지정 부에 포함되고 타부로 새지 
       ...shiftRes(date, "2부", 2),
       ...shiftRes(date, "3부", 2),
     ],
+    protectedTailCount: 0,
     specialSupportByShift: {
       "1부": [off],
       "2부": [duty],
@@ -959,6 +980,7 @@ section("SICK / RETIRED / LEAVE는 support로도 배치되지 않음");
       ...shiftRes(date, "2부", 2),
       ...shiftRes(date, "3부", 2),
     ],
+    protectedTailCount: 0,
     specialSupportByShift: {
       "1부": [sick],
       "2부": [retired],
@@ -972,6 +994,78 @@ section("SICK / RETIRED / LEAVE는 support로도 배치되지 않음");
   assert(
     result.assignments.filter((a) => a.kind === "specialSupport").length === 0,
     "hard exclusion 지원 배정 0"
+  );
+}
+
+section("N=10 R=3 AUTO: 특수지원은 뒤 일반순번 보호 직전");
+{
+  const date = "2026-09-06";
+  const available = Array.from({ length: 12 }, (_, i) => house(i + 1, i + 1));
+  const oneThree = { ...house(501, 1), name: "13C", inputOrder: 1 };
+  const oneMak = { ...house(601, 1), name: "1MC", inputOrder: 1 };
+  const sx = { ...supportCaddy(901, "SX"), extraFlags: ["OFF"] };
+  const sy = { ...supportCaddy(902, "SY"), extraFlags: ["OFF"] };
+  const reservations = shiftRes(date, "1부", 10, "07:00");
+  const shared = {
+    date,
+    available,
+    oneThreeCandidates: [oneThree],
+    oneMakCandidates: [oneMak],
+    placementMode: "AUTO" as const,
+    protectedTailCount: 3,
+    reservations,
+  };
+  const without = computeAutoAssignmentsV1({
+    ...shared,
+    specialSupportByShift: emptySpecialSupportByShift(),
+  });
+  const withSupport = computeAutoAssignmentsV1({
+    ...shared,
+    specialSupportByShift: {
+      ...emptySpecialSupportByShift(),
+      "1부": [sx, sy],
+    },
+  });
+  const shift1 = (result: ReturnType<typeof computeAutoAssignmentsV1>) =>
+    result.assignments
+      .filter((a) => a.shift === "1부")
+      .sort((a, b) => compareReservationOrder(a.reservation, b.reservation));
+  const noS = shift1(without);
+  const yesS = shift1(withSupport);
+  assert(noS.length === 10 && yesS.length === 10, "1부 capacity 10");
+  assert(
+    noS.map((a) => a.kind).join(",") ===
+      "regular,regular,regular,regular,regular,oneThree,oneMak,regular,regular,regular",
+    "지원 없음: 기존 1·3/1막/R3 보호 불변"
+  );
+  assert(
+    yesS.map((a) => a.kind).join(",") ===
+      "regular,regular,regular,oneThree,oneMak,specialSupport,specialSupport,regular,regular,regular",
+    "앞 regular → 1·3 → 1막 → 지원2 → 보호 regular3"
+  );
+  assert(
+    yesS.slice(7).every((a) => a.kind === "regular"),
+    "마지막 3슬롯 regular"
+  );
+  assert(
+    yesS.slice(7).map((a) => a.caddy.id).join(",") ===
+      noS.slice(7).map((a) => a.caddy.id).join(","),
+    "보호 R팀 identity 유지"
+  );
+  assert(yesS[5]!.caddy.id === 901 && yesS[6]!.caddy.id === 902, "지원은 R 직전");
+  const unconsumed = noS
+    .filter((a) => a.kind === "regular")
+    .map((a) => a.caddy.id)
+    .filter((id) => !yesS.some((a) => a.kind === "regular" && a.caddy.id === id));
+  const protectedIds = new Set(noS.slice(7).map((a) => a.caddy.id));
+  assert(unconsumed.length === 2, "지원 2명만큼 normal 미소모");
+  assert(
+    unconsumed.every((id) => !protectedIds.has(id)),
+    "미소모는 보호 R팀이 아님"
+  );
+  assert(
+    unconsumed.includes(noS[3]!.caddy.id) && unconsumed.includes(noS[4]!.caddy.id),
+    "미소모는 보호구간 앞쪽 normal 2명"
   );
 }
 
@@ -1026,6 +1120,8 @@ section("source / UI / migration / 권한");
     "모달 열 때만 후보 재조회"
   );
   assert(/kind: "specialSupport"/.test(engine), "assignment kind");
+  assert(/S: shift1Support.length/.test(engine), "1부 AUTO 창에 특수지원 S 포함");
+  assert(/shift1SupportHouseSkip/.test(engine), "보호구간 앞 HOUSE skip");
   assert(/isReservedSupportTailSlot/.test(engine), "부 capacity 꼬리에 지원 예약");
   assert(/specialSupportCaddyIds/.test(engine), "지원 id를 regular pool에서 제외");
   assert(/specialSupportIds.has\(caddy.id\)/.test(engine), "available에서 지원 id 제거");
