@@ -49,6 +49,7 @@ import {
   filterSupportQueueForShift,
   isReservedSupportTailSlot,
   pickNextSpecialSupport,
+  specialSupportCaddyIds,
   unusedSupportCount,
 } from "@/lib/dailySpecialSupport";
 
@@ -2457,6 +2458,7 @@ export function assignRegularSequence(input: {
   >;
   sparesByShift: SpareByShift[];
 } {
+  const supportIds = specialSupportCaddyIds(input.specialSupportByShift);
   const pools =
     input.house != null
       ? {
@@ -2465,6 +2467,8 @@ export function assignRegularSequence(input: {
           driving: [] as AutoAssignCaddy[],
         }
       : splitCaddyPools(input.available || []);
+  pools.house = pools.house.filter((caddy) => !supportIds.has(caddy.id));
+  pools.third = pools.third.filter((caddy) => !supportIds.has(caddy.id));
 
   const house =
     input.houseStartCaddyId != null && input.houseStartCaddyId !== undefined
@@ -3044,9 +3048,10 @@ export function computeAutoAssignmentsV1(input: {
     .filter((c) => !specialExclude.has(c.id))
     .sort(compareCaddyOrder);
 
-  const availableAll = dedupeCaddies([...(input.available || [])]).sort(
-    compareCaddyOrder
-  );
+  const specialSupportIds = specialSupportCaddyIds(input.specialSupportByShift);
+  const availableAll = dedupeCaddies([...(input.available || [])])
+    .filter((caddy) => !specialSupportIds.has(caddy.id))
+    .sort(compareCaddyOrder);
   const originalHouse = splitCaddyPools(availableAll).house;
   const available = availableAll.filter((c) => !specialExclude.has(c.id));
   const pools = splitCaddyPools(available);

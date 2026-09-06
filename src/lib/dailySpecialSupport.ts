@@ -70,6 +70,21 @@ export function emptySpecialSupportByShift(): Record<ShiftPart, AutoAssignCaddy[
   return { "1부": [], "2부": [], "3부": [] };
 }
 
+/** 부에 상관없이 특수지원으로 등록된 caddyId. regular HOUSE/THIRD 후보에서 뺀다. */
+export function specialSupportCaddyIds(
+  byShift?: Record<ShiftPart, AutoAssignCaddy[]> | null
+): Set<number> {
+  const ids = new Set<number>();
+  if (!byShift) return ids;
+  for (const shift of SHIFT_PARTS) {
+    for (const caddy of byShift[shift] || []) {
+      const id = Number(caddy?.id);
+      if (Number.isInteger(id) && id > 0) ids.add(id);
+    }
+  }
+  return ids;
+}
+
 export function isInactiveEmployment(status: unknown): boolean {
   const raw = String(status ?? "").trim().toUpperCase();
   if (!raw) return false;
@@ -136,11 +151,11 @@ export function supportBlockedByUnavailable(
 export function filterSupportQueueForShift(input: {
   queue: readonly AutoAssignCaddy[];
   shift: ShiftPart;
-  normalIds: Iterable<number>;
+  /** 호출 호환용. regular pool 소속만으로 지원 큐에서 제거하지 않는다. */
+  normalIds?: Iterable<number>;
   usedInShift: Iterable<number>;
   unavailable?: readonly SpecialSupportUnavailable[];
 }): AutoAssignCaddy[] {
-  const normal = new Set([...input.normalIds].map(Number));
   const used = new Set([...input.usedInShift].map(Number));
   const unavailableById = new Map(
     (input.unavailable || []).map((row) => [row.caddyId, row])
@@ -149,7 +164,7 @@ export function filterSupportQueueForShift(input: {
   const seen = new Set<number>();
   for (const caddy of input.queue) {
     if (!(caddy.id > 0) || seen.has(caddy.id)) continue;
-    if (used.has(caddy.id) || normal.has(caddy.id)) continue;
+    if (used.has(caddy.id)) continue;
     if (isHardExcludedSpecialSupport(caddy)) continue;
     if (supportBlockedByUnavailable(unavailableById.get(caddy.id), input.shift)) {
       continue;
