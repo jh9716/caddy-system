@@ -133,7 +133,7 @@ import {
 } from "@/lib/draftSaveFlush";
 import {
   prepareRecalcDraftExpectedVersion,
-  shouldAcceptRecalcDraftQueue,
+  shouldAcceptDraftQueue,
 } from "@/lib/recalcDraftSave";
 import {
   buildOffSnapshot,
@@ -479,6 +479,7 @@ export default function ManageAssignmentsOpsPage() {
   const dateRef = useRef(date);
   const hydratingDraftRef = useRef(false);
   const recalcInFlightRef = useRef(false);
+  const exclusiveDraftWriterRef = useRef(false);
   const serverDraftVersionRef = useRef(0);
   const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingDraftSaveRef = useRef<AssignmentDraft | null>(null);
@@ -534,6 +535,7 @@ export default function ManageAssignmentsOpsPage() {
       pendingIntentsRef.current = [];
       setPendingIntentCount(0);
       persistInFlightRef.current = false;
+      exclusiveDraftWriterRef.current = false;
       setPersistInFlight(false);
       setAutoResult(autoResultFromDraft(hydrated, null) as RunResponse);
       setWarnings(detectDraftWarnings(hydrated));
@@ -688,7 +690,13 @@ export default function ManageAssignmentsOpsPage() {
   const queueDraftSave = useCallback(
     (next: AssignmentDraft, immediate = false) => {
       if (hydratingDraftRef.current) return;
-      if (!shouldAcceptRecalcDraftQueue(recalcInFlightRef.current)) return;
+      if (
+        !shouldAcceptDraftQueue(
+          recalcInFlightRef.current || exclusiveDraftWriterRef.current
+        )
+      ) {
+        return;
+      }
       if (next.date !== dateRef.current) return;
       pendingDraftSaveRef.current = next;
       if (draftSaveTimerRef.current) {
@@ -2067,6 +2075,7 @@ export default function ManageAssignmentsOpsPage() {
     }
     pendingIntentsRef.current = projected.applied;
     setPendingIntentCount(projected.applied.length);
+    exclusiveDraftWriterRef.current = true;
     markPipelineDirty(window.sessionStorage, {
       date: confirmed.date,
       count: projected.applied.length,
@@ -2197,10 +2206,16 @@ export default function ManageAssignmentsOpsPage() {
   async function flushPipelineWrites() {
     if (persistInFlightRef.current) return;
     persistInFlightRef.current = true;
+    exclusiveDraftWriterRef.current = true;
     setPersistInFlight(true);
     let flushHadFailure = false;
     try {
       const drained = await flushDraftSave();
+      pendingDraftSaveRef.current = null;
+      if (draftSaveTimerRef.current) {
+        clearTimeout(draftSaveTimerRef.current);
+        draftSaveTimerRef.current = null;
+      }
       if (persistAfterOwnDraftFlush(drained.status) === "conflict") {
         flushHadFailure = true;
         setDraftSaveState("conflict");
@@ -2319,14 +2334,17 @@ export default function ManageAssignmentsOpsPage() {
           count: pendingIntentsRef.current.length,
         });
         void flushPipelineWrites();
-      } else if (
-        shouldClearPipelineDirty({
-          pendingIntentCount: 0,
-          flushHadFailure,
-        })
-      ) {
-        clearPipelineDirty(window.sessionStorage);
-        setDraftSaveState("saved");
+      } else {
+        exclusiveDraftWriterRef.current = false;
+        if (
+          shouldClearPipelineDirty({
+            pendingIntentCount: 0,
+            flushHadFailure,
+          })
+        ) {
+          clearPipelineDirty(window.sessionStorage);
+          setDraftSaveState("saved");
+        }
       }
     }
   }

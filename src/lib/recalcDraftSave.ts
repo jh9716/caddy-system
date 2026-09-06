@@ -36,9 +36,20 @@ export async function prepareRecalcDraftExpectedVersion(input: {
   return resolveRecalcDraftSavePrep(status, input.getCachedVersion());
 }
 
+/**
+ * Exclusive Draft writers: recalc PUT, SICK/MOVE quick-mutation persist.
+ * While one is in flight, queueDraftSave must not start a new autosave PUT
+ * (offSnapshot attach / availability merge) that races the same expectedVersion.
+ */
+export function shouldAcceptDraftQueue(
+  exclusiveWriterInFlight: boolean
+): boolean {
+  return exclusiveWriterInFlight !== true;
+}
+
 /** Recalc 진행 중에는 구 작업본 autosave를 새로 넣지 않는다. */
 export function shouldAcceptRecalcDraftQueue(recalcInFlight: boolean): boolean {
-  return !recalcInFlight;
+  return shouldAcceptDraftQueue(recalcInFlight);
 }
 
 export function isDraftVersionConflict(

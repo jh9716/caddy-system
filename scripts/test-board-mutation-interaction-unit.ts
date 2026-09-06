@@ -13,6 +13,7 @@ import {
   confirmedDraftKeepingPlacedUnavailable,
   createDraftFromAutoResult,
   snapshotComputePoolFromDraft,
+  applyLiveResultToDraft,
 } from "../src/lib/assignmentDraft";
 import {
   computeAutoAssignmentsV1,
@@ -34,6 +35,7 @@ import {
 import {
   isDraftVersionConflict,
   resolveRecalcDraftSavePrep,
+  shouldAcceptDraftQueue,
   shouldAcceptRecalcDraftQueue,
 } from "../src/lib/recalcDraftSave";
 
@@ -391,6 +393,29 @@ section("7A. 1·2 regular 투대기 2부 SICK → 1부 유지, 2부 이후만 �
   assert(laterShiftIds(preview.after, dual!).length === 0, "2·3부에서 제외");
   assert(engineFrom === "2부", "클릭 2부 → effectiveFromShift=2부");
   assert(persisted?.effectiveFromShift === "2부", "persist도 2부 (1부 승격 없음)");
+  const confirmed = applyLiveResultToDraft(
+    createDraftFromAutoResult(previous, pool),
+    preview.after
+  );
+  assert(
+    confirmed.assignments.some(
+      (row) => row.shift === "1부" && row.caddy.id === dual
+    ),
+    "confirmed Draft도 1부 유지"
+  );
+  assert(
+    !confirmed.assignments.some(
+      (row) => row.shift !== "1부" && row.caddy.id === dual
+    ),
+    "confirmed Draft에서 2부 이후 제외 — 원상복구 없음"
+  );
+  assert(
+    spareSnap({
+      ...preview.after,
+      sparesByShift: confirmed.sparesByShift,
+    }) === spareSnap(preview.after),
+    "confirmed Draft 2부 spare는 persist after 유지"
+  );
 }
 
 section("7B. 동일 투대기 1부 SICK → 종일 제외 유지");
@@ -556,6 +581,14 @@ section("C. 특수지원 저장 → stale → 재맞추기 version은 자기 aut
     shouldAcceptRecalcDraftQueue(true) === false,
     "재맞추기 중 구 작업본 autosave queue 차단"
   );
+  assert(
+    shouldAcceptDraftQueue(true) === false,
+    "SICK persist 중 autosave writer 차단"
+  );
+  assert(
+    shouldAcceptDraftQueue(false) === true,
+    "exclusive writer 없으면 autosave 허용"
+  );
 }
 
 section("D. genuine concurrent version은 기존 409 유지");
@@ -600,8 +633,10 @@ section("source: 2부 병가 유지 + 특수지원 pool isolation 되돌림 + re
   );
   assert(
     /prepareRecalcDraftExpectedVersion\(/.test(page) &&
-      /recalcInFlightRef/.test(page),
-    "재맞추기는 자기 Draft drain 후 version으로 PUT"
+      /recalcInFlightRef/.test(page) &&
+      /exclusiveDraftWriterRef/.test(page) &&
+      /shouldAcceptDraftQueue\(/.test(page),
+    "재맞추기 drain + SICK persist writer lock"
   );
   assert(
     /overlayUnavailableKeepingShift/.test(apply) &&
