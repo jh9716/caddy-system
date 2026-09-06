@@ -1,7 +1,8 @@
 /**
  * 특수지원 v1 (순수 도메인, DB write 없음)
- * - 원래 자동가용에서 제외된 ACTIVE 캐디가 지정 부에만 보충 근무
- * - 정상 후보 뒤에만 쓰며 HOUSE/THIRD cursor·스페어를 밀지 않음
+ * - 원래 자동가용에서 제외된 ACTIVE 캐디가 지정 부에만 추가 근무
+ * - 해당 부 capacity 안에 반드시 포함. HOUSE 부족 시에만 붙는 overflow가 아님
+ * - 지원 인원만큼 그 부의 뒤쪽 정상 HOUSE 소비를 줄인다. 앞 순번은 유지
  * - 찾근 특수근무와 무관. DailySpecialDuty 에 넣지 않음
  */
 
@@ -165,6 +166,33 @@ export function pickNextSpecialSupport(
 ): AutoAssignCaddy | null {
   const used = new Set([...usedInShift].map(Number));
   return queue.find((caddy) => !used.has(caddy.id)) ?? null;
+}
+
+export function unusedSupportCount(
+  queue: readonly AutoAssignCaddy[],
+  usedInShift: Iterable<number>
+): number {
+  const used = new Set([...usedInShift].map(Number));
+  let n = 0;
+  for (const caddy of queue) {
+    if (!(caddy.id > 0) || used.has(caddy.id)) continue;
+    n += 1;
+  }
+  return n;
+}
+
+/**
+ * Remaining reservations including the current slot are reserved for support
+ * when they fit in the unused support queue. Regular HOUSE is not consumed
+ * on those tail slots.
+ */
+export function isReservedSupportTailSlot(input: {
+  remainingIncludingCurrent: number;
+  supportLeft: number;
+}): boolean {
+  const remaining = Number(input.remainingIncludingCurrent);
+  const supportLeft = Number(input.supportLeft);
+  return remaining > 0 && supportLeft > 0 && remaining <= supportLeft;
 }
 
 export function groupSupportRecordsByShift(
