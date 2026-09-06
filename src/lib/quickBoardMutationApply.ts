@@ -202,9 +202,7 @@ export async function applyQuickBoardMutation(input: {
   };
   const persistPool = snapshotComputePool({
     rosterBaseline: rosterBaseline.length ? rosterBaseline : computePool,
-    assigned: input.previous.assignments
-      .filter((row) => row.kind !== "specialSupport")
-      .map((row) => row.caddy),
+    assigned: input.previous.assignments.map((row) => row.caddy),
     spareIds: placed,
     extraUsable: computePool,
     unavailableIds: overlayUnavail,

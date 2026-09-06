@@ -93,7 +93,7 @@ const COURSE_SHORT: Record<CourseCode, string> = {
 import { SpecialDutyPanel, type Shift1StartOption } from "./SpecialDutyPanel";
 import { SpecialSupportPanel } from "./SpecialSupportPanel";
 import { BoardQuickSheet, LiveChangePanel, LockToggle, SameDayAddSheet, TeamMoveSheet } from "./LiveChangePanel";
-import { emptySpecialSupportByShift, isSpecialSupportDraftStale, isSpecialSupportStalePipelineBlock } from "@/lib/dailySpecialSupport";
+import { emptySpecialSupportByShift } from "@/lib/dailySpecialSupport";
 import { SPECIAL_SETTINGS_STALE_MESSAGE } from "@/lib/dailySpecialDuty";
 import { isThirdBandTeam, THIRD_BAND_TEAMS } from "@/lib/caddyManage";
 import { rotateThirdQueueFromStartTeam } from "@/lib/thirdWeeklyRotation";
@@ -375,9 +375,6 @@ export default function ManageAssignmentsOpsPage() {
   const [specialSupportByShift, setSpecialSupportByShift] = useState(
     emptySpecialSupportByShift
   );
-  const specialSupportByShiftRef = useRef(specialSupportByShift);
-  const specialSupportHydratedRef = useRef(false);
-  specialSupportByShiftRef.current = specialSupportByShift;
   const [specialSettingsStale, setSpecialSettingsStale] = useState(false);
   const [recalcNotice, setRecalcNotice] = useState<{
     tone: "error" | "success" | "running";
@@ -557,14 +554,6 @@ export default function ManageAssignmentsOpsPage() {
       setMovePendingDest(null);
       setQuickSheet(null);
       setExpandedKey(null);
-      if (specialSupportHydratedRef.current) {
-        setSpecialSettingsStale(
-          isSpecialSupportDraftStale(
-            specialSupportByShiftRef.current,
-            hydrated.assignments
-          )
-        );
-      }
       hydratingDraftRef.current = false;
     },
     []
@@ -771,14 +760,7 @@ export default function ManageAssignmentsOpsPage() {
 
   const onSpecialSupportLoaded = useCallback(
     (byShift: ReturnType<typeof emptySpecialSupportByShift>) => {
-      specialSupportHydratedRef.current = true;
-      specialSupportByShiftRef.current = byShift;
       setSpecialSupportByShift(byShift);
-      const current = draftRef.current;
-      if (!current) return;
-      setSpecialSettingsStale(
-        isSpecialSupportDraftStale(byShift, current.assignments)
-      );
     },
     []
   );
@@ -911,8 +893,6 @@ export default function ManageAssignmentsOpsPage() {
     dateRef.current = date;
     serverDraftVersionRef.current = 0;
     setDraftVersion(0);
-    specialSupportHydratedRef.current = false;
-    setSpecialSettingsStale(false);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       clearDraftBoard();
       return;
@@ -2038,11 +2018,6 @@ export default function ManageAssignmentsOpsPage() {
       showToast(snapshotBlock);
       return;
     }
-    if (specialSettingsStale && isSpecialSupportStalePipelineBlock(change.type)) {
-      setError(SPECIAL_SETTINGS_STALE_MESSAGE);
-      showToast(SPECIAL_SETTINGS_STALE_MESSAGE);
-      return;
-    }
     if (change.type === "MOVE_RESERVATION") {
       const dest = parseMoveDestination(change.to);
       if (!dest) {
@@ -2502,11 +2477,6 @@ export default function ManageAssignmentsOpsPage() {
       setError("확정할 작업본이 없습니다.");
       return;
     }
-    if (specialSettingsStale) {
-      setError(SPECIAL_SETTINGS_STALE_MESSAGE);
-      showToast(SPECIAL_SETTINGS_STALE_MESSAGE);
-      return;
-    }
     if (publishingRef.current) return;
     const ok = window.confirm(
       published
@@ -2794,7 +2764,6 @@ export default function ManageAssignmentsOpsPage() {
     published,
     draftVersion,
     conflict: draftSaveState === "conflict",
-    blocked: specialSettingsStale,
   });
 
   const boardRows = useMemo(() => {

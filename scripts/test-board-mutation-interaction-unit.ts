@@ -12,6 +12,7 @@ import {
 import {
   confirmedDraftKeepingPlacedUnavailable,
   createDraftFromAutoResult,
+  snapshotComputePoolFromDraft,
 } from "../src/lib/assignmentDraft";
 import {
   computeAutoAssignmentsV1,
@@ -29,9 +30,7 @@ import {
 import {
   emptySpecialSupportByShift,
   isSpecialSupportDraftStale,
-  isSpecialSupportStalePipelineBlock,
 } from "../src/lib/dailySpecialSupport";
-import { publishBoardActionState } from "../src/lib/publishDailyBoardClient";
 import {
   isDraftVersionConflict,
   resolveRecalcDraftSavePrep,
@@ -109,6 +108,23 @@ function laterShiftIds(result: AutoAssignResultV1, caddyId: number): string[] {
   return result.assignments
     .filter((a) => a.caddy.id === caddyId && a.shift !== "1부")
     .map((a) => `${a.shift}:${a.kind}`);
+}
+
+function regularSnap(result: AutoAssignResultV1, shift: string): string {
+  return result.assignments
+    .filter((a) => a.shift === shift && a.kind === "regular")
+    .map((a) => `${a.reservation.id}:${a.caddy.id}`)
+    .sort()
+    .join("|");
+}
+
+function spareSnap(result: AutoAssignResultV1): string {
+  return (result.sparesByShift || [])
+    .map(
+      (s) =>
+        `${s.shift}:${s.spare1?.caddyId ?? "-"}:${s.spare2?.caddyId ?? "-"}`
+    )
+    .join("|");
 }
 
 section("1. 2부 effective 병가: 1부 유지 + 2·3부 재등장 금지");
@@ -213,35 +229,72 @@ section("2. 부분 병가 후 MOVE: later shift regular 재선택 금지");
   assert(laterShiftIds(moved.after, b1Id).length === 0, "MOVE 후에도 2·3부 재선택 없음");
 }
 
-section("3. 1부 specialSupport는 later reflow에서 regular HOUSE로 재선택되지 않음");
+section("3. 특수지원 재맞추기는 main과 같이 정상 순번/스페어를 유지한다");
 {
   const date = "2026-08-26";
   const available = [house(1, 1), house(2, 2), house(3, 3)];
   const off = supportCaddy(90, "휴무지원");
-  const previous = computeAutoAssignmentsV1({
+  const reservations = [
+    res(date, "A1", { teeTime: "07:00", shift: "1부", course: "SKY" }),
+    res(date, "A2", { teeTime: "07:08", shift: "1부", course: "SKY" }),
+    res(date, "A3", { teeTime: "07:16", shift: "1부", course: "OCEAN" }),
+    res(date, "A4", { teeTime: "07:24", shift: "1부", course: "LAKE" }),
+    res(date, "B1", { teeTime: "12:00", shift: "2부", course: "SKY" }),
+    res(date, "B2", { teeTime: "12:08", shift: "2부", course: "SKY" }),
+  ];
+  const without = computeAutoAssignmentsV1({
     date,
     available,
-    reservations: [
-      res(date, "A1", { teeTime: "07:00", shift: "1부", course: "SKY" }),
-      res(date, "A2", { teeTime: "07:08", shift: "1부", course: "SKY" }),
-      res(date, "A3", { teeTime: "07:16", shift: "1부", course: "OCEAN" }),
-      res(date, "A4", { teeTime: "07:24", shift: "1부", course: "LAKE" }),
-      res(date, "B1", { teeTime: "12:00", shift: "2부", course: "SKY" }),
-      res(date, "B2", { teeTime: "12:08", shift: "2부", course: "SKY" }),
-    ],
+    reservations: reservations.filter((row) => row.id !== "A4"),
+  });
+  const withSupport = computeAutoAssignmentsV1({
+    date,
+    available,
+    reservations,
     specialSupportByShift: { ...emptySpecialSupportByShift(), "1부": [off] },
   });
   assert(
-    previous.assignments.some(
+    withSupport.assignments.some(
       (row) => row.kind === "specialSupport" && row.caddy.id === 90 && row.shift === "1부"
     ),
-    "1부에 specialSupport 배정"
+    "재맞추기(compute)는 지원자를 1부 꼬리에 배치"
   );
-  const b1 = previous.assignments.find((row) => row.reservation.id === "B1");
-  const leakyPool = [...available, off];
+  assert(
+    regularSnap(withSupport, "1부") === regularSnap(without, "1부"),
+    "1부 정상 HOUSE identity 유지"
+  );
+  assert(
+    regularSnap(withSupport, "2부") === regularSnap(without, "2부"),
+    "2부 정상 HOUSE identity 유지"
+  );
+  assert(
+    spareSnap(withSupport) === spareSnap(without),
+    "스페어가 지원자 때문에 바뀌지 않음"
+  );
+  const draft = createDraftFromAutoResult(withSupport, available);
+  const roundTrip = confirmedDraftKeepingPlacedUnavailable(draft);
+  assert(
+    regularSnap(
+      { ...withSupport, assignments: roundTrip.assignments },
+      "1부"
+    ) === regularSnap(withSupport, "1부"),
+    "새로고침 hydrate 후에도 1부 identity 동일"
+  );
+  assert(
+    roundTrip.assignments.some(
+      (row) => row.kind === "specialSupport" && row.caddy.id === 90
+    ),
+    "hydrate 후에도 지원 배치 유지"
+  );
+  const persistPool = snapshotComputePoolFromDraft(draft, withSupport);
+  assert(
+    persistPool.some((c) => c.id === 90),
+    "main과 같이 assigned seed에 지원 HOUSE가 포함"
+  );
+  const b1 = withSupport.assignments.find((row) => row.reservation.id === "B1");
   const moved = reflowRegularAssignments({
-    previous,
-    regularCaddyPool: leakyPool,
+    previous: withSupport,
+    regularCaddyPool: available,
     events: [
       {
         type: "MOVE_RESERVATION",
@@ -255,51 +308,25 @@ section("3. 1부 specialSupport는 later reflow에서 regular HOUSE로 재선택
     moved.after.assignments
       .filter((row) => row.caddy.id === 90)
       .every((row) => row.kind === "specialSupport" && row.shift === "1부"),
-    "지원자는 1부 specialSupport만 유지"
+    "MOVE 후에도 지원자는 1부 specialSupport"
   );
   assert(
     !moved.after.assignments.some(
       (row) => row.caddy.id === 90 && row.kind === "regular"
     ),
-    "later reflow에서 regular HOUSE로 재선택되지 않음"
+    "available pool 밖 지원자는 regular로 중복되지 않음"
   );
-}
-
-section("4~6. 지원 설정 vs Draft stale / 차단 / 재맞추기 후 해제");
-{
-  const queues = { ...emptySpecialSupportByShift(), "1부": [supportCaddy(90, "휴무지원")] };
-  const ghostDraft = [
-    {
-      kind: "specialSupport",
-      shift: "1부",
-      caddy: { id: 90 },
-    },
-  ];
-  const emptyDraft: typeof ghostDraft = [];
-  const matchingDraft = ghostDraft;
-  assert(
-    isSpecialSupportDraftStale(emptySpecialSupportByShift(), ghostDraft),
-    "지원 삭제 후 Draft 잔존이면 stale"
-  );
-  assert(
-    isSpecialSupportDraftStale(queues, emptyDraft),
-    "지원 추가 후 Draft 미반영이면 stale"
-  );
-  assert(
-    !isSpecialSupportDraftStale(queues, matchingDraft),
-    "재맞추기 후 설정=Draft 이면 stale 해제"
-  );
-  assert(isSpecialSupportStalePipelineBlock("CADDY_SICK"), "stale 중 SICK 차단");
-  assert(isSpecialSupportStalePipelineBlock("MOVE_RESERVATION"), "stale 중 MOVE 차단");
-  assert(!isSpecialSupportStalePipelineBlock("SWAP_CADDY"), "stale이어도 SWAP은 이 가드 밖");
-  const blockedPublish = publishBoardActionState({
-    publishing: false,
-    hasDraft: true,
-    published: null,
-    draftVersion: 1,
-    blocked: true,
+  const sick = previewLiveAssignmentChange({
+    previous: withSupport,
+    regularCaddyPool: available,
+    change: { type: "CADDY_SICK", caddyId: caddyOn(withSupport, "A1")!, shift: "2부" },
   });
-  assert(blockedPublish.disabled, "stale 중 publish 버튼 비활성");
+  assert(
+    sick.after.assignments
+      .filter((row) => row.caddy.id === 90)
+      .every((row) => row.kind === "specialSupport"),
+    "SICK reflow 후에도 지원자는 specialSupport"
+  );
 }
 
 section("7A. 1·2 regular 투대기 2부 SICK → 1부 유지, 2부 이후만 제외");
@@ -539,7 +566,7 @@ section("D. genuine concurrent version은 기존 409 유지");
   assert(prep.ok === false && prep.reason === "conflict", "flush 중 타인 기록은 conflict");
 }
 
-section("source: hydrate stale restore + pipeline/publish block");
+section("source: 2부 병가 유지 + 특수지원 pool isolation 되돌림 + recalc drain");
 {
   const page = readFileSync(
     join(process.cwd(), "src/app/manage/assignments/page.tsx"),
@@ -553,25 +580,26 @@ section("source: hydrate stale restore + pipeline/publish block");
     join(process.cwd(), "src/lib/autoAssignEngine.ts"),
     "utf8"
   );
+  const draft = readFileSync(
+    join(process.cwd(), "src/lib/assignmentDraft.ts"),
+    "utf8"
+  );
   const change = readFileSync(
     join(process.cwd(), "src/lib/assignmentChange.ts"),
     "utf8"
   );
   assert(
-    /isSpecialSupportDraftStale\(/.test(page) &&
-      /specialSupportHydratedRef/.test(page),
-    "hydrate 시 지원 설정 vs Draft 비교"
+    !/isSpecialSupportDraftStale\(/.test(page) &&
+      !/specialSupportHydratedRef/.test(page),
+    "hydrate 시 지원 설정 비교를 main처럼 하지 않음"
   );
   assert(
-    /isSpecialSupportStalePipelineBlock\(change\.type\)/.test(page) &&
-      /blocked: specialSettingsStale/.test(page) &&
-      /if \(specialSettingsStale\)/.test(page),
-    "stale 중 SICK/MOVE/publish 차단"
+    !/isSpecialSupportStalePipelineBlock\(/.test(page) &&
+      !/blocked: specialSettingsStale/.test(page),
+    "stale로 SICK/MOVE/publish를 막지 않음"
   );
   assert(
-    /setSpecialSettingsStale\(false\)/.test(page) &&
-      /RECALC_SUCCESS_MESSAGE/.test(page) &&
-      /prepareRecalcDraftExpectedVersion\(/.test(page) &&
+    /prepareRecalcDraftExpectedVersion\(/.test(page) &&
       /recalcInFlightRef/.test(page),
     "재맞추기는 자기 Draft drain 후 version으로 PUT"
   );
@@ -581,12 +609,22 @@ section("source: hydrate stale restore + pipeline/publish block");
     "quick mutation previous에 부 범위 unavailable 유지"
   );
   assert(
-    /specialSupportExcludeIds\(/.test(engine),
-    "reflow regular pool에서 특수지원 제외"
+    !/specialSupportExcludeIds\(/.test(engine),
+    "reflow regular pool에서 특수지원 강제 제외 없음"
+  );
+  assert(
+    /assigned: draft\.assignments\.map\(\(row\) => row\.caddy\)/.test(draft),
+    "snapshot assigned는 main처럼 지원 배치를 포함"
+  );
+  assert(
+    /assigned: input\.previous\.assignments\.map\(\(row\) => row\.caddy\)/.test(
+      apply
+    ),
+    "persist assigned는 main처럼 지원 배치를 포함"
   );
   assert(
     !/shift1 > 0 && shift2 > 0/.test(engine),
-    "1·2 regular 투대기 2부 병가 1부 승격 제거"
+    "1·2 regular 투대기 2부 병가 1부 승격 제거 유지"
   );
   assert(
     /fromById\.get\(event\.caddyId\)/.test(change),

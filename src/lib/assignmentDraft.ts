@@ -250,9 +250,7 @@ export function snapshotComputePoolFromDraft(
 ): AutoAssignCaddy[] {
   return snapshotComputePool({
     rosterBaseline: draft.caddyPool,
-    assigned: draft.assignments
-      .filter((row) => row.kind !== "specialSupport")
-      .map((row) => row.caddy),
+    assigned: draft.assignments.map((row) => row.caddy),
     spareIds: spareIdsFromDraft(draft),
     engineUnused: base?.unusedCaddies,
     extraUsable: extra?.extraUsable,

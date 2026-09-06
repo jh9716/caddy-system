@@ -5177,27 +5177,6 @@ function reflowPlacementPolicy(
   };
 }
 
-function specialSupportExcludeIds(
-  previous: AutoAssignResultV1,
-  queues?: Record<ShiftPart, AutoAssignCaddy[]> | null
-): Set<number> {
-  const ids = new Set<number>();
-  const byShift = queues || previous.specialSupportByShift;
-  if (byShift) {
-    for (const shift of SHIFT_PARTS) {
-      for (const caddy of byShift[shift] || []) {
-        if (caddy?.id > 0) ids.add(caddy.id);
-      }
-    }
-  }
-  for (const row of previous.assignments) {
-    if (row.kind === "specialSupport" && row.caddy.id > 0) {
-      ids.add(row.caddy.id);
-    }
-  }
-  return ids;
-}
-
 export function serializeUnavailableFromShift(
   map: Map<number, ShiftPart>
 ): UnavailableFromShiftRow[] {
@@ -5648,10 +5627,6 @@ export function reflowRegularAssignments(input: {
         !autoSpecialIds.has(row.caddy.id)
     )
     .map((row) => row.caddy);
-  const supportExcludeIds = specialSupportExcludeIds(
-    previous,
-    input.specialSupportByShift
-  );
   const remainingSource = eligibleRegularReflowCaddies([
     ...fullPool,
     ...extraSpecials,
@@ -5659,20 +5634,14 @@ export function reflowRegularAssignments(input: {
     (c) =>
       !lockedCaddies.has(c.id) &&
       !allDayUnavailable.has(c.id) &&
-      !autoSpecialIds.has(c.id) &&
-      !supportExcludeIds.has(c.id)
+      !autoSpecialIds.has(c.id)
   );
   const originalSource = eligibleRegularReflowCaddies([
     ...fullPool,
     ...extraSpecials,
     ...previous.assignments.map((row) => row.caddy),
     ...(previous.unusedCaddies || []),
-  ]).filter(
-    (c) =>
-      !lockedCaddies.has(c.id) &&
-      !autoSpecialIds.has(c.id) &&
-      !supportExcludeIds.has(c.id)
-  );
+  ]).filter((c) => !lockedCaddies.has(c.id) && !autoSpecialIds.has(c.id));
   // Non-SICK reflow: historical team-order rebuild + origin rotate.
   // SICK removeOnly: 1부 보드 순서 + leftover. Do not team-sort the
   // whole queue and do not rebuild 2부 from its (possibly reset) board.
