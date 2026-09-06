@@ -723,7 +723,7 @@ export function BoardQuickSheet({
                 fire({ type: "CANCEL_RESERVATION", reservationKey: key })
               }
             >
-              예약 취소
+              캔슬
             </button>
             <button
               type="button"
@@ -731,6 +731,19 @@ export function BoardQuickSheet({
               onClick={() => fire({ type: "TEAM_NOSHOW", reservationKey: key })}
             >
               노쇼
+            </button>
+            <button
+              type="button"
+              className={`btn ${row.reservation.houseRequest ? "apply" : ""}`}
+              onClick={() =>
+                fire({
+                  type: "SET_HOUSE",
+                  reservationKey: key,
+                  houseRequest: row.reservation.houseRequest !== true,
+                })
+              }
+            >
+              하우스 {row.reservation.houseRequest ? "OFF" : "ON"}
             </button>
             <button
               type="button"
@@ -798,6 +811,16 @@ export function BoardQuickSheet({
           <div className="qa-actions qa-caddy-actions">
             <button
               type="button"
+              className={`btn ${swapSelected ? "apply" : ""}`}
+              onClick={() => {
+                onSwapClick();
+                onClose();
+              }}
+            >
+              {swapSelected ? "상대 캐디를 탭하세요" : "캐디 맞교환"}
+            </button>
+            <button
+              type="button"
               className="btn"
               onClick={() =>
                 fire({
@@ -823,13 +846,12 @@ export function BoardQuickSheet({
             </button>
             <button
               type="button"
-              className={`btn ${swapSelected ? "apply" : ""}`}
-              onClick={() => {
-                onSwapClick();
-                onClose();
-              }}
+              className="btn"
+              onClick={() =>
+                fire({ type: "SET_LOCK", reservationKey: key, locked: !locked })
+              }
             >
-              {swapSelected ? "상대 캐디를 탭하세요" : "순번 바꿈"}
+              {locked ? "LOCK 해제" : "LOCK"}
             </button>
           </div>
         )}

@@ -49,6 +49,7 @@ function ReadOnlySlot({ row }: { row: PublishedPlacementV1 }) {
     <div className="bc-slot">
       <div className="bc-team">
         <span className="bc-team-name">{row.teamName || "팀"}</span>
+        {row.houseRequest ? <span className="bc-badge house">하우스</span> : null}
         {row.limousine ? <span className="bc-badge limo">리무진</span> : null}
       </div>
       <div className="bc-caddy">

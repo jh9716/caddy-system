@@ -93,6 +93,8 @@ const COURSE_SHORT: Record<CourseCode, string> = {
 import { SpecialDutyPanel, type Shift1StartOption } from "./SpecialDutyPanel";
 import { SpecialSupportPanel } from "./SpecialSupportPanel";
 import { BoardQuickSheet, LiveChangePanel, LockToggle, SameDayAddSheet, TeamMoveSheet } from "./LiveChangePanel";
+import { UnavailablePanel } from "./UnavailablePanel";
+import { buildUnavailablePanelGroups } from "@/lib/assignmentBoardDirectEdit";
 import { emptySpecialSupportByShift } from "@/lib/dailySpecialSupport";
 import { SPECIAL_SETTINGS_STALE_MESSAGE } from "@/lib/dailySpecialDuty";
 import { isThirdBandTeam, THIRD_BAND_TEAMS } from "@/lib/caddyManage";
@@ -102,6 +104,7 @@ import {
   QUICK_ACTION_CONFIRM_MESSAGE,
   changeFromEmptyBoardCell,
   hasBlockingLiveChangeError,
+  isDraftOnlyLiveChange,
   needsQuickActionConfirm,
   previewLiveChangeFromDraft,
   shouldReconcileLivePersist,
@@ -297,6 +300,9 @@ const BoardAssignedSlots = memo(function BoardAssignedSlots({
               <span className="bc-team-name">
                 {row.reservation.teamName || "팀"}
               </span>
+              {marks.houseRequest ? (
+                <span className="bc-badge house">하우스</span>
+              ) : null}
               {marks.limousine ? (
                 <span className="bc-badge limo">리무진</span>
               ) : null}
@@ -386,6 +392,12 @@ export default function ManageAssignmentsOpsPage() {
     count: number;
     byRole?: Record<string, number>;
     caddyIds: number[];
+    rows?: Array<{
+      caddyId: number;
+      name?: string;
+      team?: string;
+      role?: string;
+    }>;
   } | null>(null);
   const [opsDutyPreview, setOpsDutyPreview] = useState<{
     matchedCount: number;
@@ -847,6 +859,7 @@ export default function ManageAssignmentsOpsPage() {
             : Array.isArray(data.rows)
               ? data.rows.map((r: { caddyId: number }) => r.caddyId)
               : [],
+          rows: Array.isArray(data.rows) ? data.rows : [],
         });
       } catch {
         if (!cancelled) setOpsDutyStored(null);
@@ -1223,6 +1236,7 @@ export default function ManageAssignmentsOpsPage() {
           count: prev?.count ?? dutyIds.length,
           byRole: prev?.byRole,
           caddyIds: dutyIds,
+          rows: prev?.rows,
         }));
       }
       const sync = (
@@ -1260,11 +1274,12 @@ export default function ManageAssignmentsOpsPage() {
       const finalAvailable =
         Number(data.dailySummary?.finalAvailable ?? data.counts?.available ?? 0);
       if (sync?.status === "synced") {
-        setOpsDutyStored({
+        setOpsDutyStored((prev) => ({
           count: Number(sync.savedCount) || dutyIds.length,
           byRole: sync.byRole,
           caddyIds: Array.isArray(sync.caddyIds) ? sync.caddyIds : dutyIds,
-        });
+          rows: prev?.rows,
+        }));
         const text = `${sync.message} · 최종 가용 ${finalAvailable}명`;
         setOpsDutySyncNotice({ tone: "ok", text });
         showToast(text);
@@ -1408,6 +1423,7 @@ export default function ManageAssignmentsOpsPage() {
         caddyIds: Array.isArray(data.saved)
           ? data.saved.map((r: { caddyId: number }) => r.caddyId)
           : [],
+        rows: Array.isArray(data.saved) ? data.saved : [],
       });
       setOpsDutyPreview(null);
       showToast(`당번·마샬·조장 일정 ${data.savedCount}명 저장`);
@@ -1539,6 +1555,7 @@ export default function ManageAssignmentsOpsPage() {
         caddyIds: Array.isArray(data.saved)
           ? data.saved.map((r: { caddyId: number }) => r.caddyId)
           : [],
+        rows: Array.isArray(data.saved) ? data.saved : [],
       });
       setOpsDutySheetPreview(null);
       showToast(`운영배치 ${data.savedCount}명 적용`);
@@ -2565,6 +2582,7 @@ export default function ManageAssignmentsOpsPage() {
     failToast?: string;
     applyServerDraft?: boolean;
     rollbackDraft?: AssignmentDraft | null;
+    change?: LiveChangeInput;
   }): Promise<boolean> {
     setError(null);
     const failToast =
@@ -2575,27 +2593,36 @@ export default function ManageAssignmentsOpsPage() {
       setWarnings(detectDraftWarnings(input.rollbackDraft));
     };
     try {
-      const res = await fetch("/api/assignments/reflow/apply", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          previous: input.previous,
-          regularCaddyPool: input.pool,
-          events: input.preview.events,
-          changeType: input.preview.changeType,
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        rollbackOptimistic();
-        setError(
-          data.error ||
-            data.message ||
-            "배치 저장 중 오류가 발생했습니다. 다시 시도해주세요."
-        );
-        showToast(failToast);
-        return false;
+      const draftOnly =
+        input.preview.changeType != null &&
+        isDraftOnlyLiveChange(input.preview.changeType);
+      const data: { preview?: LiveChangePreview; error?: string; message?: string } =
+        draftOnly ? { preview: input.preview } : {};
+      if (!draftOnly) {
+        const res = await fetch("/api/assignments/reflow/apply", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            previous: input.previous,
+            regularCaddyPool: input.pool,
+            events: input.preview.events,
+            changeType: input.preview.changeType,
+            change: input.change,
+          }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          rollbackOptimistic();
+          setError(
+            body.error ||
+              body.message ||
+              "배치 저장 중 오류가 발생했습니다. 다시 시도해주세요."
+          );
+          showToast(failToast);
+          return false;
+        }
+        Object.assign(data, body);
       }
       let savedDraft: AssignmentDraft | null = null;
       if (input.applyServerDraft !== false) {
@@ -2669,6 +2696,9 @@ export default function ManageAssignmentsOpsPage() {
     if (change.type === "SET_LIMOUSINE") {
       return change.limousineCart ? "리무진 ON" : "리무진 OFF";
     }
+    if (change.type === "SET_HOUSE") {
+      return change.houseRequest ? "하우스 ON" : "하우스 OFF";
+    }
     if (change.type === "SET_LOCK") {
       return change.locked ? "LOCK ON" : "LOCK OFF";
     }
@@ -2713,6 +2743,7 @@ export default function ManageAssignmentsOpsPage() {
         pool: livePool,
         applyServerDraft: shouldReconcileLivePersist(change.type),
         rollbackDraft: current,
+        change,
       });
       if (!ok) persistGenRef.current += 1;
     });
@@ -2798,6 +2829,16 @@ export default function ManageAssignmentsOpsPage() {
       ) || null
     );
   }, [draft, quickSheet]);
+
+  const unavailableGroups = useMemo(
+    () =>
+      buildUnavailablePanelGroups({
+        excluded: availability?.excluded,
+        opsDuties: opsDutyStored?.rows,
+        specialSupportByShift,
+      }),
+    [availability?.excluded, opsDutyStored?.rows, specialSupportByShift]
+  );
 
   const moveSourceRow = useMemo(() => {
     if (!draft || !moveKey) return null;
@@ -3424,7 +3465,7 @@ export default function ManageAssignmentsOpsPage() {
 
             {shiftTab !== "UNASSIGNED" && shiftTab !== "CLOSED" && (
               <p className="ops-board-hint">
-                팀 또는 캐디 이름을 눌러 수정할 수 있습니다.
+                팀 또는 캐디를 눌러 바로 수정합니다. 상단 버튼은 그대로 쓸 수 있습니다.
               </p>
             )}
 
@@ -3504,7 +3545,8 @@ export default function ManageAssignmentsOpsPage() {
           </div>
 
           {shiftTab !== "UNASSIGNED" && shiftTab !== "CLOSED" && (
-            <>
+            <div className="ops-direct-layout">
+              <div className="ops-direct-main">
               {viewMode === "board" && (
                 <div
                   ref={boardWrapRef}
@@ -3663,6 +3705,9 @@ export default function ManageAssignmentsOpsPage() {
                             onClick={() => handlePlacementTap(row, "team")}
                           >
                             {row.reservation.teamName || "팀"}
+                            {marks.houseRequest ? (
+                              <span className="bc-badge house">하우스</span>
+                            ) : null}
                             {marks.limousine ? (
                               <span className="bc-badge limo">리무진</span>
                             ) : null}
@@ -3722,7 +3767,9 @@ export default function ManageAssignmentsOpsPage() {
                   )}
                 </div>
               </div>
-            </>
+              </div>
+              <UnavailablePanel groups={unavailableGroups} />
+            </div>
           )}
 
           {shiftTab === "UNASSIGNED" && (
@@ -4416,6 +4463,66 @@ const opsCss = `
     color: #94a3b8;
     line-height: 1.3;
   }
+  .ops-direct-layout {
+    display: grid;
+    gap: 12px;
+  }
+  .ops-direct-main { min-width: 0; }
+  .ops-unavail {
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background: #fff;
+    overflow: hidden;
+  }
+  .ops-unavail-toggle {
+    width: 100%;
+    border: 0;
+    background: #f8fafc;
+    padding: 10px 12px;
+    text-align: left;
+    font-weight: 700;
+    font-size: 0.82rem;
+    color: #0f172a;
+    cursor: pointer;
+  }
+  .ops-unavail-body { padding: 0 12px 12px; }
+  .ops-unavail-empty {
+    margin: 8px 0 0;
+    font-size: 0.75rem;
+    color: #94a3b8;
+  }
+  .ops-unavail-group { margin-top: 10px; }
+  .ops-unavail-group h3 {
+    margin: 0 0 4px;
+    font-size: 0.72rem;
+    color: #64748b;
+  }
+  .ops-unavail-group ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .ops-unavail-group li {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 2px 8px;
+    padding: 4px 0;
+    border-top: 1px solid #f1f5f9;
+    font-size: 0.75rem;
+  }
+  .ops-unavail-name { font-weight: 700; color: #0f172a; }
+  .ops-unavail-team { color: #64748b; }
+  .ops-unavail-reason {
+    grid-column: 1 / -1;
+    color: #475569;
+    font-size: 0.7rem;
+  }
+  @media (min-width: 1100px) {
+    .ops-direct-layout {
+      grid-template-columns: minmax(0, 1fr) 240px;
+      align-items: start;
+    }
+  }
   .ops-board-head-bar {
     width: 100%;
     border: 1px solid #e2e8f0;
@@ -4741,6 +4848,12 @@ const opsCss = `
   .bc-badge.support {
     color: #1e3a8a;
     background: #dbeafe;
+  }
+  .bc-badge.house {
+    color: #166534;
+    background: #dcfce7;
+    box-shadow: 0 0 0 1px #86efac;
+    font-size: 0.6rem;
   }
   .bc-badge.limo {
     color: #9a3412;
