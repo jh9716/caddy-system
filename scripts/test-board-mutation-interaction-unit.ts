@@ -32,6 +32,11 @@ import {
   isSpecialSupportStalePipelineBlock,
 } from "../src/lib/dailySpecialSupport";
 import { publishBoardActionState } from "../src/lib/publishDailyBoardClient";
+import {
+  isDraftVersionConflict,
+  resolveRecalcDraftSavePrep,
+  shouldAcceptRecalcDraftQueue,
+} from "../src/lib/recalcDraftSave";
 
 let passed = 0;
 let failed = 0;
@@ -297,7 +302,71 @@ section("4~6. 지원 설정 vs Draft stale / 차단 / 재맞추기 후 해제");
   assert(blockedPublish.disabled, "stale 중 publish 버튼 비활성");
 }
 
-section("7. engine effectiveFromShift == persisted effectiveFromShift");
+section("7A. 1·2 regular 투대기 2부 SICK → 1부 유지, 2부 이후만 제외");
+{
+  const date = "2026-08-27";
+  const pool = makeCaddies(4);
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      res(date, "A1", { teeTime: "07:00", shift: "1부" }),
+      res(date, "A2", { teeTime: "07:08", shift: "1부" }),
+      res(date, "A3", { teeTime: "07:16", shift: "1부" }),
+      res(date, "B1", { teeTime: "12:00", shift: "2부" }),
+      res(date, "B2", { teeTime: "12:08", shift: "2부" }),
+      res(date, "B3", { teeTime: "12:16", shift: "2부" }),
+      res(date, "C1", { teeTime: "16:00", shift: "3부" }),
+      res(date, "C2", { teeTime: "16:08", shift: "3부" }),
+    ],
+  });
+  const dual = previous.assignments
+    .filter((row) => row.kind === "regular" && row.caddy.caddyType === "HOUSE")
+    .reduce<number | null>((found, row) => {
+      if (found) return found;
+      const other = previous.assignments.some(
+        (alt) =>
+          alt.caddy.id === row.caddy.id &&
+          alt.shift === "2부" &&
+          row.shift === "1부" &&
+          alt.kind === "regular"
+      );
+      return other ? row.caddy.id : null;
+    }, null);
+  assert(!!dual, "1·2 regular HOUSE 투대기 캐디 존재");
+  const shift1Before = previous.assignments
+    .filter((a) => a.shift === "1부")
+    .map((a) => `${a.reservation.id}:${a.caddy.id}`)
+    .sort()
+    .join("|");
+  const preview = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: { type: "CADDY_SICK", caddyId: dual!, shift: "2부" },
+  });
+  const shift1After = preview.after.assignments
+    .filter((a) => a.shift === "1부")
+    .map((a) => `${a.reservation.id}:${a.caddy.id}`)
+    .sort()
+    .join("|");
+  const engineFrom = preview.after.unavailableFromShift?.find(
+    (row) => row.caddyId === dual
+  )?.effectiveFromShift;
+  const plan = buildLiveChangePersistPlan(preview);
+  const persisted = plan.unavailables.find((row) => row.caddyId === dual);
+  assert(shift1After === shift1Before, "2부 병가 후 1부 identity 유지");
+  assert(
+    preview.after.assignments.some(
+      (row) => row.shift === "1부" && row.caddy.id === dual
+    ),
+    "투대기 1부 배치는 유지"
+  );
+  assert(laterShiftIds(preview.after, dual!).length === 0, "2·3부에서 제외");
+  assert(engineFrom === "2부", "클릭 2부 → effectiveFromShift=2부");
+  assert(persisted?.effectiveFromShift === "2부", "persist도 2부 (1부 승격 없음)");
+}
+
+section("7B. 동일 투대기 1부 SICK → 종일 제외 유지");
 {
   const date = "2026-08-27";
   const pool = makeCaddies(4);
@@ -320,28 +389,28 @@ section("7. engine effectiveFromShift == persisted effectiveFromShift");
       const other = previous.assignments.some(
         (alt) =>
           alt.caddy.id === row.caddy.id &&
-          alt.shift !== row.shift &&
-          (alt.shift === "1부" || alt.shift === "2부") &&
+          alt.shift === "2부" &&
+          row.shift === "1부" &&
           alt.kind === "regular"
       );
       return other ? row.caddy.id : null;
     }, null);
-  assert(!!dual, "1·2 regular HOUSE 쌍소비 캐디 존재");
+  assert(!!dual, "동일 투대기 캐디 존재");
   const preview = previewLiveAssignmentChange({
     previous,
     regularCaddyPool: pool,
-    change: { type: "CADDY_SICK", caddyId: dual!, shift: "2부" },
+    change: { type: "CADDY_SICK", caddyId: dual!, shift: "1부" },
   });
   const engineFrom = preview.after.unavailableFromShift?.find(
     (row) => row.caddyId === dual
   )?.effectiveFromShift;
   const plan = buildLiveChangePersistPlan(preview);
   const persisted = plan.unavailables.find((row) => row.caddyId === dual);
-  assert(engineFrom === "1부", "엔진은 쌍소비를 종일(1부)로 해석");
-  assert(persisted?.effectiveFromShift === engineFrom, "persist effectiveFromShift=엔진 결과");
+  assert(engineFrom === "1부", "1부 클릭 → effectiveFromShift=1부");
+  assert(persisted?.effectiveFromShift === "1부", "persist 종일 1부");
   assert(
     preview.after.assignments.every((row) => row.caddy.id !== dual),
-    "종일 제외라 1·2·3부 모두 제거"
+    "1부 병가는 1·2·3부 모두 제외"
   );
 }
 
@@ -410,6 +479,66 @@ section("8. 기존 정상: 종일 병가 / 빈칸 MOVE / specialSupport");
   );
 }
 
+section("C. 특수지원 저장 → stale → 재맞추기 version은 자기 autosave 이후");
+{
+  const queues = {
+    ...emptySpecialSupportByShift(),
+    "1부": [supportCaddy(90, "휴무지원")],
+  };
+  assert(
+    isSpecialSupportDraftStale(queues, []),
+    "지원 저장 후 Draft 미반영이면 stale"
+  );
+  const date = "2026-08-26";
+  const placed = computeAutoAssignmentsV1({
+    date,
+    available: [house(1, 1), house(2, 2)],
+    reservations: [
+      res(date, "S1", { teeTime: "07:00", shift: "1부" }),
+      res(date, "S2", { teeTime: "07:08", shift: "1부" }),
+      res(date, "S3", { teeTime: "07:16", shift: "1부" }),
+    ],
+    specialSupportByShift: queues,
+  });
+  assert(
+    placed.assignments.some(
+      (row) => row.kind === "specialSupport" && row.caddy.id === 90 && row.shift === "1부"
+    ),
+    "재맞추기 preview는 지원 캐디를 1부에 배치"
+  );
+  const draft = createDraftFromAutoResult(placed, [house(1, 1), house(2, 2)]);
+  assert(
+    !isSpecialSupportDraftStale(queues, draft.assignments),
+    "성공한 Draft와 지원 설정이 일치하면 stale 해제"
+  );
+
+  let cachedVersion = 5;
+  assert(isDraftVersionConflict(5, 6), "자기 autosave가 올린 version을 무시하면 409");
+  cachedVersion = 6;
+  const prep = resolveRecalcDraftSavePrep("ok", cachedVersion);
+  assert(prep.ok === true, "자기 저장 drain 성공");
+  assert(
+    prep.ok && prep.expectedVersion === 6,
+    "재맞추기 PUT expectedVersion=drain 후 6"
+  );
+  assert(
+    prep.ok && !isDraftVersionConflict(prep.expectedVersion, cachedVersion),
+    "drain 후 PUT은 자기 변경을 conflict로 오판하지 않음"
+  );
+  assert(
+    shouldAcceptRecalcDraftQueue(true) === false,
+    "재맞추기 중 구 작업본 autosave queue 차단"
+  );
+}
+
+section("D. genuine concurrent version은 기존 409 유지");
+{
+  assert(isDraftVersionConflict(6, 7), "다른 version이면 conflict");
+  assert(!isDraftVersionConflict(6, 6), "같은 version이면 conflict 아님");
+  const prep = resolveRecalcDraftSavePrep("conflict", 6);
+  assert(prep.ok === false && prep.reason === "conflict", "flush 중 타인 기록은 conflict");
+}
+
 section("source: hydrate stale restore + pipeline/publish block");
 {
   const page = readFileSync(
@@ -441,8 +570,10 @@ section("source: hydrate stale restore + pipeline/publish block");
   );
   assert(
     /setSpecialSettingsStale\(false\)/.test(page) &&
-      /RECALC_SUCCESS_MESSAGE/.test(page),
-    "재맞추기 성공 후 stale 해제 경로 유지"
+      /RECALC_SUCCESS_MESSAGE/.test(page) &&
+      /prepareRecalcDraftExpectedVersion\(/.test(page) &&
+      /recalcInFlightRef/.test(page),
+    "재맞추기는 자기 Draft drain 후 version으로 PUT"
   );
   assert(
     /overlayUnavailableKeepingShift/.test(apply) &&
@@ -452,6 +583,10 @@ section("source: hydrate stale restore + pipeline/publish block");
   assert(
     /specialSupportExcludeIds\(/.test(engine),
     "reflow regular pool에서 특수지원 제외"
+  );
+  assert(
+    !/shift1 > 0 && shift2 > 0/.test(engine),
+    "1·2 regular 투대기 2부 병가 1부 승격 제거"
   );
   assert(
     /fromById\.get\(event\.caddyId\)/.test(change),

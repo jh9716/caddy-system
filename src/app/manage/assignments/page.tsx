@@ -132,6 +132,10 @@ import {
   persistAfterOwnDraftFlush,
 } from "@/lib/draftSaveFlush";
 import {
+  prepareRecalcDraftExpectedVersion,
+  shouldAcceptRecalcDraftQueue,
+} from "@/lib/recalcDraftSave";
+import {
   buildOffSnapshot,
   isUsableOffSnapshot,
   offCaddyIdsFromAvailability,
@@ -477,6 +481,7 @@ export default function ManageAssignmentsOpsPage() {
   const persistGenRef = useRef(0);
   const dateRef = useRef(date);
   const hydratingDraftRef = useRef(false);
+  const recalcInFlightRef = useRef(false);
   const serverDraftVersionRef = useRef(0);
   const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingDraftSaveRef = useRef<AssignmentDraft | null>(null);
@@ -694,6 +699,7 @@ export default function ManageAssignmentsOpsPage() {
   const queueDraftSave = useCallback(
     (next: AssignmentDraft, immediate = false) => {
       if (hydratingDraftRef.current) return;
+      if (!shouldAcceptRecalcDraftQueue(recalcInFlightRef.current)) return;
       if (next.date !== dateRef.current) return;
       pendingDraftSaveRef.current = next;
       if (draftSaveTimerRef.current) {
@@ -1766,7 +1772,29 @@ export default function ManageAssignmentsOpsPage() {
     setLoadingRun(true);
     setRecalcNotice({ tone: "running", text: RECALC_RUNNING_LABEL });
     setError(null);
+    recalcInFlightRef.current = true;
     try {
+      const discardObsoletePending = () => {
+        pendingDraftSaveRef.current = null;
+        if (draftSaveTimerRef.current) {
+          clearTimeout(draftSaveTimerRef.current);
+          draftSaveTimerRef.current = null;
+        }
+      };
+      const prep = await prepareRecalcDraftExpectedVersion({
+        discardObsoletePending,
+        flushOwnSaves: flushDraftSave,
+        getCachedVersion: () => serverDraftVersionRef.current,
+      });
+      if (!prep.ok) {
+        failRecalc(
+          prep.reason === "conflict"
+            ? DRAFT_VERSION_CONFLICT_MESSAGE
+            : RECALC_SAVE_FAILED_MESSAGE
+        );
+        return;
+      }
+
       let caddyPool = pool;
       if (!availability && current?.caddyPool?.length) {
         caddyPool = current.caddyPool;
@@ -1800,9 +1828,22 @@ export default function ManageAssignmentsOpsPage() {
       const next = isUsableOffSnapshot(offSnapshotRef.current, created.date)
         ? { ...created, offSnapshot: offSnapshotRef.current }
         : created;
+      const prepAfterPreview = await prepareRecalcDraftExpectedVersion({
+        discardObsoletePending,
+        flushOwnSaves: flushDraftSave,
+        getCachedVersion: () => serverDraftVersionRef.current,
+      });
+      if (!prepAfterPreview.ok) {
+        failRecalc(
+          prepAfterPreview.reason === "conflict"
+            ? DRAFT_VERSION_CONFLICT_MESSAGE
+            : RECALC_SAVE_FAILED_MESSAGE
+        );
+        return;
+      }
       const { res: saveRes, data: saveData } = await putAssignmentDraft(
         next,
-        serverDraftVersionRef.current
+        prepAfterPreview.expectedVersion
       );
       if (saveRes.status === 409 || saveData.code === DRAFT_VERSION_CONFLICT) {
         failRecalc(DRAFT_VERSION_CONFLICT_MESSAGE);
@@ -1837,6 +1878,7 @@ export default function ManageAssignmentsOpsPage() {
     } catch (e: unknown) {
       failRecalc(e instanceof Error ? e.message : "자동배치 요청 실패");
     } finally {
+      recalcInFlightRef.current = false;
       setLoadingRun(false);
     }
   }

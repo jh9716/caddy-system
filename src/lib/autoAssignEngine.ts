@@ -4664,7 +4664,7 @@ function freezeBeforeShiftFromEvents(
       minRank = Math.min(
         minRank,
         shiftRank(
-          removeCaddyEffectiveFromShift(previous, event.caddyId, event.fromShift)
+          removeCaddyEffectiveFromShift(event.fromShift)
         )
       );
       continue;
@@ -4971,38 +4971,12 @@ function refillFrozenThirdHouseLeftover(input: {
   return { assignments, sparesByShift };
 }
 
-function regularHouseConsumeCount(
-  previous: AutoAssignResultV1,
-  shift: ShiftPart,
-  caddyId: number
-): number {
-  let count = 0;
-  for (const row of previous.assignments) {
-    if (
-      row.shift === shift &&
-      row.kind === "regular" &&
-      row.caddy.id === caddyId &&
-      isHouseRegularCaddy(row.caddy)
-    ) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
 /**
- * SICK/결근은 클릭한 셀의 fromShift가 아니라
- * 기존 보드 1·2부 regular HOUSE 실소비로 유효 시작 부를 정한다.
- * 1·2부 둘 다 소비된 투대기는 종일(1부부터). 단일 2부는 기존처럼 2부부터.
+ * 병가 유효 시작 부 = 사용자가 클릭한 부.
+ * 1·2 regular HOUSE 투대기라도 2부 클릭을 1부로 승격하지 않는다.
+ * 앞선 근무는 소급 삭제하지 않는다. (54홀 / oneTwo / oneThree 는 여기 범위 밖)
  */
-function removeCaddyEffectiveFromShift(
-  previous: AutoAssignResultV1,
-  caddyId: number,
-  eventFrom?: ShiftPart
-): ShiftPart {
-  const shift1 = regularHouseConsumeCount(previous, "1부", caddyId);
-  const shift2 = regularHouseConsumeCount(previous, "2부", caddyId);
-  if (shift1 > 0 && shift2 > 0) return "1부";
+function removeCaddyEffectiveFromShift(eventFrom?: ShiftPart): ShiftPart {
   return eventFrom ?? "1부";
 }
 
@@ -5372,11 +5346,7 @@ export function reflowRegularAssignments(input: {
     if (event.type === "REMOVE_CADDY") {
       removeCount += 1;
       unavailable.set(event.caddyId, event.cause);
-      const from = removeCaddyEffectiveFromShift(
-        previous,
-        event.caddyId,
-        event.fromShift
-      );
+      const from = removeCaddyEffectiveFromShift(event.fromShift);
       unavailableFromShift.set(event.caddyId, from);
       if (from === "1부") allDayUnavailable.add(event.caddyId);
     }
