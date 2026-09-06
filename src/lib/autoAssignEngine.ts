@@ -192,6 +192,11 @@ export type AutoAssignReservation = {
   reviewReasons?: string[];
   /** 리무진카트 요청팀. 캐디가 아니라 예약 속성. */
   limousineCart?: boolean;
+  /**
+   * 하우스 요청팀 표시. 리무진과 독립.
+   * Draft JSON에만 저장. DailyReservation 컬럼/migration 없음.
+   */
+  houseRequest?: boolean;
 };
 
 /** 1부 특수근무(54홀/1·2)가 건너뛰는 앞자리 수 — 코스명 하드코딩 없음 */

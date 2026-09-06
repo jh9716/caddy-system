@@ -191,6 +191,12 @@ export const publishedBoardCss = `
   .bc-badge.two { color: #334155; background: #e2e8f0; }
   .bc-badge.call { color: #7c5a1e; background: #f4ead6; }
   .bc-badge.support { color: #1e3a8a; background: #dbeafe; }
+  .bc-badge.house {
+    color: #166534;
+    background: #dcfce7;
+    box-shadow: 0 0 0 1px #86efac;
+    font-size: 0.6rem;
+  }
   .bc-badge.limo {
     color: #9a3412;
     background: #fb923c;

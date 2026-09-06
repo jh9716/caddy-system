@@ -37,6 +37,7 @@ import {
   stableReservationMoveKeyFromId,
   summarizeReservationMove,
 } from "@/lib/reservationMove";
+import { applyHouseRequestFlag } from "@/lib/assignmentBoardDirectEdit";
 import {
   legacyCompositeReservationKey,
   reservationMatchesIdentity,
@@ -53,6 +54,7 @@ export const LIVE_CHANGE_TYPES = [
   "ASSIGN_DRIVING",
   "CLEAR_DRIVING",
   "SET_LOCK",
+  "SET_HOUSE",
   "MOVE_RESERVATION",
 ] as const;
 
@@ -69,6 +71,7 @@ export const LIVE_CHANGE_LABELS: Record<LiveChangeType, string> = {
   ASSIGN_DRIVING: "드라이빙 캐디 지정",
   CLEAR_DRIVING: "드라이빙 지정 해제",
   SET_LOCK: "LOCK 변경",
+  SET_HOUSE: "하우스 요청",
   MOVE_RESERVATION: "팀 이동",
 };
 
@@ -86,6 +89,7 @@ export const QUICK_ACTION_CONFIRM_TYPES: readonly LiveChangeType[] = [
 /** 보드에서 미리보기 없이 즉시 저장하는 Quick Action. */
 export const QUICK_ACTION_INSTANT_TYPES: readonly LiveChangeType[] = [
   "SET_LIMOUSINE",
+  "SET_HOUSE",
   "SET_LOCK",
   "SWAP_CADDY",
   "ASSIGN_DRIVING",
@@ -109,7 +113,10 @@ export const QUICK_ACTION_CONFIRM_MESSAGE = "정말 적용하시겠습니까?";
 /** 전체 날짜 delete/create 없이 patch 가능한 단순 Quick Action. */
 export function isPatchableLiveChange(type: LiveChangeType): boolean {
   return (
-    type === "SWAP_CADDY" || type === "SET_LOCK" || type === "SET_LIMOUSINE"
+    type === "SWAP_CADDY" ||
+    type === "SET_LOCK" ||
+    type === "SET_LIMOUSINE" ||
+    type === "SET_HOUSE"
   );
 }
 
@@ -135,7 +142,9 @@ export function shouldReconcileLivePersist(type: LiveChangeType): boolean {
 }
 
 export function skipsOpsRewriteOnLivePersist(type: LiveChangeType): boolean {
-  return type === "SET_LOCK" || type === "SET_LIMOUSINE";
+  return (
+    type === "SET_LOCK" || type === "SET_LIMOUSINE" || type === "SET_HOUSE"
+  );
 }
 
 /** 보드 탭/프리셋이 이 조건을 충족하면 배치 다시 맞추기 없이 preview 계산. */
@@ -159,6 +168,7 @@ export function isLiveChangeReady(
         change.reservationKeyA !== change.reservationKeyB
       );
     case "SET_LIMOUSINE":
+    case "SET_HOUSE":
     case "CLEAR_DRIVING":
     case "SET_LOCK":
       return !!change.reservationKey || change.reservationId != null;
@@ -189,6 +199,7 @@ export type LiveChangeInput = {
   reservationKeyB?: string;
   addReservation?: AutoAssignReservation;
   limousineCart?: boolean;
+  houseRequest?: boolean;
   locked?: boolean;
   note?: string | null;
   to?: {
@@ -393,6 +404,42 @@ export function previewLiveAssignmentChange(input: {
   change: LiveChangeInput;
   specialSupportByShift?: Record<ShiftPart, AutoAssignCaddy[]>;
 }): LiveChangePreview {
+  if (input.change.type === "SET_HOUSE") {
+    const key =
+      String(input.change.reservationKey || "").trim() ||
+      (input.change.reservationId != null
+        ? `id:${input.change.reservationId}`
+        : "");
+    const after = applyHouseRequestFlag(
+      input.previous,
+      key,
+      input.change.houseRequest === true
+    );
+    return {
+      date: input.previous.date,
+      reason: "HOUSE_REQUEST_SET",
+      before: input.previous,
+      after,
+      changes: [],
+      placementDiffs: [],
+      lockedPreserved: [],
+      warnings: [],
+      unavailableCaddyIds: [],
+      summary: {
+        movedBackward: 0,
+        movedForward: 0,
+        unchanged: input.previous.assignments.length,
+        newlyAssigned: 0,
+        becameUnassigned: 0,
+        specialPreserved: 0,
+        pulledCount: 0,
+        pushedCount: 0,
+        lockedPreservedCount: 0,
+      },
+      changeType: "SET_HOUSE",
+      events: [],
+    };
+  }
   const events = eventsFromLiveChange(input.change);
   const reflow = reflowRegularAssignments({
     previous: input.previous,
@@ -957,6 +1004,7 @@ async function tryPatchLiveDay(
 ): Promise<boolean> {
   // 예약취소/노쇼/병가/결근은 1–2 row patch 금지. reflow persist만 허용.
   if (isSequenceReflowLiveChange(plan.changeType)) return false;
+  if (plan.changeType === "SET_HOUSE") return true;
   if (!isPatchableLiveChange(plan.changeType)) return false;
   const existing = await tx.dailyReservation.count({
     where: { date: plan.dateObj },

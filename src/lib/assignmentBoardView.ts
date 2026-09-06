@@ -85,6 +85,7 @@ export type BoardAssignmentMarks = {
   chageun: boolean;
   specialSupport: boolean;
   limousine: boolean;
+  houseRequest: boolean;
   driving: boolean;
 };
 
@@ -97,6 +98,7 @@ export function boardAssignmentMarks(
     chageun: isChageunAssignment(row),
     specialSupport: isSpecialSupportAssignment(row),
     limousine: row.reservation?.limousineCart === true,
+    houseRequest: row.reservation?.houseRequest === true,
     driving: row.kind === "driving",
   };
 }
