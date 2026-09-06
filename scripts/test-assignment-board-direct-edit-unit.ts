@@ -10,7 +10,9 @@ import {
   isHouseRequest,
 } from "../src/lib/assignmentBoardDirectEdit";
 import {
+  applyLiveAssignmentChange,
   eventsFromLiveChange,
+  isDraftOnlyLiveChange,
   isInstantQuickAction,
   isPatchableLiveChange,
   isSequenceReflowLiveChange,
@@ -186,6 +188,8 @@ console.log("== HOUSE + LIMOUSINE flags ==");
   assert(isInstantQuickAction("SET_HOUSE"), "HOUSE is instant");
   assert(isPatchableLiveChange("SET_HOUSE"), "HOUSE is patchable/draft-only");
   assert(!isSequenceReflowLiveChange("SET_HOUSE"), "HOUSE no reflow");
+  assert(isDraftOnlyLiveChange("SET_HOUSE"), "HOUSE draft-only persist");
+  assert(!isDraftOnlyLiveChange("SET_LIMOUSINE"), "LIMO still uses apply");
 }
 
 console.log("== SWAP A↔B only ==");
@@ -291,8 +295,34 @@ console.log("== UI source: cell menus ==");
   assert(/캐디 맞교환/.test(caddyBlock) && /CADDY_SICK/.test(caddyBlock), "swap + sick");
   assert(/CADDY_ATTENDANCE_NOSHOW/.test(caddyBlock) && /SET_LOCK/.test(caddyBlock), "absent + lock");
   assert(/UnavailablePanel/.test(page), "unavailable panel mounted");
+  assert(/opsDuties:\s*opsDutyStored/.test(page), "unavailable panel gets opsDuties");
+  assert(/isDraftOnlyLiveChange/.test(page), "HOUSE skips apply persist");
   assert(/autoAssignEngine/.test(fs.readFileSync(path.resolve("src/lib/assignmentBoardDirectEdit.ts"), "utf8")), "helper imports types only");
 }
 
-console.log(`\nDONE: ${passed} passed, ${failed} failed`);
-if (failed > 0) process.exit(1);
+console.log("== SET_HOUSE apply empty events ==");
+void applyLiveAssignmentChange({
+  previous: base,
+  regularCaddyPool: pool,
+  changeType: "SET_HOUSE",
+  events: [],
+  change: {
+    type: "SET_HOUSE",
+    reservationKey: reservationKey(a),
+    houseRequest: true,
+  },
+}).then((applied) => {
+  assert(applied.ok, "SET_HOUSE apply does not EMPTY_EVENTS");
+  if (applied.ok) {
+    assert(applied.preview.changeType === "SET_HOUSE", "apply returns HOUSE preview");
+    assert(
+      applied.preview.after.assignments[0]?.reservation.houseRequest === true,
+      "HOUSE remains after apply"
+    );
+  }
+  console.log(`\nDONE: ${passed} passed, ${failed} failed`);
+  if (failed > 0) process.exit(1);
+}).catch((err) => {
+  console.error("  ✗ SET_HOUSE apply threw", err);
+  process.exit(1);
+});

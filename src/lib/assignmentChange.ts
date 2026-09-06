@@ -147,6 +147,11 @@ export function skipsOpsRewriteOnLivePersist(type: LiveChangeType): boolean {
   );
 }
 
+/** HOUSE는 DailyReservation 컬럼이 없어 apply API/이력 enum write 없이 Draft JSON만 저장. */
+export function isDraftOnlyLiveChange(type: LiveChangeType): boolean {
+  return type === "SET_HOUSE";
+}
+
 /** 보드 탭/프리셋이 이 조건을 충족하면 배치 다시 맞추기 없이 preview 계산. */
 export function isLiveChangeReady(
   change: LiveChangeInput | null | undefined
@@ -787,7 +792,7 @@ function mapUnavailableReason(
 }
 
 function mapChangeType(
-  type: Exclude<LiveChangeType, "SET_LOCK">
+  type: Exclude<LiveChangeType, "SET_LOCK" | "SET_HOUSE">
 ):
   | "CANCEL_RESERVATION"
   | "TEAM_NOSHOW"
@@ -1169,11 +1174,14 @@ export async function writeLiveChangePlan(
       }
 
       let changeId: number;
-      if (plan.changeType === "SET_LOCK") {
+      if (plan.changeType === "SET_LOCK" || plan.changeType === "SET_HOUSE") {
         const audit = await tx.audit.create({
           data: {
-            action: "ASSIGNMENTS_SET_LOCK",
-            entity: "DailyPlacement",
+            action:
+              plan.changeType === "SET_HOUSE"
+                ? "ASSIGNMENTS_SET_HOUSE"
+                : "ASSIGNMENTS_SET_LOCK",
+            entity: plan.changeType === "SET_HOUSE" ? "DailyBoardDraft" : "DailyPlacement",
             entityId: 0,
             ip: opts.ip || null,
             payload: {
@@ -1278,6 +1286,32 @@ export async function applyLiveAssignmentChange(
     memory?: LiveChangeMemoryStore;
   } = {}
 ): Promise<ApplyLiveChangeResult> {
+  const changeType = input.changeType || input.change?.type;
+  if (changeType === "SET_HOUSE") {
+    const change =
+      input.change?.type === "SET_HOUSE"
+        ? input.change
+        : {
+            type: "SET_HOUSE" as const,
+            reservationKey: input.change?.reservationKey,
+            reservationId: input.change?.reservationId,
+            houseRequest: input.change?.houseRequest === true,
+          };
+    const preview = previewLiveAssignmentChange({
+      previous: input.previous,
+      regularCaddyPool: input.regularCaddyPool,
+      change,
+      specialSupportByShift: input.specialSupportByShift,
+    });
+    return {
+      ok: true,
+      changeId: 0,
+      date: preview.date,
+      opsUpdated: false,
+      preview,
+      timings: { computeMs: 0, persistMs: 0 },
+    };
+  }
   const events =
     input.events ||
     (input.change ? eventsFromLiveChange(input.change) : []);

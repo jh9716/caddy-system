@@ -104,6 +104,7 @@ import {
   QUICK_ACTION_CONFIRM_MESSAGE,
   changeFromEmptyBoardCell,
   hasBlockingLiveChangeError,
+  isDraftOnlyLiveChange,
   needsQuickActionConfirm,
   previewLiveChangeFromDraft,
   shouldReconcileLivePersist,
@@ -391,6 +392,12 @@ export default function ManageAssignmentsOpsPage() {
     count: number;
     byRole?: Record<string, number>;
     caddyIds: number[];
+    rows?: Array<{
+      caddyId: number;
+      name?: string;
+      team?: string;
+      role?: string;
+    }>;
   } | null>(null);
   const [opsDutyPreview, setOpsDutyPreview] = useState<{
     matchedCount: number;
@@ -852,6 +859,7 @@ export default function ManageAssignmentsOpsPage() {
             : Array.isArray(data.rows)
               ? data.rows.map((r: { caddyId: number }) => r.caddyId)
               : [],
+          rows: Array.isArray(data.rows) ? data.rows : [],
         });
       } catch {
         if (!cancelled) setOpsDutyStored(null);
@@ -1228,6 +1236,7 @@ export default function ManageAssignmentsOpsPage() {
           count: prev?.count ?? dutyIds.length,
           byRole: prev?.byRole,
           caddyIds: dutyIds,
+          rows: prev?.rows,
         }));
       }
       const sync = (
@@ -1265,11 +1274,12 @@ export default function ManageAssignmentsOpsPage() {
       const finalAvailable =
         Number(data.dailySummary?.finalAvailable ?? data.counts?.available ?? 0);
       if (sync?.status === "synced") {
-        setOpsDutyStored({
+        setOpsDutyStored((prev) => ({
           count: Number(sync.savedCount) || dutyIds.length,
           byRole: sync.byRole,
           caddyIds: Array.isArray(sync.caddyIds) ? sync.caddyIds : dutyIds,
-        });
+          rows: prev?.rows,
+        }));
         const text = `${sync.message} · 최종 가용 ${finalAvailable}명`;
         setOpsDutySyncNotice({ tone: "ok", text });
         showToast(text);
@@ -1413,6 +1423,7 @@ export default function ManageAssignmentsOpsPage() {
         caddyIds: Array.isArray(data.saved)
           ? data.saved.map((r: { caddyId: number }) => r.caddyId)
           : [],
+        rows: Array.isArray(data.saved) ? data.saved : [],
       });
       setOpsDutyPreview(null);
       showToast(`당번·마샬·조장 일정 ${data.savedCount}명 저장`);
@@ -1544,6 +1555,7 @@ export default function ManageAssignmentsOpsPage() {
         caddyIds: Array.isArray(data.saved)
           ? data.saved.map((r: { caddyId: number }) => r.caddyId)
           : [],
+        rows: Array.isArray(data.saved) ? data.saved : [],
       });
       setOpsDutySheetPreview(null);
       showToast(`운영배치 ${data.savedCount}명 적용`);
@@ -2570,6 +2582,7 @@ export default function ManageAssignmentsOpsPage() {
     failToast?: string;
     applyServerDraft?: boolean;
     rollbackDraft?: AssignmentDraft | null;
+    change?: LiveChangeInput;
   }): Promise<boolean> {
     setError(null);
     const failToast =
@@ -2580,27 +2593,36 @@ export default function ManageAssignmentsOpsPage() {
       setWarnings(detectDraftWarnings(input.rollbackDraft));
     };
     try {
-      const res = await fetch("/api/assignments/reflow/apply", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          previous: input.previous,
-          regularCaddyPool: input.pool,
-          events: input.preview.events,
-          changeType: input.preview.changeType,
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        rollbackOptimistic();
-        setError(
-          data.error ||
-            data.message ||
-            "배치 저장 중 오류가 발생했습니다. 다시 시도해주세요."
-        );
-        showToast(failToast);
-        return false;
+      const draftOnly =
+        input.preview.changeType != null &&
+        isDraftOnlyLiveChange(input.preview.changeType);
+      const data: { preview?: LiveChangePreview; error?: string; message?: string } =
+        draftOnly ? { preview: input.preview } : {};
+      if (!draftOnly) {
+        const res = await fetch("/api/assignments/reflow/apply", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            previous: input.previous,
+            regularCaddyPool: input.pool,
+            events: input.preview.events,
+            changeType: input.preview.changeType,
+            change: input.change,
+          }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          rollbackOptimistic();
+          setError(
+            body.error ||
+              body.message ||
+              "배치 저장 중 오류가 발생했습니다. 다시 시도해주세요."
+          );
+          showToast(failToast);
+          return false;
+        }
+        Object.assign(data, body);
       }
       let savedDraft: AssignmentDraft | null = null;
       if (input.applyServerDraft !== false) {
@@ -2721,6 +2743,7 @@ export default function ManageAssignmentsOpsPage() {
         pool: livePool,
         applyServerDraft: shouldReconcileLivePersist(change.type),
         rollbackDraft: current,
+        change,
       });
       if (!ok) persistGenRef.current += 1;
     });
@@ -2811,9 +2834,10 @@ export default function ManageAssignmentsOpsPage() {
     () =>
       buildUnavailablePanelGroups({
         excluded: availability?.excluded,
+        opsDuties: opsDutyStored?.rows,
         specialSupportByShift,
       }),
-    [availability?.excluded, specialSupportByShift]
+    [availability?.excluded, opsDutyStored?.rows, specialSupportByShift]
   );
 
   const moveSourceRow = useMemo(() => {
