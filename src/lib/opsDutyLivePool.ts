@@ -36,6 +36,7 @@ export async function resolveCanonicalLivePool(
     computePool: pool || [],
     rosterBaseline: pool || [],
     unavailableIds: [],
+    unavailableFromShift: [],
     opsDutyIds: [],
     specialSkipIds: [],
     offSheetMatched: false,

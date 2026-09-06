@@ -60,6 +60,8 @@ import {
 } from "@/lib/offSnapshot";
 import {
   overlayUnavailableIdsKeepingPlaced,
+  overlayUnavailableKeepingShift,
+  parseUnavailableFromShift,
   placedCaddyIdsFromBoard,
   snapshotComputePool,
 } from "@/lib/caddyPoolCanonical";
@@ -128,10 +130,13 @@ export async function applyQuickBoardMutation(input: {
   let computePool = input.regularCaddyPool;
   let rosterBaseline = input.regularCaddyPool;
   let storedUnavailable: number[] = [];
+  let storedUnavailableFromShift: CanonicalReflowState["unavailableFromShift"] =
+    [];
   if (input.skipCanonicalReload && input.canonical) {
     computePool = input.canonical.computePool;
     rosterBaseline = input.canonical.rosterBaseline;
     storedUnavailable = input.canonical.unavailableIds;
+    storedUnavailableFromShift = input.canonical.unavailableFromShift || [];
   } else {
     const offSnapshot = parseOffSnapshot(
       (input.draft.payload as { offSnapshot?: unknown } | undefined)?.offSnapshot
@@ -154,6 +159,7 @@ export async function applyQuickBoardMutation(input: {
       computePool = canonical.computePool;
       rosterBaseline = canonical.rosterBaseline;
       storedUnavailable = canonical.unavailableIds;
+      storedUnavailableFromShift = canonical.unavailableFromShift || [];
     } catch (error) {
       if (isOffSheetUnresolvedError(error) || isOffSnapshotRequiredError(error)) {
         return {
@@ -163,15 +169,18 @@ export async function applyQuickBoardMutation(input: {
           message: error.message,
         };
       }
-      storedUnavailable =
+      const fallbackRows =
         typeof db.dailyCaddyUnavailable?.findMany === "function"
-          ? (
-              await db.dailyCaddyUnavailable.findMany({
-                where: { date: parseYmd(input.previous.date).start },
-                select: { caddyId: true },
-              })
-            ).map((row) => Number(row.caddyId))
+          ? await db.dailyCaddyUnavailable.findMany({
+              where: { date: parseYmd(input.previous.date).start },
+              select: { caddyId: true, effectiveFromShift: true },
+            })
           : [];
+      storedUnavailable = fallbackRows.map((row) => Number(row.caddyId));
+      storedUnavailableFromShift = fallbackRows.map((row) => ({
+        caddyId: Number(row.caddyId),
+        effectiveFromShift: parseUnavailableFromShift(row.effectiveFromShift),
+      }));
     }
   }
   const placed = placedCaddyIds(input.previous);
@@ -179,9 +188,17 @@ export async function applyQuickBoardMutation(input: {
     dailyUnavailableIds: storedUnavailable,
     placedIds: placed,
   });
+  const overlayFromShift = overlayUnavailableKeepingShift({
+    dailyUnavailable:
+      storedUnavailableFromShift.length > 0
+        ? storedUnavailableFromShift
+        : storedUnavailable,
+    placedIds: placed,
+  });
   const previous = {
     ...input.previous,
-    unavailableCaddyIds: overlayUnavail,
+    unavailableCaddyIds: overlayFromShift.map((row) => row.caddyId),
+    unavailableFromShift: overlayFromShift,
   };
   const persistPool = snapshotComputePool({
     rosterBaseline: rosterBaseline.length ? rosterBaseline : computePool,
@@ -235,6 +252,10 @@ export async function applyQuickBoardMutation(input: {
       ...(preview.unavailableCaddyIds.length > 0
         ? { unavailableCaddyIds: preview.unavailableCaddyIds }
         : { unavailableCaddyIds: [] }),
+      ...(preview.after.unavailableFromShift &&
+      preview.after.unavailableFromShift.length > 0
+        ? { unavailableFromShift: preview.after.unavailableFromShift }
+        : {}),
     };
   } catch (e) {
     return {

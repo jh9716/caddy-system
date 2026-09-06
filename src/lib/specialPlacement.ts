@@ -37,6 +37,7 @@ export type Shift1SpecialWindowOk = {
   R: number;
   A: number;
   B: number;
+  S: number;
   neededCount: number;
   availableCount: number;
   specialStart: number;
@@ -45,6 +46,8 @@ export type Shift1SpecialWindowOk = {
   oneThreeEnd: number | null;
   oneMakStart: number | null;
   oneMakEnd: number | null;
+  supportStart: number | null;
+  supportEnd: number | null;
 };
 
 export type Shift1SpecialWindowFail = {
@@ -54,6 +57,7 @@ export type Shift1SpecialWindowFail = {
   R: number;
   A: number;
   B: number;
+  S: number;
   neededCount: number;
   availableCount: number;
   message: string;
@@ -138,13 +142,15 @@ export function computeShift1SpecialWindow(input: {
   R: number;
   A: number;
   B: number;
+  S?: number;
 }): Shift1SpecialWindow {
   const N = Math.max(0, Math.floor(Number(input.N) || 0));
   // 공식은 R>=0 정수를 그대로 쓴다. 0~20 제한은 저장/API 전용.
   const R = rawNonNegativeInt(input.R, PROTECTED_TAIL_COUNT_DEFAULT);
   const A = Math.max(0, Math.floor(Number(input.A) || 0));
   const B = Math.max(0, Math.floor(Number(input.B) || 0));
-  const neededCount = A + B;
+  const S = Math.max(0, Math.floor(Number(input.S) || 0));
+  const neededCount = A + B + S;
   const availableCount = Math.max(0, N - R);
   if (neededCount === 0) {
     return {
@@ -153,6 +159,7 @@ export function computeShift1SpecialWindow(input: {
       R,
       A,
       B,
+      S,
       neededCount: 0,
       availableCount,
       specialStart: availableCount + 1,
@@ -161,6 +168,8 @@ export function computeShift1SpecialWindow(input: {
       oneThreeEnd: null,
       oneMakStart: null,
       oneMakEnd: null,
+      supportStart: null,
+      supportEnd: null,
     };
   }
   if (neededCount > availableCount) {
@@ -171,9 +180,13 @@ export function computeShift1SpecialWindow(input: {
       R,
       A,
       B,
+      S,
       neededCount,
       availableCount,
-      message: `1·3부/1막 ${neededCount}명을 넣을 1부 자리가 ${availableCount}칸뿐입니다 (1부 ${N}팀, 끝 ${R}팀 제외).`,
+      message:
+        S > 0
+          ? `1·3부/1막/특수지원 ${neededCount}명을 넣을 1부 자리가 ${availableCount}칸뿐입니다 (1부 ${N}팀, 끝 ${R}팀 제외).`
+          : `1·3부/1막 ${neededCount}명을 넣을 1부 자리가 ${availableCount}칸뿐입니다 (1부 ${N}팀, 끝 ${R}팀 제외).`,
     };
   }
   const specialEnd = N - R;
@@ -184,6 +197,7 @@ export function computeShift1SpecialWindow(input: {
     R,
     A,
     B,
+    S,
     neededCount,
     availableCount,
     specialStart,
@@ -192,6 +206,8 @@ export function computeShift1SpecialWindow(input: {
     oneThreeEnd: A > 0 ? specialStart + A - 1 : null,
     oneMakStart: B > 0 ? specialStart + A : null,
     oneMakEnd: B > 0 ? specialStart + A + B - 1 : null,
+    supportStart: S > 0 ? specialStart + A + B : null,
+    supportEnd: S > 0 ? specialStart + A + B + S - 1 : null,
   };
 }
 

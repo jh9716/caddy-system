@@ -16,6 +16,7 @@ import type {
   AutoAssignmentRow,
   SpareByShift,
   UnassignedReservationRow,
+  UnavailableFromShiftRow,
 } from "@/lib/autoAssignEngine";
 import { ensureReservationUid } from "@/lib/reservationIdentity";
 import {
@@ -65,6 +66,8 @@ export type DailyBoardDraftPayloadV1 = {
   thirdStartCaddyId?: number;
   /** optional: 병가/결근 캐디. legacy payload에는 없음. */
   unavailableCaddyIds?: number[];
+  /** optional: 병가 유효 시작 부. legacy payload에는 없음. */
+  unavailableFromShift?: UnavailableFromShiftRow[];
   /** optional: 검증된 날짜 휴무. legacy payload에는 없음. migration 없음. */
   offSnapshot?: DraftOffSnapshot;
   confirmedAt: string | null;
@@ -151,6 +154,22 @@ export function assignmentDraftToPayload(
             .filter((id) => Number.isInteger(id) && id > 0),
         }
       : {}),
+    ...(Array.isArray(draft.unavailableFromShift) &&
+    draft.unavailableFromShift.length > 0
+      ? {
+          unavailableFromShift: draft.unavailableFromShift
+            .filter(
+              (row) =>
+                Number.isInteger(Number(row?.caddyId)) &&
+                Number(row.caddyId) > 0 &&
+                SHIFT_PARTS.includes(row.effectiveFromShift)
+            )
+            .map((row) => ({
+              caddyId: Number(row.caddyId),
+              effectiveFromShift: row.effectiveFromShift,
+            })),
+        }
+      : {}),
     ...(isUsableOffSnapshot(draft.offSnapshot, draft.date)
       ? { offSnapshot: draft.offSnapshot }
       : {}),
@@ -180,6 +199,14 @@ export function payloadToAssignmentDraft(
       : {}),
     ...(payload.unavailableCaddyIds?.length
       ? { unavailableCaddyIds: [...payload.unavailableCaddyIds] }
+      : {}),
+    ...(payload.unavailableFromShift?.length
+      ? {
+          unavailableFromShift: payload.unavailableFromShift.map((row) => ({
+            caddyId: row.caddyId,
+            effectiveFromShift: row.effectiveFromShift,
+          })),
+        }
       : {}),
     ...(isUsableOffSnapshot(payload.offSnapshot, payload.date)
       ? { offSnapshot: payload.offSnapshot }
@@ -452,6 +479,24 @@ export function parseDailyBoardDraftPayload(
           unavailableCaddyIds: o.unavailableCaddyIds.map((id, i) =>
             asFiniteInt(id, `unavailableCaddyIds[${i}]`)
           ),
+        }
+      : {}),
+    ...(Array.isArray(o.unavailableFromShift)
+      ? {
+          unavailableFromShift: o.unavailableFromShift
+            .map((raw, i) => {
+              const row = asRecord(raw, `unavailableFromShift[${i}]`);
+              const shift = String(row.effectiveFromShift ?? "");
+              if (!SHIFT_PARTS.includes(shift as ShiftPart)) return null;
+              return {
+                caddyId: asFiniteInt(
+                  row.caddyId,
+                  `unavailableFromShift[${i}].caddyId`
+                ),
+                effectiveFromShift: shift as ShiftPart,
+              };
+            })
+            .filter((row): row is UnavailableFromShiftRow => row != null),
         }
       : {}),
     ...(isUsableOffSnapshot(offSnapshot, expectedDate)

@@ -6,10 +6,12 @@
 
 import {
   eligibleRegularReflowCaddies,
+  parseAssignShiftPart,
   regularCaddyPoolFromAvailabilityRows,
   splitCaddyPools,
   type AutoAssignCaddy,
   type SpareByShift,
+  type UnavailableFromShiftRow,
 } from "@/lib/autoAssignEngine";
 import {
   isInactiveEmploymentAvailability,
@@ -134,10 +136,104 @@ export function placedCaddyIdsFromBoard(input: {
   return ids;
 }
 
+export function parseUnavailableFromShift(value: unknown): ShiftPart {
+  return parseAssignShiftPart(value) ?? "1부";
+}
+
+export function toUnavailableShiftEntries(
+  rows:
+    | Iterable<
+        | UnavailableFromShiftRow
+        | { caddyId?: unknown; effectiveFromShift?: unknown }
+        | number
+        | null
+        | undefined
+      >
+    | null
+    | undefined
+): UnavailableFromShiftRow[] {
+  const out: UnavailableFromShiftRow[] = [];
+  const seen = new Set<number>();
+  for (const raw of rows || []) {
+    if (raw == null) continue;
+    let id: number;
+    let from: ShiftPart;
+    if (typeof raw === "object") {
+      id = Number(raw.caddyId);
+      from = parseUnavailableFromShift(raw.effectiveFromShift);
+    } else {
+      id = Number(raw);
+      from = "1부";
+    }
+    if (!Number.isInteger(id) || id < 1 || seen.has(id)) continue;
+    seen.add(id);
+    out.push({ caddyId: id, effectiveFromShift: from });
+  }
+  return out;
+}
+
+export function mergeUnavailableShiftEntries(
+  ...groups: Array<
+    | Iterable<
+        | UnavailableFromShiftRow
+        | { caddyId?: unknown; effectiveFromShift?: unknown }
+        | number
+        | null
+        | undefined
+      >
+    | null
+    | undefined
+  >
+): UnavailableFromShiftRow[] {
+  const byId = new Map<number, ShiftPart>();
+  for (const group of groups) {
+    for (const row of toUnavailableShiftEntries(group)) {
+      byId.set(row.caddyId, row.effectiveFromShift);
+    }
+  }
+  return [...byId.entries()].map(([caddyId, effectiveFromShift]) => ({
+    caddyId,
+    effectiveFromShift,
+  }));
+}
+
+/**
+ * Shift-aware leftover overlay.
+ * All-day (1부) leftover still painted must not pull HOUSE forward.
+ * Partial sick (2부/3부) stays unavailable from that shift even if still
+ * placed on an earlier shift.
+ */
+export function overlayUnavailableKeepingShift(input: {
+  dailyUnavailable?: Iterable<
+    | UnavailableFromShiftRow
+    | { caddyId?: unknown; effectiveFromShift?: unknown }
+    | number
+    | null
+    | undefined
+  > | null;
+  pendingRemove?: Iterable<
+    | UnavailableFromShiftRow
+    | { caddyId?: unknown; effectiveFromShift?: unknown }
+    | number
+    | null
+    | undefined
+  > | null;
+  placedIds: Iterable<unknown>;
+}): UnavailableFromShiftRow[] {
+  const placed = new Set(uniquePositiveIds(input.placedIds));
+  return mergeUnavailableShiftEntries(
+    input.dailyUnavailable,
+    input.pendingRemove
+  ).filter(
+    (row) => !(placed.has(row.caddyId) && row.effectiveFromShift === "1부")
+  );
+}
+
 /**
  * Live DailyCaddyUnavailable overlay for click/persist reflow.
  * Still-placed HOUSE stay on the board; leftover live SICK rows do not
  * pull-forward until a REMOVE_CADDY event (this click / pending intents).
+ * ID-only input is all-day (1부): still-placed ids are dropped.
  */
 export function overlayUnavailableIdsKeepingPlaced(input: {
   dailyUnavailableIds?: Iterable<unknown>;

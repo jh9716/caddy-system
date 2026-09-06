@@ -602,6 +602,12 @@ export function buildLiveChangePersistPlan(
   );
 
   const unavailables: PersistUnavailableRow[] = [];
+  const fromById = new Map(
+    (preview.after.unavailableFromShift || []).map((row) => [
+      row.caddyId,
+      row.effectiveFromShift,
+    ])
+  );
   for (const event of preview.events) {
     if (event.type !== "REMOVE_CADDY") continue;
     unavailables.push({
@@ -609,7 +615,9 @@ export function buildLiveChangePersistPlan(
       reason: event.cause,
       note: event.note ?? null,
       effectiveFromShift:
-        event.cause === "SICK" ? event.fromShift ?? "1부" : null,
+        event.cause === "SICK"
+          ? fromById.get(event.caddyId) ?? event.fromShift ?? "1부"
+          : null,
     });
   }
 

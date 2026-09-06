@@ -7,7 +7,7 @@ import {
   DRAFT_VERSION_CONFLICT,
   DRAFT_VERSION_CONFLICT_MESSAGE,
   getDailyBoardDraft,
-  listUnavailableCaddyIds,
+  listUnavailableFromShift,
   resetDailyBoardDraft,
   saveDailyBoardDraft,
 } from "@/lib/dailyBoardDraftService";
@@ -40,11 +40,17 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "date=YYYY-MM-DD 필요" }, { status: 400 });
   }
   try {
-    const [draft, unavailableCaddyIds] = await Promise.all([
+    const [draft, unavailableFromShift] = await Promise.all([
       getDailyBoardDraft(date),
-      listUnavailableCaddyIds(date),
+      listUnavailableFromShift(date),
     ]);
-    return NextResponse.json({ ok: true, date, draft, unavailableCaddyIds });
+    return NextResponse.json({
+      ok: true,
+      date,
+      draft,
+      unavailableCaddyIds: unavailableFromShift.map((row) => row.caddyId),
+      unavailableFromShift,
+    });
   } catch (e: unknown) {
     if (e instanceof DailyBoardDraftPayloadError) {
       return NextResponse.json({ error: e.message, code: e.code }, { status: 400 });

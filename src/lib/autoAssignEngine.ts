@@ -47,7 +47,10 @@ import {
 import {
   emptySpecialSupportByShift,
   filterSupportQueueForShift,
+  isReservedSupportTailSlot,
   pickNextSpecialSupport,
+  specialSupportCaddyIds,
+  unusedSupportCount,
 } from "@/lib/dailySpecialSupport";
 
 /** 배치/표시용 코스 고정 순서 */
@@ -261,6 +264,11 @@ export type SpareByShift = {
   spare2: SpareCaddyInfo | null;
 };
 
+export type UnavailableFromShiftRow = {
+  caddyId: number;
+  effectiveFromShift: ShiftPart;
+};
+
 export type AutoAssignResultV1 = {
   date: string;
   /** 전체 배치 (고정/찾근 + 54홀 + 1·3부 + 1·2부 + 일반) */
@@ -285,7 +293,7 @@ export type AutoAssignResultV1 = {
   openCourses: CourseCode[];
   /** 부별 HOUSE 스페어1·2 (대기, 예약 row 아님) */
   sparesByShift: SpareByShift[];
-  /** 특수지원 보충 큐. 정상 HOUSE/THIRD 순번과 분리. */
+  /** 부별 특수지원 큐. 정상 HOUSE/THIRD 순번과 분리. 해당 부 capacity 안에 포함. */
   specialSupportByShift?: Record<ShiftPart, AutoAssignCaddy[]>;
   meta: {
     availableCount: number;
@@ -330,6 +338,8 @@ export type AutoAssignResultV1 = {
   specialPlacement?: SpecialPlacementState;
   /** 이미 병가/결근 처리된 캐디. 이후 MOVE/reflow가 다시 넣으면 안 된다. */
   unavailableCaddyIds?: number[];
+  /** 병가 유효 시작 부. 없으면 unavailableCaddyIds는 종일(1부)로 해석. */
+  unavailableFromShift?: UnavailableFromShiftRow[];
 };
 
 export type SpecialPlacementState = {
@@ -343,6 +353,8 @@ export type SpecialPlacementState = {
     oneThreeEnd: number | null;
     oneMakStart: number | null;
     oneMakEnd: number | null;
+    supportStart?: number | null;
+    supportEnd?: number | null;
   };
   block?: SpecialWindowBlock;
 };
@@ -1283,6 +1295,7 @@ export type SpecialDutySlotResult = {
   oneThreeAssignments: AutoAssignmentRow[];
   oneMakAssignments: AutoAssignmentRow[];
   weekendBandAssignments: AutoAssignmentRow[];
+  specialSupportAssignments: AutoAssignmentRow[];
   specialUnassigned: SpecialUnassignedRow[];
   remainingReservations: AutoAssignReservation[];
   assignedCaddyIds: Set<number>;
@@ -1314,6 +1327,8 @@ export function assignSpecialDutySlots(input: {
   protectedShift1Keys?: ReadonlySet<string>;
   housePoolLength: number;
   min54HoleGapMinutes?: number;
+  /** 1부 AUTO 창에 넣을 특수지원. MANUAL/다른 부는 regular sequence가 담당 */
+  specialSupport?: AutoAssignCaddy[];
 }): SpecialDutySlotResult {
   const date = input.date;
   const minGap = input.min54HoleGapMinutes ?? MIN_54HOLE_GAP_MINUTES;
@@ -1322,6 +1337,7 @@ export function assignSpecialDutySlots(input: {
   const oneTwoAssignments: AutoAssignmentRow[] = [];
   const oneThreeAssignments: AutoAssignmentRow[] = [];
   const oneMakAssignments: AutoAssignmentRow[] = [];
+  const specialSupportAssignments: AutoAssignmentRow[] = [];
   const weekendBandAssignments: AutoAssignmentRow[] = [];
   const specialUnassigned: SpecialUnassignedRow[] = [];
   const assignedCaddyIds = new Set<number>();
@@ -1486,16 +1502,39 @@ export function assignSpecialDutySlots(input: {
   };
 
   if (placementMode === "AUTO") {
+    const shift1Support = filterSupportQueueForShift({
+      queue: input.specialSupport || [],
+      shift: "1부",
+      usedInShift: [
+        ...assignedCaddyIds,
+        ...oneThree.map((caddy) => caddy.id),
+        ...oneMak.map((caddy) => caddy.id),
+      ],
+    });
     const window = computeShift1SpecialWindow({
       N: originalShift1.length,
       R: protectedTailCount,
       A: oneThree.length,
       B: oneMak.length,
+      S: shift1Support.length,
     });
+    const windowState = window.ok
+      ? {
+          N: window.N,
+          specialStart: window.specialStart,
+          specialEnd: window.specialEnd,
+          oneThreeStart: window.oneThreeStart,
+          oneThreeEnd: window.oneThreeEnd,
+          oneMakStart: window.oneMakStart,
+          oneMakEnd: window.oneMakEnd,
+          supportStart: window.supportStart,
+          supportEnd: window.supportEnd,
+        }
+      : null;
     if (!window.ok) {
       blockAllSpecialCandidates(
         specialUnassigned,
-        [...oneThree, ...oneMak],
+        [...oneThree, ...oneMak, ...shift1Support],
         REASON.SPECIAL_WINDOW_OVERFLOW
       );
       specialPlacement = {
@@ -1539,21 +1578,13 @@ export function assignSpecialDutySlots(input: {
       if (collisions.length) {
         blockAllSpecialCandidates(
           specialUnassigned,
-          [...oneThree, ...oneMak],
+          [...oneThree, ...oneMak, ...shift1Support],
           REASON.SPECIAL_WINDOW_COLLISION
         );
         specialPlacement = {
           mode: "AUTO",
           protectedTailCount,
-          window: {
-            N: window.N,
-            specialStart: window.specialStart,
-            specialEnd: window.specialEnd,
-            oneThreeStart: window.oneThreeStart,
-            oneThreeEnd: window.oneThreeEnd,
-            oneMakStart: window.oneMakStart,
-            oneMakEnd: window.oneMakEnd,
-          },
+          window: windowState || undefined,
           block: {
             code: REASON.SPECIAL_WINDOW_COLLISION,
             message: `1·3부/1막 자동 구간에 이미 다른 특수배치가 있습니다 (${collisions
@@ -1598,34 +1629,31 @@ export function assignSpecialDutySlots(input: {
           taken.push(slot);
           assignedCaddyIds.add(caddy.id);
         });
+        shift1Support.forEach((caddy, i) => {
+          const slot = target[oneThree.length + oneMak.length + i];
+          pushShift1Special(
+            specialSupportAssignments,
+            caddy,
+            slot,
+            REASON.SPECIAL_SUPPORT,
+            "specialSupport",
+            null
+          );
+          taken.push(slot);
+          assignedCaddyIds.add(caddy.id);
+        });
         remaining = withoutTaken(remaining, taken);
         specialPlacement = {
           mode: "AUTO",
           protectedTailCount,
-          window: {
-            N: window.N,
-            specialStart: window.specialStart,
-            specialEnd: window.specialEnd,
-            oneThreeStart: window.oneThreeStart,
-            oneThreeEnd: window.oneThreeEnd,
-            oneMakStart: window.oneMakStart,
-            oneMakEnd: window.oneMakEnd,
-          },
+          window: windowState || undefined,
         };
       }
     } else {
       specialPlacement = {
         mode: "AUTO",
         protectedTailCount,
-        window: {
-          N: window.N,
-          specialStart: window.specialStart,
-          specialEnd: window.specialEnd,
-          oneThreeStart: null,
-          oneThreeEnd: null,
-          oneMakStart: null,
-          oneMakEnd: null,
-        },
+        window: windowState || undefined,
       };
     }
   } else {
@@ -1775,6 +1803,7 @@ export function assignSpecialDutySlots(input: {
     oneThreeAssignments,
     oneMakAssignments,
     weekendBandAssignments,
+    specialSupportAssignments,
     specialUnassigned,
     remainingReservations: remaining.sort(compareReservationOrder),
     assignedCaddyIds,
@@ -2376,6 +2405,25 @@ export function assignOneTwoPriority(input: {
  *   (별도 HOUSE queue에서 새로 뽑지 않음. Mode A/B 동일. 순환 시 해당 3부 sequence 유지)
  * - DRIVING은 일반 순번에 섞지 않음
  */
+function specialSupportAssignmentRow(input: {
+  date: string;
+  shift: ShiftPart;
+  reservation: AutoAssignReservation;
+  caddy: AutoAssignCaddy;
+}): AutoAssignmentRow {
+  return {
+    date: input.date,
+    shift: input.shift,
+    sequenceIndex: -1,
+    reason: REASON.SPECIAL_SUPPORT,
+    reservation: input.reservation,
+    caddy: input.caddy,
+    pairId: null,
+    kind: "specialSupport",
+    locked: false,
+  };
+}
+
 export function assignRegularSequence(input: {
   date: string;
   /** 혼합 가용(하위 호환). house/third가 있으면 무시됨 */
@@ -2409,10 +2457,18 @@ export function assignRegularSequence(input: {
   /** 캐디가 빠지는 첫 부. 그 부부터 pick/spare에서 건너뛴다. */
   unavailableFromShift?: Map<number, ShiftPart>;
   /**
-   * 특수지원 보충 큐. house/third 배열에 넣지 않는다.
-   * 정상 후보가 부족할 때만 해당 부 예약을 메운다. cursor/스페어 계산에 쓰지 않는다.
+   * 특수지원 큐. house/third 배열에 넣지 않는다.
+   * 해당 부 capacity 꼬리에 넣고, 그 수만큼 정상 HOUSE 소비를 줄인다.
+   * 1부 AUTO는 assignSpecialDutySlots가 보호구간 앞에 넣으므로 큐를 비운다.
    */
   specialSupportByShift?: Record<ShiftPart, AutoAssignCaddy[]>;
+  /**
+   * 1부 AUTO 뒤 일반순번 보호 예약. 이 구간에 들어가기 직전
+   * shift1SupportHouseSkip명만큼 HOUSE 순번을 건너뛴다 (미소모는 앞쪽).
+   */
+  shift1ProtectedTailKeys?: ReadonlySet<string>;
+  /** 1부 AUTO 특수지원 인원 S. 보호구간 앞 HOUSE skip 횟수 */
+  shift1SupportHouseSkip?: number;
   /**
    * 이미 다른 파이프라인(고정/1막/1·2/1·3/54홀)에서 배치된 캐디.
    * usedInShift에만 넣고 이 함수 결과 row로는 다시 내보내지 않는다.
@@ -2429,6 +2485,7 @@ export function assignRegularSequence(input: {
   >;
   sparesByShift: SpareByShift[];
 } {
+  const supportIds = specialSupportCaddyIds(input.specialSupportByShift);
   const pools =
     input.house != null
       ? {
@@ -2437,6 +2494,8 @@ export function assignRegularSequence(input: {
           driving: [] as AutoAssignCaddy[],
         }
       : splitCaddyPools(input.available || []);
+  pools.house = pools.house.filter((caddy) => !supportIds.has(caddy.id));
+  pools.third = pools.third.filter((caddy) => !supportIds.has(caddy.id));
 
   const house =
     input.houseStartCaddyId != null && input.houseStartCaddyId !== undefined
@@ -2547,6 +2606,26 @@ export function assignRegularSequence(input: {
         effectiveFromShift: from,
       })),
     });
+    const placeSupport = (reservation: AutoAssignReservation): boolean => {
+      const support = pickNextSpecialSupport(supportQueue, usedInShift);
+      if (!support) return false;
+      usedInShift.add(support.id);
+      assignments.push(
+        specialSupportAssignmentRow({
+          date: input.date,
+          shift,
+          reservation,
+          caddy: support,
+        })
+      );
+      byShift[shift].assigned += 1;
+      return true;
+    };
+    const inSupportTail = (index: number, total: number) =>
+      isReservedSupportTailSlot({
+        remainingIncludingCurrent: total - index,
+        supportLeft: unusedSupportCount(supportQueue, usedInShift),
+      });
 
     if (freezeSet.has(shift)) {
       const nextCursor =
@@ -2680,7 +2759,11 @@ export function assignRegularSequence(input: {
 
       const oneThreeAssigned = new Set<number>();
       let oi = 0;
-      for (const reservation of shiftReservations) {
+      for (let i = 0; i < shiftReservations.length; i++) {
+        const reservation = shiftReservations[i];
+        if (inSupportTail(i, shiftReservations.length) && placeSupport(reservation)) {
+          continue;
+        }
         let picked: ThirdOrderItem | null = null;
         while (oi < order.length) {
           const cand = order[oi++];
@@ -2690,23 +2773,6 @@ export function assignRegularSequence(input: {
         }
 
         if (!picked) {
-          const support = pickNextSpecialSupport(supportQueue, usedInShift);
-          if (support) {
-            usedInShift.add(support.id);
-            assignments.push({
-              date: input.date,
-              shift,
-              sequenceIndex: -1,
-              reason: REASON.SPECIAL_SUPPORT,
-              reservation,
-              caddy: support,
-              pairId: null,
-              kind: "specialSupport",
-              locked: false,
-            });
-            byShift[shift].assigned += 1;
-            continue;
-          }
           unassignedReservations.push({
             reservation,
             reason:
@@ -2748,11 +2814,50 @@ export function assignRegularSequence(input: {
       thirdSequence = order.map((o) => o.caddy);
       thirdNextIdx = oi;
     } else {
-      // 1·2부: HOUSE만, houseStart부터 wrap
+      // 1·2부: HOUSE만, houseStart부터 wrap. 꼬리 슬롯은 특수지원.
+      // 1부 AUTO: 보호구간 직전에서 지원 S명만큼 HOUSE를 건너뛰어
+      // 마지막 R팀 상대순서를 유지한다.
       let cursor =
         house.length === 0 ? 0 : ((houseStart % house.length) + house.length) % house.length;
+      const protectedTailKeys =
+        shift === "1부" ? input.shift1ProtectedTailKeys : undefined;
+      const supportHouseSkip =
+        shift === "1부"
+          ? Math.max(0, Math.floor(Number(input.shift1SupportHouseSkip) || 0))
+          : 0;
+      const deferredHouseIds = new Set<number>();
+      let skippedForProtectedTail = false;
 
-      for (const reservation of shiftReservations) {
+      for (let i = 0; i < shiftReservations.length; i++) {
+        const reservation = shiftReservations[i];
+        if (inSupportTail(i, shiftReservations.length) && placeSupport(reservation)) {
+          continue;
+        }
+        if (
+          !skippedForProtectedTail &&
+          supportHouseSkip > 0 &&
+          protectedTailKeys &&
+          protectedTailKeys.size > 0 &&
+          protectedTailKeys.has(reservationKey(reservation))
+        ) {
+          skippedForProtectedTail = true;
+          if (house.length > 0) {
+            let skipped = 0;
+            let guard = 0;
+            while (skipped < supportHouseSkip && guard < house.length) {
+              guard += 1;
+              const idx = cursor;
+              const caddy = house[idx];
+              cursor = (idx + 1) % house.length;
+              if (usedInShift.has(caddy.id) || deferredHouseIds.has(caddy.id)) {
+                continue;
+              }
+              deferredHouseIds.add(caddy.id);
+              houseAssigned += 1;
+              skipped += 1;
+            }
+          }
+        }
         let picked: AutoAssignCaddy | null = null;
         let pickedIndex = -1;
         if (house.length > 0) {
@@ -2760,6 +2865,7 @@ export function assignRegularSequence(input: {
             const idx = (cursor + attempt) % house.length;
             const caddy = house[idx];
             if (usedInShift.has(caddy.id)) continue;
+            if (deferredHouseIds.has(caddy.id)) continue;
             picked = caddy;
             pickedIndex = idx;
             cursor = (idx + 1) % house.length;
@@ -2768,23 +2874,6 @@ export function assignRegularSequence(input: {
         }
 
         if (!picked || pickedIndex < 0) {
-          const support = pickNextSpecialSupport(supportQueue, usedInShift);
-          if (support) {
-            usedInShift.add(support.id);
-            assignments.push({
-              date: input.date,
-              shift,
-              sequenceIndex: -1,
-              reason: REASON.SPECIAL_SUPPORT,
-              reservation,
-              caddy: support,
-              pairId: null,
-              kind: "specialSupport",
-              locked: false,
-            });
-            byShift[shift].assigned += 1;
-            continue;
-          }
           unassignedReservations.push({
             reservation,
             reason:
@@ -2918,7 +3007,8 @@ export function computeAutoAssignmentsV1(input: {
    */
   thirdStartTeam?: string | null;
   /**
-   * 특수지원 보충 큐. 정상 available/house/third 에 넣지 않는다.
+   * 특수지원 큐. 정상 available/house/third 에 넣지 않는다.
+   * 해당 부 capacity 안에 포함되며 overflow fallback이 아니다.
    */
   specialSupportByShift?: Record<ShiftPart, AutoAssignCaddy[]>;
 }): AutoAssignResultV1 {
@@ -3021,9 +3111,10 @@ export function computeAutoAssignmentsV1(input: {
     .filter((c) => !specialExclude.has(c.id))
     .sort(compareCaddyOrder);
 
-  const availableAll = dedupeCaddies([...(input.available || [])]).sort(
-    compareCaddyOrder
-  );
+  const specialSupportIds = specialSupportCaddyIds(input.specialSupportByShift);
+  const availableAll = dedupeCaddies([...(input.available || [])])
+    .filter((caddy) => !specialSupportIds.has(caddy.id))
+    .sort(compareCaddyOrder);
   const originalHouse = splitCaddyPools(availableAll).house;
   const available = availableAll.filter((c) => !specialExclude.has(c.id));
   const pools = splitCaddyPools(available);
@@ -3039,6 +3130,13 @@ export function computeAutoAssignmentsV1(input: {
   const originalShift1 = eligible
     .filter((row) => row.shift === "1부")
     .sort(compareReservationOrder);
+  const specialSupportByShift =
+    input.specialSupportByShift || emptySpecialSupportByShift();
+  const shift1AutoPlacement =
+    inferComputePlacementMode({
+      placementMode: input.placementMode,
+      hasAnchor: !!(input.oneThreeAnchor || input.oneMakAnchor),
+    }) === "AUTO";
   const slotted = assignSpecialDutySlots({
     date,
     reservations: fixed.remainingReservations,
@@ -3055,6 +3153,7 @@ export function computeAutoAssignmentsV1(input: {
     protectedShift1Keys: protectedShift1KeySet(originalShift1),
     housePoolLength: pools.house.length,
     min54HoleGapMinutes: input.min54HoleGapMinutes,
+    specialSupport: specialSupportByShift["1부"] || [],
   });
 
   const fixedAssignments = fixed.assignments;
@@ -3079,22 +3178,42 @@ export function computeAutoAssignmentsV1(input: {
     thirdStartCaddyId: input.thirdStartCaddyId,
     thirdRoster: caddyDirectory,
     oneThreeForThird: slotted.oneThreePlaced,
-    specialSupportByShift: input.specialSupportByShift,
+    specialSupportByShift: {
+      ...specialSupportByShift,
+      ...(shift1AutoPlacement ? { "1부": [] } : {}),
+    },
     occupiedAssignments: [
       ...fixedAssignments,
       ...fiftyFourHoleAssignments,
       ...oneTwoAssignments,
       ...oneMakAssignments,
       ...slotted.oneThreeAssignments,
+      ...slotted.specialSupportAssignments,
     ],
+    shift1ProtectedTailKeys: shift1AutoPlacement
+      ? new Set(
+          originalShift1
+            .slice(
+              Math.max(
+                0,
+                originalShift1.length - slotted.specialPlacement.protectedTailCount
+              )
+            )
+            .map(reservationKey)
+        )
+      : undefined,
+    shift1SupportHouseSkip: shift1AutoPlacement
+      ? slotted.specialSupportAssignments.length
+      : 0,
   });
   const oneThreeThirdAssignments = regular.assignments.filter(
     (row) => row.kind === "oneThree"
   );
   const weekendBandAssignments = regular.assignments.filter(isWeekendBandRow);
-  const specialSupportAssignments = regular.assignments.filter(
-    (row) => row.kind === "specialSupport"
-  );
+  const specialSupportAssignments = [
+    ...slotted.specialSupportAssignments,
+    ...regular.assignments.filter((row) => row.kind === "specialSupport"),
+  ];
   const regularAssignments = regular.assignments.filter(
     (row) => row.kind === "regular" && !isWeekendBandRow(row)
   );
@@ -3120,6 +3239,7 @@ export function computeAutoAssignmentsV1(input: {
     ...slotted.oneThreeAssignments,
     ...oneTwoAssignments,
     ...oneMakAssignments,
+    ...slotted.specialSupportAssignments,
   ]) {
     byShift[a.shift].assigned += 1;
   }
@@ -4657,7 +4777,7 @@ function freezeBeforeShiftFromEvents(
       minRank = Math.min(
         minRank,
         shiftRank(
-          removeCaddyEffectiveFromShift(previous, event.caddyId, event.fromShift)
+          removeCaddyEffectiveFromShift(event.fromShift)
         )
       );
       continue;
@@ -4964,38 +5084,12 @@ function refillFrozenThirdHouseLeftover(input: {
   return { assignments, sparesByShift };
 }
 
-function regularHouseConsumeCount(
-  previous: AutoAssignResultV1,
-  shift: ShiftPart,
-  caddyId: number
-): number {
-  let count = 0;
-  for (const row of previous.assignments) {
-    if (
-      row.shift === shift &&
-      row.kind === "regular" &&
-      row.caddy.id === caddyId &&
-      isHouseRegularCaddy(row.caddy)
-    ) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
 /**
- * SICK/결근은 클릭한 셀의 fromShift가 아니라
- * 기존 보드 1·2부 regular HOUSE 실소비로 유효 시작 부를 정한다.
- * 1·2부 둘 다 소비된 투대기는 종일(1부부터). 단일 2부는 기존처럼 2부부터.
+ * 병가 유효 시작 부 = 사용자가 클릭한 부.
+ * 1·2 regular HOUSE 투대기라도 2부 클릭을 1부로 승격하지 않는다.
+ * 앞선 근무는 소급 삭제하지 않는다. (54홀 / oneTwo / oneThree 는 여기 범위 밖)
  */
-function removeCaddyEffectiveFromShift(
-  previous: AutoAssignResultV1,
-  caddyId: number,
-  eventFrom?: ShiftPart
-): ShiftPart {
-  const shift1 = regularHouseConsumeCount(previous, "1부", caddyId);
-  const shift2 = regularHouseConsumeCount(previous, "2부", caddyId);
-  if (shift1 > 0 && shift2 > 0) return "1부";
+function removeCaddyEffectiveFromShift(eventFrom?: ShiftPart): ShiftPart {
   return eventFrom ?? "1부";
 }
 
@@ -5196,6 +5290,47 @@ function reflowPlacementPolicy(
   };
 }
 
+export function serializeUnavailableFromShift(
+  map: Map<number, ShiftPart>
+): UnavailableFromShiftRow[] {
+  return [...map.entries()]
+    .filter(([caddyId]) => Number.isInteger(caddyId) && caddyId > 0)
+    .map(([caddyId, effectiveFromShift]) => ({
+      caddyId,
+      effectiveFromShift,
+    }));
+}
+
+function seedUnavailableFromPrevious(previous: AutoAssignResultV1): {
+  unavailable: Map<number, CaddyUnavailableCause>;
+  unavailableFromShift: Map<number, ShiftPart>;
+  allDayUnavailable: Set<number>;
+} {
+  const unavailable = new Map<number, CaddyUnavailableCause>();
+  const unavailableFromShift = new Map<number, ShiftPart>();
+  const allDayUnavailable = new Set<number>();
+  const fromRows =
+    previous.unavailableFromShift && previous.unavailableFromShift.length > 0
+      ? previous.unavailableFromShift
+      : [];
+  for (const row of fromRows) {
+    const id = Number(row.caddyId);
+    if (!Number.isInteger(id) || id < 1) continue;
+    const from = parseAssignShiftPart(row.effectiveFromShift) ?? "1부";
+    unavailable.set(id, "SICK");
+    unavailableFromShift.set(id, from);
+    if (from === "1부") allDayUnavailable.add(id);
+  }
+  for (const rawId of previous.unavailableCaddyIds || []) {
+    const id = Number(rawId);
+    if (!Number.isInteger(id) || id < 1 || unavailable.has(id)) continue;
+    unavailable.set(id, "SICK");
+    unavailableFromShift.set(id, "1부");
+    allDayUnavailable.add(id);
+  }
+  return { unavailable, unavailableFromShift, allDayUnavailable };
+}
+
 export function reflowRegularAssignments(input: {
   previous: AutoAssignResultV1;
   /** 원본 일반 available 풀 (정렬 전/후 모두 허용 — 내부에서 재정렬) */
@@ -5289,16 +5424,10 @@ export function reflowRegularAssignments(input: {
     });
   }
 
-  const unavailable = new Map<number, CaddyUnavailableCause>();
-  const unavailableFromShift = new Map<number, ShiftPart>();
-  const allDayUnavailable = new Set<number>();
-  for (const rawId of previous.unavailableCaddyIds || []) {
-    const id = Number(rawId);
-    if (!Number.isInteger(id) || id < 1) continue;
-    unavailable.set(id, "SICK");
-    unavailableFromShift.set(id, "1부");
-    allDayUnavailable.add(id);
-  }
+  const unavailableState = seedUnavailableFromPrevious(previous);
+  const unavailable = unavailableState.unavailable;
+  const unavailableFromShift = unavailableState.unavailableFromShift;
+  const allDayUnavailable = unavailableState.allDayUnavailable;
   let cancelCount = 0;
   let teamNoshowCount = 0;
   let addCount = 0;
@@ -5309,11 +5438,7 @@ export function reflowRegularAssignments(input: {
     if (event.type === "REMOVE_CADDY") {
       removeCount += 1;
       unavailable.set(event.caddyId, event.cause);
-      const from = removeCaddyEffectiveFromShift(
-        previous,
-        event.caddyId,
-        event.fromShift
-      );
+      const from = removeCaddyEffectiveFromShift(event.fromShift);
       unavailableFromShift.set(event.caddyId, from);
       if (from === "1부") allDayUnavailable.add(event.caddyId);
     }
@@ -5807,6 +5932,7 @@ export function reflowRegularAssignments(input: {
       block: autoSpecialBlock,
     },
     unavailableCaddyIds: [...unavailable.keys()],
+    unavailableFromShift: serializeUnavailableFromShift(unavailableFromShift),
   };
 
   const lockedPreserved: LockedPreservedRow[] = lockedRows.map((row) => ({

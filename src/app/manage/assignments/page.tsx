@@ -52,6 +52,7 @@ import {
   type AutoAssignReservation,
   type AutoAssignResultV1,
   type AutoAssignmentRow,
+  type UnavailableFromShiftRow,
 } from "@/lib/autoAssignEngine";
 import {
   mergeRosterBaseline,
@@ -130,6 +131,10 @@ import {
   drainDraftSaves,
   persistAfterOwnDraftFlush,
 } from "@/lib/draftSaveFlush";
+import {
+  prepareRecalcDraftExpectedVersion,
+  shouldAcceptDraftQueue,
+} from "@/lib/recalcDraftSave";
 import {
   buildOffSnapshot,
   isUsableOffSnapshot,
@@ -473,6 +478,8 @@ export default function ManageAssignmentsOpsPage() {
   const persistGenRef = useRef(0);
   const dateRef = useRef(date);
   const hydratingDraftRef = useRef(false);
+  const recalcInFlightRef = useRef(false);
+  const exclusiveDraftWriterRef = useRef(false);
   const serverDraftVersionRef = useRef(0);
   const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingDraftSaveRef = useRef<AssignmentDraft | null>(null);
@@ -499,7 +506,8 @@ export default function ManageAssignmentsOpsPage() {
       assignmentDraft: AssignmentDraft,
       version: number,
       savedAt?: string | null,
-      unavailableIds?: number[]
+      unavailableIds?: number[],
+      unavailableFromShift?: UnavailableFromShiftRow[]
     ) => {
       hydratingDraftRef.current = true;
       serverDraftVersionRef.current = version;
@@ -512,6 +520,11 @@ export default function ManageAssignmentsOpsPage() {
       const incoming: AssignmentDraft = {
         ...assignmentDraft,
         unavailableCaddyIds: liveUnavailableIds,
+        ...(unavailableFromShift && unavailableFromShift.length > 0
+          ? { unavailableFromShift }
+          : assignmentDraft.unavailableFromShift
+            ? { unavailableFromShift: assignmentDraft.unavailableFromShift }
+            : {}),
       };
       const hydrated = confirmedDraftKeepingPlacedUnavailable(incoming);
       setDraft(hydrated);
@@ -522,6 +535,7 @@ export default function ManageAssignmentsOpsPage() {
       pendingIntentsRef.current = [];
       setPendingIntentCount(0);
       persistInFlightRef.current = false;
+      exclusiveDraftWriterRef.current = false;
       setPersistInFlight(false);
       setAutoResult(autoResultFromDraft(hydrated, null) as RunResponse);
       setWarnings(detectDraftWarnings(hydrated));
@@ -581,6 +595,7 @@ export default function ManageAssignmentsOpsPage() {
           updatedAt: string;
         };
         unavailableCaddyIds?: number[];
+        unavailableFromShift?: UnavailableFromShiftRow[];
       };
     },
     []
@@ -675,6 +690,13 @@ export default function ManageAssignmentsOpsPage() {
   const queueDraftSave = useCallback(
     (next: AssignmentDraft, immediate = false) => {
       if (hydratingDraftRef.current) return;
+      if (
+        !shouldAcceptDraftQueue(
+          recalcInFlightRef.current || exclusiveDraftWriterRef.current
+        )
+      ) {
+        return;
+      }
       if (next.date !== dateRef.current) return;
       pendingDraftSaveRef.current = next;
       if (draftSaveTimerRef.current) {
@@ -708,7 +730,10 @@ export default function ManageAssignmentsOpsPage() {
         payloadToAssignmentDraft(data.draft.payload as never),
         data.draft.version,
         data.draft.updatedAt,
-        Array.isArray(data.unavailableCaddyIds) ? data.unavailableCaddyIds : []
+        Array.isArray(data.unavailableCaddyIds) ? data.unavailableCaddyIds : [],
+        Array.isArray(data.unavailableFromShift)
+          ? data.unavailableFromShift
+          : undefined
       );
       showToast("최신 작업본을 불러왔습니다");
     } catch (e: unknown) {
@@ -910,7 +935,10 @@ export default function ManageAssignmentsOpsPage() {
           payloadToAssignmentDraft(payload),
           data.draft.version,
           data.draft.updatedAt,
-          Array.isArray(data.unavailableCaddyIds) ? data.unavailableCaddyIds : []
+          Array.isArray(data.unavailableCaddyIds) ? data.unavailableCaddyIds : [],
+          Array.isArray(data.unavailableFromShift)
+            ? data.unavailableFromShift
+            : undefined
         );
         if (payload.offSnapshot) offSnapshotRef.current = payload.offSnapshot;
         scheduleAfterPaint(() =>
@@ -1732,7 +1760,29 @@ export default function ManageAssignmentsOpsPage() {
     setLoadingRun(true);
     setRecalcNotice({ tone: "running", text: RECALC_RUNNING_LABEL });
     setError(null);
+    recalcInFlightRef.current = true;
     try {
+      const discardObsoletePending = () => {
+        pendingDraftSaveRef.current = null;
+        if (draftSaveTimerRef.current) {
+          clearTimeout(draftSaveTimerRef.current);
+          draftSaveTimerRef.current = null;
+        }
+      };
+      const prep = await prepareRecalcDraftExpectedVersion({
+        discardObsoletePending,
+        flushOwnSaves: flushDraftSave,
+        getCachedVersion: () => serverDraftVersionRef.current,
+      });
+      if (!prep.ok) {
+        failRecalc(
+          prep.reason === "conflict"
+            ? DRAFT_VERSION_CONFLICT_MESSAGE
+            : RECALC_SAVE_FAILED_MESSAGE
+        );
+        return;
+      }
+
       let caddyPool = pool;
       if (!availability && current?.caddyPool?.length) {
         caddyPool = current.caddyPool;
@@ -1766,9 +1816,22 @@ export default function ManageAssignmentsOpsPage() {
       const next = isUsableOffSnapshot(offSnapshotRef.current, created.date)
         ? { ...created, offSnapshot: offSnapshotRef.current }
         : created;
+      const prepAfterPreview = await prepareRecalcDraftExpectedVersion({
+        discardObsoletePending,
+        flushOwnSaves: flushDraftSave,
+        getCachedVersion: () => serverDraftVersionRef.current,
+      });
+      if (!prepAfterPreview.ok) {
+        failRecalc(
+          prepAfterPreview.reason === "conflict"
+            ? DRAFT_VERSION_CONFLICT_MESSAGE
+            : RECALC_SAVE_FAILED_MESSAGE
+        );
+        return;
+      }
       const { res: saveRes, data: saveData } = await putAssignmentDraft(
         next,
-        serverDraftVersionRef.current
+        prepAfterPreview.expectedVersion
       );
       if (saveRes.status === 409 || saveData.code === DRAFT_VERSION_CONFLICT) {
         failRecalc(DRAFT_VERSION_CONFLICT_MESSAGE);
@@ -1785,7 +1848,10 @@ export default function ManageAssignmentsOpsPage() {
         next,
         Number(saveData.draft.version) || 0,
         String(saveData.draft.updatedAt || ""),
-        Array.isArray(latest.unavailableCaddyIds) ? latest.unavailableCaddyIds : []
+        Array.isArray(latest.unavailableCaddyIds) ? latest.unavailableCaddyIds : [],
+        Array.isArray(latest.unavailableFromShift)
+          ? latest.unavailableFromShift
+          : undefined
       );
       setAutoResult(data);
       setHouseStartCaddyId(resolved.caddyId);
@@ -1800,6 +1866,7 @@ export default function ManageAssignmentsOpsPage() {
     } catch (e: unknown) {
       failRecalc(e instanceof Error ? e.message : "자동배치 요청 실패");
     } finally {
+      recalcInFlightRef.current = false;
       setLoadingRun(false);
     }
   }
@@ -2008,6 +2075,7 @@ export default function ManageAssignmentsOpsPage() {
     }
     pendingIntentsRef.current = projected.applied;
     setPendingIntentCount(projected.applied.length);
+    exclusiveDraftWriterRef.current = true;
     markPipelineDirty(window.sessionStorage, {
       date: confirmed.date,
       count: projected.applied.length,
@@ -2138,10 +2206,16 @@ export default function ManageAssignmentsOpsPage() {
   async function flushPipelineWrites() {
     if (persistInFlightRef.current) return;
     persistInFlightRef.current = true;
+    exclusiveDraftWriterRef.current = true;
     setPersistInFlight(true);
     let flushHadFailure = false;
     try {
       const drained = await flushDraftSave();
+      pendingDraftSaveRef.current = null;
+      if (draftSaveTimerRef.current) {
+        clearTimeout(draftSaveTimerRef.current);
+        draftSaveTimerRef.current = null;
+      }
       if (persistAfterOwnDraftFlush(drained.status) === "conflict") {
         flushHadFailure = true;
         setDraftSaveState("conflict");
@@ -2260,14 +2334,17 @@ export default function ManageAssignmentsOpsPage() {
           count: pendingIntentsRef.current.length,
         });
         void flushPipelineWrites();
-      } else if (
-        shouldClearPipelineDirty({
-          pendingIntentCount: 0,
-          flushHadFailure,
-        })
-      ) {
-        clearPipelineDirty(window.sessionStorage);
-        setDraftSaveState("saved");
+      } else {
+        exclusiveDraftWriterRef.current = false;
+        if (
+          shouldClearPipelineDirty({
+            pendingIntentCount: 0,
+            flushHadFailure,
+          })
+        ) {
+          clearPipelineDirty(window.sessionStorage);
+          setDraftSaveState("saved");
+        }
       }
     }
   }

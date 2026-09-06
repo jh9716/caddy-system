@@ -1,7 +1,8 @@
 /**
  * 특수지원 v1 (순수 도메인, DB write 없음)
- * - 원래 자동가용에서 제외된 ACTIVE 캐디가 지정 부에만 보충 근무
- * - 정상 후보 뒤에만 쓰며 HOUSE/THIRD cursor·스페어를 밀지 않음
+ * - 원래 자동가용에서 제외된 ACTIVE 캐디가 지정 부에만 추가 근무
+ * - 해당 부 capacity 안에 반드시 포함. HOUSE 부족 시에만 붙는 overflow가 아님
+ * - 지원 인원만큼 그 부의 뒤쪽 정상 HOUSE 소비를 줄인다. 앞 순번은 유지
  * - 찾근 특수근무와 무관. DailySpecialDuty 에 넣지 않음
  */
 
@@ -67,6 +68,21 @@ export function isSpecialSupportShift(value: unknown): value is ShiftPart {
 
 export function emptySpecialSupportByShift(): Record<ShiftPart, AutoAssignCaddy[]> {
   return { "1부": [], "2부": [], "3부": [] };
+}
+
+/** 부에 상관없이 특수지원으로 등록된 caddyId. regular HOUSE/THIRD 후보에서 뺀다. */
+export function specialSupportCaddyIds(
+  byShift?: Record<ShiftPart, AutoAssignCaddy[]> | null
+): Set<number> {
+  const ids = new Set<number>();
+  if (!byShift) return ids;
+  for (const shift of SHIFT_PARTS) {
+    for (const caddy of byShift[shift] || []) {
+      const id = Number(caddy?.id);
+      if (Number.isInteger(id) && id > 0) ids.add(id);
+    }
+  }
+  return ids;
 }
 
 export function isInactiveEmployment(status: unknown): boolean {
@@ -135,11 +151,11 @@ export function supportBlockedByUnavailable(
 export function filterSupportQueueForShift(input: {
   queue: readonly AutoAssignCaddy[];
   shift: ShiftPart;
-  normalIds: Iterable<number>;
+  /** 호출 호환용. regular pool 소속만으로 지원 큐에서 제거하지 않는다. */
+  normalIds?: Iterable<number>;
   usedInShift: Iterable<number>;
   unavailable?: readonly SpecialSupportUnavailable[];
 }): AutoAssignCaddy[] {
-  const normal = new Set([...input.normalIds].map(Number));
   const used = new Set([...input.usedInShift].map(Number));
   const unavailableById = new Map(
     (input.unavailable || []).map((row) => [row.caddyId, row])
@@ -148,7 +164,7 @@ export function filterSupportQueueForShift(input: {
   const seen = new Set<number>();
   for (const caddy of input.queue) {
     if (!(caddy.id > 0) || seen.has(caddy.id)) continue;
-    if (used.has(caddy.id) || normal.has(caddy.id)) continue;
+    if (used.has(caddy.id)) continue;
     if (isHardExcludedSpecialSupport(caddy)) continue;
     if (supportBlockedByUnavailable(unavailableById.get(caddy.id), input.shift)) {
       continue;
@@ -165,6 +181,33 @@ export function pickNextSpecialSupport(
 ): AutoAssignCaddy | null {
   const used = new Set([...usedInShift].map(Number));
   return queue.find((caddy) => !used.has(caddy.id)) ?? null;
+}
+
+export function unusedSupportCount(
+  queue: readonly AutoAssignCaddy[],
+  usedInShift: Iterable<number>
+): number {
+  const used = new Set([...usedInShift].map(Number));
+  let n = 0;
+  for (const caddy of queue) {
+    if (!(caddy.id > 0) || used.has(caddy.id)) continue;
+    n += 1;
+  }
+  return n;
+}
+
+/**
+ * Remaining reservations including the current slot are reserved for support
+ * when they fit in the unused support queue. Regular HOUSE is not consumed
+ * on those tail slots.
+ */
+export function isReservedSupportTailSlot(input: {
+  remainingIncludingCurrent: number;
+  supportLeft: number;
+}): boolean {
+  const remaining = Number(input.remainingIncludingCurrent);
+  const supportLeft = Number(input.supportLeft);
+  return remaining > 0 && supportLeft > 0 && remaining <= supportLeft;
 }
 
 export function groupSupportRecordsByShift(
@@ -213,4 +256,84 @@ export function uniqueCaddyIds(ids: readonly unknown[]): number[] {
     out.push(id);
   }
   return out;
+}
+
+export type SpecialSupportShiftEntry = {
+  caddyId: number;
+  shift: ShiftPart;
+};
+
+export function specialSupportPlacementEntries(
+  assignments:
+    | ReadonlyArray<{ kind?: string; shift?: string; caddy?: { id?: number } }>
+    | null
+    | undefined
+): SpecialSupportShiftEntry[] {
+  const out: SpecialSupportShiftEntry[] = [];
+  const seen = new Set<string>();
+  for (const row of assignments || []) {
+    if (row.kind !== "specialSupport") continue;
+    if (!isSpecialSupportShift(row.shift)) continue;
+    const caddyId = Number(row.caddy?.id);
+    if (!Number.isInteger(caddyId) || caddyId < 1) continue;
+    const key = `${caddyId}:${row.shift}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ caddyId, shift: row.shift });
+  }
+  return out.sort((a, b) =>
+    a.shift === b.shift ? a.caddyId - b.caddyId : a.shift.localeCompare(b.shift)
+  );
+}
+
+export function specialSupportQueueEntries(
+  byShift:
+    | Partial<Record<ShiftPart, ReadonlyArray<{ id?: number }>>>
+    | null
+    | undefined
+): SpecialSupportShiftEntry[] {
+  const out: SpecialSupportShiftEntry[] = [];
+  const seen = new Set<string>();
+  for (const shift of SHIFT_PARTS) {
+    for (const caddy of byShift?.[shift] || []) {
+      const caddyId = Number(caddy?.id);
+      if (!Number.isInteger(caddyId) || caddyId < 1) continue;
+      const key = `${caddyId}:${shift}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ caddyId, shift });
+    }
+  }
+  return out.sort((a, b) =>
+    a.shift === b.shift ? a.caddyId - b.caddyId : a.shift.localeCompare(b.shift)
+  );
+}
+
+function supportEntryKey(row: SpecialSupportShiftEntry): string {
+  return `${row.caddyId}:${row.shift}`;
+}
+
+export function isSpecialSupportDraftStale(
+  queues:
+    | Partial<Record<ShiftPart, ReadonlyArray<{ id?: number }>>>
+    | null
+    | undefined,
+  assignments:
+    | ReadonlyArray<{ kind?: string; shift?: string; caddy?: { id?: number } }>
+    | null
+    | undefined
+): boolean {
+  const settings = specialSupportQueueEntries(queues)
+    .map(supportEntryKey)
+    .join("|");
+  const placed = specialSupportPlacementEntries(assignments)
+    .map(supportEntryKey)
+    .join("|");
+  return settings !== placed;
+}
+
+export function isSpecialSupportStalePipelineBlock(
+  type: string | undefined | null
+): boolean {
+  return type === "CADDY_SICK" || type === "MOVE_RESERVATION";
 }

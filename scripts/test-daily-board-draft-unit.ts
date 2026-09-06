@@ -887,6 +887,7 @@ section("source guards: API / UI / migration / live save order");
   assert(/houseStartCaddyId\?:/.test(payloadType), "payload stores optional houseStartCaddyId");
   assert(/thirdStartCaddyId\?:/.test(payloadType), "payload stores optional thirdStartCaddyId");
   assert(/unavailableCaddyIds\?:/.test(payloadType), "payload stores optional unavailableCaddyIds");
+  assert(/unavailableFromShift\?:/.test(payloadType), "payload stores optional unavailableFromShift");
   assert(/offSnapshot\?:/.test(payloadType), "payload stores optional offSnapshot without migration");
   assert(/CONFIRMED/.test(page), "client CONFIRMED kept as legacy ops status");
   assert(/function onConfirm/.test(page), "legacy onConfirm handler kept");
