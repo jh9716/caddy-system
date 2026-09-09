@@ -94,7 +94,10 @@ import { SpecialDutyPanel, type Shift1StartOption } from "./SpecialDutyPanel";
 import { SpecialSupportPanel } from "./SpecialSupportPanel";
 import { BoardQuickSheet, LiveChangePanel, LockToggle, SameDayAddSheet, TeamMoveSheet } from "./LiveChangePanel";
 import { UnavailablePanel } from "./UnavailablePanel";
-import { buildUnavailablePanelGroups } from "@/lib/assignmentBoardDirectEdit";
+import {
+  buildUnavailablePanelGroups,
+  unavailablePanelTotal,
+} from "@/lib/assignmentBoardDirectEdit";
 import { emptySpecialSupportByShift } from "@/lib/dailySpecialSupport";
 import { SPECIAL_SETTINGS_STALE_MESSAGE } from "@/lib/dailySpecialDuty";
 import { isThirdBandTeam, THIRD_BAND_TEAMS } from "@/lib/caddyManage";
@@ -388,6 +391,8 @@ export default function ManageAssignmentsOpsPage() {
   } | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [dutyFile, setDutyFile] = useState<File | null>(null);
+  const [unavailOpen, setUnavailOpen] = useState(true);
+  const [unavailSheetOpen, setUnavailSheetOpen] = useState(false);
   const [opsDutyStored, setOpsDutyStored] = useState<{
     count: number;
     byRole?: Record<string, number>;
@@ -2877,6 +2882,17 @@ export default function ManageAssignmentsOpsPage() {
                 </span>
               </div>
             ) : null}
+            <button
+              type="button"
+              className="ops-unavail-chip"
+              aria-expanded={unavailSheetOpen}
+              onClick={() => {
+                setUnavailSheetOpen((v) => !v);
+                setUnavailOpen(true);
+              }}
+            >
+              비가용 {unavailablePanelTotal(unavailableGroups)}명
+            </button>
             <DraftSaveStatus
               state={draftSaveState}
               savedAt={draftSavedAt}
@@ -3768,7 +3784,15 @@ export default function ManageAssignmentsOpsPage() {
                 </div>
               </div>
               </div>
-              <UnavailablePanel groups={unavailableGroups} />
+              <UnavailablePanel
+                groups={unavailableGroups}
+                open={unavailOpen}
+                sheetOpen={unavailSheetOpen}
+                onToggle={() => {
+                  setUnavailOpen((v) => !v);
+                  setUnavailSheetOpen(false);
+                }}
+              />
             </div>
           )}
 
@@ -4468,6 +4492,19 @@ const opsCss = `
     gap: 12px;
   }
   .ops-direct-main { min-width: 0; }
+  .ops-unavail-chip {
+    display: none;
+    align-items: center;
+    min-height: 32px;
+    padding: 0 10px;
+    border: 1px solid #cbd5e1;
+    border-radius: 999px;
+    background: #fff;
+    color: #0f172a;
+    font-size: 0.78rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
   .ops-unavail {
     border: 1px solid #e2e8f0;
     border-radius: 8px;
@@ -4521,6 +4558,21 @@ const opsCss = `
     .ops-direct-layout {
       grid-template-columns: minmax(0, 1fr) 240px;
       align-items: start;
+    }
+  }
+  @media (max-width: 1099px) {
+    .ops-unavail-chip { display: inline-flex; }
+    .ops-unavail { display: none; }
+    .ops-unavail.is-mobile-open {
+      display: block;
+      position: fixed;
+      left: 8px;
+      right: 8px;
+      bottom: 8px;
+      z-index: 50;
+      max-height: 70vh;
+      overflow: auto;
+      box-shadow: 0 -8px 24px rgb(15 23 42 / 16%);
     }
   }
   .ops-board-head-bar {
@@ -4865,14 +4917,8 @@ const opsCss = `
     color: #fff;
     background: #7c3aed;
   }
-  .bc-cell.assigned.limo {
-    box-shadow: inset 0 -3px 0 #f59e0b;
-  }
   .bc-cell.assigned.drive {
     box-shadow: inset 3px 0 0 #7c3aed;
-  }
-  .bc-cell.assigned.limo.drive {
-    box-shadow: inset 3px 0 0 #7c3aed, inset 0 -3px 0 #f59e0b;
   }
   .ops-row.limo { background: #fff7ed; }
   .ops-row.drive { box-shadow: inset 3px 0 0 #7c3aed; }

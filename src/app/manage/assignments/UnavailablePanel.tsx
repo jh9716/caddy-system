@@ -1,22 +1,32 @@
 "use client";
 
-import { useState } from "react";
 import type { UnavailablePanelGroup } from "@/lib/assignmentBoardDirectEdit";
+import { unavailablePanelTotal } from "@/lib/assignmentBoardDirectEdit";
 
 export function UnavailablePanel({
   groups,
+  open,
+  sheetOpen = false,
+  onToggle,
 }: {
   groups: UnavailablePanelGroup[];
+  open: boolean;
+  sheetOpen?: boolean;
+  onToggle: () => void;
 }) {
-  const [open, setOpen] = useState(true);
-  const total = groups.reduce((n, g) => n + g.items.length, 0);
+  const total = unavailablePanelTotal(groups);
   return (
-    <aside className="ops-unavail" aria-label="오늘 비가용">
+    <aside
+      className={`ops-unavail${open ? " is-open" : ""}${
+        sheetOpen ? " is-mobile-open" : ""
+      }`}
+      aria-label="오늘 비가용"
+    >
       <button
         type="button"
         className="ops-unavail-toggle"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        onClick={onToggle}
       >
         오늘 비가용 {total}명 {open ? "접기" : "펼치기"}
       </button>

@@ -4,8 +4,6 @@
  */
 import {
   isDrivingPlacement,
-  isPlacementLocked,
-  isWeekendBandRow,
   parseAssignShiftPart,
   reservationKey,
   resolveCourseCode,
@@ -137,16 +135,16 @@ export function reservationMoveBlockReason(
       message: "드라이빙 배치는 1차 팀 이동 대상이 아닙니다.",
     };
   }
-  if (row.kind !== "regular" || isWeekendBandRow(row)) {
+  if (row.kind === "fiftyFourHole") {
     return {
-      code: "MOVE_SPECIAL",
-      message: "특수 배치(LOCK/1·3/주말반 등)는 1차에서 이동할 수 없습니다.",
+      code: "MOVE_FIFTY_FOUR",
+      message: "54홀 배치는 페어 슬롯을 깨지 않도록 1차에서 팀 이동하지 않습니다.",
     };
   }
-  if (isPlacementLocked(row) || row.locked === true) {
+  if (row.kind === "specialSupport") {
     return {
-      code: "MOVE_LOCKED",
-      message: "LOCK ON 예약은 잠금을 해제한 뒤에만 이동할 수 있습니다.",
+      code: "MOVE_SPECIAL_SUPPORT",
+      message: "특수지원 배치는 지원 큐를 유지하므로 1차에서 팀 이동하지 않습니다.",
     };
   }
   const dest = opts?.dest;

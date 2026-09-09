@@ -8,7 +8,11 @@ import {
   applyHouseRequestFlag,
   buildUnavailablePanelGroups,
   isHouseRequest,
+  mergeDraftOnlyReservationFlags,
+  unavailablePanelTotal,
 } from "../src/lib/assignmentBoardDirectEdit";
+import { applyLiveResultToDraft, createDraftFromAutoResult } from "../src/lib/assignmentDraft";
+import { reservationMoveBlockReason } from "../src/lib/reservationMove";
 import {
   applyLiveAssignmentChange,
   eventsFromLiveChange,
@@ -190,6 +194,107 @@ console.log("== HOUSE + LIMOUSINE flags ==");
   assert(!isSequenceReflowLiveChange("SET_HOUSE"), "HOUSE no reflow");
   assert(isDraftOnlyLiveChange("SET_HOUSE"), "HOUSE draft-only persist");
   assert(!isDraftOnlyLiveChange("SET_LIMOUSINE"), "LIMO still uses apply");
+
+  const houseFirst = previewLiveAssignmentChange({
+    previous: base,
+    regularCaddyPool: pool,
+    change: {
+      type: "SET_HOUSE",
+      reservationKey: reservationKey(a),
+      houseRequest: true,
+    },
+  });
+  const houseThenLimo = previewLiveAssignmentChange({
+    previous: houseFirst.after,
+    regularCaddyPool: pool,
+    change: {
+      type: "SET_LIMOUSINE",
+      reservationKey: reservationKey(a),
+      limousineCart: true,
+    },
+  });
+  assert(
+    houseThenLimo.after.assignments[0]?.reservation.houseRequest === true &&
+      houseThenLimo.after.assignments[0]?.reservation.limousineCart === true,
+    "HOUSE then LIMO keeps both"
+  );
+  const limoFirst = previewLiveAssignmentChange({
+    previous: base,
+    regularCaddyPool: pool,
+    change: {
+      type: "SET_LIMOUSINE",
+      reservationKey: reservationKey(a),
+      limousineCart: true,
+    },
+  });
+  const limoThenHouse = previewLiveAssignmentChange({
+    previous: limoFirst.after,
+    regularCaddyPool: pool,
+    change: {
+      type: "SET_HOUSE",
+      reservationKey: reservationKey(a),
+      houseRequest: true,
+    },
+  });
+  assert(
+    limoThenHouse.after.assignments[0]?.reservation.houseRequest === true &&
+      limoThenHouse.after.assignments[0]?.reservation.limousineCart === true,
+    "LIMO then HOUSE keeps both"
+  );
+  const limoOff = previewLiveAssignmentChange({
+    previous: houseThenLimo.after,
+    regularCaddyPool: pool,
+    change: {
+      type: "SET_LIMOUSINE",
+      reservationKey: reservationKey(a),
+      limousineCart: false,
+    },
+  });
+  assert(
+    limoOff.after.assignments[0]?.reservation.houseRequest === true &&
+      limoOff.after.assignments[0]?.reservation.limousineCart === false,
+    "LIMO OFF keeps HOUSE"
+  );
+  const houseOff = previewLiveAssignmentChange({
+    previous: houseThenLimo.after,
+    regularCaddyPool: pool,
+    change: {
+      type: "SET_HOUSE",
+      reservationKey: reservationKey(a),
+      houseRequest: false,
+    },
+  });
+  assert(
+    houseOff.after.assignments[0]?.reservation.houseRequest === false &&
+      houseOff.after.assignments[0]?.reservation.limousineCart === true,
+    "HOUSE OFF keeps LIMO"
+  );
+  const dropped = {
+    ...houseThenLimo.after,
+    assignments: houseThenLimo.after.assignments.map((row, i) =>
+      i === 0
+        ? {
+            ...row,
+            reservation: { ...row.reservation, houseRequest: undefined },
+          }
+        : row
+    ),
+  };
+  const restored = mergeDraftOnlyReservationFlags(dropped, {
+    assignments: houseThenLimo.after.assignments,
+  });
+  assert(
+    restored.assignments[0]?.reservation.houseRequest === true &&
+      restored.assignments[0]?.reservation.limousineCart === true,
+    "live after merge restores Draft HOUSE"
+  );
+  const draft = createDraftFromAutoResult(houseFirst.after, pool);
+  const mergedDraft = applyLiveResultToDraft(draft, dropped);
+  assert(
+    mergedDraft.assignments[0]?.reservation.houseRequest === true &&
+      mergedDraft.assignments[0]?.reservation.limousineCart === true,
+    "applyLiveResultToDraft keeps HOUSE across LIMO rebuild"
+  );
 }
 
 console.log("== SWAP A↔B only ==");
@@ -274,6 +379,90 @@ console.log("== unavailable panel grouping ==");
   assert(off?.reason.includes("휴무") && off.reason.includes("1부 지원"), "휴무 → 지원");
   assert(sick?.name === "병가김", "병가 group");
   assert(leader?.name === "조장박", "조장 from ops duty");
+  assert(unavailablePanelTotal(groups) === 3, "unavailable count");
+}
+
+console.log("== special TEAM MOVE keeps anchors ==");
+{
+  const ocean = reservation("D", {
+    course: "OCEAN",
+    teeTime: "07:00",
+    teamName: "D팀",
+  });
+  const specialPrev = result([
+    row(a, c1),
+    row(b, c2, { sequenceIndex: 1, kind: "oneMak", locked: true, reason: "SPECIAL_CALL" }),
+    row(c, c3, { sequenceIndex: 2 }),
+    row(ocean, caddy(8, "고정"), {
+      sequenceIndex: 3,
+      kind: "oneThree",
+      locked: true,
+      reason: "ONE_THREE_PRIORITY",
+    }),
+  ]);
+  assert(
+    reservationMoveBlockReason(specialPrev.assignments[1]) == null,
+    "special source TEAM MOVE allowed"
+  );
+  assert(
+    reservationMoveBlockReason({
+      ...specialPrev.assignments[0],
+      locked: true,
+    }) == null,
+    "LOCK source TEAM MOVE allowed"
+  );
+  assert(
+    reservationMoveBlockReason({
+      ...specialPrev.assignments[0],
+      kind: "driving",
+    })?.code === "MOVE_DRIVING",
+    "driving still blocked"
+  );
+  assert(
+    reservationMoveBlockReason({
+      ...specialPrev.assignments[0],
+      kind: "fiftyFourHole",
+    })?.code === "MOVE_FIFTY_FOUR",
+    "54홀 still blocked"
+  );
+  const moved = previewLiveAssignmentChange({
+    previous: specialPrev,
+    regularCaddyPool: [...pool, caddy(8, "고정")],
+    change: makeMoveReservationChange({
+      reservationKey: reservationKey(b),
+      to: { course: "SKY", shift: "1부", teeTime: "07:21" },
+    }),
+  });
+  assert(
+    !moved.warnings.some((w) => w.code === "MOVE_SPECIAL" || w.code === "MOVE_LOCKED"),
+    "MOVE special/LOCK not blocked"
+  );
+  const dest = moved.after.assignments.find(
+    (r) => r.reservation.teamName === "B팀"
+  );
+  const oceanAfter = moved.after.assignments.find(
+    (r) => r.reservation.teamName === "D팀"
+  );
+  const xAtDest = dest?.caddy.id === 2;
+  const xAtOld = moved.after.assignments.find(
+    (r) =>
+      r.caddy.id === 2 &&
+      r.reservation.teeTime === "07:07" &&
+      String(r.reservation.course) === "SKY"
+  );
+  assert(dest?.reservation.teeTime === "07:21", "team moved to dest");
+  assert(!xAtDest, "special caddy does not follow team");
+  assert(
+    xAtOld != null ||
+      (moved.after.unusedCaddies || []).some((c) => c.id === 2),
+    "special caddy stays at old slot or unused"
+  );
+  assert(
+    oceanAfter?.caddy.id === 8 && oceanAfter.reservation.teeTime === "07:00",
+    "other special/fixed stays"
+  );
+  const aAfter = moved.after.assignments.find((r) => r.reservation.teamName === "A팀");
+  assert(aAfter?.reservation.teeTime === "07:00", "unrelated team slot unchanged");
 }
 
 console.log("== UI source: cell menus ==");
@@ -296,6 +485,9 @@ console.log("== UI source: cell menus ==");
   assert(/CADDY_ATTENDANCE_NOSHOW/.test(caddyBlock) && /SET_LOCK/.test(caddyBlock), "absent + lock");
   assert(/UnavailablePanel/.test(page), "unavailable panel mounted");
   assert(/opsDuties:\s*opsDutyStored/.test(page), "unavailable panel gets opsDuties");
+  assert(/ops-unavail-chip/.test(page) && /비가용/.test(page), "mobile unavailable chip");
+  assert(/is-mobile-open/.test(fs.readFileSync(path.resolve("src/app/manage/assignments/UnavailablePanel.tsx"), "utf8")), "unavailable sheet open");
+  assert(!/inset 0 -3px 0 #f59e0b/.test(page), "limo orange stripe removed");
   assert(/isDraftOnlyLiveChange/.test(page), "HOUSE skips apply persist");
   assert(/autoAssignEngine/.test(fs.readFileSync(path.resolve("src/lib/assignmentBoardDirectEdit.ts"), "utf8")), "helper imports types only");
 }

@@ -42,6 +42,62 @@ export function isHouseRequest(reservation: {
   return reservation.houseRequest === true;
 }
 
+export function mergeDraftOnlyReservationFlags(
+  after: AutoAssignResultV1,
+  source: {
+    assignments?: Array<{ reservation: AutoAssignReservation }>;
+    unassignedReservations?: Array<{ reservation: AutoAssignReservation }>;
+  } | null | undefined
+): AutoAssignResultV1 {
+  if (!source) return after;
+  const flags = new Map<
+    string,
+    { houseRequest?: boolean; limousineCart?: boolean }
+  >();
+  const remember = (reservation: AutoAssignReservation) => {
+    flags.set(reservationKey(reservation), {
+      houseRequest: reservation.houseRequest,
+      limousineCart: reservation.limousineCart,
+    });
+  };
+  for (const row of source.assignments || []) remember(row.reservation);
+  for (const row of source.unassignedReservations || []) remember(row.reservation);
+
+  const mergeOne = (reservation: AutoAssignReservation): AutoAssignReservation => {
+    const prev = flags.get(reservationKey(reservation));
+    if (!prev) return reservation;
+    return {
+      ...reservation,
+      houseRequest:
+        reservation.houseRequest !== undefined
+          ? reservation.houseRequest
+          : prev.houseRequest,
+      limousineCart:
+        reservation.limousineCart !== undefined
+          ? reservation.limousineCart
+          : prev.limousineCart,
+    };
+  };
+
+  return {
+    ...after,
+    assignments: after.assignments.map((row) => ({
+      ...row,
+      reservation: mergeOne(row.reservation),
+    })),
+    unassignedReservations: (after.unassignedReservations || []).map((row) => ({
+      ...row,
+      reservation: mergeOne(row.reservation),
+    })),
+  };
+}
+
+export function unavailablePanelTotal(
+  groups: readonly UnavailablePanelGroup[]
+): number {
+  return groups.reduce((n, group) => n + group.items.length, 0);
+}
+
 export function applyHouseRequestFlag(
   previous: AutoAssignResultV1,
   identityKey: string,
