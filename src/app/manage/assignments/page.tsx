@@ -4446,8 +4446,13 @@ const opsCss = `
   .ops-flow-primary {
     display: grid;
     gap: 10px;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-columns: 1fr;
     align-items: end;
+  }
+  @media (min-width: 520px) {
+    .ops-flow-primary {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
   }
   .ops-flow-primary > .ops-actions {
     grid-column: 1 / -1;
