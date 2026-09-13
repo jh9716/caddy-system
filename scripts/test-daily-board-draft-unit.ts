@@ -899,8 +899,10 @@ section("source guards: API / UI / migration / live save order");
   assert(!/>\s*CONFIRMED\s*</.test(actionsUi), "CONFIRMED button not in ops-actions");
   assert(!/운영 반영/.test(actionsUi), "운영 반영 button not in ops-actions");
   assert(/배치 확정/.test(page), "Published 확정 primary action");
+  assert(/ops-publish-title/.test(page), "publish section labeled 운영 반영");
   assert(/publishBoardActionState/.test(page), "already-current publish label");
   assert(/PUBLISH_HINT/.test(page), "publish hint copy");
+  assert(/className="ops-flow"/.test(page), "primary ops flow grouped");
 }
 
 section("저장된 평일 Draft는 엔진 수정만으로 자동 교정되지 않음");

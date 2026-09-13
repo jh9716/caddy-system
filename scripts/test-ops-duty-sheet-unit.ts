@@ -359,10 +359,11 @@ section("소스 가드 — persist/offSheet/Excel 경로 유지");
   );
   assert(
     /운영배치 불러오기/.test(page) &&
-      /당번·마샬·조장 Excel/.test(page) &&
+      /당번·마샬·조장 Google Spreadsheet/.test(page) &&
+      !/당번·마샬·조장 Excel/.test(page) &&
       /\/api\/daily-ops-duties\/sheet-preview/.test(page) &&
       /\/api\/daily-ops-duties\/preview/.test(page),
-    "Excel + Spreadsheet 둘 다 UI에 존재"
+    "Spreadsheet UI 유지, Excel 파일 UI 제거, Excel API 경로 유지"
   );
   assert(!/opsDutySheet/.test(engine), "autoAssignEngine 미변경");
 }

@@ -165,9 +165,10 @@ section("소스 가드 — persist/quick-mutation/Excel/수동 UI 유지");
   assert(
     /syncOpsDutySheet/.test(page) &&
       /운영배치 불러오기/.test(page) &&
-      /당번·마샬·조장 Excel/.test(page) &&
+      /당번·마샬·조장 Google Spreadsheet/.test(page) &&
+      !/당번·마샬·조장 Excel/.test(page) &&
       /운영배치 확인 필요/.test(page),
-    "버튼 자동동기화 + 수동 불러오기/Excel 유지"
+    "버튼 자동동기화 + 수동 Spreadsheet 불러오기 유지"
   );
   assert(
     /parseDutyMarshalLeaderWorkbook/.test(excelPreview) &&
