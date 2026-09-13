@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, memo } from "react";
 import { formatCaddyLabel } from "@/lib/caddyDisplay";
 import {
   SPECIAL_SUPPORT_CHANGED_MESSAGE,
@@ -9,6 +9,7 @@ import {
   isEligibleSpecialSupportCandidate,
   type SpecialSupportRecord,
 } from "@/lib/dailySpecialSupport";
+import { RECALC_RUNNING_LABEL } from "@/lib/assignmentDraft";
 import { type ShiftPart } from "@/lib/reservationParser";
 
 type Candidate = {
@@ -35,12 +36,15 @@ function countLabel(counts: Record<ShiftPart, number> | undefined): string {
   return `1부 지원 ${c["1부"] || 0}명 · 2부 지원 ${c["2부"] || 0}명 · 3부 지원 ${c["3부"] || 0}명`;
 }
 
-export function SpecialSupportPanel({
+export const SpecialSupportPanel = memo(function SpecialSupportPanel({
   date,
   excludedRows,
   hasDraft,
   onChanged,
   onLoaded,
+  onRecalcDraft,
+  recalcBusy,
+  recalcDisabled,
 }: {
   date: string;
   excludedRows?: Array<{
@@ -54,6 +58,9 @@ export function SpecialSupportPanel({
   hasDraft?: boolean;
   onChanged?: () => void;
   onLoaded?: (byShift: ReturnType<typeof engineQueuesFromSupportRecords>) => void;
+  onRecalcDraft?: () => void;
+  recalcBusy?: boolean;
+  recalcDisabled?: boolean;
 }) {
   const [payload, setPayload] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(false);
@@ -187,11 +194,13 @@ export function SpecialSupportPanel({
     }
   }
 
+  const shiftItems = payload?.byShift?.[shift] || [];
+
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     return (
       <section className="ss-panel">
         <div className="ss-title">특수지원</div>
-        <p className="ss-hint">날짜를 선택하면 해당 날짜 특수지원만 표시됩니다.</p>
+        <p className="ss-hint">날짜를 선택하세요.</p>
       </section>
     );
   }
@@ -199,21 +208,54 @@ export function SpecialSupportPanel({
   return (
     <section className="ss-panel">
       <div className="ss-head">
-        <div>
-          <div className="ss-title">특수지원</div>
-          <p className="ss-hint">
-            휴무·당번·마샬·조장 등 제외 캐디가 지정 부에만 보충 근무합니다. 정상
-            출근자 순번을 밀어내지 않습니다.
-          </p>
-        </div>
-        <button type="button" className="ss-add" onClick={openModal}>
-          특수지원 등록
+        <div className="ss-title">특수지원</div>
+        <button type="button" className="ss-add" onClick={() => void openModal()}>
+          등록
         </button>
       </div>
       {loading ? <div className="ss-hint">불러오는 중…</div> : null}
       {error ? <div className="ss-error">{error}</div> : null}
       <div className="ss-summary">{countLabel(counts)}</div>
       {notice ? <p className="ss-draft">{notice}</p> : null}
+      <div className="ss-kinds" role="tablist" aria-label="지원 부">
+        {SPECIAL_SUPPORT_SHIFTS.map((part) => (
+          <button
+            key={part}
+            type="button"
+            role="tab"
+            aria-selected={shift === part}
+            className={shift === part ? "on" : ""}
+            onClick={() => setShift(part)}
+          >
+            {part} {counts[part] || 0}
+          </button>
+        ))}
+      </div>
+      {shiftItems.length === 0 ? (
+        <div className="ss-empty">등록 없음</div>
+      ) : (
+        <ol className="ss-list">
+          {shiftItems.map((row, index) => (
+            <li key={row.id || `${row.caddyId}-${index}`}>
+              <span className="ss-pri">{index + 1}</span>
+              <span>{formatCaddyLabel(row)}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+
+      {hasDraft ? (
+        <div className="ss-recalc">
+          <button
+            type="button"
+            className="ss-recalc-btn"
+            disabled={recalcBusy || recalcDisabled || !onRecalcDraft}
+            onClick={() => onRecalcDraft?.()}
+          >
+            {recalcBusy ? RECALC_RUNNING_LABEL : "배치 다시 맞추기"}
+          </button>
+        </div>
+      ) : null}
 
       {modalOpen ? (
         <div className="ss-modal" role="dialog" aria-modal="true">
@@ -280,15 +322,27 @@ export function SpecialSupportPanel({
       ) : null}
 
       <style>{`
-        .ss-panel { margin-top: 14px; padding-top: 12px; border-top: 1px solid #e5e7eb; }
-        .ss-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
-        .ss-title { font-weight: 800; }
-        .ss-hint, .ss-summary, .ss-draft { font-size: 13px; color: #475569; margin: 6px 0 0; }
-        .ss-error { color: #b91c1c; font-size: 13px; }
+        .ss-panel { margin-top: 4px; }
+        .ss-head { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+        .ss-title { font-weight: 800; font-size: 0.9rem; }
+        .ss-hint, .ss-summary, .ss-draft { font-size: 0.78rem; color: #475569; margin: 6px 0 0; }
+        .ss-error { color: #b91c1c; font-size: 0.8rem; }
         .ss-add {
-          border: 1px solid #1e3a8a; background: #1e3a8a; color: #fff;
-          border-radius: 10px; padding: 8px 12px; font-weight: 700; cursor: pointer;
+          min-height: 36px; border: 0; background: #0f172a; color: #fff;
+          border-radius: 8px; padding: 0 12px; font-weight: 700; font-size: 0.82rem; cursor: pointer;
         }
+        .ss-kinds { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 8px; }
+        .ss-kinds button {
+          min-height: 40px; border: 1px solid #e5e7eb; background: #fff; border-radius: 8px;
+          font-weight: 700; font-size: 0.8rem; cursor: pointer; color: #475569;
+        }
+        .ss-kinds button.on { background: #0f172a; color: #fff; border-color: #0f172a; }
+        .ss-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }
+        .ss-list li {
+          display: grid; grid-template-columns: 24px 1fr; gap: 6px; align-items: center;
+          min-height: 32px; font-size: 0.85rem;
+        }
+        .ss-pri { font-weight: 800; color: #0f172a; }
         .ss-modal {
           position: fixed; inset: 0; background: rgba(15,23,42,.45);
           display: grid; place-items: center; z-index: 80; padding: 16px;
@@ -298,20 +352,20 @@ export function SpecialSupportPanel({
           background: #fff; border-radius: 16px; padding: 16px; display: grid; gap: 10px;
         }
         .ss-sheet-head { display: flex; justify-content: space-between; align-items: center; }
-        .ss-kinds { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
-        .ss-kinds button {
-          border: 1px solid #e5e7eb; background: #f8fafc; border-radius: 10px;
-          padding: 8px; font-weight: 700; cursor: pointer;
-        }
-        .ss-kinds button.on { background: #1e3a8a; color: #fff; border-color: #1e3a8a; }
         .ss-cands { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-        .ss-cands label { display: flex; gap: 8px; align-items: center; }
-        .ss-empty { color: #64748b; font-size: 13px; }
+        .ss-cands label { display: flex; gap: 8px; align-items: center; min-height: 36px; }
+        .ss-empty { color: #64748b; font-size: 0.78rem; margin-top: 8px; }
         .ss-actions button {
-          width: 100%; border: 0; background: #0f172a; color: #fff;
+          width: 100%; min-height: 40px; border: 0; background: #0f172a; color: #fff;
           border-radius: 10px; padding: 10px; font-weight: 800; cursor: pointer;
         }
+        .ss-recalc { margin-top: 10px; }
+        .ss-recalc-btn {
+          width: 100%; min-height: 40px; border: 0; background: #0f172a; color: #fff;
+          border-radius: 10px; font-weight: 800; cursor: pointer;
+        }
+        .ss-recalc-btn:disabled { opacity: 0.5; cursor: not-allowed; }
       `}</style>
     </section>
   );
-}
+});

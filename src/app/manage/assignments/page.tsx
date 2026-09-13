@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, memo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, memo, type MutableRefObject, type ReactNode } from "react";
 import {
   assignCaddyToUnassigned,
   assignmentsByShift,
@@ -13,6 +13,8 @@ import {
   replaceAssignmentCaddy,
   reservationIdentity,
   reservationsFromAssignmentDraft,
+  shift1ReservationsForAnchor,
+  buildShift1StartOptions,
   resolveHouseStartCaddyIdForRecalc,
   RECALC_CONFIRM_MESSAGE,
   RECALC_NEED_COURSE_MESSAGE,
@@ -373,6 +375,72 @@ const BoardAssignedSlots = memo(function BoardAssignedSlots({
   );
 });
 
+type SettingsTabId = "general" | "special" | "support";
+
+/** 탭 클릭이 배치표 페이지 전체를 다시 그리지 않도록 탭 state만 여기서 둔다. */
+function SettingsTabHost({
+  tabApiRef,
+  general,
+  special,
+  support,
+}: {
+  tabApiRef: MutableRefObject<{ setTab: (tab: SettingsTabId) => void } | null>;
+  general: ReactNode;
+  special: ReactNode;
+  support: ReactNode;
+}) {
+  const [settingsTab, setSettingsTab] = useState<SettingsTabId>("general");
+  useEffect(() => {
+    tabApiRef.current = { setTab: setSettingsTab };
+    return () => {
+      tabApiRef.current = null;
+    };
+  }, [tabApiRef]);
+
+  return (
+    <>
+      <div className="ops-settings-tabs" role="tablist" aria-label="배치 설정">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={settingsTab === "general"}
+          className={settingsTab === "general" ? "on" : ""}
+          onClick={() => setSettingsTab("general")}
+        >
+          일반설정
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={settingsTab === "special"}
+          className={settingsTab === "special" ? "on" : ""}
+          onClick={() => setSettingsTab("special")}
+        >
+          특수근무
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={settingsTab === "support"}
+          className={settingsTab === "support" ? "on" : ""}
+          onClick={() => setSettingsTab("support")}
+        >
+          지원근무
+        </button>
+      </div>
+      <div className="ops-settings-pane" hidden={settingsTab !== "general"}>
+        {general}
+      </div>
+      <div className="ops-settings-pane" hidden={settingsTab !== "special"}>
+        {special}
+      </div>
+      <div className="ops-settings-pane" hidden={settingsTab !== "support"}>
+        {support}
+      </div>
+    </>
+  );
+}
+
 type CourseOpenState = Record<CourseCode, boolean>;
 type DraftSaveState = "idle" | "saving" | "saved" | "error" | "conflict";
 type PublishedSummary = {
@@ -495,6 +563,9 @@ export default function ManageAssignmentsOpsPage() {
     ShiftPart | "UNASSIGNED" | "CLOSED"
   >("1부");
   const [courseOpen, setCourseOpen] = useState<CourseOpenState>(defaultCourseOpen);
+  const settingsTabApiRef = useRef<{ setTab: (tab: SettingsTabId) => void } | null>(
+    null
+  );
   const [houseStartCaddyId, setHouseStartCaddyId] = useState<number | "">("");
   const [thirdStartCaddyId, setThirdStartCaddyId] = useState<number | "">("");
   const [thirdWeekly, setThirdWeekly] = useState<ThirdWeeklyStartState | null>(
@@ -852,6 +923,14 @@ export default function ManageAssignmentsOpsPage() {
     []
   );
 
+  const openDateSettings = useCallback(
+    (tab: SettingsTabId = "general") => {
+      settingsTabApiRef.current?.setTab(tab);
+      if (dateSettingsRef.current) dateSettingsRef.current.open = true;
+    },
+    []
+  );
+
   useEffect(() => {
     if (!file || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       setShift1Options([]);
@@ -1180,6 +1259,32 @@ export default function ManageAssignmentsOpsPage() {
     [courseOpen]
   );
 
+  const shift1StartOptions = useMemo(() => {
+    if (draft && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      const fromDraft = buildShift1StartOptions(
+        shift1ReservationsForAnchor(draft),
+        date
+      );
+      if (fromDraft.length > 0) return fromDraft;
+    }
+    return shift1Options;
+  }, [date, draft, shift1Options]);
+
+  const recalcDisabled = useMemo(() => {
+    if (!date || !draft) return true;
+    const reservationCount =
+      (draft.assignments?.length || 0) +
+      (draft.unassignedReservations?.length || 0) +
+      (draft.closedCourseReservations?.length || 0);
+    if (reservationCount === 0) return true;
+    if (openCourseList.length === 0) return true;
+    return !resolveHouseStartCaddyIdForRecalc({
+      selectedId: houseStartCaddyId,
+      metaId: autoResult?.meta?.houseStartCaddyId ?? null,
+      draft,
+    });
+  }, [date, draft, openCourseList, houseStartCaddyId, autoResult]);
+
   /** 오늘 1부 첫 캐디 후보: 당일 일반 가용 1~8조 HOUSE만 (9~12조·special/제외 제외).
    * Draft가 있으면 가용 로드 전에도 작업본 풀에서 고를 수 있다 (관리 도구 재배치). */
   const houseStartCandidates = useMemo(() => {
@@ -1403,7 +1508,7 @@ export default function ManageAssignmentsOpsPage() {
         if (sync.preview) setOpsDutySheetPreview(sync.preview);
         showToast("운영배치 확인 필요");
         requestAnimationFrame(() => {
-          if (dateSettingsRef.current) dateSettingsRef.current.open = true;
+          openDateSettings("general");
           document
             .getElementById("ops-duty-sheet-block")
             ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -1975,16 +2080,12 @@ export default function ManageAssignmentsOpsPage() {
         );
         return;
       }
-      const latest = await loadServerDraft(date);
-      applyUnavailablePanelRows(latest.unavailableRows);
       applyHydratedDraft(
         next,
         Number(saveData.draft.version) || 0,
         String(saveData.draft.updatedAt || ""),
-        Array.isArray(latest.unavailableCaddyIds) ? latest.unavailableCaddyIds : [],
-        Array.isArray(latest.unavailableFromShift)
-          ? latest.unavailableFromShift
-          : undefined
+        current?.unavailableCaddyIds,
+        current?.unavailableFromShift
       );
       setAutoResult(data);
       setHouseStartCaddyId(resolved.caddyId);
@@ -3280,9 +3381,7 @@ export default function ManageAssignmentsOpsPage() {
                   type="button"
                   className="ghost"
                   onClick={() => {
-                    if (dateSettingsRef.current) {
-                      dateSettingsRef.current.open = true;
-                    }
+                    openDateSettings("general");
                     document
                       .getElementById("ops-duty-sheet-block")
                       ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -3370,6 +3469,10 @@ export default function ManageAssignmentsOpsPage() {
         </div>
         <details className="ops-date-settings" ref={dateSettingsRef}>
           <summary>기타 배치 설정</summary>
+          <SettingsTabHost
+            tabApiRef={settingsTabApiRef}
+            general={
+              <>
           <div className="ops-field ops-third-week">
             <span>
               이번 주 3부반 시작조
@@ -3524,9 +3627,7 @@ export default function ManageAssignmentsOpsPage() {
             )}
           </div>
           <div className="ops-courses" aria-label="코스 Open/Close">
-            <div className="ops-courses-label">
-              코스 운영 (기본 전부 ON · OFF 코스는 배치 제외)
-            </div>
+            <div className="ops-courses-label">코스 ON/OFF</div>
             <div className="ops-courses-toggles">
               {COURSE_CODES.map((code) => (
                 <button
@@ -3544,26 +3645,39 @@ export default function ManageAssignmentsOpsPage() {
               ))}
             </div>
           </div>
+              </>
+            }
+            special={
           <SpecialDutyPanel
             key={date || "no-date"}
             date={date}
             excludedRows={availability?.excluded}
-            shift1Options={shift1Options}
+            shift1Options={shift1StartOptions}
             hasDraft={Boolean(draft || serverDraftVersionRef.current > 0)}
+            onRecalcDraft={() => void runRecalcDraft()}
+            recalcBusy={loadingRun}
+            recalcDisabled={recalcDisabled}
             onChanged={() => {
               setSpecialSettingsStale(true);
               showToast(SPECIAL_SETTINGS_STALE_MESSAGE);
             }}
           />
+            }
+            support={
           <SpecialSupportPanel
             date={date}
             excludedRows={availability?.excluded}
             hasDraft={Boolean(draft || serverDraftVersionRef.current > 0)}
             onLoaded={onSpecialSupportLoaded}
+            onRecalcDraft={() => void runRecalcDraft()}
+            recalcBusy={loadingRun}
+            recalcDisabled={recalcDisabled}
             onChanged={() => {
               setSpecialSettingsStale(true);
               showToast(SPECIAL_SETTINGS_STALE_MESSAGE);
             }}
+          />
+            }
           />
         </details>
       </section>
@@ -5879,7 +5993,7 @@ const opsCss = `
     padding: 4px 10px 10px;
     background: #f8fafc;
     display: grid;
-    gap: 10px;
+    gap: 8px;
   }
   .ops-date-settings > summary {
     cursor: pointer;
@@ -5897,5 +6011,32 @@ const opsCss = `
   .ops-date-settings:not([open]) {
     padding-bottom: 4px;
     gap: 0;
+  }
+  .ops-settings-tabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .ops-settings-tabs button {
+    min-height: 40px;
+    border-radius: 8px;
+    border: 1px solid #e2e8f0;
+    background: #fff;
+    color: #475569;
+    font-size: 0.8rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .ops-settings-tabs button.on {
+    background: #0f172a;
+    color: #fff;
+    border-color: #0f172a;
+  }
+  .ops-settings-pane {
+    display: grid;
+    gap: 8px;
+  }
+  .ops-settings-pane[hidden] {
+    display: none !important;
   }
 `;

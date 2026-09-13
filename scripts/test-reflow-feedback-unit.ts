@@ -136,6 +136,7 @@ console.log("== UI wiring: no silent return ==");
   assert(/RECALC_SUCCESS_MESSAGE/.test(recalc), "성공 카피");
   assert(/failRecalc\(/.test(recalc), "실패 경로가 failRecalc");
   assert(/putAssignmentDraft\(/.test(recalc), "Draft PUT");
+  assert(!/await loadServerDraft\(date\)/.test(recalc), "재맞추기 후 동일 draft GET 생략");
   assert(RECALC_CONFIRM_MESSAGE.includes("다시 만들까요"), "confirm copy");
   assert(RECALC_RUNNING_LABEL === "배치 맞추는 중...", "running copy");
   assert(RECALC_SUCCESS_MESSAGE === "배치를 다시 맞췄습니다.", "success copy");
