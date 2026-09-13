@@ -27,9 +27,42 @@ import {
   assertSlotAvailable,
   assertSlotWithinConfiguredCapacity,
 } from "@/lib/caddySlot";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, resolveAuthUser } from "@/lib/auth";
+import {
+  canReadArchivedCaddies,
+  denyArchivedCaddyRead,
+} from "@/lib/caddyArchiveVisibility";
 
 export const dynamic = "force-dynamic";
+
+function archivedNotFound() {
+  return NextResponse.json({ error: "캐디 없음" }, { status: 404 });
+}
+
+/** GET: 캐디 상세. 경기과 직원/staff는 퇴사·삭제 캐디를 읽지 못한다. */
+export async function GET(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> | { id: string } }
+) {
+  const denied = await requireAdmin(req);
+  if (denied) return denied;
+
+  const resolved = await Promise.resolve(params);
+  const id = Number(resolved.id);
+  if (!id) {
+    return NextResponse.json({ error: "id 필요" }, { status: 400 });
+  }
+
+  const auth = await resolveAuthUser(req);
+  const current = await prisma.caddy.findUnique({ where: { id } });
+  if (!current) {
+    return archivedNotFound();
+  }
+  if (denyArchivedCaddyRead(current.employmentStatus, canReadArchivedCaddies(auth))) {
+    return archivedNotFound();
+  }
+  return NextResponse.json(current);
+}
 
 /** PATCH: 이름/조/고정슬롯/재직상태/extraFlags/phone 수정 — ID 불변 */
 export async function PATCH(
@@ -59,6 +92,10 @@ export async function PATCH(
     const current = await prisma.caddy.findUnique({ where: { id } });
     if (!current) {
       return NextResponse.json({ error: "캐디 없음" }, { status: 404 });
+    }
+    const auth = await resolveAuthUser(req);
+    if (denyArchivedCaddyRead(current.employmentStatus, canReadArchivedCaddies(auth))) {
+      return archivedNotFound();
     }
 
     // ↑↓ 원자적 슬롯 스왑 (같은 조, ACTIVE/LEAVE 점유 교환)
@@ -396,6 +433,15 @@ export async function DELETE(
     const id = Number(resolved.id);
     if (!id) {
       return NextResponse.json({ error: "id 필요" }, { status: 400 });
+    }
+
+    const current = await prisma.caddy.findUnique({ where: { id } });
+    if (!current) {
+      return archivedNotFound();
+    }
+    const auth = await resolveAuthUser(req);
+    if (denyArchivedCaddyRead(current.employmentStatus, canReadArchivedCaddies(auth))) {
+      return archivedNotFound();
     }
 
     const updated = await prisma.caddy.update({

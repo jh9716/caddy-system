@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { buildRosterExportCsv } from "@/lib/caddyRosterImportV2";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, resolveAuthUser } from "@/lib/auth";
+import {
+  canReadArchivedCaddies,
+  filterArchivedCaddies,
+} from "@/lib/caddyArchiveVisibility";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -19,19 +23,24 @@ export async function GET(req: NextRequest) {
   if (guard) return guard;
 
   try {
-    const rows = await prisma.caddy.findMany({
-      select: {
-        id: true,
-        name: true,
-        team: true,
-        teamOrder: true,
-        employmentStatus: true,
-        phoneNormalized: true,
-        thirdBandSubgroup: true,
-        caddyType: true,
-      },
-      orderBy: [{ team: "asc" }, { teamOrder: "asc" }, { id: "asc" }],
-    });
+    const auth = await resolveAuthUser(req);
+    const canReadArchived = canReadArchivedCaddies(auth);
+    const rows = filterArchivedCaddies(
+      await prisma.caddy.findMany({
+        select: {
+          id: true,
+          name: true,
+          team: true,
+          teamOrder: true,
+          employmentStatus: true,
+          phoneNormalized: true,
+          thirdBandSubgroup: true,
+          caddyType: true,
+        },
+        orderBy: [{ team: "asc" }, { teamOrder: "asc" }, { id: "asc" }],
+      }),
+      canReadArchived
+    );
 
     const csv = buildRosterExportCsv(
       rows.map((r) => ({

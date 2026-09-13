@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { resolveAuthUser } from "@/lib/auth";
+import { canReadArchivedCaddies } from "@/lib/caddyArchiveVisibility";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +16,7 @@ export async function GET(req: NextRequest) {
       username: auth.username,
       role: auth.role,
       sessionVersion: auth.sessionVersion,
+      canReadArchivedCaddies: canReadArchivedCaddies(auth),
     },
   });
 }

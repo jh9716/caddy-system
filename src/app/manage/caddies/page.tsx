@@ -308,6 +308,7 @@ export default function ManageCaddiesPage() {
   const [employmentFilter, setEmploymentFilter] = useState<
     EmploymentStatus | 'all' | 'missing'
   >('ACTIVE');
+  const [canReadArchived, setCanReadArchived] = useState(false);
   const [teamFilter, setTeamFilter] = useState<string>('all');
   const [q, setQ] = useState('');
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -478,9 +479,38 @@ export default function ManageCaddiesPage() {
     load();
   }, [load]);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/me', { credentials: 'include' });
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        setCanReadArchived(Boolean(data?.user?.canReadArchivedCaddies));
+      } catch {
+        if (!cancelled) setCanReadArchived(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!canReadArchived && employmentFilter === 'RETIRED') {
+      setEmploymentFilter('ACTIVE');
+    }
+  }, [canReadArchived, employmentFilter]);
+
   const filtered = useMemo(() => {
     const query = q.trim();
     return rows.filter((r) => {
+      if (
+        !canReadArchived &&
+        normalizeEmploymentStatus(r.employmentStatus) === 'RETIRED'
+      ) {
+        return false;
+      }
       if (viewMode === 'detail') {
         if (employmentFilter === 'missing') {
           if (!r.missingFromImport) return false;
@@ -500,7 +530,7 @@ export default function ManageCaddiesPage() {
       if (!query) return true;
       return r.name.includes(query) || String(r.id).includes(query);
     });
-  }, [rows, teamFilter, q, viewMode, employmentFilter]);
+  }, [rows, teamFilter, q, viewMode, employmentFilter, canReadArchived]);
 
   const v1DecisionRows = importPreview?.rows ?? [];
   const v1MergedRows = useMemo(
@@ -1237,7 +1267,9 @@ export default function ManageCaddiesPage() {
                 ['RETIRED', '삭제됨'],
                 ['missing', '명단 누락'],
               ] as const
-            ).map(([value, label]) => (
+            )
+              .filter(([value]) => canReadArchived || value !== 'RETIRED')
+              .map(([value, label]) => (
               <button
                 key={value}
                 type="button"
@@ -1274,7 +1306,7 @@ export default function ManageCaddiesPage() {
               {' '}
               · 표시 {stats.total}명
             </span>
-            {employmentFilter === 'ACTIVE' && (
+            {canReadArchived && employmentFilter === 'ACTIVE' && (
               <span className="cm-stats-hint"> · 삭제된 캐디는 「삭제됨」 필터에서 조회·복귀</span>
             )}
             {employmentFilter === 'missing' && (
