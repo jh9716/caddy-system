@@ -34,6 +34,13 @@ import {
   boardAssignmentMarks,
   buildShiftBoard,
 } from "@/lib/assignmentBoardView";
+import {
+  applyDirectCaddyEdit,
+  DIRECT_EDIT_PROTECTED_MESSAGE,
+  isDirectEditProtected,
+  isDirectEditVacant,
+  overlayUnassignedVacancies,
+} from "@/lib/assignmentBoardCellEdit";
 import { BoardImageExportMenu } from "@/components/board/BoardImageExportMenu";
 import { formatCaddyLabel, caddyAffiliation } from "@/lib/caddyDisplay";
 import {
@@ -93,6 +100,7 @@ const COURSE_SHORT: Record<CourseCode, string> = {
 import { SpecialDutyPanel, type Shift1StartOption } from "./SpecialDutyPanel";
 import { SpecialSupportPanel } from "./SpecialSupportPanel";
 import { BoardQuickSheet, LiveChangePanel, LockToggle, SameDayAddSheet, TeamMoveSheet } from "./LiveChangePanel";
+import { CaddyCellEditSheet } from "./CaddyCellEditSheet";
 import { UnavailablePanel } from "./UnavailablePanel";
 import {
   buildUnavailablePanelGroups,
@@ -274,6 +282,9 @@ const BoardAssignedSlots = memo(function BoardAssignedSlots({
   expandedKey,
   swapKey,
   moveKey,
+  cellEditOn,
+  cellEditKey,
+  pendingEditKeys,
   onTeamTap,
   onCaddyTap,
   onToggleLock,
@@ -283,6 +294,9 @@ const BoardAssignedSlots = memo(function BoardAssignedSlots({
   expandedKey: string | null;
   swapKey: string | null;
   moveKey: string | null;
+  cellEditOn: boolean;
+  cellEditKey: string | null;
+  pendingEditKeys: ReadonlySet<string>;
   onTeamTap: (row: AutoAssignmentRow) => void;
   onCaddyTap: (row: AutoAssignmentRow) => void;
   onToggleLock: (row: AutoAssignmentRow, locked: boolean) => void;
@@ -293,13 +307,22 @@ const BoardAssignedSlots = memo(function BoardAssignedSlots({
         const key = reservationIdentity(row.reservation);
         const special = row.kind !== "regular";
         const marks = boardAssignmentMarks(row, allAssignments);
-        const active = expandedKey === key || swapKey === key || moveKey === key;
+        const vacant = isDirectEditVacant(row);
+        const editing = cellEditOn && cellEditKey === key;
+        const pending = pendingEditKeys.has(key);
+        const active =
+          expandedKey === key ||
+          swapKey === key ||
+          moveKey === key ||
+          editing;
         return (
           <div
             key={key}
             className={`bc-slot${active ? " active" : ""}${
               swapKey === key ? " swap-on" : ""
-            }${moveKey === key ? " move-on" : ""}`}
+            }${moveKey === key ? " move-on" : ""}${
+              editing ? " cell-edit-target" : ""
+            }${pending ? " cell-edit-pending" : ""}`}
           >
             <button
               type="button"
@@ -318,11 +341,17 @@ const BoardAssignedSlots = memo(function BoardAssignedSlots({
             </button>
             <button
               type="button"
-              className="bc-caddy"
+              className={`bc-caddy${cellEditOn ? " cell-edit-hit" : ""}${
+                editing ? " cell-edit-target" : ""
+              }`}
               onClick={() => onCaddyTap(row)}
             >
-              <span className="bc-name">{row.caddy.name}</span>
-              <span className="bc-affil">{caddyAffiliation(row.caddy)}</span>
+              <span className="bc-name">
+                {vacant ? "빈칸" : row.caddy.name}
+              </span>
+              <span className="bc-affil">
+                {vacant ? "미배치" : caddyAffiliation(row.caddy)}
+              </span>
               <AssignmentMarkBadges
                 twoWork={marks.twoWork}
                 chageun={marks.chageun}
@@ -331,10 +360,12 @@ const BoardAssignedSlots = memo(function BoardAssignedSlots({
                 driving={marks.driving}
               />
             </button>
-            <LockToggle
-              row={row}
-              onToggle={(locked) => onToggleLock(row, locked)}
-            />
+            {vacant ? null : (
+              <LockToggle
+                row={row}
+                onToggle={(locked) => onToggleLock(row, locked)}
+              />
+            )}
           </div>
         );
       })}
@@ -489,6 +520,11 @@ export default function ManageAssignmentsOpsPage() {
     mode: "team" | "caddy";
     key: string;
   } | null>(null);
+  const [cellEditOn, setCellEditOn] = useState(false);
+  const [cellEditKey, setCellEditKey] = useState<string | null>(null);
+  const [pendingEditKeys, setPendingEditKeys] = useState<Set<string>>(
+    () => new Set()
+  );
   const [liveChangePreset, setLiveChangePreset] =
     useState<LiveChangeInput | null>(null);
   const [addTeamOpen, setAddTeamOpen] = useState(false);
@@ -1132,6 +1168,12 @@ export default function ManageAssignmentsOpsPage() {
     if (!draft) return;
     stickyStackRef.current?.scrollIntoView({ block: "start", behavior: "auto" });
   }, [shiftTab, viewMode, draft?.id]);
+
+  useEffect(() => {
+    if (draftSaveState === "saved") {
+      setPendingEditKeys(new Set());
+    }
+  }, [draftSaveState]);
 
   const openCourseList = useMemo(
     () => COURSE_CODES.filter((c) => courseOpen[c]),
@@ -2029,8 +2071,22 @@ export default function ManageAssignmentsOpsPage() {
       return;
     }
     const key = reservationIdentity(row.reservation);
+    if (cellEditOn && mode === "caddy") {
+      if (isDirectEditProtected(row)) {
+        showToast(DIRECT_EDIT_PROTECTED_MESSAGE);
+        setError(DIRECT_EDIT_PROTECTED_MESSAGE);
+        setQuickSheet(null);
+        setCellEditKey(null);
+        return;
+      }
+      setExpandedKey(key);
+      setCellEditKey(key);
+      setQuickSheet(null);
+      return;
+    }
     setExpandedKey(key);
     setQuickSheet({ mode, key });
+    if (mode === "team") setCellEditKey(null);
   }
 
   const onTeamTap = useCallback(
@@ -2038,15 +2094,50 @@ export default function ManageAssignmentsOpsPage() {
       handlePlacementTap(row, "team");
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [swapKey, moveKey]
+    [swapKey, moveKey, cellEditOn]
   );
   const onCaddyTap = useCallback(
     (row: AutoAssignmentRow) => {
       handlePlacementTap(row, "caddy");
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [swapKey, moveKey]
+    [swapKey, moveKey, cellEditOn]
   );
+
+  function applyDirectCellPick(row: AutoAssignmentRow, caddyId: number) {
+    const current = draftRef.current;
+    if (!current) return;
+    const key = reservationIdentity(row.reservation);
+    const result = applyDirectCaddyEdit(current, {
+      reservationKey: key,
+      caddyId,
+    });
+    if (!result.ok) {
+      setError(result.message);
+      showToast(result.message);
+      return;
+    }
+    if (result.action === "noop") {
+      setCellEditKey(null);
+      return;
+    }
+    if (result.action === "swap") {
+      setPendingEditKeys(new Set(result.affectedKeys));
+      setCellEditKey(null);
+      applyQuickChange({
+        type: "SWAP_CADDY",
+        reservationKeyA: result.reservationKeyA,
+        reservationKeyB: result.reservationKeyB,
+      });
+      return;
+    }
+    setDraft(result.draft);
+    setWarnings(detectDraftWarnings(result.draft));
+    queueDraftSave(result.draft);
+    setPendingEditKeys(new Set(result.affectedKeys));
+    setCellEditKey(null);
+    if (result.toast) showToast(result.toast);
+  }
 
   function onStartTeamMove(row: AutoAssignmentRow) {
     if (moveApplyingRef.current) return;
@@ -2892,8 +2983,15 @@ export default function ManageAssignmentsOpsPage() {
   const boardRows = useMemo(() => {
     if (shiftTab === "UNASSIGNED" || shiftTab === "CLOSED") return [];
     // 선택된 부 내부에서만 matrix — reservation.shift 기준으로 재검증
-    return buildShiftBoard(shiftRows, boardOpenCourses, shiftTab);
-  }, [shiftRows, boardOpenCourses, shiftTab]);
+    const built = buildShiftBoard(shiftRows, boardOpenCourses, shiftTab);
+    if (!cellEditOn || !draft) return built;
+    return overlayUnassignedVacancies({
+      board: built,
+      draft,
+      shift: shiftTab,
+      openCourses: boardOpenCourses,
+    });
+  }, [shiftRows, boardOpenCourses, shiftTab, cellEditOn, draft]);
 
   const quickSheetRow = useMemo(() => {
     if (!draft || !quickSheet) return null;
@@ -2903,6 +3001,25 @@ export default function ManageAssignmentsOpsPage() {
       ) || null
     );
   }, [draft, quickSheet]);
+
+  const cellEditRow = useMemo(() => {
+    if (!draft || !cellEditKey) return null;
+    const assigned = draft.assignments.find(
+      (a) => reservationIdentity(a.reservation) === cellEditKey
+    );
+    if (assigned) return assigned;
+    for (const tr of boardRows) {
+      for (const code of COURSE_CODES) {
+        const cell = tr.cells[code];
+        if (cell.kind !== "assigned") continue;
+        const hit = cell.rows.find(
+          (row) => reservationIdentity(row.reservation) === cellEditKey
+        );
+        if (hit) return hit;
+      }
+    }
+    return null;
+  }, [draft, cellEditKey, boardRows]);
 
   const hasSelectedDate = /^\d{4}-\d{2}-\d{2}$/.test(date);
 
@@ -3598,6 +3715,18 @@ export default function ManageAssignmentsOpsPage() {
                     목록
                   </button>
                 </div>
+                <button
+                  type="button"
+                  data-cell-edit-toggle="1"
+                  aria-pressed={cellEditOn}
+                  className={`ops-cell-edit-toggle${cellEditOn ? " on" : ""}`}
+                  onClick={() => {
+                    setCellEditOn((v) => !v);
+                    setCellEditKey(null);
+                  }}
+                >
+                  직접편집 {cellEditOn ? "ON" : "OFF"}
+                </button>
                 <div className="ops-board-tools-end">
                   <BoardImageExportMenu draft={draft} onNotice={showToast} />
                   <button
@@ -3617,7 +3746,9 @@ export default function ManageAssignmentsOpsPage() {
 
             {shiftTab !== "UNASSIGNED" && shiftTab !== "CLOSED" && (
               <p className="ops-board-hint">
-                팀 또는 캐디를 눌러 바로 수정합니다. 상단 버튼은 그대로 쓸 수 있습니다.
+                {cellEditOn
+                  ? "캐디 이름을 눌러 바로 선택합니다. 병가·결근 등은 선택기 안 업무 메뉴를 사용하세요."
+                  : "팀 또는 캐디를 눌러 바로 수정합니다. 상단 버튼은 그대로 쓸 수 있습니다."}
               </p>
             )}
 
@@ -3709,7 +3840,12 @@ export default function ManageAssignmentsOpsPage() {
                   {boardRows.length === 0 ? (
                     <div className="ops-empty">이 부 배치 없음</div>
                   ) : (
-                    <div className="ops-board" role="table" aria-label={`${shiftTab} 배치표`}>
+                    <div
+                      className={`ops-board${cellEditOn ? " cell-edit-on" : ""}`}
+                      role="table"
+                      aria-label={`${shiftTab} 배치표`}
+                      data-cell-edit={cellEditOn ? "on" : "off"}
+                    >
                       {boardRows.map((tr) => (
                           <div key={tr.teeTime} className="ops-board-block">
                             <div className="ops-board-row" role="row">
@@ -3784,7 +3920,9 @@ export default function ManageAssignmentsOpsPage() {
                                     reservationIdentity(r.reservation) ===
                                       swapKey ||
                                     reservationIdentity(r.reservation) ===
-                                      moveKey
+                                      moveKey ||
+                                    reservationIdentity(r.reservation) ===
+                                      cellEditKey
                                 );
                                 return (
                                   <div
@@ -3804,6 +3942,9 @@ export default function ManageAssignmentsOpsPage() {
                                       expandedKey={expandedKey}
                                       swapKey={swapKey}
                                       moveKey={moveKey}
+                                      cellEditOn={cellEditOn}
+                                      cellEditKey={cellEditKey}
+                                      pendingEditKeys={pendingEditKeys}
                                       onTeamTap={onTeamTap}
                                       onCaddyTap={onCaddyTap}
                                       onToggleLock={onToggleLock}
@@ -3831,7 +3972,13 @@ export default function ManageAssignmentsOpsPage() {
                       row,
                       draft.assignments
                     );
-                    const open = expandedKey === key || swapKey === key || moveKey === key;
+                    const open =
+                      expandedKey === key ||
+                      swapKey === key ||
+                      moveKey === key ||
+                      cellEditKey === key;
+                    const pending = pendingEditKeys.has(key);
+                    const vacant = isDirectEditVacant(row);
                     const course =
                       row.reservation.courseLabel ||
                       COURSE_LABELS[row.reservation.course as CourseCode] ||
@@ -3845,7 +3992,9 @@ export default function ManageAssignmentsOpsPage() {
                           marks.limousine ? " limo" : ""
                         }${marks.driving ? " drive" : ""} ${
                           swapKey === key ? "swap-on" : ""
-                        } ${moveKey === key ? "move-on" : ""} ${open ? "open" : ""}`}
+                        } ${moveKey === key ? "move-on" : ""} ${
+                          cellEditKey === key ? "cell-edit-target" : ""
+                        } ${pending ? "cell-edit-pending" : ""} ${open ? "open" : ""}`}
                       >
                         <div className="ops-row-main">
                           <span className="col time">
@@ -3873,10 +4022,12 @@ export default function ManageAssignmentsOpsPage() {
                           <span className="col course">{course}</span>
                           <button
                             type="button"
-                            className="col caddy ops-row-hit"
+                            className={`col caddy ops-row-hit${
+                              cellEditOn ? " cell-edit-hit" : ""
+                            }`}
                             onClick={() => handlePlacementTap(row, "caddy")}
                           >
-                            {formatCaddyLabel(row.caddy)}
+                            {vacant ? "빈칸" : formatCaddyLabel(row.caddy)}
                             <AssignmentMarkBadges
                               twoWork={marks.twoWork}
                               chageun={marks.chageun}
@@ -3885,10 +4036,12 @@ export default function ManageAssignmentsOpsPage() {
                               driving={marks.driving}
                             />
                           </button>
-                          <LockToggle
-                            row={row}
-                            onToggle={(locked) => onToggleLock(row, locked)}
-                          />
+                          {vacant ? null : (
+                            <LockToggle
+                              row={row}
+                              onToggle={(locked) => onToggleLock(row, locked)}
+                            />
+                          )}
                         </div>
                       </li>
                     );
@@ -4071,6 +4224,24 @@ export default function ManageAssignmentsOpsPage() {
             onSubmit={(change) => setLiveChangePreset(change)}
           />
         )}
+      {cellEditKey && cellEditRow && draft && (
+        <CaddyCellEditSheet
+          draft={draft}
+          row={cellEditRow}
+          unavailableCaddyIds={unavailableCaddyIds}
+          onClose={() => setCellEditKey(null)}
+          onSelect={(caddyId) => applyDirectCellPick(cellEditRow, caddyId)}
+          onOpenDutyMenu={() => {
+            const key = reservationIdentity(cellEditRow.reservation);
+            setCellEditKey(null);
+            if (isDirectEditVacant(cellEditRow)) {
+              showToast("빈 칸은 캐디를 먼저 배치하세요");
+              return;
+            }
+            setQuickSheet({ mode: "caddy", key });
+          }}
+        />
+      )}
       {quickSheet && quickSheetRow && (
         <BoardQuickSheet
           mode={quickSheet.mode}
@@ -4617,6 +4788,24 @@ const opsCss = `
     font-weight: 700;
     box-shadow: 0 1px 2px rgb(15 23 42 / 10%);
   }
+  .ops-cell-edit-toggle {
+    min-height: 28px;
+    padding: 0 10px;
+    border-radius: 999px;
+    border: 1px solid #cbd5e1;
+    background: #fff;
+    color: #64748b;
+    font-size: 0.78rem;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+    flex: 0 0 auto;
+  }
+  .ops-cell-edit-toggle.on {
+    background: #eff6ff;
+    border-color: #2563eb;
+    color: #1d4ed8;
+  }
   .ops-board-hint {
     margin: 0;
     font-size: 0.72rem;
@@ -5061,6 +5250,21 @@ const opsCss = `
     outline: 2px solid #2563eb;
     outline-offset: -1px;
     border-radius: 4px;
+  }
+  .bc-slot.cell-edit-target,
+  .bc-caddy.cell-edit-target {
+    outline: 2px solid #1d4ed8;
+    outline-offset: -1px;
+    border-radius: 4px;
+    background: #eff6ff;
+  }
+  .bc-caddy.cell-edit-hit {
+    box-shadow: inset 0 0 0 1px #93c5fd;
+    border-radius: 4px;
+  }
+  .bc-slot.cell-edit-pending,
+  .ops-row.cell-edit-pending .col.caddy {
+    background: #fffbeb;
   }
   .bc-team,
   .bc-caddy {
@@ -5602,6 +5806,84 @@ const opsCss = `
     font-size: 0.85rem;
     background: #f8fafc;
     border-radius: 8px;
+  }
+  .de-sheet {
+    display: grid;
+    gap: 10px;
+  }
+  .de-search {
+    display: grid;
+    gap: 4px;
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: #334155;
+  }
+  .de-search input {
+    width: 100%;
+    min-height: 44px;
+    font-size: 16px;
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    padding: 0 12px;
+  }
+  .de-group-title {
+    font-size: 0.75rem;
+    font-weight: 800;
+    color: #64748b;
+    margin-bottom: 6px;
+  }
+  .de-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 4px;
+    max-height: 28vh;
+    overflow: auto;
+  }
+  .de-item {
+    width: 100%;
+    min-height: 44px;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    background: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 10px;
+    text-align: left;
+    cursor: pointer;
+    font: inherit;
+  }
+  .de-item.on {
+    border-color: #2563eb;
+    background: #eff6ff;
+  }
+  .de-item-name {
+    font-weight: 800;
+    font-size: 0.92rem;
+    color: #0f172a;
+  }
+  .de-item-meta {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: #64748b;
+    white-space: nowrap;
+  }
+  .de-duty {
+    min-height: 42px;
+    width: 100%;
+  }
+  @media (min-width: 720px) {
+    .qa-overlay {
+      align-items: center;
+    }
+    .qa-sheet.de-sheet {
+      max-width: 420px;
+      border-radius: 16px;
+      max-height: 72vh;
+    }
   }
   .ops-date-settings {
     border: 1px solid #e2e8f0;
