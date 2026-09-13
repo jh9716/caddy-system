@@ -8,6 +8,7 @@ import {
   matchDutyEntriesToCaddies,
   type DailyOpsDutyRole,
 } from "@/lib/dailyOpsDuty";
+import { filterOperationalRoster, isOperationalCaddy } from "@/lib/operationalRoster";
 import {
   listDailyOpsDuties,
   type StoredOpsDutyRow,
@@ -81,20 +82,27 @@ export function opsDutyPanelRowsFromReadOnly(
   resolved: ResolveOpsDutyReadOnlyResult,
   caddies: readonly (NameMatchCaddy & { team?: string })[]
 ): OpsDutyPanelRow[] {
+  const operational = filterOperationalRoster(caddies);
+  const operationalById = new Map(operational.map((row) => [Number(row.id), row]));
   if (resolved.source === "stored") {
-    return resolved.stored.map((row) => ({
-      caddyId: row.caddyId,
-      name: row.name,
-      team: row.team,
-      role: row.role,
-      roleKey: row.roleKey,
-      rawName: row.rawName,
-    }));
+    return resolved.stored
+      .filter((row) => {
+        const current = operationalById.get(Number(row.caddyId));
+        return isOperationalCaddy(current || row);
+      })
+      .map((row) => ({
+        caddyId: row.caddyId,
+        name: row.name,
+        team: row.team,
+        role: row.role,
+        roleKey: row.roleKey,
+        rawName: row.rawName,
+      }));
   }
   if (resolved.sheetEntries.length === 0) return [];
-  const { matched } = matchDutyEntriesToCaddies(resolved.sheetEntries, caddies);
+  const { matched } = matchDutyEntriesToCaddies(resolved.sheetEntries, operational);
   const teamById = new Map(
-    caddies.map((row) => [Number(row.id), String(row.team || "").trim() || "—"])
+    operational.map((row) => [Number(row.id), String(row.team || "").trim() || "—"])
   );
   return matched.map((row) => ({
     caddyId: row.caddyId,

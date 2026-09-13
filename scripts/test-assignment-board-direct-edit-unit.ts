@@ -22,7 +22,12 @@ import {
   opsDutyPanelRowsFromReadOnly,
   resolveOpsDutyReadOnly,
 } from "../src/lib/opsDutyReadOnlySource";
-import { applyLiveResultToDraft, createDraftFromAutoResult } from "../src/lib/assignmentDraft";
+import { applyLiveResultToDraft, createDraftFromAutoResult, unusedCaddies } from "../src/lib/assignmentDraft";
+import {
+  isOperationalCaddy,
+  isOperationalEmploymentStatus,
+  mergeOperationalRoster,
+} from "../src/lib/operationalRoster";
 import { reservationMoveBlockReason } from "../src/lib/reservationMove";
 import {
   applyLiveAssignmentChange,
@@ -704,6 +709,178 @@ console.log("== 2026-08-28 shaped sources ==");
   assert(sheetView.leaders[0]?.name === "조장시트", "sheet/DB 조장");
 }
 
+console.log("== ops status independent of Draft + operational roster ==");
+{
+  const excluded: AvailabilityRow[] = [
+    {
+      id: 501,
+      name: "휴무재직",
+      team: "1조",
+      teamOrder: 1,
+      caddyType: "HOUSE",
+      extraFlags: [],
+      employmentStatus: "ACTIVE",
+      bucket: "excluded",
+      excludedReasons: ["휴무"],
+      specialTags: [],
+      assignmentLabels: ["휴무"],
+    },
+    {
+      id: 502,
+      name: "퇴사휴무",
+      team: "2조",
+      teamOrder: 1,
+      caddyType: "HOUSE",
+      extraFlags: [],
+      employmentStatus: "RETIRED",
+      bucket: "excluded",
+      excludedReasons: ["퇴사(RETIRED)", "휴무"],
+      specialTags: [],
+      assignmentLabels: ["휴무"],
+    },
+    {
+      id: 503,
+      name: "삭제캐디",
+      team: "3조",
+      teamOrder: 1,
+      caddyType: "HOUSE",
+      extraFlags: [],
+      employmentStatus: "DELETED",
+      bucket: "excluded",
+      excludedReasons: ["재직상태 아님(DELETED)"],
+      specialTags: [],
+      assignmentLabels: [],
+    },
+  ];
+  const opsDuties = [
+    { caddyId: 601, name: "당번재직", team: "4조", role: "DUTY_AM", employmentStatus: "ACTIVE" },
+    { caddyId: 602, name: "당번퇴사", team: "5조", role: "DUTY_AM", employmentStatus: "RETIRED" },
+    { caddyId: 603, name: "마샬재직", team: "6조", role: "MARSHAL_AM", employmentStatus: "ACTIVE" },
+    { caddyId: 604, name: "조장재직", team: "7조", role: "LEADER", employmentStatus: "ACTIVE" },
+  ];
+  const dailyUnavailables = [
+    { caddyId: 701, name: "병가재직", team: "8조", reason: "SICK", employmentStatus: "ACTIVE" },
+    { caddyId: 702, name: "병가퇴사", team: "9조", reason: "SICK", employmentStatus: "RETIRED" },
+  ];
+  const roster = mergeOperationalRoster(excluded, [
+    { id: 601, name: "당번재직", team: "4조", employmentStatus: "ACTIVE" },
+    { id: 801, name: "가용재직", team: "1조", employmentStatus: "ACTIVE" },
+    { id: 802, name: "퇴사풀", team: "2조", employmentStatus: "RETIRED" },
+  ]);
+  const offCaddies = offCaddiesFromRoster(
+    [501, 502, 802],
+    roster
+  );
+  const withoutDraft = buildUnavailablePanelGroups({
+    excluded,
+    opsDuties,
+    offCaddies,
+    dailyUnavailables,
+  });
+  const withDraft = buildUnavailablePanelGroups({
+    excluded,
+    opsDuties,
+    offCaddies,
+    dailyUnavailables,
+  });
+  const names = (groups: ReturnType<typeof buildUnavailablePanelGroups>) =>
+    groups.flatMap((g) => g.items.map((i) => i.name)).sort().join(",");
+  assert(names(withoutDraft) === names(withDraft), "same date ops groups before/after Draft");
+  assert(unavailablePanelTotal(withoutDraft) === unavailablePanelTotal(withDraft), "same count before/after Draft");
+  assert(
+    withoutDraft.find((g) => g.category === "휴무")?.items.map((i) => i.name).join(",") ===
+      "휴무재직",
+    "ACTIVE 휴무 stays, retired OFF dropped"
+  );
+  assert(
+    withoutDraft.find((g) => g.category === "당번")?.items.map((i) => i.name).join(",") ===
+      "당번재직",
+    "retired duty source hidden from current ops"
+  );
+  assert(
+    withoutDraft.find((g) => g.category === "마샬")?.items[0]?.name === "마샬재직",
+    "marshal classification unchanged"
+  );
+  assert(
+    withoutDraft.find((g) => g.category === "조장")?.items[0]?.name === "조장재직",
+    "leader classification unchanged"
+  );
+  assert(
+    withoutDraft.find((g) => g.category === "병가")?.items.map((i) => i.name).join(",") ===
+      "병가재직",
+    "retired SICK hidden"
+  );
+  assert(
+    !names(withoutDraft).includes("퇴사") && !names(withoutDraft).includes("삭제캐디"),
+    "RETIRED/DELETED absent from current ops panel"
+  );
+  assert(roster.some((r) => r.name === "가용재직"), "ACTIVE stays in operational roster");
+  assert(!roster.some((r) => r.employmentStatus === "RETIRED"), "RETIRED absent from operational roster");
+  assert(isOperationalEmploymentStatus("ACTIVE") && !isOperationalEmploymentStatus("RETIRED"), "ACTIVE filter");
+  assert(!isOperationalEmploymentStatus("DELETED") && !isOperationalCaddy({
+    id: 9,
+    employmentStatus: "RETIRED",
+    excludedReasons: ["휴무"],
+  }), "retired+OFF still non-operational");
+
+  const unused = unusedCaddies({
+    date: "2026-09-10",
+    status: "DRAFT",
+    assignments: [],
+    unassignedReservations: [],
+    closedCourseReservations: [],
+    openCourses: ["SKY"],
+    sparesByShift: [],
+    confirmedAt: null,
+    caddyPool: [
+      { id: 801, name: "가용재직", team: "1조", teamOrder: 1, caddyType: "HOUSE", employmentStatus: "ACTIVE" },
+      { id: 802, name: "퇴사풀", team: "2조", teamOrder: 1, caddyType: "HOUSE", employmentStatus: "RETIRED" },
+    ],
+  });
+  assert(
+    unused.map((c) => c.name).join(",") === "가용재직",
+    "unused/pick candidates drop RETIRED"
+  );
+
+  const storedDutyRows = opsDutyPanelRowsFromReadOnly(
+    {
+      source: "stored",
+      stored: [
+        {
+          id: 1,
+          role: "DUTY_AM",
+          roleKey: "당번_조출_1",
+          caddyId: 601,
+          rawName: "당번재직",
+          name: "당번재직",
+          team: "4조",
+          employmentStatus: "ACTIVE",
+        },
+        {
+          id: 2,
+          role: "DUTY_PM",
+          roleKey: "당번_후출_1",
+          caddyId: 602,
+          rawName: "당번퇴사",
+          name: "당번퇴사",
+          team: "5조",
+          employmentStatus: "RETIRED",
+        },
+      ],
+      sheetEntries: [],
+      error: null,
+    },
+    [
+      { id: 601, name: "당번재직", team: "4조", employmentStatus: "ACTIVE" },
+      { id: 602, name: "당번퇴사", team: "5조", employmentStatus: "RETIRED" },
+    ]
+  );
+  assert(
+    storedDutyRows.map((r) => r.name).join(",") === "당번재직",
+    "stored DailyOpsDuty retired not shown"
+  );
+}
+
 console.log("== opsDuty read-only sheet fallback ==");
 const opsDutyFallbackChecks = Promise.all([
   resolveOpsDutyReadOnly("2026-08-28", {
@@ -868,6 +1045,39 @@ console.log("== UI source: cell menus ==");
     "date hydrate reads availability GET + OFF + unavailable"
   );
   assert(/ops-unavail-chip/.test(page) && /비가용/.test(page), "mobile unavailable chip");
+  assert(/data-ops-unavail-chip/.test(page), "mobile chip is not Draft-gated");
+  assert(/data-ops-status-without-draft/.test(page), "ops status renders without Draft");
+  assert(/hasSelectedDate && !draft/.test(page), "solo ops panel when date selected and no Draft");
+  assert(/opsOffSnapshot/.test(page), "OFF snapshot hydrates without Draft");
+  assert(/mergeOperationalRoster/.test(page), "page uses common operational roster");
+  assert(
+    !/method:\s*["']POST["']/.test(
+      page.split("useEffect(() => {")[2] || ""
+    ) || /\/api\/availability\?date=/.test(page),
+    "date hydrate uses availability GET"
+  );
+  const publishedLib = fs.readFileSync(
+    path.resolve("src/lib/dailyBoardPublished.ts"),
+    "utf8"
+  );
+  const publishedService = fs.readFileSync(
+    path.resolve("src/lib/dailyBoardPublishedService.ts"),
+    "utf8"
+  );
+  const snapshotLib = fs.readFileSync(
+    path.resolve("src/lib/adminOpsDashboard.ts"),
+    "utf8"
+  );
+  assert(!/operationalRoster/.test(publishedLib), "Published payload helper not rewritten");
+  assert(!/operationalRoster/.test(publishedService), "Published service not rewritten");
+  assert(!/from ["']@\/lib\/operationalRoster["']/.test(snapshotLib), "ops dashboard snapshot not rewritten by this filter");
+  const publishedFixture = {
+    placements: [{ caddyName: "과거퇴사자", caddyId: 999 }],
+  };
+  assert(
+    publishedFixture.placements[0]?.caddyName === "과거퇴사자",
+    "Published fixture retired name preserved"
+  );
   const unavailPanel = fs.readFileSync(
     path.resolve("src/app/manage/assignments/UnavailablePanel.tsx"),
     "utf8"

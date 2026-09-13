@@ -87,7 +87,15 @@ export function isInactiveEmploymentAvailability(row: {
   excludedReasons?: readonly string[] | null;
 }): boolean {
   const emp = String(row.employmentStatus ?? "").trim().toUpperCase();
-  if (emp === "RETIRED" || emp === "LEAVE" || emp === "퇴사" || emp === "휴직") {
+  if (
+    emp === "RETIRED" ||
+    emp === "DELETED" ||
+    emp === "LEAVE" ||
+    emp === "퇴사" ||
+    emp === "삭제" ||
+    emp === "삭제됨" ||
+    emp === "휴직"
+  ) {
     return true;
   }
   if (emp === "ACTIVE") return false;

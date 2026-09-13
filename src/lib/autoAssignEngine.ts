@@ -3425,7 +3425,15 @@ export function preservePlacementOnReflow(row: AutoAssignmentRow): boolean {
 
 export function isActiveEmploymentStatus(value: unknown): boolean {
   const raw = String(value ?? "ACTIVE").trim().toUpperCase();
-  if (raw === "LEAVE" || raw === "RETIRED" || raw === "휴직" || raw === "퇴사") {
+  if (
+    raw === "LEAVE" ||
+    raw === "RETIRED" ||
+    raw === "DELETED" ||
+    raw === "휴직" ||
+    raw === "퇴사" ||
+    raw === "삭제" ||
+    raw === "삭제됨"
+  ) {
     return false;
   }
   return true;

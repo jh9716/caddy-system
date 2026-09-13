@@ -8,6 +8,7 @@ import type { AvailabilityRow } from "@/lib/availabilityEngine";
 import type { DailyOpsDutyRole } from "@/lib/dailyOpsDuty";
 import { OPS_DUTY_ROLE_LABELS } from "@/lib/dailyOpsDuty";
 import { reservationKey } from "@/lib/autoAssignEngine";
+import { isOperationalCaddy } from "@/lib/operationalRoster";
 import type { ShiftPart } from "@/lib/reservationParser";
 
 export const UNAVAILABLE_PANEL_CATEGORIES = [
@@ -155,7 +156,13 @@ export function supportNoteForCaddy(
 
 export function offCaddiesFromRoster(
   caddyIds: readonly number[] | null | undefined,
-  roster: ReadonlyArray<{ id: number; name?: string; team?: string }> | null | undefined
+  roster: ReadonlyArray<{
+    id: number;
+    name?: string;
+    team?: string;
+    employmentStatus?: unknown;
+    excludedReasons?: readonly string[] | null;
+  }> | null | undefined
 ): Array<{ id: number; name: string; team: string }> {
   const byId = new Map((roster || []).map((row) => [Number(row.id), row]));
   const out: Array<{ id: number; name: string; team: string }> = [];
@@ -163,10 +170,11 @@ export function offCaddiesFromRoster(
     const id = Number(raw);
     if (!Number.isInteger(id) || id < 1) continue;
     const hit = byId.get(id);
+    if (!hit || !isOperationalCaddy(hit)) continue;
     out.push({
       id,
-      name: String(hit?.name || "").trim() || `캐디${id}`,
-      team: String(hit?.team || "").trim() || "—",
+      name: String(hit.name || "").trim() || `캐디${id}`,
+      team: String(hit.team || "").trim() || "—",
     });
   }
   return out;
@@ -204,23 +212,27 @@ export function buildUnavailablePanelGroups(input: {
     name?: string;
     team?: string;
     role?: DailyOpsDutyRole | string;
+    employmentStatus?: unknown;
   }> | null;
   offCaddies?: Array<{
     id: number;
     name?: string;
     team?: string;
+    employmentStatus?: unknown;
   }> | null;
   dailyUnavailables?: Array<{
     caddyId: number;
     name?: string;
     team?: string;
     reason?: string;
+    employmentStatus?: unknown;
   }> | null;
   specialSupportByShift?: Record<ShiftPart, Array<{ id: number }>> | null;
 }): UnavailablePanelGroup[] {
   const byId = new Map<number, UnavailablePanelItem>();
 
   for (const row of input.excluded || []) {
+    if (!isOperationalCaddy(row)) continue;
     const reason = (row.excludedReasons || row.assignmentLabels || []).join(" · ") ||
       "비가용";
     const rawCategory = classifyReason(reason);
@@ -250,6 +262,7 @@ export function buildUnavailablePanelGroups(input: {
   for (const row of input.dailyUnavailables || []) {
     const id = Number(row.caddyId);
     if (!id) continue;
+    if (!isOperationalCaddy({ ...row, id })) continue;
     const raw = String(row.reason || "").trim();
     if (!raw) continue;
     const category = /ATTENDANCE|결근|미출근/.test(raw)
@@ -270,6 +283,7 @@ export function buildUnavailablePanelGroups(input: {
   for (const duty of input.opsDuties || []) {
     const id = Number(duty.caddyId);
     if (!id) continue;
+    if (!isOperationalCaddy({ ...duty, id })) continue;
     const category = classifyOpsRole(duty.role) || "기타";
     const roleLabel =
       duty.role && duty.role in OPS_DUTY_ROLE_LABELS

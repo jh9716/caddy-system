@@ -99,6 +99,7 @@ import {
   offCaddiesFromRoster,
   unavailablePanelTotal,
 } from "@/lib/assignmentBoardDirectEdit";
+import { isOperationalEmploymentStatus, mergeOperationalRoster } from "@/lib/operationalRoster";
 import {
   buildUnavailableBoardView,
   pickOpsStatusSummary,
@@ -398,6 +399,9 @@ export default function ManageAssignmentsOpsPage() {
   const [dutyFile, setDutyFile] = useState<File | null>(null);
   const [unavailOpen, setUnavailOpen] = useState(true);
   const [unavailSheetOpen, setUnavailSheetOpen] = useState(false);
+  const [opsOffSnapshot, setOpsOffSnapshot] = useState<DraftOffSnapshot | null>(
+    null
+  );
   const [opsDutyStored, setOpsDutyStored] = useState<{
     count: number;
     byRole?: Record<string, number>;
@@ -970,10 +974,12 @@ export default function ManageAssignmentsOpsPage() {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       clearDraftBoard();
       setDailyUnavailables([]);
+      setOpsOffSnapshot(null);
       return;
     }
     let cancelled = false;
     hydratingDraftRef.current = true;
+    setOpsOffSnapshot(null);
     setDraft(null);
     setAutoResult(null);
     setDraftSaveState("idle");
@@ -994,6 +1000,7 @@ export default function ManageAssignmentsOpsPage() {
             prewarmOffSheetForDate(date, (snap) => {
               if (cancelled) return;
               offSnapshotRef.current = snap;
+              setOpsOffSnapshot(snap);
             })
           );
           return;
@@ -1008,11 +1015,15 @@ export default function ManageAssignmentsOpsPage() {
             ? data.unavailableFromShift
             : undefined
         );
-        if (payload.offSnapshot) offSnapshotRef.current = payload.offSnapshot;
+        if (payload.offSnapshot) {
+          offSnapshotRef.current = payload.offSnapshot;
+          setOpsOffSnapshot(payload.offSnapshot);
+        }
         scheduleAfterPaint(() =>
           prewarmOffSheetForDate(date, (snap) => {
             if (cancelled) return;
             offSnapshotRef.current = snap;
+            setOpsOffSnapshot(snap);
             const current = draftRef.current;
             if (!current || current.date !== snap.date) return;
             const next = { ...current, offSnapshot: snap };
@@ -1134,7 +1145,13 @@ export default function ManageAssignmentsOpsPage() {
       ? availability.available.all
       : draft?.caddyPool || [];
     return rows
-      .filter((r) => isHouseStartCandidate(r))
+      .filter(
+        (r) =>
+          isHouseStartCandidate(r) &&
+          isOperationalEmploymentStatus(
+            "employmentStatus" in r ? r.employmentStatus : undefined
+          )
+      )
       .slice()
       .sort(
         (a, b) =>
@@ -1182,13 +1199,13 @@ export default function ManageAssignmentsOpsPage() {
 
   const opsDutyCaddyIds = opsDutyStored?.caddyIds || [];
   const pool: AutoAssignCaddy[] = useMemo(() => {
-    if (availability) {
-      return mergeRosterBaseline(
-        draft?.caddyPool,
-        rosterBaselineFromAvailability(availability)
-      );
-    }
-    return draft?.caddyPool || [];
+    const raw = availability
+      ? mergeRosterBaseline(
+          draft?.caddyPool,
+          rosterBaselineFromAvailability(availability)
+        )
+      : draft?.caddyPool || [];
+    return raw.filter((c) => isOperationalEmploymentStatus(c.employmentStatus));
   }, [availability, draft]);
 
   const freeCaddies = draft ? unusedCaddies(draft) : [];
@@ -1282,6 +1299,7 @@ export default function ManageAssignmentsOpsPage() {
         caddyIds: offCaddyIdsFromAvailability(data),
       });
       offSnapshotRef.current = offSnapshot;
+      setOpsOffSnapshot(offSnapshot);
       scheduleAfterPaint(() => prewarmOffSheetForDate(date));
       const dutyIds = Array.isArray((data as { opsDutyCaddyIds?: number[] }).opsDutyCaddyIds)
         ? ((data as { opsDutyCaddyIds?: number[] }).opsDutyCaddyIds as number[])
@@ -2886,16 +2904,38 @@ export default function ManageAssignmentsOpsPage() {
     );
   }, [draft, quickSheet]);
 
+  const hasSelectedDate = /^\d{4}-\d{2}-\d{2}$/.test(date);
+
+  const operationalRoster = useMemo(
+    () =>
+      mergeOperationalRoster(
+        availability?.available?.all,
+        availability?.special,
+        availability?.excluded,
+        draft?.caddyPool
+      ),
+    [
+      availability?.available?.all,
+      availability?.special,
+      availability?.excluded,
+      draft?.caddyPool,
+    ]
+  );
+
+  const liveOffSnapshot = isUsableOffSnapshot(draft?.offSnapshot, date)
+    ? draft?.offSnapshot
+    : isUsableOffSnapshot(opsOffSnapshot, date)
+      ? opsOffSnapshot
+      : null;
+
   const unavailableGroups = useMemo(
     () =>
       buildUnavailablePanelGroups({
         excluded: availability?.excluded,
         opsDuties: opsDutyStored?.rows,
         offCaddies: offCaddiesFromRoster(
-          isUsableOffSnapshot(draft?.offSnapshot, date)
-            ? draft?.offSnapshot?.caddyIds
-            : [],
-          draft?.caddyPool
+          liveOffSnapshot?.caddyIds,
+          operationalRoster
         ),
         dailyUnavailables,
         specialSupportByShift,
@@ -2903,9 +2943,8 @@ export default function ManageAssignmentsOpsPage() {
     [
       availability?.excluded,
       opsDutyStored?.rows,
-      draft?.offSnapshot,
-      draft?.caddyPool,
-      date,
+      liveOffSnapshot?.caddyIds,
+      operationalRoster,
       dailyUnavailables,
       specialSupportByShift,
     ]
@@ -2948,6 +2987,20 @@ export default function ManageAssignmentsOpsPage() {
     setCourseOpen((prev) => ({ ...prev, [code]: !prev[code] }));
   }
 
+  const unavailablePanelEl = (
+    <UnavailablePanel
+      groups={unavailableGroups}
+      sources={unavailableBoardSources}
+      summary={opsStatusSummary}
+      open={unavailOpen}
+      sheetOpen={unavailSheetOpen}
+      onToggle={() => {
+        setUnavailOpen((v) => !v);
+        setUnavailSheetOpen(false);
+      }}
+    />
+  );
+
   return (
     <div className="ops-root">
       <header className="ops-header">
@@ -2955,9 +3008,9 @@ export default function ManageAssignmentsOpsPage() {
           <h1>자동배치 운영</h1>
           <p>가용 캐디 불러오기 → 자동배치 실행 → 배치 수정/자동저장 → 배치 확정</p>
         </div>
-        {draft && (
+        {(hasSelectedDate || draft) && (
           <div className="ops-header-side">
-            {persistInFlight || pendingIntentCount > 0 ? (
+            {draft && (persistInFlight || pendingIntentCount > 0) ? (
               <div
                 className="ops-pipeline-saving"
                 role="status"
@@ -2972,26 +3025,31 @@ export default function ManageAssignmentsOpsPage() {
                 </span>
               </div>
             ) : null}
-            <button
-              type="button"
-              className="ops-unavail-chip"
-              aria-expanded={unavailSheetOpen}
-              onClick={() => {
-                setUnavailSheetOpen((v) => !v);
-                setUnavailOpen(true);
-              }}
-            >
-              비가용 {unavailablePanelTotal(unavailableGroups)}명
-            </button>
-            <DraftSaveStatus
-              state={draftSaveState}
-              savedAt={draftSavedAt}
-              onRetry={() => {
-                if (draftRef.current) queueDraftSave(draftRef.current, true);
-              }}
-              onReload={() => void reloadLatestDraft()}
-            />
-            {published ? (
+            {hasSelectedDate ? (
+              <button
+                type="button"
+                className="ops-unavail-chip"
+                data-ops-unavail-chip="1"
+                aria-expanded={unavailSheetOpen}
+                onClick={() => {
+                  setUnavailSheetOpen((v) => !v);
+                  setUnavailOpen(true);
+                }}
+              >
+                비가용 {unavailablePanelTotal(unavailableGroups)}명
+              </button>
+            ) : null}
+            {draft ? (
+              <DraftSaveStatus
+                state={draftSaveState}
+                savedAt={draftSavedAt}
+                onRetry={() => {
+                  if (draftRef.current) queueDraftSave(draftRef.current, true);
+                }}
+                onReload={() => void reloadLatestDraft()}
+              />
+            ) : null}
+            {draft && published ? (
               <div className="ops-published-meta">
                 확정 {formatPublishedAt(published.publishedAt)} ·{" "}
                 {publisherDisplayName(published.publishedByUsername)}
@@ -3469,6 +3527,15 @@ export default function ManageAssignmentsOpsPage() {
         </section>
       )}
 
+      {hasSelectedDate && !draft ? (
+        <div
+          className="ops-direct-layout ops-ops-status-solo"
+          data-ops-status-without-draft="1"
+        >
+          {unavailablePanelEl}
+        </div>
+      ) : null}
+
       {draft && (
         <>
           {/*
@@ -3853,17 +3920,7 @@ export default function ManageAssignmentsOpsPage() {
                 </div>
               </div>
               </div>
-              <UnavailablePanel
-                groups={unavailableGroups}
-                sources={unavailableBoardSources}
-                summary={opsStatusSummary}
-                open={unavailOpen}
-                sheetOpen={unavailSheetOpen}
-                onToggle={() => {
-                  setUnavailOpen((v) => !v);
-                  setUnavailSheetOpen(false);
-                }}
-              />
+              {unavailablePanelEl}
             </div>
           )}
 
@@ -4570,6 +4627,10 @@ const opsCss = `
     display: grid;
     gap: 12px;
   }
+  .ops-ops-status-solo {
+    display: grid;
+    gap: 12px;
+  }
   .ops-direct-main { min-width: 0; }
   .ops-unavail-chip {
     display: none;
@@ -4725,6 +4786,12 @@ const opsCss = `
       top: 8px;
       max-height: calc(100vh - 16px);
       overflow: auto;
+    }
+    .ops-ops-status-solo {
+      grid-template-columns: minmax(0, 1fr) minmax(280px, 26%);
+    }
+    .ops-ops-status-solo .ops-unavail {
+      grid-column: 2;
     }
   }
   @media (max-width: 1279px) {

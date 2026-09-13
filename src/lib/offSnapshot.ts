@@ -11,6 +11,7 @@ import {
   resolveOffSheetNameTokens,
   type NameMatchCaddy,
 } from "@/lib/dailyCaddyNameMatch";
+import { filterOperationalRoster, isOperationalCaddy } from "@/lib/operationalRoster";
 
 export const OFF_SNAPSHOT_VERSION = 1 as const;
 
@@ -89,14 +90,23 @@ export function buildOffSnapshot(input: {
 }
 
 export function offCaddyIdsFromAvailability(data: {
-  excluded?: Array<{ id?: unknown; excludedReasons?: unknown }> | null;
+  excluded?: Array<{
+    id?: unknown;
+    excludedReasons?: unknown;
+    employmentStatus?: unknown;
+  }> | null;
 }): number[] {
   return uniquePositiveIds(
     (data.excluded || [])
       .filter(
         (row) =>
           Array.isArray(row.excludedReasons) &&
-          row.excludedReasons.map(String).includes("휴무")
+          row.excludedReasons.map(String).includes("휴무") &&
+          isOperationalCaddy({
+            id: Number(row.id),
+            employmentStatus: row.employmentStatus,
+            excludedReasons: row.excludedReasons.map(String),
+          })
       )
       .map((row) => row.id)
   );
@@ -106,10 +116,11 @@ export function offCaddyIdsFromNames(
   names: readonly string[],
   caddies: readonly NameMatchCaddy[]
 ): number[] {
+  const operational = filterOperationalRoster(caddies);
   const ids: number[] = [];
   for (const name of names) {
-    for (const token of resolveOffSheetNameTokens(name, caddies)) {
-      const match = matchCaddyByExactName(token, caddies);
+    for (const token of resolveOffSheetNameTokens(name, operational)) {
+      const match = matchCaddyByExactName(token, operational);
       if (match.status === "matched") ids.push(match.caddyId);
     }
   }

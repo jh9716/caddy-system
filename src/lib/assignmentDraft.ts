@@ -38,6 +38,7 @@ import {
   isUsableOffSnapshot,
   type DraftOffSnapshot,
 } from "@/lib/offSnapshot";
+import { isOperationalEmploymentStatus } from "@/lib/operationalRoster";
 import { mergeDraftOnlyReservationFlags } from "@/lib/assignmentBoardDirectEdit";
 
 export type DraftStatus = "DRAFT" | "EDITED" | "CONFIRMED" | "APPLIED";
@@ -226,7 +227,13 @@ export function usedCaddyIds(draft: AssignmentDraft): Set<number> {
 
 export function unusedCaddies(draft: AssignmentDraft): AutoAssignCaddy[] {
   const used = usedCaddyIds(draft);
-  return draft.caddyPool.filter((c) => !used.has(c.id) && c.id > 0 && c.name);
+  return draft.caddyPool.filter(
+    (c) =>
+      !used.has(c.id) &&
+      c.id > 0 &&
+      c.name &&
+      isOperationalEmploymentStatus(c.employmentStatus)
+  );
 }
 
 export function spareIdsFromDraft(draft: AssignmentDraft): number[] {
