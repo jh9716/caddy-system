@@ -845,17 +845,16 @@ console.log("== ops menu simplify: one place per daily action ==");
       /SameDayAddSheet/.test(board) &&
       /onEmptyBoardCellClick/.test(board) &&
       /ops-date-settings/.test(board) &&
-      /기타 배치 설정 \(1부 첫 캐디, 3부, 당번·마샬, 특수근무, 코스\)/.test(board),
+      />\s*기타 배치 설정\s*</.test(board) &&
+      !/기타 배치 설정 \(1부 첫 캐디/.test(board),
     "추가팀 entry points and extra assignment settings remain"
   );
 
   const flowAt = board.indexOf('className="ops-flow"');
+  const firstCaddyAt = board.indexOf("오늘 1부 첫 캐디 (필수)");
   const excelAt = board.indexOf("<span>예약 Excel</span>");
   const actionsAt = board.indexOf('className="ops-actions"');
-  const dateSettingsAt = board.indexOf(
-    "기타 배치 설정 (1부 첫 캐디, 3부, 당번·마샬, 특수근무, 코스)"
-  );
-  const firstCaddyAt = board.indexOf("오늘 1부 첫 캐디 (필수)");
+  const dateSettingsAt = board.indexOf(">기타 배치 설정<");
   const thirdStartAt = board.indexOf("3부 첫 캐디 (선택)");
   const dutyAt = board.indexOf("당번·마샬·조장 Excel");
   const livePanelAt = board.indexOf("<LiveChangePanel");
@@ -864,17 +863,18 @@ console.log("== ops menu simplify: one place per daily action ==");
   const publishTitleAt = board.indexOf(">운영 반영<");
   assert(
     flowAt > 0 &&
-      excelAt > flowAt &&
+      firstCaddyAt > flowAt &&
+      excelAt > firstCaddyAt &&
       actionsAt > excelAt &&
       dateSettingsAt > actionsAt &&
-      firstCaddyAt > dateSettingsAt &&
-      thirdStartAt > firstCaddyAt &&
+      firstCaddyAt < dateSettingsAt &&
+      thirdStartAt > dateSettingsAt &&
       dutyAt > thirdStartAt &&
       boardToolsAt > 0 &&
       livePanelAt > boardToolsAt &&
       publishAt > 0 &&
       publishTitleAt > publishAt,
-    "first screen: date/excel/run before extra settings; house/3부 inside details; 관리 도구 after board"
+    "first screen: date/house/excel/run before extra settings; 3부 inside details"
   );
   assert(
     /min-height:\s*48px/.test(board) && /className="qa-title"/.test(panel),
