@@ -3,10 +3,16 @@
 import type { UnavailablePanelGroup } from "@/lib/assignmentBoardDirectEdit";
 import {
   buildUnavailableBoardView,
+  pickOpsStatusSummary,
+  type OpsStatusSummary,
   type UnavailableBoardPerson,
   type UnavailableSlotBlock,
   type UnavailableTeamBlock,
 } from "@/lib/unavailablePanelView";
+
+function formatCount(value: number | null | undefined): string {
+  return value == null ? "—" : String(value);
+}
 
 function PersonPill({ person }: { person: UnavailableBoardPerson }) {
   return (
@@ -66,27 +72,58 @@ function SlotBlocks({ slots }: { slots: UnavailableSlotBlock[] }) {
   );
 }
 
+function SummaryStrip({ summary }: { summary: OpsStatusSummary }) {
+  return (
+    <div className="ops-unavail-summary" aria-label="오늘 운영 요약">
+      <span className="ops-unavail-stat">
+        <b>{formatCount(summary.employed)}</b>
+        <span>재직</span>
+      </span>
+      <span className="ops-unavail-stat">
+        <b>{formatCount(summary.off)}</b>
+        <span>휴무</span>
+      </span>
+      <span className="ops-unavail-stat is-final">
+        <b>{formatCount(summary.finalAvailable)}</b>
+        <span>최종가용</span>
+      </span>
+      <span className="ops-unavail-stat">
+        <b>{formatCount(summary.sick)}</b>
+        <span>병가</span>
+      </span>
+      <span className="ops-unavail-stat">
+        <b>{formatCount(summary.absent)}</b>
+        <span>결근</span>
+      </span>
+    </div>
+  );
+}
+
 export function UnavailablePanel({
   groups,
+  summary,
   open,
   sheetOpen = false,
   onToggle,
 }: {
   groups: UnavailablePanelGroup[];
+  summary?: OpsStatusSummary | null;
   open: boolean;
   sheetOpen?: boolean;
   onToggle: () => void;
 }) {
   const view = buildUnavailableBoardView(groups);
+  const stats = summary || pickOpsStatusSummary(null, groups);
+  const hasHealth = view.sick.length > 0 || view.absent.length > 0;
   return (
     <aside
       className={`ops-unavail${open ? " is-open" : ""}${
         sheetOpen ? " is-mobile-open" : ""
       }`}
-      aria-label="오늘 비가용"
+      aria-label="오늘 운영현황"
     >
       <div className="ops-unavail-head">
-        <h2>오늘 비가용 {view.total}명</h2>
+        <h2>오늘 운영현황</h2>
         <button
           type="button"
           className="ops-unavail-close"
@@ -96,6 +133,7 @@ export function UnavailablePanel({
           닫기
         </button>
       </div>
+      <SummaryStrip summary={stats} />
       <div className="ops-unavail-body">
         {view.total === 0 ? (
           <p className="ops-unavail-empty">표시할 비가용 캐디가 없습니다.</p>
@@ -103,86 +141,57 @@ export function UnavailablePanel({
           <>
             {view.offTeams.length > 0 ? (
               <section className="ops-unavail-sec">
-                <h3>
-                  휴무{" "}
-                  <em>
-                    {view.offTeams.reduce((n, block) => n + block.people.length, 0)}
-                  </em>
-                </h3>
+                <h3>휴무</h3>
                 <TeamBlocks
                   blocks={view.offTeams}
                   className="ops-unavail-off-grid"
                 />
               </section>
             ) : null}
-            {view.sick.length > 0 ? (
+            {hasHealth ? (
               <section className="ops-unavail-sec">
-                <h3>
-                  병가 <em>{view.sick.length}</em>
-                </h3>
-                <PersonFlow people={view.sick} />
-              </section>
-            ) : null}
-            {view.absent.length > 0 ? (
-              <section className="ops-unavail-sec">
-                <h3>
-                  결근 <em>{view.absent.length}</em>
-                </h3>
-                <PersonFlow people={view.absent} />
+                <h3>병가 / 결근</h3>
+                {view.sick.length > 0 ? (
+                  <div className="ops-unavail-row">
+                    <span className="ops-unavail-k">병가</span>
+                    <PersonFlow people={view.sick} />
+                  </div>
+                ) : null}
+                {view.absent.length > 0 ? (
+                  <div className="ops-unavail-row">
+                    <span className="ops-unavail-k">결근</span>
+                    <PersonFlow people={view.absent} />
+                  </div>
+                ) : null}
               </section>
             ) : null}
             {view.dutySlots.length > 0 ? (
               <section className="ops-unavail-sec">
-                <h3>
-                  당번{" "}
-                  <em>
-                    {view.dutySlots.reduce((n, slot) => n + slot.people.length, 0)}
-                  </em>
-                </h3>
+                <h3>당번</h3>
                 <SlotBlocks slots={view.dutySlots} />
               </section>
             ) : null}
             {view.marshalSlots.length > 0 ? (
               <section className="ops-unavail-sec">
-                <h3>
-                  마샬{" "}
-                  <em>
-                    {view.marshalSlots.reduce(
-                      (n, slot) => n + slot.people.length,
-                      0
-                    )}
-                  </em>
-                </h3>
+                <h3>마샬</h3>
                 <SlotBlocks slots={view.marshalSlots} />
               </section>
             ) : null}
             {view.leaders.length > 0 ? (
               <section className="ops-unavail-sec">
-                <h3>
-                  조장 <em>{view.leaders.length}</em>
-                </h3>
+                <h3>조장</h3>
                 <PersonFlow people={view.leaders} />
               </section>
             ) : null}
             {view.specialBands.length > 0 ? (
               <section className="ops-unavail-sec">
-                <h3>
-                  특수반{" "}
-                  <em>
-                    {view.specialBands.reduce(
-                      (n, block) => n + block.people.length,
-                      0
-                    )}
-                  </em>
-                </h3>
+                <h3>특수반</h3>
                 <TeamBlocks blocks={view.specialBands} />
               </section>
             ) : null}
             {view.other.length > 0 ? (
               <section className="ops-unavail-sec">
-                <h3>
-                  기타 <em>{view.other.length}</em>
-                </h3>
+                <h3>기타</h3>
                 <PersonFlow people={view.other} />
               </section>
             ) : null}

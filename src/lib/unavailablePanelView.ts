@@ -58,6 +58,35 @@ export type UnavailableBoardView = {
   other: UnavailableBoardPerson[];
 };
 
+export type OpsStatusSummary = {
+  employed: number | null;
+  off: number | null;
+  finalAvailable: number | null;
+  sick: number;
+  absent: number;
+};
+
+export function pickOpsStatusSummary(
+  dailySummary:
+    | {
+        baseAvailable: number;
+        off: number;
+        finalAvailable: number;
+      }
+    | null
+    | undefined,
+  groups: readonly UnavailablePanelGroup[]
+): OpsStatusSummary {
+  return {
+    employed: dailySummary != null ? dailySummary.baseAvailable : null,
+    off:
+      dailySummary != null ? dailySummary.off : itemsOf(groups, "휴무").length,
+    finalAvailable: dailySummary != null ? dailySummary.finalAvailable : null,
+    sick: itemsOf(groups, "병가").length,
+    absent: itemsOf(groups, "결근").length,
+  };
+}
+
 export function supportBadgesFromReason(
   reason: string
 ): UnavailableSupportBadge[] {

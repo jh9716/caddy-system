@@ -99,6 +99,7 @@ import {
   offCaddiesFromRoster,
   unavailablePanelTotal,
 } from "@/lib/assignmentBoardDirectEdit";
+import { pickOpsStatusSummary } from "@/lib/unavailablePanelView";
 import { emptySpecialSupportByShift } from "@/lib/dailySpecialSupport";
 import { SPECIAL_SETTINGS_STALE_MESSAGE } from "@/lib/dailySpecialDuty";
 import { isThirdBandTeam, THIRD_BAND_TEAMS } from "@/lib/caddyManage";
@@ -2907,6 +2908,11 @@ export default function ManageAssignmentsOpsPage() {
     ]
   );
 
+  const opsStatusSummary = useMemo(
+    () => pickOpsStatusSummary(availability?.dailySummary, unavailableGroups),
+    [availability?.dailySummary, unavailableGroups]
+  );
+
   const moveSourceRow = useMemo(() => {
     if (!draft || !moveKey) return null;
     return (
@@ -3121,63 +3127,42 @@ export default function ManageAssignmentsOpsPage() {
             {availability.counts.special} · 제외 {availability.counts.excluded}
           </div>
         )}
-        {availability?.dailySummary && (
-          <div className="ops-daily" aria-label="당일 가용 요약">
-            <div className="ops-daily-title">당일 가용 요약</div>
-            <ul className="ops-daily-list">
-              <li>재직/기본 가용 {availability.dailySummary.baseAvailable}</li>
-              <li>휴무 {availability.dailySummary.off}</li>
-              <li>
-                조출당번 {availability.dailySummary.dutyAm} / 후출당번{" "}
-                {availability.dailySummary.dutyPm}
-              </li>
-              <li>
-                조출마샬 {availability.dailySummary.marshalAm} / 후출마샬{" "}
-                {availability.dailySummary.marshalPm}
-              </li>
-              <li>조장 {availability.dailySummary.leader}</li>
-              <li>
-                휴무/기타 중복 {availability.dailySummary.duplicateExcluded}명
-              </li>
-              <li>
-                실제 추가 제외{" "}
-                {availability.dailySummary.dutyAdditionalExcluded ?? 0}명
-              </li>
-              <li>확인 필요 {availability.dailySummary.reviewCount}</li>
-              <li className="final">
-                최종 가용 {availability.dailySummary.finalAvailable}
-              </li>
-            </ul>
-            {opsDutySyncNotice && (
-              <div
-                className={
-                  opsDutySyncNotice.tone === "review"
-                    ? "ops-error"
-                    : "ops-meta"
-                }
-              >
-                {opsDutySyncNotice.text}
-                {opsDutySyncNotice.tone === "review" ? (
-                  <>
-                    {" "}
-                    <button
-                      type="button"
-                      className="ghost"
-                      onClick={() => {
-                        if (dateSettingsRef.current) {
-                          dateSettingsRef.current.open = true;
-                        }
-                        document
-                          .getElementById("ops-duty-sheet-block")
-                          ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-                      }}
-                    >
-                      운영배치 불러오기에서 확인
-                    </button>
-                  </>
-                ) : null}
-              </div>
-            )}
+        {opsDutySyncNotice && (
+          <div
+            className={
+              opsDutySyncNotice.tone === "review" ? "ops-error" : "ops-meta"
+            }
+          >
+            {opsDutySyncNotice.text}
+            {opsDutySyncNotice.tone === "review" ? (
+              <>
+                {" "}
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => {
+                    if (dateSettingsRef.current) {
+                      dateSettingsRef.current.open = true;
+                    }
+                    document
+                      .getElementById("ops-duty-sheet-block")
+                      ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                  }}
+                >
+                  운영배치 불러오기에서 확인
+                </button>
+              </>
+            ) : null}
+          </div>
+        )}
+        {availability?.dailySummary &&
+        ((availability.dailySummary.duplicates || []).length > 0 ||
+          availability.dailySummary.reviews.length > 0) ? (
+          <details className="ops-daily-mini">
+            <summary>
+              확인 필요 {availability.dailySummary.reviewCount} · 중복{" "}
+              {availability.dailySummary.duplicateExcluded}
+            </summary>
             {(availability.dailySummary.duplicates || []).length > 0 && (
               <div className="ops-daily-reviews">
                 <div className="ops-daily-title">중복 상세</div>
@@ -3203,8 +3188,8 @@ export default function ManageAssignmentsOpsPage() {
                 </ul>
               </div>
             )}
-          </div>
-        )}
+          </details>
+        ) : null}
         {autoResult && (
           <div className="ops-meta">
             자동배치 {autoResult.meta.assignedCount}건 · 미배치{" "}
@@ -3848,6 +3833,7 @@ export default function ManageAssignmentsOpsPage() {
               </div>
               <UnavailablePanel
                 groups={unavailableGroups}
+                summary={opsStatusSummary}
                 open={unavailOpen}
                 sheetOpen={unavailSheetOpen}
                 onToggle={() => {
@@ -4394,6 +4380,14 @@ const opsCss = `
     display: grid;
     gap: 8px;
   }
+  .ops-daily-mini {
+    font-size: 0.78rem;
+    color: #9a3412;
+  }
+  .ops-daily-mini summary {
+    cursor: pointer;
+    font-weight: 700;
+  }
   .ops-daily-title { font-size: 0.78rem; font-weight: 800; color: #1c1917; }
   .ops-daily-list {
     margin: 0; padding: 0; list-style: none;
@@ -4578,16 +4572,42 @@ const opsCss = `
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 8px 10px;
+    padding: 6px 8px 5px;
     background: #f8fafc;
-    border-bottom: 1px solid #e2e8f0;
   }
   .ops-unavail-head h2 {
     margin: 0;
-    font-size: 0.8rem;
+    font-size: 0.78rem;
     font-weight: 800;
     color: #0f172a;
   }
+  .ops-unavail-summary {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 2px;
+    padding: 4px 6px 6px;
+    border-bottom: 1px solid #e2e8f0;
+    background: #f8fafc;
+  }
+  .ops-unavail-stat {
+    display: grid;
+    justify-items: center;
+    gap: 0;
+    min-width: 0;
+  }
+  .ops-unavail-stat b {
+    font-size: 0.84rem;
+    font-weight: 800;
+    color: #0f172a;
+    line-height: 1.2;
+  }
+  .ops-unavail-stat span {
+    font-size: 0.58rem;
+    font-weight: 700;
+    color: #64748b;
+    letter-spacing: -0.02em;
+  }
+  .ops-unavail-stat.is-final b { color: #14532d; }
   .ops-unavail-close {
     display: none;
     border: 1px solid #cbd5e1;
@@ -4599,48 +4619,46 @@ const opsCss = `
     padding: 2px 8px;
     cursor: pointer;
   }
-  .ops-unavail-body { padding: 8px 10px 10px; }
+  .ops-unavail-body { padding: 6px 8px 8px; }
   .ops-unavail-empty {
-    margin: 8px 0 0;
+    margin: 6px 0 0;
     font-size: 0.75rem;
     color: #94a3b8;
   }
-  .ops-unavail-sec { margin-top: 8px; }
+  .ops-unavail-sec { margin-top: 7px; }
   .ops-unavail-sec:first-child { margin-top: 0; }
   .ops-unavail-sec h3 {
-    margin: 0 0 4px;
-    font-size: 0.7rem;
+    margin: 0 0 3px;
+    font-size: 0.66rem;
     font-weight: 800;
-    color: #334155;
-    letter-spacing: 0.01em;
-  }
-  .ops-unavail-sec h3 em {
-    font-style: normal;
-    font-weight: 700;
-    color: #64748b;
+    color: #475569;
+    letter-spacing: 0.04em;
+    text-transform: none;
+    border-bottom: 1px solid #e2e8f0;
+    padding-bottom: 2px;
   }
   .ops-unavail-off-grid,
   .ops-unavail-slots {
     display: grid;
-    gap: 3px;
+    gap: 2px;
   }
   .ops-unavail-row {
     display: grid;
-    grid-template-columns: 36px minmax(0, 1fr);
-    gap: 6px;
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 4px;
     align-items: start;
   }
   .ops-unavail-k {
-    font-size: 0.66rem;
+    font-size: 0.64rem;
     font-weight: 800;
     color: #64748b;
-    line-height: 1.45;
+    line-height: 1.5;
     padding-top: 1px;
   }
   .ops-unavail-pills {
     display: flex;
     flex-wrap: wrap;
-    gap: 2px 6px;
+    gap: 1px 5px;
     min-width: 0;
   }
   .ops-unavail-pill {
@@ -4648,10 +4666,10 @@ const opsCss = `
     align-items: center;
     gap: 3px;
     max-width: 100%;
-    line-height: 1.35;
+    line-height: 1.4;
   }
   .ops-unavail-name {
-    font-size: 0.72rem;
+    font-size: 0.78rem;
     font-weight: 700;
     color: #0f172a;
     white-space: nowrap;
@@ -4676,7 +4694,7 @@ const opsCss = `
   }
   @media (min-width: 1280px) {
     .ops-direct-layout {
-      grid-template-columns: minmax(0, 1fr) minmax(300px, 28%);
+      grid-template-columns: minmax(0, 1fr) minmax(280px, 26%);
       align-items: start;
     }
     .ops-unavail {

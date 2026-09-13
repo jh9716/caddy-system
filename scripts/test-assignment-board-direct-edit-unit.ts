@@ -15,6 +15,7 @@ import {
 import {
   buildUnavailableBoardView,
   countUnavailableBoardPeople,
+  pickOpsStatusSummary,
   supportBadgesFromReason,
 } from "../src/lib/unavailablePanelView";
 import { applyLiveResultToDraft, createDraftFromAutoResult } from "../src/lib/assignmentDraft";
@@ -531,6 +532,12 @@ console.log("== unavailable board presentation ==");
     "특수반 only when team already exists"
   );
   assert(view.specialBands.every((b) => b.team !== "주중반"), "missing 주중반 hidden");
+  const picked = pickOpsStatusSummary(
+    { baseAvailable: 88, off: 40, finalAvailable: 61 },
+    groups
+  );
+  assert(picked.employed === 88 && picked.off === 40 && picked.finalAvailable === 61, "summary reuses dailySummary");
+  assert(picked.sick === 1 && picked.absent === 1, "summary reuses grouped 병가/결근");
 }
 
 console.log("== special TEAM MOVE keeps anchors ==");
@@ -649,9 +656,14 @@ console.log("== UI source: cell menus ==");
   );
   assert(/is-mobile-open/.test(unavailPanel), "unavailable sheet open");
   assert(/buildUnavailableBoardView/.test(unavailPanel), "panel uses compact board view");
+  assert(/오늘 운영현황/.test(unavailPanel), "ops status panel title");
+  assert(/재직/.test(unavailPanel) && /최종가용/.test(unavailPanel), "compact summary chips");
+  assert(/병가 \/ 결근/.test(unavailPanel), "sick/absent combined section");
   assert(!/<ul>/.test(unavailPanel), "raw unavailable list removed");
+  assert(!/당일 가용 요약/.test(page), "top daily summary box removed");
+  assert(/pickOpsStatusSummary/.test(page), "summary numbers reused not recalculated");
   assert(/min-width: 1280px/.test(page), "PC side-by-side from 1280");
-  assert(/minmax\(300px, 28%\)/.test(page), "right panel ~25-30%");
+  assert(/minmax\(280px, 26%\)/.test(page), "right panel ~25-28%");
   assert(/position: sticky/.test(page), "desktop unavailable panel sticky");
   assert(/max-width: 1279px/.test(page), "no forced side panel below 1280");
   assert(!/inset 0 -3px 0 #f59e0b/.test(page), "limo orange stripe removed");
