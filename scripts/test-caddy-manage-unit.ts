@@ -846,6 +846,10 @@ console.log("== ops menu simplify: one place per daily action ==");
       /onEmptyBoardCellClick/.test(board) &&
       /ops-date-settings/.test(board) &&
       />\s*기타 배치 설정\s*</.test(board) &&
+      /일반설정/.test(board) &&
+      /특수근무/.test(board) &&
+      /지원근무/.test(board) &&
+      /ops-settings-tabs/.test(board) &&
       !/기타 배치 설정 \(1부 첫 캐디/.test(board) &&
       /운영배치 불러오기/.test(board) &&
       !/당번·마샬·조장 Excel/.test(board),

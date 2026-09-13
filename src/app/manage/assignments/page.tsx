@@ -495,6 +495,9 @@ export default function ManageAssignmentsOpsPage() {
     ShiftPart | "UNASSIGNED" | "CLOSED"
   >("1부");
   const [courseOpen, setCourseOpen] = useState<CourseOpenState>(defaultCourseOpen);
+  const [settingsTab, setSettingsTab] = useState<
+    "general" | "special" | "support"
+  >("general");
   const [houseStartCaddyId, setHouseStartCaddyId] = useState<number | "">("");
   const [thirdStartCaddyId, setThirdStartCaddyId] = useState<number | "">("");
   const [thirdWeekly, setThirdWeekly] = useState<ThirdWeeklyStartState | null>(
@@ -848,6 +851,14 @@ export default function ManageAssignmentsOpsPage() {
   const onSpecialSupportLoaded = useCallback(
     (byShift: ReturnType<typeof emptySpecialSupportByShift>) => {
       setSpecialSupportByShift(byShift);
+    },
+    []
+  );
+
+  const openDateSettings = useCallback(
+    (tab: "general" | "special" | "support" = "general") => {
+      setSettingsTab(tab);
+      if (dateSettingsRef.current) dateSettingsRef.current.open = true;
     },
     []
   );
@@ -1403,7 +1414,7 @@ export default function ManageAssignmentsOpsPage() {
         if (sync.preview) setOpsDutySheetPreview(sync.preview);
         showToast("운영배치 확인 필요");
         requestAnimationFrame(() => {
-          if (dateSettingsRef.current) dateSettingsRef.current.open = true;
+          openDateSettings("general");
           document
             .getElementById("ops-duty-sheet-block")
             ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -3280,9 +3291,7 @@ export default function ManageAssignmentsOpsPage() {
                   type="button"
                   className="ghost"
                   onClick={() => {
-                    if (dateSettingsRef.current) {
-                      dateSettingsRef.current.open = true;
-                    }
+                    openDateSettings("general");
                     document
                       .getElementById("ops-duty-sheet-block")
                       ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -3370,6 +3379,39 @@ export default function ManageAssignmentsOpsPage() {
         </div>
         <details className="ops-date-settings" ref={dateSettingsRef}>
           <summary>기타 배치 설정</summary>
+          <div className="ops-settings-tabs" role="tablist" aria-label="배치 설정">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={settingsTab === "general"}
+              className={settingsTab === "general" ? "on" : ""}
+              onClick={() => setSettingsTab("general")}
+            >
+              일반설정
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={settingsTab === "special"}
+              className={settingsTab === "special" ? "on" : ""}
+              onClick={() => setSettingsTab("special")}
+            >
+              특수근무
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={settingsTab === "support"}
+              className={settingsTab === "support" ? "on" : ""}
+              onClick={() => setSettingsTab("support")}
+            >
+              지원근무
+            </button>
+          </div>
+          <div
+            className="ops-settings-pane"
+            hidden={settingsTab !== "general"}
+          >
           <div className="ops-field ops-third-week">
             <span>
               이번 주 3부반 시작조
@@ -3524,9 +3566,7 @@ export default function ManageAssignmentsOpsPage() {
             )}
           </div>
           <div className="ops-courses" aria-label="코스 Open/Close">
-            <div className="ops-courses-label">
-              코스 운영 (기본 전부 ON · OFF 코스는 배치 제외)
-            </div>
+            <div className="ops-courses-label">코스 ON/OFF</div>
             <div className="ops-courses-toggles">
               {COURSE_CODES.map((code) => (
                 <button
@@ -3544,6 +3584,11 @@ export default function ManageAssignmentsOpsPage() {
               ))}
             </div>
           </div>
+          </div>
+          <div
+            className="ops-settings-pane"
+            hidden={settingsTab !== "special"}
+          >
           <SpecialDutyPanel
             key={date || "no-date"}
             date={date}
@@ -3555,6 +3600,11 @@ export default function ManageAssignmentsOpsPage() {
               showToast(SPECIAL_SETTINGS_STALE_MESSAGE);
             }}
           />
+          </div>
+          <div
+            className="ops-settings-pane"
+            hidden={settingsTab !== "support"}
+          >
           <SpecialSupportPanel
             date={date}
             excludedRows={availability?.excluded}
@@ -3565,6 +3615,7 @@ export default function ManageAssignmentsOpsPage() {
               showToast(SPECIAL_SETTINGS_STALE_MESSAGE);
             }}
           />
+          </div>
         </details>
       </section>
 
@@ -5879,7 +5930,7 @@ const opsCss = `
     padding: 4px 10px 10px;
     background: #f8fafc;
     display: grid;
-    gap: 10px;
+    gap: 8px;
   }
   .ops-date-settings > summary {
     cursor: pointer;
@@ -5897,5 +5948,32 @@ const opsCss = `
   .ops-date-settings:not([open]) {
     padding-bottom: 4px;
     gap: 0;
+  }
+  .ops-settings-tabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .ops-settings-tabs button {
+    min-height: 40px;
+    border-radius: 8px;
+    border: 1px solid #e2e8f0;
+    background: #fff;
+    color: #475569;
+    font-size: 0.8rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .ops-settings-tabs button.on {
+    background: #0f172a;
+    color: #fff;
+    border-color: #0f172a;
+  }
+  .ops-settings-pane {
+    display: grid;
+    gap: 8px;
+  }
+  .ops-settings-pane[hidden] {
+    display: none !important;
   }
 `;

@@ -710,9 +710,18 @@ section("UI/API 문자열");
     join(process.cwd(), "src/app/api/assignments/preview/route.ts"),
     "utf8"
   );
-  assert(src.includes("자동 배치") && src.includes("수동 위치 지정"), "AUTO/MANUAL 라디오");
+  assert(src.includes("자동") && src.includes("위치 지정"), "AUTO/MANUAL 토글");
+  assert(src.includes("배치 방식"), "배치 방식 라벨");
+  assert(src.includes("1부 시작 위치"), "MANUAL 시작 위치 바로 노출");
+  assert(
+    src.includes("선택한 위치부터 등록 순서대로 연속 배치됩니다."),
+    "MANUAL 연속 배치 안내"
+  );
+  assert(src.includes("예약 Excel 업로드 후 선택 가능"), "Excel 없을 때 disabled 안내");
   assert(src.includes("뒤 일반순번 보호"), "R 입력");
   assert(src.includes('placementMode === "MANUAL"'), "MANUAL에서만 anchor");
+  assert(src.includes('role="tablist"'), "유형 칩 탭");
+  assert(!src.includes("sd-group-head"), "세로 아코디언 제거");
   assert(api.includes('action === "placement"'), "placement API");
   assert(
     preview.includes('placement.mode === "AUTO"') &&
@@ -728,6 +737,7 @@ section("UI/API 문자열");
   assert(
     src.includes('placementMode === "MANUAL"') &&
       src.includes("ANCHOR_SPECIAL_KINDS") &&
+      src.includes("isAnchorSpecialKind") &&
       !/placementMode === "AUTO"[\s\S]*ONE_THREE 시작/.test(src),
     "AUTO에서 anchor UI 숨김"
   );
