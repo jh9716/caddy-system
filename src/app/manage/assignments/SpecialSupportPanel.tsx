@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, memo } from "react";
 import { formatCaddyLabel } from "@/lib/caddyDisplay";
 import {
   SPECIAL_SUPPORT_CHANGED_MESSAGE,
@@ -9,6 +9,7 @@ import {
   isEligibleSpecialSupportCandidate,
   type SpecialSupportRecord,
 } from "@/lib/dailySpecialSupport";
+import { RECALC_RUNNING_LABEL } from "@/lib/assignmentDraft";
 import { type ShiftPart } from "@/lib/reservationParser";
 
 type Candidate = {
@@ -35,12 +36,15 @@ function countLabel(counts: Record<ShiftPart, number> | undefined): string {
   return `1부 지원 ${c["1부"] || 0}명 · 2부 지원 ${c["2부"] || 0}명 · 3부 지원 ${c["3부"] || 0}명`;
 }
 
-export function SpecialSupportPanel({
+export const SpecialSupportPanel = memo(function SpecialSupportPanel({
   date,
   excludedRows,
   hasDraft,
   onChanged,
   onLoaded,
+  onRecalcDraft,
+  recalcBusy,
+  recalcDisabled,
 }: {
   date: string;
   excludedRows?: Array<{
@@ -54,6 +58,9 @@ export function SpecialSupportPanel({
   hasDraft?: boolean;
   onChanged?: () => void;
   onLoaded?: (byShift: ReturnType<typeof engineQueuesFromSupportRecords>) => void;
+  onRecalcDraft?: () => void;
+  recalcBusy?: boolean;
+  recalcDisabled?: boolean;
 }) {
   const [payload, setPayload] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(false);
@@ -237,6 +244,19 @@ export function SpecialSupportPanel({
         </ol>
       )}
 
+      {hasDraft ? (
+        <div className="ss-recalc">
+          <button
+            type="button"
+            className="ss-recalc-btn"
+            disabled={recalcBusy || recalcDisabled || !onRecalcDraft}
+            onClick={() => onRecalcDraft?.()}
+          >
+            {recalcBusy ? RECALC_RUNNING_LABEL : "배치 다시 맞추기"}
+          </button>
+        </div>
+      ) : null}
+
       {modalOpen ? (
         <div className="ss-modal" role="dialog" aria-modal="true">
           <div className="ss-sheet">
@@ -339,7 +359,13 @@ export function SpecialSupportPanel({
           width: 100%; min-height: 40px; border: 0; background: #0f172a; color: #fff;
           border-radius: 10px; padding: 10px; font-weight: 800; cursor: pointer;
         }
+        .ss-recalc { margin-top: 10px; }
+        .ss-recalc-btn {
+          width: 100%; min-height: 40px; border: 0; background: #0f172a; color: #fff;
+          border-radius: 10px; font-weight: 800; cursor: pointer;
+        }
+        .ss-recalc-btn:disabled { opacity: 0.5; cursor: not-allowed; }
       `}</style>
     </section>
   );
-}
+});

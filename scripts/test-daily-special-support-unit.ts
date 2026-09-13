@@ -1105,6 +1105,10 @@ section("source / UI / migration / 권한");
   assert(/SpecialSupportPanel/.test(page), "날짜 설정에 특수지원");
   assert(/지원근무/.test(page) && /ops-settings-tabs/.test(page), "지원근무 탭");
   assert(
+    /배치 다시 맞추기/.test(supportUi) && /onRecalcDraft/.test(supportUi),
+    "지원근무 탭에 배치 다시 맞추기 상시"
+  );
+  assert(
     !/휴무지원|마샬지원|조장지원|54지원/.test(supportUi),
     "미구현 지원 유형 가짜 UI 없음"
   );

@@ -22,6 +22,9 @@ import {
 import {
   autoResultFromDraft,
   createDraftFromAutoResult,
+  shift1ReservationsForAnchor,
+  buildShift1StartOptions,
+  type AssignmentDraft,
 } from "../src/lib/assignmentDraft";
 import {
   makeAddReservationChange,
@@ -717,7 +720,18 @@ section("UI/API 문자열");
     src.includes("선택한 위치부터 등록 순서대로 연속 배치됩니다."),
     "MANUAL 연속 배치 안내"
   );
-  assert(src.includes("예약 Excel 업로드 후 선택 가능"), "Excel 없을 때 disabled 안내");
+  assert(
+    src.includes("작업본 또는 예약 Excel이 필요합니다"),
+    "작업본·Excel 둘 다 없을 때 disabled 안내"
+  );
+  assert(
+    !src.includes("예약 Excel 업로드 후 선택 가능"),
+    "Excel 전용 막기 문구 제거"
+  );
+  assert(
+    src.includes("onRecalcDraft") && src.includes("배치 다시 맞추기"),
+    "특수근무 탭에 배치 다시 맞추기 상시"
+  );
   assert(src.includes("뒤 일반순번 보호"), "R 입력");
   assert(src.includes('placementMode === "MANUAL"'), "MANUAL에서만 anchor");
   assert(src.includes('role="tablist"'), "유형 칩 탭");
@@ -745,6 +759,123 @@ section("UI/API 문자열");
     !src.includes("employment=all"),
     "특수근무 검색은 기본 ACTIVE만"
   );
+}
+
+section("작업본 1부 시작 위치 / 탭 분리 / 재맞추기 GET 생략");
+{
+  const date = "2099-09-13";
+  const caddyA = housePool(1)[0];
+  const caddyB = housePool(1, 202)[0];
+  const draft = {
+    date,
+    status: "DRAFT",
+    assignments: [
+      {
+        date,
+        shift: "1부",
+        sequenceIndex: 1,
+        reason: "x",
+        kind: "regular",
+        caddy: caddyA,
+        reservation: {
+          date,
+          course: "VERTHILL",
+          shift: "1부",
+          teeTime: "07:00",
+          teamName: "A",
+          rawRowIndex: 1,
+        },
+      },
+      {
+        date,
+        shift: "2부",
+        sequenceIndex: 1,
+        reason: "x",
+        kind: "regular",
+        caddy: caddyB,
+        reservation: {
+          date,
+          course: "VERTHILL",
+          shift: "2부",
+          teeTime: "12:00",
+          teamName: "PM",
+          rawRowIndex: 10,
+        },
+      },
+    ],
+    unassignedReservations: [
+      {
+        reservation: {
+          date,
+          course: "SKY",
+          shift: "1부",
+          teeTime: "07:08",
+          teamName: "B",
+          rawRowIndex: 2,
+        },
+        reason: "unassigned",
+      },
+    ],
+    closedCourseReservations: [
+      {
+        reservation: {
+          date,
+          course: "LAKE",
+          shift: "1부",
+          teeTime: "07:16",
+          teamName: "CLOSED",
+          rawRowIndex: 3,
+        },
+        reason: "closed",
+      },
+    ],
+    openCourses: ["VERTHILL", "SKY"],
+    caddyPool: [],
+    sparesByShift: [],
+    confirmedAt: null,
+  } as AssignmentDraft;
+  const rows = shift1ReservationsForAnchor(draft);
+  assert(
+    rows.length === 2 && rows.every((r) => r.shift === "1부"),
+    "작업본 1부 assigned+unassigned만"
+  );
+  assert(
+    !rows.some((r) => r.teamName === "CLOSED"),
+    "closed 코스 예약은 시작 위치에서 제외"
+  );
+  const opts = buildShift1StartOptions(rows, date);
+  assert(opts.length === 2, "1부 시작 옵션 2개");
+  assert(
+    opts[0].teeTime === "07:00" && opts[1].teeTime === "07:08",
+    "티타임 순 정렬"
+  );
+  const empty = buildShift1StartOptions([], date);
+  assert(empty.length === 0, "슬롯 없으면 옵션 없음 → Excel fallback 대상");
+
+  const page = readFileSync(
+    join(process.cwd(), "src/app/manage/assignments/page.tsx"),
+    "utf8"
+  );
+  assert(/function SettingsTabHost\(/.test(page), "탭 state를 페이지 전체에서 분리");
+  assert(
+    /shift1ReservationsForAnchor\(draft\)/.test(page) &&
+      /fromDraft\.length > 0/.test(page) &&
+      /return shift1Options/.test(page),
+    "작업본 슬롯 우선, 없으면 Excel shift1Options"
+  );
+  const recalc =
+    page.split("async function runRecalcDraft()")[1]?.split("function onReplace")[0] ||
+    "";
+  assert(
+    !/await loadServerDraft\(date\)/.test(recalc),
+    "재맞추기 성공 후 동일 draft GET 생략"
+  );
+  assert(/\/api\/assignments\/preview/.test(recalc), "재맞추기 preview API 유지");
+  const dutyPanel = readFileSync(
+    join(process.cwd(), "src/app/manage/assignments/SpecialDutyPanel.tsx"),
+    "utf8"
+  );
+  assert(/action: "anchor"/.test(dutyPanel), "기존 anchor 저장 경로 유지");
 }
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);

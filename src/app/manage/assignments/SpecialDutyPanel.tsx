@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, memo } from "react";
 import { normalizePersonName } from "@/lib/dailyCaddyNameMatch";
 import {
   DAILY_SPECIAL_KIND_UI,
@@ -33,6 +33,12 @@ import {
 } from "@/lib/specialPlacement";
 import { resolveCourseCode } from "@/lib/autoAssignEngine";
 import { COURSE_LABELS } from "@/lib/reservationParser";
+import {
+  RECALC_RUNNING_LABEL,
+  type Shift1StartOption,
+} from "@/lib/assignmentDraft";
+
+export type { Shift1StartOption };
 
 type GroupPayload = {
   kind: DailySpecialKind;
@@ -57,13 +63,6 @@ type ListPayload = {
   error?: string;
 };
 
-export type Shift1StartOption = {
-  course: string;
-  teeTime: string;
-  teamName?: string | null;
-  label: string;
-};
-
 type SearchCaddy = {
   id: number;
   name: string;
@@ -82,18 +81,24 @@ function anchorValue(anchor: SpecialStartAnchor | null | undefined): string {
   return `${anchor.course}@@${anchor.teeTime}`;
 }
 
-export function SpecialDutyPanel({
+export const SpecialDutyPanel = memo(function SpecialDutyPanel({
   date,
   excludedRows,
   shift1Options = [],
   hasDraft,
   onChanged,
+  onRecalcDraft,
+  recalcBusy,
+  recalcDisabled,
 }: {
   date: string;
   excludedRows?: Array<{ id: number; excludedReasons?: string[] | null }>;
   shift1Options?: Shift1StartOption[];
   hasDraft?: boolean;
   onChanged?: () => void;
+  onRecalcDraft?: () => void;
+  recalcBusy?: boolean;
+  recalcDisabled?: boolean;
 }) {
   const [groups, setGroups] = useState<GroupPayload[]>([]);
   const [anchors, setAnchors] = useState<SpecialDutyAnchors>(EMPTY_ANCHORS);
@@ -672,7 +677,7 @@ export function SpecialDutyPanel({
                   >
                     <option value="">
                       {shift1Options.length === 0
-                        ? "예약 Excel 업로드 후 선택 가능"
+                        ? "작업본 또는 예약 Excel이 필요합니다"
                         : "시작 예약 선택…"}
                     </option>
                     {shift1Options.map((opt) => (
@@ -761,6 +766,19 @@ export function SpecialDutyPanel({
               {busy ? "저장 중…" : `${activeGroup.label} 변경 저장`}
             </button>
           ) : null}
+        </div>
+      ) : null}
+
+      {hasDraft ? (
+        <div className="sd-recalc">
+          <button
+            type="button"
+            className="sd-recalc-btn"
+            disabled={recalcBusy || recalcDisabled || !onRecalcDraft}
+            onClick={() => onRecalcDraft?.()}
+          >
+            {recalcBusy ? RECALC_RUNNING_LABEL : "배치 다시 맞추기"}
+          </button>
         </div>
       ) : null}
 
@@ -1125,6 +1143,18 @@ export function SpecialDutyPanel({
           background: #fff;
         }
         .sd-save { width: 100%; margin: 6px 0; }
+        .sd-recalc { margin-top: 10px; }
+        .sd-recalc-btn {
+          width: 100%;
+          min-height: 40px;
+          border: 0;
+          border-radius: 8px;
+          background: #0f172a;
+          color: #fff;
+          font-weight: 700;
+          cursor: pointer;
+        }
+        .sd-recalc-btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .sd-kind-save { margin: 0; }
         .sd-selected {
           margin: 8px 0;
@@ -1144,4 +1174,4 @@ export function SpecialDutyPanel({
       `}</style>
     </section>
   );
-}
+});

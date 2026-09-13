@@ -7,6 +7,7 @@
 import {
   compareAssignmentOrder,
   compareReservationOrder,
+  resolveCourseCode,
   isPlacementLocked,
   isWeekendBandRow,
   MIN_54HOLE_GAP_MINUTES,
@@ -25,7 +26,7 @@ import {
   type UnavailableFromShiftRow,
 } from "@/lib/autoAssignEngine";
 import { ensureReservationUid } from "@/lib/reservationIdentity";
-import type { CourseCode, ShiftPart } from "@/lib/reservationParser";
+import { COURSE_LABELS, type CourseCode, type ShiftPart } from "@/lib/reservationParser";
 import {
   mergeRosterBaseline,
   overlayUnavailableIdsKeepingPlaced,
@@ -368,6 +369,65 @@ export function reservationsFromAssignmentDraft(
   for (const row of draft.assignments || []) push(row.reservation);
   for (const row of draft.unassignedReservations || []) push(row.reservation);
   for (const row of draft.closedCourseReservations || []) push(row.reservation);
+  return out;
+}
+
+/**
+ * 특수근무 MANUAL 1부 시작 위치용. 현재 작업본에 보이는 1부 슬롯만 사용한다.
+ * closed(코스 OFF) 예약은 선택지에서 제외한다.
+ */
+export function shift1ReservationsForAnchor(
+  draft: AssignmentDraft
+): AutoAssignReservation[] {
+  const seen = new Set<string>();
+  const out: AutoAssignReservation[] = [];
+  const push = (reservation: AutoAssignReservation | undefined | null) => {
+    if (!reservation) return;
+    if (String(reservation.shift) !== "1부") return;
+    const key = reservationKey(reservation);
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ ...reservation });
+  };
+  for (const row of draft.assignments || []) push(row.reservation);
+  for (const row of draft.unassignedReservations || []) push(row.reservation);
+  return out;
+}
+
+export type Shift1StartOption = {
+  course: string;
+  teeTime: string;
+  teamName?: string | null;
+  label: string;
+};
+
+/** Excel preview / 작업본 1부 슬롯을 시작 위치 select 옵션으로 만든다. */
+export function buildShift1StartOptions(
+  rows: AutoAssignReservation[],
+  date: string
+): Shift1StartOption[] {
+  const filtered = rows.filter(
+    (row) =>
+      String(row.shift) === "1부" && (!row.date || row.date === date)
+  );
+  const sorted = filtered.slice().sort(compareReservationOrder);
+  const seen = new Set<string>();
+  const out: Shift1StartOption[] = [];
+  for (const row of sorted) {
+    const key = `${row.course}@@${row.teeTime}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const code = resolveCourseCode(row.course);
+    const courseLabel = code ? COURSE_LABELS[code] : row.course;
+    out.push({
+      course: row.course,
+      teeTime: row.teeTime,
+      teamName: row.teamName ?? null,
+      label: `${courseLabel} ${row.teeTime}${
+        row.teamName ? ` · ${row.teamName}` : ""
+      }`,
+    });
+  }
   return out;
 }
 
