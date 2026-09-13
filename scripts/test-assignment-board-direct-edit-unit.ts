@@ -18,6 +18,10 @@ import {
   pickOpsStatusSummary,
   supportBadgesFromReason,
 } from "../src/lib/unavailablePanelView";
+import {
+  opsDutyPanelRowsFromReadOnly,
+  resolveOpsDutyReadOnly,
+} from "../src/lib/opsDutyReadOnlySource";
 import { applyLiveResultToDraft, createDraftFromAutoResult } from "../src/lib/assignmentDraft";
 import { reservationMoveBlockReason } from "../src/lib/reservationMove";
 import {
@@ -356,21 +360,12 @@ console.log("== unavailable panel grouping ==");
       specialTags: [],
       assignmentLabels: ["휴무"],
     },
-    {
-      id: 12,
-      name: "병가김",
-      team: "1조",
-      teamOrder: 2,
-      caddyType: "HOUSE",
-      extraFlags: [],
-      bucket: "excluded",
-      excludedReasons: ["병가"],
-      specialTags: [],
-      assignmentLabels: ["병가"],
-    },
   ];
   const groups = buildUnavailablePanelGroups({
     excluded,
+    dailyUnavailables: [
+      { caddyId: 12, name: "병가김", team: "1조", reason: "SICK" },
+    ],
     opsDuties: [
       { caddyId: 13, name: "조장박", team: "2조", role: "LEADER" },
     ],
@@ -640,6 +635,129 @@ console.log("== unavailable display classification ==");
   assert(countUnavailableBoardPeople(conflictView) === 1, "conflict unique count");
 }
 
+console.log("== 2026-08-28 shaped sources ==");
+{
+  const groups = buildUnavailablePanelGroups({
+    excluded: [
+      {
+        id: 901,
+        name: "제외병가라벨",
+        team: "1조",
+        teamOrder: 1,
+        caddyType: "HOUSE",
+        extraFlags: [],
+        bucket: "excluded",
+        excludedReasons: ["병가"],
+        specialTags: [],
+        assignmentLabels: ["병가"],
+      },
+    ],
+    offCaddies: offCaddiesFromRoster(
+      [101, 102],
+      [
+        { id: 101, name: "휴무A", team: "1조" },
+        { id: 102, name: "휴무B", team: "2조" },
+      ]
+    ),
+    dailyUnavailables: [
+      { caddyId: 201, name: "실제병가A", team: "3조", reason: "SICK" },
+      { caddyId: 202, name: "실제병가B", team: "4조", reason: "SICK" },
+    ],
+    opsDuties: [],
+  });
+  assert(groups.find((g) => g.category === "휴무")?.items.length === 2, "OFF -> 휴무");
+  assert(groups.find((g) => g.category === "병가")?.items.length === 2, "actual SICK only");
+  assert(
+    !groups.find((g) => g.category === "병가")?.items.some((i) => i.name === "제외병가라벨"),
+    "generic excluded not SICK"
+  );
+  assert(groups.find((g) => g.category === "기타")?.items[0]?.name === "제외병가라벨", "excluded 병가 label -> 기타");
+  assert(!groups.find((g) => g.category === "당번"), "no duty source -> no 당번");
+
+  const withSheetDuty = buildUnavailablePanelGroups({
+    dailyUnavailables: [{ caddyId: 201, name: "실제병가A", team: "3조", reason: "SICK" }],
+    offCaddies: offCaddiesFromRoster([101], [{ id: 101, name: "휴무A", team: "1조" }]),
+    opsDuties: [
+      { caddyId: 301, name: "당번시트", team: "5조", role: "DUTY_AM", roleKey: "당번_조출_1" },
+      { caddyId: 302, name: "마샬시트", team: "6조", role: "MARSHAL_PM", roleKey: "마샬_후출_1" },
+      { caddyId: 303, name: "조장시트", team: "7조", role: "LEADER", roleKey: "조장_1" },
+    ],
+  });
+  const sheetView = buildUnavailableBoardView(withSheetDuty, {
+    opsDuties: [
+      { caddyId: 301, role: "DUTY_AM", roleKey: "당번_조출_1" },
+      { caddyId: 302, role: "MARSHAL_PM", roleKey: "마샬_후출_1" },
+      { caddyId: 303, role: "LEADER", roleKey: "조장_1" },
+    ],
+    dailyUnavailables: [{ caddyId: 201, reason: "SICK" }],
+  });
+  assert(sheetView.offTeams.flatMap((b) => b.people).length === 1, "sheet fixture 휴무");
+  assert(sheetView.sick.length === 1 && sheetView.sick[0]?.name === "실제병가A", "sheet fixture 병가");
+  assert(
+    sheetView.dutySlots.find((s) => s.label === "조출1")?.people[0]?.name === "당번시트",
+    "sheet/DB 당번"
+  );
+  assert(
+    sheetView.marshalSlots.find((s) => s.label === "후출1")?.people[0]?.name === "마샬시트",
+    "sheet/DB 마샬"
+  );
+  assert(sheetView.leaders[0]?.name === "조장시트", "sheet/DB 조장");
+}
+
+console.log("== opsDuty read-only sheet fallback ==");
+const opsDutyFallbackChecks = Promise.all([
+  resolveOpsDutyReadOnly("2026-08-28", {
+    listDuties: async () => [
+      {
+        id: 1,
+        role: "DUTY_AM",
+        roleKey: "당번_조출_1",
+        caddyId: 11,
+        rawName: "DB당번",
+        name: "DB당번",
+        team: "1조",
+        employmentStatus: "ACTIVE",
+      },
+    ],
+    fetchOpsDutySheets: async () => {
+      throw new Error("stored가 있으면 sheet를 읽지 않음");
+    },
+  }),
+  resolveOpsDutyReadOnly("2026-08-28", {
+    listDuties: async () => [],
+    fetchOpsDutySheets: async () => {
+      throw new Error("선택한 날짜 2026-08-28를 운영 탭에서 찾지 못했습니다.");
+    },
+  }),
+]).then(([stored, missingDate]) => {
+  assert(stored.source === "stored" && stored.stored.length === 1, "DB rows win");
+  assert(missingDate.source === "none" && missingDate.sheetEntries.length === 0, "8/28 sheet date missing");
+  const sheetRows = opsDutyPanelRowsFromReadOnly(
+    {
+      source: "sheet",
+      stored: [],
+      sheetEntries: [
+        { kind: "duty_am", roleKey: "당번_조출_1", rawName: "시트당번" },
+        { kind: "marshal_pm", roleKey: "마샬_후출_1", rawName: "시트마샬" },
+        { kind: "leader", roleKey: "조장_1", rawName: "시트조장" },
+      ],
+      error: null,
+    },
+    [
+      { id: 11, name: "시트당번", team: "1조", employmentStatus: "ACTIVE" },
+      { id: 12, name: "시트마샬", team: "2조", employmentStatus: "ACTIVE" },
+      { id: 13, name: "시트조장", team: "3조", employmentStatus: "ACTIVE" },
+    ]
+  );
+  assert(sheetRows.map((r) => r.role).join(",") === "DUTY_AM,MARSHAL_PM,LEADER", "sheet match roles");
+  const dutyRoute = fs.readFileSync(
+    path.resolve("src/app/api/daily-ops-duties/route.ts"),
+    "utf8"
+  );
+  assert(/resolveOpsDutyReadOnly/.test(dutyRoute), "GET daily-ops-duties uses sheet fallback");
+  assert(!/replaceDailyOpsDuties/.test(dutyRoute), "GET daily-ops-duties does not write");
+});
+
 console.log("== special TEAM MOVE keeps anchors ==");
 {
   const ocean = reservation("D", {
@@ -774,7 +892,7 @@ console.log("== UI source: cell menus ==");
 }
 
 console.log("== SET_HOUSE apply empty events ==");
-void applyLiveAssignmentChange({
+void opsDutyFallbackChecks.then(() => applyLiveAssignmentChange({
   previous: base,
   regularCaddyPool: pool,
   changeType: "SET_HOUSE",
@@ -798,4 +916,4 @@ void applyLiveAssignmentChange({
 }).catch((err) => {
   console.error("  ✗ SET_HOUSE apply threw", err);
   process.exit(1);
-});
+}));

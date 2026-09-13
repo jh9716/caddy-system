@@ -223,7 +223,9 @@ export function buildUnavailablePanelGroups(input: {
   for (const row of input.excluded || []) {
     const reason = (row.excludedReasons || row.assignmentLabels || []).join(" · ") ||
       "비가용";
-    const category = classifyReason(reason);
+    const rawCategory = classifyReason(reason);
+    const category =
+      rawCategory === "병가" || rawCategory === "결근" ? "기타" : rawCategory;
     upsertUnavailableItem(byId, {
       caddyId: row.id,
       name: row.name,
@@ -248,13 +250,20 @@ export function buildUnavailablePanelGroups(input: {
   for (const row of input.dailyUnavailables || []) {
     const id = Number(row.caddyId);
     if (!id) continue;
-    const raw = String(row.reason || "").trim() || "병가";
+    const raw = String(row.reason || "").trim();
+    if (!raw) continue;
+    const category = /ATTENDANCE|결근|미출근/.test(raw)
+      ? "결근"
+      : /SICK|병가/.test(raw)
+        ? "병가"
+        : classifyReason(raw);
+    if (category !== "병가" && category !== "결근") continue;
     upsertUnavailableItem(byId, {
       caddyId: id,
       name: String(row.name || "").trim() || `캐디${id}`,
       team: String(row.team || "").trim() || "—",
-      category: classifyReason(raw),
-      reason: /ATTENDANCE/.test(raw) ? "결근" : /SICK/.test(raw) ? "병가" : raw,
+      category,
+      reason: category === "결근" ? "결근" : "병가",
     });
   }
 

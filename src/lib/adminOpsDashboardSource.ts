@@ -13,17 +13,15 @@ import {
   listDailyOpsDuties,
   type StoredOpsDutyRow,
 } from "@/lib/dailyOpsDutyService";
-import { dutyEntriesFromStored, opsDutyRoleFromKind } from "@/lib/dailyOpsDuty";
+import { opsDutyRoleFromKind } from "@/lib/dailyOpsDuty";
 import type { DutyExcelEntry } from "@/lib/dutyMarshalLeaderParser";
 import {
   fetchPublishedOffSheets,
 } from "@/lib/offSheetFetch";
 import { offNamesForDate, type OffSheet } from "@/lib/offSheetParser";
 import { fetchPublishedOpsDutySheets } from "@/lib/opsDutySheetFetch";
-import {
-  parseOpsDutySheetsForDate,
-  type OpsDutySheet,
-} from "@/lib/opsDutySheetParser";
+import { type OpsDutySheet } from "@/lib/opsDutySheetParser";
+import { resolveOpsDutyReadOnly } from "@/lib/opsDutyReadOnlySource";
 
 export type AdminOpsSourceQuality = "complete" | "fallback";
 export type AdminOpsOffSource = "sheet" | "assignment_only";
@@ -82,24 +80,14 @@ export async function loadAdminOpsDashboardSource(
     offError = error instanceof Error ? error.message : "off_sheet_fetch_failed";
   }
 
-  const stored = await listDuties(ymd);
-  let dutyEntries: DutyExcelEntry[] = [];
-  let dutySource: AdminOpsDutySource = "none";
-  let dutyError: string | null = null;
-  if (stored.length > 0) {
-    dutySource = "stored";
-    dutyEntries = dutyEntriesFromStored(stored);
-  } else {
-    try {
-      const sheets = await fetchOps();
-      const parsed = parseOpsDutySheetsForDate(sheets, ymd);
-      dutySource = "sheet";
-      dutyEntries = parsed.entries;
-      if (dutyEntries.length === 0) dutyError = "ops_duty_sheet_empty";
-    } catch (error) {
-      dutyError = error instanceof Error ? error.message : "ops_duty_sheet_failed";
-    }
-  }
+  const resolvedDuty = await resolveOpsDutyReadOnly(ymd, {
+    listDuties,
+    fetchOpsDutySheets: fetchOps,
+  });
+  const stored = resolvedDuty.stored;
+  const dutyEntries = resolvedDuty.sheetEntries;
+  const dutySource = resolvedDuty.source;
+  const dutyError = resolvedDuty.error;
 
   const offOk = Boolean(offSheets && offDateFound && !offError);
   const dutyOk =
