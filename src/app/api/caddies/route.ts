@@ -24,7 +24,11 @@ import {
   assertSlotAvailable,
   assertSlotWithinConfiguredCapacity,
 } from "@/lib/caddySlot";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, resolveAuthUser } from "@/lib/auth";
+import {
+  canReadArchivedCaddies,
+  caddyManageListWhere,
+} from "@/lib/caddyArchiveVisibility";
 
 export const dynamic = "force-dynamic";
 
@@ -34,11 +38,15 @@ export async function GET(req: NextRequest) {
   if (guard) return guard;
 
   try {
+    const auth = await resolveAuthUser(req);
+    const canReadArchived = canReadArchivedCaddies(auth);
     const employment = parseEmploymentFilter(
       req.nextUrl.searchParams.get("employment")
     );
-    const where =
-      employment === "all" ? {} : { employmentStatus: employment };
+    const where = caddyManageListWhere(employment, canReadArchived);
+    if ("empty" in where && where.empty) {
+      return NextResponse.json([]);
+    }
 
     const caddies = await prisma.caddy.findMany({
       where,
