@@ -4571,58 +4571,122 @@ const opsCss = `
     border: 1px solid #e2e8f0;
     border-radius: 8px;
     background: #fff;
-    overflow: hidden;
+    min-width: 0;
   }
-  .ops-unavail-toggle {
-    width: 100%;
-    border: 0;
+  .ops-unavail-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 10px;
     background: #f8fafc;
-    padding: 10px 12px;
-    text-align: left;
-    font-weight: 700;
-    font-size: 0.82rem;
+    border-bottom: 1px solid #e2e8f0;
+  }
+  .ops-unavail-head h2 {
+    margin: 0;
+    font-size: 0.8rem;
+    font-weight: 800;
     color: #0f172a;
+  }
+  .ops-unavail-close {
+    display: none;
+    border: 1px solid #cbd5e1;
+    border-radius: 999px;
+    background: #fff;
+    color: #334155;
+    font-size: 0.72rem;
+    font-weight: 700;
+    padding: 2px 8px;
     cursor: pointer;
   }
-  .ops-unavail-body { padding: 0 12px 12px; }
+  .ops-unavail-body { padding: 8px 10px 10px; }
   .ops-unavail-empty {
     margin: 8px 0 0;
     font-size: 0.75rem;
     color: #94a3b8;
   }
-  .ops-unavail-group { margin-top: 10px; }
-  .ops-unavail-group h3 {
+  .ops-unavail-sec { margin-top: 8px; }
+  .ops-unavail-sec:first-child { margin-top: 0; }
+  .ops-unavail-sec h3 {
     margin: 0 0 4px;
-    font-size: 0.72rem;
+    font-size: 0.7rem;
+    font-weight: 800;
+    color: #334155;
+    letter-spacing: 0.01em;
+  }
+  .ops-unavail-sec h3 em {
+    font-style: normal;
+    font-weight: 700;
     color: #64748b;
   }
-  .ops-unavail-group ul {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-  }
-  .ops-unavail-group li {
+  .ops-unavail-off-grid,
+  .ops-unavail-slots {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 2px 8px;
-    padding: 4px 0;
-    border-top: 1px solid #f1f5f9;
-    font-size: 0.75rem;
+    gap: 3px;
   }
-  .ops-unavail-name { font-weight: 700; color: #0f172a; }
-  .ops-unavail-team { color: #64748b; }
-  .ops-unavail-reason {
-    grid-column: 1 / -1;
-    color: #475569;
+  .ops-unavail-row {
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr);
+    gap: 6px;
+    align-items: start;
+  }
+  .ops-unavail-k {
+    font-size: 0.66rem;
+    font-weight: 800;
+    color: #64748b;
+    line-height: 1.45;
+    padding-top: 1px;
+  }
+  .ops-unavail-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 6px;
+    min-width: 0;
+  }
+  .ops-unavail-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    max-width: 100%;
+    line-height: 1.35;
+  }
+  .ops-unavail-name {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #0f172a;
+    white-space: nowrap;
+  }
+  .ops-unavail-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 4px;
+    border-radius: 3px;
+    background: #e2e8f0;
+    color: #334155;
+    font-size: 0.58rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    line-height: 1.4;
+    white-space: nowrap;
+  }
+  .ops-unavail-blank {
+    color: #cbd5e1;
     font-size: 0.7rem;
+    line-height: 1.45;
   }
-  @media (min-width: 1100px) {
+  @media (min-width: 1280px) {
     .ops-direct-layout {
-      grid-template-columns: minmax(0, 1fr) 240px;
+      grid-template-columns: minmax(0, 1fr) minmax(300px, 28%);
       align-items: start;
     }
+    .ops-unavail {
+      position: sticky;
+      top: 8px;
+      max-height: calc(100vh - 16px);
+      overflow: auto;
+    }
   }
-  @media (max-width: 1099px) {
+  @media (max-width: 1279px) {
     .ops-unavail-chip { display: inline-flex; }
     .ops-unavail { display: none; }
     .ops-unavail.is-mobile-open {
@@ -4635,6 +4699,16 @@ const opsCss = `
       max-height: 70vh;
       overflow: auto;
       box-shadow: 0 -8px 24px rgb(15 23 42 / 16%);
+    }
+    .ops-unavail-close { display: inline-flex; }
+    .ops-unavail-off-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 4px 10px;
+    }
+  }
+  @media (max-width: 420px) {
+    .ops-unavail-off-grid {
+      grid-template-columns: 1fr;
     }
   }
   .ops-board-head-bar {

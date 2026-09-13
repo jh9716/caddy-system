@@ -12,6 +12,11 @@ import {
   offCaddiesFromRoster,
   unavailablePanelTotal,
 } from "../src/lib/assignmentBoardDirectEdit";
+import {
+  buildUnavailableBoardView,
+  countUnavailableBoardPeople,
+  supportBadgesFromReason,
+} from "../src/lib/unavailablePanelView";
 import { applyLiveResultToDraft, createDraftFromAutoResult } from "../src/lib/assignmentDraft";
 import { reservationMoveBlockReason } from "../src/lib/reservationMove";
 import {
@@ -422,6 +427,112 @@ console.log("== unavailable panel grouping ==");
   assert(unavailablePanelTotal(hydrated) === 4, "hydrate sources without availability");
 }
 
+console.log("== unavailable board presentation ==");
+{
+  const groups = buildUnavailablePanelGroups({
+    excluded: [
+      {
+        id: 31,
+        name: "휴무갑",
+        team: "1조",
+        teamOrder: 1,
+        caddyType: "HOUSE",
+        extraFlags: [],
+        bucket: "excluded",
+        excludedReasons: ["휴무"],
+        specialTags: [],
+        assignmentLabels: ["휴무"],
+      },
+      {
+        id: 32,
+        name: "휴무을",
+        team: "1조",
+        teamOrder: 2,
+        caddyType: "HOUSE",
+        extraFlags: [],
+        bucket: "excluded",
+        excludedReasons: ["휴무"],
+        specialTags: [],
+        assignmentLabels: ["휴무"],
+      },
+      {
+        id: 33,
+        name: "휴무병",
+        team: "10조",
+        teamOrder: 3,
+        caddyType: "THIRD",
+        extraFlags: [],
+        bucket: "excluded",
+        excludedReasons: ["휴무"],
+        specialTags: [],
+        assignmentLabels: ["휴무"],
+      },
+      {
+        id: 34,
+        name: "드라이빙휴",
+        team: "드라이빙",
+        teamOrder: 0,
+        caddyType: "DRIVING",
+        extraFlags: [],
+        bucket: "excluded",
+        excludedReasons: ["휴무"],
+        specialTags: [],
+        assignmentLabels: ["휴무"],
+      },
+    ],
+    opsDuties: [
+      { caddyId: 41, name: "조출하나", team: "2조", role: "DUTY_AM" },
+      { caddyId: 42, name: "조출둘", team: "3조", role: "DUTY_AM" },
+      { caddyId: 43, name: "후출하나", team: "4조", role: "DUTY_PM" },
+      { caddyId: 44, name: "마샬조출", team: "5조", role: "MARSHAL_AM" },
+      { caddyId: 45, name: "조장임", team: "6조", role: "LEADER" },
+    ],
+    dailyUnavailables: [
+      { caddyId: 51, name: "병가자", team: "7조", reason: "SICK" },
+      { caddyId: 52, name: "결근자", team: "8조", reason: "ATTENDANCE_NOSHOW" },
+    ],
+    specialSupportByShift: {
+      "1부": [{ id: 31 }],
+      "2부": [],
+      "3부": [],
+    },
+  });
+  const view = buildUnavailableBoardView(groups);
+  assert(view.total === unavailablePanelTotal(groups), "view total matches groups");
+  assert(countUnavailableBoardPeople(view) === view.total, "every person rendered once");
+  assert(view.offTeams.map((b) => b.team).join(",") === "1조,10조", "휴무 teams compact, empty omitted");
+  assert(
+    view.offTeams[0]?.people.map((p) => p.name).join(",") === "휴무갑,휴무을",
+    "휴무 names stay in team"
+  );
+  assert(
+    view.offTeams[0]?.people[0]?.badges.join(",") === "1부지원",
+    "휴무 → 1부지원 badge"
+  );
+  assert(
+    supportBadgesFromReason("휴무 → 1부·3부 지원").join(",") === "1부지원,3부지원",
+    "multi support badges"
+  );
+  assert(view.sick.map((p) => p.name).join(",") === "병가자", "병가 compact");
+  assert(view.absent.map((p) => p.name).join(",") === "결근자", "결근 compact");
+  assert(
+    view.dutySlots.map((s) => `${s.label}:${s.people.map((p) => p.name).join("/")}`).join("|") ===
+      "조출1:조출하나|조출2:조출둘|후출1:후출하나|후출2:",
+    "당번 slots"
+  );
+  assert(
+    view.marshalSlots.map((s) => s.label).join(",") === "조출1,조출2,후출1",
+    "마샬 slot labels"
+  );
+  assert(view.leaders[0]?.name === "조장임", "조장 section");
+  assert(
+    view.specialBands.map((b) => `${b.team}:${b.people[0]?.name}`).join(",") ===
+      "드라이빙:드라이빙휴",
+    "특수반 only when team already exists"
+  );
+  assert(view.specialBands.every((b) => b.team !== "주중반"), "missing 주중반 hidden");
+}
+
 console.log("== special TEAM MOVE keeps anchors ==");
 {
   const ocean = reservation("D", {
@@ -532,7 +643,17 @@ console.log("== UI source: cell menus ==");
     "date hydrate reads availability GET + OFF + unavailable"
   );
   assert(/ops-unavail-chip/.test(page) && /비가용/.test(page), "mobile unavailable chip");
-  assert(/is-mobile-open/.test(fs.readFileSync(path.resolve("src/app/manage/assignments/UnavailablePanel.tsx"), "utf8")), "unavailable sheet open");
+  const unavailPanel = fs.readFileSync(
+    path.resolve("src/app/manage/assignments/UnavailablePanel.tsx"),
+    "utf8"
+  );
+  assert(/is-mobile-open/.test(unavailPanel), "unavailable sheet open");
+  assert(/buildUnavailableBoardView/.test(unavailPanel), "panel uses compact board view");
+  assert(!/<ul>/.test(unavailPanel), "raw unavailable list removed");
+  assert(/min-width: 1280px/.test(page), "PC side-by-side from 1280");
+  assert(/minmax\(300px, 28%\)/.test(page), "right panel ~25-30%");
+  assert(/position: sticky/.test(page), "desktop unavailable panel sticky");
+  assert(/max-width: 1279px/.test(page), "no forced side panel below 1280");
   assert(!/inset 0 -3px 0 #f59e0b/.test(page), "limo orange stripe removed");
   assert(/isDraftOnlyLiveChange/.test(page), "HOUSE skips apply persist");
   assert(/autoAssignEngine/.test(fs.readFileSync(path.resolve("src/lib/assignmentBoardDirectEdit.ts"), "utf8")), "helper imports types only");
