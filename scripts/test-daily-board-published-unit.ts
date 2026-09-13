@@ -746,11 +746,13 @@ async function main() {
     assert(/publishBoardActionState/.test(page), "page uses publishBoardActionState");
     assert(/PUBLISH_HINT/.test(page), "page renders publish hint");
     assert(/className="ops-publish"/.test(page), "publish is dedicated primary section");
+    assert(/ops-publish-title/.test(page), "publish section labeled 운영 반영");
     const actionsUi = page.split('className="ops-actions"')[1]?.split("</div>")[0] || "";
     assert(/가용 캐디 불러오기/.test(actionsUi), "availability action kept");
     assert(/자동배치 실행/.test(actionsUi), "auto-assign action kept");
     assert(!/>\s*CONFIRMED\s*</.test(actionsUi), "CONFIRMED button not in ops-actions");
     assert(!/운영 반영/.test(actionsUi), "운영 반영 button not in ops-actions");
+    assert(/className="ops-flow"/.test(page), "primary ops flow grouped");
     assert(!/<button[\s\S]*?>\s*CONFIRMED\s*</.test(page), "CONFIRMED button UI hidden");
     assert(!/<StatusBadge/.test(page), "CONFIRMED status chip not rendered in ops header");
     assert(!/loadingApply \? "반영 중…" : "운영 반영"/.test(page), "운영 반영 button UI hidden");

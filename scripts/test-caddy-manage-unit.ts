@@ -813,8 +813,8 @@ console.log("== ops menu simplify: one place per daily action ==");
     "admin tools keep recalc/reset; generic type select removed; handlers kept"
   );
   assert(
-    !/기타 배치 설정/.test(panel) && !/기타 배치 설정/.test(board),
-    "기타 배치 설정 card removed from UI"
+    !/기타 배치 설정/.test(panel),
+    "관리 도구 does not revive 기타 배치 설정 card"
   );
   assert(
     !/당추/.test(panel) && !/당추/.test(board),
@@ -845,22 +845,36 @@ console.log("== ops menu simplify: one place per daily action ==");
       /SameDayAddSheet/.test(board) &&
       /onEmptyBoardCellClick/.test(board) &&
       /ops-date-settings/.test(board) &&
-      /날짜 설정 \(당번·마샬, 특수근무, 코스\)/.test(board),
-    "추가팀 entry points and date settings remain"
+      /기타 배치 설정 \(1부 첫 캐디, 3부, 당번·마샬, 특수근무, 코스\)/.test(board),
+    "추가팀 entry points and extra assignment settings remain"
   );
 
-  const firstCaddyAt = board.indexOf("오늘 1부 첫 캐디");
-  const dateSettingsAt = board.indexOf("날짜 설정 (당번·마샬, 특수근무, 코스)");
+  const flowAt = board.indexOf('className="ops-flow"');
+  const excelAt = board.indexOf("<span>예약 Excel</span>");
+  const actionsAt = board.indexOf('className="ops-actions"');
+  const dateSettingsAt = board.indexOf(
+    "기타 배치 설정 (1부 첫 캐디, 3부, 당번·마샬, 특수근무, 코스)"
+  );
+  const firstCaddyAt = board.indexOf("오늘 1부 첫 캐디 (필수)");
+  const thirdStartAt = board.indexOf("3부 첫 캐디 (선택)");
   const dutyAt = board.indexOf("당번·마샬·조장 Excel");
   const livePanelAt = board.indexOf("<LiveChangePanel");
   const boardToolsAt = board.indexOf("ops-board-tools");
+  const publishAt = board.indexOf('className="ops-publish"');
+  const publishTitleAt = board.indexOf(">운영 반영<");
   assert(
-    firstCaddyAt > 0 &&
-      dateSettingsAt > firstCaddyAt &&
-      dutyAt > dateSettingsAt &&
+    flowAt > 0 &&
+      excelAt > flowAt &&
+      actionsAt > excelAt &&
+      dateSettingsAt > actionsAt &&
+      firstCaddyAt > dateSettingsAt &&
+      thirdStartAt > firstCaddyAt &&
+      dutyAt > thirdStartAt &&
       boardToolsAt > 0 &&
-      livePanelAt > boardToolsAt,
-    "first screen: date/caddy/run before date settings; 기타 after board"
+      livePanelAt > boardToolsAt &&
+      publishAt > 0 &&
+      publishTitleAt > publishAt,
+    "first screen: date/excel/run before extra settings; house/3부 inside details; 관리 도구 after board"
   );
   assert(
     /min-height:\s*48px/.test(board) && /className="qa-title"/.test(panel),

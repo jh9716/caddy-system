@@ -3123,7 +3123,7 @@ export default function ManageAssignmentsOpsPage() {
       <header className="ops-header">
         <div>
           <h1>자동배치 운영</h1>
-          <p>가용 캐디 불러오기 → 자동배치 실행 → 배치 수정/자동저장 → 배치 확정</p>
+          <p>예약 Excel → 가용 캐디 → 자동배치 실행 → 보드 수정 → 운영 반영</p>
         </div>
         {(hasSelectedDate || draft) && (
           <div className="ops-header-side">
@@ -3186,139 +3186,74 @@ export default function ManageAssignmentsOpsPage() {
       )}
 
       <section className="ops-panel">
-        <label className="ops-field">
-          <span>날짜</span>
-          <input
-            type="date"
-            value={date}
-            onChange={(e) => {
-              setDate(e.target.value);
-              setHouseStartCaddyId("");
-              setThirdStartCaddyId("");
-              setAvailability(null);
-              setSpecialSettingsStale(false);
-              setRecalcNotice(null);
-            }}
-          />
-        </label>
-        <label className="ops-field">
-          <span>예약 Excel</span>
-          <input
-            type="file"
-            accept=".xlsx,.xls"
-            onChange={(e) => setFile(e.target.files?.[0] || null)}
-          />
-        </label>
-        <label className="ops-field ops-first-caddy">
-          <span>오늘 1부 첫 캐디 (필수)</span>
-          <select
-            value={houseStartCaddyId === "" ? "" : String(houseStartCaddyId)}
-            onChange={(e) => {
-              const v = e.target.value;
-              setHouseStartCaddyId(v ? Number(v) : "");
-            }}
-            disabled={houseStartCandidates.length === 0}
-          >
-            <option value="">
-              {houseStartCandidates.length === 0
-                ? !availability
-                  ? "먼저 가용 캐디를 불러오세요"
-                  : "선택 가능한 HOUSE 가용 캐디 없음"
-                : "HOUSE 가용 캐디 선택…"}
-            </option>
-            {houseStartCandidates.map((c) => (
-              <option key={c.id} value={c.id}>
-                {formatCaddyLabel(c)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <div className="ops-field ops-third-week">
-          <span>
-            이번 주 3부반 시작조
-            {thirdWeekly?.overridden ? (
-              <span className="ops-manual-badge">수동 지정</span>
-            ) : null}
-          </span>
-          <div className="ops-third-week-row">
-            <select
-              value={thirdWeekly?.startTeam || ""}
-              disabled={!date || savingThirdWeekly}
-              onChange={(e) => {
-                const v = e.target.value;
-                if (!v) return;
-                void persistThirdWeeklyStart(v);
-              }}
-            >
-              <option value="">
-                {!date ? "날짜를 선택하세요" : "불러오는 중…"}
-              </option>
-              {THIRD_BAND_TEAMS.map((team) => (
-                <option key={team} value={team}>
-                  {team}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              className="btn ghost"
-              disabled={!thirdWeekly?.overridden || savingThirdWeekly}
-              onClick={() => void persistThirdWeeklyStart(null)}
-            >
-              자동값으로 복원
-            </button>
+        <div className="ops-flow">
+          <div className="ops-flow-primary">
+            <label className="ops-field">
+              <span>날짜</span>
+              <input
+                type="date"
+                value={date}
+                onChange={(e) => {
+                  setDate(e.target.value);
+                  setHouseStartCaddyId("");
+                  setThirdStartCaddyId("");
+                  setAvailability(null);
+                  setSpecialSettingsStale(false);
+                  setRecalcNotice(null);
+                }}
+              />
+            </label>
+            <label className="ops-field">
+              <span>예약 Excel</span>
+              <input
+                type="file"
+                accept=".xlsx,.xls"
+                onChange={(e) => setFile(e.target.files?.[0] || null)}
+              />
+            </label>
+            <div className="ops-actions">
+              <button
+                type="button"
+                className="btn ghost"
+                disabled={!date || loadingAvail}
+                onClick={loadAvailability}
+              >
+                {loadingAvail ? "가용…" : "가용 캐디 불러오기"}
+              </button>
+              <button
+                type="button"
+                className="btn primary"
+                disabled={
+                  !date ||
+                  !file ||
+                  loadingRun ||
+                  houseStartCaddyId === "" ||
+                  !Number(houseStartCaddyId)
+                }
+                onClick={runAutoAssign}
+              >
+                {loadingRun ? "배치 중…" : "자동배치 실행"}
+              </button>
+            </div>
           </div>
-          <span className="ops-third-week-hint">
-            자동 계산값 {thirdWeekly?.autoStartTeam || "—"} · {thirdWeekly?.weekStart || "—"} 주만 적용
-          </span>
-        </div>
-        <label className="ops-field ops-first-caddy">
-          <span>3부 첫 캐디 (선택)</span>
-          <select
-            value={thirdStartCaddyId === "" ? "" : String(thirdStartCaddyId)}
-            onChange={(e) => {
-              const v = e.target.value;
-              setThirdStartCaddyId(v ? Number(v) : "");
-            }}
-            disabled={!availability}
-          >
-            <option value="">
-              {!availability
-                ? "먼저 가용 캐디를 불러오세요"
-                : "선택 안 함 (주간 시작조 첫 가용)"}
-            </option>
-            {thirdStartCandidates.map((c) => (
-              <option key={c.id} value={c.id}>
-                {formatCaddyLabel(c)} · {thirdStartCandidateStatus(c)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <div className="ops-actions">
-          <button
-            type="button"
-            className="btn ghost"
-            disabled={!date || loadingAvail}
-            onClick={loadAvailability}
-          >
-            {loadingAvail ? "가용…" : "가용 캐디 불러오기"}
-          </button>
-          <button
-            type="button"
-            className="btn primary"
-            disabled={
-              !date ||
-              !file ||
-              loadingRun ||
-              houseStartCaddyId === "" ||
-              !Number(houseStartCaddyId)
-            }
-            onClick={runAutoAssign}
-          >
-            {loadingRun ? "배치 중…" : "자동배치 실행"}
-          </button>
-        </div>
-        {availability && (
+          {availability && houseStartCaddyId === "" ? (
+            <div className="ops-meta">
+              자동배치 실행 전{" "}
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => {
+                  if (dateSettingsRef.current) {
+                    dateSettingsRef.current.open = true;
+                  }
+                }}
+              >
+                기타 배치 설정
+              </button>
+              에서 1부 시작 캐디를 선택하세요.
+            </div>
+          ) : null}
+          {availability && (
           <div className="ops-meta">
             가용 {availability.counts.available} · special{" "}
             {availability.counts.special} · 제외 {availability.counts.excluded}
@@ -3425,8 +3360,94 @@ export default function ManageAssignmentsOpsPage() {
             ) : null}
           </div>
         )}
+        </div>
         <details className="ops-date-settings" ref={dateSettingsRef}>
-          <summary>날짜 설정 (당번·마샬, 특수근무, 코스)</summary>
+          <summary>기타 배치 설정 (1부 첫 캐디, 3부, 당번·마샬, 특수근무, 코스)</summary>
+          <label className="ops-field ops-first-caddy">
+            <span>오늘 1부 첫 캐디 (필수)</span>
+            <select
+              value={houseStartCaddyId === "" ? "" : String(houseStartCaddyId)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setHouseStartCaddyId(v ? Number(v) : "");
+              }}
+              disabled={houseStartCandidates.length === 0}
+            >
+              <option value="">
+                {houseStartCandidates.length === 0
+                  ? !availability
+                    ? "먼저 가용 캐디를 불러오세요"
+                    : "선택 가능한 HOUSE 가용 캐디 없음"
+                  : "HOUSE 가용 캐디 선택…"}
+              </option>
+              {houseStartCandidates.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {formatCaddyLabel(c)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="ops-field ops-third-week">
+            <span>
+              이번 주 3부반 시작조
+              {thirdWeekly?.overridden ? (
+                <span className="ops-manual-badge">수동 지정</span>
+              ) : null}
+            </span>
+            <div className="ops-third-week-row">
+              <select
+                value={thirdWeekly?.startTeam || ""}
+                disabled={!date || savingThirdWeekly}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (!v) return;
+                  void persistThirdWeeklyStart(v);
+                }}
+              >
+                <option value="">
+                  {!date ? "날짜를 선택하세요" : "불러오는 중…"}
+                </option>
+                {THIRD_BAND_TEAMS.map((team) => (
+                  <option key={team} value={team}>
+                    {team}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="btn ghost"
+                disabled={!thirdWeekly?.overridden || savingThirdWeekly}
+                onClick={() => void persistThirdWeeklyStart(null)}
+              >
+                자동값으로 복원
+              </button>
+            </div>
+            <span className="ops-third-week-hint">
+              자동 계산값 {thirdWeekly?.autoStartTeam || "—"} · {thirdWeekly?.weekStart || "—"} 주만 적용
+            </span>
+          </div>
+          <label className="ops-field ops-first-caddy">
+            <span>3부 첫 캐디 (선택)</span>
+            <select
+              value={thirdStartCaddyId === "" ? "" : String(thirdStartCaddyId)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setThirdStartCaddyId(v ? Number(v) : "");
+              }}
+              disabled={!availability}
+            >
+              <option value="">
+                {!availability
+                  ? "먼저 가용 캐디를 불러오세요"
+                  : "선택 안 함 (주간 시작조 첫 가용)"}
+              </option>
+              {thirdStartCandidates.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {formatCaddyLabel(c)} · {thirdStartCandidateStatus(c)}
+                </option>
+              ))}
+            </select>
+          </label>
           <label className="ops-field">
             <span>당번·마샬·조장 Excel (xlsx/xlsm)</span>
             <input
@@ -4166,7 +4187,8 @@ export default function ManageAssignmentsOpsPage() {
       )}
 
       {draft && (
-        <section className="ops-publish" aria-label="배치 확정">
+        <section className="ops-publish" aria-label="운영 반영">
+          <h2 className="ops-publish-title">운영 반영</h2>
           <button
             type="button"
             className="btn primary ops-publish-btn"
@@ -4417,6 +4439,20 @@ const opsCss = `
     border-radius: 14px;
     background: #fff;
   }
+  .ops-flow {
+    display: grid;
+    gap: 10px;
+  }
+  .ops-flow-primary {
+    display: grid;
+    gap: 10px;
+  }
+  @media (min-width: 720px) {
+    .ops-flow-primary {
+      grid-template-columns: minmax(148px, 180px) minmax(180px, 1fr) minmax(260px, 1.15fr);
+      align-items: end;
+    }
+  }
   .ops-courses {
     display: grid;
     gap: 6px;
@@ -4526,11 +4562,11 @@ const opsCss = `
   }
   .ops-actions {
     display: grid;
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
   }
-  @media (min-width: 560px) {
-    .ops-actions { grid-template-columns: repeat(2, 1fr); }
+  .ops-actions .btn {
+    min-width: 0;
   }
   .btn {
     min-height: 42px;
@@ -4551,6 +4587,12 @@ const opsCss = `
     border: 1px solid #e5e7eb;
     border-radius: 14px;
     background: #fff;
+  }
+  .ops-publish-title {
+    margin: 0;
+    font-size: 0.92rem;
+    font-weight: 800;
+    color: #0f172a;
   }
   .ops-publish-btn {
     width: 100%;
@@ -4575,6 +4617,17 @@ const opsCss = `
   }
   .btn.tiny { min-height: 34px; padding: 0 10px; font-size: 0.8rem; }
   .ops-meta { font-size: 0.8rem; color: #475569; }
+  .ops-meta button.ghost,
+  .ops-error button.ghost {
+    border: 0;
+    background: transparent;
+    color: #1d4ed8;
+    padding: 0;
+    min-height: 0;
+    font-size: inherit;
+    font-weight: 700;
+    cursor: pointer;
+  }
   .ops-duty-actions {
     display: flex;
     flex-wrap: wrap;
