@@ -846,7 +846,9 @@ console.log("== ops menu simplify: one place per daily action ==");
       /onEmptyBoardCellClick/.test(board) &&
       /ops-date-settings/.test(board) &&
       />\s*기타 배치 설정\s*</.test(board) &&
-      !/기타 배치 설정 \(1부 첫 캐디/.test(board),
+      !/기타 배치 설정 \(1부 첫 캐디/.test(board) &&
+      /운영배치 불러오기/.test(board) &&
+      !/당번·마샬·조장 Excel/.test(board),
     "추가팀 entry points and extra assignment settings remain"
   );
 
@@ -856,7 +858,7 @@ console.log("== ops menu simplify: one place per daily action ==");
   const actionsAt = board.indexOf('className="ops-actions"');
   const dateSettingsAt = board.indexOf(">기타 배치 설정<");
   const thirdStartAt = board.indexOf("3부 첫 캐디 (선택)");
-  const dutyAt = board.indexOf("당번·마샬·조장 Excel");
+  const dutyAt = board.indexOf("당번·마샬·조장 Google Spreadsheet");
   const livePanelAt = board.indexOf("<LiveChangePanel");
   const boardToolsAt = board.indexOf("ops-board-tools");
   const publishAt = board.indexOf('className="ops-publish"');

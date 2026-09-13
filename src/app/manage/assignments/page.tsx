@@ -3431,76 +3431,6 @@ export default function ManageAssignmentsOpsPage() {
               ))}
             </select>
           </label>
-          <label className="ops-field">
-            <span>당번·마샬·조장 Excel (xlsx/xlsm)</span>
-            <input
-              type="file"
-              accept=".xlsx,.xlsm"
-              onChange={(e) => {
-                setDutyFile(e.target.files?.[0] || null);
-                setOpsDutyPreview(null);
-              }}
-            />
-            <div className="ops-duty-actions">
-              <button
-                type="button"
-                className="ghost"
-                onClick={previewOpsDutyFile}
-                disabled={loadingDutyPreview || !dutyFile}
-              >
-                {loadingDutyPreview ? "미리보기…" : "일정 미리보기"}
-              </button>
-              <button
-                type="button"
-                onClick={applyOpsDutyFile}
-                disabled={loadingDutyApply || !dutyFile}
-              >
-                {loadingDutyApply
-                  ? "저장…"
-                  : opsDutyPreview?.replaceRequired
-                    ? "이 날짜 일정 교체 저장"
-                    : "이 날짜 일정 저장"}
-              </button>
-            </div>
-            {opsDutyStored && (
-              <div className="ops-meta">
-                서버 저장 {opsDutyStored.count}명
-                {opsDutyStored.count > 0
-                  ? " · 파일 없이 가용/자동배치/reflow에 반영"
-                  : " · 아직 없음"}
-                {opsDutyStored.byRole && opsDutyStored.count > 0 ? (
-                  <div>
-                    조출당번 {opsDutyStored.byRole.DUTY_AM ?? 0} / 후출당번{" "}
-                    {opsDutyStored.byRole.DUTY_PM ?? 0} / 조출마샬{" "}
-                    {opsDutyStored.byRole.MARSHAL_AM ?? 0} / 후출마샬{" "}
-                    {opsDutyStored.byRole.MARSHAL_PM ?? 0} / 조장{" "}
-                    {opsDutyStored.byRole.LEADER ?? 0}
-                  </div>
-                ) : null}
-              </div>
-            )}
-            {opsDutyPreview && (
-              <div className="ops-daily">
-                <div className="ops-daily-title">당번 일정 미리보기</div>
-                <ul className="ops-daily-list">
-                  <li>매칭 {opsDutyPreview.matchedCount}명</li>
-                  <li>확인 필요 {opsDutyPreview.reviewCount}</li>
-                  <li>기존 저장 {opsDutyPreview.existingCount}건</li>
-                </ul>
-                {opsDutyPreview.reviews.length > 0 && (
-                  <div className="ops-daily-reviews">
-                    <ul>
-                      {opsDutyPreview.reviews.map((r, i) => (
-                        <li key={`${r.rawName}-${i}`}>
-                          <strong>{r.rawName}</strong> — {r.reason}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            )}
-          </label>
           <div className="ops-field" id="ops-duty-sheet-block">
             <span>당번·마샬·조장 Google Spreadsheet</span>
             <div className="ops-duty-actions">
@@ -3527,6 +3457,23 @@ export default function ManageAssignmentsOpsPage() {
                     : "적용"}
               </button>
             </div>
+            {opsDutyStored && (
+              <div className="ops-meta">
+                서버 저장 {opsDutyStored.count}명
+                {opsDutyStored.count > 0
+                  ? " · 파일 없이 가용/자동배치/reflow에 반영"
+                  : " · 아직 없음"}
+                {opsDutyStored.byRole && opsDutyStored.count > 0 ? (
+                  <div>
+                    조출당번 {opsDutyStored.byRole.DUTY_AM ?? 0} / 후출당번{" "}
+                    {opsDutyStored.byRole.DUTY_PM ?? 0} / 조출마샬{" "}
+                    {opsDutyStored.byRole.MARSHAL_AM ?? 0} / 후출마샬{" "}
+                    {opsDutyStored.byRole.MARSHAL_PM ?? 0} / 조장{" "}
+                    {opsDutyStored.byRole.LEADER ?? 0}
+                  </div>
+                ) : null}
+              </div>
+            )}
             {opsDutySheetPreview && (
               <div className="ops-daily">
                 <div className="ops-daily-title">
