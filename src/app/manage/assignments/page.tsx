@@ -99,7 +99,10 @@ import {
   offCaddiesFromRoster,
   unavailablePanelTotal,
 } from "@/lib/assignmentBoardDirectEdit";
-import { pickOpsStatusSummary } from "@/lib/unavailablePanelView";
+import {
+  buildUnavailableBoardView,
+  pickOpsStatusSummary,
+} from "@/lib/unavailablePanelView";
 import { emptySpecialSupportByShift } from "@/lib/dailySpecialSupport";
 import { SPECIAL_SETTINGS_STALE_MESSAGE } from "@/lib/dailySpecialDuty";
 import { isThirdBandTeam, THIRD_BAND_TEAMS } from "@/lib/caddyManage";
@@ -2908,10 +2911,29 @@ export default function ManageAssignmentsOpsPage() {
     ]
   );
 
-  const opsStatusSummary = useMemo(
-    () => pickOpsStatusSummary(availability?.dailySummary, unavailableGroups),
-    [availability?.dailySummary, unavailableGroups]
+  const unavailableBoardSources = useMemo(
+    () => ({
+      opsDuties: opsDutyStored?.rows,
+      dailyUnavailables,
+    }),
+    [opsDutyStored?.rows, dailyUnavailables]
   );
+
+  const opsStatusSummary = useMemo(() => {
+    const view = buildUnavailableBoardView(
+      unavailableGroups,
+      unavailableBoardSources
+    );
+    return pickOpsStatusSummary(
+      availability?.dailySummary,
+      unavailableGroups,
+      view
+    );
+  }, [
+    availability?.dailySummary,
+    unavailableGroups,
+    unavailableBoardSources,
+  ]);
 
   const moveSourceRow = useMemo(() => {
     if (!draft || !moveKey) return null;
@@ -3833,6 +3855,7 @@ export default function ManageAssignmentsOpsPage() {
               </div>
               <UnavailablePanel
                 groups={unavailableGroups}
+                sources={unavailableBoardSources}
                 summary={opsStatusSummary}
                 open={unavailOpen}
                 sheetOpen={unavailSheetOpen}

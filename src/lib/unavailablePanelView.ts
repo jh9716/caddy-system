@@ -1,6 +1,9 @@
 /**
  * 비가용 패널 presentation-only.
  * buildUnavailablePanelGroups / hydrate / source 는 변경하지 않는다.
+ *
+ * grouping이 병가를 먼저 고정해도, 이미 있는 reason / opsDuty role로
+ * 상태(휴무·병가·결근)와 역할(당번·마샬·조장)을 다시 나눈다.
  */
 
 import type {
@@ -30,6 +33,19 @@ export type UnavailableSpecialBand =
 export const DUTY_SLOT_LABELS = ["조출1", "조출2", "후출1", "후출2"] as const;
 export const MARSHAL_SLOT_LABELS = ["조출1", "조출2", "후출1"] as const;
 
+export const DUTY_ROLEKEY_SLOTS: Record<string, string> = {
+  당번_조출_1: "조출1",
+  당번_조출_2: "조출2",
+  당번_후출_1: "후출1",
+  당번_후출_2: "후출2",
+};
+
+export const MARSHAL_ROLEKEY_SLOTS: Record<string, string> = {
+  마샬_조출_1: "조출1",
+  마샬_조출_2: "조출2",
+  마샬_후출_1: "후출1",
+};
+
 export type UnavailableBoardPerson = {
   caddyId: number;
   name: string;
@@ -46,6 +62,13 @@ export type UnavailableSlotBlock = {
   people: UnavailableBoardPerson[];
 };
 
+export type UnavailableSourceConflict = {
+  caddyId: number;
+  name: string;
+  status: "병가" | "결근";
+  role: string;
+};
+
 export type UnavailableBoardView = {
   total: number;
   offTeams: UnavailableTeamBlock[];
@@ -56,6 +79,7 @@ export type UnavailableBoardView = {
   leaders: UnavailableBoardPerson[];
   specialBands: UnavailableTeamBlock[];
   other: UnavailableBoardPerson[];
+  conflicts: UnavailableSourceConflict[];
 };
 
 export type OpsStatusSummary = {
@@ -66,6 +90,20 @@ export type OpsStatusSummary = {
   absent: number;
 };
 
+export type UnavailableBoardSources = {
+  opsDuties?: Array<{
+    caddyId: number;
+    role?: string;
+    roleKey?: string;
+  }> | null;
+  dailyUnavailables?: Array<{
+    caddyId: number;
+    reason?: string;
+  }> | null;
+};
+
+export type OpsRoleKind = "당번" | "마샬" | "조장";
+
 export function pickOpsStatusSummary(
   dailySummary:
     | {
@@ -75,15 +113,16 @@ export function pickOpsStatusSummary(
       }
     | null
     | undefined,
-  groups: readonly UnavailablePanelGroup[]
+  groups: readonly UnavailablePanelGroup[],
+  view?: Pick<UnavailableBoardView, "sick" | "absent"> | null
 ): OpsStatusSummary {
   return {
     employed: dailySummary != null ? dailySummary.baseAvailable : null,
     off:
       dailySummary != null ? dailySummary.off : itemsOf(groups, "휴무").length,
     finalAvailable: dailySummary != null ? dailySummary.finalAvailable : null,
-    sick: itemsOf(groups, "병가").length,
-    absent: itemsOf(groups, "결근").length,
+    sick: view ? view.sick.length : itemsOf(groups, "병가").length,
+    absent: view ? view.absent.length : itemsOf(groups, "결근").length,
   };
 }
 
@@ -119,11 +158,44 @@ export function specialBandFromTeam(
   return null;
 }
 
+export function slotLabelFromRoleKey(roleKey: string): string | null {
+  const key = String(roleKey || "").trim();
+  return DUTY_ROLEKEY_SLOTS[key] || MARSHAL_ROLEKEY_SLOTS[key] || null;
+}
+
+export function opsRoleFromReason(reason: string): OpsRoleKind | null {
+  const text = String(reason || "");
+  if (/조장|LEADER/.test(text)) return "조장";
+  if (/마샬|MARSHAL/.test(text)) return "마샬";
+  if (/당번|DUTY/.test(text)) return "당번";
+  return null;
+}
+
+export function opsRoleFromStoredRole(role: string | null | undefined): OpsRoleKind | null {
+  const r = String(role || "").trim().toUpperCase();
+  if (r === "LEADER") return "조장";
+  if (r === "MARSHAL_AM" || r === "MARSHAL_PM") return "마샬";
+  if (r === "DUTY_AM" || r === "DUTY_PM") return "당번";
+  return null;
+}
+
 function itemsOf(
   groups: readonly UnavailablePanelGroup[],
   category: UnavailablePanelGroup["category"]
 ): UnavailablePanelItem[] {
   return groups.find((group) => group.category === category)?.items || [];
+}
+
+function flattenItems(
+  groups: readonly UnavailablePanelGroup[]
+): UnavailablePanelItem[] {
+  const byId = new Map<number, UnavailablePanelItem>();
+  for (const group of groups) {
+    for (const item of group.items) {
+      if (!byId.has(item.caddyId)) byId.set(item.caddyId, item);
+    }
+  }
+  return [...byId.values()];
 }
 
 function toPerson(item: UnavailablePanelItem): UnavailableBoardPerson {
@@ -134,17 +206,58 @@ function toPerson(item: UnavailablePanelItem): UnavailableBoardPerson {
   };
 }
 
-function dutyPeriod(reason: string): "am" | "pm" | "unknown" {
-  const text = String(reason || "");
+function isOffItem(item: UnavailablePanelItem): boolean {
+  if (item.category === "휴무") return true;
+  return /휴무|^OFF\b/.test(item.reason);
+}
+
+function isConfirmedSick(
+  item: UnavailablePanelItem,
+  sickIds: Set<number> | null,
+  hasOpsRole: boolean
+): boolean {
+  if (hasOpsRole) return Boolean(sickIds?.has(item.caddyId));
+  if (sickIds?.has(item.caddyId)) return true;
+  return item.category === "병가" || /병가|SICK/.test(item.reason);
+}
+
+function isConfirmedAbsent(
+  item: UnavailablePanelItem,
+  absentIds: Set<number> | null,
+  hasOpsRole: boolean
+): boolean {
+  if (hasOpsRole) return Boolean(absentIds?.has(item.caddyId));
+  if (absentIds?.has(item.caddyId)) return true;
+  return item.category === "결근" || /결근|미출근|ATTENDANCE/.test(item.reason);
+}
+
+function dailyStatusSets(
+  rows: UnavailableBoardSources["dailyUnavailables"]
+): { sickIds: Set<number> | null; absentIds: Set<number> | null } {
+  if (rows == null) return { sickIds: null, absentIds: null };
+  const sickIds = new Set<number>();
+  const absentIds = new Set<number>();
+  for (const row of rows) {
+    const id = Number(row.caddyId);
+    if (!id) continue;
+    const raw = String(row.reason || "").trim();
+    if (/ATTENDANCE|결근|미출근/.test(raw)) absentIds.add(id);
+    else if (/SICK|병가/.test(raw)) sickIds.add(id);
+  }
+  return { sickIds, absentIds };
+}
+
+function dutyPeriod(reason: string, role?: string): "am" | "pm" | "unknown" {
+  const text = `${reason || ""} ${role || ""}`;
   if (/후출당번|DUTY_PM/.test(text)) return "pm";
   if (/조출당번|DUTY_AM/.test(text)) return "am";
-  if (/후출/.test(text) && !/마샬/.test(text)) return "pm";
-  if (/조출/.test(text) && !/마샬/.test(text)) return "am";
+  if (/후출/.test(text) && !/마샬|MARSHAL/.test(text)) return "pm";
+  if (/조출/.test(text) && !/마샬|MARSHAL/.test(text)) return "am";
   return "unknown";
 }
 
-function marshalPeriod(reason: string): "am" | "pm" | "unknown" {
-  const text = String(reason || "");
+function marshalPeriod(reason: string, role?: string): "am" | "pm" | "unknown" {
+  const text = `${reason || ""} ${role || ""}`;
   if (/후출마샬|MARSHAL_PM/.test(text)) return "pm";
   if (/조출마샬|MARSHAL_AM/.test(text)) return "am";
   if (/후출/.test(text)) return "pm";
@@ -162,26 +275,35 @@ function fillNamedSlots(
   }));
 }
 
-function assignSequentialSlots(
-  items: UnavailablePanelItem[],
-  periodOf: (reason: string) => "am" | "pm" | "unknown",
+type SlotCandidate = {
+  item: UnavailablePanelItem;
+  slotLabel: string | null;
+  period: "am" | "pm" | "unknown";
+};
+
+function assignSlots(
+  candidates: SlotCandidate[],
   labels: readonly string[],
   amCount: number
 ): UnavailableSlotBlock[] {
-  const am: UnavailablePanelItem[] = [];
-  const pm: UnavailablePanelItem[] = [];
-  const unknown: UnavailablePanelItem[] = [];
-  for (const item of items) {
-    const period = periodOf(item.reason);
-    if (period === "am") am.push(item);
-    else if (period === "pm") pm.push(item);
-    else unknown.push(item);
-  }
+  if (candidates.length === 0) return [];
   const buckets: UnavailableBoardPerson[][] = labels.map(() => []);
-  const place = (list: UnavailablePanelItem[], start: number, count: number) => {
-    list.forEach((item, index) => {
-      const slot = start + Math.min(index, count - 1);
-      buckets[slot].push(toPerson(item));
+  const used = new Set<number>();
+  for (const row of candidates) {
+    if (!row.slotLabel) continue;
+    const index = labels.indexOf(row.slotLabel);
+    if (index < 0) continue;
+    buckets[index].push(toPerson(row.item));
+    used.add(row.item.caddyId);
+  }
+  const leftover = candidates.filter((row) => !used.has(row.item.caddyId));
+  const am = leftover.filter((row) => row.period === "am");
+  const pm = leftover.filter((row) => row.period === "pm");
+  const unknown = leftover.filter((row) => row.period === "unknown");
+  const place = (list: SlotCandidate[], start: number, count: number) => {
+    list.forEach((row, index) => {
+      const slot = start + Math.min(index, Math.max(count, 1) - 1);
+      buckets[slot].push(toPerson(row.item));
     });
   };
   place(am, 0, amCount);
@@ -201,13 +323,27 @@ export function countUnavailableBoardPeople(view: UnavailableBoardView): number 
     named(view.marshalSlots) +
     view.leaders.length +
     named(view.specialBands) +
-    view.other.length
+    view.other.length +
+    (view.conflicts || []).length
   );
 }
 
 export function buildUnavailableBoardView(
-  groups: readonly UnavailablePanelGroup[]
+  groups: readonly UnavailablePanelGroup[],
+  sources?: UnavailableBoardSources | null
 ): UnavailableBoardView {
+  const dutyHint = new Map<
+    number,
+    { role?: string; roleKey?: string; kind: OpsRoleKind }
+  >();
+  for (const row of sources?.opsDuties || []) {
+    const id = Number(row.caddyId);
+    const kind = opsRoleFromStoredRole(row.role);
+    if (!id || !kind) continue;
+    dutyHint.set(id, { role: row.role, roleKey: row.roleKey, kind });
+  }
+  const { sickIds, absentIds } = dailyStatusSets(sources?.dailyUnavailables);
+
   const specialByBand = new Map<
     UnavailableSpecialBand,
     UnavailableBoardPerson[]
@@ -228,17 +364,76 @@ export function buildUnavailableBoardView(
 
   const offByTeam = new Map<number, UnavailableBoardPerson[]>();
   const offOther: UnavailableBoardPerson[] = [];
-  for (const item of itemsOf(groups, "휴무")) {
-    takeSpecialOr(item, (person) => {
-      const n = houseTeamNumber(item.team);
-      if (n) {
-        const list = offByTeam.get(n) || [];
-        list.push(person);
-        offByTeam.set(n, list);
-        return;
-      }
-      offOther.push(person);
-    });
+  const sick: UnavailableBoardPerson[] = [];
+  const absent: UnavailableBoardPerson[] = [];
+  const dutyCandidates: SlotCandidate[] = [];
+  const marshalCandidates: SlotCandidate[] = [];
+  const leaders: UnavailableBoardPerson[] = [];
+  const other: UnavailableBoardPerson[] = [];
+  const conflicts: UnavailableSourceConflict[] = [];
+
+  for (const item of flattenItems(groups)) {
+    const hint = dutyHint.get(item.caddyId);
+    const role = hint?.kind || opsRoleFromReason(item.reason);
+    const off = isOffItem(item);
+    const sickHit = isConfirmedSick(item, sickIds, Boolean(role));
+    const absentHit = isConfirmedAbsent(item, absentIds, Boolean(role));
+
+    if (off) {
+      takeSpecialOr(item, (person) => {
+        const n = houseTeamNumber(item.team);
+        if (n) {
+          const list = offByTeam.get(n) || [];
+          list.push(person);
+          offByTeam.set(n, list);
+          return;
+        }
+        offOther.push(person);
+      });
+      continue;
+    }
+
+    if (role && (sickHit || absentHit)) {
+      conflicts.push({
+        caddyId: item.caddyId,
+        name: item.name,
+        status: absentHit ? "결근" : "병가",
+        role: hint?.roleKey || hint?.role || role,
+      });
+      continue;
+    }
+
+    if (role === "당번") {
+      dutyCandidates.push({
+        item,
+        slotLabel: hint?.roleKey ? slotLabelFromRoleKey(hint.roleKey) : null,
+        period: dutyPeriod(item.reason, hint?.role),
+      });
+      continue;
+    }
+    if (role === "마샬") {
+      marshalCandidates.push({
+        item,
+        slotLabel: hint?.roleKey ? slotLabelFromRoleKey(hint.roleKey) : null,
+        period: marshalPeriod(item.reason, hint?.role),
+      });
+      continue;
+    }
+    if (role === "조장") {
+      leaders.push(toPerson(item));
+      continue;
+    }
+
+    if (sickHit) {
+      sick.push(toPerson(item));
+      continue;
+    }
+    if (absentHit) {
+      absent.push(toPerson(item));
+      continue;
+    }
+
+    takeSpecialOr(item, (person) => other.push(person));
   }
 
   const offTeams: UnavailableTeamBlock[] = [];
@@ -251,11 +446,6 @@ export function buildUnavailableBoardView(
     offTeams.push({ team: "기타", people: offOther });
   }
 
-  const other: UnavailableBoardPerson[] = [];
-  for (const item of itemsOf(groups, "기타")) {
-    takeSpecialOr(item, (person) => other.push(person));
-  }
-
   const specialBands = UNAVAILABLE_SPECIAL_BANDS.filter((band) =>
     specialByBand.get(band)?.length
   ).map((band) => ({
@@ -263,22 +453,16 @@ export function buildUnavailableBoardView(
     people: specialByBand.get(band) || [],
   }));
 
-  const dutyItems = itemsOf(groups, "당번");
-  const marshalItems = itemsOf(groups, "마샬");
-
   return {
     total: unavailablePanelTotal(groups),
     offTeams,
-    sick: itemsOf(groups, "병가").map(toPerson),
-    absent: itemsOf(groups, "결근").map(toPerson),
-    dutySlots: dutyItems.length
-      ? assignSequentialSlots(dutyItems, dutyPeriod, DUTY_SLOT_LABELS, 2)
-      : [],
-    marshalSlots: marshalItems.length
-      ? assignSequentialSlots(marshalItems, marshalPeriod, MARSHAL_SLOT_LABELS, 2)
-      : [],
-    leaders: itemsOf(groups, "조장").map(toPerson),
+    sick,
+    absent,
+    dutySlots: assignSlots(dutyCandidates, DUTY_SLOT_LABELS, 2),
+    marshalSlots: assignSlots(marshalCandidates, MARSHAL_SLOT_LABELS, 2),
+    leaders,
     specialBands,
     other,
+    conflicts,
   };
 }

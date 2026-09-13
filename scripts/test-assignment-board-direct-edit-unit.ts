@@ -534,10 +534,110 @@ console.log("== unavailable board presentation ==");
   assert(view.specialBands.every((b) => b.team !== "주중반"), "missing 주중반 hidden");
   const picked = pickOpsStatusSummary(
     { baseAvailable: 88, off: 40, finalAvailable: 61 },
-    groups
+    groups,
+    view
   );
   assert(picked.employed === 88 && picked.off === 40 && picked.finalAvailable === 61, "summary reuses dailySummary");
   assert(picked.sick === 1 && picked.absent === 1, "summary reuses grouped 병가/결근");
+}
+
+console.log("== unavailable display classification ==");
+{
+  const excludedSickDuty: AvailabilityRow = {
+    id: 61,
+    name: "당번조출일",
+    team: "2조",
+    teamOrder: 1,
+    caddyType: "HOUSE",
+    extraFlags: [],
+    bucket: "excluded",
+    excludedReasons: ["병가"],
+    specialTags: [],
+    assignmentLabels: ["병가"],
+  };
+  const groups = buildUnavailablePanelGroups({
+    excluded: [
+      {
+        id: 71,
+        name: "휴무자",
+        team: "1조",
+        teamOrder: 1,
+        caddyType: "HOUSE",
+        extraFlags: [],
+        bucket: "excluded",
+        excludedReasons: ["휴무"],
+        specialTags: [],
+        assignmentLabels: ["휴무"],
+      },
+      excludedSickDuty,
+    ],
+    opsDuties: [
+      { caddyId: 61, name: "당번조출일", team: "2조", role: "DUTY_AM", roleKey: "당번_조출_1" },
+      { caddyId: 62, name: "마샬후출일", team: "3조", role: "MARSHAL_PM", roleKey: "마샬_후출_1" },
+      { caddyId: 63, name: "조장일", team: "4조", role: "LEADER", roleKey: "조장_1" },
+    ],
+    dailyUnavailables: [
+      { caddyId: 81, name: "실제병가", team: "5조", reason: "SICK" },
+      { caddyId: 82, name: "실제결근", team: "6조", reason: "ATTENDANCE_NOSHOW" },
+    ],
+    specialSupportByShift: {
+      "1부": [{ id: 71 }],
+      "2부": [],
+      "3부": [],
+    },
+  });
+  const sources = {
+    opsDuties: [
+      { caddyId: 61, role: "DUTY_AM", roleKey: "당번_조출_1" },
+      { caddyId: 62, role: "MARSHAL_PM", roleKey: "마샬_후출_1" },
+      { caddyId: 63, role: "LEADER", roleKey: "조장_1" },
+    ],
+    dailyUnavailables: [
+      { caddyId: 81, reason: "SICK" },
+      { caddyId: 82, reason: "ATTENDANCE_NOSHOW" },
+    ],
+  };
+  const view = buildUnavailableBoardView(groups, sources);
+  const offNames = view.offTeams.flatMap((b) => b.people.map((p) => p.name));
+  const dutyMap = Object.fromEntries(
+    view.dutySlots.map((s) => [s.label, s.people.map((p) => p.name).join(",")])
+  );
+  const marshalMap = Object.fromEntries(
+    view.marshalSlots.map((s) => [s.label, s.people.map((p) => p.name).join(",")])
+  );
+  assert(offNames.join(",") === "휴무자", "OFF -> 휴무");
+  assert(view.offTeams[0]?.people[0]?.badges.join(",") === "1부지원", "휴무 + specialSupport badge");
+  assert(view.sick.map((p) => p.name).join(",") === "실제병가", "SICK only -> 병가");
+  assert(view.absent.map((p) => p.name).join(",") === "실제결근", "NOSHOW -> 결근");
+  assert(dutyMap["조출1"] === "당번조출일", "당번 조출1");
+  assert(marshalMap["후출1"] === "마샬후출일", "마샬 후출1");
+  assert(view.leaders[0]?.name === "조장일", "조장 section");
+  assert(
+    !view.sick.some((p) => ["당번조출일", "마샬후출일", "조장일"].includes(p.name)),
+    "당번/마샬/조장 not in 병가"
+  );
+  assert(view.conflicts.length === 0, "no false SICK+duty conflict");
+  assert(view.total === 6, "unique people 6");
+  assert(countUnavailableBoardPeople(view) === 6, "section sum == unique");
+
+  const conflictGroups = buildUnavailablePanelGroups({
+    excluded: [excludedSickDuty],
+    opsDuties: [
+      { caddyId: 61, name: "당번조출일", team: "2조", role: "DUTY_AM", roleKey: "당번_조출_1" },
+    ],
+    dailyUnavailables: [{ caddyId: 61, name: "당번조출일", team: "2조", reason: "SICK" }],
+  });
+  const conflictView = buildUnavailableBoardView(conflictGroups, {
+    opsDuties: [{ caddyId: 61, role: "DUTY_AM", roleKey: "당번_조출_1" }],
+    dailyUnavailables: [{ caddyId: 61, reason: "SICK" }],
+  });
+  assert(conflictView.conflicts.length === 1, "real SICK+duty reported once");
+  assert(conflictView.sick.length === 0, "conflict not counted as 병가");
+  assert(
+    conflictView.dutySlots.every((s) => s.people.length === 0),
+    "conflict not duplicated as 당번"
+  );
+  assert(countUnavailableBoardPeople(conflictView) === 1, "conflict unique count");
 }
 
 console.log("== special TEAM MOVE keeps anchors ==");
@@ -662,6 +762,8 @@ console.log("== UI source: cell menus ==");
   assert(!/<ul>/.test(unavailPanel), "raw unavailable list removed");
   assert(!/당일 가용 요약/.test(page), "top daily summary box removed");
   assert(/pickOpsStatusSummary/.test(page), "summary numbers reused not recalculated");
+  assert(/sources=\{unavailableBoardSources\}/.test(page), "panel gets opsDuty + dailyUnavailables");
+  assert(/상태\/역할 충돌/.test(unavailPanel), "conflict section rendered");
   assert(/min-width: 1280px/.test(page), "PC side-by-side from 1280");
   assert(/minmax\(280px, 26%\)/.test(page), "right panel ~25-28%");
   assert(/position: sticky/.test(page), "desktop unavailable panel sticky");

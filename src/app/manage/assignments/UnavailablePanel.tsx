@@ -6,6 +6,7 @@ import {
   pickOpsStatusSummary,
   type OpsStatusSummary,
   type UnavailableBoardPerson,
+  type UnavailableBoardSources,
   type UnavailableSlotBlock,
   type UnavailableTeamBlock,
 } from "@/lib/unavailablePanelView";
@@ -101,19 +102,25 @@ function SummaryStrip({ summary }: { summary: OpsStatusSummary }) {
 
 export function UnavailablePanel({
   groups,
+  sources,
   summary,
   open,
   sheetOpen = false,
   onToggle,
 }: {
   groups: UnavailablePanelGroup[];
+  sources?: UnavailableBoardSources | null;
   summary?: OpsStatusSummary | null;
   open: boolean;
   sheetOpen?: boolean;
   onToggle: () => void;
 }) {
-  const view = buildUnavailableBoardView(groups);
-  const stats = summary || pickOpsStatusSummary(null, groups);
+  const view = buildUnavailableBoardView(groups, sources);
+  const stats = {
+    ...(summary || pickOpsStatusSummary(null, groups, view)),
+    sick: view.sick.length,
+    absent: view.absent.length,
+  };
   const hasHealth = view.sick.length > 0 || view.absent.length > 0;
   return (
     <aside
@@ -193,6 +200,21 @@ export function UnavailablePanel({
               <section className="ops-unavail-sec">
                 <h3>기타</h3>
                 <PersonFlow people={view.other} />
+              </section>
+            ) : null}
+            {view.conflicts.length > 0 ? (
+              <section className="ops-unavail-sec">
+                <h3>상태/역할 충돌</h3>
+                <div className="ops-unavail-pills">
+                  {view.conflicts.map((row) => (
+                    <span key={row.caddyId} className="ops-unavail-pill">
+                      <span className="ops-unavail-name">{row.name}</span>
+                      <span className="ops-unavail-badge">
+                        {row.status}·{row.role}
+                      </span>
+                    </span>
+                  ))}
+                </div>
               </section>
             ) : null}
           </>
