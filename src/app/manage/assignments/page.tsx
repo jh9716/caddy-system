@@ -96,6 +96,7 @@ import { BoardQuickSheet, LiveChangePanel, LockToggle, SameDayAddSheet, TeamMove
 import { UnavailablePanel } from "./UnavailablePanel";
 import {
   buildUnavailablePanelGroups,
+  offCaddiesFromRoster,
   unavailablePanelTotal,
 } from "@/lib/assignmentBoardDirectEdit";
 import { emptySpecialSupportByShift } from "@/lib/dailySpecialSupport";
@@ -445,6 +446,9 @@ export default function ManageAssignmentsOpsPage() {
   const [availability, setAvailability] = useState<
     (AvailabilityResult & { dailySummary?: DailyAvailabilitySummary }) | null
   >(null);
+  const [dailyUnavailables, setDailyUnavailables] = useState<
+    Array<{ caddyId: number; name?: string; team?: string; reason?: string }>
+  >([]);
   const [autoResult, setAutoResult] = useState<RunResponse | null>(null);
   const [draft, setDraft] = useState<AssignmentDraft | null>(null);
   const [warnings, setWarnings] = useState<DraftWarning[]>([]);
@@ -613,6 +617,12 @@ export default function ManageAssignmentsOpsPage() {
         };
         unavailableCaddyIds?: number[];
         unavailableFromShift?: UnavailableFromShiftRow[];
+        unavailableRows?: Array<{
+          caddyId: number;
+          name?: string;
+          team?: string;
+          reason?: string;
+        }>;
       };
     },
     []
@@ -732,12 +742,20 @@ export default function ManageAssignmentsOpsPage() {
     [flushDraftSave]
   );
 
+  const applyUnavailablePanelRows = useCallback(
+    (rows: unknown) => {
+      setDailyUnavailables(Array.isArray(rows) ? rows : []);
+    },
+    []
+  );
+
   const reloadLatestDraft = useCallback(async () => {
     const ymd = dateRef.current;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return;
     setError(null);
     try {
       const data = await loadServerDraft(ymd);
+      applyUnavailablePanelRows(data.unavailableRows);
       if (!data.draft) {
         clearDraftBoard();
         showToast("저장된 작업본이 없습니다");
@@ -756,7 +774,7 @@ export default function ManageAssignmentsOpsPage() {
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "작업본 조회 실패");
     }
-  }, [applyHydratedDraft, clearDraftBoard, loadServerDraft]);
+  }, [applyHydratedDraft, applyUnavailablePanelRows, clearDraftBoard, loadServerDraft]);
 
   const resetStoredDraft = useCallback(async () => {
     const ymd = dateRef.current;
@@ -840,6 +858,32 @@ export default function ManageAssignmentsOpsPage() {
   }, [file, date]);
 
   useEffect(() => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      setAvailability(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/availability?date=${encodeURIComponent(date)}`,
+          { credentials: "include" }
+        );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || cancelled) return;
+        setAvailability(
+          data as AvailabilityResult & { dailySummary?: DailyAvailabilitySummary }
+        );
+      } catch {
+        // Draft offSnapshot / opsDuty / DailyCaddyUnavailable 로 패널을 채운다.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [date]);
+
+  useEffect(() => {
     setOpsDutySyncNotice(null);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       setOpsDutyStored(null);
@@ -921,6 +965,7 @@ export default function ManageAssignmentsOpsPage() {
     setDraftVersion(0);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       clearDraftBoard();
+      setDailyUnavailables([]);
       return;
     }
     let cancelled = false;
@@ -932,6 +977,7 @@ export default function ManageAssignmentsOpsPage() {
       try {
         const data = await loadServerDraft(date);
         if (cancelled) return;
+        applyUnavailablePanelRows(data.unavailableRows);
         if (!data.draft) {
           hydratingDraftRef.current = false;
           setDraft(null);
@@ -1866,6 +1912,7 @@ export default function ManageAssignmentsOpsPage() {
         return;
       }
       const latest = await loadServerDraft(date);
+      applyUnavailablePanelRows(latest.unavailableRows);
       applyHydratedDraft(
         next,
         Number(saveData.draft.version) || 0,
@@ -2840,9 +2887,24 @@ export default function ManageAssignmentsOpsPage() {
       buildUnavailablePanelGroups({
         excluded: availability?.excluded,
         opsDuties: opsDutyStored?.rows,
+        offCaddies: offCaddiesFromRoster(
+          isUsableOffSnapshot(draft?.offSnapshot, date)
+            ? draft?.offSnapshot?.caddyIds
+            : [],
+          draft?.caddyPool
+        ),
+        dailyUnavailables,
         specialSupportByShift,
       }),
-    [availability?.excluded, opsDutyStored?.rows, specialSupportByShift]
+    [
+      availability?.excluded,
+      opsDutyStored?.rows,
+      draft?.offSnapshot,
+      draft?.caddyPool,
+      date,
+      dailyUnavailables,
+      specialSupportByShift,
+    ]
   );
 
   const moveSourceRow = useMemo(() => {

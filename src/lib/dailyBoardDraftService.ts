@@ -241,6 +241,35 @@ export async function listUnavailableFromShift(
     .filter((row) => Number.isInteger(row.caddyId) && row.caddyId > 0);
 }
 
+export type UnavailablePanelSourceRow = {
+  caddyId: number;
+  name: string;
+  team: string;
+  reason: string;
+};
+
+/** 패널 표시용 병가/결근. Draft identity/reflow 타입은 바꾸지 않는다. */
+export async function listUnavailablePanelRows(
+  ymd: string
+): Promise<UnavailablePanelSourceRow[]> {
+  const rows = await defaultPrisma.dailyCaddyUnavailable.findMany({
+    where: { date: dateKey(ymd) },
+    select: {
+      caddyId: true,
+      reason: true,
+      caddy: { select: { name: true, team: true } },
+    },
+  });
+  return rows
+    .map((row) => ({
+      caddyId: Number(row.caddyId),
+      name: String(row.caddy?.name || "").trim(),
+      team: String(row.caddy?.team || "").trim(),
+      reason: String(row.reason || ""),
+    }))
+    .filter((row) => Number.isInteger(row.caddyId) && row.caddyId > 0);
+}
+
 /** Draft row만 삭제. DailyReservation / DailyPlacement 는 건드리지 않는다. */
 export async function resetDailyBoardDraft(
   ymd: string,

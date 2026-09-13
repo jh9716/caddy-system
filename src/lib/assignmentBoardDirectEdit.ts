@@ -153,6 +153,50 @@ export function supportNoteForCaddy(
   return `${hit.join("·")} 지원`;
 }
 
+export function offCaddiesFromRoster(
+  caddyIds: readonly number[] | null | undefined,
+  roster: ReadonlyArray<{ id: number; name?: string; team?: string }> | null | undefined
+): Array<{ id: number; name: string; team: string }> {
+  const byId = new Map((roster || []).map((row) => [Number(row.id), row]));
+  const out: Array<{ id: number; name: string; team: string }> = [];
+  for (const raw of caddyIds || []) {
+    const id = Number(raw);
+    if (!Number.isInteger(id) || id < 1) continue;
+    const hit = byId.get(id);
+    out.push({
+      id,
+      name: String(hit?.name || "").trim() || `캐디${id}`,
+      team: String(hit?.team || "").trim() || "—",
+    });
+  }
+  return out;
+}
+
+function upsertUnavailableItem(
+  byId: Map<number, UnavailablePanelItem>,
+  item: UnavailablePanelItem
+) {
+  const existing = byId.get(item.caddyId);
+  if (!existing) {
+    byId.set(item.caddyId, item);
+    return;
+  }
+  if (existing.category === "기타" && item.category !== "기타") {
+    existing.category = item.category;
+  }
+  if (item.reason && !existing.reason.includes(item.reason)) {
+    existing.reason = existing.reason
+      ? `${existing.reason} · ${item.reason}`
+      : item.reason;
+  }
+  if (existing.name.startsWith("캐디") && item.name && !item.name.startsWith("캐디")) {
+    existing.name = item.name;
+  }
+  if ((existing.team === "—" || !existing.team) && item.team) {
+    existing.team = item.team;
+  }
+}
+
 export function buildUnavailablePanelGroups(input: {
   excluded?: AvailabilityRow[] | null;
   opsDuties?: Array<{
@@ -160,6 +204,17 @@ export function buildUnavailablePanelGroups(input: {
     name?: string;
     team?: string;
     role?: DailyOpsDutyRole | string;
+  }> | null;
+  offCaddies?: Array<{
+    id: number;
+    name?: string;
+    team?: string;
+  }> | null;
+  dailyUnavailables?: Array<{
+    caddyId: number;
+    name?: string;
+    team?: string;
+    reason?: string;
   }> | null;
   specialSupportByShift?: Record<ShiftPart, Array<{ id: number }>> | null;
 }): UnavailablePanelGroup[] {
@@ -169,13 +224,37 @@ export function buildUnavailablePanelGroups(input: {
     const reason = (row.excludedReasons || row.assignmentLabels || []).join(" · ") ||
       "비가용";
     const category = classifyReason(reason);
-    const support = supportNoteForCaddy(row.id, input.specialSupportByShift);
-    byId.set(row.id, {
+    upsertUnavailableItem(byId, {
       caddyId: row.id,
       name: row.name,
       team: row.team,
       category,
-      reason: support ? `${reason} → ${support}` : reason,
+      reason,
+    });
+  }
+
+  for (const row of input.offCaddies || []) {
+    const id = Number(row.id);
+    if (!id) continue;
+    upsertUnavailableItem(byId, {
+      caddyId: id,
+      name: String(row.name || "").trim() || `캐디${id}`,
+      team: String(row.team || "").trim() || "—",
+      category: "휴무",
+      reason: "휴무",
+    });
+  }
+
+  for (const row of input.dailyUnavailables || []) {
+    const id = Number(row.caddyId);
+    if (!id) continue;
+    const raw = String(row.reason || "").trim() || "병가";
+    upsertUnavailableItem(byId, {
+      caddyId: id,
+      name: String(row.name || "").trim() || `캐디${id}`,
+      team: String(row.team || "").trim() || "—",
+      category: classifyReason(raw),
+      reason: /ATTENDANCE/.test(raw) ? "결근" : /SICK/.test(raw) ? "병가" : raw,
     });
   }
 
@@ -187,23 +266,20 @@ export function buildUnavailablePanelGroups(input: {
       duty.role && duty.role in OPS_DUTY_ROLE_LABELS
         ? OPS_DUTY_ROLE_LABELS[duty.role as DailyOpsDutyRole]
         : String(duty.role || category);
-    const existing = byId.get(id);
-    if (existing) {
-      if (existing.category === "기타" && category !== "기타") {
-        existing.category = category;
-      }
-      if (!existing.reason.includes(roleLabel)) {
-        existing.reason = `${existing.reason} · ${roleLabel}`;
-      }
-      continue;
-    }
-    byId.set(id, {
+    upsertUnavailableItem(byId, {
       caddyId: id,
       name: String(duty.name || "").trim() || `캐디${id}`,
       team: String(duty.team || "").trim() || "—",
       category,
       reason: roleLabel,
     });
+  }
+
+  for (const item of byId.values()) {
+    const support = supportNoteForCaddy(item.caddyId, input.specialSupportByShift);
+    if (support && !item.reason.includes("지원")) {
+      item.reason = `${item.reason} → ${support}`;
+    }
   }
 
   const grouped = new Map<UnavailablePanelCategory, UnavailablePanelItem[]>();

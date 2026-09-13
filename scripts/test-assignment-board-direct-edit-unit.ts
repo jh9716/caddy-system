@@ -9,6 +9,7 @@ import {
   buildUnavailablePanelGroups,
   isHouseRequest,
   mergeDraftOnlyReservationFlags,
+  offCaddiesFromRoster,
   unavailablePanelTotal,
 } from "../src/lib/assignmentBoardDirectEdit";
 import { applyLiveResultToDraft, createDraftFromAutoResult } from "../src/lib/assignmentDraft";
@@ -380,6 +381,45 @@ console.log("== unavailable panel grouping ==");
   assert(sick?.name === "병가김", "병가 group");
   assert(leader?.name === "조장박", "조장 from ops duty");
   assert(unavailablePanelTotal(groups) === 3, "unavailable count");
+
+  const hydrated = buildUnavailablePanelGroups({
+    opsDuties: [{ caddyId: 21, name: "당번이", team: "1조", role: "DUTY_AM" }],
+    offCaddies: offCaddiesFromRoster(
+      [22],
+      [{ id: 22, name: "휴무자", team: "4조" }]
+    ),
+    dailyUnavailables: [
+      { caddyId: 23, name: "병가자", team: "2조", reason: "SICK" },
+      { caddyId: 24, name: "결근자", team: "5조", reason: "ATTENDANCE_NOSHOW" },
+    ],
+    specialSupportByShift: {
+      "1부": [{ id: 22 }],
+      "2부": [],
+      "3부": [],
+    },
+  });
+  assert(
+    hydrated.find((g) => g.category === "당번")?.items[0]?.name === "당번이",
+    "ops duty without excluded"
+  );
+  assert(
+    hydrated.find((g) => g.category === "휴무")?.items[0]?.reason.includes(
+      "휴무"
+    ) &&
+      hydrated
+        .find((g) => g.category === "휴무")
+        ?.items[0]?.reason.includes("1부 지원"),
+    "off snapshot 휴무 → 지원 without excluded"
+  );
+  assert(
+    hydrated.find((g) => g.category === "병가")?.items[0]?.name === "병가자",
+    "DailyCaddyUnavailable 병가"
+  );
+  assert(
+    hydrated.find((g) => g.category === "결근")?.items[0]?.name === "결근자",
+    "DailyCaddyUnavailable 결근"
+  );
+  assert(unavailablePanelTotal(hydrated) === 4, "hydrate sources without availability");
 }
 
 console.log("== special TEAM MOVE keeps anchors ==");
@@ -485,6 +525,12 @@ console.log("== UI source: cell menus ==");
   assert(/CADDY_ATTENDANCE_NOSHOW/.test(caddyBlock) && /SET_LOCK/.test(caddyBlock), "absent + lock");
   assert(/UnavailablePanel/.test(page), "unavailable panel mounted");
   assert(/opsDuties:\s*opsDutyStored/.test(page), "unavailable panel gets opsDuties");
+  assert(
+    /\/api\/availability\?date=/.test(page) &&
+      /offCaddiesFromRoster/.test(page) &&
+      /dailyUnavailables/.test(page),
+    "date hydrate reads availability GET + OFF + unavailable"
+  );
   assert(/ops-unavail-chip/.test(page) && /비가용/.test(page), "mobile unavailable chip");
   assert(/is-mobile-open/.test(fs.readFileSync(path.resolve("src/app/manage/assignments/UnavailablePanel.tsx"), "utf8")), "unavailable sheet open");
   assert(!/inset 0 -3px 0 #f59e0b/.test(page), "limo orange stripe removed");
