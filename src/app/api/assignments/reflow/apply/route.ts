@@ -43,6 +43,7 @@ export async function POST(req: NextRequest) {
     const regularCaddyPool = body.regularCaddyPool as AutoAssignCaddy[] | undefined;
     const events = body.events as ReservationChangeEvent[] | undefined;
     const change = body.change as LiveChangeInput | undefined;
+    const changeType = body.changeType as LiveChangeInput["type"] | undefined;
 
     if (!previous || !previous.date) {
       return NextResponse.json({ error: "previous 결과 필요" }, { status: 400 });
@@ -80,6 +81,7 @@ export async function POST(req: NextRequest) {
         regularCaddyPool: poolResult.pool,
         events,
         change,
+        changeType,
         specialSupportByShift: supportResult.specialSupportByShift,
       },
       { ip, updateOpsIfPresent: true }

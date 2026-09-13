@@ -192,6 +192,11 @@ export type AutoAssignReservation = {
   reviewReasons?: string[];
   /** 리무진카트 요청팀. 캐디가 아니라 예약 속성. */
   limousineCart?: boolean;
+  /**
+   * 하우스 요청팀 표시. 리무진과 독립.
+   * Draft JSON에만 저장. DailyReservation 컬럼/migration 없음.
+   */
+  houseRequest?: boolean;
 };
 
 /** 1부 특수근무(54홀/1·2)가 건너뛰는 앞자리 수 — 코스명 하드코딩 없음 */
@@ -3420,7 +3425,15 @@ export function preservePlacementOnReflow(row: AutoAssignmentRow): boolean {
 
 export function isActiveEmploymentStatus(value: unknown): boolean {
   const raw = String(value ?? "ACTIVE").trim().toUpperCase();
-  if (raw === "LEAVE" || raw === "RETIRED" || raw === "휴직" || raw === "퇴사") {
+  if (
+    raw === "LEAVE" ||
+    raw === "RETIRED" ||
+    raw === "DELETED" ||
+    raw === "휴직" ||
+    raw === "퇴사" ||
+    raw === "삭제" ||
+    raw === "삭제됨"
+  ) {
     return false;
   }
   return true;
@@ -3843,20 +3856,20 @@ function validateReservationMoveEvents(
       });
       continue;
     }
-    if (row.kind !== "regular" || isWeekendBandRow(row)) {
+    if (row.kind === "fiftyFourHole") {
       warnings.push({
         level: "error",
-        code: "MOVE_SPECIAL",
-        message: "특수 배치(LOCK/1·3/주말반 등)는 1차에서 이동할 수 없습니다.",
+        code: "MOVE_FIFTY_FOUR",
+        message: "54홀 배치는 페어 슬롯을 깨지 않도록 1차에서 팀 이동하지 않습니다.",
         reservationKey: reservationKey(row.reservation),
       });
       continue;
     }
-    if (isPlacementLocked(row) || row.locked === true) {
+    if (row.kind === "specialSupport") {
       warnings.push({
         level: "error",
-        code: "MOVE_LOCKED",
-        message: "LOCK ON 예약은 잠금을 해제한 뒤에만 이동할 수 있습니다.",
+        code: "MOVE_SPECIAL_SUPPORT",
+        message: "특수지원 배치는 지원 큐를 유지하므로 1차에서 팀 이동하지 않습니다.",
         reservationKey: reservationKey(row.reservation),
       });
       continue;
@@ -5472,6 +5485,17 @@ export function reflowRegularAssignments(input: {
   const lockedResKeys = new Set(
     lockedRows.map((r) => reservationKey(r.reservation))
   );
+  const moveSlotAnchors: Array<{
+    caddy: AutoAssignCaddy;
+    kind: AutoAssignmentRow["kind"];
+    reason: string;
+    pairId: string | null | undefined;
+    locked: boolean;
+    course: string;
+    shift: ShiftPart;
+    teeTime: string;
+    date: string;
+  }> = [];
 
   const unlockedPrevious = previous.assignments.filter(
     (row) => !lockedResKeys.has(reservationKey(row.reservation))
@@ -5546,6 +5570,31 @@ export function reflowRegularAssignments(input: {
       const dest = parseMoveEventDestination(event.to);
       const sourceRow = findMoveSourceRow(previous, event);
       if (!dest || !sourceRow) continue;
+      const sourceKey = reservationKey(sourceRow.reservation);
+      const keepCaddyAtOldSlot =
+        lockedResKeys.has(sourceKey) ||
+        specialTagRow(sourceRow) ||
+        sourceRow.locked === true;
+      if (keepCaddyAtOldSlot) {
+        moveSlotAnchors.push({
+          caddy: sourceRow.caddy,
+          kind: sourceRow.kind,
+          reason: sourceRow.reason,
+          pairId: sourceRow.pairId,
+          locked: sourceRow.locked === true || isPlacementLocked(sourceRow),
+          course: String(sourceRow.reservation.course),
+          shift: sourceRow.shift,
+          teeTime: String(sourceRow.reservation.teeTime),
+          date: sourceRow.reservation.date,
+        });
+        lockedCaddies.add(sourceRow.caddy.id);
+        if (lockedResKeys.has(sourceKey)) {
+          lockedRows = lockedRows.filter(
+            (row) => reservationKey(row.reservation) !== sourceKey
+          );
+          lockedResKeys.delete(sourceKey);
+        }
+      }
       const original =
         seedMap.get(reservationKey(sourceRow.reservation)) ||
         seedMap.get(legacyCompositeReservationKey(sourceRow.reservation)) ||
@@ -5869,13 +5918,46 @@ export function reflowRegularAssignments(input: {
     ...regularAssignments.map((a) => a.caddy.id),
     ...autoSpecialIds,
   ]);
-  const unusedCaddies = pool.filter((c) => !usedRegular.has(c.id));
+  let unusedCaddies = pool.filter((c) => !usedRegular.has(c.id));
 
-  const assignments = [
+  let assignments = [
     ...lockedRows,
     ...autoShift1Specials,
     ...regularAssignments,
   ].sort(compareAssignmentOrder);
+  if (moveSlotAnchors.length > 0) {
+    const placed = new Set(assignments.map((row) => row.caddy.id));
+    for (const anchor of moveSlotAnchors) {
+      const hit = assignments.findIndex(
+        (row) =>
+          resolveCourseCode(String(row.reservation.course)) ===
+            resolveCourseCode(anchor.course) &&
+          parseAssignShiftPart(row.reservation.shift) === anchor.shift &&
+          String(row.reservation.teeTime) === anchor.teeTime
+      );
+      if (hit >= 0) {
+        const displaced = assignments[hit].caddy;
+        assignments[hit] = {
+          ...assignments[hit],
+          caddy: anchor.caddy,
+          kind: anchor.kind,
+          reason: anchor.reason,
+          pairId: anchor.pairId ?? assignments[hit].pairId,
+          locked: anchor.locked,
+        };
+        placed.add(anchor.caddy.id);
+        if (displaced.id !== anchor.caddy.id) {
+          unusedCaddies.push(displaced);
+        }
+      } else if (!placed.has(anchor.caddy.id)) {
+        unusedCaddies.push(anchor.caddy);
+      }
+    }
+    unusedCaddies = dedupeCaddies(unusedCaddies).filter(
+      (caddy) => !assignments.some((row) => row.caddy.id === caddy.id)
+    );
+    assignments = assignments.sort(compareAssignmentOrder);
+  }
   const buckets = bucketizeAssignments(assignments);
 
   const byShift = emptyShiftMeta();

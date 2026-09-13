@@ -781,8 +781,9 @@ console.log("== ops menu simplify: one place per daily action ==");
   );
   assert(
     /팀 이동/.test(teamActions) &&
-      /예약 취소/.test(teamActions) &&
+      /캔슬/.test(teamActions) &&
       />\s*노쇼\s*</.test(teamActions) &&
+      /하우스/.test(teamActions) &&
       /리무진/.test(teamActions) &&
       /드라이빙/.test(teamActions) &&
       /SET_LOCK/.test(teamActions) &&
@@ -792,14 +793,15 @@ console.log("== ops menu simplify: one place per daily action ==");
   assert(
     /CADDY_SICK/.test(caddyActions) &&
       /CADDY_ATTENDANCE_NOSHOW/.test(caddyActions) &&
-      /순번 바꿈/.test(caddyActions) &&
+      /캐디 맞교환/.test(caddyActions) &&
       />\s*병가\s*</.test(caddyActions) &&
-      />\s*결근\s*</.test(caddyActions),
+      />\s*결근\s*</.test(caddyActions) &&
+      /SET_LOCK/.test(caddyActions),
     "caddy menu exposes sick/noshow/swap"
   );
   assert(
-    !/SET_LOCK/.test(caddyActions) && !/LOCK ON/.test(caddyActions),
-    "caddy menu does not expose LOCK"
+    /캐디 맞교환/.test(caddyActions) && /LOCK 해제/.test(caddyActions),
+    "caddy menu exposes swap and LOCK"
   );
   assert(
     /관리 도구/.test(panel) &&

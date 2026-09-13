@@ -293,6 +293,9 @@ function parseReservation(raw: unknown, label: string) {
     ...(typeof o.limousineCart === "boolean"
       ? { limousineCart: o.limousineCart }
       : {}),
+    ...(typeof o.houseRequest === "boolean"
+      ? { houseRequest: o.houseRequest }
+      : {}),
   };
 }
 

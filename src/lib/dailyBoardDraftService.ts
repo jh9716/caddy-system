@@ -16,6 +16,7 @@ import {
 import { prisma as defaultPrisma } from "@/lib/prisma";
 import { parseUnavailableFromShift } from "@/lib/caddyPoolCanonical";
 import type { UnavailableFromShiftRow } from "@/lib/autoAssignEngine";
+import { isOperationalCaddy } from "@/lib/operationalRoster";
 
 export { DRAFT_VERSION_CONFLICT, DRAFT_VERSION_CONFLICT_MESSAGE };
 
@@ -239,6 +240,45 @@ export async function listUnavailableFromShift(
       effectiveFromShift: parseUnavailableFromShift(row.effectiveFromShift),
     }))
     .filter((row) => Number.isInteger(row.caddyId) && row.caddyId > 0);
+}
+
+export type UnavailablePanelSourceRow = {
+  caddyId: number;
+  name: string;
+  team: string;
+  reason: string;
+  employmentStatus?: string;
+};
+
+/** 패널 표시용 병가/결근. Draft identity/reflow 타입은 바꾸지 않는다. */
+export async function listUnavailablePanelRows(
+  ymd: string
+): Promise<UnavailablePanelSourceRow[]> {
+  const rows = await defaultPrisma.dailyCaddyUnavailable.findMany({
+    where: { date: dateKey(ymd) },
+    select: {
+      caddyId: true,
+      reason: true,
+      caddy: { select: { name: true, team: true, employmentStatus: true } },
+    },
+  });
+  return rows
+    .map((row) => ({
+      caddyId: Number(row.caddyId),
+      name: String(row.caddy?.name || "").trim(),
+      team: String(row.caddy?.team || "").trim(),
+      reason: String(row.reason || ""),
+      employmentStatus: String(row.caddy?.employmentStatus || ""),
+    }))
+    .filter(
+      (row) =>
+        Number.isInteger(row.caddyId) &&
+        row.caddyId > 0 &&
+        isOperationalCaddy({
+          id: row.caddyId,
+          employmentStatus: row.employmentStatus,
+        })
+    );
 }
 
 /** Draft row만 삭제. DailyReservation / DailyPlacement 는 건드리지 않는다. */

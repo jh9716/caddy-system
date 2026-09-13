@@ -92,10 +92,14 @@ export function isInactiveEmployment(status: unknown): boolean {
   return (
     raw === "LEAVE" ||
     raw === "RETIRED" ||
+    raw === "DELETED" ||
     raw === "휴직" ||
     raw === "퇴사" ||
+    raw === "삭제" ||
+    raw === "삭제됨" ||
     raw.includes("LEAVE") ||
-    raw.includes("RETIRED")
+    raw.includes("RETIRED") ||
+    raw.includes("DELETED")
   );
 }
 

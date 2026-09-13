@@ -80,6 +80,7 @@ export type PublishedPlacementV1 = {
   kind: AssignmentKind;
   locked: boolean;
   limousine: boolean;
+  houseRequest?: boolean;
   driving: boolean;
   twoWork: boolean;
   chageun: boolean;
@@ -211,6 +212,7 @@ function parsePlacement(raw: unknown, label: string): PublishedPlacementV1 {
     kind: asKind(o.kind, `${label}.kind`),
     locked: o.locked === true,
     limousine: o.limousine === true,
+    houseRequest: o.houseRequest === true,
     driving: o.driving === true || String(o.kind) === "driving",
     twoWork: o.twoWork === true,
     chageun: o.chageun === true,
@@ -321,6 +323,7 @@ function placementFromAssignment(
     kind: row.kind,
     locked: row.locked === true,
     limousine: marks.limousine,
+    houseRequest: marks.houseRequest,
     driving: marks.driving,
     twoWork: marks.twoWork,
     chageun: marks.chageun,

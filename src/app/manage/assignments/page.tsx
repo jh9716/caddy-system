@@ -93,6 +93,17 @@ const COURSE_SHORT: Record<CourseCode, string> = {
 import { SpecialDutyPanel, type Shift1StartOption } from "./SpecialDutyPanel";
 import { SpecialSupportPanel } from "./SpecialSupportPanel";
 import { BoardQuickSheet, LiveChangePanel, LockToggle, SameDayAddSheet, TeamMoveSheet } from "./LiveChangePanel";
+import { UnavailablePanel } from "./UnavailablePanel";
+import {
+  buildUnavailablePanelGroups,
+  offCaddiesFromRoster,
+  unavailablePanelTotal,
+} from "@/lib/assignmentBoardDirectEdit";
+import { isOperationalEmploymentStatus, mergeOperationalRoster } from "@/lib/operationalRoster";
+import {
+  buildUnavailableBoardView,
+  pickOpsStatusSummary,
+} from "@/lib/unavailablePanelView";
 import { emptySpecialSupportByShift } from "@/lib/dailySpecialSupport";
 import { SPECIAL_SETTINGS_STALE_MESSAGE } from "@/lib/dailySpecialDuty";
 import { isThirdBandTeam, THIRD_BAND_TEAMS } from "@/lib/caddyManage";
@@ -102,6 +113,7 @@ import {
   QUICK_ACTION_CONFIRM_MESSAGE,
   changeFromEmptyBoardCell,
   hasBlockingLiveChangeError,
+  isDraftOnlyLiveChange,
   needsQuickActionConfirm,
   previewLiveChangeFromDraft,
   shouldReconcileLivePersist,
@@ -297,6 +309,9 @@ const BoardAssignedSlots = memo(function BoardAssignedSlots({
               <span className="bc-team-name">
                 {row.reservation.teamName || "팀"}
               </span>
+              {marks.houseRequest ? (
+                <span className="bc-badge house">하우스</span>
+              ) : null}
               {marks.limousine ? (
                 <span className="bc-badge limo">리무진</span>
               ) : null}
@@ -382,10 +397,21 @@ export default function ManageAssignmentsOpsPage() {
   } | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [dutyFile, setDutyFile] = useState<File | null>(null);
+  const [unavailOpen, setUnavailOpen] = useState(true);
+  const [unavailSheetOpen, setUnavailSheetOpen] = useState(false);
+  const [opsOffSnapshot, setOpsOffSnapshot] = useState<DraftOffSnapshot | null>(
+    null
+  );
   const [opsDutyStored, setOpsDutyStored] = useState<{
     count: number;
     byRole?: Record<string, number>;
     caddyIds: number[];
+    rows?: Array<{
+      caddyId: number;
+      name?: string;
+      team?: string;
+      role?: string;
+    }>;
   } | null>(null);
   const [opsDutyPreview, setOpsDutyPreview] = useState<{
     matchedCount: number;
@@ -428,6 +454,9 @@ export default function ManageAssignmentsOpsPage() {
   const [availability, setAvailability] = useState<
     (AvailabilityResult & { dailySummary?: DailyAvailabilitySummary }) | null
   >(null);
+  const [dailyUnavailables, setDailyUnavailables] = useState<
+    Array<{ caddyId: number; name?: string; team?: string; reason?: string }>
+  >([]);
   const [autoResult, setAutoResult] = useState<RunResponse | null>(null);
   const [draft, setDraft] = useState<AssignmentDraft | null>(null);
   const [warnings, setWarnings] = useState<DraftWarning[]>([]);
@@ -596,6 +625,12 @@ export default function ManageAssignmentsOpsPage() {
         };
         unavailableCaddyIds?: number[];
         unavailableFromShift?: UnavailableFromShiftRow[];
+        unavailableRows?: Array<{
+          caddyId: number;
+          name?: string;
+          team?: string;
+          reason?: string;
+        }>;
       };
     },
     []
@@ -715,12 +750,20 @@ export default function ManageAssignmentsOpsPage() {
     [flushDraftSave]
   );
 
+  const applyUnavailablePanelRows = useCallback(
+    (rows: unknown) => {
+      setDailyUnavailables(Array.isArray(rows) ? rows : []);
+    },
+    []
+  );
+
   const reloadLatestDraft = useCallback(async () => {
     const ymd = dateRef.current;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return;
     setError(null);
     try {
       const data = await loadServerDraft(ymd);
+      applyUnavailablePanelRows(data.unavailableRows);
       if (!data.draft) {
         clearDraftBoard();
         showToast("저장된 작업본이 없습니다");
@@ -739,7 +782,7 @@ export default function ManageAssignmentsOpsPage() {
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "작업본 조회 실패");
     }
-  }, [applyHydratedDraft, clearDraftBoard, loadServerDraft]);
+  }, [applyHydratedDraft, applyUnavailablePanelRows, clearDraftBoard, loadServerDraft]);
 
   const resetStoredDraft = useCallback(async () => {
     const ymd = dateRef.current;
@@ -823,6 +866,32 @@ export default function ManageAssignmentsOpsPage() {
   }, [file, date]);
 
   useEffect(() => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      setAvailability(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/availability?date=${encodeURIComponent(date)}`,
+          { credentials: "include" }
+        );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || cancelled) return;
+        setAvailability(
+          data as AvailabilityResult & { dailySummary?: DailyAvailabilitySummary }
+        );
+      } catch {
+        // Draft offSnapshot / opsDuty / DailyCaddyUnavailable 로 패널을 채운다.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [date]);
+
+  useEffect(() => {
     setOpsDutySyncNotice(null);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       setOpsDutyStored(null);
@@ -847,6 +916,7 @@ export default function ManageAssignmentsOpsPage() {
             : Array.isArray(data.rows)
               ? data.rows.map((r: { caddyId: number }) => r.caddyId)
               : [],
+          rows: Array.isArray(data.rows) ? data.rows : [],
         });
       } catch {
         if (!cancelled) setOpsDutyStored(null);
@@ -903,10 +973,13 @@ export default function ManageAssignmentsOpsPage() {
     setDraftVersion(0);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       clearDraftBoard();
+      setDailyUnavailables([]);
+      setOpsOffSnapshot(null);
       return;
     }
     let cancelled = false;
     hydratingDraftRef.current = true;
+    setOpsOffSnapshot(null);
     setDraft(null);
     setAutoResult(null);
     setDraftSaveState("idle");
@@ -914,6 +987,7 @@ export default function ManageAssignmentsOpsPage() {
       try {
         const data = await loadServerDraft(date);
         if (cancelled) return;
+        applyUnavailablePanelRows(data.unavailableRows);
         if (!data.draft) {
           hydratingDraftRef.current = false;
           setDraft(null);
@@ -926,6 +1000,7 @@ export default function ManageAssignmentsOpsPage() {
             prewarmOffSheetForDate(date, (snap) => {
               if (cancelled) return;
               offSnapshotRef.current = snap;
+              setOpsOffSnapshot(snap);
             })
           );
           return;
@@ -940,11 +1015,15 @@ export default function ManageAssignmentsOpsPage() {
             ? data.unavailableFromShift
             : undefined
         );
-        if (payload.offSnapshot) offSnapshotRef.current = payload.offSnapshot;
+        if (payload.offSnapshot) {
+          offSnapshotRef.current = payload.offSnapshot;
+          setOpsOffSnapshot(payload.offSnapshot);
+        }
         scheduleAfterPaint(() =>
           prewarmOffSheetForDate(date, (snap) => {
             if (cancelled) return;
             offSnapshotRef.current = snap;
+            setOpsOffSnapshot(snap);
             const current = draftRef.current;
             if (!current || current.date !== snap.date) return;
             const next = { ...current, offSnapshot: snap };
@@ -1066,7 +1145,13 @@ export default function ManageAssignmentsOpsPage() {
       ? availability.available.all
       : draft?.caddyPool || [];
     return rows
-      .filter((r) => isHouseStartCandidate(r))
+      .filter(
+        (r) =>
+          isHouseStartCandidate(r) &&
+          isOperationalEmploymentStatus(
+            "employmentStatus" in r ? r.employmentStatus : undefined
+          )
+      )
       .slice()
       .sort(
         (a, b) =>
@@ -1114,13 +1199,13 @@ export default function ManageAssignmentsOpsPage() {
 
   const opsDutyCaddyIds = opsDutyStored?.caddyIds || [];
   const pool: AutoAssignCaddy[] = useMemo(() => {
-    if (availability) {
-      return mergeRosterBaseline(
-        draft?.caddyPool,
-        rosterBaselineFromAvailability(availability)
-      );
-    }
-    return draft?.caddyPool || [];
+    const raw = availability
+      ? mergeRosterBaseline(
+          draft?.caddyPool,
+          rosterBaselineFromAvailability(availability)
+        )
+      : draft?.caddyPool || [];
+    return raw.filter((c) => isOperationalEmploymentStatus(c.employmentStatus));
   }, [availability, draft]);
 
   const freeCaddies = draft ? unusedCaddies(draft) : [];
@@ -1214,6 +1299,7 @@ export default function ManageAssignmentsOpsPage() {
         caddyIds: offCaddyIdsFromAvailability(data),
       });
       offSnapshotRef.current = offSnapshot;
+      setOpsOffSnapshot(offSnapshot);
       scheduleAfterPaint(() => prewarmOffSheetForDate(date));
       const dutyIds = Array.isArray((data as { opsDutyCaddyIds?: number[] }).opsDutyCaddyIds)
         ? ((data as { opsDutyCaddyIds?: number[] }).opsDutyCaddyIds as number[])
@@ -1223,6 +1309,7 @@ export default function ManageAssignmentsOpsPage() {
           count: prev?.count ?? dutyIds.length,
           byRole: prev?.byRole,
           caddyIds: dutyIds,
+          rows: prev?.rows,
         }));
       }
       const sync = (
@@ -1260,11 +1347,12 @@ export default function ManageAssignmentsOpsPage() {
       const finalAvailable =
         Number(data.dailySummary?.finalAvailable ?? data.counts?.available ?? 0);
       if (sync?.status === "synced") {
-        setOpsDutyStored({
+        setOpsDutyStored((prev) => ({
           count: Number(sync.savedCount) || dutyIds.length,
           byRole: sync.byRole,
           caddyIds: Array.isArray(sync.caddyIds) ? sync.caddyIds : dutyIds,
-        });
+          rows: prev?.rows,
+        }));
         const text = `${sync.message} · 최종 가용 ${finalAvailable}명`;
         setOpsDutySyncNotice({ tone: "ok", text });
         showToast(text);
@@ -1408,6 +1496,7 @@ export default function ManageAssignmentsOpsPage() {
         caddyIds: Array.isArray(data.saved)
           ? data.saved.map((r: { caddyId: number }) => r.caddyId)
           : [],
+        rows: Array.isArray(data.saved) ? data.saved : [],
       });
       setOpsDutyPreview(null);
       showToast(`당번·마샬·조장 일정 ${data.savedCount}명 저장`);
@@ -1539,6 +1628,7 @@ export default function ManageAssignmentsOpsPage() {
         caddyIds: Array.isArray(data.saved)
           ? data.saved.map((r: { caddyId: number }) => r.caddyId)
           : [],
+        rows: Array.isArray(data.saved) ? data.saved : [],
       });
       setOpsDutySheetPreview(null);
       showToast(`운영배치 ${data.savedCount}명 적용`);
@@ -1844,6 +1934,7 @@ export default function ManageAssignmentsOpsPage() {
         return;
       }
       const latest = await loadServerDraft(date);
+      applyUnavailablePanelRows(latest.unavailableRows);
       applyHydratedDraft(
         next,
         Number(saveData.draft.version) || 0,
@@ -2565,6 +2656,7 @@ export default function ManageAssignmentsOpsPage() {
     failToast?: string;
     applyServerDraft?: boolean;
     rollbackDraft?: AssignmentDraft | null;
+    change?: LiveChangeInput;
   }): Promise<boolean> {
     setError(null);
     const failToast =
@@ -2575,27 +2667,36 @@ export default function ManageAssignmentsOpsPage() {
       setWarnings(detectDraftWarnings(input.rollbackDraft));
     };
     try {
-      const res = await fetch("/api/assignments/reflow/apply", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          previous: input.previous,
-          regularCaddyPool: input.pool,
-          events: input.preview.events,
-          changeType: input.preview.changeType,
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        rollbackOptimistic();
-        setError(
-          data.error ||
-            data.message ||
-            "배치 저장 중 오류가 발생했습니다. 다시 시도해주세요."
-        );
-        showToast(failToast);
-        return false;
+      const draftOnly =
+        input.preview.changeType != null &&
+        isDraftOnlyLiveChange(input.preview.changeType);
+      const data: { preview?: LiveChangePreview; error?: string; message?: string } =
+        draftOnly ? { preview: input.preview } : {};
+      if (!draftOnly) {
+        const res = await fetch("/api/assignments/reflow/apply", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            previous: input.previous,
+            regularCaddyPool: input.pool,
+            events: input.preview.events,
+            changeType: input.preview.changeType,
+            change: input.change,
+          }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          rollbackOptimistic();
+          setError(
+            body.error ||
+              body.message ||
+              "배치 저장 중 오류가 발생했습니다. 다시 시도해주세요."
+          );
+          showToast(failToast);
+          return false;
+        }
+        Object.assign(data, body);
       }
       let savedDraft: AssignmentDraft | null = null;
       if (input.applyServerDraft !== false) {
@@ -2669,6 +2770,9 @@ export default function ManageAssignmentsOpsPage() {
     if (change.type === "SET_LIMOUSINE") {
       return change.limousineCart ? "리무진 ON" : "리무진 OFF";
     }
+    if (change.type === "SET_HOUSE") {
+      return change.houseRequest ? "하우스 ON" : "하우스 OFF";
+    }
     if (change.type === "SET_LOCK") {
       return change.locked ? "LOCK ON" : "LOCK OFF";
     }
@@ -2713,6 +2817,7 @@ export default function ManageAssignmentsOpsPage() {
         pool: livePool,
         applyServerDraft: shouldReconcileLivePersist(change.type),
         rollbackDraft: current,
+        change,
       });
       if (!ok) persistGenRef.current += 1;
     });
@@ -2799,6 +2904,76 @@ export default function ManageAssignmentsOpsPage() {
     );
   }, [draft, quickSheet]);
 
+  const hasSelectedDate = /^\d{4}-\d{2}-\d{2}$/.test(date);
+
+  const operationalRoster = useMemo(
+    () =>
+      mergeOperationalRoster(
+        availability?.available?.all,
+        availability?.special,
+        availability?.excluded,
+        draft?.caddyPool
+      ),
+    [
+      availability?.available?.all,
+      availability?.special,
+      availability?.excluded,
+      draft?.caddyPool,
+    ]
+  );
+
+  const liveOffSnapshot = isUsableOffSnapshot(draft?.offSnapshot, date)
+    ? draft?.offSnapshot
+    : isUsableOffSnapshot(opsOffSnapshot, date)
+      ? opsOffSnapshot
+      : null;
+
+  const unavailableGroups = useMemo(
+    () =>
+      buildUnavailablePanelGroups({
+        excluded: availability?.excluded,
+        opsDuties: opsDutyStored?.rows,
+        offCaddies: offCaddiesFromRoster(
+          liveOffSnapshot?.caddyIds,
+          operationalRoster
+        ),
+        dailyUnavailables,
+        specialSupportByShift,
+      }),
+    [
+      availability?.excluded,
+      opsDutyStored?.rows,
+      liveOffSnapshot?.caddyIds,
+      operationalRoster,
+      dailyUnavailables,
+      specialSupportByShift,
+    ]
+  );
+
+  const unavailableBoardSources = useMemo(
+    () => ({
+      opsDuties: opsDutyStored?.rows,
+      dailyUnavailables,
+    }),
+    [opsDutyStored?.rows, dailyUnavailables]
+  );
+
+  const opsStatusSummary = useMemo(() => {
+    const view = buildUnavailableBoardView(
+      unavailableGroups,
+      unavailableBoardSources
+    );
+    return pickOpsStatusSummary(
+      availability?.dailySummary,
+      unavailableGroups,
+      view
+    );
+  }, [
+    availability?.dailySummary,
+    unavailableGroups,
+    unavailableBoardSources,
+  ]);
+
   const moveSourceRow = useMemo(() => {
     if (!draft || !moveKey) return null;
     return (
@@ -2812,6 +2987,20 @@ export default function ManageAssignmentsOpsPage() {
     setCourseOpen((prev) => ({ ...prev, [code]: !prev[code] }));
   }
 
+  const unavailablePanelEl = (
+    <UnavailablePanel
+      groups={unavailableGroups}
+      sources={unavailableBoardSources}
+      summary={opsStatusSummary}
+      open={unavailOpen}
+      sheetOpen={unavailSheetOpen}
+      onToggle={() => {
+        setUnavailOpen((v) => !v);
+        setUnavailSheetOpen(false);
+      }}
+    />
+  );
+
   return (
     <div className="ops-root">
       <header className="ops-header">
@@ -2819,9 +3008,9 @@ export default function ManageAssignmentsOpsPage() {
           <h1>자동배치 운영</h1>
           <p>가용 캐디 불러오기 → 자동배치 실행 → 배치 수정/자동저장 → 배치 확정</p>
         </div>
-        {draft && (
+        {(hasSelectedDate || draft) && (
           <div className="ops-header-side">
-            {persistInFlight || pendingIntentCount > 0 ? (
+            {draft && (persistInFlight || pendingIntentCount > 0) ? (
               <div
                 className="ops-pipeline-saving"
                 role="status"
@@ -2836,15 +3025,31 @@ export default function ManageAssignmentsOpsPage() {
                 </span>
               </div>
             ) : null}
-            <DraftSaveStatus
-              state={draftSaveState}
-              savedAt={draftSavedAt}
-              onRetry={() => {
-                if (draftRef.current) queueDraftSave(draftRef.current, true);
-              }}
-              onReload={() => void reloadLatestDraft()}
-            />
-            {published ? (
+            {hasSelectedDate ? (
+              <button
+                type="button"
+                className="ops-unavail-chip"
+                data-ops-unavail-chip="1"
+                aria-expanded={unavailSheetOpen}
+                onClick={() => {
+                  setUnavailSheetOpen((v) => !v);
+                  setUnavailOpen(true);
+                }}
+              >
+                비가용 {unavailablePanelTotal(unavailableGroups)}명
+              </button>
+            ) : null}
+            {draft ? (
+              <DraftSaveStatus
+                state={draftSaveState}
+                savedAt={draftSavedAt}
+                onRetry={() => {
+                  if (draftRef.current) queueDraftSave(draftRef.current, true);
+                }}
+                onReload={() => void reloadLatestDraft()}
+              />
+            ) : null}
+            {draft && published ? (
               <div className="ops-published-meta">
                 확정 {formatPublishedAt(published.publishedAt)} ·{" "}
                 {publisherDisplayName(published.publishedByUsername)}
@@ -3002,63 +3207,42 @@ export default function ManageAssignmentsOpsPage() {
             {availability.counts.special} · 제외 {availability.counts.excluded}
           </div>
         )}
-        {availability?.dailySummary && (
-          <div className="ops-daily" aria-label="당일 가용 요약">
-            <div className="ops-daily-title">당일 가용 요약</div>
-            <ul className="ops-daily-list">
-              <li>재직/기본 가용 {availability.dailySummary.baseAvailable}</li>
-              <li>휴무 {availability.dailySummary.off}</li>
-              <li>
-                조출당번 {availability.dailySummary.dutyAm} / 후출당번{" "}
-                {availability.dailySummary.dutyPm}
-              </li>
-              <li>
-                조출마샬 {availability.dailySummary.marshalAm} / 후출마샬{" "}
-                {availability.dailySummary.marshalPm}
-              </li>
-              <li>조장 {availability.dailySummary.leader}</li>
-              <li>
-                휴무/기타 중복 {availability.dailySummary.duplicateExcluded}명
-              </li>
-              <li>
-                실제 추가 제외{" "}
-                {availability.dailySummary.dutyAdditionalExcluded ?? 0}명
-              </li>
-              <li>확인 필요 {availability.dailySummary.reviewCount}</li>
-              <li className="final">
-                최종 가용 {availability.dailySummary.finalAvailable}
-              </li>
-            </ul>
-            {opsDutySyncNotice && (
-              <div
-                className={
-                  opsDutySyncNotice.tone === "review"
-                    ? "ops-error"
-                    : "ops-meta"
-                }
-              >
-                {opsDutySyncNotice.text}
-                {opsDutySyncNotice.tone === "review" ? (
-                  <>
-                    {" "}
-                    <button
-                      type="button"
-                      className="ghost"
-                      onClick={() => {
-                        if (dateSettingsRef.current) {
-                          dateSettingsRef.current.open = true;
-                        }
-                        document
-                          .getElementById("ops-duty-sheet-block")
-                          ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-                      }}
-                    >
-                      운영배치 불러오기에서 확인
-                    </button>
-                  </>
-                ) : null}
-              </div>
-            )}
+        {opsDutySyncNotice && (
+          <div
+            className={
+              opsDutySyncNotice.tone === "review" ? "ops-error" : "ops-meta"
+            }
+          >
+            {opsDutySyncNotice.text}
+            {opsDutySyncNotice.tone === "review" ? (
+              <>
+                {" "}
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => {
+                    if (dateSettingsRef.current) {
+                      dateSettingsRef.current.open = true;
+                    }
+                    document
+                      .getElementById("ops-duty-sheet-block")
+                      ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                  }}
+                >
+                  운영배치 불러오기에서 확인
+                </button>
+              </>
+            ) : null}
+          </div>
+        )}
+        {availability?.dailySummary &&
+        ((availability.dailySummary.duplicates || []).length > 0 ||
+          availability.dailySummary.reviews.length > 0) ? (
+          <details className="ops-daily-mini">
+            <summary>
+              확인 필요 {availability.dailySummary.reviewCount} · 중복{" "}
+              {availability.dailySummary.duplicateExcluded}
+            </summary>
             {(availability.dailySummary.duplicates || []).length > 0 && (
               <div className="ops-daily-reviews">
                 <div className="ops-daily-title">중복 상세</div>
@@ -3084,8 +3268,8 @@ export default function ManageAssignmentsOpsPage() {
                 </ul>
               </div>
             )}
-          </div>
-        )}
+          </details>
+        ) : null}
         {autoResult && (
           <div className="ops-meta">
             자동배치 {autoResult.meta.assignedCount}건 · 미배치{" "}
@@ -3343,6 +3527,15 @@ export default function ManageAssignmentsOpsPage() {
         </section>
       )}
 
+      {hasSelectedDate && !draft ? (
+        <div
+          className="ops-direct-layout ops-ops-status-solo"
+          data-ops-status-without-draft="1"
+        >
+          {unavailablePanelEl}
+        </div>
+      ) : null}
+
       {draft && (
         <>
           {/*
@@ -3424,7 +3617,7 @@ export default function ManageAssignmentsOpsPage() {
 
             {shiftTab !== "UNASSIGNED" && shiftTab !== "CLOSED" && (
               <p className="ops-board-hint">
-                팀 또는 캐디 이름을 눌러 수정할 수 있습니다.
+                팀 또는 캐디를 눌러 바로 수정합니다. 상단 버튼은 그대로 쓸 수 있습니다.
               </p>
             )}
 
@@ -3504,7 +3697,8 @@ export default function ManageAssignmentsOpsPage() {
           </div>
 
           {shiftTab !== "UNASSIGNED" && shiftTab !== "CLOSED" && (
-            <>
+            <div className="ops-direct-layout">
+              <div className="ops-direct-main">
               {viewMode === "board" && (
                 <div
                   ref={boardWrapRef}
@@ -3663,6 +3857,9 @@ export default function ManageAssignmentsOpsPage() {
                             onClick={() => handlePlacementTap(row, "team")}
                           >
                             {row.reservation.teamName || "팀"}
+                            {marks.houseRequest ? (
+                              <span className="bc-badge house">하우스</span>
+                            ) : null}
                             {marks.limousine ? (
                               <span className="bc-badge limo">리무진</span>
                             ) : null}
@@ -3722,7 +3919,9 @@ export default function ManageAssignmentsOpsPage() {
                   )}
                 </div>
               </div>
-            </>
+              </div>
+              {unavailablePanelEl}
+            </div>
           )}
 
           {shiftTab === "UNASSIGNED" && (
@@ -4261,6 +4460,14 @@ const opsCss = `
     display: grid;
     gap: 8px;
   }
+  .ops-daily-mini {
+    font-size: 0.78rem;
+    color: #9a3412;
+  }
+  .ops-daily-mini summary {
+    cursor: pointer;
+    font-weight: 700;
+  }
   .ops-daily-title { font-size: 0.78rem; font-weight: 800; color: #1c1917; }
   .ops-daily-list {
     margin: 0; padding: 0; list-style: none;
@@ -4415,6 +4622,202 @@ const opsCss = `
     font-size: 0.72rem;
     color: #94a3b8;
     line-height: 1.3;
+  }
+  .ops-direct-layout {
+    display: grid;
+    gap: 12px;
+  }
+  .ops-ops-status-solo {
+    display: grid;
+    gap: 12px;
+  }
+  .ops-direct-main { min-width: 0; }
+  .ops-unavail-chip {
+    display: none;
+    align-items: center;
+    min-height: 32px;
+    padding: 0 10px;
+    border: 1px solid #cbd5e1;
+    border-radius: 999px;
+    background: #fff;
+    color: #0f172a;
+    font-size: 0.78rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .ops-unavail {
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background: #fff;
+    min-width: 0;
+  }
+  .ops-unavail-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 8px 5px;
+    background: #f8fafc;
+  }
+  .ops-unavail-head h2 {
+    margin: 0;
+    font-size: 0.78rem;
+    font-weight: 800;
+    color: #0f172a;
+  }
+  .ops-unavail-summary {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 2px;
+    padding: 4px 6px 6px;
+    border-bottom: 1px solid #e2e8f0;
+    background: #f8fafc;
+  }
+  .ops-unavail-stat {
+    display: grid;
+    justify-items: center;
+    gap: 0;
+    min-width: 0;
+  }
+  .ops-unavail-stat b {
+    font-size: 0.84rem;
+    font-weight: 800;
+    color: #0f172a;
+    line-height: 1.2;
+  }
+  .ops-unavail-stat span {
+    font-size: 0.58rem;
+    font-weight: 700;
+    color: #64748b;
+    letter-spacing: -0.02em;
+  }
+  .ops-unavail-stat.is-final b { color: #14532d; }
+  .ops-unavail-close {
+    display: none;
+    border: 1px solid #cbd5e1;
+    border-radius: 999px;
+    background: #fff;
+    color: #334155;
+    font-size: 0.72rem;
+    font-weight: 700;
+    padding: 2px 8px;
+    cursor: pointer;
+  }
+  .ops-unavail-body { padding: 6px 8px 8px; }
+  .ops-unavail-empty {
+    margin: 6px 0 0;
+    font-size: 0.75rem;
+    color: #94a3b8;
+  }
+  .ops-unavail-sec { margin-top: 7px; }
+  .ops-unavail-sec:first-child { margin-top: 0; }
+  .ops-unavail-sec h3 {
+    margin: 0 0 3px;
+    font-size: 0.66rem;
+    font-weight: 800;
+    color: #475569;
+    letter-spacing: 0.04em;
+    text-transform: none;
+    border-bottom: 1px solid #e2e8f0;
+    padding-bottom: 2px;
+  }
+  .ops-unavail-off-grid,
+  .ops-unavail-slots {
+    display: grid;
+    gap: 2px;
+  }
+  .ops-unavail-row {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 4px;
+    align-items: start;
+  }
+  .ops-unavail-k {
+    font-size: 0.64rem;
+    font-weight: 800;
+    color: #64748b;
+    line-height: 1.5;
+    padding-top: 1px;
+  }
+  .ops-unavail-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1px 5px;
+    min-width: 0;
+  }
+  .ops-unavail-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    max-width: 100%;
+    line-height: 1.4;
+  }
+  .ops-unavail-name {
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: #0f172a;
+    white-space: nowrap;
+  }
+  .ops-unavail-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 4px;
+    border-radius: 3px;
+    background: #e2e8f0;
+    color: #334155;
+    font-size: 0.58rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    line-height: 1.4;
+    white-space: nowrap;
+  }
+  .ops-unavail-blank {
+    color: #cbd5e1;
+    font-size: 0.7rem;
+    line-height: 1.45;
+  }
+  @media (min-width: 1280px) {
+    .ops-direct-layout {
+      grid-template-columns: minmax(0, 1fr) minmax(280px, 26%);
+      align-items: start;
+    }
+    .ops-unavail {
+      position: sticky;
+      top: 8px;
+      max-height: calc(100vh - 16px);
+      overflow: auto;
+    }
+    .ops-ops-status-solo {
+      grid-template-columns: minmax(0, 1fr) minmax(280px, 26%);
+    }
+    .ops-ops-status-solo .ops-unavail {
+      grid-column: 2;
+    }
+  }
+  @media (max-width: 1279px) {
+    .ops-unavail-chip { display: inline-flex; }
+    .ops-unavail { display: none; }
+    .ops-unavail.is-mobile-open {
+      display: block;
+      position: fixed;
+      left: 8px;
+      right: 8px;
+      bottom: 8px;
+      z-index: 50;
+      max-height: 70vh;
+      overflow: auto;
+      box-shadow: 0 -8px 24px rgb(15 23 42 / 16%);
+    }
+    .ops-unavail-close { display: inline-flex; }
+    .ops-unavail-off-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 4px 10px;
+    }
+  }
+  @media (max-width: 420px) {
+    .ops-unavail-off-grid {
+      grid-template-columns: 1fr;
+    }
   }
   .ops-board-head-bar {
     width: 100%;
@@ -4742,6 +5145,12 @@ const opsCss = `
     color: #1e3a8a;
     background: #dbeafe;
   }
+  .bc-badge.house {
+    color: #166534;
+    background: #dcfce7;
+    box-shadow: 0 0 0 1px #86efac;
+    font-size: 0.6rem;
+  }
   .bc-badge.limo {
     color: #9a3412;
     background: #fb923c;
@@ -4752,14 +5161,8 @@ const opsCss = `
     color: #fff;
     background: #7c3aed;
   }
-  .bc-cell.assigned.limo {
-    box-shadow: inset 0 -3px 0 #f59e0b;
-  }
   .bc-cell.assigned.drive {
     box-shadow: inset 3px 0 0 #7c3aed;
-  }
-  .bc-cell.assigned.limo.drive {
-    box-shadow: inset 3px 0 0 #7c3aed, inset 0 -3px 0 #f59e0b;
   }
   .ops-row.limo { background: #fff7ed; }
   .ops-row.drive { box-shadow: inset 3px 0 0 #7c3aed; }
