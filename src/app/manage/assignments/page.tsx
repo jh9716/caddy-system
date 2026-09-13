@@ -4446,12 +4446,11 @@ const opsCss = `
   .ops-flow-primary {
     display: grid;
     gap: 10px;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: end;
   }
-  @media (min-width: 720px) {
-    .ops-flow-primary {
-      grid-template-columns: minmax(148px, 180px) minmax(180px, 1fr) minmax(260px, 1.15fr);
-      align-items: end;
-    }
+  .ops-flow-primary > .ops-actions {
+    grid-column: 1 / -1;
   }
   .ops-courses {
     display: grid;
@@ -4567,6 +4566,7 @@ const opsCss = `
   }
   .ops-actions .btn {
     min-width: 0;
+    white-space: nowrap;
   }
   .btn {
     min-height: 42px;
