@@ -80,33 +80,6 @@ function SlotBlocks({ slots }: { slots: UnavailableSlotBlock[] }) {
   );
 }
 
-function SummaryStrip({ summary }: { summary: OpsStatusSummary }) {
-  return (
-    <div className="ops-unavail-summary" aria-label="오늘 운영 요약">
-      <span className="ops-unavail-stat">
-        <b>{formatCount(summary.employed)}</b>
-        <span>재직</span>
-      </span>
-      <span className="ops-unavail-stat">
-        <b>{formatCount(summary.off)}</b>
-        <span>휴무</span>
-      </span>
-      <span className="ops-unavail-stat is-final">
-        <b>{formatCount(summary.finalAvailable)}</b>
-        <span>최종가용</span>
-      </span>
-      <span className="ops-unavail-stat">
-        <b>{formatCount(summary.sick)}</b>
-        <span>병가</span>
-      </span>
-      <span className="ops-unavail-stat">
-        <b>{formatCount(summary.absent)}</b>
-        <span>결근</span>
-      </span>
-    </div>
-  );
-}
-
 function OpsSection({
   title,
   count,
@@ -205,18 +178,23 @@ export function UnavailablePanel({
       </div>
       <div className="ops-unavail-hero">
         <span>비가용</span>
-        <b>{total}명</b>
+        <b>{total}</b>
       </div>
-      {countChips.length > 0 ? (
-        <div className="ops-unavail-chips" aria-label="비가용 구분">
-          {countChips.map((chip) => (
-            <span key={chip.key} className="ops-unavail-count-chip">
-              {chip.label} {chip.count}
-            </span>
-          ))}
-        </div>
-      ) : null}
-      <SummaryStrip summary={stats} />
+      <div className="ops-unavail-chips" aria-label="비가용 구분">
+        {countChips.map((chip) => (
+          <span key={chip.key} className="ops-unavail-count-chip">
+            {chip.label} {chip.count}
+          </span>
+        ))}
+      </div>
+      <div className="ops-unavail-summary" aria-label="오늘 운영 요약">
+        <span>
+          재직 {formatCount(stats.employed)}
+        </span>
+        <span className="is-final">
+          최종가용 {formatCount(stats.finalAvailable)}
+        </span>
+      </div>
       <div className="ops-unavail-body">
         {view.offTeams.length > 0 ? (
           <OpsSection title="휴무" count={stats.off ?? undefined}>

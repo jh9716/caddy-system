@@ -60,7 +60,10 @@ console.log("== ops status chips / compact names ==");
     buildUnavailableBoardView(buildUnavailablePanelGroups({})),
     0
   );
-  assert(emptyChips.length === 0, "0건 항목은 칩을 만들지 않음");
+  assert(
+    emptyChips.map((c) => `${c.label}${c.count}`).join(",") === "휴무0,병가0,결근0",
+    "휴무/병가/결근 칩은 0이어도 표시"
+  );
 }
 
 console.log("== duty/marshal empty slots ==");
@@ -151,11 +154,13 @@ console.log("== source contracts: read-only, reuse existing loads ==");
   assert(/onLoaded=\{onSpecialSupportLoaded\}/.test(page), "engine support queues still wired");
   assert(/toOpsSpecialDutyGroups/.test(dutyPanel), "special duty slim groups for panel");
   assert(/onRecordsLoadedRef/.test(supportPanel), "support items forwarded without extra GET");
-  assert(/minmax\(320px, 360px\)/.test(page), "desktop width 320-360");
+  assert(/minmax\(0, 1fr\) 320px/.test(page), "desktop width 320");
+  assert(/@container ops-assign \(min-width: 760px\)/.test(page), "two-col uses content container not 1280 viewport");
+  assert(/max-width: none/.test(page), "PC assignments ops-root fills work area");
   assert(/is-ops-panel-collapsed/.test(page), "collapsed layout class");
   assert(/ops-unavail-collapse/.test(page), "desktop collapse css");
   assert(/data-ops-panel-open/.test(page), "chip hidden while desktop panel open");
-  assert(/max-width: 1279px/.test(page), "mobile breakpoint kept");
+  assert(/max-width: 759px/.test(page), "narrow content uses drawer");
 }
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);

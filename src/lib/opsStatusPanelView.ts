@@ -99,14 +99,11 @@ export function opsStatusCountChips(
     offCount != null
       ? offCount
       : view.offTeams.reduce((n, block) => n + block.people.length, 0);
-  const chips: OpsCountChip[] = [];
-  if (off > 0) chips.push({ key: "off", label: "휴무", count: off });
-  if (view.sick.length > 0) {
-    chips.push({ key: "sick", label: "병가", count: view.sick.length });
-  }
-  if (view.absent.length > 0) {
-    chips.push({ key: "absent", label: "결근", count: view.absent.length });
-  }
+  const chips: OpsCountChip[] = [
+    { key: "off", label: "휴무", count: off },
+    { key: "sick", label: "병가", count: view.sick.length },
+    { key: "absent", label: "결근", count: view.absent.length },
+  ];
   if (view.other.length > 0) {
     chips.push({ key: "other", label: "기타", count: view.other.length });
   }
@@ -141,6 +138,17 @@ export function toOpsSpecialDutyGroups(
   });
 }
 
+export const OPS_SPECIAL_DUTY_CHIP_LABELS: Record<
+  (typeof DAILY_SPECIAL_KIND_UI)[number],
+  string
+> = {
+  ONE_MAK: "1막",
+  ONE_TWO: "1·2",
+  TWO_THREE: "2·3",
+  ONE_THREE: "1·3",
+  FIFTY_FOUR: "54",
+};
+
 export function opsSpecialDutyChips(
   groups: readonly OpsSpecialDutyGroup[] | null | undefined
 ): OpsKindChip[] {
@@ -154,7 +162,7 @@ export function opsSpecialDutyChips(
       .filter(Boolean);
     return {
       kind,
-      label: DAILY_SPECIAL_KIND_LABELS[kind],
+      label: OPS_SPECIAL_DUTY_CHIP_LABELS[kind],
       count: group?.count ?? names.length,
       names,
     };

@@ -3320,10 +3320,13 @@ export default function ManageAssignmentsOpsPage() {
                 data-ops-panel-open={unavailOpen ? "1" : "0"}
                 aria-expanded={unavailSheetOpen || unavailOpen}
                 onClick={() => {
-                  if (!unavailOpen) {
+                  const rootWidth =
+                    document.querySelector(".ops-root")?.clientWidth || 0;
+                  if (rootWidth >= 760) {
                     setUnavailOpen(true);
                     return;
                   }
+                  setUnavailOpen(true);
                   setUnavailSheetOpen((v) => !v);
                 }}
               >
@@ -3359,6 +3362,11 @@ export default function ManageAssignmentsOpsPage() {
         </div>
       )}
 
+      <div
+        className={`ops-direct-layout${hasSelectedDate ? " has-ops-panel" : ""}${opsLayoutCollapsed}`}
+        data-ops-status-without-draft={hasSelectedDate && !draft ? "1" : undefined}
+      >
+        <div className="ops-direct-main">
       <section className="ops-panel">
         <div className="ops-flow">
           <div className="ops-flow-primary">
@@ -3786,15 +3794,6 @@ export default function ManageAssignmentsOpsPage() {
         </section>
       )}
 
-      {hasSelectedDate && !draft ? (
-        <div
-          className={`ops-direct-layout ops-ops-status-solo${opsLayoutCollapsed}`}
-          data-ops-status-without-draft="1"
-        >
-          {unavailablePanelEl}
-        </div>
-      ) : null}
-
       {draft && (
         <>
           {/*
@@ -3970,8 +3969,7 @@ export default function ManageAssignmentsOpsPage() {
           </div>
 
           {shiftTab !== "UNASSIGNED" && shiftTab !== "CLOSED" && (
-            <div className={`ops-direct-layout${opsLayoutCollapsed}`}>
-              <div className="ops-direct-main">
+              <>
               {viewMode === "board" && (
                 <div
                   ref={boardWrapRef}
@@ -4217,9 +4215,7 @@ export default function ManageAssignmentsOpsPage() {
                   )}
                 </div>
               </div>
-              </div>
-              {unavailablePanelEl}
-            </div>
+              </>
           )}
 
           {shiftTab === "UNASSIGNED" && (
@@ -4309,6 +4305,9 @@ export default function ManageAssignmentsOpsPage() {
           )}
         </>
       )}
+        </div>
+        {hasSelectedDate ? unavailablePanelEl : null}
+      </div>
 
       {draft && (
         <section className="ops-publish" aria-label="운영 반영">
@@ -4489,6 +4488,14 @@ const opsCss = `
     padding: 0 8px 72px;
     box-sizing: border-box;
     width: 100%;
+    container-type: inline-size;
+    container-name: ops-assign;
+  }
+  @media (min-width: 960px) {
+    .ops-root {
+      max-width: none;
+      padding: 0 0 32px;
+    }
   }
   .ops-header {
     display: flex;
@@ -4997,10 +5004,7 @@ const opsCss = `
   .ops-direct-layout {
     display: grid;
     gap: 12px;
-  }
-  .ops-ops-status-solo {
-    display: grid;
-    gap: 12px;
+    min-width: 0;
   }
   .ops-direct-main { min-width: 0; }
   .ops-unavail-chip {
@@ -5029,7 +5033,7 @@ const opsCss = `
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 6px 8px 5px;
+    padding: 6px 8px 4px;
     background: #f8fafc;
     flex: 0 0 auto;
   }
@@ -5049,7 +5053,7 @@ const opsCss = `
     align-items: baseline;
     justify-content: space-between;
     gap: 8px;
-    padding: 4px 10px 2px;
+    padding: 2px 10px 0;
     background: #f8fafc;
   }
   .ops-unavail-hero span {
@@ -5067,13 +5071,14 @@ const opsCss = `
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
-    padding: 2px 8px 6px;
+    padding: 4px 8px 6px;
     background: #f8fafc;
+    border-bottom: 1px solid #e2e8f0;
   }
   .ops-unavail-count-chip {
     display: inline-flex;
     align-items: center;
-    padding: 2px 7px;
+    padding: 1px 7px;
     border-radius: 999px;
     background: #fff;
     border: 1px solid #e2e8f0;
@@ -5082,33 +5087,20 @@ const opsCss = `
     color: #334155;
   }
   .ops-unavail-summary {
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 2px;
-    padding: 4px 6px 6px;
-    border-bottom: 1px solid #e2e8f0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 4px 10px 6px;
     background: #f8fafc;
-    flex: 0 0 auto;
-  }
-  .ops-unavail-stat {
-    display: grid;
-    justify-items: center;
-    gap: 0;
-    min-width: 0;
-  }
-  .ops-unavail-stat b {
-    font-size: 0.84rem;
-    font-weight: 800;
-    color: #0f172a;
-    line-height: 1.2;
-  }
-  .ops-unavail-stat span {
-    font-size: 0.58rem;
+    border-bottom: 1px solid #e2e8f0;
+    font-size: 0.66rem;
     font-weight: 700;
     color: #64748b;
-    letter-spacing: -0.02em;
+    flex: 0 0 auto;
   }
-  .ops-unavail-stat.is-final b { color: #14532d; }
+  .ops-unavail-summary .is-final {
+    color: #14532d;
+  }
   .ops-unavail-close,
   .ops-unavail-collapse {
     display: none;
@@ -5122,7 +5114,7 @@ const opsCss = `
     cursor: pointer;
   }
   .ops-unavail-body {
-    padding: 6px 8px 8px;
+    padding: 4px 8px 8px;
     overflow: auto;
     min-height: 0;
     flex: 1 1 auto;
@@ -5132,13 +5124,13 @@ const opsCss = `
     font-size: 0.75rem;
     color: #94a3b8;
   }
-  .ops-unavail-sec { margin-top: 7px; }
+  .ops-unavail-sec { margin-top: 6px; }
   .ops-unavail-sec:first-child { margin-top: 0; }
   .ops-unavail-sec > summary {
     display: flex;
     align-items: center;
     gap: 6px;
-    margin: 0 0 3px;
+    margin: 0 0 2px;
     font-size: 0.66rem;
     font-weight: 800;
     color: #475569;
@@ -5157,7 +5149,7 @@ const opsCss = `
   .ops-unavail-off-grid,
   .ops-unavail-slots {
     display: grid;
-    gap: 2px;
+    gap: 1px;
   }
   .ops-unavail-row {
     display: grid;
@@ -5169,7 +5161,7 @@ const opsCss = `
     font-size: 0.64rem;
     font-weight: 800;
     color: #64748b;
-    line-height: 1.5;
+    line-height: 1.45;
     padding-top: 1px;
   }
   .ops-unavail-names,
@@ -5177,15 +5169,15 @@ const opsCss = `
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 1px 0;
+    gap: 0;
     min-width: 0;
   }
   .ops-unavail-person {
-    font-size: 0.78rem;
-    line-height: 1.45;
+    font-size: 0.74rem;
+    line-height: 1.4;
   }
   .ops-unavail-name {
-    font-size: 0.78rem;
+    font-size: 0.74rem;
     font-weight: 700;
     color: #0f172a;
     white-space: nowrap;
@@ -5210,15 +5202,15 @@ const opsCss = `
     line-height: 1.45;
   }
   .ops-unavail-kind-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    display: flex;
+    flex-wrap: wrap;
     gap: 4px;
   }
   .ops-unavail-kind {
     border: 1px solid #e2e8f0;
-    border-radius: 8px;
+    border-radius: 6px;
     background: #f8fafc;
-    padding: 2px 6px 2px;
+    padding: 1px 6px;
   }
   .ops-unavail-kind > summary {
     display: flex;
@@ -5227,21 +5219,21 @@ const opsCss = `
     gap: 6px;
     cursor: pointer;
     list-style: none;
-    font-size: 0.68rem;
+    font-size: 0.66rem;
     font-weight: 700;
     color: #334155;
   }
   .ops-unavail-kind > summary::-webkit-details-marker { display: none; }
   .ops-unavail-kind b {
-    font-size: 0.78rem;
+    font-size: 0.74rem;
     color: #0f172a;
   }
   .ops-unavail-kind-names {
     margin: 2px 0 4px;
-    font-size: 0.74rem;
+    font-size: 0.72rem;
     font-weight: 700;
     color: #0f172a;
-    line-height: 1.4;
+    line-height: 1.35;
   }
   .ops-unavail-support-list {
     display: grid;
@@ -5254,33 +5246,28 @@ const opsCss = `
     align-items: center;
     gap: 3px;
   }
-  @media (min-width: 1280px) {
-    .ops-direct-layout {
-      grid-template-columns: minmax(0, 1fr) minmax(320px, 360px);
+  @container ops-assign (min-width: 760px) {
+    .ops-direct-layout.has-ops-panel {
+      grid-template-columns: minmax(0, 1fr) 320px;
       align-items: start;
     }
-    .ops-direct-layout.is-ops-panel-collapsed,
-    .ops-ops-status-solo.is-ops-panel-collapsed {
+    .ops-direct-layout.has-ops-panel.is-ops-panel-collapsed {
       grid-template-columns: minmax(0, 1fr);
     }
     .ops-unavail {
       position: sticky;
       top: 8px;
-      max-height: calc(100vh - 16px);
+      width: 320px;
+      height: calc(100vh - 24px);
+      max-height: calc(100vh - 24px);
     }
     .ops-unavail:not(.is-open) {
       display: none;
     }
     .ops-unavail-collapse { display: inline-flex; }
     .ops-unavail-chip[data-ops-panel-open="0"] { display: inline-flex; }
-    .ops-ops-status-solo {
-      grid-template-columns: minmax(0, 1fr) minmax(320px, 360px);
-    }
-    .ops-ops-status-solo .ops-unavail {
-      grid-column: 2;
-    }
   }
-  @media (max-width: 1279px) {
+  @container ops-assign (max-width: 759px) {
     .ops-unavail-chip { display: inline-flex; }
     .ops-unavail { display: none; }
     .ops-unavail.is-mobile-open {
