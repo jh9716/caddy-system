@@ -989,18 +989,21 @@ section("2·3부 저장 구조·2부 보호·3부 우선순위");
     .filter((a) => a.shift === "3부")
     .sort((a, b) => compareReservationOrder(a.reservation, b.reservation));
   const ids = s3a.map((a) => `${a.kind}:${a.caddy.id}`);
+  assert(
+    ids.join(",") === "regular:201,regular:202,fixed:60,twoThree:50,regular:1",
+    `THIRD → 찾근 → 2·3 → HOUSE  (${ids.join(",")})`
+  );
   const thirdIdx = s3a.findIndex((a) => a.caddy.id === 201);
+  const chageunIdx = s3a.findIndex((a) => a.caddy.id === 60);
   const twoThreeIdx = s3a.findIndex((a) => a.kind === "twoThree");
   const houseAfter = s3a.findIndex(
     (a, i) => i > twoThreeIdx && a.kind === "regular" && a.caddy.caddyType !== "THIRD"
   );
-  assert(s3a[0]?.kind === "fixed" && s3a[0]?.caddy.id === 60, "3부 첫 슬롯 찾근");
-  assert(thirdIdx > 0 && thirdIdx < twoThreeIdx, `3부반이 2·3보다 앞 ${ids.join(",")}`);
-  assert(twoThreeIdx > thirdIdx, "2·3은 3부반 다음");
-  assert(
-    houseAfter > twoThreeIdx,
-    "일반 HOUSE 3부는 2·3 다음"
-  );
+  assert(thirdIdx === 0 && s3a[1]?.caddy.id === 202, "3부 앞자리는 3부반 원번");
+  assert(chageunIdx === 2 && s3a[chageunIdx]?.kind === "fixed", "찾근은 THIRD 다음");
+  assert(s3a[chageunIdx]?.reason === "SPECIAL_CALL", "3부 찾근 reason 유지");
+  assert(twoThreeIdx === 3, "2·3은 찾근 다음");
+  assert(houseAfter === 4, "일반 HOUSE 3부는 2·3 다음");
   assert(
     s3a[twoThreeIdx]?.pairId === "23-50",
     "3부 pairId 동일 연결"
@@ -1009,6 +1012,111 @@ section("2·3부 저장 구조·2부 보호·3부 우선순위");
     !result.regularAssignments.some((a) => a.caddy.id === 50),
     "2·3은 일반 중복 없음"
   );
+}
+
+section("3부 일반 FIXED·마샬찾근은 지정 예약 유지");
+{
+  const date = "2026-06-10";
+  const house: AutoAssignCaddy[] = [1, 2].map((n) => ({
+    id: n,
+    name: `하우스${n}`,
+    team: `${n}조`,
+    teamOrder: 1,
+    caddyType: "HOUSE",
+  }));
+  const third: AutoAssignCaddy = {
+    id: 201,
+    name: "3부반A",
+    team: "9조",
+    teamOrder: 1,
+    caddyType: "THIRD",
+  };
+  const chageun: AutoAssignCaddy = {
+    id: 60,
+    name: "찾근C",
+    team: "6조",
+    teamOrder: 1,
+    caddyType: "HOUSE",
+  };
+  const pinned: AutoAssignCaddy = {
+    id: 70,
+    name: "고정핀",
+    team: "7조",
+    teamOrder: 1,
+    caddyType: "HOUSE",
+  };
+  const marshal: AutoAssignCaddy = {
+    id: 80,
+    name: "마샬찾근",
+    team: "8조",
+    teamOrder: 1,
+    caddyType: "HOUSE",
+  };
+  const reservations: AutoAssignReservation[] = [];
+  let idx = 1;
+  for (const shift of ["1부", "2부", "3부"] as const) {
+    const n = shift === "3부" ? 4 : 2;
+    for (let i = 0; i < n; i++) {
+      reservations.push({
+        date,
+        course: "SKY",
+        shift,
+        teeTime: shift === "3부" ? `16:0${i}` : "07:00",
+        teamName: `${shift}-${idx}`,
+        rawRowIndex: idx++,
+      });
+    }
+  }
+  const shift3 = reservations.filter((r) => r.shift === "3부");
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: [...house, third, chageun, pinned, marshal],
+    thirdStartTeam: "9조",
+    reservations,
+    fixedAssignments: [
+      {
+        caddyId: 70,
+        type: "FIXED",
+        reservationMatch: {
+          date,
+          course: shift3[0].course,
+          shift: "3부",
+          teeTime: shift3[0].teeTime,
+          teamName: shift3[0].teamName,
+        },
+      },
+      {
+        caddyId: 60,
+        type: "SPECIAL_CALL",
+        reservationMatch: {
+          date,
+          course: shift3[1].course,
+          shift: "3부",
+          teeTime: shift3[1].teeTime,
+          teamName: shift3[1].teamName,
+        },
+      },
+      {
+        caddyId: 80,
+        type: "마샬찾근",
+        reservationMatch: {
+          date,
+          course: shift3[3].course,
+          shift: "3부",
+          teeTime: shift3[3].teeTime,
+          teamName: shift3[3].teamName,
+        },
+      },
+    ],
+  });
+  const s3 = result.assignments
+    .filter((a) => a.shift === "3부")
+    .sort((a, b) => compareReservationOrder(a.reservation, b.reservation));
+  const ids = s3.map((a) => `${a.reason}:${a.caddy.id}`);
+  assert(s3[0]?.caddy.id === 70 && s3[0]?.kind === "fixed", `일반 FIXED 첫 슬롯 유지 (${ids.join(",")})`);
+  assert(s3[1]?.caddy.id === 201, "THIRD는 일반 FIXED 다음 remaining");
+  assert(s3[2]?.caddy.id === 60 && s3[2]?.reason === "SPECIAL_CALL", "SPECIAL_CALL 찾근은 THIRD 다음");
+  assert(s3[3]?.caddy.id === 80 && s3[3]?.reason === "MARSHAL_CALL", "마샬찾근은 지정 예약 유지");
 }
 
 section("특수근무 검색·3부 첫 캐디 후보는 RETIRED/LEAVE 제외");
