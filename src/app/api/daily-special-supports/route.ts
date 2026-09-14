@@ -3,9 +3,16 @@ import { requireAdmin, resolveAuthUser } from "@/lib/auth";
 import {
   DailySpecialSupportError,
   buildDailySpecialSupportPayload,
+  deleteDailySpecialSupport,
+  moveDailySpecialSupport,
+  replaceDailySpecialSupportGroup,
   replaceDailySpecialSupports,
 } from "@/lib/dailySpecialSupportService";
-import { isSpecialSupportShift } from "@/lib/dailySpecialSupport";
+import {
+  isDailySpecialSupportKind,
+  isDailySpecialSupportWorkPattern,
+  isSpecialSupportShift,
+} from "@/lib/dailySpecialSupport";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -45,8 +52,8 @@ export async function GET(req: NextRequest) {
 }
 
 /**
- * PUT { date, shift, caddyIds } — 해당 날짜·부의 특수지원 목록을 교체.
- * 기존 Draft를 즉시 재배치하지 않는다.
+ * PUT { date, shift, caddyIds } — 레거시: 해당 부 SPECIAL_SUPPORT만 교체.
+ * PUT { date, kind, workPattern, caddyIds } — date+kind+workPattern 그룹 교체.
  */
 export async function PUT(req: NextRequest) {
   const guard = await requireAdmin(req);
@@ -58,22 +65,45 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: "JSON body 필요" }, { status: 400 });
     }
     const date = String((body as { date?: unknown }).date || "");
-    const shift = String((body as { shift?: unknown }).shift || "");
     const caddyIds = (body as { caddyIds?: unknown }).caddyIds;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return NextResponse.json({ error: "date=YYYY-MM-DD 필요" }, { status: 400 });
     }
-    if (!isSpecialSupportShift(shift)) {
-      return NextResponse.json({ error: "shift는 1부/2부/3부 이어야 합니다." }, { status: 400 });
-    }
     if (!Array.isArray(caddyIds)) {
       return NextResponse.json({ error: "caddyIds[] 필요" }, { status: 400 });
+    }
+    const kindRaw = (body as { kind?: unknown }).kind;
+    const patternRaw = (body as { workPattern?: unknown }).workPattern;
+    const shift = String((body as { shift?: unknown }).shift || "");
+    const createdByUserId = auth?.userId ?? null;
+
+    if (isDailySpecialSupportKind(kindRaw) && isDailySpecialSupportWorkPattern(patternRaw)) {
+      const result = await replaceDailySpecialSupportGroup({
+        date,
+        kind: kindRaw,
+        workPattern: patternRaw,
+        caddyIds,
+        createdByUserId,
+      });
+      const payload = await buildDailySpecialSupportPayload(date);
+      return NextResponse.json({
+        ok: true,
+        ...payload,
+        savedKind: kindRaw,
+        savedWorkPattern: patternRaw,
+        added: result.added,
+        removed: result.removed,
+      });
+    }
+
+    if (!isSpecialSupportShift(shift)) {
+      return NextResponse.json({ error: "shift는 1부/2부/3부 이어야 합니다." }, { status: 400 });
     }
     const result = await replaceDailySpecialSupports({
       date,
       shift,
       caddyIds,
-      createdByUserId: auth?.userId ?? null,
+      createdByUserId,
     });
     const payload = await buildDailySpecialSupportPayload(date);
     return NextResponse.json({
@@ -83,6 +113,37 @@ export async function PUT(req: NextRequest) {
       added: result.added,
       removed: result.removed,
     });
+  } catch (e) {
+    return errorResponse(e);
+  }
+}
+
+export async function PATCH(req: NextRequest) {
+  const guard = await requireAdmin(req);
+  if (guard) return guard;
+  try {
+    const body = await req.json().catch(() => null);
+    if (!body || typeof body !== "object") {
+      return NextResponse.json({ error: "JSON body 필요" }, { status: 400 });
+    }
+    const action = String((body as { action?: unknown }).action || "");
+    const id = Number((body as { id?: unknown }).id);
+    if (!Number.isInteger(id) || id < 1) {
+      return NextResponse.json({ error: "id가 필요합니다." }, { status: 400 });
+    }
+    if (action === "move") {
+      const direction = (body as { direction?: unknown }).direction;
+      if (direction !== "up" && direction !== "down") {
+        return NextResponse.json({ error: "direction=up|down" }, { status: 400 });
+      }
+      const moved = await moveDailySpecialSupport(id, direction);
+      return NextResponse.json(await buildDailySpecialSupportPayload(moved.date));
+    }
+    if (action === "delete") {
+      const deleted = await deleteDailySpecialSupport(id);
+      return NextResponse.json(await buildDailySpecialSupportPayload(deleted.date));
+    }
+    return NextResponse.json({ error: "action=move|delete" }, { status: 400 });
   } catch (e) {
     return errorResponse(e);
   }

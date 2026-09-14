@@ -529,7 +529,7 @@ model DailySpecialSupport {
   shift           String
   kind            DailySpecialSupportKind          @default(SPECIAL_SUPPORT)
   workPattern     DailySpecialSupportWorkPattern   @default(SHIFT_1)
-  /// 1부터. 같은 date+kind 안에서 작을수록 먼저
+  /// 1부터. 같은 date+kind+workPattern 안에서 작을수록 먼저
   sortOrder       Int                              @default(0)
   createdByUserId Int?
   createdAt       DateTime                         @default(now())

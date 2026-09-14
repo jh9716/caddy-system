@@ -8,6 +8,7 @@ import type { AutoAssignmentRow } from "@/lib/autoAssignEngine";
 import { caddyAffiliation } from "@/lib/caddyDisplay";
 import { COURSE_CODES, COURSE_LABELS } from "@/lib/reservationParser";
 import { assignmentBoardExportCss } from "@/components/board/assignmentBoardExportCss";
+import { supportBoardBadgeLabels } from "@/lib/dailySpecialSupport";
 
 function ExportMarks({
   row,
@@ -18,6 +19,12 @@ function ExportMarks({
 }) {
   const marks = boardAssignmentMarks(row, allAssignments);
   const special = row.kind !== "regular" && row.kind !== "specialSupport";
+  const supportBadges = marks.specialSupport
+    ? supportBoardBadgeLabels(
+        row.supportKind || row.caddy?.supportKind,
+        row.supportWorkPattern || row.caddy?.supportWorkPattern
+      )
+    : null;
   if (
     !marks.twoWork &&
     !marks.chageun &&
@@ -33,7 +40,12 @@ function ExportMarks({
       {marks.limousine ? <span className="bx-badge limo">리무진</span> : null}
       {marks.driving ? <span className="bx-badge drive">드라이빙</span> : null}
       {marks.twoWork ? <span className="bx-badge two">투</span> : null}
-      {marks.specialSupport ? <span className="bx-badge support">지원</span> : null}
+      {supportBadges ? (
+        <>
+          <span className="bx-badge support">{supportBadges.kind}</span>
+          <span className="bx-badge support-pat">{supportBadges.pattern}</span>
+        </>
+      ) : null}
       {marks.chageun ? (
         <span className="bx-badge call">찾근</span>
       ) : row.kind === "twoThree" ? (

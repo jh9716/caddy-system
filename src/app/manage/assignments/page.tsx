@@ -114,7 +114,7 @@ import {
   buildUnavailableBoardView,
   pickOpsStatusSummary,
 } from "@/lib/unavailablePanelView";
-import { emptySpecialSupportByShift } from "@/lib/dailySpecialSupport";
+import { emptySpecialSupportByShift, supportBoardBadgeLabels } from "@/lib/dailySpecialSupport";
 import { SPECIAL_SETTINGS_STALE_MESSAGE } from "@/lib/dailySpecialDuty";
 import { isThirdBandTeam, THIRD_BAND_TEAMS } from "@/lib/caddyManage";
 import { rotateThirdQueueFromStartTeam } from "@/lib/thirdWeeklyRotation";
@@ -253,6 +253,8 @@ function AssignmentMarkBadges({
   limousine,
   driving,
   twoThree,
+  supportKind,
+  supportWorkPattern,
 }: {
   twoWork: boolean;
   chageun: boolean;
@@ -261,6 +263,8 @@ function AssignmentMarkBadges({
   limousine?: boolean;
   driving?: boolean;
   twoThree?: boolean;
+  supportKind?: string;
+  supportWorkPattern?: string;
 }) {
   if (
     !twoWork &&
@@ -273,16 +277,25 @@ function AssignmentMarkBadges({
   ) {
     return null;
   }
+  const supportBadges = specialSupport
+    ? supportBoardBadgeLabels(supportKind, supportWorkPattern)
+    : null;
   return (
     <span className="bc-marks">
       {limousine ? <span className="bc-badge limo">리무진</span> : null}
       {driving ? <span className="bc-badge drive">드라이빙</span> : null}
       {twoWork ? <span className="bc-badge two">투</span> : null}
-      {specialSupport ? <span className="bc-badge support">지원</span> : null}
-      {twoThree ? <span className="bc-badge two-three">2·3</span> : null}
+      {supportBadges ? (
+        <>
+          <span className="bc-badge support">{supportBadges.kind}</span>
+          <span className="bc-badge support-pat">{supportBadges.pattern}</span>
+        </>
+      ) : null}
       {chageun ? (
         <span className="bc-badge call">찾근</span>
-      ) : special && !driving && !specialSupport && !twoThree ? (
+      ) : twoThree ? (
+        <span className="bc-badge two-three">2·3</span>
+      ) : special && !driving && !specialSupport ? (
         <span className="bc-special">S</span>
       ) : null}
     </span>
@@ -372,6 +385,8 @@ const BoardAssignedSlots = memo(function BoardAssignedSlots({
                 special={special && row.kind !== "specialSupport"}
                 driving={marks.driving}
                 twoThree={row.kind === "twoThree"}
+                supportKind={row.supportKind || row.caddy.supportKind}
+                supportWorkPattern={row.supportWorkPattern || row.caddy.supportWorkPattern}
               />
             </button>
             {vacant ? null : (
@@ -4112,6 +4127,8 @@ export default function ManageAssignmentsOpsPage() {
                               special={special && row.kind !== "specialSupport"}
                               driving={marks.driving}
                               twoThree={row.kind === "twoThree"}
+                              supportKind={row.supportKind || row.caddy.supportKind}
+                              supportWorkPattern={row.supportWorkPattern || row.caddy.supportWorkPattern}
                             />
                           </button>
                           {vacant ? null : (
@@ -5463,6 +5480,10 @@ const opsCss = `
   .bc-badge.support {
     color: #1e3a8a;
     background: #dbeafe;
+  }
+  .bc-badge.support-pat {
+    color: #1e3a8a;
+    background: #eff6ff;
   }
   .bc-badge.house {
     color: #166534;

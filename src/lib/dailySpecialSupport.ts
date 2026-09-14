@@ -53,7 +53,8 @@ export type SpecialSupportRecord = {
   id?: number;
   date: string;
   caddyId: number;
-  shift: ShiftPart;
+  /** 단일부 호환값(1부/2부/3부) 또는 1·2부/54 저장용 문자열 */
+  shift: string;
   kind?: DailySpecialSupportKind;
   workPattern?: DailySpecialSupportWorkPattern;
   sortOrder?: number;
@@ -88,6 +89,32 @@ export const DAILY_SPECIAL_SUPPORT_KIND_LABELS: Record<
   FIFTY_FOUR_SUPPORT: "54지원",
 };
 
+/** 탭 칩용 짧은 이름 */
+export const DAILY_SPECIAL_SUPPORT_KIND_CHIP_LABELS: Record<
+  DailySpecialSupportKind,
+  string
+> = {
+  CHAGEUN: "찾근",
+  SPECIAL_SUPPORT: "특수",
+  OFF_SUPPORT: "휴무",
+  MARSHAL_SUPPORT: "마샬",
+  LEADER_SUPPORT: "조장",
+  FIFTY_FOUR_SUPPORT: "54지원",
+};
+
+/** 배치표 compact badge */
+export const DAILY_SPECIAL_SUPPORT_KIND_BADGES: Record<
+  DailySpecialSupportKind,
+  string
+> = {
+  CHAGEUN: "찾",
+  SPECIAL_SUPPORT: "특",
+  OFF_SUPPORT: "휴",
+  MARSHAL_SUPPORT: "마",
+  LEADER_SUPPORT: "조",
+  FIFTY_FOUR_SUPPORT: "54지",
+};
+
 export const DAILY_SPECIAL_SUPPORT_WORK_PATTERNS = [
   "ONE_TWO",
   "SHIFT_1",
@@ -110,6 +137,17 @@ export const DAILY_SPECIAL_SUPPORT_WORK_PATTERN_LABELS: Record<
   FIFTY_FOUR: "54",
 };
 
+export const DAILY_SPECIAL_SUPPORT_WORK_PATTERN_CHIP_LABELS: Record<
+  DailySpecialSupportWorkPattern,
+  string
+> = {
+  ONE_TWO: "1·2",
+  SHIFT_1: "1",
+  SHIFT_2: "2",
+  SHIFT_3: "3",
+  FIFTY_FOUR: "54",
+};
+
 export const DEFAULT_SPECIAL_SUPPORT_KIND: DailySpecialSupportKind =
   "SPECIAL_SUPPORT";
 
@@ -121,12 +159,137 @@ export function isDailySpecialSupportKind(
   );
 }
 
+export function isDailySpecialSupportWorkPattern(
+  value: unknown
+): value is DailySpecialSupportWorkPattern {
+  return DAILY_SPECIAL_SUPPORT_WORK_PATTERNS.includes(
+    String(value) as DailySpecialSupportWorkPattern
+  );
+}
+
 export function workPatternFromShift(
   shift: ShiftPart
 ): DailySpecialSupportWorkPattern {
   if (shift === "1부") return "SHIFT_1";
   if (shift === "2부") return "SHIFT_2";
   return "SHIFT_3";
+}
+
+/** 단일부 패턴 → 기존 shift 컬럼 호환값. 1·2/54는 엔진 ShiftPart가 아님. */
+export function shiftCompatFromWorkPattern(
+  pattern: DailySpecialSupportWorkPattern
+): string {
+  if (pattern === "SHIFT_1") return "1부";
+  if (pattern === "SHIFT_2") return "2부";
+  if (pattern === "SHIFT_3") return "3부";
+  if (pattern === "ONE_TWO") return "1·2부";
+  return "54";
+}
+
+export function workPatternFromStoredShift(
+  shift: unknown
+): DailySpecialSupportWorkPattern | null {
+  const raw = String(shift || "").trim();
+  if (raw === "1부") return "SHIFT_1";
+  if (raw === "2부") return "SHIFT_2";
+  if (raw === "3부") return "SHIFT_3";
+  if (raw === "1·2부" || raw === "1.2부" || raw === "ONE_TWO") return "ONE_TWO";
+  if (raw === "54" || raw === "FIFTY_FOUR") return "FIFTY_FOUR";
+  return null;
+}
+
+export function resolveSupportWorkPattern(row: {
+  workPattern?: unknown;
+  shift?: unknown;
+}): DailySpecialSupportWorkPattern {
+  if (isDailySpecialSupportWorkPattern(row.workPattern)) return row.workPattern;
+  const fromShift = workPatternFromStoredShift(row.shift);
+  if (fromShift) return fromShift;
+  return "SHIFT_1";
+}
+
+export function resolveSupportKind(row: {
+  kind?: unknown;
+}): DailySpecialSupportKind {
+  if (isDailySpecialSupportKind(row.kind)) return row.kind;
+  return DEFAULT_SPECIAL_SUPPORT_KIND;
+}
+
+/**
+ * 기존 shift 기반 엔진에 넣는 행만.
+ * SPECIAL_SUPPORT + 단일부(SHIFT_1/2/3)만 기존 꼬리 배치 큐로 전달한다.
+ * 1·2/54 및 다른 유형은 저장만 하고 이번 PR에서 배치하지 않는다.
+ */
+export function isEngineEligibleSupportRecord(row: {
+  kind?: unknown;
+  workPattern?: unknown;
+  shift?: unknown;
+}): boolean {
+  if (resolveSupportKind(row) !== DEFAULT_SPECIAL_SUPPORT_KIND) return false;
+  const pattern = resolveSupportWorkPattern(row);
+  if (pattern !== "SHIFT_1" && pattern !== "SHIFT_2" && pattern !== "SHIFT_3") {
+    return false;
+  }
+  return isSpecialSupportShift(shiftCompatFromWorkPattern(pattern));
+}
+
+export function supportBoardBadgeLabels(
+  kind?: unknown,
+  workPattern?: unknown
+): { kind: string; pattern: string } {
+  const resolvedKind = resolveSupportKind({ kind });
+  const resolvedPattern = isDailySpecialSupportWorkPattern(workPattern)
+    ? workPattern
+    : resolveSupportWorkPattern({ workPattern, shift: workPattern });
+  return {
+    kind: DAILY_SPECIAL_SUPPORT_KIND_BADGES[resolvedKind],
+    pattern: DAILY_SPECIAL_SUPPORT_WORK_PATTERN_CHIP_LABELS[resolvedPattern],
+  };
+}
+
+export function groupSupportRecordsByKindPattern(
+  rows: readonly SpecialSupportRecord[]
+): Record<
+  DailySpecialSupportKind,
+  Record<DailySpecialSupportWorkPattern, SpecialSupportRecord[]>
+> {
+  const out = {} as Record<
+    DailySpecialSupportKind,
+    Record<DailySpecialSupportWorkPattern, SpecialSupportRecord[]>
+  >;
+  for (const kind of DAILY_SPECIAL_SUPPORT_KINDS) {
+    out[kind] = {
+      ONE_TWO: [],
+      SHIFT_1: [],
+      SHIFT_2: [],
+      SHIFT_3: [],
+      FIFTY_FOUR: [],
+    };
+  }
+  for (const row of rows) {
+    const kind = resolveSupportKind(row);
+    const pattern = resolveSupportWorkPattern(row);
+    out[kind][pattern].push(row);
+  }
+  for (const kind of DAILY_SPECIAL_SUPPORT_KINDS) {
+    for (const pattern of DAILY_SPECIAL_SUPPORT_WORK_PATTERNS) {
+      out[kind][pattern].sort(
+        (a, b) =>
+          (Number(a.sortOrder) || 0) - (Number(b.sortOrder) || 0) ||
+          (a.id || 0) - (b.id || 0)
+      );
+    }
+  }
+  return out;
+}
+
+export function countSupportByKind(
+  rows: readonly SpecialSupportRecord[]
+): Record<DailySpecialSupportKind, number> {
+  const out = {} as Record<DailySpecialSupportKind, number>;
+  for (const kind of DAILY_SPECIAL_SUPPORT_KINDS) out[kind] = 0;
+  for (const row of rows) out[resolveSupportKind(row)] += 1;
+  return out;
 }
 
 export function isSpecialSupportShift(value: unknown): value is ShiftPart {
@@ -290,8 +453,16 @@ export function groupSupportRecordsByShift(
     "3부": [],
   };
   for (const row of rows) {
+    if (!isEngineEligibleSupportRecord(row)) continue;
     if (!isSpecialSupportShift(row.shift)) continue;
     out[row.shift].push(row);
+  }
+  for (const shift of SHIFT_PARTS) {
+    out[shift].sort(
+      (a, b) =>
+        (Number(a.sortOrder) || 0) - (Number(b.sortOrder) || 0) ||
+        (a.id || 0) - (b.id || 0)
+    );
   }
   return out;
 }
@@ -303,16 +474,19 @@ export function engineQueuesFromSupportRecords(
     | null
     | undefined
 ): Record<ShiftPart, AutoAssignCaddy[]> {
-  // V2 kind/workPattern는 이번 PR에서 배치 정책에 쓰지 않는다. shift 큐만.
+  // 기존 SPECIAL_SUPPORT + 단일부만. 새 유형/1·2/54는 엔진에 넣지 않는다.
   const next = emptySpecialSupportByShift();
   for (const part of SHIFT_PARTS) {
     next[part] = (byShift?.[part] || [])
-      .filter((row) => !row.blocked)
+      .filter((row) => !row.blocked && isEngineEligibleSupportRecord(row))
       .map((row) => ({
         id: row.caddyId,
         name: row.name || "",
         team: row.team || "",
         teamOrder: Number(row.teamOrder) || 0,
+        inputOrder: Number(row.sortOrder) || 0,
+        supportKind: resolveSupportKind(row),
+        supportWorkPattern: resolveSupportWorkPattern(row),
       }));
   }
   return next;

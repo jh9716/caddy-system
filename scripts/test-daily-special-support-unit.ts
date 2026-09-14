@@ -3,7 +3,7 @@
  * 실행: npx tsx scripts/test-daily-special-support-unit.ts
  */
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   compareReservationOrder,
@@ -18,7 +18,10 @@ import { createDraftFromAutoResult as draftFromResult } from "../src/lib/assignm
 import {
   buildPublishedPayloadFromDraft,
 } from "../src/lib/dailyBoardPublished";
-import { assignmentDraftToPayload } from "../src/lib/dailyBoardDraft";
+import {
+  assignmentDraftToPayload,
+  parseDailyBoardDraftPayload,
+} from "../src/lib/dailyBoardDraft";
 import {
   emptySpecialSupportByShift,
   filterSupportQueueForShift,
@@ -31,6 +34,16 @@ import {
   DEFAULT_SPECIAL_SUPPORT_KIND,
   workPatternFromShift,
   isDailySpecialSupportKind,
+  DAILY_SPECIAL_SUPPORT_KINDS,
+  DAILY_SPECIAL_SUPPORT_WORK_PATTERNS,
+  countSupportByKind,
+  engineQueuesFromSupportRecords,
+  groupSupportRecordsByKindPattern,
+  groupSupportRecordsByShift,
+  isEngineEligibleSupportRecord,
+  shiftCompatFromWorkPattern,
+  supportBoardBadgeLabels,
+  type SpecialSupportRecord,
 } from "../src/lib/dailySpecialSupport";
 import { boardAssignmentMarks } from "../src/lib/assignmentBoardView";
 
@@ -842,7 +855,11 @@ section("Draft round-trip / Published snapshot");
 {
   const date = "2026-08-26";
   const available = [house(1, 1), house(2, 2)];
-  const off = supportCaddy(90, "휴무지원");
+  const off = {
+    ...supportCaddy(90, "휴무지원"),
+    supportKind: "SPECIAL_SUPPORT",
+    supportWorkPattern: "SHIFT_1",
+  };
   const result = computeAutoAssignmentsV1({
     date,
     available,
@@ -855,11 +872,23 @@ section("Draft round-trip / Published snapshot");
     !draft.caddyPool.some((c) => c.id === 90),
     "caddyPool에 지원자 넣지 않음"
   );
+  const assigned = draft.assignments.find((a) => a.caddy.id === 90);
+  assert(assigned?.supportKind === "SPECIAL_SUPPORT", "Draft 지원 kind 메타");
+  assert(assigned?.supportWorkPattern === "SHIFT_1", "Draft 지원 pattern 메타");
   const payload = assignmentDraftToPayload(draft);
+  const reparsed = parseDailyBoardDraftPayload(payload, date);
+  const reparsedRow = reparsed.assignments.find((a) => a.caddy.id === 90);
+  assert(reparsedRow?.supportKind === "SPECIAL_SUPPORT", "Draft parse kind 보존");
+  assert(
+    reparsedRow?.supportWorkPattern === "SHIFT_1",
+    "Draft parse pattern 보존"
+  );
   const published = buildPublishedPayloadFromDraft(payload);
   const supportPlacement = published.placements.find((p) => p.caddyId === 90);
   assert(supportPlacement?.specialSupport === true, "Published에 지원 보존");
   assert(supportPlacement?.kind === "specialSupport", "Published kind 보존");
+  assert(supportPlacement?.supportKind === "SPECIAL_SUPPORT", "Published kind 뱃지 메타");
+  assert(supportPlacement?.supportWorkPattern === "SHIFT_1", "Published pattern 뱃지 메타");
   assert(supportPlacement?.chageun === false, "찾근으로 취급하지 않음");
   assert(supportPlacement?.locked === false, "LOCK 아님");
   const marks = boardAssignmentMarks(
@@ -1072,6 +1101,122 @@ section("N=10 R=3 AUTO: 특수지원은 뒤 일반순번 보호 직전");
   );
 }
 
+section("지원근무 V2 유형/패턴/sortOrder/엔진 제외");
+{
+  assert(DAILY_SPECIAL_SUPPORT_KINDS.length === 6, "6개 지원 kind");
+  assert(
+    DAILY_SPECIAL_SUPPORT_KINDS.join(",") ===
+      "CHAGEUN,SPECIAL_SUPPORT,OFF_SUPPORT,MARSHAL_SUPPORT,LEADER_SUPPORT,FIFTY_FOUR_SUPPORT",
+    "6유형 순서"
+  );
+  assert(DAILY_SPECIAL_SUPPORT_WORK_PATTERNS.length === 5, "5개 workPattern");
+  assert(
+    DAILY_SPECIAL_SUPPORT_WORK_PATTERNS.join(",") ===
+      "ONE_TWO,SHIFT_1,SHIFT_2,SHIFT_3,FIFTY_FOUR",
+    "5패턴 순서"
+  );
+  assert(shiftCompatFromWorkPattern("SHIFT_1") === "1부", "SHIFT_1 → 1부");
+  assert(shiftCompatFromWorkPattern("SHIFT_2") === "2부", "SHIFT_2 → 2부");
+  assert(shiftCompatFromWorkPattern("SHIFT_3") === "3부", "SHIFT_3 → 3부");
+  assert(shiftCompatFromWorkPattern("ONE_TWO") === "1·2부", "ONE_TWO 저장 shift");
+  assert(shiftCompatFromWorkPattern("FIFTY_FOUR") === "54", "FIFTY_FOUR 저장 shift");
+
+  const rec = (
+    kind: SpecialSupportRecord["kind"],
+    workPattern: SpecialSupportRecord["workPattern"],
+    caddyId: number,
+    sortOrder: number,
+    shift: string
+  ): SpecialSupportRecord => ({
+    date: "2099-12-14",
+    caddyId,
+    shift,
+    kind,
+    workPattern,
+    sortOrder,
+    name: `C${caddyId}`,
+  });
+
+  const rows: SpecialSupportRecord[] = [
+    rec("SPECIAL_SUPPORT", "SHIFT_1", 2, 2, "1부"),
+    rec("SPECIAL_SUPPORT", "SHIFT_1", 1, 1, "1부"),
+    rec("CHAGEUN", "SHIFT_2", 3, 1, "2부"),
+    rec("OFF_SUPPORT", "ONE_TWO", 4, 1, "1·2부"),
+    rec("MARSHAL_SUPPORT", "SHIFT_3", 5, 1, "3부"),
+    rec("LEADER_SUPPORT", "SHIFT_1", 6, 1, "1부"),
+    rec("FIFTY_FOUR_SUPPORT", "FIFTY_FOUR", 7, 1, "54"),
+  ];
+  const grouped = groupSupportRecordsByKindPattern(rows);
+  assert(
+    grouped.SPECIAL_SUPPORT.SHIFT_1.map((r) => r.caddyId).join(",") === "1,2",
+    "date+kind+workPattern 안 sortOrder"
+  );
+  assert(grouped.CHAGEUN.SHIFT_2.length === 1, "찾근 그룹");
+  assert(grouped.OFF_SUPPORT.ONE_TWO.length === 1, "휴무 1·2부 그룹");
+  const counts = countSupportByKind(rows);
+  assert(counts.SPECIAL_SUPPORT === 2 && counts.CHAGEUN === 1, "유형별 인원");
+  assert(
+    isEngineEligibleSupportRecord(rows[0]) &&
+      isEngineEligibleSupportRecord(rows[1]),
+    "기존 특수지원 단일부는 엔진 대상"
+  );
+  assert(
+    !isEngineEligibleSupportRecord(rows[2]) &&
+      !isEngineEligibleSupportRecord(rows[3]) &&
+      !isEngineEligibleSupportRecord(rows[4]) &&
+      !isEngineEligibleSupportRecord(rows[5]) &&
+      !isEngineEligibleSupportRecord(rows[6]),
+    "새 유형/1·2/54는 엔진 제외"
+  );
+  const byShift = groupSupportRecordsByShift(rows);
+  assert(
+    byShift["1부"].map((r) => r.caddyId).join(",") === "1,2" &&
+      byShift["2부"].length === 0 &&
+      byShift["3부"].length === 0,
+    "엔진 큐는 SPECIAL_SUPPORT 단일부만"
+  );
+  const queues = engineQueuesFromSupportRecords(byShift);
+  assert(
+    queues["1부"].map((c) => c.id).join(",") === "1,2" &&
+      queues["1부"][0]!.supportKind === "SPECIAL_SUPPORT",
+    "엔진 큐에 표시 메타 복사"
+  );
+  const badges = supportBoardBadgeLabels("SPECIAL_SUPPORT", "SHIFT_1");
+  assert(badges.kind === "특" && badges.pattern === "1", "특수지원 compact 뱃지");
+  assert(
+    supportBoardBadgeLabels("CHAGEUN", "ONE_TWO").kind === "찾" &&
+      supportBoardBadgeLabels("CHAGEUN", "ONE_TWO").pattern === "1·2",
+    "찾근 1·2 뱃지"
+  );
+  assert(
+    supportBoardBadgeLabels("OFF_SUPPORT", "SHIFT_2").kind === "휴",
+    "휴무지원 뱃지"
+  );
+  assert(
+    supportBoardBadgeLabels("MARSHAL_SUPPORT", "SHIFT_3").kind === "마",
+    "마샬지원 뱃지"
+  );
+  assert(
+    supportBoardBadgeLabels("LEADER_SUPPORT", "SHIFT_1").kind === "조",
+    "조장지원 뱃지"
+  );
+  assert(
+    supportBoardBadgeLabels("FIFTY_FOUR_SUPPORT", "FIFTY_FOUR").kind === "54지" &&
+      supportBoardBadgeLabels("FIFTY_FOUR_SUPPORT", "FIFTY_FOUR").pattern === "54",
+    "54지원 뱃지"
+  );
+  const legacyRow: SpecialSupportRecord = {
+    date: "2026-09-14",
+    caddyId: 8,
+    shift: "1부",
+  };
+  assert(isEngineEligibleSupportRecord(legacyRow), "kind 없는 기존 row는 특수지원");
+  assert(
+    supportBoardBadgeLabels(undefined, undefined).kind === "특",
+    "메타 없는 기존 배치는 특"
+  );
+}
+
 section("source / UI / migration / 권한");
 {
   const sql = readSrc(
@@ -1117,10 +1262,10 @@ section("source / UI / migration / 권한");
   assert(/model DailySpecialSupport/.test(schema), "schema model");
   assert(/createdByUserId\s+Int\?/.test(schema), "nullable createdByUserId");
   assert(/DAILY_SPECIAL_KIND_UI\.map/.test(panel), "찾근 탭 제거");
-  assert(/특수지원 등록/.test(supportUi), "특수지원 등록 액션");
+  assert(/지원근무 등록/.test(supportUi), "지원근무 등록 액션");
   assert(/const \[busy, setBusy\]/.test(supportUi), "저장 busy state");
-  assert(/1부 지원/.test(supportUi), "부별 인원 요약");
-  assert(/ss-kinds/.test(supportUi), "mobile 3부 탭");
+  assert(/countsByKind/.test(supportUi), "유형별 인원 칩");
+  assert(/ss-kinds/.test(supportUi) && /ss-patterns/.test(supportUi), "유형·패턴 wrap 칩");
   assert(/SpecialSupportPanel/.test(page), "날짜 설정에 특수지원");
   assert(/지원근무/.test(page) && /ops-settings-tabs/.test(page), "지원근무 탭");
   assert(
@@ -1128,9 +1273,17 @@ section("source / UI / migration / 권한");
     "지원근무 탭에 배치 다시 맞추기 상시"
   );
   assert(
-    !/휴무지원|마샬지원|조장지원|54지원/.test(supportUi),
-    "미구현 지원 유형 가짜 UI 없음"
+    /DAILY_SPECIAL_SUPPORT_KINDS\.map/.test(supportUi) &&
+      /DAILY_SPECIAL_SUPPORT_KIND_CHIP_LABELS/.test(supportUi),
+    "지원 6유형 등록 UI"
   );
+  assert(
+    /DAILY_SPECIAL_SUPPORT_WORK_PATTERNS\.map/.test(supportUi) &&
+      /DAILY_SPECIAL_SUPPORT_WORK_PATTERN_CHIP_LABELS/.test(supportUi),
+    "5개 workPattern 칩"
+  );
+  assert(/action === "move"/.test(route) && /action === "delete"/.test(route), "sortOrder 위아래·삭제 API");
+  assert(/savedKind/.test(route) && /savedShift/.test(route), "kind PUT + legacy shift PUT");
   assert(
     !/\/api\/daily-special-supports/.test(page),
     "assignments page는 특수지원 GET을 중복하지 않음 (패널 1회)"
@@ -1155,6 +1308,19 @@ section("source / UI / migration / 권한");
   assert(/specialSupportIds.has\(caddy.id\)/.test(engine), "available에서 지원 id 제거");
   const supportDomain = readSrc("src/lib/dailySpecialSupport.ts");
   assert(
+    /찾근/.test(supportDomain) &&
+      /특수지원/.test(supportDomain) &&
+      /휴무지원/.test(supportDomain) &&
+      /마샬지원/.test(supportDomain) &&
+      /조장지원/.test(supportDomain) &&
+      /54지원/.test(supportDomain),
+    "지원 6유형 라벨"
+  );
+  assert(
+    /ONE_TWO/.test(supportDomain) && /FIFTY_FOUR/.test(supportDomain),
+    "5개 workPattern 상수"
+  );
+  assert(
     !/used.has\(caddy.id\) \|\| normal.has\(caddy.id\)/.test(supportDomain),
     "normal.has만으로 지원 큐에서 제거하지 않음"
   );
@@ -1170,12 +1336,28 @@ section("source / UI / migration / 권한");
     "reflow/apply도 서버에서 다시 읽음"
   );
   assert(/bc-badge support/.test(publishedView), "Published 지원 뱃지");
+  assert(/supportBoardBadgeLabels/.test(publishedView), "Published compact 유형 뱃지");
   assert(
     !/DailySpecialKind/.test(supportDomain) &&
       !/kind:\s*"CHAGEUN"/.test(engine) &&
       /kind: "specialSupport"/.test(engine),
     "특수지원이 CHAGEUN을 재사용하지 않음"
   );
+  assert(
+    /isEngineEligibleSupportRecord/.test(supportDomain),
+    "새 유형/1·2/54는 엔진 큐에서 제외"
+  );
+  const schemaText = readSrc("prisma/schema.prisma");
+  assert(
+    /enum DailySpecialSupportKind/.test(schemaText) &&
+      /enum DailySpecialSupportWorkPattern/.test(schemaText),
+    "기존 V2 schema 컬럼 사용"
+  );
+  const migDirs = readdirSync(join(process.cwd(), "prisma/migrations")).filter(
+    (name) =>
+      /^\d{14}/.test(name) && name > "20260914010000_two_three_and_support_v2"
+  );
+  assert(migDirs.length === 0, "새 migration 없음");
 }
 
 console.log(`\nOK ${passed}/${passed + failed}`);
