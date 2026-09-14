@@ -1501,6 +1501,7 @@ section("source / UI / migration / 권한");
       /isLateMarshalShift1Support/.test(engine) &&
       /isShift2MidSupport/.test(engine) &&
       /isOffSupportShift3/.test(engine) &&
+      /isDeferredSecondShiftChageun/.test(engine) &&
       /MARSHAL_SUPPORT/.test(engine) &&
       /LEADER_SUPPORT/.test(engine) &&
       /OFF_SUPPORT/.test(engine),

@@ -365,6 +365,132 @@ section("2부 2·3은 보호 다음, pairId 유지");
   assert(spIdx > 2, "2부 지원은 2·3 뒤");
 }
 
+section("2부 찾근은 뒤쪽 지정 예약이어도 보호 다음·2·3 앞");
+{
+  const date = "2026-06-10";
+  const available = [1, 2, 3, 4, 5, 6].map((n) => house(n, n));
+  const chageunA: AutoAssignCaddy = {
+    id: 61,
+    name: "찾근A",
+    team: "9조",
+    teamOrder: 9,
+    caddyType: "HOUSE",
+  };
+  const chageunB: AutoAssignCaddy = {
+    id: 62,
+    name: "찾근B",
+    team: "1조",
+    teamOrder: 1,
+    caddyType: "HOUSE",
+  };
+  const twoThree: AutoAssignCaddy = {
+    id: 50,
+    name: "이삼",
+    team: "5조",
+    teamOrder: 1,
+    caddyType: "HOUSE",
+    inputOrder: 1,
+  };
+  const duty: AutoAssignCaddy = {
+    id: 70,
+    name: "당번2",
+    team: "3조",
+    teamOrder: 1,
+    caddyType: "HOUSE",
+  };
+  const sp = support(21, "특2", "SPECIAL_SUPPORT", "SHIFT_2", 1);
+  const reservations = [
+    ...shiftRes(date, "1부", 4),
+    ...shiftRes(date, "2부", 10, "12:00"),
+    ...shiftRes(date, "3부", 6, "16:00"),
+  ];
+  const shift2 = reservations.filter((r) => r.shift === "2부");
+  const lateA = shift2[shift2.length - 1]!;
+  const lateB = shift2[shift2.length - 2]!;
+  const dutySlot = shift2[shift2.length - 3]!;
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: [...available, chageunA, chageunB, twoThree, duty],
+    twoThreeCandidates: [twoThree],
+    reservations,
+    fixedAssignments: [
+      {
+        caddyId: 61,
+        type: "SPECIAL_CALL",
+        reservationMatch: {
+          date,
+          course: lateA.course,
+          shift: "2부",
+          teeTime: lateA.teeTime,
+          teamName: lateA.teamName,
+        },
+      },
+      {
+        caddyId: 62,
+        type: "SPECIAL_CALL",
+        reservationMatch: {
+          date,
+          course: lateB.course,
+          shift: "2부",
+          teeTime: lateB.teeTime,
+          teamName: lateB.teamName,
+        },
+      },
+      {
+        caddyId: 70,
+        type: "DUTY_CALL",
+        reservationMatch: {
+          date,
+          course: dutySlot.course,
+          shift: "2부",
+          teeTime: dutySlot.teeTime,
+          teamName: dutySlot.teamName,
+        },
+      },
+    ],
+    specialSupportByShift: {
+      ...emptySpecialSupportByShift(),
+      "2부": [sp],
+    },
+  });
+  const s2 = sortedShift(result, "2부");
+  assert(s2[0]?.kind !== "fixed" && s2[1]?.kind !== "fixed", "2부 보호 1·2는 찾근이 아님");
+  assert(
+    s2[2]?.caddy.id === 61 &&
+      s2[2]?.kind === "fixed" &&
+      s2[2]?.reason === "SPECIAL_CALL",
+    "첫 찾근은 보호 다음, 등록 순서 유지"
+  );
+  assert(
+    s2[3]?.caddy.id === 62 && s2[3]?.reason === "SPECIAL_CALL",
+    "둘째 찾근은 첫 찾근 다음 (조순이 아님)"
+  );
+  assert(
+    s2[2]?.reservation.teeTime !== lateA.teeTime &&
+      s2[3]?.reservation.teeTime !== lateB.teeTime,
+    "찾근은 뒤쪽 지정 예약을 쓰지 않음"
+  );
+  assert(
+    s2[4]?.kind === "twoThree" && s2[4]?.pairId === "23-50",
+    "2·3은 찾근 다음 pairId"
+  );
+  const s3 = sortedShift(result, "3부");
+  assert(
+    s3.find((a) => a.kind === "twoThree")?.pairId === "23-50",
+    "3부 2·3 pairId 유지"
+  );
+  const dutyRow = s2.find((a) => a.caddy.id === 70);
+  assert(
+    dutyRow?.reason === "DUTY_CALL" &&
+      dutyRow.reservation.teeTime === dutySlot.teeTime,
+    "당번 FIXED는 지정 예약 유지"
+  );
+  const spIdx = s2.findIndex((a) => a.caddy.id === 21);
+  const oneTwoOrSupportAfter = s2.findIndex((a) => a.kind === "twoThree");
+  assert(spIdx > oneTwoOrSupportAfter, "일반 지원은 2·3·찾근 뒤");
+  assert(s2[spIdx]?.kind === "specialSupport", "2부 지원 kind 유지");
+}
+
 section("2부 찾근은 보호 다음, 지원보다 앞");
 {
   const date = "2026-06-10";
@@ -383,6 +509,7 @@ section("2부 찾근은 보호 다음, 지원보다 앞");
     ...shiftRes(date, "3부", 4, "16:00"),
   ];
   const shift2 = reservations.filter((r) => r.shift === "2부");
+  const late = shift2[shift2.length - 1]!;
   const result = computeAutoAssignmentsV1({
     date,
     available: [...available, chageun],
@@ -393,10 +520,10 @@ section("2부 찾근은 보호 다음, 지원보다 앞");
         type: "SPECIAL_CALL",
         reservationMatch: {
           date,
-          course: shift2[2]!.course,
+          course: late.course,
           shift: "2부",
-          teeTime: shift2[2]!.teeTime,
-          teamName: shift2[2]!.teamName,
+          teeTime: late.teeTime,
+          teamName: late.teamName,
         },
       },
     ],
@@ -411,8 +538,9 @@ section("2부 찾근은 보호 다음, 지원보다 앞");
     s2[2]?.caddy.id === 60 &&
       s2[2]?.kind === "fixed" &&
       s2[2]?.reason === "SPECIAL_CALL",
-    "찾근은 보호 다음 지정 예약"
+    "찾근은 보호 다음으로 재배치"
   );
+  assert(s2[2]?.reservation.teeTime !== late.teeTime, "마지막 지정 예약을 그대로 쓰지 않음");
   const spIdx = s2.findIndex((a) => a.caddy.id === 21);
   assert(spIdx > 2, "지원은 찾근·원번 뒤");
   assert(s2[spIdx]?.kind === "specialSupport", "2부 지원 kind 유지");

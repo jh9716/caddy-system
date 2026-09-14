@@ -1163,7 +1163,7 @@ section("특수근무 검색·3부 첫 캐디 후보는 RETIRED/LEAVE 제외");
   assert(/sd-override/.test(specialSrc), "휴무 오버라이드는 숨기지 않고 별도 스타일");
   assert(/specialDutySoftOriginBadge/.test(specialSrc), "휴무 특수근무는 원상태 compact 뱃지");
   assert(
-    /2부는 앞 2자리 다음, 3부는 3부반 원번 다음·찾근 앞/.test(specialSrc),
+    /2부는 앞 2자리·찾근 다음, 3부는 3부반 원번 다음·찾근 앞/.test(specialSrc),
     "2·3부 운영 규칙 안내"
   );
   assert(

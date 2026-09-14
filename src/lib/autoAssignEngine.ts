@@ -7,7 +7,8 @@
  *        → 휴무지원 → regular THIRD → 2·3 → 찾근 → 남은 HOUSE
  *        Mode B(원번 완주) 1·3 → WEEKEND(토/일/공휴일만) → 휴무지원 → regular THIRD
  *        → 2·3 → 찾근 → 남은 HOUSE
- *        3부 찾근(SPECIAL_CALL)만 remaining 큐에서 2·3 다음·HOUSE 앞.
+ *        2부 찾근(SPECIAL_CALL)은 지정 예약을 점유하지 않고 보호 1·2 다음·2·3 앞.
+ *        3부 찾근(SPECIAL_CALL)은 remaining 큐에서 2·3 다음·HOUSE 앞.
  *        마샬/당번/일반 FIXED 핀은 assignFixedPriority 최우선 유지.
  *        thirdBandSubgroup=WEEKEND는 평일(비공휴일) 3부 어디에든 넣지 않음
  * - DRIVING은 일반 HOUSE/THIRD 순번에 섞지 않음
@@ -1328,6 +1329,7 @@ export type SpecialDutySlotResult = {
   oneMakAssignments: AutoAssignmentRow[];
   weekendBandAssignments: AutoAssignmentRow[];
   specialSupportAssignments: AutoAssignmentRow[];
+  shift2ChageunAssignments: AutoAssignmentRow[];
   specialUnassigned: SpecialUnassignedRow[];
   remainingReservations: AutoAssignReservation[];
   assignedCaddyIds: Set<number>;
@@ -1339,9 +1341,10 @@ export type SpecialDutySlotResult = {
 };
 
 /**
- * 관리자 특수근무 슬롯 배치 (고정/찾근 이후).
+ * 관리자 특수근무 슬롯 배치 (일반 고정 이후).
  * 1부: 앞 2자리 보호 → 후출마샬 1부 지원 → 54홀 → 1·2부, 1·3/1막은 AUTO 순번 창 또는 MANUAL anchor.
  * 후출마샬(MARSHAL_SUPPORT+SHIFT_1)은 1막이 아니다.
+ * 2부: 보호 1·2 → 찾근(SPECIAL_CALL, 지정 예약 무시) → 2·3 → 원번 → 지원 → 1·2 투.
  * 조출마샬(MARSHAL_SUPPORT+SHIFT_2)·조장(LEADER_SUPPORT+SHIFT_2)은 2부 막.
  * 휴무지원(OFF_SUPPORT+SHIFT_3)은 3부 주말반 다음.
  */
@@ -1367,6 +1370,8 @@ export function assignSpecialDutySlots(input: {
   specialSupport?: AutoAssignCaddy[];
   /** 2부 원번 뒤·1·2 투 앞 특수지원. 조출마샬/조장은 regular 2부 막 */
   shift2Support?: AutoAssignCaddy[];
+  /** 2부 특별찾근. 지정 예약을 점유하지 않고 보호 1·2 다음·2·3 앞. 입력 순서 유지 */
+  chageunForSecond?: AutoAssignCaddy[];
 }): SpecialDutySlotResult {
   const date = input.date;
   const minGap = input.min54HoleGapMinutes ?? MIN_54HOLE_GAP_MINUTES;
@@ -1377,6 +1382,7 @@ export function assignSpecialDutySlots(input: {
   const oneThreeAssignments: AutoAssignmentRow[] = [];
   const oneMakAssignments: AutoAssignmentRow[] = [];
   const specialSupportAssignments: AutoAssignmentRow[] = [];
+  const shift2ChageunAssignments: AutoAssignmentRow[] = [];
   const weekendBandAssignments: AutoAssignmentRow[] = [];
   const specialUnassigned: SpecialUnassignedRow[] = [];
   const assignedCaddyIds = new Set<number>();
@@ -1863,7 +1869,38 @@ export function assignSpecialDutySlots(input: {
     }
   }
 
-  // 2·3부 2부: 앞 2자리 보호 다음. 지원/1·2 투보다 먼저 자리를 잡는다.
+  // 2부 찾근: 보호 1·2 다음. 지정 예약을 쓰지 않는다. 2·3보다 앞.
+  {
+    const shift2Chageun = dedupeCaddies([...(input.chageunForSecond || [])]);
+    const shift2 = shiftReservations(remaining, "2부");
+    const insertAt = Math.min(SHIFT2_PROTECTED_COUNT, shift2.length);
+    const taken: AutoAssignReservation[] = [];
+    let cursor = insertAt;
+    for (const caddy of shift2Chageun) {
+      if (cursor >= shift2.length) {
+        specialUnassigned.push({
+          caddy,
+          reason: REASON.SPECIAL_CALL,
+          review: true,
+        });
+        continue;
+      }
+      const slot = shift2[cursor++];
+      pushPair(
+        shift2ChageunAssignments,
+        caddy,
+        slot,
+        REASON.SPECIAL_CALL,
+        "fixed",
+        null
+      );
+      taken.push(slot);
+      assignedCaddyIds.add(caddy.id);
+    }
+    remaining = withoutTaken(remaining, taken);
+  }
+
+  // 2·3부 2부: 보호 1·2·찾근 다음. 지원/1·2 투보다 먼저 자리를 잡는다.
   const twoThreePlaced: AutoAssignCaddy[] = [];
   {
     const shift2 = shiftReservations(remaining, "2부");
@@ -1963,6 +2000,7 @@ export function assignSpecialDutySlots(input: {
     oneMakAssignments,
     weekendBandAssignments,
     specialSupportAssignments,
+    shift2ChageunAssignments,
     specialUnassigned,
     remainingReservations: remaining.sort(compareReservationOrder),
     assignedCaddyIds,
@@ -1988,17 +2026,32 @@ export function reasonForFixedType(type: FixedAssignmentType | string): string {
 }
 
 /**
- * 3부 특별찾근만 remaining 3부 큐(2·3 다음·HOUSE 앞)로 미룬다.
- * 마샬찾근·당번찾근·일반 FIXED는 기존처럼 지정 예약을 먼저 점유한다.
+ * 2부/3부 특별찾근만 지정 예약에서 빼고 부별 우선순위 큐로 미룬다.
+ * 마샬찾근·당번찾근·일반 FIXED·1부 SPECIAL_CALL은 기존처럼 지정 예약을 먼저 점유한다.
  */
-export function isDeferredThirdShiftChageun(
+export function isDeferredSpecialCallOnShift(
   fixed: FixedAssignmentInput,
-  reservations: AutoAssignReservation[]
+  reservations: AutoAssignReservation[],
+  shift: ShiftPart
 ): boolean {
   if (fixed.cancelled) return false;
   if (reasonForFixedType(fixed.type) !== REASON.SPECIAL_CALL) return false;
   const reservation = resolveFixedReservation(fixed, reservations);
-  return parseAssignShiftPart(reservation?.shift) === "3부";
+  return parseAssignShiftPart(reservation?.shift) === shift;
+}
+
+export function isDeferredSecondShiftChageun(
+  fixed: FixedAssignmentInput,
+  reservations: AutoAssignReservation[]
+): boolean {
+  return isDeferredSpecialCallOnShift(fixed, reservations, "2부");
+}
+
+export function isDeferredThirdShiftChageun(
+  fixed: FixedAssignmentInput,
+  reservations: AutoAssignReservation[]
+): boolean {
+  return isDeferredSpecialCallOnShift(fixed, reservations, "3부");
 }
 
 function unknownCaddyStub(id: number): AutoAssignCaddy {
@@ -3303,13 +3356,18 @@ export function computeAutoAssignmentsV1(input: {
   ]);
 
   // 0) 고정배치 / 특별찾근 (최우선)
-  // 3부 SPECIAL_CALL만 remaining 3부 큐로 미룬다. 마샬/당번/일반 FIXED는 지정 예약 점유.
+  // 2부·3부 SPECIAL_CALL만 부별 우선순위 큐로 미룬다. 마샬/당번/일반 FIXED·1부 찾근은 지정 예약 점유.
   const incomingFixed = input.fixedAssignments || [];
   const deferredThirdChageun = incomingFixed.filter((row) =>
     isDeferredThirdShiftChageun(row, eligible)
   );
+  const deferredSecondChageun = incomingFixed.filter((row) =>
+    isDeferredSecondShiftChageun(row, eligible)
+  );
   const pinnedFixed = incomingFixed.filter(
-    (row) => !isDeferredThirdShiftChageun(row, eligible)
+    (row) =>
+      !isDeferredThirdShiftChageun(row, eligible) &&
+      !isDeferredSecondShiftChageun(row, eligible)
   );
   const fixed = assignFixedPriority({
     date,
@@ -3318,13 +3376,18 @@ export function computeAutoAssignmentsV1(input: {
     fixedAssignments: pinnedFixed,
   });
   const caddyById = new Map(caddyDirectory.map((c) => [c.id, c]));
-  const chageunForThird = dedupeCaddies(
-    deferredThirdChageun
-      .map((row) => caddyById.get(row.caddyId))
-      .filter((caddy): caddy is AutoAssignCaddy => !!caddy)
-      .filter((caddy) => !fixed.assignedCaddyIds.has(caddy.id))
+  const chageunFromFixed = (rows: FixedAssignmentInput[]) =>
+    dedupeCaddies(
+      rows
+        .map((row) => caddyById.get(row.caddyId))
+        .filter((caddy): caddy is AutoAssignCaddy => !!caddy)
+        .filter((caddy) => !fixed.assignedCaddyIds.has(caddy.id))
+    );
+  const chageunForThird = chageunFromFixed(deferredThirdChageun);
+  const chageunForSecond = chageunFromFixed(deferredSecondChageun);
+  const chageunIds = new Set(
+    [...chageunForThird, ...chageunForSecond].map((caddy) => caddy.id)
   );
-  const chageunIds = new Set(chageunForThird.map((c) => c.id));
 
   const fixedIds = new Set([...fixed.excludedCaddyIds, ...chageunIds]);
 
@@ -3426,6 +3489,7 @@ export function computeAutoAssignmentsV1(input: {
     min54HoleGapMinutes: input.min54HoleGapMinutes,
     specialSupport: specialSupportByShift["1부"] || [],
     shift2Support: specialSupportByShift["2부"] || [],
+    chageunForSecond,
   });
 
   const pinnedFixedAssignments = fixed.assignments;
@@ -3463,6 +3527,7 @@ export function computeAutoAssignmentsV1(input: {
       ...oneMakAssignments,
       ...slotted.oneThreeAssignments,
       ...slotted.twoThreeAssignments,
+      ...slotted.shift2ChageunAssignments,
       ...slotted.specialSupportAssignments,
     ],
     shift1ProtectedTailKeys: shift1AutoPlacement
@@ -3511,6 +3576,7 @@ export function computeAutoAssignmentsV1(input: {
   );
   const fixedAssignments = [
     ...pinnedFixedAssignments,
+    ...slotted.shift2ChageunAssignments,
     ...thirdChageunAssignments,
   ];
   const specialUnassigned = [
@@ -3532,6 +3598,7 @@ export function computeAutoAssignmentsV1(input: {
     ...oneTwoAssignments,
     ...oneMakAssignments,
     ...slotted.twoThreeAssignments,
+    ...slotted.shift2ChageunAssignments,
     ...slotted.specialSupportAssignments,
   ]) {
     byShift[a.shift].assigned += 1;

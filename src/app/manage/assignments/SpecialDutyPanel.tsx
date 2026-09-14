@@ -692,7 +692,7 @@ export const SpecialDutyPanel = memo(function SpecialDutyPanel({
               {activeKind === "FIFTY_FOUR"
                 ? "1부 세 번째 자리부터 자동 배치"
                 : activeKind === "TWO_THREE"
-                  ? "2부는 앞 2자리 다음, 3부는 3부반 원번 다음·찾근 앞"
+                  ? "2부는 앞 2자리·찾근 다음, 3부는 3부반 원번 다음·찾근 앞"
                 : "1부는 앞 2자리·54홀 다음, 2부는 HOUSE 첫근무 종료 지점"}
             </div>
           ) : null}

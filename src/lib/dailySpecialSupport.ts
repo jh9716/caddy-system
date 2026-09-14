@@ -319,7 +319,7 @@ export function resolveSupportKind(row: {
  * 후출마샬 1부 지원을 1막 특수근무로 변환하거나 배치하면 안 된다.
  *
  * [2부 지원]
- * 보호 1·2 → (기존 2·3) → 찾근 핀 → 원번 전부 소진 → 지원 → 1·2부 투.
+ * 보호 1·2 → 찾근(SPECIAL_CALL, 지정 예약 무시) → 2·3 → 원번 전부 소진 → 지원 → 1·2부 투.
  * 조출마샬(MARSHAL_SUPPORT+SHIFT_2) / 조장(LEADER_SUPPORT+SHIFT_2)은 2부 막.
  *
  * [휴무지원 3부]
