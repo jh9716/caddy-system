@@ -308,7 +308,8 @@ export function resolveSupportKind(row: {
 }
 
 /**
- * 단일부 지원만 엔진 큐에 넣는다. ONE_TWO / FIFTY_FOUR / 54지원 / 찾근 kind는 저장만.
+ * 단일부 지원만 부별 엔진 큐에 넣는다. FIFTY_FOUR / 54지원 kind는 저장만.
+ * ONE_TWO는 이 함수가 아니라 isEngineEligibleOneTwoSupportRecord + 전용 큐.
  *
  * [후출마샬 1부 지원]
  * 후출마샬이 1부 지원으로 등록된 경우:
@@ -325,7 +326,7 @@ export function resolveSupportKind(row: {
  * [휴무지원 3부]
  * 1·3부 → 주중/주말반 → 휴무지원 → 3부반 원번 → 2·3부 → 찾근 → HOUSE
  *
- * 3부 마샬지원/조장지원, 1·2·54 지원은 이번 PR에서 자동배치하지 않는다.
+ * 3부 마샬지원/조장지원, 54 지원은 이번 PR에서 자동배치하지 않는다.
  */
 export function isEngineEligibleSupportRecord(row: {
   kind?: unknown;
@@ -345,6 +346,41 @@ export function isEngineEligibleSupportRecord(row: {
   if (kind === "LEADER_SUPPORT") return pattern === "SHIFT_2";
   if (kind === "OFF_SUPPORT") return pattern === "SHIFT_3";
   return false;
+}
+
+const ONE_TWO_SUPPORT_KINDS = new Set<DailySpecialSupportKind>([
+  "CHAGEUN",
+  "SPECIAL_SUPPORT",
+  "OFF_SUPPORT",
+  "MARSHAL_SUPPORT",
+  "LEADER_SUPPORT",
+]);
+
+/** 1·2부 지원 전용 linked id. 특수근무 12-/23-/13-/54H- 와 충돌하지 않는다. */
+export const ONE_TWO_SUPPORT_PAIR_PREFIX = "SUP12-";
+
+export function oneTwoSupportPairId(caddyId: number): string {
+  return `${ONE_TWO_SUPPORT_PAIR_PREFIX}${caddyId}`;
+}
+
+export function isOneTwoSupportPairId(pairId: unknown): boolean {
+  return String(pairId || "").startsWith(ONE_TWO_SUPPORT_PAIR_PREFIX);
+}
+
+/**
+ * DailySpecialSupport.workPattern=ONE_TWO 만 1부+2부 linked 배치 대상.
+ * SpecialDuty.ONE_TWO 로 변환하지 않는다. FIFTY_FOUR_SUPPORT 는 제외.
+ */
+export function isEngineEligibleOneTwoSupportRecord(row: {
+  kind?: unknown;
+  workPattern?: unknown;
+  shift?: unknown;
+}): boolean {
+  const kind = resolveSupportKind(row);
+  const pattern = resolveSupportWorkPattern(row);
+  if (pattern !== "ONE_TWO") return false;
+  if (kind === "FIFTY_FOUR_SUPPORT") return false;
+  return ONE_TWO_SUPPORT_KINDS.has(kind);
 }
 
 type SupportMetaCaddy = {
@@ -374,6 +410,7 @@ export function isShift2EndSupport(caddy: SupportMetaCaddy): boolean {
  * 마샬/조장/휴무/찾근/54는 여기 넣지 않는다.
  */
 export function isShift2MidSupport(caddy: SupportMetaCaddy): boolean {
+  if (caddy.supportWorkPattern === "ONE_TWO") return false;
   const kind = caddy.supportKind;
   return kind == null || kind === "" || kind === "SPECIAL_SUPPORT";
 }
@@ -393,6 +430,7 @@ export function isRegularSequenceTailSupport(
   caddy: SupportMetaCaddy,
   shift: ShiftPart
 ): boolean {
+  if (caddy.supportWorkPattern === "ONE_TWO") return false;
   const kind = caddy.supportKind;
   if (
     kind === "CHAGEUN" ||
@@ -542,15 +580,21 @@ export function emptySpecialSupportByShift(): Record<ShiftPart, AutoAssignCaddy[
 
 /** 부에 상관없이 특수지원으로 등록된 caddyId. regular HOUSE/THIRD 후보에서 뺀다. */
 export function specialSupportCaddyIds(
-  byShift?: Record<ShiftPart, AutoAssignCaddy[]> | null
+  byShift?: Record<ShiftPart, AutoAssignCaddy[]> | null,
+  extra?: readonly AutoAssignCaddy[] | null
 ): Set<number> {
   const ids = new Set<number>();
-  if (!byShift) return ids;
-  for (const shift of SHIFT_PARTS) {
-    for (const caddy of byShift[shift] || []) {
-      const id = Number(caddy?.id);
-      if (Number.isInteger(id) && id > 0) ids.add(id);
+  if (byShift) {
+    for (const shift of SHIFT_PARTS) {
+      for (const caddy of byShift[shift] || []) {
+        const id = Number(caddy?.id);
+        if (Number.isInteger(id) && id > 0) ids.add(id);
+      }
     }
+  }
+  for (const caddy of extra || []) {
+    const id = Number(caddy?.id);
+    if (Number.isInteger(id) && id > 0) ids.add(id);
   }
   return ids;
 }
@@ -707,6 +751,18 @@ export function groupSupportRecordsByShift(
   return out;
 }
 
+function supportRecordToEngineCaddy(row: SpecialSupportRecord): AutoAssignCaddy {
+  return {
+    id: row.caddyId,
+    name: row.name || "",
+    team: row.team || "",
+    teamOrder: Number(row.teamOrder) || 0,
+    inputOrder: Number(row.sortOrder) || 0,
+    supportKind: resolveSupportKind(row),
+    supportWorkPattern: resolveSupportWorkPattern(row),
+  };
+}
+
 /** UI byShift 레코드를 엔진 보충 큐로 변환. blocked 행은 제외. */
 export function engineQueuesFromSupportRecords(
   byShift:
@@ -714,22 +770,25 @@ export function engineQueuesFromSupportRecords(
     | null
     | undefined
 ): Record<ShiftPart, AutoAssignCaddy[]> {
-  // 단일부 엔진 대상만. 1·2/54/찾근 kind/3부 마샬·조장은 isEngineEligible에서 제외.
+  // 단일부 엔진 대상만. 54/찾근 kind/3부 마샬·조장은 isEngineEligible에서 제외.
+  // ONE_TWO는 oneTwoSupportQueueFromRecords.
   const next = emptySpecialSupportByShift();
   for (const part of SHIFT_PARTS) {
     next[part] = (byShift?.[part] || [])
       .filter((row) => !row.blocked && isEngineEligibleSupportRecord(row))
-      .map((row) => ({
-        id: row.caddyId,
-        name: row.name || "",
-        team: row.team || "",
-        teamOrder: Number(row.teamOrder) || 0,
-        inputOrder: Number(row.sortOrder) || 0,
-        supportKind: resolveSupportKind(row),
-        supportWorkPattern: resolveSupportWorkPattern(row),
-      }));
+      .map(supportRecordToEngineCaddy);
   }
   return next;
+}
+
+/** workPattern=ONE_TWO 지원 큐. 부별 SHIFT 큐와 분리하고 sortOrder를 유지한다. */
+export function oneTwoSupportQueueFromRecords(
+  rows: readonly SpecialSupportRecord[] | null | undefined
+): AutoAssignCaddy[] {
+  return [...(rows || [])]
+    .filter((row) => !row.blocked && isEngineEligibleOneTwoSupportRecord(row))
+    .sort(compareSupportRecordsForDisplay)
+    .map(supportRecordToEngineCaddy);
 }
 
 export function uniqueCaddyIds(ids: readonly unknown[]): number[] {

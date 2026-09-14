@@ -40,6 +40,7 @@ import {
   engineQueuesFromSupportRecords,
   groupSupportRecordsByKindPattern,
   groupSupportRecordsByShift,
+  isEngineEligibleOneTwoSupportRecord,
   isEngineEligibleSupportRecord,
   shiftCompatFromWorkPattern,
   supportBoardBadgeLabels,
@@ -1205,7 +1206,12 @@ section("지원근무 V2 유형/패턴/sortOrder/엔진 제외");
       !isEngineEligibleSupportRecord(rows[4]) &&
       !isEngineEligibleSupportRecord(rows[5]) &&
       !isEngineEligibleSupportRecord(rows[6]),
-    "찾근 kind / 휴무 1·2 / 마샬 3부 / 조장 1부 / 54는 엔진 제외"
+    "찾근 kind / 휴무 1·2 / 마샬 3부 / 조장 1부 / 54는 단일부 큐 제외"
+  );
+  assert(
+    isEngineEligibleOneTwoSupportRecord(rows[3]) &&
+      !isEngineEligibleOneTwoSupportRecord(rows[6]),
+    "휴무 1·2는 ONE_TWO 큐, 54지원은 제외"
   );
   assert(
     isEngineEligibleSupportRecord(rec("MARSHAL_SUPPORT", "SHIFT_1", 11, 1, "1부")) &&
@@ -1463,8 +1469,9 @@ section("source / UI / migration / 권한");
   assert(/pickNextSpecialSupport/.test(engine), "지원 큐 사용");
   assert(/houseAssigned \+= 1/.test(engine), "정상 houseAssigned 유지");
   assert(
-    /specialSupportByShift: await loadSpecialSupportQueuesForDate/.test(preview),
-    "preview는 서버에서 특수지원을 다시 읽음"
+    /loadSupportEngineQueuesForDate/.test(preview) &&
+      /oneTwoSupport: supportQueues.oneTwoSupport/.test(preview),
+    "preview는 서버에서 단일부+ONE_TWO 지원 큐를 읽음"
   );
   assert(
     /loadSpecialSupportQueuesForDate/.test(reflow) &&
@@ -1480,9 +1487,11 @@ section("source / UI / migration / 권한");
     "특수지원이 CHAGEUN을 재사용하지 않음"
   );
   assert(
-    /isEngineEligibleSupportRecord/.test(supportDomain),
-    "새 유형/1·2/54는 엔진 큐에서 제외"
+    /isEngineEligibleSupportRecord/.test(supportDomain) &&
+      /isEngineEligibleOneTwoSupportRecord/.test(supportDomain),
+    "단일부 큐와 ONE_TWO 큐를 분리"
   );
+  assert(/SUP12-/.test(engine) && /oneTwoSupport/.test(engine), "ONE_TWO 지원 SUP12 pair");
   const schemaText = readSrc("prisma/schema.prisma");
   assert(
     /enum DailySpecialSupportKind/.test(schemaText) &&
