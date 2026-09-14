@@ -134,7 +134,6 @@ function opsDutyStateFromPayload(data: {
     slots: Array.isArray(data.slots) ? (data.slots as OpsDutySlotState[]) : undefined,
   };
 }
-};
 
 import { SpecialDutyPanel, type Shift1StartOption } from "./SpecialDutyPanel";
 import { SpecialSupportPanel } from "./SpecialSupportPanel";
