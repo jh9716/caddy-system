@@ -73,7 +73,7 @@ import {
   type AvailabilityRow,
 } from "@/lib/availabilityEngine";
 import type { DailyAvailabilitySummary } from "@/lib/dailyAvailabilityOverlay";
-import { excludeCaddiesById } from "@/lib/dailyOpsDuty";
+import type { OpsDutySlotState } from "@/lib/opsDutyEffective";
 import {
   COURSE_CODES,
   COURSE_LABELS,
@@ -99,11 +99,48 @@ const COURSE_SHORT: Record<CourseCode, string> = {
   LAKE: "레",
 };
 
+type OpsDutyPanelState = {
+  count: number;
+  byRole?: Record<string, number>;
+  caddyIds: number[];
+  rows?: Array<{
+    caddyId: number;
+    name?: string;
+    team?: string;
+    role?: string;
+    roleKey?: string;
+    overridden?: boolean;
+  }>;
+  slots?: OpsDutySlotState[];
+};
+
+function opsDutyStateFromPayload(data: {
+  count?: unknown;
+  byRole?: Record<string, number>;
+  caddyIds?: unknown;
+  rows?: unknown;
+  slots?: unknown;
+}): OpsDutyPanelState {
+  const rows = Array.isArray(data.rows)
+    ? (data.rows as NonNullable<OpsDutyPanelState["rows"]>)
+    : [];
+  return {
+    count: Number(data.count) || rows.length,
+    byRole: data.byRole,
+    caddyIds: Array.isArray(data.caddyIds)
+      ? (data.caddyIds as number[])
+      : rows.map((row) => row.caddyId),
+    rows,
+    slots: Array.isArray(data.slots) ? (data.slots as OpsDutySlotState[]) : undefined,
+  };
+}
+};
+
 import { SpecialDutyPanel, type Shift1StartOption } from "./SpecialDutyPanel";
 import { SpecialSupportPanel } from "./SpecialSupportPanel";
 import { BoardQuickSheet, LiveChangePanel, LockToggle, SameDayAddSheet, TeamMoveSheet } from "./LiveChangePanel";
 import { CaddyCellEditSheet } from "./CaddyCellEditSheet";
-import { UnavailablePanel } from "./UnavailablePanel";
+import { UnavailablePanel, type OpsDutyEditCaddy } from "./UnavailablePanel";
 import {
   buildUnavailablePanelGroups,
   offCaddiesFromRoster,
@@ -558,17 +595,10 @@ export default function ManageAssignmentsOpsPage() {
   const [opsOffSnapshot, setOpsOffSnapshot] = useState<DraftOffSnapshot | null>(
     null
   );
-  const [opsDutyStored, setOpsDutyStored] = useState<{
-    count: number;
-    byRole?: Record<string, number>;
-    caddyIds: number[];
-    rows?: Array<{
-      caddyId: number;
-      name?: string;
-      team?: string;
-      role?: string;
-    }>;
-  } | null>(null);
+  const [opsDutyStored, setOpsDutyStored] = useState<OpsDutyPanelState | null>(null);
+  const [opsDutyCaddies, setOpsDutyCaddies] = useState<OpsDutyEditCaddy[]>([]);
+  const [opsDutyBusy, setOpsDutyBusy] = useState(false);
+  const [opsDutyError, setOpsDutyError] = useState<string | null>(null);
   const [opsDutyPreview, setOpsDutyPreview] = useState<{
     matchedCount: number;
     reviewCount: number;
@@ -1091,16 +1121,7 @@ export default function ManageAssignmentsOpsPage() {
         );
         const data = await res.json();
         if (!res.ok || cancelled) return;
-        setOpsDutyStored({
-          count: Number(data.count) || 0,
-          byRole: data.byRole,
-          caddyIds: Array.isArray(data.caddyIds)
-            ? data.caddyIds
-            : Array.isArray(data.rows)
-              ? data.rows.map((r: { caddyId: number }) => r.caddyId)
-              : [],
-          rows: Array.isArray(data.rows) ? data.rows : [],
-        });
+        setOpsDutyStored(opsDutyStateFromPayload(data));
       } catch {
         if (!cancelled) setOpsDutyStored(null);
       }
@@ -1486,6 +1507,76 @@ export default function ManageAssignmentsOpsPage() {
     }
   }
 
+  async function refreshOpsDutyPanel() {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+    const res = await fetch(
+      `/api/daily-ops-duties?date=${encodeURIComponent(date)}`,
+      { credentials: "include" }
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || "운영현황 당번 조회 실패");
+    }
+    setOpsDutyStored(opsDutyStateFromPayload(data));
+  }
+
+  async function refreshAvailabilityReadOnly() {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+    const res = await fetch(
+      `/api/availability?date=${encodeURIComponent(date)}`,
+      { credentials: "include" }
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return;
+    setAvailability(
+      data as AvailabilityResult & { dailySummary?: DailyAvailabilitySummary }
+    );
+  }
+
+  async function ensureOpsDutyCaddies() {
+    if (opsDutyCaddies.length) return;
+    const res = await fetch("/api/caddies", { credentials: "include" });
+    const data = await res.json().catch(() => []);
+    if (!res.ok || !Array.isArray(data)) return;
+    setOpsDutyCaddies(
+      data.map((row: { id: number; name?: string; team?: string; employmentStatus?: string }) => ({
+        id: Number(row.id),
+        name: String(row.name || ""),
+        team: row.team,
+        employmentStatus: row.employmentStatus,
+      }))
+    );
+  }
+
+  async function mutateOpsDuty(
+    action: "SET" | "CLEAR" | "RESTORE",
+    roleKey: string,
+    caddyId?: number
+  ) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+    setOpsDutyBusy(true);
+    setOpsDutyError(null);
+    try {
+      const res = await fetch("/api/daily-ops-duties/override", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date, roleKey, action, caddyId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setOpsDutyError(data.error || "저장 실패");
+        return;
+      }
+      setOpsDutyStored(opsDutyStateFromPayload(data));
+      await refreshAvailabilityReadOnly();
+    } catch (e: unknown) {
+      setOpsDutyError(e instanceof Error ? e.message : "저장 실패");
+    } finally {
+      setOpsDutyBusy(false);
+    }
+  }
+
   async function loadAvailability() {
     if (!date) {
       setError("날짜를 선택하세요.");
@@ -1705,14 +1796,7 @@ export default function ManageAssignmentsOpsPage() {
         setError(data.error || "당번 일정 저장 실패");
         return;
       }
-      setOpsDutyStored({
-        count: Number(data.savedCount) || 0,
-        byRole: data.byRole,
-        caddyIds: Array.isArray(data.saved)
-          ? data.saved.map((r: { caddyId: number }) => r.caddyId)
-          : [],
-        rows: Array.isArray(data.saved) ? data.saved : [],
-      });
+      await refreshOpsDutyPanel();
       setOpsDutyPreview(null);
       showToast(`당번·마샬·조장 일정 ${data.savedCount}명 저장`);
       const availForm = new FormData();
@@ -1837,14 +1921,7 @@ export default function ManageAssignmentsOpsPage() {
         setError(data.error || "운영배치 적용 실패");
         return;
       }
-      setOpsDutyStored({
-        count: Number(data.savedCount) || 0,
-        byRole: data.byRole,
-        caddyIds: Array.isArray(data.saved)
-          ? data.saved.map((r: { caddyId: number }) => r.caddyId)
-          : [],
-        rows: Array.isArray(data.saved) ? data.saved : [],
-      });
+      await refreshOpsDutyPanel();
       setOpsDutySheetPreview(null);
       showToast(`운영배치 ${data.savedCount}명 적용`);
       const availForm = new FormData();
@@ -3282,6 +3359,22 @@ export default function ManageAssignmentsOpsPage() {
       sheetOpen={unavailSheetOpen}
       specialDutyGroups={specialDutyGroups}
       specialSupportItems={specialSupportItems}
+      opsDutySlots={opsDutyStored?.slots}
+      opsDutyCaddies={opsDutyCaddies}
+      opsDutyBusy={opsDutyBusy}
+      opsDutyError={opsDutyError}
+      onEnsureOpsDutyCaddies={() => {
+        void ensureOpsDutyCaddies();
+      }}
+      onOpsDutySet={(roleKey, caddyId) => {
+        void mutateOpsDuty("SET", roleKey, caddyId);
+      }}
+      onOpsDutyClear={(roleKey) => {
+        void mutateOpsDuty("CLEAR", roleKey);
+      }}
+      onOpsDutyRestore={(roleKey) => {
+        void mutateOpsDuty("RESTORE", roleKey);
+      }}
       onToggle={() => setUnavailSheetOpen(false)}
       onCollapse={() => setUnavailOpen(false)}
     />
@@ -5156,6 +5249,93 @@ const opsCss = `
     grid-template-columns: 34px minmax(0, 1fr);
     gap: 4px;
     align-items: start;
+  }
+  .ops-unavail-row.is-editable {
+    grid-template-columns: 34px minmax(0, 1fr) auto;
+  }
+  .ops-unavail-row.is-editable.is-leader {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .ops-unavail-slot-main {
+    min-width: 0;
+  }
+  .ops-unavail-edit {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: #2563eb;
+    font-size: 0.64rem;
+    font-weight: 700;
+    padding: 0;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .ops-unavail-edit:disabled {
+    color: #94a3b8;
+    cursor: default;
+  }
+  .ops-unavail-badge.is-manual {
+    background: #eef2ff;
+    border-color: #c7d2fe;
+    color: #3730a3;
+  }
+  .ops-unavail-editor {
+    margin-top: 4px;
+    padding: 6px;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    background: #f8fafc;
+  }
+  .ops-unavail-search {
+    width: 100%;
+    min-height: 28px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 0.72rem;
+  }
+  .ops-unavail-hits {
+    list-style: none;
+    margin: 4px 0 0;
+    padding: 0;
+    display: grid;
+    gap: 2px;
+  }
+  .ops-unavail-hits button {
+    width: 100%;
+    text-align: left;
+    border: 0;
+    background: #fff;
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-size: 0.72rem;
+    cursor: pointer;
+  }
+  .ops-unavail-editor-empty,
+  .ops-unavail-editor-error {
+    margin: 4px 0 0;
+    font-size: 0.64rem;
+  }
+  .ops-unavail-editor-error { color: #b91c1c; }
+  .ops-unavail-editor-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+  }
+  .ops-unavail-editor-actions button {
+    appearance: none;
+    border: 1px solid #cbd5e1;
+    background: #fff;
+    border-radius: 4px;
+    font-size: 0.64rem;
+    font-weight: 700;
+    padding: 2px 6px;
+    cursor: pointer;
+  }
+  .ops-unavail-editor-actions button:disabled {
+    color: #94a3b8;
+    cursor: default;
   }
   .ops-unavail-k {
     font-size: 0.64rem;

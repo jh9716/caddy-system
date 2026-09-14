@@ -25,7 +25,7 @@ export const DUTY_ROLE_LABELS: Record<DutyRoleKind, string> = {
   leader: "조장",
 };
 
-const ROLE_BY_KEY: Record<string, DutyRoleKind> = {
+export const DUTY_ROLE_KEY_KIND: Record<string, DutyRoleKind> = {
   당번_조출_1: "duty_am",
   당번_조출_2: "duty_am",
   당번_후출_1: "duty_pm",
@@ -35,6 +35,25 @@ const ROLE_BY_KEY: Record<string, DutyRoleKind> = {
   마샬_후출_1: "marshal_pm",
   조장_1: "leader",
 };
+
+export const OPS_DUTY_ROLE_KEYS = [
+  "당번_조출_1",
+  "당번_조출_2",
+  "당번_후출_1",
+  "당번_후출_2",
+  "마샬_조출_1",
+  "마샬_조출_2",
+  "마샬_후출_1",
+  "조장_1",
+] as const;
+
+export type OpsDutyRoleKey = (typeof OPS_DUTY_ROLE_KEYS)[number];
+
+export function isOpsDutyRoleKey(value: unknown): value is OpsDutyRoleKey {
+  return OPS_DUTY_ROLE_KEYS.includes(String(value) as OpsDutyRoleKey);
+}
+
+const ROLE_BY_KEY = DUTY_ROLE_KEY_KIND;
 
 export type DutyExcelEntry = {
   kind: DutyRoleKind;
