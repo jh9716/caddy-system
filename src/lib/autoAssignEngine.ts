@@ -173,6 +173,9 @@ export type AutoAssignCaddy = {
    * 있으면 조순/이름순 대신 이 값을 사용한다.
    */
   inputOrder?: number;
+  /** 지원근무 V2 표시용. 엔진 배치 정책에는 쓰지 않음 */
+  supportKind?: string;
+  supportWorkPattern?: string;
 };
 
 export type AutoAssignReservation = {
@@ -246,6 +249,9 @@ export type AutoAssignmentRow = {
    * 명시적 locked=true가 아니면 3부 우선순위로 재배치한다.
    */
   locked?: boolean;
+  /** 지원근무 유형/패턴 표시. 배치 위치 계산과 무관 */
+  supportKind?: string;
+  supportWorkPattern?: string;
 };
 
 export type UnassignedReservationRow = {
@@ -1524,6 +1530,12 @@ export function assignSpecialDutySlots(input: {
       pairId,
       kind,
       locked: lockSpecial,
+      ...(kind === "specialSupport"
+        ? {
+            supportKind: caddy.supportKind,
+            supportWorkPattern: caddy.supportWorkPattern,
+          }
+        : {}),
     });
   };
 
@@ -2495,6 +2507,8 @@ function specialSupportAssignmentRow(input: {
     pairId: null,
     kind: "specialSupport",
     locked: false,
+    supportKind: input.caddy.supportKind,
+    supportWorkPattern: input.caddy.supportWorkPattern,
   };
 }
 

@@ -258,6 +258,12 @@ function parseCaddy(raw: unknown, label: string): AutoAssignCaddy {
     ...(o.inputOrder != null && Number.isFinite(Number(o.inputOrder))
       ? { inputOrder: Number(o.inputOrder) }
       : {}),
+    ...(o.supportKind != null && String(o.supportKind).trim() !== ""
+      ? { supportKind: String(o.supportKind) }
+      : {}),
+    ...(o.supportWorkPattern != null && String(o.supportWorkPattern).trim() !== ""
+      ? { supportWorkPattern: String(o.supportWorkPattern) }
+      : {}),
   };
 }
 
@@ -332,6 +338,12 @@ function parseAssignment(raw: unknown, label: string): AutoAssignmentRow {
     ...(o.pairId !== undefined ? { pairId: o.pairId as string | null } : {}),
     ...(o.note !== undefined ? { note: o.note as string | null } : {}),
     ...(typeof o.locked === "boolean" ? { locked: o.locked } : {}),
+    ...(o.supportKind != null && String(o.supportKind).trim() !== ""
+      ? { supportKind: String(o.supportKind) }
+      : {}),
+    ...(o.supportWorkPattern != null && String(o.supportWorkPattern).trim() !== ""
+      ? { supportWorkPattern: String(o.supportWorkPattern) }
+      : {}),
   };
 }
 

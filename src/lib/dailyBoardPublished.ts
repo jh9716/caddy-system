@@ -86,6 +86,8 @@ export type PublishedPlacementV1 = {
   twoWork: boolean;
   chageun: boolean;
   specialSupport: boolean;
+  supportKind?: string;
+  supportWorkPattern?: string;
   sequenceIndex: number;
 };
 
@@ -219,6 +221,11 @@ function parsePlacement(raw: unknown, label: string): PublishedPlacementV1 {
     chageun: o.chageun === true,
     specialSupport:
       o.specialSupport === true || String(o.kind) === "specialSupport",
+    supportKind: o.supportKind == null || o.supportKind === "" ? undefined : String(o.supportKind),
+    supportWorkPattern:
+      o.supportWorkPattern == null || o.supportWorkPattern === ""
+        ? undefined
+        : String(o.supportWorkPattern),
     sequenceIndex: asFiniteInt(o.sequenceIndex ?? 0, `${label}.sequenceIndex`),
   };
 }
@@ -329,6 +336,8 @@ function placementFromAssignment(
     twoWork: marks.twoWork,
     chageun: marks.chageun,
     specialSupport: marks.specialSupport,
+    supportKind: row.supportKind || row.caddy?.supportKind,
+    supportWorkPattern: row.supportWorkPattern || row.caddy?.supportWorkPattern,
     sequenceIndex: Number.isInteger(row.sequenceIndex) ? row.sequenceIndex : 0,
   };
 }

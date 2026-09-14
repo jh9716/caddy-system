@@ -114,7 +114,7 @@ import {
   buildUnavailableBoardView,
   pickOpsStatusSummary,
 } from "@/lib/unavailablePanelView";
-import { emptySpecialSupportByShift } from "@/lib/dailySpecialSupport";
+import { emptySpecialSupportByShift, supportBoardBadgeLabels } from "@/lib/dailySpecialSupport";
 import { SPECIAL_SETTINGS_STALE_MESSAGE } from "@/lib/dailySpecialDuty";
 import { isThirdBandTeam, THIRD_BAND_TEAMS } from "@/lib/caddyManage";
 import { rotateThirdQueueFromStartTeam } from "@/lib/thirdWeeklyRotation";
@@ -253,6 +253,8 @@ function AssignmentMarkBadges({
   limousine,
   driving,
   twoThree,
+  supportKind,
+  supportWorkPattern,
 }: {
   twoWork: boolean;
   chageun: boolean;
@@ -261,6 +263,8 @@ function AssignmentMarkBadges({
   limousine?: boolean;
   driving?: boolean;
   twoThree?: boolean;
+  supportKind?: string;
+  supportWorkPattern?: string;
 }) {
   if (
     !twoWork &&
@@ -273,16 +277,25 @@ function AssignmentMarkBadges({
   ) {
     return null;
   }
+  const supportBadges = specialSupport
+    ? supportBoardBadgeLabels(supportKind, supportWorkPattern)
+    : null;
   return (
     <span className="bc-marks">
       {limousine ? <span className="bc-badge limo">리무진</span> : null}
       {driving ? <span className="bc-badge drive">드라이빙</span> : null}
       {twoWork ? <span className="bc-badge two">투</span> : null}
-      {specialSupport ? <span className="bc-badge support">지원</span> : null}
-      {twoThree ? <span className="bc-badge two-three">2·3</span> : null}
+      {supportBadges ? (
+        <>
+          <span className="bc-badge support">{supportBadges.kind}</span>
+          <span className="bc-badge support-pat">{supportBadges.pattern}</span>
+        </>
+      ) : null}
       {chageun ? (
         <span className="bc-badge call">찾근</span>
-      ) : special && !driving && !specialSupport && !twoThree ? (
+      ) : twoThree ? (
+        <span className="bc-badge two-three">2·3</span>
+      ) : special && !driving && !specialSupport ? (
         <span className="bc-special">S</span>
       ) : null}
     </span>
@@ -372,6 +385,8 @@ const BoardAssignedSlots = memo(function BoardAssignedSlots({
                 special={special && row.kind !== "specialSupport"}
                 driving={marks.driving}
                 twoThree={row.kind === "twoThree"}
+                supportKind={row.supportKind || row.caddy.supportKind}
+                supportWorkPattern={row.supportWorkPattern || row.caddy.supportWorkPattern}
               />
             </button>
             {vacant ? null : (
@@ -395,11 +410,20 @@ function SettingsTabHost({
   general,
   special,
   support,
+  recalc,
 }: {
   tabApiRef: MutableRefObject<{ setTab: (tab: SettingsTabId) => void } | null>;
   general: ReactNode;
   special: ReactNode;
   support: ReactNode;
+  recalc?: {
+    visible: boolean;
+    busy?: boolean;
+    disabled?: boolean;
+    onClick: () => void;
+    runningLabel: string;
+    idleLabel: string;
+  };
 }) {
   const [settingsTab, setSettingsTab] = useState<SettingsTabId>("general");
   useEffect(() => {
@@ -440,6 +464,17 @@ function SettingsTabHost({
           지원근무
         </button>
       </div>
+      {recalc?.visible ? (
+        <div className="ops-settings-recalc">
+          <button
+            type="button"
+            disabled={recalc.busy || recalc.disabled}
+            onClick={recalc.onClick}
+          >
+            {recalc.busy ? recalc.runningLabel : recalc.idleLabel}
+          </button>
+        </div>
+      ) : null}
       <div className="ops-settings-pane" hidden={settingsTab !== "general"}>
         {general}
       </div>
@@ -3483,6 +3518,14 @@ export default function ManageAssignmentsOpsPage() {
           <summary>기타 배치 설정</summary>
           <SettingsTabHost
             tabApiRef={settingsTabApiRef}
+            recalc={{
+              visible: Boolean(draft || serverDraftVersionRef.current > 0),
+              busy: loadingRun,
+              disabled: recalcDisabled,
+              onClick: () => void runRecalcDraft(),
+              runningLabel: RECALC_RUNNING_LABEL,
+              idleLabel: "배치 다시 맞추기",
+            }}
             general={
               <>
           <div className="ops-field ops-third-week">
@@ -3666,9 +3709,6 @@ export default function ManageAssignmentsOpsPage() {
             excludedRows={availability?.excluded}
             shift1Options={shift1StartOptions}
             hasDraft={Boolean(draft || serverDraftVersionRef.current > 0)}
-            onRecalcDraft={() => void runRecalcDraft()}
-            recalcBusy={loadingRun}
-            recalcDisabled={recalcDisabled}
             onChanged={() => {
               setSpecialSettingsStale(true);
               showToast(SPECIAL_SETTINGS_STALE_MESSAGE);
@@ -3681,9 +3721,6 @@ export default function ManageAssignmentsOpsPage() {
             excludedRows={availability?.excluded}
             hasDraft={Boolean(draft || serverDraftVersionRef.current > 0)}
             onLoaded={onSpecialSupportLoaded}
-            onRecalcDraft={() => void runRecalcDraft()}
-            recalcBusy={loadingRun}
-            recalcDisabled={recalcDisabled}
             onChanged={() => {
               setSpecialSettingsStale(true);
               showToast(SPECIAL_SETTINGS_STALE_MESSAGE);
@@ -4112,6 +4149,8 @@ export default function ManageAssignmentsOpsPage() {
                               special={special && row.kind !== "specialSupport"}
                               driving={marks.driving}
                               twoThree={row.kind === "twoThree"}
+                              supportKind={row.supportKind || row.caddy.supportKind}
+                              supportWorkPattern={row.supportWorkPattern || row.caddy.supportWorkPattern}
                             />
                           </button>
                           {vacant ? null : (
@@ -5464,6 +5503,10 @@ const opsCss = `
     color: #1e3a8a;
     background: #dbeafe;
   }
+  .bc-badge.support-pat {
+    color: #1e3a8a;
+    background: #eff6ff;
+  }
   .bc-badge.house {
     color: #166534;
     background: #dcfce7;
@@ -6048,6 +6091,24 @@ const opsCss = `
     background: #0f172a;
     color: #fff;
     border-color: #0f172a;
+  }
+  .ops-settings-recalc {
+    margin-top: 8px;
+  }
+  .ops-settings-recalc button {
+    width: 100%;
+    min-height: 36px;
+    border: 1px solid #e2e8f0;
+    background: #fff;
+    color: #0f172a;
+    border-radius: 8px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .ops-settings-recalc button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
   .ops-settings-pane {
     display: grid;

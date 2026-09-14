@@ -98,6 +98,14 @@ export type SpecialDutyConflictCode =
 export const SPECIAL_DUTY_SOFT_OVERRIDE_MESSAGE_SUFFIX = " → 특수근무로 배치";
 export const SPECIAL_DUTY_HARD_BLOCK_MESSAGE_SUFFIX = " — 특수근무 배치 불가";
 
+/** 특수근무 목록용 compact 표시. 데이터/엔진 의미는 그대로. */
+export function specialDutySoftOriginBadge(message: string): string {
+  const origin = String(message || "")
+    .replace(SPECIAL_DUTY_SOFT_OVERRIDE_MESSAGE_SUFFIX, "")
+    .trim();
+  return origin ? `원상태: ${origin}` : "원상태";
+}
+
 export type SpecialDutyConflict = {
   code: SpecialDutyConflictCode;
   message: string;

@@ -15,6 +15,7 @@ import {
   renumberSortOrders,
   unavailableReasonsFromRows,
   SPECIAL_DUTY_CHANGED_MESSAGE,
+  specialDutySoftOriginBadge,
   type DailySpecialKind,
   type SpecialDutyAnchors,
   type SpecialDutyConflict,
@@ -33,10 +34,7 @@ import {
 } from "@/lib/specialPlacement";
 import { resolveCourseCode } from "@/lib/autoAssignEngine";
 import { COURSE_LABELS } from "@/lib/reservationParser";
-import {
-  RECALC_RUNNING_LABEL,
-  type Shift1StartOption,
-} from "@/lib/assignmentDraft";
+import { type Shift1StartOption } from "@/lib/assignmentDraft";
 
 export type { Shift1StartOption };
 
@@ -87,18 +85,12 @@ export const SpecialDutyPanel = memo(function SpecialDutyPanel({
   shift1Options = [],
   hasDraft,
   onChanged,
-  onRecalcDraft,
-  recalcBusy,
-  recalcDisabled,
 }: {
   date: string;
   excludedRows?: Array<{ id: number; excludedReasons?: string[] | null }>;
   shift1Options?: Shift1StartOption[];
   hasDraft?: boolean;
   onChanged?: () => void;
-  onRecalcDraft?: () => void;
-  recalcBusy?: boolean;
-  recalcDisabled?: boolean;
 }) {
   const [groups, setGroups] = useState<GroupPayload[]>([]);
   const [anchors, setAnchors] = useState<SpecialDutyAnchors>(EMPTY_ANCHORS);
@@ -716,18 +708,20 @@ export const SpecialDutyPanel = memo(function SpecialDutyPanel({
                     <div className="sd-who">
                       <strong>{formatCaddyLabel(item)}</strong>
                       {item.conflicts?.length
-                        ? item.conflicts.map((c, i) => (
-                            <em
-                              key={`${c.code}-${i}`}
-                              className={
-                                c.code === "SOFT_OVERRIDE"
-                                  ? "sd-override"
-                                  : "sd-warn"
-                              }
-                            >
-                              {c.message}
-                            </em>
-                          ))
+                        ? item.conflicts.map((c, i) =>
+                            c.code === "SOFT_OVERRIDE" ? (
+                              <span
+                                key={`${c.code}-${i}`}
+                                className="sd-override sd-origin-badge"
+                              >
+                                {specialDutySoftOriginBadge(c.message)}
+                              </span>
+                            ) : (
+                              <em key={`${c.code}-${i}`} className="sd-warn">
+                                {c.message}
+                              </em>
+                            )
+                          )
                         : null}
                     </div>
                     <div className="sd-ops">
@@ -769,20 +763,7 @@ export const SpecialDutyPanel = memo(function SpecialDutyPanel({
             </button>
           ) : null}
         </div>
-      ) : null}
-
-      {hasDraft ? (
-        <div className="sd-recalc">
-          <button
-            type="button"
-            className="sd-recalc-btn"
-            disabled={recalcBusy || recalcDisabled || !onRecalcDraft}
-            onClick={() => onRecalcDraft?.()}
-          >
-            {recalcBusy ? RECALC_RUNNING_LABEL : "배치 다시 맞추기"}
-          </button>
-        </div>
-      ) : null}
+          ) : null}
 
       {modalOpen ? (
         <div className="sd-modal" role="dialog" aria-modal="true">
@@ -1068,9 +1049,20 @@ export const SpecialDutyPanel = memo(function SpecialDutyPanel({
           font-size: 0.72rem;
         }
         .sd-override {
-          color: #0369a1;
+          display: inline-flex;
+          align-self: flex-start;
+          color: #334155;
+          background: #e2e8f0;
           font-style: normal;
-          font-size: 0.72rem;
+          font-size: 0.68rem;
+          font-weight: 700;
+          line-height: 1;
+          padding: 3px 6px;
+          border-radius: 6px;
+        }
+        .sd-origin-badge {
+          color: #334155;
+          background: #e2e8f0;
         }
         .sd-ops {
           grid-column: 1 / -1;
@@ -1145,18 +1137,6 @@ export const SpecialDutyPanel = memo(function SpecialDutyPanel({
           background: #fff;
         }
         .sd-save { width: 100%; margin: 6px 0; }
-        .sd-recalc { margin-top: 10px; }
-        .sd-recalc-btn {
-          width: 100%;
-          min-height: 40px;
-          border: 0;
-          border-radius: 8px;
-          background: #0f172a;
-          color: #fff;
-          font-weight: 700;
-          cursor: pointer;
-        }
-        .sd-recalc-btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .sd-kind-save { margin: 0; }
         .sd-selected {
           margin: 8px 0;
