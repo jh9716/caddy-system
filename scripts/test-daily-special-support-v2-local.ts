@@ -277,6 +277,71 @@ async function main() {
         "레거시 shift 호환 헬퍼"
       );
     }
+
+    section("OFF_SUPPORT vs SPECIAL_SUPPORT 분리");
+    {
+      await replaceDailySpecialSupportGroup({
+        date: DATE,
+        kind: "SPECIAL_SUPPORT",
+        workPattern: "SHIFT_1",
+        caddyIds: [ids[1]!],
+      });
+      await replaceDailySpecialSupportGroup({
+        date: DATE,
+        kind: "OFF_SUPPORT",
+        workPattern: "SHIFT_1",
+        caddyIds: [ids[6]!],
+      });
+      const both = await listDailySpecialSupportRecords(DATE);
+      const special = both.filter(
+        (row) => row.kind === "SPECIAL_SUPPORT" && row.workPattern === "SHIFT_1"
+      );
+      const offShift1 = both.filter(
+        (row) => row.kind === "OFF_SUPPORT" && row.workPattern === "SHIFT_1"
+      );
+      assert(
+        special.map((row) => row.caddyId).join(",") === `${ids[1]}`,
+        "특수지원+1부 저장"
+      );
+      assert(
+        offShift1.map((row) => row.caddyId).join(",") === `${ids[6]}`,
+        "휴무지원+1부 저장"
+      );
+      assert(
+        special[0]?.kind === "SPECIAL_SUPPORT" &&
+          offShift1[0]?.kind === "OFF_SUPPORT",
+        "두 kind가 캐디를 섞지 않음"
+      );
+      const payload = await buildDailySpecialSupportPayload(DATE);
+      assert(
+        (payload.countsByKind?.SPECIAL_SUPPORT || 0) >= 1 &&
+          (payload.countsByKind?.OFF_SUPPORT || 0) >= 1,
+        "종류 필터 카운트 분리"
+      );
+      assert(
+        both.some((row) => row.kind === "SPECIAL_SUPPORT"),
+        "기존 SPECIAL_SUPPORT 조회 유지"
+      );
+
+      await replaceDailySpecialSupportGroup({
+        date: DATE,
+        kind: "OFF_SUPPORT",
+        workPattern: "SHIFT_1",
+        caddyIds: [ids[1]!],
+      });
+      const afterMove = await listDailySpecialSupportRecords(DATE);
+      const moved = afterMove.find((row) => row.caddyId === ids[1]);
+      assert(
+        moved?.kind === "OFF_SUPPORT" && moved.workPattern === "SHIFT_1",
+        "같은 부 다른 kind 저장은 요청 kind로 이동"
+      );
+      assert(
+        !afterMove.some(
+          (row) => row.caddyId === ids[1] && row.kind === "SPECIAL_SUPPORT"
+        ),
+        "이동 후 특수로 남지 않음"
+      );
+    }
   } finally {
     setPublishedOffSheetLoaderForTests(null);
     await cleanup(ids);

@@ -8,7 +8,6 @@ import {
   DAILY_SPECIAL_SUPPORT_KIND_LABELS,
   DAILY_SPECIAL_SUPPORT_WORK_PATTERNS,
   DAILY_SPECIAL_SUPPORT_WORK_PATTERN_LABELS,
-  DEFAULT_SPECIAL_SUPPORT_KIND,
   SPECIAL_SUPPORT_CHANGED_MESSAGE,
   displaySupportRecords,
   engineQueuesFromSupportRecords,
@@ -16,6 +15,7 @@ import {
   resolveSupportKind,
   resolveSupportWorkPattern,
   sameSupportGroup,
+  supportListBadgeLabels,
   type DailySpecialSupportKind,
   type DailySpecialSupportWorkPattern,
   type SpecialSupportRecord,
@@ -92,8 +92,8 @@ export const SpecialSupportPanel = memo(function SpecialSupportPanel({
   const [error, setError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [filterKind, setFilterKind] = useState<FilterKind>("ALL");
-  const [modalKind, setModalKind] = useState<DailySpecialSupportKind>(
-    DEFAULT_SPECIAL_SUPPORT_KIND
+  const [modalKind, setModalKind] = useState<DailySpecialSupportKind | null>(
+    null
   );
   const [modalPattern, setModalPattern] =
     useState<DailySpecialSupportWorkPattern>("SHIFT_1");
@@ -161,7 +161,7 @@ export const SpecialSupportPanel = memo(function SpecialSupportPanel({
   const candidates = useMemo(() => {
     const fromApi = payload?.candidates || [];
     const registered = new Set(
-      groupCaddyIds(items, modalKind, modalPattern)
+      modalKind ? groupCaddyIds(items, modalKind, modalPattern) : []
     );
     const source = fromApi.length
       ? fromApi
@@ -192,9 +192,7 @@ export const SpecialSupportPanel = memo(function SpecialSupportPanel({
 
   async function openModal() {
     setSelected(new Set());
-    setModalKind(
-      filterKind === "ALL" ? DEFAULT_SPECIAL_SUPPORT_KIND : filterKind
-    );
+    setModalKind(filterKind === "ALL" ? null : filterKind);
     setModalPattern("SHIFT_1");
     setModalOpen(true);
     if (!(payload?.candidates && payload.candidates.length)) {
@@ -250,6 +248,10 @@ export const SpecialSupportPanel = memo(function SpecialSupportPanel({
   }
 
   async function addSelected() {
+    if (!modalKind) {
+      setError("지원 종류를 선택하세요.");
+      return;
+    }
     const current = groupCaddyIds(items, modalKind, modalPattern);
     const merged = [...current];
     for (const id of selected) {
@@ -341,8 +343,11 @@ export const SpecialSupportPanel = memo(function SpecialSupportPanel({
       ) : (
         <ol className="ss-list">
           {visibleRows.map((row, index) => {
-            const kind = resolveSupportKind(row);
-            const pattern = resolveSupportWorkPattern(row);
+            const badges = supportListBadgeLabels(
+              row.kind,
+              row.workPattern,
+              row.shift
+            );
             const prev = visibleRows[index - 1];
             const next = visibleRows[index + 1];
             const canUp = Boolean(prev && sameSupportGroup(row, prev));
@@ -353,12 +358,8 @@ export const SpecialSupportPanel = memo(function SpecialSupportPanel({
                 <span className="ss-who">
                   <span className="ss-name">{formatCaddyLabel(row)}</span>
                   <span className="ss-badges">
-                    <span className="ss-badge kind">
-                      {DAILY_SPECIAL_SUPPORT_KIND_CHIP_LABELS[kind]}
-                    </span>
-                    <span className="ss-badge pat">
-                      {DAILY_SPECIAL_SUPPORT_WORK_PATTERN_LABELS[pattern]}
-                    </span>
+                    <span className="ss-badge kind">{badges.kind}</span>
+                    <span className="ss-badge pat">{badges.pattern}</span>
                   </span>
                 </span>
                 <span className="ss-ops">
@@ -406,6 +407,7 @@ export const SpecialSupportPanel = memo(function SpecialSupportPanel({
                   key={item}
                   type="button"
                   className={modalKind === item ? "on" : ""}
+                  aria-pressed={modalKind === item}
                   onClick={() => setModalKind(item)}
                 >
                   {DAILY_SPECIAL_SUPPORT_KIND_LABELS[item]}
@@ -427,9 +429,9 @@ export const SpecialSupportPanel = memo(function SpecialSupportPanel({
             </div>
             <div className="ss-step">3. 캐디 선택</div>
             <p className="ss-hint">
-              {DAILY_SPECIAL_SUPPORT_KIND_LABELS[modalKind]} ·{" "}
-              {DAILY_SPECIAL_SUPPORT_WORK_PATTERN_LABELS[modalPattern]} · 추가{" "}
-              {selected.size}명. 병가·결근·휴직·퇴사는 목록에 없습니다.
+              {modalKind
+                ? `${DAILY_SPECIAL_SUPPORT_KIND_LABELS[modalKind]} · ${DAILY_SPECIAL_SUPPORT_WORK_PATTERN_LABELS[modalPattern]} · 추가 ${selected.size}명. 병가·결근·휴직·퇴사는 목록에 없습니다.`
+                : "지원 종류를 먼저 고르세요. 병가·결근·휴직·퇴사는 목록에 없습니다."}
             </p>
             {candidates.length === 0 ? (
               <div className="ss-empty">이 날짜에 지원 가능한 제외 캐디가 없습니다.</div>
@@ -456,7 +458,11 @@ export const SpecialSupportPanel = memo(function SpecialSupportPanel({
               </ul>
             )}
             <div className="ss-actions">
-              <button type="button" disabled={busy} onClick={() => void addSelected()}>
+              <button
+                type="button"
+                disabled={busy || !modalKind || selected.size === 0}
+                onClick={() => void addSelected()}
+              >
                 {busy ? "저장 중…" : "저장"}
               </button>
             </div>

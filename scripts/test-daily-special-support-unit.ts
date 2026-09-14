@@ -43,8 +43,12 @@ import {
   isEngineEligibleSupportRecord,
   shiftCompatFromWorkPattern,
   supportBoardBadgeLabels,
+  supportListBadgeLabels,
   displaySupportRecords,
   sameSupportGroup,
+  parseSupportKindInput,
+  parseSupportWorkPatternInput,
+  resolveDailySpecialSupportPut,
   type SpecialSupportRecord,
 } from "../src/lib/dailySpecialSupport";
 import { boardAssignmentMarks } from "../src/lib/assignmentBoardView";
@@ -1232,6 +1236,70 @@ section("지원근무 V2 유형/패턴/sortOrder/엔진 제외");
     supportBoardBadgeLabels(undefined, undefined).kind === "특",
     "메타 없는 기존 배치는 특"
   );
+  const listOff = supportListBadgeLabels("OFF_SUPPORT", "SHIFT_1");
+  const listSpecial = supportListBadgeLabels("SPECIAL_SUPPORT", "SHIFT_1");
+  assert(
+    listOff.kind === "휴무" && listOff.pattern === "1부",
+    "휴무지원 목록 뱃지 [휴무] [1부]"
+  );
+  assert(
+    listSpecial.kind === "특수" && listSpecial.pattern === "1부",
+    "특수지원 목록 뱃지 [특수] [1부]"
+  );
+  assert(
+    displaySupportRecords(rows, "OFF_SUPPORT").every(
+      (row) => row.kind === "OFF_SUPPORT"
+    ) &&
+      displaySupportRecords(rows, "SPECIAL_SUPPORT").every(
+        (row) => row.kind === "SPECIAL_SUPPORT"
+      ),
+    "종류 필터가 OFF/SPECIAL을 섞지 않음"
+  );
+  assert(counts.OFF_SUPPORT === 1 && counts.SPECIAL_SUPPORT === 2, "휴무/특수 카운트 분리");
+  assert(parseSupportKindInput("휴무지원") === "OFF_SUPPORT", "휴무지원 라벨 → OFF_SUPPORT");
+  assert(parseSupportKindInput("휴무") === "OFF_SUPPORT", "휴무 칩 → OFF_SUPPORT");
+  assert(parseSupportKindInput("특수지원") === "SPECIAL_SUPPORT", "특수지원 라벨");
+  assert(parseSupportKindInput("특수") === "SPECIAL_SUPPORT", "특수 칩");
+  assert(parseSupportWorkPatternInput("1부") === "SHIFT_1", "1부 라벨 → SHIFT_1");
+  const putOff = resolveDailySpecialSupportPut({
+    kind: "OFF_SUPPORT",
+    workPattern: "SHIFT_1",
+  });
+  assert(
+    putOff.mode === "v2" &&
+      putOff.mode === "v2" &&
+      putOff.kind === "OFF_SUPPORT" &&
+      putOff.workPattern === "SHIFT_1",
+    "OFF_SUPPORT PUT은 v2 유지"
+  );
+  const putOffLabel = resolveDailySpecialSupportPut({
+    kind: "휴무지원",
+    workPattern: "1부",
+  });
+  assert(
+    putOffLabel.mode === "v2" &&
+      putOffLabel.kind === "OFF_SUPPORT" &&
+      putOffLabel.workPattern === "SHIFT_1",
+    "휴무지원+1부 라벨 PUT"
+  );
+  const putKindOnly = resolveDailySpecialSupportPut({
+    kind: "OFF_SUPPORT",
+    shift: "1부",
+  });
+  assert(
+    putKindOnly.mode === "error",
+    "kind만 있고 workPattern 없으면 레거시 특수로 떨어지지 않음"
+  );
+  const putSpecial = resolveDailySpecialSupportPut({
+    kind: "SPECIAL_SUPPORT",
+    workPattern: "SHIFT_1",
+  });
+  assert(
+    putSpecial.mode === "v2" && putSpecial.kind === "SPECIAL_SUPPORT",
+    "SPECIAL_SUPPORT PUT 분리"
+  );
+  const putLegacy = resolveDailySpecialSupportPut({ shift: "1부" });
+  assert(putLegacy.mode === "legacy" && putLegacy.shift === "1부", "shift-only는 레거시");
 }
 
 section("source / UI / migration / 권한");
@@ -1284,6 +1352,13 @@ section("source / UI / migration / 권한");
   assert(/countsByKind/.test(supportUi), "유형별 인원 칩");
   assert(/ss-kinds/.test(supportUi), "유형 wrap 칩");
   assert(/filterKind/.test(supportUi) && /전체/.test(supportUi), "전체 필터 기본");
+  assert(
+    /filterKind === "ALL" \? null/.test(supportUi) &&
+      !/filterKind === "ALL" \? DEFAULT_SPECIAL_SUPPORT_KIND/.test(supportUi),
+    "+등록은 전체에서 특수로 기본 선택하지 않음"
+  );
+  assert(/지원 종류를 선택하세요/.test(supportUi), "종류 미선택 저장 차단");
+  assert(/supportListBadgeLabels/.test(supportUi), "목록 뱃지는 kind 매핑 함수");
   assert(/현재 등록/.test(supportUi), "전체 등록 목록 우선");
   assert(!/ss-pattern-label/.test(supportUi), "메인 패턴 선택 줄 제거");
   assert(/ss-patterns/.test(supportUi) && /1\. 지원 종류/.test(supportUi), "패턴은 등록 모달");
@@ -1309,6 +1384,13 @@ section("source / UI / migration / 권한");
   );
   assert(/action === "move"/.test(route) && /action === "delete"/.test(route), "sortOrder 위아래·삭제 API");
   assert(/savedKind/.test(route) && /savedShift/.test(route), "kind PUT + legacy shift PUT");
+  assert(
+    /resolveDailySpecialSupportPut/.test(route) &&
+      !/isDailySpecialSupportKind\(kindRaw\) && isDailySpecialSupportWorkPattern/.test(
+        route
+      ),
+    "kind 있는 PUT은 레거시 SPECIAL_SUPPORT로 떨어지지 않음"
+  );
   assert(
     !/\/api\/daily-special-supports/.test(page),
     "assignments page는 특수지원 GET을 중복하지 않음 (패널 1회)"
@@ -1383,6 +1465,20 @@ section("source / UI / migration / 권한");
       /^\d{14}/.test(name) && name > "20260914010000_two_three_and_support_v2"
   );
   assert(migDirs.length === 0, "새 migration 없음");
+  assert(
+    /후출마샬이 1부 지원으로 등록된 경우/.test(supportDomain) &&
+      /조출마샬과 조장은 기본적으로/.test(supportDomain) &&
+      /autoAssignEngine은 #141에서 수정하지 않음/.test(supportDomain),
+    "다음 엔진 PR 운영 규칙 기록"
+  );
+  assert(
+    !/후출마샬 1부 지원/.test(engine) &&
+      !/조출마샬/.test(engine) &&
+      !/MARSHAL_SUPPORT/.test(engine) &&
+      !/LEADER_SUPPORT/.test(engine) &&
+      !/OFF_SUPPORT/.test(engine),
+    "autoAssignEngine 배치 규칙 변경 없음"
+  );
 }
 
 console.log(`\nOK ${passed}/${passed + failed}`);

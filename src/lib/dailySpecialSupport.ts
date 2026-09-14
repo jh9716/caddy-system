@@ -148,6 +148,10 @@ export const DAILY_SPECIAL_SUPPORT_WORK_PATTERN_CHIP_LABELS: Record<
   FIFTY_FOUR: "54",
 };
 
+/**
+ * 레거시 전용 default. kind가 비어 있는 기존 row / shift-only PUT에만 쓴다.
+ * 요청에 휴무지원(OFF_SUPPORT) 등이 있으면 이 값으로 바꾸지 않는다.
+ */
 export const DEFAULT_SPECIAL_SUPPORT_KIND: DailySpecialSupportKind =
   "SPECIAL_SUPPORT";
 
@@ -165,6 +169,94 @@ export function isDailySpecialSupportWorkPattern(
   return DAILY_SPECIAL_SUPPORT_WORK_PATTERNS.includes(
     String(value) as DailySpecialSupportWorkPattern
   );
+}
+
+function nonEmptyInput(value: unknown): boolean {
+  return value != null && String(value).trim() !== "";
+}
+
+/** PUT/UI 입력. enum·한글 라벨·칩을 받고, 없으면 null. SPECIAL_SUPPORT로 강제하지 않음. */
+export function parseSupportKindInput(
+  value: unknown
+): DailySpecialSupportKind | null {
+  if (!nonEmptyInput(value)) return null;
+  if (isDailySpecialSupportKind(value)) return value;
+  const raw = String(value).trim();
+  for (const kind of DAILY_SPECIAL_SUPPORT_KINDS) {
+    if (
+      DAILY_SPECIAL_SUPPORT_KIND_LABELS[kind] === raw ||
+      DAILY_SPECIAL_SUPPORT_KIND_CHIP_LABELS[kind] === raw ||
+      DAILY_SPECIAL_SUPPORT_KIND_BADGES[kind] === raw
+    ) {
+      return kind;
+    }
+  }
+  return null;
+}
+
+/** PUT/UI 입력. enum·1부·칩(1)을 받고, 없으면 null. */
+export function parseSupportWorkPatternInput(
+  value: unknown
+): DailySpecialSupportWorkPattern | null {
+  if (!nonEmptyInput(value)) return null;
+  if (isDailySpecialSupportWorkPattern(value)) return value;
+  const fromShift = workPatternFromStoredShift(value);
+  if (fromShift) return fromShift;
+  const raw = String(value).trim();
+  for (const pattern of DAILY_SPECIAL_SUPPORT_WORK_PATTERNS) {
+    if (
+      DAILY_SPECIAL_SUPPORT_WORK_PATTERN_LABELS[pattern] === raw ||
+      DAILY_SPECIAL_SUPPORT_WORK_PATTERN_CHIP_LABELS[pattern] === raw
+    ) {
+      return pattern;
+    }
+  }
+  return null;
+}
+
+export type DailySpecialSupportPutResolution =
+  | {
+      mode: "v2";
+      kind: DailySpecialSupportKind;
+      workPattern: DailySpecialSupportWorkPattern;
+    }
+  | { mode: "legacy"; shift: ShiftPart }
+  | { mode: "error"; error: string };
+
+/**
+ * kind 또는 workPattern이 하나라도 있으면 레거시 SPECIAL_SUPPORT PUT으로 떨어지지 않는다.
+ * 휴무지원+shift만 보낸 요청이 특수로 저장되던 경로를 막는다.
+ */
+export function resolveDailySpecialSupportPut(body: {
+  kind?: unknown;
+  workPattern?: unknown;
+  shift?: unknown;
+}): DailySpecialSupportPutResolution {
+  const kindProvided = nonEmptyInput(body.kind);
+  const patternProvided = nonEmptyInput(body.workPattern);
+  if (kindProvided || patternProvided) {
+    const kind = parseSupportKindInput(body.kind);
+    const workPattern = parseSupportWorkPatternInput(body.workPattern);
+    if (!kind) {
+      return {
+        mode: "error",
+        error:
+          "kind는 찾근/특수지원/휴무지원/마샬지원/조장지원/54지원 중 하나여야 합니다.",
+      };
+    }
+    if (!workPattern) {
+      return {
+        mode: "error",
+        error: "workPattern은 1·2부/1부/2부/3부/54 중 하나여야 합니다.",
+      };
+    }
+    return { mode: "v2", kind, workPattern };
+  }
+  const shift = String(body.shift || "");
+  if (!isSpecialSupportShift(shift)) {
+    return { mode: "error", error: "shift는 1부/2부/3부 이어야 합니다." };
+  }
+  return { mode: "legacy", shift };
 }
 
 export function workPatternFromShift(
@@ -219,6 +311,22 @@ export function resolveSupportKind(row: {
  * 기존 shift 기반 엔진에 넣는 행만.
  * SPECIAL_SUPPORT + 단일부(SHIFT_1/2/3)만 기존 꼬리 배치 큐로 전달한다.
  * 1·2/54 및 다른 유형은 저장만 하고 이번 PR에서 배치하지 않는다.
+ *
+ * NEXT ENGINE PR 확정 규칙 (여기 기록만. autoAssignEngine은 #141에서 수정하지 않음):
+ *
+ * [후출마샬 1부 지원]
+ * 후출마샬이 1부 지원으로 등록된 경우:
+ *   1부 보호 슬롯 1번
+ *   1부 보호 슬롯 2번
+ *   → 후출마샬 1부 지원
+ *   → 그 다음 기타 특수/지원 및 일반 순번
+ * 즉 후출마샬 1부 지원은 1부 1·2번째 다음 자리부터 지원 대상 중 최우선이다.
+ * 후출마샬 1부 지원을 1막 특수근무로 변환하거나 배치하면 안 된다.
+ *
+ * [조출마샬 / 조장]
+ * 조출마샬과 조장은 기본적으로 2부 막(마지막 쪽) 배치를 사용한다.
+ * 실제 운영 상황에 따라 위치가 달라질 수 있으므로
+ * 향후 지원근무 배치 엔진에서 수동 위치 지정으로 override 가능해야 한다.
  */
 export function isEngineEligibleSupportRecord(row: {
   kind?: unknown;
@@ -237,13 +345,34 @@ export function supportBoardBadgeLabels(
   kind?: unknown,
   workPattern?: unknown
 ): { kind: string; pattern: string } {
-  const resolvedKind = resolveSupportKind({ kind });
-  const resolvedPattern = isDailySpecialSupportWorkPattern(workPattern)
-    ? workPattern
-    : resolveSupportWorkPattern({ workPattern, shift: workPattern });
+  const parsedKind = parseSupportKindInput(kind);
+  const resolvedKind = parsedKind ?? resolveSupportKind({ kind });
+  const parsedPattern = parseSupportWorkPatternInput(workPattern);
+  const resolvedPattern =
+    parsedPattern ??
+    (isDailySpecialSupportWorkPattern(workPattern)
+      ? workPattern
+      : resolveSupportWorkPattern({ workPattern, shift: workPattern }));
   return {
     kind: DAILY_SPECIAL_SUPPORT_KIND_BADGES[resolvedKind],
     pattern: DAILY_SPECIAL_SUPPORT_WORK_PATTERN_CHIP_LABELS[resolvedPattern],
+  };
+}
+
+/** 지원근무 목록/필터용. OFF_SUPPORT → [휴무], SPECIAL_SUPPORT → [특수]. */
+export function supportListBadgeLabels(
+  kind?: unknown,
+  workPattern?: unknown,
+  shift?: unknown
+): { kind: string; pattern: string } {
+  const parsedKind = parseSupportKindInput(kind);
+  const resolvedKind = parsedKind ?? resolveSupportKind({ kind });
+  const resolvedPattern =
+    parseSupportWorkPatternInput(workPattern) ??
+    resolveSupportWorkPattern({ workPattern, shift });
+  return {
+    kind: DAILY_SPECIAL_SUPPORT_KIND_CHIP_LABELS[resolvedKind],
+    pattern: DAILY_SPECIAL_SUPPORT_WORK_PATTERN_LABELS[resolvedPattern],
   };
 }
 

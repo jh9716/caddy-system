@@ -9,9 +9,8 @@ import {
   replaceDailySpecialSupports,
 } from "@/lib/dailySpecialSupportService";
 import {
-  isDailySpecialSupportKind,
-  isDailySpecialSupportWorkPattern,
-  isSpecialSupportShift,
+  DEFAULT_SPECIAL_SUPPORT_KIND,
+  resolveDailySpecialSupportPut,
 } from "@/lib/dailySpecialSupport";
 
 export const dynamic = "force-dynamic";
@@ -72,16 +71,20 @@ export async function PUT(req: NextRequest) {
     if (!Array.isArray(caddyIds)) {
       return NextResponse.json({ error: "caddyIds[] 필요" }, { status: 400 });
     }
-    const kindRaw = (body as { kind?: unknown }).kind;
-    const patternRaw = (body as { workPattern?: unknown }).workPattern;
-    const shift = String((body as { shift?: unknown }).shift || "");
     const createdByUserId = auth?.userId ?? null;
-
-    if (isDailySpecialSupportKind(kindRaw) && isDailySpecialSupportWorkPattern(patternRaw)) {
+    const put = resolveDailySpecialSupportPut({
+      kind: (body as { kind?: unknown }).kind,
+      workPattern: (body as { workPattern?: unknown }).workPattern,
+      shift: (body as { shift?: unknown }).shift,
+    });
+    if (put.mode === "error") {
+      return NextResponse.json({ error: put.error }, { status: 400 });
+    }
+    if (put.mode === "v2") {
       const result = await replaceDailySpecialSupportGroup({
         date,
-        kind: kindRaw,
-        workPattern: patternRaw,
+        kind: put.kind,
+        workPattern: put.workPattern,
         caddyIds,
         createdByUserId,
       });
@@ -89,19 +92,16 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({
         ok: true,
         ...payload,
-        savedKind: kindRaw,
-        savedWorkPattern: patternRaw,
+        savedKind: put.kind,
+        savedWorkPattern: put.workPattern,
         added: result.added,
         removed: result.removed,
       });
     }
 
-    if (!isSpecialSupportShift(shift)) {
-      return NextResponse.json({ error: "shift는 1부/2부/3부 이어야 합니다." }, { status: 400 });
-    }
     const result = await replaceDailySpecialSupports({
       date,
-      shift,
+      shift: put.shift,
       caddyIds,
       createdByUserId,
     });
@@ -109,7 +109,8 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       ...payload,
-      savedShift: shift,
+      savedKind: DEFAULT_SPECIAL_SUPPORT_KIND,
+      savedShift: put.shift,
       added: result.added,
       removed: result.removed,
     });

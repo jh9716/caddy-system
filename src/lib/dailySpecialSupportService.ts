@@ -324,17 +324,32 @@ export async function replaceDailySpecialSupportGroup(input: {
             data: { sortOrder: i + 1, shift, kind, workPattern },
           });
         } else {
-          await tx.dailySpecialSupport.create({
-            data: {
-              date: start,
-              caddyId,
-              shift,
-              kind,
-              workPattern,
-              sortOrder: i + 1,
-              createdByUserId: input.createdByUserId ?? null,
+          // (date,caddyId,shift) unique. 같은 부 문자열의 다른 kind는
+          // 이번 저장 요청의 kind로 옮긴다. 기존 SPECIAL_SUPPORT 전체를
+          // OFF_SUPPORT로 일괄 변환하지 않는다.
+          const conflict = await tx.dailySpecialSupport.findUnique({
+            where: {
+              date_caddyId_shift: { date: start, caddyId, shift },
             },
           });
+          if (conflict) {
+            await tx.dailySpecialSupport.update({
+              where: { id: conflict.id },
+              data: { sortOrder: i + 1, shift, kind, workPattern },
+            });
+          } else {
+            await tx.dailySpecialSupport.create({
+              data: {
+                date: start,
+                caddyId,
+                shift,
+                kind,
+                workPattern,
+                sortOrder: i + 1,
+                createdByUserId: input.createdByUserId ?? null,
+              },
+            });
+          }
         }
       }
     });
