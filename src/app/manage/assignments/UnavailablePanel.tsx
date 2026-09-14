@@ -1,6 +1,18 @@
 "use client";
 
+import { useState, type ReactNode } from "react";
 import type { UnavailablePanelGroup } from "@/lib/assignmentBoardDirectEdit";
+import { unavailablePanelTotal } from "@/lib/assignmentBoardDirectEdit";
+import {
+  compactPeopleNames,
+  filledDutySlots,
+  filledMarshalSlots,
+  opsSpecialDutyChips,
+  opsSpecialSupportBlocks,
+  opsStatusCountChips,
+  type OpsSpecialDutyGroup,
+  type OpsSpecialSupportItem,
+} from "@/lib/opsStatusPanelView";
 import {
   buildUnavailableBoardView,
   pickOpsStatusSummary,
@@ -15,27 +27,22 @@ function formatCount(value: number | null | undefined): string {
   return value == null ? "—" : String(value);
 }
 
-function PersonPill({ person }: { person: UnavailableBoardPerson }) {
-  return (
-    <span className="ops-unavail-pill">
-      <span className="ops-unavail-name">{person.name}</span>
-      {person.badges.map((badge) => (
-        <span key={badge} className="ops-unavail-badge">
-          {badge}
-        </span>
-      ))}
-    </span>
-  );
-}
-
-function PersonFlow({ people }: { people: UnavailableBoardPerson[] }) {
+function CompactPeople({ people }: { people: UnavailableBoardPerson[] }) {
   if (people.length === 0) {
-    return <span className="ops-unavail-blank">—</span>;
+    return <span className="ops-unavail-blank">없음</span>;
   }
   return (
-    <div className="ops-unavail-pills">
-      {people.map((person) => (
-        <PersonPill key={person.caddyId} person={person} />
+    <div className="ops-unavail-names">
+      {people.map((person, index) => (
+        <span key={person.caddyId} className="ops-unavail-person">
+          {index > 0 ? " · " : null}
+          <span className="ops-unavail-name">{person.name}</span>
+          {person.badges.map((badge) => (
+            <span key={badge} className="ops-unavail-badge">
+              {badge}
+            </span>
+          ))}
+        </span>
       ))}
     </div>
   );
@@ -53,7 +60,7 @@ function TeamBlocks({
       {blocks.map((block) => (
         <div key={block.team} className="ops-unavail-row">
           <span className="ops-unavail-k">{block.team}</span>
-          <PersonFlow people={block.people} />
+          <CompactPeople people={block.people} />
         </div>
       ))}
     </div>
@@ -66,37 +73,41 @@ function SlotBlocks({ slots }: { slots: UnavailableSlotBlock[] }) {
       {slots.map((slot) => (
         <div key={slot.label} className="ops-unavail-row">
           <span className="ops-unavail-k">{slot.label}</span>
-          <PersonFlow people={slot.people} />
+          <CompactPeople people={slot.people} />
         </div>
       ))}
     </div>
   );
 }
 
-function SummaryStrip({ summary }: { summary: OpsStatusSummary }) {
+function OpsSection({
+  title,
+  count,
+  children,
+  defaultOpen = true,
+}: {
+  title: string;
+  count?: number;
+  children: ReactNode;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="ops-unavail-summary" aria-label="오늘 운영 요약">
-      <span className="ops-unavail-stat">
-        <b>{formatCount(summary.employed)}</b>
-        <span>재직</span>
-      </span>
-      <span className="ops-unavail-stat">
-        <b>{formatCount(summary.off)}</b>
-        <span>휴무</span>
-      </span>
-      <span className="ops-unavail-stat is-final">
-        <b>{formatCount(summary.finalAvailable)}</b>
-        <span>최종가용</span>
-      </span>
-      <span className="ops-unavail-stat">
-        <b>{formatCount(summary.sick)}</b>
-        <span>병가</span>
-      </span>
-      <span className="ops-unavail-stat">
-        <b>{formatCount(summary.absent)}</b>
-        <span>결근</span>
-      </span>
-    </div>
+    <details
+      className="ops-unavail-sec"
+      open={open}
+      onToggle={(event) => {
+        setOpen((event.currentTarget as HTMLDetailsElement).open);
+      }}
+    >
+      <summary>
+        {title}
+        {count != null ? (
+          <span className="ops-unavail-sec-count">{count}</span>
+        ) : null}
+      </summary>
+      {children}
+    </details>
   );
 }
 
@@ -107,6 +118,9 @@ export function UnavailablePanel({
   open,
   sheetOpen = false,
   onToggle,
+  onCollapse,
+  specialDutyGroups = [],
+  specialSupportItems = [],
 }: {
   groups: UnavailablePanelGroup[];
   sources?: UnavailableBoardSources | null;
@@ -114,6 +128,9 @@ export function UnavailablePanel({
   open: boolean;
   sheetOpen?: boolean;
   onToggle: () => void;
+  onCollapse?: () => void;
+  specialDutyGroups?: OpsSpecialDutyGroup[];
+  specialSupportItems?: OpsSpecialSupportItem[];
 }) {
   const view = buildUnavailableBoardView(groups, sources);
   const stats = {
@@ -121,104 +138,170 @@ export function UnavailablePanel({
     sick: view.sick.length,
     absent: view.absent.length,
   };
+  const total = unavailablePanelTotal(groups);
+  const countChips = opsStatusCountChips(view, stats.off);
+  const dutySlots = filledDutySlots(view.dutySlots);
+  const marshalSlots = filledMarshalSlots(view.marshalSlots);
+  const specialChips = opsSpecialDutyChips(specialDutyGroups);
+  const supportBlocks = opsSpecialSupportBlocks(specialSupportItems);
+  const supportTotal = supportBlocks.reduce((n, block) => n + block.count, 0);
+  const specialTotal = specialChips.reduce((n, chip) => n + chip.count, 0);
   const hasHealth = view.sick.length > 0 || view.absent.length > 0;
+
   return (
     <aside
       className={`ops-unavail${open ? " is-open" : ""}${
         sheetOpen ? " is-mobile-open" : ""
       }`}
       aria-label="오늘 운영현황"
+      data-ops-status-panel="1"
     >
       <div className="ops-unavail-head">
         <h2>오늘 운영현황</h2>
-        <button
-          type="button"
-          className="ops-unavail-close"
-          aria-expanded={sheetOpen}
-          onClick={onToggle}
-        >
-          닫기
-        </button>
+        <div className="ops-unavail-head-actions">
+          <button
+            type="button"
+            className="ops-unavail-collapse"
+            onClick={onCollapse || onToggle}
+          >
+            접기
+          </button>
+          <button
+            type="button"
+            className="ops-unavail-close"
+            aria-expanded={sheetOpen}
+            onClick={onToggle}
+          >
+            닫기
+          </button>
+        </div>
       </div>
-      <SummaryStrip summary={stats} />
+      <div className="ops-unavail-hero">
+        <span>비가용</span>
+        <b>{total}</b>
+      </div>
+      <div className="ops-unavail-chips" aria-label="비가용 구분">
+        {countChips.map((chip) => (
+          <span key={chip.key} className="ops-unavail-count-chip">
+            {chip.label} {chip.count}
+          </span>
+        ))}
+      </div>
+      <div className="ops-unavail-summary" aria-label="오늘 운영 요약">
+        <span>
+          재직 {formatCount(stats.employed)}
+        </span>
+        <span className="is-final">
+          최종가용 {formatCount(stats.finalAvailable)}
+        </span>
+      </div>
       <div className="ops-unavail-body">
-        {view.total === 0 ? (
-          <p className="ops-unavail-empty">표시할 비가용 캐디가 없습니다.</p>
-        ) : (
-          <>
-            {view.offTeams.length > 0 ? (
-              <section className="ops-unavail-sec">
-                <h3>휴무</h3>
-                <TeamBlocks
-                  blocks={view.offTeams}
-                  className="ops-unavail-off-grid"
-                />
-              </section>
+        {view.offTeams.length > 0 ? (
+          <OpsSection title="휴무" count={stats.off ?? undefined}>
+            <TeamBlocks
+              blocks={view.offTeams}
+              className="ops-unavail-off-grid"
+            />
+          </OpsSection>
+        ) : null}
+        {hasHealth ? (
+          <OpsSection title="병가 / 결근">
+            {view.sick.length > 0 ? (
+              <div className="ops-unavail-row">
+                <span className="ops-unavail-k">병가</span>
+                <CompactPeople people={view.sick} />
+              </div>
             ) : null}
-            {hasHealth ? (
-              <section className="ops-unavail-sec">
-                <h3>병가 / 결근</h3>
-                {view.sick.length > 0 ? (
-                  <div className="ops-unavail-row">
-                    <span className="ops-unavail-k">병가</span>
-                    <PersonFlow people={view.sick} />
+            {view.absent.length > 0 ? (
+              <div className="ops-unavail-row">
+                <span className="ops-unavail-k">결근</span>
+                <CompactPeople people={view.absent} />
+              </div>
+            ) : null}
+          </OpsSection>
+        ) : null}
+        <OpsSection title="당번" defaultOpen>
+          <SlotBlocks slots={dutySlots} />
+        </OpsSection>
+        <OpsSection title="마샬" defaultOpen>
+          <SlotBlocks slots={marshalSlots} />
+        </OpsSection>
+        <OpsSection title="조장" count={view.leaders.length || undefined}>
+          <CompactPeople people={view.leaders} />
+        </OpsSection>
+        {view.specialBands.length > 0 ? (
+          <OpsSection title="특수반">
+            <TeamBlocks blocks={view.specialBands} />
+          </OpsSection>
+        ) : null}
+        {view.other.length > 0 ? (
+          <OpsSection title="기타" count={view.other.length}>
+            <CompactPeople people={view.other} />
+          </OpsSection>
+        ) : null}
+        {view.conflicts.length > 0 ? (
+          <OpsSection title="상태/역할 충돌" count={view.conflicts.length}>
+            <div className="ops-unavail-names">
+              {view.conflicts.map((row) => (
+                <span key={row.caddyId} className="ops-unavail-person">
+                  <span className="ops-unavail-name">{row.name}</span>
+                  <span className="ops-unavail-badge">
+                    {row.status}·{row.role}
+                  </span>
+                </span>
+              ))}
+            </div>
+          </OpsSection>
+        ) : null}
+        <OpsSection title="특수근무" count={specialTotal}>
+          <div className="ops-unavail-kind-grid">
+            {specialChips.map((chip) => (
+              <details key={chip.kind} className="ops-unavail-kind">
+                <summary>
+                  <span>{chip.label}</span>
+                  <b>{chip.count}</b>
+                </summary>
+                <p className="ops-unavail-kind-names">
+                  {chip.names.length
+                    ? compactPeopleNames(chip.names.map((name) => ({ name })))
+                    : "없음"}
+                </p>
+              </details>
+            ))}
+          </div>
+        </OpsSection>
+        <OpsSection title="지원근무" count={supportTotal}>
+          <div className="ops-unavail-kind-grid">
+            {supportBlocks.map((block) => (
+              <details key={block.kind} className="ops-unavail-kind">
+                <summary>
+                  <span>{block.label}</span>
+                  <b>{block.count}</b>
+                </summary>
+                {block.people.length === 0 ? (
+                  <p className="ops-unavail-kind-names">없음</p>
+                ) : (
+                  <div className="ops-unavail-support-list">
+                    {block.people.map((person) => (
+                      <div
+                        key={`${block.kind}-${person.caddyId}`}
+                        className="ops-unavail-support-row"
+                      >
+                        <span className="ops-unavail-name">{person.name}</span>
+                        <span className="ops-unavail-badge">
+                          {person.kindBadge}
+                        </span>
+                        <span className="ops-unavail-badge">
+                          {person.patternBadge}
+                        </span>
+                      </div>
+                    ))}
                   </div>
-                ) : null}
-                {view.absent.length > 0 ? (
-                  <div className="ops-unavail-row">
-                    <span className="ops-unavail-k">결근</span>
-                    <PersonFlow people={view.absent} />
-                  </div>
-                ) : null}
-              </section>
-            ) : null}
-            {view.dutySlots.length > 0 ? (
-              <section className="ops-unavail-sec">
-                <h3>당번</h3>
-                <SlotBlocks slots={view.dutySlots} />
-              </section>
-            ) : null}
-            {view.marshalSlots.length > 0 ? (
-              <section className="ops-unavail-sec">
-                <h3>마샬</h3>
-                <SlotBlocks slots={view.marshalSlots} />
-              </section>
-            ) : null}
-            {view.leaders.length > 0 ? (
-              <section className="ops-unavail-sec">
-                <h3>조장</h3>
-                <PersonFlow people={view.leaders} />
-              </section>
-            ) : null}
-            {view.specialBands.length > 0 ? (
-              <section className="ops-unavail-sec">
-                <h3>특수반</h3>
-                <TeamBlocks blocks={view.specialBands} />
-              </section>
-            ) : null}
-            {view.other.length > 0 ? (
-              <section className="ops-unavail-sec">
-                <h3>기타</h3>
-                <PersonFlow people={view.other} />
-              </section>
-            ) : null}
-            {view.conflicts.length > 0 ? (
-              <section className="ops-unavail-sec">
-                <h3>상태/역할 충돌</h3>
-                <div className="ops-unavail-pills">
-                  {view.conflicts.map((row) => (
-                    <span key={row.caddyId} className="ops-unavail-pill">
-                      <span className="ops-unavail-name">{row.name}</span>
-                      <span className="ops-unavail-badge">
-                        {row.status}·{row.role}
-                      </span>
-                    </span>
-                  ))}
-                </div>
-              </section>
-            ) : null}
-          </>
-        )}
+                )}
+              </details>
+            ))}
+          </div>
+        </OpsSection>
       </div>
     </aside>
   );
