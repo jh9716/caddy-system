@@ -932,8 +932,7 @@ const opsDutyFallbackChecks = Promise.all([
     path.resolve("src/app/api/daily-ops-duties/route.ts"),
     "utf8"
   );
-  assert(/resolveEffectiveOpsDuty/.test(dutyRoute), "GET daily-ops-duties uses effective resolver");
-  assert(/resolveOpsDutyReadOnly/.test(fs.readFileSync(path.resolve("src/lib/opsDutyEffectiveService.ts"), "utf8")), "effective resolver reuses sheet fallback");
+  assert(/resolveOpsDutyReadOnly/.test(dutyRoute), "GET daily-ops-duties uses sheet fallback");
   assert(!/replaceDailyOpsDuties/.test(dutyRoute), "GET daily-ops-duties does not write");
 });
 

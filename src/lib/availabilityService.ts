@@ -25,11 +25,11 @@ import {
   parseDutyMarshalLeaderWorkbook,
   type DutyExcelEntry,
 } from "@/lib/dutyMarshalLeaderParser";
-import { resolveEffectiveOpsDuty } from "@/lib/opsDutyEffectiveService";
+import { loadStoredDutyEntries } from "@/lib/dailyOpsDutyService";
 
 export type AvailabilityWithSlotGrid = DailyAvailabilityResult & {
   slotGrid: TeamSlotGrid;
-  dutySource?: "file" | "stored" | "sheet" | "none";
+  dutySource?: "file" | "stored" | "none";
   dutyEntryCount?: number;
 };
 
@@ -120,23 +120,17 @@ export async function loadAvailabilityForDate(
   }
 
   let dutyEntries: DutyExcelEntry[] = [];
-  let dutySource: "file" | "stored" | "sheet" | "none" = "none";
+  let dutySource: "file" | "stored" | "none" = "none";
   if (options?.dutyWorkbook) {
     dutyEntries = parseDutyMarshalLeaderWorkbook(options.dutyWorkbook, ymd)
       .entries;
     dutySource = "file";
-  } else if (Array.isArray(options?.dutyEntries)) {
+  } else if (options?.dutyEntries && options.dutyEntries.length > 0) {
     dutyEntries = options.dutyEntries;
-    dutySource = options.dutyEntries.length > 0 ? "file" : "none";
+    dutySource = "file";
   } else if (options?.includeStoredOpsDuty !== false) {
-    const resolved = await resolveEffectiveOpsDuty(ymd);
-    dutyEntries = resolved.entries;
-    dutySource =
-      resolved.baseSource === "sheet"
-        ? "sheet"
-        : resolved.entries.length > 0
-          ? "stored"
-          : "none";
+    dutyEntries = await loadStoredDutyEntries(ymd);
+    if (dutyEntries.length > 0) dutySource = "stored";
   }
 
   const overlaid = applyDailyExternalExclusions({

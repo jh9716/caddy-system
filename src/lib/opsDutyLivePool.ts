@@ -1,4 +1,4 @@
-import { listEffectiveOpsDutyCaddyIds } from "@/lib/opsDutyEffectiveService";
+import { listDailyOpsDutyCaddyIds } from "@/lib/dailyOpsDutyService";
 import { excludeCaddiesById } from "@/lib/dailyOpsDuty";
 import type { AutoAssignCaddy } from "@/lib/autoAssignEngine";
 import {
@@ -61,7 +61,7 @@ export async function resolveCanonicalLivePool(
     if (isOffSheetUnresolvedError(error) || isOffSnapshotRequiredError(error)) {
       throw error;
     }
-        const ids = await listEffectiveOpsDutyCaddyIds(date);
+    const ids = await listDailyOpsDutyCaddyIds(date);
     return {
       ...empty,
       computePool: excludeCaddiesById(pool, ids),

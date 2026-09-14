@@ -18,7 +18,7 @@ import {
   rememberOffSheetsForDate,
 } from "@/lib/offSheetFetch";
 import { offNamesForDate } from "@/lib/offSheetParser";
-import { resolveEffectiveOpsDuty } from "@/lib/opsDutyEffectiveService";
+import { listDailyOpsDutyCaddyIds, loadStoredDutyEntries } from "@/lib/dailyOpsDutyService";
 import { listDailySpecialDutyRecords } from "@/lib/dailySpecialDutyService";
 import {
   OFF_SHEET_UNRESOLVED_CODE,
@@ -251,7 +251,7 @@ export async function loadCanonicalReflowState(
   const prisma = asCaddyDb(db);
   const { start, end } = parseYmd(ymd);
 
-  const [caddies, assignments, extraTags, unavailableRows, effectiveDuty, specialRows] =
+  const [caddies, assignments, extraTags, unavailableRows, opsDutyIds, specialRows] =
     await Promise.all([
       prisma.caddy.findMany({
         select: {
@@ -284,7 +284,7 @@ export async function loadCanonicalReflowState(
         where: { date: start },
         select: { caddyId: true, effectiveFromShift: true },
       }),
-      resolveEffectiveOpsDuty(ymd).catch(() => null),
+      listDailyOpsDutyCaddyIds(ymd).catch(() => [] as number[]),
       listDailySpecialDutyRecords(ymd).catch(() => [] as Array<{ caddyId: number }>),
     ]);
 
@@ -337,8 +337,12 @@ export async function loadCanonicalReflowState(
     offResolveMs = resolvedOff.resolveMs;
   }
 
-  const opsDutyIds = uniquePositiveIds(effectiveDuty?.caddyIds || []);
-  const dutyEntries = effectiveDuty?.entries || [];
+  let dutyEntries: Awaited<ReturnType<typeof loadStoredDutyEntries>> = [];
+  try {
+    dutyEntries = await loadStoredDutyEntries(ymd);
+  } catch {
+    dutyEntries = [];
+  }
 
   const overlaid = applyDailyExternalExclusions({
     availability: baseAvailability,

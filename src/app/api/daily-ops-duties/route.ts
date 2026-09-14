@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
 import { DailyOpsDutyError } from "@/lib/dailyOpsDutyService";
+import { countByOpsRole } from "@/lib/dailyOpsDuty";
 import {
-  effectiveOpsDutyJson,
-  resolveEffectiveOpsDuty,
-} from "@/lib/opsDutyEffectiveService";
+  opsDutyPanelRowsFromReadOnly,
+  resolveOpsDutyReadOnly,
+} from "@/lib/opsDutyReadOnlySource";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -17,8 +19,21 @@ export async function GET(req: NextRequest) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return NextResponse.json({ error: "date=YYYY-MM-DD 필요" }, { status: 400 });
     }
-    const resolved = await resolveEffectiveOpsDuty(date);
-    return NextResponse.json(effectiveOpsDutyJson(resolved));
+    const resolved = await resolveOpsDutyReadOnly(date);
+    const caddies = await prisma.caddy.findMany({
+      select: { id: true, name: true, team: true, employmentStatus: true },
+    });
+    const rows = opsDutyPanelRowsFromReadOnly(resolved, caddies);
+    return NextResponse.json({
+      date,
+      source: resolved.source,
+      persisted: resolved.source === "stored",
+      count: rows.length,
+      byRole: countByOpsRole(rows),
+      caddyIds: [...new Set(rows.map((r) => r.caddyId))],
+      rows,
+      error: resolved.error,
+    });
   } catch (e: unknown) {
     if (e instanceof DailyOpsDutyError) {
       return NextResponse.json(
