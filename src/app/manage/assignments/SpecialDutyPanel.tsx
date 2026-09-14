@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, memo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, memo } from "react";
+import { toOpsSpecialDutyGroups, type OpsSpecialDutyGroup } from "@/lib/opsStatusPanelView";
 import { normalizePersonName } from "@/lib/dailyCaddyNameMatch";
 import {
   DAILY_SPECIAL_KIND_UI,
@@ -85,12 +86,14 @@ export const SpecialDutyPanel = memo(function SpecialDutyPanel({
   shift1Options = [],
   hasDraft,
   onChanged,
+  onLoaded,
 }: {
   date: string;
   excludedRows?: Array<{ id: number; excludedReasons?: string[] | null }>;
   shift1Options?: Shift1StartOption[];
   hasDraft?: boolean;
   onChanged?: () => void;
+  onLoaded?: (groups: OpsSpecialDutyGroup[]) => void;
 }) {
   const [groups, setGroups] = useState<GroupPayload[]>([]);
   const [anchors, setAnchors] = useState<SpecialDutyAnchors>(EMPTY_ANCHORS);
@@ -122,8 +125,13 @@ export const SpecialDutyPanel = memo(function SpecialDutyPanel({
     setTimeout(() => setToast(null), 2200);
   }, []);
 
+  const onLoadedRef = useRef(onLoaded);
+  onLoadedRef.current = onLoaded;
+
   const applyPayload = useCallback((data: ListPayload) => {
-    setGroups(data.groups || []);
+    const next = data.groups || [];
+    setGroups(next);
+    onLoadedRef.current?.(toOpsSpecialDutyGroups(next));
     if (data.anchors) setAnchors(data.anchors);
     if (data.placement?.mode) {
       setPlacementMode(data.placement.mode);
@@ -138,6 +146,7 @@ export const SpecialDutyPanel = memo(function SpecialDutyPanel({
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       setGroups([]);
       setAnchors(EMPTY_ANCHORS);
+      onLoadedRef.current?.([]);
       return;
     }
     setLoading(true);
@@ -165,6 +174,7 @@ export const SpecialDutyPanel = memo(function SpecialDutyPanel({
 
   useEffect(() => {
     setGroups([]);
+    onLoadedRef.current?.([]);
     setAnchors(EMPTY_ANCHORS);
     setPlacementMode("AUTO");
     setProtectedTailCount(PROTECTED_TAIL_COUNT_DEFAULT);

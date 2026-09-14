@@ -1423,6 +1423,10 @@ section("source / UI / migration / 권한");
   assert(/reservationsFromAssignmentDraft/.test(page), "엑셀 없이 Draft 예약으로 재실행");
   assert(/onLoaded=\{onSpecialSupportLoaded\}/.test(page), "패널 onLoaded로 큐 전달");
   assert(
+    /onRecordsLoaded=\{onSpecialSupportRecordsLoaded\}/.test(page),
+    "우측 패널은 지원근무 기존 GET 결과를 재사용"
+  );
+  assert(
     /isThirdBandTeam, THIRD_BAND_TEAMS/.test(page),
     "THIRD_BAND_TEAMS import 유지"
   );

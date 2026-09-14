@@ -115,6 +115,10 @@ import {
   pickOpsStatusSummary,
 } from "@/lib/unavailablePanelView";
 import { emptySpecialSupportByShift, supportBoardBadgeLabels } from "@/lib/dailySpecialSupport";
+import type {
+  OpsSpecialDutyGroup,
+  OpsSpecialSupportItem,
+} from "@/lib/opsStatusPanelView";
 import { SPECIAL_SETTINGS_STALE_MESSAGE } from "@/lib/dailySpecialDuty";
 import { isThirdBandTeam, THIRD_BAND_TEAMS } from "@/lib/caddyManage";
 import { rotateThirdQueueFromStartTeam } from "@/lib/thirdWeeklyRotation";
@@ -545,6 +549,12 @@ export default function ManageAssignmentsOpsPage() {
   const [dutyFile, setDutyFile] = useState<File | null>(null);
   const [unavailOpen, setUnavailOpen] = useState(true);
   const [unavailSheetOpen, setUnavailSheetOpen] = useState(false);
+  const [specialDutyGroups, setSpecialDutyGroups] = useState<
+    OpsSpecialDutyGroup[]
+  >([]);
+  const [specialSupportItems, setSpecialSupportItems] = useState<
+    OpsSpecialSupportItem[]
+  >([]);
   const [opsOffSnapshot, setOpsOffSnapshot] = useState<DraftOffSnapshot | null>(
     null
   );
@@ -966,6 +976,17 @@ export default function ManageAssignmentsOpsPage() {
   const onSpecialSupportLoaded = useCallback(
     (byShift: ReturnType<typeof emptySpecialSupportByShift>) => {
       setSpecialSupportByShift(byShift);
+    },
+    []
+  );
+
+  const onSpecialDutyLoaded = useCallback((groups: OpsSpecialDutyGroup[]) => {
+    setSpecialDutyGroups(groups);
+  }, []);
+
+  const onSpecialSupportRecordsLoaded = useCallback(
+    (items: OpsSpecialSupportItem[]) => {
+      setSpecialSupportItems(items);
     },
     []
   );
@@ -3259,12 +3280,13 @@ export default function ManageAssignmentsOpsPage() {
       summary={opsStatusSummary}
       open={unavailOpen}
       sheetOpen={unavailSheetOpen}
-      onToggle={() => {
-        setUnavailOpen((v) => !v);
-        setUnavailSheetOpen(false);
-      }}
+      specialDutyGroups={specialDutyGroups}
+      specialSupportItems={specialSupportItems}
+      onToggle={() => setUnavailSheetOpen(false)}
+      onCollapse={() => setUnavailOpen(false)}
     />
   );
+  const opsLayoutCollapsed = unavailOpen ? "" : " is-ops-panel-collapsed";
 
   return (
     <div className="ops-root">
@@ -3295,10 +3317,14 @@ export default function ManageAssignmentsOpsPage() {
                 type="button"
                 className="ops-unavail-chip"
                 data-ops-unavail-chip="1"
-                aria-expanded={unavailSheetOpen}
+                data-ops-panel-open={unavailOpen ? "1" : "0"}
+                aria-expanded={unavailSheetOpen || unavailOpen}
                 onClick={() => {
+                  if (!unavailOpen) {
+                    setUnavailOpen(true);
+                    return;
+                  }
                   setUnavailSheetOpen((v) => !v);
-                  setUnavailOpen(true);
                 }}
               >
                 비가용 {unavailablePanelTotal(unavailableGroups)}명
@@ -3709,6 +3735,7 @@ export default function ManageAssignmentsOpsPage() {
             excludedRows={availability?.excluded}
             shift1Options={shift1StartOptions}
             hasDraft={Boolean(draft || serverDraftVersionRef.current > 0)}
+            onLoaded={onSpecialDutyLoaded}
             onChanged={() => {
               setSpecialSettingsStale(true);
               showToast(SPECIAL_SETTINGS_STALE_MESSAGE);
@@ -3721,6 +3748,7 @@ export default function ManageAssignmentsOpsPage() {
             excludedRows={availability?.excluded}
             hasDraft={Boolean(draft || serverDraftVersionRef.current > 0)}
             onLoaded={onSpecialSupportLoaded}
+            onRecordsLoaded={onSpecialSupportRecordsLoaded}
             onChanged={() => {
               setSpecialSettingsStale(true);
               showToast(SPECIAL_SETTINGS_STALE_MESSAGE);
@@ -3760,7 +3788,7 @@ export default function ManageAssignmentsOpsPage() {
 
       {hasSelectedDate && !draft ? (
         <div
-          className="ops-direct-layout ops-ops-status-solo"
+          className={`ops-direct-layout ops-ops-status-solo${opsLayoutCollapsed}`}
           data-ops-status-without-draft="1"
         >
           {unavailablePanelEl}
@@ -3942,7 +3970,7 @@ export default function ManageAssignmentsOpsPage() {
           </div>
 
           {shiftTab !== "UNASSIGNED" && shiftTab !== "CLOSED" && (
-            <div className="ops-direct-layout">
+            <div className={`ops-direct-layout${opsLayoutCollapsed}`}>
               <div className="ops-direct-main">
               {viewMode === "board" && (
                 <div
@@ -4989,6 +5017,8 @@ const opsCss = `
     cursor: pointer;
   }
   .ops-unavail {
+    display: flex;
+    flex-direction: column;
     border: 1px solid #e2e8f0;
     border-radius: 8px;
     background: #fff;
@@ -5001,12 +5031,55 @@ const opsCss = `
     gap: 8px;
     padding: 6px 8px 5px;
     background: #f8fafc;
+    flex: 0 0 auto;
   }
   .ops-unavail-head h2 {
     margin: 0;
     font-size: 0.78rem;
     font-weight: 800;
     color: #0f172a;
+  }
+  .ops-unavail-head-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .ops-unavail-hero {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 4px 10px 2px;
+    background: #f8fafc;
+  }
+  .ops-unavail-hero span {
+    font-size: 0.68rem;
+    font-weight: 700;
+    color: #64748b;
+  }
+  .ops-unavail-hero b {
+    font-size: 1.05rem;
+    font-weight: 800;
+    color: #0f172a;
+    letter-spacing: -0.03em;
+  }
+  .ops-unavail-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 2px 8px 6px;
+    background: #f8fafc;
+  }
+  .ops-unavail-count-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    font-size: 0.66rem;
+    font-weight: 700;
+    color: #334155;
   }
   .ops-unavail-summary {
     display: grid;
@@ -5015,6 +5088,7 @@ const opsCss = `
     padding: 4px 6px 6px;
     border-bottom: 1px solid #e2e8f0;
     background: #f8fafc;
+    flex: 0 0 auto;
   }
   .ops-unavail-stat {
     display: grid;
@@ -5035,7 +5109,8 @@ const opsCss = `
     letter-spacing: -0.02em;
   }
   .ops-unavail-stat.is-final b { color: #14532d; }
-  .ops-unavail-close {
+  .ops-unavail-close,
+  .ops-unavail-collapse {
     display: none;
     border: 1px solid #cbd5e1;
     border-radius: 999px;
@@ -5046,7 +5121,12 @@ const opsCss = `
     padding: 2px 8px;
     cursor: pointer;
   }
-  .ops-unavail-body { padding: 6px 8px 8px; }
+  .ops-unavail-body {
+    padding: 6px 8px 8px;
+    overflow: auto;
+    min-height: 0;
+    flex: 1 1 auto;
+  }
   .ops-unavail-empty {
     margin: 6px 0 0;
     font-size: 0.75rem;
@@ -5054,15 +5134,25 @@ const opsCss = `
   }
   .ops-unavail-sec { margin-top: 7px; }
   .ops-unavail-sec:first-child { margin-top: 0; }
-  .ops-unavail-sec h3 {
+  .ops-unavail-sec > summary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     margin: 0 0 3px;
     font-size: 0.66rem;
     font-weight: 800;
     color: #475569;
     letter-spacing: 0.04em;
-    text-transform: none;
     border-bottom: 1px solid #e2e8f0;
     padding-bottom: 2px;
+    cursor: pointer;
+    list-style: none;
+  }
+  .ops-unavail-sec > summary::-webkit-details-marker { display: none; }
+  .ops-unavail-sec-count {
+    margin-left: auto;
+    font-size: 0.66rem;
+    color: #0f172a;
   }
   .ops-unavail-off-grid,
   .ops-unavail-slots {
@@ -5082,18 +5172,17 @@ const opsCss = `
     line-height: 1.5;
     padding-top: 1px;
   }
+  .ops-unavail-names,
   .ops-unavail-pills {
     display: flex;
     flex-wrap: wrap;
-    gap: 1px 5px;
+    align-items: center;
+    gap: 1px 0;
     min-width: 0;
   }
-  .ops-unavail-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    max-width: 100%;
-    line-height: 1.4;
+  .ops-unavail-person {
+    font-size: 0.78rem;
+    line-height: 1.45;
   }
   .ops-unavail-name {
     font-size: 0.78rem;
@@ -5104,6 +5193,7 @@ const opsCss = `
   .ops-unavail-badge {
     display: inline-flex;
     align-items: center;
+    margin-left: 3px;
     padding: 0 4px;
     border-radius: 3px;
     background: #e2e8f0;
@@ -5115,23 +5205,76 @@ const opsCss = `
     white-space: nowrap;
   }
   .ops-unavail-blank {
-    color: #cbd5e1;
+    color: #94a3b8;
     font-size: 0.7rem;
     line-height: 1.45;
   }
+  .ops-unavail-kind-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px;
+  }
+  .ops-unavail-kind {
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background: #f8fafc;
+    padding: 2px 6px 2px;
+  }
+  .ops-unavail-kind > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    cursor: pointer;
+    list-style: none;
+    font-size: 0.68rem;
+    font-weight: 700;
+    color: #334155;
+  }
+  .ops-unavail-kind > summary::-webkit-details-marker { display: none; }
+  .ops-unavail-kind b {
+    font-size: 0.78rem;
+    color: #0f172a;
+  }
+  .ops-unavail-kind-names {
+    margin: 2px 0 4px;
+    font-size: 0.74rem;
+    font-weight: 700;
+    color: #0f172a;
+    line-height: 1.4;
+  }
+  .ops-unavail-support-list {
+    display: grid;
+    gap: 2px;
+    margin: 2px 0 4px;
+  }
+  .ops-unavail-support-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 3px;
+  }
   @media (min-width: 1280px) {
     .ops-direct-layout {
-      grid-template-columns: minmax(0, 1fr) minmax(280px, 26%);
+      grid-template-columns: minmax(0, 1fr) minmax(320px, 360px);
       align-items: start;
+    }
+    .ops-direct-layout.is-ops-panel-collapsed,
+    .ops-ops-status-solo.is-ops-panel-collapsed {
+      grid-template-columns: minmax(0, 1fr);
     }
     .ops-unavail {
       position: sticky;
       top: 8px;
       max-height: calc(100vh - 16px);
-      overflow: auto;
     }
+    .ops-unavail:not(.is-open) {
+      display: none;
+    }
+    .ops-unavail-collapse { display: inline-flex; }
+    .ops-unavail-chip[data-ops-panel-open="0"] { display: inline-flex; }
     .ops-ops-status-solo {
-      grid-template-columns: minmax(0, 1fr) minmax(280px, 26%);
+      grid-template-columns: minmax(0, 1fr) minmax(320px, 360px);
     }
     .ops-ops-status-solo .ops-unavail {
       grid-column: 2;
@@ -5141,14 +5284,13 @@ const opsCss = `
     .ops-unavail-chip { display: inline-flex; }
     .ops-unavail { display: none; }
     .ops-unavail.is-mobile-open {
-      display: block;
+      display: flex;
       position: fixed;
       left: 8px;
       right: 8px;
       bottom: 8px;
       z-index: 50;
       max-height: 70vh;
-      overflow: auto;
       box-shadow: 0 -8px 24px rgb(15 23 42 / 16%);
     }
     .ops-unavail-close { display: inline-flex; }

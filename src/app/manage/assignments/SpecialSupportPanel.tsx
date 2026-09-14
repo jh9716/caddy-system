@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, memo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, memo } from "react";
+import type { OpsSpecialSupportItem } from "@/lib/opsStatusPanelView";
 import { formatCaddyLabel } from "@/lib/caddyDisplay";
 import {
   DAILY_SPECIAL_SUPPORT_KINDS,
@@ -73,6 +74,7 @@ export const SpecialSupportPanel = memo(function SpecialSupportPanel({
   hasDraft,
   onChanged,
   onLoaded,
+  onRecordsLoaded,
 }: {
   date: string;
   excludedRows?: Array<{
@@ -86,6 +88,7 @@ export const SpecialSupportPanel = memo(function SpecialSupportPanel({
   hasDraft?: boolean;
   onChanged?: () => void;
   onLoaded?: (byShift: ReturnType<typeof engineQueuesFromSupportRecords>) => void;
+  onRecordsLoaded?: (items: OpsSpecialSupportItem[]) => void;
 }) {
   const [payload, setPayload] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(false);
@@ -101,8 +104,12 @@ export const SpecialSupportPanel = memo(function SpecialSupportPanel({
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const onRecordsLoadedRef = useRef(onRecordsLoaded);
+  onRecordsLoadedRef.current = onRecordsLoaded;
+
   const applyPayload = useCallback(
     (data: Payload) => {
+      const items = data.items || [];
       setPayload((prev) => ({
         ...data,
         candidates:
@@ -111,6 +118,7 @@ export const SpecialSupportPanel = memo(function SpecialSupportPanel({
             : prev?.candidates,
       }));
       onLoaded?.(engineQueuesFromSupportRecords(data.byShift));
+      onRecordsLoadedRef.current?.(items);
     },
     [onLoaded]
   );
@@ -120,6 +128,7 @@ export const SpecialSupportPanel = memo(function SpecialSupportPanel({
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
         setPayload(null);
         onLoaded?.(engineQueuesFromSupportRecords(null));
+        onRecordsLoadedRef.current?.([]);
         return null as Payload | null;
       }
       setLoading(true);
