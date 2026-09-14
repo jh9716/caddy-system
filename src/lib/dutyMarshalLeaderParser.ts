@@ -7,40 +7,24 @@
 import * as XLSX from "xlsx";
 import { parseDateValue } from "@/lib/reservationParser";
 import { normalizePersonName, splitPersonNames } from "@/lib/dailyCaddyNameMatch";
+import {
+  DUTY_ROLE_KEY_KIND,
+  type DutyExcelEntry,
+} from "@/lib/opsDutyRoleKeys";
 
 export const DUTY_SHEET_NAME = "당번마샬조장";
 
-export type DutyRoleKind =
-  | "duty_am"
-  | "duty_pm"
-  | "marshal_am"
-  | "marshal_pm"
-  | "leader";
+export {
+  DUTY_ROLE_KEY_KIND,
+  DUTY_ROLE_LABELS,
+  isOpsDutyRoleKey,
+  OPS_DUTY_ROLE_KEYS,
+  type DutyExcelEntry,
+  type DutyRoleKind,
+  type OpsDutyRoleKey,
+} from "@/lib/opsDutyRoleKeys";
 
-export const DUTY_ROLE_LABELS: Record<DutyRoleKind, string> = {
-  duty_am: "조출당번",
-  duty_pm: "후출당번",
-  marshal_am: "조출마샬",
-  marshal_pm: "후출마샬",
-  leader: "조장",
-};
-
-const ROLE_BY_KEY: Record<string, DutyRoleKind> = {
-  당번_조출_1: "duty_am",
-  당번_조출_2: "duty_am",
-  당번_후출_1: "duty_pm",
-  당번_후출_2: "duty_pm",
-  마샬_조출_1: "marshal_am",
-  마샬_조출_2: "marshal_am",
-  마샬_후출_1: "marshal_pm",
-  조장_1: "leader",
-};
-
-export type DutyExcelEntry = {
-  kind: DutyRoleKind;
-  roleKey: string;
-  rawName: string;
-};
+const ROLE_BY_KEY = DUTY_ROLE_KEY_KIND;
 
 export type DutyExcelParseResult = {
   date: string;
