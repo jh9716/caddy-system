@@ -1,7 +1,7 @@
 /**
  * 배치표 캐디 셀 직접편집 V1.
  * 전체 autoAssign/reflow를 호출하지 않는다.
- * 54홀·1·2·1·3·고정 등 특수 연결은 조용히 깨지 않고 차단한다.
+ * 54홀·1·2·2·3·1·3·고정 등 특수 연결은 조용히 깨지 않고 차단한다.
  */
 
 import {
@@ -36,7 +36,7 @@ import {
 } from "@/lib/reservationParser";
 
 export const DIRECT_EDIT_PROTECTED_MESSAGE =
-  "54홀·1·2·1·3·고정 등 특수 연결 배치는 직접편집할 수 없습니다. 기존 메뉴를 사용하세요.";
+  "54홀·1·2·2·3·1·3·고정 등 특수 연결 배치는 직접편집할 수 없습니다. 기존 메뉴를 사용하세요.";
 
 export const DIRECT_EDIT_SHIFT_BLOCKED_MESSAGE =
   "LOCK/특수 배치를 밀어야 해서 이 위치에 미배치 캐디를 넣을 수 없습니다.";
@@ -100,6 +100,7 @@ const LINKED_SPECIAL_KINDS = new Set<AutoAssignmentRow["kind"]>([
   "fiftyFourHole",
   "oneThree",
   "oneTwo",
+  "twoThree",
   "oneMak",
   "fixed",
   "driving",

@@ -204,6 +204,7 @@ export const publishedBoardCss = `
     font-size: 0.6rem;
   }
   .bc-badge.drive { color: #fff; background: #7c3aed; }
+  .bc-badge.two-three { color: #0f766e; background: #ccfbf1; }
   .bc-special {
     font-size: 0.58rem;
     font-weight: 800;

@@ -101,6 +101,7 @@ function result(assignments: AutoAssignResultV1["assignments"]): AutoAssignResul
     fiftyFourHoleAssignments: [],
     oneThreeAssignments: [],
     oneTwoAssignments: [],
+    twoThreeAssignments: [],
     oneMakAssignments: [],
     weekendBandAssignments: [],
     regularAssignments: assignments,

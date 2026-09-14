@@ -202,6 +202,7 @@ export const assignmentBoardExportCss = `
 .bx-badge.support { color: #1e3a8a; background: #dbeafe; }
 .bx-badge.limo { color: #9a3412; background: #fb923c; }
 .bx-badge.drive { color: #fff; background: #7c3aed; }
+.bx-badge.two-three { color: #0f766e; background: #ccfbf1; }
 .bx-special { font-size: 10px; font-weight: 800; color: #b45309; }
 .bx-empty-board {
   padding: 28px 12px;

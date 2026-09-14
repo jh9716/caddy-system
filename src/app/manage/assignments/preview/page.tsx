@@ -291,6 +291,8 @@ export default function AutoAssignPreviewPage() {
                         ? "1·3부"
                         : a.kind === "oneTwo"
                           ? "1·2부"
+                          : a.kind === "twoThree"
+                            ? "2·3부"
                           : "일반",
                   a.shift,
                   a.reservation.teeTime,

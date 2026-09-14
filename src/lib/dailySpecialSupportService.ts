@@ -16,6 +16,8 @@ import {
   isSpecialSupportShift,
   supportBlockedByUnavailable,
   uniqueCaddyIds,
+  workPatternFromShift,
+  DEFAULT_SPECIAL_SUPPORT_KIND,
   type SpecialSupportCandidateRow,
   type SpecialSupportRecord,
   type SpecialSupportUnavailable,
@@ -94,7 +96,7 @@ export async function listDailySpecialSupportRecords(
     prisma.dailySpecialSupport.findMany({
       where: { date: start },
       include: { caddy: { select: caddySelect } },
-      orderBy: [{ shift: "asc" }, { id: "asc" }],
+      orderBy: [{ shift: "asc" }, { sortOrder: "asc" }, { id: "asc" }],
     }),
     loadUnavailables(ymd),
   ]);
@@ -118,6 +120,9 @@ export async function listDailySpecialSupportRecords(
         date: ymd,
         caddyId: row.caddyId,
         shift,
+        kind: row.kind || DEFAULT_SPECIAL_SUPPORT_KIND,
+        workPattern: row.workPattern || workPatternFromShift(shift),
+        sortOrder: Number(row.sortOrder) || 0,
         name: row.caddy.name,
         team: row.caddy.team,
         teamOrder: row.caddy.teamOrder,
@@ -231,10 +236,13 @@ export async function replaceDailySpecialSupports(input: {
     }
     if (addIds.length) {
       await tx.dailySpecialSupport.createMany({
-        data: addIds.map((caddyId) => ({
+        data: addIds.map((caddyId, index) => ({
           date: start,
           caddyId,
           shift,
+          kind: DEFAULT_SPECIAL_SUPPORT_KIND,
+          workPattern: workPatternFromShift(shift),
+          sortOrder: existing.length + index + 1,
           createdByUserId: input.createdByUserId ?? null,
         })),
       });
@@ -261,7 +269,7 @@ export async function loadSpecialSupportQueuesForDate(
     prisma.dailySpecialSupport.findMany({
       where: { date: start },
       include: { caddy: { select: caddySelect } },
-      orderBy: [{ id: "asc" }],
+      orderBy: [{ shift: "asc" }, { sortOrder: "asc" }, { id: "asc" }],
     }),
     options?.unavailables
       ? Promise.resolve(options.unavailables)

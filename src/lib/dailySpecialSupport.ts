@@ -54,6 +54,9 @@ export type SpecialSupportRecord = {
   date: string;
   caddyId: number;
   shift: ShiftPart;
+  kind?: DailySpecialSupportKind;
+  workPattern?: DailySpecialSupportWorkPattern;
+  sortOrder?: number;
   name?: string;
   team?: string;
   teamOrder?: number;
@@ -61,6 +64,70 @@ export type SpecialSupportRecord = {
   blocked?: boolean;
   blockedReason?: string | null;
 };
+
+export const DAILY_SPECIAL_SUPPORT_KINDS = [
+  "CHAGEUN",
+  "SPECIAL_SUPPORT",
+  "OFF_SUPPORT",
+  "MARSHAL_SUPPORT",
+  "LEADER_SUPPORT",
+  "FIFTY_FOUR_SUPPORT",
+] as const;
+
+export type DailySpecialSupportKind = (typeof DAILY_SPECIAL_SUPPORT_KINDS)[number];
+
+export const DAILY_SPECIAL_SUPPORT_KIND_LABELS: Record<
+  DailySpecialSupportKind,
+  string
+> = {
+  CHAGEUN: "찾근",
+  SPECIAL_SUPPORT: "특수지원",
+  OFF_SUPPORT: "휴무지원",
+  MARSHAL_SUPPORT: "마샬지원",
+  LEADER_SUPPORT: "조장지원",
+  FIFTY_FOUR_SUPPORT: "54지원",
+};
+
+export const DAILY_SPECIAL_SUPPORT_WORK_PATTERNS = [
+  "ONE_TWO",
+  "SHIFT_1",
+  "SHIFT_2",
+  "SHIFT_3",
+  "FIFTY_FOUR",
+] as const;
+
+export type DailySpecialSupportWorkPattern =
+  (typeof DAILY_SPECIAL_SUPPORT_WORK_PATTERNS)[number];
+
+export const DAILY_SPECIAL_SUPPORT_WORK_PATTERN_LABELS: Record<
+  DailySpecialSupportWorkPattern,
+  string
+> = {
+  ONE_TWO: "1·2부",
+  SHIFT_1: "1부",
+  SHIFT_2: "2부",
+  SHIFT_3: "3부",
+  FIFTY_FOUR: "54",
+};
+
+export const DEFAULT_SPECIAL_SUPPORT_KIND: DailySpecialSupportKind =
+  "SPECIAL_SUPPORT";
+
+export function isDailySpecialSupportKind(
+  value: unknown
+): value is DailySpecialSupportKind {
+  return DAILY_SPECIAL_SUPPORT_KINDS.includes(
+    String(value) as DailySpecialSupportKind
+  );
+}
+
+export function workPatternFromShift(
+  shift: ShiftPart
+): DailySpecialSupportWorkPattern {
+  if (shift === "1부") return "SHIFT_1";
+  if (shift === "2부") return "SHIFT_2";
+  return "SHIFT_3";
+}
 
 export function isSpecialSupportShift(value: unknown): value is ShiftPart {
   return SHIFT_PARTS.includes(String(value) as ShiftPart);
@@ -236,6 +303,7 @@ export function engineQueuesFromSupportRecords(
     | null
     | undefined
 ): Record<ShiftPart, AutoAssignCaddy[]> {
+  // V2 kind/workPattern는 이번 PR에서 배치 정책에 쓰지 않는다. shift 큐만.
   const next = emptySpecialSupportByShift();
   for (const part of SHIFT_PARTS) {
     next[part] = (byShift?.[part] || [])
