@@ -408,13 +408,25 @@ section("휴무자 1부 지원은 정상 후보 뒤에만");
   assert(tail.locked === false, "지원은 LOCK 아님");
 }
 
-section("마샬 3부 지원 / 조장·당번 특정 부 / 여러 부");
+section("마샬 3부 지원은 미배치 / 조장 2부 막만");
 {
   const date = "2026-08-26";
   const available = [house(1, 1), house(2, 2), third(11, 1)];
-  const marshal = supportCaddy(91, "마샬지원", "9조");
-  const leader = supportCaddy(92, "조장지원", "8조");
-  const duty = supportCaddy(93, "당번지원", "6조");
+  const marshal3: AutoAssignCaddy = {
+    ...supportCaddy(91, "마샬지원", "9조"),
+    supportKind: "MARSHAL_SUPPORT",
+    supportWorkPattern: "SHIFT_3",
+  };
+  const leader2: AutoAssignCaddy = {
+    ...supportCaddy(92, "조장지원", "8조"),
+    supportKind: "LEADER_SUPPORT",
+    supportWorkPattern: "SHIFT_2",
+  };
+  const duty: AutoAssignCaddy = {
+    ...supportCaddy(93, "당번지원", "6조"),
+    supportKind: "SPECIAL_SUPPORT",
+    supportWorkPattern: "SHIFT_1",
+  };
   const reservations = [
     ...shiftRes(date, "1부", 3),
     ...shiftRes(date, "2부", 3),
@@ -427,21 +439,27 @@ section("마샬 3부 지원 / 조장·당번 특정 부 / 여러 부");
     protectedTailCount: 0,
     specialSupportByShift: {
       "1부": [duty],
-      "2부": [leader],
-      "3부": [marshal, leader],
+      "2부": [leader2],
+      "3부": [marshal3, leader2],
     },
   });
   const byShiftKind = (shift: "1부" | "2부" | "3부") =>
     result.assignments.filter((a) => a.shift === shift && a.kind === "specialSupport");
   assert(byShiftKind("1부").every((a) => a.caddy.id === 93), "1부 당번 지원");
-  assert(byShiftKind("2부").every((a) => a.caddy.id === 92), "2부 조장 지원");
+  const s2 = result.assignments
+    .filter((a) => a.shift === "2부")
+    .sort((a, b) => compareReservationOrder(a.reservation, b.reservation));
   assert(
-    byShiftKind("3부").some((a) => a.caddy.id === 91),
-    "3부 마샬 지원"
+    s2[s2.length - 1]?.caddy.id === 92 && s2[s2.length - 1]?.kind === "specialSupport",
+    "조장은 2부 막"
   );
   assert(
-    result.assignments.filter((a) => a.caddy.id === 92).length >= 2,
-    "조장은 여러 부 지원 가능"
+    !byShiftKind("3부").some((a) => a.caddy.id === 91 || a.caddy.id === 92),
+    "3부 마샬지원/조장지원은 자동배치하지 않음"
+  );
+  assert(
+    result.assignments.filter((a) => a.caddy.id === 92).length === 1,
+    "조장은 이번 PR에서 2부만"
   );
 }
 
@@ -1187,7 +1205,14 @@ section("지원근무 V2 유형/패턴/sortOrder/엔진 제외");
       !isEngineEligibleSupportRecord(rows[4]) &&
       !isEngineEligibleSupportRecord(rows[5]) &&
       !isEngineEligibleSupportRecord(rows[6]),
-    "새 유형/1·2/54는 엔진 제외"
+    "찾근 kind / 휴무 1·2 / 마샬 3부 / 조장 1부 / 54는 엔진 제외"
+  );
+  assert(
+    isEngineEligibleSupportRecord(rec("MARSHAL_SUPPORT", "SHIFT_1", 11, 1, "1부")) &&
+      isEngineEligibleSupportRecord(rec("MARSHAL_SUPPORT", "SHIFT_2", 12, 1, "2부")) &&
+      isEngineEligibleSupportRecord(rec("LEADER_SUPPORT", "SHIFT_2", 13, 1, "2부")) &&
+      isEngineEligibleSupportRecord(rec("OFF_SUPPORT", "SHIFT_3", 14, 1, "3부")),
+    "후출마샬 1부·조출마샬 2부·조장 2부·휴무 3부는 엔진 대상"
   );
   const byShift = groupSupportRecordsByShift(rows);
   assert(
@@ -1467,17 +1492,19 @@ section("source / UI / migration / 권한");
   assert(migDirs.length === 0, "새 migration 없음");
   assert(
     /후출마샬이 1부 지원으로 등록된 경우/.test(supportDomain) &&
-      /조출마샬과 조장은 기본적으로/.test(supportDomain) &&
-      /autoAssignEngine은 #141에서 수정하지 않음/.test(supportDomain),
-    "다음 엔진 PR 운영 규칙 기록"
+      /조출마샬/.test(supportDomain) &&
+      /isLateMarshalShift1Support/.test(supportDomain),
+    "단일부 엔진 우선순위 기록"
   );
   assert(
-    !/후출마샬 1부 지원/.test(engine) &&
-      !/조출마샬/.test(engine) &&
-      !/MARSHAL_SUPPORT/.test(engine) &&
-      !/LEADER_SUPPORT/.test(engine) &&
-      !/OFF_SUPPORT/.test(engine),
-    "autoAssignEngine 배치 규칙 변경 없음"
+    /후출마샬 1부 지원/.test(engine) &&
+      /isLateMarshalShift1Support/.test(engine) &&
+      /isShift2MidSupport/.test(engine) &&
+      /isOffSupportShift3/.test(engine) &&
+      /MARSHAL_SUPPORT/.test(engine) &&
+      /LEADER_SUPPORT/.test(engine) &&
+      /OFF_SUPPORT/.test(engine),
+    "autoAssignEngine 단일부 지원 우선순위 연결"
   );
 }
 

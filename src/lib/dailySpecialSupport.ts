@@ -308,11 +308,7 @@ export function resolveSupportKind(row: {
 }
 
 /**
- * 기존 shift 기반 엔진에 넣는 행만.
- * SPECIAL_SUPPORT + 단일부(SHIFT_1/2/3)만 기존 꼬리 배치 큐로 전달한다.
- * 1·2/54 및 다른 유형은 저장만 하고 이번 PR에서 배치하지 않는다.
- *
- * NEXT ENGINE PR 확정 규칙 (여기 기록만. autoAssignEngine은 #141에서 수정하지 않음):
+ * 단일부 지원만 엔진 큐에 넣는다. ONE_TWO / FIFTY_FOUR / 54지원 / 찾근 kind는 저장만.
  *
  * [후출마샬 1부 지원]
  * 후출마샬이 1부 지원으로 등록된 경우:
@@ -320,25 +316,99 @@ export function resolveSupportKind(row: {
  *   1부 보호 슬롯 2번
  *   → 후출마샬 1부 지원
  *   → 그 다음 기타 특수/지원 및 일반 순번
- * 즉 후출마샬 1부 지원은 1부 1·2번째 다음 자리부터 지원 대상 중 최우선이다.
  * 후출마샬 1부 지원을 1막 특수근무로 변환하거나 배치하면 안 된다.
  *
- * [조출마샬 / 조장]
- * 조출마샬과 조장은 기본적으로 2부 막(마지막 쪽) 배치를 사용한다.
- * 실제 운영 상황에 따라 위치가 달라질 수 있으므로
- * 향후 지원근무 배치 엔진에서 수동 위치 지정으로 override 가능해야 한다.
+ * [2부 지원]
+ * 보호 1·2 → (기존 2·3) → 찾근 핀 → 원번 전부 소진 → 지원 → 1·2부 투.
+ * 조출마샬(MARSHAL_SUPPORT+SHIFT_2) / 조장(LEADER_SUPPORT+SHIFT_2)은 2부 막.
+ *
+ * [휴무지원 3부]
+ * 1·3부 → 주중/주말반 → 휴무지원 → 3부반 원번 → 2·3부 → 찾근 → HOUSE
+ *
+ * 3부 마샬지원/조장지원, 1·2·54 지원은 이번 PR에서 자동배치하지 않는다.
  */
 export function isEngineEligibleSupportRecord(row: {
   kind?: unknown;
   workPattern?: unknown;
   shift?: unknown;
 }): boolean {
-  if (resolveSupportKind(row) !== DEFAULT_SPECIAL_SUPPORT_KIND) return false;
+  const kind = resolveSupportKind(row);
   const pattern = resolveSupportWorkPattern(row);
   if (pattern !== "SHIFT_1" && pattern !== "SHIFT_2" && pattern !== "SHIFT_3") {
     return false;
   }
-  return isSpecialSupportShift(shiftCompatFromWorkPattern(pattern));
+  if (!isSpecialSupportShift(shiftCompatFromWorkPattern(pattern))) return false;
+  if (kind === "SPECIAL_SUPPORT") return true;
+  if (kind === "MARSHAL_SUPPORT") {
+    return pattern === "SHIFT_1" || pattern === "SHIFT_2";
+  }
+  if (kind === "LEADER_SUPPORT") return pattern === "SHIFT_2";
+  if (kind === "OFF_SUPPORT") return pattern === "SHIFT_3";
+  return false;
+}
+
+type SupportMetaCaddy = {
+  supportKind?: string | null;
+  supportWorkPattern?: string | null;
+};
+
+/** 후출마샬 1부 지원. 1막으로 변환하지 않는다. */
+export function isLateMarshalShift1Support(caddy: SupportMetaCaddy): boolean {
+  return (
+    caddy.supportKind === "MARSHAL_SUPPORT" &&
+    caddy.supportWorkPattern === "SHIFT_1"
+  );
+}
+
+/** 조출마샬 / 조장 2부 막 */
+export function isShift2EndSupport(caddy: SupportMetaCaddy): boolean {
+  return (
+    (caddy.supportKind === "MARSHAL_SUPPORT" ||
+      caddy.supportKind === "LEADER_SUPPORT") &&
+    caddy.supportWorkPattern === "SHIFT_2"
+  );
+}
+
+/**
+ * 2부 원번 뒤·1·2 투 앞 지원. 레거시(kind 없음)와 SPECIAL_SUPPORT.
+ * 마샬/조장/휴무/찾근/54는 여기 넣지 않는다.
+ */
+export function isShift2MidSupport(caddy: SupportMetaCaddy): boolean {
+  const kind = caddy.supportKind;
+  return kind == null || kind === "" || kind === "SPECIAL_SUPPORT";
+}
+
+/** 휴무지원 3부. HOUSE 꼬리가 아니라 주말반 다음. */
+export function isOffSupportShift3(caddy: SupportMetaCaddy): boolean {
+  return (
+    caddy.supportKind === "OFF_SUPPORT" &&
+    (caddy.supportWorkPattern === "SHIFT_3" ||
+      caddy.supportWorkPattern == null ||
+      caddy.supportWorkPattern === "")
+  );
+}
+
+/** regular sequence 꼬리(1부 MANUAL / 2부 막 / 3부 특수지원 용량 꼬리) */
+export function isRegularSequenceTailSupport(
+  caddy: SupportMetaCaddy,
+  shift: ShiftPart
+): boolean {
+  const kind = caddy.supportKind;
+  if (
+    kind === "CHAGEUN" ||
+    kind === "FIFTY_FOUR_SUPPORT" ||
+    kind === "OFF_SUPPORT"
+  ) {
+    return false;
+  }
+  if (shift === "1부") {
+    return kind == null || kind === "" || kind === "SPECIAL_SUPPORT";
+  }
+  if (shift === "2부") return isShift2EndSupport(caddy);
+  if (shift === "3부") {
+    return kind == null || kind === "" || kind === "SPECIAL_SUPPORT";
+  }
+  return false;
 }
 
 export function supportBoardBadgeLabels(
@@ -644,7 +714,7 @@ export function engineQueuesFromSupportRecords(
     | null
     | undefined
 ): Record<ShiftPart, AutoAssignCaddy[]> {
-  // 기존 SPECIAL_SUPPORT + 단일부만. 새 유형/1·2/54는 엔진에 넣지 않는다.
+  // 단일부 엔진 대상만. 1·2/54/찾근 kind/3부 마샬·조장은 isEngineEligible에서 제외.
   const next = emptySpecialSupportByShift();
   for (const part of SHIFT_PARTS) {
     next[part] = (byShift?.[part] || [])
