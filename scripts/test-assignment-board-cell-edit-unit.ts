@@ -476,6 +476,17 @@ console.log("== 6. linked 54/special/fixed 차단 ==");
     caddyId: spare.id,
   });
   assert(!blocked23.ok, "2·3부 직접편집 차단");
+  const oneTwoSupportRow = row(rA, cA, {
+    kind: "specialSupport",
+    pairId: "SUP12-1",
+  });
+  assert(isDirectEditProtected(oneTwoSupportRow), "ONE_TWO 지원 protected");
+  const oneTwoSupportDraft = makeDraft([oneTwoSupportRow, row(rB, cB)]);
+  const blockedOt = applyDirectCaddyEdit(oneTwoSupportDraft, {
+    reservationKey: reservationKey(rA),
+    caddyId: spare.id,
+  });
+  assert(!blockedOt.ok, "ONE_TWO 지원 한쪽만 이동 차단");
   const blocked = applyDirectCaddyEdit(draft, {
     reservationKey: reservationKey(r54a),
     caddyId: spare.id,

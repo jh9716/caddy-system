@@ -6,6 +6,7 @@
 import {
   compareReservationOrder,
   computeAutoAssignmentsV1,
+  preservePlacementOnReflow,
   SHIFT2_PROTECTED_COUNT,
   type AutoAssignCaddy,
   type AutoAssignReservation,
@@ -17,7 +18,10 @@ import {
   emptySpecialSupportByShift,
   engineQueuesFromSupportRecords,
   groupSupportRecordsByShift,
+  isEngineEligibleOneTwoSupportRecord,
   isEngineEligibleSupportRecord,
+  oneTwoSupportPairId,
+  oneTwoSupportQueueFromRecords,
   supportBoardBadgeLabels,
   type SpecialSupportRecord,
 } from "../src/lib/dailySpecialSupport";
@@ -181,7 +185,17 @@ section("엔진 적격: 단일부만, 1·2/54/3부마샬 제외");
   );
   assert(
     !isEngineEligibleSupportRecord(rec("SPECIAL_SUPPORT", "ONE_TWO", 8, 1, "1·2부")),
-    "ONE_TWO 지원 미배치"
+    "ONE_TWO 지원은 단일부 큐가 아님"
+  );
+  assert(
+    isEngineEligibleOneTwoSupportRecord(rec("SPECIAL_SUPPORT", "ONE_TWO", 8, 1, "1·2부")),
+    "ONE_TWO 지원은 linked 큐 대상"
+  );
+  assert(
+    !isEngineEligibleOneTwoSupportRecord(
+      rec("FIFTY_FOUR_SUPPORT", "FIFTY_FOUR", 7, 1, "54")
+    ),
+    "54지원은 ONE_TWO 큐도 아님"
   );
   const legacy: SpecialSupportRecord = { date: "2026-06-10", caddyId: 9, shift: "2부" };
   assert(isEngineEligibleSupportRecord(legacy), "kind 없는 기존 row는 특수지원");
@@ -741,6 +755,173 @@ section("미배치 조합은 운영 kind를 바꾸지 않음");
     ),
     "마샬지원을 1막으로 변환하지 않음"
   );
+}
+
+section("ONE_TWO 지원 1명: 1부+2부 같은 SUP12 pair, 특수근무 oneTwo 아님");
+{
+  const date = "2026-06-10";
+  const available = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => house(n, n));
+  const ot = support(201, "일이지원", "SPECIAL_SUPPORT", "ONE_TWO", 1);
+  const result = computeAutoAssignmentsV1({
+    date,
+    available,
+    reservations: [
+      ...shiftRes(date, "1부", 10),
+      ...shiftRes(date, "2부", 12, "12:00"),
+      ...shiftRes(date, "3부", 4, "16:00"),
+    ],
+    protectedTailCount: 2,
+    oneTwoSupport: [ot],
+  });
+  const s1 = sortedShift(result, "1부").filter((a) => a.caddy.id === 201);
+  const s2 = sortedShift(result, "2부").filter((a) => a.caddy.id === 201);
+  assert(s1.length === 1, "ONE_TWO 지원 1부 1회");
+  assert(s2.length === 1, "ONE_TWO 지원 2부 1회");
+  assert(
+    s1[0]?.kind === "specialSupport" && s2[0]?.kind === "specialSupport",
+    "지원근무 kind=specialSupport"
+  );
+  assert(
+    s1[0]?.pairId === oneTwoSupportPairId(201) &&
+      s2[0]?.pairId === s1[0]?.pairId,
+    "1부/2부 같은 SUP12 pairId"
+  );
+  assert(
+    !result.assignments.some(
+      (a) => a.caddy.id === 201 && a.kind === "oneTwo"
+    ),
+    "DailySpecialDuty.ONE_TWO 로 변환하지 않음"
+  );
+  assert(
+    s1[0]?.supportKind === "SPECIAL_SUPPORT" &&
+      s1[0]?.supportWorkPattern === "ONE_TWO" &&
+      s2[0]?.supportWorkPattern === "ONE_TWO",
+    "표시 metadata 유지"
+  );
+  const badges = supportBoardBadgeLabels("SPECIAL_SUPPORT", "ONE_TWO");
+  assert(badges.kind === "특" && badges.pattern === "1·2", "배치표 [특][1·2]");
+  assert(
+    preservePlacementOnReflow(s1[0] as never) &&
+      preservePlacementOnReflow(s2[0] as never),
+    "reflow에서 linked 지원 양쪽 보호"
+  );
+}
+
+section("ONE_TWO 지원 여러 명: 1부/2부 모두 A→B→C sortOrder");
+{
+  const date = "2026-06-10";
+  const available = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => house(n, n));
+  const a = support(301, "A", "SPECIAL_SUPPORT", "ONE_TWO", 1);
+  const b = support(302, "B", "SPECIAL_SUPPORT", "ONE_TWO", 2);
+  const c = support(303, "C", "SPECIAL_SUPPORT", "ONE_TWO", 3);
+  const result = computeAutoAssignmentsV1({
+    date,
+    available,
+    reservations: [
+      ...shiftRes(date, "1부", 12),
+      ...shiftRes(date, "2부", 14, "12:00"),
+      ...shiftRes(date, "3부", 4, "16:00"),
+    ],
+    protectedTailCount: 2,
+    oneTwoSupport: [c, a, b],
+  });
+  const s1 = sortedShift(result, "1부")
+    .filter((row) => [301, 302, 303].includes(row.caddy.id))
+    .map((row) => row.caddy.id)
+    .join(",");
+  const s2 = sortedShift(result, "2부")
+    .filter((row) => [301, 302, 303].includes(row.caddy.id))
+    .map((row) => row.caddy.id)
+    .join(",");
+  assert(s1 === "301,302,303", `1부 A→B→C (${s1})`);
+  assert(s2 === "301,302,303", `2부 A→B→C (${s2})`);
+  const queued = oneTwoSupportQueueFromRecords([
+    rec("SPECIAL_SUPPORT", "ONE_TWO", 303, 3, "1·2부"),
+    rec("SPECIAL_SUPPORT", "ONE_TWO", 301, 1, "1·2부"),
+    rec("SPECIAL_SUPPORT", "ONE_TWO", 302, 2, "1·2부"),
+  ]);
+  assert(
+    queued.map((row) => row.id).join(",") === "301,302,303",
+    "큐도 sortOrder"
+  );
+}
+
+section("2부: 보호→찾근→2·3→원번→ONE_TWO 지원→1·2 투");
+{
+  const date = "2026-06-10";
+  const available = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => house(n, n));
+  const chageun: AutoAssignCaddy = {
+    id: 60,
+    name: "찾근2",
+    team: "6조",
+    teamOrder: 1,
+    caddyType: "HOUSE",
+  };
+  const twoThree: AutoAssignCaddy = {
+    id: 50,
+    name: "이삼",
+    team: "5조",
+    teamOrder: 1,
+    caddyType: "HOUSE",
+    inputOrder: 1,
+  };
+  const duty: AutoAssignCaddy = {
+    id: 30,
+    name: "일이부",
+    team: "5조",
+    teamOrder: 1,
+    caddyType: "HOUSE",
+    inputOrder: 1,
+  };
+  const ot = support(201, "일이지원", "SPECIAL_SUPPORT", "ONE_TWO", 1);
+  const reservations = [
+    ...shiftRes(date, "1부", 5),
+    ...shiftRes(date, "2부", 16, "12:00"),
+    ...shiftRes(date, "3부", 6, "16:00"),
+  ];
+  const shift2 = reservations.filter((r) => r.shift === "2부");
+  const late = shift2[shift2.length - 1]!;
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: [...available, chageun, twoThree, duty],
+    twoThreeCandidates: [twoThree],
+    oneTwoCandidates: [duty],
+    oneTwoSupport: [ot],
+    reservations,
+    fixedAssignments: [
+      {
+        caddyId: 60,
+        type: "SPECIAL_CALL",
+        reservationMatch: {
+          date,
+          course: late.course,
+          shift: "2부",
+          teeTime: late.teeTime,
+          teamName: late.teamName,
+        },
+      },
+    ],
+  });
+  const s2 = sortedShift(result, "2부");
+  const idx = (id: number) => s2.findIndex((a) => a.caddy.id === id);
+  const chageunIdx = idx(60);
+  const twoThreeIdx = s2.findIndex((a) => a.kind === "twoThree");
+  const otIdx = idx(201);
+  const dutyIdx = s2.findIndex((a) => a.kind === "oneTwo");
+  assert(s2[0]?.kind !== "fixed" && s2[1]?.kind !== "fixed", "2부 보호 1·2");
+  assert(chageunIdx === 2, `찾근은 보호 다음 (${chageunIdx})`);
+  assert(twoThreeIdx > chageunIdx, "2·3은 찾근 다음");
+  assert(
+    twoThreeIdx < otIdx &&
+      s2.slice(twoThreeIdx + 1, otIdx).length > 0 &&
+      s2.slice(twoThreeIdx + 1, otIdx).every((a) => a.kind === "regular"),
+    "원번은 2·3 다음·지원 앞"
+  );
+  assert(otIdx > twoThreeIdx, "ONE_TWO 지원은 원번 뒤");
+  assert(dutyIdx === otIdx + 1, `지원 다음 1·2 투 (${otIdx},${dutyIdx})`);
+  assert(s2[otIdx]?.kind === "specialSupport", "지원은 specialSupport");
+  assert(s2[dutyIdx]?.kind === "oneTwo" && s2[dutyIdx]?.pairId === "12-30", "특수근무 투 pairId 12-");
+  assert(s2[twoThreeIdx]?.pairId === "23-50", "2·3 pairId 유지");
 }
 
 console.log(`\nOK ${passed}/${passed + failed}`);

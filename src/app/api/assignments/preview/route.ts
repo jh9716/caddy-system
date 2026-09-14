@@ -28,7 +28,7 @@ import {
 import { isThirdWeeklyTeam } from "@/lib/thirdWeeklyRotation";
 import { loadEffectiveThirdStartTeam } from "@/lib/thirdWeeklyStartService";
 import { regularPoolExcludingStoredOpsDuty } from "@/lib/opsDutyLivePool";
-import { loadSpecialSupportQueuesForDate } from "@/lib/dailySpecialSupportService";
+import { loadSupportEngineQueuesForDate } from "@/lib/dailySpecialSupportService";
 import { stampReservationIdentities } from "@/lib/reservationIdentity";
 import { rosterBaselineFromAvailability } from "@/lib/caddyPoolCanonical";
 
@@ -242,7 +242,7 @@ export async function POST(req: NextRequest) {
         ...availability.special,
         ...availability.excluded,
       ]);
-      const specialSupportByShift = await loadSpecialSupportQueuesForDate(date);
+      const supportQueues = await loadSupportEngineQueuesForDate(date);
 
       const result = computeAutoAssignmentsV1({
         date,
@@ -264,7 +264,8 @@ export async function POST(req: NextRequest) {
         thirdStartTeam,
         thirdStartCaddyId,
         caddyDirectory,
-        specialSupportByShift,
+        specialSupportByShift: supportQueues.byShift,
+        oneTwoSupport: supportQueues.oneTwoSupport,
       });
 
       return NextResponse.json({
@@ -435,6 +436,7 @@ export async function POST(req: NextRequest) {
       houseStartCaddyId = n;
     }
 
+    const supportQueues = await loadSupportEngineQueuesForDate(date);
     const result = computeAutoAssignmentsV1({
       date,
       reservations,
@@ -458,7 +460,8 @@ export async function POST(req: NextRequest) {
       ),
       thirdStartCaddyId: parseOptionalThirdStartCaddyId(body.thirdStartCaddyId),
       caddyDirectory: jsonCaddyDirectory,
-      specialSupportByShift: await loadSpecialSupportQueuesForDate(date),
+      specialSupportByShift: supportQueues.byShift,
+      oneTwoSupport: supportQueues.oneTwoSupport,
     });
 
     return NextResponse.json({

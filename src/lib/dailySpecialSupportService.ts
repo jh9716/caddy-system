@@ -10,11 +10,13 @@ import type { AutoAssignCaddy } from "@/lib/autoAssignEngine";
 import { Prisma } from "@prisma/client";
 import {
   countSupportByKind,
+  compareSupportRecordsForDisplay,
   emptySpecialSupportByShift,
   exclusionLabel,
   groupSupportRecordsByKindPattern,
   groupSupportRecordsByShift,
   isEligibleSpecialSupportCandidate,
+  isEngineEligibleOneTwoSupportRecord,
   isEngineEligibleSupportRecord,
   isHardExcludedSpecialSupport,
   isSpecialSupportShift,
@@ -424,14 +426,20 @@ export async function deleteDailySpecialSupport(
   return { date: ymd };
 }
 
+export type SupportEngineQueues = {
+  byShift: Record<ShiftPart, AutoAssignCaddy[]>;
+  oneTwoSupport: AutoAssignCaddy[];
+};
+
 /**
  * 한 날짜 특수지원 큐를 한 번에 읽는다.
  * course/team/shift 루프에서 호출하지 말 것 — preview/reflow 요청당 1회.
+ * 단일부는 byShift, ONE_TWO는 oneTwoSupport (1부+2부 linked).
  */
-export async function loadSpecialSupportQueuesForDate(
+export async function loadSupportEngineQueuesForDate(
   ymd: string,
   options?: { unavailables?: SpecialSupportUnavailable[] }
-): Promise<Record<ShiftPart, AutoAssignCaddy[]>> {
+): Promise<SupportEngineQueues> {
   parseYmd(ymd);
   const { start } = parseYmd(ymd);
   const [rows, unavailables] = await Promise.all([
@@ -445,21 +453,47 @@ export async function loadSpecialSupportQueuesForDate(
       : loadUnavailables(ymd),
   ]);
   const blocked = unavailableReasonsMap(unavailables);
-  const out = emptySpecialSupportByShift();
+  const byShift = emptySpecialSupportByShift();
+  const oneTwoRows: typeof rows = [];
   for (const row of rows) {
-    if (!isEngineEligibleSupportRecord(row)) continue;
-    if (!isSpecialSupportShift(row.shift)) continue;
     const caddy = toCaddy(row.caddy);
     if (isHardExcludedSpecialSupport(caddy)) continue;
+    if (isEngineEligibleOneTwoSupportRecord(row)) {
+      const unavail = blocked.get(row.caddyId);
+      if (
+        supportBlockedByUnavailable(unavail, "1부") ||
+        supportBlockedByUnavailable(unavail, "2부")
+      ) {
+        continue;
+      }
+      oneTwoRows.push(row);
+      continue;
+    }
+    if (!isEngineEligibleSupportRecord(row)) continue;
+    if (!isSpecialSupportShift(row.shift)) continue;
     if (supportBlockedByUnavailable(blocked.get(row.caddyId), row.shift)) continue;
-    out[row.shift].push({
+    byShift[row.shift].push({
       ...caddy,
       inputOrder: Number(row.sortOrder) || 0,
       supportKind: resolveSupportKind(row),
       supportWorkPattern: resolveSupportWorkPattern(row),
     });
   }
-  return out;
+  oneTwoRows.sort(compareSupportRecordsForDisplay);
+  const oneTwoSupport = oneTwoRows.map((row) => ({
+    ...toCaddy(row.caddy),
+    inputOrder: Number(row.sortOrder) || 0,
+    supportKind: resolveSupportKind(row),
+    supportWorkPattern: resolveSupportWorkPattern(row),
+  }));
+  return { byShift, oneTwoSupport };
+}
+
+export async function loadSpecialSupportQueuesForDate(
+  ymd: string,
+  options?: { unavailables?: SpecialSupportUnavailable[] }
+): Promise<Record<ShiftPart, AutoAssignCaddy[]>> {
+  return (await loadSupportEngineQueuesForDate(ymd, options)).byShift;
 }
 
 export { SHIFT_PARTS };
