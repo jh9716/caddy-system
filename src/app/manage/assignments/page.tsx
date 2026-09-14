@@ -3322,7 +3322,7 @@ export default function ManageAssignmentsOpsPage() {
                 onClick={() => {
                   const rootWidth =
                     document.querySelector(".ops-root")?.clientWidth || 0;
-                  if (rootWidth >= 760) {
+                  if (rootWidth >= 880) {
                     setUnavailOpen(true);
                     return;
                   }
@@ -5246,7 +5246,7 @@ const opsCss = `
     align-items: center;
     gap: 3px;
   }
-  @container ops-assign (min-width: 760px) {
+  @container ops-assign (min-width: 880px) {
     .ops-direct-layout.has-ops-panel {
       grid-template-columns: minmax(0, 1fr) 320px;
       align-items: start;
@@ -5267,7 +5267,7 @@ const opsCss = `
     .ops-unavail-collapse { display: inline-flex; }
     .ops-unavail-chip[data-ops-panel-open="0"] { display: inline-flex; }
   }
-  @container ops-assign (max-width: 759px) {
+  @container ops-assign (max-width: 879px) {
     .ops-unavail-chip { display: inline-flex; }
     .ops-unavail { display: none; }
     .ops-unavail.is-mobile-open {

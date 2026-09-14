@@ -155,12 +155,12 @@ console.log("== source contracts: read-only, reuse existing loads ==");
   assert(/toOpsSpecialDutyGroups/.test(dutyPanel), "special duty slim groups for panel");
   assert(/onRecordsLoadedRef/.test(supportPanel), "support items forwarded without extra GET");
   assert(/minmax\(0, 1fr\) 320px/.test(page), "desktop width 320");
-  assert(/@container ops-assign \(min-width: 760px\)/.test(page), "two-col uses content container not 1280 viewport");
+  assert(/@container ops-assign \(min-width: 880px\)/.test(page), "two-col uses content container 880");
   assert(/max-width: none/.test(page), "PC assignments ops-root fills work area");
   assert(/is-ops-panel-collapsed/.test(page), "collapsed layout class");
   assert(/ops-unavail-collapse/.test(page), "desktop collapse css");
   assert(/data-ops-panel-open/.test(page), "chip hidden while desktop panel open");
-  assert(/max-width: 759px/.test(page), "narrow content uses drawer");
+  assert(/max-width: 879px/.test(page), "narrow content uses drawer");
 }
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);
