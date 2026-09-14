@@ -996,20 +996,20 @@ section("2·3부 저장 구조·2부 보호·3부 우선순위");
     .sort((a, b) => compareReservationOrder(a.reservation, b.reservation));
   const ids = s3a.map((a) => `${a.kind}:${a.caddy.id}`);
   assert(
-    ids.join(",") === "regular:201,regular:202,fixed:60,twoThree:50,regular:1",
-    `THIRD → 찾근 → 2·3 → HOUSE  (${ids.join(",")})`
+    ids.join(",") === "regular:201,regular:202,twoThree:50,fixed:60,regular:1",
+    `THIRD → 2·3 → 찾근 → HOUSE  (${ids.join(",")})`
   );
   const thirdIdx = s3a.findIndex((a) => a.caddy.id === 201);
   const chageunIdx = s3a.findIndex((a) => a.caddy.id === 60);
   const twoThreeIdx = s3a.findIndex((a) => a.kind === "twoThree");
   const houseAfter = s3a.findIndex(
-    (a, i) => i > twoThreeIdx && a.kind === "regular" && a.caddy.caddyType !== "THIRD"
+    (a, i) => i > chageunIdx && a.kind === "regular" && a.caddy.caddyType !== "THIRD"
   );
   assert(thirdIdx === 0 && s3a[1]?.caddy.id === 202, "3부 앞자리는 3부반 원번");
-  assert(chageunIdx === 2 && s3a[chageunIdx]?.kind === "fixed", "찾근은 THIRD 다음");
+  assert(twoThreeIdx === 2, "2·3은 3부반 원번 다음");
+  assert(chageunIdx === 3 && s3a[chageunIdx]?.kind === "fixed", "찾근은 2·3 다음");
   assert(s3a[chageunIdx]?.reason === "SPECIAL_CALL", "3부 찾근 reason 유지");
-  assert(twoThreeIdx === 3, "2·3은 찾근 다음");
-  assert(houseAfter === 4, "일반 HOUSE 3부는 2·3 다음");
+  assert(houseAfter === 4, "일반 HOUSE 3부는 찾근 다음");
   assert(
     s3a[twoThreeIdx]?.pairId === "23-50",
     "3부 pairId 동일 연결"
@@ -1163,7 +1163,7 @@ section("특수근무 검색·3부 첫 캐디 후보는 RETIRED/LEAVE 제외");
   assert(/sd-override/.test(specialSrc), "휴무 오버라이드는 숨기지 않고 별도 스타일");
   assert(/specialDutySoftOriginBadge/.test(specialSrc), "휴무 특수근무는 원상태 compact 뱃지");
   assert(
-    /2부는 앞 2자리 다음, 3부는 3부반 원번·찾근 다음/.test(specialSrc),
+    /2부는 앞 2자리·찾근 다음, 3부는 3부반 원번 다음·찾근 앞/.test(specialSrc),
     "2·3부 운영 규칙 안내"
   );
   assert(
