@@ -285,6 +285,7 @@ model OffRequest {
 enum DailySpecialKind {
   ONE_MAK
   ONE_TWO
+  TWO_THREE
   ONE_THREE
   FIFTY_FOUR
   CHAGEUN
@@ -497,21 +498,46 @@ model DailyBoardDraft {
   @@index([updatedAt])
 }
 
+/// 지원근무 유형. 기존 row default = SPECIAL_SUPPORT (현재 운영 중인 특수지원).
+enum DailySpecialSupportKind {
+  CHAGEUN
+  SPECIAL_SUPPORT
+  OFF_SUPPORT
+  MARSHAL_SUPPORT
+  LEADER_SUPPORT
+  FIFTY_FOUR_SUPPORT
+}
+
+/// 지원근무 부 패턴. 기존 row는 shift(1부/2부/3부)에서 SHIFT_1/2/3 으로 채운다.
+enum DailySpecialSupportWorkPattern {
+  ONE_TWO
+  SHIFT_1
+  SHIFT_2
+  SHIFT_3
+  FIFTY_FOUR
+}
+
 /// 날짜·부별 특수지원. 자동가용에서 제외된 ACTIVE 캐디가 특정 부에만 보충 근무.
-/// DailySpecialDuty(1막/1·2/1·3/54홀/CHAGEUN)와 분리. CHAGEUN을 재사용하지 않는다.
+/// DailySpecialDuty(1막/1·2/2·3/1·3/54홀/CHAGEUN)와 분리. CHAGEUN을 재사용하지 않는다.
 /// shift는 예약부와 같은 "1부"|"2부"|"3부" 문자열. Schedule ShiftPart(ONE/TWO/THREE)와 의미가 달라 공유하지 않는다.
+/// kind/workPattern/sortOrder 는 V2 확장용. 기존 API가 안 보내면 default로 기존 특수지원+해당 부로 해석한다.
 model DailySpecialSupport {
-  id              Int      @id @default(autoincrement())
+  id              Int                              @id @default(autoincrement())
   date            DateTime
   caddyId         Int
-  caddy           Caddy    @relation(fields: [caddyId], references: [id])
+  caddy           Caddy                           @relation(fields: [caddyId], references: [id])
   shift           String
+  kind            DailySpecialSupportKind          @default(SPECIAL_SUPPORT)
+  workPattern     DailySpecialSupportWorkPattern   @default(SHIFT_1)
+  /// 1부터. 같은 date+kind 안에서 작을수록 먼저
+  sortOrder       Int                              @default(0)
   createdByUserId Int?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime                         @default(now())
+  updatedAt       DateTime                         @updatedAt
 
   @@unique([date, caddyId, shift])
   @@index([date, shift])
+  @@index([date, kind, sortOrder])
   @@index([caddyId])
 }
 

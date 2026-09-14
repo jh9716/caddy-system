@@ -695,10 +695,12 @@ export const SpecialDutyPanel = memo(function SpecialDutyPanel({
                 </label>
               )}
             </div>
-          ) : activeKind === "FIFTY_FOUR" || activeKind === "ONE_TWO" ? (
+          ) : activeKind === "FIFTY_FOUR" || activeKind === "ONE_TWO" || activeKind === "TWO_THREE" ? (
             <div className="sd-rule">
               {activeKind === "FIFTY_FOUR"
                 ? "1부 세 번째 자리부터 자동 배치"
+                : activeKind === "TWO_THREE"
+                  ? "2부는 앞 2자리 다음, 3부는 3부반 원번·찾근 다음"
                 : "1부는 앞 2자리·54홀 다음, 2부는 HOUSE 첫근무 종료 지점"}
             </div>
           ) : null}
@@ -952,7 +954,7 @@ export const SpecialDutyPanel = memo(function SpecialDutyPanel({
           color: #fff;
           border-color: #0f172a;
         }
-        .sd-kinds-modal { grid-template-columns: repeat(4, 1fr); }
+        .sd-kinds-modal { grid-template-columns: repeat(5, minmax(0, 1fr)); }
         .sd-body {
           margin-top: 8px;
           display: grid;

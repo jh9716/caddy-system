@@ -201,6 +201,7 @@ export async function POST(req: NextRequest) {
         bundles.oneTwoCandidates ??
         extractOneTwoCandidates(availability.special);
       const oneMakCandidates = bundles.oneMakCandidates ?? [];
+      const twoThreeCandidates = bundles.twoThreeCandidates ?? [];
 
       let openCourses: string[] | null = null;
       const openRaw = form.get("openCourses");
@@ -251,6 +252,7 @@ export async function POST(req: NextRequest) {
         fiftyFourHole,
         oneThreeCandidates,
         oneTwoCandidates,
+        twoThreeCandidates,
         oneMakCandidates,
         placementMode: placement.mode,
         protectedTailCount: placement.protectedTailCount,
@@ -317,6 +319,9 @@ export async function POST(req: NextRequest) {
     let explicitMak = Array.isArray(body.oneMakCandidates)
       ? body.oneMakCandidates
       : null;
+    let explicit23 = Array.isArray(body.twoThreeCandidates)
+      ? body.twoThreeCandidates
+      : null;
     let oneThreeAnchor = parseSpecialAnchor(body.oneThreeAnchor);
     let oneMakAnchor = parseSpecialAnchor(body.oneMakAnchor);
     let placementMode: "AUTO" | "MANUAL" | null = null;
@@ -369,6 +374,9 @@ export async function POST(req: NextRequest) {
       if (explicitMak == null && bundles.oneMakCandidates !== null) {
         explicitMak = bundles.oneMakCandidates;
       }
+      if (explicit23 == null && bundles.twoThreeCandidates !== null) {
+        explicit23 = bundles.twoThreeCandidates;
+      }
       if (placement.mode === "AUTO") {
         oneThreeAnchor = null;
         oneMakAnchor = null;
@@ -400,6 +408,7 @@ export async function POST(req: NextRequest) {
       explicit12
     );
     const oneMakCandidates = Array.isArray(explicitMak) ? explicitMak : [];
+    const twoThreeCandidates = Array.isArray(explicit23) ? explicit23 : [];
     const fixedAssignments = Array.isArray(body.fixedAssignments)
       ? (body.fixedAssignments as FixedAssignmentInput[])
       : [];
@@ -435,6 +444,7 @@ export async function POST(req: NextRequest) {
       fiftyFourHole,
       oneThreeCandidates,
       oneTwoCandidates,
+      twoThreeCandidates,
       oneMakCandidates,
       placementMode,
       protectedTailCount,

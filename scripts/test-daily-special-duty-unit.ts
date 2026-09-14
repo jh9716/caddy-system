@@ -19,6 +19,8 @@ import {
   renumberSortOrders,
   resolvePastedSpecialNames,
   splitPastedSpecialNames,
+  DAILY_SPECIAL_KIND_UI,
+  DAILY_SPECIAL_KIND_LABELS,
   SPECIAL_DUTY_HARD_BLOCK_MESSAGE_SUFFIX,
   SPECIAL_DUTY_SOFT_OVERRIDE_MESSAGE_SUFFIX,
   type SpecialDutyRecord,
@@ -27,6 +29,7 @@ import {
   computeAutoAssignmentsV1,
   applyWeekendBandPriorityIfPresent,
   compareReservationOrder,
+  SHIFT2_PROTECTED_COUNT,
   type AutoAssignCaddy,
   type AutoAssignReservation,
 } from "../src/lib/autoAssignEngine";
@@ -63,6 +66,12 @@ function rec(
 
 section("같은 유형 A→B→C 입력 순서 보존");
 {
+  assert(
+    DAILY_SPECIAL_KIND_UI.join(",") ===
+      "ONE_MAK,ONE_TWO,TWO_THREE,ONE_THREE,FIFTY_FOUR",
+    "UI 칩 순서 1막·1·2·2·3·1·3·54홀"
+  );
+  assert(DAILY_SPECIAL_KIND_LABELS.TWO_THREE === "2·3부", "2·3부 라벨");
   const rows = [
     rec("ONE_TWO", 1, 1, "김A", "3조", 9),
     rec("ONE_TWO", 2, 2, "김B", "2조", 5),
@@ -890,6 +899,226 @@ section("ONE_THREE 3명 중 3번째만 OFF — 2026-08-28 사례");
   assert(noh1?.kind === "oneThree", "노준영 1부 kind=oneThree");
 }
 
+section("2·3부 저장 구조·2부 보호·3부 우선순위");
+{
+  const date = "2026-06-10";
+  const house: AutoAssignCaddy[] = [1, 2, 3, 4].map((n) => ({
+    id: n,
+    name: `하우스${n}`,
+    team: `${n}조`,
+    teamOrder: 1,
+    caddyType: "HOUSE",
+  }));
+  const third: AutoAssignCaddy[] = [
+    { id: 201, name: "3부반A", team: "9조", teamOrder: 1, caddyType: "THIRD" },
+    { id: 202, name: "3부반B", team: "10조", teamOrder: 1, caddyType: "THIRD" },
+  ];
+  const twoThreeCaddy: AutoAssignCaddy = {
+    id: 50,
+    name: "이삼부",
+    team: "5조",
+    teamOrder: 1,
+    caddyType: "HOUSE",
+    inputOrder: 1,
+  };
+  const chageun: AutoAssignCaddy = {
+    id: 60,
+    name: "찾근C",
+    team: "6조",
+    teamOrder: 1,
+    caddyType: "HOUSE",
+  };
+  const courses = ["VERTHILL", "SKY", "OCEAN", "LAKE"] as const;
+  const reservations: AutoAssignReservation[] = [];
+  let idx = 1;
+  const pushShift = (shift: "1부" | "2부" | "3부", tee: string, n: number) => {
+    for (let i = 0; i < n; i++) {
+      reservations.push({
+        date,
+        course: courses[i % 4],
+        shift,
+        teeTime: tee,
+        teamName: `${shift}-${idx}`,
+        rawRowIndex: idx++,
+      });
+    }
+  };
+  pushShift("1부", "07:00", 4);
+  pushShift("2부", "12:00", 5);
+  pushShift("3부", "16:00", 5);
+  const shift3 = reservations.filter((r) => r.shift === "3부");
+  const bundles = buildEngineSpecialBundles(
+    [rec("TWO_THREE", 50, 1, "이삼부", "5조", 1)],
+    new Map()
+  );
+  assert(
+    bundles.twoThreeCandidates?.map((c) => c.id).join(",") === "50",
+    "TWO_THREE 엔진 후보"
+  );
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: [...house, ...third, twoThreeCaddy, chageun],
+    twoThreeCandidates: bundles.twoThreeCandidates || [twoThreeCaddy],
+    thirdStartTeam: "9조",
+    reservations,
+    fixedAssignments: [
+      {
+        caddyId: 60,
+        type: "SPECIAL_CALL",
+        reservationMatch: {
+          date,
+          course: shift3[0].course,
+          shift: "3부",
+          teeTime: shift3[0].teeTime,
+          teamName: shift3[0].teamName,
+        },
+      },
+    ],
+  });
+  const s2 = result.assignments
+    .filter((a) => a.shift === "2부")
+    .sort((a, b) => compareReservationOrder(a.reservation, b.reservation));
+  assert(SHIFT2_PROTECTED_COUNT === 2, "2부 앞 2자리 보호 상수");
+  assert(
+    s2.slice(0, 2).every((a) => a.kind !== "twoThree"),
+    "2부 1·2번째는 2·3이 아님"
+  );
+  assert(s2[2]?.kind === "twoThree" && s2[2]?.caddy.id === 50, "2부 3번째가 2·3");
+  assert(s2[2]?.pairId === "23-50", "2부 pairId 23-{id}");
+  const s3a = result.assignments
+    .filter((a) => a.shift === "3부")
+    .sort((a, b) => compareReservationOrder(a.reservation, b.reservation));
+  const ids = s3a.map((a) => `${a.kind}:${a.caddy.id}`);
+  assert(
+    ids.join(",") === "regular:201,regular:202,fixed:60,twoThree:50,regular:1",
+    `THIRD → 찾근 → 2·3 → HOUSE  (${ids.join(",")})`
+  );
+  const thirdIdx = s3a.findIndex((a) => a.caddy.id === 201);
+  const chageunIdx = s3a.findIndex((a) => a.caddy.id === 60);
+  const twoThreeIdx = s3a.findIndex((a) => a.kind === "twoThree");
+  const houseAfter = s3a.findIndex(
+    (a, i) => i > twoThreeIdx && a.kind === "regular" && a.caddy.caddyType !== "THIRD"
+  );
+  assert(thirdIdx === 0 && s3a[1]?.caddy.id === 202, "3부 앞자리는 3부반 원번");
+  assert(chageunIdx === 2 && s3a[chageunIdx]?.kind === "fixed", "찾근은 THIRD 다음");
+  assert(s3a[chageunIdx]?.reason === "SPECIAL_CALL", "3부 찾근 reason 유지");
+  assert(twoThreeIdx === 3, "2·3은 찾근 다음");
+  assert(houseAfter === 4, "일반 HOUSE 3부는 2·3 다음");
+  assert(
+    s3a[twoThreeIdx]?.pairId === "23-50",
+    "3부 pairId 동일 연결"
+  );
+  assert(
+    !result.regularAssignments.some((a) => a.caddy.id === 50),
+    "2·3은 일반 중복 없음"
+  );
+}
+
+section("3부 일반 FIXED·마샬찾근은 지정 예약 유지");
+{
+  const date = "2026-06-10";
+  const house: AutoAssignCaddy[] = [1, 2].map((n) => ({
+    id: n,
+    name: `하우스${n}`,
+    team: `${n}조`,
+    teamOrder: 1,
+    caddyType: "HOUSE",
+  }));
+  const third: AutoAssignCaddy = {
+    id: 201,
+    name: "3부반A",
+    team: "9조",
+    teamOrder: 1,
+    caddyType: "THIRD",
+  };
+  const chageun: AutoAssignCaddy = {
+    id: 60,
+    name: "찾근C",
+    team: "6조",
+    teamOrder: 1,
+    caddyType: "HOUSE",
+  };
+  const pinned: AutoAssignCaddy = {
+    id: 70,
+    name: "고정핀",
+    team: "7조",
+    teamOrder: 1,
+    caddyType: "HOUSE",
+  };
+  const marshal: AutoAssignCaddy = {
+    id: 80,
+    name: "마샬찾근",
+    team: "8조",
+    teamOrder: 1,
+    caddyType: "HOUSE",
+  };
+  const reservations: AutoAssignReservation[] = [];
+  let idx = 1;
+  for (const shift of ["1부", "2부", "3부"] as const) {
+    const n = shift === "3부" ? 4 : 2;
+    for (let i = 0; i < n; i++) {
+      reservations.push({
+        date,
+        course: "SKY",
+        shift,
+        teeTime: shift === "3부" ? `16:0${i}` : "07:00",
+        teamName: `${shift}-${idx}`,
+        rawRowIndex: idx++,
+      });
+    }
+  }
+  const shift3 = reservations.filter((r) => r.shift === "3부");
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: [...house, third, chageun, pinned, marshal],
+    thirdStartTeam: "9조",
+    reservations,
+    fixedAssignments: [
+      {
+        caddyId: 70,
+        type: "FIXED",
+        reservationMatch: {
+          date,
+          course: shift3[0].course,
+          shift: "3부",
+          teeTime: shift3[0].teeTime,
+          teamName: shift3[0].teamName,
+        },
+      },
+      {
+        caddyId: 60,
+        type: "SPECIAL_CALL",
+        reservationMatch: {
+          date,
+          course: shift3[1].course,
+          shift: "3부",
+          teeTime: shift3[1].teeTime,
+          teamName: shift3[1].teamName,
+        },
+      },
+      {
+        caddyId: 80,
+        type: "마샬찾근",
+        reservationMatch: {
+          date,
+          course: shift3[3].course,
+          shift: "3부",
+          teeTime: shift3[3].teeTime,
+          teamName: shift3[3].teamName,
+        },
+      },
+    ],
+  });
+  const s3 = result.assignments
+    .filter((a) => a.shift === "3부")
+    .sort((a, b) => compareReservationOrder(a.reservation, b.reservation));
+  const ids = s3.map((a) => `${a.reason}:${a.caddy.id}`);
+  assert(s3[0]?.caddy.id === 70 && s3[0]?.kind === "fixed", `일반 FIXED 첫 슬롯 유지 (${ids.join(",")})`);
+  assert(s3[1]?.caddy.id === 201, "THIRD는 일반 FIXED 다음 remaining");
+  assert(s3[2]?.caddy.id === 60 && s3[2]?.reason === "SPECIAL_CALL", "SPECIAL_CALL 찾근은 THIRD 다음");
+  assert(s3[3]?.caddy.id === 80 && s3[3]?.reason === "MARSHAL_CALL", "마샬찾근은 지정 예약 유지");
+}
+
 section("특수근무 검색·3부 첫 캐디 후보는 RETIRED/LEAVE 제외");
 {
   const specialSrc = readFileSync(
@@ -926,6 +1155,14 @@ section("특수근무 검색·3부 첫 캐디 후보는 RETIRED/LEAVE 제외");
   assert(/레거시 찾근/.test(specialSrc), "기존 CHAGEUN row는 레거시로만 표시");
   assert(/SOFT_OVERRIDE/.test(specialSrc), "soft override 충돌을 UI에 표시");
   assert(/sd-override/.test(specialSrc), "휴무 오버라이드는 숨기지 않고 별도 스타일");
+  assert(
+    /2부는 앞 2자리 다음, 3부는 3부반 원번·찾근 다음/.test(specialSrc),
+    "2·3부 운영 규칙 안내"
+  );
+  assert(
+    /sd-kinds-modal \{ grid-template-columns: repeat\(5/.test(specialSrc),
+    "등록 칩 5열"
+  );
   const engineSrc = readFileSync(
     join(process.cwd(), "src/lib/autoAssignEngine.ts"),
     "utf8"

@@ -156,6 +156,7 @@ function makeDraft(
     fiftyFourHoleAssignments: assignments.filter((a) => a.kind === "fiftyFourHole"),
     oneThreeAssignments: assignments.filter((a) => a.kind === "oneThree"),
     oneTwoAssignments: assignments.filter((a) => a.kind === "oneTwo"),
+    twoThreeAssignments: assignments.filter((a) => a.kind === "twoThree"),
     oneMakAssignments: assignments.filter((a) => a.kind === "oneMak"),
     weekendBandAssignments: [],
     regularAssignments: assignments.filter((a) => a.kind === "regular"),
@@ -208,6 +209,7 @@ function emptyResult(assignments: AutoAssignmentRow[]): AutoAssignResultV1 {
     fiftyFourHoleAssignments: [],
     oneThreeAssignments: [],
     oneTwoAssignments: [],
+    twoThreeAssignments: [],
     oneMakAssignments: [],
     weekendBandAssignments: [],
     regularAssignments: assignments,
@@ -463,6 +465,17 @@ console.log("== 6. linked 54/special/fixed 차단 ==");
     locked,
   ]);
   assert(isDirectEditProtected(fiftyFour), "54홀 protected");
+  const twoThreeRow = row(r2, cC, {
+    kind: "twoThree",
+    pairId: "23-3",
+  });
+  assert(isDirectEditProtected(twoThreeRow), "2·3부 protected");
+  const twoThreeDraft = makeDraft([row(rA, cA), twoThreeRow]);
+  const blocked23 = applyDirectCaddyEdit(twoThreeDraft, {
+    reservationKey: reservationKey(r2),
+    caddyId: spare.id,
+  });
+  assert(!blocked23.ok, "2·3부 직접편집 차단");
   const blocked = applyDirectCaddyEdit(draft, {
     reservationKey: reservationKey(r54a),
     caddyId: spare.id,

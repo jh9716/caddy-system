@@ -28,6 +28,9 @@ import {
   isReservedSupportTailSlot,
   specialSupportCaddyIds,
   unusedSupportCount,
+  DEFAULT_SPECIAL_SUPPORT_KIND,
+  workPatternFromShift,
+  isDailySpecialSupportKind,
 } from "../src/lib/dailySpecialSupport";
 import { boardAssignmentMarks } from "../src/lib/assignmentBoardView";
 
@@ -1095,6 +1098,22 @@ section("source / UI / migration / 권한");
   assert(!/DROP TABLE/.test(sql), "no DROP");
   assert(!/ALTER TABLE "DailySpecialDuty"/.test(sql), "DailySpecialDuty 미변경");
   assert(!/DROP TYPE "DailySpecialKind"/.test(sql), "CHAGEUN enum 유지");
+  const v2 = readSrc(
+    "prisma/migrations/20260914010000_two_three_and_support_v2/migration.sql"
+  );
+  assert(/ADD VALUE IF NOT EXISTS 'TWO_THREE'/.test(v2), "TWO_THREE additive enum");
+  assert(/DEFAULT 'SPECIAL_SUPPORT'/.test(v2), "기존 row 특수지원 default");
+  assert(
+    /SET "workPattern" = 'SHIFT_1'/.test(v2) &&
+      /SET "workPattern" = 'SHIFT_2'/.test(v2) &&
+      /SET "workPattern" = 'SHIFT_3'/.test(v2),
+    "기존 shift로 workPattern backfill"
+  );
+  assert(!/DROP TABLE/.test(v2) && !/DROP TYPE "DailySpecialKind"/.test(v2), "v2 no drop");
+  assert(DEFAULT_SPECIAL_SUPPORT_KIND === "SPECIAL_SUPPORT", "API default kind");
+  assert(workPatternFromShift("1부") === "SHIFT_1", "1부 default pattern");
+  assert(workPatternFromShift("3부") === "SHIFT_3", "3부 default pattern");
+  assert(isDailySpecialSupportKind("SPECIAL_SUPPORT"), "기존 특수지원 kind");
   assert(/model DailySpecialSupport/.test(schema), "schema model");
   assert(/createdByUserId\s+Int\?/.test(schema), "nullable createdByUserId");
   assert(/DAILY_SPECIAL_KIND_UI\.map/.test(panel), "찾근 탭 제거");

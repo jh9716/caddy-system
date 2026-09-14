@@ -15,6 +15,7 @@ import type { AutoAssignCaddy } from "@/lib/autoAssignEngine";
 export const DAILY_SPECIAL_KINDS = [
   "ONE_MAK",
   "ONE_TWO",
+  "TWO_THREE",
   "ONE_THREE",
   "FIFTY_FOUR",
   "CHAGEUN",
@@ -24,6 +25,7 @@ export const DAILY_SPECIAL_KINDS = [
 export const DAILY_SPECIAL_KIND_UI = [
   "ONE_MAK",
   "ONE_TWO",
+  "TWO_THREE",
   "ONE_THREE",
   "FIFTY_FOUR",
 ] as const;
@@ -33,6 +35,7 @@ export type DailySpecialKind = (typeof DAILY_SPECIAL_KINDS)[number];
 export const DAILY_SPECIAL_KIND_LABELS: Record<DailySpecialKind, string> = {
   ONE_MAK: "1막",
   ONE_TWO: "1·2부",
+  TWO_THREE: "2·3부",
   ONE_THREE: "1·3부",
   FIFTY_FOUR: "54홀",
   CHAGEUN: "찾근",
@@ -49,6 +52,7 @@ export const SPECIAL_SETTINGS_STALE_MESSAGE =
 export const ENGINE_SPECIAL_KINDS = [
   "ONE_MAK",
   "ONE_TWO",
+  "TWO_THREE",
   "ONE_THREE",
   "FIFTY_FOUR",
   "CHAGEUN",
@@ -423,6 +427,7 @@ export type EngineSpecialBundles = {
   fiftyFourHole: EngineSpecialCaddy[] | null;
   oneThreeCandidates: EngineSpecialCaddy[] | null;
   oneTwoCandidates: EngineSpecialCaddy[] | null;
+  twoThreeCandidates: EngineSpecialCaddy[] | null;
   oneMakCandidates: EngineSpecialCaddy[] | null;
   extraSpecial: EngineSpecialCaddy[];
   skipFromAvailableIds: number[];
@@ -499,6 +504,7 @@ export function buildEngineSpecialBundles(
   const fiftyFourHole = pick("FIFTY_FOUR");
   const oneThreeCandidates = pick("ONE_THREE");
   const oneTwoCandidates = pick("ONE_TWO");
+  const twoThreeCandidates = pick("TWO_THREE");
   const oneMakCandidates = pick("ONE_MAK");
   const chageun = pick("CHAGEUN") || [];
 
@@ -506,6 +512,7 @@ export function buildEngineSpecialBundles(
     fiftyFourHole,
     oneThreeCandidates,
     oneTwoCandidates,
+    twoThreeCandidates,
     oneMakCandidates,
     extraSpecial: chageun,
     skipFromAvailableIds: [...skip],

@@ -252,6 +252,7 @@ function AssignmentMarkBadges({
   special,
   limousine,
   driving,
+  twoThree,
 }: {
   twoWork: boolean;
   chageun: boolean;
@@ -259,8 +260,17 @@ function AssignmentMarkBadges({
   special?: boolean;
   limousine?: boolean;
   driving?: boolean;
+  twoThree?: boolean;
 }) {
-  if (!twoWork && !chageun && !specialSupport && !special && !limousine && !driving) {
+  if (
+    !twoWork &&
+    !chageun &&
+    !specialSupport &&
+    !special &&
+    !limousine &&
+    !driving &&
+    !twoThree
+  ) {
     return null;
   }
   return (
@@ -269,9 +279,10 @@ function AssignmentMarkBadges({
       {driving ? <span className="bc-badge drive">드라이빙</span> : null}
       {twoWork ? <span className="bc-badge two">투</span> : null}
       {specialSupport ? <span className="bc-badge support">지원</span> : null}
+      {twoThree ? <span className="bc-badge two-three">2·3</span> : null}
       {chageun ? (
         <span className="bc-badge call">찾근</span>
-      ) : special && !driving && !specialSupport ? (
+      ) : special && !driving && !specialSupport && !twoThree ? (
         <span className="bc-special">S</span>
       ) : null}
     </span>
@@ -360,6 +371,7 @@ const BoardAssignedSlots = memo(function BoardAssignedSlots({
                 specialSupport={marks.specialSupport}
                 special={special && row.kind !== "specialSupport"}
                 driving={marks.driving}
+                twoThree={row.kind === "twoThree"}
               />
             </button>
             {vacant ? null : (
@@ -4099,6 +4111,7 @@ export default function ManageAssignmentsOpsPage() {
                               specialSupport={marks.specialSupport}
                               special={special && row.kind !== "specialSupport"}
                               driving={marks.driving}
+                              twoThree={row.kind === "twoThree"}
                             />
                           </button>
                           {vacant ? null : (
@@ -5466,6 +5479,10 @@ const opsCss = `
   .bc-badge.drive {
     color: #fff;
     background: #7c3aed;
+  }
+  .bc-badge.two-three {
+    color: #0f766e;
+    background: #ccfbf1;
   }
   .bc-cell.assigned.drive {
     box-shadow: inset 3px 0 0 #7c3aed;

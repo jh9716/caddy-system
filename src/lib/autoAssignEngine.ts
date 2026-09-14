@@ -1,10 +1,12 @@
 /**
  * 자동배치 엔진 (3~8단계)
  * - 순수 함수: DB write 없음
- * - 우선순위: 고정/특별찾근 → 54홀 → 1·3부 → 1·2부 → 일반 순번
+ * - 우선순위: 고정/특별찾근 → 54홀 → 1·3부 → 1·2부 → 2·3부 → 일반 순번
  * - 일반: HOUSE 순번 + 부별 스페어1·2
- * - 3부: Mode A(원번 미완주) 2부 스페어 HOUSE → 1·3 → WEEKEND(토/일/공휴일만) → regular THIRD
- *        Mode B(원번 완주) 1·3 → WEEKEND(토/일/공휴일만) → regular THIRD
+ * - 3부: Mode A(원번 미완주) 2부 스페어 HOUSE → 1·3 → WEEKEND(토/일/공휴일만) → regular THIRD → 2·3 → 남은 HOUSE
+ *        Mode B(원번 완주) 1·3 → WEEKEND(토/일/공휴일만) → regular THIRD → 2·3 → 남은 HOUSE
+ *        3부 찾근(SPECIAL_CALL)만 remaining 큐에서 THIRD 다음·2·3 앞.
+ *        마샬/당번/일반 FIXED 핀은 assignFixedPriority 최우선 유지.
  *        thirdBandSubgroup=WEEKEND는 평일(비공휴일) 3부 어디에든 넣지 않음
  * - DRIVING은 일반 HOUSE/THIRD 순번에 섞지 않음
  * - 8단계: 일반 예약 캔슬/추가 시 regular reflow (special 보호, 스페어·3부 재계산)
@@ -85,6 +87,10 @@ export const REASON = {
   ONE_TWO_MISSING_SHIFT1: "ONE_TWO_MISSING_SHIFT1",
   ONE_TWO_MISSING_SHIFT2: "ONE_TWO_MISSING_SHIFT2",
   ONE_TWO_INSUFFICIENT_RESERVATIONS: "ONE_TWO_INSUFFICIENT_RESERVATIONS",
+  TWO_THREE_PRIORITY: "TWO_THREE_PRIORITY",
+  TWO_THREE_MISSING_SHIFT2: "TWO_THREE_MISSING_SHIFT2",
+  TWO_THREE_MISSING_SHIFT3: "TWO_THREE_MISSING_SHIFT3",
+  TWO_THREE_INSUFFICIENT_RESERVATIONS: "TWO_THREE_INSUFFICIENT_RESERVATIONS",
   ONE_MAK_PRIORITY: "ONE_MAK_PRIORITY",
   ONE_MAK_MISSING_ANCHOR: "ONE_MAK_MISSING_ANCHOR",
   ONE_MAK_INSUFFICIENT_RESERVATIONS: "ONE_MAK_INSUFFICIENT_RESERVATIONS",
@@ -201,6 +207,8 @@ export type AutoAssignReservation = {
 
 /** 1부 특수근무(54홀/1·2)가 건너뛰는 앞자리 수 — 코스명 하드코딩 없음 */
 export const SHIFT1_PROTECTED_COUNT = 2;
+/** 2부 2·3부가 건너뛰는 앞자리 수 */
+export const SHIFT2_PROTECTED_COUNT = 2;
 
 export type SpecialStartAnchor = {
   course: string;
@@ -212,6 +220,7 @@ export type AssignmentKind =
   | "fiftyFourHole"
   | "oneThree"
   | "oneTwo"
+  | "twoThree"
   | "oneMak"
   | "fixed"
   | "driving"
@@ -282,6 +291,7 @@ export type AutoAssignResultV1 = {
   fiftyFourHoleAssignments: AutoAssignmentRow[];
   oneThreeAssignments: AutoAssignmentRow[];
   oneTwoAssignments: AutoAssignmentRow[];
+  twoThreeAssignments: AutoAssignmentRow[];
   oneMakAssignments: AutoAssignmentRow[];
   /** 토/일/공휴일 주말반 3부 (kind=regular). 1·3 다음, regular THIRD 앞 */
   weekendBandAssignments: AutoAssignmentRow[];
@@ -319,6 +329,9 @@ export type AutoAssignResultV1 = {
     oneTwoCandidateCount: number;
     oneTwoAssignedCaddyCount: number;
     oneTwoUnassignedCount: number;
+    twoThreeCandidateCount: number;
+    twoThreeAssignedCaddyCount: number;
+    twoThreeUnassignedCount: number;
     oneMakCandidateCount: number;
     oneMakAssignedCaddyCount: number;
     oneMakUnassignedCount: number;
@@ -1297,6 +1310,7 @@ export function applyWeekendBandPriorityIfPresent(
 export type SpecialDutySlotResult = {
   fiftyFourHoleAssignments: AutoAssignmentRow[];
   oneTwoAssignments: AutoAssignmentRow[];
+  twoThreeAssignments: AutoAssignmentRow[];
   oneThreeAssignments: AutoAssignmentRow[];
   oneMakAssignments: AutoAssignmentRow[];
   weekendBandAssignments: AutoAssignmentRow[];
@@ -1306,6 +1320,8 @@ export type SpecialDutySlotResult = {
   assignedCaddyIds: Set<number>;
   /** 1부 1·3 배치에 성공한 신청자. 3부 우선은 regular 1·2부 이후 */
   oneThreePlaced: AutoAssignCaddy[];
+  /** 2부 2·3 배치에 성공한 신청자. 3부는 3부반 원번·찾근 다음 */
+  twoThreePlaced: AutoAssignCaddy[];
   specialPlacement: SpecialPlacementState;
 };
 
@@ -1320,6 +1336,7 @@ export function assignSpecialDutySlots(input: {
   reservations: AutoAssignReservation[];
   fiftyFourHole: AutoAssignCaddy[];
   oneTwoCandidates: AutoAssignCaddy[];
+  twoThreeCandidates?: AutoAssignCaddy[];
   oneThreeCandidates: AutoAssignCaddy[];
   oneMakCandidates: AutoAssignCaddy[];
   placementMode?: SpecialPlacementMode | null;
@@ -1340,6 +1357,7 @@ export function assignSpecialDutySlots(input: {
   let remaining = [...input.reservations];
   const fiftyFourHoleAssignments: AutoAssignmentRow[] = [];
   const oneTwoAssignments: AutoAssignmentRow[] = [];
+  const twoThreeAssignments: AutoAssignmentRow[] = [];
   const oneThreeAssignments: AutoAssignmentRow[] = [];
   const oneMakAssignments: AutoAssignmentRow[] = [];
   const specialSupportAssignments: AutoAssignmentRow[] = [];
@@ -1351,6 +1369,9 @@ export function assignSpecialDutySlots(input: {
     compareSpecialCandidateOrder
   );
   const oneTwo = dedupeCaddies([...input.oneTwoCandidates]).sort(
+    compareSpecialCandidateOrder
+  );
+  const twoThree = dedupeCaddies([...(input.twoThreeCandidates || [])]).sort(
     compareSpecialCandidateOrder
   );
   const oneThree = dedupeCaddies([...input.oneThreeCandidates]).sort(
@@ -1802,9 +1823,42 @@ export function assignSpecialDutySlots(input: {
     remaining = withoutTaken(remaining, taken);
   }
 
+  // 2·3부 2부: 1·2번째 보호 슬롯 다음부터. 기존 1·2부 2부 삽입은 그대로 둔다.
+  const twoThreePlaced: AutoAssignCaddy[] = [];
+  {
+    const shift2 = shiftReservations(remaining, "2부");
+    const insertAt = Math.min(SHIFT2_PROTECTED_COUNT, shift2.length);
+    const taken: AutoAssignReservation[] = [];
+    let cursor = insertAt;
+    for (const caddy of twoThree) {
+      if (cursor >= shift2.length) {
+        specialUnassigned.push({
+          caddy,
+          reason: REASON.TWO_THREE_MISSING_SHIFT2,
+          review: true,
+        });
+        continue;
+      }
+      const slot = shift2[cursor++];
+      pushPair(
+        twoThreeAssignments,
+        caddy,
+        slot,
+        REASON.TWO_THREE_PRIORITY,
+        "twoThree",
+        `23-${caddy.id}`
+      );
+      taken.push(slot);
+      twoThreePlaced.push(caddy);
+      assignedCaddyIds.add(caddy.id);
+    }
+    remaining = withoutTaken(remaining, taken);
+  }
+
   return {
     fiftyFourHoleAssignments,
     oneTwoAssignments,
+    twoThreeAssignments,
     oneThreeAssignments,
     oneMakAssignments,
     weekendBandAssignments,
@@ -1813,6 +1867,7 @@ export function assignSpecialDutySlots(input: {
     remainingReservations: remaining.sort(compareReservationOrder),
     assignedCaddyIds,
     oneThreePlaced,
+    twoThreePlaced,
     specialPlacement,
   };
 }
@@ -1830,6 +1885,20 @@ export function reasonForFixedType(type: FixedAssignmentType | string): string {
     return REASON.SPECIAL_CALL;
   }
   return REASON.FIXED_ASSIGNMENT;
+}
+
+/**
+ * 3부 특별찾근만 remaining 3부 큐(THIRD 다음)로 미룬다.
+ * 마샬찾근·당번찾근·일반 FIXED는 기존처럼 지정 예약을 먼저 점유한다.
+ */
+export function isDeferredThirdShiftChageun(
+  fixed: FixedAssignmentInput,
+  reservations: AutoAssignReservation[]
+): boolean {
+  if (fixed.cancelled) return false;
+  if (reasonForFixedType(fixed.type) !== REASON.SPECIAL_CALL) return false;
+  const reservation = resolveFixedReservation(fixed, reservations);
+  return parseAssignShiftPart(reservation?.shift) === "3부";
 }
 
 function unknownCaddyStub(id: number): AutoAssignCaddy {
@@ -2454,6 +2523,16 @@ export function assignRegularSequence(input: {
    * 1부에 못 들어간 신청자는 넣지 않는다.
    */
   oneThreeForThird?: AutoAssignCaddy[];
+  /**
+   * 2부 2·3 배치에 성공한 신청자.
+   * 3부 remaining: THIRD → 3부 찾근(SPECIAL_CALL) → 하우스 2·3부 → 일반 HOUSE.
+   */
+  twoThreeForThird?: AutoAssignCaddy[];
+  /**
+   * 3부 특별찾근. 지정 예약을 먼저 뺏지 않고 THIRD 다음에 넣는다.
+   * 마샬/당번/일반 FIXED는 이 배열에 넣지 않는다.
+   */
+  chageunForThird?: AutoAssignCaddy[];
   /** 이미 확정된 부 배치. freezeShifts와 함께 이전 부 identity를 유지한다. */
   seedAssignments?: AutoAssignmentRow[];
   /** 이 부는 다시 채우지 않고 seed + 기존 spare를 유지한다. */
@@ -2515,6 +2594,8 @@ export function assignRegularSequence(input: {
     ? weekendSeparated
     : [];
   const oneThreeForThird = dedupeCaddies([...(input.oneThreeForThird || [])]);
+  const chageunForThird = dedupeCaddies([...(input.chageunForThird || [])]);
+  const twoThreeForThird = dedupeCaddies([...(input.twoThreeForThird || [])]);
   const thirdStartCaddyId =
     input.thirdStartCaddyId != null && input.thirdStartCaddyId !== undefined
       ? Number(input.thirdStartCaddyId)
@@ -2575,6 +2656,8 @@ export function assignRegularSequence(input: {
     ...house.map((c) => c.id),
     ...third.map((c) => c.id),
     ...oneThreeForThird.map((c) => c.id),
+    ...chageunForThird.map((c) => c.id),
+    ...twoThreeForThird.map((c) => c.id),
     ...weekendBand.map((c) => c.id),
   ]);
 
@@ -2724,6 +2807,17 @@ export function assignRegularSequence(input: {
           reason: REASON.ONE_THREE_PRIORITY,
           pairId: `13-${caddy.id}`,
         });
+      const pushChageun = (caddy: AutoAssignCaddy) =>
+        pushCaddy(caddy, -1, {
+          kind: "fixed",
+          reason: REASON.SPECIAL_CALL,
+        });
+      const pushTwoThree = (caddy: AutoAssignCaddy) =>
+        pushCaddy(caddy, -1, {
+          kind: "twoThree",
+          reason: REASON.TWO_THREE_PRIORITY,
+          pairId: `23-${caddy.id}`,
+        });
       const pushWeekend = (caddy: AutoAssignCaddy) =>
         pushCaddy(caddy, -1, {
           kind: "regular",
@@ -2731,7 +2825,7 @@ export function assignRegularSequence(input: {
         });
 
       if (!houseExhaustedIn12) {
-        // Mode A: 2부 스페어(실측) → 1·3 → WEEKEND → regular THIRD → 남은 미근무 → wrap
+        // Mode A: 2부 스페어(실측) → 1·3 → WEEKEND → regular THIRD → 찾근 → 2·3 → 남은 미근무 → wrap
         for (const caddy of shift2SpareCaddiesFromSpares(house, sparesByShift)) {
           pushCaddy(caddy, seqOf(caddy));
         }
@@ -2740,6 +2834,8 @@ export function assignRegularSequence(input: {
         for (let i = 0; i < third.length; i++) {
           pushCaddy(third[i], 10_000 + i);
         }
+        for (const caddy of chageunForThird) pushChageun(caddy);
+        for (const caddy of twoThreeForThird) pushTwoThree(caddy);
         for (const caddy of neverWorked) {
           pushCaddy(caddy, seqOf(caddy));
         }
@@ -2748,12 +2844,14 @@ export function assignRegularSequence(input: {
           pushCaddy(c, seqOf(c));
         }
       } else {
-        // Mode B: 1·3 → WEEKEND → THIRD → 2부 실근무·1부 미근무 HOUSE (spare1·2 제외)
+        // Mode B: 1·3 → WEEKEND → THIRD → 찾근 → 2·3 → 2부 실근무·1부 미근무 HOUSE (spare1·2 제외)
         for (const caddy of oneThreeForThird) pushOneThree(caddy);
         for (const caddy of weekendBand) pushWeekend(caddy);
         for (let i = 0; i < third.length; i++) {
           pushCaddy(third[i], 10_000 + i);
         }
+        for (const caddy of chageunForThird) pushChageun(caddy);
+        for (const caddy of twoThreeForThird) pushTwoThree(caddy);
         for (const c of modeBHouse) {
           pushCaddy(c, seqOf(c));
         }
@@ -2763,6 +2861,7 @@ export function assignRegularSequence(input: {
       }
 
       const oneThreeAssigned = new Set<number>();
+      const twoThreeAssigned = new Set<number>();
       let oi = 0;
       for (let i = 0; i < shiftReservations.length; i++) {
         const reservation = shiftReservations[i];
@@ -2793,6 +2892,9 @@ export function assignRegularSequence(input: {
         if (picked.kind === "oneThree") {
           oneThreeAssigned.add(picked.caddy.id);
         }
+        if (picked.kind === "twoThree") {
+          twoThreeAssigned.add(picked.caddy.id);
+        }
         if (normalizeAssignCaddyType(picked.caddy.caddyType) === "HOUSE") {
           houseAssigned += 1;
         }
@@ -2813,6 +2915,14 @@ export function assignRegularSequence(input: {
         specialUnassigned.push({
           caddy,
           reason: REASON.ONE_THREE_MISSING_SHIFT3,
+          review: true,
+        });
+      }
+      for (const caddy of twoThreeForThird) {
+        if (twoThreeAssigned.has(caddy.id)) continue;
+        specialUnassigned.push({
+          caddy,
+          reason: REASON.TWO_THREE_MISSING_SHIFT3,
           review: true,
         });
       }
@@ -2959,7 +3069,7 @@ export function assignRegularSequence(input: {
 
 /**
  * 자동배치:
- * 0) 고정/특별찾근 1) 54홀 2) 1·3부 3) 1·2부 4) 일반 순번
+ * 0) 고정/특별찾근 1) 54홀 2) 1·3부 3) 1·2부 4) 2·3부 5) 일반 순번
  * - special/고정 후보는 일반 available/포인터에서 제외
  * - special 실패·conflict·캔슬은 specialUnassigned (일반 강등 없음)
  */
@@ -2978,6 +3088,8 @@ export function computeAutoAssignmentsV1(input: {
   oneThreeCandidates?: AutoAssignCaddy[];
   /** 1·2부 신청자 후보 — 명시적 입력 */
   oneTwoCandidates?: AutoAssignCaddy[];
+  /** 2·3부 신청자 후보 — 명시적 입력 */
+  twoThreeCandidates?: AutoAssignCaddy[];
   /** 1막 신청자 후보 — 찾근_1막(fixed)과 별개 */
   oneMakCandidates?: AutoAssignCaddy[];
   /** 명시 시 이 모드만 사용. 없으면 anchor 있으면 MANUAL, 없으면 AUTO */
@@ -3063,18 +3175,35 @@ export function computeAutoAssignmentsV1(input: {
     ...(input.fiftyFourHole || []),
     ...(input.oneThreeCandidates || []),
     ...(input.oneTwoCandidates || []),
+    ...(input.twoThreeCandidates || []),
     ...(input.oneMakCandidates || []),
   ]);
 
   // 0) 고정배치 / 특별찾근 (최우선)
+  // 3부 SPECIAL_CALL만 remaining 3부 큐로 미룬다. 마샬/당번/일반 FIXED는 지정 예약 점유.
+  const incomingFixed = input.fixedAssignments || [];
+  const deferredThirdChageun = incomingFixed.filter((row) =>
+    isDeferredThirdShiftChageun(row, eligible)
+  );
+  const pinnedFixed = incomingFixed.filter(
+    (row) => !isDeferredThirdShiftChageun(row, eligible)
+  );
   const fixed = assignFixedPriority({
     date,
     reservations: eligible,
     caddies: caddyDirectory,
-    fixedAssignments: input.fixedAssignments || [],
+    fixedAssignments: pinnedFixed,
   });
+  const caddyById = new Map(caddyDirectory.map((c) => [c.id, c]));
+  const chageunForThird = dedupeCaddies(
+    deferredThirdChageun
+      .map((row) => caddyById.get(row.caddyId))
+      .filter((caddy): caddy is AutoAssignCaddy => !!caddy)
+      .filter((caddy) => !fixed.assignedCaddyIds.has(caddy.id))
+  );
+  const chageunIds = new Set(chageunForThird.map((c) => c.id));
 
-  const fixedIds = fixed.excludedCaddyIds;
+  const fixedIds = new Set([...fixed.excludedCaddyIds, ...chageunIds]);
 
   const fiftyFourHole = dedupeCaddies([...(input.fiftyFourHole || [])])
     .filter((c) => !fixedIds.has(c.id))
@@ -3105,12 +3234,25 @@ export function computeAutoAssignmentsV1(input: {
     .sort(compareSpecialCandidateOrder);
   const oneMakIds = new Set(oneMakCandidates.map((c) => c.id));
 
+  const twoThreeCandidates = dedupeCaddies([...(input.twoThreeCandidates || [])])
+    .filter(
+      (c) =>
+        !fixedIds.has(c.id) &&
+        !fiftyFourIds.has(c.id) &&
+        !oneThreeIds.has(c.id) &&
+        !oneTwoIds.has(c.id) &&
+        !oneMakIds.has(c.id)
+    )
+    .sort(compareSpecialCandidateOrder);
+  const twoThreeIds = new Set(twoThreeCandidates.map((c) => c.id));
+
   const specialExclude = new Set<number>([
     ...fixedIds,
     ...fiftyFourIds,
     ...oneThreeIds,
     ...oneTwoIds,
     ...oneMakIds,
+    ...twoThreeIds,
   ]);
   const special = dedupeCaddies([...(input.special || [])])
     .filter((c) => !specialExclude.has(c.id))
@@ -3147,6 +3289,7 @@ export function computeAutoAssignmentsV1(input: {
     reservations: fixed.remainingReservations,
     fiftyFourHole,
     oneTwoCandidates,
+    twoThreeCandidates,
     oneThreeCandidates,
     oneMakCandidates,
     placementMode: input.placementMode,
@@ -3161,7 +3304,7 @@ export function computeAutoAssignmentsV1(input: {
     specialSupport: specialSupportByShift["1부"] || [],
   });
 
-  const fixedAssignments = fixed.assignments;
+  const pinnedFixedAssignments = fixed.assignments;
   const fiftyFourHoleAssignments = slotted.fiftyFourHoleAssignments;
   const oneTwoAssignments = slotted.oneTwoAssignments;
   const oneMakAssignments = slotted.oneMakAssignments;
@@ -3183,16 +3326,19 @@ export function computeAutoAssignmentsV1(input: {
     thirdStartCaddyId: input.thirdStartCaddyId,
     thirdRoster: caddyDirectory,
     oneThreeForThird: slotted.oneThreePlaced,
+    twoThreeForThird: slotted.twoThreePlaced,
+    chageunForThird,
     specialSupportByShift: {
       ...specialSupportByShift,
       ...(shift1AutoPlacement ? { "1부": [] } : {}),
     },
     occupiedAssignments: [
-      ...fixedAssignments,
+      ...pinnedFixedAssignments,
       ...fiftyFourHoleAssignments,
       ...oneTwoAssignments,
       ...oneMakAssignments,
       ...slotted.oneThreeAssignments,
+      ...slotted.twoThreeAssignments,
       ...slotted.specialSupportAssignments,
     ],
     shift1ProtectedTailKeys: shift1AutoPlacement
@@ -3226,6 +3372,20 @@ export function computeAutoAssignmentsV1(input: {
     ...slotted.oneThreeAssignments,
     ...oneThreeThirdAssignments,
   ];
+  const twoThreeThirdAssignments = regular.assignments.filter(
+    (row) => row.kind === "twoThree"
+  );
+  const twoThreeAssignments = [
+    ...slotted.twoThreeAssignments,
+    ...twoThreeThirdAssignments,
+  ];
+  const thirdChageunAssignments = regular.assignments.filter(
+    (row) => row.kind === "fixed" && row.reason === REASON.SPECIAL_CALL
+  );
+  const fixedAssignments = [
+    ...pinnedFixedAssignments,
+    ...thirdChageunAssignments,
+  ];
   const specialUnassigned = [
     ...fixed.specialUnassigned,
     ...slotted.specialUnassigned,
@@ -3239,11 +3399,12 @@ export function computeAutoAssignmentsV1(input: {
   }
 
   for (const a of [
-    ...fixedAssignments,
+    ...pinnedFixedAssignments,
     ...fiftyFourHoleAssignments,
     ...slotted.oneThreeAssignments,
     ...oneTwoAssignments,
     ...oneMakAssignments,
+    ...slotted.twoThreeAssignments,
     ...slotted.specialSupportAssignments,
   ]) {
     byShift[a.shift].assigned += 1;
@@ -3260,6 +3421,7 @@ export function computeAutoAssignmentsV1(input: {
     ...fiftyFourHoleAssignments,
     ...oneThreeAssignments,
     ...oneTwoAssignments,
+    ...twoThreeAssignments,
     ...oneMakAssignments,
     ...weekendBandAssignments,
     ...regularAssignments,
@@ -3279,6 +3441,9 @@ export function computeAutoAssignmentsV1(input: {
   const oneMakAssignedCaddyCount = new Set(
     oneMakAssignments.map((a) => a.caddy.id)
   ).size;
+  const twoThreeAssignedCaddyCount = new Set(
+    twoThreeAssignments.map((a) => a.caddy.id)
+  ).size;
 
   return {
     date,
@@ -3287,6 +3452,7 @@ export function computeAutoAssignmentsV1(input: {
     fiftyFourHoleAssignments,
     oneThreeAssignments,
     oneTwoAssignments,
+    twoThreeAssignments,
     oneMakAssignments,
     weekendBandAssignments,
     regularAssignments,
@@ -3328,6 +3494,11 @@ export function computeAutoAssignmentsV1(input: {
       oneMakAssignedCaddyCount,
       oneMakUnassignedCount: slotted.specialUnassigned.filter((u) =>
         u.reason.startsWith("ONE_MAK")
+      ).length,
+      twoThreeCandidateCount: twoThreeCandidates.length,
+      twoThreeAssignedCaddyCount,
+      twoThreeUnassignedCount: specialUnassigned.filter((u) =>
+        u.reason.startsWith("TWO_THREE")
       ).length,
       housePoolCount: pools.house.length,
       thirdPoolCount: pools.third.length,
@@ -3483,6 +3654,7 @@ function bucketizeAssignments(assignments: AutoAssignmentRow[]): {
   fiftyFourHoleAssignments: AutoAssignmentRow[];
   oneThreeAssignments: AutoAssignmentRow[];
   oneTwoAssignments: AutoAssignmentRow[];
+  twoThreeAssignments: AutoAssignmentRow[];
   oneMakAssignments: AutoAssignmentRow[];
   weekendBandAssignments: AutoAssignmentRow[];
   regularAssignments: AutoAssignmentRow[];
@@ -3491,6 +3663,7 @@ function bucketizeAssignments(assignments: AutoAssignmentRow[]): {
   const fiftyFourHoleAssignments: AutoAssignmentRow[] = [];
   const oneThreeAssignments: AutoAssignmentRow[] = [];
   const oneTwoAssignments: AutoAssignmentRow[] = [];
+  const twoThreeAssignments: AutoAssignmentRow[] = [];
   const oneMakAssignments: AutoAssignmentRow[] = [];
   const weekendBandAssignments: AutoAssignmentRow[] = [];
   const regularAssignments: AutoAssignmentRow[] = [];
@@ -3499,6 +3672,7 @@ function bucketizeAssignments(assignments: AutoAssignmentRow[]): {
     else if (row.kind === "fiftyFourHole") fiftyFourHoleAssignments.push(row);
     else if (row.kind === "oneThree") oneThreeAssignments.push(row);
     else if (row.kind === "oneTwo") oneTwoAssignments.push(row);
+    else if (row.kind === "twoThree") twoThreeAssignments.push(row);
     else if (row.kind === "oneMak") oneMakAssignments.push(row);
     else if (isWeekendBandRow(row)) weekendBandAssignments.push(row);
     else regularAssignments.push(row);
@@ -3508,6 +3682,7 @@ function bucketizeAssignments(assignments: AutoAssignmentRow[]): {
     fiftyFourHoleAssignments,
     oneThreeAssignments,
     oneTwoAssignments,
+    twoThreeAssignments,
     oneMakAssignments,
     weekendBandAssignments,
     regularAssignments,
@@ -5122,6 +5297,8 @@ function assignRemoveOnlyKeepingShiftOrder(input: {
   thirdStartCaddyId: number | null;
   thirdRoster: AutoAssignCaddy[];
   oneThreeForThird: AutoAssignCaddy[];
+  twoThreeForThird?: AutoAssignCaddy[];
+  chageunForThird?: AutoAssignCaddy[];
   specialSupportByShift: Record<ShiftPart, AutoAssignCaddy[]>;
   occupiedAssignments: AutoAssignmentRow[];
 }): ReturnType<typeof assignRegularSequence> {
@@ -5149,6 +5326,8 @@ function assignRemoveOnlyKeepingShiftOrder(input: {
       thirdStartCaddyId: null,
       thirdRoster: input.thirdRoster,
       oneThreeForThird: [],
+      twoThreeForThird: [],
+      chageunForThird: [],
       seedAssignments: input.seedAssignments.filter((row) =>
         freeze12.includes(row.shift)
       ),
@@ -5218,6 +5397,8 @@ function assignRemoveOnlyKeepingShiftOrder(input: {
       thirdStartCaddyId: input.thirdStartCaddyId,
       thirdRoster: input.thirdRoster,
       oneThreeForThird: input.oneThreeForThird,
+      twoThreeForThird: input.twoThreeForThird || [],
+      chageunForThird: input.chageunForThird || [],
       seedAssignments: combined.assignments.filter(
         (row) => row.shift === "1부" || row.shift === "2부"
       ),
@@ -5863,6 +6044,24 @@ export function reflowRegularAssignments(input: {
     seenOneThree.add(row.caddy.id);
     oneThreeForThird.push(row.caddy);
   }
+  const twoThreeForThird: AutoAssignCaddy[] = [];
+  const seenTwoThree = new Set<number>();
+  for (const row of [...lockedRows, ...seedAssignments]) {
+    if (row.kind !== "twoThree" || row.shift !== "2부") continue;
+    if (lockedThirdIds.has(row.caddy.id)) continue;
+    if (seenTwoThree.has(row.caddy.id)) continue;
+    seenTwoThree.add(row.caddy.id);
+    twoThreeForThird.push(row.caddy);
+  }
+  const chageunForThird: AutoAssignCaddy[] = [];
+  const seenChageun = new Set<number>();
+  for (const row of [...lockedRows, ...seedAssignments]) {
+    if (row.shift !== "3부" || row.kind !== "fixed") continue;
+    if (row.reason !== REASON.SPECIAL_CALL) continue;
+    if (seenChageun.has(row.caddy.id)) continue;
+    seenChageun.add(row.caddy.id);
+    chageunForThird.push(row.caddy);
+  }
 
   const regular = removeOnly
     ? assignRemoveOnlyKeepingShiftOrder({
@@ -5882,6 +6081,8 @@ export function reflowRegularAssignments(input: {
         thirdStartCaddyId,
         thirdRoster,
         oneThreeForThird,
+        twoThreeForThird,
+        chageunForThird,
         specialSupportByShift:
           input.specialSupportByShift ||
           previous.specialSupportByShift ||
@@ -5900,6 +6101,8 @@ export function reflowRegularAssignments(input: {
         thirdStartCaddyId,
         thirdRoster,
         oneThreeForThird,
+        twoThreeForThird,
+        chageunForThird,
         seedAssignments,
         freezeShifts,
         seedSparesByShift,

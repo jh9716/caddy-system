@@ -37,6 +37,8 @@ function Marks({ row }: { row: PublishedPlacementV1 }) {
       ) : null}
       {row.chageun ? (
         <span className="bc-badge call">찾근</span>
+      ) : row.kind === "twoThree" ? (
+        <span className="bc-badge two-three">2·3</span>
       ) : special && !row.driving ? (
         <span className="bc-special">S</span>
       ) : null}

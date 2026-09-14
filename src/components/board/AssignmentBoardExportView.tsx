@@ -36,6 +36,8 @@ function ExportMarks({
       {marks.specialSupport ? <span className="bx-badge support">지원</span> : null}
       {marks.chageun ? (
         <span className="bx-badge call">찾근</span>
+      ) : row.kind === "twoThree" ? (
+        <span className="bx-badge two-three">2·3</span>
       ) : special && !marks.driving ? (
         <span className="bx-special">S</span>
       ) : null}
