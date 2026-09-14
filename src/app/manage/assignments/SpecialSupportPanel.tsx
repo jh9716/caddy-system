@@ -7,16 +7,19 @@ import {
   DAILY_SPECIAL_SUPPORT_KIND_CHIP_LABELS,
   DAILY_SPECIAL_SUPPORT_KIND_LABELS,
   DAILY_SPECIAL_SUPPORT_WORK_PATTERNS,
-  DAILY_SPECIAL_SUPPORT_WORK_PATTERN_CHIP_LABELS,
+  DAILY_SPECIAL_SUPPORT_WORK_PATTERN_LABELS,
   DEFAULT_SPECIAL_SUPPORT_KIND,
   SPECIAL_SUPPORT_CHANGED_MESSAGE,
+  displaySupportRecords,
   engineQueuesFromSupportRecords,
   isEligibleSpecialSupportCandidate,
+  resolveSupportKind,
+  resolveSupportWorkPattern,
+  sameSupportGroup,
   type DailySpecialSupportKind,
   type DailySpecialSupportWorkPattern,
   type SpecialSupportRecord,
 } from "@/lib/dailySpecialSupport";
-import { RECALC_RUNNING_LABEL } from "@/lib/assignmentDraft";
 import { type ShiftPart } from "@/lib/reservationParser";
 
 type Candidate = {
@@ -43,16 +46,25 @@ type Payload = {
   error?: string;
 };
 
-function groupItems(
-  payload: Payload | null,
+type FilterKind = "ALL" | DailySpecialSupportKind;
+
+function groupCaddyIds(
+  items: readonly SpecialSupportRecord[],
   kind: DailySpecialSupportKind,
   pattern: DailySpecialSupportWorkPattern
-): SpecialSupportRecord[] {
-  const fromGroup = payload?.byKindPattern?.[kind]?.[pattern];
-  if (fromGroup) return fromGroup;
-  return (payload?.items || []).filter(
-    (row) => row.kind === kind && row.workPattern === pattern
-  );
+): number[] {
+  return items
+    .filter(
+      (row) =>
+        resolveSupportKind(row) === kind &&
+        resolveSupportWorkPattern(row) === pattern
+    )
+    .sort(
+      (a, b) =>
+        (Number(a.sortOrder) || 0) - (Number(b.sortOrder) || 0) ||
+        (a.id || 0) - (b.id || 0)
+    )
+    .map((row) => row.caddyId);
 }
 
 export const SpecialSupportPanel = memo(function SpecialSupportPanel({
@@ -61,9 +73,6 @@ export const SpecialSupportPanel = memo(function SpecialSupportPanel({
   hasDraft,
   onChanged,
   onLoaded,
-  onRecalcDraft,
-  recalcBusy,
-  recalcDisabled,
 }: {
   date: string;
   excludedRows?: Array<{
@@ -77,18 +86,16 @@ export const SpecialSupportPanel = memo(function SpecialSupportPanel({
   hasDraft?: boolean;
   onChanged?: () => void;
   onLoaded?: (byShift: ReturnType<typeof engineQueuesFromSupportRecords>) => void;
-  onRecalcDraft?: () => void;
-  recalcBusy?: boolean;
-  recalcDisabled?: boolean;
 }) {
   const [payload, setPayload] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
-  const [kind, setKind] = useState<DailySpecialSupportKind>(
+  const [filterKind, setFilterKind] = useState<FilterKind>("ALL");
+  const [modalKind, setModalKind] = useState<DailySpecialSupportKind>(
     DEFAULT_SPECIAL_SUPPORT_KIND
   );
-  const [workPattern, setWorkPattern] =
+  const [modalPattern, setModalPattern] =
     useState<DailySpecialSupportWorkPattern>("SHIFT_1");
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [notice, setNotice] = useState<string | null>(null);
@@ -145,22 +152,33 @@ export const SpecialSupportPanel = memo(function SpecialSupportPanel({
     void load();
   }, [load]);
 
+  const items = payload?.items || [];
+  const visibleRows = useMemo(
+    () => displaySupportRecords(items, filterKind),
+    [payload?.items, filterKind]
+  );
+
   const candidates = useMemo(() => {
     const fromApi = payload?.candidates || [];
-    if (fromApi.length) return fromApi;
-    return (excludedRows || [])
-      .filter((row) => isEligibleSpecialSupportCandidate(row))
-      .map((row) => ({
-        id: row.id,
-        name: row.name || "",
-        team: row.team || "",
-        teamOrder: row.teamOrder,
-        employmentStatus: row.employmentStatus,
-        excludedReasons: row.excludedReasons,
-        exclusionLabel:
-          (row.excludedReasons || []).filter(Boolean).join(" · ") || "제외",
-      }));
-  }, [payload?.candidates, excludedRows]);
+    const registered = new Set(
+      groupCaddyIds(items, modalKind, modalPattern)
+    );
+    const source = fromApi.length
+      ? fromApi
+      : (excludedRows || [])
+          .filter((row) => isEligibleSpecialSupportCandidate(row))
+          .map((row) => ({
+            id: row.id,
+            name: row.name || "",
+            team: row.team || "",
+            teamOrder: row.teamOrder,
+            employmentStatus: row.employmentStatus,
+            excludedReasons: row.excludedReasons,
+            exclusionLabel:
+              (row.excludedReasons || []).filter(Boolean).join(" · ") || "제외",
+          }));
+    return source.filter((row) => !registered.has(row.id));
+  }, [payload?.candidates, excludedRows, items, modalKind, modalPattern]);
 
   const countsByKind = payload?.countsByKind || {
     CHAGEUN: 0,
@@ -170,10 +188,14 @@ export const SpecialSupportPanel = memo(function SpecialSupportPanel({
     LEADER_SUPPORT: 0,
     FIFTY_FOUR_SUPPORT: 0,
   };
-  const groupRows = groupItems(payload, kind, workPattern);
+  const totalCount = items.length;
 
   async function openModal() {
     setSelected(new Set());
+    setModalKind(
+      filterKind === "ALL" ? DEFAULT_SPECIAL_SUPPORT_KIND : filterKind
+    );
+    setModalPattern("SHIFT_1");
     setModalOpen(true);
     if (!(payload?.candidates && payload.candidates.length)) {
       await load({ includeCandidates: true });
@@ -189,7 +211,11 @@ export const SpecialSupportPanel = memo(function SpecialSupportPanel({
     });
   }
 
-  async function saveGroup(caddyIds: number[]) {
+  async function saveGroup(
+    kind: DailySpecialSupportKind,
+    workPattern: DailySpecialSupportWorkPattern,
+    caddyIds: number[]
+  ) {
     setBusy(true);
     setError(null);
     try {
@@ -224,12 +250,12 @@ export const SpecialSupportPanel = memo(function SpecialSupportPanel({
   }
 
   async function addSelected() {
-    const current = groupRows.map((row) => row.caddyId);
+    const current = groupCaddyIds(items, modalKind, modalPattern);
     const merged = [...current];
     for (const id of selected) {
       if (!merged.includes(id)) merged.push(id);
     }
-    const ok = await saveGroup(merged);
+    const ok = await saveGroup(modalKind, modalPattern, merged);
     if (ok) {
       setModalOpen(false);
       setSelected(new Set());
@@ -284,91 +310,85 @@ export const SpecialSupportPanel = memo(function SpecialSupportPanel({
       {error ? <div className="ss-error">{error}</div> : null}
       {notice ? <p className="ss-draft">{notice}</p> : null}
 
-      <div className="ss-kinds" role="tablist" aria-label="지원 유형">
+      <div className="ss-kinds" role="tablist" aria-label="지원 유형 필터">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={filterKind === "ALL"}
+          className={filterKind === "ALL" ? "on" : ""}
+          onClick={() => setFilterKind("ALL")}
+        >
+          전체 {totalCount}
+        </button>
         {DAILY_SPECIAL_SUPPORT_KINDS.map((item) => (
           <button
             key={item}
             type="button"
             role="tab"
-            aria-selected={kind === item}
-            className={kind === item ? "on" : ""}
-            onClick={() => setKind(item)}
+            aria-selected={filterKind === item}
+            className={filterKind === item ? "on" : ""}
+            onClick={() => setFilterKind(item)}
           >
             {DAILY_SPECIAL_SUPPORT_KIND_CHIP_LABELS[item]} {countsByKind[item] || 0}
           </button>
         ))}
       </div>
 
-      <div className="ss-pattern-label">패턴</div>
-      <div className="ss-patterns" role="tablist" aria-label="근무 패턴">
-        {DAILY_SPECIAL_SUPPORT_WORK_PATTERNS.map((item) => (
-          <button
-            key={item}
-            type="button"
-            role="tab"
-            aria-selected={workPattern === item}
-            className={workPattern === item ? "on" : ""}
-            onClick={() => setWorkPattern(item)}
-          >
-            {DAILY_SPECIAL_SUPPORT_WORK_PATTERN_CHIP_LABELS[item]}{" "}
-            {payload?.byKindPattern?.[kind]?.[item]?.length || 0}
-          </button>
-        ))}
-      </div>
+      <div className="ss-current">현재 등록 {visibleRows.length}명</div>
 
-      <div className="ss-current">
-        {DAILY_SPECIAL_SUPPORT_KIND_LABELS[kind]} ·{" "}
-        {DAILY_SPECIAL_SUPPORT_WORK_PATTERN_CHIP_LABELS[workPattern]} · {groupRows.length}명
-      </div>
-
-      {groupRows.length === 0 ? (
+      {visibleRows.length === 0 ? (
         <div className="ss-empty">등록 없음</div>
       ) : (
         <ol className="ss-list">
-          {groupRows.map((row, index) => (
-            <li key={row.id || `${row.caddyId}-${index}`}>
-              <span className="ss-pri">{index + 1}</span>
-              <span className="ss-who">{formatCaddyLabel(row)}</span>
-              <span className="ss-ops">
-                <button
-                  type="button"
-                  disabled={busy || index === 0}
-                  onClick={() => row.id && void patchRow(row.id, "move", "up")}
-                >
-                  위
-                </button>
-                <button
-                  type="button"
-                  disabled={busy || index === groupRows.length - 1}
-                  onClick={() => row.id && void patchRow(row.id, "move", "down")}
-                >
-                  아래
-                </button>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => row.id && void patchRow(row.id, "delete")}
-                >
-                  삭제
-                </button>
-              </span>
-            </li>
-          ))}
+          {visibleRows.map((row, index) => {
+            const kind = resolveSupportKind(row);
+            const pattern = resolveSupportWorkPattern(row);
+            const prev = visibleRows[index - 1];
+            const next = visibleRows[index + 1];
+            const canUp = Boolean(prev && sameSupportGroup(row, prev));
+            const canDown = Boolean(next && sameSupportGroup(row, next));
+            return (
+              <li key={row.id || `${row.caddyId}-${index}`}>
+                <span className="ss-pri">{index + 1}</span>
+                <span className="ss-who">
+                  <span className="ss-name">{formatCaddyLabel(row)}</span>
+                  <span className="ss-badges">
+                    <span className="ss-badge kind">
+                      {DAILY_SPECIAL_SUPPORT_KIND_CHIP_LABELS[kind]}
+                    </span>
+                    <span className="ss-badge pat">
+                      {DAILY_SPECIAL_SUPPORT_WORK_PATTERN_LABELS[pattern]}
+                    </span>
+                  </span>
+                </span>
+                <span className="ss-ops">
+                  <button
+                    type="button"
+                    disabled={busy || !canUp || !row.id}
+                    onClick={() => row.id && void patchRow(row.id, "move", "up")}
+                  >
+                    위
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy || !canDown || !row.id}
+                    onClick={() => row.id && void patchRow(row.id, "move", "down")}
+                  >
+                    아래
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy || !row.id}
+                    onClick={() => row.id && void patchRow(row.id, "delete")}
+                  >
+                    삭제
+                  </button>
+                </span>
+              </li>
+            );
+          })}
         </ol>
       )}
-
-      {hasDraft ? (
-        <div className="ss-recalc">
-          <button
-            type="button"
-            className="ss-recalc-btn"
-            disabled={recalcBusy || recalcDisabled || !onRecalcDraft}
-            onClick={() => onRecalcDraft?.()}
-          >
-            {recalcBusy ? RECALC_RUNNING_LABEL : "배치 다시 맞추기"}
-          </button>
-        </div>
-      ) : null}
 
       {modalOpen ? (
         <div className="ss-modal" role="dialog" aria-modal="true">
@@ -379,33 +399,36 @@ export const SpecialSupportPanel = memo(function SpecialSupportPanel({
                 닫기
               </button>
             </div>
+            <div className="ss-step">1. 지원 종류</div>
             <div className="ss-kinds">
               {DAILY_SPECIAL_SUPPORT_KINDS.map((item) => (
                 <button
                   key={item}
                   type="button"
-                  className={kind === item ? "on" : ""}
-                  onClick={() => setKind(item)}
+                  className={modalKind === item ? "on" : ""}
+                  onClick={() => setModalKind(item)}
                 >
-                  {DAILY_SPECIAL_SUPPORT_KIND_CHIP_LABELS[item]}
+                  {DAILY_SPECIAL_SUPPORT_KIND_LABELS[item]}
                 </button>
               ))}
             </div>
+            <div className="ss-step">2. 근무 패턴</div>
             <div className="ss-patterns">
               {DAILY_SPECIAL_SUPPORT_WORK_PATTERNS.map((item) => (
                 <button
                   key={item}
                   type="button"
-                  className={workPattern === item ? "on" : ""}
-                  onClick={() => setWorkPattern(item)}
+                  className={modalPattern === item ? "on" : ""}
+                  onClick={() => setModalPattern(item)}
                 >
-                  {DAILY_SPECIAL_SUPPORT_WORK_PATTERN_CHIP_LABELS[item]}
+                  {DAILY_SPECIAL_SUPPORT_WORK_PATTERN_LABELS[item]}
                 </button>
               ))}
             </div>
+            <div className="ss-step">3. 캐디 선택</div>
             <p className="ss-hint">
-              {DAILY_SPECIAL_SUPPORT_KIND_LABELS[kind]} ·{" "}
-              {DAILY_SPECIAL_SUPPORT_WORK_PATTERN_CHIP_LABELS[workPattern]} · 추가{" "}
+              {DAILY_SPECIAL_SUPPORT_KIND_LABELS[modalKind]} ·{" "}
+              {DAILY_SPECIAL_SUPPORT_WORK_PATTERN_LABELS[modalPattern]} · 추가{" "}
               {selected.size}명. 병가·결근·휴직·퇴사는 목록에 없습니다.
             </p>
             {candidates.length === 0 ? (
@@ -434,7 +457,7 @@ export const SpecialSupportPanel = memo(function SpecialSupportPanel({
             )}
             <div className="ss-actions">
               <button type="button" disabled={busy} onClick={() => void addSelected()}>
-                {busy ? "저장 중…" : "추가 저장"}
+                {busy ? "저장 중…" : "저장"}
               </button>
             </div>
           </div>
@@ -463,13 +486,22 @@ export const SpecialSupportPanel = memo(function SpecialSupportPanel({
         .ss-kinds button.on, .ss-patterns button.on {
           background: #0f172a; color: #fff; border-color: #0f172a;
         }
-        .ss-pattern-label { margin-top: 8px; font-size: 0.72rem; color: #64748b; font-weight: 700; }
-        .ss-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }
+        .ss-step { margin-top: 8px; font-size: 0.72rem; color: #64748b; font-weight: 700; }
+        .ss-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
         .ss-list li {
           display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 6px; align-items: center;
-          min-height: 32px; font-size: 0.85rem;
+          min-height: 36px; font-size: 0.85rem;
         }
         .ss-pri { font-weight: 800; color: #0f172a; }
+        .ss-who { display: grid; gap: 3px; min-width: 0; }
+        .ss-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .ss-badges { display: flex; flex-wrap: wrap; gap: 4px; }
+        .ss-badge {
+          display: inline-flex; align-items: center; min-height: 18px;
+          border-radius: 6px; padding: 0 6px; font-size: 0.68rem; font-weight: 700;
+        }
+        .ss-badge.kind { color: #1e3a8a; background: #dbeafe; }
+        .ss-badge.pat { color: #334155; background: #e2e8f0; }
         .ss-ops { display: flex; gap: 4px; }
         .ss-ops button {
           min-height: 28px; border: 1px solid #e5e7eb; background: #fff; border-radius: 6px;
@@ -492,12 +524,6 @@ export const SpecialSupportPanel = memo(function SpecialSupportPanel({
           width: 100%; min-height: 40px; border: 0; background: #0f172a; color: #fff;
           border-radius: 10px; padding: 10px; font-weight: 800; cursor: pointer;
         }
-        .ss-recalc { margin-top: 10px; }
-        .ss-recalc-btn {
-          width: 100%; min-height: 40px; border: 0; background: #0f172a; color: #fff;
-          border-radius: 10px; font-weight: 800; cursor: pointer;
-        }
-        .ss-recalc-btn:disabled { opacity: 0.5; cursor: not-allowed; }
       `}</style>
     </section>
   );

@@ -43,6 +43,8 @@ import {
   isEngineEligibleSupportRecord,
   shiftCompatFromWorkPattern,
   supportBoardBadgeLabels,
+  displaySupportRecords,
+  sameSupportGroup,
   type SpecialSupportRecord,
 } from "../src/lib/dailySpecialSupport";
 import { boardAssignmentMarks } from "../src/lib/assignmentBoardView";
@@ -1151,6 +1153,21 @@ section("지원근무 V2 유형/패턴/sortOrder/엔진 제외");
     grouped.SPECIAL_SUPPORT.SHIFT_1.map((r) => r.caddyId).join(",") === "1,2",
     "date+kind+workPattern 안 sortOrder"
   );
+  const listed = displaySupportRecords(rows, "ALL");
+  assert(
+    listed.map((r) => r.caddyId).join(",") === "3,1,2,4,5,6,7",
+    "전체 목록은 유형·패턴·sortOrder"
+  );
+  assert(
+    displaySupportRecords(rows, "SPECIAL_SUPPORT")
+      .map((r) => r.caddyId)
+      .join(",") === "1,2",
+    "종류 필터는 로드된 목록에서"
+  );
+  assert(
+    sameSupportGroup(rows[0]!, rows[1]!) && !sameSupportGroup(rows[0]!, rows[2]!),
+    "위/아래는 같은 kind+pattern만"
+  );
   assert(grouped.CHAGEUN.SHIFT_2.length === 1, "찾근 그룹");
   assert(grouped.OFF_SUPPORT.ONE_TWO.length === 1, "휴무 1·2부 그룹");
   const counts = countSupportByKind(rows);
@@ -1265,12 +1282,20 @@ section("source / UI / migration / 권한");
   assert(/지원근무 등록/.test(supportUi), "지원근무 등록 액션");
   assert(/const \[busy, setBusy\]/.test(supportUi), "저장 busy state");
   assert(/countsByKind/.test(supportUi), "유형별 인원 칩");
-  assert(/ss-kinds/.test(supportUi) && /ss-patterns/.test(supportUi), "유형·패턴 wrap 칩");
+  assert(/ss-kinds/.test(supportUi), "유형 wrap 칩");
+  assert(/filterKind/.test(supportUi) && /전체/.test(supportUi), "전체 필터 기본");
+  assert(/현재 등록/.test(supportUi), "전체 등록 목록 우선");
+  assert(!/ss-pattern-label/.test(supportUi), "메인 패턴 선택 줄 제거");
+  assert(/ss-patterns/.test(supportUi) && /1\. 지원 종류/.test(supportUi), "패턴은 등록 모달");
   assert(/SpecialSupportPanel/.test(page), "날짜 설정에 특수지원");
   assert(/지원근무/.test(page) && /ops-settings-tabs/.test(page), "지원근무 탭");
   assert(
-    /배치 다시 맞추기/.test(supportUi) && /onRecalcDraft/.test(supportUi),
-    "지원근무 탭에 배치 다시 맞추기 상시"
+    /ops-settings-recalc/.test(page) && /runRecalcDraft/.test(page),
+    "공용 배치 다시 맞추기 handler 유지"
+  );
+  assert(
+    !/onRecalcDraft/.test(supportUi) && !/onRecalcDraft/.test(panel),
+    "탭별 재맞추기 버튼 제거"
   );
   assert(
     /DAILY_SPECIAL_SUPPORT_KINDS\.map/.test(supportUi) &&
@@ -1279,7 +1304,7 @@ section("source / UI / migration / 권한");
   );
   assert(
     /DAILY_SPECIAL_SUPPORT_WORK_PATTERNS\.map/.test(supportUi) &&
-      /DAILY_SPECIAL_SUPPORT_WORK_PATTERN_CHIP_LABELS/.test(supportUi),
+      /DAILY_SPECIAL_SUPPORT_WORK_PATTERN_LABELS/.test(supportUi),
     "5개 workPattern 칩"
   );
   assert(/action === "move"/.test(route) && /action === "delete"/.test(route), "sortOrder 위아래·삭제 API");

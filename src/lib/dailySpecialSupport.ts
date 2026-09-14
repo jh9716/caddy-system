@@ -283,6 +283,47 @@ export function groupSupportRecordsByKindPattern(
   return out;
 }
 
+export function sameSupportGroup(
+  a: Pick<SpecialSupportRecord, "kind" | "workPattern" | "shift">,
+  b: Pick<SpecialSupportRecord, "kind" | "workPattern" | "shift">
+): boolean {
+  return (
+    resolveSupportKind(a) === resolveSupportKind(b) &&
+    resolveSupportWorkPattern(a) === resolveSupportWorkPattern(b)
+  );
+}
+
+export function compareSupportRecordsForDisplay(
+  a: SpecialSupportRecord,
+  b: SpecialSupportRecord
+): number {
+  const kindA = DAILY_SPECIAL_SUPPORT_KINDS.indexOf(resolveSupportKind(a));
+  const kindB = DAILY_SPECIAL_SUPPORT_KINDS.indexOf(resolveSupportKind(b));
+  if (kindA !== kindB) return kindA - kindB;
+  const patternA = DAILY_SPECIAL_SUPPORT_WORK_PATTERNS.indexOf(
+    resolveSupportWorkPattern(a)
+  );
+  const patternB = DAILY_SPECIAL_SUPPORT_WORK_PATTERNS.indexOf(
+    resolveSupportWorkPattern(b)
+  );
+  if (patternA !== patternB) return patternA - patternB;
+  return (
+    (Number(a.sortOrder) || 0) - (Number(b.sortOrder) || 0) ||
+    (a.id || 0) - (b.id || 0)
+  );
+}
+
+export function displaySupportRecords(
+  rows: readonly SpecialSupportRecord[],
+  kind?: DailySpecialSupportKind | "ALL" | null
+): SpecialSupportRecord[] {
+  const filtered =
+    !kind || kind === "ALL"
+      ? [...rows]
+      : rows.filter((row) => resolveSupportKind(row) === kind);
+  return filtered.sort(compareSupportRecordsForDisplay);
+}
+
 export function countSupportByKind(
   rows: readonly SpecialSupportRecord[]
 ): Record<DailySpecialSupportKind, number> {

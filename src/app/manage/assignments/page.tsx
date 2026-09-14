@@ -410,11 +410,20 @@ function SettingsTabHost({
   general,
   special,
   support,
+  recalc,
 }: {
   tabApiRef: MutableRefObject<{ setTab: (tab: SettingsTabId) => void } | null>;
   general: ReactNode;
   special: ReactNode;
   support: ReactNode;
+  recalc?: {
+    visible: boolean;
+    busy?: boolean;
+    disabled?: boolean;
+    onClick: () => void;
+    runningLabel: string;
+    idleLabel: string;
+  };
 }) {
   const [settingsTab, setSettingsTab] = useState<SettingsTabId>("general");
   useEffect(() => {
@@ -455,6 +464,17 @@ function SettingsTabHost({
           지원근무
         </button>
       </div>
+      {recalc?.visible ? (
+        <div className="ops-settings-recalc">
+          <button
+            type="button"
+            disabled={recalc.busy || recalc.disabled}
+            onClick={recalc.onClick}
+          >
+            {recalc.busy ? recalc.runningLabel : recalc.idleLabel}
+          </button>
+        </div>
+      ) : null}
       <div className="ops-settings-pane" hidden={settingsTab !== "general"}>
         {general}
       </div>
@@ -3498,6 +3518,14 @@ export default function ManageAssignmentsOpsPage() {
           <summary>기타 배치 설정</summary>
           <SettingsTabHost
             tabApiRef={settingsTabApiRef}
+            recalc={{
+              visible: Boolean(draft || serverDraftVersionRef.current > 0),
+              busy: loadingRun,
+              disabled: recalcDisabled,
+              onClick: () => void runRecalcDraft(),
+              runningLabel: RECALC_RUNNING_LABEL,
+              idleLabel: "배치 다시 맞추기",
+            }}
             general={
               <>
           <div className="ops-field ops-third-week">
@@ -3681,9 +3709,6 @@ export default function ManageAssignmentsOpsPage() {
             excludedRows={availability?.excluded}
             shift1Options={shift1StartOptions}
             hasDraft={Boolean(draft || serverDraftVersionRef.current > 0)}
-            onRecalcDraft={() => void runRecalcDraft()}
-            recalcBusy={loadingRun}
-            recalcDisabled={recalcDisabled}
             onChanged={() => {
               setSpecialSettingsStale(true);
               showToast(SPECIAL_SETTINGS_STALE_MESSAGE);
@@ -3696,9 +3721,6 @@ export default function ManageAssignmentsOpsPage() {
             excludedRows={availability?.excluded}
             hasDraft={Boolean(draft || serverDraftVersionRef.current > 0)}
             onLoaded={onSpecialSupportLoaded}
-            onRecalcDraft={() => void runRecalcDraft()}
-            recalcBusy={loadingRun}
-            recalcDisabled={recalcDisabled}
             onChanged={() => {
               setSpecialSettingsStale(true);
               showToast(SPECIAL_SETTINGS_STALE_MESSAGE);
@@ -6069,6 +6091,24 @@ const opsCss = `
     background: #0f172a;
     color: #fff;
     border-color: #0f172a;
+  }
+  .ops-settings-recalc {
+    margin-top: 8px;
+  }
+  .ops-settings-recalc button {
+    width: 100%;
+    min-height: 36px;
+    border: 1px solid #e2e8f0;
+    background: #fff;
+    color: #0f172a;
+    border-radius: 8px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .ops-settings-recalc button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
   .ops-settings-pane {
     display: grid;

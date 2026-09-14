@@ -23,6 +23,7 @@ import {
   DAILY_SPECIAL_KIND_LABELS,
   SPECIAL_DUTY_HARD_BLOCK_MESSAGE_SUFFIX,
   SPECIAL_DUTY_SOFT_OVERRIDE_MESSAGE_SUFFIX,
+  specialDutySoftOriginBadge,
   type SpecialDutyRecord,
 } from "../src/lib/dailySpecialDuty";
 import {
@@ -154,6 +155,11 @@ section("휴무 등 soft exclusion은 특수근무 우선, hard는 차단");
         c.message === `휴무${SPECIAL_DUTY_SOFT_OVERRIDE_MESSAGE_SUFFIX}`
     ),
     "휴무 → 특수근무로 배치 표시"
+  );
+  assert(
+    specialDutySoftOriginBadge(`휴무${SPECIAL_DUTY_SOFT_OVERRIDE_MESSAGE_SUFFIX}`) ===
+      "원상태: 휴무",
+    "휴무 특수근무 compact 원상태 뱃지"
   );
   assert(
     annotated[2].conflicts.some(
@@ -1155,6 +1161,7 @@ section("특수근무 검색·3부 첫 캐디 후보는 RETIRED/LEAVE 제외");
   assert(/레거시 찾근/.test(specialSrc), "기존 CHAGEUN row는 레거시로만 표시");
   assert(/SOFT_OVERRIDE/.test(specialSrc), "soft override 충돌을 UI에 표시");
   assert(/sd-override/.test(specialSrc), "휴무 오버라이드는 숨기지 않고 별도 스타일");
+  assert(/specialDutySoftOriginBadge/.test(specialSrc), "휴무 특수근무는 원상태 compact 뱃지");
   assert(
     /2부는 앞 2자리 다음, 3부는 3부반 원번·찾근 다음/.test(specialSrc),
     "2·3부 운영 규칙 안내"

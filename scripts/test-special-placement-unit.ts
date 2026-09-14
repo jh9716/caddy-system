@@ -729,8 +729,12 @@ section("UI/API 문자열");
     "Excel 전용 막기 문구 제거"
   );
   assert(
-    src.includes("onRecalcDraft") && src.includes("배치 다시 맞추기"),
-    "특수근무 탭에 배치 다시 맞추기 상시"
+    !src.includes("onRecalcDraft") &&
+      readFileSync(
+        join(process.cwd(), "src/app/manage/assignments/page.tsx"),
+        "utf8"
+      ).includes("ops-settings-recalc"),
+    "배치 다시 맞추기는 설정 탭 공용"
   );
   assert(src.includes("뒤 일반순번 보호"), "R 입력");
   assert(src.includes('placementMode === "MANUAL"'), "MANUAL에서만 anchor");
