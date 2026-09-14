@@ -13,15 +13,18 @@ import {
   listDailyOpsDuties,
   type StoredOpsDutyRow,
 } from "@/lib/dailyOpsDutyService";
-import { opsDutyRoleFromKind } from "@/lib/dailyOpsDuty";
-import type { DutyExcelEntry } from "@/lib/dutyMarshalLeaderParser";
+import { isDailyOpsDutyRole } from "@/lib/dailyOpsDuty";
 import {
   fetchPublishedOffSheets,
 } from "@/lib/offSheetFetch";
 import { offNamesForDate, type OffSheet } from "@/lib/offSheetParser";
 import { fetchPublishedOpsDutySheets } from "@/lib/opsDutySheetFetch";
 import { type OpsDutySheet } from "@/lib/opsDutySheetParser";
-import { resolveOpsDutyReadOnly } from "@/lib/opsDutyReadOnlySource";
+import {
+  resolveEffectiveOpsDuty,
+  type StoredOpsDutyOverrideRow,
+} from "@/lib/opsDutyEffectiveService";
+import type { NameMatchCaddy } from "@/lib/dailyCaddyNameMatch";
 
 export type AdminOpsSourceQuality = "complete" | "fallback";
 export type AdminOpsOffSource = "sheet" | "assignment_only";
@@ -39,24 +42,25 @@ export type AdminOpsDashboardSourceResult = {
 export type AdminOpsDashboardSourceDeps = {
   loadAvailability?: typeof loadAvailabilityForDate;
   listDuties?: (ymd: string) => Promise<StoredOpsDutyRow[]>;
+  listOverrides?: (ymd: string) => Promise<StoredOpsDutyOverrideRow[]>;
+  listCaddies?: () => Promise<Array<NameMatchCaddy & { team?: string }>>;
   fetchOffSheets?: () => Promise<OffSheet[]>;
   fetchOpsDutySheets?: () => Promise<OpsDutySheet[]>;
 };
 
-function dutyInputsFromEntries(entries: DutyExcelEntry[]): AdminOpsDutyNameInput[] {
-  return entries.map((entry) => ({
-    role: opsDutyRoleFromKind(entry.kind),
-    name: entry.rawName,
-    rawName: entry.rawName,
-  }));
-}
-
-function dutyInputsFromStored(rows: StoredOpsDutyRow[]): AdminOpsDutyNameInput[] {
-  return rows.map((row) => ({
-    role: row.role,
-    name: row.name,
-    rawName: row.rawName,
-  }));
+function dutyInputsFromEffective(
+  rows: Array<{ role: string; name: string; rawName?: string }>
+): AdminOpsDutyNameInput[] {
+  const out: AdminOpsDutyNameInput[] = [];
+  for (const row of rows) {
+    if (!isDailyOpsDutyRole(row.role)) continue;
+    out.push({
+      role: row.role,
+      name: row.name,
+      rawName: row.rawName || row.name,
+    });
+  }
+  return out;
 }
 
 export async function loadAdminOpsDashboardSource(
@@ -80,18 +84,17 @@ export async function loadAdminOpsDashboardSource(
     offError = error instanceof Error ? error.message : "off_sheet_fetch_failed";
   }
 
-  const resolvedDuty = await resolveOpsDutyReadOnly(ymd, {
+  const resolvedDuty = await resolveEffectiveOpsDuty(ymd, {
     listDuties,
     fetchOpsDutySheets: fetchOps,
+    listOverrides: deps.listOverrides,
+    listCaddies: deps.listCaddies,
   });
-  const stored = resolvedDuty.stored;
-  const dutyEntries = resolvedDuty.sheetEntries;
-  const dutySource = resolvedDuty.source;
+  const dutySource = resolvedDuty.baseSource;
   const dutyError = resolvedDuty.error;
 
   const offOk = Boolean(offSheets && offDateFound && !offError);
-  const dutyOk =
-    dutySource === "stored" || (dutySource === "sheet" && dutyEntries.length > 0);
+  const dutyOk = dutySource === "stored" || dutySource === "sheet";
   const completeForSnapshot = offOk && dutyOk;
   const quality: AdminOpsSourceQuality = completeForSnapshot ? "complete" : "fallback";
   let skipReason: string | null = null;
@@ -101,14 +104,11 @@ export async function loadAdminOpsDashboardSource(
   const availability = await loadAvailability(ymd, {
     includeOffSheet: offOk,
     offSheets: offOk && offSheets ? offSheets : undefined,
-    includeStoredOpsDuty: dutySource === "stored",
-    dutyEntries: dutySource === "sheet" ? dutyEntries : undefined,
+    includeStoredOpsDuty: false,
+    dutyEntries: resolvedDuty.entries,
   });
 
-  const opsDuties =
-    dutySource === "stored"
-      ? dutyInputsFromStored(stored)
-      : dutyInputsFromEntries(dutyEntries);
+  const opsDuties = dutyInputsFromEffective(resolvedDuty.rows);
 
   return {
     dashboard: buildAdminOpsDashboard({

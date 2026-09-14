@@ -94,6 +94,7 @@ model Caddy {
   dailyPlacements    DailyPlacement[]
   dailyUnavailables  DailyCaddyUnavailable[]
   dailyOpsDuties     DailyOpsDuty[]
+  dailyOpsDutyOverrides DailyOpsDutyOverride[]
   /// 승인 시 선택된 Caddy로 역참조 (이력). Caddy 물리 삭제 시 selectedCaddyId만 null
   linkRequestSelections CaddyLinkRequest[] @relation("CaddyLinkRequestSelectedCaddy")
   /// 로그인 User와 1:1 (미연결 시 null)
@@ -432,6 +433,33 @@ model DailyOpsDuty {
   @@unique([date, roleKey])
   @@unique([date, role, caddyId])
   @@index([date, caddyId])
+  @@index([caddyId])
+}
+
+/// 당번·마샬·조장 현장 수동 override. DailyOpsDuty(시트 적용본)는 덮어쓰지 않음.
+/// SET=슬롯 교체, CLEAR=현장 해제. 행 삭제(RESTORE)만 원본으로 복원.
+enum DailyOpsDutyOverrideAction {
+  SET
+  CLEAR
+}
+
+model DailyOpsDutyOverride {
+  id        Int                        @id @default(autoincrement())
+  date      DateTime
+  role      DailyOpsDutyRole
+  /// DailyOpsDuty.roleKey 와 동일. 예: 당번_조출_1
+  roleKey   String
+  action    DailyOpsDutyOverrideAction
+  /// SET이면 필수. CLEAR는 null.
+  caddyId   Int?
+  caddy     Caddy?                     @relation(fields: [caddyId], references: [id])
+  /// SET 당시 이름 (표시·감사). CLEAR는 null.
+  rawName   String?
+  createdAt DateTime                   @default(now())
+  updatedAt DateTime                   @updatedAt
+
+  @@unique([date, roleKey])
+  @@index([date])
   @@index([caddyId])
 }
 

@@ -357,6 +357,8 @@ section("read-only OFF/ops source overlay");
   const loaded = await loadAdminOpsDashboardSource(date, {
     loadAvailability: mockLoadAvailability(),
     listDuties: async () => [storedDuty("김가용")],
+    listOverrides: async () => [],
+    listCaddies: async () => caddies,
     fetchOffSheets: async () => [offSheetForDate(date, ["이휴무"])],
     fetchOpsDutySheets: async () => {
       writes.push("unexpected_ops_fetch");
@@ -376,6 +378,8 @@ section("Sheet overlay는 DB write / apply 없음");
   await loadAdminOpsDashboardSource(date, {
     loadAvailability: mockLoadAvailability(),
     listDuties: async () => [],
+    listOverrides: async () => [],
+    listCaddies: async () => caddies,
     fetchOffSheets: async () => [offSheetForDate(date, ["이휴무"])],
     fetchOpsDutySheets: async () =>
       buildOpsDutySheetTestSheets([
@@ -402,6 +406,8 @@ section("DailyOpsDuty 없이 운영배치 Sheet read-only");
   const loaded = await loadAdminOpsDashboardSource(date, {
     loadAvailability: mockLoadAvailability(),
     listDuties: async () => [],
+    listOverrides: async () => [],
+    listCaddies: async () => caddies,
     fetchOffSheets: async () => [offSheetForDate(date, ["이휴무"])],
     fetchOpsDutySheets: async () => {
       opsFetch += 1;
@@ -432,6 +438,8 @@ section("Sheet fetch 실패 시 DB fallback + incomplete metadata");
   const loaded = await loadAdminOpsDashboardSource(date, {
     loadAvailability: mockLoadAvailability(),
     listDuties: async () => [storedDuty("김가용")],
+    listOverrides: async () => [],
+    listCaddies: async () => caddies,
     fetchOffSheets: async () => {
       throw new Error("off_sheet_fetch_failed");
     },
@@ -459,6 +467,7 @@ section("dashboard 조회 write/sync 없음");
   assert(/loadAdminOpsDashboardSource/.test(service), "service가 공통 source 사용");
   assert(/fetchPublishedOffSheets/.test(source), "OFF Sheet read-only fetch");
   assert(/fetchPublishedOpsDutySheets/.test(source), "운영배치 Sheet read-only fetch");
+  assert(/resolveEffectiveOpsDuty/.test(source), "effective ops duty resolver 사용");
   assert(/listDailyOpsDuties/.test(source), "기존 ops duty read helper");
   assert(/loadAvailabilityForDate/.test(source), "기존 availability loader 재사용");
   assert(!/syncOpsDutySheet/.test(source + service + api + helper + page + ui), "autosync 없음");
