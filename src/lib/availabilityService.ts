@@ -13,6 +13,7 @@ import {
 } from "@/lib/availabilitySlotGrid";
 import {
   applyDailyExternalExclusions,
+  applyDailyUnavailableExclusions,
   type DailyAvailabilityResult,
 } from "@/lib/dailyAvailabilityOverlay";
 import {
@@ -29,11 +30,18 @@ import {
   loadEffectiveOpsDutyEntries,
   type ResolveEffectiveOpsDutyDeps,
 } from "@/lib/opsDutyEffectiveService";
+import {
+  effectiveOffNamesFromBase,
+  type EffectiveOffResult,
+} from "@/lib/offEffective";
+import { listDailyOffOverrides } from "@/lib/offEffectiveService";
+import { listUnavailablePanelRows } from "@/lib/dailyBoardDraftService";
 
 export type AvailabilityWithSlotGrid = DailyAvailabilityResult & {
   slotGrid: TeamSlotGrid;
   dutySource?: "file" | "stored" | "none";
   dutyEntryCount?: number;
+  offOverlay?: EffectiveOffResult;
 };
 
 export type LoadAvailabilityOptions = {
@@ -51,6 +59,10 @@ export type LoadAvailabilityOptions = {
   includeOffSheet?: boolean;
   /** true면 휴무 Sheet 캐시를 무시하고 다시 읽음 (가용 새로고침) */
   forceOffSheet?: boolean;
+  /** false면 DailyOffOverride 를 적용하지 않음 (기본 true) */
+  includeOffOverride?: boolean;
+  /** false면 DailyCaddyUnavailable 병가/결근을 가용에서 빼지 않음 (기본 true) */
+  includeDailyUnavailable?: boolean;
 };
 
 export async function loadAvailabilityForDate(
@@ -124,6 +136,16 @@ export async function loadAvailabilityForDate(
     offNames = requireOffNamesForDate(sheets, ymd);
   }
 
+  const offOverrides =
+    options?.includeOffOverride === false
+      ? []
+      : await listDailyOffOverrides(ymd);
+  const offResolved = effectiveOffNamesFromBase({
+    caddies,
+    offNames,
+    overrides: offOverrides,
+  });
+
   let dutyEntries: DutyExcelEntry[] = [];
   let dutySource: "file" | "stored" | "none" = "none";
   if (options?.dutyWorkbook) {
@@ -138,12 +160,19 @@ export async function loadAvailabilityForDate(
     if (dutyEntries.length > 0) dutySource = "stored";
   }
 
-  const overlaid = applyDailyExternalExclusions({
+  let overlaid = applyDailyExternalExclusions({
     availability,
     caddies,
-    offNames,
+    offNames: offResolved.names,
     dutyEntries,
   });
+  if (options?.includeDailyUnavailable !== false) {
+    const unavailables = await listUnavailablePanelRows(ymd);
+    overlaid = applyDailyUnavailableExclusions({
+      availability: overlaid,
+      unavailables,
+    });
+  }
 
   const slotGrid = buildTeamSlotGrid({
     availability: overlaid,
@@ -156,5 +185,11 @@ export async function loadAvailabilityForDate(
     })),
   });
 
-  return { ...overlaid, slotGrid, dutySource, dutyEntryCount: dutyEntries.length };
+  return {
+    ...overlaid,
+    slotGrid,
+    dutySource,
+    dutyEntryCount: dutyEntries.length,
+    offOverlay: offResolved.effective,
+  };
 }

@@ -186,6 +186,16 @@ function CompactPeople({ people }: { people: UnavailableBoardPerson[] }) {
         <span key={person.caddyId} className="ops-unavail-person">
           {index > 0 ? " · " : null}
           <span className="ops-unavail-name">{person.name}</span>
+          {(person.statusBadges || []).map((badge) => (
+            <span
+              key={`st-${badge}`}
+              className={`ops-unavail-badge${
+                badge.startsWith("수동") ? " is-manual" : ""
+              }`}
+            >
+              {badge}
+            </span>
+          ))}
           {person.badges.map((badge) => (
             <span key={badge} className="ops-unavail-badge">
               {badge}
@@ -193,6 +203,133 @@ function CompactPeople({ people }: { people: UnavailableBoardPerson[] }) {
           ))}
         </span>
       ))}
+    </div>
+  );
+}
+
+function FieldSearch({
+  query,
+  hits,
+  pendingCaddyId,
+  busy,
+  error,
+  onQuery,
+  onSelect,
+  onConfirm,
+  onClose,
+  confirmLabel,
+}: {
+  query: string;
+  hits: OpsDutyEditCaddy[];
+  pendingCaddyId: number | null;
+  busy: boolean;
+  error: string | null;
+  onQuery: (value: string) => void;
+  onSelect: (caddyId: number) => void;
+  onConfirm: () => void;
+  onClose: () => void;
+  confirmLabel: string;
+}) {
+  return (
+    <div className="ops-unavail-editor" data-ops-field-search="1">
+      <input
+        type="search"
+        className="ops-unavail-search"
+        value={query}
+        placeholder="재직 캐디 이름"
+        autoComplete="off"
+        onChange={(event) => onQuery(event.target.value)}
+        disabled={busy}
+      />
+      {hits.length > 0 ? (
+        <ul className="ops-unavail-hits">
+          {hits.map((caddy) => (
+            <li key={caddy.id}>
+              <button
+                type="button"
+                className={pendingCaddyId === caddy.id ? "is-selected" : undefined}
+                disabled={busy}
+                onClick={() => onSelect(caddy.id)}
+              >
+                {caddy.name}
+                {caddy.team ? ` · ${caddy.team}` : ""}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : query.trim() ? (
+        <p className="ops-unavail-editor-empty">재직 캐디가 없습니다.</p>
+      ) : (
+        <p className="ops-unavail-editor-empty">이름을 검색하세요.</p>
+      )}
+      {error ? <p className="ops-unavail-editor-error">{error}</p> : null}
+      <div className="ops-unavail-editor-actions">
+        <button type="button" disabled={busy || pendingCaddyId == null} onClick={onConfirm}>
+          {confirmLabel}
+        </button>
+        <button type="button" disabled={busy} onClick={onClose}>
+          취소
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PersonStatusBadges({ person }: { person: UnavailableBoardPerson }) {
+  return (
+    <>
+      {(person.statusBadges || []).map((badge) => (
+        <span
+          key={`st-${badge}`}
+          className={`ops-unavail-badge${badge.startsWith("수동") ? " is-manual" : ""}`}
+        >
+          {badge}
+        </span>
+      ))}
+      {person.badges.map((badge) => (
+        <span key={badge} className="ops-unavail-badge">
+          {badge}
+        </span>
+      ))}
+    </>
+  );
+}
+
+function EditablePeople({
+  people,
+  busy,
+  actionLabel,
+  onAction,
+}: {
+  people: UnavailableBoardPerson[];
+  busy: boolean;
+  actionLabel: (person: UnavailableBoardPerson) => string | null;
+  onAction: (person: UnavailableBoardPerson) => void;
+}) {
+  if (people.length === 0) {
+    return <span className="ops-unavail-blank">없음</span>;
+  }
+  return (
+    <div className="ops-unavail-names">
+      {people.map((person) => {
+        const label = actionLabel(person);
+        return (
+          <span key={person.caddyId} className="ops-unavail-person is-field">
+            <span className="ops-unavail-name">{person.name}</span>
+            <PersonStatusBadges person={person} />
+            {label ? (
+              <button
+                type="button"
+                className="ops-unavail-edit"
+                disabled={busy}
+                onClick={() => onAction(person)}
+              >
+                {label}
+              </button>
+            ) : null}
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -278,6 +415,15 @@ export function UnavailablePanel({
   onOpsDutySet,
   onOpsDutyClear,
   onOpsDutyRestore,
+  fieldBusy = false,
+  fieldError = null,
+  onOffForceOff,
+  onOffForceAvailable,
+  onOffRestore,
+  onSickSet,
+  onSickClear,
+  onAbsentSet,
+  onAbsentClear,
 }: {
   groups: UnavailablePanelGroup[];
   sources?: UnavailableBoardSources | null;
@@ -296,6 +442,15 @@ export function UnavailablePanel({
   onOpsDutySet?: (roleKey: string, caddyId: number) => void;
   onOpsDutyClear?: (roleKey: string) => void;
   onOpsDutyRestore?: (roleKey: string) => void;
+  fieldBusy?: boolean;
+  fieldError?: string | null;
+  onOffForceOff?: (caddyId: number) => void;
+  onOffForceAvailable?: (caddyId: number) => void;
+  onOffRestore?: (caddyId: number) => void;
+  onSickSet?: (caddyId: number) => void;
+  onSickClear?: (caddyId: number) => void;
+  onAbsentSet?: (caddyId: number) => void;
+  onAbsentClear?: (caddyId: number) => void;
 }) {
   const view = buildUnavailableBoardView(groups, sources);
   const stats = {
@@ -311,7 +466,6 @@ export function UnavailablePanel({
   const supportBlocks = opsSpecialSupportBlocks(specialSupportItems);
   const supportTotal = supportBlocks.reduce((n, block) => n + block.count, 0);
   const specialTotal = specialChips.reduce((n, chip) => n + chip.count, 0);
-  const hasHealth = view.sick.length > 0 || view.absent.length > 0;
   const editorSlots = parseOpsDutyEditorSlots({ slots: opsDutySlots });
   const canEdit = Boolean(
     editorSlots && onOpsDutySet && onOpsDutyClear && onOpsDutyRestore
@@ -319,6 +473,15 @@ export function UnavailablePanel({
   const [editingRoleKey, setEditingRoleKey] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [pendingCaddyId, setPendingCaddyId] = useState<number | null>(null);
+  const [fieldAdd, setFieldAdd] = useState<"off" | "sick" | "absent" | null>(
+    null
+  );
+  const [fieldQuery, setFieldQuery] = useState("");
+  const [fieldPending, setFieldPending] = useState<number | null>(null);
+  const canEditOff = Boolean(onOffForceOff && onOffForceAvailable && onOffRestore);
+  const canEditHealth = Boolean(
+    onSickSet && onSickClear && onAbsentSet && onAbsentClear
+  );
   const dutyEditSlots = editorSlots
     ? opsDutyEditorSlotsBySection(editorSlots, "당번")
     : [];
@@ -340,6 +503,25 @@ export function UnavailablePanel({
       )
       .slice(0, 12);
   }, [opsDutyCaddies, query]);
+  const fieldHits = useMemo(() => {
+    const q = fieldQuery.trim().replace(/\s+/g, "");
+    if (!q) return [];
+    return opsDutyCaddies
+      .filter((caddy) => String(caddy.employmentStatus || "ACTIVE") === "ACTIVE")
+      .filter((caddy) =>
+        String(caddy.name || "")
+          .replace(/\s+/g, "")
+          .includes(q)
+      )
+      .slice(0, 12);
+  }, [opsDutyCaddies, fieldQuery]);
+
+  function openFieldAdd(mode: "off" | "sick" | "absent") {
+    setFieldAdd(mode);
+    setFieldQuery("");
+    setFieldPending(null);
+    onEnsureOpsDutyCaddies?.();
+  }
 
   const editorProps = {
     editingRoleKey,
@@ -420,30 +602,146 @@ export function UnavailablePanel({
         </span>
       </div>
       <div className="ops-unavail-body">
-        {view.offTeams.length > 0 ? (
-          <OpsSection title="휴무" count={stats.off ?? undefined}>
-            <TeamBlocks
-              blocks={view.offTeams}
-              className="ops-unavail-off-grid"
+        <OpsSection title="휴무" count={stats.off ?? undefined}>
+          {canEditOff ? (
+            <div className="ops-unavail-field-head">
+              <button
+                type="button"
+                className="ops-unavail-add"
+                disabled={fieldBusy}
+                onClick={() => openFieldAdd("off")}
+              >
+                + 휴무 추가
+              </button>
+            </div>
+          ) : null}
+          {fieldAdd === "off" ? (
+            <FieldSearch
+              query={fieldQuery}
+              hits={fieldHits}
+              pendingCaddyId={fieldPending}
+              busy={fieldBusy}
+              error={fieldError}
+              confirmLabel="휴무 처리"
+              onQuery={setFieldQuery}
+              onSelect={setFieldPending}
+              onConfirm={() => {
+                if (fieldPending == null) return;
+                onOffForceOff?.(fieldPending);
+                setFieldAdd(null);
+              }}
+              onClose={() => setFieldAdd(null)}
             />
-          </OpsSection>
-        ) : null}
-        {hasHealth ? (
-          <OpsSection title="병가 / 결근">
-            {view.sick.length > 0 ? (
-              <div className="ops-unavail-row">
-                <span className="ops-unavail-k">병가</span>
-                <CompactPeople people={view.sick} />
-              </div>
-            ) : null}
-            {view.absent.length > 0 ? (
-              <div className="ops-unavail-row">
-                <span className="ops-unavail-k">결근</span>
-                <CompactPeople people={view.absent} />
-              </div>
-            ) : null}
-          </OpsSection>
-        ) : null}
+          ) : null}
+          {view.offTeams.length > 0 ? (
+            <div className="ops-unavail-off-grid">
+              {view.offTeams.map((block) => (
+                <div key={block.team} className="ops-unavail-row">
+                  <span className="ops-unavail-k">{block.team}</span>
+                  {canEditOff ? (
+                    <EditablePeople
+                      people={block.people}
+                      busy={fieldBusy}
+                      actionLabel={(person) =>
+                        person.offKind === "force_off" ? "원본 복원" : "출근 처리"
+                      }
+                      onAction={(person) => {
+                        if (person.offKind === "force_off") onOffRestore?.(person.caddyId);
+                        else onOffForceAvailable?.(person.caddyId);
+                      }}
+                    />
+                  ) : (
+                    <CompactPeople people={block.people} />
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="ops-unavail-blank">없음</p>
+          )}
+          {view.forceAvailable.length > 0 ? (
+            <div className="ops-unavail-row">
+              <span className="ops-unavail-k">출근</span>
+              {canEditOff ? (
+                <EditablePeople
+                  people={view.forceAvailable}
+                  busy={fieldBusy}
+                  actionLabel={() => "원본 복원"}
+                  onAction={(person) => onOffRestore?.(person.caddyId)}
+                />
+              ) : (
+                <CompactPeople people={view.forceAvailable} />
+              )}
+            </div>
+          ) : null}
+        </OpsSection>
+        <OpsSection title="병가 / 결근">
+          {canEditHealth ? (
+            <div className="ops-unavail-field-head">
+              <button
+                type="button"
+                className="ops-unavail-add"
+                disabled={fieldBusy}
+                onClick={() => openFieldAdd("sick")}
+              >
+                + 병가 추가
+              </button>
+              <button
+                type="button"
+                className="ops-unavail-add"
+                disabled={fieldBusy}
+                onClick={() => openFieldAdd("absent")}
+              >
+                + 결근 추가
+              </button>
+            </div>
+          ) : null}
+          {fieldAdd === "sick" || fieldAdd === "absent" ? (
+            <FieldSearch
+              query={fieldQuery}
+              hits={fieldHits}
+              pendingCaddyId={fieldPending}
+              busy={fieldBusy}
+              error={fieldError}
+              confirmLabel={fieldAdd === "sick" ? "병가 처리" : "결근 처리"}
+              onQuery={setFieldQuery}
+              onSelect={setFieldPending}
+              onConfirm={() => {
+                if (fieldPending == null) return;
+                if (fieldAdd === "sick") onSickSet?.(fieldPending);
+                else onAbsentSet?.(fieldPending);
+                setFieldAdd(null);
+              }}
+              onClose={() => setFieldAdd(null)}
+            />
+          ) : null}
+          <div className="ops-unavail-row">
+            <span className="ops-unavail-k">병가</span>
+            {canEditHealth ? (
+              <EditablePeople
+                people={view.sick}
+                busy={fieldBusy}
+                actionLabel={() => "해제"}
+                onAction={(person) => onSickClear?.(person.caddyId)}
+              />
+            ) : (
+              <CompactPeople people={view.sick} />
+            )}
+          </div>
+          <div className="ops-unavail-row">
+            <span className="ops-unavail-k">결근</span>
+            {canEditHealth ? (
+              <EditablePeople
+                people={view.absent}
+                busy={fieldBusy}
+                actionLabel={() => "해제"}
+                onAction={(person) => onAbsentClear?.(person.caddyId)}
+              />
+            ) : (
+              <CompactPeople people={view.absent} />
+            )}
+          </div>
+        </OpsSection>
         <OpsSection title="당번" defaultOpen>
           {canEdit && dutyEditSlots.length === 4 ? (
             <SlotEditor slots={dutyEditSlots} {...editorProps} />

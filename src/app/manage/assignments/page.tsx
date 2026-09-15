@@ -172,6 +172,7 @@ import {
   pipelineMutationOffSnapshotBlock,
   type DraftOffSnapshot,
 } from "@/lib/offSnapshot";
+import { resolveEffectiveOff } from "@/lib/offEffective";
 import {
   PUBLISH_HINT,
   publishBoardActionState,
@@ -209,6 +210,21 @@ import {
   shouldBlockAnchorNavigation,
   shouldClearPipelineDirty,
 } from "@/lib/pipelineUnloadGuard";
+
+function snapshotCaddyIdsFromAvailability(data: {
+  excluded?: Array<{
+    id?: unknown;
+    excludedReasons?: unknown;
+    employmentStatus?: unknown;
+  }> | null;
+  offOverlay?: { baseOffCaddyIds?: unknown } | null;
+}): number[] {
+  const base = data.offOverlay?.baseOffCaddyIds;
+  if (Array.isArray(base) && base.length >= 0) {
+    return base.map(Number).filter((id) => Number.isInteger(id) && id > 0);
+  }
+  return offCaddyIdsFromAvailability(data);
+}
 
 async function fetchOffSnapshotForDate(
   ymd: string
@@ -579,6 +595,11 @@ export default function ManageAssignmentsOpsPage() {
   const [opsDutyCaddies, setOpsDutyCaddies] = useState<OpsDutyEditCaddy[]>([]);
   const [opsDutyBusy, setOpsDutyBusy] = useState(false);
   const [opsDutyError, setOpsDutyError] = useState<string | null>(null);
+  const [offOverrides, setOffOverrides] = useState<
+    Array<{ caddyId: number; action: string; name?: string; team?: string }>
+  >([]);
+  const [fieldBusy, setFieldBusy] = useState(false);
+  const [fieldError, setFieldError] = useState<string | null>(null);
   const [opsDutyPreview, setOpsDutyPreview] = useState<{
     matchedCount: number;
     reviewCount: number;
@@ -1127,6 +1148,42 @@ export default function ManageAssignmentsOpsPage() {
   }, [date]);
 
   useEffect(() => {
+    setOffOverrides([]);
+    setFieldError(null);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      setDailyUnavailables([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const [offRes, unavailRes] = await Promise.all([
+          fetch(`/api/daily-off-overrides?date=${encodeURIComponent(date)}`, {
+            credentials: "include",
+          }),
+          fetch(`/api/daily-unavailables?date=${encodeURIComponent(date)}`, {
+            credentials: "include",
+          }),
+        ]);
+        const offData = await offRes.json().catch(() => ({}));
+        const unavailData = await unavailRes.json().catch(() => ({}));
+        if (cancelled) return;
+        if (offRes.ok && Array.isArray(offData.overrides)) {
+          setOffOverrides(offData.overrides);
+        }
+        if (unavailRes.ok && Array.isArray(unavailData.rows)) {
+          applyUnavailablePanelRows(unavailData.rows);
+        }
+      } catch {
+        if (!cancelled) setOffOverrides([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [date, applyUnavailablePanelRows]);
+
+  useEffect(() => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       setThirdWeekly(null);
       return;
@@ -1588,6 +1645,95 @@ export default function ManageAssignmentsOpsPage() {
     }
   }
 
+  async function refreshFieldStatus() {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+    try {
+      const [offRes, unavailRes, availRes] = await Promise.all([
+        fetch(`/api/daily-off-overrides?date=${encodeURIComponent(date)}`, {
+          credentials: "include",
+        }),
+        fetch(`/api/daily-unavailables?date=${encodeURIComponent(date)}`, {
+          credentials: "include",
+        }),
+        fetch(`/api/availability?date=${encodeURIComponent(date)}`, {
+          credentials: "include",
+        }),
+      ]);
+      const offData = await offRes.json().catch(() => ({}));
+      const unavailData = await unavailRes.json().catch(() => ({}));
+      const availData = await availRes.json().catch(() => ({}));
+      if (offRes.ok && Array.isArray(offData.overrides)) {
+        setOffOverrides(offData.overrides);
+      }
+      if (unavailRes.ok && Array.isArray(unavailData.rows)) {
+        applyUnavailablePanelRows(unavailData.rows);
+      }
+      if (availRes.ok) {
+        setAvailability(
+          availData as AvailabilityResult & { dailySummary?: DailyAvailabilitySummary }
+        );
+      }
+    } catch (e: unknown) {
+      setFieldError(e instanceof Error ? e.message : "운영현황 갱신 실패");
+    }
+  }
+
+  async function mutateOff(
+    action: "FORCE_OFF" | "FORCE_AVAILABLE" | "RESTORE",
+    caddyId: number
+  ) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+    setFieldBusy(true);
+    setFieldError(null);
+    try {
+      const res = await fetch("/api/daily-off-overrides", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date, action, caddyId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setFieldError(data.error || "휴무 저장 실패");
+        return;
+      }
+      await refreshFieldStatus();
+    } catch (e: unknown) {
+      setFieldError(e instanceof Error ? e.message : "휴무 저장 실패");
+    } finally {
+      setFieldBusy(false);
+    }
+  }
+
+  async function mutateUnavailable(
+    action: "SET" | "CLEAR",
+    reason: "SICK" | "ATTENDANCE_NOSHOW",
+    caddyId: number
+  ) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+    setFieldBusy(true);
+    setFieldError(null);
+    try {
+      const res = await fetch("/api/daily-unavailables", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date, action, reason, caddyId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setFieldError(data.error || "병가/결근 저장 실패");
+        return;
+      }
+      if (Array.isArray(data.rows)) applyUnavailablePanelRows(data.rows);
+      await refreshFieldStatus();
+    } catch (e: unknown) {
+      setFieldError(e instanceof Error ? e.message : "병가/결근 저장 실패");
+    } finally {
+      setFieldBusy(false);
+    }
+  }
+
   async function loadAvailability() {
     if (!date) {
       setError("날짜를 선택하세요.");
@@ -1613,7 +1759,7 @@ export default function ManageAssignmentsOpsPage() {
       setAvailability(data as AvailabilityResult & { dailySummary?: DailyAvailabilitySummary });
       const offSnapshot = buildOffSnapshot({
         date,
-        caddyIds: offCaddyIdsFromAvailability(data),
+        caddyIds: snapshotCaddyIdsFromAvailability(data),
       });
       offSnapshotRef.current = offSnapshot;
       setOpsOffSnapshot(offSnapshot);
@@ -2033,7 +2179,7 @@ export default function ManageAssignmentsOpsPage() {
           setAvailability(availData as AvailabilityResult & { dailySummary?: DailyAvailabilitySummary });
           offSnapshotRef.current = buildOffSnapshot({
             date,
-            caddyIds: offCaddyIdsFromAvailability(availData),
+            caddyIds: snapshotCaddyIdsFromAvailability(availData),
           });
           caddyPool = regularCaddyPoolFromAvailabilityRows(
             availData.available?.all || []
@@ -3316,13 +3462,30 @@ export default function ManageAssignmentsOpsPage() {
       ? opsOffSnapshot
       : null;
 
+  const effectiveOff = useMemo(
+    () =>
+      resolveEffectiveOff({
+        baseOffCaddyIds:
+          liveOffSnapshot?.caddyIds ||
+          (availability as { offOverlay?: { baseOffCaddyIds?: number[] } } | null)
+            ?.offOverlay?.baseOffCaddyIds ||
+          offCaddyIdsFromAvailability(availability || {}),
+        overrides: offOverrides,
+      }),
+    [
+      liveOffSnapshot?.caddyIds,
+      availability,
+      offOverrides,
+    ]
+  );
+
   const unavailableGroups = useMemo(
     () =>
       buildUnavailablePanelGroups({
         excluded: availability?.excluded,
         opsDuties: opsDutyStored?.rows,
         offCaddies: offCaddiesFromRoster(
-          liveOffSnapshot?.caddyIds,
+          effectiveOff.offCaddyIds,
           operationalRoster
         ),
         dailyUnavailables,
@@ -3331,7 +3494,7 @@ export default function ManageAssignmentsOpsPage() {
     [
       availability?.excluded,
       opsDutyStored?.rows,
-      liveOffSnapshot?.caddyIds,
+      effectiveOff.offCaddyIds,
       operationalRoster,
       dailyUnavailables,
       specialSupportByShift,
@@ -3342,8 +3505,9 @@ export default function ManageAssignmentsOpsPage() {
     () => ({
       opsDuties: opsDutyStored?.rows,
       dailyUnavailables,
+      offOverrides,
     }),
-    [opsDutyStored?.rows, dailyUnavailables]
+    [opsDutyStored?.rows, dailyUnavailables, offOverrides]
   );
 
   const opsStatusSummary = useMemo(() => {
@@ -3401,6 +3565,29 @@ export default function ManageAssignmentsOpsPage() {
       }}
       onOpsDutyRestore={(roleKey) => {
         void mutateOpsDuty("RESTORE", roleKey);
+      }}
+      fieldBusy={fieldBusy}
+      fieldError={fieldError}
+      onOffForceOff={(caddyId) => {
+        void mutateOff("FORCE_OFF", caddyId);
+      }}
+      onOffForceAvailable={(caddyId) => {
+        void mutateOff("FORCE_AVAILABLE", caddyId);
+      }}
+      onOffRestore={(caddyId) => {
+        void mutateOff("RESTORE", caddyId);
+      }}
+      onSickSet={(caddyId) => {
+        void mutateUnavailable("SET", "SICK", caddyId);
+      }}
+      onSickClear={(caddyId) => {
+        void mutateUnavailable("CLEAR", "SICK", caddyId);
+      }}
+      onAbsentSet={(caddyId) => {
+        void mutateUnavailable("SET", "ATTENDANCE_NOSHOW", caddyId);
+      }}
+      onAbsentClear={(caddyId) => {
+        void mutateUnavailable("CLEAR", "ATTENDANCE_NOSHOW", caddyId);
       }}
     />
   );
@@ -5302,6 +5489,33 @@ const opsCss = `
   .ops-unavail-badge.is-manual {
     background: #eef2ff;
     color: #3730a3;
+  }
+  .ops-unavail-field-head {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 6px;
+  }
+  .ops-unavail-add {
+    appearance: none;
+    border: 1px solid #cbd5e1;
+    background: #fff;
+    color: #1e293b;
+    font-size: 0.64rem;
+    font-weight: 700;
+    border-radius: 4px;
+    padding: 2px 6px;
+    cursor: pointer;
+  }
+  .ops-unavail-add:disabled {
+    color: #94a3b8;
+    cursor: default;
+  }
+  .ops-unavail-person.is-field {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
   }
   .ops-unavail-editor {
     margin-top: 4px;

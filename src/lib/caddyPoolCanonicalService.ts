@@ -38,6 +38,8 @@ import {
   offNamesFromCaddyIds,
   type DraftOffSnapshot,
 } from "@/lib/offSnapshot";
+import { effectiveOffNamesFromBase } from "@/lib/offEffective";
+import { listDailyOffOverrides } from "@/lib/offEffectiveService";
 import {
   regularCaddyPoolFromAvailabilityRows,
   type AutoAssignCaddy,
@@ -339,11 +341,20 @@ export async function loadCanonicalReflowState(
   }
 
   const dutyEntries = effectiveOps?.entries ?? [];
+  const offOverrides = await listDailyOffOverrides(ymd).catch(() => []);
+  const offResolved = effectiveOffNamesFromBase({
+    caddies,
+    offNames,
+    baseOffCaddyIds: isUsableOffSnapshot(offSnapshot, ymd)
+      ? offSnapshot.caddyIds
+      : undefined,
+    overrides: offOverrides,
+  });
 
   const overlaid = applyDailyExternalExclusions({
     availability: baseAvailability,
     caddies,
-    offNames,
+    offNames: offResolved.names,
     dutyEntries,
   });
 

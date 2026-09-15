@@ -50,6 +50,8 @@ export type UnavailableBoardPerson = {
   caddyId: number;
   name: string;
   badges: UnavailableSupportBadge[];
+  statusBadges?: string[];
+  offKind?: "sheet" | "force_off" | "force_available";
 };
 
 export type UnavailableTeamBlock = {
@@ -72,6 +74,7 @@ export type UnavailableSourceConflict = {
 export type UnavailableBoardView = {
   total: number;
   offTeams: UnavailableTeamBlock[];
+  forceAvailable: UnavailableBoardPerson[];
   sick: UnavailableBoardPerson[];
   absent: UnavailableBoardPerson[];
   dutySlots: UnavailableSlotBlock[];
@@ -99,6 +102,11 @@ export type UnavailableBoardSources = {
   dailyUnavailables?: Array<{
     caddyId: number;
     reason?: string;
+  }> | null;
+  offOverrides?: Array<{
+    caddyId: number;
+    action?: string;
+    name?: string;
   }> | null;
 };
 
@@ -198,11 +206,15 @@ function flattenItems(
   return [...byId.values()];
 }
 
-function toPerson(item: UnavailablePanelItem): UnavailableBoardPerson {
+function toPerson(
+  item: UnavailablePanelItem,
+  extra?: Partial<UnavailableBoardPerson>
+): UnavailableBoardPerson {
   return {
     caddyId: item.caddyId,
     name: item.name,
     badges: supportBadgesFromReason(item.reason),
+    ...extra,
   };
 }
 
@@ -343,6 +355,12 @@ export function buildUnavailableBoardView(
     dutyHint.set(id, { role: row.role, roleKey: row.roleKey, kind });
   }
   const { sickIds, absentIds } = dailyStatusSets(sources?.dailyUnavailables);
+  const overrideById = new Map<number, string>();
+  for (const row of sources?.offOverrides || []) {
+    const id = Number(row.caddyId);
+    if (!id) continue;
+    overrideById.set(id, String(row.action || "").trim().toUpperCase());
+  }
 
   const specialByBand = new Map<
     UnavailableSpecialBand,
@@ -350,20 +368,22 @@ export function buildUnavailableBoardView(
   >();
   const takeSpecialOr = (
     item: UnavailablePanelItem,
-    fallback: (person: UnavailableBoardPerson) => void
+    fallback: (person: UnavailableBoardPerson) => void,
+    person = toPerson(item)
   ) => {
     const band = specialBandFromTeam(item.team);
     if (!band) {
-      fallback(toPerson(item));
+      fallback(person);
       return;
     }
     const list = specialByBand.get(band) || [];
-    list.push(toPerson(item));
+    list.push(person);
     specialByBand.set(band, list);
   };
 
   const offByTeam = new Map<number, UnavailableBoardPerson[]>();
   const offOther: UnavailableBoardPerson[] = [];
+  const forceAvailable: UnavailableBoardPerson[] = [];
   const sick: UnavailableBoardPerson[] = [];
   const absent: UnavailableBoardPerson[] = [];
   const dutyCandidates: SlotCandidate[] = [];
@@ -371,6 +391,7 @@ export function buildUnavailableBoardView(
   const leaders: UnavailableBoardPerson[] = [];
   const other: UnavailableBoardPerson[] = [];
   const conflicts: UnavailableSourceConflict[] = [];
+  const seenForceAvailable = new Set<number>();
 
   for (const item of flattenItems(groups)) {
     const hint = dutyHint.get(item.caddyId);
@@ -378,18 +399,38 @@ export function buildUnavailableBoardView(
     const off = isOffItem(item);
     const sickHit = isConfirmedSick(item, sickIds, Boolean(role));
     const absentHit = isConfirmedAbsent(item, absentIds, Boolean(role));
+    const overrideAction = overrideById.get(item.caddyId) || "";
 
     if (off) {
-      takeSpecialOr(item, (person) => {
-        const n = houseTeamNumber(item.team);
-        if (n) {
-          const list = offByTeam.get(n) || [];
-          list.push(person);
-          offByTeam.set(n, list);
-          return;
-        }
-        offOther.push(person);
+      if (overrideAction === "FORCE_AVAILABLE") {
+        forceAvailable.push(
+          toPerson(item, {
+            offKind: "force_available",
+            statusBadges: ["수동출근"],
+          })
+        );
+        seenForceAvailable.add(item.caddyId);
+        continue;
+      }
+      const offKind = overrideAction === "FORCE_OFF" ? "force_off" : "sheet";
+      const person = toPerson(item, {
+        offKind,
+        statusBadges: [offKind === "force_off" ? "수동휴무" : "시트"],
       });
+      takeSpecialOr(
+        item,
+        (row) => {
+          const n = houseTeamNumber(item.team);
+          if (n) {
+            const list = offByTeam.get(n) || [];
+            list.push(row);
+            offByTeam.set(n, list);
+            return;
+          }
+          offOther.push(row);
+        },
+        person
+      );
       continue;
     }
 
@@ -425,11 +466,11 @@ export function buildUnavailableBoardView(
     }
 
     if (sickHit) {
-      sick.push(toPerson(item));
+      sick.push(toPerson(item, { statusBadges: ["병가"] }));
       continue;
     }
     if (absentHit) {
-      absent.push(toPerson(item));
+      absent.push(toPerson(item, { statusBadges: ["결근"] }));
       continue;
     }
 
@@ -446,6 +487,22 @@ export function buildUnavailableBoardView(
     offTeams.push({ team: "기타", people: offOther });
   }
 
+  for (const row of sources?.offOverrides || []) {
+    const id = Number(row.caddyId);
+    if (!id || seenForceAvailable.has(id)) continue;
+    if (String(row.action || "").trim().toUpperCase() !== "FORCE_AVAILABLE") {
+      continue;
+    }
+    forceAvailable.push({
+      caddyId: id,
+      name: String((row as { name?: string }).name || `캐디${id}`),
+      badges: [],
+      statusBadges: ["수동출근"],
+      offKind: "force_available",
+    });
+    seenForceAvailable.add(id);
+  }
+
   const specialBands = UNAVAILABLE_SPECIAL_BANDS.filter((band) =>
     specialByBand.get(band)?.length
   ).map((band) => ({
@@ -456,6 +513,7 @@ export function buildUnavailableBoardView(
   return {
     total: unavailablePanelTotal(groups),
     offTeams,
+    forceAvailable,
     sick,
     absent,
     dutySlots: assignSlots(dutyCandidates, DUTY_SLOT_LABELS, 2),
