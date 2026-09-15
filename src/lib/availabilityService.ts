@@ -25,7 +25,10 @@ import {
   parseDutyMarshalLeaderWorkbook,
   type DutyExcelEntry,
 } from "@/lib/dutyMarshalLeaderParser";
-import { loadStoredDutyEntries } from "@/lib/dailyOpsDutyService";
+import {
+  loadEffectiveOpsDutyEntries,
+  type ResolveEffectiveOpsDutyDeps,
+} from "@/lib/opsDutyEffectiveService";
 
 export type AvailabilityWithSlotGrid = DailyAvailabilityResult & {
   slotGrid: TeamSlotGrid;
@@ -40,8 +43,10 @@ export type LoadAvailabilityOptions = {
   dutyWorkbook?: Buffer | ArrayBuffer | Uint8Array | null;
   /** 이미 파싱된 당번·마샬·조장. workbook보다 우선하지 않음. 저장/apply 없음. */
   dutyEntries?: DutyExcelEntry[];
-  /** false면 저장된 당번·마샬·조장 일정을 읽지 않음 (기본 true) */
+  /** false면 당번·마샬·조장 overlay를 읽지 않음 (기본 true = effective) */
   includeStoredOpsDuty?: boolean;
+  /** 테스트 주입. 기본은 resolveEffectiveOpsDuty */
+  opsDutyDeps?: ResolveEffectiveOpsDutyDeps;
   /** false면 휴무 Sheet를 읽지 않음 (기본 true) */
   includeOffSheet?: boolean;
   /** true면 휴무 Sheet 캐시를 무시하고 다시 읽음 (가용 새로고침) */
@@ -129,7 +134,7 @@ export async function loadAvailabilityForDate(
     dutyEntries = options.dutyEntries;
     dutySource = "file";
   } else if (options?.includeStoredOpsDuty !== false) {
-    dutyEntries = await loadStoredDutyEntries(ymd);
+    dutyEntries = await loadEffectiveOpsDutyEntries(ymd, options.opsDutyDeps);
     if (dutyEntries.length > 0) dutySource = "stored";
   }
 

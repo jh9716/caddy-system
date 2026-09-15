@@ -1,7 +1,9 @@
 /**
  * 당번·마샬·조장 effective resolver + 현장 override 저장.
- * DailyOpsDuty / Google Spreadsheet 는 쓰지 않는다.
- * 자동배치 exclusion / Dashboard GET 계약은 이 모듈을 연결하지 않는다.
+ * DailyOpsDuty row / Google Spreadsheet 는 쓰지 않는다.
+ *
+ * 자동배치 exclusion은 이 모듈의 resolveEffectiveOpsDuty 를 재사용한다.
+ * GET /api/daily-ops-duties 의 rows 계약은 바꾸지 않는다 (slots overlay 유지).
  */
 
 import type { Prisma, PrismaClient } from "@prisma/client";
@@ -141,6 +143,24 @@ export async function resolveEffectiveOpsDuty(
     baseRows,
     overrides,
   };
+}
+
+/** 자동배치 exclusion용. GET rows를 바꾸지 않는다. */
+export async function loadEffectiveOpsDutyEntries(
+  ymd: string,
+  deps: ResolveEffectiveOpsDutyDeps = {}
+) {
+  const result = await resolveEffectiveOpsDuty(ymd, deps);
+  return result.entries;
+}
+
+/** 자동배치 exclusion용 caddyId 집합. GET rows.caddyIds 가 아니라 effective. */
+export async function listEffectiveOpsDutyCaddyIds(
+  ymd: string,
+  deps: ResolveEffectiveOpsDutyDeps = {}
+): Promise<number[]> {
+  const result = await resolveEffectiveOpsDuty(ymd, deps);
+  return result.caddyIds;
 }
 
 export type OpsDutyOverrideWriteResult = EffectiveOpsDutyResult & {
