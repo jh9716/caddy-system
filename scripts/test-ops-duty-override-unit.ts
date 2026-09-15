@@ -222,8 +222,8 @@ console.log("== #146A source contracts ==");
   );
   assert(/resolveOpsDutyReadOnly/.test(service), "기존 sheet fallback 재사용");
   assert(/resolveOpsDutyReadOnly/.test(getRoute), "GET은 기존 read-only resolver 유지");
-  assert(!/resolveEffectiveOpsDuty/.test(getRoute), "GET에 effective resolver 미연결");
-  assert(!/\bslots\b/.test(getRoute), "GET에 UI slots 없음");
+  assert(!/resolveEffectiveOpsDuty/.test(getRoute), "GET rows를 effective resolver로 교체하지 않음");
+  assert(/buildOpsDutySlotStates/.test(getRoute), "GET slots는 overlay extra field");
   assert(/loadStoredDutyEntries/.test(avail), "availability는 stored DailyOpsDuty 유지");
   assert(!/resolveEffectiveOpsDuty/.test(avail), "자동배치 availability에 overlay 미연결");
   assert(/listDailyOpsDutyCaddyIds/.test(canonical), "canonical exclusion은 stored ids");
@@ -239,8 +239,8 @@ console.log("== #146A source contracts ==");
     migrationDirs.filter((name) => name.includes("duty_override")).length === 1,
     "새 override migration 없음"
   );
-  assert(!/원본 복원/.test(panel) && !/opsDutySlots/.test(panel), "운영현황 editor UI 없음");
-  assert(!/\/api\/daily-ops-duties\/override/.test(page), "page가 override POST 안 함");
+  assert(/parseOpsDutyEditorSlots/.test(panel), "panel이 slots payload 재검증");
+  assert(/\/api\/daily-ops-duties\/override/.test(page), "page가 override POST");
   assert(!/from ["']@\/lib\/opsDutyEffective/.test(page + panel), "client가 opsDutyEffective import 없음");
   assert(!/dutyMarshalLeaderParser/.test(merge + keys), "effective/type 파일은 xlsx parser 미import");
   assert(!/from ["']xlsx["']/.test(merge + keys + service), "effective/service에 xlsx 없음");

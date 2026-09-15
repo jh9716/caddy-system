@@ -3,6 +3,8 @@ import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { DailyOpsDutyError } from "@/lib/dailyOpsDutyService";
 import { countByOpsRole } from "@/lib/dailyOpsDuty";
+import { buildOpsDutySlotStates } from "@/lib/opsDutyEffective";
+import { listDailyOpsDutyOverrides } from "@/lib/opsDutyEffectiveService";
 import {
   opsDutyPanelRowsFromReadOnly,
   resolveOpsDutyReadOnly,
@@ -24,7 +26,7 @@ export async function GET(req: NextRequest) {
       select: { id: true, name: true, team: true, employmentStatus: true },
     });
     const rows = opsDutyPanelRowsFromReadOnly(resolved, caddies);
-    return NextResponse.json({
+    const payload: Record<string, unknown> = {
       date,
       source: resolved.source,
       persisted: resolved.source === "stored",
@@ -33,7 +35,14 @@ export async function GET(req: NextRequest) {
       caddyIds: [...new Set(rows.map((r) => r.caddyId))],
       rows,
       error: resolved.error,
-    });
+    };
+    try {
+      const overrides = await listDailyOpsDutyOverrides(date);
+      payload.slots = buildOpsDutySlotStates(rows, overrides);
+    } catch (overlayError) {
+      console.error("[GET /api/daily-ops-duties] overlay slots skipped", overlayError);
+    }
+    return NextResponse.json(payload);
   } catch (e: unknown) {
     if (e instanceof DailyOpsDutyError) {
       return NextResponse.json(
