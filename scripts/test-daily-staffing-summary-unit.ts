@@ -518,6 +518,11 @@ section("source contract");
   const prisma = read("prisma/schema.prisma");
   assert(!/prisma|fetch\(|DATABASE_URL|spreadsheets/.test(lib), "lib에 DB/네트워크 없음");
   assert(lib.includes("computeAutoAssignmentsV1"), "dry-run만 엔진 순수 호출");
+  const availSvc = read("src/lib/availabilityService.ts");
+  assert(
+    availSvc.includes("options?.opsDutyDeps"),
+    "GET availability가 options 없이 가용 카운트를 계산"
+  );
   assert(page.includes("hasCurrentBoardStaffingResult"), "현재 배치면 dry-run 생략");
   assert(page.includes("DailyStaffingSummaryCard"), "요약 카드 연결");
   assert(page.includes("비가용"), "비가용 버튼 유지");

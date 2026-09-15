@@ -18,21 +18,22 @@ export function DailyStaffingSummaryCard({
       <div className="ops-staffing-title">{model.title}</div>
       <div className="ops-staffing-grid">
         {model.rows.map((row) => (
-          <div
-            key={row.key}
-            className={`ops-staffing-row${row.tone ? ` is-${row.tone}` : ""}`}
-            data-staffing-row={row.key}
-          >
-            <span className="ops-staffing-k">{row.label}</span>
-            <span className="ops-staffing-v">{row.value}</span>
+          <div key={row.key}>
+            <div
+              className={`ops-staffing-row${row.tone ? ` is-${row.tone}` : ""}`}
+              data-staffing-row={row.key}
+            >
+              <span className="ops-staffing-k">{row.label}</span>
+              <span className="ops-staffing-v">{row.value}</span>
+            </div>
+            {row.key === "reservation" && model.shiftLine ? (
+              <div className="ops-staffing-shifts" data-staffing-shifts="1">
+                {model.shiftLine}
+              </div>
+            ) : null}
           </div>
         ))}
       </div>
-      {model.shiftLine ? (
-        <div className="ops-staffing-shifts" data-staffing-shifts="1">
-          {model.shiftLine}
-        </div>
-      ) : null}
     </section>
   );
 }

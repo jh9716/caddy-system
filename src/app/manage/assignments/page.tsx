@@ -5000,6 +5000,8 @@ const opsCss = `
     font-weight: 650;
     color: #475569;
     word-break: keep-all;
+    padding: 0 0 4px 4.4rem;
+    box-sizing: border-box;
   }
   .status {
     min-width: 96px;
