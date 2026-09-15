@@ -13,6 +13,7 @@ export function DailyStaffingSummaryCard({
       data-staffing-card="1"
       data-staffing-required-source={summary.required.source}
       data-staffing-gap={summary.gap.kind}
+      data-staffing-board-status={summary.boardStatus}
       aria-label={model.title}
     >
       <div className="ops-staffing-title">{model.title}</div>
@@ -24,7 +25,17 @@ export function DailyStaffingSummaryCard({
               data-staffing-row={row.key}
             >
               <span className="ops-staffing-k">{row.label}</span>
-              <span className="ops-staffing-v">{row.value}</span>
+              <span className="ops-staffing-vwrap">
+                <span className="ops-staffing-v">{row.value}</span>
+                {row.badge ? (
+                  <span
+                    className={`ops-staffing-badge is-${row.badge}`}
+                    data-staffing-badge={row.badge}
+                  >
+                    {row.badge === "current" ? "현재 배치" : "예상"}
+                  </span>
+                ) : null}
+              </span>
             </div>
             {row.key === "reservation" && model.shiftLine ? (
               <div className="ops-staffing-shifts" data-staffing-shifts="1">

@@ -3466,9 +3466,8 @@ export default function ManageAssignmentsOpsPage() {
       canonicalAvailableCount({
         availableIds: availability?.available?.all?.map((row) => row.id),
         availableCount: availability?.counts?.available ?? null,
-        opsDutyCaddyIds,
       }),
-    [availability, opsDutyCaddyIds]
+    [availability]
   );
 
   const staffingSummary = useMemo(() => {
@@ -3482,12 +3481,11 @@ export default function ManageAssignmentsOpsPage() {
       houseStartCaddyId !== "" &&
       Number(houseStartCaddyId) > 0
     ) {
-      const duty = new Set(opsDutyCaddyIds);
       dryRunInput = {
         date,
         reservations: previewReservations,
         available: regularCaddyPoolFromAvailabilityRows(
-          availability.available.all.filter((row) => !duty.has(row.id))
+          availability.available.all
         ),
         openCourses: openCourseList,
         houseStartCaddyId: Number(houseStartCaddyId),
@@ -3516,7 +3514,6 @@ export default function ManageAssignmentsOpsPage() {
     thirdWeekly?.startTeam,
     openCourseList,
     specialSupportByShift,
-    opsDutyCaddyIds,
     staffingAvailableCount,
     date,
   ]);
@@ -4961,7 +4958,7 @@ const opsCss = `
   }
   .ops-staffing-row {
     display: grid;
-    grid-template-columns: 4.4rem minmax(0, 1fr);
+    grid-template-columns: 5.6rem minmax(0, 1fr);
     gap: 8px;
     align-items: baseline;
     min-width: 0;
@@ -4971,6 +4968,13 @@ const opsCss = `
     font-weight: 700;
     font-size: 0.78rem;
   }
+  .ops-staffing-vwrap {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
+  }
   .ops-staffing-v {
     font-weight: 800;
     font-size: 0.92rem;
@@ -4978,6 +4982,24 @@ const opsCss = `
     min-width: 0;
     overflow-wrap: anywhere;
     word-break: keep-all;
+  }
+  .ops-staffing-badge {
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    padding: 1px 7px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .ops-staffing-badge.is-current {
+    background: #ecfdf5;
+    color: #047857;
+  }
+  .ops-staffing-badge.is-estimate {
+    background: #eff6ff;
+    color: #1d4ed8;
   }
   .ops-staffing-row.is-ok .ops-staffing-v { color: #047857; }
   .ops-staffing-row.is-muted .ops-staffing-v {
@@ -5000,7 +5022,7 @@ const opsCss = `
     font-weight: 650;
     color: #475569;
     word-break: keep-all;
-    padding: 0 0 4px 4.4rem;
+    padding: 0 0 4px 5.6rem;
     box-sizing: border-box;
   }
   .status {

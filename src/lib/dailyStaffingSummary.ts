@@ -3,6 +3,7 @@
  * - 예약 팀 수와 필요 인원(unique caddyId)을 섞지 않는다.
  * - 현재 화면 배치가 있으면 엔진을 다시 돌리지 않는다.
  * - 배치가 없을 때만 computeAutoAssignmentsV1 dry-run (DB/draft write 없음).
+ * - available − required subtraction 금지.
  */
 
 import { assignmentShiftOf } from "@/lib/assignmentBoardView";
@@ -25,12 +26,9 @@ export type StaffingRequiredSource =
   | "missing_reservations"
   | "estimate_unavailable";
 
-export type StaffingGapKind =
-  | "surplus"
-  | "shortage"
-  | "balanced"
-  | "min_shortage"
-  | "unknown";
+export type StaffingGapKind = "ok" | "min_shortage" | "unknown";
+
+export type StaffingBoardStatus = "ok" | "unassigned" | "estimate" | "unknown";
 
 export type DailyStaffingSummary = {
   date: string;
@@ -39,6 +37,7 @@ export type DailyStaffingSummary = {
     total: number | null;
     byShift: StaffingShiftCounts | null;
   };
+  assignedTeams: number;
   required: {
     source: StaffingRequiredSource;
     count: number | null;
@@ -53,6 +52,7 @@ export type DailyStaffingSummary = {
     kind: StaffingGapKind;
     people: number | null;
   };
+  boardStatus: StaffingBoardStatus;
 };
 
 export type StaffingDryRunInput = {
@@ -174,24 +174,30 @@ export function countVacantAssignmentTeams(
   return n;
 }
 
+export function countAssignedTeams(
+  assignments: readonly AutoAssignmentRow[] | null | undefined
+): number {
+  return Math.max(
+    0,
+    (assignments?.length || 0) - countVacantAssignmentTeams(assignments)
+  );
+}
+
+/**
+ * canonical HOUSE 가용 인원.
+ * availability GET 결과가 이미 effective ops duty를 반영하므로
+ * 여기서 caddyIds를 다시 빼지 않는다.
+ */
 export function canonicalAvailableCount(input: {
   availableIds?: readonly number[] | null;
   availableCount?: number | null;
-  opsDutyCaddyIds?: readonly number[] | null;
 }): number | null {
-  const duty = new Set<number>();
-  for (const raw of input.opsDutyCaddyIds || []) {
-    const id = Number(raw);
-    if (Number.isInteger(id) && id > 0) duty.add(id);
-  }
   if (Array.isArray(input.availableIds)) {
     const seen = new Set<number>();
     let n = 0;
     for (const raw of input.availableIds) {
       const id = Number(raw);
-      if (!Number.isInteger(id) || id <= 0 || duty.has(id) || seen.has(id)) {
-        continue;
-      }
+      if (!Number.isInteger(id) || id <= 0 || seen.has(id)) continue;
       seen.add(id);
       n += 1;
     }
@@ -211,6 +217,7 @@ function emptySummary(date: string): DailyStaffingSummary {
   return {
     date,
     reservation: { status: "none", total: null, byShift: null },
+    assignedTeams: 0,
     required: {
       source: "missing_reservations",
       count: null,
@@ -219,6 +226,7 @@ function emptySummary(date: string): DailyStaffingSummary {
     available: { status: "none", count: null },
     unassignedTeams: 0,
     gap: { kind: "unknown", people: null },
+    boardStatus: "unknown",
   };
 }
 
@@ -239,25 +247,43 @@ function withAvailable(
   return summary;
 }
 
-function applyGap(summary: DailyStaffingSummary): DailyStaffingSummary {
-  const required = summary.required.count;
-  const available = summary.available.count;
-  if (required == null || available == null) {
+/** available − required 를 쓰지 않는다. */
+function applyStaffingOutcome(
+  summary: DailyStaffingSummary
+): DailyStaffingSummary {
+  const source = summary.required.source;
+  if (source === "current_board") {
+    if (summary.unassignedTeams > 0) {
+      summary.gap = {
+        kind: "min_shortage",
+        people: summary.unassignedTeams,
+      };
+      summary.boardStatus = "unassigned";
+      return summary;
+    }
+    if ((summary.reservation.total ?? 0) > 0) {
+      summary.gap = { kind: "ok", people: null };
+      summary.boardStatus = "ok";
+      return summary;
+    }
     summary.gap = { kind: "unknown", people: null };
+    summary.boardStatus = "unknown";
     return summary;
   }
-  const raw = available - required;
-  if (summary.unassignedTeams > 0) {
-    if (raw < 0) {
-      summary.gap = { kind: "min_shortage", people: Math.abs(raw) };
+  if (source === "engine_estimate") {
+    summary.boardStatus = "estimate";
+    if (summary.unassignedTeams > 0) {
+      summary.gap = {
+        kind: "min_shortage",
+        people: summary.unassignedTeams,
+      };
     } else {
-      summary.gap = { kind: "unknown", people: null };
+      summary.gap = { kind: "ok", people: null };
     }
     return summary;
   }
-  if (raw > 0) summary.gap = { kind: "surplus", people: raw };
-  else if (raw < 0) summary.gap = { kind: "shortage", people: Math.abs(raw) };
-  else summary.gap = { kind: "balanced", people: 0 };
+  summary.gap = { kind: "unknown", people: null };
+  summary.boardStatus = source === "estimate_unavailable" ? "estimate" : "unknown";
   return summary;
 }
 
@@ -274,6 +300,7 @@ function fromPlacements(input: {
     unassignedReservations: input.unassignedReservations,
   });
   const vacant = countVacantAssignmentTeams(input.assignments);
+  const assignedTeams = countAssignedTeams(input.assignments);
   const unassignedTeams =
     (input.unassignedReservations?.length || 0) + vacant;
   if (teams.total <= 0) {
@@ -285,20 +312,21 @@ function fromPlacements(input: {
       count: null,
       imprecise: false,
     };
-    return applyGap(summary);
+    return applyStaffingOutcome(summary);
   }
   summary.reservation = {
     status: "ok",
     total: teams.total,
     byShift: teams.byShift,
   };
+  summary.assignedTeams = assignedTeams;
   summary.unassignedTeams = unassignedTeams;
   summary.required = {
     source: input.source,
     count: countUniqueRequiredCaddies(input.assignments),
     imprecise: unassignedTeams > 0,
   };
-  return applyGap(summary);
+  return applyStaffingOutcome(summary);
 }
 
 export function staffingSummaryFromEngineResult(
@@ -392,7 +420,7 @@ export function buildDailyStaffingSummary(
       count: null,
       imprecise: false,
     };
-    return applyGap(summaryBase);
+    return applyStaffingOutcome(summaryBase);
   }
 
   summaryBase.required = {
@@ -400,14 +428,17 @@ export function buildDailyStaffingSummary(
     count: null,
     imprecise: false,
   };
-  return applyGap(summaryBase);
+  return applyStaffingOutcome(summaryBase);
 }
+
+export type StaffingCardBadge = "current" | "estimate";
 
 export type StaffingCardRow = {
   key: string;
   label: string;
   value: string;
   tone?: "danger" | "ok" | "muted" | "warn";
+  badge?: StaffingCardBadge;
 };
 
 export type DailyStaffingCardModel = {
@@ -428,6 +459,8 @@ export function formatDailyStaffingCardModel(
   summary: DailyStaffingSummary
 ): DailyStaffingCardModel {
   const rows: StaffingCardRow[] = [];
+  const isBoard = summary.required.source === "current_board";
+  const isEstimate = summary.required.source === "engine_estimate";
   const hasReservation = summary.reservation.status === "ok";
   const hasAvailable = summary.available.status === "ok";
   const availableOnly =
@@ -457,31 +490,103 @@ export function formatDailyStaffingCardModel(
     });
   }
 
-  if (summary.required.source === "current_board" && summary.required.count != null) {
+  if (isBoard) {
     rows.push({
-      key: "required",
-      label: "필요",
-      value: `${summary.required.count}명 [현재 배치]`,
+      key: "assigned",
+      label: "배정",
+      value: `${summary.assignedTeams}팀`,
     });
-  } else if (
-    summary.required.source === "engine_estimate" &&
-    summary.required.count != null
-  ) {
+    if (summary.required.count != null) {
+      rows.push({
+        key: "required",
+        label: "실제 투입",
+        value: `${summary.required.count}명`,
+        badge: "current",
+      });
+    }
     rows.push({
-      key: "required",
-      label: "예상 필요",
-      value: `${summary.required.count}명 [예상]`,
+      key: "unassigned",
+      label: "미배치",
+      value: `${summary.unassignedTeams}팀`,
+      tone: summary.unassignedTeams > 0 ? "warn" : "ok",
     });
+    if (summary.boardStatus === "ok") {
+      rows.push({
+        key: "status",
+        label: "상태",
+        value: "정상",
+        tone: "ok",
+      });
+    } else if (summary.boardStatus === "unassigned") {
+      rows.push({
+        key: "status",
+        label: "상태",
+        value: "미배치",
+        tone: "warn",
+      });
+      if (summary.gap.kind === "min_shortage" && summary.gap.people != null) {
+        rows.push({
+          key: "gap",
+          label: "최소 부족",
+          value: `${summary.gap.people}명 이상`,
+          tone: "danger",
+        });
+      }
+    }
+    if (hasAvailable) {
+      rows.push({
+        key: "available",
+        label: "일반 가용",
+        value: `${summary.available.count}명`,
+        tone: "muted",
+      });
+    }
+  } else if (isEstimate) {
+    if (summary.required.count != null) {
+      rows.push({
+        key: "required",
+        label: "예상 필요",
+        value: `${summary.required.count}명`,
+        badge: "estimate",
+      });
+    }
+    if (hasAvailable) {
+      rows.push({
+        key: "available",
+        label: "현재 가용",
+        value: `${summary.available.count}명`,
+      });
+    }
+    rows.push({
+      key: "unassigned",
+      label: "예상 미배치",
+      value: `${summary.unassignedTeams}팀`,
+      tone: summary.unassignedTeams > 0 ? "warn" : undefined,
+    });
+    if (summary.gap.kind === "min_shortage" && summary.gap.people != null) {
+      rows.push({
+        key: "gap",
+        label: "최소 부족",
+        value: `${summary.gap.people}명`,
+        tone: "danger",
+      });
+    }
   } else if (summary.required.source === "estimate_unavailable") {
     rows.push({
       key: "required",
-      label: "필요",
+      label: "예상 필요",
       value: "예상 계산 불가",
       tone: "muted",
+      badge: "estimate",
     });
-  }
-
-  if (availableOnly) {
+    if (hasAvailable) {
+      rows.push({
+        key: "available",
+        label: "현재 가용",
+        value: `${summary.available.count}명`,
+      });
+    }
+  } else if (availableOnly) {
     rows.push({
       key: "available",
       label: "가용",
@@ -495,46 +600,8 @@ export function formatDailyStaffingCardModel(
     });
   }
 
-  if (summary.unassignedTeams > 0) {
-    rows.push({
-      key: "unassigned",
-      label: "미배치",
-      value: `${summary.unassignedTeams}팀`,
-      tone: "warn",
-    });
-  }
-
-  if (summary.gap.kind === "surplus" && summary.gap.people != null) {
-    rows.push({
-      key: "gap",
-      label: "여유",
-      value: `${summary.gap.people}명`,
-      tone: "ok",
-    });
-  } else if (summary.gap.kind === "shortage" && summary.gap.people != null) {
-    rows.push({
-      key: "gap",
-      label: "부족",
-      value: `${summary.gap.people}명`,
-      tone: "danger",
-    });
-  } else if (summary.gap.kind === "min_shortage" && summary.gap.people != null) {
-    rows.push({
-      key: "gap",
-      label: "최소 부족",
-      value: `${summary.gap.people}명 이상`,
-      tone: "danger",
-    });
-  } else if (summary.gap.kind === "balanced") {
-    rows.push({
-      key: "gap",
-      label: "적정",
-      value: "0명",
-    });
-  }
-
   return {
-    title: "오늘 인력 현황",
+    title: "인력 현황",
     shiftLine: hasReservation ? formatShiftLine(summary.reservation.byShift) : null,
     rows,
     availableOnly,
