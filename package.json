@@ -71,6 +71,8 @@
     "test:daily-ops-duty-unit": "bash scripts/tsx-safe.sh scripts/test-daily-ops-duty-unit.ts",
     "test:ops-duty-override-unit": "bash scripts/tsx-safe.sh scripts/test-ops-duty-override-unit.ts",
     "test:ops-duty-override-local": "bash scripts/tsx-safe.sh scripts/test-ops-duty-override-local.ts",
+    "test:ops-duty-editor-unit": "bash scripts/tsx-safe.sh scripts/test-ops-duty-editor-unit.ts",
+    "test:ops-duty-editor-local": "bash scripts/tsx-safe.sh scripts/test-ops-duty-editor-local.ts",
     "test:ops-duty-sheet-unit": "bash scripts/tsx-safe.sh scripts/test-ops-duty-sheet-unit.ts",
     "test:ops-duty-sheet-autosync-unit": "bash scripts/tsx-safe.sh scripts/test-ops-duty-sheet-autosync-unit.ts",
     "test:third-weekly-rotation-unit": "bash scripts/tsx-safe.sh scripts/test-third-weekly-rotation-unit.ts",

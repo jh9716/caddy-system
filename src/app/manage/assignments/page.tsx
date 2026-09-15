@@ -103,7 +103,11 @@ import { SpecialDutyPanel, type Shift1StartOption } from "./SpecialDutyPanel";
 import { SpecialSupportPanel } from "./SpecialSupportPanel";
 import { BoardQuickSheet, LiveChangePanel, LockToggle, SameDayAddSheet, TeamMoveSheet } from "./LiveChangePanel";
 import { CaddyCellEditSheet } from "./CaddyCellEditSheet";
-import { UnavailablePanel } from "./UnavailablePanel";
+import { UnavailablePanel, type OpsDutyEditCaddy } from "./UnavailablePanel";
+import {
+  parseOpsDutyEditorSlots,
+  type OpsDutyEditorSlot,
+} from "@/lib/opsDutyEditorView";
 import {
   buildUnavailablePanelGroups,
   offCaddiesFromRoster,
@@ -569,6 +573,12 @@ export default function ManageAssignmentsOpsPage() {
       role?: string;
     }>;
   } | null>(null);
+  const [opsDutyEditorSlots, setOpsDutyEditorSlots] = useState<
+    OpsDutyEditorSlot[] | null
+  >(null);
+  const [opsDutyCaddies, setOpsDutyCaddies] = useState<OpsDutyEditCaddy[]>([]);
+  const [opsDutyBusy, setOpsDutyBusy] = useState(false);
+  const [opsDutyError, setOpsDutyError] = useState<string | null>(null);
   const [opsDutyPreview, setOpsDutyPreview] = useState<{
     matchedCount: number;
     reviewCount: number;
@@ -1076,6 +1086,8 @@ export default function ManageAssignmentsOpsPage() {
 
   useEffect(() => {
     setOpsDutySyncNotice(null);
+    setOpsDutyEditorSlots(null);
+    setOpsDutyError(null);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       setOpsDutyStored(null);
       setOpsDutyPreview(null);
@@ -1089,7 +1101,7 @@ export default function ManageAssignmentsOpsPage() {
           `/api/daily-ops-duties?date=${encodeURIComponent(date)}`,
           { credentials: "include" }
         );
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         if (!res.ok || cancelled) return;
         setOpsDutyStored({
           count: Number(data.count) || 0,
@@ -1101,8 +1113,12 @@ export default function ManageAssignmentsOpsPage() {
               : [],
           rows: Array.isArray(data.rows) ? data.rows : [],
         });
+        setOpsDutyEditorSlots(parseOpsDutyEditorSlots(data));
       } catch {
-        if (!cancelled) setOpsDutyStored(null);
+        if (!cancelled) {
+          setOpsDutyStored(null);
+          setOpsDutyEditorSlots(null);
+        }
       }
     })();
     return () => {
@@ -1483,6 +1499,92 @@ export default function ManageAssignmentsOpsPage() {
       setError(e instanceof Error ? e.message : "3부반 시작조 저장 실패");
     } finally {
       setSavingThirdWeekly(false);
+    }
+  }
+
+  async function refreshOpsDutyPanel() {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+    try {
+      const res = await fetch(
+        `/api/daily-ops-duties?date=${encodeURIComponent(date)}`,
+        { credentials: "include" }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setOpsDutyError(data.error || "운영현황 당번 조회 실패");
+        return false;
+      }
+      setOpsDutyStored({
+        count: Number(data.count) || 0,
+        byRole: data.byRole,
+        caddyIds: Array.isArray(data.caddyIds)
+          ? data.caddyIds
+          : Array.isArray(data.rows)
+            ? data.rows.map((r: { caddyId: number }) => r.caddyId)
+            : [],
+        rows: Array.isArray(data.rows) ? data.rows : [],
+      });
+      setOpsDutyEditorSlots(parseOpsDutyEditorSlots(data));
+      return true;
+    } catch (e: unknown) {
+      setOpsDutyError(e instanceof Error ? e.message : "운영현황 당번 조회 실패");
+      return false;
+    }
+  }
+
+  async function ensureOpsDutyCaddies() {
+    try {
+      if (opsDutyCaddies.length) return;
+      const res = await fetch("/api/caddies?employment=ACTIVE", {
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => []);
+      if (!res.ok || !Array.isArray(data)) return;
+      setOpsDutyCaddies(
+        data.map(
+          (row: {
+            id: number;
+            name?: string;
+            team?: string;
+            employmentStatus?: string;
+          }) => ({
+            id: Number(row.id),
+            name: String(row.name || ""),
+            team: row.team,
+            employmentStatus: row.employmentStatus,
+          })
+        )
+      );
+    } catch {
+      setOpsDutyError("재직 캐디 목록을 불러오지 못했습니다.");
+    }
+  }
+
+  async function mutateOpsDuty(
+    action: "SET" | "CLEAR" | "RESTORE",
+    roleKey: string,
+    caddyId?: number
+  ) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+    setOpsDutyBusy(true);
+    setOpsDutyError(null);
+    try {
+      const res = await fetch("/api/daily-ops-duties/override", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date, roleKey, action, caddyId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setOpsDutyError(data.error || "저장 실패");
+        return;
+      }
+      await refreshOpsDutyPanel();
+    } catch (e: unknown) {
+      setOpsDutyError(e instanceof Error ? e.message : "저장 실패");
+    } finally {
+      setOpsDutyBusy(false);
     }
   }
 
@@ -3284,6 +3386,22 @@ export default function ManageAssignmentsOpsPage() {
       specialSupportItems={specialSupportItems}
       onToggle={() => setUnavailSheetOpen(false)}
       onCollapse={() => setUnavailOpen(false)}
+      opsDutySlots={opsDutyEditorSlots}
+      opsDutyCaddies={opsDutyCaddies}
+      opsDutyBusy={opsDutyBusy}
+      opsDutyError={opsDutyError}
+      onEnsureOpsDutyCaddies={() => {
+        void ensureOpsDutyCaddies();
+      }}
+      onOpsDutySet={(roleKey, caddyId) => {
+        void mutateOpsDuty("SET", roleKey, caddyId);
+      }}
+      onOpsDutyClear={(roleKey) => {
+        void mutateOpsDuty("CLEAR", roleKey);
+      }}
+      onOpsDutyRestore={(roleKey) => {
+        void mutateOpsDuty("RESTORE", roleKey);
+      }}
     />
   );
   const opsLayoutCollapsed = unavailOpen ? "" : " is-ops-panel-collapsed";
@@ -5156,6 +5274,96 @@ const opsCss = `
     grid-template-columns: 34px minmax(0, 1fr);
     gap: 4px;
     align-items: start;
+  }
+  .ops-unavail-row.is-editable {
+    grid-template-columns: 34px minmax(0, 1fr) auto;
+  }
+  .ops-unavail-row.is-editable.is-leader {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .ops-unavail-slot-main {
+    min-width: 0;
+  }
+  .ops-unavail-edit {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: #2563eb;
+    font-size: 0.64rem;
+    font-weight: 700;
+    padding: 0;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .ops-unavail-edit:disabled {
+    color: #94a3b8;
+    cursor: default;
+  }
+  .ops-unavail-badge.is-manual {
+    background: #eef2ff;
+    color: #3730a3;
+  }
+  .ops-unavail-editor {
+    margin-top: 4px;
+    padding: 6px;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    background: #f8fafc;
+  }
+  .ops-unavail-search {
+    width: 100%;
+    min-height: 28px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 0.72rem;
+  }
+  .ops-unavail-hits {
+    list-style: none;
+    margin: 4px 0 0;
+    padding: 0;
+    display: grid;
+    gap: 2px;
+  }
+  .ops-unavail-hits button {
+    width: 100%;
+    text-align: left;
+    border: 0;
+    background: #fff;
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-size: 0.72rem;
+    cursor: pointer;
+  }
+  .ops-unavail-hits button.is-selected {
+    outline: 1px solid #2563eb;
+    background: #eff6ff;
+  }
+  .ops-unavail-editor-empty,
+  .ops-unavail-editor-error {
+    margin: 4px 0 0;
+    font-size: 0.64rem;
+  }
+  .ops-unavail-editor-error { color: #b91c1c; }
+  .ops-unavail-editor-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+  }
+  .ops-unavail-editor-actions button {
+    appearance: none;
+    border: 1px solid #cbd5e1;
+    background: #fff;
+    border-radius: 4px;
+    font-size: 0.64rem;
+    font-weight: 700;
+    padding: 2px 6px;
+    cursor: pointer;
+  }
+  .ops-unavail-editor-actions button:disabled {
+    color: #94a3b8;
+    cursor: default;
   }
   .ops-unavail-k {
     font-size: 0.64rem;
