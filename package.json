@@ -47,6 +47,7 @@
     "test:assignment-board-cell-edit-unit": "bash scripts/tsx-safe.sh scripts/test-assignment-board-cell-edit-unit.ts",
     "test:assignment-board-export-unit": "bash scripts/tsx-safe.sh scripts/test-assignment-board-export-unit.ts",
     "test:assignment-board-export-xlsx-unit": "bash scripts/tsx-safe.sh scripts/test-assignment-board-export-xlsx-unit.ts",
+    "test:daily-staffing-summary-unit": "bash scripts/tsx-safe.sh scripts/test-daily-staffing-summary-unit.ts",
     "test:assignment-confirm-unit": "bash scripts/tsx-safe.sh scripts/test-assignment-confirm-unit.ts",
     "test:daily-board-draft-unit": "bash scripts/tsx-safe.sh scripts/test-daily-board-draft-unit.ts",
     "test:quick-move-atomicity-local": "bash scripts/tsx-safe.sh scripts/test-quick-move-atomicity-local.ts",

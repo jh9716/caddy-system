@@ -156,7 +156,7 @@ export async function loadAvailabilityForDate(
     dutyEntries = options.dutyEntries;
     dutySource = "file";
   } else if (options?.includeStoredOpsDuty !== false) {
-    dutyEntries = await loadEffectiveOpsDutyEntries(ymd, options.opsDutyDeps);
+    dutyEntries = await loadEffectiveOpsDutyEntries(ymd, options?.opsDutyDeps);
     if (dutyEntries.length > 0) dutySource = "stored";
   }
 

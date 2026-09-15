@@ -102,6 +102,13 @@ const COURSE_SHORT: Record<CourseCode, string> = {
 
 import { SpecialDutyPanel, type Shift1StartOption } from "./SpecialDutyPanel";
 import { SpecialSupportPanel } from "./SpecialSupportPanel";
+import { DailyStaffingSummaryCard } from "@/components/manage/DailyStaffingSummaryCard";
+import {
+  buildDailyStaffingSummary,
+  canonicalAvailableCount,
+  hasCurrentBoardStaffingResult,
+  type StaffingDryRunInput,
+} from "@/lib/dailyStaffingSummary";
 import { BoardQuickSheet, LiveChangePanel, LockToggle, SameDayAddSheet, TeamMoveSheet } from "./LiveChangePanel";
 import { CaddyCellEditSheet } from "./CaddyCellEditSheet";
 import { UnavailablePanel, type OpsDutyEditCaddy } from "./UnavailablePanel";
@@ -639,6 +646,9 @@ export default function ManageAssignmentsOpsPage() {
     text: string;
   } | null>(null);
   const [shift1Options, setShift1Options] = useState<Shift1StartOption[]>([]);
+  const [previewReservations, setPreviewReservations] = useState<
+    AutoAssignReservation[]
+  >([]);
   const [availability, setAvailability] = useState<
     (AvailabilityResult & { dailySummary?: DailyAvailabilitySummary }) | null
   >(null);
@@ -1034,6 +1044,7 @@ export default function ManageAssignmentsOpsPage() {
   useEffect(() => {
     if (!file || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       setShift1Options([]);
+      setPreviewReservations([]);
       return;
     }
     let cancelled = false;
@@ -1048,15 +1059,21 @@ export default function ManageAssignmentsOpsPage() {
           credentials: "include",
         });
         const data = await res.json();
-        if (!res.ok || cancelled) return;
-        const rows = ((data.reservations || []) as AutoAssignReservation[])
-          .filter(
-            (row) =>
-              row.shift === "1부" && (!row.date || row.date === date)
-          )
+        if (cancelled) return;
+        if (!res.ok) {
+          setPreviewReservations([]);
+          setShift1Options([]);
+          return;
+        }
+        const all = ((data.reservations || []) as AutoAssignReservation[]).filter(
+          (row) => !row.date || row.date === date
+        );
+        const rows = all
+          .filter((row) => row.shift === "1부")
           .slice()
           .sort(compareReservationOrder);
         if (cancelled) return;
+        setPreviewReservations(all);
         setShift1Options(
           rows.map((row) => {
             const code = resolveCourseCode(row.course);
@@ -1072,7 +1089,10 @@ export default function ManageAssignmentsOpsPage() {
           })
         );
       } catch {
-        if (!cancelled) setShift1Options([]);
+        if (!cancelled) {
+          setShift1Options([]);
+          setPreviewReservations([]);
+        }
       }
     })();
     return () => {
@@ -3441,6 +3461,63 @@ export default function ManageAssignmentsOpsPage() {
 
   const hasSelectedDate = /^\d{4}-\d{2}-\d{2}$/.test(date);
 
+  const staffingAvailableCount = useMemo(
+    () =>
+      canonicalAvailableCount({
+        availableIds: availability?.available?.all?.map((row) => row.id),
+        availableCount: availability?.counts?.available ?? null,
+      }),
+    [availability]
+  );
+
+  const staffingSummary = useMemo(() => {
+    if (!hasSelectedDate) return null;
+    const hasBoard = hasCurrentBoardStaffingResult(draft);
+    let dryRunInput: StaffingDryRunInput | null = null;
+    if (
+      !hasBoard &&
+      previewReservations.length > 0 &&
+      availability?.available?.all?.length &&
+      houseStartCaddyId !== "" &&
+      Number(houseStartCaddyId) > 0
+    ) {
+      dryRunInput = {
+        date,
+        reservations: previewReservations,
+        available: regularCaddyPoolFromAvailabilityRows(
+          availability.available.all
+        ),
+        openCourses: openCourseList,
+        houseStartCaddyId: Number(houseStartCaddyId),
+        thirdStartCaddyId:
+          thirdStartCaddyId !== "" && Number(thirdStartCaddyId)
+            ? Number(thirdStartCaddyId)
+            : null,
+        thirdStartTeam: thirdWeekly?.startTeam || null,
+        specialSupportByShift,
+      };
+    }
+    return buildDailyStaffingSummary({
+      date,
+      availableCount: staffingAvailableCount,
+      currentDraft: draft,
+      previewReservations,
+      dryRunInput,
+    });
+  }, [
+    hasSelectedDate,
+    draft,
+    previewReservations,
+    availability,
+    houseStartCaddyId,
+    thirdStartCaddyId,
+    thirdWeekly?.startTeam,
+    openCourseList,
+    specialSupportByShift,
+    staffingAvailableCount,
+    date,
+  ]);
+
   const operationalRoster = useMemo(
     () =>
       mergeOperationalRoster(
@@ -3667,6 +3744,10 @@ export default function ManageAssignmentsOpsPage() {
           </button>
         </div>
       )}
+
+      {staffingSummary ? (
+        <DailyStaffingSummaryCard summary={staffingSummary} />
+      ) : null}
 
       <div
         className={`ops-direct-layout${hasSelectedDate ? " has-ops-panel" : ""}${opsLayoutCollapsed}`}
@@ -4854,6 +4935,95 @@ const opsCss = `
     margin: 2px 0 0;
     color: #64748b;
     font-size: 0.78rem;
+  }
+  .ops-staffing-card {
+    display: grid;
+    gap: 6px;
+    padding: 10px 12px;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    background: #fff;
+    min-width: 0;
+  }
+  .ops-staffing-title {
+    font-size: 0.72rem;
+    font-weight: 800;
+    color: #64748b;
+    letter-spacing: 0.04em;
+  }
+  .ops-staffing-grid {
+    display: grid;
+    gap: 3px 0;
+    min-width: 0;
+  }
+  .ops-staffing-row {
+    display: grid;
+    grid-template-columns: 5.6rem minmax(0, 1fr);
+    gap: 8px;
+    align-items: baseline;
+    min-width: 0;
+  }
+  .ops-staffing-k {
+    color: #64748b;
+    font-weight: 700;
+    font-size: 0.78rem;
+  }
+  .ops-staffing-vwrap {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
+  }
+  .ops-staffing-v {
+    font-weight: 800;
+    font-size: 0.92rem;
+    color: #0f172a;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: keep-all;
+  }
+  .ops-staffing-badge {
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    padding: 1px 7px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .ops-staffing-badge.is-current {
+    background: #ecfdf5;
+    color: #047857;
+  }
+  .ops-staffing-badge.is-estimate {
+    background: #eff6ff;
+    color: #1d4ed8;
+  }
+  .ops-staffing-row.is-ok .ops-staffing-v { color: #047857; }
+  .ops-staffing-row.is-muted .ops-staffing-v {
+    color: #64748b;
+    font-weight: 700;
+  }
+  .ops-staffing-row.is-warn .ops-staffing-v { color: #b45309; }
+  .ops-staffing-row.is-danger {
+    margin: 2px -4px 0;
+    padding: 4px 6px;
+    border-radius: 8px;
+    background: #fef2f2;
+  }
+  .ops-staffing-row.is-danger .ops-staffing-k,
+  .ops-staffing-row.is-danger .ops-staffing-v {
+    color: #b91c1c;
+  }
+  .ops-staffing-shifts {
+    font-size: 0.75rem;
+    font-weight: 650;
+    color: #475569;
+    word-break: keep-all;
+    padding: 0 0 4px 5.6rem;
+    box-sizing: border-box;
   }
   .status {
     min-width: 96px;
