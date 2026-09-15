@@ -7,7 +7,7 @@ import {
   DUTY_ROLE_LABELS,
   type DutyExcelEntry,
   type DutyRoleKind,
-} from "@/lib/dutyMarshalLeaderParser";
+} from "@/lib/opsDutyRoleKeys";
 import {
   matchCaddyByExactName,
   type NameMatchCaddy,
