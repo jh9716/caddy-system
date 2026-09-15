@@ -6,6 +6,7 @@ import { unavailablePanelTotal } from "@/lib/assignmentBoardDirectEdit";
 import {
   opsDutyEditorSlotsBySection,
   parseOpsDutyEditorSlots,
+  type OpsDutyEditorSlot,
 } from "@/lib/opsDutyEditorView";
 import {
   compactPeopleNames,
