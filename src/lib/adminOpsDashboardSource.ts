@@ -101,8 +101,10 @@ export async function loadAdminOpsDashboardSource(
   const availability = await loadAvailability(ymd, {
     includeOffSheet: offOk,
     offSheets: offOk && offSheets ? offSheets : undefined,
-    includeStoredOpsDuty: dutySource === "stored",
-    dutyEntries: dutySource === "sheet" ? dutyEntries : undefined,
+    // Dashboard는 stored/sheet base만. override는 운영현황 slots에서만 본다.
+    includeStoredOpsDuty: false,
+    dutyEntries:
+      dutySource === "stored" || dutySource === "sheet" ? dutyEntries : undefined,
   });
 
   const opsDuties =

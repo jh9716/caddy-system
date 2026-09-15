@@ -1,4 +1,4 @@
-import { listDailyOpsDutyCaddyIds } from "@/lib/dailyOpsDutyService";
+import { listEffectiveOpsDutyCaddyIds } from "@/lib/opsDutyEffectiveService";
 import { excludeCaddiesById } from "@/lib/dailyOpsDuty";
 import type { AutoAssignCaddy } from "@/lib/autoAssignEngine";
 import {
@@ -9,7 +9,7 @@ import {
 } from "@/lib/caddyPoolCanonicalService";
 import { isOffSnapshotRequiredError } from "@/lib/offSnapshot";
 
-/** 라이브 reflow/apply 서버 경로: 저장된 당번·마샬·조장을 후보에서 강제 제외 */
+/** 라이브 reflow/apply 서버 경로: effective 당번·마샬·조장을 후보에서 강제 제외 */
 export async function regularPoolExcludingStoredOpsDuty(
   date: string,
   pool: AutoAssignCaddy[]
@@ -61,7 +61,7 @@ export async function resolveCanonicalLivePool(
     if (isOffSheetUnresolvedError(error) || isOffSnapshotRequiredError(error)) {
       throw error;
     }
-    const ids = await listDailyOpsDutyCaddyIds(date);
+    const ids = await listEffectiveOpsDutyCaddyIds(date).catch(() => [] as number[]);
     return {
       ...empty,
       computePool: excludeCaddiesById(pool, ids),

@@ -224,11 +224,21 @@ console.log("== #146A source contracts ==");
   assert(/resolveOpsDutyReadOnly/.test(getRoute), "GET은 기존 read-only resolver 유지");
   assert(!/resolveEffectiveOpsDuty/.test(getRoute), "GET rows를 effective resolver로 교체하지 않음");
   assert(/buildOpsDutySlotStates/.test(getRoute), "GET slots는 overlay extra field");
-  assert(/loadStoredDutyEntries/.test(avail), "availability는 stored DailyOpsDuty 유지");
-  assert(!/resolveEffectiveOpsDuty/.test(avail), "자동배치 availability에 overlay 미연결");
-  assert(/listDailyOpsDutyCaddyIds/.test(canonical), "canonical exclusion은 stored ids");
-  assert(!/resolveEffectiveOpsDuty/.test(canonical), "canonical에 overlay 미연결");
-  assert(/listDailyOpsDutyCaddyIds/.test(live), "reflow fallback은 stored ids");
+  assert(
+    /loadEffectiveOpsDutyEntries/.test(avail),
+    "availability exclusion은 effective entries"
+  );
+  assert(!/loadStoredDutyEntries/.test(avail), "availability는 stored-only loader를 쓰지 않음");
+  assert(
+    /resolveEffectiveOpsDuty/.test(canonical),
+    "canonical exclusion은 effective resolver"
+  );
+  assert(!/listDailyOpsDutyCaddyIds/.test(canonical), "canonical은 stored-only ids를 쓰지 않음");
+  assert(
+    /listEffectiveOpsDutyCaddyIds/.test(live),
+    "reflow fallback은 effective ids"
+  );
+  assert(!/listDailyOpsDutyCaddyIds/.test(live), "reflow fallback은 stored-only ids를 쓰지 않음");
   assert(/resolveOpsDutyReadOnly/.test(dashboard), "Dashboard는 기존 resolver");
   assert(!/resolveEffectiveOpsDuty/.test(dashboard), "Dashboard에 overlay 미연결");
   assert(/DailyOpsDutyOverrideAction/.test(schema) && /SET/.test(schema) && /CLEAR/.test(schema), "SET/CLEAR enum");
