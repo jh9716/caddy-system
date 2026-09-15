@@ -5208,12 +5208,16 @@ const opsCss = `
     gap: 8px;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
+    row-gap: 6px;
   }
   .ops-board-tools-end {
     display: flex;
     gap: 6px;
     align-items: center;
     flex: 0 0 auto;
+    flex-wrap: wrap;
+    max-width: 100%;
   }
   .bx-export-menu { position: relative; }
   .bx-export-btn {
