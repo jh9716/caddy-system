@@ -1,0 +1,6287 @@
+{
+  "date": "2026-09-07",
+  "status": "DRAFT",
+  "openCourses": [
+    "VERTHILL",
+    "SKY",
+    "OCEAN",
+    "LAKE"
+  ],
+  "assignments": [
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 0,
+      "reason": "REGULAR_SEQUENCE(1부, seq=0)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.3",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "1부",
+        "teeTime": "05:57",
+        "teamName": null,
+        "rawRowIndex": 3
+      },
+      "caddy": {
+        "id": 189,
+        "name": "박지아",
+        "team": "1조",
+        "teamOrder": 4,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 1,
+      "reason": "REGULAR_SEQUENCE(1부, seq=1)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.3.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "1부",
+        "teeTime": "05:57",
+        "teamName": null,
+        "rawRowIndex": 3
+      },
+      "caddy": {
+        "id": 190,
+        "name": "강보미",
+        "team": "1조",
+        "teamOrder": 5,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": -1,
+      "reason": "ONE_TWO_PRIORITY",
+      "kind": "oneTwo",
+      "pairId": "12-8",
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.4",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "1부",
+        "teeTime": "06:04",
+        "teamName": null,
+        "rawRowIndex": 4
+      },
+      "caddy": {
+        "id": 8,
+        "name": "임형규",
+        "team": "1조",
+        "teamOrder": 20,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": -1,
+      "reason": "ONE_TWO_PRIORITY",
+      "kind": "oneTwo",
+      "pairId": "12-123",
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.4.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "1부",
+        "teeTime": "06:04",
+        "teamName": null,
+        "rawRowIndex": 4
+      },
+      "caddy": {
+        "id": 123,
+        "name": "구본의",
+        "team": "4조",
+        "teamOrder": 7,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 2,
+      "reason": "REGULAR_SEQUENCE(1부, seq=2)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.4.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "1부",
+        "teeTime": "06:04",
+        "teamName": null,
+        "rawRowIndex": 4
+      },
+      "caddy": {
+        "id": 113,
+        "name": "이연호",
+        "team": "1조",
+        "teamOrder": 6,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 3,
+      "reason": "REGULAR_SEQUENCE(1부, seq=3)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.5",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "1부",
+        "teeTime": "06:11",
+        "teamName": null,
+        "rawRowIndex": 5
+      },
+      "caddy": {
+        "id": 191,
+        "name": "정윤지",
+        "team": "1조",
+        "teamOrder": 8,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 4,
+      "reason": "REGULAR_SEQUENCE(1부, seq=4)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.5.1",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "1부",
+        "teeTime": "06:11",
+        "teamName": null,
+        "rawRowIndex": 5
+      },
+      "caddy": {
+        "id": 192,
+        "name": "김규민",
+        "team": "1조",
+        "teamOrder": 9,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 5,
+      "reason": "REGULAR_SEQUENCE(1부, seq=5)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.5.2",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "1부",
+        "teeTime": "06:11",
+        "teamName": null,
+        "rawRowIndex": 5
+      },
+      "caddy": {
+        "id": 9,
+        "name": "강정미",
+        "team": "1조",
+        "teamOrder": 12,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 6,
+      "reason": "REGULAR_SEQUENCE(1부, seq=6)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.6",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "1부",
+        "teeTime": "06:18",
+        "teamName": null,
+        "rawRowIndex": 6
+      },
+      "caddy": {
+        "id": 14,
+        "name": "김보람",
+        "team": "1조",
+        "teamOrder": 13,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 7,
+      "reason": "REGULAR_SEQUENCE(1부, seq=7)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.6.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "1부",
+        "teeTime": "06:18",
+        "teamName": null,
+        "rawRowIndex": 6
+      },
+      "caddy": {
+        "id": 187,
+        "name": "이영진",
+        "team": "1조",
+        "teamOrder": 14,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 8,
+      "reason": "REGULAR_SEQUENCE(1부, seq=8)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.6.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "1부",
+        "teeTime": "06:18",
+        "teamName": null,
+        "rawRowIndex": 6
+      },
+      "caddy": {
+        "id": 23,
+        "name": "김경진",
+        "team": "1조",
+        "teamOrder": 15,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 9,
+      "reason": "REGULAR_SEQUENCE(1부, seq=9)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.6.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "1부",
+        "teeTime": "06:18",
+        "teamName": null,
+        "rawRowIndex": 6
+      },
+      "caddy": {
+        "id": 21,
+        "name": "김하나1",
+        "team": "1조",
+        "teamOrder": 18,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 10,
+      "reason": "REGULAR_SEQUENCE(1부, seq=10)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.7",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "1부",
+        "teeTime": "06:25",
+        "teamName": null,
+        "rawRowIndex": 7
+      },
+      "caddy": {
+        "id": 193,
+        "name": "김선홍",
+        "team": "2조",
+        "teamOrder": 1,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 11,
+      "reason": "REGULAR_SEQUENCE(1부, seq=11)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.7.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "1부",
+        "teeTime": "06:25",
+        "teamName": null,
+        "rawRowIndex": 7
+      },
+      "caddy": {
+        "id": 31,
+        "name": "김영한",
+        "team": "2조",
+        "teamOrder": 3,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 12,
+      "reason": "REGULAR_SEQUENCE(1부, seq=12)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.7.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "1부",
+        "teeTime": "06:25",
+        "teamName": null,
+        "rawRowIndex": 7
+      },
+      "caddy": {
+        "id": 29,
+        "name": "최유진",
+        "team": "2조",
+        "teamOrder": 5,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 13,
+      "reason": "REGULAR_SEQUENCE(1부, seq=13)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.7.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "1부",
+        "teeTime": "06:25",
+        "teamName": null,
+        "rawRowIndex": 7
+      },
+      "caddy": {
+        "id": 32,
+        "name": "김진희1",
+        "team": "2조",
+        "teamOrder": 7,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 14,
+      "reason": "REGULAR_SEQUENCE(1부, seq=14)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.8",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "1부",
+        "teeTime": "06:32",
+        "teamName": null,
+        "rawRowIndex": 8
+      },
+      "caddy": {
+        "id": 28,
+        "name": "김윤정",
+        "team": "2조",
+        "teamOrder": 8,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 15,
+      "reason": "REGULAR_SEQUENCE(1부, seq=15)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.8.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "1부",
+        "teeTime": "06:32",
+        "teamName": null,
+        "rawRowIndex": 8
+      },
+      "caddy": {
+        "id": 40,
+        "name": "정재호",
+        "team": "2조",
+        "teamOrder": 9,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 16,
+      "reason": "REGULAR_SEQUENCE(1부, seq=16)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.8.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "1부",
+        "teeTime": "06:32",
+        "teamName": null,
+        "rawRowIndex": 8
+      },
+      "caddy": {
+        "id": 34,
+        "name": "변수민",
+        "team": "2조",
+        "teamOrder": 10,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 17,
+      "reason": "REGULAR_SEQUENCE(1부, seq=17)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.8.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "1부",
+        "teeTime": "06:32",
+        "teamName": null,
+        "rawRowIndex": 8
+      },
+      "caddy": {
+        "id": 44,
+        "name": "문혜경",
+        "team": "2조",
+        "teamOrder": 13,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 18,
+      "reason": "REGULAR_SEQUENCE(1부, seq=18)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.9",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "1부",
+        "teeTime": "06:39",
+        "teamName": null,
+        "rawRowIndex": 9
+      },
+      "caddy": {
+        "id": 195,
+        "name": "최민주",
+        "team": "2조",
+        "teamOrder": 14,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 19,
+      "reason": "REGULAR_SEQUENCE(1부, seq=19)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.9.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "1부",
+        "teeTime": "06:39",
+        "teamName": null,
+        "rawRowIndex": 9
+      },
+      "caddy": {
+        "id": 37,
+        "name": "최덕희",
+        "team": "2조",
+        "teamOrder": 16,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 20,
+      "reason": "REGULAR_SEQUENCE(1부, seq=20)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.9.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "1부",
+        "teeTime": "06:39",
+        "teamName": null,
+        "rawRowIndex": 9
+      },
+      "caddy": {
+        "id": 46,
+        "name": "원진성",
+        "team": "2조",
+        "teamOrder": 17,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 21,
+      "reason": "REGULAR_SEQUENCE(1부, seq=21)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.9.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "1부",
+        "teeTime": "06:39",
+        "teamName": null,
+        "rawRowIndex": 9
+      },
+      "caddy": {
+        "id": 42,
+        "name": "김혜진",
+        "team": "2조",
+        "teamOrder": 18,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 22,
+      "reason": "REGULAR_SEQUENCE(1부, seq=22)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.10",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "1부",
+        "teeTime": "06:46",
+        "teamName": null,
+        "rawRowIndex": 10
+      },
+      "caddy": {
+        "id": 197,
+        "name": "박고윤",
+        "team": "2조",
+        "teamOrder": 20,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 23,
+      "reason": "REGULAR_SEQUENCE(1부, seq=23)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.10.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "1부",
+        "teeTime": "06:46",
+        "teamName": null,
+        "rawRowIndex": 10
+      },
+      "caddy": {
+        "id": 47,
+        "name": "김지희",
+        "team": "3조",
+        "teamOrder": 1,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 24,
+      "reason": "REGULAR_SEQUENCE(1부, seq=24)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.10.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "1부",
+        "teeTime": "06:46",
+        "teamName": null,
+        "rawRowIndex": 10
+      },
+      "caddy": {
+        "id": 48,
+        "name": "정예지",
+        "team": "3조",
+        "teamOrder": 2,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 25,
+      "reason": "REGULAR_SEQUENCE(1부, seq=25)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.10.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "1부",
+        "teeTime": "06:46",
+        "teamName": null,
+        "rawRowIndex": 10
+      },
+      "caddy": {
+        "id": 16,
+        "name": "김지운",
+        "team": "3조",
+        "teamOrder": 3,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 26,
+      "reason": "REGULAR_SEQUENCE(1부, seq=26)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.11",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "1부",
+        "teeTime": "06:53",
+        "teamName": null,
+        "rawRowIndex": 11
+      },
+      "caddy": {
+        "id": 49,
+        "name": "박효주",
+        "team": "3조",
+        "teamOrder": 4,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 27,
+      "reason": "REGULAR_SEQUENCE(1부, seq=27)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.11.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "1부",
+        "teeTime": "06:53",
+        "teamName": null,
+        "rawRowIndex": 11
+      },
+      "caddy": {
+        "id": 50,
+        "name": "안은형",
+        "team": "3조",
+        "teamOrder": 5,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 28,
+      "reason": "REGULAR_SEQUENCE(1부, seq=28)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.11.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "1부",
+        "teeTime": "06:53",
+        "teamName": null,
+        "rawRowIndex": 11
+      },
+      "caddy": {
+        "id": 54,
+        "name": "김하라",
+        "team": "3조",
+        "teamOrder": 7,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 29,
+      "reason": "REGULAR_SEQUENCE(1부, seq=29)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.11.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "1부",
+        "teeTime": "06:53",
+        "teamName": null,
+        "rawRowIndex": 11
+      },
+      "caddy": {
+        "id": 56,
+        "name": "김태은",
+        "team": "3조",
+        "teamOrder": 9,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 30,
+      "reason": "REGULAR_SEQUENCE(1부, seq=30)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.12",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "1부",
+        "teeTime": "07:00",
+        "teamName": null,
+        "rawRowIndex": 12
+      },
+      "caddy": {
+        "id": 57,
+        "name": "원정희",
+        "team": "3조",
+        "teamOrder": 11,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 31,
+      "reason": "REGULAR_SEQUENCE(1부, seq=31)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.12.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "1부",
+        "teeTime": "07:00",
+        "teamName": null,
+        "rawRowIndex": 12
+      },
+      "caddy": {
+        "id": 55,
+        "name": "임현아",
+        "team": "3조",
+        "teamOrder": 12,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 32,
+      "reason": "REGULAR_SEQUENCE(1부, seq=32)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.12.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "1부",
+        "teeTime": "07:00",
+        "teamName": null,
+        "rawRowIndex": 12
+      },
+      "caddy": {
+        "id": 64,
+        "name": "이경주",
+        "team": "3조",
+        "teamOrder": 13,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 33,
+      "reason": "REGULAR_SEQUENCE(1부, seq=33)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.12.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "1부",
+        "teeTime": "07:00",
+        "teamName": null,
+        "rawRowIndex": 12
+      },
+      "caddy": {
+        "id": 58,
+        "name": "김다솜",
+        "team": "3조",
+        "teamOrder": 14,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 34,
+      "reason": "REGULAR_SEQUENCE(1부, seq=34)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.13",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "1부",
+        "teeTime": "07:07",
+        "teamName": null,
+        "rawRowIndex": 13
+      },
+      "caddy": {
+        "id": 59,
+        "name": "박영현",
+        "team": "3조",
+        "teamOrder": 15,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 35,
+      "reason": "REGULAR_SEQUENCE(1부, seq=35)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.13.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "1부",
+        "teeTime": "07:07",
+        "teamName": null,
+        "rawRowIndex": 13
+      },
+      "caddy": {
+        "id": 278,
+        "name": "박준형",
+        "team": "3조",
+        "teamOrder": 16,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 36,
+      "reason": "REGULAR_SEQUENCE(1부, seq=36)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.13.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "1부",
+        "teeTime": "07:07",
+        "teamName": null,
+        "rawRowIndex": 13
+      },
+      "caddy": {
+        "id": 65,
+        "name": "정은비",
+        "team": "3조",
+        "teamOrder": 17,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 37,
+      "reason": "REGULAR_SEQUENCE(1부, seq=37)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.13.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "1부",
+        "teeTime": "07:07",
+        "teamName": null,
+        "rawRowIndex": 13
+      },
+      "caddy": {
+        "id": 70,
+        "name": "신시은",
+        "team": "4조",
+        "teamOrder": 3,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 38,
+      "reason": "REGULAR_SEQUENCE(1부, seq=38)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.14",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "1부",
+        "teeTime": "07:14",
+        "teamName": null,
+        "rawRowIndex": 14
+      },
+      "caddy": {
+        "id": 131,
+        "name": "박익수",
+        "team": "4조",
+        "teamOrder": 4,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 39,
+      "reason": "REGULAR_SEQUENCE(1부, seq=39)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.14.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "1부",
+        "teeTime": "07:14",
+        "teamName": null,
+        "rawRowIndex": 14
+      },
+      "caddy": {
+        "id": 279,
+        "name": "정혜원",
+        "team": "4조",
+        "teamOrder": 6,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 40,
+      "reason": "REGULAR_SEQUENCE(1부, seq=40)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.14.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "1부",
+        "teeTime": "07:14",
+        "teamName": null,
+        "rawRowIndex": 14
+      },
+      "caddy": {
+        "id": 171,
+        "name": "김보혜",
+        "team": "4조",
+        "teamOrder": 8,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 41,
+      "reason": "REGULAR_SEQUENCE(1부, seq=41)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.14.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "1부",
+        "teeTime": "07:14",
+        "teamName": null,
+        "rawRowIndex": 14
+      },
+      "caddy": {
+        "id": 122,
+        "name": "김기덕",
+        "team": "4조",
+        "teamOrder": 9,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 42,
+      "reason": "REGULAR_SEQUENCE(1부, seq=42)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.15",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "1부",
+        "teeTime": "07:21",
+        "teamName": null,
+        "rawRowIndex": 15
+      },
+      "caddy": {
+        "id": 121,
+        "name": "이유리",
+        "team": "4조",
+        "teamOrder": 10,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 43,
+      "reason": "REGULAR_SEQUENCE(1부, seq=43)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.15.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "1부",
+        "teeTime": "07:21",
+        "teamName": null,
+        "rawRowIndex": 15
+      },
+      "caddy": {
+        "id": 127,
+        "name": "이혜연",
+        "team": "4조",
+        "teamOrder": 12,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 44,
+      "reason": "REGULAR_SEQUENCE(1부, seq=44)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.15.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "1부",
+        "teeTime": "07:21",
+        "teamName": null,
+        "rawRowIndex": 15
+      },
+      "caddy": {
+        "id": 137,
+        "name": "박재영",
+        "team": "4조",
+        "teamOrder": 13,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 45,
+      "reason": "REGULAR_SEQUENCE(1부, seq=45)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.15.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "1부",
+        "teeTime": "07:21",
+        "teamName": null,
+        "rawRowIndex": 15
+      },
+      "caddy": {
+        "id": 198,
+        "name": "이지현",
+        "team": "4조",
+        "teamOrder": 14,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 46,
+      "reason": "REGULAR_SEQUENCE(1부, seq=46)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.16",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "1부",
+        "teeTime": "07:28",
+        "teamName": null,
+        "rawRowIndex": 16
+      },
+      "caddy": {
+        "id": 125,
+        "name": "김윤옥",
+        "team": "4조",
+        "teamOrder": 15,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 47,
+      "reason": "REGULAR_SEQUENCE(1부, seq=47)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.16.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "1부",
+        "teeTime": "07:28",
+        "teamName": null,
+        "rawRowIndex": 16
+      },
+      "caddy": {
+        "id": 199,
+        "name": "윤숙영",
+        "team": "4조",
+        "teamOrder": 16,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 48,
+      "reason": "REGULAR_SEQUENCE(1부, seq=48)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.16.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "1부",
+        "teeTime": "07:28",
+        "teamName": null,
+        "rawRowIndex": 16
+      },
+      "caddy": {
+        "id": 90,
+        "name": "홍정자",
+        "team": "5조",
+        "teamOrder": 1,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 49,
+      "reason": "REGULAR_SEQUENCE(1부, seq=49)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.16.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "1부",
+        "teeTime": "07:28",
+        "teamName": null,
+        "rawRowIndex": 16
+      },
+      "caddy": {
+        "id": 72,
+        "name": "오은수",
+        "team": "5조",
+        "teamOrder": 2,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 50,
+      "reason": "REGULAR_SEQUENCE(1부, seq=50)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.17",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "1부",
+        "teeTime": "07:35",
+        "teamName": null,
+        "rawRowIndex": 17
+      },
+      "caddy": {
+        "id": 73,
+        "name": "이예슬",
+        "team": "5조",
+        "teamOrder": 3,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 51,
+      "reason": "REGULAR_SEQUENCE(1부, seq=51)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.17.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "1부",
+        "teeTime": "07:35",
+        "teamName": null,
+        "rawRowIndex": 17
+      },
+      "caddy": {
+        "id": 77,
+        "name": "허진",
+        "team": "5조",
+        "teamOrder": 5,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 52,
+      "reason": "REGULAR_SEQUENCE(1부, seq=52)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.17.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "1부",
+        "teeTime": "07:35",
+        "teamName": null,
+        "rawRowIndex": 17
+      },
+      "caddy": {
+        "id": 288,
+        "name": "김한나",
+        "team": "5조",
+        "teamOrder": 6,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 53,
+      "reason": "REGULAR_SEQUENCE(1부, seq=53)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.17.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "1부",
+        "teeTime": "07:35",
+        "teamName": null,
+        "rawRowIndex": 17
+      },
+      "caddy": {
+        "id": 88,
+        "name": "강현아",
+        "team": "5조",
+        "teamOrder": 7,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 54,
+      "reason": "REGULAR_SEQUENCE(1부, seq=54)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.18",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "1부",
+        "teeTime": "07:42",
+        "teamName": null,
+        "rawRowIndex": 18
+      },
+      "caddy": {
+        "id": 71,
+        "name": "권소연",
+        "team": "5조",
+        "teamOrder": 8,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 55,
+      "reason": "REGULAR_SEQUENCE(1부, seq=55)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.18.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "1부",
+        "teeTime": "07:42",
+        "teamName": null,
+        "rawRowIndex": 18
+      },
+      "caddy": {
+        "id": 83,
+        "name": "구주희",
+        "team": "5조",
+        "teamOrder": 9,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 56,
+      "reason": "REGULAR_SEQUENCE(1부, seq=56)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.18.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "1부",
+        "teeTime": "07:42",
+        "teamName": null,
+        "rawRowIndex": 18
+      },
+      "caddy": {
+        "id": 200,
+        "name": "이현정",
+        "team": "5조",
+        "teamOrder": 10,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 57,
+      "reason": "REGULAR_SEQUENCE(1부, seq=57)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.18.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "1부",
+        "teeTime": "07:42",
+        "teamName": null,
+        "rawRowIndex": 18
+      },
+      "caddy": {
+        "id": 89,
+        "name": "안성연",
+        "team": "5조",
+        "teamOrder": 13,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 58,
+      "reason": "REGULAR_SEQUENCE(1부, seq=58)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.19",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "1부",
+        "teeTime": "07:49",
+        "teamName": null,
+        "rawRowIndex": 19
+      },
+      "caddy": {
+        "id": 87,
+        "name": "허윤실",
+        "team": "5조",
+        "teamOrder": 14,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 59,
+      "reason": "REGULAR_SEQUENCE(1부, seq=59)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.19.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "1부",
+        "teeTime": "07:49",
+        "teamName": null,
+        "rawRowIndex": 19
+      },
+      "caddy": {
+        "id": 66,
+        "name": "유수현",
+        "team": "5조",
+        "teamOrder": 16,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 60,
+      "reason": "REGULAR_SEQUENCE(1부, seq=60)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.19.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "1부",
+        "teeTime": "07:49",
+        "teamName": null,
+        "rawRowIndex": 19
+      },
+      "caddy": {
+        "id": 202,
+        "name": "황혜정",
+        "team": "5조",
+        "teamOrder": 18,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 61,
+      "reason": "REGULAR_SEQUENCE(1부, seq=61)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.19.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "1부",
+        "teeTime": "07:49",
+        "teamName": null,
+        "rawRowIndex": 19
+      },
+      "caddy": {
+        "id": 81,
+        "name": "신미아",
+        "team": "5조",
+        "teamOrder": 20,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 62,
+      "reason": "REGULAR_SEQUENCE(1부, seq=62)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.20",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "1부",
+        "teeTime": "07:56",
+        "teamName": null,
+        "rawRowIndex": 20
+      },
+      "caddy": {
+        "id": 145,
+        "name": "이연주",
+        "team": "6조",
+        "teamOrder": 1,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 63,
+      "reason": "REGULAR_SEQUENCE(1부, seq=63)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.20.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "1부",
+        "teeTime": "07:56",
+        "teamName": null,
+        "rawRowIndex": 20
+      },
+      "caddy": {
+        "id": 146,
+        "name": "김현정1",
+        "team": "6조",
+        "teamOrder": 2,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 64,
+      "reason": "REGULAR_SEQUENCE(1부, seq=64)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.20.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "1부",
+        "teeTime": "07:56",
+        "teamName": null,
+        "rawRowIndex": 20
+      },
+      "caddy": {
+        "id": 141,
+        "name": "안한빛",
+        "team": "6조",
+        "teamOrder": 3,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 65,
+      "reason": "REGULAR_SEQUENCE(1부, seq=65)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.20.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "1부",
+        "teeTime": "07:56",
+        "teamName": null,
+        "rawRowIndex": 20
+      },
+      "caddy": {
+        "id": 152,
+        "name": "남궁정호",
+        "team": "6조",
+        "teamOrder": 4,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 66,
+      "reason": "REGULAR_SEQUENCE(1부, seq=66)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.21",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "1부",
+        "teeTime": "08:03",
+        "teamName": null,
+        "rawRowIndex": 21
+      },
+      "caddy": {
+        "id": 157,
+        "name": "조정혜",
+        "team": "6조",
+        "teamOrder": 5,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 67,
+      "reason": "REGULAR_SEQUENCE(1부, seq=67)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.21.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "1부",
+        "teeTime": "08:03",
+        "teamName": null,
+        "rawRowIndex": 21
+      },
+      "caddy": {
+        "id": 149,
+        "name": "장혜원",
+        "team": "6조",
+        "teamOrder": 6,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 68,
+      "reason": "REGULAR_SEQUENCE(1부, seq=68)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.21.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "1부",
+        "teeTime": "08:03",
+        "teamName": null,
+        "rawRowIndex": 21
+      },
+      "caddy": {
+        "id": 143,
+        "name": "지석준",
+        "team": "6조",
+        "teamOrder": 7,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 69,
+      "reason": "REGULAR_SEQUENCE(1부, seq=69)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.21.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "1부",
+        "teeTime": "08:03",
+        "teamName": null,
+        "rawRowIndex": 21
+      },
+      "caddy": {
+        "id": 144,
+        "name": "강순혁",
+        "team": "6조",
+        "teamOrder": 9,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": 70,
+      "reason": "REGULAR_SEQUENCE(1부, seq=70)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.22",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "1부",
+        "teeTime": "08:10",
+        "teamName": null,
+        "rawRowIndex": 22
+      },
+      "caddy": {
+        "id": 147,
+        "name": "김푸른",
+        "team": "6조",
+        "teamOrder": 10,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": -1,
+      "reason": "SPECIAL_SUPPORT",
+      "kind": "specialSupport",
+      "pairId": null,
+      "locked": false,
+      "supportKind": "SPECIAL_SUPPORT",
+      "supportWorkPattern": "SHIFT_1",
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.22.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "1부",
+        "teeTime": "08:10",
+        "teamName": null,
+        "rawRowIndex": 22
+      },
+      "caddy": {
+        "id": 27,
+        "name": "손지연",
+        "team": "1조",
+        "teamOrder": 19,
+        "caddyType": "HOUSE",
+        "supportKind": "SPECIAL_SUPPORT",
+        "supportWorkPattern": "SHIFT_1"
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": -1,
+      "reason": "SPECIAL_SUPPORT",
+      "kind": "specialSupport",
+      "pairId": null,
+      "locked": false,
+      "supportKind": "SPECIAL_SUPPORT",
+      "supportWorkPattern": "SHIFT_1",
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.22.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "1부",
+        "teeTime": "08:10",
+        "teamName": null,
+        "rawRowIndex": 22
+      },
+      "caddy": {
+        "id": 194,
+        "name": "유지효",
+        "team": "2조",
+        "teamOrder": 2,
+        "caddyType": "HOUSE",
+        "supportKind": "SPECIAL_SUPPORT",
+        "supportWorkPattern": "SHIFT_1"
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": -1,
+      "reason": "SPECIAL_SUPPORT",
+      "kind": "specialSupport",
+      "pairId": null,
+      "locked": false,
+      "supportKind": "SPECIAL_SUPPORT",
+      "supportWorkPattern": "SHIFT_1",
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.22.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "1부",
+        "teeTime": "08:10",
+        "teamName": null,
+        "rawRowIndex": 22
+      },
+      "caddy": {
+        "id": 30,
+        "name": "한재만",
+        "team": "2조",
+        "teamOrder": 6,
+        "caddyType": "HOUSE",
+        "supportKind": "SPECIAL_SUPPORT",
+        "supportWorkPattern": "SHIFT_1"
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "1부",
+      "sequenceIndex": -1,
+      "reason": "SPECIAL_SUPPORT",
+      "kind": "specialSupport",
+      "pairId": null,
+      "locked": false,
+      "supportKind": "SPECIAL_SUPPORT",
+      "supportWorkPattern": "SHIFT_1",
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.23",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "1부",
+        "teeTime": "08:17",
+        "teamName": null,
+        "rawRowIndex": 23
+      },
+      "caddy": {
+        "id": 99,
+        "name": "김성규",
+        "team": "6조",
+        "teamOrder": 12,
+        "caddyType": "HOUSE",
+        "supportKind": "SPECIAL_SUPPORT",
+        "supportWorkPattern": "SHIFT_1"
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 71,
+      "reason": "REGULAR_SEQUENCE(2부, seq=71)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.24",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "2부",
+        "teeTime": "11:15",
+        "teamName": null,
+        "rawRowIndex": 24
+      },
+      "caddy": {
+        "id": 140,
+        "name": "김가영",
+        "team": "6조",
+        "teamOrder": 17,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 72,
+      "reason": "REGULAR_SEQUENCE(2부, seq=72)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.24.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "2부",
+        "teeTime": "11:15",
+        "teamName": null,
+        "rawRowIndex": 24
+      },
+      "caddy": {
+        "id": 142,
+        "name": "김규리",
+        "team": "6조",
+        "teamOrder": 18,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 73,
+      "reason": "REGULAR_SEQUENCE(2부, seq=73)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.24.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "2부",
+        "teeTime": "11:15",
+        "teamName": null,
+        "rawRowIndex": 24
+      },
+      "caddy": {
+        "id": 94,
+        "name": "김수현",
+        "team": "6조",
+        "teamOrder": 21,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 74,
+      "reason": "REGULAR_SEQUENCE(2부, seq=74)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.24.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "2부",
+        "teeTime": "11:15",
+        "teamName": null,
+        "rawRowIndex": 24
+      },
+      "caddy": {
+        "id": 205,
+        "name": "주선영",
+        "team": "6조",
+        "teamOrder": 22,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 75,
+      "reason": "REGULAR_SEQUENCE(2부, seq=75)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.25",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "2부",
+        "teeTime": "11:22",
+        "teamName": null,
+        "rawRowIndex": 25
+      },
+      "caddy": {
+        "id": 206,
+        "name": "이유경",
+        "team": "7조",
+        "teamOrder": 2,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 76,
+      "reason": "REGULAR_SEQUENCE(2부, seq=76)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.25.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "2부",
+        "teeTime": "11:22",
+        "teamName": null,
+        "rawRowIndex": 25
+      },
+      "caddy": {
+        "id": 182,
+        "name": "김은경",
+        "team": "7조",
+        "teamOrder": 3,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 77,
+      "reason": "REGULAR_SEQUENCE(2부, seq=77)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.25.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "2부",
+        "teeTime": "11:22",
+        "teamName": null,
+        "rawRowIndex": 25
+      },
+      "caddy": {
+        "id": 98,
+        "name": "최정묵",
+        "team": "7조",
+        "teamOrder": 4,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 78,
+      "reason": "REGULAR_SEQUENCE(2부, seq=78)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.25.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "2부",
+        "teeTime": "11:22",
+        "teamName": null,
+        "rawRowIndex": 25
+      },
+      "caddy": {
+        "id": 207,
+        "name": "김민선",
+        "team": "7조",
+        "teamOrder": 5,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 79,
+      "reason": "REGULAR_SEQUENCE(2부, seq=79)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.26",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "2부",
+        "teeTime": "11:29",
+        "teamName": null,
+        "rawRowIndex": 26
+      },
+      "caddy": {
+        "id": 208,
+        "name": "진추하",
+        "team": "7조",
+        "teamOrder": 7,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 80,
+      "reason": "REGULAR_SEQUENCE(2부, seq=80)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.26.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "2부",
+        "teeTime": "11:29",
+        "teamName": null,
+        "rawRowIndex": 26
+      },
+      "caddy": {
+        "id": 174,
+        "name": "김경란",
+        "team": "7조",
+        "teamOrder": 8,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 81,
+      "reason": "REGULAR_SEQUENCE(2부, seq=81)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.26.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "2부",
+        "teeTime": "11:29",
+        "teamName": null,
+        "rawRowIndex": 26
+      },
+      "caddy": {
+        "id": 175,
+        "name": "조은경",
+        "team": "7조",
+        "teamOrder": 9,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 82,
+      "reason": "REGULAR_SEQUENCE(2부, seq=82)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.26.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "2부",
+        "teeTime": "11:29",
+        "teamName": null,
+        "rawRowIndex": 26
+      },
+      "caddy": {
+        "id": 167,
+        "name": "신정훈",
+        "team": "7조",
+        "teamOrder": 10,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 83,
+      "reason": "REGULAR_SEQUENCE(2부, seq=83)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.27",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "2부",
+        "teeTime": "11:36",
+        "teamName": null,
+        "rawRowIndex": 27
+      },
+      "caddy": {
+        "id": 209,
+        "name": "김수경",
+        "team": "7조",
+        "teamOrder": 13,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 84,
+      "reason": "REGULAR_SEQUENCE(2부, seq=84)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.27.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "2부",
+        "teeTime": "11:36",
+        "teamName": null,
+        "rawRowIndex": 27
+      },
+      "caddy": {
+        "id": 210,
+        "name": "김은우",
+        "team": "7조",
+        "teamOrder": 14,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 85,
+      "reason": "REGULAR_SEQUENCE(2부, seq=85)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.27.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "2부",
+        "teeTime": "11:36",
+        "teamName": null,
+        "rawRowIndex": 27
+      },
+      "caddy": {
+        "id": 111,
+        "name": "김인영",
+        "team": "7조",
+        "teamOrder": 15,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 86,
+      "reason": "REGULAR_SEQUENCE(2부, seq=86)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.27.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "2부",
+        "teeTime": "11:36",
+        "teamName": null,
+        "rawRowIndex": 27
+      },
+      "caddy": {
+        "id": 162,
+        "name": "이윤정",
+        "team": "7조",
+        "teamOrder": 16,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 87,
+      "reason": "REGULAR_SEQUENCE(2부, seq=87)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.28",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "2부",
+        "teeTime": "11:43",
+        "teamName": null,
+        "rawRowIndex": 28
+      },
+      "caddy": {
+        "id": 36,
+        "name": "정선우",
+        "team": "7조",
+        "teamOrder": 17,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 88,
+      "reason": "REGULAR_SEQUENCE(2부, seq=88)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.28.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "2부",
+        "teeTime": "11:43",
+        "teamName": null,
+        "rawRowIndex": 28
+      },
+      "caddy": {
+        "id": 211,
+        "name": "전선화",
+        "team": "7조",
+        "teamOrder": 18,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 89,
+      "reason": "REGULAR_SEQUENCE(2부, seq=89)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.28.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "2부",
+        "teeTime": "11:43",
+        "teamName": null,
+        "rawRowIndex": 28
+      },
+      "caddy": {
+        "id": 213,
+        "name": "박윤희",
+        "team": "8조",
+        "teamOrder": 1,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 90,
+      "reason": "REGULAR_SEQUENCE(2부, seq=90)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.28.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "2부",
+        "teeTime": "11:43",
+        "teamName": null,
+        "rawRowIndex": 28
+      },
+      "caddy": {
+        "id": 264,
+        "name": "김진수",
+        "team": "8조",
+        "teamOrder": 2,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 91,
+      "reason": "REGULAR_SEQUENCE(2부, seq=91)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.29",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "2부",
+        "teeTime": "11:50",
+        "teamName": null,
+        "rawRowIndex": 29
+      },
+      "caddy": {
+        "id": 212,
+        "name": "이윤지",
+        "team": "8조",
+        "teamOrder": 3,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 92,
+      "reason": "REGULAR_SEQUENCE(2부, seq=92)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.29.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "2부",
+        "teeTime": "11:50",
+        "teamName": null,
+        "rawRowIndex": 29
+      },
+      "caddy": {
+        "id": 133,
+        "name": "최여진",
+        "team": "8조",
+        "teamOrder": 7,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 93,
+      "reason": "REGULAR_SEQUENCE(2부, seq=93)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.29.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "2부",
+        "teeTime": "11:50",
+        "teamName": null,
+        "rawRowIndex": 29
+      },
+      "caddy": {
+        "id": 138,
+        "name": "이수민",
+        "team": "8조",
+        "teamOrder": 8,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 94,
+      "reason": "REGULAR_SEQUENCE(2부, seq=94)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.29.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "2부",
+        "teeTime": "11:50",
+        "teamName": null,
+        "rawRowIndex": 29
+      },
+      "caddy": {
+        "id": 139,
+        "name": "박재윤",
+        "team": "8조",
+        "teamOrder": 9,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 95,
+      "reason": "REGULAR_SEQUENCE(2부, seq=95)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.30",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "2부",
+        "teeTime": "11:57",
+        "teamName": null,
+        "rawRowIndex": 30
+      },
+      "caddy": {
+        "id": 22,
+        "name": "김시은",
+        "team": "8조",
+        "teamOrder": 10,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 96,
+      "reason": "REGULAR_SEQUENCE(2부, seq=96)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.30.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "2부",
+        "teeTime": "11:57",
+        "teamName": null,
+        "rawRowIndex": 30
+      },
+      "caddy": {
+        "id": 19,
+        "name": "김나나",
+        "team": "8조",
+        "teamOrder": 12,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 97,
+      "reason": "REGULAR_SEQUENCE(2부, seq=97)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.30.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "2부",
+        "teeTime": "11:57",
+        "teamName": null,
+        "rawRowIndex": 30
+      },
+      "caddy": {
+        "id": 92,
+        "name": "양현철",
+        "team": "8조",
+        "teamOrder": 13,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 98,
+      "reason": "REGULAR_SEQUENCE(2부, seq=98)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.30.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "2부",
+        "teeTime": "11:57",
+        "teamName": null,
+        "rawRowIndex": 30
+      },
+      "caddy": {
+        "id": 169,
+        "name": "임해미",
+        "team": "8조",
+        "teamOrder": 15,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 99,
+      "reason": "REGULAR_SEQUENCE(2부, seq=99)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.31",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "2부",
+        "teeTime": "12:04",
+        "teamName": null,
+        "rawRowIndex": 31
+      },
+      "caddy": {
+        "id": 110,
+        "name": "박시내",
+        "team": "8조",
+        "teamOrder": 17,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 100,
+      "reason": "REGULAR_SEQUENCE(2부, seq=100)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.31.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "2부",
+        "teeTime": "12:04",
+        "teamName": null,
+        "rawRowIndex": 31
+      },
+      "caddy": {
+        "id": 108,
+        "name": "양형택",
+        "team": "8조",
+        "teamOrder": 18,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 101,
+      "reason": "REGULAR_SEQUENCE(2부, seq=101)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.31.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "2부",
+        "teeTime": "12:04",
+        "teamName": null,
+        "rawRowIndex": 31
+      },
+      "caddy": {
+        "id": 109,
+        "name": "우지연",
+        "team": "8조",
+        "teamOrder": 19,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": -1,
+      "reason": "ONE_TWO_PRIORITY",
+      "kind": "oneTwo",
+      "pairId": "12-8",
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.32",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "2부",
+        "teeTime": "12:11",
+        "teamName": null,
+        "rawRowIndex": 32
+      },
+      "caddy": {
+        "id": 8,
+        "name": "임형규",
+        "team": "1조",
+        "teamOrder": 20,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": -1,
+      "reason": "ONE_TWO_PRIORITY",
+      "kind": "oneTwo",
+      "pairId": "12-123",
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.32.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "2부",
+        "teeTime": "12:11",
+        "teamName": null,
+        "rawRowIndex": 32
+      },
+      "caddy": {
+        "id": 123,
+        "name": "구본의",
+        "team": "4조",
+        "teamOrder": 7,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 102,
+      "reason": "REGULAR_SEQUENCE(2부, seq=102)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.32.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "2부",
+        "teeTime": "12:11",
+        "teamName": null,
+        "rawRowIndex": 32
+      },
+      "caddy": {
+        "id": 93,
+        "name": "양현중",
+        "team": "8조",
+        "teamOrder": 20,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 103,
+      "reason": "REGULAR_SEQUENCE(2부, seq=103)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.33",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "2부",
+        "teeTime": "12:18",
+        "teamName": null,
+        "rawRowIndex": 33
+      },
+      "caddy": {
+        "id": 178,
+        "name": "이제이",
+        "team": "1조",
+        "teamOrder": 1,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 104,
+      "reason": "REGULAR_SEQUENCE(2부, seq=104)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.33.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "2부",
+        "teeTime": "12:18",
+        "teamName": null,
+        "rawRowIndex": 33
+      },
+      "caddy": {
+        "id": 4,
+        "name": "박서진2",
+        "team": "1조",
+        "teamOrder": 2,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 105,
+      "reason": "REGULAR_SEQUENCE(2부, seq=105)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.33.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "2부",
+        "teeTime": "12:18",
+        "teamName": null,
+        "rawRowIndex": 33
+      },
+      "caddy": {
+        "id": 112,
+        "name": "최루비",
+        "team": "1조",
+        "teamOrder": 3,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 0,
+      "reason": "REGULAR_SEQUENCE(2부, seq=0)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.33.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "2부",
+        "teeTime": "12:18",
+        "teamName": null,
+        "rawRowIndex": 33
+      },
+      "caddy": {
+        "id": 189,
+        "name": "박지아",
+        "team": "1조",
+        "teamOrder": 4,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 1,
+      "reason": "REGULAR_SEQUENCE(2부, seq=1)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.34",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "2부",
+        "teeTime": "12:25",
+        "teamName": null,
+        "rawRowIndex": 34
+      },
+      "caddy": {
+        "id": 190,
+        "name": "강보미",
+        "team": "1조",
+        "teamOrder": 5,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 2,
+      "reason": "REGULAR_SEQUENCE(2부, seq=2)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.34.1",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "2부",
+        "teeTime": "12:25",
+        "teamName": null,
+        "rawRowIndex": 34
+      },
+      "caddy": {
+        "id": 113,
+        "name": "이연호",
+        "team": "1조",
+        "teamOrder": 6,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 3,
+      "reason": "REGULAR_SEQUENCE(2부, seq=3)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.34.2",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "2부",
+        "teeTime": "12:25",
+        "teamName": null,
+        "rawRowIndex": 34
+      },
+      "caddy": {
+        "id": 191,
+        "name": "정윤지",
+        "team": "1조",
+        "teamOrder": 8,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 4,
+      "reason": "REGULAR_SEQUENCE(2부, seq=4)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.35",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "2부",
+        "teeTime": "12:32",
+        "teamName": null,
+        "rawRowIndex": 35
+      },
+      "caddy": {
+        "id": 192,
+        "name": "김규민",
+        "team": "1조",
+        "teamOrder": 9,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 5,
+      "reason": "REGULAR_SEQUENCE(2부, seq=5)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.35.1",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "2부",
+        "teeTime": "12:32",
+        "teamName": null,
+        "rawRowIndex": 35
+      },
+      "caddy": {
+        "id": 9,
+        "name": "강정미",
+        "team": "1조",
+        "teamOrder": 12,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 6,
+      "reason": "REGULAR_SEQUENCE(2부, seq=6)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.35.2",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "2부",
+        "teeTime": "12:32",
+        "teamName": null,
+        "rawRowIndex": 35
+      },
+      "caddy": {
+        "id": 14,
+        "name": "김보람",
+        "team": "1조",
+        "teamOrder": 13,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 7,
+      "reason": "REGULAR_SEQUENCE(2부, seq=7)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.36",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "2부",
+        "teeTime": "12:39",
+        "teamName": null,
+        "rawRowIndex": 36
+      },
+      "caddy": {
+        "id": 187,
+        "name": "이영진",
+        "team": "1조",
+        "teamOrder": 14,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 8,
+      "reason": "REGULAR_SEQUENCE(2부, seq=8)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.36.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "2부",
+        "teeTime": "12:39",
+        "teamName": null,
+        "rawRowIndex": 36
+      },
+      "caddy": {
+        "id": 23,
+        "name": "김경진",
+        "team": "1조",
+        "teamOrder": 15,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 9,
+      "reason": "REGULAR_SEQUENCE(2부, seq=9)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.36.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "2부",
+        "teeTime": "12:39",
+        "teamName": null,
+        "rawRowIndex": 36
+      },
+      "caddy": {
+        "id": 21,
+        "name": "김하나1",
+        "team": "1조",
+        "teamOrder": 18,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 10,
+      "reason": "REGULAR_SEQUENCE(2부, seq=10)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.36.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "2부",
+        "teeTime": "12:39",
+        "teamName": null,
+        "rawRowIndex": 36
+      },
+      "caddy": {
+        "id": 193,
+        "name": "김선홍",
+        "team": "2조",
+        "teamOrder": 1,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 11,
+      "reason": "REGULAR_SEQUENCE(2부, seq=11)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.37",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "2부",
+        "teeTime": "12:46",
+        "teamName": null,
+        "rawRowIndex": 37
+      },
+      "caddy": {
+        "id": 31,
+        "name": "김영한",
+        "team": "2조",
+        "teamOrder": 3,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 12,
+      "reason": "REGULAR_SEQUENCE(2부, seq=12)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.37.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "2부",
+        "teeTime": "12:46",
+        "teamName": null,
+        "rawRowIndex": 37
+      },
+      "caddy": {
+        "id": 29,
+        "name": "최유진",
+        "team": "2조",
+        "teamOrder": 5,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 13,
+      "reason": "REGULAR_SEQUENCE(2부, seq=13)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.37.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "2부",
+        "teeTime": "12:46",
+        "teamName": null,
+        "rawRowIndex": 37
+      },
+      "caddy": {
+        "id": 32,
+        "name": "김진희1",
+        "team": "2조",
+        "teamOrder": 7,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 14,
+      "reason": "REGULAR_SEQUENCE(2부, seq=14)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.37.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "2부",
+        "teeTime": "12:46",
+        "teamName": null,
+        "rawRowIndex": 37
+      },
+      "caddy": {
+        "id": 28,
+        "name": "김윤정",
+        "team": "2조",
+        "teamOrder": 8,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 15,
+      "reason": "REGULAR_SEQUENCE(2부, seq=15)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.38",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "2부",
+        "teeTime": "12:53",
+        "teamName": null,
+        "rawRowIndex": 38
+      },
+      "caddy": {
+        "id": 40,
+        "name": "정재호",
+        "team": "2조",
+        "teamOrder": 9,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 16,
+      "reason": "REGULAR_SEQUENCE(2부, seq=16)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.38.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "2부",
+        "teeTime": "12:53",
+        "teamName": null,
+        "rawRowIndex": 38
+      },
+      "caddy": {
+        "id": 34,
+        "name": "변수민",
+        "team": "2조",
+        "teamOrder": 10,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 17,
+      "reason": "REGULAR_SEQUENCE(2부, seq=17)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.38.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "2부",
+        "teeTime": "12:53",
+        "teamName": null,
+        "rawRowIndex": 38
+      },
+      "caddy": {
+        "id": 44,
+        "name": "문혜경",
+        "team": "2조",
+        "teamOrder": 13,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 18,
+      "reason": "REGULAR_SEQUENCE(2부, seq=18)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.38.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "2부",
+        "teeTime": "12:53",
+        "teamName": null,
+        "rawRowIndex": 38
+      },
+      "caddy": {
+        "id": 195,
+        "name": "최민주",
+        "team": "2조",
+        "teamOrder": 14,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 19,
+      "reason": "REGULAR_SEQUENCE(2부, seq=19)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.39",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "2부",
+        "teeTime": "13:00",
+        "teamName": null,
+        "rawRowIndex": 39
+      },
+      "caddy": {
+        "id": 37,
+        "name": "최덕희",
+        "team": "2조",
+        "teamOrder": 16,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 20,
+      "reason": "REGULAR_SEQUENCE(2부, seq=20)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.39.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "2부",
+        "teeTime": "13:00",
+        "teamName": null,
+        "rawRowIndex": 39
+      },
+      "caddy": {
+        "id": 46,
+        "name": "원진성",
+        "team": "2조",
+        "teamOrder": 17,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 21,
+      "reason": "REGULAR_SEQUENCE(2부, seq=21)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.39.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "2부",
+        "teeTime": "13:00",
+        "teamName": null,
+        "rawRowIndex": 39
+      },
+      "caddy": {
+        "id": 42,
+        "name": "김혜진",
+        "team": "2조",
+        "teamOrder": 18,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 22,
+      "reason": "REGULAR_SEQUENCE(2부, seq=22)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.39.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "2부",
+        "teeTime": "13:00",
+        "teamName": null,
+        "rawRowIndex": 39
+      },
+      "caddy": {
+        "id": 197,
+        "name": "박고윤",
+        "team": "2조",
+        "teamOrder": 20,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 23,
+      "reason": "REGULAR_SEQUENCE(2부, seq=23)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.40",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "2부",
+        "teeTime": "13:07",
+        "teamName": null,
+        "rawRowIndex": 40
+      },
+      "caddy": {
+        "id": 47,
+        "name": "김지희",
+        "team": "3조",
+        "teamOrder": 1,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 24,
+      "reason": "REGULAR_SEQUENCE(2부, seq=24)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.40.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "2부",
+        "teeTime": "13:07",
+        "teamName": null,
+        "rawRowIndex": 40
+      },
+      "caddy": {
+        "id": 48,
+        "name": "정예지",
+        "team": "3조",
+        "teamOrder": 2,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 25,
+      "reason": "REGULAR_SEQUENCE(2부, seq=25)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.40.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "2부",
+        "teeTime": "13:07",
+        "teamName": null,
+        "rawRowIndex": 40
+      },
+      "caddy": {
+        "id": 16,
+        "name": "김지운",
+        "team": "3조",
+        "teamOrder": 3,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 26,
+      "reason": "REGULAR_SEQUENCE(2부, seq=26)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.40.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "2부",
+        "teeTime": "13:07",
+        "teamName": null,
+        "rawRowIndex": 40
+      },
+      "caddy": {
+        "id": 49,
+        "name": "박효주",
+        "team": "3조",
+        "teamOrder": 4,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 27,
+      "reason": "REGULAR_SEQUENCE(2부, seq=27)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.41",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "2부",
+        "teeTime": "13:14",
+        "teamName": null,
+        "rawRowIndex": 41
+      },
+      "caddy": {
+        "id": 50,
+        "name": "안은형",
+        "team": "3조",
+        "teamOrder": 5,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 28,
+      "reason": "REGULAR_SEQUENCE(2부, seq=28)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.41.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "2부",
+        "teeTime": "13:14",
+        "teamName": null,
+        "rawRowIndex": 41
+      },
+      "caddy": {
+        "id": 54,
+        "name": "김하라",
+        "team": "3조",
+        "teamOrder": 7,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 29,
+      "reason": "REGULAR_SEQUENCE(2부, seq=29)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.41.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "2부",
+        "teeTime": "13:14",
+        "teamName": null,
+        "rawRowIndex": 41
+      },
+      "caddy": {
+        "id": 56,
+        "name": "김태은",
+        "team": "3조",
+        "teamOrder": 9,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 30,
+      "reason": "REGULAR_SEQUENCE(2부, seq=30)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.41.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "2부",
+        "teeTime": "13:14",
+        "teamName": null,
+        "rawRowIndex": 41
+      },
+      "caddy": {
+        "id": 57,
+        "name": "원정희",
+        "team": "3조",
+        "teamOrder": 11,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 31,
+      "reason": "REGULAR_SEQUENCE(2부, seq=31)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.42",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "2부",
+        "teeTime": "13:21",
+        "teamName": null,
+        "rawRowIndex": 42
+      },
+      "caddy": {
+        "id": 55,
+        "name": "임현아",
+        "team": "3조",
+        "teamOrder": 12,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 32,
+      "reason": "REGULAR_SEQUENCE(2부, seq=32)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.42.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "2부",
+        "teeTime": "13:21",
+        "teamName": null,
+        "rawRowIndex": 42
+      },
+      "caddy": {
+        "id": 64,
+        "name": "이경주",
+        "team": "3조",
+        "teamOrder": 13,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 33,
+      "reason": "REGULAR_SEQUENCE(2부, seq=33)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.42.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "2부",
+        "teeTime": "13:21",
+        "teamName": null,
+        "rawRowIndex": 42
+      },
+      "caddy": {
+        "id": 58,
+        "name": "김다솜",
+        "team": "3조",
+        "teamOrder": 14,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 34,
+      "reason": "REGULAR_SEQUENCE(2부, seq=34)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.42.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "2부",
+        "teeTime": "13:21",
+        "teamName": null,
+        "rawRowIndex": 42
+      },
+      "caddy": {
+        "id": 59,
+        "name": "박영현",
+        "team": "3조",
+        "teamOrder": 15,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 35,
+      "reason": "REGULAR_SEQUENCE(2부, seq=35)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.43",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "2부",
+        "teeTime": "13:28",
+        "teamName": null,
+        "rawRowIndex": 43
+      },
+      "caddy": {
+        "id": 278,
+        "name": "박준형",
+        "team": "3조",
+        "teamOrder": 16,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 36,
+      "reason": "REGULAR_SEQUENCE(2부, seq=36)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.43.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "2부",
+        "teeTime": "13:28",
+        "teamName": null,
+        "rawRowIndex": 43
+      },
+      "caddy": {
+        "id": 65,
+        "name": "정은비",
+        "team": "3조",
+        "teamOrder": 17,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 37,
+      "reason": "REGULAR_SEQUENCE(2부, seq=37)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.43.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "2부",
+        "teeTime": "13:28",
+        "teamName": null,
+        "rawRowIndex": 43
+      },
+      "caddy": {
+        "id": 70,
+        "name": "신시은",
+        "team": "4조",
+        "teamOrder": 3,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 38,
+      "reason": "REGULAR_SEQUENCE(2부, seq=38)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.43.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "2부",
+        "teeTime": "13:28",
+        "teamName": null,
+        "rawRowIndex": 43
+      },
+      "caddy": {
+        "id": 131,
+        "name": "박익수",
+        "team": "4조",
+        "teamOrder": 4,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 39,
+      "reason": "REGULAR_SEQUENCE(2부, seq=39)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.44",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "2부",
+        "teeTime": "13:35",
+        "teamName": null,
+        "rawRowIndex": 44
+      },
+      "caddy": {
+        "id": 279,
+        "name": "정혜원",
+        "team": "4조",
+        "teamOrder": 6,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 40,
+      "reason": "REGULAR_SEQUENCE(2부, seq=40)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.44.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "2부",
+        "teeTime": "13:35",
+        "teamName": null,
+        "rawRowIndex": 44
+      },
+      "caddy": {
+        "id": 171,
+        "name": "김보혜",
+        "team": "4조",
+        "teamOrder": 8,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 41,
+      "reason": "REGULAR_SEQUENCE(2부, seq=41)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.44.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "2부",
+        "teeTime": "13:35",
+        "teamName": null,
+        "rawRowIndex": 44
+      },
+      "caddy": {
+        "id": 122,
+        "name": "김기덕",
+        "team": "4조",
+        "teamOrder": 9,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "2부",
+      "sequenceIndex": 42,
+      "reason": "REGULAR_SEQUENCE(2부, seq=42)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.44.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "2부",
+        "teeTime": "13:35",
+        "teamName": null,
+        "rawRowIndex": 44
+      },
+      "caddy": {
+        "id": 121,
+        "name": "이유리",
+        "team": "4조",
+        "teamOrder": 10,
+        "caddyType": "HOUSE",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10000,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10000)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.45",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "3부",
+        "teeTime": "16:40",
+        "teamName": null,
+        "rawRowIndex": 45
+      },
+      "caddy": {
+        "id": 160,
+        "name": "전준환",
+        "team": "11조",
+        "teamOrder": 1,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10001,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10001)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.45.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "3부",
+        "teeTime": "16:40",
+        "teamName": null,
+        "rawRowIndex": 45
+      },
+      "caddy": {
+        "id": 254,
+        "name": "정의돈",
+        "team": "11조",
+        "teamOrder": 2,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10002,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10002)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.45.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "3부",
+        "teeTime": "16:40",
+        "teamName": null,
+        "rawRowIndex": 45
+      },
+      "caddy": {
+        "id": 255,
+        "name": "김예가",
+        "team": "11조",
+        "teamOrder": 3,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10003,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10003)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.45.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "3부",
+        "teeTime": "16:40",
+        "teamName": null,
+        "rawRowIndex": 45
+      },
+      "caddy": {
+        "id": 256,
+        "name": "정지석",
+        "team": "11조",
+        "teamOrder": 4,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10004,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10004)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.46",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "3부",
+        "teeTime": "16:47",
+        "teamName": null,
+        "rawRowIndex": 46
+      },
+      "caddy": {
+        "id": 257,
+        "name": "주성민",
+        "team": "11조",
+        "teamOrder": 5,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10005,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10005)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.46.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "3부",
+        "teeTime": "16:47",
+        "teamName": null,
+        "rawRowIndex": 46
+      },
+      "caddy": {
+        "id": 258,
+        "name": "이세현",
+        "team": "11조",
+        "teamOrder": 6,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10006,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10006)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.46.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "3부",
+        "teeTime": "16:47",
+        "teamName": null,
+        "rawRowIndex": 46
+      },
+      "caddy": {
+        "id": 259,
+        "name": "안진희",
+        "team": "11조",
+        "teamOrder": 8,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10007,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10007)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.46.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "3부",
+        "teeTime": "16:47",
+        "teamName": null,
+        "rawRowIndex": 46
+      },
+      "caddy": {
+        "id": 25,
+        "name": "국명근",
+        "team": "11조",
+        "teamOrder": 12,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10008,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10008)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.47",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "3부",
+        "teeTime": "16:54",
+        "teamName": null,
+        "rawRowIndex": 47
+      },
+      "caddy": {
+        "id": 261,
+        "name": "윤서현",
+        "team": "11조",
+        "teamOrder": 13,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10009,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10009)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.47.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "3부",
+        "teeTime": "16:54",
+        "teamName": null,
+        "rawRowIndex": 47
+      },
+      "caddy": {
+        "id": 281,
+        "name": "김기환2",
+        "team": "11조",
+        "teamOrder": 14,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10010,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10010)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.47.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "3부",
+        "teeTime": "16:54",
+        "teamName": null,
+        "rawRowIndex": 47
+      },
+      "caddy": {
+        "id": 262,
+        "name": "유준민",
+        "team": "11조",
+        "teamOrder": 15,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10011,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10011)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.48",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "3부",
+        "teeTime": "17:01",
+        "teamName": null,
+        "rawRowIndex": 48
+      },
+      "caddy": {
+        "id": 263,
+        "name": "이인영",
+        "team": "11조",
+        "teamOrder": 16,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10012,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10012)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.48.1",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "3부",
+        "teeTime": "17:01",
+        "teamName": null,
+        "rawRowIndex": 48
+      },
+      "caddy": {
+        "id": 159,
+        "name": "오주연",
+        "team": "11조",
+        "teamOrder": 18,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10013,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10013)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.48.2",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "3부",
+        "teeTime": "17:01",
+        "teamName": null,
+        "rawRowIndex": 48
+      },
+      "caddy": {
+        "id": 265,
+        "name": "진선화",
+        "team": "11조",
+        "teamOrder": 19,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10014,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10014)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.49",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "3부",
+        "teeTime": "17:08",
+        "teamName": null,
+        "rawRowIndex": 49
+      },
+      "caddy": {
+        "id": 266,
+        "name": "오송희",
+        "team": "11조",
+        "teamOrder": 20,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10015,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10015)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.49.1",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "3부",
+        "teeTime": "17:08",
+        "teamName": null,
+        "rawRowIndex": 49
+      },
+      "caddy": {
+        "id": 267,
+        "name": "정예서",
+        "team": "11조",
+        "teamOrder": 21,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10016,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10016)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.49.2",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "3부",
+        "teeTime": "17:08",
+        "teamName": null,
+        "rawRowIndex": 49
+      },
+      "caddy": {
+        "id": 268,
+        "name": "마의선",
+        "team": "11조",
+        "teamOrder": 22,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10017,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10017)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.50",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "3부",
+        "teeTime": "17:15",
+        "teamName": null,
+        "rawRowIndex": 50
+      },
+      "caddy": {
+        "id": 269,
+        "name": "김태원",
+        "team": "11조",
+        "teamOrder": 23,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10018,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10018)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.53",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "3부",
+        "teeTime": "17:36",
+        "teamName": null,
+        "rawRowIndex": 53
+      },
+      "caddy": {
+        "id": 270,
+        "name": "김도엽",
+        "team": "11조",
+        "teamOrder": 24,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10019,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10019)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.53.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "3부",
+        "teeTime": "17:36",
+        "teamName": null,
+        "rawRowIndex": 53
+      },
+      "caddy": {
+        "id": 271,
+        "name": "오승민",
+        "team": "12조",
+        "teamOrder": 1,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10020,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10020)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.53.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "3부",
+        "teeTime": "17:36",
+        "teamName": null,
+        "rawRowIndex": 53
+      },
+      "caddy": {
+        "id": 68,
+        "name": "김은선",
+        "team": "12조",
+        "teamOrder": 2,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10021,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10021)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.53.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "3부",
+        "teeTime": "17:36",
+        "teamName": null,
+        "rawRowIndex": 53
+      },
+      "caddy": {
+        "id": 67,
+        "name": "김채현",
+        "team": "12조",
+        "teamOrder": 3,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10022,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10022)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.54",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "3부",
+        "teeTime": "17:43",
+        "teamName": null,
+        "rawRowIndex": 54
+      },
+      "caddy": {
+        "id": 272,
+        "name": "권순홍",
+        "team": "12조",
+        "teamOrder": 4,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10023,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10023)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.54.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "3부",
+        "teeTime": "17:43",
+        "teamName": null,
+        "rawRowIndex": 54
+      },
+      "caddy": {
+        "id": 7,
+        "name": "간종민",
+        "team": "12조",
+        "teamOrder": 5,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10024,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10024)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.54.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "3부",
+        "teeTime": "17:43",
+        "teamName": null,
+        "rawRowIndex": 54
+      },
+      "caddy": {
+        "id": 6,
+        "name": "원다빈",
+        "team": "12조",
+        "teamOrder": 6,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10025,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10025)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.57",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "3부",
+        "teeTime": "18:04",
+        "teamName": null,
+        "rawRowIndex": 57
+      },
+      "caddy": {
+        "id": 17,
+        "name": "이강우",
+        "team": "12조",
+        "teamOrder": 7,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10026,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10026)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.57.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "3부",
+        "teeTime": "18:04",
+        "teamName": null,
+        "rawRowIndex": 57
+      },
+      "caddy": {
+        "id": 177,
+        "name": "허도겸",
+        "team": "12조",
+        "teamOrder": 8,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10027,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10027)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.57.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "3부",
+        "teeTime": "18:04",
+        "teamName": null,
+        "rawRowIndex": 57
+      },
+      "caddy": {
+        "id": 155,
+        "name": "심은아",
+        "team": "12조",
+        "teamOrder": 9,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10028,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10028)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.57.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "3부",
+        "teeTime": "18:04",
+        "teamName": null,
+        "rawRowIndex": 57
+      },
+      "caddy": {
+        "id": 282,
+        "name": "김기환1",
+        "team": "12조",
+        "teamOrder": 10,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10029,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10029)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.58",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "3부",
+        "teeTime": "18:11",
+        "teamName": null,
+        "rawRowIndex": 58
+      },
+      "caddy": {
+        "id": 172,
+        "name": "유지혜",
+        "team": "12조",
+        "teamOrder": 11,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10030,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10030)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.58.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "3부",
+        "teeTime": "18:11",
+        "teamName": null,
+        "rawRowIndex": 58
+      },
+      "caddy": {
+        "id": 85,
+        "name": "김용민",
+        "team": "12조",
+        "teamOrder": 12,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10031,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10031)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.58.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "3부",
+        "teeTime": "18:11",
+        "teamName": null,
+        "rawRowIndex": 58
+      },
+      "caddy": {
+        "id": 176,
+        "name": "정영빈",
+        "team": "12조",
+        "teamOrder": 14,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10032,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10032)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.58.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "3부",
+        "teeTime": "18:11",
+        "teamName": null,
+        "rawRowIndex": 58
+      },
+      "caddy": {
+        "id": 168,
+        "name": "양정훈",
+        "team": "12조",
+        "teamOrder": 15,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10033,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10033)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.59",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "3부",
+        "teeTime": "18:18",
+        "teamName": null,
+        "rawRowIndex": 59
+      },
+      "caddy": {
+        "id": 181,
+        "name": "김하나2",
+        "team": "12조",
+        "teamOrder": 16,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10034,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10034)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.59.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "3부",
+        "teeTime": "18:18",
+        "teamName": null,
+        "rawRowIndex": 59
+      },
+      "caddy": {
+        "id": 215,
+        "name": "김가원",
+        "team": "9조",
+        "teamOrder": 1,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10035,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10035)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.59.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "3부",
+        "teeTime": "18:18",
+        "teamName": null,
+        "rawRowIndex": 59
+      },
+      "caddy": {
+        "id": 216,
+        "name": "김요한",
+        "team": "9조",
+        "teamOrder": 2,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10036,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10036)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.59.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "3부",
+        "teeTime": "18:18",
+        "teamName": null,
+        "rawRowIndex": 59
+      },
+      "caddy": {
+        "id": 217,
+        "name": "임재욱",
+        "team": "9조",
+        "teamOrder": 3,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10037,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10037)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.60",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "3부",
+        "teeTime": "18:25",
+        "teamName": null,
+        "rawRowIndex": 60
+      },
+      "caddy": {
+        "id": 218,
+        "name": "최지환",
+        "team": "9조",
+        "teamOrder": 4,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10038,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10038)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.60.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "3부",
+        "teeTime": "18:25",
+        "teamName": null,
+        "rawRowIndex": 60
+      },
+      "caddy": {
+        "id": 219,
+        "name": "정다운",
+        "team": "9조",
+        "teamOrder": 5,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10039,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10039)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.60.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "3부",
+        "teeTime": "18:25",
+        "teamName": null,
+        "rawRowIndex": 60
+      },
+      "caddy": {
+        "id": 220,
+        "name": "김창우",
+        "team": "9조",
+        "teamOrder": 6,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10040,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10040)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.61",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "3부",
+        "teeTime": "18:32",
+        "teamName": null,
+        "rawRowIndex": 61
+      },
+      "caddy": {
+        "id": 221,
+        "name": "박소진",
+        "team": "9조",
+        "teamOrder": 7,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10041,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10041)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.61.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "3부",
+        "teeTime": "18:32",
+        "teamName": null,
+        "rawRowIndex": 61
+      },
+      "caddy": {
+        "id": 222,
+        "name": "권현주",
+        "team": "9조",
+        "teamOrder": 9,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10042,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10042)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.61.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "3부",
+        "teeTime": "18:32",
+        "teamName": null,
+        "rawRowIndex": 61
+      },
+      "caddy": {
+        "id": 223,
+        "name": "장성민",
+        "team": "9조",
+        "teamOrder": 10,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10043,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10043)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.62",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "3부",
+        "teeTime": "18:39",
+        "teamName": null,
+        "rawRowIndex": 62
+      },
+      "caddy": {
+        "id": 225,
+        "name": "이경민",
+        "team": "9조",
+        "teamOrder": 12,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10044,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10044)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.62.1",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "3부",
+        "teeTime": "18:39",
+        "teamName": null,
+        "rawRowIndex": 62
+      },
+      "caddy": {
+        "id": 226,
+        "name": "문성화",
+        "team": "9조",
+        "teamOrder": 13,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10045,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10045)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.62.2",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "3부",
+        "teeTime": "18:39",
+        "teamName": null,
+        "rawRowIndex": 62
+      },
+      "caddy": {
+        "id": 228,
+        "name": "윤연희",
+        "team": "9조",
+        "teamOrder": 15,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10046,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10046)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.63",
+        "date": "2026-09-07",
+        "course": "VERTHILL",
+        "shift": "3부",
+        "teeTime": "18:46",
+        "teamName": null,
+        "rawRowIndex": 63
+      },
+      "caddy": {
+        "id": 229,
+        "name": "정하온",
+        "team": "9조",
+        "teamOrder": 16,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10047,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10047)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.63.1",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "3부",
+        "teeTime": "18:46",
+        "teamName": null,
+        "rawRowIndex": 63
+      },
+      "caddy": {
+        "id": 13,
+        "name": "조정희",
+        "team": "9조",
+        "teamOrder": 19,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10048,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10048)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.63.2",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "3부",
+        "teeTime": "18:46",
+        "teamName": null,
+        "rawRowIndex": 63
+      },
+      "caddy": {
+        "id": 280,
+        "name": "김예진2",
+        "team": "9조",
+        "teamOrder": 20,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10049,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10049)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.63.3",
+        "date": "2026-09-07",
+        "course": "LAKE",
+        "shift": "3부",
+        "teeTime": "18:46",
+        "teamName": null,
+        "rawRowIndex": 63
+      },
+      "caddy": {
+        "id": 165,
+        "name": "권혜정",
+        "team": "9조",
+        "teamOrder": 21,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10050,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10050)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.64",
+        "date": "2026-09-07",
+        "course": "SKY",
+        "shift": "3부",
+        "teeTime": "18:53",
+        "teamName": null,
+        "rawRowIndex": 64
+      },
+      "caddy": {
+        "id": 231,
+        "name": "박준현",
+        "team": "9조",
+        "teamOrder": 23,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    },
+    {
+      "date": "2026-09-07",
+      "shift": "3부",
+      "sequenceIndex": 10051,
+      "reason": "REGULAR_SEQUENCE(3부, seq=10051)",
+      "kind": "regular",
+      "pairId": null,
+      "locked": null,
+      "supportKind": null,
+      "supportWorkPattern": null,
+      "note": null,
+      "reservation": {
+        "id": "xlsx.2026-09-07.경기진행등록.64.1",
+        "date": "2026-09-07",
+        "course": "OCEAN",
+        "shift": "3부",
+        "teeTime": "18:53",
+        "teamName": null,
+        "rawRowIndex": 64
+      },
+      "caddy": {
+        "id": 79,
+        "name": "곽승현",
+        "team": "10조",
+        "teamOrder": 1,
+        "caddyType": "THIRD",
+        "supportKind": null,
+        "supportWorkPattern": null
+      }
+    }
+  ],
+  "unassignedReservations": [],
+  "closedCourseReservations": [],
+  "caddyPool": [],
+  "sparesByShift": [],
+  "confirmedAt": null
+}

@@ -43,6 +43,7 @@ import {
   isDirectEditVacant,
   overlayUnassignedVacancies,
 } from "@/lib/assignmentBoardCellEdit";
+import { BoardExcelExportButton } from "@/components/board/BoardExcelExportButton";
 import { BoardImageExportMenu } from "@/components/board/BoardImageExportMenu";
 import { formatCaddyLabel, caddyAffiliation } from "@/lib/caddyDisplay";
 import {
@@ -4175,6 +4176,7 @@ export default function ManageAssignmentsOpsPage() {
                 </button>
                 <div className="ops-board-tools-end">
                   <BoardImageExportMenu draft={draft} onNotice={showToast} />
+                  <BoardExcelExportButton draft={draft} onNotice={showToast} />
                   <button
                     type="button"
                     className="ops-add-team"
@@ -5206,12 +5208,16 @@ const opsCss = `
     gap: 8px;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
+    row-gap: 6px;
   }
   .ops-board-tools-end {
     display: flex;
     gap: 6px;
     align-items: center;
     flex: 0 0 auto;
+    flex-wrap: wrap;
+    max-width: 100%;
   }
   .bx-export-menu { position: relative; }
   .bx-export-btn {
