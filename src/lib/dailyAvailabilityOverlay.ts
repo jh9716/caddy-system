@@ -225,3 +225,77 @@ export function applyDailyExternalExclusions(input: {
     opsDutyCaddyIds,
   };
 }
+
+export function unavailableReasonLabel(
+  reason: unknown
+): "병가" | "결근" | null {
+  const raw = String(reason || "").trim();
+  if (/ATTENDANCE|결근|미출근/.test(raw)) return "결근";
+  if (/SICK|병가/.test(raw)) return "병가";
+  return null;
+}
+
+/**
+ * DailyCaddyUnavailable (SICK / ATTENDANCE_NOSHOW) 만 적용.
+ * 휴무 overlay와 섞지 않는다. 이미 제외된 사람은 버킷을 바꾸지 않는다.
+ */
+export function applyDailyUnavailableExclusions(input: {
+  availability: DailyAvailabilityResult;
+  unavailables?: Array<{ caddyId: number; reason?: string | null }> | null;
+}): DailyAvailabilityResult {
+  const rows = input.unavailables || [];
+  if (rows.length === 0) return input.availability;
+
+  const byId = new Map<number, AvailabilityRow>();
+  for (const row of [
+    ...input.availability.available.all,
+    ...input.availability.special,
+    ...input.availability.excluded,
+  ]) {
+    byId.set(row.id, { ...row, excludedReasons: [...row.excludedReasons] });
+  }
+
+  for (const row of rows) {
+    const id = Number(row.caddyId);
+    const label = unavailableReasonLabel(row.reason);
+    if (!id || !label) continue;
+    const current = byId.get(id);
+    if (!current) continue;
+    if (!current.excludedReasons.includes(label)) {
+      current.excludedReasons.push(label);
+    }
+    if (current.bucket === "excluded") continue;
+    current.bucket = "excluded";
+  }
+
+  const all = [...byId.values()];
+  const available = rebuildBuckets(all);
+  const special = all
+    .filter((r) => r.bucket === "special")
+    .sort(compareAvailabilityRows);
+  const excluded = all
+    .filter((r) => r.bucket === "excluded")
+    .sort(compareAvailabilityRows);
+  const summary = {
+    ...input.availability.dailySummary,
+    finalAvailable: available.all.length,
+  };
+
+  return {
+    ...input.availability,
+    available,
+    special,
+    excluded,
+    counts: {
+      available: available.all.length,
+      special: special.length,
+      excluded: excluded.length,
+      byType: {
+        HOUSE: available.byType.HOUSE.length,
+        THIRD: available.byType.THIRD.length,
+        DRIVING: available.byType.DRIVING.length,
+      },
+    },
+    dailySummary: summary,
+  };
+}
