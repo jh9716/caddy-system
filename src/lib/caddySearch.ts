@@ -71,6 +71,7 @@ export function matchesTeamQuery(team: unknown, query: string): boolean {
   if (/^\d{1,2}$/.test(qTeam) && /^\d{1,2}$/.test(tTeam)) {
     return qTeam === tTeam;
   }
+  if (q === "조" || qTeam === "") return false;
   return t.includes(q);
 }
 

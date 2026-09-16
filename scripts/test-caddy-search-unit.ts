@@ -104,6 +104,8 @@ section("조 검색");
   assert(!matchesTeamQuery("10조", "1"), "1이 10조를 치지 않음");
   assert(matchesCaddySearch(tenTeam, "10조"), "10조");
   assert(filterCaddiesBySearch(roster, "7조")[0]?.id === 12, "7조 결과");
+  assert(!matchesTeamQuery("7조", "조"), "단독 '조'는 팀 includes 오탐 없음");
+  assert(!matchesTeamQuery("1조", "조"), "단독 '조'는 1조를 치지 않음");
 }
 
 section("id 검색");
