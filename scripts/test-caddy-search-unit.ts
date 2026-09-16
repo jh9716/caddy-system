@@ -5,6 +5,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
+  CADDY_SEARCH_API_KEYS,
+  CADDY_SEARCH_DEBOUNCE_MS,
+  CADDY_SEARCH_LIMIT,
+  CADDY_SEARCH_RANK,
+  caddySearchApiResponse,
   caddyTelHref,
   filterCaddiesBySearch,
   matchesCaddySearch,
@@ -12,7 +17,10 @@ import {
   matchesNameQuery,
   matchesPhoneQuery,
   matchesTeamQuery,
+  rankCaddySearchHit,
+  searchCaddiesLimited,
   todayPlacementSummary,
+  toCaddySearchApiHit,
   toCaddySearchView,
   type CaddySearchRecord,
 } from "../src/lib/caddySearch";
@@ -44,6 +52,7 @@ const kim: CaddySearchRecord = {
   id: 12,
   name: "김현정1",
   team: "7조",
+  teamOrder: 1,
   caddyType: "HOUSE",
   employmentStatus: "ACTIVE",
   phoneNormalized: "01012345678",
@@ -200,6 +209,7 @@ section("검색 UI / 권한 / 개인정보 source guard");
 {
   const page = readSrc("src/app/manage/caddy-search/page.tsx");
   const matcher = readSrc("src/lib/caddySearch.ts");
+  const searchApi = readSrc("src/app/api/caddies/search/route.ts");
   const shell = readSrc("src/components/manage/ManageShell.tsx");
   const layout = readSrc("src/app/manage/layout.tsx");
   const mw = readSrc("src/middleware.ts");
@@ -210,19 +220,37 @@ section("검색 UI / 권한 / 개인정보 source guard");
   const schema = readSrc("prisma/schema.prisma");
   const publishedView = readSrc("src/components/board/PublishedBoardView.tsx");
   const published = readSrc("src/lib/dailyBoardPublished.ts");
+  const snapshot = readSrc("src/lib/dailyOpsSnapshot.ts");
   const boardPage = readSrc("src/app/board/page.tsx");
   const pkg = readSrc("package.json");
 
-  assert(/\/api\/caddies\?employment=all/.test(page), "GET /api/caddies 재사용");
-  assert(/toCaddySearchView/.test(page) && /caddyTelHref/.test(matcher), "view/tel helper");
+  assert(!/\/api\/caddies\?employment=all/.test(page), "검색 페이지 전체 roster GET 제거");
+  assert(!/filterCaddiesBySearch/.test(page), "클라이언트 전체 filter 제거");
+  assert(/\/api\/caddies\/search\?q=/.test(page), "GET /api/caddies/search 사용");
+  assert(/CADDY_SEARCH_DEBOUNCE_MS/.test(page), "debounce 적용");
+  assert(CADDY_SEARCH_DEBOUNCE_MS === 300, "debounce 300ms");
+  assert(/검색 중/.test(page), "검색 중 loading");
   assert(/연락처 등록 필요/.test(page), "phone 없는 UX");
-  assert(/view\.telHref/.test(page), "tel은 view href만");
+  assert(/tel:\$\{hit\.telPhone\}/.test(page), "tel href는 검색 hit telPhone만");
+  assert(!/\{hit\.telPhone\}/.test(page.replace(/tel:\$\{hit\.telPhone\}/g, "")), "raw telPhone 화면 텍스트 없음");
+  assert(/hit\.maskedPhone/.test(page), "화면은 maskedPhone");
   assert(!/console\.(log|info|debug|warn)\([^)]*phone/i.test(page), "검색 페이지 phone console 없음");
   assert(!/console\.(log|info|debug|warn)\([^)]*phone/i.test(matcher), "matcher phone console 없음");
   assert(/href: "\/manage\/caddy-search"/.test(shell), "nav 캐디 검색");
   assert(/auth\.role !== "admin"/.test(layout), "layout admin only");
   assert(/pathname\.startsWith\("\/manage"\)/.test(mw) && /role !== "admin"/.test(mw), "middleware admin");
-  assert(/requireAdmin/.test(listApi), "caddies GET requireAdmin");
+  assert(/requireAdmin/.test(listApi), "caddies GET requireAdmin 유지");
+  assert(/requireAdmin/.test(searchApi), "search GET requireAdmin");
+  assert(
+    searchApi.indexOf("requireAdmin") < searchApi.indexOf("prisma.caddy.findMany"),
+    "search admin gate before DB"
+  );
+  assert(/select: SEARCH_SELECT/.test(searchApi), "prisma select 최소화");
+  assert(/phoneNormalized: true/.test(searchApi), "phone은 서버 select만");
+  assert(!/NextResponse\.json\(\s*(caddies|rows)\s*\)/.test(searchApi), "raw prisma rows 응답 금지");
+  assert(/results: \[\]/.test(searchApi), "빈 q는 빈 results");
+  assert(/export async function GET/.test(searchApi), "GET only");
+  assert(!/export async function POST/.test(searchApi), "search POST 없음");
   assert(/parseOptionalPhoneInput/.test(patchApi) && /maskKrMobile/.test(patchApi), "기존 phone edit 재사용");
   assert(
     /\["phone", "휴대폰", "전화번호", "mobile"\]/.test(importV2),
@@ -230,13 +258,16 @@ section("검색 UI / 권한 / 개인정보 source guard");
   );
   assert(/rosterImportContactSummary/.test(caddiesPage), "import preview 연락처 요약");
   assert(/전화번호 있음/.test(caddiesPage) && /동명이인/.test(caddiesPage), "import preview 문구");
+  assert(/\/api\/caddies\?employment=/.test(caddiesPage), "/manage/caddies 기존 GET 유지");
+  assert(!/\/api\/caddies\/search/.test(caddiesPage), "/manage/caddies는 검색 API 미사용");
   assert(!/vehicleNumber/.test(schema), "vehicleNumber schema 없음");
   assert(!/model NotificationSend/.test(schema) && !/model AlimTalkSend/.test(schema), "알림톡 모델 없음");
   assert(!/phoneNormalized/.test(publishedView), "published view 전화 없음");
   assert(!/phoneNormalized/.test(published), "published payload 전화 없음");
+  assert(/SNAPSHOT_FORBIDDEN_KEYS/.test(snapshot) && /phoneNormalized/.test(snapshot), "ops snapshot phone 금지 유지");
   assert(!/phoneNormalized/.test(boardPage), "/board 전화 없음");
   assert(!/"solapi"|"aligo"|"nhn-toast"|alimtalk/i.test(pkg), "알림톡 SDK 없음");
-  assert(/href=\{\`\/manage\/caddies\?id=\$\{view\.id\}\`\}/.test(page), "상세는 캐디 관리");
+  assert(/href=\{\`\/manage\/caddies\?id=\$\{hit\.id\}\`\}/.test(page), "상세는 캐디 관리");
   assert(/aria-disabled="true"/.test(page), "전화 없음 버튼 disabled");
 }
 
@@ -244,6 +275,105 @@ section("empty query returns no dump");
 {
   assert(filterCaddiesBySearch(roster, "").length === 0, "빈 검색 전체 덤프 안 함");
   assert(filterCaddiesBySearch(roster, "   ").length === 0, "공백 query 덤프 안 함");
+}
+
+section("V2 API 응답 최소화 / telPhone / 빈 query");
+{
+  const exactName: CaddySearchRecord = {
+    id: 90,
+    name: "김현정",
+    team: "8조",
+    teamOrder: 2,
+    caddyType: "HOUSE",
+    employmentStatus: "ACTIVE",
+    phoneNormalized: "01077776666",
+  };
+  const withMemoLike: CaddySearchRecord = {
+    ...kim,
+    // extra prisma-like fields must not leak
+  };
+  const hit = toCaddySearchApiHit(withMemoLike);
+  const keys = Object.keys(hit).sort();
+  assert(
+    keys.join(",") === [...CADDY_SEARCH_API_KEYS].slice().sort().join(","),
+    "API hit keys only"
+  );
+  assert(!("phoneNormalized" in hit), "phoneNormalized key 없음");
+  assert(!("memo" in hit) && !("extraFlags" in hit), "memo/extraFlags 없음");
+  assert(hit.maskedPhone === "010-****-5678", "maskedPhone");
+  assert(hit.hasPhone === true, "hasPhone");
+  assert(hit.telPhone === "01012345678", "telPhone canonical");
+  const json = JSON.stringify(hit);
+  assert(!json.includes("phoneNormalized"), "JSON에 phoneNormalized 키 없음");
+  assert(!json.includes("memo"), "JSON에 memo 없음");
+  assert(json.includes("010-****-5678"), "mask in JSON");
+
+  const missing = toCaddySearchApiHit(noPhone);
+  assert(missing.hasPhone === false, "no phone hasPhone false");
+  assert(missing.telPhone === null, "no phone telPhone null");
+  assert(missing.maskedPhone === null, "no phone masked null");
+
+  const empty = caddySearchApiResponse(roster, "");
+  assert(Array.isArray(empty.results) && empty.results.length === 0, "empty q → []");
+  assert(caddySearchApiResponse(roster, "   ").results.length === 0, "whitespace q → []");
+  assert(caddySearchApiResponse(roster, "없는이름xyz").results.length === 0, "no result");
+
+  const nameHits = searchCaddiesLimited(roster, "김현정");
+  assert(nameHits.map((h) => h.id).join() === "12", "이름 부분검색");
+  const spaced = searchCaddiesLimited(roster, "박 서 진");
+  assert(spaced[0]?.id === 13, "공백 이름");
+  const team7 = searchCaddiesLimited(roster, "7");
+  assert(team7[0]?.id === 12, "조 7");
+  const team7jo = searchCaddiesLimited(roster, "7조");
+  assert(team7jo[0]?.id === 12, "조 7조");
+  const byId = searchCaddiesLimited(roster, "123");
+  assert(byId[0]?.id === 123, "id 검색");
+  const fullPhone = searchCaddiesLimited(roster, "01012345678");
+  assert(fullPhone[0]?.id === 12, "full phone");
+  const hyphenPhone = searchCaddiesLimited(roster, "010-1234-5678");
+  assert(hyphenPhone[0]?.id === 12, "하이픈 phone");
+  const last4 = searchCaddiesLimited(roster, "5678");
+  assert(last4[0]?.id === 12, "last4");
+  const noPhoneName = searchCaddiesLimited(roster, "원다빈");
+  assert(noPhoneName[0]?.id === 14 && noPhoneName[0]?.hasPhone === false, "phone 없는 캐디");
+  const retiredHit = searchCaddiesLimited(roster, "이퇴사");
+  assert(retiredHit[0]?.employmentStatus === "RETIRED", "RETIRED 검색");
+
+  const rankedRoster = [...roster, exactName];
+  const ranked = searchCaddiesLimited(rankedRoster, "김현정");
+  assert(ranked[0]?.id === 90, "exact name 우선");
+  assert(rankCaddySearchHit(exactName, "김현정") === CADDY_SEARCH_RANK.EXACT_NAME, "rank exact name");
+  assert(rankCaddySearchHit(tenTeam, "123") === CADDY_SEARCH_RANK.EXACT_ID, "rank exact id");
+  assert(rankCaddySearchHit(kim, "5678") === CADDY_SEARCH_RANK.EXACT_PHONE, "rank last4");
+  assert(rankCaddySearchHit(kim, "김현정") === CADDY_SEARCH_RANK.NAME_CONTAINS, "rank name contains");
+  assert(rankCaddySearchHit(kim, "7조") === CADDY_SEARCH_RANK.TEAM, "rank team");
+}
+
+section("20건 limit");
+{
+  const many: CaddySearchRecord[] = [];
+  for (let i = 1; i <= 25; i += 1) {
+    many.push({
+      id: 1000 + i,
+      name: `한팀캐디${i}`,
+      team: "7조",
+      teamOrder: i,
+      caddyType: "HOUSE",
+      employmentStatus: "ACTIVE",
+      phoneNormalized: i % 2 === 0 ? `0105555${String(1000 + i).slice(-4)}` : null,
+    });
+  }
+  const limited = searchCaddiesLimited(many, "7조");
+  assert(CADDY_SEARCH_LIMIT === 20, "limit constant 20");
+  assert(limited.length === 20, "최대 20건");
+  assert(limited.every((hit) => hit.team === "7조"), "limit 결과도 매칭만");
+  assert(!limited.some((hit) => "phoneNormalized" in hit), "limit 결과 raw phone 키 없음");
+  assert(
+    limited.filter((hit) => hit.hasPhone).every((hit) => /^010\d{8}$/.test(String(hit.telPhone))),
+    "telPhone은 검색 hit에만 canonical"
+  );
+  const dumped = filterCaddiesBySearch(many, "7조");
+  assert(dumped.length === 25, "matcher 자체는 25 매칭");
 }
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);
