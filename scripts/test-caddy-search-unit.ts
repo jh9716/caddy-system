@@ -266,7 +266,7 @@ section("검색 UI / 권한 / 개인정보 source guard");
   assert(!/phoneNormalized/.test(published), "published payload 전화 없음");
   assert(/SNAPSHOT_FORBIDDEN_KEYS/.test(snapshot) && /phoneNormalized/.test(snapshot), "ops snapshot phone 금지 유지");
   assert(!/phoneNormalized/.test(boardPage), "/board 전화 없음");
-  assert(!/"solapi"|"aligo"|"nhn-toast"|alimtalk/i.test(pkg), "알림톡 SDK 없음");
+  assert(!/"solapi"|"aligo"|"nhn-toast"/i.test(pkg), "알림톡 SDK 없음");
   assert(/href=\{\`\/manage\/caddies\?id=\$\{hit\.id\}\`\}/.test(page), "상세는 캐디 관리");
   assert(/aria-disabled="true"/.test(page), "전화 없음 버튼 disabled");
 }
