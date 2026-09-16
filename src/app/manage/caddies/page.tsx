@@ -41,6 +41,8 @@ import {
   ROSTER_IMPORT_APPLY_FAILED_USER_MESSAGE,
   rosterImportApplySuccessMessage,
 } from '@/lib/caddyRosterImportApplyConfig';
+import { rosterImportContactSummary } from '@/lib/rosterImportContactSummary';
+import Link from 'next/link';
 
 /** 한눈에 보기: 1~12조 */
 const GLANCE_TEAMS = PRIMARY_TEAMS;
@@ -480,6 +482,15 @@ export default function ManageCaddiesPage() {
   }, [load]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    const id = new URLSearchParams(window.location.search).get("id");
+    if (id && /^\d+$/.test(id)) {
+      setQ(id);
+      setViewMode("detail");
+    }
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
@@ -542,6 +553,10 @@ export default function ManageCaddiesPage() {
     [v1MergedRows]
   );
   const v1Occupants = importPreview?.occupants ?? slotPeers;
+  const importContactSummary = useMemo(
+    () => rosterImportContactSummary(importPreview),
+    [importPreview]
+  );
 
   const patchV1Resolution = useCallback(
     (name: string, patch: Partial<V1SafeResolution>) => {
@@ -983,6 +998,9 @@ export default function ManageCaddiesPage() {
         <div>
           <h1 className="cm-title">캐디 관리</h1>
           <p className="cm-headcount">총원 {rosterCounts.headcount}명</p>
+          <Link href="/manage/caddy-search" className="cm-search-link">
+            통합검색
+          </Link>
         </div>
         <div className="cm-header-actions">
           <button
@@ -2075,6 +2093,31 @@ export default function ManageCaddiesPage() {
                     >
                       순번충돌 {importPreview.summary.teamOrderConflicts ?? 0}
                     </span>
+                    <span>총 {importContactSummary.total}명</span>
+                    <span>전화번호 있음 {importContactSummary.withPhone}명</span>
+                    <span>기존 캐디 매칭 {importContactSummary.matched}명</span>
+                    <span>미매칭 {importContactSummary.unmatched}명</span>
+                    <span
+                      className={
+                        importContactSummary.homonyms ? 'is-warn' : ''
+                      }
+                    >
+                      동명이인 {importContactSummary.homonyms}명
+                    </span>
+                    <span
+                      className={
+                        importContactSummary.phoneInvalid ? 'is-warn' : ''
+                      }
+                    >
+                      전화번호 형식 오류 {importContactSummary.phoneInvalid}명
+                    </span>
+                    <span
+                      className={
+                        importContactSummary.phoneDuplicate ? 'is-warn' : ''
+                      }
+                    >
+                      중복 전화번호 {importContactSummary.phoneDuplicate}명
+                    </span>
                   </>
                 )}
               </div>
@@ -2588,6 +2631,13 @@ export default function ManageCaddiesPage() {
           font-size: 0.82rem;
           color: var(--vh-muted);
           font-weight: 600;
+        }
+        .cm-search-link {
+          display: inline-block;
+          margin-top: 6px;
+          font-size: 0.78rem;
+          font-weight: 700;
+          color: var(--vh-green-800);
         }
         .cm-detail-tools {
           display: flex;
