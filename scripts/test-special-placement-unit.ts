@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   computeShift1SpecialWindow,
+  countLeadingShift1Prefix,
   inferComputePlacementMode,
   parseProtectedTailCount,
   resolveStoredPlacementPolicy,
@@ -107,15 +108,36 @@ function shift1Names(
 
 section("공식");
 {
+  const lead = countLeadingShift1Prefix(
+    [{ taken: true }, { taken: true }, { taken: true }, { taken: false }],
+    (row) => row.taken
+  );
+  assert(lead === 3, "앞쪽 점유 prefix 3");
+  assert(
+    countLeadingShift1Prefix([{ taken: false }], (row) => row.taken) === 0,
+    "첫 칸이 비면 prefix 0"
+  );
   const w = computeShift1SpecialWindow({ N: 50, R: 3, A: 5, B: 2 });
-  assert(w.ok && w.oneThreeStart === 41 && w.oneThreeEnd === 45, "R3 1·3 41~45");
-  assert(w.ok && w.oneMakStart === 46 && w.oneMakEnd === 47, "R3 1막 46~47");
+  assert(w.ok && w.oneThreeStart === 1 && w.oneThreeEnd === 5, "prefix0 1·3 1~5");
+  assert(w.ok && w.oneMakStart === 6 && w.oneMakEnd === 7, "prefix0 1막 6~7");
   const r2 = computeShift1SpecialWindow({ N: 50, R: 2, A: 5, B: 2 });
-  assert(r2.ok && r2.oneThreeStart === 42 && r2.oneMakEnd === 48, "R2 42~46 / 47~48");
+  assert(r2.ok && r2.oneThreeStart === 1 && r2.oneMakEnd === 7, "R만 overflow 한계, 창은 앞");
   const r4 = computeShift1SpecialWindow({ N: 50, R: 4, A: 5, B: 2 });
-  assert(r4.ok && r4.oneThreeStart === 40 && r4.oneMakEnd === 46, "R4 40~44 / 45~46");
+  assert(r4.ok && r4.oneThreeStart === 1 && r4.oneMakEnd === 7, "R4도 앞쪽 1~7");
+  const prefixed = computeShift1SpecialWindow({
+    N: 50,
+    R: 3,
+    A: 5,
+    B: 2,
+    prefixCount: 2,
+  });
+  assert(
+    prefixed.ok && prefixed.oneThreeStart === 3 && prefixed.oneThreeEnd === 7,
+    "prefix2 보호 다음 1·3 3~7"
+  );
+  assert(prefixed.ok && prefixed.oneMakStart === 8 && prefixed.oneMakEnd === 9, "prefix2 1막 8~9");
   const r0 = computeShift1SpecialWindow({ N: 50, R: 0, A: 5, B: 2 });
-  assert(r0.ok && r0.specialEnd === 50 && r0.oneMakEnd === 50, "R0 끝까지");
+  assert(r0.ok && r0.specialStart === 1 && r0.oneMakEnd === 7, "R0도 앞에서부터");
   const rN = computeShift1SpecialWindow({ N: 50, R: 50, A: 0, B: 0 });
   assert(rN.ok && rN.neededCount === 0 && rN.availableCount === 0, "R=N + 신청 0");
   const rNblock = computeShift1SpecialWindow({ N: 50, R: 50, A: 1, B: 0 });
@@ -125,20 +147,20 @@ section("공식");
   assert(parseProtectedTailCount(21).ok === false, "R 21 거부");
   assert(parseProtectedTailCount(-1).ok === false, "R 음수 거부");
   const a0 = computeShift1SpecialWindow({ N: 50, R: 4, A: 0, B: 2 });
-  assert(a0.ok && a0.oneThreeStart == null && a0.oneMakStart === 45, "A=0 1막만");
+  assert(a0.ok && a0.oneThreeStart == null && a0.oneMakStart === 1, "A=0 1막만 앞");
   const b0 = computeShift1SpecialWindow({ N: 50, R: 4, A: 5, B: 0 });
-  assert(b0.ok && b0.oneMakStart == null && b0.oneThreeEnd === 46, "B=0 1·3만");
+  assert(b0.ok && b0.oneMakStart == null && b0.oneThreeEnd === 5, "B=0 1·3만 앞");
   const none = computeShift1SpecialWindow({ N: 50, R: 4, A: 0, B: 0 });
   assert(none.ok && none.neededCount === 0, "A=B=0");
   const noneS = computeShift1SpecialWindow({ N: 10, R: 3, A: 1, B: 1, S: 0 });
   assert(
-    noneS.ok && noneS.specialStart === 6 && noneS.oneMakEnd === 7,
-    "S=0이면 기존 1·3/1막 창"
+    noneS.ok && noneS.specialStart === 1 && noneS.oneMakEnd === 2,
+    "S=0이면 1·3/1막 앞 창"
   );
   const withS = computeShift1SpecialWindow({ N: 10, R: 3, A: 1, B: 1, S: 2 });
-  assert(withS.ok && withS.specialStart === 4 && withS.specialEnd === 7, "S 포함 창 4~7");
-  assert(withS.ok && withS.oneThreeStart === 4 && withS.oneMakStart === 5, "1·3 다음 1막");
-  assert(withS.ok && withS.supportStart === 6 && withS.supportEnd === 7, "지원은 R 직전");
+  assert(withS.ok && withS.specialStart === 1 && withS.specialEnd === 4, "S 포함 창 1~4");
+  assert(withS.ok && withS.oneThreeStart === 1 && withS.oneMakStart === 2, "1·3 다음 1막");
+  assert(withS.ok && withS.supportStart === 3 && withS.supportEnd === 4, "지원은 1막 다음");
   const overflowS = computeShift1SpecialWindow({ N: 10, R: 3, A: 4, B: 3, S: 2 });
   assert(!overflowS.ok && overflowS.code === SPECIAL_WINDOW_OVERFLOW, "A+B+S > N-R blocking");
 }
@@ -185,15 +207,15 @@ section("AUTO 50/R3/A5/B2 실제 슬롯");
   assert(s13.length === 5 && s1m.length === 2, "5+2 전부 배치");
   assert(
     s13.map((a) => a.reservation.teamName).join(",") ===
-      "1부-41,1부-42,1부-43,1부-44,1부-45",
-    "41~45 ONE_THREE"
+      "1부-3,1부-4,1부-5,1부-6,1부-7",
+    "3~7 ONE_THREE (보호 다음)"
   );
   assert(
     s1m
       .map((a) => a.reservation.teamName)
       .sort()
-      .join(",") === "1부-46,1부-47",
-    "46~47 ONE_MAK"
+      .join(",") === "1부-8,1부-9",
+    "8~9 ONE_MAK"
   );
   assert(
     !result.assignments.some(
@@ -214,7 +236,7 @@ section("AUTO 50/R3/A5/B2 실제 슬롯");
   );
 }
 
-section("AUTO N=10 R=3: 특수지원은 뒤 일반순번 보호 직전");
+section("AUTO N=10 R=3: 특수지원은 보호 다음, HOUSE보다 앞");
 {
   const date = "2026-09-06";
   const available = housePool(12);
@@ -265,39 +287,34 @@ section("AUTO N=10 R=3: 특수지원은 뒤 일반순번 보호 직전");
   assert(noS.length === 10 && yesS.length === 10, "1부 capacity 10");
   assert(
     noS.map((a) => a.kind).join(",") ===
-      "regular,regular,regular,regular,regular,oneThree,oneMak,regular,regular,regular",
-    "지원 없음: 기존 1·3/1막/R 보호"
+      "regular,regular,oneThree,oneMak,regular,regular,regular,regular,regular,regular",
+    "지원 없음: 보호2 → 1·3 → 1막 → HOUSE"
   );
   assert(
     yesS.map((a) => a.kind).join(",") ===
-      "regular,regular,regular,oneThree,oneMak,specialSupport,specialSupport,regular,regular,regular",
-    "regular → 1·3 → 1막 → 지원2 → 보호 regular3"
+      "regular,regular,oneThree,oneMak,specialSupport,specialSupport,regular,regular,regular,regular",
+    "보호2 → 1·3 → 1막 → 지원2 → HOUSE"
   );
   assert(
     yesS.slice(7).every((a) => a.kind === "regular"),
     "마지막 R=3은 모두 regular"
   );
   assert(
-    yesS.slice(7).map((a) => a.caddy.id).join(",") ===
-      noS.slice(7).map((a) => a.caddy.id).join(","),
-    "보호 R팀 캐디 identity 불변"
+    yesS.slice(2, 6).every((a) => a.kind !== "regular"),
+    "특수/지원 4명이 보호 다음·HOUSE 앞"
   );
-  assert(yesS[3]!.caddy.id === 501 && yesS[4]!.caddy.id === 601, "1·3 다음 1막");
-  assert(yesS[5]!.caddy.id === 901 && yesS[6]!.caddy.id === 902, "지원 2명 R 직전");
+  assert(yesS[2]!.caddy.id === 501 && yesS[3]!.caddy.id === 601, "1·3 다음 1막");
+  assert(yesS[4]!.caddy.id === 901 && yesS[5]!.caddy.id === 902, "지원은 1막 다음");
   const noSRegularIds = noS.filter((a) => a.kind === "regular").map((a) => a.caddy.id);
   const yesSRegularIds = new Set(
     yesS.filter((a) => a.kind === "regular").map((a) => a.caddy.id)
   );
   const unconsumed = noSRegularIds.filter((id) => !yesSRegularIds.has(id));
-  const protectedIds = new Set(noS.slice(7).map((a) => a.caddy.id));
   assert(unconsumed.length === 2, "지원 2명만큼 normal 미소모");
   assert(
-    unconsumed.every((id) => !protectedIds.has(id)),
-    "미소모 normal은 보호 R팀이 아니라 앞쪽"
-  );
-  assert(
-    unconsumed.includes(noS[3]!.caddy.id) && unconsumed.includes(noS[4]!.caddy.id),
-    "미소모는 기존 앞쪽 regular 2명"
+    yesS.filter((a) => a.kind === "regular").length ===
+      noS.filter((a) => a.kind === "regular").length - 2,
+    "지원 슬롯만큼 HOUSE 소비가 줄어든다"
   );
 }
 
@@ -318,8 +335,8 @@ section("AUTO는 저장 anchor 무시 / MANUAL은 기존 결과");
     reservations,
   });
   const auto1 = auto.assignments.find((a) => a.shift === "1부" && a.kind === "oneThree");
-  assert(auto1?.reservation.teamName === "1부-4", "AUTO는 마지막 4 앞 (4번째)");
-  assert(auto1?.reservation.course !== "VERTHILL" || auto1.reservation.teeTime !== "06:00" || auto1.reservation.teamName === "1부-4", "AUTO가 첫 슬롯 anchor를 쓰지 않음");
+  assert(auto1?.reservation.teamName === "1부-3", "AUTO는 보호 다음 (3번째)");
+  assert(auto1?.reservation.course !== "VERTHILL" || auto1.reservation.teeTime !== "06:00" || auto1.reservation.teamName === "1부-3", "AUTO가 첫 슬롯 anchor를 쓰지 않음");
   const manual = computeAutoAssignmentsV1({
     date,
     available: housePool(20),
@@ -350,16 +367,17 @@ section("충돌은 뒤로 밀지 않고 blocking");
     reservations,
   });
   assert(
-    fifty.specialPlacement?.block?.code === REASON.SPECIAL_WINDOW_COLLISION,
-    "54홀이 창을 점유하면 collision"
+    fifty.specialPlacement?.block?.code === REASON.SPECIAL_WINDOW_OVERFLOW,
+    "54홀+1·3 과다 시 overflow (부분 배치 없음)"
   );
   assert(
     fifty.assignments.filter((a) => a.shift === "1부" && a.kind === "oneThree").length === 0,
     "54홀 충돌 시 부분 배치 없음"
   );
   assert(
-    (fifty.specialPlacement?.block?.collisions.length || 0) > 0,
-    "충돌 reservation/kind 포함"
+    (fifty.specialPlacement?.block?.collisions.length || 0) === 0 &&
+      fifty.specialPlacement?.block?.code === REASON.SPECIAL_WINDOW_OVERFLOW,
+    "용량 부족은 overflow"
   );
 
   const oneTwo = computeAutoAssignmentsV1({
@@ -375,15 +393,15 @@ section("충돌은 뒤로 밀지 않고 blocking");
     ],
   });
   assert(
-    oneTwo.specialPlacement?.block?.code === REASON.SPECIAL_WINDOW_COLLISION,
-    "1·2가 창을 점유하면 collision"
+    oneTwo.specialPlacement?.block?.code === REASON.SPECIAL_WINDOW_OVERFLOW,
+    "1·2+1·3 과다 시 overflow"
   );
   assert(
     oneTwo.assignments.filter((a) => a.shift === "1부" && a.kind === "oneThree").length === 0,
     "1·2 충돌 시 부분 배치 없음"
   );
 
-  const lockSlot = reservations.find((r) => r.teamName === "1부-8")!;
+  const lockSlot = reservations.find((r) => r.teamName === "1부-4")!;
   const fixed = computeAutoAssignmentsV1({
     date,
     available: housePool(20),
@@ -442,8 +460,8 @@ section("충돌은 뒤로 밀지 않고 blocking");
   });
   assert(
     shift1Names(a0, "oneThree").length === 0 &&
-      shift1Names(a0, "oneMak").join(",") === "1부-5,1부-6",
-    "엔진 A=0 1막만"
+      shift1Names(a0, "oneMak").join(",") === "1부-3,1부-4",
+    "엔진 A=0 1막만 (보호 다음)"
   );
   const b0 = computeAutoAssignmentsV1({
     date,
@@ -455,8 +473,8 @@ section("충돌은 뒤로 밀지 않고 blocking");
   });
   assert(
     shift1Names(b0, "oneMak").length === 0 &&
-      shift1Names(b0, "oneThree").join(",") === "1부-5,1부-6",
-    "엔진 B=0 1·3만"
+      shift1Names(b0, "oneThree").join(",") === "1부-3,1부-4",
+    "엔진 B=0 1·3만 (보호 다음)"
   );
   const none = computeAutoAssignmentsV1({
     date,
@@ -525,8 +543,8 @@ section("reflow 창 이동 / freeze");
   });
   assert(
     shift1Names(previous, "oneThree").join(",") ===
-      "1부-41,1부-42,1부-43,1부-44,1부-45",
-    "before 41~45"
+      "1부-3,1부-4,1부-5,1부-6,1부-7",
+    "before 3~7"
   );
   const added = previewLiveAssignmentChange({
     previous,
@@ -542,8 +560,8 @@ section("reflow 창 이동 / freeze");
   assert(
     !added.warnings.some((w) => w.level === "error") &&
       shift1Names(added.after, "oneThree").join(",") ===
-        "1부-42,1부-43,1부-44,1부-45,1부-46",
-    "50→51 당추 후 창이 1칸 뒤"
+        "1부-3,1부-4,1부-5,1부-6,1부-7",
+    "50→51 당추 후에도 앞 창 유지"
   );
   const tail = previous.assignments.find(
     (a) => a.reservation.teamName === "1부-50"
@@ -560,8 +578,8 @@ section("reflow 창 이동 / freeze");
   assert(
     !cancelled.warnings.some((w) => w.level === "error") &&
       shift1Names(cancelled.after, "oneThree").join(",") ===
-        "1부-40,1부-41,1부-42,1부-43,1부-44",
-    "50→49 취소 후 창이 1칸 앞"
+        "1부-3,1부-4,1부-5,1부-6,1부-7",
+    "50→49 취소 후에도 앞 창 유지"
   );
   const move1 = previewLiveAssignmentChange({
     previous,
@@ -621,13 +639,13 @@ section("reflow 창 이동 / freeze");
   );
 
   const lockTail = previous.assignments.find(
-    (a) => a.reservation.teamName === "1부-48"
+    (a) => a.reservation.teamName === "1부-4"
   );
-  assert(!!lockTail && lockTail.kind === "regular", "1부-48은 마지막 R regular");
+  assert(!!lockTail && lockTail.kind === "oneThree", "1부-4는 AUTO 1·3 창");
   const afterSetLock = {
     ...previous,
     assignments: previous.assignments.map((row) =>
-      row.reservation.teamName === "1부-48" ? { ...row, locked: true } : row
+      row.reservation.teamName === "1부-4" ? { ...row, locked: true } : row
     ),
   };
   const lockAdd = previewLiveAssignmentChange({
@@ -689,7 +707,7 @@ section("AUTO↔MANUAL 전환 후 stale anchor 오염 없음");
     ?.reservation.teamName;
   const auto2Name = auto2.assignments.find((a) => a.shift === "1부" && a.kind === "oneThree")
     ?.reservation.teamName;
-  assert(autoName === "1부-4" && auto2Name === "1부-4", "AUTO→MANUAL→AUTO도 AUTO 창");
+  assert(autoName === "1부-3" && auto2Name === "1부-3", "AUTO→MANUAL→AUTO도 AUTO 창");
   assert(manName === "1부-1", "MANUAL은 예전 anchor 유지");
   assert(autoName !== manName, "stale anchor가 AUTO를 오염하지 않음");
   const drafted = autoResultFromDraft(

@@ -271,7 +271,7 @@ section("정상 HOUSE 6 + 지원 1 + capacity 6 → normal 5 + support 1");
   assert(s1.length === 6, "capacity 6 유지");
   assert(regular.length === 5, "normal 5명");
   assert(supportRows.length === 1 && supportRows[0].caddy.id === 90, "support 1명");
-  assert(s1[5].kind === "specialSupport", "지원은 꼬리");
+  assert(s1[2].kind === "specialSupport", "지원은 보호 다음·HOUSE 앞");
   assert(
     regular.every((a, i) => a.caddy.id === without.assignments.filter((x) => x.shift === "1부")[i].caddy.id),
     "앞 5명 정상 순번 유지"
@@ -320,11 +320,11 @@ section("특수지원 2명이면 normal 소비 2명 감소");
     "normal 4명"
   );
   assert(
-    s1.slice(4).every((a) => a.kind === "specialSupport"),
-    "꼬리 2명 지원"
+    s1[2].kind === "specialSupport" && s1[3].kind === "specialSupport",
+    "보호 다음 지원 2명"
   );
   assert(
-    s1[4].caddy.id === 90 && s1[5].caddy.id === 91,
+    s1[2].caddy.id === 90 && s1[3].caddy.id === 91,
     "지원 큐 순서 X,Y"
   );
   assert(
@@ -399,14 +399,15 @@ section("휴무자 1부 지원은 정상 후보 뒤에만");
   const s1With = withSupport.assignments.filter((a) => a.shift === "1부");
   assert(s1Without.length === 3, "지원 없으면 정상 3명만");
   assert(s1With.length === 4, "지원 있으면 4번째 메움");
+  assert(s1With[0].kind === "regular" && s1With[1].kind === "regular", "보호 1·2는 정상");
+  const supportRow = s1With.find((a) => a.kind === "specialSupport");
+  assert(supportRow?.caddy.id === 90, "휴무 지원이 capacity에 포함");
+  assert(supportRow?.reason === REASON.SPECIAL_SUPPORT, "SPECIAL_SUPPORT reason");
+  assert(supportRow?.locked === false, "지원은 LOCK 아님");
   assert(
-    s1With.slice(0, 3).every((a) => a.kind === "regular"),
-    "앞 3자리는 정상"
+    s1With.findIndex((a) => a.kind === "specialSupport") === 2,
+    "지원은 보호 다음"
   );
-  const tail = s1With[3];
-  assert(tail.kind === "specialSupport" && tail.caddy.id === 90, "마지막만 휴무 지원");
-  assert(tail.reason === REASON.SPECIAL_SUPPORT, "SPECIAL_SUPPORT reason");
-  assert(tail.locked === false, "지원은 LOCK 아님");
 }
 
 section("마샬 3부 지원은 미배치 / 조장 2부 막만");
@@ -503,8 +504,8 @@ section("실제 웹형: available.all에 X가 있어도 specialSupport");
   assert(
     supportRows.length === 1 &&
       supportRows[0].caddy.id === 90 &&
-      s1[5].kind === "specialSupport",
-    "X는 꼬리 specialSupport"
+      s1[2].kind === "specialSupport",
+    "X는 보호 다음 specialSupport"
   );
   assert(
     s1.filter((row) => row.caddy.id === 90).length === 1,
@@ -638,8 +639,8 @@ section("실제 웹형 지원 2명: available에 X,Y 포함해도 normal 2명 �
     );
   assert(
     s1.map((row) => `${row.caddy.id}:${row.kind}`).join(",") ===
-      "1:regular,2:regular,3:regular,4:regular,90:specialSupport,91:specialSupport",
-    "A B C D X Y"
+      "1:regular,2:regular,90:specialSupport,91:specialSupport,3:regular,4:regular",
+    "보호2 → 지원 XY → HOUSE"
   );
   assert(
     !s1.some((row) => row.caddy.id === 5 || row.caddy.id === 6),
@@ -988,7 +989,7 @@ section("OFF/DUTY/MARSHAL 지원은 지정 부에 포함되고 타부로 새지 
       third(13, 3),
     ],
     reservations: [
-      ...shiftRes(date, "1부", 2),
+      ...shiftRes(date, "1부", 4),
       ...shiftRes(date, "2부", 2),
       ...shiftRes(date, "3부", 2),
     ],
@@ -1054,7 +1055,7 @@ section("SICK / RETIRED / LEAVE는 support로도 배치되지 않음");
   );
 }
 
-section("N=10 R=3 AUTO: 특수지원은 뒤 일반순번 보호 직전");
+section("N=10 R=3 AUTO: 특수지원은 보호 다음, HOUSE보다 앞");
 {
   const date = "2026-09-06";
   const available = Array.from({ length: 12 }, (_, i) => house(i + 1, i + 1));
@@ -1092,37 +1093,32 @@ section("N=10 R=3 AUTO: 특수지원은 뒤 일반순번 보호 직전");
   assert(noS.length === 10 && yesS.length === 10, "1부 capacity 10");
   assert(
     noS.map((a) => a.kind).join(",") ===
-      "regular,regular,regular,regular,regular,oneThree,oneMak,regular,regular,regular",
-    "지원 없음: 기존 1·3/1막/R3 보호 불변"
+      "regular,regular,oneThree,oneMak,regular,regular,regular,regular,regular,regular",
+    "지원 없음: 보호2 → 1·3 → 1막 → HOUSE"
   );
   assert(
     yesS.map((a) => a.kind).join(",") ===
-      "regular,regular,regular,oneThree,oneMak,specialSupport,specialSupport,regular,regular,regular",
-    "앞 regular → 1·3 → 1막 → 지원2 → 보호 regular3"
+      "regular,regular,oneThree,oneMak,specialSupport,specialSupport,regular,regular,regular,regular",
+    "보호2 → 1·3 → 1막 → 지원2 → HOUSE"
   );
   assert(
     yesS.slice(7).every((a) => a.kind === "regular"),
     "마지막 3슬롯 regular"
   );
   assert(
-    yesS.slice(7).map((a) => a.caddy.id).join(",") ===
-      noS.slice(7).map((a) => a.caddy.id).join(","),
-    "보호 R팀 identity 유지"
+    yesS.slice(7).every((a) => a.kind !== "specialSupport"),
+    "특수지원이 뒤쪽 R 창에 들어가지 않음"
   );
-  assert(yesS[5]!.caddy.id === 901 && yesS[6]!.caddy.id === 902, "지원은 R 직전");
+  assert(yesS[4]!.caddy.id === 901 && yesS[5]!.caddy.id === 902, "지원은 1막 다음");
   const unconsumed = noS
     .filter((a) => a.kind === "regular")
     .map((a) => a.caddy.id)
     .filter((id) => !yesS.some((a) => a.kind === "regular" && a.caddy.id === id));
-  const protectedIds = new Set(noS.slice(7).map((a) => a.caddy.id));
   assert(unconsumed.length === 2, "지원 2명만큼 normal 미소모");
   assert(
-    unconsumed.every((id) => !protectedIds.has(id)),
-    "미소모는 보호 R팀이 아님"
-  );
-  assert(
-    unconsumed.includes(noS[3]!.caddy.id) && unconsumed.includes(noS[4]!.caddy.id),
-    "미소모는 보호구간 앞쪽 normal 2명"
+    yesS.filter((a) => a.kind === "regular").length ===
+      noS.filter((a) => a.kind === "regular").length - 2,
+    "지원 슬롯만큼 HOUSE 소비가 줄어든다"
   );
 }
 
@@ -1500,7 +1496,7 @@ section("source / UI / migration / 권한");
   );
   const migDirs = readdirSync(join(process.cwd(), "prisma/migrations")).filter(
     (name) =>
-      /^\d{14}/.test(name) && name > "20260914010000_two_three_and_support_v2"
+      /^\d{14}/.test(name) && name > "20260915120000_daily_off_override"
   );
   assert(migDirs.length === 0, "새 migration 없음");
   assert(

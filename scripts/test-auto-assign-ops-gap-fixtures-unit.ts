@@ -182,7 +182,7 @@ section("휴무지원 OFF_SUPPORT+SHIFT_3: 1·3/주말반 다음, 원번 앞");
   };
   const off = support(71, "휴1", "OFF_SUPPORT", "SHIFT_3", 1);
   const reservations = [
-    ...shiftRes(date, "1부", 4),
+    ...shiftRes(date, "1부", 8),
     ...shiftRes(date, "2부", 6, "12:00"),
     ...shiftRes(date, "3부", 12, "16:00"),
   ];

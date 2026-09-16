@@ -33,7 +33,7 @@ import {
   sliceShift1WindowSlots,
   type SpecialPlacementMode,
 } from "@/lib/specialPlacement";
-import { resolveCourseCode } from "@/lib/autoAssignEngine";
+import { resolveCourseCode, SHIFT1_PROTECTED_COUNT } from "@/lib/autoAssignEngine";
 import { COURSE_LABELS } from "@/lib/reservationParser";
 import { type Shift1StartOption } from "@/lib/assignmentDraft";
 
@@ -481,6 +481,7 @@ export const SpecialDutyPanel = memo(function SpecialDutyPanel({
       R: protectedTailCount,
       A: eligibleCount("ONE_THREE"),
       B: eligibleCount("ONE_MAK"),
+      prefixCount: SHIFT1_PROTECTED_COUNT,
     });
   }, [shift1Options.length, protectedTailCount, displayGroups]);
 

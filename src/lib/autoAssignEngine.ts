@@ -3,14 +3,15 @@
  * - 순수 함수: DB write 없음
  * - 우선순위: 고정/특별찾근 → 54홀 → 1·3부 → 1·2부 → 2·3부 → 일반 순번
  * - 일반: HOUSE 순번 + 부별 스페어1·2
- * - 3부: Mode A(원번 미완주) 2부 스페어 HOUSE → 1·3 → WEEKEND(토/일/공휴일만)
+ * - 3부: Mode A(원번 미완주) 2부 스페어 HOUSE → 1·3 → 주중반/주말반
  *        → 휴무지원 → regular THIRD → 2·3 → 찾근 → 남은 HOUSE
- *        Mode B(원번 완주) 1·3 → WEEKEND(토/일/공휴일만) → 휴무지원 → regular THIRD
+ *        Mode B(원번 완주) 1·3 → 주중반/주말반 → 휴무지원 → regular THIRD
  *        → 2·3 → 찾근 → 남은 HOUSE
  *        2부 찾근(SPECIAL_CALL)은 지정 예약을 점유하지 않고 보호 1·2 다음·2·3 앞.
  *        3부 찾근(SPECIAL_CALL)은 remaining 큐에서 2·3 다음·HOUSE 앞.
  *        마샬/당번/일반 FIXED 핀은 assignFixedPriority 최우선 유지.
  *        thirdBandSubgroup=WEEKEND는 평일(비공휴일) 3부 어디에든 넣지 않음
+ *        thirdBandSubgroup=WEEKDAY는 평일 3부 우선 band, 주말/공휴일은 regular THIRD
  * - DRIVING은 일반 HOUSE/THIRD 순번에 섞지 않음
  * - 8단계: 일반 예약 캔슬/추가 시 regular reflow (special 보호, 스페어·3부 재계산)
  */
@@ -28,6 +29,7 @@ import {
 } from "@/lib/reservationParser";
 import {
   extractWeekendBandInRotationOrder,
+  extractWeekdayBandInRotationOrder,
   resolveThirdStartTeam,
   rotateThirdQueueFromStartCaddy,
   rotateThirdQueueFromStartTeam,
@@ -43,6 +45,7 @@ import {
   SPECIAL_WINDOW_COLLISION,
   SPECIAL_WINDOW_OVERFLOW,
   computeShift1SpecialWindow,
+  countLeadingShift1Prefix,
   inferComputePlacementMode,
   parseProtectedTailCount,
   PROTECTED_TAIL_COUNT_DEFAULT,
@@ -129,6 +132,7 @@ export const REASON = {
   RESERVATION_MOVE_REFLOW: "RESERVATION_MOVE_REFLOW",
   CLOSED_COURSE: "CLOSED_COURSE",
   WEEKEND_BAND_PRIORITY: "WEEKEND_BAND_PRIORITY",
+  WEEKDAY_BAND_PRIORITY: "WEEKDAY_BAND_PRIORITY",
   SPECIAL_SUPPORT: "SPECIAL_SUPPORT",
 } as const;
 
@@ -1344,7 +1348,7 @@ export type SpecialDutySlotResult = {
 
 /**
  * 관리자 특수근무 슬롯 배치 (일반 고정 이후).
- * 1부: 앞 2자리 보호 → 후출마샬 1부 지원 → 54홀 → 1·2부, 1·3/1막은 AUTO 순번 창 또는 MANUAL anchor.
+ * 1부: 앞 2자리 보호 → 후출마샬 1부 지원 → 54홀 → 1·2부 → AUTO 1·3/1막/특수지원 → HOUSE.
  * 후출마샬(MARSHAL_SUPPORT+SHIFT_1)은 1막이 아니다.
  * 1·2부 지원은 지원 창(1부) + 원번 뒤 지원 구간(2부)에 linked 배치. 특수근무 oneTwo가 아님.
  * 2부: 보호 1·2 → 찾근(SPECIAL_CALL, 지정 예약 무시) → 2·3 → 원번 → 지원 → 1·2 투.
@@ -1632,12 +1636,20 @@ export function assignSpecialDutySlots(input: {
         ...oneMak.map((caddy) => caddy.id),
       ],
     });
+    const remainingShift1Keys = new Set(
+      shiftReservations(remaining, "1부").map(reservationKey)
+    );
+    const prefixCount = countLeadingShift1Prefix(originalShift1, (row) => {
+      const key = reservationKey(row);
+      return protectedKeys.has(key) || !remainingShift1Keys.has(key);
+    });
     const window = computeShift1SpecialWindow({
       N: originalShift1.length,
       R: protectedTailCount,
       A: oneThree.length,
       B: oneMak.length,
       S: shift1Support.length + oneTwoSupportQueue.length,
+      prefixCount,
     });
     const windowState = window.ok
       ? {
@@ -2712,15 +2724,16 @@ export function assignOneTwoPriority(input: {
  * - 다음 부 HOUSE 시작 = 직전 부 스페어1 (= N)
  * - 3부 (실제 1·2부 배치 결과 기준):
  *   A) HOUSE 원번 잔여(1·2부 미근무 HOUSE 존재):
- *      2부 스페어 HOUSE(최대 2, sparesByShift["2부"]) → 1·3 신청자 → WEEKEND(토/일/공휴일만)
- *      → 휴무지원 → THIRD(thirdStartCaddyId는 WEEKEND 제외 후 여기부터) → 2·3
+ *      2부 스페어 HOUSE(최대 2, sparesByShift["2부"]) → 1·3 신청자
+ *      → 주중반(평일) 또는 주말반(토/일/공휴일) → 휴무지원 → THIRD → 2·3
  *      → 3부 찾근(SPECIAL_CALL) → 남은 미근무 HOUSE → (부족 시) 기근무 wrap
  *   B) HOUSE 소진(전원이 1·2부 중 ≥1회 실근무):
- *      1·3 신청자 → WEEKEND(토/일/공휴일만) → 휴무지원 → THIRD → 2·3 → 찾근
+ *      1·3 신청자 → 주중반/주말반 → 휴무지원 → THIRD → 2·3 → 찾근
  *      → (1부 미근무 ∩ 2부 실근무) HOUSE, 단 1부 spare1·2 제외
  *      (2부 스페어 우선 없음. 2부 spare 표시/계산은 유지)
- *   WEEKEND(thirdBandSubgroup)는 날짜와 관계없이 regular THIRD에서 먼저 분리한다.
- *   토/일/한국 공휴일에만 weekendBand로 쓰고, 평일 비공휴일은 그날 3부에 배치하지 않는다.
+ *   WEEKEND는 날짜와 관계없이 regular THIRD에서 분리하고, 토/일/공휴일에만 우선 band.
+ *   WEEKDAY는 평일에만 우선 band로 분리하고, 주말/공휴일에는 regular THIRD에 남긴다.
+ *   평일 비공휴일에 WEEKEND는 그날 3부에 배치하지 않는다.
  * - 3부 spare1·2 = 당일 3부 최종 배치 sequence에서 마지막 배치자 다음 가용 2명
  *   (별도 HOUSE queue에서 새로 뽑지 않음. Mode A/B 동일. 순환 시 해당 3부 sequence 유지)
  * - DRIVING은 일반 순번에 섞지 않음
@@ -2841,11 +2854,16 @@ export function assignRegularSequence(input: {
   const thirdStartTeam = resolveThirdStartTeam(input.thirdStartTeam, input.date);
   let third = rotateThirdQueueFromStartTeam(pools.third, thirdStartTeam);
   const weekendSeparated = extractWeekendBandInRotationOrder(third);
+  const weekdaySeparated = extractWeekdayBandInRotationOrder(third);
   const weekendIds = new Set(weekendSeparated.map((c) => c.id));
+  const weekdayIds = new Set(weekdaySeparated.map((c) => c.id));
+  const weekendPriority = isWeekendBandPriorityDate(input.date);
   third = third.filter((caddy) => !weekendIds.has(caddy.id));
-  const weekendBand = isWeekendBandPriorityDate(input.date)
-    ? weekendSeparated
-    : [];
+  if (!weekendPriority) {
+    third = third.filter((caddy) => !weekdayIds.has(caddy.id));
+  }
+  const weekendBand = weekendPriority ? weekendSeparated : [];
+  const weekdayBand = weekendPriority ? [] : weekdaySeparated;
   const oneThreeForThird = dedupeCaddies([...(input.oneThreeForThird || [])]);
   const chageunForThird = dedupeCaddies([...(input.chageunForThird || [])]);
   const twoThreeForThird = dedupeCaddies([...(input.twoThreeForThird || [])]);
@@ -2912,6 +2930,7 @@ export function assignRegularSequence(input: {
     ...chageunForThird.map((c) => c.id),
     ...twoThreeForThird.map((c) => c.id),
     ...weekendBand.map((c) => c.id),
+    ...weekdayBand.map((c) => c.id),
   ]);
 
   for (const shift of SHIFT_PARTS) {
@@ -3076,6 +3095,11 @@ export function assignRegularSequence(input: {
           kind: "regular",
           reason: REASON.WEEKEND_BAND_PRIORITY,
         });
+      const pushWeekday = (caddy: AutoAssignCaddy) =>
+        pushCaddy(caddy, -1, {
+          kind: "regular",
+          reason: REASON.WEEKDAY_BAND_PRIORITY,
+        });
       const pushOffSupport = (caddy: AutoAssignCaddy) =>
         pushCaddy(caddy, -1, {
           kind: "specialSupport",
@@ -3089,12 +3113,13 @@ export function assignRegularSequence(input: {
       );
 
       if (!houseExhaustedIn12) {
-        // Mode A: 2부 스페어(실측) → 1·3 → WEEKEND → 휴무지원 → regular THIRD → 2·3 → 찾근 → 남은 미근무 → wrap
+        // Mode A: 2부 스페어(실측) → 1·3 → 주중/주말반 → 휴무지원 → regular THIRD → 2·3 → 찾근 → 남은 미근무 → wrap
         for (const caddy of shift2SpareCaddiesFromSpares(house, sparesByShift)) {
           pushCaddy(caddy, seqOf(caddy));
         }
         for (const caddy of oneThreeForThird) pushOneThree(caddy);
         for (const caddy of weekendBand) pushWeekend(caddy);
+        for (const caddy of weekdayBand) pushWeekday(caddy);
         for (const caddy of offSupportShift3) pushOffSupport(caddy);
         for (let i = 0; i < third.length; i++) {
           pushCaddy(third[i], 10_000 + i);
@@ -3109,9 +3134,10 @@ export function assignRegularSequence(input: {
           pushCaddy(c, seqOf(c));
         }
       } else {
-        // Mode B: 1·3 → WEEKEND → 휴무지원 → THIRD → 2·3 → 찾근 → 2부 실근무·1부 미근무 HOUSE (spare1·2 제외)
+        // Mode B: 1·3 → 주중/주말반 → 휴무지원 → THIRD → 2·3 → 찾근 → 2부 실근무·1부 미근무 HOUSE (spare1·2 제외)
         for (const caddy of oneThreeForThird) pushOneThree(caddy);
         for (const caddy of weekendBand) pushWeekend(caddy);
+        for (const caddy of weekdayBand) pushWeekday(caddy);
         for (const caddy of offSupportShift3) pushOffSupport(caddy);
         for (let i = 0; i < third.length; i++) {
           pushCaddy(third[i], 10_000 + i);
@@ -3604,7 +3630,7 @@ export function computeAutoAssignmentsV1(input: {
     compareReservationOrder
   );
 
-  // 4) 일반 순번 — 1·2부 후 3부: 2부 스페어 → 1·3 → WEEKEND → 휴무지원 → THIRD → 2·3 → 찾근
+  // 4) 일반 순번 — 1·2부 후 3부: 2부 스페어 → 1·3 → 주중/주말반 → 휴무지원 → THIRD → 2·3 → 찾근
   // houseStartCaddyId는 일반 HOUSE에서 적용. 시작점이 특수근무로 빠지면
   // 원본 HOUSE 회전 후 특수 id만 제외하고 이어간다 (전체 abort 없음).
   const regular = assignRegularSequence({
@@ -3647,12 +3673,7 @@ export function computeAutoAssignmentsV1(input: {
             .map(reservationKey)
         )
       : undefined,
-    shift1SupportHouseSkip: shift1AutoPlacement
-      ? slotted.specialSupportAssignments.filter(
-          (row) =>
-            row.shift === "1부" && !isLateMarshalShift1Support(row.caddy)
-        ).length
-      : 0,
+    shift1SupportHouseSkip: 0,
   });
   const oneThreeThirdAssignments = regular.assignments.filter(
     (row) => row.kind === "oneThree"
@@ -6142,12 +6163,23 @@ export function reflowRegularAssignments(input: {
     ])
       .filter((row) => row.shift === "1부")
       .sort(compareReservationOrder);
+    const remainingKeys = new Set(
+      [...seedMap.values()]
+        .filter((row) => row.shift === "1부")
+        .map(reservationKey)
+    );
+    const protectedKeys = protectedShift1KeySet(shift1All);
+    const prefixCount = countLeadingShift1Prefix(shift1All, (row) => {
+      const key = reservationKey(row);
+      return protectedKeys.has(key) || !remainingKeys.has(key);
+    });
     const window = computeShift1SpecialWindow({
       N: shift1All.length,
       R: placementPolicy.protectedTailCount,
       A: oneThreeCands.length,
       B: oneMakCands.length,
       S: oneTwoSupportLocked1,
+      prefixCount,
     });
     if (!window.ok) {
       autoSpecialBlock = {
@@ -6159,11 +6191,6 @@ export function reflowRegularAssignments(input: {
       };
     } else if (oneThreeCands.length + oneMakCands.length > 0) {
       const occupied = occupancyLookup(lockedRows);
-      const remainingKeys = new Set(
-        [...seedMap.values()]
-          .filter((row) => row.shift === "1부")
-          .map(reservationKey)
-      );
       const target = shift1All.slice(window.specialStart - 1, window.specialEnd);
       const placeCount = oneThreeCands.length + oneMakCands.length;
       const collisions: SpecialWindowCollision[] = [];

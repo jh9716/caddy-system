@@ -174,9 +174,23 @@ export function isWeekendBandCaddy(caddy: {
   return String(caddy.thirdBandSubgroup || "").toUpperCase() === "WEEKEND";
 }
 
+export function isWeekdayBandCaddy(caddy: {
+  thirdBandSubgroup?: string | null;
+  extraFlags?: string[] | null;
+}): boolean {
+  return String(caddy.thirdBandSubgroup || "").toUpperCase() === "WEEKDAY";
+}
+
 /** 주간 THIRD rotation 안에서 WEEKEND만 상대순서 유지하며 추출 */
 export function extractWeekendBandInRotationOrder<T extends ThirdQueueCaddy>(
   rotatedThird: readonly T[]
 ): T[] {
   return rotatedThird.filter((caddy) => isWeekendBandCaddy(caddy));
+}
+
+/** 주간 THIRD rotation 안에서 WEEKDAY만 상대순서 유지하며 추출 */
+export function extractWeekdayBandInRotationOrder<T extends ThirdQueueCaddy>(
+  rotatedThird: readonly T[]
+): T[] {
+  return rotatedThird.filter((caddy) => isWeekdayBandCaddy(caddy));
 }

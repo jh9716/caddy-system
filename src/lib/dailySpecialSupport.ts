@@ -324,7 +324,7 @@ export function resolveSupportKind(row: {
  * 조출마샬(MARSHAL_SUPPORT+SHIFT_2) / 조장(LEADER_SUPPORT+SHIFT_2)은 2부 막.
  *
  * [휴무지원 3부]
- * 1·3부 → 주중/주말반 → 휴무지원 → 3부반 원번 → 2·3부 → 찾근 → HOUSE
+ * 1·3부 → 주중반(평일) 또는 주말반(토/일/공휴일) → 휴무지원 → 3부반 원번 → 2·3부 → 찾근 → HOUSE
  *
  * 3부 마샬지원/조장지원, 54 지원은 이번 PR에서 자동배치하지 않는다.
  */
