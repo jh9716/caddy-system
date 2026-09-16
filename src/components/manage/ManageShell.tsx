@@ -13,6 +13,11 @@ const NAV = [
     match: (p: string) => p.startsWith("/manage/caddies"),
   },
   {
+    href: "/manage/caddy-search",
+    label: "캐디 검색",
+    match: (p: string) => p.startsWith("/manage/caddy-search"),
+  },
+  {
     href: "/manage/availability",
     label: "가용표",
     match: (p: string) => p.startsWith("/manage/availability"),
@@ -135,6 +140,7 @@ export default function ManageShell({
     const toPrefetch = [
       "/manage",
       "/manage/caddies",
+      "/manage/caddy-search",
       "/manage/assignments",
       "/manage/availability",
     ].filter((href) => href !== pathname);

@@ -24,6 +24,7 @@
     "test:roster-import-v1-safe-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-roster-import-v1-safe-unit.ts",
     "test:roster-import-v2-db": "bash scripts/tsx-safe.sh scripts/test-caddy-roster-import-v2-db.ts",
     "test:slot-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-slot-unit.ts",
+    "test:caddy-search-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-search-unit.ts",
     "test:caddy-display-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-display-unit.ts",
     "test:login-unit": "bash scripts/tsx-safe.sh scripts/test-login-session-unit.ts",
     "test:staff-admin-unit": "bash scripts/tsx-safe.sh scripts/test-staff-admin-password-unit.ts",
