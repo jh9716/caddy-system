@@ -1,59 +1,24 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { kstYmd } from "@/lib/kstDate";
+import { employmentStatusLabel } from "@/lib/caddyManage";
 import {
-  filterCaddiesBySearch,
+  CADDY_SEARCH_DEBOUNCE_MS,
   todayPlacementSummary,
-  toCaddySearchView,
-  type CaddySearchRecord,
+  type CaddySearchApiHit,
   type SearchPlacementHit,
 } from "@/lib/caddySearch";
 
-type SearchCaddy = CaddySearchRecord & {
-  teamOrder?: number;
-};
-
 export default function ManageCaddySearchPage() {
-  const [rows, setRows] = useState<SearchCaddy[]>([]);
   const [query, setQuery] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [hits, setHits] = useState<CaddySearchApiHit[]>([]);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [placements, setPlacements] = useState<SearchPlacementHit[] | null>(
     null
   );
-
-  const loadCaddies = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/caddies?employment=all", {
-        credentials: "include",
-      });
-      if (res.status === 401) {
-        setError("관리자만 사용할 수 있습니다.");
-        setRows([]);
-        return;
-      }
-      if (!res.ok) {
-        setError("캐디 목록을 불러오지 못했습니다.");
-        setRows([]);
-        return;
-      }
-      const data = await res.json();
-      setRows(Array.isArray(data) ? data : []);
-    } catch {
-      setError("캐디 목록을 불러오지 못했습니다.");
-      setRows([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadCaddies();
-  }, [loadCaddies]);
 
   useEffect(() => {
     let cancelled = false;
@@ -68,7 +33,7 @@ export default function ManageCaddySearchPage() {
         const data = await res.json().catch(() => null);
         const list = data?.published?.payload?.placements;
         if (cancelled || !Array.isArray(list)) return;
-        const hits: SearchPlacementHit[] = list.map((row: Record<string, unknown>) => {
+        const next: SearchPlacementHit[] = list.map((row: Record<string, unknown>) => {
           const rawId = row?.caddyId;
           const parsed = typeof rawId === "number" ? rawId : Number(rawId);
           return {
@@ -78,7 +43,7 @@ export default function ManageCaddySearchPage() {
             course: String(row?.course ?? ""),
           };
         });
-        setPlacements(hits);
+        setPlacements(next);
       } catch {
         if (!cancelled) setPlacements(null);
       }
@@ -88,10 +53,52 @@ export default function ManageCaddySearchPage() {
     };
   }, []);
 
-  const hits = useMemo(
-    () => filterCaddiesBySearch(rows, query),
-    [rows, query]
-  );
+  useEffect(() => {
+    const q = query.replace(/\u00a0/g, " ").trim();
+    if (!q) {
+      setHits([]);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+
+    setLoading(true);
+    const ctrl = new AbortController();
+    const timer = window.setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `/api/caddies/search?q=${encodeURIComponent(q)}`,
+          { credentials: "include", signal: ctrl.signal }
+        );
+        if (res.status === 401) {
+          setError("관리자만 사용할 수 있습니다.");
+          setHits([]);
+          return;
+        }
+        if (!res.ok) {
+          setError("검색에 실패했습니다.");
+          setHits([]);
+          return;
+        }
+        const data = await res.json();
+        const results = Array.isArray(data?.results) ? data.results : [];
+        setHits(results);
+        setError(null);
+      } catch (e: unknown) {
+        if (e instanceof DOMException && e.name === "AbortError") return;
+        if (e instanceof Error && e.name === "AbortError") return;
+        setError("검색에 실패했습니다.");
+        setHits([]);
+      } finally {
+        if (!ctrl.signal.aborted) setLoading(false);
+      }
+    }, CADDY_SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      window.clearTimeout(timer);
+      ctrl.abort();
+    };
+  }, [query]);
 
   return (
     <div className="cs-page">
@@ -127,7 +134,7 @@ export default function ManageCaddySearchPage() {
           {error}
         </p>
       ) : null}
-      {loading ? <p className="cs-muted">불러오는 중…</p> : null}
+      {loading ? <p className="cs-muted">검색 중…</p> : null}
 
       {!loading && !query.trim() ? (
         <p className="cs-empty">이름, 조, 캐디 번호, 휴대폰 뒤 4자리를 입력하세요.</p>
@@ -138,28 +145,28 @@ export default function ManageCaddySearchPage() {
       ) : null}
 
       <ul className="cs-list">
-        {hits.map((caddy) => {
-          const view = toCaddySearchView(caddy);
-          const today = todayPlacementSummary(placements, caddy.id);
+        {hits.map((hit) => {
+          const telHref = hit.hasPhone && hit.telPhone ? `tel:${hit.telPhone}` : null;
+          const today = todayPlacementSummary(placements, hit.id);
+          const statusLabel = employmentStatusLabel(hit.employmentStatus);
+          const typeLabel = String(hit.caddyType ?? "HOUSE").trim() || "HOUSE";
           return (
-            <li key={caddy.id} className="cs-card">
+            <li key={hit.id} className="cs-card">
               <div className="cs-card-main">
-                <strong className="cs-name">{view.name}</strong>
+                <strong className="cs-name">{hit.name}</strong>
                 <div className="cs-meta">
-                  {view.team || "조 없음"} · {view.typeLabel} · {view.statusLabel}
+                  {hit.team || "조 없음"} · {typeLabel} · {statusLabel}
                 </div>
                 <div
-                  className={`cs-phone${view.phoneMissing ? " is-missing" : ""}`}
+                  className={`cs-phone${!hit.hasPhone ? " is-missing" : ""}`}
                 >
-                  {view.phoneMissing
-                    ? "연락처 등록 필요"
-                    : view.maskedPhone}
+                  {!hit.hasPhone ? "연락처 등록 필요" : hit.maskedPhone}
                 </div>
                 {today ? <div className="cs-today">오늘 배치 {today}</div> : null}
               </div>
               <div className="cs-actions">
-                {view.telHref ? (
-                  <a className="cs-btn cs-btn-call" href={view.telHref}>
+                {telHref ? (
+                  <a className="cs-btn cs-btn-call" href={telHref}>
                     전화
                   </a>
                 ) : (
@@ -169,7 +176,7 @@ export default function ManageCaddySearchPage() {
                 )}
                 <Link
                   className="cs-btn"
-                  href={`/manage/caddies?id=${view.id}`}
+                  href={`/manage/caddies?id=${hit.id}`}
                 >
                   상세
                 </Link>

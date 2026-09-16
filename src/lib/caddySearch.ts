@@ -12,10 +12,52 @@ export type CaddySearchRecord = {
   id: number;
   name: string;
   team: string;
+  teamOrder?: number;
   caddyType?: string | null;
   employmentStatus?: string | null;
   phoneNormalized?: string | null;
 };
+
+/** 관리자 검색 API 공개 필드. phoneNormalized/memo 등 raw Prisma 키 금지. */
+export const CADDY_SEARCH_LIMIT = 20;
+export const CADDY_SEARCH_DEBOUNCE_MS = 300;
+
+export const CADDY_SEARCH_API_KEYS = [
+  "id",
+  "name",
+  "team",
+  "teamOrder",
+  "caddyType",
+  "employmentStatus",
+  "maskedPhone",
+  "hasPhone",
+  "telPhone",
+] as const;
+
+export type CaddySearchApiHit = {
+  id: number;
+  name: string;
+  team: string;
+  teamOrder: number;
+  caddyType: string;
+  employmentStatus: string;
+  maskedPhone: string | null;
+  hasPhone: boolean;
+  telPhone: string | null;
+};
+
+export type CaddySearchApiResponse = {
+  results: CaddySearchApiHit[];
+};
+
+export const CADDY_SEARCH_RANK = {
+  EXACT_NAME: 1,
+  EXACT_ID: 2,
+  EXACT_PHONE: 3,
+  NAME_CONTAINS: 4,
+  TEAM: 5,
+  OTHER: 6,
+} as const;
 
 export type CaddySearchView = {
   id: number;
@@ -129,6 +171,101 @@ export function filterCaddiesBySearch<T extends CaddySearchRecord>(
     .trim();
   if (!raw) return [];
   return caddies.filter((caddy) => matchesCaddySearch(caddy, raw));
+}
+
+export function trimSearchQuery(query: unknown): string {
+  return String(query ?? "")
+    .replace(/\u00a0/g, " ")
+    .trim();
+}
+
+export function isExactPhoneOrLast4(
+  phoneNormalized: string | null | undefined,
+  query: string
+): boolean {
+  if (!phoneNormalized || !PHONE_CANONICAL.test(phoneNormalized)) return false;
+  if (!queryLooksLikePhone(query)) return false;
+  const digits = searchDigits(query);
+  if (digits.length === 11 && phoneNormalized === digits) return true;
+  if (digits.length === 4 && phoneNormalized.slice(-4) === digits) return true;
+  return false;
+}
+
+export function rankCaddySearchHit(
+  caddy: CaddySearchRecord,
+  query: string
+): number | null {
+  const raw = trimSearchQuery(query);
+  if (!raw || !matchesCaddySearch(caddy, raw)) return null;
+  const qName = normalizePersonName(raw);
+  const nName = normalizePersonName(caddy.name);
+  if (qName && nName === qName) return CADDY_SEARCH_RANK.EXACT_NAME;
+  if (matchesIdQuery(caddy.id, raw)) return CADDY_SEARCH_RANK.EXACT_ID;
+  if (isExactPhoneOrLast4(caddy.phoneNormalized, raw)) {
+    return CADDY_SEARCH_RANK.EXACT_PHONE;
+  }
+  if (matchesNameQuery(caddy.name, raw)) return CADDY_SEARCH_RANK.NAME_CONTAINS;
+  if (matchesTeamQuery(caddy.team, raw)) return CADDY_SEARCH_RANK.TEAM;
+  return CADDY_SEARCH_RANK.OTHER;
+}
+
+export function toCaddySearchApiHit(caddy: CaddySearchRecord): CaddySearchApiHit {
+  const telHref = caddyTelHref(caddy.phoneNormalized);
+  const telPhone = telHref ? String(caddy.phoneNormalized) : null;
+  return {
+    id: caddy.id,
+    name: String(caddy.name ?? "").trim() || "이름없음",
+    team: String(caddy.team ?? "").trim(),
+    teamOrder: Number.isInteger(caddy.teamOrder) ? Number(caddy.teamOrder) : 0,
+    caddyType: String(caddy.caddyType ?? "HOUSE").trim() || "HOUSE",
+    employmentStatus: String(caddy.employmentStatus ?? "ACTIVE") || "ACTIVE",
+    maskedPhone: maskKrMobile(caddy.phoneNormalized),
+    hasPhone: telPhone != null,
+    telPhone,
+  };
+}
+
+function compareSearchHits(
+  a: { caddy: CaddySearchRecord; rank: number },
+  b: { caddy: CaddySearchRecord; rank: number }
+): number {
+  if (a.rank !== b.rank) return a.rank - b.rank;
+  const teamCmp = String(a.caddy.team ?? "").localeCompare(
+    String(b.caddy.team ?? ""),
+    "ko"
+  );
+  if (teamCmp !== 0) return teamCmp;
+  const ao = Number.isInteger(a.caddy.teamOrder) ? Number(a.caddy.teamOrder) : 0;
+  const bo = Number.isInteger(b.caddy.teamOrder) ? Number(b.caddy.teamOrder) : 0;
+  if (ao !== bo) return ao - bo;
+  return a.caddy.id - b.caddy.id;
+}
+
+/** 빈 q → []. 매칭 후 우선순위로 정렬하고 최대 20건. raw Prisma row 반환 없음. */
+export function searchCaddiesLimited(
+  caddies: readonly CaddySearchRecord[],
+  query: string,
+  limit: number = CADDY_SEARCH_LIMIT
+): CaddySearchApiHit[] {
+  const raw = trimSearchQuery(query);
+  if (!raw) return [];
+  const ranked: Array<{ caddy: CaddySearchRecord; rank: number }> = [];
+  for (const caddy of caddies) {
+    const rank = rankCaddySearchHit(caddy, raw);
+    if (rank == null) continue;
+    ranked.push({ caddy, rank });
+  }
+  ranked.sort(compareSearchHits);
+  const cap = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : CADDY_SEARCH_LIMIT;
+  return ranked.slice(0, cap).map((row) => toCaddySearchApiHit(row.caddy));
+}
+
+export function caddySearchApiResponse(
+  caddies: readonly CaddySearchRecord[],
+  query: string,
+  limit: number = CADDY_SEARCH_LIMIT
+): CaddySearchApiResponse {
+  return { results: searchCaddiesLimited(caddies, query, limit) };
 }
 
 /** tel: 링크용. invalid/null이면 링크를 만들지 않는다. */
