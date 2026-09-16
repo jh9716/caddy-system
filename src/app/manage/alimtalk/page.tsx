@@ -9,11 +9,16 @@ import {
   ALIMTALK_BADGE_STALE,
   ALIMTALK_CANNOT_SEND_LABEL,
   ALIMTALK_GO_ASSIGNMENTS_LABEL,
+  ALIMTALK_SENDABLE_STATUS_LABEL,
   ALIMTALK_STALE_PREVIEW_NOTE,
   ALIMTALK_STALE_REPUBLISH_HINT,
   ALIMTALK_STALE_TITLE,
   alimtalkBlockedCountLabel,
+  alimtalkCurrentDraftVersionLine,
+  alimtalkCurrentPublishedVersionLine,
   alimtalkReadyCountLabel,
+  alimtalkStaleDraftVersionLine,
+  alimtalkStalePublishedVersionLine,
   type AlimtalkPublishedFreshness,
 } from "@/lib/alimtalkPublishedFreshness";
 import {
@@ -137,15 +142,28 @@ export default function ManageAlimtalkPreviewPage() {
             <div className="at-stale" role="alert">
               <strong>{ALIMTALK_STALE_TITLE}</strong>
               <p className="at-stale-versions">
-                게시 버전: v{freshness?.publishedVersion ?? "—"}
-                {" / "}
-                현재 작업본: v{freshness?.currentDraftVersion ?? "—"}
+                {alimtalkStalePublishedVersionLine(freshness?.publishedVersion)}
+              </p>
+              <p className="at-stale-versions">
+                {alimtalkStaleDraftVersionLine(freshness?.currentDraftVersion)}
               </p>
               <p>{ALIMTALK_STALE_PREVIEW_NOTE}</p>
               <p>{ALIMTALK_STALE_REPUBLISH_HINT}</p>
               <Link className="at-go" href={ALIMTALK_ASSIGNMENTS_HREF}>
                 {ALIMTALK_GO_ASSIGNMENTS_LABEL}
               </Link>
+            </div>
+          ) : null}
+
+          {showCurrentBadge ? (
+            <div className="at-current" role="status">
+              <p className="at-current-versions">
+                {alimtalkCurrentPublishedVersionLine(freshness?.publishedVersion)}
+              </p>
+              <p className="at-current-versions">
+                {alimtalkCurrentDraftVersionLine(freshness?.currentDraftVersion)}
+              </p>
+              <p>{ALIMTALK_SENDABLE_STATUS_LABEL}</p>
             </div>
           ) : null}
 
@@ -177,6 +195,11 @@ export default function ManageAlimtalkPreviewPage() {
               </button>
             ))}
           </div>
+          {stale ? (
+            <p className="at-preview-basis" role="note">
+              {ALIMTALK_STALE_PREVIEW_NOTE}
+            </p>
+          ) : null}
           <ul className="at-list">
             {rows.map((row) => (
               <RecipientCard key={row.caddyId} row={row} />
@@ -230,6 +253,17 @@ export default function ManageAlimtalkPreviewPage() {
         .at-stale strong { display: block; font-size: 0.95rem; margin-bottom: 6px; }
         .at-stale p { margin: 4px 0; }
         .at-stale-versions { font-weight: 800; }
+        .at-current {
+          margin-bottom: 12px; padding: 12px 14px; border-radius: 12px;
+          border: 1px solid #b7d4be; background: #f3faf4;
+          color: var(--vh-green-900); font-size: 0.86rem; line-height: 1.45;
+        }
+        .at-current p { margin: 4px 0; }
+        .at-current-versions { font-weight: 800; }
+        .at-preview-basis {
+          margin: 0 0 8px; font-size: 0.78rem; font-weight: 700;
+          color: #8a1f1f;
+        }
         .at-go {
           display: inline-block; margin-top: 8px; font-weight: 800;
           color: var(--vh-green-900); text-decoration: underline;

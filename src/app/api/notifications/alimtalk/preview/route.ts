@@ -15,7 +15,9 @@ export const dynamic = "force-dynamic";
 /**
  * GET /api/notifications/alimtalk/preview?date=YYYY-MM-DD
  * 관리자 전용 READ-ONLY. Published만. 실제 발송/provider/POST 없음.
- * freshness 는 서버에서 매번 재계산. 향후 send 도 같은 helper 를 호출해야 한다.
+ * freshness 는 요청마다 Published+Draft 를 다시 읽어 재계산한다.
+ * 향후 send POST 는 UI canSend 를 믿지 말고 발송 직전에 같은 조회+helper+
+ * assertAlimtalkCanSend 를 호출해야 한다 (TOCTOU).
  */
 export async function GET(req: NextRequest) {
   const guard = await requireAdmin(req);

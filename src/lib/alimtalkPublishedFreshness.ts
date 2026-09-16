@@ -36,12 +36,14 @@ export type AlimtalkPublishedFreshness = {
 export const ALIMTALK_STALE_TITLE =
   "현재 게시 배치가 최신 작업본과 다릅니다.";
 export const ALIMTALK_STALE_PREVIEW_NOTE =
-  "이 내용은 최신 작업본이 아닙니다.";
+  "이 내용은 최신 작업본이 아닌 게시본 기준입니다.";
 export const ALIMTALK_STALE_REPUBLISH_HINT =
   "현재 작업본을 다시 게시한 후 알림톡을 발송할 수 있습니다.";
 export const ALIMTALK_BADGE_CURRENT = "최신 배치";
 export const ALIMTALK_BADGE_STALE = "게시본 오래됨";
 export const ALIMTALK_CANNOT_SEND_LABEL = "발송 불가";
+export const ALIMTALK_SENDABLE_STATUS_LABEL = "발송 가능 상태";
+export const ALIMTALK_SEND_STATUS_PREFIX = "발송 상태";
 export const ALIMTALK_SENDABLE_COUNT_LABEL = "발송 가능";
 export const ALIMTALK_CONTACT_READY_LABEL = "연락처 준비";
 export const ALIMTALK_GO_ASSIGNMENTS_LABEL = "배치표로 이동";
@@ -70,9 +72,33 @@ export function alimtalkBlockedCountLabel(
 ): string | null {
   if (status === "CURRENT" || status === "PUBLISHED_ONLY") return null;
   if (status === "STALE") {
-    return `${ALIMTALK_BADGE_STALE} · ${ALIMTALK_CANNOT_SEND_LABEL}`;
+    return `${ALIMTALK_SEND_STATUS_PREFIX}: ${ALIMTALK_BADGE_STALE} · ${ALIMTALK_CANNOT_SEND_LABEL}`;
   }
-  return ALIMTALK_CANNOT_SEND_LABEL;
+  return `${ALIMTALK_SEND_STATUS_PREFIX}: ${ALIMTALK_CANNOT_SEND_LABEL}`;
+}
+
+export function alimtalkStalePublishedVersionLine(
+  publishedVersion: number | null | undefined
+): string {
+  return `게시 버전 v${publishedVersion ?? "—"}`;
+}
+
+export function alimtalkStaleDraftVersionLine(
+  currentDraftVersion: number | null | undefined
+): string {
+  return `현재 작업본 v${currentDraftVersion ?? "—"}`;
+}
+
+export function alimtalkCurrentPublishedVersionLine(
+  publishedVersion: number | null | undefined
+): string {
+  return `게시 v${publishedVersion ?? "—"}`;
+}
+
+export function alimtalkCurrentDraftVersionLine(
+  currentDraftVersion: number | null | undefined
+): string {
+  return `현재 v${currentDraftVersion ?? "—"}`;
 }
 
 export function isPositiveDraftVersion(
@@ -149,7 +175,11 @@ export function resolvePublishedFreshness(input: {
   };
 }
 
-/** 향후 POST send 가 provider 호출 전에 반드시 호출. UI canSend 만 믿으면 안 된다. */
+/**
+ * 향후 POST send 가 provider 호출 직전에 반드시 호출.
+ * UI canSend 를 믿지 말고, 그 시점에 Published+Draft 를 다시 읽은 뒤
+ * resolvePublishedFreshness 결과를 넘긴다 (TOCTOU).
+ */
 export function assertAlimtalkCanSend(
   freshness: AlimtalkPublishedFreshness
 ): void {

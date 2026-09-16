@@ -11,10 +11,17 @@ import {
   ALIMTALK_CONTACT_READY_LABEL,
   ALIMTALK_GO_ASSIGNMENTS_LABEL,
   ALIMTALK_NOT_SENDABLE,
+  ALIMTALK_SEND_STATUS_PREFIX,
   ALIMTALK_SENDABLE_COUNT_LABEL,
+  ALIMTALK_SENDABLE_STATUS_LABEL,
+  ALIMTALK_STALE_PREVIEW_NOTE,
   AlimtalkNotSendableError,
   alimtalkBlockedCountLabel,
+  alimtalkCurrentDraftVersionLine,
+  alimtalkCurrentPublishedVersionLine,
   alimtalkReadyCountLabel,
+  alimtalkStaleDraftVersionLine,
+  alimtalkStalePublishedVersionLine,
   assertAlimtalkCanSend,
   resolvePublishedFreshness,
 } from "../src/lib/alimtalkPublishedFreshness";
@@ -358,11 +365,44 @@ section("UI wording helpers");
   );
   assert(
     alimtalkBlockedCountLabel("STALE") ===
-      `${ALIMTALK_BADGE_STALE} · ${ALIMTALK_CANNOT_SEND_LABEL}`,
-    "stale 발송 불가 문구"
+      `${ALIMTALK_SEND_STATUS_PREFIX}: ${ALIMTALK_BADGE_STALE} · ${ALIMTALK_CANNOT_SEND_LABEL}`,
+    "stale 발송 상태: 게시본 오래됨 · 발송 불가"
+  );
+  assert(
+    !alimtalkBlockedCountLabel("STALE")!.includes("발송 가능"),
+    "stale 발송 가능 표현 없음"
   );
   assert(alimtalkBlockedCountLabel("CURRENT") === null, "CURRENT 차단문구 없음");
   assert(alimtalkBlockedCountLabel("PUBLISHED_ONLY") === null, "PUBLISHED_ONLY 차단문구 없음");
+  assert(
+    alimtalkBlockedCountLabel("NO_PUBLISHED") ===
+      `${ALIMTALK_SEND_STATUS_PREFIX}: ${ALIMTALK_CANNOT_SEND_LABEL}`,
+    "NO_PUBLISHED 발송 상태"
+  );
+  assert(
+    alimtalkStalePublishedVersionLine(5) === "게시 버전 v5",
+    "stale 게시 버전 v5"
+  );
+  assert(
+    alimtalkStaleDraftVersionLine(39) === "현재 작업본 v39",
+    "stale 현재 작업본 v39"
+  );
+  assert(
+    alimtalkCurrentPublishedVersionLine(39) === "게시 v39",
+    "CURRENT 게시 v39"
+  );
+  assert(
+    alimtalkCurrentDraftVersionLine(39) === "현재 v39",
+    "CURRENT 현재 v39"
+  );
+  assert(
+    ALIMTALK_STALE_PREVIEW_NOTE.includes("게시본 기준"),
+    "stale preview 게시본 기준"
+  );
+  assert(
+    ALIMTALK_SENDABLE_STATUS_LABEL === "발송 가능 상태",
+    "CURRENT 발송 가능 상태"
+  );
   assert(ALIMTALK_ASSIGNMENTS_HREF === "/manage/assignments", "배치표 이동은 assignments");
   assert(ALIMTALK_GO_ASSIGNMENTS_LABEL === "배치표로 이동", "이동 버튼 문구");
 }
@@ -394,9 +434,135 @@ section("source / 안전장치");
   assert(/ALIMTALK_GO_ASSIGNMENTS_LABEL/.test(page), "배치표로 이동");
   assert(/ALIMTALK_ASSIGNMENTS_HREF/.test(page), "assignments href");
   assert(/alimtalkReadyCountLabel/.test(page), "count wording helper");
+  assert(/alimtalkBlockedCountLabel/.test(page), "blocked count helper");
+  assert(/alimtalkCurrentPublishedVersionLine/.test(page), "CURRENT 게시 vN");
+  assert(/alimtalkCurrentDraftVersionLine/.test(page), "CURRENT 현재 vN");
+  assert(/ALIMTALK_SENDABLE_STATUS_LABEL/.test(page), "발송 가능 상태");
+  assert(/at-preview-basis/.test(page), "stale recipient 게시본 기준 note");
   assert(!/model NotificationSend/.test(schema), "send 테이블 없음");
   assert(/contactReady/.test(previewLib), "counts.contactReady");
   assert(!/phoneNormalized/.test(page), "UI raw phone 키 없음");
+}
+
+section("Draft.version 증가 경로 (freshness equality 전제)");
+{
+  const service = readSrc("src/lib/dailyBoardDraftService.ts");
+  const assignments = readSrc("src/app/manage/assignments/page.tsx");
+  const draftRoute = readSrc("src/app/api/assignments/draft/route.ts");
+  const quickMutApply = readSrc("src/lib/quickBoardMutationApply.ts");
+  const quickMoveApply = readSrc("src/lib/quickReservationMoveApply.ts");
+  const specialSupportRoute = readSrc("src/app/api/daily-special-supports/route.ts");
+  const specialDutyRoute = readSrc("src/app/api/daily-special-duties/route.ts");
+  const specialSupportSvc = readSrc("src/lib/dailySpecialSupportService.ts");
+  const specialDutySvc = readSrc("src/lib/dailySpecialDutyService.ts");
+  const previewApi = readSrc("src/app/api/notifications/alimtalk/preview/route.ts");
+  const publishSvc = readSrc("src/lib/dailyBoardPublishedService.ts");
+
+  const createIdx = service.indexOf("dailyBoardDraft.create");
+  const updateIdx = service.indexOf("dailyBoardDraft.updateMany");
+  const bumpIdx = service.indexOf("version: expectedVersion + 1");
+  const createStart = service.indexOf("version: 1");
+  assert(createIdx >= 0 && createStart > createIdx, "create starts at version 1");
+  assert(updateIdx >= 0 && bumpIdx > updateIdx, "updateMany 는 expectedVersion+1");
+  assert(
+    (service.match(/dailyBoardDraft\.create/g) || []).length === 1,
+    "Draft create 는 saveDailyBoardDraftOnDb 한 곳"
+  );
+  assert(
+    (service.match(/dailyBoardDraft\.updateMany/g) || []).length === 1,
+    "Draft updateMany 는 saveDailyBoardDraftOnDb 한 곳"
+  );
+
+  assert(/saveDailyBoardDraft\(/.test(draftRoute), "PUT draft → saveDailyBoardDraft");
+  assert(
+    /await putAssignmentDraft\(\s*next,\s*prepAfterPreview\.expectedVersion/.test(
+      assignments
+    ),
+    "자동배치 재실행 persist + version"
+  );
+  assert(
+    /function onReplace[\s\S]*queueDraftSave\(result\.draft\)/.test(assignments),
+    "직접 셀 교체 → autosave PUT"
+  );
+  assert(
+    /function applyDirectCellPick[\s\S]*queueDraftSave\(result\.draft\)/.test(
+      assignments
+    ),
+    "직접 셀 선택 → autosave PUT"
+  );
+  assert(/const queueDraftSave = useCallback/.test(assignments), "draft autosave queue");
+  assert(
+    /const \{ res, data \} = await putAssignmentDraft\(\s*next,\s*serverDraftVersionRef\.current/.test(
+      assignments
+    ),
+    "autosave flushOnce PUT expectedVersion"
+  );
+
+  function walkTs(dir: string, acc: string[] = []): string[] {
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, ent.name);
+      if (ent.isDirectory()) walkTs(p, acc);
+      else if (/\.(ts|tsx)$/.test(ent.name)) acc.push(p);
+    }
+    return acc;
+  }
+  const draftWriters = walkTs(path.join(process.cwd(), "src")).filter((file) =>
+    /dailyBoardDraft\.(create|updateMany|upsert)/.test(fs.readFileSync(file, "utf8"))
+  );
+  assert(
+    draftWriters.length === 1 &&
+      draftWriters[0].endsWith(`${path.sep}dailyBoardDraftService.ts`),
+    "DailyBoardDraft write 는 saveDailyBoardDraftOnDb 한 파일"
+  );
+  assert(
+    /saveDailyBoardDraftOnDb/.test(quickMutApply) &&
+      quickMutApply.indexOf("writeLiveChangePlan") <
+        quickMutApply.indexOf("saveDailyBoardDraftOnDb"),
+    "live change quick-mutation: live 후 Draft +1"
+  );
+  assert(
+    /saveDailyBoardDraftOnDb/.test(quickMoveApply) &&
+      quickMoveApply.indexOf("writeLiveChangePlan") <
+        quickMoveApply.indexOf("saveDailyBoardDraftOnDb"),
+    "live MOVE: live 후 Draft +1"
+  );
+  assert(
+    !/saveDailyBoardDraft/.test(specialSupportRoute) &&
+      !/dailyBoardDraft/.test(specialSupportRoute) &&
+      !/saveDailyBoardDraft/.test(specialSupportSvc) &&
+      !/dailyBoardDraft/.test(specialSupportSvc),
+    "special support API 는 Draft 미기록"
+  );
+  assert(
+    !/saveDailyBoardDraft/.test(specialDutyRoute) &&
+      !/dailyBoardDraft/.test(specialDutyRoute) &&
+      !/saveDailyBoardDraft/.test(specialDutySvc) &&
+      !/dailyBoardDraft/.test(specialDutySvc),
+    "special duty API 는 Draft 미기록"
+  );
+  assert(
+    /setSpecialSettingsStale\(true\)/.test(assignments) &&
+      /await putAssignmentDraft\(\s*next,\s*prepAfterPreview\.expectedVersion/.test(
+        assignments
+      ),
+    "duty/support 반영은 recalc persist 때 version++"
+  );
+  assert(
+    /sourceDraftVersion: draft\.version/.test(publishSvc),
+    "publish 는 서버 Draft.version 을 sourceDraftVersion 으로 기록"
+  );
+  assert(
+    /getDailyBoardPublished/.test(previewApi) &&
+      /getDailyBoardDraftVersion/.test(previewApi) &&
+      /resolvePublishedFreshness/.test(previewApi),
+    "preview 는 요청마다 Published+Draft 재조회 후 freshness"
+  );
+  assert(
+    /assertAlimtalkCanSend/.test(
+      readSrc("src/lib/alimtalkPublishedFreshness.ts")
+    ),
+    "향후 send 는 helper 재검증"
+  );
 }
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);
