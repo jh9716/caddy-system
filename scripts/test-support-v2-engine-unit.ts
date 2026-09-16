@@ -260,7 +260,7 @@ section("1부: 보호1 → 보호2 → 후출마샬 → 이후 기존 흐름");
     specialRow?.kind === "specialSupport" &&
       specialRow.supportKind === "SPECIAL_SUPPORT" &&
       s1.findIndex((a) => a.caddy.id === 110) > 3,
-    "특수지원은 후출마샬 이후 기존 AUTO 창"
+    "특수지원은 후출마샬 이후, 일반 HOUSE보다 앞"
   );
 }
 
@@ -594,7 +594,7 @@ section("3부: 1·3 → 주말반 → 휴무지원 → 원번 → 2·3 → 찾�
   const off2 = support(72, "휴2", "OFF_SUPPORT", "SHIFT_3", 2);
   const special3 = support(80, "특3", "SPECIAL_SUPPORT", "SHIFT_3", 1);
   const reservations = [
-    ...shiftRes(date, "1부", 4),
+    ...shiftRes(date, "1부", 8),
     ...shiftRes(date, "2부", 6, "12:00"),
     ...shiftRes(date, "3부", 12, "16:00"),
   ];
@@ -887,6 +887,7 @@ section("2부: 보호→찾근→2·3→원번→ONE_TWO 지원→1·2 투");
     twoThreeCandidates: [twoThree],
     oneTwoCandidates: [duty],
     oneTwoSupport: [ot],
+    protectedTailCount: 0,
     reservations,
     fixedAssignments: [
       {

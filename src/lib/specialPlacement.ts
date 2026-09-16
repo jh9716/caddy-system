@@ -1,6 +1,6 @@
 /**
  * 1·3부 / 1막 1부 위치 정책 (순수 도메인, DB write 없음).
- * AUTO: 1부 팀 순번 창. MANUAL: 기존 course+teeTime anchor.
+ * AUTO: 보호·후출/54/1·2 다음부터 1·3 → 1막 → 지원. MANUAL: 기존 course+teeTime anchor.
  */
 
 export const SPECIAL_PLACEMENT_MODES = ["AUTO", "MANUAL"] as const;
@@ -137,12 +137,27 @@ function rawNonNegativeInt(raw: unknown, fallback: number): number {
   return n;
 }
 
+/** 보호1·2 + 이미 점유한 앞 슬롯 수. 1·3/1막/지원 AUTO 창은 이 다음부터. */
+export function countLeadingShift1Prefix<T>(
+  shift1: readonly T[],
+  isPrefixSlot: (row: T) => boolean
+): number {
+  let n = 0;
+  for (const row of shift1) {
+    if (!isPrefixSlot(row)) break;
+    n += 1;
+  }
+  return n;
+}
+
 export function computeShift1SpecialWindow(input: {
   N: number;
   R: number;
   A: number;
   B: number;
   S?: number;
+  /** 보호1·2·후출/54/1·2가 차지한 앞쪽 칸. 기본 0. */
+  prefixCount?: number;
 }): Shift1SpecialWindow {
   const N = Math.max(0, Math.floor(Number(input.N) || 0));
   // 공식은 R>=0 정수를 그대로 쓴다. 0~20 제한은 저장/API 전용.
@@ -150,8 +165,9 @@ export function computeShift1SpecialWindow(input: {
   const A = Math.max(0, Math.floor(Number(input.A) || 0));
   const B = Math.max(0, Math.floor(Number(input.B) || 0));
   const S = Math.max(0, Math.floor(Number(input.S) || 0));
+  const prefixCount = Math.max(0, Math.floor(Number(input.prefixCount) || 0));
   const neededCount = A + B + S;
-  const availableCount = Math.max(0, N - R);
+  const availableCount = Math.max(0, N - R - prefixCount);
   if (neededCount === 0) {
     return {
       ok: true,
@@ -162,8 +178,8 @@ export function computeShift1SpecialWindow(input: {
       S,
       neededCount: 0,
       availableCount,
-      specialStart: availableCount + 1,
-      specialEnd: availableCount,
+      specialStart: prefixCount + 1,
+      specialEnd: prefixCount,
       oneThreeStart: null,
       oneThreeEnd: null,
       oneMakStart: null,
@@ -185,12 +201,12 @@ export function computeShift1SpecialWindow(input: {
       availableCount,
       message:
         S > 0
-          ? `1·3부/1막/특수지원 ${neededCount}명을 넣을 1부 자리가 ${availableCount}칸뿐입니다 (1부 ${N}팀, 끝 ${R}팀 제외).`
-          : `1·3부/1막 ${neededCount}명을 넣을 1부 자리가 ${availableCount}칸뿐입니다 (1부 ${N}팀, 끝 ${R}팀 제외).`,
+          ? `1·3부/1막/특수지원 ${neededCount}명을 넣을 1부 자리가 ${availableCount}칸뿐입니다 (1부 ${N}팀, 앞 ${prefixCount}·끝 ${R}팀 제외).`
+          : `1·3부/1막 ${neededCount}명을 넣을 1부 자리가 ${availableCount}칸뿐입니다 (1부 ${N}팀, 앞 ${prefixCount}·끝 ${R}팀 제외).`,
     };
   }
-  const specialEnd = N - R;
-  const specialStart = specialEnd - neededCount + 1;
+  const specialStart = prefixCount + 1;
+  const specialEnd = prefixCount + neededCount;
   return {
     ok: true,
     N,

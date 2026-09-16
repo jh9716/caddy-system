@@ -31,6 +31,7 @@
     "test:user-kakao-schema-unit": "bash scripts/tsx-safe.sh scripts/test-user-kakao-schema-unit.ts",
     "test:reservation-unit": "bash scripts/tsx-safe.sh scripts/test-reservation-parse-unit.ts",
     "test:auto-assign-unit": "bash scripts/tsx-safe.sh scripts/test-auto-assign-unit.ts",
+    "test:auto-assign-shift-order-unit": "bash scripts/tsx-safe.sh scripts/test-auto-assign-shift-order-unit.ts",
     "test:auto-assign-acceptance": "bash scripts/tsx-safe.sh scripts/test-auto-assign-acceptance-ops-rules.ts",
     "test:assignment-change-reflow-unit": "bash scripts/tsx-safe.sh scripts/test-assignment-change-reflow-unit.ts",
     "test:caddy-pool-canonical-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-pool-canonical-unit.ts",

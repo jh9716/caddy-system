@@ -357,12 +357,26 @@ section("토/일/공휴일 WEEKEND 우선, 평일은 없음");
     !wdThirdNames.some((n) => n === "W12" || n === "W12b" || n === "W9"),
     "평일 WEEKEND는 3부 최종 배치 0"
   );
+  const wdBand = wdResult.assignments.filter(
+    (a) =>
+      a.shift === "3부" &&
+      String(a.reason || "").startsWith("WEEKDAY_BAND_PRIORITY")
+  );
+  assert(
+    wdBand.map((a) => a.caddy.name).join(",") === "D10",
+    "평일 WEEKDAY 우선 band"
+  );
   const wdRegularThird = wdResult.regularAssignments
-    .filter((a) => a.shift === "3부" && a.caddy.caddyType === "THIRD")
+    .filter(
+      (a) =>
+        a.shift === "3부" &&
+        a.caddy.caddyType === "THIRD" &&
+        !String(a.reason || "").startsWith("WEEKDAY_BAND_PRIORITY")
+    )
     .map((a) => a.caddy.name);
   assert(
-    wdRegularThird[0] === "D10" && wdRegularThird.includes("N11"),
-    "평일 regular THIRD는 WEEKEND 제거 후 D10부터"
+    wdRegularThird[0] === "N11" && !wdRegularThird.includes("D10"),
+    "평일 regular THIRD는 WEEKDAY band 제외 후 N11부터"
   );
 }
 
@@ -441,7 +455,7 @@ section("평일 WEEKEND 3부 완전 제외 / 토·일·공휴일 우선");
     const modeBThird = thirdShiftNames(modeB);
     assert(
       modeBThird[0] === "D10" && modeBThird[1] === "N11",
-      `${date} ${label} Mode B: 2부 spare 없이 regular THIRD부터 (WEEKEND 제외)`
+      `${date} ${label} Mode B: 2부 spare 없이 WEEKDAY 다음 regular THIRD`
     );
   }
 
