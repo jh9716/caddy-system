@@ -1,14 +1,34 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { kstYmd } from "@/lib/kstDate";
+import {
+  ALIMTALK_ASSIGNMENTS_HREF,
+  ALIMTALK_BADGE_CURRENT,
+  ALIMTALK_BADGE_STALE,
+  ALIMTALK_CANNOT_SEND_LABEL,
+  ALIMTALK_GO_ASSIGNMENTS_LABEL,
+  ALIMTALK_STALE_PREVIEW_NOTE,
+  ALIMTALK_STALE_REPUBLISH_HINT,
+  ALIMTALK_STALE_TITLE,
+  alimtalkBlockedCountLabel,
+  alimtalkReadyCountLabel,
+  type AlimtalkPublishedFreshness,
+} from "@/lib/alimtalkPublishedFreshness";
 import {
   ALIMTALK_PREVIEW_EMPTY_MESSAGE,
   type AlimtalkPreviewRecipient,
   type AlimtalkWorkNoticePreview,
 } from "@/lib/alimtalkWorkNoticePreview";
 
-type FilterId = "all" | "sendable" | "missing";
+type FilterId = "all" | "ready" | "missing";
+
+function freshnessOf(
+  preview: AlimtalkWorkNoticePreview | null
+): AlimtalkPublishedFreshness | null {
+  return preview?.freshness ?? null;
+}
 
 export default function ManageAlimtalkPreviewPage() {
   const [date, setDate] = useState(kstYmd);
@@ -49,9 +69,12 @@ export default function ManageAlimtalkPreviewPage() {
     void load(date);
   }, [date, load]);
 
+  const freshness = freshnessOf(preview);
+  const canSend = freshness?.canSend === true;
+  const stale = freshness?.status === "STALE";
   const rows = useMemo(() => {
     const list = preview?.recipients ?? [];
-    if (filter === "sendable") return list.filter((row) => row.hasPhone);
+    if (filter === "ready") return list.filter((row) => row.hasPhone);
     if (filter === "missing") return list.filter((row) => !row.hasPhone);
     return list;
   }, [preview, filter]);
@@ -60,8 +83,13 @@ export default function ManageAlimtalkPreviewPage() {
   const counts = preview?.counts ?? {
     recipients: 0,
     sendable: 0,
+    contactReady: 0,
     missingPhone: 0,
   };
+  const contactReady = counts.contactReady ?? counts.sendable ?? 0;
+  const readyFilterLabel = alimtalkReadyCountLabel(canSend);
+  const blockedLabel = alimtalkBlockedCountLabel(freshness?.status ?? "NO_PUBLISHED");
+  const showCurrentBadge = canSend;
 
   return (
     <div className="at-page">
@@ -95,16 +123,47 @@ export default function ManageAlimtalkPreviewPage() {
 
       {!loading && published ? (
         <>
+          <div className="at-status-row">
+            {showCurrentBadge ? (
+              <span className="at-badge is-current">{ALIMTALK_BADGE_CURRENT}</span>
+            ) : (
+              <span className="at-badge is-stale">
+                {stale ? ALIMTALK_BADGE_STALE : ALIMTALK_CANNOT_SEND_LABEL}
+              </span>
+            )}
+          </div>
+
+          {stale ? (
+            <div className="at-stale" role="alert">
+              <strong>{ALIMTALK_STALE_TITLE}</strong>
+              <p className="at-stale-versions">
+                게시 버전: v{freshness?.publishedVersion ?? "—"}
+                {" / "}
+                현재 작업본: v{freshness?.currentDraftVersion ?? "—"}
+              </p>
+              <p>{ALIMTALK_STALE_PREVIEW_NOTE}</p>
+              <p>{ALIMTALK_STALE_REPUBLISH_HINT}</p>
+              <Link className="at-go" href={ALIMTALK_ASSIGNMENTS_HREF}>
+                {ALIMTALK_GO_ASSIGNMENTS_LABEL}
+              </Link>
+            </div>
+          ) : null}
+
           <div className="at-counts">
-            <span>게시 배치 {counts.recipients}명</span>
-            <span>발송 가능 {counts.sendable}명</span>
+            <span>대상 {counts.recipients}명</span>
+            <span>
+              {readyFilterLabel} {contactReady}명
+            </span>
             <span>연락처 없음 {counts.missingPhone}명</span>
+            {blockedLabel ? (
+              <span className="at-nosend">{blockedLabel}</span>
+            ) : null}
           </div>
           <div className="at-filters" role="tablist" aria-label="수신자 필터">
             {(
               [
                 ["all", "전체"],
-                ["sendable", "발송 가능"],
+                ["ready", readyFilterLabel],
                 ["missing", "연락처 없음"],
               ] as const
             ).map(([id, label]) => (
@@ -152,11 +211,35 @@ export default function ManageAlimtalkPreviewPage() {
         .at-muted, .at-empty {
           font-size: 0.88rem; color: var(--vh-muted); white-space: pre-line;
         }
+        .at-status-row { margin-bottom: 10px; }
+        .at-badge {
+          display: inline-block; padding: 4px 10px; border-radius: 999px;
+          font-size: 0.76rem; font-weight: 800;
+        }
+        .at-badge.is-current {
+          background: #e7f3ea; color: var(--vh-green-900);
+        }
+        .at-badge.is-stale {
+          background: #fdecec; color: #8a1f1f;
+        }
+        .at-stale {
+          margin-bottom: 12px; padding: 12px 14px; border-radius: 12px;
+          border: 1px solid #e7b0b0; background: #fff6f6;
+          color: #6b1d1d; font-size: 0.86rem; line-height: 1.45;
+        }
+        .at-stale strong { display: block; font-size: 0.95rem; margin-bottom: 6px; }
+        .at-stale p { margin: 4px 0; }
+        .at-stale-versions { font-weight: 800; }
+        .at-go {
+          display: inline-block; margin-top: 8px; font-weight: 800;
+          color: var(--vh-green-900); text-decoration: underline;
+        }
         .at-counts {
           display: flex; flex-wrap: wrap; gap: 8px 14px;
           font-size: 0.82rem; font-weight: 700; color: var(--vh-green-900);
           margin-bottom: 10px;
         }
+        .at-nosend { color: #8a1f1f; }
         .at-filters { display: flex; gap: 6px; margin-bottom: 10px; }
         .at-filter {
           min-height: 34px; padding: 4px 10px; border-radius: 999px;

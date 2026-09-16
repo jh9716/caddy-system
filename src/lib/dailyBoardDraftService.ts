@@ -123,6 +123,17 @@ export async function getDailyBoardDraft(
   return toRecord(row, ymd);
 }
 
+/** payload 파싱 없이 version 만. 알림톡 freshness / 향후 send guard 용. */
+export async function getDailyBoardDraftVersion(
+  ymd: string
+): Promise<number | null> {
+  const row = await defaultPrisma.dailyBoardDraft.findUnique({
+    where: { date: dateKey(ymd) },
+    select: { version: true },
+  });
+  return row ? row.version : null;
+}
+
 export type DailyBoardDraftWriter = Pick<DailyBoardDraftDb, "dailyBoardDraft">;
 
 export async function saveDailyBoardDraftOnDb(

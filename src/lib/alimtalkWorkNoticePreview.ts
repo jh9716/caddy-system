@@ -8,6 +8,10 @@ import { formatShiftLabel } from "@/lib/caddySearch";
 import { maskKrMobile } from "@/lib/caddyPhone";
 import { courseLabelKo } from "@/lib/reservationMove";
 import type { DailyBoardPublishedPayloadV1 } from "@/lib/dailyBoardPublished";
+import {
+  resolvePublishedFreshness,
+  type AlimtalkPublishedFreshness,
+} from "@/lib/alimtalkPublishedFreshness";
 
 const PHONE_CANONICAL = /^010\d{8}$/;
 
@@ -44,9 +48,12 @@ export type AlimtalkWorkNoticePreview = {
   date: string;
   published: boolean;
   sourceDraftVersion: number | null;
+  freshness: AlimtalkPublishedFreshness;
   counts: {
     recipients: number;
+    /** 연락처 준비 인원. 발송 가능 여부는 freshness.canSend. */
     sendable: number;
+    contactReady: number;
     missingPhone: number;
   };
   recipients: AlimtalkPreviewRecipient[];
@@ -122,13 +129,21 @@ function hasCanonicalPhone(phoneNormalized: string | null | undefined): boolean 
 }
 
 export function emptyAlimtalkWorkNoticePreview(
-  date: string
+  date: string,
+  freshness?: AlimtalkPublishedFreshness | null
 ): AlimtalkWorkNoticePreview {
   return {
     date,
     published: false,
     sourceDraftVersion: null,
-    counts: { recipients: 0, sendable: 0, missingPhone: 0 },
+    freshness:
+      freshness ??
+      resolvePublishedFreshness({
+        hasPublished: false,
+        publishedSourceDraftVersion: null,
+        currentDraftVersion: null,
+      }),
+    counts: { recipients: 0, sendable: 0, contactReady: 0, missingPhone: 0 },
     recipients: [],
   };
 }
@@ -137,6 +152,8 @@ export function buildAlimtalkWorkNoticePreview(input: {
   payload: Pick<DailyBoardPublishedPayloadV1, "date" | "placements">;
   caddies?: readonly AlimtalkCaddyContact[] | null;
   sourceDraftVersion?: number | null;
+  currentDraftVersion?: number | null;
+  freshness?: AlimtalkPublishedFreshness | null;
 }): AlimtalkWorkNoticePreview {
   const date = String(input.payload?.date ?? "").trim();
   const contactById = new Map<number, AlimtalkCaddyContact>();
@@ -206,16 +223,26 @@ export function buildAlimtalkWorkNoticePreview(input: {
   }
 
   recipients.sort(compareRecipients);
-  const sendable = recipients.filter((row) => row.hasPhone).length;
+  const contactReady = recipients.filter((row) => row.hasPhone).length;
+  const sourceDraftVersion =
+    typeof input.sourceDraftVersion === "number" ? input.sourceDraftVersion : null;
+  const freshness =
+    input.freshness ??
+    resolvePublishedFreshness({
+      hasPublished: true,
+      publishedSourceDraftVersion: sourceDraftVersion,
+      currentDraftVersion: input.currentDraftVersion ?? null,
+    });
   return {
     date,
     published: true,
-    sourceDraftVersion:
-      typeof input.sourceDraftVersion === "number" ? input.sourceDraftVersion : null,
+    sourceDraftVersion,
+    freshness,
     counts: {
       recipients: recipients.length,
-      sendable,
-      missingPhone: recipients.length - sendable,
+      sendable: contactReady,
+      contactReady,
+      missingPhone: recipients.length - contactReady,
     },
     recipients,
   };

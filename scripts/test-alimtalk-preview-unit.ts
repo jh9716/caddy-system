@@ -206,6 +206,7 @@ section("E. phone 있음 → sendable + maskedPhone만");
     caddies: [kimContact],
   });
   assert(out.counts.sendable === 1, "sendable +1");
+  assert(out.counts.contactReady === 1, "contactReady +1");
   assert(out.counts.missingPhone === 0, "missing 0");
   assert(out.recipients[0]?.hasPhone === true, "hasPhone");
   assert(out.recipients[0]?.maskedPhone === "010-****-5678", "masked");
@@ -252,6 +253,9 @@ section("H. Published 없음 empty state");
   assert(empty.published === false, "published false");
   assert(empty.recipients.length === 0, "recipients []");
   assert(empty.sourceDraftVersion === null, "no draft version");
+  assert(empty.freshness.status === "NO_PUBLISHED", "empty freshness");
+  assert(empty.freshness.canSend === false, "empty canSend false");
+  assert(empty.counts.contactReady === 0, "contactReady 0");
   assert(
     ALIMTALK_PREVIEW_EMPTY_MESSAGE.includes("게시된 배치표가 없습니다"),
     "empty copy"
@@ -401,7 +405,9 @@ section("source / 안전장치");
   const publishedView = readSrc("src/components/board/PublishedBoardView.tsx");
 
   assert(/getDailyBoardPublished/.test(api), "API Published source");
-  assert(!/getDailyBoardDraft/.test(api), "Draft fallback 없음");
+  assert(!/getDailyBoardDraft\(/.test(api), "Draft payload fallback 없음");
+  assert(/getDailyBoardDraftVersion/.test(api), "freshness draft version");
+  assert(/resolvePublishedFreshness/.test(api), "freshness helper");
   assert(/requireAdmin/.test(api), "requireAdmin");
   assert(api.indexOf("requireAdmin") < api.indexOf("getDailyBoardPublished"), "admin first");
   assert(/export async function GET/.test(api), "GET only");
