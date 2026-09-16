@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/auth";
 import { isYmd } from "@/lib/dailyBoardDraft";
+import { getDailyBoardDraftVersion } from "@/lib/dailyBoardDraftService";
 import { getDailyBoardPublished } from "@/lib/dailyBoardPublishedService";
+import { resolvePublishedFreshness } from "@/lib/alimtalkPublishedFreshness";
 import {
   buildAlimtalkWorkNoticePreview,
   emptyAlimtalkWorkNoticePreview,
@@ -13,6 +15,9 @@ export const dynamic = "force-dynamic";
 /**
  * GET /api/notifications/alimtalk/preview?date=YYYY-MM-DD
  * 관리자 전용 READ-ONLY. Published만. 실제 발송/provider/POST 없음.
+ * freshness 는 요청마다 Published+Draft 를 다시 읽어 재계산한다.
+ * 향후 send POST 는 UI canSend 를 믿지 말고 발송 직전에 같은 조회+helper+
+ * assertAlimtalkCanSend 를 호출해야 한다 (TOCTOU).
  */
 export async function GET(req: NextRequest) {
   const guard = await requireAdmin(req);
@@ -24,9 +29,18 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const published = await getDailyBoardPublished(date);
+    const [published, currentDraftVersion] = await Promise.all([
+      getDailyBoardPublished(date),
+      getDailyBoardDraftVersion(date),
+    ]);
+    const freshness = resolvePublishedFreshness({
+      hasPublished: Boolean(published),
+      publishedSourceDraftVersion: published?.sourceDraftVersion ?? null,
+      currentDraftVersion,
+    });
+
     if (!published) {
-      return NextResponse.json(emptyAlimtalkWorkNoticePreview(date));
+      return NextResponse.json(emptyAlimtalkWorkNoticePreview(date, freshness));
     }
 
     const ids = [
@@ -55,6 +69,8 @@ export async function GET(req: NextRequest) {
         payload: published.payload,
         caddies,
         sourceDraftVersion: published.sourceDraftVersion,
+        currentDraftVersion,
+        freshness,
       })
     );
   } catch (e: unknown) {

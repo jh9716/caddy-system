@@ -1,0 +1,12 @@
+{
+  "date": "2026-09-07",
+  "publishedSourceDraftVersion": 5,
+  "currentDraftVersion": 39,
+  "placements": 209,
+  "recipients": 168,
+  "contactReady": 1,
+  "missingPhone": 167,
+  "expectedStatus": "STALE",
+  "canSend": false,
+  "note": "production-like stale Published. Do not collapse recipients to Draft 164."
+}
