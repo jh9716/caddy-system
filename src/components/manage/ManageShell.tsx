@@ -39,6 +39,11 @@ const NAV = [
     match: (p: string) => p.startsWith("/manage/assignments/preview"),
   },
   {
+    href: "/manage/alimtalk",
+    label: "알림톡",
+    match: (p: string) => p.startsWith("/manage/alimtalk"),
+  },
+  {
     href: "/manage/users",
     label: "계정 연결",
     match: (p: string) => p.startsWith("/manage/users"),
