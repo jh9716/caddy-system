@@ -12,8 +12,9 @@
  *   The handler is a no-op: the browser keeps the default network path.
  *
  * Push:
- * - V1 does not listen for push or notification clicks.
- * - A later PR may attach those listeners after explicit product approval.
+ * - Subscription V1 reuses this registration for PushManager.subscribe.
+ * - This file still does not listen for push or notification clicks.
+ * - Display/send is a later PR after explicit product approval.
  */
 /* eslint-disable no-restricted-globals */
 

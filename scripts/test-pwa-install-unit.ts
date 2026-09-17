@@ -239,7 +239,6 @@ const pwaFiles = [
   "src/components/PwaInstallCard.tsx",
   "src/components/ServiceWorkerRegister.tsx",
   "src/app/manifest.ts",
-  "src/app/caddy/page.tsx",
   "src/app/layout.tsx",
 ];
 for (const rel of pwaFiles) {
@@ -250,15 +249,18 @@ for (const rel of pwaFiles) {
   assert(!src.includes("vapid"), `${rel} no vapid`);
 }
 
+const caddyPagePush = readSrc("src/app/caddy/page.tsx");
+assert(caddyPagePush.includes("PushNotificationCard"), "/caddy renders notification card");
+assert(!caddyPagePush.includes("requestPermission"), "/caddy page does not request permission itself");
+
 const schema = readSrc("prisma/schema.prisma");
-assert(!schema.includes("PushSubscription"), "schema has no PushSubscription");
 assert(!schema.includes("model Comment"), "schema has no Comment (out of scope)");
 assert(!schema.includes("model Chat"), "schema has no Chat (out of scope)");
 
 const migrations = fs.readdirSync(path.join(process.cwd(), "prisma/migrations"));
 assert(
-  !migrations.some((name) => /pwa|push.?sub/i.test(name)),
-  "no PWA/push migration folder"
+  !migrations.some((name) => /pwa.?install/i.test(name)),
+  "no PWA install migration folder"
 );
 
 assert(SESSION_MAX_AGE_SEC === 60 * 60 * 8, "session TTL still 8h");
