@@ -6,7 +6,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import {
   ADMIN_SESSION_MAX_AGE_SEC,
@@ -22,9 +22,12 @@ import {
   verifySignedSessionToken,
 } from "../src/lib/sessionCookies";
 import {
+  AuthStoreUnavailableError,
   isRetiredCaddySessionBlocked,
+  requireAdmin,
   resolveAuthFromCookieStore,
 } from "../src/lib/auth";
+import { prisma } from "../src/lib/prisma";
 import {
   employmentBecameRetired,
   incrementSessionVersionForCaddyLink,
@@ -294,8 +297,56 @@ async function main() {
     assert(checkRole.includes("resolveAuthFromCookieStore"), "check-role uses resolveAuthUser path");
     assert(checkRole.includes("{ role: auth.role }") || checkRole.includes("role: auth.role"), "check-role keeps role field");
     assert(checkRole.includes("role: null") || checkRole.includes("role:null"), "unauth role null");
+    assert(checkRole.includes("isAuthStoreUnavailable"), "check-role distinguishes DB unavailable");
+    assert(checkRole.includes("status: 503"), "check-role DB unavailable → 503 without cookie clear");
     assert(!mw.includes("prisma"), "middleware still has no Prisma");
     assert(!mw.includes("@/lib/prisma"), "middleware does not import prisma");
+  }
+
+  section("F2. DB unavailable is not session revoke");
+  {
+    const origFind = prisma.user.findUnique.bind(prisma.user);
+    prisma.user.findUnique = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as typeof prisma.user.findUnique;
+    try {
+      const tok = await signSessionClaims(
+        buildSessionClaims({
+          userId: 1,
+          username: "db_down_user",
+          role: "caddy",
+          sessionVersion: 0,
+        })
+      );
+      let threw: unknown = null;
+      try {
+        await resolveAuthFromCookieStore(cookieJar({ [SESSION_COOKIE_NAME]: tok }));
+      } catch (e) {
+        threw = e;
+      }
+      assert(
+        threw instanceof AuthStoreUnavailableError,
+        "DB throw → AuthStoreUnavailableError, not null"
+      );
+
+      const req = new NextRequest("http://localhost/api/caddies", {
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${tok}` },
+      });
+      const guard = await requireAdmin(req);
+      assert(
+        guard instanceof Response && guard.status === 503,
+        "requireAdmin DB down → 503 not 401"
+      );
+      if (guard instanceof Response) {
+        const blob = (guard.headers.getSetCookie?.() ?? []).join("\n");
+        assert(
+          !blob.includes(`${SESSION_COOKIE_NAME}=`),
+          "503 does not Set-Cookie-clear vh_session"
+        );
+      }
+    } finally {
+      prisma.user.findUnique = origFind;
+    }
   }
 
   section("G. PWA cookie / SW regression (source)");

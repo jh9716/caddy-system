@@ -29,6 +29,25 @@ export type ResolvedAuthUser = {
   mustChangePassword: boolean;
 };
 
+/** Prisma/DB 일시 오류. invalid session과 구분. 쿠키를 지우면 안 됨. */
+export class AuthStoreUnavailableError extends Error {
+  constructor(message = "auth store unavailable", options?: { cause?: unknown }) {
+    super(message);
+    this.name = "AuthStoreUnavailableError";
+    if (options && "cause" in options) {
+      (this as Error & { cause?: unknown }).cause = options.cause;
+    }
+  }
+}
+
+export function isAuthStoreUnavailable(e: unknown): boolean {
+  return e instanceof AuthStoreUnavailableError;
+}
+
+export function authUnavailableResponse(): NextResponse {
+  return NextResponse.json({ error: "auth_unavailable" }, { status: 503 });
+}
+
 /**
  * RETIRED linked Caddy blocks caddy/leader sessions only.
  * Admin stays authenticated even if an anomalous caddyId points at RETIRED.
@@ -116,8 +135,9 @@ export async function resolveAuthFromCookieStore(cookies: {
       mustChangePassword: user.mustChangePassword === true,
     };
   } catch (e) {
+    if (e instanceof AuthStoreUnavailableError) throw e;
     console.error("[resolveAuthFromCookieStore]", e);
-    return null;
+    throw new AuthStoreUnavailableError("auth store unavailable", { cause: e });
   }
 }
 
@@ -147,7 +167,13 @@ export function canReadPublishedBoard(role: AppRole | null | undefined): boolean
 export async function requireAdmin(
   req: NextRequest
 ): Promise<NextResponse | void> {
-  const auth = await resolveAuthUser(req);
+  let auth: ResolvedAuthUser | null;
+  try {
+    auth = await resolveAuthUser(req);
+  } catch (e) {
+    if (isAuthStoreUnavailable(e)) return authUnavailableResponse();
+    throw e;
+  }
   if (!auth || auth.role !== "admin") {
     const res = NextResponse.json({ error: "unauthorized" }, { status: 401 });
     if (!auth) clearSessionCookies(res, req);
@@ -162,7 +188,13 @@ export async function requireAdmin(
 export async function requirePublishedReader(
   req: NextRequest
 ): Promise<NextResponse | void> {
-  const auth = await resolveAuthUser(req);
+  let auth: ResolvedAuthUser | null;
+  try {
+    auth = await resolveAuthUser(req);
+  } catch (e) {
+    if (isAuthStoreUnavailable(e)) return authUnavailableResponse();
+    throw e;
+  }
   if (!auth || !canReadPublishedBoard(auth.role)) {
     const res = NextResponse.json({ error: "unauthorized" }, { status: 401 });
     if (!auth) clearSessionCookies(res, req);
@@ -225,7 +257,13 @@ export async function resolveOffRequestActor(
 export async function requireOffRequestActor(
   req: NextRequest
 ): Promise<OffRequestActor | NextResponse> {
-  const auth = await resolveAuthUser(req);
+  let auth: ResolvedAuthUser | null;
+  try {
+    auth = await resolveAuthUser(req);
+  } catch (e) {
+    if (isAuthStoreUnavailable(e)) return authUnavailableResponse();
+    throw e;
+  }
   if (!auth) {
     const res = NextResponse.json({ error: "unauthorized" }, { status: 401 });
     clearSessionCookies(res, req);

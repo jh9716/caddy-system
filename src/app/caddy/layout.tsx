@@ -8,6 +8,7 @@ export const dynamic = "force-dynamic";
  * Node/RSC gate for /caddy (and /caddy/link).
  * Edge middleware only checks signed cookie + role claim.
  * This re-checks DB User.sessionVersion, DB role, and RETIRED via resolveAuthUser.
+ * AuthStoreUnavailableError는 여기서 login redirect로 바꾸지 않는다.
  */
 export default async function CaddyLayout({
   children,
