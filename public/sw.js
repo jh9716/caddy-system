@@ -6,6 +6,8 @@
  * Cache policy:
  * - Do not store HTML, API, auth, login, manage, or published board.
  * - Do not write into Cache Storage.
+ * - Do not enumerate or delete origin Cache Storage on activate.
+ *   V1 creates no caches; a later PR may clean only a VERTHILL prefix.
  * - A fetch listener is present so Chromium can treat the app as installable.
  *   The handler is a no-op: the browser keeps the default network path.
  *
@@ -20,13 +22,7 @@ self.addEventListener("install", (event) => {
 });
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(
-    (async () => {
-      const keys = await caches.keys();
-      await Promise.all(keys.map((key) => caches.delete(key)));
-      await self.clients.claim();
-    })()
-  );
+  event.waitUntil(self.clients.claim());
 });
 
 self.addEventListener("fetch", () => {

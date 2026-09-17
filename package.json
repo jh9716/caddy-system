@@ -28,6 +28,7 @@
     "test:alimtalk-preview-unit": "bash scripts/tsx-safe.sh scripts/test-alimtalk-preview-unit.ts",
     "test:alimtalk-freshness-unit": "bash scripts/tsx-safe.sh scripts/test-alimtalk-freshness-unit.ts",
     "test:pwa-install-unit": "bash scripts/tsx-safe.sh scripts/test-pwa-install-unit.ts",
+    "test:pwa-sw-cache-preserve-chromium": "bash scripts/tsx-safe.sh scripts/test-pwa-sw-cache-preserve-chromium.ts",
     "test:caddy-display-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-display-unit.ts",
     "test:login-unit": "bash scripts/tsx-safe.sh scripts/test-login-session-unit.ts",
     "test:staff-admin-unit": "bash scripts/tsx-safe.sh scripts/test-staff-admin-password-unit.ts",

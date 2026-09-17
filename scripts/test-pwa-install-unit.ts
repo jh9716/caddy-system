@@ -160,7 +160,9 @@ assert(!/event\.respondWith/.test(sw), "fetch does not respondWith");
 assert(!/\.put\(/.test(sw), "no cache.put");
 assert(!/caches\.open/.test(sw), "no caches.open");
 assert(!/caches\.match/.test(sw), "no caches.match");
-assert(sw.includes("caches.delete"), "activate deletes leftover caches");
+assert(!/caches\.keys/.test(sw), "activate does not enumerate origin caches");
+assert(!/caches\.delete/.test(sw), "activate does not delete origin caches");
+assert(!/keys\.map/.test(sw), "no keys.map cache wipe");
 assert(!/addEventListener\(\s*["']push["']/.test(sw), "no push listener in V1");
 assert(
   !/addEventListener\(\s*["']notificationclick["']/.test(sw),
