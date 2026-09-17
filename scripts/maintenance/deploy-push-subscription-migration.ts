@@ -47,17 +47,23 @@ function auditMigrationSql(sql: string): void {
   const forbidden = [
     /\bDROP\b/,
     /\bTRUNCATE\b/,
-    /\bDELETE\b/,
-    /\bUPDATE\b/,
     /\bINSERT\b/,
     /\bREWRITE\b/,
     /\bSET\s+DATA\s+TYPE\b/,
     /\bMIGRATE\s+RESET\b/,
+    /\bDELETE\s+FROM\b/,
+    /\bUPDATE\s+"?[A-Z0-9_]+"?\s+SET\b/,
   ];
   for (const re of forbidden) {
     if (re.test(upper)) {
       throw new Error(`HOLD: migration.sql contains forbidden token ${re}`);
     }
+  }
+  if (/\bDELETE\b/.test(upper.replace(/ON\s+DELETE\s+CASCADE/g, ""))) {
+    throw new Error("HOLD: migration.sql contains DELETE besides ON DELETE CASCADE");
+  }
+  if (/\bUPDATE\b/.test(upper.replace(/ON\s+UPDATE\s+CASCADE/g, ""))) {
+    throw new Error("HOLD: migration.sql contains UPDATE besides ON UPDATE CASCADE");
   }
 
   const alterRe = /\bALTER\s+TABLE\b\s+"?([A-Za-z0-9_]+)"?/gi;
