@@ -1,10 +1,46 @@
 import "./globals.css";
+import type { Metadata, Viewport } from "next";
 import { cookies } from "next/headers";
 import { Cormorant_Garamond, Noto_Serif_KR, Source_Sans_3 } from "next/font/google";
 import AppHeader from "@/components/AppHeader";
+import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
 import { getVerifiedSessionFromCookies } from "@/lib/sessionCookies";
+import {
+  PWA_APPLE_TOUCH_ICON,
+  PWA_ICON_192,
+  PWA_ICON_512,
+  PWA_NAME,
+  PWA_THEME_COLOR,
+} from "@/lib/pwaManifest";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  applicationName: PWA_NAME,
+  title: {
+    default: PWA_NAME,
+    template: `%s · ${PWA_NAME}`,
+  },
+  manifest: "/manifest.webmanifest",
+  icons: {
+    icon: [
+      { url: PWA_ICON_192, sizes: "192x192", type: "image/png" },
+      { url: PWA_ICON_512, sizes: "512x512", type: "image/png" },
+    ],
+    apple: [{ url: PWA_APPLE_TOUCH_ICON, sizes: "180x180", type: "image/png" }],
+  },
+  appleWebApp: {
+    capable: true,
+    title: PWA_NAME,
+    statusBarStyle: "default",
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: PWA_THEME_COLOR,
+  width: "device-width",
+  initialScale: 1,
+};
 
 const display = Cormorant_Garamond({
   subsets: ["latin"],
@@ -37,6 +73,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       className={`${display.variable} ${displayKr.variable} ${sans.variable}`}
     >
       <body>
+        <ServiceWorkerRegister />
         <AppHeader role={role} />
         <main className="vh-main">{children}</main>
       </body>
