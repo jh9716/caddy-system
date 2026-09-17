@@ -23,6 +23,19 @@ const MAJOR_TABLES = [
   "DailySpecialSupport",
   "DailyOpsDuty",
   "DailyCaddyUnavailable",
+  "CaddyLinkRequest",
+  "DailyAssignmentChange",
+  "DailyOffOverride",
+  "DailyOpsDutyOverride",
+  "DailyOpsSnapshot",
+  "DailyPlacement",
+  "DailyReservation",
+  "DailySpecialDuty",
+  "DailySpecialDutyAnchor",
+  "DailySpecialPlacementSetting",
+  "OffRequest",
+  "ScheduleExtraTag",
+  "ThirdWeeklyStartOverride",
 ] as const;
 
 function assertReadOnly() {

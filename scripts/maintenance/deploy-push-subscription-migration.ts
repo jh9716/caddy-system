@@ -304,9 +304,18 @@ async function main() {
         console.log(
           JSON.stringify(
             {
+              ok: true,
               mode: "already-applied",
               host,
               migration: MIGRATION_NAME,
+              columns: desc.columns.map((c) => c.column_name),
+              indexes: desc.indexes.map((i) => i.indexname),
+              foreignKeys: desc.fks.map((f) => ({
+                name: f.constraint_name,
+                from: f.column_name,
+                to: `${f.foreign_table}.${f.foreign_column}`,
+                onDelete: f.delete_rule,
+              })),
               pushSubscriptionRows: n,
             },
             null,
@@ -318,7 +327,9 @@ async function main() {
       throw new Error("HOLD: PushSubscription table exists but migration is not recorded");
     }
 
-    const countTargets = tablesBefore.filter((t) => t !== "PushSubscription");
+    const countTargets = tablesBefore.filter(
+      (t) => t !== "PushSubscription" && t !== "_prisma_migrations"
+    );
     const before = await countTables(prisma, countTargets);
     console.log(
       JSON.stringify(
@@ -362,7 +373,7 @@ async function main() {
 
     const afterBase = await countTables(
       prisma,
-      tablesAfter.filter((t) => t !== "PushSubscription")
+      tablesAfter.filter((t) => t !== "PushSubscription" && t !== "_prisma_migrations")
     );
     const drift: string[] = [];
     for (const name of countTargets) {
