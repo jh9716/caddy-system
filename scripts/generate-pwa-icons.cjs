@@ -182,6 +182,22 @@ function writePng(relOrAbs, px) {
   console.log("wrote", path.relative(ROOT, abs), px.size);
 }
 
+function writeIco(abs, px) {
+  const png = encodePng(px);
+  const header = Buffer.alloc(6);
+  header.writeUInt16LE(0, 0);
+  header.writeUInt16LE(1, 2);
+  header.writeUInt16LE(1, 4);
+  const entry = Buffer.alloc(16);
+  entry[0] = px.size >= 256 ? 0 : px.size;
+  entry[1] = px.size >= 256 ? 0 : px.size;
+  entry.writeUInt32LE(png.length, 8);
+  entry.writeUInt32LE(22, 12);
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  fs.writeFileSync(abs, Buffer.concat([header, entry, png]));
+  console.log("wrote", path.relative(ROOT, abs), "ico");
+}
+
 function main() {
   fs.mkdirSync(OUT, { recursive: true });
   writePng(path.join(OUT, "icon-192.png"), makeCanvas(192, { rounded: true, maskable: false }));
@@ -199,6 +215,9 @@ function main() {
     makeCanvas(180, { rounded: false, maskable: false })
   );
   writePng(path.join(APP, "icon.png"), makeCanvas(192, { rounded: true, maskable: false }));
+  const favPx = makeCanvas(32, { rounded: true, maskable: false });
+  writeIco(path.join(APP, "favicon.ico"), favPx);
+  writeIco(path.join(ROOT, "public", "favicon.ico"), favPx);
 }
 
 main();

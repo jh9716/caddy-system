@@ -128,6 +128,11 @@ for (const [rel, size] of files) {
   assert(info.width === size && info.height === size, `${rel} is ${size}x${size}`);
   assert(info.bytes > 400, `${rel} is not empty`);
 }
+const favIco = fs.readFileSync(path.join(process.cwd(), "src/app/favicon.ico"));
+assert(favIco.readUInt16LE(2) === 1, "src/app/favicon.ico is ICO");
+assert(favIco.readUInt16LE(4) === 1, "one ICO image");
+assert(favIco[6] === 32 && favIco[7] === 32, "favicon 32x32");
+assert(fs.existsSync(path.join(process.cwd(), "public/favicon.ico")), "public/favicon.ico exists");
 
 section("root metadata");
 const layout = readSrc("src/app/layout.tsx");
@@ -135,7 +140,7 @@ assert(layout.includes("export const metadata"), "layout exports metadata");
 assert(layout.includes("applicationName"), "applicationName");
 assert(layout.includes("manifest:"), "manifest field");
 assert(layout.includes("/manifest.webmanifest"), "manifest.webmanifest");
-assert(layout.includes("appleWebApp"), "appleWebApp");
+assert(layout.includes("apple-mobile-web-app-capable"), "iOS apple-mobile-web-app-capable");
 assert(layout.includes("template:"), "title template");
 assert(layout.includes("export const viewport"), "viewport export (Next themeColor)");
 assert(layout.includes("themeColor"), "themeColor on viewport");

@@ -72,6 +72,9 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       lang="ko"
       className={`${display.variable} ${displayKr.variable} ${sans.variable}`}
     >
+      <head>
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+      </head>
       <body>
         <ServiceWorkerRegister />
         <AppHeader role={role} />
