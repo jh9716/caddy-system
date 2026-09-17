@@ -29,6 +29,7 @@ import {
   canReadArchivedCaddies,
   caddyManageListWhere,
 } from "@/lib/caddyArchiveVisibility";
+import { writeCaddyRevokingRetiredSessions } from "@/lib/sessionRevocation";
 
 export const dynamic = "force-dynamic";
 
@@ -229,9 +230,23 @@ export async function DELETE(req: NextRequest) {
     const id = Number(searchParams.get("id"));
     if (!id) return NextResponse.json({ error: "id 필요" }, { status: 400 });
 
-    const updated = await prisma.caddy.update({
+    const current = await prisma.caddy.findUnique({
       where: { id },
-      data: { employmentStatus: "RETIRED" },
+      select: { id: true, employmentStatus: true },
+    });
+    if (!current) {
+      return NextResponse.json({ error: "캐디 없음" }, { status: 404 });
+    }
+
+    const updated = await writeCaddyRevokingRetiredSessions(prisma, {
+      caddyId: id,
+      previousEmployment: current.employmentStatus,
+      nextEmployment: "RETIRED",
+      write: (tx) =>
+        tx.caddy.update({
+          where: { id },
+          data: { employmentStatus: "RETIRED" },
+        }),
     });
     return NextResponse.json({
       ok: true,

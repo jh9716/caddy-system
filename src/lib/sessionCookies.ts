@@ -11,7 +11,32 @@ import type { NextRequest, NextResponse } from "next/server";
 export type AppRole = "admin" | "caddy" | "leader";
 
 export const SESSION_COOKIE_NAME = "vh_session";
-export const SESSION_MAX_AGE_SEC = 60 * 60 * 8; // 8h
+
+/** env-only accounts (uid=null). Also the legacy SESSION_MAX_AGE_SEC alias. */
+export const ENV_SESSION_MAX_AGE_SEC = 60 * 60 * 8; // 8h
+/** DB User role=admin */
+export const ADMIN_SESSION_MAX_AGE_SEC = 60 * 60 * 24; // 24h
+/** DB User role=caddy */
+export const CADDY_SESSION_MAX_AGE_SEC = 60 * 60 * 24 * 30; // 30d
+/** DB User role=leader — same as caddy (field phone / PWA) */
+export const LEADER_SESSION_MAX_AGE_SEC = CADDY_SESSION_MAX_AGE_SEC;
+
+/**
+ * Fallback / env-only TTL. Role-specific durations use sessionMaxAgeSec().
+ * Do not use this for DB caddy/leader/admin cookies.
+ */
+export const SESSION_MAX_AGE_SEC = ENV_SESSION_MAX_AGE_SEC;
+
+/** Hard expiry from login. No sliding / rolling refresh. */
+export function sessionMaxAgeSec(input: {
+  userId: number | null;
+  role: AppRole;
+}): number {
+  if (input.userId == null) return ENV_SESSION_MAX_AGE_SEC;
+  if (input.role === "admin") return ADMIN_SESSION_MAX_AGE_SEC;
+  if (input.role === "leader") return LEADER_SESSION_MAX_AGE_SEC;
+  return CADDY_SESSION_MAX_AGE_SEC;
+}
 
 /** Cleared on login/logout; never trusted for authorization after this PR */
 export const LEGACY_SESSION_COOKIE_NAMES = [
@@ -241,7 +266,9 @@ export function buildSessionClaims(input: {
   maxAgeSec?: number;
 }): SessionClaims {
   const now = input.nowSec ?? Math.floor(Date.now() / 1000);
-  const maxAge = input.maxAgeSec ?? SESSION_MAX_AGE_SEC;
+  const maxAge =
+    input.maxAgeSec ??
+    sessionMaxAgeSec({ userId: input.userId, role: input.role });
   return {
     v: 1,
     uid: input.userId,
@@ -275,9 +302,13 @@ export async function applySessionCookies(
     sessionVersion: number;
   }
 ) {
-  const claims = buildSessionClaims(input);
+  const maxAgeSec = sessionMaxAgeSec({
+    userId: input.userId,
+    role: input.role,
+  });
+  const claims = buildSessionClaims({ ...input, maxAgeSec });
   const token = await signSessionClaims(claims);
-  const base = cookieBase(req, SESSION_MAX_AGE_SEC);
+  const base = cookieBase(req, maxAgeSec);
   res.cookies.set(SESSION_COOKIE_NAME, token, base);
   clearLegacySessionCookies(res, req);
 }

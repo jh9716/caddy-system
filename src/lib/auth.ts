@@ -30,6 +30,21 @@ export type ResolvedAuthUser = {
 };
 
 /**
+ * RETIRED linked Caddy blocks caddy/leader sessions only.
+ * Admin stays authenticated even if an anomalous caddyId points at RETIRED.
+ * LEAVE is allowed. Unlinked (caddyId=null) is allowed (→ /caddy/link).
+ */
+export function isRetiredCaddySessionBlocked(input: {
+  role: AppRole;
+  caddyId: number | null;
+  employmentStatus?: string | null;
+}): boolean {
+  if (input.role !== "caddy" && input.role !== "leader") return false;
+  if (input.caddyId == null) return false;
+  return String(input.employmentStatus ?? "").trim().toUpperCase() === "RETIRED";
+}
+
+/**
  * Full auth resolution for Node runtime (API / RSC).
  * - Requires valid signed vh_session
  * - Legacy unsigned cookies alone → null
@@ -72,6 +87,7 @@ export async function resolveAuthFromCookieStore(cookies: {
         caddyId: true,
         managedTeams: true,
         mustChangePassword: true,
+        caddy: { select: { employmentStatus: true } },
       },
     });
     if (!user) return null;
@@ -79,6 +95,15 @@ export async function resolveAuthFromCookieStore(cookies: {
     if (user.sessionVersion !== session.sv) return null;
     const dbRole = normalizeAppRole(user.role);
     if (!dbRole) return null;
+    if (
+      isRetiredCaddySessionBlocked({
+        role: dbRole,
+        caddyId: user.caddyId ?? null,
+        employmentStatus: user.caddy?.employmentStatus ?? null,
+      })
+    ) {
+      return null;
+    }
 
     return {
       session,
