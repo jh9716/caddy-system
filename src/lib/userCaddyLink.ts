@@ -270,7 +270,7 @@ export async function unlinkUserFromCaddy(
   const previousCaddyId = user.caddyId;
   const updated = await db.user.updateMany({
     where: { id: userId, caddyId: previousCaddyId },
-    data: { caddyId: null },
+    data: { caddyId: null, sessionVersion: { increment: 1 } },
   });
   if (updated.count !== 1) {
     throw new UserCaddyLinkError(

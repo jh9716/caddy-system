@@ -31,6 +31,7 @@
     "test:pwa-sw-cache-preserve-chromium": "bash scripts/tsx-safe.sh scripts/test-pwa-sw-cache-preserve-chromium.ts",
     "test:caddy-display-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-display-unit.ts",
     "test:login-unit": "bash scripts/tsx-safe.sh scripts/test-login-session-unit.ts",
+    "test:session-persistence-unit": "bash scripts/tsx-safe.sh scripts/test-session-persistence-unit.ts",
     "test:staff-admin-unit": "bash scripts/tsx-safe.sh scripts/test-staff-admin-password-unit.ts",
     "test:login-speed-unit": "bash scripts/tsx-safe.sh scripts/test-login-speed-unit.ts",
     "test:user-kakao-schema-unit": "bash scripts/tsx-safe.sh scripts/test-user-kakao-schema-unit.ts",

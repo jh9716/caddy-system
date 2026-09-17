@@ -32,6 +32,7 @@ import {
   canReadArchivedCaddies,
   denyArchivedCaddyRead,
 } from "@/lib/caddyArchiveVisibility";
+import { writeCaddyRevokingRetiredSessions } from "@/lib/sessionRevocation";
 
 export const dynamic = "force-dynamic";
 
@@ -195,9 +196,15 @@ export async function PATCH(
         updateData.missingFromImport = data.missingFromImport;
       }
 
-      const updated = await prisma.caddy.update({
-        where: { id },
-        data: updateData,
+      const updated = await writeCaddyRevokingRetiredSessions(prisma, {
+        caddyId: id,
+        previousEmployment: current.employmentStatus,
+        nextEmployment: updateData.employmentStatus ?? current.employmentStatus,
+        write: (tx) =>
+          tx.caddy.update({
+            where: { id },
+            data: updateData as Prisma.CaddyUpdateInput,
+          }),
       });
       const auditPayload = { ...data } as Record<string, unknown>;
       if (Object.prototype.hasOwnProperty.call(auditPayload, "phone")) {
@@ -350,9 +357,15 @@ export async function PATCH(
       }
     }
 
-    const updated = await prisma.caddy.update({
-      where: { id },
-      data: updateData,
+    const updated = await writeCaddyRevokingRetiredSessions(prisma, {
+      caddyId: id,
+      previousEmployment: current.employmentStatus,
+      nextEmployment: updateData.employmentStatus ?? current.employmentStatus,
+      write: (tx) =>
+        tx.caddy.update({
+          where: { id },
+          data: updateData as Prisma.CaddyUpdateInput,
+        }),
     });
 
     const auditPayload = { ...data } as Record<string, unknown>;
@@ -444,9 +457,15 @@ export async function DELETE(
       return archivedNotFound();
     }
 
-    const updated = await prisma.caddy.update({
-      where: { id },
-      data: { employmentStatus: "RETIRED" },
+    const updated = await writeCaddyRevokingRetiredSessions(prisma, {
+      caddyId: id,
+      previousEmployment: current.employmentStatus,
+      nextEmployment: "RETIRED",
+      write: (tx) =>
+        tx.caddy.update({
+          where: { id },
+          data: { employmentStatus: "RETIRED" },
+        }),
     });
 
     await logAudit({

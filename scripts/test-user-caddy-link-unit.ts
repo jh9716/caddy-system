@@ -42,6 +42,7 @@ type UserRow = {
   caddyId: number | null;
   password: string | null;
   managedTeams: string[];
+  sessionVersion: number;
   createdAt: Date;
 };
 
@@ -70,6 +71,7 @@ function createMockDb() {
       caddyId: partial.caddyId ?? null,
       password: partial.password ?? null,
       managedTeams: partial.managedTeams ?? [],
+      sessionVersion: partial.sessionVersion ?? 0,
       createdAt: partial.createdAt ?? new Date("2026-08-01T00:00:00Z"),
     };
     users.set(row.id, row);
@@ -175,7 +177,10 @@ function createMockDb() {
           caddyId: number | null;
           kakaoUserId?: { not: null };
         };
-        data: { caddyId: number | null };
+        data: {
+          caddyId?: number | null;
+          sessionVersion?: { increment: number };
+        };
       }) {
         const row = users.get(args.where.id);
         if (!row) return { count: 0 };
@@ -193,8 +198,12 @@ function createMockDb() {
             }
           }
         }
-        // Only mutate caddyId (assert write scope in tests via snapshot)
-        row.caddyId = args.data.caddyId;
+        if (Object.prototype.hasOwnProperty.call(args.data, "caddyId")) {
+          row.caddyId = args.data.caddyId ?? null;
+        }
+        if (args.data.sessionVersion?.increment) {
+          row.sessionVersion += args.data.sessionVersion.increment;
+        }
         return { count: 1 };
       },
     },
@@ -379,6 +388,10 @@ async function main() {
     assert(r.previousCaddyId === caddy.id, "previous id returned");
     const after = db.snap(linked.id);
     assert(after.caddyId === null, "unlinked");
+    assert(
+      after.sessionVersion === beforeLinked.sessionVersion + 1,
+      "unlink increments sessionVersion"
+    );
     assert(after.kakaoUserId === beforeLinked.kakaoUserId, "kakao intact");
     assert(after.username === beforeLinked.username, "username intact");
     assert(after.role === beforeLinked.role, "role intact");
@@ -455,6 +468,7 @@ async function main() {
     });
     await unlinkUserFromCaddy(db as any, user.id);
     assert(db.snap(user.id).caddyId === null, "unlinked first");
+    assert(db.snap(user.id).sessionVersion === 1, "unlink bumped sv");
     await linkUserToCaddy(db as any, user.id, c2.id);
     assert(db.snap(user.id).caddyId === c2.id, "relinked to c2");
   }
