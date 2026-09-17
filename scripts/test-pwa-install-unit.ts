@@ -140,6 +140,7 @@ assert(layout.includes("export const metadata"), "layout exports metadata");
 assert(layout.includes("applicationName"), "applicationName");
 assert(layout.includes("manifest:"), "manifest field");
 assert(layout.includes("/manifest.webmanifest"), "manifest.webmanifest");
+assert(layout.includes("appleWebApp"), "appleWebApp");
 assert(layout.includes("apple-mobile-web-app-capable"), "iOS apple-mobile-web-app-capable");
 assert(layout.includes("template:"), "title template");
 assert(layout.includes("export const viewport"), "viewport export (Next themeColor)");
