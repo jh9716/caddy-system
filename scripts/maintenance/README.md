@@ -11,3 +11,13 @@
 5. 사용자 명시 승인 없이 실행하지 않는다.
 
 로컬/테스트 write는 `assertLocalDatabaseUrl` / `assertLocalFixtureDatabase` 만 사용한다.
+
+PushSubscription V1 production schema:
+
+```
+PROD_MAINTENANCE_CONFIRM=PUSH_SUBSCRIPTION_V1_20260917 \
+DATABASE_URL="$PRODUCTION_DATABASE_URL" \
+npx tsx scripts/maintenance/deploy-push-subscription-migration.ts
+```
+
+`prisma migrate deploy` only. No db push / migrate reset / seed / subscription INSERT.
