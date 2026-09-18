@@ -165,6 +165,17 @@ async function main() {
       "compose does not bounce env-only admin back to list"
     );
     assert(newPage.includes("CourseReportForm"), "compose renders form");
+    const form = read("src/app/course-reports/CourseReportForm.tsx");
+    assert(form.includes("COURSE_REPORT_HOLES"), "form hole chips 1~9");
+    assert(form.includes("선택 안 함"), "form optional hole");
+    assert(form.includes("선택 안 함 또는 1~9"), "form hole hint 1~9");
+    assert(!form.includes("1~18"), "form no 1~18");
+    assert(!form.includes('placeholder="비우거나'), "form no free-text hole placeholder");
+    const constants = read("src/lib/courseReportConstants.ts");
+    assert(constants.includes("COURSE_REPORT_HOLE_MAX = 9"), "HOLE_MAX 9");
+    const parser = read("src/lib/courseReport.ts");
+    assert(parser.includes("/^[1-9]$/"), "hole string 1-9 only");
+    assert(!parser.includes("1~18"), "parser message not 1~18");
     assert(
       isRetiredCaddySessionBlocked({
         role: "caddy",
@@ -203,7 +214,8 @@ async function main() {
     assert(parseCourseReportHole(null) === null, "hole null");
     assert(parseCourseReportHole("") === null, "hole empty");
     assert(parseCourseReportHole(1) === 1, "hole 1");
-    assert(parseCourseReportHole(18) === 18, "hole 18");
+    assert(parseCourseReportHole(9) === 9, "hole 9");
+    assert(parseCourseReportHole("9") === 9, "hole string 9");
     try {
       parseCourseReportHole(0);
       assert(false, "hole 0 should throw");
@@ -211,10 +223,22 @@ async function main() {
       assert(true, "hole 0 rejected");
     }
     try {
-      parseCourseReportHole(19);
-      assert(false, "hole 19 should throw");
+      parseCourseReportHole(10);
+      assert(false, "hole 10 should throw");
     } catch {
-      assert(true, "hole 19 rejected");
+      assert(true, "hole 10 rejected");
+    }
+    try {
+      parseCourseReportHole(18);
+      assert(false, "hole 18 should throw");
+    } catch {
+      assert(true, "hole 18 rejected");
+    }
+    try {
+      parseCourseReportHole(-1);
+      assert(false, "hole negative should throw");
+    } catch {
+      assert(true, "hole negative rejected");
     }
     try {
       parseCourseReportHole(1.5);
@@ -453,13 +477,14 @@ async function main() {
             title: `${tag}_admin`,
             body: "관리자 제보",
             course: "LAKE",
-            hole: 18,
+            hole: 9,
             category: "OTHER",
           }),
         })
       );
       const adminBody = await jsonOf(adminRes);
       assert(adminRes.status === 200, "admin create 200");
+      assert(adminBody.report.hole === 9, "admin hole 9 allowed");
       assert(adminBody.report.authorDisplayName === `${tag}_admin`, "admin uses username");
       reportIds.push(adminBody.id);
 
@@ -476,20 +501,40 @@ async function main() {
         })
       );
       assert(badCourse.status === 400, "invalid course 400");
-      const badHole = await POST_REPORT(
+      for (const [label, value] of [
+        ["0", 0],
+        ["10", 10],
+        ["18", 18],
+      ] as const) {
+        const badHole = await POST_REPORT(
+          req("https://www.verthill.kr/api/course-reports", {
+            method: "POST",
+            headers: { cookie: caddyCookie, "content-type": "application/json" },
+            body: JSON.stringify({
+              title: `${tag}_bad_hole_${label}`,
+              body: "x",
+              course: "SKY",
+              hole: value,
+              category: "OTHER",
+            }),
+          })
+        );
+        assert(badHole.status === 400, `hole ${label} 400`);
+      }
+      const badDecimal = await POST_REPORT(
         req("https://www.verthill.kr/api/course-reports", {
           method: "POST",
           headers: { cookie: caddyCookie, "content-type": "application/json" },
           body: JSON.stringify({
-            title: `${tag}_bad_hole`,
+            title: `${tag}_bad_hole_decimal`,
             body: "x",
             course: "SKY",
-            hole: 19,
+            hole: 1.5,
             category: "OTHER",
           }),
         })
       );
-      assert(badHole.status === 400, "hole 19 400");
+      assert(badDecimal.status === 400, "hole decimal 400");
     }
 
     const caddyReportId = reportIds[0];

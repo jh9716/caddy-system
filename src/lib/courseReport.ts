@@ -8,6 +8,7 @@ import {
   COURSE_REPORT_BODY_MAX,
   COURSE_REPORT_CATEGORIES,
   COURSE_REPORT_CATEGORY_LABELS,
+  COURSE_REPORT_HOLE_ERROR,
   COURSE_REPORT_HOLE_MAX,
   COURSE_REPORT_HOLE_MIN,
   COURSE_REPORT_STATUS_LABELS,
@@ -85,19 +86,19 @@ export function parseCourseReportHole(value: unknown): number | null {
   if (value === undefined || value === null || value === "") return null;
   if (typeof value === "number") {
     if (!Number.isInteger(value) || value < COURSE_REPORT_HOLE_MIN || value > COURSE_REPORT_HOLE_MAX) {
-      throw new CourseReportValidationError("invalid_hole", "홀은 비우거나 1~18만 가능합니다.");
+      throw new CourseReportValidationError("invalid_hole", COURSE_REPORT_HOLE_ERROR);
     }
     return value;
   }
   if (typeof value === "string") {
     const trimmed = value.trim();
     if (!trimmed) return null;
-    if (!/^(?:[1-9]|1[0-8])$/.test(trimmed)) {
-      throw new CourseReportValidationError("invalid_hole", "홀은 비우거나 1~18만 가능합니다.");
+    if (!/^[1-9]$/.test(trimmed)) {
+      throw new CourseReportValidationError("invalid_hole", COURSE_REPORT_HOLE_ERROR);
     }
     return Number(trimmed);
   }
-  throw new CourseReportValidationError("invalid_hole", "홀은 비우거나 1~18만 가능합니다.");
+  throw new CourseReportValidationError("invalid_hole", COURSE_REPORT_HOLE_ERROR);
 }
 
 export function parseCourseReportCategory(value: unknown): CourseReportCategoryCode {

@@ -6,6 +6,7 @@ import { COURSE_CODES, COURSE_LABELS, type CourseCode } from "@/lib/reservationP
 import {
   COURSE_REPORT_CATEGORIES,
   COURSE_REPORT_CATEGORY_LABELS,
+  COURSE_REPORT_HOLES,
   type CourseReportCategoryCode,
 } from "@/lib/courseReportConstants";
 import type { CourseReportPhotoPublic } from "@/lib/courseReportPhotoConstants";
@@ -44,7 +45,7 @@ export default function CourseReportForm({
   const [title, setTitle] = useState(initial?.title ?? "");
   const [body, setBody] = useState(initial?.body ?? "");
   const [course, setCourse] = useState<CourseCode>(initial?.course ?? "VERTHILL");
-  const [hole, setHole] = useState(initial?.hole != null ? String(initial.hole) : "");
+  const [hole, setHole] = useState<number | null>(initial?.hole ?? null);
   const [category, setCategory] = useState<CourseReportCategoryCode>(
     initial?.category ?? "COURSE_CONDITION"
   );
@@ -135,7 +136,7 @@ export default function CourseReportForm({
       title,
       body,
       course,
-      hole: hole.trim() ? Number(hole) : null,
+      hole,
       category,
     };
     const url = isEdit ? `/api/course-reports/${initial?.id}` : "/api/course-reports";
@@ -208,15 +209,29 @@ export default function CourseReportForm({
         </div>
       </fieldset>
 
-      <label className="course-report-field">
-        <span>홀 (선택)</span>
-        <input
-          inputMode="numeric"
-          value={hole}
-          onChange={(e) => setHole(e.target.value)}
-          placeholder="비우거나 1~18"
-        />
-      </label>
+      <fieldset className="course-report-fieldset">
+        <legend>홀 (선택)</legend>
+        <p className="course-report-hole-hint">선택 안 함 또는 1~9</p>
+        <div className="course-report-chips course-report-hole-chips">
+          <button
+            type="button"
+            className={`course-report-chip${hole == null ? " is-active" : ""}`}
+            onClick={() => setHole(null)}
+          >
+            선택 안 함
+          </button>
+          {COURSE_REPORT_HOLES.map((n) => (
+            <button
+              key={n}
+              type="button"
+              className={`course-report-chip${hole === n ? " is-active" : ""}`}
+              onClick={() => setHole(n)}
+            >
+              {n}
+            </button>
+          ))}
+        </div>
+      </fieldset>
 
       <label className="course-report-field">
         <span>제목</span>
