@@ -2,12 +2,21 @@
  * Published daily-board Web Push V1.
  * Source: DailyBoardPublished only. No auto-send. No schema/migration.
  *
- * Idempotency without a unique table:
- * - pg_advisory_xact_lock(date) serializes double-clicks
- * - Audit BOARD_PUSH_SEND keyed by date + sourceDraftVersion
- * Audit has no unique constraint. A process crash between lock release and
- * Audit insert can still double-send. Durable uniqueness needs a new table
- * — not in this PR.
+ * Fail-closed idempotency (no unique table / no migration):
+ * - Console-only audit helper is NOT used. Prisma `Audit` INSERT/SELECT only.
+ * - pg_advisory_xact_lock(date) serializes concurrent claims (not the
+ *   durable key). Same date + different sourceDraftVersion can send again
+ *   after the lock is released.
+ * - Durable key: action=BOARD_PUSH_SEND + payload.date + payload.sourceDraftVersion.
+ * - Same transaction: lock → SELECT existing row → INSERT status=STARTED → COMMIT.
+ *   Claim is durable BEFORE any deliverWebPush.
+ * - Crash before COMMIT: no row, retry may send (first send never started).
+ * - Crash after COMMIT / partial send: STARTED|SENT|FAILED blocks the same
+ *   version. Admin cannot full-resend to successes. No per-recipient retry in V1.
+ * - no_recipients before claim: no Audit row (retry allowed if someone later
+ *   subscribes). After claim, 0 targets writes NO_RECIPIENTS and blocks.
+ * Audit has no UNIQUE constraint; the lock shrinks the race. A new table
+ * would be required for constraint-level uniqueness — not in this PR.
  */
 
 import type { Prisma, PrismaClient } from "@prisma/client";

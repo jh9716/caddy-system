@@ -95,6 +95,16 @@ function jsonHasSecrets(body: unknown): boolean {
   );
 }
 
+async function boardPushAudits(date: string) {
+  return prisma.$queryRaw<Array<{ id: number; payload: unknown }>>`
+    SELECT id, payload FROM "Audit"
+    WHERE action = ${BOARD_PUSH_AUDIT_ACTION}
+      AND entity = ${BOARD_PUSH_AUDIT_ENTITY}
+      AND payload->>'date' = ${date}
+    ORDER BY id ASC
+  `;
+}
+
 async function cookieFor(user: {
   id: number | null;
   username: string;
@@ -278,6 +288,13 @@ async function main() {
     );
     assert(core.includes("pg_advisory_xact_lock"), "advisory lock");
     assert(core.includes("BOARD_PUSH_SEND"), "audit action");
+    assert(!/from ["']@\/lib\/audit["']/.test(core), "does not import console audit helper");
+    assert(core.includes("tx.audit.create"), "Prisma Audit INSERT in claim tx");
+    assert(core.includes('SELECT id, payload FROM "Audit"'), "Prisma Audit SELECT");
+    assert(
+      core.indexOf("claimBoardPushSend(") < core.lastIndexOf("await deliverWebPush"),
+      "claim invoked before deliverWebPush"
+    );
     assert(!core.includes("publishDailyBoard("), "no auto send on publish");
     assert(!core.includes("cron"), "no cron");
     const publish = read("src/lib/dailyBoardPublishedService.ts");
@@ -582,6 +599,7 @@ async function main() {
       assert(bad.status === 400, "confirm mismatch 400");
       const badBody = await bad.json();
       assert(badBody.error === "invalid_confirm", "invalid_confirm");
+      assert((await boardPushAudits(DATE)).length === 0, "confirm mismatch: no Audit claim");
       try {
         parseBoardPushSendRequest({
           date: DATE,
@@ -609,6 +627,7 @@ async function main() {
       assert(body.error === "STALE", "STALE code");
       assert(body.message === BOARD_PUSH_STALE_MESSAGE, "STALE message");
       assert(!jsonHasSecrets(body), "STALE response no secrets");
+      assert((await boardPushAudits(DATE)).length === 0, "STALE: no Audit claim");
       await upsertDraft(DATE, 39);
     }
 
@@ -645,6 +664,10 @@ async function main() {
       );
       assert(none.error === "no_recipients", "0 sub → no_recipients");
       assert(none.sent === 0, "no_recipients sent 0");
+      assert(
+        (await boardPushAudits(DATE2)).length === 0,
+        "no_recipients: no Audit claim (retry allowed if someone later subscribes)"
+      );
 
       const calls: string[] = [];
       const result = await sendBoardPush(
@@ -697,11 +720,21 @@ async function main() {
       });
       assert(failSub?.lastFailureAt != null, "fail lastFailureAt");
 
+      const afterFirst = await boardPushAudits(DATE);
+      assert(afterFirst.length === 1, "one Audit row after first send");
+      const firstPayload = afterFirst[0]?.payload as Record<string, unknown>;
+      assert(firstPayload?.status === "SENT", "claim finished SENT");
+      assert(firstPayload?.sourceDraftVersion === 39, "audit version 39");
+      assert(!jsonHasSecrets(firstPayload), "Audit payload no secrets");
+
+      let dupCalls = 0;
       try {
         await sendBoardPush(
           prisma,
           { date: DATE, confirm: BOARD_PUSH_CONFIRM },
-          { sendFn: async () => undefined }
+          { sendFn: async () => {
+              dupCalls += 1;
+            } }
         );
         assert(false, "duplicate should throw");
       } catch (e) {
@@ -710,9 +743,105 @@ async function main() {
           "same version second send already_sent"
         );
       }
+      assert(dupCalls === 0, "sequential duplicate: sender 0");
+      assert((await boardPushAudits(DATE)).length === 1, "duplicate does not insert second claim");
 
       await prisma.dailyBoardPublished.deleteMany({ where: { date: key2 } });
       await prisma.dailyBoardDraft.deleteMany({ where: { date: key2 } });
+    }
+
+    section("concurrent duplicate + republish newer version");
+    {
+      const DATE4 = "2099-06-22";
+      const concC = await prisma.caddy.create({
+        data: { name: `${tag}_동시`, team: "1조", employmentStatus: "ACTIVE" },
+      });
+      caddyIds.push(concC.id);
+      const uConc = await prisma.user.create({
+        data: {
+          username: `${tag}_conc`,
+          password: hash,
+          role: "caddy",
+          caddyId: concC.id,
+          sessionVersion: 0,
+        },
+      });
+      userIds.push(uConc.id);
+      await addSub(uConc.id, `https://push.example/${tag}/conc`);
+      await upsertPublished(
+        DATE4,
+        39,
+        publishedPayload(DATE4, [placement({ caddyId: concC.id, caddyName: "동시" })])
+      );
+      await upsertDraft(DATE4, 39);
+
+      let senderCalls = 0;
+      const slowSend: Parameters<typeof sendBoardPush>[2] = {
+        sendFn: async () => {
+          senderCalls += 1;
+          await new Promise((r) => setTimeout(r, 250));
+        },
+      };
+      const settled = await Promise.allSettled([
+        sendBoardPush(prisma, { date: DATE4, confirm: BOARD_PUSH_CONFIRM }, slowSend),
+        sendBoardPush(prisma, { date: DATE4, confirm: BOARD_PUSH_CONFIRM }, slowSend),
+      ]);
+      const ok = settled.filter(
+        (s) => s.status === "fulfilled" && s.value.ok === true && !s.value.error
+      );
+      const blocked = settled.filter(
+        (s) =>
+          s.status === "rejected" &&
+          s.reason instanceof Error &&
+          (s.reason as { code?: string }).code === "already_sent"
+      );
+      assert(ok.length === 1, `concurrent: 1 success got ${ok.length}`);
+      assert(blocked.length === 1, `concurrent: 1 already_sent got ${blocked.length}`);
+      assert(senderCalls === 1, `concurrent sender once got ${senderCalls}`);
+      const auditsV39 = await boardPushAudits(DATE4);
+      assert(auditsV39.length === 1, "concurrent: single Audit claim");
+      assert(!jsonHasSecrets(auditsV39[0]?.payload), "concurrent Audit no secrets");
+
+      await upsertPublished(
+        DATE4,
+        40,
+        publishedPayload(DATE4, [placement({ caddyId: concC.id, caddyName: "동시" })])
+      );
+      await upsertDraft(DATE4, 40);
+      const beforeV40 = senderCalls;
+      const v40 = await sendBoardPush(
+        prisma,
+        { date: DATE4, confirm: BOARD_PUSH_CONFIRM },
+        { sendFn: async () => {
+            senderCalls += 1;
+          } }
+      );
+      assert(v40.ok === true && v40.sent === 1, "republish v40 allowed");
+      assert(senderCalls === beforeV40 + 1, "v40 called sender");
+      const auditsAll = await boardPushAudits(DATE4);
+      assert(auditsAll.length === 2, "v39 + v40 Audit rows");
+      const versions = auditsAll.map(
+        (r) => (r.payload as Record<string, unknown>)?.sourceDraftVersion
+      );
+      assert(versions.includes(39) && versions.includes(40), "audits for 39 and 40");
+
+      let v40dup = 0;
+      try {
+        await sendBoardPush(
+          prisma,
+          { date: DATE4, confirm: BOARD_PUSH_CONFIRM },
+          { sendFn: async () => {
+              v40dup += 1;
+            } }
+        );
+        assert(false, "v40 duplicate should throw");
+      } catch (e) {
+        assert(
+          e instanceof Error && (e as { code?: string }).code === "already_sent",
+          "v40 second send already_sent"
+        );
+      }
+      assert(v40dup === 0, "v40 duplicate sender 0");
     }
 
     section("19 secrets + 20 url + UI");
@@ -748,17 +877,35 @@ async function main() {
       where: {
         action: BOARD_PUSH_AUDIT_ACTION,
         entity: BOARD_PUSH_AUDIT_ENTITY,
-        entityId: { in: [20990618, 20990619, 20990620] },
+        entityId: { in: [20990618, 20990619, 20990620, 20990622] },
       },
     });
     await prisma.pushSubscription.deleteMany({
       where: { userId: { in: userIds } },
     });
     await prisma.dailyBoardPublished.deleteMany({
-      where: { date: { in: [parseYmd(DATE).start, parseYmd("2099-06-19").start, parseYmd("2099-06-20").start] } },
+      where: {
+        date: {
+          in: [
+            parseYmd(DATE).start,
+            parseYmd("2099-06-19").start,
+            parseYmd("2099-06-20").start,
+            parseYmd("2099-06-22").start,
+          ],
+        },
+      },
     });
     await prisma.dailyBoardDraft.deleteMany({
-      where: { date: { in: [parseYmd(DATE).start, parseYmd("2099-06-19").start, parseYmd("2099-06-20").start] } },
+      where: {
+        date: {
+          in: [
+            parseYmd(DATE).start,
+            parseYmd("2099-06-19").start,
+            parseYmd("2099-06-20").start,
+            parseYmd("2099-06-22").start,
+          ],
+        },
+      },
     });
     if (userIds.length) {
       await prisma.user.deleteMany({ where: { id: { in: userIds } } });
