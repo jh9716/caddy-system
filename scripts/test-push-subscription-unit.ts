@@ -149,7 +149,7 @@ async function main() {
     assert(!sql.includes("DROP COLUMN"), "no DROP COLUMN");
     assert(!sql.includes("ALTER TABLE \"User\" DROP"), "no User DROP");
     const pkg = read("package.json");
-    assert(!pkg.includes("web-push"), "web-push package not added (no send)");
+    assert(pkg.includes("web-push"), "web-push is a server dependency for send");
   }
 
   section("A2. no send / privacy in source");
@@ -170,7 +170,7 @@ async function main() {
       assert(!src.includes("FCM"), `${rel} no FCM`);
     }
     const sw = read("public/sw.js");
-    assert(!/addEventListener\(\s*["']push["']/.test(sw), "sw still no push listener");
+    assert(/addEventListener\(\s*["']push["']/.test(sw), "sw has push listener");
     assert(!/event\.respondWith/.test(sw), "sw still no respondWith");
     const card = read("src/components/PushNotificationCard.tsx");
     assert(card.includes("requestPermission"), "permission only in card click path");

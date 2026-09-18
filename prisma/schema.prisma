@@ -188,7 +188,7 @@ model User {
 }
 
 /// 기기별 Web Push subscription (1 User : N devices).
-/// endpoint unique. 발송은 후속 PR. V1은 등록/해제만.
+/// endpoint unique. 관리자 1명 테스트 발송은 lastSuccessAt/lastFailureAt/stale delete만.
 model PushSubscription {
   id     Int  @id @default(autoincrement())
   userId Int

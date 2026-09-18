@@ -29,6 +29,7 @@
     "test:alimtalk-freshness-unit": "bash scripts/tsx-safe.sh scripts/test-alimtalk-freshness-unit.ts",
     "test:pwa-install-unit": "bash scripts/tsx-safe.sh scripts/test-pwa-install-unit.ts",
     "test:push-subscription-unit": "bash scripts/tsx-safe.sh scripts/test-push-subscription-unit.ts",
+    "test:web-push-display-unit": "bash scripts/tsx-safe.sh scripts/test-web-push-display-unit.ts",
     "test:pwa-sw-cache-preserve-chromium": "bash scripts/tsx-safe.sh scripts/test-pwa-sw-cache-preserve-chromium.ts",
     "test:caddy-display-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-display-unit.ts",
     "test:login-unit": "bash scripts/tsx-safe.sh scripts/test-login-session-unit.ts",
@@ -109,6 +110,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "tslib": "^2.8.1",
+    "web-push": "^3.6.7",
     "xlsx": "^0.18.5",
     "zod": "^4.1.11"
   },
@@ -116,6 +118,7 @@
     "@tailwindcss/postcss": "^4.1.14",
     "@types/node": "24.6.2",
     "@types/react": "19.2.0",
+    "@types/web-push": "^3.6.4",
     "@types/xlsx": "^0.0.35",
     "@typescript-eslint/eslint-plugin": "^8.45.0",
     "@typescript-eslint/parser": "^8.45.0",

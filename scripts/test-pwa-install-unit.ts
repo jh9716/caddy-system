@@ -163,11 +163,14 @@ assert(!/caches\.match/.test(sw), "no caches.match");
 assert(!/caches\.keys/.test(sw), "activate does not enumerate origin caches");
 assert(!/caches\.delete/.test(sw), "activate does not delete origin caches");
 assert(!/keys\.map/.test(sw), "no keys.map cache wipe");
-assert(!/addEventListener\(\s*["']push["']/.test(sw), "no push listener in V1");
+assert(/addEventListener\(\s*["']push["']/.test(sw), "push listener for display");
 assert(
-  !/addEventListener\(\s*["']notificationclick["']/.test(sw),
-  "no notificationclick listener"
+  /addEventListener\(\s*["']notificationclick["']/.test(sw),
+  "notificationclick listener"
 );
+assert(sw.includes("showNotification"), "shows system notification");
+assert(sw.includes("clients.openWindow"), "openWindow on click if no client");
+assert(sw.includes("/icons/icon-192.png"), "reuses PWA icon");
 assert(!sw.includes("/api"), "SW does not special-case or cache /api");
 assert(PWA_SW_URL === "/sw.js", "SW url /sw.js");
 

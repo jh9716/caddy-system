@@ -1,7 +1,6 @@
 /**
  * Web Push VAPID env. Public key only is ever returned to the client.
  * Private key is never imported into client bundles, never logged, never sent.
- * Send/web-push is out of scope for V1.
  */
 
 export const WEB_PUSH_VAPID_PUBLIC_KEY_ENV = "WEB_PUSH_VAPID_PUBLIC_KEY";
@@ -45,6 +44,27 @@ export function readVapidPublicKey(): string | null {
 
 export function isWebPushConfigured(): boolean {
   return readVapidPublicKey() != null;
+}
+
+export type WebPushSendCredentials = {
+  publicKey: string;
+  privateKey: string;
+  subject: string;
+};
+
+/** Server send only. Never return this object to a client response. */
+export function readWebPushSendCredentials(): WebPushSendCredentials | null {
+  const publicKey = readVapidPublicKey();
+  const privateKey = readEnv(WEB_PUSH_VAPID_PRIVATE_KEY_ENV);
+  const subject = readEnv(WEB_PUSH_SUBJECT_ENV);
+  if (!publicKey || !privateKey || !subject) return null;
+  if (privateKey.length < 20 || privateKey.length > 256) return null;
+  if (!/^https:\/\//i.test(subject) && !/^mailto:/i.test(subject)) return null;
+  return { publicKey, privateKey, subject };
+}
+
+export function isWebPushSendConfigured(): boolean {
+  return readWebPushSendCredentials() != null;
 }
 
 /**
