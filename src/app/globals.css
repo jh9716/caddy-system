@@ -2207,6 +2207,13 @@ body.manage-mode .vh-work-inner:has(.course-report-page) {
 
 .course-report-page-head .ui-btn {
   flex-shrink: 0;
+  position: relative;
+  z-index: 2;
+  pointer-events: auto;
+}
+
+.course-report-compose-link {
+  min-height: 44px;
 }
 
 .course-report-filters,

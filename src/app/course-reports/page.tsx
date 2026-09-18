@@ -37,7 +37,10 @@ export default async function CourseReportListPage({
     <div className="course-report-page">
       <div className="course-report-page-head">
         <h1 className="ui-page-title">코스 제보</h1>
-        <Link href="/course-reports/new" className="ui-btn ui-btn-primary">
+        <Link
+          href="/course-reports/new"
+          className="ui-btn ui-btn-primary course-report-compose-link"
+        >
           + 제보하기
         </Link>
       </div>

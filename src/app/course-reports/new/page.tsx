@@ -11,7 +11,8 @@ export default async function NewCourseReportPage() {
     redirect("/login?callbackUrl=/course-reports/new");
   }
   if (auth.mustChangePassword) redirect("/change-password");
-  if (auth.userId == null) redirect("/course-reports");
+  // Env-only admin (userId=null) must still reach the compose form.
+  // POST remains 403 without a DB User.id — do not bounce the list CTA.
 
   return (
     <div className="course-report-page">

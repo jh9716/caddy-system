@@ -158,6 +158,18 @@ async function main() {
     const shell = read("src/components/manage/ManageShell.tsx");
     assert(shell.includes('href: "/course-reports"'), "ManageShell 코스 제보");
     assert(!/BOTTOM[\s\S]*course-reports/.test(shell), "bottom nav not expanded");
+    const listPage = read("src/app/course-reports/page.tsx");
+    assert(listPage.includes('href="/course-reports/new"'), "list CTA href /course-reports/new");
+    assert(listPage.includes("from \"next/link\""), "list uses Next Link");
+    assert(!listPage.includes("<button"), "list CTA is not a nested button");
+    assert(!listPage.includes("preventDefault"), "list has no preventDefault");
+    assert(!listPage.includes("pointer-events: none"), "list has no pointer-events none");
+    const newPage = read("src/app/course-reports/new/page.tsx");
+    assert(
+      !newPage.includes('redirect("/course-reports")'),
+      "compose does not bounce env-only admin back to list"
+    );
+    assert(newPage.includes("CourseReportForm"), "compose renders form");
     assert(
       isRetiredCaddySessionBlocked({
         role: "caddy",
