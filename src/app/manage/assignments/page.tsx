@@ -103,6 +103,7 @@ const COURSE_SHORT: Record<CourseCode, string> = {
 import { SpecialDutyPanel, type Shift1StartOption } from "./SpecialDutyPanel";
 import { SpecialSupportPanel } from "./SpecialSupportPanel";
 import { DailyStaffingSummaryCard } from "@/components/manage/DailyStaffingSummaryCard";
+import { BoardPushNotifyCard } from "@/components/manage/BoardPushNotifyCard";
 import {
   buildDailyStaffingSummary,
   canonicalAvailableCount,
@@ -4718,6 +4719,8 @@ export default function ManageAssignmentsOpsPage() {
         </section>
       )}
 
+      {hasSelectedDate ? <BoardPushNotifyCard date={date} /> : null}
+
       {draft && (
         <LiveChangePanel
           draft={draft}
@@ -5221,6 +5224,42 @@ const opsCss = `
     font-size: 0.8rem;
     color: #64748b;
   }
+  .ops-board-push {
+    display: grid;
+    gap: 8px;
+    padding: 14px 12px 16px;
+    border: 1px solid #e5e7eb;
+    border-radius: 14px;
+    background: #fff;
+  }
+  .ops-board-push-title {
+    margin: 0;
+    font-size: 0.92rem;
+    font-weight: 800;
+    color: #0f172a;
+  }
+  .ops-board-push-btn {
+    width: 100%;
+    min-height: 44px;
+    padding: 10px 16px;
+    font-size: 0.95rem;
+    font-weight: 800;
+  }
+  .ops-board-push-meta,
+  .ops-board-push-hint,
+  .ops-board-push-result {
+    margin: 0;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+  .ops-board-push-stale,
+  .ops-board-push-error {
+    margin: 0;
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: #b45309;
+  }
+  .ops-board-push-error { color: #b91c1c; }
   .btn.ghost { background: #f8fafc; }
   .btn.danger {
     background: #fef2f2;
