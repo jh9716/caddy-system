@@ -19,8 +19,8 @@ export default function ManagePage() {
 
 async function ManageDashboardNotices() {
   const latestNotices = await prisma.notice.findMany({
-    select: { id: true, title: true, createdAt: true },
-    orderBy: { createdAt: "desc" },
+    select: { id: true, title: true, createdAt: true, important: true, pinned: true },
+    orderBy: [{ pinned: "desc" }, { important: "desc" }, { createdAt: "desc" }],
     take: 5,
   });
   return (

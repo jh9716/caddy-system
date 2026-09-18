@@ -1,45 +1,62 @@
 import { prisma } from "@/lib/prisma";
-import NewNoticeForm from "@/app/notice/new/ui/NewNoticeForm";
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import dayjs from "dayjs";
+import { getRequestAuthUser } from "@/lib/getRequestAuthUser";
+import { loadNoticeViewer } from "@/lib/noticeAccess";
+import {
+  canViewNotice,
+  formatNoticeTargetLabel,
+} from "@/lib/noticeTarget";
+import NoticeDetailActions from "@/components/notice/NoticeDetailActions";
+import NoticePushNotifyCard from "@/components/notice/NoticePushNotifyCard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-export default async function EditNoticePage({
+export default async function NoticeDetailPage({
   params,
 }: {
-  params: { id: string };
+  params: Promise<{ id: string }> | { id: string };
 }) {
-  const id = Number(params.id);
+  const auth = await getRequestAuthUser();
+  if (!auth) redirect("/login?callbackUrl=/notice");
+
+  const resolved = await Promise.resolve(params);
+  const id = Number(resolved.id);
   if (!Number.isFinite(id)) notFound();
 
   const notice = await prisma.notice.findUnique({ where: { id } });
-  if (!notice) {
-    return (
-      <div className="container-page py-8">
-        <p className="text-slate-600">존재하지 않는 공지입니다.</p>
-        <Link href="/notice" className="btn btn-ghost mt-4">
-          ← 공지 목록으로
-        </Link>
-      </div>
-    );
-  }
+  if (!notice) notFound();
 
-  // 스키마가 프로젝트마다 달라서 body/content 둘 다 케어
-  const body =
-    (notice as any).body ??
-    (notice as any).content ??
-    "";
+  const viewer = await loadNoticeViewer(prisma, auth);
+  if (!canViewNotice(notice, viewer)) notFound();
+
+  const isAdmin = auth.role === "admin";
+  const content = notice.content ?? "";
 
   return (
-    <div className="container-page py-8">
-      <h1 className="mb-6 text-xl font-semibold">공지 수정</h1>
-      <NewNoticeForm
-        mode="edit"
-        initial={{ id, title: (notice as any).title, body }}
-      />
+    <div className="notice-page notice-detail">
+      <Link href="/notice" className="ui-btn ui-btn-ghost notice-back">
+        ← 목록
+      </Link>
+      <div className="notice-detail-badges">
+        {notice.important ? <span className="notice-badge notice-badge-important">중요</span> : null}
+        {notice.pinned ? <span className="notice-badge notice-badge-pinned">고정</span> : null}
+      </div>
+      <h1 className="ui-page-title">{notice.title}</h1>
+      <p className="notice-detail-meta">
+        {dayjs(notice.createdAt).format("YYYY-MM-DD HH:mm")}
+        <span> · {formatNoticeTargetLabel(notice)}</span>
+      </p>
+      <div className="notice-detail-body">{content || "내용이 없습니다."}</div>
+      {isAdmin ? (
+        <>
+          <NoticeDetailActions id={id} />
+          <NoticePushNotifyCard noticeId={id} />
+        </>
+      ) : null}
     </div>
   );
 }

@@ -21,3 +21,13 @@ npx tsx scripts/maintenance/deploy-push-subscription-migration.ts
 ```
 
 `prisma migrate deploy` only. No db push / migrate reset / seed / subscription INSERT.
+
+Notice V2 production schema:
+
+```
+PROD_MAINTENANCE_CONFIRM=NOTICE_V2_20260918 \
+DATABASE_URL="$PRODUCTION_DATABASE_URL" \
+npx tsx scripts/maintenance/deploy-notice-v2-migration.ts
+```
+
+`prisma migrate deploy` only. No db push / migrate reset / seed / Notice INSERT/UPDATE/DELETE.

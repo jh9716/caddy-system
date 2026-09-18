@@ -28,13 +28,15 @@ export default function AppHeader({ role }: { role: AppRole | null }) {
           >
             홈
           </Link>
-          <Link
-            className={navClass(pathname, "/notice")}
-            href="/notice"
-            aria-current={isAppNavActive(pathname, "/notice") ? "page" : undefined}
-          >
-            공지
-          </Link>
+          {role && (
+            <Link
+              className={navClass(pathname, "/notice")}
+              href="/notice"
+              aria-current={isAppNavActive(pathname, "/notice") ? "page" : undefined}
+            >
+              공지
+            </Link>
+          )}
           {role && (
             <Link
               className={navClass(pathname, "/board")}
