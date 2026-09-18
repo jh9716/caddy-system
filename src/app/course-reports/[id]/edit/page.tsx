@@ -4,7 +4,7 @@ import { getRequestAuthUser } from "@/lib/getRequestAuthUser";
 import { isCourseReportCourse } from "@/lib/courseReport";
 import { canEditCourseReportContent } from "@/lib/courseReportAccess";
 import CourseReportForm from "../../CourseReportForm";
-import { toCourseReportPhotoPublic } from "@/lib/courseReportPhoto";
+import { findCourseReportWithPhotos } from "@/lib/courseReportPhoto";
 import {
   COURSE_REPORT_CATEGORIES,
   type CourseReportCategoryCode,
@@ -26,11 +26,9 @@ export default async function EditCourseReportPage({
   const id = Number(resolved.id);
   if (!Number.isInteger(id) || id <= 0) notFound();
 
-  const row = await prisma.courseReport.findFirst({
-    where: { id, deletedAt: null },
-    include: { photos: { orderBy: { sortOrder: "asc" } } },
-  });
-  if (!row) notFound();
+  const loaded = await findCourseReportWithPhotos(prisma, id);
+  if (!loaded) notFound();
+  const row = loaded.report;
 
   if (
     !canEditCourseReportContent({
@@ -62,7 +60,7 @@ export default async function EditCourseReportPage({
           course,
           hole: row.hole,
           category,
-          photos: row.photos.map(toCourseReportPhotoPublic),
+          photos: loaded.photos,
         }}
       />
     </div>

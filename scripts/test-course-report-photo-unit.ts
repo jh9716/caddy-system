@@ -22,6 +22,7 @@ import {
   createMemoryCourseReportPhotoStore,
   setCourseReportPhotoStoreForTests,
 } from "../src/lib/courseReportPhotoStorage";
+import { isCourseReportPhotoTableMissing } from "../src/lib/courseReportPhoto";
 import { COURSE_REPORT_PHOTO_MAX_BYTES } from "../src/lib/courseReportPhotoConstants";
 import { POST as POST_REPORT } from "../src/app/api/course-reports/route";
 import { PATCH as PATCH_STATUS } from "../src/app/api/course-reports/[id]/status/route";
@@ -205,8 +206,12 @@ async function main() {
     assert(!/\bDROP\s+(TABLE|COLUMN|INDEX|TYPE)\b/i.test(mig), "migration no DROP");
     const listApi = read("src/app/api/course-reports/route.ts");
     assert(!listApi.includes("storageKey"), "list API no storageKey");
+    assert(listApi.includes("listCourseReportsWithPhotoCount"), "list API photo-table fail-soft");
     const listPage = read("src/app/course-reports/page.tsx");
     assert(!listPage.includes("<img"), "list no eager photo img");
+    assert(listPage.includes("listCourseReportsWithPhotoCount"), "list page photo-table fail-soft");
+    const detailPage = read("src/app/course-reports/[id]/page.tsx");
+    assert(detailPage.includes("findCourseReportWithPhotos"), "detail photo-table fail-soft");
     assert(listPage.includes("photoCount"), "list shows photoCount");
     const photoGet = read("src/app/api/course-reports/[id]/photos/[photoId]/route.ts");
     assert(photoGet.includes("requireCourseReportReader"), "photo GET reuses reader auth");
@@ -248,6 +253,16 @@ async function main() {
         "oversize code"
       );
     }
+    assert(
+      isCourseReportPhotoTableMissing(
+        new Error('The table `public.CourseReportPhoto` does not exist in the current database.')
+      ),
+      "missing table helper true"
+    );
+    assert(
+      !isCourseReportPhotoTableMissing(new Error("connection refused")),
+      "missing table helper false"
+    );
   }
 
   try {

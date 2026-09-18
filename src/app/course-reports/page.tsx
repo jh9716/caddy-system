@@ -8,6 +8,7 @@ import {
   COURSE_REPORT_STATUSES,
   COURSE_REPORT_STATUS_LABELS,
 } from "@/lib/courseReportConstants";
+import { listCourseReportsWithPhotoCount } from "@/lib/courseReportPhoto";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -23,16 +24,11 @@ export default async function CourseReportListPage({
   const resolved = await Promise.resolve(searchParams ?? {});
   const status = parseCourseReportStatusFilter(resolved.status);
 
-  const rows = await prisma.courseReport.findMany({
-    where: {
-      deletedAt: null,
-      ...(status ? { status } : {}),
-    },
-    orderBy: { createdAt: "desc" },
+  const packed = await listCourseReportsWithPhotoCount(prisma, {
+    status: status ?? undefined,
     take: COURSE_REPORT_LIST_TAKE,
-    include: { _count: { select: { photos: true } } },
   });
-  const reports = rows.map((row) => toCourseReportPublic(row, row._count.photos));
+  const reports = packed.map(({ report, photoCount }) => toCourseReportPublic(report, photoCount));
 
   return (
     <div className="course-report-page">

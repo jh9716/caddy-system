@@ -11,7 +11,7 @@ import {
 } from "@/lib/courseReportAccess";
 import CourseReportDetailActions from "./CourseReportDetailActions";
 import CourseReportPhotoGallery from "../CourseReportPhotoGallery";
-import { toCourseReportPhotoPublic } from "@/lib/courseReportPhoto";
+import { findCourseReportWithPhotos } from "@/lib/courseReportPhoto";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,20 +29,17 @@ export default async function CourseReportDetailPage({
   const id = Number(resolved.id);
   if (!Number.isInteger(id) || id <= 0) notFound();
 
-  const row = await prisma.courseReport.findFirst({
-    where: { id, deletedAt: null },
-    include: { photos: { orderBy: { sortOrder: "asc" } } },
-  });
-  if (!row) notFound();
+  const loaded = await findCourseReportWithPhotos(prisma, id);
+  if (!loaded) notFound();
 
-  const report = toCourseReportPublic(row, row.photos.length);
-  const photos = row.photos.map(toCourseReportPhotoPublic);
+  const report = toCourseReportPublic(loaded.report, loaded.photos.length);
+  const photos = loaded.photos;
   const editInput = {
     role: auth.role,
     userId: auth.userId,
-    authorUserId: row.authorUserId,
-    status: row.status,
-    deletedAt: row.deletedAt,
+    authorUserId: loaded.report.authorUserId,
+    status: loaded.report.status,
+    deletedAt: loaded.report.deletedAt,
   };
 
   return (
@@ -71,7 +68,7 @@ export default async function CourseReportDetailPage({
         canDelete={canSoftDeleteCourseReport(editInput)}
         canChangeStatus={canChangeCourseReportStatus({
           role: auth.role,
-          deletedAt: row.deletedAt,
+          deletedAt: loaded.report.deletedAt,
         })}
         status={report.status}
       />
