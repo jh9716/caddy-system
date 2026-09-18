@@ -39,6 +39,15 @@ export default function AppHeader({ role }: { role: AppRole | null }) {
           )}
           {role && (
             <Link
+              className={navClass(pathname, "/course-reports")}
+              href="/course-reports"
+              aria-current={isAppNavActive(pathname, "/course-reports") ? "page" : undefined}
+            >
+              제보
+            </Link>
+          )}
+          {role && (
+            <Link
               className={navClass(pathname, "/board")}
               href="/board"
               aria-current={isAppNavActive(pathname, "/board") ? "page" : undefined}

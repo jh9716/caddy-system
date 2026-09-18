@@ -65,6 +65,22 @@ enum CaddyLinkRequestStatus {
   CANCELLED
 }
 
+/// 코스 제보 분류. Prisma course enum 은 만들지 않음 — COURSE_CODES 문자열 재사용.
+enum CourseReportCategory {
+  COURSE_CONDITION
+  CART_PATH
+  FACILITY
+  SAFETY
+  LOST_FOUND
+  OTHER
+}
+
+enum CourseReportStatus {
+  RECEIVED
+  CHECKING
+  RESOLVED
+}
+
 model Caddy {
   id                Int              @id @default(autoincrement())
   name              String
@@ -100,6 +116,8 @@ model Caddy {
   linkRequestSelections CaddyLinkRequest[] @relation("CaddyLinkRequestSelectedCaddy")
   /// 로그인 User와 1:1 (미연결 시 null)
   user              User?
+  /// 작성 시점 caddy snapshot. unlink/삭제 후에도 글 유지 (SetNull).
+  courseReportAuthorSnapshots CourseReport[] @relation("CourseReportAuthorCaddy")
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
 
@@ -201,7 +219,38 @@ model User {
   caddyLinkRequests CaddyLinkRequest[]
   /// Web Push 기기 구독. caddyId 스냅샷 없음 — 발송 시 현재 User.caddyId로 resolve.
   pushSubscriptions PushSubscription[]
+  /// 코스 제보 작성 이력. User 물리 삭제는 Restrict.
+  courseReports CourseReport[] @relation("CourseReportAuthor")
   createdAt DateTime @default(now())
+}
+
+/// 코스 제보 텍스트 V1. 사진/댓글/push column 없음.
+model CourseReport {
+  id                Int                   @id @default(autoincrement())
+  authorUserId      Int
+  author            User                  @relation("CourseReportAuthor", fields: [authorUserId], references: [id], onDelete: Restrict)
+  /// 작성 시점 User.caddyId snapshot. unlink 이후에도 글 유지.
+  authorCaddyId     Int?
+  authorCaddy       Caddy?                @relation("CourseReportAuthorCaddy", fields: [authorCaddyId], references: [id], onDelete: SetNull)
+  authorDisplayName String
+  title             String
+  body              String
+  /// COURSE_CODES 문자열. Prisma course enum 아님.
+  course            String
+  hole              Int?
+  category          CourseReportCategory
+  status            CourseReportStatus    @default(RECEIVED)
+  /// 처리 admin User.id. FK 없음 (Notice.pushSentByUserId 와 동일).
+  handlerUserId     Int?
+  resolvedAt        DateTime?
+  deletedAt         DateTime?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  @@index([deletedAt, status, createdAt])
+  @@index([authorUserId])
+  @@index([course, hole])
+  @@index([category])
 }
 
 /// 기기별 Web Push subscription (1 User : N devices).

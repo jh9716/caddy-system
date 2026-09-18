@@ -66,6 +66,11 @@ const NAV = [
   },
   { href: "/notice", label: "공지", match: (p: string) => p.startsWith("/notice") },
   {
+    href: "/course-reports",
+    label: "코스 제보",
+    match: (p: string) => p.startsWith("/course-reports"),
+  },
+  {
     href: "/schedule",
     label: "스케줄",
     match: (p: string) => p.startsWith("/schedule"),

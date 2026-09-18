@@ -16,6 +16,12 @@ export function shouldUseManageShellForNotice(
   return shouldUseManageShellForBoard(role);
 }
 
+export function shouldUseManageShellForCourseReport(
+  role: AppRole | string | null | undefined
+): boolean {
+  return shouldUseManageShellForBoard(role);
+}
+
 /** 공통 상단 헤더에서 현재 페이지 active 표시. `/` 는 정확 일치. */
 export function isAppNavActive(pathname: string, href: string): boolean {
   if (href === "/") return pathname === "/";
