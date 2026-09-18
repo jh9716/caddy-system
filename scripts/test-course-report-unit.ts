@@ -121,10 +121,6 @@ async function main() {
       assert(!src.includes("deliverWebPush"), `${rel} no deliverWebPush`);
       assert(!src.includes("PushSubscription"), `${rel} no PushSubscription`);
       assert(!src.includes("@vercel/blob"), `${rel} no blob`);
-      assert(!src.includes("multipart"), `${rel} no multipart`);
-      assert(!src.includes("FormData"), `${rel} no FormData`);
-      assert(!src.includes('type="file"'), `${rel} no file input`);
-      assert(!src.includes("CourseReportPhoto"), `${rel} no photo model`);
       assert(!src.includes("CommentThread"), `${rel} no CommentThread`);
       assert(!src.includes("model Comment"), `${rel} no Comment`);
     }
@@ -132,7 +128,6 @@ async function main() {
     assert(schema.includes("model CourseReport"), "schema CourseReport");
     assert(schema.includes("enum CourseReportCategory"), "schema category enum");
     assert(schema.includes("enum CourseReportStatus"), "schema status enum");
-    assert(!schema.includes("model CourseReportPhoto"), "no CourseReportPhoto");
     assert(!schema.includes("model Comment"), "no Comment");
     assert(!schema.includes("model CommentThread"), "no CommentThread");
     const mig = read("prisma/migrations/20260918140000_course_report_v1/migration.sql");

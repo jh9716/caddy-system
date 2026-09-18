@@ -30,8 +30,9 @@ export default async function CourseReportListPage({
     },
     orderBy: { createdAt: "desc" },
     take: COURSE_REPORT_LIST_TAKE,
+    include: { _count: { select: { photos: true } } },
   });
-  const reports = rows.map(toCourseReportPublic);
+  const reports = rows.map((row) => toCourseReportPublic(row, row._count.photos));
 
   return (
     <div className="course-report-page">
@@ -81,6 +82,11 @@ export default async function CourseReportListPage({
                 </span>
                 <span>{row.authorDisplayName}</span>
                 <time>{dayjs(row.createdAt).format("YYYY-MM-DD HH:mm")}</time>
+                {row.photoCount > 0 ? (
+                  <span className="course-report-photo-count" aria-label={`사진 ${row.photoCount}장`}>
+                    사진 {row.photoCount}
+                  </span>
+                ) : null}
               </div>
             </Link>
           </li>

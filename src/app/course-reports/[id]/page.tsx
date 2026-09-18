@@ -10,6 +10,8 @@ import {
   canSoftDeleteCourseReport,
 } from "@/lib/courseReportAccess";
 import CourseReportDetailActions from "./CourseReportDetailActions";
+import CourseReportPhotoGallery from "../CourseReportPhotoGallery";
+import { toCourseReportPhotoPublic } from "@/lib/courseReportPhoto";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,10 +31,12 @@ export default async function CourseReportDetailPage({
 
   const row = await prisma.courseReport.findFirst({
     where: { id, deletedAt: null },
+    include: { photos: { orderBy: { sortOrder: "asc" } } },
   });
   if (!row) notFound();
 
-  const report = toCourseReportPublic(row);
+  const report = toCourseReportPublic(row, row.photos.length);
+  const photos = row.photos.map(toCourseReportPhotoPublic);
   const editInput = {
     role: auth.role,
     userId: auth.userId,
@@ -60,6 +64,7 @@ export default async function CourseReportDetailPage({
         <span> · {dayjs(report.createdAt).format("YYYY-MM-DD HH:mm")}</span>
       </p>
       <div className="course-report-detail-body">{report.body}</div>
+      <CourseReportPhotoGallery reportId={id} photos={photos} />
       <CourseReportDetailActions
         id={id}
         canEdit={canEditCourseReportContent(editInput)}

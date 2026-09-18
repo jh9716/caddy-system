@@ -47,6 +47,7 @@ export type CourseReportPublic = {
   resolvedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  photoCount: number;
 };
 
 export type CourseReportWriteFields = {
@@ -193,7 +194,10 @@ export function parseCourseReportStatusBody(body: unknown): CourseReportStatusCo
   return parseCourseReportStatus(body.status);
 }
 
-export function toCourseReportPublic(row: CourseReport): CourseReportPublic {
+export function toCourseReportPublic(
+  row: CourseReport,
+  photoCount = 0
+): CourseReportPublic {
   const course = isCourseReportCourse(row.course) ? row.course : "VERTHILL";
   const category = (
     COURSE_REPORT_CATEGORIES as readonly string[]
@@ -221,6 +225,7 @@ export function toCourseReportPublic(row: CourseReport): CourseReportPublic {
     resolvedAt: row.resolvedAt ? row.resolvedAt.toISOString() : null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
+    photoCount,
   };
 }
 

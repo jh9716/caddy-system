@@ -29,8 +29,9 @@ export async function GET(req: NextRequest) {
     },
     orderBy: { createdAt: "desc" },
     take: COURSE_REPORT_LIST_TAKE,
+    include: { _count: { select: { photos: true } } },
   });
-  return NextResponse.json(list.map(toCourseReportPublic));
+  return NextResponse.json(list.map((row) => toCourseReportPublic(row, row._count.photos)));
 }
 
 export async function POST(req: NextRequest) {

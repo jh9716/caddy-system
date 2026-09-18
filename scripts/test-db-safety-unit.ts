@@ -138,6 +138,10 @@ console.log("== readonly inspect allowlist includes push subscription ==");
     guardSrc.includes("inspect-board-push-freshness-prod-readonly"),
     "guard allowlists board push inspect"
   );
+  assert(
+    guardSrc.includes("inspect-course-report-photo-v1-prod-readonly"),
+    "guard allowlists course report photo inspect"
+  );
 }
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);

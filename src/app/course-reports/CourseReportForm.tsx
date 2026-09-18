@@ -1,16 +1,26 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { COURSE_CODES, COURSE_LABELS, type CourseCode } from "@/lib/reservationParser";
 import {
   COURSE_REPORT_CATEGORIES,
   COURSE_REPORT_CATEGORY_LABELS,
   type CourseReportCategoryCode,
 } from "@/lib/courseReportConstants";
+import type { CourseReportPhotoPublic } from "@/lib/courseReportPhotoConstants";
+import { courseReportPhotoSrc } from "@/lib/courseReportPhotoConstants";
+import {
+  COURSE_REPORT_HEIC_MESSAGE,
+  COURSE_REPORT_PHOTO_ACCEPT,
+  COURSE_REPORT_PHOTO_MAX,
+  isHeicLikeFile,
+  prepareCourseReportPhoto,
+} from "@/lib/courseReportPhotoClient";
 
 type Props = {
   mode?: "new" | "edit";
+  canManagePhotos?: boolean;
   initial?: {
     id: number;
     title: string;
@@ -18,11 +28,19 @@ type Props = {
     course: CourseCode;
     hole: number | null;
     category: CourseReportCategoryCode;
+    photos?: CourseReportPhotoPublic[];
   };
 };
 
-export default function CourseReportForm({ mode = "new", initial }: Props) {
+type PendingPhoto = { key: string; blob: Blob; previewUrl: string };
+
+export default function CourseReportForm({
+  mode = "new",
+  initial,
+  canManagePhotos = true,
+}: Props) {
   const router = useRouter();
+  const fileRef = useRef<HTMLInputElement>(null);
   const [title, setTitle] = useState(initial?.title ?? "");
   const [body, setBody] = useState(initial?.body ?? "");
   const [course, setCourse] = useState<CourseCode>(initial?.course ?? "VERTHILL");
@@ -31,11 +49,88 @@ export default function CourseReportForm({ mode = "new", initial }: Props) {
     initial?.category ?? "COURSE_CONDITION"
   );
   const [busy, setBusy] = useState(false);
+  const [statusNote, setStatusNote] = useState("");
+  const [existingPhotos, setExistingPhotos] = useState<CourseReportPhotoPublic[]>(
+    initial?.photos ?? []
+  );
+  const [pending, setPending] = useState<PendingPhoto[]>([]);
   const isEdit = mode === "edit";
+  const totalPhotos = existingPhotos.length + pending.length;
+  const canAdd = canManagePhotos && totalPhotos < COURSE_REPORT_PHOTO_MAX;
+
+  async function onPick(files: FileList | null) {
+    if (!files || !canManagePhotos) return;
+    setStatusNote("");
+    const room = COURSE_REPORT_PHOTO_MAX - existingPhotos.length - pending.length;
+    const selected = Array.from(files).slice(0, Math.max(0, room));
+    const additions: PendingPhoto[] = [];
+    for (const file of selected) {
+      if (isHeicLikeFile(file)) {
+        setStatusNote(COURSE_REPORT_HEIC_MESSAGE);
+        continue;
+      }
+      try {
+        const blob = await prepareCourseReportPhoto(file);
+        additions.push({
+          key: `${Date.now()}-${additions.length}-${file.name}`,
+          blob,
+          previewUrl: URL.createObjectURL(blob),
+        });
+      } catch (e) {
+        setStatusNote(e instanceof Error ? e.message : COURSE_REPORT_HEIC_MESSAGE);
+      }
+    }
+    if (additions.length) {
+      setPending((cur) => {
+        const roomLeft = COURSE_REPORT_PHOTO_MAX - existingPhotos.length - cur.length;
+        return [...cur, ...additions.slice(0, Math.max(0, roomLeft))];
+      });
+    }
+    if (fileRef.current) fileRef.current.value = "";
+  }
+
+  function removePending(key: string) {
+    setPending((cur) => {
+      const hit = cur.find((p) => p.key === key);
+      if (hit) URL.revokeObjectURL(hit.previewUrl);
+      return cur.filter((p) => p.key !== key);
+    });
+  }
+
+  async function removeExisting(photoId: number) {
+    if (!initial?.id || !canManagePhotos) return;
+    const res = await fetch(`/api/course-reports/${initial.id}/photos/${photoId}`, {
+      method: "DELETE",
+      credentials: "include",
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(typeof data.message === "string" ? data.message : "사진 삭제 실패");
+      return;
+    }
+    setExistingPhotos((cur) => cur.filter((p) => p.id !== photoId));
+  }
+
+  async function uploadPending(reportId: number): Promise<number> {
+    let failed = 0;
+    for (const item of pending) {
+      const fd = new FormData();
+      fd.append("file", item.blob, "photo.jpg");
+      const res = await fetch(`/api/course-reports/${reportId}/photos`, {
+        method: "POST",
+        credentials: "include",
+        body: fd,
+      });
+      if (!res.ok) failed += 1;
+    }
+    return failed;
+  }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (busy) return;
     setBusy(true);
+    setStatusNote("");
     const payload = {
       title,
       body,
@@ -51,22 +146,32 @@ export default function CourseReportForm({ mode = "new", initial }: Props) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    setBusy(false);
     if (!res.ok) {
+      setBusy(false);
       const data = await res.json().catch(() => ({}));
       alert(typeof data.message === "string" ? data.message : isEdit ? "수정 실패" : "등록 실패");
       return;
     }
-    if (isEdit) {
-      router.replace(`/course-reports/${initial?.id}`);
+    const data = await res.json().catch(() => ({}));
+    const reportId = isEdit ? initial?.id : data.id;
+    if (typeof reportId !== "number") {
+      setBusy(false);
+      router.replace("/course-reports");
       return;
     }
-    const data = await res.json().catch(() => ({}));
-    if (typeof data.id === "number") {
-      router.replace(`/course-reports/${data.id}`);
-    } else {
-      router.replace("/course-reports");
+    let failed = 0;
+    if (canManagePhotos && pending.length > 0) {
+      failed = await uploadPending(reportId);
     }
+    setBusy(false);
+    if (failed > 0) {
+      alert(
+        isEdit
+          ? `제보는 수정되었지만 사진 ${failed}장이 업로드되지 않았습니다.`
+          : `제보는 등록되었지만 사진 ${failed}장이 업로드되지 않았습니다.`
+      );
+    }
+    router.replace(`/course-reports/${reportId}`);
   }
 
   return (
@@ -134,6 +239,54 @@ export default function CourseReportForm({ mode = "new", initial }: Props) {
           maxLength={4000}
         />
       </label>
+
+      {canManagePhotos ? (
+        <fieldset className="course-report-fieldset">
+          <legend>사진 (최대 {COURSE_REPORT_PHOTO_MAX}장)</legend>
+          <div className="course-report-photo-composer">
+            {existingPhotos.map((photo) => (
+              <div key={photo.id} className="course-report-photo-item">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={courseReportPhotoSrc(initial!.id, photo.id)} alt="" />
+                <button
+                  type="button"
+                  className="course-report-photo-remove"
+                  aria-label="사진 삭제"
+                  onClick={() => void removeExisting(photo.id)}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+            {pending.map((photo) => (
+              <div key={photo.key} className="course-report-photo-item">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={photo.previewUrl} alt="" />
+                <button
+                  type="button"
+                  className="course-report-photo-remove"
+                  aria-label="사진 삭제"
+                  onClick={() => removePending(photo.key)}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+            <label className={`course-report-photo-add${canAdd ? "" : " is-disabled"}`}>
+              + 사진
+              <input
+                ref={fileRef}
+                type="file"
+                accept={COURSE_REPORT_PHOTO_ACCEPT}
+                multiple
+                disabled={!canAdd || busy}
+                onChange={(e) => void onPick(e.target.files)}
+              />
+            </label>
+          </div>
+          {statusNote ? <p className="course-report-photo-note">{statusNote}</p> : null}
+        </fieldset>
+      ) : null}
 
       <div className="course-report-form-actions">
         <button type="submit" disabled={busy} className="ui-btn ui-btn-primary">
