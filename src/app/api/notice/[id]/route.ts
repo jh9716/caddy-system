@@ -2,49 +2,105 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/auth";
+import {
+  isNoticeAuthResponse,
+  loadNoticeViewer,
+  requireNoticeReader,
+} from "@/lib/noticeAccess";
+import {
+  NoticeValidationError,
+  canViewNotice,
+  parseNoticeWriteBody,
+} from "@/lib/noticeTarget";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
-// 단건 조회 (상세 페이지 SSR에서 사용)
+async function noticeId(
+  params: Promise<{ id: string }> | { id: string }
+): Promise<number> {
+  const resolved = await Promise.resolve(params);
+  return Number(resolved.id);
+}
+
 export async function GET(
-  _req: NextRequest,
-  { params }: { params: { id: string } }
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> | { id: string } }
 ) {
-  const id = Number(params.id);
+  const auth = await requireNoticeReader(req);
+  if (isNoticeAuthResponse(auth)) return auth;
+
+  const id = await noticeId(params);
+  if (!Number.isInteger(id) || id <= 0) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
   const notice = await prisma.notice.findUnique({ where: { id } });
   if (!notice) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+  const viewer = await loadNoticeViewer(prisma, auth);
+  if (!canViewNotice(notice, viewer)) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   return NextResponse.json(notice);
 }
 
-// 수정 (관리자)
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> | { id: string } }
 ) {
   const guard = await requireAdmin(req);
   if (guard) return guard;
-  const id = Number(params.id);
-  const body = await req.json();
-  const updated = await prisma.notice.update({
-    where: { id },
-    data: {
-      title: body.title ?? undefined,
-      body: body.body ?? undefined,
-    },
-  });
-  return NextResponse.json(updated);
+  const id = await noticeId(params);
+  if (!Number.isInteger(id) || id <= 0) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+  const body = await req.json().catch(() => ({}));
+  try {
+    const parsed = parseNoticeWriteBody(body, "update");
+    const data: {
+      title?: string;
+      content?: string;
+      important?: boolean;
+      pinned?: boolean;
+      targetType?: string;
+      targetValue?: string | null;
+      publishStartAt?: Date | null;
+      publishEndAt?: Date | null;
+      author?: string;
+    } = {};
+    if (parsed.title !== undefined) data.title = parsed.title;
+    if (parsed.content !== undefined) data.content = parsed.content;
+    if (parsed.important !== undefined) data.important = parsed.important;
+    if (parsed.pinned !== undefined) data.pinned = parsed.pinned;
+    if (parsed.targetType !== undefined) data.targetType = parsed.targetType;
+    if (parsed.targetValue !== undefined) data.targetValue = parsed.targetValue;
+    if (parsed.publishStartAt !== undefined) data.publishStartAt = parsed.publishStartAt;
+    if (parsed.publishEndAt !== undefined) data.publishEndAt = parsed.publishEndAt;
+    if (parsed.author !== undefined) data.author = parsed.author;
+    const updated = await prisma.notice.update({
+      where: { id },
+      data,
+    });
+    return NextResponse.json(updated);
+  } catch (e) {
+    if (e instanceof NoticeValidationError) {
+      return NextResponse.json({ error: e.code, message: e.message }, { status: e.status });
+    }
+    throw e;
+  }
 }
 
-// 삭제 (관리자)
 export async function DELETE(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> | { id: string } }
 ) {
   const guard = await requireAdmin(req);
   if (guard) return guard;
-  const id = Number(params.id);
+  const id = await noticeId(params);
+  if (!Number.isInteger(id) || id <= 0) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
   await prisma.notice.delete({ where: { id } });
   return NextResponse.json({ ok: true });
 }

@@ -161,6 +161,23 @@ model Notice {
   author    String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  /// 중요 공지 배지. 기존 row는 false.
+  important Boolean  @default(false)
+  /// 목록 상단 고정. 기존 row는 false.
+  pinned    Boolean  @default(false)
+  /// ALL | CADDY_TYPE | TEAM (서버 validation, enum 아님)
+  targetType  String  @default("ALL")
+  /// ALL → null. CADDY_TYPE → HOUSE/THIRD/DRIVING. TEAM → Caddy.team
+  targetValue String?
+  publishStartAt DateTime?
+  publishEndAt   DateTime?
+  /// Fail-closed Web Push claim. deliverWebPush 전에 기록.
+  pushSentAt DateTime?
+  /// 발송 admin User.id. FK 없음 (User 삭제와 이력 분리).
+  pushSentByUserId Int?
+
+  @@index([pinned, important, createdAt])
+  @@index([targetType, targetValue])
 }
 
 model User {

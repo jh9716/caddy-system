@@ -7,7 +7,13 @@ import PushNotificationCard from '@/components/PushNotificationCard'
 type Summary = {
   date: string
   today: { off: number; sick: number; longSick: number; duty: number; marshal: number }
-  latestNotices: { id: number; title: string; createdAt: string }[]
+  latestNotices: {
+    id: number
+    title: string
+    createdAt: string
+    important?: boolean
+    pinned?: boolean
+  }[]
 }
 
 export default function CaddyPage() {
@@ -101,6 +107,8 @@ export default function CaddyPage() {
               {summary.latestNotices.map(n => (
                 <li key={n.id} style={{ padding: 12, borderTop: '1px solid #f1f5f9' }}>
                   <a href={`/notice/${n.id}`} style={{ textDecoration: 'none', color: '#0f172a' }}>
+                    {n.important ? '[중요] ' : ''}
+                    {n.pinned ? '[고정] ' : ''}
                     {n.title}
                   </a>
                   <span style={{ marginLeft: 8, fontSize: 12, color: '#94a3b8' }}>
