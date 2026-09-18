@@ -30,6 +30,7 @@
     "test:pwa-install-unit": "bash scripts/tsx-safe.sh scripts/test-pwa-install-unit.ts",
     "test:push-subscription-unit": "bash scripts/tsx-safe.sh scripts/test-push-subscription-unit.ts",
     "test:web-push-display-unit": "bash scripts/tsx-safe.sh scripts/test-web-push-display-unit.ts",
+    "test:board-push-unit": "bash scripts/tsx-safe.sh scripts/test-board-push-unit.ts",
     "test:pwa-sw-cache-preserve-chromium": "bash scripts/tsx-safe.sh scripts/test-pwa-sw-cache-preserve-chromium.ts",
     "test:caddy-display-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-display-unit.ts",
     "test:login-unit": "bash scripts/tsx-safe.sh scripts/test-login-session-unit.ts",
