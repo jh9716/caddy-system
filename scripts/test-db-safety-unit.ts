@@ -2,6 +2,7 @@
  * DB URL safety unit tests. No database connection.
  */
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import {
   assertLocalDatabaseUrl,
@@ -120,6 +121,15 @@ console.log("== guard-prod-db.cjs aborts ad-hoc neon DATABASE_URL ==");
   );
   assert(r.status === 0, "guard allows localhost");
   assert(String(r.stdout).includes("ok-local"), "local process ran");
+}
+
+console.log("== readonly inspect allowlist includes push subscription ==");
+{
+  const guardSrc = fs.readFileSync(path.resolve("scripts/guard-prod-db.cjs"), "utf8");
+  assert(
+    guardSrc.includes("inspect-push-subscription-prod-readonly"),
+    "guard allowlists push subscription inspect"
+  );
 }
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);

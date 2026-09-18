@@ -182,7 +182,32 @@ model User {
   mustChangePassword Boolean @default(false)
   /// 본인확인 연결 요청 이력 (User 물리 삭제는 Restrict로 이력 보호)
   caddyLinkRequests CaddyLinkRequest[]
+  /// Web Push 기기 구독. caddyId 스냅샷 없음 — 발송 시 현재 User.caddyId로 resolve.
+  pushSubscriptions PushSubscription[]
   createdAt DateTime @default(now())
+}
+
+/// 기기별 Web Push subscription (1 User : N devices).
+/// endpoint unique. 발송은 후속 PR. V1은 등록/해제만.
+model PushSubscription {
+  id     Int  @id @default(autoincrement())
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// PushService endpoint. unique — 같은 브라우저 endpoint는 현재 로그인 User 소유.
+  endpoint String @unique
+  p256dh   String
+  auth     String
+  userAgent String?
+  platform  String?
+  enabled   Boolean @default(true)
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  lastSuccessAt DateTime?
+  lastFailureAt DateTime?
+
+  @@index([userId])
 }
 
 /// Kakao 직원 본인확인 요청 (이름+휴대폰 → 관리자 승인 후 User.caddyId / Caddy.phoneNormalized)
