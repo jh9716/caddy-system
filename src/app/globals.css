@@ -1998,14 +1998,33 @@ a {
 .notice-page {
   max-width: 720px;
   margin: 0 auto;
+  min-width: 0;
 }
 
 .notice-page-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px 12px;
   margin-bottom: 16px;
+  min-width: 0;
+}
+
+.notice-page-head .ui-page-title {
+  margin: 0;
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.notice-page-head .ui-btn {
+  flex-shrink: 0;
+}
+
+.notice-detail .ui-page-title {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .notice-list {
@@ -2040,6 +2059,9 @@ a {
 .notice-list-title {
   font-weight: 700;
   color: var(--vh-ink);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .notice-list-meta {

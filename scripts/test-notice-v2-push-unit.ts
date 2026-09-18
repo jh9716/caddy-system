@@ -42,6 +42,7 @@ import {
 import { GET as GET_PREVIEW } from "../src/app/api/push/notice-preview/route";
 import { POST as POST_SEND } from "../src/app/api/push/notice-send/route";
 import { GET as GET_SUMMARY } from "../src/app/api/summary/route";
+import { shouldUseManageShellForNotice } from "../src/lib/boardNav";
 
 let passed = 0;
 let failed = 0;
@@ -245,6 +246,34 @@ async function main() {
     assert(mw.includes('"/notice"'), "middleware gates /notice");
     const layout = read("src/app/notice/layout.tsx");
     assert(layout.includes("getRequestAuthUser"), "RSC layout resolveAuth");
+    assert(layout.includes("ManageShell"), "admin /notice reuses ManageShell");
+    assert(
+      layout.includes("shouldUseManageShellForNotice"),
+      "notice layout gates ManageShell by role"
+    );
+    assert(
+      !layout.includes("VERTHILL · Caddy") && !layout.includes("모든 기기 로그아웃"),
+      "notice layout has no standalone header"
+    );
+    for (const rel of [
+      "src/app/notice/page.tsx",
+      "src/app/notice/[id]/page.tsx",
+      "src/app/notice/new/page.tsx",
+      "src/app/notice/[id]/edit/page.tsx",
+    ]) {
+      const src = read(rel);
+      assert(!src.includes("vh-header"), `${rel} no standalone vh-header`);
+      assert(!src.includes("VERTHILL · Caddy"), `${rel} no old brand header`);
+      assert(!src.includes("모든 기기 로그아웃"), `${rel} no duplicate logout`);
+    }
+    const boardNav = read("src/lib/boardNav.ts");
+    assert(
+      boardNav.includes("shouldUseManageShellForNotice"),
+      "shared notice shell helper exists"
+    );
+    assert(shouldUseManageShellForNotice("admin") === true, "admin /notice uses ManageShell");
+    assert(shouldUseManageShellForNotice("caddy") === false, "caddy /notice does not use ManageShell");
+    assert(shouldUseManageShellForNotice("leader") === false, "leader /notice does not use ManageShell");
     const patch = read("src/app/api/notice/[id]/route.ts");
     assert(patch.includes("parseNoticeWriteBody"), "PATCH uses content||body parser");
     assert(!patch.includes("body: body.body"), "PATCH does not write schema-less body field");
