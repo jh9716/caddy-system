@@ -2174,6 +2174,12 @@ a {
   margin-top: 4px;
 }
 
+body.manage-mode .vh-work-inner:has(.notice-page) {
+  padding-bottom: calc(
+    var(--vh-bottom-nav-height, 58px) + env(safe-area-inset-bottom, 0px) + 28px
+  );
+}
+
 .notice-push {
   margin-top: 24px;
   padding: 14px;
