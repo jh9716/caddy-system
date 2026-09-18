@@ -99,6 +99,25 @@ export default function CaddyPage() {
           </div>
 
           <div style={{ marginTop: 28 }}>
+            <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>코스 제보</h3>
+            <a
+              href="/course-reports"
+              style={{
+                display: "inline-block",
+                padding: "10px 14px",
+                borderRadius: 10,
+                border: "1px solid #e5e7eb",
+                background: "#163028",
+                color: "#fff",
+                textDecoration: "none",
+                fontWeight: 700,
+              }}
+            >
+              코스 제보 보기
+            </a>
+          </div>
+
+          <div style={{ marginTop: 28 }}>
             <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>최근 공지</h3>
             <ul style={{ border: '1px solid #e5e7eb', borderRadius: 10, overflow: 'hidden' }}>
               {summary.latestNotices.length === 0 && (

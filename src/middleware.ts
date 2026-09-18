@@ -43,7 +43,8 @@ export async function middleware(req: NextRequest) {
   if (
     pathname.startsWith("/caddy") ||
     pathname.startsWith("/board") ||
-    pathname.startsWith("/notice")
+    pathname.startsWith("/notice") ||
+    pathname.startsWith("/course-reports")
   ) {
     if (
       !session ||
@@ -68,5 +69,7 @@ export const config = {
     "/board/:path*",
     "/notice",
     "/notice/:path*",
+    "/course-reports",
+    "/course-reports/:path*",
   ],
 };
