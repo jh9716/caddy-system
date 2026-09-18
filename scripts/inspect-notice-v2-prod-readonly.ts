@@ -6,6 +6,7 @@
  *
  * Uses PRODUCTION_DATABASE_URL directly. Does not replace local DATABASE_URL.
  */
+import crypto from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 import { isProductionDatabaseUrl, parseDatabaseUrl } from "../src/lib/dbSafety";
 
@@ -112,14 +113,69 @@ async function main() {
          COUNT(*) FILTER (WHERE "pushSentByUserId" IS NULL)::bigint AS push_by_null
        FROM "Notice"`
     );
-    const sample = await prisma.$queryRawUnsafe<
-      Array<{ id: number; title: string; targetType: string; important: boolean; pinned: boolean }>
+    const identity = await prisma.$queryRawUnsafe<
+      Array<{
+        id: number;
+        title: string;
+        content: string;
+        author: string | null;
+        createdAt: Date;
+        updatedAt: Date;
+      }>
     >(
-      `SELECT id, title, "targetType", important, pinned
+      `SELECT id, title, content, author, "createdAt", "updatedAt"
+       FROM "Notice"
+       ORDER BY id ASC`
+    );
+    const sample = await prisma.$queryRawUnsafe<
+      Array<{
+        id: number;
+        title: string;
+        targetType: string;
+        targetValue: string | null;
+        important: boolean;
+        pinned: boolean;
+        publishStartAt: Date | null;
+        publishEndAt: Date | null;
+        pushSentAt: Date | null;
+        pushSentByUserId: number | null;
+      }>
+    >(
+      `SELECT id, title, "targetType", "targetValue", important, pinned,
+              "publishStartAt", "publishEndAt", "pushSentAt", "pushSentByUserId"
        FROM "Notice"
        ORDER BY id ASC
        LIMIT 8`
     );
+    const pushCount = await prisma.$queryRawUnsafe<Array<{ n: bigint | number }>>(
+      `SELECT COUNT(*)::bigint AS n FROM "PushSubscription"`
+    );
+    const noticePushAudits = await prisma.$queryRawUnsafe<Array<{ n: bigint | number }>>(
+      `SELECT COUNT(*)::bigint AS n FROM "Audit" WHERE action = 'NOTICE_PUSH_SEND'`
+    );
+    const appliedAll = await prisma.$queryRawUnsafe<
+      Array<{ n: bigint | number }>
+    >(
+      `SELECT COUNT(*)::bigint AS n FROM "_prisma_migrations" WHERE finished_at IS NOT NULL`
+    );
+
+    const identityFingerprint = crypto
+      .createHash("sha256")
+      .update(
+        JSON.stringify(
+          identity.map((r) => ({
+            id: r.id,
+            title: r.title,
+            content: r.content,
+            author: r.author,
+            createdAt: r.createdAt.toISOString(),
+            updatedAt: r.updatedAt.toISOString(),
+          }))
+        )
+      )
+      .digest("hex");
+    const expectedFingerprint =
+      "346557b614d1a52c41f0c77e976a93ef27017b017c8e74119cd191016d4aad4d";
 
     const colNames = columns.map((c) => c.column_name);
     const idxNames = indexes.map((i) => i.indexname);
@@ -137,6 +193,10 @@ async function main() {
       Number(d.end_null) === n &&
       Number(d.push_sent_null) === n &&
       Number(d.push_by_null) === n;
+    const identityUnchanged = identityFingerprint === expectedFingerprint;
+    const pushSubscriptionRows = Number(pushCount[0]?.n ?? -1);
+    const noticePushSendAudits = Number(noticePushAudits[0]?.n ?? -1);
+    const finishedMigrations = Number(appliedAll[0]?.n ?? -1);
 
     console.log(
       JSON.stringify(
@@ -147,24 +207,41 @@ async function main() {
             pending.length === 0 &&
             missingCols.length === 0 &&
             missingIdx.length === 0 &&
-            defaultsOk,
+            defaultsOk &&
+            identityUnchanged &&
+            noticePushSendAudits === 0,
           host,
           migration: MIGRATION_NAME,
           applied: applied[0] ?? null,
           pendingMigrations: pending.map((p) => p.migration_name),
+          finishedMigrations,
+          schemaUpToDate: pending.length === 0 && Boolean(applied[0]?.finished_at),
           noticeCount: n,
+          noticeCountBeforeDeploy: 1,
+          identityFingerprint,
+          expectedFingerprint,
+          identityUnchanged,
           columns: colNames,
           missingColumns: missingCols,
           indexes: idxNames,
           missingIndexes: missingIdx,
           defaultsOk,
           sample,
+          pushSubscriptionRows,
+          noticePushSendAudits,
         },
         null,
         2
       )
     );
-    if (missingCols.length || missingIdx.length || !applied.length || !defaultsOk) {
+    if (
+      missingCols.length ||
+      missingIdx.length ||
+      !applied.length ||
+      !defaultsOk ||
+      !identityUnchanged ||
+      noticePushSendAudits !== 0
+    ) {
       process.exitCode = 2;
     }
   } finally {
