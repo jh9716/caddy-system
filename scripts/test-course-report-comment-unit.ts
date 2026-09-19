@@ -136,6 +136,19 @@ async function main() {
     assert(manage.includes("캐디 관리"), "ManageShell menus intact");
     const form = read("src/app/course-reports/CourseReportForm.tsx");
     assert(!form.includes("comments"), "form no comments");
+    const commentLib = read("src/lib/comment.ts");
+    assert(!commentLib.includes("stripHtml"), "no stripHtml");
+    assert(!commentLib.includes("dangerouslySetInnerHTML"), "lib no innerHTML");
+    assert(!/<\[\^>\]\*>/.test(commentLib), "no HTML tag strip regex");
+    const commentUi = read("src/app/course-reports/[id]/CourseReportComments.tsx");
+    assert(commentUi.includes("{item.body}"), "React text child body");
+    assert(!commentUi.includes("dangerouslySetInnerHTML"), "UI no innerHTML");
+    const deploy = read("scripts/maintenance/deploy-comment-v1-migration.ts");
+    assert(deploy.includes("COMMENT_V1_20260919"), "maintenance confirm task-id");
+    assert(deploy.includes('["migrate", "deploy"]'), "migrate deploy only");
+    assert(!deploy.includes('["migrate", "dev"]'), "no migrate dev");
+    assert(!deploy.includes('["migrate", "reset"]'), "no migrate reset");
+    assert(!deploy.includes('["db", "push"]'), "no db push");
   }
 
   section("parse / auth helpers");
@@ -153,7 +166,11 @@ async function main() {
     } catch (e) {
       assert((e as { code?: string }).code === "too_long", "too_long code");
     }
-    assert(parseCommentBody("<b>hi</b>") === "hi", "html stripped");
+    assert(parseCommentBody("<3") === "<3", "<3 preserved");
+    assert(parseCommentBody("1 < 2") === "1 < 2", "1 < 2 preserved");
+    assert(parseCommentBody("a > b") === "a > b", "a > b preserved");
+    assert(parseCommentBody("<b>hi</b>") === "<b>hi</b>", "tags stored as plain text");
+    assert(parseCommentBody("foo < bar > baz") === "foo < bar > baz", "angle brackets preserved");
     assert(canComposeComment({ role: "caddy", userId: 1 }) === true, "caddy compose");
     assert(canComposeComment({ role: "admin", userId: null }) === false, "env-only no compose");
     assert(
@@ -340,6 +357,28 @@ async function main() {
       assert(caddyJson.comment?.authorUserId === userCaddy.id, "spoof author ignored");
       assert(caddyJson.comment?.authorDisplayName === "댓글캐디A", "caddy display name");
       assert(caddyJson.comment?.body === "캐디 댓글", "caddy body");
+
+      const plainPost = await POST_COMMENT(
+        req(`http://local/api/course-reports/${reportId}/comments`, {
+          method: "POST",
+          headers: { cookie: caddyCookie, "content-type": "application/json" },
+          body: JSON.stringify({ body: "<3 1 < 2 a > b <b>hi</b>" }),
+        }),
+        reportParams(reportId)
+      );
+      const plainJson = await jsonOf(plainPost);
+      assert(plainPost.status === 201, "plain-text symbols POST 201");
+      assert(
+        plainJson.comment?.body === "<3 1 < 2 a > b <b>hi</b>",
+        "plain-text symbols stored as-is"
+      );
+      const plainRow = await prisma.comment.findUnique({
+        where: { id: Number(plainJson.comment.id) },
+      });
+      assert(
+        plainRow?.body === "<3 1 < 2 a > b <b>hi</b>",
+        "plain-text symbols in DB as-is"
+      );
 
       const leaderPost = await POST_COMMENT(
         req(`http://local/api/course-reports/${reportId}/comments`, {

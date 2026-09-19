@@ -32,16 +32,13 @@ export function isCommentUniqueConflict(e: unknown): boolean {
   );
 }
 
-function stripHtml(raw: string): string {
-  return raw.replace(/<[^>]*>/g, "");
-}
-
 export function parseCommentBody(input: unknown): string {
   if (typeof input !== "string") {
     throw new CommentValidationError("empty", "댓글을 입력해 주세요.", 400);
   }
-  const stripped = stripHtml(input).replace(/\u0000/g, "");
-  const body = stripped.trim();
+  // Plain text only: trim + null-byte strip. Do not HTML-parse/sanitize/mutate.
+  // React text children escape on render; never dangerouslySetInnerHTML.
+  const body = input.replace(/\u0000/g, "").trim();
   if (!body) {
     throw new CommentValidationError("empty", "댓글을 입력해 주세요.", 400);
   }
