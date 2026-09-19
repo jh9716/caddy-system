@@ -22,6 +22,19 @@ export function canWriteCourseReport(
   return canReadCourseReport(role);
 }
 
+/** Compose requires a DB User.id. Env-only admin (userId=null) can read/status only. */
+export function canComposeCourseReport(auth: {
+  role: ResolvedAuthUser["role"] | null | undefined;
+  userId: number | null;
+}): boolean {
+  return (
+    canWriteCourseReport(auth.role) &&
+    typeof auth.userId === "number" &&
+    Number.isInteger(auth.userId) &&
+    auth.userId > 0
+  );
+}
+
 export function isCourseReportAuthResponse(
   v: ResolvedAuthUser | NextResponse
 ): v is NextResponse {

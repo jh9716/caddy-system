@@ -13,6 +13,7 @@ import {
   requireCourseReportWriter,
 } from "@/lib/courseReportAccess";
 import { COURSE_REPORT_LIST_TAKE } from "@/lib/courseReportConstants";
+import { listCourseReportsWithPhotoCount } from "@/lib/courseReportPhoto";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -22,15 +23,11 @@ export async function GET(req: NextRequest) {
   if (isCourseReportAuthResponse(auth)) return auth;
 
   const status = parseCourseReportStatusFilter(req.nextUrl.searchParams.get("status"));
-  const list = await prisma.courseReport.findMany({
-    where: {
-      deletedAt: null,
-      ...(status ? { status } : {}),
-    },
-    orderBy: { createdAt: "desc" },
+  const list = await listCourseReportsWithPhotoCount(prisma, {
+    status: status ?? undefined,
     take: COURSE_REPORT_LIST_TAKE,
   });
-  return NextResponse.json(list.map(toCourseReportPublic));
+  return NextResponse.json(list.map(({ report, photoCount }) => toCourseReportPublic(report, photoCount)));
 }
 
 export async function POST(req: NextRequest) {

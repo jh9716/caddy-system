@@ -42,7 +42,7 @@ function isDeployedApp() {
 
 function isReadonlyInspectArgv() {
   const s = process.argv.join(" ");
-  return /inspect-db-schema-readonly|check-migration-checksums-readonly|export-caddies-snapshot|preview-roster-import|inspect-special-assign-prod-readonly|inspect-reflow-prod-readonly|inspect-sick-spare-prod-readonly|inspect-unavail-ops-prod-readonly|inspect-daily-special-support-prod-readonly|inspect-push-subscription-prod-readonly|inspect-board-push-freshness-prod-readonly|inspect-notice-v2-prod-readonly/.test(
+  return /inspect-db-schema-readonly|check-migration-checksums-readonly|export-caddies-snapshot|preview-roster-import|inspect-special-assign-prod-readonly|inspect-reflow-prod-readonly|inspect-sick-spare-prod-readonly|inspect-unavail-ops-prod-readonly|inspect-daily-special-support-prod-readonly|inspect-push-subscription-prod-readonly|inspect-board-push-freshness-prod-readonly|inspect-notice-v2-prod-readonly|inspect-course-report-v1-prod-readonly|inspect-course-report-photo-v1-prod-readonly/.test(
     s
   );
 }

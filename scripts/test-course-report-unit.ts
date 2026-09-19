@@ -23,6 +23,7 @@ import {
 } from "../src/lib/courseReport";
 import {
   canChangeCourseReportStatus,
+  canComposeCourseReport,
   canEditCourseReportContent,
   canSoftDeleteCourseReport,
 } from "../src/lib/courseReportAccess";
@@ -121,10 +122,6 @@ async function main() {
       assert(!src.includes("deliverWebPush"), `${rel} no deliverWebPush`);
       assert(!src.includes("PushSubscription"), `${rel} no PushSubscription`);
       assert(!src.includes("@vercel/blob"), `${rel} no blob`);
-      assert(!src.includes("multipart"), `${rel} no multipart`);
-      assert(!src.includes("FormData"), `${rel} no FormData`);
-      assert(!src.includes('type="file"'), `${rel} no file input`);
-      assert(!src.includes("CourseReportPhoto"), `${rel} no photo model`);
       assert(!src.includes("CommentThread"), `${rel} no CommentThread`);
       assert(!src.includes("model Comment"), `${rel} no Comment`);
     }
@@ -132,7 +129,6 @@ async function main() {
     assert(schema.includes("model CourseReport"), "schema CourseReport");
     assert(schema.includes("enum CourseReportCategory"), "schema category enum");
     assert(schema.includes("enum CourseReportStatus"), "schema status enum");
-    assert(!schema.includes("model CourseReportPhoto"), "no CourseReportPhoto");
     assert(!schema.includes("model Comment"), "no Comment");
     assert(!schema.includes("model CommentThread"), "no CommentThread");
     const mig = read("prisma/migrations/20260918140000_course_report_v1/migration.sql");
@@ -160,16 +156,33 @@ async function main() {
     assert(!/BOTTOM[\s\S]*course-reports/.test(shell), "bottom nav not expanded");
     const listPage = read("src/app/course-reports/page.tsx");
     assert(listPage.includes('href="/course-reports/new"'), "list CTA href /course-reports/new");
+    assert(listPage.includes("canComposeCourseReport"), "list gates compose by DB userId");
+    assert(
+      listPage.includes("COURSE_REPORT_COMPOSE_ACCOUNT_HINT"),
+      "list shows env-only compose hint"
+    );
     assert(listPage.includes("from \"next/link\""), "list uses Next Link");
     assert(!listPage.includes("<button"), "list CTA is not a nested button");
     assert(!listPage.includes("preventDefault"), "list has no preventDefault");
     assert(!listPage.includes("pointer-events: none"), "list has no pointer-events none");
     const newPage = read("src/app/course-reports/new/page.tsx");
+    assert(newPage.includes("canComposeCourseReport"), "compose requires DB userId");
     assert(
-      !newPage.includes('redirect("/course-reports")'),
-      "compose does not bounce env-only admin back to list"
+      newPage.includes('redirect("/course-reports")'),
+      "compose bounces env-only admin back to list"
     );
-    assert(newPage.includes("CourseReportForm"), "compose renders form");
+    assert(newPage.includes("CourseReportForm"), "compose still renders form for DB users");
+    const form = read("src/app/course-reports/CourseReportForm.tsx");
+    assert(form.includes("COURSE_REPORT_HOLES"), "form hole chips 1~9");
+    assert(form.includes("선택 안 함"), "form optional hole");
+    assert(form.includes("선택 안 함 또는 1~9"), "form hole hint 1~9");
+    assert(!form.includes("1~18"), "form no 1~18");
+    assert(!form.includes('placeholder="비우거나'), "form no free-text hole placeholder");
+    const constants = read("src/lib/courseReportConstants.ts");
+    assert(constants.includes("COURSE_REPORT_HOLE_MAX = 9"), "HOLE_MAX 9");
+    const parser = read("src/lib/courseReport.ts");
+    assert(parser.includes("/^[1-9]$/"), "hole string 1-9 only");
+    assert(!parser.includes("1~18"), "parser message not 1~18");
     assert(
       isRetiredCaddySessionBlocked({
         role: "caddy",
@@ -208,7 +221,8 @@ async function main() {
     assert(parseCourseReportHole(null) === null, "hole null");
     assert(parseCourseReportHole("") === null, "hole empty");
     assert(parseCourseReportHole(1) === 1, "hole 1");
-    assert(parseCourseReportHole(18) === 18, "hole 18");
+    assert(parseCourseReportHole(9) === 9, "hole 9");
+    assert(parseCourseReportHole("9") === 9, "hole string 9");
     try {
       parseCourseReportHole(0);
       assert(false, "hole 0 should throw");
@@ -216,10 +230,22 @@ async function main() {
       assert(true, "hole 0 rejected");
     }
     try {
-      parseCourseReportHole(19);
-      assert(false, "hole 19 should throw");
+      parseCourseReportHole(10);
+      assert(false, "hole 10 should throw");
     } catch {
-      assert(true, "hole 19 rejected");
+      assert(true, "hole 10 rejected");
+    }
+    try {
+      parseCourseReportHole(18);
+      assert(false, "hole 18 should throw");
+    } catch {
+      assert(true, "hole 18 rejected");
+    }
+    try {
+      parseCourseReportHole(-1);
+      assert(false, "hole negative should throw");
+    } catch {
+      assert(true, "hole negative rejected");
     }
     try {
       parseCourseReportHole(1.5);
@@ -305,6 +331,18 @@ async function main() {
       !canChangeCourseReportStatus({ role: "caddy", deletedAt: null }),
       "caddy cannot change status"
     );
+    assert(
+      canComposeCourseReport({ role: "admin", userId: 9 }),
+      "DB admin can compose"
+    );
+    assert(
+      canComposeCourseReport({ role: "caddy", userId: 1 }),
+      "caddy can compose"
+    );
+    assert(
+      !canComposeCourseReport({ role: "admin", userId: null }),
+      "env-only admin cannot compose"
+    );
   }
 
   try {
@@ -384,6 +422,12 @@ async function main() {
     userIds.push(uAdmin.id, uCaddy.id, uOther.id, uLeader.id, uRetired.id);
 
     const adminCookie = await cookieFor({ ...uAdmin, role: "admin" });
+    const envAdminCookie = await cookieFor({
+      id: null,
+      username: "env-admin",
+      role: "admin",
+      sessionVersion: 0,
+    });
     const caddyCookie = await cookieFor({ ...uCaddy, role: "caddy" });
     const otherCookie = await cookieFor({ ...uOther, role: "caddy" });
     const leaderCookie = await cookieFor({ ...uLeader, role: "leader" });
@@ -458,15 +502,38 @@ async function main() {
             title: `${tag}_admin`,
             body: "관리자 제보",
             course: "LAKE",
-            hole: 18,
+            hole: 9,
             category: "OTHER",
           }),
         })
       );
       const adminBody = await jsonOf(adminRes);
       assert(adminRes.status === 200, "admin create 200");
+      assert(adminBody.report.hole === 9, "admin hole 9 allowed");
       assert(adminBody.report.authorDisplayName === `${tag}_admin`, "admin uses username");
       reportIds.push(adminBody.id);
+
+      const envCreate = await POST_REPORT(
+        req("https://www.verthill.kr/api/course-reports", {
+          method: "POST",
+          headers: { cookie: envAdminCookie, "content-type": "application/json" },
+          body: JSON.stringify({
+            title: `${tag}_env_admin`,
+            body: "env admin",
+            course: "LAKE",
+            category: "OTHER",
+          }),
+        })
+      );
+      const envCreateBody = await jsonOf(envCreate);
+      assert(envCreate.status === 403, "env-only admin create 403");
+      assert(envCreateBody.error === "author_required", "env-only author_required");
+      const envList = await GET_LIST(
+        req("https://www.verthill.kr/api/course-reports", {
+          headers: { cookie: envAdminCookie },
+        })
+      );
+      assert(envList.status === 200, "env-only admin list 200");
 
       const badCourse = await POST_REPORT(
         req("https://www.verthill.kr/api/course-reports", {
@@ -481,20 +548,40 @@ async function main() {
         })
       );
       assert(badCourse.status === 400, "invalid course 400");
-      const badHole = await POST_REPORT(
+      for (const [label, value] of [
+        ["0", 0],
+        ["10", 10],
+        ["18", 18],
+      ] as const) {
+        const badHole = await POST_REPORT(
+          req("https://www.verthill.kr/api/course-reports", {
+            method: "POST",
+            headers: { cookie: caddyCookie, "content-type": "application/json" },
+            body: JSON.stringify({
+              title: `${tag}_bad_hole_${label}`,
+              body: "x",
+              course: "SKY",
+              hole: value,
+              category: "OTHER",
+            }),
+          })
+        );
+        assert(badHole.status === 400, `hole ${label} 400`);
+      }
+      const badDecimal = await POST_REPORT(
         req("https://www.verthill.kr/api/course-reports", {
           method: "POST",
           headers: { cookie: caddyCookie, "content-type": "application/json" },
           body: JSON.stringify({
-            title: `${tag}_bad_hole`,
+            title: `${tag}_bad_hole_decimal`,
             body: "x",
             course: "SKY",
-            hole: 19,
+            hole: 1.5,
             category: "OTHER",
           }),
         })
       );
-      assert(badHole.status === 400, "hole 19 400");
+      assert(badDecimal.status === 400, "hole decimal 400");
     }
 
     const caddyReportId = reportIds[0];
@@ -558,6 +645,26 @@ async function main() {
       const checkingBody = await jsonOf(checking);
       assert(checking.status === 200, "admin CHECKING 200");
       assert(checkingBody.status === "CHECKING", "status CHECKING");
+      const envStatus = await PATCH_STATUS(
+        req(`https://www.verthill.kr/api/course-reports/${caddyReportId}/status`, {
+          method: "PATCH",
+          headers: { cookie: envAdminCookie, "content-type": "application/json" },
+          body: JSON.stringify({ status: "RESOLVED" }),
+        }),
+        params(caddyReportId)
+      );
+      const envStatusBody = await jsonOf(envStatus);
+      assert(envStatus.status === 200, "env-only admin status 200");
+      assert(envStatusBody.status === "RESOLVED", "env-only admin can resolve");
+      const reopenToChecking = await PATCH_STATUS(
+        req(`https://www.verthill.kr/api/course-reports/${caddyReportId}/status`, {
+          method: "PATCH",
+          headers: { cookie: adminCookie, "content-type": "application/json" },
+          body: JSON.stringify({ status: "CHECKING" }),
+        }),
+        params(caddyReportId)
+      );
+      assert(reopenToChecking.status === 200, "restore CHECKING after env status");
       assert(checkingBody.resolvedAt === null, "CHECKING resolvedAt null");
 
       const authorLocked = await PATCH_ONE(

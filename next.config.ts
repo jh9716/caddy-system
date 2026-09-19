@@ -10,7 +10,7 @@ const nextConfig: NextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
-  serverExternalPackages: ["web-push"],
+  serverExternalPackages: ["web-push", "@vercel/blob", "heic-to"],
   // Cloudflare quick tunnel 등 외부 호스트에서 next dev 접근 허용
   allowedDevOrigins: [
     '*.trycloudflare.com',

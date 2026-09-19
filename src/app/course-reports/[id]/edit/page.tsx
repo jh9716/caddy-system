@@ -4,6 +4,7 @@ import { getRequestAuthUser } from "@/lib/getRequestAuthUser";
 import { isCourseReportCourse } from "@/lib/courseReport";
 import { canEditCourseReportContent } from "@/lib/courseReportAccess";
 import CourseReportForm from "../../CourseReportForm";
+import { findCourseReportWithPhotos } from "@/lib/courseReportPhoto";
 import {
   COURSE_REPORT_CATEGORIES,
   type CourseReportCategoryCode,
@@ -25,10 +26,9 @@ export default async function EditCourseReportPage({
   const id = Number(resolved.id);
   if (!Number.isInteger(id) || id <= 0) notFound();
 
-  const row = await prisma.courseReport.findFirst({
-    where: { id, deletedAt: null },
-  });
-  if (!row) notFound();
+  const loaded = await findCourseReportWithPhotos(prisma, id);
+  if (!loaded) notFound();
+  const row = loaded.report;
 
   if (
     !canEditCourseReportContent({
@@ -52,6 +52,7 @@ export default async function EditCourseReportPage({
       <h1 className="ui-page-title">제보 수정</h1>
       <CourseReportForm
         mode="edit"
+        canManagePhotos
         initial={{
           id,
           title: row.title,
@@ -59,6 +60,7 @@ export default async function EditCourseReportPage({
           course,
           hole: row.hole,
           category,
+          photos: loaded.photos,
         }}
       />
     </div>

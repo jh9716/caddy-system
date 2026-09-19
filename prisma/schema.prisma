@@ -224,7 +224,7 @@ model User {
   createdAt DateTime @default(now())
 }
 
-/// 코스 제보 텍스트 V1. 사진/댓글/push column 없음.
+/// 코스 제보 텍스트 V1. 댓글/push column 없음. 사진은 CourseReportPhoto.
 model CourseReport {
   id                Int                   @id @default(autoincrement())
   authorUserId      Int
@@ -246,11 +246,27 @@ model CourseReport {
   deletedAt         DateTime?
   createdAt         DateTime              @default(now())
   updatedAt         DateTime              @updatedAt
+  photos            CourseReportPhoto[]
 
   @@index([deletedAt, status, createdAt])
   @@index([authorUserId])
   @@index([course, hole])
   @@index([category])
+}
+
+/// CourseReport Photo Upload V1. Bytes live in private object storage, not Postgres.
+/// public URL column 없음. width/height V1 제외.
+model CourseReportPhoto {
+  id         Int          @id @default(autoincrement())
+  reportId   Int
+  report     CourseReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  storageKey String       @unique
+  mimeType   String
+  size       Int
+  sortOrder  Int          @default(0)
+  createdAt  DateTime     @default(now())
+
+  @@index([reportId, sortOrder])
 }
 
 /// 기기별 Web Push subscription (1 User : N devices).

@@ -31,3 +31,14 @@ npx tsx scripts/maintenance/deploy-notice-v2-migration.ts
 ```
 
 `prisma migrate deploy` only. No db push / migrate reset / seed / Notice INSERT/UPDATE/DELETE.
+
+CourseReport Photo V1 production schema:
+
+```
+PROD_MAINTENANCE_CONFIRM=COURSE_REPORT_PHOTO_V1_20260919 \
+DATABASE_URL="$PRODUCTION_DATABASE_URL" \
+npx tsx scripts/maintenance/deploy-course-report-photo-v1-migration.ts
+```
+
+`prisma migrate deploy` only. No db push / migrate reset / seed / Blob upload / CourseReport INSERT/UPDATE/DELETE.
+

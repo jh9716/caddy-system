@@ -2216,6 +2216,13 @@ body.manage-mode .vh-work-inner:has(.course-report-page) {
   min-height: 44px;
 }
 
+.course-report-compose-hint {
+  margin: -8px 0 14px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--vh-muted, #5b6570);
+}
+
 .course-report-filters,
 .course-report-chips,
 .course-report-status-row {
@@ -2243,6 +2250,17 @@ body.manage-mode .vh-work-inner:has(.course-report-page) {
   background: var(--vh-green-900);
   border-color: var(--vh-green-900);
   color: #fff;
+}
+
+.course-report-hole-hint {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--vh-muted);
+}
+
+.course-report-hole-chips .course-report-chip {
+  min-width: 44px;
+  padding: 8px 10px;
 }
 
 .course-report-list {
@@ -2413,6 +2431,144 @@ body.manage-mode .vh-work-inner:has(.course-report-page) {
   display: flex;
   gap: 8px;
   margin-top: 4px;
+}
+
+.course-report-photo-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--vh-green-800);
+}
+
+.course-report-photo-count::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  background: var(--vh-green-800);
+  opacity: 0.35;
+}
+
+.course-report-photos {
+  margin: 16px 0 8px;
+}
+
+.course-report-photo-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.course-report-photo-grid.is-1 {
+  grid-template-columns: 1fr;
+}
+
+.course-report-photo-grid.is-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.course-report-photo-grid.is-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.course-report-photo-thumb,
+.course-report-photo-item {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  padding: 0;
+  border: 1px solid var(--vh-border);
+  border-radius: var(--vh-radius-sm);
+  overflow: hidden;
+  background: var(--vh-ivory-deep);
+}
+
+.course-report-photo-grid.is-1 .course-report-photo-thumb {
+  aspect-ratio: 4 / 3;
+}
+
+.course-report-photo-thumb img,
+.course-report-photo-item img,
+.course-report-photo-lightbox img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.course-report-photo-composer {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.course-report-photo-add {
+  position: relative;
+  min-height: 88px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--vh-border-strong);
+  border-radius: var(--vh-radius-sm);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--vh-ink-soft);
+  background: #fff;
+}
+
+.course-report-photo-add input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.course-report-photo-add.is-disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.course-report-photo-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(15, 31, 24, 0.72);
+  color: #fff;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.course-report-photo-note {
+  margin: 8px 0 0;
+  color: var(--vh-danger);
+  font-size: 13px;
+}
+
+.course-report-photo-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(15, 31, 24, 0.82);
+  border: 0;
+}
+
+.course-report-photo-lightbox img {
+  max-width: min(100%, 720px);
+  max-height: 85vh;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 8px;
 }
 
 @media (max-width: 720px) {

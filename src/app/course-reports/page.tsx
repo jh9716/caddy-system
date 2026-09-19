@@ -4,10 +4,13 @@ import dayjs from "dayjs";
 import { getRequestAuthUser } from "@/lib/getRequestAuthUser";
 import { toCourseReportPublic, parseCourseReportStatusFilter } from "@/lib/courseReport";
 import {
+  COURSE_REPORT_COMPOSE_ACCOUNT_HINT,
   COURSE_REPORT_LIST_TAKE,
   COURSE_REPORT_STATUSES,
   COURSE_REPORT_STATUS_LABELS,
 } from "@/lib/courseReportConstants";
+import { listCourseReportsWithPhotoCount } from "@/lib/courseReportPhoto";
+import { canComposeCourseReport } from "@/lib/courseReportAccess";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -23,27 +26,29 @@ export default async function CourseReportListPage({
   const resolved = await Promise.resolve(searchParams ?? {});
   const status = parseCourseReportStatusFilter(resolved.status);
 
-  const rows = await prisma.courseReport.findMany({
-    where: {
-      deletedAt: null,
-      ...(status ? { status } : {}),
-    },
-    orderBy: { createdAt: "desc" },
+  const packed = await listCourseReportsWithPhotoCount(prisma, {
+    status: status ?? undefined,
     take: COURSE_REPORT_LIST_TAKE,
   });
-  const reports = rows.map(toCourseReportPublic);
+  const reports = packed.map(({ report, photoCount }) => toCourseReportPublic(report, photoCount));
+  const canCompose = canComposeCourseReport(auth);
 
   return (
     <div className="course-report-page">
       <div className="course-report-page-head">
         <h1 className="ui-page-title">코스 제보</h1>
-        <Link
-          href="/course-reports/new"
-          className="ui-btn ui-btn-primary course-report-compose-link"
-        >
-          + 제보하기
-        </Link>
+        {canCompose ? (
+          <Link
+            href="/course-reports/new"
+            className="ui-btn ui-btn-primary course-report-compose-link"
+          >
+            + 제보하기
+          </Link>
+        ) : null}
       </div>
+      {!canCompose ? (
+        <p className="course-report-compose-hint">{COURSE_REPORT_COMPOSE_ACCOUNT_HINT}</p>
+      ) : null}
 
       <div className="course-report-filters" role="tablist" aria-label="처리상태">
         <Link
@@ -81,6 +86,11 @@ export default async function CourseReportListPage({
                 </span>
                 <span>{row.authorDisplayName}</span>
                 <time>{dayjs(row.createdAt).format("YYYY-MM-DD HH:mm")}</time>
+                {row.photoCount > 0 ? (
+                  <span className="course-report-photo-count" aria-label={`사진 ${row.photoCount}장`}>
+                    사진 {row.photoCount}
+                  </span>
+                ) : null}
               </div>
             </Link>
           </li>

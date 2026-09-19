@@ -10,6 +10,8 @@ import {
   canSoftDeleteCourseReport,
 } from "@/lib/courseReportAccess";
 import CourseReportDetailActions from "./CourseReportDetailActions";
+import CourseReportPhotoGallery from "../CourseReportPhotoGallery";
+import { findCourseReportWithPhotos } from "@/lib/courseReportPhoto";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,18 +29,17 @@ export default async function CourseReportDetailPage({
   const id = Number(resolved.id);
   if (!Number.isInteger(id) || id <= 0) notFound();
 
-  const row = await prisma.courseReport.findFirst({
-    where: { id, deletedAt: null },
-  });
-  if (!row) notFound();
+  const loaded = await findCourseReportWithPhotos(prisma, id);
+  if (!loaded) notFound();
 
-  const report = toCourseReportPublic(row);
+  const report = toCourseReportPublic(loaded.report, loaded.photos.length);
+  const photos = loaded.photos;
   const editInput = {
     role: auth.role,
     userId: auth.userId,
-    authorUserId: row.authorUserId,
-    status: row.status,
-    deletedAt: row.deletedAt,
+    authorUserId: loaded.report.authorUserId,
+    status: loaded.report.status,
+    deletedAt: loaded.report.deletedAt,
   };
 
   return (
@@ -60,13 +61,14 @@ export default async function CourseReportDetailPage({
         <span> · {dayjs(report.createdAt).format("YYYY-MM-DD HH:mm")}</span>
       </p>
       <div className="course-report-detail-body">{report.body}</div>
+      <CourseReportPhotoGallery reportId={id} photos={photos} />
       <CourseReportDetailActions
         id={id}
         canEdit={canEditCourseReportContent(editInput)}
         canDelete={canSoftDeleteCourseReport(editInput)}
         canChangeStatus={canChangeCourseReportStatus({
           role: auth.role,
-          deletedAt: row.deletedAt,
+          deletedAt: loaded.report.deletedAt,
         })}
         status={report.status}
       />

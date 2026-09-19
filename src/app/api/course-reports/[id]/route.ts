@@ -12,6 +12,7 @@ import {
   isCourseReportAuthResponse,
   requireCourseReportReader,
 } from "@/lib/courseReportAccess";
+import { findCourseReportWithPhotos } from "@/lib/courseReportPhoto";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -34,13 +35,14 @@ export async function GET(
   if (!Number.isInteger(id) || id <= 0) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
-  const row = await prisma.courseReport.findFirst({
-    where: { id, deletedAt: null },
-  });
-  if (!row) {
+  const loaded = await findCourseReportWithPhotos(prisma, id);
+  if (!loaded) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
-  return NextResponse.json(toCourseReportPublic(row));
+  return NextResponse.json({
+    ...toCourseReportPublic(loaded.report, loaded.photos.length),
+    photos: loaded.photos,
+  });
 }
 
 export async function PATCH(
