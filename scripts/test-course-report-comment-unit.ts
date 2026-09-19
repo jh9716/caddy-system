@@ -93,6 +93,7 @@ async function main() {
     const files = [
       "src/lib/comment.ts",
       "src/lib/commentConstants.ts",
+      "src/lib/commentThread.ts",
       "src/lib/courseReportComments.ts",
       "src/app/api/course-reports/[id]/comments/route.ts",
       "src/app/api/course-reports/[id]/comments/[commentId]/route.ts",
