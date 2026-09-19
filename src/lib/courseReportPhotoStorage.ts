@@ -46,8 +46,20 @@ function hasOidcBlobAuth(): boolean {
   return process.env.VERCEL === "1";
 }
 
+export type CourseReportPhotoStorageAuthStatus = {
+  ready: boolean;
+  oidc: boolean;
+  token: boolean;
+};
+
+export function getCourseReportPhotoStorageAuthStatus(): CourseReportPhotoStorageAuthStatus {
+  const token = hasLegacyBlobToken();
+  const oidc = hasOidcBlobAuth();
+  return { ready: token || oidc, oidc, token };
+}
+
 export function isCourseReportPhotoStorageConfigured(): boolean {
-  return hasLegacyBlobToken() || hasOidcBlobAuth();
+  return getCourseReportPhotoStorageAuthStatus().ready;
 }
 
 const unconfigured: CourseReportPhotoStore = {

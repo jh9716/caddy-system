@@ -20,6 +20,7 @@ import {
 } from "../src/lib/courseReportPhotoMagic";
 import {
   createMemoryCourseReportPhotoStore,
+  getCourseReportPhotoStorageAuthStatus,
   isCourseReportPhotoStorageConfigured,
   setCourseReportPhotoStoreForTests,
 } from "../src/lib/courseReportPhotoStorage";
@@ -235,6 +236,14 @@ async function main() {
     const photoGet = read("src/app/api/course-reports/[id]/photos/[photoId]/route.ts");
     assert(photoGet.includes("requireCourseReportReader"), "photo GET reuses reader auth");
     assert(photoGet.includes("Cache-Control"), "private cache header");
+    const health = read("src/app/api/health/route.ts");
+    assert(health.includes("getCourseReportPhotoStorageAuthStatus"), "health blob status helper");
+    assert(!health.includes("BLOB_READ_WRITE_TOKEN"), "health no token env name");
+    assert(!health.includes("BLOB_STORE_ID"), "health no store id env name");
+    assert(!health.includes("VERCEL_OIDC_TOKEN"), "health no oidc env name");
+    const dbcheck = read("src/app/api/dbcheck/route.ts");
+    assert(dbcheck.includes("CourseReportPhoto"), "dbcheck photo table probe");
+    assert(!dbcheck.includes("BLOB_"), "dbcheck no blob env");
     const deploy = read("scripts/maintenance/deploy-course-report-photo-v1-migration.ts");
     assert(deploy.includes("COURSE_REPORT_PHOTO_V1_20260919"), "maintenance confirm task-id");
     assert(deploy.includes('["migrate", "deploy"]'), "maintenance migrate deploy only");
@@ -292,13 +301,22 @@ async function main() {
   section("storage auth detection");
   {
     assert(!isCourseReportPhotoStorageConfigured(), "empty env unconfigured");
+    assert(
+      JSON.stringify(getCourseReportPhotoStorageAuthStatus()) ===
+        JSON.stringify({ ready: false, oidc: false, token: false }),
+      "empty env auth status booleans"
+    );
     process.env.BLOB_READ_WRITE_TOKEN = "vercel_blob_rw_unit_dummy";
     assert(isCourseReportPhotoStorageConfigured(), "legacy token configured");
+    assert(getCourseReportPhotoStorageAuthStatus().token === true, "legacy token flag");
+    assert(getCourseReportPhotoStorageAuthStatus().oidc === false, "legacy not oidc");
     delete process.env.BLOB_READ_WRITE_TOKEN;
     process.env.BLOB_STORE_ID = "store_unit_dummy";
     assert(!isCourseReportPhotoStorageConfigured(), "store id alone unconfigured");
     process.env.VERCEL_OIDC_TOKEN = "oidc_unit_dummy";
     assert(isCourseReportPhotoStorageConfigured(), "OIDC env + store id configured");
+    assert(getCourseReportPhotoStorageAuthStatus().oidc === true, "oidc flag");
+    assert(getCourseReportPhotoStorageAuthStatus().token === false, "oidc without token flag");
     delete process.env.VERCEL_OIDC_TOKEN;
     process.env.VERCEL = "1";
     assert(isCourseReportPhotoStorageConfigured(), "Vercel runtime + store id configured");
@@ -308,6 +326,18 @@ async function main() {
     delete process.env.BLOB_READ_WRITE_TOKEN;
     delete process.env.BLOB_STORE_ID;
     delete process.env.VERCEL_OIDC_TOKEN;
+    const { GET: GET_HEALTH } = await import("../src/app/api/health/route");
+    const healthRes = await GET_HEALTH();
+    const healthBody = await healthRes.json();
+    assert(healthRes.status === 200, "health 200");
+    assert(healthBody.ok === true, "health ok");
+    assert(healthBody.blob?.ready === false, "local health blob not ready");
+    assert(healthBody.blob?.oidc === false, "local health oidc false");
+    assert(healthBody.blob?.token === false, "local health token false");
+    const healthJson = JSON.stringify(healthBody);
+    assert(!healthJson.includes("vercel_blob_rw"), "health json no token value");
+    assert(!healthJson.includes("store_unit"), "health json no store id value");
+    assert(!healthJson.includes("oidc_unit"), "health json no oidc value");
   }
 
   try {

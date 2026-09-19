@@ -6,5 +6,11 @@ export async function GET() {
   const count = await prisma.assignment.count().catch((e) => {
     return -1; // 에러 표시
   });
-  return NextResponse.json({ connected: count >= 0, count });
+  const photo = await prisma.$queryRaw<Array<{ n: bigint | number }>>`
+    SELECT COUNT(*)::bigint AS n FROM "CourseReportPhoto"
+  `.then((rows) => ({ ready: true, rows: Number(rows[0]?.n ?? 0) })).catch(() => ({
+    ready: false,
+    rows: -1,
+  }));
+  return NextResponse.json({ connected: count >= 0, count, courseReportPhoto: photo });
 }
