@@ -12,11 +12,9 @@ import {
 import type { CourseReportPhotoPublic } from "@/lib/courseReportPhotoConstants";
 import { courseReportPhotoSrc } from "@/lib/courseReportPhotoConstants";
 import {
-  COURSE_REPORT_HEIC_MESSAGE,
   COURSE_REPORT_PHOTO_ACCEPT,
   COURSE_REPORT_PHOTO_MAX,
-  isHeicLikeFile,
-  prepareCourseReportPhoto,
+  pickCourseReportPhotos,
 } from "@/lib/courseReportPhotoClient";
 
 type Props = {
@@ -63,28 +61,12 @@ export default function CourseReportForm({
     if (!files || !canManagePhotos) return;
     setStatusNote("");
     const room = COURSE_REPORT_PHOTO_MAX - existingPhotos.length - pending.length;
-    const selected = Array.from(files).slice(0, Math.max(0, room));
-    const additions: PendingPhoto[] = [];
-    for (const file of selected) {
-      if (isHeicLikeFile(file)) {
-        setStatusNote(COURSE_REPORT_HEIC_MESSAGE);
-        continue;
-      }
-      try {
-        const blob = await prepareCourseReportPhoto(file);
-        additions.push({
-          key: `${Date.now()}-${additions.length}-${file.name}`,
-          blob,
-          previewUrl: URL.createObjectURL(blob),
-        });
-      } catch (e) {
-        setStatusNote(e instanceof Error ? e.message : COURSE_REPORT_HEIC_MESSAGE);
-      }
-    }
-    if (additions.length) {
+    const { items, note } = await pickCourseReportPhotos(Array.from(files), room);
+    if (note) setStatusNote(note);
+    if (items.length) {
       setPending((cur) => {
         const roomLeft = COURSE_REPORT_PHOTO_MAX - existingPhotos.length - cur.length;
-        return [...cur, ...additions.slice(0, Math.max(0, roomLeft))];
+        return [...cur, ...items.slice(0, Math.max(0, roomLeft))];
       });
     }
     if (fileRef.current) fileRef.current.value = "";

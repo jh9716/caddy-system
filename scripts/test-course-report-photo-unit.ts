@@ -25,7 +25,13 @@ import {
   setCourseReportPhotoStoreForTests,
 } from "../src/lib/courseReportPhotoStorage";
 import { isCourseReportPhotoTableMissing } from "../src/lib/courseReportPhoto";
-import { COURSE_REPORT_PHOTO_MAX_BYTES } from "../src/lib/courseReportPhotoConstants";
+import { COURSE_REPORT_PHOTO_MAX, COURSE_REPORT_PHOTO_MAX_BYTES } from "../src/lib/courseReportPhotoConstants";
+import {
+  COURSE_REPORT_HEIC_CONVERT_MESSAGE,
+  isHeicLikeFile,
+  pickCourseReportPhotos,
+  setHeicConverterForTests,
+} from "../src/lib/courseReportPhotoClient";
 import { POST as POST_REPORT } from "../src/app/api/course-reports/route";
 import { PATCH as PATCH_STATUS } from "../src/app/api/course-reports/[id]/status/route";
 import { DELETE as DELETE_REPORT } from "../src/app/api/course-reports/[id]/route";
@@ -196,9 +202,19 @@ async function main() {
     assert(form.includes('type="file"'), "form file input");
     assert(
       form.includes("COURSE_REPORT_PHOTO_ACCEPT") &&
+        constants.includes("image/heic") &&
         constants.includes("image/jpeg,image/png,image/webp"),
-      "accept jpeg/png/webp"
+      "accept jpeg/png/webp/heic"
     );
+    assert(constants.includes("COURSE_REPORT_PHOTO_MIMES"), "stored mimes constant");
+    assert(
+      !/COURSE_REPORT_PHOTO_MIMES\s*=\s*\[[^\]]*heic/i.test(constants),
+      "stored mimes no heic"
+    );
+    const client = read("src/lib/courseReportPhotoClient.ts");
+    assert(client.includes('import("heic-to")'), "client dynamic heic-to");
+    assert(client.includes("COURSE_REPORT_HEIC_CONVERT_MESSAGE"), "heic convert error copy");
+    assert(form.includes("pickCourseReportPhotos"), "form uses pick helper");
     assert(!form.includes("capture="), "no forced capture");
     assert(form.includes("courseReportPhotoClient"), "client compression module");
     assert(!form.includes("@vercel/blob"), "form no blob sdk");
@@ -296,6 +312,55 @@ async function main() {
       !isCourseReportPhotoTableMissing(new Error("connection refused")),
       "missing table helper false"
     );
+  }
+
+  section("client HEIC convert + preview mock");
+  {
+    const jpegFile = new File([jpegBytes()], "shot.jpg", { type: "image/jpeg" });
+    const heicFile = new File([heicBytes()], "cam.heic", { type: "image/heic" });
+    const heifFile = new File([heicBytes()], "cam.heif", { type: "image/heif" });
+    assert(isHeicLikeFile(heicFile), "heic filename/type detected");
+    assert(isHeicLikeFile(heifFile), "heif detected");
+    assert(!isHeicLikeFile(jpegFile), "jpg not heic-like");
+    setHeicConverterForTests(async () => new Blob([jpegBytes()], { type: "image/jpeg" }));
+    const prepare = async (file: File) => {
+      const { decodeCourseReportPhotoSource } = await import("../src/lib/courseReportPhotoClient");
+      const decoded = await decodeCourseReportPhotoSource(file);
+      if (isHeicLikeFile(file)) {
+        const buf = new Uint8Array(await decoded.arrayBuffer());
+        if (detectCourseReportPhotoMime(buf) !== "image/jpeg") {
+          throw new Error("converted blob is not jpeg");
+        }
+      }
+      return new Blob([jpegBytes()], { type: "image/jpeg" });
+    };
+    const oneHeic = await pickCourseReportPhotos([heicFile], COURSE_REPORT_PHOTO_MAX, prepare);
+    assert(oneHeic.items.length === 1, "HEIC 1 -> preview item");
+    assert(oneHeic.items[0].blob.type === "image/jpeg", "HEIC preview is jpeg");
+    assert(oneHeic.items[0].previewUrl.length > 0, "HEIC preview url");
+    const oneJpg = await pickCourseReportPhotos([jpegFile], COURSE_REPORT_PHOTO_MAX, prepare);
+    assert(oneJpg.items.length === 1, "JPG 1 -> preview item");
+    assert(oneJpg.items[0].blob.type === "image/jpeg", "JPG preview jpeg");
+    const mix = await pickCourseReportPhotos(
+      [heicFile, jpegFile, heifFile, jpegFile],
+      COURSE_REPORT_PHOTO_MAX,
+      prepare
+    );
+    assert(mix.items.length === 3, "HEIC+JPG mix capped at 3");
+    assert(
+      mix.items.every((item) => item.blob.type === "image/jpeg"),
+      "mixed previews are jpeg"
+    );
+    setHeicConverterForTests(async () => {
+      throw new Error("boom");
+    });
+    const fail = await pickCourseReportPhotos([heicFile], COURSE_REPORT_PHOTO_MAX, prepare);
+    assert(fail.items.length === 0, "failed HEIC not added");
+    assert(fail.note === COURSE_REPORT_HEIC_CONVERT_MESSAGE, "convert fail copy");
+    setHeicConverterForTests(null);
+    for (const item of [...oneHeic.items, ...oneJpg.items, ...mix.items]) {
+      URL.revokeObjectURL(item.previewUrl);
+    }
   }
 
   section("storage auth detection");

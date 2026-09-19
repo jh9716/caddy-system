@@ -2216,6 +2216,13 @@ body.manage-mode .vh-work-inner:has(.course-report-page) {
   min-height: 44px;
 }
 
+.course-report-compose-hint {
+  margin: -8px 0 14px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--vh-muted, #5b6570);
+}
+
 .course-report-filters,
 .course-report-chips,
 .course-report-status-row {

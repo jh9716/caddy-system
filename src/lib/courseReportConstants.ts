@@ -42,3 +42,5 @@ export const COURSE_REPORT_HOLE_MAX = 9;
 export const COURSE_REPORT_HOLES = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
 export const COURSE_REPORT_HOLE_ERROR = "홀은 선택 안 함 또는 1~9만 가능합니다.";
 export const COURSE_REPORT_LIST_TAKE = 200;
+export const COURSE_REPORT_COMPOSE_ACCOUNT_HINT =
+  "제보 작성은 연결된 사용자 계정에서 가능합니다.";

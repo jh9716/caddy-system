@@ -1,7 +1,7 @@
 import { getRequestAuthUser } from "@/lib/getRequestAuthUser";
 import { redirect } from "next/navigation";
 import CourseReportForm from "../CourseReportForm";
-import { canWriteCourseReport } from "@/lib/courseReportAccess";
+import { canComposeCourseReport, canWriteCourseReport } from "@/lib/courseReportAccess";
 
 export const dynamic = "force-dynamic";
 
@@ -11,8 +11,9 @@ export default async function NewCourseReportPage() {
     redirect("/login?callbackUrl=/course-reports/new");
   }
   if (auth.mustChangePassword) redirect("/change-password");
-  // Env-only admin (userId=null) must still reach the compose form.
-  // POST remains 403 without a DB User.id — do not bounce the list CTA.
+  if (!canComposeCourseReport(auth)) {
+    redirect("/course-reports");
+  }
 
   return (
     <div className="course-report-page">
