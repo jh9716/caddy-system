@@ -32,6 +32,7 @@
     "test:web-push-display-unit": "bash scripts/tsx-safe.sh scripts/test-web-push-display-unit.ts",
     "test:board-push-unit": "bash scripts/tsx-safe.sh scripts/test-board-push-unit.ts",
     "test:notice-v2-push-unit": "bash scripts/tsx-safe.sh scripts/test-notice-v2-push-unit.ts",
+    "test:course-report-push-unit": "bash scripts/tsx-safe.sh scripts/test-course-report-push-unit.ts",
     "test:course-report-unit": "bash scripts/tsx-safe.sh scripts/test-course-report-unit.ts",
     "test:course-report-photo-unit": "bash scripts/tsx-safe.sh scripts/test-course-report-photo-unit.ts",
     "test:course-report-comment-unit": "bash scripts/tsx-safe.sh scripts/test-course-report-comment-unit.ts",
