@@ -14,7 +14,7 @@ import {
 } from "../src/lib/sessionCookies";
 import { assertLocalDatabaseUrl } from "./assertLocalDatabaseUrl";
 import { COMMENT_BODY_MAX } from "../src/lib/commentConstants";
-import { parseCommentBody, canComposeComment, canSoftDeleteComment } from "../src/lib/comment";
+import { parseCommentBody, canComposeComment, canSoftDeleteComment, resolveCommentAuthorUserId } from "../src/lib/comment";
 import { POST as POST_REPORT } from "../src/app/api/course-reports/route";
 import { DELETE as DELETE_REPORT } from "../src/app/api/course-reports/[id]/route";
 import {
@@ -141,6 +141,9 @@ async function main() {
     assert(!commentLib.includes("stripHtml"), "no stripHtml");
     assert(!commentLib.includes("dangerouslySetInnerHTML"), "lib no innerHTML");
     assert(!/<\[\^>\]\*>/.test(commentLib), "no HTML tag strip regex");
+    assert(commentLib.includes("findUnique"), "author lookup findUnique");
+    assert(!commentLib.includes("findFirst"), "author lookup not findFirst");
+    assert(!commentLib.includes("orderBy"), "author lookup not orderBy");
     const srcTree = ["src/lib/comment.ts", "src/lib/courseReportComments.ts", "src/app/course-reports/[id]/CourseReportComments.tsx"];
     for (const rel of srcTree) {
       assert(!read(rel).includes("dangerouslySetInnerHTML"), `${rel} no innerHTML`);
@@ -148,6 +151,16 @@ async function main() {
     const commentUi = read("src/app/course-reports/[id]/CourseReportComments.tsx");
     assert(commentUi.includes("{item.body}"), "React text child body");
     assert(!commentUi.includes("dangerouslySetInnerHTML"), "UI no innerHTML");
+    const crPage = read("src/app/course-reports/[id]/page.tsx");
+    assert(crPage.includes("canComposeCommentAs"), "CR comments use comment compose gate");
+    assert(!crPage.includes("canComposeCourseReport"), "CR comments not gated by report compose");
+    const migDirs = fs
+      .readdirSync(path.resolve("prisma/migrations"))
+      .filter((name) => /^\d{14}_/.test(name));
+    assert(
+      !migDirs.some((name) => name > "20260919070000_comment_v1" && name.includes("comment")),
+      "no new comment migration"
+    );
     const deploy = read("scripts/maintenance/deploy-comment-v1-migration.ts");
     assert(deploy.includes("COMMENT_V1_20260919"), "maintenance confirm task-id");
     assert(deploy.includes('["migrate", "deploy"]'), "migrate deploy only");
@@ -177,7 +190,77 @@ async function main() {
     assert(parseCommentBody("<b>hi</b>") === "<b>hi</b>", "tags stored as plain text");
     assert(parseCommentBody("foo < bar > baz") === "foo < bar > baz", "angle brackets preserved");
     assert(canComposeComment({ role: "caddy", userId: 1 }) === true, "caddy compose");
-    assert(canComposeComment({ role: "admin", userId: null }) === false, "env-only no compose");
+    assert(canComposeComment({ role: "admin", userId: null }) === false, "env-only no compose until username link");
+    {
+      const lookup = {
+        user: {
+          async findUnique({ where: { username } }: { where: { username: string } }) {
+            const rows = [
+              { id: 1, username: "admin", role: "ADMIN" },
+              { id: 21, username: "박성민", role: "admin" },
+              { id: 11, username: "caddy", role: "STAFF" },
+            ];
+            return rows.find((r) => r.username === username) ?? null;
+          },
+        },
+      };
+      assert(
+        (await resolveCommentAuthorUserId(lookup, {
+          role: "caddy",
+          userId: 18,
+          username: "ignored",
+        })) === 18,
+        "DB caddy uses session userId"
+      );
+      assert(
+        (await resolveCommentAuthorUserId(lookup, {
+          role: "admin",
+          userId: 21,
+          username: "admin",
+        })) === 21,
+        "DB admin uses session userId not username admin"
+      );
+      assert(
+        (await resolveCommentAuthorUserId(lookup, {
+          role: "admin",
+          userId: null,
+          username: "admin",
+        })) === 1,
+        "env admin links exact username admin"
+      );
+      assert(
+        (await resolveCommentAuthorUserId(lookup, {
+          role: "admin",
+          userId: null,
+          username: "박성민",
+        })) === 21,
+        "env admin links exact staff username"
+      );
+      assert(
+        (await resolveCommentAuthorUserId(lookup, {
+          role: "admin",
+          userId: null,
+          username: "missing",
+        })) === null,
+        "env admin without matching User"
+      );
+      assert(
+        (await resolveCommentAuthorUserId(lookup, {
+          role: "admin",
+          userId: null,
+          username: "caddy",
+        })) === null,
+        "env admin does not take non-admin username"
+      );
+      assert(
+        (await resolveCommentAuthorUserId(lookup, {
+          role: "caddy",
+          userId: null,
+          username: "admin",
+        })) === null,
+        "env caddy does not username-link"
+      );
+    }
     assert(
       canSoftDeleteComment({
         role: "caddy",
@@ -423,7 +506,48 @@ async function main() {
         }),
         reportParams(reportId)
       );
-      assert(envPost.status === 403, "env-only admin POST 403");
+      assert(envPost.status === 403, "env-only unmatched admin POST 403");
+
+      const envLinkedCookie = await cookieFor({
+        id: null,
+        username: userAdmin.username,
+        role: "admin",
+        sessionVersion: 0,
+      });
+      const envLinkedPost = await POST_COMMENT(
+        req(`http://local/api/course-reports/${reportId}/comments`, {
+          method: "POST",
+          headers: { cookie: envLinkedCookie, "content-type": "application/json" },
+          body: JSON.stringify({ body: "env-linked", authorUserId: userCaddy.id }),
+        }),
+        reportParams(reportId)
+      );
+      const envLinkedJson = await jsonOf(envLinkedPost);
+      assert(envLinkedPost.status === 201, "env admin matching username POST 201");
+      assert(
+        envLinkedJson.comment?.authorUserId === userAdmin.id,
+        "env admin author is exact username User not first/other"
+      );
+      assert(
+        envLinkedJson.comment?.authorDisplayName === userAdmin.username,
+        "env linked display name"
+      );
+
+      const envCaddyNameCookie = await cookieFor({
+        id: null,
+        username: userCaddy.username,
+        role: "admin",
+        sessionVersion: 0,
+      });
+      const envWrongRole = await POST_COMMENT(
+        req(`http://local/api/course-reports/${reportId}/comments`, {
+          method: "POST",
+          headers: { cookie: envCaddyNameCookie, "content-type": "application/json" },
+          body: JSON.stringify({ body: "nope" }),
+        }),
+        reportParams(reportId)
+      );
+      assert(envWrongRole.status === 403, "env admin cannot use caddy username User");
     }
 
     section("validation");

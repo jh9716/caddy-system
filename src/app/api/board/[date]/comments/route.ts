@@ -3,7 +3,7 @@ import type { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import {
   CommentValidationError,
-  canComposeComment,
+  canComposeCommentAs,
   createBoardDateComment,
   isBoardCommentAuthResponse,
   listBoardDateComments,
@@ -44,7 +44,7 @@ export async function GET(
     );
     return NextResponse.json({
       comments,
-      canCompose: canComposeComment(auth),
+      canCompose: await canComposeCommentAs(prisma, auth),
     });
   } catch (e) {
     return fail(e);

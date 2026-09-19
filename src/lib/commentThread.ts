@@ -3,15 +3,23 @@ import type { ResolvedAuthUser } from "@/lib/auth";
 import {
   CommentValidationError,
   canComposeComment,
+  canComposeCommentAs,
   canSoftDeleteComment,
   isCommentTableMissing,
   isCommentUniqueConflict,
   parseCommentBody,
+  resolveCommentAuthorUserId,
   toCommentPublic,
   type CommentPublic,
 } from "@/lib/comment";
 
-export { CommentValidationError, canComposeComment, canSoftDeleteComment };
+export {
+  CommentValidationError,
+  canComposeComment,
+  canComposeCommentAs,
+  canSoftDeleteComment,
+  resolveCommentAuthorUserId,
+};
 export type { CommentPublic };
 
 export const COMMENT_AUTHOR_SELECT = {
@@ -98,7 +106,8 @@ export async function createCommentByTarget(
   rawBody: unknown,
   ensureTarget: EnsureCommentTarget
 ): Promise<CommentPublic> {
-  if (!canComposeComment(auth) || auth.userId == null) {
+  const authorUserId = await resolveCommentAuthorUserId(db, auth);
+  if (!canComposeComment({ role: auth.role, userId: authorUserId }) || authorUserId == null) {
     throw new CommentValidationError(
       "author_required",
       "작성자 계정이 필요합니다.",
@@ -106,7 +115,6 @@ export async function createCommentByTarget(
     );
   }
   const body = parseCommentBody(rawBody);
-  const authorUserId = auth.userId;
   try {
     const created = await db.$transaction(async (tx) => {
       await ensureTarget(tx);

@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import type { ResolvedAuthUser } from "@/lib/auth";
 import { COMMENT_BODY_MAX } from "@/lib/commentConstants";
+import { normalizeAppRole } from "@/lib/sessionCookies";
 
 export class CommentValidationError extends Error {
   constructor(
@@ -63,6 +64,63 @@ export function canComposeComment(auth: {
     Number.isInteger(auth.userId) &&
     auth.userId > 0
   );
+}
+
+type CommentAuthorLookupDb = {
+  user: {
+    findUnique: (args: {
+      where: { username: string };
+      select: { id: true; username: true; role: true };
+    }) => Promise<{ id: number; username: string; role: string } | null | undefined>;
+  };
+};
+
+/**
+ * Comment author User.id.
+ * - DB session (userId>0): that id only. Never first/min User, never a different admin.
+ * - env-only admin (userId=null): exact username match to an existing admin User.
+ * - env-only caddy/leader: no lookup (keep FK-only compose).
+ */
+export async function resolveCommentAuthorUserId(
+  db: CommentAuthorLookupDb,
+  auth: {
+    role: ResolvedAuthUser["role"] | null | undefined;
+    userId: number | null;
+    username?: string | null;
+  }
+): Promise<number | null> {
+  if (
+    typeof auth.userId === "number" &&
+    Number.isInteger(auth.userId) &&
+    auth.userId > 0
+  ) {
+    return canComposeComment({ role: auth.role, userId: auth.userId })
+      ? auth.userId
+      : null;
+  }
+  if (auth.role !== "admin") return null;
+  const username = String(auth.username ?? "").trim();
+  if (!username) return null;
+  const row = await db.user.findUnique({
+    where: { username },
+    select: { id: true, username: true, role: true },
+  });
+  if (!row || row.username !== username) return null;
+  if (normalizeAppRole(row.role) !== "admin") return null;
+  if (!Number.isInteger(row.id) || row.id <= 0) return null;
+  return row.id;
+}
+
+export async function canComposeCommentAs(
+  db: CommentAuthorLookupDb,
+  auth: {
+    role: ResolvedAuthUser["role"] | null | undefined;
+    userId: number | null;
+    username?: string | null;
+  }
+): Promise<boolean> {
+  const authorUserId = await resolveCommentAuthorUserId(db, auth);
+  return canComposeComment({ role: auth.role, userId: authorUserId });
 }
 
 export function canSoftDeleteComment(input: {
