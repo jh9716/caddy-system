@@ -9,6 +9,7 @@ import {
 export const COURSE_REPORT_HEIC_MESSAGE = "JPG/PNG/WEBP 형식으로 첨부해 주세요.";
 export const COURSE_REPORT_HEIC_CONVERT_MESSAGE =
   "이 사진을 변환할 수 없습니다. JPG로 다시 선택해 주세요.";
+export const COURSE_REPORT_PHOTO_DUPLICATE_MESSAGE = "이미 추가한 사진입니다.";
 
 export function isHeicLikeFile(file: File): boolean {
   const type = (file.type || "").toLowerCase();
@@ -140,29 +141,94 @@ export async function prepareCourseReportPhoto(file: File): Promise<Blob> {
   return blob;
 }
 
-export type CourseReportPendingPick = { key: string; blob: Blob; previewUrl: string };
+export type CourseReportPendingPick = {
+  key: string;
+  blob: Blob;
+  previewUrl: string;
+  fileId: string;
+  fingerprint: string;
+};
+
+export function courseReportPhotoFileId(file: File): string {
+  return `${file.name}|${file.size}|${file.lastModified}|${file.type}`;
+}
+
+export async function courseReportPhotoBlobFingerprint(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let hash = 2166136261;
+  for (let i = 0; i < bytes.length; i++) {
+    hash ^= bytes[i];
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${blob.size}:${blob.type}:${hash >>> 0}`;
+}
 
 export async function pickCourseReportPhotos(
   files: File[],
   room: number,
-  prepare: (file: File) => Promise<Blob> = prepareCourseReportPhoto
+  prepare?: (file: File) => Promise<Blob>,
+  already: {
+    fileIds?: Iterable<string>;
+    fingerprints?: Iterable<string>;
+  } = {}
 ): Promise<{ items: CourseReportPendingPick[]; note: string }> {
-  const selected = files.slice(0, Math.max(0, room));
+  const run = prepare ?? prepareCourseReportPhoto;
+  const seenIds = new Set(already.fileIds ?? []);
+  const seenPrints = new Set(already.fingerprints ?? []);
   const items: CourseReportPendingPick[] = [];
   let note = "";
-  for (const file of selected) {
+  for (const file of files) {
+    if (items.length >= Math.max(0, room)) break;
+    const fileId = courseReportPhotoFileId(file);
+    if (seenIds.has(fileId)) {
+      note = COURSE_REPORT_PHOTO_DUPLICATE_MESSAGE;
+      continue;
+    }
     try {
-      const blob = await prepare(file);
+      const blob = await run(file);
+      const fingerprint = await courseReportPhotoBlobFingerprint(blob);
+      if (seenPrints.has(fingerprint)) {
+        note = COURSE_REPORT_PHOTO_DUPLICATE_MESSAGE;
+        continue;
+      }
+      seenIds.add(fileId);
+      seenPrints.add(fingerprint);
       items.push({
-        key: `${Date.now()}-${items.length}-${file.name}`,
+        key: `${Date.now()}-${items.length}-${fileId}`,
         blob,
         previewUrl: URL.createObjectURL(blob),
+        fileId,
+        fingerprint,
       });
     } catch (e) {
       note = e instanceof Error ? e.message : COURSE_REPORT_HEIC_CONVERT_MESSAGE;
     }
   }
   return { items, note };
+}
+
+export async function uploadCourseReportPendingPhotos(
+  reportId: number,
+  items: { blob: Blob }[],
+  post: typeof fetch = fetch
+): Promise<{ uploaded: number; failed: number }> {
+  let uploaded = 0;
+  let failed = 0;
+  for (let i = 0; i < items.length; i++) {
+    const blob = items[i].blob;
+    const mime = (blob.type || "image/jpeg").toLowerCase();
+    const ext = mime.includes("png") ? "png" : mime.includes("webp") ? "webp" : "jpg";
+    const fd = new FormData();
+    fd.append("file", blob, `photo-${i}.${ext}`);
+    const res = await post(`/api/course-reports/${reportId}/photos`, {
+      method: "POST",
+      credentials: "include",
+      body: fd,
+    });
+    if (res.ok) uploaded += 1;
+    else failed += 1;
+  }
+  return { uploaded, failed };
 }
 
 export {

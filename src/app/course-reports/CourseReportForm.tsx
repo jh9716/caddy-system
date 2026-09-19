@@ -15,6 +15,7 @@ import {
   COURSE_REPORT_PHOTO_ACCEPT,
   COURSE_REPORT_PHOTO_MAX,
   pickCourseReportPhotos,
+  uploadCourseReportPendingPhotos,
 } from "@/lib/courseReportPhotoClient";
 
 type Props = {
@@ -31,7 +32,13 @@ type Props = {
   };
 };
 
-type PendingPhoto = { key: string; blob: Blob; previewUrl: string };
+type PendingPhoto = {
+  key: string;
+  blob: Blob;
+  previewUrl: string;
+  fileId: string;
+  fingerprint: string;
+};
 
 export default function CourseReportForm({
   mode = "new",
@@ -61,7 +68,10 @@ export default function CourseReportForm({
     if (!files || !canManagePhotos) return;
     setStatusNote("");
     const room = COURSE_REPORT_PHOTO_MAX - existingPhotos.length - pending.length;
-    const { items, note } = await pickCourseReportPhotos(Array.from(files), room);
+    const { items, note } = await pickCourseReportPhotos(Array.from(files), room, undefined, {
+      fileIds: pending.map((p) => p.fileId),
+      fingerprints: pending.map((p) => p.fingerprint),
+    });
     if (note) setStatusNote(note);
     if (items.length) {
       setPending((cur) => {
@@ -95,17 +105,7 @@ export default function CourseReportForm({
   }
 
   async function uploadPending(reportId: number): Promise<number> {
-    let failed = 0;
-    for (const item of pending) {
-      const fd = new FormData();
-      fd.append("file", item.blob, "photo.jpg");
-      const res = await fetch(`/api/course-reports/${reportId}/photos`, {
-        method: "POST",
-        credentials: "include",
-        body: fd,
-      });
-      if (!res.ok) failed += 1;
-    }
+    const { failed } = await uploadCourseReportPendingPhotos(reportId, pending);
     return failed;
   }
 

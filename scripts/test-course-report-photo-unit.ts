@@ -28,9 +28,11 @@ import { isCourseReportPhotoTableMissing } from "../src/lib/courseReportPhoto";
 import { COURSE_REPORT_PHOTO_MAX, COURSE_REPORT_PHOTO_MAX_BYTES } from "../src/lib/courseReportPhotoConstants";
 import {
   COURSE_REPORT_HEIC_CONVERT_MESSAGE,
+  COURSE_REPORT_PHOTO_DUPLICATE_MESSAGE,
   isHeicLikeFile,
   pickCourseReportPhotos,
   setHeicConverterForTests,
+  uploadCourseReportPendingPhotos,
 } from "../src/lib/courseReportPhotoClient";
 import { POST as POST_REPORT } from "../src/app/api/course-reports/route";
 import { PATCH as PATCH_STATUS } from "../src/app/api/course-reports/[id]/status/route";
@@ -94,9 +96,10 @@ async function jsonOf(res: Response) {
   return res.json().catch(() => ({}));
 }
 
-function jpegBytes(extra = 32): Uint8Array {
-  const out = new Uint8Array(4 + extra);
+function jpegBytes(extra = 32, mark = 0): Uint8Array {
+  const out = new Uint8Array(Math.max(5, 4 + extra));
   out.set([0xff, 0xd8, 0xff, 0xe0], 0);
+  out[4] = mark;
   return out;
 }
 
@@ -322,7 +325,10 @@ async function main() {
     assert(isHeicLikeFile(heicFile), "heic filename/type detected");
     assert(isHeicLikeFile(heifFile), "heif detected");
     assert(!isHeicLikeFile(jpegFile), "jpg not heic-like");
-    setHeicConverterForTests(async () => new Blob([jpegBytes()], { type: "image/jpeg" }));
+    setHeicConverterForTests(async (file) => {
+      const mark = String((file as File).name || "").includes("heif") ? 2 : 1;
+      return new Blob([jpegBytes(32, mark)], { type: "image/jpeg" });
+    });
     const prepare = async (file: File) => {
       const { decodeCourseReportPhotoSource } = await import("../src/lib/courseReportPhotoClient");
       const decoded = await decodeCourseReportPhotoSource(file);
@@ -331,8 +337,10 @@ async function main() {
         if (detectCourseReportPhotoMime(buf) !== "image/jpeg") {
           throw new Error("converted blob is not jpeg");
         }
+        const mark = file.name.includes("heif") ? 2 : 1;
+        return new Blob([jpegBytes(32, mark)], { type: "image/jpeg" });
       }
-      return new Blob([jpegBytes()], { type: "image/jpeg" });
+      return new Blob([jpegBytes(32, 9)], { type: "image/jpeg" });
     };
     const oneHeic = await pickCourseReportPhotos([heicFile], COURSE_REPORT_PHOTO_MAX, prepare);
     assert(oneHeic.items.length === 1, "HEIC 1 -> preview item");
@@ -346,11 +354,78 @@ async function main() {
       COURSE_REPORT_PHOTO_MAX,
       prepare
     );
-    assert(mix.items.length === 3, "HEIC+JPG mix capped at 3");
+    assert(mix.items.length === 3, "HEIC+JPG mix keeps 3 distinct then ignores 4th dup");
     assert(
       mix.items.every((item) => item.blob.type === "image/jpeg"),
       "mixed previews are jpeg"
     );
+
+    const jpgA = new File([jpegBytes(32, 11)], "a.jpg", { type: "image/jpeg" });
+    const jpgB = new File([jpegBytes(32, 12)], "b.jpg", { type: "image/jpeg" });
+    const jpgC = new File([jpegBytes(32, 13)], "c.jpg", { type: "image/jpeg" });
+    const jpgD = new File([jpegBytes(32, 14)], "d.jpg", { type: "image/jpeg" });
+    const identityPrepare = async (file: File) =>
+      new Blob([new Uint8Array(await file.arrayBuffer())], { type: file.type });
+    const one = await pickCourseReportPhotos([jpgA], COURSE_REPORT_PHOTO_MAX, identityPrepare);
+    assert(one.items.length === 1, "JPG 1장 -> 1");
+    const two = await pickCourseReportPhotos([jpgA, jpgB], COURSE_REPORT_PHOTO_MAX, identityPrepare);
+    assert(two.items.length === 2, "서로 다른 JPG 2장 -> 2");
+    const three = await pickCourseReportPhotos(
+      [jpgA, jpgB, jpgC],
+      COURSE_REPORT_PHOTO_MAX,
+      identityPrepare
+    );
+    assert(three.items.length === 3, "서로 다른 이미지 3장 -> 3");
+    const four = await pickCourseReportPhotos(
+      [jpgA, jpgB, jpgC, jpgD],
+      COURSE_REPORT_PHOTO_MAX,
+      identityPrepare
+    );
+    assert(four.items.length === 3, "4번째 추가 차단");
+    const sameTwice = await pickCourseReportPhotos(
+      [jpgA, jpgA],
+      COURSE_REPORT_PHOTO_MAX,
+      identityPrepare
+    );
+    assert(sameTwice.items.length === 1, "동일 파일 2회 -> 1장만");
+    assert(sameTwice.note === COURSE_REPORT_PHOTO_DUPLICATE_MESSAGE, "동일 파일 즉시 안내");
+    const secondPick = await pickCourseReportPhotos([jpgA], 2, identityPrepare, {
+      fileIds: one.items.map((p) => p.fileId),
+      fingerprints: one.items.map((p) => p.fingerprint),
+    });
+    assert(secondPick.items.length === 0, "이미 추가한 파일 재선택 0");
+    assert(secondPick.note === COURSE_REPORT_PHOTO_DUPLICATE_MESSAGE, "재선택 안내");
+
+    const heicA = new File([heicBytes()], "cam-a.heic", { type: "image/heic" });
+    const heicB = new File([heicBytes()], "cam-b.heic", { type: "image/heic" });
+    const heicPrepare = async (file: File) => {
+      const { decodeCourseReportPhotoSource } = await import("../src/lib/courseReportPhotoClient");
+      await decodeCourseReportPhotoSource(file);
+      const mark = file.name.includes("b.heic") ? 22 : 21;
+      return new Blob([jpegBytes(32, mark)], { type: "image/jpeg" });
+    };
+    const twoHeic = await pickCourseReportPhotos([heicA, heicB], COURSE_REPORT_PHOTO_MAX, heicPrepare);
+    assert(twoHeic.items.length === 2, "HEIC mock 2개 -> JPEG 2개");
+    assert(
+      twoHeic.items.every((item) => item.blob.type === "image/jpeg"),
+      "HEIC mock previews jpeg"
+    );
+    assert(twoHeic.items[0].fingerprint !== twoHeic.items[1].fingerprint, "HEIC fingerprints differ");
+    const posted: string[] = [];
+    const fakePost: typeof fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      const fd = init?.body as FormData;
+      const file = fd.get("file");
+      posted.push(file instanceof File ? file.name : "missing");
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as typeof fetch;
+    const up = await uploadCourseReportPendingPhotos(99, twoHeic.items, fakePost);
+    assert(up.uploaded === 2 && up.failed === 0, "HEIC mock 2장 모두 upload 대상");
+    assert(posted.length === 2 && posted[0] !== posted[1], "FormData filenames unique");
+
+    const form = read("src/app/course-reports/CourseReportForm.tsx");
+    assert(form.includes("uploadCourseReportPendingPhotos"), "form uses sequential unique upload helper");
+    assert(form.includes("fingerprints"), "form passes existing fingerprints");
+
     setHeicConverterForTests(async () => {
       throw new Error("boom");
     });
@@ -358,7 +433,17 @@ async function main() {
     assert(fail.items.length === 0, "failed HEIC not added");
     assert(fail.note === COURSE_REPORT_HEIC_CONVERT_MESSAGE, "convert fail copy");
     setHeicConverterForTests(null);
-    for (const item of [...oneHeic.items, ...oneJpg.items, ...mix.items]) {
+    for (const item of [
+      ...oneHeic.items,
+      ...oneJpg.items,
+      ...mix.items,
+      ...one.items,
+      ...two.items,
+      ...three.items,
+      ...four.items,
+      ...sameTwice.items,
+      ...twoHeic.items,
+    ]) {
       URL.revokeObjectURL(item.previewUrl);
     }
   }
@@ -506,6 +591,28 @@ async function main() {
       assert(fourth.status === 409, "4th 409");
       const n = await prisma.courseReportPhoto.count({ where: { reportId: ownId } });
       assert(n === 3, "max 3 stored");
+    }
+
+    section("distinct jpeg 1/2/3 preserved");
+    {
+      const multiId = await createReport(caddyCookie, `${tag}_multi`);
+      reportIds.push(multiId);
+      const first = await postPhoto(caddyCookie, multiId, jpegBytes(32, 31));
+      assert(first.status === 200, "distinct 1 -> 1");
+      assert((await prisma.courseReportPhoto.count({ where: { reportId: multiId } })) === 1, "count 1");
+      const second = await postPhoto(caddyCookie, multiId, jpegBytes(32, 32));
+      assert(second.status === 200, "distinct 2 -> 2");
+      assert((await prisma.courseReportPhoto.count({ where: { reportId: multiId } })) === 2, "count 2");
+      const third = await postPhoto(caddyCookie, multiId, jpegBytes(32, 33));
+      assert(third.status === 200, "distinct 3 -> 3");
+      const rows = await prisma.courseReportPhoto.findMany({ where: { reportId: multiId } });
+      assert(rows.length === 3, "count 3");
+      assert(new Set(rows.map((r) => r.storageKey)).size === 3, "storageKey unique for 3");
+      const packed = await (
+        await import("../src/lib/courseReportPhoto")
+      ).listCourseReportsWithPhotoCount(prisma, { take: 20 });
+      const hit = packed.find((row) => row.report.id === multiId);
+      assert(hit?.photoCount === 3, "list photoCount 3");
     }
 
     section("rejects");
