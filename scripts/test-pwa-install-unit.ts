@@ -257,7 +257,7 @@ assert(caddyPagePush.includes("PushNotificationCard"), "/caddy renders notificat
 assert(!caddyPagePush.includes("requestPermission"), "/caddy page does not request permission itself");
 
 const schema = readSrc("prisma/schema.prisma");
-assert(!schema.includes("model Comment"), "schema has no Comment (out of scope)");
+assert(schema.includes("model Comment"), "schema has Comment (comments V1)");
 assert(!schema.includes("model Chat"), "schema has no Chat (out of scope)");
 
 const migrations = fs.readdirSync(path.join(process.cwd(), "prisma/migrations"));

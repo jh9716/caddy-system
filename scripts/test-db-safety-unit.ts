@@ -142,6 +142,10 @@ console.log("== readonly inspect allowlist includes push subscription ==");
     guardSrc.includes("inspect-course-report-photo-v1-prod-readonly"),
     "guard allowlists course report photo inspect"
   );
+  assert(
+    guardSrc.includes("inspect-comment-v1-prod-readonly"),
+    "guard allowlists comment v1 inspect"
+  );
   const photoDeploy = fs.readFileSync(
     path.resolve("scripts/maintenance/deploy-course-report-photo-v1-migration.ts"),
     "utf8"
@@ -154,6 +158,28 @@ console.log("== readonly inspect allowlist includes push subscription ==");
   assert(!photoDeploy.includes('["migrate", "dev"]'), "photo deploy no migrate dev call");
   assert(!photoDeploy.includes('["migrate", "reset"]'), "photo deploy no migrate reset call");
   assert(!photoDeploy.includes('["db", "push"]'), "photo deploy no db push call");
+  const commentMig = fs.readFileSync(
+    path.resolve("prisma/migrations/20260919070000_comment_v1/migration.sql"),
+    "utf8"
+  );
+  assert(commentMig.includes("CREATE TYPE \"CommentTargetType\""), "comment migration CREATE TYPE");
+  assert(commentMig.includes("CREATE TABLE \"CommentThread\""), "comment migration CommentThread");
+  assert(commentMig.includes("CREATE TABLE \"Comment\""), "comment migration Comment");
+  assert(!/\bDROP\s+(TABLE|COLUMN|INDEX|TYPE)\b/i.test(commentMig), "comment migration no DROP");
+  assert(!/(^|\n)\s*UPDATE\s+/i.test(commentMig), "comment migration no UPDATE");
+  assert(!/(^|\n)\s*DELETE\s+/i.test(commentMig), "comment migration no DELETE");
+  const commentDeploy = fs.readFileSync(
+    path.resolve("scripts/maintenance/deploy-comment-v1-migration.ts"),
+    "utf8"
+  );
+  assert(
+    commentDeploy.includes("COMMENT_V1_20260919"),
+    "comment deploy uses exact confirm task-id"
+  );
+  assert(commentDeploy.includes('["migrate", "deploy"]'), "comment deploy uses migrate deploy");
+  assert(!commentDeploy.includes('["migrate", "dev"]'), "comment deploy no migrate dev call");
+  assert(!commentDeploy.includes('["migrate", "reset"]'), "comment deploy no migrate reset call");
+  assert(!commentDeploy.includes('["db", "push"]'), "comment deploy no db push call");
 }
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);

@@ -6,12 +6,15 @@ import { getRequestAuthUser } from "@/lib/getRequestAuthUser";
 import { toCourseReportPublic } from "@/lib/courseReport";
 import {
   canChangeCourseReportStatus,
+  canComposeCourseReport,
   canEditCourseReportContent,
   canSoftDeleteCourseReport,
 } from "@/lib/courseReportAccess";
 import CourseReportDetailActions from "./CourseReportDetailActions";
+import CourseReportComments from "./CourseReportComments";
 import CourseReportPhotoGallery from "../CourseReportPhotoGallery";
 import { findCourseReportWithPhotos } from "@/lib/courseReportPhoto";
+import { listCourseReportComments } from "@/lib/courseReportComments";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,6 +37,7 @@ export default async function CourseReportDetailPage({
 
   const report = toCourseReportPublic(loaded.report, loaded.photos.length);
   const photos = loaded.photos;
+  const comments = await listCourseReportComments(prisma, id, auth);
   const editInput = {
     role: auth.role,
     userId: auth.userId,
@@ -71,6 +75,11 @@ export default async function CourseReportDetailPage({
           deletedAt: loaded.report.deletedAt,
         })}
         status={report.status}
+      />
+      <CourseReportComments
+        reportId={id}
+        initialComments={comments}
+        canCompose={canComposeCourseReport(auth)}
       />
     </div>
   );

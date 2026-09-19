@@ -221,6 +221,8 @@ model User {
   pushSubscriptions PushSubscription[]
   /// 코스 제보 작성 이력. User 물리 삭제는 Restrict.
   courseReports CourseReport[] @relation("CourseReportAuthor")
+  /// 공용 댓글. User 물리 삭제는 Restrict. 표시명은 조회 시 Caddy.name 우선.
+  comments Comment[]
   createdAt DateTime @default(now())
 }
 
@@ -267,6 +269,43 @@ model CourseReportPhoto {
   createdAt  DateTime     @default(now())
 
   @@index([reportId, sortOrder])
+}
+
+/// 공용 댓글 대상. V1 UI는 COURSE_REPORT 만 연결. Board/Notice UI 없음.
+enum CommentTargetType {
+  COURSE_REPORT
+  BOARD_DATE
+  NOTICE
+}
+
+/// 대상당 thread 1개. GET empty 는 thread 를 만들지 않음.
+model CommentThread {
+  id         Int               @id @default(autoincrement())
+  targetType CommentTargetType
+  targetKey  String
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+  comments   Comment[]
+
+  @@unique([targetType, targetKey])
+  @@index([targetType, targetKey])
+}
+
+/// 공용 댓글 V1. 대댓글/좋아요/이미지/push/hard delete 없음.
+model Comment {
+  id           Int       @id @default(autoincrement())
+  threadId     Int
+  authorUserId Int
+  body         String
+  deletedAt    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  thread CommentThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  author User          @relation(fields: [authorUserId], references: [id], onDelete: Restrict)
+
+  @@index([threadId, createdAt])
+  @@index([authorUserId])
 }
 
 /// 기기별 Web Push subscription (1 User : N devices).

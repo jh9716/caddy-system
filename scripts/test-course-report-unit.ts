@@ -122,15 +122,22 @@ async function main() {
       assert(!src.includes("deliverWebPush"), `${rel} no deliverWebPush`);
       assert(!src.includes("PushSubscription"), `${rel} no PushSubscription`);
       assert(!src.includes("@vercel/blob"), `${rel} no blob`);
-      assert(!src.includes("CommentThread"), `${rel} no CommentThread`);
-      assert(!src.includes("model Comment"), `${rel} no Comment`);
+      if (rel !== "src/app/course-reports/[id]/page.tsx") {
+        assert(!src.includes("CommentThread"), `${rel} no CommentThread`);
+        assert(!src.includes("model Comment"), `${rel} no Comment`);
+      }
     }
+    const detail = read("src/app/course-reports/[id]/page.tsx");
+    assert(detail.includes("CourseReportComments"), "detail has comments UI");
+    assert(detail.includes("CourseReportPhotoGallery"), "detail still has photos");
+    assert(!detail.includes("deliverWebPush"), "detail no push");
+    assert(!detail.includes("@vercel/blob"), "detail no blob");
     const schema = read("prisma/schema.prisma");
     assert(schema.includes("model CourseReport"), "schema CourseReport");
     assert(schema.includes("enum CourseReportCategory"), "schema category enum");
     assert(schema.includes("enum CourseReportStatus"), "schema status enum");
-    assert(!schema.includes("model Comment"), "no Comment");
-    assert(!schema.includes("model CommentThread"), "no CommentThread");
+    assert(schema.includes("model CommentThread"), "schema CommentThread");
+    assert(schema.includes("model Comment {"), "schema Comment");
     const mig = read("prisma/migrations/20260918140000_course_report_v1/migration.sql");
     assert(!/\bDROP\s+(TABLE|COLUMN|INDEX|TYPE)\b/i.test(mig), "migration no DROP");
     assert(mig.includes("CREATE TABLE \"CourseReport\""), "migration CREATE TABLE");
