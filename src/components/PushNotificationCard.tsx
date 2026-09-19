@@ -19,6 +19,7 @@ type StatusResponse = {
   subscriptionExists?: boolean;
   enabled?: boolean;
   error?: string;
+  message?: string;
 };
 
 function readPermission(): PushPermission {
@@ -28,7 +29,17 @@ function readPermission(): PushPermission {
   return "unsupported";
 }
 
-export default function PushNotificationCard() {
+export default function PushNotificationCard({
+  title = PUSH_UI_TITLE,
+  enableLabel = PUSH_UI_ENABLE,
+  disableLabel = PUSH_UI_DISABLE,
+  statusText,
+}: {
+  title?: string;
+  enableLabel?: string;
+  disableLabel?: string;
+  statusText?: (surface: PushNotificationSurface) => string;
+} = {}) {
   const [configured, setConfigured] = useState(false);
   const [publicKey, setPublicKey] = useState<string | null>(null);
   const [standalone, setStandalone] = useState(false);
@@ -77,6 +88,12 @@ export default function PushNotificationCard() {
     if (res.status === 503 && data.error === "auth_unavailable") {
       setConfigured(false);
       setPublicKey(null);
+      return;
+    }
+    if (res.status === 403) {
+      setConfigured(false);
+      setPublicKey(null);
+      setError(typeof data.message === "string" ? data.message : "관리자 계정을 찾을 수 없습니다.");
       return;
     }
     setConfigured(data.configured === true);
@@ -205,12 +222,18 @@ export default function PushNotificationCard() {
   const showEnable = surface === "off";
   const showDisable = surface === "on";
 
+  const status = statusText ? statusText(surface) : pushSurfaceLabel(surface);
+
   return (
-    <section aria-label={PUSH_UI_TITLE} style={cardStyle}>
-      <div style={{ fontSize: 15, fontWeight: 800, color: "#163028" }}>{PUSH_UI_TITLE}</div>
-      <p style={{ margin: "6px 0 0", fontSize: 13, color: "#4d5a52" }}>
-        {pushSurfaceLabel(surface)}
-      </p>
+    <section aria-label={title} style={cardStyle}>
+      <div style={{ fontSize: 15, fontWeight: 800, color: "#163028" }}>{title}</div>
+      {status ? (
+        <p style={{ margin: "6px 0 0", fontSize: 13, color: "#4d5a52" }}>{status}</p>
+      ) : (
+        <p style={{ margin: "6px 0 0", fontSize: 13, color: "#4d5a52" }}>
+          {pushSurfaceLabel(surface)}
+        </p>
+      )}
       {showEnable && (
         <button
           type="button"
@@ -218,7 +241,7 @@ export default function PushNotificationCard() {
           disabled={busy}
           style={buttonStyle}
         >
-          {PUSH_UI_ENABLE}
+          {enableLabel}
         </button>
       )}
       {showDisable && (
@@ -228,7 +251,7 @@ export default function PushNotificationCard() {
           disabled={busy}
           style={secondaryButtonStyle}
         >
-          {PUSH_UI_DISABLE}
+          {disableLabel}
         </button>
       )}
       {error ? (

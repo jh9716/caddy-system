@@ -8,6 +8,10 @@ import {
 import { clearSessionCookies } from "@/lib/sessionCookies";
 import { isWebPushConfigured, vapidClientConfig } from "@/lib/pushVapid";
 import {
+  isEnvOnlyNonAdmin,
+  resolvePushSubscriptionUserId,
+} from "@/lib/adminPushUser";
+import {
   PushSubscriptionError,
   deletePushSubscriptionForUser,
   isPushStoreMissing,
@@ -62,18 +66,30 @@ async function requireDbPushUser(req: NextRequest) {
     clearSessionCookies(res, req);
     return { error: res };
   }
-  if (auth.userId == null) {
+  const userId = await resolvePushSubscriptionUserId(prisma, auth);
+  if (userId == null) {
+    if (isEnvOnlyNonAdmin(auth)) {
+      return {
+        error: NextResponse.json(
+          {
+            error: "unsupported",
+            message: "환경변수 계정은 알림을 등록할 수 없습니다.",
+          },
+          { status: 400 }
+        ),
+      };
+    }
     return {
       error: NextResponse.json(
         {
-          error: "unsupported",
-          message: "환경변수 계정은 알림을 등록할 수 없습니다.",
+          error: "forbidden",
+          message: "관리자 계정을 찾을 수 없습니다.",
         },
-        { status: 400 }
+        { status: 403 }
       ),
     };
   }
-  return { auth, userId: auth.userId };
+  return { auth, userId };
 }
 
 /** GET — public VAPID + whether this User has an enabled row. No endpoint/keys. */

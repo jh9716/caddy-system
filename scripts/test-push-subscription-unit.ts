@@ -338,9 +338,9 @@ async function main() {
       assert(unauthBody.role === undefined && unauthBody.error === "unauthorized", "unauth error unauthorized");
 
       const envRes = await jsonReq("GET", await envCookie());
-      assert(envRes.status === 400, "env uid=null unsupported");
+      assert(envRes.status === 403, "env admin without matching User forbidden");
       const envBody = await envRes.json();
-      assert(envBody.error === "unsupported", "env error unsupported");
+      assert(envBody.error === "forbidden", "env mismatch forbidden");
 
       const ok = await jsonReq("GET", await cookieFor({ ...uCaddy, role: "caddy" }));
       assert(ok.status === 200, "valid DB user GET 200");
