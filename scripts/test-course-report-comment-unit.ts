@@ -140,6 +140,10 @@ async function main() {
     assert(!commentLib.includes("stripHtml"), "no stripHtml");
     assert(!commentLib.includes("dangerouslySetInnerHTML"), "lib no innerHTML");
     assert(!/<\[\^>\]\*>/.test(commentLib), "no HTML tag strip regex");
+    const srcTree = ["src/lib/comment.ts", "src/lib/courseReportComments.ts", "src/app/course-reports/[id]/CourseReportComments.tsx"];
+    for (const rel of srcTree) {
+      assert(!read(rel).includes("dangerouslySetInnerHTML"), `${rel} no innerHTML`);
+    }
     const commentUi = read("src/app/course-reports/[id]/CourseReportComments.tsx");
     assert(commentUi.includes("{item.body}"), "React text child body");
     assert(!commentUi.includes("dangerouslySetInnerHTML"), "UI no innerHTML");

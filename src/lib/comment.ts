@@ -37,7 +37,7 @@ export function parseCommentBody(input: unknown): string {
     throw new CommentValidationError("empty", "댓글을 입력해 주세요.", 400);
   }
   // Plain text only: trim + null-byte strip. Do not HTML-parse/sanitize/mutate.
-  // React text children escape on render; never dangerouslySetInnerHTML.
+  // React text children escape on render.
   const body = input.replace(/\u0000/g, "").trim();
   if (!body) {
     throw new CommentValidationError("empty", "댓글을 입력해 주세요.", 400);
