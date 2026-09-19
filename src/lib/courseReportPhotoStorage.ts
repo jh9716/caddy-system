@@ -1,9 +1,17 @@
 /**
  * Server-only CourseReport photo object storage.
  * Client components must never import this module.
- * Token values are never logged.
+ * Token / OIDC values are never logged or returned in responses.
+ *
+ * Auth is resolved by @vercel/blob (do not pass credentials unless needed):
+ * 1. Vercel OIDC default: VERCEL_OIDC_TOKEN + BLOB_STORE_ID
+ * 2. Legacy/local fallback: BLOB_READ_WRITE_TOKEN
  */
-import { COURSE_REPORT_BLOB_TOKEN_ENV } from "@/lib/courseReportPhotoConstants";
+import {
+  COURSE_REPORT_BLOB_OIDC_TOKEN_ENV,
+  COURSE_REPORT_BLOB_STORE_ID_ENV,
+  COURSE_REPORT_BLOB_TOKEN_ENV,
+} from "@/lib/courseReportPhotoConstants";
 
 export class CourseReportPhotoStorageError extends Error {
   constructor(
@@ -23,14 +31,23 @@ export type CourseReportPhotoStore = {
   delete(key: string): Promise<void>;
 };
 
-function blobToken(): string | null {
-  const raw = process.env[COURSE_REPORT_BLOB_TOKEN_ENV];
-  if (typeof raw !== "string" || raw.trim().length === 0) return null;
-  return raw;
+function envNonEmpty(name: string): boolean {
+  const raw = process.env[name];
+  return typeof raw === "string" && raw.trim().length > 0;
+}
+
+function hasLegacyBlobToken(): boolean {
+  return envNonEmpty(COURSE_REPORT_BLOB_TOKEN_ENV);
+}
+
+function hasOidcBlobAuth(): boolean {
+  if (!envNonEmpty(COURSE_REPORT_BLOB_STORE_ID_ENV)) return false;
+  if (envNonEmpty(COURSE_REPORT_BLOB_OIDC_TOKEN_ENV)) return true;
+  return process.env.VERCEL === "1";
 }
 
 export function isCourseReportPhotoStorageConfigured(): boolean {
-  return blobToken() != null;
+  return hasLegacyBlobToken() || hasOidcBlobAuth();
 }
 
 const unconfigured: CourseReportPhotoStore = {
@@ -61,8 +78,7 @@ const unconfigured: CourseReportPhotoStore = {
 const vercelBlobStore: CourseReportPhotoStore = {
   configured: true,
   async put(key, bytes, mimeType) {
-    const token = blobToken();
-    if (!token) {
+    if (!isCourseReportPhotoStorageConfigured()) {
       throw new CourseReportPhotoStorageError(
         "storage_not_configured",
         "사진 저장소가 설정되지 않았습니다.",
@@ -74,13 +90,11 @@ const vercelBlobStore: CourseReportPhotoStore = {
       access: "private",
       addRandomSuffix: false,
       contentType: mimeType,
-      token,
       cacheControlMaxAge: 60 * 60 * 24 * 30,
     });
   },
   async get(key) {
-    const token = blobToken();
-    if (!token) {
+    if (!isCourseReportPhotoStorageConfigured()) {
       throw new CourseReportPhotoStorageError(
         "storage_not_configured",
         "사진 저장소가 설정되지 않았습니다.",
@@ -89,7 +103,7 @@ const vercelBlobStore: CourseReportPhotoStore = {
     }
     try {
       const { get } = await import("@vercel/blob");
-      const result = await get(key, { access: "private", token, useCache: false });
+      const result = await get(key, { access: "private", useCache: false });
       if (!result || result.statusCode !== 200 || !result.stream) return null;
       const buf = await new Response(result.stream).arrayBuffer();
       return new Uint8Array(buf);
@@ -104,8 +118,7 @@ const vercelBlobStore: CourseReportPhotoStore = {
     }
   },
   async delete(key) {
-    const token = blobToken();
-    if (!token) {
+    if (!isCourseReportPhotoStorageConfigured()) {
       throw new CourseReportPhotoStorageError(
         "storage_not_configured",
         "사진 저장소가 설정되지 않았습니다.",
@@ -114,7 +127,7 @@ const vercelBlobStore: CourseReportPhotoStore = {
     }
     try {
       const { del } = await import("@vercel/blob");
-      await del(key, { token });
+      await del(key);
     } catch (e) {
       const { BlobNotFoundError } = await import("@vercel/blob");
       if (e instanceof BlobNotFoundError) return;

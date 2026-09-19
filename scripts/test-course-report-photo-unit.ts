@@ -20,6 +20,7 @@ import {
 } from "../src/lib/courseReportPhotoMagic";
 import {
   createMemoryCourseReportPhotoStore,
+  isCourseReportPhotoStorageConfigured,
   setCourseReportPhotoStoreForTests,
 } from "../src/lib/courseReportPhotoStorage";
 import { isCourseReportPhotoTableMissing } from "../src/lib/courseReportPhoto";
@@ -151,8 +152,14 @@ async function main() {
   assertLocalDatabaseUrl(process.env.DATABASE_URL);
   const prevSecret = process.env.SESSION_SECRET;
   const prevBlob = process.env.BLOB_READ_WRITE_TOKEN;
+  const prevStoreId = process.env.BLOB_STORE_ID;
+  const prevOidc = process.env.VERCEL_OIDC_TOKEN;
+  const prevVercel = process.env.VERCEL;
   process.env.SESSION_SECRET = "course-report-photo-unit-secret-32ch!";
   delete process.env.BLOB_READ_WRITE_TOKEN;
+  delete process.env.BLOB_STORE_ID;
+  delete process.env.VERCEL_OIDC_TOKEN;
+  delete process.env.VERCEL;
   setCourseReportPhotoStoreForTests(null);
 
   const tag = `crp_${Date.now()}`;
@@ -170,8 +177,20 @@ async function main() {
         storage.includes("COURSE_REPORT_BLOB_TOKEN_ENV"),
       "env name BLOB_READ_WRITE_TOKEN"
     );
+    assert(
+      constants.includes("BLOB_STORE_ID") &&
+        storage.includes("COURSE_REPORT_BLOB_STORE_ID_ENV"),
+      "env name BLOB_STORE_ID"
+    );
+    assert(
+      constants.includes("VERCEL_OIDC_TOKEN") &&
+        storage.includes("COURSE_REPORT_BLOB_OIDC_TOKEN_ENV"),
+      "env name VERCEL_OIDC_TOKEN"
+    );
     assert(storage.includes("access: \"private\""), "private blob access");
-    assert(!/console\.(log|info|debug).*TOKEN/i.test(storage), "no token logs");
+    assert(!storage.includes("token,"), "sdk calls do not pass token option");
+    assert(!/if \(!token\)/.test(storage), "no token-only put/get/del guard");
+    assert(!/console\.(log|info|debug|error|warn)/.test(storage), "no storage console logs");
     const form = read("src/app/course-reports/CourseReportForm.tsx");
     assert(form.includes('type="file"'), "form file input");
     assert(
@@ -268,6 +287,27 @@ async function main() {
       !isCourseReportPhotoTableMissing(new Error("connection refused")),
       "missing table helper false"
     );
+  }
+
+  section("storage auth detection");
+  {
+    assert(!isCourseReportPhotoStorageConfigured(), "empty env unconfigured");
+    process.env.BLOB_READ_WRITE_TOKEN = "vercel_blob_rw_unit_dummy";
+    assert(isCourseReportPhotoStorageConfigured(), "legacy token configured");
+    delete process.env.BLOB_READ_WRITE_TOKEN;
+    process.env.BLOB_STORE_ID = "store_unit_dummy";
+    assert(!isCourseReportPhotoStorageConfigured(), "store id alone unconfigured");
+    process.env.VERCEL_OIDC_TOKEN = "oidc_unit_dummy";
+    assert(isCourseReportPhotoStorageConfigured(), "OIDC env + store id configured");
+    delete process.env.VERCEL_OIDC_TOKEN;
+    process.env.VERCEL = "1";
+    assert(isCourseReportPhotoStorageConfigured(), "Vercel runtime + store id configured");
+    delete process.env.BLOB_STORE_ID;
+    assert(!isCourseReportPhotoStorageConfigured(), "Vercel without store unconfigured");
+    delete process.env.VERCEL;
+    delete process.env.BLOB_READ_WRITE_TOKEN;
+    delete process.env.BLOB_STORE_ID;
+    delete process.env.VERCEL_OIDC_TOKEN;
   }
 
   try {
@@ -526,6 +566,12 @@ async function main() {
     setCourseReportPhotoStoreForTests(null);
     if (prevBlob === undefined) delete process.env.BLOB_READ_WRITE_TOKEN;
     else process.env.BLOB_READ_WRITE_TOKEN = prevBlob;
+    if (prevStoreId === undefined) delete process.env.BLOB_STORE_ID;
+    else process.env.BLOB_STORE_ID = prevStoreId;
+    if (prevOidc === undefined) delete process.env.VERCEL_OIDC_TOKEN;
+    else process.env.VERCEL_OIDC_TOKEN = prevOidc;
+    if (prevVercel === undefined) delete process.env.VERCEL;
+    else process.env.VERCEL = prevVercel;
     process.env.SESSION_SECRET = prevSecret;
     if (reportIds.length) {
       await prisma.courseReportPhoto.deleteMany({ where: { reportId: { in: reportIds } } });

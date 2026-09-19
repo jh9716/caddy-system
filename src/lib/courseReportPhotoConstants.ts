@@ -21,6 +21,8 @@ export const COURSE_REPORT_PHOTO_EXT: Record<CourseReportPhotoMime, "jpg" | "png
 export const COURSE_REPORT_PHOTO_ACCEPT = "image/jpeg,image/png,image/webp";
 
 export const COURSE_REPORT_BLOB_TOKEN_ENV = "BLOB_READ_WRITE_TOKEN";
+export const COURSE_REPORT_BLOB_STORE_ID_ENV = "BLOB_STORE_ID";
+export const COURSE_REPORT_BLOB_OIDC_TOKEN_ENV = "VERCEL_OIDC_TOKEN";
 
 export type CourseReportPhotoPublic = {
   id: number;
