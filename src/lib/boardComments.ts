@@ -12,8 +12,10 @@ import { COMMENT_TARGET } from "@/lib/commentConstants";
 import {
   CommentValidationError,
   canComposeComment,
+  canComposeCommentAs,
   createCommentByTarget,
   listCommentsByTarget,
+  resolveCommentAuthorUserId,
   softDeleteCommentByTarget,
   type CommentPublic,
 } from "@/lib/commentThread";
@@ -24,7 +26,12 @@ import {
 import { shouldForcePasswordChange } from "@/lib/passwordPolicy";
 import { clearSessionCookies } from "@/lib/sessionCookies";
 
-export { CommentValidationError, canComposeComment };
+export {
+  CommentValidationError,
+  canComposeComment,
+  canComposeCommentAs,
+  resolveCommentAuthorUserId,
+};
 export type { CommentPublic };
 
 export function isBoardCommentAuthResponse(

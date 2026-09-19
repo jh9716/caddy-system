@@ -3,15 +3,23 @@ import type { ResolvedAuthUser } from "@/lib/auth";
 import {
   CommentValidationError,
   canComposeComment,
+  canComposeCommentAs,
   canSoftDeleteComment,
   createCommentByTarget,
   listCommentsByTarget,
+  resolveCommentAuthorUserId,
   softDeleteCommentByTarget,
   type CommentPublic,
 } from "@/lib/commentThread";
 import { COMMENT_TARGET } from "@/lib/commentConstants";
 
-export { CommentValidationError, canComposeComment, canSoftDeleteComment };
+export {
+  CommentValidationError,
+  canComposeComment,
+  canComposeCommentAs,
+  canSoftDeleteComment,
+  resolveCommentAuthorUserId,
+};
 export type { CommentPublic };
 
 async function requireLiveCourseReport(

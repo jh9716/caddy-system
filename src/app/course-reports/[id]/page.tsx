@@ -6,10 +6,10 @@ import { getRequestAuthUser } from "@/lib/getRequestAuthUser";
 import { toCourseReportPublic } from "@/lib/courseReport";
 import {
   canChangeCourseReportStatus,
-  canComposeCourseReport,
   canEditCourseReportContent,
   canSoftDeleteCourseReport,
 } from "@/lib/courseReportAccess";
+import { canComposeCommentAs } from "@/lib/comment";
 import CourseReportDetailActions from "./CourseReportDetailActions";
 import CourseReportComments from "./CourseReportComments";
 import CourseReportPhotoGallery from "../CourseReportPhotoGallery";
@@ -38,6 +38,7 @@ export default async function CourseReportDetailPage({
   const report = toCourseReportPublic(loaded.report, loaded.photos.length);
   const photos = loaded.photos;
   const comments = await listCourseReportComments(prisma, id, auth);
+  const canCompose = await canComposeCommentAs(prisma, auth);
   const editInput = {
     role: auth.role,
     userId: auth.userId,
@@ -79,7 +80,7 @@ export default async function CourseReportDetailPage({
       <CourseReportComments
         reportId={id}
         initialComments={comments}
-        canCompose={canComposeCourseReport(auth)}
+        canCompose={canCompose}
       />
     </div>
   );

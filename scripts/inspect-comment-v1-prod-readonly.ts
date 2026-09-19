@@ -182,6 +182,29 @@ async function main() {
         )
       : [];
 
+    const adminUsers = await prisma.$queryRawUnsafe<
+      Array<{
+        id: number;
+        username: string;
+        role: string;
+        has_caddy: boolean;
+        has_kakao: boolean;
+        has_password: boolean;
+        must_change_password: boolean;
+      }>
+    >(
+      `SELECT
+         id,
+         username,
+         role,
+         ("caddyId" IS NOT NULL) AS has_caddy,
+         ("kakaoUserId" IS NOT NULL) AS has_kakao,
+         ("password" IS NOT NULL) AS has_password,
+         "mustChangePassword" AS must_change_password
+       FROM "User"
+       WHERE lower(role) = 'admin'
+       ORDER BY id`
+    );
     const photoExists = await tableExists(prisma, "CourseReportPhoto");
     const counts = await prisma.$queryRawUnsafe<
       Array<{
@@ -272,6 +295,16 @@ async function main() {
           fks,
           commentThreadRows,
           commentRows,
+          adminUsers: adminUsers.map((u) => ({
+            id: u.id,
+            username: u.username,
+            role: u.role,
+            hasCaddy: Boolean(u.has_caddy),
+            hasKakao: Boolean(u.has_kakao),
+            hasPassword: Boolean(u.has_password),
+            mustChangePassword: Boolean(u.must_change_password),
+          })),
+          usernameAdminExists: adminUsers.some((u) => u.username === "admin"),
           counts: {
             User: Number(counts[0]?.users ?? -1),
             Caddy: Number(counts[0]?.caddy ?? -1),

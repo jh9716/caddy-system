@@ -156,6 +156,9 @@ async function main() {
     const css = read("src/app/globals.css");
     assert(css.includes(".board-comments"), "board comments css");
     assert(css.includes("min-height: 44px"), "44px touch");
+    const commentLib = read("src/lib/comment.ts");
+    assert(commentLib.includes("findUnique"), "author lookup findUnique");
+    assert(!commentLib.includes("findFirst"), "author lookup not findFirst");
     const crPage = read("src/app/course-reports/[id]/page.tsx");
     assert(crPage.includes("CourseReportComments"), "CourseReport comments kept");
     try {
@@ -452,14 +455,58 @@ async function main() {
         }),
         dateParams(pubDate)
       );
-      assert(envPost.status === 403, "env-only admin POST 403");
+      assert(envPost.status === 403, "env-only unmatched admin POST 403");
       const envGet = await GET_COMMENTS(
         req(`http://local/api/board/${pubDate}/comments`, {
           headers: { cookie: envAdminCookie },
         }),
         dateParams(pubDate)
       );
-      assert((await jsonOf(envGet)).canCompose === false, "env-only canCompose false");
+      assert((await jsonOf(envGet)).canCompose === false, "env-only unmatched canCompose false");
+
+      const envLinkedCookie = await cookieFor({
+        id: null,
+        username: userAdmin.username,
+        role: "admin",
+        sessionVersion: 0,
+      });
+      const envLinkedGet = await GET_COMMENTS(
+        req(`http://local/api/board/${pubDate}/comments`, {
+          headers: { cookie: envLinkedCookie },
+        }),
+        dateParams(pubDate)
+      );
+      assert((await jsonOf(envLinkedGet)).canCompose === true, "env matching username canCompose");
+      const envLinkedPost = await POST_COMMENT(
+        req(`http://local/api/board/${pubDate}/comments`, {
+          method: "POST",
+          headers: { cookie: envLinkedCookie, "content-type": "application/json" },
+          body: JSON.stringify({ body: "env-linked", authorUserId: userCaddy.id }),
+        }),
+        dateParams(pubDate)
+      );
+      const envLinkedJson = await jsonOf(envLinkedPost);
+      assert(envLinkedPost.status === 201, "env admin matching username POST 201");
+      assert(
+        envLinkedJson.comment?.authorUserId === userAdmin.id,
+        "env admin author is exact username User not first/other"
+      );
+
+      const envCaddyNameCookie = await cookieFor({
+        id: null,
+        username: userCaddy.username,
+        role: "admin",
+        sessionVersion: 0,
+      });
+      const envWrongRole = await POST_COMMENT(
+        req(`http://local/api/board/${pubDate}/comments`, {
+          method: "POST",
+          headers: { cookie: envCaddyNameCookie, "content-type": "application/json" },
+          body: JSON.stringify({ body: "nope" }),
+        }),
+        dateParams(pubDate)
+      );
+      assert(envWrongRole.status === 403, "env admin cannot use caddy username User");
     }
 
     section("validation");
