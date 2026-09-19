@@ -154,6 +154,20 @@ console.log("== readonly inspect allowlist includes push subscription ==");
   assert(!photoDeploy.includes('["migrate", "dev"]'), "photo deploy no migrate dev call");
   assert(!photoDeploy.includes('["migrate", "reset"]'), "photo deploy no migrate reset call");
   assert(!photoDeploy.includes('["db", "push"]'), "photo deploy no db push call");
+  const commentMig = fs.readFileSync(
+    path.resolve("prisma/migrations/20260919070000_comment_v1/migration.sql"),
+    "utf8"
+  );
+  assert(commentMig.includes("CREATE TYPE \"CommentTargetType\""), "comment migration CREATE TYPE");
+  assert(commentMig.includes("CREATE TABLE \"CommentThread\""), "comment migration CommentThread");
+  assert(commentMig.includes("CREATE TABLE \"Comment\""), "comment migration Comment");
+  assert(!/\bDROP\s+(TABLE|COLUMN|INDEX|TYPE)\b/i.test(commentMig), "comment migration no DROP");
+  assert(!/(^|\n)\s*UPDATE\s+/i.test(commentMig), "comment migration no UPDATE");
+  assert(!/(^|\n)\s*DELETE\s+/i.test(commentMig), "comment migration no DELETE");
+  assert(
+    !fs.existsSync(path.resolve("scripts/maintenance/deploy-comment-v1-migration.ts")),
+    "no comment production deploy script in this PR"
+  );
 }
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);
