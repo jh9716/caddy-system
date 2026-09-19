@@ -9,7 +9,7 @@ export default async function HomePage() {
   const role = (await getVerifiedSessionFromCookies(store))?.role ?? null;
 
   const target =
-    role === "admin" ? "/manage" : role === "caddy" ? "/caddy" : "/login";
+    role === "admin" ? "/manage" : role === "caddy" || role === "leader" ? "/caddy" : "/login";
   const cta = role ? "대시보드로 이동" : "로그인";
 
   return (

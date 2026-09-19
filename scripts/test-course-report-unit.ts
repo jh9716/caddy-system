@@ -27,7 +27,7 @@ import {
   canEditCourseReportContent,
   canSoftDeleteCourseReport,
 } from "../src/lib/courseReportAccess";
-import { shouldUseManageShellForCourseReport } from "../src/lib/boardNav";
+import { shouldUseManageShellForCourseReport, shouldUseMemberShell } from "../src/lib/boardNav";
 import {
   GET as GET_LIST,
   POST as POST_REPORT,
@@ -149,6 +149,11 @@ async function main() {
     assert(shouldUseManageShellForCourseReport("admin") === true, "admin shell");
     assert(shouldUseManageShellForCourseReport("caddy") === false, "caddy no admin shell");
     assert(shouldUseManageShellForCourseReport("leader") === false, "leader no admin shell");
+    assert(shouldUseMemberShell("caddy") === true, "caddy member shell");
+    assert(shouldUseMemberShell("leader") === true, "leader member shell");
+    assert(shouldUseMemberShell("admin") === false, "admin not member shell");
+    const rootLayout = read("src/app/layout.tsx");
+    assert(rootLayout.includes("MemberShell"), "root wraps caddy/leader MemberShell");
     const header = read("src/components/AppHeader.tsx");
     assert(header.includes('href="/course-reports"'), "AppHeader 제보 link");
     const shell = read("src/components/manage/ManageShell.tsx");

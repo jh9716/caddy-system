@@ -3,7 +3,9 @@ import type { Metadata, Viewport } from "next";
 import { cookies } from "next/headers";
 import { Cormorant_Garamond, Noto_Serif_KR, Source_Sans_3 } from "next/font/google";
 import AppHeader from "@/components/AppHeader";
+import MemberShell from "@/components/manage/MemberShell";
 import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
+import { shouldUseMemberShell } from "@/lib/boardNav";
 import { getVerifiedSessionFromCookies } from "@/lib/sessionCookies";
 import {
   PWA_APPLE_TOUCH_ICON,
@@ -77,8 +79,14 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       </head>
       <body>
         <ServiceWorkerRegister />
-        <AppHeader role={role} />
-        <main className="vh-main">{children}</main>
+        {shouldUseMemberShell(role) ? (
+          <MemberShell>{children}</MemberShell>
+        ) : (
+          <>
+            <AppHeader role={role} />
+            <main className="vh-main">{children}</main>
+          </>
+        )}
       </body>
     </html>
   );
