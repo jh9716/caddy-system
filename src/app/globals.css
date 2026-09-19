@@ -645,12 +645,24 @@ a {
   bottom: 0;
   z-index: 35;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   background: rgba(255, 252, 247, 0.96);
   border-top: 1px solid var(--vh-border);
   backdrop-filter: blur(10px);
   padding: 6px 0 calc(6px + env(safe-area-inset-bottom, 0px));
   box-shadow: 0 -6px 18px rgba(15, 31, 24, 0.04);
+}
+
+.vh-bottom-tabs-5 {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.vh-bottom-tabs-5 .vh-tab {
+  font-size: 0.56rem;
+  line-height: 1.15;
+  white-space: normal;
+  text-align: center;
+  padding: 4px 2px;
 }
 
 /* 관리자 toast: 하단 탭/safe-area 위, 가로폭 안 */
@@ -784,6 +796,25 @@ a {
   background: rgba(255, 255, 255, 0.03);
   border-color: rgba(196, 165, 116, 0.35);
   color: #e8efe9;
+}
+
+.vh-logout-group {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.vh-drawer-foot .vh-logout-group,
+.vh-sidebar-foot .vh-logout-group {
+  display: flex !important;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.vh-drawer-foot .vh-logout-group .ui-btn,
+.vh-sidebar-foot .vh-logout-group .ui-btn {
+  width: 100%;
+  white-space: nowrap;
 }
 
 @media (min-width: 960px) {
@@ -2178,6 +2209,27 @@ body.manage-mode .vh-work-inner:has(.notice-page),
 body.manage-mode .vh-work-inner:has(.course-report-page) {
   padding-bottom: calc(
     var(--vh-bottom-nav-height, 58px) + env(safe-area-inset-bottom, 0px) + 28px
+  );
+}
+
+body.manage-mode .vh-work-inner:has(.vh-auth-hero) {
+  padding: 0;
+}
+
+body.manage-mode .vh-auth-top {
+  display: none;
+}
+
+body.manage-mode .vh-auth-hero,
+body.manage-mode .vh-auth-frame {
+  min-height: calc(
+    100dvh - 52px - var(--vh-bottom-nav-height, 58px) - env(safe-area-inset-bottom, 0px)
+  );
+}
+
+body.manage-mode .vh-auth-frame {
+  padding-bottom: calc(
+    16px + var(--vh-bottom-nav-height, 58px) + env(safe-area-inset-bottom, 0px)
   );
 }
 

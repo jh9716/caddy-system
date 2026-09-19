@@ -27,7 +27,7 @@ export default function LogoutButton() {
   };
 
   return (
-    <span className="vh-logout-group" style={{ display: "inline-flex", gap: 8 }}>
+    <span className="vh-logout-group">
       <button type="button" onClick={onClick} className="ui-btn ui-btn-ghost">
         로그아웃
       </button>

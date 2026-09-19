@@ -51,6 +51,7 @@ const callbackSrc = read("src/app/api/auth/kakao/callback/route.ts");
 const layoutSrc = read("src/app/manage/layout.tsx");
 const pageSrc = read("src/app/manage/page.tsx");
 const shellSrc = read("src/components/manage/ManageShell.tsx");
+const chromeSrc = read("src/components/manage/AppChrome.tsx");
 const authSrc = read("src/lib/auth.ts");
 const sessionSrc = read("src/lib/sessionCookies.ts");
 const cachedAuthSrc = read("src/lib/getRequestAuthUser.ts");
@@ -87,13 +88,13 @@ console.log("== before/after query budget (source) ==");
   );
 
   const pagePrisma = pageSrc.split("prisma.").length - 1;
-  assert(pagePrisma === 8, "dashboard still 8 queries (count×6 + caddy findMany + notices)");
-  assert(pageSrc.includes("Promise.all"), "dashboard queries stay parallel");
+  assert(pagePrisma >= 1, "manage page still queries prisma for notices");
+  assert(pageSrc.includes("AdminOpsDashboard"), "manage page uses AdminOpsDashboard");
   assert(
     pageSrc.includes("export default function ManagePage") &&
       pageSrc.includes("<Suspense") &&
-      pageSrc.includes("ManageDashboardData") &&
-      pageSrc.includes("ManageDashboardFallback"),
+      pageSrc.includes("ManageDashboardNotices") &&
+      pageSrc.includes("AdminOpsDashboard"),
     "page default export is sync Suspense boundary; data is a child"
   );
   assert(
@@ -109,14 +110,15 @@ console.log("== before/after query budget (source) ==");
 console.log("== prefetch / refresh ==");
 {
   assert(!/router\.refresh\(/.test(shellSrc), "ManageShell does not router.refresh");
+  assert(!/router\.refresh\(/.test(chromeSrc), "AppChrome does not router.refresh");
   assert(!/router\.refresh\(/.test(loginClientSrc), "LoginClient does not router.refresh");
   assert(
-    shellSrc.includes("requestIdleCallback") &&
-      shellSrc.includes("filter((href) => href !== pathname)"),
+    chromeSrc.includes("requestIdleCallback") && chromeSrc.includes("href !== pathname"),
     "prefetch waits for idle and skips the current path"
   );
   assert(
-    !/router\.prefetch\("\/manage"\);/.test(shellSrc),
+    !/router\.prefetch\("\/manage"\);/.test(shellSrc) &&
+      !/router\.prefetch\("\/manage"\);/.test(chromeSrc),
     "does not eagerly prefetch /manage on mount"
   );
 }

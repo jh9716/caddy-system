@@ -26,7 +26,7 @@ export default function CaddyPage() {
       try {
         const r = await fetch('/api/check-role', { credentials: 'include' })
         const d = await r.json()
-        if (d.role !== 'caddy') {
+        if (d.role !== 'caddy' && d.role !== 'leader') {
           alert('캐디만 접근 가능합니다.')
           router.push('/login')
           return
