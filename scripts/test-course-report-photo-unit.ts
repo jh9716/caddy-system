@@ -216,6 +216,11 @@ async function main() {
     const photoGet = read("src/app/api/course-reports/[id]/photos/[photoId]/route.ts");
     assert(photoGet.includes("requireCourseReportReader"), "photo GET reuses reader auth");
     assert(photoGet.includes("Cache-Control"), "private cache header");
+    const deploy = read("scripts/maintenance/deploy-course-report-photo-v1-migration.ts");
+    assert(deploy.includes("COURSE_REPORT_PHOTO_V1_20260919"), "maintenance confirm task-id");
+    assert(deploy.includes('["migrate", "deploy"]'), "maintenance migrate deploy only");
+    assert(!deploy.includes('["migrate", "reset"]'), "maintenance no reset call");
+    assert(!deploy.includes('["migrate", "dev"]'), "maintenance no migrate dev call");
   }
 
   section("magic bytes");

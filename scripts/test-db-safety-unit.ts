@@ -142,6 +142,18 @@ console.log("== readonly inspect allowlist includes push subscription ==");
     guardSrc.includes("inspect-course-report-photo-v1-prod-readonly"),
     "guard allowlists course report photo inspect"
   );
+  const photoDeploy = fs.readFileSync(
+    path.resolve("scripts/maintenance/deploy-course-report-photo-v1-migration.ts"),
+    "utf8"
+  );
+  assert(
+    photoDeploy.includes("COURSE_REPORT_PHOTO_V1_20260919"),
+    "photo deploy uses exact confirm task-id"
+  );
+  assert(photoDeploy.includes('["migrate", "deploy"]'), "photo deploy uses migrate deploy");
+  assert(!photoDeploy.includes('["migrate", "dev"]'), "photo deploy no migrate dev call");
+  assert(!photoDeploy.includes('["migrate", "reset"]'), "photo deploy no migrate reset call");
+  assert(!photoDeploy.includes('["db", "push"]'), "photo deploy no db push call");
 }
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);
