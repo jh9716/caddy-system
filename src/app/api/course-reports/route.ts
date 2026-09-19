@@ -14,6 +14,7 @@ import {
 } from "@/lib/courseReportAccess";
 import { COURSE_REPORT_LIST_TAKE } from "@/lib/courseReportConstants";
 import { listCourseReportsWithPhotoCount } from "@/lib/courseReportPhoto";
+import { notifyCourseReportCreated } from "@/lib/courseReportPush";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -48,6 +49,11 @@ export async function POST(req: NextRequest) {
         category: parsed.category,
       },
     });
+    try {
+      await notifyCourseReportCreated(prisma, created.id);
+    } catch {
+      // push must not fail report create
+    }
     return NextResponse.json({ ok: true, id: created.id, report: toCourseReportPublic(created) });
   } catch (e) {
     if (e instanceof CourseReportValidationError) {

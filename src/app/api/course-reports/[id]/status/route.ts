@@ -12,6 +12,7 @@ import {
   isCourseReportAuthResponse,
   requireCourseReportReader,
 } from "@/lib/courseReportAccess";
+import { notifyCourseReportStatusChanged } from "@/lib/courseReportPush";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -45,6 +46,7 @@ export async function PATCH(
   const body = await req.json().catch(() => ({}));
   try {
     const status = parseCourseReportStatusBody(body);
+    const previousStatus = existing.status;
     const updated = await prisma.courseReport.update({
       where: { id },
       data: {
@@ -53,6 +55,15 @@ export async function PATCH(
         handlerUserId: auth.userId,
       },
     });
+    try {
+      await notifyCourseReportStatusChanged(prisma, {
+        reportId: updated.id,
+        previousStatus,
+        nextStatus: status,
+      });
+    } catch {
+      // push must not fail status update
+    }
     return NextResponse.json(toCourseReportPublic(updated));
   } catch (e) {
     if (e instanceof CourseReportValidationError) {
