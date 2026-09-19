@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { BoardImageExportMenu } from "@/components/board/BoardImageExportMenu";
 import PublishedBoardView from "@/components/board/PublishedBoardView";
+import BoardComments from "./BoardComments";
 import { assignmentDraftFromPublishedPayload } from "@/lib/assignmentBoardExport";
 import {
   addDaysYmd,
@@ -142,6 +143,7 @@ export default function PublishedBoardPage() {
           </div>
           {notice ? <p className="pub-notice">{notice}</p> : null}
           <PublishedBoardView payload={published.payload} shift={shift} />
+          <BoardComments date={published.date} />
         </>
       ) : null}
 
