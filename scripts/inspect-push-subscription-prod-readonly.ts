@@ -8,6 +8,7 @@
 import { PrismaClient } from "@prisma/client";
 
 const MIGRATION_NAME = "20260917200000_push_subscription";
+const NEXT_MIGRATION_NAME = "20260920013000_push_subscription_user_endpoint_unique";
 
 const MAJOR_TABLES = [
   "User",
@@ -128,6 +129,13 @@ async function main() {
        FROM "_prisma_migrations"
        WHERE migration_name = '${MIGRATION_NAME}'`
     );
+    const nextApplied = await prisma.$queryRawUnsafe<
+      Array<{ migration_name: string; finished_at: Date | null; checksum: string }>
+    >(
+      `SELECT migration_name, finished_at, checksum
+       FROM "_prisma_migrations"
+       WHERE migration_name = '${NEXT_MIGRATION_NAME}'`
+    );
 
     const major: Record<string, number | null> = {};
     for (const t of MAJOR_TABLES) {
@@ -181,6 +189,11 @@ async function main() {
           })),
           foreignKeys: fks,
           migrationApplied: applied.map((r) => ({
+            name: r.migration_name,
+            finished: Boolean(r.finished_at),
+            checksumPresent: Boolean(r.checksum),
+          })),
+          nextMigrationApplied: nextApplied.map((r) => ({
             name: r.migration_name,
             finished: Boolean(r.finished_at),
             checksumPresent: Boolean(r.checksum),
