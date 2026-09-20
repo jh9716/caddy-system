@@ -39,15 +39,12 @@ import {
 } from "@/lib/boardPushConstants";
 import { buildBoardPushPayload } from "@/lib/boardPushMessage";
 import {
-  mapWithConcurrency,
   uniqueAssignedCaddyIdsFromPublished,
 } from "@/lib/boardPushRecipients";
 import { isPushStoreMissing } from "@/lib/pushSubscriptionStore";
+import { deliverWebPushMappings } from "@/lib/pushDelivery";
 import { isWebPushSendConfigured, readWebPushSendCredentials } from "@/lib/pushVapid";
-import {
-  deliverWebPush,
-  type WebPushSendFn,
-} from "@/lib/webPushSender";
+import { type WebPushSendFn } from "@/lib/webPushSender";
 
 export class BoardPushError extends Error {
   constructor(
@@ -88,6 +85,7 @@ export type BoardPushSendResult = {
   sent: number;
   failed: number;
   removedStale: number;
+  deliveries: number;
   error?: string;
 };
 
@@ -394,6 +392,7 @@ export async function sendBoardPush(
       sent: 0,
       failed: 0,
       removedStale: 0,
+      deliveries: 0,
       error: "no_recipients",
     };
   }
@@ -447,37 +446,16 @@ export async function sendBoardPush(
         sent: 0,
         failed: 0,
         removedStale: 0,
+        deliveries: 0,
         error: "no_recipients",
       };
     }
 
     const payload = buildBoardPushPayload(input.date);
-    let sent = 0;
-    let failed = 0;
-    let removedStale = 0;
-
-    await mapWithConcurrency(subscriptions, BOARD_PUSH_CONCURRENCY, async (sub) => {
-      const result = await deliverWebPush(
-        { endpoint: sub.endpoint, p256dh: sub.p256dh, auth: sub.auth },
-        payload,
-        { sendFn: options?.sendFn, credentials: creds }
-      );
-      if (result === "sent") {
-        await db.pushSubscription.update({
-          where: { id: sub.id },
-          data: { lastSuccessAt: new Date() },
-        });
-        sent += 1;
-      } else if (result === "gone") {
-        await db.pushSubscription.delete({ where: { id: sub.id } });
-        removedStale += 1;
-      } else {
-        await db.pushSubscription.update({
-          where: { id: sub.id },
-          data: { lastFailureAt: new Date() },
-        });
-        failed += 1;
-      }
+    const delivered = await deliverWebPushMappings(db, subscriptions, payload, {
+      sendFn: options?.sendFn,
+      credentials: creds,
+      concurrency: BOARD_PUSH_CONCURRENCY,
     });
 
     await finishBoardPushAudit(db, claim.auditId, {
@@ -486,18 +464,20 @@ export async function sendBoardPush(
       status: "SENT",
       recipients: recipientUserIds.length,
       subscriptions: counts.subscriptions,
-      sent,
-      failed,
-      removedStale,
+      sent: delivered.sent,
+      failed: delivered.failed,
+      removedStale: delivered.removedStale,
+      deliveries: delivered.deliveries,
     });
 
     return {
       ok: true,
       recipients: recipientUserIds.length,
       subscriptions: counts.subscriptions,
-      sent,
-      failed,
-      removedStale,
+      sent: delivered.sent,
+      failed: delivered.failed,
+      removedStale: delivered.removedStale,
+      deliveries: delivered.deliveries,
     };
   } catch (e) {
     const code = e instanceof BoardPushError ? e.code : "internal_error";

@@ -4,10 +4,21 @@
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { decodeUrlSafeBase64 } from "@/lib/pushVapid";
+import {
+  SAME_DEVICE_PREPARE_ERROR,
+  SAME_DEVICE_PREPARE_MESSAGE,
+} from "@/lib/pushSubscriptionErrors";
+
+export {
+  SAME_DEVICE_PREPARE_ERROR,
+  SAME_DEVICE_PREPARE_MESSAGE,
+} from "@/lib/pushSubscriptionErrors";
 
 export const MAX_ENDPOINT_LENGTH = 2048;
 export const MAX_USER_AGENT_LENGTH = 256;
 export const MAX_PLATFORM_LENGTH = 32;
+/** Client GET header. Never echo this value in API/UI/logs. */
+export const PUSH_ENDPOINT_HEADER = "x-push-endpoint";
 
 export class PushSubscriptionError extends Error {
   constructor(
@@ -114,9 +125,23 @@ export async function userHasEnabledPushSubscription(
   return n > 0;
 }
 
+/** Registered on this browser = current User + this endpoint. */
+export async function userHasEnabledPushSubscriptionForEndpoint(
+  db: PrismaClient,
+  userId: number,
+  endpoint: string
+): Promise<boolean> {
+  const n = await db.pushSubscription.count({
+    where: { userId, endpoint, enabled: true },
+  });
+  return n > 0;
+}
+
 /**
- * Same endpoint → one row. Reassigns to the current user so the previous
- * account does not keep receiving on this browser/PWA.
+ * Upsert the current User's mapping for this endpoint.
+ * Does not reassign another User's row.
+ * PREPARE: legacy endpoint UNIQUE may reject a second User on the same
+ * physical endpoint — fail-closed 409, no steal/delete.
  */
 export async function upsertPushSubscriptionForUser(
   db: PrismaClient,
@@ -129,37 +154,77 @@ export async function upsertPushSubscriptionForUser(
     platform: string | null;
   }
 ): Promise<{ userId: number }> {
-  await db.pushSubscription.upsert({
-    where: { endpoint: input.endpoint },
-    create: {
-      userId,
-      endpoint: input.endpoint,
-      p256dh: input.p256dh,
-      auth: input.auth,
-      userAgent: input.userAgent,
-      platform: input.platform,
-      enabled: true,
-    },
-    update: {
-      userId,
-      p256dh: input.p256dh,
-      auth: input.auth,
-      userAgent: input.userAgent,
-      platform: input.platform,
-      enabled: true,
-    },
+  const existing = await db.pushSubscription.findFirst({
+    where: { userId, endpoint: input.endpoint },
+    select: { id: true },
   });
-  return { userId };
+  if (existing) {
+    await db.pushSubscription.update({
+      where: { id: existing.id },
+      data: {
+        p256dh: input.p256dh,
+        auth: input.auth,
+        userAgent: input.userAgent,
+        platform: input.platform,
+        enabled: true,
+      },
+    });
+    return { userId };
+  }
+  try {
+    await db.pushSubscription.create({
+      data: {
+        userId,
+        endpoint: input.endpoint,
+        p256dh: input.p256dh,
+        auth: input.auth,
+        userAgent: input.userAgent,
+        platform: input.platform,
+        enabled: true,
+      },
+    });
+    return { userId };
+  } catch (e) {
+    if (
+      !(e instanceof Prisma.PrismaClientKnownRequestError) ||
+      e.code !== "P2002"
+    ) {
+      throw e;
+    }
+    const mine = await db.pushSubscription.findFirst({
+      where: { userId, endpoint: input.endpoint },
+      select: { id: true },
+    });
+    if (mine) return { userId };
+    throw new PushSubscriptionError(
+      SAME_DEVICE_PREPARE_ERROR,
+      SAME_DEVICE_PREPARE_MESSAGE,
+      409
+    );
+  }
 }
 
-/** Hard delete this user's row for the endpoint (PII minimization). */
+/**
+ * Device-level unsubscribe: current User must own a mapping for this endpoint,
+ * then every User mapping for the same physical endpoint is removed.
+ */
 export async function deletePushSubscriptionForUser(
   db: PrismaClient,
   userId: number,
   endpoint: string
 ): Promise<{ deleted: number }> {
-  const result = await db.pushSubscription.deleteMany({
+  const owned = await db.pushSubscription.count({
     where: { userId, endpoint },
+  });
+  if (owned < 1) {
+    throw new PushSubscriptionError(
+      "forbidden",
+      "이 기기 알림을 해제할 수 없습니다.",
+      403
+    );
+  }
+  const result = await db.pushSubscription.deleteMany({
+    where: { endpoint },
   });
   return { deleted: result.count };
 }

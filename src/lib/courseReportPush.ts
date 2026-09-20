@@ -16,7 +16,6 @@
  */
 
 import type { Prisma, PrismaClient } from "@prisma/client";
-import { mapWithConcurrency } from "@/lib/boardPushRecipients";
 import {
   COURSE_REPORT_STATUSES,
   type CourseReportStatusCode,
@@ -32,10 +31,10 @@ import {
   buildCourseReportStatusPushPayload,
 } from "@/lib/courseReportPushMessage";
 import { isPushStoreMissing } from "@/lib/pushSubscriptionStore";
+import { deliverWebPushMappings } from "@/lib/pushDelivery";
 import { isWebPushSendConfigured, readWebPushSendCredentials } from "@/lib/pushVapid";
 import { normalizeAppRole } from "@/lib/sessionCookies";
 import {
-  deliverWebPush,
   type WebPushPayload,
   type WebPushSendFn,
 } from "@/lib/webPushSender";
@@ -54,6 +53,7 @@ export type CourseReportPushResult = {
   sent: number;
   failed: number;
   removedStale: number;
+  deliveries: number;
   error?: string;
 };
 
@@ -84,6 +84,7 @@ const emptyResult = (
   sent: 0,
   failed: 0,
   removedStale: 0,
+  deliveries: 0,
   ...extra,
 });
 
@@ -235,34 +236,12 @@ async function deliverToSubscriptions(
   payload: WebPushPayload,
   sendFn: WebPushSendFn | undefined,
   creds: NonNullable<ReturnType<typeof readWebPushSendCredentials>>
-): Promise<{ sent: number; failed: number; removedStale: number }> {
-  let sent = 0;
-  let failed = 0;
-  let removedStale = 0;
-  await mapWithConcurrency(subscriptions, COURSE_REPORT_PUSH_CONCURRENCY, async (sub) => {
-    const result = await deliverWebPush(
-      { endpoint: sub.endpoint, p256dh: sub.p256dh, auth: sub.auth },
-      payload,
-      { sendFn, credentials: creds }
-    );
-    if (result === "sent") {
-      await db.pushSubscription.update({
-        where: { id: sub.id },
-        data: { lastSuccessAt: new Date() },
-      });
-      sent += 1;
-    } else if (result === "gone") {
-      await db.pushSubscription.delete({ where: { id: sub.id } });
-      removedStale += 1;
-    } else {
-      await db.pushSubscription.update({
-        where: { id: sub.id },
-        data: { lastFailureAt: new Date() },
-      });
-      failed += 1;
-    }
+): Promise<{ sent: number; failed: number; removedStale: number; deliveries: number }> {
+  return deliverWebPushMappings(db, subscriptions, payload, {
+    sendFn,
+    credentials: creds,
+    concurrency: COURSE_REPORT_PUSH_CONCURRENCY,
   });
-  return { sent, failed, removedStale };
 }
 
 export async function sendCourseReportPush(
@@ -314,6 +293,7 @@ export async function sendCourseReportPush(
           claim: "NO_RECIPIENTS",
           recipients: 0,
           subscriptions: 0,
+          deliveries: 0,
         });
         return emptyResult({ error: "no_recipients" });
       }
@@ -332,6 +312,7 @@ export async function sendCourseReportPush(
         sent: delivered.sent,
         failed: delivered.failed,
         removedStale: delivered.removedStale,
+        deliveries: delivered.deliveries,
       });
       return {
         ok: true,
@@ -340,6 +321,7 @@ export async function sendCourseReportPush(
         sent: delivered.sent,
         failed: delivered.failed,
         removedStale: delivered.removedStale,
+        deliveries: delivered.deliveries,
       };
     } catch (e) {
       await finishCourseReportPushAudit(db, claim.auditId, event, {

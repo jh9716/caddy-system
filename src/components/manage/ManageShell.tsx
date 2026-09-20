@@ -46,6 +46,11 @@ const NAV = [
     match: (p: string) => p.startsWith("/manage/alimtalk"),
   },
   {
+    href: "/manage/notifications",
+    label: "알림 설정",
+    match: (p: string) => p.startsWith("/manage/notifications"),
+  },
+  {
     href: "/manage/push-test",
     label: "푸시 알림 테스트",
     match: (p: string) => p.startsWith("/manage/push-test"),

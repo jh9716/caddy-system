@@ -15,7 +15,9 @@ export type PushNotificationSurface =
 
 export const PUSH_UI_TITLE = "알림 설정";
 export const PUSH_UI_ENABLE = "알림 받기";
-export const PUSH_UI_DISABLE = "알림 끄기";
+export const PUSH_UI_DISABLE = "이 기기 알림 해제";
+export const PUSH_UI_DISABLE_HINT =
+  "이 기기에서 등록된 VERTHILL 알림이 모두 해제됩니다.";
 export const PUSH_UI_ON = "알림 사용 중";
 export const PUSH_UI_OFF = "알림 꺼짐";
 export const PUSH_UI_BLOCKED = "브라우저에서 차단됨";
@@ -32,6 +34,7 @@ export function resolvePushNotificationSurface(input: {
   pushManagerSupported: boolean;
   permission: PushPermission;
   localSubscription: boolean;
+  serverRegistered: boolean;
 }): PushNotificationSurface {
   if (!input.configured) return "preparing";
   if (input.ios && !input.standalone) return "ios-add-to-home";
@@ -43,7 +46,13 @@ export function resolvePushNotificationSurface(input: {
     return "unsupported";
   }
   if (input.permission === "denied") return "blocked";
-  if (input.localSubscription && input.permission === "granted") return "on";
+  if (
+    input.localSubscription &&
+    input.permission === "granted" &&
+    input.serverRegistered
+  ) {
+    return "on";
+  }
   return "off";
 }
 

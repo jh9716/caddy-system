@@ -8,6 +8,7 @@
 import { PrismaClient } from "@prisma/client";
 
 const MIGRATION_NAME = "20260917200000_push_subscription";
+const NEXT_MIGRATION_NAME = "20260920013000_push_subscription_user_endpoint_unique";
 
 const MAJOR_TABLES = [
   "User",
@@ -128,12 +129,46 @@ async function main() {
        FROM "_prisma_migrations"
        WHERE migration_name = '${MIGRATION_NAME}'`
     );
+    const nextApplied = await prisma.$queryRawUnsafe<
+      Array<{ migration_name: string; finished_at: Date | null; checksum: string }>
+    >(
+      `SELECT migration_name, finished_at, checksum
+       FROM "_prisma_migrations"
+       WHERE migration_name = '${NEXT_MIGRATION_NAME}'`
+    );
 
     const major: Record<string, number | null> = {};
     for (const t of MAJOR_TABLES) {
       major[t] = await countIfExists(prisma, t);
     }
     const pushRows = exists ? await countIfExists(prisma, "PushSubscription") : null;
+    const endpointDistinct = exists
+      ? await prisma.$queryRawUnsafe<
+          Array<{ rows: bigint | number; distinct_endpoints: bigint | number }>
+        >(
+          `SELECT COUNT(*)::bigint AS rows,
+                  COUNT(DISTINCT endpoint)::bigint AS distinct_endpoints
+           FROM "PushSubscription"`
+        )
+      : [];
+    const rowSummaries = exists
+      ? await prisma.$queryRawUnsafe<
+          Array<{ id: number; userId: number; enabled: boolean }>
+        >(
+          `SELECT id, "userId", enabled
+           FROM "PushSubscription"
+           ORDER BY id`
+        )
+      : [];
+    const duplicateEndpointGroups = exists
+      ? await prisma.$queryRawUnsafe<Array<{ n: bigint | number }>>(
+          `SELECT COUNT(*)::bigint AS n FROM (
+             SELECT 1 FROM "PushSubscription"
+             GROUP BY endpoint
+             HAVING COUNT(*) > 1
+           ) d`
+        )
+      : [];
 
     console.log(
       JSON.stringify(
@@ -158,7 +193,23 @@ async function main() {
             finished: Boolean(r.finished_at),
             checksumPresent: Boolean(r.checksum),
           })),
+          nextMigrationApplied: nextApplied.map((r) => ({
+            name: r.migration_name,
+            finished: Boolean(r.finished_at),
+            checksumPresent: Boolean(r.checksum),
+          })),
           pushSubscriptionRows: pushRows,
+          endpointDistinctCount: endpointDistinct[0]
+            ? Number(endpointDistinct[0].distinct_endpoints ?? 0)
+            : null,
+          duplicateEndpointGroups: duplicateEndpointGroups[0]
+            ? Number(duplicateEndpointGroups[0].n ?? 0)
+            : null,
+          rowSummaries: rowSummaries.map((r) => ({
+            id: r.id,
+            userId: r.userId,
+            enabled: r.enabled,
+          })),
           majorTableCounts: major,
         },
         null,

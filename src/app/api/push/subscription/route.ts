@@ -8,13 +8,18 @@ import {
 import { clearSessionCookies } from "@/lib/sessionCookies";
 import { isWebPushConfigured, vapidClientConfig } from "@/lib/pushVapid";
 import {
+  isEnvOnlyNonAdmin,
+  resolvePushSubscriptionUserId,
+} from "@/lib/adminPushUser";
+import {
   PushSubscriptionError,
   deletePushSubscriptionForUser,
   isPushStoreMissing,
   parsePushSubscriptionInput,
   upsertPushSubscriptionForUser,
-  userHasEnabledPushSubscription,
+  userHasEnabledPushSubscriptionForEndpoint,
   validatePushEndpoint,
+  PUSH_ENDPOINT_HEADER,
 } from "@/lib/pushSubscriptionStore";
 
 export const dynamic = "force-dynamic";
@@ -62,21 +67,43 @@ async function requireDbPushUser(req: NextRequest) {
     clearSessionCookies(res, req);
     return { error: res };
   }
-  if (auth.userId == null) {
+  const userId = await resolvePushSubscriptionUserId(prisma, auth);
+  if (userId == null) {
+    if (isEnvOnlyNonAdmin(auth)) {
+      return {
+        error: NextResponse.json(
+          {
+            error: "unsupported",
+            message: "환경변수 계정은 알림을 등록할 수 없습니다.",
+          },
+          { status: 400 }
+        ),
+      };
+    }
     return {
       error: NextResponse.json(
         {
-          error: "unsupported",
-          message: "환경변수 계정은 알림을 등록할 수 없습니다.",
+          error: "forbidden",
+          message: "관리자 계정을 찾을 수 없습니다.",
         },
-        { status: 400 }
+        { status: 403 }
       ),
     };
   }
-  return { auth, userId: auth.userId };
+  return { auth, userId };
 }
 
-/** GET — public VAPID + whether this User has an enabled row. No endpoint/keys. */
+function readPushEndpointHeader(req: NextRequest): string | null {
+  const raw = req.headers.get(PUSH_ENDPOINT_HEADER);
+  if (!raw) return null;
+  try {
+    return validatePushEndpoint(raw);
+  } catch {
+    return null;
+  }
+}
+
+/** GET — public VAPID + whether this User+this browser endpoint is registered. No endpoint/keys. */
 export async function GET(req: NextRequest) {
   const gate = await requireDbPushUser(req);
   if (gate.error) return gate.error;
@@ -89,7 +116,11 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const exists = await userHasEnabledPushSubscription(prisma, gate.userId);
+    const endpoint = readPushEndpointHeader(req);
+    const exists =
+      endpoint != null
+        ? await userHasEnabledPushSubscriptionForEndpoint(prisma, gate.userId, endpoint)
+        : false;
     return NextResponse.json(
       statusJson({
         configured: true,
@@ -150,7 +181,7 @@ export async function POST(req: NextRequest) {
   }
 }
 
-/** DELETE — remove this user's row for the endpoint. Logout does not call this. */
+/** DELETE — device-level: owner check, then all mappings for this endpoint. Logout does not call this. */
 export async function DELETE(req: NextRequest) {
   const gate = await requireDbPushUser(req);
   if (gate.error) return gate.error;

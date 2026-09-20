@@ -9,12 +9,10 @@ import {
   TEST_PUSH_TITLE,
   TEST_PUSH_URL,
 } from "@/lib/webPushTestConstants";
-import {
-  deliverWebPush,
-  type WebPushSendFn,
-} from "@/lib/webPushSender";
-import { isWebPushSendConfigured, readWebPushSendCredentials } from "@/lib/pushVapid";
+import { deliverWebPushMappings } from "@/lib/pushDelivery";
 import { isPushStoreMissing } from "@/lib/pushSubscriptionStore";
+import { isWebPushSendConfigured, readWebPushSendCredentials } from "@/lib/pushVapid";
+import { type WebPushSendFn } from "@/lib/webPushSender";
 
 export class PushTestError extends Error {
   constructor(
@@ -32,6 +30,7 @@ export type PushTestAggregate = {
   sent: number;
   failed: number;
   removedStale: number;
+  deliveries: number;
   error?: string;
 };
 
@@ -98,36 +97,28 @@ export async function sendTestPushToUser(
     throw new PushTestError("retired", "퇴사한 캐디에게는 보낼 수 없습니다.", 400);
   }
   if (user.pushSubscriptions.length === 0) {
-    return { ok: true, sent: 0, failed: 0, removedStale: 0, error: "no_subscription" };
+    return { ok: true, sent: 0, failed: 0, removedStale: 0, deliveries: 0, error: "no_subscription" };
   }
 
-  let sent = 0;
-  let failed = 0;
-  let removedStale = 0;
-  for (const sub of user.pushSubscriptions) {
-    const result = await deliverWebPush(
-      { endpoint: sub.endpoint, p256dh: sub.p256dh, auth: sub.auth },
-      { title: TEST_PUSH_TITLE, body: TEST_PUSH_BODY, url: TEST_PUSH_URL },
-      { sendFn: options?.sendFn, credentials: creds }
-    );
-    if (result === "sent") {
-      await db.pushSubscription.update({
-        where: { id: sub.id },
-        data: { lastSuccessAt: new Date() },
-      });
-      sent += 1;
-    } else if (result === "gone") {
-      await db.pushSubscription.delete({ where: { id: sub.id } });
-      removedStale += 1;
-    } else {
-      await db.pushSubscription.update({
-        where: { id: sub.id },
-        data: { lastFailureAt: new Date() },
-      });
-      failed += 1;
-    }
-  }
-  return { ok: true, sent, failed, removedStale };
+  const delivered = await deliverWebPushMappings(
+    db,
+    user.pushSubscriptions.map((sub) => ({
+      id: sub.id,
+      userId,
+      endpoint: sub.endpoint,
+      p256dh: sub.p256dh,
+      auth: sub.auth,
+    })),
+    { title: TEST_PUSH_TITLE, body: TEST_PUSH_BODY, url: TEST_PUSH_URL },
+    { sendFn: options?.sendFn, credentials: creds, concurrency: 1 }
+  );
+  return {
+    ok: true,
+    sent: delivered.sent,
+    failed: delivered.failed,
+    removedStale: delivered.removedStale,
+    deliveries: delivered.deliveries,
+  };
 }
 
 export function isPushTestStoreMissing(e: unknown): boolean {

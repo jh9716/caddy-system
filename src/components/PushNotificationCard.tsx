@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import {
   PUSH_UI_DISABLE,
+  PUSH_UI_DISABLE_HINT,
   PUSH_UI_ENABLE,
   PUSH_UI_TITLE,
   PushNotificationSurface,
@@ -12,6 +13,10 @@ import {
   vapidPublicKeyToBytes,
   type PushPermission,
 } from "@/lib/pushNotificationUi";
+import {
+  SAME_DEVICE_PREPARE_ERROR,
+  SAME_DEVICE_PREPARE_MESSAGE,
+} from "@/lib/pushSubscriptionErrors";
 
 type StatusResponse = {
   configured?: boolean;
@@ -19,6 +24,7 @@ type StatusResponse = {
   subscriptionExists?: boolean;
   enabled?: boolean;
   error?: string;
+  message?: string;
 };
 
 function readPermission(): PushPermission {
@@ -28,7 +34,19 @@ function readPermission(): PushPermission {
   return "unsupported";
 }
 
-export default function PushNotificationCard() {
+export default function PushNotificationCard({
+  title = PUSH_UI_TITLE,
+  enableLabel = PUSH_UI_ENABLE,
+  disableLabel = PUSH_UI_DISABLE,
+  disableHint = PUSH_UI_DISABLE_HINT,
+  statusText,
+}: {
+  title?: string;
+  enableLabel?: string;
+  disableLabel?: string;
+  disableHint?: string;
+  statusText?: (surface: PushNotificationSurface) => string;
+} = {}) {
   const [configured, setConfigured] = useState(false);
   const [publicKey, setPublicKey] = useState<string | null>(null);
   const [standalone, setStandalone] = useState(false);
@@ -37,6 +55,7 @@ export default function PushNotificationCard() {
   const [pushManagerSupported, setPushManagerSupported] = useState(false);
   const [notificationSupported, setNotificationSupported] = useState(false);
   const [localSubscription, setLocalSubscription] = useState(false);
+  const [serverRegistered, setServerRegistered] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -69,18 +88,38 @@ export default function PushNotificationCard() {
   }, []);
 
   const refreshServer = useCallback(async () => {
+    let endpoint: string | undefined;
+    try {
+      if ("serviceWorker" in navigator && "PushManager" in window) {
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.getSubscription();
+        endpoint = sub?.endpoint || undefined;
+      }
+    } catch {
+      endpoint = undefined;
+    }
     const res = await fetch("/api/push/subscription", {
       credentials: "include",
       cache: "no-store",
+      headers: endpoint ? { "x-push-endpoint": endpoint } : undefined,
     });
     const data = (await res.json().catch(() => ({}))) as StatusResponse;
     if (res.status === 503 && data.error === "auth_unavailable") {
       setConfigured(false);
       setPublicKey(null);
+      setServerRegistered(false);
+      return;
+    }
+    if (res.status === 403) {
+      setConfigured(false);
+      setPublicKey(null);
+      setServerRegistered(false);
+      setError(typeof data.message === "string" ? data.message : "관리자 계정을 찾을 수 없습니다.");
       return;
     }
     setConfigured(data.configured === true);
     setPublicKey(typeof data.vapidPublicKey === "string" ? data.vapidPublicKey : null);
+    setServerRegistered(data.subscriptionExists === true);
   }, []);
 
   useEffect(() => {
@@ -100,6 +139,7 @@ export default function PushNotificationCard() {
         pushManagerSupported,
         permission,
         localSubscription,
+        serverRegistered,
       }),
     [
       configured,
@@ -109,6 +149,7 @@ export default function PushNotificationCard() {
       pushManagerSupported,
       permission,
       localSubscription,
+      serverRegistered,
     ]
   );
 
@@ -136,10 +177,14 @@ export default function PushNotificationCard() {
         return;
       }
       const reg = await navigator.serviceWorker.ready;
-      const sub = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: keyBytes,
-      });
+      const existing = await reg.pushManager.getSubscription();
+      const sub =
+        existing ??
+        (await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: keyBytes,
+        }));
+      const createdNew = !existing;
       const json = sub.toJSON();
       const res = await fetch("/api/push/subscription", {
         method: "POST",
@@ -153,13 +198,23 @@ export default function PushNotificationCard() {
         }),
       });
       if (!res.ok) {
-        try {
-          await sub.unsubscribe();
-        } catch {
-          // keep local/server consistent on failed register
+        const errBody = (await res.json().catch(() => ({}))) as StatusResponse;
+        if (res.status !== 409 && createdNew) {
+          try {
+            await sub.unsubscribe();
+          } catch {
+            // keep local/server consistent on failed first register
+          }
         }
-        setError("알림을 등록하지 못했습니다.");
+        setError(
+          res.status === 409 || errBody.error === SAME_DEVICE_PREPARE_ERROR
+            ? typeof errBody.message === "string" && errBody.message
+              ? errBody.message
+              : SAME_DEVICE_PREPARE_MESSAGE
+            : "알림을 등록하지 못했습니다."
+        );
         await refreshLocal();
+        await refreshServer();
         return;
       }
       await refreshLocal();
@@ -181,17 +236,27 @@ export default function PushNotificationCard() {
         const reg = await navigator.serviceWorker.ready;
         const sub = await reg.pushManager.getSubscription();
         endpoint = sub?.endpoint ?? null;
-        if (sub) {
-          await sub.unsubscribe();
-        }
       }
       if (endpoint) {
-        await fetch("/api/push/subscription", {
+        const res = await fetch("/api/push/subscription", {
           method: "DELETE",
           credentials: "include",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ endpoint }),
         });
+        if (!res.ok && res.status !== 404) {
+          setError("알림을 해제하지 못했습니다.");
+          await refreshLocal();
+          await refreshServer();
+          return;
+        }
+      }
+      if ("serviceWorker" in navigator && "PushManager" in window) {
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.getSubscription();
+        if (sub) {
+          await sub.unsubscribe();
+        }
       }
       await refreshLocal();
       await refreshServer();
@@ -205,12 +270,18 @@ export default function PushNotificationCard() {
   const showEnable = surface === "off";
   const showDisable = surface === "on";
 
+  const status = statusText ? statusText(surface) : pushSurfaceLabel(surface);
+
   return (
-    <section aria-label={PUSH_UI_TITLE} style={cardStyle}>
-      <div style={{ fontSize: 15, fontWeight: 800, color: "#163028" }}>{PUSH_UI_TITLE}</div>
-      <p style={{ margin: "6px 0 0", fontSize: 13, color: "#4d5a52" }}>
-        {pushSurfaceLabel(surface)}
-      </p>
+    <section aria-label={title} style={cardStyle}>
+      <div style={{ fontSize: 15, fontWeight: 800, color: "#163028" }}>{title}</div>
+      {status ? (
+        <p style={{ margin: "6px 0 0", fontSize: 13, color: "#4d5a52" }}>{status}</p>
+      ) : (
+        <p style={{ margin: "6px 0 0", fontSize: 13, color: "#4d5a52" }}>
+          {pushSurfaceLabel(surface)}
+        </p>
+      )}
       {showEnable && (
         <button
           type="button"
@@ -218,18 +289,23 @@ export default function PushNotificationCard() {
           disabled={busy}
           style={buttonStyle}
         >
-          {PUSH_UI_ENABLE}
+          {enableLabel}
         </button>
       )}
       {showDisable && (
-        <button
-          type="button"
-          onClick={() => void onDisable()}
-          disabled={busy}
-          style={secondaryButtonStyle}
-        >
-          {PUSH_UI_DISABLE}
-        </button>
+        <>
+          <button
+            type="button"
+            onClick={() => void onDisable()}
+            disabled={busy}
+            style={secondaryButtonStyle}
+          >
+            {disableLabel}
+          </button>
+          {disableHint ? (
+            <p style={{ margin: "8px 0 0", fontSize: 12, color: "#6b7280" }}>{disableHint}</p>
+          ) : null}
+        </>
       )}
       {error ? (
         <p style={{ margin: "8px 0 0", fontSize: 12, color: "#9a3412" }}>{error}</p>
