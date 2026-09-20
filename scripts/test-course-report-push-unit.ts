@@ -157,13 +157,13 @@ async function main() {
       assert(!src.includes("parentId"), `${rel} no parentId`);
     }
     const core = read("src/lib/courseReportPush.ts");
-    assert(core.includes("deliverWebPush"), "reuses deliverWebPush");
+    assert(core.includes("deliverWebPushMappings"), "reuses delivery helper");
     assert(core.includes("pg_advisory_xact_lock"), "advisory lock");
     assert(core.includes("tx.audit.create"), "Prisma Audit INSERT in claim tx");
     assert(core.includes('payload->>\'kind\''), "Audit kind lookup");
     assert(
-      core.indexOf("claimCourseReportPushSend(") < core.lastIndexOf("await deliverWebPush"),
-      "claim before deliverWebPush"
+      core.indexOf("claimCourseReportPushSend(") < core.lastIndexOf("deliverWebPushMappings"),
+      "claim before deliverWebPushMappings"
     );
     assert(!core.includes("pushSentAt"), "no CourseReport pushSentAt field");
     assert(core.includes("normalizeAppRole"), "admin role via normalizeAppRole");
@@ -178,8 +178,8 @@ async function main() {
       .readdirSync(path.resolve("prisma/migrations"))
       .filter((name) => /^\d{14}_/.test(name));
     assert(
-      !migDirs.some((name) => name > "20260919070000_comment_v1" && name.includes("push")),
-      "no new push migration"
+      !migDirs.some((name) => name.includes("course_report") && name.includes("push")),
+      "no CourseReport pushSentAt migration"
     );
     assert(
       !migDirs.some((name) => name > "20260919070000_comment_v1" && name.includes("course_report")),

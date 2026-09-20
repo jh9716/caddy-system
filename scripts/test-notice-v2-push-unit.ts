@@ -232,12 +232,12 @@ async function main() {
       assert(!src.includes("WEB_PUSH_VAPID_PRIVATE_KEY"), `${rel} no private env`);
     }
     const core = read("src/lib/noticePush.ts");
-    assert(core.includes("deliverWebPush"), "reuses deliverWebPush");
+    assert(core.includes("deliverWebPushMappings"), "reuses delivery helper");
     assert(core.includes("pg_advisory_xact_lock"), "advisory lock");
     assert(core.includes("pushSentAt"), "claim uses pushSentAt");
     assert(
-      core.indexOf("claimNoticePushSend(") < core.lastIndexOf("await deliverWebPush"),
-      "claim invoked before deliverWebPush"
+      core.indexOf("claimNoticePushSend(") < core.lastIndexOf("await deliverWebPushMappings"),
+      "claim invoked before deliverWebPushMappings"
     );
     assert(!/from ["']@\/lib\/audit["']/.test(core), "does not import console audit helper");
     assert(!core.includes("cron"), "no cron");

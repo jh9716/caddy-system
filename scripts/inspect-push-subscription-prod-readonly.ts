@@ -134,6 +134,33 @@ async function main() {
       major[t] = await countIfExists(prisma, t);
     }
     const pushRows = exists ? await countIfExists(prisma, "PushSubscription") : null;
+    const endpointDistinct = exists
+      ? await prisma.$queryRawUnsafe<
+          Array<{ rows: bigint | number; distinct_endpoints: bigint | number }>
+        >(
+          `SELECT COUNT(*)::bigint AS rows,
+                  COUNT(DISTINCT endpoint)::bigint AS distinct_endpoints
+           FROM "PushSubscription"`
+        )
+      : [];
+    const rowSummaries = exists
+      ? await prisma.$queryRawUnsafe<
+          Array<{ id: number; userId: number; enabled: boolean }>
+        >(
+          `SELECT id, "userId", enabled
+           FROM "PushSubscription"
+           ORDER BY id`
+        )
+      : [];
+    const duplicateEndpointGroups = exists
+      ? await prisma.$queryRawUnsafe<Array<{ n: bigint | number }>>(
+          `SELECT COUNT(*)::bigint AS n FROM (
+             SELECT 1 FROM "PushSubscription"
+             GROUP BY endpoint
+             HAVING COUNT(*) > 1
+           ) d`
+        )
+      : [];
 
     console.log(
       JSON.stringify(
@@ -159,6 +186,17 @@ async function main() {
             checksumPresent: Boolean(r.checksum),
           })),
           pushSubscriptionRows: pushRows,
+          endpointDistinctCount: endpointDistinct[0]
+            ? Number(endpointDistinct[0].distinct_endpoints ?? 0)
+            : null,
+          duplicateEndpointGroups: duplicateEndpointGroups[0]
+            ? Number(duplicateEndpointGroups[0].n ?? 0)
+            : null,
+          rowSummaries: rowSummaries.map((r) => ({
+            id: r.id,
+            userId: r.userId,
+            enabled: r.enabled,
+          })),
           majorTableCounts: major,
         },
         null,

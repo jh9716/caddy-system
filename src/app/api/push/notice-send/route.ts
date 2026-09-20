@@ -33,6 +33,7 @@ export async function POST(req: NextRequest) {
       sent: result.sent,
       failed: result.failed,
       removedStale: result.removedStale,
+      ...(typeof result.deliveries === "number" ? { deliveries: result.deliveries } : {}),
       ...(result.error ? { error: result.error } : {}),
     });
   } catch (e) {

@@ -17,8 +17,9 @@ import {
   isPushStoreMissing,
   parsePushSubscriptionInput,
   upsertPushSubscriptionForUser,
-  userHasEnabledPushSubscription,
+  userHasEnabledPushSubscriptionForEndpoint,
   validatePushEndpoint,
+  PUSH_ENDPOINT_HEADER,
 } from "@/lib/pushSubscriptionStore";
 
 export const dynamic = "force-dynamic";
@@ -92,7 +93,17 @@ async function requireDbPushUser(req: NextRequest) {
   return { auth, userId };
 }
 
-/** GET — public VAPID + whether this User has an enabled row. No endpoint/keys. */
+function readPushEndpointHeader(req: NextRequest): string | null {
+  const raw = req.headers.get(PUSH_ENDPOINT_HEADER);
+  if (!raw) return null;
+  try {
+    return validatePushEndpoint(raw);
+  } catch {
+    return null;
+  }
+}
+
+/** GET — public VAPID + whether this User+this browser endpoint is registered. No endpoint/keys. */
 export async function GET(req: NextRequest) {
   const gate = await requireDbPushUser(req);
   if (gate.error) return gate.error;
@@ -105,7 +116,11 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const exists = await userHasEnabledPushSubscription(prisma, gate.userId);
+    const endpoint = readPushEndpointHeader(req);
+    const exists =
+      endpoint != null
+        ? await userHasEnabledPushSubscriptionForEndpoint(prisma, gate.userId, endpoint)
+        : false;
     return NextResponse.json(
       statusJson({
         configured: true,
@@ -166,7 +181,7 @@ export async function POST(req: NextRequest) {
   }
 }
 
-/** DELETE — remove this user's row for the endpoint. Logout does not call this. */
+/** DELETE — device-level: owner check, then all mappings for this endpoint. Logout does not call this. */
 export async function DELETE(req: NextRequest) {
   const gate = await requireDbPushUser(req);
   if (gate.error) return gate.error;

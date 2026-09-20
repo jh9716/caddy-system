@@ -104,7 +104,8 @@ async function envCookie() {
 async function jsonReq(
   method: string,
   cookie: string | undefined,
-  body?: unknown
+  body?: unknown,
+  extraHeaders?: Record<string, string>
 ) {
   const { GET, POST, DELETE } = await import(
     "../src/app/api/push/subscription/route"
@@ -114,6 +115,7 @@ async function jsonReq(
     headers: {
       ...(cookie ? { cookie } : {}),
       ...(body !== undefined ? { "content-type": "application/json" } : {}),
+      ...extraHeaders,
     },
   };
   if (body !== undefined) init.body = JSON.stringify(body);
@@ -140,14 +142,26 @@ async function main() {
     assert(schema.includes("pushSubscriptions PushSubscription[]"), "User relation");
     const model = schema.split("model PushSubscription")[1]?.split("}")[0] || "";
     assert(!/\bcaddyId\b/.test(model), "PushSubscription has no caddyId snapshot");
-    assert(model.includes("endpoint String @unique"), "endpoint unique in schema");
+    assert(!model.includes("endpoint String @unique"), "endpoint not unique alone");
+    assert(schema.includes("@@unique([userId, endpoint])"), "unique userId+endpoint");
+    assert(schema.includes("@@index([endpoint])"), "endpoint non-unique index");
+    assert(schema.includes("@@index([userId])"), "userId index");
     assert(sql.includes('CREATE TABLE "PushSubscription"'), "CREATE TABLE");
     assert(sql.includes("PushSubscription_userId_fkey"), "FK userId");
-    assert(sql.includes("PushSubscription_endpoint_key"), "unique endpoint");
+    assert(sql.includes("PushSubscription_endpoint_key"), "historical unique endpoint");
     assert(sql.includes("PushSubscription_userId_idx"), "userId index");
     assert(!sql.includes("DROP TABLE"), "no DROP TABLE");
     assert(!sql.includes("DROP COLUMN"), "no DROP COLUMN");
     assert(!sql.includes("ALTER TABLE \"User\" DROP"), "no User DROP");
+    const nextSql = read(
+      "prisma/migrations/20260920013000_push_subscription_user_endpoint_unique/migration.sql"
+    );
+    assert(nextSql.includes('DROP INDEX IF EXISTS "PushSubscription_endpoint_key"'), "drops endpoint unique");
+    assert(nextSql.includes("PushSubscription_userId_endpoint_key"), "compound unique");
+    assert(nextSql.includes("PushSubscription_endpoint_idx"), "endpoint index");
+    assert(!/^\s*(INSERT|UPDATE|DELETE)\b/im.test(nextSql), "no DML");
+    assert(!nextSql.includes("DROP TABLE"), "new migration no DROP TABLE");
+    assert(!nextSql.includes("DROP COLUMN"), "new migration no DROP COLUMN");
     const pkg = read("package.json");
     assert(pkg.includes("web-push"), "web-push is a server dependency for send");
   }
@@ -195,6 +209,7 @@ async function main() {
         pushManagerSupported: true,
         permission: "granted",
         localSubscription: true,
+        serverRegistered: false,
       }) === "preparing",
       "VAPID missing → preparing"
     );
@@ -207,6 +222,7 @@ async function main() {
         pushManagerSupported: true,
         permission: "default",
         localSubscription: false,
+        serverRegistered: false,
       }) === "ios-add-to-home",
       "iOS Safari tab → add to home"
     );
@@ -219,8 +235,22 @@ async function main() {
         pushManagerSupported: true,
         permission: "granted",
         localSubscription: true,
+        serverRegistered: true,
       }) === "on",
-      "iOS PWA standalone + granted → on"
+      "iOS PWA standalone + granted + server → on"
+    );
+    assert(
+      resolvePushNotificationSurface({
+        configured: true,
+        standalone: true,
+        ios: true,
+        notificationSupported: true,
+        pushManagerSupported: true,
+        permission: "granted",
+        localSubscription: true,
+        serverRegistered: false,
+      }) === "off",
+      "local sub without this User mapping → off"
     );
     assert(
       resolvePushNotificationSurface({
@@ -231,6 +261,7 @@ async function main() {
         pushManagerSupported: true,
         permission: "default",
         localSubscription: false,
+        serverRegistered: false,
       }) === "off",
       "Android/browser can enable"
     );
@@ -243,6 +274,7 @@ async function main() {
         pushManagerSupported: true,
         permission: "denied",
         localSubscription: false,
+        serverRegistered: false,
       }) === "blocked",
       "denied → blocked"
     );
@@ -255,6 +287,7 @@ async function main() {
         pushManagerSupported: false,
         permission: "unsupported",
         localSubscription: false,
+        serverRegistered: false,
       }) === "unsupported",
       "no PushManager → unsupported"
     );
@@ -392,15 +425,27 @@ async function main() {
       const again = await jsonReq("POST", cookie, validBody(ep));
       assert(again.status === 200, "re-POST 200");
       const rows = await prisma.pushSubscription.findMany({ where: { endpoint: ep } });
-      assert(rows.length === 1, "same endpoint → 1 row");
+      assert(rows.length === 1, "same user+endpoint → 1 row");
       assert(rows[0]?.userId === uCaddy.id, "owned by current user");
 
+      const getThis = await jsonReq("GET", cookie, undefined, { "x-push-endpoint": ep });
+      const getThisBody = await getThis.json();
+      assert(getThisBody.subscriptionExists === true, "GET this User+endpoint registered");
+      const getNoEp = await jsonReq("GET", cookie);
+      const getNoEpBody = await getNoEp.json();
+      assert(getNoEpBody.subscriptionExists === false, "GET without endpoint not this-device registered");
+
       const otherCookie = await cookieFor({ ...uOther, role: "caddy" });
+      const otherGet = await jsonReq("GET", otherCookie, undefined, { "x-push-endpoint": ep });
+      const otherGetBody = await otherGet.json();
+      assert(otherGetBody.subscriptionExists === false, "other User same endpoint not registered");
       const reassign = await jsonReq("POST", otherCookie, validBody(ep));
       assert(reassign.status === 200, "other user POST 200");
       const after = await prisma.pushSubscription.findMany({ where: { endpoint: ep } });
-      assert(after.length === 1, "reassign still 1 row");
-      assert(after[0]?.userId === uOther.id, "endpoint now owned by current user");
+      assert(after.length === 2, "same endpoint two User rows");
+      const owners = new Set(after.map((r) => r.userId));
+      assert(owners.has(uCaddy.id) && owners.has(uOther.id), "A/X and B/X coexist");
+      assert(after.find((r) => r.userId === uCaddy.id)?.userId === uCaddy.id, "A/X userId kept");
 
       const unlinkedCookie = await cookieFor({ ...uUnlinked, role: "caddy" });
       const unlinkedEp = `https://fcm.googleapis.com/fcm/send/${tag}-unlinked`;
@@ -428,11 +473,11 @@ async function main() {
       assert(del.status === 200, "DELETE 200");
       const delBody = await del.json();
       assert(delBody.subscriptionExists === false && delBody.enabled === false, "DELETE status off");
-      const gone = await prisma.pushSubscription.findUnique({ where: { endpoint: ep } });
+      const gone = await prisma.pushSubscription.findFirst({ where: { endpoint: ep } });
       assert(gone == null, "row deleted");
       const again = await jsonReq("POST", cookie, validBody(ep));
       assert(again.status === 200, "re-register after delete");
-      const back = await prisma.pushSubscription.findUnique({ where: { endpoint: ep } });
+      const back = await prisma.pushSubscription.findFirst({ where: { endpoint: ep } });
       assert(back?.userId === uCaddy.id, "re-register row exists");
       await deletePushSubscriptionForUser(prisma, uCaddy.id, ep);
     }

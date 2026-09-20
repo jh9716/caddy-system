@@ -15,7 +15,6 @@
  */
 
 import type { Prisma, PrismaClient } from "@prisma/client";
-import { mapWithConcurrency } from "@/lib/boardPushRecipients";
 import {
   NOTICE_PUSH_ALREADY_SENT_MESSAGE,
   NOTICE_PUSH_AUDIT_ACTION,
@@ -31,11 +30,9 @@ import {
   isNoticeInPublishWindow,
 } from "@/lib/noticeTarget";
 import { isPushStoreMissing } from "@/lib/pushSubscriptionStore";
+import { deliverWebPushMappings } from "@/lib/pushDelivery";
 import { isWebPushSendConfigured, readWebPushSendCredentials } from "@/lib/pushVapid";
-import {
-  deliverWebPush,
-  type WebPushSendFn,
-} from "@/lib/webPushSender";
+import { type WebPushSendFn } from "@/lib/webPushSender";
 
 export class NoticePushError extends Error {
   constructor(
@@ -72,6 +69,7 @@ export type NoticePushSendResult = {
   sent: number;
   failed: number;
   removedStale: number;
+  deliveries: number;
   error?: string;
 };
 
@@ -325,6 +323,7 @@ export async function sendNoticePush(
       sent: 0,
       failed: 0,
       removedStale: 0,
+      deliveries: 0,
       error: "no_recipients",
     };
   }
@@ -362,6 +361,7 @@ export async function sendNoticePush(
         sent: 0,
         failed: 0,
         removedStale: 0,
+        deliveries: 0,
         error: "no_recipients",
       };
     }
@@ -371,32 +371,10 @@ export async function sendNoticePush(
       title: again.title,
       important: again.important,
     });
-    let sent = 0;
-    let failed = 0;
-    let removedStale = 0;
-
-    await mapWithConcurrency(subscriptions, NOTICE_PUSH_CONCURRENCY, async (sub) => {
-      const result = await deliverWebPush(
-        { endpoint: sub.endpoint, p256dh: sub.p256dh, auth: sub.auth },
-        payload,
-        { sendFn: options?.sendFn, credentials: creds }
-      );
-      if (result === "sent") {
-        await db.pushSubscription.update({
-          where: { id: sub.id },
-          data: { lastSuccessAt: new Date() },
-        });
-        sent += 1;
-      } else if (result === "gone") {
-        await db.pushSubscription.delete({ where: { id: sub.id } });
-        removedStale += 1;
-      } else {
-        await db.pushSubscription.update({
-          where: { id: sub.id },
-          data: { lastFailureAt: new Date() },
-        });
-        failed += 1;
-      }
+    const delivered = await deliverWebPushMappings(db, subscriptions, payload, {
+      sendFn: options?.sendFn,
+      credentials: creds,
+      concurrency: NOTICE_PUSH_CONCURRENCY,
     });
 
     await writeNoticePushAudit(db, input.noticeId, {
@@ -404,18 +382,20 @@ export async function sendNoticePush(
       status: "SENT",
       recipients: recipientUserIds.length,
       subscriptions: counts.subscriptions,
-      sent,
-      failed,
-      removedStale,
+      sent: delivered.sent,
+      failed: delivered.failed,
+      removedStale: delivered.removedStale,
+      deliveries: delivered.deliveries,
     });
 
     return {
       ok: true,
       recipients: recipientUserIds.length,
       subscriptions: counts.subscriptions,
-      sent,
-      failed,
-      removedStale,
+      sent: delivered.sent,
+      failed: delivered.failed,
+      removedStale: delivered.removedStale,
+      deliveries: delivered.deliveries,
     };
   } catch (e) {
     const code = e instanceof NoticePushError ? e.code : "internal_error";

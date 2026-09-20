@@ -279,7 +279,7 @@ async function main() {
       assert(!src.includes("WEB_PUSH_VAPID_PRIVATE_KEY"), `${rel} no private env`);
     }
     const core = read("src/lib/boardPush.ts");
-    assert(core.includes("deliverWebPush"), "reuses deliverWebPush");
+    assert(core.includes("deliverWebPushMappings"), "reuses delivery helper");
     assert(core.includes("resolvePublishedFreshness"), "reuses freshness helper");
     assert(core.includes("loadFreshness"), "send reloads published+draft");
     assert(
@@ -292,8 +292,8 @@ async function main() {
     assert(core.includes("tx.audit.create"), "Prisma Audit INSERT in claim tx");
     assert(core.includes('SELECT id, payload FROM "Audit"'), "Prisma Audit SELECT");
     assert(
-      core.indexOf("claimBoardPushSend(") < core.lastIndexOf("await deliverWebPush"),
-      "claim invoked before deliverWebPush"
+      core.indexOf("claimBoardPushSend(") < core.lastIndexOf("await deliverWebPushMappings"),
+      "claim invoked before deliverWebPushMappings"
     );
     assert(!core.includes("publishDailyBoard("), "no auto send on publish");
     assert(!core.includes("cron"), "no cron");

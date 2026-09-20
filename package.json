@@ -30,6 +30,7 @@
     "test:pwa-install-unit": "bash scripts/tsx-safe.sh scripts/test-pwa-install-unit.ts",
     "test:admin-notifications-unit": "bash scripts/tsx-safe.sh scripts/test-admin-notifications-unit.ts",
     "test:push-subscription-unit": "bash scripts/tsx-safe.sh scripts/test-push-subscription-unit.ts",
+    "test:push-same-device-unit": "bash scripts/tsx-safe.sh scripts/test-push-same-device-unit.ts",
     "test:web-push-display-unit": "bash scripts/tsx-safe.sh scripts/test-web-push-display-unit.ts",
     "test:board-push-unit": "bash scripts/tsx-safe.sh scripts/test-board-push-unit.ts",
     "test:notice-v2-push-unit": "bash scripts/tsx-safe.sh scripts/test-notice-v2-push-unit.ts",

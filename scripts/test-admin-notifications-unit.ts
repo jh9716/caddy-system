@@ -21,6 +21,7 @@ import {
 import {
   ADMIN_PUSH_UI_DENIED,
   ADMIN_PUSH_UI_DISABLE,
+  ADMIN_PUSH_UI_DISABLE_HINT,
   ADMIN_PUSH_UI_ENABLE,
   ADMIN_PUSH_UI_REGISTERED,
   ADMIN_PUSH_UI_UNREGISTERED,
@@ -87,12 +88,18 @@ async function cookieFor(user: {
   )}`;
 }
 
-async function jsonReq(method: string, cookie: string | undefined, body?: unknown) {
+async function jsonReq(
+  method: string,
+  cookie: string | undefined,
+  body?: unknown,
+  extraHeaders?: Record<string, string>
+) {
   const init: ConstructorParameters<typeof NextRequest>[1] = {
     method,
     headers: {
       ...(cookie ? { cookie } : {}),
       ...(body !== undefined ? { "content-type": "application/json" } : {}),
+      ...extraHeaders,
     },
   };
   if (body !== undefined) init.body = JSON.stringify(body);
@@ -161,7 +168,8 @@ async function main() {
   section("admin surface copy");
   {
     assert(ADMIN_PUSH_UI_ENABLE === "이 기기 알림 받기", "enable copy");
-    assert(ADMIN_PUSH_UI_DISABLE === "알림 해제", "disable copy");
+    assert(ADMIN_PUSH_UI_DISABLE === "이 기기 알림 해제", "disable copy");
+    assert(ADMIN_PUSH_UI_DISABLE_HINT.includes("모두 해제"), "device-level hint");
     assert(adminPushSurfaceStatus("on").includes(ADMIN_PUSH_UI_REGISTERED), "registered");
     assert(adminPushSurfaceStatus("off").includes(ADMIN_PUSH_UI_UNREGISTERED), "unregistered");
     assert(adminPushSurfaceStatus("blocked").includes(ADMIN_PUSH_UI_DENIED), "denied");
@@ -293,7 +301,7 @@ async function main() {
       const ep = `https://fcm.googleapis.com/fcm/send/${tag}-admin-1`;
       const created = await jsonReq("POST", envAdminCookie, validBody(ep));
       assert(created.status === 200, "env admin POST 200");
-      const row = await prisma.pushSubscription.findUnique({ where: { endpoint: ep } });
+      const row = await prisma.pushSubscription.findFirst({ where: { endpoint: ep } });
       assert(row?.userId === dbAdmin.id, "saved under resolved admin User.id");
       if (row) subIds.push(row.id);
 
@@ -312,15 +320,15 @@ async function main() {
       });
       const caddyPost = await jsonReq("POST", caddyCookie, validBody(caddyEp));
       assert(caddyPost.status === 200, "caddy register still works");
-      const caddyRow = await prisma.pushSubscription.findUnique({ where: { endpoint: caddyEp } });
+      const caddyRow = await prisma.pushSubscription.findFirst({ where: { endpoint: caddyEp } });
       assert(caddyRow?.userId === dbCaddy.id, "caddy row owned by caddy");
       if (caddyRow) subIds.push(caddyRow.id);
 
       const del = await jsonReq("DELETE", envAdminCookie, { endpoint: ep });
       assert(del.status === 200, "admin unsubscribe DELETE 200");
-      const gone = await prisma.pushSubscription.findUnique({ where: { endpoint: ep } });
+      const gone = await prisma.pushSubscription.findFirst({ where: { endpoint: ep } });
       assert(gone == null, "admin endpoint deleted");
-      const stillCaddy = await prisma.pushSubscription.findUnique({ where: { endpoint: caddyEp } });
+      const stillCaddy = await prisma.pushSubscription.findFirst({ where: { endpoint: caddyEp } });
       assert(stillCaddy?.userId === dbCaddy.id, "caddy subscription untouched");
     }
 

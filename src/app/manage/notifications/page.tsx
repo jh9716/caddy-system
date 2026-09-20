@@ -3,6 +3,7 @@
 import PushNotificationCard from "@/components/PushNotificationCard";
 import {
   ADMIN_PUSH_UI_DISABLE,
+  ADMIN_PUSH_UI_DISABLE_HINT,
   ADMIN_PUSH_UI_ENABLE,
   ADMIN_PUSH_UI_TITLE,
   adminPushSurfaceStatus,
@@ -19,6 +20,7 @@ export default function ManageNotificationsPage() {
         title={ADMIN_PUSH_UI_TITLE}
         enableLabel={ADMIN_PUSH_UI_ENABLE}
         disableLabel={ADMIN_PUSH_UI_DISABLE}
+        disableHint={ADMIN_PUSH_UI_DISABLE_HINT}
         statusText={adminPushSurfaceStatus}
       />
       <style>{`

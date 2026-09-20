@@ -309,14 +309,15 @@ model Comment {
 }
 
 /// 기기별 Web Push subscription (1 User : N devices).
-/// endpoint unique. 관리자 1명 테스트 발송은 lastSuccessAt/lastFailureAt/stale delete만.
+/// 같은 browser endpoint는 User마다 한 row (unique userId+endpoint).
+/// 관리자 1명 테스트 발송은 lastSuccessAt/lastFailureAt/stale delete만.
 model PushSubscription {
   id     Int  @id @default(autoincrement())
   userId Int
   user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  /// PushService endpoint. unique — 같은 브라우저 endpoint는 현재 로그인 User 소유.
-  endpoint String @unique
+  /// PushService endpoint. 같은 endpoint를 여러 User가 공유할 수 있다.
+  endpoint String
   p256dh   String
   auth     String
   userAgent String?
@@ -328,6 +329,8 @@ model PushSubscription {
   lastSuccessAt DateTime?
   lastFailureAt DateTime?
 
+  @@unique([userId, endpoint])
+  @@index([endpoint])
   @@index([userId])
 }
 
