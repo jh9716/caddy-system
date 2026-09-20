@@ -162,6 +162,22 @@ assert(
   fs.existsSync(path.join(process.cwd(), "public/brand/splash-course.jpg")),
   "splash course photo exists"
 );
+assert(
+  fs.existsSync(path.join(process.cwd(), "public/brand/source-app-icon.png")),
+  "approved app icon source exists"
+);
+assert(
+  fs.existsSync(path.join(process.cwd(), "public/brand/source-splash.png")),
+  "approved splash source exists"
+);
+assert(
+  readSrc("scripts/build-brand-assets.cjs").includes("source-app-icon.png"),
+  "icon builder uses approved app icon source"
+);
+assert(
+  readSrc("scripts/build-brand-assets.cjs").includes("source-splash.png"),
+  "splash builder uses approved splash source"
+);
 assert(!readSrc("src/app/page.tsx").includes("hero-green.jpg"), "home does not reuse hero-green splash");
 assert(!readSrc("src/app/login/LoginClient.tsx").includes("hero-fairway.jpg"), "login does not reuse hero-fairway splash");
 assert(readSrc("src/app/page.tsx").includes("verthill-monogram.png") || readSrc("src/app/page.tsx").includes("PWA_MONOGRAM"), "home uses gold monogram");
