@@ -309,15 +309,14 @@ model Comment {
 }
 
 /// 기기별 Web Push subscription (1 User : N devices).
-/// PREPARE: endpoint unique를 유지한 채 unique(userId, endpoint)만 추가.
-/// 같은 endpoint를 두 User가 쓰려면 FINALIZE(#171) 이후.
+/// FINALIZE: endpoint unique 제거. unique(userId, endpoint) + endpoint lookup index.
 model PushSubscription {
   id     Int  @id @default(autoincrement())
   userId Int
   user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  /// PushService endpoint. PREPARE에서는 아직 unique.
-  endpoint String @unique
+  /// PushService endpoint. Logical mapping is unique(userId, endpoint).
+  endpoint String
   p256dh   String
   auth     String
   userAgent String?
@@ -330,6 +329,7 @@ model PushSubscription {
   lastFailureAt DateTime?
 
   @@unique([userId, endpoint])
+  @@index([endpoint])
   @@index([userId])
 }
 

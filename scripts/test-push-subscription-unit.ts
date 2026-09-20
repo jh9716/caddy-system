@@ -142,9 +142,10 @@ async function main() {
     assert(schema.includes("pushSubscriptions PushSubscription[]"), "User relation");
     const model = schema.split("model PushSubscription")[1]?.split("}")[0] || "";
     assert(!/\bcaddyId\b/.test(model), "PushSubscription has no caddyId snapshot");
-    assert(model.includes("endpoint String @unique"), "PREPARE keeps endpoint unique");
+    assert(!model.includes("endpoint String @unique"), "FINALIZE drops endpoint unique");
+    assert(/endpoint String\n/.test(model) || model.includes("endpoint String"), "endpoint column remains");
     assert(schema.includes("@@unique([userId, endpoint])"), "unique userId+endpoint");
-    assert(!schema.includes("@@index([endpoint])"), "no extra endpoint idx in PREPARE");
+    assert(schema.includes("@@index([endpoint])"), "non-unique endpoint idx");
     assert(schema.includes("@@index([userId])"), "userId index");
     assert(sql.includes('CREATE TABLE "PushSubscription"'), "CREATE TABLE");
     assert(sql.includes("PushSubscription_userId_fkey"), "FK userId");
@@ -159,10 +160,25 @@ async function main() {
     assert(nextSql.includes("PushSubscription_userId_endpoint_key"), "compound unique");
     assert(!nextSql.includes("PushSubscription_endpoint_key"), "does not drop/recreate endpoint unique");
     assert(!nextSql.includes("DROP INDEX"), "PREPARE no DROP INDEX");
-    assert(!nextSql.includes("PushSubscription_endpoint_idx"), "no extra endpoint idx");
+    assert(!nextSql.includes("PushSubscription_endpoint_idx"), "PREPARE no extra endpoint idx");
     assert(!/^\s*(INSERT|UPDATE|DELETE)\b/im.test(nextSql), "no DML");
     assert(!nextSql.includes("DROP TABLE"), "new migration no DROP TABLE");
     assert(!nextSql.includes("DROP COLUMN"), "new migration no DROP COLUMN");
+    const finalizeSql = read(
+      "prisma/migrations/20260920043000_push_subscription_drop_endpoint_unique/migration.sql"
+    );
+    assert(
+      finalizeSql.includes('DROP INDEX "PushSubscription_endpoint_key"'),
+      "FINALIZE drops endpoint unique"
+    );
+    assert(
+      finalizeSql.includes('CREATE INDEX "PushSubscription_endpoint_idx"'),
+      "FINALIZE non-unique endpoint idx"
+    );
+    assert(!finalizeSql.includes("userId_endpoint_key"), "FINALIZE does not touch compound unique");
+    assert(!/^\s*(INSERT|UPDATE|DELETE)\b/im.test(finalizeSql), "FINALIZE no DML");
+    assert(!finalizeSql.includes("DROP TABLE"), "FINALIZE no DROP TABLE");
+    assert(!finalizeSql.includes("DROP COLUMN"), "FINALIZE no DROP COLUMN");
     const pkg = read("package.json");
     assert(pkg.includes("web-push"), "web-push is a server dependency for send");
   }
@@ -463,12 +479,11 @@ async function main() {
       const otherGetBody = await otherGet.json();
       assert(otherGetBody.subscriptionExists === false, "other User same endpoint not registered");
       const reassign = await jsonReq("POST", otherCookie, validBody(ep));
-      assert(reassign.status === 409, "PREPARE other user same endpoint 409");
-      const reassignBody = await reassign.json();
-      assert(reassignBody.error === "same_device_multi_user_not_finalized", "409 code");
+      assert(reassign.status === 200, "FINALIZE other user same endpoint 200");
       const after = await prisma.pushSubscription.findMany({ where: { endpoint: ep } });
-      assert(after.length === 1, "PREPARE still 1 row");
-      assert(after[0]?.userId === uCaddy.id, "A/X userId not stolen");
+      assert(after.length === 2, "A/X + B/X coexist");
+      assert(after.some((r) => r.userId === uCaddy.id), "A/X userId not stolen");
+      assert(after.some((r) => r.userId === uOther.id), "B/X created");
 
       const unlinkedCookie = await cookieFor({ ...uUnlinked, role: "caddy" });
       const unlinkedEp = `https://fcm.googleapis.com/fcm/send/${tag}-unlinked`;

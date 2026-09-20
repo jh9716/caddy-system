@@ -318,11 +318,12 @@ async function main() {
         sessionVersion: 0,
       });
       const steal = await jsonReq("POST", caddyCookie, validBody(ep));
-      assert(steal.status === 409, "caddy same endpoint 409");
-      const stealBody = await steal.json();
-      assert(stealBody.error === "same_device_multi_user_not_finalized", "prepare 409 code");
+      assert(steal.status === 200, "caddy same endpoint 200");
       const stillAdmin = await prisma.pushSubscription.findMany({ where: { endpoint: ep } });
-      assert(stillAdmin.length === 1 && stillAdmin[0]?.userId === dbAdmin.id, "admin row not stolen");
+      assert(stillAdmin.length === 2, "admin + caddy mappings coexist");
+      assert(stillAdmin.some((r) => r.userId === dbAdmin.id), "admin row not stolen");
+      assert(stillAdmin.some((r) => r.userId === dbCaddy.id), "caddy mapping created");
+      for (const row of stillAdmin) subIds.push(row.id);
 
       const caddyEp = `https://fcm.googleapis.com/fcm/send/${tag}-caddy-keep`;
       const caddyPost = await jsonReq("POST", caddyCookie, validBody(caddyEp));
