@@ -9,6 +9,7 @@ import { PrismaClient } from "@prisma/client";
 
 const MIGRATION_NAME = "20260917200000_push_subscription";
 const NEXT_MIGRATION_NAME = "20260920013000_push_subscription_user_endpoint_unique";
+const FINALIZE_MIGRATION_NAME = "20260920043000_push_subscription_drop_endpoint_unique";
 
 const MAJOR_TABLES = [
   "User",
@@ -136,6 +137,13 @@ async function main() {
        FROM "_prisma_migrations"
        WHERE migration_name = '${NEXT_MIGRATION_NAME}'`
     );
+    const finalizeApplied = await prisma.$queryRawUnsafe<
+      Array<{ migration_name: string; finished_at: Date | null; checksum: string }>
+    >(
+      `SELECT migration_name, finished_at, checksum
+       FROM "_prisma_migrations"
+       WHERE migration_name = '${FINALIZE_MIGRATION_NAME}'`
+    );
 
     const major: Record<string, number | null> = {};
     for (const t of MAJOR_TABLES) {
@@ -169,6 +177,15 @@ async function main() {
            ) d`
         )
       : [];
+    const duplicateUserEndpointGroups = exists
+      ? await prisma.$queryRawUnsafe<Array<{ n: bigint | number }>>(
+          `SELECT COUNT(*)::bigint AS n FROM (
+             SELECT 1 FROM "PushSubscription"
+             GROUP BY "userId", endpoint
+             HAVING COUNT(*) > 1
+           ) d`
+        )
+      : [];
 
     console.log(
       JSON.stringify(
@@ -198,12 +215,20 @@ async function main() {
             finished: Boolean(r.finished_at),
             checksumPresent: Boolean(r.checksum),
           })),
+          finalizeMigrationApplied: finalizeApplied.map((r) => ({
+            name: r.migration_name,
+            finished: Boolean(r.finished_at),
+            checksumPresent: Boolean(r.checksum),
+          })),
           pushSubscriptionRows: pushRows,
           endpointDistinctCount: endpointDistinct[0]
             ? Number(endpointDistinct[0].distinct_endpoints ?? 0)
             : null,
           duplicateEndpointGroups: duplicateEndpointGroups[0]
             ? Number(duplicateEndpointGroups[0].n ?? 0)
+            : null,
+          duplicateUserEndpointGroups: duplicateUserEndpointGroups[0]
+            ? Number(duplicateUserEndpointGroups[0].n ?? 0)
             : null,
           rowSummaries: rowSummaries.map((r) => ({
             id: r.id,
