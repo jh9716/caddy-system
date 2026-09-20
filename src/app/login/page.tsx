@@ -15,15 +15,15 @@ export default async function LoginPage() {
   return (
     <Suspense
       fallback={
-        <div className="vh-auth-hero">
+        <div className="vh-auth-hero vh-splash-ivory">
           <div
-            className="vh-auth-bg"
-            style={{ backgroundImage: "url(/brand/hero-fairway.jpg)" }}
+            className="vh-auth-bg vh-splash-course"
+            style={{ backgroundImage: "url(/brand/splash-course.jpg)" }}
             aria-hidden
           />
-          <div className="vh-auth-overlay" aria-hidden />
+          <div className="vh-auth-overlay vh-splash-ivory-overlay" aria-hidden />
           <div className="vh-auth-frame">
-            <p style={{ color: "rgba(255,255,255,0.75)", marginTop: 40 }}>
+            <p style={{ color: "#163028", marginTop: 40 }}>
               로그인 준비 중…
             </p>
           </div>

@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { postLoginPath } from "@/lib/passwordPolicy";
 import PwaInstallCard from "@/components/PwaInstallCard";
+import { PWA_MONOGRAM, PWA_SPLASH_COURSE } from "@/lib/pwaManifest";
 
 const KAKAO_ERROR_MESSAGES: Record<string, string> = {
   kakao_config: "카카오 로그인 설정이 없습니다. 관리자에게 문의하세요.",
@@ -68,13 +69,13 @@ export default function LoginClient() {
   };
 
   return (
-    <div className="vh-auth-hero">
+    <div className="vh-auth-hero vh-splash-ivory">
       <div
-        className="vh-auth-bg"
-        style={{ backgroundImage: "url(/brand/hero-fairway.jpg)" }}
+        className="vh-auth-bg vh-splash-course"
+        style={{ backgroundImage: `url(${PWA_SPLASH_COURSE})` }}
         aria-hidden
       />
-      <div className="vh-auth-overlay" aria-hidden />
+      <div className="vh-auth-overlay vh-splash-ivory-overlay" aria-hidden />
 
       <div className="vh-auth-frame">
         <header className="vh-auth-top">
@@ -87,10 +88,10 @@ export default function LoginClient() {
           <div className="vh-auth-intro">
             <img
               className="vh-splash-mark vh-splash-mark-sm"
-              src="/icons/icon-192.png"
+              src={PWA_MONOGRAM}
               alt=""
-              width={56}
-              height={56}
+              width={72}
+              height={52}
             />
             <h1 className="vh-auth-title">VERTHILL</h1>
             <p className="vh-splash-subtitle">Caddy System</p>

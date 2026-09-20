@@ -5,8 +5,8 @@ export const PWA_SHORT_NAME = "VERTHILL";
 export const PWA_START_URL = "/caddy";
 export const PWA_SCOPE = "/";
 export const PWA_DISPLAY = "standalone" as const;
-/** Native PWA splash uses the same deep green as the app icon. */
-export const PWA_BACKGROUND_COLOR = "#163028";
+/** Native PWA splash matches the ivory launch screen, not the green icon tile. */
+export const PWA_BACKGROUND_COLOR = "#f6f1e8";
 export const PWA_THEME_COLOR = "#163028";
 export const PWA_LANG = "ko";
 export const PWA_SW_URL = "/sw.js";
@@ -20,3 +20,5 @@ export const PWA_APPLE_TOUCH_ICON = "/icons/apple-touch-icon.png";
 export const PWA_NOTIFICATION_ICON = "/icons/icon-192.png";
 export const PWA_NOTIFICATION_BADGE = "/icons/badge-96.png";
 export const PWA_SPLASH_PORTRAIT = "/brand/splash-portrait.jpg";
+export const PWA_MONOGRAM = "/brand/verthill-monogram.png";
+export const PWA_SPLASH_COURSE = "/brand/splash-course.jpg";

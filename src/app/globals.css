@@ -1827,18 +1827,19 @@ a {
 }
 
 .vh-splash-mark {
-  width: 72px;
-  height: 72px;
-  border-radius: 16px;
+  width: 88px;
+  height: 64px;
+  object-fit: contain;
+  border-radius: 0;
   margin: 0 0 18px;
-  box-shadow: 0 10px 28px rgba(8, 18, 14, 0.32);
+  box-shadow: none;
+  background: transparent;
   display: block;
 }
 
 .vh-splash-mark-sm {
-  width: 56px;
-  height: 56px;
-  border-radius: 14px;
+  width: 72px;
+  height: 52px;
   margin-bottom: 14px;
 }
 
@@ -1849,7 +1850,15 @@ a {
   font-weight: 500;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: rgba(233, 220, 200, 0.92);
+  color: #8a6e3d;
+}
+
+.vh-splash-kicker {
+  margin: 10px 0 0;
+  font-size: 0.68rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #7b7568;
 }
 
 .vh-splash-center {
@@ -1865,6 +1874,52 @@ a {
 
 .vh-splash-center .vh-home-cta {
   margin-top: 28px;
+}
+
+.vh-splash-ivory {
+  color: #163028;
+  background: #f6f1e8;
+}
+
+.vh-splash-ivory .vh-auth-brand {
+  color: #163028;
+}
+
+.vh-splash-ivory .vh-home-title,
+.vh-splash-ivory .vh-auth-title {
+  color: #163028;
+}
+
+.vh-splash-ivory .vh-home-lead,
+.vh-splash-ivory .vh-auth-lead {
+  color: rgba(22, 48, 40, 0.72);
+}
+
+.vh-splash-ivory .vh-home-top-link {
+  color: #163028;
+  border-color: rgba(22, 48, 40, 0.28);
+}
+
+.vh-splash-ivory .vh-home-top-link:hover {
+  border-color: var(--vh-gold);
+  color: #163028;
+}
+
+.vh-splash-course {
+  inset: auto 0 0 0;
+  height: 42%;
+  transform: none;
+}
+
+.vh-splash-ivory-overlay {
+  inset: auto 0 0 0;
+  height: 42%;
+  background: linear-gradient(
+    180deg,
+    #f6f1e8 0%,
+    rgba(246, 241, 232, 0.55) 28%,
+    rgba(246, 241, 232, 0) 100%
+  );
 }
 
 .vh-auth-login-col {

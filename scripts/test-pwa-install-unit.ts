@@ -152,8 +152,19 @@ assert(
   fs.existsSync(path.join(process.cwd(), "public/brand/app-icon-master.png")),
   "app-icon-master exists"
 );
-assert(PWA_BACKGROUND_COLOR === "#163028", "native splash background is deep green");
+assert(PWA_BACKGROUND_COLOR === "#f6f1e8", "native splash background is ivory");
 assert(PWA_THEME_COLOR === "#163028", "theme color deep green");
+assert(
+  fs.existsSync(path.join(process.cwd(), "public/brand/verthill-monogram.png")),
+  "gold monogram exists"
+);
+assert(
+  fs.existsSync(path.join(process.cwd(), "public/brand/splash-course.jpg")),
+  "splash course photo exists"
+);
+assert(!readSrc("src/app/page.tsx").includes("hero-green.jpg"), "home does not reuse hero-green splash");
+assert(!readSrc("src/app/login/LoginClient.tsx").includes("hero-fairway.jpg"), "login does not reuse hero-fairway splash");
+assert(readSrc("src/app/page.tsx").includes("verthill-monogram.png") || readSrc("src/app/page.tsx").includes("PWA_MONOGRAM"), "home uses gold monogram");
 
 section("root metadata");
 const layout = readSrc("src/app/layout.tsx");
