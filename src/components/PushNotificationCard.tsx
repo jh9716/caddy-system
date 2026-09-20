@@ -13,6 +13,10 @@ import {
   vapidPublicKeyToBytes,
   type PushPermission,
 } from "@/lib/pushNotificationUi";
+import {
+  SAME_DEVICE_PREPARE_ERROR,
+  SAME_DEVICE_PREPARE_MESSAGE,
+} from "@/lib/pushSubscriptionErrors";
 
 type StatusResponse = {
   configured?: boolean;
@@ -194,14 +198,21 @@ export default function PushNotificationCard({
         }),
       });
       if (!res.ok) {
-        if (createdNew) {
+        const errBody = (await res.json().catch(() => ({}))) as StatusResponse;
+        if (res.status !== 409 && createdNew) {
           try {
             await sub.unsubscribe();
           } catch {
             // keep local/server consistent on failed first register
           }
         }
-        setError("알림을 등록하지 못했습니다.");
+        setError(
+          res.status === 409 || errBody.error === SAME_DEVICE_PREPARE_ERROR
+            ? typeof errBody.message === "string" && errBody.message
+              ? errBody.message
+              : SAME_DEVICE_PREPARE_MESSAGE
+            : "알림을 등록하지 못했습니다."
+        );
         await refreshLocal();
         await refreshServer();
         return;

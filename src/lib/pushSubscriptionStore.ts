@@ -4,6 +4,15 @@
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { decodeUrlSafeBase64 } from "@/lib/pushVapid";
+import {
+  SAME_DEVICE_PREPARE_ERROR,
+  SAME_DEVICE_PREPARE_MESSAGE,
+} from "@/lib/pushSubscriptionErrors";
+
+export {
+  SAME_DEVICE_PREPARE_ERROR,
+  SAME_DEVICE_PREPARE_MESSAGE,
+} from "@/lib/pushSubscriptionErrors";
 
 export const MAX_ENDPOINT_LENGTH = 2048;
 export const MAX_USER_AGENT_LENGTH = 256;
@@ -130,7 +139,9 @@ export async function userHasEnabledPushSubscriptionForEndpoint(
 
 /**
  * Upsert the current User's mapping for this endpoint.
- * Does not reassign another User's row. Same User + same endpoint stays one row.
+ * Does not reassign another User's row.
+ * PREPARE: legacy endpoint UNIQUE may reject a second User on the same
+ * physical endpoint — fail-closed 409, no steal/delete.
  */
 export async function upsertPushSubscriptionForUser(
   db: PrismaClient,
@@ -143,28 +154,54 @@ export async function upsertPushSubscriptionForUser(
     platform: string | null;
   }
 ): Promise<{ userId: number }> {
-  await db.pushSubscription.upsert({
-    where: {
-      userId_endpoint: { userId, endpoint: input.endpoint },
-    },
-    create: {
-      userId,
-      endpoint: input.endpoint,
-      p256dh: input.p256dh,
-      auth: input.auth,
-      userAgent: input.userAgent,
-      platform: input.platform,
-      enabled: true,
-    },
-    update: {
-      p256dh: input.p256dh,
-      auth: input.auth,
-      userAgent: input.userAgent,
-      platform: input.platform,
-      enabled: true,
-    },
+  const existing = await db.pushSubscription.findFirst({
+    where: { userId, endpoint: input.endpoint },
+    select: { id: true },
   });
-  return { userId };
+  if (existing) {
+    await db.pushSubscription.update({
+      where: { id: existing.id },
+      data: {
+        p256dh: input.p256dh,
+        auth: input.auth,
+        userAgent: input.userAgent,
+        platform: input.platform,
+        enabled: true,
+      },
+    });
+    return { userId };
+  }
+  try {
+    await db.pushSubscription.create({
+      data: {
+        userId,
+        endpoint: input.endpoint,
+        p256dh: input.p256dh,
+        auth: input.auth,
+        userAgent: input.userAgent,
+        platform: input.platform,
+        enabled: true,
+      },
+    });
+    return { userId };
+  } catch (e) {
+    if (
+      !(e instanceof Prisma.PrismaClientKnownRequestError) ||
+      e.code !== "P2002"
+    ) {
+      throw e;
+    }
+    const mine = await db.pushSubscription.findFirst({
+      where: { userId, endpoint: input.endpoint },
+      select: { id: true },
+    });
+    if (mine) return { userId };
+    throw new PushSubscriptionError(
+      SAME_DEVICE_PREPARE_ERROR,
+      SAME_DEVICE_PREPARE_MESSAGE,
+      409
+    );
+  }
 }
 
 /**

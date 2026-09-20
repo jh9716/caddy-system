@@ -133,26 +133,29 @@ async function main() {
   {
     const schema = read("prisma/schema.prisma");
     const model = schema.split("model PushSubscription")[1]?.split("}")[0] || "";
-    assert(!model.includes("endpoint String @unique"), "endpoint not @unique");
+    assert(model.includes("endpoint String @unique"), "PREPARE keeps endpoint unique");
     assert(schema.includes("@@unique([userId, endpoint])"), "compound unique");
-    assert(schema.includes("@@index([endpoint])"), "endpoint index");
+    assert(!schema.includes("@@index([endpoint])"), "no extra endpoint idx");
     const sql = read(
       "prisma/migrations/20260920013000_push_subscription_user_endpoint_unique/migration.sql"
     );
-    assert(sql.includes('DROP INDEX IF EXISTS "PushSubscription_endpoint_key"'), "drop old unique");
+    assert(!sql.includes("DROP INDEX"), "PREPARE no DROP INDEX");
     assert(sql.includes("PushSubscription_userId_endpoint_key"), "new unique");
-    assert(sql.includes("PushSubscription_endpoint_idx"), "endpoint idx");
+    assert(!sql.includes("PushSubscription_endpoint_idx"), "no extra endpoint idx SQL");
     assert(!/^\s*(INSERT|UPDATE|DELETE)\b/im.test(sql), "migration no DML");
     assert(!sql.includes("DROP TABLE"), "no DROP TABLE");
     assert(!sql.includes("DROP COLUMN"), "no DROP COLUMN");
     const store = read("src/lib/pushSubscriptionStore.ts");
-    assert(store.includes("userId_endpoint"), "upsert compound where");
+    assert(store.includes("findFirst"), "lookup by userId+endpoint");
+    assert(store.includes("P2002"), "P2002 fail-closed");
+    assert(store.includes("SAME_DEVICE_PREPARE_ERROR") || store.includes("P2002"), "P2002 fail-closed");
     assert(!/update:\s*\{[^}]*userId/.test(store), "update does not reassign userId");
     const delivery = read("src/lib/pushDelivery.ts");
     assert(delivery.includes("groupMappingsByEndpoint") || delivery.includes("groups.set"), "endpoint groups");
     assert(!/console\.(log|info|debug|error)\([^)]*endpoint/.test(delivery), "no endpoint logs");
     const card = read("src/components/PushNotificationCard.tsx");
     assert(card.includes("x-push-endpoint"), "GET sends current endpoint header");
+    assert(card.includes("SAME_DEVICE_PREPARE"), "409 prepare copy");
     assert(card.includes("serverRegistered"), "surface uses server registered");
     assert(!card.includes("WEB_PUSH_VAPID_PRIVATE_KEY"), "card no private key");
     const route = read("src/app/api/push/subscription/route.ts");
@@ -176,6 +179,7 @@ async function main() {
   const hash = await bcrypt.hash("x", 4);
   const userIds: number[] = [];
   const reportIds: number[] = [];
+  let droppedEndpointUnique = false;
 
   try {
     const caddyRow = await prisma.caddy.create({
@@ -238,32 +242,54 @@ async function main() {
     const X = `https://fcm.googleapis.com/fcm/send/${tag}-X`;
     const Y = `https://fcm.googleapis.com/fcm/send/${tag}-Y`;
 
-    section("1-6 register + GET");
+    section("STATE A PREPARE: endpoint UNIQUE + userId+endpoint UNIQUE");
     {
       const aPost = await jsonReq("POST", cookieA, validBody(X));
-      assert(aPost.status === 200, "1 A/X POST 200");
+      assert(aPost.status === 200, "A/X POST 200");
       const afterA = await prisma.pushSubscription.findMany({ where: { endpoint: X } });
-      assert(afterA.length === 1, "1 A/X row 1");
-      assert(afterA[0]?.userId === userA.id, "1 owned by caddy A");
+      assert(afterA.length === 1, "A/X row 1");
+      assert(afterA[0]?.userId === userA.id, "owned by caddy A");
+
+      const aAgain = await jsonReq("POST", cookieA, validBody(X));
+      assert(aAgain.status === 200, "A/X re-POST 200");
+      assert(
+        (await prisma.pushSubscription.count({ where: { endpoint: X } })) === 1,
+        "A re-POST still 1 row"
+      );
 
       const bPost = await jsonReq("POST", cookieB, validBody(X));
-      assert(bPost.status === 200, "2 B/X POST 200");
+      assert(bPost.status === 409, "B/X POST 409 while endpoint unique");
+      const bBody = await bPost.json();
+      assert(bBody.error === "same_device_multi_user_not_finalized", "409 code");
+      assert(String(bBody.message ?? "").includes("준비"), "409 safe message");
       const afterB = await prisma.pushSubscription.findMany({ where: { endpoint: X } });
-      assert(afterB.length === 2, "2 A/X + B/X row 2");
-      const aRow = afterB.find((r) => r.userId === userA.id);
-      const bRow = afterB.find((r) => r.userId === userB.id);
-      assert(aRow != null && aRow.userId === userA.id, "3 A/X userId kept");
-      assert(bRow != null && bRow.userId === userB.id, "4 B/X separate userId");
+      assert(afterB.length === 1, "row not lost");
+      assert(afterB[0]?.userId === userA.id, "A/X userId not stolen");
 
       const aGet = await jsonReq("GET", cookieA, undefined, { [PUSH_ENDPOINT_HEADER]: X });
       const aGetBody = await aGet.json();
-      assert(aGet.status === 200 && aGetBody.subscriptionExists === true, "5 A GET registered");
-      assert(!jsonHasSecrets(aGetBody) || !("endpoint" in aGetBody), "5 GET no raw endpoint");
-      assert(aGetBody.endpoint == null, "5 GET endpoint omitted");
-
+      assert(aGet.status === 200 && aGetBody.subscriptionExists === true, "A GET registered");
+      assert(aGetBody.endpoint == null, "GET endpoint omitted");
       const bGet = await jsonReq("GET", cookieB, undefined, { [PUSH_ENDPOINT_HEADER]: X });
       const bGetBody = await bGet.json();
-      assert(bGet.status === 200 && bGetBody.subscriptionExists === true, "6 B GET registered");
+      assert(bGet.status === 200 && bGetBody.subscriptionExists === false, "B GET not registered");
+    }
+
+    section("STATE B FINAL simulation: drop endpoint UNIQUE");
+    {
+      await prisma.$executeRawUnsafe(`DROP INDEX IF EXISTS "PushSubscription_endpoint_key"`);
+      droppedEndpointUnique = true;
+      const bPost = await jsonReq("POST", cookieB, validBody(X));
+      assert(bPost.status === 200, "B/X POST 200 after FINAL indexes");
+      const afterB = await prisma.pushSubscription.findMany({ where: { endpoint: X } });
+      assert(afterB.length === 2, "A/X + B/X coexist");
+      assert(afterB.some((r) => r.userId === userA.id), "A/X kept");
+      assert(afterB.some((r) => r.userId === userB.id), "B/X created");
+
+      const aGet = await jsonReq("GET", cookieA, undefined, { [PUSH_ENDPOINT_HEADER]: X });
+      const bGet = await jsonReq("GET", cookieB, undefined, { [PUSH_ENDPOINT_HEADER]: X });
+      assert((await aGet.json()).subscriptionExists === true, "A GET registered");
+      assert((await bGet.json()).subscriptionExists === true, "B GET registered");
     }
 
     section("7-9 delivery dedupe");
@@ -481,6 +507,11 @@ async function main() {
     await prisma.pushSubscription.deleteMany({
       where: { userId: { in: userIds } },
     });
+    if (droppedEndpointUnique) {
+      await prisma.$executeRawUnsafe(
+        `CREATE UNIQUE INDEX IF NOT EXISTS "PushSubscription_endpoint_key" ON "PushSubscription"("endpoint")`
+      );
+    }
     if (userIds.length) {
       await prisma.user.deleteMany({ where: { id: { in: userIds } } });
     }

@@ -142,9 +142,9 @@ async function main() {
     assert(schema.includes("pushSubscriptions PushSubscription[]"), "User relation");
     const model = schema.split("model PushSubscription")[1]?.split("}")[0] || "";
     assert(!/\bcaddyId\b/.test(model), "PushSubscription has no caddyId snapshot");
-    assert(!model.includes("endpoint String @unique"), "endpoint not unique alone");
+    assert(model.includes("endpoint String @unique"), "PREPARE keeps endpoint unique");
     assert(schema.includes("@@unique([userId, endpoint])"), "unique userId+endpoint");
-    assert(schema.includes("@@index([endpoint])"), "endpoint non-unique index");
+    assert(!schema.includes("@@index([endpoint])"), "no extra endpoint idx in PREPARE");
     assert(schema.includes("@@index([userId])"), "userId index");
     assert(sql.includes('CREATE TABLE "PushSubscription"'), "CREATE TABLE");
     assert(sql.includes("PushSubscription_userId_fkey"), "FK userId");
@@ -156,9 +156,10 @@ async function main() {
     const nextSql = read(
       "prisma/migrations/20260920013000_push_subscription_user_endpoint_unique/migration.sql"
     );
-    assert(nextSql.includes('DROP INDEX IF EXISTS "PushSubscription_endpoint_key"'), "drops endpoint unique");
     assert(nextSql.includes("PushSubscription_userId_endpoint_key"), "compound unique");
-    assert(nextSql.includes("PushSubscription_endpoint_idx"), "endpoint index");
+    assert(!nextSql.includes("PushSubscription_endpoint_key"), "does not drop/recreate endpoint unique");
+    assert(!nextSql.includes("DROP INDEX"), "PREPARE no DROP INDEX");
+    assert(!nextSql.includes("PushSubscription_endpoint_idx"), "no extra endpoint idx");
     assert(!/^\s*(INSERT|UPDATE|DELETE)\b/im.test(nextSql), "no DML");
     assert(!nextSql.includes("DROP TABLE"), "new migration no DROP TABLE");
     assert(!nextSql.includes("DROP COLUMN"), "new migration no DROP COLUMN");
@@ -196,6 +197,28 @@ async function main() {
     assert(!read("src/components/PushNotificationCard.tsx").includes("WEB_PUSH_VAPID_PRIVATE_KEY"), "private key env not in client card");
     const logout = read("src/app/api/logout/route.ts");
     assert(!logout.toLowerCase().includes("pushsubscription"), "logout does not delete subscription");
+    const srcRoot = "src";
+    function walk(dir: string, acc: string[] = []): string[] {
+      for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, ent.name);
+        if (ent.isDirectory()) walk(p, acc);
+        else if (ent.name.endsWith(".ts") || ent.name.endsWith(".tsx")) acc.push(p);
+      }
+      return acc;
+    }
+    let uniqueEndpointQueries = 0;
+    for (const file of walk(srcRoot)) {
+      const src = read(file);
+      if (
+        /pushSubscription\.(findUnique|update|upsert|delete)\([\s\S]{0,180}where:\s*\{\s*endpoint\s*:/.test(
+          src
+        )
+      ) {
+        uniqueEndpointQueries += 1;
+        console.error("  unique-endpoint query in", file);
+      }
+    }
+    assert(uniqueEndpointQueries === 0, "endpoint uniqueness runtime query = 0");
   }
 
   section("E. UI surfaces");
@@ -440,12 +463,12 @@ async function main() {
       const otherGetBody = await otherGet.json();
       assert(otherGetBody.subscriptionExists === false, "other User same endpoint not registered");
       const reassign = await jsonReq("POST", otherCookie, validBody(ep));
-      assert(reassign.status === 200, "other user POST 200");
+      assert(reassign.status === 409, "PREPARE other user same endpoint 409");
+      const reassignBody = await reassign.json();
+      assert(reassignBody.error === "same_device_multi_user_not_finalized", "409 code");
       const after = await prisma.pushSubscription.findMany({ where: { endpoint: ep } });
-      assert(after.length === 2, "same endpoint two User rows");
-      const owners = new Set(after.map((r) => r.userId));
-      assert(owners.has(uCaddy.id) && owners.has(uOther.id), "A/X and B/X coexist");
-      assert(after.find((r) => r.userId === uCaddy.id)?.userId === uCaddy.id, "A/X userId kept");
+      assert(after.length === 1, "PREPARE still 1 row");
+      assert(after[0]?.userId === uCaddy.id, "A/X userId not stolen");
 
       const unlinkedCookie = await cookieFor({ ...uUnlinked, role: "caddy" });
       const unlinkedEp = `https://fcm.googleapis.com/fcm/send/${tag}-unlinked`;

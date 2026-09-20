@@ -311,13 +311,20 @@ async function main() {
       assert(rows.length === 1, "same endpoint no duplicate row");
       assert(rows[0]?.userId === dbAdmin.id, "still admin owner");
 
-      const caddyEp = `https://fcm.googleapis.com/fcm/send/${tag}-caddy-keep`;
       const caddyCookie = await cookieFor({
         id: dbCaddy.id,
         username: dbCaddy.username,
         role: "caddy",
         sessionVersion: 0,
       });
+      const steal = await jsonReq("POST", caddyCookie, validBody(ep));
+      assert(steal.status === 409, "caddy same endpoint 409");
+      const stealBody = await steal.json();
+      assert(stealBody.error === "same_device_multi_user_not_finalized", "prepare 409 code");
+      const stillAdmin = await prisma.pushSubscription.findMany({ where: { endpoint: ep } });
+      assert(stillAdmin.length === 1 && stillAdmin[0]?.userId === dbAdmin.id, "admin row not stolen");
+
+      const caddyEp = `https://fcm.googleapis.com/fcm/send/${tag}-caddy-keep`;
       const caddyPost = await jsonReq("POST", caddyCookie, validBody(caddyEp));
       assert(caddyPost.status === 200, "caddy register still works");
       const caddyRow = await prisma.pushSubscription.findFirst({ where: { endpoint: caddyEp } });
