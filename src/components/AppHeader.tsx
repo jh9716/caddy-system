@@ -17,7 +17,7 @@ export default function AppHeader({ role }: { role: AppRole | null }) {
     <header className="vh-header">
       <div className="vh-header-inner">
         <Link href="/" className="vh-brand">
-          VERTHILL <span>• Caddy</span>
+          VERTHILL <span>Caddy System</span>
         </Link>
 
         <nav className="vh-nav" aria-label="사이트 메뉴">

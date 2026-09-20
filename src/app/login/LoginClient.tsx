@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { postLoginPath } from "@/lib/passwordPolicy";
+import PwaInstallCard from "@/components/PwaInstallCard";
 
 const KAKAO_ERROR_MESSAGES: Record<string, string> = {
   kakao_config: "카카오 로그인 설정이 없습니다. 관리자에게 문의하세요.",
@@ -78,21 +79,25 @@ export default function LoginClient() {
       <div className="vh-auth-frame">
         <header className="vh-auth-top">
           <Link href="/" className="vh-auth-brand">
-            VERTHILL <span>Caddy</span>
+            VERTHILL <span>Caddy System</span>
           </Link>
         </header>
 
         <div className="vh-auth-stage">
           <div className="vh-auth-intro">
-            <p className="vh-auth-eyebrow">Golf Resort Operations</p>
-            <h1 className="vh-auth-title">VERTHILL Caddy</h1>
-            <div className="vh-auth-rule" aria-hidden />
-            <p className="vh-auth-lead">
-              프리미엄 골프 리조트를 위한 캐디·가용·배치 운영 시스템
-            </p>
+            <img
+              className="vh-splash-mark vh-splash-mark-sm"
+              src="/icons/icon-192.png"
+              alt=""
+              width={56}
+              height={56}
+            />
+            <h1 className="vh-auth-title">VERTHILL</h1>
+            <p className="vh-splash-subtitle">Caddy System</p>
           </div>
 
-          <form onSubmit={onSubmit} className="vh-auth-card">
+          <div className="vh-auth-login-col">
+            <form onSubmit={onSubmit} className="vh-auth-card">
             <h2 className="vh-auth-card-title">로그인</h2>
             <p className="vh-auth-card-sub">관리자 및 캐디 계정으로 입장합니다</p>
 
@@ -147,6 +152,8 @@ export default function LoginClient() {
               {loading ? "로그인 중…" : "로그인"}
             </button>
           </form>
+          <PwaInstallCard />
+          </div>
         </div>
       </div>
     </div>

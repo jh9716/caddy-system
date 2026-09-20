@@ -12,6 +12,7 @@ import {
   PWA_ICON_192,
   PWA_ICON_512,
   PWA_NAME,
+  PWA_SPLASH_PORTRAIT,
   PWA_THEME_COLOR,
 } from "@/lib/pwaManifest";
 
@@ -34,7 +35,8 @@ export const metadata: Metadata = {
   appleWebApp: {
     capable: true,
     title: PWA_NAME,
-    statusBarStyle: "default",
+    statusBarStyle: "black-translucent",
+    startupImage: [PWA_SPLASH_PORTRAIT],
   },
 };
 

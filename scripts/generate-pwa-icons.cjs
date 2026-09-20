@@ -199,6 +199,13 @@ function writeIco(abs, px) {
 }
 
 function main() {
+  const master = path.join(ROOT, "public", "brand", "app-icon-master.png");
+  if (fs.existsSync(master)) {
+    console.log(
+      "brand masters present; icons are produced by scripts/build-brand-assets.cjs — not overwriting"
+    );
+    return;
+  }
   fs.mkdirSync(OUT, { recursive: true });
   writePng(path.join(OUT, "icon-192.png"), makeCanvas(192, { rounded: true, maskable: false }));
   writePng(path.join(OUT, "icon-512.png"), makeCanvas(512, { rounded: true, maskable: false }));

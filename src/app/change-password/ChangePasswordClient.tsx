@@ -73,7 +73,7 @@ export default function ChangePasswordClient({
       <div className="vh-auth-frame">
         <header className="vh-auth-top">
           <span className="vh-auth-brand">
-            VERTHILL <span>Caddy</span>
+            VERTHILL <span>Caddy System</span>
           </span>
         </header>
 
