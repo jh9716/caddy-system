@@ -80,6 +80,7 @@
     "test:published-board-privacy-unit": "bash scripts/tsx-safe.sh scripts/test-published-board-privacy-unit.ts",
     "preview:roster": "bash scripts/tsx-safe.sh scripts/preview-roster-import.ts",
     "inspect:db-readonly": "bash scripts/tsx-safe.sh scripts/inspect-db-schema-readonly.ts",
+    "inspect:device-push-token-readonly": "bash scripts/tsx-safe.sh scripts/inspect-device-push-token-prod-readonly.ts",
     "check:migration-checksums": "bash scripts/tsx-safe.sh scripts/check-migration-checksums-readonly.ts",
     "test:availability-unit": "bash scripts/tsx-safe.sh scripts/test-availability-unit.ts",
     "test:daily-availability-unit": "bash scripts/tsx-safe.sh scripts/test-daily-availability-unit.ts",

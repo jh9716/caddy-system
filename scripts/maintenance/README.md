@@ -52,3 +52,13 @@ npx tsx scripts/maintenance/deploy-comment-v1-migration.ts
 
 `prisma migrate deploy` only. No db push / migrate reset / seed / Comment INSERT/UPDATE/DELETE.
 
+DevicePushToken V1 production schema (PREPARE only, no app deploy):
+
+```
+PROD_MAINTENANCE_CONFIRM=PREPARE_DEVICE_PUSH_TOKEN_175_20260922 \
+DATABASE_URL="$PRODUCTION_DATABASE_URL" \
+npx tsx scripts/maintenance/deploy-device-push-token-migration.ts
+```
+
+`prisma migrate deploy` only. No db push / migrate reset / seed / DevicePushToken INSERT/UPDATE/DELETE / FCM send.
+
