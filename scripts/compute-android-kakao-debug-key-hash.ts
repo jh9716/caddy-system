@@ -2,7 +2,7 @@
  * Compute Kakao Developers Android DEBUG KEY HASH from this PoC's debug cert.
  *
  * Kakao key hash = Base64(SHA-1(signing certificate)).
- * Uses android/app/debug.keystore (same cert as the sideloaded debug APK).
+ * Uses the local android/app/debug.keystore (gitignored; same cert as the sideloaded debug APK).
  *
  *   npx tsx scripts/compute-android-kakao-debug-key-hash.ts
  *

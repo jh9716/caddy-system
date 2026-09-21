@@ -53,6 +53,7 @@ android/app/build/
 android/app/.cxx/
 android/local.properties
 android/kakao.properties
+android/app/debug.keystore
 android/captures/
 android/*.iml
 android/app/*.iml
