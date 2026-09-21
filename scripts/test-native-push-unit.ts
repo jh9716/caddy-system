@@ -184,12 +184,12 @@ assert(
   !/\blocalStorage\b/.test(read("src/lib/nativePushBridge.ts")),
   "token not in localStorage"
 );
-assert(
-  !/\{[^}]*readMemoryNativePushToken\(\)[^}]*\}/.test(
-    read("src/components/NativePushNotificationCard.tsx")
-  ),
-  "card does not interpolate token into JSX"
-);
+{
+  const cardSrc = read("src/components/NativePushNotificationCard.tsx");
+  const jsx = cardSrc.slice(cardSrc.lastIndexOf("return ("));
+  assert(!jsx.includes("readMemoryNativePushToken"), "card JSX does not render token helper");
+  assert(!jsx.includes("{token}"), "card does not interpolate token into JSX");
+}
 assert(
   read("src/components/DevicePushSettings.tsx").includes("if (!ready) return null"),
   "native/web split waits for official Capacitor check"

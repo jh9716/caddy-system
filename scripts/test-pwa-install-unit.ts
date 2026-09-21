@@ -484,7 +484,10 @@ for (const rel of pwaFiles) {
 }
 
 const caddyPagePush = readSrc("src/app/caddy/page.tsx");
-assert(caddyPagePush.includes("PushNotificationCard"), "/caddy renders notification card");
+assert(
+  caddyPagePush.includes("DevicePushSettings"),
+  "/caddy renders notification card"
+);
 assert(!caddyPagePush.includes("requestPermission"), "/caddy page does not request permission itself");
 
 const schema = readSrc("prisma/schema.prisma");

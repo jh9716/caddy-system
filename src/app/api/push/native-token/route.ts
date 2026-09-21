@@ -44,7 +44,7 @@ function logRoute(op: string, e: unknown) {
     e && typeof e === "object" && "code" in e
       ? String((e as { code?: unknown }).code ?? "")
       : "";
-  console.error(`[ /api/push/native-token ${op} ]`, code || "failed");
+  console.error(`[ native-push ${op} ]`, code || "failed");
 }
 
 async function requireDbPushUser(req: NextRequest) {
