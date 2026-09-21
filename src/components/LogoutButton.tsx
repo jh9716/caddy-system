@@ -1,7 +1,10 @@
 "use client";
 
+import { deactivateNativePushOnLogout } from "@/lib/nativePushBridge";
+
 export default function LogoutButton() {
   const onClick = async () => {
+    await deactivateNativePushOnLogout("current");
     await fetch("/api/logout", { method: "POST", credentials: "include" });
     location.href = "/";
   };
@@ -14,6 +17,7 @@ export default function LogoutButton() {
     ) {
       return;
     }
+    await deactivateNativePushOnLogout("all");
     const res = await fetch("/api/auth/logout-all", {
       method: "POST",
       credentials: "include",

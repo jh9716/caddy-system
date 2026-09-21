@@ -150,7 +150,7 @@ async function main() {
     assert(!read("src/lib/noticePush.ts").includes("adminPushUser"), "noticePush untouched");
     assert(!read("src/lib/boardPush.ts").includes("adminPushUser"), "boardPush untouched");
     const page = read("src/app/manage/notifications/page.tsx");
-    assert(page.includes("PushNotificationCard"), "reuses PushNotificationCard");
+    assert(page.includes("DevicePushSettings"), "reuses DevicePushSettings");
     assert(page.includes(ADMIN_PUSH_UI_ENABLE) || page.includes("ADMIN_PUSH_UI_ENABLE"), "enable copy");
     assert(page.includes("ManageShell") === false, "page uses layout ManageShell");
     const shell = read("src/components/manage/ManageShell.tsx");
@@ -158,7 +158,7 @@ async function main() {
     const member = read("src/components/manage/MemberShell.tsx");
     assert(!member.includes("/manage/notifications"), "member shell no admin notifications");
     const caddy = read("src/app/caddy/page.tsx");
-    assert(caddy.includes("<PushNotificationCard />"), "caddy card still default");
+    assert(caddy.includes("<DevicePushSettings />"), "caddy card still default");
     const subRoute = read("src/app/api/push/subscription/route.ts");
     assert(subRoute.includes("resolvePushSubscriptionUserId"), "subscription API reuses resolve");
     assert(subRoute.includes("upsertPushSubscriptionForUser"), "upsert reused");

@@ -32,6 +32,13 @@ import {
 } from "@/lib/courseReportPushMessage";
 import { isPushStoreMissing } from "@/lib/pushSubscriptionStore";
 import { deliverWebPushMappings } from "@/lib/pushDelivery";
+import {
+  canAttemptNativePushSend,
+  deliverNativePushTokens,
+  hasPushDeliveryTargets,
+  loadEnabledDevicePushTokens,
+  type NativePushSendFn,
+} from "@/lib/nativePushDelivery";
 import { isWebPushSendConfigured, readWebPushSendCredentials } from "@/lib/pushVapid";
 import { normalizeAppRole } from "@/lib/sessionCookies";
 import {
@@ -175,7 +182,11 @@ async function finishCourseReportPushAudit(
 
 export async function resolveCourseReportNewPushTargets(
   db: PrismaClient
-): Promise<{ subscriptions: SubRow[]; recipientUserIds: number[] }> {
+): Promise<{
+  subscriptions: SubRow[];
+  recipientUserIds: number[];
+  logicalUserIds: number[];
+}> {
   const users = await db.user.findMany({
     select: {
       id: true,
@@ -191,15 +202,23 @@ export async function resolveCourseReportNewPushTargets(
   const recipientUserIds = admins
     .filter((u) => u.pushSubscriptions.length > 0)
     .map((u) => u.id);
-  return { subscriptions, recipientUserIds };
+  return {
+    subscriptions,
+    recipientUserIds,
+    logicalUserIds: admins.map((u) => u.id),
+  };
 }
 
 export async function resolveCourseReportStatusPushTargets(
   db: PrismaClient,
   authorUserId: number
-): Promise<{ subscriptions: SubRow[]; recipientUserIds: number[] }> {
+): Promise<{
+  subscriptions: SubRow[];
+  recipientUserIds: number[];
+  logicalUserIds: number[];
+}> {
   if (!Number.isInteger(authorUserId) || authorUserId <= 0) {
-    return { subscriptions: [], recipientUserIds: [] };
+    return { subscriptions: [], recipientUserIds: [], logicalUserIds: [] };
   }
   const subscriptions = await db.pushSubscription.findMany({
     where: { userId: authorUserId, enabled: true },
@@ -208,6 +227,7 @@ export async function resolveCourseReportStatusPushTargets(
   return {
     subscriptions,
     recipientUserIds: subscriptions.length > 0 ? [authorUserId] : [],
+    logicalUserIds: [authorUserId],
   };
 }
 
@@ -247,7 +267,7 @@ async function deliverToSubscriptions(
 export async function sendCourseReportPush(
   db: PrismaClient,
   event: CourseReportPushEvent,
-  options?: { sendFn?: WebPushSendFn }
+  options?: { sendFn?: WebPushSendFn; nativeSendFn?: NativePushSendFn }
 ): Promise<CourseReportPushResult> {
   try {
     if (!options?.sendFn && !isWebPushSendConfigured()) {
@@ -267,6 +287,30 @@ export async function sendCourseReportPush(
       event.kind === "NEW"
         ? await resolveCourseReportNewPushTargets(db)
         : await resolveCourseReportStatusPushTargets(db, report.authorUserId);
+
+    const nativeTokens = await loadEnabledDevicePushTokens(
+      db,
+      targets.logicalUserIds
+    );
+    if (!hasPushDeliveryTargets(targets.subscriptions.length, nativeTokens.length)) {
+      const claim = await claimCourseReportPushSend(db, event);
+      if ("duplicate" in claim) {
+        return emptyResult({ skipped: "already_sent" });
+      }
+      await finishCourseReportPushAudit(db, claim.auditId, event, {
+        claim: "NO_RECIPIENTS",
+        recipients: 0,
+        subscriptions: 0,
+        deliveries: 0,
+      });
+      return emptyResult({ error: "no_recipients" });
+    }
+    if (
+      targets.subscriptions.length === 0 &&
+      !canAttemptNativePushSend({ sendFn: options?.nativeSendFn })
+    ) {
+      return emptyResult();
+    }
 
     const claim = await claimCourseReportPushSend(db, event);
     if ("duplicate" in claim) {
@@ -288,16 +332,6 @@ export async function sendCourseReportPush(
               title: report.title,
             });
 
-      if (targets.subscriptions.length === 0) {
-        await finishCourseReportPushAudit(db, claim.auditId, event, {
-          claim: "NO_RECIPIENTS",
-          recipients: 0,
-          subscriptions: 0,
-          deliveries: 0,
-        });
-        return emptyResult({ error: "no_recipients" });
-      }
-
       const delivered = await deliverToSubscriptions(
         db,
         targets.subscriptions,
@@ -305,6 +339,9 @@ export async function sendCourseReportPush(
         options?.sendFn,
         creds
       );
+      await deliverNativePushTokens(db, nativeTokens, payload, {
+        sendFn: options?.nativeSendFn,
+      });
       await finishCourseReportPushAudit(db, claim.auditId, event, {
         claim: "SENT",
         recipients: targets.recipientUserIds.length,

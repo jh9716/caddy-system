@@ -266,6 +266,24 @@ assert(
   resolvePwaInstallSurface({
     standalone: false,
     ios: false,
+    hasBeforeInstallPrompt: true,
+    android: true,
+    isNativePlatform: true,
+  }) === "hidden",
+  "Capacitor native hides install surface"
+);
+assert(
+  shouldShowHomeInstallCta({
+    surface: "android-prompt",
+    installed: false,
+    isNativePlatform: true,
+  }) === false,
+  "Capacitor native hides home CTA"
+);
+assert(
+  resolvePwaInstallSurface({
+    standalone: false,
+    ios: false,
     hasBeforeInstallPrompt: false,
     android: true,
   }) === "android-hint",
@@ -331,6 +349,8 @@ assert(card.includes("PWA_INSTALL_IOS_BODY") || card.includes("pwaInstallBody"),
 assert(card.includes("PWA_INSTALL_STANDALONE_LABEL"), "standalone copy");
 assert(hook.includes("isSamsungInternet"), "detects Samsung Internet");
 assert(hook.includes("isAndroidDevice"), "detects Android");
+assert(hook.includes("readCapacitorNativePlatform"), "official Capacitor native check");
+assert(hook.includes('if (!nativeReady) return "hidden"'), "hide install UI until native check");
 assert(PWA_INSTALL_BUTTON === "설치", "button copy");
 assert(PWA_INSTALL_TITLE === "홈 화면에 추가", "title is add to home screen");
 assert(PWA_INSTALL_CTA_LABEL === "VERTHILL 앱 설치", "home CTA label");
@@ -464,7 +484,10 @@ for (const rel of pwaFiles) {
 }
 
 const caddyPagePush = readSrc("src/app/caddy/page.tsx");
-assert(caddyPagePush.includes("PushNotificationCard"), "/caddy renders notification card");
+assert(
+  caddyPagePush.includes("DevicePushSettings"),
+  "/caddy renders notification card"
+);
 assert(!caddyPagePush.includes("requestPermission"), "/caddy page does not request permission itself");
 
 const schema = readSrc("prisma/schema.prisma");

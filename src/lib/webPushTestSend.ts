@@ -10,6 +10,13 @@ import {
   TEST_PUSH_URL,
 } from "@/lib/webPushTestConstants";
 import { deliverWebPushMappings } from "@/lib/pushDelivery";
+import {
+  canAttemptNativePushSend,
+  deliverNativePushTokens,
+  hasPushDeliveryTargets,
+  loadEnabledDevicePushTokens,
+  type NativePushSendFn,
+} from "@/lib/nativePushDelivery";
 import { isPushStoreMissing } from "@/lib/pushSubscriptionStore";
 import { isWebPushSendConfigured, readWebPushSendCredentials } from "@/lib/pushVapid";
 import { type WebPushSendFn } from "@/lib/webPushSender";
@@ -59,7 +66,7 @@ export async function sendTestPushToUser(
   db: PrismaClient,
   userId: number,
   confirm: string,
-  options?: { sendFn?: WebPushSendFn }
+  options?: { sendFn?: WebPushSendFn; nativeSendFn?: NativePushSendFn }
 ): Promise<PushTestAggregate> {
   if (confirm !== TEST_PUSH_CONFIRM) {
     throw new PushTestError("invalid_confirm", "confirm이 필요합니다.", 400);
@@ -96,22 +103,32 @@ export async function sendTestPushToUser(
   if (user.caddy && String(user.caddy.employmentStatus) === "RETIRED") {
     throw new PushTestError("retired", "퇴사한 캐디에게는 보낼 수 없습니다.", 400);
   }
-  if (user.pushSubscriptions.length === 0) {
+  const nativeTokens = await loadEnabledDevicePushTokens(db, [userId]);
+  if (!hasPushDeliveryTargets(user.pushSubscriptions.length, nativeTokens.length)) {
     return { ok: true, sent: 0, failed: 0, removedStale: 0, deliveries: 0, error: "no_subscription" };
   }
 
-  const delivered = await deliverWebPushMappings(
-    db,
-    user.pushSubscriptions.map((sub) => ({
-      id: sub.id,
-      userId,
-      endpoint: sub.endpoint,
-      p256dh: sub.p256dh,
-      auth: sub.auth,
-    })),
-    { title: TEST_PUSH_TITLE, body: TEST_PUSH_BODY, url: TEST_PUSH_URL },
-    { sendFn: options?.sendFn, credentials: creds, concurrency: 1 }
-  );
+  const payload = { title: TEST_PUSH_TITLE, body: TEST_PUSH_BODY, url: TEST_PUSH_URL };
+  let delivered = { sent: 0, failed: 0, removedStale: 0, deliveries: 0 };
+  if (user.pushSubscriptions.length > 0) {
+    delivered = await deliverWebPushMappings(
+      db,
+      user.pushSubscriptions.map((sub) => ({
+        id: sub.id,
+        userId,
+        endpoint: sub.endpoint,
+        p256dh: sub.p256dh,
+        auth: sub.auth,
+      })),
+      payload,
+      { sendFn: options?.sendFn, credentials: creds, concurrency: 1 }
+    );
+  } else if (!canAttemptNativePushSend({ sendFn: options?.nativeSendFn })) {
+    return { ok: true, sent: 0, failed: 0, removedStale: 0, deliveries: 0 };
+  }
+  await deliverNativePushTokens(db, nativeTokens, payload, {
+    sendFn: options?.nativeSendFn,
+  });
   return {
     ok: true,
     sent: delivered.sent,

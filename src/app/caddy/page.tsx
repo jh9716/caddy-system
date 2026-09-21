@@ -1,8 +1,8 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import DevicePushSettings from '@/components/DevicePushSettings'
 import PwaInstallCard from '@/components/PwaInstallCard'
-import PushNotificationCard from '@/components/PushNotificationCard'
 import { resolveCaddyPageGate } from '@/lib/roleRouting'
 
 type Summary = {
@@ -75,7 +75,7 @@ export default function CaddyPage() {
     <div style={{ maxWidth: 1100, margin: '10px auto' }}>
       <h2 style={{ fontSize: 22, fontWeight: 800, marginBottom: 12 }}>캐디 대시보드 (보기 전용)</h2>
       <PwaInstallCard />
-      <PushNotificationCard />
+      <DevicePushSettings />
 
       {summary && (
         <>

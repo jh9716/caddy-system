@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { resolveAuthUser } from "@/lib/auth";
 import { clearSessionCookies } from "@/lib/sessionCookies";
+import {
+  disableAllDevicePushTokensForUser,
+  isDevicePushStoreMissing,
+} from "@/lib/nativePushToken";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -35,6 +39,13 @@ export async function POST(req: NextRequest) {
       where: { id: auth.userId },
       data: { sessionVersion: { increment: 1 } },
     });
+    try {
+      await disableAllDevicePushTokensForUser(prisma, auth.userId);
+    } catch (tokenErr) {
+      if (!isDevicePushStoreMissing(tokenErr)) {
+        console.error("[POST /api/auth/logout-all] native-token");
+      }
+    }
   } catch (e) {
     console.error("[POST /api/auth/logout-all]", e);
     return NextResponse.json({ error: "update_failed" }, { status: 500 });

@@ -1,0 +1,17 @@
+{
+  "_comment": "Copy to android/app/google-services.json from Firebase Console. Do not commit the real file. package_name must stay kr.verthill.caddy.",
+  "project_info": {
+    "project_number": "REPLACE_ME",
+    "project_id": "REPLACE_ME"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "REPLACE_ME",
+        "android_client_info": {
+          "package_name": "kr.verthill.caddy"
+        }
+      }
+    }
+  ]
+}

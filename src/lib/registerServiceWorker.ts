@@ -1,5 +1,7 @@
+import { Capacitor } from "@capacitor/core";
 import { PWA_SW_SCOPE, PWA_SW_URL } from "@/lib/pwaManifest";
 import { shouldRegisterServiceWorker } from "@/lib/pwaInstall";
+import { isCapacitorNativePlatform } from "@/lib/nativePlatform";
 
 export type ServiceWorkerRegisterResult =
   | "registered"
@@ -12,6 +14,9 @@ export type ServiceWorkerRegisterResult =
  */
 export async function registerVerthillServiceWorker(): Promise<ServiceWorkerRegisterResult> {
   if (typeof window === "undefined") return "skipped";
+  if (isCapacitorNativePlatform({ isNativePlatform: Capacitor.isNativePlatform() })) {
+    return "skipped";
+  }
   if (
     !shouldRegisterServiceWorker({
       hasServiceWorker: "serviceWorker" in navigator,

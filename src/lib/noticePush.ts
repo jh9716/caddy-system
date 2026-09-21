@@ -31,6 +31,13 @@ import {
 } from "@/lib/noticeTarget";
 import { isPushStoreMissing } from "@/lib/pushSubscriptionStore";
 import { deliverWebPushMappings } from "@/lib/pushDelivery";
+import {
+  canAttemptNativePushSend,
+  deliverNativePushTokens,
+  hasPushDeliveryTargets,
+  loadEnabledDevicePushTokens,
+  type NativePushSendFn,
+} from "@/lib/nativePushDelivery";
 import { isWebPushSendConfigured, readWebPushSendCredentials } from "@/lib/pushVapid";
 import { type WebPushSendFn } from "@/lib/webPushSender";
 
@@ -151,6 +158,7 @@ export async function resolveEligibleNoticePushTargets(
   counts: NoticePushCounts;
   subscriptions: SubRow[];
   recipientUserIds: number[];
+  logicalUserIds: number[];
 }> {
   const caddies = await db.caddy.findMany({
     where: caddyTargetWhere(notice),
@@ -158,7 +166,12 @@ export async function resolveEligibleNoticePushTargets(
   });
   const eligibleCaddyIds = caddies.map((c) => c.id);
   if (eligibleCaddyIds.length === 0) {
-    return { counts: emptyCounts(), subscriptions: [], recipientUserIds: [] };
+    return {
+      counts: emptyCounts(),
+      subscriptions: [],
+      recipientUserIds: [],
+      logicalUserIds: [],
+    };
   }
 
   const users = await db.user.findMany({
@@ -182,6 +195,7 @@ export async function resolveEligibleNoticePushTargets(
       users.filter((u) => u.pushSubscriptions.length > 0).map((u) => u.id)
     ),
   ];
+  const logicalUserIds = [...new Set(users.map((u) => u.id))];
 
   return {
     counts: {
@@ -192,6 +206,7 @@ export async function resolveEligibleNoticePushTargets(
     },
     subscriptions,
     recipientUserIds,
+    logicalUserIds,
   };
 }
 
@@ -285,7 +300,7 @@ export async function previewNoticePush(
 export async function sendNoticePush(
   db: PrismaClient,
   input: { noticeId: number; confirm: string; actorUserId: number | null },
-  options?: { sendFn?: WebPushSendFn }
+  options?: { sendFn?: WebPushSendFn; nativeSendFn?: NativePushSendFn }
 ): Promise<NoticePushSendResult> {
   if (input.confirm !== NOTICE_PUSH_CONFIRM) {
     throw new NoticePushError("invalid_confirm", "confirm이 필요합니다.", 400);
@@ -315,7 +330,8 @@ export async function sendNoticePush(
   }
 
   const preTargets = await resolveEligibleNoticePushTargets(db, first);
-  if (preTargets.subscriptions.length === 0) {
+  const preNative = await loadEnabledDevicePushTokens(db, preTargets.logicalUserIds);
+  if (!hasPushDeliveryTargets(preTargets.subscriptions.length, preNative.length)) {
     return {
       ok: true,
       recipients: 0,
@@ -325,6 +341,20 @@ export async function sendNoticePush(
       removedStale: 0,
       deliveries: 0,
       error: "no_recipients",
+    };
+  }
+  if (
+    preTargets.subscriptions.length === 0 &&
+    !canAttemptNativePushSend({ sendFn: options?.nativeSendFn })
+  ) {
+    return {
+      ok: true,
+      recipients: 0,
+      subscriptions: 0,
+      sent: 0,
+      failed: 0,
+      removedStale: 0,
+      deliveries: 0,
     };
   }
 
@@ -344,10 +374,11 @@ export async function sendNoticePush(
     }
     assertInWindow(again);
 
-    const { counts, subscriptions, recipientUserIds } =
+    const { counts, subscriptions, recipientUserIds, logicalUserIds } =
       await resolveEligibleNoticePushTargets(db, again);
 
-    if (subscriptions.length === 0) {
+    const nativeTokens = await loadEnabledDevicePushTokens(db, logicalUserIds);
+    if (!hasPushDeliveryTargets(subscriptions.length, nativeTokens.length)) {
       await writeNoticePushAudit(db, input.noticeId, {
         noticeId: input.noticeId,
         status: "NO_RECIPIENTS",
@@ -374,6 +405,10 @@ export async function sendNoticePush(
     const delivered = await deliverWebPushMappings(db, subscriptions, payload, {
       sendFn: options?.sendFn,
       credentials: creds,
+      concurrency: NOTICE_PUSH_CONCURRENCY,
+    });
+    await deliverNativePushTokens(db, nativeTokens, payload, {
+      sendFn: options?.nativeSendFn,
       concurrency: NOTICE_PUSH_CONCURRENCY,
     });
 

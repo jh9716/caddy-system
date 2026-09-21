@@ -146,6 +146,43 @@ console.log("== readonly inspect allowlist includes push subscription ==");
     guardSrc.includes("inspect-comment-v1-prod-readonly"),
     "guard allowlists comment v1 inspect"
   );
+  assert(
+    guardSrc.includes("inspect-device-push-token-prod-readonly"),
+    "guard allowlists device push token inspect"
+  );
+  const devicePushDeploy = fs.readFileSync(
+    path.resolve("scripts/maintenance/deploy-device-push-token-migration.ts"),
+    "utf8"
+  );
+  assert(
+    devicePushDeploy.includes("PREPARE_DEVICE_PUSH_TOKEN_175_20260922"),
+    "device push deploy uses exact confirm task-id"
+  );
+  assert(devicePushDeploy.includes('["migrate", "deploy"]'), "device push deploy uses migrate deploy");
+  assert(!devicePushDeploy.includes('["migrate", "dev"]'), "device push deploy no migrate dev call");
+  assert(!devicePushDeploy.includes('["migrate", "reset"]'), "device push deploy no migrate reset call");
+  assert(!devicePushDeploy.includes('["db", "push"]'), "device push deploy no db push call");
+  const devicePushMig = fs.readFileSync(
+    path.resolve("prisma/migrations/20260921120000_device_push_token/migration.sql"),
+    "utf8"
+  );
+  assert(devicePushMig.includes("CREATE TYPE \"DevicePushPlatform\""), "device push CREATE TYPE");
+  assert(devicePushMig.includes("CREATE TABLE \"DevicePushToken\""), "device push CREATE TABLE");
+  assert(
+    devicePushMig.includes('CREATE UNIQUE INDEX "DevicePushToken_userId_token_key"'),
+    "device push unique(userId, token)"
+  );
+  assert(
+    !/\bDROP\s+(TABLE|COLUMN|INDEX|TYPE)\b/i.test(devicePushMig),
+    "device push migration no DROP"
+  );
+  assert(!/(^|\n)\s*UPDATE\s+/i.test(devicePushMig), "device push migration no UPDATE");
+  assert(!/(^|\n)\s*INSERT\s+/i.test(devicePushMig), "device push migration no INSERT");
+  assert(!/(^|\n)\s*DELETE\s+FROM\b/i.test(devicePushMig), "device push migration no DELETE FROM");
+  assert(
+    !/\bALTER\s+TABLE\s+"PushSubscription"/i.test(devicePushMig),
+    "device push no PushSubscription ALTER"
+  );
   const photoDeploy = fs.readFileSync(
     path.resolve("scripts/maintenance/deploy-course-report-photo-v1-migration.ts"),
     "utf8"

@@ -9,11 +9,11 @@ import PwaInstallHintSheet from "@/components/PwaInstallHintSheet";
 import { usePwaInstall } from "@/components/usePwaInstall";
 
 export default function PwaInstallHomeCta() {
-  const { surface, action, installed, prompting, promptInstall } =
+  const { surface, action, installed, prompting, promptInstall, isNativePlatform } =
     usePwaInstall();
   const [sheetOpen, setSheetOpen] = useState(false);
 
-  if (!shouldShowHomeInstallCta({ surface, installed })) return null;
+  if (!shouldShowHomeInstallCta({ surface, installed, isNativePlatform })) return null;
 
   async function onClick() {
     if (action === "prompt") {

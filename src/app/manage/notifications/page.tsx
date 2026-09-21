@@ -1,6 +1,6 @@
 "use client";
 
-import PushNotificationCard from "@/components/PushNotificationCard";
+import DevicePushSettings from "@/components/DevicePushSettings";
 import {
   ADMIN_PUSH_UI_DISABLE,
   ADMIN_PUSH_UI_DISABLE_HINT,
@@ -16,7 +16,7 @@ export default function ManageNotificationsPage() {
         <h1 className="pt-title">{ADMIN_PUSH_UI_TITLE}</h1>
         <p className="pt-sub">이 관리자 기기에 새 코스 제보 알림을 받습니다.</p>
       </header>
-      <PushNotificationCard
+      <DevicePushSettings
         title={ADMIN_PUSH_UI_TITLE}
         enableLabel={ADMIN_PUSH_UI_ENABLE}
         disableLabel={ADMIN_PUSH_UI_DISABLE}

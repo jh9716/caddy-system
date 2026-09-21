@@ -1,6 +1,7 @@
 'use client'
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
+import { deactivateNativePushOnLogout } from '@/lib/nativePushBridge'
 
 export default function NavBar() {
   const [role, setRole] = useState<string | null>(null)
@@ -14,6 +15,7 @@ export default function NavBar() {
   }, [])
 
   async function onLogout() {
+    await deactivateNativePushOnLogout('current')
     await fetch('/api/logout', { method: 'POST' })
     window.location.href = '/login'
   }

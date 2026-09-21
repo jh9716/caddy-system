@@ -219,6 +219,8 @@ model User {
   caddyLinkRequests CaddyLinkRequest[]
   /// Web Push 기기 구독. caddyId 스냅샷 없음 — 발송 시 현재 User.caddyId로 resolve.
   pushSubscriptions PushSubscription[]
+  /// Android FCM tokens. Additive; does not replace PushSubscription.
+  devicePushTokens DevicePushToken[]
   /// 코스 제보 작성 이력. User 물리 삭제는 Restrict.
   courseReports CourseReport[] @relation("CourseReportAuthor")
   /// 공용 댓글. User 물리 삭제는 Restrict. 표시명은 조회 시 Caddy.name 우선.
@@ -330,6 +332,30 @@ model PushSubscription {
 
   @@unique([userId, endpoint])
   @@index([endpoint])
+  @@index([userId])
+}
+
+enum DevicePushPlatform {
+  ANDROID
+}
+
+/// Android FCM device token (1 User : N devices). Additive to Web Push.
+/// unique(userId, token). Production migrate is out of scope for this PR.
+model DevicePushToken {
+  id     Int  @id @default(autoincrement())
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  token    String
+  platform DevicePushPlatform @default(ANDROID)
+  enabled  Boolean            @default(true)
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  lastFailureAt DateTime?
+
+  @@unique([userId, token])
+  @@index([token])
   @@index([userId])
 }
 
