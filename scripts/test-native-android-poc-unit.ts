@@ -86,7 +86,7 @@ assert(!pkg.includes("@capacitor/push-notifications"), "no native push plugin");
 assert(!pkg.includes("@capacitor/camera"), "no Camera plugin");
 assert(!pkg.includes("firebase"), "no Firebase package");
 assert(!pkg.includes("@capacitor-community/fcm"), "no FCM plugin");
-assert(!/kakao-sdk|@kakao-sdk|react-native-kakao/i.test(pkg), "no Kakao SDK");
+assert(!/kakao-sdk|@kakao-sdk|react-native-kakao|com.kakao.sdk:v2/i.test(pkg), "no Kakao SDK npm package");
 
 console.log("== web architecture unchanged ==");
 assert(!nextCfg.includes("output:"), "next.config has no static export");
@@ -119,10 +119,15 @@ assert(
 );
 assert(roleRouting.includes("caddy") && roleRouting.includes("/caddy"), "caddy routing intact");
 
-console.log("== Kakao source (unchanged, Phase 1 no SDK) ==");
+console.log("== Kakao REST kept; native SDK not wired ==");
 assert(
   loginClient.includes('location.href = `/api/auth/kakao/start${qs}`'),
   "Kakao button still uses in-page start redirect"
+);
+assert(
+  !loginClient.includes("KakaoNativeAuth") &&
+    !loginClient.includes("native-session"),
+  "LoginClient does not call native Kakao this step"
 );
 assert(
   kakaoStart.includes("buildKakaoRedirectUri") &&
@@ -137,6 +142,14 @@ assert(kakaoOAuth.includes('sameSite: "lax"'), "OAuth cookies stay SameSite=Lax"
 assert(kakaoOAuth.includes("httpOnly: true"), "OAuth cookies stay httpOnly");
 assert(kakaoCallback.includes("statesMatch(cookieState, queryState)"), "callback still validates state");
 assert(!kakaoCallback.includes("skipState") && !kakaoOAuth.includes("skipState"), "no state bypass");
+assert(
+  kakaoCallback.includes("findOrCreateKakaoSessionUser"),
+  "REST callback reuses shared Kakao User helper"
+);
+assert(
+  !exists("src/app/api/auth/kakao/native-session/route.ts"),
+  "native-session HTTP route is not mounted yet"
+);
 
 console.log("== CourseReport file input remains web input ==");
 assert(photoForm.includes('type="file"'), "composer still uses input[type=file]");
@@ -155,7 +168,26 @@ assert(
   mainActivity.includes("extends BridgeActivity"),
   "MainActivity is stock BridgeActivity"
 );
+assert(
+  mainActivity.includes("registerPlugin(KakaoNativeAuthPlugin.class)"),
+  "KakaoNativeAuth plugin registered"
+);
+assert(
+  read(
+    "android/app/src/main/java/kr/verthill/caddy/kakao/KakaoNativeAuthPlugin.java"
+  ).includes("unimplemented"),
+  "native Kakao plugin is unimplemented this step"
+);
 assert(manifest.includes("android.permission.INTERNET"), "INTERNET permission");
+assert(
+  manifest.includes("com.kakao.talk"),
+  "queries includes KakaoTalk for future SDK login"
+);
+assert(
+  !manifest.includes("com.kakao.sdk.auth.AuthCodeHandlerActivity") ||
+    manifest.includes("do not enable until Kakao SDK"),
+  "AuthCodeHandlerActivity is documented, not live"
+);
 assert(!manifest.includes("CAMERA"), "no CAMERA permission");
 assert(
   !manifest.includes("POST_NOTIFICATIONS"),
@@ -178,6 +210,37 @@ assert(
 );
 assert(!exists("android/app/google-services.json"), "no google-services.json");
 assert(!exists("ios"), "still no ios/");
+assert(exists("android/app/debug.keystore"), "PoC debug keystore committed for Kakao hash stability");
+assert(
+  appGradle.includes("KAKAO_NATIVE_APP_KEY") &&
+    appGradle.includes("kakaoScheme") &&
+    appGradle.includes("kakao_unconfigured"),
+  "Gradle injects Kakao native app key / scheme without a hardcoded secret"
+);
+assert(
+  !appGradle.includes("com.kakao.sdk") &&
+    !appGradle.includes("kakaosdk"),
+  "Kakao Android SDK Maven dependency is not added yet"
+);
+assert(
+  read(".gitignore").includes("android/kakao.properties"),
+  "kakao.properties is gitignored"
+);
+assert(
+  exists("android/kakao.properties.example"),
+  "kakao.properties.example exists"
+);
+assert(
+  read("src/lib/kakaoNativeBridge.ts").includes(
+    "export const NATIVE_KAKAO_LOGIN_ENABLED = false"
+  ),
+  "native Kakao login flag is false"
+);
+assert(
+  cfg.includes("REST Kakao OAuth inside this WebView is terminated") ||
+    cfg.includes("Do not add more allowNavigation"),
+  "allowNavigation expansion is frozen"
+);
 
 if (failed) {
   console.error(`\nFAILED ${failed} / ${passed + failed}`);

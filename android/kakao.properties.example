@@ -1,0 +1,5 @@
+# Kakao Native App Key injection (NOT the REST API key, NOT Admin key).
+# Copy to android/kakao.properties (gitignored) or export KAKAO_NATIVE_APP_KEY.
+# Never commit the real value. Never log it.
+#
+# KAKAO_NATIVE_APP_KEY=

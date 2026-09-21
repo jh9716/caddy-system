@@ -109,6 +109,8 @@
     "test:daily-ops-snapshot-unit": "bash scripts/tsx-safe.sh scripts/test-daily-ops-snapshot-unit.ts",
     "test:reflow-feedback-unit": "bash scripts/tsx-safe.sh scripts/test-reflow-feedback-unit.ts",
     "test:native-android-poc-unit": "bash scripts/tsx-safe.sh scripts/test-native-android-poc-unit.ts",
+    "test:kakao-native-session-unit": "bash scripts/tsx-safe.sh scripts/test-kakao-native-session-unit.ts",
+    "compute:android-kakao-debug-key-hash": "bash scripts/tsx-safe.sh scripts/compute-android-kakao-debug-key-hash.ts",
     "native:sync:android": "npx cap sync android"
   },
   "dependencies": {

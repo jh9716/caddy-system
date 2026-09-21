@@ -8,7 +8,10 @@ import type { CapacitorConfig } from "@capacitor/cli";
  *
  * - Loads the existing Next.js site. No static export.
  * - Does not duplicate API/backend.
- * - iOS / FCM / APNs / Camera / Kakao SDK remain out of scope.
+ * - iOS / FCM / APNs / Camera remain out of scope.
+ * - REST Kakao OAuth inside this WebView is terminated (Samsung Internet dump).
+ *   Do not add more allowNavigation hosts. App Kakao login is Android SDK +
+ *   POST /api/auth/kakao/native-session (not wired this step).
  */
 const config: CapacitorConfig = {
   appId: "kr.verthill.caddy",
@@ -22,15 +25,8 @@ const config: CapacitorConfig = {
     url: "https://www.verthill.kr",
     cleartext: false,
     androidScheme: "https",
-    // Keep REST Kakao OAuth in this WebView. Capacitor otherwise
-    // ACTION_VIEW-launches unknown hosts (Samsung Internet), which splits
-    // kakao_oauth_state from callback. Exact hosts only, no kakao.com wildcards.
-    //
-    // Navigation (user-visible):
-    //   www.verthill.kr / verthill.kr  app + /api/auth/kakao/callback
-    //   kauth.kakao.com                official /oauth/authorize + consent
-    //   accounts.kakao.com             Kakao Account login page after authorize
-    // Server-only (not WebView navigation): /oauth/token POST and /v2/user/me.
+    // Frozen leftover from the REST-WebView attempt. No further Kakao hosts.
+    // Exact hosts only, no kakao.com wildcards. kapi is server-only.
     allowNavigation: [
       "www.verthill.kr",
       "verthill.kr",

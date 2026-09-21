@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <queries>
+        <!-- KakaoTalk visibility for loginWithKakaoTalk (SDK wiring is next). -->
+        <package android:name="com.kakao.talk" />
+    </queries>
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
@@ -24,6 +29,17 @@
             </intent-filter>
 
         </activity>
+
+        <!--
+          Kakao Android SDK redirect (do not enable until Kakao SDK is on the classpath):
+            activity: com.kakao.sdk.auth.AuthCodeHandlerActivity
+            exported: true
+            VIEW / DEFAULT / BROWSABLE
+            data android:host="oauth"
+            data android:scheme="${kakaoScheme}"
+          kakaoScheme is injected as kakao${KAKAO_NATIVE_APP_KEY} from Gradle.
+          Do not hardcode the Native App Key here.
+        -->
 
         <provider
             android:name="androidx.core.content.FileProvider"
