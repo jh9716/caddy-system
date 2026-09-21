@@ -6,6 +6,7 @@
 export const DEFAULT_PUSH_TITLE = "VERTHILL";
 export const DEFAULT_PUSH_URL = "/caddy";
 export const PWA_NOTIFICATION_ICON = "/icons/icon-192.png";
+export const PWA_NOTIFICATION_BADGE = "/icons/badge-96.png";
 
 export type ParsedPushPayload = {
   title: string;

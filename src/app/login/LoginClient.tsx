@@ -3,7 +3,10 @@
 import { useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { postLoginPath } from "@/lib/passwordPolicy";
+import PwaInstallCard from "@/components/PwaInstallCard";
+import { PWA_MONOGRAM, PWA_SPLASH_COURSE } from "@/lib/pwaManifest";
+import { resolvePostLoginHref } from "@/lib/roleRouting";
+import { safeReturnPath } from "@/lib/safeReturnPath";
 
 const KAKAO_ERROR_MESSAGES: Record<string, string> = {
   kakao_config: "카카오 로그인 설정이 없습니다. 관리자에게 문의하세요.",
@@ -23,11 +26,7 @@ export default function LoginClient() {
   });
   const [loading, setLoading] = useState(false);
 
-  const callback = searchParams.get("callbackUrl");
-  const safeCallback =
-    callback && callback.startsWith("/") && !callback.startsWith("//")
-      ? callback
-      : null;
+  const safeCallback = safeReturnPath(searchParams.get("callbackUrl"));
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -43,15 +42,11 @@ export default function LoginClient() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || data?.message || "로그인 실패");
 
-      if (data.mustChangePassword) {
-        location.href = "/change-password";
-        return;
-      }
-      if (safeCallback) {
-        location.href = safeCallback;
-        return;
-      }
-      location.href = postLoginPath(String(data.role || ""), false);
+      location.href = resolvePostLoginHref({
+        role: data.role,
+        mustChangePassword: !!data.mustChangePassword,
+        callbackUrl: safeCallback,
+      });
     } catch (e: any) {
       setErr(e.message || "로그인 실패");
     } finally {
@@ -67,32 +62,36 @@ export default function LoginClient() {
   };
 
   return (
-    <div className="vh-auth-hero">
+    <div className="vh-auth-hero vh-splash-ivory">
       <div
-        className="vh-auth-bg"
-        style={{ backgroundImage: "url(/brand/hero-fairway.jpg)" }}
+        className="vh-auth-bg vh-splash-course"
+        style={{ backgroundImage: `url(${PWA_SPLASH_COURSE})` }}
         aria-hidden
       />
-      <div className="vh-auth-overlay" aria-hidden />
+      <div className="vh-auth-overlay vh-splash-ivory-overlay" aria-hidden />
 
       <div className="vh-auth-frame">
         <header className="vh-auth-top">
           <Link href="/" className="vh-auth-brand">
-            VERTHILL <span>Caddy</span>
+            VERTHILL <span>Caddy System</span>
           </Link>
         </header>
 
         <div className="vh-auth-stage">
           <div className="vh-auth-intro">
-            <p className="vh-auth-eyebrow">Golf Resort Operations</p>
-            <h1 className="vh-auth-title">VERTHILL Caddy</h1>
-            <div className="vh-auth-rule" aria-hidden />
-            <p className="vh-auth-lead">
-              프리미엄 골프 리조트를 위한 캐디·가용·배치 운영 시스템
-            </p>
+            <img
+              className="vh-splash-mark vh-splash-mark-sm"
+              src={PWA_MONOGRAM}
+              alt=""
+              width={72}
+              height={52}
+            />
+            <h1 className="vh-auth-title">VERTHILL</h1>
+            <p className="vh-splash-subtitle">Caddy System</p>
           </div>
 
-          <form onSubmit={onSubmit} className="vh-auth-card">
+          <div className="vh-auth-login-col">
+            <form onSubmit={onSubmit} className="vh-auth-card">
             <h2 className="vh-auth-card-title">로그인</h2>
             <p className="vh-auth-card-sub">관리자 및 캐디 계정으로 입장합니다</p>
 
@@ -147,6 +146,8 @@ export default function LoginClient() {
               {loading ? "로그인 중…" : "로그인"}
             </button>
           </form>
+          <PwaInstallCard />
+          </div>
         </div>
       </div>
     </div>

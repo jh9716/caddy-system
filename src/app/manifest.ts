@@ -19,7 +19,7 @@ export default function manifest(): MetadataRoute.Manifest {
   return {
     name: PWA_NAME,
     short_name: PWA_SHORT_NAME,
-    description: "VERTHILL 캐디",
+    description: "VERTHILL Caddy System",
     lang: PWA_LANG,
     start_url: PWA_START_URL,
     scope: PWA_SCOPE,

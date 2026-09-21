@@ -62,18 +62,18 @@ export default function ChangePasswordClient({
   };
 
   return (
-    <div className="vh-auth-hero">
+    <div className="vh-auth-hero vh-splash-ivory">
       <div
-        className="vh-auth-bg"
-        style={{ backgroundImage: "url(/brand/hero-fairway.jpg)" }}
+        className="vh-auth-bg vh-splash-course"
+        style={{ backgroundImage: "url(/brand/splash-course.jpg)" }}
         aria-hidden
       />
-      <div className="vh-auth-overlay" aria-hidden />
+      <div className="vh-auth-overlay vh-splash-ivory-overlay" aria-hidden />
 
       <div className="vh-auth-frame">
         <header className="vh-auth-top">
           <span className="vh-auth-brand">
-            VERTHILL <span>Caddy</span>
+            VERTHILL <span>Caddy System</span>
           </span>
         </header>
 

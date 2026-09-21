@@ -5,6 +5,21 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
+  isIosDevice,
+  isAndroidDevice,
+  isSamsungInternet,
+  isStandaloneDisplay,
+  resolvePwaInstallSurface,
+  shouldRegisterServiceWorker,
+  PWA_INSTALL_ANDROID_BODY,
+  PWA_INSTALL_BUTTON,
+  PWA_INSTALL_IOS_BODY,
+  PWA_INSTALL_SAMSUNG_BODY,
+  PWA_INSTALL_STANDALONE_LABEL,
+  PWA_INSTALL_TITLE,
+  pwaInstallBody,
+} from "../src/lib/pwaInstall";
+import {
   PWA_APPLE_TOUCH_ICON,
   PWA_BACKGROUND_COLOR,
   PWA_DISPLAY,
@@ -13,23 +28,15 @@ import {
   PWA_ICON_512,
   PWA_ICON_512_MASKABLE,
   PWA_NAME,
+  PWA_NOTIFICATION_BADGE,
+  PWA_NOTIFICATION_ICON,
   PWA_SCOPE,
   PWA_SHORT_NAME,
+  PWA_SPLASH_PORTRAIT,
   PWA_START_URL,
   PWA_SW_URL,
   PWA_THEME_COLOR,
 } from "../src/lib/pwaManifest";
-import {
-  isIosDevice,
-  isStandaloneDisplay,
-  resolvePwaInstallSurface,
-  shouldRegisterServiceWorker,
-  PWA_INSTALL_ANDROID_BODY,
-  PWA_INSTALL_BUTTON,
-  PWA_INSTALL_IOS_BODY,
-  PWA_INSTALL_STANDALONE_LABEL,
-  PWA_INSTALL_TITLE,
-} from "../src/lib/pwaInstall";
 import manifest from "../src/app/manifest";
 import { SESSION_MAX_AGE_SEC } from "../src/lib/sessionCookies";
 
@@ -120,6 +127,7 @@ const files: Array<[string, number]> = [
   ["public/icons/icon-192-maskable.png", 192],
   ["public/icons/icon-512-maskable.png", 512],
   ["public/icons/apple-touch-icon.png", 180],
+  ["public/icons/badge-96.png", 96],
   ["src/app/icon.png", 192],
 ];
 for (const [rel, size] of files) {
@@ -133,6 +141,46 @@ assert(favIco.readUInt16LE(2) === 1, "src/app/favicon.ico is ICO");
 assert(favIco.readUInt16LE(4) === 1, "one ICO image");
 assert(favIco[6] === 32 && favIco[7] === 32, "favicon 32x32");
 assert(fs.existsSync(path.join(process.cwd(), "public/favicon.ico")), "public/favicon.ico exists");
+assert(PWA_NOTIFICATION_ICON === PWA_ICON_192, "notification icon reuses 192");
+assert(PWA_NOTIFICATION_BADGE === "/icons/badge-96.png", "notification badge path");
+assert(PWA_SPLASH_PORTRAIT === "/brand/splash-portrait.jpg", "splash portrait path");
+assert(
+  fs.existsSync(path.join(process.cwd(), "public/brand/splash-portrait.jpg")),
+  "splash-portrait.jpg exists"
+);
+assert(
+  fs.existsSync(path.join(process.cwd(), "public/brand/app-icon-master.png")),
+  "app-icon-master exists"
+);
+assert(PWA_BACKGROUND_COLOR === "#f6f1e8", "native splash background is ivory");
+assert(PWA_THEME_COLOR === "#163028", "theme color deep green");
+assert(
+  fs.existsSync(path.join(process.cwd(), "public/brand/verthill-monogram.png")),
+  "gold monogram exists"
+);
+assert(
+  fs.existsSync(path.join(process.cwd(), "public/brand/splash-course.jpg")),
+  "splash course photo exists"
+);
+assert(
+  fs.existsSync(path.join(process.cwd(), "public/brand/source-app-icon.png")),
+  "approved app icon source exists"
+);
+assert(
+  fs.existsSync(path.join(process.cwd(), "public/brand/source-splash.png")),
+  "approved splash source exists"
+);
+assert(
+  readSrc("scripts/build-brand-assets.cjs").includes("source-app-icon.png"),
+  "icon builder uses approved app icon source"
+);
+assert(
+  readSrc("scripts/build-brand-assets.cjs").includes("source-splash.png"),
+  "splash builder uses approved splash source"
+);
+assert(!readSrc("src/app/page.tsx").includes("hero-green.jpg"), "home does not reuse hero-green splash");
+assert(!readSrc("src/app/login/LoginClient.tsx").includes("hero-fairway.jpg"), "login does not reuse hero-fairway splash");
+assert(readSrc("src/app/page.tsx").includes("verthill-monogram.png") || readSrc("src/app/page.tsx").includes("PWA_MONOGRAM"), "home uses gold monogram");
 
 section("root metadata");
 const layout = readSrc("src/app/layout.tsx");
@@ -141,6 +189,8 @@ assert(layout.includes("applicationName"), "applicationName");
 assert(layout.includes("manifest:"), "manifest field");
 assert(layout.includes("/manifest.webmanifest"), "manifest.webmanifest");
 assert(layout.includes("appleWebApp"), "appleWebApp");
+assert(layout.includes("startupImage"), "apple startupImage splash");
+assert(layout.includes("PWA_SPLASH_PORTRAIT") || layout.includes("/brand/splash-portrait.jpg"), "splash portrait wired");
 assert(layout.includes("apple-mobile-web-app-capable"), "iOS apple-mobile-web-app-capable");
 assert(layout.includes("template:"), "title template");
 assert(layout.includes("export const viewport"), "viewport export (Next themeColor)");
@@ -170,7 +220,9 @@ assert(
 );
 assert(sw.includes("showNotification"), "shows system notification");
 assert(sw.includes("clients.openWindow"), "openWindow on click if no client");
-assert(sw.includes("/icons/icon-192.png"), "reuses PWA icon");
+assert(sw.includes("/icons/icon-192.png"), "notification icon 192");
+assert(sw.includes("/icons/badge-96.png"), "notification badge 96");
+assert(!sw.includes('badge: "/icons/icon-192.png"'), "badge is not the full app icon");
 assert(!sw.includes("/api"), "SW does not special-case or cache /api");
 assert(PWA_SW_URL === "/sw.js", "SW url /sw.js");
 
@@ -204,13 +256,56 @@ assert(resolvePwaInstallSurface({ standalone: true, ios: false, hasBeforeInstall
 assert(resolvePwaInstallSurface({ standalone: false, ios: true, hasBeforeInstallPrompt: false }) === "ios-hint", "iOS hint");
 assert(resolvePwaInstallSurface({ standalone: false, ios: true, hasBeforeInstallPrompt: true }) === "ios-hint", "iOS ignores BIP");
 assert(resolvePwaInstallSurface({ standalone: false, ios: false, hasBeforeInstallPrompt: true }) === "android-prompt", "Android prompt");
-assert(resolvePwaInstallSurface({ standalone: false, ios: false, hasBeforeInstallPrompt: false }) === "hidden", "hidden without BIP");
+assert(resolvePwaInstallSurface({ standalone: false, ios: false, hasBeforeInstallPrompt: false }) === "hidden", "desktop hidden without BIP");
+assert(
+  resolvePwaInstallSurface({
+    standalone: false,
+    ios: false,
+    hasBeforeInstallPrompt: false,
+    android: true,
+  }) === "android-hint",
+  "Android hint without BIP"
+);
+assert(
+  resolvePwaInstallSurface({
+    standalone: false,
+    ios: false,
+    hasBeforeInstallPrompt: false,
+    samsung: true,
+    android: true,
+  }) === "samsung-hint",
+  "Samsung hint without BIP"
+);
+assert(
+  resolvePwaInstallSurface({
+    standalone: false,
+    ios: false,
+    hasBeforeInstallPrompt: true,
+    samsung: true,
+    android: true,
+  }) === "android-prompt",
+  "BIP wins over Samsung hint"
+);
 assert(isStandaloneDisplay({ displayModeStandalone: true, iosNavigatorStandalone: false }), "display-mode standalone");
 assert(isStandaloneDisplay({ displayModeStandalone: false, iosNavigatorStandalone: true }), "iOS navigator.standalone");
 assert(!isStandaloneDisplay({ displayModeStandalone: false, iosNavigatorStandalone: false }), "browser is not standalone");
 assert(isIosDevice("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)"), "iPhone UA");
 assert(isIosDevice("Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X)"), "iPad UA");
 assert(!isIosDevice("Mozilla/5.0 (Linux; Android 14; Pixel) Chrome/120.0.0.0"), "Android UA not iOS");
+assert(
+  isSamsungInternet(
+    "Mozilla/5.0 (Linux; Android 14; SAMSUNG SM-S928B) AppleWebKit/537.36 SamsungBrowser/25.0 Chrome/121.0.0.0 Mobile Safari/537.36"
+  ),
+  "Samsung Internet UA"
+);
+assert(
+  isAndroidDevice("Mozilla/5.0 (Linux; Android 14; Pixel) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36"),
+  "Chrome Android UA"
+);
+assert(
+  !isAndroidDevice("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)"),
+  "iPhone is not Android"
+);
 
 const card = readSrc("src/components/PwaInstallCard.tsx");
 assert(card.includes("beforeinstallprompt"), "listens for beforeinstallprompt");
@@ -222,16 +317,34 @@ assert(!card.includes("requestPermission"), "no permission request");
 assert(!card.includes("PushManager"), "no PushManager");
 assert(!card.includes("showModal") && !card.includes("<dialog"), "no install modal");
 assert(card.includes(PWA_INSTALL_TITLE) || card.includes("PWA_INSTALL_TITLE"), "install title");
-assert(card.includes("PWA_INSTALL_IOS_BODY"), "iOS copy");
+assert(card.includes("PWA_INSTALL_IOS_BODY") || card.includes("pwaInstallBody"), "iOS copy");
 assert(card.includes("PWA_INSTALL_STANDALONE_LABEL"), "standalone copy");
-assert(PWA_INSTALL_BUTTON === "앱 설치", "button copy");
+assert(card.includes("isSamsungInternet"), "detects Samsung Internet");
+assert(card.includes("isAndroidDevice"), "detects Android");
+assert(PWA_INSTALL_BUTTON === "설치", "button copy");
+assert(PWA_INSTALL_TITLE === "홈 화면에 추가", "title is add to home screen");
 assert(PWA_INSTALL_ANDROID_BODY.includes("홈 화면"), "android body");
 assert(PWA_INSTALL_IOS_BODY.includes("홈 화면에 추가"), "ios body");
+assert(PWA_INSTALL_SAMSUNG_BODY.includes("삼성 인터넷"), "samsung body");
 assert(PWA_INSTALL_STANDALONE_LABEL === "앱으로 사용 중", "standalone label");
+assert(pwaInstallBody("ios-hint") === PWA_INSTALL_IOS_BODY, "ios body helper");
+assert(pwaInstallBody("samsung-hint") === PWA_INSTALL_SAMSUNG_BODY, "samsung body helper");
 
 const caddyPage = readSrc("src/app/caddy/page.tsx");
 assert(caddyPage.includes("PwaInstallCard"), "/caddy renders install card");
 assert(!caddyPage.includes("beforeinstallprompt"), "/caddy does not auto-prompt itself");
+const loginClient = readSrc("src/app/login/LoginClient.tsx");
+assert(loginClient.includes("PwaInstallCard"), "login renders install card");
+assert(loginClient.includes("VERTHILL"), "login title VERTHILL");
+assert(loginClient.includes("Caddy System"), "login subtitle Caddy System");
+assert(!loginClient.includes("Golf Resort Operations"), "login dropped operations eyebrow");
+assert(!loginClient.includes("예술이 머무는"), "login has no poetic tagline");
+const home = readSrc("src/app/page.tsx");
+assert(home.includes("Caddy System"), "home subtitle Caddy System");
+assert(home.includes("vh-home-title\">VERTHILL"), "home title VERTHILL only");
+assert(!home.includes("Premium Golf Resort"), "home dropped resort eyebrow");
+assert(!home.includes("예술이 머무는"), "home has no poetic tagline");
+assert(!home.includes("Operations Console"), "home dropped operations footer");
 
 section("auth / API cache forbidden + no push/schema");
 const pwaFiles = [

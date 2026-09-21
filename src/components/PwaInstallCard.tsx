@@ -2,13 +2,14 @@
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import {
-  PWA_INSTALL_ANDROID_BODY,
   PWA_INSTALL_BUTTON,
-  PWA_INSTALL_IOS_BODY,
   PWA_INSTALL_STANDALONE_LABEL,
   PWA_INSTALL_TITLE,
+  isAndroidDevice,
   isIosDevice,
+  isSamsungInternet,
   isStandaloneDisplay,
+  pwaInstallBody,
   resolvePwaInstallSurface,
 } from "@/lib/pwaInstall";
 
@@ -20,6 +21,8 @@ type BeforeInstallPromptEvent = Event & {
 export default function PwaInstallCard() {
   const [standalone, setStandalone] = useState(false);
   const [ios, setIos] = useState(false);
+  const [samsung, setSamsung] = useState(false);
+  const [android, setAndroid] = useState(false);
   const [deferred, setDeferred] = useState<BeforeInstallPromptEvent | null>(
     null
   );
@@ -28,13 +31,16 @@ export default function PwaInstallCard() {
   useEffect(() => {
     const media = window.matchMedia("(display-mode: standalone)");
     const nav = window.navigator as Navigator & { standalone?: boolean };
+    const ua = window.navigator.userAgent;
     setStandalone(
       isStandaloneDisplay({
         displayModeStandalone: media.matches,
         iosNavigatorStandalone: nav.standalone === true,
       })
     );
-    setIos(isIosDevice(window.navigator.userAgent));
+    setIos(isIosDevice(ua));
+    setSamsung(isSamsungInternet(ua));
+    setAndroid(isAndroidDevice(ua));
 
     const onChange = () => {
       const nextNav = window.navigator as Navigator & { standalone?: boolean };
@@ -70,9 +76,11 @@ export default function PwaInstallCard() {
       resolvePwaInstallSurface({
         standalone,
         ios,
+        samsung,
+        android,
         hasBeforeInstallPrompt: deferred != null,
       }),
-    [standalone, ios, deferred]
+    [standalone, ios, samsung, android, deferred]
   );
 
   async function onInstallClick() {
@@ -110,7 +118,7 @@ export default function PwaInstallCard() {
         {PWA_INSTALL_TITLE}
       </div>
       <p style={{ margin: "6px 0 0", fontSize: 13, color: "#4d5a52" }}>
-        {surface === "ios-hint" ? PWA_INSTALL_IOS_BODY : PWA_INSTALL_ANDROID_BODY}
+        {pwaInstallBody(surface)}
       </p>
       {surface === "android-prompt" && (
         <button

@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import PwaInstallCard from '@/components/PwaInstallCard'
 import PushNotificationCard from '@/components/PushNotificationCard'
+import { resolveCaddyPageGate } from '@/lib/roleRouting'
 
 type Summary = {
   date: string
@@ -19,6 +20,7 @@ type Summary = {
 export default function CaddyPage() {
   const router = useRouter()
   const [loading, setLoading] = useState(true)
+  const [allowed, setAllowed] = useState(false)
   const [summary, setSummary] = useState<Summary | null>(null)
 
   useEffect(() => {
@@ -26,9 +28,14 @@ export default function CaddyPage() {
       try {
         const r = await fetch('/api/check-role', { credentials: 'include' })
         const d = await r.json()
-        if (d.role !== 'caddy' && d.role !== 'leader') {
-          alert('캐디만 접근 가능합니다.')
-          router.push('/login')
+        const gate = resolveCaddyPageGate(d.role)
+        if (gate.action === 'replace') {
+          router.replace(gate.href)
+          return
+        }
+        if (gate.action === 'deny') {
+          alert(gate.alertMessage)
+          router.push(gate.href)
           return
         }
         // 미연결 Kakao 직원 → 본인확인 요청 화면으로 유도 (middleware 미변경)
@@ -51,8 +58,10 @@ export default function CaddyPage() {
         const res = await fetch('/api/summary', { credentials: 'include' })
         const data: Summary = await res.json()
         setSummary(data)
+        setAllowed(true)
       } catch {
         alert('정보를 불러오지 못했습니다.')
+        setAllowed(true)
       } finally {
         setLoading(false)
       }
@@ -60,7 +69,7 @@ export default function CaddyPage() {
     run()
   }, [router])
 
-  if (loading) return <p style={{ textAlign:'center', marginTop:100 }}>로딩 중…</p>
+  if (loading || !allowed) return <p style={{ textAlign:'center', marginTop:100 }}>로딩 중…</p>
 
   return (
     <div style={{ maxWidth: 1100, margin: '10px auto' }}>
