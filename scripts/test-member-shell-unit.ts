@@ -13,6 +13,7 @@ import {
   shouldUseMemberShell,
 } from "../src/lib/boardNav";
 import { manageNavItems } from "../src/components/manage/ManageShell";
+import { resolveCaddyPageGate } from "../src/lib/roleRouting";
 
 let passed = 0;
 let failed = 0;
@@ -98,7 +99,8 @@ section("wiring");
   assert(chrome.includes('aria-label="메뉴 열기"'), "hamburger");
   assert(chrome.includes("VERTHILL"), "central brand");
   const caddyPage = read("src/app/caddy/page.tsx");
-  assert(caddyPage.includes("d.role !== 'leader'"), "leader can open 내 대시보드");
+  assert(resolveCaddyPageGate("leader").action === "enter", "leader can open 내 대시보드");
+  assert(caddyPage.includes("resolveCaddyPageGate"), "caddy page uses role gate helper");
   const home = read("src/app/page.tsx");
   assert(home.includes('role === "leader"'), "home CTA sends leader to /caddy");
   const css = read("src/app/globals.css");
