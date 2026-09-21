@@ -114,7 +114,7 @@ export const PWA_INSTALL_IOS_STEPS = [
 ] as const;
 
 export const PWA_INSTALL_SAMSUNG_STEPS = [
-  "오른쪽 위 메뉴(⋮)를 엽니다.",
+  "오른쪽 위 메뉴(점 3개)를 엽니다.",
   "'현재 페이지 추가' 또는 '홈 화면에 추가'를 선택합니다.",
   "홈 화면에서 VERTHILL을 앱처럼 엽니다.",
 ] as const;
