@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
   applySessionCookies,
@@ -18,6 +17,7 @@ import {
   safeReturnPath,
   statesMatch,
 } from "@/lib/kakaoOAuth";
+import { findOrCreateKakaoSessionUser } from "@/lib/kakaoSessionUser";
 import { resolvePostLoginHref } from "@/lib/roleRouting";
 
 export const dynamic = "force-dynamic";
@@ -81,56 +81,7 @@ export async function GET(req: NextRequest) {
 
   let role: AppRole = "caddy";
   try {
-    // Existing user: 1 User lookup. Caddy link is not needed to issue the session.
-    let user = await prisma.user.findUnique({
-      where: { kakaoUserId },
-      select: {
-        id: true,
-        username: true,
-        role: true,
-        sessionVersion: true,
-      },
-    });
-
-    if (!user) {
-      try {
-        user = await prisma.user.create({
-          data: {
-            username,
-            password: null,
-            role: "caddy",
-            caddyId: null,
-            managedTeams: [],
-            kakaoUserId,
-          },
-          select: {
-            id: true,
-            username: true,
-            role: true,
-            sessionVersion: true,
-          },
-        });
-      } catch (e) {
-        // 동시 최초 로그인 레이스 → kakaoUserId unique
-        if (
-          e instanceof Prisma.PrismaClientKnownRequestError &&
-          e.code === "P2002"
-        ) {
-          user = await prisma.user.findUnique({
-            where: { kakaoUserId },
-            select: {
-              id: true,
-              username: true,
-              role: true,
-              sessionVersion: true,
-            },
-          });
-        } else {
-          throw e;
-        }
-      }
-    }
-
+    const user = await findOrCreateKakaoSessionUser(prisma, kakaoUserId);
     if (!user) return redirectLoginError(req, "kakao_user");
 
     // 기존 User는 DB role 유지 (leader 등). 신규는 caddy.

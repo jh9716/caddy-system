@@ -44,3 +44,19 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Capacitor / Android local build (commit the project, not outputs)
+android/.gradle/
+android/.idea/
+android/build/
+android/app/build/
+android/app/.cxx/
+android/local.properties
+android/kakao.properties
+android/app/debug.keystore
+android/captures/
+android/*.iml
+android/app/*.iml
+*.apk
+*.aab
+*.ap_

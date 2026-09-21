@@ -48,6 +48,7 @@ function cookieJar(map: Record<string, string>) {
 }
 
 const callbackSrc = read("src/app/api/auth/kakao/callback/route.ts");
+const kakaoSessionUserSrc = read("src/lib/kakaoSessionUser.ts");
 const layoutSrc = read("src/app/manage/layout.tsx");
 const pageSrc = read("src/app/manage/page.tsx");
 const shellSrc = read("src/components/manage/ManageShell.tsx");
@@ -60,10 +61,19 @@ const loginClientSrc = read("src/app/login/LoginClient.tsx");
 
 console.log("== before/after query budget (source) ==");
 {
-  const callbackUserFinds = callbackSrc.split("prisma.user.findUnique").length - 1;
+  const callbackUserFinds =
+    kakaoSessionUserSrc.split("db.user.findUnique").length - 1;
   // existing path uses 1; P2002 retry is a second findUnique in the race branch
+  assert(
+    callbackSrc.includes("findOrCreateKakaoSessionUser"),
+    "callback uses shared Kakao User helper"
+  );
   assert(callbackUserFinds === 2, "callback User findUnique: happy path 1 + P2002 retry 1");
   assert(!/prisma\.caddy\./.test(callbackSrc), "callback does not query Caddy");
+  assert(
+    !/prisma\.caddy\./.test(kakaoSessionUserSrc),
+    "Kakao User helper does not query Caddy model"
+  );
   assert(
     !/include:\s*\{[^}]*caddy/.test(callbackSrc),
     "callback session issue does not load User↔Caddy"
