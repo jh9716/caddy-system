@@ -3,10 +3,17 @@
 import { useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { Capacitor } from "@capacitor/core";
 import PwaInstallCard from "@/components/PwaInstallCard";
 import { PWA_MONOGRAM, PWA_SPLASH_COURSE } from "@/lib/pwaManifest";
 import { resolvePostLoginHref } from "@/lib/roleRouting";
 import { safeReturnPath } from "@/lib/safeReturnPath";
+import { KakaoNativeAuth } from "@/lib/kakaoNativeAuth";
+import {
+  KAKAO_NATIVE_SESSION_PATH,
+  nativeKakaoSessionRequestInit,
+  runKakaoLogin,
+} from "@/lib/kakaoNativeBridge";
 
 const KAKAO_ERROR_MESSAGES: Record<string, string> = {
   kakao_config: "카카오 로그인 설정이 없습니다. 관리자에게 문의하세요.",
@@ -14,6 +21,10 @@ const KAKAO_ERROR_MESSAGES: Record<string, string> = {
   kakao_state: "카카오 로그인 보안 검증에 실패했습니다. 다시 시도해 주세요.",
   kakao_token: "카카오 인증에 실패했습니다. 잠시 후 다시 시도해 주세요.",
   kakao_user: "카카오 계정 처리 중 오류가 발생했습니다.",
+  kakao_retired: "사용할 수 없는 계정입니다.",
+  missing_token: "카카오 인증에 실패했습니다. 잠시 후 다시 시도해 주세요.",
+  client_kakao_id_not_trusted:
+    "카카오 로그인 보안 검증에 실패했습니다. 다시 시도해 주세요.",
 };
 
 export default function LoginClient() {
@@ -54,11 +65,52 @@ export default function LoginClient() {
     }
   };
 
-  const onKakao = () => {
-    const qs = safeCallback
-      ? `?callbackUrl=${encodeURIComponent(safeCallback)}`
-      : "";
-    location.href = `/api/auth/kakao/start${qs}`;
+  const onKakao = async () => {
+    setErr("");
+    setLoading(true);
+    try {
+      const result = await runKakaoLogin({
+        isNativePlatform: Capacitor.isNativePlatform(),
+        callbackUrl: safeCallback,
+        nativeLogin: () => KakaoNativeAuth.login(),
+        exchangeSession: async (accessToken, callbackUrl) => {
+          const res = await fetch(
+            KAKAO_NATIVE_SESSION_PATH,
+            nativeKakaoSessionRequestInit(accessToken, callbackUrl)
+          );
+          const data = (await res.json().catch(() => ({}))) as {
+            error?: string;
+            role?: string;
+            href?: string;
+          };
+          if (!res.ok) {
+            const code = String(data?.error || "");
+            throw new Error(
+              KAKAO_ERROR_MESSAGES[code] || "로그인에 실패했습니다."
+            );
+          }
+          const role = String(data.role || "");
+          return {
+            role,
+            href:
+              String(data.href || "") ||
+              resolvePostLoginHref({
+                role,
+                callbackUrl: safeCallback,
+              }),
+          };
+        },
+      });
+      if (result.mode === "rest") {
+        location.href = result.startUrl;
+        return;
+      }
+      location.href = result.href;
+    } catch (e: any) {
+      setErr(e.message || "로그인 실패");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -98,6 +150,7 @@ export default function LoginClient() {
             <button
               type="button"
               onClick={onKakao}
+              disabled={loading}
               className="vh-auth-kakao"
             >
               카카오로 시작

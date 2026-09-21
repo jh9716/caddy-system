@@ -2,10 +2,8 @@
  * Native Kakao Android SDK → vh_session exchange contract.
  *
  * App-only. Web/PWA keep REST `/api/auth/kakao/start` + `/callback`.
- * This module is the server-side design lock. The HTTP route is not
- * mounted in this step (no live Kakao login, no production User write).
  *
- * Flow (next implementation):
+ * Flow:
  *   native SDK OAuthToken
  *   → Capacitor bridge (memory only)
  *   → POST /api/auth/kakao/native-session { accessToken }
@@ -13,7 +11,7 @@
  *   → User.kakaoUserId
  *   → applySessionCookies(vh_session)
  *
- * Forbidden: localStorage, logs, DB columns for the access token.
+ * Forbidden: localStorage, sessionStorage, logs, DB columns for the access token.
  * Forbidden: trusting client-supplied kakaoUserId.
  */
 
@@ -221,8 +219,26 @@ export async function exchangeNativeKakaoSession(
   };
 }
 
-/** Default live Kakao fetchers for the future route. Unused this step. */
+/** Default live Kakao fetchers for POST /api/auth/kakao/native-session. */
 export const liveNativeKakaoFetchers = {
   fetchTokenInfo: fetchKakaoAccessTokenInfo,
   fetchUserId: fetchKakaoUserId,
 };
+
+export function nativeKakaoSessionHttpStatus(
+  error: NativeKakaoSessionFail["error"]
+): number {
+  switch (error) {
+    case "kakao_config":
+      return 503;
+    case "kakao_token":
+      return 401;
+    case "kakao_retired":
+      return 403;
+    case "kakao_user":
+    case "invalid_json":
+    case "missing_token":
+    case "client_kakao_id_not_trusted":
+      return 400;
+  }
+}

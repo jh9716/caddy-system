@@ -10,6 +10,8 @@ import {
 import {
   NATIVE_KAKAO_LOGIN_ENABLED,
   nativeKakaoSessionRequestInit,
+  restKakaoStartUrl,
+  runKakaoLogin,
   shouldUseNativeKakaoLogin,
 } from "../src/lib/kakaoNativeBridge";
 import {
@@ -17,6 +19,7 @@ import {
   getKakaoAppIdConfig,
   kakaoAppIdMatches,
   kakaoBearerHeaders,
+  nativeKakaoSessionHttpStatus,
   parseKakaoAccessTokenInfo,
   parseNativeKakaoSessionBody,
 } from "../src/lib/kakaoNativeSession";
@@ -303,20 +306,70 @@ section("exchangeNativeKakaoSession");
   }
 }
 
-section("native bridge stays off");
-assert(NATIVE_KAKAO_LOGIN_ENABLED === false, "native Kakao login flag off");
+section("native bridge app-only");
+assert(NATIVE_KAKAO_LOGIN_ENABLED === true, "native Kakao login flag on");
 assert(
-  shouldUseNativeKakaoLogin({ isNativePlatform: true }) === false,
-  "native platform still uses REST until flag on"
+  shouldUseNativeKakaoLogin({ isNativePlatform: true }) === true,
+  "Capacitor Android uses native Kakao"
 );
 assert(
   shouldUseNativeKakaoLogin({ isNativePlatform: false }) === false,
   "web/PWA never uses native Kakao"
 );
-const reqInit = nativeKakaoSessionRequestInit("secret-token");
+assert(
+  restKakaoStartUrl("/caddy") === "/api/auth/kakao/start?callbackUrl=%2Fcaddy",
+  "REST start URL kept for web/PWA"
+);
+const reqInit = nativeKakaoSessionRequestInit("secret-token", "/caddy");
 assert(reqInit.credentials === "include", "cookie credentials include");
 assert(reqInit.method === "POST", "POST native-session");
 assert(!reqInit.body.includes("kakaoUserId"), "body has no kakaoUserId");
+assert(reqInit.body.includes("callbackUrl"), "optional callbackUrl allowed");
+assert(
+  nativeKakaoSessionHttpStatus("missing_token") === 400,
+  "missing token 400"
+);
+assert(
+  nativeKakaoSessionHttpStatus("client_kakao_id_not_trusted") === 400,
+  "spoof id 400"
+);
+assert(nativeKakaoSessionHttpStatus("kakao_token") === 401, "bad token 401");
+assert(
+  nativeKakaoSessionHttpStatus("kakao_retired") === 403,
+  "retired 403"
+);
+assert(nativeKakaoSessionHttpStatus("kakao_config") === 503, "config 503");
+
+{
+  const rest = await runKakaoLogin({
+    isNativePlatform: false,
+    callbackUrl: "/caddy",
+    nativeLogin: async () => {
+      throw new Error("native must not run on web");
+    },
+    exchangeSession: async () => {
+      throw new Error("exchange must not run on web");
+    },
+  });
+  assert(rest.mode === "rest", "web uses REST mode");
+  assert(
+    rest.mode === "rest" && rest.startUrl.includes("/api/auth/kakao/start"),
+    "web start URL is REST"
+  );
+
+  const native = await runKakaoLogin({
+    isNativePlatform: true,
+    callbackUrl: "/caddy",
+    nativeLogin: async () => ({ accessToken: "mem-only" }),
+    exchangeSession: async (token, cb) => {
+      assert(token === "mem-only", "exchange receives memory token");
+      assert(cb === "/caddy", "callback forwarded");
+      return { role: "caddy", href: "/caddy" };
+    },
+  });
+  assert(native.mode === "native", "app uses native mode");
+  assert(native.mode === "native" && native.href === "/caddy", "native href");
+}
 
 if (failed) {
   console.error(`\nFAILED ${failed} / ${passed + failed}`);

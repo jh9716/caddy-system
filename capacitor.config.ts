@@ -10,8 +10,9 @@ import type { CapacitorConfig } from "@capacitor/cli";
  * - Does not duplicate API/backend.
  * - iOS / FCM / APNs / Camera remain out of scope.
  * - REST Kakao OAuth inside this WebView is terminated (Samsung Internet dump).
- *   Do not add more allowNavigation hosts. App Kakao login is Android SDK +
- *   POST /api/auth/kakao/native-session (not wired this step).
+ *   Do not add more allowNavigation hosts.
+ * - App Kakao login: Android SDK + POST /api/auth/kakao/native-session.
+ *   Web/PWA keep REST /api/auth/kakao/start.
  */
 const config: CapacitorConfig = {
   appId: "kr.verthill.caddy",

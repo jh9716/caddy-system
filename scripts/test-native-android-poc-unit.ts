@@ -119,15 +119,22 @@ assert(
 );
 assert(roleRouting.includes("caddy") && roleRouting.includes("/caddy"), "caddy routing intact");
 
-console.log("== Kakao REST kept; native SDK not wired ==");
+console.log("== Kakao REST kept; native SDK wired for Capacitor only ==");
 assert(
-  loginClient.includes('location.href = `/api/auth/kakao/start${qs}`'),
-  "Kakao button still uses in-page start redirect"
+  loginClient.includes("runKakaoLogin") &&
+    loginClient.includes("KakaoNativeAuth.login"),
+  "LoginClient native Kakao path exists"
 );
 assert(
-  !loginClient.includes("KakaoNativeAuth") &&
-    !loginClient.includes("native-session"),
-  "LoginClient does not call native Kakao this step"
+  loginClient.includes("/api/auth/kakao/start") ||
+    read("src/lib/kakaoNativeBridge.ts").includes("/api/auth/kakao/start"),
+  "web/PWA REST start URL remains"
+);
+assert(
+  read("src/lib/kakaoNativeBridge.ts").includes(
+    "input.isNativePlatform === true"
+  ),
+  "native Kakao requires Capacitor native platform"
 );
 assert(
   kakaoStart.includes("buildKakaoRedirectUri") &&
@@ -147,8 +154,25 @@ assert(
   "REST callback reuses shared Kakao User helper"
 );
 assert(
-  !exists("src/app/api/auth/kakao/native-session/route.ts"),
-  "native-session HTTP route is not mounted yet"
+  exists("src/app/api/auth/kakao/native-session/route.ts"),
+  "native-session HTTP route is mounted"
+);
+const nativeSession = read("src/app/api/auth/kakao/native-session/route.ts");
+assert(
+  nativeSession.includes("getKakaoAppIdConfig") &&
+    nativeSession.includes("liveNativeKakaoFetchers") &&
+    nativeSession.includes("findOrCreateKakaoSessionUser") &&
+    nativeSession.includes("applySessionCookies"),
+  "native-session verifies Kakao token then reuses User + vh_session"
+);
+assert(
+  !/console\.(log|info|debug|error)\([^)]*accessToken/.test(nativeSession),
+  "native-session does not log accessToken"
+);
+assert(
+  !nativeSession.includes("localStorage") &&
+    !nativeSession.includes("sessionStorage"),
+  "native-session does not touch web storage"
 );
 
 console.log("== CourseReport file input remains web input ==");
@@ -175,18 +199,42 @@ assert(
 assert(
   read(
     "android/app/src/main/java/kr/verthill/caddy/kakao/KakaoNativeAuthPlugin.java"
-  ).includes("unimplemented"),
-  "native Kakao plugin is unimplemented this step"
+  ).includes("loginWithKakaoTalk") &&
+    read(
+      "android/app/src/main/java/kr/verthill/caddy/kakao/KakaoNativeAuthPlugin.java"
+    ).includes("loginWithKakaoAccount"),
+  "native Kakao plugin uses Talk then Account fallback"
+);
+assert(
+  !/Log\.(d|i|v|e|w)\([^)]*accessToken/.test(
+    read(
+      "android/app/src/main/java/kr/verthill/caddy/kakao/KakaoNativeAuthPlugin.java"
+    )
+  ),
+  "plugin does not log accessToken"
 );
 assert(manifest.includes("android.permission.INTERNET"), "INTERNET permission");
 assert(
   manifest.includes("com.kakao.talk"),
-  "queries includes KakaoTalk for future SDK login"
+  "queries includes KakaoTalk for SDK login"
 );
 assert(
-  !manifest.includes("com.kakao.sdk.auth.AuthCodeHandlerActivity") ||
-    manifest.includes("do not enable until Kakao SDK"),
-  "AuthCodeHandlerActivity is documented, not live"
+  manifest.includes("com.kakao.sdk.auth.AuthCodeHandlerActivity") &&
+    manifest.includes("${kakaoScheme}"),
+  "AuthCodeHandlerActivity uses injected kakaoScheme"
+);
+assert(
+  manifest.includes("android:name=\".VerthillApp\""),
+  "custom Application inits KakaoSdk"
+);
+assert(
+  read("android/app/src/main/java/kr/verthill/caddy/VerthillApp.java").includes(
+    "KakaoSdk.init"
+  ) &&
+    read("android/app/src/main/java/kr/verthill/caddy/VerthillApp.java").includes(
+      "setLoggingEnabled(false)"
+    ),
+  "VerthillApp calls KakaoSdk.init with SDK logging off"
 );
 assert(!manifest.includes("CAMERA"), "no CAMERA permission");
 assert(
@@ -218,9 +266,13 @@ assert(
   "Gradle injects Kakao native app key / scheme without a hardcoded secret"
 );
 assert(
-  !appGradle.includes("com.kakao.sdk") &&
-    !appGradle.includes("kakaosdk"),
-  "Kakao Android SDK Maven dependency is not added yet"
+  appGradle.includes("com.kakao.sdk:v2-user") &&
+    read("android/variables.gradle").includes("kakaoSdkVersion"),
+  "Kakao Android SDK v2-user is a Gradle dependency"
+);
+assert(
+  appGradle.includes("versionCode 3"),
+  "debug versionCode bumped"
 );
 assert(
   read(".gitignore").includes("android/kakao.properties"),
@@ -232,9 +284,9 @@ assert(
 );
 assert(
   read("src/lib/kakaoNativeBridge.ts").includes(
-    "export const NATIVE_KAKAO_LOGIN_ENABLED = false"
+    "export const NATIVE_KAKAO_LOGIN_ENABLED = true"
   ),
-  "native Kakao login flag is false"
+  "native Kakao login flag is true"
 );
 assert(
   cfg.includes("REST Kakao OAuth inside this WebView is terminated") ||

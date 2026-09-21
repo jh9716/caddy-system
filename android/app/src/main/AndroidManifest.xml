@@ -2,11 +2,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <queries>
-        <!-- KakaoTalk visibility for loginWithKakaoTalk (SDK wiring is next). -->
         <package android:name="com.kakao.talk" />
     </queries>
 
     <application
+        android:name=".VerthillApp"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
@@ -30,16 +30,19 @@
 
         </activity>
 
-        <!--
-          Kakao Android SDK redirect (do not enable until Kakao SDK is on the classpath):
-            activity: com.kakao.sdk.auth.AuthCodeHandlerActivity
-            exported: true
-            VIEW / DEFAULT / BROWSABLE
-            data android:host="oauth"
-            data android:scheme="${kakaoScheme}"
-          kakaoScheme is injected as kakao${KAKAO_NATIVE_APP_KEY} from Gradle.
-          Do not hardcode the Native App Key here.
-        -->
+        <activity
+            android:name="com.kakao.sdk.auth.AuthCodeHandlerActivity"
+            android:exported="true"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:host="oauth"
+                    android:scheme="${kakaoScheme}" />
+            </intent-filter>
+        </activity>
 
         <provider
             android:name="androidx.core.content.FileProvider"
