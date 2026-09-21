@@ -4,6 +4,7 @@
  *
  * 실행: npm run test:native-android-poc-unit
  */
+import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -16,6 +17,11 @@ function read(rel: string): string {
 
 function exists(rel: string): boolean {
   return fs.existsSync(path.resolve(rel));
+}
+
+function gitTracked(rel: string): boolean {
+  const out = execSync(`git ls-files -- "${rel}"`, { encoding: "utf8" }).trim();
+  return out.length > 0;
 }
 
 function assert(cond: unknown, msg: string) {
@@ -257,7 +263,10 @@ assert(
   exists("android/app/src/main/res/drawable/splash.png"),
   "splash drawable generated"
 );
-assert(!exists("android/app/google-services.json"), "google-services.json is not committed");
+assert(
+  !gitTracked("android/app/google-services.json"),
+  "google-services.json is not committed"
+);
 assert(
   exists("android/app/google-services.json.example"),
   "google-services.json.example documents package name only"
@@ -266,6 +275,31 @@ assert(
   read(".gitignore").includes("android/app/google-services.json"),
   "google-services.json is gitignored"
 );
+assert(
+  read("android/.gitignore").includes("app/google-services.json"),
+  "android/.gitignore ignores app/google-services.json"
+);
+if (exists("android/app/google-services.json")) {
+  const gs = JSON.parse(read("android/app/google-services.json")) as {
+    project_info?: { project_id?: unknown; project_number?: unknown };
+    client?: Array<{
+      client_info?: { android_client_info?: { package_name?: unknown } };
+    }>;
+  };
+  assert(
+    Boolean(String(gs.project_info?.project_id ?? "").trim()),
+    "local google-services.json has project_id"
+  );
+  assert(
+    Boolean(String(gs.project_info?.project_number ?? "").trim()),
+    "local google-services.json has project_number"
+  );
+  assert(
+    gs.client?.[0]?.client_info?.android_client_info?.package_name ===
+      "kr.verthill.caddy",
+    "local google-services.json package_name is kr.verthill.caddy"
+  );
+}
 assert(!exists("ios"), "still no ios/");
 assert(exists("android/app/debug.keystore"), "PoC debug keystore exists on disk for Kakao hash stability");
 assert(
