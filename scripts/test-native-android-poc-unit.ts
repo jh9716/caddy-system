@@ -36,6 +36,7 @@ const authLogin = read("src/app/api/auth/login/route.ts");
 const passwordLogin = read("src/lib/passwordLogin.ts");
 const loginClient = read("src/app/login/LoginClient.tsx");
 const kakaoStart = read("src/app/api/auth/kakao/start/route.ts");
+const kakaoCallback = read("src/app/api/auth/kakao/callback/route.ts");
 const kakaoOAuth = read("src/lib/kakaoOAuth.ts");
 const roleRouting = read("src/lib/roleRouting.ts");
 const photoForm = read("src/app/course-reports/CourseReportForm.tsx");
@@ -63,11 +64,18 @@ assert(
 assert(cfg.includes("PoC") || cfg.includes("POC"), "config marks remote URL as PoC");
 assert(cfg.includes("cleartext: false"), "HTTPS only, no cleartext");
 assert(cfg.includes("allowMixedContent: false"), "mixed content disabled");
+assert(cfg.includes('"www.verthill.kr"'), "allowNavigation includes www.verthill.kr");
+assert(cfg.includes('"verthill.kr"'), "allowNavigation includes verthill.kr");
+assert(cfg.includes('"kauth.kakao.com"'), "allowNavigation includes kauth.kakao.com");
 assert(
-  cfg.includes('allowNavigation: ["www.verthill.kr", "verthill.kr"]'),
-  "WebView navigation allowlist is verthill hosts only"
+  cfg.includes('"accounts.kakao.com"'),
+  "allowNavigation includes accounts.kakao.com"
 );
-assert(!cfg.includes("kauth.kakao.com"), "Kakao hosts not allowlisted in Phase 1");
+assert(
+  !cfg.includes('"*.kakao.com"') && !cfg.includes("*.kakao."),
+  "no wildcard Kakao allowNavigation"
+);
+assert(!cfg.includes("kapi.kakao.com"), "kapi.kakao.com is not a WebView host");
 assert(!exists("ios"), "iOS project is not added");
 
 console.log("== packages stay web-safe ==");
@@ -125,6 +133,10 @@ assert(
   kakaoOAuth.includes("https://kauth.kakao.com/oauth/authorize"),
   "Kakao authorize URL unchanged"
 );
+assert(kakaoOAuth.includes('sameSite: "lax"'), "OAuth cookies stay SameSite=Lax");
+assert(kakaoOAuth.includes("httpOnly: true"), "OAuth cookies stay httpOnly");
+assert(kakaoCallback.includes("statesMatch(cookieState, queryState)"), "callback still validates state");
+assert(!kakaoCallback.includes("skipState") && !kakaoOAuth.includes("skipState"), "no state bypass");
 
 console.log("== CourseReport file input remains web input ==");
 assert(photoForm.includes('type="file"'), "composer still uses input[type=file]");
