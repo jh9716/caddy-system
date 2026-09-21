@@ -52,7 +52,9 @@ export function resolvePwaInstallSurface(input: {
   hasBeforeInstallPrompt: boolean;
   samsung?: boolean;
   android?: boolean;
+  isNativePlatform?: boolean;
 }): PwaInstallSurface {
+  if (input.isNativePlatform === true) return "hidden";
   if (input.standalone) return "standalone";
   if (input.ios) return "ios-hint";
   if (input.hasBeforeInstallPrompt) return "android-prompt";
@@ -87,7 +89,9 @@ export function resolvePwaInstallAction(
 export function shouldShowHomeInstallCta(input: {
   surface: PwaInstallSurface;
   installed: boolean;
+  isNativePlatform?: boolean;
 }): boolean {
+  if (input.isNativePlatform === true) return false;
   if (input.installed || input.surface === "standalone") return false;
   return resolvePwaInstallAction(input.surface) !== "hide";
 }

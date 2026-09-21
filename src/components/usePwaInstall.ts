@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { readCapacitorNativePlatform } from "@/lib/nativePlatformClient";
 import {
   isAndroidDevice,
   isIosDevice,
@@ -28,6 +29,8 @@ export function usePwaInstall() {
     null
   );
   const [prompting, setPrompting] = useState(false);
+  const [isNativePlatform, setIsNativePlatform] = useState(false);
+  const [nativeReady, setNativeReady] = useState(false);
 
   useEffect(() => {
     const media = window.matchMedia("(display-mode: standalone)");
@@ -42,6 +45,8 @@ export function usePwaInstall() {
     setIos(isIosDevice(ua));
     setSamsung(isSamsungInternet(ua));
     setAndroid(isAndroidDevice(ua));
+    setIsNativePlatform(readCapacitorNativePlatform());
+    setNativeReady(true);
 
     const onChange = () => {
       const nextNav = window.navigator as Navigator & { standalone?: boolean };
@@ -75,17 +80,17 @@ export function usePwaInstall() {
 
   const installed = isPwaInstalled({ standalone, appInstalled });
 
-  const surface: PwaInstallSurface = useMemo(
-    () =>
-      resolvePwaInstallSurface({
-        standalone: installed,
-        ios,
-        samsung,
-        android,
-        hasBeforeInstallPrompt: deferred != null,
-      }),
-    [installed, ios, samsung, android, deferred]
-  );
+  const surface: PwaInstallSurface = useMemo(() => {
+    if (!nativeReady) return "hidden";
+    return resolvePwaInstallSurface({
+      standalone: installed,
+      ios,
+      samsung,
+      android,
+      hasBeforeInstallPrompt: deferred != null,
+      isNativePlatform,
+    });
+  }, [installed, ios, samsung, android, deferred, isNativePlatform, nativeReady]);
 
   const action: PwaInstallAction = resolvePwaInstallAction(surface);
 
@@ -111,6 +116,7 @@ export function usePwaInstall() {
     action,
     installed,
     standalone,
+    isNativePlatform,
     prompting,
     canPrompt: deferred != null && !prompting,
     promptInstall,
