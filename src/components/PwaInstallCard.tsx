@@ -1,115 +1,41 @@
 "use client";
 
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useState, type CSSProperties } from "react";
 import {
   PWA_INSTALL_BUTTON,
+  PWA_INSTALL_CTA_LABEL,
   PWA_INSTALL_STANDALONE_LABEL,
   PWA_INSTALL_TITLE,
-  isAndroidDevice,
-  isIosDevice,
-  isSamsungInternet,
-  isStandaloneDisplay,
   pwaInstallBody,
-  resolvePwaInstallSurface,
 } from "@/lib/pwaInstall";
-
-type BeforeInstallPromptEvent = Event & {
-  prompt: () => Promise<void>;
-  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
-};
+import PwaInstallHintSheet from "@/components/PwaInstallHintSheet";
+import { usePwaInstall } from "@/components/usePwaInstall";
 
 export default function PwaInstallCard() {
-  const [standalone, setStandalone] = useState(false);
-  const [ios, setIos] = useState(false);
-  const [samsung, setSamsung] = useState(false);
-  const [android, setAndroid] = useState(false);
-  const [deferred, setDeferred] = useState<BeforeInstallPromptEvent | null>(
-    null
-  );
-  const [prompting, setPrompting] = useState(false);
-
-  useEffect(() => {
-    const media = window.matchMedia("(display-mode: standalone)");
-    const nav = window.navigator as Navigator & { standalone?: boolean };
-    const ua = window.navigator.userAgent;
-    setStandalone(
-      isStandaloneDisplay({
-        displayModeStandalone: media.matches,
-        iosNavigatorStandalone: nav.standalone === true,
-      })
-    );
-    setIos(isIosDevice(ua));
-    setSamsung(isSamsungInternet(ua));
-    setAndroid(isAndroidDevice(ua));
-
-    const onChange = () => {
-      const nextNav = window.navigator as Navigator & { standalone?: boolean };
-      setStandalone(
-        isStandaloneDisplay({
-          displayModeStandalone: media.matches,
-          iosNavigatorStandalone: nextNav.standalone === true,
-        })
-      );
-    };
-    media.addEventListener("change", onChange);
-
-    const onBeforeInstall = (event: Event) => {
-      event.preventDefault();
-      setDeferred(event as BeforeInstallPromptEvent);
-    };
-    window.addEventListener("beforeinstallprompt", onBeforeInstall);
-
-    const onInstalled = () => {
-      setDeferred(null);
-    };
-    window.addEventListener("appinstalled", onInstalled);
-
-    return () => {
-      media.removeEventListener("change", onChange);
-      window.removeEventListener("beforeinstallprompt", onBeforeInstall);
-      window.removeEventListener("appinstalled", onInstalled);
-    };
-  }, []);
-
-  const surface = useMemo(
-    () =>
-      resolvePwaInstallSurface({
-        standalone,
-        ios,
-        samsung,
-        android,
-        hasBeforeInstallPrompt: deferred != null,
-      }),
-    [standalone, ios, samsung, android, deferred]
-  );
-
-  async function onInstallClick() {
-    if (!deferred || prompting) return;
-    setPrompting(true);
-    try {
-      await deferred.prompt();
-      await deferred.userChoice;
-    } catch {
-      // Fail-soft: existing web UI stays usable without install.
-    } finally {
-      setDeferred(null);
-      setPrompting(false);
-    }
-  }
+  const { surface, action, installed, prompting, promptInstall } =
+    usePwaInstall();
+  const [sheetOpen, setSheetOpen] = useState(false);
 
   if (surface === "hidden") return null;
 
-  if (surface === "standalone") {
+  if (installed || surface === "standalone") {
     return (
-      <section
-        aria-label={PWA_INSTALL_STANDALONE_LABEL}
-        style={cardStyle}
-      >
+      <section aria-label={PWA_INSTALL_STANDALONE_LABEL} style={cardStyle}>
         <div style={{ fontSize: 14, fontWeight: 700, color: "#163028" }}>
           {PWA_INSTALL_STANDALONE_LABEL}
         </div>
       </section>
     );
+  }
+
+  async function onPrimaryClick() {
+    if (action === "prompt") {
+      await promptInstall();
+      return;
+    }
+    if (action === "sheet") {
+      setSheetOpen(true);
+    }
   }
 
   return (
@@ -120,16 +46,22 @@ export default function PwaInstallCard() {
       <p style={{ margin: "6px 0 0", fontSize: 13, color: "#4d5a52" }}>
         {pwaInstallBody(surface)}
       </p>
-      {surface === "android-prompt" && (
+      {action !== "hide" && (
         <button
           type="button"
-          onClick={() => void onInstallClick()}
+          onClick={() => void onPrimaryClick()}
           disabled={prompting}
           style={buttonStyle}
         >
-          {PWA_INSTALL_BUTTON}
+          {action === "prompt" ? PWA_INSTALL_BUTTON : PWA_INSTALL_CTA_LABEL}
         </button>
       )}
+      {sheetOpen && action === "sheet" ? (
+        <PwaInstallHintSheet
+          surface={surface}
+          onClose={() => setSheetOpen(false)}
+        />
+      ) : null}
     </section>
   );
 }

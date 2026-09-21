@@ -9,10 +9,15 @@ import {
   isAndroidDevice,
   isSamsungInternet,
   isStandaloneDisplay,
+  isPwaInstalled,
+  resolvePwaInstallAction,
   resolvePwaInstallSurface,
   shouldRegisterServiceWorker,
+  shouldShowHomeInstallCta,
+  pwaInstallHintSteps,
   PWA_INSTALL_ANDROID_BODY,
   PWA_INSTALL_BUTTON,
+  PWA_INSTALL_CTA_LABEL,
   PWA_INSTALL_IOS_BODY,
   PWA_INSTALL_SAMSUNG_BODY,
   PWA_INSTALL_STANDALONE_LABEL,
@@ -308,24 +313,33 @@ assert(
 );
 
 const card = readSrc("src/components/PwaInstallCard.tsx");
-assert(card.includes("beforeinstallprompt"), "listens for beforeinstallprompt");
-assert(card.includes("preventDefault"), "prevents auto mini-infobar prompt");
-assert(card.includes("deferred.prompt"), "prompt() only after storing event");
-assert(/onClick/.test(card) && card.includes("onInstallClick"), "prompt on button click");
+const hook = readSrc("src/components/usePwaInstall.ts");
+assert(hook.includes("beforeinstallprompt"), "listens for beforeinstallprompt");
+assert(hook.includes("preventDefault"), "prevents auto mini-infobar prompt");
+assert(hook.includes("deferred.prompt"), "prompt() only after storing event");
+assert(hook.includes("if (!deferred || prompting) return"), "same session no repeat prompt");
+assert(hook.includes('addEventListener("appinstalled"'), "listens for appinstalled");
+assert(hook.includes("setAppInstalled(true)"), "appinstalled marks installed");
+assert(!hook.includes("localStorage"), "installed is not localStorage-only");
+assert(/onClick/.test(card) && card.includes("usePwaInstall"), "card reuses install hook");
 assert(!card.includes("Notification"), "no Notification API");
 assert(!card.includes("requestPermission"), "no permission request");
 assert(!card.includes("PushManager"), "no PushManager");
-assert(!card.includes("showModal") && !card.includes("<dialog"), "no install modal");
+assert(!card.includes("SamsungBrowser://") && !card.includes("intent:"), "does not fake Samsung menu");
 assert(card.includes(PWA_INSTALL_TITLE) || card.includes("PWA_INSTALL_TITLE"), "install title");
 assert(card.includes("PWA_INSTALL_IOS_BODY") || card.includes("pwaInstallBody"), "iOS copy");
 assert(card.includes("PWA_INSTALL_STANDALONE_LABEL"), "standalone copy");
-assert(card.includes("isSamsungInternet"), "detects Samsung Internet");
-assert(card.includes("isAndroidDevice"), "detects Android");
+assert(hook.includes("isSamsungInternet"), "detects Samsung Internet");
+assert(hook.includes("isAndroidDevice"), "detects Android");
 assert(PWA_INSTALL_BUTTON === "설치", "button copy");
 assert(PWA_INSTALL_TITLE === "홈 화면에 추가", "title is add to home screen");
+assert(PWA_INSTALL_CTA_LABEL === "VERTHILL 앱 설치", "home CTA label");
 assert(PWA_INSTALL_ANDROID_BODY.includes("홈 화면"), "android body");
 assert(PWA_INSTALL_IOS_BODY.includes("홈 화면에 추가"), "ios body");
+assert(!PWA_INSTALL_IOS_BODY.includes("Android"), "iOS copy is not Android");
+assert(!PWA_INSTALL_IOS_BODY.includes("삼성"), "iOS copy is not Samsung");
 assert(PWA_INSTALL_SAMSUNG_BODY.includes("삼성 인터넷"), "samsung body");
+assert(PWA_INSTALL_SAMSUNG_BODY.includes("⋮"), "samsung mentions menu");
 assert(PWA_INSTALL_STANDALONE_LABEL === "앱으로 사용 중", "standalone label");
 assert(pwaInstallBody("ios-hint") === PWA_INSTALL_IOS_BODY, "ios body helper");
 assert(pwaInstallBody("samsung-hint") === PWA_INSTALL_SAMSUNG_BODY, "samsung body helper");
@@ -339,6 +353,87 @@ assert(loginClient.includes("VERTHILL"), "login title VERTHILL");
 assert(loginClient.includes("Caddy System"), "login subtitle Caddy System");
 assert(!loginClient.includes("Golf Resort Operations"), "login dropped operations eyebrow");
 assert(!loginClient.includes("예술이 머무는"), "login has no poetic tagline");
+
+section("A–J home install CTA");
+{
+  assert(
+    resolvePwaInstallAction("android-prompt") === "prompt",
+    "A Chromium BIP → native prompt"
+  );
+  assert(
+    shouldShowHomeInstallCta({ surface: "android-prompt", installed: false }) === true,
+    "A home CTA visible when BIP exists"
+  );
+  assert(
+    isPwaInstalled({ standalone: false, appInstalled: true }) === true,
+    "B appinstalled counts as installed"
+  );
+  assert(
+    shouldShowHomeInstallCta({ surface: "android-prompt", installed: true }) === false,
+    "B appinstalled hides home CTA"
+  );
+  assert(
+    resolvePwaInstallAction("samsung-hint") === "sheet",
+    "C Samsung without BIP → sheet"
+  );
+  assert(
+    pwaInstallHintSteps("samsung-hint").length === 3,
+    "C Samsung sheet is 3 steps"
+  );
+  assert(
+    pwaInstallHintSteps("samsung-hint").some((s) => s.includes("현재 페이지 추가")),
+    "C Samsung mentions 현재 페이지 추가"
+  );
+  assert(
+    resolvePwaInstallAction("ios-hint") === "sheet",
+    "D iOS → sheet"
+  );
+  assert(
+    pwaInstallHintSteps("ios-hint").some((s) => s.includes("공유")),
+    "D iOS mentions share"
+  );
+  assert(
+    pwaInstallHintSteps("ios-hint").every((s) => !s.includes("Android") && !s.includes("삼성")),
+    "D iOS steps are not Android"
+  );
+  assert(
+    shouldShowHomeInstallCta({ surface: "standalone", installed: false }) === false,
+    "E standalone surface hides CTA"
+  );
+  assert(
+    shouldShowHomeInstallCta({ surface: "hidden", installed: true }) === false,
+    "E standalone installed hides CTA"
+  );
+  assert(
+    resolvePwaInstallAction("hidden") === "hide",
+    "F desktop unsupported action hide"
+  );
+  assert(
+    shouldShowHomeInstallCta({ surface: "hidden", installed: false }) === false,
+    "F desktop unsupported CTA hidden"
+  );
+
+  const home = readSrc("src/app/page.tsx");
+  const homeCta = readSrc("src/components/PwaInstallHomeCta.tsx");
+  const sheet = readSrc("src/components/PwaInstallHintSheet.tsx");
+  assert(home.includes("PwaInstallHomeCta"), "home renders compact install CTA");
+  assert(!home.includes("PwaInstallCard"), "G home has no install card");
+  assert(!loginClient.includes("PwaInstallHomeCta"), "G login has no home CTA");
+  assert(!caddyPage.includes("PwaInstallHomeCta"), "G /caddy has no home CTA");
+  assert(loginClient.includes("PwaInstallCard"), "G login keeps guidance card");
+  assert(caddyPage.includes("PwaInstallCard"), "G /caddy keeps guidance card");
+  assert(homeCta.includes("PWA_INSTALL_CTA_LABEL"), "home button uses VERTHILL 앱 설치");
+  assert(homeCta.includes('className="vh-home-install"'), "home CTA is secondary class");
+  assert(homeCta.includes("shouldShowHomeInstallCta"), "home CTA uses hide helper");
+  assert(homeCta.includes("PwaInstallHintSheet"), "C/D home opens hint sheet");
+  assert(sheet.includes(PWA_INSTALL_CTA_LABEL) || sheet.includes("PWA_INSTALL_CTA_LABEL"), "sheet title VERTHILL 앱 설치");
+  assert(!sheet.includes("메뉴를 엽니다") || sheet.includes("메뉴(⋮)"), "sheet does not claim it opens the browser menu");
+  assert(!home.includes("hero-green.jpg"), "H home splash path unchanged");
+  assert(readSrc("src/app/manifest.ts").includes("PWA_START_URL"), "I manifest still uses shared start_url");
+  assert(!homeCta.includes("PushManager"), "J home CTA no push");
+  assert(!sheet.includes("PushManager"), "J sheet no push");
+}
+
 const home = readSrc("src/app/page.tsx");
 assert(home.includes("Caddy System"), "home subtitle Caddy System");
 assert(home.includes("vh-home-title\">VERTHILL"), "home title VERTHILL only");
@@ -353,6 +448,9 @@ const pwaFiles = [
   "src/lib/pwaManifest.ts",
   "src/lib/registerServiceWorker.ts",
   "src/components/PwaInstallCard.tsx",
+  "src/components/PwaInstallHomeCta.tsx",
+  "src/components/PwaInstallHintSheet.tsx",
+  "src/components/usePwaInstall.ts",
   "src/components/ServiceWorkerRegister.tsx",
   "src/app/manifest.ts",
   "src/app/layout.tsx",
