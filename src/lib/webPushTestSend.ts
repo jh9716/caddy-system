@@ -10,6 +10,10 @@ import {
   TEST_PUSH_URL,
 } from "@/lib/webPushTestConstants";
 import { deliverWebPushMappings } from "@/lib/pushDelivery";
+import {
+  deliverNativePushTokens,
+  loadEnabledDevicePushTokens,
+} from "@/lib/nativePushDelivery";
 import { isPushStoreMissing } from "@/lib/pushSubscriptionStore";
 import { isWebPushSendConfigured, readWebPushSendCredentials } from "@/lib/pushVapid";
 import { type WebPushSendFn } from "@/lib/webPushSender";
@@ -100,6 +104,7 @@ export async function sendTestPushToUser(
     return { ok: true, sent: 0, failed: 0, removedStale: 0, deliveries: 0, error: "no_subscription" };
   }
 
+  const payload = { title: TEST_PUSH_TITLE, body: TEST_PUSH_BODY, url: TEST_PUSH_URL };
   const delivered = await deliverWebPushMappings(
     db,
     user.pushSubscriptions.map((sub) => ({
@@ -109,9 +114,11 @@ export async function sendTestPushToUser(
       p256dh: sub.p256dh,
       auth: sub.auth,
     })),
-    { title: TEST_PUSH_TITLE, body: TEST_PUSH_BODY, url: TEST_PUSH_URL },
+    payload,
     { sendFn: options?.sendFn, credentials: creds, concurrency: 1 }
   );
+  const nativeTokens = await loadEnabledDevicePushTokens(db, [userId]);
+  await deliverNativePushTokens(db, nativeTokens, payload);
   return {
     ok: true,
     sent: delivered.sent,

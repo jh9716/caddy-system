@@ -32,6 +32,10 @@ import {
 } from "@/lib/courseReportPushMessage";
 import { isPushStoreMissing } from "@/lib/pushSubscriptionStore";
 import { deliverWebPushMappings } from "@/lib/pushDelivery";
+import {
+  deliverNativePushTokens,
+  loadEnabledDevicePushTokens,
+} from "@/lib/nativePushDelivery";
 import { isWebPushSendConfigured, readWebPushSendCredentials } from "@/lib/pushVapid";
 import { normalizeAppRole } from "@/lib/sessionCookies";
 import {
@@ -175,7 +179,11 @@ async function finishCourseReportPushAudit(
 
 export async function resolveCourseReportNewPushTargets(
   db: PrismaClient
-): Promise<{ subscriptions: SubRow[]; recipientUserIds: number[] }> {
+): Promise<{
+  subscriptions: SubRow[];
+  recipientUserIds: number[];
+  logicalUserIds: number[];
+}> {
   const users = await db.user.findMany({
     select: {
       id: true,
@@ -191,15 +199,23 @@ export async function resolveCourseReportNewPushTargets(
   const recipientUserIds = admins
     .filter((u) => u.pushSubscriptions.length > 0)
     .map((u) => u.id);
-  return { subscriptions, recipientUserIds };
+  return {
+    subscriptions,
+    recipientUserIds,
+    logicalUserIds: admins.map((u) => u.id),
+  };
 }
 
 export async function resolveCourseReportStatusPushTargets(
   db: PrismaClient,
   authorUserId: number
-): Promise<{ subscriptions: SubRow[]; recipientUserIds: number[] }> {
+): Promise<{
+  subscriptions: SubRow[];
+  recipientUserIds: number[];
+  logicalUserIds: number[];
+}> {
   if (!Number.isInteger(authorUserId) || authorUserId <= 0) {
-    return { subscriptions: [], recipientUserIds: [] };
+    return { subscriptions: [], recipientUserIds: [], logicalUserIds: [] };
   }
   const subscriptions = await db.pushSubscription.findMany({
     where: { userId: authorUserId, enabled: true },
@@ -208,6 +224,7 @@ export async function resolveCourseReportStatusPushTargets(
   return {
     subscriptions,
     recipientUserIds: subscriptions.length > 0 ? [authorUserId] : [],
+    logicalUserIds: [authorUserId],
   };
 }
 
@@ -305,6 +322,11 @@ export async function sendCourseReportPush(
         options?.sendFn,
         creds
       );
+      const nativeTokens = await loadEnabledDevicePushTokens(
+        db,
+        targets.logicalUserIds
+      );
+      await deliverNativePushTokens(db, nativeTokens, payload);
       await finishCourseReportPushAudit(db, claim.auditId, event, {
         claim: "SENT",
         recipients: targets.recipientUserIds.length,

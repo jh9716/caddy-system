@@ -82,18 +82,19 @@ console.log("== packages stay web-safe ==");
 assert(pkg.includes('"@capacitor/android"'), "capacitor android dependency");
 assert(pkg.includes('"@capacitor/core"'), "capacitor core dependency");
 assert(!pkg.includes("@capacitor/ios"), "no Capacitor iOS package");
-assert(!pkg.includes("@capacitor/push-notifications"), "no native push plugin");
+assert(pkg.includes('"@capacitor/push-notifications"'), "Capacitor PushNotifications for Android FCM");
 assert(!pkg.includes("@capacitor/camera"), "no Camera plugin");
-assert(!pkg.includes("firebase"), "no Firebase package");
-assert(!pkg.includes("@capacitor-community/fcm"), "no FCM plugin");
+assert(!/"firebase"/.test(pkg) && !pkg.includes('"firebase/'), "no Firebase JS package");
+assert(!pkg.includes("@capacitor-community/fcm"), "no extra FCM community plugin");
 assert(!/kakao-sdk|@kakao-sdk|react-native-kakao|com.kakao.sdk:v2/i.test(pkg), "no Kakao SDK npm package");
 
 console.log("== web architecture unchanged ==");
 assert(!nextCfg.includes("output:"), "next.config has no static export");
 assert(pwaManifest.includes('PWA_START_URL = "/caddy"'), "PWA start_url frozen");
 assert(schema.includes("model PushSubscription"), "Web Push model remains");
-assert(!schema.includes("DevicePushToken"), "no native push table");
-assert(!schema.includes("model NativePush"), "no native push model");
+assert(schema.includes("model DevicePushToken"), "additive DevicePushToken model");
+assert(schema.includes("@@unique([userId, token])"), "DevicePushToken unique(userId, token)");
+assert(!schema.includes("model NativePush"), "no NativePush model");
 
 console.log("== ID/PW login is cookie-only (no User write) ==");
 assert(login.includes("passwordLogin("), "/api/login uses passwordLogin");
@@ -238,8 +239,8 @@ assert(
 );
 assert(!manifest.includes("CAMERA"), "no CAMERA permission");
 assert(
-  !manifest.includes("POST_NOTIFICATIONS"),
-  "no POST_NOTIFICATIONS permission"
+  manifest.includes("POST_NOTIFICATIONS"),
+  "POST_NOTIFICATIONS for Android 13+ FCM"
 );
 assert(
   manifest.includes('android:usesCleartextTraffic="false"'),
@@ -256,7 +257,15 @@ assert(
   exists("android/app/src/main/res/drawable/splash.png"),
   "splash drawable generated"
 );
-assert(!exists("android/app/google-services.json"), "no google-services.json");
+assert(!exists("android/app/google-services.json"), "google-services.json is not committed");
+assert(
+  exists("android/app/google-services.json.example"),
+  "google-services.json.example documents package name only"
+);
+assert(
+  read(".gitignore").includes("android/app/google-services.json"),
+  "google-services.json is gitignored"
+);
 assert(!exists("ios"), "still no ios/");
 assert(exists("android/app/debug.keystore"), "PoC debug keystore exists on disk for Kakao hash stability");
 assert(
@@ -306,6 +315,41 @@ assert(
     cfg.includes("Do not add more allowNavigation"),
   "allowNavigation expansion is frozen"
 );
+
+console.log("== Phase 2 native push foundation ==");
+assert(
+  read("src/lib/nativePlatform.ts").includes("isNativePlatform") &&
+    !read("src/lib/nativePlatform.ts").includes("userAgent"),
+  "native detection is official isNativePlatform, no UA"
+);
+assert(
+  read("src/lib/nativePlatformClient.ts").includes("Capacitor.isNativePlatform()"),
+  "client uses Capacitor.isNativePlatform()"
+);
+assert(
+  exists("src/app/api/push/native-token/route.ts"),
+  "native-token HTTP route is mounted"
+);
+assert(
+  !/console\.(log|info|debug|error)\([^)]*token/.test(
+    read("src/app/api/push/native-token/route.ts")
+  ),
+  "native-token route does not log token"
+);
+assert(
+  read("src/app/caddy/page.tsx").includes("DevicePushSettings") &&
+    read("src/app/manage/notifications/page.tsx").includes("DevicePushSettings"),
+  "caddy and admin use DevicePushSettings split"
+);
+assert(
+  read("src/components/DevicePushSettings.tsx").includes("NativePushNotificationCard"),
+  "native card is separate from Web Push card"
+);
+assert(
+  exists("prisma/migrations/20260921120000_device_push_token/migration.sql"),
+  "DevicePushToken migration file exists"
+);
+assert(!exists("ios"), "iOS project still not added");
 
 if (failed) {
   console.error(`\nFAILED ${failed} / ${passed + failed}`);

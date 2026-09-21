@@ -43,6 +43,10 @@ import {
 } from "@/lib/boardPushRecipients";
 import { isPushStoreMissing } from "@/lib/pushSubscriptionStore";
 import { deliverWebPushMappings } from "@/lib/pushDelivery";
+import {
+  deliverNativePushTokens,
+  loadEnabledDevicePushTokens,
+} from "@/lib/nativePushDelivery";
 import { isWebPushSendConfigured, readWebPushSendCredentials } from "@/lib/pushVapid";
 import { type WebPushSendFn } from "@/lib/webPushSender";
 
@@ -240,10 +244,16 @@ export async function resolveEligibleBoardPushTargets(
   counts: BoardPushCounts;
   subscriptions: SubRow[];
   recipientUserIds: number[];
+  logicalUserIds: number[];
 }> {
   const assignedCaddies = assignedCaddyIds.length;
   if (assignedCaddyIds.length === 0) {
-    return { counts: emptyCounts(), subscriptions: [], recipientUserIds: [] };
+    return {
+      counts: emptyCounts(),
+      subscriptions: [],
+      recipientUserIds: [],
+      logicalUserIds: [],
+    };
   }
 
   const caddies = await db.caddy.findMany({
@@ -259,6 +269,7 @@ export async function resolveEligibleBoardPushTargets(
       counts: { ...emptyCounts(), assignedCaddies },
       subscriptions: [],
       recipientUserIds: [],
+      logicalUserIds: [],
     };
   }
 
@@ -285,6 +296,7 @@ export async function resolveEligibleBoardPushTargets(
   const recipientUserIds = users
     .filter((u) => u.pushSubscriptions.length > 0)
     .map((u) => u.id);
+  const logicalUserIds = users.map((u) => u.id);
 
   return {
     counts: {
@@ -297,6 +309,7 @@ export async function resolveEligibleBoardPushTargets(
     },
     subscriptions,
     recipientUserIds,
+    logicalUserIds,
   };
 }
 
@@ -427,7 +440,7 @@ export async function sendBoardPush(
       });
     }
 
-    const { counts, subscriptions, recipientUserIds } =
+    const { counts, subscriptions, recipientUserIds, logicalUserIds } =
       await resolveEligibleBoardPushTargets(
         db,
         uniqueAssignedCaddyIdsFromPublished(again.published.payload)
@@ -455,6 +468,10 @@ export async function sendBoardPush(
     const delivered = await deliverWebPushMappings(db, subscriptions, payload, {
       sendFn: options?.sendFn,
       credentials: creds,
+      concurrency: BOARD_PUSH_CONCURRENCY,
+    });
+    const nativeTokens = await loadEnabledDevicePushTokens(db, logicalUserIds);
+    await deliverNativePushTokens(db, nativeTokens, payload, {
       concurrency: BOARD_PUSH_CONCURRENCY,
     });
 

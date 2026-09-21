@@ -8,7 +8,8 @@ import type { CapacitorConfig } from "@capacitor/cli";
  *
  * - Loads the existing Next.js site. No static export.
  * - Does not duplicate API/backend.
- * - iOS / FCM / APNs / Camera remain out of scope.
+ * - iOS / APNs / Camera remain out of scope.
+ * - Android FCM foundation is additive. google-services.json is gitignored.
  * - REST Kakao OAuth inside this WebView is terminated (Samsung Internet dump).
  *   Do not add more allowNavigation hosts.
  * - App Kakao login: Android SDK + POST /api/auth/kakao/native-session.
@@ -20,6 +21,11 @@ const config: CapacitorConfig = {
   webDir: "native/www",
   android: {
     allowMixedContent: false,
+  },
+  plugins: {
+    PushNotifications: {
+      presentationOptions: ["badge", "sound", "alert"],
+    },
   },
   server: {
     // PoC-only: Android debug shell opens the live website.

@@ -110,6 +110,7 @@
     "test:reflow-feedback-unit": "bash scripts/tsx-safe.sh scripts/test-reflow-feedback-unit.ts",
     "test:native-android-poc-unit": "bash scripts/tsx-safe.sh scripts/test-native-android-poc-unit.ts",
     "test:kakao-native-session-unit": "bash scripts/tsx-safe.sh scripts/test-kakao-native-session-unit.ts",
+    "test:native-push-unit": "bash scripts/tsx-safe.sh scripts/test-native-push-unit.ts",
     "compute:android-kakao-debug-key-hash": "bash scripts/tsx-safe.sh scripts/compute-android-kakao-debug-key-hash.ts",
     "native:sync:android": "npx cap sync android"
   },
@@ -117,6 +118,7 @@
     "@capacitor/android": "^8.5.2",
     "@capacitor/cli": "^8.5.2",
     "@capacitor/core": "^8.5.2",
+    "@capacitor/push-notifications": "^8.1.2",
     "@prisma/client": "^5.22.0",
     "@vercel/blob": "^2.8.0",
     "bcrypt": "^6.0.0",

@@ -31,6 +31,10 @@ import {
 } from "@/lib/noticeTarget";
 import { isPushStoreMissing } from "@/lib/pushSubscriptionStore";
 import { deliverWebPushMappings } from "@/lib/pushDelivery";
+import {
+  deliverNativePushTokens,
+  loadEnabledDevicePushTokens,
+} from "@/lib/nativePushDelivery";
 import { isWebPushSendConfigured, readWebPushSendCredentials } from "@/lib/pushVapid";
 import { type WebPushSendFn } from "@/lib/webPushSender";
 
@@ -151,6 +155,7 @@ export async function resolveEligibleNoticePushTargets(
   counts: NoticePushCounts;
   subscriptions: SubRow[];
   recipientUserIds: number[];
+  logicalUserIds: number[];
 }> {
   const caddies = await db.caddy.findMany({
     where: caddyTargetWhere(notice),
@@ -158,7 +163,12 @@ export async function resolveEligibleNoticePushTargets(
   });
   const eligibleCaddyIds = caddies.map((c) => c.id);
   if (eligibleCaddyIds.length === 0) {
-    return { counts: emptyCounts(), subscriptions: [], recipientUserIds: [] };
+    return {
+      counts: emptyCounts(),
+      subscriptions: [],
+      recipientUserIds: [],
+      logicalUserIds: [],
+    };
   }
 
   const users = await db.user.findMany({
@@ -182,6 +192,7 @@ export async function resolveEligibleNoticePushTargets(
       users.filter((u) => u.pushSubscriptions.length > 0).map((u) => u.id)
     ),
   ];
+  const logicalUserIds = [...new Set(users.map((u) => u.id))];
 
   return {
     counts: {
@@ -192,6 +203,7 @@ export async function resolveEligibleNoticePushTargets(
     },
     subscriptions,
     recipientUserIds,
+    logicalUserIds,
   };
 }
 
@@ -344,7 +356,7 @@ export async function sendNoticePush(
     }
     assertInWindow(again);
 
-    const { counts, subscriptions, recipientUserIds } =
+    const { counts, subscriptions, recipientUserIds, logicalUserIds } =
       await resolveEligibleNoticePushTargets(db, again);
 
     if (subscriptions.length === 0) {
@@ -374,6 +386,10 @@ export async function sendNoticePush(
     const delivered = await deliverWebPushMappings(db, subscriptions, payload, {
       sendFn: options?.sendFn,
       credentials: creds,
+      concurrency: NOTICE_PUSH_CONCURRENCY,
+    });
+    const nativeTokens = await loadEnabledDevicePushTokens(db, logicalUserIds);
+    await deliverNativePushTokens(db, nativeTokens, payload, {
       concurrency: NOTICE_PUSH_CONCURRENCY,
     });
 
