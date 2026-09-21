@@ -18,6 +18,7 @@ import {
   safeReturnPath,
   statesMatch,
 } from "@/lib/kakaoOAuth";
+import { resolvePostLoginHref } from "@/lib/roleRouting";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -137,9 +138,10 @@ export async function GET(req: NextRequest) {
     username = user.username;
 
     const returnCookie = req.cookies.get(KAKAO_RETURN_COOKIE)?.value;
-    const returnTo = safeReturnPath(returnCookie);
-    const dest =
-      returnTo || (role === "admin" ? "/manage" : "/caddy");
+    const dest = resolvePostLoginHref({
+      role,
+      callbackUrl: safeReturnPath(returnCookie),
+    });
 
     const res = NextResponse.redirect(new URL(dest, req.url));
     clearOAuthCookies(res, req);

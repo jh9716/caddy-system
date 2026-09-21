@@ -3,9 +3,10 @@
 import { useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { postLoginPath } from "@/lib/passwordPolicy";
 import PwaInstallCard from "@/components/PwaInstallCard";
 import { PWA_MONOGRAM, PWA_SPLASH_COURSE } from "@/lib/pwaManifest";
+import { resolvePostLoginHref } from "@/lib/roleRouting";
+import { safeReturnPath } from "@/lib/safeReturnPath";
 
 const KAKAO_ERROR_MESSAGES: Record<string, string> = {
   kakao_config: "카카오 로그인 설정이 없습니다. 관리자에게 문의하세요.",
@@ -25,11 +26,7 @@ export default function LoginClient() {
   });
   const [loading, setLoading] = useState(false);
 
-  const callback = searchParams.get("callbackUrl");
-  const safeCallback =
-    callback && callback.startsWith("/") && !callback.startsWith("//")
-      ? callback
-      : null;
+  const safeCallback = safeReturnPath(searchParams.get("callbackUrl"));
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -45,15 +42,11 @@ export default function LoginClient() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || data?.message || "로그인 실패");
 
-      if (data.mustChangePassword) {
-        location.href = "/change-password";
-        return;
-      }
-      if (safeCallback) {
-        location.href = safeCallback;
-        return;
-      }
-      location.href = postLoginPath(String(data.role || ""), false);
+      location.href = resolvePostLoginHref({
+        role: data.role,
+        mustChangePassword: !!data.mustChangePassword,
+        callbackUrl: safeCallback,
+      });
     } catch (e: any) {
       setErr(e.message || "로그인 실패");
     } finally {
