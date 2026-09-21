@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">VERTHILL</string>
+    <string name="title_activity_main">VERTHILL</string>
+    <string name="package_name">kr.verthill.caddy</string>
+    <string name="custom_url_scheme">kr.verthill.caddy</string>
+</resources>

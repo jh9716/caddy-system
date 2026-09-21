@@ -1,0 +1,174 @@
+/**
+ * VERTHILL Native App V1 Phase 1 — Android Capacitor PoC guards.
+ * No network. No production login. No Android SDK required.
+ *
+ * 실행: npm run test:native-android-poc-unit
+ */
+import fs from "node:fs";
+import path from "node:path";
+
+let passed = 0;
+let failed = 0;
+
+function read(rel: string): string {
+  return fs.readFileSync(path.resolve(rel), "utf8");
+}
+
+function exists(rel: string): boolean {
+  return fs.existsSync(path.resolve(rel));
+}
+
+function assert(cond: unknown, msg: string) {
+  if (cond) {
+    passed++;
+    console.log("  ✓", msg);
+  } else {
+    failed++;
+    console.error("  ✗", msg);
+  }
+}
+
+const cfg = read("capacitor.config.ts");
+const pkg = read("package.json");
+const nextCfg = read("next.config.ts");
+const login = read("src/app/api/login/route.ts");
+const authLogin = read("src/app/api/auth/login/route.ts");
+const passwordLogin = read("src/lib/passwordLogin.ts");
+const loginClient = read("src/app/login/LoginClient.tsx");
+const kakaoStart = read("src/app/api/auth/kakao/start/route.ts");
+const kakaoOAuth = read("src/lib/kakaoOAuth.ts");
+const roleRouting = read("src/lib/roleRouting.ts");
+const photoForm = read("src/app/course-reports/CourseReportForm.tsx");
+const pwaManifest = read("src/lib/pwaManifest.ts");
+const schema = read("prisma/schema.prisma");
+const manifest = read("android/app/src/main/AndroidManifest.xml");
+const strings = read("android/app/src/main/res/values/strings.xml");
+const colors = read("android/app/src/main/res/values/colors.xml");
+const launcherBg = read(
+  "android/app/src/main/res/values/ic_launcher_background.xml"
+);
+const mainActivity = read(
+  "android/app/src/main/java/kr/verthill/caddy/MainActivity.java"
+);
+const filePaths = read("android/app/src/main/res/xml/file_paths.xml");
+const appGradle = read("android/app/build.gradle");
+
+console.log("== Capacitor PoC config ==");
+assert(cfg.includes('appId: "kr.verthill.caddy"'), "appId kr.verthill.caddy");
+assert(cfg.includes('appName: "VERTHILL"'), "appName VERTHILL");
+assert(
+  cfg.includes('url: "https://www.verthill.kr"'),
+  "PoC remote URL is www.verthill.kr"
+);
+assert(cfg.includes("PoC") || cfg.includes("POC"), "config marks remote URL as PoC");
+assert(cfg.includes("cleartext: false"), "HTTPS only, no cleartext");
+assert(cfg.includes("allowMixedContent: false"), "mixed content disabled");
+assert(
+  cfg.includes('allowNavigation: ["www.verthill.kr", "verthill.kr"]'),
+  "WebView navigation allowlist is verthill hosts only"
+);
+assert(!cfg.includes("kauth.kakao.com"), "Kakao hosts not allowlisted in Phase 1");
+assert(!exists("ios"), "iOS project is not added");
+
+console.log("== packages stay web-safe ==");
+assert(pkg.includes('"@capacitor/android"'), "capacitor android dependency");
+assert(pkg.includes('"@capacitor/core"'), "capacitor core dependency");
+assert(!pkg.includes("@capacitor/ios"), "no Capacitor iOS package");
+assert(!pkg.includes("@capacitor/push-notifications"), "no native push plugin");
+assert(!pkg.includes("@capacitor/camera"), "no Camera plugin");
+assert(!pkg.includes("firebase"), "no Firebase package");
+assert(!pkg.includes("@capacitor-community/fcm"), "no FCM plugin");
+assert(!/kakao-sdk|@kakao-sdk|react-native-kakao/i.test(pkg), "no Kakao SDK");
+
+console.log("== web architecture unchanged ==");
+assert(!nextCfg.includes("output:"), "next.config has no static export");
+assert(pwaManifest.includes('PWA_START_URL = "/caddy"'), "PWA start_url frozen");
+assert(schema.includes("model PushSubscription"), "Web Push model remains");
+assert(!schema.includes("DevicePushToken"), "no native push table");
+assert(!schema.includes("model NativePush"), "no native push model");
+
+console.log("== ID/PW login is cookie-only (no User write) ==");
+assert(login.includes("passwordLogin("), "/api/login uses passwordLogin");
+assert(authLogin.includes("passwordLogin("), "/api/auth/login uses passwordLogin");
+assert(
+  !/\bprisma\.user\.(update|create|upsert|delete)/.test(login),
+  "/api/login has no User mutation"
+);
+assert(
+  !/\bprisma\.user\.(update|create|upsert|delete)/.test(authLogin),
+  "/api/auth/login has no User mutation"
+);
+assert(passwordLogin.includes("findUnique"), "passwordLogin reads User by username");
+assert(
+  !/\.update\(/.test(passwordLogin) && !/\.create\(/.test(passwordLogin),
+  "passwordLogin does not write User"
+);
+assert(loginClient.includes('fetch("/api/login"'), "login form posts /api/login");
+assert(
+  roleRouting.includes('href: "/manage"') &&
+    roleRouting.includes('return postLoginPath("admin", false)'),
+  "admin post-login prefers /manage"
+);
+assert(roleRouting.includes("caddy") && roleRouting.includes("/caddy"), "caddy routing intact");
+
+console.log("== Kakao source (unchanged, Phase 1 no SDK) ==");
+assert(
+  loginClient.includes('location.href = `/api/auth/kakao/start${qs}`'),
+  "Kakao button still uses in-page start redirect"
+);
+assert(
+  kakaoStart.includes("buildKakaoRedirectUri") &&
+    kakaoOAuth.includes("KAKAO_CALLBACK_PATH"),
+  "Kakao redirect URI still host-derived /api/auth/kakao/callback"
+);
+assert(
+  kakaoOAuth.includes("https://kauth.kakao.com/oauth/authorize"),
+  "Kakao authorize URL unchanged"
+);
+
+console.log("== CourseReport file input remains web input ==");
+assert(photoForm.includes('type="file"'), "composer still uses input[type=file]");
+assert(
+  !photoForm.includes("@capacitor/camera"),
+  "composer does not import Camera plugin"
+);
+
+console.log("== Android shell ==");
+assert(strings.includes(">VERTHILL<"), "Android app_name VERTHILL");
+assert(
+  appGradle.includes('applicationId "kr.verthill.caddy"'),
+  "Gradle applicationId matches appId"
+);
+assert(
+  mainActivity.includes("extends BridgeActivity"),
+  "MainActivity is stock BridgeActivity"
+);
+assert(manifest.includes("android.permission.INTERNET"), "INTERNET permission");
+assert(!manifest.includes("CAMERA"), "no CAMERA permission");
+assert(
+  !manifest.includes("POST_NOTIFICATIONS"),
+  "no POST_NOTIFICATIONS permission"
+);
+assert(
+  manifest.includes('android:usesCleartextTraffic="false"'),
+  "cleartext traffic disabled"
+);
+assert(filePaths.includes("cache-path"), "FileProvider paths exist for file chooser");
+assert(colors.includes("#163028"), "launcher/theme uses deep green");
+assert(launcherBg.includes("#163028"), "adaptive icon background is deep green");
+assert(
+  exists("android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png"),
+  "xxxhdpi launcher icon generated"
+);
+assert(
+  exists("android/app/src/main/res/drawable/splash.png"),
+  "splash drawable generated"
+);
+assert(!exists("android/app/google-services.json"), "no google-services.json");
+assert(!exists("ios"), "still no ios/");
+
+if (failed) {
+  console.error(`\nFAILED ${failed} / ${passed + failed}`);
+  process.exit(1);
+}
+console.log(`\nOK ${passed}`);

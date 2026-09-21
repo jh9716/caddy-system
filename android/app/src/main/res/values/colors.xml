@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Approved VERTHILL branding. Do not invent new colors. -->
+    <color name="colorPrimary">#163028</color>
+    <color name="colorPrimaryDark">#0F1F18</color>
+    <color name="colorAccent">#C4A574</color>
+    <color name="splashBackground">#F6F1E8</color>
+</resources>
