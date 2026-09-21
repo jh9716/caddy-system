@@ -24,8 +24,15 @@ export default function DevicePushSettings({
   const [native, setNative] = useState(false);
 
   useEffect(() => {
-    setNative(shouldUseNativePushUi({ isNativePlatform: readCapacitorNativePlatform() }));
-    setReady(true);
+    try {
+      setNative(
+        shouldUseNativePushUi({ isNativePlatform: readCapacitorNativePlatform() })
+      );
+    } catch {
+      setNative(false);
+    } finally {
+      setReady(true);
+    }
   }, []);
 
   // Wait for official Capacitor check so native never paints Web Push unsupported copy.
