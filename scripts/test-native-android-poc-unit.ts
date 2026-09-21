@@ -258,7 +258,15 @@ assert(
 );
 assert(!exists("android/app/google-services.json"), "no google-services.json");
 assert(!exists("ios"), "still no ios/");
-assert(exists("android/app/debug.keystore"), "PoC debug keystore committed for Kakao hash stability");
+assert(exists("android/app/debug.keystore"), "PoC debug keystore exists on disk for Kakao hash stability");
+assert(
+  read(".gitignore").includes("android/app/debug.keystore"),
+  "debug.keystore is gitignored, not tracked"
+);
+assert(
+  read("android/.gitignore").includes("*.keystore"),
+  "android/.gitignore ignores keystore files"
+);
 assert(
   appGradle.includes("KAKAO_NATIVE_APP_KEY") &&
     appGradle.includes("kakaoScheme") &&
@@ -271,8 +279,13 @@ assert(
   "Kakao Android SDK v2-user is a Gradle dependency"
 );
 assert(
-  appGradle.includes("versionCode 3"),
-  "debug versionCode bumped"
+  appGradle.includes("versionCode 4") && appGradle.includes('versionName "1.0.3"'),
+  "debug versionCode 4 / versionName 1.0.3"
+);
+assert(
+  !appGradle.includes("length()") &&
+    !/logger\.[^(]*\([^)]*kakaoNativeAppKey/.test(appGradle),
+  "Gradle does not log Native App Key or its length"
 );
 assert(
   read(".gitignore").includes("android/kakao.properties"),

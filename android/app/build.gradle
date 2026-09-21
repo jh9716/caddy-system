@@ -22,7 +22,7 @@ def loadKakaoNativeAppKey() {
 def kakaoNativeAppKey = loadKakaoNativeAppKey()
 def kakaoScheme = kakaoNativeAppKey ? "kakao${kakaoNativeAppKey}" : "kakao_unconfigured"
 if (kakaoNativeAppKey) {
-    logger.lifecycle("Kakao native app key: configured (len=${kakaoNativeAppKey.length()})")
+    logger.lifecycle("Kakao native app key: configured")
 } else {
     logger.lifecycle("Kakao native app key: not configured")
 }
@@ -34,8 +34,8 @@ android {
         applicationId "kr.verthill.caddy"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 3
-        versionName "1.0.2"
+        versionCode 4
+        versionName "1.0.3"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders = [
             kakaoNativeAppKey: kakaoNativeAppKey,
