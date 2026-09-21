@@ -32,8 +32,11 @@ import {
 import { isPushStoreMissing } from "@/lib/pushSubscriptionStore";
 import { deliverWebPushMappings } from "@/lib/pushDelivery";
 import {
+  canAttemptNativePushSend,
   deliverNativePushTokens,
+  hasPushDeliveryTargets,
   loadEnabledDevicePushTokens,
+  type NativePushSendFn,
 } from "@/lib/nativePushDelivery";
 import { isWebPushSendConfigured, readWebPushSendCredentials } from "@/lib/pushVapid";
 import { type WebPushSendFn } from "@/lib/webPushSender";
@@ -297,7 +300,7 @@ export async function previewNoticePush(
 export async function sendNoticePush(
   db: PrismaClient,
   input: { noticeId: number; confirm: string; actorUserId: number | null },
-  options?: { sendFn?: WebPushSendFn }
+  options?: { sendFn?: WebPushSendFn; nativeSendFn?: NativePushSendFn }
 ): Promise<NoticePushSendResult> {
   if (input.confirm !== NOTICE_PUSH_CONFIRM) {
     throw new NoticePushError("invalid_confirm", "confirm이 필요합니다.", 400);
@@ -327,7 +330,8 @@ export async function sendNoticePush(
   }
 
   const preTargets = await resolveEligibleNoticePushTargets(db, first);
-  if (preTargets.subscriptions.length === 0) {
+  const preNative = await loadEnabledDevicePushTokens(db, preTargets.logicalUserIds);
+  if (!hasPushDeliveryTargets(preTargets.subscriptions.length, preNative.length)) {
     return {
       ok: true,
       recipients: 0,
@@ -337,6 +341,20 @@ export async function sendNoticePush(
       removedStale: 0,
       deliveries: 0,
       error: "no_recipients",
+    };
+  }
+  if (
+    preTargets.subscriptions.length === 0 &&
+    !canAttemptNativePushSend({ sendFn: options?.nativeSendFn })
+  ) {
+    return {
+      ok: true,
+      recipients: 0,
+      subscriptions: 0,
+      sent: 0,
+      failed: 0,
+      removedStale: 0,
+      deliveries: 0,
     };
   }
 
@@ -359,7 +377,8 @@ export async function sendNoticePush(
     const { counts, subscriptions, recipientUserIds, logicalUserIds } =
       await resolveEligibleNoticePushTargets(db, again);
 
-    if (subscriptions.length === 0) {
+    const nativeTokens = await loadEnabledDevicePushTokens(db, logicalUserIds);
+    if (!hasPushDeliveryTargets(subscriptions.length, nativeTokens.length)) {
       await writeNoticePushAudit(db, input.noticeId, {
         noticeId: input.noticeId,
         status: "NO_RECIPIENTS",
@@ -388,8 +407,8 @@ export async function sendNoticePush(
       credentials: creds,
       concurrency: NOTICE_PUSH_CONCURRENCY,
     });
-    const nativeTokens = await loadEnabledDevicePushTokens(db, logicalUserIds);
     await deliverNativePushTokens(db, nativeTokens, payload, {
+      sendFn: options?.nativeSendFn,
       concurrency: NOTICE_PUSH_CONCURRENCY,
     });
 

@@ -33,8 +33,11 @@ import {
 import { isPushStoreMissing } from "@/lib/pushSubscriptionStore";
 import { deliverWebPushMappings } from "@/lib/pushDelivery";
 import {
+  canAttemptNativePushSend,
   deliverNativePushTokens,
+  hasPushDeliveryTargets,
   loadEnabledDevicePushTokens,
+  type NativePushSendFn,
 } from "@/lib/nativePushDelivery";
 import { isWebPushSendConfigured, readWebPushSendCredentials } from "@/lib/pushVapid";
 import { normalizeAppRole } from "@/lib/sessionCookies";
@@ -264,7 +267,7 @@ async function deliverToSubscriptions(
 export async function sendCourseReportPush(
   db: PrismaClient,
   event: CourseReportPushEvent,
-  options?: { sendFn?: WebPushSendFn }
+  options?: { sendFn?: WebPushSendFn; nativeSendFn?: NativePushSendFn }
 ): Promise<CourseReportPushResult> {
   try {
     if (!options?.sendFn && !isWebPushSendConfigured()) {
@@ -284,6 +287,30 @@ export async function sendCourseReportPush(
       event.kind === "NEW"
         ? await resolveCourseReportNewPushTargets(db)
         : await resolveCourseReportStatusPushTargets(db, report.authorUserId);
+
+    const nativeTokens = await loadEnabledDevicePushTokens(
+      db,
+      targets.logicalUserIds
+    );
+    if (!hasPushDeliveryTargets(targets.subscriptions.length, nativeTokens.length)) {
+      const claim = await claimCourseReportPushSend(db, event);
+      if ("duplicate" in claim) {
+        return emptyResult({ skipped: "already_sent" });
+      }
+      await finishCourseReportPushAudit(db, claim.auditId, event, {
+        claim: "NO_RECIPIENTS",
+        recipients: 0,
+        subscriptions: 0,
+        deliveries: 0,
+      });
+      return emptyResult({ error: "no_recipients" });
+    }
+    if (
+      targets.subscriptions.length === 0 &&
+      !canAttemptNativePushSend({ sendFn: options?.nativeSendFn })
+    ) {
+      return emptyResult();
+    }
 
     const claim = await claimCourseReportPushSend(db, event);
     if ("duplicate" in claim) {
@@ -305,16 +332,6 @@ export async function sendCourseReportPush(
               title: report.title,
             });
 
-      if (targets.subscriptions.length === 0) {
-        await finishCourseReportPushAudit(db, claim.auditId, event, {
-          claim: "NO_RECIPIENTS",
-          recipients: 0,
-          subscriptions: 0,
-          deliveries: 0,
-        });
-        return emptyResult({ error: "no_recipients" });
-      }
-
       const delivered = await deliverToSubscriptions(
         db,
         targets.subscriptions,
@@ -322,11 +339,9 @@ export async function sendCourseReportPush(
         options?.sendFn,
         creds
       );
-      const nativeTokens = await loadEnabledDevicePushTokens(
-        db,
-        targets.logicalUserIds
-      );
-      await deliverNativePushTokens(db, nativeTokens, payload);
+      await deliverNativePushTokens(db, nativeTokens, payload, {
+        sendFn: options?.nativeSendFn,
+      });
       await finishCourseReportPushAudit(db, claim.auditId, event, {
         claim: "SENT",
         recipients: targets.recipientUserIds.length,

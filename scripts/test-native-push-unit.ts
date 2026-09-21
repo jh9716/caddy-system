@@ -256,6 +256,39 @@ async function main() {
   );
   assert(sent.sent === 1 && mockSent.length === 1, "injected sendFn delivers once");
 
+  const stale = { enabled: true, lastFailureAt: null as Date | null };
+  const transient = { enabled: true, lastFailureAt: null as Date | null };
+  const failDb = {
+    devicePushToken: {
+      findMany: async () => [],
+      updateMany: async ({
+        where,
+        data,
+      }: {
+        where: { id: number };
+        data: { enabled?: boolean; lastFailureAt?: Date };
+      }) => {
+        const row = where.id === 1 ? stale : transient;
+        if (data.enabled === false) row.enabled = false;
+        if (data.lastFailureAt) row.lastFailureAt = data.lastFailureAt;
+        return { count: 1 };
+      },
+    },
+  };
+  await deliverNativePushTokens(
+    failDb as never,
+    [
+      { id: 1, userId: 1, token: "stale", platform: "ANDROID" },
+      { id: 2, userId: 1, token: "tmp", platform: "ANDROID" },
+    ],
+    { title: "t", body: "b", url: "/caddy" },
+    {
+      sendFn: async (token) => (token === "stale" ? "gone" : "failed"),
+    }
+  );
+  assert(stale.enabled === false, "gone disables stale token");
+  assert(transient.enabled === true, "failed keeps token enabled");
+
   console.log("== Kakao / Web Push files stay ==");
   assert(
     read("src/lib/kakaoNativeBridge.ts").includes("NATIVE_KAKAO_LOGIN_ENABLED"),

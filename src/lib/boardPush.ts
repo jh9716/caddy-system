@@ -44,8 +44,11 @@ import {
 import { isPushStoreMissing } from "@/lib/pushSubscriptionStore";
 import { deliverWebPushMappings } from "@/lib/pushDelivery";
 import {
+  canAttemptNativePushSend,
   deliverNativePushTokens,
+  hasPushDeliveryTargets,
   loadEnabledDevicePushTokens,
+  type NativePushSendFn,
 } from "@/lib/nativePushDelivery";
 import { isWebPushSendConfigured, readWebPushSendCredentials } from "@/lib/pushVapid";
 import { type WebPushSendFn } from "@/lib/webPushSender";
@@ -366,7 +369,7 @@ export async function previewBoardPush(
 export async function sendBoardPush(
   db: PrismaClient,
   input: { date: string; confirm: string },
-  options?: { sendFn?: WebPushSendFn }
+  options?: { sendFn?: WebPushSendFn; nativeSendFn?: NativePushSendFn }
 ): Promise<BoardPushSendResult> {
   if (input.confirm !== BOARD_PUSH_CONFIRM) {
     throw new BoardPushError("invalid_confirm", "confirm이 필요합니다.", 400);
@@ -397,7 +400,8 @@ export async function sendBoardPush(
     db,
     uniqueAssignedCaddyIdsFromPublished(first.published.payload)
   );
-  if (preTargets.subscriptions.length === 0) {
+  const preNative = await loadEnabledDevicePushTokens(db, preTargets.logicalUserIds);
+  if (!hasPushDeliveryTargets(preTargets.subscriptions.length, preNative.length)) {
     return {
       ok: true,
       recipients: 0,
@@ -407,6 +411,20 @@ export async function sendBoardPush(
       removedStale: 0,
       deliveries: 0,
       error: "no_recipients",
+    };
+  }
+  if (
+    preTargets.subscriptions.length === 0 &&
+    !canAttemptNativePushSend({ sendFn: options?.nativeSendFn })
+  ) {
+    return {
+      ok: true,
+      recipients: 0,
+      subscriptions: 0,
+      sent: 0,
+      failed: 0,
+      removedStale: 0,
+      deliveries: 0,
     };
   }
 
@@ -446,7 +464,8 @@ export async function sendBoardPush(
         uniqueAssignedCaddyIdsFromPublished(again.published.payload)
       );
 
-    if (subscriptions.length === 0) {
+    const nativeTokens = await loadEnabledDevicePushTokens(db, logicalUserIds);
+    if (!hasPushDeliveryTargets(subscriptions.length, nativeTokens.length)) {
       await finishBoardPushAudit(db, claim.auditId, {
         date: input.date,
         sourceDraftVersion: again.published.sourceDraftVersion,
@@ -470,8 +489,8 @@ export async function sendBoardPush(
       credentials: creds,
       concurrency: BOARD_PUSH_CONCURRENCY,
     });
-    const nativeTokens = await loadEnabledDevicePushTokens(db, logicalUserIds);
     await deliverNativePushTokens(db, nativeTokens, payload, {
+      sendFn: options?.nativeSendFn,
       concurrency: BOARD_PUSH_CONCURRENCY,
     });
 

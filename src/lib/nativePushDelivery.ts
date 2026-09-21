@@ -1,11 +1,29 @@
 /**
- * Native DevicePushToken fan-out. Actual FCM HTTP is fail-closed.
- * This PR does not send production FCM. Tests inject sendFn.
+ * Native DevicePushToken fan-out. Actual FCM HTTP v1 is fail-closed
+ * unless FCM_SEND_ENABLED=1 and service-account env parse. Tests inject
+ * sendFn or fetchFn — no live Firebase from unit tests.
  */
 import type { PrismaClient } from "@prisma/client";
 import { mapWithConcurrency } from "@/lib/boardPushRecipients";
-import { isDevicePushStoreMissing } from "@/lib/nativePushToken";
+import {
+  isFcmSendEnabled,
+  isFcmServerConfigured,
+} from "@/lib/fcmCredentials";
+import { sendFcmHttpV1, type FcmFetchFn } from "@/lib/fcmHttpV1";
+import {
+  disableDevicePushTokenById,
+  isDevicePushStoreMissing,
+  touchDevicePushTokenFailure,
+} from "@/lib/nativePushToken";
+import { safeReturnPath } from "@/lib/safeReturnPath";
 import type { WebPushPayload } from "@/lib/webPushSender";
+
+export {
+  isFcmSendEnabled,
+  isFcmServerConfigured,
+  canAttemptNativePushSend,
+  hasPushDeliveryTargets,
+} from "@/lib/fcmCredentials";
 
 export type NativePushTokenRow = {
   id: number;
@@ -19,6 +37,7 @@ export type NativePushDeliveryResult = {
   failed: number;
   skipped: number;
   deliveries: number;
+  removedStale: number;
   reason?: "not_configured" | "send_disabled" | "store_missing";
 };
 
@@ -32,23 +51,15 @@ export function buildNativePushDataPayload(payload: WebPushPayload): {
   title: string;
   body: string;
   url: string;
+  tag?: string;
 } {
+  const url = safeReturnPath(payload.url) ?? "";
   return {
     title: payload.title,
     body: payload.body,
-    url: payload.url,
+    url,
+    ...(payload.tag ? { tag: payload.tag } : {}),
   };
-}
-
-export function isFcmSendEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.FCM_SEND_ENABLED === "1";
-}
-
-export function isFcmServerConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
-  const projectId = String(env.FIREBASE_PROJECT_ID ?? "").trim();
-  const clientEmail = String(env.FIREBASE_CLIENT_EMAIL ?? "").trim();
-  const privateKey = String(env.FIREBASE_PRIVATE_KEY ?? "").trim();
-  return Boolean(projectId && clientEmail && privateKey);
 }
 
 export function hasDevicePushTokenDelegate(db: unknown): boolean {
@@ -84,8 +95,14 @@ export async function deliverNativePushTokens(
   db: PrismaClient,
   tokens: readonly NativePushTokenRow[],
   payload: WebPushPayload,
-  options?: { sendFn?: NativePushSendFn; concurrency?: number }
+  options?: {
+    sendFn?: NativePushSendFn;
+    fetchFn?: FcmFetchFn;
+    env?: NodeJS.ProcessEnv;
+    concurrency?: number;
+  }
 ): Promise<NativePushDeliveryResult> {
+  const env = options?.env ?? process.env;
   const empty = (
     extra?: Partial<NativePushDeliveryResult>
   ): NativePushDeliveryResult => ({
@@ -93,35 +110,55 @@ export async function deliverNativePushTokens(
     failed: 0,
     skipped: tokens.length,
     deliveries: 0,
+    removedStale: 0,
     ...extra,
   });
 
   if (tokens.length === 0) return empty();
-  if (!options?.sendFn && !isFcmSendEnabled()) {
+  if (!options?.sendFn && !isFcmSendEnabled(env)) {
     return empty({ reason: "send_disabled" });
   }
-  if (!options?.sendFn && !isFcmServerConfigured()) {
+  if (!options?.sendFn && !isFcmServerConfigured(env)) {
     return empty({ reason: "not_configured" });
   }
-  if (!options?.sendFn) {
-    return empty({ reason: "send_disabled" });
-  }
+
+  const send: NativePushSendFn =
+    options.sendFn ??
+    ((token, body) =>
+      sendFcmHttpV1(token, body, { env, fetchFn: options.fetchFn }));
 
   let sent = 0;
   let failed = 0;
+  let removedStale = 0;
   await mapWithConcurrency(tokens, options.concurrency ?? 4, async (row) => {
-    const result = await options.sendFn!(row.token, payload);
+    const result = await send(row.token, payload);
     if (result === "sent") {
       sent += 1;
-    } else {
-      if (hasDevicePushTokenDelegate(db)) {
-        await db.devicePushToken.update({
-          where: { id: row.id },
-          data: { lastFailureAt: new Date() },
-        });
+      return;
+    }
+    if (!hasDevicePushTokenDelegate(db)) {
+      if (result === "gone") removedStale += 1;
+      else failed += 1;
+      return;
+    }
+    try {
+      if (result === "gone") {
+        await disableDevicePushTokenById(db, row.id);
+        removedStale += 1;
+      } else {
+        await touchDevicePushTokenFailure(db, row.id);
+        failed += 1;
       }
+    } catch (e) {
+      if (!isDevicePushStoreMissing(e)) throw e;
       failed += 1;
     }
   });
-  return { sent, failed, skipped: 0, deliveries: tokens.length };
+  return {
+    sent,
+    failed,
+    skipped: 0,
+    deliveries: tokens.length,
+    removedStale,
+  };
 }

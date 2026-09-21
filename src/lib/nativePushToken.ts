@@ -71,6 +71,28 @@ export async function upsertDevicePushToken(
   });
 }
 
+export async function disableDevicePushTokenById(
+  db: PrismaClient,
+  id: number
+): Promise<number> {
+  const result = await db.devicePushToken.updateMany({
+    where: { id },
+    data: { enabled: false, lastFailureAt: new Date() },
+  });
+  return result.count;
+}
+
+export async function touchDevicePushTokenFailure(
+  db: PrismaClient,
+  id: number
+): Promise<number> {
+  const result = await db.devicePushToken.updateMany({
+    where: { id },
+    data: { lastFailureAt: new Date() },
+  });
+  return result.count;
+}
+
 export async function disableDevicePushToken(
   db: PrismaClient,
   input: { userId: number; token: string }

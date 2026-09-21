@@ -8,6 +8,7 @@ import {
   type PushDeliveryMapping,
   type PushDeliveryResult,
 } from "@/lib/pushDelivery";
+import type { FcmFetchFn } from "@/lib/fcmHttpV1";
 import {
   deliverNativePushTokens,
   loadEnabledDevicePushTokens,
@@ -32,6 +33,8 @@ export async function fanoutPushToUserIds(
     concurrency: number;
     webSendFn?: WebPushSendFn;
     nativeSendFn?: NativePushSendFn;
+    nativeFetchFn?: FcmFetchFn;
+    env?: NodeJS.ProcessEnv;
   }
 ): Promise<PushFanoutResult> {
   const web = await deliverWebPushMappings(db, input.webMappings, input.payload, {
@@ -42,6 +45,8 @@ export async function fanoutPushToUserIds(
   const tokens = await loadEnabledDevicePushTokens(db, input.userIds);
   const native = await deliverNativePushTokens(db, tokens, input.payload, {
     sendFn: input.nativeSendFn,
+    fetchFn: input.nativeFetchFn,
+    env: input.env,
     concurrency: input.concurrency,
   });
   return { web, native };
