@@ -3114,3 +3114,66 @@ body.manage-mode .vh-auth-frame {
 body.manage-mode .vh-work-inner:has(.privacy-page) {
   max-width: 760px;
 }
+
+.privacy-page a {
+  color: var(--vh-green-800);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.privacy-form {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+  max-width: 440px;
+}
+
+.privacy-form-label {
+  margin-top: 6px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--vh-green-800);
+}
+
+.privacy-form-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--vh-border-strong);
+  border-radius: var(--vh-radius-sm);
+  background: var(--vh-paper);
+  color: var(--vh-ink);
+  font: inherit;
+}
+
+.privacy-form-textarea {
+  resize: vertical;
+  min-height: 96px;
+}
+
+.privacy-form-error {
+  margin: 0;
+  color: var(--vh-danger);
+  font-size: 0.88rem;
+}
+
+.privacy-form-done {
+  margin: 12px 0 0;
+  padding: 12px 14px;
+  border-radius: var(--vh-radius-sm);
+  background: var(--vh-ok-bg);
+  color: var(--vh-ok);
+}
+
+.privacy-form-hp {
+  position: absolute;
+  left: -9999px;
+  height: 0;
+  overflow: hidden;
+}
+
+.vh-auth-legal {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0 8px;
+}

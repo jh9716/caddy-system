@@ -97,6 +97,7 @@ section("wiring");
   const chrome = read("src/components/manage/AppChrome.tsx");
   assert(chrome.includes("LogoutButton"), "logout lives in shared chrome drawer/sidebar");
   assert(chrome.includes("PrivacyPolicyLink"), "privacy link in shared chrome drawer/sidebar");
+  assert(chrome.includes("AccountDeletionLink"), "deletion request link in chrome drawer/sidebar");
   assert(chrome.includes('aria-label="메뉴 열기"'), "hamburger");
   assert(chrome.includes("VERTHILL"), "central brand");
   const caddyPage = read("src/app/caddy/page.tsx");
@@ -114,6 +115,7 @@ section("wiring");
   assert(header.includes("/manage"), "admin AppHeader 관리자 유지");
   assert(header.includes("내 대시보드"), "AppHeader still has caddy fallback link");
   assert(header.includes("PrivacyPolicyLink"), "AppHeader has privacy link");
+  assert(header.includes("AccountDeletionLink"), "AppHeader has deletion request link");
 }
 
 if (failed > 0) {

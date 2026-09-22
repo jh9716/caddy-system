@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import AccountDeletionLink from "@/components/AccountDeletionLink";
 import LogoutButton from "@/components/LogoutButton";
 import PrivacyPolicyLink from "@/components/PrivacyPolicyLink";
-import { PRIVACY_PATH } from "@/lib/privacy";
+import { ACCOUNT_DELETION_PATH, PRIVACY_PATH } from "@/lib/privacy";
 import { isAppNavActive } from "@/lib/boardNav";
 import type { AppRole } from "@/lib/sessionCookies";
 
@@ -33,6 +34,11 @@ export default function AppHeader({ role }: { role: AppRole | null }) {
           <PrivacyPolicyLink
             className={navClass(pathname, PRIVACY_PATH)}
           />
+          {role ? (
+            <AccountDeletionLink
+              className={navClass(pathname, ACCOUNT_DELETION_PATH)}
+            />
+          ) : null}
           {role && (
             <Link
               className={navClass(pathname, "/notice")}

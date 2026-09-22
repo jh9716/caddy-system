@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Capacitor } from "@capacitor/core";
-import PrivacyPolicyLink from "@/components/PrivacyPolicyLink";
+import LegalLinks from "@/components/LegalLinks";
 import PwaInstallCard from "@/components/PwaInstallCard";
 import { PWA_MONOGRAM, PWA_SPLASH_COURSE } from "@/lib/pwaManifest";
 import { resolvePostLoginHref } from "@/lib/roleRouting";
@@ -201,9 +201,7 @@ export default function LoginClient() {
             </button>
           </form>
           <PwaInstallCard />
-          <p className="vh-auth-legal">
-            <PrivacyPolicyLink />
-          </p>
+          <LegalLinks />
           </div>
         </div>
       </div>

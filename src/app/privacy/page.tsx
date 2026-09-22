@@ -1,12 +1,16 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import {
+  ACCOUNT_DELETION_PATH,
   PRIVACY_EFFECTIVE_DATE,
   PRIVACY_LINK_LABEL,
+  PRIVACY_OPERATOR_NAME,
   PRIVACY_PUBLIC_URL,
   PRIVACY_SERVICE_NAME,
+  readPrivacyContactEmail,
 } from "@/lib/privacy";
 
-export const dynamic = "force-static";
+export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: PRIVACY_LINK_LABEL,
@@ -15,6 +19,8 @@ export const metadata: Metadata = {
 };
 
 export default function PrivacyPage() {
+  const contactEmail = readPrivacyContactEmail();
+
   return (
     <article className="privacy-page">
       <header className="privacy-page-head">
@@ -27,16 +33,16 @@ export default function PrivacyPage() {
 
       <section className="privacy-section">
         <h2>1. 서비스명 및 운영 주체</h2>
+        <ul>
+          <li>서비스명: {PRIVACY_SERVICE_NAME}</li>
+          <li>운영 주체: {PRIVACY_OPERATOR_NAME}</li>
+          <li>
+            Android 패키지 <code>kr.verthill.caddy</code>, 웹{" "}
+            <code>https://www.verthill.kr</code>
+          </li>
+        </ul>
         <p>
-          이 방침은 {PRIVACY_SERVICE_NAME}(VERTHILL Caddy System, Android
-          패키지 <code>kr.verthill.caddy</code>, 웹{" "}
-          <code>https://www.verthill.kr</code>)에 적용됩니다. 골프장 캐디 근무·배치
-          운영을 위한 내부 업무용 서비스입니다.
-        </p>
-        <p>
-          운영 주체의 법적 명칭, 사업장 주소, 전화번호, 개인정보 담당
-          연락처는 현재 이 서비스 코드에서 확정된 값이 없습니다. 확정되는
-          즉시 이 페이지를 갱신합니다.
+          골프장 캐디 근무·배치 운영을 위한 내부 업무용 서비스입니다.
         </p>
       </section>
 
@@ -91,9 +97,7 @@ export default function PrivacyPage() {
         </ul>
         <h3>기기 및 알림</h3>
         <ul>
-          <li>
-            Android 푸시: Firebase Cloud Messaging 기기 토큰.
-          </li>
+          <li>Android 푸시: Firebase Cloud Messaging 기기 토큰.</li>
           <li>
             웹 푸시: 구독 endpoint, 암호화 키(p256dh, auth), User-Agent,
             플랫폼 구분.
@@ -122,8 +126,8 @@ export default function PrivacyPage() {
       <section className="privacy-section">
         <h2>4. 보유 및 이용 기간</h2>
         <p>
-          코드에 개인정보 자동 파기 주기는 없습니다. 서비스 이용에 필요한
-          동안 보관하며, 삭제 요청이 있으면 아래 절차에 따라 검토합니다.
+          개인정보 자동 파기 주기는 없습니다. 서비스 이용에 필요한 동안
+          보관하며, 삭제 요청이 있으면 아래 절차에 따라 검토합니다.
         </p>
         <ul>
           <li>
@@ -156,8 +160,9 @@ export default function PrivacyPage() {
         </p>
         <ul>
           <li>
-            카카오: 로그인 인증. 앱은 카카오 회원번호만 식별값으로
-            사용합니다.
+            카카오: 로그인 인증. 앱은 카카오에서 받은 회원번호만
+            식별값으로 저장합니다. 앱이 수집한 이름·전화·제보를 카카오로
+            보내지는 않습니다.
           </li>
           <li>
             Firebase Cloud Messaging(Google): Android 푸시 전달. 기기 토큰과
@@ -213,32 +218,36 @@ export default function PrivacyPage() {
           <li>계정 또는 작성 내용의 삭제</li>
           <li>푸시 알림 수신 거부(앱·웹 알림 설정 또는 로그아웃)</li>
         </ul>
-        <p>
-          현재 앱에는 이용자가 직접 계정 전체를 삭제하는 버튼이 없습니다.
-          열람·정정·삭제는 관리자에게 요청하면 처리합니다.
-        </p>
       </section>
 
       <section className="privacy-section">
         <h2>9. 개인정보 삭제 요청</h2>
         <p>
-          계정 또는 개인정보 삭제를 원하면 로그인 후 관리자에게 요청해
-          주세요. 코스 제보와 댓글은 작성자 또는 관리자가 화면에서 삭제할
-          수 있습니다(소프트 삭제).
-        </p>
-        <p>
-          로그인 없이 제출할 수 있는 공개 삭제 요청 주소나 담당 이메일은
-          아직 게시하지 않습니다. 확정되면 이 페이지에 안내합니다.
+          계정 삭제는{" "}
+          <Link href={ACCOUNT_DELETION_PATH}>계정 삭제 요청</Link>{" "}
+          페이지에서 로그인 없이 시작할 수 있습니다. 코스 제보와 댓글은
+          작성자 또는 관리자가 화면에서 삭제할 수 있습니다(소프트 삭제).
         </p>
       </section>
 
       <section className="privacy-section">
         <h2>10. 문의</h2>
-        <p>
-          개인정보 처리에 관한 문의는 로그인 후 관리자에게 전달해 주세요.
-          운영 주체의 공개 이메일·전화번호·주소는 확정 후 이 항목에
-          추가합니다.
-        </p>
+        <ul>
+          <li>서비스명: {PRIVACY_SERVICE_NAME}</li>
+          <li>운영 주체: {PRIVACY_OPERATOR_NAME}</li>
+          {contactEmail ? (
+            <li>
+              개인정보 문의 이메일:{" "}
+              <a href={`mailto:${contactEmail}`}>{contactEmail}</a>
+            </li>
+          ) : (
+            <li>
+              개인정보 문의:{" "}
+              <Link href={ACCOUNT_DELETION_PATH}>계정 삭제 요청</Link>{" "}
+              페이지의 요청 폼으로 접수합니다.
+            </li>
+          )}
+        </ul>
       </section>
 
       <section className="privacy-section">

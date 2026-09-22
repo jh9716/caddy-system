@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 import LogoutButton from "@/components/LogoutButton";
+import AccountDeletionLink from "@/components/AccountDeletionLink";
 import PrivacyPolicyLink from "@/components/PrivacyPolicyLink";
 
 export type AppChromeNavItem = {
@@ -179,6 +180,7 @@ export default function AppChrome({
           <div className="vh-sidebar-admin">{footerTitle}</div>
           <div className="vh-sidebar-meta">{footerMeta}</div>
           <PrivacyPolicyLink className="vh-privacy-link vh-privacy-link-chrome" />
+          <AccountDeletionLink className="vh-privacy-link vh-privacy-link-chrome" />
           <LogoutButton />
         </div>
       </aside>
@@ -277,6 +279,7 @@ export default function AppChrome({
             </nav>
             <div className="vh-drawer-foot">
               <PrivacyPolicyLink className="vh-privacy-link vh-privacy-link-chrome" />
+              <AccountDeletionLink className="vh-privacy-link vh-privacy-link-chrome" />
               <LogoutButton />
             </div>
           </div>

@@ -7,11 +7,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
+  ACCOUNT_DELETION_PATH,
+  ACCOUNT_DELETION_PUBLIC_URL,
+  PRIVACY_CONTACT_EMAIL_ENV,
   PRIVACY_EFFECTIVE_DATE,
   PRIVACY_LINK_LABEL,
+  PRIVACY_OPERATOR_NAME,
   PRIVACY_PATH,
   PRIVACY_PUBLIC_URL,
   PRIVACY_SERVICE_NAME,
+  readPrivacyContactEmail,
 } from "../src/lib/privacy";
 
 let passed = 0;
@@ -44,7 +49,34 @@ section("public URL constants");
   );
   assert(PRIVACY_LINK_LABEL === "개인정보처리방침", "Korean label");
   assert(PRIVACY_SERVICE_NAME === "VERTHILL", "service name VERTHILL");
+  assert(PRIVACY_OPERATOR_NAME === "VERTHILL", "operator VERTHILL");
   assert(/^\d{4}-\d{2}-\d{2}$/.test(PRIVACY_EFFECTIVE_DATE), "effective date ISO");
+  assert(ACCOUNT_DELETION_PATH === "/account-deletion", "deletion path");
+  assert(
+    ACCOUNT_DELETION_PUBLIC_URL === "https://www.verthill.kr/account-deletion",
+    "deletion production URL"
+  );
+  assert(PRIVACY_CONTACT_EMAIL_ENV === "PRIVACY_CONTACT_EMAIL", "email env name");
+}
+
+section("contact email is env-only");
+{
+  assert(readPrivacyContactEmail({}) === null, "empty env → null");
+  assert(readPrivacyContactEmail({ PRIVACY_CONTACT_EMAIL: "" }) === null, "blank → null");
+  assert(
+    readPrivacyContactEmail({ PRIVACY_CONTACT_EMAIL: "privacy@example.com" }) === null,
+    "example.com rejected"
+  );
+  assert(
+    readPrivacyContactEmail({ PRIVACY_CONTACT_EMAIL: "not-an-email" }) === null,
+    "invalid rejected"
+  );
+  assert(
+    readPrivacyContactEmail({ PRIVACY_CONTACT_EMAIL: "a@b.co" }) === "a@b.co",
+    "valid env email accepted"
+  );
+  const privacyLib = read("src/lib/privacy.ts");
+  assert(!/@verthill\.kr/.test(privacyLib), "lib does not hardcode operator email");
 }
 
 const page = read("src/app/privacy/page.tsx");
@@ -60,6 +92,8 @@ section("page is public and Korean");
 {
   assert(page.includes("PRIVACY_LINK_LABEL"), "page title uses Korean label constant");
   assert(page.includes("서비스명"), "운영 주체 절");
+  assert(page.includes("운영 주체"), "운영 주체 라벨");
+  assert(page.includes("PRIVACY_OPERATOR_NAME"), "operator constant");
   assert(page.includes("수집하는 정보"), "수집 절");
   assert(page.includes("수집 및 이용 목적"), "목적 절");
   assert(page.includes("보유 및 이용 기간"), "보유 절");
@@ -73,6 +107,8 @@ section("page is public and Korean");
   assert(page.includes("kr.verthill.caddy"), "package name");
   assert(page.includes("https://www.verthill.kr"), "production host");
   assert(page.includes("PRIVACY_PUBLIC_URL"), "canonical uses constant");
+  assert(page.includes("ACCOUNT_DELETION_PATH"), "privacy links deletion page");
+  assert(page.includes("readPrivacyContactEmail"), "email comes from env reader");
 }
 
 section("no invented operator contact placeholders");
@@ -85,18 +121,14 @@ section("no invented operator contact placeholders");
     "(추후 기재)",
     "TBD",
     "TODO",
-    "주소:",
-    "전화번호:",
-    "FAX",
+    "코드에서 확정된 값이 없습니다",
+    "확정되는 즉시",
+    "확정 후 이 항목",
+    "아직 게시하지 않습니다",
   ];
   for (const token of forbidden) {
     assert(!page.includes(token), `page has no ${token}`);
   }
-  assert(
-    page.includes("코드에서 확정된 값이 없습니다") ||
-      page.includes("확정되는 즉시"),
-    "operator contact is explicitly unset"
-  );
 }
 
 section("facts match schema/code (no invented collection)");
@@ -125,36 +157,21 @@ section("same-origin in-app links");
 {
   assert(link.includes("PRIVACY_PATH"), "shared link uses path constant");
   assert(!link.includes("https://"), "shared link is relative, not hardcoded host");
-  assert(login.includes("PrivacyPolicyLink"), "login has privacy link");
-  assert(home.includes("PrivacyPolicyLink"), "home has privacy link");
+  assert(login.includes("LegalLinks"), "login has legal links");
+  assert(home.includes("LegalLinks"), "home has legal links");
   assert(header.includes("PrivacyPolicyLink"), "header has privacy link");
+  assert(header.includes("AccountDeletionLink"), "header has deletion link when logged in");
   assert(chrome.includes("PrivacyPolicyLink"), "chrome sidebar/drawer has privacy link");
-  const chromeHits = chrome.split("PrivacyPolicyLink").length - 1;
-  assert(chromeHits >= 2, "chrome has sidebar + drawer link");
+  assert(chrome.includes("AccountDeletionLink"), "chrome has deletion request link");
+  const chromeHits = chrome.split("AccountDeletionLink").length - 1;
+  assert(chromeHits >= 2, "chrome has sidebar + drawer deletion link");
 }
 
-section("middleware does not gate /privacy");
+section("middleware does not gate public legal pages");
 {
   assert(!middleware.includes("/privacy"), "middleware matcher omits /privacy");
+  assert(!middleware.includes("/account-deletion"), "middleware matcher omits /account-deletion");
   assert(middleware.includes("/login"), "middleware still redirects others to login");
-}
-
-section("no account deletion implementation in this change");
-{
-  const apiDir = path.resolve("src/app/api");
-  const walk = (dir: string): string[] =>
-    fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-      const full = path.join(dir, entry.name);
-      return entry.isDirectory() ? walk(full) : [full];
-    });
-  const deleteAccount = walk(apiDir).filter((file) =>
-    /delete-account|account-delete|회원탈퇴/i.test(file)
-  );
-  assert(deleteAccount.length === 0, "no account-delete API route");
-  assert(
-    page.includes("직접 계정 전체를 삭제하는 버튼이 없습니다"),
-    "policy admits no self-serve delete"
-  );
 }
 
 if (failed > 0) {
