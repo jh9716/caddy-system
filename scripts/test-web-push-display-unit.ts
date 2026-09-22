@@ -146,9 +146,14 @@ async function main() {
     assert(!/caches\.open/.test(sw), "no caches.open");
     assert(sw.includes("skipWaiting"), "skipWaiting kept");
     assert(sw.includes("clients.claim"), "clients.claim kept");
-    const page = read("src/app/manage/push-test/page.tsx");
-    assert(!page.includes("web-push"), "UI no web-push");
-    assert(!page.includes("WEB_PUSH_VAPID_PRIVATE_KEY"), "UI no private env");
+    const page = read("src/app/manage/push-test/PushTestClient.tsx");
+    const pageServer = read("src/app/manage/push-test/page.tsx");
+    assert(!page.includes("web-push") && !pageServer.includes("web-push"), "UI no web-push");
+    assert(
+      !page.includes("WEB_PUSH_VAPID_PRIVATE_KEY") &&
+        !pageServer.includes("WEB_PUSH_VAPID_PRIVATE_KEY"),
+      "UI no private env"
+    );
     const sender = read("src/lib/webPushSender.ts");
     assert(/from ["']web-push["']/.test(sender), "sender uses web-push");
     assert(!sender.includes("console.log"), "sender no console.log");
@@ -157,6 +162,7 @@ async function main() {
     assert(vapid.includes("Never includes private key"), "private never in client config");
     for (const rel of [
       "src/app/manage/push-test/page.tsx",
+      "src/app/manage/push-test/PushTestClient.tsx",
       "src/components/PushNotificationCard.tsx",
       "src/lib/webPushTestConstants.ts",
     ]) {
@@ -505,7 +511,7 @@ async function main() {
       const many = await searchPushTestTargets(prisma, "조");
       assert(many.length <= PUSH_TEST_SEARCH_LIMIT, "search max 20");
 
-      const ui = read("src/app/manage/push-test/page.tsx");
+      const ui = read("src/app/manage/push-test/PushTestClient.tsx");
       assert(ui.includes("푸시 알림 테스트"), "page title");
       assert(ui.includes("테스트 알림 보내기"), "send button");
       assert(ui.includes("이 캐디 1명에게 테스트 알림을 보냅니다."), "confirm copy");
