@@ -408,7 +408,7 @@ section("local POST inquiry + admin forbidden (localhost only)");
     const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     return { status: res.status, json };
   };
-  const ip = "203.0.113.77";
+  const ip = `198.51.100.${(Date.now() % 200) + 1}`;
   const a = await post(
     {
       topic: "privacy_inquiry",
