@@ -133,6 +133,14 @@ tasks.configureEach { task ->
     }
 }
 
+configurations.configureEach {
+    resolutionStrategy.eachDependency { details ->
+        if (details.requested.group == "androidx.datastore") {
+            details.useVersion rootProject.ext.datastoreVersion
+        }
+    }
+}
+
 tasks.register("checkReleaseSigning") {
     group = "verification"
     description = "Reports whether env-based release signing is ready. Never prints secret values."
@@ -175,5 +183,5 @@ try {
         apply plugin: 'com.google.gms.google-services'
     }
 } catch(Exception e) {
-    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+    logger.lifecycle("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
 }

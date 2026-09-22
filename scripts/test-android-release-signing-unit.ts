@@ -165,7 +165,8 @@ console.log("== Firebase / Kakao / Capacitor stay on the existing production pat
 assert(
   googleServicesBlock.includes("apply plugin: 'com.google.gms.google-services'") &&
     googleServicesBlock.includes("google-services.json not found") &&
-    googleServicesBlock.includes("catch(Exception e)"),
+    googleServicesBlock.includes("catch(Exception e)") &&
+    googleServicesBlock.includes("logger.lifecycle"),
   "missing google-services.json still skips the plugin instead of failing config"
 );
 assert(
@@ -235,6 +236,14 @@ assert(
     pushGradle.includes("firebaseMessagingVersion") &&
     pushGradle.includes("25.0.1"),
   "PushNotifications resolves firebase-messaging 25.0.1 by default"
+);
+assert(
+  variables.includes("datastoreVersion = '1.2.1'") &&
+    appGradle.includes('details.requested.group == "androidx.datastore"') &&
+    appGradle.includes("rootProject.ext.datastoreVersion") &&
+    !appGradle.includes("firebase-messaging:") &&
+    pushGradle.includes("com.google.firebase:firebase-messaging:$firebaseMessagingVersion"),
+  "datastore 1.2.1 is pinned for 16KB; firebase-messaging version is unchanged"
 );
 
 if (failed) {
