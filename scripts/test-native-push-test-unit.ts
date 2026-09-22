@@ -146,6 +146,8 @@ async function main() {
         "export async function sendTestPushToUser"
       );
       assert(nativeFn.includes("deliverNativePushTokens"), "native calls deliverNativePushTokens");
+      assert(nativeFn.includes("normalizeAppRole"), "native role uses shared normalizer");
+      assert(!nativeFn.includes('user.role !== "admin"'), "native role compare is not case-sensitive");
       assert(!nativeFn.includes("deliverWebPush"), "native fn has no web push send");
       assert(!nativeFn.includes("pushSubscription"), "native fn does not query PushSubscription");
       const route = read("src/app/api/push/test/route.ts");
@@ -325,6 +327,52 @@ async function main() {
       });
       assert(fetches === 0, "FCM off network 0");
       assert(off.sent === 0 && off.error === "fcm_send_disabled", "FCM off send 0");
+
+      await prisma.user.update({ where: { id: adminId }, data: { role: "ADMIN" } });
+      let upperFetches = 0;
+      const upper = await sendNativeTestPushToSelf(prisma, adminId, {
+        env: offEnv,
+        fetchFn: async () => {
+          upperFetches += 1;
+          throw new Error("network");
+        },
+      });
+      assert(upperFetches === 0, "ADMIN role FCM off network 0");
+      assert(
+        upper.sent === 0 && upper.error === "fcm_send_disabled",
+        "DB role ADMIN is allowed and does not send while FCM is off"
+      );
+      let caddyThrew = false;
+      try {
+        await sendNativeTestPushToSelf(guardedDb(), otherId, {
+          sendFn: async () => "sent",
+        });
+      } catch (e) {
+        caddyThrew = e instanceof Error && (e as { code?: string }).code === "invalid_target";
+      }
+      assert(caddyThrew, "non-admin DB role rejected");
+      const upperHttp = await postTest(adminCookie, {
+        channel: "native",
+        confirm: TEST_PUSH_CONFIRM,
+      });
+      const upperBody = await upperHttp.json();
+      assert(
+        upperHttp.status === 200 &&
+          upperBody.error === "fcm_send_disabled" &&
+          upperBody.sent === 0,
+        "admin session with DB role ADMIN passes native self test"
+      );
+      const upperForeign = await postTest(adminCookie, {
+        channel: "native",
+        confirm: TEST_PUSH_CONFIRM,
+        userId: otherId,
+      });
+      const upperForeignBody = await upperForeign.json();
+      assert(
+        upperForeign.status === 400 && upperForeignBody.error === "invalid_target",
+        "ADMIN db role still cannot target another user"
+      );
+      await prisma.user.update({ where: { id: adminId }, data: { role: "admin" } });
 
       const origFetch = globalThis.fetch;
       let httpFetches = 0;
