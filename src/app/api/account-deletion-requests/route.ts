@@ -4,6 +4,7 @@ import {
   clientIpFromRequest,
   createAccountDeletionRequest,
   parseAccountDeletionRequest,
+  publicDeletionAcceptedBody,
 } from "@/lib/accountDeletionRequest";
 import { prisma } from "@/lib/prisma";
 
@@ -14,10 +15,10 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
     const input = parseAccountDeletionRequest(body);
-    const created = await createAccountDeletionRequest(prisma, input, {
+    await createAccountDeletionRequest(prisma, input, {
       ip: clientIpFromRequest(req.headers),
     });
-    return NextResponse.json({ ok: true, id: created.id });
+    return NextResponse.json(publicDeletionAcceptedBody());
   } catch (e) {
     if (e instanceof AccountDeletionRequestError) {
       return NextResponse.json(

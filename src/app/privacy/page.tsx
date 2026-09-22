@@ -109,6 +109,10 @@ export default function PrivacyPage() {
             관리자 작업 감사 로그: 작업 종류, 대상, 일부 요청의 접속 IP
             (x-forwarded-for).
           </li>
+          <li>
+            계정 삭제 요청: 계정 식별 정보, 회신 이메일, 선택 메모.
+            요청 시각은 감사 로그 시각을 사용합니다.
+          </li>
         </ul>
       </section>
 
@@ -120,6 +124,7 @@ export default function PrivacyPage() {
           <li>근무 배치, 휴무, 공지, 코스 제보·댓글 등 업무 기능 제공</li>
           <li>공지·배치·제보 관련 푸시 알림 전달</li>
           <li>운영 변경 이력 보존 및 장애 대응</li>
+          <li>계정 삭제 요청 접수와 본인 확인</li>
         </ul>
       </section>
 
@@ -147,6 +152,9 @@ export default function PrivacyPage() {
           <li>
             휴무 신청, 본인확인 연결 요청, 감사 로그는 운영 이력으로
             유지합니다.
+          </li>
+          <li>
+            계정 삭제 요청 기록은 요청을 확인하고 처리하기 위해 보관합니다.
           </li>
         </ul>
       </section>
@@ -225,7 +233,8 @@ export default function PrivacyPage() {
         <p>
           계정 삭제는{" "}
           <Link href={ACCOUNT_DELETION_PATH}>계정 삭제 요청</Link>{" "}
-          페이지에서 로그인 없이 시작할 수 있습니다. 코스 제보와 댓글은
+          페이지에서 로그인 없이 시작할 수 있습니다. 요청 처리 과정에서
+          계정 식별 정보와 회신 이메일을 수집합니다. 코스 제보와 댓글은
           작성자 또는 관리자가 화면에서 삭제할 수 있습니다(소프트 삭제).
         </p>
       </section>

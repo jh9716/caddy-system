@@ -109,6 +109,11 @@ section("page is public and Korean");
   assert(page.includes("PRIVACY_PUBLIC_URL"), "canonical uses constant");
   assert(page.includes("ACCOUNT_DELETION_PATH"), "privacy links deletion page");
   assert(page.includes("readPrivacyContactEmail"), "email comes from env reader");
+  assert(
+    page.includes("계정 식별 정보와 회신 이메일"),
+    "deletion request collection disclosed"
+  );
+  assert(page.includes("요청을 확인하고 처리하기"), "deletion request retention purpose");
 }
 
 section("no invented operator contact placeholders");

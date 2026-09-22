@@ -16,8 +16,13 @@ export const ACCOUNT_DELETION_REQUEST_ACTION = "account_deletion_request";
 export const ACCOUNT_DELETION_REQUEST_ENTITY = "User";
 export const ACCOUNT_DELETION_RATE_LIMIT = 5;
 export const ACCOUNT_DELETION_RATE_WINDOW_MS = 60 * 60 * 1000;
+export const ACCOUNT_DELETION_IDENTIFIER_MAX = 80;
+export const ACCOUNT_DELETION_EMAIL_MAX = 128;
+export const ACCOUNT_DELETION_NOTE_MAX = 500;
+export const ACCOUNT_DELETION_UNKNOWN_IP = "unknown";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
 
 export type AccountDeletionRequestInput = {
   accountIdentifier: string;
@@ -59,7 +64,6 @@ export type AccountDeletionRequestDb = {
           accountIdentifier: string;
           replyEmail: string;
           note: string | null;
-          source: "web_form";
         };
       };
       select: { id: true };
@@ -67,22 +71,59 @@ export type AccountDeletionRequestDb = {
   };
 };
 
-function clip(raw: unknown, max: number): string {
-  return String(raw ?? "").trim().slice(0, max);
+export function publicDeletionAcceptedBody() {
+  return { ok: true as const };
+}
+
+/** 저장·표시용 평문. 태그/제어문자 제거. 길이 초과는 거절. */
+export function readPlainField(
+  raw: unknown,
+  max: number,
+  code: string,
+  emptyMessage: string
+): string {
+  if (raw == null) return "";
+  if (typeof raw !== "string" && typeof raw !== "number") {
+    throw new AccountDeletionRequestError(400, code, emptyMessage);
+  }
+  const original = String(raw);
+  if (original.length > max) {
+    throw new AccountDeletionRequestError(
+      400,
+      "field_too_long",
+      "입력 길이가 너무 깁니다."
+    );
+  }
+  return original.replace(CONTROL_CHARS, "").replace(/[<>]/g, "").trim();
 }
 
 export function parseAccountDeletionRequest(
   body: unknown
 ): AccountDeletionRequestInput {
   const rec = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
-  const honeypot = clip(rec.company, 80);
+  const honeypot = readPlainField(rec.company, 80, "invalid_request", "요청을 처리할 수 없습니다.");
   if (honeypot) {
     throw new AccountDeletionRequestError(400, "invalid_request", "요청을 처리할 수 없습니다.");
   }
 
-  const accountIdentifier = clip(rec.accountIdentifier, 80);
-  const replyEmail = clip(rec.replyEmail, 128).toLowerCase();
-  const noteRaw = clip(rec.note, 500);
+  const accountIdentifier = readPlainField(
+    rec.accountIdentifier,
+    ACCOUNT_DELETION_IDENTIFIER_MAX,
+    "invalid_account",
+    "계정 식별 정보를 입력해 주세요."
+  );
+  const replyEmail = readPlainField(
+    rec.replyEmail,
+    ACCOUNT_DELETION_EMAIL_MAX,
+    "invalid_email",
+    "회신 받을 이메일을 입력해 주세요."
+  ).toLowerCase();
+  const noteRaw = readPlainField(
+    rec.note,
+    ACCOUNT_DELETION_NOTE_MAX,
+    "invalid_note",
+    "요청 내용을 확인해 주세요."
+  );
   const note = noteRaw.length > 0 ? noteRaw : null;
 
   if (accountIdentifier.length < 2) {
@@ -108,7 +149,11 @@ export function clientIpFromRequest(headers: {
 }): string | null {
   const forwarded = headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "";
   if (!forwarded || forwarded.length > 64) return null;
-  return forwarded;
+  return forwarded.replace(CONTROL_CHARS, "");
+}
+
+export function rateLimitIp(ip: string | null): string {
+  return ip && ip.length > 0 ? ip : ACCOUNT_DELETION_UNKNOWN_IP;
 }
 
 export async function createAccountDeletionRequest(
@@ -116,21 +161,20 @@ export async function createAccountDeletionRequest(
   input: AccountDeletionRequestInput,
   meta: AccountDeletionRequestMeta
 ): Promise<{ id: number }> {
-  if (meta.ip) {
-    const recent = await db.audit.count({
-      where: {
-        action: ACCOUNT_DELETION_REQUEST_ACTION,
-        ip: meta.ip,
-        createdAt: { gte: new Date(Date.now() - ACCOUNT_DELETION_RATE_WINDOW_MS) },
-      },
-    });
-    if (recent >= ACCOUNT_DELETION_RATE_LIMIT) {
-      throw new AccountDeletionRequestError(
-        429,
-        "rate_limited",
-        "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요."
-      );
-    }
+  const ip = rateLimitIp(meta.ip);
+  const recent = await db.audit.count({
+    where: {
+      action: ACCOUNT_DELETION_REQUEST_ACTION,
+      ip,
+      createdAt: { gte: new Date(Date.now() - ACCOUNT_DELETION_RATE_WINDOW_MS) },
+    },
+  });
+  if (recent >= ACCOUNT_DELETION_RATE_LIMIT) {
+    throw new AccountDeletionRequestError(
+      429,
+      "rate_limited",
+      "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요."
+    );
   }
 
   return db.audit.create({
@@ -138,12 +182,11 @@ export async function createAccountDeletionRequest(
       action: ACCOUNT_DELETION_REQUEST_ACTION,
       entity: ACCOUNT_DELETION_REQUEST_ENTITY,
       entityId: null,
-      ip: meta.ip,
+      ip,
       payload: {
         accountIdentifier: input.accountIdentifier,
         replyEmail: input.replyEmail,
         note: input.note,
-        source: "web_form",
       },
     },
     select: { id: true },
