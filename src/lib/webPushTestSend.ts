@@ -3,6 +3,7 @@
  * only when deliverWebPush is actually invoked.
  */
 import type { PrismaClient } from "@prisma/client";
+import { normalizeAppRole } from "@/lib/sessionCookies";
 import {
   NATIVE_TEST_PUSH_BODY,
   NATIVE_TEST_PUSH_TAG,
@@ -122,7 +123,7 @@ export async function sendNativeTestPushToSelf(
     where: { id: userId },
     select: { id: true, role: true },
   });
-  if (!user || user.role !== "admin") {
+  if (!user || normalizeAppRole(user.role) !== "admin") {
     throw new PushTestError("invalid_target", "본인 Android 알림만 테스트할 수 있습니다.", 400);
   }
   if (!hasDevicePushTokenDelegate(db)) {
