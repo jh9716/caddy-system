@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { resolvePushSubscriptionUserId } from "@/lib/adminPushUser";
 import { requireAdmin, resolveAuthUser } from "@/lib/auth";
 import {
   PushTestError,
@@ -19,16 +20,24 @@ function requireWebTarget(userId: number | null): number {
   return userId;
 }
 
-/** Native test target is always the signed-in admin. Client userId cannot redirect it. */
+/** Native test target is the signed-in admin's own User. Client userId cannot redirect it. */
 async function sendNativeTestToSessionAdmin(req: NextRequest, requestedUserId: number | null) {
   const auth = await resolveAuthUser(req);
-  if (!auth || auth.role !== "admin" || auth.userId == null) {
+  if (!auth || auth.role !== "admin") {
     throw new PushTestError("invalid_target", "본인 Android 알림만 테스트할 수 있습니다.", 400);
   }
-  if (requestedUserId != null && requestedUserId !== auth.userId) {
+  const targetUserId = await resolvePushSubscriptionUserId(prisma, {
+    role: auth.role,
+    userId: auth.userId,
+    username: auth.username,
+  });
+  if (targetUserId == null) {
+    throw new PushTestError("invalid_target", "본인 Android 알림만 테스트할 수 있습니다.", 400);
+  }
+  if (requestedUserId != null && requestedUserId !== targetUserId) {
     throw new PushTestError("invalid_target", "본인에게만 보낼 수 있습니다.", 400);
   }
-  return sendNativeTestPushToSelf(prisma, auth.userId);
+  return sendNativeTestPushToSelf(prisma, targetUserId);
 }
 
 function logTest(op: string, e: unknown) {

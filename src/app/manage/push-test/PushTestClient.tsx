@@ -27,7 +27,7 @@ export default function PushTestClient({ nativeTokenCount }: { nativeTokenCount:
   const [sendingId, setSendingId] = useState<number | null>(null);
   const [nativeSending, setNativeSending] = useState(false);
   const nativeLock = useRef(false);
-  const canNative = nativeTokenCount >= 1;
+  const hasNativeToken = nativeTokenCount >= 1;
 
   useEffect(() => {
     const q = query.replace(/\u00a0/g, " ").trim();
@@ -126,7 +126,7 @@ export default function PushTestClient({ nativeTokenCount }: { nativeTokenCount:
   }
 
   async function sendNative() {
-    if (!canNative || nativeLock.current) return;
+    if (!hasNativeToken || nativeLock.current) return;
     const ok = window.confirm("내 Android 앱으로 테스트 알림 1건을 보냅니다.");
     if (!ok || nativeLock.current) return;
     nativeLock.current = true;
@@ -184,22 +184,25 @@ export default function PushTestClient({ nativeTokenCount }: { nativeTokenCount:
         <p className="pt-sub">구독된 캐디 1명에게만 고정 테스트 알림을 보냅니다.</p>
       </header>
 
-      {canNative ? (
-        <section className="pt-self">
-          <div>
-            <strong className="pt-name">내 Android 앱</strong>
-            <div className="pt-meta">이 관리자 계정의 Android 알림으로 1건만 보냅니다.</div>
+      <section className="pt-self">
+        <div>
+          <strong className="pt-name">내 Android 앱 알림 테스트</strong>
+          <div className="pt-meta">
+            현재 이 관리자 계정에 등록된 VERTHILL 앱으로 테스트 알림을 보냅니다.
           </div>
-          <button
-            type="button"
-            className="pt-btn"
-            disabled={nativeSending}
-            onClick={() => void sendNative()}
-          >
-            {nativeSending ? "보내는 중…" : "내 Android 앱 알림 테스트"}
-          </button>
-        </section>
-      ) : null}
+          {hasNativeToken ? null : (
+            <div className="pt-meta">등록된 Android 앱 알림이 없습니다.</div>
+          )}
+        </div>
+        <button
+          type="button"
+          className={`pt-btn${hasNativeToken ? "" : " is-disabled"}`}
+          disabled={nativeSending || !hasNativeToken}
+          onClick={() => void sendNative()}
+        >
+          {nativeSending ? "보내는 중…" : "내 앱으로 테스트 알림 보내기"}
+        </button>
+      </section>
 
       <label className="pt-search-label">
         캐디 이름 검색
