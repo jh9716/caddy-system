@@ -72,6 +72,7 @@ section("admin menus unchanged");
   assert(admin.includes("/manage/staff-accounts"), "account manager keeps 직원 계정");
   assert(!staff.includes("/manage/staff-accounts"), "staff admin hides 직원 계정");
   assert(admin.includes("/manage/notifications"), "admin keeps 알림 설정");
+  assert(admin.includes("/manage/privacy-requests"), "admin has 개인정보 요청 inbox");
   assert(admin.includes("/course-reports"), "admin keeps 코스 제보");
   const manageShell = read("src/components/manage/ManageShell.tsx");
   assert(manageShell.includes('label: "캐디 관리"'), "ManageShell still has 캐디 관리");
@@ -96,6 +97,8 @@ section("wiring");
   assert(member.includes("LogoutButton") === false, "logout not in MemberShell body (chrome foot)");
   const chrome = read("src/components/manage/AppChrome.tsx");
   assert(chrome.includes("LogoutButton"), "logout lives in shared chrome drawer/sidebar");
+  assert(chrome.includes("PrivacyPolicyLink"), "privacy link in shared chrome drawer/sidebar");
+  assert(chrome.includes("AccountDeletionLink"), "deletion request link in chrome drawer/sidebar");
   assert(chrome.includes('aria-label="메뉴 열기"'), "hamburger");
   assert(chrome.includes("VERTHILL"), "central brand");
   const caddyPage = read("src/app/caddy/page.tsx");
@@ -112,6 +115,8 @@ section("wiring");
   const header = read("src/components/AppHeader.tsx");
   assert(header.includes("/manage"), "admin AppHeader 관리자 유지");
   assert(header.includes("내 대시보드"), "AppHeader still has caddy fallback link");
+  assert(header.includes("PrivacyPolicyLink"), "AppHeader has privacy link");
+  assert(header.includes("AccountDeletionLink"), "AppHeader has deletion request link");
 }
 
 if (failed > 0) {
