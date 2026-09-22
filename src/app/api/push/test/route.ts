@@ -1,15 +1,35 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, resolveAuthUser } from "@/lib/auth";
 import {
   PushTestError,
   isPushTestStoreMissing,
   parseTestPushRequest,
+  sendNativeTestPushToSelf,
   sendTestPushToUser,
 } from "@/lib/webPushTestSend";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+
+function requireWebTarget(userId: number | null): number {
+  if (userId == null) {
+    throw new PushTestError("invalid_target", "userId가 올바르지 않습니다.", 400);
+  }
+  return userId;
+}
+
+/** Native test target is always the signed-in admin. Client userId cannot redirect it. */
+async function sendNativeTestToSessionAdmin(req: NextRequest, requestedUserId: number | null) {
+  const auth = await resolveAuthUser(req);
+  if (!auth || auth.role !== "admin" || auth.userId == null) {
+    throw new PushTestError("invalid_target", "본인 Android 알림만 테스트할 수 있습니다.", 400);
+  }
+  if (requestedUserId != null && requestedUserId !== auth.userId) {
+    throw new PushTestError("invalid_target", "본인에게만 보낼 수 있습니다.", 400);
+  }
+  return sendNativeTestPushToSelf(prisma, auth.userId);
+}
 
 function logTest(op: string, e: unknown) {
   const code =
@@ -25,8 +45,11 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json().catch(() => ({}));
   try {
-    const { userId, confirm } = parseTestPushRequest(body);
-    const result = await sendTestPushToUser(prisma, userId, confirm);
+    const parsed = parseTestPushRequest(body);
+    const result =
+      parsed.channel === "native"
+        ? await sendNativeTestToSessionAdmin(req, parsed.userId)
+        : await sendTestPushToUser(prisma, requireWebTarget(parsed.userId), parsed.confirm);
     return NextResponse.json({
       ok: result.ok,
       sent: result.sent,

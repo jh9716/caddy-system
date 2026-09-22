@@ -32,6 +32,7 @@
     "test:push-subscription-unit": "bash scripts/tsx-safe.sh scripts/test-push-subscription-unit.ts",
     "test:push-same-device-unit": "bash scripts/tsx-safe.sh scripts/test-push-same-device-unit.ts",
     "test:web-push-display-unit": "bash scripts/tsx-safe.sh scripts/test-web-push-display-unit.ts",
+    "test:native-push-test-unit": "bash scripts/tsx-safe.sh scripts/test-native-push-test-unit.ts",
     "test:board-push-unit": "bash scripts/tsx-safe.sh scripts/test-board-push-unit.ts",
     "test:notice-v2-push-unit": "bash scripts/tsx-safe.sh scripts/test-notice-v2-push-unit.ts",
     "test:course-report-push-unit": "bash scripts/tsx-safe.sh scripts/test-course-report-push-unit.ts",
