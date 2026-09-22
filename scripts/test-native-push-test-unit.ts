@@ -150,20 +150,33 @@ async function main() {
       assert(!nativeFn.includes("pushSubscription"), "native fn does not query PushSubscription");
       const route = read("src/app/api/push/test/route.ts");
       assert(route.includes("requireAdmin"), "route keeps requireAdmin");
-      assert(route.includes("auth.userId"), "route uses session user id");
-      assert(route.includes("requestedUserId !== auth.userId"), "mismatched userId rejected");
+      assert(route.includes("auth.userId"), "route passes session user id");
+      assert(route.includes("requestedUserId !== targetUserId"), "mismatched userId rejected");
       const ui = read("src/app/manage/push-test/PushTestClient.tsx");
       const nativeUi = sliceBetween(ui, "async function sendNative", "return (");
-      assert(ui.includes("내 Android 앱 알림 테스트"), "native button label");
-      assert(ui.includes("nativeTokenCount >= 1"), "button requires enabled token");
+      assert(ui.includes("내 Android 앱 알림 테스트"), "native card title");
+      assert(
+        ui.includes("현재 이 관리자 계정에 등록된 VERTHILL 앱으로 테스트 알림을 보냅니다."),
+        "native card description"
+      );
+      assert(ui.includes("내 앱으로 테스트 알림 보내기"), "native button label");
+      assert(ui.includes("nativeTokenCount < 1") || ui.includes("!hasNativeToken"), "missing token disables button");
+      assert(ui.includes("등록된 Android 앱 알림이 없습니다."), "missing token guidance");
       assert(ui.includes("nativeSending"), "loading lock");
       assert(nativeUi.includes('channel: "native"'), "ui sends native channel");
       assert(!nativeUi.includes("userId"), "ui native body has no userId");
+      const nativeCard = sliceBetween(ui, '<section className="pt-self">', "캐디 이름 검색");
+      assert(nativeCard.length > 0, "native card is above search");
+      assert(!nativeCard.includes("subscriptionCount"), "native card ignores web subscription count");
+      assert(!nativeCard.includes("canNative ?"), "native card is not hidden");
       assert(ui.includes("subscriptionCount < 1"), "web button still checks subscriptions");
       assert(ui.includes("테스트 알림 보내기"), "web send button kept");
       const page = read("src/app/manage/push-test/page.tsx");
       assert(page.includes("countEnabledAndroidDeviceTokens"), "page counts own tokens");
+      assert(page.includes("resolvePushSubscriptionUserId"), "page resolves env admin to db user");
+      assert(!page.includes('typeof auth.userId === "number"'), "page does not skip null session uid");
       assert(page.includes("nativeTokenCount"), "page passes token count");
+      assert(route.includes("resolvePushSubscriptionUserId"), "send uses the same self user");
       const migrations = fs.readdirSync(path.join(process.cwd(), "prisma/migrations"));
       assert(
         !migrations.some((n) => /native-fcm-e2e|native-push-test/i.test(n)),
@@ -343,6 +356,31 @@ async function main() {
         });
         const omittedBody = await omitted.json();
         assert(omitted.status === 200 && omittedBody.error === "fcm_send_disabled", "omitted userId uses session");
+        const envCookie = await cookieFor({
+          id: null,
+          username: admin.username,
+          role: "admin",
+          sessionVersion: 0,
+        });
+        const envSelf = await postTest(envCookie, {
+          channel: "native",
+          confirm: TEST_PUSH_CONFIRM,
+        });
+        const envBody = await envSelf.json();
+        assert(
+          envSelf.status === 200 && envBody.error === "fcm_send_disabled" && envBody.sent === 0,
+          "env admin resolves own db user and does not send while FCM is off"
+        );
+        const envForeign = await postTest(envCookie, {
+          channel: "native",
+          confirm: TEST_PUSH_CONFIRM,
+          userId: otherId,
+        });
+        const envForeignBody = await envForeign.json();
+        assert(
+          envForeign.status === 400 && envForeignBody.error === "invalid_target",
+          "env admin cannot target another user"
+        );
       } finally {
         globalThis.fetch = origFetch;
       }
