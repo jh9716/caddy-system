@@ -27,6 +27,32 @@ if (kakaoNativeAppKey) {
     logger.lifecycle("Kakao native app key: not configured")
 }
 
+def releaseSigningEnvNames = [
+    "ANDROID_KEYSTORE_PATH",
+    "ANDROID_KEYSTORE_PASSWORD",
+    "ANDROID_KEY_ALIAS",
+    "ANDROID_KEY_PASSWORD",
+]
+
+def readReleaseSigningEnv = { String name ->
+    def value = System.getenv(name)
+    return value != null ? value.toString().trim() : ""
+}
+
+def missingReleaseSigningEnv = releaseSigningEnvNames.findAll { name ->
+    readReleaseSigningEnv(name).isEmpty()
+}
+def releaseKeystorePath = readReleaseSigningEnv("ANDROID_KEYSTORE_PATH")
+def releaseKeystoreFileFound = !releaseKeystorePath.isEmpty() && file(releaseKeystorePath).isFile()
+def releaseSigningReady = missingReleaseSigningEnv.isEmpty() && releaseKeystoreFileFound
+if (releaseSigningReady) {
+    logger.lifecycle("Release signing: configured")
+} else if (!missingReleaseSigningEnv.isEmpty()) {
+    logger.lifecycle("Release signing: not configured (missing env: ${missingReleaseSigningEnv.join(', ')})")
+} else {
+    logger.lifecycle("Release signing: not configured (keystore file not found)")
+}
+
 android {
     namespace = "kr.verthill.caddy"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -55,6 +81,14 @@ android {
             keyAlias "androiddebugkey"
             keyPassword "android"
         }
+        if (releaseSigningReady) {
+            release {
+                storeFile file(releaseKeystorePath)
+                storePassword readReleaseSigningEnv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias readReleaseSigningEnv("ANDROID_KEY_ALIAS")
+                keyPassword readReleaseSigningEnv("ANDROID_KEY_PASSWORD")
+            }
+        }
     }
     buildTypes {
         debug {
@@ -63,6 +97,9 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (releaseSigningReady) {
+                signingConfig signingConfigs.release
+            }
         }
     }
     compileOptions {
@@ -71,6 +108,43 @@ android {
     }
     kotlinOptions {
         jvmTarget = "21"
+    }
+}
+
+def signedReleaseTaskNames = [
+    "assembleRelease",
+    "bundleRelease",
+    "signRelease",
+    "signReleaseBundle",
+] as Set
+
+tasks.configureEach { task ->
+    if (signedReleaseTaskNames.contains(task.name)) {
+        task.doFirst {
+            if (!releaseSigningReady) {
+                def reason = !missingReleaseSigningEnv.isEmpty()
+                    ? "missing env: ${missingReleaseSigningEnv.join(', ')}"
+                    : "ANDROID_KEYSTORE_PATH is set but the keystore file was not found"
+                throw new GradleException(
+                    "Refusing ${task.name}: release signing is required and debug keystore fallback is disabled (${reason})."
+                )
+            }
+        }
+    }
+}
+
+tasks.register("checkReleaseSigning") {
+    group = "verification"
+    description = "Reports whether env-based release signing is ready. Never prints secret values."
+    doLast {
+        if (releaseSigningReady) {
+            logger.lifecycle("Release signing: ready")
+        } else if (!missingReleaseSigningEnv.isEmpty()) {
+            logger.lifecycle("Release signing: not ready (missing env: ${missingReleaseSigningEnv.join(', ')})")
+        } else {
+            logger.lifecycle("Release signing: not ready (keystore file not found)")
+        }
+        logger.lifecycle("Release debug-keystore fallback: disabled")
     }
 }
 
