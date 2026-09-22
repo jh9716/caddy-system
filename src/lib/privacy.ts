@@ -16,6 +16,12 @@ export const ACCOUNT_DELETION_PUBLIC_URL =
   "https://www.verthill.kr/account-deletion";
 export const ACCOUNT_DELETION_LINK_LABEL = "계정 삭제 요청";
 
+export const PRIVACY_CONTACT_PATH = "/privacy-contact";
+export const PRIVACY_CONTACT_PUBLIC_URL =
+  "https://www.verthill.kr/privacy-contact";
+export const PRIVACY_CONTACT_LINK_LABEL = "개인정보 문의";
+export const PRIVACY_REQUESTS_ADMIN_PATH = "/manage/privacy-requests";
+
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /** env에 유효한 문의 이메일이 있을 때만 반환. 없으면 null. */

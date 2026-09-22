@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import {
   ACCOUNT_DELETION_PATH,
+  PRIVACY_CONTACT_PATH,
   PRIVACY_EFFECTIVE_DATE,
   PRIVACY_LINK_LABEL,
   PRIVACY_OPERATOR_NAME,
@@ -113,6 +114,10 @@ export default function PrivacyPage() {
             계정 삭제 요청: 계정 식별 정보, 회신 이메일, 선택 메모.
             요청 시각은 감사 로그 시각을 사용합니다.
           </li>
+          <li>
+            개인정보 문의: 회신 이메일, 문의 유형, 문의 내용.
+            요청 시각은 감사 로그 시각을 사용합니다.
+          </li>
         </ul>
       </section>
 
@@ -125,6 +130,7 @@ export default function PrivacyPage() {
           <li>공지·배치·제보 관련 푸시 알림 전달</li>
           <li>운영 변경 이력 보존 및 장애 대응</li>
           <li>계정 삭제 요청 접수와 본인 확인</li>
+          <li>개인정보 열람·정정·삭제 등 권리 행사 접수와 회신</li>
         </ul>
       </section>
 
@@ -154,7 +160,8 @@ export default function PrivacyPage() {
             유지합니다.
           </li>
           <li>
-            계정 삭제 요청 기록은 요청을 확인하고 처리하기 위해 보관합니다.
+            계정 삭제 요청·개인정보 문의 기록은 요청을 확인하고 처리하기
+            위해 보관합니다.
           </li>
         </ul>
       </section>
@@ -226,16 +233,31 @@ export default function PrivacyPage() {
           <li>계정 또는 작성 내용의 삭제</li>
           <li>푸시 알림 수신 거부(앱·웹 알림 설정 또는 로그아웃)</li>
         </ul>
+        <p>
+          개인정보 문의는{" "}
+          <Link href={PRIVACY_CONTACT_PATH}>공개 문의 폼</Link>으로 접수할
+          수 있습니다.
+        </p>
       </section>
 
       <section className="privacy-section">
         <h2>9. 개인정보 삭제 요청</h2>
         <p>
-          계정 삭제는{" "}
+          계정 삭제 요청은{" "}
           <Link href={ACCOUNT_DELETION_PATH}>계정 삭제 요청</Link>{" "}
-          페이지에서 로그인 없이 시작할 수 있습니다. 요청 처리 과정에서
-          계정 식별 정보와 회신 이메일을 수집합니다. 코스 제보와 댓글은
-          작성자 또는 관리자가 화면에서 삭제할 수 있습니다(소프트 삭제).
+          페이지에서 로그인 없이 접수할 수 있습니다. 요청 처리 과정에서
+          계정 식별 정보와 회신 이메일을 수집합니다.
+        </p>
+        <p>
+          요청을 받은 뒤 본인 확인을 거쳐 계정 및 관련 개인정보를
+          삭제하거나 익명화합니다. 이 페이지에서 제출하는 즉시 자동
+          삭제되지는 않습니다. 보안·운영상 정당한 보존 사유가 있는
+          기록(근무 배치, 감사 로그 등)은 이 방침에 명시한 범위에서
+          보존합니다.
+        </p>
+        <p>
+          코스 제보와 댓글은 작성자 또는 관리자가 화면에서 삭제할 수
+          있습니다(소프트 삭제).
         </p>
       </section>
 
@@ -244,18 +266,22 @@ export default function PrivacyPage() {
         <ul>
           <li>서비스명: {PRIVACY_SERVICE_NAME}</li>
           <li>운영 주체: {PRIVACY_OPERATOR_NAME}</li>
+          <li>
+            개인정보 문의:{" "}
+            <Link href={PRIVACY_CONTACT_PATH}>공개 문의 폼</Link>으로
+            접수할 수 있습니다.
+          </li>
+          <li>
+            계정 삭제 요청:{" "}
+            <Link href={ACCOUNT_DELETION_PATH}>계정 삭제 요청</Link>{" "}
+            페이지에서 접수할 수 있습니다.
+          </li>
           {contactEmail ? (
             <li>
               개인정보 문의 이메일:{" "}
               <a href={`mailto:${contactEmail}`}>{contactEmail}</a>
             </li>
-          ) : (
-            <li>
-              개인정보 문의:{" "}
-              <Link href={ACCOUNT_DELETION_PATH}>계정 삭제 요청</Link>{" "}
-              페이지의 요청 폼으로 접수합니다.
-            </li>
-          )}
+          ) : null}
         </ul>
       </section>
 

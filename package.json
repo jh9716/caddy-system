@@ -30,6 +30,7 @@
     "test:pwa-install-unit": "bash scripts/tsx-safe.sh scripts/test-pwa-install-unit.ts",
     "test:privacy-policy-unit": "bash scripts/tsx-safe.sh scripts/test-privacy-policy-unit.ts",
     "test:account-deletion-unit": "bash scripts/tsx-safe.sh scripts/test-account-deletion-unit.ts",
+    "test:privacy-inquiry-unit": "bash scripts/tsx-safe.sh scripts/test-privacy-inquiry-unit.ts",
     "test:admin-notifications-unit": "bash scripts/tsx-safe.sh scripts/test-admin-notifications-unit.ts",
     "test:push-subscription-unit": "bash scripts/tsx-safe.sh scripts/test-push-subscription-unit.ts",
     "test:push-same-device-unit": "bash scripts/tsx-safe.sh scripts/test-push-same-device-unit.ts",

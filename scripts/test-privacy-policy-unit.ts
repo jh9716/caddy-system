@@ -10,11 +10,14 @@ import {
   ACCOUNT_DELETION_PATH,
   ACCOUNT_DELETION_PUBLIC_URL,
   PRIVACY_CONTACT_EMAIL_ENV,
+  PRIVACY_CONTACT_PATH,
+  PRIVACY_CONTACT_PUBLIC_URL,
   PRIVACY_EFFECTIVE_DATE,
   PRIVACY_LINK_LABEL,
   PRIVACY_OPERATOR_NAME,
   PRIVACY_PATH,
   PRIVACY_PUBLIC_URL,
+  PRIVACY_REQUESTS_ADMIN_PATH,
   PRIVACY_SERVICE_NAME,
   readPrivacyContactEmail,
 } from "../src/lib/privacy";
@@ -57,6 +60,12 @@ section("public URL constants");
     "deletion production URL"
   );
   assert(PRIVACY_CONTACT_EMAIL_ENV === "PRIVACY_CONTACT_EMAIL", "email env name");
+  assert(PRIVACY_CONTACT_PATH === "/privacy-contact", "inquiry path");
+  assert(
+    PRIVACY_CONTACT_PUBLIC_URL === "https://www.verthill.kr/privacy-contact",
+    "inquiry production URL"
+  );
+  assert(PRIVACY_REQUESTS_ADMIN_PATH === "/manage/privacy-requests", "admin inbox path");
 }
 
 section("contact email is env-only");
@@ -108,12 +117,22 @@ section("page is public and Korean");
   assert(page.includes("https://www.verthill.kr"), "production host");
   assert(page.includes("PRIVACY_PUBLIC_URL"), "canonical uses constant");
   assert(page.includes("ACCOUNT_DELETION_PATH"), "privacy links deletion page");
+  assert(page.includes("PRIVACY_CONTACT_PATH"), "privacy links inquiry form");
   assert(page.includes("readPrivacyContactEmail"), "email comes from env reader");
   assert(
     page.includes("계정 식별 정보와 회신 이메일"),
     "deletion request collection disclosed"
   );
   assert(page.includes("요청을 확인하고 처리하기"), "deletion request retention purpose");
+  assert(page.includes("공개 문의 폼"), "public inquiry mechanism named");
+  assert(
+    page.includes("본인 확인을 거쳐 계정 및 관련 개인정보를"),
+    "deletion after review, not receive-only"
+  );
+  assert(
+    page.includes("보안·운영상 정당한 보존 사유"),
+    "lawful retention disclosed"
+  );
 }
 
 section("no invented operator contact placeholders");
@@ -176,6 +195,7 @@ section("middleware does not gate public legal pages");
 {
   assert(!middleware.includes("/privacy"), "middleware matcher omits /privacy");
   assert(!middleware.includes("/account-deletion"), "middleware matcher omits /account-deletion");
+  assert(!middleware.includes("/privacy-contact"), "middleware matcher omits /privacy-contact");
   assert(middleware.includes("/login"), "middleware still redirects others to login");
 }
 

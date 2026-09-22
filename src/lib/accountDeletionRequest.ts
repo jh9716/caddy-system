@@ -2,6 +2,10 @@
  * 공개 계정 삭제 요청. User/Caddy를 지우지 않는다.
  * 접수만 Audit에 남기고 운영자가 확인 후 처리한다.
  *
+ * Rate limit: Postgres Audit.count (IP 또는 "unknown", 1시간).
+ * 프로세스 메모리가 아니므로 Vercel 인스턴스 사이에서도 적용된다.
+ * 기본 abuse mitigation 수준이다. IP 우회를 막는 강한 보안 보장은 아니다.
+ *
  * 운영자 처리 제안 (자동화 없음, migration 없음):
  * - User: anonymize + unlink. Restrict FK 때문에 hard delete 금지.
  * - kakaoUserId: unlink (null). 같은 카카오 계정은 이후 신규 User로만 로그인.

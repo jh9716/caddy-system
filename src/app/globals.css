@@ -3150,6 +3150,13 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
   min-height: 96px;
 }
 
+.privacy-form-hint {
+  margin: 4px 0 0;
+  font-size: 0.82rem;
+  color: var(--vh-ink-soft);
+  line-height: 1.5;
+}
+
 .privacy-form-error {
   margin: 0;
   color: var(--vh-danger);
