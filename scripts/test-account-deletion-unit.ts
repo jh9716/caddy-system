@@ -265,7 +265,7 @@ section("local POST safety (localhost only)");
     const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     return { status: res.status, json };
   };
-  const ip = "203.0.113.50";
+  const ip = `198.51.100.${(Date.now() % 200) + 1}`;
   const a = await post(
     { accountIdentifier: "admin", replyEmail: "user@domain.kr", note: "local-a" },
     ip
