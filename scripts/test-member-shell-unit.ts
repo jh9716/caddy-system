@@ -96,6 +96,7 @@ section("wiring");
   assert(member.includes("LogoutButton") === false, "logout not in MemberShell body (chrome foot)");
   const chrome = read("src/components/manage/AppChrome.tsx");
   assert(chrome.includes("LogoutButton"), "logout lives in shared chrome drawer/sidebar");
+  assert(chrome.includes("PrivacyPolicyLink"), "privacy link in shared chrome drawer/sidebar");
   assert(chrome.includes('aria-label="메뉴 열기"'), "hamburger");
   assert(chrome.includes("VERTHILL"), "central brand");
   const caddyPage = read("src/app/caddy/page.tsx");
@@ -112,6 +113,7 @@ section("wiring");
   const header = read("src/components/AppHeader.tsx");
   assert(header.includes("/manage"), "admin AppHeader 관리자 유지");
   assert(header.includes("내 대시보드"), "AppHeader still has caddy fallback link");
+  assert(header.includes("PrivacyPolicyLink"), "AppHeader has privacy link");
 }
 
 if (failed > 0) {

@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import LogoutButton from "@/components/LogoutButton";
+import PrivacyPolicyLink from "@/components/PrivacyPolicyLink";
+import { PRIVACY_PATH } from "@/lib/privacy";
 import { isAppNavActive } from "@/lib/boardNav";
 import type { AppRole } from "@/lib/sessionCookies";
 
@@ -28,6 +30,9 @@ export default function AppHeader({ role }: { role: AppRole | null }) {
           >
             홈
           </Link>
+          <PrivacyPolicyLink
+            className={navClass(pathname, PRIVACY_PATH)}
+          />
           {role && (
             <Link
               className={navClass(pathname, "/notice")}

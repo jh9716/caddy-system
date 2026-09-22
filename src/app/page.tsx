@@ -2,6 +2,7 @@ import Link from "next/link";
 import { cookies } from "next/headers";
 import { getVerifiedSessionFromCookies } from "@/lib/sessionCookies";
 import { PWA_MONOGRAM, PWA_SPLASH_COURSE } from "@/lib/pwaManifest";
+import PrivacyPolicyLink from "@/components/PrivacyPolicyLink";
 import PwaInstallHomeCta from "@/components/PwaInstallHomeCta";
 
 export const dynamic = "force-dynamic";
@@ -52,6 +53,9 @@ export default async function HomePage() {
               {cta}
             </Link>
             <PwaInstallHomeCta />
+            <p className="vh-auth-legal">
+              <PrivacyPolicyLink />
+            </p>
           </div>
         </div>
       </div>
