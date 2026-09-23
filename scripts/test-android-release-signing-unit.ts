@@ -50,6 +50,9 @@ const gitignore = read(".gitignore");
 const androidGitignore = read("android/.gitignore");
 const envExample = read("android/release-signing.env.example");
 const kakaoHashScript = read("scripts/compute-android-kakao-debug-key-hash.ts");
+const workflowRel = ".github/workflows/android-release-aab.yml";
+const workflow = exists(workflowRel) ? read(workflowRel) : "";
+const pkgJson = JSON.parse(read("package.json")) as { engines?: { node?: string } };
 
 const envNames = [
   "ANDROID_KEYSTORE_PATH",
@@ -206,8 +209,8 @@ assert(
 
 console.log("== version + SDK policy ==");
 assert(
-  appGradle.includes("versionCode 5") && appGradle.includes('versionName "1.0.4"'),
-  "PREPARE does not bump versionCode 5 / versionName 1.0.4"
+  appGradle.includes("versionCode 6") && appGradle.includes('versionName "1.0.5"'),
+  "Play candidate versionCode 6 / versionName 1.0.5"
 );
 assert(
   variables.includes("compileSdkVersion = 36") &&
@@ -244,6 +247,90 @@ assert(
     !appGradle.includes("firebase-messaging:") &&
     pushGradle.includes("com.google.firebase:firebase-messaging:$firebaseMessagingVersion"),
   "datastore 1.2.1 is pinned for 16KB; firebase-messaging version is unchanged"
+);
+
+console.log("== workflow_dispatch AAB release ==");
+assert(exists(workflowRel) && gitTracked(workflowRel), "android-release-aab.yml is tracked");
+assert(
+  /^on:\n  workflow_dispatch:\n/m.test(workflow) &&
+    !/^\s+push:/m.test(workflow) &&
+    !/^\s+pull_request:/m.test(workflow) &&
+    !/^\s+schedule:/m.test(workflow) &&
+    !/^\s+workflow_run:/m.test(workflow) &&
+    !/^\s+release:/m.test(workflow),
+  "workflow_dispatch is the only trigger"
+);
+assert(
+  workflow.includes("runs-on: ubuntu-latest") &&
+    workflow.includes('java-version: "21"') &&
+    workflow.includes("node-version-file: package.json") &&
+    String(pkgJson.engines?.node || "").startsWith("24"),
+  "ubuntu + Java 21 + package.json engines Node"
+);
+assert(workflow.includes("npm ci"), "workflow uses repo-standard npm ci");
+assert(
+  workflow.includes("npx cap sync android") &&
+    workflow.includes("./gradlew --no-daemon --console=plain bundleRelease"),
+  "workflow runs cap sync android and bundleRelease"
+);
+for (const name of [
+  "ANDROID_UPLOAD_KEYSTORE_B64",
+  "GOOGLE_SERVICES_JSON_B64",
+  "ANDROID_KEYSTORE_PATH",
+  "ANDROID_KEYSTORE_PASSWORD",
+  "ANDROID_KEY_ALIAS",
+  "ANDROID_KEY_PASSWORD",
+  "KAKAO_NATIVE_APP_KEY",
+]) {
+  assert(workflow.includes(name), `workflow injects ${name}`);
+}
+assert(
+  workflow.includes("RUNNER_TEMP") &&
+    !/ANDROID_KEYSTORE_PATH: \$\{\{ runner\./.test(workflow) &&
+    workflow.includes("base64 -d") &&
+    workflow.includes("android/app/google-services.json") &&
+    workflow.includes("if: always()") &&
+    workflow.includes("Cleanup runner release inputs"),
+  "secrets are restored to runner temp and always cleaned up"
+);
+const uploadBlock = workflow.slice(
+  workflow.indexOf("Upload app-release.aab"),
+  workflow.indexOf("Cleanup runner release inputs")
+);
+assert(
+  uploadBlock.includes("name: app-release.aab") &&
+    uploadBlock.includes(
+      "path: android/app/build/outputs/bundle/release/app-release.aab"
+    ) &&
+    uploadBlock.includes("retention-days: 7") &&
+    uploadBlock.includes("if-no-files-found: error") &&
+    !uploadBlock.includes(".jks") &&
+    !uploadBlock.includes("local.properties") &&
+    !uploadBlock.includes("kakao.properties") &&
+    !uploadBlock.includes("google-services.json") &&
+    !uploadBlock.includes("ANDROID_KEYSTORE_PASSWORD") &&
+    !workflow.includes("path: android/app/google-services.json"),
+  "artifact is app-release.aab only, retention 7 days"
+);
+assert(
+  workflow.includes('application_id != "kr.verthill.caddy"') &&
+    workflow.includes("version_code) != 6") &&
+    workflow.includes('version_name) != "1.0.5"') &&
+    workflow.includes(
+      "11:98:3D:66:F4:39:F2:CD:88:0E:1D:50:21:08:9C:2B:B5:EB:7F:2D:69:CC:93:36:CA:44:96:AA:8F:98:75:E5"
+    ) &&
+    workflow.includes("android debug") &&
+    workflow.includes("processReleaseGoogleServices") &&
+    workflow.includes("Kakao native app key: configured"),
+  "workflow verifies package, version, upload cert, Kakao, and Google Services"
+);
+assert(
+  !gitTracked(".cursor-transfer/pr181-release-inputs.gpg") &&
+    !gitTracked("android/app/google-services.json") &&
+    execSync("git ls-files -- '*.jks' '*.keystore' '*.aab' '.cursor-transfer/*'", {
+      encoding: "utf8",
+    }).trim() === "",
+  "JKS, google-services.json, AAB, and encrypted transfer stay untracked"
 );
 
 if (failed) {
