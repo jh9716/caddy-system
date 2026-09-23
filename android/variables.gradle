@@ -14,4 +14,8 @@ ext {
     androidxEspressoCoreVersion = '3.7.0'
     cordovaAndroidVersion = '14.0.1'
     kakaoSdkVersion = '2.24.0'
+    // Play 16KB: firebase-common 22.0.1 pulls datastore 1.1.7 whose
+    // libdatastore_shared_counter.so RELRO end is not 16KB aligned.
+    // Pin the group only; do not change firebase-messaging itself.
+    datastoreVersion = '1.2.1'
 }
