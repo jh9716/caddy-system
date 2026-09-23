@@ -251,6 +251,22 @@ assert(
 
 console.log("== workflow_dispatch AAB release ==");
 assert(exists(workflowRel) && gitTracked(workflowRel), "android-release-aab.yml is tracked");
+{
+  const yamlCheck = execSync(
+    `python3 -c "import yaml,sys; data=yaml.safe_load(open(sys.argv[1])); on=data.get('on', data.get(True)); print(data['name']); print(','.join(on if isinstance(on, list) else on.keys())); print(len(data['jobs']['bundle-release']['steps'])); print(','.join(step.get('name','') for step in data['jobs']['bundle-release']['steps']))" "${workflowRel}"`,
+    { encoding: "utf8" }
+  ).trim();
+  const [wfName, triggers, stepCount, stepNames] = yamlCheck.split("\n");
+  assert(
+    wfName === "Android Release AAB" &&
+      triggers === "workflow_dispatch" &&
+      Number(stepCount) === 11 &&
+      stepNames.includes("Verify signed AAB") &&
+      stepNames.includes("Upload app-release.aab") &&
+      stepNames.includes("Cleanup runner release inputs"),
+    "android-release-aab.yml parses as YAML with workflow_dispatch only"
+  );
+}
 assert(
   /^on:\n  workflow_dispatch:\n/m.test(workflow) &&
     !/^\s+push:/m.test(workflow) &&
@@ -313,16 +329,39 @@ assert(
   "artifact is app-release.aab only, retention 7 days"
 );
 assert(
-  workflow.includes('application_id != "kr.verthill.caddy"') &&
-    workflow.includes("version_code) != 6") &&
-    workflow.includes('version_name) != "1.0.5"') &&
+  !workflow.includes("output-metadata.json") &&
+    !workflow.includes("AAB output-metadata.json is missing"),
+  "workflow does not require AAB output-metadata.json"
+);
+assert(
+  workflow.includes(
+    'Path("android/app/build/outputs/bundle/release/app-release.aab")'
+  ) &&
+    workflow.includes("if not aab.is_file()") &&
+    workflow.includes("aab.stat().st_size <= 0") &&
+    workflow.includes('["jarsigner", "-verify", str(aab)]') &&
+    workflow.includes('["keytool", "-printcert", "-jarfile", str(aab)]') &&
     workflow.includes(
       "11:98:3D:66:F4:39:F2:CD:88:0E:1D:50:21:08:9C:2B:B5:EB:7F:2D:69:CC:93:36:CA:44:96:AA:8F:98:75:E5"
     ) &&
     workflow.includes("android debug") &&
+    workflow.includes('applicationId "kr.verthill.caddy"') &&
+    workflow.includes("versionCode 6") &&
+    workflow.includes('versionName "1.0.5"') &&
+    workflow.includes('Path("android/app/build.gradle")') &&
+    workflow.includes('Path("android/app/src/main/res/values/strings.xml")') &&
     workflow.includes("processReleaseGoogleServices") &&
     workflow.includes("Kakao native app key: configured"),
-  "workflow verifies package, version, upload cert, Kakao, and Google Services"
+  "workflow verifies AAB file, jarsigner, upload cert, Gradle package/version, Kakao, and Google Services"
+);
+assert(
+  !workflow.includes("echo \"$ANDROID_KEYSTORE_PASSWORD\"") &&
+    !workflow.includes("echo \"$ANDROID_KEY_PASSWORD\"") &&
+    !workflow.includes("print(os.environ") &&
+    !workflow.includes("print(cert)") &&
+    !workflow.includes("print(verify.stdout)") &&
+    !workflow.includes("print(verify.stderr)"),
+  "workflow does not print signing secrets or certificate dumps"
 );
 assert(
   !gitTracked(".cursor-transfer/pr181-release-inputs.gpg") &&
