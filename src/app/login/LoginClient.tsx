@@ -12,6 +12,7 @@ import { safeReturnPath } from "@/lib/safeReturnPath";
 import { KakaoNativeAuth } from "@/lib/kakaoNativeAuth";
 import {
   KAKAO_NATIVE_SESSION_PATH,
+  formatNativeKakaoBridgeError,
   nativeKakaoSessionRequestInit,
   runKakaoLogin,
 } from "@/lib/kakaoNativeBridge";
@@ -107,8 +108,8 @@ export default function LoginClient() {
         return;
       }
       location.href = result.href;
-    } catch (e: any) {
-      setErr(e.message || "로그인 실패");
+    } catch (e: unknown) {
+      setErr(formatNativeKakaoBridgeError(e));
     } finally {
       setLoading(false);
     }

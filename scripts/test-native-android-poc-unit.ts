@@ -7,6 +7,10 @@
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import {
+  formatNativeKakaoBridgeError,
+  isSafeNativeKakaoDiagnostic,
+} from "../src/lib/kakaoNativeBridge";
 
 let passed = 0;
 let failed = 0;
@@ -203,22 +207,37 @@ assert(
   mainActivity.includes("registerPlugin(KakaoNativeAuthPlugin.class)"),
   "KakaoNativeAuth plugin registered"
 );
+const kakaoPlugin = read(
+  "android/app/src/main/java/kr/verthill/caddy/kakao/KakaoNativeAuthPlugin.java"
+);
 assert(
-  read(
-    "android/app/src/main/java/kr/verthill/caddy/kakao/KakaoNativeAuthPlugin.java"
-  ).includes("loginWithKakaoTalk") &&
-    read(
-      "android/app/src/main/java/kr/verthill/caddy/kakao/KakaoNativeAuthPlugin.java"
-    ).includes("loginWithKakaoAccount"),
+  kakaoPlugin.includes("loginWithKakaoTalk") &&
+    kakaoPlugin.includes("loginWithKakaoAccount"),
   "native Kakao plugin uses Talk then Account fallback"
 );
 assert(
-  !/Log\.(d|i|v|e|w)\([^)]*accessToken/.test(
-    read(
-      "android/app/src/main/java/kr/verthill/caddy/kakao/KakaoNativeAuthPlugin.java"
-    )
-  ),
+  kakaoPlugin.includes("safeDiagnostic(\"account\"") &&
+    kakaoPlugin.includes("kakao_native_") &&
+    kakaoPlugin.includes("safeTokenEmptyDiagnostic") &&
+    kakaoPlugin.includes("AuthError") &&
+    kakaoPlugin.includes("ClientError") &&
+    kakaoPlugin.includes("getReason()"),
+  "plugin rejects allowlisted Kakao SDK reason names instead of collapsing to kakao_token"
+);
+assert(
+  !kakaoPlugin.includes("getErrorDescription") &&
+    !kakaoPlugin.includes("getLocalizedMessage") &&
+    !kakaoPlugin.includes(".toString()") &&
+    !kakaoPlugin.includes("getMessage()"),
+  "plugin does not expose raw exception message or toString"
+);
+assert(
+  !/Log\.(d|i|v|e|w)\([^)]*accessToken/.test(kakaoPlugin),
   "plugin does not log accessToken"
+);
+assert(
+  loginClient.includes("formatNativeKakaoBridgeError"),
+  "LoginClient shows native Kakao diagnostic on Play"
 );
 assert(manifest.includes("android.permission.INTERNET"), "INTERNET permission");
 assert(
@@ -322,8 +341,8 @@ assert(
   "Kakao Android SDK v2-user is a Gradle dependency"
 );
 assert(
-  appGradle.includes("versionCode 6") && appGradle.includes('versionName "1.0.5"'),
-  "Play candidate versionCode 6 / versionName 1.0.5"
+  appGradle.includes("versionCode 7") && appGradle.includes('versionName "1.0.6"'),
+  "Play candidate versionCode 7 / versionName 1.0.6"
 );
 assert(
   !appGradle.includes("length()") &&
@@ -384,6 +403,38 @@ assert(
   "DevicePushToken migration file exists"
 );
 assert(!exists("ios"), "iOS project still not added");
+
+console.log("== native Kakao diagnostic allowlist ==");
+assert(
+  isSafeNativeKakaoDiagnostic("kakao_native_account: AuthError / Misconfigured") &&
+    isSafeNativeKakaoDiagnostic("kakao_native_token-empty: empty / token-null") &&
+    !isSafeNativeKakaoDiagnostic(
+      "AuthError(statusCode=401, reason=Misconfigured, response=https://kauth.kakao.com?token=abc)"
+    ) &&
+    !isSafeNativeKakaoDiagnostic("kakao_token"),
+  "only allowlisted native diagnostic strings are trusted"
+);
+assert(
+  formatNativeKakaoBridgeError({
+    message: "kakao_native_account: AuthError / Misconfigured",
+    code: "kakao_token",
+  }).includes("kakao_native_account: AuthError / Misconfigured"),
+  "Login UI surfaces account AuthError reason"
+);
+assert(
+  formatNativeKakaoBridgeError({
+    message: "Bearer secret-token https://kauth.kakao.com/oauth?code=abc",
+    code: "kakao_token",
+  }) === "카카오 인증에 실패했습니다. 잠시 후 다시 시도해 주세요.",
+  "raw token/URL exception text is not shown"
+);
+assert(
+  formatNativeKakaoBridgeError({
+    message: "사용할 수 없는 계정입니다.",
+    code: "",
+  }) === "사용할 수 없는 계정입니다.",
+  "mapped native-session Korean errors still pass through"
+);
 
 if (failed) {
   console.error(`\nFAILED ${failed} / ${passed + failed}`);
