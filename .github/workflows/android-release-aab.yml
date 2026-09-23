@@ -13,7 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/android-upload-signing/verthill-upload.jks
       ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
       ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
       ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
@@ -56,6 +55,7 @@ jobs:
           set +x
           set +o xtrace
           umask 077
+          export ANDROID_KEYSTORE_PATH="${RUNNER_TEMP}/android-upload-signing/verthill-upload.jks"
           keystore_dir="$(dirname "$ANDROID_KEYSTORE_PATH")"
           mkdir -p "$keystore_dir"
           chmod 700 "$keystore_dir"
@@ -64,6 +64,9 @@ jobs:
           chmod 600 "$ANDROID_KEYSTORE_PATH" android/app/google-services.json
           test -s "$ANDROID_KEYSTORE_PATH"
           test -s android/app/google-services.json
+          {
+            printf 'ANDROID_KEYSTORE_PATH=%s\n' "$ANDROID_KEYSTORE_PATH"
+          } >> "$GITHUB_ENV"
           python3 - <<'PY'
           from pathlib import Path
           import os
@@ -176,9 +179,10 @@ jobs:
         run: |
           set +x
           set +o xtrace
-          rm -f "$ANDROID_KEYSTORE_PATH"
+          keystore_path="${ANDROID_KEYSTORE_PATH:-${RUNNER_TEMP}/android-upload-signing/verthill-upload.jks}"
+          rm -f "$keystore_path"
           rm -f android/app/google-services.json
           rm -f android/local.properties
-          rm -rf "$(dirname "$ANDROID_KEYSTORE_PATH")"
+          rm -rf "${RUNNER_TEMP}/android-upload-signing"
           rm -f "${RUNNER_TEMP}/gradle-bundleRelease.log"
           echo "Runner release inputs deleted"

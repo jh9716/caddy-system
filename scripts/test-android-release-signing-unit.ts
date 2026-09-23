@@ -285,7 +285,8 @@ for (const name of [
   assert(workflow.includes(name), `workflow injects ${name}`);
 }
 assert(
-  workflow.includes("runner.temp") &&
+  workflow.includes("RUNNER_TEMP") &&
+    !/ANDROID_KEYSTORE_PATH: \$\{\{ runner\./.test(workflow) &&
     workflow.includes("base64 -d") &&
     workflow.includes("android/app/google-services.json") &&
     workflow.includes("if: always()") &&
