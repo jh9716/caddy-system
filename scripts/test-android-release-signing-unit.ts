@@ -206,8 +206,8 @@ assert(
 
 console.log("== version + SDK policy ==");
 assert(
-  appGradle.includes("versionCode 5") && appGradle.includes('versionName "1.0.4"'),
-  "PREPARE does not bump versionCode 5 / versionName 1.0.4"
+  appGradle.includes("versionCode 6") && appGradle.includes('versionName "1.0.5"'),
+  "Play candidate versionCode 6 / versionName 1.0.5"
 );
 assert(
   variables.includes("compileSdkVersion = 36") &&
