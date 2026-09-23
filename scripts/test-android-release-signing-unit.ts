@@ -6,6 +6,7 @@
  */
 import { execSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 let passed = 0;
@@ -345,15 +346,41 @@ assert(
       "11:98:3D:66:F4:39:F2:CD:88:0E:1D:50:21:08:9C:2B:B5:EB:7F:2D:69:CC:93:36:CA:44:96:AA:8F:98:75:E5"
     ) &&
     workflow.includes("android debug") &&
-    workflow.includes('applicationId "kr.verthill.caddy"') &&
-    workflow.includes("versionCode 6") &&
-    workflow.includes('versionName "1.0.5"') &&
-    workflow.includes('Path("android/app/build.gradle")') &&
-    workflow.includes('Path("android/app/src/main/res/values/strings.xml")') &&
     workflow.includes("processReleaseGoogleServices") &&
     workflow.includes("Kakao native app key: configured"),
-  "workflow verifies AAB file, jarsigner, upload cert, Gradle package/version, Kakao, and Google Services"
+  "workflow verifies AAB file, jarsigner, upload cert, Kakao, and Google Services"
 );
+assert(
+  workflow.includes("scripts/android_release_manifest.py") &&
+    workflow.includes("--intermediates android/app/build/intermediates") &&
+    workflow.includes(
+      "--aab android/app/build/outputs/bundle/release/app-release.aab"
+    ) &&
+    workflow.includes("--expected-package kr.verthill.caddy") &&
+    workflow.includes("--expected-version-code 6") &&
+    workflow.includes("--expected-version-name 1.0.5") &&
+    workflow.includes("Gradle applicationId sanity mismatch") &&
+    workflow.includes("strings.xml package_name sanity mismatch"),
+  "package/version PASS requires AGP/AAB release manifest, with source only as sanity"
+);
+assert(
+  exists("scripts/android_release_manifest.py") &&
+    gitTracked("scripts/android_release_manifest.py"),
+  "android_release_manifest.py is tracked"
+);
+{
+  const manifestScript = read("scripts/android_release_manifest.py");
+  assert(
+    !manifestScript.includes("build.gradle") &&
+      !manifestScript.includes("strings.xml") &&
+      !manifestScript.includes("output-metadata.json") &&
+      manifestScript.includes("packaged_manifests") &&
+      manifestScript.includes("http://schemas.android.com/apk/res/android") &&
+      manifestScript.includes("dump") &&
+      manifestScript.includes("manifest"),
+    "manifest parser reads AGP/AAB output, not source Gradle or output-metadata.json"
+  );
+}
 assert(
   !workflow.includes("echo \"$ANDROID_KEYSTORE_PASSWORD\"") &&
     !workflow.includes("echo \"$ANDROID_KEY_PASSWORD\"") &&
@@ -371,6 +398,128 @@ assert(
     }).trim() === "",
   "JKS, google-services.json, AAB, and encrypted transfer stay untracked"
 );
+
+console.log("== release manifest parser fixtures ==");
+{
+  const parser = path.resolve("scripts/android_release_manifest.py");
+  const validXml = `<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="kr.verthill.caddy"
+    android:versionCode="6"
+    android:versionName="1.0.5">
+  <application android:name=".VerthillApp" />
+</manifest>
+`;
+  const sourceXml = `<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application android:name=".VerthillApp" />
+</manifest>
+`;
+  const wrongXml = `<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="kr.verthill.caddy"
+    android:versionCode="5"
+    android:versionName="1.0.4">
+  <application android:name=".VerthillApp" />
+</manifest>
+`;
+  const nsPackageXml = `<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    android:package="kr.verthill.caddy"
+    android:versionCode="6"
+    android:versionName="1.0.5">
+  <application android:name=".VerthillApp" />
+</manifest>
+`;
+
+  function writeFile(root: string, rel: string, contents: string) {
+    const full = path.join(root, rel);
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, contents);
+  }
+
+  function runParser(intermediates: string, extra: string[] = []): { code: number; out: string } {
+    try {
+      const out = execSync(
+        `python3 "${parser}" --intermediates "${intermediates}" ${extra.join(" ")}`,
+        { encoding: "utf8" }
+      );
+      return { code: 0, out };
+    } catch (error) {
+      const err = error as { status?: number; stdout?: string; stderr?: string };
+      return {
+        code: typeof err.status === "number" ? err.status : 1,
+        out: `${err.stdout || ""}${err.stderr || ""}`,
+      };
+    }
+  }
+
+  const okRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aab-manifest-ok-"));
+  writeFile(
+    okRoot,
+    "packaged_manifests/release/processReleaseManifestForPackage/AndroidManifest.xml",
+    validXml
+  );
+  writeFile(okRoot, "src/main/AndroidManifest.xml", sourceXml);
+  writeFile(
+    okRoot,
+    "packaged_manifests/debug/processDebugManifestForPackage/AndroidManifest.xml",
+    wrongXml
+  );
+  const ok = runParser(okRoot);
+  assert(
+    ok.code === 0 &&
+      ok.out.includes("source=agp") &&
+      ok.out.includes("package=kr.verthill.caddy") &&
+      ok.out.includes("versionCode=6") &&
+      ok.out.includes("versionName=1.0.5"),
+    "parser PASSes AGP packaged release manifest with android namespace"
+  );
+
+  const nsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aab-manifest-ns-"));
+  writeFile(
+    nsRoot,
+    "merged_manifests/release/processReleaseMainManifest/AndroidManifest.xml",
+    nsPackageXml
+  );
+  const ns = runParser(nsRoot);
+  assert(ns.code === 0, "parser reads package/version from android namespace attributes");
+
+  const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aab-manifest-source-"));
+  writeFile(sourceRoot, "src/main/AndroidManifest.xml", sourceXml);
+  writeFile(
+    sourceRoot,
+    "build.gradle",
+    'applicationId "kr.verthill.caddy"\nversionCode 6\nversionName "1.0.5"\n'
+  );
+  writeFile(
+    sourceRoot,
+    "strings.xml",
+    '<string name="package_name">kr.verthill.caddy</string>\n'
+  );
+  const sourceOnly = runParser(sourceRoot);
+  assert(
+    sourceOnly.code !== 0 && !sourceOnly.out.includes("PASS"),
+    "source Gradle/strings/manifest values alone do not PASS package/version"
+  );
+
+  const wrongRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aab-manifest-wrong-"));
+  writeFile(
+    wrongRoot,
+    "packaged_manifests/release/processReleaseManifestForPackage/AndroidManifest.xml",
+    wrongXml
+  );
+  writeFile(
+    wrongRoot,
+    "build.gradle",
+    'applicationId "kr.verthill.caddy"\nversionCode 6\nversionName "1.0.5"\n'
+  );
+  const wrong = runParser(wrongRoot);
+  assert(
+    wrong.code !== 0 && wrong.out.includes("versionCode mismatch"),
+    "wrong release manifest version fails even when source Gradle is correct"
+  );
+}
 
 if (failed) {
   console.error(`\nFAILED ${failed} / ${passed + failed}`);
