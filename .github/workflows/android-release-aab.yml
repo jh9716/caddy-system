@@ -115,9 +115,9 @@ jobs:
           strings = Path("android/app/src/main/res/values/strings.xml").read_text()
           if 'applicationId "kr.verthill.caddy"' not in gradle:
               raise SystemExit("Gradle applicationId sanity mismatch")
-          if "versionCode 6" not in gradle:
+          if "versionCode 7" not in gradle:
               raise SystemExit("Gradle versionCode sanity mismatch")
-          if 'versionName "1.0.5"' not in gradle:
+          if 'versionName "1.0.6"' not in gradle:
               raise SystemExit("Gradle versionName sanity mismatch")
           if '<string name="package_name">kr.verthill.caddy</string>' not in strings:
               raise SystemExit("strings.xml package_name sanity mismatch")
@@ -168,8 +168,8 @@ jobs:
             --intermediates android/app/build/intermediates \
             --aab android/app/build/outputs/bundle/release/app-release.aab \
             --expected-package kr.verthill.caddy \
-            --expected-version-code 6 \
-            --expected-version-name 1.0.5
+            --expected-version-code 7 \
+            --expected-version-name 1.0.6
 
       - name: Upload app-release.aab
         uses: actions/upload-artifact@v4

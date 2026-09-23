@@ -77,4 +77,40 @@ export async function runKakaoLogin(input: {
   }
 }
 
+const SAFE_NATIVE_DIAGNOSTIC =
+  /^kakao_native_(talk|account|token-empty): [A-Za-z0-9_.\-]+ \/ [A-Za-z0-9_./\-]+$/;
+
+export function isSafeNativeKakaoDiagnostic(message: string): boolean {
+  return SAFE_NATIVE_DIAGNOSTIC.test(message);
+}
+
+function readErrorField(error: unknown, key: "message" | "code"): string {
+  if (!error || typeof error !== "object") return "";
+  const value = (error as Record<string, unknown>)[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/** Native Capacitor reject only. Web/PWA REST errors stay on query-code mapping. */
+export function formatNativeKakaoBridgeError(error: unknown): string {
+  const message = readErrorField(error, "message");
+  const code = readErrorField(error, "code");
+  if (code === "kakao_denied" || message === "kakao_denied") {
+    return "카카오 로그인이 취소되었습니다.";
+  }
+  if (code === "kakao_config") {
+    return "카카오 로그인 설정이 없습니다. 관리자에게 문의하세요.";
+  }
+  if (isSafeNativeKakaoDiagnostic(message)) {
+    return `카카오 인증에 실패했습니다.\n${message}`;
+  }
+  if (
+    message &&
+    message !== "kakao_token" &&
+    !/[&=?:]|Bearer|https?:|token/i.test(message)
+  ) {
+    return message;
+  }
+  return "카카오 인증에 실패했습니다. 잠시 후 다시 시도해 주세요.";
+}
+
 export { KAKAO_NATIVE_SESSION_PATH };
