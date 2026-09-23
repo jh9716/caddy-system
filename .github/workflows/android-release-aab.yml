@@ -1,0 +1,184 @@
+# Manual Play-candidate AAB only. Do not add push or pull_request triggers.
+# MERGE HOLD: this workflow can run only after it exists on the default branch.
+name: Android Release AAB
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bundle-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/android-upload-signing/verthill-upload.jks
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      KAKAO_NATIVE_APP_KEY: ${{ secrets.KAKAO_NATIVE_APP_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Node from package.json engines
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: npm
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools platforms;android-36 build-tools;35.0.0"
+          log-accepted-android-sdk-licenses: false
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Capacitor sync Android
+        run: npx cap sync android
+
+      - name: Restore release inputs to runner temp
+        env:
+          ANDROID_UPLOAD_KEYSTORE_B64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_B64 }}
+          GOOGLE_SERVICES_JSON_B64: ${{ secrets.GOOGLE_SERVICES_JSON_B64 }}
+        run: |
+          set +x
+          set +o xtrace
+          umask 077
+          keystore_dir="$(dirname "$ANDROID_KEYSTORE_PATH")"
+          mkdir -p "$keystore_dir"
+          chmod 700 "$keystore_dir"
+          printf '%s' "$ANDROID_UPLOAD_KEYSTORE_B64" | base64 -d > "$ANDROID_KEYSTORE_PATH"
+          printf '%s' "$GOOGLE_SERVICES_JSON_B64" | base64 -d > android/app/google-services.json
+          chmod 600 "$ANDROID_KEYSTORE_PATH" android/app/google-services.json
+          test -s "$ANDROID_KEYSTORE_PATH"
+          test -s android/app/google-services.json
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          ks = Path(os.environ["ANDROID_KEYSTORE_PATH"])
+          gs = Path("android/app/google-services.json")
+          if ks.stat().st_size < 32:
+              raise SystemExit("keystore restore produced an empty file")
+          if gs.stat().st_size < 32:
+              raise SystemExit("google-services restore produced an empty file")
+          print("Release inputs restored")
+          PY
+
+      - name: Bundle signed release AAB
+        run: |
+          set +x
+          set +o xtrace
+          set -euo pipefail
+          if [ -n "${ANDROID_HOME:-}" ] && [ ! -f android/local.properties ]; then
+            printf 'sdk.dir=%s\n' "$ANDROID_HOME" > android/local.properties
+          fi
+          (
+            cd android
+            ./gradlew --no-daemon --console=plain bundleRelease
+          ) | tee "${RUNNER_TEMP}/gradle-bundleRelease.log"
+          test -s android/app/build/outputs/bundle/release/app-release.aab
+
+      - name: Verify signed AAB metadata
+        run: |
+          set +x
+          set +o xtrace
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          expected_sha256 = "11:98:3D:66:F4:39:F2:CD:88:0E:1D:50:21:08:9C:2B:B5:EB:7F:2D:69:CC:93:36:CA:44:96:AA:8F:98:75:E5"
+          aab = Path("android/app/build/outputs/bundle/release/app-release.aab")
+          if not aab.is_file() or aab.stat().st_size < 1024:
+              raise SystemExit("app-release.aab is missing")
+
+          metadata_candidates = [
+              Path("android/app/build/outputs/bundle/release/output-metadata.json"),
+              Path("android/app/build/intermediates/bundle_ide_model/release/output-metadata.json"),
+          ]
+          metadata = next((p for p in metadata_candidates if p.is_file()), None)
+          if metadata is None:
+              raise SystemExit("AAB output-metadata.json is missing")
+          data = json.loads(metadata.read_text())
+          elements = data.get("elements") or [{}]
+          application_id = data.get("applicationId") or data.get("application_id")
+          version_code = data.get("versionCode") or elements[0].get("versionCode")
+          version_name = data.get("versionName") or elements[0].get("versionName")
+          if application_id != "kr.verthill.caddy":
+              raise SystemExit("AAB applicationId mismatch")
+          if int(version_code) != 6:
+              raise SystemExit("AAB versionCode mismatch")
+          if str(version_name) != "1.0.5":
+              raise SystemExit("AAB versionName mismatch")
+
+          cert = subprocess.check_output(
+              ["keytool", "-printcert", "-jarfile", str(aab)],
+              text=True,
+          )
+          sha256s = re.findall(r"(?im)SHA-?256:\s*([0-9A-F:]+)", cert)
+          owners = re.findall(r"(?im)^Owner:\s*(.+)$", cert)
+          if expected_sha256.upper() not in [s.upper() for s in sha256s]:
+              raise SystemExit("AAB signing certificate SHA-256 mismatch")
+          if any("android debug" in owner.lower() for owner in owners):
+              raise SystemExit("AAB is signed with a debug certificate")
+
+          log = Path(os.environ["RUNNER_TEMP"]) / "gradle-bundleRelease.log"
+          text = log.read_text(errors="replace")
+          required = [
+              "Kakao native app key: configured",
+              "Release signing: configured",
+              "processReleaseGoogleServices",
+          ]
+          missing = [item for item in required if item not in text]
+          if missing:
+              raise SystemExit("Gradle log missing required release signals")
+          if "Release signing: not configured" in text:
+              raise SystemExit("Release signing was not configured")
+          if "Kakao native app key: not configured" in text:
+              raise SystemExit("Kakao native app key was not configured")
+
+          gradle = Path("android/app/build.gradle").read_text()
+          variables = Path("android/variables.gradle").read_text()
+          if "datastoreVersion = '1.2.1'" not in variables:
+              raise SystemExit("DataStore 1.2.1 pin missing")
+          if 'details.requested.group == "androidx.datastore"' not in gradle:
+              raise SystemExit("DataStore 16KB force-resolve missing")
+
+          print("AAB package/version/signing verification: PASS")
+          PY
+
+      - name: Upload app-release.aab
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release.aab
+          path: android/app/build/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: Cleanup runner release inputs
+        if: always()
+        run: |
+          set +x
+          set +o xtrace
+          rm -f "$ANDROID_KEYSTORE_PATH"
+          rm -f android/app/google-services.json
+          rm -f android/local.properties
+          rm -rf "$(dirname "$ANDROID_KEYSTORE_PATH")"
+          rm -f "${RUNNER_TEMP}/gradle-bundleRelease.log"
+          echo "Runner release inputs deleted"
