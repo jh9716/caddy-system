@@ -210,8 +210,8 @@ assert(
 
 console.log("== version + SDK policy ==");
 assert(
-  appGradle.includes("versionCode 10") && appGradle.includes('versionName "1.0.7"'),
-  "Play candidate versionCode 10 / versionName 1.0.7"
+  appGradle.includes("versionCode 11") && appGradle.includes('versionName "1.0.8"'),
+  "Play candidate versionCode 11 / versionName 1.0.8"
 );
 assert(
   variables.includes("compileSdkVersion = 36") &&
@@ -357,8 +357,8 @@ assert(
       "--aab android/app/build/outputs/bundle/release/app-release.aab"
     ) &&
     workflow.includes("--expected-package kr.verthill.caddy") &&
-    workflow.includes("--expected-version-code 10") &&
-    workflow.includes("--expected-version-name 1.0.7") &&
+    workflow.includes("--expected-version-code 11") &&
+    workflow.includes("--expected-version-name 1.0.8") &&
     workflow.includes("Gradle applicationId sanity mismatch") &&
     workflow.includes("strings.xml package_name sanity mismatch"),
   "package/version PASS requires AGP/AAB release manifest, with source only as sanity"
@@ -405,8 +405,8 @@ console.log("== release manifest parser fixtures ==");
   const validXml = `<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="kr.verthill.caddy"
-    android:versionCode="10"
-    android:versionName="1.0.7">
+    android:versionCode="11"
+    android:versionName="1.0.8">
   <application android:name=".VerthillApp" />
 </manifest>
 `;
@@ -426,8 +426,8 @@ console.log("== release manifest parser fixtures ==");
   const nsPackageXml = `<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     android:package="kr.verthill.caddy"
-    android:versionCode="10"
-    android:versionName="1.0.7">
+    android:versionCode="11"
+    android:versionName="1.0.8">
   <application android:name=".VerthillApp" />
 </manifest>
 `;
@@ -471,8 +471,8 @@ console.log("== release manifest parser fixtures ==");
     ok.code === 0 &&
       ok.out.includes("source=agp") &&
       ok.out.includes("package=kr.verthill.caddy") &&
-      ok.out.includes("versionCode=10") &&
-      ok.out.includes("versionName=1.0.7"),
+      ok.out.includes("versionCode=11") &&
+      ok.out.includes("versionName=1.0.8"),
     "parser PASSes AGP packaged release manifest with android namespace"
   );
 
@@ -490,7 +490,7 @@ console.log("== release manifest parser fixtures ==");
   writeFile(
     sourceRoot,
     "build.gradle",
-    'applicationId "kr.verthill.caddy"\nversionCode 10\nversionName "1.0.7"\n'
+    'applicationId "kr.verthill.caddy"\nversionCode 11\nversionName "1.0.8"\n'
   );
   writeFile(
     sourceRoot,
@@ -512,7 +512,7 @@ console.log("== release manifest parser fixtures ==");
   writeFile(
     wrongRoot,
     "build.gradle",
-    'applicationId "kr.verthill.caddy"\nversionCode 10\nversionName "1.0.7"\n'
+    'applicationId "kr.verthill.caddy"\nversionCode 11\nversionName "1.0.8"\n'
   );
   const wrong = runParser(wrongRoot);
   assert(

@@ -10,6 +10,8 @@ import path from "node:path";
 import {
   formatNativeKakaoBridgeError,
   isSafeNativeKakaoDiagnostic,
+  NATIVE_KAKAO_LOGIN_FAILED_MESSAGE,
+  readSafeNativeKakaoDiagnostic,
 } from "../src/lib/kakaoNativeBridge";
 
 let passed = 0;
@@ -236,8 +238,9 @@ assert(
   "plugin does not log accessToken"
 );
 assert(
-  loginClient.includes("formatNativeKakaoBridgeError"),
-  "LoginClient shows native Kakao diagnostic on Play"
+  loginClient.includes("formatNativeKakaoBridgeError") &&
+    !loginClient.includes("kakao_native_account"),
+  "LoginClient maps native Kakao errors without raw diagnostic copy"
 );
 assert(manifest.includes("android.permission.INTERNET"), "INTERNET permission");
 assert(
@@ -341,8 +344,8 @@ assert(
   "Kakao Android SDK v2-user is a Gradle dependency"
 );
 assert(
-  appGradle.includes("versionCode 10") && appGradle.includes('versionName "1.0.7"'),
-  "Play candidate versionCode 10 / versionName 1.0.7"
+  appGradle.includes("versionCode 11") && appGradle.includes('versionName "1.0.8"'),
+  "Play candidate versionCode 11 / versionName 1.0.8"
 );
 assert(
   !appGradle.includes("length()") &&
@@ -415,17 +418,32 @@ assert(
   "only allowlisted native diagnostic strings are trusted"
 );
 assert(
+  readSafeNativeKakaoDiagnostic({
+    message: "kakao_native_account: AuthError / Misconfigured",
+    code: "kakao_token",
+  }) === "kakao_native_account: AuthError / Misconfigured",
+  "safe diagnostic stays readable internally"
+);
+assert(
   formatNativeKakaoBridgeError({
     message: "kakao_native_account: AuthError / Misconfigured",
     code: "kakao_token",
-  }).includes("kakao_native_account: AuthError / Misconfigured"),
-  "Login UI surfaces account AuthError reason"
+  }) === NATIVE_KAKAO_LOGIN_FAILED_MESSAGE &&
+    !formatNativeKakaoBridgeError({
+      message: "kakao_native_account: AuthError / Misconfigured",
+      code: "kakao_token",
+    }).includes("kakao_native_account") &&
+    !formatNativeKakaoBridgeError({
+      message: "kakao_native_account: AuthError / Misconfigured",
+      code: "kakao_token",
+    }).includes("Misconfigured"),
+  "Login UI hides account AuthError diagnostic"
 );
 assert(
   formatNativeKakaoBridgeError({
     message: "Bearer secret-token https://kauth.kakao.com/oauth?code=abc",
     code: "kakao_token",
-  }) === "카카오 인증에 실패했습니다. 잠시 후 다시 시도해 주세요.",
+  }) === NATIVE_KAKAO_LOGIN_FAILED_MESSAGE,
   "raw token/URL exception text is not shown"
 );
 assert(
