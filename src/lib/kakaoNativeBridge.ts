@@ -84,10 +84,19 @@ export function isSafeNativeKakaoDiagnostic(message: string): boolean {
   return SAFE_NATIVE_DIAGNOSTIC.test(message);
 }
 
+export const NATIVE_KAKAO_LOGIN_FAILED_MESSAGE =
+  "카카오 로그인에 실패했습니다. 잠시 후 다시 시도해주세요.";
+
 function readErrorField(error: unknown, key: "message" | "code"): string {
   if (!error || typeof error !== "object") return "";
   const value = (error as Record<string, unknown>)[key];
   return typeof value === "string" ? value.trim() : "";
+}
+
+/** Internal allowlisted diagnostic only. Never logs or returns secrets. */
+export function readSafeNativeKakaoDiagnostic(error: unknown): string | null {
+  const message = readErrorField(error, "message");
+  return isSafeNativeKakaoDiagnostic(message) ? message : null;
 }
 
 /** Native Capacitor reject only. Web/PWA REST errors stay on query-code mapping. */
@@ -100,17 +109,18 @@ export function formatNativeKakaoBridgeError(error: unknown): string {
   if (code === "kakao_config") {
     return "카카오 로그인 설정이 없습니다. 관리자에게 문의하세요.";
   }
-  if (isSafeNativeKakaoDiagnostic(message)) {
-    return `카카오 인증에 실패했습니다.\n${message}`;
+  if (readSafeNativeKakaoDiagnostic(error)) {
+    return NATIVE_KAKAO_LOGIN_FAILED_MESSAGE;
   }
   if (
     message &&
     message !== "kakao_token" &&
+    !isSafeNativeKakaoDiagnostic(message) &&
     !/[&=?:]|Bearer|https?:|token/i.test(message)
   ) {
     return message;
   }
-  return "카카오 인증에 실패했습니다. 잠시 후 다시 시도해 주세요.";
+  return NATIVE_KAKAO_LOGIN_FAILED_MESSAGE;
 }
 
 export { KAKAO_NATIVE_SESSION_PATH };
