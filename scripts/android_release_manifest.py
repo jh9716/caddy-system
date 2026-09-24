@@ -11,8 +11,8 @@ from pathlib import Path
 
 ANDROID_NS = "http://schemas.android.com/apk/res/android"
 EXPECTED_PACKAGE = "kr.verthill.caddy"
-EXPECTED_VERSION_CODE = 9
-EXPECTED_VERSION_NAME = "1.0.6"
+EXPECTED_VERSION_CODE = 10
+EXPECTED_VERSION_NAME = "1.0.7"
 
 # App-module AGP families only. Nested task folders change across AGP versions.
 MANIFEST_FAMILIES = (
