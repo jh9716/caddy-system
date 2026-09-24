@@ -9,6 +9,7 @@ import {
   NATIVE_PUSH_TOKEN_PATH,
   readMemoryNativePushToken,
   registerNativePushDevice,
+  rehydrateNativePushToken,
   readNativePushPermission,
 } from "@/lib/nativePushBridge";
 import {
@@ -17,6 +18,7 @@ import {
   NATIVE_PUSH_UI_TITLE,
   nativePushSurfaceLabel,
   resolveNativePushSurface,
+  restoreNativePushUiState,
   type NativePushPermission,
   type NativePushSurface,
 } from "@/lib/nativePushUi";
@@ -52,19 +54,29 @@ export default function NativePushNotificationCard({
     }
     const perm = await readNativePushPermission();
     setPermission(perm);
-    const token = readMemoryNativePushToken();
-    setTokenReady(Boolean(token));
-    if (!token) {
-      setServerRegistered(false);
-      return;
-    }
-    const res = await fetch(NATIVE_PUSH_TOKEN_PATH, {
-      credentials: "include",
-      cache: "no-store",
-      headers: nativeTokenStatusHeaders(token),
+    const restored = await restoreNativePushUiState({
+      pluginAvailable: available,
+      permission: perm,
+      rehydrateToken: async () => {
+        const next = await rehydrateNativePushToken();
+        return next.tokenReady ? readMemoryNativePushToken() : null;
+      },
+      getRegistered: async (token) => {
+        try {
+          const res = await fetch(NATIVE_PUSH_TOKEN_PATH, {
+            credentials: "include",
+            cache: "no-store",
+            headers: nativeTokenStatusHeaders(token),
+          });
+          const data = (await res.json().catch(() => ({}))) as StatusResponse;
+          return data.registered === true;
+        } catch {
+          return false;
+        }
+      },
     });
-    const data = (await res.json().catch(() => ({}))) as StatusResponse;
-    setServerRegistered(data.registered === true);
+    setTokenReady(restored.tokenReady);
+    setServerRegistered(restored.serverRegistered);
   }, []);
 
   useEffect(() => {
@@ -89,11 +101,7 @@ export default function NativePushNotificationCard({
     try {
       const next = await registerNativePushDevice();
       setPermission(next.permission);
-      let token = readMemoryNativePushToken();
-      if (!token && next.permission === "granted") {
-        await new Promise((r) => setTimeout(r, 400));
-        token = readMemoryNativePushToken();
-      }
+      const token = readMemoryNativePushToken();
       setTokenReady(Boolean(token));
       if (next.permission === "denied") return;
       if (!token) {

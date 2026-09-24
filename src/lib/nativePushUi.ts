@@ -56,3 +56,30 @@ export function nativePushSurfaceLabel(surface: NativePushSurface): string {
       return NATIVE_PUSH_UI_AVAILABLE;
   }
 }
+
+export type NativePushRestoreResult = {
+  tokenReady: boolean;
+  serverRegistered: boolean;
+  posted: false;
+};
+
+/**
+ * Passive restart restore. Rehydrate token then GET status only.
+ * Never POSTs / upserts DevicePushToken.enabled.
+ */
+export async function restoreNativePushUiState(input: {
+  pluginAvailable: boolean;
+  permission: NativePushPermission;
+  rehydrateToken: () => Promise<string | null>;
+  getRegistered: (token: string) => Promise<boolean>;
+}): Promise<NativePushRestoreResult> {
+  if (!input.pluginAvailable || input.permission !== "granted") {
+    return { tokenReady: false, serverRegistered: false, posted: false };
+  }
+  const token = String((await input.rehydrateToken()) ?? "").trim();
+  if (!token) {
+    return { tokenReady: false, serverRegistered: false, posted: false };
+  }
+  const serverRegistered = (await input.getRegistered(token)) === true;
+  return { tokenReady: true, serverRegistered, posted: false };
+}
