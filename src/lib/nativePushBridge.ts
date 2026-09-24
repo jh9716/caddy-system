@@ -21,6 +21,9 @@ export {
 let memoryToken: string | null = null;
 let listenersBound = false;
 
+const TOKEN_WAIT_MS = 1500;
+const TOKEN_POLL_MS = 50;
+
 export function readMemoryNativePushToken(): string | null {
   return memoryToken;
 }
@@ -98,6 +101,40 @@ export async function bindNativePushListeners(input?: {
   });
 }
 
+export async function waitForMemoryNativePushToken(
+  timeoutMs = TOKEN_WAIT_MS
+): Promise<string | null> {
+  const deadline = Date.now() + timeoutMs;
+  let token = readMemoryNativePushToken();
+  while (!token && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, TOKEN_POLL_MS));
+    token = readMemoryNativePushToken();
+  }
+  return token;
+}
+
+async function requestNativePushToken(): Promise<string | null> {
+  await bindNativePushListeners();
+  await PushNotifications.register();
+  return waitForMemoryNativePushToken();
+}
+
+/** Restart restore only. Does not POST / upsert. */
+export async function rehydrateNativePushToken(): Promise<{
+  permission: NativePushPermission;
+  tokenReady: boolean;
+}> {
+  if (!(await nativePushPluginAvailable())) {
+    return { permission: "unknown", tokenReady: false };
+  }
+  const permission = await readNativePushPermission();
+  if (permission !== "granted") {
+    return { permission, tokenReady: Boolean(readMemoryNativePushToken()) };
+  }
+  const token = await requestNativePushToken();
+  return { permission: "granted", tokenReady: Boolean(token) };
+}
+
 export async function registerNativePushDevice(): Promise<{
   permission: NativePushPermission;
   tokenReady: boolean;
@@ -117,6 +154,6 @@ export async function registerNativePushDevice(): Promise<{
       };
     }
   }
-  await PushNotifications.register();
-  return { permission: "granted", tokenReady: Boolean(memoryToken) };
+  const token = await requestNativePushToken();
+  return { permission: "granted", tokenReady: Boolean(token) };
 }

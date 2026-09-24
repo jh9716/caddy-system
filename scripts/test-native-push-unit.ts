@@ -20,6 +20,7 @@ import {
   NATIVE_PUSH_UI_REGISTERED,
   nativePushSurfaceLabel,
   resolveNativePushSurface,
+  restoreNativePushUiState,
 } from "../src/lib/nativePushUi";
 import {
   NativePushTokenError,
@@ -199,6 +200,76 @@ assert(
   "native card source has no Web Push unsupported copy"
 );
 
+console.log("== restart token rehydrate / no auto POST ==");
+{
+  const bridge = read("src/lib/nativePushBridge.ts");
+  const card = read("src/components/NativePushNotificationCard.tsx");
+  assert(bridge.includes("export async function rehydrateNativePushToken"), "rehydrate helper exists");
+  assert(bridge.includes("if (listenersBound) return"), "registration listeners bind once");
+  {
+    const rehydrateStart = bridge.indexOf("export async function rehydrateNativePushToken");
+    const registerStart = bridge.indexOf("export async function registerNativePushDevice");
+    const rehydrateFn = bridge.slice(rehydrateStart, registerStart);
+    assert(
+      !rehydrateFn.includes("nativeTokenRequestInit") && !rehydrateFn.includes("fetch("),
+      "bridge rehydrate does not POST"
+    );
+  }
+  assert(!/\blocalStorage\b/.test(bridge) && !/\bsessionStorage\b/.test(bridge), "no web storage");
+  assert(!bridge.includes("Preferences"), "no Capacitor Preferences token persist");
+  assert(card.includes("restoreNativePushUiState"), "card refresh uses passive restore");
+  assert(card.includes("rehydrateNativePushToken"), "card refresh rehydrates token");
+  const enableStart = card.indexOf("async function onEnable");
+  const disableStart = card.indexOf("async function onDisable");
+  const refreshStart = card.indexOf("const refresh = useCallback");
+  const enableFn = card.slice(enableStart, disableStart);
+  const refreshFn = card.slice(refreshStart, enableStart);
+  assert(enableFn.includes("nativeTokenRequestInit"), "C: 알림 받기 still POSTs");
+  assert(!refreshFn.includes("nativeTokenRequestInit"), "refresh/restore never POSTs");
+}
+
+async function testRestoreCases() {
+  console.log("== restart restore A/B ==");
+  const posts: string[] = [];
+  const enabled = await restoreNativePushUiState({
+    pluginAvailable: true,
+    permission: "granted",
+    rehydrateToken: async () => "device-token",
+    getRegistered: async () => true,
+  });
+  assert(enabled.tokenReady === true, "A: token ready after rehydrate");
+  assert(enabled.serverRegistered === true, "A: granted + enabled token → registered");
+  assert(enabled.posted === false, "A: restore does not POST");
+
+  const disabled = await restoreNativePushUiState({
+    pluginAvailable: true,
+    permission: "granted",
+    rehydrateToken: async () => "device-token",
+    getRegistered: async () => false,
+  });
+  assert(disabled.tokenReady === true, "B: token ready after rehydrate");
+  assert(disabled.serverRegistered === false, "B: enabled=false stays unregistered");
+  assert(disabled.posted === false, "B: no auto POST after disable");
+  assert(posts.length === 0, "B: no POST side effects");
+
+  let rehydrated = 0;
+  let got = 0;
+  const skipped = await restoreNativePushUiState({
+    pluginAvailable: true,
+    permission: "prompt",
+    rehydrateToken: async () => {
+      rehydrated += 1;
+      return "device-token";
+    },
+    getRegistered: async () => {
+      got += 1;
+      return true;
+    },
+  });
+  assert(rehydrated === 0 && got === 0, "not granted → no rehydrate/GET");
+  assert(skipped.serverRegistered === false && skipped.posted === false, "prompt stays unrestored");
+}
+
 console.log("== deep link ==");
 assert(resolveNativePushOpenPath({ url: "/course-reports/9" }) === "/course-reports/9", "course report");
 assert(resolveNativePushOpenPath({ url: "/board?date=2026-09-21" }) === "/board?date=2026-09-21", "board");
@@ -230,6 +301,7 @@ assert(
   "no server creds by default"
 );
 async function main() {
+  await testRestoreCases();
   assert(hasDevicePushTokenDelegate({}) === false, "missing delegate safe");
   const skipped = await deliverNativePushTokens(
     {} as never,
