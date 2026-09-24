@@ -344,8 +344,8 @@ assert(
   "Kakao Android SDK v2-user is a Gradle dependency"
 );
 assert(
-  appGradle.includes("versionCode 10") && appGradle.includes('versionName "1.0.7"'),
-  "Play candidate versionCode 10 / versionName 1.0.7"
+  appGradle.includes("versionCode 11") && appGradle.includes('versionName "1.0.8"'),
+  "Play candidate versionCode 11 / versionName 1.0.8"
 );
 assert(
   !appGradle.includes("length()") &&
