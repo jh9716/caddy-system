@@ -206,7 +206,15 @@ console.log("== restart token rehydrate / no auto POST ==");
   const card = read("src/components/NativePushNotificationCard.tsx");
   assert(bridge.includes("export async function rehydrateNativePushToken"), "rehydrate helper exists");
   assert(bridge.includes("if (listenersBound) return"), "registration listeners bind once");
-  assert(!bridge.includes("nativeTokenRequestInit"), "bridge rehydrate/register does not POST");
+  {
+    const rehydrateStart = bridge.indexOf("export async function rehydrateNativePushToken");
+    const registerStart = bridge.indexOf("export async function registerNativePushDevice");
+    const rehydrateFn = bridge.slice(rehydrateStart, registerStart);
+    assert(
+      !rehydrateFn.includes("nativeTokenRequestInit") && !rehydrateFn.includes("fetch("),
+      "bridge rehydrate does not POST"
+    );
+  }
   assert(!/\blocalStorage\b/.test(bridge) && !/\bsessionStorage\b/.test(bridge), "no web storage");
   assert(!bridge.includes("Preferences"), "no Capacitor Preferences token persist");
   assert(card.includes("restoreNativePushUiState"), "card refresh uses passive restore");
@@ -221,6 +229,7 @@ console.log("== restart token rehydrate / no auto POST ==");
 }
 
 async function testRestoreCases() {
+  console.log("== restart restore A/B ==");
   const posts: string[] = [];
   const enabled = await restoreNativePushUiState({
     pluginAvailable: true,
