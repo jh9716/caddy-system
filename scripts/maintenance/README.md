@@ -62,3 +62,42 @@ npx tsx scripts/maintenance/deploy-device-push-token-migration.ts
 
 `prisma migrate deploy` only. No db push / migrate reset / seed / DevicePushToken INSERT/UPDATE/DELETE / FCM send.
 
+Google Play review accounts (default dry-run, no password output):
+
+```
+DATABASE_URL=postgresql://caddy:caddy@localhost:5432/caddy_local \
+  npx tsx scripts/maintenance/play-review-accounts.ts
+```
+
+Create apply (local). Set passwords in env; do not put them on the CLI.
+
+```
+PLAY_REVIEW_ADMIN_PASSWORD=... \
+PLAY_REVIEW_CADDY_PASSWORD=... \
+DATABASE_URL=postgresql://caddy:caddy@localhost:5432/caddy_local \
+  npx tsx scripts/maintenance/play-review-accounts.ts \
+  --apply --confirm=CREATE_PLAY_REVIEW_ACCOUNTS
+```
+
+Create apply (production, explicit approval only):
+
+```
+PLAY_REVIEW_ADMIN_PASSWORD=... \
+PLAY_REVIEW_CADDY_PASSWORD=... \
+PROD_MAINTENANCE_CONFIRM=CREATE_PLAY_REVIEW_ACCOUNTS \
+DATABASE_URL="$PRODUCTION_DATABASE_URL" \
+  npx tsx scripts/maintenance/play-review-accounts.ts \
+  --apply --confirm=CREATE_PLAY_REVIEW_ACCOUNTS
+```
+
+Disable apply (production, explicit approval only):
+
+```
+PROD_MAINTENANCE_CONFIRM=DISABLE_PLAY_REVIEW_ACCOUNTS \
+DATABASE_URL="$PRODUCTION_DATABASE_URL" \
+  npx tsx scripts/maintenance/play-review-accounts.ts \
+  --disable --apply --confirm=DISABLE_PLAY_REVIEW_ACCOUNTS
+```
+
+No migrate / db push / hard delete. Does not modify username=admin or real staff User/Caddy.
+
