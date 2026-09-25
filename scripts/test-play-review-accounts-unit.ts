@@ -4,7 +4,9 @@
  *
  *   npm run test:play-review-accounts-unit
  */
+import { execFileSync, execSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { SUPER_ADMIN_USERNAME, STAFF_ADMIN_USERNAMES } from "../src/lib/staffAdminAccounts";
 import { DRIVING_POOL_TEAM } from "../src/lib/caddyManage";
@@ -305,6 +307,178 @@ section("11 disable review targets only");
     prodMaintenanceConfirm: null,
   });
   assert(gate.ok === true, "local disable apply+confirm allowed");
+}
+
+section("12 play-review-accounts.yml dispatch gates");
+{
+  const workflowRel = ".github/workflows/play-review-accounts.yml";
+  const workflowPath = path.join(process.cwd(), workflowRel);
+  const workflow = fs.readFileSync(workflowPath, "utf8");
+  const androidWorkflow = fs.readFileSync(
+    path.join(process.cwd(), ".github/workflows/android-release-aab.yml"),
+    "utf8"
+  );
+
+  const yamlDump = path.join(os.tmpdir(), `play-review-wf-${process.pid}.json`);
+  execSync(
+    `python3 -c "import json,yaml,sys; data=yaml.safe_load(open(sys.argv[1])); json.dump(data, open(sys.argv[2],'w'))" "${workflowRel}" "${yamlDump}"`,
+    { encoding: "utf8" }
+  );
+  const data = JSON.parse(fs.readFileSync(yamlDump, "utf8")) as {
+    name: string;
+    on?: Record<string, unknown>;
+    true?: Record<string, unknown>;
+    permissions?: { contents?: string };
+    jobs: {
+      "play-review-accounts": {
+        env: Record<string, string>;
+        steps: Array<{ name?: string; run?: string; env?: Record<string, string> }>;
+      };
+    };
+  };
+  fs.rmSync(yamlDump, { force: true });
+  const on = data.on ?? data.true ?? {};
+  const job = data.jobs["play-review-accounts"];
+  const lastStep = job.steps[job.steps.length - 1];
+  const runScript = String(lastStep.run ?? "");
+  assert(data.name === "Play Review Accounts", "workflow name parses");
+  assert(Object.keys(on).join(",") === "workflow_dispatch", "workflow_dispatch is the only trigger");
+  assert(
+    Object.keys(lastStep.env ?? {}).join(",") === "PLAY_REVIEW_ACTION,PLAY_REVIEW_CONFIRM",
+    "action/confirm arrive as env, not interpolated into argv"
+  );
+  assert(data.permissions?.contents === "read", "contents: read permission");
+  assert(
+    job.env.DATABASE_URL === "${{ secrets.DATABASE_URL }}" &&
+      job.env.PLAY_REVIEW_ADMIN_PASSWORD ===
+        "${{ secrets.PLAY_REVIEW_ADMIN_PASSWORD }}" &&
+      job.env.PLAY_REVIEW_CADDY_PASSWORD ===
+        "${{ secrets.PLAY_REVIEW_CADDY_PASSWORD }}",
+    "job env uses the three repository secrets"
+  );
+
+  assert(
+    /^on:\n  workflow_dispatch:\n/m.test(workflow) &&
+      !/^\s+push:/m.test(workflow) &&
+      !/^\s+pull_request:/m.test(workflow) &&
+      !/^\s+schedule:/m.test(workflow) &&
+      !/^\s+workflow_run:/m.test(workflow) &&
+      !/^\s+release:/m.test(workflow),
+    "no push/PR/schedule/workflow_run/release triggers"
+  );
+  assert(workflow.includes("default: dry-run"), "action default is dry-run");
+  assert(/confirm:[\s\S]*default: ""/.test(workflow), "confirm default is empty");
+  assert(workflow.includes("npm ci"), "uses npm ci");
+  assert(workflow.includes("npx prisma generate"), "explicit prisma generate");
+  assert(workflow.includes("npx --yes tsx"), "uses npx --yes tsx");
+  assert(!/\bset -x\b/.test(workflow), "no set -x");
+  assert(workflow.includes("set +x") && workflow.includes("set +o xtrace"), "xtrace disabled");
+  assert(
+    !/echo .*DATABASE_URL|echo .*PLAY_REVIEW_ADMIN_PASSWORD|echo .*PLAY_REVIEW_CADDY_PASSWORD/.test(
+      workflow
+    ),
+    "does not echo secrets"
+  );
+  assert(
+    !workflow.includes("prisma migrate") && !workflow.includes("db push"),
+    "workflow does not migrate"
+  );
+
+  assert(runScript.includes("set +x"), "dispatch run script present");
+  const dryIdx = runScript.indexOf('if [ "$action" = "dry-run" ]');
+  const createIdx = runScript.indexOf('elif [ "$action" = "create" ]');
+  const disableIdx = runScript.indexOf('elif [ "$action" = "disable" ]');
+  const dryNpx = runScript.indexOf(
+    "npx --yes tsx scripts/maintenance/play-review-accounts.ts\n"
+  );
+  const createConfirm = runScript.indexOf(
+    'if [ "$confirm" != "CREATE_PLAY_REVIEW_ACCOUNTS" ]'
+  );
+  const createNpx = runScript.indexOf("--apply");
+  const disableConfirm = runScript.indexOf(
+    'if [ "$confirm" != "DISABLE_PLAY_REVIEW_ACCOUNTS" ]'
+  );
+  const disableNpx = runScript.indexOf("--disable");
+  assert(
+    dryIdx >= 0 && dryNpx > dryIdx && dryNpx < createIdx,
+    "dry-run invokes tsx without --apply"
+  );
+  assert(
+    createConfirm > createIdx && createNpx > createConfirm,
+    "create confirm is checked before --apply"
+  );
+  assert(
+    disableConfirm > disableIdx && disableNpx > disableConfirm,
+    "disable confirm is checked before --apply"
+  );
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "play-review-wf-"));
+  const mockBin = path.join(tmp, "bin");
+  fs.mkdirSync(mockBin);
+  fs.writeFileSync(
+    path.join(mockBin, "npx"),
+    `#!/usr/bin/env bash
+set +x
+printf 'RAN_TSX'
+for arg in "$@"; do printf ' %s' "$arg"; done
+printf '\\n'
+exit 0
+`,
+    { mode: 0o755 }
+  );
+  const scriptPath = path.join(tmp, "dispatch.sh");
+  fs.writeFileSync(scriptPath, runScript, { mode: 0o755 });
+
+  const runDispatch = (action: string, confirm: string) => {
+    try {
+      const out = execFileSync("bash", [scriptPath], {
+        encoding: "utf8",
+        env: {
+          PATH: `${mockBin}:${process.env.PATH ?? ""}`,
+          PLAY_REVIEW_ACTION: action,
+          PLAY_REVIEW_CONFIRM: confirm,
+        },
+      });
+      return { code: 0, out };
+    } catch (error) {
+      const err = error as { status?: number; stdout?: string; stderr?: string };
+      return {
+        code: typeof err.status === "number" ? err.status : 1,
+        out: `${err.stdout ?? ""}${err.stderr ?? ""}`,
+      };
+    }
+  };
+
+  const dry = runDispatch("dry-run", "");
+  assert(dry.code === 0, "dry-run mock exits 0");
+  assert(
+    dry.out.includes("RAN_TSX --yes tsx scripts/maintenance/play-review-accounts.ts") &&
+      !dry.out.includes("--apply"),
+    "dry-run mock runs tsx without --apply"
+  );
+
+  const badCreate = runDispatch("create", "WRONG");
+  assert(badCreate.code === 1, "wrong create confirm exits 1");
+  assert(!badCreate.out.includes("RAN_TSX"), "wrong create confirm never runs tsx");
+
+  const badDisable = runDispatch("disable", "");
+  assert(badDisable.code === 1, "empty disable confirm exits 1");
+  assert(!badDisable.out.includes("RAN_TSX"), "wrong disable confirm never runs tsx");
+
+  const okCreate = runDispatch("create", PLAY_REVIEW_CREATE_CONFIRM);
+  assert(okCreate.code === 0 && okCreate.out.includes("--apply"), "valid create reaches apply argv");
+  const okDisable = runDispatch("disable", PLAY_REVIEW_DISABLE_CONFIRM);
+  assert(
+    okDisable.code === 0 && okDisable.out.includes("--disable"),
+    "valid disable reaches disable argv"
+  );
+
+  assert(
+    androidWorkflow.includes("name: Android Release AAB") &&
+      androidWorkflow.includes("workflow_dispatch"),
+    "android-release-aab.yml still present and dispatch-only"
+  );
+  fs.rmSync(tmp, { recursive: true, force: true });
 }
 
 section("source + hashing");
