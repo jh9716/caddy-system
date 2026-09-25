@@ -1,0 +1,86 @@
+# Manual Play review-account maintenance only. Do not add push or pull_request triggers.
+# MERGE HOLD: this workflow can run only after it exists on the default branch.
+name: Play Review Accounts
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: dry-run (default), create, or disable
+        required: true
+        type: choice
+        options:
+          - dry-run
+          - create
+          - disable
+        default: dry-run
+      confirm:
+        description: CREATE_PLAY_REVIEW_ACCOUNTS or DISABLE_PLAY_REVIEW_ACCOUNTS for write actions
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  play-review-accounts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      PLAY_REVIEW_ADMIN_PASSWORD: ${{ secrets.PLAY_REVIEW_ADMIN_PASSWORD }}
+      PLAY_REVIEW_CADDY_PASSWORD: ${{ secrets.PLAY_REVIEW_CADDY_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node from package.json engines
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Run play-review-accounts
+        env:
+          PLAY_REVIEW_ACTION: ${{ inputs.action }}
+          PLAY_REVIEW_CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set +x
+          set +o xtrace
+          set -eu
+          action="${PLAY_REVIEW_ACTION}"
+          confirm="${PLAY_REVIEW_CONFIRM}"
+          if [ "$action" = "dry-run" ]; then
+            npx --yes tsx scripts/maintenance/play-review-accounts.ts
+          elif [ "$action" = "create" ]; then
+            if [ "$confirm" != "CREATE_PLAY_REVIEW_ACCOUNTS" ]; then
+              echo "create requires confirm=CREATE_PLAY_REVIEW_ACCOUNTS"
+              exit 1
+            fi
+            export PROD_MAINTENANCE_CONFIRM=CREATE_PLAY_REVIEW_ACCOUNTS
+            npx --yes tsx scripts/maintenance/play-review-accounts.ts \
+              --apply \
+              --confirm=CREATE_PLAY_REVIEW_ACCOUNTS
+          elif [ "$action" = "disable" ]; then
+            if [ "$confirm" != "DISABLE_PLAY_REVIEW_ACCOUNTS" ]; then
+              echo "disable requires confirm=DISABLE_PLAY_REVIEW_ACCOUNTS"
+              exit 1
+            fi
+            export PROD_MAINTENANCE_CONFIRM=DISABLE_PLAY_REVIEW_ACCOUNTS
+            npx --yes tsx scripts/maintenance/play-review-accounts.ts \
+              --disable \
+              --apply \
+              --confirm=DISABLE_PLAY_REVIEW_ACCOUNTS
+          else
+            echo "unsupported action"
+            exit 1
+          fi
