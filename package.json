@@ -38,6 +38,8 @@
     "test:native-push-test-unit": "bash scripts/tsx-safe.sh scripts/test-native-push-test-unit.ts",
     "test:board-push-unit": "bash scripts/tsx-safe.sh scripts/test-board-push-unit.ts",
     "test:notice-v2-push-unit": "bash scripts/tsx-safe.sh scripts/test-notice-v2-push-unit.ts",
+    "test:notice-push-channel-unit": "bash scripts/tsx-safe.sh scripts/test-notice-push-channel-unit.ts",
+    "test:notice-kst-display-unit": "bash scripts/tsx-safe.sh scripts/test-notice-kst-display-unit.ts",
     "test:course-report-push-unit": "bash scripts/tsx-safe.sh scripts/test-course-report-push-unit.ts",
     "test:course-report-unit": "bash scripts/tsx-safe.sh scripts/test-course-report-unit.ts",
     "test:course-report-photo-unit": "bash scripts/tsx-safe.sh scripts/test-course-report-photo-unit.ts",
@@ -120,6 +122,7 @@
     "test:fcm-http-v1-unit": "bash scripts/tsx-safe.sh scripts/test-fcm-http-v1-unit.ts",
     "test:play-review-accounts-unit": "bash scripts/tsx-safe.sh scripts/test-play-review-accounts-unit.ts",
     "test:notice-photo-unit": "bash scripts/tsx-safe.sh scripts/test-notice-photo-unit.ts",
+    "test:notice-photo-display-unit": "bash scripts/tsx-safe.sh scripts/test-notice-photo-display-unit.ts",
     "compute:android-kakao-debug-key-hash": "bash scripts/tsx-safe.sh scripts/compute-android-kakao-debug-key-hash.ts",
     "native:sync:android": "npx cap sync android"
   },

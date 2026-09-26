@@ -17,12 +17,12 @@ export default function NoticePhotoGallery({
 
   return (
     <div className="notice-photos">
-      <div className={`course-report-photo-grid is-${Math.min(photos.length, 3)}`}>
+      <div className="notice-photos-list">
         {photos.map((photo) => (
           <button
             key={photo.id}
             type="button"
-            className="course-report-photo-thumb"
+            className="notice-photos-item"
             onClick={() => setOpenId(photo.id)}
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -33,7 +33,7 @@ export default function NoticePhotoGallery({
       {open ? (
         <button
           type="button"
-          className="course-report-photo-lightbox"
+          className="notice-photos-lightbox"
           onClick={() => setOpenId(null)}
           aria-label="닫기"
         >

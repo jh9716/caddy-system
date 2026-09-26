@@ -38,6 +38,8 @@ export type NativePushDeliveryResult = {
   skipped: number;
   deliveries: number;
   removedStale: number;
+  /** Users with at least one native "sent". Additive; callers may ignore. */
+  sentUserIds: number[];
   reason?: "not_configured" | "send_disabled" | "store_missing";
 };
 
@@ -111,6 +113,7 @@ export async function deliverNativePushTokens(
     skipped: tokens.length,
     deliveries: 0,
     removedStale: 0,
+    sentUserIds: [],
     ...extra,
   });
 
@@ -130,10 +133,12 @@ export async function deliverNativePushTokens(
   let sent = 0;
   let failed = 0;
   let removedStale = 0;
+  const sentUserIds = new Set<number>();
   await mapWithConcurrency(tokens, options.concurrency ?? 4, async (row) => {
     const result = await send(row.token, payload);
     if (result === "sent") {
       sent += 1;
+      sentUserIds.add(row.userId);
       return;
     }
     if (!hasDevicePushTokenDelegate(db)) {
@@ -160,5 +165,6 @@ export async function deliverNativePushTokens(
     skipped: 0,
     deliveries: tokens.length,
     removedStale,
+    sentUserIds: [...sentUserIds],
   };
 }

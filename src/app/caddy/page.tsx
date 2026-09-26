@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import DevicePushSettings from '@/components/DevicePushSettings'
 import PwaInstallCard from '@/components/PwaInstallCard'
 import { resolveCaddyPageGate } from '@/lib/roleRouting'
+import { formatKstDisplay } from '@/lib/kstDate'
 
 type Summary = {
   date: string
@@ -140,7 +141,7 @@ export default function CaddyPage() {
                     {n.title}
                   </a>
                   <span style={{ marginLeft: 8, fontSize: 12, color: '#94a3b8' }}>
-                    {new Date(n.createdAt).toLocaleString()}
+                    {formatKstDisplay(n.createdAt, "ymd-hm")}
                   </span>
                 </li>
               ))}

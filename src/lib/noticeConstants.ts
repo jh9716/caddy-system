@@ -23,6 +23,8 @@ export const NOTICE_PUSH_TITLE = "VERTHILL 새 공지";
 export const NOTICE_PUSH_IMPORTANT_TITLE = "VERTHILL 중요 공지";
 export const NOTICE_PUSH_ALREADY_SENT_MESSAGE =
   "이 공지에는 이미 알림을 보냈습니다.";
+export const NOTICE_PUSH_DELIVERY_FAILED_MESSAGE =
+  "알림 전달에 실패했습니다. 다시 보낼 수 있습니다.";
 export const NOTICE_PUSH_OUTSIDE_WINDOW_MESSAGE =
   "게시 기간이 아닌 공지에는 알림을 보낼 수 없습니다.";
 export const NOTICE_PUSH_CONFIRM_UI =

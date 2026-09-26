@@ -1,10 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import dayjs from "dayjs";
+import { formatKstDisplay } from "@/lib/kstDate";
 import {
   NOTICE_PUSH_CONFIRM,
   NOTICE_PUSH_CONFIRM_UI,
+  NOTICE_PUSH_DELIVERY_FAILED_MESSAGE,
   NOTICE_PUSH_DONE_LABEL,
   NOTICE_PUSH_SEND_BUTTON,
 } from "@/lib/noticeConstants";
@@ -130,7 +131,7 @@ export default function NoticePushNotifyCard({
       {alreadySent ? (
         <p className="notice-push-done">
           {NOTICE_PUSH_DONE_LABEL}
-          {sentAt ? ` · ${dayjs(sentAt).format("YYYY-MM-DD HH:mm")}` : ""}
+          {sentAt ? ` · ${formatKstDisplay(sentAt, "ymd-hm")}` : ""}
         </p>
       ) : (
         <button
@@ -146,7 +147,9 @@ export default function NoticePushNotifyCard({
         <p className="notice-push-result" role="status">
           {result.error === "no_recipients"
             ? "구독 중인 캐디가 없습니다."
-            : `발송 ${result.sent} · 실패 ${result.failed} · 만료 삭제 ${result.removedStale}`}
+            : result.error === "delivery_failed"
+              ? NOTICE_PUSH_DELIVERY_FAILED_MESSAGE
+              : `발송 ${result.sent} · 실패 ${result.failed} · 만료 삭제 ${result.removedStale}`}
         </p>
       ) : null}
       {error ? <p className="notice-push-error">{error}</p> : null}

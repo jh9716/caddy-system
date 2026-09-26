@@ -1,5 +1,8 @@
 import type { PrismaClient } from "@prisma/client";
-import { NOTICE_PUSH_CONFIRM } from "@/lib/noticeConstants";
+import {
+  NOTICE_PUSH_CONFIRM,
+  NOTICE_PUSH_DELIVERY_FAILED_MESSAGE,
+} from "@/lib/noticeConstants";
 import { isNoticeInPublishWindow } from "@/lib/noticeTarget";
 import { NoticePushError, sendNoticePush } from "@/lib/noticePush";
 
@@ -108,7 +111,9 @@ export async function runNoticeCreatePush(input: {
       message:
         result.error === "no_recipients"
           ? "구독 중인 캐디가 없습니다."
-          : undefined,
+          : result.error === "delivery_failed"
+            ? NOTICE_PUSH_DELIVERY_FAILED_MESSAGE
+            : undefined,
     };
   } catch (e) {
     const message =

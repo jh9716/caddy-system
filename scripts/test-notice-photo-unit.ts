@@ -561,6 +561,35 @@ async function main() {
       assert(apiList.includes("isNoticePhotoTableMissing"), "GET list falls back if photo table missing");
       assert(apiList.includes("include: { _count: { select: { photos: true } } }"), "GET list counts photos");
       assert(rscList.includes("isNoticePhotoTableMissing"), "RSC list falls back if photo table missing");
+      const gallery = read("src/components/notice/NoticePhotoGallery.tsx");
+      const css = read("src/app/globals.css");
+      const noticePhotoCss = css.slice(
+        css.indexOf(".notice-photos {"),
+        css.indexOf(".notice-back {")
+      );
+      assert(gallery.includes("notice-photos-list"), "detail gallery uses uncropped list");
+      assert(gallery.includes("notice-photos-item"), "detail gallery item class");
+      assert(gallery.includes("notice-photos-lightbox"), "detail lightbox is notice-scoped");
+      assert(!gallery.includes("course-report-photo-grid"), "detail does not reuse cropped report grid");
+      assert(!gallery.includes("course-report-photo-thumb"), "detail does not reuse cropped report thumb");
+      assert(!gallery.includes("course-report-photo-lightbox"), "detail lightbox not report lightbox");
+      assert(noticePhotoCss.includes("width: 100%"), "detail photo width 100%");
+      assert(noticePhotoCss.includes("height: auto"), "detail photo height auto");
+      assert(noticePhotoCss.includes("object-fit: contain"), "detail photo contain");
+      assert(!/\baspect-ratio\b/.test(noticePhotoCss), "detail photo CSS has no aspect-ratio");
+      assert(
+        !noticePhotoCss.includes("object-fit: cover"),
+        "detail photo CSS does not crop with cover"
+      );
+      assert(
+        css.includes(".course-report-photo-thumb") &&
+          css.includes("object-fit: cover"),
+        "course-report thumbs still crop/cover"
+      );
+      const lightboxCss = noticePhotoCss.slice(noticePhotoCss.indexOf(".notice-photos-lightbox img"));
+      assert(lightboxCss.includes("object-fit: contain"), "lightbox contain");
+      assert(lightboxCss.includes("max-height: 90vh"), "lightbox fits viewport");
+      assert(lightboxCss.includes("width: auto") && lightboxCss.includes("height: auto"), "lightbox keeps ratio");
       assert(!/include:\s*\{\s*photos:/.test(apiOne), "GET detail does not include photos on Notice");
       assert(!/include:\s*\{\s*photos:/.test(rscDetail), "RSC detail does not include photos on Notice");
       assert(!summary.includes("photos:"), "summary notice query has no photos include");

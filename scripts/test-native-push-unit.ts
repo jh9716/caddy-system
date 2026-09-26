@@ -327,6 +327,7 @@ async function main() {
     }
   );
   assert(sent.sent === 1 && mockSent.length === 1, "injected sendFn delivers once");
+  assert(sent.sentUserIds.join(",") === "9", "success reports sentUserIds");
 
   const stale = { enabled: true, lastFailureAt: null as Date | null };
   const transient = { enabled: true, lastFailureAt: null as Date | null };
@@ -347,7 +348,7 @@ async function main() {
       },
     },
   };
-  await deliverNativePushTokens(
+  const failResult = await deliverNativePushTokens(
     failDb as never,
     [
       { id: 1, userId: 1, token: "stale", platform: "ANDROID" },
@@ -360,6 +361,7 @@ async function main() {
   );
   assert(stale.enabled === false, "gone disables stale token");
   assert(transient.enabled === true, "failed keeps token enabled");
+  assert(failResult.sentUserIds.length === 0, "gone/failed do not count as native success");
 
   console.log("== Kakao / Web Push files stay ==");
   assert(
