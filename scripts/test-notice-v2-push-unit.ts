@@ -21,6 +21,9 @@ import {
   NOTICE_PUSH_CONCURRENCY,
   NOTICE_PUSH_AUDIT_ACTION,
   NOTICE_PUSH_AUDIT_ENTITY,
+  NOTICE_PUSH_DONE_LABEL,
+  NOTICE_PUSH_SEND_BUTTON,
+  NOTICE_SCHEDULED_PUSH_HINT,
 } from "../src/lib/noticeConstants";
 import {
   canViewNotice,
@@ -49,6 +52,7 @@ import {
   runNoticeCreatePush,
   setNoticeCreatePushSenderForTests,
 } from "../src/lib/noticeAutoPush";
+import { planNoticeClientAutoPush } from "../src/lib/noticeAutoPushPlan";
 
 let passed = 0;
 let failed = 0;
@@ -298,6 +302,23 @@ async function main() {
     const form = read("src/app/notice/new/ui/NewNoticeForm.tsx");
     assert(form.includes("useState(mode !== 'edit')"), "create sendPush defaults on");
     assert(form.includes("NOTICE_EDIT_SEND_PUSH_LABEL"), "edit sendPush is explicit");
+    assert(form.includes("NOTICE_SCHEDULED_PUSH_HINT"), "scheduled start hides auto-push");
+    assert(form.includes("planNoticeClientAutoPush"), "create defers push until photos succeed");
+    assert(form.includes("sendAfterPhotos"), "photos-then-push path exists");
+    assert(form.includes("자동 푸시는 보내지 않았습니다"), "photo upload fail skips auto push");
+    assert(form.includes("requestNoticePushSend"), "after-photo push uses notice-send");
+    assert(!form.includes("다시 보내기"), "form has no resend copy");
+    const photoLib = read("src/lib/noticePhoto.ts");
+    assert(photoLib.includes("getCourseReportPhotoStore"), "notice photos reuse course-report store");
+    assert(photoLib.includes("await store.delete"), "photo delete calls blob store.delete");
+    assert(patch.includes("deleteNoticePhotoBlobs"), "notice DELETE cleans blobs first");
+    assert(
+      patch.indexOf("deleteNoticePhotoBlobs") < patch.indexOf("prisma.notice.delete"),
+      "blobs deleted before notice row"
+    );
+    assert(NOTICE_PUSH_SEND_BUTTON === "공지 푸시 알림 보내기", "manual send copy");
+    assert(NOTICE_PUSH_DONE_LABEL === "푸시 발송 완료", "sent copy");
+    assert(NOTICE_SCHEDULED_PUSH_HINT.includes("게시 후 수동 발송"), "scheduled hint");
     const autoPush = read("src/lib/noticeAutoPush.ts");
     assert(!autoPush.includes("cron"), "auto push has no cron");
     const mig = read("prisma/migrations/20260918120000_notice_v2/migration.sql");
@@ -306,7 +327,10 @@ async function main() {
     const card = read("src/components/notice/NoticePushNotifyCard.tsx");
     assert(card.includes("window.confirm"), "one confirm dialog");
     assert(card.includes("NOTICE_PUSH_CONFIRM_UI"), "confirm copy");
-    assert(card.includes("NOTICE_PUSH_SEND_BUTTON"), "manual button uses 푸시 알림 보내기");
+    assert(card.includes("NOTICE_PUSH_SEND_BUTTON"), "manual button uses 공지 푸시 알림 보내기");
+    assert(card.includes("NOTICE_PUSH_DONE_LABEL"), "sent state uses 푸시 발송 완료");
+    assert(card.includes("pushSentAt"), "sent time can render");
+    assert(!card.includes("다시 보내기"), "card has no resend copy");
     const alimtalkTouched = [
       "src/lib/alimtalkPublishedFreshness.ts",
       "src/lib/autoAssignEngine.ts",
@@ -890,6 +914,12 @@ async function main() {
       assert(!jsonHasSecrets(prevBody), "preview no endpoint/keys");
       assert(typeof prevBody.counts.eligibleUsers === "number", "eligibleUsers");
       assert(typeof prevBody.counts.subscribedUsers === "number", "subscribedUsers");
+      const sentPrev = await getPreview(adminCookie, nDup.id);
+      const sentPrevBody = await sentPrev.json();
+      assert(sentPrev.status === 200, "already-sent preview 200");
+      assert(sentPrevBody.alreadySent === true, "preview alreadySent");
+      assert(typeof sentPrevBody.pushSentAt === "string", "preview returns pushSentAt");
+      assert(!jsonHasSecrets(sentPrevBody), "already-sent preview no secrets");
       const sendHttp = await postSend(adminCookie, { noticeId: 0, confirm: NOTICE_PUSH_CONFIRM });
       const sendBody = await sendHttp.json();
       assert(!jsonHasSecrets(sendBody), "send error no secrets");
@@ -984,6 +1014,89 @@ async function main() {
         decideNoticeAutoPush({ requested: true, publishStartAt: null }).send === true,
         "immediate notice can send"
       );
+      const noPhoto = planNoticeClientAutoPush({
+        sendPushRequested: true,
+        pendingPhotoCount: 0,
+      });
+      assert(noPhoto.sendOnCreate && !noPhoto.sendAfterPhotos, "no photos: push on create");
+      const withPhoto = planNoticeClientAutoPush({
+        sendPushRequested: true,
+        pendingPhotoCount: 2,
+      });
+      assert(
+        !withPhoto.sendOnCreate && withPhoto.sendAfterPhotos,
+        "photos: push only after uploads"
+      );
+      const photoOff = planNoticeClientAutoPush({
+        sendPushRequested: true,
+        pendingPhotoCount: 2,
+        publishStartAt: new Date(Date.now() + 86400000),
+      });
+      assert(
+        photoOff.scheduled && !photoOff.sendOnCreate && !photoOff.sendAfterPhotos,
+        "scheduled + photos: immediate push 0"
+      );
+      const failPhotos = planNoticeClientAutoPush({
+        sendPushRequested: true,
+        pendingPhotoCount: 1,
+      });
+      assert(failPhotos.sendAfterPhotos === true, "failed uploads must skip this send path");
+      const scheduledNoPhotos = planNoticeClientAutoPush({
+        sendPushRequested: true,
+        pendingPhotoCount: 0,
+        publishStartAt: new Date(Date.now() + 86400000),
+      });
+      assert(
+        scheduledNoPhotos.scheduled &&
+          !scheduledNoPhotos.sendOnCreate &&
+          !scheduledNoPhotos.sendAfterPhotos,
+        "scheduled no-photo: immediate push 0"
+      );
+
+      const { requestNoticePushSend } = await import("../src/lib/noticePushClient");
+      const { uploadNoticePendingPhotos } = await import("../src/lib/noticePhotoClient");
+      let pushCalls = 0;
+      const okPost = (async (url: string) => {
+        if (String(url).includes("notice-send")) {
+          pushCalls += 1;
+          return new Response(JSON.stringify({ ok: true, sent: 1, failed: 0 }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({ photo: { id: 1 } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as typeof fetch;
+      const uploaded = await uploadNoticePendingPhotos(
+        1,
+        [{ blob: new Blob(["a"]) }, { blob: new Blob(["b"]) }],
+        okPost
+      );
+      assert(uploaded.uploaded === 2 && uploaded.failed === 0, "mock photos all uploaded");
+      if (withPhoto.sendAfterPhotos && uploaded.failed === 0) {
+        const sent = await requestNoticePushSend(1, okPost);
+        assert(sent.ok === true, "after-photo push client ok");
+      }
+      assert(pushCalls === 1, "push only after all photos succeed");
+
+      pushCalls = 0;
+      const failPost = (async (url: string) => {
+        if (String(url).includes("notice-send")) {
+          pushCalls += 1;
+          return new Response(JSON.stringify({ ok: true }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({ error: "fail" }), { status: 500 });
+      }) as typeof fetch;
+      const failedUp = await uploadNoticePendingPhotos(1, [{ blob: new Blob(["x"]) }], failPost);
+      if (failedUp.failed === 0) {
+        await requestNoticePushSend(1, failPost);
+      }
+      assert(failedUp.failed === 1 && pushCalls === 0, "failed photo upload does not auto-push");
 
       let calls = 0;
       setNoticeCreatePushSenderForTests(async () => {

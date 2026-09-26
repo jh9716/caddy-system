@@ -13,10 +13,15 @@ import {
 import { assertLocalDatabaseUrl } from "./assertLocalDatabaseUrl";
 import {
   createMemoryCourseReportPhotoStore,
+  getCourseReportPhotoStore,
   setCourseReportPhotoStoreForTests,
 } from "../src/lib/courseReportPhotoStorage";
 import { NOTICE_PHOTO_MAX } from "../src/lib/noticePhotoConstants";
-import { GET as GET_NOTICE, PATCH as PATCH_NOTICE } from "../src/app/api/notice/[id]/route";
+import {
+  DELETE as DELETE_NOTICE,
+  GET as GET_NOTICE,
+  PATCH as PATCH_NOTICE,
+} from "../src/app/api/notice/[id]/route";
 import { POST as POST_NOTICE } from "../src/app/api/notice/route";
 import { POST as POST_PHOTO } from "../src/app/api/notice/[id]/photos/route";
 import {
@@ -220,6 +225,112 @@ async function main() {
       assert(hidden.status === 404, "caddy cannot read future notice photo");
     }
 
+    section("blob deleted on photo delete and notice delete");
+    {
+      const store = getCourseReportPhotoStore();
+      const rows = await prisma.noticePhoto.findMany({
+        where: { noticeId: createdJson.id },
+      });
+      assert(rows.length === 3, "three stored keys");
+      const firstKey = rows[0].storageKey;
+      const restKeys = rows.slice(1).map((r) => r.storageKey);
+      assert((await store.get(firstKey)) != null, "blob exists before individual delete");
+
+      const delOne = await DELETE_PHOTO(
+        req(
+          `https://www.verthill.kr/api/notice/${createdJson.id}/photos/${rows[0].id}`,
+          { method: "DELETE", headers: { cookie: adminCookie } }
+        ),
+        { params: { id: String(createdJson.id), photoId: String(rows[0].id) } }
+      );
+      assert(delOne.status === 200, "individual photo delete 200");
+      assert((await store.get(firstKey)) == null, "individual delete removes blob");
+      assert(
+        (await prisma.noticePhoto.count({ where: { noticeId: createdJson.id } })) === 2,
+        "two photos remain after individual delete"
+      );
+
+      const doomed = await POST_NOTICE(
+        req("https://www.verthill.kr/api/notice", {
+          method: "POST",
+          headers: { cookie: adminCookie, "content-type": "application/json" },
+          body: JSON.stringify({ title: `${tag}-del`, content: "gone" }),
+        })
+      );
+      const doomedJson = await doomed.json();
+      noticeIds.push(doomedJson.id);
+      const up = await postPhoto(adminCookie, doomedJson.id, jpegBytes(32, 21));
+      const upJson = await up.json();
+      const doomedRow = await prisma.noticePhoto.findUnique({
+        where: { id: upJson.photo.id },
+      });
+      const doomedKey = doomedRow?.storageKey ?? "";
+      assert((await store.get(doomedKey)) != null, "blob exists before notice delete");
+      const gone = await DELETE_NOTICE(
+        req(`https://www.verthill.kr/api/notice/${doomedJson.id}`, {
+          method: "DELETE",
+          headers: { cookie: adminCookie },
+        }),
+        { params: { id: String(doomedJson.id) } }
+      );
+      assert(gone.status === 200, "notice delete 200");
+      assert((await store.get(doomedKey)) == null, "notice delete removes blobs");
+      assert(
+        (await prisma.noticePhoto.count({ where: { noticeId: doomedJson.id } })) === 0,
+        "notice delete cascades photo rows"
+      );
+      assert((await store.get(restKeys[0])) != null, "other notice blobs stay");
+    }
+
+    section("upload rollback deletes blob when row create fails");
+    {
+      const { uploadNoticePhoto } = await import("../src/lib/noticePhoto");
+      const inner = getCourseReportPhotoStore();
+      let lastPut = "";
+      setCourseReportPhotoStoreForTests({
+        configured: true,
+        async put(key, bytes, mime) {
+          lastPut = key;
+          return inner.put(key, bytes, mime);
+        },
+        get: (key) => inner.get(key),
+        delete: (key) => inner.delete(key),
+      });
+      const before = await prisma.noticePhoto.count({ where: { noticeId: createdJson.id } });
+      const origCreate = prisma.noticePhoto.create.bind(prisma.noticePhoto);
+      prisma.noticePhoto.create = (async () => {
+        throw new Error("forced_create_fail");
+      }) as typeof prisma.noticePhoto.create;
+      try {
+        await uploadNoticePhoto(prisma, {
+          noticeId: createdJson.id,
+          bytes: jpegBytes(32, 77),
+          auth: {
+            session: {} as never,
+            userId: uAdmin.id,
+            username: uAdmin.username,
+            role: "admin",
+            sessionVersion: 0,
+            caddyId: null,
+            managedTeams: [],
+            mustChangePassword: false,
+          },
+        });
+        assert(false, "create fail should throw");
+      } catch (e) {
+        assert(e instanceof Error && e.message === "forced_create_fail", "row create failed");
+      } finally {
+        prisma.noticePhoto.create = origCreate;
+      }
+      assert(lastPut.length > 0, "blob put before row create");
+      assert((await inner.get(lastPut)) == null, "failed upload blob rolled back");
+      assert(
+        (await prisma.noticePhoto.count({ where: { noticeId: createdJson.id } })) === before,
+        "failed upload leaves no extra row"
+      );
+      setCourseReportPhotoStoreForTests(inner);
+    }
+
     section("patch without sendPush keeps photos");
     {
       const patch = await PATCH_NOTICE(
@@ -238,7 +349,7 @@ async function main() {
         { params: { id: String(createdJson.id) } }
       );
       const body = await after.json();
-      assert(body.photos.length === 3, "photos survive text patch");
+      assert(body.photos.length === 2, "remaining photos survive text patch");
     }
   } finally {
     setCourseReportPhotoStoreForTests(null);
