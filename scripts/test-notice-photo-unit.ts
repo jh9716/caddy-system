@@ -4,6 +4,7 @@
  */
 import { NextRequest } from "next/server";
 import bcrypt from "bcryptjs";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../src/lib/prisma";
 import {
   SESSION_COOKIE_NAME,
@@ -17,14 +18,14 @@ import {
   setCourseReportPhotoStoreForTests,
 } from "../src/lib/courseReportPhotoStorage";
 import { NOTICE_PHOTO_MAX } from "../src/lib/noticePhotoConstants";
-import { deleteNoticePhoto } from "../src/lib/noticePhoto";
+import { deleteNoticePhoto, isNoticePhotoTableMissing } from "../src/lib/noticePhoto";
 import { CourseReportPhotoStorageError } from "../src/lib/courseReportPhotoStorage";
 import {
   DELETE as DELETE_NOTICE,
   GET as GET_NOTICE,
   PATCH as PATCH_NOTICE,
 } from "../src/app/api/notice/[id]/route";
-import { POST as POST_NOTICE } from "../src/app/api/notice/route";
+import { GET as GET_NOTICE_LIST, POST as POST_NOTICE } from "../src/app/api/notice/route";
 import { POST as POST_PHOTO } from "../src/app/api/notice/[id]/photos/route";
 import {
   GET as GET_PHOTO,
@@ -79,6 +80,13 @@ function adminAuth(user: { id: number; username: string }) {
     managedTeams: [] as string[],
     mustChangePassword: false,
   };
+}
+
+function noticePhotoTableMissingError() {
+  return new Prisma.PrismaClientKnownRequestError(
+    "The table `public.NoticePhoto` does not exist in the current database.",
+    { code: "P2021", clientVersion: "test" }
+  );
 }
 
 function jpegBytes(extra = 32, mark = 0): Uint8Array {
@@ -538,6 +546,174 @@ async function main() {
       );
       assert((await inner.get(noticeBlobFailKey)) != null, "notice blob orphan remains after fail");
       setCourseReportPhotoStoreForTests(inner);
+    }
+
+    section("NoticePhoto table missing: existing notice CRUD stays up");
+    {
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+      const read = (rel: string) => fs.readFileSync(path.resolve(rel), "utf8");
+      const apiList = read("src/app/api/notice/route.ts");
+      const apiOne = read("src/app/api/notice/[id]/route.ts");
+      const rscList = read("src/app/notice/page.tsx");
+      const rscDetail = read("src/app/notice/[id]/page.tsx");
+      const summary = read("src/app/api/summary/route.ts");
+      assert(apiList.includes("isNoticePhotoTableMissing"), "GET list falls back if photo table missing");
+      assert(apiList.includes("include: { _count: { select: { photos: true } } }"), "GET list counts photos");
+      assert(rscList.includes("isNoticePhotoTableMissing"), "RSC list falls back if photo table missing");
+      assert(!/include:\s*\{\s*photos:/.test(apiOne), "GET detail does not include photos on Notice");
+      assert(!/include:\s*\{\s*photos:/.test(rscDetail), "RSC detail does not include photos on Notice");
+      assert(!summary.includes("photos:"), "summary notice query has no photos include");
+      assert(isNoticePhotoTableMissing(noticePhotoTableMissingError()), "P2021 NoticePhoto detected");
+      assert(
+        isNoticePhotoTableMissing(new Error('relation "NoticePhoto" does not exist')),
+        "pg missing relation detected"
+      );
+      assert(
+        !isNoticePhotoTableMissing(new Error("connection refused")),
+        "unrelated errors are not table-missing"
+      );
+
+      const snapshot = await prisma.notice.findUnique({ where: { id: createdJson.id } });
+      const photoCountBefore = await prisma.noticePhoto.count({
+        where: { noticeId: createdJson.id },
+      });
+      assert(snapshot != null, "fixture notice exists before missing-table mock");
+
+      const origNoticeFindMany = prisma.notice.findMany.bind(prisma.notice);
+      const origPhotoFindMany = prisma.noticePhoto.findMany.bind(prisma.noticePhoto);
+      const origPhotoFindUnique = prisma.noticePhoto.findUnique.bind(prisma.noticePhoto);
+      const origPhotoCount = prisma.noticePhoto.count.bind(prisma.noticePhoto);
+      const origPhotoCreate = prisma.noticePhoto.create.bind(prisma.noticePhoto);
+      const origPhotoDelete = prisma.noticePhoto.delete.bind(prisma.noticePhoto);
+      const boom = async () => {
+        throw noticePhotoTableMissingError();
+      };
+      prisma.notice.findMany = (async (args?: unknown) => {
+        const rec = args as {
+          include?: { _count?: { select?: { photos?: boolean } } };
+          select?: { _count?: { select?: { photos?: boolean } } };
+        };
+        if (rec?.include?._count?.select?.photos || rec?.select?._count?.select?.photos) {
+          throw noticePhotoTableMissingError();
+        }
+        return origNoticeFindMany(args as never);
+      }) as typeof prisma.notice.findMany;
+      prisma.noticePhoto.findMany = boom as typeof prisma.noticePhoto.findMany;
+      prisma.noticePhoto.findUnique = boom as typeof prisma.noticePhoto.findUnique;
+      prisma.noticePhoto.count = boom as typeof prisma.noticePhoto.count;
+      prisma.noticePhoto.create = boom as typeof prisma.noticePhoto.create;
+      prisma.noticePhoto.delete = boom as typeof prisma.noticePhoto.delete;
+
+      try {
+        const list = await GET_NOTICE_LIST(
+          req("https://www.verthill.kr/api/notice", {
+            headers: { cookie: adminCookie },
+          })
+        );
+        const listBody = (await list.json()) as Array<{ id: number; photoCount?: number }>;
+        assert(list.status === 200, "list 200 when NoticePhoto table missing");
+        const listed = listBody.find((row) => row.id === createdJson.id);
+        assert(listed != null, "existing notice still listed");
+        assert(listed?.photoCount === 0, "list photoCount 0 without table");
+
+        const detail = await GET_NOTICE(
+          req(`https://www.verthill.kr/api/notice/${createdJson.id}`, {
+            headers: { cookie: adminCookie },
+          }),
+          { params: { id: String(createdJson.id) } }
+        );
+        const detailBody = await detail.json();
+        assert(detail.status === 200, "detail 200 when NoticePhoto table missing");
+        assert(detailBody.id === createdJson.id, "detail returns existing notice");
+        assert(Array.isArray(detailBody.photos) && detailBody.photos.length === 0, "detail photos []");
+        assert(detailBody.photoCount === 0, "detail photoCount 0");
+
+        const created = await POST_NOTICE(
+          req("https://www.verthill.kr/api/notice", {
+            method: "POST",
+            headers: { cookie: adminCookie, "content-type": "application/json" },
+            body: JSON.stringify({ title: `${tag}-no-table-create`, content: "text only" }),
+          })
+        );
+        const createdMissing = await created.json();
+        noticeIds.push(createdMissing.id);
+        assert(created.status === 200 && typeof createdMissing.id === "number", "text create ok");
+
+        const patched = await PATCH_NOTICE(
+          req(`https://www.verthill.kr/api/notice/${createdMissing.id}`, {
+            method: "PATCH",
+            headers: { cookie: adminCookie, "content-type": "application/json" },
+            body: JSON.stringify({ title: `${tag}-no-table-patched` }),
+          }),
+          { params: { id: String(createdMissing.id) } }
+        );
+        assert(patched.status === 200, "text patch ok without photo table");
+
+        const up = await postPhoto(adminCookie, createdMissing.id, jpegBytes(32, 41));
+        const upJson = await up.json();
+        assert(up.status === 503, "photo upload 503 without table");
+        assert(upJson.error === "photo_table_not_ready", "upload table-not-ready");
+
+        const got = await GET_PHOTO(
+          req(`https://www.verthill.kr/api/notice/${createdJson.id}/photos/1`, {
+            headers: { cookie: adminCookie },
+          }),
+          { params: { id: String(createdJson.id), photoId: "1" } }
+        );
+        const gotJson = await got.json();
+        assert(got.status === 503, "photo GET 503 without table");
+        assert(gotJson.error === "photo_table_not_ready", "read table-not-ready");
+
+        const delPhoto = await DELETE_PHOTO(
+          req(`https://www.verthill.kr/api/notice/${createdJson.id}/photos/1`, {
+            method: "DELETE",
+            headers: { cookie: adminCookie },
+          }),
+          { params: { id: String(createdJson.id), photoId: "1" } }
+        );
+        const delPhotoJson = await delPhoto.json();
+        assert(delPhoto.status === 503, "photo DELETE 503 without table");
+        assert(delPhotoJson.error === "photo_table_not_ready", "delete table-not-ready");
+
+        const doomed = await POST_NOTICE(
+          req("https://www.verthill.kr/api/notice", {
+            method: "POST",
+            headers: { cookie: adminCookie, "content-type": "application/json" },
+            body: JSON.stringify({ title: `${tag}-no-table-del`, content: "gone" }),
+          })
+        );
+        const doomedJson = await doomed.json();
+        noticeIds.push(doomedJson.id);
+        const gone = await DELETE_NOTICE(
+          req(`https://www.verthill.kr/api/notice/${doomedJson.id}`, {
+            method: "DELETE",
+            headers: { cookie: adminCookie },
+          }),
+          { params: { id: String(doomedJson.id) } }
+        );
+        assert(gone.status === 200, "text notice delete ok without photo table");
+        assert(
+          (await prisma.notice.findUnique({ where: { id: doomedJson.id } })) == null,
+          "deleted notice stays deleted"
+        );
+
+        const after = await prisma.notice.findUnique({ where: { id: createdJson.id } });
+        assert(after?.title === snapshot?.title, "existing notice title unchanged");
+        assert(after?.content === snapshot?.content, "existing notice content unchanged");
+      } finally {
+        prisma.notice.findMany = origNoticeFindMany;
+        prisma.noticePhoto.findMany = origPhotoFindMany;
+        prisma.noticePhoto.findUnique = origPhotoFindUnique;
+        prisma.noticePhoto.count = origPhotoCount;
+        prisma.noticePhoto.create = origPhotoCreate;
+        prisma.noticePhoto.delete = origPhotoDelete;
+      }
+
+      assert(
+        (await prisma.noticePhoto.count({ where: { noticeId: createdJson.id } })) === photoCountBefore,
+        "existing photo rows not damaged"
+      );
     }
 
     section("patch without sendPush keeps photos");
