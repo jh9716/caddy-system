@@ -122,6 +122,7 @@
     "test:fcm-http-v1-unit": "bash scripts/tsx-safe.sh scripts/test-fcm-http-v1-unit.ts",
     "test:play-review-accounts-unit": "bash scripts/tsx-safe.sh scripts/test-play-review-accounts-unit.ts",
     "test:notice-photo-unit": "bash scripts/tsx-safe.sh scripts/test-notice-photo-unit.ts",
+    "test:notice-photo-display-unit": "bash scripts/tsx-safe.sh scripts/test-notice-photo-display-unit.ts",
     "compute:android-kakao-debug-key-hash": "bash scripts/tsx-safe.sh scripts/compute-android-kakao-debug-key-hash.ts",
     "native:sync:android": "npx cap sync android"
   },

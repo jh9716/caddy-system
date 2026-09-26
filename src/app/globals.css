@@ -2428,6 +2428,49 @@ a {
   margin-top: 16px;
 }
 
+.notice-photos-list {
+  display: grid;
+  gap: 12px;
+}
+
+.notice-photos-item {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 1px solid var(--vh-border);
+  border-radius: var(--vh-radius-sm);
+  background: var(--vh-ivory-deep);
+  overflow: hidden;
+}
+
+.notice-photos-item img {
+  display: block;
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+}
+
+.notice-photos-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(15, 31, 24, 0.82);
+  border: 0;
+}
+
+.notice-photos-lightbox img {
+  max-width: 100%;
+  max-height: 90vh;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 8px;
+}
+
 .notice-back {
   margin-bottom: 16px;
 }
