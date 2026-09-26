@@ -126,6 +126,7 @@ section("source: notice send uses helper, does not blank all web");
   const helper = read("src/lib/noticePushChannel.ts");
   assert(core.includes("selectNoticeWebPushMappings"), "sendNoticePush uses helper");
   assert(core.includes("sentUserIds"), "sendNoticePush reads native success users");
+  assert(core.includes("releaseNoticePushClaim"), "zero-success unsets pushSentAt");
   assert(
     core.lastIndexOf("await deliverNativePushTokens") <
       core.lastIndexOf("await deliverWebPushMappings"),

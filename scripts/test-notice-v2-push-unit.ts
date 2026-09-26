@@ -248,6 +248,8 @@ async function main() {
     assert(core.includes("sentUserIds"), "dedupe uses native success user ids");
     assert(core.includes("pg_advisory_xact_lock"), "advisory lock");
     assert(core.includes("pushSentAt"), "claim uses pushSentAt");
+    assert(core.includes("releaseNoticePushClaim"), "zero-success releases claim");
+    assert(core.includes("delivery_failed"), "zero-success returns delivery_failed");
     assert(
       core.indexOf("claimNoticePushSend(") < core.lastIndexOf("await deliverNativePushTokens"),
       "claim invoked before native deliver"
@@ -365,6 +367,7 @@ async function main() {
     assert(card.includes("NOTICE_PUSH_CONFIRM_UI"), "confirm copy");
     assert(card.includes("NOTICE_PUSH_SEND_BUTTON"), "manual button uses 공지 푸시 알림 보내기");
     assert(card.includes("NOTICE_PUSH_DONE_LABEL"), "sent state uses 푸시 발송 완료");
+    assert(card.includes("NOTICE_PUSH_DELIVERY_FAILED_MESSAGE"), "zero-success shows retryable failure");
     assert(card.includes("pushSentAt"), "sent time can render");
     assert(!card.includes("다시 보내기"), "card has no resend copy");
     const alimtalkTouched = [
@@ -1246,6 +1249,7 @@ async function main() {
       const uPcApp = await makeChannelUser("ch_pcapp", "7조");
       const uBothFail = await makeChannelUser("ch_bothfail", "8조");
       const uPcFail = await makeChannelUser("ch_pcfail", "11조");
+      const uAllFail = await makeChannelUser("ch_allfail", "12조");
 
       await prisma.devicePushToken.create({
         data: {
@@ -1360,6 +1364,24 @@ async function main() {
           enabled: true,
         },
       });
+      await prisma.pushSubscription.create({
+        data: {
+          userId: uAllFail.id,
+          endpoint: `https://push.example/${tag}/all-fail-web`,
+          p256dh: fakeP256(),
+          auth: fakeAuth(),
+          enabled: true,
+          platform: "android",
+        },
+      });
+      await prisma.devicePushToken.create({
+        data: {
+          userId: uAllFail.id,
+          token: `${tag}-all-fail-native`,
+          platform: "ANDROID",
+          enabled: true,
+        },
+      });
 
       async function teamNotice(suffix: string, team: string) {
         const row = await prisma.notice.create({
@@ -1381,10 +1403,13 @@ async function main() {
       const nPcApp = await teamNotice("ch_pcapp", "7조");
       const nBothFail = await teamNotice("ch_bothfail", "8조");
       const nPcFail = await teamNotice("ch_pcfail", "11조");
+      const nAllFail = await teamNotice("ch_allfail", "12조");
+      const nAllFailConc = await teamNotice("ch_allfail_conc", "12조");
 
       async function sendChannel(
         noticeId: number,
-        nativeResult: (token: string) => "sent" | "failed" | "gone" = () => "sent"
+        nativeResult: (token: string) => "sent" | "failed" | "gone" = () => "sent",
+        webFail = false
       ) {
         const webEnds: string[] = [];
         const nativeToks: string[] = [];
@@ -1395,6 +1420,9 @@ async function main() {
           {
             sendFn: async (sub) => {
               webEnds.push(String(sub.endpoint));
+              if (webFail) {
+                throw Object.assign(new Error("web fail"), { statusCode: 500 });
+              }
             },
             nativeSendFn: async (token) => {
               nativeToks.push(token);
@@ -1413,10 +1441,15 @@ async function main() {
       const nativeOnly = await sendChannel(nNative.id);
       assert(taggedWeb(nativeOnly.webEnds).length === 0, "native-only: no web");
       assert(taggedNative(nativeOnly.nativeToks).length === 1, "native-only: 1 FCM");
+      const nativeOnlyRow = await prisma.notice.findUnique({ where: { id: nNative.id } });
+      assert(nativeOnlyRow?.pushSentAt != null, "native success keeps pushSentAt");
+      assert(nativeOnly.result.ok === true && nativeOnly.result.sent === 1, "native success counts as sent");
 
       const webDesk = await sendChannel(nWebDesk.id);
       assert(taggedWeb(webDesk.webEnds).length === 1, "desktop web-only: 1 web");
       assert(taggedNative(webDesk.nativeToks).length === 0, "desktop web-only: no FCM");
+      const webDeskRow = await prisma.notice.findUnique({ where: { id: nWebDesk.id } });
+      assert(webDeskRow?.pushSentAt != null, "web success keeps pushSentAt");
 
       const webAnd = await sendChannel(nWebAnd.id);
       assert(taggedWeb(webAnd.webEnds).length === 1, "android web-only: 1 web");
@@ -1460,6 +1493,8 @@ async function main() {
       assert(taggedNative(bothFail.nativeToks).length === 1, "android web+native failure: native attempted");
       assert(bothFail.nativeOutcomes[0] === "failed", "android web+native failure: native failed");
       assert(taggedWeb(bothFail.webEnds).length === 1, "android web+native failure: web fallback 1");
+      const bothFailKept = await prisma.notice.findUnique({ where: { id: nBothFail.id } });
+      assert(bothFailKept?.pushSentAt != null, "native fail + web fallback success keeps pushSentAt");
       assert(
         taggedWeb(bothFail.webEnds)[0]?.endsWith("/both-fail-web") === true,
         "android web+native failure: fallback is android web"
@@ -1479,6 +1514,58 @@ async function main() {
         where: { token: `${tag}-pc-fail-native` },
       });
       assert(goneRow?.enabled === false, "stale native gone reuses existing disable cleanup");
+
+      const allFail = await sendChannel(nAllFail.id, () => "failed", true);
+      assert(allFail.result.ok === false, "native+web fail is not ok");
+      assert(allFail.result.error === "delivery_failed", "native+web fail delivery_failed");
+      assert(allFail.result.sent === 0, "native+web fail sent 0");
+      const allFailRow = await prisma.notice.findUnique({ where: { id: nAllFail.id } });
+      assert(allFailRow?.pushSentAt == null, "native+web fail releases pushSentAt");
+      const retryFail = await sendChannel(nAllFail.id);
+      assert(retryFail.result.ok === true && retryFail.result.sent >= 1, "zero-success can retry");
+      const retryRow = await prisma.notice.findUnique({ where: { id: nAllFail.id } });
+      assert(retryRow?.pushSentAt != null, "retry success keeps pushSentAt");
+
+      let concFailWeb = 0;
+      let concFailNative = 0;
+      const concFail = await Promise.allSettled([
+        sendNoticePush(
+          prisma,
+          { noticeId: nAllFailConc.id, confirm: NOTICE_PUSH_CONFIRM, actorUserId: uAdmin.id },
+          {
+            sendFn: async () => {
+              concFailWeb += 1;
+              throw Object.assign(new Error("web fail"), { statusCode: 500 });
+            },
+            nativeSendFn: async () => {
+              concFailNative += 1;
+              return "failed";
+            },
+          }
+        ),
+        sendNoticePush(
+          prisma,
+          { noticeId: nAllFailConc.id, confirm: NOTICE_PUSH_CONFIRM, actorUserId: uAdmin.id },
+          {
+            sendFn: async () => {
+              concFailWeb += 1;
+              throw Object.assign(new Error("web fail"), { statusCode: 500 });
+            },
+            nativeSendFn: async () => {
+              concFailNative += 1;
+              return "failed";
+            },
+          }
+        ),
+      ]);
+      const concFailOk = concFail.filter((r) => r.status === "fulfilled");
+      const concFailDup = concFail.filter((r) => r.status === "rejected");
+      assert(concFailOk.length === 1, "concurrent all-fail one result");
+      assert(concFailDup.length === 1, "concurrent all-fail one already_sent");
+      assert(concFailWeb === 1, "concurrent all-fail does not double web");
+      assert(concFailNative === 1, "concurrent all-fail does not double native");
+      const concFailRow = await prisma.notice.findUnique({ where: { id: nAllFailConc.id } });
+      assert(concFailRow?.pushSentAt == null, "concurrent all-fail releases claim");
     }
   } finally {
     if (subIds.length) {

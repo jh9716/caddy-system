@@ -5,12 +5,13 @@
  * Fail-closed idempotency:
  * - Durable key: Notice.pushSentAt / pushSentByUserId.
  * - Same transaction: pg_advisory_xact_lock(noticeId) → SELECT → SET pushSentAt → COMMIT.
- * - Claim is durable BEFORE any deliverWebPush.
+ * - Claim is durable BEFORE native/web delivery so concurrent sends cannot double-fire.
  * - Crash before COMMIT: pushSentAt null, retry may send (first send never started).
- * - Crash after COMMIT / partial send: pushSentAt blocks the same notice.
- *   Admin cannot full-resend. No per-recipient retry in V1.
- * - no_recipients before claim: pushSentAt stays null (retry allowed if someone later
- *   subscribes). After claim, 0 targets still keep pushSentAt.
+ * - After delivery, pushSentAt means at least one native or web "sent".
+ *   Success 0 (failed/gone/stale only) releases the claim so admin can retry.
+ * - Crash after some successful sends: pushSentAt stays; no full resend.
+ * - no_recipients before claim: pushSentAt stays null. After claim, 0 targets
+ *   also release the claim.
  * Optional Audit NOTICE_PUSH_SEND is aggregates only — not the idempotency key.
  */
 
@@ -270,6 +271,22 @@ async function claimNoticePushSend(
   });
 }
 
+async function releaseNoticePushClaim(
+  db: PrismaClient,
+  noticeId: number
+): Promise<void> {
+  await db.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(
+      CAST(${NOTICE_PUSH_LOCK_NS} AS integer),
+      CAST(${noticeId} AS integer)
+    )`;
+    await tx.notice.updateMany({
+      where: { id: noticeId },
+      data: { pushSentAt: null, pushSentByUserId: null },
+    });
+  });
+}
+
 async function writeNoticePushAudit(
   db: PrismaClient,
   noticeId: number,
@@ -380,6 +397,8 @@ export async function sendNoticePush(
     );
   }
 
+  let nativeSent = 0;
+  let webSent = 0;
   try {
     const again = await loadNotice(db, input.noticeId);
     if (!again) {
@@ -392,6 +411,7 @@ export async function sendNoticePush(
 
     const nativeTokens = await loadEnabledDevicePushTokens(db, logicalUserIds);
     if (!hasPushDeliveryTargets(subscriptions.length, nativeTokens.length)) {
+      await releaseNoticePushClaim(db, input.noticeId);
       await writeNoticePushAudit(db, input.noticeId, {
         noticeId: input.noticeId,
         status: "NO_RECIPIENTS",
@@ -419,6 +439,7 @@ export async function sendNoticePush(
       sendFn: options?.nativeSendFn,
       concurrency: NOTICE_PUSH_CONCURRENCY,
     });
+    nativeSent = nativeDelivered.sent;
     const webMappings = selectNoticeWebPushMappings(
       subscriptions,
       nativeDelivered.sentUserIds
@@ -428,28 +449,61 @@ export async function sendNoticePush(
       credentials: creds,
       concurrency: NOTICE_PUSH_CONCURRENCY,
     });
+    webSent = delivered.sent;
+    const sent = nativeSent + webSent;
+    const failed = nativeDelivered.failed + delivered.failed;
+    const removedStale = nativeDelivered.removedStale + delivered.removedStale;
+    const deliveries = nativeDelivered.deliveries + delivered.deliveries;
+
+    if (sent === 0) {
+      await releaseNoticePushClaim(db, input.noticeId);
+      await writeNoticePushAudit(db, input.noticeId, {
+        noticeId: input.noticeId,
+        status: "FAILED",
+        error: "delivery_failed",
+        recipients: recipientUserIds.length,
+        subscriptions: webMappings.length,
+        sent,
+        failed,
+        removedStale,
+        deliveries,
+      });
+      return {
+        ok: false,
+        recipients: recipientUserIds.length,
+        subscriptions: webMappings.length,
+        sent,
+        failed,
+        removedStale,
+        deliveries,
+        error: "delivery_failed",
+      };
+    }
 
     await writeNoticePushAudit(db, input.noticeId, {
       noticeId: input.noticeId,
       status: "SENT",
       recipients: recipientUserIds.length,
       subscriptions: webMappings.length,
-      sent: delivered.sent,
-      failed: delivered.failed,
-      removedStale: delivered.removedStale,
-      deliveries: delivered.deliveries,
+      sent,
+      failed,
+      removedStale,
+      deliveries,
     });
 
     return {
       ok: true,
       recipients: recipientUserIds.length,
       subscriptions: webMappings.length,
-      sent: delivered.sent,
-      failed: delivered.failed,
-      removedStale: delivered.removedStale,
-      deliveries: delivered.deliveries,
+      sent,
+      failed,
+      removedStale,
+      deliveries,
     };
   } catch (e) {
+    if (nativeSent + webSent === 0) {
+      await releaseNoticePushClaim(db, input.noticeId);
+    }
     const code = e instanceof NoticePushError ? e.code : "internal_error";
     await writeNoticePushAudit(db, input.noticeId, {
       noticeId: input.noticeId,
