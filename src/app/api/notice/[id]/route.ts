@@ -1,12 +1,22 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, resolveAuthUser } from "@/lib/auth";
 import {
   isNoticeAuthResponse,
   loadNoticeViewer,
   requireNoticeReader,
 } from "@/lib/noticeAccess";
+import {
+  parseNoticeSendPushFlag,
+  runNoticeCreatePush,
+} from "@/lib/noticeAutoPush";
+import {
+  cleanupNoticePhotoBlobsBestEffort,
+  isNoticePhotoTableMissing,
+  listNoticePhotoStorageKeys,
+  listNoticePhotos,
+} from "@/lib/noticePhoto";
 import {
   NoticeValidationError,
   canViewNotice,
@@ -42,7 +52,13 @@ export async function GET(
   if (!canViewNotice(notice, viewer)) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
-  return NextResponse.json(notice);
+  try {
+    const photos = await listNoticePhotos(prisma, id);
+    return NextResponse.json({ ...notice, photos, photoCount: photos.length });
+  } catch (e) {
+    if (!isNoticePhotoTableMissing(e)) throw e;
+    return NextResponse.json({ ...notice, photos: [], photoCount: 0 });
+  }
 }
 
 export async function PATCH(
@@ -82,7 +98,20 @@ export async function PATCH(
       where: { id },
       data,
     });
-    return NextResponse.json(updated);
+    const sendPush = parseNoticeSendPushFlag(body, false);
+    if (!sendPush) {
+      return NextResponse.json(updated);
+    }
+    const authUser = await resolveAuthUser(req);
+    const push = await runNoticeCreatePush({
+      db: prisma,
+      noticeId: updated.id,
+      requested: true,
+      publishStartAt: updated.publishStartAt,
+      publishEndAt: updated.publishEndAt,
+      actorUserId: authUser?.userId ?? null,
+    });
+    return NextResponse.json({ ...updated, push });
   } catch (e) {
     if (e instanceof NoticeValidationError) {
       return NextResponse.json({ error: e.code, message: e.message }, { status: e.status });
@@ -101,6 +130,13 @@ export async function DELETE(
   if (!Number.isInteger(id) || id <= 0) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
+  const photoKeys = await listNoticePhotoStorageKeys(prisma, id);
   await prisma.notice.delete({ where: { id } });
-  return NextResponse.json({ ok: true });
+  const cleanup = await cleanupNoticePhotoBlobsBestEffort(photoKeys, {
+    noticeId: id,
+  });
+  return NextResponse.json({
+    ok: true,
+    ...(cleanup.failed.length > 0 ? { blobCleanupFailed: true } : {}),
+  });
 }

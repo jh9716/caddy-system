@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { resolveAuthFromCookieStore } from "@/lib/auth";
 import NewNoticeForm from "@/app/notice/new/ui/NewNoticeForm";
+import { listNoticePhotos } from "@/lib/noticePhoto";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -28,6 +29,7 @@ export default async function EditNoticePage({
       </div>
     );
   }
+  const photos = await listNoticePhotos(prisma, id);
 
   return (
     <div className="notice-page">
@@ -48,6 +50,7 @@ export default async function EditNoticePage({
           publishEndAt: notice.publishEndAt
             ? notice.publishEndAt.toISOString()
             : null,
+          photos,
         }}
       />
     </div>

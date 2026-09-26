@@ -31,6 +31,7 @@ export async function GET(req: NextRequest) {
       counts: preview.counts,
       canSend: preview.canSend,
       alreadySent: preview.alreadySent,
+      pushSentAt: preview.pushSentAt,
     });
   } catch (e) {
     if (e instanceof NoticePushError) {

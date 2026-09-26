@@ -3,6 +3,7 @@ import Link from "next/link";
 import dayjs from "dayjs";
 import { getRequestAuthUser } from "@/lib/getRequestAuthUser";
 import { loadNoticeViewer } from "@/lib/noticeAccess";
+import { isNoticePhotoTableMissing } from "@/lib/noticePhoto";
 import {
   formatNoticeTargetLabel,
   noticeListOrder,
@@ -18,20 +19,54 @@ export default async function NoticeListPage() {
   if (!auth) return null;
   const viewer = await loadNoticeViewer(prisma, auth);
 
-  const notices = await prisma.notice.findMany({
-    where: visibleNoticeWhere(viewer),
-    select: {
-      id: true,
-      title: true,
-      createdAt: true,
-      important: true,
-      pinned: true,
-      targetType: true,
-      targetValue: true,
-    },
-    orderBy: noticeListOrder(),
-    take: 80,
-  });
+  let notices: Array<{
+    id: number;
+    title: string;
+    createdAt: Date;
+    important: boolean;
+    pinned: boolean;
+    targetType: string;
+    targetValue: string | null;
+    photoCount: number;
+  }>;
+  try {
+    const rows = await prisma.notice.findMany({
+      where: visibleNoticeWhere(viewer),
+      select: {
+        id: true,
+        title: true,
+        createdAt: true,
+        important: true,
+        pinned: true,
+        targetType: true,
+        targetValue: true,
+        _count: { select: { photos: true } },
+      },
+      orderBy: noticeListOrder(),
+      take: 80,
+    });
+    notices = rows.map(({ _count, ...row }) => ({
+      ...row,
+      photoCount: _count.photos,
+    }));
+  } catch (e) {
+    if (!isNoticePhotoTableMissing(e)) throw e;
+    const rows = await prisma.notice.findMany({
+      where: visibleNoticeWhere(viewer),
+      select: {
+        id: true,
+        title: true,
+        createdAt: true,
+        important: true,
+        pinned: true,
+        targetType: true,
+        targetValue: true,
+      },
+      orderBy: noticeListOrder(),
+      take: 80,
+    });
+    notices = rows.map((row) => ({ ...row, photoCount: 0 }));
+  }
 
   return (
     <div className="notice-page">
@@ -51,6 +86,9 @@ export default async function NoticeListPage() {
               <div className="notice-list-title-row">
                 {n.important ? <span className="notice-badge notice-badge-important">중요</span> : null}
                 {n.pinned ? <span className="notice-badge notice-badge-pinned">고정</span> : null}
+                {n.photoCount > 0 ? (
+                  <span className="notice-badge notice-badge-photo">사진 {n.photoCount}</span>
+                ) : null}
                 <span className="notice-list-title">{n.title}</span>
               </div>
               <div className="notice-list-meta">

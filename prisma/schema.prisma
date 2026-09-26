@@ -193,9 +193,26 @@ model Notice {
   pushSentAt DateTime?
   /// 발송 admin User.id. FK 없음 (User 삭제와 이력 분리).
   pushSentByUserId Int?
+  /// 첨부 사진. Bytes는 private Blob. 기존 Notice row는 0장.
+  photos NoticePhoto[]
 
   @@index([pinned, important, createdAt])
   @@index([targetType, targetValue])
+}
+
+/// Notice Photo Upload V1. Bytes live in private object storage, not Postgres.
+/// public URL column 없음. CourseReportPhoto 와 동일 정책.
+model NoticePhoto {
+  id         Int      @id @default(autoincrement())
+  noticeId   Int
+  notice     Notice   @relation(fields: [noticeId], references: [id], onDelete: Cascade)
+  storageKey String   @unique
+  mimeType   String
+  size       Int
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  @@index([noticeId, sortOrder])
 }
 
 model User {

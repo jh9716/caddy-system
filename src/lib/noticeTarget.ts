@@ -207,11 +207,18 @@ export function noticeListOrder(): typeof NOTICE_LIST_ORDER {
   return NOTICE_LIST_ORDER;
 }
 
+const NOTICE_CADDY_TYPE_LABELS: Record<string, string> = {
+  HOUSE: "하우스",
+  THIRD: "3부반",
+  DRIVING: "드라이빙",
+};
+
 export function formatNoticeTargetLabel(notice: NoticeTargetFields): string {
   const t = String(notice.targetType ?? NOTICE_TARGET_ALL).trim().toUpperCase();
   if (t === NOTICE_TARGET_ALL) return "전체";
   if (t === NOTICE_TARGET_CADDY_TYPE) {
-    return `캐디구분 · ${notice.targetValue ?? ""}`;
+    const raw = String(notice.targetValue ?? "").trim().toUpperCase();
+    return `캐디구분 · ${NOTICE_CADDY_TYPE_LABELS[raw] ?? notice.targetValue ?? ""}`;
   }
   if (t === NOTICE_TARGET_TEAM) {
     return `조 · ${notice.targetValue ?? ""}`;

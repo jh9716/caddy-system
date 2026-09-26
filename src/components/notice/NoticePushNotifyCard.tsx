@@ -1,9 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import dayjs from "dayjs";
 import {
   NOTICE_PUSH_CONFIRM,
   NOTICE_PUSH_CONFIRM_UI,
+  NOTICE_PUSH_DONE_LABEL,
+  NOTICE_PUSH_SEND_BUTTON,
 } from "@/lib/noticeConstants";
 
 type Preview = {
@@ -18,6 +21,7 @@ type Preview = {
   };
   canSend: boolean;
   alreadySent: boolean;
+  pushSentAt: string | null;
 };
 
 type SendResult = {
@@ -30,7 +34,13 @@ type SendResult = {
   error?: string;
 };
 
-export default function NoticePushNotifyCard({ noticeId }: { noticeId: number }) {
+export default function NoticePushNotifyCard({
+  noticeId,
+  pushSentAt = null,
+}: {
+  noticeId: number;
+  pushSentAt?: string | null;
+}) {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
@@ -99,8 +109,10 @@ export default function NoticePushNotifyCard({ noticeId }: { noticeId: number })
     }
   }
 
+  const alreadySent = preview?.alreadySent === true || Boolean(pushSentAt);
+  const sentAt = preview?.pushSentAt ?? pushSentAt;
   const sendDisabled =
-    sending || loading || !preview?.canSend || preview?.alreadySent === true;
+    sending || loading || !preview?.canSend || alreadySent;
 
   return (
     <section className="notice-push" aria-label="푸시 알림">
@@ -113,19 +125,23 @@ export default function NoticePushNotifyCard({ noticeId }: { noticeId: number })
             알림 가능 {preview.counts.subscribedUsers}명 · 기기{" "}
             {preview.counts.subscriptions}대
           </p>
-          {preview.alreadySent ? (
-            <p className="notice-push-done">알림 발송 완료</p>
-          ) : null}
         </>
       ) : null}
-      <button
-        type="button"
-        className="ui-btn ui-btn-primary"
-        disabled={sendDisabled}
-        onClick={() => void onSend()}
-      >
-        {sending ? "보내는 중…" : "공지 알림 보내기"}
-      </button>
+      {alreadySent ? (
+        <p className="notice-push-done">
+          {NOTICE_PUSH_DONE_LABEL}
+          {sentAt ? ` · ${dayjs(sentAt).format("YYYY-MM-DD HH:mm")}` : ""}
+        </p>
+      ) : (
+        <button
+          type="button"
+          className="ui-btn ui-btn-primary"
+          disabled={sendDisabled}
+          onClick={() => void onSend()}
+        >
+          {sending ? "보내는 중…" : NOTICE_PUSH_SEND_BUTTON}
+        </button>
+      )}
       {result ? (
         <p className="notice-push-result" role="status">
           {result.error === "no_recipients"
