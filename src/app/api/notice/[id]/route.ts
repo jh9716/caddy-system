@@ -1,12 +1,17 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, resolveAuthUser } from "@/lib/auth";
 import {
   isNoticeAuthResponse,
   loadNoticeViewer,
   requireNoticeReader,
 } from "@/lib/noticeAccess";
+import {
+  parseNoticeSendPushFlag,
+  runNoticeCreatePush,
+} from "@/lib/noticeAutoPush";
+import { isNoticePhotoTableMissing, listNoticePhotos } from "@/lib/noticePhoto";
 import {
   NoticeValidationError,
   canViewNotice,
@@ -42,7 +47,13 @@ export async function GET(
   if (!canViewNotice(notice, viewer)) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
-  return NextResponse.json(notice);
+  try {
+    const photos = await listNoticePhotos(prisma, id);
+    return NextResponse.json({ ...notice, photos, photoCount: photos.length });
+  } catch (e) {
+    if (!isNoticePhotoTableMissing(e)) throw e;
+    return NextResponse.json({ ...notice, photos: [], photoCount: 0 });
+  }
 }
 
 export async function PATCH(
@@ -82,7 +93,20 @@ export async function PATCH(
       where: { id },
       data,
     });
-    return NextResponse.json(updated);
+    const sendPush = parseNoticeSendPushFlag(body, false);
+    if (!sendPush) {
+      return NextResponse.json(updated);
+    }
+    const authUser = await resolveAuthUser(req);
+    const push = await runNoticeCreatePush({
+      db: prisma,
+      noticeId: updated.id,
+      requested: true,
+      publishStartAt: updated.publishStartAt,
+      publishEndAt: updated.publishEndAt,
+      actorUserId: authUser?.userId ?? null,
+    });
+    return NextResponse.json({ ...updated, push });
   } catch (e) {
     if (e instanceof NoticeValidationError) {
       return NextResponse.json({ error: e.code, message: e.message }, { status: e.status });

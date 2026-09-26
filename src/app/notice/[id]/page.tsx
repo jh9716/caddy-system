@@ -8,7 +8,9 @@ import {
   canViewNotice,
   formatNoticeTargetLabel,
 } from "@/lib/noticeTarget";
+import { listNoticePhotos } from "@/lib/noticePhoto";
 import NoticeDetailActions from "@/components/notice/NoticeDetailActions";
+import NoticePhotoGallery from "@/components/notice/NoticePhotoGallery";
 import NoticePushNotifyCard from "@/components/notice/NoticePushNotifyCard";
 
 export const runtime = "nodejs";
@@ -35,6 +37,8 @@ export default async function NoticeDetailPage({
 
   const isAdmin = auth.role === "admin";
   const content = notice.content ?? "";
+  const photos = await listNoticePhotos(prisma, id);
+  const hasWindow = Boolean(notice.publishStartAt || notice.publishEndAt);
 
   return (
     <div className="notice-page notice-detail">
@@ -42,15 +46,36 @@ export default async function NoticeDetailPage({
         ← 목록
       </Link>
       <div className="notice-detail-badges">
-        {notice.important ? <span className="notice-badge notice-badge-important">중요</span> : null}
-        {notice.pinned ? <span className="notice-badge notice-badge-pinned">고정</span> : null}
+        {notice.important ? <span className="notice-badge notice-badge-important">중요공지</span> : null}
+        {notice.pinned ? <span className="notice-badge notice-badge-pinned">상단고정</span> : null}
       </div>
       <h1 className="ui-page-title">{notice.title}</h1>
-      <p className="notice-detail-meta">
-        {dayjs(notice.createdAt).format("YYYY-MM-DD HH:mm")}
-        <span> · {formatNoticeTargetLabel(notice)}</span>
-      </p>
+      <dl className="notice-detail-meta-list">
+        <div>
+          <dt>작성일</dt>
+          <dd>{dayjs(notice.createdAt).format("YYYY-MM-DD HH:mm")}</dd>
+        </div>
+        <div>
+          <dt>게시 대상</dt>
+          <dd>{formatNoticeTargetLabel(notice)}</dd>
+        </div>
+        {hasWindow ? (
+          <div>
+            <dt>게시 기간</dt>
+            <dd>
+              {notice.publishStartAt
+                ? dayjs(notice.publishStartAt).format("YYYY-MM-DD HH:mm")
+                : "시작 없음"}
+              {" ~ "}
+              {notice.publishEndAt
+                ? dayjs(notice.publishEndAt).format("YYYY-MM-DD HH:mm")
+                : "종료 없음"}
+            </dd>
+          </div>
+        ) : null}
+      </dl>
       <div className="notice-detail-body">{content || "내용이 없습니다."}</div>
+      <NoticePhotoGallery noticeId={id} photos={photos} />
       {isAdmin ? (
         <>
           <NoticeDetailActions id={id} />

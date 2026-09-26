@@ -19,14 +19,17 @@ export const NOTICE_CADDY_TYPES = ["HOUSE", "THIRD", "DRIVING"] as const;
 export type NoticeCaddyType = (typeof NOTICE_CADDY_TYPES)[number];
 
 export const NOTICE_PUSH_CONFIRM = "SEND_NOTICE_PUSH";
-export const NOTICE_PUSH_TITLE = "VERTHILL 공지";
+export const NOTICE_PUSH_TITLE = "VERTHILL 새 공지";
 export const NOTICE_PUSH_IMPORTANT_TITLE = "VERTHILL 중요 공지";
 export const NOTICE_PUSH_ALREADY_SENT_MESSAGE =
   "이 공지에는 이미 알림을 보냈습니다.";
 export const NOTICE_PUSH_OUTSIDE_WINDOW_MESSAGE =
   "게시 기간이 아닌 공지에는 알림을 보낼 수 없습니다.";
 export const NOTICE_PUSH_CONFIRM_UI =
-  "이 공지를 대상 캐디에게 알림으로 보냅니다.";
+  "이 공지를 대상 캐디에게 푸시 알림으로 보냅니다.";
+export const NOTICE_PUSH_SEND_BUTTON = "푸시 알림 보내기";
+export const NOTICE_CREATE_SEND_PUSH_LABEL = "등록과 동시에 푸시 알림 보내기";
+export const NOTICE_EDIT_SEND_PUSH_LABEL = "수정 내용 푸시 알림 보내기";
 
 export const NOTICE_PUSH_CONCURRENCY = 12;
 export const NOTICE_PUSH_AUDIT_ACTION = "NOTICE_PUSH_SEND";

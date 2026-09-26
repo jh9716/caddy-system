@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   NOTICE_PUSH_CONFIRM,
   NOTICE_PUSH_CONFIRM_UI,
+  NOTICE_PUSH_SEND_BUTTON,
 } from "@/lib/noticeConstants";
 
 type Preview = {
@@ -124,7 +125,7 @@ export default function NoticePushNotifyCard({ noticeId }: { noticeId: number })
         disabled={sendDisabled}
         onClick={() => void onSend()}
       >
-        {sending ? "보내는 중…" : "공지 알림 보내기"}
+        {sending ? "보내는 중…" : NOTICE_PUSH_SEND_BUTTON}
       </button>
       {result ? (
         <p className="notice-push-result" role="status">
