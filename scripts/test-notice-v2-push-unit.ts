@@ -310,11 +310,24 @@ async function main() {
     assert(!form.includes("다시 보내기"), "form has no resend copy");
     const photoLib = read("src/lib/noticePhoto.ts");
     assert(photoLib.includes("getCourseReportPhotoStore"), "notice photos reuse course-report store");
-    assert(photoLib.includes("await store.delete"), "photo delete calls blob store.delete");
-    assert(patch.includes("deleteNoticePhotoBlobs"), "notice DELETE cleans blobs first");
+    assert(photoLib.includes("cleanupNoticePhotoBlobsBestEffort"), "blob cleanup is best-effort");
+    const photoDeleteFn = photoLib.slice(
+      photoLib.indexOf("export async function deleteNoticePhoto"),
+      photoLib.indexOf("export async function loadNoticePhotoBytes")
+    );
     assert(
-      patch.indexOf("deleteNoticePhotoBlobs") < patch.indexOf("prisma.notice.delete"),
-      "blobs deleted before notice row"
+      photoDeleteFn.indexOf("db.noticePhoto.delete") <
+        photoDeleteFn.indexOf("cleanupNoticePhotoBlobsBestEffort"),
+      "individual delete removes DB row before blob cleanup"
+    );
+    assert(patch.includes("listNoticePhotoStorageKeys"), "notice DELETE reads keys first");
+    assert(patch.includes("cleanupNoticePhotoBlobsBestEffort"), "notice DELETE blob cleanup best-effort");
+    assert(
+      patch.indexOf("await listNoticePhotoStorageKeys") <
+        patch.indexOf("await prisma.notice.delete") &&
+        patch.indexOf("await prisma.notice.delete") <
+          patch.indexOf("await cleanupNoticePhotoBlobsBestEffort"),
+      "notice row deleted before blob cleanup"
     );
     assert(NOTICE_PUSH_SEND_BUTTON === "공지 푸시 알림 보내기", "manual send copy");
     assert(NOTICE_PUSH_DONE_LABEL === "푸시 발송 완료", "sent copy");

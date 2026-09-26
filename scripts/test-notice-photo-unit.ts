@@ -17,6 +17,8 @@ import {
   setCourseReportPhotoStoreForTests,
 } from "../src/lib/courseReportPhotoStorage";
 import { NOTICE_PHOTO_MAX } from "../src/lib/noticePhotoConstants";
+import { deleteNoticePhoto } from "../src/lib/noticePhoto";
+import { CourseReportPhotoStorageError } from "../src/lib/courseReportPhotoStorage";
 import {
   DELETE as DELETE_NOTICE,
   GET as GET_NOTICE,
@@ -64,6 +66,19 @@ async function cookieFor(user: {
 
 function req(url: string, init?: ConstructorParameters<typeof NextRequest>[1]) {
   return new NextRequest(url, init);
+}
+
+function adminAuth(user: { id: number; username: string }) {
+  return {
+    session: {} as never,
+    userId: user.id,
+    username: user.username,
+    role: "admin" as const,
+    sessionVersion: 0,
+    caddyId: null,
+    managedTeams: [] as string[],
+    mustChangePassword: false,
+  };
 }
 
 function jpegBytes(extra = 32, mark = 0): Uint8Array {
@@ -328,6 +343,200 @@ async function main() {
         (await prisma.noticePhoto.count({ where: { noticeId: createdJson.id } })) === before,
         "failed upload leaves no extra row"
       );
+      setCourseReportPhotoStoreForTests(inner);
+    }
+
+    section("DB delete first; blob cleanup best-effort");
+    {
+      const inner = getCourseReportPhotoStore();
+      const auth = adminAuth(uAdmin);
+
+      const rowFail = await POST_NOTICE(
+        req("https://www.verthill.kr/api/notice", {
+          method: "POST",
+          headers: { cookie: adminCookie, "content-type": "application/json" },
+          body: JSON.stringify({ title: `${tag}-row-fail`, content: "keep" }),
+        })
+      );
+      const rowFailJson = await rowFail.json();
+      noticeIds.push(rowFailJson.id);
+      const rowFailUp = await postPhoto(adminCookie, rowFailJson.id, jpegBytes(32, 31));
+      const rowFailPhoto = await rowFailUp.json();
+      const rowFailRow = await prisma.noticePhoto.findUnique({
+        where: { id: rowFailPhoto.photo.id },
+      });
+      const rowFailKey = rowFailRow?.storageKey ?? "";
+      let photoBlobDeletes = 0;
+      setCourseReportPhotoStoreForTests({
+        configured: true,
+        put: (key, bytes, mime) => inner.put(key, bytes, mime),
+        get: (key) => inner.get(key),
+        async delete(key) {
+          photoBlobDeletes += 1;
+          return inner.delete(key);
+        },
+      });
+      const origPhotoDelete = prisma.noticePhoto.delete.bind(prisma.noticePhoto);
+      prisma.noticePhoto.delete = (async () => {
+        throw new Error("forced_photo_delete_fail");
+      }) as typeof prisma.noticePhoto.delete;
+      try {
+        await deleteNoticePhoto(prisma, {
+          noticeId: rowFailJson.id,
+          photoId: rowFailPhoto.photo.id,
+          auth,
+        });
+        assert(false, "photo row delete fail should throw");
+      } catch (e) {
+        assert(
+          e instanceof Error && e.message === "forced_photo_delete_fail",
+          "photo DB delete failed"
+        );
+      } finally {
+        prisma.noticePhoto.delete = origPhotoDelete;
+      }
+      assert(photoBlobDeletes === 0, "photo DB delete fail: blob delete 0");
+      assert((await inner.get(rowFailKey)) != null, "photo DB delete fail keeps blob");
+      assert(
+        (await prisma.noticePhoto.findUnique({ where: { id: rowFailPhoto.photo.id } })) != null,
+        "photo DB delete fail keeps row"
+      );
+
+      const noticeFail = await POST_NOTICE(
+        req("https://www.verthill.kr/api/notice", {
+          method: "POST",
+          headers: { cookie: adminCookie, "content-type": "application/json" },
+          body: JSON.stringify({ title: `${tag}-notice-fail`, content: "keep" }),
+        })
+      );
+      const noticeFailJson = await noticeFail.json();
+      noticeIds.push(noticeFailJson.id);
+      const noticeFailUp = await postPhoto(adminCookie, noticeFailJson.id, jpegBytes(32, 32));
+      const noticeFailPhoto = await noticeFailUp.json();
+      const noticeFailRow = await prisma.noticePhoto.findUnique({
+        where: { id: noticeFailPhoto.photo.id },
+      });
+      const noticeFailKey = noticeFailRow?.storageKey ?? "";
+      let noticeBlobDeletes = 0;
+      setCourseReportPhotoStoreForTests({
+        configured: true,
+        put: (key, bytes, mime) => inner.put(key, bytes, mime),
+        get: (key) => inner.get(key),
+        async delete(key) {
+          noticeBlobDeletes += 1;
+          return inner.delete(key);
+        },
+      });
+      const origNoticeDelete = prisma.notice.delete.bind(prisma.notice);
+      prisma.notice.delete = (async () => {
+        throw new Error("forced_notice_delete_fail");
+      }) as typeof prisma.notice.delete;
+      try {
+        await DELETE_NOTICE(
+          req(`https://www.verthill.kr/api/notice/${noticeFailJson.id}`, {
+            method: "DELETE",
+            headers: { cookie: adminCookie },
+          }),
+          { params: { id: String(noticeFailJson.id) } }
+        );
+        assert(false, "notice DB delete fail should throw");
+      } catch (e) {
+        assert(
+          e instanceof Error && e.message === "forced_notice_delete_fail",
+          "notice DB delete failed"
+        );
+      } finally {
+        prisma.notice.delete = origNoticeDelete;
+      }
+      assert(noticeBlobDeletes === 0, "notice DB delete fail: blob delete 0");
+      assert((await inner.get(noticeFailKey)) != null, "notice DB delete fail keeps blob");
+      assert(
+        (await prisma.notice.findUnique({ where: { id: noticeFailJson.id } })) != null,
+        "notice DB delete fail keeps notice"
+      );
+      assert(
+        (await prisma.noticePhoto.findUnique({ where: { id: noticeFailPhoto.photo.id } })) != null,
+        "notice DB delete fail keeps photo row"
+      );
+
+      const blobFail = await POST_NOTICE(
+        req("https://www.verthill.kr/api/notice", {
+          method: "POST",
+          headers: { cookie: adminCookie, "content-type": "application/json" },
+          body: JSON.stringify({ title: `${tag}-blob-fail`, content: "gone-row" }),
+        })
+      );
+      const blobFailJson = await blobFail.json();
+      noticeIds.push(blobFailJson.id);
+      const blobFailUp = await postPhoto(adminCookie, blobFailJson.id, jpegBytes(32, 33));
+      const blobFailPhoto = await blobFailUp.json();
+      const blobFailRow = await prisma.noticePhoto.findUnique({
+        where: { id: blobFailPhoto.photo.id },
+      });
+      const blobFailKey = blobFailRow?.storageKey ?? "";
+      setCourseReportPhotoStoreForTests({
+        configured: true,
+        put: (key, bytes, mime) => inner.put(key, bytes, mime),
+        get: (key) => inner.get(key),
+        async delete() {
+          throw new CourseReportPhotoStorageError(
+            "storage_delete_failed",
+            "forced_blob_delete_fail",
+            502
+          );
+        },
+      });
+      const photoDel = await deleteNoticePhoto(prisma, {
+        noticeId: blobFailJson.id,
+        photoId: blobFailPhoto.photo.id,
+        auth,
+      });
+      assert(photoDel.blobCleanupFailed === true, "photo blob cleanup failure reported");
+      assert(
+        (await prisma.noticePhoto.findUnique({ where: { id: blobFailPhoto.photo.id } })) == null,
+        "photo DB delete kept after blob fail"
+      );
+      assert((await inner.get(blobFailKey)) != null, "failed blob cleanup leaves orphan object");
+
+      const noticeBlobFail = await POST_NOTICE(
+        req("https://www.verthill.kr/api/notice", {
+          method: "POST",
+          headers: { cookie: adminCookie, "content-type": "application/json" },
+          body: JSON.stringify({ title: `${tag}-notice-blob-fail`, content: "gone" }),
+        })
+      );
+      const noticeBlobFailJson = await noticeBlobFail.json();
+      noticeIds.push(noticeBlobFailJson.id);
+      const noticeBlobFailUp = await postPhoto(
+        adminCookie,
+        noticeBlobFailJson.id,
+        jpegBytes(32, 34)
+      );
+      const noticeBlobFailPhoto = await noticeBlobFailUp.json();
+      const noticeBlobFailRow = await prisma.noticePhoto.findUnique({
+        where: { id: noticeBlobFailPhoto.photo.id },
+      });
+      const noticeBlobFailKey = noticeBlobFailRow?.storageKey ?? "";
+      const gone = await DELETE_NOTICE(
+        req(`https://www.verthill.kr/api/notice/${noticeBlobFailJson.id}`, {
+          method: "DELETE",
+          headers: { cookie: adminCookie },
+        }),
+        { params: { id: String(noticeBlobFailJson.id) } }
+      );
+      const goneJson = await gone.json();
+      assert(gone.status === 200, "notice delete 200 when blob cleanup fails");
+      assert(goneJson.ok === true, "notice delete ok despite blob cleanup fail");
+      assert(goneJson.blobCleanupFailed === true, "notice blob cleanup failure reported");
+      assert(
+        (await prisma.notice.findUnique({ where: { id: noticeBlobFailJson.id } })) == null,
+        "notice DB delete kept after blob fail"
+      );
+      assert(
+        (await prisma.noticePhoto.count({ where: { noticeId: noticeBlobFailJson.id } })) === 0,
+        "notice delete still removes photo rows"
+      );
+      assert((await inner.get(noticeBlobFailKey)) != null, "notice blob orphan remains after fail");
       setCourseReportPhotoStoreForTests(inner);
     }
 
