@@ -43,6 +43,12 @@ import { GET as GET_PREVIEW } from "../src/app/api/push/notice-preview/route";
 import { POST as POST_SEND } from "../src/app/api/push/notice-send/route";
 import { GET as GET_SUMMARY } from "../src/app/api/summary/route";
 import { shouldUseManageShellForNotice } from "../src/lib/boardNav";
+import {
+  decideNoticeAutoPush,
+  parseNoticeSendPushFlag,
+  runNoticeCreatePush,
+  setNoticeCreatePushSenderForTests,
+} from "../src/lib/noticeAutoPush";
 
 let passed = 0;
 let failed = 0;
@@ -287,12 +293,20 @@ async function main() {
     assert(!schema.includes("model NoticeComment"), "no comments table");
     assert(!schema.includes("model NoticeRecipient"), "no recipient table");
     assert(!schema.includes("model NotificationDelivery"), "no NotificationDelivery");
+    assert(schema.includes("model NoticePhoto"), "NoticePhoto additive model");
+    assert(NOTICE_PUSH_TITLE === "VERTHILL 새 공지", "push title is 새 공지");
+    const form = read("src/app/notice/new/ui/NewNoticeForm.tsx");
+    assert(form.includes("useState(mode !== 'edit')"), "create sendPush defaults on");
+    assert(form.includes("NOTICE_EDIT_SEND_PUSH_LABEL"), "edit sendPush is explicit");
+    const autoPush = read("src/lib/noticeAutoPush.ts");
+    assert(!autoPush.includes("cron"), "auto push has no cron");
     const mig = read("prisma/migrations/20260918120000_notice_v2/migration.sql");
     assert(!/\bDROP\s+(TABLE|COLUMN|INDEX)\b/i.test(mig), "migration no DROP");
     assert(mig.includes("ADD COLUMN"), "additive ADD COLUMN");
     const card = read("src/components/notice/NoticePushNotifyCard.tsx");
     assert(card.includes("window.confirm"), "one confirm dialog");
     assert(card.includes("NOTICE_PUSH_CONFIRM_UI"), "confirm copy");
+    assert(card.includes("NOTICE_PUSH_SEND_BUTTON"), "manual button uses 푸시 알림 보내기");
     const alimtalkTouched = [
       "src/lib/alimtalkPublishedFreshness.ts",
       "src/lib/autoAssignEngine.ts",
@@ -949,6 +963,106 @@ async function main() {
       assert(false, "userIds should be rejected");
     } catch (e) {
       assert((e as { code?: string }).code === "invalid_target", "arbitrary userIds rejected");
+    }
+
+    section("26 auto-push gates");
+    {
+      assert(parseNoticeSendPushFlag({}, false) === false, "omit sendPush is off");
+      assert(parseNoticeSendPushFlag({ sendPush: true }, false) === true, "sendPush true");
+      assert(
+        decideNoticeAutoPush({ requested: false }).send === false,
+        "auto off does not send"
+      );
+      assert(
+        decideNoticeAutoPush({
+          requested: true,
+          publishStartAt: new Date(Date.now() + 86400000),
+        }).send === false,
+        "future start skips immediate send"
+      );
+      assert(
+        decideNoticeAutoPush({ requested: true, publishStartAt: null }).send === true,
+        "immediate notice can send"
+      );
+
+      let calls = 0;
+      setNoticeCreatePushSenderForTests(async () => {
+        calls += 1;
+        return {
+          ok: true,
+          recipients: 1,
+          subscriptions: 1,
+          sent: 1,
+          failed: 0,
+          removedStale: 0,
+        };
+      });
+
+      const failCreate = await postNotice(adminCookie, { title: "   ", content: "x" });
+      assert(failCreate.status === 400, "invalid create rejected");
+      assert(calls === 0, "failed create does not push");
+
+      const offCreate = await postNotice(adminCookie, {
+        title: `${tag}-nopush`,
+        content: "off",
+        sendPush: false,
+      });
+      const offJson = await offCreate.json();
+      noticeIds.push(offJson.id);
+      assert(offCreate.status === 200, "create without push ok");
+      assert(offJson.push?.skipped === "disabled", "sendPush false skipped");
+      assert(calls === 0, "auto push off: 0 sends");
+
+      const futureCreate = await postNotice(adminCookie, {
+        title: `${tag}-future-push`,
+        content: "later",
+        sendPush: true,
+        publishStartAt: new Date(Date.now() + 86400000).toISOString(),
+      });
+      const futureJson = await futureCreate.json();
+      noticeIds.push(futureJson.id);
+      assert(futureJson.push?.skipped === "scheduled", "future start skips push");
+      assert(calls === 0, "scheduled create: 0 sends");
+
+      const onCreate = await postNotice(adminCookie, {
+        title: `${tag}-autopush`,
+        content: "now",
+        sendPush: true,
+      });
+      const onJson = await onCreate.json();
+      noticeIds.push(onJson.id);
+      assert(onCreate.status === 200, "create with push ok");
+      assert(calls === 1, "successful create then one push");
+      assert(onJson.push?.attempted === true, "push attempted after save");
+
+      const patchOnly = await patchNotice(adminCookie, offJson.id, {
+        title: `${tag}-patched-only`,
+      });
+      assert(patchOnly.status === 200, "patch without sendPush ok");
+      assert(calls === 1, "edit does not auto-resend");
+
+      const patchSend = await patchNotice(adminCookie, offJson.id, {
+        title: `${tag}-patched-send`,
+        sendPush: true,
+      });
+      const patchJson = await patchSend.json();
+      assert(calls === 2, "explicit edit sendPush calls send");
+      assert(patchJson.push?.attempted === true, "edit explicit push attempted");
+
+      const failPush = await runNoticeCreatePush({
+        db: prisma,
+        noticeId: offJson.id,
+        requested: true,
+        actorUserId: uAdmin.id,
+        send: async () => {
+          throw new Error("boom");
+        },
+      });
+      const stillThere = await prisma.notice.findUnique({ where: { id: offJson.id } });
+      assert(failPush.ok === false, "push failure reported");
+      assert(stillThere?.title === `${tag}-patched-send`, "push failure does not rollback notice");
+
+      setNoticeCreatePushSenderForTests(null);
     }
   } finally {
     if (subIds.length) {

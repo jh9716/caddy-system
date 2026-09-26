@@ -1,0 +1,264 @@
+/**
+ * Notice photo upload. local caddy_local only. Blob mocked.
+ * 실행: npm run test:notice-photo-unit
+ */
+import { NextRequest } from "next/server";
+import bcrypt from "bcryptjs";
+import { prisma } from "../src/lib/prisma";
+import {
+  SESSION_COOKIE_NAME,
+  buildSessionClaims,
+  signSessionClaims,
+} from "../src/lib/sessionCookies";
+import { assertLocalDatabaseUrl } from "./assertLocalDatabaseUrl";
+import {
+  createMemoryCourseReportPhotoStore,
+  setCourseReportPhotoStoreForTests,
+} from "../src/lib/courseReportPhotoStorage";
+import { NOTICE_PHOTO_MAX } from "../src/lib/noticePhotoConstants";
+import { GET as GET_NOTICE, PATCH as PATCH_NOTICE } from "../src/app/api/notice/[id]/route";
+import { POST as POST_NOTICE } from "../src/app/api/notice/route";
+import { POST as POST_PHOTO } from "../src/app/api/notice/[id]/photos/route";
+import {
+  GET as GET_PHOTO,
+  DELETE as DELETE_PHOTO,
+} from "../src/app/api/notice/[id]/photos/[photoId]/route";
+
+let passed = 0;
+let failed = 0;
+
+function assert(cond: unknown, msg: string) {
+  if (cond) {
+    passed++;
+    console.log("  ✓", msg);
+  } else {
+    failed++;
+    console.error("  ✗", msg);
+  }
+}
+
+function section(title: string) {
+  console.log("\n==", title, "==");
+}
+
+async function cookieFor(user: {
+  id: number | null;
+  username: string;
+  role: "admin" | "caddy" | "leader";
+  sessionVersion: number;
+}) {
+  return `${SESSION_COOKIE_NAME}=${await signSessionClaims(
+    buildSessionClaims({
+      userId: user.id,
+      username: user.username,
+      role: user.role,
+      sessionVersion: user.sessionVersion,
+    })
+  )}`;
+}
+
+function req(url: string, init?: ConstructorParameters<typeof NextRequest>[1]) {
+  return new NextRequest(url, init);
+}
+
+function jpegBytes(extra = 32, mark = 0): Uint8Array {
+  const out = new Uint8Array(Math.max(5, 4 + extra));
+  out.set([0xff, 0xd8, 0xff, 0xe0], 0);
+  out[4] = mark;
+  return out;
+}
+
+async function postPhoto(cookie: string, noticeId: number, bytes: Uint8Array) {
+  const form = new FormData();
+  form.append("file", new Blob([bytes], { type: "image/jpeg" }), "n.jpg");
+  return POST_PHOTO(
+    req(`https://www.verthill.kr/api/notice/${noticeId}/photos`, {
+      method: "POST",
+      headers: cookie ? { cookie } : {},
+      body: form,
+    }),
+    { params: { id: String(noticeId) } }
+  );
+}
+
+async function main() {
+  assertLocalDatabaseUrl(process.env.DATABASE_URL);
+  const prevSecret = process.env.SESSION_SECRET;
+  process.env.SESSION_SECRET = "notice-photo-unit-secret-32chars!!!";
+  setCourseReportPhotoStoreForTests(createMemoryCourseReportPhotoStore());
+
+  const tag = `np_${Date.now()}`;
+  const hash = await bcrypt.hash("x", 4);
+  const caddyIds: number[] = [];
+  const userIds: number[] = [];
+  const noticeIds: number[] = [];
+
+  try {
+    const house = await prisma.caddy.create({
+      data: {
+        name: `${tag}-house`,
+        team: "1조",
+        teamOrder: 1,
+        caddyType: "HOUSE",
+        employmentStatus: "ACTIVE",
+      },
+    });
+    caddyIds.push(house.id);
+    const uAdmin = await prisma.user.create({
+      data: { username: `${tag}-admin`, password: hash, role: "admin" },
+    });
+    const uCaddy = await prisma.user.create({
+      data: {
+        username: `${tag}-caddy`,
+        password: hash,
+        role: "caddy",
+        caddyId: house.id,
+      },
+    });
+    userIds.push(uAdmin.id, uCaddy.id);
+    const adminCookie = await cookieFor({ ...uAdmin, role: "admin" });
+    const caddyCookie = await cookieFor({ ...uCaddy, role: "caddy" });
+
+    const created = await POST_NOTICE(
+      req("https://www.verthill.kr/api/notice", {
+        method: "POST",
+        headers: { cookie: adminCookie, "content-type": "application/json" },
+        body: JSON.stringify({ title: `${tag}-plain`, content: "no photo" }),
+      })
+    );
+    const createdJson = await created.json();
+    noticeIds.push(createdJson.id);
+
+    section("existing notice without photos");
+    {
+      const detail = await GET_NOTICE(
+        req(`https://www.verthill.kr/api/notice/${createdJson.id}`, {
+          headers: { cookie: adminCookie },
+        }),
+        { params: { id: String(createdJson.id) } }
+      );
+      const body = await detail.json();
+      assert(detail.status === 200, "notice without photos still 200");
+      assert(Array.isArray(body.photos) && body.photos.length === 0, "photos []");
+      assert(body.photoCount === 0, "photoCount 0");
+    }
+
+    section("admin upload / caddy blocked");
+    {
+      const denied = await postPhoto(caddyCookie, createdJson.id, jpegBytes());
+      assert(denied.status === 403, "caddy cannot upload notice photo");
+      const unauth = await postPhoto("", createdJson.id, jpegBytes());
+      assert(unauth.status === 401, "unauth cannot upload");
+
+      const first = await postPhoto(adminCookie, createdJson.id, jpegBytes(32, 1));
+      const firstJson = await first.json();
+      assert(first.status === 200, "admin upload 200");
+      assert(firstJson.photo?.id > 0, "photo id returned");
+
+      const got = await GET_PHOTO(
+        req(
+          `https://www.verthill.kr/api/notice/${createdJson.id}/photos/${firstJson.photo.id}`,
+          { headers: { cookie: caddyCookie } }
+        ),
+        { params: { id: String(createdJson.id), photoId: String(firstJson.photo.id) } }
+      );
+      assert(got.status === 200, "caddy can read visible notice photo");
+      assert(got.headers.get("content-type") === "image/jpeg", "jpeg content-type");
+
+      const delDenied = await DELETE_PHOTO(
+        req(
+          `https://www.verthill.kr/api/notice/${createdJson.id}/photos/${firstJson.photo.id}`,
+          { method: "DELETE", headers: { cookie: caddyCookie } }
+        ),
+        { params: { id: String(createdJson.id), photoId: String(firstJson.photo.id) } }
+      );
+      assert(delDenied.status === 403, "caddy cannot delete notice photo");
+    }
+
+    section("multi photo + limit");
+    {
+      await postPhoto(adminCookie, createdJson.id, jpegBytes(32, 2));
+      const third = await postPhoto(adminCookie, createdJson.id, jpegBytes(32, 3));
+      assert(third.status === 200, "third photo ok");
+      const fourth = await postPhoto(adminCookie, createdJson.id, jpegBytes(32, 4));
+      assert(fourth.status === 409, `over ${NOTICE_PHOTO_MAX} rejected`);
+      const detail = await GET_NOTICE(
+        req(`https://www.verthill.kr/api/notice/${createdJson.id}`, {
+          headers: { cookie: adminCookie },
+        }),
+        { params: { id: String(createdJson.id) } }
+      );
+      const body = await detail.json();
+      assert(body.photos.length === 3, "three photos listed");
+      assert(body.photoCount === 3, "photoCount 3");
+    }
+
+    section("future notice photo hidden from caddy");
+    {
+      const future = await POST_NOTICE(
+        req("https://www.verthill.kr/api/notice", {
+          method: "POST",
+          headers: { cookie: adminCookie, "content-type": "application/json" },
+          body: JSON.stringify({
+            title: `${tag}-future`,
+            content: "later",
+            publishStartAt: new Date(Date.now() + 86400000).toISOString(),
+          }),
+        })
+      );
+      const futureJson = await future.json();
+      noticeIds.push(futureJson.id);
+      const up = await postPhoto(adminCookie, futureJson.id, jpegBytes(32, 9));
+      const upJson = await up.json();
+      const hidden = await GET_PHOTO(
+        req(
+          `https://www.verthill.kr/api/notice/${futureJson.id}/photos/${upJson.photo.id}`,
+          { headers: { cookie: caddyCookie } }
+        ),
+        { params: { id: String(futureJson.id), photoId: String(upJson.photo.id) } }
+      );
+      assert(hidden.status === 404, "caddy cannot read future notice photo");
+    }
+
+    section("patch without sendPush keeps photos");
+    {
+      const patch = await PATCH_NOTICE(
+        req(`https://www.verthill.kr/api/notice/${createdJson.id}`, {
+          method: "PATCH",
+          headers: { cookie: adminCookie, "content-type": "application/json" },
+          body: JSON.stringify({ title: `${tag}-plain-edited` }),
+        }),
+        { params: { id: String(createdJson.id) } }
+      );
+      assert(patch.status === 200, "patch ok");
+      const after = await GET_NOTICE(
+        req(`https://www.verthill.kr/api/notice/${createdJson.id}`, {
+          headers: { cookie: adminCookie },
+        }),
+        { params: { id: String(createdJson.id) } }
+      );
+      const body = await after.json();
+      assert(body.photos.length === 3, "photos survive text patch");
+    }
+  } finally {
+    setCourseReportPhotoStoreForTests(null);
+    if (noticeIds.length) {
+      await prisma.notice.deleteMany({ where: { id: { in: noticeIds } } }).catch(() => undefined);
+    }
+    if (userIds.length) {
+      await prisma.user.deleteMany({ where: { id: { in: userIds } } }).catch(() => undefined);
+    }
+    if (caddyIds.length) {
+      await prisma.caddy.deleteMany({ where: { id: { in: caddyIds } } }).catch(() => undefined);
+    }
+    process.env.SESSION_SECRET = prevSecret;
+  }
+
+  console.log(`\n${passed} passed, ${failed} failed`);
+  if (failed > 0) process.exit(1);
+}
+
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
