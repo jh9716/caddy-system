@@ -12,8 +12,9 @@ import {
   runNoticeCreatePush,
 } from "@/lib/noticeAutoPush";
 import {
-  deleteNoticePhotoBlobs,
+  cleanupNoticePhotoBlobsBestEffort,
   isNoticePhotoTableMissing,
+  listNoticePhotoStorageKeys,
   listNoticePhotos,
 } from "@/lib/noticePhoto";
 import {
@@ -129,7 +130,13 @@ export async function DELETE(
   if (!Number.isInteger(id) || id <= 0) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
-  await deleteNoticePhotoBlobs(prisma, id);
+  const photoKeys = await listNoticePhotoStorageKeys(prisma, id);
   await prisma.notice.delete({ where: { id } });
-  return NextResponse.json({ ok: true });
+  const cleanup = await cleanupNoticePhotoBlobsBestEffort(photoKeys, {
+    noticeId: id,
+  });
+  return NextResponse.json({
+    ok: true,
+    ...(cleanup.failed.length > 0 ? { blobCleanupFailed: true } : {}),
+  });
 }

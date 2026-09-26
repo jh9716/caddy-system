@@ -89,8 +89,11 @@ export async function DELETE(
   }
 
   try {
-    await deleteNoticePhoto(prisma, { noticeId, photoId, auth });
-    return NextResponse.json({ ok: true });
+    const result = await deleteNoticePhoto(prisma, { noticeId, photoId, auth });
+    return NextResponse.json({
+      ok: true,
+      ...(result.blobCleanupFailed ? { blobCleanupFailed: true } : {}),
+    });
   } catch (e) {
     if (e instanceof CourseReportPhotoValidationError || e instanceof CourseReportPhotoStorageError) {
       return NextResponse.json({ error: e.code, message: e.message }, { status: e.status });

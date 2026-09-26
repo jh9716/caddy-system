@@ -175,33 +175,43 @@ export async function uploadNoticePhoto(
   return toNoticePhotoPublic(row);
 }
 
-export async function deleteNoticePhotoBlobs(
+export async function listNoticePhotoStorageKeys(
   db: PrismaClient,
   noticeId: number
 ): Promise<string[]> {
-  let rows: NoticePhoto[] = [];
   try {
-    rows = await db.noticePhoto.findMany({ where: { noticeId } });
+    const rows = await db.noticePhoto.findMany({
+      where: { noticeId },
+      select: { storageKey: true },
+    });
+    return rows.map((row) => row.storageKey);
   } catch (e) {
     if (isNoticePhotoTableMissing(e)) return [];
     throw e;
   }
+}
+
+export async function cleanupNoticePhotoBlobsBestEffort(
+  keys: string[],
+  context?: { noticeId?: number; photoId?: number }
+): Promise<{ failed: string[] }> {
   const store = getCourseReportPhotoStore();
-  const keys = rows.map((row) => row.storageKey);
-  if (!store.configured) return keys;
-  for (const key of keys) {
+  if (!store.configured) return { failed: [] };
+  const failed: string[] = [];
+  for (const storageKey of keys) {
     try {
-      await store.delete(key);
+      await store.delete(storageKey);
     } catch (e) {
-      if (e instanceof CourseReportPhotoStorageError) throw e;
-      throw new CourseReportPhotoStorageError(
-        "storage_delete_failed",
-        "사진 저장소 삭제에 실패했습니다.",
-        502
-      );
+      failed.push(storageKey);
+      console.error("[notice-photo] orphan blob cleanup failed", {
+        noticeId: context?.noticeId ?? null,
+        photoId: context?.photoId ?? null,
+        storageKey,
+        error: e instanceof Error ? e.message : String(e ?? ""),
+      });
     }
   }
-  return keys;
+  return { failed };
 }
 
 export async function deleteNoticePhoto(
@@ -211,7 +221,7 @@ export async function deleteNoticePhoto(
     photoId: number;
     auth: ResolvedAuthUser;
   }
-): Promise<void> {
+): Promise<{ blobCleanupFailed: boolean }> {
   if (!canManageNoticePhotos(input.auth.role)) {
     throw new CourseReportPhotoValidationError("forbidden", "사진을 삭제할 수 없습니다.", 403);
   }
@@ -231,26 +241,18 @@ export async function deleteNoticePhoto(
     throw new CourseReportPhotoValidationError("not_found", "사진을 찾을 수 없습니다.", 404);
   }
 
-  const store = getCourseReportPhotoStore();
-  if (store.configured) {
-    try {
-      await store.delete(photo.storageKey);
-    } catch (e) {
-      if (e instanceof CourseReportPhotoStorageError) throw e;
-      throw new CourseReportPhotoStorageError(
-        "storage_delete_failed",
-        "사진 저장소 삭제에 실패했습니다.",
-        502
-      );
-    }
-  }
-
   try {
     await db.noticePhoto.delete({ where: { id: photo.id } });
   } catch (e) {
     if (isNoticePhotoTableMissing(e)) photoTableNotReady();
     throw e;
   }
+
+  const cleanup = await cleanupNoticePhotoBlobsBestEffort([photo.storageKey], {
+    noticeId: input.noticeId,
+    photoId: input.photoId,
+  });
+  return { blobCleanupFailed: cleanup.failed.length > 0 };
 }
 
 export async function loadNoticePhotoBytes(
