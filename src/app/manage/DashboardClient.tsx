@@ -1,6 +1,7 @@
 // src/app/manage/DashboardClient.tsx
 'use client';
 import { useEffect, useState } from 'react';
+import { formatKstDisplay } from '@/lib/kstDate';
 
 type Summary = {
   date: string
@@ -57,7 +58,7 @@ export default function DashboardClient() {
                     {n.title}
                   </a>
                   <span style={{ marginLeft: 8, fontSize: 12, color: '#94a3b8' }}>
-                    {new Date(n.createdAt).toLocaleString()}
+                    {formatKstDisplay(n.createdAt, "ymd-hm")}
                   </span>
                 </li>
               ))}

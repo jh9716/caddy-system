@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import dayjs from "dayjs";
+import { formatKstDisplay } from "@/lib/kstDate";
 import {
   NOTICE_PUSH_CONFIRM,
   NOTICE_PUSH_CONFIRM_UI,
@@ -130,7 +130,7 @@ export default function NoticePushNotifyCard({
       {alreadySent ? (
         <p className="notice-push-done">
           {NOTICE_PUSH_DONE_LABEL}
-          {sentAt ? ` · ${dayjs(sentAt).format("YYYY-MM-DD HH:mm")}` : ""}
+          {sentAt ? ` · ${formatKstDisplay(sentAt, "ymd-hm")}` : ""}
         </p>
       ) : (
         <button

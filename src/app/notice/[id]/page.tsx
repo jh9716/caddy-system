@@ -1,8 +1,8 @@
 import { prisma } from "@/lib/prisma";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import dayjs from "dayjs";
 import { getRequestAuthUser } from "@/lib/getRequestAuthUser";
+import { formatKstDisplay } from "@/lib/kstDate";
 import { loadNoticeViewer } from "@/lib/noticeAccess";
 import {
   canViewNotice,
@@ -53,7 +53,7 @@ export default async function NoticeDetailPage({
       <dl className="notice-detail-meta-list">
         <div>
           <dt>작성일</dt>
-          <dd>{dayjs(notice.createdAt).format("YYYY-MM-DD HH:mm")}</dd>
+          <dd>{formatKstDisplay(notice.createdAt, "ymd-hm")}</dd>
         </div>
         <div>
           <dt>게시 대상</dt>
@@ -64,11 +64,11 @@ export default async function NoticeDetailPage({
             <dt>게시 기간</dt>
             <dd>
               {notice.publishStartAt
-                ? dayjs(notice.publishStartAt).format("YYYY-MM-DD HH:mm")
+                ? formatKstDisplay(notice.publishStartAt, "ymd-hm")
                 : "시작 없음"}
               {" ~ "}
               {notice.publishEndAt
-                ? dayjs(notice.publishEndAt).format("YYYY-MM-DD HH:mm")
+                ? formatKstDisplay(notice.publishEndAt, "ymd-hm")
                 : "종료 없음"}
             </dd>
           </div>

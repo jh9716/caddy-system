@@ -243,6 +243,8 @@ async function main() {
     }
     const core = read("src/lib/noticePush.ts");
     assert(core.includes("deliverWebPushMappings"), "reuses delivery helper");
+    assert(core.includes("selectNoticeWebPushMappings"), "filters android web when native exists");
+    assert(core.includes("noticePushChannel"), "reuses channel helper");
     assert(core.includes("pg_advisory_xact_lock"), "advisory lock");
     assert(core.includes("pushSentAt"), "claim uses pushSentAt");
     assert(
@@ -276,6 +278,17 @@ async function main() {
       assert(!src.includes("VERTHILL · Caddy"), `${rel} no old brand header`);
       assert(!src.includes("모든 기기 로그아웃"), `${rel} no duplicate logout`);
     }
+    const noticeList = read("src/app/notice/page.tsx");
+    const noticeDetail = read("src/app/notice/[id]/page.tsx");
+    const noticePushCard = read("src/components/notice/NoticePushNotifyCard.tsx");
+    const manageNotices = read("src/app/manage/page.tsx");
+    assert(noticeList.includes("formatKstDisplay"), "list uses shared KST formatter");
+    assert(!noticeList.includes("dayjs"), "list does not format with dayjs UTC");
+    assert(noticeDetail.includes("formatKstDisplay"), "detail uses shared KST formatter");
+    assert(!noticeDetail.includes("dayjs"), "detail does not format with dayjs UTC");
+    assert(noticePushCard.includes("formatKstDisplay"), "pushSentAt uses shared KST formatter");
+    assert(!noticePushCard.includes("dayjs"), "push card does not format with dayjs UTC");
+    assert(manageNotices.includes("formatKstDisplay"), "admin glance uses shared KST formatter");
     const boardNav = read("src/lib/boardNav.ts");
     assert(
       boardNav.includes("shouldUseManageShellForNotice"),
@@ -1189,6 +1202,192 @@ async function main() {
       assert(stillThere?.title === `${tag}-patched-send`, "push failure does not rollback notice");
 
       setNoticeCreatePushSenderForTests(null);
+    }
+
+    section("web/native channel overlap");
+    {
+      async function makeChannelUser(suffix: string, team: string) {
+        const caddy = await prisma.caddy.create({
+          data: {
+            name: `${tag}_${suffix}`,
+            team,
+            caddyType: "HOUSE",
+            employmentStatus: "ACTIVE",
+          },
+        });
+        caddyIds.push(caddy.id);
+        const user = await prisma.user.create({
+          data: {
+            username: `${tag}_${suffix}`,
+            password: hash,
+            role: "caddy",
+            caddyId: caddy.id,
+            sessionVersion: 0,
+          },
+        });
+        userIds.push(user.id);
+        return user;
+      }
+
+      const uNativeOnly = await makeChannelUser("ch_native", "3조");
+      const uWebDesk = await makeChannelUser("ch_webd", "4조");
+      const uWebAnd = await makeChannelUser("ch_weba", "5조");
+      const uBoth = await makeChannelUser("ch_both", "6조");
+      const uPcApp = await makeChannelUser("ch_pcapp", "7조");
+
+      await prisma.devicePushToken.create({
+        data: {
+          userId: uNativeOnly.id,
+          token: `${tag}-native-only`,
+          platform: "ANDROID",
+          enabled: true,
+        },
+      });
+      await prisma.pushSubscription.create({
+        data: {
+          userId: uWebDesk.id,
+          endpoint: `https://push.example/${tag}/web-desk`,
+          p256dh: fakeP256(),
+          auth: fakeAuth(),
+          enabled: true,
+          platform: "desktop",
+        },
+      });
+      await prisma.pushSubscription.create({
+        data: {
+          userId: uWebAnd.id,
+          endpoint: `https://push.example/${tag}/web-and`,
+          p256dh: fakeP256(),
+          auth: fakeAuth(),
+          enabled: true,
+          platform: "android",
+          userAgent: "Mozilla/5.0 (Linux; Android 14; SM-S) SamsungBrowser/26.0",
+        },
+      });
+      await prisma.pushSubscription.create({
+        data: {
+          userId: uBoth.id,
+          endpoint: `https://push.example/${tag}/both-web`,
+          p256dh: fakeP256(),
+          auth: fakeAuth(),
+          enabled: true,
+          platform: "android",
+          userAgent: "Mozilla/5.0 (Linux; Android 14; SM-S) SamsungBrowser/26.0",
+        },
+      });
+      await prisma.devicePushToken.create({
+        data: {
+          userId: uBoth.id,
+          token: `${tag}-both-native`,
+          platform: "ANDROID",
+          enabled: true,
+        },
+      });
+      await prisma.pushSubscription.create({
+        data: {
+          userId: uPcApp.id,
+          endpoint: `https://push.example/${tag}/pc-web`,
+          p256dh: fakeP256(),
+          auth: fakeAuth(),
+          enabled: true,
+          platform: "desktop",
+        },
+      });
+      await prisma.devicePushToken.create({
+        data: {
+          userId: uPcApp.id,
+          token: `${tag}-pcapp-native`,
+          platform: "ANDROID",
+          enabled: true,
+        },
+      });
+
+      async function teamNotice(suffix: string, team: string) {
+        const row = await prisma.notice.create({
+          data: {
+            title: `${tag}_${suffix}`,
+            content: suffix,
+            targetType: "TEAM",
+            targetValue: team,
+          },
+        });
+        noticeIds.push(row.id);
+        return row;
+      }
+
+      const nNative = await teamNotice("ch_native", "3조");
+      const nWebDesk = await teamNotice("ch_webd", "4조");
+      const nWebAnd = await teamNotice("ch_weba", "5조");
+      const nBoth = await teamNotice("ch_both", "6조");
+      const nPcApp = await teamNotice("ch_pcapp", "7조");
+
+      async function sendChannel(noticeId: number) {
+        const webEnds: string[] = [];
+        const nativeToks: string[] = [];
+        const result = await sendNoticePush(
+          prisma,
+          { noticeId, confirm: NOTICE_PUSH_CONFIRM, actorUserId: uAdmin.id },
+          {
+            sendFn: async (sub) => {
+              webEnds.push(String(sub.endpoint));
+            },
+            nativeSendFn: async (token) => {
+              nativeToks.push(token);
+              return "sent";
+            },
+          }
+        );
+        return { result, webEnds, nativeToks };
+      }
+
+      const taggedWeb = (ends: string[]) => ends.filter((e) => e.includes(tag));
+      const taggedNative = (toks: string[]) => toks.filter((t) => t.includes(tag));
+
+      const nativeOnly = await sendChannel(nNative.id);
+      assert(taggedWeb(nativeOnly.webEnds).length === 0, "native-only: no web");
+      assert(taggedNative(nativeOnly.nativeToks).length === 1, "native-only: 1 FCM");
+
+      const webDesk = await sendChannel(nWebDesk.id);
+      assert(taggedWeb(webDesk.webEnds).length === 1, "desktop web-only: 1 web");
+      assert(taggedNative(webDesk.nativeToks).length === 0, "desktop web-only: no FCM");
+
+      const webAnd = await sendChannel(nWebAnd.id);
+      assert(taggedWeb(webAnd.webEnds).length === 1, "android web-only: 1 web");
+      assert(taggedNative(webAnd.nativeToks).length === 0, "android web-only: no FCM");
+
+      const both = await sendChannel(nBoth.id);
+      assert(taggedWeb(both.webEnds).length === 0, "same-device web+native: android web skipped");
+      assert(taggedNative(both.nativeToks).length === 1, "same-device web+native: 1 FCM");
+      const bothRow = await prisma.notice.findUnique({ where: { id: nBoth.id } });
+      assert(bothRow?.pushSentAt != null, "overlap send claims pushSentAt once");
+      try {
+        await sendNoticePush(
+          prisma,
+          { noticeId: nBoth.id, confirm: NOTICE_PUSH_CONFIRM, actorUserId: uAdmin.id },
+          {
+            sendFn: async () => {
+              throw new Error("should not resend web");
+            },
+            nativeSendFn: async () => {
+              throw new Error("should not resend native");
+            },
+          }
+        );
+        assert(false, "overlap resend should throw");
+      } catch (e) {
+        assert(
+          e instanceof Error && (e as { code?: string }).code === "already_sent",
+          "overlap resend already_sent"
+        );
+      }
+
+      const pcApp = await sendChannel(nPcApp.id);
+      assert(taggedWeb(pcApp.webEnds).length === 1, "PC web + Android app: desktop web kept");
+      assert(taggedNative(pcApp.nativeToks).length === 1, "PC web + Android app: native kept");
+      assert(
+        taggedWeb(pcApp.webEnds)[0]?.endsWith("/pc-web") === true,
+        "PC web + Android app: web is the desktop endpoint"
+      );
     }
   } finally {
     if (subIds.length) {

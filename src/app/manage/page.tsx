@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 import { prisma } from "@/lib/prisma";
-import dayjs from "dayjs";
 import Link from "next/link";
+import { formatKstDisplay } from "@/lib/kstDate";
 import AdminOpsDashboard from "@/components/manage/AdminOpsDashboard";
 
 export const dynamic = "force-dynamic";
@@ -42,7 +42,7 @@ async function ManageDashboardNotices() {
         {latestNotices.map((n) => (
           <li key={n.id}>
             <Link href={`/notice/${n.id}`}>{n.title}</Link>
-            <time>{dayjs(n.createdAt).format("MM-DD HH:mm")}</time>
+            <time>{formatKstDisplay(n.createdAt, "md-hm")}</time>
           </li>
         ))}
       </ul>

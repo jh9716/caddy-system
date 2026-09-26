@@ -31,7 +31,7 @@ import type { AdminOpsDashboardSourceDeps } from "../src/lib/adminOpsDashboardSo
 import type { StoredOpsDutyRow } from "../src/lib/dailyOpsDutyService";
 import { offNamesForDate, type OffSheet } from "../src/lib/offSheetParser";
 import { buildOpsDutySheetTestSheets } from "../src/lib/opsDutySheetParser";
-import { formatCapturedAtKst, kstYmd, previousKstYmd } from "../src/lib/kstDate";
+import { formatCapturedAtKst, formatKstDisplay, kstYmd, previousKstYmd } from "../src/lib/kstDate";
 
 let passed = 0;
 let failed = 0;
@@ -381,6 +381,10 @@ section("KST 전날 계산");
   assert(previousKstYmd(new Date("2026-09-03T17:30:00.000Z")) === "2026-09-03", "02:30 KST 재시도도 같은 전날");
   assert(previousKstYmd(new Date("2026-09-03T14:59:00.000Z")) === "2026-09-02", "23:59 KST 전날");
   assert(formatCapturedAtKst("2026-09-03T15:30:00.000Z") === "2026.09.04 00:30", "저장시각 KST 표기");
+  assert(
+    formatKstDisplay("2026-09-26T06:37:00.000Z", "ymd-hm") === "2026-09-26 15:37",
+    "notice-style KST datetime"
+  );
 }
 
 section("OFF/ops 불완전 → snapshot skip");
