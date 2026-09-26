@@ -40,6 +40,7 @@ import {
 } from "@/lib/nativePushDelivery";
 import { isWebPushSendConfigured, readWebPushSendCredentials } from "@/lib/pushVapid";
 import { type WebPushSendFn } from "@/lib/webPushSender";
+import { selectNoticeWebPushMappings } from "@/lib/noticePushChannel";
 
 export class NoticePushError extends Error {
   constructor(
@@ -87,6 +88,8 @@ type SubRow = {
   endpoint: string;
   p256dh: string;
   auth: string;
+  platform: string | null;
+  userAgent: string | null;
 };
 
 type NoticePushRow = {
@@ -182,7 +185,15 @@ export async function resolveEligibleNoticePushTargets(
       caddyId: true,
       pushSubscriptions: {
         where: { enabled: true },
-        select: { id: true, userId: true, endpoint: true, p256dh: true, auth: true },
+        select: {
+          id: true,
+          userId: true,
+          endpoint: true,
+          p256dh: true,
+          auth: true,
+          platform: true,
+          userAgent: true,
+        },
       },
     },
   });
@@ -333,7 +344,10 @@ export async function sendNoticePush(
 
   const preTargets = await resolveEligibleNoticePushTargets(db, first);
   const preNative = await loadEnabledDevicePushTokens(db, preTargets.logicalUserIds);
-  if (!hasPushDeliveryTargets(preTargets.subscriptions.length, preNative.length)) {
+  const preWeb = selectNoticeWebPushMappings(preTargets.subscriptions, preNative, {
+    nativeSendFn: options?.nativeSendFn,
+  });
+  if (!hasPushDeliveryTargets(preWeb.length, preNative.length)) {
     return {
       ok: true,
       recipients: 0,
@@ -346,7 +360,7 @@ export async function sendNoticePush(
     };
   }
   if (
-    preTargets.subscriptions.length === 0 &&
+    preWeb.length === 0 &&
     !canAttemptNativePushSend({ sendFn: options?.nativeSendFn })
   ) {
     return {
@@ -376,11 +390,14 @@ export async function sendNoticePush(
     }
     assertInWindow(again);
 
-    const { counts, subscriptions, recipientUserIds, logicalUserIds } =
+    const { subscriptions, recipientUserIds, logicalUserIds } =
       await resolveEligibleNoticePushTargets(db, again);
 
     const nativeTokens = await loadEnabledDevicePushTokens(db, logicalUserIds);
-    if (!hasPushDeliveryTargets(subscriptions.length, nativeTokens.length)) {
+    const webMappings = selectNoticeWebPushMappings(subscriptions, nativeTokens, {
+      nativeSendFn: options?.nativeSendFn,
+    });
+    if (!hasPushDeliveryTargets(webMappings.length, nativeTokens.length)) {
       await writeNoticePushAudit(db, input.noticeId, {
         noticeId: input.noticeId,
         status: "NO_RECIPIENTS",
@@ -404,7 +421,7 @@ export async function sendNoticePush(
       title: again.title,
       important: again.important,
     });
-    const delivered = await deliverWebPushMappings(db, subscriptions, payload, {
+    const delivered = await deliverWebPushMappings(db, webMappings, payload, {
       sendFn: options?.sendFn,
       credentials: creds,
       concurrency: NOTICE_PUSH_CONCURRENCY,
@@ -418,7 +435,7 @@ export async function sendNoticePush(
       noticeId: input.noticeId,
       status: "SENT",
       recipients: recipientUserIds.length,
-      subscriptions: counts.subscriptions,
+      subscriptions: webMappings.length,
       sent: delivered.sent,
       failed: delivered.failed,
       removedStale: delivered.removedStale,
@@ -428,7 +445,7 @@ export async function sendNoticePush(
     return {
       ok: true,
       recipients: recipientUserIds.length,
-      subscriptions: counts.subscriptions,
+      subscriptions: webMappings.length,
       sent: delivered.sent,
       failed: delivered.failed,
       removedStale: delivered.removedStale,
