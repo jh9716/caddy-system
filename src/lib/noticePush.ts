@@ -67,6 +67,7 @@ export type NoticePushPreview = {
   counts: NoticePushCounts;
   canSend: boolean;
   alreadySent: boolean;
+  pushSentAt: string | null;
 };
 
 export type NoticePushSendResult = {
@@ -294,6 +295,7 @@ export async function previewNoticePush(
     counts,
     canSend: inWindow && !alreadySent,
     alreadySent,
+    pushSentAt: notice.pushSentAt ? notice.pushSentAt.toISOString() : null,
   };
 }
 

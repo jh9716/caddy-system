@@ -6,10 +6,13 @@ import {
   NOTICE_CADDY_TYPES,
   NOTICE_CREATE_SEND_PUSH_LABEL,
   NOTICE_EDIT_SEND_PUSH_LABEL,
+  NOTICE_SCHEDULED_PUSH_HINT,
   NOTICE_TARGET_ALL,
   NOTICE_TARGET_CADDY_TYPE,
   NOTICE_TARGET_TEAM,
 } from '@/lib/noticeConstants'
+import { isFutureNoticeStart, planNoticeClientAutoPush } from '@/lib/noticeAutoPushPlan'
+import { requestNoticePushSend } from '@/lib/noticePushClient'
 import { DRIVING_POOL_TEAM, PRIMARY_TEAMS } from '@/lib/caddyManage'
 import {
   COURSE_REPORT_PHOTO_ACCEPT,
@@ -98,6 +101,7 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
   )
   const [pending, setPending] = useState<PendingPhoto[]>([])
   const isEdit = mode === 'edit'
+  const scheduled = isFutureNoticeStart(publishStartAt || null)
   const totalPhotos = existingPhotos.length + pending.length
   const canAdd = totalPhotos < COURSE_REPORT_PHOTO_MAX
 
@@ -150,6 +154,11 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
     e.preventDefault()
     setBusy(true)
     setStatusNote('')
+    const plan = planNoticeClientAutoPush({
+      sendPushRequested: sendPush && !scheduled,
+      pendingPhotoCount: pending.length,
+      publishStartAt: publishStartAt || null,
+    })
     const payload = {
       title,
       content: body,
@@ -161,7 +170,7 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
         targetType === NOTICE_TARGET_ALL ? null : targetValue || null,
       publishStartAt: publishStartAt ? new Date(publishStartAt).toISOString() : null,
       publishEndAt: publishEndAt ? new Date(publishEndAt).toISOString() : null,
-      sendPush,
+      sendPush: plan.sendOnCreate,
     }
 
     const url = isEdit ? `/api/notice/${initial?.id}` : '/api/notice'
@@ -199,16 +208,32 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
       if (uploaded.failed > 0) {
         setBusy(false)
         alert(
-          `공지는 저장됐지만 사진 ${uploaded.failed}장을 올리지 못했습니다.`
+          `공지는 저장됐지만 사진 ${uploaded.failed}장을 올리지 못했습니다. 자동 푸시는 보내지 않았습니다.`
         )
         router.replace(`/notice/${noticeId}`)
         return
       }
     }
 
-    const pushNote = pushResultMessage(data.push)
-    setBusy(false)
-    if (pushNote) alert(pushNote)
+    if (noticeId && plan.sendAfterPhotos) {
+      const after = await requestNoticePushSend(noticeId)
+      setBusy(false)
+      if (!after.ok) {
+        alert(after.message || '공지와 사진은 저장됐지만 푸시 알림 발송에 실패했습니다.')
+        router.replace(`/notice/${noticeId}`)
+        return
+      }
+      const pushNote = pushResultMessage({
+        ok: after.ok,
+        error: after.error,
+        message: after.message,
+      })
+      if (pushNote) alert(pushNote)
+    } else {
+      const pushNote = pushResultMessage(data.push)
+      setBusy(false)
+      if (pushNote) alert(pushNote)
+    }
 
     if (noticeId) {
       router.replace(`/notice/${noticeId}`)
@@ -355,14 +380,20 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
           onChange={(e) => setPublishEndAt(e.target.value)}
         />
       </label>
-      <label className="notice-check notice-check-push">
-        <input
-          type="checkbox"
-          checked={sendPush}
-          onChange={(e) => setSendPush(e.currentTarget.checked)}
-        />
-        {isEdit ? NOTICE_EDIT_SEND_PUSH_LABEL : NOTICE_CREATE_SEND_PUSH_LABEL}
-      </label>
+      {scheduled ? (
+        <p className="notice-scheduled-push-hint" role="status">
+          {NOTICE_SCHEDULED_PUSH_HINT}
+        </p>
+      ) : (
+        <label className="notice-check notice-check-push">
+          <input
+            type="checkbox"
+            checked={sendPush}
+            onChange={(e) => setSendPush(e.currentTarget.checked)}
+          />
+          {isEdit ? NOTICE_EDIT_SEND_PUSH_LABEL : NOTICE_CREATE_SEND_PUSH_LABEL}
+        </label>
+      )}
       <div className="notice-form-actions">
         <button type="submit" disabled={busy} className="ui-btn ui-btn-primary">
           {busy ? (isEdit ? '수정 중…' : '등록 중…') : (isEdit ? '수정' : '등록')}

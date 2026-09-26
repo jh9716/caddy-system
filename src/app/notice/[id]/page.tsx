@@ -79,7 +79,10 @@ export default async function NoticeDetailPage({
       {isAdmin ? (
         <>
           <NoticeDetailActions id={id} />
-          <NoticePushNotifyCard noticeId={id} />
+          <NoticePushNotifyCard
+            noticeId={id}
+            pushSentAt={notice.pushSentAt ? notice.pushSentAt.toISOString() : null}
+          />
         </>
       ) : null}
     </div>

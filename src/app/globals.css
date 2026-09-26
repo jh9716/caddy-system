@@ -2496,6 +2496,17 @@ a {
   background: var(--vh-paper);
 }
 
+.notice-scheduled-push-hint {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--vh-border);
+  border-radius: var(--vh-radius-sm);
+  background: var(--vh-warn-bg);
+  color: var(--vh-warn);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 body.manage-mode .vh-work-inner:has(.notice-page),
 body.manage-mode .vh-work-inner:has(.course-report-page) {
   padding-bottom: calc(

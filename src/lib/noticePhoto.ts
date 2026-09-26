@@ -175,6 +175,35 @@ export async function uploadNoticePhoto(
   return toNoticePhotoPublic(row);
 }
 
+export async function deleteNoticePhotoBlobs(
+  db: PrismaClient,
+  noticeId: number
+): Promise<string[]> {
+  let rows: NoticePhoto[] = [];
+  try {
+    rows = await db.noticePhoto.findMany({ where: { noticeId } });
+  } catch (e) {
+    if (isNoticePhotoTableMissing(e)) return [];
+    throw e;
+  }
+  const store = getCourseReportPhotoStore();
+  const keys = rows.map((row) => row.storageKey);
+  if (!store.configured) return keys;
+  for (const key of keys) {
+    try {
+      await store.delete(key);
+    } catch (e) {
+      if (e instanceof CourseReportPhotoStorageError) throw e;
+      throw new CourseReportPhotoStorageError(
+        "storage_delete_failed",
+        "사진 저장소 삭제에 실패했습니다.",
+        502
+      );
+    }
+  }
+  return keys;
+}
+
 export async function deleteNoticePhoto(
   db: PrismaClient,
   input: {

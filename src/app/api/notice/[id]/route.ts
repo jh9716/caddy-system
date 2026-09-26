@@ -11,7 +11,11 @@ import {
   parseNoticeSendPushFlag,
   runNoticeCreatePush,
 } from "@/lib/noticeAutoPush";
-import { isNoticePhotoTableMissing, listNoticePhotos } from "@/lib/noticePhoto";
+import {
+  deleteNoticePhotoBlobs,
+  isNoticePhotoTableMissing,
+  listNoticePhotos,
+} from "@/lib/noticePhoto";
 import {
   NoticeValidationError,
   canViewNotice,
@@ -125,6 +129,7 @@ export async function DELETE(
   if (!Number.isInteger(id) || id <= 0) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
+  await deleteNoticePhotoBlobs(prisma, id);
   await prisma.notice.delete({ where: { id } });
   return NextResponse.json({ ok: true });
 }
