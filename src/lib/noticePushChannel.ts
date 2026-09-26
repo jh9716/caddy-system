@@ -5,14 +5,12 @@
  * There is no installationId / deviceId, so same physical device cannot be
  * joined exactly. Do not disable every web mapping for a user.
  *
- * Safe heuristic:
- * - If that user has an enabled Android native token AND native send can run,
- *   skip only Android-classified web mappings for that user.
- * - Desktop / iOS / unknown web stay (PC browser + Android app both receive).
- * - Android web without a native token still receives Web Push.
+ * Dedupe is based on actual native delivery success, not token presence:
+ * - Skip Android-classified web only for users with at least one native "sent".
+ * - Native failed / gone / skipped → keep that user's Android web (fallback).
+ * - Desktop / iOS / unknown web always stay (PC browser + Android app).
  */
 
-import { canAttemptNativePushSend } from "@/lib/fcmCredentials";
 import { isAndroidDevice } from "@/lib/pwaInstall";
 
 export type NoticeWebPushRow = {
@@ -44,31 +42,24 @@ export function nativeUserIdsFromTokens(
 
 export function filterNoticeWebPushForNativeOverlap(
   subscriptions: readonly NoticeWebPushRow[],
-  nativeUserIds: readonly number[]
+  succeededNativeUserIds: readonly number[]
 ): NoticeWebPushRow[] {
-  const native = new Set(
-    nativeUserIds.filter((id) => Number.isInteger(id) && id > 0)
+  const nativeOk = new Set(
+    succeededNativeUserIds.filter((id) => Number.isInteger(id) && id > 0)
   );
-  if (native.size === 0) return [...subscriptions];
+  if (nativeOk.size === 0) return [...subscriptions];
   return subscriptions.filter((sub) => {
-    if (!native.has(sub.userId)) return true;
+    if (!nativeOk.has(sub.userId)) return true;
     return !isAndroidWebPushSubscription(sub);
   });
 }
 
 export function selectNoticeWebPushMappings<T extends NoticeWebPushRow>(
   subscriptions: readonly T[],
-  nativeTokens: readonly { userId: number }[],
-  options?: { nativeSendFn?: unknown }
+  succeededNativeUserIds: readonly number[]
 ): T[] {
-  if (
-    nativeTokens.length === 0 ||
-    !canAttemptNativePushSend({ sendFn: options?.nativeSendFn })
-  ) {
-    return [...subscriptions];
-  }
   return filterNoticeWebPushForNativeOverlap(
     subscriptions,
-    nativeUserIdsFromTokens(nativeTokens)
+    succeededNativeUserIds
   ) as T[];
 }

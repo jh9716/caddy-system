@@ -92,7 +92,7 @@ section("filter keeps browser-only and PC web");
   );
   assert(
     filtered.map((s) => s.id).join(",") === "2,3,4",
-    "native user: drop that user's android web only"
+    "native success: drop that user's android web only"
   );
   assert(
     filtered.some((s) => s.id === 2),
@@ -108,23 +108,16 @@ section("filter keeps browser-only and PC web");
   );
 }
 
-section("select respects native send gate");
+section("select uses native success, not token presence");
 {
   const androidWeb = sub(1, 10, { platform: "android" });
-  const tokens = [{ userId: 10 }];
-  const prev = process.env.FCM_SEND_ENABLED;
-  process.env.FCM_SEND_ENABLED = "";
-  const gated = selectNoticeWebPushMappings([androidWeb], tokens);
-  assert(gated.length === 1, "without native send capability keep android web");
-  const ready = selectNoticeWebPushMappings([androidWeb], tokens, {
-    nativeSendFn: async () => "sent",
-  });
-  assert(ready.length === 0, "with native sendFn skip android web");
-  const noToken = selectNoticeWebPushMappings([androidWeb], [], {
-    nativeSendFn: async () => "sent",
-  });
-  assert(noToken.length === 1, "no native token → keep android web");
-  process.env.FCM_SEND_ENABLED = prev;
+  const desktopWeb = sub(2, 10, { platform: "desktop" });
+  const kept = selectNoticeWebPushMappings([androidWeb, desktopWeb], []);
+  assert(kept.length === 2, "no native success → keep android web fallback");
+  const ready = selectNoticeWebPushMappings([androidWeb, desktopWeb], [10]);
+  assert(ready.length === 1 && ready[0].id === 2, "native success skips android web only");
+  const otherUser = selectNoticeWebPushMappings([androidWeb], [99]);
+  assert(otherUser.length === 1, "other user's success does not drop this android web");
 }
 
 section("source: notice send uses helper, does not blank all web");
@@ -132,10 +125,20 @@ section("source: notice send uses helper, does not blank all web");
   const core = read("src/lib/noticePush.ts");
   const helper = read("src/lib/noticePushChannel.ts");
   assert(core.includes("selectNoticeWebPushMappings"), "sendNoticePush uses helper");
+  assert(core.includes("sentUserIds"), "sendNoticePush reads native success users");
+  assert(
+    core.lastIndexOf("await deliverNativePushTokens") <
+      core.lastIndexOf("await deliverWebPushMappings"),
+    "native first, then web fallback"
+  );
   assert(helper.includes("isAndroidWebPushSubscription"), "classifies android web");
   assert(
     helper.includes("Do not disable every web mapping"),
     "documents no user-wide web disable"
+  );
+  assert(
+    helper.includes("actual native delivery success"),
+    "documents success-based dedupe"
   );
   assert(
     /filterNoticeWebPushForNativeOverlap/.test(helper),

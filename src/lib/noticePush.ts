@@ -344,10 +344,7 @@ export async function sendNoticePush(
 
   const preTargets = await resolveEligibleNoticePushTargets(db, first);
   const preNative = await loadEnabledDevicePushTokens(db, preTargets.logicalUserIds);
-  const preWeb = selectNoticeWebPushMappings(preTargets.subscriptions, preNative, {
-    nativeSendFn: options?.nativeSendFn,
-  });
-  if (!hasPushDeliveryTargets(preWeb.length, preNative.length)) {
+  if (!hasPushDeliveryTargets(preTargets.subscriptions.length, preNative.length)) {
     return {
       ok: true,
       recipients: 0,
@@ -360,7 +357,7 @@ export async function sendNoticePush(
     };
   }
   if (
-    preWeb.length === 0 &&
+    preTargets.subscriptions.length === 0 &&
     !canAttemptNativePushSend({ sendFn: options?.nativeSendFn })
   ) {
     return {
@@ -394,10 +391,7 @@ export async function sendNoticePush(
       await resolveEligibleNoticePushTargets(db, again);
 
     const nativeTokens = await loadEnabledDevicePushTokens(db, logicalUserIds);
-    const webMappings = selectNoticeWebPushMappings(subscriptions, nativeTokens, {
-      nativeSendFn: options?.nativeSendFn,
-    });
-    if (!hasPushDeliveryTargets(webMappings.length, nativeTokens.length)) {
+    if (!hasPushDeliveryTargets(subscriptions.length, nativeTokens.length)) {
       await writeNoticePushAudit(db, input.noticeId, {
         noticeId: input.noticeId,
         status: "NO_RECIPIENTS",
@@ -421,13 +415,17 @@ export async function sendNoticePush(
       title: again.title,
       important: again.important,
     });
+    const nativeDelivered = await deliverNativePushTokens(db, nativeTokens, payload, {
+      sendFn: options?.nativeSendFn,
+      concurrency: NOTICE_PUSH_CONCURRENCY,
+    });
+    const webMappings = selectNoticeWebPushMappings(
+      subscriptions,
+      nativeDelivered.sentUserIds
+    );
     const delivered = await deliverWebPushMappings(db, webMappings, payload, {
       sendFn: options?.sendFn,
       credentials: creds,
-      concurrency: NOTICE_PUSH_CONCURRENCY,
-    });
-    await deliverNativePushTokens(db, nativeTokens, payload, {
-      sendFn: options?.nativeSendFn,
       concurrency: NOTICE_PUSH_CONCURRENCY,
     });
 

@@ -243,10 +243,20 @@ async function main() {
     }
     const core = read("src/lib/noticePush.ts");
     assert(core.includes("deliverWebPushMappings"), "reuses delivery helper");
-    assert(core.includes("selectNoticeWebPushMappings"), "filters android web when native exists");
+    assert(core.includes("selectNoticeWebPushMappings"), "filters android web after native success");
     assert(core.includes("noticePushChannel"), "reuses channel helper");
+    assert(core.includes("sentUserIds"), "dedupe uses native success user ids");
     assert(core.includes("pg_advisory_xact_lock"), "advisory lock");
     assert(core.includes("pushSentAt"), "claim uses pushSentAt");
+    assert(
+      core.indexOf("claimNoticePushSend(") < core.lastIndexOf("await deliverNativePushTokens"),
+      "claim invoked before native deliver"
+    );
+    assert(
+      core.lastIndexOf("await deliverNativePushTokens") <
+        core.lastIndexOf("await deliverWebPushMappings"),
+      "native deliver before web so fallback can run"
+    );
     assert(
       core.indexOf("claimNoticePushSend(") < core.lastIndexOf("await deliverWebPushMappings"),
       "claim invoked before deliverWebPushMappings"
@@ -1234,6 +1244,8 @@ async function main() {
       const uWebAnd = await makeChannelUser("ch_weba", "5조");
       const uBoth = await makeChannelUser("ch_both", "6조");
       const uPcApp = await makeChannelUser("ch_pcapp", "7조");
+      const uBothFail = await makeChannelUser("ch_bothfail", "8조");
+      const uPcFail = await makeChannelUser("ch_pcfail", "11조");
 
       await prisma.devicePushToken.create({
         data: {
@@ -1301,6 +1313,53 @@ async function main() {
           enabled: true,
         },
       });
+      await prisma.pushSubscription.create({
+        data: {
+          userId: uBothFail.id,
+          endpoint: `https://push.example/${tag}/both-fail-web`,
+          p256dh: fakeP256(),
+          auth: fakeAuth(),
+          enabled: true,
+          platform: "android",
+          userAgent: "Mozilla/5.0 (Linux; Android 14; SM-S) SamsungBrowser/26.0",
+        },
+      });
+      await prisma.devicePushToken.create({
+        data: {
+          userId: uBothFail.id,
+          token: `${tag}-both-fail-native`,
+          platform: "ANDROID",
+          enabled: true,
+        },
+      });
+      await prisma.pushSubscription.create({
+        data: {
+          userId: uPcFail.id,
+          endpoint: `https://push.example/${tag}/pc-fail-desk`,
+          p256dh: fakeP256(),
+          auth: fakeAuth(),
+          enabled: true,
+          platform: "desktop",
+        },
+      });
+      await prisma.pushSubscription.create({
+        data: {
+          userId: uPcFail.id,
+          endpoint: `https://push.example/${tag}/pc-fail-and`,
+          p256dh: fakeP256(),
+          auth: fakeAuth(),
+          enabled: true,
+          platform: "android",
+        },
+      });
+      await prisma.devicePushToken.create({
+        data: {
+          userId: uPcFail.id,
+          token: `${tag}-pc-fail-native`,
+          platform: "ANDROID",
+          enabled: true,
+        },
+      });
 
       async function teamNotice(suffix: string, team: string) {
         const row = await prisma.notice.create({
@@ -1320,10 +1379,16 @@ async function main() {
       const nWebAnd = await teamNotice("ch_weba", "5조");
       const nBoth = await teamNotice("ch_both", "6조");
       const nPcApp = await teamNotice("ch_pcapp", "7조");
+      const nBothFail = await teamNotice("ch_bothfail", "8조");
+      const nPcFail = await teamNotice("ch_pcfail", "11조");
 
-      async function sendChannel(noticeId: number) {
+      async function sendChannel(
+        noticeId: number,
+        nativeResult: (token: string) => "sent" | "failed" | "gone" = () => "sent"
+      ) {
         const webEnds: string[] = [];
         const nativeToks: string[] = [];
+        const nativeOutcomes: string[] = [];
         const result = await sendNoticePush(
           prisma,
           { noticeId, confirm: NOTICE_PUSH_CONFIRM, actorUserId: uAdmin.id },
@@ -1333,11 +1398,13 @@ async function main() {
             },
             nativeSendFn: async (token) => {
               nativeToks.push(token);
-              return "sent";
+              const outcome = nativeResult(token);
+              nativeOutcomes.push(outcome);
+              return outcome;
             },
           }
         );
-        return { result, webEnds, nativeToks };
+        return { result, webEnds, nativeToks, nativeOutcomes };
       }
 
       const taggedWeb = (ends: string[]) => ends.filter((e) => e.includes(tag));
@@ -1356,8 +1423,8 @@ async function main() {
       assert(taggedNative(webAnd.nativeToks).length === 0, "android web-only: no FCM");
 
       const both = await sendChannel(nBoth.id);
-      assert(taggedWeb(both.webEnds).length === 0, "same-device web+native: android web skipped");
-      assert(taggedNative(both.nativeToks).length === 1, "same-device web+native: 1 FCM");
+      assert(taggedWeb(both.webEnds).length === 0, "android web+native success: web 0");
+      assert(taggedNative(both.nativeToks).length === 1, "android web+native success: native 1");
       const bothRow = await prisma.notice.findUnique({ where: { id: nBoth.id } });
       assert(bothRow?.pushSentAt != null, "overlap send claims pushSentAt once");
       try {
@@ -1382,12 +1449,36 @@ async function main() {
       }
 
       const pcApp = await sendChannel(nPcApp.id);
-      assert(taggedWeb(pcApp.webEnds).length === 1, "PC web + Android app: desktop web kept");
-      assert(taggedNative(pcApp.nativeToks).length === 1, "PC web + Android app: native kept");
+      assert(taggedWeb(pcApp.webEnds).length === 1, "PC web + Android native success: desktop web 1");
+      assert(taggedNative(pcApp.nativeToks).length === 1, "PC web + Android native success: native 1");
       assert(
         taggedWeb(pcApp.webEnds)[0]?.endsWith("/pc-web") === true,
-        "PC web + Android app: web is the desktop endpoint"
+        "PC web + Android native success: web is the desktop endpoint"
       );
+
+      const bothFail = await sendChannel(nBothFail.id, () => "failed");
+      assert(taggedNative(bothFail.nativeToks).length === 1, "android web+native failure: native attempted");
+      assert(bothFail.nativeOutcomes[0] === "failed", "android web+native failure: native failed");
+      assert(taggedWeb(bothFail.webEnds).length === 1, "android web+native failure: web fallback 1");
+      assert(
+        taggedWeb(bothFail.webEnds)[0]?.endsWith("/both-fail-web") === true,
+        "android web+native failure: fallback is android web"
+      );
+
+      const pcFail = await sendChannel(nPcFail.id, () => "gone");
+      assert(taggedNative(pcFail.nativeToks).length === 1, "desktop+android web+native fail: native attempted");
+      assert(pcFail.nativeOutcomes[0] === "gone", "desktop+android web+native fail: native gone");
+      const pcFailWeb = taggedWeb(pcFail.webEnds).sort();
+      assert(pcFailWeb.length === 2, "desktop+android web+native fail: desktop kept + android fallback");
+      assert(
+        pcFailWeb.some((e) => e.endsWith("/pc-fail-desk")) &&
+          pcFailWeb.some((e) => e.endsWith("/pc-fail-and")),
+        "desktop+android web+native fail: both web endpoints"
+      );
+      const goneRow = await prisma.devicePushToken.findFirst({
+        where: { token: `${tag}-pc-fail-native` },
+      });
+      assert(goneRow?.enabled === false, "stale native gone reuses existing disable cleanup");
     }
   } finally {
     if (subIds.length) {
