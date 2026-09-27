@@ -28,6 +28,7 @@
     "test:alimtalk-preview-unit": "bash scripts/tsx-safe.sh scripts/test-alimtalk-preview-unit.ts",
     "test:alimtalk-freshness-unit": "bash scripts/tsx-safe.sh scripts/test-alimtalk-freshness-unit.ts",
     "test:pwa-install-unit": "bash scripts/tsx-safe.sh scripts/test-pwa-install-unit.ts",
+    "test:play-install-unit": "bash scripts/tsx-safe.sh scripts/test-play-install-unit.ts",
     "test:privacy-policy-unit": "bash scripts/tsx-safe.sh scripts/test-privacy-policy-unit.ts",
     "test:account-deletion-unit": "bash scripts/tsx-safe.sh scripts/test-account-deletion-unit.ts",
     "test:privacy-inquiry-unit": "bash scripts/tsx-safe.sh scripts/test-privacy-inquiry-unit.ts",

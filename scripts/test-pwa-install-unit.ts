@@ -405,6 +405,10 @@ section("A–J home install CTA");
     "C Samsung mentions 현재 페이지 추가"
   );
   assert(
+    pwaInstallHintSteps("android-prompt").some((s) => s.includes("홈 화면에 추가")),
+    "web-app option can open Android steps after BIP"
+  );
+  assert(
     resolvePwaInstallAction("ios-hint") === "sheet",
     "D iOS → sheet"
   );
@@ -445,7 +449,10 @@ section("A–J home install CTA");
   assert(homeCta.includes("PWA_INSTALL_CTA_LABEL"), "home button uses VERTHILL 앱 설치");
   assert(homeCta.includes('className="vh-home-install"'), "home CTA is secondary class");
   assert(homeCta.includes("shouldShowHomeInstallCta"), "home CTA uses hide helper");
-  assert(homeCta.includes("PwaInstallHintSheet"), "C/D home opens hint sheet");
+  assert(homeCta.includes("resolveHomeInstallPrimary"), "home branches Android Play vs iOS PWA");
+  assert(homeCta.includes("PlayInstallSheet"), "Android home can open Play install sheet");
+  assert(homeCta.includes("PwaInstallHintSheet"), "iOS/home keeps PWA hint sheet");
+  assert(homeCta.includes("shouldOfferWebAppInstall"), "Android Play modal offers web-app as secondary");
   assert(sheet.includes(PWA_INSTALL_CTA_LABEL) || sheet.includes("PWA_INSTALL_CTA_LABEL"), "sheet title VERTHILL 앱 설치");
   assert(!sheet.includes("메뉴를 엽니다") || sheet.includes("메뉴(⋮)"), "sheet does not claim it opens the browser menu");
   assert(!home.includes("hero-green.jpg"), "H home splash path unchanged");
@@ -469,6 +476,8 @@ const pwaFiles = [
   "src/lib/registerServiceWorker.ts",
   "src/components/PwaInstallCard.tsx",
   "src/components/PwaInstallHomeCta.tsx",
+  "src/components/PlayInstallSheet.tsx",
+  "src/lib/playInstall.ts",
   "src/components/PwaInstallHintSheet.tsx",
   "src/components/usePwaInstall.ts",
   "src/components/ServiceWorkerRegister.tsx",
