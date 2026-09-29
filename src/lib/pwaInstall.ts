@@ -153,6 +153,7 @@ export function pwaInstallHintSteps(
     case "samsung-hint":
       return PWA_INSTALL_SAMSUNG_STEPS;
     case "android-hint":
+    case "android-prompt":
       return PWA_INSTALL_ANDROID_STEPS;
     default:
       return [];
