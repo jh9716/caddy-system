@@ -219,6 +219,10 @@ console.log("== restart token rehydrate / no auto POST ==");
   assert(!bridge.includes("Preferences"), "no Capacitor Preferences token persist");
   assert(card.includes("restoreNativePushUiState"), "card refresh uses passive restore");
   assert(card.includes("rehydrateNativePushToken"), "card refresh rehydrates token");
+  assert(
+    read("src/components/NativePushBootstrap.tsx").includes("rebindNativePushTokenOnSession"),
+    "session rebind lives on bootstrap, not restore"
+  );
   const enableStart = card.indexOf("async function onEnable");
   const disableStart = card.indexOf("async function onDisable");
   const refreshStart = card.indexOf("const refresh = useCallback");

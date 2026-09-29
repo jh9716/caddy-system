@@ -1,12 +1,16 @@
 "use client";
 
 import { useEffect } from "react";
-import { bindNativePushListeners } from "@/lib/nativePushBridge";
+import {
+  bindNativePushListeners,
+  rebindNativePushTokenOnSession,
+} from "@/lib/nativePushBridge";
 
-/** Foreground / background / cold-start tap → same-origin path. */
+/** Tap routing + one session rebind of an already-granted OS token. */
 export default function NativePushBootstrap() {
   useEffect(() => {
     void bindNativePushListeners();
+    void rebindNativePushTokenOnSession();
   }, []);
   return null;
 }

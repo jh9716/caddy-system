@@ -8,7 +8,13 @@ import { assignNativePushPath, resolveNativePushOpenPath } from "@/lib/nativePus
 import {
   NATIVE_PUSH_TOKEN_PATH,
   nativeTokenDisableInit,
+  nativeTokenRequestInit,
+  nativeTokenStatusHeaders,
 } from "@/lib/nativePushHttp";
+import {
+  runNativePushSessionRebind,
+  type NativePushRebindStatus,
+} from "@/lib/nativePushRebind";
 import type { NativePushPermission } from "@/lib/nativePushUi";
 
 export {
@@ -20,6 +26,14 @@ export {
 
 let memoryToken: string | null = null;
 let listenersBound = false;
+/** Same JS heap: POST this token at most once (login / account switch). */
+let reboundTokenThisHeap: string | null = null;
+let rebindInFlight: Promise<{ posted: boolean }> | null = null;
+
+export function resetNativePushRebindGuard(): void {
+  reboundTokenThisHeap = null;
+  rebindInFlight = null;
+}
 
 const TOKEN_WAIT_MS = 1500;
 const TOKEN_POLL_MS = 50;
@@ -57,13 +71,25 @@ export async function deactivateNativePushOnLogout(
   scope: "current" | "all" = "current"
 ): Promise<void> {
   if (!readCapacitorNativePlatform()) return;
-  const token = memoryToken;
-  if (scope === "current" && !token) return;
+  let token = memoryToken;
+  if (!token) {
+    try {
+      const next = await rehydrateNativePushToken();
+      token = next.tokenReady ? readMemoryNativePushToken() : null;
+    } catch {
+      token = null;
+    }
+  }
+  if (scope === "current" && !token) {
+    resetNativePushRebindGuard();
+    return;
+  }
   try {
     await fetch(NATIVE_PUSH_TOKEN_PATH, nativeTokenDisableInit(token, scope));
   } catch {
     // fail-soft: session clear still proceeds
   } finally {
+    resetNativePushRebindGuard();
     if (scope === "all" || token) clearMemoryNativePushToken();
   }
 }
@@ -117,6 +143,61 @@ async function requestNativePushToken(): Promise<string | null> {
   await bindNativePushListeners();
   await PushNotifications.register();
   return waitForMemoryNativePushToken();
+}
+
+async function readNativePushRegistration(
+  token: string
+): Promise<NativePushRebindStatus> {
+  try {
+    const res = await fetch(NATIVE_PUSH_TOKEN_PATH, {
+      credentials: "include",
+      cache: "no-store",
+      headers: nativeTokenStatusHeaders(token),
+    });
+    if (res.status === 401) return "unauthorized";
+    if (!res.ok) return "error";
+    const data = (await res.json().catch(() => ({}))) as { registered?: boolean };
+    return data.registered === true ? "registered" : "unregistered";
+  } catch {
+    return "error";
+  }
+}
+
+/**
+ * After login / account switch: if OS permission is already granted and a
+ * token exists, POST once so #196 can rebind the token to this session.
+ * Does not request permission. Restart restore still uses rehydrate + GET.
+ */
+export async function rebindNativePushTokenOnSession(): Promise<{ posted: boolean }> {
+  if (rebindInFlight) return rebindInFlight;
+  rebindInFlight = (async () => {
+    if (!(await nativePushPluginAvailable())) return { posted: false };
+    const permission = await readNativePushPermission();
+    if (permission !== "granted") return { posted: false };
+    if (!readMemoryNativePushToken()) {
+      await rehydrateNativePushToken();
+    }
+    const token = readMemoryNativePushToken();
+    const result = await runNativePushSessionRebind({
+      pluginAvailable: true,
+      permission,
+      token,
+      alreadyReboundToken: reboundTokenThisHeap,
+      getRegistered: readNativePushRegistration,
+      postToken: async (nextToken) => {
+        const res = await fetch(
+          NATIVE_PUSH_TOKEN_PATH,
+          nativeTokenRequestInit(nextToken)
+        );
+        return res.ok;
+      },
+    });
+    if (result.boundToken) reboundTokenThisHeap = result.boundToken;
+    return { posted: result.posted };
+  })().finally(() => {
+    rebindInFlight = null;
+  });
+  return rebindInFlight;
 }
 
 /** Restart restore only. Does not POST / upsert. */
