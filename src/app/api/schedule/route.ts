@@ -1,8 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { requireAdmin } from '@/lib/auth'
 
-// GET: /api/schedules?date=YYYY-MM-DD
+export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
+
+// GET: /api/schedule?date=YYYY-MM-DD — 관리자 전용 (캐디 배치는 /api/assignments/published)
 export async function GET(req: NextRequest) {
+  const guard = await requireAdmin(req)
+  if (guard) return guard
+
   try {
     const { searchParams } = new URL(req.url)
     const date = searchParams.get('date')
@@ -19,9 +26,6 @@ export async function GET(req: NextRequest) {
             team: true,
             teamOrder: true,
             employmentStatus: true,
-            status: true,
-            memo: true,
-            extraFlags: true,
             caddyType: true,
           },
         },
@@ -35,8 +39,11 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// POST: /api/schedules { date: 'YYYY-MM-DD' }
+// POST: /api/schedule { date: 'YYYY-MM-DD' } — 관리자 전용
 export async function POST(req: NextRequest) {
+  const guard = await requireAdmin(req)
+  if (guard) return guard
+
   try {
     const { date } = await req.json()
     if (!date) return NextResponse.json({ error: '날짜가 필요합니다.' }, { status: 400 })
