@@ -277,6 +277,11 @@ async function main() {
     assert(!login.includes("rebindNativePushTokenOnSession"), "login stays redirect-only");
     assert(bootstrap.includes("rebindNativePushTokenOnSession"), "layout bootstrap rebinds");
     assert(bootstrap.includes("bindNativePushListeners"), "tap listeners kept");
+    assert(
+      bridge.includes('addListener("registration"') &&
+        bridge.includes("rebindNativePushTokenOnSession"),
+      "registration event can rebind after late token"
+    );
     assert(bridge.includes("rehydrateNativePushToken"), "rehydrate kept");
     {
       const rehydrateStart = bridge.indexOf("export async function rehydrateNativePushToken");

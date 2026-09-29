@@ -27,6 +27,39 @@ export function shouldRebindNativePushToken(input: {
   return true;
 }
 
+export function createNativePushRebindCoordinator() {
+  let alreadyReboundToken: string | null = null;
+  let inFlight: Promise<{ posted: boolean; boundToken: string | null }> | null =
+    null;
+
+  return {
+    getAlreadyReboundToken() {
+      return alreadyReboundToken;
+    },
+    reset() {
+      alreadyReboundToken = null;
+      inFlight = null;
+    },
+    rebind(
+      input: Omit<Parameters<typeof runNativePushSessionRebind>[0], "alreadyReboundToken">
+    ) {
+      if (inFlight) return inFlight;
+      inFlight = runNativePushSessionRebind({
+        ...input,
+        alreadyReboundToken,
+      })
+        .then((result) => {
+          if (result.boundToken) alreadyReboundToken = result.boundToken;
+          return result;
+        })
+        .finally(() => {
+          inFlight = null;
+        });
+      return inFlight;
+    },
+  };
+}
+
 export async function runNativePushSessionRebind(input: {
   pluginAvailable: boolean;
   permission: NativePushPermission;
