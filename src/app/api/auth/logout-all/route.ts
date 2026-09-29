@@ -6,6 +6,10 @@ import {
   disableAllDevicePushTokensForUser,
   isDevicePushStoreMissing,
 } from "@/lib/nativePushToken";
+import {
+  disableAllPushSubscriptionsForUser,
+  isPushStoreMissing,
+} from "@/lib/pushSubscriptionStore";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -44,6 +48,13 @@ export async function POST(req: NextRequest) {
     } catch (tokenErr) {
       if (!isDevicePushStoreMissing(tokenErr)) {
         console.error("[POST /api/auth/logout-all] native-token");
+      }
+    }
+    try {
+      await disableAllPushSubscriptionsForUser(prisma, auth.userId);
+    } catch (subErr) {
+      if (!isPushStoreMissing(subErr)) {
+        console.error("[POST /api/auth/logout-all] web-push");
       }
     }
   } catch (e) {

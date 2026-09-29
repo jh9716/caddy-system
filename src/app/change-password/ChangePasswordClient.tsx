@@ -7,6 +7,7 @@ import {
   validateNewPassword,
   validatePasswordConfirm,
 } from "@/lib/passwordPolicy";
+import { logoutCurrentDevice } from "@/lib/logoutClient";
 
 export default function ChangePasswordClient({
   forced,
@@ -57,7 +58,7 @@ export default function ChangePasswordClient({
   };
 
   const onLogout = async () => {
-    await fetch("/api/logout", { method: "POST", credentials: "include" });
+    await logoutCurrentDevice();
     location.href = "/login";
   };
 

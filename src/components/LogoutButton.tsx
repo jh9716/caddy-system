@@ -1,11 +1,10 @@
 "use client";
 
-import { deactivateNativePushOnLogout } from "@/lib/nativePushBridge";
+import { logoutAllDevices, logoutCurrentDevice } from "@/lib/logoutClient";
 
 export default function LogoutButton() {
   const onClick = async () => {
-    await deactivateNativePushOnLogout("current");
-    await fetch("/api/logout", { method: "POST", credentials: "include" });
+    await logoutCurrentDevice();
     location.href = "/";
   };
 
@@ -17,11 +16,7 @@ export default function LogoutButton() {
     ) {
       return;
     }
-    await deactivateNativePushOnLogout("all");
-    const res = await fetch("/api/auth/logout-all", {
-      method: "POST",
-      credentials: "include",
-    });
+    const res = await logoutAllDevices();
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       alert(data?.message || data?.error || "전체 로그아웃에 실패했습니다.");

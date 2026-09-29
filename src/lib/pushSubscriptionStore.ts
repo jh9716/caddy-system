@@ -204,6 +204,31 @@ export async function upsertPushSubscriptionForUser(
   }
 }
 
+/** Current User + this browser endpoint. Other devices are untouched. */
+export async function disablePushSubscriptionForUserEndpoint(
+  db: PrismaClient,
+  userId: number,
+  endpoint: string
+): Promise<number> {
+  const result = await db.pushSubscription.updateMany({
+    where: { userId, endpoint, enabled: true },
+    data: { enabled: false },
+  });
+  return result.count;
+}
+
+/** logout-all: this User's web push on every device. */
+export async function disableAllPushSubscriptionsForUser(
+  db: PrismaClient,
+  userId: number
+): Promise<number> {
+  const result = await db.pushSubscription.updateMany({
+    where: { userId, enabled: true },
+    data: { enabled: false },
+  });
+  return result.count;
+}
+
 /**
  * Device-level unsubscribe: current User must own a mapping for this endpoint,
  * then every User mapping for the same physical endpoint is removed.
