@@ -11,10 +11,12 @@ import {
   nativeTokenRequestInit,
   nativeTokenStatusHeaders,
 } from "@/lib/nativePushHttp";
+import { createNativePushRebindCoordinator } from "@/lib/nativePushRebind";
+import type { NativePushRebindStatus } from "@/lib/nativePushRebind";
 import {
-  runNativePushSessionRebind,
-  type NativePushRebindStatus,
-} from "@/lib/nativePushRebind";
+  createNativePushTokenArrivalGate,
+  resolveLogoutNativePushToken,
+} from "@/lib/nativePushTokenArrival";
 import type { NativePushPermission } from "@/lib/nativePushUi";
 
 export {
@@ -24,31 +26,26 @@ export {
   nativeTokenStatusHeaders,
 } from "@/lib/nativePushHttp";
 
-let memoryToken: string | null = null;
+const tokenGate = createNativePushTokenArrivalGate();
+const rebindCoordinator = createNativePushRebindCoordinator();
 let listenersBound = false;
-/** Same JS heap: POST this token at most once (login / account switch). */
-let reboundTokenThisHeap: string | null = null;
-let rebindInFlight: Promise<{ posted: boolean }> | null = null;
 
 export function resetNativePushRebindGuard(): void {
-  reboundTokenThisHeap = null;
-  rebindInFlight = null;
+  rebindCoordinator.reset();
 }
 
 const TOKEN_WAIT_MS = 1500;
-const TOKEN_POLL_MS = 50;
 
 export function readMemoryNativePushToken(): string | null {
-  return memoryToken;
+  return tokenGate.read();
 }
 
 export function clearMemoryNativePushToken(): void {
-  memoryToken = null;
+  tokenGate.clear();
 }
 
 export function rememberNativePushToken(token: string): void {
-  const next = String(token ?? "").trim();
-  memoryToken = next || null;
+  tokenGate.remember(token);
 }
 
 export async function nativePushPluginAvailable(): Promise<boolean> {
@@ -71,15 +68,20 @@ export async function deactivateNativePushOnLogout(
   scope: "current" | "all" = "current"
 ): Promise<void> {
   if (!readCapacitorNativePlatform()) return;
-  let token = memoryToken;
-  if (!token) {
-    try {
-      const next = await rehydrateNativePushToken();
-      token = next.tokenReady ? readMemoryNativePushToken() : null;
-    } catch {
-      token = null;
-    }
-  }
+  const token = await resolveLogoutNativePushToken({
+    memoryToken: tokenGate.read(),
+    acquireIfGranted: async () => {
+      const permission = await readNativePushPermission();
+      if (permission !== "granted") return tokenGate.read();
+      await bindNativePushListeners();
+      try {
+        await PushNotifications.register();
+      } catch {
+        // token may still arrive on the shared gate
+      }
+      return tokenGate.wait(TOKEN_WAIT_MS);
+    },
+  });
   if (scope === "current" && !token) {
     resetNativePushRebindGuard();
     return;
@@ -117,6 +119,7 @@ export async function bindNativePushListeners(input?: {
 
   await PushNotifications.addListener("registration", (event) => {
     rememberNativePushToken(event.value);
+    void rebindNativePushTokenOnSession();
   });
   await PushNotifications.addListener("registrationError", () => {
     // no token / no log
@@ -130,13 +133,7 @@ export async function bindNativePushListeners(input?: {
 export async function waitForMemoryNativePushToken(
   timeoutMs = TOKEN_WAIT_MS
 ): Promise<string | null> {
-  const deadline = Date.now() + timeoutMs;
-  let token = readMemoryNativePushToken();
-  while (!token && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, TOKEN_POLL_MS));
-    token = readMemoryNativePushToken();
-  }
-  return token;
+  return tokenGate.wait(timeoutMs);
 }
 
 async function requestNativePushToken(): Promise<string | null> {
@@ -169,35 +166,32 @@ async function readNativePushRegistration(
  * Does not request permission. Restart restore still uses rehydrate + GET.
  */
 export async function rebindNativePushTokenOnSession(): Promise<{ posted: boolean }> {
-  if (rebindInFlight) return rebindInFlight;
-  rebindInFlight = (async () => {
-    if (!(await nativePushPluginAvailable())) return { posted: false };
-    const permission = await readNativePushPermission();
-    if (permission !== "granted") return { posted: false };
-    if (!readMemoryNativePushToken()) {
-      await rehydrateNativePushToken();
+  if (!(await nativePushPluginAvailable())) return { posted: false };
+  const permission = await readNativePushPermission();
+  if (permission !== "granted") return { posted: false };
+  if (!tokenGate.read()) {
+    await bindNativePushListeners();
+    try {
+      await PushNotifications.register();
+    } catch {
+      // late registration event still rebinds via the listener
     }
-    const token = readMemoryNativePushToken();
-    const result = await runNativePushSessionRebind({
-      pluginAvailable: true,
-      permission,
-      token,
-      alreadyReboundToken: reboundTokenThisHeap,
-      getRegistered: readNativePushRegistration,
-      postToken: async (nextToken) => {
-        const res = await fetch(
-          NATIVE_PUSH_TOKEN_PATH,
-          nativeTokenRequestInit(nextToken)
-        );
-        return res.ok;
-      },
-    });
-    if (result.boundToken) reboundTokenThisHeap = result.boundToken;
-    return { posted: result.posted };
-  })().finally(() => {
-    rebindInFlight = null;
+    await tokenGate.wait(TOKEN_WAIT_MS);
+  }
+  const result = await rebindCoordinator.rebind({
+    pluginAvailable: true,
+    permission,
+    token: tokenGate.read(),
+    getRegistered: readNativePushRegistration,
+    postToken: async (nextToken) => {
+      const res = await fetch(
+        NATIVE_PUSH_TOKEN_PATH,
+        nativeTokenRequestInit(nextToken)
+      );
+      return res.ok;
+    },
   });
-  return rebindInFlight;
+  return { posted: result.posted };
 }
 
 /** Restart restore only. Does not POST / upsert. */
@@ -225,13 +219,13 @@ export async function registerNativePushDevice(): Promise<{
   }
   await bindNativePushListeners();
   const current = await readNativePushPermission();
-  if (current === "denied") return { permission: "denied", tokenReady: Boolean(memoryToken) };
+  if (current === "denied") return { permission: "denied", tokenReady: Boolean(tokenGate.read()) };
   if (current !== "granted") {
     const asked = await PushNotifications.requestPermissions();
     if (asked.receive !== "granted") {
       return {
         permission: asked.receive === "denied" ? "denied" : "prompt",
-        tokenReady: Boolean(memoryToken),
+        tokenReady: Boolean(tokenGate.read()),
       };
     }
   }
