@@ -101,7 +101,11 @@ export default function NativePushNotificationCard({
     try {
       const next = await registerNativePushDevice();
       setPermission(next.permission);
-      const token = readMemoryNativePushToken();
+      let token = readMemoryNativePushToken();
+      if (!token && next.permission === "granted") {
+        const restored = await rehydrateNativePushToken();
+        token = restored.tokenReady ? readMemoryNativePushToken() : null;
+      }
       setTokenReady(Boolean(token));
       if (next.permission === "denied") return;
       if (!token) {
