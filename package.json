@@ -84,6 +84,7 @@
     "test:persist-keepalive-chromium": "bash scripts/tsx-safe.sh scripts/test-persist-keepalive-chromium.ts",
     "test:daily-board-published-unit": "bash scripts/tsx-safe.sh scripts/test-daily-board-published-unit.ts",
     "test:published-board-privacy-unit": "bash scripts/tsx-safe.sh scripts/test-published-board-privacy-unit.ts",
+    "test:legacy-api-auth-unit": "bash scripts/tsx-safe.sh scripts/test-legacy-api-auth-unit.ts",
     "preview:roster": "bash scripts/tsx-safe.sh scripts/preview-roster-import.ts",
     "inspect:db-readonly": "bash scripts/tsx-safe.sh scripts/inspect-db-schema-readonly.ts",
     "inspect:device-push-token-readonly": "bash scripts/tsx-safe.sh scripts/inspect-device-push-token-prod-readonly.ts",

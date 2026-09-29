@@ -1,8 +1,15 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import dayjs from 'dayjs'
 import { prisma } from '@/lib/prisma'
+import { requireAdmin } from '@/lib/auth'
 
-export async function POST() {
+export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
+
+export async function POST(req: NextRequest) {
+  const guard = await requireAdmin(req)
+  if (guard) return guard
+
   const today = dayjs().startOf('day')
 
   // 이미 생성된 날짜면 중복 방지

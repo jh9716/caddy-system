@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { requirePublishedReader } from '@/lib/auth'
 
 // AssignmentType → 한국어 라벨
 const LABEL: Record<string, string> = {
@@ -21,7 +22,13 @@ function getDayRange(ymd: string) {
   return { start, end }
 }
 
+export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
+
 export async function GET(req: NextRequest) {
+  const guard = await requirePublishedReader(req)
+  if (guard) return guard
+
   try {
     const { searchParams } = new URL(req.url)
     const ymd = searchParams.get('date')

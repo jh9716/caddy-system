@@ -15,6 +15,15 @@ export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
   const session = await getVerifiedSessionFromCookies(req.cookies);
 
+  if (pathname === "/assignments" || pathname.startsWith("/assignments/")) {
+    if (!session || session.role !== "admin") {
+      const login = req.nextUrl.clone();
+      login.pathname = "/login";
+      login.searchParams.set("callbackUrl", pathname);
+      return NextResponse.redirect(login);
+    }
+  }
+
   if (pathname.startsWith("/manage")) {
     if (!session || session.role !== "admin") {
       const login = req.nextUrl.clone();
@@ -43,6 +52,8 @@ export async function middleware(req: NextRequest) {
   if (
     pathname.startsWith("/caddy") ||
     pathname.startsWith("/board") ||
+    pathname === "/schedule" ||
+    pathname.startsWith("/schedule/") ||
     pathname.startsWith("/notice") ||
     pathname.startsWith("/course-reports")
   ) {
@@ -67,6 +78,10 @@ export const config = {
     "/manage/:path*",
     "/caddy/:path*",
     "/board/:path*",
+    "/assignments",
+    "/assignments/:path*",
+    "/schedule",
+    "/schedule/:path*",
     "/notice",
     "/notice/:path*",
     "/course-reports",
