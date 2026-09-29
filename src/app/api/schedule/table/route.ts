@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { requirePublishedReader } from '@/lib/auth'
+import { requireAdmin } from '@/lib/auth'
 
 // AssignmentType → 한국어 라벨
 const LABEL: Record<string, string> = {
@@ -26,7 +26,7 @@ export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
 export async function GET(req: NextRequest) {
-  const guard = await requirePublishedReader(req)
+  const guard = await requireAdmin(req)
   if (guard) return guard
 
   try {

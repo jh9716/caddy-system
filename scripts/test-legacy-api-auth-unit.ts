@@ -27,6 +27,7 @@ import { GET as scheduleGET, POST as schedulePOST } from "../src/app/api/schedul
 import { GET as scheduleTableGET } from "../src/app/api/schedule/table/route";
 import { POST as scheduleGeneratePOST } from "../src/app/api/schedule/generate/route";
 import { GET as dbcheckGET } from "../src/app/api/dbcheck/route";
+import { GET as publishedGET } from "../src/app/api/assignments/published/route";
 
 let passed = 0;
 let failed = 0;
@@ -135,13 +136,17 @@ async function main() {
     const board = read("src/app/board/page.tsx");
     const getFn = schedule.split("export async function POST")[0] || "";
     const postFn = schedule.split("export async function POST")[1] || "";
-    assert(/requirePublishedReader/.test(getFn), "GET /api/schedule published-reader");
+    assert(/requireAdmin/.test(getFn), "GET /api/schedule admin");
+    assert(!/requirePublishedReader/.test(getFn), "GET schedule is not caddy-readable");
     assert(/requireAdmin/.test(postFn), "POST /api/schedule admin");
     assert(!/requirePublishedReader/.test(postFn), "POST schedule is not caddy-writable");
-    assert(/requirePublishedReader/.test(table), "GET table published-reader");
+    assert(/requireAdmin/.test(table), "GET table admin");
+    assert(!/requirePublishedReader/.test(table), "GET table is not caddy-readable");
     assert(/requireAdmin/.test(gen), "POST generate admin");
     assert(/\/api\/schedule\/table/.test(schedPage), "가용표 page still uses table API");
     assert(/\/api\/assignments\/published/.test(board), "caddy board still published API");
+    const memberNav = read("src/lib/boardNav.ts");
+    assert(!/href: "\/schedule"/.test(memberNav), "member nav has no /schedule");
     assert(!/phoneNormalized:\s*true/.test(schedule), "schedule GET omits phone");
     assert(!/memo:\s*true/.test(getFn), "schedule GET omits memo");
     assert(!/extraFlags:\s*true/.test(getFn), "schedule GET omits extraFlags");
@@ -156,7 +161,8 @@ async function main() {
     assert(/\/assignments/.test(mw), "middleware matcher includes /assignments");
     assert(/\/schedule/.test(mw), "middleware matcher includes /schedule");
     assert(/pathname === "\/assignments"/.test(mw), "assignments admin gate");
-    assert(/pathname === "\/schedule"/.test(mw), "schedule published-reader gate");
+    assert(/pathname === "\/schedule"/.test(mw), "schedule admin gate");
+    assert(/dest\.pathname = "\/board"/.test(mw), "non-admin /schedule → /board");
     assert(/href: "\/schedule"/.test(shell), "admin ManageShell still links 가용표");
     assert(/requireAdmin/.test(dbcheck), "dbcheck admin only");
     assert(/CourseReportPhoto/.test(dbcheck), "dbcheck still probes photo table for admin");
@@ -167,7 +173,7 @@ async function main() {
   section("guards: unauth / caddy / admin");
   {
     const unauthPub = await requirePublishedReader(
-      new NextRequest("http://localhost/api/schedule/table?date=2026-09-29")
+      new NextRequest("http://localhost/api/assignments/published?date=2026-09-29")
     );
     assert(unauthPub instanceof Response && unauthPub.status === 401, "unauth published-reader 401");
     const unauthAdmin = await requireAdmin(
@@ -176,13 +182,20 @@ async function main() {
     assert(unauthAdmin instanceof Response && unauthAdmin.status === 401, "unauth requireAdmin 401");
 
     const caddyRead = await requirePublishedReader(
-      await cookieReq("caddy", "http://localhost/api/schedule/table?date=2026-09-29")
+      await cookieReq("caddy", "http://localhost/api/assignments/published?date=2026-09-29")
     );
     assert(caddyRead === undefined, "caddy published-reader passes");
     const leaderRead = await requirePublishedReader(
-      await cookieReq("leader", "http://localhost/api/schedule?date=2026-09-29")
+      await cookieReq("leader", "http://localhost/api/assignments/published?date=2026-09-29")
     );
     assert(leaderRead === undefined, "leader published-reader passes");
+    const caddyScheduleAdmin = await requireAdmin(
+      await cookieReq("caddy", "http://localhost/api/schedule/table?date=2026-09-29")
+    );
+    assert(
+      caddyScheduleAdmin instanceof Response && caddyScheduleAdmin.status === 401,
+      "caddy schedule table requireAdmin 401"
+    );
     const caddyWrite = await requireAdmin(
       await cookieReq("caddy", "http://localhost/api/assignments")
     );
@@ -431,7 +444,47 @@ async function main() {
         await cookieReq("caddy", "http://localhost/api/schedule/table?date=2026-09-29")
       )
     );
-    assert(caddyTable.status === 200, `caddy GET table ${caddyTable.status}`);
+    assert(caddyTable.status === 401, `caddy GET table ${caddyTable.status}`);
+    assert(
+      !caddyTable.body ||
+        typeof caddyTable.body !== "object" ||
+        !("columns" in (caddyTable.body as object)),
+      "caddy table has no roster columns"
+    );
+
+    const caddySchedGet = await jsonStatus(
+      await scheduleGET(
+        await cookieReq("caddy", "http://localhost/api/schedule?date=2026-09-29")
+      )
+    );
+    assert(caddySchedGet.status === 401, `caddy GET schedule ${caddySchedGet.status}`);
+
+    const leaderTable = await jsonStatus(
+      await scheduleTableGET(
+        await cookieReq("leader", "http://localhost/api/schedule/table?date=2026-09-29")
+      )
+    );
+    assert(leaderTable.status === 401, `leader GET table ${leaderTable.status}`);
+
+    const adminSchedGet = await jsonStatus(
+      await scheduleGET(
+        await cookieReq("admin", "http://localhost/api/schedule?date=2026-09-29")
+      )
+    );
+    assert(adminSchedGet.status === 200, `admin GET schedule ${adminSchedGet.status}`);
+
+    const caddyPublished = await jsonStatus(
+      await publishedGET(
+        await cookieReq("caddy", "http://localhost/api/assignments/published?date=2026-09-29")
+      )
+    );
+    assert(caddyPublished.status === 200, `caddy published GET ${caddyPublished.status}`);
+    assert(
+      caddyPublished.body &&
+        typeof caddyPublished.body === "object" &&
+        (caddyPublished.body as { ok?: unknown }).ok === true,
+      "caddy published GET ok"
+    );
 
     const adminDb = await jsonStatus(
       await dbcheckGET(await cookieReq("admin", "http://localhost/api/dbcheck"))
@@ -445,7 +498,7 @@ async function main() {
     );
   }
 
-  section("middleware: /assignments admin / /schedule published-reader");
+  section("middleware: /assignments admin / /schedule admin");
   {
     const unauthA = await middleware(
       new NextRequest("https://example.com/assignments")
@@ -473,10 +526,22 @@ async function main() {
     const caddyS = await middleware(
       await cookieReq("caddy", "https://example.com/schedule")
     );
-    assert(caddyS.status === 200 || caddyS.status === 0, `caddy /schedule next ${caddyS.status}`);
+    assert(caddyS.status === 307 || caddyS.status === 302, "caddy /schedule redirect");
+    assert(
+      (caddyS.headers.get("location") || "").includes("/board"),
+      "caddy /schedule → /board"
+    );
     assert(
       !(caddyS.headers.get("location") || "").includes("/login"),
       "caddy /schedule not sent to login"
+    );
+
+    const leaderS = await middleware(
+      await cookieReq("leader", "https://example.com/schedule")
+    );
+    assert(
+      (leaderS.headers.get("location") || "").includes("/board"),
+      "leader /schedule → /board"
     );
 
     const adminA = await middleware(

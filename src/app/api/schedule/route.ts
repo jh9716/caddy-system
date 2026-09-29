@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { requireAdmin, requirePublishedReader } from '@/lib/auth'
+import { requireAdmin } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
-// GET: /api/schedule?date=YYYY-MM-DD — 로그인 캐디/조장/관리자 (가용표 읽기)
+// GET: /api/schedule?date=YYYY-MM-DD — 관리자 전용 (캐디 배치는 /api/assignments/published)
 export async function GET(req: NextRequest) {
-  const guard = await requirePublishedReader(req)
+  const guard = await requireAdmin(req)
   if (guard) return guard
 
   try {
