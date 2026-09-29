@@ -14,6 +14,8 @@ import {
 import {
   PushSubscriptionError,
   deletePushSubscriptionForUser,
+  disableAllPushSubscriptionsForUser,
+  disablePushSubscriptionForUserEndpoint,
   isPushStoreMissing,
   parsePushSubscriptionInput,
   upsertPushSubscriptionForUser,
@@ -181,19 +183,31 @@ export async function POST(req: NextRequest) {
   }
 }
 
-/** DELETE — device-level: owner check, then all mappings for this endpoint. Logout does not call this. */
+/** DELETE — this endpoint (device), or all of this User when scope=all. */
 export async function DELETE(req: NextRequest) {
   const gate = await requireDbPushUser(req);
   if (gate.error) return gate.error;
 
   const body = await req.json().catch(() => ({}));
   try {
-    const endpoint = validatePushEndpoint(
-      body && typeof body === "object"
-        ? (body as { endpoint?: unknown }).endpoint
-        : ""
-    );
-    await deletePushSubscriptionForUser(prisma, gate.userId, endpoint);
+    const rec = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    if (rec.scope === "all") {
+      await disableAllPushSubscriptionsForUser(prisma, gate.userId);
+      return NextResponse.json(
+        statusJson({
+          configured: isWebPushConfigured(),
+          vapidPublicKey: null,
+          subscriptionExists: false,
+          enabled: false,
+        })
+      );
+    }
+    const endpoint = validatePushEndpoint(rec.endpoint);
+    if (rec.scope === "current") {
+      await disablePushSubscriptionForUserEndpoint(prisma, gate.userId, endpoint);
+    } else {
+      await deletePushSubscriptionForUser(prisma, gate.userId, endpoint);
+    }
     return NextResponse.json(
       statusJson({
         configured: isWebPushConfigured(),

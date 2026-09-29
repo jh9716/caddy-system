@@ -50,10 +50,30 @@ export function parseNativePushPlatform(raw: unknown): "ANDROID" {
   return NATIVE_PUSH_PLATFORM_ANDROID;
 }
 
+/** Same physical token cannot stay enabled for another User (account switch). */
+export async function disableDevicePushTokensForOtherUsers(
+  db: PrismaClient,
+  input: { userId: number; token: string }
+): Promise<number> {
+  const result = await db.devicePushToken.updateMany({
+    where: {
+      token: input.token,
+      enabled: true,
+      userId: { not: input.userId },
+    },
+    data: { enabled: false },
+  });
+  return result.count;
+}
+
 export async function upsertDevicePushToken(
   db: PrismaClient,
   input: { userId: number; token: string; platform: "ANDROID" }
 ) {
+  await disableDevicePushTokensForOtherUsers(db, {
+    userId: input.userId,
+    token: input.token,
+  });
   return db.devicePushToken.upsert({
     where: {
       userId_token: { userId: input.userId, token: input.token },
