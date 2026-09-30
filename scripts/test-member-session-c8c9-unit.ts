@@ -311,7 +311,7 @@ section("C9 source: REST callback blocks before session");
   assert(cb.includes('redirectLoginError(req, "kakao_retired")'), "callback uses kakao_retired");
   const lookupAt = cb.indexOf("findOrCreateKakaoSessionUser");
   const retiredAt = cb.indexOf("kakao_retired");
-  const destAt = cb.indexOf("resolvePostLoginHref");
+  const destAt = cb.lastIndexOf("resolvePostLoginHref");
   const sessionAt = cb.lastIndexOf("applySessionCookies");
   assert(lookupAt > 0, "user/caddy lookup present");
   assert(retiredAt > lookupAt, "RETIRED check is after user lookup");
