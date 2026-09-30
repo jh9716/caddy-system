@@ -93,6 +93,7 @@ export default function CaddyLinkClient() {
         credentials: "include",
         body: JSON.stringify({ name, phone }),
       });
+      if (consumeUnauthorizedMemberResponse(res)) return;
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(staffLinkErrorMessage(data?.error, data?.message));
@@ -126,6 +127,7 @@ export default function CaddyLinkClient() {
         method: "POST",
         credentials: "include",
       });
+      if (consumeUnauthorizedMemberResponse(res)) return;
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(staffLinkErrorMessage(data?.error, data?.message));

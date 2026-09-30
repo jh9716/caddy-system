@@ -1,3 +1,5 @@
+import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
+
 export async function uploadNoticePendingPhotos(
   noticeId: number,
   items: { blob: Blob }[],
@@ -16,6 +18,9 @@ export async function uploadNoticePendingPhotos(
       credentials: "include",
       body: fd,
     });
+    if (consumeUnauthorizedMemberResponse(res)) {
+      return { uploaded, failed: failed + (items.length - i) };
+    }
     if (res.ok) uploaded += 1;
     else failed += 1;
   }

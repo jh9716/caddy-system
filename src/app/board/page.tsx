@@ -11,7 +11,10 @@ import {
   todayYmd,
   type DailyBoardPublishedPayloadV1,
 } from "@/lib/dailyBoardPublished";
-import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
+import {
+  consumeUnauthorizedMemberResponse,
+  isMemberSessionRedirectScheduled,
+} from "@/lib/memberSessionRedirect";
 import { type ShiftPart } from "@/lib/reservationParser";
 
 type PublishedResponse = {
@@ -61,10 +64,11 @@ export default function PublishedBoardPage() {
       }
       setPublished(data.published ?? null);
     } catch (e: unknown) {
+      if (isMemberSessionRedirectScheduled()) return;
       setPublished(null);
       setError(e instanceof Error ? e.message : "배치표 조회 실패");
     } finally {
-      setLoading(false);
+      if (!isMemberSessionRedirectScheduled()) setLoading(false);
     }
   }, []);
 

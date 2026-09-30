@@ -21,11 +21,17 @@ export function resetMemberSessionRedirectForTests(): void {
   redirectScheduled = false;
 }
 
+/** True after the first member 401 scheduled /login (skip leftover setState). */
+export function isMemberSessionRedirectScheduled(): boolean {
+  return redirectScheduled;
+}
+
 export function isExemptMemberSessionRedirectPath(pathname: string): boolean {
   const p = String(pathname ?? "").split("?")[0] || "/";
   if (p === "/login" || p.startsWith("/login/")) return true;
   if (p.startsWith("/api/auth/kakao")) return true;
   if (p === "/privacy" || p.startsWith("/privacy/")) return true;
+  if (p === "/privacy-contact" || p.startsWith("/privacy-contact/")) return true;
   if (p === "/account-deletion" || p.startsWith("/account-deletion/")) return true;
   if (p.startsWith("/manage")) return true;
   if (p === "/assignments" || p.startsWith("/assignments/")) return true;

@@ -9,6 +9,7 @@ import {
   NOTICE_PUSH_DONE_LABEL,
   NOTICE_PUSH_SEND_BUTTON,
 } from "@/lib/noticeConstants";
+import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
 
 type Preview = {
   noticeId: number;
@@ -56,6 +57,7 @@ export default function NoticePushNotifyCard({
         `/api/push/notice-preview?noticeId=${encodeURIComponent(String(noticeId))}`,
         { credentials: "include", cache: "no-store" }
       );
+      if (consumeUnauthorizedMemberResponse(res)) return;
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setPreview(null);
@@ -89,6 +91,7 @@ export default function NoticePushNotifyCard({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ noticeId, confirm: NOTICE_PUSH_CONFIRM }),
       });
+      if (consumeUnauthorizedMemberResponse(res)) return;
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(
