@@ -2,6 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { applySessionCookies } from "@/lib/sessionCookies";
 import { passwordLogin } from "@/lib/passwordLogin";
+import {
+  passwordLoginRateLimitedResponse,
+  passwordLoginUnauthorizedResponse,
+} from "@/lib/passwordLoginHttp";
+import {
+  claimPasswordLoginAttempt,
+  loginRateIpFromRequest,
+  releasePasswordLoginClaim,
+} from "@/lib/passwordLoginRateLimit";
 
 export const dynamic = "force-dynamic";
 
@@ -11,22 +20,25 @@ export async function POST(req: NextRequest) {
   const password = String(body?.password ?? "");
 
   if (!username || !password) {
-    return NextResponse.json(
-      { error: "아이디/비밀번호를 입력하세요." },
-      { status: 401 }
-    );
+    return passwordLoginUnauthorizedResponse();
+  }
+
+  const ip = loginRateIpFromRequest(req);
+  const claim = await claimPasswordLoginAttempt(prisma, { ip, username });
+  if (claim.limited) {
+    return passwordLoginRateLimitedResponse(claim.retryAfterSec);
   }
 
   const result = await passwordLogin(username, password, prisma);
   if (result.status === "unavailable") {
+    await releasePasswordLoginClaim(prisma, claim.claimId);
     return NextResponse.json({ error: "auth_unavailable" }, { status: 500 });
   }
   if (result.status !== "ok") {
-    return NextResponse.json(
-      { error: "unauthorized", message: "로그인 실패" },
-      { status: 401 }
-    );
+    return passwordLoginUnauthorizedResponse();
   }
+
+  await releasePasswordLoginClaim(prisma, claim.claimId);
 
   try {
     const res = NextResponse.json({

@@ -2,6 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { applySessionCookies } from "@/lib/sessionCookies";
 import { passwordLogin } from "@/lib/passwordLogin";
+import {
+  passwordLoginRateLimitedResponse,
+  passwordLoginUnauthorizedResponse,
+} from "@/lib/passwordLoginHttp";
+import {
+  claimPasswordLoginAttempt,
+  loginRateIpFromRequest,
+  releasePasswordLoginClaim,
+} from "@/lib/passwordLoginRateLimit";
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
@@ -9,23 +18,25 @@ export async function POST(req: NextRequest) {
   const password = String(body?.password ?? "");
 
   if (!username || !password) {
-    return NextResponse.json(
-      { ok: false, message: "존재하지 않거나 권한이 없습니다." },
-      { status: 401 }
-    );
+    return passwordLoginUnauthorizedResponse();
+  }
+
+  const ip = loginRateIpFromRequest(req);
+  const claim = await claimPasswordLoginAttempt(prisma, { ip, username });
+  if (claim.limited) {
+    return passwordLoginRateLimitedResponse(claim.retryAfterSec);
   }
 
   const result = await passwordLogin(username, password, prisma);
   if (result.status === "unavailable") {
+    await releasePasswordLoginClaim(prisma, claim.claimId);
     return NextResponse.json({ error: "auth_unavailable" }, { status: 500 });
   }
   if (result.status !== "ok") {
-    const message =
-      result.reason === "bad_password"
-        ? "비밀번호가 올바르지 않습니다."
-        : "존재하지 않거나 권한이 없습니다.";
-    return NextResponse.json({ ok: false, message }, { status: 401 });
+    return passwordLoginUnauthorizedResponse();
   }
+
+  await releasePasswordLoginClaim(prisma, claim.claimId);
 
   try {
     const res = NextResponse.json({

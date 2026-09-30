@@ -53,7 +53,9 @@ export default function LoginClient() {
         body: JSON.stringify({ username, password }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || data?.message || "로그인 실패");
+      if (!res.ok) {
+        throw new Error(data?.message || data?.error || "로그인 실패");
+      }
 
       location.href = resolvePostLoginHref({
         role: data.role,
