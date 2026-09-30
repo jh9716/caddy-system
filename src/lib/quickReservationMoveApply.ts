@@ -32,6 +32,7 @@ import {
   parseDailyBoardDraftPayload,
   type DailyBoardDraftPayloadV1,
 } from "@/lib/dailyBoardDraft";
+import { assertDailyBoardDraftInvariants } from "@/lib/dailyBoardDraftInvariants";
 import { rejectStaleLivePrevious } from "@/lib/liveAssignmentFreshness";
 
 export const QUICK_MOVE_DRAFT_FORCE_FAIL = "QUICK_MOVE_DRAFT_FORCE_FAIL";
@@ -142,6 +143,7 @@ export async function applyQuickReservationMove(input: {
         ? { unavailableCaddyIds: [...input.previous.unavailableCaddyIds] }
         : { unavailableCaddyIds: [] }),
     };
+    assertDailyBoardDraftInvariants(payload);
   } catch (e) {
     return {
       ok: false,

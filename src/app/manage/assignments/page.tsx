@@ -2458,6 +2458,11 @@ export default function ManageAssignmentsOpsPage() {
         allowSpecialEdit: true,
       });
     }
+    if (result.warnings.some((w) => w.code === "SAME_SHIFT_DUPLICATE")) {
+      setWarnings(result.warnings);
+      showToast(result.warnings[0]?.message || "같은 부에 동일 캐디를 둘 수 없습니다.");
+      return;
+    }
     setDraft(result.draft);
     setWarnings(result.warnings);
     queueDraftSave(result.draft);
@@ -3015,6 +3020,11 @@ export default function ManageAssignmentsOpsPage() {
   function onAssignUnassigned(resKey: string, caddyId: number) {
     if (!draft) return;
     const result = assignCaddyToUnassigned(draft, resKey, caddyId);
+    if (result.warnings.some((w) => w.code === "SAME_SHIFT_DUPLICATE")) {
+      setWarnings(result.warnings);
+      showToast(result.warnings[0]?.message || "같은 부에 동일 캐디를 둘 수 없습니다.");
+      return;
+    }
     setDraft(result.draft);
     setWarnings(result.warnings);
     queueDraftSave(result.draft);

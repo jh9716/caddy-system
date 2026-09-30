@@ -4,6 +4,8 @@
  */
 
 import { parseYmd } from "@/lib/availabilityEngine";
+import { DailyBoardDraftPayloadError } from "@/lib/dailyBoardDraft";
+import { assertDailyBoardDraftInvariants } from "@/lib/dailyBoardDraftInvariants";
 import {
   getDailyBoardDraft,
   type DailyBoardDraftDb,
@@ -165,6 +167,12 @@ export async function publishDailyBoard(input: {
   }
   if (draft.version !== expected) {
     throw new DailyBoardPublishStaleError(draft);
+  }
+  try {
+    assertDailyBoardDraftInvariants(draft.payload);
+  } catch (e) {
+    if (e instanceof DailyBoardDraftPayloadError) throw e;
+    throw e;
   }
   const payload = buildPublishedPayloadFromDraft(draft.payload, {
     publisherUsername: input.publisherUsername ?? null,

@@ -6,6 +6,7 @@
 import { createHash } from "crypto";
 import type { AssignmentKind, AutoAssignmentRow } from "@/lib/autoAssignEngine";
 import type { ShiftPart as UiShiftPart } from "@/lib/reservationParser";
+import { findDailyBoardDraftInvariantIssue } from "@/lib/dailyBoardDraftInvariants";
 
 export type ConfirmDraftStatus = "DRAFT" | "EDITED" | "CONFIRMED" | "APPLIED";
 
@@ -216,6 +217,19 @@ export function validateConfirmRequest(
   }
 
   if (issues.length > 0) {
+    return { ok: false, issues };
+  }
+
+  const invariant = findDailyBoardDraftInvariantIssue({
+    date,
+    assignments: rows,
+  });
+  if (invariant) {
+    issues.push({
+      code: invariant.code,
+      message: invariant.message,
+      caddyId: invariant.caddyId,
+    });
     return { ok: false, issues };
   }
 

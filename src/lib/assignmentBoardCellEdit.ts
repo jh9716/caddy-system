@@ -12,6 +12,7 @@ import {
   unusedCaddies,
   type AssignmentDraft,
 } from "@/lib/assignmentDraft";
+import { findDailyBoardDraftInvariantIssue } from "@/lib/dailyBoardDraftInvariants";
 import {
   compareAssignmentOrder,
   compareReservationOrder,
@@ -48,6 +49,9 @@ export const DIRECT_EDIT_NOT_FOUND_MESSAGE = "배치 예약을 찾을 수 없습
 
 export const DIRECT_EDIT_CADDY_NOT_FOUND_MESSAGE =
   "선택한 캐디를 현재 운영 roster에서 찾을 수 없습니다.";
+
+export const DIRECT_EDIT_SAME_SHIFT_DUPLICATE_MESSAGE =
+  "같은 부에 동일 캐디를 두 번 이상 배치할 수 없습니다.";
 
 export const VACANT_CADDY_PLACEHOLDER: AutoAssignCaddy = {
   id: 0,
@@ -174,6 +178,30 @@ function cloneRow(row: AutoAssignmentRow): AutoAssignmentRow {
     caddy: { ...row.caddy },
     locked: row.locked,
   };
+}
+
+function rejectBrokenInvariants(
+  next: AssignmentDraft
+): DirectCaddyEditResult | null {
+  try {
+    const issue = findDailyBoardDraftInvariantIssue({
+      date: next.date,
+      assignments: next.assignments,
+      allowedCaddyIds: (next.caddyPool || []).map((c) => c.id),
+    });
+    if (!issue) return null;
+    return {
+      ok: false,
+      code: issue.code,
+      message: issue.message,
+    };
+  } catch {
+    return {
+      ok: false,
+      code: "DRAFT_ASSIGNMENT_MISMATCH",
+      message: DIRECT_EDIT_SAME_SHIFT_DUPLICATE_MESSAGE,
+    };
+  }
 }
 
 function markEdited(draft: AssignmentDraft): AssignmentDraft {
@@ -519,7 +547,7 @@ function placeOnVacantAssignment(
 ): DirectCaddyEditResult {
   const key = reservationKey(target.reservation);
   const result = replaceAssignmentCaddy(draft, key, caddy.id);
-  if (result.warnings.some((w) => w.level === "error" && w.code !== "SAME_SHIFT_DUPLICATE")) {
+  if (result.warnings.some((w) => w.level === "error")) {
     const blocking = result.warnings.find((w) => w.level === "error");
     return {
       ok: false,
@@ -551,7 +579,7 @@ function placeOnUnassigned(
   caddy: AutoAssignCaddy
 ): DirectCaddyEditResult {
   const result = assignCaddyToUnassigned(draft, resKey, caddy.id);
-  if (result.warnings.some((w) => w.level === "error" && w.code !== "SAME_SHIFT_DUPLICATE")) {
+  if (result.warnings.some((w) => w.level === "error")) {
     const blocking = result.warnings.find((w) => w.level === "error");
     return {
       ok: false,
@@ -805,29 +833,39 @@ export function applyDirectCaddyEdit(
             }
           : row
       );
+      const nextDraft = markEdited({ ...placed.draft, assignments: vacated });
+      const broken = rejectBrokenInvariants(nextDraft);
+      if (broken) return broken;
       return {
         ...placed,
-        draft: markEdited({ ...placed.draft, assignments: vacated }),
+        draft: nextDraft,
         affectedKeys: [resKey, reservationKey(peer.reservation)],
       };
     }
-    return swapDraft(draft, resKey, reservationKey(peer.reservation));
+    const swapped = swapDraft(draft, resKey, reservationKey(peer.reservation));
+    if (swapped.ok && swapped.action !== "noop") {
+      const broken = rejectBrokenInvariants(swapped.draft);
+      if (broken) return broken;
+    }
+    return swapped;
   }
 
-  if (unassigned) {
-    return placeOnUnassigned(draft, resKey, caddy);
+  const next = unassigned
+    ? placeOnUnassigned(draft, resKey, caddy)
+    : assigned && isDirectEditVacant(assigned)
+      ? placeOnVacantAssignment(draft, assigned, caddy)
+    : assigned
+      ? insertSpareIntoRegularWindow(draft, assigned, caddy)
+      : {
+          ok: false as const,
+          code: "RESERVATION_NOT_FOUND",
+          message: DIRECT_EDIT_NOT_FOUND_MESSAGE,
+        };
+  if (next.ok && next.action !== "noop") {
+    const broken = rejectBrokenInvariants(next.draft);
+    if (broken) return broken;
   }
-  if (assigned && isDirectEditVacant(assigned)) {
-    return placeOnVacantAssignment(draft, assigned, caddy);
-  }
-  if (assigned) {
-    return insertSpareIntoRegularWindow(draft, assigned, caddy);
-  }
-  return {
-    ok: false,
-    code: "RESERVATION_NOT_FOUND",
-    message: DIRECT_EDIT_NOT_FOUND_MESSAGE,
-  };
+  return next;
 }
 
 export function groupDirectEditCandidates(
