@@ -39,6 +39,9 @@ import {
   publishDailyBoard,
   type PublishDailyBoardDb,
 } from "../src/lib/dailyBoardPublishedService";
+import { parseYmd } from "../src/lib/availabilityEngine";
+import { assertLocalDatabaseUrl, isLocalDatabaseUrl } from "../src/lib/dbSafety";
+import { PrismaClient } from "@prisma/client";
 
 let passed = 0;
 let failed = 0;
@@ -102,9 +105,14 @@ type DraftRow = {
   createdAt: Date;
 };
 
-function createMemoryDraftDb() {
+function createMemoryDraftDb(
+  trustedCaddyIds: Iterable<number> = Array.from({ length: 20 }, (_, i) => i + 1)
+) {
   const rows = new Map<number, DraftRow>();
   const published = new Map<number, unknown>();
+  const caddySet = new Set(
+    [...trustedCaddyIds].map((id) => Number(id)).filter((id) => id > 0)
+  );
   const keyOf = (d: Date) => d.getTime();
   const cloneRow = (row: DraftRow): DraftRow => ({
     ...clone(row),
@@ -211,9 +219,18 @@ function createMemoryDraftDb() {
         };
       },
     },
+    caddy: {
+      findMany: async ({ where }: { where: { id: { in: number[] } } }) => {
+        const ids = Array.isArray(where?.id?.in) ? where.id.in : [];
+        return ids
+          .map((id) => Number(id))
+          .filter((id) => caddySet.has(id))
+          .map((id) => ({ id }));
+      },
+    },
     $transaction: async (fn) => fn(api),
   };
-  return { db: api, rows, published };
+  return { db: api, rows, published, caddySet };
 }
 
 async function main() {
@@ -224,17 +241,17 @@ async function main() {
       "utf8"
     );
     const parseIdx = svc.indexOf("parseDailyBoardDraftPayload(input.payload");
-    const assertIdx = svc.indexOf("assertDailyBoardDraftInvariants(payload)");
+    const assertIdx = svc.indexOf("assertDailyBoardDraftWriteInvariants(payload, db)");
     const txIdx = svc.indexOf("db.$transaction");
     assert(parseIdx >= 0 && assertIdx > parseIdx && txIdx > assertIdx, "saveDailyBoardDraft parse→assert→tx");
-    const onDbAssert = svc.indexOf("assertDailyBoardDraftInvariants(input.payload)");
+    const onDbAssert = svc.indexOf("assertDailyBoardDraftWriteInvariants(input.payload, tx)");
     const onDbCreate = svc.indexOf("tx.dailyBoardDraft.create");
     assert(onDbAssert >= 0 && onDbCreate > onDbAssert, "OnDb assert before create");
     const pub = fs.readFileSync(
       path.resolve("src/lib/dailyBoardPublishedService.ts"),
       "utf8"
     );
-    const pubAssert = pub.indexOf("assertDailyBoardDraftInvariants(draft.payload)");
+    const pubAssert = pub.indexOf("assertDailyBoardDraftWriteInvariants(draft.payload, db)");
     const pubWrite = pub.indexOf("const payload = buildPublishedPayloadFromDraft");
     assert(
       pubAssert >= 0 && pubWrite > pubAssert,
@@ -252,7 +269,7 @@ async function main() {
       path.resolve("src/lib/quickReservationMoveApply.ts"),
       "utf8"
     );
-    const qmAssert = quickMove.indexOf("assertDailyBoardDraftInvariants(payload)");
+    const qmAssert = quickMove.indexOf("assertDailyBoardDraftWriteInvariants(payload, db)");
     const qmTx = quickMove.indexOf("db.$transaction");
     assert(
       qmAssert >= 0 && qmTx > qmAssert,
@@ -262,11 +279,19 @@ async function main() {
       path.resolve("src/lib/quickBoardMutationApply.ts"),
       "utf8"
     );
-    const qmutAssert = quickMut.indexOf("assertDailyBoardDraftInvariants(payload)");
+    const qmutAssert = quickMut.indexOf("assertDailyBoardDraftWriteInvariants(payload, db)");
     const qmutTx = quickMut.indexOf("db.$transaction");
     assert(
       qmutAssert >= 0 && qmutTx > qmutAssert,
       "quick-mutation asserts before transaction"
+    );
+    const inv = fs.readFileSync(
+      path.resolve("src/lib/dailyBoardDraftInvariants.ts"),
+      "utf8"
+    );
+    assert(
+      inv.includes("loadTrustedCaddyIdsFromDb") && inv.includes("caddy.findMany"),
+      "write path looks up Caddy table ids"
     );
   }
 
@@ -512,6 +537,215 @@ async function main() {
       threw = true;
     }
     assert(!threw, "vacant placeholder id 0 is not INVALID_CADDY");
+  }
+
+  section("9 ghost in caddyPool+assignment still rejected");
+  {
+    const mem = createMemoryDraftDb();
+    const payload = assignmentDraftToPayload(draft);
+    const ghost = { id: 999999, name: "Ghost", team: "X조", teamOrder: 0 };
+    payload.caddyPool = [...payload.caddyPool, ghost];
+    payload.assignments = payload.assignments.map((row, i) =>
+      i === 0 ? { ...row, caddy: { ...ghost } } : row
+    );
+    let err: DailyBoardDraftPayloadError | null = null;
+    try {
+      await saveDailyBoardDraft({
+        date,
+        expectedVersion: 0,
+        payload,
+        updatedByUserId: null,
+        db: mem.db,
+      });
+    } catch (e) {
+      if (e instanceof DailyBoardDraftPayloadError) err = e;
+    }
+    assert(err?.code === INVALID_CADDY, "forged pool+assignment ghost INVALID_CADDY");
+    assert((await getDailyBoardDraft(date, mem.db)) === null, "forged ghost write 0");
+  }
+
+  section("10 aligned date/shift rewrite vs request date");
+  {
+    const mem = createMemoryDraftDb();
+    const payload = assignmentDraftToPayload(draft);
+    payload.assignments = payload.assignments.map((row, i) =>
+      i === 0
+        ? {
+            ...row,
+            date: "2099-12-01",
+            reservation: { ...row.reservation, date: "2099-12-01" },
+          }
+        : row
+    );
+    let err: DailyBoardDraftPayloadError | null = null;
+    try {
+      await saveDailyBoardDraft({
+        date,
+        expectedVersion: 0,
+        payload,
+        updatedByUserId: null,
+        db: mem.db,
+      });
+    } catch (e) {
+      if (e instanceof DailyBoardDraftPayloadError) err = e;
+    }
+    assert(
+      err?.code === DRAFT_ASSIGNMENT_MISMATCH,
+      "assignment+reservation both forged off request date → mismatch"
+    );
+
+    const aligned = assignmentDraftToPayload(draft);
+    aligned.assignments = aligned.assignments.map((row, i) =>
+      i === 0
+        ? {
+            ...row,
+            shift: "3부",
+            reservation: { ...row.reservation, shift: "3부" },
+          }
+        : row
+    );
+    const saved = await saveDailyBoardDraft({
+      date,
+      expectedVersion: 0,
+      payload: aligned,
+      updatedByUserId: null,
+      db: mem.db,
+    });
+    assert(saved.version === 1, "internally aligned shift rewrite currently saves");
+  }
+
+  section("11 special cross-shift no false positive");
+  {
+    const mem = createMemoryDraftDb();
+    const payload = assignmentDraftToPayload(draft);
+    const kinds = ["oneTwo", "oneThree", "twoThree", "oneMak"] as const;
+    payload.assignments = payload.assignments.map((row) => {
+      if (reservationKey(row.reservation) === reservationKey(twoShift.reservation)) {
+        return {
+          ...row,
+          caddy: { ...first.caddy },
+          kind: "oneTwo",
+          pairId: "pair-1-2",
+        };
+      }
+      if (reservationKey(row.reservation) === reservationKey(first.reservation)) {
+        return { ...row, kind: "oneTwo", pairId: "pair-1-2" };
+      }
+      return row;
+    });
+    const saved = await saveDailyBoardDraft({
+      date,
+      expectedVersion: 0,
+      payload,
+      updatedByUserId: null,
+      db: mem.db,
+    });
+    assert(saved.version === 1, "oneTwo 1부+2부 same caddy saves");
+    for (const kind of kinds) {
+      const issue = findDailyBoardDraftInvariantIssue({
+        date,
+        assignments: [
+          { date, shift: "1부", caddy: { id: first.caddy.id } },
+          {
+            date,
+            shift: kind === "twoThree" ? "2부" : kind === "oneMak" ? "3부" : "2부",
+            caddy: { id: first.caddy.id },
+          },
+        ],
+      });
+      assert(issue == null, `${kind} cross-shift is not SAME_SHIFT_DUPLICATE`);
+    }
+  }
+
+  section("12 legacy invalid GET then repair save");
+  {
+    const mem = createMemoryDraftDb();
+    const ok = await saveDailyBoardDraft({
+      date,
+      expectedVersion: 0,
+      payload: assignmentDraftToPayload(draft),
+      updatedByUserId: null,
+      db: mem.db,
+    });
+    const row = mem.rows.values().next().value as DraftRow;
+    const poisoned = assignmentDraftToPayload(draft);
+    poisoned.assignments = poisoned.assignments.map((a) =>
+      reservationKey(a.reservation) === reservationKey(second.reservation)
+        ? { ...a, caddy: { ...first.caddy } }
+        : a
+    );
+    row.payload = poisoned;
+    const loaded = await getDailyBoardDraft(date, mem.db);
+    assert(loaded?.version === ok.version, "GET still returns legacy invalid draft");
+
+    let saveErr: DailyBoardDraftPayloadError | null = null;
+    try {
+      await saveDailyBoardDraft({
+        date,
+        expectedVersion: ok.version,
+        payload: poisoned,
+        updatedByUserId: null,
+        db: mem.db,
+      });
+    } catch (e) {
+      if (e instanceof DailyBoardDraftPayloadError) saveErr = e;
+    }
+    assert(saveErr?.code === SAME_SHIFT_DUPLICATE, "resave invalid rejected");
+    assert(
+      (await getDailyBoardDraft(date, mem.db))?.version === ok.version,
+      "invalid resave write 0"
+    );
+
+    const repaired = await saveDailyBoardDraft({
+      date,
+      expectedVersion: ok.version,
+      payload: assignmentDraftToPayload(draft),
+      updatedByUserId: null,
+      db: mem.db,
+    });
+    assert(repaired.version === ok.version + 1, "repaired draft saves");
+  }
+
+  section("13 local Caddy table rejects forged pool ghost");
+  {
+    const url = process.env.DATABASE_URL || "";
+    if (!isLocalDatabaseUrl(url)) {
+      console.log("  · skip local Caddy table (no local DATABASE_URL)");
+    } else {
+      assertLocalDatabaseUrl(url);
+      const prisma = new PrismaClient();
+      const localDate = "2099-11-28";
+      const key = parseYmd(localDate).start;
+      try {
+        await prisma.dailyBoardDraft.deleteMany({ where: { date: key } });
+        const payload = assignmentDraftToPayload(makeDraft(localDate));
+        const ghost = { id: 999999999, name: "Ghost", team: "X조", teamOrder: 0 };
+        payload.caddyPool = [...payload.caddyPool, ghost];
+        payload.assignments = payload.assignments.map((row, i) =>
+          i === 0 ? { ...row, caddy: { ...ghost } } : row
+        );
+        let err: DailyBoardDraftPayloadError | null = null;
+        try {
+          await saveDailyBoardDraft({
+            date: localDate,
+            expectedVersion: 0,
+            payload,
+            updatedByUserId: null,
+            db: prisma as unknown as DailyBoardDraftDb,
+          });
+        } catch (e) {
+          if (e instanceof DailyBoardDraftPayloadError) err = e;
+        }
+        const leftover = await prisma.dailyBoardDraft.findUnique({
+          where: { date: key },
+        });
+        assert(err?.code === INVALID_CADDY, "local Caddy table rejects forged ghost");
+        assert(leftover == null, "local forged ghost write 0");
+      } finally {
+        await prisma.dailyBoardDraft.deleteMany({ where: { date: key } });
+        await prisma.$disconnect();
+      }
+    }
   }
 
   console.log(`\nDONE: ${passed} passed, ${failed} failed`);

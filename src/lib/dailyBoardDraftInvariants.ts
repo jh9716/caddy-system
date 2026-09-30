@@ -112,14 +112,82 @@ export function findDailyBoardDraftInvariantIssue(input: {
   return null;
 }
 
+export type CaddyIdLookupDb = {
+  caddy: {
+    findMany: (args: {
+      where: { id: { in: number[] } };
+      select: { id: true };
+    }) => Promise<Array<{ id: number }>>;
+  };
+};
+
+export function asCaddyIdLookup(db: unknown): CaddyIdLookupDb | null {
+  if (!db || typeof db !== "object") return null;
+  const caddy = (db as { caddy?: { findMany?: unknown } }).caddy;
+  if (!caddy || typeof caddy.findMany !== "function") return null;
+  return db as CaddyIdLookupDb;
+}
+
+export function collectAssignmentCaddyIds(
+  assignments: readonly DraftInvariantAssignment[]
+): number[] {
+  const ids: number[] = [];
+  const seen = new Set<number>();
+  for (const row of assignments) {
+    const id = positiveCaddyId(row.caddy?.id);
+    if (id == null || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
+}
+
+/** Server Caddy table ids that exist. null = lookup unavailable (tests). */
+export async function loadTrustedCaddyIdsFromDb(
+  db: unknown,
+  assignments: readonly DraftInvariantAssignment[]
+): Promise<Set<number> | null> {
+  const lookup = asCaddyIdLookup(db);
+  if (!lookup) return null;
+  const ids = collectAssignmentCaddyIds(assignments);
+  if (ids.length === 0) return new Set();
+  const rows = await lookup.caddy.findMany({
+    where: { id: { in: ids } },
+    select: { id: true },
+  });
+  return new Set(
+    rows
+      .map((row) => Number(row.id))
+      .filter((id) => Number.isInteger(id) && id > 0)
+  );
+}
+
 export function assertDailyBoardDraftInvariants(
-  payload: DailyBoardDraftPayloadV1
+  payload: DailyBoardDraftPayloadV1,
+  options?: { trustedCaddyIds?: Iterable<number> | null }
 ): void {
+  const allowedCaddyIds =
+    options && "trustedCaddyIds" in options
+      ? options.trustedCaddyIds
+      : (payload.caddyPool || []).map((c) => c.id);
   const issue = findDailyBoardDraftInvariantIssue({
     date: payload.date,
     assignments: payload.assignments,
-    allowedCaddyIds: (payload.caddyPool || []).map((c) => c.id),
+    allowedCaddyIds,
   });
   if (!issue) return;
   throw new DailyBoardDraftPayloadError(issue.message, issue.code);
+}
+
+/** Write-boundary assert. Uses Caddy table when db can look up ids. */
+export async function assertDailyBoardDraftWriteInvariants(
+  payload: DailyBoardDraftPayloadV1,
+  db?: unknown
+): Promise<void> {
+  const trusted = await loadTrustedCaddyIdsFromDb(db, payload.assignments);
+  if (trusted) {
+    assertDailyBoardDraftInvariants(payload, { trustedCaddyIds: trusted });
+    return;
+  }
+  assertDailyBoardDraftInvariants(payload);
 }

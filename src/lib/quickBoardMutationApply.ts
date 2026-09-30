@@ -37,7 +37,7 @@ import {
   payloadToAssignmentDraft,
   type DailyBoardDraftPayloadV1,
 } from "@/lib/dailyBoardDraft";
-import { assertDailyBoardDraftInvariants } from "@/lib/dailyBoardDraftInvariants";
+import { assertDailyBoardDraftWriteInvariants } from "@/lib/dailyBoardDraftInvariants";
 import {
   isPipelineMutation,
   type PipelineMutationType,
@@ -264,7 +264,7 @@ export async function applyQuickBoardMutation(input: {
         ? { unavailableFromShift: preview.after.unavailableFromShift }
         : {}),
     };
-    assertDailyBoardDraftInvariants(payload);
+    await assertDailyBoardDraftWriteInvariants(payload, db);
   } catch (e) {
     return {
       ok: false,

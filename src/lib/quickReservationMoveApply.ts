@@ -32,7 +32,7 @@ import {
   parseDailyBoardDraftPayload,
   type DailyBoardDraftPayloadV1,
 } from "@/lib/dailyBoardDraft";
-import { assertDailyBoardDraftInvariants } from "@/lib/dailyBoardDraftInvariants";
+import { assertDailyBoardDraftWriteInvariants } from "@/lib/dailyBoardDraftInvariants";
 import { rejectStaleLivePrevious } from "@/lib/liveAssignmentFreshness";
 
 export const QUICK_MOVE_DRAFT_FORCE_FAIL = "QUICK_MOVE_DRAFT_FORCE_FAIL";
@@ -132,6 +132,7 @@ export async function applyQuickReservationMove(input: {
     };
   }
 
+  const db = input.prisma ?? defaultPrisma;
   let payload: DailyBoardDraftPayloadV1;
   try {
     payload = parseDailyBoardDraftPayload(input.draft.payload, input.draft.date);
@@ -143,7 +144,7 @@ export async function applyQuickReservationMove(input: {
         ? { unavailableCaddyIds: [...input.previous.unavailableCaddyIds] }
         : { unavailableCaddyIds: [] }),
     };
-    assertDailyBoardDraftInvariants(payload);
+    await assertDailyBoardDraftWriteInvariants(payload, db);
   } catch (e) {
     return {
       ok: false,
@@ -154,7 +155,6 @@ export async function applyQuickReservationMove(input: {
   }
 
   const plan = buildLiveChangePersistPlan(preview);
-  const db = input.prisma ?? defaultPrisma;
   const persistStarted = Date.now();
   try {
     const written = await db.$transaction(

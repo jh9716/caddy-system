@@ -13,7 +13,7 @@ import {
   type DailyBoardDraftPayloadV1,
   DAILY_BOARD_DRAFT_SCHEMA_VERSION,
 } from "@/lib/dailyBoardDraft";
-import { assertDailyBoardDraftInvariants } from "@/lib/dailyBoardDraftInvariants";
+import { assertDailyBoardDraftWriteInvariants } from "@/lib/dailyBoardDraftInvariants";
 import { prisma as defaultPrisma } from "@/lib/prisma";
 import { parseUnavailableFromShift } from "@/lib/caddyPoolCanonical";
 import type { UnavailableFromShiftRow } from "@/lib/autoAssignEngine";
@@ -148,7 +148,7 @@ export async function saveDailyBoardDraftOnDb(
 ): Promise<DailyBoardDraftRecord> {
   const ymd = input.date;
   const expectedVersion = Number(input.expectedVersion);
-  assertDailyBoardDraftInvariants(input.payload);
+  await assertDailyBoardDraftWriteInvariants(input.payload, tx);
   const key = dateKey(ymd);
   const existing = await tx.dailyBoardDraft.findUnique({
     where: { date: key },
@@ -210,8 +210,8 @@ export async function saveDailyBoardDraft(input: {
     throw new DailyBoardDraftPayloadError("version이 올바르지 않습니다.");
   }
   const payload = parseDailyBoardDraftPayload(input.payload, ymd);
-  assertDailyBoardDraftInvariants(payload);
   const db = input.db ?? (defaultPrisma as unknown as DailyBoardDraftDb);
+  await assertDailyBoardDraftWriteInvariants(payload, db);
 
   try {
     return await db.$transaction(async (tx) =>
