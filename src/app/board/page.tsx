@@ -11,6 +11,7 @@ import {
   todayYmd,
   type DailyBoardPublishedPayloadV1,
 } from "@/lib/dailyBoardPublished";
+import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
 import { type ShiftPart } from "@/lib/reservationParser";
 
 type PublishedResponse = {
@@ -53,6 +54,7 @@ export default function PublishedBoardPage() {
         `/api/assignments/published?date=${encodeURIComponent(ymd)}`,
         { credentials: "include", cache: "no-store" }
       );
+      if (consumeUnauthorizedMemberResponse(res)) return;
       const data = (await res.json().catch(() => ({}))) as PublishedResponse;
       if (!res.ok) {
         throw new Error(data.error || "배치표 조회 실패");

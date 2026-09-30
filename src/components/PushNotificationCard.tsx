@@ -17,6 +17,7 @@ import {
   SAME_DEVICE_PREPARE_ERROR,
   SAME_DEVICE_PREPARE_MESSAGE,
 } from "@/lib/pushSubscriptionErrors";
+import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
 
 type StatusResponse = {
   configured?: boolean;
@@ -103,6 +104,7 @@ export default function PushNotificationCard({
       cache: "no-store",
       headers: endpoint ? { "x-push-endpoint": endpoint } : undefined,
     });
+    if (consumeUnauthorizedMemberResponse(res)) return;
     const data = (await res.json().catch(() => ({}))) as StatusResponse;
     if (res.status === 503 && data.error === "auth_unavailable") {
       setConfigured(false);
@@ -197,6 +199,7 @@ export default function PushNotificationCard({
           platform: ios ? "ios" : /Android/i.test(navigator.userAgent) ? "android" : "desktop",
         }),
       });
+      if (consumeUnauthorizedMemberResponse(res)) return;
       if (!res.ok) {
         const errBody = (await res.json().catch(() => ({}))) as StatusResponse;
         if (res.status !== 409 && createdNew) {
@@ -244,6 +247,7 @@ export default function PushNotificationCard({
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ endpoint }),
         });
+        if (consumeUnauthorizedMemberResponse(res)) return;
         if (!res.ok && res.status !== 404) {
           setError("알림을 해제하지 못했습니다.");
           await refreshLocal();

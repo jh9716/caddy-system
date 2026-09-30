@@ -17,6 +17,7 @@ import {
   pickCourseReportPhotos,
   uploadCourseReportPendingPhotos,
 } from "@/lib/courseReportPhotoClient";
+import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
 
 type Props = {
   mode?: "new" | "edit";
@@ -96,6 +97,7 @@ export default function CourseReportForm({
       method: "DELETE",
       credentials: "include",
     });
+    if (consumeUnauthorizedMemberResponse(res)) return;
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       alert(typeof data.message === "string" ? data.message : "사진 삭제 실패");
@@ -129,6 +131,10 @@ export default function CourseReportForm({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+    if (consumeUnauthorizedMemberResponse(res)) {
+      setBusy(false);
+      return;
+    }
     if (!res.ok) {
       setBusy(false);
       const data = await res.json().catch(() => ({}));

@@ -7,6 +7,7 @@ import {
   COURSE_REPORT_STATUS_LABELS,
   type CourseReportStatusCode,
 } from "@/lib/courseReportConstants";
+import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
 
 export default function CourseReportDetailActions({
   id,
@@ -32,6 +33,10 @@ export default function CourseReportDetailActions({
       method: "DELETE",
       credentials: "include",
     });
+    if (consumeUnauthorizedMemberResponse(res)) {
+      setBusy(false);
+      return;
+    }
     setBusy(false);
     if (!res.ok) {
       alert("삭제 실패");
@@ -49,6 +54,10 @@ export default function CourseReportDetailActions({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status: next }),
     });
+    if (consumeUnauthorizedMemberResponse(res)) {
+      setBusy(false);
+      return;
+    }
     setBusy(false);
     if (!res.ok) {
       alert("상태 변경 실패");

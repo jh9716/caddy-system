@@ -8,6 +8,7 @@ import {
   type MineLinkPayload,
   type StaffLinkRequestView,
 } from "@/lib/caddyLinkRequestUi";
+import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
 
 export default function CaddyLinkClient() {
   const router = useRouter();
@@ -35,8 +36,7 @@ export default function CaddyLinkClient() {
       credentials: "include",
       cache: "no-store",
     });
-    if (res.status === 401) {
-      router.replace("/login?callbackUrl=/caddy/link");
+    if (consumeUnauthorizedMemberResponse(res)) {
       return null;
     }
     const data = await res.json().catch(() => ({}));
@@ -62,6 +62,7 @@ export default function CaddyLinkClient() {
           credentials: "include",
           cache: "no-store",
         });
+        if (consumeUnauthorizedMemberResponse(roleRes)) return;
         const roleData = await roleRes.json().catch(() => ({}));
         if (roleData.role !== "caddy") {
           router.replace("/login?callbackUrl=/caddy/link");
