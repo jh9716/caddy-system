@@ -164,7 +164,7 @@ import {
   draftAutosaveCandidate,
   formatDraftSavedAt,
   liveApplyDraftSaveUi,
-  nextDraftVersionAfterConflict,
+  planLiveApplyDraftConflictRetry,
   parseDailyBoardDraftPayload,
   payloadToAssignmentDraft,
 } from "@/lib/dailyBoardDraft";
@@ -3267,20 +3267,29 @@ export default function ManageAssignmentsOpsPage() {
           });
           if (ui === "keep-applied") {
             const latest = await loadServerDraft(toSave.date).catch(() => null);
-            const retryVersion = nextDraftVersionAfterConflict(
-              serverDraftVersionRef.current,
-              latest?.draft?.version
-            );
-            if (retryVersion != null) {
-              const retry = await putAssignmentDraft(toSave, retryVersion);
+            const planned = planLiveApplyDraftConflictRetry({
+              attemptedVersion: serverDraftVersionRef.current,
+              latestVersion: latest?.draft?.version,
+              latestPayload: latest?.draft?.payload,
+              date: toSave.date,
+              liveAfter: (data.preview?.after ||
+                input.preview.after) as typeof input.preview.after,
+            });
+            if (planned.action === "put") {
+              const retry = await putAssignmentDraft(
+                planned.draft,
+                planned.version
+              );
               if (
                 retry.res.ok &&
                 retry.data.draft &&
                 retry.res.status !== 409 &&
                 retry.data.code !== DRAFT_VERSION_CONFLICT
               ) {
+                setDraft(planned.draft);
+                setWarnings(detectDraftWarnings(planned.draft));
                 serverDraftVersionRef.current =
-                  Number(retry.data.draft.version) || retryVersion;
+                  Number(retry.data.draft.version) || planned.version;
                 setDraftVersion(serverDraftVersionRef.current);
                 setDraftSavedAt(
                   String(retry.data.draft.updatedAt || new Date().toISOString())

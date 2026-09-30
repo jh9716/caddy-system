@@ -4,7 +4,6 @@
  */
 import {
   isDrivingPlacement,
-  isPlacementLocked,
   parseAssignShiftPart,
   reservationKey,
   resolveCourseCode,
@@ -148,7 +147,7 @@ export function reservationMoveBlockReason(
       message: "특수지원 배치는 지원 큐를 유지하므로 1차에서 팀 이동하지 않습니다.",
     };
   }
-  if (isPlacementLocked(row) || row.locked === true) {
+  if (row.locked === true) {
     return {
       code: "MOVE_LOCKED",
       message: "LOCK된 예약은 이동할 수 없습니다.",

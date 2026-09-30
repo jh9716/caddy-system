@@ -3251,6 +3251,36 @@ section("MOVE는 같은 row metadata 유지 / LOCK·특수·충돌 거부");
     change: moveTo(specialPrev, "S1A", { course: "VERTHILL", shift: "1부", teeTime: "07:40" }),
   });
   assert(special.warnings.some((w) => w.code === "MOVE_SPECIAL"), "special blocked");
+  assert(
+    reservationMoveBlockReason(
+      specialPrev.assignments.find((a) => a.reservation.id === "S1A")!
+    )?.code === "MOVE_SPECIAL",
+    "UI special reason"
+  );
+
+  for (const kind of ["oneMak", "oneTwo", "twoThree"] as const) {
+    const otherPrev: AutoAssignResultV1 = {
+      ...stamped,
+      assignments: stamped.assignments.map((row) =>
+        row.reservation.id === "S1A" ? { ...row, kind } : row
+      ),
+    };
+    const other = previewLiveAssignmentChange({
+      previous: otherPrev,
+      regularCaddyPool: pool,
+      change: moveTo(otherPrev, "S1A", { course: "VERTHILL", shift: "1부", teeTime: "07:40" }),
+    });
+    assert(
+      !other.warnings.some((w) => w.code === "MOVE_SPECIAL" || w.code === "MOVE_LOCKED"),
+      `${kind} not MOVE_SPECIAL/MOVE_LOCKED`
+    );
+    assert(
+      reservationMoveBlockReason(
+        otherPrev.assignments.find((a) => a.reservation.id === "S1A")!
+      ) == null,
+      `UI ${kind} still movable`
+    );
+  }
 
   const drivingPrev: AutoAssignResultV1 = {
     ...stamped,

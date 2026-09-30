@@ -720,8 +720,9 @@ console.log("== 보드 팀 이동은 미리보기 없이 즉시 apply ==");
   assert(
     !/rollbackOptimistic\(\)/.test(conflictBlock) &&
       /liveApplyDraftSaveUi/.test(conflictBlock) &&
-      /nextDraftVersionAfterConflict/.test(conflictBlock),
-    "Draft PUT 409 after live success keeps applied UI and retries version"
+      /planLiveApplyDraftConflictRetry/.test(conflictBlock) &&
+      !/putAssignmentDraft\(\s*toSave/.test(conflictBlock),
+    "Draft PUT 409 after live success reconciles latest draft + live"
   );
   assert(
     /setError\(drop\?\.message/.test(enqueueFn) &&

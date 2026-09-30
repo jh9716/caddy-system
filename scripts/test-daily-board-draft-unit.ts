@@ -12,6 +12,7 @@ import {
   DRAFT_VERSION_CONFLICT_MESSAGE,
   liveApplyDraftSaveUi,
   nextDraftVersionAfterConflict,
+  planLiveApplyDraftConflictRetry,
   parseDailyBoardDraftPayload,
   payloadToAssignmentDraft,
   resolveDraftRequestDate,
@@ -24,6 +25,8 @@ import {
   type DailyBoardDraftDb,
 } from "../src/lib/dailyBoardDraftService";
 import {
+  applyLiveResultToDraft,
+  autoResultFromDraft,
   createDraftFromAutoResult,
   reservationsFromAssignmentDraft,
   type AssignmentDraft,
@@ -40,8 +43,10 @@ import {
   hasBlockingLiveChangeError,
   makeAddReservationChange,
   makeMoveReservationChange,
+  previewLiveAssignmentChange,
   previewLiveChangeFromDraft,
 } from "../src/lib/assignmentChange";
+import { applyHouseRequestFlag, isHouseRequest } from "../src/lib/assignmentBoardDirectEdit";
 import { parseYmd } from "../src/lib/availabilityEngine";
 
 let passed = 0;
@@ -782,6 +787,87 @@ section("B6: live 성공 후 Draft 409는 UI rollback이 아니라 keep-applied"
   assert(nextDraftVersionAfterConflict(3, 4) === 4, "retry next version");
   assert(nextDraftVersionAfterConflict(3, 3) === null, "same version no retry");
   assert(nextDraftVersionAfterConflict(3, "x") === null, "invalid version no retry");
+
+  const date = "2026-09-30";
+  const available = pool(8);
+  const shared = makeDraft(date, available);
+  const rowA = shared.assignments.find((r) => r.reservation.id === "A")!;
+  const rowB = shared.assignments.find((r) => r.reservation.id === "B")!;
+  const keyA = reservationKey(rowA.reservation);
+  const keyB = reservationKey(rowB.reservation);
+
+  const bLatest = applyLiveResultToDraft(
+    shared,
+    applyHouseRequestFlag(autoResultFromDraft(shared), keyA, true)
+  );
+  assert(
+    bLatest.assignments.some(
+      (r) => reservationKey(r.reservation) === keyA && isHouseRequest(r.reservation)
+    ),
+    "B draft has houseRequest on A"
+  );
+
+  const liveAfter = previewLiveAssignmentChange({
+    previous: autoResultFromDraft(shared),
+    regularCaddyPool: available,
+    change: {
+      type: "SWAP_CADDY",
+      reservationKeyA: keyA,
+      reservationKeyB: keyB,
+    },
+  }).after;
+  const aStaleApplied = applyLiveResultToDraft(shared, liveAfter);
+  assert(
+    !aStaleApplied.assignments.some(
+      (r) => reservationKey(r.reservation) === keyA && isHouseRequest(r.reservation)
+    ),
+    "A stale applied payload lacks B houseRequest"
+  );
+  assert(
+    aStaleApplied.assignments.find((r) => reservationKey(r.reservation) === keyA)
+      ?.caddy.id ===
+      shared.assignments.find((r) => reservationKey(r.reservation) === keyB)?.caddy
+        .id,
+    "A live swap is on stale applied payload"
+  );
+
+  const planned = planLiveApplyDraftConflictRetry({
+    attemptedVersion: 1,
+    latestVersion: 2,
+    latestPayload: assignmentDraftToPayload(bLatest),
+    date,
+    liveAfter,
+  });
+  assert(planned.action === "put", "conflict retry plans one PUT");
+  assert(planned.action === "put" && planned.version === 2, "retry uses B version");
+  const reconciled = planned.action === "put" ? planned.draft : bLatest;
+  assert(
+    reconciled.assignments.some(
+      (r) => reservationKey(r.reservation) === keyA && isHouseRequest(r.reservation)
+    ),
+    "reconcile keeps B houseRequest"
+  );
+  assert(
+    reconciled.assignments.find((r) => reservationKey(r.reservation) === keyA)
+      ?.caddy.id ===
+      liveAfter.assignments.find((r) => reservationKey(r.reservation) === keyA)
+        ?.caddy.id,
+    "reconcile keeps A live swap"
+  );
+  assert(
+    JSON.stringify(assignmentDraftToPayload(reconciled)) !==
+      JSON.stringify(assignmentDraftToPayload(aStaleApplied)),
+    "retry payload is not A stale applied"
+  );
+
+  const noLatest = planLiveApplyDraftConflictRetry({
+    attemptedVersion: 1,
+    latestVersion: 2,
+    latestPayload: { not: "a draft" },
+    date,
+    liveAfter,
+  });
+  assert(noLatest.action === "conflict", "unreadable latest stays conflict, no PUT");
 }
 
 section("source guards: API / UI / migration / live save order");
@@ -860,9 +946,10 @@ section("source guards: API / UI / migration / live save order");
   assert(
     !/rollbackOptimistic\(\)/.test(conflictBlock) &&
       /liveApplyDraftSaveUi/.test(conflictBlock) &&
-      /nextDraftVersionAfterConflict/.test(conflictBlock) &&
-      /putAssignmentDraft/.test(conflictBlock),
-    "Draft PUT 409 after live success keeps applied UI and retries latest version"
+      /planLiveApplyDraftConflictRetry/.test(conflictBlock) &&
+      /putAssignmentDraft\(\s*planned\.draft/.test(conflictBlock) &&
+      !/putAssignmentDraft\(\s*toSave/.test(conflictBlock),
+    "Draft PUT 409 after live success reconciles latest draft + live, not stale payload"
   );
 
   const run = page.split("async function runAutoAssign")[1]?.split("function onReplace")[0] || "";

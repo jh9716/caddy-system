@@ -4373,7 +4373,7 @@ function validateReservationMoveEvents(
       });
       continue;
     }
-    if (isPlacementLocked(row) || row.locked === true) {
+    if (row.locked === true) {
       warnings.push({
         level: "error",
         code: "MOVE_LOCKED",
