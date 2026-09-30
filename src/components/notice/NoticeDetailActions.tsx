@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
 import { useState } from "react";
 
 export default function NoticeDetailActions({ id }: { id: number }) {
@@ -14,6 +15,10 @@ export default function NoticeDetailActions({ id }: { id: number }) {
       method: "DELETE",
       credentials: "include",
     });
+    if (consumeUnauthorizedMemberResponse(res)) {
+      setBusy(false);
+      return;
+    }
     setBusy(false);
     if (!res.ok) {
       alert("삭제 실패");

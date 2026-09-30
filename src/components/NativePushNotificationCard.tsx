@@ -22,6 +22,7 @@ import {
   type NativePushPermission,
   type NativePushSurface,
 } from "@/lib/nativePushUi";
+import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
 
 type StatusResponse = {
   configured?: boolean;
@@ -68,6 +69,7 @@ export default function NativePushNotificationCard({
             cache: "no-store",
             headers: nativeTokenStatusHeaders(token),
           });
+          if (consumeUnauthorizedMemberResponse(res)) return false;
           const data = (await res.json().catch(() => ({}))) as StatusResponse;
           return data.registered === true;
         } catch {
@@ -113,6 +115,7 @@ export default function NativePushNotificationCard({
         return;
       }
       const res = await fetch(NATIVE_PUSH_TOKEN_PATH, nativeTokenRequestInit(token));
+      if (consumeUnauthorizedMemberResponse(res)) return;
       if (!res.ok) {
         setError("알림을 등록하지 못했습니다.");
         await refresh();
@@ -134,6 +137,7 @@ export default function NativePushNotificationCard({
       const token = readMemoryNativePushToken();
       if (token) {
         const res = await fetch(NATIVE_PUSH_TOKEN_PATH, nativeTokenDisableInit(token));
+        if (consumeUnauthorizedMemberResponse(res)) return;
         if (!res.ok && res.status !== 404) {
           setError("알림을 해제하지 못했습니다.");
         }

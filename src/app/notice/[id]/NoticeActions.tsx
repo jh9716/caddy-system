@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
 
 type Props = {
   id: number;
@@ -35,6 +36,7 @@ export default function NoticeActions({
         // content, body 둘 다 보내서 백엔드 어떤 필드여도 수용되게
         body: JSON.stringify({ title, content, body: content }),
       });
+      if (consumeUnauthorizedMemberResponse(res)) return;
       if (!res.ok) throw new Error("failed");
       setEditing(false);
       router.refresh();
@@ -48,6 +50,7 @@ export default function NoticeActions({
   async function onDelete() {
     if (!confirm("정말 삭제하시겠습니까?")) return;
     const res = await fetch(`/api/notice/${id}`, { method: "DELETE" });
+    if (consumeUnauthorizedMemberResponse(res)) return;
     if (!res.ok) {
       alert("삭제에 실패했습니다.");
       return;

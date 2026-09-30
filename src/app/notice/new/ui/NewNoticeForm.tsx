@@ -22,6 +22,10 @@ import {
 import type { NoticePhotoPublic } from '@/lib/noticePhotoConstants'
 import { noticePhotoSrc } from '@/lib/noticePhotoConstants'
 import { uploadNoticePendingPhotos } from '@/lib/noticePhotoClient'
+import {
+  consumeUnauthorizedMemberResponse,
+  isMemberSessionRedirectScheduled,
+} from '@/lib/memberSessionRedirect'
 
 type Props = {
   mode?: 'new' | 'edit'
@@ -142,6 +146,7 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
       method: 'DELETE',
       credentials: 'include',
     })
+    if (consumeUnauthorizedMemberResponse(res)) return
     if (!res.ok) {
       const data = await res.json().catch(() => ({}))
       setStatusNote(typeof data.message === 'string' ? data.message : '사진 삭제 실패')
@@ -183,6 +188,11 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
       body: JSON.stringify(payload),
     })
 
+    if (consumeUnauthorizedMemberResponse(res)) {
+      setBusy(false)
+      return
+    }
+
     if (!res.ok) {
       setBusy(false)
       const data = await res.json().catch(() => ({}))
@@ -205,6 +215,7 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
 
     if (noticeId && pending.length > 0) {
       const uploaded = await uploadNoticePendingPhotos(noticeId, pending)
+      if (isMemberSessionRedirectScheduled()) return
       if (uploaded.failed > 0) {
         setBusy(false)
         alert(

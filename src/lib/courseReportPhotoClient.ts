@@ -1,3 +1,4 @@
+import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
 import {
   COURSE_REPORT_PHOTO_ACCEPT,
   COURSE_REPORT_PHOTO_JPEG_QUALITY,
@@ -225,6 +226,9 @@ export async function uploadCourseReportPendingPhotos(
       credentials: "include",
       body: fd,
     });
+    if (consumeUnauthorizedMemberResponse(res)) {
+      return { uploaded, failed: failed + (items.length - i) };
+    }
     if (res.ok) uploaded += 1;
     else failed += 1;
   }

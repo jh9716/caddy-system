@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import type { CommentPublic } from "@/lib/comment";
 import { COMMENT_BODY_MAX, COMMENT_DELETED_PLACEHOLDER } from "@/lib/commentConstants";
+import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
 
 function formatCommentTime(iso: string): string {
   const d = new Date(iso);
@@ -41,6 +42,10 @@ export default function CourseReportComments({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ body }),
     });
+    if (consumeUnauthorizedMemberResponse(res)) {
+      setBusy(false);
+      return;
+    }
     const data = await res.json().catch(() => ({}));
     setBusy(false);
     if (!res.ok) {
@@ -60,6 +65,10 @@ export default function CourseReportComments({
       `/api/course-reports/${reportId}/comments/${commentId}`,
       { method: "DELETE", credentials: "include" }
     );
+    if (consumeUnauthorizedMemberResponse(res)) {
+      setBusy(false);
+      return;
+    }
     setBusy(false);
     if (!res.ok) {
       alert("댓글 삭제 실패");

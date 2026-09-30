@@ -17,6 +17,7 @@ import {
   safeReturnPath,
   statesMatch,
 } from "@/lib/kakaoOAuth";
+import { isRetiredCaddySessionBlocked } from "@/lib/auth";
 import { findOrCreateKakaoSessionUser } from "@/lib/kakaoSessionUser";
 import { resolvePostLoginHref } from "@/lib/roleRouting";
 
@@ -87,6 +88,15 @@ export async function GET(req: NextRequest) {
     // 기존 User는 DB role 유지 (leader 등). 신규는 caddy.
     role = normalizeAppRole(user.role) || "caddy";
     username = user.username;
+    if (
+      isRetiredCaddySessionBlocked({
+        role,
+        caddyId: user.caddyId,
+        employmentStatus: user.employmentStatus,
+      })
+    ) {
+      return redirectLoginError(req, "kakao_retired");
+    }
 
     const returnCookie = req.cookies.get(KAKAO_RETURN_COOKIE)?.value;
     const dest = resolvePostLoginHref({

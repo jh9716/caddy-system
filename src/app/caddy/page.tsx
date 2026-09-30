@@ -5,6 +5,10 @@ import DevicePushSettings from '@/components/DevicePushSettings'
 import PwaInstallCard from '@/components/PwaInstallCard'
 import { resolveCaddyPageGate } from '@/lib/roleRouting'
 import { formatKstDisplay } from '@/lib/kstDate'
+import {
+  consumeUnauthorizedMemberResponse,
+  redirectMemberToLogin,
+} from '@/lib/memberSessionRedirect'
 
 type Summary = {
   date: string
@@ -26,9 +30,20 @@ export default function CaddyPage() {
 
   useEffect(() => {
     const run = async () => {
+      let redirected = false
       try {
         const r = await fetch('/api/check-role', { credentials: 'include' })
+        if (consumeUnauthorizedMemberResponse(r)) {
+          redirected = true
+          return
+        }
         const d = await r.json()
+        // 200 + role=null: expired/cleared session (check-role never 401s).
+        // 503 auth_unavailable keeps the existing gate/catch path.
+        if (r.status === 200 && !d.role) {
+          redirected = redirectMemberToLogin()
+          if (redirected) return
+        }
         const gate = resolveCaddyPageGate(d.role)
         if (gate.action === 'replace') {
           router.replace(gate.href)
@@ -44,6 +59,10 @@ export default function CaddyPage() {
           credentials: 'include',
           cache: 'no-store',
         })
+        if (consumeUnauthorizedMemberResponse(mineRes)) {
+          redirected = true
+          return
+        }
         if (mineRes.ok) {
           const mine = await mineRes.json().catch(() => null)
           // 미연결만 /caddy/link로. APPROVED(+미연결 레이스)는 루프 방지로 대시보드 유지
@@ -57,14 +76,22 @@ export default function CaddyPage() {
           }
         }
         const res = await fetch('/api/summary', { credentials: 'include' })
+        if (consumeUnauthorizedMemberResponse(res)) {
+          redirected = true
+          return
+        }
+        if (!res.ok) {
+          throw new Error('summary')
+        }
         const data: Summary = await res.json()
         setSummary(data)
         setAllowed(true)
       } catch {
+        if (redirected) return
         alert('정보를 불러오지 못했습니다.')
         setAllowed(true)
       } finally {
-        setLoading(false)
+        if (!redirected) setLoading(false)
       }
     }
     run()

@@ -11,6 +11,10 @@ import {
   todayYmd,
   type DailyBoardPublishedPayloadV1,
 } from "@/lib/dailyBoardPublished";
+import {
+  consumeUnauthorizedMemberResponse,
+  isMemberSessionRedirectScheduled,
+} from "@/lib/memberSessionRedirect";
 import { type ShiftPart } from "@/lib/reservationParser";
 
 type PublishedResponse = {
@@ -53,16 +57,18 @@ export default function PublishedBoardPage() {
         `/api/assignments/published?date=${encodeURIComponent(ymd)}`,
         { credentials: "include", cache: "no-store" }
       );
+      if (consumeUnauthorizedMemberResponse(res)) return;
       const data = (await res.json().catch(() => ({}))) as PublishedResponse;
       if (!res.ok) {
         throw new Error(data.error || "배치표 조회 실패");
       }
       setPublished(data.published ?? null);
     } catch (e: unknown) {
+      if (isMemberSessionRedirectScheduled()) return;
       setPublished(null);
       setError(e instanceof Error ? e.message : "배치표 조회 실패");
     } finally {
-      setLoading(false);
+      if (!isMemberSessionRedirectScheduled()) setLoading(false);
     }
   }, []);
 
