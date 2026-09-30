@@ -2,8 +2,7 @@
 import type { NextAuthOptions } from "next-auth";
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
-import { prisma } from "@/lib/prisma";
-import { passwordLogin } from "@/lib/passwordLogin";
+import { authorizePasswordCredentials } from "@/lib/nextAuthCredentials";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,32 +24,8 @@ export const authOptions: NextAuthOptions = {
         username: { label: "ID", type: "text" },
         password: { label: "Password", type: "password" },
       },
-      async authorize(creds) {
-        if (!creds?.username || !creds?.password) return null;
-
-        const result = await passwordLogin(
-          String(creds.username),
-          String(creds.password),
-          prisma
-        );
-        if (result.status === "unavailable") {
-          throw new Error("auth_unavailable");
-        }
-        if (result.status !== "ok") return null;
-
-        if (result.source === "env") {
-          return {
-            id: result.role === "admin" ? "env-admin" : "env-caddy",
-            name: result.username,
-            role: result.role,
-          };
-        }
-
-        return {
-          id: String(result.userId),
-          name: result.username,
-          role: result.role,
-        };
+      async authorize(creds, req) {
+        return authorizePasswordCredentials(creds, req);
       },
     }),
   ],
