@@ -201,9 +201,17 @@ section("C8 source: member clients use shared helper");
   assert(board.includes("isMemberSessionRedirectScheduled"), "board skips setState after redirect");
   assert(comments.includes("consumeUnauthorizedMemberResponse"), "board comments uses helper");
   assert(courseForm.includes("consumeUnauthorizedMemberResponse"), "course form uses helper");
+  assert(
+    courseForm.includes("isMemberSessionRedirectScheduled"),
+    "course form skips photo toast after redirect"
+  );
   assert(courseActions.includes("consumeUnauthorizedMemberResponse"), "course actions uses helper");
   assert(courseComments.includes("consumeUnauthorizedMemberResponse"), "course comments uses helper");
   assert(noticeForm.includes("consumeUnauthorizedMemberResponse"), "notice form uses helper");
+  assert(
+    noticeForm.includes("isMemberSessionRedirectScheduled"),
+    "notice form skips photo toast after redirect"
+  );
   assert(noticeActions.includes("consumeUnauthorizedMemberResponse"), "notice actions uses helper");
   assert(noticeDetail.includes("consumeUnauthorizedMemberResponse"), "notice detail uses helper");
   assert(noticePush.includes("consumeUnauthorizedMemberResponse"), "notice push preview uses helper");

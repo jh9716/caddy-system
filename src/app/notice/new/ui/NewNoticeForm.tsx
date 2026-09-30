@@ -22,7 +22,10 @@ import {
 import type { NoticePhotoPublic } from '@/lib/noticePhotoConstants'
 import { noticePhotoSrc } from '@/lib/noticePhotoConstants'
 import { uploadNoticePendingPhotos } from '@/lib/noticePhotoClient'
-import { consumeUnauthorizedMemberResponse } from '@/lib/memberSessionRedirect'
+import {
+  consumeUnauthorizedMemberResponse,
+  isMemberSessionRedirectScheduled,
+} from '@/lib/memberSessionRedirect'
 
 type Props = {
   mode?: 'new' | 'edit'
@@ -212,6 +215,7 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
 
     if (noticeId && pending.length > 0) {
       const uploaded = await uploadNoticePendingPhotos(noticeId, pending)
+      if (isMemberSessionRedirectScheduled()) return
       if (uploaded.failed > 0) {
         setBusy(false)
         alert(

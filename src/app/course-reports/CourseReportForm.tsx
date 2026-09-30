@@ -17,7 +17,10 @@ import {
   pickCourseReportPhotos,
   uploadCourseReportPendingPhotos,
 } from "@/lib/courseReportPhotoClient";
-import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
+import {
+  consumeUnauthorizedMemberResponse,
+  isMemberSessionRedirectScheduled,
+} from "@/lib/memberSessionRedirect";
 
 type Props = {
   mode?: "new" | "edit";
@@ -152,6 +155,7 @@ export default function CourseReportForm({
     if (canManagePhotos && pending.length > 0) {
       failed = await uploadPending(reportId);
     }
+    if (isMemberSessionRedirectScheduled()) return;
     setBusy(false);
     if (failed > 0) {
       alert(
