@@ -10,6 +10,8 @@ import {
   draftAutosaveCandidate,
   DRAFT_VERSION_CONFLICT,
   DRAFT_VERSION_CONFLICT_MESSAGE,
+  liveApplyDraftSaveUi,
+  nextDraftVersionAfterConflict,
   parseDailyBoardDraftPayload,
   payloadToAssignmentDraft,
   resolveDraftRequestDate,
@@ -756,6 +758,32 @@ section("Draft reset은 DailyReservation/DailyPlacement를 삭제하지 않음")
   assert(mem.dailyPlacements.length === 1, "DailyPlacement untouched");
 }
 
+section("B6: live 성공 후 Draft 409는 UI rollback이 아니라 keep-applied");
+{
+  assert(
+    liveApplyDraftSaveUi({ livePersisted: false, draftSave: "conflict" }) ===
+      "rollback",
+    "live fail rolls back"
+  );
+  assert(
+    liveApplyDraftSaveUi({ livePersisted: true, draftSave: "ok" }) === "success",
+    "live+draft ok"
+  );
+  assert(
+    liveApplyDraftSaveUi({ livePersisted: true, draftSave: "conflict" }) ===
+      "keep-applied",
+    "live ok + draft 409 keeps applied"
+  );
+  assert(
+    liveApplyDraftSaveUi({ livePersisted: true, draftSave: "error" }) ===
+      "keep-applied",
+    "live ok + draft error keeps applied"
+  );
+  assert(nextDraftVersionAfterConflict(3, 4) === 4, "retry next version");
+  assert(nextDraftVersionAfterConflict(3, 3) === null, "same version no retry");
+  assert(nextDraftVersionAfterConflict(3, "x") === null, "invalid version no retry");
+}
+
 section("source guards: API / UI / migration / live save order");
 {
   const page = readSrc("src/app/manage/assignments/page.tsx");
@@ -822,7 +850,20 @@ section("source guards: API / UI / migration / live save order");
       /offSheetHttp: false/.test(quickMoveRoute),
     "quick-move skips off-sheet/availability"
   );
-  assert(/rollbackOptimistic\(\)/.test(persist), "persist rolls back optimistic Draft on apply/PUT fail");
+  const applyFail = persist.split("if (!res.ok)")[1]?.split("let savedDraft")[0] || "";
+  const conflictBlock =
+    persist.split('flushed.status === "conflict"')[1]?.split("if (flushed.status")[0] || "";
+  assert(
+    /rollbackOptimistic\(\)/.test(applyFail),
+    "persist rolls back optimistic Draft on live apply fail"
+  );
+  assert(
+    !/rollbackOptimistic\(\)/.test(conflictBlock) &&
+      /liveApplyDraftSaveUi/.test(conflictBlock) &&
+      /nextDraftVersionAfterConflict/.test(conflictBlock) &&
+      /putAssignmentDraft/.test(conflictBlock),
+    "Draft PUT 409 after live success keeps applied UI and retries latest version"
+  );
 
   const run = page.split("async function runAutoAssign")[1]?.split("function onReplace")[0] || "";
   const runFail = run.split("if (!res.ok)")[1]?.split("setAutoResult(data)")[0] || "";

@@ -163,6 +163,8 @@ import {
   DRAFT_VERSION_CONFLICT_MESSAGE,
   draftAutosaveCandidate,
   formatDraftSavedAt,
+  liveApplyDraftSaveUi,
+  nextDraftVersionAfterConflict,
   parseDailyBoardDraftPayload,
   payloadToAssignmentDraft,
 } from "@/lib/dailyBoardDraft";
@@ -3259,14 +3261,45 @@ export default function ManageAssignmentsOpsPage() {
         queueDraftSave(toSave, true);
         const flushed = await flushDraftSave();
         if (flushed.status === "conflict") {
-          rollbackOptimistic();
+          const ui = liveApplyDraftSaveUi({
+            livePersisted: true,
+            draftSave: "conflict",
+          });
+          if (ui === "keep-applied") {
+            const latest = await loadServerDraft(toSave.date).catch(() => null);
+            const retryVersion = nextDraftVersionAfterConflict(
+              serverDraftVersionRef.current,
+              latest?.draft?.version
+            );
+            if (retryVersion != null) {
+              const retry = await putAssignmentDraft(toSave, retryVersion);
+              if (
+                retry.res.ok &&
+                retry.data.draft &&
+                retry.res.status !== 409 &&
+                retry.data.code !== DRAFT_VERSION_CONFLICT
+              ) {
+                serverDraftVersionRef.current =
+                  Number(retry.data.draft.version) || retryVersion;
+                setDraftVersion(serverDraftVersionRef.current);
+                setDraftSavedAt(
+                  String(retry.data.draft.updatedAt || new Date().toISOString())
+                );
+                setDraftSaveState("saved");
+                return true;
+              }
+            }
+          }
           setDraftSaveState("conflict");
           setError(DRAFT_VERSION_CONFLICT_MESSAGE);
           showToast(failToast);
           return false;
         }
         if (flushed.status !== "ok") {
-          rollbackOptimistic();
+          liveApplyDraftSaveUi({
+            livePersisted: true,
+            draftSave: flushed.status,
+          });
           setError("작업본 저장에 실패했습니다. 다시 시도해주세요.");
           showToast(failToast);
           return false;

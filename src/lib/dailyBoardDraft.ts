@@ -110,6 +110,30 @@ export function draftAutosaveCandidate(input: {
   return input.draft;
 }
 
+/**
+ * Live apply 성공 후 Draft PUT 409/실패 시 UI는 적용 결과를 유지한다.
+ * apply 실패(live 미기록)만 rollback.
+ */
+export function liveApplyDraftSaveUi(input: {
+  livePersisted: boolean;
+  draftSave: "ok" | "conflict" | "error" | "skipped";
+}): "success" | "rollback" | "keep-applied" {
+  if (!input.livePersisted) return "rollback";
+  if (input.draftSave === "ok") return "success";
+  return "keep-applied";
+}
+
+/** 409 응답의 최신 version으로 Draft PUT을 한 번 더 시도할 수 있으면 그 version. */
+export function nextDraftVersionAfterConflict(
+  attemptedVersion: number,
+  conflictDraftVersion: unknown
+): number | null {
+  const latest = Number(conflictDraftVersion);
+  if (!Number.isInteger(latest) || latest < 0) return null;
+  if (latest === attemptedVersion) return null;
+  return latest;
+}
+
 export function assignmentDraftToPayload(
   draft: AssignmentDraft
 ): DailyBoardDraftPayloadV1 {

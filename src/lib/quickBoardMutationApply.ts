@@ -65,6 +65,7 @@ import {
   placedCaddyIdsFromBoard,
   snapshotComputePool,
 } from "@/lib/caddyPoolCanonical";
+import { rejectStaleLivePrevious } from "@/lib/liveAssignmentFreshness";
 
 function placedCaddyIds(previous: AutoAssignResultV1): Set<number> {
   return placedCaddyIdsFromBoard(previous);
@@ -124,6 +125,11 @@ export async function applyQuickBoardMutation(input: {
       message: "Draft 날짜와 배치 날짜가 다릅니다.",
     };
   }
+
+  const freshness = await rejectStaleLivePrevious(input.previous, {
+    prisma: input.prisma ?? defaultPrisma,
+  });
+  if (!freshness.ok) return freshness;
 
   const computeStarted = Date.now();
   const db = input.prisma ?? defaultPrisma;
