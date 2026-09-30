@@ -177,6 +177,12 @@ async function main() {
     const kakaoNative = read("src/app/api/auth/kakao/native-session/route.ts");
     assert(kakaoCb.includes("findOrCreateKakaoSessionUser"), "kakao callback untouched");
     assert(kakaoNative.includes("exchangeNativeKakaoSession"), "kakao native untouched");
+    const nextauth = read("src/app/api/auth/[...nextauth]/route.ts");
+    assert(
+      nextauth.includes("authorizePasswordCredentials"),
+      "nextauth authorize uses shared helper"
+    );
+    assert(!nextauth.includes("passwordLogin("), "nextauth no direct passwordLogin");
   }
 
   section("helper: IP+account key, 8 allowed / 9th limited");

@@ -24,6 +24,37 @@ export const PASSWORD_LOGIN_RATE_LIMIT = 8;
 export const PASSWORD_LOGIN_RATE_WINDOW_MS = 15 * 60 * 1000;
 export const PASSWORD_LOGIN_USERNAME_MAX = 80;
 
+/**
+ * Env-admin password POSTs have no request username (shared ADMIN_PASSWORD).
+ * Key is IP + fixed sentinel so office NAT is one bucket, isolated from C7.
+ * 20 / 15 min is more generous than C7's 8 because the key is IP-only.
+ */
+export const ADMIN_ENV_PASSWORD_RATE_ACTION = "ADMIN_ENV_PASSWORD_FAIL";
+export const ADMIN_ENV_PASSWORD_RATE_USERNAME = "env-admin";
+export const ADMIN_ENV_PASSWORD_RATE_LIMIT = 20;
+export const ADMIN_ENV_PASSWORD_RATE_WINDOW_MS = 15 * 60 * 1000;
+
+export type LoginRatePolicy = {
+  action: string;
+  entity: string;
+  limit: number;
+  windowMs: number;
+};
+
+export const PASSWORD_LOGIN_RATE_POLICY: LoginRatePolicy = {
+  action: PASSWORD_LOGIN_RATE_ACTION,
+  entity: PASSWORD_LOGIN_RATE_ENTITY,
+  limit: PASSWORD_LOGIN_RATE_LIMIT,
+  windowMs: PASSWORD_LOGIN_RATE_WINDOW_MS,
+};
+
+export const ADMIN_ENV_PASSWORD_RATE_POLICY: LoginRatePolicy = {
+  action: ADMIN_ENV_PASSWORD_RATE_ACTION,
+  entity: PASSWORD_LOGIN_RATE_ENTITY,
+  limit: ADMIN_ENV_PASSWORD_RATE_LIMIT,
+  windowMs: ADMIN_ENV_PASSWORD_RATE_WINDOW_MS,
+};
+
 export type PasswordLoginRateDb = {
   audit: {
     count: (args: {
@@ -79,9 +110,18 @@ export function loginRateIpFromRequest(req: {
   return rateLimitIp(clientIpFromRequest(req.headers));
 }
 
-function keyWhere(ip: string, username: string, since?: Date) {
+function resolvePolicy(policy?: LoginRatePolicy): LoginRatePolicy {
+  return policy ?? PASSWORD_LOGIN_RATE_POLICY;
+}
+
+function keyWhere(
+  ip: string,
+  username: string,
+  policy: LoginRatePolicy,
+  since?: Date
+) {
   return {
-    action: PASSWORD_LOGIN_RATE_ACTION,
+    action: policy.action,
     ip,
     payload: { equals: { u: username } },
     ...(since ? { createdAt: { gte: since } } : {}),
@@ -90,44 +130,63 @@ function keyWhere(ip: string, username: string, since?: Date) {
 
 function retryAfterSecFromOldest(
   oldest: { createdAt: Date } | null,
-  now: number
+  now: number,
+  windowMs: number
 ): number {
   return Math.max(
     1,
-    Math.ceil(
-      ((oldest?.createdAt.getTime() ?? now) +
-        PASSWORD_LOGIN_RATE_WINDOW_MS -
-        now) /
-        1000
-    )
+    Math.ceil(((oldest?.createdAt.getTime() ?? now) + windowMs - now) / 1000)
   );
+}
+
+export function loginRateIpFromAuthHeaders(headers: unknown): string {
+  const get = (name: string): string | null => {
+    if (!headers) return null;
+    if (typeof (headers as { get?: unknown }).get === "function") {
+      const v = (headers as { get: (n: string) => unknown }).get(name);
+      return v == null ? null : String(v);
+    }
+    const rec = headers as Record<string, unknown>;
+    const raw =
+      rec[name] ?? rec[name.toLowerCase()] ?? rec[name.toUpperCase()];
+    if (Array.isArray(raw)) return raw[0] == null ? null : String(raw[0]);
+    if (raw == null) return null;
+    return String(raw);
+  };
+  return rateLimitIp(clientIpFromRequest({ get }));
 }
 
 export async function readPasswordLoginRateLimit(
   db: PasswordLoginRateDb,
-  input: { ip: string; username: string; now?: number }
+  input: {
+    ip: string;
+    username: string;
+    now?: number;
+    policy?: LoginRatePolicy;
+  }
 ): Promise<{ limited: boolean; retryAfterSec: number; count: number }> {
+  const policy = resolvePolicy(input.policy);
   const username = normalizeLoginRateUsername(input.username);
   if (!username) {
     return { limited: false, retryAfterSec: 0, count: 0 };
   }
   const now = input.now ?? Date.now();
-  const since = new Date(now - PASSWORD_LOGIN_RATE_WINDOW_MS);
+  const since = new Date(now - policy.windowMs);
   try {
     const count = await db.audit.count({
-      where: keyWhere(input.ip, username, since),
+      where: keyWhere(input.ip, username, policy, since),
     });
-    if (count < PASSWORD_LOGIN_RATE_LIMIT) {
+    if (count < policy.limit) {
       return { limited: false, retryAfterSec: 0, count };
     }
     const oldest = await db.audit.findFirst({
-      where: keyWhere(input.ip, username, since),
+      where: keyWhere(input.ip, username, policy, since),
       orderBy: { createdAt: "asc" },
       select: { createdAt: true },
     });
     return {
       limited: true,
-      retryAfterSec: retryAfterSecFromOldest(oldest, now),
+      retryAfterSec: retryAfterSecFromOldest(oldest, now, policy.windowMs),
       count,
     };
   } catch (e) {
@@ -138,25 +197,31 @@ export async function readPasswordLoginRateLimit(
 
 export async function claimPasswordLoginAttempt(
   db: PasswordLoginRateDb,
-  input: { ip: string; username: string; now?: number }
+  input: {
+    ip: string;
+    username: string;
+    now?: number;
+    policy?: LoginRatePolicy;
+  }
 ): Promise<{
   limited: boolean;
   retryAfterSec: number;
   count: number;
   claimId: number | null;
 }> {
+  const policy = resolvePolicy(input.policy);
   const username = normalizeLoginRateUsername(input.username);
   if (!username) {
     return { limited: false, retryAfterSec: 0, count: 0, claimId: null };
   }
   const now = input.now ?? Date.now();
-  const since = new Date(now - PASSWORD_LOGIN_RATE_WINDOW_MS);
+  const since = new Date(now - policy.windowMs);
   let claimId: number | null = null;
   try {
     const created = await db.audit.create({
       data: {
-        action: PASSWORD_LOGIN_RATE_ACTION,
-        entity: PASSWORD_LOGIN_RATE_ENTITY,
+        action: policy.action,
+        entity: policy.entity,
         entityId: null,
         ip: input.ip,
         payload: { u: username },
@@ -170,19 +235,19 @@ export async function claimPasswordLoginAttempt(
   }
   try {
     const count = await db.audit.count({
-      where: keyWhere(input.ip, username, since),
+      where: keyWhere(input.ip, username, policy, since),
     });
-    if (count <= PASSWORD_LOGIN_RATE_LIMIT) {
+    if (count <= policy.limit) {
       return { limited: false, retryAfterSec: 0, count, claimId };
     }
     const oldest = await db.audit.findFirst({
-      where: keyWhere(input.ip, username, since),
+      where: keyWhere(input.ip, username, policy, since),
       orderBy: { createdAt: "asc" },
       select: { createdAt: true },
     });
     return {
       limited: true,
-      retryAfterSec: retryAfterSecFromOldest(oldest, now),
+      retryAfterSec: retryAfterSecFromOldest(oldest, now, policy.windowMs),
       count,
       claimId,
     };
@@ -194,12 +259,14 @@ export async function claimPasswordLoginAttempt(
 
 export async function releasePasswordLoginClaim(
   db: PasswordLoginRateDb,
-  claimId: number | null
+  claimId: number | null,
+  policy?: LoginRatePolicy
 ): Promise<void> {
   if (claimId == null) return;
+  const action = resolvePolicy(policy).action;
   try {
     await db.audit.deleteMany({
-      where: { id: claimId, action: PASSWORD_LOGIN_RATE_ACTION },
+      where: { id: claimId, action },
     });
   } catch (e) {
     console.error("[passwordLoginRateLimit] release claim failed", e);
@@ -208,15 +275,16 @@ export async function releasePasswordLoginClaim(
 
 export async function recordPasswordLoginFailure(
   db: PasswordLoginRateDb,
-  input: { ip: string; username: string }
+  input: { ip: string; username: string; policy?: LoginRatePolicy }
 ): Promise<void> {
+  const policy = resolvePolicy(input.policy);
   const username = normalizeLoginRateUsername(input.username);
   if (!username) return;
   try {
     await db.audit.create({
       data: {
-        action: PASSWORD_LOGIN_RATE_ACTION,
-        entity: PASSWORD_LOGIN_RATE_ENTITY,
+        action: policy.action,
+        entity: policy.entity,
         entityId: null,
         ip: input.ip,
         payload: { u: username },
@@ -231,13 +299,14 @@ export async function recordPasswordLoginFailure(
 /** Test / maintenance cleanup only. Login success does not wipe history. */
 export async function clearPasswordLoginFailures(
   db: PasswordLoginRateDb,
-  input: { ip: string; username: string }
+  input: { ip: string; username: string; policy?: LoginRatePolicy }
 ): Promise<void> {
+  const policy = resolvePolicy(input.policy);
   const username = normalizeLoginRateUsername(input.username);
   if (!username) return;
   try {
     await db.audit.deleteMany({
-      where: keyWhere(input.ip, username),
+      where: keyWhere(input.ip, username, policy),
     });
   } catch (e) {
     console.error("[passwordLoginRateLimit] clear failed", e);
