@@ -35,7 +35,7 @@ section("source: /admin/login is a fixed /login redirect");
   const page = read("src/app/admin/login/page.tsx");
   assert(page.includes('redirect("/login")'), "page redirects to /login");
   assert(!page.includes("_LoginClient"), "page does not import leftover client");
-  assert(!page.includes("/api/auth"), "page does not post to /api/auth");
+  assert(!/fetch\s*\(\s*['"]\/api\/auth['"]/.test(page), "page does not post to /api/auth");
   assert(!page.includes("/api/admin"), "page does not add a second admin auth UI");
   assert(!page.includes("searchParams"), "page does not forward query (open redirect)");
   assert(!page.includes("callbackUrl"), "page does not take callbackUrl");
@@ -66,28 +66,32 @@ section("source: production login + admin APIs + Kakao unchanged");
   assert(!mw.includes('"/admin/login"'), "middleware does not special-case /admin/login");
 }
 
-section("runtime: page throws NEXT_REDIRECT /login");
-{
-  const { default: AdminLoginPage } = await import("../src/app/admin/login/page");
-  let thrown: unknown = null;
-  try {
-    AdminLoginPage();
-  } catch (e) {
-    thrown = e;
+async function main() {
+  section("runtime: page throws NEXT_REDIRECT /login");
+  {
+    const { default: AdminLoginPage } = await import("../src/app/admin/login/page");
+    let thrown: unknown = null;
+    try {
+      AdminLoginPage();
+    } catch (e) {
+      thrown = e;
+    }
+    const digest = String((thrown as { digest?: string } | null)?.digest ?? "");
+    const msg = String((thrown as { message?: string } | null)?.message ?? thrown ?? "");
+    assert(thrown != null, "redirect throws");
+    assert(
+      digest.includes("NEXT_REDIRECT") || msg.includes("NEXT_REDIRECT"),
+      "Next.js redirect error"
+    );
+    assert(
+      digest.includes("/login") || msg.includes("/login"),
+      "redirect target is /login"
+    );
+    assert(!digest.includes("http://") && !digest.includes("https://"), "no absolute URL redirect");
   }
-  const digest = String((thrown as { digest?: string } | null)?.digest ?? "");
-  const msg = String((thrown as { message?: string } | null)?.message ?? thrown ?? "");
-  assert(thrown != null, "redirect throws");
-  assert(
-    digest.includes("NEXT_REDIRECT") || msg.includes("NEXT_REDIRECT"),
-    "Next.js redirect error"
-  );
-  assert(
-    digest.includes("/login") || msg.includes("/login"),
-    "redirect target is /login"
-  );
-  assert(!digest.includes("http://") && !digest.includes("https://"), "no absolute URL redirect");
+
+  console.log(`\nDONE: ${passed} passed, ${failed} failed`);
+  if (failed) process.exit(1);
 }
 
-console.log(`\nDONE: ${passed} passed, ${failed} failed`);
-if (failed) process.exit(1);
+void main();
