@@ -42,6 +42,7 @@ import {
   legacyCompositeReservationKey,
   reservationMatchesIdentity,
 } from "@/lib/reservationIdentity";
+import { rejectStaleLivePrevious } from "@/lib/liveAssignmentFreshness";
 
 export const LIVE_CHANGE_TYPES = [
   "CANCEL_RESERVATION",
@@ -1284,6 +1285,8 @@ export async function applyLiveAssignmentChange(
     updateOpsIfPresent?: boolean;
     /** 테스트 전용 in-memory writer. 있으면 prisma를 호출하지 않음. */
     memory?: LiveChangeMemoryStore;
+    /** 테스트: 현재 live 보드. 있으면 DB 대신 이 스냅샷과 previous를 비교. */
+    currentLive?: AutoAssignResultV1 | null;
   } = {}
 ): Promise<ApplyLiveChangeResult> {
   const changeType = input.changeType || input.change?.type;
@@ -1323,6 +1326,16 @@ export async function applyLiveAssignmentChange(
       message: "변경 이벤트가 없습니다.",
     };
   }
+
+  const freshness = await rejectStaleLivePrevious(input.previous, {
+    currentLive: options.currentLive,
+    prisma: options.memory
+      ? undefined
+      : options.currentLive !== undefined
+        ? undefined
+        : (options.prisma ?? defaultPrisma),
+  });
+  if (!freshness.ok) return freshness;
 
   const computeStarted = Date.now();
   const preview = previewLiveAssignmentEvents({

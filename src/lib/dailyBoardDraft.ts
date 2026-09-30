@@ -4,7 +4,11 @@
  * 당번·특수근무·휴무·3부 시작조는 별도 테이블에서 다시 읽는다.
  */
 
-import type { AssignmentDraft, DraftStatus } from "@/lib/assignmentDraft";
+import {
+  applyLiveResultToDraft,
+  type AssignmentDraft,
+  type DraftStatus,
+} from "@/lib/assignmentDraft";
 import {
   isUsableOffSnapshot,
   parseOffSnapshot,
@@ -13,6 +17,7 @@ import {
 import type {
   AutoAssignCaddy,
   AutoAssignReservation,
+  AutoAssignResultV1,
   AutoAssignmentRow,
   SpareByShift,
   UnassignedReservationRow,
@@ -108,6 +113,65 @@ export function draftAutosaveCandidate(input: {
 }): AssignmentDraft | null {
   if (!input.mutationSucceeded || !input.draft) return null;
   return input.draft;
+}
+
+/**
+ * Live apply 성공 후 Draft PUT 409/실패 시 UI는 적용 결과를 유지한다.
+ * apply 실패(live 미기록)만 rollback.
+ */
+export function liveApplyDraftSaveUi(input: {
+  livePersisted: boolean;
+  draftSave: "ok" | "conflict" | "error" | "skipped";
+}): "success" | "rollback" | "keep-applied" {
+  if (!input.livePersisted) return "rollback";
+  if (input.draftSave === "ok") return "success";
+  return "keep-applied";
+}
+
+/** 409 응답의 최신 version으로 Draft PUT을 한 번 더 시도할 수 있으면 그 version. */
+export function nextDraftVersionAfterConflict(
+  attemptedVersion: number,
+  conflictDraftVersion: unknown
+): number | null {
+  const latest = Number(conflictDraftVersion);
+  if (!Number.isInteger(latest) || latest < 0) return null;
+  if (latest === attemptedVersion) return null;
+  return latest;
+}
+
+export type LiveApplyDraftConflictRetry =
+  | { action: "conflict" }
+  | { action: "put"; draft: AssignmentDraft; version: number };
+
+/**
+ * Live 성공 + Draft 409: 최신 draft 위에 live after를 얹는다.
+ * stale applied payload를 최신 version으로 PUT하지 않는다 (다른 관리자 draft 덮어쓰기 금지).
+ * 재시도는 최대 1회. latest를 못 읽으면 conflict.
+ */
+export function planLiveApplyDraftConflictRetry(input: {
+  attemptedVersion: number;
+  latestVersion: unknown;
+  latestPayload: unknown;
+  date: string;
+  liveAfter: AutoAssignResultV1 | null | undefined;
+}): LiveApplyDraftConflictRetry {
+  const version = nextDraftVersionAfterConflict(
+    input.attemptedVersion,
+    input.latestVersion
+  );
+  if (version == null || !input.liveAfter) return { action: "conflict" };
+  try {
+    const latestDraft = payloadToAssignmentDraft(
+      parseDailyBoardDraftPayload(input.latestPayload, input.date)
+    );
+    return {
+      action: "put",
+      version,
+      draft: applyLiveResultToDraft(latestDraft, input.liveAfter),
+    };
+  } catch {
+    return { action: "conflict" };
+  }
 }
 
 export function assignmentDraftToPayload(

@@ -710,7 +710,7 @@ console.log("== 보드 팀 이동은 미리보기 없이 즉시 apply ==");
     /rollbackOptimistic\(\)/.test(persistFail) &&
       /setError\(/.test(persistFail) &&
       /showToast\(failToast\)/.test(persistFail) &&
-      /data\.error/.test(persistFail) &&
+      /body\.error/.test(persistFail) &&
       !/queueDraftSave/.test(persistFail),
     "failed apply restores previous Draft, shows server error, does not save"
   );
@@ -718,8 +718,11 @@ console.log("== 보드 팀 이동은 미리보기 없이 즉시 apply ==");
     persistFn.split('flushed.status === "conflict"')[1]?.split("if (flushed.status")[0] ||
     "";
   assert(
-    /rollbackOptimistic\(\)/.test(conflictBlock),
-    "Draft PUT 409 rolls back optimistic Draft"
+    !/rollbackOptimistic\(\)/.test(conflictBlock) &&
+      /liveApplyDraftSaveUi/.test(conflictBlock) &&
+      /planLiveApplyDraftConflictRetry/.test(conflictBlock) &&
+      !/putAssignmentDraft\(\s*toSave/.test(conflictBlock),
+    "Draft PUT 409 after live success reconciles latest draft + live"
   );
   assert(
     /setError\(drop\?\.message/.test(enqueueFn) &&

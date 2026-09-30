@@ -28,6 +28,12 @@ import {
   swapOrderToast,
 } from "../src/lib/assignmentChange";
 import {
+  LIVE_STATE_CONFLICT,
+  isStaleLivePrevious,
+  livePlacementFingerprintFromResult,
+  rejectStaleLivePrevious,
+} from "../src/lib/liveAssignmentFreshness";
+import {
   autoResultFromDraft,
   createDraftFromAutoResult,
 } from "../src/lib/assignmentDraft";
@@ -3245,6 +3251,36 @@ section("MOVE는 같은 row metadata 유지 / LOCK·특수·충돌 거부");
     change: moveTo(specialPrev, "S1A", { course: "VERTHILL", shift: "1부", teeTime: "07:40" }),
   });
   assert(special.warnings.some((w) => w.code === "MOVE_SPECIAL"), "special blocked");
+  assert(
+    reservationMoveBlockReason(
+      specialPrev.assignments.find((a) => a.reservation.id === "S1A")!
+    )?.code === "MOVE_SPECIAL",
+    "UI special reason"
+  );
+
+  for (const kind of ["oneMak", "oneTwo", "twoThree"] as const) {
+    const otherPrev: AutoAssignResultV1 = {
+      ...stamped,
+      assignments: stamped.assignments.map((row) =>
+        row.reservation.id === "S1A" ? { ...row, kind } : row
+      ),
+    };
+    const other = previewLiveAssignmentChange({
+      previous: otherPrev,
+      regularCaddyPool: pool,
+      change: moveTo(otherPrev, "S1A", { course: "VERTHILL", shift: "1부", teeTime: "07:40" }),
+    });
+    assert(
+      !other.warnings.some((w) => w.code === "MOVE_SPECIAL" || w.code === "MOVE_LOCKED"),
+      `${kind} not MOVE_SPECIAL/MOVE_LOCKED`
+    );
+    assert(
+      reservationMoveBlockReason(
+        otherPrev.assignments.find((a) => a.reservation.id === "S1A")!
+      ) == null,
+      `UI ${kind} still movable`
+    );
+  }
 
   const drivingPrev: AutoAssignResultV1 = {
     ...stamped,
@@ -3273,6 +3309,42 @@ section("MOVE는 같은 row metadata 유지 / LOCK·특수·충돌 거부");
     }),
   });
   assert(closed.warnings.some((w) => w.code === "MOVE_CLOSED_COURSE"), "closed course blocked");
+}
+
+section("B5: stale previous는 live apply를 거부하고 덮어쓰지 않음");
+{
+  const date = "2026-09-30";
+  const pool = makeCaddies(4);
+  const s0 = computeAutoAssignmentsV1({
+    date,
+    available: pool,
+    reservations: [
+      res(date, "R1", { teeTime: "07:00" }),
+      res(date, "R2", { teeTime: "07:08" }),
+    ],
+  });
+  const s1 = previewLiveAssignmentChange({
+    previous: s0,
+    regularCaddyPool: pool,
+    change: {
+      type: "SWAP_CADDY",
+      reservationKeyA: reservationKey(
+        s0.assignments.find((x) => x.reservation.id === "R1")!.reservation
+      ),
+      reservationKeyB: reservationKey(
+        s0.assignments.find((x) => x.reservation.id === "R2")!.reservation
+      ),
+    },
+  }).after;
+  assert(
+    isStaleLivePrevious(s0, livePlacementFingerprintFromResult(s1)),
+    "S0 is stale vs S1"
+  );
+  assert(
+    !isStaleLivePrevious(s1, livePlacementFingerprintFromResult(s1)),
+    "S1 matches S1"
+  );
+  assert(!isStaleLivePrevious(s0, null), "empty live is not stale");
 }
 
 section("MOVE 풀 제외 DailyOpsDuty/RETIRED/LEAVE + 순번바꿈/당추/병가 회귀");
@@ -3352,6 +3424,64 @@ section("MOVE 풀 제외 DailyOpsDuty/RETIRED/LEAVE + 순번바꿈/당추/병가
 }
 
 async function runPersistTests() {
+  section("B5: stale previous apply는 memory에 쓰지 않음");
+  {
+    const date = "2026-09-30";
+    const pool = makeCaddies(4);
+    const s0 = computeAutoAssignmentsV1({
+      date,
+      available: pool,
+      reservations: [
+        res(date, "R1", { teeTime: "07:00" }),
+        res(date, "R2", { teeTime: "07:08" }),
+      ],
+    });
+    const a = s0.assignments.find((x) => x.reservation.id === "R1")!;
+    const b = s0.assignments.find((x) => x.reservation.id === "R2")!;
+    const s1 = previewLiveAssignmentChange({
+      previous: s0,
+      regularCaddyPool: pool,
+      change: {
+        type: "SWAP_CADDY",
+        reservationKeyA: reservationKey(a.reservation),
+        reservationKeyB: reservationKey(b.reservation),
+      },
+    }).after;
+    const mem = emptyLiveChangeMemoryStore();
+    const blocked = await applyLiveAssignmentChange(
+      {
+        previous: s0,
+        regularCaddyPool: pool,
+        change: {
+          type: "SET_LOCK",
+          reservationKey: reservationKey(a.reservation),
+          locked: true,
+        },
+      },
+      { memory: mem, currentLive: s1, updateOpsIfPresent: false }
+    );
+    assert(blocked.ok === false, "stale apply rejected");
+    assert(blocked.ok === false && blocked.code === LIVE_STATE_CONFLICT, "conflict code");
+    assert(blocked.ok === false && blocked.httpStatus === 409, "conflict 409");
+    assert(mem.placements.length === 0, "stale apply wrote no placements");
+    const fresh = await rejectStaleLivePrevious(s1, { currentLive: s1 });
+    assert(fresh.ok === true, "matching previous is accepted");
+    const written = await applyLiveAssignmentChange(
+      {
+        previous: s1,
+        regularCaddyPool: pool,
+        change: {
+          type: "SET_LOCK",
+          reservationKey: reservationKey(a.reservation),
+          locked: true,
+        },
+      },
+      { memory: mem, currentLive: s1, updateOpsIfPresent: false }
+    );
+    assert(written.ok === true, "fresh previous apply ok");
+    assert(mem.placements.length > 0, "fresh apply wrote placements");
+  }
+
   section("Quick swap/리무진/LOCK/확인형 변경 apply는 memory DB write");
   {
     const date = "2026-09-26";

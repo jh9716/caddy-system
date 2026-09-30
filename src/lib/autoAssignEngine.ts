@@ -4373,6 +4373,24 @@ function validateReservationMoveEvents(
       });
       continue;
     }
+    if (row.locked === true) {
+      warnings.push({
+        level: "error",
+        code: "MOVE_LOCKED",
+        message: "LOCK된 예약은 이동할 수 없습니다.",
+        reservationKey: reservationKey(row.reservation),
+      });
+      continue;
+    }
+    if (row.kind === "oneThree") {
+      warnings.push({
+        level: "error",
+        code: "MOVE_SPECIAL",
+        message: "특수배치는 1차에서 팀 이동하지 않습니다.",
+        reservationKey: reservationKey(row.reservation),
+      });
+      continue;
+    }
     if (!openCourses.has(String(dest.course).toUpperCase())) {
       warnings.push({
         level: "error",

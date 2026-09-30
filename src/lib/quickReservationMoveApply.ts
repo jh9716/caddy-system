@@ -32,6 +32,7 @@ import {
   parseDailyBoardDraftPayload,
   type DailyBoardDraftPayloadV1,
 } from "@/lib/dailyBoardDraft";
+import { rejectStaleLivePrevious } from "@/lib/liveAssignmentFreshness";
 
 export const QUICK_MOVE_DRAFT_FORCE_FAIL = "QUICK_MOVE_DRAFT_FORCE_FAIL";
 export const QUICK_MOVE_LIVE_FORCE_FAIL = "QUICK_MOVE_LIVE_FORCE_FAIL";
@@ -96,6 +97,11 @@ export async function applyQuickReservationMove(input: {
       message: "Draft 날짜와 배치 날짜가 다릅니다.",
     };
   }
+
+  const freshness = await rejectStaleLivePrevious(input.previous, {
+    prisma: input.prisma ?? defaultPrisma,
+  });
+  if (!freshness.ok) return freshness;
 
   const computeStarted = Date.now();
   const preview = previewLiveAssignmentEvents({
