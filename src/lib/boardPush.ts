@@ -51,6 +51,7 @@ import {
   type NativePushSendFn,
 } from "@/lib/nativePushDelivery";
 import { isWebPushSendConfigured, readWebPushSendCredentials } from "@/lib/pushVapid";
+import { selectWebPushMappingsAfterNativeSuccess } from "@/lib/pushChannelOverlap";
 import { type WebPushSendFn } from "@/lib/webPushSender";
 
 export class BoardPushError extends Error {
@@ -102,6 +103,8 @@ type SubRow = {
   endpoint: string;
   p256dh: string;
   auth: string;
+  platform?: string | null;
+  userAgent?: string | null;
 };
 
 const emptyCounts = (): BoardPushCounts => ({
@@ -283,7 +286,15 @@ export async function resolveEligibleBoardPushTargets(
       caddyId: true,
       pushSubscriptions: {
         where: { enabled: true },
-        select: { id: true, userId: true, endpoint: true, p256dh: true, auth: true },
+        select: {
+          id: true,
+          userId: true,
+          endpoint: true,
+          p256dh: true,
+          auth: true,
+          platform: true,
+          userAgent: true,
+        },
       },
     },
   });
@@ -484,13 +495,17 @@ export async function sendBoardPush(
     }
 
     const payload = buildBoardPushPayload(input.date);
-    const delivered = await deliverWebPushMappings(db, subscriptions, payload, {
-      sendFn: options?.sendFn,
-      credentials: creds,
+    const nativeDelivered = await deliverNativePushTokens(db, nativeTokens, payload, {
+      sendFn: options?.nativeSendFn,
       concurrency: BOARD_PUSH_CONCURRENCY,
     });
-    await deliverNativePushTokens(db, nativeTokens, payload, {
-      sendFn: options?.nativeSendFn,
+    const webMappings = selectWebPushMappingsAfterNativeSuccess(
+      subscriptions,
+      nativeDelivered.sentUserIds
+    );
+    const delivered = await deliverWebPushMappings(db, webMappings, payload, {
+      sendFn: options?.sendFn,
+      credentials: creds,
       concurrency: BOARD_PUSH_CONCURRENCY,
     });
 

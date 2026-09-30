@@ -40,6 +40,7 @@ import {
   type NativePushSendFn,
 } from "@/lib/nativePushDelivery";
 import { isWebPushSendConfigured, readWebPushSendCredentials } from "@/lib/pushVapid";
+import { selectWebPushMappingsAfterNativeSuccess } from "@/lib/pushChannelOverlap";
 import { normalizeAppRole } from "@/lib/sessionCookies";
 import {
   type WebPushPayload,
@@ -70,6 +71,8 @@ type SubRow = {
   endpoint: string;
   p256dh: string;
   auth: string;
+  platform?: string | null;
+  userAgent?: string | null;
 };
 
 type ReportRow = {
@@ -193,7 +196,15 @@ export async function resolveCourseReportNewPushTargets(
       role: true,
       pushSubscriptions: {
         where: { enabled: true },
-        select: { id: true, userId: true, endpoint: true, p256dh: true, auth: true },
+        select: {
+          id: true,
+          userId: true,
+          endpoint: true,
+          p256dh: true,
+          auth: true,
+          platform: true,
+          userAgent: true,
+        },
       },
     },
   });
@@ -222,7 +233,15 @@ export async function resolveCourseReportStatusPushTargets(
   }
   const subscriptions = await db.pushSubscription.findMany({
     where: { userId: authorUserId, enabled: true },
-    select: { id: true, userId: true, endpoint: true, p256dh: true, auth: true },
+    select: {
+      id: true,
+      userId: true,
+      endpoint: true,
+      p256dh: true,
+      auth: true,
+      platform: true,
+      userAgent: true,
+    },
   });
   return {
     subscriptions,
@@ -332,16 +351,20 @@ export async function sendCourseReportPush(
               title: report.title,
             });
 
+      const nativeDelivered = await deliverNativePushTokens(db, nativeTokens, payload, {
+        sendFn: options?.nativeSendFn,
+      });
+      const webMappings = selectWebPushMappingsAfterNativeSuccess(
+        targets.subscriptions,
+        nativeDelivered.sentUserIds
+      );
       const delivered = await deliverToSubscriptions(
         db,
-        targets.subscriptions,
+        webMappings,
         payload,
         options?.sendFn,
         creds
       );
-      await deliverNativePushTokens(db, nativeTokens, payload, {
-        sendFn: options?.nativeSendFn,
-      });
       await finishCourseReportPushAudit(db, claim.auditId, event, {
         claim: "SENT",
         recipients: targets.recipientUserIds.length,
