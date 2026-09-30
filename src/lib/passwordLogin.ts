@@ -1,7 +1,11 @@
 import type { AppRole } from "@/lib/sessionCookies";
 import { normalizeAppRole } from "@/lib/sessionCookies";
 import { matchEnvOnlyAccount } from "@/lib/envCredentials";
-import { verifyUserPassword } from "@/lib/userPassword";
+import { hasPasswordHash, verifyUserPassword } from "@/lib/userPassword";
+
+/** Dummy bcrypt target so missing-user / null-hash takes a compare path. */
+const TIMING_PAD_HASH =
+  "$2b$10$FxUFAT5M7uHsiPu7Z7KQq.UqojD9KEHidmX42yUVbNGrTwVFT9UyW";
 
 export type PasswordLoginUser = {
   id: number;
@@ -64,7 +68,13 @@ export async function passwordLogin(
 
   try {
     const row = await db.user.findUnique({ where: { username: user } });
-    if (!row) return { status: "unauthorized", reason: "not_found" };
+    if (!row || !hasPasswordHash(row.password)) {
+      await verifyUserPassword(pass, TIMING_PAD_HASH);
+      return {
+        status: "unauthorized",
+        reason: row ? "bad_password" : "not_found",
+      };
+    }
     const ok = await verifyUserPassword(pass, row.password);
     if (!ok) return { status: "unauthorized", reason: "bad_password" };
     const role = normalizeAppRole(row.role);
