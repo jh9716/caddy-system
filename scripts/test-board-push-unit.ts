@@ -231,7 +231,8 @@ async function upsertDraft(date: string, version: number | null) {
 async function addSub(
   userId: number,
   endpoint: string,
-  enabled = true
+  enabled = true,
+  extra?: { platform?: string | null; userAgent?: string | null }
 ) {
   return prisma.pushSubscription.create({
     data: {
@@ -240,6 +241,19 @@ async function addSub(
       p256dh: fakeP256(),
       auth: fakeAuth(),
       enabled,
+      platform: extra?.platform ?? undefined,
+      userAgent: extra?.userAgent ?? undefined,
+    },
+  });
+}
+
+async function addNative(userId: number, token: string) {
+  return prisma.devicePushToken.create({
+    data: {
+      userId,
+      token,
+      platform: "ANDROID",
+      enabled: true,
     },
   });
 }
@@ -321,6 +335,16 @@ async function main() {
     const page = read("src/app/manage/assignments/page.tsx");
     assert(page.includes("BoardPushNotifyCard"), "assignments UI card");
     assert(BOARD_PUSH_CONCURRENCY >= 10 && BOARD_PUSH_CONCURRENCY <= 20, "concurrency 10-20");
+    assert(core.includes("selectWebPushMappingsAfterNativeSuccess"), "reuses notice overlap helper");
+    assert(core.includes("sentUserIds"), "board send reads native success users");
+    assert(core.includes("platform: true"), "board loads platform for android classify");
+    assert(core.includes("userAgent: true"), "board loads userAgent for android classify");
+    assert(
+      core.lastIndexOf("await deliverNativePushTokens") <
+        core.lastIndexOf("await deliverWebPushMappings"),
+      "board native first, then web fallback"
+    );
+    assert(!core.includes("enabled: false"), "board does not disable all PushSubscription");
   }
 
   section("message / grouping / concurrency helper");
@@ -872,12 +896,152 @@ async function main() {
         where: { date: parseYmd(DATE3).start },
       });
     }
+
+    section("C1 android native/web overlap");
+    {
+      const DATE_C1 = "2099-06-25";
+      async function mk(suffix: string) {
+        const c = await prisma.caddy.create({
+          data: {
+            name: `${tag}_${suffix}`,
+            team: "9조",
+            employmentStatus: "ACTIVE",
+          },
+        });
+        caddyIds.push(c.id);
+        const u = await prisma.user.create({
+          data: {
+            username: `${tag}_${suffix}`,
+            password: hash,
+            role: "caddy",
+            caddyId: c.id,
+            sessionVersion: 0,
+          },
+        });
+        userIds.push(u.id);
+        return { c, u };
+      }
+
+      const nativeOnly = await mk("c1_native");
+      const webOnly = await mk("c1_web");
+      const both = await mk("c1_both");
+      const bothFail = await mk("c1_bothfail");
+      const ios = await mk("c1_ios");
+      const desktop = await mk("c1_desk");
+      const pwa = await mk("c1_pwa");
+
+      await addNative(nativeOnly.u.id, `${tag}-c1-native-only`);
+      await addSub(webOnly.u.id, `https://push.example/${tag}/c1-web-only`, true, {
+        platform: "android",
+      });
+      await addSub(both.u.id, `https://push.example/${tag}/c1-both-web`, true, {
+        platform: "android",
+        userAgent: "Mozilla/5.0 (Linux; Android 14; SM-S) SamsungBrowser/26.0",
+      });
+      await addNative(both.u.id, `${tag}-c1-both-native`);
+      await addSub(bothFail.u.id, `https://push.example/${tag}/c1-both-fail-web`, true, {
+        platform: "android",
+      });
+      await addNative(bothFail.u.id, `${tag}-c1-both-fail-native`);
+      await addSub(ios.u.id, `https://push.example/${tag}/c1-ios-web`, true, {
+        platform: "ios",
+      });
+      await addNative(ios.u.id, `${tag}-c1-ios-native`);
+      await addSub(desktop.u.id, `https://push.example/${tag}/c1-desk-web`, true, {
+        platform: "desktop",
+      });
+      await addNative(desktop.u.id, `${tag}-c1-desk-native`);
+      await addSub(pwa.u.id, `https://push.example/${tag}/c1-pwa-web`);
+      await addNative(pwa.u.id, `${tag}-c1-pwa-native`);
+
+      await upsertPublished(
+        DATE_C1,
+        1,
+        publishedPayload(DATE_C1, [
+          placement({ caddyId: nativeOnly.c.id, caddyName: "native" }),
+          placement({ caddyId: webOnly.c.id, caddyName: "web" }),
+          placement({ caddyId: both.c.id, caddyName: "both" }),
+          placement({ caddyId: bothFail.c.id, caddyName: "bothfail" }),
+          placement({ caddyId: ios.c.id, caddyName: "ios" }),
+          placement({ caddyId: desktop.c.id, caddyName: "desk" }),
+          placement({ caddyId: pwa.c.id, caddyName: "pwa" }),
+        ])
+      );
+      await upsertDraft(DATE_C1, 1);
+
+      const preview = await previewBoardPush(prisma, DATE_C1);
+      assert(preview.counts.subscriptions === 6, "C1 preview counts all web before dedupe");
+      assert(preview.counts.linkedUsers === 7, "C1 preview includes native-only caddy user");
+
+      const webEnds: string[] = [];
+      const nativeToks: string[] = [];
+      const nativeOutcomes: string[] = [];
+      const sent = await sendBoardPush(
+        prisma,
+        { date: DATE_C1, confirm: BOARD_PUSH_CONFIRM },
+        {
+          sendFn: async (sub) => {
+            webEnds.push(String(sub.endpoint));
+          },
+          nativeSendFn: async (token) => {
+            nativeToks.push(token);
+            const outcome = token.includes("both-fail") ? "failed" : "sent";
+            nativeOutcomes.push(outcome);
+            return outcome;
+          },
+        }
+      );
+      assert(sent.ok === true, "C1 send ok");
+      const taggedWeb = webEnds.filter((e) => e.includes(tag));
+      const taggedNative = nativeToks.filter((t) => t.includes(tag));
+      assert(taggedNative.length === 6, `C1 native attempts 6 got ${taggedNative.length}`);
+      assert(
+        taggedWeb.includes(`https://push.example/${tag}/c1-web-only`),
+        "C1 android web-only still sent"
+      );
+      assert(
+        !taggedWeb.includes(`https://push.example/${tag}/c1-both-web`),
+        "C1 native success → android web 0"
+      );
+      assert(
+        taggedWeb.includes(`https://push.example/${tag}/c1-both-fail-web`),
+        "C1 native fail → android web fallback"
+      );
+      assert(
+        taggedWeb.includes(`https://push.example/${tag}/c1-ios-web`),
+        "C1 iOS web kept after native success"
+      );
+      assert(
+        taggedWeb.includes(`https://push.example/${tag}/c1-desk-web`),
+        "C1 desktop/PWA web kept after native success"
+      );
+      assert(
+        taggedWeb.includes(`https://push.example/${tag}/c1-pwa-web`),
+        "C1 unknown web mapping kept (no device join)"
+      );
+      assert(taggedWeb.length === 5, `C1 web deliveries 5 got ${taggedWeb.length}`);
+      assert(
+        nativeOutcomes.filter((o) => o === "failed").length === 1,
+        "C1 one native failure"
+      );
+      assert(
+        !taggedWeb.some((e) => e.includes("c1-native-only")),
+        "C1 native-only has no web endpoint"
+      );
+
+      await prisma.dailyBoardPublished.deleteMany({
+        where: { date: parseYmd(DATE_C1).start },
+      });
+      await prisma.dailyBoardDraft.deleteMany({
+        where: { date: parseYmd(DATE_C1).start },
+      });
+    }
   } finally {
     await prisma.audit.deleteMany({
       where: {
         action: BOARD_PUSH_AUDIT_ACTION,
         entity: BOARD_PUSH_AUDIT_ENTITY,
-        entityId: { in: [20990618, 20990619, 20990620, 20990622] },
+        entityId: { in: [20990618, 20990619, 20990620, 20990622, 20990625] },
       },
     });
     await prisma.pushSubscription.deleteMany({
@@ -891,6 +1055,7 @@ async function main() {
             parseYmd("2099-06-19").start,
             parseYmd("2099-06-20").start,
             parseYmd("2099-06-22").start,
+            parseYmd("2099-06-25").start,
           ],
         },
       },
@@ -903,10 +1068,14 @@ async function main() {
             parseYmd("2099-06-19").start,
             parseYmd("2099-06-20").start,
             parseYmd("2099-06-22").start,
+            parseYmd("2099-06-25").start,
           ],
         },
       },
     });
+    await prisma.devicePushToken.deleteMany({
+      where: { userId: { in: userIds } },
+    }).catch(() => undefined);
     if (userIds.length) {
       await prisma.user.deleteMany({ where: { id: { in: userIds } } });
     }

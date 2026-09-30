@@ -167,6 +167,16 @@ async function main() {
     );
     assert(!core.includes("pushSentAt"), "no CourseReport pushSentAt field");
     assert(core.includes("normalizeAppRole"), "admin role via normalizeAppRole");
+    assert(core.includes("selectWebPushMappingsAfterNativeSuccess"), "reuses notice overlap helper");
+    assert(core.includes("sentUserIds"), "course send reads native success users");
+    assert(core.includes("platform: true"), "course loads platform for android classify");
+    assert(core.includes("userAgent: true"), "course loads userAgent for android classify");
+    assert(
+      core.lastIndexOf("await deliverNativePushTokens") <
+        core.lastIndexOf("deliverToSubscriptions("),
+      "course native first, then web fallback"
+    );
+    assert(!core.includes("enabled: false"), "course does not disable all PushSubscription");
     assert(!core.includes("caddyId snapshot"), "no caddy snapshot comment noise");
     assert(!/caddyId:\s*\{/.test(core), "recipients not by caddyId");
     const actions = read("src/app/course-reports/[id]/CourseReportDetailActions.tsx");
@@ -245,7 +255,11 @@ async function main() {
   });
   userIds.push(userAdmin.id, userAdminUpper.id, userCaddy.id, userLeader.id);
 
-  async function addSub(userId: number, mark: number) {
+  async function addSub(
+    userId: number,
+    mark: number,
+    extra?: { platform?: string | null; userAgent?: string | null }
+  ) {
     const row = await prisma.pushSubscription.create({
       data: {
         userId,
@@ -253,10 +267,23 @@ async function main() {
         p256dh: fakeP256(),
         auth: fakeAuth(),
         enabled: true,
+        platform: extra?.platform ?? undefined,
+        userAgent: extra?.userAgent ?? undefined,
       },
     });
     subIds.push(row.id);
     return row;
+  }
+
+  async function addNative(userId: number, token: string) {
+    return prisma.devicePushToken.create({
+      data: {
+        userId,
+        token,
+        platform: "ANDROID",
+        enabled: true,
+      },
+    });
   }
 
   const adminSub = await addSub(userAdmin.id, 1);
@@ -589,6 +616,199 @@ async function main() {
       assert(winner?.sent === 2, "winning NEW still admin-only 2");
       assert(hits === 2, "concurrent deliver only winning admin pair");
     }
+
+    section("C1 NEW admin android native/web overlap");
+    {
+      const adminNativeOnly = await prisma.user.create({
+        data: { username: `${tag}_c1_admin_native`, password: hash, role: "admin" },
+      });
+      const adminWebOnly = await prisma.user.create({
+        data: { username: `${tag}_c1_admin_web`, password: hash, role: "admin" },
+      });
+      const adminBoth = await prisma.user.create({
+        data: { username: `${tag}_c1_admin_both`, password: hash, role: "admin" },
+      });
+      const adminBothFail = await prisma.user.create({
+        data: { username: `${tag}_c1_admin_bothfail`, password: hash, role: "admin" },
+      });
+      const adminIos = await prisma.user.create({
+        data: { username: `${tag}_c1_admin_ios`, password: hash, role: "admin" },
+      });
+      userIds.push(
+        adminNativeOnly.id,
+        adminWebOnly.id,
+        adminBoth.id,
+        adminBothFail.id,
+        adminIos.id
+      );
+
+      await addNative(adminNativeOnly.id, `${tag}-c1-admin-native-only`);
+      await addSub(adminWebOnly.id, 11, { platform: "android" });
+      await addSub(adminBoth.id, 12, { platform: "android" });
+      await addNative(adminBoth.id, `${tag}-c1-admin-both-native`);
+      await addSub(adminBothFail.id, 13, { platform: "android" });
+      await addNative(adminBothFail.id, `${tag}-c1-admin-both-fail-native`);
+      await addSub(adminIos.id, 14, { platform: "ios" });
+      await addNative(adminIos.id, `${tag}-c1-admin-ios-native`);
+
+      const created = await prisma.courseReport.create({
+        data: {
+          authorUserId: userCaddy.id,
+          authorDisplayName: "푸시캐디A",
+          title: `${tag} C1 NEW`,
+          body: "본문",
+          course: "SKY",
+          category: "SAFETY",
+        },
+      });
+      reportIds.push(created.id);
+
+      const webEnds: string[] = [];
+      const nativeToks: string[] = [];
+      const first = await sendCourseReportPush(
+        prisma,
+        { kind: "NEW", reportId: created.id },
+        {
+          sendFn: async (sub) => {
+            webEnds.push(String(sub.endpoint));
+          },
+          nativeSendFn: async (token) => {
+            nativeToks.push(token);
+            return token.includes("admin-both-fail") ? "failed" : "sent";
+          },
+        }
+      );
+      assert(first.ok === true, "C1 NEW send ok");
+      const taggedWeb = webEnds.filter((e) => e.includes(tag));
+      const taggedNative = nativeToks.filter((t) => t.includes(tag));
+      assert(
+        taggedWeb.some((e) => e.includes(`/${adminWebOnly.id}/11`)),
+        "C1 NEW admin android web-only sent"
+      );
+      assert(
+        !taggedWeb.some((e) => e.includes(`/${adminBoth.id}/12`)),
+        "C1 NEW admin native success → android web 0"
+      );
+      assert(
+        taggedWeb.some((e) => e.includes(`/${adminBothFail.id}/13`)),
+        "C1 NEW admin native fail → web fallback"
+      );
+      assert(
+        taggedWeb.some((e) => e.includes(`/${adminIos.id}/14`)),
+        "C1 NEW admin iOS web kept"
+      );
+      assert(
+        taggedWeb.some((e) => e.includes(`/${userAdmin.id}/`)),
+        "C1 NEW existing admin unknown-platform web kept"
+      );
+      assert(
+        !taggedWeb.some((e) => e.includes(`/${userCaddy.id}/`)),
+        "C1 NEW caddy still excluded"
+      );
+      assert(
+        taggedNative.includes(`${tag}-c1-admin-both-native`),
+        "C1 NEW admin both native attempted"
+      );
+      assert(
+        taggedNative.includes(`${tag}-c1-admin-native-only`),
+        "C1 NEW admin native-only attempted"
+      );
+      assert(
+        !taggedNative.some((t) => t.includes("caddy")),
+        "C1 NEW no caddy native"
+      );
+    }
+
+    section("C1 STATUS author android native/web overlap");
+    {
+      const caddyBoth = await prisma.user.create({
+        data: {
+          username: `${tag}_c1_caddy_both`,
+          password: hash,
+          role: "caddy",
+        },
+      });
+      const caddyBothFail = await prisma.user.create({
+        data: {
+          username: `${tag}_c1_caddy_bothfail`,
+          password: hash,
+          role: "caddy",
+        },
+      });
+      const caddyIos = await prisma.user.create({
+        data: {
+          username: `${tag}_c1_caddy_ios`,
+          password: hash,
+          role: "caddy",
+        },
+      });
+      userIds.push(caddyBoth.id, caddyBothFail.id, caddyIos.id);
+      await addSub(caddyBoth.id, 21, { platform: "android" });
+      await addNative(caddyBoth.id, `${tag}-c1-caddy-both-native`);
+      await addSub(caddyBothFail.id, 22, { platform: "android" });
+      await addNative(caddyBothFail.id, `${tag}-c1-caddy-both-fail-native`);
+      await addSub(caddyIos.id, 23, { platform: "ios" });
+      await addNative(caddyIos.id, `${tag}-c1-caddy-ios-native`);
+
+      async function statusSend(
+        authorUserId: number,
+        suffix: string,
+        nativeResult: (token: string) => "sent" | "failed" | "gone"
+      ) {
+        const created = await prisma.courseReport.create({
+          data: {
+            authorUserId,
+            authorDisplayName: suffix,
+            title: `${tag} C1 STATUS ${suffix}`,
+            body: "본문",
+            course: "LAKE",
+            category: "FACILITY",
+          },
+        });
+        reportIds.push(created.id);
+        const webEnds: string[] = [];
+        const nativeToks: string[] = [];
+        const result = await sendCourseReportPush(
+          prisma,
+          { kind: "STATUS", reportId: created.id, status: "CHECKING" },
+          {
+            sendFn: async (sub) => {
+              webEnds.push(String(sub.endpoint));
+            },
+            nativeSendFn: async (token) => {
+              nativeToks.push(token);
+              return nativeResult(token);
+            },
+          }
+        );
+        return { created, result, webEnds, nativeToks };
+      }
+
+      const both = await statusSend(caddyBoth.id, "both", () => "sent");
+      assert(both.result.ok === true, "C1 STATUS both ok");
+      assert(both.nativeToks.includes(`${tag}-c1-caddy-both-native`), "C1 STATUS both native 1");
+      assert(
+        !both.webEnds.some((e) => e.includes(`/${caddyBoth.id}/21`)),
+        "C1 STATUS native success → author android web 0"
+      );
+      assert(
+        !both.webEnds.some((e) => e.includes(`/${userAdmin.id}/`)),
+        "C1 STATUS admin not author recipient"
+      );
+
+      const bothFail = await statusSend(caddyBothFail.id, "bothfail", () => "failed");
+      assert(
+        bothFail.webEnds.some((e) => e.includes(`/${caddyBothFail.id}/22`)),
+        "C1 STATUS native fail → author android web fallback"
+      );
+      assert(bothFail.nativeToks.includes(`${tag}-c1-caddy-both-fail-native`), "C1 STATUS fail native attempted");
+
+      const ios = await statusSend(caddyIos.id, "ios", () => "sent");
+      assert(
+        ios.webEnds.some((e) => e.includes(`/${caddyIos.id}/23`)),
+        "C1 STATUS iOS web kept after native success"
+      );
+    }
   } finally {
     await prisma.audit.deleteMany({
       where: {
@@ -601,6 +821,7 @@ async function main() {
       await prisma.pushSubscription.deleteMany({ where: { id: { in: subIds } } });
     }
     await prisma.pushSubscription.deleteMany({ where: { userId: { in: userIds } } });
+    await prisma.devicePushToken.deleteMany({ where: { userId: { in: userIds } } }).catch(() => undefined);
     if (reportIds.length) {
       await prisma.courseReportPhoto.deleteMany({ where: { reportId: { in: reportIds } } });
       await prisma.comment.deleteMany({

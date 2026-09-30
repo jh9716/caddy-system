@@ -9,6 +9,10 @@ import {
   isAndroidWebPushSubscription,
   selectNoticeWebPushMappings,
 } from "../src/lib/noticePushChannel";
+import {
+  filterWebPushForNativeOverlap,
+  selectWebPushMappingsAfterNativeSuccess,
+} from "../src/lib/pushChannelOverlap";
 
 let passed = 0;
 let failed = 0;
@@ -120,10 +124,30 @@ section("select uses native success, not token presence");
   assert(otherUser.length === 1, "other user's success does not drop this android web");
 }
 
+section("shared helper aliases match notice names");
+{
+  const androidWeb = sub(1, 10, { platform: "android" });
+  const desktopWeb = sub(2, 10, { platform: "desktop" });
+  const viaNotice = selectNoticeWebPushMappings([androidWeb, desktopWeb], [10]);
+  const viaShared = selectWebPushMappingsAfterNativeSuccess(
+    [androidWeb, desktopWeb],
+    [10]
+  );
+  assert(
+    viaNotice.map((s) => s.id).join(",") === viaShared.map((s) => s.id).join(","),
+    "notice alias == shared select"
+  );
+  const filteredShared = filterWebPushForNativeOverlap([androidWeb], [10]);
+  assert(filteredShared.length === 0, "shared filter drops android after native success");
+}
+
 section("source: notice send uses helper, does not blank all web");
 {
   const core = read("src/lib/noticePush.ts");
   const helper = read("src/lib/noticePushChannel.ts");
+  const shared = read("src/lib/pushChannelOverlap.ts");
+  const board = read("src/lib/boardPush.ts");
+  const course = read("src/lib/courseReportPush.ts");
   assert(core.includes("selectNoticeWebPushMappings"), "sendNoticePush uses helper");
   assert(core.includes("sentUserIds"), "sendNoticePush reads native success users");
   assert(core.includes("releaseNoticePushClaim"), "zero-success unsets pushSentAt");
@@ -145,6 +169,34 @@ section("source: notice send uses helper, does not blank all web");
     /filterNoticeWebPushForNativeOverlap/.test(helper),
     "overlap filter exists"
   );
+  assert(
+    helper.includes("from \"@/lib/pushChannelOverlap\""),
+    "notice helper re-exports shared overlap"
+  );
+  assert(
+    shared.includes("selectWebPushMappingsAfterNativeSuccess"),
+    "shared select exists"
+  );
+  assert(
+    board.includes("selectWebPushMappingsAfterNativeSuccess"),
+    "board send uses shared overlap"
+  );
+  assert(
+    course.includes("selectWebPushMappingsAfterNativeSuccess"),
+    "course report send uses shared overlap"
+  );
+  assert(
+    board.lastIndexOf("await deliverNativePushTokens") <
+      board.lastIndexOf("await deliverWebPushMappings"),
+    "board native first, then web fallback"
+  );
+  assert(
+    course.lastIndexOf("await deliverNativePushTokens") <
+      course.lastIndexOf("deliverToSubscriptions("),
+    "course native first, then web fallback"
+  );
+  assert(!board.includes("enabled: false"), "board does not blank all web");
+  assert(!course.includes("enabled: false"), "course does not blank all web");
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
