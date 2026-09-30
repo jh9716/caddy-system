@@ -7,10 +7,9 @@ import {
   passwordLoginUnauthorizedResponse,
 } from "@/lib/passwordLoginHttp";
 import {
-  clearPasswordLoginFailures,
+  claimPasswordLoginAttempt,
   loginRateIpFromRequest,
-  readPasswordLoginRateLimit,
-  recordPasswordLoginFailure,
+  releasePasswordLoginClaim,
 } from "@/lib/passwordLoginRateLimit";
 
 export const dynamic = "force-dynamic";
@@ -25,21 +24,21 @@ export async function POST(req: NextRequest) {
   }
 
   const ip = loginRateIpFromRequest(req);
-  const limited = await readPasswordLoginRateLimit(prisma, { ip, username });
-  if (limited.limited) {
-    return passwordLoginRateLimitedResponse(limited.retryAfterSec);
+  const claim = await claimPasswordLoginAttempt(prisma, { ip, username });
+  if (claim.limited) {
+    return passwordLoginRateLimitedResponse(claim.retryAfterSec);
   }
 
   const result = await passwordLogin(username, password, prisma);
   if (result.status === "unavailable") {
+    await releasePasswordLoginClaim(prisma, claim.claimId);
     return NextResponse.json({ error: "auth_unavailable" }, { status: 500 });
   }
   if (result.status !== "ok") {
-    await recordPasswordLoginFailure(prisma, { ip, username });
     return passwordLoginUnauthorizedResponse();
   }
 
-  await clearPasswordLoginFailures(prisma, { ip, username });
+  await releasePasswordLoginClaim(prisma, claim.claimId);
 
   try {
     const res = NextResponse.json({
