@@ -211,7 +211,16 @@ export function AdminOpsTeamBoard({
 
 export default function AdminOpsDashboard() {
   const [date, setDate] = useState(todayYmd);
-  const [data, setData] = useState<AdminOpsDashboardPayload | null>(null);
+  const [data, setData] = useState<AdminOpsDashboardPayload | null>(() => {
+    const ymd = todayYmd();
+    return (
+      peekLastNamespaceResource<DashboardResponse>(
+        CLIENT_RESOURCE.DASHBOARD,
+        ymd,
+        (value) => value.date === ymd
+      )?.value ?? null
+    );
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");

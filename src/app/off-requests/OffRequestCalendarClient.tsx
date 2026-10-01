@@ -70,7 +70,16 @@ function formatPeriod(window: WindowDto | null): string {
 
 export default function OffRequestCalendarClient() {
   const [month, setMonth] = useState(() => kstYmd().slice(0, 7));
-  const [data, setData] = useState<CalendarDto | null>(null);
+  const [data, setData] = useState<CalendarDto | null>(() => {
+    const initialMonth = kstYmd().slice(0, 7);
+    return (
+      peekLastNamespaceResource<CalendarDto>(
+        CLIENT_RESOURCE.OFF_CALENDAR,
+        initialMonth,
+        (value) => value.month === initialMonth
+      )?.value ?? null
+    );
+  });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");

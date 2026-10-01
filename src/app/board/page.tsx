@@ -47,7 +47,16 @@ export default function PublishedBoardPage() {
   const [shift, setShift] = useState<ShiftPart>("1부");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [published, setPublished] = useState<PublishedResponse["published"]>(null);
+  const [published, setPublished] = useState<PublishedResponse["published"]>(() => {
+    const ymd = todayYmd();
+    return (
+      peekLastNamespaceResource<PublishedResponse["published"]>(
+        CLIENT_RESOURCE.BOARD,
+        ymd,
+        (value) => value == null || value.date === ymd
+      )?.value ?? null
+    );
+  });
   const [notice, setNotice] = useState<string | null>(null);
   const loadGen = useRef(0);
 

@@ -34,9 +34,23 @@ function formatCommentTime(iso: string): string {
 }
 
 export default function BoardComments({ date }: { date: string }) {
-  const [comments, setComments] = useState<CommentPublic[]>([]);
-  const [canCompose, setCanCompose] = useState(false);
-  const [visible, setVisible] = useState(false);
+  const [comments, setComments] = useState<CommentPublic[]>(() => {
+    return (
+      peekLastNamespaceResource<CommentsCache>(CLIENT_RESOURCE.BOARD_COMMENTS, date)
+        ?.value.comments ?? []
+    );
+  });
+  const [canCompose, setCanCompose] = useState(() => {
+    return (
+      peekLastNamespaceResource<CommentsCache>(CLIENT_RESOURCE.BOARD_COMMENTS, date)
+        ?.value.canCompose ?? false
+    );
+  });
+  const [visible, setVisible] = useState(() => {
+    return Boolean(
+      peekLastNamespaceResource<CommentsCache>(CLIENT_RESOURCE.BOARD_COMMENTS, date)
+    );
+  });
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
   const liveCount = useMemo(

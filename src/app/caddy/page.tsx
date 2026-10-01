@@ -7,6 +7,7 @@ import {
   CLIENT_RESOURCE,
   ensureClientAuthNamespace,
   readClientResource,
+  readLastClientAuthNamespace,
   writeClientResource,
 } from '@/lib/clientResourceCache'
 import { resolveCaddyPageGate } from '@/lib/roleRouting'
@@ -40,11 +41,20 @@ function shouldRedirectUnlinked(mine: MinePayload | null): boolean {
   )
 }
 
+function peekSafeCaddySummary(): Summary | null {
+  const ns = readLastClientAuthNamespace()
+  if (!ns || (ns.role !== 'caddy' && ns.role !== 'leader')) return null
+  const mineHit = readClientResource<MinePayload>(ns, CLIENT_RESOURCE.CADDY_MINE, 'self')
+  if (shouldRedirectUnlinked(mineHit?.value ?? null)) return null
+  return readClientResource<Summary>(ns, CLIENT_RESOURCE.CADDY_SUMMARY, 'today')?.value ?? null
+}
+
 export default function CaddyPage() {
   const router = useRouter()
+  const cachedSummary = peekSafeCaddySummary()
   const [loading, setLoading] = useState(true)
-  const [allowed, setAllowed] = useState(false)
-  const [summary, setSummary] = useState<Summary | null>(null)
+  const [allowed, setAllowed] = useState(() => cachedSummary != null)
+  const [summary, setSummary] = useState<Summary | null>(() => cachedSummary)
   const [refreshError, setRefreshError] = useState(false)
   const loadGen = useRef(0)
 

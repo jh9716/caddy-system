@@ -314,7 +314,15 @@ const V1_SAFE_KIND_LABEL: Record<string, string> = {
 };
 
 export default function ManageCaddiesPage() {
-  const [rows, setRows] = useState<Caddy[]>([]);
+  const [rows, setRows] = useState<Caddy[]>(() => {
+    return (
+      peekLastNamespaceResource<Caddy[]>(
+        CLIENT_RESOURCE.CADDY_ROSTER,
+        "all",
+        (value) => Array.isArray(value)
+      )?.value ?? []
+    );
+  });
   const [loading, setLoading] = useState(false);
   const [savingId, setSavingId] = useState<number | null>(null);
   const [employmentFilter, setEmploymentFilter] = useState<
