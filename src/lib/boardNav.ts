@@ -36,6 +36,11 @@ export function memberNavItems() {
       match: (p: string) => p.startsWith("/board"),
     },
     {
+      href: "/off-requests",
+      label: "휴무 신청",
+      match: (p: string) => p.startsWith("/off-requests"),
+    },
+    {
       href: "/caddy",
       label: "내 대시보드",
       match: (p: string) => p.startsWith("/caddy"),

@@ -1,6 +1,6 @@
 /**
  * Member-page client helper: one /login redirect on 401.
- * Used by board / notice / course-report / caddy clients.
+ * Used by board / notice / course-report / off-request / caddy clients.
  *
  * Exempt: /login, Kakao OAuth, logout UX, public legal pages,
  * and admin surfaces that already handle 401 themselves.

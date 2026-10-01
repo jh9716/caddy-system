@@ -61,6 +61,11 @@ const NAV = [
     match: (p: string) => p.startsWith("/manage/users"),
   },
   {
+    href: "/manage/off-requests",
+    label: "휴무 신청",
+    match: (p: string) => p.startsWith("/manage/off-requests"),
+  },
+  {
     href: "/manage/privacy-requests",
     label: "개인정보 요청",
     match: (p: string) => p.startsWith("/manage/privacy-requests"),
