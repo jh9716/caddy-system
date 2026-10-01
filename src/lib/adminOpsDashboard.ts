@@ -305,6 +305,29 @@ export function teamStatusSummary(rows: readonly AdminOpsCaddyRow[]): string {
     .join(" · ");
 }
 
+export function teamHeaderAriaLabel(team: string, rows: readonly AdminOpsCaddyRow[]): string {
+  const summary = teamStatusSummary(rows);
+  const count = `${rows.length}명`;
+  return summary ? `${team} ${count} · ${summary}` : `${team} ${count}`;
+}
+
+/** Date fetch 중(stale)에는 person row를 열지 않는다. 검색 match만 자동으로 연다. */
+export function resolveDashboardExpandedTeams(input: {
+  openedTeams: readonly string[];
+  collapsedTeams?: readonly string[];
+  matchedTeams?: readonly string[];
+  searching?: boolean;
+  staleDate?: boolean;
+}): Set<string> {
+  if (input.staleDate) return new Set();
+  const next = new Set(input.openedTeams);
+  if (input.searching) {
+    for (const team of input.matchedTeams ?? []) next.add(team);
+  }
+  for (const team of input.collapsedTeams ?? []) next.delete(team);
+  return next;
+}
+
 export function filterDashboardCaddies(
   rows: readonly AdminOpsCaddyRow[],
   query: string

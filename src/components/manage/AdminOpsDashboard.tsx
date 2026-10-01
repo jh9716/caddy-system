@@ -5,6 +5,8 @@ import {
   OPS_DUTY_DASHBOARD_LABELS,
   filterDashboardCaddies,
   groupCaddiesByPrimaryTeam,
+  resolveDashboardExpandedTeams,
+  teamHeaderAriaLabel,
   teamStatusSummary,
   type AdminOpsCaddyRow,
   type AdminOpsDashboardPayload,
@@ -197,9 +199,10 @@ export function AdminOpsTeamBoard({
               className="dash-team-col-head"
               onClick={() => onToggleTeam?.(group.team)}
               aria-expanded={expanded}
+              aria-label={teamHeaderAriaLabel(group.team, group.rows)}
               disabled={!onToggleTeam}
             >
-              <h3 className="dash-team-col-title">{group.team}</h3>
+              <span className="dash-team-col-title">{group.team}</span>
               <span className="dash-team-col-count">{group.rows.length}</span>
             </button>
             {expanded ? (
@@ -289,16 +292,17 @@ export default function AdminOpsDashboard() {
   );
   const teamGroups = useMemo(() => groupCaddiesByPrimaryTeam(visible), [visible]);
   const searching = query.trim().length > 0;
-  const expandedTeams = useMemo(() => {
-    const next = new Set(openedTeams);
-    if (searching) {
-      for (const group of teamGroups) {
-        if (group.rows.length > 0) next.add(group.team);
-      }
-    }
-    for (const team of collapsedTeams) next.delete(team);
-    return next;
-  }, [openedTeams, searching, teamGroups, collapsedTeams]);
+  const expandedTeams = useMemo(
+    () =>
+      resolveDashboardExpandedTeams({
+        openedTeams,
+        collapsedTeams,
+        searching,
+        staleDate,
+        matchedTeams: teamGroups.filter((group) => group.rows.length > 0).map((group) => group.team),
+      }),
+    [openedTeams, searching, teamGroups, collapsedTeams, staleDate]
+  );
 
   return (
     <div className="dash ops-dash" aria-busy={loading || undefined} data-date={date}>
