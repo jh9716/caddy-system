@@ -13,6 +13,8 @@ import {
   resolveTeamFilter,
   type OffRequestActor,
 } from "@/lib/offRequestAuth";
+import { isRetiredCaddySessionBlocked } from "@/lib/auth";
+import { isPastKstYmd, kstYmd } from "@/lib/kstDate";
 import {
   applyApproveDecision,
   applyRejectDecision,
@@ -23,6 +25,7 @@ import {
   formatOffDateYmd,
   normalizeOffDateInput,
   offAssignmentDayRange,
+  yearMonthFromYmd,
   type OffQuotaSnapshot,
 } from "@/lib/offRequestDomain";
 
@@ -93,6 +96,63 @@ export async function getTeamDayQuotaSnapshot(
   return computeOffQuotaSnapshot({ approvedCount, requestedCount });
 }
 
+async function assertCaddyNotRetired(db: DbClient, actor: OffRequestActor) {
+  if (actor.caddyId == null) return;
+  const caddy = await db.caddy.findUnique({
+    where: { id: actor.caddyId },
+    select: { employmentStatus: true },
+  });
+  if (
+    isRetiredCaddySessionBlocked({
+      role: actor.role,
+      caddyId: actor.caddyId,
+      employmentStatus: caddy?.employmentStatus ?? null,
+    })
+  ) {
+    throw new OffRequestServiceError(
+      "retired",
+      "퇴사 계정은 휴무 신청을 할 수 없습니다.",
+      403
+    );
+  }
+}
+
+async function requireOpenWindowForYmd(db: DbClient, ymd: string) {
+  const yearMonth = yearMonthFromYmd(ymd);
+  const window = await db.offRequestWindow.findUnique({ where: { yearMonth } });
+  if (!window) {
+    throw new OffRequestServiceError(
+      "window_not_found",
+      "해당 월 휴무 신청 기간이 없습니다.",
+      404
+    );
+  }
+  if (window.status !== "OPEN") {
+    throw new OffRequestServiceError(
+      "window_not_open",
+      window.status === "DRAFT"
+        ? "아직 휴무 신청 전입니다."
+        : window.status === "ADJUSTING"
+          ? "조정 중에는 변경할 수 없습니다."
+          : "확정된 휴무는 변경할 수 없습니다.",
+      409,
+      { status: window.status }
+    );
+  }
+  return window;
+}
+
+function assertNotPastYmd(ymd: string, now: Date) {
+  if (isPastKstYmd(ymd, now)) {
+    throw new OffRequestServiceError(
+      "past_date",
+      "지난 날짜에는 신청할 수 없습니다.",
+      400,
+      { date: ymd, today: kstYmd(now) }
+    );
+  }
+}
+
 async function assertNoActiveDuplicate(
   db: DbClient,
   caddyId: number,
@@ -144,7 +204,7 @@ async function assertNoExistingOffAssignment(
 export async function submitOffRequest(
   db: PrismaClient,
   actor: OffRequestActor,
-  input: { date: string; note?: string | null }
+  input: { date: string; note?: string | null; now?: Date }
 ): Promise<OffRequest> {
   if (!canSubmitOwnOffRequest(actor) || actor.caddyId == null) {
     throw new OffRequestServiceError(
@@ -160,6 +220,12 @@ export async function submitOffRequest(
       ? null
       : String(input.note).trim().slice(0, 500);
 
+  await assertCaddyNotRetired(db, actor);
+  const window = await requireOpenWindowForYmd(db, ymd);
+  if (yearMonthFromYmd(ymd) !== window.yearMonth) {
+    throw new OffRequestServiceError("outside_window", "신청 월 밖의 날짜입니다.", 400);
+  }
+  assertNotPastYmd(ymd, input.now ?? new Date());
   await assertNoActiveDuplicate(db, actor.caddyId, date);
   await assertNoExistingOffAssignment(db, actor.caddyId, ymd);
 
@@ -208,7 +274,8 @@ export async function listMyOffRequests(
 export async function cancelOwnOffRequest(
   db: PrismaClient,
   actor: OffRequestActor,
-  id: number
+  id: number,
+  input: { now?: Date } = {}
 ): Promise<OffRequest> {
   if (actor.caddyId == null) {
     throw new OffRequestServiceError(
@@ -217,6 +284,7 @@ export async function cancelOwnOffRequest(
       403
     );
   }
+  await assertCaddyNotRetired(db, actor);
   const row = await db.offRequest.findUnique({ where: { id } });
   if (!row) {
     throw new OffRequestServiceError("not_found", "신청을 찾을 수 없습니다.", 404);
@@ -232,6 +300,9 @@ export async function cancelOwnOffRequest(
       { status: row.status }
     );
   }
+  const ymd = formatOffDateYmd(row.date);
+  await requireOpenWindowForYmd(db, ymd);
+  assertNotPastYmd(ymd, input.now ?? new Date());
   // Assignment 생성 전 단계 — Assignment 없음. row는 CANCELLED로 보존(물리 삭제 금지)
   return db.offRequest.update({
     where: { id },
@@ -260,7 +331,8 @@ export async function listOffRequestsForManagers(
 
   const date = normalizeOffDateInput(ymd);
   const status =
-    query.status && ["REQUESTED", "APPROVED", "REJECTED", "CANCELLED"].includes(query.status)
+    query.status &&
+    ["REQUESTED", "APPROVED", "REJECTED", "CANCELLED", "UNSELECTED"].includes(query.status)
       ? (query.status as OffRequest["status"])
       : undefined;
 

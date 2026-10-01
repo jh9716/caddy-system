@@ -103,6 +103,8 @@
     "test:off-request-domain-unit": "bash scripts/tsx-safe.sh scripts/test-off-request-domain-unit.ts",
     "test:off-request-auth-unit": "bash scripts/tsx-safe.sh scripts/test-off-request-auth-unit.ts",
     "test:off-request-api-unit": "bash scripts/tsx-safe.sh scripts/test-off-request-api-unit.ts",
+    "test:off-request-window-unit": "bash scripts/tsx-safe.sh scripts/test-off-request-window-unit.ts",
+    "test:off-request-calendar-ui-unit": "bash scripts/tsx-safe.sh scripts/test-off-request-calendar-ui-unit.ts",
     "test:daily-special-duty-unit": "bash scripts/tsx-safe.sh scripts/test-daily-special-duty-unit.ts",
     "test:daily-special-support-unit": "bash scripts/tsx-safe.sh scripts/test-daily-special-support-unit.ts",
     "test:support-v2-engine-unit": "bash scripts/tsx-safe.sh scripts/test-support-v2-engine-unit.ts",

@@ -36,6 +36,13 @@ export function uniqueTeams(teams: unknown): string[] {
   return out;
 }
 
+/** 휴무 화면/API 세션 역할. admin·caddy·leader만. */
+export function canUseOffRequestPages(
+  role: AppRole | string | null | undefined
+): boolean {
+  return role === "admin" || role === "caddy" || role === "leader";
+}
+
 /** admin / leader 만 조 단위 목록·승인 가능 */
 export function canManageOffRequests(actor: OffRequestActor): boolean {
   return actor.role === "admin" || actor.role === "leader";
