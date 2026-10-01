@@ -110,6 +110,21 @@ section("service auth guards (no DB)");
     code = e instanceof OffRequestServiceError ? e.code : "other";
   }
   assert(code === "user_required", "leader approve needs userId");
+
+  const linked: OffRequestActor = {
+    role: "caddy",
+    username: "c2",
+    userId: 2,
+    caddyId: 9,
+    managedTeams: [],
+  };
+  let dateErr = "";
+  try {
+    await submitOffRequest({} as any, linked, { date: "2026-9-1" });
+  } catch (e) {
+    dateErr = e instanceof Error ? e.message : "other";
+  }
+  assert(/YYYY-MM-DD/.test(dateErr), "invalid date rejected before write");
 }
 
 // ─── Optional local DB integration ─────────────────────────────────
@@ -296,8 +311,44 @@ async function runLocalDbTests() {
         status: "REQUESTED",
       },
     });
+    let dup = false;
+    try {
+      await submitOffRequest(prisma, caddyActor, { date: ymd, note: "dup" });
+    } catch (e) {
+      dup = e instanceof OffRequestServiceError && e.code === "duplicate_active";
+    }
+    assert(dup, "duplicate REQUESTED/APPROVED blocked");
+
+    let caddyApproveBlocked = false;
+    try {
+      await approveOffRequest(prisma, caddyActor, extraReq.id, {});
+    } catch (e) {
+      caddyApproveBlocked =
+        e instanceof OffRequestServiceError && e.code === "forbidden";
+    }
+    assert(caddyApproveBlocked, "caddy cannot approve");
+
+    const rejected = await rejectOffRequest(prisma, leaderActor, extraReq.id, {
+      decisionNote: "no",
+    });
+    assert(rejected.status === "REJECTED", "leader reject REQUESTED");
+    let rejectAgain = "";
+    try {
+      await rejectOffRequest(prisma, leaderActor, extraReq.id, {});
+    } catch (e) {
+      rejectAgain = e instanceof OffRequestServiceError ? e.code : "other";
+    }
+    assert(rejectAgain === "invalid_transition", "rejected cannot reject again");
+
     const cancelled = await cancelOwnOffRequest(prisma, caddyActor, cancelable.id);
     assert(cancelled.status === "CANCELLED", "own cancel");
+    let cancelApproved = "";
+    try {
+      await cancelOwnOffRequest(prisma, caddyActor, created.id);
+    } catch (e) {
+      cancelApproved = e instanceof OffRequestServiceError ? e.code : "other";
+    }
+    assert(cancelApproved === "invalid_transition", "approved cannot self-cancel");
     const stillThere = await prisma.offRequest.findUnique({
       where: { id: cancelable.id },
     });
