@@ -17,6 +17,13 @@ import {
 } from "@/lib/memberSessionRedirect";
 import { type ShiftPart } from "@/lib/reservationParser";
 import {
+  CLIENT_RESOURCE,
+  ensureClientAuthNamespace,
+  peekLastNamespaceResource,
+  shouldApplyScopedResponse,
+  writeClientResource,
+} from "@/lib/clientResourceCache";
+import {
   boardPendingCopy,
   isCurrentLoadGen,
   isStalePublishedBoard,
@@ -64,8 +71,18 @@ export default function PublishedBoardPage() {
 
   const load = useCallback(async (ymd: string) => {
     const gen = ++loadGen.current;
+    const cached = peekLastNamespaceResource<PublishedResponse["published"]>(
+      CLIENT_RESOURCE.BOARD,
+      ymd,
+      (value) => value == null || value.date === ymd
+    );
+    if (cached) {
+      setPublished(cached.value);
+      setError(null);
+    }
     setLoading(true);
-    setError(null);
+    if (!cached) setError(null);
+    const nsPromise = ensureClientAuthNamespace();
     try {
       const res = await fetch(
         `/api/assignments/published?date=${encodeURIComponent(ymd)}`,
@@ -74,11 +91,27 @@ export default function PublishedBoardPage() {
       if (!isCurrentLoadGen(gen, loadGen.current)) return;
       if (consumeUnauthorizedMemberResponse(res)) return;
       const data = (await res.json().catch(() => ({}))) as PublishedResponse;
-      if (!isCurrentLoadGen(gen, loadGen.current)) return;
+      if (
+        !shouldApplyScopedResponse({
+          requestGen: gen,
+          latestGen: loadGen.current,
+          selectedKey: ymd,
+          responseKey: typeof data.date === "string" ? data.date : ymd,
+        })
+      ) {
+        return;
+      }
       if (!res.ok) {
         throw new Error(data.error || "배치표 조회 실패");
       }
-      setPublished(data.published ?? null);
+      const next = data.published ?? null;
+      if (next && next.date !== ymd) return;
+      setPublished(next);
+      setError(null);
+      const ns = await nsPromise;
+      if (!isCurrentLoadGen(gen, loadGen.current)) return;
+      if (!ns) return;
+      writeClientResource(ns, CLIENT_RESOURCE.BOARD, ymd, next);
     } catch (e: unknown) {
       if (!isCurrentLoadGen(gen, loadGen.current)) return;
       if (isMemberSessionRedirectScheduled()) return;
@@ -98,7 +131,11 @@ export default function PublishedBoardPage() {
   }, [date, load]);
 
   return (
-    <div className="pub-page" aria-busy={loading || undefined}>
+    <div
+      className="pub-page"
+      aria-busy={loading || undefined}
+      data-resource-cache={published && published.date === date ? "ready" : "empty"}
+    >
       <header className="pub-head">
         <h1>배치표</h1>
         <p>확정된 날짜별 최종 배치표입니다.</p>

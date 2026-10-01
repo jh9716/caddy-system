@@ -3,7 +3,25 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CommentPublic } from "@/lib/comment";
 import { COMMENT_BODY_MAX, COMMENT_DELETED_PLACEHOLDER } from "@/lib/commentConstants";
+import {
+  CLIENT_RESOURCE,
+  ensureClientAuthNamespace,
+  peekLastNamespaceResource,
+  readLastClientAuthNamespace,
+  writeClientResource,
+} from "@/lib/clientResourceCache";
 import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
+
+type CommentsCache = {
+  comments: CommentPublic[];
+  canCompose: boolean;
+};
+
+function rememberComments(date: string, payload: CommentsCache) {
+  const ns = readLastClientAuthNamespace();
+  if (!ns) return;
+  writeClientResource(ns, CLIENT_RESOURCE.BOARD_COMMENTS, date, payload);
+}
 
 function formatCommentTime(iso: string): string {
   const d = new Date(iso);
@@ -28,11 +46,22 @@ export default function BoardComments({ date }: { date: string }) {
 
   useEffect(() => {
     let cancelled = false;
-    setVisible(false);
-    setComments([]);
-    setCanCompose(false);
+    const cached = peekLastNamespaceResource<CommentsCache>(
+      CLIENT_RESOURCE.BOARD_COMMENTS,
+      date
+    );
+    if (cached) {
+      setComments(cached.value.comments);
+      setCanCompose(cached.value.canCompose);
+      setVisible(true);
+    } else {
+      setVisible(false);
+      setComments([]);
+      setCanCompose(false);
+    }
     setBody("");
     (async () => {
+      const nsPromise = ensureClientAuthNamespace();
       const res = await fetch(`/api/board/${encodeURIComponent(date)}/comments`, {
         credentials: "include",
         cache: "no-store",
@@ -41,12 +70,19 @@ export default function BoardComments({ date }: { date: string }) {
       const data = await res.json().catch(() => ({}));
       if (cancelled) return;
       if (!res.ok) {
-        setVisible(false);
+        if (!cached) setVisible(false);
         return;
       }
-      setComments(Array.isArray(data.comments) ? (data.comments as CommentPublic[]) : []);
-      setCanCompose(data.canCompose === true);
+      const next: CommentsCache = {
+        comments: Array.isArray(data.comments) ? (data.comments as CommentPublic[]) : [],
+        canCompose: data.canCompose === true,
+      };
+      setComments(next.comments);
+      setCanCompose(next.canCompose);
       setVisible(true);
+      const ns = await nsPromise;
+      if (cancelled || !ns) return;
+      writeClientResource(ns, CLIENT_RESOURCE.BOARD_COMMENTS, date, next);
     })();
     return () => {
       cancelled = true;
@@ -74,7 +110,11 @@ export default function BoardComments({ date }: { date: string }) {
       return;
     }
     if (data.comment) {
-      setComments((cur) => [...cur, data.comment as CommentPublic]);
+      setComments((cur) => {
+        const next = [...cur, data.comment as CommentPublic];
+        rememberComments(date, { comments: next, canCompose });
+        return next;
+      });
       setBody("");
     }
   }
@@ -95,8 +135,8 @@ export default function BoardComments({ date }: { date: string }) {
       alert("댓글 삭제 실패");
       return;
     }
-    setComments((cur) =>
-      cur.map((c) =>
+    setComments((cur) => {
+      const next = cur.map((c) =>
         c.id === commentId
           ? {
               ...c,
@@ -107,8 +147,10 @@ export default function BoardComments({ date }: { date: string }) {
               canDelete: false,
             }
           : c
-      )
-    );
+      );
+      rememberComments(date, { comments: next, canCompose });
+      return next;
+    });
   }
 
   if (!visible) return null;
