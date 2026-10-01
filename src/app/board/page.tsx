@@ -16,7 +16,11 @@ import {
   isMemberSessionRedirectScheduled,
 } from "@/lib/memberSessionRedirect";
 import { type ShiftPart } from "@/lib/reservationParser";
-import { boardPendingCopy, isCurrentLoadGen } from "@/lib/pendingLoad";
+import {
+  boardPendingCopy,
+  isCurrentLoadGen,
+  isStalePublishedBoard,
+} from "@/lib/pendingLoad";
 
 type PublishedResponse = {
   ok?: boolean;
@@ -50,6 +54,13 @@ export default function PublishedBoardPage() {
 
   const today = useMemo(() => todayYmd(), []);
   const yesterday = useMemo(() => addDaysYmd(today, -1), [today]);
+  const staleBoard = isStalePublishedBoard(published?.date, date);
+  const pendingCopy = boardPendingCopy({
+    loading,
+    selectedDate: date,
+    publishedDate: published?.date ?? null,
+    error: Boolean(error),
+  });
 
   const load = useCallback(async (ymd: string) => {
     const gen = ++loadGen.current;
@@ -87,7 +98,7 @@ export default function PublishedBoardPage() {
   }, [date, load]);
 
   return (
-    <div className="pub-page">
+    <div className="pub-page" aria-busy={loading || undefined}>
       <header className="pub-head">
         <h1>배치표</h1>
         <p>확정된 날짜별 최종 배치표입니다.</p>
@@ -142,15 +153,7 @@ export default function PublishedBoardPage() {
         </button>
       </nav>
 
-      {loading ? (
-        <p className="pub-pending">
-          {boardPendingCopy({
-            loading,
-            selectedDate: date,
-            publishedDate: published?.date ?? null,
-          })}
-        </p>
-      ) : null}
+      {pendingCopy ? <p className="pub-pending">{pendingCopy}</p> : null}
       {error ? <p className="pub-msg error">{error}</p> : null}
       {!loading && !error && !published ? (
         <p className="pub-empty">아직 확정된 배치표가 없습니다.</p>
@@ -162,21 +165,20 @@ export default function PublishedBoardPage() {
       ) : null}
       {published ? (
         <div
-          className={
-            loading && published.date !== date ? "pub-board-pending" : undefined
-          }
+          className={staleBoard ? "pub-board-pending" : undefined}
+          aria-disabled={staleBoard || undefined}
         >
           <div className="pub-tools">
             <p className="pub-meta">
               {published.date} · {formatPublishedAt(published.publishedAt)} 확정
             </p>
-            {exportDraft ? (
+            {exportDraft && !staleBoard ? (
               <BoardImageExportMenu draft={exportDraft} onNotice={setNotice} />
             ) : null}
           </div>
-          {notice ? <p className="pub-notice">{notice}</p> : null}
+          {notice && !staleBoard ? <p className="pub-notice">{notice}</p> : null}
           <PublishedBoardView payload={published.payload} shift={shift} />
-          <BoardComments date={published.date} />
+          {staleBoard ? null : <BoardComments date={published.date} />}
         </div>
       ) : null}
 

@@ -9,15 +9,27 @@ export function isCurrentLoadGen(requestGen: number, latestGen: number): boolean
   return requestGen === latestGen;
 }
 
+export function isStalePublishedBoard(
+  publishedDate: string | null | undefined,
+  selectedDate: string
+): boolean {
+  return Boolean(publishedDate && publishedDate !== selectedDate);
+}
+
 export function boardPendingCopy(input: {
   loading: boolean;
   selectedDate: string;
   publishedDate: string | null;
+  error?: boolean;
 }): string | null {
-  if (!input.loading) return null;
-  if (input.publishedDate && input.publishedDate !== input.selectedDate) {
+  const stale = isStalePublishedBoard(input.publishedDate, input.selectedDate);
+  if (stale && input.loading) {
     return `이전 배치표 표시 중 · ${input.selectedDate} 불러오는 중`;
   }
+  if (stale && input.error) {
+    return `이전 배치표 표시 중 · ${input.selectedDate} 불러오기 실패`;
+  }
+  if (!input.loading) return null;
   return "업데이트 중…";
 }
 
@@ -38,4 +50,24 @@ export function calendarPlaceholderDates(yearMonth: string): string[] {
 
 export function shouldShowDashboardZeroCount(hasData: boolean): boolean {
   return hasData;
+}
+
+export function isStaleDashboardDate(
+  dataDate: string | null | undefined,
+  selectedDate: string
+): boolean {
+  return Boolean(dataDate && dataDate !== selectedDate);
+}
+
+export function dashboardUpdatingCopy(input: {
+  loading: boolean;
+  hasData: boolean;
+  staleDate: boolean;
+  error: boolean;
+}): string | null {
+  if (input.loading && input.hasData) return "업데이트 중…";
+  if (input.error && input.staleDate && !input.loading) {
+    return "이전 날짜 표시 중 · 불러오기 실패";
+  }
+  return null;
 }

@@ -3721,7 +3721,8 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
 }
 
 .pub-board-pending {
-  opacity: 0.58;
+  opacity: 0.52;
+  pointer-events: none;
 }
 
 .off-cal-cell.is-pending {

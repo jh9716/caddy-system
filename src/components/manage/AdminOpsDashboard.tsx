@@ -15,7 +15,12 @@ import { formatCapturedAtKst } from "@/lib/kstDate";
 import type { DailyOpsDutyRole } from "@/lib/dailyOpsDuty";
 import { addDays } from "@/lib/krHolidays";
 import { PRIMARY_TEAMS } from "@/lib/caddyManage";
-import { isCurrentLoadGen, shouldShowDashboardZeroCount } from "@/lib/pendingLoad";
+import {
+  dashboardUpdatingCopy,
+  isCurrentLoadGen,
+  isStaleDashboardDate,
+  shouldShowDashboardZeroCount,
+} from "@/lib/pendingLoad";
 
 type DashboardResponse = AdminOpsDashboardView & { ok?: boolean; error?: string };
 
@@ -204,6 +209,13 @@ export default function AdminOpsDashboard() {
   const [query, setQuery] = useState("");
   const loadGen = useRef(0);
   const initial = loading && !data;
+  const staleDate = isStaleDashboardDate(data?.date, date);
+  const updatingCopy = dashboardUpdatingCopy({
+    loading,
+    hasData: Boolean(data),
+    staleDate,
+    error: Boolean(error),
+  });
 
   const load = useCallback(async (ymd: string) => {
     const gen = ++loadGen.current;
@@ -357,7 +369,7 @@ export default function AdminOpsDashboard() {
         </SummaryCard>
       </section>
 
-      {loading && data ? <p className="dash-updating">업데이트 중…</p> : null}
+      {updatingCopy ? <p className="dash-updating">{updatingCopy}</p> : null}
 
       <section className="dash-duty" aria-label="운영 당번·마샬·조장">
         <h2 className="dash-duty-title">운영 당번 · 마샬 · 조장</h2>
@@ -365,9 +377,9 @@ export default function AdminOpsDashboard() {
           <div className="dash-ops-board" aria-hidden>
             <div className="vh-skel vh-skel-block" style={{ height: 120, marginTop: 0 }} />
           </div>
-        ) : (
-          <AdminOpsDutyBoard groups={data?.opsDuties ?? []} />
-        )}
+        ) : data ? (
+          <AdminOpsDutyBoard groups={data.opsDuties} />
+        ) : null}
       </section>
 
       <section className="dash-caddies" aria-label="조별 캐디 현황">
@@ -391,7 +403,11 @@ export default function AdminOpsDashboard() {
             aria-label="캐디 이름 검색"
           />
         </div>
-        {initial ? <AdminOpsTeamBoardSkeleton /> : <AdminOpsTeamBoard groups={teamGroups} />}
+        {initial ? (
+          <AdminOpsTeamBoardSkeleton />
+        ) : data ? (
+          <AdminOpsTeamBoard groups={teamGroups} />
+        ) : null}
       </section>
 
       <p className="dash-footnote">
