@@ -14,8 +14,10 @@ import {
   formatOffDateYmd,
   isActiveOffRequestStatus,
   isOffRequestStatus,
+  isOccupiedOverLimit,
   isRequestedOverLimit,
   isYmdInYearMonth,
+  requireCalendarYmd,
   canTransitionOffRequestWindow,
   nextOffRequestStatus,
   normalizeOffDateInput,
@@ -149,6 +151,22 @@ section("window month + quota helpers");
   assert(resolveDayQuotaLimit({ defaultQuota: 7, overrideLimit: 3 }) === 3, "override");
   assert(!isRequestedOverLimit(5, 5), "at cap not over");
   assert(isRequestedOverLimit(6, 5), "6/5 over");
+  assert(
+    !isOccupiedOverLimit({ approvedCount: 2, requestedCount: 3, limit: 5 }),
+    "2+3=5 not over"
+  );
+  assert(
+    isOccupiedOverLimit({ approvedCount: 2, requestedCount: 4, limit: 5 }),
+    "2+4=6 over"
+  );
+  let invalidYmd = false;
+  try {
+    requireCalendarYmd("2026-02-30");
+  } catch {
+    invalidYmd = true;
+  }
+  assert(invalidYmd, "Feb 30 rejected");
+  assert(requireCalendarYmd("2026-10-01").getDate() === 1, "valid Oct 1");
 }
 
 section("KST month boundary");

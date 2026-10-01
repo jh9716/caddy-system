@@ -10,7 +10,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { PrismaClient } from "@prisma/client";
 import type { OffRequestActor } from "../src/lib/offRequestAuth";
-import { OffRequestServiceError, submitOffRequest, cancelOwnOffRequest } from "../src/lib/offRequestService";
+import {
+  OffRequestServiceError,
+  cancelOwnOffRequest,
+  listOffRequestsForManagers,
+  submitOffRequest,
+} from "../src/lib/offRequestService";
+import { offAssignmentDayRange, requireCalendarYmd } from "../src/lib/offRequestDomain";
 import {
   closeOffRequestWindow,
   createOffRequestWindow,
@@ -138,6 +144,7 @@ async function runLocalDbTests() {
       where: { offRequest: { caddy: { team } } },
     });
     await prisma.offRequest.deleteMany({ where: { caddy: { team } } });
+    await prisma.assignment.deleteMany({ where: { caddy: { team } } });
     await prisma.offRequestQuota.deleteMany({
       where: { window: { yearMonth: { startsWith: `${year}-` } } },
     });
@@ -314,16 +321,61 @@ async function runLocalDbTests() {
     }
 
     section("15-17 calendar counts / override / no names");
+    const secretNote = `SECRET-NOTE-${tag}`;
+    const extraReq = await prisma.offRequest.findFirst({
+      where: { caddyId: { not: caddy.id }, date: requireCalendarYmd(day15), status: "REQUESTED" },
+    });
+    if (extraReq) {
+      await prisma.offRequest.update({
+        where: { id: extraReq.id },
+        data: { note: secretNote },
+      });
+    }
+
     const cal1 = await getOffRequestCalendar(prisma, caddyActor, ym(1));
     const cell15 = cal1.days.find((d) => d.date === day15);
     assert(cal1.days.length === ymdDaysInYearMonth(ym(1)).length, "calendar days");
     assert(cell15?.requestedCount === 6, "requestedCount 6");
+    assert(cell15?.approvedCount === 0, "no Assignment OFF yet");
     assert(cell15?.limit === 6, "limit uses window defaultQuota 6");
-    assert(cell15?.over === false, "6/6 is not over");
+    assert(cell15?.over === false, "6+0 / 6 is not over");
     assert(cell15?.mine?.id === submitted.id, "mine is self");
     const dumped = JSON.stringify(cal1);
     assert(!dumped.includes(caddy2.name), "calendar hides other caddy name");
     assert(!dumped.includes("C2-SECRET"), "calendar payload has no other name");
+    assert(!dumped.includes(secretNote), "calendar hides other note");
+    assert(!("applicants" in cal1), "calendar has no applicants array");
+    assert(!dumped.includes("phoneNormalized"), "no phone field");
+
+    await expectCode(
+      () => listOffRequestsForManagers(prisma, caddyActor, { date: day15 }),
+      "forbidden",
+      "caddy cannot list team applicants"
+    );
+
+    const offHolder = await prisma.caddy.create({
+      data: {
+        name: `OFFH-${tag}`,
+        team,
+        teamOrder: 80,
+        employmentStatus: "ACTIVE",
+      },
+    });
+    const range = offAssignmentDayRange(day15);
+    await prisma.assignment.create({
+      data: {
+        caddyId: offHolder.id,
+        type: "OFF",
+        startDate: range.startDate,
+        endDate: range.endDate,
+        comment: `legacy-${tag}`,
+      },
+    });
+    const calOff = await getOffRequestCalendar(prisma, caddyActor, ym(1));
+    const cellOff = calOff.days.find((d) => d.date === day15);
+    assert(cellOff?.approvedCount === 1, "Assignment OFF counts as approved");
+    assert(cellOff?.requestedCount === 6, "REQUESTED still 6");
+    assert(cellOff?.over === true, "1 OFF + 6 requested > 6 limit");
 
     await upsertOffRequestQuota(prisma, admin, {
       month: ym(1),
@@ -334,10 +386,52 @@ async function runLocalDbTests() {
     const cal2 = await getOffRequestCalendar(prisma, caddyActor, ym(1));
     const cell15b = cal2.days.find((d) => d.date === day15);
     assert(cell15b?.limit === 3, "quota override");
-    assert(cell15b?.over === true, "6/3 is over");
+    assert(cell15b?.over === true, "1+6 / 3 is over");
+
+    await expectCode(
+      () =>
+        upsertOffRequestQuota(prisma, admin, {
+          month: ym(1),
+          team,
+          date: `${year}-02-30`,
+          limit: 2,
+        }),
+      "invalid_date",
+      "quota rejects non-calendar date"
+    );
+    await expectCode(
+      () =>
+        upsertOffRequestQuota(prisma, admin, {
+          month: ym(1),
+          team,
+          date: `${year}-03-15`,
+          limit: 2,
+        }),
+      "outside_window",
+      "quota date must stay in window month"
+    );
+    await expectCode(
+      () =>
+        upsertOffRequestQuota(prisma, caddyActor, {
+          month: ym(1),
+          team,
+          date: day15,
+          limit: 9,
+        }),
+      "forbidden",
+      "caddy cannot change quota"
+    );
 
     section("3 cancel / 4-6 reschedule + adjustment + dest duplicate");
     const other = await submitOffRequest(prisma, caddy2Actor, { date: day16 });
+    await expectCode(
+      () =>
+        rescheduleOwnOffRequest(prisma, caddyActor, other.id, {
+          toDate: `${ym(1)}-20`,
+        }),
+      "forbidden",
+      "cannot reschedule another caddy"
+    );
     const parked = await submitOffRequest(prisma, caddyActor, {
       date: `${ym(1)}-18`,
     });
@@ -358,6 +452,26 @@ async function runLocalDbTests() {
       "outside_window",
       "reschedule outside month blocked"
     );
+    const raceRow = await submitOffRequest(prisma, caddy2Actor, {
+      date: `${ym(1)}-25`,
+    });
+    const raced = await Promise.allSettled([
+      rescheduleOwnOffRequest(prisma, caddy2Actor, raceRow.id, {
+        toDate: `${ym(1)}-26`,
+      }),
+      rescheduleOwnOffRequest(prisma, caddy2Actor, raceRow.id, {
+        toDate: `${ym(1)}-27`,
+      }),
+    ]);
+    const raceOk = raced.filter((x) => x.status === "fulfilled");
+    const raceBad = raced.filter((x) => x.status === "rejected");
+    assert(raceOk.length === 1, "concurrent reschedule one winner");
+    assert(raceBad.length === 1, "concurrent reschedule one rejected");
+    const raceAdj = await prisma.offRequestAdjustment.findMany({
+      where: { offRequestId: raceRow.id },
+    });
+    assert(raceAdj.length === 1, "concurrent reschedule one adjustment");
+
     const moved = await rescheduleOwnOffRequest(prisma, caddyActor, submitted.id, {
       toDate: `${ym(1)}-20`,
       reason: "조율",

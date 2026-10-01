@@ -33,6 +33,7 @@ type DayDto = {
   date: string;
   limit: number;
   requestedCount: number;
+  approvedCount: number;
   mine: MineDto | null;
   over: boolean;
 };
@@ -216,7 +217,7 @@ export default function OffRequestCalendarClient() {
             >
               <span className="off-cal-num">{Number(day.date.slice(-2))}</span>
               <span className="off-cal-count">
-                {day.requestedCount}/{day.limit}
+                {day.approvedCount + day.requestedCount}/{day.limit}
               </span>
               {mine ? <span className="off-cal-mine">내 신청</span> : null}
             </button>

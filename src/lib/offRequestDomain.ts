@@ -71,6 +71,15 @@ export function normalizeOffDateInput(ymd: string): Date {
   return d;
 }
 
+/** 캘린더에 실제 존재하는 YYYY-MM-DD. 2월 30일 같은 overflow 거부. */
+export function requireCalendarYmd(ymd: string): Date {
+  const date = normalizeOffDateInput(ymd);
+  if (formatOffDateYmd(date) !== ymd) {
+    throw new Error("invalid date");
+  }
+  return date;
+}
+
 const YEAR_MONTH_RE = /^(\d{4})-(0[1-9]|1[0-2])$/;
 
 /** YYYY-MM. 월/날짜 판정은 문자열 캘린더(KST YMD) 기준. */
@@ -169,6 +178,20 @@ export function resolveDayQuotaLimit(input: {
 /** 신청 인원이 허용을 넘으면 초과. 정원과 같으면 초과가 아님. */
 export function isRequestedOverLimit(requestedCount: number, limit: number): boolean {
   return requestedCount > limit;
+}
+
+/**
+ * 현장 정원: 확정 Assignment(OFF) + 이번 REQUESTED.
+ * APPROVED OffRequest는 Assignment를 통해만 세어 이중 집계하지 않는다.
+ */
+export function isOccupiedOverLimit(input: {
+  approvedCount: number;
+  requestedCount: number;
+  limit: number;
+}): boolean {
+  const approved = Math.max(0, Math.floor(Number(input.approvedCount) || 0));
+  const requested = Math.max(0, Math.floor(Number(input.requestedCount) || 0));
+  return approved + requested > input.limit;
 }
 
 /** Date → YYYY-MM-DD (로컬 캘린더) */

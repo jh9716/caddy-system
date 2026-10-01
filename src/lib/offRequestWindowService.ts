@@ -15,9 +15,10 @@ import {
   canTransitionOffRequestWindow,
   clampOffDefaultQuota,
   formatOffDateYmd,
-  isRequestedOverLimit,
+  isOccupiedOverLimit,
   isYearMonth,
   normalizeOffDateInput,
+  requireCalendarYmd,
   resolveDayQuotaLimit,
   yearMonthFromYmd,
   ymdDaysInYearMonth,
@@ -25,6 +26,7 @@ import {
 } from "@/lib/offRequestDomain";
 import {
   OffRequestServiceError,
+  countApprovedOffForTeamDays,
   type DbClient,
   serializeOffRequest,
 } from "@/lib/offRequestService";
@@ -253,7 +255,19 @@ export async function updateOffRequestWindow(
       400
     );
   }
-  return db.offRequestWindow.update({ where: { id }, data });
+  if (Object.keys(data).length === 0) return row;
+  const switched = await db.offRequestWindow.updateMany({
+    where: { id, status: "DRAFT" },
+    data,
+  });
+  if (switched.count !== 1) {
+    throw new OffRequestServiceError(
+      "invalid_transition",
+      "DRAFT 상태에서만 일정/정원을 수정할 수 있습니다.",
+      409
+    );
+  }
+  return db.offRequestWindow.findUniqueOrThrow({ where: { id } });
 }
 
 async function transitionWindow(
@@ -276,10 +290,19 @@ async function transitionWindow(
       { status: row.status, to }
     );
   }
-  return db.offRequestWindow.update({
-    where: { id },
+  const switched = await db.offRequestWindow.updateMany({
+    where: { id, status: row.status },
     data: { status: to, ...extra },
   });
+  if (switched.count !== 1) {
+    throw new OffRequestServiceError(
+      "invalid_transition",
+      `${row.status}에서 ${to}(으)로 바꿀 수 없습니다.`,
+      409,
+      { status: row.status, to }
+    );
+  }
+  return db.offRequestWindow.findUniqueOrThrow({ where: { id } });
 }
 
 export async function openOffRequestWindow(
@@ -316,7 +339,11 @@ export async function upsertOffRequestQuota(
     );
   }
   const ymd = String(input.date ?? "").trim();
-  normalizeOffDateInput(ymd);
+  try {
+    requireCalendarYmd(ymd);
+  } catch {
+    throw new OffRequestServiceError("invalid_date", "date=YYYY-MM-DD 필요", 400);
+  }
   if (yearMonthFromYmd(ymd) !== window.yearMonth) {
     throw new OffRequestServiceError("outside_window", "신청 월 밖의 날짜입니다.", 400);
   }
@@ -330,7 +357,7 @@ export async function upsertOffRequestQuota(
   } catch {
     throw new OffRequestServiceError("invalid_quota", "limit는 1-99입니다.", 400);
   }
-  const date = normalizeOffDateInput(ymd);
+  const date = requireCalendarYmd(ymd);
   await db.offRequestQuota.upsert({
     where: {
       windowId_team_date: {
@@ -349,6 +376,8 @@ export type CalendarDay = {
   date: string;
   limit: number;
   requestedCount: number;
+  /** Assignment(OFF) SoT. APPROVED OffRequest는 여기로만 반영. */
+  approvedCount: number;
   mine: ReturnType<typeof serializeOffRequest> | null;
   over: boolean;
 };
@@ -443,6 +472,9 @@ export async function getOffRequestCalendar(
     overrideByDate.set(formatOffDateYmd(row.date), row.limit);
   }
   const defaultQuota = window?.defaultQuota ?? 5;
+  const approvedByDate = team
+    ? await countApprovedOffForTeamDays(db, team, days)
+    : new Map<string, number>();
 
   return {
     month,
@@ -450,6 +482,7 @@ export async function getOffRequestCalendar(
     window: window ? serializeOffRequestWindow(window) : null,
     days: days.map((date) => {
       const requestedCount = requestedByDate.get(date) ?? 0;
+      const approvedCount = approvedByDate.get(date) ?? 0;
       const limit = resolveDayQuotaLimit({
         defaultQuota,
         overrideLimit: overrideByDate.get(date) ?? null,
@@ -459,8 +492,9 @@ export async function getOffRequestCalendar(
         date,
         limit,
         requestedCount,
+        approvedCount,
         mine: mineRow ? serializeOffRequest(mineRow as OffRequest) : null,
-        over: isRequestedOverLimit(requestedCount, limit),
+        over: isOccupiedOverLimit({ approvedCount, requestedCount, limit }),
       };
     }),
   };
@@ -529,45 +563,72 @@ export async function rescheduleOwnOffRequest(
     );
   }
 
-  const fromYmd = formatOffDateYmd(row.date);
-  const toYmd = String(input.toDate ?? "").trim();
-  const toDate = normalizeOffDateInput(toYmd);
-  if (fromYmd === toYmd) {
-    throw new OffRequestServiceError("same_date", "같은 날짜로는 이동할 수 없습니다.", 400);
-  }
-  if (yearMonthFromYmd(fromYmd) !== yearMonthFromYmd(toYmd)) {
-    throw new OffRequestServiceError("outside_window", "같은 달 안에서만 이동할 수 있습니다.", 400);
-  }
-
-  const window = await requireOpenWindowForYmd(db, toYmd);
-  const now = input.now ?? new Date();
-  assertWritableOffDate(fromYmd, window.yearMonth, now);
-  assertWritableOffDate(toYmd, window.yearMonth, now);
-  await assertNoActiveDuplicate(db, actor.caddyId, toDate, row.id);
-
   const reason =
     input.reason == null || String(input.reason).trim() === ""
       ? null
       : String(input.reason).trim().slice(0, 500);
+  const now = input.now ?? new Date();
+  const toYmd = String(input.toDate ?? "").trim();
+  const toDate = requireCalendarYmd(toYmd);
 
   try {
     return await db.$transaction(async (tx) => {
-      const updated = await tx.offRequest.update({
-        where: { id: row.id },
+      const locked = await tx.offRequest.findUnique({ where: { id } });
+      if (!locked) {
+        throw new OffRequestServiceError("not_found", "신청을 찾을 수 없습니다.", 404);
+      }
+      if (!isOwnCaddy(actor, locked.caddyId)) {
+        throw new OffRequestServiceError("forbidden", "본인 신청만 변경할 수 있습니다.", 403);
+      }
+      if (locked.status !== "REQUESTED") {
+        throw new OffRequestServiceError(
+          "invalid_transition",
+          "REQUESTED 상태만 날짜를 바꿀 수 있습니다.",
+          409,
+          { status: locked.status }
+        );
+      }
+      const fromYmd = formatOffDateYmd(locked.date);
+      if (fromYmd === toYmd) {
+        throw new OffRequestServiceError("same_date", "같은 날짜로는 이동할 수 없습니다.", 400);
+      }
+      if (yearMonthFromYmd(fromYmd) !== yearMonthFromYmd(toYmd)) {
+        throw new OffRequestServiceError(
+          "outside_window",
+          "같은 달 안에서만 이동할 수 있습니다.",
+          400
+        );
+      }
+      const window = await requireOpenWindowForYmd(tx, toYmd);
+      assertWritableOffDate(fromYmd, window.yearMonth, now);
+      assertWritableOffDate(toYmd, window.yearMonth, now);
+      await assertNoActiveDuplicate(tx, actor.caddyId, toDate, locked.id);
+
+      const switched = await tx.offRequest.updateMany({
+        where: { id: locked.id, status: "REQUESTED", date: locked.date },
         data: { date: toDate },
       });
+      if (switched.count !== 1) {
+        throw new OffRequestServiceError(
+          "invalid_transition",
+          "REQUESTED 상태만 날짜를 바꿀 수 있습니다.",
+          409
+        );
+      }
       const adjustment = await tx.offRequestAdjustment.create({
         data: {
-          offRequestId: row.id,
-          fromDate: row.date,
+          offRequestId: locked.id,
+          fromDate: locked.date,
           toDate,
           adjustedByUserId: actor.userId!,
           reason,
         },
       });
+      const updated = await tx.offRequest.findUniqueOrThrow({ where: { id: locked.id } });
       return { offRequest: updated, adjustmentId: adjustment.id };
     });
   } catch (e) {
+    if (e instanceof OffRequestServiceError) throw e;
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
       throw new OffRequestServiceError(
         "duplicate_active",

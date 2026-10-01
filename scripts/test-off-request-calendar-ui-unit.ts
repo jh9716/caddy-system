@@ -58,11 +58,20 @@ section("caddy calendar wiring");
   assert(!client.includes("/reject"), "no reject UI");
   assert(!client.includes("applicants"), "no applicants list");
   assert(!client.includes("caddy.name"), "no other caddy name field");
+  assert(client.includes("approvedCount + day.requestedCount"), "UI uses occupied/limit");
   assert(client.includes("아직 휴무 신청 전") || client.includes("offRequestWindowHint"), "draft copy");
   assert(client.includes("조정 중") || client.includes("offRequestWindowHint"), "adjusting copy");
   assert(layout.includes("canUseOffRequestPages"), "layout auth");
   assert(mw.includes('pathname.startsWith("/off-requests")'), "middleware gate");
   assert(nav.includes('href: "/off-requests"'), "member menu");
+  const windowSvc = read("src/lib/offRequestWindowService.ts");
+  assert(windowSvc.includes('where: { id, status: "DRAFT" }'), "patch is conditional");
+  assert(windowSvc.includes("where: { id, status: row.status }"), "transition is conditional");
+  assert(windowSvc.includes("countApprovedOffForTeamDays"), "calendar uses Assignment OFF SoT");
+  assert(windowSvc.includes("isOccupiedOverLimit"), "over uses approved+requested");
+  const mig = read("prisma/migrations/20261001120000_off_request_window/migration.sql");
+  assert(!/ALTER TABLE "OffRequest"/i.test(mig), "migration does not alter OffRequest columns");
+  assert(!/updatedAt/i.test(mig.split("OffRequestWindow")[0] || ""), "no pre-window updatedAt drift");
 }
 
 if (failed > 0) {

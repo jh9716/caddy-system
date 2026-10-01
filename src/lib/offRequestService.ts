@@ -25,6 +25,7 @@ import {
   formatOffDateYmd,
   normalizeOffDateInput,
   offAssignmentDayRange,
+  requireCalendarYmd,
   yearMonthFromYmd,
   type OffQuotaSnapshot,
 } from "@/lib/offRequestDomain";
@@ -67,6 +68,42 @@ export async function countApprovedOffForTeamDay(
       endDate: { gte: startDate },
     },
   });
+}
+
+/** 한 달 날짜들에 대해 Assignment(OFF) overlap 수를 하루씩 집계. APPROVED OffRequest는 세지 않음. */
+export async function countApprovedOffForTeamDays(
+  db: DbClient,
+  team: string,
+  ymds: string[]
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  for (const ymd of ymds) out.set(ymd, 0);
+  if (ymds.length === 0) return out;
+  const start = dayBounds(ymds[0]).startDate;
+  const end = dayBounds(ymds[ymds.length - 1]).endDate;
+  const caddies = await db.caddy.findMany({
+    where: { team },
+    select: { id: true },
+  });
+  if (caddies.length === 0) return out;
+  const rows = await db.assignment.findMany({
+    where: {
+      type: "OFF",
+      caddyId: { in: caddies.map((c) => c.id) },
+      startDate: { lte: end },
+      endDate: { gte: start },
+    },
+    select: { startDate: true, endDate: true },
+  });
+  for (const row of rows) {
+    for (const ymd of ymds) {
+      const { startDate, endDate } = dayBounds(ymd);
+      if (row.startDate <= endDate && row.endDate >= startDate) {
+        out.set(ymd, (out.get(ymd) ?? 0) + 1);
+      }
+    }
+  }
+  return out;
 }
 
 export async function countRequestedOffForTeamDay(
@@ -214,7 +251,7 @@ export async function submitOffRequest(
     );
   }
   const ymd = input.date;
-  const date = normalizeOffDateInput(ymd);
+  const date = requireCalendarYmd(ymd);
   const note =
     input.note == null || String(input.note).trim() === ""
       ? null
