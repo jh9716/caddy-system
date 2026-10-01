@@ -17,10 +17,7 @@ import {
   filterDashboardCaddies,
   groupCaddiesByPrimaryTeam,
   groupOpsDutyNames,
-  resolveDashboardExpandedTeams,
   statusToneFromReasons,
-  teamHeaderAriaLabel,
-  teamStatusSummary,
 } from "../src/lib/adminOpsDashboard";
 import {
   loadAdminOpsDashboardSource,
@@ -387,34 +384,12 @@ section("전체 캐디 조별 현황판 가용/제외");
   assert(!html.includes("dash-caddy-grid"), "사람 카드 grid 제거");
   const named = filterDashboardCaddies(dash.caddies, "김");
   assert(named.length === 1 && named[0].name === "김가용", "이름 검색만");
-  assert(teamStatusSummary(teams[0].rows).includes("가용") || teamStatusSummary(dash.caddies).includes("휴무"), "조 상태 요약");
-  const collapsedHtml = renderToStaticMarkup(
-    createElement(AdminOpsTeamBoard, { groups: teams, expandedTeams: new Set() })
-  );
-  assert(!collapsedHtml.includes("dash-team-person-name"), "기본 collapsed는 캐디 row 없음");
-  assert(collapsedHtml.includes("data-expanded=\"false\""), "collapsed marker");
-  const oneOpen = renderToStaticMarkup(
-    createElement(AdminOpsTeamBoard, {
-      groups: teams,
-      expandedTeams: new Set(["1조"]),
-    })
-  );
-  assert(oneOpen.includes("김가용") && !oneOpen.includes("박3부"), "펼친 조만 row");
-  const twoOpen = renderToStaticMarkup(
-    createElement(AdminOpsTeamBoard, {
-      groups: teams,
-      expandedTeams: new Set(["1조", "9조"]),
-    })
-  );
-  assert(twoOpen.includes("김가용") && twoOpen.includes("박3부"), "복수 조 동시 펼침");
-  const team1 = teams.find((t) => t.team === "1조")!;
-  const team1Html = renderToStaticMarkup(
-    createElement(AdminOpsTeamBoard, { groups: [team1], expandedTeams: new Set() })
-  );
-  const expectedSummary = teamStatusSummary(team1.rows);
-  assert(team1Html.includes(expectedSummary) || expectedSummary === "", "collapsed summary = row tones");
-  assert(team1Html.includes(`aria-label="${teamHeaderAriaLabel("1조", team1.rows)}"`), "header aria-label");
-  assert(!team1Html.includes("<h3"), "button 안 heading 없음");
+  const alwaysOpen = renderToStaticMarkup(createElement(AdminOpsTeamBoard, { groups: teams }));
+  assert(alwaysOpen.includes("김가용") && alwaysOpen.includes("박3부"), "기본 펼침은 전 조 person row");
+  assert((alwaysOpen.match(/dash-team-person-name/g) || []).length >= 4, "lazy DOM 없음");
+  assert(!alwaysOpen.includes("data-expanded"), "collapse marker 없음");
+  assert(!alwaysOpen.includes("dash-team-summary"), "collapsed summary 없음");
+  assert(!alwaysOpen.includes("aria-expanded"), "toggle button 없음");
   const offRow = dash.caddies.find((c) => c.name === "이휴무")!;
   const leaveRow = dash.caddies.find((c) => c.name === "강휴직")!;
   const thirdRow = dash.caddies.find((c) => c.name === "박3부")!;
@@ -682,42 +657,6 @@ section("Sheet call-count cache / inflight");
   }
 }
 
-section("search / date expanded team policy");
-{
-  const opened = resolveDashboardExpandedTeams({
-    openedTeams: ["1조"],
-    matchedTeams: ["9조", "1조"],
-    searching: true,
-  });
-  assert(opened.has("1조") && opened.has("9조"), "검색 match 조 자동 open");
-  const zero = resolveDashboardExpandedTeams({
-    openedTeams: [],
-    matchedTeams: [],
-    searching: true,
-  });
-  assert(zero.size === 0, "검색 0건은 조를 펼치지 않음");
-  const afterClear = resolveDashboardExpandedTeams({
-    openedTeams: ["1조"],
-    matchedTeams: ["9조"],
-    searching: false,
-  });
-  assert(afterClear.has("1조") && !afterClear.has("9조"), "검색 지우면 사용자 open만 유지");
-  const collapsedSearch = resolveDashboardExpandedTeams({
-    openedTeams: [],
-    collapsedTeams: ["9조"],
-    matchedTeams: ["9조"],
-    searching: true,
-  });
-  assert(!collapsedSearch.has("9조"), "검색 중 접은 조는 닫힘");
-  const stale = resolveDashboardExpandedTeams({
-    openedTeams: ["1조", "9조"],
-    matchedTeams: ["9조"],
-    searching: true,
-    staleDate: true,
-  });
-  assert(stale.size === 0, "날짜 stale이면 person row 0");
-}
-
 section("read-only OFF/ops source overlay");
 {
   const date = "2026-09-03";
@@ -865,12 +804,10 @@ section("모바일 폭 rendering 구조");
   assert(/is-marshal/.test(css) && /is-leader/.test(css) && /is-available/.test(css), "마샬/조장/가용 색");
   assert(/addDays\(/.test(ui) && /이전/.test(ui) && /type="date"/.test(ui), "날짜 이전/다음/input");
   assert(/캐디 이름 검색/.test(ui), "이름 검색만");
-  assert(/expandedTeams/.test(ui), "조 기본 collapsed");
-  assert(/resolveDashboardExpandedTeams/.test(ui), "검색/stale expanded helper");
-  assert(/staleDate/.test(ui) && /matchedTeams/.test(ui), "날짜 stale 시 검색 auto-open 억제");
-  assert(/teamStatusSummary/.test(ui), "접힌 조 상태 요약");
-  assert(/aria-label=\{teamHeaderAriaLabel/.test(ui) || /teamHeaderAriaLabel/.test(ui), "조 header aria-label");
-  assert(/dash-team-summary/.test(css), "collapsed summary style");
+  assert(/filterDashboardCaddies/.test(ui), "검색은 즉시 필터");
+  assert(!/openedTeams|collapsedTeams|expandedTeams/.test(ui), "collapse 상태 없음");
+  assert(!/resolveDashboardExpandedTeams|teamHeaderAriaLabel|teamStatusSummary/.test(ui), "collapse helper 미사용");
+  assert(!/dash-team-summary/.test(css) && !/is-collapsed/.test(css), "collapse CSS 없음");
   assert(/AdminOpsTeamBoardSkeleton/.test(ui), "첫 로딩 조별 placeholder");
   assert(/shouldShowDashboardZeroCount/.test(ui), "로딩 중 0명 숨김");
   assert(!/불러오는 중…/.test(ui), "첫 진입 wipe 문구 없음");
