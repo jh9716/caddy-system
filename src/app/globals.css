@@ -1403,9 +1403,26 @@ a {
   align-items: baseline;
   justify-content: space-between;
   gap: 4px;
-  margin-bottom: 6px;
-  padding-bottom: 5px;
+  width: 100%;
+  margin: 0 0 6px;
+  padding: 0 0 5px;
+  border: 0;
   border-bottom: 1px solid var(--vh-gold-line);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dash-team-col-head:disabled {
+  cursor: default;
+}
+
+.dash-team-summary {
+  margin: 0;
+  color: var(--vh-muted);
+  font-size: 0.68rem;
+  line-height: 1.35;
 }
 
 .dash-team-col-title {
