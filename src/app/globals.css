@@ -3492,3 +3492,143 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
   padding: 8px 0;
   border-top: 1px solid var(--vh-border);
 }
+
+.off-admin {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 8px 4px 36px;
+}
+
+.off-admin-head {
+  margin-bottom: 8px;
+}
+
+.off-admin-card {
+  margin: 14px 0;
+  padding: 14px;
+  border: 1px solid var(--vh-border);
+  border-radius: 12px;
+  background: var(--vh-paper);
+}
+
+.off-admin-status {
+  margin: 0 0 10px;
+  font-weight: 800;
+  color: var(--vh-green-900);
+}
+
+.off-admin-subtitle {
+  margin: 0 0 10px;
+  font-size: 1.05rem;
+}
+
+.off-admin-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin: 0 0 12px;
+}
+
+.off-admin-meta dt {
+  font-size: 0.75rem;
+  color: var(--vh-muted);
+}
+
+.off-admin-meta dd {
+  margin: 2px 0 0;
+  font-weight: 700;
+}
+
+.off-admin-form {
+  display: grid;
+  gap: 10px;
+  margin: 10px 0 0;
+}
+
+.off-admin-form.is-inline {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  align-items: end;
+}
+
+.off-admin-form label {
+  display: grid;
+  gap: 4px;
+  font-size: 0.82rem;
+  color: var(--vh-ink-soft);
+}
+
+.off-admin-form input,
+.off-admin-form select,
+.off-admin-teambar select {
+  min-height: 38px;
+  border: 1px solid var(--vh-border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font: inherit;
+  background: #fff;
+}
+
+.off-admin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.off-admin-teambar {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.off-admin-overrides {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  font-size: 0.88rem;
+}
+
+.off-admin-overrides li {
+  padding: 4px 0;
+}
+
+.off-admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+  font-size: 0.85rem;
+}
+
+.off-admin-table th,
+.off-admin-table td {
+  border-top: 1px solid var(--vh-border);
+  padding: 6px 4px;
+  text-align: center;
+}
+
+.off-admin-table tr.is-current td {
+  font-weight: 700;
+  background: var(--vh-ok-bg);
+}
+
+.off-admin-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: grid;
+  place-items: center;
+  z-index: 40;
+  padding: 16px;
+}
+
+.off-admin-modal-card {
+  width: min(420px, 100%);
+  background: var(--vh-paper);
+  border-radius: 12px;
+  padding: 18px;
+}
+
+.off-admin-modal-card p {
+  margin: 0 0 12px;
+  line-height: 1.45;
+}

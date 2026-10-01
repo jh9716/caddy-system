@@ -5,6 +5,7 @@
 
 import { Prisma, type OffRequest, type OffRequestWindow, type PrismaClient } from "@prisma/client";
 import { isRetiredCaddySessionBlocked } from "@/lib/auth";
+import { PRIMARY_TEAMS } from "@/lib/caddyManage";
 import { isPastKstYmd, kstYmd } from "@/lib/kstDate";
 import {
   canSubmitOwnOffRequest,
@@ -33,6 +34,9 @@ import {
 
 export type WindowWriteNow = { now?: Date };
 
+/** 관리자 quota/현황에 쓰는 실제 조 목록. 자유 입력 금지. */
+export const OFF_REQUEST_ADMIN_TEAMS = PRIMARY_TEAMS;
+
 function assertAdmin(actor: OffRequestActor) {
   if (actor.role !== "admin") {
     throw new OffRequestServiceError("forbidden", "관리자만 가능합니다.", 403);
@@ -46,6 +50,23 @@ function parseIsoDate(value: unknown, field: string): Date {
     throw new OffRequestServiceError("invalid_date", `${field}가 올바르지 않습니다.`, 400);
   }
   return d;
+}
+
+function assertQuotaWritable(window: OffRequestWindow) {
+  if (window.status === "FINALIZED") {
+    throw new OffRequestServiceError(
+      "window_finalized",
+      "확정된 달의 정원은 바꿀 수 없습니다.",
+      409
+    );
+  }
+  if (window.status === "ADJUSTING") {
+    throw new OffRequestServiceError(
+      "window_adjusting",
+      "조정 중에는 정원을 바꿀 수 없습니다.",
+      409
+    );
+  }
 }
 
 async function assertCaddyNotRetired(db: DbClient, actor: OffRequestActor) {
@@ -331,13 +352,7 @@ export async function upsertOffRequestQuota(
 ): Promise<{ window: OffRequestWindow; team: string; date: string; limit: number }> {
   assertAdmin(actor);
   const window = await requireWindowByMonth(db, input.month);
-  if (window.status === "FINALIZED") {
-    throw new OffRequestServiceError(
-      "window_finalized",
-      "확정된 달의 정원은 바꿀 수 없습니다.",
-      409
-    );
-  }
+  assertQuotaWritable(window);
   const ymd = String(input.date ?? "").trim();
   try {
     requireCalendarYmd(ymd);
@@ -370,6 +385,146 @@ export async function upsertOffRequestQuota(
     update: { limit },
   });
   return { window, team, date: ymd, limit };
+}
+
+export async function deleteOffRequestQuota(
+  db: PrismaClient,
+  actor: OffRequestActor,
+  input: { month: string; team: string; date: string }
+): Promise<{ window: OffRequestWindow; team: string; date: string; deleted: number }> {
+  assertAdmin(actor);
+  const window = await requireWindowByMonth(db, input.month);
+  assertQuotaWritable(window);
+  const ymd = String(input.date ?? "").trim();
+  try {
+    requireCalendarYmd(ymd);
+  } catch {
+    throw new OffRequestServiceError("invalid_date", "date=YYYY-MM-DD 필요", 400);
+  }
+  if (yearMonthFromYmd(ymd) !== window.yearMonth) {
+    throw new OffRequestServiceError("outside_window", "신청 월 밖의 날짜입니다.", 400);
+  }
+  const team = String(input.team ?? "").trim();
+  if (!team) {
+    throw new OffRequestServiceError("invalid_team", "team이 필요합니다.", 400);
+  }
+  const date = requireCalendarYmd(ymd);
+  const deleted = await db.offRequestQuota.deleteMany({
+    where: { windowId: window.id, team, date },
+  });
+  return { window, team, date: ymd, deleted: deleted.count };
+}
+
+export type AdminMonthTeamCell = {
+  team: string;
+  requestedCount: number;
+  approvedCount: number;
+  occupied: number;
+  limit: number;
+  over: boolean;
+  override: boolean;
+};
+
+export type AdminMonthDay = {
+  date: string;
+  requestedCount: number;
+  approvedCount: number;
+  occupied: number;
+  overTeamCount: number;
+  teams: AdminMonthTeamCell[];
+};
+
+export async function getOffRequestAdminMonth(
+  db: DbClient,
+  actor: OffRequestActor,
+  month: string
+): Promise<{
+  month: string;
+  today: string;
+  teams: readonly string[];
+  window: ReturnType<typeof serializeOffRequestWindow> | null;
+  quotas: Array<{ team: string; date: string; limit: number }>;
+  days: AdminMonthDay[];
+}> {
+  assertAdmin(actor);
+  if (!isYearMonth(month)) {
+    throw new OffRequestServiceError("invalid_month", "month=YYYY-MM 필요", 400);
+  }
+  const window = await findWindowByMonth(db, month);
+  const days = ymdDaysInYearMonth(month);
+  const start = normalizeOffDateInput(days[0]);
+  const end = normalizeOffDateInput(days[days.length - 1]);
+  const teams = OFF_REQUEST_ADMIN_TEAMS;
+
+  const [requests, overrides] = await Promise.all([
+    db.offRequest.findMany({
+      where: {
+        date: { gte: start, lte: end },
+        status: "REQUESTED",
+        caddy: { team: { in: [...teams] } },
+      },
+      select: { date: true, caddy: { select: { team: true } } },
+    }),
+    window
+      ? db.offRequestQuota.findMany({ where: { windowId: window.id } })
+      : Promise.resolve([]),
+  ]);
+
+  const requested = new Map<string, number>();
+  for (const row of requests) {
+    const key = `${row.caddy.team}|${formatOffDateYmd(row.date)}`;
+    requested.set(key, (requested.get(key) ?? 0) + 1);
+  }
+
+  const overrideMap = new Map<string, number>();
+  const quotas: Array<{ team: string; date: string; limit: number }> = [];
+  for (const row of overrides) {
+    const date = formatOffDateYmd(row.date);
+    overrideMap.set(`${row.team}|${date}`, row.limit);
+    quotas.push({ team: row.team, date, limit: row.limit });
+  }
+
+  const approvedByTeam = new Map<string, Map<string, number>>();
+  for (const team of teams) {
+    approvedByTeam.set(team, await countApprovedOffForTeamDays(db, team, days));
+  }
+
+  const defaultQuota = window?.defaultQuota ?? 5;
+  return {
+    month,
+    today: kstYmd(),
+    teams,
+    window: window ? serializeOffRequestWindow(window) : null,
+    quotas,
+    days: days.map((date) => {
+      const teamCells = teams.map((team) => {
+        const requestedCount = requested.get(`${team}|${date}`) ?? 0;
+        const approvedCount = approvedByTeam.get(team)?.get(date) ?? 0;
+        const overrideLimit = overrideMap.get(`${team}|${date}`);
+        const limit = resolveDayQuotaLimit({
+          defaultQuota,
+          overrideLimit: overrideLimit ?? null,
+        });
+        return {
+          team,
+          requestedCount,
+          approvedCount,
+          occupied: approvedCount + requestedCount,
+          limit,
+          over: isOccupiedOverLimit({ approvedCount, requestedCount, limit }),
+          override: overrideLimit != null,
+        };
+      });
+      return {
+        date,
+        requestedCount: teamCells.reduce((n, c) => n + c.requestedCount, 0),
+        approvedCount: teamCells.reduce((n, c) => n + c.approvedCount, 0),
+        occupied: teamCells.reduce((n, c) => n + c.occupied, 0),
+        overTeamCount: teamCells.filter((c) => c.over).length,
+        teams: teamCells,
+      };
+    }),
+  };
 }
 
 export type CalendarDay = {

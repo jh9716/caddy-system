@@ -25,6 +25,11 @@ const NAV = [
     match: (p: string) => p.startsWith("/manage/availability"),
   },
   {
+    href: "/manage/off-requests",
+    label: "휴무 신청",
+    match: (p: string) => p.startsWith("/manage/off-requests"),
+  },
+  {
     href: "/manage/reservations",
     label: "예약표 파싱",
     match: (p: string) => p.startsWith("/manage/reservations"),
@@ -110,6 +115,7 @@ const ADMIN_PREFETCH = [
   "/manage/caddy-search",
   "/manage/assignments",
   "/manage/availability",
+  "/manage/off-requests",
 ] as const;
 
 export default function ManageShell({

@@ -1,6 +1,7 @@
 import type { OffRequestWindowStatus } from "@/lib/offRequestDomain";
 
 export const OFF_REQUEST_MEMBER_PATH = "/off-requests";
+export const OFF_REQUEST_ADMIN_PATH = "/manage/off-requests";
 
 export function offRequestWindowStatusLabel(status: string | null | undefined): string {
   switch (status) {

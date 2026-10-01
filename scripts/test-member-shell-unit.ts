@@ -73,6 +73,7 @@ section("admin menus unchanged");
   assert(!staff.includes("/manage/staff-accounts"), "staff admin hides 직원 계정");
   assert(admin.includes("/manage/notifications"), "admin keeps 알림 설정");
   assert(admin.includes("/manage/privacy-requests"), "admin has 개인정보 요청 inbox");
+  assert(admin.includes("/manage/off-requests"), "admin has 휴무 신청 관리");
   assert(admin.includes("/course-reports"), "admin keeps 코스 제보");
   const manageShell = read("src/components/manage/ManageShell.tsx");
   assert(manageShell.includes('label: "캐디 관리"'), "ManageShell still has 캐디 관리");
