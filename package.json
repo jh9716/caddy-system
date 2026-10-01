@@ -106,6 +106,7 @@
     "test:off-request-window-unit": "bash scripts/tsx-safe.sh scripts/test-off-request-window-unit.ts",
     "test:off-request-calendar-ui-unit": "bash scripts/tsx-safe.sh scripts/test-off-request-calendar-ui-unit.ts",
     "test:pending-load-unit": "bash scripts/tsx-safe.sh scripts/test-pending-load-unit.ts",
+    "test:client-resource-cache-unit": "bash scripts/tsx-safe.sh scripts/test-client-resource-cache-unit.ts",
     "test:off-request-admin-unit": "bash scripts/tsx-safe.sh scripts/test-off-request-admin-unit.ts",
     "test:off-request-admin-ui-unit": "bash scripts/tsx-safe.sh scripts/test-off-request-admin-ui-unit.ts",
     "test:daily-special-duty-unit": "bash scripts/tsx-safe.sh scripts/test-daily-special-duty-unit.ts",

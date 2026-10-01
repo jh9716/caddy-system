@@ -1,14 +1,22 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import DevicePushSettings from '@/components/DevicePushSettings'
 import PwaInstallCard from '@/components/PwaInstallCard'
+import {
+  CLIENT_RESOURCE,
+  ensureClientAuthNamespace,
+  readClientResource,
+  readLastClientAuthNamespace,
+  writeClientResource,
+} from '@/lib/clientResourceCache'
 import { resolveCaddyPageGate } from '@/lib/roleRouting'
 import { formatKstDisplay } from '@/lib/kstDate'
 import {
   consumeUnauthorizedMemberResponse,
   redirectMemberToLogin,
 } from '@/lib/memberSessionRedirect'
+import { isCurrentLoadGen } from '@/lib/pendingLoad'
 
 type Summary = {
   date: string
@@ -22,17 +30,46 @@ type Summary = {
   }[]
 }
 
+type MinePayload = {
+  linked?: boolean
+  request?: { status?: string } | null
+}
+
+function shouldRedirectUnlinked(mine: MinePayload | null): boolean {
+  return Boolean(
+    mine && mine.linked === false && mine.request?.status !== 'APPROVED'
+  )
+}
+
+function peekSafeCaddySummary(): Summary | null {
+  const ns = readLastClientAuthNamespace()
+  if (!ns || (ns.role !== 'caddy' && ns.role !== 'leader')) return null
+  const mineHit = readClientResource<MinePayload>(ns, CLIENT_RESOURCE.CADDY_MINE, 'self')
+  if (shouldRedirectUnlinked(mineHit?.value ?? null)) return null
+  return readClientResource<Summary>(ns, CLIENT_RESOURCE.CADDY_SUMMARY, 'today')?.value ?? null
+}
+
 export default function CaddyPage() {
   const router = useRouter()
+  const cachedSummary = peekSafeCaddySummary()
   const [loading, setLoading] = useState(true)
-  const [allowed, setAllowed] = useState(false)
-  const [summary, setSummary] = useState<Summary | null>(null)
+  const [allowed, setAllowed] = useState(() => cachedSummary != null)
+  const [summary, setSummary] = useState<Summary | null>(() => cachedSummary)
+  const [refreshError, setRefreshError] = useState(false)
+  const loadGen = useRef(0)
 
   useEffect(() => {
     const run = async () => {
+      const gen = ++loadGen.current
       let redirected = false
+      let showedCache = false
       try {
-        const r = await fetch('/api/check-role', { credentials: 'include' })
+        // check-role stays first in the gate pair: routing/security before caddy data.
+        const [r, ns] = await Promise.all([
+          fetch('/api/check-role', { credentials: 'include' }),
+          ensureClientAuthNamespace(),
+        ])
+        if (!isCurrentLoadGen(gen, loadGen.current)) return
         if (consumeUnauthorizedMemberResponse(r)) {
           redirected = true
           return
@@ -54,54 +91,101 @@ export default function CaddyPage() {
           router.push(gate.href)
           return
         }
-        // 미연결 Kakao 직원 → 본인확인 요청 화면으로 유도 (middleware 미변경)
-        const mineRes = await fetch('/api/caddy-link-requests/mine', {
-          credentials: 'include',
-          cache: 'no-store',
-        })
-        if (consumeUnauthorizedMemberResponse(mineRes)) {
+        if (ns) {
+          const mineHit = readClientResource<MinePayload>(
+            ns,
+            CLIENT_RESOURCE.CADDY_MINE,
+            'self'
+          )
+          const sumHit = readClientResource<Summary>(
+            ns,
+            CLIENT_RESOURCE.CADDY_SUMMARY,
+            'today'
+          )
+          if (
+            sumHit &&
+            !shouldRedirectUnlinked(mineHit?.value ?? null)
+          ) {
+            showedCache = true
+            setSummary(sumHit.value)
+            setAllowed(true)
+            setRefreshError(false)
+            if (sumHit.fresh && (mineHit?.fresh ?? true)) {
+              setLoading(false)
+              return
+            }
+          }
+        }
+        const [mineRes, res] = await Promise.all([
+          fetch('/api/caddy-link-requests/mine', {
+            credentials: 'include',
+            cache: 'no-store',
+          }),
+          fetch('/api/summary', { credentials: 'include', cache: 'no-store' }),
+        ])
+        if (!isCurrentLoadGen(gen, loadGen.current)) return
+        if (
+          consumeUnauthorizedMemberResponse(mineRes) ||
+          consumeUnauthorizedMemberResponse(res)
+        ) {
           redirected = true
           return
         }
         if (mineRes.ok) {
-          const mine = await mineRes.json().catch(() => null)
+          const mine = (await mineRes.json().catch(() => null)) as MinePayload | null
+          if (ns && mine) {
+            writeClientResource(ns, CLIENT_RESOURCE.CADDY_MINE, 'self', mine)
+          }
           // 미연결만 /caddy/link로. APPROVED(+미연결 레이스)는 루프 방지로 대시보드 유지
-          if (
-            mine &&
-            mine.linked === false &&
-            mine.request?.status !== 'APPROVED'
-          ) {
+          if (shouldRedirectUnlinked(mine)) {
             router.replace('/caddy/link')
             return
           }
-        }
-        const res = await fetch('/api/summary', { credentials: 'include' })
-        if (consumeUnauthorizedMemberResponse(res)) {
-          redirected = true
-          return
         }
         if (!res.ok) {
           throw new Error('summary')
         }
         const data: Summary = await res.json()
+        if (!isCurrentLoadGen(gen, loadGen.current)) return
         setSummary(data)
         setAllowed(true)
+        setRefreshError(false)
+        if (ns) writeClientResource(ns, CLIENT_RESOURCE.CADDY_SUMMARY, 'today', data)
       } catch {
         if (redirected) return
-        alert('정보를 불러오지 못했습니다.')
-        setAllowed(true)
+        if (!isCurrentLoadGen(gen, loadGen.current)) return
+        if (showedCache) {
+          setRefreshError(true)
+        } else {
+          alert('정보를 불러오지 못했습니다.')
+          setAllowed(true)
+        }
       } finally {
-        if (!redirected) setLoading(false)
+        if (!redirected && isCurrentLoadGen(gen, loadGen.current)) {
+          setLoading(false)
+        }
       }
     }
     run()
   }, [router])
 
-  if (loading || !allowed) return <p style={{ textAlign:'center', marginTop:100 }}>로딩 중…</p>
+  if (!summary && (loading || !allowed)) {
+    return <p style={{ textAlign:'center', marginTop:100 }}>로딩 중…</p>
+  }
 
   return (
-    <div style={{ maxWidth: 1100, margin: '10px auto' }}>
+    <div
+      style={{ maxWidth: 1100, margin: '10px auto' }}
+      aria-busy={loading || undefined}
+      data-resource-cache={summary ? 'ready' : 'empty'}
+    >
       <h2 style={{ fontSize: 22, fontWeight: 800, marginBottom: 12 }}>캐디 대시보드 (보기 전용)</h2>
+      {loading && summary ? (
+        <p style={{ color: '#64748b', marginTop: 0 }}>업데이트 중…</p>
+      ) : null}
+      {refreshError ? (
+        <p style={{ color: '#b91c1c', marginTop: 0 }}>갱신 실패</p>
+      ) : null}
       <PwaInstallCard />
       <DevicePushSettings />
 

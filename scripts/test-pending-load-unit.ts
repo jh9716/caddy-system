@@ -104,6 +104,11 @@ section("dashboard zero");
       null,
     "initial error has no updating copy"
   );
+  assert(
+    dashboardUpdatingCopy({ loading: false, hasData: true, staleDate: false, error: true }) ===
+      "갱신 실패",
+    "cached same-date refresh failure"
+  );
 }
 
 section("board wiring");

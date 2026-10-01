@@ -8,6 +8,18 @@ import {
 } from "@/lib/memberSessionRedirect";
 import { isYearMonth } from "@/lib/offRequestDomain";
 import {
+  CLIENT_RESOURCE,
+  clientResourceStoreKey,
+  ensureClientAuthNamespace,
+  invalidateClientResource,
+  peekLastNamespaceResource,
+  readLastClientAuthNamespace,
+  runDedupedClientResource,
+  shouldApplyScopedResponse,
+  shouldSkipFreshResourceRefresh,
+  writeClientResource,
+} from "@/lib/clientResourceCache";
+import {
   calendarPlaceholderDates,
   isCurrentLoadGen,
   isStaleCalendarMonth,
@@ -61,7 +73,16 @@ function formatPeriod(window: WindowDto | null): string {
 
 export default function OffRequestCalendarClient() {
   const [month, setMonth] = useState(() => kstYmd().slice(0, 7));
-  const [data, setData] = useState<CalendarDto | null>(null);
+  const [data, setData] = useState<CalendarDto | null>(() => {
+    const initialMonth = kstYmd().slice(0, 7);
+    return (
+      peekLastNamespaceResource<CalendarDto>(
+        CLIENT_RESOURCE.OFF_CALENDAR,
+        initialMonth,
+        (value) => value.month === initialMonth
+      )?.value ?? null
+    );
+  });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -70,14 +91,34 @@ export default function OffRequestCalendarClient() {
 
   const load = useCallback(async (nextMonth: string) => {
     const gen = ++loadGen.current;
+    const cached = peekLastNamespaceResource<CalendarDto>(
+      CLIENT_RESOURCE.OFF_CALENDAR,
+      nextMonth,
+      (value) => value.month === nextMonth
+    );
+    if (cached) {
+      setData(cached.value);
+      setError("");
+    }
     setLoading(true);
-    setError("");
     setMoveId(null);
+    const ns = await ensureClientAuthNamespace();
+    if (!isCurrentLoadGen(gen, loadGen.current)) return;
+    if (shouldSkipFreshResourceRefresh(cached) && ns) {
+      setLoading(false);
+      return;
+    }
     try {
-      const res = await fetch(`/api/off-requests/calendar?month=${nextMonth}`, {
-        credentials: "include",
-        cache: "no-store",
-      });
+      const res = await runDedupedClientResource(
+        ns
+          ? clientResourceStoreKey(ns, CLIENT_RESOURCE.OFF_CALENDAR, nextMonth)
+          : `anon::off-calendar::${nextMonth}`,
+        () =>
+          fetch(`/api/off-requests/calendar?month=${nextMonth}`, {
+            credentials: "include",
+            cache: "no-store",
+          })
+      );
       if (!isCurrentLoadGen(gen, loadGen.current)) return;
       if (consumeUnauthorizedMemberResponse(res)) return;
       if (res.status === 401) {
@@ -85,11 +126,25 @@ export default function OffRequestCalendarClient() {
         return;
       }
       const json = await res.json().catch(() => null);
-      if (!isCurrentLoadGen(gen, loadGen.current)) return;
+      const responseMonth =
+        json && typeof json.month === "string" ? json.month : nextMonth;
+      if (
+        !shouldApplyScopedResponse({
+          requestGen: gen,
+          latestGen: loadGen.current,
+          selectedKey: nextMonth,
+          responseKey: responseMonth,
+        })
+      ) {
+        return;
+      }
       if (!res.ok) {
         throw new Error(json?.message || "달력을 불러오지 못했습니다.");
       }
       setData(json);
+      setError("");
+      if (!ns) return;
+      writeClientResource(ns, CLIENT_RESOURCE.OFF_CALENDAR, nextMonth, json);
     } catch (e) {
       if (!isCurrentLoadGen(gen, loadGen.current)) return;
       setError(e instanceof Error ? e.message : "달력을 불러오지 못했습니다.");
@@ -129,6 +184,8 @@ export default function OffRequestCalendarClient() {
       if (!res.ok) {
         throw new Error(json?.message || "처리하지 못했습니다.");
       }
+      const ns = readLastClientAuthNamespace();
+      if (ns) invalidateClientResource(ns, CLIENT_RESOURCE.OFF_CALENDAR, month);
       await load(month);
       return true;
     } catch (e) {
@@ -166,7 +223,11 @@ export default function OffRequestCalendarClient() {
   }
 
   return (
-    <div className="off-cal" aria-busy={loading || staleMonth || undefined}>
+    <div
+      className="off-cal"
+      aria-busy={loading || staleMonth || undefined}
+      data-resource-cache={data?.month === month ? "ready" : "empty"}
+    >
       <header className="off-cal-head">
         <h1 className="ui-page-title">휴무 신청</h1>
         <p className="ui-page-sub">
@@ -201,6 +262,9 @@ export default function OffRequestCalendarClient() {
       ) : (
         <p className="off-cal-hint">{offRequestWindowHint(window?.status ?? null)}</p>
       )}
+      {!staleMonth && loading && data ? (
+        <p className="off-cal-updating">업데이트 중…</p>
+      ) : null}
       {moveId != null && open ? (
         <p className="off-cal-hint is-move">다른 날짜를 누르면 신청일이 이동합니다.</p>
       ) : null}

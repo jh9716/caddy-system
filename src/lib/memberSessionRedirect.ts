@@ -7,6 +7,7 @@
  * 403 MUST_CHANGE_PASSWORD and 503 auth_unavailable are not session expiry.
  */
 
+import { clearClientResourceCache } from "@/lib/clientResourceCache";
 import { safeReturnPath } from "@/lib/safeReturnPath";
 
 export type MemberSessionLocation = {
@@ -69,5 +70,6 @@ export function consumeUnauthorizedMemberResponse(
   loc?: MemberSessionLocation | null
 ): boolean {
   if (res.status !== 401) return false;
+  clearClientResourceCache();
   return redirectMemberToLogin(loc === undefined ? currentLocation() : loc);
 }

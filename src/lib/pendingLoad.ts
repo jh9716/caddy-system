@@ -29,6 +29,9 @@ export function boardPendingCopy(input: {
   if (stale && input.error) {
     return `이전 배치표 표시 중 · ${input.selectedDate} 불러오기 실패`;
   }
+  if (input.error && input.publishedDate && !input.loading) {
+    return "갱신 실패";
+  }
   if (!input.loading) return null;
   return "업데이트 중…";
 }
@@ -68,6 +71,9 @@ export function dashboardUpdatingCopy(input: {
   if (input.loading && input.hasData) return "업데이트 중…";
   if (input.error && input.staleDate && !input.loading) {
     return "이전 날짜 표시 중 · 불러오기 실패";
+  }
+  if (input.error && input.hasData && !input.loading) {
+    return "갱신 실패";
   }
   return null;
 }

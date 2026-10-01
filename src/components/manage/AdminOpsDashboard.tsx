@@ -16,6 +16,17 @@ import type { DailyOpsDutyRole } from "@/lib/dailyOpsDuty";
 import { addDays } from "@/lib/krHolidays";
 import { PRIMARY_TEAMS } from "@/lib/caddyManage";
 import {
+  CLIENT_RESOURCE,
+  clearClientResourceCache,
+  clientResourceStoreKey,
+  ensureClientAuthNamespace,
+  peekLastNamespaceResource,
+  runDedupedClientResource,
+  shouldApplyScopedResponse,
+  shouldSkipFreshResourceRefresh,
+  writeClientResource,
+} from "@/lib/clientResourceCache";
+import {
   dashboardUpdatingCopy,
   isCurrentLoadGen,
   isStaleDashboardDate,
@@ -203,7 +214,16 @@ export function AdminOpsTeamBoard({
 
 export default function AdminOpsDashboard() {
   const [date, setDate] = useState(todayYmd);
-  const [data, setData] = useState<AdminOpsDashboardPayload | null>(null);
+  const [data, setData] = useState<AdminOpsDashboardPayload | null>(() => {
+    const ymd = todayYmd();
+    return (
+      peekLastNamespaceResource<DashboardResponse>(
+        CLIENT_RESOURCE.DASHBOARD,
+        ymd,
+        (value) => value.date === ymd
+      )?.value ?? null
+    );
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -219,26 +239,60 @@ export default function AdminOpsDashboard() {
 
   const load = useCallback(async (ymd: string) => {
     const gen = ++loadGen.current;
+    const cached = peekLastNamespaceResource<DashboardResponse>(
+      CLIENT_RESOURCE.DASHBOARD,
+      ymd,
+      (value) => value.date === ymd
+    );
+    if (cached) {
+      setData(cached.value);
+      setError(null);
+    }
     setLoading(true);
-    setError(null);
+    if (!cached) setError(null);
+    const ns = await ensureClientAuthNamespace();
+    if (!isCurrentLoadGen(gen, loadGen.current)) return;
+    if (shouldSkipFreshResourceRefresh(cached) && ns) {
+      setLoading(false);
+      return;
+    }
     try {
-      const res = await fetch(`/api/manage/dashboard?date=${encodeURIComponent(ymd)}`, {
-        cache: "no-store",
-        credentials: "include",
-        method: "GET",
-      });
+      const res = await runDedupedClientResource(
+        ns
+          ? clientResourceStoreKey(ns, CLIENT_RESOURCE.DASHBOARD, ymd)
+          : `anon::dashboard::${ymd}`,
+        () =>
+          fetch(`/api/manage/dashboard?date=${encodeURIComponent(ymd)}`, {
+            cache: "no-store",
+            credentials: "include",
+            method: "GET",
+          })
+      );
       if (!isCurrentLoadGen(gen, loadGen.current)) return;
       if (res.status === 401 || res.status === 403) {
+        clearClientResourceCache();
         location.href = "/login?callbackUrl=/manage";
         return;
       }
       const json = (await res.json()) as DashboardResponse;
-      if (!isCurrentLoadGen(gen, loadGen.current)) return;
+      if (
+        !shouldApplyScopedResponse({
+          requestGen: gen,
+          latestGen: loadGen.current,
+          selectedKey: ymd,
+          responseKey: typeof json.date === "string" ? json.date : "",
+        })
+      ) {
+        return;
+      }
       if (!res.ok) {
         setError(json?.error || "불러오기 실패");
         return;
       }
       setData(json);
+      setError(null);
+      if (!ns) return;
+      writeClientResource(ns, CLIENT_RESOURCE.DASHBOARD, ymd, json);
     } catch {
       if (!isCurrentLoadGen(gen, loadGen.current)) return;
       setError("대시보드 조회 실패");
@@ -258,7 +312,12 @@ export default function AdminOpsDashboard() {
   const teamGroups = useMemo(() => groupCaddiesByPrimaryTeam(visible), [visible]);
 
   return (
-    <div className="dash ops-dash" aria-busy={loading || undefined} data-date={date}>
+    <div
+      className="dash ops-dash"
+      aria-busy={loading || undefined}
+      data-date={date}
+      data-resource-cache={data?.date === date ? "ready" : "empty"}
+    >
       <div className="dash-scenic" aria-hidden>
         <div
           className="dash-scenic-img"

@@ -17,6 +17,16 @@ import {
 } from "@/lib/memberSessionRedirect";
 import { type ShiftPart } from "@/lib/reservationParser";
 import {
+  CLIENT_RESOURCE,
+  clientResourceStoreKey,
+  ensureClientAuthNamespace,
+  peekLastNamespaceResource,
+  runDedupedClientResource,
+  shouldApplyScopedResponse,
+  shouldSkipFreshResourceRefresh,
+  writeClientResource,
+} from "@/lib/clientResourceCache";
+import {
   boardPendingCopy,
   isCurrentLoadGen,
   isStalePublishedBoard,
@@ -40,7 +50,16 @@ export default function PublishedBoardPage() {
   const [shift, setShift] = useState<ShiftPart>("1부");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [published, setPublished] = useState<PublishedResponse["published"]>(null);
+  const [published, setPublished] = useState<PublishedResponse["published"]>(() => {
+    const ymd = todayYmd();
+    return (
+      peekLastNamespaceResource<PublishedResponse["published"]>(
+        CLIENT_RESOURCE.BOARD,
+        ymd,
+        (value) => value == null || value.date === ymd
+      )?.value ?? null
+    );
+  });
   const [notice, setNotice] = useState<string | null>(null);
   const loadGen = useRef(0);
 
@@ -64,21 +83,56 @@ export default function PublishedBoardPage() {
 
   const load = useCallback(async (ymd: string) => {
     const gen = ++loadGen.current;
+    const cached = peekLastNamespaceResource<PublishedResponse["published"]>(
+      CLIENT_RESOURCE.BOARD,
+      ymd,
+      (value) => value == null || value.date === ymd
+    );
+    if (cached) {
+      setPublished(cached.value);
+      setError(null);
+    }
     setLoading(true);
-    setError(null);
+    if (!cached) setError(null);
+    const ns = await ensureClientAuthNamespace();
+    if (!isCurrentLoadGen(gen, loadGen.current)) return;
+    if (shouldSkipFreshResourceRefresh(cached) && ns) {
+      setLoading(false);
+      return;
+    }
     try {
-      const res = await fetch(
-        `/api/assignments/published?date=${encodeURIComponent(ymd)}`,
-        { credentials: "include", cache: "no-store" }
+      const res = await runDedupedClientResource(
+        ns
+          ? clientResourceStoreKey(ns, CLIENT_RESOURCE.BOARD, ymd)
+          : `anon::board::${ymd}`,
+        () =>
+          fetch(`/api/assignments/published?date=${encodeURIComponent(ymd)}`, {
+            credentials: "include",
+            cache: "no-store",
+          })
       );
       if (!isCurrentLoadGen(gen, loadGen.current)) return;
       if (consumeUnauthorizedMemberResponse(res)) return;
       const data = (await res.json().catch(() => ({}))) as PublishedResponse;
-      if (!isCurrentLoadGen(gen, loadGen.current)) return;
+      if (
+        !shouldApplyScopedResponse({
+          requestGen: gen,
+          latestGen: loadGen.current,
+          selectedKey: ymd,
+          responseKey: typeof data.date === "string" ? data.date : ymd,
+        })
+      ) {
+        return;
+      }
       if (!res.ok) {
         throw new Error(data.error || "배치표 조회 실패");
       }
-      setPublished(data.published ?? null);
+      const next = data.published ?? null;
+      if (next && next.date !== ymd) return;
+      setPublished(next);
+      setError(null);
+      if (!ns) return;
+      writeClientResource(ns, CLIENT_RESOURCE.BOARD, ymd, next);
     } catch (e: unknown) {
       if (!isCurrentLoadGen(gen, loadGen.current)) return;
       if (isMemberSessionRedirectScheduled()) return;
@@ -98,7 +152,11 @@ export default function PublishedBoardPage() {
   }, [date, load]);
 
   return (
-    <div className="pub-page" aria-busy={loading || undefined}>
+    <div
+      className="pub-page"
+      aria-busy={loading || undefined}
+      data-resource-cache={published && published.date === date ? "ready" : "empty"}
+    >
       <header className="pub-head">
         <h1>배치표</h1>
         <p>확정된 날짜별 최종 배치표입니다.</p>
