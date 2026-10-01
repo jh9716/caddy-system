@@ -71,6 +71,10 @@ section("C8 helper: exempt paths (no redirect loop)");
     "/course-reports not exempt"
   );
   assert(isExemptMemberSessionRedirectPath("/caddy") === false, "/caddy not exempt");
+  assert(
+    isExemptMemberSessionRedirectPath("/off-requests") === false,
+    "/off-requests not exempt"
+  );
 }
 
 section("C8 helper: one redirect on concurrent 401");

@@ -3361,3 +3361,134 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
   justify-content: center;
   gap: 0 8px;
 }
+
+.off-cal {
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 8px 4px 28px;
+}
+
+.off-cal-head .ui-page-sub {
+  margin-bottom: 12px;
+}
+
+.off-cal-monthbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.off-cal-monthbar strong {
+  font-size: 1.15rem;
+  color: var(--vh-green-900);
+}
+
+.off-cal-hint {
+  margin: 0 0 10px;
+  color: var(--vh-ink-soft);
+  font-size: 0.92rem;
+}
+
+.off-cal-hint.is-move {
+  color: var(--vh-green-800);
+  font-weight: 600;
+}
+
+.off-cal-error {
+  margin: 0 0 10px;
+  color: var(--vh-danger);
+  font-size: 0.9rem;
+}
+
+.off-cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.off-cal-dow {
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--vh-muted);
+  padding: 4px 0;
+}
+
+.off-cal-cell {
+  min-height: 72px;
+  border: 1px solid var(--vh-border);
+  border-radius: 10px;
+  background: var(--vh-paper);
+  color: var(--vh-ink);
+  padding: 6px 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  font: inherit;
+}
+
+.off-cal-cell.is-empty {
+  border: none;
+  background: transparent;
+  min-height: 0;
+}
+
+.off-cal-cell.is-open {
+  cursor: pointer;
+}
+
+.off-cal-cell.is-locked {
+  cursor: default;
+  opacity: 0.88;
+}
+
+.off-cal-cell.is-mine {
+  border-color: var(--vh-green-700);
+  background: var(--vh-ok-bg);
+}
+
+.off-cal-cell.is-over {
+  border-color: var(--vh-danger);
+  background: var(--vh-danger-bg);
+}
+
+.off-cal-cell.is-mine.is-over {
+  background: linear-gradient(180deg, var(--vh-ok-bg), var(--vh-danger-bg));
+}
+
+.off-cal-cell.is-moving {
+  outline: 2px solid var(--vh-green-700);
+}
+
+.off-cal-num {
+  font-weight: 700;
+  color: var(--vh-green-900);
+}
+
+.off-cal-count {
+  font-size: 0.72rem;
+  color: var(--vh-ink-soft);
+}
+
+.off-cal-mine {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--vh-ok);
+}
+
+.off-cal-mine-list {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+}
+
+.off-cal-mine-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--vh-border);
+}

@@ -54,8 +54,8 @@ section("member menus");
   const items = memberNavItems();
   const labels = items.map((i) => i.label);
   const hrefs = items.map((i) => i.href);
-  assert(labels.join(",") === "홈,공지,제보,배치표,내 대시보드", "member menu labels");
-  assert(hrefs.join(",") === "/,/notice,/course-reports,/board,/caddy", "member hrefs");
+  assert(labels.join(",") === "홈,공지,제보,배치표,휴무 신청,내 대시보드", "member menu labels");
+  assert(hrefs.join(",") === "/,/notice,/course-reports,/board,/off-requests,/caddy", "member hrefs");
   assert(memberNavExposesAdminMenu() === false, "member nav admin menu 0");
   assert(!hrefs.some((h) => h.startsWith("/manage")), "member href no /manage");
   for (const banned of ["캐디 관리", "자동배치", "직원 계정", "계정 연결", "관리자"]) {
