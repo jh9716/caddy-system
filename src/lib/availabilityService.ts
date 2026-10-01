@@ -34,8 +34,14 @@ import {
   effectiveOffNamesFromBase,
   type EffectiveOffResult,
 } from "@/lib/offEffective";
-import { listDailyOffOverrides } from "@/lib/offEffectiveService";
-import { listUnavailablePanelRows } from "@/lib/dailyBoardDraftService";
+import {
+  listDailyOffOverrides,
+  type StoredOffOverrideRow,
+} from "@/lib/offEffectiveService";
+import {
+  listUnavailablePanelRows,
+  type UnavailablePanelSourceRow,
+} from "@/lib/dailyBoardDraftService";
 
 export type AvailabilityWithSlotGrid = DailyAvailabilityResult & {
   slotGrid: TeamSlotGrid;
@@ -63,6 +69,21 @@ export type LoadAvailabilityOptions = {
   includeOffOverride?: boolean;
   /** false면 DailyCaddyUnavailable 병가/결근을 가용에서 빼지 않음 (기본 true) */
   includeDailyUnavailable?: boolean;
+  /** request-scoped reuse. 없으면 이 함수가 직접 조회 */
+  listCaddies?: () => Promise<
+    Array<{
+      id: number;
+      name: string;
+      team: string;
+      teamOrder: number;
+      employmentStatus: string;
+      caddyType: string;
+      extraFlags: string[] | null;
+      thirdBandSubgroup: string | null;
+    }>
+  >;
+  listOffOverrides?: (ymd: string) => Promise<StoredOffOverrideRow[]>;
+  listUnavailables?: (ymd: string) => Promise<UnavailablePanelSourceRow[]>;
 };
 
 export async function loadAvailabilityForDate(
@@ -73,19 +94,21 @@ export async function loadAvailabilityForDate(
   const { start, end } = parseYmd(ymd);
 
   const [caddies, assignments, extraTags] = await Promise.all([
-    prisma.caddy.findMany({
-      select: {
-        id: true,
-        name: true,
-        team: true,
-        teamOrder: true,
-        employmentStatus: true,
-        caddyType: true,
-        extraFlags: true,
-        thirdBandSubgroup: true,
-      },
-      orderBy: [{ team: "asc" }, { teamOrder: "asc" }, { id: "asc" }],
-    }),
+    options?.listCaddies
+      ? options.listCaddies()
+      : prisma.caddy.findMany({
+          select: {
+            id: true,
+            name: true,
+            team: true,
+            teamOrder: true,
+            employmentStatus: true,
+            caddyType: true,
+            extraFlags: true,
+            thirdBandSubgroup: true,
+          },
+          orderBy: [{ team: "asc" }, { teamOrder: "asc" }, { id: "asc" }],
+        }),
     prisma.assignment.findMany({
       where: {
         startDate: { lte: end },
@@ -139,7 +162,9 @@ export async function loadAvailabilityForDate(
   const offOverrides =
     options?.includeOffOverride === false
       ? []
-      : await listDailyOffOverrides(ymd);
+      : await (options?.listOffOverrides
+          ? options.listOffOverrides(ymd)
+          : listDailyOffOverrides(ymd));
   const offResolved = effectiveOffNamesFromBase({
     caddies,
     offNames,
@@ -167,7 +192,9 @@ export async function loadAvailabilityForDate(
     dutyEntries,
   });
   if (options?.includeDailyUnavailable !== false) {
-    const unavailables = await listUnavailablePanelRows(ymd);
+    const unavailables = await (options?.listUnavailables
+      ? options.listUnavailables(ymd)
+      : listUnavailablePanelRows(ymd));
     overlaid = applyDailyUnavailableExclusions({
       availability: overlaid,
       unavailables,

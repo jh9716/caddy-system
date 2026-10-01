@@ -363,11 +363,16 @@ export function withConflicts(
   return annotateSpecialDutyConflicts(records, unavailableById);
 }
 
-export async function buildDailySpecialDutyPayload(date: string) {
+export async function buildDailySpecialDutyPayload(
+  date: string,
+  opts?: { caddies?: Array<{ id: number; employmentStatus?: string | null }> }
+) {
   const records = await listDailySpecialDutyRecords(date);
-  const caddies = await prisma.caddy.findMany({
-    select: { id: true, employmentStatus: true },
-  });
+  const caddies =
+    opts?.caddies ??
+    (await prisma.caddy.findMany({
+      select: { id: true, employmentStatus: true },
+    }));
   const unavailable = new Map<number, string[]>();
   for (const caddy of caddies) {
     const emp = String(caddy.employmentStatus || "").toUpperCase();

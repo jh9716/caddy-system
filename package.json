@@ -81,6 +81,7 @@
     "test:daily-staffing-summary-unit": "bash scripts/tsx-safe.sh scripts/test-daily-staffing-summary-unit.ts",
     "test:assignment-confirm-unit": "bash scripts/tsx-safe.sh scripts/test-assignment-confirm-unit.ts",
     "test:assignment-draft-unit": "bash scripts/tsx-safe.sh scripts/test-assignment-draft-unit.ts",
+    "test:assignments-date-bundle-unit": "bash scripts/tsx-safe.sh scripts/test-assignments-date-bundle-unit.ts",
     "test:daily-board-draft-unit": "bash scripts/tsx-safe.sh scripts/test-daily-board-draft-unit.ts",
     "test:assignments-c4-unit": "bash scripts/tsx-safe.sh scripts/test-assignments-c4-unit.ts",
     "test:draft-leave-flush-chromium": "bash scripts/tsx-safe.sh scripts/test-draft-leave-flush-chromium.ts",
