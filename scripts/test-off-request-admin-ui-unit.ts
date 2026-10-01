@@ -82,6 +82,8 @@ section("admin page auth + nav");
   assert(!client.includes("/approve"), "no approve UI");
   assert(!client.includes("assignment.create"), "no assignment write");
   assert(client.includes("canEditQuota = draft"), "quota UI only in DRAFT");
+  assert(client.includes("loadGen"), "stale month fetch ignored");
+  assert(client.includes("gen !== loadGen.current"), "stale apply blocked");
 }
 
 section("API + service wiring");

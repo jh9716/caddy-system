@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PRIMARY_TEAMS } from "@/lib/caddyManage";
 import { isYearMonth } from "@/lib/offRequestDomain";
 import { formatKstDateTimeLocal, formatKstDisplay, kstYmd } from "@/lib/kstDate";
@@ -91,8 +91,10 @@ export default function OffRequestAdminClient() {
     defaultQuota: "5",
   });
   const [quotaLimit, setQuotaLimit] = useState("5");
+  const loadGen = useRef(0);
 
   const load = useCallback(async (nextMonth: string) => {
+    const gen = ++loadGen.current;
     setLoading(true);
     setError("");
     try {
@@ -101,6 +103,7 @@ export default function OffRequestAdminClient() {
         cache: "no-store",
       });
       const json = await res.json().catch(() => null);
+      if (gen !== loadGen.current) return;
       if (!res.ok) {
         throw new Error(json?.message || "월간 현황을 불러오지 못했습니다.");
       }
@@ -115,9 +118,10 @@ export default function OffRequestAdminClient() {
         setCreateForm(defaultCreateInputs(nextMonth));
       }
     } catch (e) {
+      if (gen !== loadGen.current) return;
       setError(e instanceof Error ? e.message : "월간 현황을 불러오지 못했습니다.");
     } finally {
-      setLoading(false);
+      if (gen === loadGen.current) setLoading(false);
     }
   }, []);
 
