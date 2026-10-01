@@ -69,6 +69,8 @@ section("caddy calendar wiring");
   assert(windowSvc.includes("where: { id, status: row.status }"), "transition is conditional");
   assert(windowSvc.includes("countApprovedOffForTeamDays"), "calendar uses Assignment OFF SoT");
   assert(windowSvc.includes("isOccupiedOverLimit"), "over uses approved+requested");
+  assert(client.includes("offRequestWindowStatusLabel"), "caddy uses shared labels");
+  assert(!client.includes("/manage/off-requests"), "caddy calendar is not admin page");
   const mig = read("prisma/migrations/20261001120000_off_request_window/migration.sql");
   assert(!/ALTER TABLE "OffRequest"/i.test(mig), "migration does not alter OffRequest columns");
   assert(!/updatedAt/i.test(mig.split("OffRequestWindow")[0] || ""), "no pre-window updatedAt drift");

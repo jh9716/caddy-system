@@ -27,6 +27,7 @@ import {
   serializeOffRequestWindow,
   updateOffRequestWindow,
   upsertOffRequestQuota,
+  deleteOffRequestQuota,
 } from "../src/lib/offRequestWindowService";
 import { ymdDaysInYearMonth } from "../src/lib/offRequestDomain";
 import { assertLocalDatabaseUrl } from "./assertLocalDatabaseUrl";
@@ -387,6 +388,21 @@ async function runLocalDbTests() {
     const cell15b = cal2.days.find((d) => d.date === day15);
     assert(cell15b?.limit === 3, "quota override");
     assert(cell15b?.over === true, "1+6 / 3 is over");
+    const reverted = await deleteOffRequestQuota(prisma, admin, {
+      month: ym(1),
+      team,
+      date: day15,
+    });
+    assert(reverted.deleted === 1, "quota override deleted");
+    const cal3 = await getOffRequestCalendar(prisma, caddyActor, ym(1));
+    const cell15c = cal3.days.find((d) => d.date === day15);
+    assert(cell15c?.limit === 6, "quota delete returns defaultQuota");
+    await upsertOffRequestQuota(prisma, admin, {
+      month: ym(1),
+      team,
+      date: day15,
+      limit: 3,
+    });
 
     await expectCode(
       () =>
