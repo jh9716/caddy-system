@@ -11,15 +11,21 @@ import {
   clientAuthNamespaceFromMeUser,
   clientResourceStoreKey,
   clearClientResourceCache,
+  applyRemoteClientResourceCacheClear,
   invalidateClientResource,
+  isClientResourceCacheServerIdle,
   peekLastNamespaceResource,
   readClientResource,
   readLastClientAuthNamespace,
+  releaseClientResourceCacheStoreForTests,
   rememberClientAuthNamespace,
   resetClientResourceCacheForTests,
+  runDedupedClientResource,
   sameAuthNamespace,
   shouldApplyScopedResponse,
+  shouldSkipFreshResourceRefresh,
   writeClientResource,
+  CLIENT_RESOURCE_MAX_ENTRIES,
   type ClientAuthNamespace,
 } from "../src/lib/clientResourceCache";
 import { dashboardUpdatingCopy, boardPendingCopy } from "../src/lib/pendingLoad";
@@ -220,6 +226,71 @@ section("refresh copy");
   );
 }
 
+section("server idle / no process Map");
+{
+  releaseClientResourceCacheStoreForTests();
+  assert(isClientResourceCacheServerIdle(), "server has no store");
+  writeClientResource(alice, CLIENT_RESOURCE.BOARD, "2026-10-01", { leak: true });
+  assert(
+    readClientResource(alice, CLIENT_RESOURCE.BOARD, "2026-10-01") === null,
+    "server write is a no-op"
+  );
+  resetClientResourceCacheForTests();
+}
+
+section("fresh skip helper");
+{
+  writeClientResource(alice, CLIENT_RESOURCE.BOARD, "2026-10-01", { date: "2026-10-01" }, 1_000);
+  const fresh = readClientResource(alice, CLIENT_RESOURCE.BOARD, "2026-10-01", 1_000 + 1_000);
+  const stale = readClientResource(alice, CLIENT_RESOURCE.BOARD, "2026-10-01", 1_000 + 31_000);
+  assert(shouldSkipFreshResourceRefresh(fresh), "fresh skips resource API");
+  assert(!shouldSkipFreshResourceRefresh(stale), "stale still revalidates");
+  assert(!shouldSkipFreshResourceRefresh(null), "miss does not skip");
+}
+
+section("memory prune");
+{
+  resetClientResourceCacheForTests();
+  rememberClientAuthNamespace(alice);
+  for (let i = 0; i < CLIENT_RESOURCE_MAX_ENTRIES + 8; i++) {
+    writeClientResource(alice, CLIENT_RESOURCE.BOARD, `d${i}`, { i }, i * 1_000);
+  }
+  assert(
+    readClientResource(alice, CLIENT_RESOURCE.BOARD, "d0") === null,
+    "oldest evicted"
+  );
+  assert(
+    readClientResource(alice, CLIENT_RESOURCE.BOARD, `d${CLIENT_RESOURCE_MAX_ENTRIES + 7}`) !=
+      null,
+    "newest kept"
+  );
+  writeClientResource(alice, CLIENT_RESOURCE.BOARD, "old", { v: 1 }, 1);
+  writeClientResource(
+    alice,
+    CLIENT_RESOURCE.BOARD,
+    "new",
+    { v: 2 },
+    1 + 31 * 60 * 1000
+  );
+  assert(
+    readClientResource(alice, CLIENT_RESOURCE.BOARD, "old", 1 + 31 * 60 * 1000) === null,
+    "max-age evicts on write"
+  );
+}
+
+section("remote tab clear");
+{
+  resetClientResourceCacheForTests();
+  rememberClientAuthNamespace(alice);
+  writeClientResource(alice, CLIENT_RESOURCE.BOARD, "2026-10-01", { owner: "alice" });
+  applyRemoteClientResourceCacheClear();
+  assert(readLastClientAuthNamespace() === null, "remote clear drops ns");
+  assert(
+    readClientResource(alice, CLIENT_RESOURCE.BOARD, "2026-10-01") === null,
+    "remote clear drops store"
+  );
+}
+
 section("no durable storage");
 {
   const cache = read("src/lib/clientResourceCache.ts");
@@ -248,6 +319,7 @@ section("page wiring");
   const dash = read("src/components/manage/AdminOpsDashboard.tsx");
   const caddy = read("src/app/caddy/page.tsx");
   const roster = read("src/app/manage/caddies/page.tsx");
+  const cache = read("src/lib/clientResourceCache.ts");
   assert(board.includes("CLIENT_RESOURCE.BOARD"), "board cache");
   assert(board.includes("peekLastNamespaceResource"), "board peek");
   assert(board.includes("useState<PublishedResponse[\"published\"]>(() => {"), "board first paint from cache");
@@ -273,12 +345,38 @@ section("page wiring");
   assert(caddy.includes("ns.role !== 'caddy' && ns.role !== 'leader'"), "caddy peek requires caddy/leader ns");
   assert(roster.includes("CLIENT_RESOURCE.CADDY_ROSTER"), "roster cache");
   assert(roster.includes("reloadAfterMutation"), "roster mutation invalidate");
+  assert(roster.includes("CLIENT_RESOURCE.DASHBOARD"), "caddy mutation invalidates dashboard");
   assert(roster.includes("loading && rows.length === 0"), "roster keep list");
   assert(roster.includes("RETIRED"), "retired filter still present");
+  assert(board.includes("shouldSkipFreshResourceRefresh"), "board fresh skip");
+  assert(cal.includes("shouldSkipFreshResourceRefresh"), "calendar fresh skip");
+  assert(dash.includes("shouldSkipFreshResourceRefresh"), "dashboard fresh skip");
+  assert(roster.includes("shouldSkipFreshResourceRefresh"), "roster fresh skip");
+  assert(cache.includes("BroadcastChannel"), "cross-tab channel");
+  assert(cache.includes("typeof window"), "browser-only store guard");
 }
 
-if (failed > 0) {
-  console.error(`\nclient-resource-cache failed: ${failed} (passed ${passed})`);
-  process.exit(1);
-}
-console.log(`\nclient-resource-cache passed: ${passed}`);
+void (async () => {
+  section("inflight dedupe");
+  {
+    let runs = 0;
+    const p1 = runDedupedClientResource("k", async () => {
+      runs += 1;
+      await new Promise((r) => setTimeout(r, 20));
+      return "one";
+    });
+    const p2 = runDedupedClientResource("k", async () => {
+      runs += 1;
+      return "two";
+    });
+    const [a, b] = await Promise.all([p1, p2]);
+    assert(a === "one" && b === "one", "dedupe shares the first promise");
+    assert(runs === 1, "dedupe runs once");
+  }
+
+  if (failed > 0) {
+    console.error(`\nclient-resource-cache failed: ${failed} (passed ${passed})`);
+    process.exit(1);
+  }
+  console.log(`\nclient-resource-cache passed: ${passed}`);
+})();

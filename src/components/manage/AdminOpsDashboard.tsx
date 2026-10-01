@@ -18,9 +18,12 @@ import { PRIMARY_TEAMS } from "@/lib/caddyManage";
 import {
   CLIENT_RESOURCE,
   clearClientResourceCache,
+  clientResourceStoreKey,
   ensureClientAuthNamespace,
   peekLastNamespaceResource,
+  runDedupedClientResource,
   shouldApplyScopedResponse,
+  shouldSkipFreshResourceRefresh,
   writeClientResource,
 } from "@/lib/clientResourceCache";
 import {
@@ -247,13 +250,24 @@ export default function AdminOpsDashboard() {
     }
     setLoading(true);
     if (!cached) setError(null);
-    const nsPromise = ensureClientAuthNamespace();
+    const ns = await ensureClientAuthNamespace();
+    if (!isCurrentLoadGen(gen, loadGen.current)) return;
+    if (shouldSkipFreshResourceRefresh(cached) && ns) {
+      setLoading(false);
+      return;
+    }
     try {
-      const res = await fetch(`/api/manage/dashboard?date=${encodeURIComponent(ymd)}`, {
-        cache: "no-store",
-        credentials: "include",
-        method: "GET",
-      });
+      const res = await runDedupedClientResource(
+        ns
+          ? clientResourceStoreKey(ns, CLIENT_RESOURCE.DASHBOARD, ymd)
+          : `anon::dashboard::${ymd}`,
+        () =>
+          fetch(`/api/manage/dashboard?date=${encodeURIComponent(ymd)}`, {
+            cache: "no-store",
+            credentials: "include",
+            method: "GET",
+          })
+      );
       if (!isCurrentLoadGen(gen, loadGen.current)) return;
       if (res.status === 401 || res.status === 403) {
         clearClientResourceCache();
@@ -277,8 +291,7 @@ export default function AdminOpsDashboard() {
       }
       setData(json);
       setError(null);
-      const ns = await nsPromise;
-      if (!isCurrentLoadGen(gen, loadGen.current) || !ns) return;
+      if (!ns) return;
       writeClientResource(ns, CLIENT_RESOURCE.DASHBOARD, ymd, json);
     } catch {
       if (!isCurrentLoadGen(gen, loadGen.current)) return;

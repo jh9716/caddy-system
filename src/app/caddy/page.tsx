@@ -110,6 +110,10 @@ export default function CaddyPage() {
             setSummary(sumHit.value)
             setAllowed(true)
             setRefreshError(false)
+            if (sumHit.fresh && (mineHit?.fresh ?? true)) {
+              setLoading(false)
+              return
+            }
           }
         }
         const [mineRes, res] = await Promise.all([

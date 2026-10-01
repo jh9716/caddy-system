@@ -2,6 +2,9 @@
  * Browser-memory stale-while-revalidate cache.
  * No localStorage / sessionStorage / IndexedDB / Cache Storage.
  * Keys are auth namespace + resource + params. Never tokens or cookies.
+ *
+ * The Map is browser-tab memory only. SSR / Node must not retain entries
+ * so request A/B cannot share a process-level store.
  */
 
 import { isCurrentLoadGen } from "@/lib/pendingLoad";
@@ -26,7 +29,7 @@ export const CLIENT_RESOURCE = {
 export type ClientResourceName =
   (typeof CLIENT_RESOURCE)[keyof typeof CLIENT_RESOURCE];
 
-/** Freshness hint only — stale hits are still readable for SWR display. */
+/** Freshness hint: fresh hits skip the resource API after /api/me confirms. */
 export const CLIENT_RESOURCE_TTL_MS: Record<ClientResourceName, number> = {
   [CLIENT_RESOURCE.BOARD]: 30_000,
   [CLIENT_RESOURCE.BOARD_COMMENTS]: 10_000,
@@ -37,6 +40,11 @@ export const CLIENT_RESOURCE_TTL_MS: Record<ClientResourceName, number> = {
   [CLIENT_RESOURCE.CADDY_MINE]: 30_000,
 };
 
+/** Hard memory cap — not a display expire. Refresh still drops everything. */
+export const CLIENT_RESOURCE_MAX_ENTRIES = 64;
+export const CLIENT_RESOURCE_MAX_AGE_MS = 30 * 60 * 1000;
+export const CLIENT_RESOURCE_AUTH_CHANNEL = "verthill-client-resource-cache";
+
 export type ClientResourceHit<T> = {
   value: T;
   storedAt: number;
@@ -46,8 +54,29 @@ export type ClientResourceHit<T> = {
 
 type StoreEntry = { value: unknown; storedAt: number };
 
-const store = new Map<string, StoreEntry>();
+let browserStore: Map<string, StoreEntry> | null = null;
+let nodeTestStore: Map<string, StoreEntry> | null = null;
 let lastNamespace: ClientAuthNamespace | null = null;
+const inflight = new Map<string, Promise<unknown>>();
+let applyingRemoteClear = false;
+let authChannel: BroadcastChannel | null = null;
+let authChannelInstalled = false;
+
+function isBrowserRuntime(): boolean {
+  return typeof window !== "undefined";
+}
+
+function getStore(): Map<string, StoreEntry> | null {
+  if (isBrowserRuntime()) {
+    if (!browserStore) browserStore = new Map();
+    return browserStore;
+  }
+  return nodeTestStore;
+}
+
+export function isClientResourceCacheServerIdle(): boolean {
+  return !isBrowserRuntime() && nodeTestStore == null;
+}
 
 export function authNamespaceKey(ns: ClientAuthNamespace): string {
   const userId = ns.userId == null ? "nouser" : String(ns.userId);
@@ -78,17 +107,76 @@ export function readLastClientAuthNamespace(): ClientAuthNamespace | null {
   return lastNamespace;
 }
 
-export function clearClientResourceCache(): void {
-  store.clear();
+function wipeLocalCache(): void {
+  getStore()?.clear();
   lastNamespace = null;
+  inflight.clear();
+}
+
+function postAuthCacheClear(): void {
+  if (applyingRemoteClear || !isBrowserRuntime()) return;
+  try {
+    getAuthChannel()?.postMessage({ type: "clear" });
+  } catch {
+    /* ignore */
+  }
+}
+
+export function clearClientResourceCache(): void {
+  wipeLocalCache();
+  postAuthCacheClear();
+}
+
+export function applyRemoteClientResourceCacheClear(): void {
+  applyingRemoteClear = true;
+  try {
+    wipeLocalCache();
+  } finally {
+    applyingRemoteClear = false;
+  }
 }
 
 export function resetClientResourceCacheForTests(): void {
-  clearClientResourceCache();
+  applyingRemoteClear = false;
+  lastNamespace = null;
+  inflight.clear();
+  browserStore = null;
+  nodeTestStore = new Map();
+}
+
+/** Leave the Node store unset so SSR/server idle can be asserted. */
+export function releaseClientResourceCacheStoreForTests(): void {
+  applyingRemoteClear = false;
+  lastNamespace = null;
+  inflight.clear();
+  browserStore = null;
+  nodeTestStore = null;
 }
 
 export function isClientResourceFresh(ageMs: number, ttlMs: number): boolean {
   return ageMs <= ttlMs;
+}
+
+export function shouldSkipFreshResourceRefresh(
+  hit: ClientResourceHit<unknown> | null | undefined
+): boolean {
+  return Boolean(hit?.fresh);
+}
+
+function pruneStore(nowMs: number): void {
+  const store = getStore();
+  if (!store) return;
+  for (const [key, entry] of store) {
+    if (nowMs - entry.storedAt > CLIENT_RESOURCE_MAX_AGE_MS) {
+      store.delete(key);
+    }
+  }
+  if (store.size <= CLIENT_RESOURCE_MAX_ENTRIES) return;
+  const oldest = [...store.entries()].sort((a, b) => a[1].storedAt - b[1].storedAt);
+  for (const [key] of oldest) {
+    if (store.size <= CLIENT_RESOURCE_MAX_ENTRIES) break;
+    store.delete(key);
+  }
 }
 
 export function readClientResource<T>(
@@ -98,6 +186,8 @@ export function readClientResource<T>(
   nowMs: number = Date.now(),
   ttlMs?: number
 ): ClientResourceHit<T> | null {
+  const store = getStore();
+  if (!store) return null;
   const entry = store.get(clientResourceStoreKey(ns, resource, params));
   if (!entry) return null;
   const ageMs = Math.max(0, nowMs - entry.storedAt);
@@ -130,10 +220,14 @@ export function writeClientResource<T>(
   value: T,
   nowMs: number = Date.now()
 ): void {
+  const store = getStore();
+  if (!store) return;
+  pruneStore(nowMs);
   store.set(clientResourceStoreKey(ns, resource, params), {
     value,
     storedAt: nowMs,
   });
+  pruneStore(nowMs);
 }
 
 export function invalidateClientResource(
@@ -141,6 +235,8 @@ export function invalidateClientResource(
   resource: string,
   params?: string
 ): void {
+  const store = getStore();
+  if (!store) return;
   if (params != null) {
     store.delete(clientResourceStoreKey(ns, resource, params));
     return;
@@ -149,6 +245,19 @@ export function invalidateClientResource(
   for (const key of store.keys()) {
     if (key.startsWith(prefix)) store.delete(key);
   }
+}
+
+export function runDedupedClientResource<T>(
+  key: string,
+  run: () => Promise<T>
+): Promise<T> {
+  const existing = inflight.get(key);
+  if (existing) return existing as Promise<T>;
+  const pending = run().finally(() => {
+    if (inflight.get(key) === pending) inflight.delete(key);
+  });
+  inflight.set(key, pending);
+  return pending;
 }
 
 export function shouldApplyScopedResponse(input: {
@@ -219,4 +328,50 @@ export async function ensureClientAuthNamespace(): Promise<ClientAuthNamespace |
   } catch {
     return lastNamespace;
   }
+}
+
+function getAuthChannel(): BroadcastChannel | null {
+  if (!isBrowserRuntime() || typeof BroadcastChannel === "undefined") return null;
+  if (!authChannel) {
+    authChannel = new BroadcastChannel(CLIENT_RESOURCE_AUTH_CHANNEL);
+  }
+  return authChannel;
+}
+
+function reloadAfterRemoteAuthClear(): void {
+  if (!isBrowserRuntime()) return;
+  try {
+    location.reload();
+  } catch {
+    /* ignore */
+  }
+}
+
+export function installClientResourceCacheRuntime(): void {
+  if (authChannelInstalled || !isBrowserRuntime()) return;
+  authChannelInstalled = true;
+  const channel = getAuthChannel();
+  if (channel) {
+    channel.onmessage = (event: MessageEvent) => {
+      const type = (event.data as { type?: string } | null)?.type;
+      if (type !== "clear") return;
+      applyRemoteClientResourceCacheClear();
+      reloadAfterRemoteAuthClear();
+    };
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    const prev = lastNamespace;
+    if (!prev) return;
+    void ensureClientAuthNamespace().then((next) => {
+      if (!next || !sameAuthNamespace(prev, next)) {
+        applyRemoteClientResourceCacheClear();
+        reloadAfterRemoteAuthClear();
+      }
+    });
+  });
+}
+
+if (typeof window !== "undefined") {
+  installClientResourceCacheRuntime();
 }

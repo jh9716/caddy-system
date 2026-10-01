@@ -5,9 +5,12 @@ import type { CommentPublic } from "@/lib/comment";
 import { COMMENT_BODY_MAX, COMMENT_DELETED_PLACEHOLDER } from "@/lib/commentConstants";
 import {
   CLIENT_RESOURCE,
+  clientResourceStoreKey,
   ensureClientAuthNamespace,
   peekLastNamespaceResource,
   readLastClientAuthNamespace,
+  runDedupedClientResource,
+  shouldSkipFreshResourceRefresh,
   writeClientResource,
 } from "@/lib/clientResourceCache";
 import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
@@ -75,11 +78,19 @@ export default function BoardComments({ date }: { date: string }) {
     }
     setBody("");
     (async () => {
-      const nsPromise = ensureClientAuthNamespace();
-      const res = await fetch(`/api/board/${encodeURIComponent(date)}/comments`, {
-        credentials: "include",
-        cache: "no-store",
-      });
+      const ns = await ensureClientAuthNamespace();
+      if (cancelled) return;
+      if (shouldSkipFreshResourceRefresh(cached) && ns) return;
+      const res = await runDedupedClientResource(
+        ns
+          ? clientResourceStoreKey(ns, CLIENT_RESOURCE.BOARD_COMMENTS, date)
+          : `anon::board-comments::${date}`,
+        () =>
+          fetch(`/api/board/${encodeURIComponent(date)}/comments`, {
+            credentials: "include",
+            cache: "no-store",
+          })
+      );
       if (consumeUnauthorizedMemberResponse(res)) return;
       const data = await res.json().catch(() => ({}));
       if (cancelled) return;
@@ -94,8 +105,7 @@ export default function BoardComments({ date }: { date: string }) {
       setComments(next.comments);
       setCanCompose(next.canCompose);
       setVisible(true);
-      const ns = await nsPromise;
-      if (cancelled || !ns) return;
+      if (!ns) return;
       writeClientResource(ns, CLIENT_RESOURCE.BOARD_COMMENTS, date, next);
     })();
     return () => {

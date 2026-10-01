@@ -4,10 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CLIENT_RESOURCE,
   clearClientResourceCache,
+  clientResourceStoreKey,
   ensureClientAuthNamespace,
   invalidateClientResource,
   peekLastNamespaceResource,
   readLastClientAuthNamespace,
+  runDedupedClientResource,
+  shouldSkipFreshResourceRefresh,
   writeClientResource,
 } from '@/lib/clientResourceCache';
 import { isCurrentLoadGen } from '@/lib/pendingLoad';
@@ -428,7 +431,10 @@ export default function ManageCaddiesPage() {
 
   const invalidateCaddyRosters = useCallback(() => {
     const ns = readLastClientAuthNamespace();
-    if (ns) invalidateClientResource(ns, CLIENT_RESOURCE.CADDY_ROSTER);
+    if (ns) {
+      invalidateClientResource(ns, CLIENT_RESOURCE.CADDY_ROSTER);
+      invalidateClientResource(ns, CLIENT_RESOURCE.DASHBOARD);
+    }
   }, []);
 
   const refreshSlotPeers = useCallback(async () => {
@@ -475,12 +481,23 @@ export default function ManageCaddiesPage() {
       }
       setLoading(true);
       setMessage(null);
-      const nsPromise = ensureClientAuthNamespace();
+      const ns = await ensureClientAuthNamespace();
+      if (!isCurrentLoadGen(gen, loadGen.current)) return;
+      if (shouldSkipFreshResourceRefresh(cached) && ns) {
+        setLoading(false);
+        return;
+      }
       try {
-        const res = await fetch(`/api/caddies?employment=${employment}`, {
-          cache: 'no-store',
-          credentials: 'include',
-        });
+        const res = await runDedupedClientResource(
+          ns
+            ? clientResourceStoreKey(ns, CLIENT_RESOURCE.CADDY_ROSTER, String(employment))
+            : `anon::caddy-roster::${employment}`,
+          () =>
+            fetch(`/api/caddies?employment=${employment}`, {
+              cache: 'no-store',
+              credentials: 'include',
+            })
+        );
         if (!isCurrentLoadGen(gen, loadGen.current)) return;
         if (res.status === 401 || res.status === 403) {
           clearClientResourceCache();
@@ -498,8 +515,6 @@ export default function ManageCaddiesPage() {
         const next = Array.isArray(data) ? data : [];
         setRows(next);
         setRefreshError(false);
-        const ns = await nsPromise;
-        if (!isCurrentLoadGen(gen, loadGen.current)) return;
         if (ns) {
           writeClientResource(ns, CLIENT_RESOURCE.CADDY_ROSTER, String(employment), next);
         }

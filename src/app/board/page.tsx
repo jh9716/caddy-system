@@ -18,9 +18,12 @@ import {
 import { type ShiftPart } from "@/lib/reservationParser";
 import {
   CLIENT_RESOURCE,
+  clientResourceStoreKey,
   ensureClientAuthNamespace,
   peekLastNamespaceResource,
+  runDedupedClientResource,
   shouldApplyScopedResponse,
+  shouldSkipFreshResourceRefresh,
   writeClientResource,
 } from "@/lib/clientResourceCache";
 import {
@@ -91,11 +94,22 @@ export default function PublishedBoardPage() {
     }
     setLoading(true);
     if (!cached) setError(null);
-    const nsPromise = ensureClientAuthNamespace();
+    const ns = await ensureClientAuthNamespace();
+    if (!isCurrentLoadGen(gen, loadGen.current)) return;
+    if (shouldSkipFreshResourceRefresh(cached) && ns) {
+      setLoading(false);
+      return;
+    }
     try {
-      const res = await fetch(
-        `/api/assignments/published?date=${encodeURIComponent(ymd)}`,
-        { credentials: "include", cache: "no-store" }
+      const res = await runDedupedClientResource(
+        ns
+          ? clientResourceStoreKey(ns, CLIENT_RESOURCE.BOARD, ymd)
+          : `anon::board::${ymd}`,
+        () =>
+          fetch(`/api/assignments/published?date=${encodeURIComponent(ymd)}`, {
+            credentials: "include",
+            cache: "no-store",
+          })
       );
       if (!isCurrentLoadGen(gen, loadGen.current)) return;
       if (consumeUnauthorizedMemberResponse(res)) return;
@@ -117,8 +131,6 @@ export default function PublishedBoardPage() {
       if (next && next.date !== ymd) return;
       setPublished(next);
       setError(null);
-      const ns = await nsPromise;
-      if (!isCurrentLoadGen(gen, loadGen.current)) return;
       if (!ns) return;
       writeClientResource(ns, CLIENT_RESOURCE.BOARD, ymd, next);
     } catch (e: unknown) {
