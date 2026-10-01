@@ -20,6 +20,10 @@ type Preview = {
     subscribedUsers: number;
     subscriptions: number;
     noSubscription: number;
+    nativeTokens?: number;
+    nativeUsers?: number;
+    webSubscriptions?: number;
+    webUsers?: number;
   };
   canSend: boolean;
   alreadySent: boolean;
@@ -126,8 +130,15 @@ export default function NoticePushNotifyCard({
         <>
           <p className="notice-push-meta">대상 {preview.counts.eligibleUsers}명</p>
           <p className="notice-push-meta">
-            알림 가능 {preview.counts.subscribedUsers}명 · 기기{" "}
-            {preview.counts.subscriptions}대
+            알림 가능 {preview.counts.subscribedUsers}명
+          </p>
+          <p className="notice-push-meta">
+            Native 예상 {preview.counts.nativeTokens ?? 0}대 · Web 예상{" "}
+            {preview.counts.webSubscriptions ?? preview.counts.subscriptions}대
+            · 합계 {preview.counts.subscriptions}대
+          </p>
+          <p className="notice-push-meta">
+            Native 실패 시 Web fallback으로 실제 발송 수는 달라질 수 있음
           </p>
         </>
       ) : null}

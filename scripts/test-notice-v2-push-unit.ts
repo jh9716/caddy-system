@@ -1406,6 +1406,28 @@ async function main() {
       const nAllFail = await teamNotice("ch_allfail", "12조");
       const nAllFailConc = await teamNotice("ch_allfail_conc", "12조");
 
+      section("C5 preview channel overlap (native success assumed)");
+      {
+        const pWebDesk = await previewNoticePush(prisma, nWebDesk.id);
+        assert(pWebDesk.counts.nativeTokens === 0, "A preview web-only native 0");
+        assert(pWebDesk.counts.webSubscriptions === 1, "A preview web kept");
+        const pNative = await previewNoticePush(prisma, nNative.id);
+        assert(pNative.counts.nativeTokens === 1, "B preview native-only token 1");
+        assert(pNative.counts.webSubscriptions === 0, "B preview native-only web 0");
+        assert(pNative.counts.subscribedUsers === 1, "B preview native-only reachable");
+        const pBoth = await previewNoticePush(prisma, nBoth.id);
+        assert(pBoth.counts.nativeTokens === 1, "C preview native+android web: native 1");
+        assert(pBoth.counts.webSubscriptions === 0, "C preview drops android web");
+        const pPc = await previewNoticePush(prisma, nPcApp.id);
+        assert(pPc.counts.nativeTokens === 1, "D preview native+desktop: native 1");
+        assert(pPc.counts.webSubscriptions === 1, "D preview keeps desktop web");
+        const pFail = await previewNoticePush(prisma, nBothFail.id);
+        assert(
+          pFail.counts.webSubscriptions === 0,
+          "F preview assumes native success (no fallback web)"
+        );
+      }
+
       async function sendChannel(
         noticeId: number,
         nativeResult: (token: string) => "sent" | "failed" | "gone" = () => "sent",
