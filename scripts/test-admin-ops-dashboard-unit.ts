@@ -497,6 +497,9 @@ section("모바일 폭 rendering 구조");
   assert(/is-marshal/.test(css) && /is-leader/.test(css) && /is-available/.test(css), "마샬/조장/가용 색");
   assert(/addDays\(/.test(ui) && /이전/.test(ui) && /type="date"/.test(ui), "날짜 이전/다음/input");
   assert(/캐디 이름 검색/.test(ui), "이름 검색만");
+  assert(/AdminOpsTeamBoardSkeleton/.test(ui), "첫 로딩 조별 placeholder");
+  assert(/shouldShowDashboardZeroCount/.test(ui), "로딩 중 0명 숨김");
+  assert(!/불러오는 중…/.test(ui), "첫 진입 wipe 문구 없음");
   assert(!/전화번호|차량번호/.test(ui), "전화/차량 검색 없음");
 }
 

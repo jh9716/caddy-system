@@ -1,12 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { kstYmd } from "@/lib/kstDate";
 import {
   consumeUnauthorizedMemberResponse,
   redirectMemberToLogin,
 } from "@/lib/memberSessionRedirect";
 import { isYearMonth } from "@/lib/offRequestDomain";
+import {
+  calendarPlaceholderDates,
+  isCurrentLoadGen,
+  isStaleCalendarMonth,
+} from "@/lib/pendingLoad";
 import {
   offRequestWindowHint,
   offRequestWindowStatusLabel,
@@ -61,29 +66,35 @@ export default function OffRequestCalendarClient() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [moveId, setMoveId] = useState<number | null>(null);
+  const loadGen = useRef(0);
 
   const load = useCallback(async (nextMonth: string) => {
+    const gen = ++loadGen.current;
     setLoading(true);
     setError("");
+    setMoveId(null);
     try {
       const res = await fetch(`/api/off-requests/calendar?month=${nextMonth}`, {
         credentials: "include",
         cache: "no-store",
       });
+      if (!isCurrentLoadGen(gen, loadGen.current)) return;
       if (consumeUnauthorizedMemberResponse(res)) return;
       if (res.status === 401) {
         redirectMemberToLogin();
         return;
       }
       const json = await res.json().catch(() => null);
+      if (!isCurrentLoadGen(gen, loadGen.current)) return;
       if (!res.ok) {
         throw new Error(json?.message || "달력을 불러오지 못했습니다.");
       }
       setData(json);
     } catch (e) {
+      if (!isCurrentLoadGen(gen, loadGen.current)) return;
       setError(e instanceof Error ? e.message : "달력을 불러오지 못했습니다.");
     } finally {
-      setLoading(false);
+      if (isCurrentLoadGen(gen, loadGen.current)) setLoading(false);
     }
   }, []);
 
@@ -91,14 +102,17 @@ export default function OffRequestCalendarClient() {
     void load(month);
   }, [load, month]);
 
-  const window = data?.window ?? null;
+  const staleMonth = isStaleCalendarMonth(data?.month, month);
+  const window = staleMonth ? null : data?.window ?? null;
   const open = window?.status === "OPEN";
   const cells = useMemo(() => {
-    const days = data?.days ?? [];
+    const days = staleMonth
+      ? calendarPlaceholderDates(month).map((date) => ({ date, pending: true as const }))
+      : (data?.days ?? []).map((day) => ({ ...day, pending: false as const }));
     if (days.length === 0) return [];
     const pad = weekdayIndexUtc(days[0].date);
     return [...Array.from({ length: pad }, () => null), ...days];
-  }, [data]);
+  }, [data, month, staleMonth]);
 
   async function postJson(url: string, body: Record<string, unknown>) {
     setBusy(true);
@@ -152,11 +166,13 @@ export default function OffRequestCalendarClient() {
   }
 
   return (
-    <div className="off-cal">
+    <div className="off-cal" aria-busy={loading || staleMonth || undefined}>
       <header className="off-cal-head">
         <h1 className="ui-page-title">휴무 신청</h1>
         <p className="ui-page-sub">
-          {offRequestWindowStatusLabel(window?.status)} · {formatPeriod(window)}
+          {staleMonth
+            ? "이 달 현황 불러오는 중"
+            : `${offRequestWindowStatusLabel(window?.status)} · ${formatPeriod(window)}`}
         </p>
       </header>
 
@@ -180,12 +196,15 @@ export default function OffRequestCalendarClient() {
         </button>
       </div>
 
-      <p className="off-cal-hint">{offRequestWindowHint(window?.status ?? null)}</p>
+      {staleMonth ? (
+        <p className="off-cal-updating">날짜별 신청 현황을 불러오는 중</p>
+      ) : (
+        <p className="off-cal-hint">{offRequestWindowHint(window?.status ?? null)}</p>
+      )}
       {moveId != null && open ? (
         <p className="off-cal-hint is-move">다른 날짜를 누르면 신청일이 이동합니다.</p>
       ) : null}
       {error ? <p className="off-cal-error">{error}</p> : null}
-      {loading ? <p className="off-cal-hint">불러오는 중…</p> : null}
 
       <div className="off-cal-grid" role="grid" aria-label="휴무 신청 달력">
         {WEEKDAYS.map((w) => (
@@ -196,6 +215,14 @@ export default function OffRequestCalendarClient() {
         {cells.map((day, idx) => {
           if (!day) {
             return <div key={`pad-${idx}`} className="off-cal-cell is-empty" />;
+          }
+          if (day.pending) {
+            return (
+              <div key={day.date} className="off-cal-cell is-pending">
+                <span className="off-cal-num">{Number(day.date.slice(-2))}</span>
+                <span className="vh-skel vh-skel-line" />
+              </div>
+            );
           }
           const mine = Boolean(day.mine);
           const classes = [

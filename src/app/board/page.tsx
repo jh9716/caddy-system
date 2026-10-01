@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BoardImageExportMenu } from "@/components/board/BoardImageExportMenu";
 import PublishedBoardView from "@/components/board/PublishedBoardView";
 import BoardComments from "./BoardComments";
@@ -16,6 +16,7 @@ import {
   isMemberSessionRedirectScheduled,
 } from "@/lib/memberSessionRedirect";
 import { type ShiftPart } from "@/lib/reservationParser";
+import { boardPendingCopy, isCurrentLoadGen } from "@/lib/pendingLoad";
 
 type PublishedResponse = {
   ok?: boolean;
@@ -33,10 +34,11 @@ type PublishedResponse = {
 export default function PublishedBoardPage() {
   const [date, setDate] = useState(todayYmd);
   const [shift, setShift] = useState<ShiftPart>("1부");
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [published, setPublished] = useState<PublishedResponse["published"]>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const loadGen = useRef(0);
 
   const exportDraft = useMemo(
     () =>
@@ -50,6 +52,7 @@ export default function PublishedBoardPage() {
   const yesterday = useMemo(() => addDaysYmd(today, -1), [today]);
 
   const load = useCallback(async (ymd: string) => {
+    const gen = ++loadGen.current;
     setLoading(true);
     setError(null);
     try {
@@ -57,18 +60,25 @@ export default function PublishedBoardPage() {
         `/api/assignments/published?date=${encodeURIComponent(ymd)}`,
         { credentials: "include", cache: "no-store" }
       );
+      if (!isCurrentLoadGen(gen, loadGen.current)) return;
       if (consumeUnauthorizedMemberResponse(res)) return;
       const data = (await res.json().catch(() => ({}))) as PublishedResponse;
+      if (!isCurrentLoadGen(gen, loadGen.current)) return;
       if (!res.ok) {
         throw new Error(data.error || "배치표 조회 실패");
       }
       setPublished(data.published ?? null);
     } catch (e: unknown) {
+      if (!isCurrentLoadGen(gen, loadGen.current)) return;
       if (isMemberSessionRedirectScheduled()) return;
-      setPublished(null);
       setError(e instanceof Error ? e.message : "배치표 조회 실패");
     } finally {
-      if (!isMemberSessionRedirectScheduled()) setLoading(false);
+      if (
+        isCurrentLoadGen(gen, loadGen.current) &&
+        !isMemberSessionRedirectScheduled()
+      ) {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -132,13 +142,30 @@ export default function PublishedBoardPage() {
         </button>
       </nav>
 
-      {loading ? <p className="pub-msg">불러오는 중…</p> : null}
+      {loading ? (
+        <p className="pub-pending">
+          {boardPendingCopy({
+            loading,
+            selectedDate: date,
+            publishedDate: published?.date ?? null,
+          })}
+        </p>
+      ) : null}
       {error ? <p className="pub-msg error">{error}</p> : null}
       {!loading && !error && !published ? (
         <p className="pub-empty">아직 확정된 배치표가 없습니다.</p>
       ) : null}
-      {!loading && published ? (
-        <>
+      {loading && !published ? (
+        <div className="pub-skel" aria-hidden>
+          <div className="vh-skel vh-skel-block" />
+        </div>
+      ) : null}
+      {published ? (
+        <div
+          className={
+            loading && published.date !== date ? "pub-board-pending" : undefined
+          }
+        >
           <div className="pub-tools">
             <p className="pub-meta">
               {published.date} · {formatPublishedAt(published.publishedAt)} 확정
@@ -150,7 +177,7 @@ export default function PublishedBoardPage() {
           {notice ? <p className="pub-notice">{notice}</p> : null}
           <PublishedBoardView payload={published.payload} shift={shift} />
           <BoardComments date={published.date} />
-        </>
+        </div>
       ) : null}
 
       <style>{`
@@ -219,6 +246,7 @@ export default function PublishedBoardPage() {
           gap: 8px;
         }
         .pub-notice { color: #334155; }
+        .pub-skel { min-height: 240px; }
       `}</style>
     </div>
   );

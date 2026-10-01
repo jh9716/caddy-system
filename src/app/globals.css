@@ -3632,3 +3632,137 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
   margin: 0 0 12px;
   line-height: 1.45;
 }
+
+.vh-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.vh-skel {
+  display: block;
+  background: var(--vh-ivory-deep);
+  border-radius: 6px;
+  position: relative;
+  overflow: hidden;
+}
+
+.vh-skel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 252, 247, 0.45),
+    transparent
+  );
+  transform: translateX(-100%);
+  animation: vh-skel-shimmer 1.5s ease-in-out infinite;
+}
+
+.vh-skel-line {
+  height: 10px;
+  width: 52%;
+  margin-top: 8px;
+}
+
+.vh-skel-line.is-wide {
+  width: 78%;
+}
+
+.vh-skel-title {
+  height: 28px;
+  width: 42%;
+  max-width: 220px;
+  margin-bottom: 14px;
+}
+
+.vh-skel-block {
+  height: 168px;
+  width: 100%;
+  margin-top: 14px;
+}
+
+.vh-skel-card {
+  height: 88px;
+  width: 100%;
+}
+
+.vh-skel-kpi {
+  height: 2.1rem;
+  width: 3.4rem;
+  margin-top: 8px;
+}
+
+.vh-route-pending {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 16px 12px 48px;
+  min-height: 420px;
+}
+
+.vh-route-pending-kpis {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.pub-pending {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--vh-ink-soft);
+}
+
+.pub-board-pending {
+  opacity: 0.58;
+}
+
+.off-cal-cell.is-pending {
+  cursor: default;
+  pointer-events: none;
+}
+
+.off-cal-updating {
+  margin: 0 0 10px;
+  color: var(--vh-ink-soft);
+  font-size: 0.86rem;
+}
+
+.dash-updating {
+  margin: 0 0 8px;
+  font-size: 0.82rem;
+  color: var(--vh-ink-soft);
+}
+
+.dash-team-skel-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px 4px 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.dash-team-skel-list .vh-skel-line {
+  width: 100%;
+  margin-top: 0;
+  height: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vh-skel::after {
+    animation: none;
+  }
+}
+
+@keyframes vh-skel-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
