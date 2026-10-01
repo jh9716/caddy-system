@@ -173,6 +173,11 @@ import {
   persistAfterOwnDraftFlush,
 } from "@/lib/draftSaveFlush";
 import {
+  assignmentsDateFromSearch,
+  replaceAssignmentsDateUrl,
+} from "@/lib/assignmentsDateUrl";
+import { decideDraftLeaveFlush } from "@/lib/draftUnloadFlush";
+import {
   prepareRecalcDraftExpectedVersion,
   shouldAcceptDraftQueue,
 } from "@/lib/recalcDraftSave";
@@ -555,6 +560,7 @@ async function putAssignmentDraft(
   const res = await fetch("/api/assignments/draft", {
     method: "PUT",
     credentials: "include",
+    keepalive: false,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       date: next.date,
@@ -1237,6 +1243,22 @@ export default function ManageAssignmentsOpsPage() {
   }, [date]);
 
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      const fromUrl = assignmentsDateFromSearch(window.location.search);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) && fromUrl) {
+        setDate(fromUrl);
+        return;
+      }
+      replaceAssignmentsDateUrl({
+        pathname: window.location.pathname,
+        search: window.location.search,
+        hash: window.location.hash,
+        date,
+        replaceState: (url) => {
+          window.history.replaceState(window.history.state, "", url);
+        },
+      });
+    }
     if (draftSaveTimerRef.current) {
       clearTimeout(draftSaveTimerRef.current);
       draftSaveTimerRef.current = null;
@@ -1331,6 +1353,41 @@ export default function ManageAssignmentsOpsPage() {
       cancelled = true;
     };
   }, [date, applyHydratedDraft, clearDraftBoard, loadServerDraft]);
+
+  useEffect(() => {
+    const onPopState = () => {
+      const next = assignmentsDateFromSearch(window.location.search) || "";
+      setDate((current) => (current === next ? current : next));
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  useEffect(() => {
+    const flushPending = () => {
+      const decision = decideDraftLeaveFlush({
+        hydrating: hydratingDraftRef.current,
+        pending: pendingDraftSaveRef.current,
+        currentDate: dateRef.current,
+        inFlight: draftSaveInFlightRef.current,
+      });
+      if (decision.action !== "flush") return;
+      if (draftSaveTimerRef.current) {
+        clearTimeout(draftSaveTimerRef.current);
+        draftSaveTimerRef.current = null;
+      }
+      void flushOnce();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") flushPending();
+    };
+    window.addEventListener("pagehide", flushPending);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("pagehide", flushPending);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [flushOnce]);
 
   useEffect(() => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {

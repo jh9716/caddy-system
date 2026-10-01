@@ -81,6 +81,8 @@
     "test:assignment-confirm-unit": "bash scripts/tsx-safe.sh scripts/test-assignment-confirm-unit.ts",
     "test:assignment-draft-unit": "bash scripts/tsx-safe.sh scripts/test-assignment-draft-unit.ts",
     "test:daily-board-draft-unit": "bash scripts/tsx-safe.sh scripts/test-daily-board-draft-unit.ts",
+    "test:assignments-c4-unit": "bash scripts/tsx-safe.sh scripts/test-assignments-c4-unit.ts",
+    "test:draft-leave-flush-chromium": "bash scripts/tsx-safe.sh scripts/test-draft-leave-flush-chromium.ts",
     "test:daily-board-draft-invariants-unit": "bash scripts/tsx-safe.sh scripts/test-daily-board-draft-invariants-unit.ts",
     "test:quick-move-atomicity-local": "bash scripts/tsx-safe.sh scripts/test-quick-move-atomicity-local.ts",
     "test:board-mutation-pipeline-unit": "bash scripts/tsx-safe.sh scripts/test-board-mutation-pipeline-unit.ts",
