@@ -149,6 +149,19 @@ section("source: notice send uses helper, does not blank all web");
   const board = read("src/lib/boardPush.ts");
   const course = read("src/lib/courseReportPush.ts");
   assert(core.includes("selectNoticeWebPushMappings"), "sendNoticePush uses helper");
+  assert(core.includes("planNoticePushPreviewChannels"), "preview uses shared planner");
+  assert(
+    helper.includes("planNoticePushPreviewChannels"),
+    "preview planner lives next to overlap aliases"
+  );
+  const previewFn = core.split("export async function previewNoticePush")[1]?.split(
+    "export async function sendNoticePush"
+  )[0] || "";
+  assert(
+    !previewFn.includes("deliverNativePushTokens") &&
+      !previewFn.includes("deliverWebPushMappings"),
+    "preview does not call send functions"
+  );
   assert(core.includes("sentUserIds"), "sendNoticePush reads native success users");
   assert(core.includes("releaseNoticePushClaim"), "zero-success unsets pushSentAt");
   assert(

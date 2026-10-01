@@ -40,6 +40,7 @@
     "test:board-push-unit": "bash scripts/tsx-safe.sh scripts/test-board-push-unit.ts",
     "test:notice-v2-push-unit": "bash scripts/tsx-safe.sh scripts/test-notice-v2-push-unit.ts",
     "test:notice-push-channel-unit": "bash scripts/tsx-safe.sh scripts/test-notice-push-channel-unit.ts",
+    "test:notice-preview-channel-unit": "bash scripts/tsx-safe.sh scripts/test-notice-preview-channel-unit.ts",
     "test:notice-kst-display-unit": "bash scripts/tsx-safe.sh scripts/test-notice-kst-display-unit.ts",
     "test:course-report-push-unit": "bash scripts/tsx-safe.sh scripts/test-course-report-push-unit.ts",
     "test:course-report-unit": "bash scripts/tsx-safe.sh scripts/test-course-report-unit.ts",

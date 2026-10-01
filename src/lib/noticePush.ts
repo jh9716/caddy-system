@@ -41,7 +41,10 @@ import {
 } from "@/lib/nativePushDelivery";
 import { isWebPushSendConfigured, readWebPushSendCredentials } from "@/lib/pushVapid";
 import { type WebPushSendFn } from "@/lib/webPushSender";
-import { selectNoticeWebPushMappings } from "@/lib/noticePushChannel";
+import {
+  planNoticePushPreviewChannels,
+  selectNoticeWebPushMappings,
+} from "@/lib/noticePushChannel";
 
 export class NoticePushError extends Error {
   constructor(
@@ -60,6 +63,10 @@ export type NoticePushCounts = {
   subscribedUsers: number;
   subscriptions: number;
   noSubscription: number;
+  nativeTokens: number;
+  nativeUsers: number;
+  webSubscriptions: number;
+  webUsers: number;
 };
 
 export type NoticePushPreview = {
@@ -109,6 +116,10 @@ const emptyCounts = (): NoticePushCounts => ({
   subscribedUsers: 0,
   subscriptions: 0,
   noSubscription: 0,
+  nativeTokens: 0,
+  nativeUsers: 0,
+  webSubscriptions: 0,
+  webUsers: 0,
 });
 
 const noticePushSelect = {
@@ -216,6 +227,10 @@ export async function resolveEligibleNoticePushTargets(
       subscribedUsers,
       subscriptions: subscriptions.length,
       noSubscription,
+      nativeTokens: 0,
+      nativeUsers: 0,
+      webSubscriptions: subscriptions.length,
+      webUsers: subscribedUsers,
     },
     subscriptions,
     recipientUserIds,
@@ -313,14 +328,20 @@ export async function previewNoticePush(
   if (!notice) {
     throw new NoticePushError("not_found", "공지를 찾을 수 없습니다.", 404);
   }
-  const { counts } = await resolveEligibleNoticePushTargets(db, notice);
+  const targets = await resolveEligibleNoticePushTargets(db, notice);
+  const nativeTokens = await loadEnabledDevicePushTokens(db, targets.logicalUserIds);
+  const planned = planNoticePushPreviewChannels({
+    eligibleUsers: targets.counts.eligibleUsers,
+    webMappings: targets.subscriptions,
+    nativeTokens,
+  });
   const alreadySent = Boolean(notice.pushSentAt);
   const inWindow = isNoticeInPublishWindow(notice);
   return {
     noticeId: notice.id,
     targetType: notice.targetType,
     targetValue: notice.targetValue,
-    counts,
+    counts: planned.counts,
     canSend: inWindow && !alreadySent,
     alreadySent,
     pushSentAt: notice.pushSentAt ? notice.pushSentAt.toISOString() : null,
