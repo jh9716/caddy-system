@@ -46,6 +46,10 @@ section("A parse / URL date");
   assert(parseAssignmentsDateParam("2026-10-01") === "2026-10-01", "valid ymd");
   assert(parseAssignmentsDateParam(" 2026-10-01 ") === "2026-10-01", "trim valid ymd");
   assert(parseAssignmentsDateParam("2026-13-1") === null, "non YYYY-MM-DD ignored");
+  assert(parseAssignmentsDateParam("2026-13-01") === null, "month 13 ignored");
+  assert(parseAssignmentsDateParam("2026-99-99") === null, "calendar-impossible ignored");
+  assert(parseAssignmentsDateParam("2026-02-31") === null, "Feb 31 ignored");
+  assert(parseAssignmentsDateParam("2026-00-01") === null, "month 00 ignored");
   assert(parseAssignmentsDateParam("2026/10/01") === null, "slash date ignored");
   assert(parseAssignmentsDateParam("https://evil.test") === null, "url-like ignored");
   assert(parseAssignmentsDateParam("") === null, "empty ignored");
@@ -214,6 +218,15 @@ section("C/D/F drain + conflict no overwrite");
   assert(puts === 1, "conflict PUT 1회");
   assert(pending === null, "conflict clears pending, no overwrite retry");
   assert(shouldRetryDraftLeaveConflict() === false && !retried, "no unload retry flag");
+}
+
+section("source: calendar-valid URL date");
+{
+  const urlSrc = readSrc("src/lib/assignmentsDateUrl.ts");
+  assert(
+    urlSrc.includes("parseAssignmentYmd") && !urlSrc.includes("isYmd"),
+    "URL date uses calendar-valid parseAssignmentYmd, not format-only isYmd"
+  );
 }
 
 section("source: page wiring");

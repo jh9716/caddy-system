@@ -1,7 +1,9 @@
 /**
  * Pending draft flush on tab hide / pagehide.
- * Draft JSON is typically far above Chromium's 64 KiB keepalive limit.
- * Do not use keepalive or sendBeacon. Do not await on unload. No 409 retry.
+ * Chromium rejects keepalive:true above ~64 KiB (TypeError).
+ * Production-like draft PUT bodies are often 80–150 KiB+, so leave PUT
+ * stays keepalive:false. Chrome 148 still delivers that pagehide fetch
+ * on reload / same-origin navigation / tab close. Do not await. No 409 retry.
  */
 
 export type DraftLeavePending = { date: string };

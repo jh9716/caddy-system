@@ -1,17 +1,16 @@
 /**
- * /manage/assignments date query. YYYY-MM-DD only.
+ * /manage/assignments date query. Calendar-valid YYYY-MM-DD only.
  * Never writes an absolute/external URL.
  */
 
-import { isYmd } from "@/lib/dailyBoardDraft";
+import { parseAssignmentYmd } from "@/lib/legacyAssignmentApi";
 
 export const ASSIGNMENTS_DATE_PARAM = "date";
 export const ASSIGNMENTS_OPS_PATH = "/manage/assignments";
 
 export function parseAssignmentsDateParam(value: unknown): string | null {
   if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return isYmd(trimmed) ? trimmed : null;
+  return parseAssignmentYmd(value.trim())?.ymd ?? null;
 }
 
 export function assignmentsDateFromSearch(
