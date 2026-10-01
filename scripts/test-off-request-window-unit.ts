@@ -532,6 +532,27 @@ async function runLocalDbTests() {
       "window_not_open",
       "ADJUSTING blocks reschedule"
     );
+    await expectCode(
+      () =>
+        upsertOffRequestQuota(prisma, admin, {
+          month: ym(1),
+          team,
+          date: `${ym(1)}-23`,
+          limit: 2,
+        }),
+      "window_adjusting",
+      "ADJUSTING blocks quota put"
+    );
+    await expectCode(
+      () =>
+        deleteOffRequestQuota(prisma, admin, {
+          month: ym(1),
+          team,
+          date: day15,
+        }),
+      "window_adjusting",
+      "ADJUSTING blocks quota delete"
+    );
 
     await prisma.offRequestWindow.update({
       where: { id: created.id },

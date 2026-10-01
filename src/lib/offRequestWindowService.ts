@@ -52,6 +52,23 @@ function parseIsoDate(value: unknown, field: string): Date {
   return d;
 }
 
+function assertQuotaWritable(window: OffRequestWindow) {
+  if (window.status === "FINALIZED") {
+    throw new OffRequestServiceError(
+      "window_finalized",
+      "확정된 달의 정원은 바꿀 수 없습니다.",
+      409
+    );
+  }
+  if (window.status === "ADJUSTING") {
+    throw new OffRequestServiceError(
+      "window_adjusting",
+      "조정 중에는 정원을 바꿀 수 없습니다.",
+      409
+    );
+  }
+}
+
 async function assertCaddyNotRetired(db: DbClient, actor: OffRequestActor) {
   if (actor.caddyId == null) return;
   const caddy = await db.caddy.findUnique({
@@ -335,13 +352,7 @@ export async function upsertOffRequestQuota(
 ): Promise<{ window: OffRequestWindow; team: string; date: string; limit: number }> {
   assertAdmin(actor);
   const window = await requireWindowByMonth(db, input.month);
-  if (window.status === "FINALIZED") {
-    throw new OffRequestServiceError(
-      "window_finalized",
-      "확정된 달의 정원은 바꿀 수 없습니다.",
-      409
-    );
-  }
+  assertQuotaWritable(window);
   const ymd = String(input.date ?? "").trim();
   try {
     requireCalendarYmd(ymd);
@@ -383,13 +394,7 @@ export async function deleteOffRequestQuota(
 ): Promise<{ window: OffRequestWindow; team: string; date: string; deleted: number }> {
   assertAdmin(actor);
   const window = await requireWindowByMonth(db, input.month);
-  if (window.status === "FINALIZED") {
-    throw new OffRequestServiceError(
-      "window_finalized",
-      "확정된 달의 정원은 바꿀 수 없습니다.",
-      409
-    );
-  }
+  assertQuotaWritable(window);
   const ymd = String(input.date ?? "").trim();
   try {
     requireCalendarYmd(ymd);

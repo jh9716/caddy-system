@@ -7,7 +7,10 @@
  */
 import { PrismaClient } from "@prisma/client";
 import type { OffRequestActor } from "../src/lib/offRequestAuth";
-import { canTransitionOffRequestWindow } from "../src/lib/offRequestDomain";
+import {
+  canTransitionOffRequestWindow,
+  isOccupiedOverLimit,
+} from "../src/lib/offRequestDomain";
 import { OffRequestServiceError, submitOffRequest } from "../src/lib/offRequestService";
 import {
   closeOffRequestWindow,
@@ -20,6 +23,7 @@ import {
   upsertOffRequestQuota,
 } from "../src/lib/offRequestWindowService";
 import { offAssignmentDayRange } from "../src/lib/offRequestDomain";
+import { formatKstDateTimeLocal } from "../src/lib/kstDate";
 import { assertLocalDatabaseUrl } from "./assertLocalDatabaseUrl";
 
 let passed = 0;
@@ -106,6 +110,17 @@ async function runLocalDbTests() {
       defaultQuota: 5,
     });
     assert(created.status === "DRAFT", "create is DRAFT");
+    assert(formatKstDateTimeLocal(created.openAt) === `${year}-10-01T09:00`, "create redisplay 09:00 KST");
+    await expectCode(
+      () =>
+        createOffRequestWindow(prisma, admin, {
+          yearMonth: `${year}-12`,
+          openAt: `${year}-11-20T00:00:00.000Z`,
+          closeAt: `${year}-11-20T00:00:00.000Z`,
+        }),
+      "invalid_schedule",
+      "create openAt < closeAt"
+    );
     await expectCode(
       () =>
         createOffRequestWindow(prisma, admin, {
@@ -120,8 +135,44 @@ async function runLocalDbTests() {
     section("DRAFT patch + quota override/delete");
     const patched = await updateOffRequestWindow(prisma, admin, created.id, {
       defaultQuota: 6,
+      openAt: `${year}-10-20T00:00:00.000Z`,
+      closeAt: `${year}-10-20T09:00:00.000Z`,
     });
     assert(patched.defaultQuota === 6, "DRAFT defaultQuota");
+    assert(patched.openAt.toISOString() === `${year}-10-20T00:00:00.000Z`, "PATCH openAt UTC");
+    assert(formatKstDateTimeLocal(patched.openAt) === `${year}-10-20T09:00`, "PATCH redisplay 09:00 KST");
+    assert(formatKstDateTimeLocal(patched.closeAt) === `${year}-10-20T18:00`, "PATCH redisplay 18:00 KST");
+    await expectCode(
+      () =>
+        updateOffRequestWindow(prisma, admin, created.id, {
+          openAt: `${year}-10-20T10:00:00.000Z`,
+          closeAt: `${year}-10-20T09:00:00.000Z`,
+        }),
+      "invalid_schedule",
+      "PATCH openAt < closeAt"
+    );
+    await expectCode(
+      () =>
+        upsertOffRequestQuota(prisma, admin, {
+          month,
+          team: "7조",
+          date: day,
+          limit: 0,
+        }),
+      "invalid_quota",
+      "limit 0 rejected"
+    );
+    await expectCode(
+      () =>
+        upsertOffRequestQuota(prisma, admin, {
+          month,
+          team: "7조",
+          date: day,
+          limit: 100,
+        }),
+      "invalid_quota",
+      "limit 100 rejected"
+    );
     await upsertOffRequestQuota(prisma, admin, {
       month,
       team: "7조",
@@ -170,6 +221,12 @@ async function runLocalDbTests() {
       "invalid_transition",
       "no re-open"
     );
+    await expectCode(
+      () =>
+        updateOffRequestWindow(prisma, admin, created.id, { defaultQuota: 8 }),
+      "invalid_transition",
+      "OPEN blocks schedule/defaultQuota"
+    );
     const req = await submitOffRequest(prisma, caddyActor, { date: day });
     assert(req.status === "REQUESTED", "OPEN submit");
 
@@ -205,12 +262,49 @@ async function runLocalDbTests() {
     assert(calDay?.requestedCount === 1, "caddy calendar requested");
     assert(!JSON.stringify(cal).includes(offHolder.name), "caddy calendar hides other name");
 
+    const openQuota = await upsertOffRequestQuota(prisma, admin, {
+      month,
+      team: "8조",
+      date: day,
+      limit: 5,
+    });
+    assert(openQuota.limit === 5, "OPEN still allows quota API (#209)");
+
     const closed = await closeOffRequestWindow(prisma, admin, created.id);
     assert(closed.status === "ADJUSTING", "OPEN→ADJUSTING");
     await expectCode(
       () => openOffRequestWindow(prisma, admin, created.id),
       "invalid_transition",
       "no ADJUSTING→OPEN"
+    );
+    await expectCode(
+      () =>
+        updateOffRequestWindow(prisma, admin, created.id, {
+          defaultQuota: 9,
+        }),
+      "invalid_transition",
+      "ADJUSTING blocks schedule/defaultQuota"
+    );
+    await expectCode(
+      () =>
+        upsertOffRequestQuota(prisma, admin, {
+          month,
+          team: "7조",
+          date: day,
+          limit: 2,
+        }),
+      "window_adjusting",
+      "ADJUSTING blocks quota put"
+    );
+    await expectCode(
+      () =>
+        deleteOffRequestQuota(prisma, admin, {
+          month,
+          team: "7조",
+          date: day,
+        }),
+      "window_adjusting",
+      "ADJUSTING blocks quota delete"
     );
 
     await cleanup();
@@ -228,6 +322,14 @@ async function main() {
     assert(!canTransitionOffRequestWindow("OPEN", "DRAFT"), "no OPEN→DRAFT");
     assert(!canTransitionOffRequestWindow("ADJUSTING", "OPEN"), "no ADJUSTING→OPEN");
     assert(!canTransitionOffRequestWindow("DRAFT", "FINALIZED"), "no DRAFT→FINALIZED");
+    assert(
+      isOccupiedOverLimit({ approvedCount: 2, requestedCount: 4, limit: 5 }),
+      "2 OFF + 4 REQUESTED / 5 is over"
+    );
+    assert(
+      !isOccupiedOverLimit({ approvedCount: 2, requestedCount: 3, limit: 5 }),
+      "2+3 / 5 is not over"
+    );
     const caddy = actorOf("caddy", { caddyId: 1 });
     await expectCode(
       () =>

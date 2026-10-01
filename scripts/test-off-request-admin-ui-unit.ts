@@ -40,6 +40,11 @@ section("paths + labels");
   assert(local === "2026-11-01T00:00", "kst datetime-local");
   const back = parseKstDateTimeLocal("2026-11-01T00:00");
   assert(back.toISOString() === "2026-10-31T15:00:00.000Z", "parse kst local to utc");
+  const adminInput = "2026-10-20T09:00";
+  const iso = new Date(`${adminInput}:00+09:00`).toISOString();
+  assert(iso === "2026-10-20T00:00:00.000Z", "admin input 09:00 KST stores UTC 00:00");
+  assert(formatKstDateTimeLocal(iso) === adminInput, "GET redisplay same KST local");
+  assert(formatKstDateTimeLocal("2026-10-19T15:00:00.000Z") === "2026-10-20T00:00", "no day shift midnight KST");
 }
 
 section("admin page auth + nav");
@@ -76,6 +81,7 @@ section("admin page auth + nav");
   assert(!client.includes("caddy.name"), "no applicant name field");
   assert(!client.includes("/approve"), "no approve UI");
   assert(!client.includes("assignment.create"), "no assignment write");
+  assert(client.includes("canEditQuota = draft"), "quota UI only in DRAFT");
 }
 
 section("API + service wiring");
@@ -95,6 +101,8 @@ section("API + service wiring");
   assert(svc.includes("resolveDayQuotaLimit"), "reuses quota limit SoT");
   assert(svc.includes("OFF_REQUEST_ADMIN_TEAMS"), "admin teams constant");
   assert(svc.includes("PRIMARY_TEAMS"), "teams from roster");
+  assert(svc.includes("window_adjusting"), "ADJUSTING quota writes blocked");
+  assert(svc.includes('window.status === "ADJUSTING"'), "ADJUSTING status checked");
   assert(!svc.includes("finalizeOffRequestWindow"), "no finalize helper");
   assert(!/model OffRequestWindow/.test(schema) || true, "schema still has window");
   assert(
