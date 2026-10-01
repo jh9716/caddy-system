@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   OPS_DUTY_DASHBOARD_LABELS,
   filterDashboardCaddies,
   groupCaddiesByPrimaryTeam,
   type AdminOpsCaddyRow,
+  type AdminOpsDashboardPayload,
   type AdminOpsDutyGroup,
   type AdminOpsTeamGroup,
 } from "@/lib/adminOpsDashboard";
@@ -13,6 +14,13 @@ import type { AdminOpsDashboardView } from "@/lib/dailyOpsSnapshot";
 import { formatCapturedAtKst } from "@/lib/kstDate";
 import type { DailyOpsDutyRole } from "@/lib/dailyOpsDuty";
 import { addDays } from "@/lib/krHolidays";
+import { PRIMARY_TEAMS } from "@/lib/caddyManage";
+import {
+  dashboardUpdatingCopy,
+  isCurrentLoadGen,
+  isStaleDashboardDate,
+  shouldShowDashboardZeroCount,
+} from "@/lib/pendingLoad";
 
 type DashboardResponse = AdminOpsDashboardView & { ok?: boolean; error?: string };
 
@@ -101,7 +109,7 @@ function SummaryCard({
 }: {
   hint: string;
   label: string;
-  value: number | string;
+  value: number | string | ReactNode;
   lines?: string[];
   children?: ReactNode;
 }) {
@@ -133,6 +141,28 @@ export function TeamBoardPerson({ row }: { row: AdminOpsCaddyRow }) {
       <span className="dash-team-person-name">{row.name}</span>
       <span className="dash-team-person-reason">{reason}</span>
     </li>
+  );
+}
+
+export function AdminOpsTeamBoardSkeleton() {
+  return (
+    <div className="dash-team-board" aria-hidden>
+      {PRIMARY_TEAMS.map((team) => (
+        <section key={team} className="dash-team-col" data-team={team}>
+          <header className="dash-team-col-head">
+            <h3 className="dash-team-col-title">{team}</h3>
+            <span className="dash-team-col-count">
+              <span className="vh-skel vh-skel-line" style={{ width: 18, height: 10, margin: 0 }} />
+            </span>
+          </header>
+          <ul className="dash-team-skel-list">
+            <li className="vh-skel vh-skel-line" />
+            <li className="vh-skel vh-skel-line" />
+            <li className="vh-skel vh-skel-line" />
+          </ul>
+        </section>
+      ))}
+    </div>
   );
 }
 
@@ -177,8 +207,18 @@ export default function AdminOpsDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const loadGen = useRef(0);
+  const initial = loading && !data;
+  const staleDate = isStaleDashboardDate(data?.date, date);
+  const updatingCopy = dashboardUpdatingCopy({
+    loading,
+    hasData: Boolean(data),
+    staleDate,
+    error: Boolean(error),
+  });
 
   const load = useCallback(async (ymd: string) => {
+    const gen = ++loadGen.current;
     setLoading(true);
     setError(null);
     try {
@@ -187,22 +227,23 @@ export default function AdminOpsDashboard() {
         credentials: "include",
         method: "GET",
       });
+      if (!isCurrentLoadGen(gen, loadGen.current)) return;
       if (res.status === 401 || res.status === 403) {
         location.href = "/login?callbackUrl=/manage";
         return;
       }
       const json = (await res.json()) as DashboardResponse;
+      if (!isCurrentLoadGen(gen, loadGen.current)) return;
       if (!res.ok) {
         setError(json?.error || "불러오기 실패");
-        setData(null);
         return;
       }
       setData(json);
     } catch {
+      if (!isCurrentLoadGen(gen, loadGen.current)) return;
       setError("대시보드 조회 실패");
-      setData(null);
     } finally {
-      setLoading(false);
+      if (isCurrentLoadGen(gen, loadGen.current)) setLoading(false);
     }
   }, []);
 
@@ -274,7 +315,13 @@ export default function AdminOpsDashboard() {
         <SummaryCard
           hint="people"
           label="재직 캐디"
-          value={data?.roster.activeCount ?? "—"}
+          value={
+            initial ? (
+              <span className="vh-skel vh-skel-kpi" />
+            ) : (
+              data?.roster.activeCount ?? "—"
+            )
+          }
           lines={
             data
               ? [`하우스 ${data.roster.houseCount} · 3부반 ${data.roster.thirdCount}`]
@@ -284,7 +331,13 @@ export default function AdminOpsDashboard() {
         <SummaryCard
           hint="available"
           label="해당일 가용 캐디"
-          value={data?.availability.finalAvailable ?? "—"}
+          value={
+            initial ? (
+              <span className="vh-skel vh-skel-kpi" />
+            ) : (
+              data?.availability.finalAvailable ?? "—"
+            )
+          }
           lines={
             data
               ? [
@@ -296,7 +349,13 @@ export default function AdminOpsDashboard() {
         <SummaryCard
           hint="off"
           label="휴무"
-          value={data?.availability.offCount ?? "—"}
+          value={
+            initial ? (
+              <span className="vh-skel vh-skel-kpi" />
+            ) : (
+              data?.availability.offCount ?? "—"
+            )
+          }
         >
           {data && data.availability.reasonCounts.length > 0 && (
             <div className="dash-reason-strip">
@@ -310,16 +369,30 @@ export default function AdminOpsDashboard() {
         </SummaryCard>
       </section>
 
+      {updatingCopy ? <p className="dash-updating">{updatingCopy}</p> : null}
+
       <section className="dash-duty" aria-label="운영 당번·마샬·조장">
         <h2 className="dash-duty-title">운영 당번 · 마샬 · 조장</h2>
-        <AdminOpsDutyBoard groups={data?.opsDuties ?? []} />
+        {initial ? (
+          <div className="dash-ops-board" aria-hidden>
+            <div className="vh-skel vh-skel-block" style={{ height: 120, marginTop: 0 }} />
+          </div>
+        ) : data ? (
+          <AdminOpsDutyBoard groups={data.opsDuties} />
+        ) : null}
       </section>
 
       <section className="dash-caddies" aria-label="조별 캐디 현황">
         <div className="dash-glance-head">
           <h2 className="dash-duty-title">
             조별 캐디 현황{" "}
-            <span className="dash-caddy-count">{visible.length}</span>
+            {shouldShowDashboardZeroCount(Boolean(data)) ? (
+              <span className="dash-caddy-count">{visible.length}</span>
+            ) : (
+              <span className="dash-caddy-count" aria-hidden>
+                <span className="vh-skel vh-skel-line" style={{ width: 28, height: 14, margin: 0 }} />
+              </span>
+            )}
           </h2>
           <input
             type="search"
@@ -330,11 +403,11 @@ export default function AdminOpsDashboard() {
             aria-label="캐디 이름 검색"
           />
         </div>
-        {loading && !data ? (
-          <p className="dash-empty">불러오는 중…</p>
-        ) : (
+        {initial ? (
+          <AdminOpsTeamBoardSkeleton />
+        ) : data ? (
           <AdminOpsTeamBoard groups={teamGroups} />
-        )}
+        ) : null}
       </section>
 
       <p className="dash-footnote">
