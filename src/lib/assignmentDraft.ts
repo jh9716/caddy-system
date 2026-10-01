@@ -682,12 +682,18 @@ export function replaceAssignmentCaddy(
       reservationKey(a.reservation) !== resKey
   );
   if (sameShiftDup) {
-    warnings.push({
-      level: "error",
-      code: "SAME_SHIFT_DUPLICATE",
-      message: `${newCaddy.name}은(는) 이미 같은 부 다른 예약에 배치되어 있습니다.`,
-      caddyId: newCaddyId,
-    });
+    return {
+      draft,
+      warnings: [
+        {
+          level: "error",
+          code: "SAME_SHIFT_DUPLICATE",
+          message: `${newCaddy.name}은(는) 이미 같은 부 다른 예약에 배치되어 있습니다.`,
+          caddyId: newCaddyId,
+        },
+      ],
+      specialEditWarned,
+    };
   }
 
   const nextAssignments = draft.assignments.map((a, i) =>
@@ -824,12 +830,18 @@ export function assignCaddyToUnassigned(
       a.caddy.id === caddyId && String(a.shift) === String(reservation.shift)
   );
   if (sameShiftDup) {
-    warnings.push({
-      level: "error",
-      code: "SAME_SHIFT_DUPLICATE",
-      message: `${caddy.name}은(는) 이미 같은 부 다른 예약에 배치되어 있습니다.`,
-      caddyId,
-    });
+    return {
+      draft,
+      warnings: [
+        {
+          level: "error",
+          code: "SAME_SHIFT_DUPLICATE",
+          message: `${caddy.name}은(는) 이미 같은 부 다른 예약에 배치되어 있습니다.`,
+          caddyId,
+        },
+      ],
+      specialEditWarned: false,
+    };
   }
   const newRow: AutoAssignmentRow = {
     date: draft.date,

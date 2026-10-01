@@ -83,10 +83,11 @@ export type DailyBoardDraftPayloadV1 = {
 
 export class DailyBoardDraftPayloadError extends Error {
   status = 400;
-  code = "DRAFT_PAYLOAD_INVALID";
-  constructor(message: string) {
+  code: string;
+  constructor(message: string, code = "DRAFT_PAYLOAD_INVALID") {
     super(message);
     this.name = "DailyBoardDraftPayloadError";
+    this.code = code;
   }
 }
 

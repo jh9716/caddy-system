@@ -156,7 +156,21 @@ section("same-shift duplicate / multi-shift ok");
     dup.warnings.some((w) => w.code === "SAME_SHIFT_DUPLICATE"),
     "same-shift duplicate warning"
   );
-  const detected = detectDraftWarnings(dup.draft);
+  assert(
+    dup.draft.assignments.filter((a) => a.caddy.id === sameId && a.shift === draft.assignments[0].shift)
+      .length === 1,
+    "replace does not apply same-shift duplicate"
+  );
+  const detected = detectDraftWarnings({
+    ...dup.draft,
+    assignments: [
+      ...dup.draft.assignments,
+      {
+        ...dup.draft.assignments[1],
+        caddy: { ...dup.draft.assignments[0].caddy },
+      },
+    ],
+  });
   assert(
     detected.some((w) => w.code === "SAME_SHIFT_DUPLICATE"),
     "detectDraftWarnings finds SAME_SHIFT_DUPLICATE"
@@ -244,10 +258,12 @@ section("special edit requires confirm");
   const fx = draft.assignments.find((a) => a.kind === "fixed");
   assert(!!fx, "has fixed row");
   const key = reservationKey(fx!.reservation);
-  const blocked = replaceAssignmentCaddy(draft, key, available[0].id);
+  const unused = unusedCaddies(draft)[0];
+  assert(!!unused, "has unused for special replace");
+  const blocked = replaceAssignmentCaddy(draft, key, unused.id);
   assert(blocked.specialEditWarned, "special warn");
   assert(blocked.draft.status === "DRAFT", "no edit without confirm");
-  const allowed = replaceAssignmentCaddy(draft, key, available[0].id, {
+  const allowed = replaceAssignmentCaddy(draft, key, unused.id, {
     allowSpecialEdit: true,
   });
   assert(allowed.draft.status === "EDITED", "special edit after confirm");

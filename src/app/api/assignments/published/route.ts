@@ -4,7 +4,11 @@ import {
   requirePublishedReader,
   resolveAuthUser,
 } from "@/lib/auth";
-import { isYmd, resolveDraftRequestDate } from "@/lib/dailyBoardDraft";
+import {
+  DailyBoardDraftPayloadError,
+  isYmd,
+  resolveDraftRequestDate,
+} from "@/lib/dailyBoardDraft";
 import {
   DailyBoardPublishedPayloadError,
   PUBLISH_NO_DRAFT,
@@ -144,6 +148,9 @@ export async function POST(req: NextRequest) {
         },
         { status: 404 }
       );
+    }
+    if (e instanceof DailyBoardDraftPayloadError) {
+      return NextResponse.json({ error: e.message, code: e.code }, { status: 400 });
     }
     if (e instanceof DailyBoardPublishedPayloadError) {
       return NextResponse.json({ error: e.message, code: e.code }, { status: 400 });
