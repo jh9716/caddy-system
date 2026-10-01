@@ -18,6 +18,7 @@ import {
   groupCaddiesByPrimaryTeam,
   groupOpsDutyNames,
   statusToneFromReasons,
+  teamStatusSummary,
 } from "../src/lib/adminOpsDashboard";
 import { loadAdminOpsDashboardSource } from "../src/lib/adminOpsDashboardSource";
 import { computeAvailability } from "../src/lib/availabilityEngine";
@@ -298,6 +299,19 @@ section("전체 캐디 조별 현황판 가용/제외");
   assert(!html.includes("dash-caddy-grid"), "사람 카드 grid 제거");
   const named = filterDashboardCaddies(dash.caddies, "김");
   assert(named.length === 1 && named[0].name === "김가용", "이름 검색만");
+  assert(teamStatusSummary(teams[0].rows).includes("가용") || teamStatusSummary(dash.caddies).includes("휴무"), "조 상태 요약");
+  const collapsedHtml = renderToStaticMarkup(
+    createElement(AdminOpsTeamBoard, { groups: teams, expandedTeams: new Set() })
+  );
+  assert(!collapsedHtml.includes("dash-team-person-name"), "기본 collapsed는 캐디 row 없음");
+  assert(collapsedHtml.includes("data-expanded=\"false\""), "collapsed marker");
+  const oneOpen = renderToStaticMarkup(
+    createElement(AdminOpsTeamBoard, {
+      groups: teams,
+      expandedTeams: new Set(["1조"]),
+    })
+  );
+  assert(oneOpen.includes("김가용") && !oneOpen.includes("박3부"), "펼친 조만 row");
 }
 
 section("휴무 count source (OFF Sheet overlay + Assignment)");
@@ -348,6 +362,33 @@ section("날짜 변경 시 해당 날짜 데이터");
   assert(p1.availability.offCount === 1, "16일 휴무 반영");
   assert(p2.availability.offCount === 0, "다음날 휴무 없음");
   assert(p2.availability.finalAvailable > p1.availability.finalAvailable, "날짜별 가용 갱신");
+}
+
+section("OFF와 duty source 병렬");
+{
+  const date = "2026-09-03";
+  const events: string[] = [];
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  await loadAdminOpsDashboardSource(date, {
+    loadAvailability: mockLoadAvailability(),
+    listDuties: async () => {
+      events.push("duty-start");
+      await sleep(20);
+      events.push("duty-end");
+      return [];
+    },
+    fetchOffSheets: async () => {
+      events.push("off-start");
+      await sleep(40);
+      events.push("off-end");
+      return [offSheetForDate(date, ["이휴무"])];
+    },
+    fetchOpsDutySheets: async () => [],
+  });
+  assert(events.includes("off-start") && events.includes("duty-start"), "OFF/duty 둘 다 시작");
+  assert(events.indexOf("duty-start") < events.indexOf("off-end"), "duty가 OFF 종료 전에 시작");
+  const src = readSrc("src/lib/adminOpsDashboardSource.ts");
+  assert(/Promise\.all/.test(src), "source Promise.all");
 }
 
 section("read-only OFF/ops source overlay");
@@ -497,6 +538,9 @@ section("모바일 폭 rendering 구조");
   assert(/is-marshal/.test(css) && /is-leader/.test(css) && /is-available/.test(css), "마샬/조장/가용 색");
   assert(/addDays\(/.test(ui) && /이전/.test(ui) && /type="date"/.test(ui), "날짜 이전/다음/input");
   assert(/캐디 이름 검색/.test(ui), "이름 검색만");
+  assert(/expandedTeams/.test(ui), "조 기본 collapsed");
+  assert(/teamStatusSummary/.test(ui), "접힌 조 상태 요약");
+  assert(/dash-team-summary/.test(css), "collapsed summary style");
   assert(/AdminOpsTeamBoardSkeleton/.test(ui), "첫 로딩 조별 placeholder");
   assert(/shouldShowDashboardZeroCount/.test(ui), "로딩 중 0명 숨김");
   assert(!/불러오는 중…/.test(ui), "첫 진입 wipe 문구 없음");

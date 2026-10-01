@@ -5,6 +5,7 @@ import {
   OPS_DUTY_DASHBOARD_LABELS,
   filterDashboardCaddies,
   groupCaddiesByPrimaryTeam,
+  teamStatusSummary,
   type AdminOpsCaddyRow,
   type AdminOpsDashboardPayload,
   type AdminOpsDutyGroup,
@@ -168,35 +169,55 @@ export function AdminOpsTeamBoardSkeleton() {
 
 export function AdminOpsTeamBoard({
   groups,
+  expandedTeams,
+  onToggleTeam,
 }: {
   groups: readonly AdminOpsTeamGroup[];
+  expandedTeams?: ReadonlySet<string>;
+  onToggleTeam?: (team: string) => void;
 }) {
   if (groups.length === 0) {
     return <p className="dash-empty">표시할 캐디가 없습니다.</p>;
   }
+  const collapseEnabled = expandedTeams !== undefined;
   return (
     <div className="dash-team-board">
-      {groups.map((group) => (
-        <section
-          key={group.team}
-          className="dash-team-col"
-          data-team={group.team}
-        >
-          <header className="dash-team-col-head">
-            <h3 className="dash-team-col-title">{group.team}</h3>
-            <span className="dash-team-col-count">{group.rows.length}</span>
-          </header>
-          {group.rows.length === 0 ? (
-            <p className="dash-team-empty">—</p>
-          ) : (
-            <ul className="dash-team-list">
-              {group.rows.map((row) => (
-                <TeamBoardPerson key={row.id} row={row} />
-              ))}
-            </ul>
-          )}
-        </section>
-      ))}
+      {groups.map((group) => {
+        const expanded = !collapseEnabled || expandedTeams.has(group.team);
+        const summary = teamStatusSummary(group.rows);
+        return (
+          <section
+            key={group.team}
+            className={`dash-team-col${expanded ? "" : " is-collapsed"}`}
+            data-team={group.team}
+            data-expanded={expanded ? "true" : "false"}
+          >
+            <button
+              type="button"
+              className="dash-team-col-head"
+              onClick={() => onToggleTeam?.(group.team)}
+              aria-expanded={expanded}
+              disabled={!onToggleTeam}
+            >
+              <h3 className="dash-team-col-title">{group.team}</h3>
+              <span className="dash-team-col-count">{group.rows.length}</span>
+            </button>
+            {expanded ? (
+              group.rows.length === 0 ? (
+                <p className="dash-team-empty">—</p>
+              ) : (
+                <ul className="dash-team-list">
+                  {group.rows.map((row) => (
+                    <TeamBoardPerson key={row.id} row={row} />
+                  ))}
+                </ul>
+              )
+            ) : (
+              <p className="dash-team-summary">{summary || "—"}</p>
+            )}
+          </section>
+        );
+      })}
     </div>
   );
 }
@@ -207,6 +228,8 @@ export default function AdminOpsDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [openedTeams, setOpenedTeams] = useState<string[]>([]);
+  const [collapsedTeams, setCollapsedTeams] = useState<string[]>([]);
   const loadGen = useRef(0);
   const initial = loading && !data;
   const staleDate = isStaleDashboardDate(data?.date, date);
@@ -251,11 +274,31 @@ export default function AdminOpsDashboard() {
     void load(date);
   }, [date, load]);
 
+  useEffect(() => {
+    setOpenedTeams([]);
+    setCollapsedTeams([]);
+  }, [date]);
+
+  useEffect(() => {
+    setCollapsedTeams([]);
+  }, [query]);
+
   const visible = useMemo(
     () => (data ? filterDashboardCaddies(data.caddies, query) : []),
     [data, query]
   );
   const teamGroups = useMemo(() => groupCaddiesByPrimaryTeam(visible), [visible]);
+  const searching = query.trim().length > 0;
+  const expandedTeams = useMemo(() => {
+    const next = new Set(openedTeams);
+    if (searching) {
+      for (const group of teamGroups) {
+        if (group.rows.length > 0) next.add(group.team);
+      }
+    }
+    for (const team of collapsedTeams) next.delete(team);
+    return next;
+  }, [openedTeams, searching, teamGroups, collapsedTeams]);
 
   return (
     <div className="dash ops-dash" aria-busy={loading || undefined} data-date={date}>
@@ -406,7 +449,19 @@ export default function AdminOpsDashboard() {
         {initial ? (
           <AdminOpsTeamBoardSkeleton />
         ) : data ? (
-          <AdminOpsTeamBoard groups={teamGroups} />
+          <AdminOpsTeamBoard
+            groups={teamGroups}
+            expandedTeams={expandedTeams}
+            onToggleTeam={(team) => {
+              const isOpen = expandedTeams.has(team);
+              setOpenedTeams((cur) =>
+                isOpen ? cur.filter((item) => item !== team) : [...cur, team]
+              );
+              setCollapsedTeams((cur) =>
+                isOpen ? [...cur.filter((item) => item !== team), team] : cur.filter((item) => item !== team)
+              );
+            }}
+          />
         ) : null}
       </section>
 

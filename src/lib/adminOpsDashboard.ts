@@ -274,6 +274,37 @@ export function matchesCaddyNameQuery(name: string, query: string): boolean {
   return String(name ?? "").toLowerCase().includes(q);
 }
 
+const TONE_SUMMARY_LABEL: Record<AdminOpsStatusTone, string> = {
+  available: "가용",
+  off: "휴무",
+  sick: "병가",
+  duty: "당번",
+  marshal: "마샬",
+  leader: "조장",
+  other: "제외",
+};
+
+export function teamStatusSummary(rows: readonly AdminOpsCaddyRow[]): string {
+  if (rows.length === 0) return "";
+  const counts = new Map<AdminOpsStatusTone, number>();
+  for (const row of rows) {
+    counts.set(row.statusTone, (counts.get(row.statusTone) ?? 0) + 1);
+  }
+  const order: AdminOpsStatusTone[] = [
+    "available",
+    "off",
+    "sick",
+    "duty",
+    "marshal",
+    "leader",
+    "other",
+  ];
+  return order
+    .filter((tone) => (counts.get(tone) ?? 0) > 0)
+    .map((tone) => `${TONE_SUMMARY_LABEL[tone]} ${counts.get(tone)}`)
+    .join(" · ");
+}
+
 export function filterDashboardCaddies(
   rows: readonly AdminOpsCaddyRow[],
   query: string
