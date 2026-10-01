@@ -965,6 +965,18 @@ section("source guards: API / UI / migration / live save order");
   );
 
   assert(/1500/.test(page) && /queueDraftSave/.test(page), "1.5s debounce autosave");
+  assert(
+    /assignmentsDateFromSearch/.test(page) && /replaceAssignmentsDateUrl/.test(page),
+    "assignments date stays in URL search"
+  );
+  assert(
+    /pagehide/.test(page) && /visibilitychange/.test(page) && /decideDraftLeaveFlush/.test(page),
+    "pending draft flushes on pagehide/visibility"
+  );
+  assert(
+    /keepalive:\s*false/.test(page.split("async function putAssignmentDraft")[1] || ""),
+    "draft PUT does not use keepalive"
+  );
   assert(/저장 중…/.test(page), "saving UI");
   assert(/자동 저장됨/.test(page), "saved UI");
   assert(/저장 실패 · 다시 시도/.test(page), "error retry UI");
