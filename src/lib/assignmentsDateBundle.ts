@@ -14,6 +14,7 @@ import {
 } from "@/lib/availabilityService";
 import {
   getDailyBoardDraft,
+  mapUnavailablePanelRows,
   type DailyBoardDraftRecord,
   type UnavailablePanelSourceRow,
 } from "@/lib/dailyBoardDraftService";
@@ -202,21 +203,6 @@ function dateKey(ymd: string): Date {
   return parseYmd(ymd).start;
 }
 
-function mapUnavailablePanelRows(
-  rows: UnavailableRawRow[]
-): UnavailablePanelSourceRow[] {
-  return rows
-    .map((row) => ({
-      caddyId: Number(row.caddyId),
-      name: String(row.caddy?.name || "").trim(),
-      team: String(row.caddy?.team || "").trim(),
-      reason: String(row.reason || ""),
-      employmentStatus: String(row.caddy?.employmentStatus || ""),
-    }))
-    .filter(
-      (row) => Number.isInteger(row.caddyId) && row.caddyId > 0
-    );
-}
 
 function mapUnavailableFromShift(
   rows: UnavailableRawRow[]
@@ -373,14 +359,32 @@ async function timed<T>(
   }
 }
 
+export type AssignmentsDateBundleLoaders = {
+  loadAvailability?: typeof loadAvailabilityForDate;
+  resolveOpsDuty?: typeof resolveOpsDutyReadOnly;
+  resolveThirdWeekly?: typeof resolveThirdWeeklyStart;
+  buildSpecialDuties?: typeof buildDailySpecialDutyPayload;
+  buildSpecialSupports?: typeof buildDailySpecialSupportPayload;
+  previewPush?: typeof previewBoardPush;
+};
+
 export async function loadAssignmentsDateBundle(
   ymd: string,
-  ctx: AssignmentsDateReadContext = createAssignmentsDateReadContext(ymd)
+  ctx: AssignmentsDateReadContext = createAssignmentsDateReadContext(ymd),
+  loaders: AssignmentsDateBundleLoaders = {}
 ): Promise<AssignmentsDateBundlePayload> {
   parseYmd(ymd);
   const started = Date.now();
   const timings: Record<string, number> = {};
   const errors: AssignmentsDateBundlePayload["errors"] = {};
+  const loadAvailability = loaders.loadAvailability ?? loadAvailabilityForDate;
+  const resolveOpsDuty = loaders.resolveOpsDuty ?? resolveOpsDutyReadOnly;
+  const resolveThirdWeekly = loaders.resolveThirdWeekly ?? resolveThirdWeeklyStart;
+  const buildSpecialDuties =
+    loaders.buildSpecialDuties ?? buildDailySpecialDutyPayload;
+  const buildSpecialSupports =
+    loaders.buildSpecialSupports ?? buildDailySpecialSupportPayload;
+  const previewPush = loaders.previewPush ?? previewBoardPush;
 
   const draftP = timed(timings, "draftMs", async () => {
     const [draft, unavailableFromShift, unavailableRows] = await Promise.all([
@@ -397,7 +401,7 @@ export async function loadAssignmentsDateBundle(
   });
 
   const availabilityP = timed(timings, "availabilityMs", () =>
-    loadAvailabilityForDate(ymd, {
+    loadAvailability(ymd, {
       listCaddies: () => ctx.listCaddies(),
       listOffOverrides: () => ctx.listOffOverrides(),
       listUnavailables: () => ctx.listUnavailablePanelRows(),
@@ -410,7 +414,7 @@ export async function loadAssignmentsDateBundle(
   );
 
   const opsDutyP = timed(timings, "opsDutyMs", async () => {
-    const resolved = await resolveOpsDutyReadOnly(ymd, {
+    const resolved = await resolveOpsDuty(ymd, {
       listDuties: () => ctx.listOpsDuties(),
     });
     const [caddies, overrides] = await Promise.all([
@@ -459,15 +463,15 @@ export async function loadAssignmentsDateBundle(
   });
 
   const thirdWeeklyP = timed(timings, "thirdWeeklyStartMs", () =>
-    resolveThirdWeeklyStart(ymd)
+    resolveThirdWeekly(ymd)
   );
   const publishedP = timed(timings, "publishedMs", () => ctx.getPublished());
   const specialDutiesP = timed(timings, "specialDutiesMs", async () => {
     const caddies = await ctx.listCaddies();
-    return buildDailySpecialDutyPayload(ymd, { caddies });
+    return buildSpecialDuties(ymd, { caddies });
   });
   const specialSupportsP = timed(timings, "specialSupportsMs", () =>
-    buildDailySpecialSupportPayload(ymd)
+    buildSpecialSupports(ymd)
   );
 
   const boardPreviewP = timed(timings, "boardPreviewMs", async () => {
@@ -475,7 +479,7 @@ export async function loadAssignmentsDateBundle(
       ctx.getPublished(),
       ctx.getDraft(),
     ]);
-    return previewBoardPush(prisma, ymd, {
+    return previewPush(prisma, ymd, {
       published,
       currentDraftVersion: draft?.version ?? null,
     });
