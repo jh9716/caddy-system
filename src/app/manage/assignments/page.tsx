@@ -43,8 +43,8 @@ import {
   isDirectEditVacant,
   overlayUnassignedVacancies,
 } from "@/lib/assignmentBoardCellEdit";
-import { BoardExcelExportButton } from "@/components/board/BoardExcelExportButton";
-import { BoardImageExportMenu } from "@/components/board/BoardImageExportMenu";
+import { LazyBoardExcelExportButton } from "@/components/board/LazyBoardExcelExportButton";
+import { LazyBoardImageExportMenu } from "@/components/board/LazyBoardImageExportMenu";
 import { formatCaddyLabel, caddyAffiliation } from "@/lib/caddyDisplay";
 import {
   formatPublishedAt,
@@ -4408,8 +4408,8 @@ export default function ManageAssignmentsOpsPage() {
                   직접편집 {cellEditOn ? "ON" : "OFF"}
                 </button>
                 <div className="ops-board-tools-end">
-                  <BoardImageExportMenu draft={draft} onNotice={showToast} />
-                  <BoardExcelExportButton draft={draft} onNotice={showToast} />
+                  <LazyBoardImageExportMenu draft={draft} onNotice={showToast} />
+                  <LazyBoardExcelExportButton draft={draft} onNotice={showToast} />
                   <button
                     type="button"
                     className="ops-add-team"

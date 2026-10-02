@@ -5,7 +5,7 @@
  * DB·Spreadsheet write 없음.
  */
 
-import * as XLSX from "xlsx";
+import type { RowInfo, WorkBook, WorkSheet } from "xlsx";
 import {
   BOARD_EXPORT_COURSE_LABELS,
   BOARD_EXPORT_SHIFTS,
@@ -63,6 +63,11 @@ const SUPPORT_PATTERN_TAG: Partial<Record<DailySpecialSupportWorkPattern, string
 
 export function boardExportXlsxFilename(date: string): string {
   return `VERTHILL_배치표_${date}.xlsx`;
+}
+
+/** Client Excel 버튼 클릭 전에만 로드. 서버 Sheet fetch 경로와 분리. */
+export function loadBoardExportXlsx() {
+  return import("xlsx");
 }
 
 /** 서버 응답용. 클라이언트 <a download>와 같은 파일명을 RFC5987로 인코딩한다. */
@@ -152,7 +157,7 @@ function sliceToAoa(slice: BoardExportSlice): unknown[][] {
   return aoa;
 }
 
-function applySheetLayout(ws: XLSX.WorkSheet, dataRowCount: number) {
+function applySheetLayout(ws: WorkSheet, dataRowCount: number) {
   ws["!cols"] = [
     { wch: 10 },
     { wch: 18 },
@@ -160,7 +165,7 @@ function applySheetLayout(ws: XLSX.WorkSheet, dataRowCount: number) {
     { wch: 18 },
     { wch: 18 },
   ];
-  const rows: XLSX.RowInfo[] = [
+  const rows: RowInfo[] = [
     { hpt: 22 },
     { hpt: 18 },
     { hpt: 18 },
@@ -187,7 +192,10 @@ function applySheetLayout(ws: XLSX.WorkSheet, dataRowCount: number) {
   delete ws["!protect"];
 }
 
-export function buildBoardExportWorkbook(draft: AssignmentDraft): XLSX.WorkBook {
+export async function buildBoardExportWorkbook(
+  draft: AssignmentDraft
+): Promise<WorkBook> {
+  const XLSX = await loadBoardExportXlsx();
   const wb = XLSX.utils.book_new();
   wb.Props = {
     Title: BOARD_XLSX_TITLE,
@@ -219,8 +227,11 @@ function toUint8Array(out: unknown): Uint8Array {
   throw new Error("xlsx 버퍼를 만들지 못했습니다.");
 }
 
-export function writeBoardExportXlsxBytes(draft: AssignmentDraft): Uint8Array {
-  const wb = buildBoardExportWorkbook(draft);
+export async function writeBoardExportXlsxBytes(
+  draft: AssignmentDraft
+): Promise<Uint8Array> {
+  const XLSX = await loadBoardExportXlsx();
+  const wb = await buildBoardExportWorkbook(draft);
   const out = XLSX.write(wb, {
     bookType: "xlsx",
     type: "array",
@@ -249,9 +260,10 @@ function cellString(value: unknown): string {
   return String(value);
 }
 
-export function parseBoardExportWorkbook(
+export async function parseBoardExportWorkbook(
   data: Uint8Array | ArrayBuffer | Buffer
-): ParsedBoardExcelSheet[] {
+): Promise<ParsedBoardExcelSheet[]> {
+  const XLSX = await loadBoardExportXlsx();
   const buf =
     data instanceof Uint8Array
       ? Buffer.from(data)

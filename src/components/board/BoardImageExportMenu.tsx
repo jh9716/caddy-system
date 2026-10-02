@@ -13,6 +13,7 @@ import {
   canShareBoardPngFiles,
   downloadBoardPngFilesSequentially,
   exportAndDownloadShiftPng,
+  loadHtmlToImage,
   makeBoardExportPngFile,
   renderBoardExportPng,
   shareBoardPngFiles,
@@ -26,11 +27,13 @@ type ExportMode = "download" | "share";
 export function BoardImageExportMenu({
   draft,
   onNotice,
+  defaultOpen = false,
 }: {
   draft: AssignmentDraft;
   onNotice: (msg: string) => void;
+  defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const [mode, setMode] = useState<ExportMode | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -140,11 +143,15 @@ export function BoardImageExportMenu({
         aria-expanded={open}
         aria-haspopup="menu"
         onClick={() => {
-          setOpen((v) => !v);
+          setOpen((v) => {
+            const next = !v;
+            if (next) void loadHtmlToImage();
+            return next;
+          });
           setMode(null);
         }}
       >
-        {busy ? "이미지…" : "이미지"}
+        {busy ? "준비 중…" : "이미지"}
       </button>
       {open ? (
         <div className="bx-export-pop" role="menu">
