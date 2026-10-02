@@ -3,10 +3,10 @@
  * DailyOpsSnapshot 의미/오늘 overwrite 없음. schema 변경 없음.
  */
 
-import { OFF_SHEET_CACHE_MS } from "@/lib/offSheetFetch";
 import type { AdminOpsDashboardView } from "@/lib/dailyOpsSnapshot";
 
-export const DASHBOARD_SHEET_FRESH_MS = OFF_SHEET_CACHE_MS;
+/** Keep aligned with OFF_SHEET_CACHE_MS. Do not import offSheetFetch here (client-safe). */
+export const DASHBOARD_SHEET_FRESH_MS = 45_000;
 
 export type DashboardFreshness = "fresh" | "refreshing" | "stale" | "error";
 

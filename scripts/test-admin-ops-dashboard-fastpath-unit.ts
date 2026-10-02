@@ -361,6 +361,11 @@ section("wiring / no date-bundle / snapshot untouched");
   assert(/if \(existing\)/.test(snap), "snapshot write-once");
   assert(!assignments.includes("adminOpsDashboardFastPath"), "assignments page untouched by fast path");
   assert(!bundle.includes("adminOpsDashboardFastPath"), "date-bundle untouched");
+  assert(!ui.includes("offSheetFetch") && !ui.includes("adminOpsDashboardFastPath"), "dashboard UI stays client-safe");
+  assert(
+    !/from ["']@\/lib\/offSheetFetch["']/.test(readSrc("src/lib/adminOpsDashboardFreshness.ts")),
+    "freshness module stays client-safe"
+  );
   assert(!/prisma\.(create|update|upsert|delete)/.test(source), "dashboard source no prisma write");
   const dbFirst = await loadAdminOpsDashboardDbFirst(DATE_A, {
     listRoster: async () => roster,
