@@ -71,8 +71,10 @@ section("auth-first in both GET routes");
   assert(authBeforeEtag(report, "requireCourseReportReader"), "report auth before etag");
   assert(notice.includes("loadNoticePhotoMeta"), "notice DB meta before blob");
   assert(report.includes("loadCourseReportPhotoMeta"), "report DB meta before blob");
-  assert(notice.includes("readNoticePhotoBytes"), "notice blob only on 200");
-  assert(report.includes("readCourseReportPhotoBytes"), "report blob only on 200");
+  assert(notice.includes("openNoticePhotoBody"), "notice blob only on 200");
+  assert(report.includes("openCourseReportPhotoBody"), "report blob only on 200");
+  assert(notice.includes("photoObjectToResponseBody"), "notice streams body");
+  assert(report.includes("photoObjectToResponseBody"), "report streams body");
   assert(notice.includes('status: 304'), "notice 304");
   assert(report.includes('status: 304'), "report 304");
   assert(notice.includes("privatePhotoCacheHeaders"), "notice shared cache headers");
@@ -88,6 +90,9 @@ section("blob get stays uncached on 200 miss");
 {
   const storage = read("src/lib/courseReportPhotoStorage.ts");
   assert(storage.includes("useCache: false"), "200 path still useCache false");
+  assert(storage.includes("async open"), "blob open is official stream");
+  assert(/return result\.stream/.test(storage), "open returns SDK stream");
+  assert(!/async open[\s\S]*arrayBuffer/.test(storage), "open does not buffer");
 }
 
 section("no Next/Image / no schema width");
@@ -100,8 +105,10 @@ section("no Next/Image / no schema width");
   assert(!report.includes("next/image"), "report no next/image");
   const photoModel = schema.split("model NoticePhoto")[1]?.split("model ")[0] ?? "";
   assert(!/\bwidth\b/.test(photoModel.replace(/\/\/[^\n]*/g, "")), "no NoticePhoto width");
-  assert(client.includes("COURSE_REPORT_PHOTO_LONG_EDGE"), "upload long-edge unchanged");
+  assert(client.includes("COURSE_REPORT_PHOTO_LONG_EDGE"), "upload uses shared long-edge");
   assert(client.includes("COURSE_REPORT_PHOTO_JPEG_QUALITY"), "upload quality unchanged");
+  assert(read("src/lib/courseReportPhotoConstants.ts").includes("COURSE_REPORT_PHOTO_LONG_EDGE = 1200"), "new uploads 1200");
+  assert(read("src/lib/courseReportPhotoConstants.ts").includes("COURSE_REPORT_PHOTO_JPEG_QUALITY = 0.8"), "quality stays 0.8");
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

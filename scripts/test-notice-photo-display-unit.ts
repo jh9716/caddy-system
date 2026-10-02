@@ -1,6 +1,6 @@
 /**
  * Notice detail photos must show the full original, no crop.
- * Reserved 4/3 box is allowed. List has no image thumbs.
+ * Native aspect, full width. No fake 4/3 box. List has no image thumbs.
  * 실행: npm run test:notice-photo-display-unit
  */
 import fs from "node:fs";
@@ -45,8 +45,9 @@ section("detail gallery is uncropped");
   assert(!gallery.includes("course-report-photo-"), "does not reuse report crop classes");
   assert(!gallery.includes('object-fit: "cover"'), "component has no cover");
   assert(noticeCss.includes("width: 100%"), "item/img width 100%");
+  assert(/\.notice-photos-item img\s*\{[^}]*height:\s*auto/.test(noticeCss), "img height auto");
   assert(/\.notice-photos-item img\s*\{[^}]*object-fit:\s*contain/.test(noticeCss), "img contain");
-  assert(/\.notice-photos-item\s*\{[^}]*aspect-ratio:\s*4\s*\/\s*3/.test(noticeCss), "reserved 4/3 box");
+  assert(!/\.notice-photos-item\s*\{[^}]*aspect-ratio:/.test(noticeCss), "no fake reserved ratio");
   assert(!noticeCss.includes("object-fit: cover"), "no cover crop");
   assert(!noticeCss.includes("max-height:") || noticeCss.includes(".notice-photos-lightbox"), "detail list has no max-height crop");
 }

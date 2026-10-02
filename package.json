@@ -146,6 +146,9 @@
     "test:notice-photo-unit": "bash scripts/tsx-safe.sh scripts/test-notice-photo-unit.ts",
     "test:notice-photo-display-unit": "bash scripts/tsx-safe.sh scripts/test-notice-photo-display-unit.ts",
     "test:photo-http-cache-unit": "bash scripts/tsx-safe.sh scripts/test-photo-http-cache-unit.ts",
+    "test:image-header-size-unit": "bash scripts/tsx-safe.sh scripts/test-image-header-size-unit.ts",
+    "test:photo-stream-unit": "bash scripts/tsx-safe.sh scripts/test-photo-stream-unit.ts",
+    "measure:photo-ux-chromium": "bash scripts/tsx-safe.sh scripts/measure-photo-ux-chromium.ts",
     "compute:android-kakao-debug-key-hash": "bash scripts/tsx-safe.sh scripts/compute-android-kakao-debug-key-hash.ts",
     "native:sync:android": "npx cap sync android"
   },

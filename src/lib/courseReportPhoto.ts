@@ -288,7 +288,7 @@ export async function loadCourseReportPhotoMeta(
   return photo;
 }
 
-export async function readCourseReportPhotoBytes(storageKey: string): Promise<Uint8Array> {
+export async function openCourseReportPhotoBody(storageKey: string) {
   const store = getCourseReportPhotoStore();
   if (!store.configured) {
     throw new CourseReportPhotoStorageError(
@@ -297,11 +297,17 @@ export async function readCourseReportPhotoBytes(storageKey: string): Promise<Ui
       503
     );
   }
-  const bytes = await store.get(storageKey);
-  if (!bytes) {
+  const body = store.open ? await store.open(storageKey) : await store.get(storageKey);
+  if (!body) {
     throw new CourseReportPhotoValidationError("not_found", "사진을 찾을 수 없습니다.", 404);
   }
-  return bytes;
+  return body;
+}
+
+export async function readCourseReportPhotoBytes(storageKey: string): Promise<Uint8Array> {
+  const body = await openCourseReportPhotoBody(storageKey);
+  if (body instanceof Uint8Array) return body;
+  return new Uint8Array(await new Response(body).arrayBuffer());
 }
 
 export async function loadCourseReportPhotoBytes(
