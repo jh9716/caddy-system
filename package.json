@@ -48,6 +48,7 @@
     "test:course-report-comment-unit": "bash scripts/tsx-safe.sh scripts/test-course-report-comment-unit.ts",
     "test:board-comment-unit": "bash scripts/tsx-safe.sh scripts/test-board-comment-unit.ts",
     "test:member-shell-unit": "bash scripts/tsx-safe.sh scripts/test-member-shell-unit.ts",
+    "test:caddy-dashboard-v2-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-dashboard-v2-unit.ts",
     "test:pwa-sw-cache-preserve-chromium": "bash scripts/tsx-safe.sh scripts/test-pwa-sw-cache-preserve-chromium.ts",
     "test:caddy-display-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-display-unit.ts",
     "test:login-unit": "bash scripts/tsx-safe.sh scripts/test-login-session-unit.ts",
