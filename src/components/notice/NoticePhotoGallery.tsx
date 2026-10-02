@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { RevealedPhoto } from "@/components/photo/RevealedPhoto";
 import type { NoticePhotoPublic } from "@/lib/noticePhotoConstants";
 import { noticePhotoSrc } from "@/lib/noticePhotoConstants";
 
@@ -18,15 +19,18 @@ export default function NoticePhotoGallery({
   return (
     <div className="notice-photos">
       <div className="notice-photos-list">
-        {photos.map((photo) => (
+        {photos.map((photo, index) => (
           <button
             key={photo.id}
             type="button"
             className="notice-photos-item"
             onClick={() => setOpenId(photo.id)}
           >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={noticePhotoSrc(noticeId, photo.id)} alt="" />
+            <RevealedPhoto
+              src={noticePhotoSrc(noticeId, photo.id)}
+              fetchPriority={index === 0 ? "high" : "auto"}
+              loading={index === 0 ? "eager" : "lazy"}
+            />
           </button>
         ))}
       </div>
@@ -37,8 +41,7 @@ export default function NoticePhotoGallery({
           onClick={() => setOpenId(null)}
           aria-label="닫기"
         >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={noticePhotoSrc(noticeId, open.id)} alt="" />
+          <RevealedPhoto src={noticePhotoSrc(noticeId, open.id)} />
         </button>
       ) : null}
     </div>

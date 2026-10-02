@@ -2504,6 +2504,7 @@ a {
 .notice-photos-item {
   display: block;
   width: 100%;
+  aspect-ratio: 4 / 3;
   padding: 0;
   border: 1px solid var(--vh-border);
   border-radius: var(--vh-radius-sm);
@@ -2514,8 +2515,14 @@ a {
 .notice-photos-item img {
   display: block;
   width: 100%;
-  height: auto;
+  height: 100%;
   object-fit: contain;
+  opacity: 0;
+  transition: opacity 180ms ease-out;
+}
+
+.notice-photos-item img.is-revealed {
+  opacity: 1;
 }
 
 .notice-photos-lightbox {
@@ -2537,6 +2544,12 @@ a {
   height: auto;
   object-fit: contain;
   border-radius: 8px;
+  opacity: 0;
+  transition: opacity 180ms ease-out;
+}
+
+.notice-photos-lightbox img.is-revealed {
+  opacity: 1;
 }
 
 .notice-back {
@@ -3064,6 +3077,14 @@ body.manage-mode .vh-auth-frame {
   height: 100%;
   object-fit: cover;
   display: block;
+  opacity: 0;
+  transition: opacity 180ms ease-out;
+}
+
+.course-report-photo-thumb img.is-revealed,
+.course-report-photo-item img.is-revealed,
+.course-report-photo-lightbox img.is-revealed {
+  opacity: 1;
 }
 
 .course-report-photo-composer {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { RevealedPhoto } from "@/components/photo/RevealedPhoto";
 import type { CourseReportPhotoPublic } from "@/lib/courseReportPhotoConstants";
 import { courseReportPhotoSrc } from "@/lib/courseReportPhotoConstants";
 
@@ -20,17 +21,17 @@ export default function CourseReportPhotoGallery({
       <div
         className={`course-report-photo-grid is-${Math.min(photos.length, 3)}`}
       >
-        {photos.map((photo) => (
+        {photos.map((photo, index) => (
           <button
             key={photo.id}
             type="button"
             className="course-report-photo-thumb"
             onClick={() => setOpenId(photo.id)}
           >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
+            <RevealedPhoto
               src={courseReportPhotoSrc(reportId, photo.id)}
-              alt=""
+              fetchPriority={index === 0 ? "high" : "auto"}
+              loading={index === 0 ? "eager" : "lazy"}
             />
           </button>
         ))}
@@ -42,8 +43,7 @@ export default function CourseReportPhotoGallery({
           onClick={() => setOpenId(null)}
           aria-label="닫기"
         >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={courseReportPhotoSrc(reportId, open.id)} alt="" />
+          <RevealedPhoto src={courseReportPhotoSrc(reportId, open.id)} />
         </button>
       ) : null}
     </div>

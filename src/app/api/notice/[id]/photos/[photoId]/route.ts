@@ -8,7 +8,16 @@ import {
   requireNoticeAdmin,
   requireNoticeReader,
 } from "@/lib/noticeAccess";
-import { deleteNoticePhoto, loadNoticePhotoBytes } from "@/lib/noticePhoto";
+import {
+  deleteNoticePhoto,
+  loadNoticePhotoMeta,
+  readNoticePhotoBytes,
+} from "@/lib/noticePhoto";
+import {
+  buildPrivatePhotoETag,
+  ifNoneMatchContains,
+  privatePhotoCacheHeaders,
+} from "@/lib/privatePhotoCache";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -46,18 +55,22 @@ export async function GET(
 
   try {
     const viewer = await loadNoticeViewer(prisma, auth);
-    const { mimeType, bytes } = await loadNoticePhotoBytes(prisma, {
+    const photo = await loadNoticePhotoMeta(prisma, {
       noticeId,
       photoId,
       viewer,
     });
+    const etag = buildPrivatePhotoETag("n", photo);
+    if (ifNoneMatchContains(req.headers.get("if-none-match"), etag)) {
+      return new NextResponse(null, {
+        status: 304,
+        headers: privatePhotoCacheHeaders(etag),
+      });
+    }
+    const bytes = await readNoticePhotoBytes(photo.storageKey);
     return new NextResponse(Buffer.from(bytes), {
       status: 200,
-      headers: {
-        "Content-Type": mimeType,
-        "Cache-Control": "private, max-age=60",
-        "X-Content-Type-Options": "nosniff",
-      },
+      headers: privatePhotoCacheHeaders(etag, photo.mimeType),
     });
   } catch (e) {
     if (e instanceof CourseReportPhotoValidationError || e instanceof CourseReportPhotoStorageError) {
