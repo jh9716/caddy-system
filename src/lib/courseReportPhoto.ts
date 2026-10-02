@@ -265,10 +265,10 @@ export async function deleteCourseReportPhoto(
   }
 }
 
-export async function loadCourseReportPhotoBytes(
+export async function loadCourseReportPhotoMeta(
   db: PrismaClient,
   input: { reportId: number; photoId: number }
-): Promise<{ mimeType: string; bytes: Uint8Array }> {
+): Promise<CourseReportPhoto> {
   const report = await db.courseReport.findFirst({
     where: { id: input.reportId, deletedAt: null },
   });
@@ -285,6 +285,10 @@ export async function loadCourseReportPhotoBytes(
   if (!photo || photo.reportId !== input.reportId) {
     throw new CourseReportPhotoValidationError("not_found", "사진을 찾을 수 없습니다.", 404);
   }
+  return photo;
+}
+
+export async function readCourseReportPhotoBytes(storageKey: string): Promise<Uint8Array> {
   const store = getCourseReportPhotoStore();
   if (!store.configured) {
     throw new CourseReportPhotoStorageError(
@@ -293,9 +297,18 @@ export async function loadCourseReportPhotoBytes(
       503
     );
   }
-  const bytes = await store.get(photo.storageKey);
+  const bytes = await store.get(storageKey);
   if (!bytes) {
     throw new CourseReportPhotoValidationError("not_found", "사진을 찾을 수 없습니다.", 404);
   }
+  return bytes;
+}
+
+export async function loadCourseReportPhotoBytes(
+  db: PrismaClient,
+  input: { reportId: number; photoId: number }
+): Promise<{ mimeType: string; bytes: Uint8Array }> {
+  const photo = await loadCourseReportPhotoMeta(db, input);
+  const bytes = await readCourseReportPhotoBytes(photo.storageKey);
   return { mimeType: photo.mimeType, bytes };
 }

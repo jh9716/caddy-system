@@ -113,7 +113,15 @@ async function main() {
   assertLocalDatabaseUrl(process.env.DATABASE_URL);
   const prevSecret = process.env.SESSION_SECRET;
   process.env.SESSION_SECRET = "notice-photo-unit-secret-32chars!!!";
-  setCourseReportPhotoStoreForTests(createMemoryCourseReportPhotoStore());
+  const mem = createMemoryCourseReportPhotoStore();
+  let blobGets = 0;
+  setCourseReportPhotoStoreForTests({
+    ...mem,
+    async get(key) {
+      blobGets += 1;
+      return mem.get(key);
+    },
+  });
 
   const tag = `np_${Date.now()}`;
   const hash = await bcrypt.hash("x", 4);
@@ -192,6 +200,45 @@ async function main() {
       );
       assert(got.status === 200, "caddy can read visible notice photo");
       assert(got.headers.get("content-type") === "image/jpeg", "jpeg content-type");
+      assert(got.headers.get("cache-control") === "private, no-cache", "private no-cache");
+      const etag = got.headers.get("etag");
+      assert(Boolean(etag) && etag?.startsWith('"n'), "etag from notice metadata");
+      assert(!String(etag).includes("notices/"), "etag does not leak storageKey");
+
+      const getsBefore = blobGets;
+      const cached = await GET_PHOTO(
+        req(
+          `https://www.verthill.kr/api/notice/${createdJson.id}/photos/${firstJson.photo.id}`,
+          { headers: { cookie: caddyCookie, "if-none-match": etag } }
+        ),
+        { params: { id: String(createdJson.id), photoId: String(firstJson.photo.id) } }
+      );
+      assert(cached.status === 304, "matching etag 304 after auth");
+      assert((await cached.arrayBuffer()).byteLength === 0, "304 body empty");
+      assert(cached.headers.get("etag") === etag, "304 repeats etag");
+      assert(cached.headers.get("cache-control") === "private, no-cache", "304 keeps no-cache");
+      assert(blobGets === getsBefore, "304 does not Blob get");
+
+      const stale = await GET_PHOTO(
+        req(
+          `https://www.verthill.kr/api/notice/${createdJson.id}/photos/${firstJson.photo.id}`,
+          { headers: { cookie: caddyCookie, "if-none-match": '"n0-0-deadbeef"' } }
+        ),
+        { params: { id: String(createdJson.id), photoId: String(firstJson.photo.id) } }
+      );
+      assert(stale.status === 200, "mismatch etag 200");
+      assert((await stale.arrayBuffer()).byteLength > 0, "mismatch returns body");
+      assert(blobGets === getsBefore + 1, "mismatch Blob gets once");
+
+      const unauth304 = await GET_PHOTO(
+        req(
+          `https://www.verthill.kr/api/notice/${createdJson.id}/photos/${firstJson.photo.id}`,
+          { headers: { "if-none-match": etag } }
+        ),
+        { params: { id: String(createdJson.id), photoId: String(firstJson.photo.id) } }
+      );
+      assert(unauth304.status === 401, "unauth never 304");
+      assert(unauth304.status !== 304, "unauth status is not 304");
 
       const delDenied = await DELETE_PHOTO(
         req(
@@ -246,6 +293,22 @@ async function main() {
         { params: { id: String(futureJson.id), photoId: String(upJson.photo.id) } }
       );
       assert(hidden.status === 404, "caddy cannot read future notice photo");
+      const adminGot = await GET_PHOTO(
+        req(
+          `https://www.verthill.kr/api/notice/${futureJson.id}/photos/${upJson.photo.id}`,
+          { headers: { cookie: adminCookie } }
+        ),
+        { params: { id: String(futureJson.id), photoId: String(upJson.photo.id) } }
+      );
+      const futureEtag = adminGot.headers.get("etag") ?? "";
+      const hiddenCached = await GET_PHOTO(
+        req(
+          `https://www.verthill.kr/api/notice/${futureJson.id}/photos/${upJson.photo.id}`,
+          { headers: { cookie: caddyCookie, "if-none-match": futureEtag } }
+        ),
+        { params: { id: String(futureJson.id), photoId: String(upJson.photo.id) } }
+      );
+      assert(hiddenCached.status === 404, "hidden notice never 304 even with etag");
     }
 
     section("blob deleted on photo delete and notice delete");
@@ -574,9 +637,9 @@ async function main() {
       assert(!gallery.includes("course-report-photo-thumb"), "detail does not reuse cropped report thumb");
       assert(!gallery.includes("course-report-photo-lightbox"), "detail lightbox not report lightbox");
       assert(noticePhotoCss.includes("width: 100%"), "detail photo width 100%");
-      assert(noticePhotoCss.includes("height: auto"), "detail photo height auto");
-      assert(noticePhotoCss.includes("object-fit: contain"), "detail photo contain");
-      assert(!/\baspect-ratio\b/.test(noticePhotoCss), "detail photo CSS has no aspect-ratio");
+      assert(/\.notice-photos-item img\s*\{[^}]*object-fit:\s*contain/.test(noticePhotoCss), "detail photo contain");
+      assert(/\.notice-photos-item\s*\{[^}]*aspect-ratio:\s*4\s*\/\s*3/.test(noticePhotoCss), "detail reserves 4/3 box");
+      assert(!/\.notice-photos-item img\s*\{[^}]*object-fit:\s*cover/.test(noticePhotoCss), "item img is not cover");
       assert(
         !noticePhotoCss.includes("object-fit: cover"),
         "detail photo CSS does not crop with cover"

@@ -9,8 +9,14 @@ import { CourseReportPhotoValidationError } from "@/lib/courseReportPhotoMagic";
 import { CourseReportPhotoStorageError } from "@/lib/courseReportPhotoStorage";
 import {
   deleteCourseReportPhoto,
-  loadCourseReportPhotoBytes,
+  loadCourseReportPhotoMeta,
+  readCourseReportPhotoBytes,
 } from "@/lib/courseReportPhoto";
+import {
+  buildPrivatePhotoETag,
+  ifNoneMatchContains,
+  privatePhotoCacheHeaders,
+} from "@/lib/privatePhotoCache";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -47,17 +53,21 @@ export async function GET(
   }
 
   try {
-    const { mimeType, bytes } = await loadCourseReportPhotoBytes(prisma, {
+    const photo = await loadCourseReportPhotoMeta(prisma, {
       reportId,
       photoId,
     });
+    const etag = buildPrivatePhotoETag("r", photo);
+    if (ifNoneMatchContains(req.headers.get("if-none-match"), etag)) {
+      return new NextResponse(null, {
+        status: 304,
+        headers: privatePhotoCacheHeaders(etag),
+      });
+    }
+    const bytes = await readCourseReportPhotoBytes(photo.storageKey);
     return new NextResponse(Buffer.from(bytes), {
       status: 200,
-      headers: {
-        "Content-Type": mimeType,
-        "Cache-Control": "private, max-age=60",
-        "X-Content-Type-Options": "nosniff",
-      },
+      headers: privatePhotoCacheHeaders(etag, photo.mimeType),
     });
   } catch (e) {
     if (e instanceof CourseReportPhotoValidationError || e instanceof CourseReportPhotoStorageError) {
