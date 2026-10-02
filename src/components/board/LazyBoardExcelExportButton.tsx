@@ -2,13 +2,8 @@
 
 import { useState } from "react";
 import type { AssignmentDraft } from "@/lib/assignmentDraft";
-import {
-  boardExportXlsxFilename,
-  downloadBoardXlsxBytes,
-  writeBoardExportXlsxBytes,
-} from "@/lib/assignmentBoardExportXlsx";
 
-export function BoardExcelExportButton({
+export function LazyBoardExcelExportButton({
   draft,
   onNotice,
 }: {
@@ -21,9 +16,13 @@ export function BoardExcelExportButton({
     if (busy) return;
     setBusy(true);
     try {
+      const {
+        boardExportXlsxFilename,
+        downloadBoardXlsxBytes,
+        writeBoardExportXlsxBytes,
+      } = await import("@/lib/assignmentBoardExportXlsx");
       const bytes = await writeBoardExportXlsxBytes(draft);
-      const filename = boardExportXlsxFilename(draft.date);
-      downloadBoardXlsxBytes(bytes, filename);
+      downloadBoardXlsxBytes(bytes, boardExportXlsxFilename(draft.date));
       onNotice("Excel 배치표를 다운로드했습니다.");
     } catch (e) {
       onNotice(e instanceof Error ? e.message : "Excel 다운로드에 실패했습니다.");

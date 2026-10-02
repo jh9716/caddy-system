@@ -250,8 +250,8 @@ section("export가 Draft/DB write를 발생시키지 않음");
   assert(!/assignmentBoardExport/.test(engine), "autoAssignEngine 미변경");
   const boardPage = read("src/app/board/page.tsx");
   assert(
-    /BoardImageExportMenu/.test(page) &&
-      /BoardImageExportMenu/.test(boardPage) &&
+    /LazyBoardImageExportMenu/.test(page) &&
+      /LazyBoardImageExportMenu/.test(boardPage) &&
       /assignmentDraftFromPublishedPayload/.test(boardPage) &&
       /PNG 다운로드/.test(menu) &&
       /공유하기/.test(menu) &&
@@ -259,6 +259,12 @@ section("export가 Draft/DB write를 발생시키지 않음");
       /전체 PNG 다운로드/.test(menu) &&
       /전체 공유하기/.test(menu),
     "자동배치·최종 배치표 버튼"
+  );
+  assert(/import\("html-to-image"\)/.test(png), "html-to-image dynamic import");
+  assert(!/from "html-to-image"/.test(png), "html-to-image static import 없음");
+  assert(
+    !/from "@\/components\/board\/BoardImageExportMenu"/.test(boardPage),
+    "board 초기 그래프에 PNG menu 없음"
   );
   assert(!/붙여넣을 수 있습니다/.test(menu), "clipboard 안내 없음");
   assert(

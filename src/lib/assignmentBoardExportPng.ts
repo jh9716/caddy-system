@@ -4,7 +4,6 @@
 
 import { createRoot, type Root } from "react-dom/client";
 import { createElement } from "react";
-import { toPng } from "html-to-image";
 import { AssignmentBoardExportView } from "@/components/board/AssignmentBoardExportView";
 import {
   boardExportPngFilename,
@@ -14,6 +13,11 @@ import type { ShiftPart } from "@/lib/reservationParser";
 
 export const BOARD_EXPORT_PIXEL_RATIO = 2;
 export const BOARD_EXPORT_WIDTH_PX = 720;
+
+/** PNG 생성/메뉴 오픈 시에만 로드. 페이지 초기 bundle에서 제외. */
+export function loadHtmlToImage() {
+  return import("html-to-image");
+}
 
 function dataUrlToBlob(dataUrl: string): Blob {
   const [meta, b64] = dataUrl.split(",");
@@ -56,6 +60,7 @@ export async function renderBoardExportPng(slice: BoardExportSlice): Promise<Blo
     if (!(node instanceof HTMLElement)) {
       throw new Error("배치표 export DOM을 만들지 못했습니다.");
     }
+    const { toPng } = await loadHtmlToImage();
     const dataUrl = await toPng(node, {
       pixelRatio: BOARD_EXPORT_PIXEL_RATIO,
       backgroundColor: "#fbf7ee",

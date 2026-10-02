@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BoardImageExportMenu } from "@/components/board/BoardImageExportMenu";
+import { LazyBoardImageExportMenu } from "@/components/board/LazyBoardImageExportMenu";
 import PublishedBoardView from "@/components/board/PublishedBoardView";
 import BoardComments from "./BoardComments";
 import { assignmentDraftFromPublishedPayload } from "@/lib/assignmentBoardExport";
@@ -231,7 +231,7 @@ export default function PublishedBoardPage() {
               {published.date} · {formatPublishedAt(published.publishedAt)} 확정
             </p>
             {exportDraft && !staleBoard ? (
-              <BoardImageExportMenu draft={exportDraft} onNotice={setNotice} />
+              <LazyBoardImageExportMenu draft={exportDraft} onNotice={setNotice} />
             ) : null}
           </div>
           {notice && !staleBoard ? <p className="pub-notice">{notice}</p> : null}
