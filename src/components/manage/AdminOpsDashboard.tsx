@@ -2,15 +2,16 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
+  DASHBOARD_PENDING_STATUS_LABEL,
   OPS_DUTY_DASHBOARD_LABELS,
   filterDashboardCaddies,
   groupCaddiesByPrimaryTeam,
   type AdminOpsCaddyRow,
-  type AdminOpsDashboardPayload,
   type AdminOpsDutyGroup,
   type AdminOpsTeamGroup,
 } from "@/lib/adminOpsDashboard";
 import type { AdminOpsDashboardView } from "@/lib/dailyOpsSnapshot";
+import { isDashboardSheetFreshPayload } from "@/lib/adminOpsDashboardFreshness";
 import { formatCapturedAtKst } from "@/lib/kstDate";
 import type { DailyOpsDutyRole } from "@/lib/dailyOpsDuty";
 import { addDays } from "@/lib/krHolidays";
@@ -36,13 +37,27 @@ import {
 type DashboardResponse = AdminOpsDashboardView & { ok?: boolean; error?: string };
 
 export function dashboardSourceLine(
-  data: Pick<
+  data: (Pick<
     AdminOpsDashboardView,
     "source" | "snapshotAvailable" | "capturedAt" | "isPastDate" | "sourceQuality"
-  > | null
+  > &
+    Partial<
+      Pick<AdminOpsDashboardView, "freshness" | "sourceAsOf" | "sheetDerivedReady">
+    >) | null
 ): string {
   if (data?.source === "snapshot" && data.capturedAt) {
     return `저장된 운영기록 · ${formatCapturedAtKst(data.capturedAt)} 저장`;
+  }
+  if (data?.freshness === "error") {
+    return data.sourceAsOf
+      ? `최신 정보 확인 실패 · ${formatCapturedAtKst(data.sourceAsOf)} 기준 표시`
+      : "최신 정보 확인 실패";
+  }
+  if (data?.freshness === "refreshing" || data?.freshness === "stale") {
+    if (data.sourceAsOf) {
+      return `선택일 운영현황 · ${formatCapturedAtKst(data.sourceAsOf)} 기준 · 최신 확인 중…`;
+    }
+    return "선택일 운영현황 · 최신 확인 중…";
   }
   if (data?.isPastDate) {
     return "저장된 과거기록 없음 · 현재 자료 기준 재구성";
@@ -61,8 +76,8 @@ function todayYmd() {
   return `${y}-${m}-${day}`;
 }
 
-function formatNames(names: string[]): string {
-  if (names.length === 0) return "없음";
+function formatNames(names: string[], pending = false): string {
+  if (names.length === 0) return pending ? DASHBOARD_PENDING_STATUS_LABEL : "없음";
   return names.join(" · ");
 }
 
@@ -79,33 +94,43 @@ function dutyGroupOrEmpty(
   );
 }
 
-export function OpsDutyCell({ group }: { group: AdminOpsDutyGroup }) {
+export function OpsDutyCell({
+  group,
+  pending = false,
+}: {
+  group: AdminOpsDutyGroup;
+  pending?: boolean;
+}) {
   return (
-    <div className="dash-ops-cell" data-role={group.role}>
+    <div className="dash-ops-cell" data-role={group.role} data-pending={pending || undefined}>
       <span className="dash-ops-role">{group.label}</span>
-      <span className="dash-ops-names">{formatNames(group.names)}</span>
-      <span className="dash-ops-count">{group.names.length}명</span>
+      <span className="dash-ops-names">{formatNames(group.names, pending)}</span>
+      <span className="dash-ops-count">
+        {pending && group.names.length === 0 ? DASHBOARD_PENDING_STATUS_LABEL : `${group.names.length}명`}
+      </span>
     </div>
   );
 }
 
 export function AdminOpsDutyBoard({
   groups,
+  pending = false,
 }: {
   groups: readonly AdminOpsDutyGroup[];
+  pending?: boolean;
 }) {
   return (
     <div className="dash-ops-board">
       <div className="dash-ops-row">
-        <OpsDutyCell group={dutyGroupOrEmpty(groups, "DUTY_AM")} />
-        <OpsDutyCell group={dutyGroupOrEmpty(groups, "DUTY_PM")} />
+        <OpsDutyCell group={dutyGroupOrEmpty(groups, "DUTY_AM")} pending={pending} />
+        <OpsDutyCell group={dutyGroupOrEmpty(groups, "DUTY_PM")} pending={pending} />
       </div>
       <div className="dash-ops-row">
-        <OpsDutyCell group={dutyGroupOrEmpty(groups, "MARSHAL_AM")} />
-        <OpsDutyCell group={dutyGroupOrEmpty(groups, "MARSHAL_PM")} />
+        <OpsDutyCell group={dutyGroupOrEmpty(groups, "MARSHAL_AM")} pending={pending} />
+        <OpsDutyCell group={dutyGroupOrEmpty(groups, "MARSHAL_PM")} pending={pending} />
       </div>
       <div className="dash-ops-row is-single">
-        <OpsDutyCell group={dutyGroupOrEmpty(groups, "LEADER")} />
+        <OpsDutyCell group={dutyGroupOrEmpty(groups, "LEADER")} pending={pending} />
       </div>
     </div>
   );
@@ -212,9 +237,20 @@ export function AdminOpsTeamBoard({
   );
 }
 
+function fetchDashboard(ymd: string, refresh = false): Promise<Response> {
+  const qs = refresh
+    ? `date=${encodeURIComponent(ymd)}&refresh=1`
+    : `date=${encodeURIComponent(ymd)}`;
+  return fetch(`/api/manage/dashboard?${qs}`, {
+    cache: "no-store",
+    credentials: "include",
+    method: "GET",
+  });
+}
+
 export default function AdminOpsDashboard() {
   const [date, setDate] = useState(todayYmd);
-  const [data, setData] = useState<AdminOpsDashboardPayload | null>(() => {
+  const [data, setData] = useState<AdminOpsDashboardView | null>(() => {
     const ymd = todayYmd();
     return (
       peekLastNamespaceResource<DashboardResponse>(
@@ -228,6 +264,7 @@ export default function AdminOpsDashboard() {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const loadGen = useRef(0);
+  const sheetReady = Boolean(data && data.date === date && data.sheetDerivedReady);
   const initial = loading && !data;
   const staleDate = isStaleDashboardDate(data?.date, date);
   const updatingCopy = dashboardUpdatingCopy({
@@ -235,6 +272,7 @@ export default function AdminOpsDashboard() {
     hasData: Boolean(data),
     staleDate,
     error: Boolean(error),
+    freshness: staleDate ? undefined : data?.freshness,
   });
 
   const load = useCallback(async (ymd: string) => {
@@ -250,29 +288,23 @@ export default function AdminOpsDashboard() {
     }
     setLoading(true);
     if (!cached) setError(null);
+    let painted = Boolean(cached);
     const ns = await ensureClientAuthNamespace();
     if (!isCurrentLoadGen(gen, loadGen.current)) return;
-    if (shouldSkipFreshResourceRefresh(cached) && ns) {
+    if (
+      shouldSkipFreshResourceRefresh(cached) &&
+      isDashboardSheetFreshPayload(cached?.value) &&
+      ns
+    ) {
       setLoading(false);
       return;
     }
-    try {
-      const res = await runDedupedClientResource(
-        ns
-          ? clientResourceStoreKey(ns, CLIENT_RESOURCE.DASHBOARD, ymd)
-          : `anon::dashboard::${ymd}`,
-        () =>
-          fetch(`/api/manage/dashboard?date=${encodeURIComponent(ymd)}`, {
-            cache: "no-store",
-            credentials: "include",
-            method: "GET",
-          })
-      );
-      if (!isCurrentLoadGen(gen, loadGen.current)) return;
+    const apply = async (res: Response): Promise<DashboardResponse | null> => {
+      if (!isCurrentLoadGen(gen, loadGen.current)) return null;
       if (res.status === 401 || res.status === 403) {
         clearClientResourceCache();
         location.href = "/login?callbackUrl=/manage";
-        return;
+        return null;
       }
       const json = (await res.json()) as DashboardResponse;
       if (
@@ -283,19 +315,52 @@ export default function AdminOpsDashboard() {
           responseKey: typeof json.date === "string" ? json.date : "",
         })
       ) {
+        return null;
+      }
+      return json;
+    };
+    try {
+      const fastRes = await runDedupedClientResource(
+        ns
+          ? clientResourceStoreKey(ns, CLIENT_RESOURCE.DASHBOARD, ymd)
+          : `anon::dashboard::${ymd}`,
+        () => fetchDashboard(ymd, false)
+      );
+      const fast = await apply(fastRes);
+      if (!fast) return;
+      if (!fastRes.ok) {
+        setError(fast.error || "불러오기 실패");
         return;
       }
-      if (!res.ok) {
-        setError(json?.error || "불러오기 실패");
+      setData(fast);
+      painted = true;
+      setError(fast.freshness === "error" ? "최신 정보 확인 실패" : null);
+      setLoading(false);
+      if (ns && isDashboardSheetFreshPayload(fast)) {
+        writeClientResource(ns, CLIENT_RESOURCE.DASHBOARD, ymd, fast);
+      }
+      if (isDashboardSheetFreshPayload(fast)) return;
+
+      const refreshRes = await runDedupedClientResource(
+        ns
+          ? `${clientResourceStoreKey(ns, CLIENT_RESOURCE.DASHBOARD, ymd)}::refresh`
+          : `anon::dashboard::${ymd}::refresh`,
+        () => fetchDashboard(ymd, true)
+      );
+      const refreshed = await apply(refreshRes);
+      if (!refreshed) return;
+      if (!refreshRes.ok) {
+        setError(refreshed.error || "최신 정보 확인 실패");
         return;
       }
-      setData(json);
-      setError(null);
-      if (!ns) return;
-      writeClientResource(ns, CLIENT_RESOURCE.DASHBOARD, ymd, json);
+      setData(refreshed);
+      setError(refreshed.freshness === "error" ? "최신 정보 확인 실패" : null);
+      if (ns && isDashboardSheetFreshPayload(refreshed)) {
+        writeClientResource(ns, CLIENT_RESOURCE.DASHBOARD, ymd, refreshed);
+      }
     } catch {
       if (!isCurrentLoadGen(gen, loadGen.current)) return;
-      setError("대시보드 조회 실패");
+      setError(painted ? "최신 정보 확인 실패" : "대시보드 조회 실패");
     } finally {
       if (isCurrentLoadGen(gen, loadGen.current)) setLoading(false);
     }
@@ -314,9 +379,11 @@ export default function AdminOpsDashboard() {
   return (
     <div
       className="dash ops-dash"
-      aria-busy={loading || undefined}
+      aria-busy={initial || undefined}
       data-date={date}
       data-resource-cache={data?.date === date ? "ready" : "empty"}
+      data-freshness={data?.date === date ? data.freshness : undefined}
+      data-sheet-ready={sheetReady ? "1" : "0"}
     >
       <div className="dash-scenic" aria-hidden>
         <div
@@ -393,16 +460,20 @@ export default function AdminOpsDashboard() {
           value={
             initial ? (
               <span className="vh-skel vh-skel-kpi" />
-            ) : (
+            ) : sheetReady ? (
               data?.availability.finalAvailable ?? "—"
+            ) : (
+              "—"
             )
           }
           lines={
-            data
+            data && sheetReady
               ? [
                   `하우스 가용 ${data.availability.houseAvailable} · 3부반 가용 ${data.availability.thirdAvailable}`,
                 ]
-              : undefined
+              : data
+                ? [`하우스 가용 ${DASHBOARD_PENDING_STATUS_LABEL} · 3부반 가용 ${DASHBOARD_PENDING_STATUS_LABEL}`]
+                : undefined
           }
         />
         <SummaryCard
@@ -411,12 +482,14 @@ export default function AdminOpsDashboard() {
           value={
             initial ? (
               <span className="vh-skel vh-skel-kpi" />
-            ) : (
+            ) : sheetReady ? (
               data?.availability.offCount ?? "—"
+            ) : (
+              "—"
             )
           }
         >
-          {data && data.availability.reasonCounts.length > 0 && (
+          {sheetReady && data && data.availability.reasonCounts.length > 0 && (
             <div className="dash-reason-strip">
               {data.availability.reasonCounts.map((item) => (
                 <span key={item.reason} className="dash-reason-chip">
@@ -437,7 +510,7 @@ export default function AdminOpsDashboard() {
             <div className="vh-skel vh-skel-block" style={{ height: 120, marginTop: 0 }} />
           </div>
         ) : data ? (
-          <AdminOpsDutyBoard groups={data.opsDuties} />
+          <AdminOpsDutyBoard groups={data.opsDuties} pending={!sheetReady} />
         ) : null}
       </section>
 

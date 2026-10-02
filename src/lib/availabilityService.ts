@@ -61,7 +61,7 @@ export type LoadAvailabilityOptions = {
   includeStoredOpsDuty?: boolean;
   /** 테스트 주입. 기본은 resolveEffectiveOpsDuty */
   opsDutyDeps?: ResolveEffectiveOpsDutyDeps;
-  /** false면 휴무 Sheet를 읽지 않음 (기본 true) */
+  /** false면 휴무 Sheet를 읽지 않음 (기본 true). dashboard fast path가 이 기본값을 바꾸면 안 됨. */
   includeOffSheet?: boolean;
   /** true면 휴무 Sheet 캐시를 무시하고 다시 읽음 (가용 새로고침) */
   forceOffSheet?: boolean;

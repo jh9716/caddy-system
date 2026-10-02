@@ -5,12 +5,16 @@
 
 import { parseYmd } from "@/lib/availabilityEngine";
 import {
+  loadAdminOpsDashboardRefreshView,
+  loadAdminOpsDashboardFastView,
+} from "@/lib/adminOpsDashboardFastPath";
+import type { AdminOpsDashboardFastPathDeps } from "@/lib/adminOpsDashboardFastPath";
+import {
   loadAdminOpsDashboardWithSource,
 } from "@/lib/adminOpsDashboardService";
 import type { AdminOpsDashboardSourceDeps } from "@/lib/adminOpsDashboardSource";
 import {
   DAILY_OPS_SNAPSHOT_SCHEMA_VERSION,
-  dashboardViewFromLive,
   dashboardViewFromSnapshot,
   toDailyOpsSnapshotPayload,
   type AdminOpsDashboardView,
@@ -154,6 +158,8 @@ export async function loadAdminOpsDashboardView(
     now?: Date;
     db?: DailyOpsSnapshotDb;
     sourceDeps?: AdminOpsDashboardSourceDeps;
+    waitForSheet?: boolean;
+    listRoster?: AdminOpsDashboardFastPathDeps["listRoster"];
   }
 ): Promise<AdminOpsDashboardView> {
   parseYmd(ymd);
@@ -172,8 +178,18 @@ export async function loadAdminOpsDashboardView(
     }
   }
 
-  const loaded = await loadAdminOpsDashboardWithSource(ymd, options?.sourceDeps);
-  return dashboardViewFromLive(loaded.dashboard, past, loaded.quality);
+  const waitForSheet = options?.waitForSheet !== false;
+  const fastDeps: AdminOpsDashboardFastPathDeps = {
+    ...options?.sourceDeps,
+    listRoster: options?.listRoster,
+    nowMs: now.getTime(),
+    isPastDate: past,
+  };
+  if (!waitForSheet) {
+    return loadAdminOpsDashboardFastView(ymd, fastDeps);
+  }
+
+  return loadAdminOpsDashboardRefreshView(ymd, fastDeps);
 }
 
 export function todayKstYmd(now: Date = new Date()): string {

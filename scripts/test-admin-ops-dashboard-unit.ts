@@ -775,6 +775,8 @@ section("dashboard 조회 write/sync 없음");
   assert(!/dailyBoardPublished/.test(ui), "dashboard UI가 published payload를 쓰지 않음");
   assert(!/export async function POST/.test(api), "dashboard API는 GET만");
   assert(/method: "GET"/.test(ui), "클라이언트도 GET만");
+  assert(/refresh=1/.test(api) && /waitForSheet: refresh/.test(api), "GET fast/refresh 분리");
+  assert(/최신 확인 중/.test(ui), "Sheet pending UX");
   assert(!/prisma\.(create|update|upsert|delete)/.test(getFn), "GET에 prisma write 없음");
   assert(/loadAdminOpsDashboard/.test(getFn), "GET이 read helper 사용");
   assert(!/captureDailyOpsSnapshot/.test(api), "GET이 snapshot write 안 함");

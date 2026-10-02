@@ -20,6 +20,9 @@ import { PRIMARY_TEAMS, normalizeEmploymentStatus } from "@/lib/caddyManage";
 
 export const ADMIN_OPS_DASHBOARD_ROLES = DAILY_OPS_DUTY_ROLES;
 
+/** Sheet 전 상태. 0으로 위장하지 않는다. */
+export const DASHBOARD_PENDING_STATUS_LABEL = "확인 중";
+
 export const CADDY_TYPE_DASH_LABEL: Record<CaddyTypeCode, string> = {
   HOUSE: "HOUSE",
   THIRD: "3부반",
