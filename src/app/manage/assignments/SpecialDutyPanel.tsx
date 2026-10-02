@@ -80,6 +80,8 @@ function anchorValue(anchor: SpecialStartAnchor | null | undefined): string {
   return `${anchor.course}@@${anchor.teeTime}`;
 }
 
+export type SpecialDutyListPayload = ListPayload;
+
 export const SpecialDutyPanel = memo(function SpecialDutyPanel({
   date,
   excludedRows,
@@ -87,6 +89,9 @@ export const SpecialDutyPanel = memo(function SpecialDutyPanel({
   hasDraft,
   onChanged,
   onLoaded,
+  initialPayload,
+  initialError,
+  bundleReady = false,
 }: {
   date: string;
   excludedRows?: Array<{ id: number; excludedReasons?: string[] | null }>;
@@ -94,6 +99,9 @@ export const SpecialDutyPanel = memo(function SpecialDutyPanel({
   hasDraft?: boolean;
   onChanged?: () => void;
   onLoaded?: (groups: OpsSpecialDutyGroup[]) => void;
+  initialPayload?: ListPayload | null;
+  initialError?: string | null;
+  bundleReady?: boolean;
 }) {
   const [groups, setGroups] = useState<GroupPayload[]>([]);
   const [anchors, setAnchors] = useState<SpecialDutyAnchors>(EMPTY_ANCHORS);
@@ -184,34 +192,23 @@ export const SpecialDutyPanel = memo(function SpecialDutyPanel({
     setDeletedIdsByKind({});
     setDirtyKinds(new Set());
     setSelectedKind("ONE_MAK");
-    const ac = new AbortController();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      return () => ac.abort();
+      setLoading(false);
+      return;
     }
-    void (async () => {
+    if (!bundleReady) {
       setLoading(true);
-      try {
-        const res = await fetch(
-          `/api/daily-special-duties?date=${encodeURIComponent(date)}`,
-          { credentials: "include", signal: ac.signal }
-        );
-        const data = (await res.json()) as ListPayload;
-        if (ac.signal.aborted) return;
-        if (!isSpecialDutyPayloadForSelectedDate(data, date)) return;
-        if (!res.ok) {
-          setError(data.error || "특수근무 목록을 불러오지 못했습니다.");
-          return;
-        }
-        applyPayload(data);
-      } catch (e) {
-        if (ac.signal.aborted) return;
-        setError(e instanceof Error ? e.message : "특수근무 목록 실패");
-      } finally {
-        if (!ac.signal.aborted) setLoading(false);
-      }
-    })();
-    return () => ac.abort();
-  }, [date, applyPayload]);
+      return;
+    }
+    if (initialPayload && isSpecialDutyPayloadForSelectedDate(initialPayload, date)) {
+      applyPayload(initialPayload);
+      setError(initialError ?? null);
+      setLoading(false);
+      return;
+    }
+    setError(initialError || "특수근무 목록을 불러오지 못했습니다.");
+    setLoading(false);
+  }, [date, bundleReady, initialPayload, initialError, applyPayload]);
 
   const displayGroups = useMemo(() => {
     const extra = excludedRows?.length
