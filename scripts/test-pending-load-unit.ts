@@ -109,6 +109,26 @@ section("dashboard zero");
       "갱신 실패",
     "cached same-date refresh failure"
   );
+  assert(
+    dashboardUpdatingCopy({
+      loading: false,
+      hasData: true,
+      staleDate: false,
+      error: false,
+      freshness: "refreshing",
+    }) === "최신 확인 중…",
+    "sheet refreshing copy"
+  );
+  assert(
+    dashboardUpdatingCopy({
+      loading: false,
+      hasData: true,
+      staleDate: false,
+      error: false,
+      freshness: "error",
+    }) === "최신 정보 확인 실패",
+    "sheet refresh error copy"
+  );
 }
 
 section("board wiring");

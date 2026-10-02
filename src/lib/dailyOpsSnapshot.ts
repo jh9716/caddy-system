@@ -52,6 +52,8 @@ export type DailyOpsSnapshotBody = {
   caddies: DailyOpsSnapshotCaddy[];
 };
 
+export type AdminOpsDashboardFreshness = "fresh" | "refreshing" | "stale" | "error";
+
 export type AdminOpsDashboardView = Omit<
   AdminOpsDashboardPayload,
   "reconstructedFromCurrentRoster"
@@ -62,7 +64,21 @@ export type AdminOpsDashboardView = Omit<
   source: "live" | "snapshot";
   isPastDate: boolean;
   sourceQuality: "complete" | "fallback" | "snapshot";
+  freshness: AdminOpsDashboardFreshness;
+  sourceAsOf: string | null;
+  generatedAt: string;
+  sheetDerivedReady: boolean;
 };
+
+function liveFreshMeta(sourceAsOf: string | null, now: Date = new Date()) {
+  const generatedAt = now.toISOString();
+  return {
+    freshness: "fresh" as const,
+    sourceAsOf,
+    generatedAt,
+    sheetDerivedReady: true as const,
+  };
+}
 
 function asCaddyType(value: unknown): CaddyTypeCode {
   if (value === "THIRD" || value === "DRIVING" || value === "HOUSE") return value;
@@ -241,6 +257,7 @@ export function dashboardViewFromSnapshot(input: {
     availability: body.availability,
     opsDuties: body.opsDuties,
     caddies: body.caddies.map(snapshotCaddyToDashboardRow),
+    ...liveFreshMeta(capturedAt),
   };
 }
 
@@ -257,6 +274,7 @@ export function dashboardViewFromLive(
     source: "live",
     isPastDate,
     sourceQuality,
+    ...liveFreshMeta(new Date().toISOString()),
   };
 }
 
