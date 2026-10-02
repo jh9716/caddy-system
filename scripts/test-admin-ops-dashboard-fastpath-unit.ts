@@ -336,8 +336,10 @@ section("refresh keeps complete last-success when duty falls back");
   });
   assert(first.freshness === "fresh" && first.sourceQuality === "complete", "complete last-success");
   const asOf = first.sourceAsOf;
-  rememberAdminOpsDashboardSuccess(first, Date.now() - DASHBOARD_SHEET_FRESH_MS - 5);
+  const replayNow = Date.now() + 1500;
+  rememberAdminOpsDashboardSuccess(first, replayNow - DASHBOARD_SHEET_FRESH_MS - 5);
   const replay = await loadAdminOpsDashboardFastView(DATE_A, {
+    nowMs: replayNow,
     listRoster: async () => roster,
     listDuties: async () => [stored],
     fetchOffSheets: async () => {
@@ -346,7 +348,10 @@ section("refresh keeps complete last-success when duty falls back");
   });
   assert(replay.freshness === "stale", "aged last-success is stale not fresh");
   assert(replay.sourceAsOf === asOf, "sourceAsOf stays sheet-backed compute time");
-  assert(replay.generatedAt !== first.generatedAt, "generatedAt is response build time");
+  assert(
+    replay.generatedAt === new Date(replayNow).toISOString(),
+    "generatedAt is response build time"
+  );
 
   const dutyFail = await loadAdminOpsDashboardRefreshView(DATE_A, {
     listRoster: async () => roster,
