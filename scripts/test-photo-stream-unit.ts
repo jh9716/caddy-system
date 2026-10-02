@@ -9,6 +9,7 @@ import {
   formatPhotoServerTiming,
   photoObjectToResponseBody,
   privatePhotoBodyHeaders,
+  privatePhotoStreamHeaders,
 } from "../src/lib/photoObjectBody";
 import { COURSE_REPORT_PHOTO_LONG_EDGE } from "../src/lib/courseReportPhotoConstants";
 
@@ -52,11 +53,16 @@ async function main() {
     assert(timing.includes("auth;dur=1.2"), "server-timing auth");
     assert(timing.includes("db;dur=4.5"), "server-timing db");
     assert(timing.includes("blob_open;dur=12.0"), "server-timing blob_open");
-    const headers = privatePhotoBodyHeaders('"n1-10-abcd"', "image/jpeg", 10);
+    const headers = privatePhotoBodyHeaders('"n1-10-abcd"', "image/jpeg");
     assert(headers["Cache-Control"] === "private, no-cache", "keeps private no-cache");
     assert(headers.ETag === '"n1-10-abcd"', "keeps etag");
-    assert(headers["Content-Length"] === "10", "content-length from db size");
     assert(headers["Content-Type"] === "image/jpeg", "content-type");
+    assert(!headers["Content-Length"], "generic headers omit content-length");
+    const stream = new ReadableStream<Uint8Array>();
+    const streamHeaders = privatePhotoStreamHeaders('"n1-10-abcd"', "image/jpeg", stream);
+    assert(!streamHeaders["Content-Length"], "stream omits content-length");
+    const known = privatePhotoStreamHeaders('"n1-10-abcd"', "image/jpeg", new Uint8Array(10));
+    assert(known["Content-Length"] === "10", "known bytes set content-length");
   }
 
   console.log("== NextResponse stream TTFB ==");
@@ -88,6 +94,32 @@ async function main() {
     assert(total === 36, "stream bytes complete");
   }
 
+  console.log("== stream error after headers ==");
+  {
+    const broken = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3, 4]));
+        await delay(20);
+        controller.error(new Error("blob_read_failed"));
+      },
+    });
+    const res = new NextResponse(photoObjectToResponseBody(broken), { status: 200 });
+    assert(res.status === 200, "headers already 200");
+    const reader = res.body?.getReader();
+    const first = await reader!.read();
+    assert((first.value?.byteLength ?? 0) === 4, "first chunk delivered");
+    let threw = false;
+    try {
+      while (true) {
+        const next = await reader!.read();
+        if (next.done) break;
+      }
+    } catch {
+      threw = true;
+    }
+    assert(threw, "mid-stream error surfaces to reader, no hang");
+  }
+
   console.log("== buffered path waits for full object ==");
   {
     const t0 = performance.now();
@@ -114,6 +146,11 @@ async function main() {
     assert(!report.includes("Buffer.from(bytes)"), "report 200 is not pre-buffered");
     assert(storage.includes("useCache: false"), "blob get still uncached");
     assert(storage.includes("access: \"private\""), "blob stays private");
+    assert(storage.includes("abortSignal"), "blob get accepts abort");
+    assert(noticeGet.includes("req.signal"), "notice passes request abort");
+    assert(reportGet.includes("req.signal"), "report passes request abort");
+    assert(!/206|Accept-Ranges|headers\.get\([\"']range[\"']\)/.test(noticeGet), "notice no Range");
+    assert(!/206|Accept-Ranges|headers\.get\([\"']range[\"']\)/.test(reportGet), "report no Range");
     assert(COURSE_REPORT_PHOTO_LONG_EDGE === 1200, "new upload long-edge 1200");
   }
 

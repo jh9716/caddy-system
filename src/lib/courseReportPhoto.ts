@@ -288,7 +288,10 @@ export async function loadCourseReportPhotoMeta(
   return photo;
 }
 
-export async function openCourseReportPhotoBody(storageKey: string) {
+export async function openCourseReportPhotoBody(
+  storageKey: string,
+  abortSignal?: AbortSignal
+) {
   const store = getCourseReportPhotoStore();
   if (!store.configured) {
     throw new CourseReportPhotoStorageError(
@@ -297,7 +300,10 @@ export async function openCourseReportPhotoBody(storageKey: string) {
       503
     );
   }
-  const body = store.open ? await store.open(storageKey) : await store.get(storageKey);
+  const opts = abortSignal ? { abortSignal } : undefined;
+  const body = store.open
+    ? await store.open(storageKey, opts)
+    : await store.get(storageKey, opts);
   if (!body) {
     throw new CourseReportPhotoValidationError("not_found", "사진을 찾을 수 없습니다.", 404);
   }

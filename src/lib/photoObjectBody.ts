@@ -10,14 +10,29 @@ export function photoObjectToResponseBody(body: PhotoObjectBody): BodyInit {
 export function privatePhotoBodyHeaders(
   etag: string,
   mimeType: string,
-  size: number,
   extra?: Record<string, string>
 ): Record<string, string> {
   return {
     ...privatePhotoCacheHeaders(etag, mimeType),
-    "Content-Length": String(size),
     ...extra,
   };
+}
+
+/**
+ * Content-Length only when the body length is already known.
+ * Do not use DB size for streams: a short/failed Blob would hang the client.
+ */
+export function privatePhotoStreamHeaders(
+  etag: string,
+  mimeType: string,
+  body: PhotoObjectBody,
+  extra?: Record<string, string>
+): Record<string, string> {
+  const headers = privatePhotoBodyHeaders(etag, mimeType, extra);
+  if (body instanceof Uint8Array) {
+    headers["Content-Length"] = String(body.byteLength);
+  }
+  return headers;
 }
 
 export function formatPhotoServerTiming(parts: Record<string, number>): string {

@@ -16,7 +16,7 @@ import {
 import {
   formatPhotoServerTiming,
   photoObjectToResponseBody,
-  privatePhotoBodyHeaders,
+  privatePhotoStreamHeaders,
 } from "@/lib/photoObjectBody";
 import {
   buildPrivatePhotoETag,
@@ -81,11 +81,11 @@ export async function GET(
       });
     }
     const blobStarted = performance.now();
-    const body = await openNoticePhotoBody(photo.storageKey);
+    const body = await openNoticePhotoBody(photo.storageKey, req.signal);
     const blobOpenMs = performance.now() - blobStarted;
     return new NextResponse(photoObjectToResponseBody(body), {
       status: 200,
-      headers: privatePhotoBodyHeaders(etag, photo.mimeType, photo.size, {
+      headers: privatePhotoStreamHeaders(etag, photo.mimeType, body, {
         "Server-Timing": formatPhotoServerTiming({
           auth: authMs,
           db: dbMs,

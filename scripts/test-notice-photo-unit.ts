@@ -202,7 +202,7 @@ async function main() {
       assert(got.headers.get("content-type") === "image/jpeg", "jpeg content-type");
       assert(got.headers.get("cache-control") === "private, no-cache", "private no-cache");
       const gotBytes = await got.clone().arrayBuffer();
-      assert(got.headers.get("content-length") === String(gotBytes.byteLength), "content-length from size");
+      assert(got.headers.get("content-length") === String(gotBytes.byteLength), "known body sets content-length");
       assert(String(got.headers.get("server-timing") || "").includes("auth"), "server-timing auth");
       const etag = got.headers.get("etag");
       assert(Boolean(etag) && etag?.startsWith('"n'), "etag from notice metadata");
