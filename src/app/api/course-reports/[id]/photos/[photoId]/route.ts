@@ -10,8 +10,13 @@ import { CourseReportPhotoStorageError } from "@/lib/courseReportPhotoStorage";
 import {
   deleteCourseReportPhoto,
   loadCourseReportPhotoMeta,
-  readCourseReportPhotoBytes,
+  openCourseReportPhotoBody,
 } from "@/lib/courseReportPhoto";
+import {
+  formatPhotoServerTiming,
+  photoObjectToResponseBody,
+  privatePhotoStreamHeaders,
+} from "@/lib/photoObjectBody";
 import {
   buildPrivatePhotoETag,
   ifNoneMatchContains,
@@ -39,7 +44,9 @@ export async function GET(
     params: Promise<{ id: string; photoId: string }> | { id: string; photoId: string };
   }
 ) {
+  const started = performance.now();
   const auth = await requireCourseReportReader(req);
+  const authMs = performance.now() - started;
   if (isCourseReportAuthResponse(auth)) return auth;
 
   const { reportId, photoId } = await ids(params);
@@ -53,21 +60,35 @@ export async function GET(
   }
 
   try {
+    const afterAuth = performance.now();
     const photo = await loadCourseReportPhotoMeta(prisma, {
       reportId,
       photoId,
     });
+    const dbMs = performance.now() - afterAuth;
     const etag = buildPrivatePhotoETag("r", photo);
+    const timing = formatPhotoServerTiming({ auth: authMs, db: dbMs });
     if (ifNoneMatchContains(req.headers.get("if-none-match"), etag)) {
       return new NextResponse(null, {
         status: 304,
-        headers: privatePhotoCacheHeaders(etag),
+        headers: {
+          ...privatePhotoCacheHeaders(etag),
+          "Server-Timing": timing,
+        },
       });
     }
-    const bytes = await readCourseReportPhotoBytes(photo.storageKey);
-    return new NextResponse(Buffer.from(bytes), {
+    const blobStarted = performance.now();
+    const body = await openCourseReportPhotoBody(photo.storageKey, req.signal);
+    const blobOpenMs = performance.now() - blobStarted;
+    return new NextResponse(photoObjectToResponseBody(body), {
       status: 200,
-      headers: privatePhotoCacheHeaders(etag, photo.mimeType),
+      headers: privatePhotoStreamHeaders(etag, photo.mimeType, body, {
+        "Server-Timing": formatPhotoServerTiming({
+          auth: authMs,
+          db: dbMs,
+          blob_open: blobOpenMs,
+        }),
+      }),
     });
   } catch (e) {
     if (e instanceof CourseReportPhotoValidationError || e instanceof CourseReportPhotoStorageError) {

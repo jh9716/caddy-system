@@ -11,8 +11,13 @@ import {
 import {
   deleteNoticePhoto,
   loadNoticePhotoMeta,
-  readNoticePhotoBytes,
+  openNoticePhotoBody,
 } from "@/lib/noticePhoto";
+import {
+  formatPhotoServerTiming,
+  photoObjectToResponseBody,
+  privatePhotoStreamHeaders,
+} from "@/lib/photoObjectBody";
 import {
   buildPrivatePhotoETag,
   ifNoneMatchContains,
@@ -40,7 +45,9 @@ export async function GET(
     params: Promise<{ id: string; photoId: string }> | { id: string; photoId: string };
   }
 ) {
+  const started = performance.now();
   const auth = await requireNoticeReader(req);
+  const authMs = performance.now() - started;
   if (isNoticeAuthResponse(auth)) return auth;
 
   const { noticeId, photoId } = await ids(params);
@@ -54,23 +61,37 @@ export async function GET(
   }
 
   try {
+    const afterAuth = performance.now();
     const viewer = await loadNoticeViewer(prisma, auth);
     const photo = await loadNoticePhotoMeta(prisma, {
       noticeId,
       photoId,
       viewer,
     });
+    const dbMs = performance.now() - afterAuth;
     const etag = buildPrivatePhotoETag("n", photo);
+    const timing = formatPhotoServerTiming({ auth: authMs, db: dbMs });
     if (ifNoneMatchContains(req.headers.get("if-none-match"), etag)) {
       return new NextResponse(null, {
         status: 304,
-        headers: privatePhotoCacheHeaders(etag),
+        headers: {
+          ...privatePhotoCacheHeaders(etag),
+          "Server-Timing": timing,
+        },
       });
     }
-    const bytes = await readNoticePhotoBytes(photo.storageKey);
-    return new NextResponse(Buffer.from(bytes), {
+    const blobStarted = performance.now();
+    const body = await openNoticePhotoBody(photo.storageKey, req.signal);
+    const blobOpenMs = performance.now() - blobStarted;
+    return new NextResponse(photoObjectToResponseBody(body), {
       status: 200,
-      headers: privatePhotoCacheHeaders(etag, photo.mimeType),
+      headers: privatePhotoStreamHeaders(etag, photo.mimeType, body, {
+        "Server-Timing": formatPhotoServerTiming({
+          auth: authMs,
+          db: dbMs,
+          blob_open: blobOpenMs,
+        }),
+      }),
     });
   } catch (e) {
     if (e instanceof CourseReportPhotoValidationError || e instanceof CourseReportPhotoStorageError) {

@@ -739,6 +739,9 @@ async function main() {
       assert(got.status === 200, "owner get photo 200");
       assert(got.headers.get("content-type") === "image/jpeg", "content-type jpeg");
       assert(got.headers.get("cache-control") === "private, no-cache", "private no-cache");
+      const gotBytes = await got.clone().arrayBuffer();
+      assert(got.headers.get("content-length") === String(gotBytes.byteLength), "known body sets content-length");
+      assert(String(got.headers.get("server-timing") || "").includes("auth"), "server-timing auth");
       const etag = got.headers.get("etag");
       assert(Boolean(etag) && etag.startsWith('"r'), "etag from report metadata");
       assert(!String(etag).includes("course-reports/"), "etag does not leak storageKey");

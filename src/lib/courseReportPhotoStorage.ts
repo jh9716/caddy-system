@@ -24,10 +24,18 @@ export class CourseReportPhotoStorageError extends Error {
   }
 }
 
+export type PhotoObjectBody = import("@/lib/photoObjectBody").PhotoObjectBody;
+
+export type PhotoOpenOptions = {
+  abortSignal?: AbortSignal;
+};
+
 export type CourseReportPhotoStore = {
   configured: boolean;
   put(key: string, bytes: Uint8Array, mimeType: string): Promise<void>;
-  get(key: string): Promise<Uint8Array | null>;
+  get(key: string, opts?: PhotoOpenOptions): Promise<Uint8Array | null>;
+  /** Official Blob stream. GET uses this so the API does not buffer the whole object first. */
+  open?(key: string, opts?: PhotoOpenOptions): Promise<PhotoObjectBody | null>;
   delete(key: string): Promise<void>;
 };
 
@@ -87,6 +95,38 @@ const unconfigured: CourseReportPhotoStore = {
   },
 };
 
+async function openVercelBlobStream(
+  key: string,
+  opts?: PhotoOpenOptions
+): Promise<ReadableStream<Uint8Array> | null> {
+  if (!isCourseReportPhotoStorageConfigured()) {
+    throw new CourseReportPhotoStorageError(
+      "storage_not_configured",
+      "사진 저장소가 설정되지 않았습니다.",
+      503
+    );
+  }
+  try {
+    const { get } = await import("@vercel/blob");
+    const result = await get(key, {
+      access: "private",
+      useCache: false,
+      abortSignal: opts?.abortSignal,
+    });
+    if (!result || result.statusCode !== 200 || !result.stream) return null;
+    return result.stream;
+  } catch (e) {
+    const { BlobNotFoundError } = await import("@vercel/blob");
+    if (e instanceof BlobNotFoundError) return null;
+    if (opts?.abortSignal?.aborted) throw e;
+    throw new CourseReportPhotoStorageError(
+      "storage_get_failed",
+      "사진 읽기에 실패했습니다.",
+      502
+    );
+  }
+}
+
 const vercelBlobStore: CourseReportPhotoStore = {
   configured: true,
   async put(key, bytes, mimeType) {
@@ -105,29 +145,14 @@ const vercelBlobStore: CourseReportPhotoStore = {
       cacheControlMaxAge: 60 * 60 * 24 * 30,
     });
   },
-  async get(key) {
-    if (!isCourseReportPhotoStorageConfigured()) {
-      throw new CourseReportPhotoStorageError(
-        "storage_not_configured",
-        "사진 저장소가 설정되지 않았습니다.",
-        503
-      );
-    }
-    try {
-      const { get } = await import("@vercel/blob");
-      const result = await get(key, { access: "private", useCache: false });
-      if (!result || result.statusCode !== 200 || !result.stream) return null;
-      const buf = await new Response(result.stream).arrayBuffer();
-      return new Uint8Array(buf);
-    } catch (e) {
-      const { BlobNotFoundError } = await import("@vercel/blob");
-      if (e instanceof BlobNotFoundError) return null;
-      throw new CourseReportPhotoStorageError(
-        "storage_get_failed",
-        "사진 읽기에 실패했습니다.",
-        502
-      );
-    }
+  async get(key, opts) {
+    const stream = await openVercelBlobStream(key, opts);
+    if (!stream) return null;
+    const buf = await new Response(stream).arrayBuffer();
+    return new Uint8Array(buf);
+  },
+  async open(key, opts) {
+    return openVercelBlobStream(key, opts);
   },
   async delete(key) {
     if (!isCourseReportPhotoStorageConfigured()) {

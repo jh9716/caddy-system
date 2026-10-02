@@ -201,6 +201,9 @@ async function main() {
       assert(got.status === 200, "caddy can read visible notice photo");
       assert(got.headers.get("content-type") === "image/jpeg", "jpeg content-type");
       assert(got.headers.get("cache-control") === "private, no-cache", "private no-cache");
+      const gotBytes = await got.clone().arrayBuffer();
+      assert(got.headers.get("content-length") === String(gotBytes.byteLength), "known body sets content-length");
+      assert(String(got.headers.get("server-timing") || "").includes("auth"), "server-timing auth");
       const etag = got.headers.get("etag");
       assert(Boolean(etag) && etag?.startsWith('"n'), "etag from notice metadata");
       assert(!String(etag).includes("notices/"), "etag does not leak storageKey");
@@ -638,7 +641,8 @@ async function main() {
       assert(!gallery.includes("course-report-photo-lightbox"), "detail lightbox not report lightbox");
       assert(noticePhotoCss.includes("width: 100%"), "detail photo width 100%");
       assert(/\.notice-photos-item img\s*\{[^}]*object-fit:\s*contain/.test(noticePhotoCss), "detail photo contain");
-      assert(/\.notice-photos-item\s*\{[^}]*aspect-ratio:\s*4\s*\/\s*3/.test(noticePhotoCss), "detail reserves 4/3 box");
+      assert(/\.notice-photos-item img\s*\{[^}]*height:\s*auto/.test(noticePhotoCss), "detail photo height auto");
+      assert(!/\.notice-photos-item\s*\{[^}]*aspect-ratio:/.test(noticePhotoCss), "detail has no fake 4/3 box");
       assert(!/\.notice-photos-item img\s*\{[^}]*object-fit:\s*cover/.test(noticePhotoCss), "item img is not cover");
       assert(
         !noticePhotoCss.includes("object-fit: cover"),
