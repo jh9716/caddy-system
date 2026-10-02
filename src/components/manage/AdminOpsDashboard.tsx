@@ -45,6 +45,7 @@ export function dashboardSourceLine(
       Pick<AdminOpsDashboardView, "freshness" | "sourceAsOf" | "sheetDerivedReady">
     >) | null
 ): string {
+  if (!data) return "선택일 운영현황";
   if (data?.source === "snapshot" && data.capturedAt) {
     return `저장된 운영기록 · ${formatCapturedAtKst(data.capturedAt)} 저장`;
   }

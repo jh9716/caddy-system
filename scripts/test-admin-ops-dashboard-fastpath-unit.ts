@@ -338,6 +338,7 @@ section("keep-previous helper + UX copy");
     }) === "선택일 운영현황 · 현재 운영자료 기준",
     "source line fresh complete unchanged"
   );
+  assert(dashboardSourceLine(null) === "선택일 운영현황", "empty data does not claim latest");
 }
 
 section("wiring / no date-bundle / snapshot untouched");
