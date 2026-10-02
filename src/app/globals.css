@@ -3790,6 +3790,8 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
 
 /* Caddy /caddy home dashboard V2 — layout only */
 .caddy-home {
+  /* Scoped muted: --vh-muted on paper is 3.79:1. This stays AA 4.5 on paper. */
+  --caddy-home-muted: #6c766e;
   max-width: 430px;
   margin: 0 auto;
   padding: 4px 0 8px;
@@ -3834,7 +3836,7 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
   font-size: 0.72rem;
   font-weight: 700;
   letter-spacing: 0.04em;
-  color: var(--vh-muted);
+  color: var(--caddy-home-muted);
 }
 
 .caddy-home-today-date {
@@ -3906,7 +3908,7 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
 .caddy-home-stat-label {
   font-size: 11px;
   line-height: 1.2;
-  color: var(--vh-muted);
+  color: var(--caddy-home-muted);
   white-space: nowrap;
   letter-spacing: -0.03em;
 }
@@ -3940,7 +3942,7 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
 .caddy-home-notice.is-empty {
   padding: 12px;
   font-size: 0.84rem;
-  color: var(--vh-muted);
+  color: var(--caddy-home-muted);
 }
 
 .caddy-home-notice-link {
@@ -3972,7 +3974,7 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
 .caddy-home-notice-date {
   flex-shrink: 0;
   font-size: 0.72rem;
-  color: var(--vh-muted);
+  color: var(--caddy-home-muted);
 }
 
 .caddy-home-badge {

@@ -42,6 +42,8 @@ assert(css.includes("caddy-home-stats"), "compact stats grid");
 assert(css.includes("grid-template-columns: repeat(5, minmax(0, 1fr))"), "5-col compact grid");
 assert(css.includes(".caddy-home-stat-label"), "stat label class");
 assert(/\.caddy-home-stat-label[\s\S]*white-space:\s*nowrap/.test(css), "장기병가 label nowrap");
+assert(css.includes("--caddy-home-muted: #6c766e"), "scoped muted for AA contrast");
+assert(!/^\s*--vh-muted:\s*#6c766e/m.test(css), "does not rewrite global --vh-muted");
 
 console.log("== notices up, 3-4, badges ==");
 assert(page.includes("NOTICE_PREVIEW"), "notice preview cap");
