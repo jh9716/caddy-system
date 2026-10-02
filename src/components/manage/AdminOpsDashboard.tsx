@@ -242,6 +242,7 @@ function fetchDashboard(ymd: string, refresh = false): Promise<Response> {
   const qs = refresh
     ? `date=${encodeURIComponent(ymd)}&refresh=1`
     : `date=${encodeURIComponent(ymd)}`;
+  // No AbortSignal: leaving /manage must not cancel refresh so last-success can land.
   return fetch(`/api/manage/dashboard?${qs}`, {
     cache: "no-store",
     credentials: "include",

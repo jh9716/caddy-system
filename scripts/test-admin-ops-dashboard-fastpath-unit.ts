@@ -283,6 +283,82 @@ section("warm peek compute, zero extra HTTP");
   assert(getOpsDutySheetHttpFetchCount() === beforeOps, "warm peek no ops HTTP");
 }
 
+section("warm peek date-match + ops peek required");
+{
+  resetSheets();
+  seedOffSheetCacheForTests(offSheetsFor(DATE_A, ["이휴무"]));
+  const other = await loadAdminOpsDashboardFastView(DATE_B, {
+    listRoster: async () => roster,
+    listDuties: async () => [],
+    loadAvailability: async (ymd) => mockAvailability(ymd, []),
+    fetchOffSheets: async () => {
+      throw new Error("other-date peek must not fetch");
+    },
+    fetchOpsDutySheets: async () => {
+      throw new Error("other-date peek must not fetch ops");
+    },
+  });
+  assert(other.freshness === "refreshing" && other.sheetDerivedReady === false, "other-date workbook is not fresh");
+  assert(other.availability.offCount === 0, "unknown off stays 0+not ready");
+
+  resetSheets();
+  seedOffSheetCacheForTests(offSheetsFor(DATE_A, ["이휴무"]));
+  const offOnly = await loadAdminOpsDashboardFastView(DATE_A, {
+    listRoster: async () => roster,
+    listDuties: async () => [],
+    loadAvailability: async (ymd) => mockAvailability(ymd, ["이휴무"]),
+    fetchOffSheets: async () => {
+      throw new Error("off-only peek must not fetch");
+    },
+    fetchOpsDutySheets: async () => {
+      throw new Error("off-only peek must not fetch ops");
+    },
+  });
+  assert(offOnly.freshness === "refreshing" && offOnly.sheetDerivedReady === false, "OFF peek without ops peek is not fresh");
+}
+
+section("refresh keeps complete last-success when duty falls back");
+{
+  resetSheets();
+  const stored = {
+    id: 1,
+    role: "DUTY_AM" as const,
+    roleKey: "당번_조출_1",
+    caddyId: 1,
+    name: "김가용",
+    rawName: "김가용",
+    team: "1조",
+    employmentStatus: "ACTIVE",
+  };
+  const first = await loadAdminOpsDashboardRefreshView(DATE_A, {
+    ...sourceDeps({ offNames: ["이휴무"] }),
+    listDuties: async () => [stored],
+  });
+  assert(first.freshness === "fresh" && first.sourceQuality === "complete", "complete last-success");
+  const asOf = first.sourceAsOf;
+  rememberAdminOpsDashboardSuccess(first, Date.now() - DASHBOARD_SHEET_FRESH_MS - 5);
+  const replay = await loadAdminOpsDashboardFastView(DATE_A, {
+    listRoster: async () => roster,
+    listDuties: async () => [stored],
+    fetchOffSheets: async () => {
+      throw new Error("stale replay must not fetch");
+    },
+  });
+  assert(replay.freshness === "stale", "aged last-success is stale not fresh");
+  assert(replay.sourceAsOf === asOf, "sourceAsOf stays sheet-backed compute time");
+  assert(replay.generatedAt !== first.generatedAt, "generatedAt is response build time");
+
+  const dutyFail = await loadAdminOpsDashboardRefreshView(DATE_A, {
+    listRoster: async () => roster,
+    listDuties: async () => [],
+    loadAvailability: async (ymd) => mockAvailability(ymd, ["이휴무"]),
+    fetchOffSheets: async () => offSheetsFor(DATE_A, ["이휴무"]),
+    fetchOpsDutySheets: async () => [],
+  });
+  assert(dutyFail.freshness === "error", "ops empty after complete → error, keep previous");
+  assert(dutyFail.opsDuties.some((g) => g.names.includes("김가용")), "previous duty names kept");
+}
+
 section("keep-previous helper + UX copy");
 {
   assert(
@@ -353,6 +429,7 @@ section("wiring / no date-bundle / snapshot untouched");
   const bundle = readSrc("src/lib/assignmentsDateBundle.ts");
   assert(/waitForSheet: refresh/.test(route), "GET refresh=1 waits for sheet");
   assert(/refresh=1/.test(ui), "client background refresh");
+  assert(/No AbortSignal/.test(ui) && !/AbortController/.test(ui), "leave /manage does not abort refresh");
   assert(/최신 확인 중/.test(ui), "client 최신 확인 중");
   assert(/isDashboardSheetFreshPayload/.test(ui), "client writes cache only when fresh");
   assert(/loadAdminOpsDashboardFastView/.test(service), "view uses fast path");

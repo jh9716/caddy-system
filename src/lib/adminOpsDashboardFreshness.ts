@@ -12,7 +12,9 @@ export type DashboardFreshness = "fresh" | "refreshing" | "stale" | "error";
 
 export type AdminOpsDashboardFreshView = AdminOpsDashboardView & {
   freshness: DashboardFreshness;
+  /** Last successful sheet-backed compute time (server clock). Not Google Sheet mtime. */
   sourceAsOf: string | null;
+  /** This response's build time. Updates on stale/error replay. */
   generatedAt: string;
   sheetDerivedReady: boolean;
 };

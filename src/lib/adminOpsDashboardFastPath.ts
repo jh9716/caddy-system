@@ -19,13 +19,14 @@ import {
   lastSuccessViewForDate,
   peekAdminOpsDashboardLastSuccess,
   rememberAdminOpsDashboardSuccess,
+  shouldKeepPreviousDashboardSuccess,
   type AdminOpsDashboardFreshView,
 } from "@/lib/adminOpsDashboardFreshness";
 import type { AdminOpsDashboardSourceDeps } from "@/lib/adminOpsDashboardSource";
 import { loadAdminOpsDashboardWithSource } from "@/lib/adminOpsDashboardService";
 import { dashboardViewFromLive } from "@/lib/dailyOpsSnapshot";
 import { listDailyOpsDuties } from "@/lib/dailyOpsDutyService";
-import { peekCachedOffSheets } from "@/lib/offSheetFetch";
+import { peekCachedOffSheetsForDate } from "@/lib/offSheetFetch";
 import { peekCachedOpsDutySheets } from "@/lib/opsDutySheetFetch";
 import { prisma } from "@/lib/prisma";
 
@@ -125,7 +126,7 @@ async function loadFromWarmSheetPeek(
   ymd: string,
   deps: AdminOpsDashboardFastPathDeps
 ): Promise<AdminOpsDashboardFreshView | null> {
-  const offPeek = peekCachedOffSheets();
+  const offPeek = peekCachedOffSheetsForDate(ymd);
   if (!offPeek) return null;
   const opsPeek = peekCachedOpsDutySheets();
   const loaded = await loadAdminOpsDashboardWithSource(ymd, {
@@ -133,6 +134,8 @@ async function loadFromWarmSheetPeek(
     fetchOffSheets: async () => offPeek,
     fetchOpsDutySheets: async () => opsPeek ?? [],
   });
+  if (loaded.offSource !== "sheet") return null;
+  if (loaded.dutySource === "none" && opsPeek == null) return null;
   const now = new Date(deps.nowMs ?? Date.now());
   const view = attachDashboardFreshness(
     dashboardViewFromLive(loaded.dashboard, deps.isPastDate === true, loaded.quality),
@@ -179,6 +182,13 @@ export async function loadAdminOpsDashboardRefreshView(
       }
       const fallback = await loadAdminOpsDashboardDbFirst(ymd, deps);
       return { ...fallback, freshness: "error" };
+    }
+    if (shouldKeepPreviousDashboardSuccess(previous, loaded.quality) && previous) {
+      return {
+        ...previous,
+        freshness: "error",
+        generatedAt: new Date(nowMs).toISOString(),
+      };
     }
     const now = new Date(nowMs);
     const view = attachDashboardFreshness(
