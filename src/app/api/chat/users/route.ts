@@ -7,6 +7,8 @@ import {
 } from "@/lib/auth";
 import { ChatAuthError, issueChatAccessToken } from "@/lib/chatAuth";
 import {
+  CHAT_USERS_ALL_TAKE,
+  listInvitableChatUsers,
   matchesChatUserQuery,
   sanitizeChatUserHit,
   toChatUserSearchHit,
@@ -28,19 +30,28 @@ export async function GET(req: NextRequest) {
       return mustChangePasswordResponse();
     }
     await issueChatAccessToken(prisma, auth);
+    const scope = String(req.nextUrl.searchParams.get("scope") || "").trim();
     const q = String(req.nextUrl.searchParams.get("q") || "").trim().slice(0, 40);
+    const userSelect = {
+      id: true,
+      username: true,
+      role: true,
+      caddy: {
+        select: { name: true, team: true, employmentStatus: true },
+      },
+    } as const;
+    if (scope === "all") {
+      const rows = (await prisma.user.findMany({
+        select: userSelect,
+        take: CHAT_USERS_ALL_TAKE,
+      })) as ChatUserRow[];
+      return NextResponse.json({ ok: true, users: listInvitableChatUsers(rows) });
+    }
     if (q.length < 1) {
       return NextResponse.json({ ok: true, users: [] });
     }
     const rows = (await prisma.user.findMany({
-      select: {
-        id: true,
-        username: true,
-        role: true,
-        caddy: {
-          select: { name: true, team: true, employmentStatus: true },
-        },
-      },
+      select: userSelect,
       take: 80,
     })) as ChatUserRow[];
     const users = rows

@@ -11,6 +11,20 @@ import {
   chatDirectoryWsUrl,
   chatWsUrl,
 } from "@/lib/chatClientConfig";
+import {
+  clearInviteIds,
+  filterInviteUsers,
+  invitePoolExcludingOwner,
+  inviteSelectionCount,
+  isRoleFullySelected,
+  isTeamFullySelected,
+  selectAllInviteIds,
+  toggleInviteId,
+  toggleRoleInviteIds,
+  toggleTeamInviteIds,
+  visibleInviteRoles,
+  visibleInviteTeams,
+} from "@/lib/chatInviteSelection";
 import { ALL_ROOM_ID } from "@/lib/chatRooms";
 import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
 
@@ -94,7 +108,8 @@ export default function ChatClient() {
   const [sending, setSending] = useState(false);
   const [createName, setCreateName] = useState("");
   const [userQuery, setUserQuery] = useState("");
-  const [userHits, setUserHits] = useState<SearchHit[]>([]);
+  const [invitePool, setInvitePool] = useState<SearchHit[]>([]);
+  const [inviteLoading, setInviteLoading] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [members, setMembers] = useState<MemberRow[]>([]);
   const [creating, setCreating] = useState(false);
@@ -343,6 +358,27 @@ export default function ChatClient() {
     return registerAndroidChatOverlayClose(() => setSheet(null));
   }, [sheet]);
 
+  useEffect(() => {
+    if (sheet !== "create") return;
+    let cancelled = false;
+    setInviteLoading(true);
+    void (async () => {
+      const res = await fetch("/api/chat/users?scope=all", {
+        credentials: "include",
+        cache: "no-store",
+      });
+      if (await consumeUnauthorizedMemberResponse(res)) return;
+      const data = await res.json().catch(() => null);
+      if (cancelled) return;
+      if (res.ok && Array.isArray(data?.users)) setInvitePool(data.users);
+      else setInvitePool([]);
+      setInviteLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sheet]);
+
   const refreshIfNeeded = useCallback(async () => {
     const info = tokenRef.current;
     if (!info) return info;
@@ -443,21 +479,6 @@ export default function ChatClient() {
     await connectSocket(info, room.roomId);
   }
 
-  async function searchUsers(q: string) {
-    setUserQuery(q);
-    if (!q.trim()) {
-      setUserHits([]);
-      return;
-    }
-    const res = await fetch(`/api/chat/users?q=${encodeURIComponent(q.trim())}`, {
-      credentials: "include",
-      cache: "no-store",
-    });
-    if (await consumeUnauthorizedMemberResponse(res)) return;
-    const data = await res.json().catch(() => null);
-    if (res.ok && Array.isArray(data?.users)) setUserHits(data.users);
-  }
-
   async function handleCreate() {
     if (creating) return;
     setCreating(true);
@@ -485,7 +506,7 @@ export default function ChatClient() {
       setSheet(null);
       setCreateName("");
       setSelectedIds([]);
-      setUserHits([]);
+      setInvitePool([]);
       setUserQuery("");
       const info = tokenRef.current;
       if (info) await fetchRoomsHttp(info.token);
@@ -513,6 +534,13 @@ export default function ChatClient() {
     else setMembers([]);
     setSheet("members");
   }
+
+  const ownerUserId = tokenInfo?.user.userId ?? 0;
+  const inviteCandidates = invitePoolExcludingOwner(invitePool, ownerUserId);
+  const visibleInviteUsers = filterInviteUsers(inviteCandidates, userQuery);
+  const inviteTeams = visibleInviteTeams(inviteCandidates);
+  const inviteRoles = visibleInviteRoles(inviteCandidates);
+  const selectedCount = inviteSelectionCount(selectedIds);
 
   return (
     <div className="vh-chat">
@@ -661,64 +689,131 @@ export default function ChatClient() {
       )}
 
       {sheet === "create" ? (
-        <div className="vh-chat-sheet" role="dialog" aria-label="채팅방 만들기">
+        <div className="vh-chat-sheet vh-chat-sheet-create" role="dialog" aria-label="채팅방 만들기">
           <div className="vh-chat-sheet-head">
             <strong>채팅방 만들기</strong>
             <button type="button" className="vh-chat-back" onClick={() => setSheet(null)}>
               닫기
             </button>
           </div>
-          <label className="vh-chat-field">
-            방 이름
-            <input
-              className="vh-chat-text"
-              maxLength={24}
-              value={createName}
-              onChange={(e) => setCreateName(e.target.value)}
-              placeholder="예: 대바"
-            />
-          </label>
-          <label className="vh-chat-field">
-            사람 검색
-            <input
-              className="vh-chat-text"
-              value={userQuery}
-              onChange={(e) => void searchUsers(e.target.value)}
-              placeholder="이름 또는 조"
-            />
-          </label>
-          <div className="vh-chat-hits">
-            {userHits.map((hit) => {
-              const on = selectedIds.includes(hit.userId);
-              return (
-                <button
-                  key={hit.userId}
-                  type="button"
-                  className={`vh-chat-hit ${on ? "is-on" : ""}`}
-                  onClick={() =>
-                    setSelectedIds((prev) =>
-                      prev.includes(hit.userId)
-                        ? prev.filter((id) => id !== hit.userId)
-                        : [...prev, hit.userId]
-                    )
-                  }
-                >
-                  <span>{hit.displayName}</span>
-                  <span className="vh-chat-hit-meta">
-                    {hit.team !== "-" ? hit.team : hit.role}
-                  </span>
-                </button>
-              );
-            })}
+          <div className="vh-chat-sheet-body">
+            <label className="vh-chat-field">
+              방 이름
+              <input
+                className="vh-chat-text"
+                maxLength={24}
+                value={createName}
+                onChange={(e) => setCreateName(e.target.value)}
+                placeholder="예: 대바"
+              />
+            </label>
+            <div className="vh-chat-chips" aria-label="빠른 선택">
+              <button
+                type="button"
+                className="vh-chat-chip"
+                onClick={() => setSelectedIds(selectAllInviteIds(inviteCandidates))}
+              >
+                전체 선택
+              </button>
+              <button
+                type="button"
+                className="vh-chat-chip"
+                onClick={() => setSelectedIds(clearInviteIds())}
+              >
+                선택 해제
+              </button>
+            </div>
+            {inviteTeams.length > 0 ? (
+              <>
+                <div className="vh-chat-chip-label">조</div>
+                <div className="vh-chat-chips" aria-label="조별 선택">
+                  {inviteTeams.map((chip) => (
+                    <button
+                      key={chip.team}
+                      type="button"
+                      className={`vh-chat-chip ${
+                        isTeamFullySelected(selectedIds, inviteCandidates, chip.team) ? "is-on" : ""
+                      }`}
+                      onClick={() =>
+                        setSelectedIds((prev) =>
+                          toggleTeamInviteIds(prev, inviteCandidates, chip.team)
+                        )
+                      }
+                    >
+                      {chip.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : null}
+            {inviteRoles.length > 0 ? (
+              <>
+                <div className="vh-chat-chip-label">역할</div>
+                <div className="vh-chat-chips" aria-label="역할별 선택">
+                  {inviteRoles.map((chip) => (
+                    <button
+                      key={chip.role}
+                      type="button"
+                      className={`vh-chat-chip ${
+                        isRoleFullySelected(selectedIds, inviteCandidates, chip.role) ? "is-on" : ""
+                      }`}
+                      onClick={() =>
+                        setSelectedIds((prev) =>
+                          toggleRoleInviteIds(prev, inviteCandidates, chip.role)
+                        )
+                      }
+                    >
+                      {chip.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : null}
+            <label className="vh-chat-field">
+              사람 검색
+              <input
+                className="vh-chat-text"
+                value={userQuery}
+                onChange={(e) => setUserQuery(e.target.value)}
+                placeholder="이름 또는 조"
+              />
+            </label>
+            <div className="vh-chat-hits">
+              {inviteLoading ? <p className="vh-chat-status">초대 목록 불러오는 중…</p> : null}
+              {!inviteLoading && visibleInviteUsers.length === 0 ? (
+                <p className="vh-chat-status">초대할 사용자가 없습니다.</p>
+              ) : null}
+              {visibleInviteUsers.map((hit) => {
+                const on = selectedIds.includes(hit.userId);
+                return (
+                  <button
+                    key={hit.userId}
+                    type="button"
+                    className={`vh-chat-hit ${on ? "is-on" : ""}`}
+                    onClick={() =>
+                      setSelectedIds((prev) => toggleInviteId(prev, hit.userId))
+                    }
+                  >
+                    <span>{hit.displayName}</span>
+                    <span className="vh-chat-hit-meta">
+                      {hit.team !== "-" ? hit.team : hit.role}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
-          <button
-            type="button"
-            className="ui-btn ui-btn-primary"
-            disabled={!createName.trim() || creating}
-            onClick={() => void handleCreate()}
-          >
-            {creating ? "만드는 중…" : "만들기"}
-          </button>
+          <div className="vh-chat-sheet-foot">
+            <span className="vh-chat-select-count">선택 {selectedCount}명</span>
+            <button
+              type="button"
+              className="ui-btn ui-btn-primary"
+              disabled={!createName.trim() || creating}
+              onClick={() => void handleCreate()}
+            >
+              {creating ? "만드는 중…" : "만들기"}
+            </button>
+          </div>
         </div>
       ) : null}
 

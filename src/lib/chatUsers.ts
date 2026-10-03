@@ -3,6 +3,9 @@ import { normalizeAppRole } from "@/lib/sessionCookies";
 import { sanitizeChatDisplayName, normalizeChatTeam } from "@/lib/chatToken";
 import { MAX_CUSTOM_MEMBERS } from "@/lib/chatRooms";
 
+/** One-shot invite pool for create overlay. ~250 active users; no pagination. */
+export const CHAT_USERS_ALL_TAKE = 400;
+
 export type ChatUserSearchHit = {
   userId: number;
   displayName: string;
@@ -67,6 +70,13 @@ export function matchesChatUserQuery(row: ChatUserRow, query: string): boolean {
   const username = String(row.username || "").toLowerCase();
   const team = String(row.caddy?.team || "").toLowerCase();
   return name.includes(q) || username.includes(q) || team.includes(q);
+}
+
+export function listInvitableChatUsers(rows: ChatUserRow[]): ChatUserSearchHit[] {
+  return rows
+    .map((row) => toChatUserSearchHit(row))
+    .filter((hit): hit is ChatUserSearchHit => hit != null)
+    .map(sanitizeChatUserHit);
 }
 
 export function sanitizeChatUserHit(hit: ChatUserSearchHit): ChatUserSearchHit {

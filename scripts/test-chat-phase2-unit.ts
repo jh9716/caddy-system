@@ -22,13 +22,32 @@ import {
 } from "../src/lib/chatDirectoryGrant";
 import { CHAT_TOKEN_TTL_SEC } from "../src/lib/chatToken";
 import { isVerifiedAdminRole, senderRoleFromClaims } from "../src/lib/chatAcl";
+import { MAX_CUSTOM_MEMBERS } from "../src/lib/chatRooms";
 import {
+  CHAT_USERS_ALL_TAKE,
   collectChatInviteMembers,
+  listInvitableChatUsers,
   matchesChatUserQuery,
   sanitizeChatUserHit,
   toChatUserSearchHit,
   type ChatUserRow,
+  type ChatUserSearchHit,
 } from "../src/lib/chatUsers";
+import {
+  clearInviteIds,
+  filterInviteUsers,
+  invitePoolExcludingOwner,
+  inviteSelectionCount,
+  isRoleFullySelected,
+  isTeamFullySelected,
+  selectAllInviteIds,
+  toggleInviteId,
+  toggleRoleInviteIds,
+  toggleTeamInviteIds,
+  uniqueInviteIds,
+  visibleInviteRoles,
+  visibleInviteTeams,
+} from "../src/lib/chatInviteSelection";
 
 let passed = 0;
 let failed = 0;
@@ -108,6 +127,86 @@ section("invite / search");
   const hit = toChatUserSearchHit(rows[0]!);
   assert(hit?.userId === 2 && !("phone" in hit) && !("kakaoUserId" in hit), "public search fields only");
   assert(sanitizeChatUserHit(hit!).displayName === "김OO", "sanitize keeps public keys");
+  assert(MAX_CUSTOM_MEMBERS >= 250, "custom room can invite ~250");
+  assert(CHAT_USERS_ALL_TAKE >= 250, "scope=all take covers 250");
+}
+
+section("bulk invite selection");
+{
+  const pool: ChatUserSearchHit[] = [
+    { userId: 1, displayName: "나", team: "7조", role: "caddy", active: true },
+    { userId: 10, displayName: "신정훈", team: "7조", role: "caddy", active: true },
+    { userId: 11, displayName: "7조원", team: "7조", role: "caddy", active: true },
+    { userId: 20, displayName: "8조원", team: "8조", role: "caddy", active: true },
+    { userId: 30, displayName: "리더", team: "7조", role: "leader", active: true },
+    { userId: 40, displayName: "관리자", team: "-", role: "admin", active: true },
+    { userId: 50, displayName: "퇴직", team: "7조", role: "caddy", active: false },
+  ];
+  const candidates = invitePoolExcludingOwner(pool, 1);
+  assert(!candidates.some((u) => u.userId === 1), "owner not in invite UI");
+  assert(!candidates.some((u) => !u.active), "inactive excluded from UI pool");
+  assert(visibleInviteTeams(candidates).map((t) => t.team).join(",") === "7조,8조", "only existing teams");
+  assert(
+    visibleInviteRoles(candidates)
+      .map((r) => r.label)
+      .join(",") === "캐디 전체,리더,관리자",
+    "only existing roles"
+  );
+  const all = selectAllInviteIds(candidates);
+  assert(all.length === 5 && !all.includes(1), "전체 선택 skips owner");
+  assert(inviteSelectionCount(all) === 5, "count is extra members");
+  assert(clearInviteIds().length === 0, "선택 해제");
+  const team7 = toggleTeamInviteIds([], candidates, "7조");
+  assert(team7.includes(10) && team7.includes(11) && team7.includes(30) && !team7.includes(20), "7조 selects that team");
+  const team78 = toggleTeamInviteIds(team7, candidates, "8조");
+  assert(team78.includes(20) && team78.includes(10), "7조+8조");
+  const team7off = toggleTeamInviteIds(team78, candidates, "7조");
+  assert(!team7off.includes(10) && team7off.includes(20), "7조 toggle off keeps 8조");
+  const caddies = toggleRoleInviteIds([], candidates, "caddy");
+  assert(caddies.includes(10) && caddies.includes(20) && !caddies.includes(30), "캐디 전체 excludes leaders");
+  const leaders = toggleRoleInviteIds(caddies, candidates, "leader");
+  assert(leaders.includes(30), "리더 chip is separate");
+  const minusJung = toggleInviteId(team7, 10);
+  assert(!minusJung.includes(10) && minusJung.includes(11), "quick-select then exclude 신정훈");
+  const searched = filterInviteUsers(candidates, "신정");
+  assert(searched.map((u) => u.userId).join(",") === "10", "search filters list");
+  const kept = toggleInviteId(team7, 20);
+  assert(kept.includes(11) && kept.includes(20), "selection SoT survives search");
+  assert(isTeamFullySelected(team7, candidates, "7조"), "7조 fully selected");
+  assert(!isTeamFullySelected(minusJung, candidates, "7조"), "partial 7조 not fully selected");
+  assert(isRoleFullySelected(caddies, candidates, "caddy"), "caddy role fully selected");
+  const emptyTeams = visibleInviteTeams([]);
+  assert(emptyTeams.length === 0, "no invented 1-12조");
+
+  const many: ChatUserRow[] = [];
+  for (let i = 2; i <= 251; i++) {
+    many.push({
+      id: i,
+      username: `u${i}`,
+      role: i === 2 ? "admin" : "caddy",
+      caddy: { name: `U${i}`, team: `${((i % 12) || 12)}조`, employmentStatus: "ACTIVE" },
+    });
+  }
+  many.push({
+    id: 999,
+    username: "retired",
+    role: "caddy",
+    caddy: { name: "퇴직", team: "1조", employmentStatus: "RETIRED" },
+  });
+  const listed = listInvitableChatUsers(many);
+  assert(listed.length === 250, "250-scale invite pool");
+  assert(listed.every((u) => !("phone" in u) && !("kakaoUserId" in u)), "no sensitive fields at 250");
+  const collected = collectChatInviteMembers({
+    owner: { userId: 1, displayName: "나", role: "admin", team: "-" },
+    candidates: many,
+    requestedIds: [...listed.map((u) => u.userId), 1, listed[0]!.userId],
+  });
+  assert(collected.ok, "250 + owner within cap");
+  if (collected.ok) {
+    assert(collected.members.length === 251, "owner + 250 extras");
+    assert(uniqueInviteIds(collected.members.map((m) => m.userId)).length === 251, "no duplicate members");
+    assert(!collected.members.some((m) => m.userId === 999), "retired excluded from create");
+  }
 }
 
 section("create idempotency / internal secret");

@@ -838,6 +838,7 @@ async function main() {
     const adminNav = manageNavItems(true).map((i) => i.href);
     const staffNav = manageNavItems(false).map((i) => i.href);
     assert(adminNav.includes("/board"), "admin shell includes 배치표");
+    assert(adminNav.includes("/chat"), "admin shell includes 채팅");
     assert(adminNav.includes("/manage/caddies"), "admin shell keeps 캐디 관리");
     assert(adminNav.includes("/manage/assignments"), "admin shell keeps 자동배치");
     assert(staffNav.includes("/manage/assignments"), "staff admin keeps 자동배치");

@@ -326,9 +326,111 @@ section("POST /api/chat/token");
     );
     const unlinkedBody = await unlinked.json();
     assert(unlinked.status === 403 && unlinkedBody.error === "caddy_not_linked", "unlinked rejected");
+
+    prisma.user.findUnique = (async () => ({
+      id: 1,
+      username: "park",
+      role: "admin",
+      sessionVersion: 1,
+      caddyId: null,
+      managedTeams: [],
+      mustChangePassword: false,
+      caddy: null,
+    })) as typeof prisma.user.findUnique;
+    const adminCookie = await cookieFor({
+      id: 1,
+      username: "park",
+      role: "admin",
+      sessionVersion: 1,
+    });
+    const adminRes = await POST(
+      new NextRequest("http://127.0.0.1/api/chat/token", {
+        method: "POST",
+        headers: { cookie: adminCookie },
+      })
+    );
+    const adminBody = await adminRes.json();
+    assert(adminRes.status === 200 && adminBody.user.userId === 1, "DB-backed admin token");
+    assert(adminBody.user.role === "admin", "admin role is server verified");
   } finally {
     prisma.user.findUnique = origUser;
     prisma.caddy.findUnique = origCaddy;
+  }
+}
+
+section("GET /api/chat/users");
+{
+  const { NextRequest } = await import("next/server");
+  const { GET } = await import("../src/app/api/chat/users/route");
+  const { prisma } = await import("../src/lib/prisma");
+  const {
+    SESSION_COOKIE_NAME,
+    buildSessionClaims,
+    signSessionClaims,
+  } = await import("../src/lib/sessionCookies");
+
+  const unauth = await GET(new NextRequest("http://127.0.0.1/api/chat/users?scope=all"));
+  const unauthBody = await unauth.json();
+  assert(unauth.status === 401 && unauthBody.error === "unauthorized", "unauth scope=all rejected");
+
+  const origUser = prisma.user.findUnique.bind(prisma.user);
+  const origCaddy = prisma.caddy.findUnique.bind(prisma.caddy);
+  const origFindMany = prisma.user.findMany.bind(prisma.user);
+  prisma.user.findUnique = (async () => ({
+    id: 1,
+    username: "park",
+    role: "admin",
+    sessionVersion: 1,
+    caddyId: null,
+    managedTeams: [],
+    mustChangePassword: false,
+    caddy: null,
+  })) as typeof prisma.user.findUnique;
+  prisma.caddy.findUnique = (async () => null) as typeof prisma.caddy.findUnique;
+  prisma.user.findMany = (async () => [
+    { id: 2, username: "kim", role: "caddy", caddy: { name: "김OO", team: "2조", employmentStatus: "ACTIVE" } },
+    { id: 3, username: "out", role: "caddy", caddy: { name: "퇴직", team: "3조", employmentStatus: "RETIRED" } },
+    { id: 4, username: "admin", role: "admin", caddy: null },
+  ]) as typeof prisma.user.findMany;
+  try {
+    const cookie = `${SESSION_COOKIE_NAME}=${await signSessionClaims(
+      buildSessionClaims({
+        userId: 1,
+        username: "park",
+        role: "admin",
+        sessionVersion: 1,
+      })
+    )}`;
+    const empty = await GET(
+      new NextRequest("http://127.0.0.1/api/chat/users?q=", { headers: { cookie } })
+    );
+    const emptyBody = await empty.json();
+    assert(empty.status === 200 && Array.isArray(emptyBody.users) && emptyBody.users.length === 0, "empty q still []");
+
+    const all = await GET(
+      new NextRequest("http://127.0.0.1/api/chat/users?scope=all", { headers: { cookie } })
+    );
+    const allBody = await all.json();
+    assert(all.status === 200 && allBody.users.length === 2, "scope=all returns invitable only");
+    assert(
+      allBody.users.every(
+        (u: { phone?: unknown; kakaoUserId?: unknown }) =>
+          !("phone" in u) && !("kakaoUserId" in u)
+      ),
+      "scope=all has no sensitive fields"
+    );
+    assert(
+      allBody.users.some((u: { role: string }) => u.role === "admin"),
+      "DB admin is invitable"
+    );
+    assert(
+      !allBody.users.some((u: { displayName: string }) => u.displayName === "퇴직"),
+      "retired excluded from scope=all"
+    );
+  } finally {
+    prisma.user.findUnique = origUser;
+    prisma.caddy.findUnique = origCaddy;
+    prisma.user.findMany = origFindMany;
   }
 }
 

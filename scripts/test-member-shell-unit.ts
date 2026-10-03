@@ -75,6 +75,8 @@ section("admin menus unchanged");
   assert(admin.includes("/manage/privacy-requests"), "admin has 개인정보 요청 inbox");
   assert(admin.includes("/manage/off-requests"), "admin has 휴무 신청 관리");
   assert(admin.includes("/course-reports"), "admin keeps 코스 제보");
+  assert(admin.includes("/chat"), "admin sidebar has 채팅");
+  assert(staff.includes("/chat"), "staff admin sidebar has 채팅");
   const manageShell = read("src/components/manage/ManageShell.tsx");
   assert(manageShell.includes('label: "캐디 관리"'), "ManageShell still has 캐디 관리");
   assert(manageShell.includes('href: "/manage/caddies"'), "admin bottom/nav 캐디 path");
