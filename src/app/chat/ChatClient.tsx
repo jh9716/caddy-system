@@ -245,7 +245,11 @@ export default function ChatClient() {
         tokenRef.current = info;
         setTokenInfo(info);
         connectDirectory(info);
-        await fetchRoomsHttp(info.token);
+        try {
+          await fetchRoomsHttp(info.token);
+        } catch {
+          // Directory WS is the realtime source; HTTP is a same-session fallback.
+        }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : "채팅을 열 수 없습니다.");
       } finally {

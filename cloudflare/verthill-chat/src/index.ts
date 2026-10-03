@@ -32,10 +32,21 @@ export interface Env {
   CHAT_AUTH_SECRET: string;
 }
 
+function corsHeaders(): Record<string, string> {
+  return {
+    "access-control-allow-origin": "*",
+    "access-control-allow-headers": "content-type, authorization",
+    "access-control-allow-methods": "GET, POST, OPTIONS",
+  };
+}
+
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8" },
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      ...corsHeaders(),
+    },
   });
 }
 
@@ -129,6 +140,9 @@ async function forwardDirectory(
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: corsHeaders() });
+    }
     if (request.method === "GET" && url.pathname === "/health") {
       return json({ ok: true, service: "verthill-chat" });
     }
