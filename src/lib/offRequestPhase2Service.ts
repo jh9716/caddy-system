@@ -257,11 +257,11 @@ export async function getOffRequestLeaderTeamMonth(
   const start = requireCalendarYmd(days[0]);
   const end = requireCalendarYmd(days[days.length - 1]);
 
-  const [requests, overrides, approvedByDate, finalization] = await Promise.all([
+  const [rows, overrides, approvedByDate, finalization] = await Promise.all([
     db.offRequest.findMany({
       where: {
         date: { gte: start, lte: end },
-        status: "REQUESTED",
+        status: { in: ["REQUESTED", "APPROVED"] },
         caddy: { team: leader.team },
       },
       include: { caddy: { select: { id: true, name: true, team: true } } },
@@ -280,9 +280,15 @@ export async function getOffRequestLeaderTeamMonth(
       : Promise.resolve(null),
   ]);
 
-  const requestedByDate = new Map<string, typeof requests>();
-  for (const row of requests) {
+  const requested = rows.filter((row) => row.status === "REQUESTED");
+  const requestedByDate = new Map<string, typeof requested>();
+  const displayByDate = new Map<string, typeof rows>();
+  for (const row of rows) {
     const ymd = formatOffDateYmd(row.date);
+    const display = displayByDate.get(ymd) ?? [];
+    display.push(row);
+    displayByDate.set(ymd, display);
+    if (row.status !== "REQUESTED") continue;
     const list = requestedByDate.get(ymd) ?? [];
     list.push(row);
     requestedByDate.set(ymd, list);
@@ -295,6 +301,7 @@ export async function getOffRequestLeaderTeamMonth(
 
   const dayCells: LeaderDayCell[] = days.map((date) => {
     const dayRequests = requestedByDate.get(date) ?? [];
+    const displayRequests = displayByDate.get(date) ?? [];
     const requestedCount = dayRequests.length;
     const approvedCount = approvedByDate.get(date) ?? 0;
     const limit = resolveDayQuotaLimit({
@@ -312,7 +319,7 @@ export async function getOffRequestLeaderTeamMonth(
       over,
       overCount: over ? occupied - limit : 0,
       override: overrideByDate.has(date),
-      requests: dayRequests.map((row) => ({
+      requests: displayRequests.map((row) => ({
         id: row.id,
         caddyId: row.caddy.id,
         caddyName: row.caddy.name,
@@ -337,7 +344,7 @@ export async function getOffRequestLeaderTeamMonth(
     window: window ? serializeOffRequestWindow(window) : null,
     finalization: finalization ? serializeFinalization(finalization) : null,
     defaultQuota,
-    requestedCount: requests.length,
+    requestedCount: requested.length,
     overDayCount: overDays.length,
     canAdjust,
     canFinalize,
@@ -646,19 +653,11 @@ export async function finalizeTeamOffRequests(
         };
       } catch (e) {
         if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
-          const again = await tx.offRequestTeamFinalization.findUnique({
-            where: { windowId_team: { windowId: lockedWindow.id, team: leader.team } },
-          });
-          if (again) {
-            return {
-              alreadyFinalized: true,
-              team: leader.team,
-              month: lockedWindow.yearMonth,
-              approvedCount: 0,
-              assignmentIds: [] as number[],
-              finalization: serializeFinalization(again),
-            };
-          }
+          throw new OffRequestServiceError(
+            "already_finalized",
+            "이미 팀 확정이 끝났습니다.",
+            409
+          );
         }
         throw e;
       }

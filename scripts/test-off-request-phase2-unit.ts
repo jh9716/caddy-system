@@ -324,6 +324,15 @@ async function runLocalDbTests() {
       where: { comment: { contains: `OffRequest#${aReq.id}` } },
     });
     assert(offCount === 1, "중복 Assignment 없음");
+    const afterFin = await getOffRequestLeaderTeamMonth(prisma, leader, month);
+    assert(afterFin.finalization != null, "finalization visible");
+    assert(!afterFin.canAdjust && !afterFin.canFinalize, "locked after finalize");
+    const listed = afterFin.days.flatMap((d) => d.requests);
+    assert(listed.length === 3, "확정 후 APPROVED 3명 표시");
+    assert(
+      listed.every((r) => r.status === "APPROVED"),
+      "확정 후 목록은 APPROVED"
+    );
 
     await expectCode(
       () =>

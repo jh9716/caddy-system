@@ -72,8 +72,14 @@ function formatPeriod(window: WindowDto | null): string {
   return `${open} ~ ${close}`;
 }
 
+function monthFromSearch(): string | null {
+  if (typeof window === "undefined") return null;
+  const raw = new URLSearchParams(window.location.search).get("month") || "";
+  return isYearMonth(raw) ? raw : null;
+}
+
 export default function OffRequestCalendarClient() {
-  const [month, setMonth] = useState(() => kstYmd().slice(0, 7));
+  const [month, setMonth] = useState(() => monthFromSearch() || kstYmd().slice(0, 7));
   const [data, setData] = useState<CalendarDto | null>(() => {
     const initialMonth = kstYmd().slice(0, 7);
     return (
@@ -153,6 +159,11 @@ export default function OffRequestCalendarClient() {
     } finally {
       if (isCurrentLoadGen(gen, loadGen.current)) setLoading(false);
     }
+  }, []);
+
+  useEffect(() => {
+    const fromUrl = monthFromSearch();
+    if (fromUrl) setMonth(fromUrl);
   }, []);
 
   useEffect(() => {

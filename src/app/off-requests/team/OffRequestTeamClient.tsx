@@ -42,8 +42,14 @@ type TeamDto = {
   days: DayDto[];
 };
 
+function monthFromSearch(): string | null {
+  if (typeof window === "undefined") return null;
+  const raw = new URLSearchParams(window.location.search).get("month") || "";
+  return isYearMonth(raw) ? raw : null;
+}
+
 export default function OffRequestTeamClient() {
-  const [month, setMonth] = useState(() => kstYmd().slice(0, 7));
+  const [month, setMonth] = useState(() => monthFromSearch() || kstYmd().slice(0, 7));
   const [data, setData] = useState<TeamDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -78,6 +84,11 @@ export default function OffRequestTeamClient() {
     } finally {
       if (gen === loadGen.current) setLoading(false);
     }
+  }, []);
+
+  useEffect(() => {
+    const fromUrl = monthFromSearch();
+    if (fromUrl) setMonth(fromUrl);
   }, []);
 
   useEffect(() => {
@@ -129,7 +140,9 @@ export default function OffRequestTeamClient() {
   const status = window?.status ?? null;
   const finalized = Boolean(data?.finalization);
   const canAdjust = Boolean(data?.canAdjust);
-  const visibleDays = (data?.days ?? []).filter((d) => d.requestedCount > 0 || d.over);
+  const visibleDays = (data?.days ?? []).filter(
+    (d) => d.requestedCount > 0 || d.approvedCount > 0 || d.over
+  );
 
   return (
     <div className="off-team">
@@ -182,7 +195,7 @@ export default function OffRequestTeamClient() {
         </p>
       ) : null}
 
-      {visibleDays.length === 0 && !loading ? (
+      {visibleDays.length === 0 && !loading && !finalized ? (
         <section className="off-admin-card">
           <p className="off-cal-hint">이 달 신청 0건입니다. 검토 후 팀 최종확정할 수 있습니다.</p>
         </section>
@@ -205,6 +218,7 @@ export default function OffRequestTeamClient() {
               <li key={row.id}>
                 <span>
                   {row.caddyName} {row.date.slice(5).replace("-", "/")}
+                  {row.status === "APPROVED" ? " · 확정" : ""}
                 </span>
                 {canAdjust ? (
                   movingId === row.id ? (
