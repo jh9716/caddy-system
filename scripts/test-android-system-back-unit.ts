@@ -235,6 +235,16 @@ section("wiring — no Chat Phase 2");
   assert(gradle.includes("capacitor-app"), "cap sync includes App plugin");
   assert(capBuild.includes("capacitor-app"), "app gradle implements App plugin");
   assert(
+    !bootstrap.includes('from "@capacitor/app"') &&
+      !bootstrap.includes("from '@capacitor/app'"),
+    "no static @capacitor/app import"
+  );
+  assert(
+    bootstrap.includes('import("@capacitor/app")') ||
+      bootstrap.includes("import('@capacitor/app')"),
+    "App plugin is dynamically imported after Android guard"
+  );
+  assert(
     bootstrap.includes('addListener("backButton"') ||
       bootstrap.includes("addListener('backButton'"),
     "bootstrap listens backButton"
