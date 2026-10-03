@@ -115,6 +115,10 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
         const userId = Number(url.searchParams.get("userId"));
         return json({ ok: true, member: this.isMember(roomId, userId) });
       }
+      if (request.method === "GET" && url.pathname === "/internal/member-ids") {
+        const roomId = url.searchParams.get("room") || "";
+        return json({ ok: true, ids: this.listMemberIds(roomId) });
+      }
       return json({ error: "not_found" }, 404);
     }
 
@@ -197,6 +201,15 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
       .exec(`SELECT 1 AS ok FROM members WHERE room_id = ? AND user_id = ?`, roomId, userId)
       .toArray();
     return rows.length > 0;
+  }
+
+  listMemberIds(roomId: string): number[] {
+    if (isAllRoomId(roomId)) return [];
+    return this.ctx.storage.sql
+      .exec(`SELECT user_id FROM members WHERE room_id = ?`, roomId)
+      .toArray()
+      .map((row) => Number(row.user_id))
+      .filter((id) => Number.isInteger(id) && id > 0);
   }
 
   private listMembers(roomId: string) {

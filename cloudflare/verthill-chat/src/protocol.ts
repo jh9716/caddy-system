@@ -34,8 +34,13 @@ export const ALLOWED_ROOMS = [
 ] as const;
 export const PREVIEW_MAX = 80;
 export const DIRECTORY_NAME = "verthill-global";
+export const MAX_MENTIONS = 20;
+export const MAX_MENTION_RAW = 100;
+export const MENTION_ALL_LABEL = "전체";
 
 export type ChatSenderRole = "admin" | "caddy" | "leader";
+
+export type ChatMention = { userId: number };
 
 export type ChatMessage = {
   type: "message";
@@ -46,6 +51,8 @@ export type ChatMessage = {
   body: string;
   sentAt: string;
   seq?: number;
+  mentions: ChatMention[];
+  mentionAll: boolean;
 };
 
 export type HistoryEvent = {
@@ -125,8 +132,76 @@ export function senderRoleFromClaims(role: string): ChatSenderRole {
   return "caddy";
 }
 
+export function canMentionAll(role: string | null | undefined): boolean {
+  return role === "admin" || role === "leader";
+}
+
+export function normalizeMentionUserIds(raw: unknown): number[] {
+  if (!Array.isArray(raw)) return [];
+  if (raw.length > MAX_MENTION_RAW) return [];
+  const out: number[] = [];
+  const seen = new Set<number>();
+  for (const item of raw) {
+    const id =
+      item != null && typeof item === "object" && "userId" in item
+        ? Number((item as { userId: unknown }).userId)
+        : Number(item);
+    if (!Number.isInteger(id) || id <= 0) continue;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+    if (out.length >= MAX_MENTIONS) break;
+  }
+  return out;
+}
+
+export function mentionsToWire(ids: unknown): ChatMention[] {
+  return normalizeMentionUserIds(ids).map((userId) => ({ userId }));
+}
+
+export function resolveMentionAll(
+  raw: unknown,
+  senderRole: string | null | undefined
+): boolean {
+  return raw === true && canMentionAll(senderRole);
+}
+
+export function filterMentionsToMembers(
+  ids: number[],
+  memberIds: Iterable<number> | null | undefined
+): number[] {
+  if (memberIds == null) return normalizeMentionUserIds(ids);
+  const allowed = new Set<number>();
+  for (const id of memberIds) {
+    if (Number.isInteger(id) && id > 0) allowed.add(id);
+  }
+  return normalizeMentionUserIds(ids).filter((id) => allowed.has(id));
+}
+
+export function parseStoredMentions(raw: unknown): ChatMention[] {
+  if (raw == null || raw === "") return [];
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    return mentionsToWire(normalizeMentionUserIds(parsed));
+  } catch {
+    return [];
+  }
+}
+
+export function parseStoredMentionAll(raw: unknown): boolean {
+  return raw === true || raw === 1 || raw === "1";
+}
+
 export function validateIncomingMessage(raw: unknown):
-  | { ok: true; value: { clientMessageId: string; body: string } }
+  | {
+      ok: true;
+      value: {
+        clientMessageId: string;
+        body: string;
+        mentions: unknown;
+        mentionAll: unknown;
+      };
+    }
   | { ok: false; code: string; message: string } {
   if (raw == null || typeof raw !== "object" || Array.isArray(raw)) {
     return { ok: false, code: "invalid_payload", message: "JSON object required" };
@@ -154,7 +229,15 @@ export function validateIncomingMessage(raw: unknown):
       message: `body max ${BODY_MAX}`,
     };
   }
-  return { ok: true, value: { clientMessageId, body } };
+  return {
+    ok: true,
+    value: {
+      clientMessageId,
+      body,
+      mentions: input.mentions,
+      mentionAll: input.mentionAll,
+    },
+  };
 }
 
 export function validateIncomingRead(raw: unknown):
