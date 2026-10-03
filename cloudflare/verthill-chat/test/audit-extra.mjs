@@ -94,7 +94,7 @@ async function stopWrangler(child) {
   await Promise.race([once(child, "exit"), new Promise((r) => setTimeout(r, 2000))]);
 }
 
-test("history prune, 200-cap, DO restart with auth", async () => {
+test("history persist + pagination, 200-cap, DO restart with auth", async () => {
   const tok = signTestToken({ userId: 5, displayName: "P", room: "team-3", team: "3조" });
   const { port, child } = await startWrangler();
   let restartId = "";
@@ -112,9 +112,19 @@ test("history prune, 200-cap, DO restart with auth", async () => {
     const hist = await connect(port, "team-3", tok.token);
     const history = await waitMessage(hist, (d) => d.type === "history");
     const ids = history.messages.map((m) => m.clientMessageId);
-    assert.ok(history.messages.length <= 30);
+    assert.equal(history.messages.length, 30);
+    assert.equal(history.hasMore, true);
     assert.equal(ids.includes(`${prefix}-0`), false);
     assert.equal(ids.includes(`${prefix}-34`), true);
+    const olderWait = waitMessage(
+      hist,
+      (d) => d.type === "history" && d.oldestSeq !== history.oldestSeq
+    );
+    hist.send(JSON.stringify({ type: "history", beforeSeq: history.oldestSeq, limit: 30 }));
+    const older = await olderWait;
+    const olderIds = older.messages.map((m) => m.clientMessageId);
+    assert.equal(olderIds.includes(`${prefix}-0`), true);
+    assert.equal(older.messages.some((m) => ids.includes(m.clientMessageId)), false);
     hist.close();
 
     const sockets = [];

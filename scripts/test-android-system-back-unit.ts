@@ -11,6 +11,7 @@ import {
   isAuthHistoryPath,
   isChatPath,
   peekAndroidBackOverlays,
+  registerAndroidChatOverlayClose,
   registerAndroidChatRoomLeave,
   registerAndroidDrawerClose,
   resetAndroidBackOverlaysForTests,
@@ -112,6 +113,16 @@ section("back matrix");
   assert(
     resolveAndroidSystemBack({
       drawerOpen: false,
+      chatOverlayOpen: true,
+      inChatRoom: true,
+      pathname: "/chat",
+      canGoBack: true,
+    }) === "close-chat-overlay",
+    "create/members sheet closes before leaving room"
+  );
+  assert(
+    resolveAndroidSystemBack({
+      drawerOpen: false,
       inChatRoom: false,
       pathname: "/notice",
       canGoBack: true,
@@ -179,25 +190,35 @@ section("apply hooks");
   const calls: string[] = [];
   applyAndroidSystemBack("close-drawer", {
     closeDrawer: () => calls.push("drawer"),
+    closeChatOverlay: () => calls.push("overlay"),
+    leaveChatRoom: () => calls.push("room"),
+    historyBack: () => calls.push("back"),
+  });
+  applyAndroidSystemBack("close-chat-overlay", {
+    closeDrawer: () => calls.push("drawer"),
+    closeChatOverlay: () => calls.push("overlay"),
     leaveChatRoom: () => calls.push("room"),
     historyBack: () => calls.push("back"),
   });
   applyAndroidSystemBack("leave-chat-room", {
     closeDrawer: () => calls.push("drawer"),
+    closeChatOverlay: () => calls.push("overlay"),
     leaveChatRoom: () => calls.push("room"),
     historyBack: () => calls.push("back"),
   });
   applyAndroidSystemBack("history-back", {
     closeDrawer: () => calls.push("drawer"),
+    closeChatOverlay: () => calls.push("overlay"),
     leaveChatRoom: () => calls.push("room"),
     historyBack: () => calls.push("back"),
   });
   applyAndroidSystemBack("noop", {
     closeDrawer: () => calls.push("drawer"),
+    closeChatOverlay: () => calls.push("overlay"),
     leaveChatRoom: () => calls.push("room"),
     historyBack: () => calls.push("back"),
   });
-  assert(calls.join(",") === "drawer,room,back", "apply calls only the matching hook");
+  assert(calls.join(",") === "drawer,overlay,room,back", "apply calls only the matching hook");
 }
 
 section("overlay registry");
@@ -212,9 +233,13 @@ section("overlay registry");
   assert(peekAndroidBackOverlays().inChatRoom, "room register");
   offRoom();
   assert(!peekAndroidBackOverlays().inChatRoom, "room unregister");
+  const offOverlay = registerAndroidChatOverlayClose(() => {});
+  assert(peekAndroidBackOverlays().chatOverlayOpen, "overlay register");
+  offOverlay();
+  assert(!peekAndroidBackOverlays().chatOverlayOpen, "overlay unregister");
 }
 
-section("wiring — no Chat Phase 2");
+section("wiring — chat overlays, no room URL");
 {
   const pkg = read("package.json");
   const bootstrap = read("src/components/AndroidSystemBackBootstrap.tsx");

@@ -5,11 +5,17 @@
   "compatibility_date": "2026-10-03",
   "workers_dev": true,
   "preview_urls": false,
+  // Optional later (do not set in this PR): wrangler secret put CHAT_INTERNAL_SECRET
+  // Worker/Next fall back to CHAT_AUTH_SECRET until both sides set the new name together.
   "durable_objects": {
     "bindings": [
       {
         "name": "CHAT_ROOM",
         "class_name": "ChatRoom"
+      },
+      {
+        "name": "CHAT_DIRECTORY",
+        "class_name": "ChatDirectory"
       }
     ]
   },
@@ -17,6 +23,10 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["ChatRoom"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["ChatDirectory"]
     }
   ]
 }

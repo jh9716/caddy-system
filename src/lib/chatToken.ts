@@ -1,9 +1,20 @@
 import type { AppRole } from "@/lib/sessionCookies";
 
-export const CHAT_TOKEN_TTL_SEC = 60 * 10;
-export const CHAT_TOKEN_VERSION = 1 as const;
+export const CHAT_TOKEN_TTL_SEC = 60 * 30;
+export const CHAT_TOKEN_VERSION = 2 as const;
+export const CHAT_TOKEN_V1 = 1 as const;
 
-export type ChatTokenClaims = {
+export type ChatTokenV2Claims = {
+  v: 2;
+  userId: number;
+  displayName: string;
+  role: AppRole;
+  team: string;
+  iat: number;
+  exp: number;
+};
+
+export type ChatTokenV1Claims = {
   v: 1;
   userId: number;
   displayName: string;
@@ -13,6 +24,12 @@ export type ChatTokenClaims = {
   iat: number;
   exp: number;
 };
+
+export type ChatTokenClaims = ChatTokenV2Claims | ChatTokenV1Claims;
+
+export function isChatTokenV2(claims: ChatTokenClaims): claims is ChatTokenV2Claims {
+  return claims.v === 2;
+}
 
 export function getChatAuthSecret(): string {
   return String(process.env.CHAT_AUTH_SECRET || "").trim();
@@ -26,14 +43,34 @@ export function sanitizeChatDisplayName(name: string): string {
     .slice(0, 64);
 }
 
+export function normalizeChatTeam(team: string): string {
+  const cleaned = String(team ?? "")
+    .replace(/\|/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 32);
+  return cleaned || "-";
+}
+
 export function canonicalChatTokenPayload(claims: ChatTokenClaims): string {
+  if (claims.v === 2) {
+    return [
+      "2",
+      String(claims.userId),
+      sanitizeChatDisplayName(claims.displayName),
+      claims.role,
+      normalizeChatTeam(claims.team),
+      String(claims.iat),
+      String(claims.exp),
+    ].join("|");
+  }
   return [
-    String(claims.v),
+    "1",
     String(claims.userId),
     sanitizeChatDisplayName(claims.displayName),
     claims.role,
-    claims.team,
-    claims.room,
+    normalizeChatTeam(claims.team),
+    String(claims.room),
     String(claims.iat),
     String(claims.exp),
   ].join("|");
@@ -97,27 +134,48 @@ export async function signChatToken(
 
 export function parseChatTokenClaims(canonical: string): ChatTokenClaims | null {
   const parts = canonical.split("|");
-  if (parts.length !== 8) return null;
-  const [v, userIdRaw, displayName, role, team, room, iatRaw, expRaw] = parts;
-  if (v !== "1") return null;
-  const userId = Number(userIdRaw);
-  const iat = Number(iatRaw);
-  const exp = Number(expRaw);
-  if (!Number.isInteger(userId) || userId <= 0) return null;
-  if (!Number.isFinite(iat) || !Number.isFinite(exp)) return null;
-  if (role !== "admin" && role !== "caddy" && role !== "leader") return null;
-  const name = sanitizeChatDisplayName(displayName);
-  if (!name || !team || !room) return null;
-  return {
-    v: 1,
-    userId,
-    displayName: name,
-    role,
-    team,
-    room,
-    iat,
-    exp,
-  };
+  if (parts[0] === "2" && parts.length === 7) {
+    const [, userIdRaw, displayName, role, team, iatRaw, expRaw] = parts;
+    const userId = Number(userIdRaw);
+    const iat = Number(iatRaw);
+    const exp = Number(expRaw);
+    if (!Number.isInteger(userId) || userId <= 0) return null;
+    if (!Number.isFinite(iat) || !Number.isFinite(exp)) return null;
+    if (role !== "admin" && role !== "caddy" && role !== "leader") return null;
+    const name = sanitizeChatDisplayName(displayName);
+    if (!name) return null;
+    return {
+      v: 2,
+      userId,
+      displayName: name,
+      role,
+      team: normalizeChatTeam(team),
+      iat,
+      exp,
+    };
+  }
+  if (parts[0] === "1" && parts.length === 8) {
+    const [, userIdRaw, displayName, role, team, room, iatRaw, expRaw] = parts;
+    const userId = Number(userIdRaw);
+    const iat = Number(iatRaw);
+    const exp = Number(expRaw);
+    if (!Number.isInteger(userId) || userId <= 0) return null;
+    if (!Number.isFinite(iat) || !Number.isFinite(exp)) return null;
+    if (role !== "admin" && role !== "caddy" && role !== "leader") return null;
+    const name = sanitizeChatDisplayName(displayName);
+    if (!name || !team || !room) return null;
+    return {
+      v: 1,
+      userId,
+      displayName: name,
+      role,
+      team: normalizeChatTeam(team),
+      room,
+      iat,
+      exp,
+    };
+  }
+  return null;
 }
 
 export async function verifyChatToken(

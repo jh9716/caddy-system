@@ -1,5 +1,5 @@
 /**
- * /chat Phase 1 wiring — no DB.
+ * /chat Phase 2 wiring — no DB.
  * 실행: npm run test:chat-ui-unit
  */
 import fs from "node:fs";
@@ -31,6 +31,11 @@ section("routes and nav");
   assert(fs.existsSync("src/app/chat/page.tsx"), "/chat page");
   assert(fs.existsSync("src/app/chat/ChatClient.tsx"), "ChatClient");
   assert(fs.existsSync("src/app/api/chat/token/route.ts"), "token API");
+  assert(fs.existsSync("src/app/api/chat/users/route.ts"), "user search API");
+  assert(fs.existsSync("src/app/api/chat/rooms/route.ts"), "room create API");
+  const users = read("src/app/api/chat/users/route.ts");
+  assert(users.includes("resolveAuthUser"), "user search requires login");
+  assert(users.includes("q.length < 1"), "empty q does not dump staff");
   const mw = read("src/middleware.ts");
   assert(mw.includes('"/chat"'), "middleware matcher /chat");
   const nav = read("src/lib/boardNav.ts");
@@ -38,33 +43,70 @@ section("routes and nav");
   const css = read("src/app/globals.css");
   assert(css.includes(".vh-chat"), "chat css");
   assert(css.includes("min(390px, 100%)"), "390px first");
+  assert(css.includes("vh-bottom-nav-height"), "chat height accounts for bottom nav");
+  assert(css.includes(".vh-chat-log") && css.includes("min-height: 0"), "log scrolls inside viewport");
+  assert(css.includes(".vh-chat-bubble.is-admin"), "admin superchat style");
+  assert(css.includes("vh-chat-unread"), "unread badge");
 }
 
-section("android back room leave, no Phase 2");
+section("android back room leave");
 {
   const chat = read("src/app/chat/ChatClient.tsx");
   assert(chat.includes("registerAndroidChatRoomLeave"), "room view registers Android back leave");
+  assert(chat.includes("registerAndroidChatOverlayClose"), "create/members overlay back");
   assert(chat.includes('setView("list")'), "목록 still setView list");
-  assert(!chat.includes("roomId="), "no Phase 2 room query");
+  assert(chat.includes('useState<"list" | "room">("list")'), "chat still list/room state");
+  assert(!chat.includes("searchParams"), "no room URL query");
+  assert(chat.includes("전체 채팅방은 모든 활성") || chat.includes("ALL_ROOM_ID"), "overall room");
+  assert(chat.includes("+ 채팅방 만들기"), "create room CTA");
+  assert(!chat.includes("내 조 채팅방"), "team rooms hidden from default UI");
 }
 
 section("no neon chat schema");
 {
   const schema = read("prisma/schema.prisma");
   assert(!/model\s+ChatMessage/.test(schema), "no ChatMessage model");
+  assert(!/model\s+ChatRoom/.test(schema), "no ChatRoom model");
   const migrations = fs.readdirSync("prisma/migrations");
   assert(!migrations.some((name) => /chat/i.test(name)), "no chat prisma migration");
 }
 
-section("worker auth");
+section("worker auth + directory");
 {
   const worker = read("cloudflare/verthill-chat/src/index.ts");
   assert(worker.includes("verifyChatToken"), "worker verifies token");
   assert(worker.includes("serializeAttachment"), "claims on hibernated socket");
   assert(worker.includes("sender_user_id"), "persists senderUserId");
+  assert(worker.includes("sender_role"), "persists senderRole from token");
+  assert(worker.includes("CHAT_DIRECTORY"), "directory binding used");
   const proto = read("cloudflare/verthill-chat/src/protocol.ts");
-  assert(proto.includes("team-1"), "team rooms");
+  assert(proto.includes("team-1"), "legacy team rooms still valid ids");
+  assert(proto.includes('ALL_ROOM_ID = "all"'), "overall room id");
+  assert(proto.includes("MAX_CONNECTIONS_ALL = 800"), "overall room cap 800");
+  assert(proto.includes("MAX_CONNECTIONS = 200"), "custom/legacy cap 200");
+  assert(proto.includes("HISTORY_PAGE_MAX = 50"), "history page max 50");
+  assert(!worker.includes("trimHistory"), "no ChatRoom prune");
+  assert(!worker.includes("DELETE FROM messages"), "messages are not deleted");
+  assert(worker.includes("validateIncomingHistory"), "seq cursor history");
+  assert(worker.includes("CHAT_INTERNAL_SECRET"), "internal secret name");
+  assert(worker.includes("server_only"), "browser origin cannot create rooms");
+  const dir = read("cloudflare/verthill-chat/src/directory.ts");
+  assert(dir.includes("verifyInternalRequest"), "directory internals require internal auth");
+  assert(dir.includes("clampReadSeq"), "malicious read seq clamped");
+  const chat = read("src/app/chat/ChatClient.tsx");
+  assert(chat.includes("clientRequestId"), "create idempotency id");
+  assert(chat.includes("beforeSeq"), "history pagination request");
+  assert(chat.includes("이전 메시지"), "load older CTA");
+  const token = read("src/lib/chatToken.ts");
+  assert(token.includes("CHAT_TOKEN_TTL_SEC = 60 * 30"), "token TTL 30 min");
+  const grant = read("src/lib/chatDirectoryGrant.ts");
+  assert(grant.includes("CHAT_INTERNAL_SECRET"), "internal secret helper");
+  assert(!grant.includes("NEXT_PUBLIC_CHAT_INTERNAL"), "internal secret not public");
   assert(!proto.includes("poc-room"), "anonymous poc-room gone");
+  const wrangler = read("cloudflare/verthill-chat/wrangler.jsonc");
+  assert(wrangler.includes("ChatDirectory"), "ChatDirectory class");
+  assert(wrangler.includes('"tag": "v2"'), "non-destructive v2 migration");
+  assert(wrangler.includes("ChatRoom"), "ChatRoom class kept");
 }
 
 if (failed > 0) {

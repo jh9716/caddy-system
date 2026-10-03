@@ -114,6 +114,7 @@
     "test:off-request-phase2-unit": "bash scripts/tsx-safe.sh scripts/test-off-request-phase2-unit.ts",
     "test:chat-token-unit": "bash scripts/tsx-safe.sh scripts/test-chat-token-unit.ts",
     "test:chat-ui-unit": "bash scripts/tsx-safe.sh scripts/test-chat-ui-unit.ts",
+    "test:chat-phase2-unit": "bash scripts/tsx-safe.sh scripts/test-chat-phase2-unit.ts",
     "test:android-system-back-unit": "bash scripts/tsx-safe.sh scripts/test-android-system-back-unit.ts",
     "test:daily-special-duty-unit": "bash scripts/tsx-safe.sh scripts/test-daily-special-duty-unit.ts",
     "test:daily-special-support-unit": "bash scripts/tsx-safe.sh scripts/test-daily-special-support-unit.ts",

@@ -35,12 +35,14 @@ export default function AndroidSystemBackBootstrap() {
         applyAndroidSystemBack(
           resolveAndroidSystemBack({
             drawerOpen: overlays.drawerOpen,
+            chatOverlayOpen: overlays.chatOverlayOpen,
             inChatRoom: overlays.inChatRoom,
             pathname,
             canGoBack: event.canGoBack === true,
           }),
           {
             closeDrawer: () => overlays.closeDrawer?.(),
+            closeChatOverlay: () => overlays.closeChatOverlay?.(),
             leaveChatRoom: () => overlays.leaveChatRoom?.(),
             historyBack: () => {
               if (typeof window !== "undefined") window.history.back();
