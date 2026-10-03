@@ -152,6 +152,20 @@ export function canTransitionOffRequestWindow(
   return WINDOW_TRANSITIONS[from].includes(to);
 }
 
+/** 팀장 날짜 조정 / 팀 확정은 ADJUSTING 만. */
+export function canAdjustOffRequestWindow(
+  status: OffRequestWindowStatus | string | null | undefined
+): boolean {
+  return status === "ADJUSTING";
+}
+
+/** 관리자 월 전체 확정은 ADJUSTING → FINALIZED 만. */
+export function canFinalizeOffRequestWindow(
+  status: OffRequestWindowStatus | string | null | undefined
+): boolean {
+  return status === "ADJUSTING";
+}
+
 export function clampOffDefaultQuota(value: unknown): number {
   const n = Math.floor(Number(value));
   if (!Number.isFinite(n) || n < 1 || n > 99) {

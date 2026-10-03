@@ -46,15 +46,28 @@ type DayDto = {
   teams: TeamCell[];
 };
 
+type ProgressTeam = {
+  team: string;
+  finalized: boolean;
+  finalizedAt: string | null;
+};
+
+type ProgressDto = {
+  teamCount: number;
+  finalizedCount: number;
+  teams: ProgressTeam[];
+};
+
 type AdminMonthDto = {
   month: string;
   window: WindowDto | null;
   teams: string[];
   quotas: Array<{ team: string; date: string; limit: number }>;
   days: DayDto[];
+  progress?: ProgressDto;
 };
 
-type ConfirmKind = "open" | "close" | null;
+type ConfirmKind = "open" | "close" | "finalize" | null;
 
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
 
@@ -199,7 +212,8 @@ export default function OffRequestAdminClient() {
 
   async function onConfirm() {
     if (!window || !confirm) return;
-    const path = confirm === "open" ? "open" : "close";
+    const path =
+      confirm === "open" ? "open" : confirm === "close" ? "close" : "finalize";
     const ok = await send(`/api/off-requests/window/${window.id}/${path}`, "POST");
     if (ok) setConfirm(null);
   }
@@ -375,7 +389,11 @@ export default function OffRequestAdminClient() {
             </div>
           </dl>
           {open ? <p className="off-cal-hint">현재 신청 진행 중. 현황은 읽기 전용입니다.</p> : null}
-          {adjusting ? <p className="off-cal-hint">조정 중. 이번 단계에서는 상태와 현황만 봅니다.</p> : null}
+          {adjusting ? (
+            <p className="off-cal-hint">
+              조정 중. 모든 팀이 확정되면 월 전체를 잠글 수 있습니다.
+            </p>
+          ) : null}
           {finalized ? <p className="off-cal-hint">확정됨. 변경할 수 없습니다.</p> : null}
 
           {draft ? (
@@ -439,7 +457,36 @@ export default function OffRequestAdminClient() {
                 신청 마감
               </button>
             ) : null}
+            {adjusting ? (
+              <button
+                type="button"
+                className="ui-btn ui-btn-primary"
+                disabled={
+                  busy ||
+                  (data?.progress?.finalizedCount ?? 0) < (data?.progress?.teamCount ?? 12)
+                }
+                onClick={() => setConfirm("finalize")}
+              >
+                월 전체 확정
+              </button>
+            ) : null}
           </div>
+        </section>
+      ) : null}
+
+      {window && data?.progress ? (
+        <section className="off-admin-card">
+          <h2 className="off-admin-subtitle">
+            {data.progress.finalizedCount} / {data.progress.teamCount}팀 확정
+          </h2>
+          <ul className="off-admin-progress">
+            {data.progress.teams.map((row) => (
+              <li key={row.team} className={row.finalized ? "is-done" : "is-wait"}>
+                <span>{row.team}</span>
+                <strong>{row.finalized ? "확정" : "미확정"}</strong>
+              </li>
+            ))}
+          </ul>
         </section>
       ) : null}
 
@@ -598,7 +645,9 @@ export default function OffRequestAdminClient() {
             <p>
               {confirm === "open"
                 ? "이 달 휴무 신청을 시작할까요? 캐디가 신청할 수 있게 됩니다."
-                : "신청을 마감하고 조정 중으로 바꿀까요? 캐디는 더 이상 신청·변경할 수 없습니다."}
+                : confirm === "close"
+                  ? "신청을 마감하고 조정 중으로 바꿀까요? 캐디는 더 이상 신청·변경할 수 없습니다."
+                  : "모든 팀 확정을 확인하고 이 달을 최종 잠글까요? 이후 수정할 수 없습니다."}
             </p>
             <div className="off-admin-actions">
               <button
@@ -607,7 +656,11 @@ export default function OffRequestAdminClient() {
                 disabled={busy}
                 onClick={() => void onConfirm()}
               >
-                {confirm === "open" ? "신청 시작" : "신청 마감"}
+                {confirm === "open"
+                  ? "신청 시작"
+                  : confirm === "close"
+                    ? "신청 마감"
+                    : "월 전체 확정"}
               </button>
               <button type="button" className="ui-btn" disabled={busy} onClick={() => setConfirm(null)}>
                 취소

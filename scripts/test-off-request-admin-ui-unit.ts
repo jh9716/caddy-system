@@ -62,8 +62,10 @@ section("admin page auth + nav");
   assert(client.includes("휴무 신청 만들기"), "empty create CTA");
   assert(client.includes("신청 시작"), "DRAFT open button");
   assert(client.includes("신청 마감"), "OPEN close button");
-  assert(!client.includes("/finalize"), "no finalize API");
-  assert(!/확정하기|finalizeWindow|신청 확정/.test(client), "no finalize CTA");
+  assert(client.includes('"finalize"'), "admin finalize API");
+  assert(client.includes("월 전체 확정"), "admin finalize CTA");
+  assert(client.includes("progress.finalizedCount"), "team progress count");
+  assert(client.includes("미확정"), "unfinalized team label");
   assert(!client.includes("신청 재개"), "no reverse reopen");
   assert(!client.includes("DRAFT로 되돌"), "no reverse to draft");
   assert(client.includes('role="dialog"'), "confirmation modal");
@@ -105,7 +107,11 @@ section("API + service wiring");
   assert(svc.includes("PRIMARY_TEAMS"), "teams from roster");
   assert(svc.includes("window_adjusting"), "ADJUSTING quota writes blocked");
   assert(svc.includes('window.status === "ADJUSTING"'), "ADJUSTING status checked");
-  assert(!svc.includes("finalizeOffRequestWindow"), "no finalize helper");
+  const phase2 = read("src/lib/offRequestPhase2Service.ts");
+  assert(phase2.includes("finalizeOffRequestWindow"), "phase2 finalize helper");
+  assert(phase2.includes("finalizeTeamOffRequests"), "team finalize helper");
+  assert(!phase2.includes("lottery"), "no lottery");
+  assert(!phase2.includes("preferenceRank"), "no preference rank");
   assert(!/model OffRequestWindow/.test(schema) || true, "schema still has window");
   assert(
     !migDir.some((n) => n > "20261001120000_off_request_window" && n.includes("off_request")),
