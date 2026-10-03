@@ -2,6 +2,10 @@ import type { AppRole } from "@/lib/sessionCookies";
 import type { ResolvedAuthUser } from "@/lib/auth";
 import { resolveChatRoomAccess } from "@/lib/chatAcl";
 import {
+  resolveEnvAdminChatIdentity,
+  type ChatEnvAdminUserDb,
+} from "@/lib/chatEnvAdminIdentity";
+import {
   CHAT_TOKEN_TTL_SEC,
   getChatAuthSecret,
   normalizeChatTeam,
@@ -129,15 +133,17 @@ export function assertTokenRoomMatch(
   return resolveChatRoomAccess({ claims, roomId, isMember }).ok;
 }
 
+export type ChatIdentityDb = ChatEnvAdminUserDb & {
+  caddy: {
+    findUnique: (args: {
+      where: { id: number };
+      select: { id: true; name: true; team: true; employmentStatus: true };
+    }) => Promise<ChatCaddyRow | null>;
+  };
+};
+
 export async function issueChatAccessToken(
-  db: {
-    caddy: {
-      findUnique: (args: {
-        where: { id: number };
-        select: { id: true; name: true; team: true; employmentStatus: true };
-      }) => Promise<ChatCaddyRow | null>;
-    };
-  },
+  db: ChatIdentityDb,
   auth: ResolvedAuthUser,
   nowSec = Math.floor(Date.now() / 1000)
 ): Promise<{
@@ -154,18 +160,33 @@ export async function issueChatAccessToken(
       503
     );
   }
+
+  let userId = auth.userId;
+  let username = auth.username;
+  let caddyId = auth.caddyId;
   let caddy: ChatCaddyRow | null = null;
-  if (auth.caddyId != null) {
+
+  if ((userId == null || userId <= 0) && auth.role === "admin") {
+    const mapped = await resolveEnvAdminChatIdentity(db);
+    if (!mapped.ok) {
+      throw new ChatAuthError(mapped.code, mapped.message, mapped.status);
+    }
+    userId = mapped.value.userId;
+    username = mapped.value.username;
+    caddyId = mapped.value.caddyId;
+    caddy = mapped.value.caddy;
+  } else if (caddyId != null) {
     caddy = await db.caddy.findUnique({
-      where: { id: auth.caddyId },
+      where: { id: caddyId },
       select: { id: true, name: true, team: true, employmentStatus: true },
     });
   }
+
   const checked = resolveChatEligibility({
-    userId: auth.userId,
-    username: auth.username,
+    userId,
+    username,
     role: auth.role,
-    caddyId: auth.caddyId,
+    caddyId,
     caddy,
   });
   if (!checked.ok) {

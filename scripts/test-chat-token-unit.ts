@@ -3,9 +3,14 @@
  * 실행: npm run test:chat-token-unit
  */
 import { createHmac } from "node:crypto";
-import { issueChatAccessToken, resolveChatEligibility } from "../src/lib/chatAuth";
+import { ChatAuthError, issueChatAccessToken, resolveChatEligibility } from "../src/lib/chatAuth";
 import type { ResolvedAuthUser } from "../src/lib/auth";
 import { resolveChatRoomAccess } from "../src/lib/chatAcl";
+import {
+  parseAdminChatUserId,
+  resolveEnvAdminChatIdentity,
+} from "../src/lib/chatEnvAdminIdentity";
+import { collectChatInviteMembers, listInvitableChatUsers, type ChatUserRow } from "../src/lib/chatUsers";
 import { chatRoomIdToTeam, isChatRoomId, isCustomRoomId, teamToChatRoomId } from "../src/lib/chatRooms";
 import {
   CHAT_TOKEN_TTL_SEC,
@@ -14,6 +19,7 @@ import {
   signChatToken,
   verifyChatToken,
 } from "../src/lib/chatToken";
+import { SUPER_ADMIN_USERNAME } from "../src/lib/staffAdminAccounts";
 
 process.env.CHAT_AUTH_SECRET = "phase1-local-test-only";
 process.env.SESSION_SECRET = process.env.SESSION_SECRET || "phase1-session-test";
@@ -223,6 +229,11 @@ section("issue identity token");
   } as ResolvedAuthUser;
   const issued = await issueChatAccessToken(
     {
+      user: {
+        async findUnique() {
+          throw new Error("DB-backed token must not map env admin");
+        },
+      },
       caddy: {
         async findUnique() {
           return { id: 22, name: "조장", team: "1조", employmentStatus: "ACTIVE" };
@@ -271,14 +282,27 @@ section("POST /api/chat/token");
     role: "admin",
     sessionVersion: 0,
   });
-  const envRes = await POST(
-    new NextRequest("http://127.0.0.1/api/chat/token", {
-      method: "POST",
-      headers: { cookie: envCookie },
-    })
-  );
-  const envBody = await envRes.json();
-  assert(envRes.status === 403 && envBody.error === "chat_user_required", "env-only rejected");
+  const prevAdminChatUserId = process.env.ADMIN_CHAT_USER_ID;
+  delete process.env.ADMIN_CHAT_USER_ID;
+  const origUserForEnv = prisma.user.findUnique.bind(prisma.user);
+  prisma.user.findUnique = (async () => null) as typeof prisma.user.findUnique;
+  try {
+    const envRes = await POST(
+      new NextRequest("http://127.0.0.1/api/chat/token", {
+        method: "POST",
+        headers: { cookie: envCookie },
+      })
+    );
+    const envBody = await envRes.json();
+    assert(
+      envRes.status === 403 && envBody.error === "chat_admin_user_missing",
+      "env-only admin without mapping rejected"
+    );
+  } finally {
+    prisma.user.findUnique = origUserForEnv;
+    if (prevAdminChatUserId == null) delete process.env.ADMIN_CHAT_USER_ID;
+    else process.env.ADMIN_CHAT_USER_ID = prevAdminChatUserId;
+  }
 
   const origUser = prisma.user.findUnique.bind(prisma.user);
   const origCaddy = prisma.caddy.findUnique.bind(prisma.caddy);
@@ -431,6 +455,331 @@ section("GET /api/chat/users");
     prisma.user.findUnique = origUser;
     prisma.caddy.findUnique = origCaddy;
     prisma.user.findMany = origFindMany;
+  }
+}
+
+section("env-admin chat identity mapping");
+{
+  const prev = process.env.ADMIN_CHAT_USER_ID;
+  delete process.env.ADMIN_CHAT_USER_ID;
+
+  assert(parseAdminChatUserId("").status === "unset", "empty mapping unset");
+  assert(parseAdminChatUserId("  ").status === "unset", "blank mapping unset");
+  assert(parseAdminChatUserId("12").status === "ok" && parseAdminChatUserId("12").status === "ok" && (parseAdminChatUserId("12") as { userId: number }).userId === 12, "explicit id parsed");
+  assert(parseAdminChatUserId("0").status === "invalid", "zero id invalid");
+  assert(parseAdminChatUserId("-3").status === "invalid", "negative id invalid");
+  assert(parseAdminChatUserId("1.5").status === "invalid", "float id invalid");
+  assert(parseAdminChatUserId("admin").status === "invalid", "username is not an id");
+  assert(SUPER_ADMIN_USERNAME === "admin", "default map target is dedicated admin");
+
+  const adminRow = {
+    id: 41,
+    username: "admin",
+    role: "admin",
+    caddyId: null,
+    caddy: null,
+  };
+  const staffRow = {
+    id: 21,
+    username: "박성민",
+    role: "admin",
+    caddyId: null,
+    caddy: null,
+  };
+  const caddyRow = {
+    id: 9,
+    username: "hong",
+    role: "caddy",
+    caddyId: 7,
+    caddy: { id: 7, name: "홍길동", team: "1조", employmentStatus: "ACTIVE" },
+  };
+
+  function lookupDb(rows: typeof adminRow[]) {
+    return {
+      user: {
+        async findUnique({ where }: { where: { id?: number; username?: string } }) {
+          if ("id" in where && where.id != null) {
+            return rows.find((r) => r.id === where.id) ?? null;
+          }
+          if ("username" in where && where.username != null) {
+            return rows.find((r) => r.username === where.username) ?? null;
+          }
+          return null;
+        },
+      },
+      caddy: {
+        async findUnique() {
+          return null;
+        },
+      },
+    };
+  }
+
+  const defaultMap = await resolveEnvAdminChatIdentity(lookupDb([adminRow, staffRow]));
+  assert(defaultMap.ok && defaultMap.value.userId === 41, "default maps dedicated admin id");
+  assert(defaultMap.ok && defaultMap.value.username === "admin", "default maps admin username");
+
+  const missing = await resolveEnvAdminChatIdentity(lookupDb([staffRow]));
+  assert(!missing.ok && missing.code === "chat_admin_user_missing", "missing dedicated admin rejected");
+
+  const nonAdminNamedAdmin = await resolveEnvAdminChatIdentity(
+    lookupDb([{ ...adminRow, role: "caddy" }])
+  );
+  assert(
+    !nonAdminNamedAdmin.ok && nonAdminNamedAdmin.code === "chat_admin_mapping_invalid",
+    "username admin without admin role rejected"
+  );
+
+  process.env.ADMIN_CHAT_USER_ID = "21";
+  const explicit = await resolveEnvAdminChatIdentity(lookupDb([adminRow, staffRow]));
+  assert(explicit.ok && explicit.value.userId === 21, "ADMIN_CHAT_USER_ID wins");
+  assert(explicit.ok && explicit.value.username === "박성민", "explicit id uses that User");
+
+  process.env.ADMIN_CHAT_USER_ID = "9";
+  const spoofCaddy = await resolveEnvAdminChatIdentity(lookupDb([adminRow, caddyRow]));
+  assert(!spoofCaddy.ok && spoofCaddy.code === "chat_admin_mapping_invalid", "cannot map to caddy User");
+
+  process.env.ADMIN_CHAT_USER_ID = "99";
+  const missingId = await resolveEnvAdminChatIdentity(lookupDb([adminRow]));
+  assert(!missingId.ok && missingId.code === "chat_admin_user_missing", "missing mapped id rejected");
+
+  process.env.ADMIN_CHAT_USER_ID = "nope";
+  const badEnv = await resolveEnvAdminChatIdentity(lookupDb([adminRow]));
+  assert(!badEnv.ok && badEnv.code === "chat_admin_mapping_invalid", "invalid ADMIN_CHAT_USER_ID rejected");
+
+  delete process.env.ADMIN_CHAT_USER_ID;
+
+  const envAdminAuth = {
+    userId: null,
+    username: "env-operator",
+    role: "admin",
+    caddyId: null,
+    managedTeams: [],
+    sessionVersion: 0,
+    mustChangePassword: false,
+    session: {} as ResolvedAuthUser["session"],
+  } as ResolvedAuthUser;
+
+  const issued = await issueChatAccessToken(lookupDb([adminRow]), envAdminAuth, 1_700_000_000);
+  assert(issued.user.userId === 41, "env-admin token uses mapped userId");
+  assert(issued.user.role === "admin", "env-admin token role is admin");
+  assert(issued.ttlSec === 1800, "mapped token keeps 30m TTL");
+  const again = await issueChatAccessToken(lookupDb([adminRow]), envAdminAuth, 1_700_000_100);
+  assert(again.user.userId === issued.user.userId, "mapped userId is stable");
+  const verified = await verifyChatToken(issued.token, { nowSec: 1_700_000_010 });
+  assert(verified?.userId === 41 && verified.role === "admin" && verified.v === 2, "mapped claims verify");
+
+  const envCaddyAuth = { ...envAdminAuth, role: "caddy" as const, username: "caddy" };
+  let envCaddyCode = "";
+  try {
+    await issueChatAccessToken(lookupDb([adminRow]), envCaddyAuth, 1_700_000_000);
+  } catch (e) {
+    envCaddyCode = e instanceof ChatAuthError ? e.code : "other";
+  }
+  assert(envCaddyCode === "chat_user_required", "env-only caddy cannot take admin identity");
+
+  const dbAdminAuth = {
+    userId: 21,
+    username: "박성민",
+    role: "admin" as const,
+    caddyId: null,
+    managedTeams: [],
+    sessionVersion: 1,
+    mustChangePassword: false,
+    session: {} as ResolvedAuthUser["session"],
+  } as ResolvedAuthUser;
+  const dbIssued = await issueChatAccessToken(
+    {
+      user: {
+        async findUnique() {
+          throw new Error("DB-backed admin must not remap");
+        },
+      },
+      caddy: { async findUnique() { return null; } },
+    },
+    dbAdminAuth,
+    1_700_000_000
+  );
+  assert(dbIssued.user.userId === 21 && dbIssued.user.role === "admin", "DB-backed admin path unchanged");
+
+  const ownerRows: ChatUserRow[] = [
+    { id: 2, username: "kim", role: "caddy", caddy: { name: "김OO", team: "2조", employmentStatus: "ACTIVE" } },
+    { id: 41, username: "admin", role: "admin", caddy: null },
+  ];
+  const room = collectChatInviteMembers({
+    owner: {
+      userId: issued.user.userId,
+      displayName: issued.user.displayName,
+      role: issued.user.role,
+      team: issued.user.team,
+    },
+    candidates: ownerRows,
+    requestedIds: [2],
+  });
+  assert(room.ok && room.ok && room.members[0]?.userId === 41, "mapped admin is room owner");
+  assert(room.ok && room.members.some((m) => m.userId === 2), "mapped admin can invite");
+  assert(
+    listInvitableChatUsers(ownerRows).some((u) => u.userId === 41 && u.role === "admin"),
+    "mapped admin is directory-compatible"
+  );
+  assert(
+    resolveChatRoomAccess({
+      claims: {
+        v: 2,
+        userId: issued.user.userId,
+        displayName: issued.user.displayName,
+        role: issued.user.role,
+        team: issued.user.team,
+        iat: 1,
+        exp: 9,
+      },
+      roomId: "all",
+      isMember: false,
+    }).ok,
+    "mapped admin can open overall room"
+  );
+
+  if (prev == null) delete process.env.ADMIN_CHAT_USER_ID;
+  else process.env.ADMIN_CHAT_USER_ID = prev;
+}
+
+section("POST /api/chat/token env-admin mapped + spoof");
+{
+  const { NextRequest } = await import("next/server");
+  const { POST } = await import("../src/app/api/chat/token/route");
+  const { prisma } = await import("../src/lib/prisma");
+  const {
+    SESSION_COOKIE_NAME,
+    buildSessionClaims,
+    signSessionClaims,
+  } = await import("../src/lib/sessionCookies");
+
+  async function cookieFor(user: {
+    id: number | null;
+    username: string;
+    role: "admin" | "caddy" | "leader";
+    sessionVersion: number;
+  }) {
+    return `${SESSION_COOKIE_NAME}=${await signSessionClaims(
+      buildSessionClaims({
+        userId: user.id,
+        username: user.username,
+        role: user.role,
+        sessionVersion: user.sessionVersion,
+      })
+    )}`;
+  }
+
+  const prev = process.env.ADMIN_CHAT_USER_ID;
+  delete process.env.ADMIN_CHAT_USER_ID;
+  const origUser = prisma.user.findUnique.bind(prisma.user);
+  const origCaddy = prisma.caddy.findUnique.bind(prisma.caddy);
+  prisma.user.findUnique = (async (args: { where?: { id?: number; username?: string } }) => {
+    if (args?.where?.username === "admin" || args?.where?.id === 41) {
+      return {
+        id: 41,
+        username: "admin",
+        role: "admin",
+        sessionVersion: 0,
+        caddyId: null,
+        managedTeams: [],
+        mustChangePassword: false,
+        caddy: null,
+      };
+    }
+    if (args?.where?.id === 9 || args?.where?.username === "hong") {
+      return {
+        id: 9,
+        username: "hong",
+        role: "caddy",
+        sessionVersion: 1,
+        caddyId: 7,
+        managedTeams: [],
+        mustChangePassword: false,
+        caddy: { employmentStatus: "ACTIVE" },
+      };
+    }
+    return null;
+  }) as typeof prisma.user.findUnique;
+  prisma.caddy.findUnique = (async () => ({
+    id: 7,
+    name: "홍길동",
+    team: "1조",
+    employmentStatus: "ACTIVE",
+  })) as typeof prisma.caddy.findUnique;
+
+  try {
+    const envCookie = await cookieFor({
+      id: null,
+      username: "admin",
+      role: "admin",
+      sessionVersion: 0,
+    });
+    const envRes = await POST(
+      new NextRequest("http://127.0.0.1/api/chat/token", {
+        method: "POST",
+        headers: { cookie: envCookie },
+        body: JSON.stringify({ userId: 9, role: "admin" }),
+      })
+    );
+    const envBody = await envRes.json();
+    assert(envRes.status === 200 && envBody.user.userId === 41, "env-admin session issues mapped token");
+    assert(envBody.user.role === "admin", "mapped token role is server admin");
+    assert(envBody.ttlSec === 1800, "HTTP mapped token TTL 30m");
+    assert(envBody.user.userId !== 9, "client userId body cannot spoof mapping");
+
+    const caddyCookie = await cookieFor({
+      id: 9,
+      username: "hong",
+      role: "caddy",
+      sessionVersion: 1,
+    });
+    const caddyRes = await POST(
+      new NextRequest("http://127.0.0.1/api/chat/token", {
+        method: "POST",
+        headers: { cookie: caddyCookie },
+        body: JSON.stringify({ userId: 41, role: "admin" }),
+      })
+    );
+    const caddyBody = await caddyRes.json();
+    assert(caddyRes.status === 200 && caddyBody.user.userId === 9, "caddy keeps own userId");
+    assert(caddyBody.user.role === "caddy", "caddy cannot spoof admin role");
+
+    const { GET } = await import("../src/app/api/chat/users/route");
+    const origFindMany = prisma.user.findMany.bind(prisma.user);
+    prisma.user.findMany = (async () => [
+      { id: 2, username: "kim", role: "caddy", caddy: { name: "김OO", team: "2조", employmentStatus: "ACTIVE" } },
+      { id: 41, username: "admin", role: "admin", caddy: null },
+    ]) as typeof prisma.user.findMany;
+    try {
+      const usersRes = await GET(
+        new NextRequest("http://127.0.0.1/api/chat/users?scope=all", {
+          headers: { cookie: envCookie },
+        })
+      );
+      const usersBody = await usersRes.json();
+      assert(usersRes.status === 200 && usersBody.users.length === 2, "mapped env-admin can list directory");
+    } finally {
+      prisma.user.findMany = origFindMany;
+    }
+
+    process.env.ADMIN_CHAT_USER_ID = "9";
+    const badMap = await POST(
+      new NextRequest("http://127.0.0.1/api/chat/token", {
+        method: "POST",
+        headers: { cookie: envCookie },
+      })
+    );
+    const badMapBody = await badMap.json();
+    assert(
+      badMap.status === 403 && badMapBody.error === "chat_admin_mapping_invalid",
+      "env-admin cannot map onto caddy User"
+    );
+  } finally {
+    prisma.user.findUnique = origUser;
+    prisma.caddy.findUnique = origCaddy;
+    if (prev == null) delete process.env.ADMIN_CHAT_USER_ID;
+    else process.env.ADMIN_CHAT_USER_ID = prev;
   }
 }
 
