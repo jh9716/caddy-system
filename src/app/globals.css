@@ -3638,6 +3638,12 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
   color: var(--vh-warn);
 }
 
+.off-admin-progress-wait {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .off-team {
   max-width: 430px;
   margin: 0 auto;

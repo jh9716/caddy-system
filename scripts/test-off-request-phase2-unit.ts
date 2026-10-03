@@ -12,13 +12,20 @@ import type { OffRequestActor } from "../src/lib/offRequestAuth";
 import {
   canAdjustOffRequestWindow,
   canFinalizeOffRequestWindow,
+  formatOffDateYmd,
   normalizeOffDateInput,
   offAssignmentDayRange,
 } from "../src/lib/offRequestDomain";
-import { OffRequestServiceError } from "../src/lib/offRequestService";
+import {
+  approveOffRequest,
+  OffRequestServiceError,
+  rejectOffRequest,
+  revokeOffRequest,
+} from "../src/lib/offRequestService";
 import {
   finalizeOffRequestWindow,
   finalizeTeamOffRequests,
+  finalizeTeamOffRequestsAsAdmin,
   getOffRequestAdminProgress,
   getOffRequestLeaderTeamMonth,
   rescheduleTeamOffRequest,
@@ -26,6 +33,7 @@ import {
 import {
   closeOffRequestWindow,
   createOffRequestWindow,
+  deleteOffRequestQuota,
   openOffRequestWindow,
   upsertOffRequestQuota,
 } from "../src/lib/offRequestWindowService";
@@ -91,14 +99,23 @@ section("pure + wiring");
   assert(svc.includes("offRequestAdjustment.create"), "adjustment history");
   assert(svc.includes('type: "OFF"'), "creates Assignment OFF");
   assert(svc.includes("alreadyFinalized"), "idempotent finalize");
+  assert(svc.includes("finalizeTeamOffRequestsAsAdmin"), "admin proxy finalize");
+  assert(svc.includes("assignment_inconsistent"), "admin checks missing OFF");
+  assert(svc.includes("duplicate_off"), "detect existing OffRequest#id OFF");
   assert(!svc.includes("lottery"), "no lottery");
   assert(!svc.includes("UNSELECTED"), "does not mass-use UNSELECTED");
+  const phase1 = read("src/lib/offRequestService.ts");
+  assert(phase1.includes("assertPhase1DecisionAllowed"), "phase1 decision lock");
+  assert(phase1.includes("window_adjusting"), "phase1 blocks ADJUSTING decisions");
+  const adminProxy = read("src/app/api/off-requests/admin/finalize-team/route.ts");
+  assert(adminProxy.includes("finalizeTeamOffRequestsAsAdmin"), "admin proxy route");
   assert(teamPage.includes('auth.role !== "leader"'), "team page leader only");
   assert(teamUi.includes("/api/off-requests/team/reschedule"), "team reschedule API");
   assert(teamUi.includes("/api/off-requests/team/finalize"), "team finalize API");
   assert(teamUi.includes("팀 최종확정"), "finalize CTA");
   assert(teamUi.includes("명 초과"), "over copy");
   assert(adminUi.includes("월 전체 확정"), "admin finalize CTA");
+  assert(adminUi.includes("대행 확정"), "admin proxy CTA");
   assert(adminUi.includes("/api/off-requests/window/${window.id}/${path}"), "admin window actions");
   assert(schema.includes("OffRequest_caddyId_date_active_key") || schema.includes("partial unique"), "schema notes partial unique");
   assert(
@@ -286,6 +303,48 @@ async function runLocalDbTests() {
       "다른 팀 leader 거부"
     );
 
+    const clash = await prisma.offRequest.create({
+      data: {
+        caddyId: caddyA.id,
+        date: normalizeOffDateInput(`${month}-12`),
+        status: "REQUESTED",
+      },
+    });
+    await expectCode(
+      () =>
+        rescheduleTeamOffRequest(prisma, leader, {
+          id: clash.id,
+          toDate: d10,
+        }),
+      "duplicate_active",
+      "partial unique collision → duplicate_active"
+    );
+    const clashStill = await prisma.offRequest.findUnique({ where: { id: clash.id } });
+    assert(
+      clashStill != null &&
+        formatOffDateYmd(clashStill.date) === `${month}-12`,
+      "collision rolls back date"
+    );
+    const clashAdj = await prisma.offRequestAdjustment.count({
+      where: { offRequestId: clash.id },
+    });
+    assert(clashAdj === 0, "collision leaves no adjustment history");
+    await prisma.offRequest.update({
+      where: { id: clash.id },
+      data: { status: "CANCELLED" },
+    });
+
+    await expectCode(
+      () => approveOffRequest(prisma, admin, aReq.id, {}),
+      "window_adjusting",
+      "phase1 approve blocked in ADJUSTING"
+    );
+    await expectCode(
+      () => rejectOffRequest(prisma, admin, bReq.id, {}),
+      "window_adjusting",
+      "phase1 reject blocked in ADJUSTING"
+    );
+
     section("QUOTA");
     const overView = await getOffRequestLeaderTeamMonth(prisma, leader, month);
     const day10ok = overView.allDays.find((d) => d.date === d10);
@@ -343,6 +402,11 @@ async function runLocalDbTests() {
       "team_finalized",
       "finalized team 변경 금지"
     );
+    await expectCode(
+      () => revokeOffRequest(prisma, admin, aReq.id),
+      "window_adjusting",
+      "phase1 revoke blocked after team finalize"
+    );
 
     section("CONFLICT + zero-request + concurrency");
     const month2 = `${year}-04`;
@@ -355,6 +419,29 @@ async function runLocalDbTests() {
     });
     await openOffRequestWindow(prisma, admin, window2.id);
     await closeOffRequestWindow(prisma, admin, window2.id);
+
+    const mover = await prisma.caddy.create({
+      data: { name: `M-${tag}`, team: "1조", teamOrder: 7, employmentStatus: "ACTIVE" },
+    });
+    created.push({ kind: "caddy", id: mover.id });
+    const moverReq = await prisma.offRequest.create({
+      data: { caddyId: mover.id, date: normalizeOffDateInput(d20), status: "REQUESTED" },
+    });
+    await prisma.caddy.update({ where: { id: mover.id }, data: { team: "2조" } });
+    const view1 = await getOffRequestLeaderTeamMonth(prisma, leader, month2);
+    const view2 = await getOffRequestLeaderTeamMonth(prisma, otherLeader, month2);
+    assert(
+      !view1.days.flatMap((d) => d.requests).some((r) => r.id === moverReq.id),
+      "moved caddy leaves old team view"
+    );
+    assert(
+      view2.days.flatMap((d) => d.requests).some((r) => r.id === moverReq.id),
+      "moved caddy appears on current team"
+    );
+    await prisma.offRequest.update({
+      where: { id: moverReq.id },
+      data: { status: "CANCELLED" },
+    });
 
     const conflictCaddy = await prisma.caddy.create({
       data: { name: `X-${tag}`, team: "1조", teamOrder: 8, employmentStatus: "ACTIVE" },
@@ -380,6 +467,34 @@ async function runLocalDbTests() {
     );
     await prisma.offRequest.update({
       where: { id: conflictReq.id },
+      data: { status: "CANCELLED" },
+    });
+
+    const offOnly = await prisma.caddy.create({
+      data: { name: `F-${tag}`, team: "1조", teamOrder: 9, employmentStatus: "ACTIVE" },
+    });
+    created.push({ kind: "caddy", id: offOnly.id });
+    const offYmd = `${month2}-19`;
+    const offRange = offAssignmentDayRange(offYmd);
+    await prisma.assignment.create({
+      data: {
+        caddyId: offOnly.id,
+        type: "OFF",
+        startDate: offRange.startDate,
+        endDate: offRange.endDate,
+        comment: `manual-off-${tag}`,
+      },
+    });
+    const offReq = await prisma.offRequest.create({
+      data: { caddyId: offOnly.id, date: normalizeOffDateInput(offYmd), status: "REQUESTED" },
+    });
+    await expectCode(
+      () => finalizeTeamOffRequests(prisma, leader, { month: month2 }),
+      "assignment_conflict",
+      "기존 미연결 OFF는 reuse 없이 BLOCK"
+    );
+    await prisma.offRequest.update({
+      where: { id: offReq.id },
       data: { status: "CANCELLED" },
     });
 
@@ -449,16 +564,65 @@ async function runLocalDbTests() {
       "4월도 12팀 미달 BLOCK"
     );
 
-    // 나머지 PRIMARY 팀 zero-finalize (같은 otherLeader는 2조만). 관리자 시드 finalization rows.
+    await expectCode(
+      () => finalizeTeamOffRequestsAsAdmin(prisma, leader, { month: month2, team: "3조" }),
+      "forbidden",
+      "leader cannot admin-proxy finalize"
+    );
+
     const remaining = p2.teams.filter((t) => !t.finalized).map((t) => t.team);
-    await prisma.offRequestTeamFinalization.createMany({
-      data: remaining.map((team) => ({
-        windowId: window2.id,
+    for (const team of remaining) {
+      const proxied = await finalizeTeamOffRequestsAsAdmin(prisma, admin, {
+        month: month2,
         team,
-        finalizedAt: new Date(),
-        finalizedByUserId: admin.userId,
-      })),
+      });
+      assert(
+        proxied.alreadyFinalized === false &&
+          proxied.finalization.finalizedByUserId === admin.userId,
+        `admin proxy ${team}`
+      );
+    }
+    const strayCaddy = await prisma.caddy.create({
+      data: { name: `Z-${tag}`, team: "기타", teamOrder: 1, employmentStatus: "ACTIVE" },
     });
+    created.push({ kind: "caddy", id: strayCaddy.id });
+    const stray = await prisma.offRequest.create({
+      data: {
+        caddyId: strayCaddy.id,
+        date: normalizeOffDateInput(`${month2}-25`),
+        status: "REQUESTED",
+      },
+    });
+    await expectCode(
+      () => finalizeOffRequestWindow(prisma, admin, window2.id),
+      "unresolved_requested",
+      "non-PRIMARY leftover REQUESTED blocks FINALIZED"
+    );
+    await prisma.offRequest.update({
+      where: { id: stray.id },
+      data: { status: "CANCELLED" },
+    });
+
+    const approvedRow = await prisma.offRequest.findFirst({
+      where: { id: req2.id },
+    });
+    const savedAssign = approvedRow?.assignmentId ?? null;
+    if (savedAssign != null) {
+      await prisma.offRequest.update({
+        where: { id: req2.id },
+        data: { assignmentId: null },
+      });
+      await expectCode(
+        () => finalizeOffRequestWindow(prisma, admin, window2.id),
+        "assignment_inconsistent",
+        "missing OFF blocks FINALIZED"
+      );
+      await prisma.offRequest.update({
+        where: { id: req2.id },
+        data: { assignmentId: savedAssign },
+      });
+    }
+
     const done = await finalizeOffRequestWindow(prisma, admin, window2.id);
     assert(done.status === "FINALIZED", "전팀 확정 후 FINALIZED 성공");
     await expectCode(
@@ -474,6 +638,22 @@ async function runLocalDbTests() {
         }),
       "window_not_adjusting",
       "FINALIZED 후 수정 금지"
+    );
+    await expectCode(
+      () => revokeOffRequest(prisma, admin, req2.id),
+      "window_finalized",
+      "FINALIZED 후 phase1 revoke 금지"
+    );
+    await expectCode(
+      () =>
+        upsertOffRequestQuota(prisma, admin, {
+          month: month2,
+          team: "1조",
+          date: `${month2}-26`,
+          limit: 3,
+        }),
+      "window_finalized",
+      "FINALIZED 후 quota 금지"
     );
 
     const leftover = await prisma.offRequest.findUnique({ where: { id: req2.id } });
@@ -509,9 +689,60 @@ async function runLocalDbTests() {
       "override quota 적용"
     );
     await rescheduleTeamOffRequest(prisma, leader, { id: o2.id, toDate: d06 });
-    const finOverride = await finalizeTeamOffRequests(prisma, leader, { month: month3 });
+    const [quotaPut, quotaDel, finRace] = await Promise.allSettled([
+      upsertOffRequestQuota(prisma, admin, {
+        month: month3,
+        team: "1조",
+        date: d06,
+        limit: 1,
+      }),
+      deleteOffRequestQuota(prisma, admin, {
+        month: month3,
+        team: "1조",
+        date: d05,
+      }),
+      finalizeTeamOffRequests(prisma, leader, { month: month3 }),
+    ]);
+    assert(
+      quotaPut.status === "rejected" &&
+        quotaPut.reason instanceof OffRequestServiceError &&
+        quotaPut.reason.code === "window_adjusting",
+      "quota put vs finalize — quota blocked"
+    );
+    assert(
+      quotaDel.status === "rejected" &&
+        quotaDel.reason instanceof OffRequestServiceError &&
+        quotaDel.reason.code === "window_adjusting",
+      "quota delete vs finalize — quota blocked"
+    );
+    const finOverride =
+      finRace.status === "fulfilled"
+        ? finRace.value
+        : await finalizeTeamOffRequests(prisma, leader, { month: month3 });
     assert(finOverride.assignmentIds.length === 2, "override 해소 후 finalize");
     void o1;
+
+    const p3 = await getOffRequestAdminProgress(prisma, month3);
+    const left3 = p3.teams.filter((t) => !t.finalized && t.team !== "2조").map((t) => t.team);
+    for (const team of left3) {
+      await finalizeTeamOffRequestsAsAdmin(prisma, admin, { month: month3, team });
+    }
+    const [lastTeam, adminWin] = await Promise.allSettled([
+      finalizeTeamOffRequests(prisma, otherLeader, { month: month3 }),
+      finalizeOffRequestWindow(prisma, admin, window3.id),
+    ]);
+    const teamOk = lastTeam.status === "fulfilled";
+    assert(teamOk, "last team finalize succeeds under race");
+    if (adminWin.status === "rejected") {
+      const again = await finalizeOffRequestWindow(prisma, admin, window3.id);
+      assert(again.status === "FINALIZED", "window finalize after last team");
+    } else {
+      assert(adminWin.value.status === "FINALIZED", "window finalize wins after last team lock");
+    }
+    const month3Offs = await prisma.assignment.count({
+      where: { comment: { contains: "OffRequest#" }, caddyId: { in: [caddyA.id, caddyB.id] } },
+    });
+    assert(month3Offs >= 2, "race leaves no extra OFF beyond approved");
 
     // cleanup created windows/requests/assignments later
     void leftover;

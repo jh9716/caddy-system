@@ -477,7 +477,7 @@ export async function rescheduleTeamOffRequest(
   }
 }
 
-async function quotaOverDaysForTeam(
+export async function quotaOverDaysForTeam(
   tx: TxClient,
   window: OffRequestWindow,
   team: string,
@@ -519,6 +519,18 @@ async function approveRequestedAsOff(
   row: OffRequest & { caddy: { id: number; name: string; team: string } }
 ) {
   const ymd = formatOffDateYmd(row.date);
+  const prior = await tx.assignment.findFirst({
+    where: { type: "OFF", comment: `OffRequest#${row.id}` },
+    select: { id: true },
+  });
+  if (prior) {
+    throw new OffRequestServiceError(
+      "duplicate_off",
+      "이 신청에 대한 Assignment(OFF)가 이미 있습니다.",
+      409,
+      { offRequestId: row.id, assignmentId: prior.id }
+    );
+  }
   const { startDate, endDate } = offAssignmentDayRange(ymd);
   const assignment = await tx.assignment.create({
     data: {
@@ -554,33 +566,29 @@ async function approveRequestedAsOff(
   return assignment.id;
 }
 
-export async function finalizeTeamOffRequests(
+async function executeTeamFinalize(
   db: PrismaClient,
   actor: OffRequestActor,
-  input: { month: string }
+  month: string,
+  resolveTeam: (tx: TxClient) => Promise<string>
 ) {
-  assertLeaderWriteActor(actor);
-  if (!isYearMonth(input.month)) {
-    throw new OffRequestServiceError("invalid_month", "month=YYYY-MM 필요", 400);
-  }
-
   try {
     return await withSerializableRetry(db, async (tx) => {
-      const leader = await resolveLeaderPrimaryTeam(tx, actor);
-      const window = await requireWindowByMonth(tx, input.month);
+      const window = await requireWindowByMonth(tx, month);
       await lockWindowRow(tx, window.id);
+      const team = await resolveTeam(tx);
       const lockedWindow = await tx.offRequestWindow.findUniqueOrThrow({
         where: { id: window.id },
       });
       requireAdjustingWindow(lockedWindow);
 
       const existing = await tx.offRequestTeamFinalization.findUnique({
-        where: { windowId_team: { windowId: lockedWindow.id, team: leader.team } },
+        where: { windowId_team: { windowId: lockedWindow.id, team } },
       });
       if (existing) {
         return {
           alreadyFinalized: true,
-          team: leader.team,
+          team,
           month: lockedWindow.yearMonth,
           approvedCount: 0,
           assignmentIds: [] as number[],
@@ -595,13 +603,13 @@ export async function finalizeTeamOffRequests(
         where: {
           date: { gte: start, lte: end },
           status: "REQUESTED",
-          caddy: { team: leader.team },
+          caddy: { team },
         },
         include: { caddy: { select: { id: true, name: true, team: true } } },
         orderBy: [{ date: "asc" }, { id: "asc" }],
       });
 
-      const overDays = await quotaOverDaysForTeam(tx, lockedWindow, leader.team, requests);
+      const overDays = await quotaOverDaysForTeam(tx, lockedWindow, team, requests);
       if (overDays.length > 0) {
         throw new OffRequestServiceError(
           "quota_exceeded",
@@ -638,14 +646,14 @@ export async function finalizeTeamOffRequests(
         const finalization = await tx.offRequestTeamFinalization.create({
           data: {
             windowId: lockedWindow.id,
-            team: leader.team,
+            team,
             finalizedAt: now,
             finalizedByUserId: actor.userId,
           },
         });
         return {
           alreadyFinalized: false,
-          team: leader.team,
+          team,
           month: lockedWindow.yearMonth,
           approvedCount: requests.length,
           assignmentIds,
@@ -673,6 +681,40 @@ export async function finalizeTeamOffRequests(
     }
     throw e;
   }
+}
+
+export async function finalizeTeamOffRequests(
+  db: PrismaClient,
+  actor: OffRequestActor,
+  input: { month: string }
+) {
+  assertLeaderWriteActor(actor);
+  if (!isYearMonth(input.month)) {
+    throw new OffRequestServiceError("invalid_month", "month=YYYY-MM 필요", 400);
+  }
+  return executeTeamFinalize(db, actor, input.month, async (tx) => {
+    const leader = await resolveLeaderPrimaryTeam(tx, actor);
+    return leader.team;
+  });
+}
+
+/** 관리자 대행 확정. 같은 quota/conflict transaction. leader로 위장하지 않음. */
+export async function finalizeTeamOffRequestsAsAdmin(
+  db: PrismaClient,
+  actor: OffRequestActor,
+  input: { month: string; team: string }
+) {
+  if (actor.role !== "admin") {
+    throw new OffRequestServiceError("forbidden", "관리자만 팀을 대행 확정할 수 있습니다.", 403);
+  }
+  if (!isYearMonth(input.month)) {
+    throw new OffRequestServiceError("invalid_month", "month=YYYY-MM 필요", 400);
+  }
+  const team = String(input.team ?? "").trim();
+  if (!isPrimaryTeam(team)) {
+    throw new OffRequestServiceError("invalid_team", "PRIMARY 조만 대행 확정할 수 있습니다.", 400);
+  }
+  return executeTeamFinalize(db, actor, input.month, async () => team);
 }
 
 export async function getOffRequestAdminProgress(
@@ -756,7 +798,6 @@ export async function finalizeOffRequestWindow(
       where: {
         date: { gte: start, lte: end },
         status: "REQUESTED",
-        caddy: { team: { in: [...PRIMARY_TEAMS] } },
       },
     });
     if (leftover > 0) {
@@ -765,6 +806,56 @@ export async function finalizeOffRequestWindow(
         "미처리 REQUESTED 신청이 남아 있습니다.",
         409,
         { leftover }
+      );
+    }
+
+    for (const team of PRIMARY_TEAMS) {
+      const overDays = await quotaOverDaysForTeam(tx, window, team, []);
+      if (overDays.length > 0) {
+        throw new OffRequestServiceError(
+          "quota_exceeded",
+          "정원 초과 날짜가 있어 월 전체를 확정할 수 없습니다.",
+          409,
+          { team, overDays }
+        );
+      }
+    }
+
+    const approved = await tx.offRequest.findMany({
+      where: {
+        date: { gte: start, lte: end },
+        status: "APPROVED",
+      },
+      include: { caddy: { select: { name: true } } },
+    });
+    const missing: Array<{ id: number; caddyName: string; date: string }> = [];
+    for (const row of approved) {
+      if (row.assignmentId == null) {
+        missing.push({
+          id: row.id,
+          caddyName: row.caddy.name,
+          date: formatOffDateYmd(row.date),
+        });
+        continue;
+      }
+      const linked = await tx.assignment.findUnique({
+        where: { id: row.assignmentId },
+        select: { id: true, type: true, caddyId: true },
+      });
+      if (!linked || linked.type !== "OFF" || linked.caddyId !== row.caddyId) {
+        missing.push({
+          id: row.id,
+          caddyName: row.caddy.name,
+          date: formatOffDateYmd(row.date),
+        });
+      }
+    }
+    if (missing.length > 0) {
+      throw new OffRequestServiceError(
+        "assignment_inconsistent",
+        "승인된 휴무에 Assignment(OFF)가 없거나 끊겨 있습니다.",
+        409,
+        { missing }
       );
     }
 

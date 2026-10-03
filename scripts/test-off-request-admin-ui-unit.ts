@@ -66,6 +66,8 @@ section("admin page auth + nav");
   assert(client.includes("월 전체 확정"), "admin finalize CTA");
   assert(client.includes("progress.finalizedCount"), "team progress count");
   assert(client.includes("미확정"), "unfinalized team label");
+  assert(client.includes("대행 확정"), "admin proxy finalize CTA");
+  assert(client.includes("/api/off-requests/admin/finalize-team"), "admin proxy API");
   assert(!client.includes("신청 재개"), "no reverse reopen");
   assert(!client.includes("DRAFT로 되돌"), "no reverse to draft");
   assert(client.includes('role="dialog"'), "confirmation modal");

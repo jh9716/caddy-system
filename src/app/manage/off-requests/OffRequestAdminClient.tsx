@@ -96,6 +96,7 @@ export default function OffRequestAdminClient() {
   const [error, setError] = useState("");
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<ConfirmKind>(null);
+  const [proxyTeam, setProxyTeam] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState(() => defaultCreateInputs(kstYmd().slice(0, 7)));
   const [editForm, setEditForm] = useState({
@@ -216,6 +217,15 @@ export default function OffRequestAdminClient() {
       confirm === "open" ? "open" : confirm === "close" ? "close" : "finalize";
     const ok = await send(`/api/off-requests/window/${window.id}/${path}`, "POST");
     if (ok) setConfirm(null);
+  }
+
+  async function onProxyFinalize() {
+    if (!proxyTeam) return;
+    const ok = await send("/api/off-requests/admin/finalize-team", "POST", {
+      month,
+      team: proxyTeam,
+    });
+    if (ok) setProxyTeam(null);
   }
 
   async function onSaveQuota() {
@@ -483,7 +493,23 @@ export default function OffRequestAdminClient() {
             {data.progress.teams.map((row) => (
               <li key={row.team} className={row.finalized ? "is-done" : "is-wait"}>
                 <span>{row.team}</span>
-                <strong>{row.finalized ? "확정" : "미확정"}</strong>
+                {row.finalized ? (
+                  <strong>확정</strong>
+                ) : (
+                  <span className="off-admin-progress-wait">
+                    <strong>미확정</strong>
+                    {adjusting ? (
+                      <button
+                        type="button"
+                        className="ui-btn ui-btn-ghost"
+                        disabled={busy}
+                        onClick={() => setProxyTeam(row.team)}
+                      >
+                        대행 확정
+                      </button>
+                    ) : null}
+                  </span>
+                )}
               </li>
             ))}
           </ul>
@@ -637,6 +663,35 @@ export default function OffRequestAdminClient() {
             </tbody>
           </table>
         </section>
+      ) : null}
+
+      {proxyTeam ? (
+        <div className="off-admin-modal" role="dialog" aria-modal="true">
+          <div className="off-admin-modal-card">
+            <p>
+              {proxyTeam} 휴무를 관리자가 대행 확정합니다. 정원/충돌 검증은 팀장 확정과
+              같습니다. 확정 후 해당 팀은 수정할 수 없습니다.
+            </p>
+            <div className="off-admin-actions">
+              <button
+                type="button"
+                className="ui-btn ui-btn-primary"
+                disabled={busy}
+                onClick={() => void onProxyFinalize()}
+              >
+                대행 확정
+              </button>
+              <button
+                type="button"
+                className="ui-btn"
+                disabled={busy}
+                onClick={() => setProxyTeam(null)}
+              >
+                취소
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
 
       {confirm ? (
