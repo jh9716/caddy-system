@@ -4140,11 +4140,18 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
 .vh-chat {
   width: min(390px, 100%);
   margin: 0 auto;
-  min-height: calc(100dvh - 132px);
+  height: calc(
+    100dvh - 52px - var(--vh-bottom-nav-height, 58px) - env(safe-area-inset-bottom, 0px)
+  );
+  max-height: calc(
+    100dvh - 52px - var(--vh-bottom-nav-height, 58px) - env(safe-area-inset-bottom, 0px)
+  );
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 8px 0 12px;
+  padding: 8px 0 8px;
   box-sizing: border-box;
+  overflow: hidden;
 }
 .vh-chat-status,
 .vh-chat-error {
@@ -4279,7 +4286,7 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
 }
 .vh-chat-log {
   flex: 1;
-  min-height: 280px;
+  min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -4348,10 +4355,12 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
   display: flex;
   gap: 8px;
   align-items: flex-end;
+  flex-shrink: 0;
   position: sticky;
   bottom: 0;
+  z-index: 2;
   background: var(--vh-ivory);
-  padding: 8px 0 calc(8px + env(safe-area-inset-bottom));
+  padding: 8px 0 0;
 }
 .vh-chat-input {
   flex: 1;
@@ -4371,16 +4380,16 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
 .vh-chat-sheet {
   position: fixed;
   left: 50%;
-  bottom: 0;
+  bottom: calc(var(--vh-bottom-nav-height, 58px) + env(safe-area-inset-bottom, 0px));
   transform: translateX(-50%);
   width: min(390px, 100%);
-  max-height: min(86dvh, 640px);
+  max-height: min(78dvh, 640px);
   overflow: auto;
   background: var(--vh-paper);
   border: 1px solid var(--vh-border);
   border-bottom: 0;
   border-radius: 16px 16px 0 0;
-  padding: 14px 14px calc(16px + env(safe-area-inset-bottom));
+  padding: 14px 14px 16px;
   box-shadow: var(--vh-shadow);
   z-index: 40;
   box-sizing: border-box;

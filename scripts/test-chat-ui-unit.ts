@@ -43,6 +43,8 @@ section("routes and nav");
   const css = read("src/app/globals.css");
   assert(css.includes(".vh-chat"), "chat css");
   assert(css.includes("min(390px, 100%)"), "390px first");
+  assert(css.includes("vh-bottom-nav-height"), "chat height accounts for bottom nav");
+  assert(css.includes(".vh-chat-log") && css.includes("min-height: 0"), "log scrolls inside viewport");
   assert(css.includes(".vh-chat-bubble.is-admin"), "admin superchat style");
   assert(css.includes("vh-chat-unread"), "unread badge");
 }
