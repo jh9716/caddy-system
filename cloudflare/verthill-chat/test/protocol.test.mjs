@@ -36,4 +36,11 @@ test("worker stays isolated from Next/Neon/Vercel", () => {
   assert.match(index, /validateIncomingHistory/);
   assert.match(index, /server_only/);
   assert.match(index, /CHAT_INTERNAL_SECRET/);
+  assert.match(index, /new Request\(request\.url, request\)/);
+  assert.match(index, /x-chat-claims/);
+  assert.doesNotMatch(
+    index,
+    /new Request\(url\.toString\(\),\s*\{[\s\S]*method: request\.method/,
+    "directory WS must not rebuild a non-upgrade Request"
+  );
 });
