@@ -14,7 +14,7 @@ export const LEGACY_TEAM_ROOM_RE = /^team-([1-9]|1[0-2])$/;
 export const CHAT_ROOM_ID_RE = LEGACY_TEAM_ROOM_RE;
 export const ROOM_NAME_MIN = 1;
 export const ROOM_NAME_MAX = 24;
-export const MAX_CUSTOM_MEMBERS = 80;
+export const MAX_CUSTOM_MEMBERS = 300;
 export const CHAT_PREVIEW_MAX = 80;
 
 export type ChatRoomType = "ALL" | "CUSTOM";
