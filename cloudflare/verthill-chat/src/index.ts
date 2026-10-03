@@ -128,24 +128,15 @@ async function authorizeSocket(
   return { room, claims: identity };
 }
 
-async function forwardDirectory(
-  request: Request,
-  env: Env,
-  pathname: string
-): Promise<Response> {
+async function forwardDirectory(request: Request, env: Env): Promise<Response> {
   const identity = await verifyIdentity(request, env);
   if (identity instanceof Response) return identity;
-  const headers = new Headers(request.headers);
-  headers.set("x-chat-claims", JSON.stringify(identity));
-  const url = new URL(request.url);
-  url.pathname = pathname;
-  return directoryStub(env).fetch(
-    new Request(url.toString(), {
-      method: request.method,
-      headers,
-      body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
-    })
-  );
+  // Must keep the inbound Request object. Rebuilding Request(url, {headers, body})
+  // drops Cloudflare's WebSocket upgrade binding — ChatRoom works because it
+  // forwards `request` unchanged. Directory list/WS used the rebuilt Request.
+  const forwarded = new Request(request.url, request);
+  forwarded.headers.set("x-chat-claims", JSON.stringify(identity));
+  return directoryStub(env).fetch(forwarded);
 }
 
 export default {
@@ -167,14 +158,14 @@ export default {
       return env.CHAT_ROOM.get(id).fetch(request);
     }
     if (url.pathname === "/directory/ws") {
-      return forwardDirectory(request, env, "/directory/ws");
+      return forwardDirectory(request, env);
     }
     if (request.method === "GET" && url.pathname === "/directory/rooms") {
-      return forwardDirectory(request, env, "/directory/rooms");
+      return forwardDirectory(request, env);
     }
     const membersMatch = /^\/directory\/rooms\/([^/]+)\/members$/.exec(url.pathname);
     if (request.method === "GET" && membersMatch) {
-      return forwardDirectory(request, env, url.pathname);
+      return forwardDirectory(request, env);
     }
     if (request.method === "POST" && url.pathname === "/directory/rooms") {
       return createRoomFromGrant(request, env);
