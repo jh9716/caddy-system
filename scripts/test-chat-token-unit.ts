@@ -106,6 +106,16 @@ section("eligibility");
     caddy: null,
   });
   assert(dbAdmin.ok && dbAdmin.value.role === "admin", "DB admin without caddy");
+
+  const retired = resolveChatEligibility({
+    userId: 9,
+    username: "hong",
+    role: "caddy",
+    caddyId: 7,
+    caddy: { id: 7, name: "홍길동", team: "1조", employmentStatus: "RETIRED" },
+  });
+  assert(!retired.ok && retired.code === "caddy_retired", "retired blocked from new token");
+  assert(CHAT_TOKEN_TTL_SEC === 1800, "TTL 30 min after eligibility re-check");
 }
 
 section("token hmac v2 + v1 compat");

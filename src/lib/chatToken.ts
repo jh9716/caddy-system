@@ -1,6 +1,6 @@
 import type { AppRole } from "@/lib/sessionCookies";
 
-export const CHAT_TOKEN_TTL_SEC = 60 * 10;
+export const CHAT_TOKEN_TTL_SEC = 60 * 30;
 export const CHAT_TOKEN_VERSION = 2 as const;
 export const CHAT_TOKEN_V1 = 1 as const;
 

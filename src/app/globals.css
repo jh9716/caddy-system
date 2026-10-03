@@ -4286,6 +4286,15 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
   gap: 8px;
   padding: 8px 2px 12px;
 }
+.vh-chat-more {
+  align-self: center;
+  border: 0;
+  background: transparent;
+  color: var(--vh-muted);
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 6px 8px;
+}
 .vh-chat-bubble {
   max-width: 82%;
   padding: 8px 10px;

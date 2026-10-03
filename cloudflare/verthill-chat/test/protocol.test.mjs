@@ -11,7 +11,8 @@ test("protocol limits and team rooms exist", () => {
   assert.match(src, /BODY_MAX = 2000/);
   assert.match(src, /HISTORY_LIMIT = 30/);
   assert.match(src, /MAX_CONNECTIONS = 200/);
-  assert.match(src, /MAX_CONNECTIONS_ALL = 400/);
+  assert.match(src, /MAX_CONNECTIONS_ALL = 800/);
+  assert.match(src, /HISTORY_PAGE_MAX = 50/);
   assert.match(src, /MESSAGE_MAX = 4096/);
   assert.match(src, /team-1/);
   assert.match(src, /team-12/);
@@ -31,4 +32,8 @@ test("worker stays isolated from Next/Neon/Vercel", () => {
   assert.match(index, /verifyChatToken/);
   assert.match(index, /room_forbidden/);
   assert.match(index, /sender_role/);
+  assert.doesNotMatch(index, /trimHistory|DELETE FROM messages/);
+  assert.match(index, /validateIncomingHistory/);
+  assert.match(index, /server_only/);
+  assert.match(index, /CHAT_INTERNAL_SECRET/);
 });

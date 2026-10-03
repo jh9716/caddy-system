@@ -65,6 +65,37 @@ export function generateCustomRoomId(
   return `room_${hex}`;
 }
 
+export const CLIENT_REQUEST_ID_MAX = 128;
+
+export function sanitizeClientRequestId(id: string): string {
+  return String(id ?? "")
+    .trim()
+    .slice(0, CLIENT_REQUEST_ID_MAX)
+    .replace(/[^a-zA-Z0-9._-]/g, "");
+}
+
+export async function customRoomIdFromClientRequest(
+  ownerUserId: number,
+  clientRequestId: string
+): Promise<string | null> {
+  const requestId = sanitizeClientRequestId(clientRequestId);
+  if (!requestId || !Number.isInteger(ownerUserId) || ownerUserId <= 0) return null;
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`create_room|${ownerUserId}|${requestId}`)
+  );
+  const bytes = new Uint8Array(digest).subarray(0, 8);
+  let hex = "";
+  for (let i = 0; i < bytes.length; i++) hex += bytes[i]!.toString(16).padStart(2, "0");
+  return `room_${hex}`;
+}
+
+export function clampChatReadSeq(requested: number, latestSeq: number): number {
+  if (!Number.isInteger(requested) || requested < 0) return 0;
+  if (!Number.isInteger(latestSeq) || latestSeq < 0) return 0;
+  return Math.min(requested, latestSeq);
+}
+
 export function sanitizeChatRoomName(name: string): string {
   return String(name ?? "")
     .replace(/\s+/g, " ")

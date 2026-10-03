@@ -98,12 +98,19 @@ export default function ChatClient() {
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [members, setMembers] = useState<MemberRow[]>([]);
   const [creating, setCreating] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const dirRef = useRef<WebSocket | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const stickRef = useRef(true);
   const tokenRef = useRef<TokenPayload | null>(null);
   const roomRef = useRef<RoomSummary | null>(null);
+  const historyResetRef = useRef(true);
+  const oldestSeqRef = useRef<number | null>(null);
+  const loadingOlderRef = useRef(false);
+  const pendingScrollRestore = useRef<number | null>(null);
+  const createReqRef = useRef("");
 
   const upsertLine = useCallback((incoming: ChatLine) => {
     setLines((prev) => {
@@ -154,7 +161,17 @@ export default function ChatClient() {
       const ws = new WebSocket(url);
       dirRef.current = ws;
       ws.addEventListener("open", () => setDirectoryConnected(true));
-      ws.addEventListener("close", () => setDirectoryConnected(false));
+      ws.addEventListener("close", (ev) => {
+        setDirectoryConnected(false);
+        if (ev.code === 4008) {
+          void fetchToken().then((info) => {
+            if (!info) return;
+            tokenRef.current = info;
+            setTokenInfo(info);
+            connectDirectory(info);
+          });
+        }
+      });
       ws.addEventListener("message", (event) => {
         let data: any;
         try {
@@ -167,7 +184,7 @@ export default function ChatClient() {
         }
       });
     },
-    [applyRooms]
+    [applyRooms, fetchToken]
   );
 
   const connectSocket = useCallback(
@@ -180,8 +197,23 @@ export default function ChatClient() {
       wsRef.current?.close();
       const ws = new WebSocket(url);
       wsRef.current = ws;
+      historyResetRef.current = true;
+      oldestSeqRef.current = null;
+      setHasMore(false);
       ws.addEventListener("open", () => setConnected(true));
-      ws.addEventListener("close", () => setConnected(false));
+      ws.addEventListener("close", (ev) => {
+        setConnected(false);
+        if (ev.code === 4008) {
+          void fetchToken().then((info) => {
+            if (!info) return;
+            tokenRef.current = info;
+            setTokenInfo(info);
+            connectDirectory(info);
+            const room = roomRef.current;
+            if (room) void connectSocket(info, room.roomId);
+          });
+        }
+      });
       ws.addEventListener("message", (event) => {
         let data: any;
         try {
@@ -200,10 +232,30 @@ export default function ChatClient() {
             seq: Number(m.seq),
             status: "sent" as const,
           }));
-          setLines(hist);
-          const last = hist[hist.length - 1];
-          if (last?.seq && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "read", seq: last.seq }));
+          const reset = historyResetRef.current;
+          historyResetRef.current = false;
+          loadingOlderRef.current = false;
+          setLoadingOlder(false);
+          setHasMore(data.hasMore === true);
+          if (hist.length) {
+            oldestSeqRef.current = Number(hist[0]!.seq);
+          } else if (typeof data.oldestSeq === "number") {
+            oldestSeqRef.current = data.oldestSeq;
+          }
+          if (reset) {
+            setLines(hist);
+            const last = hist[hist.length - 1];
+            if (last?.seq && ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: "read", seq: last.seq }));
+            }
+          } else {
+            const el = listRef.current;
+            if (el) pendingScrollRestore.current = el.scrollHeight;
+            setLines((prev) => {
+              const seen = new Set(prev.map((l) => l.clientMessageId));
+              const older = hist.filter((m) => !seen.has(m.clientMessageId));
+              return [...older, ...prev];
+            });
           }
           return;
         }
@@ -233,7 +285,7 @@ export default function ChatClient() {
         }
       });
     },
-    [upsertLine]
+    [connectDirectory, fetchToken, upsertLine]
   );
 
   useEffect(() => {
@@ -264,9 +316,15 @@ export default function ChatClient() {
   }, [connectDirectory, fetchRoomsHttp, fetchToken]);
 
   useEffect(() => {
-    if (!stickRef.current) return;
     const el = listRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    if (pendingScrollRestore.current != null) {
+      el.scrollTop = el.scrollHeight - pendingScrollRestore.current;
+      pendingScrollRestore.current = null;
+      return;
+    }
+    if (!stickRef.current) return;
+    el.scrollTop = el.scrollHeight;
   }, [lines, view]);
 
   useEffect(() => {
@@ -304,8 +362,19 @@ export default function ChatClient() {
     setActiveRoom(room);
     setView("room");
     setLines([]);
+    setHasMore(false);
     setError("");
     await connectSocket(info, room.roomId);
+  }
+
+  function requestOlderHistory() {
+    const ws = wsRef.current;
+    const beforeSeq = oldestSeqRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN || !beforeSeq) return;
+    if (!hasMore || loadingOlderRef.current) return;
+    loadingOlderRef.current = true;
+    setLoadingOlder(true);
+    ws.send(JSON.stringify({ type: "history", beforeSeq, limit: 30 }));
   }
 
   async function sendCurrent(body: string, clientMessageId: string) {
@@ -394,17 +463,25 @@ export default function ChatClient() {
     setCreating(true);
     setError("");
     try {
+      if (!createReqRef.current) {
+        createReqRef.current = `cr-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+      }
       const res = await fetch("/api/chat/rooms", {
         method: "POST",
         credentials: "include",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: createName, memberUserIds: selectedIds }),
+        body: JSON.stringify({
+          name: createName,
+          memberUserIds: selectedIds,
+          clientRequestId: createReqRef.current,
+        }),
       });
       if (await consumeUnauthorizedMemberResponse(res)) return;
       const data = await res.json().catch(() => null);
       if (!res.ok) {
         throw new Error(data?.message || data?.error || "채팅방을 만들지 못했습니다.");
       }
+      createReqRef.current = "";
       setSheet(null);
       setCreateName("");
       setSelectedIds([]);
@@ -511,8 +588,19 @@ export default function ChatClient() {
             onScroll={(e) => {
               const el = e.currentTarget;
               stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+              if (el.scrollTop < 48) requestOlderHistory();
             }}
           >
+            {hasMore ? (
+              <button
+                type="button"
+                className="vh-chat-more"
+                disabled={loadingOlder}
+                onClick={() => requestOlderHistory()}
+              >
+                {loadingOlder ? "이전 메시지 불러오는 중…" : "이전 메시지"}
+              </button>
+            ) : null}
             {lines.map((line) => {
               const mine = tokenInfo ? line.senderUserId === tokenInfo.user.userId : false;
               const admin = line.senderRole === "admin";

@@ -12,6 +12,7 @@ import {
   signDirectoryCreateGrant,
 } from "@/lib/chatDirectoryGrant";
 import {
+  customRoomIdFromClientRequest,
   generateCustomRoomId,
   ROOM_NAME_MIN,
   sanitizeChatRoomName,
@@ -33,9 +34,13 @@ export async function POST(req: NextRequest) {
       return mustChangePasswordResponse();
     }
     const issued = await issueChatAccessToken(prisma, auth);
-    let body: { name?: string; memberUserIds?: unknown };
+    let body: { name?: string; memberUserIds?: unknown; clientRequestId?: unknown };
     try {
-      body = (await req.json()) as { name?: string; memberUserIds?: unknown };
+      body = (await req.json()) as {
+        name?: string;
+        memberUserIds?: unknown;
+        clientRequestId?: unknown;
+      };
     } catch {
       return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
     }
@@ -84,7 +89,11 @@ export async function POST(req: NextRequest) {
       );
     }
     const nowSec = Math.floor(Date.now() / 1000);
-    const roomId = generateCustomRoomId();
+    const roomId =
+      (await customRoomIdFromClientRequest(
+        issued.user.userId,
+        String(body.clientRequestId || "")
+      )) || generateCustomRoomId();
     const grant = await signDirectoryCreateGrant({
       v: 1,
       op: "create_room",

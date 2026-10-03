@@ -2,15 +2,16 @@ export const BODY_MAX = 2000;
 export const SENDER_MAX = 64;
 export const CLIENT_ID_MAX = 128;
 export const HISTORY_LIMIT = 30;
+export const HISTORY_PAGE_MAX = 50;
 /**
  * Per-room hibernatable WebSocket cap.
  * Cloudflare hibernation supports up to 32,768 sockets per DO.
  * Custom/legacy rooms keep the Phase 1 200 cap.
- * Overall room (`all`) uses 400 to cover ~250 users + reconnect overlap.
+ * Overall room (`all`) uses 800 to cover ~250 users × phone+PC + reconnect overlap.
  */
 export const MAX_CONNECTIONS = 200;
-export const MAX_CONNECTIONS_ALL = 400;
-export const MAX_DIRECTORY_CONNECTIONS = 400;
+export const MAX_CONNECTIONS_ALL = 800;
+export const MAX_DIRECTORY_CONNECTIONS = 800;
 export const MESSAGE_MAX = 4096;
 export const ALL_ROOM_ID = "all";
 export const ALL_ROOM_NAME = "전체 채팅방";
@@ -112,6 +113,12 @@ export function computeUnread(latestSeq: number, lastReadSeq: number): number {
   return Math.max(0, Math.floor(latestSeq) - Math.floor(lastReadSeq));
 }
 
+export function clampReadSeq(requested: number, latestSeq: number): number {
+  if (!Number.isInteger(requested) || requested < 0) return 0;
+  if (!Number.isInteger(latestSeq) || latestSeq < 0) return 0;
+  return Math.min(requested, latestSeq);
+}
+
 export function senderRoleFromClaims(role: string): ChatSenderRole {
   if (role === "admin") return "admin";
   if (role === "leader") return "leader";
@@ -165,4 +172,25 @@ export function validateIncomingRead(raw: unknown):
     return { ok: false, code: "invalid_seq", message: "seq required" };
   }
   return { ok: true, seq };
+}
+
+export function validateIncomingHistory(raw: unknown):
+  | { ok: true; beforeSeq: number; limit: number }
+  | { ok: false; code: string; message: string } {
+  if (raw == null || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ok: false, code: "invalid_payload", message: "JSON object required" };
+  }
+  const input = raw as Record<string, unknown>;
+  if (input.type !== "history") {
+    return { ok: false, code: "invalid_type", message: "type must be history" };
+  }
+  const beforeSeq = Number(input.beforeSeq);
+  if (!Number.isInteger(beforeSeq) || beforeSeq <= 0) {
+    return { ok: false, code: "invalid_seq", message: "beforeSeq required" };
+  }
+  const rawLimit = input.limit == null ? HISTORY_LIMIT : Number(input.limit);
+  if (!Number.isInteger(rawLimit) || rawLimit <= 0) {
+    return { ok: false, code: "invalid_limit", message: "limit required" };
+  }
+  return { ok: true, beforeSeq, limit: Math.min(HISTORY_PAGE_MAX, rawLimit) };
 }

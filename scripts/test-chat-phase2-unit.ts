@@ -4,7 +4,9 @@
  */
 import {
   chatNotificationTag,
+  clampChatReadSeq,
   computeChatUnread,
+  customRoomIdFromClientRequest,
   generateCustomRoomId,
   isAllRoomId,
   isCustomRoomId,
@@ -13,6 +15,12 @@ import {
   sortChatRoomSummaries,
   truncateChatPreview,
 } from "../src/lib/chatRooms";
+import {
+  getChatInternalSecret,
+  signDirectoryCreateGrant,
+  verifyDirectoryCreateGrant,
+} from "../src/lib/chatDirectoryGrant";
+import { CHAT_TOKEN_TTL_SEC } from "../src/lib/chatToken";
 import { isVerifiedAdminRole, senderRoleFromClaims } from "../src/lib/chatAcl";
 import {
   collectChatInviteMembers,
@@ -39,6 +47,7 @@ function section(title: string) {
   console.log("\n==", title, "==");
 }
 
+async function main() {
 section("room ids");
 {
   assert(isAllRoomId("all"), "all room");
@@ -65,6 +74,9 @@ section("list sort / preview / unread");
   assert(computeChatUnread(12, 12) === 0, "open room read");
   assert(computeChatUnread(12, 20) === 0, "unread never negative");
   assert(computeChatUnread(5, 4) === 1, "other room increment");
+  assert(clampChatReadSeq(999999, 12) === 12, "malicious read seq clamped");
+  assert(clampChatReadSeq(7, 12) === 7, "normal read kept");
+  assert(clampChatReadSeq(-3, 12) === 0, "negative read zeroed");
 }
 
 section("invite / search");
@@ -98,6 +110,37 @@ section("invite / search");
   assert(sanitizeChatUserHit(hit!).displayName === "김OO", "sanitize keeps public keys");
 }
 
+section("create idempotency / internal secret");
+{
+  const a = await customRoomIdFromClientRequest(1, "cr-same");
+  const b = await customRoomIdFromClientRequest(1, "cr-same");
+  const c = await customRoomIdFromClientRequest(2, "cr-same");
+  assert(!!a && a === b, "same owner+request id");
+  assert(!!c && c !== a, "other owner different room");
+  assert(CHAT_TOKEN_TTL_SEC === 1800, "recommended 30 min TTL");
+  process.env.CHAT_AUTH_SECRET = process.env.CHAT_AUTH_SECRET || "phase1-local-test-only";
+  delete process.env.CHAT_INTERNAL_SECRET;
+  assert(getChatInternalSecret() === process.env.CHAT_AUTH_SECRET, "fallback to CHAT_AUTH_SECRET");
+  process.env.CHAT_INTERNAL_SECRET = "internal-only-secret";
+  assert(getChatInternalSecret() === "internal-only-secret", "prefers CHAT_INTERNAL_SECRET");
+  const now = Math.floor(Date.now() / 1000);
+  const grant = await signDirectoryCreateGrant({
+    v: 1,
+    op: "create_room",
+    roomId: "room_0123456789abcdef",
+    name: "대바",
+    ownerUserId: 1,
+    members: [{ userId: 1, displayName: "A", role: "caddy", team: "1조" }],
+    iat: now,
+    exp: now + 60,
+  });
+  const ok = await verifyDirectoryCreateGrant(grant, "internal-only-secret", now + 1);
+  const no = await verifyDirectoryCreateGrant(grant, process.env.CHAT_AUTH_SECRET, now + 1);
+  assert(!!ok && ok.roomId === "room_0123456789abcdef", "grant verifies with internal secret");
+  assert(no == null, "identity secret cannot mint directory grant when internal is set");
+  delete process.env.CHAT_INTERNAL_SECRET;
+}
+
 section("admin spoof protection helpers");
 {
   assert(isVerifiedAdminRole("admin"), "token admin is styled");
@@ -118,3 +161,9 @@ if (failed > 0) {
   process.exit(1);
 }
 console.log(`\nchat-phase2 tests passed: ${passed}`);
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

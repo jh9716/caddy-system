@@ -1,9 +1,11 @@
 import { DurableObject } from "cloudflare:workers";
+import { verifyInternalRequest } from "./internalAuth";
 import {
   ALL_ROOM_ID,
   ALL_ROOM_NAME,
   MAX_DIRECTORY_CONNECTIONS,
   chatNotificationTag,
+  clampReadSeq,
   computeUnread,
   isAllRoomId,
   isCustomRoomId,
@@ -15,6 +17,7 @@ import { isChatTokenV2, type ChatTokenClaims } from "./token";
 
 export type DirectoryEnv = {
   CHAT_AUTH_SECRET: string;
+  CHAT_INTERNAL_SECRET?: string;
 };
 
 type MemberSnap = {
@@ -94,19 +97,25 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    if (request.method === "POST" && url.pathname === "/internal/message") {
-      return this.handleInternalMessage(request);
-    }
-    if (request.method === "POST" && url.pathname === "/internal/read") {
-      return this.handleInternalRead(request);
-    }
-    if (request.method === "POST" && url.pathname === "/internal/create") {
-      return this.handleInternalCreate(request);
-    }
-    if (request.method === "GET" && url.pathname === "/internal/member") {
-      const roomId = url.searchParams.get("room") || "";
-      const userId = Number(url.searchParams.get("userId"));
-      return json({ ok: true, member: this.isMember(roomId, userId) });
+    if (url.pathname.startsWith("/internal/")) {
+      if (!(await verifyInternalRequest(request, this.env, url.pathname))) {
+        return json({ error: "forbidden" }, 403);
+      }
+      if (request.method === "POST" && url.pathname === "/internal/message") {
+        return this.handleInternalMessage(request);
+      }
+      if (request.method === "POST" && url.pathname === "/internal/read") {
+        return this.handleInternalRead(request);
+      }
+      if (request.method === "POST" && url.pathname === "/internal/create") {
+        return this.handleInternalCreate(request);
+      }
+      if (request.method === "GET" && url.pathname === "/internal/member") {
+        const roomId = url.searchParams.get("room") || "";
+        const userId = Number(url.searchParams.get("userId"));
+        return json({ ok: true, member: this.isMember(roomId, userId) });
+      }
+      return json({ error: "not_found" }, 404);
     }
 
     let claims: ChatTokenClaims | null = null;
@@ -271,9 +280,13 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
       return json({ error: "invalid_room" }, 400);
     }
     const existing = this.ctx.storage.sql
-      .exec(`SELECT 1 AS ok FROM rooms WHERE room_id = ?`, body.roomId)
+      .exec(`SELECT owner_user_id FROM rooms WHERE room_id = ?`, body.roomId)
       .toArray();
     if (existing.length) {
+      const owner = Number(existing[0]?.owner_user_id || 0);
+      if (owner === body.ownerUserId) {
+        return json({ ok: true, roomId: body.roomId, idempotent: true });
+      }
       return json({ error: "room_exists" }, 409);
     }
     const now = new Date().toISOString();
@@ -360,9 +373,16 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
     return json({ ok: true });
   }
 
+  private latestSeq(roomId: string): number {
+    const row = this.ctx.storage.sql
+      .exec(`SELECT last_message_seq FROM rooms WHERE room_id = ?`, roomId)
+      .toArray()[0];
+    return row ? Number(row.last_message_seq || 0) : 0;
+  }
+
   private upsertRead(roomId: string, userId: number, seq: number, at: string) {
     const current = this.lastRead(roomId, userId);
-    const next = Math.max(current, seq);
+    const next = Math.max(current, clampReadSeq(seq, this.latestSeq(roomId)));
     this.ctx.storage.sql.exec(
       `INSERT INTO read_state (room_id, user_id, last_read_seq, updated_at)
        VALUES (?, ?, ?, ?)
@@ -375,9 +395,22 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
     );
   }
 
+  private liveDirectoryClaims(ws: WebSocket): ChatTokenClaims | null {
+    const claims = ws.deserializeAttachment() as ChatTokenClaims | null;
+    if (!claims || claims.exp <= Math.floor(Date.now() / 1000)) {
+      try {
+        ws.close(4008, "expired_token");
+      } catch {
+        // ignore
+      }
+      return null;
+    }
+    return claims;
+  }
+
   private broadcastAffected(roomId: string) {
     for (const ws of this.ctx.getWebSockets()) {
-      const claims = ws.deserializeAttachment() as ChatTokenClaims | null;
+      const claims = this.liveDirectoryClaims(ws);
       if (!claims) continue;
       if (!isAllRoomId(roomId) && !this.isMember(roomId, claims.userId)) continue;
       try {
@@ -391,7 +424,7 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
   private broadcastRooms(userIds: number[]) {
     const allow = new Set(userIds);
     for (const ws of this.ctx.getWebSockets()) {
-      const claims = ws.deserializeAttachment() as ChatTokenClaims | null;
+      const claims = this.liveDirectoryClaims(ws);
       if (!claims || !allow.has(claims.userId)) continue;
       try {
         sendJson(ws, { type: "rooms", rooms: this.listForUser(claims.userId) });
@@ -403,7 +436,7 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
 
   private broadcastToUser(userId: number) {
     for (const ws of this.ctx.getWebSockets()) {
-      const claims = ws.deserializeAttachment() as ChatTokenClaims | null;
+      const claims = this.liveDirectoryClaims(ws);
       if (!claims || claims.userId !== userId) continue;
       try {
         sendJson(ws, { type: "rooms", rooms: this.listForUser(userId) });

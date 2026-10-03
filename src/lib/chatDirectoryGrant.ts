@@ -3,6 +3,11 @@ import type { ChatInviteMember } from "@/lib/chatUsers";
 
 export const CHAT_DIRECTORY_GRANT_TTL_SEC = 60;
 
+/** Server-to-server only. Never NEXT_PUBLIC_*. Optional until set; falls back to CHAT_AUTH_SECRET. */
+export function getChatInternalSecret(): string {
+  return String(process.env.CHAT_INTERNAL_SECRET || getChatAuthSecret() || "").trim();
+}
+
 export type ChatDirectoryCreateGrant = {
   v: 1;
   op: "create_room";
@@ -66,9 +71,9 @@ export function canonicalDirectoryGrant(grant: ChatDirectoryCreateGrant): string
 
 export async function signDirectoryCreateGrant(
   grant: ChatDirectoryCreateGrant,
-  secret = getChatAuthSecret()
+  secret = getChatInternalSecret()
 ): Promise<string> {
-  if (!secret) throw new Error("CHAT_AUTH_SECRET is required");
+  if (!secret) throw new Error("CHAT_INTERNAL_SECRET or CHAT_AUTH_SECRET is required");
   const canonical = canonicalDirectoryGrant(grant);
   const key = await crypto.subtle.importKey(
     "raw",

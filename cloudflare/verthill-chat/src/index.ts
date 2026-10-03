@@ -1,20 +1,25 @@
 import { DurableObject } from "cloudflare:workers";
 import { ChatDirectory } from "./directory";
 import {
+  chatInternalSecret,
+  internalAuthHeaders,
+} from "./internalAuth";
+import {
   DIRECTORY_NAME,
     HISTORY_LIMIT,
     MAX_CONNECTIONS,
     MAX_CONNECTIONS_ALL,
     MESSAGE_MAX,
   isAllRoomId,
-  isCustomRoomId,
-  isLegacyTeamRoomId,
-  isValidRoomName,
-  senderRoleFromClaims,
-  truncatePreview,
-  validateIncomingMessage,
-  validateIncomingRead,
-  type ChatMessage,
+    isCustomRoomId,
+    isLegacyTeamRoomId,
+    isValidRoomName,
+    senderRoleFromClaims,
+    truncatePreview,
+    validateIncomingHistory,
+    validateIncomingMessage,
+    validateIncomingRead,
+    type ChatMessage,
 } from "./protocol";
 import {
   resolveChatRoomAccess,
@@ -30,6 +35,7 @@ export interface Env {
   CHAT_ROOM: DurableObjectNamespace<ChatRoom>;
   CHAT_DIRECTORY: DurableObjectNamespace<ChatDirectory>;
   CHAT_AUTH_SECRET: string;
+  CHAT_INTERNAL_SECRET?: string;
 }
 
 function corsHeaders(): Record<string, string> {
@@ -81,8 +87,13 @@ async function isDirectoryMember(
   roomId: string,
   userId: number
 ): Promise<boolean> {
+  const path = "/internal/member";
+  const headers = await internalAuthHeaders(chatInternalSecret(env), path);
   const res = await directoryStub(env).fetch(
-    `https://chat-directory/internal/member?room=${encodeURIComponent(roomId)}&userId=${userId}`
+    new Request(
+      `https://chat-directory${path}?room=${encodeURIComponent(roomId)}&userId=${userId}`,
+      { headers }
+    )
   );
   if (!res.ok) return false;
   const data = (await res.json()) as { member?: boolean };
@@ -173,7 +184,10 @@ export default {
 };
 
 async function createRoomFromGrant(request: Request, env: Env): Promise<Response> {
-  const secret = String(env.CHAT_AUTH_SECRET || "").trim();
+  if (request.headers.get("origin")) {
+    return json({ error: "server_only" }, 403);
+  }
+  const secret = chatInternalSecret(env);
   if (!secret) return json({ error: "chat_auth_unconfigured" }, 503);
   let body: { grant?: string };
   try {
@@ -183,10 +197,11 @@ async function createRoomFromGrant(request: Request, env: Env): Promise<Response
   }
   const grant = await verifyCreateGrant(String(body.grant || ""), secret);
   if (!grant) return json({ error: "invalid_grant" }, 401);
+  const headers = await internalAuthHeaders(secret, "/internal/create");
   return directoryStub(env).fetch(
     new Request("https://chat-directory/internal/create", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers,
       body: JSON.stringify({
         roomId: grant.roomId,
         name: grant.name,
@@ -337,7 +352,7 @@ export class ChatRoom extends DurableObject<Env> {
     this.ctx.acceptWebSocket(server);
     const attach: SocketAttach = { claims: authorized.claims, roomId: authorized.room };
     server.serializeAttachment(attach);
-    this.pushHistory(server);
+    this.sendHistory(server, null, HISTORY_LIMIT);
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -380,6 +395,15 @@ export class ChatRoom extends DurableObject<Env> {
       void this.notifyDirectoryRead(attach.roomId, attach.claims.userId, read.seq);
       return;
     }
+    if (parsed && typeof parsed === "object" && (parsed as { type?: string }).type === "history") {
+      const hist = validateIncomingHistory(parsed);
+      if (!hist.ok) {
+        sendJson(ws, { type: "error", code: hist.code, message: hist.message });
+        return;
+      }
+      this.sendHistory(ws, hist.beforeSeq, hist.limit);
+      return;
+    }
     const checked = validateIncomingMessage(parsed);
     if (!checked.ok) {
       sendJson(ws, {
@@ -416,7 +440,6 @@ export class ChatRoom extends DurableObject<Env> {
       checked.value.body,
       sentAt
     );
-    this.trimHistory();
     const inserted = this.ctx.storage.sql
       .exec(
         `SELECT seq FROM messages WHERE client_message_id = ?`,
@@ -479,17 +502,30 @@ export class ChatRoom extends DurableObject<Env> {
     return null;
   }
 
-  private pushHistory(ws: WebSocket) {
-    const rows = this.ctx.storage.sql
-      .exec(
-        `SELECT seq, client_message_id, sender_user_id, sender, sender_role, body, sent_at
-         FROM messages
-         ORDER BY seq DESC
-         LIMIT ?`,
-        HISTORY_LIMIT
-      )
-      .toArray()
-      .reverse();
+  private sendHistory(ws: WebSocket, beforeSeq: number | null, limit: number) {
+    const rows =
+      beforeSeq == null
+        ? this.ctx.storage.sql
+            .exec(
+              `SELECT seq, client_message_id, sender_user_id, sender, sender_role, body, sent_at
+               FROM messages
+               ORDER BY seq DESC
+               LIMIT ?`,
+              limit
+            )
+            .toArray()
+        : this.ctx.storage.sql
+            .exec(
+              `SELECT seq, client_message_id, sender_user_id, sender, sender_role, body, sent_at
+               FROM messages
+               WHERE seq < ?
+               ORDER BY seq DESC
+               LIMIT ?`,
+              beforeSeq,
+              limit
+            )
+            .toArray();
+    rows.reverse();
     const messages: ChatMessage[] = rows.map((row) => ({
       type: "message",
       clientMessageId: String(row.client_message_id),
@@ -501,25 +537,36 @@ export class ChatRoom extends DurableObject<Env> {
       seq: Number(row.seq),
     }));
     const oldestSeq = messages.length ? Number(messages[0]!.seq) : null;
+    let hasMore = false;
+    if (oldestSeq != null) {
+      const older = this.ctx.storage.sql
+        .exec(`SELECT 1 AS ok FROM messages WHERE seq < ? LIMIT 1`, oldestSeq)
+        .toArray();
+      hasMore = older.length > 0;
+    }
     sendJson(ws, {
       type: "history",
       messages,
-      hasMore: false,
+      hasMore,
       oldestSeq,
     });
   }
 
-  private trimHistory() {
-    this.ctx.storage.sql.exec(
-      `DELETE FROM messages
-       WHERE seq < IFNULL((SELECT MAX(seq) FROM messages), 0) - ?`,
-      HISTORY_LIMIT - 1
-    );
-  }
-
   private broadcast(event: ChatMessage) {
     const payload = JSON.stringify(event);
+    const now = Math.floor(Date.now() / 1000);
     for (const socket of this.ctx.getWebSockets()) {
+      const attach = socket.deserializeAttachment() as SocketAttach | ChatTokenClaims | null;
+      const exp =
+        attach && typeof attach === "object" && "claims" in attach
+          ? attach.claims.exp
+          : attach && typeof attach === "object"
+            ? (attach as ChatTokenClaims).exp
+            : 0;
+      if (!attach || exp <= now) {
+        this.expire(socket);
+        continue;
+      }
       try {
         if (socket.readyState === WebSocket.OPEN) {
           socket.send(payload);
@@ -539,10 +586,14 @@ export class ChatRoom extends DurableObject<Env> {
   private async notifyDirectoryMessage(roomId: string, message: ChatMessage) {
     if (!isAllRoomId(roomId) && !isCustomRoomId(roomId)) return;
     try {
+      const headers = await internalAuthHeaders(
+        chatInternalSecret(this.env),
+        "/internal/message"
+      );
       await directoryStub(this.env).fetch(
         new Request("https://chat-directory/internal/message", {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers,
           body: JSON.stringify({
             roomId,
             seq: message.seq,
@@ -562,10 +613,14 @@ export class ChatRoom extends DurableObject<Env> {
   private async notifyDirectoryRead(roomId: string, userId: number, seq: number) {
     if (!isAllRoomId(roomId) && !isCustomRoomId(roomId)) return;
     try {
+      const headers = await internalAuthHeaders(
+        chatInternalSecret(this.env),
+        "/internal/read"
+      );
       await directoryStub(this.env).fetch(
         new Request("https://chat-directory/internal/read", {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers,
           body: JSON.stringify({ roomId, userId, seq }),
         })
       );
