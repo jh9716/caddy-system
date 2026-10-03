@@ -4,12 +4,26 @@ export const CLIENT_ID_MAX = 128;
 export const HISTORY_LIMIT = 30;
 export const MAX_CONNECTIONS = 200;
 export const MESSAGE_MAX = 4096;
-export const ROOM_NAME_RE = /^[a-zA-Z0-9_-]{1,64}$/;
-export const ALLOWED_ROOMS = ["poc-room", "other-room"] as const;
+export const ROOM_NAME_RE = /^team-([1-9]|1[0-2])$/;
+export const ALLOWED_ROOMS = [
+  "team-1",
+  "team-2",
+  "team-3",
+  "team-4",
+  "team-5",
+  "team-6",
+  "team-7",
+  "team-8",
+  "team-9",
+  "team-10",
+  "team-11",
+  "team-12",
+] as const;
 
 export type ChatMessage = {
   type: "message";
   clientMessageId: string;
+  senderUserId: number;
   sender: string;
   body: string;
   sentAt: string;
@@ -19,6 +33,8 @@ export type ChatMessage = {
 export type HistoryEvent = {
   type: "history";
   messages: ChatMessage[];
+  hasMore: boolean;
+  oldestSeq: number | null;
 };
 
 export type ErrorEvent = {
@@ -37,7 +53,7 @@ export function isValidRoomName(room: string): boolean {
 }
 
 export function validateIncomingMessage(raw: unknown):
-  | { ok: true; value: { clientMessageId: string; sender: string; body: string } }
+  | { ok: true; value: { clientMessageId: string; body: string } }
   | { ok: false; code: string; message: string } {
   if (raw == null || typeof raw !== "object" || Array.isArray(raw)) {
     return { ok: false, code: "invalid_payload", message: "JSON object required" };
@@ -47,7 +63,6 @@ export function validateIncomingMessage(raw: unknown):
     return { ok: false, code: "invalid_type", message: "type must be message" };
   }
   const clientMessageId = String(input.clientMessageId ?? "").trim();
-  const sender = String(input.sender ?? "").trim();
   const body = typeof input.body === "string" ? input.body : "";
   if (!clientMessageId || clientMessageId.length > CLIENT_ID_MAX) {
     return {
@@ -55,9 +70,6 @@ export function validateIncomingMessage(raw: unknown):
       code: "invalid_client_message_id",
       message: "clientMessageId required",
     };
-  }
-  if (!sender || sender.length > SENDER_MAX) {
-    return { ok: false, code: "invalid_sender", message: "sender required" };
   }
   if (body.length === 0) {
     return { ok: false, code: "invalid_body", message: "body required" };
@@ -69,5 +81,5 @@ export function validateIncomingMessage(raw: unknown):
       message: `body max ${BODY_MAX}`,
     };
   }
-  return { ok: true, value: { clientMessageId, sender, body } };
+  return { ok: true, value: { clientMessageId, body } };
 }

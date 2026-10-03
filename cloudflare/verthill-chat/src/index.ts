@@ -7,11 +7,14 @@ import {
   validateIncomingMessage,
   type ChatMessage,
 } from "./protocol";
+import { verifyChatToken, type ChatTokenClaims } from "./token";
 
 export { validateIncomingMessage, isValidRoomName } from "./protocol";
+export { verifyChatToken } from "./token";
 
 export interface Env {
   CHAT_ROOM: DurableObjectNamespace<ChatRoom>;
+  CHAT_AUTH_SECRET: string;
 }
 
 function json(data: unknown, status = 200): Response {
@@ -25,6 +28,33 @@ function sendJson(ws: WebSocket, data: unknown) {
   ws.send(JSON.stringify(data));
 }
 
+async function authorizeSocket(
+  request: Request,
+  env: Env
+): Promise<{ room: string; claims: ChatTokenClaims } | Response> {
+  const url = new URL(request.url);
+  const room = (url.searchParams.get("room") || "").trim();
+  if (!isValidRoomName(room)) {
+    return json({ error: "invalid_room" }, 400);
+  }
+  const secret = String(env.CHAT_AUTH_SECRET || "").trim();
+  if (!secret) {
+    return json({ error: "chat_auth_unconfigured" }, 503);
+  }
+  const token = (url.searchParams.get("token") || "").trim();
+  if (!token) {
+    return json({ error: "unauthorized" }, 401);
+  }
+  const claims = await verifyChatToken(token, secret);
+  if (!claims) {
+    return json({ error: "invalid_token" }, 401);
+  }
+  if (claims.room !== room) {
+    return json({ error: "room_forbidden" }, 403);
+  }
+  return { room, claims };
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -32,14 +62,12 @@ export default {
       return json({ ok: true, service: "verthill-chat" });
     }
     if (url.pathname === "/ws") {
-      const room = (url.searchParams.get("room") || "").trim();
-      if (!isValidRoomName(room)) {
-        return json({ error: "invalid_room" }, 400);
-      }
+      const authorized = await authorizeSocket(request, env);
+      if (authorized instanceof Response) return authorized;
       if ((request.headers.get("Upgrade") || "").toLowerCase() !== "websocket") {
         return json({ error: "upgrade_required" }, 426);
       }
-      const id = env.CHAT_ROOM.idFromName(room);
+      const id = env.CHAT_ROOM.idFromName(authorized.room);
       return env.CHAT_ROOM.get(id).fetch(request);
     }
     return json({ error: "not_found" }, 404);
@@ -53,17 +81,27 @@ export class ChatRoom extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS messages (
         seq INTEGER PRIMARY KEY AUTOINCREMENT,
         client_message_id TEXT NOT NULL UNIQUE,
+        sender_user_id INTEGER NOT NULL DEFAULT 0,
         sender TEXT NOT NULL,
         body TEXT NOT NULL,
         sent_at TEXT NOT NULL
       )
     `);
+    try {
+      this.ctx.storage.sql.exec(
+        `ALTER TABLE messages ADD COLUMN sender_user_id INTEGER NOT NULL DEFAULT 0`
+      );
+    } catch {
+      // already present on new rooms
+    }
     this.ctx.storage.sql.exec(
       `CREATE INDEX IF NOT EXISTS messages_seq ON messages(seq)`
     );
   }
 
-  async fetch(_request: Request): Promise<Response> {
+  async fetch(request: Request): Promise<Response> {
+    const authorized = await authorizeSocket(request, this.env);
+    if (authorized instanceof Response) return authorized;
     if (this.ctx.getWebSockets().length >= MAX_CONNECTIONS) {
       return json({ error: "room_full" }, 503);
     }
@@ -71,11 +109,26 @@ export class ChatRoom extends DurableObject<Env> {
     const client = pair[0];
     const server = pair[1];
     this.ctx.acceptWebSocket(server);
+    server.serializeAttachment(authorized.claims);
     this.pushHistory(server);
     return new Response(null, { status: 101, webSocket: client });
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
+    const claims = ws.deserializeAttachment() as ChatTokenClaims | null;
+    if (!claims || claims.exp <= Math.floor(Date.now() / 1000)) {
+      sendJson(ws, {
+        type: "error",
+        code: "expired_token",
+        message: "token expired",
+      });
+      try {
+        ws.close(4008, "expired_token");
+      } catch {
+        // ignore
+      }
+      return;
+    }
     if (typeof message !== "string") {
       sendJson(ws, {
         type: "error",
@@ -116,7 +169,7 @@ export class ChatRoom extends DurableObject<Env> {
     const sentAt = new Date().toISOString();
     const existing = this.ctx.storage.sql
       .exec(
-        `SELECT seq, sender, body, sent_at FROM messages WHERE client_message_id = ?`,
+        `SELECT seq FROM messages WHERE client_message_id = ?`,
         checked.value.clientMessageId
       )
       .toArray();
@@ -129,10 +182,11 @@ export class ChatRoom extends DurableObject<Env> {
     }
 
     this.ctx.storage.sql.exec(
-      `INSERT INTO messages (client_message_id, sender, body, sent_at)
-       VALUES (?, ?, ?, ?)`,
+      `INSERT INTO messages (client_message_id, sender_user_id, sender, body, sent_at)
+       VALUES (?, ?, ?, ?, ?)`,
       checked.value.clientMessageId,
-      checked.value.sender,
+      claims.userId,
+      claims.displayName,
       checked.value.body,
       sentAt
     );
@@ -146,7 +200,8 @@ export class ChatRoom extends DurableObject<Env> {
     const outbound: ChatMessage = {
       type: "message",
       clientMessageId: checked.value.clientMessageId,
-      sender: checked.value.sender,
+      senderUserId: claims.userId,
+      sender: claims.displayName,
       body: checked.value.body,
       sentAt,
       seq: Number(inserted.seq),
@@ -173,7 +228,7 @@ export class ChatRoom extends DurableObject<Env> {
   private pushHistory(ws: WebSocket) {
     const rows = this.ctx.storage.sql
       .exec(
-        `SELECT seq, client_message_id, sender, body, sent_at
+        `SELECT seq, client_message_id, sender_user_id, sender, body, sent_at
          FROM messages
          ORDER BY seq DESC
          LIMIT ?`,
@@ -184,12 +239,19 @@ export class ChatRoom extends DurableObject<Env> {
     const messages: ChatMessage[] = rows.map((row) => ({
       type: "message",
       clientMessageId: String(row.client_message_id),
+      senderUserId: Number(row.sender_user_id || 0),
       sender: String(row.sender),
       body: String(row.body),
       sentAt: String(row.sent_at),
       seq: Number(row.seq),
     }));
-    sendJson(ws, { type: "history", messages });
+    const oldestSeq = messages.length ? Number(messages[0]!.seq) : null;
+    sendJson(ws, {
+      type: "history",
+      messages,
+      hasMore: false,
+      oldestSeq,
+    });
   }
 
   private trimHistory() {

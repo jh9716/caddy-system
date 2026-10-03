@@ -4136,3 +4136,129 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
   padding: 7px 12px !important;
   font-size: 13px !important;
 }
+
+.vh-chat {
+  width: min(390px, 100%);
+  margin: 0 auto;
+  min-height: calc(100dvh - 132px);
+  display: flex;
+  flex-direction: column;
+  padding: 8px 0 12px;
+  box-sizing: border-box;
+}
+.vh-chat-status,
+.vh-chat-error {
+  margin: 8px 0;
+  font-size: 0.88rem;
+}
+.vh-chat-error {
+  color: #b42318;
+}
+.vh-chat-room-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--vh-border);
+  background: var(--vh-paper);
+  border-radius: 14px;
+  padding: 14px 14px 12px;
+}
+.vh-chat-room-card-name {
+  font-weight: 700;
+  font-size: 1rem;
+}
+.vh-chat-room-card-preview {
+  margin-top: 6px;
+  color: var(--vh-muted);
+  font-size: 0.86rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vh-chat-room-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.vh-chat-back,
+.vh-chat-reconnect,
+.vh-chat-retry {
+  border: 0;
+  background: transparent;
+  color: var(--vh-ink-soft);
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 0;
+}
+.vh-chat-room-title {
+  flex: 1;
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+.vh-chat-dot {
+  font-size: 0.75rem;
+  color: var(--vh-muted);
+}
+.vh-chat-dot.is-on {
+  color: #067647;
+}
+.vh-chat-log {
+  flex: 1;
+  min-height: 280px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 2px 12px;
+}
+.vh-chat-bubble {
+  max-width: 82%;
+  padding: 8px 10px;
+  border-radius: 14px;
+  background: #f3f4f6;
+}
+.vh-chat-bubble.is-mine {
+  align-self: flex-end;
+  background: #d1e9ff;
+}
+.vh-chat-bubble.is-theirs {
+  align-self: flex-start;
+}
+.vh-chat-name {
+  font-size: 0.72rem;
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+.vh-chat-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.94rem;
+  line-height: 1.45;
+}
+.vh-chat-meta {
+  margin-top: 4px;
+  font-size: 0.7rem;
+  color: var(--vh-muted);
+}
+.vh-chat-composer {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+.vh-chat-input {
+  flex: 1;
+  resize: none;
+  min-height: 44px;
+  border: 1px solid var(--vh-border);
+  border-radius: 12px;
+  padding: 8px 10px;
+  font: inherit;
+}
+.vh-chat-send {
+  flex: 0 0 auto;
+}
+.vh-chat-reconnect {
+  margin-top: 8px;
+}
