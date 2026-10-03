@@ -25,6 +25,7 @@ import {
   isStaleCalendarMonth,
 } from "@/lib/pendingLoad";
 import {
+  OFF_REQUEST_TEAM_PATH,
   offRequestWindowHint,
   offRequestWindowStatusLabel,
   shiftYearMonth,
@@ -71,8 +72,14 @@ function formatPeriod(window: WindowDto | null): string {
   return `${open} ~ ${close}`;
 }
 
+function monthFromSearch(): string | null {
+  if (typeof window === "undefined") return null;
+  const raw = new URLSearchParams(window.location.search).get("month") || "";
+  return isYearMonth(raw) ? raw : null;
+}
+
 export default function OffRequestCalendarClient() {
-  const [month, setMonth] = useState(() => kstYmd().slice(0, 7));
+  const [month, setMonth] = useState(() => monthFromSearch() || kstYmd().slice(0, 7));
   const [data, setData] = useState<CalendarDto | null>(() => {
     const initialMonth = kstYmd().slice(0, 7);
     return (
@@ -87,6 +94,7 @@ export default function OffRequestCalendarClient() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [moveId, setMoveId] = useState<number | null>(null);
+  const [isLeader, setIsLeader] = useState(false);
   const loadGen = useRef(0);
 
   const load = useCallback(async (nextMonth: string) => {
@@ -154,8 +162,26 @@ export default function OffRequestCalendarClient() {
   }, []);
 
   useEffect(() => {
+    const fromUrl = monthFromSearch();
+    if (fromUrl) setMonth(fromUrl);
+  }, []);
+
+  useEffect(() => {
     void load(month);
   }, [load, month]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/check-role", { credentials: "include" })
+      .then((res) => res.json())
+      .then((json) => {
+        if (!cancelled && json?.role === "leader") setIsLeader(true);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const staleMonth = isStaleCalendarMonth(data?.month, month);
   const window = staleMonth ? null : data?.window ?? null;
@@ -269,6 +295,11 @@ export default function OffRequestCalendarClient() {
         <p className="off-cal-hint is-move">다른 날짜를 누르면 신청일이 이동합니다.</p>
       ) : null}
       {error ? <p className="off-cal-error">{error}</p> : null}
+      {isLeader ? (
+        <p className="off-cal-hint">
+          <a href={OFF_REQUEST_TEAM_PATH}>팀 휴무 조정</a>
+        </p>
+      ) : null}
 
       <div className="off-cal-grid" role="grid" aria-label="휴무 신청 달력">
         {WEEKDAYS.map((w) => (
@@ -310,27 +341,36 @@ export default function OffRequestCalendarClient() {
               <span className="off-cal-count">
                 {day.approvedCount + day.requestedCount}/{day.limit}
               </span>
-              {mine ? <span className="off-cal-mine">내 신청</span> : null}
+              {mine ? (
+                <span className="off-cal-mine">
+                  {day.mine?.status === "APPROVED" ? "확정" : "내 신청"}
+                </span>
+              ) : null}
             </button>
           );
         })}
       </div>
 
-      {open && data?.days.some((d) => d.mine) ? (
+      {data?.days.some((d) => d.mine) ? (
         <ul className="off-cal-mine-list">
           {data.days
             .filter((d) => d.mine)
             .map((d) => (
               <li key={d.date}>
-                <span>{d.date}</span>
-                <button
-                  type="button"
-                  className="ui-btn ui-btn-ghost"
-                  disabled={busy}
-                  onClick={() => void onCancel(d)}
-                >
-                  취소
-                </button>
+                <span>
+                  {d.date}
+                  {d.mine?.status === "APPROVED" ? " · 확정" : ""}
+                </span>
+                {open && d.mine?.status === "REQUESTED" ? (
+                  <button
+                    type="button"
+                    className="ui-btn ui-btn-ghost"
+                    disabled={busy}
+                    onClick={() => void onCancel(d)}
+                  >
+                    취소
+                  </button>
+                ) : null}
               </li>
             ))}
         </ul>

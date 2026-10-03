@@ -18,6 +18,8 @@ import {
   isRequestedOverLimit,
   isYmdInYearMonth,
   requireCalendarYmd,
+  canAdjustOffRequestWindow,
+  canFinalizeOffRequestWindow,
   canTransitionOffRequestWindow,
   nextOffRequestStatus,
   normalizeOffDateInput,
@@ -146,6 +148,12 @@ section("window month + quota helpers");
   assert(!canTransitionOffRequestWindow("ADJUSTING", "OPEN"), "no reverse ADJUSTING→OPEN");
   assert(!canTransitionOffRequestWindow("FINALIZED", "ADJUSTING"), "no reverse FINALIZED");
   assert(!canTransitionOffRequestWindow("DRAFT", "ADJUSTING"), "no skip DRAFT→ADJUSTING");
+  assert(canAdjustOffRequestWindow("ADJUSTING"), "adjust only ADJUSTING");
+  assert(!canAdjustOffRequestWindow("OPEN"), "no adjust OPEN");
+  assert(!canAdjustOffRequestWindow("DRAFT"), "no adjust DRAFT");
+  assert(!canAdjustOffRequestWindow("FINALIZED"), "no adjust FINALIZED");
+  assert(canFinalizeOffRequestWindow("ADJUSTING"), "admin finalize from ADJUSTING");
+  assert(!canFinalizeOffRequestWindow("OPEN"), "no admin finalize OPEN");
   assert(resolveDayQuotaLimit({}) === 5, "fallback 5");
   assert(resolveDayQuotaLimit({ defaultQuota: 7 }) === 7, "window default");
   assert(resolveDayQuotaLimit({ defaultQuota: 7, overrideLimit: 3 }) === 3, "override");

@@ -3612,6 +3612,88 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
   padding: 4px 0;
 }
 
+.off-admin-progress {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+}
+
+.off-admin-progress li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--vh-border);
+  font-size: 0.88rem;
+}
+
+.off-admin-progress li.is-done strong {
+  color: var(--vh-ok);
+}
+
+.off-admin-progress li.is-wait strong {
+  color: var(--vh-warn);
+}
+
+.off-admin-progress-wait {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.off-team {
+  max-width: 430px;
+  margin: 0 auto;
+  padding: 4px 0 28px;
+}
+
+.off-team-back {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--vh-gold-deep);
+}
+
+.off-team-day.is-over {
+  border-color: var(--vh-danger);
+}
+
+.off-team-day-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 10px;
+  font-size: 1rem;
+}
+
+.off-team-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.off-team-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--vh-border);
+  font-size: 0.9rem;
+}
+
+.off-team-move {
+  display: grid;
+  gap: 4px;
+  font-size: 0.75rem;
+}
+
+.off-team-foot {
+  margin-top: 16px;
+}
+
 .off-admin-table {
   width: 100%;
   border-collapse: collapse;

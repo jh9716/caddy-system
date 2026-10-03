@@ -1,6 +1,7 @@
 import type { OffRequestWindowStatus } from "@/lib/offRequestDomain";
 
 export const OFF_REQUEST_MEMBER_PATH = "/off-requests";
+export const OFF_REQUEST_TEAM_PATH = "/off-requests/team";
 export const OFF_REQUEST_ADMIN_PATH = "/manage/off-requests";
 
 export function offRequestWindowStatusLabel(status: string | null | undefined): string {
@@ -22,7 +23,7 @@ export function offRequestWindowHint(status: OffRequestWindowStatus | null | und
   if (status == null) return "아직 휴무 신청 전입니다.";
   if (status === "DRAFT") return "아직 휴무 신청 전입니다.";
   if (status === "OPEN") return "원하는 날짜를 눌러 신청하거나, 내 신청일을 다른 날로 옮길 수 있습니다.";
-  if (status === "ADJUSTING") return "조정 중입니다.";
+  if (status === "ADJUSTING") return "조정 중입니다. 신청 변경은 팀장이 합니다.";
   return "이번 달 휴무 신청이 확정되었습니다.";
 }
 

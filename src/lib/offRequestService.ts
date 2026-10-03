@@ -48,6 +48,51 @@ function dayBounds(ymd: string) {
   return offAssignmentDayRange(ymd);
 }
 
+/**
+ * Phase 1 개별 승인/반려/승인취소는 OPEN 구간만.
+ * ADJUSTING·FINALIZED·team finalized 는 Phase 2 lock.
+ */
+async function assertPhase1DecisionAllowed(
+  db: DbClient,
+  ymd: string,
+  team: string
+) {
+  const yearMonth = yearMonthFromYmd(ymd);
+  const window = await db.offRequestWindow.findUnique({
+    where: { yearMonth },
+    select: { id: true, status: true },
+  });
+  if (!window) return;
+  if (window.status === "FINALIZED") {
+    throw new OffRequestServiceError(
+      "window_finalized",
+      "확정된 휴무는 변경할 수 없습니다.",
+      409,
+      { status: window.status }
+    );
+  }
+  if (window.status === "ADJUSTING") {
+    throw new OffRequestServiceError(
+      "window_adjusting",
+      "조정 중에는 개별 승인/반려가 아니라 팀 최종확정으로 처리합니다.",
+      409,
+      { status: window.status }
+    );
+  }
+  const finalized = await db.offRequestTeamFinalization.findUnique({
+    where: { windowId_team: { windowId: window.id, team } },
+    select: { id: true },
+  });
+  if (finalized) {
+    throw new OffRequestServiceError(
+      "team_finalized",
+      "이미 팀 확정이 끝났습니다.",
+      409,
+      { team }
+    );
+  }
+}
+
 /** 조·날짜 기준 확정 OFF 수 (수동/레거시 Assignment OFF 포함) */
 export async function countApprovedOffForTeamDay(
   db: DbClient,
@@ -469,6 +514,7 @@ export async function approveOffRequest(
       if (!canAccessTeam(actor, row.caddy.team)) {
         throw new OffRequestServiceError("team_forbidden", "해당 조 권한이 없습니다.", 403);
       }
+      await assertPhase1DecisionAllowed(tx, formatOffDateYmd(row.date), row.caddy.team);
       if (!canTransitionOffRequest(row.status, "APPROVE")) {
         throw new OffRequestServiceError(
           "invalid_transition",
@@ -582,6 +628,7 @@ export async function rejectOffRequest(
   if (!canAccessTeam(actor, row.caddy.team)) {
     throw new OffRequestServiceError("team_forbidden", "해당 조 권한이 없습니다.", 403);
   }
+  await assertPhase1DecisionAllowed(db, formatOffDateYmd(row.date), row.caddy.team);
   if (!canTransitionOffRequest(row.status, "REJECT")) {
     throw new OffRequestServiceError(
       "invalid_transition",
@@ -641,6 +688,7 @@ export async function revokeOffRequest(
     if (!canAccessTeam(actor, row.caddy.team)) {
       throw new OffRequestServiceError("team_forbidden", "해당 조 권한이 없습니다.", 403);
     }
+    await assertPhase1DecisionAllowed(tx, formatOffDateYmd(row.date), row.caddy.team);
     if (!canTransitionOffRequest(row.status, "REVOKE")) {
       throw new OffRequestServiceError(
         "invalid_transition",

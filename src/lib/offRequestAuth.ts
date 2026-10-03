@@ -103,3 +103,8 @@ export function isOwnCaddy(
 ): boolean {
   return actor.caddyId != null && actor.caddyId === caddyId;
 }
+
+/** Phase 2 팀장 API — admin/caddy와 섞지 않음. */
+export function isOffRequestLeader(actor: OffRequestActor): boolean {
+  return actor.role === "leader";
+}
