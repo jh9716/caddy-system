@@ -95,6 +95,7 @@ assert(pkg.includes('"@capacitor/android"'), "capacitor android dependency");
 assert(pkg.includes('"@capacitor/core"'), "capacitor core dependency");
 assert(!pkg.includes("@capacitor/ios"), "no Capacitor iOS package");
 assert(pkg.includes('"@capacitor/push-notifications"'), "Capacitor PushNotifications for Android FCM");
+assert(pkg.includes('"@capacitor/app"'), "Capacitor App plugin for Android system back");
 assert(!pkg.includes("@capacitor/camera"), "no Camera plugin");
 assert(!/"firebase"/.test(pkg) && !pkg.includes('"firebase/'), "no Firebase JS package");
 assert(!pkg.includes("@capacitor-community/fcm"), "no extra FCM community plugin");

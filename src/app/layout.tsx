@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 import { Cormorant_Garamond, Noto_Serif_KR, Source_Sans_3 } from "next/font/google";
 import AppHeader from "@/components/AppHeader";
 import MemberShell from "@/components/manage/MemberShell";
+import AndroidSystemBackBootstrap from "@/components/AndroidSystemBackBootstrap";
 import NativePushBootstrap from "@/components/NativePushBootstrap";
 import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
 import { shouldUseMemberShell } from "@/lib/boardNav";
@@ -83,6 +84,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       <body>
         <ServiceWorkerRegister />
         <NativePushBootstrap />
+        <AndroidSystemBackBootstrap />
         {shouldUseMemberShell(role) ? (
           <MemberShell>{children}</MemberShell>
         ) : (

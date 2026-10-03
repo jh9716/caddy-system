@@ -6,6 +6,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import LogoutButton from "@/components/LogoutButton";
 import AccountDeletionLink from "@/components/AccountDeletionLink";
 import PrivacyPolicyLink from "@/components/PrivacyPolicyLink";
+import { registerAndroidDrawerClose } from "@/lib/androidSystemBack";
 
 export type AppChromeNavItem = {
   href: string;
@@ -119,6 +120,11 @@ export default function AppChrome({
   useEffect(() => {
     setMenuOpen(false);
   }, [pathname]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    return registerAndroidDrawerClose(() => setMenuOpen(false));
+  }, [menuOpen]);
 
   useEffect(() => {
     document.body.classList.add("manage-mode");
