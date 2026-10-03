@@ -2,7 +2,10 @@ export const BODY_MAX = 2000;
 export const SENDER_MAX = 64;
 export const CLIENT_ID_MAX = 128;
 export const HISTORY_LIMIT = 30;
+export const MAX_CONNECTIONS = 200;
+export const MESSAGE_MAX = 4096;
 export const ROOM_NAME_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+export const ALLOWED_ROOMS = ["poc-room", "other-room"] as const;
 
 export type ChatMessage = {
   type: "message";
@@ -30,7 +33,7 @@ export type DuplicateEvent = {
 };
 
 export function isValidRoomName(room: string): boolean {
-  return ROOM_NAME_RE.test(room);
+  return ROOM_NAME_RE.test(room) && (ALLOWED_ROOMS as readonly string[]).includes(room);
 }
 
 export function validateIncomingMessage(raw: unknown):

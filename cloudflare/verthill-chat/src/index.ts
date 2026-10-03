@@ -1,6 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
 import {
   HISTORY_LIMIT,
+  MAX_CONNECTIONS,
+  MESSAGE_MAX,
   isValidRoomName,
   validateIncomingMessage,
   type ChatMessage,
@@ -62,6 +64,9 @@ export class ChatRoom extends DurableObject<Env> {
   }
 
   async fetch(_request: Request): Promise<Response> {
+    if (this.ctx.getWebSockets().length >= MAX_CONNECTIONS) {
+      return json({ error: "room_full" }, 503);
+    }
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
@@ -76,6 +81,14 @@ export class ChatRoom extends DurableObject<Env> {
         type: "error",
         code: "invalid_payload",
         message: "text JSON required",
+      });
+      return;
+    }
+    if (message.length > MESSAGE_MAX) {
+      sendJson(ws, {
+        type: "error",
+        code: "payload_too_large",
+        message: `payload max ${MESSAGE_MAX}`,
       });
       return;
     }
