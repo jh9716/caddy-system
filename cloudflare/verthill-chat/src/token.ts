@@ -1,4 +1,14 @@
-export type ChatTokenClaims = {
+export type ChatTokenV2Claims = {
+  v: 2;
+  userId: number;
+  displayName: string;
+  role: "admin" | "caddy" | "leader";
+  team: string;
+  iat: number;
+  exp: number;
+};
+
+export type ChatTokenV1Claims = {
   v: 1;
   userId: number;
   displayName: string;
@@ -9,6 +19,12 @@ export type ChatTokenClaims = {
   exp: number;
 };
 
+export type ChatTokenClaims = ChatTokenV2Claims | ChatTokenV1Claims;
+
+export function isChatTokenV2(claims: ChatTokenClaims): claims is ChatTokenV2Claims {
+  return claims.v === 2;
+}
+
 export function sanitizeChatDisplayName(name: string): string {
   return String(name ?? "")
     .replace(/\|/g, "")
@@ -17,14 +33,34 @@ export function sanitizeChatDisplayName(name: string): string {
     .slice(0, 64);
 }
 
+function normalizeTeam(team: string): string {
+  const cleaned = String(team ?? "")
+    .replace(/\|/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 32);
+  return cleaned || "-";
+}
+
 export function canonicalChatTokenPayload(claims: ChatTokenClaims): string {
+  if (claims.v === 2) {
+    return [
+      "2",
+      String(claims.userId),
+      sanitizeChatDisplayName(claims.displayName),
+      claims.role,
+      normalizeTeam(claims.team),
+      String(claims.iat),
+      String(claims.exp),
+    ].join("|");
+  }
   return [
-    String(claims.v),
+    "1",
     String(claims.userId),
     sanitizeChatDisplayName(claims.displayName),
     claims.role,
-    claims.team,
-    claims.room,
+    normalizeTeam(claims.team),
+    String(claims.room),
     String(claims.iat),
     String(claims.exp),
   ].join("|");
@@ -59,27 +95,48 @@ function timingSafeEqualBytes(a: Uint8Array, b: Uint8Array): boolean {
 
 export function parseChatTokenClaims(canonical: string): ChatTokenClaims | null {
   const parts = canonical.split("|");
-  if (parts.length !== 8) return null;
-  const [v, userIdRaw, displayName, role, team, room, iatRaw, expRaw] = parts;
-  if (v !== "1") return null;
-  const userId = Number(userIdRaw);
-  const iat = Number(iatRaw);
-  const exp = Number(expRaw);
-  if (!Number.isInteger(userId) || userId <= 0) return null;
-  if (!Number.isFinite(iat) || !Number.isFinite(exp)) return null;
-  if (role !== "admin" && role !== "caddy" && role !== "leader") return null;
-  const name = sanitizeChatDisplayName(displayName);
-  if (!name || !team || !room) return null;
-  return {
-    v: 1,
-    userId,
-    displayName: name,
-    role,
-    team,
-    room,
-    iat,
-    exp,
-  };
+  if (parts[0] === "2" && parts.length === 7) {
+    const [, userIdRaw, displayName, role, team, iatRaw, expRaw] = parts;
+    const userId = Number(userIdRaw);
+    const iat = Number(iatRaw);
+    const exp = Number(expRaw);
+    if (!Number.isInteger(userId) || userId <= 0) return null;
+    if (!Number.isFinite(iat) || !Number.isFinite(exp)) return null;
+    if (role !== "admin" && role !== "caddy" && role !== "leader") return null;
+    const name = sanitizeChatDisplayName(displayName);
+    if (!name) return null;
+    return {
+      v: 2,
+      userId,
+      displayName: name,
+      role,
+      team: normalizeTeam(team),
+      iat,
+      exp,
+    };
+  }
+  if (parts[0] === "1" && parts.length === 8) {
+    const [, userIdRaw, displayName, role, team, room, iatRaw, expRaw] = parts;
+    const userId = Number(userIdRaw);
+    const iat = Number(iatRaw);
+    const exp = Number(expRaw);
+    if (!Number.isInteger(userId) || userId <= 0) return null;
+    if (!Number.isFinite(iat) || !Number.isFinite(exp)) return null;
+    if (role !== "admin" && role !== "caddy" && role !== "leader") return null;
+    const name = sanitizeChatDisplayName(displayName);
+    if (!name || !team || !room) return null;
+    return {
+      v: 1,
+      userId,
+      displayName: name,
+      role,
+      team: normalizeTeam(team),
+      room,
+      iat,
+      exp,
+    };
+  }
+  return null;
 }
 
 export async function verifyChatToken(
@@ -137,4 +194,26 @@ export async function signChatToken(
   );
   const sig = await crypto.subtle.sign("HMAC", key, utf8Bytes(canonical));
   return `${bytesToBase64Url(utf8Bytes(canonical))}.${bytesToBase64Url(new Uint8Array(sig))}`;
+}
+
+export function resolveChatRoomAccess(input: {
+  claims: ChatTokenClaims;
+  roomId: string;
+  isMember: boolean;
+  isAll: boolean;
+  isCustom: boolean;
+  isLegacy: boolean;
+}): { ok: true } | { ok: false; code: "invalid_room" | "room_forbidden" } {
+  if (input.isAll) {
+    return input.claims.v === 2 ? { ok: true } : { ok: false, code: "room_forbidden" };
+  }
+  if (input.isCustom) {
+    if (input.claims.v !== 2) return { ok: false, code: "room_forbidden" };
+    return input.isMember ? { ok: true } : { ok: false, code: "room_forbidden" };
+  }
+  if (input.isLegacy) {
+    if (input.claims.v === 1 && input.claims.room === input.roomId) return { ok: true };
+    return { ok: false, code: "room_forbidden" };
+  }
+  return { ok: false, code: "invalid_room" };
 }

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev --local --port 8787 --ip 127.0.0.1 --var CHAT_AUTH_SECRET:phase1-local-test-only",
-    "test": "node --test --test-concurrency=1 test/protocol.test.mjs test/chat-poc.test.mjs test/audit-extra.mjs",
+    "test": "node --test --test-concurrency=1 test/protocol.test.mjs test/chat-poc.test.mjs test/phase2.test.mjs test/audit-extra.mjs",
     "test:protocol": "node --test test/protocol.test.mjs",
     "cf:deploy": "echo 'Remote Cloudflare deploy is forbidden for this POC' && exit 1"
   },

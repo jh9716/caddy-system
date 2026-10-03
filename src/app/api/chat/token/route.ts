@@ -27,7 +27,6 @@ export async function POST(req: NextRequest) {
       token: issued.token,
       exp: issued.exp,
       ttlSec: issued.ttlSec,
-      room: issued.room,
       user: issued.user,
     });
   } catch (e) {

@@ -1,10 +1,10 @@
 import type { AppRole } from "@/lib/sessionCookies";
 import type { ResolvedAuthUser } from "@/lib/auth";
-import { isPrimaryTeam } from "@/lib/caddyManage";
-import { chatRoomIdToTeam, teamToChatRoomId } from "@/lib/chatRooms";
+import { resolveChatRoomAccess } from "@/lib/chatAcl";
 import {
   CHAT_TOKEN_TTL_SEC,
   getChatAuthSecret,
+  normalizeChatTeam,
   sanitizeChatDisplayName,
   signChatToken,
   type ChatTokenClaims,
@@ -22,7 +22,6 @@ export type ChatAccess = {
   displayName: string;
   role: AppRole;
   team: string;
-  roomId: string;
 };
 
 export class ChatAuthError extends Error {
@@ -34,6 +33,10 @@ export class ChatAuthError extends Error {
     this.code = code;
     this.status = status;
   }
+}
+
+function isRetired(status: string | null | undefined): boolean {
+  return String(status ?? "").trim().toUpperCase() === "RETIRED";
 }
 
 export function resolveChatEligibility(input: {
@@ -51,6 +54,34 @@ export function resolveChatEligibility(input: {
       message: "DB 사용자만 채팅할 수 있습니다.",
     };
   }
+
+  if (input.role === "admin") {
+    if (input.caddy && input.caddyId != null && input.caddy.id === input.caddyId && !isRetired(input.caddy.employmentStatus)) {
+      const displayName =
+        sanitizeChatDisplayName(input.caddy.name || "") ||
+        sanitizeChatDisplayName(input.username) ||
+        "관리자";
+      return {
+        ok: true,
+        value: {
+          userId: input.userId,
+          displayName,
+          role: "admin",
+          team: normalizeChatTeam(input.caddy.team || ""),
+        },
+      };
+    }
+    return {
+      ok: true,
+      value: {
+        userId: input.userId,
+        displayName: sanitizeChatDisplayName(input.username) || "관리자",
+        role: "admin",
+        team: "-",
+      },
+    };
+  }
+
   if (input.caddyId == null || !input.caddy) {
     return {
       ok: false,
@@ -67,30 +98,12 @@ export function resolveChatEligibility(input: {
       message: "연결된 캐디 계정이 필요합니다.",
     };
   }
-  if (String(input.caddy.employmentStatus ?? "").trim().toUpperCase() === "RETIRED") {
+  if (isRetired(input.caddy.employmentStatus)) {
     return {
       ok: false,
       code: "caddy_retired",
       status: 403,
       message: "퇴직 계정은 채팅할 수 없습니다.",
-    };
-  }
-  const team = String(input.caddy.team ?? "").trim();
-  if (!isPrimaryTeam(team)) {
-    return {
-      ok: false,
-      code: "no_primary_team",
-      status: 403,
-      message: "PRIMARY 조 채팅방만 사용할 수 있습니다.",
-    };
-  }
-  const roomId = teamToChatRoomId(team);
-  if (!roomId) {
-    return {
-      ok: false,
-      code: "no_primary_team",
-      status: 403,
-      message: "PRIMARY 조 채팅방만 사용할 수 있습니다.",
     };
   }
   const displayName =
@@ -103,14 +116,17 @@ export function resolveChatEligibility(input: {
       userId: input.userId,
       displayName,
       role: input.role,
-      team,
-      roomId,
+      team: normalizeChatTeam(input.caddy.team || ""),
     },
   };
 }
 
-export function assertTokenRoomMatch(claims: ChatTokenClaims, roomId: string): boolean {
-  return claims.room === roomId && chatRoomIdToTeam(roomId) === claims.team;
+export function assertTokenRoomMatch(
+  claims: ChatTokenClaims,
+  roomId: string,
+  isMember = false
+): boolean {
+  return resolveChatRoomAccess({ claims, roomId, isMember }).ok;
 }
 
 export async function issueChatAccessToken(
@@ -128,7 +144,6 @@ export async function issueChatAccessToken(
   token: string;
   exp: number;
   ttlSec: number;
-  room: { id: string; name: string };
   user: { userId: number; displayName: string; role: AppRole; team: string };
 }> {
   const secret = getChatAuthSecret();
@@ -157,12 +172,11 @@ export async function issueChatAccessToken(
     throw new ChatAuthError(checked.code, checked.message, checked.status);
   }
   const claims: ChatTokenClaims = {
-    v: 1,
+    v: 2,
     userId: checked.value.userId,
     displayName: checked.value.displayName,
     role: checked.value.role,
     team: checked.value.team,
-    room: checked.value.roomId,
     iat: nowSec,
     exp: nowSec + CHAT_TOKEN_TTL_SEC,
   };
@@ -171,7 +185,6 @@ export async function issueChatAccessToken(
     token,
     exp: claims.exp,
     ttlSec: CHAT_TOKEN_TTL_SEC,
-    room: { id: checked.value.roomId, name: checked.value.team },
     user: {
       userId: checked.value.userId,
       displayName: checked.value.displayName,
