@@ -75,6 +75,7 @@ async function startWrangler() {
         CI: "1",
       },
       stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
     }
   );
   let output = "";
@@ -115,11 +116,26 @@ async function startWrangler() {
 
 async function stopWrangler(child) {
   if (!child.pid) return;
-  child.kill("SIGTERM");
-  const done = once(child, "exit");
-  await Promise.race([done, new Promise((r) => setTimeout(r, 3000))]);
+  try {
+    process.kill(-child.pid, "SIGTERM");
+  } catch {
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      // already gone
+    }
+  }
+  await Promise.race([once(child, "exit"), new Promise((r) => setTimeout(r, 2000))]);
   if (child.exitCode == null && child.signalCode == null) {
-    child.kill("SIGKILL");
+    try {
+      process.kill(-child.pid, "SIGKILL");
+    } catch {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // already gone
+      }
+    }
     await Promise.race([once(child, "exit"), new Promise((r) => setTimeout(r, 1000))]);
   }
 }
