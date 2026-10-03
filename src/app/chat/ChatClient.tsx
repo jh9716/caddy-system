@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { registerAndroidChatRoomLeave } from "@/lib/androidSystemBack";
 import { chatWsUrl } from "@/lib/chatClientConfig";
 import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
 
@@ -157,6 +158,11 @@ export default function ChatClient() {
     const el = listRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [lines, view]);
+
+  useEffect(() => {
+    if (view !== "room") return;
+    return registerAndroidChatRoomLeave(() => setView("list"));
+  }, [view]);
 
   const refreshIfNeeded = useCallback(async () => {
     const info = tokenRef.current;

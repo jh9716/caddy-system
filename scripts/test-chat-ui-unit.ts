@@ -40,6 +40,14 @@ section("routes and nav");
   assert(css.includes("min(390px, 100%)"), "390px first");
 }
 
+section("android back room leave, no Phase 2");
+{
+  const chat = read("src/app/chat/ChatClient.tsx");
+  assert(chat.includes("registerAndroidChatRoomLeave"), "room view registers Android back leave");
+  assert(chat.includes('setView("list")'), "목록 still setView list");
+  assert(!chat.includes("roomId="), "no Phase 2 room query");
+}
+
 section("no neon chat schema");
 {
   const schema = read("prisma/schema.prisma");

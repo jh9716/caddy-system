@@ -59,11 +59,13 @@ export default function LoginClient() {
         throw new Error(data?.message || data?.error || "로그인 실패");
       }
 
-      location.href = resolvePostLoginHref({
-        role: data.role,
-        mustChangePassword: !!data.mustChangePassword,
-        callbackUrl: safeCallback,
-      });
+      location.replace(
+        resolvePostLoginHref({
+          role: data.role,
+          mustChangePassword: !!data.mustChangePassword,
+          callbackUrl: safeCallback,
+        })
+      );
     } catch (e: any) {
       setErr(e.message || "로그인 실패");
     } finally {
@@ -112,7 +114,7 @@ export default function LoginClient() {
         location.href = result.startUrl;
         return;
       }
-      location.href = result.href;
+      location.replace(result.href);
     } catch (e: unknown) {
       setErr(formatNativeKakaoBridgeError(e));
     } finally {
