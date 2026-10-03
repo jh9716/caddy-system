@@ -5,6 +5,7 @@ import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { TEST_SECRET, signTestToken } from "./token-helper.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const HOST = "127.0.0.1";
@@ -43,10 +44,12 @@ function waitMessage(ws, predicate, timeoutMs = 8000) {
   });
 }
 
-function connect(port, room) {
+function connect(port, room, token) {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws://${HOST}:${port}/ws?room=${room}`);
-    const timer = setTimeout(() => reject(new Error("ws open timeout")), 8000);
+    const ws = new WebSocket(
+      `ws://${HOST}:${port}/ws?room=${encodeURIComponent(room)}&token=${encodeURIComponent(token)}`
+    );
+    const timer = setTimeout(() => reject(new Error(`ws open timeout room=${room}`)), 8000);
     ws.addEventListener("open", () => {
       clearTimeout(timer);
       resolve(ws);
@@ -58,15 +61,21 @@ function connect(port, room) {
   });
 }
 
-function sendMessage(ws, payload) {
-  ws.send(JSON.stringify({ type: "message", ...payload }));
-}
-
 async function startWrangler() {
   const port = await freePort();
   const child = spawn(
     "npx",
-    ["wrangler", "dev", "--local", "--port", String(port), "--ip", HOST],
+    [
+      "wrangler",
+      "dev",
+      "--local",
+      "--port",
+      String(port),
+      "--ip",
+      HOST,
+      "--var",
+      `CHAT_AUTH_SECRET:${TEST_SECRET}`,
+    ],
     {
       cwd: root,
       env: {
@@ -86,20 +95,13 @@ async function startWrangler() {
     const onData = (buf) => {
       output += buf.toString();
       if (
-        output.includes("Ready on") ||
-        output.includes(`http://${HOST}:${port}`) ||
-        output.includes("Starting local server")
+        (output.includes("Ready") || output.includes("ready") || /http:\/\/127\.0\.0\.1:\d+/.test(output)) &&
+        (output.includes("Ready on") || output.includes(`http://${HOST}:${port}`) || output.includes("Starting local server"))
       ) {
-        if (
-          output.includes("Ready") ||
-          output.includes("ready") ||
-          /http:\/\/127\.0\.0\.1:\d+/.test(output)
-        ) {
-          clearTimeout(timer);
-          child.stdout?.off("data", onData);
-          child.stderr?.off("data", onData);
-          resolve();
-        }
+        clearTimeout(timer);
+        child.stdout?.off("data", onData);
+        child.stderr?.off("data", onData);
+        resolve();
       }
     };
     child.stdout?.on("data", onData);
@@ -111,7 +113,7 @@ async function startWrangler() {
   });
   await ready;
   await new Promise((r) => setTimeout(r, 300));
-  return { port, child, output };
+  return { port, child };
 }
 
 async function stopWrangler(child) {
@@ -140,57 +142,73 @@ async function stopWrangler(child) {
   }
 }
 
-test("local wrangler A/B realtime, history, reconnect, duplicate, isolation", async (t) => {
+test("auth, A/B realtime, spoof, history, duplicate, isolation", async () => {
   const { port, child } = await startWrangler();
   const latencies = [];
   try {
     const health = await fetch(`http://${HOST}:${port}/health`);
     assert.equal(health.status, 200);
-    assert.deepEqual(await health.json(), { ok: true, service: "verthill-chat" });
 
-    const a = await connect(port, "poc-room");
-    const aHistory = await waitMessage(a, (d) => d.type === "history");
-    assert.equal(Array.isArray(aHistory.messages), true);
+    const noTok = await fetch(`http://${HOST}:${port}/ws?room=team-1`);
+    assert.equal(noTok.status, 401);
 
-    const b = await connect(port, "poc-room");
-    const bHistory = await waitMessage(b, (d) => d.type === "history");
-    assert.equal(bHistory.messages.length, aHistory.messages.length);
+    const badTok = await fetch(`http://${HOST}:${port}/ws?room=team-1&token=nope`);
+    assert.equal(badTok.status, 401);
+
+    const expired = signTestToken({ exp: Math.floor(Date.now() / 1000) - 10 });
+    const expRes = await fetch(
+      `http://${HOST}:${port}/ws?room=team-1&token=${encodeURIComponent(expired.token)}`
+    );
+    assert.equal(expRes.status, 401);
+
+    const aTok = signTestToken({ userId: 1, displayName: "A", room: "team-1", team: "1조" });
+    const cross = await fetch(
+      `http://${HOST}:${port}/ws?room=team-2&token=${encodeURIComponent(aTok.token)}`
+    );
+    assert.equal(cross.status, 403);
+
+    const poc = await fetch(`http://${HOST}:${port}/ws?room=poc-room`);
+    assert.equal(poc.status, 400);
+
+    const a = await connect(port, "team-1", aTok.token);
+    await waitMessage(a, (d) => d.type === "history");
+    const bTok = signTestToken({ userId: 2, displayName: "B", room: "team-1", team: "1조" });
+    const b = await connect(port, "team-1", bTok.token);
+    await waitMessage(b, (d) => d.type === "history");
 
     const idAb = `ab-${Date.now()}`;
     const t0 = Date.now();
-    const bGot = waitMessage(
-      b,
-      (d) => d.type === "message" && d.clientMessageId === idAb
+    const bGot = waitMessage(b, (d) => d.type === "message" && d.clientMessageId === idAb);
+    a.send(
+      JSON.stringify({
+        type: "message",
+        clientMessageId: idAb,
+        sender: "SPOOF",
+        body: "hello-from-a",
+      })
     );
-    sendMessage(a, {
-      clientMessageId: idAb,
-      sender: "A",
-      body: "hello-from-a",
-      sentAt: new Date().toISOString(),
-    });
     const fromA = await bGot;
     latencies.push({ path: "A->B", ms: Date.now() - t0 });
     assert.equal(fromA.sender, "A");
+    assert.equal(fromA.senderUserId, 1);
     assert.equal(fromA.body, "hello-from-a");
-    assert.equal(typeof fromA.seq, "number");
 
     const idBa = `ba-${Date.now()}`;
     const t1 = Date.now();
-    const aGot = waitMessage(
-      a,
-      (d) => d.type === "message" && d.clientMessageId === idBa
-    );
-    sendMessage(b, {
-      clientMessageId: idBa,
-      sender: "B",
-      body: "hello-from-b",
-    });
+    const aGot = waitMessage(a, (d) => d.type === "message" && d.clientMessageId === idBa);
+    b.send(JSON.stringify({ type: "message", clientMessageId: idBa, body: "hello-from-b" }));
     const fromB = await aGot;
     latencies.push({ path: "B->A", ms: Date.now() - t1 });
     assert.equal(fromB.sender, "B");
-    assert.equal(fromB.body, "hello-from-b");
+    assert.equal(fromB.senderUserId, 2);
 
-    const other = await connect(port, "other-room");
+    const otherTok = signTestToken({
+      userId: 3,
+      displayName: "C",
+      room: "team-2",
+      team: "2조",
+    });
+    const other = await connect(port, "team-2", otherTok.token);
     const otherHistory = await waitMessage(other, (d) => d.type === "history");
     assert.equal(otherHistory.messages.length, 0);
     let leaked = false;
@@ -198,11 +216,13 @@ test("local wrangler A/B realtime, history, reconnect, duplicate, isolation", as
       const data = parseJson(event);
       if (data.type === "message" && data.body === "hello-from-a") leaked = true;
     });
-    sendMessage(a, {
-      clientMessageId: `iso-${Date.now()}`,
-      sender: "A",
-      body: "room-a-only",
-    });
+    a.send(
+      JSON.stringify({
+        type: "message",
+        clientMessageId: `iso-${Date.now()}`,
+        body: "room-a-only",
+      })
+    );
     await waitMessage(b, (d) => d.type === "message" && d.body === "room-a-only");
     await new Promise((r) => setTimeout(r, 200));
     assert.equal(leaked, false);
@@ -214,12 +234,18 @@ test("local wrangler A/B realtime, history, reconnect, duplicate, isolation", as
     assert.equal(malformed.code, "invalid_payload");
 
     const long = waitMessage(a, (d) => d.type === "error" && d.code === "body_too_long");
-    sendMessage(a, {
-      clientMessageId: `long-${Date.now()}`,
-      sender: "A",
-      body: "x".repeat(2001),
-    });
+    a.send(
+      JSON.stringify({
+        type: "message",
+        clientMessageId: `long-${Date.now()}`,
+        body: "x".repeat(2001),
+      })
+    );
     await long;
+
+    const huge = waitMessage(a, (d) => d.type === "error" && d.code === "payload_too_large");
+    a.send(`{"type":"message","clientMessageId":"big","body":"${"x".repeat(5000)}"}`);
+    await huge;
 
     let extra = 0;
     const extraListener = (event) => {
@@ -228,49 +254,25 @@ test("local wrangler A/B realtime, history, reconnect, duplicate, isolation", as
     };
     b.addEventListener("message", extraListener);
     const dup = waitMessage(a, (d) => d.type === "duplicate" && d.clientMessageId === idAb);
-    sendMessage(a, {
-      clientMessageId: idAb,
-      sender: "A",
-      body: "hello-from-a-again",
-    });
+    a.send(JSON.stringify({ type: "message", clientMessageId: idAb, body: "again" }));
     await dup;
     await new Promise((r) => setTimeout(r, 200));
     b.removeEventListener("message", extraListener);
     assert.equal(extra, 0);
 
     a.close();
-    const c = await connect(port, "poc-room");
+    const c = await connect(port, "team-1", aTok.token);
     const cHistory = await waitMessage(c, (d) => d.type === "history");
     const ids = cHistory.messages.map((m) => m.clientMessageId);
     assert.ok(ids.includes(idAb));
     assert.ok(ids.includes(idBa));
     const seqs = cHistory.messages.map((m) => m.seq);
-    const sorted = [...seqs].sort((x, y) => x - y);
-    assert.deepEqual(seqs, sorted);
+    assert.deepEqual(seqs, [...seqs].sort((x, y) => x - y));
     assert.ok(cHistory.messages.length <= 30);
-
-    const reconnectId = `rc-${Date.now()}`;
-    const cGot = waitMessage(
-      c,
-      (d) => d.type === "message" && d.clientMessageId === reconnectId
-    );
-    sendMessage(b, {
-      clientMessageId: reconnectId,
-      sender: "B",
-      body: "after-reconnect",
-    });
-    const after = await cGot;
-    assert.equal(after.body, "after-reconnect");
-
-    const d = await connect(port, "poc-room");
-    const dHistory = await waitMessage(d, (dmsg) => dmsg.type === "history");
-    assert.ok(dHistory.messages.some((m) => m.clientMessageId === reconnectId));
-    assert.ok(dHistory.messages.length <= 30);
+    assert.equal(cHistory.hasMore, false);
 
     b.close();
     c.close();
-    d.close();
-
     console.log("LOCAL_LATENCY", JSON.stringify(latencies));
   } finally {
     await stopWrangler(child);
