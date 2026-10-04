@@ -72,11 +72,29 @@ export function matchesChatUserQuery(row: ChatUserRow, query: string): boolean {
   return name.includes(q) || username.includes(q) || team.includes(q);
 }
 
+function chatUserHitRank(role: string): number {
+  if (role === "caddy") return 0;
+  if (role === "leader") return 1;
+  return 2;
+}
+
+export function compareChatUserHits(
+  a: Pick<ChatUserSearchHit, "displayName" | "role" | "userId">,
+  b: Pick<ChatUserSearchHit, "displayName" | "role" | "userId">
+): number {
+  const rank = chatUserHitRank(a.role) - chatUserHitRank(b.role);
+  if (rank !== 0) return rank;
+  const name = a.displayName.localeCompare(b.displayName, "ko");
+  if (name !== 0) return name;
+  return a.userId - b.userId;
+}
+
 export function listInvitableChatUsers(rows: ChatUserRow[]): ChatUserSearchHit[] {
   return rows
     .map((row) => toChatUserSearchHit(row))
     .filter((hit): hit is ChatUserSearchHit => hit != null)
-    .map(sanitizeChatUserHit);
+    .map(sanitizeChatUserHit)
+    .sort(compareChatUserHits);
 }
 
 export function sanitizeChatUserHit(hit: ChatUserSearchHit): ChatUserSearchHit {
