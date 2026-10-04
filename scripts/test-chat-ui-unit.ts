@@ -59,7 +59,10 @@ section("routes and nav");
   assert(css.includes("vh-chat-admin-badge"), "admin badge class");
   const chatClient = read("src/app/chat/ChatClient.tsx");
   assert(chatClient.includes('line.senderRole === "admin"'), "admin style uses stored senderRole");
-  assert(chatClient.includes("🛡 관리자 ·"), "existing admin superchat label");
+  assert(
+    chatClient.includes('<span className="vh-chat-admin-badge">관리자</span>'),
+    "admin gold badge label"
+  );
   assert(chatClient.includes("vh-chat-mention"), "mention highlight class");
   assert(chatClient.includes("나를 멘션"), "self mention label");
   assert(chatClient.includes("pickMention"), "autocomplete pick");
