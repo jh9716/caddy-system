@@ -837,6 +837,7 @@ export default function ChatClient() {
                 myUserId: tokenInfo?.user.userId,
                 mentions: line.mentions,
                 mentionAll: line.mentionAll,
+                senderUserId: line.senderUserId,
               });
               const nameByUserId = new Map<number, string>(mentionNamesRef.current);
               for (const c of mentionCandidates) nameByUserId.set(c.userId, c.displayName);
