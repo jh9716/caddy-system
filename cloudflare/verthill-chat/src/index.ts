@@ -23,6 +23,8 @@ import {
   filterMentionsToMembers,
   isAllRoomId,
   isCustomRoomId,
+  isDirectoryRoomId,
+  isDmRoomId,
   isLegacyTeamRoomId,
   isValidRoomName,
   mentionsToWire,
@@ -151,11 +153,13 @@ async function authorizeSocket(
   const access = resolveChatRoomAccess({
     claims: identity,
     roomId: room,
-    isMember: isCustomRoomId(room)
-      ? await isDirectoryMember(env, room, identity.userId)
-      : isAllRoomId(room),
+    isMember:
+      isCustomRoomId(room) || isDmRoomId(room)
+        ? await isDirectoryMember(env, room, identity.userId)
+        : isAllRoomId(room),
     isAll: isAllRoomId(room),
     isCustom: isCustomRoomId(room),
+    isDm: isDmRoomId(room),
     isLegacy: isLegacyTeamRoomId(room),
   });
   if (!access.ok) {
@@ -571,9 +575,9 @@ export class ChatRoom extends DurableObject<Env> {
     }
 
     const senderRole = senderRoleFromClaims(attach.claims.role);
-    const mentionAll = resolveMentionAll(value.mentionAll, senderRole);
+    const mentionAll = resolveMentionAll(value.mentionAll, senderRole, attach.roomId);
     let mentionIds = mentionsToWire(value.mentions).map((m) => m.userId);
-    if (isCustomRoomId(attach.roomId) && mentionIds.length > 0) {
+    if ((isCustomRoomId(attach.roomId) || isDmRoomId(attach.roomId)) && mentionIds.length > 0) {
       const memberIds = await listDirectoryMemberIds(this.env, attach.roomId);
       mentionIds = filterMentionsToMembers(mentionIds, memberIds ?? []);
     }
@@ -1092,7 +1096,7 @@ export class ChatRoom extends DurableObject<Env> {
       sentAt: string;
     }
   ) {
-    if (!isAllRoomId(roomId) && !isCustomRoomId(roomId)) return;
+    if (!isDirectoryRoomId(roomId)) return;
     try {
       const headers = await internalAuthHeaders(
         chatInternalSecret(this.env),
@@ -1119,7 +1123,7 @@ export class ChatRoom extends DurableObject<Env> {
   }
 
   private async notifyDirectoryRead(roomId: string, userId: number, seq: number) {
-    if (!isAllRoomId(roomId) && !isCustomRoomId(roomId)) return;
+    if (!isDirectoryRoomId(roomId)) return;
     try {
       const headers = await internalAuthHeaders(
         chatInternalSecret(this.env),

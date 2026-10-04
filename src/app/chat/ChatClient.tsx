@@ -24,6 +24,19 @@ import {
   type ChatLineReply,
 } from "@/lib/chatPhase4";
 import {
+  canProfileMention,
+  chatAuthorLine,
+  chatRoleLabel,
+  defaultAvatarInitial,
+  formatChatDateDivider,
+  jumpToMessageIfMounted,
+  publicChatProfile,
+  roomListTitle,
+  shouldShowAuthorMeta,
+  shouldShowDateDivider,
+  shouldShowJumpButton,
+} from "@/lib/chatPhase5";
+import {
   chatReconnectStatus,
   nextReconnectDelay,
   shouldRefreshTokenOnClose,
@@ -55,7 +68,7 @@ import {
   type ComposerMention,
   type MentionCandidate,
 } from "@/lib/chatMentions";
-import { ALL_ROOM_ID } from "@/lib/chatRooms";
+import { ALL_ROOM_ID, isDmRoomId } from "@/lib/chatRooms";
 import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
 
 type TokenPayload = {
@@ -67,7 +80,7 @@ type TokenPayload = {
 type RoomSummary = {
   roomId: string;
   name: string;
-  type: "ALL" | "CUSTOM";
+  type: "ALL" | "CUSTOM" | "DM";
   ownerUserId: number | null;
   memberCount: number;
   lastMessageSeq: number;
@@ -77,6 +90,17 @@ type RoomSummary = {
   lastSenderRole: string | null;
   unread: number;
   createdAt: string;
+  peerUserId?: number | null;
+  peerDisplayName?: string | null;
+  peerRole?: string | null;
+  peerTeam?: string | null;
+};
+
+type ProfileTarget = {
+  userId: number;
+  displayName: string;
+  team: string;
+  role: string;
 };
 
 type ChatLine = {
@@ -175,6 +199,7 @@ export default function ChatClient() {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [replyTo, setReplyTo] = useState<ChatLineReply | null>(null);
   const [actionLine, setActionLine] = useState<ChatLine | null>(null);
+  const [profileTarget, setProfileTarget] = useState<ProfileTarget | null>(null);
   const [unseenCount, setUnseenCount] = useState(0);
   const [failingSince, setFailingSince] = useState<number | null>(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
@@ -758,6 +783,9 @@ export default function ChatClient() {
     if (actionLine) {
       return registerAndroidChatOverlayClose(() => setActionLine(null));
     }
+    if (profileTarget) {
+      return registerAndroidChatOverlayClose(() => setProfileTarget(null));
+    }
     if (mentionOpen) {
       return registerAndroidChatOverlayClose(() => setMentionSuppressed(true));
     }
@@ -766,7 +794,7 @@ export default function ChatClient() {
     }
     if (!sheet) return;
     return registerAndroidChatOverlayClose(() => setSheet(null));
-  }, [actionLine, mentionOpen, replyTo, sheet]);
+  }, [actionLine, profileTarget, mentionOpen, replyTo, sheet]);
 
   useEffect(() => {
     if (!mentionOpen) return;
@@ -809,6 +837,7 @@ export default function ChatClient() {
     setMentionSuppressed(false);
     setReplyTo(null);
     setActionLine(null);
+    setProfileTarget(null);
     setUnseenCount(0);
     reconnectingRef.current = false;
     lastSeqRef.current = 0;
@@ -856,7 +885,7 @@ export default function ChatClient() {
         clientMessageId,
         body,
         mentions: tokens.map((t) => t.userId),
-        mentionAll,
+        mentionAll: isDmRoomId(room.roomId) ? false : mentionAll,
         replyToSeq: replyToSeq || undefined,
       })
     );
@@ -920,7 +949,7 @@ export default function ChatClient() {
       body,
       sentAt: new Date().toISOString(),
       mentions: tokens.map((t) => t.userId),
-      mentionAll,
+      mentionAll: isDmRoomId(roomRef.current?.roomId || "") ? false : mentionAll,
       replyToSeq: reply?.seq || null,
       replyTo: reply,
       status: "sending",
@@ -974,7 +1003,44 @@ export default function ChatClient() {
     if (!el) return;
     stickRef.current = true;
     setUnseenCount(0);
-    el.scrollTop = el.scrollHeight;
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }
+
+  async function startDm(peer: ProfileTarget) {
+    setError("");
+    const res = await fetch("/api/chat/dm", {
+      method: "POST",
+      credentials: "include",
+      headers: { "content-type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({ peerUserId: peer.userId }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      setError(data?.message || "1:1 채팅을 시작하지 못했습니다.");
+      return;
+    }
+    setProfileTarget(null);
+    const room = data?.room;
+    if (!room?.roomId) return;
+    await openRoom({
+      roomId: String(room.roomId),
+      name: String(room.name || peer.displayName),
+      type: "DM",
+      ownerUserId: Number(room.ownerUserId || tokenInfo?.user.userId || 0),
+      memberCount: 2,
+      lastMessageSeq: 0,
+      lastMessagePreview: "",
+      lastMessageAt: null,
+      lastSenderName: null,
+      lastSenderRole: null,
+      unread: 0,
+      createdAt: new Date().toISOString(),
+      peerUserId: Number(room.peerUserId || peer.userId),
+      peerDisplayName: String(room.peerDisplayName || peer.displayName),
+      peerRole: String(room.peerRole || peer.role),
+      peerTeam: String(room.peerTeam || peer.team || "-"),
+    });
   }
 
   function openActions(line: ChatLine) {
@@ -1067,11 +1133,12 @@ export default function ChatClient() {
   }
 
   const ownerUserId = tokenInfo?.user.userId ?? 0;
-  const mentionSuggestions = mentionQuery
+    const mentionSuggestions = mentionQuery
     ? filterMentionSuggestions({
         candidates: mentionCandidates,
         query: mentionQuery.query,
-        canMentionAll: canMentionAll(tokenInfo?.user.role),
+        canMentionAll:
+          canMentionAll(tokenInfo?.user.role) && !isDmRoomId(activeRoom?.roomId || ""),
       })
     : [];
   const inviteCandidates = invitePoolExcludingOwner(invitePool, ownerUserId);
@@ -1101,15 +1168,21 @@ export default function ChatClient() {
             <p className="vh-chat-status">목록 연결 대기 중…</p>
           ) : null}
           <div className="vh-chat-room-list">
-            {rooms.map((room) => (
+            {rooms.map((room) => {
+              const title = roomListTitle(room);
+              return (
               <button
                 key={room.roomId}
                 type="button"
-                className={`vh-chat-room-card ${room.type === "ALL" ? "is-all" : ""}`}
+                className={`vh-chat-room-card ${room.type === "ALL" ? "is-all" : ""} ${room.type === "DM" ? "is-dm" : ""}`}
                 onClick={() => void openRoom(room)}
               >
+                <span className={`vh-chat-avatar ${room.type === "ALL" ? "is-all" : ""}`} aria-hidden="true">
+                  {room.type === "ALL" ? "전" : defaultAvatarInitial(title)}
+                </span>
+                <div className="vh-chat-room-card-main">
                 <div className="vh-chat-room-card-top">
-                  <div className="vh-chat-room-card-name">{room.name}</div>
+                  <div className="vh-chat-room-card-name">{title}</div>
                   <div className="vh-chat-room-card-time">{formatListTime(room.lastMessageAt)}</div>
                 </div>
                 <div className="vh-chat-room-card-bottom">
@@ -1122,8 +1195,10 @@ export default function ChatClient() {
                     <span className="vh-chat-unread">{room.unread > 99 ? "99+" : room.unread}</span>
                   ) : null}
                 </div>
+                </div>
               </button>
-            ))}
+              );
+            })}
           </div>
         </>
       ) : (
@@ -1143,12 +1218,28 @@ export default function ChatClient() {
                 setLines([]);
                 setReplyTo(null);
                 setActionLine(null);
+                setProfileTarget(null);
               }}
             >
               목록
             </button>
-            <button type="button" className="vh-chat-room-title-btn" onClick={() => void openMembers()}>
-              <h1 className="vh-chat-room-title">{activeRoom?.name || "채팅"}</h1>
+            <button
+              type="button"
+              className="vh-chat-room-title-btn"
+              onClick={() => {
+                if (activeRoom?.type === "DM" && activeRoom.peerUserId) {
+                  setProfileTarget({
+                    userId: activeRoom.peerUserId,
+                    displayName: activeRoom.peerDisplayName || activeRoom.name,
+                    team: activeRoom.peerTeam || "-",
+                    role: activeRoom.peerRole || "caddy",
+                  });
+                  return;
+                }
+                void openMembers();
+              }}
+            >
+              <h1 className="vh-chat-room-title">{activeRoom ? roomListTitle(activeRoom) : "채팅"}</h1>
               {activeRoom && activeRoom.type === "CUSTOM" ? (
                 <span className="vh-chat-member-count">{activeRoom.memberCount}명</span>
               ) : null}
@@ -1183,10 +1274,20 @@ export default function ChatClient() {
                 {loadingOlder ? "이전 메시지 불러오는 중…" : "이전 메시지"}
               </button>
             ) : null}
-            {lines.map((line) => {
+            {lines.map((line, index) => {
               const mine = tokenInfo ? line.senderUserId === tokenInfo.user.userId : false;
               const admin = line.senderRole === "admin";
               const deleted = Boolean(line.deletionType);
+              const prev = lines[index - 1];
+              const showDate = shouldShowDateDivider(prev?.sentAt, line.sentAt);
+              const showAuthor = shouldShowAuthorMeta({
+                mine,
+                deleted,
+                prevSenderUserId: prev?.senderUserId,
+                senderUserId: line.senderUserId,
+                prevSentAt: prev?.sentAt,
+                sentAt: line.sentAt,
+              });
               const selfMentioned =
                 !deleted &&
                 isSelfMentioned({
@@ -1208,10 +1309,47 @@ export default function ChatClient() {
                     mentionAll: line.mentionAll,
                     nameByUserId,
                   });
+              const authorLine = chatAuthorLine({
+                displayName: line.sender,
+                team: line.senderUserId === activeRoom?.peerUserId ? activeRoom.peerTeam : undefined,
+                role: line.senderRole,
+              });
               return (
+                <div key={line.clientMessageId}>
+                  {showDate ? (
+                    <div className="vh-chat-date">{formatChatDateDivider(line.sentAt)}</div>
+                  ) : null}
+                  {deleted ? (
+                    <div className="vh-chat-tombstone" data-chat-seq={line.seq || undefined}>
+                      {displayTombstone(line.deletionType)}
+                    </div>
+                  ) : (
                 <div
-                  key={line.clientMessageId}
-                  className={`vh-chat-bubble ${mine ? "is-mine" : "is-theirs"} ${admin ? "is-admin" : ""} ${deleted ? "is-deleted" : ""}`}
+                  className={`vh-chat-row ${mine ? "is-mine" : "is-theirs"} ${showAuthor ? "is-lead" : "is-follow"}`}
+                  data-chat-seq={line.seq || undefined}
+                >
+                  {!mine ? (
+                    showAuthor ? (
+                      <button
+                        type="button"
+                        className="vh-chat-avatar"
+                        onClick={() =>
+                          setProfileTarget({
+                            userId: line.senderUserId,
+                            displayName: line.sender,
+                            team: line.senderUserId === activeRoom?.peerUserId ? activeRoom.peerTeam || "-" : "-",
+                            role: line.senderRole,
+                          })
+                        }
+                      >
+                        {defaultAvatarInitial(line.sender)}
+                      </button>
+                    ) : (
+                      <span className="vh-chat-avatar is-spacer" aria-hidden="true" />
+                    )
+                  ) : null}
+                  <div
+                  className={`vh-chat-bubble ${mine ? "is-mine" : "is-theirs"} ${admin ? "is-admin" : ""}`}
                   onContextMenu={(e) => {
                     e.preventDefault();
                     openActions(line);
@@ -1229,23 +1367,41 @@ export default function ChatClient() {
                     pressTimerRef.current = null;
                   }}
                 >
-                  {admin ? (
-                    <div className="vh-chat-admin-badge">🛡 관리자 · {line.sender}</div>
-                  ) : !mine ? (
-                    <div className="vh-chat-name">{line.sender}</div>
+                  {showAuthor ? (
+                    <button
+                      type="button"
+                      className="vh-chat-name"
+                      onClick={() =>
+                        setProfileTarget({
+                          userId: line.senderUserId,
+                          displayName: line.sender,
+                          team: line.senderUserId === activeRoom?.peerUserId ? activeRoom.peerTeam || "-" : "-",
+                          role: line.senderRole,
+                        })
+                      }
+                    >
+                      {authorLine}
+                      {admin ? <span className="vh-chat-admin-badge">관리자</span> : null}
+                      {line.senderRole === "leader" ? <span className="vh-chat-role-badge">조장</span> : null}
+                    </button>
                   ) : null}
-                  {selfMentioned ? <div className="vh-chat-mention-self">나를 멘션</div> : null}
+                  {selfMentioned ? <div className="vh-chat-mention-self">@ 나를 멘션</div> : null}
                   {line.replyTo ? (
-                    <div className={`vh-chat-reply ${line.replyTo.state !== "ok" ? "is-gone" : ""}`}>
+                    <button
+                      type="button"
+                      className={`vh-chat-reply ${line.replyTo.state !== "ok" ? "is-gone" : ""}`}
+                      onClick={() => {
+                        if (!jumpToMessageIfMounted({ seq: line.replyTo!.seq, root: listRef.current })) {
+                          setError("원 메시지가 현재 화면에 없습니다.");
+                        }
+                      }}
+                    >
                       <strong>{line.replyTo.state === "ok" ? line.replyTo.sender : "답장"}</strong>
                       <span>{line.replyTo.preview}</span>
-                    </div>
+                    </button>
                   ) : null}
                   <div className="vh-chat-body">
-                    {deleted ? (
-                      displayTombstone(line.deletionType)
-                    ) : (
-                      parts.map((part, idx) =>
+                    {parts.map((part, idx) =>
                         part.kind === "mention" ? (
                           <span key={`${line.clientMessageId}-m-${idx}`} className="vh-chat-mention">
                             {part.text}
@@ -1253,8 +1409,7 @@ export default function ChatClient() {
                         ) : (
                           <span key={`${line.clientMessageId}-t-${idx}`}>{part.text}</span>
                         )
-                      )
-                    )}
+                      )}
                   </div>
                   <div className="vh-chat-meta">
                     {formatTime(line.sentAt)}
@@ -1267,12 +1422,15 @@ export default function ChatClient() {
                     </button>
                   ) : null}
                 </div>
+                </div>
+                  )}
+                </div>
               );
             })}
           </div>
-          {unseenCount > 0 ? (
+          {shouldShowJumpButton({ stuckToBottom: stickRef.current, unseenCount }) ? (
             <button type="button" className="vh-chat-jump" onClick={jumpToBottom}>
-              새 메시지 {unseenCount > 99 ? "99+" : unseenCount} ↓
+              ↓ 새 메시지{unseenCount > 1 ? ` ${unseenCount > 99 ? "99+" : unseenCount}` : ""}
             </button>
           ) : null}
           <form
@@ -1390,6 +1548,63 @@ export default function ChatClient() {
                       : "관리자 삭제"}
               </button>
             ))}
+          </div>
+        </div>
+      ) : null}
+
+      {profileTarget ? (
+        <div className="vh-chat-sheet vh-chat-profile-sheet" role="dialog" aria-label="프로필">
+          <div className="vh-chat-sheet-head">
+            <strong>프로필</strong>
+            <button type="button" className="vh-chat-back" onClick={() => setProfileTarget(null)}>
+              닫기
+            </button>
+          </div>
+          <div className="vh-chat-sheet-body">
+            {(() => {
+              const profile = publicChatProfile(profileTarget);
+              return (
+                <>
+                  <div className="vh-chat-avatar is-lg" aria-hidden="true">
+                    {defaultAvatarInitial(profile.displayName)}
+                  </div>
+                  <p className="vh-chat-profile-name">{profile.authorLine}</p>
+                  <p className="vh-chat-profile-role">{profile.roleLabel}</p>
+                </>
+              );
+            })()}
+          </div>
+          <div className="vh-chat-sheet-foot">
+            {tokenInfo && profileTarget.userId !== tokenInfo.user.userId ? (
+              <button type="button" className="ui-btn ui-btn-primary" onClick={() => void startDm(profileTarget)}>
+                1:1 채팅
+              </button>
+            ) : null}
+            {tokenInfo &&
+            canProfileMention({
+              roomId: activeRoom?.roomId,
+              isMember:
+                mentionCandidates.some((c) => c.userId === profileTarget.userId) ||
+                members.some((m) => m.userId === profileTarget.userId) ||
+                activeRoom?.type === "ALL",
+              targetUserId: profileTarget.userId,
+              myUserId: tokenInfo.user.userId,
+            }) ? (
+              <button
+                type="button"
+                className="ui-btn"
+                onClick={() => {
+                  pickMention({
+                    kind: "user",
+                    userId: profileTarget.userId,
+                    displayName: profileTarget.displayName,
+                  });
+                  setProfileTarget(null);
+                }}
+              >
+                @멘션
+              </button>
+            ) : null}
           </div>
         </div>
       ) : null}

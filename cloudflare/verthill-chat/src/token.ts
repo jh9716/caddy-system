@@ -203,11 +203,12 @@ export function resolveChatRoomAccess(input: {
   isAll: boolean;
   isCustom: boolean;
   isLegacy: boolean;
+  isDm?: boolean;
 }): { ok: true } | { ok: false; code: "invalid_room" | "room_forbidden" } {
   if (input.isAll) {
     return input.claims.v === 2 ? { ok: true } : { ok: false, code: "room_forbidden" };
   }
-  if (input.isCustom) {
+  if (input.isCustom || input.isDm) {
     if (input.claims.v !== 2) return { ok: false, code: "room_forbidden" };
     return input.isMember ? { ok: true } : { ok: false, code: "room_forbidden" };
   }
