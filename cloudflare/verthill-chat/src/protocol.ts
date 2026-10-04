@@ -16,6 +16,7 @@ export const MESSAGE_MAX = 4096;
 export const ALL_ROOM_ID = "all";
 export const ALL_ROOM_NAME = "전체 채팅방";
 export const CUSTOM_ROOM_ID_RE = /^room_[0-9a-f]{16}$/;
+export const DM_ROOM_ID_RE = /^dm_(\d+)_(\d+)$/;
 export const LEGACY_TEAM_ROOM_RE = /^team-([1-9]|1[0-2])$/;
 export const ROOM_NAME_RE = LEGACY_TEAM_ROOM_RE;
 export const ALLOWED_ROOMS = [
@@ -124,10 +125,12 @@ export type DuplicateEvent = {
   clientMessageId: string;
 };
 
+export type ChatRoomKind = "ALL" | "CUSTOM" | "DM";
+
 export type RoomSummary = {
   roomId: string;
   name: string;
-  type: "ALL" | "CUSTOM";
+  type: ChatRoomKind;
   ownerUserId: number | null;
   memberCount: number;
   lastMessageSeq: number;
@@ -138,6 +141,10 @@ export type RoomSummary = {
   unread: number;
   createdAt: string;
   notificationTag: string;
+  peerUserId?: number | null;
+  peerDisplayName?: string | null;
+  peerRole?: ChatSenderRole | null;
+  peerTeam?: string | null;
 };
 
 export function isAllRoomId(room: string): boolean {
@@ -148,12 +155,41 @@ export function isCustomRoomId(room: string): boolean {
   return CUSTOM_ROOM_ID_RE.test(room);
 }
 
+export function canonicalDmUserIds(a: number, b: number): [number, number] | null {
+  if (!Number.isInteger(a) || !Number.isInteger(b) || a <= 0 || b <= 0 || a === b) return null;
+  return a < b ? [a, b] : [b, a];
+}
+
+export function canonicalDmRoomId(a: number, b: number): string | null {
+  const pair = canonicalDmUserIds(a, b);
+  return pair ? `dm_${pair[0]}_${pair[1]}` : null;
+}
+
+export function parseDmRoomId(room: string): { low: number; high: number } | null {
+  const match = DM_ROOM_ID_RE.exec(String(room ?? "").trim());
+  if (!match) return null;
+  const low = Number(match[1]);
+  const high = Number(match[2]);
+  if (!Number.isInteger(low) || !Number.isInteger(high) || low <= 0 || high <= 0 || low >= high) {
+    return null;
+  }
+  return { low, high };
+}
+
+export function isDmRoomId(room: string): boolean {
+  return parseDmRoomId(room) != null;
+}
+
+export function isDirectoryRoomId(room: string): boolean {
+  return isAllRoomId(room) || isCustomRoomId(room) || isDmRoomId(room);
+}
+
 export function isLegacyTeamRoomId(room: string): boolean {
   return LEGACY_TEAM_ROOM_RE.test(room) && (ALLOWED_ROOMS as readonly string[]).includes(room);
 }
 
 export function isValidRoomName(room: string): boolean {
-  return isAllRoomId(room) || isCustomRoomId(room) || isLegacyTeamRoomId(room);
+  return isAllRoomId(room) || isCustomRoomId(room) || isDmRoomId(room) || isLegacyTeamRoomId(room);
 }
 
 export function chatNotificationTag(roomId: string): string {
@@ -212,8 +248,10 @@ export function mentionsToWire(ids: unknown): ChatMention[] {
 
 export function resolveMentionAll(
   raw: unknown,
-  senderRole: string | null | undefined
+  senderRole: string | null | undefined,
+  roomId?: string
 ): boolean {
+  if (roomId && isDmRoomId(roomId)) return false;
   return raw === true && canMentionAll(senderRole);
 }
 

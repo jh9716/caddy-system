@@ -1,4 +1,4 @@
-import { isAllRoomId, isCustomRoomId, isLegacyTeamRoomId } from "@/lib/chatRooms";
+import { isAllRoomId, isCustomRoomId, isDmRoomId, isLegacyTeamRoomId } from "@/lib/chatRooms";
 import type { ChatTokenClaims } from "@/lib/chatToken";
 import { isChatTokenV2 } from "@/lib/chatToken";
 
@@ -11,7 +11,7 @@ export function resolveChatRoomAccess(input: {
   if (isAllRoomId(roomId)) {
     return isChatTokenV2(input.claims) ? { ok: true } : { ok: false, code: "room_forbidden" };
   }
-  if (isCustomRoomId(roomId)) {
+  if (isCustomRoomId(roomId) || isDmRoomId(roomId)) {
     if (!isChatTokenV2(input.claims)) return { ok: false, code: "room_forbidden" };
     return input.isMember ? { ok: true } : { ok: false, code: "room_forbidden" };
   }

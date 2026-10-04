@@ -15,6 +15,9 @@ import {
   computeUnread,
   isAllRoomId,
   isCustomRoomId,
+  isDirectoryRoomId,
+  isDmRoomId,
+  parseDmRoomId,
   truncatePreview,
   type ChatSenderRole,
   type RoomSummary,
@@ -269,13 +272,35 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
     return rooms.map((row) => this.toSummary(row, userId));
   }
 
+  private peerForViewer(roomId: string, userId: number): MemberSnap | null {
+    const rows = this.ctx.storage.sql
+      .exec(
+        `SELECT user_id, display_name, role, team
+         FROM members WHERE room_id = ? AND user_id != ? LIMIT 1`,
+        roomId,
+        userId
+      )
+      .toArray();
+    const row = rows[0];
+    if (!row) return null;
+    return {
+      userId: Number(row.user_id),
+      displayName: String(row.display_name || ""),
+      role: String(row.role || "caddy"),
+      team: String(row.team || "-"),
+    };
+  }
+
   private toSummary(row: Record<string, unknown>, userId: number): RoomSummary {
     const roomId = String(row.room_id);
     const latest = Number(row.last_message_seq || 0);
+    const rawType = String(row.type || "");
+    const type = rawType === "ALL" ? "ALL" : rawType === "DM" ? "DM" : "CUSTOM";
+    const peer = type === "DM" ? this.peerForViewer(roomId, userId) : null;
     return {
       roomId,
-      name: String(row.name),
-      type: String(row.type) === "ALL" ? "ALL" : "CUSTOM",
+      name: type === "DM" ? String(peer?.displayName || "1:1 채팅") : String(row.name),
+      type,
       ownerUserId: row.owner_user_id == null ? null : Number(row.owner_user_id),
       memberCount: Number(row.member_count || 0),
       lastMessageSeq: latest,
@@ -288,6 +313,10 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
       unread: computeUnread(latest, this.lastRead(roomId, userId)),
       createdAt: String(row.created_at),
       notificationTag: chatNotificationTag(roomId),
+      peerUserId: peer?.userId ?? null,
+      peerDisplayName: peer?.displayName ?? null,
+      peerRole: peer ? (peer.role as ChatSenderRole) : null,
+      peerTeam: peer?.team ?? null,
     };
   }
 
@@ -298,6 +327,9 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
       ownerUserId: number;
       members: MemberSnap[];
     };
+    if (isDmRoomId(body.roomId)) {
+      return this.handleInternalCreateDm(body);
+    }
     if (!isCustomRoomId(body.roomId)) {
       return json({ error: "invalid_room" }, 400);
     }
@@ -338,6 +370,62 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
     return json({ ok: true, roomId: body.roomId });
   }
 
+  private handleInternalCreateDm(body: {
+    roomId: string;
+    ownerUserId: number;
+    members: MemberSnap[];
+  }): Response {
+    const pair = parseDmRoomId(body.roomId);
+    if (!pair) return json({ error: "invalid_room" }, 400);
+    const ids = [...new Set(body.members.map((m) => Number(m.userId)).filter((id) => Number.isInteger(id) && id > 0))];
+    if (ids.length !== 2 || ids[0] === ids[1]) {
+      return json({ error: "invalid_dm_members" }, 400);
+    }
+    const [low, high] = ids[0]! < ids[1]! ? [ids[0]!, ids[1]!] : [ids[1]!, ids[0]!];
+    if (low !== pair.low || high !== pair.high) {
+      return json({ error: "dm_pair_mismatch" }, 400);
+    }
+    if (body.ownerUserId !== low && body.ownerUserId !== high) {
+      return json({ error: "dm_owner_mismatch" }, 400);
+    }
+    const existing = this.ctx.storage.sql
+      .exec(`SELECT room_id, type FROM rooms WHERE room_id = ?`, body.roomId)
+      .toArray();
+    if (existing.length) {
+      if (String(existing[0]?.type) !== "DM") {
+        return json({ error: "room_exists" }, 409);
+      }
+      if (!this.isMember(body.roomId, body.ownerUserId)) {
+        return json({ error: "room_forbidden" }, 403);
+      }
+      this.broadcastRooms([low, high]);
+      return json({ ok: true, roomId: body.roomId, idempotent: true });
+    }
+    const now = new Date().toISOString();
+    this.ctx.storage.sql.exec(
+      `INSERT INTO rooms (room_id, name, type, owner_user_id, created_at, member_count)
+       VALUES (?, 'DM', 'DM', ?, ?, 2)`,
+      body.roomId,
+      body.ownerUserId,
+      now
+    );
+    for (const member of body.members) {
+      this.ctx.storage.sql.exec(
+        `INSERT OR IGNORE INTO members
+          (room_id, user_id, display_name, role, team, joined_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        body.roomId,
+        member.userId,
+        member.displayName,
+        member.role,
+        member.team,
+        now
+      );
+    }
+    this.broadcastRooms([low, high]);
+    return json({ ok: true, roomId: body.roomId });
+  }
+
   private async handleInternalMessage(request: Request): Promise<Response> {
     const body = (await request.json()) as {
       roomId: string;
@@ -348,7 +436,7 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
       senderRole: string;
       sentAt: string;
     };
-    if (!isAllRoomId(body.roomId) && !isCustomRoomId(body.roomId)) {
+    if (!isDirectoryRoomId(body.roomId)) {
       return json({ ok: true, ignored: "legacy" });
     }
     this.ensureAllRoom();

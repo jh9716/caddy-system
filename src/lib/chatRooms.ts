@@ -2,6 +2,7 @@
  * Phase 2 room ids:
  * - `all` overall room (pinned, cannot leave)
  * - `room_<16 hex>` user-created rooms (stable id, name is separate)
+ * - `dm_<minUserId>_<maxUserId>` 1:1 rooms (pair identity, not display name)
  * - `team-1`…`team-12` legacy Phase 1 rooms (kept in DO storage, hidden in new UI)
  *
  * Future FCM tag: `chat:<roomId>` — identity stays on roomId, not display name.
@@ -10,6 +11,7 @@
 export const ALL_ROOM_ID = "all";
 export const ALL_ROOM_NAME = "전체 채팅방";
 export const CUSTOM_ROOM_ID_RE = /^room_[0-9a-f]{16}$/;
+export const DM_ROOM_ID_RE = /^dm_(\d+)_(\d+)$/;
 export const LEGACY_TEAM_ROOM_RE = /^team-([1-9]|1[0-2])$/;
 export const CHAT_ROOM_ID_RE = LEGACY_TEAM_ROOM_RE;
 export const ROOM_NAME_MIN = 1;
@@ -17,7 +19,7 @@ export const ROOM_NAME_MAX = 24;
 export const MAX_CUSTOM_MEMBERS = 300;
 export const CHAT_PREVIEW_MAX = 80;
 
-export type ChatRoomType = "ALL" | "CUSTOM";
+export type ChatRoomType = "ALL" | "CUSTOM" | "DM";
 
 export function teamToChatRoomId(team: string): string | null {
   const trimmed = String(team ?? "").trim();
@@ -43,8 +45,33 @@ export function isCustomRoomId(roomId: string): boolean {
   return CUSTOM_ROOM_ID_RE.test(String(roomId ?? "").trim());
 }
 
+export function canonicalDmUserIds(a: number, b: number): [number, number] | null {
+  if (!Number.isInteger(a) || !Number.isInteger(b) || a <= 0 || b <= 0 || a === b) return null;
+  return a < b ? [a, b] : [b, a];
+}
+
+export function canonicalDmRoomId(a: number, b: number): string | null {
+  const pair = canonicalDmUserIds(a, b);
+  return pair ? `dm_${pair[0]}_${pair[1]}` : null;
+}
+
+export function parseDmRoomId(roomId: string): { low: number; high: number } | null {
+  const match = DM_ROOM_ID_RE.exec(String(roomId ?? "").trim());
+  if (!match) return null;
+  const low = Number(match[1]);
+  const high = Number(match[2]);
+  if (!Number.isInteger(low) || !Number.isInteger(high) || low <= 0 || high <= 0 || low >= high) {
+    return null;
+  }
+  return { low, high };
+}
+
+export function isDmRoomId(roomId: string): boolean {
+  return parseDmRoomId(roomId) != null;
+}
+
 export function isPhase2RoomId(roomId: string): boolean {
-  return isAllRoomId(roomId) || isCustomRoomId(roomId);
+  return isAllRoomId(roomId) || isCustomRoomId(roomId) || isDmRoomId(roomId);
 }
 
 export function isConnectableRoomId(roomId: string): boolean {
