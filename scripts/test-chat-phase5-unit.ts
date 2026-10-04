@@ -23,6 +23,7 @@ import {
   chatDateKey,
   defaultAvatarInitial,
   isNearChatBottom,
+  isVisibleChatListRoom,
   publicChatProfile,
   roomListTitle,
   shouldShowAuthorMeta,
@@ -133,6 +134,9 @@ section("group / all regression");
     { type: "DM", lastMessageAt: "2026-10-04T03:00:00.000Z", createdAt: "c" },
   ]);
   assert(sorted[0]!.type === "ALL", "전체방 remains pinned first");
+  assert(isVisibleChatListRoom("ALL") && isVisibleChatListRoom("CUSTOM"), "group rooms stay listed");
+  assert(isVisibleChatListRoom("DM"), "DM stays in directory list");
+  assert(!isVisibleChatListRoom("team-1") && !isVisibleChatListRoom("LEGACY"), "legacy team rooms stay hidden");
 }
 
 section("profile privacy / labels");
@@ -240,6 +244,16 @@ section("android back / source");
   const api = fs.readFileSync("src/app/api/chat/dm/route.ts", "utf8");
   assert(client.includes("vh-chat-profile-sheet"), "profile sheet");
   assert(client.includes("/api/chat/dm"), "DM start from profile");
+  assert(client.includes("isVisibleChatListRoom"), "list keeps Directory DM rows");
+  assert(
+    !client.includes('r.type === "ALL" || r.type === "CUSTOM"'),
+    "applyRooms no longer drops DM"
+  );
+  const startDmBlock = client.slice(
+    client.indexOf("async function startDm"),
+    client.indexOf("async function handleCreate")
+  );
+  assert(startDmBlock.includes("fetchRoomsHttp"), "startDm refreshes Directory snapshot");
   assert(client.includes("vh-chat-date"), "date divider");
   assert(client.includes("vh-chat-tombstone"), "compact tombstone");
   assert(css.includes("max-width: 76%"), "bubble width");
