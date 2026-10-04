@@ -40,7 +40,7 @@ export function shouldRegisterAndroidSystemBack(input: {
 /**
  * Priority:
  * 1. Close the hamburger drawer (local overlay, not history).
- * 2. Close chat create/members sheet.
+ * 2. Close the active chat overlay (action menu → mention → reply → sheet).
  * 3. Leave /chat room view to the list (room is React state, not a URL).
  * 4. history.back() when WebView/App plugin reports a previous screen.
  * 5. No-op on auth screens and at root — no exitApp, no redirect loop.

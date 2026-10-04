@@ -12,6 +12,23 @@ import {
   chatWsUrl,
 } from "@/lib/chatClientConfig";
 import {
+  applyDeletedLine,
+  applyHiddenSeq,
+  chatActionItems,
+  displayTombstone,
+  lastKnownSeq,
+  mergeChatLines,
+  nextSyncCursor,
+  redactHiddenReplies,
+  SYNC_LIMIT,
+  type ChatLineReply,
+} from "@/lib/chatPhase4";
+import {
+  chatReconnectStatus,
+  nextReconnectDelay,
+  shouldRefreshTokenOnClose,
+} from "@/lib/chatReconnect";
+import {
   clearInviteIds,
   filterInviteUsers,
   invitePoolExcludingOwner,
@@ -72,6 +89,10 @@ type ChatLine = {
   seq?: number;
   mentions: number[];
   mentionAll: boolean;
+  replyToSeq?: number | null;
+  replyTo?: ChatLineReply | null;
+  deletionType?: "everyone" | "admin" | null;
+  deletedAt?: string | null;
   status: "sending" | "sent" | "failed";
 };
 
@@ -152,6 +173,11 @@ export default function ChatClient() {
   const [creating, setCreating] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const [replyTo, setReplyTo] = useState<ChatLineReply | null>(null);
+  const [actionLine, setActionLine] = useState<ChatLine | null>(null);
+  const [unseenCount, setUnseenCount] = useState(0);
+  const [failingSince, setFailingSince] = useState<number | null>(null);
+  const [nowTick, setNowTick] = useState(() => Date.now());
   const wsRef = useRef<WebSocket | null>(null);
   const dirRef = useRef<WebSocket | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -167,16 +193,61 @@ export default function ChatClient() {
   const mentionCacheRef = useRef<{ roomId: string; users: MentionCandidate[] } | null>(null);
   const mentionFetchedRef = useRef("");
   const mentionNamesRef = useRef<Map<number, string>>(new Map());
+  const roomGenRef = useRef(0);
+  const dirGenRef = useRef(0);
+  const roomTimerRef = useRef<number | null>(null);
+  const dirTimerRef = useRef<number | null>(null);
+  const roomAttemptRef = useRef(0);
+  const dirAttemptRef = useRef(0);
+  const lastSeqRef = useRef(0);
+  const reconnectingRef = useRef(false);
+  const linesRef = useRef<ChatLine[]>([]);
+  const hiddenSeqsRef = useRef<Set<number>>(new Set());
+  const pressTimerRef = useRef<number | null>(null);
 
   const upsertLine = useCallback((incoming: ChatLine) => {
     setLines((prev) => {
-      const idx = prev.findIndex((l) => l.clientMessageId === incoming.clientMessageId);
-      if (idx === -1) return [...prev, incoming];
-      const next = [...prev];
-      next[idx] = { ...next[idx], ...incoming };
+      const next = redactHiddenReplies(mergeChatLines(prev, [incoming]), hiddenSeqsRef.current);
+      lastSeqRef.current = lastKnownSeq(next);
+      linesRef.current = next;
       return next;
     });
   }, []);
+
+  function payloadToLine(raw: any): ChatLine {
+    const replyTo = raw?.replyTo && typeof raw.replyTo === "object" ? raw.replyTo : null;
+    return {
+      clientMessageId: String(raw.clientMessageId),
+      senderUserId: Number(raw.senderUserId || 0),
+      sender: String(raw.sender || ""),
+      senderRole: String(raw.senderRole || "caddy"),
+      body: String(raw.body || ""),
+      sentAt: String(raw.sentAt || ""),
+      seq: Number(raw.seq) || undefined,
+      mentions: mentionIdsFromPayload(raw.mentions),
+      mentionAll: raw.mentionAll === true,
+      replyToSeq: Number(raw.replyToSeq) || null,
+      replyTo: replyTo
+        ? {
+            seq: Number(replyTo.seq || 0),
+            senderUserId: Number(replyTo.senderUserId || 0),
+            sender: String(replyTo.sender || ""),
+            preview: String(replyTo.preview || ""),
+            state: replyTo.state === "deleted" || replyTo.state === "expired" ? replyTo.state : "ok",
+          }
+        : null,
+      deletionType: raw.deletionType === "admin" || raw.deletionType === "everyone" ? raw.deletionType : null,
+      deletedAt: raw.deletedAt ? String(raw.deletedAt) : null,
+      status: "sent",
+    };
+  }
+
+  function clearTimer(ref: { current: number | null }) {
+    if (ref.current != null) {
+      window.clearTimeout(ref.current);
+      ref.current = null;
+    }
+  }
 
   const fetchToken = useCallback(async () => {
     const res = await fetch("/api/chat/token", {
@@ -209,26 +280,62 @@ export default function ChatClient() {
     if (res.ok && Array.isArray(data?.rooms)) applyRooms(data.rooms);
   }, [applyRooms]);
 
+  const connectDirectoryRef = useRef<(info: TokenPayload) => void>(() => {});
+  const connectSocketRef = useRef<(info: TokenPayload, roomId: string) => Promise<void>>(async () => {});
+
+  const scheduleDirectoryReconnect = useCallback((info: TokenPayload) => {
+    clearTimer(dirTimerRef);
+    const delay = nextReconnectDelay(dirAttemptRef.current);
+    dirAttemptRef.current += 1;
+    dirTimerRef.current = window.setTimeout(() => {
+      connectDirectoryRef.current(info);
+    }, delay);
+  }, []);
+
   const connectDirectory = useCallback(
     (info: TokenPayload) => {
       const url = chatDirectoryWsUrl(info.token);
       if (!url) return;
-      dirRef.current?.close();
+      const prev = dirRef.current;
+      dirGenRef.current += 1;
+      const gen = dirGenRef.current;
+      if (prev && (prev.readyState === WebSocket.OPEN || prev.readyState === WebSocket.CONNECTING)) {
+        prev.close();
+      }
       const ws = new WebSocket(url);
       dirRef.current = ws;
-      ws.addEventListener("open", () => setDirectoryConnected(true));
-      ws.addEventListener("close", (ev) => {
-        setDirectoryConnected(false);
-        if (ev.code === 4008) {
-          void fetchToken().then((info) => {
-            if (!info) return;
-            tokenRef.current = info;
-            setTokenInfo(info);
-            connectDirectory(info);
-          });
+      ws.addEventListener("open", () => {
+        if (gen !== dirGenRef.current) return;
+        setDirectoryConnected(true);
+        dirAttemptRef.current = 0;
+        try {
+          ws.send(JSON.stringify({ type: "sync" }));
+        } catch {
+          // snapshot still arrives on connect
         }
       });
+      ws.addEventListener("error", () => {
+        if (gen !== dirGenRef.current) return;
+        setDirectoryConnected(false);
+      });
+      ws.addEventListener("close", (ev) => {
+        if (gen !== dirGenRef.current) return;
+        setDirectoryConnected(false);
+        const run = async () => {
+          let next = info;
+          if (shouldRefreshTokenOnClose(ev.code)) {
+            const fresh = await fetchToken();
+            if (!fresh) return;
+            tokenRef.current = fresh;
+            setTokenInfo(fresh);
+            next = fresh;
+          }
+          scheduleDirectoryReconnect(next);
+        };
+        void run();
+      });
       ws.addEventListener("message", (event) => {
+        if (gen !== dirGenRef.current) return;
         let data: any;
         try {
           data = JSON.parse(String(event.data));
@@ -240,8 +347,17 @@ export default function ChatClient() {
         }
       });
     },
-    [applyRooms, fetchToken]
+    [applyRooms, fetchToken, scheduleDirectoryReconnect]
   );
+
+  const scheduleRoomReconnect = useCallback((info: TokenPayload, roomId: string) => {
+    clearTimer(roomTimerRef);
+    const delay = nextReconnectDelay(roomAttemptRef.current);
+    roomAttemptRef.current += 1;
+    roomTimerRef.current = window.setTimeout(() => {
+      void connectSocketRef.current(info, roomId);
+    }, delay);
+  }, []);
 
   const connectSocket = useCallback(
     async (info: TokenPayload, roomId: string) => {
@@ -250,27 +366,66 @@ export default function ChatClient() {
         setError("채팅 서버 주소가 없습니다.");
         return;
       }
-      wsRef.current?.close();
+      const prev = wsRef.current;
+      roomGenRef.current += 1;
+      const gen = roomGenRef.current;
+      if (prev && (prev.readyState === WebSocket.OPEN || prev.readyState === WebSocket.CONNECTING)) {
+        prev.close();
+      }
       const ws = new WebSocket(url);
       wsRef.current = ws;
-      historyResetRef.current = true;
-      oldestSeqRef.current = null;
-      setHasMore(false);
-      ws.addEventListener("open", () => setConnected(true));
-      ws.addEventListener("close", (ev) => {
-        setConnected(false);
-        if (ev.code === 4008) {
-          void fetchToken().then((info) => {
-            if (!info) return;
-            tokenRef.current = info;
-            setTokenInfo(info);
-            connectDirectory(info);
-            const room = roomRef.current;
-            if (room) void connectSocket(info, room.roomId);
-          });
+      if (!reconnectingRef.current) {
+        historyResetRef.current = true;
+        oldestSeqRef.current = null;
+        setHasMore(false);
+      }
+      ws.addEventListener("open", () => {
+        if (gen !== roomGenRef.current) return;
+        setConnected(true);
+        setFailingSince(null);
+        roomAttemptRef.current = 0;
+        const afterSeq = lastSeqRef.current;
+        if (reconnectingRef.current && afterSeq > 0) {
+          try {
+            ws.send(JSON.stringify({ type: "sync", afterSeq, limit: SYNC_LIMIT }));
+          } catch {
+            // history still arrives
+          }
+        } else {
+          historyResetRef.current = true;
+          reconnectingRef.current = false;
         }
       });
+      ws.addEventListener("error", () => {
+        if (gen !== roomGenRef.current) return;
+        setConnected(false);
+        setFailingSince((cur) => cur ?? Date.now());
+      });
+      ws.addEventListener("close", (ev) => {
+        if (gen !== roomGenRef.current) return;
+        setConnected(false);
+        setFailingSince((cur) => cur ?? Date.now());
+        setNowTick(Date.now());
+        window.setTimeout(() => setNowTick(Date.now()), 15100);
+        if (!roomRef.current) return;
+        reconnectingRef.current = true;
+        const run = async () => {
+          let next = info;
+          if (shouldRefreshTokenOnClose(ev.code)) {
+            const fresh = await fetchToken();
+            if (!fresh) return;
+            tokenRef.current = fresh;
+            setTokenInfo(fresh);
+            connectDirectory(fresh);
+            next = fresh;
+          }
+          const room = roomRef.current;
+          if (room) scheduleRoomReconnect(next, room.roomId);
+        };
+        void run();
+      });
       ws.addEventListener("message", (event) => {
+        if (gen !== roomGenRef.current) return;
         let data: any;
         try {
           data = JSON.parse(String(event.data));
@@ -278,19 +433,8 @@ export default function ChatClient() {
           return;
         }
         if (data.type === "history" && Array.isArray(data.messages)) {
-          const hist: ChatLine[] = data.messages.map((m: any) => ({
-            clientMessageId: String(m.clientMessageId),
-            senderUserId: Number(m.senderUserId || 0),
-            sender: String(m.sender || ""),
-            senderRole: String(m.senderRole || "caddy"),
-            body: String(m.body || ""),
-            sentAt: String(m.sentAt || ""),
-            seq: Number(m.seq),
-            mentions: mentionIdsFromPayload(m.mentions),
-            mentionAll: m.mentionAll === true,
-            status: "sent" as const,
-          }));
-          const reset = historyResetRef.current;
+          const hist = data.messages.map(payloadToLine);
+          const reset = historyResetRef.current && !reconnectingRef.current;
           historyResetRef.current = false;
           loadingOlderRef.current = false;
           setLoadingOlder(false);
@@ -301,39 +445,79 @@ export default function ChatClient() {
             oldestSeqRef.current = data.oldestSeq;
           }
           if (reset) {
-            setLines(hist);
-            const last = hist[hist.length - 1];
+            const next = redactHiddenReplies(hist, hiddenSeqsRef.current);
+            setLines(next);
+            linesRef.current = next;
+            lastSeqRef.current = lastKnownSeq(next);
+            const last = next[next.length - 1];
             if (last?.seq && ws.readyState === WebSocket.OPEN) {
               ws.send(JSON.stringify({ type: "read", seq: last.seq }));
             }
-          } else {
+          } else if (!reconnectingRef.current) {
             const el = listRef.current;
             if (el) pendingScrollRestore.current = el.scrollHeight;
             setLines((prev) => {
-              const seen = new Set(prev.map((l) => l.clientMessageId));
-              const older = hist.filter((m) => !seen.has(m.clientMessageId));
-              return [...older, ...prev];
+              const next = redactHiddenReplies(mergeChatLines(hist, prev), hiddenSeqsRef.current);
+              linesRef.current = next;
+              lastSeqRef.current = lastKnownSeq(next);
+              return next;
             });
           }
           return;
         }
+        if (data.type === "sync" && Array.isArray(data.messages)) {
+          const extra = data.messages.map(payloadToLine);
+          setLines((prev) => {
+            const next = redactHiddenReplies(mergeChatLines(prev, extra), hiddenSeqsRef.current);
+            linesRef.current = next;
+            lastSeqRef.current = lastKnownSeq(next);
+            return next;
+          });
+          if (data.hasMore === true && ws.readyState === WebSocket.OPEN) {
+            ws.send(
+              JSON.stringify({
+                type: "sync",
+                afterSeq: nextSyncCursor(data.newestSeq, extra.length ? Number(extra[extra.length - 1]!.seq) : 0),
+                limit: SYNC_LIMIT,
+              })
+            );
+          } else {
+            reconnectingRef.current = false;
+          }
+          const last = extra[extra.length - 1];
+          if (last?.seq && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "read", seq: last.seq }));
+          }
+          return;
+        }
         if (data.type === "message") {
-          const line: ChatLine = {
-            clientMessageId: String(data.clientMessageId),
-            senderUserId: Number(data.senderUserId || 0),
-            sender: String(data.sender || ""),
-            senderRole: String(data.senderRole || "caddy"),
-            body: String(data.body || ""),
-            sentAt: String(data.sentAt || new Date().toISOString()),
-            seq: Number(data.seq),
-            mentions: mentionIdsFromPayload(data.mentions),
-            mentionAll: data.mentionAll === true,
-            status: "sent",
-          };
+          const line = payloadToLine(data);
+          if (!stickRef.current) setUnseenCount((n) => n + 1);
           upsertLine(line);
           if (line.seq && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: "read", seq: line.seq }));
           }
+          return;
+        }
+        if (data.type === "hidden" && Number(data.seq) > 0) {
+          hiddenSeqsRef.current.add(Number(data.seq));
+          setLines((prev) => {
+            const next = applyHiddenSeq(prev, Number(data.seq));
+            linesRef.current = next;
+            return next;
+          });
+          return;
+        }
+        if (data.type === "message_deleted" && Number(data.seq) > 0) {
+          setLines((prev) => {
+            const next = applyDeletedLine(prev, {
+              seq: Number(data.seq),
+              deletionType: data.deletionType === "admin" ? "admin" : "everyone",
+              deletedAt: String(data.deletedAt || new Date().toISOString()),
+            });
+            linesRef.current = next;
+            return next;
+          });
           return;
         }
         if (data.type === "duplicate") {
@@ -345,8 +529,11 @@ export default function ChatClient() {
         }
       });
     },
-    [connectDirectory, fetchToken, upsertLine]
+    [connectDirectory, fetchToken, scheduleRoomReconnect, upsertLine]
   );
+
+  connectDirectoryRef.current = connectDirectory;
+  connectSocketRef.current = connectSocket;
 
   useEffect(() => {
     let cancelled = false;
@@ -370,10 +557,93 @@ export default function ChatClient() {
     })();
     return () => {
       cancelled = true;
+      roomGenRef.current += 1;
+      dirGenRef.current += 1;
+      clearTimer(roomTimerRef);
+      clearTimer(dirTimerRef);
       wsRef.current?.close();
       dirRef.current?.close();
     };
   }, [connectDirectory, fetchRoomsHttp, fetchToken]);
+
+  useEffect(() => {
+    const reconnect = () => {
+      const info = tokenRef.current;
+      if (!info) return;
+      connectDirectory(info);
+      const room = roomRef.current;
+      if (room) {
+        reconnectingRef.current = true;
+        void connectSocket(info, room.roomId);
+      }
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") reconnect();
+    };
+    window.addEventListener("online", reconnect);
+    document.addEventListener("visibilitychange", onVisible);
+    let removed = false;
+    let appHandle: { remove: () => Promise<void> } | undefined;
+    void import("@capacitor/app")
+      .then(({ App }) => {
+        if (removed) return;
+        return App.addListener("appStateChange", ({ isActive }) => {
+          if (isActive) reconnect();
+        });
+      })
+      .then((handle) => {
+        if (!handle) return;
+        if (removed) {
+          void handle.remove();
+          return;
+        }
+        appHandle = handle;
+      })
+      .catch(() => undefined);
+    return () => {
+      removed = true;
+      window.removeEventListener("online", reconnect);
+      document.removeEventListener("visibilitychange", onVisible);
+      void appHandle?.remove();
+    };
+  }, [connectDirectory, connectSocket]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const work = document.querySelector(".vh-work");
+    const inner = document.querySelector(".vh-work-inner");
+    root.classList.add("vh-chat-open");
+    work?.classList.add("vh-chat-open");
+    inner?.classList.add("vh-chat-open");
+    return () => {
+      root.classList.remove("vh-chat-open");
+      work?.classList.remove("vh-chat-open");
+      inner?.classList.remove("vh-chat-open");
+    };
+  }, []);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const apply = () => {
+      const vv = window.visualViewport;
+      if (!vv) {
+        root.style.setProperty("--vh-keyboard-inset", "0px");
+        return;
+      }
+      const inset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      root.style.setProperty("--vh-keyboard-inset", `${Math.round(inset)}px`);
+    };
+    apply();
+    window.visualViewport?.addEventListener("resize", apply);
+    window.visualViewport?.addEventListener("scroll", apply);
+    window.addEventListener("resize", apply);
+    return () => {
+      window.visualViewport?.removeEventListener("resize", apply);
+      window.visualViewport?.removeEventListener("scroll", apply);
+      window.removeEventListener("resize", apply);
+      root.style.removeProperty("--vh-keyboard-inset");
+    };
+  }, []);
 
   useEffect(() => {
     const el = listRef.current;
@@ -393,8 +663,13 @@ export default function ChatClient() {
       setView("list");
       setActiveRoom(null);
       roomRef.current = null;
+      reconnectingRef.current = false;
+      roomGenRef.current += 1;
+      clearTimer(roomTimerRef);
       wsRef.current?.close();
       setLines([]);
+      setReplyTo(null);
+      setActionLine(null);
     });
   }, [view]);
 
@@ -480,12 +755,18 @@ export default function ChatClient() {
   const mentionOpen = Boolean(mentionQuery && view === "room" && !sheet && !mentionSuppressed);
 
   useEffect(() => {
+    if (actionLine) {
+      return registerAndroidChatOverlayClose(() => setActionLine(null));
+    }
     if (mentionOpen) {
       return registerAndroidChatOverlayClose(() => setMentionSuppressed(true));
     }
+    if (replyTo) {
+      return registerAndroidChatOverlayClose(() => setReplyTo(null));
+    }
     if (!sheet) return;
     return registerAndroidChatOverlayClose(() => setSheet(null));
-  }, [sheet, mentionOpen]);
+  }, [actionLine, mentionOpen, replyTo, sheet]);
 
   useEffect(() => {
     if (!mentionOpen) return;
@@ -526,6 +807,13 @@ export default function ChatClient() {
     setMentionTokens([]);
     setMentionAllDraft(false);
     setMentionSuppressed(false);
+    setReplyTo(null);
+    setActionLine(null);
+    setUnseenCount(0);
+    reconnectingRef.current = false;
+    lastSeqRef.current = 0;
+    linesRef.current = [];
+    hiddenSeqsRef.current = new Set();
     if (mentionCacheRef.current?.roomId === room.roomId) {
       setMentionCandidates(mentionCacheRef.current.users);
     } else {
@@ -549,7 +837,8 @@ export default function ChatClient() {
     body: string,
     clientMessageId: string,
     tokens: ComposerMention[] = mentionTokens,
-    mentionAll = mentionAllDraft
+    mentionAll = mentionAllDraft,
+    replyToSeq?: number | null
   ) {
     const info = await refreshIfNeeded();
     const room = roomRef.current;
@@ -568,6 +857,7 @@ export default function ChatClient() {
         body,
         mentions: tokens.map((t) => t.userId),
         mentionAll,
+        replyToSeq: replyToSeq || undefined,
       })
     );
   }
@@ -619,6 +909,8 @@ export default function ChatClient() {
     setMentionTokens([]);
     setMentionAllDraft(false);
     setMentionSuppressed(false);
+    const reply = replyTo;
+    setReplyTo(null);
     setSending(true);
     upsertLine({
       clientMessageId,
@@ -629,10 +921,12 @@ export default function ChatClient() {
       sentAt: new Date().toISOString(),
       mentions: tokens.map((t) => t.userId),
       mentionAll,
+      replyToSeq: reply?.seq || null,
+      replyTo: reply,
       status: "sending",
     });
     try {
-      await sendCurrent(body, clientMessageId, tokens, mentionAll);
+      await sendCurrent(body, clientMessageId, tokens, mentionAll, reply?.seq);
     } catch {
       setLines((prev) =>
         prev.map((l) =>
@@ -670,7 +964,50 @@ export default function ChatClient() {
     const info = await refreshIfNeeded();
     const room = roomRef.current;
     if (!info || !room) return;
+    reconnectingRef.current = lastSeqRef.current > 0;
+    roomAttemptRef.current = 0;
     await connectSocket(info, room.roomId);
+  }
+
+  function jumpToBottom() {
+    const el = listRef.current;
+    if (!el) return;
+    stickRef.current = true;
+    setUnseenCount(0);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function openActions(line: ChatLine) {
+    if (!line.seq) return;
+    setNowTick(Date.now());
+    setActionLine(line);
+  }
+
+  function startReply(line: ChatLine) {
+    if (!line.seq || line.deletionType) return;
+    setReplyTo({
+      seq: line.seq,
+      senderUserId: line.senderUserId,
+      sender: line.sender,
+      preview: line.body.slice(0, 80),
+      state: "ok",
+    });
+    setActionLine(null);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }
+
+  function sendHide(seq: number) {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "hide", seq }));
+    setActionLine(null);
+  }
+
+  function sendDelete(seq: number, mode: "everyone" | "admin") {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "delete", seq, mode }));
+    setActionLine(null);
   }
 
   async function handleCreate() {
@@ -742,9 +1079,14 @@ export default function ChatClient() {
   const inviteTeams = visibleInviteTeams(inviteCandidates);
   const inviteRoles = visibleInviteRoles(inviteCandidates);
   const selectedCount = inviteSelectionCount(selectedIds);
+  const linkStatus = chatReconnectStatus({
+    connected: view === "room" ? connected : directoryConnected,
+    failingSinceMs: failingSince,
+    nowMs: nowTick,
+  });
 
   return (
-    <div className="vh-chat">
+    <div className={`vh-chat ${view === "room" ? "is-room" : "is-list"}`}>
       {view === "list" ? (
         <>
           <div className="vh-chat-list-head">
@@ -794,8 +1136,13 @@ export default function ChatClient() {
                 setView("list");
                 setActiveRoom(null);
                 roomRef.current = null;
+                reconnectingRef.current = false;
+                roomGenRef.current += 1;
+                clearTimer(roomTimerRef);
                 wsRef.current?.close();
                 setLines([]);
+                setReplyTo(null);
+                setActionLine(null);
               }}
             >
               목록
@@ -806,9 +1153,13 @@ export default function ChatClient() {
                 <span className="vh-chat-member-count">{activeRoom.memberCount}명</span>
               ) : null}
             </button>
-            <span className={`vh-chat-dot ${connected ? "is-on" : "is-off"}`}>
-              {connected ? "연결" : "끊김"}
-            </span>
+            {linkStatus === "reconnecting" ? (
+              <span className="vh-chat-dot">재연결 중…</span>
+            ) : linkStatus === "failed" ? (
+              <span className="vh-chat-dot">끊김</span>
+            ) : (
+              <span className="vh-chat-dot is-on" aria-hidden="true" />
+            )}
           </div>
           {error ? <p className="vh-chat-error">{error}</p> : null}
           <div
@@ -816,7 +1167,9 @@ export default function ChatClient() {
             className="vh-chat-log"
             onScroll={(e) => {
               const el = e.currentTarget;
-              stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+              const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+              stickRef.current = nearBottom;
+              if (nearBottom) setUnseenCount(0);
               if (el.scrollTop < 48) requestOlderHistory();
             }}
           >
@@ -833,27 +1186,48 @@ export default function ChatClient() {
             {lines.map((line) => {
               const mine = tokenInfo ? line.senderUserId === tokenInfo.user.userId : false;
               const admin = line.senderRole === "admin";
-              const selfMentioned = isSelfMentioned({
-                myUserId: tokenInfo?.user.userId,
-                mentions: line.mentions,
-                mentionAll: line.mentionAll,
-                senderUserId: line.senderUserId,
-              });
+              const deleted = Boolean(line.deletionType);
+              const selfMentioned =
+                !deleted &&
+                isSelfMentioned({
+                  myUserId: tokenInfo?.user.userId,
+                  mentions: line.mentions,
+                  mentionAll: line.mentionAll,
+                  senderUserId: line.senderUserId,
+                });
               const nameByUserId = new Map<number, string>(mentionNamesRef.current);
               for (const c of mentionCandidates) nameByUserId.set(c.userId, c.displayName);
               for (const m of members) nameByUserId.set(m.userId, m.displayName);
               for (const token of mentionTokens) {
                 if (token.label) nameByUserId.set(token.userId, token.label);
               }
-              const parts = splitMentionBody(line.body, {
-                mentions: line.mentions,
-                mentionAll: line.mentionAll,
-                nameByUserId,
-              });
+              const parts = deleted
+                ? []
+                : splitMentionBody(line.body, {
+                    mentions: line.mentions,
+                    mentionAll: line.mentionAll,
+                    nameByUserId,
+                  });
               return (
                 <div
                   key={line.clientMessageId}
-                  className={`vh-chat-bubble ${mine ? "is-mine" : "is-theirs"} ${admin ? "is-admin" : ""}`}
+                  className={`vh-chat-bubble ${mine ? "is-mine" : "is-theirs"} ${admin ? "is-admin" : ""} ${deleted ? "is-deleted" : ""}`}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    openActions(line);
+                  }}
+                  onPointerDown={() => {
+                    if (pressTimerRef.current != null) window.clearTimeout(pressTimerRef.current);
+                    pressTimerRef.current = window.setTimeout(() => openActions(line), 420);
+                  }}
+                  onPointerUp={() => {
+                    if (pressTimerRef.current != null) window.clearTimeout(pressTimerRef.current);
+                    pressTimerRef.current = null;
+                  }}
+                  onPointerLeave={() => {
+                    if (pressTimerRef.current != null) window.clearTimeout(pressTimerRef.current);
+                    pressTimerRef.current = null;
+                  }}
                 >
                   {admin ? (
                     <div className="vh-chat-admin-badge">🛡 관리자 · {line.sender}</div>
@@ -861,14 +1235,24 @@ export default function ChatClient() {
                     <div className="vh-chat-name">{line.sender}</div>
                   ) : null}
                   {selfMentioned ? <div className="vh-chat-mention-self">나를 멘션</div> : null}
+                  {line.replyTo ? (
+                    <div className={`vh-chat-reply ${line.replyTo.state !== "ok" ? "is-gone" : ""}`}>
+                      <strong>{line.replyTo.state === "ok" ? line.replyTo.sender : "답장"}</strong>
+                      <span>{line.replyTo.preview}</span>
+                    </div>
+                  ) : null}
                   <div className="vh-chat-body">
-                    {parts.map((part, idx) =>
-                      part.kind === "mention" ? (
-                        <span key={`${line.clientMessageId}-m-${idx}`} className="vh-chat-mention">
-                          {part.text}
-                        </span>
-                      ) : (
-                        <span key={`${line.clientMessageId}-t-${idx}`}>{part.text}</span>
+                    {deleted ? (
+                      displayTombstone(line.deletionType)
+                    ) : (
+                      parts.map((part, idx) =>
+                        part.kind === "mention" ? (
+                          <span key={`${line.clientMessageId}-m-${idx}`} className="vh-chat-mention">
+                            {part.text}
+                          </span>
+                        ) : (
+                          <span key={`${line.clientMessageId}-t-${idx}`}>{part.text}</span>
+                        )
                       )
                     )}
                   </div>
@@ -886,6 +1270,11 @@ export default function ChatClient() {
               );
             })}
           </div>
+          {unseenCount > 0 ? (
+            <button type="button" className="vh-chat-jump" onClick={jumpToBottom}>
+              새 메시지 {unseenCount > 99 ? "99+" : unseenCount} ↓
+            </button>
+          ) : null}
           <form
             className="vh-chat-composer"
             onSubmit={(e) => {
@@ -893,6 +1282,17 @@ export default function ChatClient() {
               void handleSend();
             }}
           >
+            {replyTo ? (
+              <div className="vh-chat-reply-draft">
+                <div>
+                  <strong>{replyTo.sender}</strong>
+                  <span>{replyTo.preview}</span>
+                </div>
+                <button type="button" className="vh-chat-back" onClick={() => setReplyTo(null)}>
+                  X
+                </button>
+              </div>
+            ) : null}
             {mentionOpen && mentionQuery ? (
               <div className="vh-chat-suggest" role="listbox" aria-label="멘션">
                 {mentionSuggestions.map((hit) => (
@@ -947,13 +1347,52 @@ export default function ChatClient() {
             </button>
             </div>
           </form>
-          {!connected ? (
+          {linkStatus === "failed" ? (
             <button type="button" className="vh-chat-reconnect" onClick={() => void handleReconnect()}>
-              다시 연결
+              다시 시도
             </button>
           ) : null}
         </>
       )}
+
+      {actionLine ? (
+        <div className="vh-chat-action-scrim" onClick={() => setActionLine(null)}>
+          <div
+            className="vh-chat-action-menu"
+            role="menu"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {chatActionItems({
+              myUserId: tokenInfo?.user.userId,
+              myRole: tokenInfo?.user.role,
+              senderUserId: actionLine.senderUserId,
+              sentAt: actionLine.sentAt,
+              deletionType: actionLine.deletionType,
+              nowMs: nowTick,
+            }).map((item) => (
+              <button
+                key={item}
+                type="button"
+                className="vh-chat-action-item"
+                onClick={() => {
+                  if (item === "reply" && actionLine.seq) startReply(actionLine);
+                  if (item === "hide" && actionLine.seq) sendHide(actionLine.seq);
+                  if (item === "delete-everyone" && actionLine.seq) sendDelete(actionLine.seq, "everyone");
+                  if (item === "delete-admin" && actionLine.seq) sendDelete(actionLine.seq, "admin");
+                }}
+              >
+                {item === "reply"
+                  ? "답장"
+                  : item === "hide"
+                    ? "나에게서만 삭제"
+                    : item === "delete-everyone"
+                      ? "모두에게서 삭제"
+                      : "관리자 삭제"}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       {sheet === "create" ? (
         <div className="vh-chat-sheet vh-chat-sheet-create" role="dialog" aria-label="채팅방 만들기">

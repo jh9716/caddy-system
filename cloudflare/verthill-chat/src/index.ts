@@ -3,28 +3,45 @@ import { ChatDirectory } from "./directory";
 import {
   chatInternalSecret,
   internalAuthHeaders,
+  verifyInternalRequest,
 } from "./internalAuth";
 import {
   DIRECTORY_NAME,
-    HISTORY_LIMIT,
-    MAX_CONNECTIONS,
-    MAX_CONNECTIONS_ALL,
-    MESSAGE_MAX,
+  DIRECTORY_TOMBSTONE_PREVIEW,
+  HISTORY_LIMIT,
+  MAX_CONNECTIONS,
+  MAX_CONNECTIONS_ALL,
+  MESSAGE_MAX,
+  MESSAGE_RETENTION_MS,
+  REPLY_DELETED,
+  RETENTION_ALARM_MS,
+  RETENTION_BATCH,
+  canAdminDelete,
+  canDeleteForEveryone,
+  clampSyncAfterSeq,
+  directorySafePreview,
+  filterMentionsToMembers,
   isAllRoomId,
-    isCustomRoomId,
-    isLegacyTeamRoomId,
-    isValidRoomName,
-    senderRoleFromClaims,
-    truncatePreview,
-    validateIncomingHistory,
-    validateIncomingMessage,
-    validateIncomingRead,
-    filterMentionsToMembers,
-    mentionsToWire,
-    parseStoredMentionAll,
-    parseStoredMentions,
-    resolveMentionAll,
-    type ChatMessage,
+  isCustomRoomId,
+  isLegacyTeamRoomId,
+  isValidRoomName,
+  mentionsToWire,
+  parseDeletionType,
+  parseOptionalSeq,
+  parseStoredMentionAll,
+  parseStoredMentions,
+  replyTargetFromRow,
+  resolveMentionAll,
+  senderRoleFromClaims,
+  validateIncomingDelete,
+  validateIncomingHide,
+  validateIncomingHistory,
+  validateIncomingMessage,
+  validateIncomingRead,
+  validateIncomingSync,
+  type ChatDeletionType,
+  type ChatMessage,
+  type MessageDeletedEvent,
 } from "./protocol";
 import {
   resolveChatRoomAccess,
@@ -363,12 +380,59 @@ export class ChatRoom extends DurableObject<Env> {
     } catch {
       // already present
     }
+    try {
+      this.ctx.storage.sql.exec(`ALTER TABLE messages ADD COLUMN reply_to_seq INTEGER`);
+    } catch {
+      // already present
+    }
+    try {
+      this.ctx.storage.sql.exec(`ALTER TABLE messages ADD COLUMN deleted_at TEXT`);
+    } catch {
+      // already present
+    }
+    try {
+      this.ctx.storage.sql.exec(`ALTER TABLE messages ADD COLUMN deletion_type TEXT`);
+    } catch {
+      // already present
+    }
+    try {
+      this.ctx.storage.sql.exec(`ALTER TABLE messages ADD COLUMN deleted_by_user_id INTEGER`);
+    } catch {
+      // already present
+    }
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS hidden_messages (
+        user_id INTEGER NOT NULL,
+        seq INTEGER NOT NULL,
+        hidden_at TEXT NOT NULL,
+        PRIMARY KEY (user_id, seq)
+      )
+    `);
     this.ctx.storage.sql.exec(
       `CREATE INDEX IF NOT EXISTS messages_seq ON messages(seq)`
     );
+    this.ctx.storage.sql.exec(
+      `CREATE INDEX IF NOT EXISTS messages_sent_at ON messages(sent_at)`
+    );
+    this.ctx.storage.sql.exec(
+      `CREATE INDEX IF NOT EXISTS messages_reply_to ON messages(reply_to_seq)`
+    );
+    this.ctx.storage.sql.exec(
+      `CREATE INDEX IF NOT EXISTS hidden_messages_user ON hidden_messages(user_id)`
+    );
+    void this.ensureRetentionAlarm();
   }
 
   async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (request.method === "POST" && url.pathname === "/internal/retention") {
+      if (!(await verifyInternalRequest(request, this.env, url.pathname))) {
+        return json({ error: "forbidden" }, 403);
+      }
+      await this.ensureRetentionAlarm();
+      this.purgeExpiredMessages(RETENTION_BATCH);
+      return json({ ok: true });
+    }
     const authorized = await authorizeSocket(request, this.env);
     if (authorized instanceof Response) return authorized;
     const cap = isAllRoomId(authorized.room) ? MAX_CONNECTIONS_ALL : MAX_CONNECTIONS;
@@ -381,7 +445,7 @@ export class ChatRoom extends DurableObject<Env> {
     this.ctx.acceptWebSocket(server);
     const attach: SocketAttach = { claims: authorized.claims, roomId: authorized.room };
     server.serializeAttachment(attach);
-    this.sendHistory(server, null, HISTORY_LIMIT);
+    this.sendHistory(server, authorized.claims.userId, null, HISTORY_LIMIT);
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -415,7 +479,9 @@ export class ChatRoom extends DurableObject<Env> {
       });
       return;
     }
-    if (parsed && typeof parsed === "object" && (parsed as { type?: string }).type === "read") {
+    const type =
+      parsed && typeof parsed === "object" ? String((parsed as { type?: unknown }).type || "") : "";
+    if (type === "read") {
       const read = validateIncomingRead(parsed);
       if (!read.ok) {
         sendJson(ws, { type: "error", code: read.code, message: read.message });
@@ -424,13 +490,44 @@ export class ChatRoom extends DurableObject<Env> {
       void this.notifyDirectoryRead(attach.roomId, attach.claims.userId, read.seq);
       return;
     }
-    if (parsed && typeof parsed === "object" && (parsed as { type?: string }).type === "history") {
+    if (type === "history") {
       const hist = validateIncomingHistory(parsed);
       if (!hist.ok) {
         sendJson(ws, { type: "error", code: hist.code, message: hist.message });
         return;
       }
-      this.sendHistory(ws, hist.beforeSeq, hist.limit);
+      this.sendHistory(ws, attach.claims.userId, hist.beforeSeq, hist.limit);
+      return;
+    }
+    if (type === "sync") {
+      const sync = validateIncomingSync(parsed);
+      if (!sync.ok) {
+        sendJson(ws, { type: "error", code: sync.code, message: sync.message });
+        return;
+      }
+      this.sendSync(ws, attach.claims.userId, sync.afterSeq, sync.limit);
+      return;
+    }
+    if (type === "hide") {
+      const hide = validateIncomingHide(parsed);
+      if (!hide.ok) {
+        sendJson(ws, { type: "error", code: hide.code, message: hide.message });
+        return;
+      }
+      this.persistQueue = this.persistQueue
+        .then(() => this.hideForMe(ws, attach, hide.seq))
+        .catch(() => undefined);
+      return;
+    }
+    if (type === "delete") {
+      const del = validateIncomingDelete(parsed);
+      if (!del.ok) {
+        sendJson(ws, { type: "error", code: del.code, message: del.message });
+        return;
+      }
+      this.persistQueue = this.persistQueue
+        .then(() => this.deleteMessage(ws, attach, del.seq, del.mode))
+        .catch(() => undefined);
       return;
     }
     const checked = validateIncomingMessage(parsed);
@@ -455,6 +552,7 @@ export class ChatRoom extends DurableObject<Env> {
       body: string;
       mentions: unknown;
       mentionAll: unknown;
+      replyToSeq: unknown;
     }
   ) {
     const sentAt = new Date().toISOString();
@@ -480,11 +578,25 @@ export class ChatRoom extends DurableObject<Env> {
       mentionIds = filterMentionsToMembers(mentionIds, memberIds ?? []);
     }
     const mentions = mentionsToWire(mentionIds);
+    const replyToSeq = parseOptionalSeq(value.replyToSeq);
+    if (value.replyToSeq != null && value.replyToSeq !== "" && replyToSeq == null) {
+      sendJson(ws, { type: "error", code: "invalid_reply", message: "replyToSeq required" });
+      return;
+    }
+    if (replyToSeq != null) {
+      const target = this.ctx.storage.sql
+        .exec(`SELECT seq FROM messages WHERE seq = ?`, replyToSeq)
+        .toArray();
+      if (target.length === 0) {
+        sendJson(ws, { type: "error", code: "reply_missing", message: "reply target missing" });
+        return;
+      }
+    }
 
     this.ctx.storage.sql.exec(
       `INSERT INTO messages
-        (client_message_id, sender_user_id, sender, sender_role, body, sent_at, mentions_json, mention_all)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        (client_message_id, sender_user_id, sender, sender_role, body, sent_at, mentions_json, mention_all, reply_to_seq)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       value.clientMessageId,
       attach.claims.userId,
       attach.claims.displayName,
@@ -492,28 +604,13 @@ export class ChatRoom extends DurableObject<Env> {
       value.body,
       sentAt,
       JSON.stringify(mentions),
-      mentionAll ? 1 : 0
+      mentionAll ? 1 : 0,
+      replyToSeq
     );
-    const inserted = this.ctx.storage.sql
-      .exec(
-        `SELECT seq FROM messages WHERE client_message_id = ?`,
-        value.clientMessageId
-      )
-      .one();
-    const outbound: ChatMessage = {
-      type: "message",
-      clientMessageId: value.clientMessageId,
-      senderUserId: attach.claims.userId,
-      sender: attach.claims.displayName,
-      senderRole,
-      body: value.body,
-      sentAt,
-      seq: Number(inserted.seq),
-      mentions,
-      mentionAll,
-    };
-    this.broadcast(outbound);
-    void this.notifyDirectoryMessage(attach.roomId, outbound);
+    const inserted = this.loadMessageByClientId(value.clientMessageId);
+    if (!inserted) return;
+    this.broadcastVisible(inserted);
+    void this.notifyDirectoryMessage(attach.roomId, inserted);
   }
 
   webSocketClose(ws: WebSocket) {
@@ -558,47 +655,107 @@ export class ChatRoom extends DurableObject<Env> {
     return null;
   }
 
-  private sendHistory(ws: WebSocket, beforeSeq: number | null, limit: number) {
-    const rows =
-      beforeSeq == null
-        ? this.ctx.storage.sql
-            .exec(
-              `SELECT seq, client_message_id, sender_user_id, sender, sender_role, body, sent_at, mentions_json, mention_all
-               FROM messages
-               ORDER BY seq DESC
-               LIMIT ?`,
-              limit
-            )
-            .toArray()
-        : this.ctx.storage.sql
-            .exec(
-              `SELECT seq, client_message_id, sender_user_id, sender, sender_role, body, sent_at, mentions_json, mention_all
-               FROM messages
-               WHERE seq < ?
-               ORDER BY seq DESC
-               LIMIT ?`,
-              beforeSeq,
-              limit
-            )
-            .toArray();
-    rows.reverse();
-    const messages: ChatMessage[] = rows.map((row) => ({
+  private messageSelectSql() {
+    return `SELECT m.seq, m.client_message_id, m.sender_user_id, m.sender, m.sender_role,
+              m.body, m.sent_at, m.mentions_json, m.mention_all, m.reply_to_seq,
+              m.deleted_at, m.deletion_type,
+              r.seq AS reply_seq, r.sender_user_id AS reply_sender_user_id,
+              r.sender AS reply_sender, r.body AS reply_body,
+              r.deletion_type AS reply_deletion_type,
+              rh.seq AS reply_hidden
+            FROM messages m
+            LEFT JOIN hidden_messages h ON h.user_id = ? AND h.seq = m.seq
+            LEFT JOIN messages r ON r.seq = m.reply_to_seq
+            LEFT JOIN hidden_messages rh ON rh.user_id = ? AND rh.seq = m.reply_to_seq
+            WHERE h.seq IS NULL`;
+  }
+
+  private rowToMessage(row: Record<string, unknown>): ChatMessage {
+    const deletionType = parseDeletionType(row.deletion_type);
+    const replyToSeq = parseOptionalSeq(row.reply_to_seq);
+    return {
       type: "message",
       clientMessageId: String(row.client_message_id),
       senderUserId: Number(row.sender_user_id || 0),
       sender: String(row.sender),
       senderRole: senderRoleFromClaims(String(row.sender_role || "caddy")),
-      body: String(row.body),
+      body: deletionType ? "" : String(row.body || ""),
       sentAt: String(row.sent_at),
       seq: Number(row.seq),
-      mentions: parseStoredMentions(row.mentions_json),
-      mentionAll: parseStoredMentionAll(row.mention_all),
-    }));
+      mentions: deletionType ? [] : parseStoredMentions(row.mentions_json),
+      mentionAll: deletionType ? false : parseStoredMentionAll(row.mention_all),
+      replyToSeq,
+      replyTo: replyTargetFromRow({
+        replyToSeq,
+        targetSeq: parseOptionalSeq(row.reply_seq),
+        targetSenderUserId: Number(row.reply_sender_user_id || 0),
+        targetSender: row.reply_sender == null ? "" : String(row.reply_sender),
+        targetBody: row.reply_body == null ? "" : String(row.reply_body),
+        targetDeletionType: row.reply_deletion_type,
+        targetHidden: row.reply_hidden != null && row.reply_hidden !== "",
+      }),
+      deletionType,
+      deletedAt: row.deleted_at ? String(row.deleted_at) : null,
+    };
+  }
+
+  private loadMessageByClientId(clientMessageId: string): ChatMessage | null {
+    const row = this.ctx.storage.sql
+      .exec(
+        `SELECT m.seq, m.client_message_id, m.sender_user_id, m.sender, m.sender_role,
+                m.body, m.sent_at, m.mentions_json, m.mention_all, m.reply_to_seq,
+                m.deleted_at, m.deletion_type,
+                r.seq AS reply_seq, r.sender_user_id AS reply_sender_user_id,
+                r.sender AS reply_sender, r.body AS reply_body,
+                r.deletion_type AS reply_deletion_type
+         FROM messages m
+         LEFT JOIN messages r ON r.seq = m.reply_to_seq
+         WHERE m.client_message_id = ?`,
+        clientMessageId
+      )
+      .toArray()[0];
+    return row ? this.rowToMessage(row) : null;
+  }
+
+  private sendHistory(ws: WebSocket, userId: number, beforeSeq: number | null, limit: number) {
+    const rows =
+      beforeSeq == null
+        ? this.ctx.storage.sql
+            .exec(
+              `${this.messageSelectSql()}
+               ORDER BY m.seq DESC
+               LIMIT ?`,
+              userId,
+              userId,
+              limit
+            )
+            .toArray()
+        : this.ctx.storage.sql
+            .exec(
+              `${this.messageSelectSql()}
+               AND m.seq < ?
+               ORDER BY m.seq DESC
+               LIMIT ?`,
+              userId,
+              userId,
+              beforeSeq,
+              limit
+            )
+            .toArray();
+    rows.reverse();
+    const messages = rows.map((row) => this.rowToMessage(row));
     const oldestSeq = messages.length ? Number(messages[0]!.seq) : null;
     let hasMore = false;
     if (oldestSeq != null) {
       const older = this.ctx.storage.sql
-        .exec(`SELECT 1 AS ok FROM messages WHERE seq < ? LIMIT 1`, oldestSeq)
+        .exec(
+          `SELECT 1 AS ok FROM messages m
+           LEFT JOIN hidden_messages h ON h.user_id = ? AND h.seq = m.seq
+           WHERE h.seq IS NULL AND m.seq < ?
+           LIMIT 1`,
+          userId,
+          oldestSeq
+        )
         .toArray();
       hasMore = older.length > 0;
     }
@@ -610,38 +767,331 @@ export class ChatRoom extends DurableObject<Env> {
     });
   }
 
-  private broadcast(event: ChatMessage) {
-    const payload = JSON.stringify(event);
-    const now = Math.floor(Date.now() / 1000);
-    for (const socket of this.ctx.getWebSockets()) {
-      const attach = socket.deserializeAttachment() as SocketAttach | ChatTokenClaims | null;
-      const exp =
-        attach && typeof attach === "object" && "claims" in attach
-          ? attach.claims.exp
-          : attach && typeof attach === "object"
-            ? (attach as ChatTokenClaims).exp
-            : 0;
-      if (!attach || exp <= now) {
-        this.expire(socket);
-        continue;
+  private sendSync(ws: WebSocket, userId: number, afterSeq: number, limit: number) {
+    const maxRow = this.ctx.storage.sql
+      .exec(`SELECT MAX(seq) AS max_seq FROM messages`)
+      .toArray()[0];
+    const after = clampSyncAfterSeq(afterSeq, Number(maxRow?.max_seq || 0));
+    const rows = this.ctx.storage.sql
+      .exec(
+        `${this.messageSelectSql()}
+         AND m.seq > ?
+         ORDER BY m.seq ASC
+         LIMIT ?`,
+        userId,
+        userId,
+        after,
+        limit
+      )
+      .toArray();
+    const messages = rows.map((row) => this.rowToMessage(row));
+    const newestSeq = messages.length ? Number(messages[messages.length - 1]!.seq) : after;
+    const newer = this.ctx.storage.sql
+      .exec(
+        `SELECT 1 AS ok FROM messages m
+         LEFT JOIN hidden_messages h ON h.user_id = ? AND h.seq = m.seq
+         WHERE h.seq IS NULL AND m.seq > ?
+         LIMIT 1`,
+        userId,
+        newestSeq
+      )
+      .toArray();
+    sendJson(ws, {
+      type: "sync",
+      messages,
+      hasMore: newer.length > 0,
+      newestSeq,
+    });
+  }
+
+  private hideForMe(ws: WebSocket, attach: SocketAttach, seq: number) {
+    const exists = this.ctx.storage.sql
+      .exec(`SELECT seq FROM messages WHERE seq = ?`, seq)
+      .toArray();
+    if (exists.length === 0) {
+      sendJson(ws, { type: "error", code: "hide_missing", message: "message missing" });
+      return;
+    }
+    this.ctx.storage.sql.exec(
+      `INSERT OR IGNORE INTO hidden_messages (user_id, seq, hidden_at) VALUES (?, ?, ?)`,
+      attach.claims.userId,
+      seq,
+      new Date().toISOString()
+    );
+    this.sendToUser(attach.claims.userId, { type: "hidden", seq });
+  }
+
+  private deleteMessage(
+    ws: WebSocket,
+    attach: SocketAttach,
+    seq: number,
+    mode: "everyone" | "admin"
+  ) {
+    const row = this.ctx.storage.sql
+      .exec(
+        `SELECT seq, sender_user_id, sender, sender_role, sent_at, deletion_type
+         FROM messages WHERE seq = ?`,
+        seq
+      )
+      .toArray()[0];
+    if (!row) {
+      sendJson(ws, { type: "error", code: "delete_missing", message: "message missing" });
+      return;
+    }
+    if (parseDeletionType(row.deletion_type)) {
+      sendJson(ws, { type: "error", code: "already_deleted", message: "already deleted" });
+      return;
+    }
+    const senderUserId = Number(row.sender_user_id || 0);
+    const sentAtMs = new Date(String(row.sent_at)).getTime();
+    if (mode === "admin") {
+      if (!canAdminDelete(attach.claims.role)) {
+        sendJson(ws, { type: "error", code: "forbidden", message: "admin only" });
+        return;
       }
+    } else if (
+      !canDeleteForEveryone({
+        actorUserId: attach.claims.userId,
+        senderUserId,
+        sentAtMs,
+      })
+    ) {
+      sendJson(ws, { type: "error", code: "delete_window", message: "delete window closed" });
+      return;
+    }
+    const deletedAt = new Date().toISOString();
+    const deletionType: ChatDeletionType = mode;
+    this.ctx.storage.sql.exec(
+      `UPDATE messages
+       SET body = '',
+           mentions_json = '[]',
+           mention_all = 0,
+           deleted_at = ?,
+           deletion_type = ?,
+           deleted_by_user_id = ?
+       WHERE seq = ?`,
+      deletedAt,
+      deletionType,
+      attach.claims.userId,
+      seq
+    );
+    const event: MessageDeletedEvent = {
+      type: "message_deleted",
+      seq,
+      deletionType,
+      deletedAt,
+      senderUserId,
+      sender: String(row.sender),
+      senderRole: senderRoleFromClaims(String(row.sender_role || "caddy")),
+      sentAt: String(row.sent_at),
+    };
+    this.broadcastJson(event);
+    void this.notifyDirectoryTombstone(attach.roomId, event);
+  }
+
+  private liveAttach(socket: WebSocket): SocketAttach | null {
+    const attach = socket.deserializeAttachment() as SocketAttach | ChatTokenClaims | null;
+    const now = Math.floor(Date.now() / 1000);
+    if (!attach) return this.expire(socket);
+    if ("claims" in attach && attach.claims) {
+      if (attach.claims.exp <= now) return this.expire(socket);
+      return attach;
+    }
+    const claims = attach as ChatTokenClaims;
+    if (claims.exp <= now) return this.expire(socket);
+    return { claims, roomId: claims.v === 1 ? claims.room : "" };
+  }
+
+  private broadcastVisible(event: ChatMessage) {
+    for (const socket of this.ctx.getWebSockets()) {
+      const attach = this.liveAttach(socket);
+      if (!attach) continue;
+      if (event.seq && this.isHiddenFor(attach.claims.userId, event.seq)) continue;
+      this.sendSocket(socket, this.redactHiddenReply(event, attach.claims.userId));
+    }
+  }
+
+  private redactHiddenReply(event: ChatMessage, userId: number): ChatMessage {
+    const replySeq = event.replyToSeq;
+    if (replySeq == null || !event.replyTo || !this.isHiddenFor(userId, replySeq)) {
+      return event;
+    }
+    return {
+      ...event,
+      replyTo: {
+        seq: replySeq,
+        senderUserId: 0,
+        sender: "",
+        preview: REPLY_DELETED,
+        state: "deleted",
+      },
+    };
+  }
+
+  private broadcastJson(event: object) {
+    for (const socket of this.ctx.getWebSockets()) {
+      const attach = this.liveAttach(socket);
+      if (!attach) continue;
+      this.sendSocket(socket, event);
+    }
+  }
+
+  private sendToUser(userId: number, event: object) {
+    for (const socket of this.ctx.getWebSockets()) {
+      const attach = this.liveAttach(socket);
+      if (!attach || attach.claims.userId !== userId) continue;
+      this.sendSocket(socket, event);
+    }
+  }
+
+  private sendSocket(socket: WebSocket, event: object) {
+    try {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify(event));
+      } else {
+        socket.close(1011, "dead");
+      }
+    } catch {
       try {
-        if (socket.readyState === WebSocket.OPEN) {
-          socket.send(payload);
-        } else {
-          socket.close(1011, "dead");
-        }
+        socket.close(1011, "send_failed");
       } catch {
-        try {
-          socket.close(1011, "send_failed");
-        } catch {
-          // ignore
-        }
+        // ignore
       }
     }
   }
 
+  private isHiddenFor(userId: number, seq: number): boolean {
+    const rows = this.ctx.storage.sql
+      .exec(
+        `SELECT 1 AS ok FROM hidden_messages WHERE user_id = ? AND seq = ?`,
+        userId,
+        seq
+      )
+      .toArray();
+    return rows.length > 0;
+  }
+
+  private latestVisiblePreview(): {
+    seq: number;
+    preview: string;
+    senderUserId: number;
+    senderName: string;
+    senderRole: string;
+    sentAt: string;
+  } | null {
+    const row = this.ctx.storage.sql
+      .exec(
+        `SELECT seq, sender_user_id, sender, sender_role, body, sent_at, deletion_type
+         FROM messages
+         ORDER BY seq DESC
+         LIMIT 1`
+      )
+      .toArray()[0];
+    if (!row) return null;
+    const deletionType = parseDeletionType(row.deletion_type);
+    return {
+      seq: Number(row.seq),
+      preview: directorySafePreview({
+        body: String(row.body || ""),
+        deletionType,
+      }),
+      senderUserId: Number(row.sender_user_id || 0),
+      senderName: String(row.sender || ""),
+      senderRole: String(row.sender_role || "caddy"),
+      sentAt: String(row.sent_at),
+    };
+  }
+
+  async alarm() {
+    let delay = RETENTION_ALARM_MS;
+    try {
+      this.purgeExpiredMessages(RETENTION_BATCH);
+      const remaining = this.ctx.storage.sql
+        .exec(
+          `SELECT 1 AS ok FROM messages WHERE sent_at < ? LIMIT 1`,
+          new Date(Date.now() - MESSAGE_RETENTION_MS).toISOString()
+        )
+        .toArray();
+      if (remaining.length > 0) delay = 5 * 60 * 1000;
+    } catch {
+      delay = 5 * 60 * 1000;
+    } finally {
+      try {
+        await this.ctx.storage.setAlarm(Date.now() + delay);
+      } catch {
+        // alarm optional on local
+      }
+    }
+  }
+
+  private async ensureRetentionAlarm() {
+    try {
+      const existing = await this.ctx.storage.getAlarm();
+      if (existing == null) {
+        await this.ctx.storage.setAlarm(Date.now() + RETENTION_ALARM_MS);
+      }
+    } catch {
+      // alarm optional on local
+    }
+  }
+
+  private purgeExpiredMessages(limit: number) {
+    const cutoff = new Date(Date.now() - MESSAGE_RETENTION_MS).toISOString();
+    const old = this.ctx.storage.sql
+      .exec(
+        `SELECT seq FROM messages WHERE sent_at < ? ORDER BY seq ASC LIMIT ?`,
+        cutoff,
+        limit
+      )
+      .toArray();
+    for (const row of old) {
+      const seq = Number(row.seq);
+      this.ctx.storage.sql.exec(`DELETE FROM hidden_messages WHERE seq = ?`, seq);
+      this.ctx.storage.sql.exec(`DELETE FROM messages WHERE seq = ? AND sent_at < ?`, seq, cutoff);
+    }
+  }
+
+  private async notifyDirectoryTombstone(roomId: string, event: MessageDeletedEvent) {
+    const latest = this.latestVisiblePreview();
+    if (!latest) {
+      await this.notifyDirectoryPreview(roomId, {
+        seq: event.seq,
+        preview: DIRECTORY_TOMBSTONE_PREVIEW,
+        senderUserId: event.senderUserId,
+        senderName: event.sender,
+        senderRole: event.senderRole,
+        sentAt: event.sentAt,
+      });
+      return;
+    }
+    await this.notifyDirectoryPreview(roomId, latest);
+  }
+
   private async notifyDirectoryMessage(roomId: string, message: ChatMessage) {
+    await this.notifyDirectoryPreview(roomId, {
+      seq: message.seq || 0,
+      preview: directorySafePreview({
+        body: message.body,
+        deletionType: message.deletionType,
+      }),
+      senderUserId: message.senderUserId,
+      senderName: message.sender,
+      senderRole: message.senderRole,
+      sentAt: message.sentAt,
+    });
+  }
+
+  private async notifyDirectoryPreview(
+    roomId: string,
+    payload: {
+      seq: number;
+      preview: string;
+      senderUserId: number;
+      senderName: string;
+      senderRole: string;
+      sentAt: string;
+    }
+  ) {
     if (!isAllRoomId(roomId) && !isCustomRoomId(roomId)) return;
     try {
       const headers = await internalAuthHeaders(
@@ -654,12 +1104,12 @@ export class ChatRoom extends DurableObject<Env> {
           headers,
           body: JSON.stringify({
             roomId,
-            seq: message.seq,
-            preview: truncatePreview(message.body),
-            senderUserId: message.senderUserId,
-            senderName: message.sender,
-            senderRole: message.senderRole,
-            sentAt: message.sentAt,
+            seq: payload.seq,
+            preview: payload.preview,
+            senderUserId: payload.senderUserId,
+            senderName: payload.senderName,
+            senderRole: payload.senderRole,
+            sentAt: payload.sentAt,
           }),
         })
       );

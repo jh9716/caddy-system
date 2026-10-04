@@ -37,10 +37,34 @@ export const DIRECTORY_NAME = "verthill-global";
 export const MAX_MENTIONS = 20;
 export const MAX_MENTION_RAW = 100;
 export const MENTION_ALL_LABEL = "전체";
+export const DELETE_FOR_EVERYONE_WINDOW_MS = 10 * 60 * 1000;
+export const MESSAGE_RETENTION_DAYS = 180;
+export const MESSAGE_RETENTION_MS = MESSAGE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+export const RETENTION_ALARM_MS = 24 * 60 * 60 * 1000;
+export const RETENTION_BATCH = 200;
+export const SYNC_LIMIT = 100;
+export const SYNC_PAGE_MAX = 100;
+export const TOMBSTONE_EVERYONE = "메시지가 삭제되었습니다.";
+export const TOMBSTONE_ADMIN = "관리자가 메시지를 삭제했습니다.";
+export const REPLY_DELETED = "삭제된 메시지입니다.";
+export const REPLY_EXPIRED = "보관기간이 지난 메시지입니다.";
+export const DIRECTORY_TOMBSTONE_PREVIEW = "메시지가 삭제되었습니다.";
 
 export type ChatSenderRole = "admin" | "caddy" | "leader";
 
 export type ChatMention = { userId: number };
+
+export type ChatDeletionType = "everyone" | "admin";
+
+export type ChatReplyState = "ok" | "deleted" | "expired";
+
+export type ChatReplyTo = {
+  seq: number;
+  senderUserId: number;
+  sender: string;
+  preview: string;
+  state: ChatReplyState;
+};
 
 export type ChatMessage = {
   type: "message";
@@ -53,6 +77,33 @@ export type ChatMessage = {
   seq?: number;
   mentions: ChatMention[];
   mentionAll: boolean;
+  replyToSeq?: number | null;
+  replyTo?: ChatReplyTo | null;
+  deletionType?: ChatDeletionType | null;
+  deletedAt?: string | null;
+};
+
+export type SyncEvent = {
+  type: "sync";
+  messages: ChatMessage[];
+  hasMore: boolean;
+  newestSeq: number | null;
+};
+
+export type HiddenEvent = {
+  type: "hidden";
+  seq: number;
+};
+
+export type MessageDeletedEvent = {
+  type: "message_deleted";
+  seq: number;
+  deletionType: ChatDeletionType;
+  deletedAt: string;
+  senderUserId: number;
+  sender: string;
+  senderRole: ChatSenderRole;
+  sentAt: string;
 };
 
 export type HistoryEvent = {
@@ -236,6 +287,7 @@ export function validateIncomingMessage(raw: unknown):
       body,
       mentions: input.mentions,
       mentionAll: input.mentionAll,
+      replyToSeq: input.replyToSeq,
     },
   };
 }
@@ -276,4 +328,164 @@ export function validateIncomingHistory(raw: unknown):
     return { ok: false, code: "invalid_limit", message: "limit required" };
   }
   return { ok: true, beforeSeq, limit: Math.min(HISTORY_PAGE_MAX, rawLimit) };
+}
+
+export function parseOptionalSeq(raw: unknown): number | null {
+  if (raw == null || raw === "") return null;
+  const seq = Number(raw);
+  if (!Number.isInteger(seq) || seq <= 0) return null;
+  return seq;
+}
+
+export function parseDeletionType(raw: unknown): ChatDeletionType | null {
+  return raw === "everyone" || raw === "admin" ? raw : null;
+}
+
+export function tombstoneBody(deletionType: ChatDeletionType | null | undefined): string {
+  if (deletionType === "admin") return TOMBSTONE_ADMIN;
+  if (deletionType === "everyone") return TOMBSTONE_EVERYONE;
+  return "";
+}
+
+export function directorySafePreview(input: {
+  body?: string;
+  deletionType?: ChatDeletionType | null;
+}): string {
+  if (input.deletionType) return DIRECTORY_TOMBSTONE_PREVIEW;
+  return truncatePreview(String(input.body ?? ""));
+}
+
+export function canDeleteForEveryone(input: {
+  actorUserId: number;
+  senderUserId: number;
+  sentAtMs: number;
+  nowMs?: number;
+  windowMs?: number;
+}): boolean {
+  if (!Number.isInteger(input.actorUserId) || input.actorUserId <= 0) return false;
+  if (input.actorUserId !== input.senderUserId) return false;
+  const now = input.nowMs ?? Date.now();
+  const windowMs = input.windowMs ?? DELETE_FOR_EVERYONE_WINDOW_MS;
+  return now - input.sentAtMs >= 0 && now - input.sentAtMs <= windowMs;
+}
+
+export function canAdminDelete(role: string | null | undefined): boolean {
+  return role === "admin";
+}
+
+export function replyTargetFromRow(input: {
+  replyToSeq: number | null;
+  targetSeq: number | null;
+  targetSenderUserId?: number | null;
+  targetSender?: string | null;
+  targetBody?: string | null;
+  targetDeletionType?: unknown;
+  targetHidden?: boolean;
+}): ChatReplyTo | null {
+  if (input.replyToSeq == null) return null;
+  if (input.targetHidden) {
+    return {
+      seq: input.replyToSeq,
+      senderUserId: 0,
+      sender: "",
+      preview: REPLY_DELETED,
+      state: "deleted",
+    };
+  }
+  if (input.targetSeq == null) {
+    return {
+      seq: input.replyToSeq,
+      senderUserId: 0,
+      sender: "",
+      preview: REPLY_EXPIRED,
+      state: "expired",
+    };
+  }
+  const deletion = parseDeletionType(input.targetDeletionType);
+  if (deletion) {
+    return {
+      seq: input.targetSeq,
+      senderUserId: Number(input.targetSenderUserId || 0),
+      sender: String(input.targetSender || ""),
+      preview: REPLY_DELETED,
+      state: "deleted",
+    };
+  }
+  return {
+    seq: input.targetSeq,
+    senderUserId: Number(input.targetSenderUserId || 0),
+    sender: String(input.targetSender || ""),
+    preview: truncatePreview(String(input.targetBody || ""), 80),
+    state: "ok",
+  };
+}
+
+export function clampSyncAfterSeq(afterSeq: number, maxSeq: number): number {
+  const after = Number.isInteger(afterSeq) && afterSeq > 0 ? afterSeq : 0;
+  const max = Number.isInteger(maxSeq) && maxSeq > 0 ? maxSeq : 0;
+  return Math.min(after, max);
+}
+
+export function nextSyncCursor(pageNewestSeq: unknown, fallbackAfterSeq: number): number {
+  const newest = Number(pageNewestSeq);
+  if (Number.isInteger(newest) && newest >= 0) return newest;
+  return fallbackAfterSeq;
+}
+
+export function validateIncomingSync(raw: unknown):
+  | { ok: true; afterSeq: number; limit: number }
+  | { ok: false; code: string; message: string } {
+  if (raw == null || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ok: false, code: "invalid_payload", message: "JSON object required" };
+  }
+  const input = raw as Record<string, unknown>;
+  if (input.type !== "sync") {
+    return { ok: false, code: "invalid_type", message: "type must be sync" };
+  }
+  const afterSeq = Number(input.afterSeq);
+  if (!Number.isInteger(afterSeq) || afterSeq < 0) {
+    return { ok: false, code: "invalid_seq", message: "afterSeq required" };
+  }
+  const rawLimit = input.limit == null ? SYNC_LIMIT : Number(input.limit);
+  if (!Number.isInteger(rawLimit) || rawLimit <= 0) {
+    return { ok: false, code: "invalid_limit", message: "limit required" };
+  }
+  return { ok: true, afterSeq, limit: Math.min(SYNC_PAGE_MAX, rawLimit) };
+}
+
+export function validateIncomingHide(raw: unknown):
+  | { ok: true; seq: number }
+  | { ok: false; code: string; message: string } {
+  if (raw == null || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ok: false, code: "invalid_payload", message: "JSON object required" };
+  }
+  const input = raw as Record<string, unknown>;
+  if (input.type !== "hide") {
+    return { ok: false, code: "invalid_type", message: "type must be hide" };
+  }
+  const seq = Number(input.seq);
+  if (!Number.isInteger(seq) || seq <= 0) {
+    return { ok: false, code: "invalid_seq", message: "seq required" };
+  }
+  return { ok: true, seq };
+}
+
+export function validateIncomingDelete(raw: unknown):
+  | { ok: true; seq: number; mode: "everyone" | "admin" }
+  | { ok: false; code: string; message: string } {
+  if (raw == null || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ok: false, code: "invalid_payload", message: "JSON object required" };
+  }
+  const input = raw as Record<string, unknown>;
+  if (input.type !== "delete") {
+    return { ok: false, code: "invalid_type", message: "type must be delete" };
+  }
+  const seq = Number(input.seq);
+  if (!Number.isInteger(seq) || seq <= 0) {
+    return { ok: false, code: "invalid_seq", message: "seq required" };
+  }
+  if (input.mode !== "everyone" && input.mode !== "admin") {
+    return { ok: false, code: "invalid_mode", message: "mode required" };
+  }
+  return { ok: true, seq, mode: input.mode };
 }

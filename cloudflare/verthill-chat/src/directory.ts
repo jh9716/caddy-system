@@ -1,9 +1,15 @@
 import { DurableObject } from "cloudflare:workers";
-import { verifyInternalRequest } from "./internalAuth";
 import {
+  chatInternalSecret,
+  internalAuthHeaders,
+  verifyInternalRequest,
+} from "./internalAuth";
+import {
+  ALLOWED_ROOMS,
   ALL_ROOM_ID,
   ALL_ROOM_NAME,
   MAX_DIRECTORY_CONNECTIONS,
+  RETENTION_ALARM_MS,
   chatNotificationTag,
   clampReadSeq,
   computeUnread,
@@ -18,6 +24,7 @@ import { isChatTokenV2, type ChatTokenClaims } from "./token";
 export type DirectoryEnv = {
   CHAT_AUTH_SECRET: string;
   CHAT_INTERNAL_SECRET?: string;
+  CHAT_ROOM?: DurableObjectNamespace;
 };
 
 type MemberSnap = {
@@ -81,6 +88,7 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
       `CREATE INDEX IF NOT EXISTS members_user ON members(user_id)`
     );
     this.ensureAllRoom();
+    void this.ensureRetentionSweep();
   }
 
   private ensureAllRoom() {
@@ -96,6 +104,7 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
   }
 
   async fetch(request: Request): Promise<Response> {
+    void this.ensureRetentionSweep();
     const url = new URL(request.url);
     if (url.pathname.startsWith("/internal/")) {
       if (!(await verifyInternalRequest(request, this.env, url.pathname))) {
@@ -455,6 +464,60 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
         sendJson(ws, { type: "rooms", rooms: this.listForUser(userId) });
       } catch {
         // ignore
+      }
+    }
+  }
+
+  async alarm() {
+    try {
+      await this.pokeKnownRooms();
+    } finally {
+      try {
+        await this.ctx.storage.setAlarm(Date.now() + RETENTION_ALARM_MS);
+      } catch {
+        // alarm optional on local
+      }
+    }
+  }
+
+  private async ensureRetentionSweep() {
+    try {
+      const existing = await this.ctx.storage.getAlarm();
+      if (existing == null) {
+        await this.ctx.storage.setAlarm(Date.now() + 15_000);
+      }
+    } catch {
+      // alarm optional on local
+    }
+  }
+
+  private listKnownRoomIds(): string[] {
+    const ids = new Set<string>([ALL_ROOM_ID, ...ALLOWED_ROOMS]);
+    const rows = this.ctx.storage.sql.exec(`SELECT room_id FROM rooms`).toArray();
+    for (const row of rows) {
+      const id = String(row.room_id || "");
+      if (id) ids.add(id);
+    }
+    return [...ids];
+  }
+
+  private async pokeKnownRooms() {
+    const ns = this.env.CHAT_ROOM;
+    if (!ns) return;
+    const secret = chatInternalSecret(this.env);
+    if (!secret) return;
+    const path = "/internal/retention";
+    const headers = await internalAuthHeaders(secret, path);
+    for (const roomId of this.listKnownRoomIds()) {
+      try {
+        await ns.get(ns.idFromName(roomId)).fetch(
+          new Request(`https://chat-room${path}`, {
+            method: "POST",
+            headers,
+          })
+        );
+      } catch {
+        // next directory alarm retries
       }
     }
   }
