@@ -29,6 +29,7 @@ import {
   chatRoleLabel,
   defaultAvatarInitial,
   formatChatDateDivider,
+  isVisibleChatListRoom,
   jumpToMessageIfMounted,
   publicChatProfile,
   roomListTitle,
@@ -289,7 +290,7 @@ export default function ChatClient() {
   }, []);
 
   const applyRooms = useCallback((next: RoomSummary[]) => {
-    const visible = next.filter((r) => r.type === "ALL" || r.type === "CUSTOM");
+    const visible = next.filter((r) => isVisibleChatListRoom(r.type));
     setRooms(visible);
     setActiveRoom((cur) => {
       if (!cur) return cur;
@@ -1041,6 +1042,8 @@ export default function ChatClient() {
       peerRole: String(room.peerRole || peer.role),
       peerTeam: String(room.peerTeam || peer.team || "-"),
     });
+    const info = tokenRef.current;
+    if (info) await fetchRoomsHttp(info.token);
   }
 
   function openActions(line: ChatLine) {

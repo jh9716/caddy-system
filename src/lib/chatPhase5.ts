@@ -152,6 +152,11 @@ export function shouldShowJumpButton(input: {
   return !input.stuckToBottom && input.unseenCount > 0;
 }
 
+/** Directory list hides leftover Phase 1 team-* rooms, not DM. */
+export function isVisibleChatListRoom(type: string | null | undefined): boolean {
+  return type === "ALL" || type === "CUSTOM" || type === "DM";
+}
+
 export function roomListTitle(room: {
   type: string;
   name: string;
