@@ -20,6 +20,10 @@ import {
   resolveMentionAll,
   splitMentionBody,
 } from "../src/lib/chatMentions";
+import {
+  listInvitableChatUsers,
+  type ChatUserRow,
+} from "../src/lib/chatUsers";
 import { canMentionAll as workerCanMentionAll } from "../cloudflare/verthill-chat/src/protocol";
 import {
   filterMentionsToMembers as workerFilterMembers,
@@ -162,6 +166,32 @@ section("autocomplete");
     canMentionAll: true,
   });
   assert(adminHits[0]?.kind === "all" && adminHits[0].displayName === MENTION_ALL_LABEL, "@전체 first for admin");
+  const mixed = filterMentionSuggestions({
+    candidates: [
+      { userId: 1, displayName: "admin", team: "-", role: "admin" },
+      { userId: 6, displayName: "이기흥", team: "-", role: "admin" },
+      { userId: 2, displayName: "ghineung", team: "-", role: "admin" },
+      { userId: 18, displayName: "신정훈", team: "7조", role: "caddy" },
+      { userId: 27, displayName: "한상준", team: "7조", role: "caddy" },
+      { userId: 3, displayName: "대시조장", team: "9조", role: "leader" },
+    ],
+    query: "",
+    canMentionAll: true,
+  });
+  const mixedUsers = mixed.filter((h) => h.kind === "user");
+  assert(mixedUsers[0]?.role === "caddy", "empty @ shows caddies before admins");
+  assert(mixedUsers.some((h) => h.displayName === "신정훈"), "active caddy appears");
+  assert(mixedUsers.some((h) => h.displayName === "대시조장"), "leader appears");
+  assert(mixedUsers.some((h) => h.displayName === "이기흥"), "real hangul admin kept");
+  const shin = filterMentionSuggestions({
+    candidates: [
+      { userId: 1, displayName: "admin", team: "-", role: "admin" },
+      { userId: 18, displayName: "신정훈", team: "7조", role: "caddy" },
+    ],
+    query: "신",
+    canMentionAll: false,
+  });
+  assert(shin.some((h) => h.displayName === "신정훈"), "Korean name search finds caddy");
 }
 
 section("render + self");
@@ -179,9 +209,61 @@ section("render + self");
     nameByUserId: new Map(),
   });
   assert(textOnly.every((p) => p.kind === "text"), "unvalidated @전체 stays text");
-  assert(isSelfMentioned({ myUserId: 10, mentions: [10], mentionAll: false }), "self mentioned");
-  assert(isSelfMentioned({ myUserId: 10, mentions: [], mentionAll: true }), "mentionAll counts as self");
+  assert(
+    isSelfMentioned({ myUserId: 10, senderUserId: 11, mentions: [10], mentionAll: false }),
+    "other user mentions me"
+  );
+  assert(
+    isSelfMentioned({ myUserId: 10, senderUserId: 11, mentions: [], mentionAll: true }),
+    "other user @전체"
+  );
+  assert(
+    !isSelfMentioned({ myUserId: 10, senderUserId: 10, mentions: [], mentionAll: true }),
+    "my @전체 has no badge"
+  );
+  assert(
+    !isSelfMentioned({ myUserId: 10, senderUserId: 10, mentions: [10], mentionAll: false }),
+    "my explicit @me has no badge"
+  );
   assert(!isSelfMentioned({ myUserId: 10, mentions: [11], mentionAll: false }), "other mention not self");
+}
+
+section("candidate eligibility / order");
+{
+  const rows: ChatUserRow[] = [
+    { id: 1, username: "admin", role: "ADMIN", caddy: null },
+    { id: 2, username: "ghineung", role: "admin", caddy: null },
+    { id: 6, username: "이기흥", role: "admin", caddy: null },
+    {
+      id: 18,
+      username: "kakao_a",
+      role: "caddy",
+      caddy: { name: "신정훈", team: "7조", employmentStatus: "ACTIVE" },
+    },
+    {
+      id: 99,
+      username: "kakao_retired",
+      role: "caddy",
+      caddy: { name: "퇴직자", team: "1조", employmentStatus: "RETIRED" },
+    },
+    {
+      id: 40,
+      username: "kakao_leader",
+      role: "leader",
+      caddy: { name: "조장", team: "3조", employmentStatus: "ACTIVE" },
+    },
+    { id: 50, username: "nolink", role: "caddy", caddy: null },
+  ];
+  const hits = listInvitableChatUsers(rows);
+  assert(hits.some((h) => h.displayName === "신정훈" && h.role === "caddy"), "active caddy appears");
+  assert(hits.some((h) => h.displayName === "조장" && h.role === "leader"), "leader appears");
+  assert(hits.some((h) => h.displayName === "이기흥" && h.role === "admin"), "이기흥 kept");
+  assert(hits.some((h) => h.displayName === "admin"), "super admin mapping account kept");
+  assert(hits.some((h) => h.displayName === "ghineung"), "latin admin kept without blacklist");
+  assert(!hits.some((h) => h.displayName === "퇴직자"), "RETIRED excluded");
+  assert(!hits.some((h) => h.userId === 50), "unlinked caddy user excluded");
+  assert(hits[0]?.role === "caddy" || hits[0]?.role === "leader", "invite/mention list is not admin-first");
+  assert(hits.every((h) => Object.keys(h).join(",") === "userId,displayName,team,role,active"), "public keys only");
 }
 
 section("worker protocol");
@@ -224,6 +306,7 @@ section("source wiring");
   const directory = read("cloudflare/verthill-chat/src/directory.ts");
   const proto = read("cloudflare/verthill-chat/src/protocol.ts");
   const css = read("src/app/globals.css");
+  assert(client.includes("senderUserId: line.senderUserId"), "badge uses senderUserId");
   assert(client.includes("mentions: tokens.map"), "composer sends userIds");
   assert(client.includes("mentionAll"), "composer sends mentionAll");
   assert(client.includes("registerAndroidChatOverlayClose"), "mention panel uses overlay back");

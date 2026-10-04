@@ -134,6 +134,23 @@ export function insertMentionToken(
   return { text: next, cursor: query.start + inserted.length };
 }
 
+function mentionCandidateRank(role: string): number {
+  if (role === "caddy") return 0;
+  if (role === "leader") return 1;
+  return 2;
+}
+
+export function compareMentionCandidates(
+  a: Pick<MentionCandidate, "displayName" | "role" | "userId">,
+  b: Pick<MentionCandidate, "displayName" | "role" | "userId">
+): number {
+  const rank = mentionCandidateRank(a.role) - mentionCandidateRank(b.role);
+  if (rank !== 0) return rank;
+  const name = a.displayName.localeCompare(b.displayName, "ko");
+  if (name !== 0) return name;
+  return a.userId - b.userId;
+}
+
 function matchesQuery(candidate: MentionCandidate, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
@@ -166,10 +183,11 @@ export function filterMentionSuggestions(input: {
   }
   const seen = new Set<number>();
   const names = new Map<string, number>();
-  for (const row of input.candidates) {
+  const candidates = [...input.candidates].sort(compareMentionCandidates);
+  for (const row of candidates) {
     names.set(row.displayName, (names.get(row.displayName) ?? 0) + 1);
   }
-  for (const row of input.candidates) {
+  for (const row of candidates) {
     if (!Number.isInteger(row.userId) || row.userId <= 0) continue;
     if (seen.has(row.userId)) continue;
     if (!matchesQuery(row, query)) continue;
@@ -262,9 +280,11 @@ export function isSelfMentioned(input: {
   myUserId: number | null | undefined;
   mentions: number[];
   mentionAll: boolean;
+  senderUserId?: number | null;
 }): boolean {
-  if (input.mentionAll) return true;
   const me = Number(input.myUserId);
   if (!Number.isInteger(me) || me <= 0) return false;
+  if (Number(input.senderUserId) === me) return false;
+  if (input.mentionAll) return true;
   return normalizeMentionUserIds(input.mentions).includes(me);
 }
