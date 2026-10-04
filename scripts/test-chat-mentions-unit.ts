@@ -79,6 +79,7 @@ section("custom room members");
 {
   assert(filterMentionsToMembers([1, 2, 9], [1, 2]).join(",") === "1,2", "non-member dropped");
   assert(filterMentionsToMembers([1], null).join(",") === "1", "all-room no member filter");
+  assert(filterMentionsToMembers([1, 2], []).join(",") === "", "directory failure fail-closed");
   assert(workerFilterMembers([4, 5], [5]).join(",") === "5", "worker member filter");
 }
 
@@ -112,6 +113,33 @@ section("composer query / insert / delete");
   assert(countMentionNeedles("@신정훈.", "신정훈") === 1, "punctuation still a token");
   assert(reconcileMentionAll("@전체 확인", true) === true, "@전체 kept");
   assert(reconcileMentionAll("전체 확인", true) === false, "plain 전체 not mentionAll");
+  assert(
+    reconcileComposerMentions("@신정 확인", [{ userId: 10, label: "신정훈" }]).length === 0,
+    "partial name edit drops mention"
+  );
+  assert(
+    reconcileComposerMentions("@신정훈 확인", []).length === 0,
+    "typed @name without pick is not a mention"
+  );
+  assert(
+    reconcileComposerMentions("안녕 @신정X훈 확인", [{ userId: 10, label: "신정훈" }]).length === 0,
+    "caret edit inside token drops mention"
+  );
+  assert(
+    reconcileComposerMentions("@신정훈", [{ userId: 10, label: "신정훈" }]).map((t) => t.userId).join(",") === "10",
+    "trim/end-of-string still a token"
+  );
+  const dedupedPick = reconcileComposerMentions("@신정훈 @신정훈 ", [
+    { userId: 10, label: "신정훈" },
+    { userId: 10, label: "신정훈" },
+  ]);
+  assert(dedupedPick.map((t) => t.userId).join(",") === "10", "same userId picked twice dedupes");
+  assert(reconcileMentionAll("@전체 확인", false) === false, "typed @전체 without pick is not mentionAll");
+  const between = reconcileComposerMentions("@신정훈 그리고 @한상준 확인", [
+    { userId: 10, label: "신정훈" },
+    { userId: 11, label: "한상준" },
+  ]);
+  assert(between.map((t) => t.userId).join(",") === "10,11", "text between mentions keeps both");
 }
 
 section("autocomplete");
@@ -168,6 +196,23 @@ section("worker protocol");
   });
   assert(ok.ok && ok.value.body === "@신정훈 확인", "message still validates with mention fields");
   assert(ok.ok && Array.isArray(ok.value.mentions), "raw mentions passed through for server filter");
+  const oldClient = validateIncomingMessage({
+    type: "message",
+    clientMessageId: "c-old",
+    body: "phase2 hello",
+  });
+  assert(oldClient.ok && oldClient.value.mentions === undefined, "old client payload still accepted");
+  assert(oldClient.ok && oldClient.value.mentionAll === undefined, "old client has no mentionAll");
+  const extra = validateIncomingMessage({
+    type: "message",
+    clientMessageId: "c-extra",
+    body: "hi",
+    mentions: [1],
+    mentionAll: true,
+    senderRole: "admin",
+    specialMention: "@전체",
+  });
+  assert(extra.ok, "unknown extra fields do not reject the message");
   const bad = validateIncomingMessage({ type: "message", clientMessageId: "c-2", body: "" });
   assert(!bad.ok, "empty body still rejected");
 }
@@ -176,6 +221,7 @@ section("source wiring");
 {
   const client = read("src/app/chat/ChatClient.tsx");
   const worker = read("cloudflare/verthill-chat/src/index.ts");
+  const directory = read("cloudflare/verthill-chat/src/directory.ts");
   const proto = read("cloudflare/verthill-chat/src/protocol.ts");
   const css = read("src/app/globals.css");
   assert(client.includes("mentions: tokens.map"), "composer sends userIds");
@@ -192,6 +238,14 @@ section("source wiring");
   assert(!worker.includes("DELETE FROM messages"), "no message wipe");
   assert(worker.includes("listDirectoryMemberIds"), "custom member validation");
   assert(worker.includes("resolveMentionAll"), "worker mentionAll from token role");
+  assert(worker.includes("memberIds ?? []"), "directory miss fail-closed");
+  assert(worker.includes("truncatePreview(message.body)"), "directory preview stays body text");
+  assert(!worker.includes("preview: JSON.stringify(mentions)"), "directory preview is not mention json");
+  assert((worker.match(/ALTER TABLE messages ADD COLUMN mentions_json/g) || []).length === 1, "one mentions_json alter");
+  assert((worker.match(/ALTER TABLE messages ADD COLUMN mention_all/g) || []).length === 1, "one mention_all alter");
+  assert(worker.includes("catch {\n      // already present"), "alter duplicate is ignored");
+  assert(directory.includes("room_forbidden"), "members ACL 403");
+  assert(directory.includes("this.isMember(roomId, claims.userId)"), "members list checks membership");
   assert(worker.includes("persistQueue"), "custom mention persist stays ordered");
   assert(
     /WHERE seq < \?\s+ORDER BY seq DESC/.test(worker),

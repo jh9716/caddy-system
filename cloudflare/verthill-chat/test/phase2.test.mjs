@@ -252,6 +252,43 @@ test("phase2 overall room, ACL, directory unread, admin spoof", async () => {
       false
     );
 
+    const outsiderMembers = await fetch(
+      `http://${HOST}:${port}/directory/rooms/${roomId}/members?token=${encodeURIComponent(outsider.token)}`
+    );
+    assert.equal(outsiderMembers.status, 403);
+    const outsiderMembersBody = await outsiderMembers.json();
+    assert.equal(outsiderMembersBody.error, "room_forbidden");
+    assert.equal(outsiderMembersBody.members, undefined);
+
+    const memberList = await fetch(
+      `http://${HOST}:${port}/directory/rooms/${roomId}/members?token=${encodeURIComponent(aTok.token)}`
+    );
+    const memberListBody = await memberList.json();
+    assert.equal(memberList.status, 200);
+    assert.equal(memberListBody.members.length, 2);
+    assert.deepEqual(
+      memberListBody.members.map((m) => m.userId).sort(),
+      [1, 2]
+    );
+    assert.equal(
+      memberListBody.members.every((m) => !("phone" in m) && !("kakaoUserId" in m)),
+      true
+    );
+
+    const allMembers = await fetch(
+      `http://${HOST}:${port}/directory/rooms/all/members?token=${encodeURIComponent(outsider.token)}`
+    );
+    const allMembersBody = await allMembers.json();
+    assert.equal(allMembers.status, 200);
+    assert.deepEqual(allMembersBody.members, []);
+
+    const oldClient = `old-client-${Date.now()}`;
+    const oldClientGot = waitMessage(b, (d) => d.type === "message" && d.clientMessageId === oldClient);
+    a.send(JSON.stringify({ type: "message", clientMessageId: oldClient, body: "phase2-payload" }));
+    const oldClientMsg = await oldClientGot;
+    assert.deepEqual(oldClientMsg.mentions, []);
+    assert.equal(oldClientMsg.mentionAll, false);
+
     const idMention = `all-mention-${Date.now()}`;
     const mentionGot = waitMessage(b, (d) => d.type === "message" && d.clientMessageId === idMention);
     a.send(
