@@ -19,7 +19,7 @@ export async function middleware(req: NextRequest) {
     if (!session || session.role !== "admin") {
       const login = req.nextUrl.clone();
       login.pathname = "/login";
-      login.searchParams.set("callbackUrl", pathname);
+      login.searchParams.set("callbackUrl", pathname + (req.nextUrl.search || ""));
       return NextResponse.redirect(login);
     }
   }
@@ -28,7 +28,7 @@ export async function middleware(req: NextRequest) {
     if (!session) {
       const login = req.nextUrl.clone();
       login.pathname = "/login";
-      login.searchParams.set("callbackUrl", pathname);
+      login.searchParams.set("callbackUrl", pathname + (req.nextUrl.search || ""));
       return NextResponse.redirect(login);
     }
     if (session.role !== "admin") {
@@ -44,7 +44,7 @@ export async function middleware(req: NextRequest) {
     if (!session || session.role !== "admin") {
       const login = req.nextUrl.clone();
       login.pathname = "/login";
-      login.searchParams.set("callbackUrl", pathname);
+      login.searchParams.set("callbackUrl", pathname + (req.nextUrl.search || ""));
       return NextResponse.redirect(login);
     }
     if (
@@ -81,7 +81,7 @@ export async function middleware(req: NextRequest) {
     ) {
       const login = req.nextUrl.clone();
       login.pathname = "/login";
-      login.searchParams.set("callbackUrl", pathname);
+      login.searchParams.set("callbackUrl", pathname + (req.nextUrl.search || ""));
       return NextResponse.redirect(login);
     }
   }

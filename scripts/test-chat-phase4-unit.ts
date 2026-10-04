@@ -438,7 +438,10 @@ section("source wiring");
   const schema = read("prisma/schema.prisma");
   assert(!/model\s+ChatMessage/.test(schema), "no Neon ChatMessage");
   const migrations = fs.readdirSync("prisma/migrations");
-  assert(!migrations.some((name) => /chat/i.test(name)), "Prisma chat migration = 0");
+  assert(
+    !migrations.some((name) => /chat_message|chat_room(?!_notification)/i.test(name)),
+    "Prisma chat message/room migration = 0"
+  );
   const wrangler = read("cloudflare/verthill-chat/wrangler.jsonc");
   assert(!wrangler.includes("v3"), "no new wrangler DO class");
   assert(!client.includes("localStorage"), "hide is not localStorage-only");

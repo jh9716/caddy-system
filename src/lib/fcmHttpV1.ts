@@ -57,7 +57,7 @@ export function buildFcmHttpV1Message(
     data: Record<string, string>;
     android: {
       priority: "HIGH";
-      notification: { channelId: string; title: string; body: string };
+      notification: { channelId: string; title: string; body: string; tag?: string };
     };
   };
 } {
@@ -76,6 +76,7 @@ export function buildFcmHttpV1Message(
           channelId: FCM_ANDROID_CHANNEL_ID,
           title: payload.title,
           body: payload.body,
+          ...(payload.tag ? { tag: String(payload.tag) } : {}),
         },
       },
     },

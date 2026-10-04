@@ -94,6 +94,7 @@ assert(msg.message.token === "tok-1", "message has token");
 assert(msg.message.notification.title === "T", "notification title");
 assert(msg.message.data.url === "/notice/3", "data.url relative");
 assert(msg.message.data.tag === "notice-3", "data.tag");
+assert(msg.message.android.notification.tag === "notice-3", "android notification tag");
 assert(msg.message.android.notification.channelId === FCM_ANDROID_CHANNEL_ID, "channel verthill");
 assert(FCM_ANDROID_CHANNEL_ID === "verthill", "channel id constant");
 const evil = buildFcmHttpV1Message("tok-1", {

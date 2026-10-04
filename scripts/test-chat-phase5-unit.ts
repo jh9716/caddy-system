@@ -264,7 +264,9 @@ section("android back / source");
   assert(api.includes("self_dm"), "API rejects self DM");
   assert(api.includes("canonicalDmRoomId"), "API uses server pair");
   assert(!api.includes("phone"), "DM API no phone");
-  assert(fs.readFileSync("prisma/schema.prisma", "utf8").includes("model User"), "no chat neon table added");
+  const schema = fs.readFileSync("prisma/schema.prisma", "utf8");
+  assert(!/model\s+ChatMessage/.test(schema), "no ChatMessage neon table");
+  assert(/model ChatRoomNotificationPreference/.test(schema), "pref table is additive");
   const wrangler = fs.readFileSync("cloudflare/verthill-chat/wrangler.jsonc", "utf8");
   assert(!wrangler.includes("v3"), "no new DO class");
 }
