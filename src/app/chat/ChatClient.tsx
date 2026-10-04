@@ -25,6 +25,19 @@ import {
   visibleInviteRoles,
   visibleInviteTeams,
 } from "@/lib/chatInviteSelection";
+import {
+  canMentionAll,
+  filterMentionSuggestions,
+  insertMentionToken,
+  isSelfMentioned,
+  mentionQueryAtCursor,
+  MENTION_ALL_LABEL,
+  reconcileComposerMentions,
+  reconcileMentionAll,
+  splitMentionBody,
+  type ComposerMention,
+  type MentionCandidate,
+} from "@/lib/chatMentions";
 import { ALL_ROOM_ID } from "@/lib/chatRooms";
 import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
 
@@ -57,6 +70,8 @@ type ChatLine = {
   body: string;
   sentAt: string;
   seq?: number;
+  mentions: number[];
+  mentionAll: boolean;
   status: "sending" | "sent" | "failed";
 };
 
@@ -86,6 +101,22 @@ function formatTime(iso: string | null | undefined): string {
   return d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
 }
 
+function mentionIdsFromPayload(raw: unknown): number[] {
+  if (!Array.isArray(raw)) return [];
+  const ids: number[] = [];
+  const seen = new Set<number>();
+  for (const item of raw) {
+    const id =
+      item != null && typeof item === "object" && "userId" in item
+        ? Number((item as { userId: unknown }).userId)
+        : Number(item);
+    if (!Number.isInteger(id) || id <= 0 || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
+}
+
 function formatListTime(iso: string | null | undefined): string {
   if (!iso) return "";
   const d = new Date(iso);
@@ -105,6 +136,12 @@ export default function ChatClient() {
   const [directoryConnected, setDirectoryConnected] = useState(false);
   const [lines, setLines] = useState<ChatLine[]>([]);
   const [draft, setDraft] = useState("");
+  const [mentionTokens, setMentionTokens] = useState<ComposerMention[]>([]);
+  const [mentionAllDraft, setMentionAllDraft] = useState(false);
+  const [mentionCandidates, setMentionCandidates] = useState<MentionCandidate[]>([]);
+  const [mentionCursor, setMentionCursor] = useState(0);
+  const [mentionSuppressed, setMentionSuppressed] = useState(false);
+  const [mentionLoading, setMentionLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [createName, setCreateName] = useState("");
   const [userQuery, setUserQuery] = useState("");
@@ -126,6 +163,10 @@ export default function ChatClient() {
   const loadingOlderRef = useRef(false);
   const pendingScrollRestore = useRef<number | null>(null);
   const createReqRef = useRef("");
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const mentionCacheRef = useRef<{ roomId: string; users: MentionCandidate[] } | null>(null);
+  const mentionFetchedRef = useRef("");
+  const mentionNamesRef = useRef<Map<number, string>>(new Map());
 
   const upsertLine = useCallback((incoming: ChatLine) => {
     setLines((prev) => {
@@ -245,6 +286,8 @@ export default function ChatClient() {
             body: String(m.body || ""),
             sentAt: String(m.sentAt || ""),
             seq: Number(m.seq),
+            mentions: mentionIdsFromPayload(m.mentions),
+            mentionAll: m.mentionAll === true,
             status: "sent" as const,
           }));
           const reset = historyResetRef.current;
@@ -283,6 +326,8 @@ export default function ChatClient() {
             body: String(data.body || ""),
             sentAt: String(data.sentAt || new Date().toISOString()),
             seq: Number(data.seq),
+            mentions: mentionIdsFromPayload(data.mentions),
+            mentionAll: data.mentionAll === true,
             status: "sent",
           };
           upsertLine(line);
@@ -353,10 +398,99 @@ export default function ChatClient() {
     });
   }, [view]);
 
+  const refreshIfNeeded = useCallback(async () => {
+    const info = tokenRef.current;
+    if (!info) return info;
+    if (info.exp - 30 > Math.floor(Date.now() / 1000)) return info;
+    const next = await fetchToken();
+    if (!next) return null;
+    tokenRef.current = next;
+    setTokenInfo(next);
+    connectDirectory(next);
+    return next;
+  }, [connectDirectory, fetchToken]);
+
+  const ensureMentionCandidates = useCallback(async () => {
+    const room = roomRef.current;
+    const info = tokenRef.current;
+    if (!room || !info) return;
+    if (mentionCacheRef.current?.roomId === room.roomId) {
+      setMentionCandidates(mentionCacheRef.current.users);
+      setMentionLoading(false);
+      return;
+    }
+    if (mentionFetchedRef.current === room.roomId) return;
+    mentionFetchedRef.current = room.roomId;
+    setMentionLoading(true);
+    try {
+      if (room.roomId === ALL_ROOM_ID) {
+        const res = await fetch("/api/chat/users?scope=all", {
+          credentials: "include",
+          cache: "no-store",
+        });
+        if (await consumeUnauthorizedMemberResponse(res)) {
+          setMentionLoading(false);
+          return;
+        }
+        const data = await res.json().catch(() => null);
+        const users = Array.isArray(data?.users)
+          ? (data.users as MentionCandidate[]).map((u) => ({
+              userId: Number(u.userId),
+              displayName: String(u.displayName || ""),
+              team: String(u.team || "-"),
+              role: String(u.role || "caddy"),
+            }))
+          : [];
+        mentionCacheRef.current = { roomId: room.roomId, users };
+        for (const user of users) {
+          if (user.displayName) mentionNamesRef.current.set(user.userId, user.displayName);
+        }
+        setMentionCandidates(users);
+        setMentionLoading(false);
+        return;
+      }
+      const url = chatDirectoryMembersUrl(room.roomId, info.token);
+      if (!url) {
+        setMentionLoading(false);
+        return;
+      }
+      const res = await fetch(url, { cache: "no-store" });
+      const data = await res.json().catch(() => null);
+      const users = Array.isArray(data?.members)
+        ? (data.members as MemberRow[]).map((m) => ({
+            userId: Number(m.userId),
+            displayName: String(m.displayName || ""),
+            team: String(m.team || "-"),
+            role: String(m.role || "caddy"),
+          }))
+        : [];
+      mentionCacheRef.current = { roomId: room.roomId, users };
+      for (const user of users) {
+        if (user.displayName) mentionNamesRef.current.set(user.userId, user.displayName);
+      }
+      setMentionCandidates(users);
+      setMentionLoading(false);
+    } catch {
+      mentionFetchedRef.current = "";
+      setMentionLoading(false);
+    }
+  }, []);
+
+  const mentionQuery = mentionQueryAtCursor(draft, mentionCursor);
+  const mentionOpen = Boolean(mentionQuery && view === "room" && !sheet && !mentionSuppressed);
+
   useEffect(() => {
+    if (mentionOpen) {
+      return registerAndroidChatOverlayClose(() => setMentionSuppressed(true));
+    }
     if (!sheet) return;
     return registerAndroidChatOverlayClose(() => setSheet(null));
-  }, [sheet]);
+  }, [sheet, mentionOpen]);
+
+  useEffect(() => {
+    if (!mentionOpen) return;
+    void ensureMentionCandidates();
+  }, [mentionOpen, ensureMentionCandidates]);
 
   useEffect(() => {
     if (sheet !== "create") return;
@@ -379,18 +513,6 @@ export default function ChatClient() {
     };
   }, [sheet]);
 
-  const refreshIfNeeded = useCallback(async () => {
-    const info = tokenRef.current;
-    if (!info) return info;
-    if (info.exp - 30 > Math.floor(Date.now() / 1000)) return info;
-    const next = await fetchToken();
-    if (!next) return null;
-    tokenRef.current = next;
-    setTokenInfo(next);
-    connectDirectory(next);
-    return next;
-  }, [connectDirectory, fetchToken]);
-
   async function openRoom(room: RoomSummary) {
     const info = await refreshIfNeeded();
     if (!info) return;
@@ -400,6 +522,16 @@ export default function ChatClient() {
     setLines([]);
     setHasMore(false);
     setError("");
+    setDraft("");
+    setMentionTokens([]);
+    setMentionAllDraft(false);
+    setMentionSuppressed(false);
+    if (mentionCacheRef.current?.roomId === room.roomId) {
+      setMentionCandidates(mentionCacheRef.current.users);
+    } else {
+      setMentionCandidates([]);
+      mentionFetchedRef.current = "";
+    }
     await connectSocket(info, room.roomId);
   }
 
@@ -413,7 +545,12 @@ export default function ChatClient() {
     ws.send(JSON.stringify({ type: "history", beforeSeq, limit: 30 }));
   }
 
-  async function sendCurrent(body: string, clientMessageId: string) {
+  async function sendCurrent(
+    body: string,
+    clientMessageId: string,
+    tokens: ComposerMention[] = mentionTokens,
+    mentionAll = mentionAllDraft
+  ) {
     const info = await refreshIfNeeded();
     const room = roomRef.current;
     if (!info || !room) return;
@@ -424,14 +561,64 @@ export default function ChatClient() {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       throw new Error("연결되지 않았습니다.");
     }
-    ws.send(JSON.stringify({ type: "message", clientMessageId, body }));
+    ws.send(
+      JSON.stringify({
+        type: "message",
+        clientMessageId,
+        body,
+        mentions: tokens.map((t) => t.userId),
+        mentionAll,
+      })
+    );
+  }
+
+  function applyDraft(next: string, cursor: number) {
+    const tokens = reconcileComposerMentions(next, mentionTokens);
+    setDraft(next);
+    setMentionTokens(tokens);
+    setMentionAllDraft(reconcileMentionAll(next, mentionAllDraft));
+    setMentionCursor(cursor);
+    setMentionSuppressed(false);
+  }
+
+  function pickMention(hit: { kind: "user" | "all"; userId: number; displayName: string }) {
+    if (hit.kind === "user" && hit.displayName) {
+      mentionNamesRef.current.set(hit.userId, hit.displayName);
+    }
+    const label = hit.kind === "all" ? MENTION_ALL_LABEL : hit.displayName;
+    const inserted = insertMentionToken(draft, mentionCursor, label);
+    const nextTokens =
+      hit.kind === "all"
+        ? mentionTokens
+        : reconcileComposerMentions(inserted.text, [
+            ...mentionTokens,
+            { userId: hit.userId, label: hit.displayName },
+          ]);
+    setDraft(inserted.text);
+    setMentionTokens(nextTokens);
+    setMentionAllDraft(
+      hit.kind === "all" ? true : reconcileMentionAll(inserted.text, mentionAllDraft)
+    );
+    setMentionCursor(inserted.cursor);
+    setMentionSuppressed(true);
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(inserted.cursor, inserted.cursor);
+    });
   }
 
   async function handleSend() {
     const body = draft.trim();
     if (!body || sending || !tokenInfo) return;
+    const tokens = reconcileComposerMentions(body, mentionTokens);
+    const mentionAll = reconcileMentionAll(body, mentionAllDraft);
     const clientMessageId = newClientMessageId();
     setDraft("");
+    setMentionTokens([]);
+    setMentionAllDraft(false);
+    setMentionSuppressed(false);
     setSending(true);
     upsertLine({
       clientMessageId,
@@ -440,10 +627,12 @@ export default function ChatClient() {
       senderRole: tokenInfo.user.role,
       body,
       sentAt: new Date().toISOString(),
+      mentions: tokens.map((t) => t.userId),
+      mentionAll,
       status: "sending",
     });
     try {
-      await sendCurrent(body, clientMessageId);
+      await sendCurrent(body, clientMessageId, tokens, mentionAll);
     } catch {
       setLines((prev) =>
         prev.map((l) =>
@@ -462,7 +651,12 @@ export default function ChatClient() {
       )
     );
     try {
-      await sendCurrent(line.body, line.clientMessageId);
+      await sendCurrent(
+        line.body,
+        line.clientMessageId,
+        line.mentions.map((userId) => ({ userId, label: "" })),
+        line.mentionAll
+      );
     } catch {
       setLines((prev) =>
         prev.map((l) =>
@@ -536,6 +730,13 @@ export default function ChatClient() {
   }
 
   const ownerUserId = tokenInfo?.user.userId ?? 0;
+  const mentionSuggestions = mentionQuery
+    ? filterMentionSuggestions({
+        candidates: mentionCandidates,
+        query: mentionQuery.query,
+        canMentionAll: canMentionAll(tokenInfo?.user.role),
+      })
+    : [];
   const inviteCandidates = invitePoolExcludingOwner(invitePool, ownerUserId);
   const visibleInviteUsers = filterInviteUsers(inviteCandidates, userQuery);
   const inviteTeams = visibleInviteTeams(inviteCandidates);
@@ -632,6 +833,22 @@ export default function ChatClient() {
             {lines.map((line) => {
               const mine = tokenInfo ? line.senderUserId === tokenInfo.user.userId : false;
               const admin = line.senderRole === "admin";
+              const selfMentioned = isSelfMentioned({
+                myUserId: tokenInfo?.user.userId,
+                mentions: line.mentions,
+                mentionAll: line.mentionAll,
+              });
+              const nameByUserId = new Map<number, string>(mentionNamesRef.current);
+              for (const c of mentionCandidates) nameByUserId.set(c.userId, c.displayName);
+              for (const m of members) nameByUserId.set(m.userId, m.displayName);
+              for (const token of mentionTokens) {
+                if (token.label) nameByUserId.set(token.userId, token.label);
+              }
+              const parts = splitMentionBody(line.body, {
+                mentions: line.mentions,
+                mentionAll: line.mentionAll,
+                nameByUserId,
+              });
               return (
                 <div
                   key={line.clientMessageId}
@@ -642,7 +859,18 @@ export default function ChatClient() {
                   ) : !mine ? (
                     <div className="vh-chat-name">{line.sender}</div>
                   ) : null}
-                  <div className="vh-chat-body">{line.body}</div>
+                  {selfMentioned ? <div className="vh-chat-mention-self">나를 멘션</div> : null}
+                  <div className="vh-chat-body">
+                    {parts.map((part, idx) =>
+                      part.kind === "mention" ? (
+                        <span key={`${line.clientMessageId}-m-${idx}`} className="vh-chat-mention">
+                          {part.text}
+                        </span>
+                      ) : (
+                        <span key={`${line.clientMessageId}-t-${idx}`}>{part.text}</span>
+                      )
+                    )}
+                  </div>
                   <div className="vh-chat-meta">
                     {formatTime(line.sentAt)}
                     {mine && line.status === "sending" ? " · 보내는 중" : ""}
@@ -664,13 +892,50 @@ export default function ChatClient() {
               void handleSend();
             }}
           >
+            {mentionOpen && mentionQuery ? (
+              <div className="vh-chat-suggest" role="listbox" aria-label="멘션">
+                {mentionSuggestions.map((hit) => (
+                  <button
+                    key={hit.kind === "all" ? "all" : hit.userId}
+                    type="button"
+                    className="vh-chat-suggest-item"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => pickMention(hit)}
+                  >
+                    <span>@{hit.displayName}</span>
+                    {hit.secondary ? (
+                      <span className="vh-chat-suggest-meta">{hit.secondary}</span>
+                    ) : null}
+                  </button>
+                ))}
+                {mentionSuggestions.length === 0 ? (
+                  <p className="vh-chat-status">
+                    {mentionLoading ? "멘션 목록 불러오는 중…" : "멘션할 사람이 없습니다."}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+            <div className="vh-chat-composer-row">
             <textarea
+              ref={inputRef}
               className="vh-chat-input"
               rows={2}
               maxLength={2000}
               value={draft}
               placeholder="메시지 입력"
-              onChange={(e) => setDraft(e.target.value)}
+              onChange={(e) => applyDraft(e.target.value, e.target.selectionStart || 0)}
+              onSelect={(e) =>
+                setMentionCursor((e.target as HTMLTextAreaElement).selectionStart || 0)
+              }
+              onKeyUp={(e) =>
+                setMentionCursor((e.target as HTMLTextAreaElement).selectionStart || 0)
+              }
+              onKeyDown={(e) => {
+                if (e.key === "Escape" && mentionOpen) {
+                  e.preventDefault();
+                  setMentionSuppressed(true);
+                }
+              }}
             />
             <button
               type="submit"
@@ -679,6 +944,7 @@ export default function ChatClient() {
             >
               전송
             </button>
+            </div>
           </form>
           {!connected ? (
             <button type="button" className="vh-chat-reconnect" onClick={() => void handleReconnect()}>

@@ -252,11 +252,118 @@ test("phase2 overall room, ACL, directory unread, admin spoof", async () => {
       false
     );
 
+    const outsiderMembers = await fetch(
+      `http://${HOST}:${port}/directory/rooms/${roomId}/members?token=${encodeURIComponent(outsider.token)}`
+    );
+    assert.equal(outsiderMembers.status, 403);
+    const outsiderMembersBody = await outsiderMembers.json();
+    assert.equal(outsiderMembersBody.error, "room_forbidden");
+    assert.equal(outsiderMembersBody.members, undefined);
+
+    const memberList = await fetch(
+      `http://${HOST}:${port}/directory/rooms/${roomId}/members?token=${encodeURIComponent(aTok.token)}`
+    );
+    const memberListBody = await memberList.json();
+    assert.equal(memberList.status, 200);
+    assert.equal(memberListBody.members.length, 2);
+    assert.deepEqual(
+      memberListBody.members.map((m) => m.userId).sort(),
+      [1, 2]
+    );
+    assert.equal(
+      memberListBody.members.every((m) => !("phone" in m) && !("kakaoUserId" in m)),
+      true
+    );
+
+    const allMembers = await fetch(
+      `http://${HOST}:${port}/directory/rooms/all/members?token=${encodeURIComponent(outsider.token)}`
+    );
+    const allMembersBody = await allMembers.json();
+    assert.equal(allMembers.status, 200);
+    assert.deepEqual(allMembersBody.members, []);
+
+    const oldClient = `old-client-${Date.now()}`;
+    const oldClientGot = waitMessage(b, (d) => d.type === "message" && d.clientMessageId === oldClient);
+    a.send(JSON.stringify({ type: "message", clientMessageId: oldClient, body: "phase2-payload" }));
+    const oldClientMsg = await oldClientGot;
+    assert.deepEqual(oldClientMsg.mentions, []);
+    assert.equal(oldClientMsg.mentionAll, false);
+
+    const idMention = `all-mention-${Date.now()}`;
+    const mentionGot = waitMessage(b, (d) => d.type === "message" && d.clientMessageId === idMention);
+    a.send(
+      JSON.stringify({
+        type: "message",
+        clientMessageId: idMention,
+        body: "@B 확인",
+        mentions: [2, 2, 0, "x"],
+        mentionAll: true,
+      })
+    );
+    const mentionMsg = await mentionGot;
+    assert.deepEqual(mentionMsg.mentions, [{ userId: 2 }]);
+    assert.equal(mentionMsg.mentionAll, false);
+
+    const idAll = `admin-all-${Date.now()}`;
+    const allGot = waitMessage(a, (d) => d.type === "message" && d.clientMessageId === idAll);
+    admin.send(
+      JSON.stringify({
+        type: "message",
+        clientMessageId: idAll,
+        body: "@전체 확인",
+        mentionAll: true,
+        mentions: [1],
+      })
+    );
+    const allMsg = await allGot;
+    assert.equal(allMsg.mentionAll, true);
+    assert.deepEqual(allMsg.mentions, [{ userId: 1 }]);
+
+    const leaderTok = signTestTokenV2({ userId: 8, displayName: "리더", role: "leader" });
+    const leader = await connect(port, "all", leaderTok.token);
+    await waitMessage(leader, (d) => d.type === "history");
+    const idLeader = `leader-all-${Date.now()}`;
+    const leaderGot = waitMessage(a, (d) => d.type === "message" && d.clientMessageId === idLeader);
+    leader.send(
+      JSON.stringify({
+        type: "message",
+        clientMessageId: idLeader,
+        body: "@전체 조장",
+        mentionAll: true,
+      })
+    );
+    const leaderMsg = await leaderGot;
+    assert.equal(leaderMsg.mentionAll, true);
+
+    const idOut = `custom-out-${Date.now()}`;
+    const customMentionGot = waitMessage(customB, (d) => d.type === "message" && d.clientMessageId === idOut);
+    customA.send(
+      JSON.stringify({
+        type: "message",
+        clientMessageId: idOut,
+        body: "@C 불가",
+        mentions: [3, 2],
+      })
+    );
+    const customMention = await customMentionGot;
+    assert.deepEqual(customMention.mentions, [{ userId: 2 }]);
+
+    const histWs = await connect(port, "all", aTok.token);
+    const hist = await waitMessage(histWs, (d) => d.type === "history");
+    const oldish = hist.messages.find((m) => m.clientMessageId === idAb);
+    assert.ok(oldish);
+    assert.deepEqual(oldish.mentions, []);
+    assert.equal(oldish.mentionAll, false);
+    const storedAll = hist.messages.find((m) => m.clientMessageId === idAll);
+    assert.equal(storedAll.mentionAll, true);
+
     a.close();
     b.close();
     admin.close();
+    leader.close();
     customA.close();
     customB.close();
+    histWs.close();
     dir.close();
   } finally {
     await stopWrangler(child);

@@ -19,6 +19,11 @@ import {
     validateIncomingHistory,
     validateIncomingMessage,
     validateIncomingRead,
+    filterMentionsToMembers,
+    mentionsToWire,
+    parseStoredMentionAll,
+    parseStoredMentions,
+    resolveMentionAll,
     type ChatMessage,
 } from "./protocol";
 import {
@@ -80,6 +85,21 @@ async function verifyIdentity(
   const claims = await verifyChatToken(token, secret);
   if (!claims) return json({ error: "invalid_token" }, 401);
   return claims;
+}
+
+async function listDirectoryMemberIds(env: Env, roomId: string): Promise<number[] | null> {
+  const path = "/internal/member-ids";
+  const headers = await internalAuthHeaders(chatInternalSecret(env), path);
+  const res = await directoryStub(env).fetch(
+    new Request(
+      `https://chat-directory${path}?room=${encodeURIComponent(roomId)}`,
+      { headers }
+    )
+  );
+  if (!res.ok) return null;
+  const data = (await res.json()) as { ids?: unknown };
+  if (!Array.isArray(data.ids)) return [];
+  return data.ids.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0);
 }
 
 async function isDirectoryMember(
@@ -298,6 +318,8 @@ async function verifyCreateGrant(
 type SocketAttach = { claims: ChatTokenClaims; roomId: string };
 
 export class ChatRoom extends DurableObject<Env> {
+  private persistQueue: Promise<void> = Promise.resolve();
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.ctx.storage.sql.exec(`
@@ -308,7 +330,9 @@ export class ChatRoom extends DurableObject<Env> {
         sender TEXT NOT NULL,
         sender_role TEXT NOT NULL DEFAULT 'caddy',
         body TEXT NOT NULL,
-        sent_at TEXT NOT NULL
+        sent_at TEXT NOT NULL,
+        mentions_json TEXT NOT NULL DEFAULT '[]',
+        mention_all INTEGER NOT NULL DEFAULT 0
       )
     `);
     try {
@@ -321,6 +345,20 @@ export class ChatRoom extends DurableObject<Env> {
     try {
       this.ctx.storage.sql.exec(
         `ALTER TABLE messages ADD COLUMN sender_role TEXT NOT NULL DEFAULT 'caddy'`
+      );
+    } catch {
+      // already present
+    }
+    try {
+      this.ctx.storage.sql.exec(
+        `ALTER TABLE messages ADD COLUMN mentions_json TEXT NOT NULL DEFAULT '[]'`
+      );
+    } catch {
+      // already present
+    }
+    try {
+      this.ctx.storage.sql.exec(
+        `ALTER TABLE messages ADD COLUMN mention_all INTEGER NOT NULL DEFAULT 0`
       );
     } catch {
       // already present
@@ -404,48 +442,75 @@ export class ChatRoom extends DurableObject<Env> {
       });
       return;
     }
+    this.persistQueue = this.persistQueue
+      .then(() => this.persistMessage(ws, attach, checked.value))
+      .catch(() => undefined);
+  }
 
+  private async persistMessage(
+    ws: WebSocket,
+    attach: SocketAttach,
+    value: {
+      clientMessageId: string;
+      body: string;
+      mentions: unknown;
+      mentionAll: unknown;
+    }
+  ) {
     const sentAt = new Date().toISOString();
     const existing = this.ctx.storage.sql
       .exec(
         `SELECT seq FROM messages WHERE client_message_id = ?`,
-        checked.value.clientMessageId
+        value.clientMessageId
       )
       .toArray();
     if (existing.length > 0) {
       sendJson(ws, {
         type: "duplicate",
-        clientMessageId: checked.value.clientMessageId,
+        clientMessageId: value.clientMessageId,
       });
       return;
     }
 
     const senderRole = senderRoleFromClaims(attach.claims.role);
+    const mentionAll = resolveMentionAll(value.mentionAll, senderRole);
+    let mentionIds = mentionsToWire(value.mentions).map((m) => m.userId);
+    if (isCustomRoomId(attach.roomId) && mentionIds.length > 0) {
+      const memberIds = await listDirectoryMemberIds(this.env, attach.roomId);
+      mentionIds = filterMentionsToMembers(mentionIds, memberIds ?? []);
+    }
+    const mentions = mentionsToWire(mentionIds);
+
     this.ctx.storage.sql.exec(
-      `INSERT INTO messages (client_message_id, sender_user_id, sender, sender_role, body, sent_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      checked.value.clientMessageId,
+      `INSERT INTO messages
+        (client_message_id, sender_user_id, sender, sender_role, body, sent_at, mentions_json, mention_all)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      value.clientMessageId,
       attach.claims.userId,
       attach.claims.displayName,
       senderRole,
-      checked.value.body,
-      sentAt
+      value.body,
+      sentAt,
+      JSON.stringify(mentions),
+      mentionAll ? 1 : 0
     );
     const inserted = this.ctx.storage.sql
       .exec(
         `SELECT seq FROM messages WHERE client_message_id = ?`,
-        checked.value.clientMessageId
+        value.clientMessageId
       )
       .one();
     const outbound: ChatMessage = {
       type: "message",
-      clientMessageId: checked.value.clientMessageId,
+      clientMessageId: value.clientMessageId,
       senderUserId: attach.claims.userId,
       sender: attach.claims.displayName,
       senderRole,
-      body: checked.value.body,
+      body: value.body,
       sentAt,
       seq: Number(inserted.seq),
+      mentions,
+      mentionAll,
     };
     this.broadcast(outbound);
     void this.notifyDirectoryMessage(attach.roomId, outbound);
@@ -498,7 +563,7 @@ export class ChatRoom extends DurableObject<Env> {
       beforeSeq == null
         ? this.ctx.storage.sql
             .exec(
-              `SELECT seq, client_message_id, sender_user_id, sender, sender_role, body, sent_at
+              `SELECT seq, client_message_id, sender_user_id, sender, sender_role, body, sent_at, mentions_json, mention_all
                FROM messages
                ORDER BY seq DESC
                LIMIT ?`,
@@ -507,7 +572,7 @@ export class ChatRoom extends DurableObject<Env> {
             .toArray()
         : this.ctx.storage.sql
             .exec(
-              `SELECT seq, client_message_id, sender_user_id, sender, sender_role, body, sent_at
+              `SELECT seq, client_message_id, sender_user_id, sender, sender_role, body, sent_at, mentions_json, mention_all
                FROM messages
                WHERE seq < ?
                ORDER BY seq DESC
@@ -526,6 +591,8 @@ export class ChatRoom extends DurableObject<Env> {
       body: String(row.body),
       sentAt: String(row.sent_at),
       seq: Number(row.seq),
+      mentions: parseStoredMentions(row.mentions_json),
+      mentionAll: parseStoredMentionAll(row.mention_all),
     }));
     const oldestSeq = messages.length ? Number(messages[0]!.seq) : null;
     let hasMore = false;
