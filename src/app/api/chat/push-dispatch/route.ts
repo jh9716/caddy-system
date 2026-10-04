@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 function asInt(raw: unknown): number {
   const n = Number(raw);
@@ -39,7 +40,8 @@ export async function POST(req: NextRequest) {
       preview: String(body.preview || ""),
       mentionAll: body.mentionAll === true,
       mentionUserIds,
-      replyToUserId: asInt(body.replyToUserId) || null,
+      replyToUserId:
+        asInt(body.replyToSenderUserId || body.replyToUserId) || null,
       deletionType: body.deletionType ? String(body.deletionType) : null,
       roomType: String(body.roomType || ""),
       memberUserIds,

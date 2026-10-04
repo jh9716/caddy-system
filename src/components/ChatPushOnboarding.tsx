@@ -9,6 +9,7 @@ import {
   readChatPushOnboardDismissed,
   resolveChatPushOnboard,
   shouldRequestOsPermissionOnEnable,
+  shouldSilentRebindWebPush,
   writeChatPushOnboardDismissed,
 } from "@/lib/chatPushOnboarding";
 import { nativePushPluginAvailable, readNativePushPermission, registerNativePushDevice } from "@/lib/nativePushBridge";
@@ -66,6 +67,15 @@ export default function ChatPushOnboarding() {
       });
       if (cancelled) return;
       setUserId(me.userId);
+      if (
+        shouldSilentRebindWebPush({
+          authenticated: me.authenticated,
+          nativePlugin,
+          notificationPermission: permission,
+        })
+      ) {
+        await enableWebPush(false);
+      }
       if (decision.kind === "none" || !decision.show) return;
       setKind(decision.kind);
       setOpen(true);
@@ -75,7 +85,7 @@ export default function ChatPushOnboarding() {
     };
   }, []);
 
-  async function enableWebPush() {
+  async function enableWebPush(requestOsPermission = true) {
     const keyRes = await fetch("/api/push/subscription", {
       credentials: "include",
       cache: "no-store",
@@ -83,8 +93,12 @@ export default function ChatPushOnboarding() {
     const keyData = (await keyRes.json().catch(() => null)) as { vapidPublicKey?: string } | null;
     const bytes = vapidPublicKeyToBytes(keyData?.vapidPublicKey || "");
     if (!bytes || !("serviceWorker" in navigator)) return;
-    const permission = await Notification.requestPermission();
-    if (permission !== "granted") return;
+    if (requestOsPermission) {
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") return;
+    } else if (Notification.permission !== "granted") {
+      return;
+    }
     const reg = await navigator.serviceWorker.ready;
     const sub = await reg.pushManager.subscribe({
       userVisibleOnly: true,

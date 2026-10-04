@@ -78,3 +78,15 @@ export function resolveChatPushOnboard(input: {
 export function shouldRequestOsPermissionOnEnable(kind: ChatPushOnboardKind): boolean {
   return kind === "android" || kind === "pwa";
 }
+
+export function shouldSilentRebindWebPush(input: {
+  authenticated: boolean;
+  nativePlugin: boolean;
+  notificationPermission: "default" | "granted" | "denied" | "unsupported";
+}): boolean {
+  return (
+    input.authenticated === true &&
+    input.nativePlugin === false &&
+    input.notificationPermission === "granted"
+  );
+}

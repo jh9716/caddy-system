@@ -11,6 +11,13 @@ import type { WebPushPayload } from "@/lib/webPushSender";
 export const FCM_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 export const FCM_MESSAGING_SCOPE = "https://www.googleapis.com/auth/firebase.messaging";
 export const FCM_ANDROID_CHANNEL_ID = "verthill";
+const FCM_OAUTH_CACHE_SKEW_SEC = 60;
+
+let oauthCache: { email: string; token: string; exp: number } | null = null;
+
+export function resetFcmOauthCache(): void {
+  oauthCache = null;
+}
 
 export type FcmHttpDelivery = "sent" | "failed" | "gone";
 
@@ -136,6 +143,13 @@ async function fetchOauthAccessToken(
   fetchFn: FcmFetchFn,
   nowSec: number
 ): Promise<string | null> {
+  if (
+    oauthCache &&
+    oauthCache.email === account.clientEmail &&
+    oauthCache.exp - FCM_OAUTH_CACHE_SKEW_SEC > nowSec
+  ) {
+    return oauthCache.token;
+  }
   const assertion = signGoogleServiceAccountJwt(account, nowSec);
   const body = new URLSearchParams({
     grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
@@ -149,7 +163,9 @@ async function fetchOauthAccessToken(
   if (res.status < 200 || res.status >= 300) return null;
   const json = (await res.json().catch(() => ({}))) as { access_token?: unknown };
   const token = String(json.access_token ?? "").trim();
-  return token || null;
+  if (!token) return null;
+  oauthCache = { email: account.clientEmail, token, exp: nowSec + 3600 };
+  return token;
 }
 
 export async function sendFcmHttpV1(

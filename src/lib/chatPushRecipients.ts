@@ -55,6 +55,15 @@ export function shouldNotifyChatUser(input: {
   return input.replyToUserId === input.userId;
 }
 
+export function exclusiveChatWebPushRows<T extends { endpoint: string; userId: number }>(
+  rows: readonly T[],
+  otherEnabledEndpoints: readonly string[]
+): T[] {
+  const shared = new Set(otherEnabledEndpoints.filter(Boolean));
+  if (shared.size === 0) return [...rows];
+  return rows.filter((row) => !shared.has(row.endpoint));
+}
+
 export function selectChatPushRecipients(input: {
   event: ChatPushEvent;
   candidateUserIds: readonly number[];

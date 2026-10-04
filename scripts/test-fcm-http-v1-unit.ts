@@ -18,6 +18,7 @@ import {
   classifyFcmHttpResponse,
   FCM_ANDROID_CHANNEL_ID,
   fcmMessagesSendUrl,
+  resetFcmOauthCache,
   sendFcmHttpV1,
   type FcmFetchFn,
 } from "../src/lib/fcmHttpV1";
@@ -122,6 +123,7 @@ assert(fcmMessagesSendUrl("verthill").includes("/v1/projects/verthill/messages:s
 
 console.log("== mocked HTTP v1 send / fail-closed ==");
 async function runHttp() {
+  resetFcmOauthCache();
   const env = {
     FCM_SEND_ENABLED: "1",
     FIREBASE_PROJECT_ID: "verthill",
@@ -151,6 +153,12 @@ async function runHttp() {
     nowSec: 1_700_000_000,
   });
   assert(sent === "sent" && oauth === 1 && fcm === 1, "mocked HTTP v1 send");
+  const sentAgain = await sendFcmHttpV1("device-token-2", { title: "t", body: "b", url: "/caddy" }, {
+    env,
+    fetchFn: okFetch,
+    nowSec: 1_700_000_010,
+  });
+  assert(sentAgain === "sent" && oauth === 1 && fcm === 2, "oauth cached across tokens");
 
   let live = 0;
   const skipped = await deliverNativePushTokens(

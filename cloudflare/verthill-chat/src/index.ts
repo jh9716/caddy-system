@@ -1113,7 +1113,10 @@ export class ChatRoom extends DurableObject<Env> {
           }),
           mentionAll: message.mentionAll === true,
           mentionUserIds: (message.mentions || []).map((m) => m.userId),
-          replyToUserId: message.replyTo?.senderUserId || null,
+          replyToSenderUserId:
+            Number(message.replyTo?.senderUserId || 0) > 0
+              ? message.replyTo?.senderUserId
+              : null,
           roomType,
           memberUserIds,
           roomName: isAllRoomId(roomId) ? "전체 채팅방" : null,

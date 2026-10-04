@@ -12,5 +12,7 @@ describe("phase6 chat push dispatch", () => {
     assert.match(src, /if \(!url \|\| message\.deletionType\) return/);
     assert.doesNotMatch(src, /queueChatPushDispatch\(attach\.roomId, tombstone/);
     assert.match(src, /ctx\.waitUntil\(this\.sendChatPushDispatch/);
+    assert.match(src, /replyToSenderUserId/);
+    assert.doesNotMatch(src, /queueChatPushDispatch\(attach\.roomId, event\)/);
   });
 });

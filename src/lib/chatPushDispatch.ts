@@ -6,6 +6,7 @@ import type { PrismaClient } from "@prisma/client";
 import { buildChatPushPayload } from "@/lib/chatPushMessage";
 import {
   candidateUserIdsForRoom,
+  exclusiveChatWebPushRows,
   selectChatPushRecipients,
   type ChatPushEvent,
 } from "@/lib/chatPushRecipients";
@@ -48,7 +49,13 @@ export type ChatPushDispatchResult = {
   skipped: boolean;
 };
 
+export type ChatNotifyPrefLoad =
+  | { ok: true; prefs: Record<string, ChatNotifyMode> }
+  | { ok: false; reason: "store_missing" | "query_failed" };
+
 function isPrefStoreMissing(e: unknown): boolean {
+  const rec = e && typeof e === "object" ? (e as { code?: unknown }) : {};
+  if (rec.code === "P2021" || rec.code === "P2010") return true;
   const msg = e instanceof Error ? e.message : String(e ?? "");
   return /ChatRoomNotificationPreference/i.test(msg) && /relation|table|does not exist/i.test(msg);
 }
@@ -70,8 +77,8 @@ export async function loadChatNotifyPrefs(
   db: PrismaClient,
   roomId: string,
   userIds: readonly number[]
-): Promise<Record<string, ChatNotifyMode>> {
-  if (userIds.length === 0) return {};
+): Promise<ChatNotifyPrefLoad> {
+  if (userIds.length === 0) return { ok: true, prefs: {} };
   try {
     const rows = await db.chatRoomNotificationPreference.findMany({
       where: { roomId, userId: { in: [...userIds] } },
@@ -84,10 +91,10 @@ export async function loadChatNotifyPrefs(
     for (const row of rows) {
       byUser[String(row.userId)] = mapped[row.roomId] ?? "ALL";
     }
-    return byUser;
+    return { ok: true, prefs: byUser };
   } catch (e) {
-    if (isPrefStoreMissing(e)) return {};
-    throw e;
+    if (isPrefStoreMissing(e)) return { ok: false, reason: "store_missing" };
+    return { ok: false, reason: "query_failed" };
   }
 }
 
@@ -116,11 +123,12 @@ export async function dispatchChatPush(
     memberUserIds: input.memberUserIds,
     eligibleUserIds: eligible,
   });
-  const prefs = await loadChatNotifyPrefs(db, input.roomId, candidates);
+  const prefLoad = await loadChatNotifyPrefs(db, input.roomId, candidates);
+  if (!prefLoad.ok) return empty(true);
   const recipients = selectChatPushRecipients({
     event: input,
     candidateUserIds: candidates,
-    prefs,
+    prefs: prefLoad.prefs,
   });
   if (recipients.length === 0) return empty(false);
 
@@ -159,7 +167,23 @@ export async function dispatchChatPush(
           userAgent: true,
         },
       });
-      const filtered = selectWebPushMappingsAfterNativeSuccess(webRows, native.sentUserIds);
+      const endpoints = [...new Set(webRows.map((row) => row.endpoint))];
+      const shared =
+        endpoints.length === 0
+          ? []
+          : await db.pushSubscription.findMany({
+              where: {
+                endpoint: { in: endpoints },
+                enabled: true,
+                userId: { notIn: recipients },
+              },
+              select: { endpoint: true },
+            });
+      const exclusive = exclusiveChatWebPushRows(
+        webRows,
+        shared.map((row) => row.endpoint)
+      );
+      const filtered = selectWebPushMappingsAfterNativeSuccess(exclusive, native.sentUserIds);
       if (filtered.length > 0 && webCreds) {
         const web = await deliverWebPushMappings(db, filtered, payload, {
           sendFn: options?.sendWeb,

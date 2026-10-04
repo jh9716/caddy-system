@@ -12,10 +12,15 @@ import {
 } from "../src/lib/chatNotificationPref";
 import {
   candidateUserIdsForRoom,
+  exclusiveChatWebPushRows,
   isChatPushableEvent,
   selectChatPushRecipients,
   shouldNotifyChatUser,
 } from "../src/lib/chatPushRecipients";
+import { dispatchChatPush, loadChatNotifyPrefs } from "../src/lib/chatPushDispatch";
+import { verifyChatInternalRequest, CHAT_INTERNAL_TS_HEADER, CHAT_INTERNAL_AUTH_HEADER } from "../src/lib/chatInternalAuth";
+import { shouldSilentRebindWebPush } from "../src/lib/chatPushOnboarding";
+import { disablePushSubscriptionsForOtherUsers } from "../src/lib/pushSubscriptionStore";
 import { buildChatPushPayload, chatPushOpenPath } from "../src/lib/chatPushMessage";
 import {
   parseChatDeepLinkRoomId,
@@ -234,6 +239,57 @@ section("recipient policy");
     }),
     "RETIRED/ghost 제외"
   );
+  assert(
+    shouldNotifyChatUser({
+      userId: 9,
+      senderUserId: 8,
+      mode: "MENTIONS",
+      mentionAll: false,
+      mentionUserIds: [],
+      replyToUserId: 9,
+    }),
+    "reply-to-my-message"
+  );
+  assert(
+    !shouldNotifyChatUser({
+      userId: 9,
+      senderUserId: 8,
+      mode: "MENTIONS",
+      mentionAll: false,
+      mentionUserIds: [],
+      replyToUserId: 7,
+    }),
+    "unrelated reply excluded"
+  );
+  const noMembers = candidateUserIdsForRoom({
+    roomId: "room_0123456789abcdef",
+    memberUserIds: [8, 11],
+    eligibleUserIds: [8, 9, 11, 99],
+  });
+  assert(!noMembers.includes(9), "CUSTOM outsider 제외");
+  const afterRemove = candidateUserIdsForRoom({
+    roomId: "room_0123456789abcdef",
+    memberUserIds: [8],
+    eligibleUserIds: [8, 11],
+  });
+  assert(!afterRemove.includes(11), "CUSTOM removed member 제외");
+}
+
+section("prefs fail-closed");
+{
+  const offOk = selectChatPushRecipients({
+    event: {
+      roomId: "all",
+      seq: 3,
+      senderUserId: 8,
+      mentionAll: true,
+      mentionUserIds: [40],
+      replyToUserId: 40,
+    },
+    candidateUserIds: [8, 40],
+    prefs: { "40": "OFF" },
+  });
+  assert(offOk.length === 0, "OFF user DB 정상 → NO PUSH");
 }
 
 section("collapse + deep link");
@@ -274,6 +330,7 @@ section("collapse + deep link");
   assert(dm.url === "/chat?room=dm_8_40", "DM deep link");
   assert(chatPushOpenPath("all") === "/chat?room=all", "open path");
   assert(parseChatDeepLinkRoomId("dm_8_40") === "dm_8_40", "parse dm");
+  assert(parseChatDeepLinkRoomId("https://evil") == null, "deep link rejects absolute");
   assert(
     resolveChatDeepLinkAction({
       requestedRoomId: "room_0123456789abcdef",
@@ -308,9 +365,11 @@ section("source wiring");
   assert(worker.includes("queueChatPushDispatch"), "worker waitUntil dispatch");
   assert(worker.includes("if (!url || message.deletionType) return"), "deleted messages skip push");
   assert(!/queueChatPushDispatch\(.*tombstone/.test(worker), "no tombstone push");
+  assert(worker.includes("replyToSenderUserId"), "validated reply sender from SQLite");
   const dispatch = fs.readFileSync("src/lib/chatPushDispatch.ts", "utf8");
   assert(dispatch.includes("loadEnabledDevicePushTokens"), "batch native tokens");
   assert(dispatch.includes("selectChatPushRecipients"), "one recipient resolve");
+  assert(dispatch.includes("!prefLoad.ok") && dispatch.includes("return empty(true)"), "prefs fail-closed skip");
   const route = fs.readFileSync("src/app/api/chat/push-dispatch/route.ts", "utf8");
   assert(route.includes("verifyChatInternalRequest"), "HMAC only");
   assert(!route.includes("resolveAuthUser"), "no session on dispatch");
@@ -324,10 +383,151 @@ section("source wiring");
   assert(onboard.includes("/api/push/subscription"), "pwa subscribe reuses API");
   const fcm = fs.readFileSync("src/lib/fcmHttpV1.ts", "utf8");
   assert(fcm.includes("payload.tag ? { tag:"), "FCM android tag");
+  const store = fs.readFileSync("src/lib/pushSubscriptionStore.ts", "utf8");
+  assert(store.includes("disablePushSubscriptionsForOtherUsers"), "web account-switch disable others");
+  const native = fs.readFileSync("src/lib/nativePushToken.ts", "utf8");
+  assert(native.includes("disableDevicePushTokensForOtherUsers"), "native A→B regression kept");
 }
 
-if (failed) {
-  console.error(`\nFAILED ${failed} / ${passed + failed}`);
-  process.exit(1);
+section("web switch / exclusive");
+{
+  const exclusive = exclusiveChatWebPushRows(
+    [
+      { endpoint: "https://e", userId: 9 },
+      { endpoint: "https://ok", userId: 40 },
+    ],
+    ["https://e"]
+  );
+  assert(exclusive.length === 1 && exclusive[0]?.userId === 40, "shared web endpoint skipped");
+  assert(
+    shouldSilentRebindWebPush({
+      authenticated: true,
+      nativePlugin: false,
+      notificationPermission: "granted",
+    }),
+    "web rebind when already granted"
+  );
+  assert(
+    !shouldSilentRebindWebPush({
+      authenticated: true,
+      nativePlugin: false,
+      notificationPermission: "default",
+    }),
+    "no silent permission request"
+  );
 }
-console.log(`\nOK ${passed}`);
+
+void extraAsync().then(() => {
+  if (failed) {
+    console.error(`\nFAILED ${failed} / ${passed + failed}`);
+    process.exit(1);
+  }
+  console.log(`\nOK ${passed}`);
+});
+
+async function extraAsync() {
+  const absent = await loadChatNotifyPrefs(
+    {
+      chatRoomNotificationPreference: {
+        findMany: async () => [],
+      },
+    } as never,
+    "all",
+    [9, 40]
+  );
+  assert(absent.ok === true && Object.keys(absent.prefs).length === 0, "prefs query ok empty");
+  const absentRecipients = selectChatPushRecipients({
+    event: {
+      roomId: "all",
+      seq: 3,
+      senderUserId: 8,
+      mentionAll: false,
+      mentionUserIds: [],
+      replyToUserId: null,
+    },
+    candidateUserIds: [8, 9],
+    prefs: absent.ok ? absent.prefs : {},
+  });
+  assert(absentRecipients.join(",") === "9", "prefs row absent → ALL");
+
+  const missing = await loadChatNotifyPrefs(
+    {
+      chatRoomNotificationPreference: {
+        findMany: async () => {
+          throw Object.assign(new Error("relation ChatRoomNotificationPreference does not exist"), {
+            code: "P2021",
+          });
+        },
+      },
+    } as never,
+    "all",
+    [9]
+  );
+  assert(missing.ok === false && missing.reason === "store_missing", "prefs table missing → NO PUSH");
+
+  const failedLoad = await loadChatNotifyPrefs(
+    {
+      chatRoomNotificationPreference: {
+        findMany: async () => {
+          throw new Error("timeout");
+        },
+      },
+    } as never,
+    "all",
+    [9]
+  );
+  assert(failedLoad.ok === false && failedLoad.reason === "query_failed", "prefs DB failure → NO PUSH");
+
+  const skipped = await dispatchChatPush(
+    {
+      chatRoomNotificationPreference: {
+        findMany: async () => {
+          throw new Error("timeout");
+        },
+      },
+    } as never,
+    {
+      roomId: "all",
+      seq: 4,
+      senderUserId: 8,
+      senderName: "홍",
+      preview: "hi",
+      mentionAll: false,
+      mentionUserIds: [],
+      replyToUserId: null,
+      roomType: "ALL",
+    },
+    { eligibleUserIds: [8, 9], sendNative: async () => "sent" }
+  );
+  assert(skipped.recipients === 0 && skipped.skipped, "dispatch skips when prefs fail");
+
+  const n = await disablePushSubscriptionsForOtherUsers(
+    {
+      pushSubscription: {
+        updateMany: async () => ({ count: 1 }),
+      },
+    } as never,
+    { userId: 2, endpoint: "https://e" }
+  );
+  assert(n === 1, "web subscription A→B account switch");
+
+  const bad = await verifyChatInternalRequest(
+    new Request("http://local/api/chat/push-dispatch", {
+      method: "POST",
+      headers: {
+        [CHAT_INTERNAL_AUTH_HEADER]: "nope",
+        [CHAT_INTERNAL_TS_HEADER]: String(Math.floor(Date.now() / 1000)),
+      },
+    }),
+    "/api/chat/push-dispatch",
+    { CHAT_INTERNAL_SECRET: "secret" } as NodeJS.ProcessEnv
+  );
+  assert(bad === false, "HMAC invalid request 401/403");
+
+  const none = await verifyChatInternalRequest(
+    new Request("http://local/api/chat/push-dispatch", { method: "POST" }),
+    "/api/chat/push-dispatch",
+    { CHAT_INTERNAL_SECRET: "secret" } as NodeJS.ProcessEnv
+  );
+  assert(none === false, "unauthenticated dispatch rejected");
+}
