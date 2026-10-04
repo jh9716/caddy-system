@@ -248,6 +248,8 @@ model User {
   pushSubscriptions PushSubscription[]
   /// Android FCM tokens. Additive; does not replace PushSubscription.
   devicePushTokens DevicePushToken[]
+  /// Per-room chat push preference. Default ALL when no row.
+  chatNotificationPreferences ChatRoomNotificationPreference[]
   /// 코스 제보 작성 이력. User 물리 삭제는 Restrict.
   courseReports CourseReport[] @relation("CourseReportAuthor")
   /// 공용 댓글. User 물리 삭제는 Restrict. 표시명은 조회 시 Caddy.name 우선.
@@ -384,6 +386,27 @@ model DevicePushToken {
   @@unique([userId, token])
   @@index([token])
   @@index([userId])
+}
+
+enum ChatRoomNotificationMode {
+  ALL
+  MENTIONS
+  OFF
+}
+
+/// userId × roomId chat push preference. Missing row means ALL.
+model ChatRoomNotificationPreference {
+  id     Int  @id @default(autoincrement())
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  roomId String
+  mode   ChatRoomNotificationMode @default(ALL)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, roomId])
+  @@index([userId])
+  @@index([roomId])
 }
 
 /// Kakao 직원 본인확인 요청 (이름+휴대폰 → 관리자 승인 후 User.caddyId / Caddy.phoneNormalized)

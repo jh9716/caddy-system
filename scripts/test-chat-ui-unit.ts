@@ -83,6 +83,9 @@ section("android back room leave");
   assert(!chat.includes("searchParams"), "no room URL query");
   assert(chat.includes("전체 채팅방은 모든 활성") || chat.includes("ALL_ROOM_ID"), "overall room");
   assert(chat.includes("+ 채팅방 만들기"), "create room CTA");
+  assert(chat.includes('sheet === "notify"'), "room notify sheet");
+  assert(chat.includes("upsertVisibleChatRoom"), "DM optimistic upsert");
+  assert(chat.includes("parseChatDeepLinkRoomId"), "chat deep link room");
   assert(!chat.includes("내 조 채팅방"), "team rooms hidden from default UI");
   assert(chat.includes("/api/chat/users?scope=all"), "create overlay fetches invite pool once");
   assert(chat.includes("전체 선택"), "bulk select all");
@@ -105,9 +108,16 @@ section("no neon chat schema");
 {
   const schema = read("prisma/schema.prisma");
   assert(!/model\s+ChatMessage/.test(schema), "no ChatMessage model");
-  assert(!/model\s+ChatRoom/.test(schema), "no ChatRoom model");
+  assert(!/model\s+ChatRoom\b/.test(schema), "no ChatRoom model");
   const migrations = fs.readdirSync("prisma/migrations");
-  assert(!migrations.some((name) => /chat/i.test(name)), "no chat prisma migration");
+  assert(
+    migrations.some((name) => name.includes("chat_room_notification_pref")),
+    "additive chat notification pref migration"
+  );
+  assert(
+    !migrations.some((name) => /chat_message|chatroom(?!_notification)/i.test(name)),
+    "no ChatMessage/ChatRoom tables"
+  );
 }
 
 section("worker auth + directory");
@@ -132,6 +142,9 @@ section("worker auth + directory");
   assert(worker.includes("validateIncomingHistory"), "seq cursor history");
   assert(worker.includes("CHAT_INTERNAL_SECRET"), "internal secret name");
   assert(worker.includes("server_only"), "browser origin cannot create rooms");
+  assert(worker.includes("queueChatPushDispatch"), "async chat push after persist");
+  assert(worker.includes("CHAT_PUSH_DISPATCH_URL"), "optional Next dispatch URL");
+  assert(worker.includes("/api/chat/push-dispatch"), "one backend path");
   const dir = read("cloudflare/verthill-chat/src/directory.ts");
   assert(dir.includes("verifyInternalRequest"), "directory internals require internal auth");
   assert(dir.includes("clampReadSeq"), "malicious read seq clamped");

@@ -7,6 +7,8 @@
   "preview_urls": false,
   // Optional later (do not set in this PR): wrangler secret put CHAT_INTERNAL_SECRET
   // Worker/Next fall back to CHAT_AUTH_SECRET until both sides set the new name together.
+  // Optional later: wrangler secret put CHAT_PUSH_DISPATCH_URL
+  // Example: https://www.verthill.kr/api/chat/push-dispatch
   "durable_objects": {
     "bindings": [
       {

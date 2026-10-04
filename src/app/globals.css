@@ -4319,6 +4319,97 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
 .vh-chat-dot.is-on {
   color: #067647;
 }
+.vh-chat-notify-btn {
+  border: 0;
+  background: transparent;
+  color: var(--vh-ink-soft);
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 0 2px;
+  flex-shrink: 0;
+}
+.vh-chat-notify-off,
+.vh-chat-notify-mentions {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--vh-muted);
+}
+.vh-chat-notify-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 0 16px;
+}
+.vh-chat-notify-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: 1px solid var(--vh-gold-line);
+  background: var(--vh-paper);
+  color: var(--vh-ink);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+}
+.vh-chat-notify-choice.is-on {
+  border-color: var(--vh-gold-deep);
+  background: var(--vh-gold-soft);
+}
+.vh-chat-notify-radio {
+  width: 1.2em;
+  color: var(--vh-gold-deep);
+}
+.vh-push-onboard {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(15, 31, 24, 0.45);
+  padding: 16px;
+}
+.vh-push-onboard-card {
+  width: min(420px, 100%);
+  background: var(--vh-paper);
+  color: var(--vh-ink);
+  border-radius: 18px;
+  padding: 18px 16px 16px;
+  box-shadow: 0 12px 32px rgba(15, 31, 24, 0.18);
+}
+.vh-push-onboard-card h2 {
+  margin: 0 0 8px;
+  font-size: 1.05rem;
+}
+.vh-push-onboard-card p {
+  margin: 0 0 14px;
+  color: var(--vh-ink-soft);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+.vh-push-onboard-actions {
+  display: flex;
+  gap: 8px;
+}
+.vh-push-onboard-actions button {
+  flex: 1;
+  border: 0;
+  border-radius: 12px;
+  padding: 11px 12px;
+  font: inherit;
+  font-weight: 800;
+}
+.vh-push-onboard-actions .is-primary {
+  background: var(--vh-green-800);
+  color: #fff;
+}
+.vh-push-onboard-actions .is-later {
+  background: var(--vh-ivory-deep);
+  color: var(--vh-ink-soft);
+}
 .vh-chat-log {
   flex: 1;
   min-height: 0;

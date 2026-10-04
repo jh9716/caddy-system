@@ -275,10 +275,18 @@ async function main() {
       assert(afterB.length === 2, "A/X + B/X coexist");
       assert(afterB.some((r) => r.userId === userA.id), "A/X kept");
       assert(afterB.some((r) => r.userId === userB.id), "B/X created with separate userId");
+      assert(
+        afterB.some((r) => r.userId === userA.id && r.enabled === false),
+        "A/X disabled after B rebind"
+      );
+      assert(
+        afterB.some((r) => r.userId === userB.id && r.enabled === true),
+        "B/X last-writer owns endpoint"
+      );
 
       const aGet = await jsonReq("GET", cookieA, undefined, { [PUSH_ENDPOINT_HEADER]: X });
       const aGetBody = await aGet.json();
-      assert(aGet.status === 200 && aGetBody.subscriptionExists === true, "A GET registered");
+      assert(aGet.status === 200 && aGetBody.subscriptionExists === false, "A GET unregistered after B switch");
       assert(aGetBody.endpoint == null, "GET endpoint omitted");
       const bGet = await jsonReq("GET", cookieB, undefined, { [PUSH_ENDPOINT_HEADER]: X });
       const bGetBody = await bGet.json();
@@ -317,9 +325,9 @@ async function main() {
           },
         }
       );
-      assert(status.ok && statusHits === 1, "7 A STATUS network 1");
-      assert(status.sent === 1 && status.deliveries === 1, "7 STATUS deliveries 1");
-      assert(status.recipients === 1 && status.subscriptions === 1, "7 STATUS recipients 1 mapping 1");
+      assert(status.ok && statusHits === 0, "7 A STATUS network 0 after B owns X");
+      assert(status.sent === 0 && status.deliveries === 0, "7 STATUS deliveries 0");
+      assert(status.recipients === 0 && status.subscriptions === 0, "7 STATUS recipients 0 mapping 0");
 
       const reportNew = await prisma.courseReport.create({
         data: {

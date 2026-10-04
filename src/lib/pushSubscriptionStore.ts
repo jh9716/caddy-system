@@ -137,11 +137,26 @@ export async function userHasEnabledPushSubscriptionForEndpoint(
   return n > 0;
 }
 
+/** Same physical endpoint cannot stay enabled for another User (account switch). */
+export async function disablePushSubscriptionsForOtherUsers(
+  db: PrismaClient,
+  input: { userId: number; endpoint: string }
+): Promise<number> {
+  const result = await db.pushSubscription.updateMany({
+    where: {
+      endpoint: input.endpoint,
+      enabled: true,
+      userId: { not: input.userId },
+    },
+    data: { enabled: false },
+  });
+  return result.count;
+}
+
 /**
  * Upsert the current User's mapping for this endpoint.
- * Does not reassign another User's row.
- * PREPARE: legacy endpoint UNIQUE may reject a second User on the same
- * physical endpoint — fail-closed 409, no steal/delete.
+ * Disables other Users' enabled rows for the same endpoint (native token ownership).
+ * PREPARE: leftover endpoint UNIQUE may still reject a second User — fail-closed 409.
  */
 export async function upsertPushSubscriptionForUser(
   db: PrismaClient,
@@ -169,6 +184,7 @@ export async function upsertPushSubscriptionForUser(
         enabled: true,
       },
     });
+    await disablePushSubscriptionsForOtherUsers(db, { userId, endpoint: input.endpoint });
     return { userId };
   }
   try {
@@ -183,6 +199,7 @@ export async function upsertPushSubscriptionForUser(
         enabled: true,
       },
     });
+    await disablePushSubscriptionsForOtherUsers(db, { userId, endpoint: input.endpoint });
     return { userId };
   } catch (e) {
     if (
@@ -195,7 +212,10 @@ export async function upsertPushSubscriptionForUser(
       where: { userId, endpoint: input.endpoint },
       select: { id: true },
     });
-    if (mine) return { userId };
+    if (mine) {
+      await disablePushSubscriptionsForOtherUsers(db, { userId, endpoint: input.endpoint });
+      return { userId };
+    }
     throw new PushSubscriptionError(
       SAME_DEVICE_PREPARE_ERROR,
       SAME_DEVICE_PREPARE_MESSAGE,

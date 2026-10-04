@@ -38,6 +38,18 @@ import {
   shouldShowJumpButton,
 } from "@/lib/chatPhase5";
 import {
+  clearPendingChatRoomId,
+  parseChatDeepLinkRoomId,
+  readPendingChatRoomId,
+  resolveChatDeepLinkAction,
+  rollbackOptimisticChatRoom,
+  upsertVisibleChatRoom,
+} from "@/lib/chatPhase6";
+import {
+  DEFAULT_CHAT_NOTIFY_MODE,
+  type ChatNotifyMode,
+} from "@/lib/chatNotificationPref";
+import {
   chatReconnectStatus,
   nextReconnectDelay,
   shouldRefreshTokenOnClose,
@@ -172,7 +184,9 @@ function formatListTime(iso: string | null | undefined): string {
 
 export default function ChatClient() {
   const [view, setView] = useState<"list" | "room">("list");
-  const [sheet, setSheet] = useState<null | "create" | "members">(null);
+  const [sheet, setSheet] = useState<null | "create" | "members" | "notify">(null);
+  const [notifyPrefs, setNotifyPrefs] = useState<Record<string, ChatNotifyMode>>({});
+  const deepLinkTriedRef = useRef("");
   const [tokenInfo, setTokenInfo] = useState<TokenPayload | null>(null);
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
   const [activeRoom, setActiveRoom] = useState<RoomSummary | null>(null);
@@ -575,6 +589,18 @@ export default function ChatClient() {
         } catch {
           // Directory WS is the realtime source; HTTP is a same-session fallback.
         }
+        try {
+          const prefRes = await fetch("/api/chat/notification-prefs", {
+            credentials: "include",
+            cache: "no-store",
+          });
+          const prefData = (await prefRes.json().catch(() => null)) as {
+            prefs?: Record<string, ChatNotifyMode>;
+          } | null;
+          if (prefRes.ok && prefData?.prefs) setNotifyPrefs(prefData.prefs);
+        } catch {
+          // default ALL
+        }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : "채팅을 열 수 없습니다.");
       } finally {
@@ -853,6 +879,57 @@ export default function ChatClient() {
     await connectSocket(info, room.roomId);
   }
 
+  useEffect(() => {
+    const requested =
+      parseChatDeepLinkRoomId(
+        typeof window !== "undefined"
+          ? new URLSearchParams(window.location.search).get("room")
+          : null
+      ) || readPendingChatRoomId(typeof sessionStorage === "undefined" ? null : sessionStorage);
+    const action = resolveChatDeepLinkAction({
+      requestedRoomId: requested,
+      rooms,
+      directoryReady: directoryConnected || (!loading && rooms.length > 0),
+    });
+    if (action === "none" || !requested) return;
+    if (action === "wait") return;
+    if (deepLinkTriedRef.current === requested) return;
+    deepLinkTriedRef.current = requested;
+    if (action === "fallback") {
+      clearPendingChatRoomId(typeof sessionStorage === "undefined" ? null : sessionStorage);
+      setError("참여할 수 없는 채팅방입니다.");
+      setView("list");
+      return;
+    }
+    const room = rooms.find((row) => row.roomId === requested);
+    if (!room) return;
+    clearPendingChatRoomId(typeof sessionStorage === "undefined" ? null : sessionStorage);
+    void openRoom(room);
+  }, [directoryConnected, loading, rooms]);
+
+  async function saveNotifyMode(mode: ChatNotifyMode) {
+    const room = activeRoom;
+    if (!room) return;
+    const prev = notifyPrefs[room.roomId] ?? DEFAULT_CHAT_NOTIFY_MODE;
+    setNotifyPrefs((cur) => ({ ...cur, [room.roomId]: mode }));
+    const res = await fetch(
+      `/api/chat/rooms/${encodeURIComponent(room.roomId)}/notification`,
+      {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode }),
+      }
+    );
+    if (await consumeUnauthorizedMemberResponse(res)) return;
+    if (!res.ok) {
+      setNotifyPrefs((cur) => ({ ...cur, [room.roomId]: prev }));
+      setError("알림 설정을 저장하지 못했습니다.");
+      return;
+    }
+    setSheet(null);
+  }
+
   function requestOlderHistory() {
     const ws = wsRef.current;
     const beforeSeq = oldestSeqRef.current;
@@ -1024,10 +1101,10 @@ export default function ChatClient() {
     setProfileTarget(null);
     const room = data?.room;
     if (!room?.roomId) return;
-    await openRoom({
+    const optimistic = {
       roomId: String(room.roomId),
       name: String(room.name || peer.displayName),
-      type: "DM",
+      type: "DM" as const,
       ownerUserId: Number(room.ownerUserId || tokenInfo?.user.userId || 0),
       memberCount: 2,
       lastMessageSeq: 0,
@@ -1041,9 +1118,16 @@ export default function ChatClient() {
       peerDisplayName: String(room.peerDisplayName || peer.displayName),
       peerRole: String(room.peerRole || peer.role),
       peerTeam: String(room.peerTeam || peer.team || "-"),
-    });
-    const info = tokenRef.current;
-    if (info) await fetchRoomsHttp(info.token);
+    };
+    setRooms((prev) => upsertVisibleChatRoom(prev, optimistic));
+    try {
+      await openRoom(optimistic);
+      const info = tokenRef.current;
+      if (info) await fetchRoomsHttp(info.token);
+    } catch {
+      setRooms((prev) => rollbackOptimisticChatRoom(prev, optimistic.roomId));
+      setError("1:1 채팅을 열지 못했습니다.");
+    }
   }
 
   function openActions(line: ChatLine) {
@@ -1185,7 +1269,20 @@ export default function ChatClient() {
                 </span>
                 <div className="vh-chat-room-card-main">
                 <div className="vh-chat-room-card-top">
-                  <div className="vh-chat-room-card-name">{title}</div>
+                  <div className="vh-chat-room-card-name">
+                    {title}
+                    {notifyPrefs[room.roomId] === "OFF" ? (
+                      <span className="vh-chat-notify-off" aria-label="알림 끔">
+                        {" "}
+                        🔕
+                      </span>
+                    ) : notifyPrefs[room.roomId] === "MENTIONS" ? (
+                      <span className="vh-chat-notify-mentions" aria-label="멘션만">
+                        {" "}
+                        @
+                      </span>
+                    ) : null}
+                  </div>
                   <div className="vh-chat-room-card-time">{formatListTime(room.lastMessageAt)}</div>
                 </div>
                 <div className="vh-chat-room-card-bottom">
@@ -1246,6 +1343,13 @@ export default function ChatClient() {
               {activeRoom && activeRoom.type === "CUSTOM" ? (
                 <span className="vh-chat-member-count">{activeRoom.memberCount}명</span>
               ) : null}
+            </button>
+            <button
+              type="button"
+              className="vh-chat-notify-btn"
+              onClick={() => setSheet("notify")}
+            >
+              알림
             </button>
             {linkStatus === "reconnecting" ? (
               <span className="vh-chat-dot">재연결 중…</span>
@@ -1737,6 +1841,41 @@ export default function ChatClient() {
             >
               {creating ? "만드는 중…" : "만들기"}
             </button>
+          </div>
+        </div>
+      ) : null}
+
+      {sheet === "notify" ? (
+        <div className="vh-chat-sheet" role="dialog" aria-label="알림 설정">
+          <div className="vh-chat-sheet-head">
+            <strong>알림 설정</strong>
+            <button type="button" className="vh-chat-back" onClick={() => setSheet(null)}>
+              닫기
+            </button>
+          </div>
+          <div className="vh-chat-notify-choices">
+            {(
+              [
+                ["ALL", "모든 알림"],
+                ["MENTIONS", "멘션만"],
+                ["OFF", "알림 끄기"],
+              ] as const
+            ).map(([mode, label]) => {
+              const current = (activeRoom && notifyPrefs[activeRoom.roomId]) || DEFAULT_CHAT_NOTIFY_MODE;
+              return (
+                <button
+                  key={mode}
+                  type="button"
+                  className={`vh-chat-notify-choice ${current === mode ? "is-on" : ""}`}
+                  onClick={() => void saveNotifyMode(mode)}
+                >
+                  <span className="vh-chat-notify-radio" aria-hidden="true">
+                    {current === mode ? "●" : "○"}
+                  </span>
+                  {label}
+                </button>
+              );
+            })}
           </div>
         </div>
       ) : null}

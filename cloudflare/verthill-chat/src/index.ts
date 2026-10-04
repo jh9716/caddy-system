@@ -60,6 +60,8 @@ export interface Env {
   CHAT_DIRECTORY: DurableObjectNamespace<ChatDirectory>;
   CHAT_AUTH_SECRET: string;
   CHAT_INTERNAL_SECRET?: string;
+  /** Optional Next origin for best-effort chat push. Example: https://www.verthill.kr/api/chat/push-dispatch */
+  CHAT_PUSH_DISPATCH_URL?: string;
 }
 
 function corsHeaders(): Record<string, string> {
@@ -615,6 +617,7 @@ export class ChatRoom extends DurableObject<Env> {
     if (!inserted) return;
     this.broadcastVisible(inserted);
     void this.notifyDirectoryMessage(attach.roomId, inserted);
+    this.queueChatPushDispatch(attach.roomId, inserted);
   }
 
   webSocketClose(ws: WebSocket) {
@@ -1069,6 +1072,59 @@ export class ChatRoom extends DurableObject<Env> {
       return;
     }
     await this.notifyDirectoryPreview(roomId, latest);
+  }
+
+  private queueChatPushDispatch(roomId: string, message: ChatMessage) {
+    try {
+      this.ctx.waitUntil(this.sendChatPushDispatch(roomId, message));
+    } catch {
+      void this.sendChatPushDispatch(roomId, message);
+    }
+  }
+
+  private async sendChatPushDispatch(roomId: string, message: ChatMessage) {
+    const url = String(this.env.CHAT_PUSH_DISPATCH_URL || "").trim();
+    if (!url || message.deletionType) return;
+    try {
+      let roomType = "ALL";
+      let memberUserIds: number[] | null = null;
+      if (isCustomRoomId(roomId)) {
+        roomType = "CUSTOM";
+        memberUserIds = (await listDirectoryMemberIds(this.env, roomId)) ?? [];
+      } else if (isDmRoomId(roomId)) {
+        roomType = "DM";
+        memberUserIds = (await listDirectoryMemberIds(this.env, roomId)) ?? [];
+      }
+      const headers = await internalAuthHeaders(
+        chatInternalSecret(this.env),
+        "/api/chat/push-dispatch"
+      );
+      await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          roomId,
+          seq: message.seq || 0,
+          senderUserId: message.senderUserId,
+          senderName: message.sender,
+          preview: directorySafePreview({
+            body: message.body,
+            deletionType: message.deletionType,
+          }),
+          mentionAll: message.mentionAll === true,
+          mentionUserIds: (message.mentions || []).map((m) => m.userId),
+          replyToSenderUserId:
+            Number(message.replyTo?.senderUserId || 0) > 0
+              ? message.replyTo?.senderUserId
+              : null,
+          roomType,
+          memberUserIds,
+          roomName: isAllRoomId(roomId) ? "전체 채팅방" : null,
+        }),
+      });
+    } catch {
+      // chat persist already succeeded
+    }
   }
 
   private async notifyDirectoryMessage(roomId: string, message: ChatMessage) {
