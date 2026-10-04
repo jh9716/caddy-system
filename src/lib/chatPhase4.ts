@@ -105,8 +105,42 @@ export function mergeChatLines<T extends { clientMessageId: string; seq?: number
   });
 }
 
-export function applyHiddenSeq<T extends { seq?: number }>(lines: T[], seq: number): T[] {
-  return lines.filter((line) => Number(line.seq) !== seq);
+export function nextSyncCursor(pageNewestSeq: unknown, fallbackAfterSeq: number): number {
+  const newest = Number(pageNewestSeq);
+  if (Number.isInteger(newest) && newest >= 0) return newest;
+  return fallbackAfterSeq;
+}
+
+export function redactHiddenReplies<T extends { replyToSeq?: number | null; replyTo?: ChatLineReply | null }>(
+  lines: T[],
+  hiddenSeqs: Iterable<number>
+): T[] {
+  const hidden = hiddenSeqs instanceof Set ? hiddenSeqs : new Set(hiddenSeqs);
+  if (hidden.size === 0) return lines;
+  return lines.map((line) => {
+    const replySeq = Number(line.replyToSeq);
+    if (!Number.isInteger(replySeq) || replySeq <= 0 || !hidden.has(replySeq)) return line;
+    return {
+      ...line,
+      replyTo: {
+        seq: replySeq,
+        senderUserId: 0,
+        sender: "",
+        preview: REPLY_DELETED,
+        state: "deleted" as const,
+      },
+    };
+  });
+}
+
+export function applyHiddenSeq<T extends { seq?: number; replyToSeq?: number | null; replyTo?: ChatLineReply | null }>(
+  lines: T[],
+  seq: number
+): T[] {
+  return redactHiddenReplies(
+    lines.filter((line) => Number(line.seq) !== seq),
+    [seq]
+  );
 }
 
 export function applyDeletedLine<T extends ChatLineBase>(

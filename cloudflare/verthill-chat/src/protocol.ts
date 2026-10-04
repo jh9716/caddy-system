@@ -380,8 +380,18 @@ export function replyTargetFromRow(input: {
   targetSender?: string | null;
   targetBody?: string | null;
   targetDeletionType?: unknown;
+  targetHidden?: boolean;
 }): ChatReplyTo | null {
   if (input.replyToSeq == null) return null;
+  if (input.targetHidden) {
+    return {
+      seq: input.replyToSeq,
+      senderUserId: 0,
+      sender: "",
+      preview: REPLY_DELETED,
+      state: "deleted",
+    };
+  }
   if (input.targetSeq == null) {
     return {
       seq: input.replyToSeq,
@@ -408,6 +418,18 @@ export function replyTargetFromRow(input: {
     preview: truncatePreview(String(input.targetBody || ""), 80),
     state: "ok",
   };
+}
+
+export function clampSyncAfterSeq(afterSeq: number, maxSeq: number): number {
+  const after = Number.isInteger(afterSeq) && afterSeq > 0 ? afterSeq : 0;
+  const max = Number.isInteger(maxSeq) && maxSeq > 0 ? maxSeq : 0;
+  return Math.min(after, max);
+}
+
+export function nextSyncCursor(pageNewestSeq: unknown, fallbackAfterSeq: number): number {
+  const newest = Number(pageNewestSeq);
+  if (Number.isInteger(newest) && newest >= 0) return newest;
+  return fallbackAfterSeq;
 }
 
 export function validateIncomingSync(raw: unknown):

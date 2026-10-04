@@ -5,9 +5,12 @@
 import {
   DELETE_FOR_EVERYONE_WINDOW_MS,
   MESSAGE_RETENTION_DAYS,
+  MESSAGE_RETENTION_MS,
   canAdminDelete,
   canDeleteForEveryone,
   canMentionAll,
+  clampSyncAfterSeq,
+  computeUnread,
   directorySafePreview,
   replyTargetFromRow,
   resolveMentionAll,
@@ -25,6 +28,8 @@ import {
   formatStorageRange,
   lastKnownSeq,
   mergeChatLines,
+  nextSyncCursor,
+  redactHiddenReplies,
   DELETE_FOR_EVERYONE_WINDOW_MS as CLIENT_WINDOW,
   MESSAGE_RETENTION_DAYS as CLIENT_RETENTION,
 } from "../src/lib/chatPhase4";
@@ -96,7 +101,16 @@ section("caddy individual mention / mentionAll spoof");
     "admin → caddy mention"
   );
   assert(!canMentionAll("caddy"), "caddy cannot @전체");
+  assert(canMentionAll("admin") && canMentionAll("leader"), "admin/leader can @전체");
   assert(resolveMentionAll(true, "caddy") === false, "caddy mentionAll:true spoof → false");
+  assert(
+    filterMentionSuggestions({
+      candidates: [{ userId: 6, displayName: "이기흥", team: "-", role: "admin" }],
+      query: "이",
+      canMentionAll: true,
+    }).some((h) => h.role === "admin"),
+    "leader/admin → admin mention"
+  );
 }
 
 section("reconnect");
@@ -154,10 +168,40 @@ section("seq sync merge");
     [
       { seq: 1, clientMessageId: "a" },
       { seq: 2, clientMessageId: "b" },
+      {
+        seq: 3,
+        clientMessageId: "c",
+        replyToSeq: 2,
+        replyTo: { seq: 2, senderUserId: 9, sender: "원문작성자", preview: "비밀원문", state: "ok" as const },
+      },
     ],
     2
   );
-  assert(hidden.length === 1 && hidden[0]!.seq === 1, "hide is per-user local apply");
+  assert(hidden.length === 2 && hidden[0]!.seq === 1, "hide is per-user local apply");
+  assert(
+    hidden[1]!.replyTo?.preview === "삭제된 메시지입니다." && hidden[1]!.replyTo?.sender === "",
+    "hide redacts reply preview instead of leaking original"
+  );
+}
+
+section("sync clamp / newestSeq paging / race");
+{
+  assert(clampSyncAfterSeq(999, 50) === 50, "future afterSeq clamps to max");
+  assert(clampSyncAfterSeq(10, 50) === 10, "valid afterSeq kept");
+  assert(clampSyncAfterSeq(-3, 50) === 0, "invalid afterSeq → 0");
+  assert(nextSyncCursor(200, 250) === 200, "page with server newestSeq not realtime lastSeq");
+  assert(nextSyncCursor("x", 40) === 40, "bad newestSeq falls back");
+  const live = [{ clientMessageId: "old", seq: 100 }, { clientMessageId: "live", seq: 250 }];
+  const page = Array.from({ length: 100 }, (_, i) => ({
+    clientMessageId: `gap-${101 + i}`,
+    seq: 101 + i,
+  }));
+  const merged = mergeChatLines(live, page);
+  const cursor = nextSyncCursor(200, lastKnownSeq(merged));
+  assert(cursor === 200, "sync+realtime race does not skip 201-249");
+  assert(merged.filter((m) => m.seq === 250).length === 1, "realtime 250 not duplicated");
+  assert(computeUnread(10, 12) === 0, "unread never negative");
+  assert(computeUnread(10, 7) === 3, "unread is latest-read");
 }
 
 section("delete / tombstone / reply");
@@ -172,6 +216,33 @@ section("delete / tombstone / reply");
       sentAtMs: Date.now() - 60_000,
     }),
     "sender can delete within window"
+  );
+  assert(
+    canDeleteForEveryone({
+      actorUserId: 8,
+      senderUserId: 8,
+      sentAtMs: 0,
+      nowMs: DELETE_FOR_EVERYONE_WINDOW_MS - 1000,
+    }),
+    "9:59 still allowed"
+  );
+  assert(
+    canDeleteForEveryone({
+      actorUserId: 8,
+      senderUserId: 8,
+      sentAtMs: 0,
+      nowMs: DELETE_FOR_EVERYONE_WINDOW_MS,
+    }),
+    "exactly 10:00 inclusive allowed"
+  );
+  assert(
+    !canDeleteForEveryone({
+      actorUserId: 8,
+      senderUserId: 8,
+      sentAtMs: 0,
+      nowMs: DELETE_FOR_EVERYONE_WINDOW_MS + 1000,
+    }),
+    "10:01 rejected"
   );
   assert(
     !canDeleteForEveryone({
@@ -211,6 +282,32 @@ section("delete / tombstone / reply");
     targetDeletionType: "everyone",
   });
   assert(gone?.state === "deleted" && gone.preview === "삭제된 메시지입니다.", "deleted reply");
+  const hid = replyTargetFromRow({
+    replyToSeq: 12,
+    targetSeq: 12,
+    targetSender: "신정훈",
+    targetBody: "원문비밀",
+    targetHidden: true,
+  });
+  assert(
+    hid?.state === "deleted" && hid.preview === "삭제된 메시지입니다." && hid.sender === "" && hid.senderUserId === 0,
+    "hidden-for-me reply does not leak author/body"
+  );
+  const redacted = redactHiddenReplies(
+    [
+      {
+        seq: 4,
+        replyToSeq: 12,
+        replyTo: { seq: 12, senderUserId: 1, sender: "신정훈", preview: "원문비밀", state: "ok" as const },
+      },
+    ],
+    [12]
+  );
+  assert(redacted[0]!.replyTo?.preview !== "원문비밀", "client redact strips hidden original");
+  const kept = Date.now() - MESSAGE_RETENTION_MS + 60_000;
+  const purged = Date.now() - MESSAGE_RETENTION_MS - 60_000;
+  assert(new Date(kept).toISOString() >= new Date(Date.now() - MESSAGE_RETENTION_MS).toISOString(), "179d 23h kept vs UTC cutoff");
+  assert(purged < Date.now() - MESSAGE_RETENTION_MS, "181d older than UTC cutoff");
   const items = chatActionItems({
     myUserId: 1,
     myRole: "admin",
@@ -303,8 +400,11 @@ section("source wiring");
   assert(client.includes("type: \"sync\""), "client sends sync");
   assert(client.includes("nextReconnectDelay"), "auto reconnect backoff");
   assert(client.includes("visibilitychange"), "visible reconnect");
+  assert(client.includes("appStateChange"), "Capacitor foreground reconnect");
   assert(client.includes("addEventListener(\"online\""), "online reconnect");
   assert(client.includes("visualViewport"), "keyboard visualViewport");
+  assert(client.includes("vh-chat-open"), "class fallback for :has()");
+  assert(client.includes("nextSyncCursor(data.newestSeq"), "sync pages by newestSeq");
   assert(client.includes("다시 시도"), "manual fallback only after long fail");
   assert(!client.includes(">다시 연결<"), "no always-on reconnect button");
   assert(client.includes("나에게서만 삭제"), "hide action");
@@ -315,6 +415,7 @@ section("source wiring");
   assert(client.includes("registerAndroidChatOverlayClose(() => setActionLine(null))"), "back closes menu first");
   assert(css.includes("--vh-keyboard-inset"), "keyboard inset var");
   assert(css.includes(".vh-work:has(.vh-chat)"), "fixed chat viewport");
+  assert(css.includes("html.vh-chat-open .vh-work"), ":has class fallback");
   assert(css.includes(".vh-chat-log"), "message area scrolls");
   assert(css.includes("text-decoration: underline"), "mention underline");
   assert(proto.includes("DELETE_FOR_EVERYONE_WINDOW_MS = 10 * 60 * 1000"), "10m window");
@@ -324,6 +425,13 @@ section("source wiring");
   assert(worker.includes("deletion_type"), "tombstone column");
   assert(worker.includes("async alarm()"), "DO alarm retention");
   assert(worker.includes("purgeExpiredMessages"), "batched purge");
+  assert(worker.includes("/internal/retention"), "existing rooms can be poked");
+  assert(worker.includes("clampSyncAfterSeq"), "sync clamps future afterSeq");
+  assert(worker.includes("rh.seq AS reply_hidden"), "history join hides reply target");
+  assert(worker.includes("verifyInternalRequest"), "retention poke is HMAC");
+  assert(dir.includes("pokeKnownRooms"), "directory wakes existing rooms");
+  assert(dir.includes("ALLOWED_ROOMS"), "legacy team rooms included in poke");
+  assert(dir.includes("CHAT_ROOM"), "directory has room binding");
   assert(!worker.includes("FCM"), "no FCM push");
   assert(!dir.includes("FCM"), "directory has no FCM");
   assert(back.includes("close-chat-overlay"), "overlay still before leave-room");

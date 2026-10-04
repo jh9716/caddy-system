@@ -18,6 +18,8 @@ import {
   displayTombstone,
   lastKnownSeq,
   mergeChatLines,
+  nextSyncCursor,
+  redactHiddenReplies,
   SYNC_LIMIT,
   type ChatLineReply,
 } from "@/lib/chatPhase4";
@@ -200,11 +202,12 @@ export default function ChatClient() {
   const lastSeqRef = useRef(0);
   const reconnectingRef = useRef(false);
   const linesRef = useRef<ChatLine[]>([]);
+  const hiddenSeqsRef = useRef<Set<number>>(new Set());
   const pressTimerRef = useRef<number | null>(null);
 
   const upsertLine = useCallback((incoming: ChatLine) => {
     setLines((prev) => {
-      const next = mergeChatLines(prev, [incoming]);
+      const next = redactHiddenReplies(mergeChatLines(prev, [incoming]), hiddenSeqsRef.current);
       lastSeqRef.current = lastKnownSeq(next);
       linesRef.current = next;
       return next;
@@ -442,10 +445,11 @@ export default function ChatClient() {
             oldestSeqRef.current = data.oldestSeq;
           }
           if (reset) {
-            setLines(hist);
-            linesRef.current = hist;
-            lastSeqRef.current = lastKnownSeq(hist);
-            const last = hist[hist.length - 1];
+            const next = redactHiddenReplies(hist, hiddenSeqsRef.current);
+            setLines(next);
+            linesRef.current = next;
+            lastSeqRef.current = lastKnownSeq(next);
+            const last = next[next.length - 1];
             if (last?.seq && ws.readyState === WebSocket.OPEN) {
               ws.send(JSON.stringify({ type: "read", seq: last.seq }));
             }
@@ -453,7 +457,7 @@ export default function ChatClient() {
             const el = listRef.current;
             if (el) pendingScrollRestore.current = el.scrollHeight;
             setLines((prev) => {
-              const next = mergeChatLines(hist, prev);
+              const next = redactHiddenReplies(mergeChatLines(hist, prev), hiddenSeqsRef.current);
               linesRef.current = next;
               lastSeqRef.current = lastKnownSeq(next);
               return next;
@@ -464,20 +468,21 @@ export default function ChatClient() {
         if (data.type === "sync" && Array.isArray(data.messages)) {
           const extra = data.messages.map(payloadToLine);
           setLines((prev) => {
-            const next = mergeChatLines(prev, extra);
+            const next = redactHiddenReplies(mergeChatLines(prev, extra), hiddenSeqsRef.current);
             linesRef.current = next;
             lastSeqRef.current = lastKnownSeq(next);
             return next;
           });
-          reconnectingRef.current = false;
           if (data.hasMore === true && ws.readyState === WebSocket.OPEN) {
             ws.send(
               JSON.stringify({
                 type: "sync",
-                afterSeq: lastSeqRef.current,
+                afterSeq: nextSyncCursor(data.newestSeq, extra.length ? Number(extra[extra.length - 1]!.seq) : 0),
                 limit: SYNC_LIMIT,
               })
             );
+          } else {
+            reconnectingRef.current = false;
           }
           const last = extra[extra.length - 1];
           if (last?.seq && ws.readyState === WebSocket.OPEN) {
@@ -495,6 +500,7 @@ export default function ChatClient() {
           return;
         }
         if (data.type === "hidden" && Number(data.seq) > 0) {
+          hiddenSeqsRef.current.add(Number(data.seq));
           setLines((prev) => {
             const next = applyHiddenSeq(prev, Number(data.seq));
             linesRef.current = next;
@@ -576,11 +582,45 @@ export default function ChatClient() {
     };
     window.addEventListener("online", reconnect);
     document.addEventListener("visibilitychange", onVisible);
+    let removed = false;
+    let appHandle: { remove: () => Promise<void> } | undefined;
+    void import("@capacitor/app")
+      .then(({ App }) => {
+        if (removed) return;
+        return App.addListener("appStateChange", ({ isActive }) => {
+          if (isActive) reconnect();
+        });
+      })
+      .then((handle) => {
+        if (!handle) return;
+        if (removed) {
+          void handle.remove();
+          return;
+        }
+        appHandle = handle;
+      })
+      .catch(() => undefined);
     return () => {
+      removed = true;
       window.removeEventListener("online", reconnect);
       document.removeEventListener("visibilitychange", onVisible);
+      void appHandle?.remove();
     };
   }, [connectDirectory, connectSocket]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const work = document.querySelector(".vh-work");
+    const inner = document.querySelector(".vh-work-inner");
+    root.classList.add("vh-chat-open");
+    work?.classList.add("vh-chat-open");
+    inner?.classList.add("vh-chat-open");
+    return () => {
+      root.classList.remove("vh-chat-open");
+      work?.classList.remove("vh-chat-open");
+      inner?.classList.remove("vh-chat-open");
+    };
+  }, []);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -773,6 +813,7 @@ export default function ChatClient() {
     reconnectingRef.current = false;
     lastSeqRef.current = 0;
     linesRef.current = [];
+    hiddenSeqsRef.current = new Set();
     if (mentionCacheRef.current?.roomId === room.roomId) {
       setMentionCandidates(mentionCacheRef.current.users);
     } else {

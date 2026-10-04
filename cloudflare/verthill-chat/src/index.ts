@@ -3,6 +3,7 @@ import { ChatDirectory } from "./directory";
 import {
   chatInternalSecret,
   internalAuthHeaders,
+  verifyInternalRequest,
 } from "./internalAuth";
 import {
   DIRECTORY_NAME,
@@ -12,10 +13,12 @@ import {
   MAX_CONNECTIONS_ALL,
   MESSAGE_MAX,
   MESSAGE_RETENTION_MS,
+  REPLY_DELETED,
   RETENTION_ALARM_MS,
   RETENTION_BATCH,
   canAdminDelete,
   canDeleteForEveryone,
+  clampSyncAfterSeq,
   directorySafePreview,
   filterMentionsToMembers,
   isAllRoomId,
@@ -421,6 +424,15 @@ export class ChatRoom extends DurableObject<Env> {
   }
 
   async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (request.method === "POST" && url.pathname === "/internal/retention") {
+      if (!(await verifyInternalRequest(request, this.env, url.pathname))) {
+        return json({ error: "forbidden" }, 403);
+      }
+      await this.ensureRetentionAlarm();
+      this.purgeExpiredMessages(RETENTION_BATCH);
+      return json({ ok: true });
+    }
     const authorized = await authorizeSocket(request, this.env);
     if (authorized instanceof Response) return authorized;
     const cap = isAllRoomId(authorized.room) ? MAX_CONNECTIONS_ALL : MAX_CONNECTIONS;
@@ -649,10 +661,12 @@ export class ChatRoom extends DurableObject<Env> {
               m.deleted_at, m.deletion_type,
               r.seq AS reply_seq, r.sender_user_id AS reply_sender_user_id,
               r.sender AS reply_sender, r.body AS reply_body,
-              r.deletion_type AS reply_deletion_type
+              r.deletion_type AS reply_deletion_type,
+              rh.seq AS reply_hidden
             FROM messages m
             LEFT JOIN hidden_messages h ON h.user_id = ? AND h.seq = m.seq
             LEFT JOIN messages r ON r.seq = m.reply_to_seq
+            LEFT JOIN hidden_messages rh ON rh.user_id = ? AND rh.seq = m.reply_to_seq
             WHERE h.seq IS NULL`;
   }
 
@@ -678,6 +692,7 @@ export class ChatRoom extends DurableObject<Env> {
         targetSender: row.reply_sender == null ? "" : String(row.reply_sender),
         targetBody: row.reply_body == null ? "" : String(row.reply_body),
         targetDeletionType: row.reply_deletion_type,
+        targetHidden: row.reply_hidden != null && row.reply_hidden !== "",
       }),
       deletionType,
       deletedAt: row.deleted_at ? String(row.deleted_at) : null,
@@ -711,6 +726,7 @@ export class ChatRoom extends DurableObject<Env> {
                ORDER BY m.seq DESC
                LIMIT ?`,
               userId,
+              userId,
               limit
             )
             .toArray()
@@ -720,6 +736,7 @@ export class ChatRoom extends DurableObject<Env> {
                AND m.seq < ?
                ORDER BY m.seq DESC
                LIMIT ?`,
+              userId,
               userId,
               beforeSeq,
               limit
@@ -751,6 +768,10 @@ export class ChatRoom extends DurableObject<Env> {
   }
 
   private sendSync(ws: WebSocket, userId: number, afterSeq: number, limit: number) {
+    const maxRow = this.ctx.storage.sql
+      .exec(`SELECT MAX(seq) AS max_seq FROM messages`)
+      .toArray()[0];
+    const after = clampSyncAfterSeq(afterSeq, Number(maxRow?.max_seq || 0));
     const rows = this.ctx.storage.sql
       .exec(
         `${this.messageSelectSql()}
@@ -758,12 +779,13 @@ export class ChatRoom extends DurableObject<Env> {
          ORDER BY m.seq ASC
          LIMIT ?`,
         userId,
-        afterSeq,
+        userId,
+        after,
         limit
       )
       .toArray();
     const messages = rows.map((row) => this.rowToMessage(row));
-    const newestSeq = messages.length ? Number(messages[messages.length - 1]!.seq) : afterSeq;
+    const newestSeq = messages.length ? Number(messages[messages.length - 1]!.seq) : after;
     const newer = this.ctx.storage.sql
       .exec(
         `SELECT 1 AS ok FROM messages m
@@ -885,8 +907,25 @@ export class ChatRoom extends DurableObject<Env> {
       const attach = this.liveAttach(socket);
       if (!attach) continue;
       if (event.seq && this.isHiddenFor(attach.claims.userId, event.seq)) continue;
-      this.sendSocket(socket, event);
+      this.sendSocket(socket, this.redactHiddenReply(event, attach.claims.userId));
     }
+  }
+
+  private redactHiddenReply(event: ChatMessage, userId: number): ChatMessage {
+    const replySeq = event.replyToSeq;
+    if (replySeq == null || !event.replyTo || !this.isHiddenFor(userId, replySeq)) {
+      return event;
+    }
+    return {
+      ...event,
+      replyTo: {
+        seq: replySeq,
+        senderUserId: 0,
+        sender: "",
+        preview: REPLY_DELETED,
+        state: "deleted",
+      },
+    };
   }
 
   private broadcastJson(event: object) {
@@ -964,16 +1003,25 @@ export class ChatRoom extends DurableObject<Env> {
   }
 
   async alarm() {
-    this.purgeExpiredMessages(RETENTION_BATCH);
-    const remaining = this.ctx.storage.sql
-      .exec(
-        `SELECT 1 AS ok FROM messages WHERE sent_at < ? LIMIT 1`,
-        new Date(Date.now() - MESSAGE_RETENTION_MS).toISOString()
-      )
-      .toArray();
-    await this.ctx.storage.setAlarm(
-      Date.now() + (remaining.length > 0 ? 5 * 60 * 1000 : RETENTION_ALARM_MS)
-    );
+    let delay = RETENTION_ALARM_MS;
+    try {
+      this.purgeExpiredMessages(RETENTION_BATCH);
+      const remaining = this.ctx.storage.sql
+        .exec(
+          `SELECT 1 AS ok FROM messages WHERE sent_at < ? LIMIT 1`,
+          new Date(Date.now() - MESSAGE_RETENTION_MS).toISOString()
+        )
+        .toArray();
+      if (remaining.length > 0) delay = 5 * 60 * 1000;
+    } catch {
+      delay = 5 * 60 * 1000;
+    } finally {
+      try {
+        await this.ctx.storage.setAlarm(Date.now() + delay);
+      } catch {
+        // alarm optional on local
+      }
+    }
   }
 
   private async ensureRetentionAlarm() {
