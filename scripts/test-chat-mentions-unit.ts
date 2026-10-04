@@ -182,6 +182,7 @@ section("source wiring");
   assert(client.includes("mentionAll"), "composer sends mentionAll");
   assert(client.includes("registerAndroidChatOverlayClose"), "mention panel uses overlay back");
   assert(client.includes("setMentionSuppressed(true)"), "back/escape closes suggestions");
+  assert(client.includes("멘션 목록 불러오는 중"), "candidate fetch shows loading");
   assert(client.includes("/api/chat/users?scope=all"), "all-room candidates reuse users API");
   assert(client.includes("chatDirectoryMembersUrl"), "custom room uses members");
   assert(!client.includes("setInterval"), "no mention polling");

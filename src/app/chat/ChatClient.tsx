@@ -141,6 +141,7 @@ export default function ChatClient() {
   const [mentionCandidates, setMentionCandidates] = useState<MentionCandidate[]>([]);
   const [mentionCursor, setMentionCursor] = useState(0);
   const [mentionSuppressed, setMentionSuppressed] = useState(false);
+  const [mentionLoading, setMentionLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [createName, setCreateName] = useState("");
   const [userQuery, setUserQuery] = useState("");
@@ -415,17 +416,22 @@ export default function ChatClient() {
     if (!room || !info) return;
     if (mentionCacheRef.current?.roomId === room.roomId) {
       setMentionCandidates(mentionCacheRef.current.users);
+      setMentionLoading(false);
       return;
     }
     if (mentionFetchedRef.current === room.roomId) return;
     mentionFetchedRef.current = room.roomId;
+    setMentionLoading(true);
     try {
       if (room.roomId === ALL_ROOM_ID) {
         const res = await fetch("/api/chat/users?scope=all", {
           credentials: "include",
           cache: "no-store",
         });
-        if (await consumeUnauthorizedMemberResponse(res)) return;
+        if (await consumeUnauthorizedMemberResponse(res)) {
+          setMentionLoading(false);
+          return;
+        }
         const data = await res.json().catch(() => null);
         const users = Array.isArray(data?.users)
           ? (data.users as MentionCandidate[]).map((u) => ({
@@ -440,10 +446,14 @@ export default function ChatClient() {
           if (user.displayName) mentionNamesRef.current.set(user.userId, user.displayName);
         }
         setMentionCandidates(users);
+        setMentionLoading(false);
         return;
       }
       const url = chatDirectoryMembersUrl(room.roomId, info.token);
-      if (!url) return;
+      if (!url) {
+        setMentionLoading(false);
+        return;
+      }
       const res = await fetch(url, { cache: "no-store" });
       const data = await res.json().catch(() => null);
       const users = Array.isArray(data?.members)
@@ -459,8 +469,10 @@ export default function ChatClient() {
         if (user.displayName) mentionNamesRef.current.set(user.userId, user.displayName);
       }
       setMentionCandidates(users);
+      setMentionLoading(false);
     } catch {
       mentionFetchedRef.current = "";
+      setMentionLoading(false);
     }
   }, []);
 
@@ -897,7 +909,9 @@ export default function ChatClient() {
                   </button>
                 ))}
                 {mentionSuggestions.length === 0 ? (
-                  <p className="vh-chat-status">멘션할 사람이 없습니다.</p>
+                  <p className="vh-chat-status">
+                    {mentionLoading ? "멘션 목록 불러오는 중…" : "멘션할 사람이 없습니다."}
+                  </p>
                 ) : null}
               </div>
             ) : null}
