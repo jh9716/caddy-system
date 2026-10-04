@@ -207,6 +207,18 @@ section("autocomplete");
     canMentionAll: false,
   });
   assert(lee.some((h) => h.displayName === "이기흥"), "admin Korean name search works");
+  const caddyToAdmin = filterMentionSuggestions({
+    candidates: [
+      { userId: 6, displayName: "이기흥", team: "-", role: "admin" },
+      { userId: 18, displayName: "신정훈", team: "7조", role: "caddy" },
+    ],
+    query: "이기",
+    canMentionAll: false,
+  });
+  assert(
+    caddyToAdmin.some((h) => h.displayName === "이기흥" && h.role === "admin"),
+    "caddy can individually mention admin"
+  );
   const fake = filterMentionSuggestions({
     candidates: [
       { userId: 0, displayName: "가짜캐디", team: "1조", role: "caddy" },
@@ -351,11 +363,12 @@ section("source wiring");
   assert(worker.includes("mentions_json"), "sqlite mentions_json");
   assert(worker.includes("mention_all"), "sqlite mention_all");
   assert(worker.includes("ALTER TABLE messages ADD COLUMN mentions_json"), "lazy upgrade");
-  assert(!worker.includes("DELETE FROM messages"), "no message wipe");
+  assert(!/DELETE FROM messages\s*;/.test(worker), "no message wipe");
+  assert(worker.includes("DELETE FROM messages WHERE seq = ? AND sent_at < ?"), "retention is batched");
   assert(worker.includes("listDirectoryMemberIds"), "custom member validation");
   assert(worker.includes("resolveMentionAll"), "worker mentionAll from token role");
   assert(worker.includes("memberIds ?? []"), "directory miss fail-closed");
-  assert(worker.includes("truncatePreview(message.body)"), "directory preview stays body text");
+  assert(worker.includes("directorySafePreview"), "directory preview stays safe text");
   assert(!worker.includes("preview: JSON.stringify(mentions)"), "directory preview is not mention json");
   assert((worker.match(/ALTER TABLE messages ADD COLUMN mentions_json/g) || []).length === 1, "one mentions_json alter");
   assert((worker.match(/ALTER TABLE messages ADD COLUMN mention_all/g) || []).length === 1, "one mention_all alter");
@@ -364,7 +377,7 @@ section("source wiring");
   assert(directory.includes("this.isMember(roomId, claims.userId)"), "members list checks membership");
   assert(worker.includes("persistQueue"), "custom mention persist stays ordered");
   assert(
-    /WHERE seq < \?\s+ORDER BY seq DESC/.test(worker),
+    /AND m\.seq < \?\s+ORDER BY m\.seq DESC/.test(worker),
     "history pagination SQL stays one statement"
   );
   assert(proto.includes("MAX_MENTIONS = 20"), "protocol max mentions");
