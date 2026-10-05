@@ -43,8 +43,8 @@ import {
   isDirectEditVacant,
   overlayUnassignedVacancies,
 } from "@/lib/assignmentBoardCellEdit";
-import { BoardExcelExportButton } from "@/components/board/BoardExcelExportButton";
-import { BoardImageExportMenu } from "@/components/board/BoardImageExportMenu";
+import { LazyBoardExcelExportButton } from "@/components/board/LazyBoardExcelExportButton";
+import { LazyBoardImageExportMenu } from "@/components/board/LazyBoardImageExportMenu";
 import { formatCaddyLabel, caddyAffiliation } from "@/lib/caddyDisplay";
 import {
   formatPublishedAt,
@@ -100,10 +100,24 @@ const COURSE_SHORT: Record<CourseCode, string> = {
   LAKE: "레",
 };
 
-import { SpecialDutyPanel, type Shift1StartOption } from "./SpecialDutyPanel";
-import { SpecialSupportPanel } from "./SpecialSupportPanel";
+import {
+  SpecialDutyPanel,
+  type Shift1StartOption,
+  type SpecialDutyListPayload,
+} from "./SpecialDutyPanel";
+import {
+  SpecialSupportPanel,
+  type SpecialSupportListPayload,
+} from "./SpecialSupportPanel";
 import { DailyStaffingSummaryCard } from "@/components/manage/DailyStaffingSummaryCard";
-import { BoardPushNotifyCard } from "@/components/manage/BoardPushNotifyCard";
+import {
+  BoardPushNotifyCard,
+  type BoardPushPreviewState,
+} from "@/components/manage/BoardPushNotifyCard";
+import {
+  dateBundleSectionWarnings,
+  shouldApplyAssignmentsDateBundle,
+} from "@/lib/assignmentsDateBundleView";
 import {
   buildDailyStaffingSummary,
   canonicalAvailableCount,
@@ -685,6 +699,24 @@ export default function ManageAssignmentsOpsPage() {
   const [loadingApply, setLoadingApply] = useState(false);
   const [loadingLiveApply, setLoadingLiveApply] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dateLoadWarnings, setDateLoadWarnings] = useState<string[]>([]);
+  const [dateBundleReady, setDateBundleReady] = useState(false);
+  const [specialDutyBundle, setSpecialDutyBundle] =
+    useState<SpecialDutyListPayload | null>(null);
+  const [specialDutyBundleError, setSpecialDutyBundleError] = useState<
+    string | null
+  >(null);
+  const [specialSupportBundle, setSpecialSupportBundle] =
+    useState<SpecialSupportListPayload | null>(null);
+  const [specialSupportBundleError, setSpecialSupportBundleError] = useState<
+    string | null
+  >(null);
+  const [boardPreviewBundle, setBoardPreviewBundle] =
+    useState<BoardPushPreviewState | null>(null);
+  const [boardPreviewBundleError, setBoardPreviewBundleError] = useState<
+    string | null
+  >(null);
+  const loadGen = useRef(0);
   const [swapKey, setSwapKey] = useState<string | null>(null);
   const [moveKey, setMoveKey] = useState<string | null>(null);
   const [moveSheetOpen, setMoveSheetOpen] = useState(false);
@@ -1110,139 +1142,6 @@ export default function ManageAssignmentsOpsPage() {
   }, [file, date]);
 
   useEffect(() => {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      setAvailability(null);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(
-          `/api/availability?date=${encodeURIComponent(date)}`,
-          { credentials: "include" }
-        );
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok || cancelled) return;
-        setAvailability(
-          data as AvailabilityResult & { dailySummary?: DailyAvailabilitySummary }
-        );
-      } catch {
-        // Draft offSnapshot / opsDuty / DailyCaddyUnavailable 로 패널을 채운다.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [date]);
-
-  useEffect(() => {
-    setOpsDutySyncNotice(null);
-    setOpsDutyEditorSlots(null);
-    setOpsDutyError(null);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      setOpsDutyStored(null);
-      setOpsDutyPreview(null);
-      setOpsDutySheetPreview(null);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(
-          `/api/daily-ops-duties?date=${encodeURIComponent(date)}`,
-          { credentials: "include" }
-        );
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok || cancelled) return;
-        setOpsDutyStored({
-          count: Number(data.count) || 0,
-          byRole: data.byRole,
-          caddyIds: Array.isArray(data.caddyIds)
-            ? data.caddyIds
-            : Array.isArray(data.rows)
-              ? data.rows.map((r: { caddyId: number }) => r.caddyId)
-              : [],
-          rows: Array.isArray(data.rows) ? data.rows : [],
-        });
-        setOpsDutyEditorSlots(parseOpsDutyEditorSlots(data));
-      } catch {
-        if (!cancelled) {
-          setOpsDutyStored(null);
-          setOpsDutyEditorSlots(null);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [date]);
-
-  useEffect(() => {
-    setOffOverrides([]);
-    setFieldError(null);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      setDailyUnavailables([]);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const [offRes, unavailRes] = await Promise.all([
-          fetch(`/api/daily-off-overrides?date=${encodeURIComponent(date)}`, {
-            credentials: "include",
-          }),
-          fetch(`/api/daily-unavailables?date=${encodeURIComponent(date)}`, {
-            credentials: "include",
-          }),
-        ]);
-        const offData = await offRes.json().catch(() => ({}));
-        const unavailData = await unavailRes.json().catch(() => ({}));
-        if (cancelled) return;
-        if (offRes.ok && Array.isArray(offData.overrides)) {
-          setOffOverrides(offData.overrides);
-        }
-        if (unavailRes.ok && Array.isArray(unavailData.rows)) {
-          applyUnavailablePanelRows(unavailData.rows);
-        }
-      } catch {
-        if (!cancelled) setOffOverrides([]);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [date, applyUnavailablePanelRows]);
-
-  useEffect(() => {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      setThirdWeekly(null);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(
-          `/api/third-weekly-start?date=${encodeURIComponent(date)}`,
-          { credentials: "include" }
-        );
-        const data = await res.json();
-        if (!res.ok || cancelled) return;
-        setThirdWeekly({
-          weekStart: String(data.weekStart || ""),
-          autoStartTeam: String(data.autoStartTeam || ""),
-          startTeam: String(data.startTeam || ""),
-          overridden: Boolean(data.overridden),
-        });
-      } catch {
-        if (!cancelled) setThirdWeekly(null);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [date]);
-
-  useEffect(() => {
     if (typeof window !== "undefined") {
       const fromUrl = assignmentsDateFromSearch(window.location.search);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date) && fromUrl) {
@@ -1273,12 +1172,32 @@ export default function ManageAssignmentsOpsPage() {
     dateRef.current = date;
     serverDraftVersionRef.current = 0;
     setDraftVersion(0);
+    setOpsDutySyncNotice(null);
+    setOpsDutyEditorSlots(null);
+    setOpsDutyError(null);
+    setOffOverrides([]);
+    setFieldError(null);
+    setDateLoadWarnings([]);
+    setDateBundleReady(false);
+    setSpecialDutyBundle(null);
+    setSpecialDutyBundleError(null);
+    setSpecialSupportBundle(null);
+    setSpecialSupportBundleError(null);
+    setBoardPreviewBundle(null);
+    setBoardPreviewBundleError(null);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       clearDraftBoard();
       setDailyUnavailables([]);
       setOpsOffSnapshot(null);
+      setAvailability(null);
+      setOpsDutyStored(null);
+      setOpsDutyPreview(null);
+      setOpsDutySheetPreview(null);
+      setThirdWeekly(null);
+      setPublished(null);
       return;
     }
+    const gen = ++loadGen.current;
     let cancelled = false;
     hydratingDraftRef.current = true;
     setOpsOffSnapshot(null);
@@ -1287,10 +1206,131 @@ export default function ManageAssignmentsOpsPage() {
     setDraftSaveState("idle");
     (async () => {
       try {
-        const data = await loadServerDraft(date);
-        if (cancelled) return;
-        applyUnavailablePanelRows(data.unavailableRows);
-        if (!data.draft) {
+        const res = await fetch(
+          `/api/assignments/date-bundle?date=${encodeURIComponent(date)}`,
+          { credentials: "include", cache: "no-store" }
+        );
+        const data = (await res.json().catch(() => ({}))) as {
+          ok?: boolean;
+          date?: string;
+          error?: string;
+          draft?: {
+            draft: null | {
+              version: number;
+              payload: unknown;
+              updatedAt: string;
+            };
+            unavailableCaddyIds?: number[];
+            unavailableFromShift?: UnavailableFromShiftRow[];
+            unavailableRows?: Array<{
+              caddyId: number;
+              name?: string;
+              team?: string;
+              reason?: string;
+            }>;
+          } | null;
+          availability?: (AvailabilityResult & {
+            dailySummary?: DailyAvailabilitySummary;
+            offOverlay?: { baseOffCaddyIds?: unknown };
+          }) | null;
+          opsDuty?: {
+            count?: number;
+            byRole?: Record<string, number>;
+            caddyIds?: number[];
+            rows?: Array<{ caddyId: number; name?: string; team?: string; role?: string }>;
+          } | null;
+          offOverrides?: { overrides?: Array<{ caddyId: number; action: string; name?: string; team?: string }> };
+          unavailables?: { rows?: Array<{ caddyId: number; name?: string; team?: string; reason?: string }> };
+          thirdWeeklyStart?: {
+            weekStart?: string;
+            autoStartTeam?: string;
+            startTeam?: string;
+            overridden?: boolean;
+          } | null;
+          published?: {
+            sourceDraftVersion?: number;
+            publishedAt?: string;
+            publishedByUsername?: string | null;
+          } | null;
+          specialDuties?: SpecialDutyListPayload | null;
+          specialSupports?: SpecialSupportListPayload | null;
+          boardPreview?: BoardPushPreviewState | null;
+          errors?: Record<string, { error?: string }>;
+        };
+        if (
+          !shouldApplyAssignmentsDateBundle({
+            requestGen: gen,
+            latestGen: loadGen.current,
+            payloadDate: data.date,
+            selectedDate: date,
+            cancelled,
+          })
+        ) {
+          return;
+        }
+        if (!res.ok) {
+          throw new Error(data.error || "날짜 묶음 조회 실패");
+        }
+        setDateLoadWarnings(dateBundleSectionWarnings(data.errors));
+        setDateBundleReady(true);
+        setSpecialDutyBundle(data.specialDuties ?? null);
+        setSpecialDutyBundleError(data.errors?.specialDuties?.error ?? null);
+        setSpecialSupportBundle(data.specialSupports ?? null);
+        setSpecialSupportBundleError(data.errors?.specialSupports?.error ?? null);
+        setBoardPreviewBundle(data.boardPreview ?? null);
+        setBoardPreviewBundleError(data.errors?.boardPreview?.error ?? null);
+
+        if (data.availability) {
+          setAvailability(
+            data.availability as AvailabilityResult & {
+              dailySummary?: DailyAvailabilitySummary;
+            }
+          );
+        }
+        if (data.opsDuty) {
+          setOpsDutyStored({
+            count: Number(data.opsDuty.count) || 0,
+            byRole: data.opsDuty.byRole,
+            caddyIds: Array.isArray(data.opsDuty.caddyIds)
+              ? data.opsDuty.caddyIds
+              : Array.isArray(data.opsDuty.rows)
+                ? data.opsDuty.rows.map((r) => r.caddyId)
+                : [],
+            rows: Array.isArray(data.opsDuty.rows) ? data.opsDuty.rows : [],
+          });
+          setOpsDutyEditorSlots(parseOpsDutyEditorSlots(data.opsDuty));
+        } else if (data.errors?.opsDuty?.error) {
+          setOpsDutyError(data.errors.opsDuty.error);
+        }
+        if (Array.isArray(data.offOverrides?.overrides)) {
+          setOffOverrides(data.offOverrides.overrides);
+        }
+        if (Array.isArray(data.unavailables?.rows)) {
+          applyUnavailablePanelRows(data.unavailables.rows);
+        } else if (Array.isArray(data.draft?.unavailableRows)) {
+          applyUnavailablePanelRows(data.draft.unavailableRows);
+        }
+        if (data.thirdWeeklyStart) {
+          setThirdWeekly({
+            weekStart: String(data.thirdWeeklyStart.weekStart || ""),
+            autoStartTeam: String(data.thirdWeeklyStart.autoStartTeam || ""),
+            startTeam: String(data.thirdWeeklyStart.startTeam || ""),
+            overridden: Boolean(data.thirdWeeklyStart.overridden),
+          });
+        }
+        const publishedRow = data.published;
+        setPublished(
+          publishedRow
+            ? {
+                sourceDraftVersion: Number(publishedRow.sourceDraftVersion) || 0,
+                publishedAt: String(publishedRow.publishedAt || ""),
+                publishedByUsername: publishedRow.publishedByUsername ?? null,
+              }
+            : null
+        );
+
+        const draftBlock = data.draft;
+        if (!draftBlock?.draft) {
           hydratingDraftRef.current = false;
           setDraft(null);
           setAutoResult(null);
@@ -1298,36 +1338,47 @@ export default function ManageAssignmentsOpsPage() {
           setDraftSaveState("idle");
           setDraftSavedAt(null);
           setDraftVersion(0);
-          scheduleAfterPaint(() =>
-            prewarmOffSheetForDate(date, (snap) => {
-              if (cancelled) return;
-              offSnapshotRef.current = snap;
-              setOpsOffSnapshot(snap);
-            })
-          );
+          const year = Number(date.slice(0, 4));
+          if (
+            data.availability &&
+            Number.isInteger(year) &&
+            year < 2090
+          ) {
+            const snap = buildOffSnapshot({
+              date,
+              caddyIds: snapshotCaddyIdsFromAvailability(data.availability),
+            });
+            offSnapshotRef.current = snap;
+            setOpsOffSnapshot(snap);
+          }
           return;
         }
-        const payload = parseDailyBoardDraftPayload(data.draft.payload, date);
+        const payload = parseDailyBoardDraftPayload(draftBlock.draft.payload, date);
         applyHydratedDraft(
           payloadToAssignmentDraft(payload),
-          data.draft.version,
-          data.draft.updatedAt,
-          Array.isArray(data.unavailableCaddyIds) ? data.unavailableCaddyIds : [],
-          Array.isArray(data.unavailableFromShift)
-            ? data.unavailableFromShift
+          draftBlock.draft.version,
+          draftBlock.draft.updatedAt,
+          Array.isArray(draftBlock.unavailableCaddyIds)
+            ? draftBlock.unavailableCaddyIds
+            : [],
+          Array.isArray(draftBlock.unavailableFromShift)
+            ? draftBlock.unavailableFromShift
             : undefined
         );
         if (payload.offSnapshot) {
           offSnapshotRef.current = payload.offSnapshot;
           setOpsOffSnapshot(payload.offSnapshot);
         }
-        scheduleAfterPaint(() =>
-          prewarmOffSheetForDate(date, (snap) => {
-            if (cancelled) return;
-            offSnapshotRef.current = snap;
-            setOpsOffSnapshot(snap);
-            const current = draftRef.current;
-            if (!current || current.date !== snap.date) return;
+        const year = Number(date.slice(0, 4));
+        if (data.availability && Number.isInteger(year) && year < 2090) {
+          const snap = buildOffSnapshot({
+            date,
+            caddyIds: snapshotCaddyIdsFromAvailability(data.availability),
+          });
+          offSnapshotRef.current = snap;
+          setOpsOffSnapshot(snap);
+          const current = draftRef.current;
+          if (current && current.date === snap.date) {
             const next = { ...current, offSnapshot: snap };
             setDraft(next);
             if (confirmedDraftRef.current?.date === snap.date) {
@@ -1337,13 +1388,24 @@ export default function ManageAssignmentsOpsPage() {
               };
             }
             queueDraftSave(next);
-          })
-        );
+          }
+        }
         const leftover = consumePipelineDirty(window.sessionStorage);
         if (leftover) setToast(PIPELINE_DIRTY_RELOAD_TOAST);
       } catch (e: unknown) {
-        if (cancelled) return;
+        if (
+          !shouldApplyAssignmentsDateBundle({
+            requestGen: gen,
+            latestGen: loadGen.current,
+            payloadDate: date,
+            selectedDate: date,
+            cancelled,
+          })
+        ) {
+          return;
+        }
         hydratingDraftRef.current = false;
+        setDateBundleReady(true);
         setDraft(null);
         setAutoResult(null);
         setError(e instanceof Error ? e.message : "작업본 조회 실패");
@@ -1352,7 +1414,7 @@ export default function ManageAssignmentsOpsPage() {
     return () => {
       cancelled = true;
     };
-  }, [date, applyHydratedDraft, clearDraftBoard, loadServerDraft]);
+  }, [date, applyHydratedDraft, applyUnavailablePanelRows, clearDraftBoard, queueDraftSave]);
 
   useEffect(() => {
     const onPopState = () => {
@@ -1388,39 +1450,6 @@ export default function ManageAssignmentsOpsPage() {
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [flushOnce]);
-
-  useEffect(() => {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      setPublished(null);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(
-          `/api/assignments/published?date=${encodeURIComponent(date)}`,
-          { credentials: "include", cache: "no-store" }
-        );
-        const data = await res.json().catch(() => ({}));
-        if (cancelled || !res.ok) return;
-        const row = data.published;
-        setPublished(
-          row
-            ? {
-                sourceDraftVersion: Number(row.sourceDraftVersion) || 0,
-                publishedAt: String(row.publishedAt || ""),
-                publishedByUsername: row.publishedByUsername ?? null,
-              }
-            : null
-        );
-      } catch {
-        if (!cancelled) setPublished(null);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [date]);
 
   useEffect(() => {
     const dirty = () =>
@@ -4020,6 +4049,13 @@ export default function ManageAssignmentsOpsPage() {
           </div>
         )}
         {error && <div className="ops-error">{error}</div>}
+        {dateLoadWarnings.length > 0 ? (
+          <div className="ops-error" role="status">
+            {dateLoadWarnings.map((line) => (
+              <div key={line}>{line}</div>
+            ))}
+          </div>
+        ) : null}
         {autoResult?.specialPlacement?.block && (
           <div className="ops-error">
             {autoResult.specialPlacement.block.message}
@@ -4240,6 +4276,9 @@ export default function ManageAssignmentsOpsPage() {
             excludedRows={availability?.excluded}
             shift1Options={shift1StartOptions}
             hasDraft={Boolean(draft || serverDraftVersionRef.current > 0)}
+            bundleReady={dateBundleReady}
+            initialPayload={specialDutyBundle}
+            initialError={specialDutyBundleError}
             onLoaded={onSpecialDutyLoaded}
             onChanged={() => {
               setSpecialSettingsStale(true);
@@ -4252,6 +4291,9 @@ export default function ManageAssignmentsOpsPage() {
             date={date}
             excludedRows={availability?.excluded}
             hasDraft={Boolean(draft || serverDraftVersionRef.current > 0)}
+            bundleReady={dateBundleReady}
+            initialPayload={specialSupportBundle}
+            initialError={specialSupportBundleError}
             onLoaded={onSpecialSupportLoaded}
             onRecordsLoaded={onSpecialSupportRecordsLoaded}
             onChanged={() => {
@@ -4366,8 +4408,8 @@ export default function ManageAssignmentsOpsPage() {
                   직접편집 {cellEditOn ? "ON" : "OFF"}
                 </button>
                 <div className="ops-board-tools-end">
-                  <BoardImageExportMenu draft={draft} onNotice={showToast} />
-                  <BoardExcelExportButton draft={draft} onNotice={showToast} />
+                  <LazyBoardImageExportMenu draft={draft} onNotice={showToast} />
+                  <LazyBoardExcelExportButton draft={draft} onNotice={showToast} />
                   <button
                     type="button"
                     className="ops-add-team"
@@ -4828,7 +4870,14 @@ export default function ManageAssignmentsOpsPage() {
         </section>
       )}
 
-      {hasSelectedDate ? <BoardPushNotifyCard date={date} /> : null}
+      {hasSelectedDate ? (
+        <BoardPushNotifyCard
+          date={date}
+          bundleReady={dateBundleReady}
+          initialPreview={boardPreviewBundle}
+          initialError={boardPreviewBundleError}
+        />
+      ) : null}
 
       {draft && (
         <LiveChangePanel

@@ -7,6 +7,7 @@ import {
   canManageOffRequests,
   canSubmitOwnOffRequest,
   canUseOffRequestPages,
+  isOffRequestLeader,
   isOwnCaddy,
   normalizeTeamName,
   resolveTeamFilter,
@@ -52,10 +53,10 @@ section("uniqueTeams / normalize");
 
 section("canManage / canSubmit");
 {
-  assert(canUseOffRequestPages("caddy"), "caddy page");
-  assert(canUseOffRequestPages("leader"), "leader page");
-  assert(canUseOffRequestPages("admin"), "admin page");
-  assert(!canUseOffRequestPages("guest"), "unknown role no page");
+  assert(canUseOffRequestPages("admin"), "admin pages");
+  assert(canUseOffRequestPages("caddy"), "caddy pages");
+  assert(canUseOffRequestPages("leader"), "leader pages");
+  assert(!canUseOffRequestPages("guest"), "guest no pages");
   assert(canManageOffRequests(actor({ role: "admin" })), "admin manage");
   assert(canManageOffRequests(actor({ role: "leader", managedTeams: ["1조"] })), "leader manage");
   assert(!canManageOffRequests(actor({ role: "caddy", caddyId: 1 })), "caddy no manage");
@@ -64,6 +65,9 @@ section("canManage / canSubmit");
   assert(!canSubmitOwnOffRequest(actor({ role: "caddy", caddyId: null })), "no caddyId no submit");
   assert(isOwnCaddy(actor({ role: "caddy", caddyId: 3 }), 3), "own");
   assert(!isOwnCaddy(actor({ role: "caddy", caddyId: 3 }), 4), "not own");
+  assert(isOffRequestLeader(actor({ role: "leader", caddyId: 1 })), "leader is leader");
+  assert(!isOffRequestLeader(actor({ role: "admin" })), "admin is not leader API");
+  assert(!isOffRequestLeader(actor({ role: "caddy", caddyId: 1 })), "caddy is not leader API");
 }
 
 section("canAccessTeam — multi-team leader, no 1:1 force");

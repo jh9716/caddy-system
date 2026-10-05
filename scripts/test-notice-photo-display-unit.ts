@@ -1,6 +1,6 @@
 /**
  * Notice detail photos must show the full original, no crop.
- * List has no image thumbs; course-report thumbs may still cover.
+ * Native aspect, full width. No fake 4/3 box. List has no image thumbs.
  * 실행: npm run test:notice-photo-display-unit
  */
 import fs from "node:fs";
@@ -41,12 +41,13 @@ section("detail gallery is uncropped");
   assert(gallery.includes("notice-photos-list"), "stacked list");
   assert(gallery.includes("notice-photos-item"), "full-width item");
   assert(gallery.includes("notice-photos-lightbox"), "notice lightbox");
+  assert(gallery.includes("RevealedPhoto"), "uses decode-then-reveal img");
   assert(!gallery.includes("course-report-photo-"), "does not reuse report crop classes");
-  assert(!gallery.includes("aspect-ratio"), "component has no aspect-ratio");
+  assert(!gallery.includes('object-fit: "cover"'), "component has no cover");
   assert(noticeCss.includes("width: 100%"), "item/img width 100%");
   assert(/\.notice-photos-item img\s*\{[^}]*height:\s*auto/.test(noticeCss), "img height auto");
   assert(/\.notice-photos-item img\s*\{[^}]*object-fit:\s*contain/.test(noticeCss), "img contain");
-  assert(!/\baspect-ratio\b/.test(noticeCss), "no fixed aspect-ratio");
+  assert(!/\.notice-photos-item\s*\{[^}]*aspect-ratio:/.test(noticeCss), "no fake reserved ratio");
   assert(!noticeCss.includes("object-fit: cover"), "no cover crop");
   assert(!noticeCss.includes("max-height:") || noticeCss.includes(".notice-photos-lightbox"), "detail list has no max-height crop");
 }
@@ -73,6 +74,32 @@ section("list and report thumbs unchanged");
   const report = sliceCss(css, ".course-report-photo-thumb,", ".course-report-photo-composer");
   assert(report.includes("aspect-ratio: 1"), "report thumb still square");
   assert(report.includes("object-fit: cover"), "report thumb still cover");
+}
+
+section("reveal hides baseline scan");
+{
+  const reveal = read("src/components/photo/RevealedPhoto.tsx");
+  const css = read("src/app/globals.css");
+  const noticeCss = sliceCss(css, ".notice-photos {", ".notice-back {");
+  assert(reveal.includes("img.decode"), "waits for decode()");
+  assert(reveal.includes("onLoad"), "onLoad fallback");
+  assert(reveal.includes("is-revealed"), "revealed class");
+  assert(/\.notice-photos-item img\s*\{[^}]*opacity:\s*0/.test(noticeCss), "hidden until reveal");
+  assert(noticeCss.includes("img.is-revealed"), "revealed opacity");
+  assert(!noticeCss.toLowerCase().includes("shimmer"), "no shimmer");
+  assert(!noticeCss.toLowerCase().includes("blur("), "no blur animation");
+}
+
+section("first image priority");
+{
+  const notice = read("src/components/notice/NoticePhotoGallery.tsx");
+  const report = read("src/app/course-reports/CourseReportPhotoGallery.tsx");
+  assert(notice.includes('fetchPriority={index === 0 ? "high" : "auto"}'), "notice first high");
+  assert(notice.includes('loading={index === 0 ? "eager" : "lazy"}'), "notice rest lazy");
+  assert(report.includes('fetchPriority={index === 0 ? "high" : "auto"}'), "report first high");
+  assert(report.includes('loading={index === 0 ? "eager" : "lazy"}'), "report rest lazy");
+  assert(!notice.includes('fetchPriority="high"'), "notice does not mark every img high");
+  assert(!report.includes('fetchPriority="high"'), "report does not mark every img high");
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

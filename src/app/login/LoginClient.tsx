@@ -7,6 +7,7 @@ import { Capacitor } from "@capacitor/core";
 import LegalLinks from "@/components/LegalLinks";
 import PwaInstallCard from "@/components/PwaInstallCard";
 import { PWA_MONOGRAM, PWA_SPLASH_COURSE } from "@/lib/pwaManifest";
+import { clearClientResourceCache } from "@/lib/clientResourceCache";
 import { resolvePostLoginHref } from "@/lib/roleRouting";
 import { safeReturnPath } from "@/lib/safeReturnPath";
 import { KakaoNativeAuth } from "@/lib/kakaoNativeAuth";
@@ -45,6 +46,7 @@ export default function LoginClient() {
     e.preventDefault();
     setErr("");
     setLoading(true);
+    clearClientResourceCache();
     try {
       const res = await fetch("/api/login", {
         method: "POST",
@@ -57,11 +59,13 @@ export default function LoginClient() {
         throw new Error(data?.message || data?.error || "로그인 실패");
       }
 
-      location.href = resolvePostLoginHref({
-        role: data.role,
-        mustChangePassword: !!data.mustChangePassword,
-        callbackUrl: safeCallback,
-      });
+      location.replace(
+        resolvePostLoginHref({
+          role: data.role,
+          mustChangePassword: !!data.mustChangePassword,
+          callbackUrl: safeCallback,
+        })
+      );
     } catch (e: any) {
       setErr(e.message || "로그인 실패");
     } finally {
@@ -72,6 +76,7 @@ export default function LoginClient() {
   const onKakao = async () => {
     setErr("");
     setLoading(true);
+    clearClientResourceCache();
     try {
       const result = await runKakaoLogin({
         isNativePlatform: Capacitor.isNativePlatform(),
@@ -109,7 +114,7 @@ export default function LoginClient() {
         location.href = result.startUrl;
         return;
       }
-      location.href = result.href;
+      location.replace(result.href);
     } catch (e: unknown) {
       setErr(formatNativeKakaoBridgeError(e));
     } finally {

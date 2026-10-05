@@ -1,12 +1,13 @@
 /**
  * Member-page client helper: one /login redirect on 401.
- * Used by board / notice / course-report / off-request / caddy clients.
+ * Used by board / notice / course-report / caddy clients.
  *
  * Exempt: /login, Kakao OAuth, logout UX, public legal pages,
  * and admin surfaces that already handle 401 themselves.
  * 403 MUST_CHANGE_PASSWORD and 503 auth_unavailable are not session expiry.
  */
 
+import { clearClientResourceCache } from "@/lib/clientResourceCache";
 import { safeReturnPath } from "@/lib/safeReturnPath";
 
 export type MemberSessionLocation = {
@@ -69,5 +70,6 @@ export function consumeUnauthorizedMemberResponse(
   loc?: MemberSessionLocation | null
 ): boolean {
   if (res.status !== 401) return false;
+  clearClientResourceCache();
   return redirectMemberToLogin(loc === undefined ? currentLocation() : loc);
 }

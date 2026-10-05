@@ -68,22 +68,33 @@ export async function loadAdminOpsDashboardSource(
   const fetchOff = deps.fetchOffSheets ?? fetchPublishedOffSheets;
   const fetchOps = deps.fetchOpsDutySheets ?? fetchPublishedOpsDutySheets;
 
-  let offSheets: OffSheet[] | null = null;
-  let offDateFound = false;
-  let offError: string | null = null;
-  try {
-    offSheets = await fetchOff();
-    const parsed = offNamesForDate(offSheets, ymd);
-    offDateFound = parsed.matchedSheetDates.includes(ymd);
-    if (!offDateFound) offError = "off_sheet_date_not_found";
-  } catch (error) {
-    offError = error instanceof Error ? error.message : "off_sheet_fetch_failed";
-  }
-
-  const resolvedDuty = await resolveOpsDutyReadOnly(ymd, {
-    listDuties,
-    fetchOpsDutySheets: fetchOps,
-  });
+  const [offResult, resolvedDuty] = await Promise.all([
+    (async () => {
+      try {
+        const sheets = await fetchOff();
+        const parsed = offNamesForDate(sheets, ymd);
+        const offDateFound = parsed.matchedSheetDates.includes(ymd);
+        return {
+          offSheets: sheets,
+          offDateFound,
+          offError: offDateFound ? null : "off_sheet_date_not_found",
+        };
+      } catch (error) {
+        return {
+          offSheets: null as OffSheet[] | null,
+          offDateFound: false,
+          offError: error instanceof Error ? error.message : "off_sheet_fetch_failed",
+        };
+      }
+    })(),
+    resolveOpsDutyReadOnly(ymd, {
+      listDuties,
+      fetchOpsDutySheets: fetchOps,
+    }),
+  ]);
+  const offSheets = offResult.offSheets;
+  const offDateFound = offResult.offDateFound;
+  const offError = offResult.offError;
   const stored = resolvedDuty.stored;
   const dutyEntries = resolvedDuty.sheetEntries;
   const dutySource = resolvedDuty.source;

@@ -95,6 +95,7 @@ assert(pkg.includes('"@capacitor/android"'), "capacitor android dependency");
 assert(pkg.includes('"@capacitor/core"'), "capacitor core dependency");
 assert(!pkg.includes("@capacitor/ios"), "no Capacitor iOS package");
 assert(pkg.includes('"@capacitor/push-notifications"'), "Capacitor PushNotifications for Android FCM");
+assert(pkg.includes('"@capacitor/app"'), "Capacitor App plugin for Android system back");
 assert(!pkg.includes("@capacitor/camera"), "no Camera plugin");
 assert(!/"firebase"/.test(pkg) && !pkg.includes('"firebase/'), "no Firebase JS package");
 assert(!pkg.includes("@capacitor-community/fcm"), "no extra FCM community plugin");
@@ -344,8 +345,8 @@ assert(
   "Kakao Android SDK v2-user is a Gradle dependency"
 );
 assert(
-  appGradle.includes("versionCode 12") && appGradle.includes('versionName "1.0.8"'),
-  "Play candidate versionCode 12 / versionName 1.0.8"
+  appGradle.includes("versionCode 13") && appGradle.includes('versionName "1.0.8"'),
+  "Play candidate versionCode 13 / versionName 1.0.8"
 );
 assert(
   !appGradle.includes("length()") &&

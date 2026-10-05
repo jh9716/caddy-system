@@ -203,6 +203,16 @@ async function runLocalDbTests() {
       managedTeams: [team, "other-unused"],
     };
 
+    await prisma.offRequestWindow.create({
+      data: {
+        yearMonth: "2099-01",
+        status: "OPEN",
+        openAt: new Date("2098-12-01T00:00:00Z"),
+        closeAt: new Date("2099-01-20T00:00:00Z"),
+        defaultQuota: 5,
+      },
+    });
+
     const created = await submitOffRequest(prisma, caddyActor, {
       date: ymd,
       note: "unit",
@@ -369,9 +379,16 @@ async function runLocalDbTests() {
     assert(manualStill != null, "manual OFF preserved");
 
     // cleanup test rows (local only)
+    await prisma.offRequestAdjustment.deleteMany({
+      where: { offRequest: { caddy: { team } } },
+    });
     await prisma.offRequest.deleteMany({
       where: { caddy: { team } },
     });
+    await prisma.offRequestQuota.deleteMany({
+      where: { window: { yearMonth: "2099-01" } },
+    });
+    await prisma.offRequestWindow.deleteMany({ where: { yearMonth: "2099-01" } });
     await prisma.assignment.deleteMany({
       where: { caddy: { team } },
     });

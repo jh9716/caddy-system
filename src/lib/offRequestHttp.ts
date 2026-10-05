@@ -12,7 +12,10 @@ export function offRequestErrorResponse(e: unknown): NextResponse {
       { status: e.status }
     );
   }
-  if (e instanceof Error && /date must be YYYY-MM-DD|invalid date/i.test(e.message)) {
+  if (
+    e instanceof Error &&
+    /date must be YYYY-MM-DD|invalid date|month must be YYYY-MM/i.test(e.message)
+  ) {
     return NextResponse.json(
       { error: "invalid_date", message: e.message },
       { status: 400 }

@@ -55,6 +55,16 @@ enum OffRequestStatus {
   APPROVED
   REJECTED
   CANCELLED
+  /// 확정 시 미선정. 활성 중복(partial unique)에 포함하지 않음.
+  UNSELECTED
+}
+
+/// 클럽 공통 월별 휴무 신청창. status가 권위 있는 단계. openAt/closeAt은 표시용.
+enum OffRequestWindowStatus {
+  DRAFT
+  OPEN
+  ADJUSTING
+  FINALIZED
 }
 
 /// Kakao 본인확인(이름+휴대폰) → 관리자 승인 연결 요청 상태
@@ -238,6 +248,8 @@ model User {
   pushSubscriptions PushSubscription[]
   /// Android FCM tokens. Additive; does not replace PushSubscription.
   devicePushTokens DevicePushToken[]
+  /// Per-room chat push preference. Default ALL when no row.
+  chatNotificationPreferences ChatRoomNotificationPreference[]
   /// 코스 제보 작성 이력. User 물리 삭제는 Restrict.
   courseReports CourseReport[] @relation("CourseReportAuthor")
   /// 공용 댓글. User 물리 삭제는 Restrict. 표시명은 조회 시 Caddy.name 우선.
@@ -376,6 +388,27 @@ model DevicePushToken {
   @@index([userId])
 }
 
+enum ChatRoomNotificationMode {
+  ALL
+  MENTIONS
+  OFF
+}
+
+/// userId × roomId chat push preference. Missing row means ALL.
+model ChatRoomNotificationPreference {
+  id     Int  @id @default(autoincrement())
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  roomId String
+  mode   ChatRoomNotificationMode @default(ALL)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, roomId])
+  @@index([userId])
+  @@index([roomId])
+}
+
 /// Kakao 직원 본인확인 요청 (이름+휴대폰 → 관리자 승인 후 User.caddyId / Caddy.phoneNormalized)
 /// 사용자당 PENDING 1건은 migration SQL partial unique:
 ///   CaddyLinkRequest_userId_pending_key
@@ -467,10 +500,73 @@ model OffRequest {
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
 
+  adjustments      OffRequestAdjustment[]
+
   @@index([date, status])
   @@index([caddyId, date])
   @@index([caddyId, status])
   @@index([decidedByUserId])
+}
+
+/// 클럽 공통 월별 신청창. OffRequest에는 windowId를 복제하지 않음(date의 YYYY-MM으로 해석).
+model OffRequestWindow {
+  id                Int                    @id @default(autoincrement())
+  yearMonth         String                 @unique
+  status            OffRequestWindowStatus @default(DRAFT)
+  openAt            DateTime
+  closeAt           DateTime
+  adjustingAt       DateTime?
+  finalizedAt       DateTime?
+  finalizedByUserId Int?
+  defaultQuota      Int                    @default(5)
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+  quotas            OffRequestQuota[]
+  teamFinalizations OffRequestTeamFinalization[]
+
+  @@index([status])
+}
+
+/// 조×날짜 정원 override. 없으면 window.defaultQuota.
+model OffRequestQuota {
+  id       Int              @id @default(autoincrement())
+  windowId Int
+  window   OffRequestWindow @relation(fields: [windowId], references: [id], onDelete: Restrict)
+  team     String
+  date     DateTime
+  limit    Int
+
+  @@unique([windowId, team, date])
+  @@index([windowId, team])
+  @@index([date])
+}
+
+/// 희망일 이동 감사. OffRequest.date는 현재 위치만 유지.
+model OffRequestAdjustment {
+  id               Int        @id @default(autoincrement())
+  offRequestId     Int
+  offRequest       OffRequest @relation(fields: [offRequestId], references: [id], onDelete: Restrict)
+  fromDate         DateTime
+  toDate           DateTime
+  adjustedByUserId Int
+  reason           String?
+  createdAt        DateTime   @default(now())
+
+  @@index([offRequestId])
+  @@index([adjustedByUserId])
+}
+
+/// 조 단위 확정 잠금 (Phase 1 schema only — finalize API는 이후 단계).
+model OffRequestTeamFinalization {
+  id                Int              @id @default(autoincrement())
+  windowId          Int
+  window            OffRequestWindow @relation(fields: [windowId], references: [id], onDelete: Restrict)
+  team              String
+  finalizedAt       DateTime
+  finalizedByUserId Int?
+
+  @@unique([windowId, team])
+  @@index([windowId])
 }
 
 /// 날짜별 관리자 특수근무 입력 (캐디 본인 신청 아님)

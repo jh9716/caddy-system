@@ -93,3 +93,23 @@ export function formatKstDisplay(
 export function formatCapturedAtKst(iso: string): string {
   return formatKstDisplay(iso, "captured") || iso;
 }
+
+/** datetime-local 값 (KST). */
+export function formatKstDateTimeLocal(
+  input: Date | string | null | undefined
+): string {
+  if (input == null || input === "") return "";
+  const d = toValidDate(input);
+  if (!d) return "";
+  const p = kstDateTimeParts(d);
+  return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`;
+}
+
+/** datetime-local(KST) → Date. */
+export function parseKstDateTimeLocal(value: string): Date {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(String(value ?? "").trim());
+  if (!m) throw new Error("datetime-local must be YYYY-MM-DDTHH:mm");
+  return new Date(
+    Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]) - 9, Number(m[5]))
+  );
+}

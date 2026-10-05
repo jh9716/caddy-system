@@ -255,14 +255,14 @@ export async function deleteNoticePhoto(
   return { blobCleanupFailed: cleanup.failed.length > 0 };
 }
 
-export async function loadNoticePhotoBytes(
+export async function loadNoticePhotoMeta(
   db: PrismaClient,
   input: {
     noticeId: number;
     photoId: number;
     viewer: Parameters<typeof canViewNotice>[1];
   }
-): Promise<{ mimeType: string; bytes: Uint8Array }> {
+): Promise<NoticePhoto> {
   const notice = await db.notice.findUnique({ where: { id: input.noticeId } });
   if (!notice || !canViewNotice(notice, input.viewer)) {
     throw new CourseReportPhotoValidationError("not_found", "공지를 찾을 수 없습니다.", 404);
@@ -277,6 +277,13 @@ export async function loadNoticePhotoBytes(
   if (!photo || photo.noticeId !== input.noticeId) {
     throw new CourseReportPhotoValidationError("not_found", "사진을 찾을 수 없습니다.", 404);
   }
+  return photo;
+}
+
+export async function openNoticePhotoBody(
+  storageKey: string,
+  abortSignal?: AbortSignal
+) {
   const store = getCourseReportPhotoStore();
   if (!store.configured) {
     throw new CourseReportPhotoStorageError(
@@ -285,9 +292,31 @@ export async function loadNoticePhotoBytes(
       503
     );
   }
-  const bytes = await store.get(photo.storageKey);
-  if (!bytes) {
+  const opts = abortSignal ? { abortSignal } : undefined;
+  const body = store.open
+    ? await store.open(storageKey, opts)
+    : await store.get(storageKey, opts);
+  if (!body) {
     throw new CourseReportPhotoValidationError("not_found", "사진을 찾을 수 없습니다.", 404);
   }
+  return body;
+}
+
+export async function readNoticePhotoBytes(storageKey: string): Promise<Uint8Array> {
+  const body = await openNoticePhotoBody(storageKey);
+  if (body instanceof Uint8Array) return body;
+  return new Uint8Array(await new Response(body).arrayBuffer());
+}
+
+export async function loadNoticePhotoBytes(
+  db: PrismaClient,
+  input: {
+    noticeId: number;
+    photoId: number;
+    viewer: Parameters<typeof canViewNotice>[1];
+  }
+): Promise<{ mimeType: string; bytes: Uint8Array }> {
+  const photo = await loadNoticePhotoMeta(db, input);
+  const bytes = await readNoticePhotoBytes(photo.storageKey);
   return { mimeType: photo.mimeType, bytes };
 }

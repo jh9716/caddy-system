@@ -10,6 +10,7 @@ export const OFF_REQUEST_STATUSES = [
   "APPROVED",
   "REJECTED",
   "CANCELLED",
+  "UNSELECTED",
 ] as const;
 
 export type OffRequestStatus = (typeof OFF_REQUEST_STATUSES)[number];
@@ -44,6 +45,7 @@ const TRANSITIONS: Record<
   },
   REJECTED: {},
   CANCELLED: {},
+  UNSELECTED: {},
 };
 
 export function isOffRequestStatus(value: unknown): value is OffRequestStatus {
@@ -67,6 +69,143 @@ export function normalizeOffDateInput(ymd: string): Date {
   const d = new Date(`${ymd}T00:00:00`);
   if (Number.isNaN(d.getTime())) throw new Error("invalid date");
   return d;
+}
+
+/** 캘린더에 실제 존재하는 YYYY-MM-DD. 2월 30일 같은 overflow 거부. */
+export function requireCalendarYmd(ymd: string): Date {
+  const date = normalizeOffDateInput(ymd);
+  if (formatOffDateYmd(date) !== ymd) {
+    throw new Error("invalid date");
+  }
+  return date;
+}
+
+const YEAR_MONTH_RE = /^(\d{4})-(0[1-9]|1[0-2])$/;
+
+/** YYYY-MM. 월/날짜 판정은 문자열 캘린더(KST YMD) 기준. */
+export function isYearMonth(value: unknown): value is string {
+  return typeof value === "string" && YEAR_MONTH_RE.test(value);
+}
+
+export function parseYearMonth(value: string): { year: number; month: number } {
+  if (!isYearMonth(value)) {
+    throw new Error("month must be YYYY-MM");
+  }
+  const [year, month] = value.split("-").map(Number);
+  return { year, month };
+}
+
+export function yearMonthFromYmd(ymd: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
+    throw new Error("date must be YYYY-MM-DD");
+  }
+  return ymd.slice(0, 7);
+}
+
+/** 해당 YYYY-MM의 모든 일자. UTC 일자 산술이라 서버 TZ와 무관. */
+export function ymdDaysInYearMonth(yearMonth: string): string[] {
+  const { year, month } = parseYearMonth(yearMonth);
+  const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const days: string[] = [];
+  for (let d = 1; d <= last; d++) {
+    days.push(`${yearMonth}-${String(d).padStart(2, "0")}`);
+  }
+  return days;
+}
+
+export function isYmdInYearMonth(ymd: string, yearMonth: string): boolean {
+  return yearMonthFromYmd(ymd) === yearMonth;
+}
+
+export const OFF_REQUEST_WINDOW_STATUSES = [
+  "DRAFT",
+  "OPEN",
+  "ADJUSTING",
+  "FINALIZED",
+] as const;
+
+export type OffRequestWindowStatus = (typeof OFF_REQUEST_WINDOW_STATUSES)[number];
+
+const WINDOW_TRANSITIONS: Record<
+  OffRequestWindowStatus,
+  readonly OffRequestWindowStatus[]
+> = {
+  DRAFT: ["OPEN"],
+  OPEN: ["ADJUSTING"],
+  ADJUSTING: ["FINALIZED"],
+  FINALIZED: [],
+};
+
+export function isOffRequestWindowStatus(
+  value: unknown
+): value is OffRequestWindowStatus {
+  return (
+    typeof value === "string" &&
+    (OFF_REQUEST_WINDOW_STATUSES as readonly string[]).includes(value)
+  );
+}
+
+export function canTransitionOffRequestWindow(
+  from: OffRequestWindowStatus,
+  to: OffRequestWindowStatus
+): boolean {
+  return WINDOW_TRANSITIONS[from].includes(to);
+}
+
+/** 팀장 날짜 조정 / 팀 확정은 ADJUSTING 만. */
+export function canAdjustOffRequestWindow(
+  status: OffRequestWindowStatus | string | null | undefined
+): boolean {
+  return status === "ADJUSTING";
+}
+
+/** 관리자 월 전체 확정은 ADJUSTING → FINALIZED 만. */
+export function canFinalizeOffRequestWindow(
+  status: OffRequestWindowStatus | string | null | undefined
+): boolean {
+  return status === "ADJUSTING";
+}
+
+export function clampOffDefaultQuota(value: unknown): number {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n) || n < 1 || n > 99) {
+    throw new Error("defaultQuota must be 1-99");
+  }
+  return n;
+}
+
+export function resolveDayQuotaLimit(input: {
+  defaultQuota?: number | null;
+  overrideLimit?: number | null;
+}): number {
+  if (input.overrideLimit != null) {
+    const n = Math.floor(Number(input.overrideLimit));
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  if (input.defaultQuota != null) {
+    const n = Math.floor(Number(input.defaultQuota));
+    if (Number.isFinite(n) && n >= 1) return n;
+  }
+  return OFF_APPROVE_QUOTA_PER_TEAM;
+}
+
+/** 신청 인원이 허용을 넘으면 초과. 정원과 같으면 초과가 아님. */
+export function isRequestedOverLimit(requestedCount: number, limit: number): boolean {
+  return requestedCount > limit;
+}
+
+/**
+ * 현장 정원: 확정 Assignment(OFF) + 이번 REQUESTED.
+ * APPROVED OffRequest는 Assignment를 통해만 세어 이중 집계하지 않는다.
+ */
+export function isOccupiedOverLimit(input: {
+  approvedCount: number;
+  requestedCount: number;
+  limit: number;
+}): boolean {
+  const approved = Math.max(0, Math.floor(Number(input.approvedCount) || 0));
+  const requested = Math.max(0, Math.floor(Number(input.requestedCount) || 0));
+  return approved + requested > input.limit;
 }
 
 /** Date → YYYY-MM-DD (로컬 캘린더) */

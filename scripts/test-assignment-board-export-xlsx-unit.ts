@@ -21,6 +21,7 @@ import {
   countAssignedExcelCells,
   parseBoardExportWorkbook,
   writeBoardExportXlsxBytes,
+  type ParsedBoardExcelSheet,
 } from "../src/lib/assignmentBoardExportXlsx";
 import { countBoardAssignments } from "../src/lib/assignmentBoardView";
 
@@ -105,7 +106,7 @@ function draftOf(
 }
 
 function cellAt(
-  sheets: ReturnType<typeof parseBoardExportWorkbook>,
+  sheets: ParsedBoardExcelSheet[],
   shift: ShiftPart,
   teeTime: string,
   course: CourseCode
@@ -175,6 +176,7 @@ section("셀 표시 형식 (metadata만)");
   );
 }
 
+async function runAsyncCases() {
 section("workbook 구조 / 빈 셀 / 닫힌 코스 / 1부만");
 {
   const d = draftOf(
@@ -184,8 +186,8 @@ section("workbook 구조 / 빈 셀 / 닫힌 코스 / 1부만");
     ],
     { openCourses: ["VERTHILL", "SKY"] }
   );
-  const bytes = writeBoardExportXlsxBytes(d);
-  const sheets = parseBoardExportWorkbook(bytes);
+  const bytes = await writeBoardExportXlsxBytes(d);
+  const sheets = await parseBoardExportWorkbook(bytes);
   assert(sheets.map((s) => s.name).join(",") === "1부,2부,3부", "3개 sheet");
   assert(sheets.every((s) => s.title === BOARD_XLSX_TITLE), "제목");
   assert(sheets.every((s) => s.dateLine === "날짜: 2026-09-07"), "날짜 행");
@@ -219,9 +221,9 @@ section("직접편집 미publish 상태가 그대로 나옴");
     ...d.assignments[0],
     caddy: { ...d.assignments[0].caddy, id: 99, name: "직접편집" },
   };
-  const sheets = parseBoardExportWorkbook(writeBoardExportXlsxBytes(d));
+  const sheets = await parseBoardExportWorkbook(await writeBoardExportXlsxBytes(d));
   assert(cellAt(sheets, "1부", "06:11", "OCEAN") === "직접편집", "화면 draft 이름");
-  assert(!Buffer.from(writeBoardExportXlsxBytes(d)).toString("utf8").includes("원본이름"), "이전 이름 없음");
+  assert(!Buffer.from(await writeBoardExportXlsxBytes(d)).toString("utf8").includes("원본이름"), "이전 이름 없음");
 }
 
 section("LOCK / 특수 / 지원 / linked pair 양쪽 sheet");
@@ -275,8 +277,8 @@ section("LOCK / 특수 / 지원 / linked pair 양쪽 sheet");
   d.assignments[5].caddy.id = d.assignments[4].caddy.id;
   d.assignments[7].caddy.id = d.assignments[6].caddy.id;
   d.assignments[9].caddy.id = d.assignments[8].caddy.id;
-  const bytes = writeBoardExportXlsxBytes(d);
-  const sheets = parseBoardExportWorkbook(bytes);
+  const bytes = await writeBoardExportXlsxBytes(d);
+  const sheets = await parseBoardExportWorkbook(bytes);
   assert(cellAt(sheets, "1부", "06:04", "VERTHILL") === "임형규 [1·2]", "1부 1·2");
   assert(cellAt(sheets, "2부", "12:11", "VERTHILL") === "임형규 [1·2]", "2부 1·2 동일 캐디");
   assert(cellAt(sheets, "2부", "13:00", "SKY") === cellAt(sheets, "3부", "17:00", "SKY"), "2·3 동일");
@@ -312,12 +314,22 @@ section("export source 안전장치 (호출/의존 금지)");
   }
   assert(/buildBoardExportSlice/.test(xlsx), "화면과 같은 buildBoardExportSlice");
   assert(/bookType: "xlsx"/.test(xlsx), "실제 xlsx");
-  assert(/BoardExcelExportButton/.test(page), "assignments에 엑셀 버튼");
-  assert(/BoardImageExportMenu/.test(page), "이미지 버튼 유지");
+  assert(/import\("xlsx"\)/.test(xlsx), "xlsx는 dynamic import");
+  assert(!/^import \* as XLSX from "xlsx";$/m.test(xlsx), "xlsx static import 없음");
+  assert(/LazyBoardExcelExportButton/.test(page), "assignments에 lazy 엑셀 버튼");
+  assert(/LazyBoardImageExportMenu/.test(page), "이미지 버튼 유지");
   assert(
-    /BoardImageExportMenu draft=\{draft\}[\s\S]{0,180}BoardExcelExportButton draft=\{draft\}/.test(page),
+    /LazyBoardImageExportMenu draft=\{draft\}[\s\S]{0,180}LazyBoardExcelExportButton draft=\{draft\}/.test(page),
     "이미지 옆 엑셀, 동일 draft"
   );
+  const lazyExcel = read("src/components/board/LazyBoardExcelExportButton.tsx");
+  const lazyPng = read("src/components/board/LazyBoardImageExportMenu.tsx");
+  assert(/import\("@\/lib\/assignmentBoardExportXlsx"\)/.test(lazyExcel), "엑셀 클릭 시 xlsx lib load");
+  assert(/import\("@\/components\/board\/BoardImageExportMenu"\)/.test(lazyPng), "이미지 클릭 시 menu load");
+  const boardPage = read("src/app/board/page.tsx");
+  assert(/LazyBoardImageExportMenu/.test(boardPage), "board는 lazy 이미지 메뉴");
+  assert(!/from "@\/components\/board\/BoardImageExportMenu"/.test(boardPage), "board 초기 import에 PNG menu 없음");
+  assert(!/from "@\/lib\/assignmentBoardExportXlsx"/.test(page), "assignments 초기 import에 xlsx lib 없음");
   const engine = read("src/lib/autoAssignEngine.ts");
   const png = read("src/lib/assignmentBoardExportPng.ts");
   const menu = read("src/components/board/BoardImageExportMenu.tsx");
@@ -339,14 +351,14 @@ section("2026-09-07 fixture 209/77/80/52");
   assert(byShift["2부"] === 80, "fixture 2부 80");
   assert(byShift["3부"] === 52, "fixture 3부 52");
 
-  const bytes = writeBoardExportXlsxBytes(fixture);
+  const bytes = await writeBoardExportXlsxBytes(fixture);
   const outDir = "/opt/cursor/artifacts";
   mkdirSync(outDir, { recursive: true });
   const outFile = join(outDir, boardExportXlsxFilename(fixture.date));
   writeFileSync(outFile, bytes);
   console.log("  wrote", outFile, bytes.byteLength, "bytes");
 
-  const sheets = parseBoardExportWorkbook(bytes);
+  const sheets = await parseBoardExportWorkbook(bytes);
   assert(sheets.length === 3, "reparse 3 sheets");
   const counted = countAssignedExcelCells(sheets);
   assert(counted.total === 209, `Excel 배정 셀 209 (실제 ${counted.total})`);
@@ -407,15 +419,23 @@ section("2026-09-07 fixture 209/77/80/52");
   assert(!/�/.test(s1 + sOneTwo + sSky), "이름 깨짐 없음");
   assert(sheets.every((s) => !s.rows.some((r) => Object.values(r.values).some((v) => v.includes("�")))), "전 sheet 한글 정상");
 }
+}
 
 section("기존 이미지 export 회귀 문구");
 {
   const menu = read("src/components/board/BoardImageExportMenu.tsx");
-  assert(menu.includes("{busy ? \"이미지…\" : \"이미지\"}"), "이미지 버튼 라벨");
+  assert(menu.includes("{busy ? \"준비 중…\" : \"이미지\"}"), "이미지 버튼 라벨");
   const page = read("src/app/manage/assignments/page.tsx");
   assert(page.includes("직접편집"), "직접편집 토글 유지");
   assert(page.includes("+ 추가팀"), "추가팀 유지");
 }
 
-console.log(`\n${passed} passed, ${failed} failed`);
-if (failed > 0) process.exit(1);
+void runAsyncCases()
+  .then(() => {
+    console.log(`\n${passed} passed, ${failed} failed`);
+    if (failed > 0) process.exit(1);
+  })
+  .catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });

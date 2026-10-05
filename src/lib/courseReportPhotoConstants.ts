@@ -1,6 +1,7 @@
 export const COURSE_REPORT_PHOTO_MAX = 3;
 export const COURSE_REPORT_PHOTO_MAX_BYTES = 3 * 1024 * 1024;
-export const COURSE_REPORT_PHOTO_LONG_EDGE = 1600;
+/** New uploads only. Existing blobs are not rewritten. */
+export const COURSE_REPORT_PHOTO_LONG_EDGE = 1200;
 export const COURSE_REPORT_PHOTO_JPEG_QUALITY = 0.8;
 
 export const COURSE_REPORT_PHOTO_MIMES = [

@@ -5,7 +5,7 @@ import { logoutAllDevices, logoutCurrentDevice } from "@/lib/logoutClient";
 export default function LogoutButton() {
   const onClick = async () => {
     await logoutCurrentDevice();
-    location.href = "/";
+    location.replace("/");
   };
 
   const onLogoutAll = async () => {
@@ -22,7 +22,7 @@ export default function LogoutButton() {
       alert(data?.message || data?.error || "전체 로그아웃에 실패했습니다.");
       return;
     }
-    location.href = "/login";
+    location.replace("/login");
   };
 
   return (

@@ -284,6 +284,8 @@ async function main() {
   );
   assert(staffNav.includes("/manage/assignments"), "직원 admin 자동배치 메뉴 유지");
   assert(staffNav.includes("/manage/caddies"), "직원 admin 캐디관리 메뉴 유지");
+  assert(adminNav.includes("/chat"), "admin 채팅 메뉴");
+  assert(staffNav.includes("/chat"), "직원 admin 채팅 메뉴");
 
   const staffMwReq = new NextRequest("https://example.com/manage/staff-accounts", {
     headers: {

@@ -21,7 +21,7 @@ export function BoardExcelExportButton({
     if (busy) return;
     setBusy(true);
     try {
-      const bytes = writeBoardExportXlsxBytes(draft);
+      const bytes = await writeBoardExportXlsxBytes(draft);
       const filename = boardExportXlsxFilename(draft.date);
       downloadBoardXlsxBytes(bytes, filename);
       onNotice("Excel 배치표를 다운로드했습니다.");
@@ -40,7 +40,7 @@ export function BoardExcelExportButton({
       data-board-excel-export="1"
       onClick={() => void downloadWorkbook()}
     >
-      {busy ? "엑셀…" : "엑셀"}
+      {busy ? "준비 중…" : "엑셀"}
     </button>
   );
 }

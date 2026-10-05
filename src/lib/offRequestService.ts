@@ -13,6 +13,8 @@ import {
   resolveTeamFilter,
   type OffRequestActor,
 } from "@/lib/offRequestAuth";
+import { isRetiredCaddySessionBlocked } from "@/lib/auth";
+import { isPastKstYmd, kstYmd } from "@/lib/kstDate";
 import {
   applyApproveDecision,
   applyRejectDecision,
@@ -23,6 +25,8 @@ import {
   formatOffDateYmd,
   normalizeOffDateInput,
   offAssignmentDayRange,
+  requireCalendarYmd,
+  yearMonthFromYmd,
   type OffQuotaSnapshot,
 } from "@/lib/offRequestDomain";
 
@@ -42,6 +46,51 @@ export class OffRequestServiceError extends Error {
 
 function dayBounds(ymd: string) {
   return offAssignmentDayRange(ymd);
+}
+
+/**
+ * Phase 1 개별 승인/반려/승인취소는 OPEN 구간만.
+ * ADJUSTING·FINALIZED·team finalized 는 Phase 2 lock.
+ */
+async function assertPhase1DecisionAllowed(
+  db: DbClient,
+  ymd: string,
+  team: string
+) {
+  const yearMonth = yearMonthFromYmd(ymd);
+  const window = await db.offRequestWindow.findUnique({
+    where: { yearMonth },
+    select: { id: true, status: true },
+  });
+  if (!window) return;
+  if (window.status === "FINALIZED") {
+    throw new OffRequestServiceError(
+      "window_finalized",
+      "확정된 휴무는 변경할 수 없습니다.",
+      409,
+      { status: window.status }
+    );
+  }
+  if (window.status === "ADJUSTING") {
+    throw new OffRequestServiceError(
+      "window_adjusting",
+      "조정 중에는 개별 승인/반려가 아니라 팀 최종확정으로 처리합니다.",
+      409,
+      { status: window.status }
+    );
+  }
+  const finalized = await db.offRequestTeamFinalization.findUnique({
+    where: { windowId_team: { windowId: window.id, team } },
+    select: { id: true },
+  });
+  if (finalized) {
+    throw new OffRequestServiceError(
+      "team_finalized",
+      "이미 팀 확정이 끝났습니다.",
+      409,
+      { team }
+    );
+  }
 }
 
 /** 조·날짜 기준 확정 OFF 수 (수동/레거시 Assignment OFF 포함) */
@@ -64,6 +113,42 @@ export async function countApprovedOffForTeamDay(
       endDate: { gte: startDate },
     },
   });
+}
+
+/** 한 달 날짜들에 대해 Assignment(OFF) overlap 수를 하루씩 집계. APPROVED OffRequest는 세지 않음. */
+export async function countApprovedOffForTeamDays(
+  db: DbClient,
+  team: string,
+  ymds: string[]
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  for (const ymd of ymds) out.set(ymd, 0);
+  if (ymds.length === 0) return out;
+  const start = dayBounds(ymds[0]).startDate;
+  const end = dayBounds(ymds[ymds.length - 1]).endDate;
+  const caddies = await db.caddy.findMany({
+    where: { team },
+    select: { id: true },
+  });
+  if (caddies.length === 0) return out;
+  const rows = await db.assignment.findMany({
+    where: {
+      type: "OFF",
+      caddyId: { in: caddies.map((c) => c.id) },
+      startDate: { lte: end },
+      endDate: { gte: start },
+    },
+    select: { startDate: true, endDate: true },
+  });
+  for (const row of rows) {
+    for (const ymd of ymds) {
+      const { startDate, endDate } = dayBounds(ymd);
+      if (row.startDate <= endDate && row.endDate >= startDate) {
+        out.set(ymd, (out.get(ymd) ?? 0) + 1);
+      }
+    }
+  }
+  return out;
 }
 
 export async function countRequestedOffForTeamDay(
@@ -91,6 +176,63 @@ export async function getTeamDayQuotaSnapshot(
     countRequestedOffForTeamDay(db, team, ymd),
   ]);
   return computeOffQuotaSnapshot({ approvedCount, requestedCount });
+}
+
+async function assertCaddyNotRetired(db: DbClient, actor: OffRequestActor) {
+  if (actor.caddyId == null) return;
+  const caddy = await db.caddy.findUnique({
+    where: { id: actor.caddyId },
+    select: { employmentStatus: true },
+  });
+  if (
+    isRetiredCaddySessionBlocked({
+      role: actor.role,
+      caddyId: actor.caddyId,
+      employmentStatus: caddy?.employmentStatus ?? null,
+    })
+  ) {
+    throw new OffRequestServiceError(
+      "retired",
+      "퇴사 계정은 휴무 신청을 할 수 없습니다.",
+      403
+    );
+  }
+}
+
+async function requireOpenWindowForYmd(db: DbClient, ymd: string) {
+  const yearMonth = yearMonthFromYmd(ymd);
+  const window = await db.offRequestWindow.findUnique({ where: { yearMonth } });
+  if (!window) {
+    throw new OffRequestServiceError(
+      "window_not_found",
+      "해당 월 휴무 신청 기간이 없습니다.",
+      404
+    );
+  }
+  if (window.status !== "OPEN") {
+    throw new OffRequestServiceError(
+      "window_not_open",
+      window.status === "DRAFT"
+        ? "아직 휴무 신청 전입니다."
+        : window.status === "ADJUSTING"
+          ? "조정 중에는 변경할 수 없습니다."
+          : "확정된 휴무는 변경할 수 없습니다.",
+      409,
+      { status: window.status }
+    );
+  }
+  return window;
+}
+
+function assertNotPastYmd(ymd: string, now: Date) {
+  if (isPastKstYmd(ymd, now)) {
+    throw new OffRequestServiceError(
+      "past_date",
+      "지난 날짜에는 신청할 수 없습니다.",
+      400,
+      { date: ymd, today: kstYmd(now) }
+    );
+  }
 }
 
 async function assertNoActiveDuplicate(
@@ -144,7 +286,7 @@ async function assertNoExistingOffAssignment(
 export async function submitOffRequest(
   db: PrismaClient,
   actor: OffRequestActor,
-  input: { date: string; note?: string | null }
+  input: { date: string; note?: string | null; now?: Date }
 ): Promise<OffRequest> {
   if (!canSubmitOwnOffRequest(actor) || actor.caddyId == null) {
     throw new OffRequestServiceError(
@@ -154,12 +296,18 @@ export async function submitOffRequest(
     );
   }
   const ymd = input.date;
-  const date = normalizeOffDateInput(ymd);
+  const date = requireCalendarYmd(ymd);
   const note =
     input.note == null || String(input.note).trim() === ""
       ? null
       : String(input.note).trim().slice(0, 500);
 
+  await assertCaddyNotRetired(db, actor);
+  const window = await requireOpenWindowForYmd(db, ymd);
+  if (yearMonthFromYmd(ymd) !== window.yearMonth) {
+    throw new OffRequestServiceError("outside_window", "신청 월 밖의 날짜입니다.", 400);
+  }
+  assertNotPastYmd(ymd, input.now ?? new Date());
   await assertNoActiveDuplicate(db, actor.caddyId, date);
   await assertNoExistingOffAssignment(db, actor.caddyId, ymd);
 
@@ -208,7 +356,8 @@ export async function listMyOffRequests(
 export async function cancelOwnOffRequest(
   db: PrismaClient,
   actor: OffRequestActor,
-  id: number
+  id: number,
+  input: { now?: Date } = {}
 ): Promise<OffRequest> {
   if (actor.caddyId == null) {
     throw new OffRequestServiceError(
@@ -217,6 +366,7 @@ export async function cancelOwnOffRequest(
       403
     );
   }
+  await assertCaddyNotRetired(db, actor);
   const row = await db.offRequest.findUnique({ where: { id } });
   if (!row) {
     throw new OffRequestServiceError("not_found", "신청을 찾을 수 없습니다.", 404);
@@ -232,6 +382,9 @@ export async function cancelOwnOffRequest(
       { status: row.status }
     );
   }
+  const ymd = formatOffDateYmd(row.date);
+  await requireOpenWindowForYmd(db, ymd);
+  assertNotPastYmd(ymd, input.now ?? new Date());
   // Assignment 생성 전 단계 — Assignment 없음. row는 CANCELLED로 보존(물리 삭제 금지)
   return db.offRequest.update({
     where: { id },
@@ -260,7 +413,8 @@ export async function listOffRequestsForManagers(
 
   const date = normalizeOffDateInput(ymd);
   const status =
-    query.status && ["REQUESTED", "APPROVED", "REJECTED", "CANCELLED"].includes(query.status)
+    query.status &&
+    ["REQUESTED", "APPROVED", "REJECTED", "CANCELLED", "UNSELECTED"].includes(query.status)
       ? (query.status as OffRequest["status"])
       : undefined;
 
@@ -360,6 +514,7 @@ export async function approveOffRequest(
       if (!canAccessTeam(actor, row.caddy.team)) {
         throw new OffRequestServiceError("team_forbidden", "해당 조 권한이 없습니다.", 403);
       }
+      await assertPhase1DecisionAllowed(tx, formatOffDateYmd(row.date), row.caddy.team);
       if (!canTransitionOffRequest(row.status, "APPROVE")) {
         throw new OffRequestServiceError(
           "invalid_transition",
@@ -473,6 +628,7 @@ export async function rejectOffRequest(
   if (!canAccessTeam(actor, row.caddy.team)) {
     throw new OffRequestServiceError("team_forbidden", "해당 조 권한이 없습니다.", 403);
   }
+  await assertPhase1DecisionAllowed(db, formatOffDateYmd(row.date), row.caddy.team);
   if (!canTransitionOffRequest(row.status, "REJECT")) {
     throw new OffRequestServiceError(
       "invalid_transition",
@@ -532,6 +688,7 @@ export async function revokeOffRequest(
     if (!canAccessTeam(actor, row.caddy.team)) {
       throw new OffRequestServiceError("team_forbidden", "해당 조 권한이 없습니다.", 403);
     }
+    await assertPhase1DecisionAllowed(tx, formatOffDateYmd(row.date), row.caddy.team);
     if (!canTransitionOffRequest(row.status, "REVOKE")) {
       throw new OffRequestServiceError(
         "invalid_transition",

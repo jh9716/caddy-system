@@ -1,16 +1,14 @@
 import { redirect } from "next/navigation";
-import { canUseOffRequestPages } from "@/lib/offRequestAuth";
+import ManageShell from "@/components/manage/ManageShell";
+import { shouldUseManageShellForBoard } from "@/lib/boardNav";
 import { getRequestAuthUser } from "@/lib/getRequestAuthUser";
+import { canUseOffRequestPages } from "@/lib/offRequestAuth";
 import { shouldForcePasswordChange } from "@/lib/passwordPolicy";
-import { OFF_REQUEST_ADMIN_PATH } from "@/lib/offRequestUi";
+import { isAccountManagerAuth } from "@/lib/staffAdminAccounts";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
-/**
- * Node/RSC gate for /off-requests.
- * Admin uses /manage/off-requests (existing /manage admin gate).
- * Caddy/leader stay on the member surface. RETIRED is denied by resolveAuthUser.
- */
 export default async function OffRequestsLayout({
   children,
 }: {
@@ -23,8 +21,12 @@ export default async function OffRequestsLayout({
   if (shouldForcePasswordChange(auth)) {
     redirect("/change-password");
   }
-  if (auth.role === "admin") {
-    redirect(OFF_REQUEST_ADMIN_PATH);
+  if (shouldUseManageShellForBoard(auth.role)) {
+    return (
+      <ManageShell canManageStaffAccounts={isAccountManagerAuth(auth)}>
+        {children}
+      </ManageShell>
+    );
   }
   return <>{children}</>;
 }

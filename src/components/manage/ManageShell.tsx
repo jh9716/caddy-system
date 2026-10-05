@@ -25,6 +25,11 @@ const NAV = [
     match: (p: string) => p.startsWith("/manage/availability"),
   },
   {
+    href: "/manage/off-requests",
+    label: "휴무 신청",
+    match: (p: string) => p.startsWith("/manage/off-requests"),
+  },
+  {
     href: "/manage/reservations",
     label: "예약표 파싱",
     match: (p: string) => p.startsWith("/manage/reservations"),
@@ -61,11 +66,6 @@ const NAV = [
     match: (p: string) => p.startsWith("/manage/users"),
   },
   {
-    href: "/manage/off-requests",
-    label: "휴무 신청",
-    match: (p: string) => p.startsWith("/manage/off-requests"),
-  },
-  {
     href: "/manage/privacy-requests",
     label: "개인정보 요청",
     match: (p: string) => p.startsWith("/manage/privacy-requests"),
@@ -82,6 +82,7 @@ const NAV = [
     match: (p: string) => p.startsWith("/board"),
   },
   { href: "/notice", label: "공지", match: (p: string) => p.startsWith("/notice") },
+  { href: "/chat", label: "채팅", match: (p: string) => p.startsWith("/chat") },
   {
     href: "/course-reports",
     label: "코스 제보",
@@ -115,6 +116,7 @@ const ADMIN_PREFETCH = [
   "/manage/caddy-search",
   "/manage/assignments",
   "/manage/availability",
+  "/manage/off-requests",
 ] as const;
 
 export default function ManageShell({

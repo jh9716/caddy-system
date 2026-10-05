@@ -22,7 +22,10 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { isYmd } from "@/lib/dailyBoardDraft";
 import { getDailyBoardDraftVersion } from "@/lib/dailyBoardDraftService";
-import { getDailyBoardPublished } from "@/lib/dailyBoardPublishedService";
+import {
+  getDailyBoardPublished,
+  type DailyBoardPublishedRecord,
+} from "@/lib/dailyBoardPublishedService";
 import {
   resolvePublishedFreshness,
   type AlimtalkPublishedFreshness,
@@ -327,10 +330,19 @@ export async function resolveEligibleBoardPushTargets(
   };
 }
 
-async function loadFreshness(date: string) {
+export type PreviewBoardPushPreload = {
+  published?: DailyBoardPublishedRecord | null;
+  currentDraftVersion?: number | null;
+};
+
+async function loadFreshness(date: string, preload?: PreviewBoardPushPreload) {
   const [published, currentDraftVersion] = await Promise.all([
-    getDailyBoardPublished(date),
-    getDailyBoardDraftVersion(date),
+    preload && "published" in preload
+      ? Promise.resolve(preload.published ?? null)
+      : getDailyBoardPublished(date),
+    preload && "currentDraftVersion" in preload
+      ? Promise.resolve(preload.currentDraftVersion ?? null)
+      : getDailyBoardDraftVersion(date),
   ]);
   const freshness = resolvePublishedFreshness({
     hasPublished: Boolean(published),
@@ -342,12 +354,16 @@ async function loadFreshness(date: string) {
 
 export async function previewBoardPush(
   db: PrismaClient,
-  date: string
+  date: string,
+  preload?: PreviewBoardPushPreload
 ): Promise<BoardPushPreview> {
   if (!isYmd(date)) {
     throw new BoardPushError("invalid_date", "date=YYYY-MM-DD 필요", 400);
   }
-  const { published, currentDraftVersion, freshness } = await loadFreshness(date);
+  const { published, currentDraftVersion, freshness } = await loadFreshness(
+    date,
+    preload
+  );
   if (!published) {
     return {
       date,

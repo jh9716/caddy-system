@@ -9,8 +9,19 @@ import { CourseReportPhotoValidationError } from "@/lib/courseReportPhotoMagic";
 import { CourseReportPhotoStorageError } from "@/lib/courseReportPhotoStorage";
 import {
   deleteCourseReportPhoto,
-  loadCourseReportPhotoBytes,
+  loadCourseReportPhotoMeta,
+  openCourseReportPhotoBody,
 } from "@/lib/courseReportPhoto";
+import {
+  formatPhotoServerTiming,
+  photoObjectToResponseBody,
+  privatePhotoStreamHeaders,
+} from "@/lib/photoObjectBody";
+import {
+  buildPrivatePhotoETag,
+  ifNoneMatchContains,
+  privatePhotoCacheHeaders,
+} from "@/lib/privatePhotoCache";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -33,7 +44,9 @@ export async function GET(
     params: Promise<{ id: string; photoId: string }> | { id: string; photoId: string };
   }
 ) {
+  const started = performance.now();
   const auth = await requireCourseReportReader(req);
+  const authMs = performance.now() - started;
   if (isCourseReportAuthResponse(auth)) return auth;
 
   const { reportId, photoId } = await ids(params);
@@ -47,17 +60,35 @@ export async function GET(
   }
 
   try {
-    const { mimeType, bytes } = await loadCourseReportPhotoBytes(prisma, {
+    const afterAuth = performance.now();
+    const photo = await loadCourseReportPhotoMeta(prisma, {
       reportId,
       photoId,
     });
-    return new NextResponse(Buffer.from(bytes), {
+    const dbMs = performance.now() - afterAuth;
+    const etag = buildPrivatePhotoETag("r", photo);
+    const timing = formatPhotoServerTiming({ auth: authMs, db: dbMs });
+    if (ifNoneMatchContains(req.headers.get("if-none-match"), etag)) {
+      return new NextResponse(null, {
+        status: 304,
+        headers: {
+          ...privatePhotoCacheHeaders(etag),
+          "Server-Timing": timing,
+        },
+      });
+    }
+    const blobStarted = performance.now();
+    const body = await openCourseReportPhotoBody(photo.storageKey, req.signal);
+    const blobOpenMs = performance.now() - blobStarted;
+    return new NextResponse(photoObjectToResponseBody(body), {
       status: 200,
-      headers: {
-        "Content-Type": mimeType,
-        "Cache-Control": "private, max-age=60",
-        "X-Content-Type-Options": "nosniff",
-      },
+      headers: privatePhotoStreamHeaders(etag, photo.mimeType, body, {
+        "Server-Timing": formatPhotoServerTiming({
+          auth: authMs,
+          db: dbMs,
+          blob_open: blobOpenMs,
+        }),
+      }),
     });
   } catch (e) {
     if (e instanceof CourseReportPhotoValidationError || e instanceof CourseReportPhotoStorageError) {

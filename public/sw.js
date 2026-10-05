@@ -87,11 +87,57 @@ self.addEventListener("push", (event) => {
         badge: "/icons/badge-96.png",
         data: { url },
       };
-      if (parsed.tag) options.tag = parsed.tag;
+      if (parsed.tag) {
+        options.tag = parsed.tag;
+        options.renotify = true;
+      }
       await self.registration.showNotification(parsed.title, options);
     })()
   );
 });
+
+function notificationClickUrlsEqual(left, right) {
+  try {
+    const a = new URL(String(left || ""));
+    const b = new URL(String(right || ""));
+    return a.origin === b.origin && a.pathname === b.pathname && a.search === b.search;
+  } catch {
+    return false;
+  }
+}
+
+async function openNotificationClickUrl(clients, url) {
+  const list = await clients.matchAll({
+    type: "window",
+    includeUncontrolled: true,
+  });
+  for (const client of list) {
+    if (!notificationClickUrlsEqual(client.url, url)) continue;
+    if (typeof client.focus === "function") await client.focus();
+    return;
+  }
+  for (const client of list) {
+    let same = false;
+    try {
+      same = new URL(client.url).origin === new URL(url).origin;
+    } catch {
+      same = false;
+    }
+    if (!same) continue;
+    if (typeof client.navigate !== "function") continue;
+    let next = null;
+    try {
+      next = await client.navigate(url);
+    } catch {
+      continue;
+    }
+    if (next && typeof next.focus === "function") {
+      await next.focus();
+      return;
+    }
+  }
+  if (clients.openWindow) await clients.openWindow(url);
+}
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
@@ -100,25 +146,5 @@ self.addEventListener("notificationclick", (event) => {
     event.notification && event.notification.data && event.notification.data.url;
   const url = resolveSameOriginUrl(raw, origin);
   if (!url) return;
-  event.waitUntil(
-    (async () => {
-      const list = await self.clients.matchAll({
-        type: "window",
-        includeUncontrolled: true,
-      });
-      for (const client of list) {
-        let same = false;
-        try {
-          same = new URL(client.url).origin === origin;
-        } catch {
-          same = false;
-        }
-        if (!same) continue;
-        if (typeof client.focus === "function") await client.focus();
-        if (typeof client.navigate === "function") await client.navigate(url);
-        return;
-      }
-      if (self.clients.openWindow) await self.clients.openWindow(url);
-    })()
-  );
+  event.waitUntil(openNotificationClickUrl(self.clients, url));
 });

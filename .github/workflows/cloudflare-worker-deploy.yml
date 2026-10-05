@@ -1,0 +1,101 @@
+# Manual Production deploy for cloudflare/verthill-chat only.
+# Do not add push, pull_request, or schedule triggers.
+name: Cloudflare Worker Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: git ref or full commit SHA to deploy (example 757ee1d11ddba19ba2d4ed28c7e3326e1b5b0a34)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-verthill-chat-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy-worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: Checkout requested ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Verify checked-out commit
+        env:
+          REQUESTED_REF: ${{ inputs.ref }}
+        run: |
+          set -eu
+          head_sha="$(git rev-parse HEAD)"
+          printf 'requested_ref=%s\n' "$REQUESTED_REF"
+          printf 'checked_out_sha=%s\n' "$head_sha"
+          trimmed="$(printf '%s' "$REQUESTED_REF" | tr -d '[:space:]')"
+          if [ -z "$trimmed" ]; then
+            echo "ref input is empty"
+            exit 1
+          fi
+          lower_in="$(printf '%s' "$trimmed" | tr 'A-F' 'a-f')"
+          lower_head="$(printf '%s' "$head_sha" | tr 'A-F' 'a-f')"
+          if printf '%s' "$trimmed" | grep -Eq '^[0-9A-Fa-f]{40}$'; then
+            if [ "$lower_in" != "$lower_head" ]; then
+              echo "checkout SHA does not match requested full SHA"
+              exit 1
+            fi
+          elif printf '%s' "$trimmed" | grep -Eq '^[0-9A-Fa-f]{7,39}$'; then
+            prefix="$(printf '%s' "$lower_head" | cut -c1-"${#trimmed}")"
+            if [ "$prefix" != "$lower_in" ]; then
+              echo "checkout SHA does not match requested short SHA"
+              exit 1
+            fi
+          else
+            echo "input is a named ref; resolved commit is above"
+          fi
+          test -f cloudflare/verthill-chat/wrangler.jsonc
+          test -f cloudflare/verthill-chat/package.json
+          test -f cloudflare/verthill-chat/package-lock.json
+
+      - name: Require Cloudflare account id variable
+        run: |
+          set -eu
+          if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            echo "GitHub Actions variable CLOUDFLARE_ACCOUNT_ID is required."
+            echo "Set it as a repository variable. Do not put the account id in workflow YAML."
+            echo "The API token is Workers Scripts Edit only, so Wrangler must not auto-discover accounts."
+            exit 1
+          fi
+          echo "CLOUDFLARE_ACCOUNT_ID is present"
+
+      - name: Set up Node from package.json engines
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: npm
+          cache-dependency-path: cloudflare/verthill-chat/package-lock.json
+
+      - name: Install Worker dependencies
+        working-directory: cloudflare/verthill-chat
+        run: npm ci
+
+      - name: Deploy with lockfile Wrangler
+        working-directory: cloudflare/verthill-chat
+        run: |
+          set +x
+          set +o xtrace
+          set -eu
+          test -x ./node_modules/.bin/wrangler
+          ./node_modules/.bin/wrangler --version
+          # Uses pinned wrangler from this ref's package-lock.
+          # Does not call npm run cf:deploy (that script exits 1 by design).
+          # wrangler deploy applies additive Durable Object migrations only.
+          # No delete / reset / secret put.
+          ./node_modules/.bin/wrangler deploy

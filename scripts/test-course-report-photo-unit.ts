@@ -228,6 +228,8 @@ async function main() {
         constants.includes("/api/course-reports/"),
       "gallery same-origin src"
     );
+    assert(gallery.includes("RevealedPhoto"), "report gallery decode-then-reveal");
+    assert(gallery.includes('fetchPriority={index === 0 ? "high" : "auto"}'), "report first image high");
     assert(!gallery.includes("blob.vercel"), "gallery no public blob url");
     assert(!gallery.includes("courseReportPhotoStorage"), "gallery no storage");
     const schema = read("prisma/schema.prisma");
@@ -254,7 +256,8 @@ async function main() {
     assert(listPage.includes("photoCount"), "list shows photoCount");
     const photoGet = read("src/app/api/course-reports/[id]/photos/[photoId]/route.ts");
     assert(photoGet.includes("requireCourseReportReader"), "photo GET reuses reader auth");
-    assert(photoGet.includes("Cache-Control"), "private cache header");
+    assert(photoGet.includes("privatePhotoCacheHeaders"), "private cache header helper");
+    assert(photoGet.includes("ifNoneMatchContains"), "conditional GET after auth");
     const health = read("src/app/api/health/route.ts");
     assert(health.includes("getCourseReportPhotoStorageAuthStatus"), "health blob status helper");
     assert(!health.includes("BLOB_READ_WRITE_TOKEN"), "health no token env name");
@@ -572,7 +575,14 @@ async function main() {
     }
 
     const mem = createMemoryCourseReportPhotoStore();
-    setCourseReportPhotoStoreForTests(mem);
+    let blobGets = 0;
+    setCourseReportPhotoStoreForTests({
+      ...mem,
+      async get(key) {
+        blobGets += 1;
+        return mem.get(key);
+      },
+    });
 
     section("upload success + types");
     {
@@ -728,6 +738,45 @@ async function main() {
       );
       assert(got.status === 200, "owner get photo 200");
       assert(got.headers.get("content-type") === "image/jpeg", "content-type jpeg");
+      assert(got.headers.get("cache-control") === "private, no-cache", "private no-cache");
+      const gotBytes = await got.clone().arrayBuffer();
+      assert(got.headers.get("content-length") === String(gotBytes.byteLength), "known body sets content-length");
+      assert(String(got.headers.get("server-timing") || "").includes("auth"), "server-timing auth");
+      const etag = got.headers.get("etag");
+      assert(Boolean(etag) && etag.startsWith('"r'), "etag from report metadata");
+      assert(!String(etag).includes("course-reports/"), "etag does not leak storageKey");
+      const getsBefore = blobGets;
+      const cached = await GET_PHOTO(
+        req(`https://www.verthill.kr/api/course-reports/${ownId}/photos/${photoId}`, {
+          headers: { cookie: caddyCookie, "if-none-match": etag ?? "" },
+        }),
+        photoParams(ownId, photoId)
+      );
+      assert(cached.status === 304, "matching etag 304 after auth");
+      assert((await cached.arrayBuffer()).byteLength === 0, "304 body empty");
+      assert(blobGets === getsBefore, "304 does not Blob get");
+      const stale = await GET_PHOTO(
+        req(`https://www.verthill.kr/api/course-reports/${ownId}/photos/${photoId}`, {
+          headers: { cookie: caddyCookie, "if-none-match": '"r0-0-deadbeef"' },
+        }),
+        photoParams(ownId, photoId)
+      );
+      assert(stale.status === 200, "mismatch etag 200");
+      assert(blobGets === getsBefore + 1, "mismatch Blob gets once");
+      const unauth304 = await GET_PHOTO(
+        req(`https://www.verthill.kr/api/course-reports/${ownId}/photos/${photoId}`, {
+          headers: { "if-none-match": etag ?? "" },
+        }),
+        photoParams(ownId, photoId)
+      );
+      assert(unauth304.status === 401, "unauth never 304");
+      const other304 = await GET_PHOTO(
+        req(`https://www.verthill.kr/api/course-reports/${otherId}/photos/${photoId}`, {
+          headers: { cookie: caddyCookie, "if-none-match": etag ?? "" },
+        }),
+        photoParams(otherId, photoId)
+      );
+      assert(other304.status === 404, "cross-report never 304");
       const wrong = await GET_PHOTO(
         req(`https://www.verthill.kr/api/course-reports/${otherId}/photos/${photoId}`, {
           headers: { cookie: caddyCookie },

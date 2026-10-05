@@ -14,10 +14,21 @@ import {
   formatOffDateYmd,
   isActiveOffRequestStatus,
   isOffRequestStatus,
+  isOccupiedOverLimit,
+  isRequestedOverLimit,
+  isYmdInYearMonth,
+  requireCalendarYmd,
+  canAdjustOffRequestWindow,
+  canFinalizeOffRequestWindow,
+  canTransitionOffRequestWindow,
   nextOffRequestStatus,
   normalizeOffDateInput,
   offAssignmentDayRange,
+  resolveDayQuotaLimit,
+  yearMonthFromYmd,
+  ymdDaysInYearMonth,
 } from "../src/lib/offRequestDomain";
+import { isPastKstYmd } from "../src/lib/kstDate";
 
 let passed = 0;
 let failed = 0;
@@ -40,11 +51,13 @@ section("status helpers");
 {
   assert(isOffRequestStatus("REQUESTED"), "REQUESTED ok");
   assert(isOffRequestStatus("APPROVED"), "APPROVED ok");
+  assert(isOffRequestStatus("UNSELECTED"), "UNSELECTED ok");
   assert(!isOffRequestStatus("WAITLISTED"), "WAITLISTED not a status");
   assert(isActiveOffRequestStatus("REQUESTED"), "REQUESTED active");
   assert(isActiveOffRequestStatus("APPROVED"), "APPROVED active");
   assert(!isActiveOffRequestStatus("REJECTED"), "REJECTED not active");
   assert(!isActiveOffRequestStatus("CANCELLED"), "CANCELLED not active");
+  assert(!isActiveOffRequestStatus("UNSELECTED"), "UNSELECTED not active");
 }
 
 section("date normalize");
@@ -117,6 +130,61 @@ section("quota");
     confirmOverQuota: true,
   });
   assert(forced.ok && forced.requiresConfirm, "5/5 allowed with confirm");
+}
+
+section("window month + quota helpers");
+{
+  assert(yearMonthFromYmd("2026-10-01") === "2026-10", "yearMonth from ymd");
+  assert(isYmdInYearMonth("2026-10-31", "2026-10"), "in month");
+  assert(!isYmdInYearMonth("2026-11-01", "2026-10"), "next month out");
+  const oct = ymdDaysInYearMonth("2026-10");
+  assert(oct[0] === "2026-10-01" && oct[30] === "2026-10-31" && oct.length === 31, "Oct days");
+  const feb = ymdDaysInYearMonth("2024-02");
+  assert(feb.length === 29, "leap Feb");
+  assert(canTransitionOffRequestWindow("DRAFT", "OPEN"), "DRAFT→OPEN");
+  assert(canTransitionOffRequestWindow("OPEN", "ADJUSTING"), "OPEN→ADJUSTING");
+  assert(canTransitionOffRequestWindow("ADJUSTING", "FINALIZED"), "ADJUSTING→FINALIZED");
+  assert(!canTransitionOffRequestWindow("OPEN", "DRAFT"), "no reverse OPEN→DRAFT");
+  assert(!canTransitionOffRequestWindow("ADJUSTING", "OPEN"), "no reverse ADJUSTING→OPEN");
+  assert(!canTransitionOffRequestWindow("FINALIZED", "ADJUSTING"), "no reverse FINALIZED");
+  assert(!canTransitionOffRequestWindow("DRAFT", "ADJUSTING"), "no skip DRAFT→ADJUSTING");
+  assert(canAdjustOffRequestWindow("ADJUSTING"), "adjust only ADJUSTING");
+  assert(!canAdjustOffRequestWindow("OPEN"), "no adjust OPEN");
+  assert(!canAdjustOffRequestWindow("DRAFT"), "no adjust DRAFT");
+  assert(!canAdjustOffRequestWindow("FINALIZED"), "no adjust FINALIZED");
+  assert(canFinalizeOffRequestWindow("ADJUSTING"), "admin finalize from ADJUSTING");
+  assert(!canFinalizeOffRequestWindow("OPEN"), "no admin finalize OPEN");
+  assert(resolveDayQuotaLimit({}) === 5, "fallback 5");
+  assert(resolveDayQuotaLimit({ defaultQuota: 7 }) === 7, "window default");
+  assert(resolveDayQuotaLimit({ defaultQuota: 7, overrideLimit: 3 }) === 3, "override");
+  assert(!isRequestedOverLimit(5, 5), "at cap not over");
+  assert(isRequestedOverLimit(6, 5), "6/5 over");
+  assert(
+    !isOccupiedOverLimit({ approvedCount: 2, requestedCount: 3, limit: 5 }),
+    "2+3=5 not over"
+  );
+  assert(
+    isOccupiedOverLimit({ approvedCount: 2, requestedCount: 4, limit: 5 }),
+    "2+4=6 over"
+  );
+  let invalidYmd = false;
+  try {
+    requireCalendarYmd("2026-02-30");
+  } catch {
+    invalidYmd = true;
+  }
+  assert(invalidYmd, "Feb 30 rejected");
+  assert(requireCalendarYmd("2026-10-01").getDate() === 1, "valid Oct 1");
+}
+
+section("KST month boundary");
+{
+  const justAfterKstMidnight = new Date("2026-09-30T15:30:00Z"); // 2026-10-01 00:30 KST
+  assert(isPastKstYmd("2026-09-30", justAfterKstMidnight), "Sep 30 is past at Oct 1 00:30 KST");
+  assert(!isPastKstYmd("2026-10-01", justAfterKstMidnight), "Oct 1 is today at Oct 1 00:30 KST");
+  const beforeKstMidnight = new Date("2026-09-30T14:30:00Z"); // 2026-09-30 23:30 KST
+  assert(!isPastKstYmd("2026-09-30", beforeKstMidnight), "Sep 30 is today at 23:30 KST");
+  assert(!isPastKstYmd("2026-10-01", beforeKstMidnight), "Oct 1 still future at Sep 30 23:30 KST");
 }
 
 section("approve / reject / revoke audit fields");

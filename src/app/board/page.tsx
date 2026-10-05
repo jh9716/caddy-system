@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { BoardImageExportMenu } from "@/components/board/BoardImageExportMenu";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { LazyBoardImageExportMenu } from "@/components/board/LazyBoardImageExportMenu";
 import PublishedBoardView from "@/components/board/PublishedBoardView";
 import BoardComments from "./BoardComments";
 import { assignmentDraftFromPublishedPayload } from "@/lib/assignmentBoardExport";
@@ -16,6 +16,21 @@ import {
   isMemberSessionRedirectScheduled,
 } from "@/lib/memberSessionRedirect";
 import { type ShiftPart } from "@/lib/reservationParser";
+import {
+  CLIENT_RESOURCE,
+  clientResourceStoreKey,
+  ensureClientAuthNamespace,
+  peekLastNamespaceResource,
+  runDedupedClientResource,
+  shouldApplyScopedResponse,
+  shouldSkipFreshResourceRefresh,
+  writeClientResource,
+} from "@/lib/clientResourceCache";
+import {
+  boardPendingCopy,
+  isCurrentLoadGen,
+  isStalePublishedBoard,
+} from "@/lib/pendingLoad";
 
 type PublishedResponse = {
   ok?: boolean;
@@ -33,10 +48,20 @@ type PublishedResponse = {
 export default function PublishedBoardPage() {
   const [date, setDate] = useState(todayYmd);
   const [shift, setShift] = useState<ShiftPart>("1부");
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [published, setPublished] = useState<PublishedResponse["published"]>(null);
+  const [published, setPublished] = useState<PublishedResponse["published"]>(() => {
+    const ymd = todayYmd();
+    return (
+      peekLastNamespaceResource<PublishedResponse["published"]>(
+        CLIENT_RESOURCE.BOARD,
+        ymd,
+        (value) => value == null || value.date === ymd
+      )?.value ?? null
+    );
+  });
   const [notice, setNotice] = useState<string | null>(null);
+  const loadGen = useRef(0);
 
   const exportDraft = useMemo(
     () =>
@@ -48,27 +73,77 @@ export default function PublishedBoardPage() {
 
   const today = useMemo(() => todayYmd(), []);
   const yesterday = useMemo(() => addDaysYmd(today, -1), [today]);
+  const staleBoard = isStalePublishedBoard(published?.date, date);
+  const pendingCopy = boardPendingCopy({
+    loading,
+    selectedDate: date,
+    publishedDate: published?.date ?? null,
+    error: Boolean(error),
+  });
 
   const load = useCallback(async (ymd: string) => {
+    const gen = ++loadGen.current;
+    const cached = peekLastNamespaceResource<PublishedResponse["published"]>(
+      CLIENT_RESOURCE.BOARD,
+      ymd,
+      (value) => value == null || value.date === ymd
+    );
+    if (cached) {
+      setPublished(cached.value);
+      setError(null);
+    }
     setLoading(true);
-    setError(null);
+    if (!cached) setError(null);
+    const ns = await ensureClientAuthNamespace();
+    if (!isCurrentLoadGen(gen, loadGen.current)) return;
+    if (shouldSkipFreshResourceRefresh(cached) && ns) {
+      setLoading(false);
+      return;
+    }
     try {
-      const res = await fetch(
-        `/api/assignments/published?date=${encodeURIComponent(ymd)}`,
-        { credentials: "include", cache: "no-store" }
+      const res = await runDedupedClientResource(
+        ns
+          ? clientResourceStoreKey(ns, CLIENT_RESOURCE.BOARD, ymd)
+          : `anon::board::${ymd}`,
+        () =>
+          fetch(`/api/assignments/published?date=${encodeURIComponent(ymd)}`, {
+            credentials: "include",
+            cache: "no-store",
+          })
       );
+      if (!isCurrentLoadGen(gen, loadGen.current)) return;
       if (consumeUnauthorizedMemberResponse(res)) return;
       const data = (await res.json().catch(() => ({}))) as PublishedResponse;
+      if (
+        !shouldApplyScopedResponse({
+          requestGen: gen,
+          latestGen: loadGen.current,
+          selectedKey: ymd,
+          responseKey: typeof data.date === "string" ? data.date : ymd,
+        })
+      ) {
+        return;
+      }
       if (!res.ok) {
         throw new Error(data.error || "배치표 조회 실패");
       }
-      setPublished(data.published ?? null);
+      const next = data.published ?? null;
+      if (next && next.date !== ymd) return;
+      setPublished(next);
+      setError(null);
+      if (!ns) return;
+      writeClientResource(ns, CLIENT_RESOURCE.BOARD, ymd, next);
     } catch (e: unknown) {
+      if (!isCurrentLoadGen(gen, loadGen.current)) return;
       if (isMemberSessionRedirectScheduled()) return;
-      setPublished(null);
       setError(e instanceof Error ? e.message : "배치표 조회 실패");
     } finally {
-      if (!isMemberSessionRedirectScheduled()) setLoading(false);
+      if (
+        isCurrentLoadGen(gen, loadGen.current) &&
+        !isMemberSessionRedirectScheduled()
+      ) {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -77,7 +152,11 @@ export default function PublishedBoardPage() {
   }, [date, load]);
 
   return (
-    <div className="pub-page">
+    <div
+      className="pub-page"
+      aria-busy={loading || undefined}
+      data-resource-cache={published && published.date === date ? "ready" : "empty"}
+    >
       <header className="pub-head">
         <h1>배치표</h1>
         <p>확정된 날짜별 최종 배치표입니다.</p>
@@ -132,25 +211,33 @@ export default function PublishedBoardPage() {
         </button>
       </nav>
 
-      {loading ? <p className="pub-msg">불러오는 중…</p> : null}
+      {pendingCopy ? <p className="pub-pending">{pendingCopy}</p> : null}
       {error ? <p className="pub-msg error">{error}</p> : null}
       {!loading && !error && !published ? (
         <p className="pub-empty">아직 확정된 배치표가 없습니다.</p>
       ) : null}
-      {!loading && published ? (
-        <>
+      {loading && !published ? (
+        <div className="pub-skel" aria-hidden>
+          <div className="vh-skel vh-skel-block" />
+        </div>
+      ) : null}
+      {published ? (
+        <div
+          className={staleBoard ? "pub-board-pending" : undefined}
+          aria-disabled={staleBoard || undefined}
+        >
           <div className="pub-tools">
             <p className="pub-meta">
               {published.date} · {formatPublishedAt(published.publishedAt)} 확정
             </p>
-            {exportDraft ? (
-              <BoardImageExportMenu draft={exportDraft} onNotice={setNotice} />
+            {exportDraft && !staleBoard ? (
+              <LazyBoardImageExportMenu draft={exportDraft} onNotice={setNotice} />
             ) : null}
           </div>
-          {notice ? <p className="pub-notice">{notice}</p> : null}
+          {notice && !staleBoard ? <p className="pub-notice">{notice}</p> : null}
           <PublishedBoardView payload={published.payload} shift={shift} />
-          <BoardComments date={published.date} />
-        </>
+          {staleBoard ? null : <BoardComments date={published.date} />}
+        </div>
       ) : null}
 
       <style>{`
@@ -219,6 +306,7 @@ export default function PublishedBoardPage() {
           gap: 8px;
         }
         .pub-notice { color: #334155; }
+        .pub-skel { min-height: 240px; }
       `}</style>
     </div>
   );

@@ -27,6 +27,7 @@ import {
   type DailyOpsSnapshotDb,
   type DailyOpsSnapshotRow,
 } from "../src/lib/dailyOpsSnapshotService";
+import { resetAdminOpsDashboardLastSuccessForTests } from "../src/lib/adminOpsDashboardFreshness";
 import type { AdminOpsDashboardSourceDeps } from "../src/lib/adminOpsDashboardSource";
 import type { StoredOpsDutyRow } from "../src/lib/dailyOpsDutyService";
 import { offNamesForDate, type OffSheet } from "../src/lib/offSheetParser";
@@ -315,6 +316,7 @@ section("오늘 live / 과거 snapshot / 과거 없음");
     },
   ]);
 
+  resetAdminOpsDashboardLastSuccessForTests();
   let sheetFetches = 0;
   const sourceFor = (ymd: string): AdminOpsDashboardSourceDeps => ({
     ...completeSourceDeps(ymd, { onOffFetch: () => { sheetFetches += 1; } }),
@@ -468,10 +470,20 @@ section("OFF/ops 불완전 → snapshot skip");
 
 section("live Sheet 실패 → fallback metadata");
 {
+  resetAdminOpsDashboardLastSuccessForTests();
   const now = new Date("2026-09-04T12:00:00+09:00");
   const view = await loadAdminOpsDashboardView("2026-09-04", {
     now,
     db: memoryDb(),
+    listRoster: async () => [
+      {
+        id: 1,
+        name: "이제이",
+        team: "1조",
+        employmentStatus: "ACTIVE",
+        caddyType: "HOUSE",
+      },
+    ],
     sourceDeps: {
       loadAvailability: mockLoadAvailability(),
       listDuties: async () => [storedDuty("이제이")],
@@ -481,6 +493,7 @@ section("live Sheet 실패 → fallback metadata");
     },
   });
   assert(view.source === "live" && view.sourceQuality === "fallback", "dashboard Sheet 실패 → fallback");
+  assert(view.freshness === "error" && view.sheetDerivedReady === false, "Sheet 실패는 0으로 fresh 위장 안 함");
   assert(view.snapshotAvailable === false, "live fallback은 snapshot 아님");
 }
 
@@ -498,6 +511,7 @@ section("dashboard GET write 없음 / cron 인증 / sheet read-only");
   const getFn = get.split("export async function GET")[1] || "";
 
   assert(/loadAdminOpsDashboardView/.test(getFn), "GET이 historical view");
+  assert(/waitForSheet: refresh/.test(getFn), "GET 기본은 fast, refresh=1만 Sheet 대기");
   assert(!/captureDailyOpsSnapshot/.test(get), "GET이 snapshot 생성 안 함");
   assert(!/prisma\.(create|update|upsert|delete)/.test(getFn), "GET에 prisma write 없음");
   assert(/requireAdmin/.test(get), "dashboard GET requireAdmin");

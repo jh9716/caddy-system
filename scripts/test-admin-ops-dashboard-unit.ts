@@ -19,7 +19,12 @@ import {
   groupOpsDutyNames,
   statusToneFromReasons,
 } from "../src/lib/adminOpsDashboard";
-import { loadAdminOpsDashboardSource } from "../src/lib/adminOpsDashboardSource";
+import {
+  loadAdminOpsDashboardSource,
+  type AdminOpsDashboardSourceDeps,
+} from "../src/lib/adminOpsDashboardSource";
+import { resolveOpsDutyReadOnly } from "../src/lib/opsDutyReadOnlySource";
+import { opsDutyRoleFromKind } from "../src/lib/dailyOpsDuty";
 import { computeAvailability } from "../src/lib/availabilityEngine";
 import { applyDailyExternalExclusions } from "../src/lib/dailyAvailabilityOverlay";
 import { AdminOpsDutyBoard, AdminOpsTeamBoard, TeamBoardPerson } from "../src/components/manage/AdminOpsDashboard";
@@ -30,6 +35,20 @@ import { offNamesForDate, type OffSheet } from "../src/lib/offSheetParser";
 import {
   buildOpsDutySheetTestSheets,
 } from "../src/lib/opsDutySheetParser";
+import {
+  fetchPublishedOffSheets,
+  getOffSheetHttpFetchCount,
+  invalidateOffSheetCache,
+  resetOffSheetHttpStatsForTests,
+  setPublishedOffSheetLoaderForTests,
+} from "../src/lib/offSheetFetch";
+import {
+  fetchPublishedOpsDutySheets,
+  getOpsDutySheetHttpFetchCount,
+  invalidateOpsDutySheetCache,
+  resetOpsDutySheetHttpStatsForTests,
+  setPublishedOpsDutySheetLoaderForTests,
+} from "../src/lib/opsDutySheetFetch";
 
 let passed = 0;
 let failed = 0;
@@ -125,6 +144,73 @@ function storedDuty(name: string, role: StoredOpsDutyRow["role"] = "DUTY_AM"): S
     name,
     team: "1조",
     employmentStatus: "ACTIVE",
+  };
+}
+
+/** base f32f2d9 sequential source. Parallel 결과와 deep-equal 비교용. */
+async function loadAdminOpsDashboardSourceSequential(
+  ymd: string,
+  deps: AdminOpsDashboardSourceDeps = {}
+) {
+  const loadAvailability = deps.loadAvailability ?? (await import("../src/lib/availabilityService")).loadAvailabilityForDate;
+  const listDuties = deps.listDuties ?? (await import("../src/lib/dailyOpsDutyService")).listDailyOpsDuties;
+  const fetchOff = deps.fetchOffSheets ?? fetchPublishedOffSheets;
+  const fetchOps = deps.fetchOpsDutySheets ?? fetchPublishedOpsDutySheets;
+  let offSheets: OffSheet[] | null = null;
+  let offDateFound = false;
+  let offError: string | null = null;
+  try {
+    offSheets = await fetchOff();
+    const parsed = offNamesForDate(offSheets, ymd);
+    offDateFound = parsed.matchedSheetDates.includes(ymd);
+    if (!offDateFound) offError = "off_sheet_date_not_found";
+  } catch (error) {
+    offError = error instanceof Error ? error.message : "off_sheet_fetch_failed";
+  }
+  const resolvedDuty = await resolveOpsDutyReadOnly(ymd, {
+    listDuties,
+    fetchOpsDutySheets: fetchOps,
+  });
+  const stored = resolvedDuty.stored;
+  const dutyEntries = resolvedDuty.sheetEntries;
+  const dutySource = resolvedDuty.source;
+  const dutyError = resolvedDuty.error;
+  const offOk = Boolean(offSheets && offDateFound && !offError);
+  const dutyOk =
+    dutySource === "stored" || (dutySource === "sheet" && dutyEntries.length > 0);
+  const completeForSnapshot = offOk && dutyOk;
+  const skipReason = !offOk
+    ? offError || "off_sheet_incomplete"
+    : !dutyOk
+      ? dutyError || "ops_duty_incomplete"
+      : null;
+  const availability = await loadAvailability(ymd, {
+    includeOffSheet: offOk,
+    offSheets: offOk && offSheets ? offSheets : undefined,
+    includeStoredOpsDuty: false,
+    dutyEntries:
+      dutySource === "stored" || dutySource === "sheet" ? dutyEntries : undefined,
+  });
+  const opsDuties =
+    dutySource === "stored"
+      ? stored.map((row) => ({ role: row.role, name: row.name, rawName: row.rawName }))
+      : dutyEntries.map((entry) => ({
+          role: opsDutyRoleFromKind(entry.kind),
+          name: entry.rawName,
+          rawName: entry.rawName,
+        }));
+  return {
+    dashboard: buildAdminOpsDashboard({ date: ymd, availability, opsDuties }),
+    quality: completeForSnapshot ? ("complete" as const) : ("fallback" as const),
+    offSource: offOk ? ("sheet" as const) : ("assignment_only" as const),
+    dutySource,
+    completeForSnapshot,
+    skipReason,
+    availabilityInput: {
+      includeOffSheet: offOk,
+      dutyEntries:
+        dutySource === "stored" || dutySource === "sheet" ? dutyEntries : undefined,
+    },
   };
 }
 
@@ -298,6 +384,19 @@ section("전체 캐디 조별 현황판 가용/제외");
   assert(!html.includes("dash-caddy-grid"), "사람 카드 grid 제거");
   const named = filterDashboardCaddies(dash.caddies, "김");
   assert(named.length === 1 && named[0].name === "김가용", "이름 검색만");
+  const alwaysOpen = renderToStaticMarkup(createElement(AdminOpsTeamBoard, { groups: teams }));
+  assert(alwaysOpen.includes("김가용") && alwaysOpen.includes("박3부"), "기본 펼침은 전 조 person row");
+  assert((alwaysOpen.match(/dash-team-person-name/g) || []).length >= 4, "lazy DOM 없음");
+  assert(!alwaysOpen.includes("data-expanded"), "collapse marker 없음");
+  assert(!alwaysOpen.includes("dash-team-summary"), "collapsed summary 없음");
+  assert(!alwaysOpen.includes("aria-expanded"), "toggle button 없음");
+  const offRow = dash.caddies.find((c) => c.name === "이휴무")!;
+  const leaveRow = dash.caddies.find((c) => c.name === "강휴직")!;
+  const thirdRow = dash.caddies.find((c) => c.name === "박3부")!;
+  assert(offRow.statusTone === "off", "OFF tone 유지");
+  assert(leaveRow.status === "excluded", "LEAVE 제외 유지");
+  assert(thirdRow.caddyType === "THIRD" && thirdRow.statusTone === "leader", "3부반+조장 semantics 유지");
+  assert(dash.roster.houseCount === 3 && dash.roster.thirdCount === 1, "HOUSE/3부반 KPI 유지");
 }
 
 section("휴무 count source (OFF Sheet overlay + Assignment)");
@@ -348,6 +447,214 @@ section("날짜 변경 시 해당 날짜 데이터");
   assert(p1.availability.offCount === 1, "16일 휴무 반영");
   assert(p2.availability.offCount === 0, "다음날 휴무 없음");
   assert(p2.availability.finalAvailable > p1.availability.finalAvailable, "날짜별 가용 갱신");
+}
+
+section("OFF와 duty source 병렬");
+{
+  const date = "2026-09-03";
+  const events: string[] = [];
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  await loadAdminOpsDashboardSource(date, {
+    loadAvailability: mockLoadAvailability(),
+    listDuties: async () => {
+      events.push("duty-start");
+      await sleep(20);
+      events.push("duty-end");
+      return [];
+    },
+    fetchOffSheets: async () => {
+      events.push("off-start");
+      await sleep(40);
+      events.push("off-end");
+      return [offSheetForDate(date, ["이휴무"])];
+    },
+    fetchOpsDutySheets: async () => [],
+  });
+  assert(events.includes("off-start") && events.includes("duty-start"), "OFF/duty 둘 다 시작");
+  assert(events.indexOf("duty-start") < events.indexOf("off-end"), "duty가 OFF 종료 전에 시작");
+  const src = readSrc("src/lib/adminOpsDashboardSource.ts");
+  assert(/Promise\.all/.test(src), "source Promise.all");
+}
+
+function dutySheetsForDate(date: string) {
+  return buildOpsDutySheetTestSheets([
+    {
+      name: "0901~0914",
+      startDate: date,
+      week1Dates: [date, "2099-01-02", "2099-01-03", "2099-01-04", "2099-01-05", "2099-01-06", "2099-01-07"],
+      week2Dates: ["2099-01-08", "2099-01-09", "2099-01-10", "2099-01-11", "2099-01-12", "2099-01-13", "2099-01-14"],
+      week1Names: [{ 당번_조출_1: "김가용", 마샬_조출_1: "최병가", 조장_1: "박3부" }],
+    },
+  ]);
+}
+
+function snapshotSource(result: {
+  dashboard: unknown;
+  quality: unknown;
+  offSource: unknown;
+  dutySource: unknown;
+  completeForSnapshot: unknown;
+  skipReason: unknown;
+}) {
+  return JSON.stringify({
+    dashboard: result.dashboard,
+    quality: result.quality,
+    offSource: result.offSource,
+    dutySource: result.dutySource,
+    completeForSnapshot: result.completeForSnapshot,
+    skipReason: result.skipReason,
+  });
+}
+
+section("parallel vs sequential payload / fallback");
+{
+  const date = "2026-09-03";
+  const fixtures: Array<{ name: string; deps: AdminOpsDashboardSourceDeps }> = [
+    {
+      name: "OFF ok + stored duty",
+      deps: {
+        listDuties: async () => [storedDuty("김가용")],
+        fetchOffSheets: async () => [offSheetForDate(date, ["이휴무"])],
+        fetchOpsDutySheets: async () => {
+          throw new Error("ops should not run when stored duty exists");
+        },
+      },
+    },
+    {
+      name: "OFF fail + stored duty",
+      deps: {
+        listDuties: async () => [storedDuty("김가용")],
+        fetchOffSheets: async () => {
+          throw new Error("off_sheet_fetch_failed");
+        },
+        fetchOpsDutySheets: async () => {
+          throw new Error("ops should not run when stored duty exists");
+        },
+      },
+    },
+    {
+      name: "OFF ok + duty sheet",
+      deps: {
+        listDuties: async () => [],
+        fetchOffSheets: async () => [offSheetForDate(date, ["이휴무"])],
+        fetchOpsDutySheets: async () => dutySheetsForDate(date),
+      },
+    },
+    {
+      name: "OFF ok + duty empty",
+      deps: {
+        listDuties: async () => [],
+        fetchOffSheets: async () => [offSheetForDate(date, ["이휴무"])],
+        fetchOpsDutySheets: async () => [],
+      },
+    },
+    {
+      name: "both fetch fail",
+      deps: {
+        listDuties: async () => [],
+        fetchOffSheets: async () => {
+          throw new Error("off_sheet_fetch_failed");
+        },
+        fetchOpsDutySheets: async () => {
+          throw new Error("ops_duty_sheet_failed");
+        },
+      },
+    },
+    {
+      name: "OFF date missing",
+      deps: {
+        listDuties: async () => [storedDuty("김가용")],
+        fetchOffSheets: async () => [offSheetForDate("2099-01-01", ["이휴무"])],
+        fetchOpsDutySheets: async () => {
+          throw new Error("ops should not run when stored duty exists");
+        },
+      },
+    },
+  ];
+  for (const fixture of fixtures) {
+    const seqAvail: Array<{ includeOffSheet?: boolean; dutyLen: number }> = [];
+    const parAvail: Array<{ includeOffSheet?: boolean; dutyLen: number }> = [];
+    const wrap = (
+      bucket: Array<{ includeOffSheet?: boolean; dutyLen: number }>
+    ) => {
+      const inner = mockLoadAvailability();
+      return async (ymd: string, options?: Parameters<typeof inner>[1]) => {
+        bucket.push({
+          includeOffSheet: options?.includeOffSheet,
+          dutyLen: options?.dutyEntries?.length ?? 0,
+        });
+        return inner(ymd, options);
+      };
+    };
+    const seq = await loadAdminOpsDashboardSourceSequential(date, {
+      ...fixture.deps,
+      loadAvailability: wrap(seqAvail),
+    });
+    const par = await loadAdminOpsDashboardSource(date, {
+      ...fixture.deps,
+      loadAvailability: wrap(parAvail),
+    });
+    assert(snapshotSource(seq) === snapshotSource(par), `${fixture.name} payload deep-equal`);
+    assert(
+      JSON.stringify(seqAvail) === JSON.stringify(parAvail),
+      `${fixture.name} availability input 동일`
+    );
+    assert(seq.availabilityInput.includeOffSheet === seqAvail[0]?.includeOffSheet, `${fixture.name} includeOffSheet`);
+  }
+}
+
+section("Sheet call-count cache / inflight");
+{
+  const date = "2026-09-03";
+  const cleanup = () => {
+    setPublishedOffSheetLoaderForTests(null);
+    setPublishedOpsDutySheetLoaderForTests(null);
+    invalidateOffSheetCache();
+    invalidateOpsDutySheetCache();
+    resetOffSheetHttpStatsForTests();
+    resetOpsDutySheetHttpStatsForTests();
+  };
+  cleanup();
+  try {
+    setPublishedOffSheetLoaderForTests(async () => [offSheetForDate(date, ["이휴무"])]);
+    setPublishedOpsDutySheetLoaderForTests(async () => dutySheetsForDate(date));
+    const deps = {
+      loadAvailability: mockLoadAvailability(),
+      listDuties: async () => [] as StoredOpsDutyRow[],
+    };
+    await loadAdminOpsDashboardSource(date, deps);
+    const coldOff = getOffSheetHttpFetchCount();
+    const coldDuty = getOpsDutySheetHttpFetchCount();
+    assert(coldOff === 1 && coldDuty === 1, "cold first: OFF 1 + duty Sheet 1");
+    await loadAdminOpsDashboardSource(date, deps);
+    assert(getOffSheetHttpFetchCount() === 1, "warm: OFF HTTP 증가 0");
+    assert(getOpsDutySheetHttpFetchCount() === 1, "warm: duty HTTP 증가 0");
+
+    invalidateOffSheetCache();
+    invalidateOpsDutySheetCache();
+    resetOffSheetHttpStatsForTests();
+    resetOpsDutySheetHttpStatsForTests();
+    await Promise.all([
+      loadAdminOpsDashboardSource(date, deps),
+      loadAdminOpsDashboardSource(date, deps),
+    ]);
+    assert(getOffSheetHttpFetchCount() === 1, "simultaneous 2: OFF inflight 1");
+    assert(getOpsDutySheetHttpFetchCount() === 1, "simultaneous 2: duty inflight 1");
+
+    cleanup();
+    setPublishedOffSheetLoaderForTests(async () => [offSheetForDate(date, ["이휴무"])]);
+    setPublishedOpsDutySheetLoaderForTests(async () => {
+      throw new Error("duty sheet should not run on stored hit");
+    });
+    await loadAdminOpsDashboardSource(date, {
+      loadAvailability: mockLoadAvailability(),
+      listDuties: async () => [storedDuty("김가용")],
+    });
+    assert(getOffSheetHttpFetchCount() === 1, "duty DB hit: OFF 1");
+    assert(getOpsDutySheetHttpFetchCount() === 0, "duty DB hit: duty Sheet 0");
+  } finally {
+    cleanup();
+  }
 }
 
 section("read-only OFF/ops source overlay");
@@ -468,6 +775,8 @@ section("dashboard 조회 write/sync 없음");
   assert(!/dailyBoardPublished/.test(ui), "dashboard UI가 published payload를 쓰지 않음");
   assert(!/export async function POST/.test(api), "dashboard API는 GET만");
   assert(/method: "GET"/.test(ui), "클라이언트도 GET만");
+  assert(/refresh=1/.test(api) && /waitForSheet: refresh/.test(api), "GET fast/refresh 분리");
+  assert(/최신 확인 중/.test(ui), "Sheet pending UX");
   assert(!/prisma\.(create|update|upsert|delete)/.test(getFn), "GET에 prisma write 없음");
   assert(/loadAdminOpsDashboard/.test(getFn), "GET이 read helper 사용");
   assert(!/captureDailyOpsSnapshot/.test(api), "GET이 snapshot write 안 함");
@@ -497,6 +806,13 @@ section("모바일 폭 rendering 구조");
   assert(/is-marshal/.test(css) && /is-leader/.test(css) && /is-available/.test(css), "마샬/조장/가용 색");
   assert(/addDays\(/.test(ui) && /이전/.test(ui) && /type="date"/.test(ui), "날짜 이전/다음/input");
   assert(/캐디 이름 검색/.test(ui), "이름 검색만");
+  assert(/filterDashboardCaddies/.test(ui), "검색은 즉시 필터");
+  assert(!/openedTeams|collapsedTeams|expandedTeams/.test(ui), "collapse 상태 없음");
+  assert(!/resolveDashboardExpandedTeams|teamHeaderAriaLabel|teamStatusSummary/.test(ui), "collapse helper 미사용");
+  assert(!/dash-team-summary/.test(css) && !/is-collapsed/.test(css), "collapse CSS 없음");
+  assert(/AdminOpsTeamBoardSkeleton/.test(ui), "첫 로딩 조별 placeholder");
+  assert(/shouldShowDashboardZeroCount/.test(ui), "로딩 중 0명 숨김");
+  assert(!/불러오는 중…/.test(ui), "첫 진입 wipe 문구 없음");
   assert(!/전화번호|차량번호/.test(ui), "전화/차량 검색 없음");
 }
 

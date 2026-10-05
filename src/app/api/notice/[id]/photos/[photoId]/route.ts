@@ -8,7 +8,21 @@ import {
   requireNoticeAdmin,
   requireNoticeReader,
 } from "@/lib/noticeAccess";
-import { deleteNoticePhoto, loadNoticePhotoBytes } from "@/lib/noticePhoto";
+import {
+  deleteNoticePhoto,
+  loadNoticePhotoMeta,
+  openNoticePhotoBody,
+} from "@/lib/noticePhoto";
+import {
+  formatPhotoServerTiming,
+  photoObjectToResponseBody,
+  privatePhotoStreamHeaders,
+} from "@/lib/photoObjectBody";
+import {
+  buildPrivatePhotoETag,
+  ifNoneMatchContains,
+  privatePhotoCacheHeaders,
+} from "@/lib/privatePhotoCache";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -31,7 +45,9 @@ export async function GET(
     params: Promise<{ id: string; photoId: string }> | { id: string; photoId: string };
   }
 ) {
+  const started = performance.now();
   const auth = await requireNoticeReader(req);
+  const authMs = performance.now() - started;
   if (isNoticeAuthResponse(auth)) return auth;
 
   const { noticeId, photoId } = await ids(params);
@@ -45,19 +61,37 @@ export async function GET(
   }
 
   try {
+    const afterAuth = performance.now();
     const viewer = await loadNoticeViewer(prisma, auth);
-    const { mimeType, bytes } = await loadNoticePhotoBytes(prisma, {
+    const photo = await loadNoticePhotoMeta(prisma, {
       noticeId,
       photoId,
       viewer,
     });
-    return new NextResponse(Buffer.from(bytes), {
+    const dbMs = performance.now() - afterAuth;
+    const etag = buildPrivatePhotoETag("n", photo);
+    const timing = formatPhotoServerTiming({ auth: authMs, db: dbMs });
+    if (ifNoneMatchContains(req.headers.get("if-none-match"), etag)) {
+      return new NextResponse(null, {
+        status: 304,
+        headers: {
+          ...privatePhotoCacheHeaders(etag),
+          "Server-Timing": timing,
+        },
+      });
+    }
+    const blobStarted = performance.now();
+    const body = await openNoticePhotoBody(photo.storageKey, req.signal);
+    const blobOpenMs = performance.now() - blobStarted;
+    return new NextResponse(photoObjectToResponseBody(body), {
       status: 200,
-      headers: {
-        "Content-Type": mimeType,
-        "Cache-Control": "private, max-age=60",
-        "X-Content-Type-Options": "nosniff",
-      },
+      headers: privatePhotoStreamHeaders(etag, photo.mimeType, body, {
+        "Server-Timing": formatPhotoServerTiming({
+          auth: authMs,
+          db: dbMs,
+          blob_open: blobOpenMs,
+        }),
+      }),
     });
   } catch (e) {
     if (e instanceof CourseReportPhotoValidationError || e instanceof CourseReportPhotoStorageError) {

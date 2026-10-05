@@ -264,18 +264,20 @@ export type UnavailablePanelSourceRow = {
   employmentStatus?: string;
 };
 
-/** 패널 표시용 병가/결근. Draft identity/reflow 타입은 바꾸지 않는다. */
-export async function listUnavailablePanelRows(
-  ymd: string
-): Promise<UnavailablePanelSourceRow[]> {
-  const rows = await defaultPrisma.dailyCaddyUnavailable.findMany({
-    where: { date: dateKey(ymd) },
-    select: {
-      caddyId: true,
-      reason: true,
-      caddy: { select: { name: true, team: true, employmentStatus: true } },
-    },
-  });
+export type UnavailablePanelRawRow = {
+  caddyId: number;
+  reason: string;
+  caddy?: {
+    name?: string | null;
+    team?: string | null;
+    employmentStatus?: string | null;
+  } | null;
+};
+
+/** 패널 표시용 병가/결근. RETIRED/DELETED 는 기존 GET과 같이 제외. */
+export function mapUnavailablePanelRows(
+  rows: UnavailablePanelRawRow[]
+): UnavailablePanelSourceRow[] {
   return rows
     .map((row) => ({
       caddyId: Number(row.caddyId),
@@ -293,6 +295,21 @@ export async function listUnavailablePanelRows(
           employmentStatus: row.employmentStatus,
         })
     );
+}
+
+/** 패널 표시용 병가/결근. Draft identity/reflow 타입은 바꾸지 않는다. */
+export async function listUnavailablePanelRows(
+  ymd: string
+): Promise<UnavailablePanelSourceRow[]> {
+  const rows = await defaultPrisma.dailyCaddyUnavailable.findMany({
+    where: { date: dateKey(ymd) },
+    select: {
+      caddyId: true,
+      reason: true,
+      caddy: { select: { name: true, team: true, employmentStatus: true } },
+    },
+  });
+  return mapUnavailablePanelRows(rows);
 }
 
 /** Draft row만 삭제. DailyReservation / DailyPlacement 는 건드리지 않는다. */

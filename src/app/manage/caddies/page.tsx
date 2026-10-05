@@ -1,6 +1,19 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  CLIENT_RESOURCE,
+  clearClientResourceCache,
+  clientResourceStoreKey,
+  ensureClientAuthNamespace,
+  invalidateClientResource,
+  peekLastNamespaceResource,
+  readLastClientAuthNamespace,
+  runDedupedClientResource,
+  shouldSkipFreshResourceRefresh,
+  writeClientResource,
+} from '@/lib/clientResourceCache';
+import { isCurrentLoadGen } from '@/lib/pendingLoad';
 import {
   DRIVING_POOL_TEAM,
   EMPLOYMENT_STATUSES,
@@ -304,7 +317,15 @@ const V1_SAFE_KIND_LABEL: Record<string, string> = {
 };
 
 export default function ManageCaddiesPage() {
-  const [rows, setRows] = useState<Caddy[]>([]);
+  const [rows, setRows] = useState<Caddy[]>(() => {
+    return (
+      peekLastNamespaceResource<Caddy[]>(
+        CLIENT_RESOURCE.CADDY_ROSTER,
+        "all",
+        (value) => Array.isArray(value)
+      )?.value ?? []
+    );
+  });
   const [loading, setLoading] = useState(false);
   const [savingId, setSavingId] = useState<number | null>(null);
   const [employmentFilter, setEmploymentFilter] = useState<
@@ -405,6 +426,16 @@ export default function ManageCaddiesPage() {
   const [importApplyFailed, setImportApplyFailed] = useState(false);
   /** 슬롯 점유 계산용 — ACTIVE+LEAVE+RETIRED 전체 */
   const [slotPeers, setSlotPeers] = useState<SlotOccupant[]>([]);
+  const [refreshError, setRefreshError] = useState(false);
+  const loadGen = useRef(0);
+
+  const invalidateCaddyRosters = useCallback(() => {
+    const ns = readLastClientAuthNamespace();
+    if (ns) {
+      invalidateClientResource(ns, CLIENT_RESOURCE.CADDY_ROSTER);
+      invalidateClientResource(ns, CLIENT_RESOURCE.DASHBOARD);
+    }
+  }, []);
 
   const refreshSlotPeers = useCallback(async () => {
     try {
@@ -438,24 +469,55 @@ export default function ManageCaddiesPage() {
         (viewMode === 'summary' || employmentFilter === 'missing'
           ? 'all'
           : employmentFilter);
+      const gen = ++loadGen.current;
+      const cached = peekLastNamespaceResource<Caddy[]>(
+        CLIENT_RESOURCE.CADDY_ROSTER,
+        String(employment),
+        (value) => Array.isArray(value)
+      );
+      if (cached) {
+        setRows(cached.value);
+        setRefreshError(false);
+      }
       setLoading(true);
       setMessage(null);
+      const ns = await ensureClientAuthNamespace();
+      if (!isCurrentLoadGen(gen, loadGen.current)) return;
+      if (shouldSkipFreshResourceRefresh(cached) && ns) {
+        setLoading(false);
+        return;
+      }
       try {
-        const res = await fetch(`/api/caddies?employment=${employment}`, {
-          cache: 'no-store',
-          credentials: 'include',
-        });
+        const res = await runDedupedClientResource(
+          ns
+            ? clientResourceStoreKey(ns, CLIENT_RESOURCE.CADDY_ROSTER, String(employment))
+            : `anon::caddy-roster::${employment}`,
+          () =>
+            fetch(`/api/caddies?employment=${employment}`, {
+              cache: 'no-store',
+              credentials: 'include',
+            })
+        );
+        if (!isCurrentLoadGen(gen, loadGen.current)) return;
         if (res.status === 401 || res.status === 403) {
+          clearClientResourceCache();
           location.href = '/login?callbackUrl=/manage/caddies';
           return;
         }
         const data = await res.json();
+        if (!isCurrentLoadGen(gen, loadGen.current)) return;
         if (!res.ok) {
           setMessage(data?.error || '목록을 불러오지 못했습니다.');
-          setRows([]);
+          setRefreshError(true);
+          if (!cached) setRows([]);
           return;
         }
-        setRows(Array.isArray(data) ? data : []);
+        const next = Array.isArray(data) ? data : [];
+        setRows(next);
+        setRefreshError(false);
+        if (ns) {
+          writeClientResource(ns, CLIENT_RESOURCE.CADDY_ROSTER, String(employment), next);
+        }
         if (employment === 'all' && Array.isArray(data)) {
           setSlotPeers(
             data.map((c: Caddy) => ({
@@ -471,10 +533,18 @@ export default function ManageCaddiesPage() {
           void refreshSlotPeers();
         }
       } finally {
-        setLoading(false);
+        if (isCurrentLoadGen(gen, loadGen.current)) setLoading(false);
       }
     },
     [employmentFilter, viewMode, refreshSlotPeers]
+  );
+
+  const reloadAfterMutation = useCallback(
+    async (employmentOverride?: EmploymentStatus | 'all') => {
+      invalidateCaddyRosters();
+      await load(employmentOverride);
+    },
+    [invalidateCaddyRosters, load]
   );
 
   useEffect(() => {
@@ -494,7 +564,7 @@ export default function ManageCaddiesPage() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch('/api/me', { credentials: 'include' });
+        const res = await fetch('/api/me', { credentials: 'include', cache: 'no-store' });
         const data = await res.json().catch(() => ({}));
         if (cancelled) return;
         setCanReadArchived(Boolean(data?.user?.canReadArchivedCaddies));
@@ -732,7 +802,7 @@ export default function ManageCaddiesPage() {
         }
         setEditingId(null);
         setMenuCaddyId(null);
-        await load();
+        await reloadAfterMutation();
         setMessage(`${formatCaddyLabel({ ...draft, caddyType: 'DRIVING' })} 저장됨`);
       } finally {
         setSavingId(null);
@@ -789,7 +859,7 @@ export default function ManageCaddiesPage() {
       }
       setEditingId(null);
       setMenuCaddyId(null);
-      await load();
+      await reloadAfterMutation();
       setMessage(`${formatCaddyLabel(draft)} 저장됨`);
     } finally {
       setSavingId(null);
@@ -821,7 +891,7 @@ export default function ManageCaddiesPage() {
         alert(data?.error || '변경 실패');
         return;
       }
-      await load();
+      await reloadAfterMutation();
       setMenuCaddyId(null);
       setMessage(`${formatCaddyLabel({ ...c, caddyType: 'DRIVING' })}: 드라이빙 캐디로 변경 (슬롯 해제)`);
     } finally {
@@ -851,7 +921,7 @@ export default function ManageCaddiesPage() {
         alert(data?.error || '순번 교환 실패');
         return;
       }
-      await load();
+      await reloadAfterMutation();
     } finally {
       setSavingId(null);
     }
@@ -883,9 +953,9 @@ export default function ManageCaddiesPage() {
       // 상세 관리에서는 해당 필터로 전환. 현장표는 전체 로드를 유지한다.
       if (viewMode === 'detail') {
         setEmploymentFilter(status);
-        await load(status);
+        await reloadAfterMutation(status);
       } else {
-        await load('all');
+        await reloadAfterMutation('all');
       }
       setMenuCaddyId(null);
       const toast =
@@ -924,7 +994,7 @@ export default function ManageCaddiesPage() {
         setCreateDraft(emptyDraft());
         setCreateKind('regular');
         setCreateOpen(false);
-        await load();
+        await reloadAfterMutation();
         setMessage(`드라이빙 캐디 등록: ${formatCaddyLabel({ ...data, caddyType: 'DRIVING' })}`);
       } finally {
         setCreating(false);
@@ -966,7 +1036,7 @@ export default function ManageCaddiesPage() {
       }
       setCreateDraft(emptyDraft());
       setCreateOpen(false);
-      await load();
+      await reloadAfterMutation();
       setMessage(
         `신규 등록: ${formatCaddyLabel(data)}`
       );
@@ -993,7 +1063,11 @@ export default function ManageCaddiesPage() {
   }, [editingId, drafts, slotPeers]);
 
   return (
-    <div className={`caddy-manage mode-${viewMode}`}>
+    <div
+      className={`caddy-manage mode-${viewMode}`}
+      aria-busy={loading || undefined}
+      data-resource-cache={rows.length > 0 ? 'ready' : 'empty'}
+    >
       <header className="cm-header">
         <div>
           <h1 className="cm-title">캐디 관리</h1>
@@ -1337,9 +1411,17 @@ export default function ManageCaddiesPage() {
         </>
       )}
 
-      {loading ? (
+      {loading && rows.length === 0 ? (
         <p className="cm-muted">불러오는 중…</p>
-      ) : viewMode === 'summary' ? (
+      ) : (
+        <>
+      {loading && rows.length > 0 ? (
+        <p className="cm-muted">업데이트 중…</p>
+      ) : null}
+      {refreshError && rows.length > 0 ? (
+        <p className="cm-muted">갱신 실패</p>
+      ) : null}
+      {viewMode === 'summary' ? (
         <div className="cm-roster-scroll" aria-label="조별 현장표">
           <div className="cm-roster">
             {rosterColumns.map((col) => (
@@ -1826,6 +1908,8 @@ export default function ManageCaddiesPage() {
           </ul>
         </>
       )}
+        </>
+      )}
 
       {viewMode === 'detail' && importOpen && (
         <section className="cm-card cm-import" aria-label="명단 가져오기">
@@ -1960,7 +2044,7 @@ export default function ManageCaddiesPage() {
                     setV1Resolutions({});
                     setImportFileName(null);
                     setImportOpen(false);
-                    await load('all');
+                    await reloadAfterMutation('all');
                   } catch {
                     setImportApplyFailed(true);
                     setMessage(ROSTER_IMPORT_APPLY_FAILED_USER_MESSAGE);
@@ -2013,7 +2097,7 @@ export default function ManageCaddiesPage() {
                   setV1Resolutions({});
                   setImportFileName(null);
                   setImportOpen(false);
-                  await load('all');
+                  await reloadAfterMutation('all');
                 } catch {
                   setImportApplyFailed(true);
                   setMessage(ROSTER_IMPORT_APPLY_FAILED_USER_MESSAGE);

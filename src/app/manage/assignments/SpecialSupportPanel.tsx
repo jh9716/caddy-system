@@ -68,6 +68,8 @@ function groupCaddyIds(
     .map((row) => row.caddyId);
 }
 
+export type SpecialSupportListPayload = Payload;
+
 export const SpecialSupportPanel = memo(function SpecialSupportPanel({
   date,
   excludedRows,
@@ -75,6 +77,9 @@ export const SpecialSupportPanel = memo(function SpecialSupportPanel({
   onChanged,
   onLoaded,
   onRecordsLoaded,
+  initialPayload,
+  initialError,
+  bundleReady = false,
 }: {
   date: string;
   excludedRows?: Array<{
@@ -89,6 +94,9 @@ export const SpecialSupportPanel = memo(function SpecialSupportPanel({
   onChanged?: () => void;
   onLoaded?: (byShift: ReturnType<typeof engineQueuesFromSupportRecords>) => void;
   onRecordsLoaded?: (items: OpsSpecialSupportItem[]) => void;
+  initialPayload?: Payload | null;
+  initialError?: string | null;
+  bundleReady?: boolean;
 }) {
   const [payload, setPayload] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(false);
@@ -158,8 +166,30 @@ export const SpecialSupportPanel = memo(function SpecialSupportPanel({
   );
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      setPayload(null);
+      onLoaded?.(engineQueuesFromSupportRecords(null));
+      onRecordsLoadedRef.current?.([]);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+    if (!bundleReady) {
+      setLoading(true);
+      return;
+    }
+    if (initialPayload && (!initialPayload.date || initialPayload.date === date)) {
+      applyPayload(initialPayload);
+      setError(initialError ?? null);
+      setLoading(false);
+      return;
+    }
+    setPayload(null);
+    onLoaded?.(engineQueuesFromSupportRecords(null));
+    onRecordsLoadedRef.current?.([]);
+    setError(initialError || "지원근무 조회 실패");
+    setLoading(false);
+  }, [date, bundleReady, initialPayload, initialError, applyPayload, onLoaded]);
 
   const items = payload?.items || [];
   const visibleRows = useMemo(

@@ -60,7 +60,19 @@ function versionLine(preview: Preview): string {
   return `게시본 v${pub ?? "—"} · 현재 작업본 v${cur}`;
 }
 
-export function BoardPushNotifyCard({ date }: { date: string }) {
+export type BoardPushPreviewState = Preview;
+
+export function BoardPushNotifyCard({
+  date,
+  initialPreview,
+  initialError,
+  bundleReady = false,
+}: {
+  date: string;
+  initialPreview?: Preview | null;
+  initialError?: string | null;
+  bundleReady?: boolean;
+}) {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
@@ -96,8 +108,26 @@ export function BoardPushNotifyCard({ date }: { date: string }) {
 
   useEffect(() => {
     setResult(null);
-    void load();
-  }, [load]);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      setPreview(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+    if (!bundleReady) {
+      setLoading(true);
+      return;
+    }
+    if (initialPreview && initialPreview.date === date) {
+      setPreview(initialPreview);
+      setError(initialError ?? null);
+      setLoading(false);
+      return;
+    }
+    setPreview(null);
+    setError(initialError ?? null);
+    setLoading(false);
+  }, [date, bundleReady, initialPreview, initialError]);
 
   async function onSend() {
     if (!preview?.canSend || preview.alreadySent || sending) return;

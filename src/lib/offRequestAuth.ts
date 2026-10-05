@@ -36,7 +36,7 @@ export function uniqueTeams(teams: unknown): string[] {
   return out;
 }
 
-/** 휴무 화면/API 세션 역할. admin·caddy·leader만. 새 역할 없음. */
+/** 휴무 화면/API 세션 역할. admin·caddy·leader만. */
 export function canUseOffRequestPages(
   role: AppRole | string | null | undefined
 ): boolean {
@@ -102,4 +102,9 @@ export function isOwnCaddy(
   caddyId: number
 ): boolean {
   return actor.caddyId != null && actor.caddyId === caddyId;
+}
+
+/** Phase 2 팀장 API — admin/caddy와 섞지 않음. */
+export function isOffRequestLeader(actor: OffRequestActor): boolean {
+  return actor.role === "leader";
 }

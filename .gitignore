@@ -45,6 +45,11 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
+# isolated Cloudflare Workers local state
+/cloudflare/**/node_modules/
+/cloudflare/**/.wrangler/
+/cloudflare/**/dist/
+
 # Capacitor / Android local build (commit the project, not outputs)
 android/.gradle/
 android/.idea/
