@@ -71,10 +71,10 @@ export function clearPendingChatRoomId(storage: {
 export function resolveChatDeepLinkAction(input: {
   requestedRoomId: string | null;
   rooms: readonly { roomId: string }[];
-  directoryReady: boolean;
+  directorySnapshotReady: boolean;
 }): "open" | "wait" | "fallback" | "none" {
   const roomId = parseChatDeepLinkRoomId(input.requestedRoomId);
   if (!roomId) return "none";
   if (input.rooms.some((row) => row.roomId === roomId)) return "open";
-  return input.directoryReady ? "fallback" : "wait";
+  return input.directorySnapshotReady ? "fallback" : "wait";
 }

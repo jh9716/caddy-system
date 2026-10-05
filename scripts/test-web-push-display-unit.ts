@@ -15,6 +15,7 @@ import {
 } from "../src/lib/sessionCookies";
 import { assertLocalDatabaseUrl } from "./assertLocalDatabaseUrl";
 import {
+  buildWebPushNotificationOptions,
   parsePushPayload,
   resolveSameOriginUrl,
 } from "../src/lib/webPushNotification";
@@ -207,6 +208,24 @@ async function main() {
     const sw = read("public/sw.js");
     assert(sw.includes("resolveSameOriginUrl"), "sw has origin helper");
     assert(sw.includes("parsePushPayload"), "sw has JSON parse helper");
+    const tagged = buildWebPushNotificationOptions({
+      body: "hi",
+      url: "/chat?room=all",
+      tag: "chat:all",
+    });
+    assert(tagged.tag === "chat:all", "same room tag kept");
+    assert(tagged.renotify === true, "tagged notification renotifies");
+    assert(!("silent" in tagged), "no silent");
+    const other = buildWebPushNotificationOptions({
+      body: "hi",
+      url: "/chat?room=dm_8_40",
+      tag: "chat:dm_8_40",
+    });
+    assert(other.tag !== tagged.tag, "different room tags independent");
+    const untagged = buildWebPushNotificationOptions({ body: "hi", url: "/caddy" });
+    assert(untagged.tag == null && untagged.renotify == null, "no tag → no renotify");
+    assert(sw.includes("options.renotify = true"), "sw sets renotify with tag");
+    assert(!/silent:\s*true/.test(sw), "sw has no silent");
   }
 
   let caddyId = 0;

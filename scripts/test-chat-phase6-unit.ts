@@ -331,11 +331,52 @@ section("collapse + deep link");
   assert(chatPushOpenPath("all") === "/chat?room=all", "open path");
   assert(parseChatDeepLinkRoomId("dm_8_40") === "dm_8_40", "parse dm");
   assert(parseChatDeepLinkRoomId("https://evil") == null, "deep link rejects absolute");
+  const earlyRooms = [{ roomId: "all" }, { roomId: "room_0123456789abcdef" }];
+  assert(
+    resolveChatDeepLinkAction({
+      requestedRoomId: "dm_8_40",
+      rooms: earlyRooms,
+      directorySnapshotReady: false,
+    }) === "wait",
+    "DM deep link waits until snapshot"
+  );
+  assert(
+    resolveChatDeepLinkAction({
+      requestedRoomId: "dm_8_40",
+      rooms: [...earlyRooms, { roomId: "dm_8_40" }],
+      directorySnapshotReady: true,
+    }) === "open",
+    "DM deep link opens after snapshot"
+  );
+  assert(
+    resolveChatDeepLinkAction({
+      requestedRoomId: "dm_8_40",
+      rooms: earlyRooms,
+      directorySnapshotReady: true,
+    }) === "fallback",
+    "DM missing after snapshot → fallback"
+  );
+  assert(
+    resolveChatDeepLinkAction({
+      requestedRoomId: "all",
+      rooms: earlyRooms,
+      directorySnapshotReady: false,
+    }) === "open",
+    "ALL deep link still opens when already listed"
+  );
+  assert(
+    resolveChatDeepLinkAction({
+      requestedRoomId: "room_0123456789abcdef",
+      rooms: earlyRooms,
+      directorySnapshotReady: false,
+    }) === "open",
+    "CUSTOM deep link still opens when already listed"
+  );
   assert(
     resolveChatDeepLinkAction({
       requestedRoomId: "room_0123456789abcdef",
       rooms: [],
-      directoryReady: true,
+      directorySnapshotReady: true,
     }) === "fallback",
     "forbidden fallback"
   );
@@ -383,6 +424,14 @@ section("source wiring");
   assert(onboard.includes("/api/push/subscription"), "pwa subscribe reuses API");
   const fcm = fs.readFileSync("src/lib/fcmHttpV1.ts", "utf8");
   assert(fcm.includes("payload.tag ? { tag:"), "FCM android tag");
+  assert(!fcm.includes("renotify"), "native FCM unchanged (no renotify)");
+  const sw = fs.readFileSync("public/sw.js", "utf8");
+  assert(sw.includes("if (parsed.tag)"), "PWA tag only when present");
+  assert(sw.includes("options.renotify = true"), "PWA same-tag renotify");
+  assert(!/silent:\s*true/.test(sw), "PWA no silent");
+  assert(client.includes("directorySnapshotReady"), "deep link waits for snapshot");
+  assert(!/directorySnapshotReady:\s*directoryConnected/.test(client), "socket open is not snapshot ready");
+  assert(!/directoryConnected \|\| \(\!loading && rooms\.length/.test(client), "no early ALL/team fallback");
   const store = fs.readFileSync("src/lib/pushSubscriptionStore.ts", "utf8");
   assert(store.includes("disablePushSubscriptionsForOtherUsers"), "web account-switch disable others");
   const native = fs.readFileSync("src/lib/nativePushToken.ts", "utf8");

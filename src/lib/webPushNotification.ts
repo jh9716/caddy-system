@@ -35,6 +35,35 @@ export function parsePushPayload(rawText: unknown): ParsedPushPayload | null {
   }
 }
 
+export type WebPushNotificationOptions = {
+  body: string;
+  icon: string;
+  badge: string;
+  data: { url: string };
+  tag?: string;
+  renotify?: true;
+};
+
+/** Collapse by tag, but alert again on each replacement. No tag → no renotify. */
+export function buildWebPushNotificationOptions(input: {
+  body: string;
+  url: string;
+  tag?: string;
+}): WebPushNotificationOptions {
+  const options: WebPushNotificationOptions = {
+    body: input.body,
+    icon: PWA_NOTIFICATION_ICON,
+    badge: PWA_NOTIFICATION_BADGE,
+    data: { url: input.url },
+  };
+  const tag = String(input.tag || "").trim();
+  if (tag) {
+    options.tag = tag;
+    options.renotify = true;
+  }
+  return options;
+}
+
 /** Same-origin absolute URL, or null if external / unsafe. */
 export function resolveSameOriginUrl(rawUrl: unknown, origin: string): string | null {
   try {
