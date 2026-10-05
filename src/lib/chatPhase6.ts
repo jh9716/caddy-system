@@ -102,3 +102,15 @@ export function nextDirectorySnapshotReady(
   if (event === "authoritative_rooms") return true;
   return current;
 }
+
+/** HTTP rooms fetch is valid only for the Directory generation that started it. */
+export function resolveDirectoryHttpRoomsApply(input: {
+  startedGen: number;
+  currentGen: number;
+  ok: boolean;
+  rooms: unknown;
+}): "apply" | "ignore" {
+  if (input.startedGen !== input.currentGen) return "ignore";
+  if (!input.ok || !Array.isArray(input.rooms)) return "ignore";
+  return "apply";
+}

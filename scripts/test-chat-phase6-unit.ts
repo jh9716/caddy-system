@@ -26,6 +26,7 @@ import {
   nextDirectorySnapshotReady,
   parseChatDeepLinkRoomId,
   resolveChatDeepLinkAction,
+  resolveDirectoryHttpRoomsApply,
   rollbackOptimisticChatRoom,
   upsertVisibleChatRoom,
 } from "../src/lib/chatPhase6";
@@ -421,6 +422,52 @@ section("collapse + deep link");
     }) === "fallback",
     "DM missing after new snapshot → fallback"
   );
+  const staleHttp = resolveDirectoryHttpRoomsApply({
+    startedGen: 1,
+    currentGen: 2,
+    ok: true,
+    rooms: [{ roomId: "all" }],
+  });
+  assert(staleHttp === "ignore", "stale HTTP after reconnect is ignored");
+  assert(
+    nextDirectorySnapshotReady(false, "connect_start") === false,
+    "reconnect ready stays false when stale HTTP ignored"
+  );
+  assert(
+    resolveChatDeepLinkAction({
+      requestedRoomId: "dm_8_40",
+      rooms: earlyRooms,
+      directorySnapshotReady: false,
+    }) === "wait",
+    "stale HTTP does not fallback DM"
+  );
+  const nextGenHttp = resolveDirectoryHttpRoomsApply({
+    startedGen: 2,
+    currentGen: 2,
+    ok: true,
+    rooms: [...earlyRooms, { roomId: "dm_8_40" }],
+  });
+  assert(nextGenHttp === "apply", "current-gen HTTP rooms apply");
+  const afterCurrentHttp = nextDirectorySnapshotReady(false, "authoritative_rooms");
+  assert(afterCurrentHttp === true, "current-gen HTTP/WS rooms → ready");
+  assert(
+    resolveDirectoryHttpRoomsApply({
+      startedGen: 2,
+      currentGen: 2,
+      ok: false,
+      rooms: [{ roomId: "all" }],
+    }) === "ignore",
+    "failed HTTP does not apply"
+  );
+  assert(
+    resolveDirectoryHttpRoomsApply({
+      startedGen: 2,
+      currentGen: 2,
+      ok: true,
+      rooms: { not: "array" },
+    }) === "ignore",
+    "non-array HTTP body does not apply"
+  );
 }
 
 section("DM optimistic list");
@@ -481,6 +528,18 @@ section("source wiring");
   const urlGuard = connectFn.indexOf("if (!url) return");
   const invalidate = connectFn.indexOf('nextDirectorySnapshotReady(true, "connect_start")');
   assert(urlGuard >= 0 && invalidate > urlGuard, "invalidate only after URL starts connection");
+  const fetchFn = client.slice(client.indexOf("const fetchRoomsHttp"));
+  assert(fetchFn.includes("startedGen"), "HTTP rooms capture Directory generation");
+  assert(fetchFn.includes("resolveDirectoryHttpRoomsApply"), "HTTP rooms use generation guard");
+  assert(fetchFn.includes("dirGenRef.current"), "HTTP rooms compare current Directory generation");
+  const capture = fetchFn.indexOf("const startedGen = dirGenRef.current");
+  const awaitFetch = fetchFn.indexOf("await fetch(");
+  const guard = fetchFn.indexOf("resolveDirectoryHttpRoomsApply");
+  const applyCall = fetchFn.indexOf("applyRooms(data.rooms)");
+  assert(
+    capture >= 0 && awaitFetch > capture && guard > awaitFetch && applyCall > guard,
+    "HTTP generation captured before fetch and checked before applyRooms"
+  );
   const store = fs.readFileSync("src/lib/pushSubscriptionStore.ts", "utf8");
   assert(store.includes("disablePushSubscriptionsForOtherUsers"), "web account-switch disable others");
   const native = fs.readFileSync("src/lib/nativePushToken.ts", "utf8");

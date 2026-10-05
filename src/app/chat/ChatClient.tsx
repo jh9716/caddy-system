@@ -43,6 +43,7 @@ import {
   parseChatDeepLinkRoomId,
   readPendingChatRoomId,
   resolveChatDeepLinkAction,
+  resolveDirectoryHttpRoomsApply,
   rollbackOptimisticChatRoom,
   upsertVisibleChatRoom,
 } from "@/lib/chatPhase6";
@@ -317,12 +318,21 @@ export default function ChatClient() {
   const fetchRoomsHttp = useCallback(async (token: string) => {
     const url = chatDirectoryRoomsUrl(token);
     if (!url) return;
+    const startedGen = dirGenRef.current;
     const res = await fetch(url, { cache: "no-store" });
     const data = await res.json().catch(() => null);
-    if (res.ok && Array.isArray(data?.rooms)) {
-      applyRooms(data.rooms);
-      setDirectorySnapshotReady(nextDirectorySnapshotReady(false, "authoritative_rooms"));
+    if (
+      resolveDirectoryHttpRoomsApply({
+        startedGen,
+        currentGen: dirGenRef.current,
+        ok: res.ok,
+        rooms: data?.rooms,
+      }) !== "apply"
+    ) {
+      return;
     }
+    applyRooms(data.rooms);
+    setDirectorySnapshotReady(nextDirectorySnapshotReady(false, "authoritative_rooms"));
   }, [applyRooms]);
 
   const connectDirectoryRef = useRef<(info: TokenPayload) => void>(() => {});
