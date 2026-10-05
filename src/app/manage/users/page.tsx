@@ -461,7 +461,9 @@ export default function ManageUsersPage() {
                 {group.rows.map((row) => (
                   <div key={row.caddy.id} className="us-dense-row">
                     <span className="us-team">{row.caddy.team || "—"}</span>
-                    <span className="us-ord">{row.caddy.teamOrder || "—"}</span>
+                    <span className="us-ord">
+                      {row.caddy.teamOrder > 0 ? row.caddy.teamOrder : "—"}
+                    </span>
                     <strong className="us-uname">{row.caddy.name}</strong>
                     <StatusPill status={row.status} />
                     <span className="us-acct" title={accountLabel(row)}>
