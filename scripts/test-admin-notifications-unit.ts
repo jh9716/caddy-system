@@ -153,7 +153,7 @@ async function main() {
     assert(page.includes("DevicePushSettings"), "reuses DevicePushSettings");
     assert(page.includes(ADMIN_PUSH_UI_ENABLE) || page.includes("ADMIN_PUSH_UI_ENABLE"), "enable copy");
     assert(page.includes("ManageShell") === false, "page uses layout ManageShell");
-    const shell = read("src/components/manage/ManageShell.tsx");
+    const shell = read("src/lib/adminManageNav.ts");
     assert(shell.includes('href: "/manage/notifications"'), "nav 알림 설정");
     const member = read("src/components/manage/MemberShell.tsx");
     assert(!member.includes("/manage/notifications"), "member shell no admin notifications");

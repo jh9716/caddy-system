@@ -157,7 +157,7 @@ async function main() {
     const mw = read("src/middleware.ts");
     const dbcheck = read("src/app/api/dbcheck/route.ts");
     const health = read("src/app/api/health/route.ts");
-    const shell = read("src/components/manage/ManageShell.tsx");
+    const shell = read("src/lib/adminManageNav.ts");
     assert(/\/assignments/.test(mw), "middleware matcher includes /assignments");
     assert(/\/schedule/.test(mw), "middleware matcher includes /schedule");
     assert(/pathname === "\/assignments"/.test(mw), "assignments admin gate");

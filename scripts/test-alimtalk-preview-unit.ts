@@ -397,7 +397,7 @@ section("source / 안전장치");
   const previewLib = readSrc("src/lib/alimtalkWorkNoticePreview.ts");
   const api = readSrc("src/app/api/notifications/alimtalk/preview/route.ts");
   const page = readSrc("src/app/manage/alimtalk/page.tsx");
-  const shell = readSrc("src/components/manage/ManageShell.tsx");
+  const shell = readSrc("src/lib/adminManageNav.ts");
   const schema = readSrc("prisma/schema.prisma");
   const pkg = readSrc("package.json");
   const published = readSrc("src/lib/dailyBoardPublished.ts");

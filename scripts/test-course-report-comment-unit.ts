@@ -133,7 +133,7 @@ async function main() {
     assert(photoClient.includes("uploadCourseReportPendingPhotos"), "photo client intact");
     const member = read("src/components/manage/MemberShell.tsx");
     assert(member.includes("memberNavItems"), "MemberShell intact");
-    const manage = read("src/components/manage/ManageShell.tsx");
+    const manage = read("src/lib/adminManageNav.ts");
     assert(manage.includes("캐디 관리"), "ManageShell menus intact");
     const form = read("src/app/course-reports/CourseReportForm.tsx");
     assert(!form.includes("comments"), "form no comments");

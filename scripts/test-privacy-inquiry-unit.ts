@@ -347,7 +347,7 @@ section("page / API / admin — no auto delete");
   const inbox = read("src/app/manage/privacy-requests/PrivacyRequestsInbox.tsx");
   const middleware = read("src/middleware.ts");
   const privacy = read("src/app/privacy/page.tsx");
-  const nav = read("src/components/manage/ManageShell.tsx");
+  const nav = read("src/lib/adminManageNav.ts");
 
   assert(page.includes("PRIVACY_CONTACT_LINK_LABEL"), "public inquiry title");
   assert(page.includes("PrivacyInquiryForm"), "form is on the page");
