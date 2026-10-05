@@ -66,6 +66,7 @@ section("routes and nav");
   assert(chatClient.includes("vh-chat-mention"), "mention highlight class");
   assert(chatClient.includes("나를 멘션"), "self mention label");
   assert(chatClient.includes("pickMention"), "autocomplete pick");
+  assert(chatClient.includes("dmMentionCandidatesFromRoom"), "DM mention from peer summary");
   assert(chatClient.includes("setMentionSuppressed(true)"), "android back closes mention panel");
   const layout = read("src/app/chat/layout.tsx");
   assert(layout.includes('auth.role !== "admin"'), "admin may enter /chat");

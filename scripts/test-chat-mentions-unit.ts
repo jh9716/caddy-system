@@ -8,6 +8,7 @@ import {
   MENTION_ALL_LABEL,
   canMentionAll,
   countMentionNeedles,
+  dmMentionCandidatesFromRoom,
   filterMentionSuggestions,
   filterMentionsToMembers,
   insertMentionToken,
@@ -234,6 +235,48 @@ section("autocomplete");
   );
 }
 
+section("DM peer mention");
+{
+  const peer = dmMentionCandidatesFromRoom({
+    roomId: "dm_8_40",
+    myUserId: 8,
+    peerUserId: 40,
+    peerDisplayName: "admin",
+    peerRole: "admin",
+    peerTeam: "-",
+  });
+  assert(peer.length === 1 && peer[0]?.userId === 40, "DM peer 1 suggestion");
+  assert(peer[0]?.displayName === "admin", "DM peer display name");
+  assert(
+    dmMentionCandidatesFromRoom({
+      roomId: "dm_8_40",
+      myUserId: 40,
+      peerUserId: 40,
+      peerDisplayName: "admin",
+    }).length === 0,
+    "DM self excluded"
+  );
+  assert(
+    dmMentionCandidatesFromRoom({
+      roomId: "all",
+      myUserId: 8,
+      peerUserId: 40,
+      peerDisplayName: "admin",
+    }).length === 0,
+    "ALL room does not use DM peer helper"
+  );
+  const hits = filterMentionSuggestions({
+    candidates: peer,
+    query: "",
+    canMentionAll: false,
+  });
+  assert(hits.every((h) => h.kind !== "all"), "DM @전체 미노출");
+  assert(hits.length === 1 && hits[0]?.displayName === "admin", "@admin suggestion");
+  const picked = reconcileComposerMentions("@admin ", [{ userId: 40, label: "admin" }]);
+  assert(picked.map((t) => t.userId).join(",") === "40", "DM peer pick keeps userId");
+  assert(mentionsToWire(picked.map((t) => t.userId))[0]?.userId === 40, "DM mention wire keeps userId");
+}
+
 section("render + self");
 {
   const parts = splitMentionBody("@신정훈 오늘 확인 @전체", {
@@ -353,6 +396,8 @@ section("source wiring");
   const css = read("src/app/globals.css");
   assert(client.includes("senderUserId: line.senderUserId"), "badge uses senderUserId");
   assert(client.includes("mentions: tokens.map"), "composer sends userIds");
+  assert(client.includes("dmMentionCandidatesFromRoom"), "DM mention uses room peer");
+  assert(client.includes("!isDmRoomId(activeRoom?.roomId"), "DM still hides @전체");
   assert(client.includes("mentionAll"), "composer sends mentionAll");
   assert(client.includes("registerAndroidChatOverlayClose"), "mention panel uses overlay back");
   assert(client.includes("setMentionSuppressed(true)"), "back/escape closes suggestions");

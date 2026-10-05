@@ -74,6 +74,7 @@ import {
 } from "@/lib/chatInviteSelection";
 import {
   canMentionAll,
+  dmMentionCandidatesFromRoom,
   filterMentionSuggestions,
   insertMentionToken,
   isSelfMentioned,
@@ -769,6 +770,23 @@ export default function ChatClient() {
     }
     if (mentionFetchedRef.current === room.roomId) return;
     mentionFetchedRef.current = room.roomId;
+    if (isDmRoomId(room.roomId)) {
+      const users = dmMentionCandidatesFromRoom({
+        roomId: room.roomId,
+        myUserId: info.user.userId,
+        peerUserId: room.peerUserId,
+        peerDisplayName: room.peerDisplayName,
+        peerRole: room.peerRole,
+        peerTeam: room.peerTeam,
+      });
+      mentionCacheRef.current = { roomId: room.roomId, users };
+      for (const user of users) {
+        if (user.displayName) mentionNamesRef.current.set(user.userId, user.displayName);
+      }
+      setMentionCandidates(users);
+      setMentionLoading(false);
+      return;
+    }
     setMentionLoading(true);
     try {
       if (room.roomId === ALL_ROOM_ID) {
@@ -891,7 +909,21 @@ export default function ChatClient() {
     lastSeqRef.current = 0;
     linesRef.current = [];
     hiddenSeqsRef.current = new Set();
-    if (mentionCacheRef.current?.roomId === room.roomId) {
+    if (isDmRoomId(room.roomId)) {
+      const users = dmMentionCandidatesFromRoom({
+        roomId: room.roomId,
+        myUserId: info.user.userId,
+        peerUserId: room.peerUserId,
+        peerDisplayName: room.peerDisplayName,
+        peerRole: room.peerRole,
+        peerTeam: room.peerTeam,
+      });
+      mentionCacheRef.current = { roomId: room.roomId, users };
+      for (const user of users) {
+        if (user.displayName) mentionNamesRef.current.set(user.userId, user.displayName);
+      }
+      setMentionCandidates(users);
+    } else if (mentionCacheRef.current?.roomId === room.roomId) {
       setMentionCandidates(mentionCacheRef.current.users);
     } else {
       setMentionCandidates([]);
@@ -1719,7 +1751,8 @@ export default function ChatClient() {
               isMember:
                 mentionCandidates.some((c) => c.userId === profileTarget.userId) ||
                 members.some((m) => m.userId === profileTarget.userId) ||
-                activeRoom?.type === "ALL",
+                activeRoom?.type === "ALL" ||
+                (activeRoom?.type === "DM" && activeRoom.peerUserId === profileTarget.userId),
               targetUserId: profileTarget.userId,
               myUserId: tokenInfo.user.userId,
             }) ? (

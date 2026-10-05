@@ -1,3 +1,5 @@
+import { isDmRoomId } from "@/lib/chatRooms";
+
 export const MAX_MENTIONS = 20;
 export const MAX_MENTION_RAW = 100;
 export const MENTION_ALL_LABEL = "전체";
@@ -24,6 +26,29 @@ export type MentionSuggestion = MentionCandidate & {
 
 export function canMentionAll(role: string | null | undefined): boolean {
   return role === "admin" || role === "leader";
+}
+
+/** DM mention pool is the peer on the room summary. No directory listing. */
+export function dmMentionCandidatesFromRoom(input: {
+  roomId: string;
+  myUserId: number;
+  peerUserId?: number | null;
+  peerDisplayName?: string | null;
+  peerRole?: string | null;
+  peerTeam?: string | null;
+}): MentionCandidate[] {
+  if (!isDmRoomId(String(input.roomId || ""))) return [];
+  const peerUserId = Number(input.peerUserId);
+  if (!Number.isInteger(peerUserId) || peerUserId <= 0) return [];
+  if (peerUserId === input.myUserId) return [];
+  return [
+    {
+      userId: peerUserId,
+      displayName: String(input.peerDisplayName || "").trim() || "이름없음",
+      team: String(input.peerTeam || "").trim() || "-",
+      role: String(input.peerRole || "caddy"),
+    },
+  ];
 }
 
 export function normalizeMentionUserIds(raw: unknown): number[] {

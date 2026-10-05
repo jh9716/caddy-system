@@ -74,9 +74,10 @@ export function canProfileMention(input: {
   myUserId: number;
 }): boolean {
   const roomId = String(input.roomId || "");
-  if (!roomId || isDmRoomId(roomId)) return false;
+  if (!roomId) return false;
   if (!Number.isInteger(input.targetUserId) || input.targetUserId <= 0) return false;
   if (input.targetUserId === input.myUserId) return false;
+  if (isDmRoomId(roomId)) return input.isMember === true;
   if (isAllRoomId(roomId)) return true;
   return isCustomRoomId(roomId) && input.isMember === true;
 }
