@@ -64,6 +64,73 @@ export function buildWebPushNotificationOptions(input: {
   return options;
 }
 
+/** Path + search match. Hash and extra fields must not hide a chat deep link. */
+export function notificationClickUrlsEqual(left: unknown, right: unknown): boolean {
+  try {
+    const a = new URL(String(left || ""));
+    const b = new URL(String(right || ""));
+    return a.origin === b.origin && a.pathname === b.pathname && a.search === b.search;
+  } catch {
+    return false;
+  }
+}
+
+export type NotificationClickVia = "focus" | "navigate" | "open_window" | "none";
+
+type NotificationClickClient = {
+  url: string;
+  focus?: () => Promise<unknown> | unknown;
+  navigate?: (
+    url: string
+  ) =>
+    | Promise<{ focus?: () => Promise<unknown> | unknown } | null | undefined>
+    | { focus?: () => Promise<unknown> | unknown }
+    | null
+    | undefined;
+};
+
+/**
+ * Open the notification destination. Exact client → focus.
+ * Other same-origin clients: navigate first, then focus the result.
+ * Failed/missing navigate falls through to openWindow(destination).
+ * Never focus /caddy (or any other page) and stop without changing URL.
+ */
+export async function openNotificationClickUrl(input: {
+  destinationUrl: string | null;
+  clients: readonly NotificationClickClient[];
+  openWindow?: (url: string) => Promise<unknown> | unknown;
+}): Promise<{ via: NotificationClickVia; url: string | null }> {
+  const dest = String(input.destinationUrl || "").trim();
+  if (!dest) return { via: "none", url: null };
+
+  for (const client of input.clients) {
+    if (!notificationClickUrlsEqual(client.url, dest)) continue;
+    if (typeof client.focus === "function") await client.focus();
+    return { via: "focus", url: dest };
+  }
+
+  for (const client of input.clients) {
+    let same = false;
+    try {
+      same = new URL(client.url).origin === new URL(dest).origin;
+    } catch {
+      same = false;
+    }
+    if (!same || typeof client.navigate !== "function") continue;
+    const next = await client.navigate(dest);
+    if (next && typeof next.focus === "function") {
+      await next.focus();
+      return { via: "navigate", url: dest };
+    }
+  }
+
+  if (typeof input.openWindow === "function") {
+    await input.openWindow(dest);
+    return { via: "open_window", url: dest };
+  }
+  return { via: "none", url: dest };
+}
+
 /** Same-origin absolute URL, or null if external / unsafe. */
 export function resolveSameOriginUrl(rawUrl: unknown, origin: string): string | null {
   try {
