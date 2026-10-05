@@ -39,6 +39,7 @@ import {
 } from "@/lib/chatPhase5";
 import {
   clearPendingChatRoomId,
+  nextDirectorySnapshotReady,
   parseChatDeepLinkRoomId,
   readPendingChatRoomId,
   resolveChatDeepLinkAction,
@@ -320,7 +321,7 @@ export default function ChatClient() {
     const data = await res.json().catch(() => null);
     if (res.ok && Array.isArray(data?.rooms)) {
       applyRooms(data.rooms);
-      setDirectorySnapshotReady(true);
+      setDirectorySnapshotReady(nextDirectorySnapshotReady(false, "authoritative_rooms"));
     }
   }, [applyRooms]);
 
@@ -343,6 +344,7 @@ export default function ChatClient() {
       const prev = dirRef.current;
       dirGenRef.current += 1;
       const gen = dirGenRef.current;
+      setDirectorySnapshotReady(nextDirectorySnapshotReady(true, "connect_start"));
       if (prev && (prev.readyState === WebSocket.OPEN || prev.readyState === WebSocket.CONNECTING)) {
         prev.close();
       }
@@ -361,12 +363,12 @@ export default function ChatClient() {
       ws.addEventListener("error", () => {
         if (gen !== dirGenRef.current) return;
         setDirectoryConnected(false);
-        setDirectorySnapshotReady(false);
+        setDirectorySnapshotReady(nextDirectorySnapshotReady(true, "socket_error"));
       });
       ws.addEventListener("close", (ev) => {
         if (gen !== dirGenRef.current) return;
         setDirectoryConnected(false);
-        setDirectorySnapshotReady(false);
+        setDirectorySnapshotReady(nextDirectorySnapshotReady(true, "socket_close"));
         const run = async () => {
           let next = info;
           if (shouldRefreshTokenOnClose(ev.code)) {
@@ -390,7 +392,7 @@ export default function ChatClient() {
         }
         if ((data.type === "rooms" || data.type === "room_summary") && Array.isArray(data.rooms)) {
           applyRooms(data.rooms);
-          setDirectorySnapshotReady(true);
+          setDirectorySnapshotReady(nextDirectorySnapshotReady(false, "authoritative_rooms"));
         }
       });
     },

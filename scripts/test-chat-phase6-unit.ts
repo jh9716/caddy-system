@@ -23,6 +23,7 @@ import { shouldSilentRebindWebPush } from "../src/lib/chatPushOnboarding";
 import { disablePushSubscriptionsForOtherUsers } from "../src/lib/pushSubscriptionStore";
 import { buildChatPushPayload, chatPushOpenPath } from "../src/lib/chatPushMessage";
 import {
+  nextDirectorySnapshotReady,
   parseChatDeepLinkRoomId,
   resolveChatDeepLinkAction,
   rollbackOptimisticChatRoom,
@@ -380,6 +381,46 @@ section("collapse + deep link");
     }) === "fallback",
     "forbidden fallback"
   );
+  assert(nextDirectorySnapshotReady(true, "connect_start") === false, "reconnect start invalidates ready");
+  assert(nextDirectorySnapshotReady(true, "connect_skip") === true, "no URL keeps previous ready");
+  assert(nextDirectorySnapshotReady(false, "connect_skip") === false, "no URL keeps previous not-ready");
+  assert(nextDirectorySnapshotReady(false, "socket_open") === false, "socket open is not snapshot ready");
+  const afterReconnect = nextDirectorySnapshotReady(true, "connect_start");
+  assert(afterReconnect === false, "stale true → false before new snapshot");
+  assert(
+    resolveChatDeepLinkAction({
+      requestedRoomId: "dm_8_40",
+      rooms: earlyRooms,
+      directorySnapshotReady: afterReconnect,
+    }) === "wait",
+    "reconnect before snapshot waits"
+  );
+  assert(
+    resolveChatDeepLinkAction({
+      requestedRoomId: "all",
+      rooms: earlyRooms,
+      directorySnapshotReady: afterReconnect,
+    }) === "open",
+    "listed room still opens during reconnect wait"
+  );
+  const afterNewSnapshot = nextDirectorySnapshotReady(afterReconnect, "authoritative_rooms");
+  assert(afterNewSnapshot === true, "new authoritative rooms → ready");
+  assert(
+    resolveChatDeepLinkAction({
+      requestedRoomId: "dm_8_40",
+      rooms: [...earlyRooms, { roomId: "dm_8_40" }],
+      directorySnapshotReady: afterNewSnapshot,
+    }) === "open",
+    "DM in new snapshot opens"
+  );
+  assert(
+    resolveChatDeepLinkAction({
+      requestedRoomId: "dm_8_40",
+      rooms: earlyRooms,
+      directorySnapshotReady: afterNewSnapshot,
+    }) === "fallback",
+    "DM missing after new snapshot → fallback"
+  );
 }
 
 section("DM optimistic list");
@@ -432,6 +473,14 @@ section("source wiring");
   assert(client.includes("directorySnapshotReady"), "deep link waits for snapshot");
   assert(!/directorySnapshotReady:\s*directoryConnected/.test(client), "socket open is not snapshot ready");
   assert(!/directoryConnected \|\| \(\!loading && rooms\.length/.test(client), "no early ALL/team fallback");
+  assert(client.includes("nextDirectorySnapshotReady"), "client uses snapshot transition helper");
+  assert(client.includes('"connect_start"'), "new Directory generation invalidates ready");
+  assert(client.includes('"authoritative_rooms"'), "HTTP/WS rooms arrays mark ready");
+  assert(!/setDirectorySnapshotReady\(true\)/.test(client), "no raw ready=true without helper");
+  const connectFn = client.slice(client.indexOf("const connectDirectory"));
+  const urlGuard = connectFn.indexOf("if (!url) return");
+  const invalidate = connectFn.indexOf('nextDirectorySnapshotReady(true, "connect_start")');
+  assert(urlGuard >= 0 && invalidate > urlGuard, "invalidate only after URL starts connection");
   const store = fs.readFileSync("src/lib/pushSubscriptionStore.ts", "utf8");
   assert(store.includes("disablePushSubscriptionsForOtherUsers"), "web account-switch disable others");
   const native = fs.readFileSync("src/lib/nativePushToken.ts", "utf8");
