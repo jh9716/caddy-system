@@ -157,8 +157,16 @@ section("profile privacy / labels");
     "all-room mention allowed"
   );
   assert(
-    !canProfileMention({ roomId: "dm_8_40", isMember: true, targetUserId: 40, myUserId: 8 }),
-    "DM profile mention hidden"
+    canProfileMention({ roomId: "dm_8_40", isMember: true, targetUserId: 40, myUserId: 8 }),
+    "DM peer profile mention allowed"
+  );
+  assert(
+    !canProfileMention({ roomId: "dm_8_40", isMember: true, targetUserId: 8, myUserId: 8 }),
+    "DM self profile mention hidden"
+  );
+  assert(
+    !canProfileMention({ roomId: "dm_8_40", isMember: false, targetUserId: 40, myUserId: 8 }),
+    "DM non-member profile mention hidden"
   );
 }
 

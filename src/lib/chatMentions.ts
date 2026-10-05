@@ -1,3 +1,5 @@
+import { isDmRoomId } from "@/lib/chatRooms";
+
 export const MAX_MENTIONS = 20;
 export const MAX_MENTION_RAW = 100;
 export const MENTION_ALL_LABEL = "전체";
@@ -24,6 +26,67 @@ export type MentionSuggestion = MentionCandidate & {
 
 export function canMentionAll(role: string | null | undefined): boolean {
   return role === "admin" || role === "leader";
+}
+
+export type MentionCandidateCache = {
+  roomId: string;
+  users: MentionCandidate[];
+};
+
+export type DmMentionRoomFields = {
+  roomId: string;
+  myUserId: number;
+  peerUserId?: number | null;
+  peerDisplayName?: string | null;
+  peerRole?: string | null;
+  peerTeam?: string | null;
+};
+
+/** DM mention pool is the peer on the room summary. No directory listing. */
+export function dmMentionCandidatesFromRoom(input: DmMentionRoomFields): MentionCandidate[] {
+  if (!isDmRoomId(String(input.roomId || ""))) return [];
+  const peerUserId = Number(input.peerUserId);
+  if (!Number.isInteger(peerUserId) || peerUserId <= 0) return [];
+  if (peerUserId === input.myUserId) return [];
+  return [
+    {
+      userId: peerUserId,
+      displayName: String(input.peerDisplayName || "").trim() || "이름없음",
+      team: String(input.peerTeam || "").trim() || "-",
+      role: String(input.peerRole || "caddy"),
+    },
+  ];
+}
+
+export function isUsableDmMentionCache(
+  cache: MentionCandidateCache | null | undefined,
+  roomId: string
+): boolean {
+  if (!cache || cache.roomId !== roomId) return false;
+  if (!isDmRoomId(String(roomId || ""))) return false;
+  return cache.users.some((u) => Number.isInteger(u.userId) && u.userId > 0);
+}
+
+/** Empty DM peer results are not cached so a later summary fill can recover. */
+export function nextDmMentionState(
+  input: DmMentionRoomFields & { cache?: MentionCandidateCache | null }
+): {
+  users: MentionCandidate[];
+  cache: MentionCandidateCache | null;
+  reused: boolean;
+} {
+  const roomId = String(input.roomId || "");
+  if (!isDmRoomId(roomId)) {
+    return { users: [], cache: input.cache ?? null, reused: true };
+  }
+  if (isUsableDmMentionCache(input.cache, roomId)) {
+    return { users: input.cache!.users, cache: input.cache ?? null, reused: true };
+  }
+  const users = dmMentionCandidatesFromRoom(input);
+  if (users.length === 0) {
+    return { users: [], cache: null, reused: false };
+  }
+  return { users, cache: { roomId, users }, reused: false };
 }
 
 export function normalizeMentionUserIds(raw: unknown): number[] {

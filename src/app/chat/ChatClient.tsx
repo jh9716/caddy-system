@@ -74,6 +74,7 @@ import {
 } from "@/lib/chatInviteSelection";
 import {
   canMentionAll,
+  nextDmMentionState,
   filterMentionSuggestions,
   insertMentionToken,
   isSelfMentioned,
@@ -313,7 +314,12 @@ export default function ChatClient() {
     setRooms(visible);
     setActiveRoom((cur) => {
       if (!cur) return cur;
-      return visible.find((r) => r.roomId === cur.roomId) || cur;
+      const match = visible.find((r) => r.roomId === cur.roomId);
+      if (!match) return cur;
+      if (roomRef.current?.roomId === match.roomId) {
+        roomRef.current = match;
+      }
+      return match;
     });
   }, []);
 
@@ -762,6 +768,24 @@ export default function ChatClient() {
     const room = roomRef.current;
     const info = tokenRef.current;
     if (!room || !info) return;
+    if (isDmRoomId(room.roomId)) {
+      const next = nextDmMentionState({
+        roomId: room.roomId,
+        myUserId: info.user.userId,
+        peerUserId: room.peerUserId,
+        peerDisplayName: room.peerDisplayName,
+        peerRole: room.peerRole,
+        peerTeam: room.peerTeam,
+        cache: mentionCacheRef.current,
+      });
+      mentionCacheRef.current = next.cache;
+      for (const user of next.users) {
+        if (user.displayName) mentionNamesRef.current.set(user.userId, user.displayName);
+      }
+      setMentionCandidates(next.users);
+      setMentionLoading(false);
+      return;
+    }
     if (mentionCacheRef.current?.roomId === room.roomId) {
       setMentionCandidates(mentionCacheRef.current.users);
       setMentionLoading(false);
@@ -850,6 +874,30 @@ export default function ChatClient() {
   }, [mentionOpen, ensureMentionCandidates]);
 
   useEffect(() => {
+    const room = activeRoom;
+    const info = tokenRef.current;
+    if (!room || !info || !isDmRoomId(room.roomId)) return;
+    if (roomRef.current?.roomId === room.roomId) {
+      roomRef.current = room;
+    }
+    const next = nextDmMentionState({
+      roomId: room.roomId,
+      myUserId: info.user.userId,
+      peerUserId: room.peerUserId,
+      peerDisplayName: room.peerDisplayName,
+      peerRole: room.peerRole,
+      peerTeam: room.peerTeam,
+      cache: mentionCacheRef.current,
+    });
+    mentionCacheRef.current = next.cache;
+    if (next.reused) return;
+    for (const user of next.users) {
+      if (user.displayName) mentionNamesRef.current.set(user.userId, user.displayName);
+    }
+    setMentionCandidates(next.users);
+  }, [activeRoom]);
+
+  useEffect(() => {
     if (sheet !== "create") return;
     let cancelled = false;
     setInviteLoading(true);
@@ -891,7 +939,22 @@ export default function ChatClient() {
     lastSeqRef.current = 0;
     linesRef.current = [];
     hiddenSeqsRef.current = new Set();
-    if (mentionCacheRef.current?.roomId === room.roomId) {
+    if (isDmRoomId(room.roomId)) {
+      const next = nextDmMentionState({
+        roomId: room.roomId,
+        myUserId: info.user.userId,
+        peerUserId: room.peerUserId,
+        peerDisplayName: room.peerDisplayName,
+        peerRole: room.peerRole,
+        peerTeam: room.peerTeam,
+        cache: mentionCacheRef.current,
+      });
+      mentionCacheRef.current = next.cache;
+      for (const user of next.users) {
+        if (user.displayName) mentionNamesRef.current.set(user.userId, user.displayName);
+      }
+      setMentionCandidates(next.users);
+    } else if (mentionCacheRef.current?.roomId === room.roomId) {
       setMentionCandidates(mentionCacheRef.current.users);
     } else {
       setMentionCandidates([]);
@@ -1719,7 +1782,8 @@ export default function ChatClient() {
               isMember:
                 mentionCandidates.some((c) => c.userId === profileTarget.userId) ||
                 members.some((m) => m.userId === profileTarget.userId) ||
-                activeRoom?.type === "ALL",
+                activeRoom?.type === "ALL" ||
+                (activeRoom?.type === "DM" && activeRoom.peerUserId === profileTarget.userId),
               targetUserId: profileTarget.userId,
               myUserId: tokenInfo.user.userId,
             }) ? (

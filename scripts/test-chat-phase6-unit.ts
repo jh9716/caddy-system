@@ -660,6 +660,19 @@ async function extraAsync() {
     prefs: mixed.ok ? mixed.prefs : {},
   });
   assert(mentionRecipients.join(",") === "9", "MENTIONS direct mention recipient is 9 only");
+  const dmMention = selectChatPushRecipients({
+    event: {
+      roomId: "dm_8_40",
+      seq: 8,
+      senderUserId: 8,
+      mentionAll: false,
+      mentionUserIds: [40],
+      replyToUserId: null,
+    },
+    candidateUserIds: [8, 40],
+    prefs: { "40": "MENTIONS" },
+  });
+  assert(dmMention.join(",") === "40", "MENTIONS DM peer mention recipient is 40");
   const offMention = selectChatPushRecipients({
     event: {
       roomId: "all",
