@@ -15,6 +15,20 @@ export function resolveChatNotifyMode(raw: unknown): ChatNotifyMode {
   return parseChatNotifyMode(raw) ?? DEFAULT_CHAT_NOTIFY_MODE;
 }
 
+export function chatNotifyHeaderLabel(mode: ChatNotifyMode | null | undefined): string {
+  const resolved = resolveChatNotifyMode(mode);
+  if (resolved === "MENTIONS") return "멘션만";
+  if (resolved === "OFF") return "알림 끔";
+  return "알림";
+}
+
+export function chatNotifyHeaderAriaLabel(mode: ChatNotifyMode | null | undefined): string {
+  const resolved = resolveChatNotifyMode(mode);
+  if (resolved === "MENTIONS") return "알림 설정, 현재 멘션만";
+  if (resolved === "OFF") return "알림 설정, 현재 알림 끔";
+  return "알림 설정, 현재 모든 알림";
+}
+
 export function canWriteChatNotifyPref(input: {
   roomId: string;
   isMember: boolean;
