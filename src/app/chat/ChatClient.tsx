@@ -74,7 +74,7 @@ import {
 } from "@/lib/chatInviteSelection";
 import {
   canMentionAll,
-  dmMentionCandidatesFromRoom,
+  nextDmMentionState,
   filterMentionSuggestions,
   insertMentionToken,
   isSelfMentioned,
@@ -314,7 +314,12 @@ export default function ChatClient() {
     setRooms(visible);
     setActiveRoom((cur) => {
       if (!cur) return cur;
-      return visible.find((r) => r.roomId === cur.roomId) || cur;
+      const match = visible.find((r) => r.roomId === cur.roomId);
+      if (!match) return cur;
+      if (roomRef.current?.roomId === match.roomId) {
+        roomRef.current = match;
+      }
+      return match;
     });
   }, []);
 
@@ -763,6 +768,24 @@ export default function ChatClient() {
     const room = roomRef.current;
     const info = tokenRef.current;
     if (!room || !info) return;
+    if (isDmRoomId(room.roomId)) {
+      const next = nextDmMentionState({
+        roomId: room.roomId,
+        myUserId: info.user.userId,
+        peerUserId: room.peerUserId,
+        peerDisplayName: room.peerDisplayName,
+        peerRole: room.peerRole,
+        peerTeam: room.peerTeam,
+        cache: mentionCacheRef.current,
+      });
+      mentionCacheRef.current = next.cache;
+      for (const user of next.users) {
+        if (user.displayName) mentionNamesRef.current.set(user.userId, user.displayName);
+      }
+      setMentionCandidates(next.users);
+      setMentionLoading(false);
+      return;
+    }
     if (mentionCacheRef.current?.roomId === room.roomId) {
       setMentionCandidates(mentionCacheRef.current.users);
       setMentionLoading(false);
@@ -770,23 +793,6 @@ export default function ChatClient() {
     }
     if (mentionFetchedRef.current === room.roomId) return;
     mentionFetchedRef.current = room.roomId;
-    if (isDmRoomId(room.roomId)) {
-      const users = dmMentionCandidatesFromRoom({
-        roomId: room.roomId,
-        myUserId: info.user.userId,
-        peerUserId: room.peerUserId,
-        peerDisplayName: room.peerDisplayName,
-        peerRole: room.peerRole,
-        peerTeam: room.peerTeam,
-      });
-      mentionCacheRef.current = { roomId: room.roomId, users };
-      for (const user of users) {
-        if (user.displayName) mentionNamesRef.current.set(user.userId, user.displayName);
-      }
-      setMentionCandidates(users);
-      setMentionLoading(false);
-      return;
-    }
     setMentionLoading(true);
     try {
       if (room.roomId === ALL_ROOM_ID) {
@@ -868,6 +874,30 @@ export default function ChatClient() {
   }, [mentionOpen, ensureMentionCandidates]);
 
   useEffect(() => {
+    const room = activeRoom;
+    const info = tokenRef.current;
+    if (!room || !info || !isDmRoomId(room.roomId)) return;
+    if (roomRef.current?.roomId === room.roomId) {
+      roomRef.current = room;
+    }
+    const next = nextDmMentionState({
+      roomId: room.roomId,
+      myUserId: info.user.userId,
+      peerUserId: room.peerUserId,
+      peerDisplayName: room.peerDisplayName,
+      peerRole: room.peerRole,
+      peerTeam: room.peerTeam,
+      cache: mentionCacheRef.current,
+    });
+    mentionCacheRef.current = next.cache;
+    if (next.reused) return;
+    for (const user of next.users) {
+      if (user.displayName) mentionNamesRef.current.set(user.userId, user.displayName);
+    }
+    setMentionCandidates(next.users);
+  }, [activeRoom]);
+
+  useEffect(() => {
     if (sheet !== "create") return;
     let cancelled = false;
     setInviteLoading(true);
@@ -910,19 +940,20 @@ export default function ChatClient() {
     linesRef.current = [];
     hiddenSeqsRef.current = new Set();
     if (isDmRoomId(room.roomId)) {
-      const users = dmMentionCandidatesFromRoom({
+      const next = nextDmMentionState({
         roomId: room.roomId,
         myUserId: info.user.userId,
         peerUserId: room.peerUserId,
         peerDisplayName: room.peerDisplayName,
         peerRole: room.peerRole,
         peerTeam: room.peerTeam,
+        cache: mentionCacheRef.current,
       });
-      mentionCacheRef.current = { roomId: room.roomId, users };
-      for (const user of users) {
+      mentionCacheRef.current = next.cache;
+      for (const user of next.users) {
         if (user.displayName) mentionNamesRef.current.set(user.userId, user.displayName);
       }
-      setMentionCandidates(users);
+      setMentionCandidates(next.users);
     } else if (mentionCacheRef.current?.roomId === room.roomId) {
       setMentionCandidates(mentionCacheRef.current.users);
     } else {

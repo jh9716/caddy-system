@@ -9,6 +9,7 @@ import {
   canMentionAll,
   countMentionNeedles,
   dmMentionCandidatesFromRoom,
+  nextDmMentionState,
   filterMentionSuggestions,
   filterMentionsToMembers,
   insertMentionToken,
@@ -277,6 +278,79 @@ section("DM peer mention");
   assert(mentionsToWire(picked.map((t) => t.userId))[0]?.userId === 40, "DM mention wire keeps userId");
 }
 
+section("DM mention cache recover");
+{
+  const emptyAt = nextDmMentionState({
+    roomId: "dm_8_40",
+    myUserId: 8,
+    peerUserId: null,
+    peerDisplayName: null,
+    cache: null,
+  });
+  assert(emptyAt.users.length === 0, "DM room 최초 peerUserId 없음 -> @ 빈 목록");
+  assert(emptyAt.cache === null, "이 상태가 cache poison 되지 않음");
+  assert(!emptyAt.reused, "empty peer is not treated as a reusable cache");
+  const poisoned = nextDmMentionState({
+    roomId: "dm_8_40",
+    myUserId: 8,
+    peerUserId: 40,
+    peerDisplayName: "admin",
+    peerRole: "admin",
+    peerTeam: "-",
+    cache: { roomId: "dm_8_40", users: [] },
+  });
+  assert(
+    poisoned.users.length === 1 && poisoned.users[0]?.userId === 40,
+    "빈 캐시 있어도 peer 갱신 시 suggestion 복구"
+  );
+  assert(poisoned.reused === false, "empty cache is not reused");
+  const filled = nextDmMentionState({
+    roomId: "dm_8_40",
+    myUserId: 8,
+    peerUserId: 40,
+    peerDisplayName: "admin",
+    peerRole: "admin",
+    peerTeam: "-",
+    cache: emptyAt.cache,
+  });
+  assert(filled.users.length === 1 && filled.users[0]?.userId === 40, "동일 roomId summary가 peerUserId 포함 상태로 갱신됨");
+  assert(filled.users[0]?.displayName === "admin", "방 재진입 없이 @ 입력 시 peer suggestion 즉시 노출");
+  assert(filled.reused === false && filled.cache?.users[0]?.userId === 40, "filled peer is now cacheable");
+  const reused = nextDmMentionState({
+    roomId: "dm_8_40",
+    myUserId: 8,
+    peerUserId: 40,
+    peerDisplayName: "admin",
+    peerRole: "admin",
+    peerTeam: "-",
+    cache: filled.cache,
+  });
+  assert(reused.reused && reused.users === filled.cache?.users, "정상 peer candidate는 기존처럼 재사용");
+  const allCache = {
+    roomId: "all",
+    users: [{ userId: 9, displayName: "신정훈", team: "7조", role: "caddy" }],
+  };
+  const allNext = nextDmMentionState({
+    roomId: "all",
+    myUserId: 8,
+    peerUserId: 40,
+    peerDisplayName: "admin",
+    cache: allCache,
+  });
+  assert(allNext.reused && allNext.cache === allCache, "ALL mention cache 동작은 그대로");
+  const customCache = {
+    roomId: "room_custom_1",
+    users: [{ userId: 11, displayName: "조원", team: "1조", role: "caddy" }],
+  };
+  const customNext = nextDmMentionState({
+    roomId: "room_custom_1",
+    myUserId: 8,
+    peerUserId: 40,
+    cache: customCache,
+  });
+  assert(customNext.reused && customNext.cache === customCache, "CUSTOM mention cache 동작은 그대로");
+}
+
 section("render + self");
 {
   const parts = splitMentionBody("@신정훈 오늘 확인 @전체", {
@@ -396,8 +470,12 @@ section("source wiring");
   const css = read("src/app/globals.css");
   assert(client.includes("senderUserId: line.senderUserId"), "badge uses senderUserId");
   assert(client.includes("mentions: tokens.map"), "composer sends userIds");
-  assert(client.includes("dmMentionCandidatesFromRoom"), "DM mention uses room peer");
+  assert(client.includes("nextDmMentionState"), "DM mention uses room peer");
   assert(client.includes("!isDmRoomId(activeRoom?.roomId"), "DM still hides @전체");
+  const dmEnsure = client.indexOf("if (isDmRoomId(room.roomId))");
+  const fetchedGuard = client.indexOf("if (mentionFetchedRef.current === room.roomId) return;");
+  assert(dmEnsure >= 0 && fetchedGuard > dmEnsure, "DM empty peer skips fetched-ref poison");
+  assert(client.includes("[activeRoom]"), "peer fill refreshes DM mention without re-enter");
   assert(client.includes("mentionAll"), "composer sends mentionAll");
   assert(client.includes("registerAndroidChatOverlayClose"), "mention panel uses overlay back");
   assert(client.includes("setMentionSuppressed(true)"), "back/escape closes suggestions");
