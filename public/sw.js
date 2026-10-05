@@ -125,7 +125,12 @@ async function openNotificationClickUrl(clients, url) {
     }
     if (!same) continue;
     if (typeof client.navigate !== "function") continue;
-    const next = await client.navigate(url);
+    let next = null;
+    try {
+      next = await client.navigate(url);
+    } catch {
+      continue;
+    }
     if (next && typeof next.focus === "function") {
       await next.focus();
       return;

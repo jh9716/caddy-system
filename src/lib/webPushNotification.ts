@@ -117,7 +117,12 @@ export async function openNotificationClickUrl(input: {
       same = false;
     }
     if (!same || typeof client.navigate !== "function") continue;
-    const next = await client.navigate(dest);
+    let next: { focus?: () => Promise<unknown> | unknown } | null | undefined;
+    try {
+      next = await client.navigate(dest);
+    } catch {
+      continue;
+    }
     if (next && typeof next.focus === "function") {
       await next.focus();
       return { via: "navigate", url: dest };

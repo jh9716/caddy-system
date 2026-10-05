@@ -271,6 +271,34 @@ async function main() {
     focused = [];
     navigated = [];
     opened = [];
+    const throwingCaddy = {
+      url: "https://www.verthill.kr/caddy",
+      focus: async () => {
+        focused.push("/caddy");
+      },
+      navigate: async () => {
+        throw new Error("navigate unsupported");
+      },
+    };
+    let threw = false;
+    const afterThrow = await openNotificationClickUrl({
+      destinationUrl: dest,
+      clients: [throwingCaddy],
+      openWindow: async (url) => {
+        opened.push(url);
+      },
+    }).catch(() => {
+      threw = true;
+      return { via: "none" as const, url: null };
+    });
+    assert(!threw, "navigate throw does not reject click handler");
+    assert(afterThrow.via === "open_window" && afterThrow.url === dest, "navigate throw → openWindow dest");
+    assert(opened[0] === dest, "throw fallback opens /chat?room=dm_8_40");
+    assert(focused.length === 0, "throw fallback does not focus /caddy");
+
+    focused = [];
+    navigated = [];
+    opened = [];
     const navigableCaddy = {
       url: "https://www.verthill.kr/caddy",
       focus: async () => {
@@ -339,6 +367,7 @@ async function main() {
     assert(sw.includes("notificationClickUrlsEqual"), "sw matches exact destination");
     assert(sw.includes("event.notification.data.url"), "sw uses notification.data.url");
     assert(sw.includes("clients.openWindow(url)"), "sw openWindow uses destination");
+    assert(sw.includes("try {\n      next = await client.navigate(url);"), "sw try/catch around navigate");
     assert(
       !/if \(typeof client\.focus === "function"\) await client\.focus\(\);\s*if \(typeof client\.navigate === "function"\) await client\.navigate\(url\);\s*return;/.test(
         sw
