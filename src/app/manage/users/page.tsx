@@ -2,189 +2,220 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  ADMIN_LINK_STATUS_LABELS,
+  buildAdminCaddyLinkRoster,
+  canApprovePendingForCaddy,
+  filterAdminCaddyLinkRoster,
+  isCaddyOccupied,
+  summarizeAdminCaddyLinkRoster,
+  toSafeRosterCaddy,
+  uniqueRosterTeams,
+  unlinkedKakaoAccounts,
+  type AdminCaddyLinkRow,
+  type AdminLinkStatus,
+  type RosterCaddy,
+  type RosterPending,
+  type RosterUser,
+} from "@/lib/adminCaddyLinkRoster";
+import {
   adminLinkErrorMessage,
   initialAdminSelectedCaddyId,
 } from "@/lib/caddyLinkRequestUi";
 import { formatCaddyLabel } from "@/lib/caddyDisplay";
 
-type LinkedCaddy = {
-  id: number;
-  name: string;
-  team: string;
-  teamOrder: number;
-  employmentStatus: string;
-};
-
-type KakaoUserRow = {
-  id: number;
-  username: string;
+type KakaoUserRow = RosterUser & {
   role: string;
   kakaoUserId: string;
-  caddyId: number | null;
-  linked: boolean;
-  caddy: LinkedCaddy | null;
-  createdAt: string;
-};
-
-type CaddyOption = {
-  id: number;
-  name: string;
-  team: string;
-  teamOrder: number;
-  employmentStatus: string;
-};
-
-type AdminCandidate = {
-  id: number;
-  name: string;
-  team: string;
-  teamOrder: number;
-  employmentStatus: string;
-};
-
-type PendingLinkRequest = {
-  id: number;
-  status: string;
-  submittedName: string;
-  maskedPhone: string | null;
-  requestedAt: string;
-  user: {
+  caddy: {
     id: number;
-    username: string;
-    kakaoUserId?: string | null;
-  };
-  candidates: AdminCandidate[];
+    name: string;
+    team: string;
+    teamOrder: number;
+    employmentStatus: string;
+  } | null;
+  createdAt?: string;
 };
+
+type LinkModal =
+  | { kind: "caddy"; caddy: RosterCaddy }
+  | { kind: "user"; user: KakaoUserRow }
+  | null;
 
 export default function ManageUsersPage() {
   const [users, setUsers] = useState<KakaoUserRow[]>([]);
   const [occupiedCaddyIds, setOccupiedCaddyIds] = useState<number[]>([]);
+  const [caddies, setCaddies] = useState<RosterCaddy[]>([]);
+  const [pending, setPending] = useState<RosterPending[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const [pending, setPending] = useState<PendingLinkRequest[]>([]);
-  const [pendingLoading, setPendingLoading] = useState(true);
   const [selectedByRequest, setSelectedByRequest] = useState<
     Record<number, number | null>
   >({});
   const [queueBusyId, setQueueBusyId] = useState<number | null>(null);
 
-  const [linkUser, setLinkUser] = useState<KakaoUserRow | null>(null);
-  const [caddies, setCaddies] = useState<CaddyOption[]>([]);
-  const [caddyQuery, setCaddyQuery] = useState("");
+  const [teamFilter, setTeamFilter] = useState("");
+  const [nameQuery, setNameQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<AdminLinkStatus | "">("");
+
+  const [linkModal, setLinkModal] = useState<LinkModal>(null);
+  const [pickerQuery, setPickerQuery] = useState("");
+  const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
   const [selectedCaddyId, setSelectedCaddyId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
 
   const loadUsers = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/users", {
-        credentials: "include",
-        cache: "no-store",
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data?.message || data?.error || "목록 조회 실패");
-      }
-      setUsers(data.users || []);
-      setOccupiedCaddyIds(data.occupiedCaddyIds || []);
-    } catch (e: any) {
-      setError(e?.message || "목록 조회 실패");
-    } finally {
-      setLoading(false);
+    const res = await fetch("/api/users", {
+      credentials: "include",
+      cache: "no-store",
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.message || data?.error || "계정 목록 조회 실패");
     }
+    setUsers(data.users || []);
+    setOccupiedCaddyIds(data.occupiedCaddyIds || []);
+  }, []);
+
+  const loadCaddies = useCallback(async () => {
+    const res = await fetch("/api/caddies?employment=ACTIVE", {
+      credentials: "include",
+      cache: "no-store",
+    });
+    const data = await res.json().catch(() => []);
+    if (!res.ok) {
+      throw new Error(data?.error || "캐디 명단 조회 실패");
+    }
+    const rows = (Array.isArray(data) ? data : []).map((c: RosterCaddy) =>
+      toSafeRosterCaddy(c)
+    );
+    setCaddies(rows);
   }, []);
 
   const loadPending = useCallback(async () => {
-    setPendingLoading(true);
-    try {
-      const res = await fetch("/api/caddy-link-requests?status=PENDING", {
-        credentials: "include",
-        cache: "no-store",
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(
-          adminLinkErrorMessage(data?.error, data?.message) ||
-            "승인 대기 목록 조회 실패"
-        );
-      }
-      const rows: PendingLinkRequest[] = Array.isArray(data.requests)
-        ? data.requests
-        : [];
-      setPending(rows);
-      // 후보 1명이어도 자동 선택 금지 — 선택 상태 초기화(null)
-      const next: Record<number, number | null> = {};
-      for (const r of rows) {
-        next[r.id] = initialAdminSelectedCaddyId(r.candidates?.length ?? 0);
-      }
-      setSelectedByRequest(next);
-    } catch (e: any) {
-      setError(e?.message || "승인 대기 목록 조회 실패");
-    } finally {
-      setPendingLoading(false);
+    const res = await fetch("/api/caddy-link-requests?status=PENDING", {
+      credentials: "include",
+      cache: "no-store",
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(
+        adminLinkErrorMessage(data?.error, data?.message) ||
+          "승인 대기 목록 조회 실패"
+      );
     }
+    const rows: RosterPending[] = Array.isArray(data.requests)
+      ? data.requests
+      : [];
+    setPending(rows);
+    const next: Record<number, number | null> = {};
+    for (const r of rows) {
+      next[r.id] = initialAdminSelectedCaddyId(r.candidates?.length ?? 0);
+    }
+    setSelectedByRequest(next);
   }, []);
 
   const refreshAll = useCallback(async () => {
-    await Promise.all([loadPending(), loadUsers()]);
-  }, [loadPending, loadUsers]);
+    setLoading(true);
+    setError(null);
+    try {
+      await Promise.all([loadCaddies(), loadUsers(), loadPending()]);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "목록 조회 실패");
+    } finally {
+      setLoading(false);
+    }
+  }, [loadCaddies, loadPending, loadUsers]);
 
   useEffect(() => {
     void refreshAll();
   }, [refreshAll]);
 
-  const openLinkModal = async (user: KakaoUserRow) => {
-    setLinkUser(user);
-    setSelectedCaddyId(null);
-    setCaddyQuery("");
-    setError(null);
-    setMessage(null);
-    try {
-      const res = await fetch("/api/caddies?employment=ACTIVE", {
-        credentials: "include",
-        cache: "no-store",
-      });
-      const data = await res.json().catch(() => []);
-      if (!res.ok) {
-        throw new Error(data?.error || "캐디 목록 실패");
-      }
-      setCaddies(Array.isArray(data) ? data : []);
-    } catch (e: any) {
-      setError(e?.message || "캐디 목록 실패");
-      setLinkUser(null);
-    }
-  };
-
+  const roster = useMemo(
+    () => buildAdminCaddyLinkRoster(caddies, users, pending),
+    [caddies, users, pending]
+  );
+  const summary = useMemo(() => summarizeAdminCaddyLinkRoster(roster), [roster]);
+  const teams = useMemo(() => uniqueRosterTeams(caddies), [caddies]);
+  const visibleRows = useMemo(
+    () =>
+      filterAdminCaddyLinkRoster(roster, {
+        team: teamFilter,
+        nameQuery,
+        status: statusFilter,
+      }),
+    [roster, teamFilter, nameQuery, statusFilter]
+  );
+  const orphanUsers = useMemo(() => unlinkedKakaoAccounts(users), [users]);
   const occupiedSet = useMemo(
     () => new Set(occupiedCaddyIds),
     [occupiedCaddyIds]
   );
 
-  const filteredCaddies = useMemo(() => {
-    const q = caddyQuery.trim().toLowerCase();
+  const openLinkCaddy = (caddy: RosterCaddy) => {
+    if (isCaddyOccupied(caddy.id, occupiedSet)) {
+      setError("이미 다른 계정에 연결된 캐디입니다.");
+      return;
+    }
+    setLinkModal({ kind: "caddy", caddy });
+    setSelectedUserId(null);
+    setSelectedCaddyId(null);
+    setPickerQuery("");
+    setError(null);
+    setMessage(null);
+  };
+
+  const openLinkUser = (user: KakaoUserRow) => {
+    setLinkModal({ kind: "user", user });
+    setSelectedUserId(null);
+    setSelectedCaddyId(null);
+    setPickerQuery("");
+    setError(null);
+    setMessage(null);
+  };
+
+  const vacantCaddies = useMemo(() => {
+    const q = pickerQuery.trim().toLowerCase();
     return caddies
-      .filter((c) => !occupiedSet.has(c.id))
+      .filter((c) => !isCaddyOccupied(c.id, occupiedSet))
       .filter((c) => {
         if (!q) return true;
-        const hay = `${c.name} ${c.team} ${c.teamOrder} ${c.id}`.toLowerCase();
-        return hay.includes(q);
+        return `${c.name} ${c.team} ${c.teamOrder}`.toLowerCase().includes(q);
       })
       .slice(0, 80);
-  }, [caddies, caddyQuery, occupiedSet]);
+  }, [caddies, occupiedSet, pickerQuery]);
 
-  const selectedCaddy = useMemo(
-    () => caddies.find((c) => c.id === selectedCaddyId) || null,
-    [caddies, selectedCaddyId]
-  );
+  const linkableUsers = useMemo(() => {
+    const q = pickerQuery.trim().toLowerCase();
+    return orphanUsers.filter((u) => {
+      if (!q) return true;
+      return u.username.toLowerCase().includes(q);
+    });
+  }, [orphanUsers, pickerQuery]);
 
   const confirmLink = async () => {
-    if (!linkUser || selectedCaddyId == null || !selectedCaddy) return;
+    if (!linkModal) return;
+    const userId =
+      linkModal.kind === "user" ? linkModal.user.id : selectedUserId;
+    const caddyId =
+      linkModal.kind === "caddy" ? linkModal.caddy.id : selectedCaddyId;
+    const user =
+      linkModal.kind === "user"
+        ? linkModal.user
+        : users.find((u) => u.id === userId);
+    const caddy =
+      linkModal.kind === "caddy"
+        ? linkModal.caddy
+        : caddies.find((c) => c.id === caddyId);
+    if (userId == null || caddyId == null || !user || !caddy) return;
+    if (isCaddyOccupied(caddyId, occupiedSet)) {
+      setError("이미 다른 계정에 연결된 캐디입니다.");
+      return;
+    }
     const ok = window.confirm(
-      `${linkUser.username} 계정을 아래 캐디와 연결할까요?\n\n` +
-        `${formatCaddyLabel(selectedCaddy)}\n\n` +
+      `${user.username} 계정을 아래 캐디와 연결할까요?\n\n` +
+        `${formatCaddyLabel(caddy)}\n\n` +
         `연결 후 이 계정으로 해당 캐디의 휴무 신청이 가능해집니다.`
     );
     if (!ok) return;
@@ -192,31 +223,30 @@ export default function ManageUsersPage() {
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(`/api/users/${linkUser.id}/link-caddy`, {
+      const res = await fetch(`/api/users/${userId}/link-caddy`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ caddyId: selectedCaddyId }),
+        body: JSON.stringify({ caddyId }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(data?.message || data?.error || "연결 실패");
       }
-      setMessage(`${linkUser.username} ↔ ${formatCaddyLabel(selectedCaddy)} 연결 완료`);
-      setLinkUser(null);
+      setMessage(`${user.username} ↔ ${formatCaddyLabel(caddy)} 연결 완료`);
+      setLinkModal(null);
       await refreshAll();
-    } catch (e: any) {
-      setError(e?.message || "연결 실패");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "연결 실패");
     } finally {
       setBusy(false);
     }
   };
 
-  const confirmUnlink = async (user: KakaoUserRow) => {
-    if (!user.caddy) return;
+  const confirmUnlink = async (user: RosterUser, caddy: RosterCaddy) => {
     const ok = window.confirm(
       `${user.username} 계정과 캐디 연결을 해제할까요?\n\n` +
-        `${formatCaddyLabel(user.caddy)}\n\n` +
+        `${formatCaddyLabel(caddy)}\n\n` +
         `해제 후 이 계정은 휴무 신청을 할 수 없습니다.`
     );
     if (!ok) return;
@@ -234,21 +264,20 @@ export default function ManageUsersPage() {
       }
       setMessage(`${user.username} 연결 해제 완료`);
       await refreshAll();
-    } catch (e: any) {
-      setError(e?.message || "연결 해제 실패");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "연결 해제 실패");
     } finally {
       setBusy(false);
     }
   };
 
-  const confirmApprove = async (req: PendingLinkRequest) => {
+  const confirmApprove = async (req: RosterPending, caddy: RosterCaddy) => {
     const selectedId = selectedByRequest[req.id];
     if (selectedId == null) {
       setError("승인할 후보 캐디를 선택해 주세요. (자동 승인 없음)");
       return;
     }
-    const cand = req.candidates.find((c) => c.id === selectedId);
-    if (!cand) {
+    if (!canApprovePendingForCaddy(req, caddy.id) || selectedId !== caddy.id) {
       setError("선택한 캐디가 후보 목록에 없습니다.");
       return;
     }
@@ -257,7 +286,7 @@ export default function ManageUsersPage() {
         `계정: ${req.user.username}\n` +
         `제출 이름: ${req.submittedName}\n` +
         `휴대폰: ${req.maskedPhone || "010-****-****"}\n` +
-        `연결 캐디: ${formatCaddyLabel(cand)}\n\n` +
+        `연결 캐디: ${formatCaddyLabel(caddy)}\n\n` +
         `승인 시 계정-캐디 연결과 휴대폰번호가 함께 반영됩니다.`
     );
     if (!ok) return;
@@ -276,18 +305,22 @@ export default function ManageUsersPage() {
         throw new Error(adminLinkErrorMessage(data?.error, data?.message));
       }
       setMessage(
-        `${req.user.username} 요청 승인 · ${formatCaddyLabel(cand)} 연결 완료`
+        `${req.user.username} 요청 승인 · ${formatCaddyLabel(caddy)} 연결 완료`
       );
       await refreshAll();
-    } catch (e: any) {
-      setError(e?.message || "승인 실패");
-      await loadPending();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "승인 실패");
+      try {
+        await loadPending();
+      } catch {
+        /* keep approve error */
+      }
     } finally {
       setQueueBusyId(null);
     }
   };
 
-  const confirmReject = async (req: PendingLinkRequest) => {
+  const confirmReject = async (req: RosterPending) => {
     const ok = window.confirm(
       `본인확인 요청을 반려할까요?\n\n` +
         `계정: ${req.user.username}\n` +
@@ -301,7 +334,7 @@ export default function ManageUsersPage() {
       "반려 안내 문구(선택). 직원 화면에 표시될 수 있습니다.",
       ""
     );
-    if (noteRaw === null) return; // prompt 취소
+    if (noteRaw === null) return;
 
     setQueueBusyId(req.id);
     setError(null);
@@ -320,9 +353,13 @@ export default function ManageUsersPage() {
       }
       setMessage(`${req.user.username} 요청 반려 완료`);
       await refreshAll();
-    } catch (e: any) {
-      setError(e?.message || "반려 실패");
-      await loadPending();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "반려 실패");
+      try {
+        await loadPending();
+      } catch {
+        /* keep reject error */
+      }
     } finally {
       setQueueBusyId(null);
     }
@@ -334,13 +371,14 @@ export default function ManageUsersPage() {
         <div>
           <h1 className="us-title">계정 연결</h1>
           <p className="us-sub">
-            승인 대기 요청과 수동 연결을 분리해 관리합니다. (후보 자동 승인 없음)
+            ACTIVE 캐디 명단을 기준으로 연결 상태를 관리합니다. (후보 자동 승인
+            없음 · 이름/번호 자동 연결 없음)
           </p>
         </div>
         <button
           type="button"
           className="us-btn"
-          disabled={pendingLoading || loading || queueBusyId != null}
+          disabled={loading || queueBusyId != null}
           onClick={() => void refreshAll()}
         >
           전체 새로고침
@@ -350,196 +388,118 @@ export default function ManageUsersPage() {
       {message && <div className="us-banner ok">{message}</div>}
       {error && <div className="us-banner err">{error}</div>}
 
-      {/* —— 승인 대기 큐 —— */}
-      <section className="us-section us-section-queue">
-        <div className="us-section-head">
-          <div>
-            <div className="us-eyebrow">승인 큐</div>
-            <h2 className="us-section-title">
-              본인확인 승인 대기
-              {!pendingLoading && (
-                <span className="us-count">{pending.length}건</span>
-              )}
-            </h2>
-          </div>
-          <button
-            type="button"
-            disabled={pendingLoading || queueBusyId != null}
-            onClick={() => void loadPending()}
-            className="us-btn"
-          >
-            새로고침
-          </button>
-        </div>
-
-        {pendingLoading ? (
-          <p className="us-muted">불러오는 중…</p>
-        ) : pending.length === 0 ? (
-          <p className="us-empty">승인 대기 중인 요청이 없습니다.</p>
-        ) : (
-          <div className="us-queue-list">
-            {pending.map((req) => {
-              const selectedId = selectedByRequest[req.id] ?? null;
-              const busyRow = queueBusyId === req.id;
-              return (
-                <article key={req.id} className="us-queue-card">
-                  <div className="us-queue-top">
-                    <div>
-                      <div className="us-queue-name">
-                        {req.submittedName}
-                        <span className="us-queue-phone">
-                          · {req.maskedPhone || "010-****-****"}
-                        </span>
-                      </div>
-                      <div className="us-queue-meta">
-                        Kakao <strong>{req.user.username}</strong>
-                        {" · "}
-                        {formatRequestedAt(req.requestedAt)}
-                      </div>
-                    </div>
-                    <div className="us-queue-actions">
-                      <button
-                        type="button"
-                        className="us-btn us-btn-primary"
-                        disabled={busyRow || selectedId == null}
-                        onClick={() => void confirmApprove(req)}
-                      >
-                        {busyRow ? "처리 중…" : "승인"}
-                      </button>
-                      <button
-                        type="button"
-                        className="us-btn us-btn-danger"
-                        disabled={busyRow}
-                        onClick={() => void confirmReject(req)}
-                      >
-                        반려
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="us-cand-label">
-                    후보 캐디
-                    <span>
-                      {req.candidates.length}명 · 직접 선택 필요 (자동 승인 없음)
-                    </span>
-                  </div>
-                  {req.candidates.length === 0 ? (
-                    <p className="us-warn">
-                      후보가 없습니다. 반려 후 직원에게 이름 확인을 요청하세요.
-                    </p>
-                  ) : (
-                    <div className="us-cand-list">
-                      {req.candidates.map((c) => {
-                        const selected = selectedId === c.id;
-                        return (
-                          <label
-                            key={c.id}
-                            className={`us-cand${selected ? " is-selected" : ""}`}
-                          >
-                            <input
-                              type="radio"
-                              name={`cand-${req.id}`}
-                              checked={selected}
-                              disabled={busyRow}
-                              onChange={() =>
-                                setSelectedByRequest((prev) => ({
-                                  ...prev,
-                                  [req.id]: c.id,
-                                }))
-                              }
-                            />
-                            <span>
-                              <strong>{formatCaddyLabel(c)}</strong>
-                              {c.employmentStatus && c.employmentStatus !== "ACTIVE"
-                                ? ` · ${c.employmentStatus}`
-                                : ""}
-                            </span>
-                          </label>
-                        );
-                      })}
-                    </div>
-                  )}
-                </article>
-              );
-            })}
-          </div>
-        )}
+      <section className="us-summary" aria-label="연결 요약">
+        <SummaryChip label="전체" value={summary.total} />
+        <SummaryChip label="연결됨" value={summary.linked} tone="ok" />
+        <SummaryChip label="승인대기" value={summary.pending} tone="wait" />
+        <SummaryChip label="미연결" value={summary.unlinked} />
       </section>
 
-      {/* —— 수동 연결 (기존) —— */}
-      <section className="us-section us-section-manual">
+      <section className="us-section us-section-roster">
         <div className="us-section-head">
           <div>
-            <div className="us-eyebrow">수동 운영</div>
-            <h2 className="us-section-title">수동 연결 / 해제</h2>
+            <div className="us-eyebrow">캐디 명단</div>
+            <h2 className="us-section-title">
+              계정 연결 관리
+              {!loading && <span className="us-count">{visibleRows.length}명</span>}
+            </h2>
           </div>
         </div>
-        <p className="us-sub us-sub-inline">
-          Kakao 가입 계정만 표시됩니다. 관리자가 캐디를 직접 선택한 뒤에만
-          연결됩니다. (이름 자동 매칭 없음)
-        </p>
+
+        <div className="us-filters">
+          <label className="us-filter">
+            <span>조</span>
+            <select
+              value={teamFilter}
+              onChange={(e) => setTeamFilter(e.target.value)}
+            >
+              <option value="">전체</option>
+              {teams.map((team) => (
+                <option key={team} value={team}>
+                  {team}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="us-filter us-filter-grow">
+            <span>이름</span>
+            <input
+              value={nameQuery}
+              onChange={(e) => setNameQuery(e.target.value)}
+              placeholder="캐디 / 계정 검색"
+            />
+          </label>
+          <label className="us-filter">
+            <span>상태</span>
+            <select
+              value={statusFilter}
+              onChange={(e) =>
+                setStatusFilter((e.target.value || "") as AdminLinkStatus | "")
+              }
+            >
+              <option value="">전체</option>
+              <option value="linked">연결됨</option>
+              <option value="pending">승인대기</option>
+              <option value="unlinked">미연결</option>
+            </select>
+          </label>
+        </div>
 
         {loading ? (
           <p className="us-muted">불러오는 중…</p>
-        ) : users.length === 0 ? (
-          <p className="us-muted">Kakao 가입 계정이 없습니다.</p>
+        ) : visibleRows.length === 0 ? (
+          <p className="us-empty">조건에 맞는 캐디가 없습니다.</p>
         ) : (
           <>
             <div className="us-table-wrap us-manual-pc">
               <table className="us-table">
                 <thead>
                   <tr>
-                    <th>username</th>
+                    <th>조</th>
+                    <th>순번</th>
+                    <th>캐디</th>
                     <th>상태</th>
-                    <th>연결된 캐디</th>
+                    <th>연결 계정</th>
+                    <th>승인대기</th>
                     <th>작업</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {users.map((u) => (
-                    <tr key={u.id}>
+                  {visibleRows.map((row) => (
+                    <tr key={row.caddy.id}>
+                      <td>{row.caddy.team || "—"}</td>
+                      <td>{row.caddy.teamOrder || "—"}</td>
+                      <td className="us-uname">{row.caddy.name}</td>
                       <td>
-                        <div className="us-uname">{u.username}</div>
-                        <div className="us-uid">
-                          kakaoUserId {u.kakaoUserId} · role {u.role}
-                        </div>
+                        <StatusPill status={row.status} />
                       </td>
                       <td>
-                        <span
-                          className={`us-status ${u.linked ? "ok" : "off"}`}
-                        >
-                          {u.linked ? "연결됨" : "미연결"}
-                        </span>
-                      </td>
-                      <td>
-                        {u.caddy ? (
-                          <>
-                            {formatCaddyLabel(u.caddy)}
-                          </>
+                        {row.linkedUser ? (
+                          row.linkedUser.username
                         ) : (
                           <span className="us-muted">—</span>
                         )}
                       </td>
                       <td>
-                        {!u.linked ? (
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => void openLinkModal(u)}
-                            className="us-btn us-btn-primary us-btn-sm"
-                          >
-                            캐디 연결
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => void confirmUnlink(u)}
-                            className="us-btn us-btn-danger us-btn-sm"
-                          >
-                            연결 해제
-                          </button>
-                        )}
+                        <PendingCell row={row} />
+                      </td>
+                      <td>
+                        <RowActions
+                          row={row}
+                          busy={busy}
+                          queueBusyId={queueBusyId}
+                          selectedByRequest={selectedByRequest}
+                          onSelect={(requestId, caddyId) =>
+                            setSelectedByRequest((prev) => ({
+                              ...prev,
+                              [requestId]: caddyId,
+                            }))
+                          }
+                          onApprove={confirmApprove}
+                          onReject={confirmReject}
+                          onUnlink={confirmUnlink}
+                          onManualLink={openLinkCaddy}
+                        />
                       </td>
                     </tr>
                   ))}
@@ -548,41 +508,37 @@ export default function ManageUsersPage() {
             </div>
 
             <ul className="us-manual-mobile">
-              {users.map((u) => (
-                <li key={u.id} className="us-user-row">
+              {visibleRows.map((row) => (
+                <li key={row.caddy.id} className="us-user-row">
                   <div className="us-user-main">
-                    <strong>{u.username}</strong>
-                    <span
-                      className={`us-status ${u.linked ? "ok" : "off"}`}
-                    >
-                      {u.linked ? "연결됨" : "미연결"}
-                    </span>
+                    <strong>
+                      {row.caddy.team} {row.caddy.teamOrder} {row.caddy.name}
+                    </strong>
+                    <StatusPill status={row.status} />
                   </div>
                   <div className="us-user-sub">
-                    {u.caddy
-                      ? formatCaddyLabel(u.caddy)
-                      : "연결된 캐디 없음"}
+                    {row.linkedUser
+                      ? `연결 계정 ${row.linkedUser.username}`
+                      : "연결 계정 없음"}
                   </div>
+                  <PendingCell row={row} />
                   <div className="us-user-actions">
-                    {!u.linked ? (
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void openLinkModal(u)}
-                        className="us-btn us-btn-primary us-btn-sm"
-                      >
-                        캐디 연결
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void confirmUnlink(u)}
-                        className="us-btn us-btn-danger us-btn-sm"
-                      >
-                        연결 해제
-                      </button>
-                    )}
+                    <RowActions
+                      row={row}
+                      busy={busy}
+                      queueBusyId={queueBusyId}
+                      selectedByRequest={selectedByRequest}
+                      onSelect={(requestId, caddyId) =>
+                        setSelectedByRequest((prev) => ({
+                          ...prev,
+                          [requestId]: caddyId,
+                        }))
+                      }
+                      onApprove={confirmApprove}
+                      onReject={confirmReject}
+                      onUnlink={confirmUnlink}
+                      onManualLink={openLinkCaddy}
+                    />
                   </div>
                 </li>
               ))}
@@ -591,53 +547,147 @@ export default function ManageUsersPage() {
         )}
       </section>
 
-      {linkUser && (
-        <div className="us-modal-overlay" onClick={() => !busy && setLinkUser(null)}>
+      <section className="us-section us-section-manual">
+        <div className="us-section-head">
+          <div>
+            <div className="us-eyebrow">미연결 Kakao</div>
+            <h2 className="us-section-title">
+              캐디와 연결되지 않은 Kakao 계정
+              {!loading && <span className="us-count">{orphanUsers.length}명</span>}
+            </h2>
+          </div>
+        </div>
+        <p className="us-sub us-sub-inline">
+          캐디 명단과 별도로 유지합니다. 정체불명/미연결 Kakao 계정은 여기서
+          수동 연결할 수 있습니다. (이름 자동 매칭 없음)
+        </p>
+        {loading ? (
+          <p className="us-muted">불러오는 중…</p>
+        ) : orphanUsers.length === 0 ? (
+          <p className="us-empty">캐디와 연결되지 않은 Kakao 계정이 없습니다.</p>
+        ) : (
+          <ul className="us-orphan-list">
+            {orphanUsers.map((u) => (
+              <li key={u.id} className="us-user-row">
+                <div className="us-user-main">
+                  <strong>{u.username}</strong>
+                  <span className="us-status off">미연결</span>
+                </div>
+                <div className="us-user-sub">
+                  role {u.role}
+                  {u.kakaoUserId ? ` · kakaoUserId ${u.kakaoUserId}` : ""}
+                </div>
+                <div className="us-user-actions">
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void openLinkUser(u as KakaoUserRow)}
+                    className="us-btn us-btn-primary us-btn-sm"
+                  >
+                    캐디 연결
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {linkModal && (
+        <div
+          className="us-modal-overlay"
+          onClick={() => !busy && setLinkModal(null)}
+        >
           <div className="us-modal" onClick={(e) => e.stopPropagation()}>
             <h2 className="us-modal-title">캐디 연결</h2>
-            <p className="us-sub us-sub-inline">
-              계정 <strong>{linkUser.username}</strong> 에 연결할 ACTIVE
-              캐디를 선택하세요. 이미 다른 계정에 연결된 캐디는 목록에 없습니다.
-            </p>
-            <input
-              className="us-input"
-              value={caddyQuery}
-              onChange={(e) => setCaddyQuery(e.target.value)}
-              placeholder="이름 / 조 검색"
-            />
-            <div className="us-modal-list">
-              {filteredCaddies.length === 0 ? (
-                <div className="us-muted" style={{ padding: 12 }}>
-                  선택 가능한 캐디가 없습니다.
+            {linkModal.kind === "caddy" ? (
+              <>
+                <p className="us-sub us-sub-inline">
+                  캐디 <strong>{formatCaddyLabel(linkModal.caddy)}</strong> 에
+                  연결할 미연결 Kakao 계정을 선택하세요. 이미 다른 계정에
+                  연결된 캐디는 연결할 수 없습니다.
+                </p>
+                <input
+                  className="us-input"
+                  value={pickerQuery}
+                  onChange={(e) => setPickerQuery(e.target.value)}
+                  placeholder="계정 검색"
+                />
+                <div className="us-modal-list">
+                  {linkableUsers.length === 0 ? (
+                    <div className="us-muted" style={{ padding: 12 }}>
+                      선택 가능한 계정이 없습니다.
+                    </div>
+                  ) : (
+                    linkableUsers.map((u) => {
+                      const selected = selectedUserId === u.id;
+                      return (
+                        <button
+                          key={u.id}
+                          type="button"
+                          className={`us-modal-item${selected ? " is-selected" : ""}`}
+                          onClick={() => setSelectedUserId(u.id)}
+                        >
+                          <strong>{u.username}</strong>
+                        </button>
+                      );
+                    })
+                  )}
                 </div>
-              ) : (
-                filteredCaddies.map((c) => {
-                  const selected = selectedCaddyId === c.id;
-                  return (
-                    <button
-                      key={c.id}
-                      type="button"
-                      className={`us-modal-item${selected ? " is-selected" : ""}`}
-                      onClick={() => setSelectedCaddyId(c.id)}
-                    >
-                      <strong>{formatCaddyLabel(c)}</strong>
-                    </button>
-                  );
-                })
-              )}
-            </div>
+              </>
+            ) : (
+              <>
+                <p className="us-sub us-sub-inline">
+                  계정 <strong>{linkModal.user.username}</strong> 에 연결할
+                  ACTIVE 캐디를 선택하세요. 이미 다른 계정에 연결된 캐디는
+                  목록에 없습니다.
+                </p>
+                <input
+                  className="us-input"
+                  value={pickerQuery}
+                  onChange={(e) => setPickerQuery(e.target.value)}
+                  placeholder="이름 / 조 검색"
+                />
+                <div className="us-modal-list">
+                  {vacantCaddies.length === 0 ? (
+                    <div className="us-muted" style={{ padding: 12 }}>
+                      선택 가능한 캐디가 없습니다.
+                    </div>
+                  ) : (
+                    vacantCaddies.map((c) => {
+                      const selected = selectedCaddyId === c.id;
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          className={`us-modal-item${selected ? " is-selected" : ""}`}
+                          onClick={() => setSelectedCaddyId(c.id)}
+                        >
+                          <strong>{formatCaddyLabel(c)}</strong>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              </>
+            )}
             <div className="us-modal-actions">
               <button
                 type="button"
                 disabled={busy}
-                onClick={() => setLinkUser(null)}
+                onClick={() => setLinkModal(null)}
                 className="us-btn"
               >
                 취소
               </button>
               <button
                 type="button"
-                disabled={busy || selectedCaddyId == null}
+                disabled={
+                  busy ||
+                  (linkModal.kind === "caddy"
+                    ? selectedUserId == null
+                    : selectedCaddyId == null)
+                }
                 onClick={() => void confirmLink()}
                 className="us-btn us-btn-primary"
               >
@@ -649,7 +699,7 @@ export default function ManageUsersPage() {
       )}
 
       <style>{`
-        .users-page { max-width: 1100px; margin: 0 auto; }
+        .users-page { max-width: 1180px; margin: 0 auto; }
         .us-header {
           display: flex; flex-wrap: wrap; gap: 10px;
           justify-content: space-between; align-items: flex-end;
@@ -676,18 +726,28 @@ export default function ManageUsersPage() {
         .us-banner.err {
           background: var(--vh-danger-bg); border: 1px solid #f0c4c9; color: var(--vh-danger);
         }
+        .us-summary {
+          display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 8px; margin-bottom: 14px;
+        }
+        .us-chip {
+          background: var(--vh-paper); border: 1px solid var(--vh-border);
+          border-radius: var(--vh-radius-sm); padding: 10px 12px;
+        }
+        .us-chip-label { font-size: 0.68rem; color: var(--vh-muted); font-weight: 700; }
+        .us-chip-value { font-size: 1.2rem; font-weight: 800; color: var(--vh-green-900); }
+        .us-chip.wait .us-chip-value { color: #9a6b12; }
+        .us-chip.ok .us-chip-value { color: var(--vh-ok); }
         .us-section {
           background: var(--vh-paper); border: 1px solid var(--vh-border);
           border-radius: var(--vh-radius); padding: 14px;
           margin-bottom: 14px; box-shadow: var(--vh-shadow-sm);
         }
-        .us-section-queue {
+        .us-section-roster {
           border-color: rgba(196, 165, 116, 0.55);
           box-shadow: 0 0 0 1px rgba(196, 165, 116, 0.12), var(--vh-shadow-sm);
         }
-        .us-section-manual {
-          border-top: 3px solid var(--vh-green-800);
-        }
+        .us-section-manual { border-top: 3px solid var(--vh-green-800); }
         .us-section-head {
           display: flex; justify-content: space-between; align-items: flex-start;
           gap: 10px; margin-bottom: 10px;
@@ -705,48 +765,28 @@ export default function ManageUsersPage() {
           margin-left: 8px; font-size: 0.78rem; font-weight: 600;
           color: var(--vh-muted); font-family: var(--font-sans);
         }
+        .us-filters {
+          display: grid; grid-template-columns: 1fr; gap: 8px; margin-bottom: 12px;
+        }
+        .us-filter { display: grid; gap: 4px; font-size: 0.7rem; font-weight: 700; color: var(--vh-muted); }
+        .us-filter select, .us-filter input {
+          min-height: 34px; padding: 6px 8px; border-radius: 8px;
+          border: 1px solid var(--vh-border-strong); background: #fff;
+          font-size: 16px; color: var(--vh-ink); font-weight: 500;
+        }
         .us-muted { color: var(--vh-muted); font-size: 0.8rem; }
         .us-empty {
           margin: 0; padding: 12px; border: 1px dashed var(--vh-border-strong);
           border-radius: 8px; color: var(--vh-muted); font-size: 0.8rem;
           background: var(--vh-ivory);
         }
-        .us-queue-list { display: grid; gap: 8px; }
-        .us-queue-card {
-          border: 1px solid var(--vh-border); border-radius: var(--vh-radius-sm);
-          background: linear-gradient(180deg, #fffcf7 0%, #f7f4ec 100%);
-          padding: 10px 12px;
-        }
-        .us-queue-top {
-          display: flex; flex-wrap: wrap; gap: 8px;
-          justify-content: space-between; margin-bottom: 8px;
-        }
-        .us-queue-name {
-          font-size: 0.9rem; font-weight: 700; color: var(--vh-green-900);
-        }
-        .us-queue-phone { color: var(--vh-muted); font-weight: 500; }
-        .us-queue-meta { margin-top: 2px; font-size: 0.72rem; color: var(--vh-muted); }
-        .us-queue-actions { display: flex; gap: 6px; align-items: center; }
-        .us-cand-label {
-          font-size: 0.74rem; font-weight: 700; color: var(--vh-ink-soft);
-          margin-bottom: 5px;
-        }
-        .us-cand-label span {
-          margin-left: 6px; font-weight: 500; color: var(--vh-muted);
-        }
-        .us-warn { margin: 0; color: var(--vh-danger); font-size: 0.78rem; }
-        .us-cand-list {
-          border: 1px solid var(--vh-border); border-radius: 8px; overflow: hidden;
-          background: #fff;
-        }
+        .us-pending-cell { font-size: 0.74rem; color: var(--vh-ink-soft); }
+        .us-pending-user { font-weight: 700; }
+        .us-pending-phone { color: var(--vh-muted); }
+        .us-row-actions { display: grid; gap: 6px; }
         .us-cand {
           display: flex; gap: 8px; align-items: center;
-          padding: 7px 10px; border-top: 1px solid var(--vh-border);
-          font-size: 0.78rem; cursor: pointer;
-        }
-        .us-cand:first-child { border-top: 0; }
-        .us-cand.is-selected {
-          background: rgba(196, 165, 116, 0.14);
+          padding: 6px 0; font-size: 0.74rem; cursor: pointer;
         }
         .us-btn {
           min-height: 30px; padding: 5px 10px; border-radius: 8px;
@@ -766,27 +806,26 @@ export default function ManageUsersPage() {
           overflow: auto; border: 1px solid var(--vh-border);
           border-radius: var(--vh-radius-sm);
         }
-        .us-table {
-          width: 100%; border-collapse: collapse; font-size: 0.8rem;
-        }
+        .us-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
         .us-table th {
           text-align: left; padding: 7px 8px; background: var(--vh-green-50);
           color: var(--vh-green-800); font-size: 0.7rem; font-weight: 700;
-          border-bottom: 1px solid var(--vh-border);
+          border-bottom: 1px solid var(--vh-border); white-space: nowrap;
         }
         .us-table td {
           padding: 7px 8px; border-top: 1px solid var(--vh-border);
-          vertical-align: middle;
+          vertical-align: top;
         }
         .us-uname { font-weight: 700; color: var(--vh-green-900); }
-        .us-uid { font-size: 0.68rem; color: var(--vh-muted); }
         .us-status {
           display: inline-flex; padding: 1px 7px; border-radius: 999px;
           font-size: 0.68rem; font-weight: 700;
         }
         .us-status.ok { background: var(--vh-ok-bg); color: var(--vh-ok); }
+        .us-status.wait { background: #fff4d6; color: #9a6b12; }
         .us-status.off { background: var(--vh-ivory-deep); color: var(--vh-muted); }
-        .us-manual-mobile { display: grid; gap: 0; list-style: none; margin: 0; padding: 0;
+        .us-manual-mobile, .us-orphan-list {
+          display: grid; gap: 0; list-style: none; margin: 0; padding: 0;
           border: 1px solid var(--vh-border); border-radius: var(--vh-radius-sm); overflow: hidden;
         }
         .us-manual-pc { display: none; }
@@ -800,7 +839,11 @@ export default function ManageUsersPage() {
         }
         .us-user-main strong { color: var(--vh-green-900); font-size: 0.86rem; }
         .us-user-sub { margin-top: 2px; font-size: 0.72rem; color: var(--vh-muted); }
-        .us-user-actions { margin-top: 6px; }
+        .us-user-actions { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; }
+        @media (min-width: 720px) {
+          .us-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+          .us-filters { grid-template-columns: 140px 1fr 140px; }
+        }
         @media (min-width: 960px) {
           .us-title { font-size: 1.8rem; }
           .us-manual-mobile { display: none; }
@@ -837,20 +880,143 @@ export default function ManageUsersPage() {
           font-family: var(--font-sans); color: var(--vh-ink);
         }
         .us-modal-item.is-selected { background: rgba(196, 165, 116, 0.16); }
-        .us-modal-actions {
-          display: flex; gap: 6px; justify-content: flex-end;
-        }
+        .us-modal-actions { display: flex; gap: 6px; justify-content: flex-end; }
       `}</style>
     </div>
   );
 }
 
-function formatRequestedAt(value: string | Date): string {
-  try {
-    const d = value instanceof Date ? value : new Date(value);
-    if (Number.isNaN(d.getTime())) return String(value);
-    return d.toLocaleString("ko-KR");
-  } catch {
-    return String(value);
+function SummaryChip({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone?: "ok" | "wait";
+}) {
+  return (
+    <div className={`us-chip${tone ? ` ${tone}` : ""}`}>
+      <div className="us-chip-label">{label}</div>
+      <div className="us-chip-value">{value}</div>
+    </div>
+  );
+}
+
+function StatusPill({ status }: { status: AdminLinkStatus }) {
+  const tone = status === "linked" ? "ok" : status === "pending" ? "wait" : "off";
+  return <span className={`us-status ${tone}`}>{ADMIN_LINK_STATUS_LABELS[status]}</span>;
+}
+
+function PendingCell({ row }: { row: AdminCaddyLinkRow }) {
+  if (row.status !== "pending" || row.pendingForCaddy.length === 0) {
+    return <span className="us-muted">—</span>;
   }
+  return (
+    <div className="us-pending-cell">
+      {row.pendingForCaddy.map((req) => (
+        <div key={req.id}>
+          <span className="us-pending-user">{req.user.username}</span>
+          <span className="us-pending-phone">
+            {" · "}
+            {req.maskedPhone || "010-****-****"}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RowActions({
+  row,
+  busy,
+  queueBusyId,
+  selectedByRequest,
+  onSelect,
+  onApprove,
+  onReject,
+  onUnlink,
+  onManualLink,
+}: {
+  row: AdminCaddyLinkRow;
+  busy: boolean;
+  queueBusyId: number | null;
+  selectedByRequest: Record<number, number | null>;
+  onSelect: (requestId: number, caddyId: number) => void;
+  onApprove: (req: RosterPending, caddy: RosterCaddy) => void;
+  onReject: (req: RosterPending) => void;
+  onUnlink: (user: RosterUser, caddy: RosterCaddy) => void;
+  onManualLink: (caddy: RosterCaddy) => void;
+}) {
+  if (row.status === "linked" && row.linkedUser) {
+    return (
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => void onUnlink(row.linkedUser!, row.caddy)}
+        className="us-btn us-btn-danger us-btn-sm"
+      >
+        연결 해제
+      </button>
+    );
+  }
+
+  if (row.status === "pending") {
+    return (
+      <div className="us-row-actions">
+        {row.pendingForCaddy.map((req) => {
+          const canApprove = canApprovePendingForCaddy(req, row.caddy.id);
+          const selected = selectedByRequest[req.id] === row.caddy.id;
+          const busyRow = queueBusyId === req.id;
+          return (
+            <div key={req.id}>
+              {canApprove ? (
+                <label className="us-cand">
+                  <input
+                    type="radio"
+                    name={`cand-${req.id}`}
+                    checked={selected}
+                    disabled={busyRow}
+                    onChange={() => onSelect(req.id, row.caddy.id)}
+                  />
+                  이 캐디로 승인
+                </label>
+              ) : (
+                <p className="us-muted">이 캐디는 후보가 아닙니다.</p>
+              )}
+              <div className="us-user-actions">
+                <button
+                  type="button"
+                  className="us-btn us-btn-primary us-btn-sm"
+                  disabled={busyRow || !canApprove || !selected}
+                  onClick={() => void onApprove(req, row.caddy)}
+                >
+                  {busyRow ? "처리 중…" : "승인"}
+                </button>
+                <button
+                  type="button"
+                  className="us-btn us-btn-danger us-btn-sm"
+                  disabled={busyRow}
+                  onClick={() => void onReject(req)}
+                >
+                  반려
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      onClick={() => onManualLink(row.caddy)}
+      className="us-btn us-btn-primary us-btn-sm"
+    >
+      수동 연결
+    </button>
+  );
 }

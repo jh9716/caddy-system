@@ -114,6 +114,9 @@ function main() {
     page.includes("자동 승인 없음") || page.includes("자동 승인"),
     "auto-approve discouraged in copy"
   );
+  assert(page.includes("/api/caddies?employment=ACTIVE"), "loads ACTIVE roster");
+  assert(page.includes("캐디 명단"), "roster-first section");
+  assert(page.includes("캐디와 연결되지 않은 Kakao"), "orphan kakao section");
 
   // API/domain files must be untouched in this PR working tree check is separate;
   // ensure page does not import domain service
