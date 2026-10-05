@@ -48,6 +48,8 @@ import {
   upsertVisibleChatRoom,
 } from "@/lib/chatPhase6";
 import {
+  chatNotifyHeaderAriaLabel,
+  chatNotifyHeaderLabel,
   DEFAULT_CHAT_NOTIFY_MODE,
   type ChatNotifyMode,
 } from "@/lib/chatNotificationPref";
@@ -1252,6 +1254,10 @@ export default function ChatClient() {
   const inviteTeams = visibleInviteTeams(inviteCandidates);
   const inviteRoles = visibleInviteRoles(inviteCandidates);
   const selectedCount = inviteSelectionCount(selectedIds);
+  const activeNotifyMode =
+    activeRoom != null
+      ? notifyPrefs[activeRoom.roomId] ?? DEFAULT_CHAT_NOTIFY_MODE
+      : DEFAULT_CHAT_NOTIFY_MODE;
   const linkStatus = chatReconnectStatus({
     connected: view === "room" ? connected : directoryConnected,
     failingSinceMs: failingSince,
@@ -1367,8 +1373,9 @@ export default function ChatClient() {
               type="button"
               className="vh-chat-notify-btn"
               onClick={() => setSheet("notify")}
+              aria-label={chatNotifyHeaderAriaLabel(activeNotifyMode)}
             >
-              알림
+              {chatNotifyHeaderLabel(activeNotifyMode)}
             </button>
             {linkStatus === "reconnecting" ? (
               <span className="vh-chat-dot">재연결 중…</span>

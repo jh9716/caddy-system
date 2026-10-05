@@ -84,6 +84,8 @@ section("android back room leave");
   assert(chat.includes("전체 채팅방은 모든 활성") || chat.includes("ALL_ROOM_ID"), "overall room");
   assert(chat.includes("+ 채팅방 만들기"), "create room CTA");
   assert(chat.includes('sheet === "notify"'), "room notify sheet");
+  assert(chat.includes("chatNotifyHeaderLabel"), "notify header label");
+  assert(chat.includes("setSheet(\"notify\")"), "notify button still opens sheet");
   assert(chat.includes("upsertVisibleChatRoom"), "DM optimistic upsert");
   assert(chat.includes("parseChatDeepLinkRoomId"), "chat deep link room");
   assert(!chat.includes("내 조 채팅방"), "team rooms hidden from default UI");

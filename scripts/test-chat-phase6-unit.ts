@@ -6,6 +6,8 @@ import fs from "node:fs";
 import { chatNotificationTag } from "../src/lib/chatRooms";
 import {
   canWriteChatNotifyPref,
+  chatNotifyHeaderAriaLabel,
+  chatNotifyHeaderLabel,
   DEFAULT_CHAT_NOTIFY_MODE,
   parseChatNotifyMode,
   resolveChatNotifyMode,
@@ -171,6 +173,24 @@ section("room prefs");
   assert(!canWriteChatNotifyPref({ roomId: "room_0123456789abcdef", isMember: false }), "ACL 없는 room 거절");
   assert(!canWriteChatNotifyPref({ roomId: "dm_8_40", isMember: false }), "DM outsider 거절");
   assert(!canWriteChatNotifyPref({ roomId: "team-1", isMember: true }), "legacy team pref 거절");
+  assert(chatNotifyHeaderLabel(undefined) === "알림", "default/ALL → 알림");
+  assert(chatNotifyHeaderLabel("ALL") === "알림", "ALL → 알림");
+  assert(chatNotifyHeaderLabel("MENTIONS") === "멘션만", "MENTIONS → 멘션만");
+  assert(chatNotifyHeaderLabel("OFF") === "알림 끔", "OFF → 알림 끔");
+  assert(chatNotifyHeaderAriaLabel("ALL").includes("모든 알림"), "aria ALL");
+  assert(chatNotifyHeaderAriaLabel("MENTIONS").includes("멘션만"), "aria MENTIONS");
+  assert(chatNotifyHeaderAriaLabel("OFF").includes("알림 끔"), "aria OFF");
+  let prefs: Record<string, "ALL" | "MENTIONS" | "OFF"> = {};
+  const roomId = "dm_8_40";
+  const headerFor = () => chatNotifyHeaderLabel(prefs[roomId] ?? DEFAULT_CHAT_NOTIFY_MODE);
+  assert(headerFor() === "알림", "missing pref uses default label");
+  const prev = prefs[roomId] ?? DEFAULT_CHAT_NOTIFY_MODE;
+  prefs = { ...prefs, [roomId]: "OFF" };
+  assert(headerFor() === "알림 끔", "optimistic OFF label");
+  prefs = { ...prefs, [roomId]: "MENTIONS" };
+  assert(headerFor() === "멘션만", "mode change updates label");
+  prefs = { ...prefs, [roomId]: prev };
+  assert(headerFor() === "알림", "save failure rollback restores label");
 }
 
 section("recipient policy");
@@ -517,6 +537,9 @@ section("source wiring");
   assert(sw.includes("if (parsed.tag)"), "PWA tag only when present");
   assert(sw.includes("options.renotify = true"), "PWA same-tag renotify");
   assert(!/silent:\s*true/.test(sw), "PWA no silent");
+  assert(client.includes("chatNotifyHeaderLabel"), "header shows current notify mode");
+  assert(client.includes("notifyPrefs[activeRoom.roomId] ?? DEFAULT_CHAT_NOTIFY_MODE"), "header uses room pref or default");
+  assert(client.includes("[room.roomId]: prev"), "failed save rolls back pref");
   assert(client.includes("directorySnapshotReady"), "deep link waits for snapshot");
   assert(!/directorySnapshotReady:\s*directoryConnected/.test(client), "socket open is not snapshot ready");
   assert(!/directoryConnected \|\| \(\!loading && rooms\.length/.test(client), "no early ALL/team fallback");
