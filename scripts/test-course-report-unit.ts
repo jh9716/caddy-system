@@ -163,8 +163,9 @@ async function main() {
     assert(rootLayout.includes("MemberShell"), "root wraps caddy/leader MemberShell");
     const header = read("src/components/AppHeader.tsx");
     assert(header.includes('href="/course-reports"'), "AppHeader 제보 link");
+    const nav = read("src/lib/adminManageNav.ts");
     const shell = read("src/components/manage/ManageShell.tsx");
-    assert(shell.includes('href: "/course-reports"'), "ManageShell 코스 제보");
+    assert(nav.includes('href: "/course-reports"'), "ManageShell 코스 제보");
     assert(!/BOTTOM[\s\S]*course-reports/.test(shell), "bottom nav not expanded");
     const listPage = read("src/app/course-reports/page.tsx");
     assert(listPage.includes('href="/course-reports/new"'), "list CTA href /course-reports/new");

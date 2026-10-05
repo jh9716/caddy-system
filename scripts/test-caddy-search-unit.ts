@@ -210,7 +210,7 @@ section("검색 UI / 권한 / 개인정보 source guard");
   const page = readSrc("src/app/manage/caddy-search/page.tsx");
   const matcher = readSrc("src/lib/caddySearch.ts");
   const searchApi = readSrc("src/app/api/caddies/search/route.ts");
-  const shell = readSrc("src/components/manage/ManageShell.tsx");
+  const shell = readSrc("src/lib/adminManageNav.ts");
   const layout = readSrc("src/app/manage/layout.tsx");
   const mw = readSrc("src/middleware.ts");
   const listApi = readSrc("src/app/api/caddies/route.ts");

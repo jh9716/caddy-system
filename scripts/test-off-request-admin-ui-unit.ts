@@ -52,7 +52,7 @@ section("admin page auth + nav");
   const page = read("src/app/manage/off-requests/page.tsx");
   const client = read("src/app/manage/off-requests/OffRequestAdminClient.tsx");
   const layout = read("src/app/manage/layout.tsx");
-  const nav = read("src/components/manage/ManageShell.tsx");
+  const nav = read("src/lib/adminManageNav.ts");
   const mw = read("src/middleware.ts");
   assert(page.includes("OffRequestAdminClient"), "page uses admin client");
   assert(layout.includes('auth.role !== "admin"'), "manage layout admin only");

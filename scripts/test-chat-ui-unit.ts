@@ -44,7 +44,7 @@ section("routes and nav");
   assert(mw.includes('"/chat"'), "middleware matcher /chat");
   const nav = read("src/lib/boardNav.ts");
   assert(nav.includes('href: "/chat"'), "drawer 채팅");
-  const manage = read("src/components/manage/ManageShell.tsx");
+  const manage = read("src/lib/adminManageNav.ts");
   assert(manage.includes('href: "/chat"'), "admin sidebar 채팅");
   assert(manage.includes('label: "채팅"'), "admin sidebar 채팅 label");
   const noticeIdx = manage.indexOf('label: "공지"');

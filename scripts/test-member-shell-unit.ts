@@ -12,7 +12,7 @@ import {
   shouldUseManageShellForNotice,
   shouldUseMemberShell,
 } from "../src/lib/boardNav";
-import { manageNavItems } from "../src/components/manage/ManageShell";
+import { manageNavItems, manageToolItems } from "../src/components/manage/ManageShell";
 import { resolveCaddyPageGate } from "../src/lib/roleRouting";
 
 let passed = 0;
@@ -67,18 +67,23 @@ section("admin menus unchanged");
 {
   const admin = manageNavItems(true).map((i) => i.href);
   const staff = manageNavItems(false).map((i) => i.href);
+  const adminTools = manageToolItems(true).map((i) => i.href);
+  const staffTools = manageToolItems(false).map((i) => i.href);
   assert(admin.includes("/manage/caddies"), "admin keeps 캐디 관리");
   assert(admin.includes("/manage/assignments"), "admin keeps 자동배치");
-  assert(admin.includes("/manage/staff-accounts"), "account manager keeps 직원 계정");
-  assert(!staff.includes("/manage/staff-accounts"), "staff admin hides 직원 계정");
-  assert(admin.includes("/manage/notifications"), "admin keeps 알림 설정");
-  assert(admin.includes("/manage/privacy-requests"), "admin has 개인정보 요청 inbox");
+  assert(admin.includes("/manage/tools"), "admin has 관리도구 hub");
+  assert(!admin.includes("/manage/staff-accounts"), "직원 계정 is not on the main nav");
+  assert(adminTools.includes("/manage/staff-accounts"), "account manager keeps 직원 계정 in tools");
+  assert(!staffTools.includes("/manage/staff-accounts"), "staff admin hides 직원 계정");
+  assert(adminTools.includes("/manage/notifications"), "admin keeps 알림 설정 in tools");
+  assert(adminTools.includes("/manage/privacy-requests"), "admin has 개인정보 요청 inbox in tools");
   assert(admin.includes("/manage/off-requests"), "admin has 휴무 신청 관리");
   assert(admin.includes("/course-reports"), "admin keeps 코스 제보");
   assert(admin.includes("/chat"), "admin sidebar has 채팅");
   assert(staff.includes("/chat"), "staff admin sidebar has 채팅");
   const manageShell = read("src/components/manage/ManageShell.tsx");
-  assert(manageShell.includes('label: "캐디 관리"'), "ManageShell still has 캐디 관리");
+  const manageNav = read("src/lib/adminManageNav.ts");
+  assert(manageNav.includes('label: "캐디 관리"'), "ManageShell still has 캐디 관리");
   assert(manageShell.includes('href: "/manage/caddies"'), "admin bottom/nav 캐디 path");
   assert(manageShell.includes('href: "#menu"'), "admin bottom still has 메뉴 tab");
   assert(!/BOTTOM[\s\S]*course-reports/.test(manageShell), "admin bottom nav not expanded");

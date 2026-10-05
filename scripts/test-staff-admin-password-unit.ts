@@ -31,7 +31,7 @@ import {
   SUPER_ADMIN_USERNAME,
   isAccountManagerAuth,
 } from "../src/lib/staffAdminAccounts";
-import { manageNavItems } from "../src/components/manage/ManageShell";
+import { manageNavItems, manageToolItems } from "../src/components/manage/ManageShell";
 import { middleware } from "../src/middleware";
 import {
   SESSION_COOKIE_NAME,
@@ -277,10 +277,17 @@ async function main() {
   );
   const adminNav = manageNavItems(true).map((i) => i.href);
   const staffNav = manageNavItems(false).map((i) => i.href);
-  assert(adminNav.includes("/manage/staff-accounts"), "admin → 직원 계정 메뉴 보임");
+  const adminTools = manageToolItems(true).map((i) => i.href);
+  const staffTools = manageToolItems(false).map((i) => i.href);
+  assert(adminNav.includes("/manage/tools"), "admin → 관리도구");
+  assert(adminTools.includes("/manage/staff-accounts"), "admin → 직원 계정 도구 보임");
   assert(
-    !staffNav.includes("/manage/staff-accounts"),
+    !staffTools.includes("/manage/staff-accounts"),
     "직원 admin → 직원 계정 메뉴 안 보임"
+  );
+  assert(
+    !adminNav.includes("/manage/staff-accounts"),
+    "직원 계정은 메인 메뉴가 아님"
   );
   assert(staffNav.includes("/manage/assignments"), "직원 admin 자동배치 메뉴 유지");
   assert(staffNav.includes("/manage/caddies"), "직원 admin 캐디관리 메뉴 유지");

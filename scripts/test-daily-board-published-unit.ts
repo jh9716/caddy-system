@@ -66,7 +66,7 @@ import {
   isAppNavActive,
   shouldUseManageShellForBoard,
 } from "../src/lib/boardNav";
-import { manageNavItems } from "../src/components/manage/ManageShell";
+import { manageNavItems, manageToolItems } from "../src/components/manage/ManageShell";
 import { GET as publishedGET, POST as publishedPOST } from "../src/app/api/assignments/published/route";
 import {
   GET as draftGET,
@@ -787,6 +787,7 @@ async function main() {
     const header = readSrc("src/components/AppHeader.tsx");
     const nav = readSrc("src/components/NavBar.tsx");
     const shell = readSrc("src/components/manage/ManageShell.tsx");
+    const manageNav = readSrc("src/lib/adminManageNav.ts");
     const caddyPage = readSrc("src/app/caddy/page.tsx");
     const boardLayout = readSrc("src/app/board/layout.tsx");
     assert(/AppHeader/.test(readSrc("src/app/layout.tsx")), "root layout uses AppHeader");
@@ -808,7 +809,7 @@ async function main() {
       /role === ['"]caddy['"]/.test(nav) && /\/board/.test(nav) && /배치표/.test(nav),
       "NavBar caddy sees 배치표"
     );
-    assert(/href: "\/board"/.test(shell) && /배치표/.test(shell), "admin ManageShell has 배치표");
+    assert(/href: "\/board"/.test(manageNav) && /배치표/.test(manageNav), "admin ManageShell has 배치표");
     assert(/href="\/board"/.test(caddyPage), "caddy dashboard links /board");
     assert(!/\/manage\/assignments/.test(caddyPage), "caddy dashboard has no assignments");
     assert(!/\/api\/assignments\/draft/.test(caddyPage), "caddy dashboard has no Draft API");
@@ -837,12 +838,15 @@ async function main() {
     assert(isAppNavActive("/", "/") === true, "홈 active on /");
     const adminNav = manageNavItems(true).map((i) => i.href);
     const staffNav = manageNavItems(false).map((i) => i.href);
+    const staffTools = manageToolItems(false).map((i) => i.href);
     assert(adminNav.includes("/board"), "admin shell includes 배치표");
     assert(adminNav.includes("/chat"), "admin shell includes 채팅");
     assert(adminNav.includes("/manage/caddies"), "admin shell keeps 캐디 관리");
     assert(adminNav.includes("/manage/assignments"), "admin shell keeps 자동배치");
+    assert(adminNav.includes("/manage/tools"), "admin shell has 관리도구");
     assert(staffNav.includes("/manage/assignments"), "staff admin keeps 자동배치");
-    assert(!staffNav.includes("/manage/staff-accounts"), "staff admin hides 직원 계정");
+    assert(!staffNav.includes("/manage/staff-accounts"), "staff admin hides 직원 계정 from main");
+    assert(!staffTools.includes("/manage/staff-accounts"), "staff admin hides 직원 계정 from tools");
     const caddyHeader = readSrc("src/components/AppHeader.tsx");
     assert(/내 대시보드/.test(caddyHeader), "caddy nav label");
     assert(!/캐디 관리/.test(caddyHeader), "caddy header has no 캐디 관리");
