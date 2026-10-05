@@ -16,6 +16,8 @@ import {
 import { assertLocalDatabaseUrl } from "./assertLocalDatabaseUrl";
 import {
   buildWebPushNotificationOptions,
+  notificationClickUrlsEqual,
+  openNotificationClickUrl,
   parsePushPayload,
   resolveSameOriginUrl,
 } from "../src/lib/webPushNotification";
@@ -226,6 +228,152 @@ async function main() {
     assert(untagged.tag == null && untagged.renotify == null, "no tag → no renotify");
     assert(sw.includes("options.renotify = true"), "sw sets renotify with tag");
     assert(!/silent:\s*true/.test(sw), "sw has no silent");
+
+    const dest = resolveSameOriginUrl("/chat?room=dm_8_40", origin);
+    assert(dest === "https://www.verthill.kr/chat?room=dm_8_40", "chat deep link stays /chat?room=");
+    assert(resolveSameOriginUrl("https://evil.example/chat?room=dm_8_40", origin) === null, "external chat URL blocked");
+    assert(resolveSameOriginUrl("javascript:alert(1)", origin) === null, "invalid javascript fail closed");
+    assert(resolveSameOriginUrl("not a url", origin) === null, "invalid URL fail closed");
+    assert(
+      notificationClickUrlsEqual(dest, "https://www.verthill.kr/chat?room=dm_8_40#x"),
+      "hash does not hide exact chat client"
+    );
+    assert(
+      !notificationClickUrlsEqual("https://www.verthill.kr/caddy", dest),
+      "/caddy is not the chat deep link"
+    );
+
+    let focused: string[] = [];
+    let navigated: string[] = [];
+    let opened: string[] = [];
+    const caddyClient = {
+      url: "https://www.verthill.kr/caddy",
+      focus: async () => {
+        focused.push("/caddy");
+      },
+      navigate: async (url: string) => {
+        navigated.push(url);
+        return null;
+      },
+    };
+    const stale = await openNotificationClickUrl({
+      destinationUrl: dest,
+      clients: [caddyClient],
+      openWindow: async (url) => {
+        opened.push(url);
+      },
+    });
+    assert(stale.via === "open_window" && stale.url === dest, "existing /caddy + failed navigate → openWindow dest");
+    assert(focused.length === 0, "failed navigate does not focus /caddy");
+    assert(opened[0] === dest, "openWindow uses /chat?room=dm_8_40");
+    assert(!opened.includes("https://www.verthill.kr/caddy"), "does not open /caddy");
+
+    focused = [];
+    navigated = [];
+    opened = [];
+    const throwingCaddy = {
+      url: "https://www.verthill.kr/caddy",
+      focus: async () => {
+        focused.push("/caddy");
+      },
+      navigate: async () => {
+        throw new Error("navigate unsupported");
+      },
+    };
+    let threw = false;
+    const afterThrow = await openNotificationClickUrl({
+      destinationUrl: dest,
+      clients: [throwingCaddy],
+      openWindow: async (url) => {
+        opened.push(url);
+      },
+    }).catch(() => {
+      threw = true;
+      return { via: "none" as const, url: null };
+    });
+    assert(!threw, "navigate throw does not reject click handler");
+    assert(afterThrow.via === "open_window" && afterThrow.url === dest, "navigate throw → openWindow dest");
+    assert(opened[0] === dest, "throw fallback opens /chat?room=dm_8_40");
+    assert(focused.length === 0, "throw fallback does not focus /caddy");
+
+    focused = [];
+    navigated = [];
+    opened = [];
+    const navigableCaddy = {
+      url: "https://www.verthill.kr/caddy",
+      focus: async () => {
+        focused.push("/caddy");
+      },
+      navigate: async (url: string) => {
+        navigated.push(url);
+        return {
+          focus: async () => {
+            focused.push(url);
+          },
+        };
+      },
+    };
+    const reused = await openNotificationClickUrl({
+      destinationUrl: dest,
+      clients: [navigableCaddy],
+      openWindow: async (url) => {
+        opened.push(url);
+      },
+    });
+    assert(reused.via === "navigate" && reused.url === dest, "reuse /caddy navigates to chat first");
+    assert(navigated[0] === dest, "navigate target is chat deep link");
+    assert(focused.includes(dest), "focus the navigated chat client");
+    assert(opened.length === 0, "successful navigate does not openWindow");
+
+    focused = [];
+    opened = [];
+    const exact = await openNotificationClickUrl({
+      destinationUrl: dest,
+      clients: [
+        {
+          url: dest,
+          focus: async () => {
+            focused.push(dest);
+          },
+        },
+      ],
+      openWindow: async (url) => {
+        opened.push(url);
+      },
+    });
+    assert(exact.via === "focus" && exact.url === dest, "exact chat client is focused");
+    assert(focused[0] === dest, "focus target is chat deep link");
+    assert(opened.length === 0, "exact match does not openWindow");
+
+    const none = await openNotificationClickUrl({
+      destinationUrl: dest,
+      clients: [],
+      openWindow: async (url) => {
+        opened.push(url);
+      },
+    });
+    assert(none.via === "open_window" && none.url === dest, "no client → openWindow dest");
+
+    const blocked = await openNotificationClickUrl({
+      destinationUrl: resolveSameOriginUrl("https://evil.example/x", origin),
+      clients: [caddyClient],
+      openWindow: async (url) => {
+        opened.push(url);
+      },
+    });
+    assert(blocked.via === "none", "blocked dest is fail-closed");
+
+    assert(sw.includes("function openNotificationClickUrl"), "sw has click router");
+    assert(sw.includes("notificationClickUrlsEqual"), "sw matches exact destination");
+    assert(sw.includes("event.notification.data.url"), "sw uses notification.data.url");
+    assert(sw.includes("clients.openWindow(url)"), "sw openWindow uses destination");
+    assert(sw.includes("try {\n      next = await client.navigate(url);"), "sw try/catch around navigate");
+    assert(
+      !/if \(typeof client\.focus === "function"\) await client\.focus\(\);\s*if \(typeof client\.navigate === "function"\) await client\.navigate\(url\);\s*return;/.test(
+        sw
+      ),
+      "sw no longer focus-then-navigate any same-origin client"
+    );
   }
 
   let caddyId = 0;
