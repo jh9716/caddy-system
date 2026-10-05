@@ -39,9 +39,11 @@ import {
 } from "@/lib/chatPhase5";
 import {
   clearPendingChatRoomId,
+  nextDirectorySnapshotReady,
   parseChatDeepLinkRoomId,
   readPendingChatRoomId,
   resolveChatDeepLinkAction,
+  resolveDirectoryHttpRoomsApply,
   rollbackOptimisticChatRoom,
   upsertVisibleChatRoom,
 } from "@/lib/chatPhase6";
@@ -194,6 +196,7 @@ export default function ChatClient() {
   const [loading, setLoading] = useState(true);
   const [connected, setConnected] = useState(false);
   const [directoryConnected, setDirectoryConnected] = useState(false);
+  const [directorySnapshotReady, setDirectorySnapshotReady] = useState(false);
   const [lines, setLines] = useState<ChatLine[]>([]);
   const [draft, setDraft] = useState("");
   const [mentionTokens, setMentionTokens] = useState<ComposerMention[]>([]);
@@ -315,9 +318,21 @@ export default function ChatClient() {
   const fetchRoomsHttp = useCallback(async (token: string) => {
     const url = chatDirectoryRoomsUrl(token);
     if (!url) return;
+    const startedGen = dirGenRef.current;
     const res = await fetch(url, { cache: "no-store" });
     const data = await res.json().catch(() => null);
-    if (res.ok && Array.isArray(data?.rooms)) applyRooms(data.rooms);
+    if (
+      resolveDirectoryHttpRoomsApply({
+        startedGen,
+        currentGen: dirGenRef.current,
+        ok: res.ok,
+        rooms: data?.rooms,
+      }) !== "apply"
+    ) {
+      return;
+    }
+    applyRooms(data.rooms);
+    setDirectorySnapshotReady(nextDirectorySnapshotReady(false, "authoritative_rooms"));
   }, [applyRooms]);
 
   const connectDirectoryRef = useRef<(info: TokenPayload) => void>(() => {});
@@ -339,6 +354,7 @@ export default function ChatClient() {
       const prev = dirRef.current;
       dirGenRef.current += 1;
       const gen = dirGenRef.current;
+      setDirectorySnapshotReady(nextDirectorySnapshotReady(true, "connect_start"));
       if (prev && (prev.readyState === WebSocket.OPEN || prev.readyState === WebSocket.CONNECTING)) {
         prev.close();
       }
@@ -357,10 +373,12 @@ export default function ChatClient() {
       ws.addEventListener("error", () => {
         if (gen !== dirGenRef.current) return;
         setDirectoryConnected(false);
+        setDirectorySnapshotReady(nextDirectorySnapshotReady(true, "socket_error"));
       });
       ws.addEventListener("close", (ev) => {
         if (gen !== dirGenRef.current) return;
         setDirectoryConnected(false);
+        setDirectorySnapshotReady(nextDirectorySnapshotReady(true, "socket_close"));
         const run = async () => {
           let next = info;
           if (shouldRefreshTokenOnClose(ev.code)) {
@@ -384,6 +402,7 @@ export default function ChatClient() {
         }
         if ((data.type === "rooms" || data.type === "room_summary") && Array.isArray(data.rooms)) {
           applyRooms(data.rooms);
+          setDirectorySnapshotReady(nextDirectorySnapshotReady(false, "authoritative_rooms"));
         }
       });
     },
@@ -889,7 +908,7 @@ export default function ChatClient() {
     const action = resolveChatDeepLinkAction({
       requestedRoomId: requested,
       rooms,
-      directoryReady: directoryConnected || (!loading && rooms.length > 0),
+      directorySnapshotReady,
     });
     if (action === "none" || !requested) return;
     if (action === "wait") return;
@@ -905,7 +924,7 @@ export default function ChatClient() {
     if (!room) return;
     clearPendingChatRoomId(typeof sessionStorage === "undefined" ? null : sessionStorage);
     void openRoom(room);
-  }, [directoryConnected, loading, rooms]);
+  }, [directorySnapshotReady, rooms]);
 
   async function saveNotifyMode(mode: ChatNotifyMode) {
     const room = activeRoom;

@@ -87,7 +87,10 @@ self.addEventListener("push", (event) => {
         badge: "/icons/badge-96.png",
         data: { url },
       };
-      if (parsed.tag) options.tag = parsed.tag;
+      if (parsed.tag) {
+        options.tag = parsed.tag;
+        options.renotify = true;
+      }
       await self.registration.showNotification(parsed.title, options);
     })()
   );

@@ -71,10 +71,46 @@ export function clearPendingChatRoomId(storage: {
 export function resolveChatDeepLinkAction(input: {
   requestedRoomId: string | null;
   rooms: readonly { roomId: string }[];
-  directoryReady: boolean;
+  directorySnapshotReady: boolean;
 }): "open" | "wait" | "fallback" | "none" {
   const roomId = parseChatDeepLinkRoomId(input.requestedRoomId);
   if (!roomId) return "none";
   if (input.rooms.some((row) => row.roomId === roomId)) return "open";
-  return input.directoryReady ? "fallback" : "wait";
+  return input.directorySnapshotReady ? "fallback" : "wait";
+}
+
+/**
+ * Directory rooms snapshot readiness.
+ * Socket `open` is never enough. Only an authoritative rooms array (WS or HTTP) is ready.
+ * Starting a new WS generation must invalidate, or reconnect can reuse a stale true.
+ */
+export type DirectorySnapshotReadyEvent =
+  | "connect_start"
+  | "connect_skip"
+  | "socket_open"
+  | "authoritative_rooms"
+  | "socket_error"
+  | "socket_close";
+
+export function nextDirectorySnapshotReady(
+  current: boolean,
+  event: DirectorySnapshotReadyEvent
+): boolean {
+  if (event === "connect_start" || event === "socket_error" || event === "socket_close") {
+    return false;
+  }
+  if (event === "authoritative_rooms") return true;
+  return current;
+}
+
+/** HTTP rooms fetch is valid only for the Directory generation that started it. */
+export function resolveDirectoryHttpRoomsApply(input: {
+  startedGen: number;
+  currentGen: number;
+  ok: boolean;
+  rooms: unknown;
+}): "apply" | "ignore" {
+  if (input.startedGen !== input.currentGen) return "ignore";
+  if (!input.ok || !Array.isArray(input.rooms)) return "ignore";
+  return "apply";
 }
