@@ -9,6 +9,7 @@ import {
   buildAdminCaddyLinkRoster,
   canApprovePendingForCaddy,
   filterAdminCaddyLinkRoster,
+  groupAdminCaddyLinkRoster,
   isCaddyOccupied,
   pendingRequestsForCaddy,
   resolveAdminLinkStatus,
@@ -97,6 +98,9 @@ assert(filterAdminCaddyLinkRoster(roster, { status: "pending" }).length === 1, "
 assert(filterAdminCaddyLinkRoster(roster, { nameQuery: "박미" }).length === 1, "name filter");
 assert(filterAdminCaddyLinkRoster(roster, { nameQuery: "kakao_linked" }).length === 1, "username filter");
 assert(uniqueRosterTeams(caddies).join(",") === "1조,2조", "teams");
+const grouped = groupAdminCaddyLinkRoster(roster);
+assert(grouped.map((g) => g.team).join(",") === "1조,2조", "group by team");
+assert(grouped[0].rows.length === 2 && grouped[1].rows.length === 1, "group sizes");
 
 console.log("== orphan kakao + occupied ==");
 const orphans = unlinkedKakaoAccounts(users);
@@ -130,6 +134,10 @@ assert(
 assert(!page.includes("autoApprove"), "no autoApprove helper");
 assert(page.includes("자동 연결 없음"), "no auto-link by name/phone");
 assert(page.includes("formatCaddyLabel"), "uses formatCaddyLabel");
+assert(page.includes("us-dense-row") && page.includes("us-team-h"), "compact roster rows + team headers");
+assert(!page.includes("us-manual-mobile"), "no mobile card list");
+assert(page.includes("us-summary-line"), "one-line summary");
+assert(page.includes("pendingModal") || page.includes("PendingDetailModal"), "pending detail not inline");
 
 if (failed > 0) {
   console.error(`\nFAIL ${failed} (passed ${passed})`);

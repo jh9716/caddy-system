@@ -181,6 +181,19 @@ export function summarizeAdminCaddyLinkRoster(
   return summary;
 }
 
+export function groupAdminCaddyLinkRoster(
+  rows: AdminCaddyLinkRow[]
+): Array<{ team: string; rows: AdminCaddyLinkRow[] }> {
+  const groups: Array<{ team: string; rows: AdminCaddyLinkRow[] }> = [];
+  for (const row of rows) {
+    const team = row.caddy.team || "미지정";
+    const last = groups[groups.length - 1];
+    if (last && last.team === team) last.rows.push(row);
+    else groups.push({ team, rows: [row] });
+  }
+  return groups;
+}
+
 export function uniqueRosterTeams(caddies: Array<Pick<RosterCaddy, "team">>): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
