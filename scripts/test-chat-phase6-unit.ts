@@ -519,9 +519,14 @@ section("source wiring");
   assert(dispatch.includes("loadEnabledDevicePushTokens"), "batch native tokens");
   assert(dispatch.includes("selectChatPushRecipients"), "one recipient resolve");
   assert(dispatch.includes("!prefLoad.ok") && dispatch.includes("return empty(true)"), "prefs fail-closed skip");
+  assert(dispatch.includes("resolveChatNotifyMode(row.mode)"), "dispatch maps each user row");
+  assert(!dispatch.includes("chatNotifyPrefMap"), "dispatch does not collapse prefs by roomId");
   const route = fs.readFileSync("src/app/api/chat/push-dispatch/route.ts", "utf8");
   assert(route.includes("verifyChatInternalRequest"), "HMAC only");
   assert(!route.includes("resolveAuthUser"), "no session on dispatch");
+  assert(route.includes("replyToSenderUserId || body.replyToUserId"), "reply sender fallback kept");
+  const httpPrefs = fs.readFileSync("src/app/api/chat/notification-prefs/route.ts", "utf8");
+  assert(httpPrefs.includes("chatNotifyPrefMap(rows)"), "HTTP prefs still room-keyed for one user");
   const pref = fs.readFileSync("src/app/api/chat/rooms/[roomId]/notification/route.ts", "utf8");
   assert(pref.includes("canWriteChatNotifyPref"), "pref ACL");
   const client = fs.readFileSync("src/app/chat/ChatClient.tsx", "utf8");
@@ -615,6 +620,61 @@ async function extraAsync() {
     "all",
     [9, 40]
   );
+  const mixed = await loadChatNotifyPrefs(
+    {
+      chatRoomNotificationPreference: {
+        findMany: async () => [
+          { userId: 9, roomId: "all", mode: "MENTIONS" },
+          { userId: 40, roomId: "all", mode: "OFF" },
+        ],
+      },
+    } as never,
+    "all",
+    [9, 40]
+  );
+  assert(mixed.ok === true && mixed.prefs["9"] === "MENTIONS", "same room user 9 MENTIONS");
+  assert(mixed.ok === true && mixed.prefs["40"] === "OFF", "same room user 40 OFF");
+  const replyRecipients = selectChatPushRecipients({
+    event: {
+      roomId: "all",
+      seq: 5,
+      senderUserId: 8,
+      mentionAll: false,
+      mentionUserIds: [],
+      replyToUserId: 9,
+    },
+    candidateUserIds: [8, 9, 40],
+    prefs: mixed.ok ? mixed.prefs : {},
+  });
+  assert(replyRecipients.join(",") === "9", "MENTIONS reply recipient is 9 only");
+  const mentionRecipients = selectChatPushRecipients({
+    event: {
+      roomId: "all",
+      seq: 6,
+      senderUserId: 8,
+      mentionAll: false,
+      mentionUserIds: [9],
+      replyToUserId: null,
+    },
+    candidateUserIds: [8, 9, 40],
+    prefs: mixed.ok ? mixed.prefs : {},
+  });
+  assert(mentionRecipients.join(",") === "9", "MENTIONS direct mention recipient is 9 only");
+  const offMention = selectChatPushRecipients({
+    event: {
+      roomId: "all",
+      seq: 7,
+      senderUserId: 8,
+      mentionAll: false,
+      mentionUserIds: [40],
+      replyToUserId: 40,
+    },
+    candidateUserIds: [8, 9, 40],
+    prefs: mixed.ok ? mixed.prefs : {},
+  });
+  assert(!offMention.includes(40), "OFF user excluded even for mention/reply");
+  assert(!offMention.includes(8) && !replyRecipients.includes(8), "sender self-push none");
+
   assert(absent.ok === true && Object.keys(absent.prefs).length === 0, "prefs query ok empty");
   const absentRecipients = selectChatPushRecipients({
     event: {

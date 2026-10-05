@@ -10,7 +10,7 @@ import {
   selectChatPushRecipients,
   type ChatPushEvent,
 } from "@/lib/chatPushRecipients";
-import { chatNotifyPrefMap, type ChatNotifyMode } from "@/lib/chatNotificationPref";
+import { resolveChatNotifyMode, type ChatNotifyMode } from "@/lib/chatNotificationPref";
 import {
   CHAT_USERS_ALL_TAKE,
   isInvitableChatUser,
@@ -85,11 +85,8 @@ export async function loadChatNotifyPrefs(
       select: { userId: true, roomId: true, mode: true },
     });
     const byUser: Record<string, ChatNotifyMode> = {};
-    const mapped = chatNotifyPrefMap(
-      rows.map((row) => ({ roomId: row.roomId, mode: String(row.mode) }))
-    );
     for (const row of rows) {
-      byUser[String(row.userId)] = mapped[row.roomId] ?? "ALL";
+      byUser[String(row.userId)] = resolveChatNotifyMode(row.mode);
     }
     return { ok: true, prefs: byUser };
   } catch (e) {
