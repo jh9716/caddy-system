@@ -599,7 +599,7 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
     for (const roomId of this.listKnownRoomIds()) {
       try {
         await ns.get(ns.idFromName(roomId)).fetch(
-          new Request(`https://chat-room${path}`, {
+          new Request(`https://chat-room${path}?room=${encodeURIComponent(roomId)}`, {
             method: "POST",
             headers,
           })

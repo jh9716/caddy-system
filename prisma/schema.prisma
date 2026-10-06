@@ -394,6 +394,22 @@ enum ChatRoomNotificationMode {
   OFF
 }
 
+/// Chat photo staging + ACL metadata. Bytes live in private object storage, not Postgres.
+/// Message history stays in the ChatRoom Durable Object (`attachments_json` ids only).
+model ChatAttachment {
+  id           String    @id @default(uuid())
+  roomId       String
+  senderUserId Int
+  storageKey   String    @unique
+  mimeType     String
+  size         Int
+  createdAt    DateTime  @default(now())
+  consumedAt   DateTime?
+
+  @@index([roomId, createdAt])
+  @@index([senderUserId, consumedAt])
+}
+
 /// userId × roomId chat push preference. Missing row means ALL.
 model ChatRoomNotificationPreference {
   id     Int  @id @default(autoincrement())

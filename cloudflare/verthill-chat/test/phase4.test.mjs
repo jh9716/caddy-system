@@ -27,6 +27,13 @@ test("phase4 worker wiring", () => {
   assert.doesNotMatch(index, /FCM|prisma/i);
   assert.doesNotMatch(index, /DELETE FROM messages\s*;/);
   assert.match(index, /DELETE FROM messages WHERE seq = \? AND sent_at < \?/);
+  assert.match(index, /queueAttachmentCleanup/);
+  assert.match(index, /shouldPurgeChatAttachmentsOnDelete/);
+  assert.match(index, /SELECT seq, attachments_json FROM messages WHERE sent_at/);
+  assert.doesNotMatch(
+    index.slice(index.indexOf("private hideForMe"), index.indexOf("private deleteMessage")),
+    /queueAttachmentCleanup/
+  );
   assert.match(directory, /pokeKnownRooms/);
   assert.match(directory, /ALLOWED_ROOMS/);
   assert.match(directory, /ensureRetentionSweep/);

@@ -3,10 +3,10 @@ import { createHash } from "node:crypto";
 /** Store is allowed; every reuse must revalidate with the origin. */
 export const PRIVATE_PHOTO_CACHE_CONTROL = "private, no-cache";
 
-export type PrivatePhotoCacheKind = "n" | "r";
+export type PrivatePhotoCacheKind = "n" | "r" | "c";
 
 export type PrivatePhotoCacheMeta = {
-  id: number;
+  id: number | string;
   size: number;
   storageKey: string;
 };
