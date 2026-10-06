@@ -54,6 +54,7 @@
     "test:admin-caddy-link-roster-unit": "bash scripts/tsx-safe.sh scripts/test-admin-caddy-link-roster-unit.ts",
     "test:admin-caddy-link-summary-unit": "bash scripts/tsx-safe.sh scripts/test-admin-caddy-link-summary-unit.ts",
     "test:admin-manage-nav-unit": "bash scripts/tsx-safe.sh scripts/test-admin-manage-nav-unit.ts",
+    "test:admin-ops-workspace-unit": "bash scripts/tsx-safe.sh scripts/test-admin-ops-workspace-unit.ts",
     "test:login-unit": "bash scripts/tsx-safe.sh scripts/test-login-session-unit.ts",
     "test:password-login-security-unit": "bash scripts/tsx-safe.sh scripts/test-password-login-security-unit.ts",
     "test:admin-nextauth-ratelimit-unit": "bash scripts/tsx-safe.sh scripts/test-admin-nextauth-ratelimit-unit.ts",
