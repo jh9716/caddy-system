@@ -50,6 +50,14 @@ export const TOMBSTONE_ADMIN = "관리자가 메시지를 삭제했습니다.";
 export const REPLY_DELETED = "삭제된 메시지입니다.";
 export const REPLY_EXPIRED = "보관기간이 지난 메시지입니다.";
 export const DIRECTORY_TOMBSTONE_PREVIEW = "메시지가 삭제되었습니다.";
+export const CHAT_PHOTO_MAX = 3;
+export const CHAT_PHOTO_MAX_BYTES = 3 * 1024 * 1024;
+export const CHAT_PHOTO_PUSH_BODY = "사진을 보냈습니다.";
+export const CHAT_PHOTO_REPLY_PREVIEW = "사진";
+export const CHAT_ATTACHMENT_CLAIM_TTL_SEC = 15 * 60;
+export const CHAT_PHOTO_MIMES = ["image/jpeg", "image/png", "image/webp"] as const;
+export const CHAT_ATTACHMENT_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export type ChatSenderRole = "admin" | "caddy" | "leader";
 
@@ -67,6 +75,19 @@ export type ChatReplyTo = {
   state: ChatReplyState;
 };
 
+export type ChatPhotoMime = (typeof CHAT_PHOTO_MIMES)[number];
+
+export type ChatAttachment = {
+  id: string;
+  mimeType: string;
+  size: number;
+};
+
+export type ChatAttachmentIncoming = ChatAttachment & {
+  exp: number;
+  claim: string;
+};
+
 export type ChatMessage = {
   type: "message";
   clientMessageId: string;
@@ -78,6 +99,7 @@ export type ChatMessage = {
   seq?: number;
   mentions: ChatMention[];
   mentionAll: boolean;
+  attachments: ChatAttachment[];
   replyToSeq?: number | null;
   replyTo?: ChatReplyTo | null;
   deletionType?: ChatDeletionType | null;
@@ -281,6 +303,165 @@ export function parseStoredMentionAll(raw: unknown): boolean {
   return raw === true || raw === 1 || raw === "1";
 }
 
+export function isChatPhotoMime(raw: unknown): raw is ChatPhotoMime {
+  return (CHAT_PHOTO_MIMES as readonly string[]).includes(String(raw || ""));
+}
+
+export function parseStoredAttachments(raw: unknown): ChatAttachment[] {
+  if (raw == null || raw === "") return [];
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!Array.isArray(parsed)) return [];
+    const out: ChatAttachment[] = [];
+    const seen = new Set<string>();
+    for (const item of parsed) {
+      if (!item || typeof item !== "object") continue;
+      const rec = item as Record<string, unknown>;
+      const id = String(rec.id || "").trim();
+      const mimeType = String(rec.mimeType || "").trim();
+      const size = Number(rec.size);
+      if (!CHAT_ATTACHMENT_ID_RE.test(id) || seen.has(id)) continue;
+      if (!isChatPhotoMime(mimeType)) continue;
+      if (!Number.isInteger(size) || size <= 0 || size > CHAT_PHOTO_MAX_BYTES) continue;
+      seen.add(id);
+      out.push({ id, mimeType, size });
+      if (out.length >= CHAT_PHOTO_MAX) break;
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+export function parseIncomingAttachments(
+  raw: unknown
+):
+  | { ok: true; value: ChatAttachmentIncoming[] }
+  | { ok: false; code: string; message: string } {
+  if (raw == null) return { ok: true, value: [] };
+  if (!Array.isArray(raw)) {
+    return { ok: false, code: "invalid_attachments", message: "attachments required" };
+  }
+  if (raw.length > CHAT_PHOTO_MAX) {
+    return { ok: false, code: "too_many_attachments", message: "attachments max 3" };
+  }
+  const out: ChatAttachmentIncoming[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (!item || typeof item !== "object") {
+      return { ok: false, code: "invalid_attachments", message: "attachments required" };
+    }
+    const rec = item as Record<string, unknown>;
+    const id = String(rec.id || "").trim();
+    const mimeType = String(rec.mimeType || "").trim();
+    const size = Number(rec.size);
+    const exp = Number(rec.exp);
+    const claim = String(rec.claim || "").trim();
+    if (!CHAT_ATTACHMENT_ID_RE.test(id) || seen.has(id)) {
+      return { ok: false, code: "invalid_attachments", message: "attachments required" };
+    }
+    if (!isChatPhotoMime(mimeType)) {
+      return { ok: false, code: "invalid_attachments", message: "attachments required" };
+    }
+    if (!Number.isInteger(size) || size <= 0 || size > CHAT_PHOTO_MAX_BYTES) {
+      return { ok: false, code: "invalid_attachments", message: "attachments required" };
+    }
+    if (!Number.isInteger(exp) || exp <= 0 || !claim) {
+      return { ok: false, code: "invalid_attachments", message: "attachments required" };
+    }
+    seen.add(id);
+    out.push({ id, mimeType, size, exp, claim });
+  }
+  return { ok: true, value: out };
+}
+
+export function storedAttachmentsFromIncoming(
+  items: readonly ChatAttachmentIncoming[]
+): ChatAttachment[] {
+  return items.map(({ id, mimeType, size }) => ({ id, mimeType, size }));
+}
+
+export function canonicalChatAttachmentClaim(input: {
+  roomId: string;
+  attachmentId: string;
+  senderUserId: number;
+  mimeType: string;
+  size: number;
+  exp: number;
+}): string {
+  return [
+    "chat-att",
+    String(input.roomId || "").trim(),
+    String(input.attachmentId || "").trim(),
+    String(input.senderUserId),
+    String(input.mimeType || "").trim(),
+    String(input.size),
+    String(input.exp),
+  ].join("|");
+}
+
+function bytesToB64Url(bytes: Uint8Array): string {
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+
+function timingSafeEqualB64(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i)! ^ b.charCodeAt(i)!;
+  return diff === 0;
+}
+
+async function hmacSha256B64Url(secret: string, payload: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payload));
+  return bytesToB64Url(new Uint8Array(sig));
+}
+
+export async function signChatAttachmentClaim(
+  secret: string,
+  input: {
+    roomId: string;
+    attachmentId: string;
+    senderUserId: number;
+    mimeType: string;
+    size: number;
+    exp: number;
+  }
+): Promise<string> {
+  return hmacSha256B64Url(secret, canonicalChatAttachmentClaim(input));
+}
+
+export async function verifyChatAttachmentClaim(
+  secret: string,
+  attachment: ChatAttachmentIncoming,
+  ctx: { roomId: string; senderUserId: number; nowSec?: number }
+): Promise<boolean> {
+  if (!secret) return false;
+  const now = ctx.nowSec ?? Math.floor(Date.now() / 1000);
+  if (attachment.exp <= now) return false;
+  if (attachment.exp > now + CHAT_ATTACHMENT_CLAIM_TTL_SEC + 30) return false;
+  const expected = await hmacSha256B64Url(
+    secret,
+    canonicalChatAttachmentClaim({
+      roomId: ctx.roomId,
+      attachmentId: attachment.id,
+      senderUserId: ctx.senderUserId,
+      mimeType: attachment.mimeType,
+      size: attachment.size,
+      exp: attachment.exp,
+    })
+  );
+  return timingSafeEqualB64(expected, attachment.claim);
+}
+
 export function validateIncomingMessage(raw: unknown):
   | {
       ok: true;
@@ -289,6 +470,8 @@ export function validateIncomingMessage(raw: unknown):
         body: string;
         mentions: unknown;
         mentionAll: unknown;
+        replyToSeq: unknown;
+        attachments: ChatAttachmentIncoming[];
       };
     }
   | { ok: false; code: string; message: string } {
@@ -308,7 +491,9 @@ export function validateIncomingMessage(raw: unknown):
       message: "clientMessageId required",
     };
   }
-  if (body.length === 0) {
+  const attachments = parseIncomingAttachments(input.attachments);
+  if (!attachments.ok) return attachments;
+  if (body.length === 0 && attachments.value.length === 0) {
     return { ok: false, code: "invalid_body", message: "body required" };
   }
   if (body.length > BODY_MAX) {
@@ -326,6 +511,7 @@ export function validateIncomingMessage(raw: unknown):
       mentions: input.mentions,
       mentionAll: input.mentionAll,
       replyToSeq: input.replyToSeq,
+      attachments: attachments.value,
     },
   };
 }
@@ -388,9 +574,13 @@ export function tombstoneBody(deletionType: ChatDeletionType | null | undefined)
 export function directorySafePreview(input: {
   body?: string;
   deletionType?: ChatDeletionType | null;
+  attachments?: unknown;
 }): string {
   if (input.deletionType) return DIRECTORY_TOMBSTONE_PREVIEW;
-  return truncatePreview(String(input.body ?? ""));
+  const text = truncatePreview(String(input.body ?? ""));
+  if (text) return text;
+  if (parseStoredAttachments(input.attachments).length > 0) return CHAT_PHOTO_PUSH_BODY;
+  return "";
 }
 
 export function canDeleteForEveryone(input: {
@@ -411,12 +601,23 @@ export function canAdminDelete(role: string | null | undefined): boolean {
   return role === "admin";
 }
 
+export function replyPreviewFromBody(input: {
+  body?: string;
+  attachments?: unknown;
+}): string {
+  const text = truncatePreview(String(input.body || ""), 80);
+  if (text) return text;
+  if (parseStoredAttachments(input.attachments).length > 0) return CHAT_PHOTO_REPLY_PREVIEW;
+  return "";
+}
+
 export function replyTargetFromRow(input: {
   replyToSeq: number | null;
   targetSeq: number | null;
   targetSenderUserId?: number | null;
   targetSender?: string | null;
   targetBody?: string | null;
+  targetAttachments?: unknown;
   targetDeletionType?: unknown;
   targetHidden?: boolean;
 }): ChatReplyTo | null {
@@ -453,7 +654,10 @@ export function replyTargetFromRow(input: {
     seq: input.targetSeq,
     senderUserId: Number(input.targetSenderUserId || 0),
     sender: String(input.targetSender || ""),
-    preview: truncatePreview(String(input.targetBody || ""), 80),
+    preview: replyPreviewFromBody({
+      body: input.targetBody == null ? "" : String(input.targetBody),
+      attachments: input.targetAttachments,
+    }),
     state: "ok",
   };
 }

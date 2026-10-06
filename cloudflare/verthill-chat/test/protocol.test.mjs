@@ -37,6 +37,7 @@ test("worker stays isolated from Next/Neon/Vercel", () => {
   assert.match(index, /sender_role/);
   assert.match(index, /mentions_json/);
   assert.match(index, /mention_all/);
+  assert.match(index, /attachments_json/);
   assert.doesNotMatch(index, /trimHistory/);
   assert.doesNotMatch(index, /DELETE FROM messages\s*;/);
   assert.match(index, /DELETE FROM messages WHERE seq = \? AND sent_at < \?/);

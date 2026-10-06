@@ -1,4 +1,9 @@
-import type { ChatDeletionType, ChatReplyTo } from "../../cloudflare/verthill-chat/src/protocol";
+import type {
+  ChatAttachment,
+  ChatDeletionType,
+  ChatReplyTo,
+} from "../../cloudflare/verthill-chat/src/protocol";
+import { replyPreviewFromBody } from "../../cloudflare/verthill-chat/src/protocol";
 
 export const DELETE_FOR_EVERYONE_WINDOW_MS = 10 * 60 * 1000;
 export const MESSAGE_RETENTION_DAYS = 180;
@@ -20,11 +25,14 @@ export type ChatLineBase = {
   seq?: number;
   mentions: number[];
   mentionAll: boolean;
+  attachments?: ChatAttachment[];
   replyToSeq?: number | null;
   replyTo?: ChatLineReply | null;
   deletionType?: ChatDeletionType | null;
   deletedAt?: string | null;
 };
+
+export { replyPreviewFromBody };
 
 export function displayTombstone(deletionType: ChatDeletionType | null | undefined): string {
   if (deletionType === "admin") return TOMBSTONE_ADMIN;
@@ -158,6 +166,7 @@ export function applyDeletedLine<T extends ChatLineBase>(
           body: "",
           mentions: [],
           mentionAll: false,
+          attachments: [],
           deletionType: patch.deletionType,
           deletedAt: patch.deletedAt,
         }

@@ -4829,6 +4829,112 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
 .vh-chat-send {
   flex: 0 0 auto;
 }
+.vh-chat-photo-btn {
+  flex: 0 0 auto;
+  min-width: 44px;
+  min-height: 44px;
+  border: 1px solid var(--vh-border);
+  border-radius: 12px;
+  background: var(--vh-paper);
+  color: var(--vh-green-800);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+.vh-chat-pending-photos {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+}
+.vh-chat-pending-photo {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  flex: 0 0 auto;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #e8eee9;
+}
+.vh-chat-pending-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.vh-chat-pending-x {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(22, 48, 40, 0.72);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+}
+.vh-chat-photos {
+  display: grid;
+  gap: 6px;
+  margin: 4px 0 6px;
+}
+.vh-chat-photo-thumb {
+  position: relative;
+  display: block;
+  width: min(220px, 68vw);
+  padding: 0;
+  border: 0;
+  background: #e8eee9;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.vh-chat-photo-thumb img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 220px;
+  object-fit: cover;
+}
+.vh-chat-photo-thumb img.is-failed {
+  display: none;
+}
+.vh-chat-photo-fallback {
+  display: none;
+  padding: 18px 10px;
+  font-size: 0.72rem;
+  color: var(--vh-muted);
+}
+.vh-chat-photo-thumb img.is-failed + .vh-chat-photo-fallback {
+  display: block;
+}
+.vh-chat-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(10, 18, 16, 0.86);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.vh-chat-lightbox img {
+  max-width: min(96vw, 720px);
+  max-height: 86dvh;
+  object-fit: contain;
+  border-radius: 8px;
+}
+.vh-chat-lightbox-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  border: 0;
+  border-radius: 8px;
+  background: #fff;
+  color: #163028;
+  font-weight: 800;
+  padding: 8px 10px;
+}
 .vh-chat-reconnect {
   margin-top: 8px;
 }

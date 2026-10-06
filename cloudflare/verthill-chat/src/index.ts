@@ -30,11 +30,14 @@ import {
   mentionsToWire,
   parseDeletionType,
   parseOptionalSeq,
+  parseStoredAttachments,
   parseStoredMentionAll,
   parseStoredMentions,
   replyTargetFromRow,
   resolveMentionAll,
   senderRoleFromClaims,
+  storedAttachmentsFromIncoming,
+  verifyChatAttachmentClaim,
   validateIncomingDelete,
   validateIncomingHide,
   validateIncomingHistory,
@@ -406,6 +409,13 @@ export class ChatRoom extends DurableObject<Env> {
     } catch {
       // already present
     }
+    try {
+      this.ctx.storage.sql.exec(
+        `ALTER TABLE messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'`
+      );
+    } catch {
+      // already present
+    }
     this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS hidden_messages (
         user_id INTEGER NOT NULL,
@@ -559,6 +569,7 @@ export class ChatRoom extends DurableObject<Env> {
       mentions: unknown;
       mentionAll: unknown;
       replyToSeq: unknown;
+      attachments: import("./protocol").ChatAttachmentIncoming[];
     }
   ) {
     const sentAt = new Date().toISOString();
@@ -599,10 +610,30 @@ export class ChatRoom extends DurableObject<Env> {
       }
     }
 
+    const incomingAttachments = value.attachments || [];
+    if (incomingAttachments.length > 0) {
+      const secret = String(this.env.CHAT_AUTH_SECRET || "").trim();
+      for (const attachment of incomingAttachments) {
+        const ok = await verifyChatAttachmentClaim(secret, attachment, {
+          roomId: attach.roomId,
+          senderUserId: attach.claims.userId,
+        });
+        if (!ok) {
+          sendJson(ws, {
+            type: "error",
+            code: "invalid_attachment",
+            message: "attachment rejected",
+          });
+          return;
+        }
+      }
+    }
+    const attachments = storedAttachmentsFromIncoming(incomingAttachments);
+
     this.ctx.storage.sql.exec(
       `INSERT INTO messages
-        (client_message_id, sender_user_id, sender, sender_role, body, sent_at, mentions_json, mention_all, reply_to_seq)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (client_message_id, sender_user_id, sender, sender_role, body, sent_at, mentions_json, mention_all, reply_to_seq, attachments_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       value.clientMessageId,
       attach.claims.userId,
       attach.claims.displayName,
@@ -611,13 +642,17 @@ export class ChatRoom extends DurableObject<Env> {
       sentAt,
       JSON.stringify(mentions),
       mentionAll ? 1 : 0,
-      replyToSeq
+      replyToSeq,
+      JSON.stringify(attachments)
     );
     const inserted = this.loadMessageByClientId(value.clientMessageId);
     if (!inserted) return;
     this.broadcastVisible(inserted);
     void this.notifyDirectoryMessage(attach.roomId, inserted);
     this.queueChatPushDispatch(attach.roomId, inserted);
+    if (attachments.length > 0) {
+      void this.consumeChatAttachments(attachments.map((item) => item.id));
+    }
   }
 
   webSocketClose(ws: WebSocket) {
@@ -665,9 +700,10 @@ export class ChatRoom extends DurableObject<Env> {
   private messageSelectSql() {
     return `SELECT m.seq, m.client_message_id, m.sender_user_id, m.sender, m.sender_role,
               m.body, m.sent_at, m.mentions_json, m.mention_all, m.reply_to_seq,
-              m.deleted_at, m.deletion_type,
+              m.attachments_json, m.deleted_at, m.deletion_type,
               r.seq AS reply_seq, r.sender_user_id AS reply_sender_user_id,
               r.sender AS reply_sender, r.body AS reply_body,
+              r.attachments_json AS reply_attachments_json,
               r.deletion_type AS reply_deletion_type,
               rh.seq AS reply_hidden
             FROM messages m
@@ -691,6 +727,7 @@ export class ChatRoom extends DurableObject<Env> {
       seq: Number(row.seq),
       mentions: deletionType ? [] : parseStoredMentions(row.mentions_json),
       mentionAll: deletionType ? false : parseStoredMentionAll(row.mention_all),
+      attachments: deletionType ? [] : parseStoredAttachments(row.attachments_json),
       replyToSeq,
       replyTo: replyTargetFromRow({
         replyToSeq,
@@ -698,6 +735,7 @@ export class ChatRoom extends DurableObject<Env> {
         targetSenderUserId: Number(row.reply_sender_user_id || 0),
         targetSender: row.reply_sender == null ? "" : String(row.reply_sender),
         targetBody: row.reply_body == null ? "" : String(row.reply_body),
+        targetAttachments: row.reply_attachments_json,
         targetDeletionType: row.reply_deletion_type,
         targetHidden: row.reply_hidden != null && row.reply_hidden !== "",
       }),
@@ -711,9 +749,10 @@ export class ChatRoom extends DurableObject<Env> {
       .exec(
         `SELECT m.seq, m.client_message_id, m.sender_user_id, m.sender, m.sender_role,
                 m.body, m.sent_at, m.mentions_json, m.mention_all, m.reply_to_seq,
-                m.deleted_at, m.deletion_type,
+                m.attachments_json, m.deleted_at, m.deletion_type,
                 r.seq AS reply_seq, r.sender_user_id AS reply_sender_user_id,
                 r.sender AS reply_sender, r.body AS reply_body,
+                r.attachments_json AS reply_attachments_json,
                 r.deletion_type AS reply_deletion_type
          FROM messages m
          LEFT JOIN messages r ON r.seq = m.reply_to_seq
@@ -873,6 +912,7 @@ export class ChatRoom extends DurableObject<Env> {
        SET body = '',
            mentions_json = '[]',
            mention_all = 0,
+           attachments_json = '[]',
            deleted_at = ?,
            deletion_type = ?,
            deleted_by_user_id = ?
@@ -988,7 +1028,7 @@ export class ChatRoom extends DurableObject<Env> {
   } | null {
     const row = this.ctx.storage.sql
       .exec(
-        `SELECT seq, sender_user_id, sender, sender_role, body, sent_at, deletion_type
+        `SELECT seq, sender_user_id, sender, sender_role, body, sent_at, deletion_type, attachments_json
          FROM messages
          ORDER BY seq DESC
          LIMIT 1`
@@ -1001,6 +1041,7 @@ export class ChatRoom extends DurableObject<Env> {
       preview: directorySafePreview({
         body: String(row.body || ""),
         deletionType,
+        attachments: row.attachments_json,
       }),
       senderUserId: Number(row.sender_user_id || 0),
       senderName: String(row.sender || ""),
@@ -1074,6 +1115,33 @@ export class ChatRoom extends DurableObject<Env> {
     await this.notifyDirectoryPreview(roomId, latest);
   }
 
+  private async consumeChatAttachments(attachmentIds: string[]) {
+    const pushUrl = String(this.env.CHAT_PUSH_DISPATCH_URL || "").trim();
+    if (!pushUrl || attachmentIds.length === 0) return;
+    let consumeUrl = "";
+    try {
+      const parsed = new URL(pushUrl);
+      parsed.pathname = "/api/chat/attachments/consume";
+      parsed.search = "";
+      consumeUrl = parsed.toString();
+    } catch {
+      return;
+    }
+    try {
+      const headers = await internalAuthHeaders(
+        chatInternalSecret(this.env),
+        "/api/chat/attachments/consume"
+      );
+      await fetch(consumeUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ attachmentIds }),
+      });
+    } catch {
+      // persist already succeeded
+    }
+  }
+
   private queueChatPushDispatch(roomId: string, message: ChatMessage) {
     try {
       this.ctx.waitUntil(this.sendChatPushDispatch(roomId, message));
@@ -1110,6 +1178,7 @@ export class ChatRoom extends DurableObject<Env> {
           preview: directorySafePreview({
             body: message.body,
             deletionType: message.deletionType,
+            attachments: message.attachments,
           }),
           mentionAll: message.mentionAll === true,
           mentionUserIds: (message.mentions || []).map((m) => m.userId),
@@ -1133,6 +1202,7 @@ export class ChatRoom extends DurableObject<Env> {
       preview: directorySafePreview({
         body: message.body,
         deletionType: message.deletionType,
+        attachments: message.attachments,
       }),
       senderUserId: message.senderUserId,
       senderName: message.sender,
