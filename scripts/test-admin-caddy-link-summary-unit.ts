@@ -73,12 +73,53 @@ console.log("== summary join ==");
   assert(accountLinkEntryForCaddy(null, 1) === null, "missing summary is null");
 }
 
+console.log("== multi candidate is display-only candidate ==");
+{
+  const multi = buildDashboardAccountLinkSummary({
+    activeCaddyIds: [2, 3, 4],
+    linked: [],
+    pending: [{ candidateCaddyIds: [2, 3], username: "kakao_multi" }],
+  });
+  assert(multi.byCaddyId["2"].status === "PENDING", "candidate 2 stays PENDING");
+  assert(multi.byCaddyId["3"].status === "PENDING", "candidate 3 stays PENDING");
+  assert(multi.byCaddyId["2"].username === "kakao_multi", "candidate 2 username");
+  assert(multi.byCaddyId["3"].username === "kakao_multi", "candidate 3 username");
+  assert(multi.byCaddyId["4"].status === "UNLINKED", "non-candidate unlinked");
+  assert(
+    DASHBOARD_ACCOUNT_LINK_LABELS[multi.byCaddyId["2"].status] ===
+      "연결 승인 후보",
+    "candidate 2 full label"
+  );
+  assert(
+    DASHBOARD_ACCOUNT_LINK_LABELS[multi.byCaddyId["3"].status] ===
+      "연결 승인 후보",
+    "candidate 3 full label"
+  );
+  const linkedWinsMulti = buildDashboardAccountLinkSummary({
+    activeCaddyIds: [2, 3],
+    linked: [{ caddyId: 2, username: "kakao_linked" }],
+    pending: [{ candidateCaddyIds: [2, 3], username: "kakao_pending" }],
+  });
+  assert(linkedWinsMulti.byCaddyId["2"].status === "LINKED", "LINKED wins shared candidate");
+  assert(
+    linkedWinsMulti.byCaddyId["2"].username === "kakao_linked",
+    "LINKED username kept"
+  );
+  assert(
+    linkedWinsMulti.byCaddyId["3"].status === "PENDING",
+    "other candidate still PENDING"
+  );
+}
+
 console.log("== compact marks ==");
 assert(compactAccountLinkMark("LINKED") === "🔗", "linked icon");
-assert(compactAccountLinkMark("PENDING") === "대기", "pending compact");
+assert(compactAccountLinkMark("PENDING") === "후보", "pending compact is 후보");
 assert(compactAccountLinkMark("UNLINKED") === "미", "unlinked compact");
 assert(DASHBOARD_ACCOUNT_LINK_LABELS.LINKED === "연결됨", "연결됨 label");
-assert(DASHBOARD_ACCOUNT_LINK_LABELS.PENDING === "승인대기", "승인대기 label");
+assert(
+  DASHBOARD_ACCOUNT_LINK_LABELS.PENDING === "연결 승인 후보",
+  "pending label is candidate, not 승인대기"
+);
 assert(DASHBOARD_ACCOUNT_LINK_LABELS.UNLINKED === "미연결", "미연결 label");
 
 console.log("== dashboard cell keeps availability ==");
@@ -102,7 +143,26 @@ console.log("== dashboard cell keeps availability ==");
       account: { status: "PENDING", username: "kakao_pending" },
     })
   );
-  assert(pending.includes("대기") && pending.includes("is-pending"), "pending mark");
+  assert(pending.includes(">후보<") && pending.includes("is-pending"), "pending mark");
+  assert(pending.includes("연결 승인 후보"), "pending title is candidate");
+  assert(!pending.includes("승인대기"), "dashboard cell does not say 승인대기");
+  const candidateA = renderToStaticMarkup(
+    createElement(TeamBoardPerson, {
+      row: { ...sampleRow, id: 2, name: "후보갑" },
+      account: { status: "PENDING", username: "kakao_multi" },
+    })
+  );
+  const candidateB = renderToStaticMarkup(
+    createElement(TeamBoardPerson, {
+      row: { ...sampleRow, id: 3, name: "후보을" },
+      account: { status: "PENDING", username: "kakao_multi" },
+    })
+  );
+  assert(candidateA.includes(">후보<") && candidateB.includes(">후보<"), "both candidates compact");
+  assert(
+    candidateA.includes("연결 승인 후보") && candidateB.includes("연결 승인 후보"),
+    "both candidates full label"
+  );
   const unlinked = renderToStaticMarkup(
     createElement(TeamBoardPerson, {
       row: sampleRow,
@@ -142,6 +202,9 @@ console.log("== O(1) fetch + no dashboard coupling ==");
   assert(!service.includes("for (const caddy"), "no per-caddy query loop");
   assert(!summaryApi.includes("redirect("), "no redirect");
   assert(usersPage.includes("/api/caddy-link-requests?status=PENDING"), "users page APIs unchanged");
+  assert(usersPage.includes("승인대기"), "users page 승인대기 UX kept");
+  assert(!ui.includes("승인대기"), "dashboard UI has no 승인대기 copy");
+  assert(ui.includes("계정 {DASHBOARD_ACCOUNT_LINK_LABELS[selectedAccount.status]}"), "modal uses summary labels");
   assert(!usersPage.includes("autoApprove"), "no auto-approve");
   assert(
     !service.includes("@/lib/caddyLinkRequest\"") &&

@@ -24,12 +24,13 @@ export type DashboardAccountLinkSummary = {
 export const DASHBOARD_ACCOUNT_LINK_SUMMARY_PATH =
   "/api/manage/account-link-summary";
 
+/** 대시보드 표시용. PENDING은 최종 대상이 아니라 candidate 목록이다. */
 export const DASHBOARD_ACCOUNT_LINK_LABELS: Record<
   DashboardAccountLinkStatus,
   string
 > = {
   LINKED: "연결됨",
-  PENDING: "승인대기",
+  PENDING: "연결 승인 후보",
   UNLINKED: "미연결",
 };
 
@@ -90,6 +91,6 @@ export function compactAccountLinkMark(
   status: DashboardAccountLinkStatus
 ): string {
   if (status === "LINKED") return "🔗";
-  if (status === "PENDING") return "대기";
+  if (status === "PENDING") return "후보";
   return "미";
 }
