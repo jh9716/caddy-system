@@ -840,7 +840,9 @@ section("기존 관리자 dashboard access policy");
   assert(/auth\.role !== "admin"/.test(layout), "layout admin only");
   assert(/role !== "admin"/.test(mw.split('pathname.startsWith("/manage")')[1] || mw), "middleware /manage admin");
   assert(/requireAdmin/.test(api), "dashboard GET requireAdmin");
-  assert(/AdminOpsDashboard/.test(page), "/manage가 V2 대시보드 사용");
+  assert(/ManageOpsWorkspace/.test(page), "/manage가 운영 워크스페이스 사용");
+  const workspace = readSrc("src/components/manage/ManageOpsWorkspace.tsx");
+  assert(/AdminOpsDashboard/.test(workspace), "status 탭이 V2 대시보드 사용");
   assert(!/AppRole = /.test(api), "새 role 타입 없음");
   const dashUi = readSrc("src/components/manage/AdminOpsDashboard.tsx");
   assert(

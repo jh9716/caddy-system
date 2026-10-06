@@ -39,7 +39,6 @@ assert(
     [
       "/manage",
       "/manage/caddies",
-      "/manage/availability",
       "/manage/off-requests",
       "/manage/assignments",
       "/board",
@@ -53,7 +52,7 @@ assert(
 );
 assert(
   ADMIN_MAIN_NAV.map((i) => i.label).join(",") ===
-    "대시보드,캐디 관리,가용표,휴무 신청,자동배치,배치표,공지,채팅,코스 제보,스케줄,관리도구",
+    "대시보드,캐디 관리,휴무 신청,자동배치,배치표,공지,채팅,코스 제보,스케줄,관리도구",
   "main labels"
 );
 
@@ -69,6 +68,14 @@ assert(!isAdminToolPath("/manage"), "dashboard is not a tool");
 
 console.log("== active highlight ==");
 assert(activeAdminMainHref("/manage") === "/manage", "dashboard active");
+assert(
+  activeAdminMainHref("/manage/availability") === "/manage",
+  "availability route highlights 대시보드"
+);
+assert(
+  ADMIN_MAIN_NAV.every((i) => i.href !== "/manage/availability"),
+  "가용표 is not a main nav item"
+);
 assert(
   activeAdminMainHref("/manage/assignments") === "/manage/assignments",
   "자동배치 active"
@@ -138,6 +145,7 @@ const routes = [
   "src/app/manage/privacy-requests/page.tsx",
   "src/app/manage/staff-accounts/page.tsx",
   "src/app/manage/tools/page.tsx",
+  "src/app/manage/availability/page.tsx",
 ];
 for (const file of routes) {
   assert(fs.existsSync(path.resolve(file)), `kept ${file}`);
@@ -152,6 +160,10 @@ assert(shell.includes('href: "/manage/caddies"'), "bottom 캐디 kept");
 assert(shell.includes('href: "#menu"'), "bottom 메뉴 kept");
 assert(shell.includes("/manage/tools"), "prefetch/hub path");
 assert(!shell.includes('label: "캐디 검색"'), "shell no longer lists 캐디 검색");
+assert(!shell.includes("/manage/availability"), "shell no longer prefetches 가용표");
+const avPage = read("src/app/manage/availability/page.tsx");
+assert(avPage.includes("ManageAvailabilityPanel"), "availability route still renders panel");
+assert(!avPage.includes("redirect("), "availability route does not redirect");
 const mw = read("src/middleware.ts");
 assert(mw.includes('pathname.startsWith("/manage")'), "middleware manage gate unchanged");
 assert(mw.includes("/manage/staff-accounts"), "middleware staff-accounts gate kept");

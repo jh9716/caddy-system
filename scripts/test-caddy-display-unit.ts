@@ -62,7 +62,7 @@ const uiFiles = [
   "src/app/manage/assignments/preview/page.tsx",
   "src/app/manage/caddies/page.tsx",
   "src/app/manage/users/page.tsx",
-  "src/app/manage/availability/page.tsx",
+  "src/components/manage/ManageAvailabilityPanel.tsx",
   "src/app/assignments/page.tsx",
 ];
 for (const rel of uiFiles) {

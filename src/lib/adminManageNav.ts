@@ -98,16 +98,15 @@ export function isAdminToolPath(pathname: string): boolean {
 }
 
 export const ADMIN_MAIN_NAV: readonly AdminNavItem[] = [
-  { href: "/manage", label: "대시보드", match: (p) => p === "/manage" },
+  {
+    href: "/manage",
+    label: "대시보드",
+    match: (p) => p === "/manage" || pathStartsWith(p, "/manage/availability"),
+  },
   {
     href: "/manage/caddies",
     label: "캐디 관리",
     match: (p) => pathStartsWith(p, "/manage/caddies"),
-  },
-  {
-    href: "/manage/availability",
-    label: "가용표",
-    match: (p) => pathStartsWith(p, "/manage/availability"),
   },
   {
     href: "/manage/off-requests",

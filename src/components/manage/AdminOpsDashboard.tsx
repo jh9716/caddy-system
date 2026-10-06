@@ -298,10 +298,44 @@ function fetchDashboard(ymd: string, refresh = false): Promise<Response> {
   });
 }
 
-export default function AdminOpsDashboard() {
-  const [date, setDate] = useState(todayYmd);
+export default function AdminOpsDashboard({
+  date: controlledDate,
+  onDateChange,
+}: {
+  date?: string;
+  onDateChange?: (ymd: string) => void;
+} = {}) {
+  const [date, setDateState] = useState(() =>
+    controlledDate && /^\d{4}-\d{2}-\d{2}$/.test(controlledDate)
+      ? controlledDate
+      : todayYmd()
+  );
+
+  useEffect(() => {
+    if (
+      controlledDate &&
+      /^\d{4}-\d{2}-\d{2}$/.test(controlledDate) &&
+      controlledDate !== date
+    ) {
+      setDateState(controlledDate);
+    }
+  }, [controlledDate, date]);
+
+  const setDate = useCallback(
+    (next: string | ((prev: string) => string)) => {
+      setDateState((prev) => {
+        const value = typeof next === "function" ? next(prev) : next;
+        if (value !== prev) onDateChange?.(value);
+        return value;
+      });
+    },
+    [onDateChange]
+  );
   const [data, setData] = useState<AdminOpsDashboardView | null>(() => {
-    const ymd = todayYmd();
+    const ymd =
+      controlledDate && /^\d{4}-\d{2}-\d{2}$/.test(controlledDate)
+        ? controlledDate
+        : todayYmd();
     return (
       peekLastNamespaceResource<DashboardResponse>(
         CLIENT_RESOURCE.DASHBOARD,
