@@ -5,11 +5,21 @@ import {
   courseReportPhotoFileId,
   prepareCourseReportPhoto,
 } from "@/lib/courseReportPhotoClient";
+import type { ChatPhotoDirectResult } from "@/lib/chatPhotoDirectClient";
 import { CHAT_PHOTO_MAX } from "@/lib/chatPhotoConstants";
 
 export const CHAT_PHOTO_UPLOAD_CONCURRENCY = 3;
 
 export type ChatPendingPhotoStatus = "preparing" | "ready" | "failed";
+export type ChatPhotoSendPhase = "idle" | "prepare" | "put" | "finalize" | "done" | "error";
+
+export type ChatPendingPhotoSend = {
+  phase: ChatPhotoSendPhase;
+  progress: number;
+  attachmentId?: string;
+  result?: ChatPhotoDirectResult;
+  error?: string;
+};
 
 export type ChatPendingPhoto = {
   key: string;
@@ -19,6 +29,7 @@ export type ChatPendingPhoto = {
   fingerprint: string;
   status: ChatPendingPhotoStatus;
   error?: string;
+  send?: ChatPendingPhotoSend;
 };
 
 export function instantChatPhotoPicks(
@@ -105,11 +116,44 @@ export function applyPreparedChatPhoto(
   return {
     items: prev.map((row) =>
       row.key === prepared.key
-        ? { ...row, blob: prepared.blob, fingerprint: prepared.fingerprint, status: "ready" }
+        ? {
+            ...row,
+            blob: prepared.blob,
+            fingerprint: prepared.fingerprint,
+            status: "ready",
+            send: row.send,
+          }
         : row
     ),
     note: "",
   };
+}
+
+export function applyChatPhotoSendProgress(
+  prev: ChatPendingPhoto[],
+  progress: {
+    key: string;
+    phase: ChatPhotoSendPhase;
+    progress: number;
+    attachmentId?: string;
+    error?: string;
+    result?: ChatPhotoDirectResult;
+  }
+): ChatPendingPhoto[] {
+  return prev.map((row) =>
+    row.key === progress.key
+      ? {
+          ...row,
+          send: {
+            phase: progress.phase,
+            progress: progress.progress,
+            attachmentId: progress.attachmentId ?? row.send?.attachmentId,
+            result: progress.result ?? row.send?.result,
+            error: progress.error,
+          },
+        }
+      : row
+  );
 }
 
 export async function mapBoundedSettled<T, R>(

@@ -396,18 +396,27 @@ enum ChatRoomNotificationMode {
 
 /// Chat photo staging + ACL metadata. Bytes live in private object storage, not Postgres.
 /// Message history stays in the ChatRoom Durable Object (`attachments_json` ids only).
+/// Chat photo direct-upload lifecycle. Existing Phase 1 rows stay READY.
+enum ChatAttachmentUploadState {
+  PENDING
+  READY
+}
+
 model ChatAttachment {
-  id           String    @id @default(uuid())
+  id           String                     @id @default(uuid())
   roomId       String
   senderUserId Int
-  storageKey   String    @unique
+  storageKey   String                     @unique
   mimeType     String
   size         Int
-  createdAt    DateTime  @default(now())
+  createdAt    DateTime                   @default(now())
   consumedAt   DateTime?
+  /// PENDING = signed PUT issued, not finalized. READY = magic-byte validated.
+  uploadState  ChatAttachmentUploadState  @default(READY)
 
   @@index([roomId, createdAt])
   @@index([senderUserId, consumedAt])
+  @@index([uploadState, createdAt])
 }
 
 /// userId × roomId chat push preference. Missing row means ALL.

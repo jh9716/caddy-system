@@ -27,6 +27,7 @@ import {
 } from "@/lib/chatPhase4";
 import type { ChatAttachment } from "../../../cloudflare/verthill-chat/src/protocol";
 import {
+  applyChatPhotoSendProgress,
   applyPreparedChatPhoto,
   CHAT_PHOTO_ACCEPT,
   CHAT_PHOTO_MAX,
@@ -37,6 +38,7 @@ import {
   mapBoundedSettled,
   prepareChatPendingPhoto,
   readyChatPhotosForUpload,
+  uploadChatPhotoDirect,
   type ChatPendingPhoto,
 } from "@/lib/chatPhotoClient";
 import { chatPhotoNow, markChatPhotoTiming } from "@/lib/chatPhotoTiming";
@@ -1136,30 +1138,24 @@ export default function ChatClient() {
   async function uploadPendingPhotos(roomId: string, items: PendingChatPhoto[]) {
     const ready = readyChatPhotosForUpload(items);
     const uploadStarted = chatPhotoNow();
-    const settled = await mapBoundedSettled(ready, CHAT_PHOTO_UPLOAD_CONCURRENCY, async (item, i) => {
-      const blob = item.blob;
-      const mime = (blob.type || "image/jpeg").toLowerCase();
-      const ext = mime.includes("png") ? "png" : mime.includes("webp") ? "webp" : "jpg";
-      const fd = new FormData();
-      fd.append("file", blob, `chat-${i}.${ext}`);
-      const res = await fetch(`/api/chat/rooms/${encodeURIComponent(roomId)}/attachments`, {
-        method: "POST",
-        credentials: "include",
-        body: fd,
+    const settled = await mapBoundedSettled(ready, CHAT_PHOTO_UPLOAD_CONCURRENCY, async (item) => {
+      const result = await uploadChatPhotoDirect(roomId, item, {
+        onProgress: (progress) => {
+          setPendingPhotoList(applyChatPhotoSendProgress(pendingPhotosRef.current, progress));
+        },
       });
-      const data = await res.json().catch(() => null);
-      if (!res.ok || !data?.photo?.id || !data.photo.claim) {
-        throw new Error(data?.message || "사진 업로드에 실패했습니다.");
-      }
-      return {
-        id: String(data.photo.id),
-        mimeType: String(data.photo.mimeType || "image/jpeg"),
-        size: Number(data.photo.size || blob.size),
-        exp: Number(data.photo.exp),
-        claim: String(data.photo.claim),
-      };
+      setPendingPhotoList(
+        applyChatPhotoSendProgress(pendingPhotosRef.current, {
+          key: item.key,
+          phase: "done",
+          progress: 100,
+          attachmentId: result.id,
+          result,
+        })
+      );
+      return result;
     });
-    markChatPhotoTiming("upload_post", uploadStarted);
+    markChatPhotoTiming("upload_direct", uploadStarted);
     const failed = settled.find((row) => row.status === "rejected");
     if (failed && failed.status === "rejected") {
       throw failed.reason instanceof Error
@@ -1268,6 +1264,7 @@ export default function ChatClient() {
     const reply = replyTo;
     setSending(true);
     setError("");
+    const sendStarted = chatPhotoNow();
     let uploaded: Array<ChatAttachment & { exp: number; claim: string }> = [];
     try {
       if (photos.length > 0) {
@@ -1315,9 +1312,10 @@ export default function ChatClient() {
       status: "sending",
     });
     try {
-      const sendStarted = chatPhotoNow();
+      const wsStarted = chatPhotoNow();
       await sendCurrent(body, clientMessageId, tokens, mentionAll, reply?.seq, uploaded);
-      markChatPhotoTiming("message_ws_send", sendStarted);
+      markChatPhotoTiming("message_ws_send", wsStarted);
+      markChatPhotoTiming("total_send", sendStarted);
     } catch {
       setLines((prev) =>
         prev.map((l) =>
@@ -1884,9 +1882,12 @@ export default function ChatClient() {
                   <div
                     key={item.key}
                     className={
-                      item.status === "failed"
+                      item.status === "failed" || item.send?.phase === "error"
                         ? "vh-chat-pending-photo is-failed"
-                        : item.status === "preparing"
+                        : item.status === "preparing" ||
+                            item.send?.phase === "prepare" ||
+                            item.send?.phase === "put" ||
+                            item.send?.phase === "finalize"
                           ? "vh-chat-pending-photo is-preparing"
                           : "vh-chat-pending-photo"
                     }
@@ -1896,7 +1897,18 @@ export default function ChatClient() {
                     {item.status === "preparing" ? (
                       <span className="vh-chat-pending-status">처리 중</span>
                     ) : null}
-                    {item.status === "failed" ? (
+                    {item.send?.phase === "prepare" ? (
+                      <span className="vh-chat-pending-status">준비 중</span>
+                    ) : null}
+                    {item.send?.phase === "put" ? (
+                      <span className="vh-chat-pending-status">
+                        {Math.max(0, Math.min(100, item.send.progress))}%
+                      </span>
+                    ) : null}
+                    {item.send?.phase === "finalize" ? (
+                      <span className="vh-chat-pending-status">확인 중</span>
+                    ) : null}
+                    {item.status === "failed" || item.send?.phase === "error" ? (
                       <span className="vh-chat-pending-status">실패</span>
                     ) : null}
                     <button

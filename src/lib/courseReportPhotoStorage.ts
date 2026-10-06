@@ -30,6 +30,23 @@ export type PhotoOpenOptions = {
   abortSignal?: AbortSignal;
 };
 
+export type PhotoSignedPutUrl = {
+  uploadUrl: string;
+  expiresAt: number;
+};
+
+export type PhotoSignedPutInput = {
+  pathname: string;
+  contentType: string;
+  maximumSizeInBytes: number;
+  validUntilMs: number;
+};
+
+export type PhotoObjectMeta = {
+  size: number;
+  contentType: string;
+};
+
 export type CourseReportPhotoStore = {
   configured: boolean;
   put(key: string, bytes: Uint8Array, mimeType: string): Promise<void>;
@@ -37,6 +54,15 @@ export type CourseReportPhotoStore = {
   /** Official Blob stream. GET uses this so the API does not buffer the whole object first. */
   open?(key: string, opts?: PhotoOpenOptions): Promise<PhotoObjectBody | null>;
   delete(key: string): Promise<void>;
+  /** Size/contentType only. Never expose store URLs or credentials. */
+  head(key: string): Promise<PhotoObjectMeta | null>;
+  /** First maxBytes only. Must not buffer the rest of the object. */
+  readPrefix(key: string, maxBytes: number): Promise<Uint8Array | null>;
+  /**
+   * Exact-pathname private PUT URL. Implementations must never return store
+   * credentials or clientSigningToken — only the finished presigned URL.
+   */
+  createSignedPutUrl?(input: PhotoSignedPutInput): Promise<PhotoSignedPutUrl>;
 };
 
 function envNonEmpty(name: string): boolean {
@@ -86,6 +112,20 @@ const unconfigured: CourseReportPhotoStore = {
       503
     );
   },
+  async head() {
+    throw new CourseReportPhotoStorageError(
+      "storage_not_configured",
+      "사진 저장소가 설정되지 않았습니다.",
+      503
+    );
+  },
+  async readPrefix() {
+    throw new CourseReportPhotoStorageError(
+      "storage_not_configured",
+      "사진 저장소가 설정되지 않았습니다.",
+      503
+    );
+  },
   async delete() {
     throw new CourseReportPhotoStorageError(
       "storage_not_configured",
@@ -94,6 +134,95 @@ const unconfigured: CourseReportPhotoStore = {
     );
   },
 };
+
+export type BlobPrefixGetResult = {
+  statusCode?: number;
+  stream?: ReadableStream<Uint8Array> | null;
+};
+
+export type BlobPrefixGetFn = (
+  key: string,
+  options: {
+    access: "private";
+    useCache: boolean;
+    abortSignal?: AbortSignal;
+    headers?: HeadersInit;
+  }
+) => Promise<BlobPrefixGetResult | null>;
+
+export function blobPrefixGetResultUsable(
+  result: BlobPrefixGetResult | null
+): result is { statusCode: number; stream: ReadableStream<Uint8Array> } {
+  if (!result || !result.stream) return false;
+  return result.statusCode === 200 || result.statusCode === 206;
+}
+
+export async function readBlobObjectPrefixWithGet(
+  get: BlobPrefixGetFn,
+  key: string,
+  maxBytes: number,
+  isNotFound: (error: unknown) => boolean = () => false
+): Promise<Uint8Array | null> {
+  const limit = Math.max(0, Math.floor(maxBytes));
+  const openPrefix = async (range: boolean) => {
+    const abort = new AbortController();
+    const result = await get(key, {
+      access: "private",
+      useCache: false,
+      abortSignal: abort.signal,
+      headers: range && limit > 0 ? { Range: `bytes=0-${limit - 1}` } : undefined,
+    });
+    if (!blobPrefixGetResultUsable(result)) return null;
+    return readLimitedStream(result.stream, limit, abort);
+  };
+  try {
+    const ranged = await openPrefix(true);
+    if (ranged && ranged.byteLength > 0) return ranged;
+  } catch (e) {
+    if (isNotFound(e)) return null;
+  }
+  try {
+    return await openPrefix(false);
+  } catch (e) {
+    if (isNotFound(e)) return null;
+    throw e;
+  }
+}
+
+export async function readLimitedStream(
+  stream: ReadableStream<Uint8Array>,
+  maxBytes: number,
+  abort?: AbortController
+): Promise<Uint8Array> {
+  const limit = Math.max(0, Math.floor(maxBytes));
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let n = 0;
+  try {
+    while (n < limit) {
+      const { done, value } = await reader.read();
+      if (done || !value || value.byteLength === 0) break;
+      const take = Math.min(limit - n, value.byteLength);
+      chunks.push(take === value.byteLength ? value : value.subarray(0, take));
+      n += take;
+      if (take < value.byteLength) break;
+    }
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      /* already closed */
+    }
+    abort?.abort();
+  }
+  const out = new Uint8Array(n);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
 
 async function openVercelBlobStream(
   key: string,
@@ -145,11 +274,104 @@ const vercelBlobStore: CourseReportPhotoStore = {
       cacheControlMaxAge: 60 * 60 * 24 * 30,
     });
   },
+  async createSignedPutUrl(input) {
+    if (!isCourseReportPhotoStorageConfigured()) {
+      throw new CourseReportPhotoStorageError(
+        "storage_not_configured",
+        "사진 저장소가 설정되지 않았습니다.",
+        503
+      );
+    }
+    try {
+      const { issueSignedToken, presignUrl } = await import("@vercel/blob");
+      const validUntil = input.validUntilMs;
+      const token = await issueSignedToken({
+        pathname: input.pathname,
+        operations: ["put"],
+        allowedContentTypes: [input.contentType],
+        maximumSizeInBytes: input.maximumSizeInBytes,
+        validUntil,
+      });
+      const { presignedUrl } = await presignUrl(
+        {
+          delegationToken: token.delegationToken,
+          clientSigningToken: token.clientSigningToken,
+        },
+        {
+          operation: "put",
+          pathname: input.pathname,
+          access: "private",
+          allowedContentTypes: [input.contentType],
+          maximumSizeInBytes: input.maximumSizeInBytes,
+          addRandomSuffix: false,
+          allowOverwrite: false,
+          cacheControlMaxAge: 60 * 60 * 24 * 30,
+          validUntil,
+        }
+      );
+      return { uploadUrl: presignedUrl, expiresAt: validUntil };
+    } catch (e) {
+      if (e instanceof CourseReportPhotoStorageError) throw e;
+      throw new CourseReportPhotoStorageError(
+        "signed_put_failed",
+        "사진 업로드 URL 발급에 실패했습니다.",
+        502
+      );
+    }
+  },
   async get(key, opts) {
     const stream = await openVercelBlobStream(key, opts);
     if (!stream) return null;
     const buf = await new Response(stream).arrayBuffer();
     return new Uint8Array(buf);
+  },
+  async head(key) {
+    if (!isCourseReportPhotoStorageConfigured()) {
+      throw new CourseReportPhotoStorageError(
+        "storage_not_configured",
+        "사진 저장소가 설정되지 않았습니다.",
+        503
+      );
+    }
+    try {
+      const { head } = await import("@vercel/blob");
+      const meta = await head(key);
+      return { size: meta.size, contentType: meta.contentType || "" };
+    } catch (e) {
+      const { BlobNotFoundError } = await import("@vercel/blob");
+      if (e instanceof BlobNotFoundError) return null;
+      throw new CourseReportPhotoStorageError(
+        "storage_get_failed",
+        "사진 읽기에 실패했습니다.",
+        502
+      );
+    }
+  },
+  async readPrefix(key, maxBytes) {
+    if (!isCourseReportPhotoStorageConfigured()) {
+      throw new CourseReportPhotoStorageError(
+        "storage_not_configured",
+        "사진 저장소가 설정되지 않았습니다.",
+        503
+      );
+    }
+    const { get, BlobNotFoundError } = await import("@vercel/blob");
+    try {
+      return await readBlobObjectPrefixWithGet(
+        get,
+        key,
+        maxBytes,
+        (e) => e instanceof BlobNotFoundError
+      );
+    } catch (e) {
+      if (e instanceof BlobNotFoundError) return null;
+      if (e instanceof CourseReportPhotoStorageError) throw e;
+      throw new CourseReportPhotoStorageError(
+        "storage_get_failed",
+        "사진 읽기에 실패했습니다.",
+        502
+      );
+    }
   },
   async open(key, opts) {
     return openVercelBlobStream(key, opts);
@@ -190,15 +412,26 @@ export function getCourseReportPhotoStore(): CourseReportPhotoStore {
 }
 
 export function createMemoryCourseReportPhotoStore(): CourseReportPhotoStore {
-  const objects = new Map<string, Uint8Array>();
+  const objects = new Map<string, { bytes: Uint8Array; mimeType: string }>();
   return {
     configured: true,
-    async put(key, bytes) {
-      objects.set(key, Uint8Array.from(bytes));
+    async put(key, bytes, mimeType = "application/octet-stream") {
+      objects.set(key, { bytes: Uint8Array.from(bytes), mimeType });
     },
     async get(key) {
       const row = objects.get(key);
-      return row ? Uint8Array.from(row) : null;
+      return row ? Uint8Array.from(row.bytes) : null;
+    },
+    async head(key) {
+      const row = objects.get(key);
+      if (!row) return null;
+      return { size: row.bytes.byteLength, contentType: row.mimeType };
+    },
+    async readPrefix(key, maxBytes) {
+      const row = objects.get(key);
+      if (!row) return null;
+      const limit = Math.max(0, Math.min(Math.floor(maxBytes), row.bytes.byteLength));
+      return Uint8Array.from(row.bytes.subarray(0, limit));
     },
     async delete(key) {
       objects.delete(key);
