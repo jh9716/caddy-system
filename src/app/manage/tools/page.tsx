@@ -2,17 +2,21 @@ import Link from "next/link";
 import { getRequestAuthUser } from "@/lib/getRequestAuthUser";
 import { isAccountManagerAuth } from "@/lib/staffAdminAccounts";
 import {
+  ADMIN_LEGACY_TOOL_NOTE,
+  ADMIN_LEGACY_TOOLS_SUMMARY,
   groupAdminToolItems,
+  legacyAdminToolItems,
   manageToolItems,
+  primaryAdminToolItems,
 } from "@/lib/adminManageNav";
 
 export const dynamic = "force-dynamic";
 
 export default async function ManageToolsPage() {
   const auth = await getRequestAuthUser();
-  const groups = groupAdminToolItems(
-    manageToolItems(isAccountManagerAuth(auth ?? {}))
-  );
+  const tools = manageToolItems(isAccountManagerAuth(auth ?? {}));
+  const groups = groupAdminToolItems(primaryAdminToolItems(tools));
+  const legacy = legacyAdminToolItems(tools);
 
   return (
     <div className="tools-page">
@@ -39,6 +43,26 @@ export default async function ManageToolsPage() {
           </div>
         </section>
       ))}
+
+      {legacy.length > 0 ? (
+        <details className="tools-legacy">
+          <summary className="tools-legacy-summary">
+            {ADMIN_LEGACY_TOOLS_SUMMARY}
+          </summary>
+          <div className="tools-list tools-legacy-list">
+            {legacy.map((item) => (
+              <Link key={item.href} href={item.href} className="tools-row">
+                <span className="tools-row-text">
+                  <strong className="tools-row-name">{item.label}</strong>
+                  <span className="tools-row-note">{ADMIN_LEGACY_TOOL_NOTE}</span>
+                  <span className="tools-row-desc">{item.description}</span>
+                </span>
+                <span className="tools-row-go">열기</span>
+              </Link>
+            ))}
+          </div>
+        </details>
+      ) : null}
 
       <style>{`
         .tools-page { max-width: 720px; margin: 0 auto; }
@@ -73,6 +97,9 @@ export default async function ManageToolsPage() {
         .tools-row-name {
           font-size: 0.86rem; font-weight: 800; color: var(--vh-green-900);
         }
+        .tools-row-note {
+          font-size: 0.62rem; font-weight: 700; color: var(--vh-green-800);
+        }
         .tools-row-desc {
           font-size: 0.68rem; color: var(--vh-muted);
           overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -82,6 +109,23 @@ export default async function ManageToolsPage() {
           font-size: 0.68rem; font-weight: 800;
           color: var(--vh-green-800);
         }
+        .tools-legacy {
+          margin: 18px 0 0;
+        }
+        .tools-legacy-summary {
+          cursor: pointer;
+          font-size: 0.7rem;
+          font-weight: 700;
+          color: var(--vh-muted);
+          list-style: none;
+        }
+        .tools-legacy-summary::-webkit-details-marker { display: none; }
+        .tools-legacy-summary::before {
+          content: "▸ ";
+          font-size: 0.62rem;
+        }
+        .tools-legacy[open] > .tools-legacy-summary::before { content: "▾ "; }
+        .tools-legacy-list { margin-top: 6px; }
       `}</style>
     </div>
   );
