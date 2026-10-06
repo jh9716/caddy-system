@@ -4865,6 +4865,18 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
 .vh-chat-pending-photo.is-failed img {
   opacity: 0.55;
 }
+.vh-chat-pending-spinner {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 999px;
+  animation: vh-chat-spin 0.7s linear infinite;
+}
 .vh-chat-pending-status {
   position: absolute;
   left: 4px;
@@ -4921,6 +4933,47 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
 }
 .vh-chat-photo-thumb img.is-failed {
   display: none;
+}
+.vh-chat-photo-thumb.is-sending img {
+  opacity: 0.78;
+}
+.vh-chat-photo-sending {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  min-height: 18px;
+  border-radius: 999px;
+  background: rgba(22, 48, 40, 0.72);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 800;
+  text-align: center;
+  line-height: 18px;
+}
+.vh-chat-photo-sending:empty {
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  margin: -9px 0 0 -9px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  background: transparent;
+  animation: vh-chat-spin 0.7s linear infinite;
+}
+@keyframes vh-chat-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.vh-chat-fail-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
 }
 .vh-chat-photo-fallback {
   display: none;

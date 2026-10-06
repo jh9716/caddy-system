@@ -76,6 +76,18 @@ import {
   prepareChatPendingPhoto,
   readyChatPhotosForUpload,
 } from "../src/lib/chatPhotoPick";
+import {
+  canUseChatPhotoFastPath,
+  needsChatPhotoHeavyPrepare,
+  prepareChatPhotoSource,
+} from "../src/lib/chatPhotoFastPath";
+import {
+  buildOptimisticOutgoingLine,
+  clearedComposerAfterOptimisticSend,
+  outgoingChatPhotoSrc,
+  revokeChatPhotoPreviewUrls,
+  shouldStartOptimisticChatSend,
+} from "../src/lib/chatPhotoOptimistic";
 import { markChatPhotoTiming, resetChatPhotoTiming } from "../src/lib/chatPhotoTiming";
 
 let passed = 0;
@@ -402,9 +414,10 @@ section("instant preview + parallel upload");
   const picked = instantChatPhotoPicks([jpgA, jpgB, jpgC], 3);
   const previewMs = Date.now() - instantStarted;
   assert(picked.items.length === 3, "3장 instant preview");
-  assert(picked.items.every((item) => item.status === "preparing"), "preview before prepare");
+  assert(picked.items.every((item) => item.status === "ready"), "JPEG <=3MB is ready without encode");
   assert(picked.items.every((item) => item.previewUrl.startsWith("blob:")), "object URL preview");
   assert(previewMs < 50, "instant preview is not blocked by encode");
+  assert(Date.now() - instantStarted < 100, "select → ready <100ms for JPEG");
 
   const one = instantChatPhotoPicks([jpgA], 3);
   assert(one.items.length === 1, "1장 instant preview");
@@ -450,7 +463,7 @@ section("instant preview + parallel upload");
   assert(partial.some((row) => row.status === "rejected"), "partial upload failure visible");
   assert(partial.filter((row) => row.status === "fulfilled").length === 2, "other uploads still settle");
   const ready = readyChatPhotosForUpload(failedApplied.items);
-  assert(ready.length === 1 && ready[0]?.status === "ready", "only ready blobs upload");
+  assert(ready.every((item) => item.status === "ready") && ready.length === 2, "only ready blobs upload");
 
   let prepareCallsDirect = 0;
   let putCalls = 0;
@@ -537,6 +550,86 @@ section("instant preview + parallel upload");
     progress: 40,
   });
   assert(progressed[0]?.send?.progress === 40, "per-photo progress state");
+
+  const jpegOk = new File([jpegBytes(32, 1)], "ok.jpg", { type: "image/jpeg", lastModified: 11 });
+  const pngOk = new File([pngBytes()], "ok.png", { type: "image/png", lastModified: 12 });
+  const webpOk = new File([webpBytes()], "ok.webp", { type: "image/webp", lastModified: 13 });
+  const huge = new File([new Uint8Array(3 * 1024 * 1024 + 8)], "huge.jpg", {
+    type: "image/jpeg",
+    lastModified: 14,
+  });
+  const heic = new File([heicBytes()], "a.heic", { type: "image/heic", lastModified: 15 });
+  const pdf = new File([pdfBytes()], "x.pdf", { type: "application/pdf", lastModified: 16 });
+  assert(canUseChatPhotoFastPath(jpegOk), "JPEG <=3MB uses fast path");
+  assert(canUseChatPhotoFastPath(pngOk), "PNG <=3MB uses fast path");
+  assert(canUseChatPhotoFastPath(webpOk), "WEBP <=3MB uses fast path");
+  assert(!canUseChatPhotoFastPath(huge), ">3MB is not fast path");
+  assert(needsChatPhotoHeavyPrepare(huge), ">3MB uses compression path");
+  assert(needsChatPhotoHeavyPrepare(heic), "HEIC uses conversion path");
+  assert(!canUseChatPhotoFastPath(pdf), "unsupported is not fast path");
+
+  let compressCalls = 0;
+  const compress = async (file: File) => {
+    compressCalls += 1;
+    return new Blob([`compressed-${file.name}`], { type: "image/jpeg" });
+  };
+  const jpegPrepared = await prepareChatPhotoSource(jpegOk, compress);
+  assert(jpegPrepared === jpegOk && compressCalls === 0, "JPEG <=3MB → prepareCourseReportPhoto 호출 안 함");
+  const pngPrepared = await prepareChatPhotoSource(pngOk, compress);
+  assert(pngPrepared === pngOk && compressCalls === 0, "PNG <=3MB → re-encode 안 함");
+  const webpPrepared = await prepareChatPhotoSource(webpOk, compress);
+  assert(webpPrepared === webpOk && compressCalls === 0, "WEBP <=3MB → re-encode 안 함");
+  const hugePrepared = await prepareChatPhotoSource(huge, compress);
+  assert(compressCalls === 1 && hugePrepared !== huge, ">3MB → compression path");
+  let unsupported = "";
+  try {
+    await prepareChatPhotoSource(pdf, compress);
+  } catch (e) {
+    unsupported = e instanceof Error ? e.message : "other";
+  }
+  assert(unsupported.includes("JPG/PNG/WEBP"), "unsupported → reject");
+
+  const rejected = instantChatPhotoPicks([pdf], 3);
+  assert(rejected.items.length === 0, "unsupported files stay out of composer");
+
+  const defaultPrepared = await prepareChatPendingPhoto(
+    instantChatPhotoPicks([jpegOk], 1).items[0]!,
+    jpegOk
+  );
+  assert(defaultPrepared.status === "ready" && defaultPrepared.fingerprint === "", "fast path skips fingerprint");
+  assert(defaultPrepared.blob === jpegOk, "fast path keeps original blob");
+
+  const sendTapStarted = Date.now();
+  const outgoing = buildOptimisticOutgoingLine("안녕", picked.items);
+  const composer = clearedComposerAfterOptimisticSend();
+  const sendTapMs = Date.now() - sendTapStarted;
+  assert(outgoing.status === "sending" && outgoing.localPhotos.length === 3, "send tap 즉시 local outgoing bubble");
+  assert(composer.draft === "" && composer.pendingPhotos.length === 0, "composer 즉시 clear/reusable");
+  assert(sendTapMs < 50, "send tap → local bubble <50ms");
+  assert(shouldStartOptimisticChatSend("", picked.items), "photos-only send is allowed");
+  assert(!shouldStartOptimisticChatSend("", []), "empty send is blocked");
+  assert(
+    outgoingChatPhotoSrc({
+      roomId: "all",
+      attachmentId: "att-9",
+      previewUrl: "blob:local",
+      chatPhotoSrc: (roomId, id) => `/api/chat/rooms/${roomId}/attachments/${id}`,
+    }).includes("att-9"),
+    "success replaces local URL with server attachment URL"
+  );
+  let revoked = 0;
+  const origRevoke = URL.revokeObjectURL;
+  URL.revokeObjectURL = () => {
+    revoked += 1;
+  };
+  revokeChatPhotoPreviewUrls([{ previewUrl: "blob:keep-me" }]);
+  URL.revokeObjectURL = origRevoke;
+  assert(revoked === 1, "local object URL lifecycle revokes blob URLs");
+
+  const failedLine = { ...outgoing, status: "failed" as const };
+  assert(failedLine.status === "failed", "upload/finalize fail → failed bubble");
+  const retried = buildOptimisticOutgoingLine(failedLine.body, failedLine.localPhotos);
+  assert(retried.localPhotos[0]?.previewUrl === failedLine.localPhotos[0]?.previewUrl, "retry reuses local photo blob");
 }
 
 section("source wiring / no public blob");
@@ -553,13 +646,23 @@ section("source wiring / no public blob");
   assert(client.includes("prepareChatPendingPhoto"), "composer prepares in background");
   assert(client.includes("mapBoundedSettled"), "composer bounded parallel upload");
   const direct = read("src/lib/chatPhotoDirectClient.ts");
+  const pickSrc = read("src/lib/chatPhotoPick.ts");
+  const fast = read("src/lib/chatPhotoFastPath.ts");
+  const optimistic = read("src/lib/chatPhotoOptimistic.ts");
   assert(client.includes("uploadChatPhotoDirect"), "composer uses direct Blob PUT");
   assert(!client.includes("fd.append"), "composer no longer posts photo bytes to Next");
   assert(direct.includes("/attachments/prepare"), "composer calls prepare");
   assert(direct.includes("/finalize"), "composer calls finalize");
   assert(client.includes("처리 중"), "preparing status copy");
   assert(reportClient.includes("createImageBitmap"), "createImageBitmap decode path");
-  assert(client.includes("전송 중..."), "sending copy");
+  assert(!client.includes("전송 중..."), "composer send button is not locked as 전송 중");
+  assert(client.includes("send_tap_to_local_bubble"), "send tap times local bubble");
+  assert(client.includes("localPhotos"), "optimistic outgoing keeps local photos");
+  assert(client.includes("discardFailedLine"), "failed bubble can be deleted");
+  assert(pickSrc.includes("canUseChatPhotoFastPath"), "pick uses chat fast path");
+  assert(!pickSrc.includes("courseReportPhotoBlobFingerprint"), "chat pick has no full blob fingerprint");
+  assert(fast.includes("canUseChatPhotoFastPath"), "chat fast-path helper");
+  assert(optimistic.includes("buildOptimisticOutgoingLine"), "optimistic send helper");
   assert(client.includes("chatPhotoSrc"), "authenticated photo src");
   assert(!client.includes("blob.vercel"), "client has no public blob url");
   assert(!client.includes("BLOB_READ_WRITE"), "client has no store token");

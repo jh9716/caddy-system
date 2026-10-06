@@ -1,12 +1,16 @@
 import {
   COURSE_REPORT_HEIC_CONVERT_MESSAGE,
+  COURSE_REPORT_HEIC_MESSAGE,
   COURSE_REPORT_PHOTO_DUPLICATE_MESSAGE,
-  courseReportPhotoBlobFingerprint,
   courseReportPhotoFileId,
-  prepareCourseReportPhoto,
 } from "@/lib/courseReportPhotoClient";
 import type { ChatPhotoDirectResult } from "@/lib/chatPhotoDirectClient";
 import { CHAT_PHOTO_MAX } from "@/lib/chatPhotoConstants";
+import {
+  canUseChatPhotoFastPath,
+  isChatPhotoAcceptableSource,
+  prepareChatPhotoSource,
+} from "@/lib/chatPhotoFastPath";
 
 export const CHAT_PHOTO_UPLOAD_CONCURRENCY = 3;
 
@@ -48,6 +52,10 @@ export function instantChatPhotoPicks(
       note = COURSE_REPORT_PHOTO_DUPLICATE_MESSAGE;
       continue;
     }
+    if (!isChatPhotoAcceptableSource(file)) {
+      note = COURSE_REPORT_HEIC_MESSAGE;
+      continue;
+    }
     seenIds.add(fileId);
     items.push({
       key: `${Date.now()}-${items.length}-${fileId}`,
@@ -55,7 +63,7 @@ export function instantChatPhotoPicks(
       previewUrl: URL.createObjectURL(file),
       fileId,
       fingerprint: "",
-      status: "preparing",
+      status: canUseChatPhotoFastPath(file) ? "ready" : "preparing",
     });
     sources.push(file);
   }
@@ -65,15 +73,23 @@ export function instantChatPhotoPicks(
 export async function prepareChatPendingPhoto(
   item: ChatPendingPhoto,
   file: File,
-  prepare: (file: File) => Promise<Blob> = prepareCourseReportPhoto
+  prepare: (file: File) => Promise<Blob> = prepareChatPhotoSource
 ): Promise<ChatPendingPhoto> {
   try {
+    if (canUseChatPhotoFastPath(file) && prepare === prepareChatPhotoSource) {
+      return {
+        ...item,
+        blob: file,
+        fingerprint: "",
+        status: "ready",
+        error: undefined,
+      };
+    }
     const blob = await prepare(file);
-    const fingerprint = await courseReportPhotoBlobFingerprint(blob);
     return {
       ...item,
       blob,
-      fingerprint,
+      fingerprint: "",
       status: "ready",
       error: undefined,
     };
