@@ -30,6 +30,18 @@ export type PhotoOpenOptions = {
   abortSignal?: AbortSignal;
 };
 
+export type PhotoSignedPutUrl = {
+  uploadUrl: string;
+  expiresAt: number;
+};
+
+export type PhotoSignedPutInput = {
+  pathname: string;
+  contentType: string;
+  maximumSizeInBytes: number;
+  validUntilMs: number;
+};
+
 export type CourseReportPhotoStore = {
   configured: boolean;
   put(key: string, bytes: Uint8Array, mimeType: string): Promise<void>;
@@ -37,6 +49,11 @@ export type CourseReportPhotoStore = {
   /** Official Blob stream. GET uses this so the API does not buffer the whole object first. */
   open?(key: string, opts?: PhotoOpenOptions): Promise<PhotoObjectBody | null>;
   delete(key: string): Promise<void>;
+  /**
+   * Exact-pathname private PUT URL. Implementations must never return store
+   * credentials or clientSigningToken — only the finished presigned URL.
+   */
+  createSignedPutUrl?(input: PhotoSignedPutInput): Promise<PhotoSignedPutUrl>;
 };
 
 function envNonEmpty(name: string): boolean {
@@ -144,6 +161,51 @@ const vercelBlobStore: CourseReportPhotoStore = {
       contentType: mimeType,
       cacheControlMaxAge: 60 * 60 * 24 * 30,
     });
+  },
+  async createSignedPutUrl(input) {
+    if (!isCourseReportPhotoStorageConfigured()) {
+      throw new CourseReportPhotoStorageError(
+        "storage_not_configured",
+        "사진 저장소가 설정되지 않았습니다.",
+        503
+      );
+    }
+    try {
+      const { issueSignedToken, presignUrl } = await import("@vercel/blob");
+      const validUntil = input.validUntilMs;
+      const token = await issueSignedToken({
+        pathname: input.pathname,
+        operations: ["put"],
+        allowedContentTypes: [input.contentType],
+        maximumSizeInBytes: input.maximumSizeInBytes,
+        validUntil,
+      });
+      const { presignedUrl } = await presignUrl(
+        {
+          delegationToken: token.delegationToken,
+          clientSigningToken: token.clientSigningToken,
+        },
+        {
+          operation: "put",
+          pathname: input.pathname,
+          access: "private",
+          allowedContentTypes: [input.contentType],
+          maximumSizeInBytes: input.maximumSizeInBytes,
+          addRandomSuffix: false,
+          allowOverwrite: false,
+          cacheControlMaxAge: 60 * 60 * 24 * 30,
+          validUntil,
+        }
+      );
+      return { uploadUrl: presignedUrl, expiresAt: validUntil };
+    } catch (e) {
+      if (e instanceof CourseReportPhotoStorageError) throw e;
+      throw new CourseReportPhotoStorageError(
+        "signed_put_failed",
+        "사진 업로드 URL 발급에 실패했습니다.",
+        502
+      );
+    }
   },
   async get(key, opts) {
     const stream = await openVercelBlobStream(key, opts);

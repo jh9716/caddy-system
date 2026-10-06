@@ -21,12 +21,22 @@ import {
   allowLocalChatPhotoMemoryStore,
   cleanupOrphanChatAttachments,
   consumeChatAttachments,
+  finalizeChatPhotoUpload,
   loadChatPhotoMeta,
+  prepareChatPhotoUpload,
   purgeChatAttachments,
   uploadChatPhoto,
 } from "../src/lib/chatPhoto";
-import { POST as POST_PHOTO } from "../src/app/api/chat/rooms/[roomId]/attachments/route";
+import { POST as POST_PROXY } from "../src/app/api/chat/rooms/[roomId]/attachments/route";
+import { POST as POST_PREPARE } from "../src/app/api/chat/rooms/[roomId]/attachments/prepare/route";
+import { POST as POST_FINALIZE } from "../src/app/api/chat/rooms/[roomId]/attachments/[attachmentId]/finalize/route";
+import { PUT as PUT_LOCAL } from "../src/app/api/chat/local-blob-put/route";
 import { GET as GET_PHOTO } from "../src/app/api/chat/rooms/[roomId]/attachments/[attachmentId]/route";
+import { uploadChatPhotoDirect } from "../src/lib/chatPhotoDirectClient";
+import {
+  parseRequestedChatPhotoMime,
+  verifyLocalChatPhotoPutToken,
+} from "../src/lib/chatPhotoSignedPut";
 import { POST as POST_CONSUME } from "../src/app/api/chat/attachments/consume/route";
 import { POST as POST_CLEANUP } from "../src/app/api/chat/attachments/cleanup/route";
 import {
@@ -52,6 +62,7 @@ import { buildChatPushPayload } from "../src/lib/chatPushMessage";
 import { applyDeletedLine } from "../src/lib/chatPhase4";
 import { CourseReportPhotoValidationError } from "../src/lib/courseReportPhotoMagic";
 import {
+  applyChatPhotoSendProgress,
   applyPreparedChatPhoto,
   instantChatPhotoPicks,
   mapBoundedSettled,
@@ -119,6 +130,43 @@ async function cookieFor(user: {
 
 function req(url: string, init?: ConstructorParameters<typeof NextRequest>[1]) {
   return new NextRequest(url, init);
+}
+
+async function putSigned(uploadUrl: string, bytes: Uint8Array, contentType: string) {
+  const url = new URL(uploadUrl, "http://localhost");
+  return PUT_LOCAL(
+    req(url.href, {
+      method: "PUT",
+      headers: { "content-type": contentType },
+      body: new Uint8Array(bytes),
+    })
+  );
+}
+
+async function prepareHttp(
+  cookie: string,
+  roomId: string,
+  contentType: string,
+  size: number
+) {
+  return POST_PREPARE(
+    req(`http://localhost/api/chat/rooms/${roomId}/attachments/prepare`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ contentType, size }),
+    }),
+    { params: Promise.resolve({ roomId }) }
+  );
+}
+
+async function finalizeHttp(cookie: string, roomId: string, attachmentId: string) {
+  return POST_FINALIZE(
+    req(
+      `http://localhost/api/chat/rooms/${roomId}/attachments/${attachmentId}/finalize`,
+      { method: "POST", headers: { cookie } }
+    ),
+    { params: Promise.resolve({ roomId, attachmentId }) }
+  );
 }
 
 section("protocol / wire");
@@ -343,6 +391,92 @@ section("instant preview + parallel upload");
   assert(partial.filter((row) => row.status === "fulfilled").length === 2, "other uploads still settle");
   const ready = readyChatPhotosForUpload(failedApplied.items);
   assert(ready.length === 1 && ready[0]?.status === "ready", "only ready blobs upload");
+
+  let prepareCallsDirect = 0;
+  let putCalls = 0;
+  let finalizeCalls = 0;
+  const fakeFetch: typeof fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/prepare")) {
+      prepareCallsDirect += 1;
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          upload: {
+            attachmentId: "att-1",
+            uploadUrl: "https://blob.example/put",
+            contentType: "image/jpeg",
+            maxBytes: 3 * 1024 * 1024,
+          },
+        }),
+        { status: 200 }
+      );
+    }
+    if (url.includes("/finalize")) {
+      finalizeCalls += 1;
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          photo: { id: "att-1", mimeType: "image/jpeg", size: 8, exp: 1, claim: "claim" },
+        }),
+        { status: 200 }
+      );
+    }
+    throw new Error(`unexpected fetch ${url} ${init?.method || ""}`);
+  }) as typeof fetch;
+  const uploaded = await uploadChatPhotoDirect(
+    "all",
+    { key: "k1", blob: new Blob([jpegBytes(8, 1)], { type: "image/jpeg" }) },
+    {
+      fetchFn: fakeFetch,
+      put: async () => {
+        putCalls += 1;
+      },
+    }
+  );
+  assert(uploaded.claim === "claim", "direct helper returns finalize claim");
+  assert(prepareCallsDirect === 1 && putCalls === 1 && finalizeCalls === 1, "prepare → PUT → finalize");
+
+  let blockedFinalize = 0;
+  try {
+    await uploadChatPhotoDirect(
+      "all",
+      { key: "k2", blob: new Blob([jpegBytes(8, 2)], { type: "image/jpeg" }) },
+      {
+        fetchFn: (async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes("/prepare")) {
+            return new Response(
+              JSON.stringify({
+                ok: true,
+                upload: { attachmentId: "att-2", uploadUrl: "https://blob.example/put", contentType: "image/jpeg" },
+              }),
+              { status: 200 }
+            );
+          }
+          if (url.includes("/finalize")) {
+            blockedFinalize += 1;
+            return new Response("{}", { status: 200 });
+          }
+          throw new Error(url);
+        }) as typeof fetch,
+        put: async () => {
+          throw new Error("direct PUT down");
+        },
+      }
+    );
+    assert(false, "partial PUT should throw");
+  } catch (e) {
+    assert(e instanceof Error && e.message.includes("direct PUT down"), "direct PUT failure blocks send");
+  }
+  assert(blockedFinalize === 0, "finalize not called after PUT failure");
+
+  const progressed = applyChatPhotoSendProgress(applied.items, {
+    key: applied.items[0]!.key,
+    phase: "put",
+    progress: 40,
+  });
+  assert(progressed[0]?.send?.progress === 40, "per-photo progress state");
 }
 
 section("source wiring / no public blob");
@@ -358,12 +492,34 @@ section("source wiring / no public blob");
   assert(client.includes("instantChatPhotoPicks"), "composer instant preview before prepare");
   assert(client.includes("prepareChatPendingPhoto"), "composer prepares in background");
   assert(client.includes("mapBoundedSettled"), "composer bounded parallel upload");
+  assert(client.includes("uploadChatPhotoDirect"), "composer uses direct Blob PUT");
+  assert(!client.includes("fd.append"), "composer no longer posts photo bytes to Next");
+  assert(client.includes("/attachments/prepare"), "composer calls prepare");
+  assert(client.includes("/finalize"), "composer calls finalize");
   assert(client.includes("처리 중"), "preparing status copy");
   assert(reportClient.includes("createImageBitmap"), "createImageBitmap decode path");
   assert(client.includes("전송 중..."), "sending copy");
   assert(client.includes("chatPhotoSrc"), "authenticated photo src");
   assert(!client.includes("blob.vercel"), "client has no public blob url");
+  assert(!client.includes("BLOB_READ_WRITE"), "client has no store token");
+  assert(!client.includes("clientSigningToken"), "client has no signing token");
   assert(photo.includes("chat/${roomId}/"), "chat storage namespace");
+  assert(photo.includes("prepareChatPhotoUpload"), "prepare helper");
+  assert(photo.includes("finalizeChatPhotoUpload"), "finalize helper");
+  assert(photo.includes('uploadState: "PENDING"'), "prepare stores PENDING");
+  const getRoute = read("src/app/api/chat/rooms/[roomId]/attachments/[attachmentId]/route.ts");
+  const proxyRoute = read("src/app/api/chat/rooms/[roomId]/attachments/route.ts");
+  const storage = read("src/lib/courseReportPhotoStorage.ts");
+  const sw = read("public/sw.js");
+  const phase6 = read("src/lib/chatPhase6.ts");
+  assert(photo.includes('uploadState !== "READY"'), "GET helper requires READY");
+  assert(proxyRoute.includes("410"), "legacy proxy upload removed");
+  assert(!proxyRoute.includes("readUploadBytes"), "legacy route does not buffer photo bytes");
+  assert(storage.includes("issueSignedToken"), "private Blob signed PUT");
+  assert(storage.includes('operations: ["put"]'), "signed URL is PUT only");
+  assert(sw.includes("openWindow"), "#250 PWA openWindow kept");
+  assert(phase6.includes("parseChatDeepLinkRoomId"), "#250 deep-link parser kept");
+  assert(getRoute.includes("loadChatPhotoMeta"), "GET still uses authenticated meta");
   assert(photo.includes("allowLocalChatPhotoMemoryStore"), "local memory store is gated");
   assert(photo.includes("__caddyChatPhotoMemoryStore"), "local memory store is process-global");
   assert(!photo.includes("notices/"), "does not write notice keys");
@@ -511,30 +667,26 @@ if (!ALLOW_DB) {
       await prisma.chatAttachment.deleteMany({
         where: { senderUserId: { in: [user.id, other.id] } },
       });
-      const form = new FormData();
-      form.append("file", new Blob([jpegBytes(12, 7)], { type: "image/jpeg" }), "a.jpg");
-      const uploaded = await POST_PHOTO(
-        req("http://localhost/api/chat/rooms/all/attachments", {
-          method: "POST",
-          headers: { cookie },
-          body: form,
-        }),
-        { params: Promise.resolve({ roomId: "all" }) }
-      );
+      const proxyGone = await POST_PROXY();
+      assert(proxyGone.status === 410, "legacy proxy POST is gone");
+
+      const prepared = await prepareHttp(cookie, "all", "image/jpeg", 16);
+      const preparedJson = await prepared.json();
+      assert(prepared.status === 200 && preparedJson.upload?.attachmentId, "ALL room member can prepare");
+      assert(!JSON.stringify(preparedJson).includes("storageKey"), "prepare hides storageKey");
+      assert(!JSON.stringify(preparedJson).includes("blob.vercel"), "prepare hides blob url");
+      assert(!JSON.stringify(preparedJson).includes("clientSigningToken"), "prepare hides signing token");
+      assert(!JSON.stringify(preparedJson).includes("BLOB_READ_WRITE"), "prepare hides store token");
+      const put = await putSigned(preparedJson.upload.uploadUrl, jpegBytes(12, 7), "image/jpeg");
+      assert(put.status === 204, "signed PUT stores bytes outside Next photo route");
+      const uploaded = await finalizeHttp(cookie, "all", preparedJson.upload.attachmentId);
       const uploadedJson = await uploaded.json();
-      assert(uploaded.status === 200 && uploadedJson.photo?.id, "ALL room member can upload");
+      assert(uploaded.status === 200 && uploadedJson.photo?.id, "ALL room member can finalize");
       assert(!String(JSON.stringify(uploadedJson)).includes("storageKey"), "response hides storageKey");
       assert(!String(JSON.stringify(uploadedJson)).includes("blob.vercel"), "response hides blob url");
 
-      const custom = await POST_PHOTO(
-        req("http://localhost/api/chat/rooms/room_0123456789abcdef/attachments", {
-          method: "POST",
-          headers: { cookie: otherCookie },
-          body: form,
-        }),
-        { params: Promise.resolve({ roomId: "room_0123456789abcdef" }) }
-      );
-      assert(custom.status === 403, "non-member upload forbidden");
+      const custom = await prepareHttp(otherCookie, "room_0123456789abcdef", "image/jpeg", 16);
+      assert(custom.status === 403, "non-member prepare forbidden");
 
       const got = await GET_PHOTO(
         req(`http://localhost/api/chat/rooms/all/attachments/${uploadedJson.photo.id}`, {
@@ -823,8 +975,9 @@ if (!ALLOW_DB) {
       await prisma.chatAttachment.deleteMany({ where: { senderUserId: user.id } });
       const origFindMany = prisma.chatAttachment.findMany.bind(prisma.chatAttachment);
       prisma.chatAttachment.findMany = (async (args: unknown) => {
-        const where = (args as { where?: { consumedAt?: unknown; createdAt?: unknown } } | undefined)?.where;
-        if (where && where.consumedAt === null && where.createdAt) {
+        const where = (args as { where?: { consumedAt?: unknown; createdAt?: unknown; OR?: unknown } } | undefined)
+          ?.where;
+        if (where?.OR || (where && where.consumedAt === null && where.createdAt)) {
           throw new Error("cleanup down");
         }
         return origFindMany(args as never);
@@ -840,14 +993,238 @@ if (!ALLOW_DB) {
         prisma.chatAttachment.findMany = origFindMany;
       }
     }
+
+    section("direct upload prepare / finalize");
+    {
+      const cookie = await cookieFor({ id: user.id, username: user.username, role: "admin" });
+      const otherCookie = await cookieFor({
+        id: other.id,
+        username: other.username,
+        role: "caddy",
+      });
+      await prisma.chatAttachment.deleteMany({
+        where: { senderUserId: { in: [user.id, other.id] } },
+      });
+
+      const anon = await prepareHttp("", "all", "image/jpeg", 16);
+      assert(anon.status === 401, "signed URL unauthorized");
+
+      const badType = await prepareHttp(cookie, "all", "application/pdf", 16);
+      const badTypeJson = await badType.json();
+      assert(badType.status === 400 && badTypeJson.error === "unsupported_type", "invalid content type");
+
+      const tooBig = await prepareHttp(cookie, "all", "image/jpeg", 3 * 1024 * 1024 + 1);
+      const tooBigJson = await tooBig.json();
+      assert(tooBig.status === 400 && tooBigJson.error === "file_too_large", "max 3MB");
+
+      const prepared = await prepareChatPhotoUpload(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        contentType: "image/jpeg",
+        size: 16,
+      });
+      assert(prepared.attachmentId && prepared.uploadUrl, "prepare returns signed PUT");
+      const pendingRow = await prisma.chatAttachment.findUnique({
+        where: { id: prepared.attachmentId },
+      });
+      assert(pendingRow?.uploadState === "PENDING", "prepare creates PENDING");
+      const pendingGet = await GET_PHOTO(
+        req(`http://localhost/api/chat/rooms/all/attachments/${prepared.attachmentId}`, {
+          headers: { cookie },
+        }),
+        { params: Promise.resolve({ roomId: "all", attachmentId: prepared.attachmentId }) }
+      );
+      assert(pendingGet.status === 404, "PENDING GET → 404");
+
+      const put = await putSigned(prepared.uploadUrl, jpegBytes(16, 11), "image/jpeg");
+      assert(put.status === 204, "direct PUT success");
+      const finalized = await finalizeChatPhotoUpload(prisma, {
+        roomId: "all",
+        attachmentId: prepared.attachmentId,
+        senderUserId: user.id,
+      });
+      assert(finalized.id === prepared.attachmentId && finalized.claim, "direct PUT → finalize");
+      const readyRow = await prisma.chatAttachment.findUnique({
+        where: { id: prepared.attachmentId },
+      });
+      assert(readyRow?.uploadState === "READY", "finalize marks READY");
+      const readyGet = await GET_PHOTO(
+        req(`http://localhost/api/chat/rooms/all/attachments/${prepared.attachmentId}`, {
+          headers: { cookie },
+        }),
+        { params: Promise.resolve({ roomId: "all", attachmentId: prepared.attachmentId }) }
+      );
+      assert(readyGet.status === 200, "READY GET → success");
+
+      const again = await finalizeChatPhotoUpload(prisma, {
+        roomId: "all",
+        attachmentId: prepared.attachmentId,
+        senderUserId: user.id,
+      });
+      assert(again.id === finalized.id, "duplicate finalize is idempotent");
+
+      let crossRoom = "";
+      try {
+        await finalizeChatPhotoUpload(prisma, {
+          roomId: "room_0123456789abcdef",
+          attachmentId: prepared.attachmentId,
+          senderUserId: user.id,
+        });
+      } catch (e) {
+        crossRoom = e instanceof CourseReportPhotoValidationError ? e.code : "other";
+      }
+      assert(crossRoom === "not_found", "cross-room finalize reject");
+
+      let otherSender = "";
+      try {
+        await finalizeChatPhotoUpload(prisma, {
+          roomId: "all",
+          attachmentId: prepared.attachmentId,
+          senderUserId: other.id,
+        });
+      } catch (e) {
+        otherSender = e instanceof CourseReportPhotoValidationError ? e.code : "other";
+      }
+      assert(otherSender === "forbidden", "other sender finalize reject");
+
+      const otherHttp = await finalizeHttp(otherCookie, "all", prepared.attachmentId);
+      assert(otherHttp.status === 403, "other sender HTTP finalize forbidden");
+
+      const magicPrep = await prepareChatPhotoUpload(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        contentType: "image/jpeg",
+        size: 16,
+      });
+      const magicPut = await putSigned(magicPrep.uploadUrl, pdfBytes(), "image/jpeg");
+      assert(magicPut.status === 204, "local PUT does not trust magic yet");
+      let magicCode = "";
+      try {
+        await finalizeChatPhotoUpload(prisma, {
+          roomId: "all",
+          attachmentId: magicPrep.attachmentId,
+          senderUserId: user.id,
+        });
+      } catch (e) {
+        magicCode = e instanceof CourseReportPhotoValidationError ? e.code : "other";
+      }
+      assert(magicCode === "unsupported_type", "magic byte invalid → finalize reject");
+      assert(
+        !(await prisma.chatAttachment.findUnique({ where: { id: magicPrep.attachmentId } })),
+        "invalid finalize deletes DB intent"
+      );
+      assert(
+        !(await store.get(`chat/all/${magicPrep.attachmentId}.jpg`)),
+        "invalid finalize deletes Blob"
+      );
+
+      const stalePending = await prepareChatPhotoUpload(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        contentType: "image/jpeg",
+        size: 16,
+      });
+      await prisma.chatAttachment.update({
+        where: { id: stalePending.attachmentId },
+        data: { createdAt: new Date(Date.now() - 16 * 60 * 1000) },
+      });
+      const freshPending = await prepareChatPhotoUpload(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        contentType: "image/jpeg",
+        size: 16,
+      });
+      await cleanupOrphanChatAttachments(prisma);
+      assert(
+        !(await prisma.chatAttachment.findUnique({ where: { id: stalePending.attachmentId } })),
+        "expired pending cleanup"
+      );
+      assert(
+        !!(await prisma.chatAttachment.findUnique({ where: { id: freshPending.attachmentId } })),
+        "fresh pending kept"
+      );
+
+      await prisma.chatAttachment.deleteMany({
+        where: { senderUserId: { in: [user.id, other.id] } },
+      });
+      const existing = await uploadChatPhoto(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        bytes: jpegBytes(12, 90),
+      });
+      const existingRow = await prisma.chatAttachment.findUnique({ where: { id: existing.id } });
+      assert(existingRow?.uploadState === "READY", "existing attachment default READY");
+
+      const t1 = Date.now();
+      const onePrep = await prepareChatPhotoUpload(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        contentType: "image/jpeg",
+        size: 16,
+      });
+      const onePrepMs = Date.now() - t1;
+      const t2 = Date.now();
+      await putSigned(onePrep.uploadUrl, jpegBytes(16, 91), "image/jpeg");
+      const onePutMs = Date.now() - t2;
+      const t3 = Date.now();
+      await finalizeChatPhotoUpload(prisma, {
+        roomId: "all",
+        attachmentId: onePrep.attachmentId,
+        senderUserId: user.id,
+      });
+      const oneFinMs = Date.now() - t3;
+      console.log(`  timing 1장 prepare=${onePrepMs}ms put=${onePutMs}ms finalize=${oneFinMs}ms`);
+
+      await prisma.chatAttachment.deleteMany({
+        where: { senderUserId: { in: [user.id, other.id] } },
+      });
+      const threeStarted = Date.now();
+      const three = await mapBoundedSettled([1, 2, 3], 3, async (n) => {
+        const prep = await prepareChatPhotoUpload(prisma, {
+          roomId: "all",
+          senderUserId: user.id,
+          contentType: "image/jpeg",
+          size: 16,
+        });
+        await putSigned(prep.uploadUrl, jpegBytes(16, 100 + n), "image/jpeg");
+        return finalizeChatPhotoUpload(prisma, {
+          roomId: "all",
+          attachmentId: prep.attachmentId,
+          senderUserId: user.id,
+        });
+      });
+      const threeMs = Date.now() - threeStarted;
+      assert(three.every((row) => row.status === "fulfilled"), "3 concurrent direct uploads");
+      console.log(`  timing 3장 total=${threeMs}ms`);
+    }
   } finally {
-    await prisma.chatAttachment.deleteMany({
-      where: { senderUserId: { in: [user.id, other.id] } },
-    });
+      await prisma.chatAttachment.deleteMany({
+        where: { senderUserId: { in: [user.id, other.id] } },
+      });
     await prisma.user.deleteMany({ where: { id: { in: [user.id, other.id] } } });
     setCourseReportPhotoStoreForTests(null);
   }
 }
+
+section("direct upload security / mime");
+{
+  assert(parseRequestedChatPhotoMime("image/jpeg") === "image/jpeg", "jpeg mime");
+  assert(parseRequestedChatPhotoMime("image/png") === "image/png", "png mime");
+  assert(parseRequestedChatPhotoMime("image/webp") === "image/webp", "webp mime");
+  let badMime = "";
+  try {
+    parseRequestedChatPhotoMime("application/pdf");
+  } catch (e) {
+    badMime = e instanceof CourseReportPhotoValidationError ? e.code : "other";
+  }
+  assert(badMime === "unsupported_type", "invalid content type rejected");
+  let forged = "";
+  try {
+    verifyLocalChatPhotoPutToken("chat-photo-unit-secret", "not-a-token");
+  } catch (e) {
+    forged = e instanceof CourseReportPhotoValidationError ? e.code : "other";
+  }
+  assert(forged === "unauthorized", "signed URL unauthorized");
 }
 
 main().then(() => {

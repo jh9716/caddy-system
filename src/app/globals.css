@@ -4881,6 +4881,9 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
 .vh-chat-pending-photo.is-failed .vh-chat-pending-status {
   background: rgba(140, 32, 32, 0.82);
 }
+.vh-chat-pending-photo.is-uploading .vh-chat-pending-status {
+  background: rgba(22, 48, 40, 0.82);
+}
 .vh-chat-pending-x {
   position: absolute;
   top: 2px;
