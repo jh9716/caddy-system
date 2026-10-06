@@ -135,7 +135,61 @@ const unconfigured: CourseReportPhotoStore = {
   },
 };
 
-async function readLimitedStream(
+export type BlobPrefixGetResult = {
+  statusCode?: number;
+  stream?: ReadableStream<Uint8Array> | null;
+};
+
+export type BlobPrefixGetFn = (
+  key: string,
+  options: {
+    access: "private";
+    useCache: boolean;
+    abortSignal?: AbortSignal;
+    headers?: HeadersInit;
+  }
+) => Promise<BlobPrefixGetResult | null>;
+
+export function blobPrefixGetResultUsable(
+  result: BlobPrefixGetResult | null
+): result is { statusCode: number; stream: ReadableStream<Uint8Array> } {
+  if (!result || !result.stream) return false;
+  return result.statusCode === 200 || result.statusCode === 206;
+}
+
+export async function readBlobObjectPrefixWithGet(
+  get: BlobPrefixGetFn,
+  key: string,
+  maxBytes: number,
+  isNotFound: (error: unknown) => boolean = () => false
+): Promise<Uint8Array | null> {
+  const limit = Math.max(0, Math.floor(maxBytes));
+  const openPrefix = async (range: boolean) => {
+    const abort = new AbortController();
+    const result = await get(key, {
+      access: "private",
+      useCache: false,
+      abortSignal: abort.signal,
+      headers: range && limit > 0 ? { Range: `bytes=0-${limit - 1}` } : undefined,
+    });
+    if (!blobPrefixGetResultUsable(result)) return null;
+    return readLimitedStream(result.stream, limit, abort);
+  };
+  try {
+    const ranged = await openPrefix(true);
+    if (ranged && ranged.byteLength > 0) return ranged;
+  } catch (e) {
+    if (isNotFound(e)) return null;
+  }
+  try {
+    return await openPrefix(false);
+  } catch (e) {
+    if (isNotFound(e)) return null;
+    throw e;
+  }
+}
+
+export async function readLimitedStream(
   stream: ReadableStream<Uint8Array>,
   maxBytes: number,
   abort?: AbortController
@@ -301,33 +355,22 @@ const vercelBlobStore: CourseReportPhotoStore = {
         503
       );
     }
-    const limit = Math.max(0, Math.floor(maxBytes));
     const { get, BlobNotFoundError } = await import("@vercel/blob");
-    const openPrefix = async (range: boolean) => {
-      const abort = new AbortController();
-      const result = await get(key, {
-        access: "private",
-        useCache: false,
-        abortSignal: abort.signal,
-        headers: range && limit > 0 ? { Range: `bytes=0-${limit - 1}` } : undefined,
-      });
-      if (!result || result.statusCode !== 200 || !result.stream) return null;
-      return readLimitedStream(result.stream, limit, abort);
-    };
     try {
-      return await openPrefix(true);
+      return await readBlobObjectPrefixWithGet(
+        get,
+        key,
+        maxBytes,
+        (e) => e instanceof BlobNotFoundError
+      );
     } catch (e) {
       if (e instanceof BlobNotFoundError) return null;
-      try {
-        return await openPrefix(false);
-      } catch (retry) {
-        if (retry instanceof BlobNotFoundError) return null;
-        throw new CourseReportPhotoStorageError(
-          "storage_get_failed",
-          "사진 읽기에 실패했습니다.",
-          502
-        );
-      }
+      if (e instanceof CourseReportPhotoStorageError) throw e;
+      throw new CourseReportPhotoStorageError(
+        "storage_get_failed",
+        "사진 읽기에 실패했습니다.",
+        502
+      );
     }
   },
   async open(key, opts) {

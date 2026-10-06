@@ -14,7 +14,9 @@ import {
   signSessionClaims,
 } from "../src/lib/sessionCookies";
 import {
+  blobPrefixGetResultUsable,
   createMemoryCourseReportPhotoStore,
+  readBlobObjectPrefixWithGet,
   setCourseReportPhotoStoreForTests,
 } from "../src/lib/courseReportPhotoStorage";
 import {
@@ -583,6 +585,15 @@ section("source wiring / no public blob");
   assert(storage.includes("async head("), "store has HEAD metadata");
   assert(storage.includes("async readPrefix("), "store has prefix read");
   assert(storage.includes("Range:"), "Vercel prefix uses Range GET when available");
+  assert(storage.includes("statusCode === 206"), "Range 206 is usable");
+  assert(storage.includes("readBlobObjectPrefixWithGet"), "range then non-range fallback");
+  assert(storage.includes("blobPrefixGetResultUsable"), "prefix helper owns 200/206 check");
+  const prefixHelper = storage.slice(
+    storage.indexOf("export async function readBlobObjectPrefixWithGet"),
+    storage.indexOf("export async function readLimitedStream")
+  );
+  assert(prefixHelper.includes("blobPrefixGetResultUsable"), "range path uses usable helper");
+  assert(!prefixHelper.includes("statusCode !== 200"), "prefix helper does not require 200 only");
   assert(storage.includes("reader.cancel"), "prefix stream cancels after 256B");
   assert(sw.includes("openWindow"), "#250 PWA openWindow kept");
   assert(phase6.includes("parseChatDeepLinkRoomId"), "#250 deep-link parser kept");
@@ -1307,6 +1318,21 @@ if (!ALLOW_DB) {
       });
       assert(pngReady.mimeType === "image/png", "actual magic wins over requested contentType");
 
+      const webpPrep = await prepareChatPhotoUpload(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        contentType: "image/webp",
+        size: 16,
+      });
+      await store.put(`chat/all/${webpPrep.attachmentId}.webp`, webpBytes(), "image/webp");
+      const webpReady = await finalizeChatPhotoUpload(prisma, {
+        roomId: "all",
+        attachmentId: webpPrep.attachmentId,
+        senderUserId: user.id,
+      });
+      assert(webpReady.mimeType === "image/webp", "finalize WEBP is ready");
+      await prisma.chatAttachment.delete({ where: { id: webpPrep.attachmentId } });
+
       const emptyPrep = await prepareChatPhotoUpload(prisma, {
         roomId: "all",
         senderUserId: user.id,
@@ -1364,6 +1390,7 @@ if (!ALLOW_DB) {
 
       for (const [label, bytes, type] of [
         ["heic", heicBytes(), "image/jpeg"],
+        ["pdf", pdfBytes(), "image/jpeg"],
         ["svg", svgBytes(), "image/jpeg"],
         ["html", htmlBytes(), "image/jpeg"],
       ] as const) {
@@ -1391,6 +1418,43 @@ if (!ALLOW_DB) {
         );
         assert(!(await store.get(`chat/all/${bad.attachmentId}.jpg`)), `${label} Blob cleaned`);
       }
+
+      const rangeStore = createMemoryCourseReportPhotoStore();
+      const prevStore = store;
+      setCourseReportPhotoStoreForTests({
+        ...rangeStore,
+        async readPrefix(key, maxBytes) {
+          const bytes = await rangeStore.get(key);
+          if (!bytes) return null;
+          return readBlobObjectPrefixWithGet(
+            async () => ({
+              statusCode: 206,
+              stream: new ReadableStream<Uint8Array>({
+                start(controller) {
+                  controller.enqueue(bytes);
+                  controller.close();
+                },
+              }),
+            }),
+            key,
+            maxBytes
+          );
+        },
+      });
+      const rangePrep = await prepareChatPhotoUpload(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        contentType: "image/jpeg",
+        size: 16,
+      });
+      await rangeStore.put(`chat/all/${rangePrep.attachmentId}.jpg`, jpegBytes(24, 21), "image/jpeg");
+      const rangeFin = await finalizeChatPhotoUpload(prisma, {
+        roomId: "all",
+        attachmentId: rangePrep.attachmentId,
+        senderUserId: user.id,
+      });
+      assert(rangeFin.claim && rangeFin.mimeType === "image/jpeg", "Range 206 does not become upload_incomplete");
+      setCourseReportPhotoStoreForTests(prevStore);
 
       storeStats.reset();
       const againReady = await finalizeChatPhotoUpload(prisma, {
@@ -1479,6 +1543,92 @@ section("direct upload security / mime");
     assert(code === "unsupported_type", `${label} prefix rejected`);
   }
   assert(COURSE_REPORT_PHOTO_MAGIC_PREFIX_BYTES === 256, "magic prefix cap is 256");
+
+  function streamFrom(bytes: Uint8Array, pull = 64, pulled?: { n: number }) {
+    let offset = 0;
+    return new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (offset >= bytes.byteLength) {
+          controller.close();
+          return;
+        }
+        const next = bytes.subarray(offset, offset + pull);
+        offset += next.byteLength;
+        if (pulled) pulled.n += next.byteLength;
+        controller.enqueue(next);
+      },
+    });
+  }
+
+  assert(
+    blobPrefixGetResultUsable({ statusCode: 206, stream: streamFrom(jpegPrefix) }),
+    "usable helper accepts 206"
+  );
+  assert(
+    blobPrefixGetResultUsable({ statusCode: 200, stream: streamFrom(jpegPrefix) }),
+    "usable helper accepts 200"
+  );
+  assert(!blobPrefixGetResultUsable({ statusCode: 206, stream: null }), "206 without stream is unusable");
+  assert(!blobPrefixGetResultUsable({ statusCode: 304, stream: null }), "304 is unusable");
+  assert(!blobPrefixGetResultUsable(null), "null get result is unusable");
+
+  const prefix206 = await readBlobObjectPrefixWithGet(
+    async () => ({ statusCode: 206, stream: streamFrom(jpegBytes(16, 2)) }),
+    "chat/all/a.jpg",
+    256
+  );
+  assert(!!prefix206 && prefix206[0] === 0xff && prefix206[1] === 0xd8, "Range GET 206 + stream → prefix");
+
+  const prefix200 = await readBlobObjectPrefixWithGet(
+    async () => ({ statusCode: 200, stream: streamFrom(pngBytes()) }),
+    "chat/all/b.png",
+    256
+  );
+  assert(!!prefix200 && prefix200[0] === 0x89, "Range GET 200 + stream → prefix");
+
+  let getCalls = 0;
+  const pulled = { n: 0 };
+  const huge = jpegBytes(3 * 1024 * 1024 - 8, 4);
+  const fallback = await readBlobObjectPrefixWithGet(async (_key, opts) => {
+    getCalls += 1;
+    const headers = opts.headers as Record<string, string> | undefined;
+    if (headers?.Range) return null;
+    return { statusCode: 200, stream: streamFrom(huge, 64, pulled) };
+  }, "chat/all/c.jpg", 256);
+  assert(getCalls === 2, "Range unusable/null → non-range fallback");
+  assert(!!fallback && fallback.byteLength === 256, "non-range fallback also max 256 bytes");
+  assert(pulled.n <= 256, "fallback stream pulled <=256 bytes");
+
+  let rangeOnly = 0;
+  await readBlobObjectPrefixWithGet(async () => {
+    rangeOnly += 1;
+    return { statusCode: 206, stream: streamFrom(jpegBytes(16, 5)) };
+  }, "chat/all/d.jpg", 256);
+  assert(rangeOnly === 1, "usable 206 does not run non-range fallback");
+
+  let statusMismatch = 0;
+  const from416 = await readBlobObjectPrefixWithGet(async (_key, opts) => {
+    statusMismatch += 1;
+    const headers = opts.headers as Record<string, string> | undefined;
+    if (headers?.Range) return { statusCode: 416, stream: null };
+    return { statusCode: 200, stream: streamFrom(webpBytes()) };
+  }, "chat/all/e.webp", 256);
+  assert(statusMismatch === 2, "Range status mismatch falls back to non-range");
+  assert(!!from416 && from416[0] === 0x52, "unusable Range status still yields prefix via fallback");
+
+  class FakeBlobNotFound extends Error {}
+  let notFoundCalls = 0;
+  const missing = await readBlobObjectPrefixWithGet(
+    async () => {
+      notFoundCalls += 1;
+      throw new FakeBlobNotFound();
+    },
+    "chat/all/missing.jpg",
+    256,
+    (e) => e instanceof FakeBlobNotFound
+  );
+  assert(missing === null, "BlobNotFoundError stays null");
+  assert(notFoundCalls === 1, "not-found does not run non-range fallback");
 }
 
 main().then(() => {
