@@ -205,8 +205,13 @@ assert(toolsPage.includes("manageToolItems"), "hub uses tool catalog");
 assert(toolsPage.includes("primaryAdminToolItems"), "hub default uses primary tools");
 assert(toolsPage.includes("legacyAdminToolItems"), "hub lists legacy separately");
 assert(toolsPage.includes("<details"), "hub uses collapsed details");
-assert(toolsPage.includes(ADMIN_LEGACY_TOOLS_SUMMARY), "hub summary copy");
-assert(toolsPage.includes(ADMIN_LEGACY_TOOL_NOTE), "legacy rows mark diagnostic");
+assert(
+  ADMIN_LEGACY_TOOLS_SUMMARY === "진단 / 레거시 도구 보기",
+  "legacy summary copy"
+);
+assert(ADMIN_LEGACY_TOOL_NOTE === "운영 보조/진단용", "legacy note copy");
+assert(toolsPage.includes("ADMIN_LEGACY_TOOLS_SUMMARY"), "hub summary copy");
+assert(toolsPage.includes("ADMIN_LEGACY_TOOL_NOTE"), "legacy rows mark diagnostic");
 assert(toolsPage.includes("isAccountManagerAuth"), "hub respects staff gate");
 assert(!toolsPage.includes("redirect("), "hub does not redirect");
 const shell = read("src/components/manage/ManageShell.tsx");
