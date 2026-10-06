@@ -17,13 +17,18 @@ export type AdminToolItem = {
   description: string;
   group: AdminToolGroup;
   accountManagerOnly?: boolean;
+  /** 기본 관리도구 목록에서 숨기고 하단 접이식에만 표시 */
+  legacy?: boolean;
 };
 
 export const ADMIN_TOOL_GROUP_LABELS: Record<AdminToolGroup, string> = {
   ops: "운영 보조",
-  notify: "알림 / 진단",
+  notify: "알림",
   account: "계정 / 시스템",
 };
+
+export const ADMIN_LEGACY_TOOLS_SUMMARY = "진단 / 레거시 도구 보기";
+export const ADMIN_LEGACY_TOOL_NOTE = "운영 보조/진단용";
 
 export const ADMIN_TOOL_GROUP_ORDER: AdminToolGroup[] = [
   "ops",
@@ -41,20 +46,16 @@ export const ADMIN_TOOL_ITEMS: readonly AdminToolItem[] = [
   {
     href: "/manage/assignments/preview",
     label: "배치 미리보기",
-    description: "자동배치 결과를 미리 확인합니다",
+    description: "자동배치 결과를 미리 확인합니다 · DB 저장 없음",
     group: "ops",
+    legacy: true,
   },
   {
     href: "/manage/reservations",
     label: "예약표 파싱",
     description: "예약 XLS/XLSX 파싱 미리보기 · DB 저장 없음",
     group: "ops",
-  },
-  {
-    href: "/manage/alimtalk",
-    label: "알림톡",
-    description: "근무 알림톡 미리보기 · 실제 발송 없음",
-    group: "notify",
+    legacy: true,
   },
   {
     href: "/manage/notifications",
@@ -63,10 +64,17 @@ export const ADMIN_TOOL_ITEMS: readonly AdminToolItem[] = [
     group: "notify",
   },
   {
+    href: "/manage/alimtalk",
+    label: "알림톡",
+    description: "근무 알림톡 미리보기 · 실제 발송 없음",
+    group: "notify",
+  },
+  {
     href: "/manage/push-test",
     label: "푸시 알림 테스트",
     description: "Native/PWA Push 동작 확인용 진단 도구",
     group: "notify",
+    legacy: true,
   },
   {
     href: "/manage/users",
@@ -159,6 +167,18 @@ export function manageToolItems(canManageStaffAccounts: boolean): AdminToolItem[
   return ADMIN_TOOL_ITEMS.filter(
     (item) => !item.accountManagerOnly || canManageStaffAccounts
   );
+}
+
+export function primaryAdminToolItems(
+  items: readonly AdminToolItem[]
+): AdminToolItem[] {
+  return items.filter((item) => !item.legacy);
+}
+
+export function legacyAdminToolItems(
+  items: readonly AdminToolItem[]
+): AdminToolItem[] {
+  return items.filter((item) => item.legacy);
 }
 
 export function groupAdminToolItems(

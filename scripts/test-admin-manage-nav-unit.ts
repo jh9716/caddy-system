@@ -10,10 +10,14 @@ import {
   ADMIN_MAIN_NAV_HREFS,
   ADMIN_TOOL_ITEMS,
   activeAdminMainHref,
+  ADMIN_LEGACY_TOOL_NOTE,
+  ADMIN_LEGACY_TOOLS_SUMMARY,
   groupAdminToolItems,
   isAdminToolPath,
+  legacyAdminToolItems,
   manageNavItems,
   manageToolItems,
+  primaryAdminToolItems,
 } from "../src/lib/adminManageNav";
 
 let passed = 0;
@@ -100,17 +104,19 @@ assert(staffTools.includes("/manage/users"), "staff still sees 계정 연결");
 assert(manageNavItems(false).every((i) => i.href !== "/manage/staff-accounts"), "staff main no 직원 계정");
 assert(manageNavItems(true).every((i) => i.href !== "/manage/staff-accounts"), "super main no 직원 계정");
 
-console.log("== tool groups ==");
-const grouped = groupAdminToolItems(manageToolItems(true));
-assert(grouped.map((g) => g.label).join(",") === "운영 보조,알림 / 진단,계정 / 시스템", "group labels");
+console.log("== tool groups (default / primary) ==");
+const allTools = manageToolItems(true);
+const primary = primaryAdminToolItems(allTools);
+const legacy = legacyAdminToolItems(allTools);
+const grouped = groupAdminToolItems(primary);
+assert(grouped.map((g) => g.label).join(",") === "운영 보조,알림,계정 / 시스템", "group labels");
 assert(
-  grouped[0].items.map((i) => i.label).join(",") === "캐디 검색,배치 미리보기,예약표 파싱",
-  "ops tools"
+  grouped[0].items.map((i) => i.label).join(",") === "캐디 검색",
+  "ops tools default"
 );
 assert(
-  grouped[1].items.map((i) => i.label).join(",") ===
-    "알림톡,알림 설정,푸시 알림 테스트",
-  "notify tools"
+  grouped[1].items.map((i) => i.label).join(",") === "알림 설정,알림톡",
+  "notify tools default"
 );
 assert(
   grouped[2].items.map((i) => i.label).join(",") ===
@@ -118,19 +124,62 @@ assert(
   "account tools"
 );
 assert(
-  ADMIN_TOOL_ITEMS.some(
-    (i) =>
-      i.href === "/manage/push-test" &&
-      i.description.includes("Native/PWA Push")
+  grouped.every((g) => g.items.every((i) => !i.legacy)),
+  "default groups exclude legacy"
+);
+assert(
+  !primary.some((i) =>
+    [
+      "/manage/assignments/preview",
+      "/manage/reservations",
+      "/manage/push-test",
+    ].includes(i.href)
   ),
-  "push-test copy"
+  "default catalog hides preview/reservations/push-test"
+);
+assert(
+  legacy.map((i) => i.href).join(",") ===
+    [
+      "/manage/assignments/preview",
+      "/manage/reservations",
+      "/manage/push-test",
+    ].join(","),
+  "legacy catalog order"
+);
+assert(
+  legacy.every((i) => i.legacy === true),
+  "legacy items flagged"
 );
 assert(
   ADMIN_TOOL_ITEMS.some(
     (i) =>
-      i.href === "/manage/reservations" && i.description.includes("DB 저장 없음")
+      i.href === "/manage/push-test" &&
+      i.description.includes("Native/PWA Push") &&
+      i.legacy === true
   ),
-  "reservations copy"
+  "push-test copy + legacy"
+);
+assert(
+  ADMIN_TOOL_ITEMS.some(
+    (i) =>
+      i.href === "/manage/reservations" &&
+      i.description.includes("DB 저장 없음") &&
+      i.legacy === true
+  ),
+  "reservations copy + legacy"
+);
+assert(
+  ADMIN_TOOL_ITEMS.some(
+    (i) =>
+      i.href === "/manage/alimtalk" &&
+      i.description.includes("실제 발송 없음") &&
+      !i.legacy
+  ),
+  "알림톡 stays primary and marks preview"
+);
+assert(
+  allTools.some((i) => i.href === "/manage/assignments/preview"),
+  "manageToolItems still includes preview"
 );
 
 console.log("== routes still exist (no delete / no redirect) ==");
@@ -153,6 +202,16 @@ for (const file of routes) {
 const toolsPage = read("src/app/manage/tools/page.tsx");
 assert(toolsPage.includes("관리도구"), "hub title");
 assert(toolsPage.includes("manageToolItems"), "hub uses tool catalog");
+assert(toolsPage.includes("primaryAdminToolItems"), "hub default uses primary tools");
+assert(toolsPage.includes("legacyAdminToolItems"), "hub lists legacy separately");
+assert(toolsPage.includes("<details"), "hub uses collapsed details");
+assert(
+  ADMIN_LEGACY_TOOLS_SUMMARY === "진단 / 레거시 도구 보기",
+  "legacy summary copy"
+);
+assert(ADMIN_LEGACY_TOOL_NOTE === "운영 보조/진단용", "legacy note copy");
+assert(toolsPage.includes("ADMIN_LEGACY_TOOLS_SUMMARY"), "hub summary copy");
+assert(toolsPage.includes("ADMIN_LEGACY_TOOL_NOTE"), "legacy rows mark diagnostic");
 assert(toolsPage.includes("isAccountManagerAuth"), "hub respects staff gate");
 assert(!toolsPage.includes("redirect("), "hub does not redirect");
 const shell = read("src/components/manage/ManageShell.tsx");
