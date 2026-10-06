@@ -64,15 +64,7 @@ export function startChatPhotoPreupload(
   if (reusable) return Promise.resolve(reusable);
 
   const inflight = jobs.get(item.key);
-  if (inflight) {
-    return inflight.then((result) => {
-      if (chatPhotoClaimStillValid(result, opts.nowSec ?? Math.floor(Date.now() / 1000))) {
-        return result;
-      }
-      if (jobs.get(item.key) === inflight) jobs.delete(item.key);
-      return startChatPhotoPreupload(jobs, roomId, itemWithoutExpiredClaim(item, nowSec), opts);
-    });
-  }
+  if (inflight) return inflight;
 
   const upload = opts.upload || uploadChatPhotoDirect;
   const promise = upload(roomId, itemWithoutExpiredClaim(item, nowSec), {
@@ -114,9 +106,13 @@ export async function resolveChatPhotoUploads(
   opts: ChatPhotoPreuploadOptions = {}
 ): Promise<ChatPhotoDirectResult[]> {
   const ready = readyChatPhotosForUpload(items);
-  const settled = await mapBoundedSettled(ready, CHAT_PHOTO_UPLOAD_CONCURRENCY, (item) =>
-    startChatPhotoPreupload(jobs, roomId, item, opts)
-  );
+  const nowSec = opts.nowSec ?? Math.floor(Date.now() / 1000);
+  const settled = await mapBoundedSettled(ready, CHAT_PHOTO_UPLOAD_CONCURRENCY, async (item) => {
+    const result = await startChatPhotoPreupload(jobs, roomId, item, opts);
+    if (chatPhotoClaimStillValid(result, nowSec)) return result;
+    if (jobs.get(item.key)) jobs.delete(item.key);
+    return startChatPhotoPreupload(jobs, roomId, itemWithoutExpiredClaim(item, nowSec), opts);
+  });
   const failed = settled.find((row) => row.status === "rejected");
   if (failed && failed.status === "rejected") {
     throw failed.reason instanceof Error
