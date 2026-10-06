@@ -1,4 +1,4 @@
-import { markChatPhotoTiming } from "@/lib/chatPhotoTiming";
+import { markChatPhotoTiming, stampChatPhotoTiming } from "@/lib/chatPhotoTiming";
 
 export type ChatPhotoDirectResult = {
   id: string;
@@ -7,6 +7,18 @@ export type ChatPhotoDirectResult = {
   exp: number;
   claim: string;
 };
+
+export function chatPhotoClaimStillValid(
+  result?: ChatPhotoDirectResult | null,
+  nowSec = Math.floor(Date.now() / 1000)
+): boolean {
+  return Boolean(
+    result?.id &&
+      result.claim &&
+      Number.isFinite(result.exp) &&
+      result.exp > nowSec
+  );
+}
 
 export type ChatPhotoDirectProgress = {
   key: string;
@@ -64,8 +76,8 @@ export async function uploadChatPhotoDirect(
     put?: typeof putChatPhotoBytes;
   } = {}
 ): Promise<ChatPhotoDirectResult> {
-  if (item.send?.result?.id && item.send.result.claim) {
-    return item.send.result;
+  if (chatPhotoClaimStillValid(item.send?.result)) {
+    return item.send!.result!;
   }
   const fetchFn = opts.fetchFn || fetch;
   const put = opts.put || putChatPhotoBytes;
@@ -74,6 +86,7 @@ export async function uploadChatPhotoDirect(
 
   notify({ key: item.key, phase: "prepare", progress: 0 });
   const prepareStarted = typeof performance !== "undefined" ? performance.now() : Date.now();
+  stampChatPhotoTiming("prepare_api_start", prepareStarted);
   const preparedRes = await fetchFn(
     `/api/chat/rooms/${encodeURIComponent(roomId)}/attachments/prepare`,
     {
@@ -96,6 +109,7 @@ export async function uploadChatPhotoDirect(
 
   notify({ key: item.key, phase: "put", progress: 0, attachmentId });
   const putStarted = typeof performance !== "undefined" ? performance.now() : Date.now();
+  stampChatPhotoTiming("put_start", putStarted);
   try {
     await put(uploadUrl, item.blob, contentType, (pct) => {
       notify({ key: item.key, phase: "put", progress: pct, attachmentId });
@@ -105,10 +119,12 @@ export async function uploadChatPhotoDirect(
     notify({ key: item.key, phase: "error", progress: 0, attachmentId, error: message });
     throw e instanceof Error ? e : new Error(message);
   }
+  stampChatPhotoTiming("put_end");
   markChatPhotoTiming("direct_put", putStarted);
 
   notify({ key: item.key, phase: "finalize", progress: 100, attachmentId });
   const finalizeStarted = typeof performance !== "undefined" ? performance.now() : Date.now();
+  stampChatPhotoTiming("finalize_start", finalizeStarted);
   const finalizedRes = await fetchFn(
     `/api/chat/rooms/${encodeURIComponent(roomId)}/attachments/${encodeURIComponent(attachmentId)}/finalize`,
     {
@@ -117,6 +133,7 @@ export async function uploadChatPhotoDirect(
     }
   );
   const finalized = await finalizedRes.json().catch(() => null);
+  stampChatPhotoTiming("finalize_end");
   markChatPhotoTiming("finalize_api", finalizeStarted);
   if (!finalizedRes.ok || !finalized?.photo?.id || !finalized.photo.claim) {
     const message = finalized?.message || "사진 확인에 실패했습니다.";

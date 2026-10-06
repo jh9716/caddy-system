@@ -26,5 +26,14 @@ export {
   shouldStartOptimisticChatSend,
   usableOptimisticChatPhotos,
 } from "@/lib/chatPhotoOptimistic";
-export { uploadChatPhotoDirect } from "@/lib/chatPhotoDirectClient";
+export {
+  chatPhotoClaimStillValid,
+  uploadChatPhotoDirect,
+} from "@/lib/chatPhotoDirectClient";
+export {
+  abandonChatPhotoPreupload,
+  finishChatPhotoOutgoingUploads,
+  startChatPhotoPreupload,
+  type ChatPhotoUploadJobMap,
+} from "@/lib/chatPhotoPreupload";
 export { CHAT_PHOTO_ACCEPT, CHAT_PHOTO_MAX, chatPhotoSrc } from "@/lib/chatPhotoConstants";
