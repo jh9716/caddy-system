@@ -83,8 +83,8 @@ type NotificationClickClient = {
   navigate?: (
     url: string
   ) =>
-    | Promise<{ focus?: () => Promise<unknown> | unknown } | null | undefined>
-    | { focus?: () => Promise<unknown> | unknown }
+    | Promise<{ url?: string; focus?: () => Promise<unknown> | unknown } | null | undefined>
+    | { url?: string; focus?: () => Promise<unknown> | unknown }
     | null
     | undefined;
 };
@@ -117,16 +117,18 @@ export async function openNotificationClickUrl(input: {
       same = false;
     }
     if (!same || typeof client.navigate !== "function") continue;
-    let next: { focus?: () => Promise<unknown> | unknown } | null | undefined;
+    let next: { url?: string; focus?: () => Promise<unknown> | unknown } | null | undefined;
     try {
       next = await client.navigate(dest);
     } catch {
       continue;
     }
-    if (next && typeof next.focus === "function") {
-      await next.focus();
-      return { via: "navigate", url: dest };
+    if (!next || typeof next.focus !== "function") continue;
+    if (typeof next.url === "string" && next.url && !notificationClickUrlsEqual(next.url, dest)) {
+      continue;
     }
+    await next.focus();
+    return { via: "navigate", url: dest };
   }
 
   if (typeof input.openWindow === "function") {

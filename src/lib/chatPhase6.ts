@@ -68,14 +68,37 @@ export function clearPendingChatRoomId(storage: {
   }
 }
 
+export type ChatDeepLinkTargetedStatus = "idle" | "loading" | "ready" | "forbidden" | "error";
+
+export function resolveTargetedRoomResponse(input: {
+  httpStatus: number;
+  requestedRoomId: string;
+  body: { room?: { roomId?: string } | null } | null;
+}): { status: Exclude<ChatDeepLinkTargetedStatus, "idle" | "loading">; roomId: string | null } {
+  const requested = parseChatDeepLinkRoomId(input.requestedRoomId);
+  if (!requested) return { status: "error", roomId: null };
+  if (input.httpStatus === 403) return { status: "forbidden", roomId: null };
+  const roomId = parseChatDeepLinkRoomId(input.body?.room?.roomId);
+  if (input.httpStatus >= 200 && input.httpStatus < 300 && roomId === requested) {
+    return { status: "ready", roomId };
+  }
+  return { status: "error", roomId: null };
+}
+
 export function resolveChatDeepLinkAction(input: {
   requestedRoomId: string | null;
   rooms: readonly { roomId: string }[];
   directorySnapshotReady: boolean;
+  targetedRoom?: { roomId: string } | null;
+  targetedStatus?: ChatDeepLinkTargetedStatus;
 }): "open" | "wait" | "fallback" | "none" {
   const roomId = parseChatDeepLinkRoomId(input.requestedRoomId);
   if (!roomId) return "none";
   if (input.rooms.some((row) => row.roomId === roomId)) return "open";
+  if (input.targetedRoom?.roomId === roomId) return "open";
+  if (input.targetedStatus === "forbidden") return "fallback";
+  if (input.targetedStatus === "loading") return "wait";
+  if (input.targetedStatus === "error" && !input.directorySnapshotReady) return "wait";
   return input.directorySnapshotReady ? "fallback" : "wait";
 }
 

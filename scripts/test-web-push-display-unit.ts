@@ -326,6 +326,64 @@ async function main() {
     assert(opened.length === 0, "successful navigate does not openWindow");
 
     focused = [];
+    navigated = [];
+    opened = [];
+    const mismatchedCaddy = {
+      url: "https://www.verthill.kr/caddy",
+      focus: async () => {
+        focused.push("/caddy");
+      },
+      navigate: async (url: string) => {
+        navigated.push(url);
+        return {
+          url: "https://www.verthill.kr/caddy",
+          focus: async () => {
+            focused.push("/caddy");
+          },
+        };
+      },
+    };
+    const mismatch = await openNotificationClickUrl({
+      destinationUrl: dest,
+      clients: [mismatchedCaddy],
+      openWindow: async (url) => {
+        opened.push(url);
+      },
+    });
+    assert(mismatch.via === "open_window" && mismatch.url === dest, "navigate URL mismatch → openWindow");
+    assert(opened[0] === dest, "mismatch fallback opens /chat?room=");
+    assert(!focused.includes("/caddy") || opened[0] === dest, "mismatch does not stop on /caddy");
+
+    focused = [];
+    navigated = [];
+    opened = [];
+    const otherChat = {
+      url: "https://www.verthill.kr/chat?room=all",
+      focus: async () => {
+        focused.push("/chat?room=all");
+      },
+      navigate: async (url: string) => {
+        navigated.push(url);
+        return {
+          url,
+          focus: async () => {
+            focused.push(url);
+          },
+        };
+      },
+    };
+    const fromOtherRoom = await openNotificationClickUrl({
+      destinationUrl: dest,
+      clients: [otherChat],
+      openWindow: async (url) => {
+        opened.push(url);
+      },
+    });
+    assert(fromOtherRoom.via === "navigate" && fromOtherRoom.url === dest, "existing other /chat room navigates");
+    assert(navigated[0] === dest, "other room navigate target is requested DM");
+    assert(opened.length === 0, "successful other-room navigate does not openWindow");
+
+    focused = [];
     opened = [];
     const exact = await openNotificationClickUrl({
       destinationUrl: dest,
@@ -368,6 +426,7 @@ async function main() {
     assert(sw.includes("event.notification.data.url"), "sw uses notification.data.url");
     assert(sw.includes("clients.openWindow(url)"), "sw openWindow uses destination");
     assert(sw.includes("try {\n      next = await client.navigate(url);"), "sw try/catch around navigate");
+    assert(sw.includes("notificationClickUrlsEqual(next.url, url)"), "sw verifies navigate result URL");
     assert(
       !/if \(typeof client\.focus === "function"\) await client\.focus\(\);\s*if \(typeof client\.navigate === "function"\) await client\.navigate\(url\);\s*return;/.test(
         sw

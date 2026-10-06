@@ -17,6 +17,7 @@ import {
   isCustomRoomId,
   isDirectoryRoomId,
   isDmRoomId,
+  isValidRoomName,
   parseDmRoomId,
   truncatePreview,
   type ChatSenderRole,
@@ -165,6 +166,20 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
       return json({ ok: true, rooms: this.listForUser(claims.userId) });
     }
 
+    const roomMatch = /^\/directory\/rooms\/([^/]+)$/.exec(url.pathname);
+    if (request.method === "GET" && roomMatch) {
+      const roomId = decodeURIComponent(roomMatch[1] || "");
+      if (!isValidRoomName(roomId) || !isDirectoryRoomId(roomId)) {
+        return json({ error: "invalid_room" }, 400);
+      }
+      if (!isAllRoomId(roomId) && !this.isMember(roomId, claims.userId)) {
+        return json({ error: "room_forbidden" }, 403);
+      }
+      const row = this.getRoomRow(roomId);
+      if (!row) return json({ error: "not_found" }, 404);
+      return json({ ok: true, room: this.toSummary(row, claims.userId) });
+    }
+
     const membersMatch = /^\/directory\/rooms\/([^/]+)\/members$/.exec(url.pathname);
     if (request.method === "GET" && membersMatch) {
       const roomId = decodeURIComponent(membersMatch[1] || "");
@@ -242,6 +257,13 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
         team: String(row.team || "-"),
         joinedAt: String(row.joined_at),
       }));
+  }
+
+  private getRoomRow(roomId: string): Record<string, unknown> | null {
+    const row = this.ctx.storage.sql
+      .exec(`SELECT * FROM rooms WHERE room_id = ?`, roomId)
+      .toArray()[0];
+    return row ? (row as Record<string, unknown>) : null;
   }
 
   private lastRead(roomId: string, userId: number): number {

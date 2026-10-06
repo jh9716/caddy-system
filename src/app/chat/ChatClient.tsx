@@ -7,6 +7,7 @@ import {
 } from "@/lib/androidSystemBack";
 import {
   chatDirectoryMembersUrl,
+  chatDirectoryRoomUrl,
   chatDirectoryRoomsUrl,
   chatDirectoryWsUrl,
   chatWsUrl,
@@ -25,7 +26,20 @@ import {
   type ChatLineReply,
 } from "@/lib/chatPhase4";
 import type { ChatAttachment } from "../../../cloudflare/verthill-chat/src/protocol";
-import { CHAT_PHOTO_ACCEPT, CHAT_PHOTO_MAX, chatPhotoSrc, pickChatPhotos } from "@/lib/chatPhotoClient";
+import {
+  applyPreparedChatPhoto,
+  CHAT_PHOTO_ACCEPT,
+  CHAT_PHOTO_MAX,
+  CHAT_PHOTO_UPLOAD_CONCURRENCY,
+  chatPhotoPickRoom,
+  chatPhotoSrc,
+  instantChatPhotoPicks,
+  mapBoundedSettled,
+  prepareChatPendingPhoto,
+  readyChatPhotosForUpload,
+  type ChatPendingPhoto,
+} from "@/lib/chatPhotoClient";
+import { chatPhotoNow, markChatPhotoTiming } from "@/lib/chatPhotoTiming";
 import {
   canProfileMention,
   chatAuthorLine,
@@ -47,8 +61,10 @@ import {
   readPendingChatRoomId,
   resolveChatDeepLinkAction,
   resolveDirectoryHttpRoomsApply,
+  resolveTargetedRoomResponse,
   rollbackOptimisticChatRoom,
   upsertVisibleChatRoom,
+  type ChatDeepLinkTargetedStatus,
 } from "@/lib/chatPhase6";
 import {
   chatNotifyHeaderAriaLabel,
@@ -143,11 +159,7 @@ type ChatLine = {
   status: "sending" | "sent" | "failed";
 };
 
-type PendingChatPhoto = {
-  key: string;
-  blob: Blob;
-  previewUrl: string;
-};
+type PendingChatPhoto = ChatPendingPhoto;
 
 type SearchHit = {
   userId: number;
@@ -203,6 +215,8 @@ export default function ChatClient() {
   const [sheet, setSheet] = useState<null | "create" | "members" | "notify">(null);
   const [notifyPrefs, setNotifyPrefs] = useState<Record<string, ChatNotifyMode>>({});
   const deepLinkTriedRef = useRef("");
+  const [targetedRoom, setTargetedRoom] = useState<RoomSummary | null>(null);
+  const [targetedStatus, setTargetedStatus] = useState<ChatDeepLinkTargetedStatus>("idle");
   const [tokenInfo, setTokenInfo] = useState<TokenPayload | null>(null);
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
   const [activeRoom, setActiveRoom] = useState<RoomSummary | null>(null);
@@ -230,6 +244,8 @@ export default function ChatClient() {
   const [hasMore, setHasMore] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [pendingPhotos, setPendingPhotos] = useState<PendingChatPhoto[]>([]);
+  const pendingPhotosRef = useRef<PendingChatPhoto[]>([]);
+  const prepareJobsRef = useRef(new Map<string, Promise<ChatPendingPhoto>>());
   const [lightbox, setLightbox] = useState<{ src: string } | null>(null);
   const [replyTo, setReplyTo] = useState<ChatLineReply | null>(null);
   const [actionLine, setActionLine] = useState<ChatLine | null>(null);
@@ -348,6 +364,31 @@ export default function ChatClient() {
       }
       return match;
     });
+  }, []);
+
+  const fetchTargetedRoom = useCallback(async (token: string, roomId: string) => {
+    const url = chatDirectoryRoomUrl(roomId, token);
+    if (!url) {
+      setTargetedStatus("error");
+      return;
+    }
+    setTargetedStatus("loading");
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      const data = (await res.json().catch(() => null)) as { room?: RoomSummary } | null;
+      const resolved = resolveTargetedRoomResponse({
+        httpStatus: res.status,
+        requestedRoomId: roomId,
+        body: data,
+      });
+      if (resolved.status === "ready" && data?.room) {
+        setTargetedRoom(data.room);
+        setRooms((prev) => upsertVisibleChatRoom(prev, data.room as RoomSummary));
+      }
+      setTargetedStatus(resolved.status);
+    } catch {
+      setTargetedStatus("error");
+    }
   }, []);
 
   const fetchRoomsHttp = useCallback(async (token: string) => {
@@ -637,7 +678,13 @@ export default function ChatClient() {
         if (cancelled || !info) return;
         tokenRef.current = info;
         setTokenInfo(info);
+        const requested =
+          parseChatDeepLinkRoomId(new URLSearchParams(window.location.search).get("room")) ||
+          readPendingChatRoomId(sessionStorage);
         connectDirectory(info);
+        if (requested) {
+          void fetchTargetedRoom(info.token, requested);
+        }
         try {
           await fetchRoomsHttp(info.token);
         } catch {
@@ -670,7 +717,7 @@ export default function ChatClient() {
       wsRef.current?.close();
       dirRef.current?.close();
     };
-  }, [connectDirectory, fetchRoomsHttp, fetchToken]);
+  }, [connectDirectory, fetchRoomsHttp, fetchTargetedRoom, fetchToken]);
 
   useEffect(() => {
     const reconnect = () => {
@@ -1001,6 +1048,8 @@ export default function ChatClient() {
       requestedRoomId: requested,
       rooms,
       directorySnapshotReady,
+      targetedRoom,
+      targetedStatus,
     });
     if (action === "none" || !requested) return;
     if (action === "wait") return;
@@ -1012,11 +1061,13 @@ export default function ChatClient() {
       setView("list");
       return;
     }
-    const room = rooms.find((row) => row.roomId === requested);
+    const room =
+      rooms.find((row) => row.roomId === requested) ||
+      (targetedRoom?.roomId === requested ? targetedRoom : null);
     if (!room) return;
     clearPendingChatRoomId(typeof sessionStorage === "undefined" ? null : sessionStorage);
     void openRoom(room);
-  }, [directorySnapshotReady, rooms]);
+  }, [directorySnapshotReady, rooms, targetedRoom, targetedStatus]);
 
   async function saveNotifyMode(mode: ChatNotifyMode) {
     const room = activeRoom;
@@ -1083,9 +1134,10 @@ export default function ChatClient() {
   }
 
   async function uploadPendingPhotos(roomId: string, items: PendingChatPhoto[]) {
-    const uploaded: Array<ChatAttachment & { exp: number; claim: string }> = [];
-    for (let i = 0; i < items.length; i++) {
-      const blob = items[i].blob;
+    const ready = readyChatPhotosForUpload(items);
+    const uploadStarted = chatPhotoNow();
+    const settled = await mapBoundedSettled(ready, CHAT_PHOTO_UPLOAD_CONCURRENCY, async (item, i) => {
+      const blob = item.blob;
       const mime = (blob.type || "image/jpeg").toLowerCase();
       const ext = mime.includes("png") ? "png" : mime.includes("webp") ? "webp" : "jpg";
       const fd = new FormData();
@@ -1099,34 +1151,72 @@ export default function ChatClient() {
       if (!res.ok || !data?.photo?.id || !data.photo.claim) {
         throw new Error(data?.message || "사진 업로드에 실패했습니다.");
       }
-      uploaded.push({
+      return {
         id: String(data.photo.id),
         mimeType: String(data.photo.mimeType || "image/jpeg"),
         size: Number(data.photo.size || blob.size),
         exp: Number(data.photo.exp),
         claim: String(data.photo.claim),
-      });
+      };
+    });
+    markChatPhotoTiming("upload_post", uploadStarted);
+    const failed = settled.find((row) => row.status === "rejected");
+    if (failed && failed.status === "rejected") {
+      throw failed.reason instanceof Error
+        ? failed.reason
+        : new Error("사진 업로드에 실패했습니다.");
     }
-    return uploaded;
+    return settled.map((row) => {
+      if (row.status !== "fulfilled") {
+        throw new Error("사진 업로드에 실패했습니다.");
+      }
+      return row.value;
+    });
+  }
+
+  function setPendingPhotoList(next: PendingChatPhoto[]) {
+    pendingPhotosRef.current = next;
+    setPendingPhotos(next);
   }
 
   async function addPendingPhotos(files: FileList | File[]) {
-    const room = CHAT_PHOTO_MAX - pendingPhotos.length;
+    const selectedAt = chatPhotoNow();
+    const room = chatPhotoPickRoom(pendingPhotosRef.current.length);
     if (room <= 0) {
       setError("사진은 최대 3장까지 첨부할 수 있습니다.");
       return;
     }
-    const picked = await pickChatPhotos(Array.from(files), room);
+    const picked = instantChatPhotoPicks(Array.from(files), room, {
+      fileIds: pendingPhotosRef.current.map((item) => item.fileId),
+    });
     if (picked.note) setError(picked.note);
-    setPendingPhotos((prev) => [...prev, ...picked.items].slice(0, CHAT_PHOTO_MAX));
+    if (picked.items.length === 0) return;
+    const next = [...pendingPhotosRef.current, ...picked.items].slice(0, CHAT_PHOTO_MAX);
+    setPendingPhotoList(next);
+    markChatPhotoTiming("select_to_preview", selectedAt);
+    for (let i = 0; i < picked.items.length; i++) {
+      const item = picked.items[i];
+      const file = picked.sources[i];
+      if (!item || !file) continue;
+      const job = prepareChatPendingPhoto(item, file).then((prepared) => {
+        markChatPhotoTiming("select_to_prepared", selectedAt);
+        const applied = applyPreparedChatPhoto(pendingPhotosRef.current, prepared);
+        if (applied.note) setError(applied.note);
+        setPendingPhotoList(applied.items);
+        return prepared;
+      });
+      prepareJobsRef.current.set(item.key, job);
+    }
   }
 
   function removePendingPhoto(key: string) {
-    setPendingPhotos((prev) => {
-      const hit = prev.find((item) => item.key === key);
-      if (hit) URL.revokeObjectURL(hit.previewUrl);
-      return prev.filter((item) => item.key !== key);
+    prepareJobsRef.current.delete(key);
+    const next = pendingPhotosRef.current.filter((item) => {
+      if (item.key !== key) return true;
+      URL.revokeObjectURL(item.previewUrl);
+      return false;
     });
+    setPendingPhotoList(next);
   }
 
   function applyDraft(next: string, cursor: number) {
@@ -1168,7 +1258,7 @@ export default function ChatClient() {
 
   async function handleSend() {
     const body = draft.trim();
-    const photos = pendingPhotos;
+    const photos = pendingPhotosRef.current;
     if ((!body && photos.length === 0) || sending || !tokenInfo) return;
     const roomId = roomRef.current?.roomId || "";
     if (!roomId) return;
@@ -1181,7 +1271,19 @@ export default function ChatClient() {
     let uploaded: Array<ChatAttachment & { exp: number; claim: string }> = [];
     try {
       if (photos.length > 0) {
-        uploaded = await uploadPendingPhotos(roomId, photos);
+        await Promise.allSettled(
+          photos.map((item) => prepareJobsRef.current.get(item.key) || Promise.resolve(item))
+        );
+        const latest = pendingPhotosRef.current.filter((item) => item.status !== "failed");
+        if (latest.some((item) => item.status !== "ready")) {
+          throw new Error("사진 처리에 실패했습니다.");
+        }
+        if (latest.length === 0 && !body) {
+          throw new Error("사진 처리에 실패했습니다.");
+        }
+        if (latest.length > 0) {
+          uploaded = await uploadPendingPhotos(roomId, latest);
+        }
       }
     } catch (e) {
       setSending(false);
@@ -1193,8 +1295,10 @@ export default function ChatClient() {
     setMentionAllDraft(false);
     setMentionSuppressed(false);
     setReplyTo(null);
-    setPendingPhotos([]);
-    for (const item of photos) URL.revokeObjectURL(item.previewUrl);
+    const sentPhotos = pendingPhotosRef.current;
+    setPendingPhotoList([]);
+    prepareJobsRef.current.clear();
+    for (const item of sentPhotos) URL.revokeObjectURL(item.previewUrl);
     upsertLine({
       clientMessageId,
       senderUserId: tokenInfo.user.userId,
@@ -1211,7 +1315,9 @@ export default function ChatClient() {
       status: "sending",
     });
     try {
+      const sendStarted = chatPhotoNow();
       await sendCurrent(body, clientMessageId, tokens, mentionAll, reply?.seq, uploaded);
+      markChatPhotoTiming("message_ws_send", sendStarted);
     } catch {
       setLines((prev) =>
         prev.map((l) =>
@@ -1775,9 +1881,24 @@ export default function ChatClient() {
             {pendingPhotos.length > 0 ? (
               <div className="vh-chat-pending-photos">
                 {pendingPhotos.map((item) => (
-                  <div key={item.key} className="vh-chat-pending-photo">
+                  <div
+                    key={item.key}
+                    className={
+                      item.status === "failed"
+                        ? "vh-chat-pending-photo is-failed"
+                        : item.status === "preparing"
+                          ? "vh-chat-pending-photo is-preparing"
+                          : "vh-chat-pending-photo"
+                    }
+                  >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={item.previewUrl} alt="" />
+                    {item.status === "preparing" ? (
+                      <span className="vh-chat-pending-status">처리 중</span>
+                    ) : null}
+                    {item.status === "failed" ? (
+                      <span className="vh-chat-pending-status">실패</span>
+                    ) : null}
                     <button
                       type="button"
                       className="vh-chat-pending-x"
@@ -1859,7 +1980,10 @@ export default function ChatClient() {
             <button
               type="submit"
               className="ui-btn ui-btn-primary vh-chat-send"
-              disabled={(!draft.trim() && pendingPhotos.length === 0) || sending}
+              disabled={
+                sending ||
+                (!draft.trim() && pendingPhotos.every((item) => item.status === "failed"))
+              }
             >
               {sending ? "전송 중..." : "전송"}
             </button>

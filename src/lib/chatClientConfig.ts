@@ -54,3 +54,11 @@ export function chatDirectoryMembersUrl(roomId: string, token: string): string {
   url.searchParams.set("token", token);
   return url.toString();
 }
+
+export function chatDirectoryRoomUrl(roomId: string, token: string): string {
+  const base = chatHttpBaseUrl();
+  if (!base) return "";
+  const url = new URL(`/directory/rooms/${encodeURIComponent(roomId)}`, base);
+  url.searchParams.set("token", token);
+  return url.toString();
+}

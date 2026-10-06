@@ -51,6 +51,14 @@ import { shouldNotifyChatUser, selectChatPushRecipients } from "../src/lib/chatP
 import { buildChatPushPayload } from "../src/lib/chatPushMessage";
 import { applyDeletedLine } from "../src/lib/chatPhase4";
 import { CourseReportPhotoValidationError } from "../src/lib/courseReportPhotoMagic";
+import {
+  applyPreparedChatPhoto,
+  instantChatPhotoPicks,
+  mapBoundedSettled,
+  prepareChatPendingPhoto,
+  readyChatPhotosForUpload,
+} from "../src/lib/chatPhotoPick";
+import { markChatPhotoTiming, resetChatPhotoTiming } from "../src/lib/chatPhotoTiming";
 
 let passed = 0;
 let failed = 0;
@@ -266,7 +274,79 @@ section("push recipient regression");
   assert(payload.url.startsWith("/chat?room="), "deep-link unchanged");
 }
 
+section("instant preview + parallel upload");
+{
+  if (typeof URL.createObjectURL !== "function") {
+    let n = 0;
+    URL.createObjectURL = () => `blob:test-${++n}`;
+    URL.revokeObjectURL = () => {};
+  }
+  globalThis.__CHAT_PHOTO_TIMING__ = { marks: [] };
+  resetChatPhotoTiming();
+  const started = 0;
+  markChatPhotoTiming("select_to_preview", started);
+  assert(globalThis.__CHAT_PHOTO_TIMING__?.marks.some((m) => m.name === "select_to_preview"), "dev timing records select→preview");
+
+  const jpgA = new File([new Uint8Array([1, 2, 3])], "a.jpg", { type: "image/jpeg", lastModified: 1 });
+  const jpgB = new File([new Uint8Array([4, 5, 6])], "b.jpg", { type: "image/jpeg", lastModified: 2 });
+  const jpgC = new File([new Uint8Array([7, 8, 9])], "c.jpg", { type: "image/jpeg", lastModified: 3 });
+  const instantStarted = Date.now();
+  const picked = instantChatPhotoPicks([jpgA, jpgB, jpgC], 3);
+  const previewMs = Date.now() - instantStarted;
+  assert(picked.items.length === 3, "3장 instant preview");
+  assert(picked.items.every((item) => item.status === "preparing"), "preview before prepare");
+  assert(picked.items.every((item) => item.previewUrl.startsWith("blob:")), "object URL preview");
+  assert(previewMs < 50, "instant preview is not blocked by encode");
+
+  const one = instantChatPhotoPicks([jpgA], 3);
+  assert(one.items.length === 1, "1장 instant preview");
+  const dup = instantChatPhotoPicks([jpgA], 2, { fileIds: one.items.map((item) => item.fileId) });
+  assert(dup.items.length === 0, "fileId blocks duplicate before fingerprint");
+  assert(dup.note.includes("이미 추가한"), "duplicate note from fileId");
+
+  let prepareCalls = 0;
+  const slowPrepare = async (file: File) => {
+    prepareCalls += 1;
+    await new Promise((r) => setTimeout(r, 20));
+    return new Blob([`ready-${file.name}`], { type: "image/jpeg" });
+  };
+  const prepared = await prepareChatPendingPhoto(picked.items[0], jpgA, slowPrepare);
+  assert(prepareCalls === 1, "prepare runs after instant pick");
+  assert(prepared.status === "ready", "prepare success");
+  assert(prepared.blob !== jpgA, "upload blob replaced");
+  const applied = applyPreparedChatPhoto(picked.items, prepared);
+  assert(applied.items[0]?.status === "ready", "state blob replaced after prepare");
+  assert(applied.items[0]?.previewUrl === picked.items[0]?.previewUrl, "preview URL stays");
+
+  const failed = await prepareChatPendingPhoto(picked.items[1], jpgB, async () => {
+    throw new Error("변환 실패");
+  });
+  assert(failed.status === "failed", "prepare failure status");
+  const failedApplied = applyPreparedChatPhoto(applied.items, failed);
+  assert(failedApplied.items[1]?.status === "failed", "failed preview kept");
+  assert(failedApplied.note.includes("변환 실패"), "prepare fail copy");
+
+  const order: number[] = [];
+  const settled = await mapBoundedSettled([1, 2, 3], 3, async (n) => {
+    order.push(n);
+    await new Promise((r) => setTimeout(r, 5));
+    return `ok-${n}`;
+  });
+  assert(settled.every((row) => row.status === "fulfilled"), "3장 bounded parallel all ok");
+  assert(order.length === 3, "all three upload jobs started");
+
+  const partial = await mapBoundedSettled(["a", "b", "c"], 3, async (id) => {
+    if (id === "b") throw new Error("upload down");
+    return id;
+  });
+  assert(partial.some((row) => row.status === "rejected"), "partial upload failure visible");
+  assert(partial.filter((row) => row.status === "fulfilled").length === 2, "other uploads still settle");
+  const ready = readyChatPhotosForUpload(failedApplied.items);
+  assert(ready.length === 1 && ready[0]?.status === "ready", "only ready blobs upload");
+}
+
 section("source wiring / no public blob");
+
 {
   const client = read("src/app/chat/ChatClient.tsx");
   const worker = read("cloudflare/verthill-chat/src/index.ts");
@@ -274,7 +354,12 @@ section("source wiring / no public blob");
   const recipients = read("src/lib/chatPushRecipients.ts");
   const dispatch = read("src/lib/chatPushDispatch.ts");
   const photo = read("src/lib/chatPhoto.ts");
-  assert(client.includes("pickChatPhotos"), "composer uses shared prepare/pick");
+  const reportClient = read("src/lib/courseReportPhotoClient.ts");
+  assert(client.includes("instantChatPhotoPicks"), "composer instant preview before prepare");
+  assert(client.includes("prepareChatPendingPhoto"), "composer prepares in background");
+  assert(client.includes("mapBoundedSettled"), "composer bounded parallel upload");
+  assert(client.includes("처리 중"), "preparing status copy");
+  assert(reportClient.includes("createImageBitmap"), "createImageBitmap decode path");
   assert(client.includes("전송 중..."), "sending copy");
   assert(client.includes("chatPhotoSrc"), "authenticated photo src");
   assert(!client.includes("blob.vercel"), "client has no public blob url");

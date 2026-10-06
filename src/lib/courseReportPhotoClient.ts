@@ -86,6 +86,42 @@ function loadImage(file: Blob): Promise<HTMLImageElement> {
   });
 }
 
+type DrawableSource = {
+  width: number;
+  height: number;
+  draw(ctx: CanvasRenderingContext2D, width: number, height: number): void;
+  close(): void;
+};
+
+async function loadDrawable(file: Blob): Promise<DrawableSource> {
+  if (typeof createImageBitmap === "function") {
+    try {
+      const bitmap = await createImageBitmap(file);
+      return {
+        width: bitmap.width,
+        height: bitmap.height,
+        draw(ctx, width, height) {
+          ctx.drawImage(bitmap, 0, 0, width, height);
+        },
+        close() {
+          bitmap.close();
+        },
+      };
+    } catch {
+      // fall through to HTMLImageElement
+    }
+  }
+  const img = await loadImage(file);
+  return {
+    width: img.width,
+    height: img.height,
+    draw(ctx, width, height) {
+      ctx.drawImage(img, 0, 0, width, height);
+    },
+    close() {},
+  };
+}
+
 function hasTransparentPixels(canvas: HTMLCanvasElement): boolean {
   const ctx = canvas.getContext("2d");
   if (!ctx) return false;
@@ -104,42 +140,46 @@ export async function prepareCourseReportPhoto(file: File): Promise<Blob> {
     throw new Error("사진이 너무 큽니다.");
   }
   const source = await decodeCourseReportPhotoSource(file);
-  let img: HTMLImageElement;
+  let drawable: DrawableSource;
   try {
-    img = await loadImage(source);
+    drawable = await loadDrawable(source);
   } catch {
     throw new Error(
       isHeicLikeFile(file) ? COURSE_REPORT_HEIC_CONVERT_MESSAGE : COURSE_REPORT_HEIC_MESSAGE
     );
   }
-  const longEdge = Math.max(img.width, img.height) || 1;
-  const scale = Math.min(1, COURSE_REPORT_PHOTO_LONG_EDGE / longEdge);
-  const width = Math.max(1, Math.round(img.width * scale));
-  const height = Math.max(1, Math.round(img.height * scale));
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("encode_failed");
-  ctx.drawImage(img, 0, 0, width, height);
+  try {
+    const longEdge = Math.max(drawable.width, drawable.height) || 1;
+    const scale = Math.min(1, COURSE_REPORT_PHOTO_LONG_EDGE / longEdge);
+    const width = Math.max(1, Math.round(drawable.width * scale));
+    const height = Math.max(1, Math.round(drawable.height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("encode_failed");
+    drawable.draw(ctx, width, height);
 
-  const type = (source.type || file.type || "").toLowerCase();
-  if (type === "image/png" && hasTransparentPixels(canvas)) {
-    const blob = await canvasToBlob(canvas, "image/png");
+    const type = (source.type || file.type || "").toLowerCase();
+    if (type === "image/png" && hasTransparentPixels(canvas)) {
+      const blob = await canvasToBlob(canvas, "image/png");
+      if (blob.size > COURSE_REPORT_PHOTO_MAX_BYTES) {
+        throw new Error("사진은 장당 3MB 이하만 첨부할 수 있습니다.");
+      }
+      return blob;
+    }
+    const blob = await canvasToBlob(
+      canvas,
+      "image/jpeg",
+      COURSE_REPORT_PHOTO_JPEG_QUALITY
+    );
     if (blob.size > COURSE_REPORT_PHOTO_MAX_BYTES) {
       throw new Error("사진은 장당 3MB 이하만 첨부할 수 있습니다.");
     }
     return blob;
+  } finally {
+    drawable.close();
   }
-  const blob = await canvasToBlob(
-    canvas,
-    "image/jpeg",
-    COURSE_REPORT_PHOTO_JPEG_QUALITY
-  );
-  if (blob.size > COURSE_REPORT_PHOTO_MAX_BYTES) {
-    throw new Error("사진은 장당 3MB 이하만 첨부할 수 있습니다.");
-  }
-  return blob;
 }
 
 export type CourseReportPendingPick = {
