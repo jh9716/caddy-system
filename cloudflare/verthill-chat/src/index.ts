@@ -16,6 +16,7 @@ import {
   REPLY_DELETED,
   RETENTION_ALARM_MS,
   RETENTION_BATCH,
+  CHAT_ATTACHMENT_CLEANUP_BATCH,
   canAdminDelete,
   canDeleteForEveryone,
   clampSyncAfterSeq,
@@ -36,6 +37,7 @@ import {
   replyTargetFromRow,
   resolveMentionAll,
   senderRoleFromClaims,
+  shouldPurgeChatAttachmentsOnDelete,
   storedAttachmentsFromIncoming,
   verifyChatAttachmentClaim,
   validateIncomingDelete,
@@ -65,6 +67,32 @@ export interface Env {
   CHAT_INTERNAL_SECRET?: string;
   /** Optional Next origin for best-effort chat push. Example: https://www.verthill.kr/api/chat/push-dispatch */
   CHAT_PUSH_DISPATCH_URL?: string;
+}
+
+function nextInternalUrl(env: Env, pathname: string): string {
+  const pushUrl = String(env.CHAT_PUSH_DISPATCH_URL || "").trim();
+  if (!pushUrl) return "";
+  try {
+    const parsed = new URL(pushUrl);
+    parsed.pathname = pathname;
+    parsed.search = "";
+    return parsed.toString();
+  } catch {
+    return "";
+  }
+}
+
+function uniqueAttachmentIds(raw: string[], limit: number): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of raw) {
+    const id = String(value || "").trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+    if (out.length >= limit) break;
+  }
+  return out;
 }
 
 function corsHeaders(): Record<string, string> {
@@ -445,9 +473,13 @@ export class ChatRoom extends DurableObject<Env> {
       if (!(await verifyInternalRequest(request, this.env, url.pathname))) {
         return json({ error: "forbidden" }, 403);
       }
+      const pokedRoom = String(url.searchParams.get("room") || "").trim();
+      if (pokedRoom) await this.rememberRoomId(pokedRoom);
       await this.ensureRetentionAlarm();
-      this.purgeExpiredMessages(RETENTION_BATCH);
-      return json({ ok: true });
+      const attachmentIds = this.purgeExpiredMessages(RETENTION_BATCH);
+      const roomId = pokedRoom || (await this.storedRoomId());
+      this.queueAttachmentCleanup(roomId, attachmentIds);
+      return json({ ok: true, purged: attachmentIds.length });
     }
     const authorized = await authorizeSocket(request, this.env);
     if (authorized instanceof Response) return authorized;
@@ -461,6 +493,7 @@ export class ChatRoom extends DurableObject<Env> {
     this.ctx.acceptWebSocket(server);
     const attach: SocketAttach = { claims: authorized.claims, roomId: authorized.room };
     server.serializeAttachment(attach);
+    void this.rememberRoomId(authorized.room);
     this.sendHistory(server, authorized.claims.userId, null, HISTORY_LIMIT);
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -875,7 +908,7 @@ export class ChatRoom extends DurableObject<Env> {
   ) {
     const row = this.ctx.storage.sql
       .exec(
-        `SELECT seq, sender_user_id, sender, sender_role, sent_at, deletion_type
+        `SELECT seq, sender_user_id, sender, sender_role, sent_at, deletion_type, attachments_json
          FROM messages WHERE seq = ?`,
         seq
       )
@@ -934,6 +967,10 @@ export class ChatRoom extends DurableObject<Env> {
     };
     this.broadcastJson(event);
     void this.notifyDirectoryTombstone(attach.roomId, event);
+    if (shouldPurgeChatAttachmentsOnDelete(deletionType)) {
+      const attachmentIds = parseStoredAttachments(row.attachments_json).map((item) => item.id);
+      this.queueAttachmentCleanup(attach.roomId, attachmentIds);
+    }
   }
 
   private liveAttach(socket: WebSocket): SocketAttach | null {
@@ -1053,7 +1090,8 @@ export class ChatRoom extends DurableObject<Env> {
   async alarm() {
     let delay = RETENTION_ALARM_MS;
     try {
-      this.purgeExpiredMessages(RETENTION_BATCH);
+      const attachmentIds = this.purgeExpiredMessages(RETENTION_BATCH);
+      this.queueAttachmentCleanup(await this.storedRoomId(), attachmentIds);
       const remaining = this.ctx.storage.sql
         .exec(
           `SELECT 1 AS ok FROM messages WHERE sent_at < ? LIMIT 1`,
@@ -1083,20 +1121,25 @@ export class ChatRoom extends DurableObject<Env> {
     }
   }
 
-  private purgeExpiredMessages(limit: number) {
+  private purgeExpiredMessages(limit: number): string[] {
     const cutoff = new Date(Date.now() - MESSAGE_RETENTION_MS).toISOString();
     const old = this.ctx.storage.sql
       .exec(
-        `SELECT seq FROM messages WHERE sent_at < ? ORDER BY seq ASC LIMIT ?`,
+        `SELECT seq, attachments_json FROM messages WHERE sent_at < ? ORDER BY seq ASC LIMIT ?`,
         cutoff,
         limit
       )
       .toArray();
+    const attachmentIds: string[] = [];
     for (const row of old) {
       const seq = Number(row.seq);
+      for (const item of parseStoredAttachments(row.attachments_json)) {
+        attachmentIds.push(item.id);
+      }
       this.ctx.storage.sql.exec(`DELETE FROM hidden_messages WHERE seq = ?`, seq);
       this.ctx.storage.sql.exec(`DELETE FROM messages WHERE seq = ? AND sent_at < ?`, seq, cutoff);
     }
+    return uniqueAttachmentIds(attachmentIds, RETENTION_BATCH * 3);
   }
 
   private async notifyDirectoryTombstone(roomId: string, event: MessageDeletedEvent) {
@@ -1115,18 +1158,65 @@ export class ChatRoom extends DurableObject<Env> {
     await this.notifyDirectoryPreview(roomId, latest);
   }
 
-  private async consumeChatAttachments(attachmentIds: string[]) {
-    const pushUrl = String(this.env.CHAT_PUSH_DISPATCH_URL || "").trim();
-    if (!pushUrl || attachmentIds.length === 0) return;
-    let consumeUrl = "";
+  private async rememberRoomId(roomId: string) {
+    const id = String(roomId || "").trim();
+    if (!id) return;
     try {
-      const parsed = new URL(pushUrl);
-      parsed.pathname = "/api/chat/attachments/consume";
-      parsed.search = "";
-      consumeUrl = parsed.toString();
+      await this.ctx.storage.put("roomId", id);
     } catch {
-      return;
+      // local storage optional
     }
+  }
+
+  private async storedRoomId(): Promise<string> {
+    try {
+      return String((await this.ctx.storage.get("roomId")) || "").trim();
+    } catch {
+      return "";
+    }
+  }
+
+  private queueAttachmentCleanup(roomId: string, attachmentIds: string[]) {
+    const ids = uniqueAttachmentIds(attachmentIds, RETENTION_BATCH * 3);
+    if (!roomId || ids.length === 0) return;
+    for (let i = 0; i < ids.length; i += CHAT_ATTACHMENT_CLEANUP_BATCH) {
+      const chunk = ids.slice(i, i + CHAT_ATTACHMENT_CLEANUP_BATCH);
+      try {
+        this.ctx.waitUntil(this.sendAttachmentCleanup(roomId, chunk));
+      } catch {
+        void this.sendAttachmentCleanup(roomId, chunk);
+      }
+    }
+  }
+
+  private async sendAttachmentCleanup(roomId: string, attachmentIds: string[]) {
+    const url = nextInternalUrl(this.env, "/api/chat/attachments/cleanup");
+    if (!url || !roomId || attachmentIds.length === 0) return;
+    try {
+      const headers = await internalAuthHeaders(
+        chatInternalSecret(this.env),
+        "/api/chat/attachments/cleanup"
+      );
+      const res = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ roomId, attachmentIds }),
+      });
+      if (!res.ok) {
+        console.error("[chat-photo] attachment cleanup request failed", {
+          roomId,
+          status: res.status,
+          attachmentIds,
+        });
+      }
+    } catch {
+      console.error("[chat-photo] attachment cleanup request error", { roomId, attachmentIds });
+    }
+  }
+
+  private async consumeChatAttachments(attachmentIds: string[]) {
+    const consumeUrl = nextInternalUrl(this.env, "/api/chat/attachments/consume");
+    if (!consumeUrl || attachmentIds.length === 0) return;
     try {
       const headers = await internalAuthHeaders(
         chatInternalSecret(this.env),

@@ -3,7 +3,7 @@ import {
   CHAT_ATTACHMENT_CONSUME_PATH,
   verifyChatInternalRequest,
 } from "@/lib/chatInternalAuth";
-import { consumeChatAttachments } from "@/lib/chatPhoto";
+import { consumeChatAttachments, runChatAttachmentMaintenance } from "@/lib/chatPhoto";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -17,5 +17,6 @@ export async function POST(req: NextRequest) {
   const raw = Array.isArray(body?.attachmentIds) ? body.attachmentIds : [];
   const attachmentIds = raw.map((id) => String(id || "").trim()).filter(Boolean);
   const consumed = await consumeChatAttachments(prisma, attachmentIds);
+  void runChatAttachmentMaintenance(prisma);
   return NextResponse.json({ ok: true, consumed });
 }

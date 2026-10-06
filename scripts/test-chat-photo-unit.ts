@@ -22,12 +22,15 @@ import {
   cleanupOrphanChatAttachments,
   consumeChatAttachments,
   loadChatPhotoMeta,
+  purgeChatAttachments,
   uploadChatPhoto,
 } from "../src/lib/chatPhoto";
 import { POST as POST_PHOTO } from "../src/app/api/chat/rooms/[roomId]/attachments/route";
 import { GET as GET_PHOTO } from "../src/app/api/chat/rooms/[roomId]/attachments/[attachmentId]/route";
 import { POST as POST_CONSUME } from "../src/app/api/chat/attachments/consume/route";
+import { POST as POST_CLEANUP } from "../src/app/api/chat/attachments/cleanup/route";
 import {
+  CHAT_ATTACHMENT_CLEANUP_PATH,
   CHAT_ATTACHMENT_CONSUME_PATH,
   CHAT_INTERNAL_AUTH_HEADER,
   CHAT_INTERNAL_TS_HEADER,
@@ -39,6 +42,7 @@ import {
   directorySafePreview,
   parseIncomingAttachments,
   replyPreviewFromBody,
+  shouldPurgeChatAttachmentsOnDelete,
   signChatAttachmentClaim,
   validateIncomingMessage,
   verifyChatAttachmentClaim,
@@ -146,6 +150,9 @@ section("protocol / wire");
     }) === CHAT_PHOTO_REPLY_PREVIEW,
     "reply to photo"
   );
+  assert(shouldPurgeChatAttachmentsOnDelete("everyone") === true, "everyone delete purges");
+  assert(shouldPurgeChatAttachmentsOnDelete("admin") === true, "admin delete purges");
+  assert(shouldPurgeChatAttachmentsOnDelete("hide") === false, "hide-for-me keeps attachments");
   const deleted = applyDeletedLine(
     [
       {
@@ -300,6 +307,14 @@ section("source wiring / no public blob");
   );
   assert(worker.includes("attachments_json"), "DO stores metadata json");
   assert(worker.includes("verifyChatAttachmentClaim"), "worker verifies claims");
+  assert(worker.includes("runChatAttachmentMaintenance") === false, "worker does not import Next maintenance");
+  assert(photo.includes("runChatAttachmentMaintenance"), "upload runs orphan maintenance");
+  assert(photo.includes("purgeChatAttachments"), "room-scoped purge helper");
+  const hideFn = worker.slice(worker.indexOf("private hideForMe"), worker.indexOf("private deleteMessage"));
+  assert(!hideFn.includes("queueAttachmentCleanup"), "hide-for-me does not purge blob");
+  assert(worker.includes("queueAttachmentCleanup(attach.roomId"), "everyone/admin delete queues cleanup");
+  assert(worker.includes("SELECT seq, attachments_json FROM messages WHERE sent_at"), "retention captures attachments");
+  assert(worker.includes("/api/chat/attachments/cleanup"), "worker calls cleanup API");
   assert(proto.includes("CHAT_PHOTO_PUSH_BODY"), "push copy in protocol");
   assert(!recipients.includes("attachment"), "recipient selection unchanged");
   assert(!dispatch.includes("attachment"), "dispatch orchestration unchanged");
@@ -496,6 +511,155 @@ if (!ALLOW_DB) {
 
       const orphans = await cleanupOrphanChatAttachments(prisma, 0);
       assert(orphans.deleted >= 0, "orphan cleanup best-effort");
+    }
+
+    section("attachment lifecycle / cleanup");
+    {
+      const cookie = await cookieFor({ id: user.id, username: user.username, role: "admin" });
+      await prisma.chatAttachment.deleteMany({
+        where: { senderUserId: { in: [user.id, other.id] } },
+      });
+
+      const orphanPhoto = await uploadChatPhoto(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        bytes: jpegBytes(14, 21),
+      });
+      await prisma.chatAttachment.update({
+        where: { id: orphanPhoto.id },
+        data: { createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000) },
+      });
+      const keptConsumed = await uploadChatPhoto(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        bytes: jpegBytes(14, 22),
+      });
+      await consumeChatAttachments(prisma, [keptConsumed.id]);
+      await prisma.chatAttachment.update({
+        where: { id: keptConsumed.id },
+        data: { createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000) },
+      });
+      const fresh = await uploadChatPhoto(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        bytes: jpegBytes(14, 23),
+      });
+      await cleanupOrphanChatAttachments(prisma);
+      assert(!(await prisma.chatAttachment.findUnique({ where: { id: orphanPhoto.id } })), "orphan row removed");
+      assert(!(await store.get(`chat/all/${orphanPhoto.id}.jpg`)), "orphan blob removed");
+      assert(!!(await prisma.chatAttachment.findUnique({ where: { id: keptConsumed.id } })), "consumed attachment not orphaned");
+      assert(!!(await prisma.chatAttachment.findUnique({ where: { id: fresh.id } })), "fresh unconsumed kept");
+
+      const hideKept = await uploadChatPhoto(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        bytes: jpegBytes(14, 24),
+      });
+      assert(shouldPurgeChatAttachmentsOnDelete("hide") === false, "hide helper keeps attachment");
+      assert(!!(await prisma.chatAttachment.findUnique({ where: { id: hideKept.id } })), "hide-for-me attachment remains");
+      assert(!!(await store.get(`chat/all/${hideKept.id}.jpg`)), "hide-for-me blob remains");
+      await consumeChatAttachments(prisma, [hideKept.id, fresh.id]);
+
+      const everyone = await uploadChatPhoto(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        bytes: jpegBytes(14, 25),
+      });
+      const everyonePurge = await purgeChatAttachments(prisma, {
+        roomId: "all",
+        attachmentIds: [everyone.id],
+      });
+      assert(everyonePurge.deleted === 1, "delete-for-everyone removes DB row");
+      assert(!(await prisma.chatAttachment.findUnique({ where: { id: everyone.id } })), "everyone row gone");
+      assert(!(await store.get(`chat/all/${everyone.id}.jpg`)), "everyone blob deleted");
+
+      const adminPhoto = await uploadChatPhoto(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        bytes: jpegBytes(14, 26),
+      });
+      const adminPurge = await purgeChatAttachments(prisma, {
+        roomId: "all",
+        attachmentIds: [adminPhoto.id],
+      });
+      assert(adminPurge.deleted === 1, "admin delete removes DB row + blob");
+      assert(!(await prisma.chatAttachment.findUnique({ where: { id: adminPhoto.id } })), "admin row gone");
+
+      const retention = await uploadChatPhoto(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        bytes: jpegBytes(14, 27),
+      });
+      const retentionPurge = await purgeChatAttachments(prisma, {
+        roomId: "all",
+        attachmentIds: [retention.id],
+      });
+      assert(retentionPurge.deleted === 1, "retention purge removes attachment");
+
+      const otherRoom = await uploadChatPhoto(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        bytes: jpegBytes(14, 28),
+      });
+      const crossed = await purgeChatAttachments(prisma, {
+        roomId: "dm_1_2",
+        attachmentIds: [otherRoom.id],
+      });
+      assert(crossed.deleted === 0 && crossed.skipped >= 1, "cross-room cleanup rejected");
+      assert(!!(await prisma.chatAttachment.findUnique({ where: { id: otherRoom.id } })), "cross-room row kept");
+
+      const failBlob = await uploadChatPhoto(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        bytes: jpegBytes(14, 29),
+      });
+      const prevDelete = store.delete.bind(store);
+      store.delete = async () => {
+        throw new Error("blob down");
+      };
+      const failed = await purgeChatAttachments(prisma, {
+        roomId: "all",
+        attachmentIds: [failBlob.id],
+      });
+      store.delete = prevDelete;
+      assert(failed.deleted === 1, "blob failure still deletes DB row");
+      assert(failed.blobFailed.some((row) => row.id === failBlob.id), "blob failure is retry-logged");
+      assert(!(await prisma.chatAttachment.findUnique({ where: { id: failBlob.id } })), "GET source row gone after failed blob");
+
+      const gone = await GET_PHOTO(
+        req(`http://localhost/api/chat/rooms/all/attachments/${everyone.id}`, {
+          headers: { cookie },
+        }),
+        { params: Promise.resolve({ roomId: "all", attachmentId: everyone.id }) }
+      );
+      assert(gone.status === 404, "deleted attachment GET is 404");
+
+      const ts = Math.floor(Date.now() / 1000);
+      const bad = await POST_CLEANUP(
+        req("http://localhost/api/chat/attachments/cleanup", {
+          method: "POST",
+          body: JSON.stringify({ roomId: "all", attachmentIds: [otherRoom.id] }),
+        })
+      );
+      assert(bad.status === 403, "cleanup endpoint bad HMAC → 403");
+
+      const sig = await signChatInternalAuth(
+        process.env.CHAT_INTERNAL_SECRET || "",
+        CHAT_ATTACHMENT_CLEANUP_PATH,
+        ts
+      );
+      const cleaned = await POST_CLEANUP(
+        req("http://localhost/api/chat/attachments/cleanup", {
+          method: "POST",
+          headers: {
+            [CHAT_INTERNAL_AUTH_HEADER]: sig,
+            [CHAT_INTERNAL_TS_HEADER]: String(ts),
+          },
+          body: JSON.stringify({ roomId: "all", attachmentIds: [otherRoom.id] }),
+        })
+      );
+      const cleanedJson = await cleaned.json();
+      assert(cleaned.status === 200 && cleanedJson.deleted >= 1, "internal cleanup deletes room attachment");
     }
   } finally {
     await prisma.chatAttachment.deleteMany({

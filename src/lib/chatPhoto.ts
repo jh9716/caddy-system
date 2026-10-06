@@ -6,10 +6,12 @@ import {
 } from "../../cloudflare/verthill-chat/src/protocol";
 import { getChatAuthSecret } from "@/lib/chatToken";
 import {
+  CHAT_PHOTO_CLEANUP_BATCH,
   CHAT_PHOTO_MAX,
   CHAT_PHOTO_ORPHAN_MS,
   chatPhotoSrc,
 } from "@/lib/chatPhotoConstants";
+import { CHAT_ATTACHMENT_ID_RE } from "../../cloudflare/verthill-chat/src/protocol";
 import {
   COURSE_REPORT_PHOTO_EXT,
   type CourseReportPhotoMime,
@@ -197,7 +199,9 @@ export async function uploadChatPhoto(
       409
     );
   }
-  return toPublic(row);
+  const photo = await toPublic(row);
+  await runChatAttachmentMaintenance(db);
+  return photo;
 }
 
 export async function loadChatPhotoMeta(
@@ -264,7 +268,7 @@ export async function cleanupOrphanChatAttachments(
     rows = await db.chatAttachment.findMany({
       where: { consumedAt: null, createdAt: { lt: cutoff } },
       select: { id: true, storageKey: true },
-      take: 50,
+      take: CHAT_PHOTO_CLEANUP_BATCH,
     });
   } catch (e) {
     if (isChatAttachmentTableMissing(e)) return { deleted: 0, blobFailed: [] };
@@ -285,7 +289,92 @@ export async function cleanupOrphanChatAttachments(
       await store.delete(row.storageKey);
     } catch {
       blobFailed.push(row.storageKey);
+      console.error("[chat-photo] orphan blob cleanup failed", {
+        attachmentId: row.id,
+        storageKey: row.storageKey,
+      });
     }
   }
   return { deleted, blobFailed };
+}
+
+function uniqueAttachmentIds(raw: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of raw) {
+    const id = String(value || "").trim();
+    if (!CHAT_ATTACHMENT_ID_RE.test(id) || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+    if (out.length >= CHAT_PHOTO_CLEANUP_BATCH) break;
+  }
+  return out;
+}
+
+export type ChatAttachmentPurgeResult = {
+  deleted: number;
+  skipped: number;
+  blobFailed: Array<{ id: string; roomId: string; storageKey: string }>;
+};
+
+/** Room-scoped hard delete of attachment rows + best-effort Blob. Never throws. */
+export async function purgeChatAttachments(
+  db: PrismaClient,
+  input: { roomId: string; attachmentIds: string[] }
+): Promise<ChatAttachmentPurgeResult> {
+  const roomId = String(input.roomId || "").trim();
+  const ids = uniqueAttachmentIds(input.attachmentIds || []);
+  const empty: ChatAttachmentPurgeResult = { deleted: 0, skipped: 0, blobFailed: [] };
+  if (!roomId || ids.length === 0) return empty;
+  let rows: Array<{ id: string; roomId: string; storageKey: string }>;
+  try {
+    rows = await db.chatAttachment.findMany({
+      where: { id: { in: ids }, roomId },
+      select: { id: true, roomId: true, storageKey: true },
+      take: CHAT_PHOTO_CLEANUP_BATCH,
+    });
+  } catch (e) {
+    if (isChatAttachmentTableMissing(e)) return empty;
+    console.error("[chat-photo] attachment purge lookup failed", e);
+    return empty;
+  }
+  const store = resolveChatPhotoStore();
+  const blobFailed: ChatAttachmentPurgeResult["blobFailed"] = [];
+  let deleted = 0;
+  for (const row of rows) {
+    try {
+      await db.chatAttachment.delete({ where: { id: row.id } });
+      deleted += 1;
+    } catch {
+      continue;
+    }
+    if (!store.configured) continue;
+    try {
+      await store.delete(row.storageKey);
+    } catch {
+      blobFailed.push(row);
+      console.error("[chat-photo] attachment blob cleanup failed", {
+        roomId: row.roomId,
+        attachmentId: row.id,
+        storageKey: row.storageKey,
+      });
+    }
+  }
+  return {
+    deleted,
+    skipped: ids.length - rows.length,
+    blobFailed,
+  };
+}
+
+/** Best-effort. Must never throw or fail a successful upload/consume. */
+export async function runChatAttachmentMaintenance(
+  db: PrismaClient
+): Promise<{ deleted: number; blobFailed: string[] }> {
+  try {
+    return await cleanupOrphanChatAttachments(db);
+  } catch (e) {
+    console.error("[chat-photo] orphan cleanup failed", e);
+    return { deleted: 0, blobFailed: [] };
+  }
 }

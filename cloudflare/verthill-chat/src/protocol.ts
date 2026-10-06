@@ -43,6 +43,7 @@ export const MESSAGE_RETENTION_DAYS = 180;
 export const MESSAGE_RETENTION_MS = MESSAGE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 export const RETENTION_ALARM_MS = 24 * 60 * 60 * 1000;
 export const RETENTION_BATCH = 200;
+export const CHAT_ATTACHMENT_CLEANUP_BATCH = 50;
 export const SYNC_LIMIT = 100;
 export const SYNC_PAGE_MAX = 100;
 export const TOMBSTONE_EVERYONE = "메시지가 삭제되었습니다.";
@@ -64,6 +65,13 @@ export type ChatSenderRole = "admin" | "caddy" | "leader";
 export type ChatMention = { userId: number };
 
 export type ChatDeletionType = "everyone" | "admin";
+
+/** hide-for-me must keep Blob/DB. everyone/admin/retention purge attachments. */
+export function shouldPurgeChatAttachmentsOnDelete(
+  mode: string | null | undefined
+): boolean {
+  return mode === "everyone" || mode === "admin";
+}
 
 export type ChatReplyState = "ok" | "deleted" | "expired";
 
