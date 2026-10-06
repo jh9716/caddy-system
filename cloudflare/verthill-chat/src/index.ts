@@ -241,6 +241,10 @@ export default {
     if (request.method === "GET" && membersMatch) {
       return forwardDirectory(request, env);
     }
+    const roomSummaryMatch = /^\/directory\/rooms\/([^/]+)$/.exec(url.pathname);
+    if (request.method === "GET" && roomSummaryMatch) {
+      return forwardDirectory(request, env);
+    }
     if (request.method === "POST" && url.pathname === "/directory/rooms") {
       return createRoomFromGrant(request, env);
     }

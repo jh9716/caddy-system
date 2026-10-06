@@ -29,6 +29,7 @@ import {
   parseChatDeepLinkRoomId,
   resolveChatDeepLinkAction,
   resolveDirectoryHttpRoomsApply,
+  resolveTargetedRoomResponse,
   rollbackOptimisticChatRoom,
   upsertVisibleChatRoom,
 } from "../src/lib/chatPhase6";
@@ -365,6 +366,63 @@ section("collapse + deep link");
   assert(
     resolveChatDeepLinkAction({
       requestedRoomId: "dm_8_40",
+      rooms: earlyRooms,
+      directorySnapshotReady: false,
+      targetedRoom: { roomId: "dm_8_40" },
+      targetedStatus: "ready",
+    }) === "open",
+    "targeted DM summary opens before snapshot"
+  );
+  assert(
+    resolveChatDeepLinkAction({
+      requestedRoomId: "dm_8_40",
+      rooms: earlyRooms,
+      directorySnapshotReady: false,
+      targetedStatus: "loading",
+    }) === "wait",
+    "targeted loading waits"
+  );
+  assert(
+    resolveChatDeepLinkAction({
+      requestedRoomId: "dm_8_40",
+      rooms: earlyRooms,
+      directorySnapshotReady: false,
+      targetedStatus: "forbidden",
+    }) === "fallback",
+    "targeted unauthorized fail-closed"
+  );
+  assert(
+    resolveChatDeepLinkAction({
+      requestedRoomId: "dm_8_40",
+      rooms: earlyRooms,
+      directorySnapshotReady: false,
+      targetedStatus: "error",
+    }) === "wait",
+    "targeted network error waits for snapshot"
+  );
+  assert(
+    resolveChatDeepLinkAction({
+      requestedRoomId: "all",
+      rooms: [],
+      directorySnapshotReady: false,
+      targetedRoom: { roomId: "all" },
+      targetedStatus: "ready",
+    }) === "open",
+    "ALL targeted summary opens immediately"
+  );
+  assert(
+    resolveChatDeepLinkAction({
+      requestedRoomId: "room_0123456789abcdef",
+      rooms: [],
+      directorySnapshotReady: false,
+      targetedRoom: { roomId: "room_0123456789abcdef" },
+      targetedStatus: "ready",
+    }) === "open",
+    "CUSTOM targeted summary opens immediately"
+  );
+  assert(
+    resolveChatDeepLinkAction({
+      requestedRoomId: "dm_8_40",
       rooms: [...earlyRooms, { roomId: "dm_8_40" }],
       directorySnapshotReady: true,
     }) === "open",
@@ -448,6 +506,30 @@ section("collapse + deep link");
     ok: true,
     rooms: [{ roomId: "all" }],
   });
+  assert(
+    resolveTargetedRoomResponse({
+      httpStatus: 200,
+      requestedRoomId: "dm_8_40",
+      body: { room: { roomId: "dm_8_40" } },
+    }).status === "ready",
+    "targeted 200 + matching room is ready"
+  );
+  assert(
+    resolveTargetedRoomResponse({
+      httpStatus: 403,
+      requestedRoomId: "dm_8_40",
+      body: { error: "room_forbidden" } as never,
+    }).status === "forbidden",
+    "targeted 403 is forbidden"
+  );
+  assert(
+    resolveTargetedRoomResponse({
+      httpStatus: 404,
+      requestedRoomId: "dm_8_40",
+      body: null,
+    }).status === "error",
+    "targeted 404 waits via error (old worker / missing row)"
+  );
   assert(staleHttp === "ignore", "stale HTTP after reconnect is ignored");
   assert(
     nextDirectorySnapshotReady(false, "connect_start") === false,
@@ -546,6 +628,10 @@ section("source wiring");
   assert(client.includes("notifyPrefs[activeRoom.roomId] ?? DEFAULT_CHAT_NOTIFY_MODE"), "header uses room pref or default");
   assert(client.includes("[room.roomId]: prev"), "failed save rolls back pref");
   assert(client.includes("directorySnapshotReady"), "deep link waits for snapshot");
+  assert(client.includes("fetchTargetedRoom"), "token then targeted room summary");
+  assert(client.includes("chatDirectoryRoomUrl"), "targeted room URL helper");
+  assert(client.includes("targetedStatus"), "targeted status drives deep link");
+  assert(client.includes("resolveTargetedRoomResponse"), "targeted HTTP mapped fail-closed");
   assert(!/directorySnapshotReady:\s*directoryConnected/.test(client), "socket open is not snapshot ready");
   assert(!/directoryConnected \|\| \(\!loading && rooms\.length/.test(client), "no early ALL/team fallback");
   assert(client.includes("nextDirectorySnapshotReady"), "client uses snapshot transition helper");

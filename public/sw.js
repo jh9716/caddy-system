@@ -131,10 +131,12 @@ async function openNotificationClickUrl(clients, url) {
     } catch {
       continue;
     }
-    if (next && typeof next.focus === "function") {
-      await next.focus();
-      return;
+    if (!next || typeof next.focus !== "function") continue;
+    if (typeof next.url === "string" && next.url && !notificationClickUrlsEqual(next.url, url)) {
+      continue;
     }
+    await next.focus();
+    return;
   }
   if (clients.openWindow) await clients.openWindow(url);
 }

@@ -252,6 +252,35 @@ test("phase2 overall room, ACL, directory unread, admin spoof", async () => {
       false
     );
 
+    const memberRoom = await fetch(
+      `http://${HOST}:${port}/directory/rooms/${roomId}?token=${encodeURIComponent(aTok.token)}`
+    );
+    const memberRoomBody = await memberRoom.json();
+    assert.equal(memberRoom.status, 200);
+    assert.equal(memberRoomBody.ok, true);
+    assert.equal(memberRoomBody.room.roomId, roomId);
+    assert.equal(memberRoomBody.room.name, "대바");
+
+    const outsiderRoom = await fetch(
+      `http://${HOST}:${port}/directory/rooms/${roomId}?token=${encodeURIComponent(outsider.token)}`
+    );
+    const outsiderRoomBody = await outsiderRoom.json();
+    assert.equal(outsiderRoom.status, 403);
+    assert.equal(outsiderRoomBody.error, "room_forbidden");
+    assert.equal(outsiderRoomBody.room, undefined);
+
+    const allRoom = await fetch(
+      `http://${HOST}:${port}/directory/rooms/all?token=${encodeURIComponent(outsider.token)}`
+    );
+    const allRoomBody = await allRoom.json();
+    assert.equal(allRoom.status, 200);
+    assert.equal(allRoomBody.room.roomId, "all");
+
+    const missingRoom = await fetch(
+      `http://${HOST}:${port}/directory/rooms/dm_1_99?token=${encodeURIComponent(aTok.token)}`
+    );
+    assert.equal(missingRoom.status === 403 || missingRoom.status === 404, true);
+
     const outsiderMembers = await fetch(
       `http://${HOST}:${port}/directory/rooms/${roomId}/members?token=${encodeURIComponent(outsider.token)}`
     );
