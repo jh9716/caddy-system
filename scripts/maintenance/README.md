@@ -52,6 +52,16 @@ npx tsx scripts/maintenance/deploy-comment-v1-migration.ts
 
 `prisma migrate deploy` only. No db push / migrate reset / seed / Comment INSERT/UPDATE/DELETE.
 
+ChatAttachment Photo V1 production schema:
+
+```
+PROD_MAINTENANCE_CONFIRM=CHAT_ATTACHMENT_PHOTO_V1_20261006 \
+DATABASE_URL="$PRODUCTION_DATABASE_URL" \
+npx tsx scripts/maintenance/deploy-chat-attachment-photo-v1-migration.ts
+```
+
+`prisma migrate deploy` only. No db push / migrate reset / seed / ChatAttachment INSERT / Blob write.
+
 DevicePushToken V1 production schema (PREPARE only, no app deploy):
 
 ```
