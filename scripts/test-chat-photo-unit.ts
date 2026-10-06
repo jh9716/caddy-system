@@ -492,10 +492,11 @@ section("source wiring / no public blob");
   assert(client.includes("instantChatPhotoPicks"), "composer instant preview before prepare");
   assert(client.includes("prepareChatPendingPhoto"), "composer prepares in background");
   assert(client.includes("mapBoundedSettled"), "composer bounded parallel upload");
+  const direct = read("src/lib/chatPhotoDirectClient.ts");
   assert(client.includes("uploadChatPhotoDirect"), "composer uses direct Blob PUT");
   assert(!client.includes("fd.append"), "composer no longer posts photo bytes to Next");
-  assert(client.includes("/attachments/prepare"), "composer calls prepare");
-  assert(client.includes("/finalize"), "composer calls finalize");
+  assert(direct.includes("/attachments/prepare"), "composer calls prepare");
+  assert(direct.includes("/finalize"), "composer calls finalize");
   assert(client.includes("처리 중"), "preparing status copy");
   assert(reportClient.includes("createImageBitmap"), "createImageBitmap decode path");
   assert(client.includes("전송 중..."), "sending copy");
@@ -1204,6 +1205,7 @@ if (!ALLOW_DB) {
     await prisma.user.deleteMany({ where: { id: { in: [user.id, other.id] } } });
     setCourseReportPhotoStoreForTests(null);
   }
+}
 }
 
 section("direct upload security / mime");
