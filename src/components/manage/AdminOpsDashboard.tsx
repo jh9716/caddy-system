@@ -33,6 +33,15 @@ import {
   isStaleDashboardDate,
   shouldShowDashboardZeroCount,
 } from "@/lib/pendingLoad";
+import {
+  DASHBOARD_ACCOUNT_LINK_LABELS,
+  DASHBOARD_ACCOUNT_LINK_SUMMARY_PATH,
+  accountLinkEntryForCaddy,
+  compactAccountLinkMark,
+  type DashboardAccountLinkEntry,
+  type DashboardAccountLinkSummary,
+} from "@/lib/adminCaddyLinkSummary";
+import Link from "next/link";
 
 type DashboardResponse = AdminOpsDashboardView & { ok?: boolean; error?: string };
 
@@ -166,7 +175,15 @@ function SummaryCard({
   );
 }
 
-export function TeamBoardPerson({ row }: { row: AdminOpsCaddyRow }) {
+export function TeamBoardPerson({
+  row,
+  account = null,
+  onOpen,
+}: {
+  row: AdminOpsCaddyRow;
+  account?: DashboardAccountLinkEntry | null;
+  onOpen?: (row: AdminOpsCaddyRow) => void;
+}) {
   const reason = row.reasons[0] || row.statusLabel;
   return (
     <li
@@ -174,9 +191,30 @@ export function TeamBoardPerson({ row }: { row: AdminOpsCaddyRow }) {
       data-caddy-id={row.id}
       data-status={row.status}
       data-tone={row.statusTone}
+      data-account={account?.status}
     >
-      <span className="dash-team-person-name">{row.name}</span>
-      <span className="dash-team-person-reason">{reason}</span>
+      <button
+        type="button"
+        className="dash-team-person-hit"
+        onClick={onOpen ? () => onOpen(row) : undefined}
+      >
+        <span className="dash-team-person-name">{row.name}</span>
+        <span className="dash-team-person-meta">
+          <span className="dash-team-person-reason">{reason}</span>
+          {account ? (
+            <span
+              className={`dash-acct is-${account.status.toLowerCase()}`}
+              title={
+                account.username
+                  ? `${DASHBOARD_ACCOUNT_LINK_LABELS[account.status]} · ${account.username}`
+                  : DASHBOARD_ACCOUNT_LINK_LABELS[account.status]
+              }
+            >
+              {compactAccountLinkMark(account.status)}
+            </span>
+          ) : null}
+        </span>
+      </button>
     </li>
   );
 }
@@ -205,12 +243,17 @@ export function AdminOpsTeamBoardSkeleton() {
 
 export function AdminOpsTeamBoard({
   groups,
+  accountById,
+  onOpenCaddy,
 }: {
   groups: readonly AdminOpsTeamGroup[];
+  accountById?: DashboardAccountLinkSummary["byCaddyId"];
+  onOpenCaddy?: (row: AdminOpsCaddyRow) => void;
 }) {
   if (groups.length === 0) {
     return <p className="dash-empty">표시할 캐디가 없습니다.</p>;
   }
+  const summary = accountById ? { byCaddyId: accountById } : null;
   return (
     <div className="dash-team-board">
       {groups.map((group) => (
@@ -228,7 +271,12 @@ export function AdminOpsTeamBoard({
           ) : (
             <ul className="dash-team-list">
               {group.rows.map((row) => (
-                <TeamBoardPerson key={row.id} row={row} />
+                <TeamBoardPerson
+                  key={row.id}
+                  row={row}
+                  account={accountLinkEntryForCaddy(summary, row.id)}
+                  onOpen={onOpenCaddy}
+                />
               ))}
             </ul>
           )}
@@ -265,6 +313,12 @@ export default function AdminOpsDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [accountById, setAccountById] = useState<
+    DashboardAccountLinkSummary["byCaddyId"]
+  >({});
+  const [selectedCaddy, setSelectedCaddy] = useState<AdminOpsCaddyRow | null>(
+    null
+  );
   const loadGen = useRef(0);
   const sheetReady = Boolean(data && data.date === date && data.sheetDerivedReady);
   const initial = loading && !data;
@@ -372,11 +426,38 @@ export default function AdminOpsDashboard() {
     void load(date);
   }, [date, load]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const loadAccounts = async () => {
+      try {
+        const res = await fetch(DASHBOARD_ACCOUNT_LINK_SUMMARY_PATH, {
+          cache: "no-store",
+          credentials: "include",
+          method: "GET",
+        });
+        const json = (await res.json().catch(() => ({}))) as {
+          byCaddyId?: DashboardAccountLinkSummary["byCaddyId"];
+        };
+        if (cancelled || !res.ok || !json.byCaddyId) return;
+        setAccountById(json.byCaddyId);
+      } catch {
+        /* 대시보드는 유지하고 계정 badge만 숨김 */
+      }
+    };
+    void loadAccounts();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const visible = useMemo(
     () => (data ? filterDashboardCaddies(data.caddies, query) : []),
     [data, query]
   );
   const teamGroups = useMemo(() => groupCaddiesByPrimaryTeam(visible), [visible]);
+  const selectedAccount = selectedCaddy
+    ? accountLinkEntryForCaddy({ byCaddyId: accountById }, selectedCaddy.id)
+    : null;
 
   return (
     <div
@@ -540,9 +621,52 @@ export default function AdminOpsDashboard() {
         {initial ? (
           <AdminOpsTeamBoardSkeleton />
         ) : data ? (
-          <AdminOpsTeamBoard groups={teamGroups} />
+          <AdminOpsTeamBoard
+            groups={teamGroups}
+            accountById={accountById}
+            onOpenCaddy={setSelectedCaddy}
+          />
         ) : null}
       </section>
+
+      {selectedCaddy && (
+        <div
+          className="dash-caddy-overlay"
+          onClick={() => setSelectedCaddy(null)}
+        >
+          <div
+            className="dash-caddy-modal"
+            role="dialog"
+            aria-label="캐디 상세"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="dash-caddy-modal-title">{selectedCaddy.name}</h2>
+            <p className="dash-caddy-modal-line">
+              {selectedCaddy.team} · {selectedCaddy.reasons[0] || selectedCaddy.statusLabel}
+            </p>
+            {selectedAccount ? (
+              <p className="dash-caddy-modal-line">
+                계정 {DASHBOARD_ACCOUNT_LINK_LABELS[selectedAccount.status]}
+                {selectedAccount.username ? ` · ${selectedAccount.username}` : ""}
+              </p>
+            ) : (
+              <p className="dash-caddy-modal-line">계정 상태 확인 안 됨</p>
+            )}
+            <div className="dash-caddy-modal-actions">
+              <Link href="/manage/users" className="dash-caddy-modal-link">
+                계정 연결 관리
+              </Link>
+              <button
+                type="button"
+                className="dash-date-btn"
+                onClick={() => setSelectedCaddy(null)}
+              >
+                닫기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <p className="dash-footnote">
         과거 날짜도 현재 재직 명단·저장된 휴무/당번으로 재구성합니다. 당시 스냅샷 저장은

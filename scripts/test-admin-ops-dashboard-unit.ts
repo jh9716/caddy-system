@@ -397,6 +397,21 @@ section("전체 캐디 조별 현황판 가용/제외");
   assert(leaveRow.status === "excluded", "LEAVE 제외 유지");
   assert(thirdRow.caddyType === "THIRD" && thirdRow.statusTone === "leader", "3부반+조장 semantics 유지");
   assert(dash.roster.houseCount === 3 && dash.roster.thirdCount === 1, "HOUSE/3부반 KPI 유지");
+  const withAccount = renderToStaticMarkup(
+    createElement(TeamBoardPerson, {
+      row: {
+        ...off,
+        name: "이제이",
+        status: "available",
+        statusLabel: "가용",
+        statusTone: "available",
+        reasons: [],
+      },
+      account: { status: "LINKED", username: "kakao_x" },
+    })
+  );
+  assert(withAccount.includes("가용") && withAccount.includes("🔗"), "계정 badge가 가용 라벨을 가리지 않음");
+  assert(withAccount.includes("is-available"), "가용 색 유지");
 }
 
 section("휴무 count source (OFF Sheet overlay + Assignment)");
@@ -827,6 +842,15 @@ section("기존 관리자 dashboard access policy");
   assert(/requireAdmin/.test(api), "dashboard GET requireAdmin");
   assert(/AdminOpsDashboard/.test(page), "/manage가 V2 대시보드 사용");
   assert(!/AppRole = /.test(api), "새 role 타입 없음");
+  const dashUi = readSrc("src/components/manage/AdminOpsDashboard.tsx");
+  assert(
+    /DASHBOARD_ACCOUNT_LINK_SUMMARY_PATH/.test(dashUi),
+    "계정 요약은 독립 fetch"
+  );
+  assert(
+    !/account-link/.test(api),
+    "운영 dashboard GET에 계정 요약을 섞지 않음"
+  );
 }
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);
