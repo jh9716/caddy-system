@@ -130,6 +130,8 @@ export async function uploadChatPhoto(
     throw new CourseReportPhotoValidationError("forbidden", "사진을 첨부할 수 없습니다.", 403);
   }
 
+  await runChatAttachmentMaintenance(db);
+
   let pending: number;
   try {
     pending = await db.chatAttachment.count({
@@ -199,9 +201,7 @@ export async function uploadChatPhoto(
       409
     );
   }
-  const photo = await toPublic(row);
-  await runChatAttachmentMaintenance(db);
-  return photo;
+  return toPublic(row);
 }
 
 export async function loadChatPhotoMeta(

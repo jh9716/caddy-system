@@ -661,6 +661,100 @@ if (!ALLOW_DB) {
       const cleanedJson = await cleaned.json();
       assert(cleaned.status === 200 && cleanedJson.deleted >= 1, "internal cleanup deletes room attachment");
     }
+
+    section("orphan quota ordering");
+    {
+      await prisma.chatAttachment.deleteMany({
+        where: { senderUserId: { in: [user.id, other.id] } },
+      });
+      const consumedKept = await uploadChatPhoto(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        bytes: jpegBytes(12, 39),
+      });
+      await consumeChatAttachments(prisma, [consumedKept.id]);
+      const stale = [];
+      for (let i = 0; i < 3; i++) {
+        stale.push(
+          await uploadChatPhoto(prisma, {
+            roomId: "all",
+            senderUserId: user.id,
+            bytes: jpegBytes(12, 40 + i),
+          })
+        );
+      }
+      await prisma.chatAttachment.updateMany({
+        where: { id: { in: [...stale.map((p) => p.id), consumedKept.id] } },
+        data: { createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000) },
+      });
+      const afterStale = await uploadChatPhoto(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        bytes: jpegBytes(12, 51),
+      });
+      assert(!!afterStale.id, "3 stale unconsumed cleaned then upload succeeds");
+      assert(
+        (await prisma.chatAttachment.findMany({
+          where: { id: { in: stale.map((p) => p.id) } },
+        })).length === 0,
+        "stale unconsumed removed before quota"
+      );
+      assert(
+        !!(await prisma.chatAttachment.findUnique({ where: { id: consumedKept.id } })),
+        "consumed attachment not touched"
+      );
+
+      await prisma.chatAttachment.deleteMany({ where: { senderUserId: user.id } });
+      const freshIds: string[] = [];
+      for (let i = 0; i < 3; i++) {
+        freshIds.push(
+          (
+            await uploadChatPhoto(prisma, {
+              roomId: "all",
+              senderUserId: user.id,
+              bytes: jpegBytes(12, 60 + i),
+            })
+          ).id
+        );
+      }
+      let freshLimit = "";
+      try {
+        await uploadChatPhoto(prisma, {
+          roomId: "all",
+          senderUserId: user.id,
+          bytes: jpegBytes(12, 70),
+        });
+      } catch (e) {
+        freshLimit = e instanceof CourseReportPhotoValidationError ? e.code : "other";
+      }
+      assert(freshLimit === "photo_limit", "fresh unconsumed 3 still 409");
+      assert(
+        (await prisma.chatAttachment.count({
+          where: { id: { in: freshIds }, consumedAt: null },
+        })) === 3,
+        "fresh unconsumed kept"
+      );
+
+      await prisma.chatAttachment.deleteMany({ where: { senderUserId: user.id } });
+      const origFindMany = prisma.chatAttachment.findMany.bind(prisma.chatAttachment);
+      prisma.chatAttachment.findMany = (async (args: unknown) => {
+        const where = (args as { where?: { consumedAt?: unknown; createdAt?: unknown } } | undefined)?.where;
+        if (where && where.consumedAt === null && where.createdAt) {
+          throw new Error("cleanup down");
+        }
+        return origFindMany(args as never);
+      }) as typeof prisma.chatAttachment.findMany;
+      try {
+        const despiteCleanup = await uploadChatPhoto(prisma, {
+          roomId: "all",
+          senderUserId: user.id,
+          bytes: jpegBytes(12, 80),
+        });
+        assert(!!despiteCleanup.id, "cleanup failure does not fail in-quota upload");
+      } finally {
+        prisma.chatAttachment.findMany = origFindMany;
+      }
+    }
   } finally {
     await prisma.chatAttachment.deleteMany({
       where: { senderUserId: { in: [user.id, other.id] } },
