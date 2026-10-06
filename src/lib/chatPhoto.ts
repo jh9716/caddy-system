@@ -20,10 +20,32 @@ import {
 } from "@/lib/courseReportPhotoMagic";
 import {
   CourseReportPhotoStorageError,
+  createMemoryCourseReportPhotoStore,
   getCourseReportPhotoStore,
+  type CourseReportPhotoStore,
 } from "@/lib/courseReportPhotoStorage";
+import { isLocalDatabaseUrl } from "@/lib/dbSafety";
 
 export { chatPhotoSrc };
+
+let localMemoryStore: CourseReportPhotoStore | null = null;
+
+/** Local agent/dev only. Never on Vercel. Never when Blob is configured. */
+export function allowLocalChatPhotoMemoryStore(
+  env: NodeJS.ProcessEnv = process.env
+): boolean {
+  if (env.LOCAL_PHOTO_MEMORY !== "1") return false;
+  if (env.VERCEL === "1") return false;
+  return isLocalDatabaseUrl(env.DATABASE_URL);
+}
+
+function resolveChatPhotoStore(): CourseReportPhotoStore {
+  const store = getCourseReportPhotoStore();
+  if (store.configured) return store;
+  if (!allowLocalChatPhotoMemoryStore()) return store;
+  if (!localMemoryStore) localMemoryStore = createMemoryCourseReportPhotoStore();
+  return localMemoryStore;
+}
 
 export type ChatPhotoPublic = {
   id: string;
@@ -89,7 +111,7 @@ export async function uploadChatPhoto(
     bytes: Uint8Array;
   }
 ): Promise<ChatPhotoPublic> {
-  const store = getCourseReportPhotoStore();
+  const store = resolveChatPhotoStore();
   if (!store.configured) {
     throw new CourseReportPhotoStorageError(
       "storage_not_configured",
@@ -191,7 +213,7 @@ export async function loadChatPhotoMeta(
 }
 
 export async function openChatPhotoBody(storageKey: string, abortSignal?: AbortSignal) {
-  const store = getCourseReportPhotoStore();
+  const store = resolveChatPhotoStore();
   if (!store.configured) {
     throw new CourseReportPhotoStorageError(
       "storage_not_configured",
@@ -243,7 +265,7 @@ export async function cleanupOrphanChatAttachments(
     if (isChatAttachmentTableMissing(e)) return { deleted: 0, blobFailed: [] };
     throw e;
   }
-  const store = getCourseReportPhotoStore();
+  const store = resolveChatPhotoStore();
   const blobFailed: string[] = [];
   let deleted = 0;
   for (const row of rows) {

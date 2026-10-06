@@ -18,6 +18,7 @@ import {
   setCourseReportPhotoStoreForTests,
 } from "../src/lib/courseReportPhotoStorage";
 import {
+  allowLocalChatPhotoMemoryStore,
   cleanupOrphanChatAttachments,
   consumeChatAttachments,
   loadChatPhotoMeta,
@@ -271,8 +272,31 @@ section("source wiring / no public blob");
   assert(client.includes("chatPhotoSrc"), "authenticated photo src");
   assert(!client.includes("blob.vercel"), "client has no public blob url");
   assert(photo.includes("chat/${roomId}/"), "chat storage namespace");
+  assert(photo.includes("allowLocalChatPhotoMemoryStore"), "local memory store is gated");
   assert(!photo.includes("notices/"), "does not write notice keys");
   assert(!photo.includes("course-reports/"), "does not write report keys");
+  assert(
+    !allowLocalChatPhotoMemoryStore({
+      LOCAL_PHOTO_MEMORY: "1",
+      VERCEL: "1",
+      DATABASE_URL: "postgresql://caddy:caddy@localhost:5432/caddy_local",
+    } as NodeJS.ProcessEnv),
+    "memory store off on Vercel"
+  );
+  assert(
+    !allowLocalChatPhotoMemoryStore({
+      LOCAL_PHOTO_MEMORY: "1",
+      DATABASE_URL: "postgresql://caddy:caddy@ep-prod.neon.tech/neondb",
+    } as NodeJS.ProcessEnv),
+    "memory store off on neon"
+  );
+  assert(
+    allowLocalChatPhotoMemoryStore({
+      LOCAL_PHOTO_MEMORY: "1",
+      DATABASE_URL: "postgresql://caddy:caddy@localhost:5432/caddy_local",
+    } as NodeJS.ProcessEnv),
+    "memory store on for local flag"
+  );
   assert(worker.includes("attachments_json"), "DO stores metadata json");
   assert(worker.includes("verifyChatAttachmentClaim"), "worker verifies claims");
   assert(proto.includes("CHAT_PHOTO_PUSH_BODY"), "push copy in protocol");
