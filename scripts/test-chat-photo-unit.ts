@@ -1474,7 +1474,6 @@ if (!ALLOW_DB) {
     setCourseReportPhotoStoreForTests(null);
   }
 }
-}
 
 section("direct upload security / mime");
 {
@@ -1544,7 +1543,7 @@ section("direct upload security / mime");
   }
   assert(COURSE_REPORT_PHOTO_MAGIC_PREFIX_BYTES === 256, "magic prefix cap is 256");
 
-  function streamFrom(bytes: Uint8Array, pull = 64, pulled?: { n: number }) {
+  function streamFrom(bytes: Uint8Array, pull = 64, pulled?: { n: number; cancelled?: boolean }) {
     let offset = 0;
     return new ReadableStream<Uint8Array>({
       pull(controller) {
@@ -1556,6 +1555,9 @@ section("direct upload security / mime");
         offset += next.byteLength;
         if (pulled) pulled.n += next.byteLength;
         controller.enqueue(next);
+      },
+      cancel() {
+        if (pulled) pulled.cancelled = true;
       },
     });
   }
@@ -1587,7 +1589,7 @@ section("direct upload security / mime");
   assert(!!prefix200 && prefix200[0] === 0x89, "Range GET 200 + stream → prefix");
 
   let getCalls = 0;
-  const pulled = { n: 0 };
+  const pulled = { n: 0, cancelled: false };
   const huge = jpegBytes(3 * 1024 * 1024 - 8, 4);
   const fallback = await readBlobObjectPrefixWithGet(async (_key, opts) => {
     getCalls += 1;
@@ -1597,7 +1599,8 @@ section("direct upload security / mime");
   }, "chat/all/c.jpg", 256);
   assert(getCalls === 2, "Range unusable/null → non-range fallback");
   assert(!!fallback && fallback.byteLength === 256, "non-range fallback also max 256 bytes");
-  assert(pulled.n <= 256, "fallback stream pulled <=256 bytes");
+  assert(pulled.cancelled === true, "fallback stream cancelled after prefix");
+  assert(pulled.n < huge.byteLength, "fallback did not pull the 3MB object");
 
   let rangeOnly = 0;
   await readBlobObjectPrefixWithGet(async () => {
@@ -1629,6 +1632,7 @@ section("direct upload security / mime");
   );
   assert(missing === null, "BlobNotFoundError stays null");
   assert(notFoundCalls === 1, "not-found does not run non-range fallback");
+}
 }
 
 main().then(() => {
