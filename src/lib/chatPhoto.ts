@@ -28,7 +28,9 @@ import { isLocalDatabaseUrl } from "@/lib/dbSafety";
 
 export { chatPhotoSrc };
 
-let localMemoryStore: CourseReportPhotoStore | null = null;
+type ChatPhotoMemoryGlobal = typeof globalThis & {
+  __caddyChatPhotoMemoryStore?: CourseReportPhotoStore;
+};
 
 /** Local agent/dev only. Never on Vercel. Never when Blob is configured. */
 export function allowLocalChatPhotoMemoryStore(
@@ -43,8 +45,11 @@ function resolveChatPhotoStore(): CourseReportPhotoStore {
   const store = getCourseReportPhotoStore();
   if (store.configured) return store;
   if (!allowLocalChatPhotoMemoryStore()) return store;
-  if (!localMemoryStore) localMemoryStore = createMemoryCourseReportPhotoStore();
-  return localMemoryStore;
+  const g = globalThis as ChatPhotoMemoryGlobal;
+  if (!g.__caddyChatPhotoMemoryStore) {
+    g.__caddyChatPhotoMemoryStore = createMemoryCourseReportPhotoStore();
+  }
+  return g.__caddyChatPhotoMemoryStore;
 }
 
 export type ChatPhotoPublic = {

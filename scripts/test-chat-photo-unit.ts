@@ -273,6 +273,7 @@ section("source wiring / no public blob");
   assert(!client.includes("blob.vercel"), "client has no public blob url");
   assert(photo.includes("chat/${roomId}/"), "chat storage namespace");
   assert(photo.includes("allowLocalChatPhotoMemoryStore"), "local memory store is gated");
+  assert(photo.includes("__caddyChatPhotoMemoryStore"), "local memory store is process-global");
   assert(!photo.includes("notices/"), "does not write notice keys");
   assert(!photo.includes("course-reports/"), "does not write report keys");
   assert(
