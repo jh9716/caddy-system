@@ -53,6 +53,9 @@ function looksLikeSvgOrHtml(bytes: Uint8Array): boolean {
   );
 }
 
+/** Magic / hostile-prefix checks only need this many leading bytes. */
+export const COURSE_REPORT_PHOTO_MAGIC_PREFIX_BYTES = 256;
+
 export function detectCourseReportPhotoMime(bytes: Uint8Array): CourseReportPhotoMime | null {
   if (startsWith(bytes, [0xff, 0xd8, 0xff])) return "image/jpeg";
   if (startsWith(bytes, [0x89, 0x50, 0x4e, 0x47])) return "image/png";
@@ -72,29 +75,37 @@ export function detectCourseReportPhotoMime(bytes: Uint8Array): CourseReportPhot
   return null;
 }
 
-export function assertCourseReportPhotoBytes(bytes: Uint8Array): CourseReportPhotoMime {
-  if (!bytes.length) {
+export function assertCourseReportPhotoPrefix(input: {
+  prefix: Uint8Array;
+  totalSize: number;
+}): CourseReportPhotoMime {
+  const totalSize = input.totalSize;
+  if (!Number.isFinite(totalSize) || totalSize <= 0 || input.prefix.byteLength === 0) {
     throw new CourseReportPhotoValidationError("empty_file", "사진 파일이 필요합니다.");
   }
-  if (bytes.byteLength > COURSE_REPORT_PHOTO_MAX_BYTES) {
+  if (totalSize > COURSE_REPORT_PHOTO_MAX_BYTES) {
     throw new CourseReportPhotoValidationError(
       "file_too_large",
       "사진은 장당 3MB 이하만 첨부할 수 있습니다."
     );
   }
-  if (isHeic(bytes)) {
+  const prefix =
+    input.prefix.byteLength > COURSE_REPORT_PHOTO_MAGIC_PREFIX_BYTES
+      ? input.prefix.subarray(0, COURSE_REPORT_PHOTO_MAGIC_PREFIX_BYTES)
+      : input.prefix;
+  if (isHeic(prefix)) {
     throw new CourseReportPhotoValidationError(
       "unsupported_type",
       "JPG/PNG/WEBP 형식으로 첨부해 주세요."
     );
   }
-  if (isPdf(bytes) || looksLikeSvgOrHtml(bytes)) {
+  if (isPdf(prefix) || looksLikeSvgOrHtml(prefix)) {
     throw new CourseReportPhotoValidationError(
       "unsupported_type",
       "JPG/PNG/WEBP 형식으로 첨부해 주세요."
     );
   }
-  const mime = detectCourseReportPhotoMime(bytes);
+  const mime = detectCourseReportPhotoMime(prefix);
   if (!mime || !(COURSE_REPORT_PHOTO_MIMES as readonly string[]).includes(mime)) {
     throw new CourseReportPhotoValidationError(
       "unsupported_type",
@@ -102,4 +113,11 @@ export function assertCourseReportPhotoBytes(bytes: Uint8Array): CourseReportPho
     );
   }
   return mime;
+}
+
+export function assertCourseReportPhotoBytes(bytes: Uint8Array): CourseReportPhotoMime {
+  return assertCourseReportPhotoPrefix({
+    prefix: bytes,
+    totalSize: bytes.byteLength,
+  });
 }

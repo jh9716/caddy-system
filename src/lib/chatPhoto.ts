@@ -25,8 +25,10 @@ import {
   type CourseReportPhotoMime,
 } from "@/lib/courseReportPhotoConstants";
 import {
+  COURSE_REPORT_PHOTO_MAGIC_PREFIX_BYTES,
   CourseReportPhotoValidationError,
   assertCourseReportPhotoBytes,
+  assertCourseReportPhotoPrefix,
 } from "@/lib/courseReportPhotoMagic";
 import {
   CourseReportPhotoStorageError,
@@ -401,10 +403,28 @@ export async function finalizeChatPhotoUpload(
     throw new CourseReportPhotoValidationError("not_found", "사진을 찾을 수 없습니다.", 404);
   }
 
-  let bytes: Uint8Array | null;
+  let meta: { size: number; contentType: string } | null;
+  let prefix: Uint8Array | null;
   try {
-    bytes = await store.get(row.storageKey);
+    meta = await store.head(row.storageKey);
+    if (!meta || meta.size <= 0) {
+      await deleteChatPhotoIntent(db, row);
+      throw new CourseReportPhotoValidationError(
+        "upload_incomplete",
+        "사진 업로드가 완료되지 않았습니다.",
+        409
+      );
+    }
+    if (meta.size > CHAT_PHOTO_MAX_BYTES) {
+      await deleteChatPhotoIntent(db, row);
+      throw new CourseReportPhotoValidationError(
+        "file_too_large",
+        "사진은 장당 3MB 이하만 첨부할 수 있습니다."
+      );
+    }
+    prefix = await store.readPrefix(row.storageKey, COURSE_REPORT_PHOTO_MAGIC_PREFIX_BYTES);
   } catch (e) {
+    if (e instanceof CourseReportPhotoValidationError) throw e;
     if (e instanceof CourseReportPhotoStorageError) throw e;
     throw new CourseReportPhotoStorageError(
       "storage_get_failed",
@@ -412,7 +432,7 @@ export async function finalizeChatPhotoUpload(
       502
     );
   }
-  if (!bytes || bytes.byteLength === 0) {
+  if (!prefix || prefix.byteLength === 0) {
     await deleteChatPhotoIntent(db, row);
     throw new CourseReportPhotoValidationError(
       "upload_incomplete",
@@ -423,7 +443,7 @@ export async function finalizeChatPhotoUpload(
 
   let mime: CourseReportPhotoMime;
   try {
-    mime = assertCourseReportPhotoBytes(bytes);
+    mime = assertCourseReportPhotoPrefix({ prefix, totalSize: meta.size });
   } catch (e) {
     await deleteChatPhotoIntent(db, row);
     throw e;
@@ -436,7 +456,7 @@ export async function finalizeChatPhotoUpload(
       data: {
         uploadState: "READY",
         mimeType: mime,
-        size: bytes.byteLength,
+        size: meta.size,
       },
     });
   } catch (e) {

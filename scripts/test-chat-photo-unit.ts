@@ -60,7 +60,12 @@ import {
 import { shouldNotifyChatUser, selectChatPushRecipients } from "../src/lib/chatPushRecipients";
 import { buildChatPushPayload } from "../src/lib/chatPushMessage";
 import { applyDeletedLine } from "../src/lib/chatPhase4";
-import { CourseReportPhotoValidationError } from "../src/lib/courseReportPhotoMagic";
+import {
+  COURSE_REPORT_PHOTO_MAGIC_PREFIX_BYTES,
+  CourseReportPhotoValidationError,
+  assertCourseReportPhotoBytes,
+  assertCourseReportPhotoPrefix,
+} from "../src/lib/courseReportPhotoMagic";
 import {
   applyChatPhotoSendProgress,
   applyPreparedChatPhoto,
@@ -111,6 +116,59 @@ function webpBytes(): Uint8Array {
 
 function pdfBytes(): Uint8Array {
   return new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37]);
+}
+
+function heicBytes(): Uint8Array {
+  const out = new Uint8Array(16);
+  out[4] = 0x66;
+  out[5] = 0x74;
+  out[6] = 0x79;
+  out[7] = 0x70;
+  out.set([0x68, 0x65, 0x69, 0x63], 8);
+  return out;
+}
+
+function svgBytes(): Uint8Array {
+  return new TextEncoder().encode("<svg xmlns='x'></svg>");
+}
+
+function htmlBytes(): Uint8Array {
+  return new TextEncoder().encode("<!doctype html><html></html>");
+}
+
+function instrumentPhotoStore(store: {
+  get: (...args: never[]) => Promise<Uint8Array | null>;
+  head: (...args: never[]) => Promise<{ size: number; contentType: string } | null>;
+  readPrefix: (...args: never[]) => Promise<Uint8Array | null>;
+}) {
+  const stats = { getCalls: 0, getBytes: 0, headCalls: 0, prefixCalls: 0, prefixBytes: 0 };
+  const reset = () => {
+    stats.getCalls = 0;
+    stats.getBytes = 0;
+    stats.headCalls = 0;
+    stats.prefixCalls = 0;
+    stats.prefixBytes = 0;
+  };
+  const origGet = store.get.bind(store);
+  const origHead = store.head.bind(store);
+  const origPrefix = store.readPrefix.bind(store);
+  store.get = (async (key: string, opts?: { abortSignal?: AbortSignal }) => {
+    stats.getCalls += 1;
+    const bytes = await origGet(key as never, opts as never);
+    stats.getBytes += bytes?.byteLength ?? 0;
+    return bytes;
+  }) as typeof store.get;
+  store.head = (async (key: string) => {
+    stats.headCalls += 1;
+    return origHead(key as never);
+  }) as typeof store.head;
+  store.readPrefix = (async (key: string, maxBytes: number) => {
+    stats.prefixCalls += 1;
+    const prefix = await origPrefix(key as never, maxBytes as never);
+    stats.prefixBytes += prefix?.byteLength ?? 0;
+    return prefix;
+  }) as typeof store.readPrefix;
+  return { ...stats, reset, snapshot: () => ({ ...stats }) };
 }
 
 async function cookieFor(user: {
@@ -508,6 +566,10 @@ section("source wiring / no public blob");
   assert(photo.includes("prepareChatPhotoUpload"), "prepare helper");
   assert(photo.includes("finalizeChatPhotoUpload"), "finalize helper");
   assert(photo.includes('uploadState: "PENDING"'), "prepare stores PENDING");
+  assert(photo.includes("store.head("), "finalize uses Blob HEAD");
+  assert(photo.includes("readPrefix"), "finalize reads prefix only");
+  assert(!/store\.get\(row\.storageKey\)/.test(photo), "finalize does not full-get Blob");
+  assert(!photo.includes("arrayBuffer()"), "finalize does not buffer whole Blob");
   const getRoute = read("src/app/api/chat/rooms/[roomId]/attachments/[attachmentId]/route.ts");
   const proxyRoute = read("src/app/api/chat/rooms/[roomId]/attachments/route.ts");
   const storage = read("src/lib/courseReportPhotoStorage.ts");
@@ -518,6 +580,10 @@ section("source wiring / no public blob");
   assert(!proxyRoute.includes("readUploadBytes"), "legacy route does not buffer photo bytes");
   assert(storage.includes("issueSignedToken"), "private Blob signed PUT");
   assert(storage.includes('operations: ["put"]'), "signed URL is PUT only");
+  assert(storage.includes("async head("), "store has HEAD metadata");
+  assert(storage.includes("async readPrefix("), "store has prefix read");
+  assert(storage.includes("Range:"), "Vercel prefix uses Range GET when available");
+  assert(storage.includes("reader.cancel"), "prefix stream cancels after 256B");
   assert(sw.includes("openWindow"), "#250 PWA openWindow kept");
   assert(phase6.includes("parseChatDeepLinkRoomId"), "#250 deep-link parser kept");
   assert(getRoute.includes("loadChatPhotoMeta"), "GET still uses authenticated meta");
@@ -573,6 +639,7 @@ if (!ALLOW_DB) {
   process.env.CHAT_INTERNAL_SECRET = process.env.CHAT_INTERNAL_SECRET || "chat-photo-unit-internal";
 
   const store = createMemoryCourseReportPhotoStore();
+  const storeStats = instrumentPhotoStore(store);
   setCourseReportPhotoStoreForTests(store);
   const tag = `cp_${Date.now()}`;
   const password = await bcrypt.hash("pw123456", 4);
@@ -1197,6 +1264,143 @@ if (!ALLOW_DB) {
       const threeMs = Date.now() - threeStarted;
       assert(three.every((row) => row.status === "fulfilled"), "3 concurrent direct uploads");
       console.log(`  timing 3장 total=${threeMs}ms`);
+
+      await prisma.chatAttachment.deleteMany({
+        where: { senderUserId: { in: [user.id, other.id] } },
+      });
+      storeStats.reset();
+      const largeJpeg = jpegBytes(3 * 1024 * 1024 - 8, 17);
+      const largePrep = await prepareChatPhotoUpload(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        contentType: "image/jpeg",
+        size: largeJpeg.byteLength,
+      });
+      await store.put(`chat/all/${largePrep.attachmentId}.jpg`, largeJpeg, "image/jpeg");
+      storeStats.reset();
+      const largeFin = await finalizeChatPhotoUpload(prisma, {
+        roomId: "all",
+        attachmentId: largePrep.attachmentId,
+        senderUserId: user.id,
+      });
+      const largeSnap = storeStats.snapshot();
+      assert(largeFin.mimeType === "image/jpeg", "3MB jpeg finalize uses actual magic");
+      assert(largeFin.size === largeJpeg.byteLength, "finalize size from HEAD not DB");
+      assert(largeSnap.getCalls === 0 && largeSnap.getBytes === 0, "3MB finalize does not full-read");
+      assert(largeSnap.prefixBytes <= COURSE_REPORT_PHOTO_MAGIC_PREFIX_BYTES, "prefix read <=256 bytes");
+      assert(largeSnap.prefixCalls === 1 && largeSnap.headCalls === 1, "HEAD + one prefix read");
+      console.log(
+        `  finalize Function bytes: prefix=${largeSnap.prefixBytes} get=${largeSnap.getBytes} (3MB object)`
+      );
+
+      const pngAsJpeg = await prepareChatPhotoUpload(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        contentType: "image/jpeg",
+        size: 16,
+      });
+      await store.put(`chat/all/${pngAsJpeg.attachmentId}.jpg`, pngBytes(), "image/jpeg");
+      const pngReady = await finalizeChatPhotoUpload(prisma, {
+        roomId: "all",
+        attachmentId: pngAsJpeg.attachmentId,
+        senderUserId: user.id,
+      });
+      assert(pngReady.mimeType === "image/png", "actual magic wins over requested contentType");
+
+      const emptyPrep = await prepareChatPhotoUpload(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        contentType: "image/jpeg",
+        size: 16,
+      });
+      await store.put(`chat/all/${emptyPrep.attachmentId}.jpg`, new Uint8Array(), "image/jpeg");
+      let emptyCode = "";
+      try {
+        await finalizeChatPhotoUpload(prisma, {
+          roomId: "all",
+          attachmentId: emptyPrep.attachmentId,
+          senderUserId: user.id,
+        });
+      } catch (e) {
+        emptyCode = e instanceof CourseReportPhotoValidationError ? e.code : "other";
+      }
+      assert(emptyCode === "upload_incomplete", "empty Blob reject");
+      assert(
+        !(await prisma.chatAttachment.findUnique({ where: { id: emptyPrep.attachmentId } })),
+        "empty Blob deletes PENDING"
+      );
+
+      const overPrep = await prepareChatPhotoUpload(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        contentType: "image/jpeg",
+        size: 16,
+      });
+      await store.put(
+        `chat/all/${overPrep.attachmentId}.jpg`,
+        jpegBytes(3 * 1024 * 1024 + 8, 19),
+        "image/jpeg"
+      );
+      storeStats.reset();
+      let overCode = "";
+      try {
+        await finalizeChatPhotoUpload(prisma, {
+          roomId: "all",
+          attachmentId: overPrep.attachmentId,
+          senderUserId: user.id,
+        });
+      } catch (e) {
+        overCode = e instanceof CourseReportPhotoValidationError ? e.code : "other";
+      }
+      const overSnap = storeStats.snapshot();
+      assert(overCode === "file_too_large", "metadata actual size >3MB reject");
+      assert(overSnap.prefixCalls === 0, "oversize rejects before prefix read");
+      assert(overSnap.getCalls === 0, "oversize does not full-get");
+      assert(
+        !(await prisma.chatAttachment.findUnique({ where: { id: overPrep.attachmentId } })),
+        "oversize deletes PENDING"
+      );
+      assert(!(await store.get(`chat/all/${overPrep.attachmentId}.jpg`)), "oversize deletes Blob");
+
+      for (const [label, bytes, type] of [
+        ["heic", heicBytes(), "image/jpeg"],
+        ["svg", svgBytes(), "image/jpeg"],
+        ["html", htmlBytes(), "image/jpeg"],
+      ] as const) {
+        const bad = await prepareChatPhotoUpload(prisma, {
+          roomId: "all",
+          senderUserId: user.id,
+          contentType: "image/jpeg",
+          size: bytes.byteLength,
+        });
+        await store.put(`chat/all/${bad.attachmentId}.jpg`, bytes, type);
+        let code = "";
+        try {
+          await finalizeChatPhotoUpload(prisma, {
+            roomId: "all",
+            attachmentId: bad.attachmentId,
+            senderUserId: user.id,
+          });
+        } catch (e) {
+          code = e instanceof CourseReportPhotoValidationError ? e.code : "other";
+        }
+        assert(code === "unsupported_type", `${label} finalize reject`);
+        assert(
+          !(await prisma.chatAttachment.findUnique({ where: { id: bad.attachmentId } })),
+          `${label} PENDING cleaned`
+        );
+        assert(!(await store.get(`chat/all/${bad.attachmentId}.jpg`)), `${label} Blob cleaned`);
+      }
+
+      storeStats.reset();
+      const againReady = await finalizeChatPhotoUpload(prisma, {
+        roomId: "all",
+        attachmentId: largePrep.attachmentId,
+        senderUserId: user.id,
+      });
+      const readySnap = storeStats.snapshot();
+      assert(againReady.id === largeFin.id, "READY re-finalize still idempotent");
+      assert(readySnap.headCalls === 0 && readySnap.prefixCalls === 0, "READY finalize skips Blob read");
     }
   } finally {
       await prisma.chatAttachment.deleteMany({
@@ -1227,6 +1431,54 @@ section("direct upload security / mime");
     forged = e instanceof CourseReportPhotoValidationError ? e.code : "other";
   }
   assert(forged === "unauthorized", "signed URL unauthorized");
+
+  const jpegPrefix = jpegBytes(16, 1);
+  assert(
+    assertCourseReportPhotoPrefix({ prefix: jpegPrefix, totalSize: 2_000_000 }) === "image/jpeg",
+    "prefix jpeg + actual size"
+  );
+  assert(
+    assertCourseReportPhotoPrefix({ prefix: pngBytes(), totalSize: 80 }) === "image/png",
+    "prefix png"
+  );
+  assert(
+    assertCourseReportPhotoPrefix({ prefix: webpBytes(), totalSize: 80 }) === "image/webp",
+    "prefix webp"
+  );
+  assert(
+    assertCourseReportPhotoBytes(jpegPrefix) ===
+      assertCourseReportPhotoPrefix({ prefix: jpegPrefix, totalSize: jpegPrefix.byteLength }),
+    "bytes helper still matches prefix helper"
+  );
+  let prefixHuge = "";
+  try {
+    assertCourseReportPhotoPrefix({ prefix: jpegPrefix, totalSize: 3 * 1024 * 1024 + 1 });
+  } catch (e) {
+    prefixHuge = e instanceof CourseReportPhotoValidationError ? e.code : "other";
+  }
+  assert(prefixHuge === "file_too_large", "prefix helper uses actual size not prefix length");
+  let prefixEmpty = "";
+  try {
+    assertCourseReportPhotoPrefix({ prefix: jpegPrefix, totalSize: 0 });
+  } catch (e) {
+    prefixEmpty = e instanceof CourseReportPhotoValidationError ? e.code : "other";
+  }
+  assert(prefixEmpty === "empty_file", "empty total size rejected");
+  for (const [label, bytes] of [
+    ["heic", heicBytes()],
+    ["pdf", pdfBytes()],
+    ["svg", svgBytes()],
+    ["html", htmlBytes()],
+  ] as const) {
+    let code = "";
+    try {
+      assertCourseReportPhotoPrefix({ prefix: bytes, totalSize: bytes.byteLength });
+    } catch (e) {
+      code = e instanceof CourseReportPhotoValidationError ? e.code : "other";
+    }
+    assert(code === "unsupported_type", `${label} prefix rejected`);
+  }
+  assert(COURSE_REPORT_PHOTO_MAGIC_PREFIX_BYTES === 256, "magic prefix cap is 256");
 }
 
 main().then(() => {
