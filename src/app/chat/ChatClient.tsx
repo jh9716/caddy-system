@@ -27,26 +27,26 @@ import {
 } from "@/lib/chatPhase4";
 import type { ChatAttachment } from "../../../cloudflare/verthill-chat/src/protocol";
 import {
+  abandonChatPhotoPreupload,
   applyChatPhotoSendProgress,
   applyPreparedChatPhoto,
   buildOptimisticOutgoingLine,
   CHAT_PHOTO_ACCEPT,
   CHAT_PHOTO_MAX,
-  CHAT_PHOTO_UPLOAD_CONCURRENCY,
   chatPhotoPickRoom,
   chatPhotoSrc,
+  finishChatPhotoOutgoingUploads,
   instantChatPhotoPicks,
-  mapBoundedSettled,
   needsChatPhotoHeavyPrepare,
   outgoingChatPhotoSrc,
   prepareChatPendingPhoto,
-  readyChatPhotosForUpload,
   revokeChatPhotoPreviewUrls,
   shouldStartOptimisticChatSend,
-  uploadChatPhotoDirect,
+  startChatPhotoPreupload,
   type ChatPendingPhoto,
 } from "@/lib/chatPhotoClient";
-import { chatPhotoNow, markChatPhotoTiming } from "@/lib/chatPhotoTiming";
+import { chatPhotoNow, emitChatPhotoTimingSummary, markChatPhotoTiming, resetChatPhotoTiming, stampChatPhotoTiming } from "@/lib/chatPhotoTiming";
+import type { ChatPhotoDirectProgress, ChatPhotoDirectResult } from "@/lib/chatPhotoDirectClient";
 import {
   canProfileMention,
   chatAuthorLine,
@@ -254,6 +254,7 @@ export default function ChatClient() {
   const [pendingPhotos, setPendingPhotos] = useState<PendingChatPhoto[]>([]);
   const pendingPhotosRef = useRef<PendingChatPhoto[]>([]);
   const prepareJobsRef = useRef(new Map<string, Promise<ChatPendingPhoto>>());
+  const uploadJobsRef = useRef(new Map<string, Promise<ChatPhotoDirectResult>>());
   const [lightbox, setLightbox] = useState<{ src: string } | null>(null);
   const [replyTo, setReplyTo] = useState<ChatLineReply | null>(null);
   const [actionLine, setActionLine] = useState<ChatLine | null>(null);
@@ -854,6 +855,7 @@ export default function ChatClient() {
       roomGenRef.current += 1;
       clearTimer(roomTimerRef);
       wsRef.current?.close();
+      abandonComposerPhotos();
       clearLocalLines([]);
       setReplyTo(null);
       setActionLine(null);
@@ -1039,9 +1041,7 @@ export default function ChatClient() {
     setMentionTokens([]);
     setMentionAllDraft(false);
     setMentionSuppressed(false);
-    revokeChatPhotoPreviewUrls(pendingPhotosRef.current);
-    setPendingPhotoList([]);
-    prepareJobsRef.current.clear();
+    abandonComposerPhotos();
     setReplyTo(null);
     setActionLine(null);
     setProfileTarget(null);
@@ -1170,49 +1170,43 @@ export default function ChatClient() {
     );
   }
 
-  async function uploadPendingPhotos(
-    roomId: string,
-    items: PendingChatPhoto[],
-    onPhotos?: (photos: PendingChatPhoto[]) => void
-  ) {
-    const ready = readyChatPhotosForUpload(items);
-    const uploadStarted = chatPhotoNow();
-    let current = items;
-    const settled = await mapBoundedSettled(ready, CHAT_PHOTO_UPLOAD_CONCURRENCY, async (item) => {
-      const result = await uploadChatPhotoDirect(roomId, item, {
-        onProgress: (progress) => {
-          current = applyChatPhotoSendProgress(current, progress);
-          onPhotos?.(current);
-        },
-      });
-      current = applyChatPhotoSendProgress(current, {
-        key: item.key,
-        phase: "done",
-        progress: 100,
-        attachmentId: result.id,
-        result,
-      });
-      onPhotos?.(current);
-      return result;
-    });
-    markChatPhotoTiming("upload_direct", uploadStarted);
-    const failed = settled.find((row) => row.status === "rejected");
-    if (failed && failed.status === "rejected") {
-      throw failed.reason instanceof Error
-        ? failed.reason
-        : new Error("사진 업로드에 실패했습니다.");
-    }
-    return settled.map((row) => {
-      if (row.status !== "fulfilled") {
-        throw new Error("사진 업로드에 실패했습니다.");
-      }
-      return row.value;
-    });
-  }
-
   function setPendingPhotoList(next: PendingChatPhoto[]) {
     pendingPhotosRef.current = next;
     setPendingPhotos(next);
+  }
+
+  function abandonComposerPhotos() {
+    const keys = pendingPhotosRef.current.map((item) => item.key);
+    for (const key of keys) prepareJobsRef.current.delete(key);
+    abandonChatPhotoPreupload(uploadJobsRef.current, keys);
+    revokeChatPhotoPreviewUrls(pendingPhotosRef.current);
+    setPendingPhotoList([]);
+  }
+
+  function applyPhotoUploadProgress(
+    progress: ChatPhotoDirectProgress & { result?: ChatPhotoDirectResult }
+  ) {
+    if (pendingPhotosRef.current.some((row) => row.key === progress.key)) {
+      setPendingPhotoList(applyChatPhotoSendProgress(pendingPhotosRef.current, progress));
+    }
+    const line = linesRef.current.find((row) => row.localPhotos?.some((photo) => photo.key === progress.key));
+    if (line) {
+      patchOutgoingLine(line.clientMessageId, (cur) => ({
+        ...cur,
+        localPhotos: applyChatPhotoSendProgress(cur.localPhotos || [], progress),
+      }));
+    }
+  }
+
+  function startComposerPreupload(item: ChatPendingPhoto) {
+    const roomId = roomRef.current?.roomId || "";
+    if (!roomId || item.status !== "ready") return;
+    if (!pendingPhotosRef.current.some((row) => row.key === item.key)) return;
+    void startChatPhotoPreupload(uploadJobsRef.current, roomId, item, {
+      onProgress: applyPhotoUploadProgress,
+    }).catch(() => {
+      // Composer stays usable; send/retry surfaces the error if the photo is still attached.
+    });
   }
 
   async function addPendingPhotos(files: FileList | File[]) {
@@ -1227,6 +1221,10 @@ export default function ChatClient() {
     });
     if (picked.note) setError(picked.note);
     if (picked.items.length === 0) return;
+    if (pendingPhotosRef.current.length === 0) {
+      resetChatPhotoTiming();
+      stampChatPhotoTiming("photo_selected", selectedAt);
+    }
     const next = [...pendingPhotosRef.current, ...picked.items].slice(0, CHAT_PHOTO_MAX);
     setPendingPhotoList(next);
     markChatPhotoTiming("select_to_preview", selectedAt);
@@ -1236,13 +1234,18 @@ export default function ChatClient() {
       if (!item || !file) continue;
       if (item.status === "ready" && !needsChatPhotoHeavyPrepare(file)) {
         markChatPhotoTiming("select_to_ready", selectedAt);
+        stampChatPhotoTiming("prepare_complete");
+        startComposerPreupload(item);
         continue;
       }
       const job = prepareChatPendingPhoto(item, file).then((prepared) => {
         markChatPhotoTiming("select_to_prepared", selectedAt);
+        stampChatPhotoTiming("prepare_complete");
         const applied = applyPreparedChatPhoto(pendingPhotosRef.current, prepared);
         if (applied.note) setError(applied.note);
         setPendingPhotoList(applied.items);
+        const current = applied.items.find((row) => row.key === prepared.key);
+        if (current?.status === "ready") startComposerPreupload(current);
         return prepared;
       });
       prepareJobsRef.current.set(item.key, job);
@@ -1251,6 +1254,7 @@ export default function ChatClient() {
 
   function removePendingPhoto(key: string) {
     prepareJobsRef.current.delete(key);
+    abandonChatPhotoPreupload(uploadJobsRef.current, [key]);
     const next = pendingPhotosRef.current.filter((item) => {
       if (item.key !== key) return true;
       URL.revokeObjectURL(item.previewUrl);
@@ -1326,11 +1330,16 @@ export default function ChatClient() {
     if (photos.some((item) => item.status !== "ready") || (ready.length === 0 && !line.body.trim())) {
       throw new Error("사진 처리에 실패했습니다.");
     }
-    let uploaded = line.pendingClaims || [];
-    if (ready.length > 0 && uploaded.length === 0) {
-      uploaded = await uploadPendingPhotos(roomId, ready, (nextPhotos) => {
-        patchOutgoingLine(line.clientMessageId, (cur) => ({ ...cur, localPhotos: nextPhotos }));
-      });
+    const uploaded = ready.length
+      ? await finishChatPhotoOutgoingUploads({
+          jobs: uploadJobsRef.current,
+          roomId,
+          photos: ready,
+          pendingClaims: line.pendingClaims,
+          onProgress: applyPhotoUploadProgress,
+        })
+      : line.pendingClaims || [];
+    if (ready.length > 0) {
       patchOutgoingLine(line.clientMessageId, (cur) => ({
         ...cur,
         pendingClaims: uploaded,
@@ -1347,9 +1356,12 @@ export default function ChatClient() {
       }));
     }
     const wsStarted = chatPhotoNow();
+    stampChatPhotoTiming("ws_send", wsStarted);
     await sendCurrent(line.body, line.clientMessageId, tokens, mentionAll, replySeq, uploaded);
     markChatPhotoTiming("message_ws_send", wsStarted);
     markChatPhotoTiming("total_send", sendStarted);
+    emitChatPhotoTimingSummary();
+    for (const item of ready) uploadJobsRef.current.delete(item.key);
   }
 
   async function handleSend() {
@@ -1365,6 +1377,7 @@ export default function ChatClient() {
     const reply = replyTo;
     const optimistic = buildOptimisticOutgoingLine(body, photos);
     const sendStarted = chatPhotoNow();
+    stampChatPhotoTiming("send_tap", sendStarted);
     setError("");
     setDraft("");
     setMentionTokens([]);
@@ -1691,6 +1704,7 @@ export default function ChatClient() {
                 roomGenRef.current += 1;
                 clearTimer(roomTimerRef);
                 wsRef.current?.close();
+                abandonComposerPhotos();
                 clearLocalLines([]);
                 setReplyTo(null);
                 setActionLine(null);

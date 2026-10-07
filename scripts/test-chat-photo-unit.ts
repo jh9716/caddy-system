@@ -88,7 +88,19 @@ import {
   revokeChatPhotoPreviewUrls,
   shouldStartOptimisticChatSend,
 } from "../src/lib/chatPhotoOptimistic";
-import { markChatPhotoTiming, resetChatPhotoTiming } from "../src/lib/chatPhotoTiming";
+import {
+  emitChatPhotoTimingSummary,
+  markChatPhotoTiming,
+  resetChatPhotoTiming,
+  stampChatPhotoTiming,
+  summarizeChatPhotoTiming,
+} from "../src/lib/chatPhotoTiming";
+import {
+  abandonChatPhotoPreupload,
+  finishChatPhotoOutgoingUploads,
+  startChatPhotoPreupload,
+} from "../src/lib/chatPhotoPreupload";
+import type { ChatPhotoDirectResult } from "../src/lib/chatPhotoDirectClient";
 
 let passed = 0;
 let failed = 0;
@@ -632,6 +644,261 @@ section("instant preview + parallel upload");
   assert(retried.localPhotos[0]?.previewUrl === failedLine.localPhotos[0]?.previewUrl, "retry reuses local photo blob");
 }
 
+section("phase 4 pre-upload on select");
+{
+  if (typeof URL.createObjectURL !== "function") {
+    let n = 0;
+    URL.createObjectURL = () => `blob:test-${++n}`;
+    URL.revokeObjectURL = () => {};
+  }
+  globalThis.__CHAT_PHOTO_TIMING__ = { marks: [], stamps: {} };
+  resetChatPhotoTiming();
+
+  function fakeResult(id: string, exp = Math.floor(Date.now() / 1000) + 600): ChatPhotoDirectResult {
+    return { id, mimeType: "image/jpeg", size: 8, exp, claim: `claim-${id}` };
+  }
+
+  function countingUpload() {
+    const counts = { prepare: 0, put: 0, finalize: 0, calls: 0 };
+    let inflightPut: (() => void) | null = null;
+    const gate = { hold: false };
+    const upload = async (
+      _roomId: string,
+      item: { key: string; blob: Blob; send?: { result?: ChatPhotoDirectResult } }
+    ) => {
+      counts.calls += 1;
+      if (item.send?.result?.id && item.send.result.claim) return item.send.result;
+      counts.prepare += 1;
+      counts.put += 1;
+      if (gate.hold) {
+        await new Promise<void>((resolve) => {
+          inflightPut = resolve;
+        });
+      }
+      counts.finalize += 1;
+      return fakeResult(`att-${item.key}`);
+    };
+    return {
+      counts,
+      gate,
+      upload,
+      release() {
+        inflightPut?.();
+        inflightPut = null;
+      },
+    };
+  }
+
+  const onePick = instantChatPhotoPicks(
+    [new File([jpegBytes(8, 21)], "one.jpg", { type: "image/jpeg", lastModified: 21 })],
+    1
+  );
+  const one = onePick.items[0]!;
+  assert(one.status === "ready", "select 1장 is ready immediately");
+  const first = countingUpload();
+  const jobs = new Map<string, Promise<ChatPhotoDirectResult>>();
+  const started = startChatPhotoPreupload(jobs, "all", one, { upload: first.upload });
+  assert(jobs.has(one.key), "select 직후 pre-upload job stored");
+  const firstResult = await started;
+  assert(first.counts.put === 1 && first.counts.prepare === 1 && first.counts.finalize === 1, "select starts prepare/PUT/finalize");
+  const completed = {
+    ...one,
+    send: { phase: "done" as const, progress: 100, attachmentId: firstResult.id, result: firstResult },
+  };
+  const sendAfterDone = await finishChatPhotoOutgoingUploads({
+    jobs,
+    roomId: "all",
+    photos: [completed],
+    upload: first.upload,
+  });
+  assert(sendAfterDone[0]?.id === firstResult.id, "send 전 upload 완료 → existing claim reused");
+  assert(first.counts.put === 1, "send 시 no second PUT");
+  assert(first.counts.prepare === 1 && first.counts.finalize === 1, "send 시 no second prepare/finalize");
+
+  let blockedNetwork = 0;
+  const liveDirect = await uploadChatPhotoDirect(
+    "all",
+    {
+      key: "already-uploaded",
+      blob: new Blob([jpegBytes(8, 24)], { type: "image/jpeg" }),
+      send: { result: firstResult },
+    },
+    {
+      fetchFn: (async () => {
+        blockedNetwork += 1;
+        throw new Error("should not call prepare/finalize");
+      }) as typeof fetch,
+      put: async () => {
+        blockedNetwork += 1;
+      },
+    }
+  );
+  assert(liveDirect.claim === firstResult.claim && blockedNetwork === 0, "live claim skips prepare/PUT/finalize");
+
+  const inflightHelper = countingUpload();
+  inflightHelper.gate.hold = true;
+  const inflightJobs = new Map<string, Promise<ChatPhotoDirectResult>>();
+  const inflightItem = instantChatPhotoPicks(
+    [new File([jpegBytes(8, 22)], "fly.jpg", { type: "image/jpeg", lastModified: 22 })],
+    1
+  ).items[0]!;
+  const firstPromise = startChatPhotoPreupload(inflightJobs, "all", inflightItem, {
+    upload: inflightHelper.upload,
+  });
+  const reusedPromise = startChatPhotoPreupload(inflightJobs, "all", inflightItem, {
+    upload: inflightHelper.upload,
+  });
+  assert(firstPromise === reusedPromise, "send while upload in-flight → same promise reuse");
+  assert(inflightHelper.counts.calls === 1 && inflightHelper.counts.put === 1, "in-flight does not start a second PUT");
+  const sendWhileInflight = finishChatPhotoOutgoingUploads({
+    jobs: inflightJobs,
+    roomId: "all",
+    photos: [inflightItem],
+    upload: inflightHelper.upload,
+  });
+  inflightHelper.release();
+  const inflightResult = await sendWhileInflight;
+  await firstPromise;
+  assert(inflightResult[0]?.id === `att-${inflightItem.key}`, "in-flight send waits then uses same attachment");
+  assert(inflightHelper.counts.put === 1, "in-flight send still one PUT");
+
+  const removeHelper = countingUpload();
+  removeHelper.gate.hold = true;
+  const removeJobs = new Map<string, Promise<ChatPhotoDirectResult>>();
+  const removeItem = instantChatPhotoPicks(
+    [new File([jpegBytes(8, 23)], "rm.jpg", { type: "image/jpeg", lastModified: 23 })],
+    1
+  ).items[0]!;
+  const removePromise = startChatPhotoPreupload(removeJobs, "all", removeItem, {
+    upload: removeHelper.upload,
+  });
+  abandonChatPhotoPreupload(removeJobs, [removeItem.key]);
+  assert(!removeJobs.has(removeItem.key), "remove while upload drops job from composer map");
+  removeHelper.release();
+  await removePromise.catch(() => null);
+  assert(removeHelper.counts.put === 1, "removed photo upload may finish as orphan; no extra PUT");
+
+  const roomJobs = new Map<string, Promise<ChatPhotoDirectResult>>();
+  const roomItem = { ...one, key: "room-leave" };
+  roomJobs.set(roomItem.key, Promise.resolve(fakeResult("att-room")));
+  abandonChatPhotoPreupload(roomJobs, [roomItem.key]);
+  assert(!roomJobs.has(roomItem.key), "room change abandons composer pre-upload jobs");
+  assert(roomJobs.size === 0, "room change does not keep composer upload map entries");
+
+  const retryHelper = countingUpload();
+  const retryJobs = new Map<string, Promise<ChatPhotoDirectResult>>();
+  const liveClaim = fakeResult("att-retry");
+  const retryPhotos = [
+    {
+      ...one,
+      key: "retry-1",
+      send: { phase: "done" as const, progress: 100, attachmentId: liveClaim.id, result: liveClaim },
+    },
+  ];
+  const afterWsFail = await finishChatPhotoOutgoingUploads({
+    jobs: retryJobs,
+    roomId: "all",
+    photos: retryPhotos,
+    pendingClaims: [liveClaim],
+    upload: retryHelper.upload,
+  });
+  assert(afterWsFail[0]?.claim === liveClaim.claim, "retry after WS failure reuses attachment claim");
+  assert(retryHelper.counts.put === 0 && retryHelper.counts.calls === 0, "WS-only retry does not re-upload");
+
+  const expiredHelper = countingUpload();
+  const expiredJobs = new Map<string, Promise<ChatPhotoDirectResult>>();
+  const expired = fakeResult("att-exp", 10);
+  const expiredItem = {
+    ...one,
+    key: "expired-1",
+    send: { phase: "done" as const, progress: 100, attachmentId: expired.id, result: expired },
+  };
+  const reuploaded = await finishChatPhotoOutgoingUploads({
+    jobs: expiredJobs,
+    roomId: "all",
+    photos: [expiredItem],
+    pendingClaims: [expired],
+    upload: expiredHelper.upload,
+    nowSec: 10_000,
+  });
+  assert(expiredHelper.counts.put === 1, "expired claim is the only re-upload case");
+  assert(reuploaded[0]?.id !== expired.id, "expired claim starts a new upload");
+
+  const tripleHelper = countingUpload();
+  const tripleJobs = new Map<string, Promise<ChatPhotoDirectResult>>();
+  const triple = instantChatPhotoPicks(
+    [
+      new File([jpegBytes(8, 31)], "t1.jpg", { type: "image/jpeg", lastModified: 31 }),
+      new File([jpegBytes(8, 32)], "t2.jpg", { type: "image/jpeg", lastModified: 32 }),
+      new File([jpegBytes(8, 33)], "t3.jpg", { type: "image/jpeg", lastModified: 33 }),
+    ],
+    3
+  ).items;
+  assert(triple.length === 3, "3장 select");
+  await Promise.all(
+    triple.map((item) => startChatPhotoPreupload(tripleJobs, "all", item, { upload: tripleHelper.upload }))
+  );
+  assert(tripleHelper.counts.put === 3, "3장 each PUT once on select");
+  const tripleDone = triple.map((item, i) => ({
+    ...item,
+    send: {
+      phase: "done" as const,
+      progress: 100,
+      attachmentId: `att-${item.key}`,
+      result: fakeResult(`att-${item.key}`),
+    },
+  }));
+  await finishChatPhotoOutgoingUploads({
+    jobs: tripleJobs,
+    roomId: "all",
+    photos: tripleDone,
+    upload: tripleHelper.upload,
+  });
+  assert(tripleHelper.counts.put === 3, "3장 send does not PUT again");
+
+  assert(shouldStartOptimisticChatSend("텍스트와 사진", [completed]), "text+photo send allowed");
+  assert(shouldStartOptimisticChatSend("", [completed]), "photo-only send allowed");
+  const replyLine = { ...buildOptimisticOutgoingLine("답글", [completed]), replyToSeq: 44 };
+  assert(replyLine.replyToSeq === 44, "reply+photo keeps reply seq");
+  const replyUploads = await finishChatPhotoOutgoingUploads({
+    jobs: new Map(),
+    roomId: "all",
+    photos: [completed],
+    pendingClaims: [firstResult],
+    upload: first.upload,
+  });
+  assert(replyUploads[0]?.id === firstResult.id && first.counts.put === 1, "reply+photo reuses claim; no extra PUT");
+
+  const composerDraft = { text: "", reply: null as number | null, photos: [one] };
+  void startChatPhotoPreupload(new Map(), "all", one, { upload: first.upload });
+  composerDraft.text = "입력 가능";
+  composerDraft.reply = 7;
+  composerDraft.photos = [];
+  assert(composerDraft.text === "입력 가능" && composerDraft.reply === 7, "pre-upload does not block text/reply/remove");
+
+  resetChatPhotoTiming();
+  stampChatPhotoTiming("photo_selected", 1000);
+  stampChatPhotoTiming("put_start", 1400);
+  markChatPhotoTiming("direct_put", 1400);
+  markChatPhotoTiming("finalize_api", 1800);
+  stampChatPhotoTiming("send_tap", 2200);
+  stampChatPhotoTiming("ws_send", 2210);
+  const summary = summarizeChatPhotoTiming();
+  assert(summary.select_to_put_start_ms === 400, "1장 select→PUT start");
+  assert(typeof summary.put_ms === "number" && summary.put_ms >= 0, "1장 PUT duration");
+  assert(typeof summary.finalize_ms === "number" && summary.finalize_ms >= 0, "1장 finalize duration");
+  assert(summary.send_tap_to_ws_ms === 10, "1장 send tap→WS send");
+  const emitted = emitChatPhotoTimingSummary();
+  const dumped = JSON.stringify(emitted);
+  assert(!/https?:|claim-|blob:|jpegBytes/i.test(dumped), "timing summary has no secret/url/file contents");
+  assert(
+    ["select_to_put_start_ms", "put_ms", "finalize_ms", "send_tap_to_ws_ms"].every((key) =>
+      Object.prototype.hasOwnProperty.call(emitted, key)
+    ),
+    "timing summary exposes the 1장 breakdown keys"
+  );
+}
+
 section("source wiring / no public blob");
 
 {
@@ -644,12 +911,26 @@ section("source wiring / no public blob");
   const reportClient = read("src/lib/courseReportPhotoClient.ts");
   assert(client.includes("instantChatPhotoPicks"), "composer instant preview before prepare");
   assert(client.includes("prepareChatPendingPhoto"), "composer prepares in background");
-  assert(client.includes("mapBoundedSettled"), "composer bounded parallel upload");
+  const preupload = read("src/lib/chatPhotoPreupload.ts");
+  const timingSrc = read("src/lib/chatPhotoTiming.ts");
+  assert(preupload.includes("mapBoundedSettled"), "pre-upload bounded parallel upload");
   const direct = read("src/lib/chatPhotoDirectClient.ts");
   const pickSrc = read("src/lib/chatPhotoPick.ts");
   const fast = read("src/lib/chatPhotoFastPath.ts");
   const optimistic = read("src/lib/chatPhotoOptimistic.ts");
-  assert(client.includes("uploadChatPhotoDirect"), "composer uses direct Blob PUT");
+  assert(client.includes("startChatPhotoPreupload"), "select starts background pre-upload");
+  assert(client.includes("uploadJobsRef"), "composer keeps in-flight pre-upload promises");
+  assert(client.includes("finishChatPhotoOutgoingUploads"), "send reuses pre-upload jobs/claims");
+  assert(client.includes("startComposerPreupload"), "fast-path select starts PUT immediately");
+  assert(client.includes("abandonChatPhotoPreupload"), "remove/room change abandon pre-upload jobs");
+  assert(client.includes("stampChatPhotoTiming(\"photo_selected\""), "times photo selected");
+  assert(client.includes("stampChatPhotoTiming(\"send_tap\""), "times send tap");
+  assert(client.includes("stampChatPhotoTiming(\"ws_send\""), "times WS send");
+  assert(client.includes("emitChatPhotoTimingSummary"), "emits safe client timing summary");
+  assert(timingSrc.includes("select_to_put_start_ms"), "timing summary has select→PUT start");
+  assert(direct.includes("stampChatPhotoTiming(\"put_start\""), "times PUT start");
+  assert(direct.includes("chatPhotoClaimStillValid"), "direct upload reuses live claims");
+  assert(client.includes("reply?.seq"), "reply+photo still forwards reply seq");
   assert(!client.includes("fd.append"), "composer no longer posts photo bytes to Next");
   assert(direct.includes("/attachments/prepare"), "composer calls prepare");
   assert(direct.includes("/finalize"), "composer calls finalize");
