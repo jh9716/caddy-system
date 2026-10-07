@@ -7,9 +7,9 @@
  * Do not use deprecated Next `preferredRegion` / Edge runtime.
  *
  * Blob PUT is a separate client→Vercel Blob ingress hop. Function region
- * does not move that store. If Korea 640KB PUT stays ~3s after API/DB
- * fixes, next storage candidate is Cloudflare R2 (Worker already in use).
- * This module does not migrate storage.
+ * does not move that store. Chat-only opt-in `CHAT_PHOTO_STORAGE=r2` issues
+ * a local HMAC grant and PUTs to the existing verthill-chat Worker / R2.
+ * Unset keeps the Vercel Blob fallback. CourseReport / Notice stay on Blob.
  *
  * Round trips stay prepare → PUT → finalize → WS. Finalize validation
  * must complete before a claim is issued. Unverified objects must not
@@ -27,9 +27,11 @@ export const CHAT_PHOTO_HOTPATH_SAFE_STEPS = [
   "create",
   "countAfter",
   "signedPut",
+  "grantSign",
   "dbFind",
   "blobInspect",
   "blobHeadFallback",
+  "r2Inspect",
   "dbUpdate",
   "claimSign",
 ] as const;

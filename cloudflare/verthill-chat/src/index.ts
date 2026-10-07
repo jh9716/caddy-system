@@ -55,6 +55,7 @@ import {
   verifyChatToken,
   type ChatTokenClaims,
 } from "./token";
+import { handleChatMediaRequest, type ChatMediaBucket } from "./chatMedia";
 
 export { validateIncomingMessage, isValidRoomName } from "./protocol";
 export { verifyChatToken } from "./token";
@@ -65,6 +66,13 @@ export interface Env {
   CHAT_DIRECTORY: DurableObjectNamespace<ChatDirectory>;
   CHAT_AUTH_SECRET: string;
   CHAT_INTERNAL_SECRET?: string;
+  /** Preferred upload-grant secret. Falls back to CHAT_INTERNAL_SECRET. Do not set in this PR. */
+  CHAT_MEDIA_SECRET?: string;
+  /**
+   * Optional chat-photo object store. Bind later as CHAT_MEDIA → verthill-chat-media.
+   * Do not bind or deploy from this PR.
+   */
+  CHAT_MEDIA?: ChatMediaBucket;
   /** Optional Next origin for best-effort chat push. Example: https://www.verthill.kr/api/chat/push-dispatch */
   CHAT_PUSH_DISPATCH_URL?: string;
 }
@@ -98,8 +106,8 @@ function uniqueAttachmentIds(raw: string[], limit: number): string[] {
 function corsHeaders(): Record<string, string> {
   return {
     "access-control-allow-origin": "*",
-    "access-control-allow-headers": "content-type, authorization",
-    "access-control-allow-methods": "GET, POST, OPTIONS",
+    "access-control-allow-headers": "content-type, authorization, x-chat-media-grant",
+    "access-control-allow-methods": "GET, POST, PUT, OPTIONS",
   };
 }
 
@@ -248,6 +256,8 @@ export default {
     if (request.method === "POST" && url.pathname === "/directory/rooms") {
       return createRoomFromGrant(request, env);
     }
+    const media = await handleChatMediaRequest(request, env);
+    if (media) return media;
     return json({ error: "not_found" }, 404);
   },
 };
