@@ -8,6 +8,8 @@ import {
 import { ChatAuthError } from "@/lib/chatAuth";
 import { requireChatPhotoRoomAccess } from "@/lib/chatPhotoAccess";
 import { finalizeChatPhotoUpload } from "@/lib/chatPhoto";
+import { createChatPhotoHotpathClock, logChatPhotoHotpath } from "@/lib/chatPhotoHotpath";
+import { canShowChatPhotoDebug } from "@/lib/chatPhotoTiming";
 import { CourseReportPhotoValidationError } from "@/lib/courseReportPhotoMagic";
 import { CourseReportPhotoStorageError } from "@/lib/courseReportPhotoStorage";
 import { prisma } from "@/lib/prisma";
@@ -20,20 +22,37 @@ export async function POST(
   req: NextRequest,
   ctx: { params: Promise<{ roomId: string; attachmentId: string }> }
 ) {
+  const clock = createChatPhotoHotpathClock();
   try {
     const auth = await resolveAuthUser(req);
+    clock.mark("auth");
     if (!auth) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     if (shouldForcePasswordChange(auth)) return mustChangePasswordResponse();
     const params = await ctx.params;
     const roomId = decodeURIComponent(params.roomId || "");
     const attachmentId = decodeURIComponent(params.attachmentId || "");
     const access = await requireChatPhotoRoomAccess(prisma, auth, roomId);
-    const photo = await finalizeChatPhotoUpload(prisma, {
-      roomId,
-      attachmentId,
-      senderUserId: access.userId,
+    clock.mark("roomAccess");
+    const photo = await finalizeChatPhotoUpload(
+      prisma,
+      {
+        roomId,
+        attachmentId,
+        senderUserId: access.userId,
+      },
+      clock
+    );
+    const hotpath = clock.summary("finalize");
+    logChatPhotoHotpath(hotpath);
+    const debug = canShowChatPhotoDebug({
+      role: auth.role,
+      search: req.nextUrl.search,
     });
-    return NextResponse.json({ ok: true, photo });
+    return NextResponse.json({
+      ok: true,
+      photo,
+      ...(debug ? { hotpath } : {}),
+    });
   } catch (e) {
     if (isAuthStoreUnavailable(e)) return authUnavailableResponse();
     if (e instanceof ChatAuthError) {

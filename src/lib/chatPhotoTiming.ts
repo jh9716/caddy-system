@@ -3,6 +3,8 @@
  * Never record URLs, tokens, claims, file names, or file contents.
  */
 
+import { parseChatPhotoHotpath, type ChatPhotoHotpathSummary } from "@/lib/chatPhotoHotpath";
+
 export type ChatPhotoTimingMark = {
   name: string;
   ms: number;
@@ -14,6 +16,8 @@ export type ChatPhotoTimingBag = {
   sourceBytes?: number;
   uploadBytes?: number;
   compressionMs?: number;
+  prepareHotpath?: ChatPhotoHotpathSummary;
+  finalizeHotpath?: ChatPhotoHotpathSummary;
 };
 
 export type ChatPhotoTimingSummary = {
@@ -34,6 +38,23 @@ export type ChatPhotoDebugSample = {
   sendTapToWsMs: number | null;
   selectedToReadyMs: number | null;
   totalUntilWsMs: number | null;
+  prepareServerMs: number | null;
+  finalizeServerMs: number | null;
+  prepareServerRegion: string | null;
+  finalizeServerRegion: string | null;
+  prepareServerCold: boolean | null;
+  finalizeServerCold: boolean | null;
+  prepareAuthMs: number | null;
+  prepareRoomAccessMs: number | null;
+  prepareCountMs: number | null;
+  prepareCreateMs: number | null;
+  prepareSignedPutMs: number | null;
+  finalizeAuthMs: number | null;
+  finalizeRoomAccessMs: number | null;
+  finalizeDbFindMs: number | null;
+  finalizeBlobMs: number | null;
+  finalizeDbUpdateMs: number | null;
+  finalizeSignMs: number | null;
 };
 
 declare global {
@@ -87,6 +108,21 @@ export function noteChatPhotoCompression(ms: number): void {
   timingBag().compressionMs = Math.max(0, ms);
 }
 
+export function noteChatPhotoServerHotpath(value: unknown): ChatPhotoHotpathSummary | null {
+  const hotpath = parseChatPhotoHotpath(value);
+  if (!hotpath) return null;
+  const bag = timingBag();
+  if (hotpath.route === "prepare") bag.prepareHotpath = hotpath;
+  if (hotpath.route === "finalize") bag.finalizeHotpath = hotpath;
+  return hotpath;
+}
+
+export function chatPhotoDebugApiUrl(path: string, search?: string | null): string {
+  const query = search ?? (typeof window !== "undefined" ? window.location.search : "");
+  if (!/(?:^|[?&])photoDebug=1(?:&|$)/.test(String(query || ""))) return path;
+  return path.includes("?") ? `${path}&photoDebug=1` : `${path}?photoDebug=1`;
+}
+
 export function latestChatPhotoMark(name: string, bag = globalThis.__CHAT_PHOTO_TIMING__): number | null {
   if (!bag?.marks?.length) return null;
   for (let i = bag.marks.length - 1; i >= 0; i--) {
@@ -137,6 +173,23 @@ export function buildChatPhotoDebugSample(
       selected != null && wsSend != null
         ? Math.max(0, Math.round(wsSend - selected))
         : latestChatPhotoMark("total_send", bag),
+    prepareServerMs: bag?.prepareHotpath?.totalMs ?? null,
+    finalizeServerMs: bag?.finalizeHotpath?.totalMs ?? null,
+    prepareServerRegion: bag?.prepareHotpath?.region ?? null,
+    finalizeServerRegion: bag?.finalizeHotpath?.region ?? null,
+    prepareServerCold: bag?.prepareHotpath ? bag.prepareHotpath.cold : null,
+    finalizeServerCold: bag?.finalizeHotpath ? bag.finalizeHotpath.cold : null,
+    prepareAuthMs: bag?.prepareHotpath?.steps.auth ?? null,
+    prepareRoomAccessMs: bag?.prepareHotpath?.steps.roomAccess ?? null,
+    prepareCountMs: bag?.prepareHotpath?.steps.count ?? null,
+    prepareCreateMs: bag?.prepareHotpath?.steps.create ?? null,
+    prepareSignedPutMs: bag?.prepareHotpath?.steps.signedPut ?? null,
+    finalizeAuthMs: bag?.finalizeHotpath?.steps.auth ?? null,
+    finalizeRoomAccessMs: bag?.finalizeHotpath?.steps.roomAccess ?? null,
+    finalizeDbFindMs: bag?.finalizeHotpath?.steps.dbFind ?? null,
+    finalizeBlobMs: bag?.finalizeHotpath?.steps.blobInspect ?? null,
+    finalizeDbUpdateMs: bag?.finalizeHotpath?.steps.dbUpdate ?? null,
+    finalizeSignMs: bag?.finalizeHotpath?.steps.claimSign ?? null,
   };
 }
 
@@ -169,4 +222,6 @@ export function resetChatPhotoTiming(): void {
   delete bag.sourceBytes;
   delete bag.uploadBytes;
   delete bag.compressionMs;
+  delete bag.prepareHotpath;
+  delete bag.finalizeHotpath;
 }

@@ -16,9 +16,16 @@ import {
 import {
   blobPrefixGetResultUsable,
   createMemoryCourseReportPhotoStore,
+  readBlobObjectPrefixAndMetaWithGet,
   readBlobObjectPrefixWithGet,
   setCourseReportPhotoStoreForTests,
+  sizeFromPrefixGetResult,
 } from "../src/lib/courseReportPhotoStorage";
+import {
+  createChatPhotoHotpathClock,
+  parseChatPhotoHotpath,
+  shouldRunBackgroundChatPhotoCleanup,
+} from "../src/lib/chatPhotoHotpath";
 import {
   allowLocalChatPhotoMemoryStore,
   cleanupOrphanChatAttachments,
@@ -92,8 +99,10 @@ import {
 import {
   buildChatPhotoDebugSample,
   canShowChatPhotoDebug,
+  chatPhotoDebugApiUrl,
   emitChatPhotoTimingSummary,
   markChatPhotoTiming,
+  noteChatPhotoServerHotpath,
   resetChatPhotoTiming,
   stampChatPhotoTiming,
   summarizeChatPhotoTiming,
@@ -176,14 +185,25 @@ function instrumentPhotoStore(store: {
   get: (...args: never[]) => Promise<Uint8Array | null>;
   head: (...args: never[]) => Promise<{ size: number; contentType: string } | null>;
   readPrefix: (...args: never[]) => Promise<Uint8Array | null>;
+  readPrefixAndMeta?: (
+    ...args: never[]
+  ) => Promise<{ prefix: Uint8Array; size: number; contentType: string } | null>;
 }) {
-  const stats = { getCalls: 0, getBytes: 0, headCalls: 0, prefixCalls: 0, prefixBytes: 0 };
+  const stats = {
+    getCalls: 0,
+    getBytes: 0,
+    headCalls: 0,
+    prefixCalls: 0,
+    prefixBytes: 0,
+    inspectCalls: 0,
+  };
   const reset = () => {
     stats.getCalls = 0;
     stats.getBytes = 0;
     stats.headCalls = 0;
     stats.prefixCalls = 0;
     stats.prefixBytes = 0;
+    stats.inspectCalls = 0;
   };
   const origGet = store.get.bind(store);
   const origHead = store.head.bind(store);
@@ -204,6 +224,15 @@ function instrumentPhotoStore(store: {
     stats.prefixBytes += prefix?.byteLength ?? 0;
     return prefix;
   }) as typeof store.readPrefix;
+  if (store.readPrefixAndMeta) {
+    const origInspect = store.readPrefixAndMeta.bind(store);
+    store.readPrefixAndMeta = (async (key: string, maxBytes: number) => {
+      stats.inspectCalls += 1;
+      const inspected = await origInspect(key as never, maxBytes as never);
+      stats.prefixBytes += inspected?.prefix.byteLength ?? 0;
+      return inspected;
+    }) as typeof store.readPrefixAndMeta;
+  }
   return { ...stats, reset, snapshot: () => ({ ...stats }) };
 }
 
@@ -1055,6 +1084,64 @@ section("phase 5 adaptive compression + debug");
   assert(chatPhotoPutBottleneck(620000, 400) === "put-ok", "fast PUT is not storage-bound");
 }
 
+section("phase 6 hot-path timing / region / cleanup");
+
+{
+  assert(
+    sizeFromPrefixGetResult({
+      statusCode: 200,
+      blob: { size: 256 },
+      headers: {
+        "content-range": "bytes 0-255/655611",
+        "content-length": "256",
+      },
+    }) === 655611,
+    "A: normalized Range 200 prefers Content-Range total over blob.size"
+  );
+  assert(
+    sizeFromPrefixGetResult({
+      statusCode: 200,
+      blob: { size: 655611 },
+    }) === 655611,
+    "B: full GET uses blob.size when Content-Range is absent"
+  );
+  assert(
+    sizeFromPrefixGetResult({
+      statusCode: 206,
+      headers: { "content-range": "bytes 0-255/640000" },
+    }) === 640000,
+    "size from Content-Range"
+  );
+  assert(sizeFromPrefixGetResult({ statusCode: 206 }) === 0, "206 without size stays 0");
+  const clock = createChatPhotoHotpathClock();
+  clock.mark("auth");
+  clock.mark("uploadUrl");
+  clock.mark("token");
+  const summary = clock.summary("prepare");
+  assert(typeof summary.steps.auth === "number", "clock records safe steps");
+  assert(summary.steps.signedPut == null, "clock drops unknown step names");
+  const dump = JSON.stringify(summary);
+  assert(!/https?:|claim|token|userId|storageKey/i.test(dump), "hotpath summary has no secrets");
+  assert(parseChatPhotoHotpath({ route: "prepare", totalMs: 12, steps: { auth: 4, leak: 9 } })?.steps.auth === 4, "parse keeps safe steps");
+  assert(parseChatPhotoHotpath({ route: "prepare", totalMs: 12, steps: { leak: 9 } })?.steps.auth == null, "parse drops unknown steps");
+  assert(shouldRunBackgroundChatPhotoCleanup(0.05) === true, "10% cleanup after() can run");
+  assert(shouldRunBackgroundChatPhotoCleanup(0.2) === false, "most prepares skip after() cleanup");
+  assert(chatPhotoDebugApiUrl("/api/x", "") === "/api/x", "debug query off leaves URL");
+  assert(chatPhotoDebugApiUrl("/api/x", "?photoDebug=1") === "/api/x?photoDebug=1", "debug query appended");
+  resetChatPhotoTiming();
+  noteChatPhotoServerHotpath({
+    route: "prepare",
+    region: "sin1",
+    cold: false,
+    totalMs: 220,
+    steps: { auth: 40, roomAccess: 50, count: 30, create: 40, signedPut: 60 },
+  });
+  const serverDebug = buildChatPhotoDebugSample();
+  assert(serverDebug.prepareServerMs === 220 && serverDebug.prepareServerRegion === "sin1", "server prepare timings");
+  assert(serverDebug.prepareAuthMs === 40 && serverDebug.prepareSignedPutMs === 60, "server prepare steps");
+  assert(!/uploadUrl|claim/.test(JSON.stringify(serverDebug)), "server debug has no secrets");
+}
+
 section("source wiring / no public blob");
 
 {
@@ -1083,6 +1170,9 @@ section("source wiring / no public blob");
   assert(client.includes("stampChatPhotoTiming(\"send_tap\""), "times send tap");
   assert(client.includes("stampChatPhotoTiming(\"ws_send\""), "times WS send");
   assert(client.includes("emitChatPhotoTimingSummary"), "emits safe client timing summary");
+  assert(client.includes("prepareServerMs"), "debug panel shows server prepare timing");
+  assert(client.includes("finalizeBlobMs"), "debug panel shows finalize blob step");
+  assert(client.includes("finalizeSignMs"), "debug panel shows finalize sign step");
   assert(timingSrc.includes("select_to_put_start_ms"), "timing summary has select→PUT start");
   assert(direct.includes("stampChatPhotoTiming(\"put_start\""), "times PUT start");
   assert(direct.includes("chatPhotoClaimStillValid"), "direct upload reuses live claims");
@@ -1118,8 +1208,8 @@ section("source wiring / no public blob");
   assert(photo.includes("prepareChatPhotoUpload"), "prepare helper");
   assert(photo.includes("finalizeChatPhotoUpload"), "finalize helper");
   assert(photo.includes('uploadState: "PENDING"'), "prepare stores PENDING");
-  assert(photo.includes("store.head("), "finalize uses Blob HEAD");
-  assert(photo.includes("readPrefix"), "finalize reads prefix only");
+  assert(photo.includes("readPrefixAndMeta"), "finalize prefers one prefix+meta read");
+  assert(photo.includes("inspectUploadedChatPhoto"), "finalize inspects via helper");
   assert(!/store\.get\(row\.storageKey\)/.test(photo), "finalize does not full-get Blob");
   assert(!photo.includes("arrayBuffer()"), "finalize does not buffer whole Blob");
   const getRoute = read("src/app/api/chat/rooms/[roomId]/attachments/[attachmentId]/route.ts");
@@ -1138,9 +1228,18 @@ section("source wiring / no public blob");
   assert(storage.includes("statusCode === 206"), "Range 206 is usable");
   assert(storage.includes("readBlobObjectPrefixWithGet"), "range then non-range fallback");
   assert(storage.includes("blobPrefixGetResultUsable"), "prefix helper owns 200/206 check");
+  const sizeFn = storage.slice(
+    storage.indexOf("export function sizeFromPrefixGetResult"),
+    storage.indexOf("export function contentTypeFromPrefixGetResult")
+  );
+  assert(
+    sizeFn.indexOf("content-range") >= 0 &&
+      sizeFn.indexOf("content-range") < sizeFn.indexOf("blob?.size"),
+    "Content-Range total is preferred over blob.size"
+  );
   const prefixHelper = storage.slice(
-    storage.indexOf("export async function readBlobObjectPrefixWithGet"),
-    storage.indexOf("export async function readLimitedStream")
+    storage.indexOf("export async function readBlobObjectPrefixAndMetaWithGet"),
+    storage.indexOf("export async function readBlobObjectPrefixWithGet")
   );
   assert(prefixHelper.includes("blobPrefixGetResultUsable"), "range path uses usable helper");
   assert(!prefixHelper.includes("statusCode !== 200"), "prefix helper does not require 200 only");
@@ -1177,7 +1276,36 @@ section("source wiring / no public blob");
   assert(worker.includes("attachments_json"), "DO stores metadata json");
   assert(worker.includes("verifyChatAttachmentClaim"), "worker verifies claims");
   assert(worker.includes("runChatAttachmentMaintenance") === false, "worker does not import Next maintenance");
-  assert(photo.includes("runChatAttachmentMaintenance"), "upload runs orphan maintenance");
+  assert(photo.includes("runChatAttachmentMaintenance"), "orphan maintenance helper remains");
+  const prepareFn = photo.slice(
+    photo.indexOf("export async function prepareChatPhotoUpload"),
+    photo.indexOf("export async function finalizeChatPhotoUpload")
+  );
+  assert(prepareFn.includes("if (pending >= CHAT_PHOTO_MAX)"), "prepare counts before cleanup");
+  assert(
+    prepareFn.includes("await runChatAttachmentMaintenance(db)"),
+    "prepare cleans only after quota is full"
+  );
+  assert(
+    prepareFn.indexOf("countUnconsumedChatPhotos") < prepareFn.indexOf("runChatAttachmentMaintenance"),
+    "prepare does not clean before the first count"
+  );
+  const vercelCfg = read("vercel.json");
+  const cleanupCron = read("src/app/api/cron/chat-attachment-cleanup/route.ts");
+  const prepareRoute = read("src/app/api/chat/rooms/[roomId]/attachments/prepare/route.ts");
+  const finalizeRoute = read("src/app/api/chat/rooms/[roomId]/attachments/[attachmentId]/finalize/route.ts");
+  const hotpath = read("src/lib/chatPhotoHotpath.ts");
+  assert(vercelCfg.includes('"regions": ["sin1"]'), "functions pinned to Singapore sin1");
+  assert(!/preferredRegion/.test(vercelCfg + prepareRoute + finalizeRoute), "no deprecated preferredRegion");
+  assert(vercelCfg.includes("/api/cron/chat-attachment-cleanup"), "cleanup cron is scheduled");
+  assert(cleanupCron.includes("authorizeCronRequest"), "cleanup cron is fail-closed");
+  assert(cleanupCron.includes("runChatAttachmentMaintenance"), "cron runs orphan cleanup");
+  assert(prepareRoute.includes("createChatPhotoHotpathClock"), "prepare records server timing");
+  assert(finalizeRoute.includes("createChatPhotoHotpathClock"), "finalize records server timing");
+  assert(prepareRoute.includes("after("), "prepare cleanup is after() not awaited");
+  assert(read("src/app/api/chat/attachments/consume/route.ts").includes("void runChatAttachmentMaintenance"), "consume still best-effort cleanup");
+  assert(hotpath.includes('"regions": ["sin1"]') || vercelCfg.includes('"sin1"'), "sin1 pin is documented");
+  assert(hotpath.includes("Cloudflare R2"), "R2 is the next storage candidate");
   assert(photo.includes("purgeChatAttachments"), "room-scoped purge helper");
   const hideFn = worker.slice(worker.indexOf("private hideForMe"), worker.indexOf("private deleteMessage"));
   assert(!hideFn.includes("queueAttachmentCleanup"), "hide-for-me does not purge blob");
@@ -1846,10 +1974,10 @@ if (!ALLOW_DB) {
       });
       const largeSnap = storeStats.snapshot();
       assert(largeFin.mimeType === "image/jpeg", "3MB jpeg finalize uses actual magic");
-      assert(largeFin.size === largeJpeg.byteLength, "finalize size from HEAD not DB");
+      assert(largeFin.size === largeJpeg.byteLength, "finalize size from inspect not DB");
       assert(largeSnap.getCalls === 0 && largeSnap.getBytes === 0, "3MB finalize does not full-read");
       assert(largeSnap.prefixBytes <= COURSE_REPORT_PHOTO_MAGIC_PREFIX_BYTES, "prefix read <=256 bytes");
-      assert(largeSnap.prefixCalls === 1 && largeSnap.headCalls === 1, "HEAD + one prefix read");
+      assert(largeSnap.inspectCalls === 1 && largeSnap.headCalls === 0, "one prefix+meta read, no HEAD");
       console.log(
         `  finalize Function bytes: prefix=${largeSnap.prefixBytes} get=${largeSnap.getBytes} (3MB object)`
       );
@@ -1930,8 +2058,7 @@ if (!ALLOW_DB) {
       }
       const overSnap = storeStats.snapshot();
       assert(overCode === "file_too_large", "metadata actual size >3MB reject");
-      assert(overSnap.prefixCalls === 0, "oversize rejects before prefix read");
-      assert(overSnap.getCalls === 0, "oversize does not full-get");
+      assert(overSnap.inspectCalls === 1 && overSnap.getCalls === 0, "oversize uses one inspect, no full-get");
       assert(
         !(await prisma.chatAttachment.findUnique({ where: { id: overPrep.attachmentId } })),
         "oversize deletes PENDING"
@@ -1973,10 +2100,10 @@ if (!ALLOW_DB) {
       const prevStore = store;
       setCourseReportPhotoStoreForTests({
         ...rangeStore,
-        async readPrefix(key, maxBytes) {
+        async readPrefixAndMeta(key, maxBytes) {
           const bytes = await rangeStore.get(key);
           if (!bytes) return null;
-          return readBlobObjectPrefixWithGet(
+          return readBlobObjectPrefixAndMetaWithGet(
             async () => ({
               statusCode: 206,
               stream: new ReadableStream<Uint8Array>({
@@ -1985,6 +2112,8 @@ if (!ALLOW_DB) {
                   controller.close();
                 },
               }),
+              headers: { "content-range": `bytes 0-${Math.max(0, bytes.byteLength - 1)}/${bytes.byteLength}` },
+              blob: { size: bytes.byteLength, contentType: "image/jpeg" },
             }),
             key,
             maxBytes
@@ -2004,6 +2133,93 @@ if (!ALLOW_DB) {
         senderUserId: user.id,
       });
       assert(rangeFin.claim && rangeFin.mimeType === "image/jpeg", "Range 206 does not become upload_incomplete");
+      await prisma.chatAttachment.deleteMany({
+        where: {
+          senderUserId: user.id,
+          id: { not: largePrep.attachmentId },
+        },
+      });
+
+      const vercelRangeStore = createMemoryCourseReportPhotoStore();
+      const vercelRangeWrapped = {
+        ...vercelRangeStore,
+        async readPrefixAndMeta(key: string, maxBytes: number) {
+          const bytes = await vercelRangeStore.get(key);
+          if (!bytes) return null;
+          const limit = Math.max(0, Math.floor(maxBytes));
+          const body = bytes.subarray(0, Math.min(limit || bytes.byteLength, bytes.byteLength));
+          return readBlobObjectPrefixAndMetaWithGet(
+            async () => ({
+              statusCode: 200,
+              stream: new ReadableStream<Uint8Array>({
+                start(controller) {
+                  controller.enqueue(body);
+                  controller.close();
+                },
+              }),
+              headers: {
+                "content-range": `bytes 0-${Math.max(0, body.byteLength - 1)}/${bytes.byteLength}`,
+                "content-length": String(body.byteLength),
+              },
+              blob: { size: body.byteLength, contentType: "image/jpeg" },
+            }),
+            key,
+            maxBytes
+          );
+        },
+      };
+      const vercelRangeStats = instrumentPhotoStore(vercelRangeWrapped);
+      setCourseReportPhotoStoreForTests(vercelRangeWrapped);
+      const overRangePrep = await prepareChatPhotoUpload(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        contentType: "image/jpeg",
+        size: 16,
+      });
+      await vercelRangeStore.put(
+        `chat/all/${overRangePrep.attachmentId}.jpg`,
+        jpegBytes(3 * 1024 * 1024 + 8, 22),
+        "image/jpeg"
+      );
+      vercelRangeStats.reset();
+      let overRangeCode = "";
+      try {
+        await finalizeChatPhotoUpload(prisma, {
+          roomId: "all",
+          attachmentId: overRangePrep.attachmentId,
+          senderUserId: user.id,
+        });
+      } catch (e) {
+        overRangeCode = e instanceof CourseReportPhotoValidationError ? e.code : "other";
+      }
+      const overRangeSnap = vercelRangeStats.snapshot();
+      assert(overRangeCode === "file_too_large", "C: Range body 256B with 3MB+ total is file_too_large");
+      assert(overRangeSnap.inspectCalls === 1 && overRangeSnap.headCalls === 0, "C: one Range GET, no HEAD");
+      assert(overRangeSnap.getCalls === 0, "C: does not full-get oversize object");
+
+      const claimedJpeg = jpegBytes(655611 - 4, 23);
+      assert(claimedJpeg.byteLength === 655611, "D fixture is 655611 bytes");
+      const claimPrep = await prepareChatPhotoUpload(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        contentType: "image/jpeg",
+        size: claimedJpeg.byteLength,
+      });
+      await vercelRangeStore.put(`chat/all/${claimPrep.attachmentId}.jpg`, claimedJpeg, "image/jpeg");
+      vercelRangeStats.reset();
+      const claimFin = await finalizeChatPhotoUpload(prisma, {
+        roomId: "all",
+        attachmentId: claimPrep.attachmentId,
+        senderUserId: user.id,
+      });
+      const claimSnap = vercelRangeStats.snapshot();
+      const claimRow = await prisma.chatAttachment.findUnique({ where: { id: claimPrep.attachmentId } });
+      assert(claimFin.size === 655611, "D: finalize claim size stays 655611");
+      assert(claimRow?.size === 655611, "D: DB size stays 655611");
+      assert(claimSnap.inspectCalls === 1 && claimSnap.headCalls === 0, "D: one Range GET, no HEAD");
+      assert(claimSnap.prefixBytes <= COURSE_REPORT_PHOTO_MAGIC_PREFIX_BYTES, "D: prefix stays <=256B");
+      await prisma.chatAttachment.delete({ where: { id: claimPrep.attachmentId } }).catch(() => undefined);
+
       setCourseReportPhotoStoreForTests(prevStore);
 
       storeStats.reset();
@@ -2014,7 +2230,10 @@ if (!ALLOW_DB) {
       });
       const readySnap = storeStats.snapshot();
       assert(againReady.id === largeFin.id, "READY re-finalize still idempotent");
-      assert(readySnap.headCalls === 0 && readySnap.prefixCalls === 0, "READY finalize skips Blob read");
+      assert(
+        readySnap.headCalls === 0 && readySnap.prefixCalls === 0 && readySnap.inspectCalls === 0,
+        "READY finalize skips Blob read"
+      );
     }
   } finally {
       await prisma.chatAttachment.deleteMany({

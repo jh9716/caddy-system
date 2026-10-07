@@ -47,6 +47,12 @@ export type PhotoObjectMeta = {
   contentType: string;
 };
 
+export type PhotoObjectPrefixMeta = {
+  prefix: Uint8Array;
+  size: number;
+  contentType: string;
+};
+
 export type CourseReportPhotoStore = {
   configured: boolean;
   put(key: string, bytes: Uint8Array, mimeType: string): Promise<void>;
@@ -58,6 +64,11 @@ export type CourseReportPhotoStore = {
   head(key: string): Promise<PhotoObjectMeta | null>;
   /** First maxBytes only. Must not buffer the rest of the object. */
   readPrefix(key: string, maxBytes: number): Promise<Uint8Array | null>;
+  /**
+   * One object read: magic prefix plus size/contentType.
+   * Prefer this over separate head() + readPrefix() on the finalize hot path.
+   */
+  readPrefixAndMeta?(key: string, maxBytes: number): Promise<PhotoObjectPrefixMeta | null>;
   /**
    * Exact-pathname private PUT URL. Implementations must never return store
    * credentials or clientSigningToken — only the finished presigned URL.
@@ -138,6 +149,8 @@ const unconfigured: CourseReportPhotoStore = {
 export type BlobPrefixGetResult = {
   statusCode?: number;
   stream?: ReadableStream<Uint8Array> | null;
+  headers?: Headers | Record<string, string>;
+  blob?: { size?: number | null; contentType?: string | null };
 };
 
 export type BlobPrefixGetFn = (
@@ -157,14 +170,51 @@ export function blobPrefixGetResultUsable(
   return result.statusCode === 200 || result.statusCode === 206;
 }
 
-export async function readBlobObjectPrefixWithGet(
+function headerValue(
+  headers: BlobPrefixGetResult["headers"] | undefined,
+  name: string
+): string {
+  if (!headers) return "";
+  if (typeof (headers as Headers).get === "function") {
+    return String((headers as Headers).get(name) || "");
+  }
+  const rec = headers as Record<string, string>;
+  return String(rec[name] || rec[name.toLowerCase()] || rec[name.toUpperCase()] || "");
+}
+
+export function sizeFromPrefixGetResult(result: BlobPrefixGetResult): number {
+  // @vercel/blob 2.8.0 get() normalizes Range responses to status 200 and
+  // sets blob.size from Content-Length (the range body, often 256). The
+  // object total is Content-Range's /TOTAL when present.
+  const range = headerValue(result.headers, "content-range");
+  const total = /\/(\d+)\s*$/.exec(range);
+  if (total) {
+    const n = Number(total[1]);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  const fromBlob = Number(result.blob?.size);
+  if (Number.isFinite(fromBlob) && fromBlob > 0) return fromBlob;
+  if (result.statusCode === 200) {
+    const len = Number(headerValue(result.headers, "content-length"));
+    if (Number.isFinite(len) && len > 0) return len;
+  }
+  return 0;
+}
+
+export function contentTypeFromPrefixGetResult(result: BlobPrefixGetResult): string {
+  const fromBlob = String(result.blob?.contentType || "").trim();
+  if (fromBlob) return fromBlob;
+  return headerValue(result.headers, "content-type").split(";", 1)[0]?.trim() || "";
+}
+
+export async function readBlobObjectPrefixAndMetaWithGet(
   get: BlobPrefixGetFn,
   key: string,
   maxBytes: number,
   isNotFound: (error: unknown) => boolean = () => false
-): Promise<Uint8Array | null> {
+): Promise<PhotoObjectPrefixMeta | null> {
   const limit = Math.max(0, Math.floor(maxBytes));
-  const openPrefix = async (range: boolean) => {
+  const openPrefix = async (range: boolean): Promise<PhotoObjectPrefixMeta | null> => {
     const abort = new AbortController();
     const result = await get(key, {
       access: "private",
@@ -173,11 +223,16 @@ export async function readBlobObjectPrefixWithGet(
       headers: range && limit > 0 ? { Range: `bytes=0-${limit - 1}` } : undefined,
     });
     if (!blobPrefixGetResultUsable(result)) return null;
-    return readLimitedStream(result.stream, limit, abort);
+    const prefix = await readLimitedStream(result.stream, limit, abort);
+    return {
+      prefix,
+      size: sizeFromPrefixGetResult(result),
+      contentType: contentTypeFromPrefixGetResult(result),
+    };
   };
   try {
     const ranged = await openPrefix(true);
-    if (ranged && ranged.byteLength > 0) return ranged;
+    if (ranged && ranged.prefix.byteLength > 0) return ranged;
   } catch (e) {
     if (isNotFound(e)) return null;
   }
@@ -187,6 +242,16 @@ export async function readBlobObjectPrefixWithGet(
     if (isNotFound(e)) return null;
     throw e;
   }
+}
+
+export async function readBlobObjectPrefixWithGet(
+  get: BlobPrefixGetFn,
+  key: string,
+  maxBytes: number,
+  isNotFound: (error: unknown) => boolean = () => false
+): Promise<Uint8Array | null> {
+  const inspected = await readBlobObjectPrefixAndMetaWithGet(get, key, maxBytes, isNotFound);
+  return inspected?.prefix ?? null;
 }
 
 export async function readLimitedStream(
@@ -348,6 +413,10 @@ const vercelBlobStore: CourseReportPhotoStore = {
     }
   },
   async readPrefix(key, maxBytes) {
+    const inspected = await this.readPrefixAndMeta?.(key, maxBytes);
+    return inspected?.prefix ?? null;
+  },
+  async readPrefixAndMeta(key, maxBytes) {
     if (!isCourseReportPhotoStorageConfigured()) {
       throw new CourseReportPhotoStorageError(
         "storage_not_configured",
@@ -357,7 +426,7 @@ const vercelBlobStore: CourseReportPhotoStore = {
     }
     const { get, BlobNotFoundError } = await import("@vercel/blob");
     try {
-      return await readBlobObjectPrefixWithGet(
+      return await readBlobObjectPrefixAndMetaWithGet(
         get,
         key,
         maxBytes,
@@ -428,10 +497,18 @@ export function createMemoryCourseReportPhotoStore(): CourseReportPhotoStore {
       return { size: row.bytes.byteLength, contentType: row.mimeType };
     },
     async readPrefix(key, maxBytes) {
+      const inspected = await this.readPrefixAndMeta?.(key, maxBytes);
+      return inspected?.prefix ?? null;
+    },
+    async readPrefixAndMeta(key, maxBytes) {
       const row = objects.get(key);
       if (!row) return null;
       const limit = Math.max(0, Math.min(Math.floor(maxBytes), row.bytes.byteLength));
-      return Uint8Array.from(row.bytes.subarray(0, limit));
+      return {
+        prefix: Uint8Array.from(row.bytes.subarray(0, limit)),
+        size: row.bytes.byteLength,
+        contentType: row.mimeType,
+      };
     },
     async delete(key) {
       objects.delete(key);

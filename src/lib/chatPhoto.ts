@@ -37,6 +37,9 @@ import {
   type CourseReportPhotoStore,
 } from "@/lib/courseReportPhotoStorage";
 import { isLocalDatabaseUrl } from "@/lib/dbSafety";
+import type { createChatPhotoHotpathClock } from "@/lib/chatPhotoHotpath";
+
+type ChatPhotoHotpathClock = ReturnType<typeof createChatPhotoHotpathClock>;
 
 export { chatPhotoSrc };
 
@@ -148,11 +151,13 @@ export async function uploadChatPhoto(
     throw new CourseReportPhotoValidationError("forbidden", "사진을 첨부할 수 없습니다.", 403);
   }
 
-  await runChatAttachmentMaintenance(db);
-
   let pending: number;
   try {
     pending = await countUnconsumedChatPhotos(db, input);
+    if (pending >= CHAT_PHOTO_MAX) {
+      await runChatAttachmentMaintenance(db);
+      pending = await countUnconsumedChatPhotos(db, input);
+    }
   } catch (e) {
     if (isChatAttachmentTableMissing(e)) photoTableNotReady();
     throw e;
@@ -288,7 +293,8 @@ export async function prepareChatPhotoUpload(
     senderUserId: number;
     contentType: unknown;
     size: unknown;
-  }
+  },
+  clock?: ChatPhotoHotpathClock
 ): Promise<ChatPhotoPrepareResult> {
   const store = resolveChatPhotoStore();
   if (!store.configured) {
@@ -304,9 +310,13 @@ export async function prepareChatPhotoUpload(
   const mime = parseRequestedChatPhotoMime(input.contentType);
   parseRequestedChatPhotoSize(input.size);
 
-  await runChatAttachmentMaintenance(db);
-
-  const pending = await countUnconsumedChatPhotos(db, input);
+  let pending = await countUnconsumedChatPhotos(db, input);
+  clock?.mark("count");
+  if (pending >= CHAT_PHOTO_MAX) {
+    await runChatAttachmentMaintenance(db);
+    pending = await countUnconsumedChatPhotos(db, input);
+    clock?.mark("maintenance");
+  }
   if (pending >= CHAT_PHOTO_MAX) {
     throw new CourseReportPhotoValidationError(
       "photo_limit",
@@ -334,15 +344,19 @@ export async function prepareChatPhotoUpload(
     if (isChatAttachmentTableMissing(e)) photoTableNotReady();
     throw e;
   }
+  clock?.mark("create");
 
-  const after = await countUnconsumedChatPhotos(db, input);
-  if (after > CHAT_PHOTO_MAX) {
-    await deleteChatPhotoIntent(db, row);
-    throw new CourseReportPhotoValidationError(
-      "photo_limit",
-      "사진은 최대 3장까지 첨부할 수 있습니다.",
-      409
-    );
+  if (pending >= CHAT_PHOTO_MAX - 1) {
+    const after = await countUnconsumedChatPhotos(db, input);
+    clock?.mark("countAfter");
+    if (after > CHAT_PHOTO_MAX) {
+      await deleteChatPhotoIntent(db, row);
+      throw new CourseReportPhotoValidationError(
+        "photo_limit",
+        "사진은 최대 3장까지 첨부할 수 있습니다.",
+        409
+      );
+    }
   }
 
   try {
@@ -350,6 +364,7 @@ export async function prepareChatPhotoUpload(
       storageKey,
       contentType: mime,
     });
+    clock?.mark("signedPut");
     return {
       attachmentId: row.id,
       uploadUrl: signed.uploadUrl,
@@ -363,13 +378,49 @@ export async function prepareChatPhotoUpload(
   }
 }
 
+async function inspectUploadedChatPhoto(
+  store: CourseReportPhotoStore,
+  storageKey: string,
+  clock?: ChatPhotoHotpathClock
+): Promise<{ size: number; contentType: string; prefix: Uint8Array }> {
+  if (store.readPrefixAndMeta) {
+    const inspected = await store.readPrefixAndMeta(
+      storageKey,
+      COURSE_REPORT_PHOTO_MAGIC_PREFIX_BYTES
+    );
+    clock?.mark("blobInspect");
+    if (!inspected) {
+      return { prefix: new Uint8Array(), size: 0, contentType: "" };
+    }
+    if (inspected.size > 0) {
+      return inspected;
+    }
+    const meta = await store.head(storageKey);
+    clock?.mark("blobHeadFallback");
+    return {
+      prefix: inspected.prefix,
+      size: meta?.size ?? 0,
+      contentType: inspected.contentType || meta?.contentType || "",
+    };
+  }
+  const meta = await store.head(storageKey);
+  const prefix = await store.readPrefix(storageKey, COURSE_REPORT_PHOTO_MAGIC_PREFIX_BYTES);
+  clock?.mark("blobInspect");
+  return {
+    prefix: prefix || new Uint8Array(),
+    size: meta?.size ?? 0,
+    contentType: meta?.contentType || "",
+  };
+}
+
 export async function finalizeChatPhotoUpload(
   db: PrismaClient,
   input: {
     roomId: string;
     attachmentId: string;
     senderUserId: number;
-  }
+  },
+  clock?: ChatPhotoHotpathClock
 ): Promise<ChatPhotoPublic> {
   const store = resolveChatPhotoStore();
   if (!store.configured) {
@@ -390,6 +441,7 @@ export async function finalizeChatPhotoUpload(
     if (isChatAttachmentTableMissing(e)) photoTableNotReady();
     throw e;
   }
+  clock?.mark("dbFind");
   if (!row || row.roomId !== input.roomId) {
     throw new CourseReportPhotoValidationError("not_found", "사진을 찾을 수 없습니다.", 404);
   }
@@ -397,32 +449,17 @@ export async function finalizeChatPhotoUpload(
     throw new CourseReportPhotoValidationError("forbidden", "사진을 첨부할 수 없습니다.", 403);
   }
   if (row.uploadState === "READY") {
-    return toPublic(row);
+    const photo = await toPublic(row);
+    clock?.mark("claimSign");
+    return photo;
   }
   if (row.uploadState !== "PENDING") {
     throw new CourseReportPhotoValidationError("not_found", "사진을 찾을 수 없습니다.", 404);
   }
 
-  let meta: { size: number; contentType: string } | null;
-  let prefix: Uint8Array | null;
+  let inspected: { size: number; contentType: string; prefix: Uint8Array };
   try {
-    meta = await store.head(row.storageKey);
-    if (!meta || meta.size <= 0) {
-      await deleteChatPhotoIntent(db, row);
-      throw new CourseReportPhotoValidationError(
-        "upload_incomplete",
-        "사진 업로드가 완료되지 않았습니다.",
-        409
-      );
-    }
-    if (meta.size > CHAT_PHOTO_MAX_BYTES) {
-      await deleteChatPhotoIntent(db, row);
-      throw new CourseReportPhotoValidationError(
-        "file_too_large",
-        "사진은 장당 3MB 이하만 첨부할 수 있습니다."
-      );
-    }
-    prefix = await store.readPrefix(row.storageKey, COURSE_REPORT_PHOTO_MAGIC_PREFIX_BYTES);
+    inspected = await inspectUploadedChatPhoto(store, row.storageKey, clock);
   } catch (e) {
     if (e instanceof CourseReportPhotoValidationError) throw e;
     if (e instanceof CourseReportPhotoStorageError) throw e;
@@ -432,7 +469,7 @@ export async function finalizeChatPhotoUpload(
       502
     );
   }
-  if (!prefix || prefix.byteLength === 0) {
+  if (inspected.size <= 0 || inspected.prefix.byteLength === 0) {
     await deleteChatPhotoIntent(db, row);
     throw new CourseReportPhotoValidationError(
       "upload_incomplete",
@@ -440,10 +477,17 @@ export async function finalizeChatPhotoUpload(
       409
     );
   }
+  if (inspected.size > CHAT_PHOTO_MAX_BYTES) {
+    await deleteChatPhotoIntent(db, row);
+    throw new CourseReportPhotoValidationError(
+      "file_too_large",
+      "사진은 장당 3MB 이하만 첨부할 수 있습니다."
+    );
+  }
 
   let mime: CourseReportPhotoMime;
   try {
-    mime = assertCourseReportPhotoPrefix({ prefix, totalSize: meta.size });
+    mime = assertCourseReportPhotoPrefix({ prefix: inspected.prefix, totalSize: inspected.size });
   } catch (e) {
     await deleteChatPhotoIntent(db, row);
     throw e;
@@ -456,7 +500,7 @@ export async function finalizeChatPhotoUpload(
       data: {
         uploadState: "READY",
         mimeType: mime,
-        size: meta.size,
+        size: inspected.size,
       },
     });
   } catch (e) {
@@ -464,7 +508,10 @@ export async function finalizeChatPhotoUpload(
     if (isChatAttachmentTableMissing(e)) photoTableNotReady();
     throw e;
   }
-  return toPublic(ready);
+  clock?.mark("dbUpdate");
+  const photo = await toPublic(ready);
+  clock?.mark("claimSign");
+  return photo;
 }
 
 export async function putLocalChatPhotoBytes(input: {
