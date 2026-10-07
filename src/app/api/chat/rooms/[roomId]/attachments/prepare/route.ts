@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import {
   authUnavailableResponse,
   isAuthStoreUnavailable,
@@ -7,7 +7,13 @@ import {
 } from "@/lib/auth";
 import { ChatAuthError } from "@/lib/chatAuth";
 import { requireChatPhotoRoomAccess } from "@/lib/chatPhotoAccess";
-import { prepareChatPhotoUpload } from "@/lib/chatPhoto";
+import { prepareChatPhotoUpload, runChatAttachmentMaintenance } from "@/lib/chatPhoto";
+import {
+  createChatPhotoHotpathClock,
+  logChatPhotoHotpath,
+  shouldRunBackgroundChatPhotoCleanup,
+} from "@/lib/chatPhotoHotpath";
+import { canShowChatPhotoDebug } from "@/lib/chatPhotoTiming";
 import { CourseReportPhotoValidationError } from "@/lib/courseReportPhotoMagic";
 import { CourseReportPhotoStorageError } from "@/lib/courseReportPhotoStorage";
 import { prisma } from "@/lib/prisma";
@@ -20,23 +26,49 @@ export async function POST(
   req: NextRequest,
   ctx: { params: Promise<{ roomId: string }> }
 ) {
+  const clock = createChatPhotoHotpathClock();
   try {
     const auth = await resolveAuthUser(req);
+    clock.mark("auth");
     if (!auth) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     if (shouldForcePasswordChange(auth)) return mustChangePasswordResponse();
     const roomId = decodeURIComponent((await ctx.params).roomId || "");
     const access = await requireChatPhotoRoomAccess(prisma, auth, roomId);
+    clock.mark("roomAccess");
     const body = (await req.json().catch(() => null)) as {
       contentType?: unknown;
       size?: unknown;
     } | null;
-    const upload = await prepareChatPhotoUpload(prisma, {
-      roomId,
-      senderUserId: access.userId,
-      contentType: body?.contentType,
-      size: body?.size,
+    const upload = await prepareChatPhotoUpload(
+      prisma,
+      {
+        roomId,
+        senderUserId: access.userId,
+        contentType: body?.contentType,
+        size: body?.size,
+      },
+      clock
+    );
+    const hotpath = clock.summary("prepare");
+    logChatPhotoHotpath(hotpath);
+    if (shouldRunBackgroundChatPhotoCleanup()) {
+      try {
+        after(() => {
+          void runChatAttachmentMaintenance(prisma);
+        });
+      } catch {
+        /* after() needs a Next request scope */
+      }
+    }
+    const debug = canShowChatPhotoDebug({
+      role: auth.role,
+      search: req.nextUrl.search,
     });
-    return NextResponse.json({ ok: true, upload });
+    return NextResponse.json({
+      ok: true,
+      upload,
+      ...(debug ? { hotpath } : {}),
+    });
   } catch (e) {
     if (isAuthStoreUnavailable(e)) return authUnavailableResponse();
     if (e instanceof ChatAuthError) {

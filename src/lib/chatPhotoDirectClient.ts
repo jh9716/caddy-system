@@ -1,4 +1,9 @@
-import { markChatPhotoTiming, stampChatPhotoTiming } from "@/lib/chatPhotoTiming";
+import {
+  chatPhotoDebugApiUrl,
+  markChatPhotoTiming,
+  noteChatPhotoServerHotpath,
+  stampChatPhotoTiming,
+} from "@/lib/chatPhotoTiming";
 
 export type ChatPhotoDirectResult = {
   id: string;
@@ -88,7 +93,7 @@ export async function uploadChatPhotoDirect(
   const prepareStarted = typeof performance !== "undefined" ? performance.now() : Date.now();
   stampChatPhotoTiming("prepare_api_start", prepareStarted);
   const preparedRes = await fetchFn(
-    `/api/chat/rooms/${encodeURIComponent(roomId)}/attachments/prepare`,
+    chatPhotoDebugApiUrl(`/api/chat/rooms/${encodeURIComponent(roomId)}/attachments/prepare`),
     {
       method: "POST",
       credentials: "include",
@@ -98,6 +103,7 @@ export async function uploadChatPhotoDirect(
   );
   const prepared = await preparedRes.json().catch(() => null);
   markChatPhotoTiming("prepare_api", prepareStarted);
+  noteChatPhotoServerHotpath(prepared?.hotpath);
   if (!preparedRes.ok || !prepared?.upload?.attachmentId || !prepared.upload.uploadUrl) {
     const message = prepared?.message || "사진 업로드 준비에 실패했습니다.";
     notify({ key: item.key, phase: "error", progress: 0, error: message });
@@ -126,7 +132,9 @@ export async function uploadChatPhotoDirect(
   const finalizeStarted = typeof performance !== "undefined" ? performance.now() : Date.now();
   stampChatPhotoTiming("finalize_start", finalizeStarted);
   const finalizedRes = await fetchFn(
-    `/api/chat/rooms/${encodeURIComponent(roomId)}/attachments/${encodeURIComponent(attachmentId)}/finalize`,
+    chatPhotoDebugApiUrl(
+      `/api/chat/rooms/${encodeURIComponent(roomId)}/attachments/${encodeURIComponent(attachmentId)}/finalize`
+    ),
     {
       method: "POST",
       credentials: "include",
@@ -135,6 +143,7 @@ export async function uploadChatPhotoDirect(
   const finalized = await finalizedRes.json().catch(() => null);
   stampChatPhotoTiming("finalize_end");
   markChatPhotoTiming("finalize_api", finalizeStarted);
+  noteChatPhotoServerHotpath(finalized?.hotpath);
   if (!finalizedRes.ok || !finalized?.photo?.id || !finalized.photo.claim) {
     const message = finalized?.message || "사진 확인에 실패했습니다.";
     notify({ key: item.key, phase: "error", progress: 100, attachmentId, error: message });

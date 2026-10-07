@@ -2187,6 +2187,21 @@ export default function ChatClient() {
                   ["sendTapToWsMs", photoDebugSample.sendTapToWsMs],
                   ["selectedToReadyMs", photoDebugSample.selectedToReadyMs],
                   ["totalUntilWsMs", photoDebugSample.totalUntilWsMs],
+                  ["prepareServerMs", photoDebugSample.prepareServerMs],
+                  ["prepareServerRegion", photoDebugSample.prepareServerRegion],
+                  ["prepareAuthMs", photoDebugSample.prepareAuthMs],
+                  ["prepareRoomAccessMs", photoDebugSample.prepareRoomAccessMs],
+                  ["prepareCountMs", photoDebugSample.prepareCountMs],
+                  ["prepareCreateMs", photoDebugSample.prepareCreateMs],
+                  ["prepareSignedPutMs", photoDebugSample.prepareSignedPutMs],
+                  ["finalizeServerMs", photoDebugSample.finalizeServerMs],
+                  ["finalizeServerRegion", photoDebugSample.finalizeServerRegion],
+                  ["finalizeAuthMs", photoDebugSample.finalizeAuthMs],
+                  ["finalizeRoomAccessMs", photoDebugSample.finalizeRoomAccessMs],
+                  ["finalizeDbFindMs", photoDebugSample.finalizeDbFindMs],
+                  ["finalizeBlobMs", photoDebugSample.finalizeBlobMs],
+                  ["finalizeDbUpdateMs", photoDebugSample.finalizeDbUpdateMs],
+                  ["finalizeSignMs", photoDebugSample.finalizeSignMs],
                 ] as const
               ).map(([key, value]) => (
                 <div key={key}>
