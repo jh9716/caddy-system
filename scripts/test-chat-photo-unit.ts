@@ -1087,7 +1087,24 @@ section("phase 5 adaptive compression + debug");
 section("phase 6 hot-path timing / region / cleanup");
 
 {
-  assert(sizeFromPrefixGetResult({ blob: { size: 655611 } }) === 655611, "size from blob.size");
+  assert(
+    sizeFromPrefixGetResult({
+      statusCode: 200,
+      blob: { size: 256 },
+      headers: {
+        "content-range": "bytes 0-255/655611",
+        "content-length": "256",
+      },
+    }) === 655611,
+    "A: normalized Range 200 prefers Content-Range total over blob.size"
+  );
+  assert(
+    sizeFromPrefixGetResult({
+      statusCode: 200,
+      blob: { size: 655611 },
+    }) === 655611,
+    "B: full GET uses blob.size when Content-Range is absent"
+  );
   assert(
     sizeFromPrefixGetResult({
       statusCode: 206,
@@ -1211,6 +1228,15 @@ section("source wiring / no public blob");
   assert(storage.includes("statusCode === 206"), "Range 206 is usable");
   assert(storage.includes("readBlobObjectPrefixWithGet"), "range then non-range fallback");
   assert(storage.includes("blobPrefixGetResultUsable"), "prefix helper owns 200/206 check");
+  const sizeFn = storage.slice(
+    storage.indexOf("export function sizeFromPrefixGetResult"),
+    storage.indexOf("export function contentTypeFromPrefixGetResult")
+  );
+  assert(
+    sizeFn.indexOf("content-range") >= 0 &&
+      sizeFn.indexOf("content-range") < sizeFn.indexOf("blob?.size"),
+    "Content-Range total is preferred over blob.size"
+  );
   const prefixHelper = storage.slice(
     storage.indexOf("export async function readBlobObjectPrefixAndMetaWithGet"),
     storage.indexOf("export async function readBlobObjectPrefixWithGet")
@@ -2107,6 +2133,93 @@ if (!ALLOW_DB) {
         senderUserId: user.id,
       });
       assert(rangeFin.claim && rangeFin.mimeType === "image/jpeg", "Range 206 does not become upload_incomplete");
+      await prisma.chatAttachment.deleteMany({
+        where: {
+          senderUserId: user.id,
+          id: { not: largePrep.attachmentId },
+        },
+      });
+
+      const vercelRangeStore = createMemoryCourseReportPhotoStore();
+      const vercelRangeWrapped = {
+        ...vercelRangeStore,
+        async readPrefixAndMeta(key: string, maxBytes: number) {
+          const bytes = await vercelRangeStore.get(key);
+          if (!bytes) return null;
+          const limit = Math.max(0, Math.floor(maxBytes));
+          const body = bytes.subarray(0, Math.min(limit || bytes.byteLength, bytes.byteLength));
+          return readBlobObjectPrefixAndMetaWithGet(
+            async () => ({
+              statusCode: 200,
+              stream: new ReadableStream<Uint8Array>({
+                start(controller) {
+                  controller.enqueue(body);
+                  controller.close();
+                },
+              }),
+              headers: {
+                "content-range": `bytes 0-${Math.max(0, body.byteLength - 1)}/${bytes.byteLength}`,
+                "content-length": String(body.byteLength),
+              },
+              blob: { size: body.byteLength, contentType: "image/jpeg" },
+            }),
+            key,
+            maxBytes
+          );
+        },
+      };
+      const vercelRangeStats = instrumentPhotoStore(vercelRangeWrapped);
+      setCourseReportPhotoStoreForTests(vercelRangeWrapped);
+      const overRangePrep = await prepareChatPhotoUpload(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        contentType: "image/jpeg",
+        size: 16,
+      });
+      await vercelRangeStore.put(
+        `chat/all/${overRangePrep.attachmentId}.jpg`,
+        jpegBytes(3 * 1024 * 1024 + 8, 22),
+        "image/jpeg"
+      );
+      vercelRangeStats.reset();
+      let overRangeCode = "";
+      try {
+        await finalizeChatPhotoUpload(prisma, {
+          roomId: "all",
+          attachmentId: overRangePrep.attachmentId,
+          senderUserId: user.id,
+        });
+      } catch (e) {
+        overRangeCode = e instanceof CourseReportPhotoValidationError ? e.code : "other";
+      }
+      const overRangeSnap = vercelRangeStats.snapshot();
+      assert(overRangeCode === "file_too_large", "C: Range body 256B with 3MB+ total is file_too_large");
+      assert(overRangeSnap.inspectCalls === 1 && overRangeSnap.headCalls === 0, "C: one Range GET, no HEAD");
+      assert(overRangeSnap.getCalls === 0, "C: does not full-get oversize object");
+
+      const claimedJpeg = jpegBytes(655611 - 4, 23);
+      assert(claimedJpeg.byteLength === 655611, "D fixture is 655611 bytes");
+      const claimPrep = await prepareChatPhotoUpload(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        contentType: "image/jpeg",
+        size: claimedJpeg.byteLength,
+      });
+      await vercelRangeStore.put(`chat/all/${claimPrep.attachmentId}.jpg`, claimedJpeg, "image/jpeg");
+      vercelRangeStats.reset();
+      const claimFin = await finalizeChatPhotoUpload(prisma, {
+        roomId: "all",
+        attachmentId: claimPrep.attachmentId,
+        senderUserId: user.id,
+      });
+      const claimSnap = vercelRangeStats.snapshot();
+      const claimRow = await prisma.chatAttachment.findUnique({ where: { id: claimPrep.attachmentId } });
+      assert(claimFin.size === 655611, "D: finalize claim size stays 655611");
+      assert(claimRow?.size === 655611, "D: DB size stays 655611");
+      assert(claimSnap.inspectCalls === 1 && claimSnap.headCalls === 0, "D: one Range GET, no HEAD");
+      assert(claimSnap.prefixBytes <= COURSE_REPORT_PHOTO_MAGIC_PREFIX_BYTES, "D: prefix stays <=256B");
+      await prisma.chatAttachment.delete({ where: { id: claimPrep.attachmentId } }).catch(() => undefined);
+
       setCourseReportPhotoStoreForTests(prevStore);
 
       storeStats.reset();

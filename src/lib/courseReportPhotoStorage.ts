@@ -183,14 +183,17 @@ function headerValue(
 }
 
 export function sizeFromPrefixGetResult(result: BlobPrefixGetResult): number {
-  const fromBlob = Number(result.blob?.size);
-  if (Number.isFinite(fromBlob) && fromBlob > 0) return fromBlob;
+  // @vercel/blob 2.8.0 get() normalizes Range responses to status 200 and
+  // sets blob.size from Content-Length (the range body, often 256). The
+  // object total is Content-Range's /TOTAL when present.
   const range = headerValue(result.headers, "content-range");
   const total = /\/(\d+)\s*$/.exec(range);
   if (total) {
     const n = Number(total[1]);
     if (Number.isFinite(n) && n > 0) return n;
   }
+  const fromBlob = Number(result.blob?.size);
+  if (Number.isFinite(fromBlob) && fromBlob > 0) return fromBlob;
   if (result.statusCode === 200) {
     const len = Number(headerValue(result.headers, "content-length"));
     if (Number.isFinite(len) && len > 0) return len;
