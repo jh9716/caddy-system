@@ -6,11 +6,13 @@ import {
 } from "@/lib/courseReportPhotoClient";
 import type { ChatPhotoDirectResult } from "@/lib/chatPhotoDirectClient";
 import { CHAT_PHOTO_MAX } from "@/lib/chatPhotoConstants";
+import { prepareChatAdaptiveBlob } from "@/lib/chatPhotoAdaptive";
 import {
   canUseChatPhotoFastPath,
   isChatPhotoAcceptableSource,
   prepareChatPhotoSource,
 } from "@/lib/chatPhotoFastPath";
+import { chatPhotoNow } from "@/lib/chatPhotoTiming";
 
 export const CHAT_PHOTO_UPLOAD_CONCURRENCY = 3;
 
@@ -25,6 +27,12 @@ export type ChatPendingPhotoSend = {
   error?: string;
 };
 
+export type ChatPhotoMetrics = {
+  sourceBytes: number;
+  uploadBytes?: number;
+  compressionMs?: number;
+};
+
 export type ChatPendingPhoto = {
   key: string;
   blob: Blob;
@@ -34,7 +42,15 @@ export type ChatPendingPhoto = {
   status: ChatPendingPhotoStatus;
   error?: string;
   send?: ChatPendingPhotoSend;
+  metrics?: ChatPhotoMetrics;
 };
+
+export function chatPhotoComposerBusy(item: ChatPendingPhoto): boolean {
+  if (item.status === "failed" || item.send?.phase === "error" || item.send?.phase === "done") {
+    return false;
+  }
+  return item.status === "preparing" || Boolean(item.send && item.send.phase !== "idle");
+}
 
 export function instantChatPhotoPicks(
   files: File[],
@@ -64,6 +80,7 @@ export function instantChatPhotoPicks(
       fileId,
       fingerprint: "",
       status: canUseChatPhotoFastPath(file) ? "ready" : "preparing",
+      metrics: { sourceBytes: file.size, uploadBytes: canUseChatPhotoFastPath(file) ? file.size : undefined, compressionMs: canUseChatPhotoFastPath(file) ? 0 : undefined },
     });
     sources.push(file);
   }
@@ -73,7 +90,7 @@ export function instantChatPhotoPicks(
 export async function prepareChatPendingPhoto(
   item: ChatPendingPhoto,
   file: File,
-  prepare: (file: File) => Promise<Blob> = prepareChatPhotoSource
+  prepare: (file: File) => Promise<Blob> = (next) => prepareChatPhotoSource(next, prepareChatAdaptiveBlob)
 ): Promise<ChatPendingPhoto> {
   try {
     if (canUseChatPhotoFastPath(file) && prepare === prepareChatPhotoSource) {
@@ -83,8 +100,10 @@ export async function prepareChatPendingPhoto(
         fingerprint: "",
         status: "ready",
         error: undefined,
+        metrics: { sourceBytes: file.size, uploadBytes: file.size, compressionMs: 0 },
       };
     }
+    const started = chatPhotoNow();
     const blob = await prepare(file);
     return {
       ...item,
@@ -92,6 +111,11 @@ export async function prepareChatPendingPhoto(
       fingerprint: "",
       status: "ready",
       error: undefined,
+      metrics: {
+        sourceBytes: item.metrics?.sourceBytes ?? file.size,
+        uploadBytes: blob.size,
+        compressionMs: Math.max(0, chatPhotoNow() - started),
+      },
     };
   } catch (e) {
     return {
@@ -138,6 +162,7 @@ export function applyPreparedChatPhoto(
             fingerprint: prepared.fingerprint,
             status: "ready",
             send: row.send,
+            metrics: prepared.metrics ?? row.metrics,
           }
         : row
     ),

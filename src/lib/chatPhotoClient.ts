@@ -9,6 +9,7 @@ export {
   chatPhotoPickRoom,
   instantChatPhotoPicks,
   mapBoundedSettled,
+  chatPhotoComposerBusy,
   prepareChatPendingPhoto,
   readyChatPhotosForUpload,
   type ChatPendingPhoto,
@@ -18,6 +19,12 @@ export {
   needsChatPhotoHeavyPrepare,
   prepareChatPhotoSource,
 } from "@/lib/chatPhotoFastPath";
+export {
+  chatPhotoEncodeBottleneck,
+  chatPhotoPutBottleneck,
+  planChatPhotoAdaptive,
+  prepareChatAdaptivePhoto,
+} from "@/lib/chatPhotoAdaptive";
 export {
   buildOptimisticOutgoingLine,
   clearedComposerAfterOptimisticSend,

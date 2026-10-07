@@ -4893,6 +4893,36 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
 .vh-chat-pending-photo.is-failed .vh-chat-pending-status {
   background: rgba(140, 32, 32, 0.82);
 }
+.vh-chat-pending-retry {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 4px;
+  border: 0;
+  border-radius: 4px;
+  padding: 3px 0;
+  background: rgba(140, 32, 32, 0.86);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 800;
+}
+.vh-chat-photo-debug {
+  position: fixed;
+  right: 8px;
+  bottom: 84px;
+  z-index: 40;
+  min-width: 196px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(16, 28, 24, 0.92);
+  color: #d7efe4;
+  font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.vh-chat-photo-debug div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
 .vh-chat-pending-photo.is-uploading .vh-chat-pending-status {
   background: rgba(22, 48, 40, 0.82);
 }

@@ -71,6 +71,7 @@ import {
 import {
   applyChatPhotoSendProgress,
   applyPreparedChatPhoto,
+  chatPhotoComposerBusy,
   instantChatPhotoPicks,
   mapBoundedSettled,
   prepareChatPendingPhoto,
@@ -89,12 +90,21 @@ import {
   shouldStartOptimisticChatSend,
 } from "../src/lib/chatPhotoOptimistic";
 import {
+  buildChatPhotoDebugSample,
+  canShowChatPhotoDebug,
   emitChatPhotoTimingSummary,
   markChatPhotoTiming,
   resetChatPhotoTiming,
   stampChatPhotoTiming,
   summarizeChatPhotoTiming,
 } from "../src/lib/chatPhotoTiming";
+import {
+  chatPhotoEncodeBottleneck,
+  chatPhotoPutBottleneck,
+  planChatPhotoAdaptive,
+  prepareChatAdaptivePhoto,
+} from "../src/lib/chatPhotoAdaptive";
+import { CHAT_PHOTO_MAX_BYTES, CHAT_PHOTO_PASSTHROUGH_MAX_BYTES } from "../src/lib/chatPhotoConstants";
 import {
   abandonChatPhotoPreupload,
   finishChatPhotoOutgoingUploads,
@@ -572,10 +582,10 @@ section("instant preview + parallel upload");
   });
   const heic = new File([heicBytes()], "a.heic", { type: "image/heic", lastModified: 15 });
   const pdf = new File([pdfBytes()], "x.pdf", { type: "application/pdf", lastModified: 16 });
-  assert(canUseChatPhotoFastPath(jpegOk), "JPEG <=3MB uses fast path");
-  assert(canUseChatPhotoFastPath(pngOk), "PNG <=3MB uses fast path");
-  assert(canUseChatPhotoFastPath(webpOk), "WEBP <=3MB uses fast path");
-  assert(!canUseChatPhotoFastPath(huge), ">3MB is not fast path");
+  assert(canUseChatPhotoFastPath(jpegOk), "small JPEG uses passthrough");
+  assert(canUseChatPhotoFastPath(pngOk), "small PNG uses passthrough");
+  assert(canUseChatPhotoFastPath(webpOk), "small WEBP uses passthrough");
+  assert(!canUseChatPhotoFastPath(huge), ">3MB is not passthrough");
   assert(needsChatPhotoHeavyPrepare(huge), ">3MB uses compression path");
   assert(needsChatPhotoHeavyPrepare(heic), "HEIC uses conversion path");
   assert(!canUseChatPhotoFastPath(pdf), "unsupported is not fast path");
@@ -586,11 +596,11 @@ section("instant preview + parallel upload");
     return new Blob([`compressed-${file.name}`], { type: "image/jpeg" });
   };
   const jpegPrepared = await prepareChatPhotoSource(jpegOk, compress);
-  assert(jpegPrepared === jpegOk && compressCalls === 0, "JPEG <=3MB → prepareCourseReportPhoto 호출 안 함");
+  assert(jpegPrepared === jpegOk && compressCalls === 0, "small JPEG → no re-encode");
   const pngPrepared = await prepareChatPhotoSource(pngOk, compress);
-  assert(pngPrepared === pngOk && compressCalls === 0, "PNG <=3MB → re-encode 안 함");
+  assert(pngPrepared === pngOk && compressCalls === 0, "small PNG → no re-encode");
   const webpPrepared = await prepareChatPhotoSource(webpOk, compress);
-  assert(webpPrepared === webpOk && compressCalls === 0, "WEBP <=3MB → re-encode 안 함");
+  assert(webpPrepared === webpOk && compressCalls === 0, "small WEBP → no re-encode");
   const hugePrepared = await prepareChatPhotoSource(huge, compress);
   assert(compressCalls === 1 && hugePrepared !== huge, ">3MB → compression path");
   let unsupported = "";
@@ -899,6 +909,152 @@ section("phase 4 pre-upload on select");
   );
 }
 
+section("phase 5 adaptive compression + debug");
+{
+  if (typeof URL.createObjectURL !== "function") {
+    let n = 0;
+    URL.createObjectURL = () => `blob:test-${++n}`;
+    URL.revokeObjectURL = () => {};
+  }
+  const smallJpeg = new File([new Uint8Array(500 * 1024)], "s.jpg", { type: "image/jpeg", lastModified: 41 });
+  const midJpeg = new File([new Uint8Array(2.2 * 1024 * 1024)], "m.jpg", {
+    type: "image/jpeg",
+    lastModified: 42,
+  });
+  const largeWebp = new File([new Uint8Array(1.4 * 1024 * 1024)], "l.webp", {
+    type: "image/webp",
+    lastModified: 43,
+  });
+  const largePng = new File([new Uint8Array(1.6 * 1024 * 1024)], "shot.png", {
+    type: "image/png",
+    lastModified: 44,
+  });
+  const heic = new File([heicBytes()], "a.heic", { type: "image/heic", lastModified: 45 });
+  assert(smallJpeg.size < CHAT_PHOTO_PASSTHROUGH_MAX_BYTES, "500KB-class fixture is under passthrough");
+  assert(canUseChatPhotoFastPath(smallJpeg), "500KB JPEG → no encode");
+  assert(!needsChatPhotoHeavyPrepare(smallJpeg), "500KB JPEG skips adaptive");
+  assert(!canUseChatPhotoFastPath(midJpeg) && needsChatPhotoHeavyPrepare(midJpeg), "2~3MB JPEG → compressed target");
+  assert(!canUseChatPhotoFastPath(largeWebp) && needsChatPhotoHeavyPrepare(largeWebp), "large WEBP → adaptive path");
+  const pngPlan = planChatPhotoAdaptive(largePng, { hasAlpha: false });
+  assert(pngPlan.kind === "png_readable" && pngPlan.mime === "image/webp", "PNG screenshot readability-oriented path");
+  assert(pngPlan.qualities[0] === 0.92 && pngPlan.maxAttempts === 2, "PNG uses high-quality bounded encode");
+  assert(pngPlan.keepAlpha === true || pngPlan.mime !== "image/jpeg", "large PNG is not forced to low-quality JPEG");
+  const jpegPlan = planChatPhotoAdaptive(midJpeg);
+  assert(jpegPlan.longEdge === 1600 && jpegPlan.targetMaxBytes <= 800 * 1024, "JPEG long edge 1600 / target <=800KB");
+  assert(jpegPlan.maxAttempts <= 2, "encode attempts bounded");
+
+  let encodeCalls = 0;
+  const compressed = await prepareChatAdaptivePhoto(midJpeg, {
+    inspect: async () => ({ width: 4000, height: 3000 }),
+    encode: async ({ mime, quality }) => {
+      encodeCalls += 1;
+      const size = quality > 0.75 ? 900 * 1024 : 620 * 1024;
+      return new Blob([new Uint8Array(size)], { type: mime });
+    },
+  });
+  assert(encodeCalls === 2, "quality loop stops at 2 encodes");
+  assert(compressed.uploadBytes <= 800 * 1024, "2~3MB JPEG compressed to target");
+  assert(compressed.uploadBytes <= CHAT_PHOTO_MAX_BYTES, "compressed result <= server max");
+  assert(compressed.sourceBytes === midJpeg.size, "sourceBytes recorded");
+
+  const webpOut = await prepareChatAdaptivePhoto(largeWebp, {
+    inspect: async () => ({ width: 2400, height: 1800 }),
+    encode: async ({ mime }) => new Blob([new Uint8Array(560 * 1024)], { type: mime }),
+  });
+  assert(webpOut.encoded && webpOut.uploadBytes === 560 * 1024, "large WEBP uses adaptive encode");
+
+  const pngOut = await prepareChatAdaptivePhoto(largePng, {
+    hasAlpha: true,
+    inspect: async () => ({ width: 2000, height: 1400, hasAlpha: true }),
+    encode: async ({ mime, quality }) => new Blob([new Uint8Array(quality > 0.88 ? 820 * 1024 : 700 * 1024)], { type: mime }),
+  });
+  assert(pngOut.mimeType.includes("webp") || pngOut.mimeType.includes("png"), "transparent/screenshot PNG stays readable");
+  assert(pngOut.uploadBytes <= 1024 * 1024, "PNG target around 700KB~1MB");
+
+  const heicOut = await prepareChatAdaptivePhoto(heic, {
+    decodeHeic: async () => new Blob([new Uint8Array(2 * 1024 * 1024)], { type: "image/jpeg" }),
+    inspect: async () => ({ width: 3000, height: 2000 }),
+    encode: async ({ mime }) => new Blob([new Uint8Array(540 * 1024)], { type: mime }),
+  });
+  assert(heicOut.encoded && heicOut.uploadBytes === 540 * 1024, "HEIC conversion + chat target");
+
+  const passthrough = await prepareChatAdaptivePhoto(smallJpeg, {
+    encode: async () => {
+      throw new Error("should not encode small jpeg");
+    },
+  });
+  assert(passthrough.encoded === false && passthrough.blob === smallJpeg, "500KB JPEG keeps original bytes");
+
+  const preview = instantChatPhotoPicks([midJpeg], 1);
+  assert(preview.items[0]?.previewUrl.startsWith("blob:"), "selected photo immediately previews");
+  assert(preview.items[0]?.status === "preparing", "large JPEG previews before compression");
+  const preparedMid = await prepareChatPendingPhoto(preview.items[0]!, midJpeg, async (file) =>
+    (await prepareChatAdaptivePhoto(file, {
+      inspect: async () => ({ width: 4000, height: 3000 }),
+      encode: async ({ mime }) => new Blob([new Uint8Array(600 * 1024)], { type: mime }),
+    })).blob
+  );
+  assert(preparedMid.status === "ready" && (preparedMid.metrics?.uploadBytes || 0) <= 800 * 1024, "compression 완료 즉시 ready");
+
+  const jobs = new Map();
+  let puts = 0;
+  const upload = async (_room: string, item: { send?: { result?: { id: string; claim: string; exp: number; mimeType: string; size: number } } }) => {
+    puts += 1;
+    if (item.send?.result?.claim) return item.send.result;
+    return { id: "att-p5", mimeType: "image/webp", size: 600 * 1024, exp: Math.floor(Date.now() / 1000) + 600, claim: "c" };
+  };
+  const first = startChatPhotoPreupload(jobs, "all", preparedMid, { upload });
+  const again = startChatPhotoPreupload(jobs, "all", preparedMid, { upload });
+  assert(first === again, "in-flight send same Promise reuse");
+  const done = await first;
+  const after = await finishChatPhotoOutgoingUploads({
+    jobs,
+    roomId: "all",
+    photos: [{ ...preparedMid, send: { phase: "done", progress: 100, attachmentId: done.id, result: done } }],
+    upload,
+  });
+  assert(puts === 1 && after[0]?.id === done.id, "send does not create second PUT");
+
+  const triple = instantChatPhotoPicks(
+    [
+      new File([jpegBytes(8, 1)], "a.jpg", { type: "image/jpeg", lastModified: 51 }),
+      new File([jpegBytes(8, 2)], "b.jpg", { type: "image/jpeg", lastModified: 52 }),
+      new File([jpegBytes(8, 3)], "c.jpg", { type: "image/jpeg", lastModified: 53 }),
+    ],
+    3
+  );
+  assert(triple.items.length === 3 && triple.items.every((item) => item.previewUrl.startsWith("blob:")), "3장 instant preview");
+  assert(shouldStartOptimisticChatSend("텍스트", triple.items), "text+photo");
+  assert(buildOptimisticOutgoingLine("답글", triple.items).localPhotos.length === 3, "reply+photo");
+  assert(chatPhotoComposerBusy({ ...preview.items[0]!, status: "preparing" }), "preparing shows quiet spinner");
+  assert(!chatPhotoComposerBusy({ ...preparedMid, status: "ready", send: { phase: "done", progress: 100 } }), "ready hides indicator");
+
+  assert(canShowChatPhotoDebug({ role: "admin", search: "?photoDebug=1" }), "admin + photoDebug=1");
+  assert(!canShowChatPhotoDebug({ role: "caddy", search: "?photoDebug=1" }), "non-admin never sees debug");
+  assert(!canShowChatPhotoDebug({ role: "admin", search: "" }), "admin without query sees no panel");
+  resetChatPhotoTiming();
+  stampChatPhotoTiming("photo_selected", 10);
+  stampChatPhotoTiming("put_start", 40);
+  stampChatPhotoTiming("prepare_complete", 25);
+  stampChatPhotoTiming("send_tap", 80);
+  stampChatPhotoTiming("ws_send", 90);
+  markChatPhotoTiming("prepare_api", 39);
+  markChatPhotoTiming("direct_put", 40);
+  markChatPhotoTiming("finalize_api", 70);
+  globalThis.__CHAT_PHOTO_TIMING__!.sourceBytes = 2200000;
+  globalThis.__CHAT_PHOTO_TIMING__!.uploadBytes = 620000;
+  globalThis.__CHAT_PHOTO_TIMING__!.compressionMs = 15;
+  const debug = buildChatPhotoDebugSample();
+  assert(debug.sourceBytes === 2200000 && debug.uploadBytes === 620000, "debug source/upload bytes");
+  assert(debug.selectedToUploadStartMs === 30 && debug.sendTapToWsMs === 10, "debug select→PUT and send→WS");
+  const debugDump = JSON.stringify(debug);
+  assert(!/https?:|claim|token|storageKey|\.jpg/i.test(debugDump), "debug sample has no secrets");
+  assert(chatPhotoEncodeBottleneck(120) === "browser-ok", "short encode is browser-ok");
+  assert(chatPhotoEncodeBottleneck(640) === "consider-native", "encode >=500ms → native candidate");
+  assert(chatPhotoPutBottleneck(620000, 2500) === "blob-network", "small PUT that is slow is Blob/network");
+  assert(chatPhotoPutBottleneck(620000, 400) === "put-ok", "fast PUT is not storage-bound");
+}
+
 section("source wiring / no public blob");
 
 {
@@ -935,6 +1091,16 @@ section("source wiring / no public blob");
   assert(direct.includes("/attachments/prepare"), "composer calls prepare");
   assert(direct.includes("/finalize"), "composer calls finalize");
   assert(client.includes("처리 중"), "preparing status copy");
+  assert(!client.includes("준비 중"), "composer does not expose prepare stage");
+  assert(!client.includes("vh-chat-pending-status"), "composer does not expose upload stage labels");
+  assert(client.includes("chatPhotoComposerBusy"), "messenger-style busy spinner");
+  assert(client.includes("canShowChatPhotoDebug"), "admin photo debug gate");
+  assert(client.includes("photoDebug"), "photoDebug query panel");
+  const adaptive = read("src/lib/chatPhotoAdaptive.ts");
+  assert(adaptive.includes("createImageBitmap"), "adaptive prefers createImageBitmap");
+  assert(adaptive.includes("OffscreenCanvas"), "adaptive considers OffscreenCanvas");
+  assert(adaptive.includes("CHAT_PHOTO_ENCODE_MAX_ATTEMPTS"), "encode loop is bounded");
+  assert(fast.includes("CHAT_PHOTO_PASSTHROUGH_MAX_BYTES"), "passthrough is chat-sized not 3MB");
   assert(reportClient.includes("createImageBitmap"), "createImageBitmap decode path");
   assert(!client.includes("전송 중..."), "composer send button is not locked as 전송 중");
   assert(client.includes("send_tap_to_local_bubble"), "send tap times local bubble");
