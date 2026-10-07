@@ -33,6 +33,7 @@ import {
   buildOptimisticOutgoingLine,
   CHAT_PHOTO_ACCEPT,
   CHAT_PHOTO_MAX,
+  chatPhotoComposerBusy,
   chatPhotoPickRoom,
   chatPhotoSrc,
   finishChatPhotoOutgoingUploads,
@@ -45,7 +46,18 @@ import {
   startChatPhotoPreupload,
   type ChatPendingPhoto,
 } from "@/lib/chatPhotoClient";
-import { chatPhotoNow, emitChatPhotoTimingSummary, markChatPhotoTiming, resetChatPhotoTiming, stampChatPhotoTiming } from "@/lib/chatPhotoTiming";
+import {
+  buildChatPhotoDebugSample,
+  canShowChatPhotoDebug,
+  chatPhotoNow,
+  emitChatPhotoTimingSummary,
+  markChatPhotoTiming,
+  noteChatPhotoBytes,
+  noteChatPhotoCompression,
+  resetChatPhotoTiming,
+  stampChatPhotoTiming,
+  type ChatPhotoDebugSample,
+} from "@/lib/chatPhotoTiming";
 import type { ChatPhotoDirectProgress, ChatPhotoDirectResult } from "@/lib/chatPhotoDirectClient";
 import {
   canProfileMention,
@@ -255,6 +267,8 @@ export default function ChatClient() {
   const pendingPhotosRef = useRef<PendingChatPhoto[]>([]);
   const prepareJobsRef = useRef(new Map<string, Promise<ChatPendingPhoto>>());
   const uploadJobsRef = useRef(new Map<string, Promise<ChatPhotoDirectResult>>());
+  const [photoDebug, setPhotoDebug] = useState(false);
+  const [photoDebugSample, setPhotoDebugSample] = useState<ChatPhotoDebugSample | null>(null);
   const [lightbox, setLightbox] = useState<{ src: string } | null>(null);
   const [replyTo, setReplyTo] = useState<ChatLineReply | null>(null);
   const [actionLine, setActionLine] = useState<ChatLine | null>(null);
@@ -834,6 +848,20 @@ export default function ChatClient() {
   }, []);
 
   useEffect(() => {
+    setPhotoDebug(
+      canShowChatPhotoDebug({
+        role: tokenInfo?.user.role,
+        search: typeof window !== "undefined" ? window.location.search : "",
+      })
+    );
+  }, [tokenInfo?.user.role]);
+
+  function refreshPhotoDebugSample() {
+    if (!photoDebug) return;
+    setPhotoDebugSample(buildChatPhotoDebugSample());
+  }
+
+  useEffect(() => {
     const el = listRef.current;
     if (!el) return;
     if (pendingScrollRestore.current != null) {
@@ -1196,6 +1224,11 @@ export default function ChatClient() {
         localPhotos: applyChatPhotoSendProgress(cur.localPhotos || [], progress),
       }));
     }
+    if (progress.result?.size) noteChatPhotoBytes(progress.result.size, progress.result.size);
+    if (progress.phase === "done" || progress.phase === "error") {
+      emitChatPhotoTimingSummary();
+      refreshPhotoDebugSample();
+    }
   }
 
   function startComposerPreupload(item: ChatPendingPhoto) {
@@ -1232,15 +1265,23 @@ export default function ChatClient() {
       const item = picked.items[i];
       const file = picked.sources[i];
       if (!item || !file) continue;
+      noteChatPhotoBytes(file.size, item.metrics?.uploadBytes);
       if (item.status === "ready" && !needsChatPhotoHeavyPrepare(file)) {
         markChatPhotoTiming("select_to_ready", selectedAt);
         stampChatPhotoTiming("prepare_complete");
+        noteChatPhotoCompression(0);
+        refreshPhotoDebugSample();
         startComposerPreupload(item);
         continue;
       }
       const job = prepareChatPendingPhoto(item, file).then((prepared) => {
         markChatPhotoTiming("select_to_prepared", selectedAt);
         stampChatPhotoTiming("prepare_complete");
+        if (prepared.metrics) {
+          noteChatPhotoBytes(prepared.metrics.sourceBytes, prepared.metrics.uploadBytes);
+          if (prepared.metrics.compressionMs != null) noteChatPhotoCompression(prepared.metrics.compressionMs);
+        }
+        refreshPhotoDebugSample();
         const applied = applyPreparedChatPhoto(pendingPhotosRef.current, prepared);
         if (applied.note) setError(applied.note);
         setPendingPhotoList(applied.items);
@@ -1361,6 +1402,7 @@ export default function ChatClient() {
     markChatPhotoTiming("message_ws_send", wsStarted);
     markChatPhotoTiming("total_send", sendStarted);
     emitChatPhotoTimingSummary();
+    refreshPhotoDebugSample();
     for (const item of ready) uploadJobsRef.current.delete(item.key);
   }
 
@@ -1915,7 +1957,6 @@ export default function ChatClient() {
                             key: item.key,
                             src: item.previewUrl,
                             sending: line.status === "sending",
-                            progress: item.send?.progress || 0,
                           }))
                       ).map((photo) => (
                           <button
@@ -1935,9 +1976,7 @@ export default function ChatClient() {
                               }}
                             />
                             {photo.sending ? (
-                              <span className="vh-chat-photo-sending" aria-label="보내는 중">
-                                {photo.progress > 0 && photo.progress < 100 ? `${photo.progress}%` : ""}
-                              </span>
+                              <span className="vh-chat-photo-sending" aria-label="보내는 중" />
                             ) : null}
                             <span className="vh-chat-photo-fallback">사진을 불러오지 못했습니다.</span>
                           </button>
@@ -2012,41 +2051,49 @@ export default function ChatClient() {
                     className={
                       item.status === "failed" || item.send?.phase === "error"
                         ? "vh-chat-pending-photo is-failed"
-                        : item.status === "preparing" ||
-                            item.send?.phase === "prepare" ||
-                            item.send?.phase === "put" ||
-                            item.send?.phase === "finalize"
+                        : chatPhotoComposerBusy(item)
                           ? "vh-chat-pending-photo is-preparing"
                           : "vh-chat-pending-photo"
                     }
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={item.previewUrl} alt="" />
-                    {item.status === "preparing" ? (
+                    {chatPhotoComposerBusy(item) ? (
                       <span className="vh-chat-pending-spinner" aria-label="처리 중" />
                     ) : null}
-                    {item.send?.phase === "prepare" ? (
-                      <span className="vh-chat-pending-status">준비 중</span>
-                    ) : null}
-                    {item.send?.phase === "put" ? (
-                      <span className="vh-chat-pending-status">
-                        {Math.max(0, Math.min(100, item.send.progress))}%
-                      </span>
-                    ) : null}
-                    {item.send?.phase === "finalize" ? (
-                      <span className="vh-chat-pending-status">확인 중</span>
-                    ) : null}
                     {item.status === "failed" || item.send?.phase === "error" ? (
-                      <span className="vh-chat-pending-status">실패</span>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="vh-chat-pending-x"
-                      aria-label="사진 제거"
-                      onClick={() => removePendingPhoto(item.key)}
-                    >
-                      X
-                    </button>
+                      <button
+                        type="button"
+                        className="vh-chat-pending-retry"
+                        onClick={() => {
+                          const file =
+                            item.blob instanceof File
+                              ? item.blob
+                              : new File([item.blob], "photo.jpg", { type: item.blob.type || "image/jpeg" });
+                          const job = prepareChatPendingPhoto({ ...item, status: "preparing", error: undefined }, file).then(
+                            (prepared) => {
+                              const applied = applyPreparedChatPhoto(pendingPhotosRef.current, prepared);
+                              setPendingPhotoList(applied.items);
+                              const current = applied.items.find((row) => row.key === prepared.key);
+                              if (current?.status === "ready") startComposerPreupload(current);
+                              return prepared;
+                            }
+                          );
+                          prepareJobsRef.current.set(item.key, job);
+                        }}
+                      >
+                        재시도
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="vh-chat-pending-x"
+                        aria-label="사진 제거"
+                        onClick={() => removePendingPhoto(item.key)}
+                      >
+                        X
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -2126,6 +2173,29 @@ export default function ChatClient() {
             </button>
             </div>
           </form>
+          {photoDebug && photoDebugSample ? (
+            <aside className="vh-chat-photo-debug" aria-label="Chat photo debug">
+              {(
+                [
+                  ["sourceBytes", photoDebugSample.sourceBytes],
+                  ["uploadBytes", photoDebugSample.uploadBytes],
+                  ["compressionMs", photoDebugSample.compressionMs],
+                  ["selectedToUploadStartMs", photoDebugSample.selectedToUploadStartMs],
+                  ["prepareApiMs", photoDebugSample.prepareApiMs],
+                  ["blobPutMs", photoDebugSample.blobPutMs],
+                  ["finalizeMs", photoDebugSample.finalizeMs],
+                  ["sendTapToWsMs", photoDebugSample.sendTapToWsMs],
+                  ["selectedToReadyMs", photoDebugSample.selectedToReadyMs],
+                  ["totalUntilWsMs", photoDebugSample.totalUntilWsMs],
+                ] as const
+              ).map(([key, value]) => (
+                <div key={key}>
+                  <span>{key}</span>
+                  <span>{value == null ? "—" : value}</span>
+                </div>
+              ))}
+            </aside>
+          ) : null}
           {linkStatus === "failed" ? (
             <button type="button" className="vh-chat-reconnect" onClick={() => void handleReconnect()}>
               다시 시도
