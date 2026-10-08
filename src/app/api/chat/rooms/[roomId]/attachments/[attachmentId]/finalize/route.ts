@@ -14,9 +14,16 @@ import { CourseReportPhotoValidationError } from "@/lib/courseReportPhotoMagic";
 import { CourseReportPhotoStorageError } from "@/lib/courseReportPhotoStorage";
 import { prisma } from "@/lib/prisma";
 import { shouldForcePasswordChange } from "@/lib/passwordPolicy";
+import { chatMediaSecret, verifyChatMediaUploadReceipt } from "@/lib/chatPhotoR2";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+
+function readUploadReceipt(body: unknown): string {
+  if (!body || typeof body !== "object") return "";
+  const receipt = (body as { receipt?: unknown }).receipt;
+  return typeof receipt === "string" ? receipt.trim() : "";
+}
 
 export async function POST(
   req: NextRequest,
@@ -31,14 +38,42 @@ export async function POST(
     const params = await ctx.params;
     const roomId = decodeURIComponent(params.roomId || "");
     const attachmentId = decodeURIComponent(params.attachmentId || "");
-    const access = await requireChatPhotoRoomAccess(prisma, auth, roomId);
-    clock.mark("roomAccess");
+    const body = await req.json().catch(() => null);
+    const receipt = readUploadReceipt(body);
+    let senderUserId: number;
+    if (receipt && auth.userId && auth.userId > 0) {
+      const verified = await verifyChatMediaUploadReceipt(chatMediaSecret(process.env), receipt);
+      if (
+        verified.ok &&
+        verified.receipt.roomId === roomId &&
+        verified.receipt.attachmentId === attachmentId &&
+        verified.receipt.senderUserId === auth.userId
+      ) {
+        senderUserId = auth.userId;
+        clock.flag("roomAccessFastPath", true);
+      } else if (!verified.ok) {
+        return NextResponse.json(
+          { error: verified.code, message: "업로드 확인에 실패했습니다." },
+          { status: verified.status }
+        );
+      } else {
+        return NextResponse.json(
+          { error: "invalid_receipt", message: "업로드 확인에 실패했습니다." },
+          { status: 401 }
+        );
+      }
+    } else {
+      const access = await requireChatPhotoRoomAccess(prisma, auth, roomId);
+      clock.mark("roomAccess");
+      senderUserId = access.userId;
+    }
     const photo = await finalizeChatPhotoUpload(
       prisma,
       {
         roomId,
         attachmentId,
-        senderUserId: access.userId,
+        senderUserId,
+        uploadReceipt: receipt || undefined,
       },
       clock
     );

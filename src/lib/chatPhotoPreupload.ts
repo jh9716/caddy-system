@@ -18,6 +18,7 @@ export type ChatPhotoPreuploadOptions = {
   upload?: typeof uploadChatPhotoDirect;
   onProgress?: (progress: ChatPhotoDirectProgress & { result?: ChatPhotoDirectResult }) => void;
   nowSec?: number;
+  chatToken?: string | null;
 };
 
 export function reusableChatPhotoResult(
@@ -69,6 +70,7 @@ export function startChatPhotoPreupload(
   const upload = opts.upload || uploadChatPhotoDirect;
   const promise = upload(roomId, itemWithoutExpiredClaim(item, nowSec), {
     onProgress: opts.onProgress,
+    chatToken: opts.chatToken,
   })
     .then((result) => {
       opts.onProgress?.({

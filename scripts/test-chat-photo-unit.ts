@@ -128,15 +128,17 @@ import {
 } from "../src/lib/chatPhotoR2";
 import {
   CHAT_MEDIA_CREATE_ONLY,
+  createBoundedConcatStream,
   createMemoryChatMediaBucket,
   handleChatMediaRequest,
   readBoundedBody,
-  sha256Hex,
+  readPrefixThenRest,
   type ChatMediaEnv,
 } from "../cloudflare/verthill-chat/src/chatMedia";
 import {
   CHAT_MEDIA_GRANT_HEADER,
   CHAT_MEDIA_PUT_OP,
+  CHAT_MEDIA_UPLOADED_OP,
   buildChatPhotoR2StorageKey,
   canonicalChatMediaPutGrant,
   chatMediaSecret,
@@ -145,8 +147,12 @@ import {
   inspectChatMediaMagic,
   parseChatMediaObjectRef,
   signChatMediaPutGrant,
+  signChatMediaUploadReceipt,
   verifyChatMediaPutGrant,
+  verifyChatMediaUploadReceipt,
 } from "../cloudflare/verthill-chat/src/chatMediaGrant";
+import { resolveChatPhotoRoomAccess } from "../src/lib/chatPhotoAccess";
+import { signChatToken } from "../src/lib/chatToken";
 
 let passed = 0;
 let failed = 0;
@@ -309,14 +315,44 @@ async function prepareHttp(
   );
 }
 
-async function finalizeHttp(cookie: string, roomId: string, attachmentId: string) {
+async function finalizeHttp(
+  cookie: string,
+  roomId: string,
+  attachmentId: string,
+  receipt?: string
+) {
   return POST_FINALIZE(
     req(
       `http://localhost/api/chat/rooms/${roomId}/attachments/${attachmentId}/finalize`,
-      { method: "POST", headers: { cookie } }
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify(receipt ? { receipt } : {}),
+      }
     ),
     { params: Promise.resolve({ roomId, attachmentId }) }
   );
+}
+
+async function prepareHttpWithToken(
+  cookie: string,
+  roomId: string,
+  contentType: string,
+  size: number,
+  chatToken: string
+) {
+  return POST_PREPARE(
+    req(`http://localhost/api/chat/rooms/${roomId}/attachments/prepare`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ contentType, size, chatToken }),
+    }),
+    { params: Promise.resolve({ roomId }) }
+  );
+}
+
+function uploadJson(res: Response | null) {
+  return res ? res.clone().json().catch(() => null) : null;
 }
 
 section("protocol / wire");
@@ -1104,6 +1140,14 @@ section("phase 5 adaptive compression + debug");
   assert(debug.sourceBytes === 2200000 && debug.uploadBytes === 620000, "debug source/upload bytes");
   assert(debug.selectedToUploadStartMs === 30 && debug.sendTapToWsMs === 10, "debug select→PUT and send→WS");
   assert(debug.storageBackend == null && debug.r2PutMs == null && debug.r2InspectMs == null, "debug R2 fields empty by default");
+  assert(
+    debug.workerIngressMs == null &&
+      debug.r2StoreMs == null &&
+      debug.receiptVerifyMs == null &&
+      debug.finalizeInspectSkipped == null &&
+      debug.roomAccessFastPath == null,
+    "phase 8 debug fields empty by default"
+  );
   const debugDump = JSON.stringify(debug);
   assert(!/https?:|claim|token|storageKey|\.jpg/i.test(debugDump), "debug sample has no secrets");
   assert(chatPhotoEncodeBottleneck(120) === "browser-ok", "short encode is browser-ok");
@@ -1201,9 +1245,15 @@ section("source wiring / no public blob");
   assert(client.includes("prepareServerMs"), "debug panel shows server prepare timing");
   assert(client.includes("finalizeBlobMs"), "debug panel shows finalize blob step");
   assert(client.includes("r2InspectMs"), "debug panel shows R2 inspect step");
+  assert(client.includes("workerIngressMs"), "debug panel shows worker ingress");
+  assert(client.includes("r2StoreMs"), "debug panel shows R2 store");
+  assert(client.includes("receiptVerifyMs"), "debug panel shows receipt verify");
+  assert(client.includes("finalizeInspectSkipped"), "debug panel shows inspect skip");
+  assert(client.includes("roomAccessFastPath"), "debug panel shows roomAccess fast path");
   assert(client.includes("storageBackend"), "debug panel shows storage backend");
   assert(client.includes("r2PutMs"), "debug panel shows R2 PUT");
   assert(client.includes("finalizeSignMs"), "debug panel shows finalize sign step");
+  assert(client.includes("chatToken: tokenRef.current?.token"), "composer passes live chat token");
   assert(timingSrc.includes("select_to_put_start_ms"), "timing summary has select→PUT start");
   assert(direct.includes("stampChatPhotoTiming(\"put_start\""), "times PUT start");
   assert(direct.includes("chatPhotoClaimStillValid"), "direct upload reuses live claims");
@@ -1340,6 +1390,8 @@ section("source wiring / no public blob");
   assert(photo.includes("purgeChatAttachments"), "room-scoped purge helper");
   assert(photo.includes("buildChatPhotoR2StorageKey"), "prepare can write r2/ keys");
   assert(photo.includes("inspectChatPhotoR2"), "R2 finalize uses Worker inspect");
+  assert(photo.includes("verifyChatMediaUploadReceipt"), "R2 finalize can verify Worker receipt");
+  assert(photo.includes("finalizeInspectSkipped"), "valid receipt skips inspect");
   assert(photo.includes("isChatPhotoR2StorageKey"), "read path keys off r2/ prefix");
   assert(!photo.includes("issueSignedToken"), "chat photo helper does not call Blob signer");
   const r2Client = read("src/lib/chatPhotoR2.ts");
@@ -1355,9 +1407,23 @@ section("source wiring / no public blob");
   assert(!/storageKey/.test(grantSrc.slice(grantSrc.indexOf("export type ChatMediaPutGrant"), grantSrc.indexOf("export type ChatMediaGrantSecretEnv"))), "grant payload has no storageKey");
   assert(mediaSrc.includes("deriveChatMediaR2Key"), "Worker derives object key");
   assert(mediaSrc.includes("etagDoesNotMatch"), "first PUT is official R2 create-only");
-  assert(mediaSrc.includes("readBoundedBody"), "PUT uses bounded body reader");
+  assert(mediaSrc.includes("readPrefixThenRest"), "PUT reads a 256-byte magic prefix");
+  assert(mediaSrc.includes("createBoundedConcatStream"), "PUT streams prefix+rest to R2");
+  const uploadFn = mediaSrc.slice(
+    mediaSrc.indexOf("export async function handleChatMediaUpload"),
+    mediaSrc.indexOf("export async function handleChatMediaInspect")
+  );
+  assert(!uploadFn.includes("readBoundedBody"), "normal R2 upload does not full-buffer");
+  assert(!uploadFn.includes("sha256Hex"), "hot path does not SHA-256 the full body");
+  assert(uploadFn.includes("bounded.stream"), "bucket.put receives a ReadableStream");
   assert(!/await request\.arrayBuffer\(\)/.test(mediaSrc), "PUT does not unbounded arrayBuffer");
-  assert(mediaSrc.includes("upload_conflict"), "different-byte replay is 409");
+  assert(mediaSrc.includes("upload_conflict"), "different-size replay is 409");
+  assert(mediaSrc.includes("signChatMediaUploadReceipt"), "successful PUT signs a receipt");
+  const accessSrc = read("src/lib/chatPhotoAccess.ts");
+  assert(accessSrc.includes("verifyChatToken"), "prepare can locally verify chat token");
+  assert(accessSrc.includes("fastPath"), "ALL room token skips caddy DB reissue");
+  assert(direct.includes("chatToken"), "prepare request can carry chat token");
+  assert(direct.includes("receipt"), "finalize request can carry upload receipt");
   assert(!reportStorage.includes("CHAT_PHOTO_STORAGE"), "CourseReport store ignores chat R2 switch");
   assert(!noticePhoto.includes("CHAT_PHOTO_STORAGE"), "Notice store ignores chat R2 switch");
   assert(direct.includes("x-chat-media-grant") || direct.includes("CHAT_MEDIA_GRANT_HEADER"), "client sends upload grant");
@@ -1437,6 +1503,24 @@ section("r2 grant / key / magic");
   assert(!bad.ok, "tampered grant rejection");
   const otherSecret = await verifyChatMediaPutGrant("other-secret", token);
   assert(!otherSecret.ok && otherSecret.code === "unauthorized", "wrong secret rejection");
+  const receiptBody = {
+    v: 1 as const,
+    op: CHAT_MEDIA_UPLOADED_OP,
+    roomId,
+    attachmentId,
+    senderUserId: 7,
+    mimeType: "image/jpeg" as const,
+    actualSize: 16,
+    exp: Math.floor(Date.now() / 1000) + 300,
+  };
+  const receiptToken = await signChatMediaUploadReceipt(secret, receiptBody);
+  const receiptOk = await verifyChatMediaUploadReceipt(secret, receiptToken);
+  assert(receiptOk.ok && receiptOk.receipt.attachmentId === attachmentId, "valid upload receipt");
+  const expiredReceipt = await verifyChatMediaUploadReceipt(secret, receiptToken, receiptBody.exp + 1);
+  assert(!expiredReceipt.ok && expiredReceipt.code === "expired", "expired receipt rejection");
+  const tamperedReceipt = receiptToken.replace(receiptToken.slice(0, 8), "aaaaaaaa");
+  const badReceipt = await verifyChatMediaUploadReceipt(secret, tamperedReceipt);
+  assert(!badReceipt.ok, "tampered receipt rejection");
   const jpeg = jpegBytes(16, 1);
   assert(inspectChatMediaMagic({ prefix: jpeg, totalSize: jpeg.byteLength, expectedMime: "image/jpeg" }).ok, "jpeg magic");
   assert(
@@ -1497,48 +1581,52 @@ section("r2 grant / key / magic");
   assert(pulledOver.n <= CHAT_PHOTO_MAX_BYTES + 65536, "oversized stream is not fully buffered");
   assert(pulledOver.n < sixMb.byteLength, "reader stops before the 6MB tail");
 
-  const replayBucket = createMemoryChatMediaBucket();
-  const replayEnv: ChatMediaEnv = {
-    CHAT_MEDIA: replayBucket,
-    CHAT_MEDIA_SECRET: secret,
-  };
   const photoA = jpegBytes(16, 41);
-  const photoB = jpegBytes(16, 42);
+  const photoB = jpegBytes(64, 42);
+  const putValues: unknown[] = [];
+  const spyBucket = createMemoryChatMediaBucket();
+  const origPut = spyBucket.put.bind(spyBucket);
+  spyBucket.put = async (key, value, options) => {
+    putValues.push(value);
+    return origPut(key, value, options);
+  };
   const firstA = await handleChatMediaRequest(
     new Request("http://chat-media.test/media/upload", {
       method: "PUT",
       headers: { "content-type": "image/jpeg", [CHAT_MEDIA_GRANT_HEADER]: token },
       body: photoA,
     }),
-    replayEnv
+    { CHAT_MEDIA: spyBucket, CHAT_MEDIA_SECRET: secret }
   );
-  assert(firstA?.status === 204, "first PUT A → 204");
-  const stored = await replayBucket.head(`chat/${roomId}/${attachmentId}.jpg`);
-  assert(stored?.customMetadata?.sha256 === (await sha256Hex(photoA)), "stores sha256 metadata");
-  assert(stored?.customMetadata?.size === String(photoA.byteLength), "stores size metadata");
+  const firstAJson = await uploadJson(firstA);
+  assert(firstA?.status === 200 && firstAJson?.receipt, "first PUT A → 200 receipt");
+  assert(putValues[0] instanceof ReadableStream, "normal R2 upload uses stream, not full Uint8Array buffering");
+  const stored = await spyBucket.head(`chat/${roomId}/${attachmentId}.jpg`);
   assert(stored?.customMetadata?.mime === "image/jpeg", "stores mime metadata");
+  assert(stored?.size === photoA.byteLength, "stores actual object size");
   const sameA = await handleChatMediaRequest(
     new Request("http://chat-media.test/media/upload", {
       method: "PUT",
       headers: { "content-type": "image/jpeg", [CHAT_MEDIA_GRANT_HEADER]: token },
       body: photoA,
     }),
-    replayEnv
+    { CHAT_MEDIA: spyBucket, CHAT_MEDIA_SECRET: secret }
   );
-  assert(sameA?.status === 204, "same grant + identical A → 204");
+  const sameAJson = await uploadJson(sameA);
+  assert(sameA?.status === 200 && sameAJson?.receipt, "same grant + identical A → receipt retry");
   const differentB = await handleChatMediaRequest(
     new Request("http://chat-media.test/media/upload", {
       method: "PUT",
       headers: { "content-type": "image/jpeg", [CHAT_MEDIA_GRANT_HEADER]: token },
       body: photoB,
     }),
-    replayEnv
+    { CHAT_MEDIA: spyBucket, CHAT_MEDIA_SECRET: secret }
   );
   const conflictJson = await differentB?.clone().json().catch(() => null);
-  assert(differentB?.status === 409 && conflictJson?.error === "upload_conflict", "same grant + different B → 409");
-  const afterConflict = new Uint8Array((await (await replayBucket.get(`chat/${roomId}/${attachmentId}.jpg`))!.arrayBuffer()));
+  assert(differentB?.status === 409 && conflictJson?.error === "upload_conflict", "same grant + different size B → 409");
+  const afterConflict = new Uint8Array((await (await spyBucket.get(`chat/${roomId}/${attachmentId}.jpg`))!.arrayBuffer()));
   assert(afterConflict[4] === photoA[4], "conflict 뒤 R2 object bytes unchanged");
-  const cond = await replayBucket.put(
+  const cond = await spyBucket.put(
     `chat/${roomId}/${attachmentId}.jpg`,
     photoB,
     { onlyIf: CHAT_MEDIA_CREATE_ONLY, httpMetadata: { contentType: "image/jpeg" } }
@@ -1558,7 +1646,8 @@ section("r2 grant / key / magic");
       CHAT_MEDIA_SECRET: secret,
     }
   );
-  assert(missingLen?.status === 204, "missing Content-Length + <=3MB → success");
+  const missingLenJson = await uploadJson(missingLen);
+  assert(missingLen?.status === 200 && missingLenJson?.receipt, "missing Content-Length + <=3MB → receipt");
   const bigPulled = { n: 0, cancelled: false };
   const missingHuge = await handleChatMediaRequest(
     new Request("http://x/media/upload", {
@@ -1596,7 +1685,43 @@ section("r2 grant / key / magic");
     }),
     { CHAT_MEDIA: createMemoryChatMediaBucket(), CHAT_MEDIA_SECRET: secret }
   );
-  assert(pngPut?.status === 204 && webpPut?.status === 204, "JPEG/PNG/WebP magic 기존 동작 유지");
+  assert(pngPut?.status === 200 && webpPut?.status === 200, "JPEG/PNG/WebP magic 기존 동작 유지");
+
+  const prefixJpeg = jpegBytes(400, 8);
+  const prefixPulled = { n: 0, cancelled: false };
+  const prefixThenRest = await readPrefixThenRest(
+    countingStream(prefixJpeg, prefixPulled, 64),
+    256
+  );
+  assert(prefixThenRest.ok && prefixThenRest.prefix.byteLength === 256, "first 256-byte magic prefix");
+  const restChunks: Uint8Array[] = [];
+  if (prefixThenRest.ok && prefixThenRest.rest) {
+    const reader = prefixThenRest.rest.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) restChunks.push(value);
+    }
+  }
+  const restLen = restChunks.reduce((n, c) => n + c.byteLength, 0);
+  assert(restLen === prefixJpeg.byteLength - 256, "remaining body stays streamed");
+  const overStream = createBoundedConcatStream(
+    prefixJpeg.subarray(0, 256),
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(sixMb.subarray(256));
+        controller.close();
+      },
+    }),
+    CHAT_PHOTO_MAX_BYTES
+  );
+  let streamLimit = false;
+  try {
+    await new Response(overStream.stream).arrayBuffer();
+  } catch {
+    streamLimit = true;
+  }
+  assert(streamLimit || !overStream.completed(), ">3MB streaming rejection");
 }
 
 const ALLOW_DB = process.env.ALLOW_DB_TEST === "1" || process.env.DATABASE_URL?.includes("caddy_local");
@@ -1722,8 +1847,78 @@ if (!ALLOW_DB) {
       assert(!String(JSON.stringify(uploadedJson)).includes("storageKey"), "response hides storageKey");
       assert(!String(JSON.stringify(uploadedJson)).includes("blob.vercel"), "response hides blob url");
 
+      const nowSec = Math.floor(Date.now() / 1000);
+      const liveToken = await signChatToken({
+        v: 2,
+        userId: user.id,
+        displayName: user.username,
+        role: "admin",
+        team: "-",
+        iat: nowSec,
+        exp: nowSec + 1800,
+      });
+      let dbHits = 0;
+      const stubDb = {
+        caddy: {
+          findUnique: async () => {
+            dbHits += 1;
+            return null;
+          },
+        },
+        user: {
+          findFirst: async () => {
+            dbHits += 1;
+            return null;
+          },
+        },
+      };
+      const stubAuth = {
+        session: { userId: user.id, username: user.username, role: "admin" as const, sessionVersion: 0 },
+        userId: user.id,
+        username: user.username,
+        role: "admin" as const,
+        sessionVersion: 0,
+        caddyId: null,
+        managedTeams: [],
+        mustChangePassword: false,
+      };
+      const fast = await resolveChatPhotoRoomAccess(stubDb as never, stubAuth as never, "all", {
+        chatToken: liveToken,
+      });
+      assert(fast.fastPath && fast.userId === user.id && dbHits === 0, "ALL room token fast path");
+      const tokenPrep = await prepareHttpWithToken(cookie, "all", "image/jpeg", 16, liveToken);
+      const tokenPrepJson = await tokenPrep.json();
+      assert(tokenPrep.status === 200 && tokenPrepJson.upload?.attachmentId, "ALL prepare with chat token");
+      const expiredToken = await signChatToken({
+        v: 2,
+        userId: user.id,
+        displayName: user.username,
+        role: "admin",
+        team: "-",
+        iat: nowSec - 2000,
+        exp: nowSec - 10,
+      });
+      const fallbackPrep = await prepareHttpWithToken(cookie, "all", "image/jpeg", 16, expiredToken);
+      assert(fallbackPrep.status === 200, "expired token falls back to requireChatPhotoRoomAccess");
+      const otherToken = await signChatToken({
+        v: 2,
+        userId: other.id,
+        displayName: other.username,
+        role: "caddy",
+        team: "-",
+        iat: nowSec,
+        exp: nowSec + 1800,
+      });
       const custom = await prepareHttp(otherCookie, "room_0123456789abcdef", "image/jpeg", 16);
       assert(custom.status === 403, "non-member prepare forbidden");
+      const customToken = await prepareHttpWithToken(
+        otherCookie,
+        "room_0123456789abcdef",
+        "image/jpeg",
+        16,
+        otherToken
+      );
+      assert(customToken.status === 403, "custom/DM access regression with token");
 
       const got = await GET_PHOTO(
         req(`http://localhost/api/chat/rooms/all/attachments/${uploadedJson.photo.id}`, {
@@ -2638,7 +2833,7 @@ if (!ALLOW_DB) {
           }),
           mediaEnv
         );
-        assert(otherRoomPut?.status === 204, "grant room wins over query key");
+        assert(otherRoomPut?.status === 200, "grant room wins over query key");
         assert(
           !(await bucket.get(`chat/all/${prepared.attachmentId}.jpg`)),
           "client cannot choose arbitrary key"
@@ -2670,7 +2865,7 @@ if (!ALLOW_DB) {
           }),
           mediaEnv
         );
-        assert(otherUserPut?.status === 204, "other-user grant still writes its derived key");
+        assert(otherUserPut?.status === 200, "other-user grant still writes its derived key");
         await bucket.delete(`chat/all/${prepared.attachmentId}.jpg`);
         const otherFinalize = await finalizeHttp(
           await cookieFor({ id: other.id, username: other.username, role: "caddy" }),
@@ -2708,7 +2903,7 @@ if (!ALLOW_DB) {
         assert(pdfPut?.status === 400, "magic byte mismatch");
 
         const photoA = jpegBytes(16, 36);
-        const photoB = jpegBytes(16, 37);
+        const photoB = jpegBytes(48, 37);
         const firstPut = await handleChatMediaRequest(
           new Request(`${prepared.uploadUrl}?key=chat/other/nope.jpg`, {
             method: "PUT",
@@ -2720,7 +2915,8 @@ if (!ALLOW_DB) {
           }),
           mediaEnv
         );
-        assert(firstPut?.status === 204, "first PUT A → 204");
+        const firstPutJson = await uploadJson(firstPut);
+        assert(firstPut?.status === 200 && firstPutJson?.receipt, "first PUT A → 200 receipt");
         const retrySame = await handleChatMediaRequest(
           new Request(prepared.uploadUrl, {
             method: "PUT",
@@ -2732,7 +2928,8 @@ if (!ALLOW_DB) {
           }),
           mediaEnv
         );
-        assert(retrySame?.status === 204, "same grant + identical A → 204");
+        const retrySameJson = await uploadJson(retrySame);
+        assert(retrySame?.status === 200 && retrySameJson?.receipt, "same grant + identical A → receipt retry");
         const retryOther = await handleChatMediaRequest(
           new Request(prepared.uploadUrl, {
             method: "PUT",
@@ -2754,12 +2951,81 @@ if (!ALLOW_DB) {
           "client arbitrary key still impossible"
         );
 
+        let inspectCalls = 0;
+        const prevFetch = (globalThis as { __caddyChatMediaWorkerFetch?: typeof fetch })
+          .__caddyChatMediaWorkerFetch;
+        setChatMediaWorkerFetchForTests((async (input: RequestInfo | URL, init?: RequestInit) => {
+          const req = input instanceof Request ? input : new Request(String(input), init);
+          if (new URL(req.url).pathname.includes("/internal/media/inspect")) inspectCalls += 1;
+          return (
+            (await handleChatMediaRequest(req, mediaEnv)) ||
+            new Response(JSON.stringify({ error: "not_found" }), { status: 404 })
+          );
+        }) as typeof fetch);
         const finalized = await finalizeChatPhotoUpload(prisma, {
           roomId: "all",
           attachmentId: prepared.attachmentId,
           senderUserId: user.id,
+          uploadReceipt: String(firstPutJson?.receipt || ""),
         });
-        assert(finalized.id === prepared.attachmentId && finalized.claim, "R2 finalize READY");
+        assert(finalized.id === prepared.attachmentId && finalized.claim, "valid receipt finalize");
+        assert(inspectCalls === 0, "normal R2 finalize skips inspect");
+        const tamperedFin = await finalizeHttp(
+          cookie,
+          "all",
+          prepared.attachmentId,
+          String(firstPutJson?.receipt || "").replace(/^../, "zz")
+        );
+        assert(tamperedFin.status === 401 || tamperedFin.status === 410, "tampered receipt reject");
+        const expiredReceipt = await signChatMediaUploadReceipt(process.env.CHAT_MEDIA_SECRET || "", {
+          v: 1,
+          op: CHAT_MEDIA_UPLOADED_OP,
+          roomId: "all",
+          attachmentId: prepared.attachmentId,
+          senderUserId: user.id,
+          mimeType: "image/jpeg",
+          actualSize: photoA.byteLength,
+          exp: Math.floor(Date.now() / 1000) - 10,
+        });
+        const expiredFin = await finalizeHttp(cookie, "all", prepared.attachmentId, expiredReceipt);
+        assert(expiredFin.status === 410, "expired receipt reject");
+        const wrongRoomReceipt = await signChatMediaUploadReceipt(process.env.CHAT_MEDIA_SECRET || "", {
+          v: 1,
+          op: CHAT_MEDIA_UPLOADED_OP,
+          roomId: "room_0123456789abcdef",
+          attachmentId: prepared.attachmentId,
+          senderUserId: user.id,
+          mimeType: "image/jpeg",
+          actualSize: photoA.byteLength,
+          exp: Math.floor(Date.now() / 1000) + 300,
+        });
+        const wrongRoomFin = await finalizeHttp(cookie, "all", prepared.attachmentId, wrongRoomReceipt);
+        assert(wrongRoomFin.status === 401, "wrong room receipt reject");
+        const wrongAttReceipt = await signChatMediaUploadReceipt(process.env.CHAT_MEDIA_SECRET || "", {
+          v: 1,
+          op: CHAT_MEDIA_UPLOADED_OP,
+          roomId: "all",
+          attachmentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          senderUserId: user.id,
+          mimeType: "image/jpeg",
+          actualSize: photoA.byteLength,
+          exp: Math.floor(Date.now() / 1000) + 300,
+        });
+        const wrongAttFin = await finalizeHttp(cookie, "all", prepared.attachmentId, wrongAttReceipt);
+        assert(wrongAttFin.status === 401, "wrong attachment receipt reject");
+        const wrongSenderReceipt = await signChatMediaUploadReceipt(process.env.CHAT_MEDIA_SECRET || "", {
+          v: 1,
+          op: CHAT_MEDIA_UPLOADED_OP,
+          roomId: "all",
+          attachmentId: prepared.attachmentId,
+          senderUserId: other.id,
+          mimeType: "image/jpeg",
+          actualSize: photoA.byteLength,
+          exp: Math.floor(Date.now() / 1000) + 300,
+        });
+        const wrongSenderFin = await finalizeHttp(cookie, "all", prepared.attachmentId, wrongSenderReceipt);
+        assert(wrongSenderFin.status === 401 || wrongSenderFin.status === 403, "wrong sender receipt reject");
+        if (prevFetch) setChatMediaWorkerFetchForTests(prevFetch);
         const r2Get = await GET_PHOTO(
           req(`http://localhost/api/chat/rooms/all/attachments/${prepared.attachmentId}`, {
             headers: { cookie },
@@ -2778,7 +3044,7 @@ if (!ALLOW_DB) {
           }),
           mediaEnv
         );
-        assert(afterReadySame?.status === 204, "finalize 후 same A retry → 204");
+        assert(afterReadySame?.status === 200, "finalize 후 same A retry → receipt");
         const afterReadyOther = await handleChatMediaRequest(
           new Request(prepared.uploadUrl, {
             method: "PUT",
@@ -2814,11 +3080,21 @@ if (!ALLOW_DB) {
           }),
           mediaEnv
         );
+        let fallbackInspect = 0;
+        setChatMediaWorkerFetchForTests((async (input: RequestInfo | URL, init?: RequestInit) => {
+          const req = input instanceof Request ? input : new Request(String(input), init);
+          if (new URL(req.url).pathname.includes("/internal/media/inspect")) fallbackInspect += 1;
+          return (
+            (await handleChatMediaRequest(req, mediaEnv)) ||
+            new Response(JSON.stringify({ error: "not_found" }), { status: 404 })
+          );
+        }) as typeof fetch);
         await finalizeChatPhotoUpload(prisma, {
           roomId: "all",
           attachmentId: second.attachmentId,
           senderUserId: user.id,
         });
+        assert(fallbackInspect === 1, "fallback inspect path");
 
         const third = await prepareChatPhotoUpload(prisma, {
           roomId: "all",

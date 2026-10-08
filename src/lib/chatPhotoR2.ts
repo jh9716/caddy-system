@@ -36,6 +36,7 @@ export {
   chatMediaSecret,
   chatPhotoStorageBackend,
   isChatPhotoR2StorageKey,
+  verifyChatMediaUploadReceipt,
 } from "../../cloudflare/verthill-chat/src/chatMediaGrant";
 
 type ChatPhotoR2Global = typeof globalThis & {
