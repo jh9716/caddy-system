@@ -23,6 +23,11 @@ test("chat media routes and grant stay Worker-local", () => {
   assert.match(media, /verifyInternalRequest/);
   assert.match(media, /deriveChatMediaR2Key/);
   assert.match(media, /inspectChatMediaMagic/);
+  assert.match(media, /etagDoesNotMatch: "\*"/);
+  assert.match(media, /readBoundedBody/);
+  assert.match(media, /upload_conflict/);
+  assert.match(media, /customMetadata/);
+  assert.doesNotMatch(media, /await request\.arrayBuffer\(\)/);
   assert.doesNotMatch(media, /issueSignedToken|presignUrl|@vercel\/blob/);
   assert.doesNotMatch(grant, /BLOB_|R2_SECRET|accessKey|clientSigningToken/i);
   const grantType = grant.slice(
