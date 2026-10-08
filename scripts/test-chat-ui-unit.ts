@@ -177,7 +177,10 @@ section("worker auth + directory");
   assert(wrangler.includes('"tag": "v2"'), "non-destructive v2 migration");
   assert(wrangler.includes("ChatRoom"), "ChatRoom class kept");
   assert(wrangler.includes("CHAT_MEDIA_SECRET"), "media secret is documented");
-  assert(!/"r2_buckets"\s*:/.test(wrangler), "this PR does not bind production R2");
+  assert(/"r2_buckets"\s*:/.test(wrangler), "wrangler binds production R2");
+  assert(wrangler.includes('"binding": "CHAT_MEDIA"'), "R2 binding name is CHAT_MEDIA");
+  assert(wrangler.includes('"bucket_name": "verthill-chat-media"'), "R2 bucket is verthill-chat-media");
+  assert(!/"CHAT_MEDIA_SECRET"\s*:/.test(wrangler), "CHAT_MEDIA_SECRET is not a wrangler config value");
 }
 
 if (failed > 0) {
