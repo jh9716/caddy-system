@@ -118,6 +118,7 @@
     "test:off-request-phase2-unit": "bash scripts/tsx-safe.sh scripts/test-off-request-phase2-unit.ts",
     "test:chat-token-unit": "bash scripts/tsx-safe.sh scripts/test-chat-token-unit.ts",
     "test:chat-ui-unit": "bash scripts/tsx-safe.sh scripts/test-chat-ui-unit.ts",
+    "test:chat-scroll-unit": "bash scripts/tsx-safe.sh scripts/test-chat-scroll-unit.ts",
     "test:chat-phase2-unit": "bash scripts/tsx-safe.sh scripts/test-chat-phase2-unit.ts",
     "test:chat-mentions-unit": "bash scripts/tsx-safe.sh scripts/test-chat-mentions-unit.ts",
     "test:chat-phase4-unit": "bash scripts/tsx-safe.sh scripts/test-chat-phase4-unit.ts",

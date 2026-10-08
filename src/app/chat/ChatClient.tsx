@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   registerAndroidChatOverlayClose,
   registerAndroidChatRoomLeave,
@@ -66,6 +66,7 @@ import {
   defaultAvatarInitial,
   formatChatDateDivider,
   isVisibleChatListRoom,
+  isNearChatBottom,
   jumpToMessageIfMounted,
   publicChatProfile,
   roomListTitle,
@@ -73,6 +74,22 @@ import {
   shouldShowDateDivider,
   shouldShowJumpButton,
 } from "@/lib/chatPhase5";
+import {
+  CHAT_UNREAD_SPLIT_LABEL,
+  applyChatEntryScroll,
+  firstLoadedSeqAtOrAfter,
+  resolveChatEntryTarget,
+  shouldAutoLoadOlderOnScroll,
+  shouldFollowIncomingMessage,
+  shouldReapplyPinnedEntryScroll,
+  shouldRequestOlderForTarget,
+  shouldShowUnreadSplit,
+  snapshotChatEntry,
+  parseChatTargetSeqFromRoomUrl,
+  type ChatEntryPin,
+  type ChatEntrySnapshot,
+  type ChatEntryTarget,
+} from "@/lib/chatScroll";
 import {
   clearPendingChatRoomId,
   nextDirectorySnapshotReady,
@@ -286,6 +303,14 @@ export default function ChatClient() {
   const oldestSeqRef = useRef<number | null>(null);
   const loadingOlderRef = useRef(false);
   const pendingScrollRestore = useRef<number | null>(null);
+  const hasMoreRef = useRef(false);
+  const entrySnapshotRef = useRef<ChatEntrySnapshot | null>(null);
+  const entryTargetRef = useRef<ChatEntryTarget | null>(null);
+  const entrySeekRef = useRef(false);
+  const entryPinRef = useRef<ChatEntryPin | null>(null);
+  const entryPagesRef = useRef(0);
+  const userMovedScrollRef = useRef(false);
+  const programmaticScrollRef = useRef(false);
   const createReqRef = useRef("");
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
@@ -622,6 +647,7 @@ export default function ChatClient() {
           historyResetRef.current = false;
           loadingOlderRef.current = false;
           setLoadingOlder(false);
+          hasMoreRef.current = data.hasMore === true;
           setHasMore(data.hasMore === true);
           if (hist.length) {
             oldestSeqRef.current = Number(hist[0]!.seq);
@@ -637,6 +663,7 @@ export default function ChatClient() {
             if (last?.seq && ws.readyState === WebSocket.OPEN) {
               ws.send(JSON.stringify({ type: "read", seq: last.seq }));
             }
+            queueEntrySeek(next);
           } else if (!reconnectingRef.current) {
             const el = listRef.current;
             if (el) pendingScrollRestore.current = el.scrollHeight;
@@ -644,6 +671,7 @@ export default function ChatClient() {
               const next = redactHiddenReplies(mergeChatLines(hist, prev), hiddenSeqsRef.current);
               linesRef.current = next;
               lastSeqRef.current = lastKnownSeq(next);
+              queueEntrySeek(next);
               return next;
             });
           }
@@ -676,7 +704,9 @@ export default function ChatClient() {
         }
         if (data.type === "message") {
           const line = payloadToLine(data);
-          if (!stickRef.current) setUnseenCount((n) => n + 1);
+          if (!shouldFollowIncomingMessage({ stuckToBottom: stickRef.current })) {
+            setUnseenCount((n) => n + 1);
+          }
           upsertLine(line);
           if (line.seq && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: "read", seq: line.seq }));
@@ -861,16 +891,65 @@ export default function ChatClient() {
     setPhotoDebugSample(buildChatPhotoDebugSample());
   }
 
-  useEffect(() => {
+  function applyPinnedEntryScroll() {
     const el = listRef.current;
     if (!el) return;
+    const pin = entryPinRef.current;
+    programmaticScrollRef.current = true;
+    if (shouldReapplyPinnedEntryScroll({ userMoved: userMovedScrollRef.current, pin })) {
+      applyChatEntryScroll(el, pin!);
+    } else if (stickRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+    requestAnimationFrame(() => {
+      programmaticScrollRef.current = false;
+    });
+  }
+
+  function queueEntrySeek(nextLines: ChatLine[]) {
+    const target = entryTargetRef.current;
+    if (!target || !entrySeekRef.current) return;
+    if (target.kind === "bottom" || target.seq == null) {
+      entrySeekRef.current = false;
+      entryPinRef.current = { kind: "bottom", seq: null };
+      stickRef.current = true;
+      return;
+    }
+    const found = firstLoadedSeqAtOrAfter(nextLines, target.seq);
+    if (found != null) {
+      entrySeekRef.current = false;
+      entryPinRef.current = { kind: "seq", seq: found };
+      stickRef.current = false;
+      return;
+    }
+    if (
+      shouldRequestOlderForTarget({
+        targetSeq: target.seq,
+        oldestLoadedSeq: oldestSeqRef.current,
+        hasMore: hasMoreRef.current,
+        pages: entryPagesRef.current,
+      })
+    ) {
+      entryPagesRef.current += 1;
+      requestOlderHistory();
+      return;
+    }
+    entrySeekRef.current = false;
+    entryPinRef.current = {
+      kind: "seq",
+      seq: nextLines[0]?.seq || null,
+    };
+    stickRef.current = false;
+  }
+
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    if (!el || view !== "room") return;
     if (pendingScrollRestore.current != null) {
       el.scrollTop = el.scrollHeight - pendingScrollRestore.current;
       pendingScrollRestore.current = null;
-      return;
     }
-    if (!stickRef.current) return;
-    el.scrollTop = el.scrollHeight;
+    applyPinnedEntryScroll();
   }, [lines, view]);
 
   useEffect(() => {
@@ -879,6 +958,10 @@ export default function ChatClient() {
       setView("list");
       setActiveRoom(null);
       roomRef.current = null;
+      entrySeekRef.current = false;
+      entryPinRef.current = null;
+      entrySnapshotRef.current = null;
+      entryTargetRef.current = null;
       reconnectingRef.current = false;
       roomGenRef.current += 1;
       clearTimer(roomTimerRef);
@@ -1056,13 +1139,33 @@ export default function ChatClient() {
     };
   }, [sheet]);
 
-  async function openRoom(room: RoomSummary) {
+  async function openRoom(room: RoomSummary, opts?: { targetSeq?: number | null }) {
     const info = await refreshIfNeeded();
     if (!info) return;
+    const urlSeq =
+      typeof window !== "undefined"
+        ? parseChatTargetSeqFromRoomUrl(room.roomId, window.location.search)
+        : null;
+    const snapshot = snapshotChatEntry({
+      unread: room.unread,
+      lastMessageSeq: room.lastMessageSeq,
+      explicitSeq: opts?.targetSeq ?? urlSeq,
+    });
+    entrySnapshotRef.current = snapshot;
+    entryTargetRef.current = resolveChatEntryTarget(snapshot);
+    entrySeekRef.current = true;
+    entryPinRef.current = null;
+    entryPagesRef.current = 0;
+    userMovedScrollRef.current = false;
+    stickRef.current = entryTargetRef.current.kind === "bottom";
     roomRef.current = room;
     setActiveRoom(room);
     setView("room");
     clearLocalLines([]);
+    pendingScrollRestore.current = null;
+    loadingOlderRef.current = false;
+    setLoadingOlder(false);
+    hasMoreRef.current = false;
     setHasMore(false);
     setError("");
     setDraft("");
@@ -1131,7 +1234,11 @@ export default function ChatClient() {
       (targetedRoom?.roomId === requested ? targetedRoom : null);
     if (!room) return;
     clearPendingChatRoomId(typeof sessionStorage === "undefined" ? null : sessionStorage);
-    void openRoom(room);
+    const targetSeq =
+      typeof window !== "undefined"
+        ? parseChatTargetSeqFromRoomUrl(room.roomId, window.location.search)
+        : null;
+    void openRoom(room, { targetSeq });
   }, [directorySnapshotReady, rooms, targetedRoom, targetedStatus]);
 
   async function saveNotifyMode(mode: ChatNotifyMode) {
@@ -1161,7 +1268,7 @@ export default function ChatClient() {
     const ws = wsRef.current;
     const beforeSeq = oldestSeqRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN || !beforeSeq) return;
-    if (!hasMore || loadingOlderRef.current) return;
+    if (!hasMoreRef.current || loadingOlderRef.current) return;
     loadingOlderRef.current = true;
     setLoadingOlder(true);
     ws.send(JSON.stringify({ type: "history", beforeSeq, limit: 30 }));
@@ -1744,6 +1851,10 @@ export default function ChatClient() {
                 setView("list");
                 setActiveRoom(null);
                 roomRef.current = null;
+                entrySeekRef.current = false;
+                entryPinRef.current = null;
+                entrySnapshotRef.current = null;
+                entryTargetRef.current = null;
                 reconnectingRef.current = false;
                 roomGenRef.current += 1;
                 clearTimer(roomTimerRef);
@@ -1800,10 +1911,27 @@ export default function ChatClient() {
             className="vh-chat-log"
             onScroll={(e) => {
               const el = e.currentTarget;
-              const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+              if (programmaticScrollRef.current) return;
+              const nearBottom = isNearChatBottom({
+                scrollHeight: el.scrollHeight,
+                scrollTop: el.scrollTop,
+                clientHeight: el.clientHeight,
+              });
               stickRef.current = nearBottom;
               if (nearBottom) setUnseenCount(0);
-              if (el.scrollTop < 48) requestOlderHistory();
+              if (entryPinRef.current) {
+                userMovedScrollRef.current = true;
+                entryPinRef.current = null;
+              }
+              if (
+                shouldAutoLoadOlderOnScroll({
+                  scrollTop: el.scrollTop,
+                  nearBottom,
+                  seeking: entrySeekRef.current,
+                })
+              ) {
+                requestOlderHistory();
+              }
             }}
           >
             {hasMore ? (
@@ -1821,6 +1949,11 @@ export default function ChatClient() {
               const admin = line.senderRole === "admin";
               const deleted = Boolean(line.deletionType);
               const prev = lines[index - 1];
+              const showUnreadSplit = shouldShowUnreadSplit({
+                firstUnreadSeq: entrySnapshotRef.current?.firstUnreadSeq ?? null,
+                lineSeq: line.seq,
+                prevSeq: prev?.seq,
+              });
               const showDate = shouldShowDateDivider(prev?.sentAt, line.sentAt);
               const showAuthor = shouldShowAuthorMeta({
                 mine,
@@ -1860,6 +1993,11 @@ export default function ChatClient() {
                 <div key={line.clientMessageId}>
                   {showDate ? (
                     <div className="vh-chat-date">{formatChatDateDivider(line.sentAt)}</div>
+                  ) : null}
+                  {showUnreadSplit ? (
+                    <div className="vh-chat-unread-split" data-chat-unread-split={line.seq || undefined}>
+                      {CHAT_UNREAD_SPLIT_LABEL}
+                    </div>
                   ) : null}
                   {deleted ? (
                     <div className="vh-chat-tombstone" data-chat-seq={line.seq || undefined}>
@@ -1973,6 +2111,7 @@ export default function ChatClient() {
                               alt=""
                               loading="lazy"
                               decoding="async"
+                              onLoad={() => applyPinnedEntryScroll()}
                               onError={(e) => {
                                 e.currentTarget.classList.add("is-failed");
                               }}
