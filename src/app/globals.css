@@ -101,6 +101,23 @@ body.manage-mode .vh-main {
   padding: 0;
 }
 
+/* Hide root AppHeader as soon as ManageShell/AppChrome is in the tree.
+   body.manage-mode is still applied in useEffect; :has() covers the
+   client-transition frame between the old effect cleanup and the new one. */
+body:has(.vh-manage) {
+  background: var(--vh-ivory);
+}
+
+body:has(.vh-manage) .vh-header {
+  display: none;
+}
+
+body:has(.vh-manage) .vh-main {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+}
+
 a {
   color: inherit;
   text-decoration: none;
