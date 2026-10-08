@@ -140,6 +140,30 @@ export function shouldShowUnreadSplit(input: {
   return true;
 }
 
+export type ChatRoomScrollCarryover = {
+  pendingScrollRestore: number | null;
+  loadingOlder: boolean;
+};
+
+/** Previous room prepend/restore must not follow the user into the next room. */
+export function resetChatRoomScrollCarryover(): ChatRoomScrollCarryover {
+  return { pendingScrollRestore: null, loadingOlder: false };
+}
+
+export function shouldApplyPendingScrollRestore(
+  pendingScrollRestore: number | null
+): pendingScrollRestore is number {
+  return pendingScrollRestore != null;
+}
+
+export function canRequestOlderHistory(input: {
+  hasMore: boolean;
+  loadingOlder: boolean;
+  beforeSeq: number | null;
+}): boolean {
+  return Boolean(input.hasMore && !input.loadingOlder && input.beforeSeq);
+}
+
 export function applyChatEntryScroll(
   el: HTMLElement | null,
   pin: ChatEntryPin

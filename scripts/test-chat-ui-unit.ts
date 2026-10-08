@@ -114,6 +114,12 @@ section("android back room leave");
   assert(chat.includes("applyPinnedEntryScroll"), "pin entry scroll through image layout");
   assert(chat.includes("CHAT_UNREAD_SPLIT_LABEL"), "unread split copy");
   assert(css.includes("vh-chat-unread-split"), "unread split style");
+  const openStart = chat.indexOf("async function openRoom");
+  const openEnd = chat.indexOf("async function saveNotifyMode", openStart);
+  const openRoom = openStart >= 0 && openEnd > openStart ? chat.slice(openStart, openEnd) : "";
+  assert(openRoom.includes("pendingScrollRestore.current = null"), "openRoom clears leftover restore");
+  assert(openRoom.includes("loadingOlderRef.current = false"), "openRoom clears leftover older-load ref");
+  assert(openRoom.includes("setLoadingOlder(false)"), "openRoom clears leftover older-load UI");
 }
 
 section("no neon chat schema");

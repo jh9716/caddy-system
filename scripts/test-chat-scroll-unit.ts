@@ -5,7 +5,10 @@
 import {
   CHAT_UNREAD_SPLIT_LABEL,
   applyChatEntryScroll,
+  canRequestOlderHistory,
   firstLoadedSeqAtOrAfter,
+  resetChatRoomScrollCarryover,
+  shouldApplyPendingScrollRestore,
   firstUnreadSeqFromSummary,
   parseChatTargetSeq,
   parseChatTargetSeqFromRoomUrl,
@@ -153,6 +156,58 @@ console.log("\n== divider / follow / pin ==");
   assert(
     shouldAutoLoadOlderOnScroll({ scrollTop: 10, nearBottom: false, seeking: false }),
     "user at top still pages older"
+  );
+}
+
+console.log("\n== room switch clears leftover pagination ==");
+{
+  const roomA = {
+    pendingScrollRestore: 1400,
+    loadingOlder: true,
+  };
+  assert(
+    shouldApplyPendingScrollRestore(roomA.pendingScrollRestore),
+    "Room A older prepend leaves a pending restore"
+  );
+  assert(
+    !canRequestOlderHistory({
+      hasMore: true,
+      loadingOlder: roomA.loadingOlder,
+      beforeSeq: 71,
+    }),
+    "Room A loadingOlder=true blocks further older fetch"
+  );
+
+  const roomB = resetChatRoomScrollCarryover();
+  assert(roomB.pendingScrollRestore == null, "Room B open clears pending restore");
+  assert(
+    !shouldApplyPendingScrollRestore(roomB.pendingScrollRestore),
+    "Room A restore is not applied on Room B"
+  );
+  assert(roomB.loadingOlder === false, "Room B open clears loadingOlder");
+
+  const bottom = resolveChatEntryTarget(snapshotChatEntry({ unread: 0, lastMessageSeq: 20 }));
+  const unread = resolveChatEntryTarget(snapshotChatEntry({ unread: 5, lastMessageSeq: 20 }));
+  const explicit = resolveChatEntryTarget(
+    snapshotChatEntry({ unread: 5, lastMessageSeq: 20, explicitSeq: 3 })
+  );
+  assert(bottom.kind === "bottom", "Room B unread=0 → bottom");
+  assert(unread.kind === "unread" && unread.seq === 16, "Room B unread → first unread");
+  assert(explicit.kind === "explicit" && explicit.seq === 3, "Room B explicit wins over unread");
+
+  assert(
+    canRequestOlderHistory({
+      hasMore: true,
+      loadingOlder: roomB.loadingOlder,
+      beforeSeq: 71,
+    }) &&
+      shouldRequestOlderForTarget({
+        targetSeq: 10,
+        oldestLoadedSeq: 71,
+        hasMore: true,
+        pages: 0,
+      }),
+    "Room B unread seek works even if Room A left loadingOlder=true"
   );
 }
 

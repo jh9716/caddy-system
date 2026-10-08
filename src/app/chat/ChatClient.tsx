@@ -1162,6 +1162,9 @@ export default function ChatClient() {
     setActiveRoom(room);
     setView("room");
     clearLocalLines([]);
+    pendingScrollRestore.current = null;
+    loadingOlderRef.current = false;
+    setLoadingOlder(false);
     hasMoreRef.current = false;
     setHasMore(false);
     setError("");
