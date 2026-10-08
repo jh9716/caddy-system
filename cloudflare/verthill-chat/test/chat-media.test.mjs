@@ -11,7 +11,7 @@ const grant = readFileSync(join(root, "../src/chatMediaGrant.ts"), "utf8");
 const wrangler = readFileSync(join(root, "../wrangler.jsonc"), "utf8");
 
 test("chat media routes and grant stay Worker-local", () => {
-  assert.match(index, /PUT \/media\/upload|\/media\/upload/);
+  assert.match(index, /\/media\/upload/);
   assert.match(index, /handleChatMediaRequest/);
   assert.match(index, /CHAT_MEDIA\?:/);
   assert.match(index, /CHAT_MEDIA_SECRET\?:/);
@@ -32,8 +32,9 @@ test("chat media routes and grant stay Worker-local", () => {
   assert.doesNotMatch(grantType, /storageKey|uploadUrl|secret/);
   assert.match(grant, /op = "chat_media_put"|CHAT_MEDIA_PUT_OP = "chat_media_put"/);
   assert.match(grant, /CHAT_MEDIA_SECRET/);
-  assert.match(grant, /chat\/\$\{input\.roomId\}\/\$\{input\.attachmentId\}/);
-  assert.match(grant, /r2\/chat\//);
+  assert.match(grant, /CHAT_MEDIA_R2_KEY_PREFIX = "chat\/"/);
+  assert.match(grant, /CHAT_PHOTO_R2_DB_PREFIX = "r2\/"/);
+  assert.match(grant, /\$\{input\.roomId\}\/\$\{input\.attachmentId\}/);
   assert.doesNotMatch(index, /vercel|neon|prisma|vh_session|FCM|D1|KV/i);
 });
 

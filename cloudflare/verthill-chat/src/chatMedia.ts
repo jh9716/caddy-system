@@ -23,6 +23,7 @@ import {
 export const CHAT_MEDIA_UPLOAD_PATH = "/media/upload";
 export const CHAT_MEDIA_INSPECT_PATH = "/internal/media/inspect";
 export const CHAT_MEDIA_OBJECT_PATH = "/internal/media/object";
+export { CHAT_MEDIA_GRANT_HEADER } from "./chatMediaGrant";
 
 export type ChatMediaObject = {
   size: number;

@@ -256,6 +256,7 @@ export default {
     if (request.method === "POST" && url.pathname === "/directory/rooms") {
       return createRoomFromGrant(request, env);
     }
+    // Chat photo media: PUT /media/upload, POST /internal/media/inspect, GET|DELETE /internal/media/object
     const media = await handleChatMediaRequest(request, env);
     if (media) return media;
     return json({ error: "not_found" }, 404);

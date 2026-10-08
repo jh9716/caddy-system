@@ -149,6 +149,7 @@ section("worker auth + directory");
   assert(worker.includes("CHAT_INTERNAL_SECRET"), "internal secret name");
   assert(worker.includes("CHAT_MEDIA"), "optional chat media binding");
   assert(worker.includes("/media/upload"), "chat media upload route");
+  assert(read("cloudflare/verthill-chat/src/chatMedia.ts").includes("CHAT_MEDIA_UPLOAD_PATH"), "media handler module");
   assert(worker.includes("x-chat-media-grant"), "upload grant header");
   assert(worker.includes("server_only"), "browser origin cannot create rooms");
   assert(worker.includes("queueChatPushDispatch"), "async chat push after persist");

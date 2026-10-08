@@ -14,12 +14,12 @@ import { chatHttpBaseUrl } from "@/lib/chatClientConfig";
 import { CHAT_PHOTO_MAX_BYTES } from "@/lib/chatPhotoConstants";
 import { CourseReportPhotoStorageError } from "@/lib/courseReportPhotoStorage";
 import {
-  CHAT_MEDIA_GRANT_HEADER,
   CHAT_MEDIA_INSPECT_PATH,
   CHAT_MEDIA_OBJECT_PATH,
   CHAT_MEDIA_UPLOAD_PATH,
 } from "../../cloudflare/verthill-chat/src/chatMedia";
 import {
+  CHAT_MEDIA_GRANT_HEADER,
   CHAT_MEDIA_SECRET_ENV,
   chatMediaSecret,
   chatPhotoStorageBackend,

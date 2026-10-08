@@ -1345,7 +1345,7 @@ section("source wiring / no public blob");
   const reportStorage = read("src/lib/courseReportPhotoStorage.ts");
   const noticePhoto = read("src/lib/noticePhoto.ts");
   assert(r2Client.includes("CHAT_PHOTO_STORAGE"), "chat-only storage switch");
-  assert(r2Client.includes("/internal/media/inspect"), "finalize inspects via Worker");
+  assert(r2Client.includes("CHAT_MEDIA_INSPECT_PATH"), "finalize inspects via Worker");
   assert(!r2Client.includes("issueSignedToken"), "R2 path has no Blob signed token");
   assert(grantSrc.includes("chat_media_put"), "upload grant op");
   assert(grantSrc.includes("CHAT_MEDIA_SECRET"), "media secret preferred");
@@ -2739,6 +2739,9 @@ if (!ALLOW_DB) {
           { params: Promise.resolve({ roomId: "all", attachmentId: prepared.attachmentId }) }
         );
         assert(r2Still.status === 200, "R2 read follows key prefix after write rollback");
+      } catch (e) {
+        console.error(e);
+        assert(false, `r2 fast lane threw: ${e instanceof Error ? e.message : e}`);
       } finally {
         setChatMediaWorkerFetchForTests(null);
         if (prevStorage) process.env.CHAT_PHOTO_STORAGE = prevStorage;
