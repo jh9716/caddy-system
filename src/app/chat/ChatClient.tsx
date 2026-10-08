@@ -1237,6 +1237,7 @@ export default function ChatClient() {
     if (!pendingPhotosRef.current.some((row) => row.key === item.key)) return;
     void startChatPhotoPreupload(uploadJobsRef.current, roomId, item, {
       onProgress: applyPhotoUploadProgress,
+      chatToken: tokenRef.current?.token,
     }).catch(() => {
       // Composer stays usable; send/retry surfaces the error if the photo is still attached.
     });
@@ -1378,6 +1379,7 @@ export default function ChatClient() {
           photos: ready,
           pendingClaims: line.pendingClaims,
           onProgress: applyPhotoUploadProgress,
+          chatToken: tokenRef.current?.token,
         })
       : line.pendingClaims || [];
     if (ready.length > 0) {
@@ -2204,6 +2206,11 @@ export default function ChatClient() {
                   ["finalizeDbFindMs", photoDebugSample.finalizeDbFindMs],
                   ["finalizeBlobMs", photoDebugSample.finalizeBlobMs],
                   ["r2InspectMs", photoDebugSample.r2InspectMs],
+                  ["workerIngressMs", photoDebugSample.workerIngressMs],
+                  ["r2StoreMs", photoDebugSample.r2StoreMs],
+                  ["receiptVerifyMs", photoDebugSample.receiptVerifyMs],
+                  ["finalizeInspectSkipped", photoDebugSample.finalizeInspectSkipped],
+                  ["roomAccessFastPath", photoDebugSample.roomAccessFastPath],
                   ["finalizeDbUpdateMs", photoDebugSample.finalizeDbUpdateMs],
                   ["finalizeSignMs", photoDebugSample.finalizeSignMs],
                 ] as const

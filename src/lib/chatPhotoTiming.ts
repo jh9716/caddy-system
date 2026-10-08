@@ -19,6 +19,8 @@ export type ChatPhotoTimingBag = {
   prepareHotpath?: ChatPhotoHotpathSummary;
   finalizeHotpath?: ChatPhotoHotpathSummary;
   storageBackend?: "r2" | "blob";
+  workerIngressMs?: number;
+  r2StoreMs?: number;
 };
 
 export type ChatPhotoTimingSummary = {
@@ -58,6 +60,11 @@ export type ChatPhotoDebugSample = {
   finalizeDbFindMs: number | null;
   finalizeBlobMs: number | null;
   r2InspectMs: number | null;
+  workerIngressMs: number | null;
+  r2StoreMs: number | null;
+  receiptVerifyMs: number | null;
+  finalizeInspectSkipped: boolean | null;
+  roomAccessFastPath: boolean | null;
   finalizeDbUpdateMs: number | null;
   finalizeSignMs: number | null;
 };
@@ -115,6 +122,15 @@ export function noteChatPhotoCompression(ms: number): void {
 
 export function noteChatPhotoStorageBackend(backend: "r2" | "blob"): void {
   timingBag().storageBackend = backend;
+}
+
+export function noteChatPhotoWorkerTiming(input: {
+  ingressMs?: number;
+  storeMs?: number;
+}): void {
+  const bag = timingBag();
+  if (Number.isFinite(input.ingressMs)) bag.workerIngressMs = Math.max(0, Number(input.ingressMs));
+  if (Number.isFinite(input.storeMs)) bag.r2StoreMs = Math.max(0, Number(input.storeMs));
 }
 
 export function noteChatPhotoServerHotpath(value: unknown): ChatPhotoHotpathSummary | null {
@@ -201,6 +217,14 @@ export function buildChatPhotoDebugSample(
     finalizeDbFindMs: bag?.finalizeHotpath?.steps.dbFind ?? null,
     finalizeBlobMs: bag?.finalizeHotpath?.steps.blobInspect ?? null,
     r2InspectMs: bag?.finalizeHotpath?.steps.r2Inspect ?? null,
+    workerIngressMs: bag?.workerIngressMs != null ? Math.round(bag.workerIngressMs) : null,
+    r2StoreMs: bag?.r2StoreMs != null ? Math.round(bag.r2StoreMs) : null,
+    receiptVerifyMs: bag?.finalizeHotpath?.steps.receiptVerify ?? null,
+    finalizeInspectSkipped: bag?.finalizeHotpath?.flags?.finalizeInspectSkipped ?? null,
+    roomAccessFastPath:
+      bag?.prepareHotpath?.flags?.roomAccessFastPath ??
+      bag?.finalizeHotpath?.flags?.roomAccessFastPath ??
+      null,
     finalizeDbUpdateMs: bag?.finalizeHotpath?.steps.dbUpdate ?? null,
     finalizeSignMs: bag?.finalizeHotpath?.steps.claimSign ?? null,
   };
@@ -238,4 +262,6 @@ export function resetChatPhotoTiming(): void {
   delete bag.prepareHotpath;
   delete bag.finalizeHotpath;
   delete bag.storageBackend;
+  delete bag.workerIngressMs;
+  delete bag.r2StoreMs;
 }

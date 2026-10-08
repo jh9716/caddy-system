@@ -6,7 +6,7 @@ import {
   resolveAuthUser,
 } from "@/lib/auth";
 import { ChatAuthError } from "@/lib/chatAuth";
-import { requireChatPhotoRoomAccess } from "@/lib/chatPhotoAccess";
+import { resolveChatPhotoRoomAccess } from "@/lib/chatPhotoAccess";
 import { prepareChatPhotoUpload, runChatAttachmentMaintenance } from "@/lib/chatPhoto";
 import {
   createChatPhotoHotpathClock,
@@ -33,12 +33,16 @@ export async function POST(
     if (!auth) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     if (shouldForcePasswordChange(auth)) return mustChangePasswordResponse();
     const roomId = decodeURIComponent((await ctx.params).roomId || "");
-    const access = await requireChatPhotoRoomAccess(prisma, auth, roomId);
-    clock.mark("roomAccess");
     const body = (await req.json().catch(() => null)) as {
       contentType?: unknown;
       size?: unknown;
+      chatToken?: unknown;
     } | null;
+    const access = await resolveChatPhotoRoomAccess(prisma, auth, roomId, {
+      chatToken: typeof body?.chatToken === "string" ? body.chatToken : "",
+    });
+    clock.mark("roomAccess");
+    clock.flag("roomAccessFastPath", access.fastPath);
     const upload = await prepareChatPhotoUpload(
       prisma,
       {

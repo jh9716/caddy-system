@@ -12,8 +12,10 @@ import {
 } from "./protocol";
 
 export const CHAT_MEDIA_PUT_OP = "chat_media_put";
+export const CHAT_MEDIA_UPLOADED_OP = "chat_media_uploaded";
 export const CHAT_MEDIA_GRANT_HEADER = "x-chat-media-grant";
 export const CHAT_MEDIA_GRANT_TTL_SEC = 5 * 60;
+export const CHAT_MEDIA_RECEIPT_TTL_SEC = 5 * 60;
 export const CHAT_MEDIA_MAGIC_PREFIX_BYTES = 256;
 export const CHAT_MEDIA_R2_KEY_PREFIX = "chat/";
 export const CHAT_PHOTO_R2_DB_PREFIX = "r2/";
@@ -45,6 +47,17 @@ export type ChatMediaGrantSecretEnv = {
   CHAT_AUTH_SECRET?: string;
 };
 
+export type ChatMediaUploadReceipt = {
+  v: 1;
+  op: typeof CHAT_MEDIA_UPLOADED_OP;
+  roomId: string;
+  attachmentId: string;
+  senderUserId: number;
+  mimeType: ChatMediaMime;
+  actualSize: number;
+  exp: number;
+};
+
 export type ChatMediaGrantVerifyOk = { ok: true; grant: ChatMediaPutGrant };
 export type ChatMediaGrantVerifyErr = {
   ok: false;
@@ -52,6 +65,14 @@ export type ChatMediaGrantVerifyErr = {
   status: number;
 };
 export type ChatMediaGrantVerifyResult = ChatMediaGrantVerifyOk | ChatMediaGrantVerifyErr;
+
+export type ChatMediaReceiptVerifyOk = { ok: true; receipt: ChatMediaUploadReceipt };
+export type ChatMediaReceiptVerifyErr = {
+  ok: false;
+  code: "unauthorized" | "expired" | "invalid_receipt";
+  status: number;
+};
+export type ChatMediaReceiptVerifyResult = ChatMediaReceiptVerifyOk | ChatMediaReceiptVerifyErr;
 
 export type ChatMediaObjectRef = {
   roomId: string;
@@ -226,6 +247,99 @@ export async function signChatMediaPutGrant(
   const payload = JSON.stringify(parsed);
   const sig = await hmacSha256(key, canonicalChatMediaPutGrant(parsed));
   return `${bytesToBase64Url(utf8Bytes(payload))}.${bytesToBase64Url(sig)}`;
+}
+
+export function canonicalChatMediaUploadReceipt(receipt: ChatMediaUploadReceipt): string {
+  return [
+    String(receipt.v),
+    receipt.op,
+    receipt.roomId,
+    receipt.attachmentId,
+    String(receipt.senderUserId),
+    receipt.mimeType,
+    String(receipt.actualSize),
+    String(receipt.exp),
+  ].join("|");
+}
+
+function parseReceiptPayload(raw: unknown): ChatMediaUploadReceipt | null {
+  if (!raw || typeof raw !== "object") return null;
+  const row = raw as Record<string, unknown>;
+  const mime = normalizeChatMediaMime(row.mimeType);
+  const roomId = String(row.roomId || "").trim();
+  const attachmentId = String(row.attachmentId || "").trim().toLowerCase();
+  const senderUserId = Number(row.senderUserId);
+  const actualSize = Number(row.actualSize);
+  const exp = Number(row.exp);
+  if (row.v !== 1 || row.op !== CHAT_MEDIA_UPLOADED_OP || !mime) return null;
+  if (!isValidRoomName(roomId) || !CHAT_ATTACHMENT_ID_RE.test(attachmentId)) return null;
+  if (!Number.isInteger(senderUserId) || senderUserId <= 0) return null;
+  if (!Number.isInteger(actualSize) || actualSize <= 0 || actualSize > CHAT_PHOTO_MAX_BYTES) {
+    return null;
+  }
+  if (!Number.isFinite(exp) || !Number.isInteger(exp) || exp <= 0) return null;
+  return {
+    v: 1,
+    op: CHAT_MEDIA_UPLOADED_OP,
+    roomId,
+    attachmentId,
+    senderUserId,
+    mimeType: mime,
+    actualSize,
+    exp,
+  };
+}
+
+export async function signChatMediaUploadReceipt(
+  secret: string,
+  receipt: ChatMediaUploadReceipt
+): Promise<string> {
+  const key = String(secret || "").trim();
+  if (!key) throw new Error("CHAT_MEDIA_SECRET is required");
+  const parsed = parseReceiptPayload(receipt);
+  if (!parsed) throw new Error("invalid chat media receipt");
+  const payload = JSON.stringify(parsed);
+  const sig = await hmacSha256(key, canonicalChatMediaUploadReceipt(parsed));
+  return `${bytesToBase64Url(utf8Bytes(payload))}.${bytesToBase64Url(sig)}`;
+}
+
+export async function verifyChatMediaUploadReceipt(
+  secret: string,
+  token: string,
+  nowSec = Math.floor(Date.now() / 1000)
+): Promise<ChatMediaReceiptVerifyResult> {
+  const key = String(secret || "").trim();
+  if (!key || !token) return { ok: false, code: "unauthorized", status: 401 };
+  const parts = token.split(".");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    return { ok: false, code: "invalid_receipt", status: 401 };
+  }
+  let payload: string;
+  try {
+    payload = new TextDecoder().decode(base64UrlToBytes(parts[0]));
+  } catch {
+    return { ok: false, code: "invalid_receipt", status: 401 };
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(payload);
+  } catch {
+    return { ok: false, code: "invalid_receipt", status: 401 };
+  }
+  const receipt = parseReceiptPayload(raw);
+  if (!receipt) return { ok: false, code: "invalid_receipt", status: 401 };
+  let got: Uint8Array;
+  try {
+    got = base64UrlToBytes(parts[1]);
+  } catch {
+    return { ok: false, code: "invalid_receipt", status: 401 };
+  }
+  const expected = await hmacSha256(key, canonicalChatMediaUploadReceipt(receipt));
+  if (!timingSafeEqualBytes(expected, got)) {
+    return { ok: false, code: "unauthorized", status: 401 };
+  }
+  if (receipt.exp <= nowSec) return { ok: false, code: "expired", status: 410 };
+  return { ok: true, receipt };
 }
 
 export async function verifyChatMediaPutGrant(

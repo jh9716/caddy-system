@@ -9,6 +9,10 @@ const index = readFileSync(join(root, "../src/index.ts"), "utf8");
 const media = readFileSync(join(root, "../src/chatMedia.ts"), "utf8");
 const grant = readFileSync(join(root, "../src/chatMediaGrant.ts"), "utf8");
 const wrangler = readFileSync(join(root, "../wrangler.jsonc"), "utf8");
+const uploadFn = media.slice(
+  media.indexOf("export async function handleChatMediaUpload"),
+  media.indexOf("export async function handleChatMediaInspect")
+);
 
 test("chat media routes and grant stay Worker-local", () => {
   assert.match(index, /\/media\/upload/);
@@ -24,10 +28,16 @@ test("chat media routes and grant stay Worker-local", () => {
   assert.match(media, /deriveChatMediaR2Key/);
   assert.match(media, /inspectChatMediaMagic/);
   assert.match(media, /etagDoesNotMatch: "\*"/);
-  assert.match(media, /readBoundedBody/);
+  assert.match(media, /readPrefixThenRest/);
+  assert.match(media, /createBoundedConcatStream/);
   assert.match(media, /upload_conflict/);
   assert.match(media, /customMetadata/);
+  assert.match(media, /signChatMediaUploadReceipt/);
   assert.doesNotMatch(media, /await request\.arrayBuffer\(\)/);
+  assert.doesNotMatch(uploadFn, /readBoundedBody/);
+  assert.doesNotMatch(uploadFn, /sha256Hex/);
+  assert.match(uploadFn, /bounded\.stream/);
+  assert.match(uploadFn, /CHAT_MEDIA_MAGIC_PREFIX_BYTES/);
   assert.doesNotMatch(media, /issueSignedToken|presignUrl|@vercel\/blob/);
   assert.doesNotMatch(grant, /BLOB_|R2_SECRET|accessKey|clientSigningToken/i);
   const grantType = grant.slice(
@@ -36,6 +46,7 @@ test("chat media routes and grant stay Worker-local", () => {
   );
   assert.doesNotMatch(grantType, /storageKey|uploadUrl|secret/);
   assert.match(grant, /op = "chat_media_put"|CHAT_MEDIA_PUT_OP = "chat_media_put"/);
+  assert.match(grant, /CHAT_MEDIA_UPLOADED_OP = "chat_media_uploaded"/);
   assert.match(grant, /CHAT_MEDIA_SECRET/);
   assert.match(grant, /CHAT_MEDIA_R2_KEY_PREFIX = "chat\/"/);
   assert.match(grant, /CHAT_PHOTO_R2_DB_PREFIX = "r2\/"/);

@@ -2,6 +2,7 @@ import { ChatAuthError, issueChatAccessToken } from "@/lib/chatAuth";
 import { resolveChatRoomAccess } from "@/lib/chatAcl";
 import { chatDirectoryMembersUrl } from "@/lib/chatClientConfig";
 import { isAllRoomId, isCustomRoomId, isDmRoomId } from "@/lib/chatRooms";
+import { verifyChatToken } from "@/lib/chatToken";
 import type { PrismaClient } from "@prisma/client";
 import type { ResolvedAuthUser } from "@/lib/auth";
 
@@ -47,4 +48,45 @@ export async function requireChatPhotoRoomAccess(
     throw new ChatAuthError(access.code, "room forbidden", 403);
   }
   return { userId: issued.user.userId, token: issued.token };
+}
+
+export type ChatPhotoRoomAccess = {
+  userId: number;
+  token: string;
+  fastPath: boolean;
+};
+
+/**
+ * Cookie auth already happened. A still-valid chat token matching the
+ * authenticated user skips issueChatAccessToken (caddy DB). ALL rooms use
+ * local ACL only. CUSTOM/DM still check directory membership with the
+ * provided token. Missing/expired/mismatched tokens fall back to the
+ * existing requireChatPhotoRoomAccess path.
+ */
+export async function resolveChatPhotoRoomAccess(
+  db: PrismaClient,
+  auth: ResolvedAuthUser,
+  roomId: string,
+  opts?: { chatToken?: string | null }
+): Promise<ChatPhotoRoomAccess> {
+  if (!isChatPhotoRoomId(roomId)) {
+    throw new ChatAuthError("invalid_room", "invalid room", 400);
+  }
+  const raw = String(opts?.chatToken || "").trim();
+  if (raw && auth.userId && auth.userId > 0) {
+    const claims = await verifyChatToken(raw);
+    if (claims && claims.userId === auth.userId) {
+      const member = isAllRoomId(roomId) || (await isDirectoryMember(raw, roomId));
+      const access = resolveChatRoomAccess({
+        claims,
+        roomId,
+        isMember: member,
+      });
+      if (access.ok) {
+        return { userId: claims.userId, token: raw, fastPath: true };
+      }
+    }
+  }
+  const issued = await requireChatPhotoRoomAccess(db, auth, roomId);
+  return { ...issued, fastPath: false };
 }

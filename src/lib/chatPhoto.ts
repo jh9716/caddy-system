@@ -54,6 +54,7 @@ import {
 import {
   CHAT_MEDIA_PUT_OP,
   signChatMediaPutGrant,
+  verifyChatMediaUploadReceipt,
   type ChatMediaPutGrant,
 } from "../../cloudflare/verthill-chat/src/chatMediaGrant";
 
@@ -534,12 +535,90 @@ async function inspectUploadedChatPhoto(
   };
 }
 
+function receiptStatusCode(code: "unauthorized" | "expired" | "invalid_receipt"): number {
+  if (code === "expired") return 410;
+  return 401;
+}
+
+async function finalizeReadyFromReceipt(
+  db: PrismaClient,
+  row: ChatAttachment,
+  input: {
+    roomId: string;
+    attachmentId: string;
+    senderUserId: number;
+    uploadReceipt: string;
+  },
+  clock?: ChatPhotoHotpathClock
+): Promise<ChatPhotoPublic | null> {
+  if (!isChatPhotoR2StorageKey(row.storageKey)) return null;
+  const secret = chatMediaSecret(process.env);
+  if (!secret) {
+    throw new CourseReportPhotoStorageError(
+      "storage_not_configured",
+      "사진 저장소가 설정되지 않았습니다.",
+      503
+    );
+  }
+  const verified = await verifyChatMediaUploadReceipt(secret, input.uploadReceipt);
+  clock?.mark("receiptVerify");
+  if (!verified.ok) {
+    throw new CourseReportPhotoValidationError(
+      verified.code,
+      "업로드 확인에 실패했습니다.",
+      receiptStatusCode(verified.code)
+    );
+  }
+  const receipt = verified.receipt;
+  if (
+    receipt.roomId !== input.roomId ||
+    receipt.attachmentId !== input.attachmentId ||
+    receipt.senderUserId !== input.senderUserId ||
+    receipt.senderUserId !== row.senderUserId ||
+    receipt.mimeType !== row.mimeType
+  ) {
+    throw new CourseReportPhotoValidationError(
+      "invalid_receipt",
+      "업로드 확인에 실패했습니다.",
+      401
+    );
+  }
+  if (receipt.actualSize <= 0 || receipt.actualSize > CHAT_PHOTO_MAX_BYTES) {
+    await deleteChatPhotoIntent(db, row);
+    throw new CourseReportPhotoValidationError(
+      "file_too_large",
+      "사진은 장당 3MB 이하만 첨부할 수 있습니다."
+    );
+  }
+  clock?.flag("finalizeInspectSkipped", true);
+  let ready: ChatAttachment;
+  try {
+    ready = await db.chatAttachment.update({
+      where: { id: row.id },
+      data: {
+        uploadState: "READY",
+        mimeType: receipt.mimeType,
+        size: receipt.actualSize,
+      },
+    });
+  } catch (e) {
+    await deleteChatPhotoIntent(db, row);
+    if (isChatAttachmentTableMissing(e)) photoTableNotReady();
+    throw e;
+  }
+  clock?.mark("dbUpdate");
+  const photo = await toPublic(ready);
+  clock?.mark("claimSign");
+  return photo;
+}
+
 export async function finalizeChatPhotoUpload(
   db: PrismaClient,
   input: {
     roomId: string;
     attachmentId: string;
     senderUserId: number;
+    uploadReceipt?: string;
   },
   clock?: ChatPhotoHotpathClock
 ): Promise<ChatPhotoPublic> {
@@ -568,6 +647,12 @@ export async function finalizeChatPhotoUpload(
   }
   if (row.uploadState !== "PENDING") {
     throw new CourseReportPhotoValidationError("not_found", "사진을 찾을 수 없습니다.", 404);
+  }
+
+  const rawReceipt = String(input.uploadReceipt || "").trim();
+  if (rawReceipt) {
+    const fromReceipt = await finalizeReadyFromReceipt(db, row, { ...input, uploadReceipt: rawReceipt }, clock);
+    if (fromReceipt) return fromReceipt;
   }
 
   let inspected: { size: number; contentType: string; prefix: Uint8Array };
