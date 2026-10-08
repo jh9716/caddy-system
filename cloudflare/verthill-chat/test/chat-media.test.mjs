@@ -43,8 +43,10 @@ test("chat media routes and grant stay Worker-local", () => {
   assert.doesNotMatch(index, /vercel|neon|prisma|vh_session|FCM|D1|KV/i);
 });
 
-test("production wrangler does not bind CHAT_MEDIA in this PR", () => {
+test("production wrangler binds CHAT_MEDIA to verthill-chat-media", () => {
   assert.match(wrangler, /CHAT_MEDIA_SECRET/);
-  assert.match(wrangler, /verthill-chat-media/);
-  assert.doesNotMatch(wrangler, /"r2_buckets"\s*:/);
+  assert.match(wrangler, /"r2_buckets"\s*:/);
+  assert.match(wrangler, /"binding":\s*"CHAT_MEDIA"/);
+  assert.match(wrangler, /"bucket_name":\s*"verthill-chat-media"/);
+  assert.doesNotMatch(wrangler, /"CHAT_MEDIA_SECRET"\s*:/);
 });
