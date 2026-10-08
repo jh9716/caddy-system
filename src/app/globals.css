@@ -4583,6 +4583,24 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
   font-size: 0.72rem;
   font-weight: 700;
 }
+.vh-chat-unread-split {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 4px 8px;
+  color: var(--vh-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.vh-chat-unread-split::before,
+.vh-chat-unread-split::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: rgba(22, 48, 40, 0.12);
+}
 .vh-chat-tombstone {
   align-self: center;
   max-width: 86%;

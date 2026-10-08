@@ -108,6 +108,12 @@ section("android back room leave");
   assert(css.includes("vh-chat-chip"), "compact invite chips");
   assert(css.includes("vh-chat-sheet-create"), "create sheet flex layout");
   assert(css.includes("vh-chat-sheet-foot"), "create footer stays reachable");
+  assert(chat.includes("snapshotChatEntry"), "entry unread snapshot before read ack");
+  assert(chat.includes("resolveChatEntryTarget"), "explicit > unread > bottom");
+  assert(chat.includes("queueEntrySeek"), "seek first unread via history pages");
+  assert(chat.includes("applyPinnedEntryScroll"), "pin entry scroll through image layout");
+  assert(chat.includes("CHAT_UNREAD_SPLIT_LABEL"), "unread split copy");
+  assert(css.includes("vh-chat-unread-split"), "unread split style");
 }
 
 section("no neon chat schema");
