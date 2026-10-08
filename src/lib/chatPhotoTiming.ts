@@ -18,6 +18,7 @@ export type ChatPhotoTimingBag = {
   compressionMs?: number;
   prepareHotpath?: ChatPhotoHotpathSummary;
   finalizeHotpath?: ChatPhotoHotpathSummary;
+  storageBackend?: "r2" | "blob";
 };
 
 export type ChatPhotoTimingSummary = {
@@ -33,7 +34,10 @@ export type ChatPhotoDebugSample = {
   compressionMs: number | null;
   selectedToUploadStartMs: number | null;
   prepareApiMs: number | null;
+  storageBackend: "r2" | "blob" | null;
   blobPutMs: number | null;
+  r2PutMs: number | null;
+  workerUploadMs: number | null;
   finalizeMs: number | null;
   sendTapToWsMs: number | null;
   selectedToReadyMs: number | null;
@@ -53,6 +57,7 @@ export type ChatPhotoDebugSample = {
   finalizeRoomAccessMs: number | null;
   finalizeDbFindMs: number | null;
   finalizeBlobMs: number | null;
+  r2InspectMs: number | null;
   finalizeDbUpdateMs: number | null;
   finalizeSignMs: number | null;
 };
@@ -106,6 +111,10 @@ export function noteChatPhotoBytes(sourceBytes: number, uploadBytes?: number): v
 
 export function noteChatPhotoCompression(ms: number): void {
   timingBag().compressionMs = Math.max(0, ms);
+}
+
+export function noteChatPhotoStorageBackend(backend: "r2" | "blob"): void {
+  timingBag().storageBackend = backend;
 }
 
 export function noteChatPhotoServerHotpath(value: unknown): ChatPhotoHotpathSummary | null {
@@ -164,7 +173,10 @@ export function buildChatPhotoDebugSample(
       bag?.compressionMs != null ? Math.round(bag.compressionMs) : latestChatPhotoMark("select_to_prepared", bag),
     selectedToUploadStartMs: summary.select_to_put_start_ms,
     prepareApiMs: latestChatPhotoMark("prepare_api", bag),
-    blobPutMs: summary.put_ms,
+    storageBackend: bag?.storageBackend ?? null,
+    blobPutMs: bag?.storageBackend === "r2" ? null : summary.put_ms,
+    r2PutMs: bag?.storageBackend === "r2" ? summary.put_ms : null,
+    workerUploadMs: bag?.storageBackend === "r2" ? summary.put_ms : null,
     finalizeMs: summary.finalize_ms,
     sendTapToWsMs: summary.send_tap_to_ws_ms,
     selectedToReadyMs:
@@ -188,6 +200,7 @@ export function buildChatPhotoDebugSample(
     finalizeRoomAccessMs: bag?.finalizeHotpath?.steps.roomAccess ?? null,
     finalizeDbFindMs: bag?.finalizeHotpath?.steps.dbFind ?? null,
     finalizeBlobMs: bag?.finalizeHotpath?.steps.blobInspect ?? null,
+    r2InspectMs: bag?.finalizeHotpath?.steps.r2Inspect ?? null,
     finalizeDbUpdateMs: bag?.finalizeHotpath?.steps.dbUpdate ?? null,
     finalizeSignMs: bag?.finalizeHotpath?.steps.claimSign ?? null,
   };
@@ -224,4 +237,5 @@ export function resetChatPhotoTiming(): void {
   delete bag.compressionMs;
   delete bag.prepareHotpath;
   delete bag.finalizeHotpath;
+  delete bag.storageBackend;
 }

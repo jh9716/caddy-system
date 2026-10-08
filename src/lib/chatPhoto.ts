@@ -38,6 +38,24 @@ import {
 } from "@/lib/courseReportPhotoStorage";
 import { isLocalDatabaseUrl } from "@/lib/dbSafety";
 import type { createChatPhotoHotpathClock } from "@/lib/chatPhotoHotpath";
+import {
+  buildChatPhotoR2StorageKey,
+  chatMediaSecret,
+  chatMediaUploadUrl,
+  chatPhotoR2Configured,
+  chatPhotoR2WriteEnabled,
+  chatPhotoStorageBackend,
+  deleteChatPhotoR2Object,
+  inspectChatPhotoR2,
+  isChatPhotoR2StorageKey,
+  openChatPhotoR2Body,
+  putChatPhotoR2Bytes,
+} from "@/lib/chatPhotoR2";
+import {
+  CHAT_MEDIA_PUT_OP,
+  signChatMediaPutGrant,
+  type ChatMediaPutGrant,
+} from "../../cloudflare/verthill-chat/src/chatMediaGrant";
 
 type ChatPhotoHotpathClock = ReturnType<typeof createChatPhotoHotpathClock>;
 
@@ -67,6 +85,28 @@ function resolveChatPhotoStore(): CourseReportPhotoStore {
   return g.__caddyChatPhotoMemoryStore;
 }
 
+function assertBlobStoreConfigured(): CourseReportPhotoStore {
+  const store = resolveChatPhotoStore();
+  if (!store.configured) {
+    throw new CourseReportPhotoStorageError(
+      "storage_not_configured",
+      "사진 저장소가 설정되지 않았습니다.",
+      503
+    );
+  }
+  return store;
+}
+
+function assertR2WriteConfigured(): void {
+  if (!chatPhotoR2WriteEnabled()) {
+    throw new CourseReportPhotoStorageError(
+      "storage_not_configured",
+      "사진 저장소가 설정되지 않았습니다.",
+      503
+    );
+  }
+}
+
 export type ChatPhotoPublic = {
   id: string;
   mimeType: string;
@@ -82,6 +122,8 @@ export type ChatPhotoPrepareResult = {
   expiresAt: number;
   maxBytes: number;
   contentType: CourseReportPhotoMime;
+  storageBackend: "r2" | "blob";
+  uploadGrant?: string;
 };
 
 export function isChatAttachmentTableMissing(e: unknown): boolean {
@@ -139,14 +181,8 @@ export async function uploadChatPhoto(
     bytes: Uint8Array;
   }
 ): Promise<ChatPhotoPublic> {
-  const store = resolveChatPhotoStore();
-  if (!store.configured) {
-    throw new CourseReportPhotoStorageError(
-      "storage_not_configured",
-      "사진 저장소가 설정되지 않았습니다.",
-      503
-    );
-  }
+  const r2 = chatPhotoR2WriteEnabled();
+  const store = r2 ? null : assertBlobStoreConfigured();
   if (!Number.isInteger(input.senderUserId) || input.senderUserId <= 0) {
     throw new CourseReportPhotoValidationError("forbidden", "사진을 첨부할 수 없습니다.", 403);
   }
@@ -172,9 +208,23 @@ export async function uploadChatPhoto(
 
   const mime = assertCourseReportPhotoBytes(input.bytes);
   const id = randomUUID();
-  const storageKey = buildChatPhotoStorageKey(input.roomId, mime, id);
+  const storageKey = r2
+    ? buildChatPhotoR2StorageKey(input.roomId, mime, id)
+    : buildChatPhotoStorageKey(input.roomId, mime, id);
   try {
-    await store.put(storageKey, input.bytes, mime);
+    if (r2) {
+      const expiresAt = Date.now() + CHAT_PHOTO_SIGNED_PUT_TTL_MS;
+      const grant = await issueChatPhotoR2Grant({
+        roomId: input.roomId,
+        attachmentId: id,
+        senderUserId: input.senderUserId,
+        mimeType: mime,
+        expiresAt,
+      });
+      await putChatPhotoR2Bytes({ grant, bytes: input.bytes, contentType: mime });
+    } else {
+      await store!.put(storageKey, input.bytes, mime);
+    }
   } catch (e) {
     if (e instanceof CourseReportPhotoStorageError) throw e;
     throw new CourseReportPhotoStorageError(
@@ -198,7 +248,7 @@ export async function uploadChatPhoto(
       },
     });
   } catch (e) {
-    await store.delete(storageKey).catch(() => undefined);
+    await deleteChatPhotoObject(storageKey).catch(() => undefined);
     if (isChatAttachmentTableMissing(e)) photoTableNotReady();
     throw e;
   }
@@ -206,7 +256,7 @@ export async function uploadChatPhoto(
   const after = await countUnconsumedChatPhotos(db, input);
   if (after > CHAT_PHOTO_MAX) {
     await db.chatAttachment.delete({ where: { id: row.id } }).catch(() => undefined);
-    await store.delete(storageKey).catch(() => undefined);
+    await deleteChatPhotoObject(storageKey).catch(() => undefined);
     throw new CourseReportPhotoValidationError(
       "photo_limit",
       "사진은 최대 3장까지 첨부할 수 있습니다.",
@@ -234,15 +284,53 @@ async function countUnconsumedChatPhotos(
   }
 }
 
+async function deleteChatPhotoObject(storageKey: string): Promise<void> {
+  if (isChatPhotoR2StorageKey(storageKey)) {
+    if (chatPhotoR2Configured()) {
+      await deleteChatPhotoR2Object(storageKey);
+    }
+    return;
+  }
+  const store = resolveChatPhotoStore();
+  if (store.configured) {
+    await store.delete(storageKey);
+  }
+}
+
 async function deleteChatPhotoIntent(
   db: PrismaClient,
   row: { id: string; storageKey: string }
 ): Promise<void> {
   await db.chatAttachment.delete({ where: { id: row.id } }).catch(() => undefined);
-  const store = resolveChatPhotoStore();
-  if (store.configured) {
-    await store.delete(row.storageKey).catch(() => undefined);
+  await deleteChatPhotoObject(row.storageKey).catch(() => undefined);
+}
+
+async function issueChatPhotoR2Grant(input: {
+  roomId: string;
+  attachmentId: string;
+  senderUserId: number;
+  mimeType: CourseReportPhotoMime;
+  expiresAt: number;
+}): Promise<string> {
+  const secret = chatMediaSecret(process.env);
+  if (!secret) {
+    throw new CourseReportPhotoStorageError(
+      "storage_not_configured",
+      "사진 저장소가 설정되지 않았습니다.",
+      503
+    );
   }
+  const grant: ChatMediaPutGrant = {
+    v: 1,
+    op: CHAT_MEDIA_PUT_OP,
+    roomId: input.roomId,
+    attachmentId: input.attachmentId,
+    senderUserId: input.senderUserId,
+    mimeType: input.mimeType,
+    maxBytes: CHAT_PHOTO_MAX_BYTES,
+    exp: Math.floor(input.expiresAt / 1000),
+  };
+  return signChatMediaPutGrant(secret, grant);
 }
 
 async function issueChatPhotoSignedPutUrl(input: {
@@ -296,13 +384,11 @@ export async function prepareChatPhotoUpload(
   },
   clock?: ChatPhotoHotpathClock
 ): Promise<ChatPhotoPrepareResult> {
-  const store = resolveChatPhotoStore();
-  if (!store.configured) {
-    throw new CourseReportPhotoStorageError(
-      "storage_not_configured",
-      "사진 저장소가 설정되지 않았습니다.",
-      503
-    );
+  const r2 = chatPhotoStorageBackend() === "r2";
+  if (r2) {
+    assertR2WriteConfigured();
+  } else {
+    assertBlobStoreConfigured();
   }
   if (!Number.isInteger(input.senderUserId) || input.senderUserId <= 0) {
     throw new CourseReportPhotoValidationError("forbidden", "사진을 첨부할 수 없습니다.", 403);
@@ -326,7 +412,9 @@ export async function prepareChatPhotoUpload(
   }
 
   const id = randomUUID();
-  const storageKey = buildChatPhotoStorageKey(input.roomId, mime, id);
+  const storageKey = r2
+    ? buildChatPhotoR2StorageKey(input.roomId, mime, id)
+    : buildChatPhotoStorageKey(input.roomId, mime, id);
   let row: ChatAttachment;
   try {
     row = await db.chatAttachment.create({
@@ -360,6 +448,26 @@ export async function prepareChatPhotoUpload(
   }
 
   try {
+    if (r2) {
+      const expiresAt = Date.now() + CHAT_PHOTO_SIGNED_PUT_TTL_MS;
+      const uploadGrant = await issueChatPhotoR2Grant({
+        roomId: input.roomId,
+        attachmentId: row.id,
+        senderUserId: input.senderUserId,
+        mimeType: mime,
+        expiresAt,
+      });
+      clock?.mark("grantSign");
+      return {
+        attachmentId: row.id,
+        uploadUrl: chatMediaUploadUrl(),
+        expiresAt,
+        maxBytes: CHAT_PHOTO_MAX_BYTES,
+        contentType: mime,
+        storageBackend: "r2",
+        uploadGrant,
+      };
+    }
     const signed = await issueChatPhotoSignedPutUrl({
       storageKey,
       contentType: mime,
@@ -371,6 +479,7 @@ export async function prepareChatPhotoUpload(
       expiresAt: signed.expiresAt,
       maxBytes: CHAT_PHOTO_MAX_BYTES,
       contentType: mime,
+      storageBackend: "blob",
     };
   } catch (e) {
     await deleteChatPhotoIntent(db, row);
@@ -379,13 +488,25 @@ export async function prepareChatPhotoUpload(
 }
 
 async function inspectUploadedChatPhoto(
-  store: CourseReportPhotoStore,
-  storageKey: string,
+  row: ChatAttachment,
   clock?: ChatPhotoHotpathClock
 ): Promise<{ size: number; contentType: string; prefix: Uint8Array }> {
+  if (isChatPhotoR2StorageKey(row.storageKey)) {
+    if (!chatPhotoR2Configured()) {
+      throw new CourseReportPhotoStorageError(
+        "storage_not_configured",
+        "사진 저장소가 설정되지 않았습니다.",
+        503
+      );
+    }
+    const inspected = await inspectChatPhotoR2(row.storageKey);
+    clock?.mark("r2Inspect");
+    return inspected;
+  }
+  const store = assertBlobStoreConfigured();
   if (store.readPrefixAndMeta) {
     const inspected = await store.readPrefixAndMeta(
-      storageKey,
+      row.storageKey,
       COURSE_REPORT_PHOTO_MAGIC_PREFIX_BYTES
     );
     clock?.mark("blobInspect");
@@ -395,7 +516,7 @@ async function inspectUploadedChatPhoto(
     if (inspected.size > 0) {
       return inspected;
     }
-    const meta = await store.head(storageKey);
+    const meta = await store.head(row.storageKey);
     clock?.mark("blobHeadFallback");
     return {
       prefix: inspected.prefix,
@@ -403,8 +524,8 @@ async function inspectUploadedChatPhoto(
       contentType: inspected.contentType || meta?.contentType || "",
     };
   }
-  const meta = await store.head(storageKey);
-  const prefix = await store.readPrefix(storageKey, COURSE_REPORT_PHOTO_MAGIC_PREFIX_BYTES);
+  const meta = await store.head(row.storageKey);
+  const prefix = await store.readPrefix(row.storageKey, COURSE_REPORT_PHOTO_MAGIC_PREFIX_BYTES);
   clock?.mark("blobInspect");
   return {
     prefix: prefix || new Uint8Array(),
@@ -422,14 +543,6 @@ export async function finalizeChatPhotoUpload(
   },
   clock?: ChatPhotoHotpathClock
 ): Promise<ChatPhotoPublic> {
-  const store = resolveChatPhotoStore();
-  if (!store.configured) {
-    throw new CourseReportPhotoStorageError(
-      "storage_not_configured",
-      "사진 저장소가 설정되지 않았습니다.",
-      503
-    );
-  }
   if (!Number.isInteger(input.senderUserId) || input.senderUserId <= 0) {
     throw new CourseReportPhotoValidationError("forbidden", "사진을 첨부할 수 없습니다.", 403);
   }
@@ -459,7 +572,7 @@ export async function finalizeChatPhotoUpload(
 
   let inspected: { size: number; contentType: string; prefix: Uint8Array };
   try {
-    inspected = await inspectUploadedChatPhoto(store, row.storageKey, clock);
+    inspected = await inspectUploadedChatPhoto(row, clock);
   } catch (e) {
     if (e instanceof CourseReportPhotoValidationError) throw e;
     if (e instanceof CourseReportPhotoStorageError) throw e;
@@ -563,14 +676,10 @@ export async function loadChatPhotoMeta(
 }
 
 export async function openChatPhotoBody(storageKey: string, abortSignal?: AbortSignal) {
-  const store = resolveChatPhotoStore();
-  if (!store.configured) {
-    throw new CourseReportPhotoStorageError(
-      "storage_not_configured",
-      "사진 저장소가 설정되지 않았습니다.",
-      503
-    );
+  if (isChatPhotoR2StorageKey(storageKey)) {
+    return openChatPhotoR2Body(storageKey, abortSignal);
   }
+  const store = assertBlobStoreConfigured();
   const opts = abortSignal ? { abortSignal } : undefined;
   const body = store.open
     ? await store.open(storageKey, opts)
@@ -622,7 +731,6 @@ export async function cleanupOrphanChatAttachments(
     if (isChatAttachmentTableMissing(e)) return { deleted: 0, blobFailed: [] };
     throw e;
   }
-  const store = resolveChatPhotoStore();
   const blobFailed: string[] = [];
   let deleted = 0;
   for (const row of rows) {
@@ -632,9 +740,8 @@ export async function cleanupOrphanChatAttachments(
     } catch {
       continue;
     }
-    if (!store.configured) continue;
     try {
-      await store.delete(row.storageKey);
+      await deleteChatPhotoObject(row.storageKey);
     } catch {
       blobFailed.push(row.storageKey);
       console.error("[chat-photo] orphan blob cleanup failed", {
@@ -686,7 +793,6 @@ export async function purgeChatAttachments(
     console.error("[chat-photo] attachment purge lookup failed", e);
     return empty;
   }
-  const store = resolveChatPhotoStore();
   const blobFailed: ChatAttachmentPurgeResult["blobFailed"] = [];
   let deleted = 0;
   for (const row of rows) {
@@ -696,9 +802,8 @@ export async function purgeChatAttachments(
     } catch {
       continue;
     }
-    if (!store.configured) continue;
     try {
-      await store.delete(row.storageKey);
+      await deleteChatPhotoObject(row.storageKey);
     } catch {
       blobFailed.push(row);
       console.error("[chat-photo] attachment blob cleanup failed", {

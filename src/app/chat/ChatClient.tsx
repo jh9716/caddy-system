@@ -2182,7 +2182,10 @@ export default function ChatClient() {
                   ["compressionMs", photoDebugSample.compressionMs],
                   ["selectedToUploadStartMs", photoDebugSample.selectedToUploadStartMs],
                   ["prepareApiMs", photoDebugSample.prepareApiMs],
+                  ["storageBackend", photoDebugSample.storageBackend],
                   ["blobPutMs", photoDebugSample.blobPutMs],
+                  ["r2PutMs", photoDebugSample.r2PutMs],
+                  ["workerUploadMs", photoDebugSample.workerUploadMs],
                   ["finalizeMs", photoDebugSample.finalizeMs],
                   ["sendTapToWsMs", photoDebugSample.sendTapToWsMs],
                   ["selectedToReadyMs", photoDebugSample.selectedToReadyMs],
@@ -2200,6 +2203,7 @@ export default function ChatClient() {
                   ["finalizeRoomAccessMs", photoDebugSample.finalizeRoomAccessMs],
                   ["finalizeDbFindMs", photoDebugSample.finalizeDbFindMs],
                   ["finalizeBlobMs", photoDebugSample.finalizeBlobMs],
+                  ["r2InspectMs", photoDebugSample.r2InspectMs],
                   ["finalizeDbUpdateMs", photoDebugSample.finalizeDbUpdateMs],
                   ["finalizeSignMs", photoDebugSample.finalizeSignMs],
                 ] as const

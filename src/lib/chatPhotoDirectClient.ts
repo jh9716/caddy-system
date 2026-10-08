@@ -2,8 +2,10 @@ import {
   chatPhotoDebugApiUrl,
   markChatPhotoTiming,
   noteChatPhotoServerHotpath,
+  noteChatPhotoStorageBackend,
   stampChatPhotoTiming,
 } from "@/lib/chatPhotoTiming";
+import { CHAT_MEDIA_GRANT_HEADER } from "../../cloudflare/verthill-chat/src/chatMediaGrant";
 
 export type ChatPhotoDirectResult = {
   id: string;
@@ -37,13 +39,17 @@ export async function putChatPhotoBytes(
   uploadUrl: string,
   blob: Blob,
   contentType: string,
-  onProgress?: (pct: number) => void
+  onProgress?: (pct: number) => void,
+  extraHeaders?: { grant?: string }
 ): Promise<void> {
   if (typeof XMLHttpRequest !== "undefined") {
     await new Promise<void>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open("PUT", uploadUrl);
       xhr.setRequestHeader("content-type", contentType);
+      if (extraHeaders?.grant) {
+        xhr.setRequestHeader(CHAT_MEDIA_GRANT_HEADER, extraHeaders.grant);
+      }
       xhr.upload.onprogress = (event) => {
         if (!event.lengthComputable || event.total <= 0) return;
         onProgress?.(Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100))));
@@ -61,9 +67,11 @@ export async function putChatPhotoBytes(
     });
     return;
   }
+  const headers: Record<string, string> = { "content-type": contentType };
+  if (extraHeaders?.grant) headers[CHAT_MEDIA_GRANT_HEADER] = extraHeaders.grant;
   const res = await fetch(uploadUrl, {
     method: "PUT",
-    headers: { "content-type": contentType },
+    headers,
     body: blob,
   });
   if (!res.ok) {
@@ -112,14 +120,24 @@ export async function uploadChatPhotoDirect(
   const attachmentId = String(prepared.upload.attachmentId);
   const uploadUrl = String(prepared.upload.uploadUrl);
   const contentType = String(prepared.upload.contentType || mime);
+  const uploadGrant =
+    typeof prepared.upload.uploadGrant === "string" ? prepared.upload.uploadGrant : "";
+  const storageBackend = prepared.upload.storageBackend === "r2" ? "r2" : "blob";
+  noteChatPhotoStorageBackend(storageBackend);
 
   notify({ key: item.key, phase: "put", progress: 0, attachmentId });
   const putStarted = typeof performance !== "undefined" ? performance.now() : Date.now();
   stampChatPhotoTiming("put_start", putStarted);
   try {
-    await put(uploadUrl, item.blob, contentType, (pct) => {
-      notify({ key: item.key, phase: "put", progress: pct, attachmentId });
-    });
+    await put(
+      uploadUrl,
+      item.blob,
+      contentType,
+      (pct) => {
+        notify({ key: item.key, phase: "put", progress: pct, attachmentId });
+      },
+      uploadGrant ? { grant: uploadGrant } : undefined
+    );
   } catch (e) {
     const message = e instanceof Error ? e.message : "사진 업로드에 실패했습니다.";
     notify({ key: item.key, phase: "error", progress: 0, attachmentId, error: message });

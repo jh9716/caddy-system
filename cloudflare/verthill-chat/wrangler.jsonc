@@ -9,6 +9,9 @@
   // Worker/Next fall back to CHAT_AUTH_SECRET until both sides set the new name together.
   // Optional later: wrangler secret put CHAT_PUSH_DISPATCH_URL
   // Example: https://www.verthill.kr/api/chat/push-dispatch
+  // Optional later (do not bind or deploy from this PR):
+  // wrangler secret put CHAT_MEDIA_SECRET
+  // r2_buckets: [{ binding: "CHAT_MEDIA", bucket_name: "verthill-chat-media" }]
   "durable_objects": {
     "bindings": [
       {

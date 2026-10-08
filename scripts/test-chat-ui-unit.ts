@@ -147,6 +147,10 @@ section("worker auth + directory");
   assert(worker.includes("sent_at <"), "retention uses sent_at cutoff");
   assert(worker.includes("validateIncomingHistory"), "seq cursor history");
   assert(worker.includes("CHAT_INTERNAL_SECRET"), "internal secret name");
+  assert(worker.includes("CHAT_MEDIA"), "optional chat media binding");
+  assert(worker.includes("/media/upload"), "chat media upload route");
+  assert(read("cloudflare/verthill-chat/src/chatMedia.ts").includes("CHAT_MEDIA_UPLOAD_PATH"), "media handler module");
+  assert(worker.includes("x-chat-media-grant"), "upload grant header");
   assert(worker.includes("server_only"), "browser origin cannot create rooms");
   assert(worker.includes("queueChatPushDispatch"), "async chat push after persist");
   assert(worker.includes("CHAT_PUSH_DISPATCH_URL"), "optional Next dispatch URL");
@@ -172,6 +176,8 @@ section("worker auth + directory");
   assert(wrangler.includes("ChatDirectory"), "ChatDirectory class");
   assert(wrangler.includes('"tag": "v2"'), "non-destructive v2 migration");
   assert(wrangler.includes("ChatRoom"), "ChatRoom class kept");
+  assert(wrangler.includes("CHAT_MEDIA_SECRET"), "media secret is documented");
+  assert(!/"r2_buckets"\s*:/.test(wrangler), "this PR does not bind production R2");
 }
 
 if (failed > 0) {
