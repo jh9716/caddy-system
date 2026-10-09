@@ -125,6 +125,7 @@
     "test:chat-phase5-unit": "bash scripts/tsx-safe.sh scripts/test-chat-phase5-unit.ts",
     "test:chat-phase6-unit": "bash scripts/tsx-safe.sh scripts/test-chat-phase6-unit.ts",
     "test:chat-photo-unit": "bash scripts/tsx-safe.sh scripts/test-chat-photo-unit.ts",
+    "test:chat-media-r2-runtime": "bash scripts/tsx-safe.sh scripts/test-chat-media-r2-runtime.ts",
     "test:android-system-back-unit": "bash scripts/tsx-safe.sh scripts/test-android-system-back-unit.ts",
     "test:daily-special-duty-unit": "bash scripts/tsx-safe.sh scripts/test-daily-special-duty-unit.ts",
     "test:daily-special-support-unit": "bash scripts/tsx-safe.sh scripts/test-daily-special-support-unit.ts",

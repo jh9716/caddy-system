@@ -2,8 +2,9 @@
  * Chat-only R2 media handlers.
  * PUT /media/upload uses a short-lived HMAC grant (no Vercel Blob token).
  * First write is create-only via official R2 onlyIf { etagDoesNotMatch: "*" }.
- * The body is streamed: first <=256 bytes for magic, then prefix+rest to
- * bucket.put(ReadableStream). Full-file SHA-256 is not on the hot path.
+ * The body is read into a bounded Uint8Array (<=3MB) then bucket.put(bytes).
+ * Reconstructed unknown-length ReadableStreams are not passed to R2: production
+ * R2 + onlyIf rejected that Phase 8 path. Full-file SHA-256 is not on the hot path.
  * Success returns a signed upload receipt. Same-size/mime retries re-issue
  * a receipt; a different size is 409 and never overwrites.
  * Internal inspect/get/delete require CHAT_INTERNAL_SECRET.
@@ -218,7 +219,7 @@ function concatBytes(chunks: Uint8Array[], total: number): Uint8Array {
 /**
  * Read at most maxBytes from a request body. The extra byte that trips the
  * limit is discarded and the reader is cancelled so the Worker never holds
- * a >maxBytes file. Kept for tests / inspect helpers; upload uses streaming.
+ * a >maxBytes file. This is the production PUT body path.
  */
 export async function readBoundedBody(
   body: ReadableStream<Uint8Array> | null,
@@ -483,6 +484,83 @@ function retryMatchesExisting(
   return true;
 }
 
+export const CHAT_MEDIA_UPLOAD_FAILURE_EVENT = "chat_media_upload_failed";
+
+export type ChatMediaUploadStage =
+  | "grant"
+  | "ingress"
+  | "magic"
+  | "r2_put"
+  | "receipt"
+  | "retry"
+  | "unknown";
+
+export type ChatMediaUploadFailureLog = {
+  event: typeof CHAT_MEDIA_UPLOAD_FAILURE_EVENT;
+  stage: ChatMediaUploadStage;
+  errorClass: string;
+  errorCode: string;
+  contentLength: number | null;
+  prefixRead: boolean;
+  r2PutStarted: boolean;
+};
+
+const SAFE_UPLOAD_STAGES = new Set<ChatMediaUploadStage>([
+  "grant",
+  "ingress",
+  "magic",
+  "r2_put",
+  "receipt",
+  "retry",
+  "unknown",
+]);
+
+function sanitizeLogToken(raw: unknown, fallback = ""): string {
+  const text = String(raw ?? "").trim();
+  const cleaned = text.replace(/[^A-Za-z0-9_.:-]/g, "").slice(0, 64);
+  return cleaned || fallback;
+}
+
+export function classifyChatMediaUploadError(err: unknown): { errorClass: string; errorCode: string } {
+  if (err && typeof err === "object") {
+    const name = sanitizeLogToken((err as { name?: unknown }).name, "Error");
+    const code = sanitizeLogToken((err as { code?: unknown }).code);
+    return { errorClass: name, errorCode: code };
+  }
+  return { errorClass: sanitizeLogToken(typeof err, "unknown"), errorCode: "" };
+}
+
+export function safeChatMediaUploadFailureLog(input: {
+  stage: string;
+  error?: unknown;
+  contentLength: number | null;
+  prefixRead: boolean;
+  r2PutStarted: boolean;
+}): ChatMediaUploadFailureLog {
+  const classified = classifyChatMediaUploadError(input.error);
+  const stage = SAFE_UPLOAD_STAGES.has(input.stage as ChatMediaUploadStage)
+    ? (input.stage as ChatMediaUploadStage)
+    : "unknown";
+  return {
+    event: CHAT_MEDIA_UPLOAD_FAILURE_EVENT,
+    stage,
+    errorClass: classified.errorClass,
+    errorCode: classified.errorCode,
+    contentLength:
+      input.contentLength != null && Number.isInteger(input.contentLength) ? input.contentLength : null,
+    prefixRead: input.prefixRead === true,
+    r2PutStarted: input.r2PutStarted === true,
+  };
+}
+
+export function emitChatMediaUploadFailure(
+  input: Parameters<typeof safeChatMediaUploadFailureLog>[0]
+): ChatMediaUploadFailureLog {
+  const log = safeChatMediaUploadFailureLog(input);
+  console.error(JSON.stringify(log));
+  return log;
+}
+
 function roundMs(ms: number): number {
   return Math.max(0, Math.round(ms * 10) / 10);
 }
@@ -537,76 +615,102 @@ export async function handleChatMediaUpload(
   nowSec = Math.floor(Date.now() / 1000)
 ): Promise<Response> {
   const started = nowMs();
-  const bucket = requireBucket(env);
-  if (bucket instanceof Response) return bucket;
-  const secret = chatMediaSecret(env);
-  const verified = await verifyChatMediaPutGrant(
-    secret,
-    request.headers.get(CHAT_MEDIA_GRANT_HEADER) || "",
-    nowSec
-  );
-  if (!verified.ok) {
-    return json({ error: verified.code }, verified.status);
-  }
-  const grant = verified.grant;
-  const declaredType = request.headers.get("content-type") || grant.mimeType;
-  const mime = declaredType.toLowerCase().split(";", 1)[0];
-  const normalized = mime === "image/jpg" ? "image/jpeg" : mime;
-  if (normalized !== grant.mimeType) {
-    return json({ error: "unsupported_type" }, 400);
-  }
+  let stage: ChatMediaUploadStage = "grant";
+  let prefixRead = false;
+  let r2PutStarted = false;
   const contentLength = declaredContentLength(request);
-  if (contentLength != null && contentLength > grant.maxBytes) {
-    return json({ error: "file_too_large" }, 413);
-  }
-  if (contentLength === 0) {
-    return json({ error: "empty_file" }, 400);
-  }
-  const prefixRead = await readPrefixThenRest(request.body, CHAT_MEDIA_MAGIC_PREFIX_BYTES);
-  if (!prefixRead.ok) return json({ error: prefixRead.code }, mediaErrorStatus(prefixRead.code));
-  const magicSize = contentLength != null ? contentLength : prefixRead.prefix.byteLength;
-  const magic = inspectChatMediaMagic({
-    prefix: prefixRead.prefix,
-    totalSize: magicSize,
-    expectedMime: grant.mimeType,
-  });
-  if (!magic.ok) {
-    await prefixRead.rest?.cancel().catch(() => undefined);
-    return json({ error: magic.code }, mediaErrorStatus(magic.code));
-  }
-  const ingressMs = nowMs() - started;
-  const bounded = createBoundedConcatStream(prefixRead.prefix, prefixRead.rest, grant.maxBytes);
-  const key = deriveChatMediaR2Key(grant);
-  const customMetadata = {
-    mime: grant.mimeType,
-    ...(contentLength != null ? { size: String(contentLength) } : {}),
-  };
-  const storeStarted = nowMs();
-  let created: unknown | null = null;
   try {
-    created = await bucket.put(key, bounded.stream, {
-      onlyIf: CHAT_MEDIA_CREATE_ONLY,
-      httpMetadata: { contentType: grant.mimeType },
-      customMetadata,
-    });
-  } catch (err) {
-    if (err instanceof ChatMediaStreamLimitError) {
+    const bucket = requireBucket(env);
+    if (bucket instanceof Response) return bucket;
+    const secret = chatMediaSecret(env);
+    const verified = await verifyChatMediaPutGrant(
+      secret,
+      request.headers.get(CHAT_MEDIA_GRANT_HEADER) || "",
+      nowSec
+    );
+    if (!verified.ok) {
+      return json({ error: verified.code }, verified.status);
+    }
+    const grant = verified.grant;
+    const declaredType = request.headers.get("content-type") || grant.mimeType;
+    const mime = declaredType.toLowerCase().split(";", 1)[0];
+    const normalized = mime === "image/jpg" ? "image/jpeg" : mime;
+    if (normalized !== grant.mimeType) {
+      return json({ error: "unsupported_type" }, 400);
+    }
+    if (contentLength != null && contentLength > grant.maxBytes) {
       return json({ error: "file_too_large" }, 413);
     }
-    throw err;
+    if (contentLength === 0) {
+      return json({ error: "empty_file" }, 400);
+    }
+    stage = "ingress";
+    const bounded = await readBoundedBody(request.body, grant.maxBytes);
+    if (!bounded.ok) return json({ error: bounded.code }, mediaErrorStatus(bounded.code));
+    prefixRead = bounded.bytes.byteLength > 0;
+    stage = "magic";
+    const magic = inspectChatMediaMagic({
+      prefix: bounded.bytes,
+      totalSize: bounded.bytes.byteLength,
+      expectedMime: grant.mimeType,
+    });
+    if (!magic.ok) {
+      return json({ error: magic.code }, mediaErrorStatus(magic.code));
+    }
+    const ingressMs = nowMs() - started;
+    const key = deriveChatMediaR2Key(grant);
+    const customMetadata = {
+      mime: grant.mimeType,
+      size: String(bounded.bytes.byteLength),
+    };
+    stage = "r2_put";
+    r2PutStarted = true;
+    const storeStarted = nowMs();
+    let created: unknown | null = null;
+    try {
+      created = await bucket.put(key, bounded.bytes, {
+        onlyIf: CHAT_MEDIA_CREATE_ONLY,
+        httpMetadata: { contentType: grant.mimeType },
+        customMetadata,
+      });
+    } catch (err) {
+      if (err instanceof ChatMediaStreamLimitError) {
+        return json({ error: "file_too_large" }, 413);
+      }
+      emitChatMediaUploadFailure({
+        stage: "r2_put",
+        error: err,
+        contentLength,
+        prefixRead,
+        r2PutStarted,
+      });
+      return json({ error: "upload_failed" }, 500);
+    }
+    const storeMs = nowMs() - storeStarted;
+    if (created) {
+      if (bounded.bytes.byteLength <= 0) return json({ error: "empty_file" }, 400);
+      stage = "receipt";
+      return uploadSuccessResponse(secret, grant, bounded.bytes.byteLength, nowSec, {
+        ingressMs,
+        storeMs,
+      });
+    }
+    stage = "retry";
+    const existing = await bucket.head(key);
+    if (existing && retryMatchesExisting(existing, grant, bounded.bytes.byteLength)) {
+      return uploadSuccessResponse(secret, grant, existing.size, nowSec, { ingressMs, storeMs });
+    }
+    return json({ error: "upload_conflict" }, 409);
+  } catch (err) {
+    emitChatMediaUploadFailure({
+      stage,
+      error: err,
+      contentLength,
+      prefixRead,
+      r2PutStarted,
+    });
+    return json({ error: "upload_failed" }, 500);
   }
-  const storeMs = nowMs() - storeStarted;
-  const counted = bounded.getByteCount();
-  if (created) {
-    if (counted <= 0) return json({ error: "empty_file" }, 400);
-    return uploadSuccessResponse(secret, grant, counted, nowSec, { ingressMs, storeMs });
-  }
-  const existing = await bucket.head(key);
-  const candidateSize = bounded.completed() && counted > 0 ? counted : contentLength;
-  if (existing && retryMatchesExisting(existing, grant, candidateSize)) {
-    return uploadSuccessResponse(secret, grant, existing.size, nowSec, { ingressMs, storeMs });
-  }
-  return json({ error: "upload_conflict" }, 409);
 }
 
 export async function handleChatMediaInspect(
