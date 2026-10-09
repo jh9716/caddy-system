@@ -17,6 +17,11 @@ import {
   chatPhotoSourceKind,
   isChatPhotoAcceptableSource,
 } from "@/lib/chatPhotoFastPath";
+import {
+  orientedImageHeaderSize,
+  readImageSizeFromHeader,
+  readJpegExifOrientation,
+} from "@/lib/imageHeaderSize";
 import { chatPhotoNow, noteChatPhotoCompressionBreakdown } from "@/lib/chatPhotoTiming";
 
 export type ChatPhotoAdaptiveMime = "image/jpeg" | "image/png" | "image/webp";
@@ -49,7 +54,23 @@ export type ChatPhotoAdaptiveResult = {
   inputHeight?: number | null;
   outputWidth?: number | null;
   outputHeight?: number | null;
+  decodePath?: string | null;
+  encodePath?: string | null;
 };
+
+export type ChatPhotoDecodePath = "bitmap-resize" | "bitmap-full" | "image-element";
+export type ChatPhotoEncodePath = "offscreen" | "canvas";
+
+export function chatPhotoBitmapResizeOptions(
+  width: number,
+  height: number,
+  longEdge = CHAT_PHOTO_ADAPTIVE_LONG_EDGE
+): { resizeWidth: number; resizeHeight: number } | null {
+  const sized = scaleChatPhotoSize(width, height, longEdge);
+  if (sized.width === width && sized.height === height) return null;
+  if (sized.width < 1 || sized.height < 1) return null;
+  return { resizeWidth: sized.width, resizeHeight: sized.height };
+}
 
 export function shouldAcceptChatPhotoEncode(
   size: number,
@@ -190,21 +211,95 @@ function loadImage(file: Blob): Promise<HTMLImageElement> {
   });
 }
 
-async function createOrientedBitmap(file: Blob): Promise<ImageBitmap> {
+export function chatPhotoDecodePathFromBitmap(
+  bitmap: { width: number; height: number },
+  requested: { resizeWidth: number; resizeHeight: number } | null
+): ChatPhotoDecodePath {
+  if (
+    requested &&
+    bitmap.width === requested.resizeWidth &&
+    bitmap.height === requested.resizeHeight
+  ) {
+    return "bitmap-resize";
+  }
+  return "bitmap-full";
+}
+
+function bitmapResizeInit(
+  resize: { resizeWidth: number; resizeHeight: number } | null
+): { resizeWidth: number; resizeHeight: number; resizeQuality: "high" } | null {
+  if (!resize) return null;
+  return {
+    resizeWidth: resize.resizeWidth,
+    resizeHeight: resize.resizeHeight,
+    resizeQuality: "high",
+  };
+}
+
+/** Prefer EXIF-aware resize; if that throws, resize with SOF pixels; then full decode. */
+export async function createChatPhotoOrientedBitmap(
+  file: Blob,
+  orientedResize?: { resizeWidth: number; resizeHeight: number } | null,
+  rawResize?: { resizeWidth: number; resizeHeight: number } | null
+): Promise<ImageBitmap> {
+  const oriented = bitmapResizeInit(orientedResize ?? null);
+  const raw = bitmapResizeInit(rawResize ?? null);
   try {
-    return await createImageBitmap(file, { imageOrientation: "from-image" });
+    return await createImageBitmap(file, {
+      imageOrientation: "from-image",
+      ...(oriented || {}),
+    });
   } catch {
+    if (raw) {
+      try {
+        return await createImageBitmap(file, raw);
+      } catch {
+        // fall through to unscaled bitmap
+      }
+    }
     return await createImageBitmap(file);
   }
 }
 
-async function loadDrawable(file: Blob): Promise<DrawableSource> {
+export async function probeChatPhotoOrientedSize(
+  file: Blob
+): Promise<{ width: number; height: number; rawWidth: number; rawHeight: number } | null> {
+  const prefix = new Uint8Array(await file.slice(0, 512 * 1024).arrayBuffer());
+  const header = readImageSizeFromHeader(prefix);
+  if (!header) return null;
+  const oriented = orientedImageHeaderSize(
+    header,
+    header.format === "jpeg" ? readJpegExifOrientation(prefix) : 1
+  );
+  return {
+    width: oriented.width,
+    height: oriented.height,
+    rawWidth: header.width,
+    rawHeight: header.height,
+  };
+}
+
+async function loadDrawable(file: Blob): Promise<DrawableSource & { decodePath: ChatPhotoDecodePath }> {
+  let orientedResize: { resizeWidth: number; resizeHeight: number } | null = null;
+  let rawResize: { resizeWidth: number; resizeHeight: number } | null = null;
+  try {
+    const probed = await probeChatPhotoOrientedSize(file);
+    if (probed) {
+      orientedResize = chatPhotoBitmapResizeOptions(probed.width, probed.height);
+      rawResize = chatPhotoBitmapResizeOptions(probed.rawWidth, probed.rawHeight);
+    }
+  } catch {
+    orientedResize = null;
+    rawResize = null;
+  }
   if (typeof createImageBitmap === "function") {
     try {
-      const bitmap = await createOrientedBitmap(file);
+      const bitmap = await createChatPhotoOrientedBitmap(file, orientedResize, rawResize);
+      const decodePath = chatPhotoDecodePathFromBitmap(bitmap, orientedResize || rawResize);
       return {
         width: bitmap.width,
         height: bitmap.height,
+        decodePath,
         draw(ctx, width, height) {
           ctx.drawImage(bitmap, 0, 0, width, height);
         },
@@ -220,6 +315,7 @@ async function loadDrawable(file: Blob): Promise<DrawableSource> {
   return {
     width: img.width,
     height: img.height,
+    decodePath: "image-element",
     draw(ctx, width, height) {
       ctx.drawImage(img, 0, 0, width, height);
     },
@@ -230,18 +326,19 @@ async function loadDrawable(file: Blob): Promise<DrawableSource> {
 function makeCanvas(width: number, height: number): {
   canvas: HTMLCanvasElement | OffscreenCanvas;
   ctx: CanvasRenderingContext2D;
+  encodePath: ChatPhotoEncodePath;
 } {
   if (typeof OffscreenCanvas === "function") {
     const canvas = new OffscreenCanvas(width, height);
     const ctx = canvas.getContext("2d");
-    if (ctx) return { canvas, ctx: ctx as CanvasRenderingContext2D };
+    if (ctx) return { canvas, ctx: ctx as CanvasRenderingContext2D, encodePath: "offscreen" };
   }
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("encode_failed");
-  return { canvas, ctx };
+  return { canvas, ctx, encodePath: "canvas" };
 }
 
 function sampleHasAlpha(ctx: CanvasRenderingContext2D, width: number, height: number): boolean {
@@ -286,6 +383,8 @@ function finishAdaptiveResult(result: ChatPhotoAdaptiveResult): ChatPhotoAdaptiv
     outputHeight: result.outputHeight ?? null,
     attempts: result.attempts,
     encodeMime: result.encoded ? result.mimeType : null,
+    decodePath: result.decodePath ?? null,
+    encodePath: result.encodePath ?? null,
   });
   return result;
 }
@@ -380,7 +479,7 @@ export async function prepareChatAdaptivePhoto(
     });
   }
 
-  let drawable: DrawableSource;
+  let drawable: DrawableSource & { decodePath: ChatPhotoDecodePath };
   const decodeStarted = now();
   try {
     drawable = await loadDrawable(source);
@@ -391,7 +490,7 @@ export async function prepareChatAdaptivePhoto(
   try {
     const sized = scaleChatPhotoSize(drawable.width, drawable.height, plan.longEdge);
     const drawStarted = now();
-    const { canvas, ctx } = makeCanvas(sized.width, sized.height);
+    const { canvas, ctx, encodePath } = makeCanvas(sized.width, sized.height);
     drawable.draw(ctx, sized.width, sized.height);
     const drawResizeMs = Math.max(0, now() - drawStarted);
     const keepAlpha =
@@ -430,6 +529,8 @@ export async function prepareChatAdaptivePhoto(
       inputHeight: drawable.height,
       outputWidth: sized.width,
       outputHeight: sized.height,
+      decodePath: drawable.decodePath,
+      encodePath,
     });
   } finally {
     drawable.close();

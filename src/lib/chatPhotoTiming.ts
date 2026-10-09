@@ -26,6 +26,8 @@ export type ChatPhotoTimingBag = {
   outputHeight?: number;
   encodeAttempts?: number;
   encodeMime?: string;
+  decodePath?: string;
+  encodePath?: string;
   prepareHotpath?: ChatPhotoHotpathSummary;
   finalizeHotpath?: ChatPhotoHotpathSummary;
   storageBackend?: "r2" | "blob";
@@ -63,6 +65,8 @@ export type ChatPhotoDebugSample = {
   outputHeight: number | null;
   encodeAttempts: number | null;
   encodeMime: string | null;
+  decodePath: string | null;
+  encodePath: string | null;
   selectedToUploadStartMs: number | null;
   prepareApiMs: number | null;
   storageBackend: "r2" | "blob" | null;
@@ -171,6 +175,8 @@ export function noteChatPhotoCompressionBreakdown(input: {
   outputHeight?: number | null;
   attempts?: number | null;
   encodeMime?: string | null;
+  decodePath?: string | null;
+  encodePath?: string | null;
 }): void {
   const bag = timingBag();
   if (Number.isFinite(input.totalCompressionMs)) {
@@ -188,6 +194,16 @@ export function noteChatPhotoCompressionBreakdown(input: {
   if (typeof input.encodeMime === "string" && input.encodeMime) {
     const mime = input.encodeMime.toLowerCase().split(";", 1)[0] || "";
     if (mime === "image/jpeg" || mime === "image/png" || mime === "image/webp") bag.encodeMime = mime;
+  }
+  if (
+    input.decodePath === "bitmap-resize" ||
+    input.decodePath === "bitmap-full" ||
+    input.decodePath === "image-element"
+  ) {
+    bag.decodePath = input.decodePath;
+  }
+  if (input.encodePath === "offscreen" || input.encodePath === "canvas") {
+    bag.encodePath = input.encodePath;
   }
 }
 
@@ -291,6 +307,8 @@ export function buildChatPhotoDebugSample(
     outputHeight: bag?.outputHeight ?? null,
     encodeAttempts: bag?.encodeAttempts ?? null,
     encodeMime: bag?.encodeMime ?? null,
+    decodePath: bag?.decodePath ?? null,
+    encodePath: bag?.encodePath ?? null,
     selectedToUploadStartMs: summary.select_to_put_start_ms,
     prepareApiMs: latestChatPhotoMark("prepare_api", bag),
     storageBackend: bag?.storageBackend ?? null,
@@ -385,6 +403,8 @@ export function resetChatPhotoTiming(): void {
   delete bag.outputHeight;
   delete bag.encodeAttempts;
   delete bag.encodeMime;
+  delete bag.decodePath;
+  delete bag.encodePath;
   delete bag.prepareHotpath;
   delete bag.finalizeHotpath;
   delete bag.storageBackend;

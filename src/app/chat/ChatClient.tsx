@@ -1401,6 +1401,7 @@ export default function ChatClient() {
       }
       const job = prepareChatPendingPhoto(item, file).then((prepared) => {
         markChatPhotoTiming("select_to_prepared", selectedAt);
+        markChatPhotoTiming("select_to_ready", selectedAt);
         stampChatPhotoTiming("prepare_complete");
         if (prepared.metrics) {
           noteChatPhotoBytes(prepared.metrics.sourceBytes, prepared.metrics.uploadBytes);
@@ -2361,6 +2362,8 @@ export default function ChatClient() {
                   ["outputHeight", photoDebugSample.outputHeight],
                   ["encodeAttempts", photoDebugSample.encodeAttempts],
                   ["encodeMime", photoDebugSample.encodeMime],
+                  ["decodePath", photoDebugSample.decodePath],
+                  ["encodePath", photoDebugSample.encodePath],
                   ["selectedToUploadStartMs", photoDebugSample.selectedToUploadStartMs],
                   ["prepareApiMs", photoDebugSample.prepareApiMs],
                   ["storageBackend", photoDebugSample.storageBackend],

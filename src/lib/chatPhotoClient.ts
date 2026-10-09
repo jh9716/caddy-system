@@ -34,10 +34,14 @@ export {
   prepareChatPhotoSource,
 } from "@/lib/chatPhotoFastPath";
 export {
+  chatPhotoBitmapResizeOptions,
+  chatPhotoDecodePathFromBitmap,
   chatPhotoEncodeBottleneck,
   chatPhotoPutBottleneck,
+  createChatPhotoOrientedBitmap,
   planChatPhotoAdaptive,
   prepareChatAdaptivePhoto,
+  probeChatPhotoOrientedSize,
   shouldAcceptChatPhotoEncode,
 } from "@/lib/chatPhotoAdaptive";
 export {
