@@ -16,6 +16,13 @@ import { chatPhotoNow } from "@/lib/chatPhotoTiming";
 
 export const CHAT_PHOTO_UPLOAD_CONCURRENCY = 3;
 
+let chatPhotoComposerKeySeq = 0;
+
+export function nextChatPhotoComposerKey(fileId: string): string {
+  chatPhotoComposerKeySeq += 1;
+  return `cph-${chatPhotoComposerKeySeq}-${fileId}`;
+}
+
 export type ChatPendingPhotoStatus = "preparing" | "ready" | "failed";
 export type ChatPhotoSendPhase = "idle" | "prepare" | "put" | "finalize" | "done" | "error";
 
@@ -74,7 +81,7 @@ export function instantChatPhotoPicks(
     }
     seenIds.add(fileId);
     items.push({
-      key: `${Date.now()}-${items.length}-${fileId}`,
+      key: nextChatPhotoComposerKey(fileId),
       blob: file,
       previewUrl: URL.createObjectURL(file),
       fileId,

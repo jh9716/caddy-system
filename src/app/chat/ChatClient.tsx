@@ -29,22 +29,26 @@ import {
 import type { ChatAttachment } from "../../../cloudflare/verthill-chat/src/protocol";
 import {
   abandonChatPhotoPreupload,
+  appendComposerPhotos,
   applyChatPhotoSendProgress,
-  applyPreparedChatPhoto,
+  applyComposerPreparedIfCurrent,
+  applyComposerProgressIfCurrent,
   buildOptimisticOutgoingLine,
   CHAT_PHOTO_ACCEPT,
   CHAT_PHOTO_MAX,
   chatPhotoComposerBusy,
-  chatPhotoPickRoom,
   chatPhotoSrc,
+  commitComposerPhotoPicks,
   finishChatPhotoOutgoingUploads,
-  instantChatPhotoPicks,
+  leftoverComposerPhotosAfterSend,
   needsChatPhotoHeavyPrepare,
   outgoingChatPhotoSrc,
   prepareChatPendingPhoto,
   revokeChatPhotoPreviewUrls,
   shouldStartOptimisticChatSend,
   startChatPhotoPreupload,
+  usableOptimisticChatPhotos,
+  visibleComposerPhotos,
   type ChatPendingPhoto,
 } from "@/lib/chatPhotoClient";
 import {
@@ -283,6 +287,7 @@ export default function ChatClient() {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [pendingPhotos, setPendingPhotos] = useState<PendingChatPhoto[]>([]);
   const pendingPhotosRef = useRef<PendingChatPhoto[]>([]);
+  const composerGenRef = useRef(0);
   const prepareJobsRef = useRef(new Map<string, Promise<ChatPendingPhoto>>());
   const uploadJobsRef = useRef(new Map<string, Promise<ChatPhotoDirectResult>>());
   const [photoDebug, setPhotoDebug] = useState(false);
@@ -1309,11 +1314,13 @@ export default function ChatClient() {
   }
 
   function setPendingPhotoList(next: PendingChatPhoto[]) {
-    pendingPhotosRef.current = next;
-    setPendingPhotos(next);
+    const unique = visibleComposerPhotos(next);
+    pendingPhotosRef.current = unique;
+    setPendingPhotos(unique);
   }
 
   function abandonComposerPhotos() {
+    composerGenRef.current += 1;
     const keys = pendingPhotosRef.current.map((item) => item.key);
     for (const key of keys) prepareJobsRef.current.delete(key);
     abandonChatPhotoPreupload(uploadJobsRef.current, keys);
@@ -1322,11 +1329,16 @@ export default function ChatClient() {
   }
 
   function applyPhotoUploadProgress(
-    progress: ChatPhotoDirectProgress & { result?: ChatPhotoDirectResult }
+    progress: ChatPhotoDirectProgress & { result?: ChatPhotoDirectResult },
+    writeGeneration = composerGenRef.current
   ) {
-    if (pendingPhotosRef.current.some((row) => row.key === progress.key)) {
-      setPendingPhotoList(applyChatPhotoSendProgress(pendingPhotosRef.current, progress));
-    }
+    const next = applyComposerProgressIfCurrent(
+      pendingPhotosRef.current,
+      progress,
+      composerGenRef.current,
+      writeGeneration
+    );
+    if (next !== pendingPhotosRef.current) setPendingPhotoList(next);
     const line = linesRef.current.find((row) => row.localPhotos?.some((photo) => photo.key === progress.key));
     if (line) {
       patchOutgoingLine(line.clientMessageId, (cur) => ({
@@ -1341,12 +1353,12 @@ export default function ChatClient() {
     }
   }
 
-  function startComposerPreupload(item: ChatPendingPhoto) {
+  function startComposerPreupload(item: ChatPendingPhoto, writeGeneration = composerGenRef.current) {
     const roomId = roomRef.current?.roomId || "";
     if (!roomId || item.status !== "ready") return;
     if (!pendingPhotosRef.current.some((row) => row.key === item.key)) return;
     void startChatPhotoPreupload(uploadJobsRef.current, roomId, item, {
-      onProgress: applyPhotoUploadProgress,
+      onProgress: (progress) => applyPhotoUploadProgress(progress, writeGeneration),
       chatToken: tokenRef.current?.token,
     }).catch(() => {
       // Composer stays usable; send/retry surfaces the error if the photo is still attached.
@@ -1355,26 +1367,28 @@ export default function ChatClient() {
 
   async function addPendingPhotos(files: FileList | File[]) {
     const selectedAt = chatPhotoNow();
-    const room = chatPhotoPickRoom(pendingPhotosRef.current.length);
-    if (room <= 0) {
-      setError("사진은 최대 3장까지 첨부할 수 있습니다.");
-      return;
-    }
-    const picked = instantChatPhotoPicks(Array.from(files), room, {
-      fileIds: pendingPhotosRef.current.map((item) => item.fileId),
-    });
-    if (picked.note) setError(picked.note);
-    if (picked.items.length === 0) return;
+    const picked = commitComposerPhotoPicks(pendingPhotosRef.current, Array.from(files));
+    const committed = {
+      ...picked,
+      ...appendComposerPhotos(pendingPhotosRef.current, picked.accepted),
+    };
+    const dropped = picked.rejected.concat(
+      picked.accepted.filter((item) => !committed.accepted.some((row) => row.key === item.key))
+    );
+    if (dropped.length) revokeChatPhotoPreviewUrls(dropped);
+    if (committed.note) setError(committed.note);
+    if (committed.accepted.length === 0) return;
     if (pendingPhotosRef.current.length === 0) {
       resetChatPhotoTiming();
       stampChatPhotoTiming("photo_selected", selectedAt);
     }
-    const next = [...pendingPhotosRef.current, ...picked.items].slice(0, CHAT_PHOTO_MAX);
-    setPendingPhotoList(next);
+    setPendingPhotoList(committed.items);
     markChatPhotoTiming("select_to_preview", selectedAt);
-    for (let i = 0; i < picked.items.length; i++) {
-      const item = picked.items[i];
-      const file = picked.sources[i];
+    const writeGeneration = composerGenRef.current;
+    for (let i = 0; i < committed.accepted.length; i++) {
+      const item = committed.accepted[i];
+      const file = picked.sources.find((_, index) => picked.accepted[index]?.key === item.key)
+        || committed.sources[i];
       if (!item || !file) continue;
       noteChatPhotoBytes(file.size, item.metrics?.uploadBytes);
       if (item.status === "ready" && !needsChatPhotoHeavyPrepare(file)) {
@@ -1382,7 +1396,7 @@ export default function ChatClient() {
         stampChatPhotoTiming("prepare_complete");
         noteChatPhotoCompression(0);
         refreshPhotoDebugSample();
-        startComposerPreupload(item);
+        startComposerPreupload(item, writeGeneration);
         continue;
       }
       const job = prepareChatPendingPhoto(item, file).then((prepared) => {
@@ -1393,11 +1407,16 @@ export default function ChatClient() {
           if (prepared.metrics.compressionMs != null) noteChatPhotoCompression(prepared.metrics.compressionMs);
         }
         refreshPhotoDebugSample();
-        const applied = applyPreparedChatPhoto(pendingPhotosRef.current, prepared);
+        const applied = applyComposerPreparedIfCurrent(
+          pendingPhotosRef.current,
+          prepared,
+          composerGenRef.current,
+          writeGeneration
+        );
         if (applied.note) setError(applied.note);
-        setPendingPhotoList(applied.items);
+        if (applied.items !== pendingPhotosRef.current) setPendingPhotoList(applied.items);
         const current = applied.items.find((row) => row.key === prepared.key);
-        if (current?.status === "ready") startComposerPreupload(current);
+        if (current?.status === "ready") startComposerPreupload(current, writeGeneration);
         return prepared;
       });
       prepareJobsRef.current.set(item.key, job);
@@ -1538,7 +1557,9 @@ export default function ChatClient() {
     setMentionAllDraft(false);
     setMentionSuppressed(false);
     setReplyTo(null);
-    setPendingPhotoList([]);
+    composerGenRef.current += 1;
+    setPendingPhotoList(leftoverComposerPhotosAfterSend(photos, usableOptimisticChatPhotos(photos).map((item) => item.key)));
+    if (photoInputRef.current) photoInputRef.current.value = "";
     const outgoing: ChatLine = {
       clientMessageId,
       senderUserId: tokenInfo.user.userId,
@@ -2214,12 +2235,18 @@ export default function ChatClient() {
                             item.blob instanceof File
                               ? item.blob
                               : new File([item.blob], "photo.jpg", { type: item.blob.type || "image/jpeg" });
+                          const writeGeneration = composerGenRef.current;
                           const job = prepareChatPendingPhoto({ ...item, status: "preparing", error: undefined }, file).then(
                             (prepared) => {
-                              const applied = applyPreparedChatPhoto(pendingPhotosRef.current, prepared);
-                              setPendingPhotoList(applied.items);
+                              const applied = applyComposerPreparedIfCurrent(
+                                pendingPhotosRef.current,
+                                prepared,
+                                composerGenRef.current,
+                                writeGeneration
+                              );
+                              if (applied.items !== pendingPhotosRef.current) setPendingPhotoList(applied.items);
                               const current = applied.items.find((row) => row.key === prepared.key);
-                              if (current?.status === "ready") startComposerPreupload(current);
+                              if (current?.status === "ready") startComposerPreupload(current, writeGeneration);
                               return prepared;
                             }
                           );

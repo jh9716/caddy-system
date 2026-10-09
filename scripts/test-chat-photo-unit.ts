@@ -95,7 +95,20 @@ import {
   outgoingChatPhotoSrc,
   revokeChatPhotoPreviewUrls,
   shouldStartOptimisticChatSend,
+  usableOptimisticChatPhotos,
 } from "../src/lib/chatPhotoOptimistic";
+import {
+  appendComposerPhotos,
+  applyComposerPreparedIfCurrent,
+  applyComposerProgressIfCurrent,
+  CHAT_PHOTO_COMPOSER_MAX_MESSAGE,
+  commitComposerPhotoPicks,
+  composerPhotoListsMatch,
+  createChatPhotoComposerSession,
+  leftoverComposerPhotosAfterSend,
+  shouldApplyComposerWrite,
+  visibleComposerPhotos,
+} from "../src/lib/chatPhotoComposer";
 import {
   buildChatPhotoDebugSample,
   canShowChatPhotoDebug,
@@ -756,6 +769,155 @@ section("instant preview + parallel upload");
   assert(retried.localPhotos[0]?.previewUrl === failedLine.localPhotos[0]?.previewUrl, "retry reuses local photo blob");
 }
 
+section("composer stale pending state");
+{
+  if (typeof URL.createObjectURL !== "function") {
+    let n = 0;
+    URL.createObjectURL = () => `blob:test-${++n}`;
+    URL.revokeObjectURL = () => {};
+  }
+  const file = (mark: number, name: string) =>
+    new File([jpegBytes(8, mark)], name, { type: "image/jpeg", lastModified: mark });
+
+  function mockComposer(initial: ReturnType<typeof instantChatPhotoPicks>["items"] = []) {
+    let state = visibleComposerPhotos(initial);
+    let ref = state;
+    let generation = 0;
+    function setList(next: typeof state) {
+      const unique = visibleComposerPhotos(next);
+      ref = unique;
+      state = unique;
+    }
+    return {
+      get state() {
+        return state;
+      },
+      get ref() {
+        return ref;
+      },
+      get generation() {
+        return generation;
+      },
+      setList,
+      select(files: File[]) {
+        const picked = commitComposerPhotoPicks(ref, files);
+        const committed = { ...picked, ...appendComposerPhotos(ref, picked.accepted) };
+        setList(committed.items);
+        return committed;
+      },
+      send() {
+        const sent = usableOptimisticChatPhotos(ref);
+        generation += 1;
+        setList(leftoverComposerPhotosAfterSend(ref, sent.map((item) => item.key)));
+        return sent;
+      },
+      assertSync(msg: string) {
+        assert(composerPhotoListsMatch(state, ref), msg);
+      },
+    };
+  }
+
+  const one = file(1, "one.jpg");
+  const two = file(2, "two.jpg");
+  const three = file(3, "three.jpg");
+  const extra = file(4, "extra.jpg");
+
+  const keysA = instantChatPhotoPicks([one], 1).items[0]!.key;
+  const keysB = instantChatPhotoPicks([one], 1).items[0]!.key;
+  assert(keysA !== keysB, "same file in the same millisecond still gets unique keys");
+
+  const dupList = instantChatPhotoPicks([one, two], 2).items;
+  const withDupKey = [...dupList, dupList[0]!];
+  assert(withDupKey.length === 3 && visibleComposerPhotos(withDupKey).length === 2, "duplicate keys do not count as extra slots");
+  assert(!composerPhotoListsMatch(visibleComposerPhotos(withDupKey), withDupKey), "visible list and raw ref diverge when keys collide");
+
+  const first = commitComposerPhotoPicks([], [one, two]);
+  const secondFromEmpty = commitComposerPhotoPicks([], [one, two]);
+  const merged = appendComposerPhotos(first.items, secondFromEmpty.accepted);
+  assert(first.accepted.length === 2, "2장 select accepts 2");
+  assert(merged.items.length === 2 && merged.accepted.length === 0, "overlapping 2장 select does not stack to 3");
+  assert(commitComposerPhotoPicks(first.items, [one, two]).accepted.length === 0, "same files are not added twice");
+
+  const full = commitComposerPhotoPicks(first.items, [three]);
+  assert(full.accepted.length === 1 && full.items.length === 3, "2장 후 1장 more is allowed");
+  const overflow = commitComposerPhotoPicks(full.items, [extra]);
+  assert(overflow.accepted.length === 0 && overflow.note === CHAT_PHOTO_COMPOSER_MAX_MESSAGE, "4th photo is rejected with max-3 message");
+
+  for (const count of [1, 2, 3] as const) {
+    const composer = mockComposer();
+    const files = [one, two, three].slice(0, count);
+    const selected = composer.select(files);
+    assert(selected.accepted.length === count, `${count}장 select`);
+    assert(composer.state.length === count && composer.ref.length === count, `${count}장 state/ref count`);
+    composer.assertSync(`${count}장 state matches ref`);
+    const sent = composer.send();
+    assert(sent.length === count && composer.state.length === 0 && composer.ref.length === 0, `${count}장 send clears composer`);
+    composer.assertSync(`${count}장 send keeps state/ref empty together`);
+    const stalePrepared = applyComposerPreparedIfCurrent(
+      composer.ref,
+      { ...sent[0]!, status: "ready" },
+      composer.generation,
+      composer.generation - 1
+    );
+    assert(stalePrepared.items.length === 0, `${count}장 stale prepare cannot restore composer`);
+    const staleProgress = applyComposerProgressIfCurrent(
+      composer.ref,
+      { key: sent[0]!.key, phase: "put", progress: 40 },
+      composer.generation,
+      composer.generation - 1
+    );
+    assert(staleProgress.length === 0, `${count}장 stale progress cannot restore composer`);
+    composer.setList(staleProgress);
+    composer.assertSync(`${count}장 stale writes leave state/ref empty`);
+  }
+
+  const afterTwo = mockComposer();
+  afterTwo.select([one, two]);
+  afterTwo.send();
+  const nextOne = afterTwo.select([three]);
+  assert(nextOne.accepted.length === 1 && afterTwo.ref.length === 1, "2장 전송 후 새 1장 선택 가능");
+  afterTwo.assertSync("2장 send then 1장 select stays in sync");
+
+  const afterThree = mockComposer();
+  afterThree.select([one, two, three]);
+  afterThree.send();
+  const nextThree = afterThree.select([one, two, three]);
+  assert(nextThree.accepted.length === 3 && afterThree.ref.length === 3, "3장 전송 후 새 3장 다시 선택 가능");
+  afterThree.assertSync("3장 send then 3장 select stays in sync");
+
+  const rapid = mockComposer();
+  for (let i = 0; i < 5; i++) {
+    const picked = rapid.select([file(10 + i, `rapid-${i}.jpg`)]);
+    assert(picked.accepted.length === 1, `rapid select ${i + 1}`);
+    rapid.send();
+    assert(rapid.state.length === 0 && rapid.ref.length === 0, `rapid send ${i + 1} clears`);
+    rapid.assertSync(`rapid loop ${i + 1} stays in sync`);
+  }
+
+  const failedStay = instantChatPhotoPicks([one, two], 2).items;
+  failedStay[1] = { ...failedStay[1]!, status: "failed", error: "변환 실패" };
+  const leftover = leftoverComposerPhotosAfterSend(
+    failedStay,
+    usableOptimisticChatPhotos(failedStay).map((item) => item.key)
+  );
+  assert(leftover.length === 1 && leftover[0]?.status === "failed", "failed photo stays for retry");
+  assert(!leftover.some((item) => item.status === "ready"), "successful photo is not a hidden leftover");
+
+  const session = createChatPhotoComposerSession(failedStay);
+  const began = session.beginSend();
+  assert(began.sent.length === 1 && began.items.length === 1, "session send keeps only failed");
+  assert(!session.canWrite(began.generation - 1, began.sent[0]?.key), "old generation cannot write sent photo back");
+  assert(
+    shouldApplyComposerWrite({
+      currentGeneration: session.generation,
+      writeGeneration: session.generation,
+      items: session.items,
+      key: began.items[0]!.key,
+    }),
+    "failed leftover can still receive retry writes"
+  );
+}
+
 section("phase 4 pre-upload on select");
 {
   if (typeof URL.createObjectURL !== "function") {
@@ -1326,7 +1488,11 @@ section("source wiring / no public blob");
   const dispatch = read("src/lib/chatPushDispatch.ts");
   const photo = read("src/lib/chatPhoto.ts");
   const reportClient = read("src/lib/courseReportPhotoClient.ts");
-  assert(client.includes("instantChatPhotoPicks"), "composer instant preview before prepare");
+  assert(client.includes("commitComposerPhotoPicks"), "composer commits picks through one helper");
+  assert(client.includes("composerGenRef"), "composer generation ignores stale prepare/progress");
+  assert(client.includes("leftoverComposerPhotosAfterSend"), "send keeps only failed leftover photos");
+  assert(client.includes("applyComposerPreparedIfCurrent"), "prepare write is generation-gated");
+  assert(client.includes("applyComposerProgressIfCurrent"), "progress write is generation-gated");
   assert(client.includes("prepareChatPendingPhoto"), "composer prepares in background");
   const preupload = read("src/lib/chatPhotoPreupload.ts");
   const timingSrc = read("src/lib/chatPhotoTiming.ts");
