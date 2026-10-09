@@ -4,6 +4,12 @@ import {
   isHeicLikeFile,
 } from "@/lib/courseReportPhotoClient";
 import { CHAT_PHOTO_MAX_BYTES, CHAT_PHOTO_PASSTHROUGH_MAX_BYTES } from "@/lib/chatPhotoConstants";
+import {
+  bindChatPhotoTimingFile,
+  chatPhotoTimingRunIdFor,
+  noteChatPhotoBoundary,
+  noteChatPhotoPrepareScope,
+} from "@/lib/chatPhotoTiming";
 
 export type ChatPhotoSourceKind = "jpeg" | "png" | "webp" | "heic" | "unknown";
 
@@ -46,27 +52,36 @@ export async function prepareChatPhotoSource(
   file: File,
   compress?: (file: File) => Promise<Blob>
 ): Promise<Blob> {
-  if (!isChatPhotoAcceptableSource(file)) {
-    throw new Error(COURSE_REPORT_HEIC_MESSAGE);
+  const runId = chatPhotoTimingRunIdFor(file);
+  noteChatPhotoBoundary(runId, "photoSourceEnterAt");
+  try {
+    if (!isChatPhotoAcceptableSource(file)) {
+      throw new Error(COURSE_REPORT_HEIC_MESSAGE);
+    }
+    if (canUseChatPhotoFastPath(file)) {
+      return file;
+    }
+    const run =
+      compress ||
+      (await import("@/lib/chatPhotoAdaptive")).prepareChatAdaptiveBlob;
+    if (isHeicLikeFile(file) || chatPhotoSourceKind(file) === "heic") {
+      const converted = await decodeCourseReportPhotoSource(file);
+      const convertedFile = new File(
+        [converted],
+        (file.name || "photo").replace(/\.(heic|heif)$/i, ".jpg"),
+        {
+          type: converted.type || "image/jpeg",
+          lastModified: file.lastModified,
+        }
+      );
+      if (runId) bindChatPhotoTimingFile(convertedFile, runId);
+      noteChatPhotoPrepareScope(runId, { jpegDirectRun: false, sameFileBound: false });
+      if (canUseChatPhotoFastPath(convertedFile)) return converted;
+      return await run(convertedFile);
+    }
+    noteChatPhotoPrepareScope(runId, { jpegDirectRun: true, sameFileBound: Boolean(runId) });
+    return await run(file);
+  } finally {
+    noteChatPhotoBoundary(runId, "photoSourceExitAt");
   }
-  if (canUseChatPhotoFastPath(file)) {
-    return file;
-  }
-  const run =
-    compress ||
-    (await import("@/lib/chatPhotoAdaptive")).prepareChatAdaptiveBlob;
-  if (isHeicLikeFile(file) || chatPhotoSourceKind(file) === "heic") {
-    const converted = await decodeCourseReportPhotoSource(file);
-    const convertedFile = new File(
-      [converted],
-      (file.name || "photo").replace(/\.(heic|heif)$/i, ".jpg"),
-      {
-        type: converted.type || "image/jpeg",
-        lastModified: file.lastModified,
-      }
-    );
-    if (canUseChatPhotoFastPath(convertedFile)) return converted;
-    return run(convertedFile);
-  }
-  return run(file);
 }

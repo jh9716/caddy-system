@@ -114,8 +114,10 @@ import {
   canShowChatPhotoDebug,
   chatPhotoDebugApiUrl,
   emitChatPhotoTimingSummary,
+  chatPhotoTimingRunIdFor,
   commitChatPhotoPrepareTiming,
   markChatPhotoTiming,
+  publicChatPhotoTimingKey,
   noteChatPhotoCompression,
   noteChatPhotoCompressionBreakdown,
   noteChatPhotoPrepareScope,
@@ -1552,6 +1554,92 @@ section("hidden latency: scope isolation");
   assert(sampleB.compressionMs === 4093 && sampleB.adaptiveTotalMs === 4093, "run B adaptive is not mixed with A");
   assert(sampleB.hiddenBeforeDecodeMs === 3800, "hidden before decode stays on the same run");
   assert(sampleA.decodeMs === 10, "earlier sample A snapshot is unchanged");
+  assert(sampleB.timingRunId === runB && sampleB.timingKey === "key-b", "published sample keeps B run id/key");
+  assert(publicChatPhotoTimingKey("cph-12-secret.jpg|123|1|image/jpeg") === "cph-12", "debug key strips file name");
+}
+
+section("prepare boundary: stale bag + same File runId");
+{
+  resetChatPhotoTiming();
+  const fileA = new File([new Uint8Array(12)], "keep.jpg", { type: "image/jpeg" });
+  const fileB = new File([new Uint8Array(2.2 * 1024 * 1024)], "next.jpg", { type: "image/jpeg" });
+  const runA = startChatPhotoPrepareTiming("cph-1-keep.jpg|12|1|image/jpeg", fileA);
+  noteChatPhotoCompressionBreakdown({
+    runId: runA,
+    decodeMs: 210,
+    encode1Ms: 36,
+    totalCompressionMs: 248,
+    hiddenBeforeDecodeMs: 0,
+  });
+  noteChatPhotoPrepareScope(runA, { prepareOuterMs: 250 });
+  commitChatPhotoPrepareTiming(runA);
+  assert(buildChatPhotoDebugSample().adaptiveTotalMs === 248, "run A adaptive published");
+  const runB = startChatPhotoPrepareTiming("cph-2-next.jpg|2200000|2|image/jpeg", fileB);
+  const afterStartB = buildChatPhotoDebugSample();
+  assert(afterStartB.adaptiveTotalMs == null && afterStartB.prepareOuterMs == null, "new run start clears previous adaptive/prepare");
+  assert(afterStartB.timingRunId === runB && afterStartB.timingKey === "cph-2", "new run id is public and current");
+  noteChatPhotoPrepareScope(runB, { prepareOuterMs: 5221 });
+  commitChatPhotoPrepareTiming(runB);
+  const stale = buildChatPhotoDebugSample();
+  assert(stale.prepareOuterMs === 5221, "run B outer published");
+  assert(stale.adaptiveTotalMs == null && stale.decodeMs == null, "commit B does not keep run A adaptive fields");
+  assert(stale.unaccountedPrepareMs == null, "missing adaptive on B does not invent a 5s mix");
+
+  resetChatPhotoTiming();
+  const bound = new File([new Uint8Array(2.2 * 1024 * 1024)], "bound.jpg", { type: "image/jpeg" });
+  const runBound = startChatPhotoPrepareTiming("key-bound", bound);
+  assert(chatPhotoTimingRunIdFor(bound) === runBound, "WeakMap keeps the same File → runId");
+  let seen: File | null = null;
+  const sourced = await prepareChatPhotoSource(bound, async (next) => {
+    seen = next;
+    return new Blob([new Uint8Array(8)], { type: "image/jpeg" });
+  });
+  assert(seen === bound, "JPEG source passes the same File into run()");
+  assert(chatPhotoTimingRunIdFor(seen) === runBound, "run() File still resolves the same runId");
+  assert(sourced.size === 8, "JPEG source uses the compress callback result");
+  resetChatPhotoTiming();
+  const delayed = new File([new Uint8Array(2.2 * 1024 * 1024)], "delay.jpg", { type: "image/jpeg" });
+  const runDelay = startChatPhotoPrepareTiming("key-delay", delayed);
+  await prepareChatPhotoSource(delayed, async (next) => {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    return next;
+  });
+  commitChatPhotoPrepareTiming(runDelay);
+  const delaySample = buildChatPhotoDebugSample();
+  assert(
+    delaySample.photoSourceEnterAt != null &&
+      delaySample.photoSourceExitAt != null &&
+      delaySample.photoSourceExitAt - delaySample.photoSourceEnterAt >= 20,
+    "photoSourceExit waits for run() to finish"
+  );
+  const prepared = await prepareChatPendingPhoto(
+    {
+      key: "key-bound",
+      blob: bound,
+      previewUrl: "blob:test-bound",
+      fileId: "bound",
+      fingerprint: "",
+      status: "preparing",
+    },
+    bound,
+    async (next) =>
+      (
+        await prepareChatAdaptivePhoto(next, {
+          inspect: async () => ({ width: 4000, height: 3000 }),
+          encode: async ({ mime }) => new Blob([new Uint8Array(600 * 1024)], { type: mime }),
+        })
+      ).blob
+  );
+  assert(prepared.metrics?.timingRunId, "pending prepare records a run id");
+  assert(prepared.metrics?.timingRunId !== runBound, "each pending prepare starts a fresh run");
+  const pendingSample = buildChatPhotoDebugSample();
+  assert(pendingSample.pendingPrepareStartAt != null && pendingSample.pendingPrepareEndAt != null, "pending start/end stamps exist");
+  assert(
+    pendingSample.adaptiveEnterAt != null &&
+      pendingSample.adaptiveExitAt != null &&
+      (pendingSample.adaptiveMs ?? 0) >= 0,
+    "adaptive enter/exit belong to the pending run"
+  );
 }
 
 section("phase 6 hot-path timing / region / cleanup");
@@ -1719,7 +1807,14 @@ section("source wiring / no public blob");
   assert(client.includes("prepareOuterMs"), "debug panel shows prepare outer");
   assert(client.includes("hiddenBeforeDecodeMs"), "debug panel shows pre-decode gap");
   assert(client.includes("unaccountedAdaptiveMs"), "debug panel shows unaccounted adaptive");
+  assert(client.includes("pendingToWrapperMs"), "debug panel shows pending→wrapper");
+  assert(client.includes("adaptiveBlobToAdaptiveMs"), "debug panel shows blob→adaptive");
+  assert(client.includes("wrapperExitToPendingEndMs"), "debug panel shows wrapper→pending end");
+  assert(client.includes("timingKey"), "debug panel shows public timing key");
+  assert(!client.includes("file.name"), "debug panel does not print file.name");
   assert(client.includes('markChatPhotoTiming("select_to_ready"'), "heavy prepare stamps select_to_ready");
+  assert(timingSrc.includes("clearPrepareScopeFromBag"), "commit replaces prepare-scope fields");
+  assert(fast.includes("jpegDirectRun"), "JPEG source records same-file run");
   assert(timingSrc.includes("noteChatPhotoCompression"), "outer note exists");
   assert(timingSrc.includes("prepareOuterMs = Math.max(0, ms)"), "outer note does not write compressionMs");
   assert(timingSrc.includes("noteChatPhotoCompressionBreakdown"), "timing bag records compression split");
