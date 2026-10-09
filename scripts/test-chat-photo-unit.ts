@@ -114,10 +114,14 @@ import {
   canShowChatPhotoDebug,
   chatPhotoDebugApiUrl,
   emitChatPhotoTimingSummary,
+  commitChatPhotoPrepareTiming,
   markChatPhotoTiming,
+  noteChatPhotoCompression,
   noteChatPhotoCompressionBreakdown,
+  noteChatPhotoPrepareScope,
   noteChatPhotoServerHotpath,
   resetChatPhotoTiming,
+  startChatPhotoPrepareTiming,
   stampChatPhotoTiming,
   summarizeChatPhotoTiming,
 } from "../src/lib/chatPhotoTiming";
@@ -1401,7 +1405,11 @@ section("phase 5 adaptive compression + debug");
       debug.encode1Ms == null &&
       debug.encodeAttempts == null &&
       debug.decodePath == null &&
-      debug.encodePath == null,
+      debug.encodePath == null &&
+      debug.adaptiveTotalMs == null &&
+      debug.prepareOuterMs == null &&
+      debug.headerProbeMs == null &&
+      debug.unaccountedPrepareMs == null,
     "phase 8/9/10 debug fields empty by default"
   );
   noteChatPhotoCompressionBreakdown({
@@ -1423,6 +1431,13 @@ section("phase 5 adaptive compression + debug");
   assert(breakdown.decodeMs === 12 && breakdown.encode1Ms === 18, "debug records decode/encode1");
   assert(breakdown.encodeAttempts === 1 && breakdown.encodeMime === "image/jpeg", "debug records JPEG 1-encode");
   assert(breakdown.decodePath === "bitmap-resize" && breakdown.encodePath === "offscreen", "debug records decode/encode path");
+  assert(breakdown.adaptiveTotalMs === 34 && breakdown.compressionMs === 34, "adaptive total stays on compressionMs");
+  noteChatPhotoCompression(4093);
+  const afterOuter = buildChatPhotoDebugSample();
+  assert(afterOuter.prepareOuterMs === 4093, "outer prepare writes prepareOuterMs");
+  assert(afterOuter.compressionMs === 34 && afterOuter.adaptiveTotalMs === 34, "outer prepare does not overwrite adaptive compressionMs");
+  assert(afterOuter.unaccountedPrepareMs === 4059, "unaccounted prepare is outer minus adaptive");
+  assert(afterOuter.unaccountedAdaptiveMs === 0, "accounted adaptive parts leave no hidden adaptive gap");
   const debugDump = JSON.stringify(debug);
   assert(!/https?:|claim|token|storageKey|\.jpg/i.test(debugDump), "debug sample has no secrets");
   assert(chatPhotoEncodeBottleneck(120) === "browser-ok", "short encode is browser-ok");
@@ -1496,6 +1511,47 @@ section("regression: header-probe bitmap resize + EXIF + fallback");
       delete (globalThis as { createImageBitmap?: typeof createImageBitmap }).createImageBitmap;
     }
   }
+}
+
+section("hidden latency: scope isolation");
+{
+  resetChatPhotoTiming();
+  const fileA = new File([new Uint8Array(8)], "a.jpg", { type: "image/jpeg" });
+  const fileB = new File([new Uint8Array(8)], "b.jpg", { type: "image/jpeg" });
+  const runA = startChatPhotoPrepareTiming("key-a", fileA);
+  const runB = startChatPhotoPrepareTiming("key-b", fileB);
+  noteChatPhotoCompressionBreakdown({
+    runId: runA,
+    decodeMs: 10,
+    encode1Ms: 20,
+    totalCompressionMs: 40,
+    headerProbeMs: 3,
+    bitmapCreateMs: 7,
+    hiddenBeforeDecodeMs: 1,
+  });
+  noteChatPhotoCompressionBreakdown({
+    runId: runB,
+    decodeMs: 200,
+    encode1Ms: 80,
+    totalCompressionMs: 4093,
+    headerProbeMs: 30,
+    bitmapCreateMs: 170,
+    hiddenBeforeDecodeMs: 3800,
+  });
+  noteChatPhotoPrepareScope(runA, { prepareOuterMs: 50, stateCommitMs: 2 });
+  noteChatPhotoPrepareScope(runB, { prepareOuterMs: 4200, stateCommitMs: 4 });
+  const committedA = commitChatPhotoPrepareTiming(runA);
+  assert(committedA?.decodeMs === 10 && committedA?.adaptiveTotalMs === 40, "run A keeps its adaptive totals");
+  const sampleA = buildChatPhotoDebugSample();
+  assert(sampleA.decodeMs === 10 && sampleA.adaptiveTotalMs === 40 && sampleA.prepareOuterMs === 50, "commit A publishes only A");
+  assert(sampleA.unaccountedPrepareMs === 10, "run A unaccounted prepare is small");
+  const committedB = commitChatPhotoPrepareTiming(runB);
+  assert(committedB?.decodeMs === 200 && committedB?.hiddenBeforeDecodeMs === 3800, "run B keeps its own hidden gap");
+  const sampleB = buildChatPhotoDebugSample();
+  assert(sampleB.decodeMs === 200 && sampleB.prepareOuterMs === 4200, "commit B replaces the debug bag with B");
+  assert(sampleB.compressionMs === 4093 && sampleB.adaptiveTotalMs === 4093, "run B adaptive is not mixed with A");
+  assert(sampleB.hiddenBeforeDecodeMs === 3800, "hidden before decode stays on the same run");
+  assert(sampleA.decodeMs === 10, "earlier sample A snapshot is unchanged");
 }
 
 section("phase 6 hot-path timing / region / cleanup");
@@ -1659,7 +1715,13 @@ section("source wiring / no public blob");
   assert(client.includes("encodeAttempts"), "debug panel shows encode attempts");
   assert(client.includes("decodePath"), "debug panel shows decode path");
   assert(client.includes("encodePath"), "debug panel shows encode path");
+  assert(client.includes("adaptiveTotalMs"), "debug panel shows adaptive total");
+  assert(client.includes("prepareOuterMs"), "debug panel shows prepare outer");
+  assert(client.includes("hiddenBeforeDecodeMs"), "debug panel shows pre-decode gap");
+  assert(client.includes("unaccountedAdaptiveMs"), "debug panel shows unaccounted adaptive");
   assert(client.includes('markChatPhotoTiming("select_to_ready"'), "heavy prepare stamps select_to_ready");
+  assert(timingSrc.includes("noteChatPhotoCompression"), "outer note exists");
+  assert(timingSrc.includes("prepareOuterMs = Math.max(0, ms)"), "outer note does not write compressionMs");
   assert(timingSrc.includes("noteChatPhotoCompressionBreakdown"), "timing bag records compression split");
   assert(fast.includes("CHAT_PHOTO_PASSTHROUGH_MAX_BYTES"), "passthrough is chat-sized not 3MB");
   assert(reportClient.includes("createImageBitmap"), "createImageBitmap decode path");

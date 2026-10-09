@@ -12,7 +12,12 @@ import {
   isChatPhotoAcceptableSource,
   prepareChatPhotoSource,
 } from "@/lib/chatPhotoFastPath";
-import { chatPhotoNow } from "@/lib/chatPhotoTiming";
+import {
+  chatPhotoNow,
+  commitChatPhotoPrepareTiming,
+  noteChatPhotoPrepareScope,
+  startChatPhotoPrepareTiming,
+} from "@/lib/chatPhotoTiming";
 
 export const CHAT_PHOTO_UPLOAD_CONCURRENCY = 3;
 
@@ -38,6 +43,8 @@ export type ChatPhotoMetrics = {
   sourceBytes: number;
   uploadBytes?: number;
   compressionMs?: number;
+  prepareOuterMs?: number;
+  timingRunId?: string;
 };
 
 export type ChatPendingPhoto = {
@@ -110,8 +117,12 @@ export async function prepareChatPendingPhoto(
         metrics: { sourceBytes: file.size, uploadBytes: file.size, compressionMs: 0 },
       };
     }
+    const timingRunId = startChatPhotoPrepareTiming(item.key, file);
     const started = chatPhotoNow();
     const blob = await prepare(file);
+    const prepareOuterMs = Math.max(0, chatPhotoNow() - started);
+    noteChatPhotoPrepareScope(timingRunId, { prepareOuterMs });
+    commitChatPhotoPrepareTiming(timingRunId);
     return {
       ...item,
       blob,
@@ -121,7 +132,9 @@ export async function prepareChatPendingPhoto(
       metrics: {
         sourceBytes: item.metrics?.sourceBytes ?? file.size,
         uploadBytes: blob.size,
-        compressionMs: Math.max(0, chatPhotoNow() - started),
+        compressionMs: prepareOuterMs,
+        prepareOuterMs,
+        timingRunId,
       },
     };
   } catch (e) {
