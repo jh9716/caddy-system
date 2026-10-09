@@ -41,6 +41,7 @@ export async function POST(
     const access = await resolveChatPhotoRoomAccess(prisma, auth, roomId, {
       chatToken: typeof body?.chatToken === "string" ? body.chatToken : "",
     });
+    // ALL-room local HMAC. Env-admin userId=null still matches a verified admin token.
     clock.mark("roomAccess");
     clock.flag("roomAccessFastPath", access.fastPath);
     clock.reason("roomAccessFallbackReason", access.fallbackReason);

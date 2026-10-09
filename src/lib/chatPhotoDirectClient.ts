@@ -109,6 +109,7 @@ function attachXhrSplit(
   result.responseWaitMs = Math.max(0, marks.responseComplete - uploadComplete);
   if (marks.firstProgress != null) {
     result.xhrFirstProgressMs = marks.firstProgress;
+    // Wait until first upload progress: connection, CORS preflight, and scheduling.
     result.connectionWaitMs = Math.max(0, marks.firstProgress - marks.start);
   }
   return result;

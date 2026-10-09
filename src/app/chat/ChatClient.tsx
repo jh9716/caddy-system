@@ -2361,7 +2361,7 @@ export default function ChatClient() {
                   ["xhrResponseCompleteMs", photoDebugSample.xhrResponseCompleteMs],
                   ["clientUploadMs", photoDebugSample.clientUploadMs],
                   ["responseWaitMs", photoDebugSample.responseWaitMs],
-                  ["connectionWaitMs", photoDebugSample.connectionWaitMs],
+                  ["connectionWaitMs", photoDebugSample.connectionWaitMs], // start → first upload progress (connection/preflight/scheduling)
                   ["finalizeDbUpdateMs", photoDebugSample.finalizeDbUpdateMs],
                   ["finalizeSignMs", photoDebugSample.finalizeSignMs],
                 ] as const

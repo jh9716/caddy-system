@@ -82,6 +82,7 @@ export type ChatPhotoDebugSample = {
   xhrResponseCompleteMs: number | null;
   clientUploadMs: number | null;
   responseWaitMs: number | null;
+  /** XHR start → first upload progress. Includes connection/preflight/scheduling, not preflight alone. */
   connectionWaitMs: number | null;
   finalizeDbUpdateMs: number | null;
   finalizeSignMs: number | null;

@@ -41,6 +41,10 @@ export async function POST(
     const body = await req.json().catch(() => null);
     const receipt = readUploadReceipt(body);
     let senderUserId: number;
+    // Production Worker (#261 / f2438a3) already returns a receipt. Inspect-skip
+    // in finalizeChatPhotoUpload already runs when that receipt is present.
+    // This gate only avoids Neon requireChatPhotoRoomAccess. Env-admin cookies
+    // have userId=null; match the HMAC receipt sender instead of cookie userId.
     if (receipt) {
       const verified = await verifyChatMediaUploadReceipt(chatMediaSecret(process.env), receipt);
       if (!verified.ok) {

@@ -75,7 +75,7 @@ export function chatPhotoMediaOrigin(): string {
 
 let chatPhotoMediaWarmed = false;
 
-/** Browser-only TCP/TLS warm-up for the Worker origin. No URL/token logs. */
+/** Browser-only origin warm-up (preconnect + /health). No URL/token logs. */
 export function warmChatPhotoMediaConnection(): void {
   if (typeof document === "undefined" || chatPhotoMediaWarmed) return;
   const origin = chatPhotoMediaOrigin();
