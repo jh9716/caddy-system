@@ -10,10 +10,24 @@ export {
   instantChatPhotoPicks,
   mapBoundedSettled,
   chatPhotoComposerBusy,
+  nextChatPhotoComposerKey,
   prepareChatPendingPhoto,
   readyChatPhotosForUpload,
   type ChatPendingPhoto,
 } from "@/lib/chatPhotoPick";
+export {
+  appendComposerPhotos,
+  applyComposerPreparedIfCurrent,
+  applyComposerProgressIfCurrent,
+  CHAT_PHOTO_COMPOSER_MAX_MESSAGE,
+  commitComposerPhotoPicks,
+  composerPhotoListsMatch,
+  createChatPhotoComposerSession,
+  leftoverComposerPhotosAfterSend,
+  sentComposerPhotoKeys,
+  shouldApplyComposerWrite,
+  visibleComposerPhotos,
+} from "@/lib/chatPhotoComposer";
 export {
   canUseChatPhotoFastPath,
   needsChatPhotoHeavyPrepare,
