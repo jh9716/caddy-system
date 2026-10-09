@@ -115,18 +115,28 @@ import {
   chatPhotoDebugApiUrl,
   emitChatPhotoTimingSummary,
   markChatPhotoTiming,
+  noteChatPhotoCompressionBreakdown,
   noteChatPhotoServerHotpath,
   resetChatPhotoTiming,
   stampChatPhotoTiming,
   summarizeChatPhotoTiming,
 } from "../src/lib/chatPhotoTiming";
 import {
+  chatPhotoBitmapResizeOptions,
+  chatPhotoDecodePathFromBitmap,
   chatPhotoEncodeBottleneck,
   chatPhotoPutBottleneck,
+  createChatPhotoOrientedBitmap,
   planChatPhotoAdaptive,
   prepareChatAdaptivePhoto,
+  probeChatPhotoOrientedSize,
   shouldAcceptChatPhotoEncode,
 } from "../src/lib/chatPhotoAdaptive";
+import {
+  orientedImageHeaderSize,
+  readImageSizeFromHeader,
+  readJpegExifOrientation,
+} from "../src/lib/imageHeaderSize";
 import { CHAT_PHOTO_MAX_BYTES, CHAT_PHOTO_PASSTHROUGH_MAX_BYTES } from "../src/lib/chatPhotoConstants";
 import {
   abandonChatPhotoPreupload,
@@ -1207,6 +1217,11 @@ section("phase 5 adaptive compression + debug");
   assert(jpegPlan.longEdge === 1600 && jpegPlan.mime === "image/jpeg", "JPEG source uses 1600 JPEG encode");
   assert(jpegPlan.acceptMaxBytes === CHAT_PHOTO_MAX_BYTES, "first encode is accepted up to 3MB");
   assert(jpegPlan.maxAttempts <= 2, "encode attempts bounded");
+  const resize4000 = chatPhotoBitmapResizeOptions(4000, 3000);
+  assert(resize4000?.resizeWidth === 1600 && resize4000?.resizeHeight === 1200, "4000x3000 bitmap resize is 1600x1200");
+  assert(chatPhotoBitmapResizeOptions(1600, 1200) === null, "already-1600 JPEG skips bitmap resize");
+  assert(chatPhotoDecodePathFromBitmap({ width: 1600, height: 1200 }, resize4000) === "bitmap-resize", "matching bitmap is resize path");
+  assert(chatPhotoDecodePathFromBitmap({ width: 4000, height: 3000 }, resize4000) === "bitmap-full", "ignored resize is full decode");
   assert(shouldAcceptChatPhotoEncode(900 * 1024), "900KB first encode is accepted");
   assert(!shouldAcceptChatPhotoEncode(CHAT_PHOTO_MAX_BYTES + 1), "over 3MB is not accepted");
 
@@ -1384,15 +1399,103 @@ section("phase 5 adaptive compression + debug");
       debug.workerTotalMs == null &&
       debug.decodeMs == null &&
       debug.encode1Ms == null &&
-      debug.encodeAttempts == null,
+      debug.encodeAttempts == null &&
+      debug.decodePath == null &&
+      debug.encodePath == null,
     "phase 8/9/10 debug fields empty by default"
   );
+  noteChatPhotoCompressionBreakdown({
+    decodeMs: 12,
+    drawResizeMs: 4,
+    encode1Ms: 18,
+    encode2Ms: null,
+    totalCompressionMs: 34,
+    inputWidth: 1600,
+    inputHeight: 1200,
+    outputWidth: 1600,
+    outputHeight: 1200,
+    attempts: 1,
+    encodeMime: "image/jpeg",
+    decodePath: "bitmap-resize",
+    encodePath: "offscreen",
+  });
+  const breakdown = buildChatPhotoDebugSample();
+  assert(breakdown.decodeMs === 12 && breakdown.encode1Ms === 18, "debug records decode/encode1");
+  assert(breakdown.encodeAttempts === 1 && breakdown.encodeMime === "image/jpeg", "debug records JPEG 1-encode");
+  assert(breakdown.decodePath === "bitmap-resize" && breakdown.encodePath === "offscreen", "debug records decode/encode path");
   const debugDump = JSON.stringify(debug);
   assert(!/https?:|claim|token|storageKey|\.jpg/i.test(debugDump), "debug sample has no secrets");
   assert(chatPhotoEncodeBottleneck(120) === "browser-ok", "short encode is browser-ok");
   assert(chatPhotoEncodeBottleneck(640) === "consider-native", "encode >=500ms → native candidate");
   assert(chatPhotoPutBottleneck(620000, 2500) === "blob-network", "small PUT that is slow is Blob/network");
   assert(chatPhotoPutBottleneck(620000, 400) === "put-ok", "fast PUT is not storage-bound");
+}
+
+section("regression: header-probe bitmap resize + EXIF + fallback");
+{
+  function jpegSofWithExif(width: number, height: number, orientation: number): Uint8Array {
+    return Uint8Array.from([
+      0xff, 0xd8,
+      0xff, 0xe1, 0x00, 0x1e,
+      0x45, 0x78, 0x69, 0x66, 0x00, 0x00,
+      0x49, 0x49, 0x2a, 0x00,
+      0x08, 0x00, 0x00, 0x00,
+      0x01, 0x00,
+      0x12, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00,
+      orientation & 0xff, 0x00, 0x00, 0x00,
+      0xff, 0xc0, 0x00, 0x0b, 0x08,
+      (height >> 8) & 0xff,
+      height & 0xff,
+      (width >> 8) & 0xff,
+      width & 0xff,
+      0x03,
+    ]);
+  }
+  const sof = jpegSofWithExif(4000, 3000, 6);
+  const header = readImageSizeFromHeader(sof);
+  assert(header?.width === 4000 && header?.height === 3000, "SOF stays 4000x3000 before orientation");
+  assert(readJpegExifOrientation(sof) === 6, "JPEG EXIF orientation 6");
+  const oriented = orientedImageHeaderSize(header!, 6);
+  assert(oriented.width === 3000 && oriented.height === 4000, "orientation 5-8 swaps SOF dims");
+  const orientedResize = chatPhotoBitmapResizeOptions(oriented.width, oriented.height);
+  assert(
+    orientedResize?.resizeWidth === 1200 && orientedResize?.resizeHeight === 1600,
+    "portrait phone JPEG resize uses swapped 1200x1600"
+  );
+  const rawResize = chatPhotoBitmapResizeOptions(header!.width, header!.height);
+  assert(rawResize?.resizeWidth === 1600 && rawResize?.resizeHeight === 1200, "unoriented fallback resize is 1600x1200");
+
+  const padded = new Uint8Array(80 * 1024);
+  padded.set(sof);
+  const probeFile = new File([padded], "exif6.jpg", { type: "image/jpeg" });
+  const probed = await probeChatPhotoOrientedSize(probeFile);
+  assert(probed?.rawWidth === 4000 && probed?.rawHeight === 3000, "probe keeps SOF pixels");
+  assert(probed?.width === 3000 && probed?.height === 4000, "probe applies EXIF 6 swap");
+
+  const calls: unknown[] = [];
+  const previousBitmap = (globalThis as { createImageBitmap?: typeof createImageBitmap }).createImageBitmap;
+  (globalThis as { createImageBitmap: typeof createImageBitmap }).createImageBitmap = (async (
+    _blob: Blob,
+    opts?: ImageBitmapOptions
+  ) => {
+    calls.push(opts);
+    if (opts && ("resizeWidth" in opts || "imageOrientation" in opts)) {
+      throw new Error("resize unsupported");
+    }
+    return { width: 4000, height: 3000, close() {} } as ImageBitmap;
+  }) as typeof createImageBitmap;
+  try {
+    const bitmap = await createChatPhotoOrientedBitmap(probeFile, orientedResize, rawResize);
+    assert(bitmap.width === 4000 && bitmap.height === 3000, "resize throw falls back to full bitmap");
+    assert(calls.length === 3, "oriented+resize, raw resize, then full decode");
+    assert(chatPhotoDecodePathFromBitmap(bitmap, orientedResize) === "bitmap-full", "failed resize is bitmap-full");
+  } finally {
+    if (previousBitmap) {
+      (globalThis as { createImageBitmap: typeof createImageBitmap }).createImageBitmap = previousBitmap;
+    } else {
+      delete (globalThis as { createImageBitmap?: typeof createImageBitmap }).createImageBitmap;
+    }
+  }
 }
 
 section("phase 6 hot-path timing / region / cleanup");
@@ -1545,13 +1648,18 @@ section("source wiring / no public blob");
   const adaptive = read("src/lib/chatPhotoAdaptive.ts");
   assert(adaptive.includes("createImageBitmap"), "adaptive prefers createImageBitmap");
   assert(adaptive.includes("imageOrientation"), "bitmap decode keeps EXIF orientation");
+  assert(adaptive.includes("resizeWidth"), "header probe feeds createImageBitmap resize");
   assert(adaptive.includes("OffscreenCanvas"), "adaptive considers OffscreenCanvas");
   assert(adaptive.includes("shouldAcceptChatPhotoEncode"), "first encode can stop at 3MB");
   assert(adaptive.includes('mime: "image/jpeg"'), "non-alpha adaptive encode prefers JPEG");
   assert(adaptive.includes("CHAT_PHOTO_ENCODE_MAX_ATTEMPTS"), "encode loop is bounded");
+  assert(adaptive.includes("probeChatPhotoOrientedSize"), "header size probe before full decode");
   assert(client.includes("decodeMs"), "debug panel shows decode timing");
   assert(client.includes("encode1Ms"), "debug panel shows first encode timing");
   assert(client.includes("encodeAttempts"), "debug panel shows encode attempts");
+  assert(client.includes("decodePath"), "debug panel shows decode path");
+  assert(client.includes("encodePath"), "debug panel shows encode path");
+  assert(client.includes('markChatPhotoTiming("select_to_ready"'), "heavy prepare stamps select_to_ready");
   assert(timingSrc.includes("noteChatPhotoCompressionBreakdown"), "timing bag records compression split");
   assert(fast.includes("CHAT_PHOTO_PASSTHROUGH_MAX_BYTES"), "passthrough is chat-sized not 3MB");
   assert(reportClient.includes("createImageBitmap"), "createImageBitmap decode path");
