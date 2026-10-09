@@ -83,43 +83,36 @@ async function run() {
     newPathMs: Math.round(decodeMs + jpeg1.drawMs + jpeg1.encodeMs),
   };
   document.getElementById("out").textContent = JSON.stringify(out);
-  window.__BENCH__ = out;
+  await fetch("/report", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(out) });
 }
-run().catch((e) => {
-  document.getElementById("out").textContent = JSON.stringify({ error: String(e && e.message || e) });
+run().catch(async (e) => {
+  const err = { error: String(e && e.message || e) };
+  document.getElementById("out").textContent = JSON.stringify(err);
+  await fetch("/report", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(err) });
 });
 </script>`;
-}
-
-async function cdp(method: string, params: Record<string, unknown> = {}) {
-  const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)).json();
-  const target = list.find((row: { type?: string; webSocketDebuggerUrl?: string }) => row.webSocketDebuggerUrl);
-  if (!target?.webSocketDebuggerUrl) throw new Error("no chrome target");
-  const ws = new WebSocket(target.webSocketDebuggerUrl);
-  await new Promise((resolve, reject) => {
-    ws.addEventListener("open", resolve);
-    ws.addEventListener("error", reject);
-  });
-  const id = 1;
-  const result = await new Promise<unknown>((resolve, reject) => {
-    ws.addEventListener("message", (ev) => {
-      const row = JSON.parse(String(ev.data));
-      if (row.id === id) resolve(row.result);
-    });
-    ws.send(JSON.stringify({ id, method, params }));
-    setTimeout(() => reject(new Error(`cdp timeout ${method}`)), 20000);
-  });
-  ws.close();
-  return result;
 }
 
 async function main() {
   const bin = chromeBin();
   if (!bin) throw new Error("chrome not found");
   mkdirSync("/opt/cursor/artifacts", { recursive: true });
+  let bench: Record<string, unknown> | null = null;
   const server = createServer((req, res) => {
-    if (req.url === "/" || req.url === "/index.html") return send(res, 200, pageHtml(), "text/html; charset=utf-8");
-    send(res, 404, "no", "text/plain");
+    if ((req.url || "").startsWith("/report") && req.method === "POST") {
+      const chunks: Buffer[] = [];
+      req.on("data", (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
+      req.on("end", () => {
+        try {
+          bench = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        } catch {
+          bench = { error: "bad json" };
+        }
+        send(res, 200, '{"ok":true}', "application/json");
+      });
+      return;
+    }
+    send(res, 200, pageHtml(), "text/html; charset=utf-8");
   });
   await new Promise<void>((resolve) => server.listen(PORT, "127.0.0.1", resolve));
   const profile = join(tmpdir(), `chat-photo-encode-${Date.now()}`);
@@ -132,33 +125,14 @@ async function main() {
       "--headless=new",
       "--disable-gpu",
       "--no-first-run",
+      "--no-sandbox",
       `http://127.0.0.1:${PORT}/`,
     ],
     { stdio: "ignore" }
   );
   try {
-    for (let i = 0; i < 40; i++) {
-      try {
-        await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/version`);
-        break;
-      } catch {
-        await delay(150);
-      }
-    }
-    await delay(800);
-    let bench: Record<string, unknown> | null = null;
-    for (let i = 0; i < 40; i++) {
-      const evaled = (await cdp("Runtime.evaluate", {
-        expression: "window.__BENCH__ ? JSON.stringify(window.__BENCH__) : document.getElementById('out')?.textContent",
-        returnByValue: true,
-      })) as { result?: { value?: string } };
-      const raw = evaled?.result?.value || "";
-      if (raw && raw !== "running" && raw.startsWith("{")) {
-        bench = JSON.parse(raw);
-        if (bench && !("error" in bench && Object.keys(bench).length === 1)) break;
-      }
-      await delay(200);
-    }
+    const started = Date.now();
+    while (!bench && Date.now() - started < 25000) await delay(150);
     if (!bench || bench.error) throw new Error(`bench failed ${JSON.stringify(bench)}`);
     writeFileSync(OUT, JSON.stringify(bench, null, 2));
     console.log(JSON.stringify(bench, null, 2));
