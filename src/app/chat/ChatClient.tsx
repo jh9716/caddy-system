@@ -57,8 +57,10 @@ import {
   chatPhotoNow,
   emitChatPhotoTimingSummary,
   markChatPhotoTiming,
+  commitChatPhotoPrepareTiming,
   noteChatPhotoBytes,
   noteChatPhotoCompression,
+  noteChatPhotoPrepareScope,
   resetChatPhotoTiming,
   stampChatPhotoTiming,
   type ChatPhotoDebugSample,
@@ -1405,9 +1407,11 @@ export default function ChatClient() {
         stampChatPhotoTiming("prepare_complete");
         if (prepared.metrics) {
           noteChatPhotoBytes(prepared.metrics.sourceBytes, prepared.metrics.uploadBytes);
-          if (prepared.metrics.compressionMs != null) noteChatPhotoCompression(prepared.metrics.compressionMs);
+          if (prepared.metrics.prepareOuterMs != null || prepared.metrics.compressionMs != null) {
+            noteChatPhotoCompression(prepared.metrics.prepareOuterMs ?? prepared.metrics.compressionMs ?? 0);
+          }
         }
-        refreshPhotoDebugSample();
+        const commitStarted = chatPhotoNow();
         const applied = applyComposerPreparedIfCurrent(
           pendingPhotosRef.current,
           prepared,
@@ -1416,6 +1420,11 @@ export default function ChatClient() {
         );
         if (applied.note) setError(applied.note);
         if (applied.items !== pendingPhotosRef.current) setPendingPhotoList(applied.items);
+        noteChatPhotoPrepareScope(prepared.metrics?.timingRunId, {
+          stateCommitMs: Math.max(0, chatPhotoNow() - commitStarted),
+        });
+        commitChatPhotoPrepareTiming(prepared.metrics?.timingRunId);
+        refreshPhotoDebugSample();
         const current = applied.items.find((row) => row.key === prepared.key);
         if (current?.status === "ready") startComposerPreupload(current, writeGeneration);
         return prepared;
@@ -2364,6 +2373,17 @@ export default function ChatClient() {
                   ["encodeMime", photoDebugSample.encodeMime],
                   ["decodePath", photoDebugSample.decodePath],
                   ["encodePath", photoDebugSample.encodePath],
+                  ["adaptiveTotalMs", photoDebugSample.adaptiveTotalMs],
+                  ["prepareOuterMs", photoDebugSample.prepareOuterMs],
+                  ["headerProbeMs", photoDebugSample.headerProbeMs],
+                  ["bitmapCreateMs", photoDebugSample.bitmapCreateMs],
+                  ["canvasCreateMs", photoDebugSample.canvasCreateMs],
+                  ["alphaProbeMs", photoDebugSample.alphaProbeMs],
+                  ["postEncodeMs", photoDebugSample.postEncodeMs],
+                  ["stateCommitMs", photoDebugSample.stateCommitMs],
+                  ["hiddenBeforeDecodeMs", photoDebugSample.hiddenBeforeDecodeMs],
+                  ["unaccountedAdaptiveMs", photoDebugSample.unaccountedAdaptiveMs],
+                  ["unaccountedPrepareMs", photoDebugSample.unaccountedPrepareMs],
                   ["selectedToUploadStartMs", photoDebugSample.selectedToUploadStartMs],
                   ["prepareApiMs", photoDebugSample.prepareApiMs],
                   ["storageBackend", photoDebugSample.storageBackend],

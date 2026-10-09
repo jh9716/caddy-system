@@ -28,6 +28,16 @@ export type ChatPhotoTimingBag = {
   encodeMime?: string;
   decodePath?: string;
   encodePath?: string;
+  timingRunId?: string;
+  adaptiveTotalMs?: number;
+  prepareOuterMs?: number;
+  headerProbeMs?: number;
+  bitmapCreateMs?: number;
+  canvasCreateMs?: number;
+  alphaProbeMs?: number;
+  postEncodeMs?: number;
+  stateCommitMs?: number;
+  hiddenBeforeDecodeMs?: number;
   prepareHotpath?: ChatPhotoHotpathSummary;
   finalizeHotpath?: ChatPhotoHotpathSummary;
   storageBackend?: "r2" | "blob";
@@ -67,6 +77,18 @@ export type ChatPhotoDebugSample = {
   encodeMime: string | null;
   decodePath: string | null;
   encodePath: string | null;
+  timingRunId: string | null;
+  adaptiveTotalMs: number | null;
+  prepareOuterMs: number | null;
+  headerProbeMs: number | null;
+  bitmapCreateMs: number | null;
+  canvasCreateMs: number | null;
+  alphaProbeMs: number | null;
+  postEncodeMs: number | null;
+  stateCommitMs: number | null;
+  hiddenBeforeDecodeMs: number | null;
+  unaccountedAdaptiveMs: number | null;
+  unaccountedPrepareMs: number | null;
   selectedToUploadStartMs: number | null;
   prepareApiMs: number | null;
   storageBackend: "r2" | "blob" | null;
@@ -144,9 +166,6 @@ export function markChatPhotoTiming(name: string, startedAt: number): number {
   const ms = Math.max(0, chatPhotoNow() - startedAt);
   const bag = timingBag();
   bag.marks.push({ name, ms });
-  if (name === "select_to_prepared" || name === "select_to_ready") {
-    bag.compressionMs = bag.compressionMs ?? (name === "select_to_prepared" ? ms : 0);
-  }
   if (isChatPhotoTimingEnabled() && typeof console !== "undefined" && typeof console.debug === "function") {
     console.debug(`[chat-photo] ${name} ${Math.round(ms)}ms`);
   }
@@ -159,16 +178,114 @@ export function noteChatPhotoBytes(sourceBytes: number, uploadBytes?: number): v
   if (uploadBytes != null) bag.uploadBytes = uploadBytes;
 }
 
+export type ChatPhotoPrepareScope = {
+  runId: string;
+  key: string;
+  adaptiveTotalMs?: number;
+  prepareOuterMs?: number;
+  headerProbeMs?: number;
+  bitmapCreateMs?: number;
+  canvasCreateMs?: number;
+  alphaProbeMs?: number;
+  postEncodeMs?: number;
+  stateCommitMs?: number;
+  hiddenBeforeDecodeMs?: number;
+  decodeMs?: number;
+  drawResizeMs?: number;
+  encode1Ms?: number;
+  encode2Ms?: number;
+  encodeAttempts?: number;
+  encodeMime?: string;
+  decodePath?: string;
+  encodePath?: string;
+};
+
+let prepareTimingSeq = 0;
+const prepareTimingRuns = new Map<string, ChatPhotoPrepareScope>();
+const prepareTimingByFile = new WeakMap<Blob, string>();
+
+export function startChatPhotoPrepareTiming(key: string, file?: Blob): string {
+  const runId = `${++prepareTimingSeq}:${key}`;
+  prepareTimingRuns.set(runId, { runId, key });
+  if (file) prepareTimingByFile.set(file, runId);
+  return runId;
+}
+
+export function bindChatPhotoTimingFile(file: Blob, runId: string): void {
+  prepareTimingByFile.set(file, runId);
+}
+
+export function chatPhotoTimingRunIdFor(file?: Blob | null): string | null {
+  if (!file) return null;
+  return prepareTimingByFile.get(file) ?? null;
+}
+
+export function noteChatPhotoPrepareScope(
+  runId: string | null | undefined,
+  patch: Partial<Omit<ChatPhotoPrepareScope, "runId" | "key">>
+): void {
+  if (!runId) return;
+  const row = prepareTimingRuns.get(runId);
+  if (!row) return;
+  Object.assign(row, patch);
+}
+
+function finiteMs(value: unknown): number | undefined {
+  if (!Number.isFinite(value)) return undefined;
+  return Math.max(0, Number(value));
+}
+
+function applyPrepareScopeToBag(row: ChatPhotoPrepareScope, bag: ChatPhotoTimingBag): void {
+  bag.timingRunId = row.runId;
+  if (row.adaptiveTotalMs != null) {
+    bag.adaptiveTotalMs = row.adaptiveTotalMs;
+    bag.compressionMs = row.adaptiveTotalMs;
+  }
+  if (row.prepareOuterMs != null) bag.prepareOuterMs = row.prepareOuterMs;
+  if (row.headerProbeMs != null) bag.headerProbeMs = row.headerProbeMs;
+  if (row.bitmapCreateMs != null) bag.bitmapCreateMs = row.bitmapCreateMs;
+  if (row.canvasCreateMs != null) bag.canvasCreateMs = row.canvasCreateMs;
+  if (row.alphaProbeMs != null) bag.alphaProbeMs = row.alphaProbeMs;
+  if (row.postEncodeMs != null) bag.postEncodeMs = row.postEncodeMs;
+  if (row.stateCommitMs != null) bag.stateCommitMs = row.stateCommitMs;
+  if (row.hiddenBeforeDecodeMs != null) bag.hiddenBeforeDecodeMs = row.hiddenBeforeDecodeMs;
+  if (row.decodeMs != null) bag.decodeMs = row.decodeMs;
+  if (row.drawResizeMs != null) bag.drawResizeMs = row.drawResizeMs;
+  if (row.encode1Ms != null) bag.encode1Ms = row.encode1Ms;
+  if (row.encode2Ms != null) bag.encode2Ms = row.encode2Ms;
+  if (row.encodeAttempts != null) bag.encodeAttempts = row.encodeAttempts;
+  if (row.encodeMime) bag.encodeMime = row.encodeMime;
+  if (row.decodePath) bag.decodePath = row.decodePath;
+  if (row.encodePath) bag.encodePath = row.encodePath;
+}
+
+export function commitChatPhotoPrepareTiming(runId: string | null | undefined): ChatPhotoPrepareScope | null {
+  if (!runId) return null;
+  const row = prepareTimingRuns.get(runId);
+  if (!row) return null;
+  applyPrepareScopeToBag(row, timingBag());
+  return row;
+}
+
+/** Outer prepare wall time only. Never overwrites adaptive compressionMs. */
 export function noteChatPhotoCompression(ms: number): void {
-  timingBag().compressionMs = Math.max(0, ms);
+  timingBag().prepareOuterMs = Math.max(0, ms);
 }
 
 export function noteChatPhotoCompressionBreakdown(input: {
+  runId?: string | null;
   decodeMs?: number | null;
   drawResizeMs?: number | null;
   encode1Ms?: number | null;
   encode2Ms?: number | null;
   totalCompressionMs?: number | null;
+  adaptiveTotalMs?: number | null;
+  headerProbeMs?: number | null;
+  bitmapCreateMs?: number | null;
+  canvasCreateMs?: number | null;
+  alphaProbeMs?: number | null;
+  postEncodeMs?: number | null;
+  hiddenBeforeDecodeMs?: number | null;
   inputWidth?: number | null;
   inputHeight?: number | null;
   outputWidth?: number | null;
@@ -178,33 +295,72 @@ export function noteChatPhotoCompressionBreakdown(input: {
   decodePath?: string | null;
   encodePath?: string | null;
 }): void {
-  const bag = timingBag();
-  if (Number.isFinite(input.totalCompressionMs)) {
-    bag.compressionMs = Math.max(0, Number(input.totalCompressionMs));
-  }
-  if (Number.isFinite(input.decodeMs)) bag.decodeMs = Math.max(0, Number(input.decodeMs));
-  if (Number.isFinite(input.drawResizeMs)) bag.drawResizeMs = Math.max(0, Number(input.drawResizeMs));
-  if (Number.isFinite(input.encode1Ms)) bag.encode1Ms = Math.max(0, Number(input.encode1Ms));
-  if (Number.isFinite(input.encode2Ms)) bag.encode2Ms = Math.max(0, Number(input.encode2Ms));
-  if (Number.isFinite(input.inputWidth)) bag.inputWidth = Math.max(0, Math.round(Number(input.inputWidth)));
-  if (Number.isFinite(input.inputHeight)) bag.inputHeight = Math.max(0, Math.round(Number(input.inputHeight)));
-  if (Number.isFinite(input.outputWidth)) bag.outputWidth = Math.max(0, Math.round(Number(input.outputWidth)));
-  if (Number.isFinite(input.outputHeight)) bag.outputHeight = Math.max(0, Math.round(Number(input.outputHeight)));
-  if (Number.isFinite(input.attempts)) bag.encodeAttempts = Math.max(0, Math.round(Number(input.attempts)));
+  const adaptiveTotal = finiteMs(input.adaptiveTotalMs ?? input.totalCompressionMs);
+  const scoped: Partial<Omit<ChatPhotoPrepareScope, "runId" | "key">> = {};
+  const decodeMs = finiteMs(input.decodeMs);
+  const drawResizeMs = finiteMs(input.drawResizeMs);
+  const encode1Ms = finiteMs(input.encode1Ms);
+  const encode2Ms = finiteMs(input.encode2Ms);
+  const headerProbeMs = finiteMs(input.headerProbeMs);
+  const bitmapCreateMs = finiteMs(input.bitmapCreateMs);
+  const canvasCreateMs = finiteMs(input.canvasCreateMs);
+  const alphaProbeMs = finiteMs(input.alphaProbeMs);
+  const postEncodeMs = finiteMs(input.postEncodeMs);
+  const hiddenBeforeDecodeMs = finiteMs(input.hiddenBeforeDecodeMs);
+  if (adaptiveTotal != null) scoped.adaptiveTotalMs = adaptiveTotal;
+  if (decodeMs != null) scoped.decodeMs = decodeMs;
+  if (drawResizeMs != null) scoped.drawResizeMs = drawResizeMs;
+  if (encode1Ms != null) scoped.encode1Ms = encode1Ms;
+  if (encode2Ms != null) scoped.encode2Ms = encode2Ms;
+  if (headerProbeMs != null) scoped.headerProbeMs = headerProbeMs;
+  if (bitmapCreateMs != null) scoped.bitmapCreateMs = bitmapCreateMs;
+  if (canvasCreateMs != null) scoped.canvasCreateMs = canvasCreateMs;
+  if (alphaProbeMs != null) scoped.alphaProbeMs = alphaProbeMs;
+  if (postEncodeMs != null) scoped.postEncodeMs = postEncodeMs;
+  if (hiddenBeforeDecodeMs != null) scoped.hiddenBeforeDecodeMs = hiddenBeforeDecodeMs;
+  if (Number.isFinite(input.attempts)) scoped.encodeAttempts = Math.max(0, Math.round(Number(input.attempts)));
   if (typeof input.encodeMime === "string" && input.encodeMime) {
     const mime = input.encodeMime.toLowerCase().split(";", 1)[0] || "";
-    if (mime === "image/jpeg" || mime === "image/png" || mime === "image/webp") bag.encodeMime = mime;
+    if (mime === "image/jpeg" || mime === "image/png" || mime === "image/webp") scoped.encodeMime = mime;
   }
   if (
     input.decodePath === "bitmap-resize" ||
     input.decodePath === "bitmap-full" ||
     input.decodePath === "image-element"
   ) {
-    bag.decodePath = input.decodePath;
+    scoped.decodePath = input.decodePath;
   }
   if (input.encodePath === "offscreen" || input.encodePath === "canvas") {
-    bag.encodePath = input.encodePath;
+    scoped.encodePath = input.encodePath;
   }
+
+  if (input.runId && prepareTimingRuns.has(input.runId)) {
+    noteChatPhotoPrepareScope(input.runId, scoped);
+  }
+
+  const bag = timingBag();
+  if (adaptiveTotal != null) {
+    bag.adaptiveTotalMs = adaptiveTotal;
+    bag.compressionMs = adaptiveTotal;
+  }
+  if (decodeMs != null) bag.decodeMs = decodeMs;
+  if (drawResizeMs != null) bag.drawResizeMs = drawResizeMs;
+  if (encode1Ms != null) bag.encode1Ms = encode1Ms;
+  if (encode2Ms != null) bag.encode2Ms = encode2Ms;
+  if (headerProbeMs != null) bag.headerProbeMs = headerProbeMs;
+  if (bitmapCreateMs != null) bag.bitmapCreateMs = bitmapCreateMs;
+  if (canvasCreateMs != null) bag.canvasCreateMs = canvasCreateMs;
+  if (alphaProbeMs != null) bag.alphaProbeMs = alphaProbeMs;
+  if (postEncodeMs != null) bag.postEncodeMs = postEncodeMs;
+  if (hiddenBeforeDecodeMs != null) bag.hiddenBeforeDecodeMs = hiddenBeforeDecodeMs;
+  if (Number.isFinite(input.inputWidth)) bag.inputWidth = Math.max(0, Math.round(Number(input.inputWidth)));
+  if (Number.isFinite(input.inputHeight)) bag.inputHeight = Math.max(0, Math.round(Number(input.inputHeight)));
+  if (Number.isFinite(input.outputWidth)) bag.outputWidth = Math.max(0, Math.round(Number(input.outputWidth)));
+  if (Number.isFinite(input.outputHeight)) bag.outputHeight = Math.max(0, Math.round(Number(input.outputHeight)));
+  if (scoped.encodeAttempts != null) bag.encodeAttempts = scoped.encodeAttempts;
+  if (scoped.encodeMime) bag.encodeMime = scoped.encodeMime;
+  if (scoped.decodePath) bag.decodePath = scoped.decodePath;
+  if (scoped.encodePath) bag.encodePath = scoped.encodePath;
 }
 
 export function noteChatPhotoStorageBackend(backend: "r2" | "blob"): void {
@@ -284,6 +440,20 @@ export function summarizeChatPhotoTiming(
   };
 }
 
+function unaccountedAdaptiveMs(bag?: ChatPhotoTimingBag): number | null {
+  const total = bag?.adaptiveTotalMs ?? bag?.compressionMs;
+  if (total == null) return null;
+  const parts = [bag?.hiddenBeforeDecodeMs, bag?.decodeMs, bag?.canvasCreateMs, bag?.drawResizeMs, bag?.alphaProbeMs, bag?.encode1Ms, bag?.encode2Ms, bag?.postEncodeMs];
+  if (parts.every((part) => part == null)) return null;
+  const accounted = parts.reduce((sum, part) => sum + (part ?? 0), 0);
+  return Math.max(0, Math.round(total - accounted));
+}
+
+function unaccountedPrepareMs(bag?: ChatPhotoTimingBag): number | null {
+  if (bag?.prepareOuterMs == null || bag?.adaptiveTotalMs == null) return null;
+  return Math.max(0, Math.round(bag.prepareOuterMs - bag.adaptiveTotalMs));
+}
+
 export function buildChatPhotoDebugSample(
   bag = globalThis.__CHAT_PHOTO_TIMING__
 ): ChatPhotoDebugSample {
@@ -296,7 +466,11 @@ export function buildChatPhotoDebugSample(
     sourceBytes: bag?.sourceBytes ?? null,
     uploadBytes: bag?.uploadBytes ?? null,
     compressionMs:
-      bag?.compressionMs != null ? Math.round(bag.compressionMs) : latestChatPhotoMark("select_to_prepared", bag),
+      bag?.compressionMs != null
+        ? Math.round(bag.compressionMs)
+        : bag?.adaptiveTotalMs != null
+          ? Math.round(bag.adaptiveTotalMs)
+          : null,
     decodeMs: bag?.decodeMs != null ? Math.round(bag.decodeMs) : null,
     drawResizeMs: bag?.drawResizeMs != null ? Math.round(bag.drawResizeMs) : null,
     encode1Ms: bag?.encode1Ms != null ? Math.round(bag.encode1Ms) : null,
@@ -309,6 +483,18 @@ export function buildChatPhotoDebugSample(
     encodeMime: bag?.encodeMime ?? null,
     decodePath: bag?.decodePath ?? null,
     encodePath: bag?.encodePath ?? null,
+    timingRunId: bag?.timingRunId ?? null,
+    adaptiveTotalMs: bag?.adaptiveTotalMs != null ? Math.round(bag.adaptiveTotalMs) : null,
+    prepareOuterMs: bag?.prepareOuterMs != null ? Math.round(bag.prepareOuterMs) : null,
+    headerProbeMs: bag?.headerProbeMs != null ? Math.round(bag.headerProbeMs) : null,
+    bitmapCreateMs: bag?.bitmapCreateMs != null ? Math.round(bag.bitmapCreateMs) : null,
+    canvasCreateMs: bag?.canvasCreateMs != null ? Math.round(bag.canvasCreateMs) : null,
+    alphaProbeMs: bag?.alphaProbeMs != null ? Math.round(bag.alphaProbeMs) : null,
+    postEncodeMs: bag?.postEncodeMs != null ? Math.round(bag.postEncodeMs) : null,
+    stateCommitMs: bag?.stateCommitMs != null ? Math.round(bag.stateCommitMs) : null,
+    hiddenBeforeDecodeMs: bag?.hiddenBeforeDecodeMs != null ? Math.round(bag.hiddenBeforeDecodeMs) : null,
+    unaccountedAdaptiveMs: unaccountedAdaptiveMs(bag),
+    unaccountedPrepareMs: unaccountedPrepareMs(bag),
     selectedToUploadStartMs: summary.select_to_put_start_ms,
     prepareApiMs: latestChatPhotoMark("prepare_api", bag),
     storageBackend: bag?.storageBackend ?? null,
@@ -383,6 +569,7 @@ export function canShowChatPhotoDebug(input: {
 }
 
 export function resetChatPhotoTiming(): void {
+  prepareTimingRuns.clear();
   const bag = globalThis.__CHAT_PHOTO_TIMING__;
   if (!bag) {
     globalThis.__CHAT_PHOTO_TIMING__ = { marks: [], stamps: {} };
@@ -405,6 +592,17 @@ export function resetChatPhotoTiming(): void {
   delete bag.encodeMime;
   delete bag.decodePath;
   delete bag.encodePath;
+  delete bag.timingRunId;
+  delete bag.adaptiveTotalMs;
+  delete bag.prepareOuterMs;
+  delete bag.headerProbeMs;
+  delete bag.bitmapCreateMs;
+  delete bag.canvasCreateMs;
+  delete bag.alphaProbeMs;
+  delete bag.postEncodeMs;
+  delete bag.stateCommitMs;
+  delete bag.hiddenBeforeDecodeMs;
+  prepareTimingRuns.clear();
   delete bag.prepareHotpath;
   delete bag.finalizeHotpath;
   delete bag.storageBackend;
