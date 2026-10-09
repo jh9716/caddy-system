@@ -62,3 +62,43 @@ export function chatDirectoryRoomUrl(roomId: string, token: string): string {
   url.searchParams.set("token", token);
   return url.toString();
 }
+
+export function chatPhotoMediaOrigin(): string {
+  const base = chatHttpBaseUrl();
+  if (!base) return "";
+  try {
+    return new URL(base).origin;
+  } catch {
+    return "";
+  }
+}
+
+let chatPhotoMediaWarmed = false;
+
+/** Browser-only origin warm-up (preconnect + /health). No URL/token logs. */
+export function warmChatPhotoMediaConnection(): void {
+  if (typeof document === "undefined" || chatPhotoMediaWarmed) return;
+  const origin = chatPhotoMediaOrigin();
+  if (!origin) return;
+  chatPhotoMediaWarmed = true;
+  if (!document.querySelector('link[data-chat-photo-preconnect="1"]')) {
+    const preconnect = document.createElement("link");
+    preconnect.rel = "preconnect";
+    preconnect.href = origin;
+    preconnect.crossOrigin = "anonymous";
+    preconnect.setAttribute("data-chat-photo-preconnect", "1");
+    document.head.appendChild(preconnect);
+    const prefetch = document.createElement("link");
+    prefetch.rel = "dns-prefetch";
+    prefetch.href = origin;
+    document.head.appendChild(prefetch);
+  }
+  void fetch(`${origin}/health`, {
+    method: "GET",
+    mode: "cors",
+    credentials: "omit",
+    cache: "no-store",
+  }).catch(() => {
+    /* warm-up is best-effort */
+  });
+}

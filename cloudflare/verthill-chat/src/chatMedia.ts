@@ -596,7 +596,7 @@ async function uploadSuccessResponse(
   grant: ChatMediaPutGrant,
   actualSize: number,
   nowSec: number,
-  timing: { ingressMs: number; storeMs: number }
+  timing: { ingressMs: number; hashMs: number; storeMs: number; workerTotalMs: number }
 ): Promise<Response> {
   const receipt = await signedUploadReceipt(secret, grant, actualSize, nowSec);
   return json({
@@ -606,7 +606,9 @@ async function uploadSuccessResponse(
     mimeType: grant.mimeType,
     timing: {
       ingressMs: roundMs(timing.ingressMs),
+      hashMs: roundMs(timing.hashMs),
       storeMs: roundMs(timing.storeMs),
+      workerTotalMs: roundMs(timing.workerTotalMs),
     },
   });
 }
@@ -659,8 +661,10 @@ export async function handleChatMediaUpload(
     if (!magic.ok) {
       return json({ error: magic.code }, mediaErrorStatus(magic.code));
     }
-    const digest = await sha256Hex(bounded.bytes);
     const ingressMs = nowMs() - started;
+    const hashStarted = nowMs();
+    const digest = await sha256Hex(bounded.bytes);
+    const hashMs = nowMs() - hashStarted;
     const key = deriveChatMediaR2Key(grant);
     const customMetadata = {
       mime: grant.mimeType,
@@ -691,18 +695,26 @@ export async function handleChatMediaUpload(
       return json({ error: "upload_failed" }, 500);
     }
     const storeMs = nowMs() - storeStarted;
+    const workerTotalMs = nowMs() - started;
     if (created) {
       if (bounded.bytes.byteLength <= 0) return json({ error: "empty_file" }, 400);
       stage = "receipt";
       return uploadSuccessResponse(secret, grant, bounded.bytes.byteLength, nowSec, {
         ingressMs,
+        hashMs,
         storeMs,
+        workerTotalMs,
       });
     }
     stage = "retry";
     const existing = await bucket.head(key);
     if (existing && retryMatchesExisting(existing, grant, { size: bounded.bytes.byteLength, sha256: digest })) {
-      return uploadSuccessResponse(secret, grant, existing.size, nowSec, { ingressMs, storeMs });
+      return uploadSuccessResponse(secret, grant, existing.size, nowSec, {
+        ingressMs,
+        hashMs,
+        storeMs,
+        workerTotalMs,
+      });
     }
     return json({ error: "upload_conflict" }, 409);
   } catch (err) {

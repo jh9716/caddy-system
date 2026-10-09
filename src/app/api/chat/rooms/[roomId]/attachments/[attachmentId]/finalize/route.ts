@@ -6,7 +6,7 @@ import {
   resolveAuthUser,
 } from "@/lib/auth";
 import { ChatAuthError } from "@/lib/chatAuth";
-import { requireChatPhotoRoomAccess } from "@/lib/chatPhotoAccess";
+import { chatPhotoIdentityMatchesReceipt, requireChatPhotoRoomAccess } from "@/lib/chatPhotoAccess";
 import { finalizeChatPhotoUpload } from "@/lib/chatPhoto";
 import { createChatPhotoHotpathClock, logChatPhotoHotpath } from "@/lib/chatPhotoHotpath";
 import { canShowChatPhotoDebug } from "@/lib/chatPhotoTiming";
@@ -41,21 +41,26 @@ export async function POST(
     const body = await req.json().catch(() => null);
     const receipt = readUploadReceipt(body);
     let senderUserId: number;
-    if (receipt && auth.userId && auth.userId > 0) {
+    // Production Worker (#261 / f2438a3) already returns a receipt. Inspect-skip
+    // in finalizeChatPhotoUpload already runs when that receipt is present.
+    // This gate only avoids Neon requireChatPhotoRoomAccess. Env-admin cookies
+    // have userId=null; match the HMAC receipt sender instead of cookie userId.
+    if (receipt) {
       const verified = await verifyChatMediaUploadReceipt(chatMediaSecret(process.env), receipt);
-      if (
-        verified.ok &&
-        verified.receipt.roomId === roomId &&
-        verified.receipt.attachmentId === attachmentId &&
-        verified.receipt.senderUserId === auth.userId
-      ) {
-        senderUserId = auth.userId;
-        clock.flag("roomAccessFastPath", true);
-      } else if (!verified.ok) {
+      if (!verified.ok) {
         return NextResponse.json(
           { error: verified.code, message: "업로드 확인에 실패했습니다." },
           { status: verified.status }
         );
+      }
+      if (
+        verified.receipt.roomId === roomId &&
+        verified.receipt.attachmentId === attachmentId &&
+        chatPhotoIdentityMatchesReceipt(auth, verified.receipt)
+      ) {
+        senderUserId = verified.receipt.senderUserId;
+        clock.flag("roomAccessFastPath", true);
+        clock.reason("roomAccessFallbackReason", "fast");
       } else {
         return NextResponse.json(
           { error: "invalid_receipt", message: "업로드 확인에 실패했습니다." },
@@ -65,6 +70,7 @@ export async function POST(
     } else {
       const access = await requireChatPhotoRoomAccess(prisma, auth, roomId);
       clock.mark("roomAccess");
+      clock.flag("roomAccessFastPath", false);
       senderUserId = access.userId;
     }
     const photo = await finalizeChatPhotoUpload(

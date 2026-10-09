@@ -1,6 +1,8 @@
 import {
   chatPhotoDebugApiUrl,
+  chatPhotoNow,
   markChatPhotoTiming,
+  noteChatPhotoPutSplit,
   noteChatPhotoServerHotpath,
   noteChatPhotoStorageBackend,
   noteChatPhotoWorkerTiming,
@@ -41,8 +43,22 @@ export type ChatPhotoPutResult = {
   actualSize?: number;
   mimeType?: string;
   ingressMs?: number;
+  hashMs?: number;
   storeMs?: number;
+  workerTotalMs?: number;
+  xhrStartMs?: number;
+  xhrUploadCompleteMs?: number;
+  xhrResponseCompleteMs?: number;
+  xhrFirstProgressMs?: number;
+  clientUploadMs?: number;
+  responseWaitMs?: number;
+  connectionWaitMs?: number;
 };
+
+function finiteMs(value: unknown): number | undefined {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
+}
 
 function parseChatPhotoPutResult(text: string): ChatPhotoPutResult {
   if (!text) return {};
@@ -51,20 +67,52 @@ function parseChatPhotoPutResult(text: string): ChatPhotoPutResult {
       receipt?: unknown;
       actualSize?: unknown;
       mimeType?: unknown;
-      timing?: { ingressMs?: unknown; storeMs?: unknown };
+      timing?: {
+        ingressMs?: unknown;
+        hashMs?: unknown;
+        storeMs?: unknown;
+        workerTotalMs?: unknown;
+      };
     };
     const result: ChatPhotoPutResult = {};
     if (typeof row.receipt === "string" && row.receipt) result.receipt = row.receipt;
     if (Number.isFinite(Number(row.actualSize))) result.actualSize = Number(row.actualSize);
     if (typeof row.mimeType === "string" && row.mimeType) result.mimeType = row.mimeType;
-    const ingressMs = Number(row.timing?.ingressMs);
-    const storeMs = Number(row.timing?.storeMs);
-    if (Number.isFinite(ingressMs)) result.ingressMs = ingressMs;
-    if (Number.isFinite(storeMs)) result.storeMs = storeMs;
+    const ingressMs = finiteMs(row.timing?.ingressMs);
+    const hashMs = finiteMs(row.timing?.hashMs);
+    const storeMs = finiteMs(row.timing?.storeMs);
+    const workerTotalMs = finiteMs(row.timing?.workerTotalMs);
+    if (ingressMs != null) result.ingressMs = ingressMs;
+    if (hashMs != null) result.hashMs = hashMs;
+    if (storeMs != null) result.storeMs = storeMs;
+    if (workerTotalMs != null) result.workerTotalMs = workerTotalMs;
     return result;
   } catch {
     return {};
   }
+}
+
+function attachXhrSplit(
+  result: ChatPhotoPutResult,
+  marks: {
+    start: number;
+    uploadComplete?: number;
+    responseComplete: number;
+    firstProgress?: number;
+  }
+): ChatPhotoPutResult {
+  const uploadComplete = marks.uploadComplete ?? marks.responseComplete;
+  result.xhrStartMs = marks.start;
+  result.xhrUploadCompleteMs = uploadComplete;
+  result.xhrResponseCompleteMs = marks.responseComplete;
+  result.clientUploadMs = Math.max(0, uploadComplete - marks.start);
+  result.responseWaitMs = Math.max(0, marks.responseComplete - uploadComplete);
+  if (marks.firstProgress != null) {
+    result.xhrFirstProgressMs = marks.firstProgress;
+    // Wait until first upload progress: connection, CORS preflight, and scheduling.
+    result.connectionWaitMs = Math.max(0, marks.firstProgress - marks.start);
+  }
+  return result;
 }
 
 export async function putChatPhotoBytes(
@@ -77,19 +125,33 @@ export async function putChatPhotoBytes(
   if (typeof XMLHttpRequest !== "undefined") {
     return new Promise<ChatPhotoPutResult>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
+      const start = chatPhotoNow();
+      let uploadComplete: number | undefined;
+      let firstProgress: number | undefined;
       xhr.open("PUT", uploadUrl);
       xhr.setRequestHeader("content-type", contentType);
       if (extraHeaders?.grant) {
         xhr.setRequestHeader(CHAT_MEDIA_GRANT_HEADER, extraHeaders.grant);
       }
       xhr.upload.onprogress = (event) => {
+        if (firstProgress == null && event.loaded > 0) firstProgress = chatPhotoNow();
         if (!event.lengthComputable || event.total <= 0) return;
         onProgress?.(Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100))));
+      };
+      xhr.upload.onload = () => {
+        uploadComplete = chatPhotoNow();
       };
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) {
           onProgress?.(100);
-          resolve(parseChatPhotoPutResult(xhr.responseText || ""));
+          resolve(
+            attachXhrSplit(parseChatPhotoPutResult(xhr.responseText || ""), {
+              start,
+              uploadComplete,
+              responseComplete: chatPhotoNow(),
+              firstProgress,
+            })
+          );
           return;
         }
         reject(new Error("사진 업로드에 실패했습니다."));
@@ -192,7 +254,18 @@ export async function uploadChatPhotoDirect(
   markChatPhotoTiming("direct_put", putStarted);
   noteChatPhotoWorkerTiming({
     ingressMs: putResult.ingressMs,
+    hashMs: putResult.hashMs,
     storeMs: putResult.storeMs,
+    workerTotalMs: putResult.workerTotalMs,
+  });
+  noteChatPhotoPutSplit({
+    xhrStartMs: putResult.xhrStartMs,
+    xhrUploadCompleteMs: putResult.xhrUploadCompleteMs,
+    xhrResponseCompleteMs: putResult.xhrResponseCompleteMs,
+    xhrFirstProgressMs: putResult.xhrFirstProgressMs,
+    clientUploadMs: putResult.clientUploadMs,
+    responseWaitMs: putResult.responseWaitMs,
+    connectionWaitMs: putResult.connectionWaitMs,
   });
 
   notify({ key: item.key, phase: "finalize", progress: 100, attachmentId });

@@ -154,7 +154,11 @@ import {
   verifyChatMediaPutGrant,
   verifyChatMediaUploadReceipt,
 } from "../cloudflare/verthill-chat/src/chatMediaGrant";
-import { resolveChatPhotoRoomAccess } from "../src/lib/chatPhotoAccess";
+import {
+  chatPhotoIdentityMatchesReceipt,
+  chatPhotoIdentityMatchesToken,
+  resolveChatPhotoRoomAccess,
+} from "../src/lib/chatPhotoAccess";
 import { signChatToken } from "../src/lib/chatToken";
 
 let passed = 0;
@@ -322,11 +326,12 @@ async function finalizeHttp(
   cookie: string,
   roomId: string,
   attachmentId: string,
-  receipt?: string
+  receipt?: string,
+  search = ""
 ) {
   return POST_FINALIZE(
     req(
-      `http://localhost/api/chat/rooms/${roomId}/attachments/${attachmentId}/finalize`,
+      `http://localhost/api/chat/rooms/${roomId}/attachments/${attachmentId}/finalize${search}`,
       {
         method: "POST",
         headers: { cookie, "content-type": "application/json" },
@@ -342,10 +347,11 @@ async function prepareHttpWithToken(
   roomId: string,
   contentType: string,
   size: number,
-  chatToken: string
+  chatToken: string,
+  search = ""
 ) {
   return POST_PREPARE(
-    req(`http://localhost/api/chat/rooms/${roomId}/attachments/prepare`, {
+    req(`http://localhost/api/chat/rooms/${roomId}/attachments/prepare${search}`, {
       method: "POST",
       headers: { cookie, "content-type": "application/json" },
       body: JSON.stringify({ contentType, size, chatToken }),
@@ -1109,6 +1115,29 @@ section("phase 5 adaptive compression + debug");
     upload,
   });
   assert(puts === 1 && after[0]?.id === done.id, "send does not create second PUT");
+  const tokenJobs = new Map();
+  let forwardedToken = "";
+  const tokenUpload = async (
+    _room: string,
+    _item: unknown,
+    opts?: { chatToken?: string | null }
+  ) => {
+    forwardedToken = String(opts?.chatToken || "");
+    return { id: "att-p9", mimeType: "image/jpeg", size: 12, exp: Math.floor(Date.now() / 1000) + 600, claim: "c9" };
+  };
+  const tokenPhoto = instantChatPhotoPicks(
+    [new File([jpegBytes(8, 9)], "p9.jpg", { type: "image/jpeg", lastModified: 59 })],
+    1
+  ).items[0]!;
+  tokenPhoto.status = "ready";
+  await finishChatPhotoOutgoingUploads({
+    jobs: tokenJobs,
+    roomId: "all",
+    photos: [tokenPhoto],
+    upload: tokenUpload as never,
+    chatToken: "live-chat-token",
+  });
+  assert(forwardedToken === "live-chat-token", "send path forwards chatToken into prepare");
 
   const triple = instantChatPhotoPicks(
     [
@@ -1148,8 +1177,13 @@ section("phase 5 adaptive compression + debug");
       debug.r2StoreMs == null &&
       debug.receiptVerifyMs == null &&
       debug.finalizeInspectSkipped == null &&
-      debug.roomAccessFastPath == null,
-    "phase 8 debug fields empty by default"
+      debug.roomAccessFastPath == null &&
+      debug.roomAccessFallbackReason == null &&
+      debug.clientUploadMs == null &&
+      debug.responseWaitMs == null &&
+      debug.workerHashMs == null &&
+      debug.workerTotalMs == null,
+    "phase 8/9 debug fields empty by default"
   );
   const debugDump = JSON.stringify(debug);
   assert(!/https?:|claim|token|storageKey|\.jpg/i.test(debugDump), "debug sample has no secrets");
@@ -1199,6 +1233,31 @@ section("phase 6 hot-path timing / region / cleanup");
   assert(!/https?:|claim|token|userId|storageKey/i.test(dump), "hotpath summary has no secrets");
   assert(parseChatPhotoHotpath({ route: "prepare", totalMs: 12, steps: { auth: 4, leak: 9 } })?.steps.auth === 4, "parse keeps safe steps");
   assert(parseChatPhotoHotpath({ route: "prepare", totalMs: 12, steps: { leak: 9 } })?.steps.auth == null, "parse drops unknown steps");
+  assert(
+    parseChatPhotoHotpath({
+      route: "prepare",
+      totalMs: 12,
+      flags: { roomAccessFastPath: false, finalizeInspectSkipped: false },
+      reasons: { roomAccessFallbackReason: "missing_token", leak: "nope" },
+    })?.flags?.roomAccessFastPath === false,
+    "parse keeps false fast-path flag"
+  );
+  assert(
+    parseChatPhotoHotpath({
+      route: "prepare",
+      totalMs: 12,
+      reasons: { roomAccessFallbackReason: "user_mismatch", leak: "secret" },
+    })?.reasons?.roomAccessFallbackReason === "user_mismatch",
+    "parse keeps safe fallback reason"
+  );
+  assert(
+    parseChatPhotoHotpath({
+      route: "prepare",
+      totalMs: 12,
+      reasons: { roomAccessFallbackReason: "totally_secret" },
+    })?.reasons == null,
+    "parse drops unknown fallback reason"
+  );
   assert(shouldRunBackgroundChatPhotoCleanup(0.05) === true, "10% cleanup after() can run");
   assert(shouldRunBackgroundChatPhotoCleanup(0.2) === false, "most prepares skip after() cleanup");
   assert(chatPhotoDebugApiUrl("/api/x", "") === "/api/x", "debug query off leaves URL");
@@ -1253,6 +1312,13 @@ section("source wiring / no public blob");
   assert(client.includes("receiptVerifyMs"), "debug panel shows receipt verify");
   assert(client.includes("finalizeInspectSkipped"), "debug panel shows inspect skip");
   assert(client.includes("roomAccessFastPath"), "debug panel shows roomAccess fast path");
+  assert(client.includes("roomAccessFallbackReason"), "debug panel shows fast-path fallback reason");
+  assert(client.includes("clientUploadMs"), "debug panel shows client upload split");
+  assert(client.includes("responseWaitMs"), "debug panel shows response wait split");
+  assert(client.includes("workerHashMs"), "debug panel shows worker hash");
+  assert(client.includes("workerTotalMs"), "debug panel shows worker total");
+  assert(client.includes("warmChatPhotoMediaConnection"), "chat entry warms Worker origin");
+  assert(client.includes("connectionWaitMs"), "debug panel shows connection wait");
   assert(client.includes("storageBackend"), "debug panel shows storage backend");
   assert(client.includes("r2PutMs"), "debug panel shows R2 PUT");
   assert(client.includes("finalizeSignMs"), "debug panel shows finalize sign step");
@@ -1386,6 +1452,11 @@ section("source wiring / no public blob");
   assert(cleanupCron.includes("runChatAttachmentMaintenance"), "cron runs orphan cleanup");
   assert(prepareRoute.includes("createChatPhotoHotpathClock"), "prepare records server timing");
   assert(finalizeRoute.includes("createChatPhotoHotpathClock"), "finalize records server timing");
+  assert(finalizeRoute.includes("chatPhotoIdentityMatchesReceipt"), "receipt finalize matches env-admin identity");
+  assert(!finalizeRoute.includes("f5747f1"), "finalize comments do not claim a rolled-back Worker");
+  assert(finalizeRoute.includes("f2438a3"), "finalize comments record live #261 Worker");
+  assert(timingSrc.includes("first upload progress"), "connectionWaitMs is first-progress wait, not preflight-only");
+  assert(finalizeRoute.includes('clock.flag("roomAccessFastPath", false)'), "no-receipt finalize keeps false flag");
   assert(prepareRoute.includes("after("), "prepare cleanup is after() not awaited");
   assert(read("src/app/api/chat/attachments/consume/route.ts").includes("void runChatAttachmentMaintenance"), "consume still best-effort cleanup");
   assert(hotpath.includes('"regions": ["sin1"]') || vercelCfg.includes('"sin1"'), "sin1 pin is documented");
@@ -1426,8 +1497,19 @@ section("source wiring / no public blob");
   const accessSrc = read("src/lib/chatPhotoAccess.ts");
   assert(accessSrc.includes("verifyChatToken"), "prepare can locally verify chat token");
   assert(accessSrc.includes("fastPath"), "ALL room token skips caddy DB reissue");
+  assert(accessSrc.includes("chatPhotoIdentityMatchesToken"), "env-admin token can match without cookie userId");
+  assert(accessSrc.includes("missing_token"), "fast-path fallback reasons are safe enums");
+  assert(accessSrc.includes("AbortSignal.timeout"), "directory membership lookup is bounded");
   assert(direct.includes("chatToken"), "prepare request can carry chat token");
   assert(direct.includes("receipt"), "finalize request can carry upload receipt");
+  assert(direct.includes("xhrUploadCompleteMs"), "client PUT splits upload vs response wait");
+  assert(direct.includes("clientUploadMs"), "client PUT records upload duration");
+  assert(mediaSrc.includes("hashMs"), "Worker reports hash timing");
+  assert(mediaSrc.includes("workerTotalMs"), "Worker reports total timing");
+  assert(hotpath.includes("roomAccessFallbackReason"), "hotpath parse keeps fallback reason");
+  assert(timingSrc.includes("noteChatPhotoPutSplit"), "timing bag records XHR split");
+  assert(read("src/lib/chatClientConfig.ts").includes("warmChatPhotoMediaConnection"), "preconnect helper exists");
+  assert(read("src/lib/chatPhotoPreupload.ts").includes("chatToken: opts.chatToken"), "send forwards live chat token");
   assert(!reportStorage.includes("CHAT_PHOTO_STORAGE"), "CourseReport store ignores chat R2 switch");
   assert(!noticePhoto.includes("CHAT_PHOTO_STORAGE"), "Notice store ignores chat R2 switch");
   assert(direct.includes("x-chat-media-grant") || direct.includes("CHAT_MEDIA_GRANT_HEADER"), "client sends upload grant");
@@ -1555,6 +1637,48 @@ section("r2 grant / key / magic");
     if (origXhr) (globalThis as { XMLHttpRequest?: typeof XMLHttpRequest }).XMLHttpRequest = origXhr;
   }
   assert(captured[0] === token, "client PUT sends upload grant header");
+
+  class FakeXhr {
+    status = 200;
+    responseText = JSON.stringify({
+      receipt: "r",
+      timing: { ingressMs: 4, hashMs: 2, storeMs: 8, workerTotalMs: 16 },
+    });
+    upload: {
+      onprogress: ((event: { loaded: number; total: number; lengthComputable: boolean }) => void) | null;
+      onload: (() => void) | null;
+    } = { onprogress: null, onload: null };
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    headers: Record<string, string> = {};
+    open() {}
+    setRequestHeader(name: string, value: string) {
+      this.headers[name] = value;
+    }
+    send() {
+      this.upload.onprogress?.({ loaded: 4, total: 16, lengthComputable: true });
+      this.upload.onload?.();
+      this.onload?.();
+    }
+  }
+  const prevXhr = (globalThis as { XMLHttpRequest?: unknown }).XMLHttpRequest;
+  (globalThis as { XMLHttpRequest?: unknown }).XMLHttpRequest = FakeXhr;
+  try {
+    const split = await putChatPhotoBytes("http://chat-media.test/media/upload", new Blob([jpeg]), "image/jpeg");
+    assert(split.ingressMs === 4 && split.hashMs === 2 && split.storeMs === 8 && split.workerTotalMs === 16, "XHR parses worker split");
+    assert(
+      split.xhrStartMs != null &&
+        split.xhrUploadCompleteMs != null &&
+        split.xhrResponseCompleteMs != null &&
+        split.clientUploadMs != null &&
+        split.responseWaitMs != null &&
+        split.connectionWaitMs != null,
+      "XHR records upload vs response wait"
+    );
+  } finally {
+    if (prevXhr) (globalThis as { XMLHttpRequest?: unknown }).XMLHttpRequest = prevXhr;
+    else delete (globalThis as { XMLHttpRequest?: unknown }).XMLHttpRequest;
+  }
 
   function countingStream(bytes: Uint8Array, pulled: { n: number; cancelled: boolean }, chunk = 65536) {
     let offset = 0;
@@ -1755,6 +1879,13 @@ section("r2 grant / key / magic");
   }
   const put500 = await putSized(jpeg500, "22222222-2222-4222-8222-222222222222");
   assert(put500.res?.status === 200 && put500.json?.receipt, "1장 500KB JPEG upload success");
+  assert(
+    Number.isFinite(put500.json?.timing?.ingressMs) &&
+      Number.isFinite(put500.json?.timing?.hashMs) &&
+      Number.isFinite(put500.json?.timing?.storeMs) &&
+      Number.isFinite(put500.json?.timing?.workerTotalMs),
+    "Worker PUT reports ingress/hash/store/total"
+  );
   assert(
     put500.storedBytes?.byteLength === jpeg500.byteLength && put500.storedBytes?.[4] === jpeg500[4],
     "500KB readback bytes identical"
@@ -1996,9 +2127,47 @@ if (!ALLOW_DB) {
         chatToken: liveToken,
       });
       assert(fast.fastPath && fast.userId === user.id && dbHits === 0, "ALL room token fast path");
-      const tokenPrep = await prepareHttpWithToken(cookie, "all", "image/jpeg", 16, liveToken);
+      assert(fast.fallbackReason === "fast", "ALL valid token reason is fast");
+      let directoryHits = 0;
+      const prevFetch = globalThis.fetch;
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input instanceof Request ? input.url : input);
+        if (url.includes("/directory/")) directoryHits += 1;
+        return prevFetch(input, init);
+      }) as typeof fetch;
+      try {
+        const again = await resolveChatPhotoRoomAccess(stubDb as never, stubAuth as never, "all", {
+          chatToken: liveToken,
+        });
+        assert(again.fastPath && directoryHits === 0 && dbHits === 0, "ALL fast path skips directory lookup");
+      } finally {
+        globalThis.fetch = prevFetch;
+      }
+      const envAdminAuth = { ...stubAuth, userId: null as number | null };
+      const envFast = await resolveChatPhotoRoomAccess(stubDb as never, envAdminAuth as never, "all", {
+        chatToken: liveToken,
+      });
+      assert(envFast.fastPath && envFast.userId === user.id && dbHits === 0, "env-admin ALL token is local fast path");
+      assert(
+        chatPhotoIdentityMatchesToken({ userId: null, role: "admin" }, { userId: user.id, role: "admin" }),
+        "env-admin cookie matches admin token"
+      );
+      assert(
+        !chatPhotoIdentityMatchesToken({ userId: user.id, role: "admin" }, { userId: other.id, role: "caddy" }),
+        "userId mismatch is not fast path"
+      );
+      const tokenPrep = await prepareHttpWithToken(
+        cookie,
+        "all",
+        "image/jpeg",
+        16,
+        liveToken,
+        "?photoDebug=1"
+      );
       const tokenPrepJson = await tokenPrep.json();
       assert(tokenPrep.status === 200 && tokenPrepJson.upload?.attachmentId, "ALL prepare with chat token");
+      assert(tokenPrepJson.hotpath?.flags?.roomAccessFastPath === true, "prepare debug shows roomAccessFastPath=true");
+      assert(tokenPrepJson.hotpath?.reasons?.roomAccessFallbackReason === "fast", "prepare debug reason is fast");
       const expiredToken = await signChatToken({
         v: 2,
         userId: user.id,
@@ -2008,8 +2177,43 @@ if (!ALLOW_DB) {
         iat: nowSec - 2000,
         exp: nowSec - 10,
       });
-      const fallbackPrep = await prepareHttpWithToken(cookie, "all", "image/jpeg", 16, expiredToken);
+      const expiredAccess = await resolveChatPhotoRoomAccess(stubDb as never, stubAuth as never, "all", {
+        chatToken: expiredToken,
+      });
+      assert(expiredAccess.fastPath === false && expiredAccess.fallbackReason === "invalid_token", "expired token safe fallback");
+      const fallbackPrep = await prepareHttpWithToken(
+        cookie,
+        "all",
+        "image/jpeg",
+        16,
+        expiredToken,
+        "?photoDebug=1"
+      );
+      const fallbackPrepJson = await fallbackPrep.json();
       assert(fallbackPrep.status === 200, "expired token falls back to requireChatPhotoRoomAccess");
+      assert(fallbackPrepJson.hotpath?.flags?.roomAccessFastPath === false, "expired token debug keeps false flag");
+      assert(fallbackPrepJson.hotpath?.reasons?.roomAccessFallbackReason === "invalid_token", "expired token debug reason");
+      const mismatchToken = await signChatToken({
+        v: 2,
+        userId: other.id,
+        displayName: other.username,
+        role: "caddy",
+        team: "-",
+        iat: nowSec,
+        exp: nowSec + 1800,
+      });
+      const mismatchAccess = await resolveChatPhotoRoomAccess(stubDb as never, stubAuth as never, "all", {
+        chatToken: mismatchToken,
+      });
+      assert(
+        mismatchAccess.fastPath === false && mismatchAccess.fallbackReason === "user_mismatch",
+        "other-user token is user_mismatch fallback"
+      );
+      const missingAccess = await resolveChatPhotoRoomAccess(stubDb as never, stubAuth as never, "all", {});
+      assert(
+        missingAccess.fastPath === false && missingAccess.fallbackReason === "missing_token",
+        "omitted token is missing_token fallback"
+      );
       const otherToken = await signChatToken({
         v: 2,
         userId: other.id,
@@ -3027,6 +3231,27 @@ if (!ALLOW_DB) {
         );
         const firstPutJson = await uploadJson(firstPut);
         assert(firstPut?.status === 200 && firstPutJson?.receipt, "first PUT A → 200 receipt");
+        assert(
+          chatPhotoIdentityMatchesReceipt({ userId: user.id, role: "admin" }, { senderUserId: user.id }),
+          "receipt sender matches cookie userId"
+        );
+        assert(
+          chatPhotoIdentityMatchesReceipt({ userId: null, role: "admin" }, { senderUserId: user.id }),
+          "env-admin can accept own remapped receipt"
+        );
+        const receiptFin = await finalizeHttp(
+          cookie,
+          "all",
+          prepared.attachmentId,
+          String(firstPutJson?.receipt || ""),
+          "?photoDebug=1"
+        );
+        const receiptFinJson = await receiptFin.json();
+        assert(receiptFin.status === 200 && receiptFinJson.photo?.id, "receipt HTTP finalize");
+        assert(receiptFinJson.hotpath?.flags?.roomAccessFastPath === true, "receipt finalize roomAccessFastPath=true");
+        assert(receiptFinJson.hotpath?.flags?.finalizeInspectSkipped === true, "receipt finalize inspect skipped");
+        assert(receiptFinJson.hotpath?.reasons?.roomAccessFallbackReason === "fast", "receipt finalize reason is fast");
+        assert(receiptFinJson.hotpath?.steps?.roomAccess == null, "receipt finalize skips requireChatPhotoRoomAccess");
         const retrySame = await handleChatMediaRequest(
           new Request(prepared.uploadUrl, {
             method: "PUT",
