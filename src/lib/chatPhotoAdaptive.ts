@@ -17,7 +17,7 @@ import {
   chatPhotoSourceKind,
   isChatPhotoAcceptableSource,
 } from "@/lib/chatPhotoFastPath";
-import { chatPhotoNow } from "@/lib/chatPhotoTiming";
+import { chatPhotoNow, noteChatPhotoCompressionBreakdown } from "@/lib/chatPhotoTiming";
 
 export type ChatPhotoAdaptiveMime = "image/jpeg" | "image/png" | "image/webp";
 
@@ -28,6 +28,7 @@ export type ChatPhotoAdaptivePlan = {
   qualities: number[];
   longEdge: number;
   targetMaxBytes: number;
+  acceptMaxBytes: number;
   maxAttempts: number;
   keepAlpha: boolean;
 };
@@ -40,7 +41,22 @@ export type ChatPhotoAdaptiveResult = {
   encoded: boolean;
   attempts: number;
   mimeType: string;
+  decodeMs?: number | null;
+  drawResizeMs?: number | null;
+  encode1Ms?: number | null;
+  encode2Ms?: number | null;
+  inputWidth?: number | null;
+  inputHeight?: number | null;
+  outputWidth?: number | null;
+  outputHeight?: number | null;
 };
+
+export function shouldAcceptChatPhotoEncode(
+  size: number,
+  acceptMaxBytes = CHAT_PHOTO_MAX_BYTES
+): boolean {
+  return Number.isFinite(size) && size > 0 && size <= acceptMaxBytes;
+}
 
 export type ChatPhotoEncodeFn = (input: {
   source: Blob;
@@ -78,6 +94,7 @@ export function planChatPhotoAdaptive(
       qualities: [],
       longEdge: CHAT_PHOTO_ADAPTIVE_LONG_EDGE,
       targetMaxBytes: CHAT_PHOTO_PASSTHROUGH_MAX_BYTES,
+      acceptMaxBytes: CHAT_PHOTO_MAX_BYTES,
       maxAttempts: 0,
       keepAlpha: kind === "png",
     };
@@ -91,6 +108,7 @@ export function planChatPhotoAdaptive(
       qualities: [0.92, 0.84].slice(0, CHAT_PHOTO_ENCODE_MAX_ATTEMPTS),
       longEdge: CHAT_PHOTO_ADAPTIVE_LONG_EDGE,
       targetMaxBytes: CHAT_PHOTO_PNG_TARGET_MAX_BYTES,
+      acceptMaxBytes: CHAT_PHOTO_MAX_BYTES,
       maxAttempts: CHAT_PHOTO_ENCODE_MAX_ATTEMPTS,
       keepAlpha,
     };
@@ -98,10 +116,11 @@ export function planChatPhotoAdaptive(
   return {
     passthrough: false,
     kind: heic ? "heic" : "jpeg_webp",
-    mime: "image/webp",
+    mime: "image/jpeg",
     qualities: [0.82, 0.7].slice(0, CHAT_PHOTO_ENCODE_MAX_ATTEMPTS),
     longEdge: CHAT_PHOTO_ADAPTIVE_LONG_EDGE,
     targetMaxBytes: CHAT_PHOTO_JPEG_WEBP_TARGET_MAX_BYTES,
+    acceptMaxBytes: CHAT_PHOTO_MAX_BYTES,
     maxAttempts: CHAT_PHOTO_ENCODE_MAX_ATTEMPTS,
     keepAlpha: false,
   };
@@ -171,10 +190,18 @@ function loadImage(file: Blob): Promise<HTMLImageElement> {
   });
 }
 
+async function createOrientedBitmap(file: Blob): Promise<ImageBitmap> {
+  try {
+    return await createImageBitmap(file, { imageOrientation: "from-image" });
+  } catch {
+    return await createImageBitmap(file);
+  }
+}
+
 async function loadDrawable(file: Blob): Promise<DrawableSource> {
   if (typeof createImageBitmap === "function") {
     try {
-      const bitmap = await createImageBitmap(file);
+      const bitmap = await createOrientedBitmap(file);
       return {
         width: bitmap.width,
         height: bitmap.height,
@@ -227,23 +254,16 @@ function sampleHasAlpha(ctx: CanvasRenderingContext2D, width: number, height: nu
   return false;
 }
 
-async function encodeDrawable(
-  drawable: DrawableSource,
-  width: number,
-  height: number,
+async function encodeCanvas(
+  canvas: HTMLCanvasElement | OffscreenCanvas,
   mime: ChatPhotoAdaptiveMime,
   quality: number,
   keepAlpha: boolean
 ): Promise<Blob> {
-  const { canvas, ctx } = makeCanvas(width, height);
-  drawable.draw(ctx, width, height);
   try {
     const blob = await canvasToBlob(canvas, mime, quality);
     if (mime === "image/webp" && blob.type && !blob.type.includes("webp")) {
-      if (keepAlpha) {
-        const png = await canvasToBlob(canvas, "image/png");
-        return png;
-      }
+      if (keepAlpha) return canvasToBlob(canvas, "image/png");
       return canvasToBlob(canvas, "image/jpeg", quality);
     }
     return blob;
@@ -251,6 +271,23 @@ async function encodeDrawable(
     if (keepAlpha) return canvasToBlob(canvas, "image/png");
     return canvasToBlob(canvas, "image/jpeg", quality);
   }
+}
+
+function finishAdaptiveResult(result: ChatPhotoAdaptiveResult): ChatPhotoAdaptiveResult {
+  noteChatPhotoCompressionBreakdown({
+    decodeMs: result.decodeMs ?? null,
+    drawResizeMs: result.drawResizeMs ?? null,
+    encode1Ms: result.encode1Ms ?? null,
+    encode2Ms: result.encode2Ms ?? null,
+    totalCompressionMs: result.compressionMs,
+    inputWidth: result.inputWidth ?? null,
+    inputHeight: result.inputHeight ?? null,
+    outputWidth: result.outputWidth ?? null,
+    outputHeight: result.outputHeight ?? null,
+    attempts: result.attempts,
+    encodeMime: result.encoded ? result.mimeType : null,
+  });
+  return result;
 }
 
 export async function prepareChatAdaptivePhoto(
@@ -283,7 +320,7 @@ export async function prepareChatAdaptivePhoto(
     size: source.size,
   };
   if (canUseChatPhotoFastPath(probe)) {
-    return {
+    return finishAdaptiveResult({
       blob: source,
       sourceBytes: file.size,
       uploadBytes: source.size,
@@ -291,12 +328,10 @@ export async function prepareChatAdaptivePhoto(
       encoded: false,
       attempts: 0,
       mimeType: probe.type || "image/jpeg",
-    };
+    });
   }
 
-  const inspect = opts.inspect
-    ? await opts.inspect(source)
-    : null;
+  const inspect = opts.inspect ? await opts.inspect(source) : null;
   const plan = planChatPhotoAdaptive(probe, {
     heic,
     hasAlpha: opts.hasAlpha ?? inspect?.hasAlpha,
@@ -306,8 +341,11 @@ export async function prepareChatAdaptivePhoto(
   if (opts.encode) {
     let blob: Blob | null = null;
     let attempts = 0;
+    let encode1Ms: number | null = null;
+    let encode2Ms: number | null = null;
     for (const quality of plan.qualities) {
       attempts += 1;
+      const encodeStarted = now();
       blob = await opts.encode({
         source,
         width: dims.width,
@@ -315,14 +353,17 @@ export async function prepareChatAdaptivePhoto(
         mime: plan.mime,
         quality,
       });
-      if (blob.size <= plan.targetMaxBytes) break;
+      const encodeMs = Math.max(0, now() - encodeStarted);
+      if (attempts === 1) encode1Ms = encodeMs;
+      else encode2Ms = encodeMs;
+      if (shouldAcceptChatPhotoEncode(blob.size, plan.acceptMaxBytes)) break;
       if (attempts >= plan.maxAttempts) break;
     }
     if (!blob || blob.size <= 0) throw new Error(COURSE_REPORT_HEIC_CONVERT_MESSAGE);
     if (blob.size > CHAT_PHOTO_MAX_BYTES) {
       throw new Error("사진은 장당 3MB 이하만 첨부할 수 있습니다.");
     }
-    return {
+    return finishAdaptiveResult({
       blob,
       sourceBytes: file.size,
       uploadBytes: blob.size,
@@ -330,33 +371,50 @@ export async function prepareChatAdaptivePhoto(
       encoded: true,
       attempts,
       mimeType: blob.type || plan.mime,
-    };
+      encode1Ms,
+      encode2Ms,
+      inputWidth: inspect?.width ?? null,
+      inputHeight: inspect?.height ?? null,
+      outputWidth: dims.width,
+      outputHeight: dims.height,
+    });
   }
 
   let drawable: DrawableSource;
+  const decodeStarted = now();
   try {
     drawable = await loadDrawable(source);
   } catch {
     throw new Error(heic ? COURSE_REPORT_HEIC_CONVERT_MESSAGE : COURSE_REPORT_HEIC_MESSAGE);
   }
+  const decodeMs = Math.max(0, now() - decodeStarted);
   try {
     const sized = scaleChatPhotoSize(drawable.width, drawable.height, plan.longEdge);
-    const { ctx } = makeCanvas(sized.width, sized.height);
+    const drawStarted = now();
+    const { canvas, ctx } = makeCanvas(sized.width, sized.height);
     drawable.draw(ctx, sized.width, sized.height);
-    const keepAlpha = plan.keepAlpha || (chatPhotoSourceKind(probe) === "png" && sampleHasAlpha(ctx, sized.width, sized.height));
+    const drawResizeMs = Math.max(0, now() - drawStarted);
+    const keepAlpha =
+      plan.keepAlpha || (chatPhotoSourceKind(probe) === "png" && sampleHasAlpha(ctx, sized.width, sized.height));
     let blob: Blob | null = null;
     let attempts = 0;
+    let encode1Ms: number | null = null;
+    let encode2Ms: number | null = null;
     for (const quality of plan.qualities) {
       attempts += 1;
-      blob = await encodeDrawable(drawable, sized.width, sized.height, plan.mime, quality, keepAlpha);
-      if (blob.size <= plan.targetMaxBytes) break;
+      const encodeStarted = now();
+      blob = await encodeCanvas(canvas, plan.mime, quality, keepAlpha);
+      const encodeMs = Math.max(0, now() - encodeStarted);
+      if (attempts === 1) encode1Ms = encodeMs;
+      else encode2Ms = encodeMs;
+      if (shouldAcceptChatPhotoEncode(blob.size, plan.acceptMaxBytes)) break;
       if (attempts >= plan.maxAttempts) break;
     }
     if (!blob || blob.size <= 0) throw new Error(COURSE_REPORT_HEIC_CONVERT_MESSAGE);
     if (blob.size > CHAT_PHOTO_MAX_BYTES) {
       throw new Error("사진은 장당 3MB 이하만 첨부할 수 있습니다.");
     }
-    return {
+    return finishAdaptiveResult({
       blob,
       sourceBytes: file.size,
       uploadBytes: blob.size,
@@ -364,7 +422,15 @@ export async function prepareChatAdaptivePhoto(
       encoded: true,
       attempts,
       mimeType: blob.type || plan.mime,
-    };
+      decodeMs,
+      drawResizeMs,
+      encode1Ms,
+      encode2Ms,
+      inputWidth: drawable.width,
+      inputHeight: drawable.height,
+      outputWidth: sized.width,
+      outputHeight: sized.height,
+    });
   } finally {
     drawable.close();
   }
