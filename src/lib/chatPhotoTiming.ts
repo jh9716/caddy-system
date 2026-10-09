@@ -16,6 +16,16 @@ export type ChatPhotoTimingBag = {
   sourceBytes?: number;
   uploadBytes?: number;
   compressionMs?: number;
+  decodeMs?: number;
+  drawResizeMs?: number;
+  encode1Ms?: number;
+  encode2Ms?: number;
+  inputWidth?: number;
+  inputHeight?: number;
+  outputWidth?: number;
+  outputHeight?: number;
+  encodeAttempts?: number;
+  encodeMime?: string;
   prepareHotpath?: ChatPhotoHotpathSummary;
   finalizeHotpath?: ChatPhotoHotpathSummary;
   storageBackend?: "r2" | "blob";
@@ -43,6 +53,16 @@ export type ChatPhotoDebugSample = {
   sourceBytes: number | null;
   uploadBytes: number | null;
   compressionMs: number | null;
+  decodeMs: number | null;
+  drawResizeMs: number | null;
+  encode1Ms: number | null;
+  encode2Ms: number | null;
+  inputWidth: number | null;
+  inputHeight: number | null;
+  outputWidth: number | null;
+  outputHeight: number | null;
+  encodeAttempts: number | null;
+  encodeMime: string | null;
   selectedToUploadStartMs: number | null;
   prepareApiMs: number | null;
   storageBackend: "r2" | "blob" | null;
@@ -139,6 +159,38 @@ export function noteChatPhotoCompression(ms: number): void {
   timingBag().compressionMs = Math.max(0, ms);
 }
 
+export function noteChatPhotoCompressionBreakdown(input: {
+  decodeMs?: number | null;
+  drawResizeMs?: number | null;
+  encode1Ms?: number | null;
+  encode2Ms?: number | null;
+  totalCompressionMs?: number | null;
+  inputWidth?: number | null;
+  inputHeight?: number | null;
+  outputWidth?: number | null;
+  outputHeight?: number | null;
+  attempts?: number | null;
+  encodeMime?: string | null;
+}): void {
+  const bag = timingBag();
+  if (Number.isFinite(input.totalCompressionMs)) {
+    bag.compressionMs = Math.max(0, Number(input.totalCompressionMs));
+  }
+  if (Number.isFinite(input.decodeMs)) bag.decodeMs = Math.max(0, Number(input.decodeMs));
+  if (Number.isFinite(input.drawResizeMs)) bag.drawResizeMs = Math.max(0, Number(input.drawResizeMs));
+  if (Number.isFinite(input.encode1Ms)) bag.encode1Ms = Math.max(0, Number(input.encode1Ms));
+  if (Number.isFinite(input.encode2Ms)) bag.encode2Ms = Math.max(0, Number(input.encode2Ms));
+  if (Number.isFinite(input.inputWidth)) bag.inputWidth = Math.max(0, Math.round(Number(input.inputWidth)));
+  if (Number.isFinite(input.inputHeight)) bag.inputHeight = Math.max(0, Math.round(Number(input.inputHeight)));
+  if (Number.isFinite(input.outputWidth)) bag.outputWidth = Math.max(0, Math.round(Number(input.outputWidth)));
+  if (Number.isFinite(input.outputHeight)) bag.outputHeight = Math.max(0, Math.round(Number(input.outputHeight)));
+  if (Number.isFinite(input.attempts)) bag.encodeAttempts = Math.max(0, Math.round(Number(input.attempts)));
+  if (typeof input.encodeMime === "string" && input.encodeMime) {
+    const mime = input.encodeMime.toLowerCase().split(";", 1)[0] || "";
+    if (mime === "image/jpeg" || mime === "image/png" || mime === "image/webp") bag.encodeMime = mime;
+  }
+}
+
 export function noteChatPhotoStorageBackend(backend: "r2" | "blob"): void {
   timingBag().storageBackend = backend;
 }
@@ -229,6 +281,16 @@ export function buildChatPhotoDebugSample(
     uploadBytes: bag?.uploadBytes ?? null,
     compressionMs:
       bag?.compressionMs != null ? Math.round(bag.compressionMs) : latestChatPhotoMark("select_to_prepared", bag),
+    decodeMs: bag?.decodeMs != null ? Math.round(bag.decodeMs) : null,
+    drawResizeMs: bag?.drawResizeMs != null ? Math.round(bag.drawResizeMs) : null,
+    encode1Ms: bag?.encode1Ms != null ? Math.round(bag.encode1Ms) : null,
+    encode2Ms: bag?.encode2Ms != null ? Math.round(bag.encode2Ms) : null,
+    inputWidth: bag?.inputWidth ?? null,
+    inputHeight: bag?.inputHeight ?? null,
+    outputWidth: bag?.outputWidth ?? null,
+    outputHeight: bag?.outputHeight ?? null,
+    encodeAttempts: bag?.encodeAttempts ?? null,
+    encodeMime: bag?.encodeMime ?? null,
     selectedToUploadStartMs: summary.select_to_put_start_ms,
     prepareApiMs: latestChatPhotoMark("prepare_api", bag),
     storageBackend: bag?.storageBackend ?? null,
@@ -313,6 +375,16 @@ export function resetChatPhotoTiming(): void {
   delete bag.sourceBytes;
   delete bag.uploadBytes;
   delete bag.compressionMs;
+  delete bag.decodeMs;
+  delete bag.drawResizeMs;
+  delete bag.encode1Ms;
+  delete bag.encode2Ms;
+  delete bag.inputWidth;
+  delete bag.inputHeight;
+  delete bag.outputWidth;
+  delete bag.outputHeight;
+  delete bag.encodeAttempts;
+  delete bag.encodeMime;
   delete bag.prepareHotpath;
   delete bag.finalizeHotpath;
   delete bag.storageBackend;

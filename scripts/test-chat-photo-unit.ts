@@ -112,6 +112,7 @@ import {
   chatPhotoPutBottleneck,
   planChatPhotoAdaptive,
   prepareChatAdaptivePhoto,
+  shouldAcceptChatPhotoEncode,
 } from "../src/lib/chatPhotoAdaptive";
 import { CHAT_PHOTO_MAX_BYTES, CHAT_PHOTO_PASSTHROUGH_MAX_BYTES } from "../src/lib/chatPhotoConstants";
 import {
@@ -1041,8 +1042,11 @@ section("phase 5 adaptive compression + debug");
   assert(pngPlan.qualities[0] === 0.92 && pngPlan.maxAttempts === 2, "PNG uses high-quality bounded encode");
   assert(pngPlan.keepAlpha === true || pngPlan.mime !== "image/jpeg", "large PNG is not forced to low-quality JPEG");
   const jpegPlan = planChatPhotoAdaptive(midJpeg);
-  assert(jpegPlan.longEdge === 1600 && jpegPlan.targetMaxBytes <= 800 * 1024, "JPEG long edge 1600 / target <=800KB");
+  assert(jpegPlan.longEdge === 1600 && jpegPlan.mime === "image/jpeg", "JPEG source uses 1600 JPEG encode");
+  assert(jpegPlan.acceptMaxBytes === CHAT_PHOTO_MAX_BYTES, "first encode is accepted up to 3MB");
   assert(jpegPlan.maxAttempts <= 2, "encode attempts bounded");
+  assert(shouldAcceptChatPhotoEncode(900 * 1024), "900KB first encode is accepted");
+  assert(!shouldAcceptChatPhotoEncode(CHAT_PHOTO_MAX_BYTES + 1), "over 3MB is not accepted");
 
   let encodeCalls = 0;
   const compressed = await prepareChatAdaptivePhoto(midJpeg, {
@@ -1053,16 +1057,47 @@ section("phase 5 adaptive compression + debug");
       return new Blob([new Uint8Array(size)], { type: mime });
     },
   });
-  assert(encodeCalls === 2, "quality loop stops at 2 encodes");
-  assert(compressed.uploadBytes <= 800 * 1024, "2~3MB JPEG compressed to target");
+  assert(encodeCalls === 1, "first encode above soft target but <=3MB skips second");
+  assert(compressed.attempts === 1 && compressed.outputWidth === 1600 && compressed.outputHeight === 1200, "4000x3000 JPEG scales to 1600x1200");
+  assert(compressed.mimeType.includes("jpeg"), "JPEG source stays JPEG");
+  assert(compressed.uploadBytes === 900 * 1024, "accepted first encode bytes kept");
   assert(compressed.uploadBytes <= CHAT_PHOTO_MAX_BYTES, "compressed result <= server max");
   assert(compressed.sourceBytes === midJpeg.size, "sourceBytes recorded");
+
+  let overCalls = 0;
+  const overThenOk = await prepareChatAdaptivePhoto(midJpeg, {
+    inspect: async () => ({ width: 4000, height: 3000 }),
+    encode: async ({ quality }) => {
+      overCalls += 1;
+      const size = quality > 0.75 ? CHAT_PHOTO_MAX_BYTES + 1024 : 900 * 1024;
+      return new Blob([new Uint8Array(size)], { type: "image/jpeg" });
+    },
+  });
+  assert(overCalls === 2 && overThenOk.attempts === 2, "first encode >3MB tries second quality");
+  assert(overThenOk.uploadBytes === 900 * 1024, "second encode under 3MB is kept");
+
+  let rejectCalls = 0;
+  let overMax = "";
+  try {
+    await prepareChatAdaptivePhoto(midJpeg, {
+      inspect: async () => ({ width: 4000, height: 3000 }),
+      encode: async () => {
+        rejectCalls += 1;
+        return new Blob([new Uint8Array(CHAT_PHOTO_MAX_BYTES + 8)], { type: "image/jpeg" });
+      },
+    });
+  } catch (e) {
+    overMax = e instanceof Error ? e.message : "other";
+  }
+  assert(rejectCalls === 2 && overMax.includes("3MB"), ">3MB final reject");
 
   const webpOut = await prepareChatAdaptivePhoto(largeWebp, {
     inspect: async () => ({ width: 2400, height: 1800 }),
     encode: async ({ mime }) => new Blob([new Uint8Array(560 * 1024)], { type: mime }),
   });
   assert(webpOut.encoded && webpOut.uploadBytes === 560 * 1024, "large WEBP uses adaptive encode");
+  assert(webpOut.attempts === 1 && webpOut.mimeType.includes("jpeg"), "WebP source uses one JPEG encode");
+  assert(planChatPhotoAdaptive(largeWebp).mime === "image/jpeg", "large WebP plan is JPEG");
 
   const pngOut = await prepareChatAdaptivePhoto(largePng, {
     hasAlpha: true,
@@ -1070,7 +1105,9 @@ section("phase 5 adaptive compression + debug");
     encode: async ({ mime, quality }) => new Blob([new Uint8Array(quality > 0.88 ? 820 * 1024 : 700 * 1024)], { type: mime }),
   });
   assert(pngOut.mimeType.includes("webp") || pngOut.mimeType.includes("png"), "transparent/screenshot PNG stays readable");
+  assert(pngOut.attempts === 1, "PNG first encode under 3MB skips second");
   assert(pngOut.uploadBytes <= 1024 * 1024, "PNG target around 700KB~1MB");
+  assert(pngOut.outputWidth === 1600 && pngOut.outputHeight === 1120, "PNG long-edge scale is valid");
 
   const heicOut = await prepareChatAdaptivePhoto(heic, {
     decodeHeic: async () => new Blob([new Uint8Array(2 * 1024 * 1024)], { type: "image/jpeg" }),
@@ -1182,8 +1219,11 @@ section("phase 5 adaptive compression + debug");
       debug.clientUploadMs == null &&
       debug.responseWaitMs == null &&
       debug.workerHashMs == null &&
-      debug.workerTotalMs == null,
-    "phase 8/9 debug fields empty by default"
+      debug.workerTotalMs == null &&
+      debug.decodeMs == null &&
+      debug.encode1Ms == null &&
+      debug.encodeAttempts == null,
+    "phase 8/9/10 debug fields empty by default"
   );
   const debugDump = JSON.stringify(debug);
   assert(!/https?:|claim|token|storageKey|\.jpg/i.test(debugDump), "debug sample has no secrets");
@@ -1338,8 +1378,15 @@ section("source wiring / no public blob");
   assert(client.includes("photoDebug"), "photoDebug query panel");
   const adaptive = read("src/lib/chatPhotoAdaptive.ts");
   assert(adaptive.includes("createImageBitmap"), "adaptive prefers createImageBitmap");
+  assert(adaptive.includes("imageOrientation"), "bitmap decode keeps EXIF orientation");
   assert(adaptive.includes("OffscreenCanvas"), "adaptive considers OffscreenCanvas");
+  assert(adaptive.includes("shouldAcceptChatPhotoEncode"), "first encode can stop at 3MB");
+  assert(adaptive.includes('mime: "image/jpeg"'), "non-alpha adaptive encode prefers JPEG");
   assert(adaptive.includes("CHAT_PHOTO_ENCODE_MAX_ATTEMPTS"), "encode loop is bounded");
+  assert(client.includes("decodeMs"), "debug panel shows decode timing");
+  assert(client.includes("encode1Ms"), "debug panel shows first encode timing");
+  assert(client.includes("encodeAttempts"), "debug panel shows encode attempts");
+  assert(timingSrc.includes("noteChatPhotoCompressionBreakdown"), "timing bag records compression split");
   assert(fast.includes("CHAT_PHOTO_PASSTHROUGH_MAX_BYTES"), "passthrough is chat-sized not 3MB");
   assert(reportClient.includes("createImageBitmap"), "createImageBitmap decode path");
   assert(!client.includes("전송 중..."), "composer send button is not locked as 전송 중");

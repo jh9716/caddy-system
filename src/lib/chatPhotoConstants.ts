@@ -11,6 +11,7 @@ export const CHAT_PHOTO_LONG_EDGE = COURSE_REPORT_PHOTO_LONG_EDGE;
 /** Skip re-encode when the source is already chat-sized. */
 export const CHAT_PHOTO_PASSTHROUGH_MAX_BYTES = 700 * 1024;
 export const CHAT_PHOTO_ADAPTIVE_LONG_EDGE = 1600;
+/** Preferred upload size. A first encode above this is kept if it is still <= 3MB. */
 export const CHAT_PHOTO_JPEG_WEBP_TARGET_MAX_BYTES = 800 * 1024;
 export const CHAT_PHOTO_PNG_TARGET_MAX_BYTES = 1024 * 1024;
 export const CHAT_PHOTO_ENCODE_MAX_ATTEMPTS = 2;

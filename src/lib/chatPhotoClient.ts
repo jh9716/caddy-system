@@ -24,6 +24,7 @@ export {
   chatPhotoPutBottleneck,
   planChatPhotoAdaptive,
   prepareChatAdaptivePhoto,
+  shouldAcceptChatPhotoEncode,
 } from "@/lib/chatPhotoAdaptive";
 export {
   buildOptimisticOutgoingLine,
