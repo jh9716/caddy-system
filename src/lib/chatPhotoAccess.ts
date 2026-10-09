@@ -28,7 +28,7 @@ export async function isDirectoryMember(token: string, roomId: string): Promise<
   const url = chatDirectoryMembersUrl(roomId, token);
   if (!url) return false;
   try {
-    const res = await fetch(url, { cache: "no-store" });
+    const res = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(2500) });
     return res.ok;
   } catch {
     return false;

@@ -1496,6 +1496,7 @@ section("source wiring / no public blob");
   assert(accessSrc.includes("fastPath"), "ALL room token skips caddy DB reissue");
   assert(accessSrc.includes("chatPhotoIdentityMatchesToken"), "env-admin token can match without cookie userId");
   assert(accessSrc.includes("missing_token"), "fast-path fallback reasons are safe enums");
+  assert(accessSrc.includes("AbortSignal.timeout"), "directory membership lookup is bounded");
   assert(direct.includes("chatToken"), "prepare request can carry chat token");
   assert(direct.includes("receipt"), "finalize request can carry upload receipt");
   assert(direct.includes("xhrUploadCompleteMs"), "client PUT splits upload vs response wait");
