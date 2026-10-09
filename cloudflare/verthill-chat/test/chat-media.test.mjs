@@ -36,7 +36,8 @@ test("chat media routes and grant stay Worker-local", () => {
   assert.match(media, /r2PutStarted/);
   assert.doesNotMatch(media, /await request\.arrayBuffer\(\)/);
   assert.match(uploadFn, /readBoundedBody/);
-  assert.doesNotMatch(uploadFn, /sha256Hex/);
+  assert.match(uploadFn, /sha256Hex/);
+  assert.match(uploadFn, /sha256: digest/);
   assert.doesNotMatch(uploadFn, /bounded\.stream/);
   assert.match(uploadFn, /bounded\.bytes/);
   assert.match(uploadFn, /upload_failed/);

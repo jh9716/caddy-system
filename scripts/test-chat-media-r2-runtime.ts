@@ -213,8 +213,16 @@ async function main() {
   const retryBytes = jpegBytes(64 * 1024, 9);
   const retry1 = await putViaHandler(bucket, retryBytes, { attachmentId: retryId });
   const retry2 = await putViaHandler(bucket, retryBytes, { attachmentId: retryId });
-  assert(retry1.res?.status === 200 && retry2.res?.status === 200, "duplicate same upload retry");
+  assert(retry1.res?.status === 200 && retry2.res?.status === 200, "same bytes same size retry → 200");
   assert(Boolean(retry2.json?.receipt), "retry returns a receipt");
+  const head1 = await bucket.head(retry1.key);
+  assert(Boolean(head1?.customMetadata?.sha256), "first object stores sha256 metadata");
+  const sameSizeOther = jpegBytes(64 * 1024, 11);
+  assert(sameSizeOther.byteLength === retryBytes.byteLength && sameSizeOther[4] !== retryBytes[4], "same-size different bytes");
+  const digestConflict = await putViaHandler(bucket, sameSizeOther, { attachmentId: retryId });
+  assert(digestConflict.res?.status === 409, "different bytes same size same mime → 409");
+  const afterDigest = new Uint8Array(await (await bucket.get(retry1.key))!.arrayBuffer());
+  assert(sameBytes(afterDigest, retryBytes), "original object bytes unchanged after digest conflict");
   const conflict = await putViaHandler(bucket, jpegBytes(80 * 1024, 10), { attachmentId: retryId });
   assert(conflict.res?.status === 409, "duplicate different size conflict");
   assert(sameBytes((await bucket.get(retry1.key).then(async (o) => new Uint8Array(await o!.arrayBuffer())))!, retryBytes), "conflict leaves original bytes");
@@ -277,14 +285,18 @@ async function main() {
     "Uint8Array put + readback works on workerd R2"
   );
 
-  console.log("\n== local timing (not slower than Phase 7 buffer path) ==");
+  console.log("\n== local timing including SHA-256 ==");
   console.log(`  500KB handler+R2 ${first.elapsed.toFixed(1)}ms`);
   console.log(`  800KB handler+R2 ${jpeg800Put.elapsed.toFixed(1)}ms`);
   const shaStart = performance.now();
   await crypto.subtle.digest("SHA-256", jpeg800);
   const shaMs = performance.now() - shaStart;
-  console.log(`  800KB SHA-256 (Phase 7 extra) ${shaMs.toFixed(1)}ms`);
-  assert(true, "Phase 8-fixed path skips hot-path SHA-256");
+  const sha500Start = performance.now();
+  await crypto.subtle.digest("SHA-256", jpeg500);
+  const sha500Ms = performance.now() - sha500Start;
+  console.log(`  500KB SHA-256 ${sha500Ms.toFixed(1)}ms`);
+  console.log(`  800KB SHA-256 ${shaMs.toFixed(1)}ms`);
+  assert(shaMs < 20, "800KB SHA-256 stays well under upload latency");
 
   await proxy.dispose();
 

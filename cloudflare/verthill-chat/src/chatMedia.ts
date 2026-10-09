@@ -4,9 +4,10 @@
  * First write is create-only via official R2 onlyIf { etagDoesNotMatch: "*" }.
  * The body is read into a bounded Uint8Array (<=3MB) then bucket.put(bytes).
  * Reconstructed unknown-length ReadableStreams are not passed to R2: production
- * R2 + onlyIf rejected that Phase 8 path. Full-file SHA-256 is not on the hot path.
- * Success returns a signed upload receipt. Same-size/mime retries re-issue
- * a receipt; a different size is 409 and never overwrites.
+ * R2 + onlyIf rejected that Phase 8 path. SHA-256 of the buffered bytes is stored
+ * in customMetadata so retries require mime + size + digest.
+ * Success returns a signed upload receipt. Same-size/mime/sha256 retries re-issue
+ * a receipt; a different size or digest is 409 and never overwrites.
  * Internal inspect/get/delete require CHAT_INTERNAL_SECRET.
  * Client never chooses the object key.
  */
@@ -469,19 +470,20 @@ function storedMime(meta: {
   return String(meta.customMetadata?.mime || meta.httpMetadata?.contentType || "");
 }
 
-function retryMatchesExisting(
+export function retryMatchesExisting(
   existing: {
     size: number;
     customMetadata?: Record<string, string>;
     httpMetadata?: { contentType?: string };
   },
   grant: ChatMediaPutGrant,
-  candidateSize: number | null
+  candidate: { size: number; sha256: string }
 ): boolean {
   if (storedMime(existing) !== grant.mimeType) return false;
   if (existing.size <= 0 || existing.size > grant.maxBytes) return false;
-  if (candidateSize != null && candidateSize > 0 && candidateSize !== existing.size) return false;
-  return true;
+  if (candidate.size <= 0 || candidate.size !== existing.size) return false;
+  const storedHash = String(existing.customMetadata?.sha256 || "");
+  return Boolean(storedHash) && storedHash === candidate.sha256;
 }
 
 export const CHAT_MEDIA_UPLOAD_FAILURE_EVENT = "chat_media_upload_failed";
@@ -657,11 +659,13 @@ export async function handleChatMediaUpload(
     if (!magic.ok) {
       return json({ error: magic.code }, mediaErrorStatus(magic.code));
     }
+    const digest = await sha256Hex(bounded.bytes);
     const ingressMs = nowMs() - started;
     const key = deriveChatMediaR2Key(grant);
     const customMetadata = {
       mime: grant.mimeType,
       size: String(bounded.bytes.byteLength),
+      sha256: digest,
     };
     stage = "r2_put";
     r2PutStarted = true;
@@ -697,7 +701,7 @@ export async function handleChatMediaUpload(
     }
     stage = "retry";
     const existing = await bucket.head(key);
-    if (existing && retryMatchesExisting(existing, grant, bounded.bytes.byteLength)) {
+    if (existing && retryMatchesExisting(existing, grant, { size: bounded.bytes.byteLength, sha256: digest })) {
       return uploadSuccessResponse(secret, grant, existing.size, nowSec, { ingressMs, storeMs });
     }
     return json({ error: "upload_conflict" }, 409);

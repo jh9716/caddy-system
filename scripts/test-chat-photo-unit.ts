@@ -133,7 +133,9 @@ import {
   handleChatMediaRequest,
   readBoundedBody,
   readPrefixThenRest,
+  retryMatchesExisting,
   safeChatMediaUploadFailureLog,
+  sha256Hex,
   type ChatMediaEnv,
 } from "../cloudflare/verthill-chat/src/chatMedia";
 import {
@@ -1415,7 +1417,7 @@ section("source wiring / no public blob");
     mediaSrc.indexOf("export async function handleChatMediaInspect")
   );
   assert(uploadFn.includes("readBoundedBody"), "normal R2 upload uses bounded body");
-  assert(!uploadFn.includes("sha256Hex"), "hot path does not SHA-256 the full body");
+  assert(uploadFn.includes("sha256Hex"), "hot path hashes bounded bytes for retry");
   assert(!uploadFn.includes("bounded.stream"), "bucket.put does not take a reconstructed stream");
   assert(uploadFn.includes("bounded.bytes"), "bucket.put receives Uint8Array bytes");
   assert(!/await request\.arrayBuffer\(\)/.test(mediaSrc), "PUT does not unbounded arrayBuffer");
@@ -1606,6 +1608,7 @@ section("r2 grant / key / magic");
   const stored = await spyBucket.head(`chat/${roomId}/${attachmentId}.jpg`);
   assert(stored?.customMetadata?.mime === "image/jpeg", "stores mime metadata");
   assert(stored?.size === photoA.byteLength, "stores actual object size");
+  assert(stored?.customMetadata?.sha256 === (await sha256Hex(photoA)), "stores sha256 metadata");
   const sameA = await handleChatMediaRequest(
     new Request("http://chat-media.test/media/upload", {
       method: "PUT",
@@ -1626,8 +1629,45 @@ section("r2 grant / key / magic");
   );
   const conflictJson = await differentB?.clone().json().catch(() => null);
   assert(differentB?.status === 409 && conflictJson?.error === "upload_conflict", "same grant + different size B → 409");
+  const photoSameSize = jpegBytes(16, 99);
+  assert(photoSameSize.byteLength === photoA.byteLength && photoSameSize[4] !== photoA[4], "same-size different bytes fixture");
+  const sameSizeDiff = await handleChatMediaRequest(
+    new Request("http://chat-media.test/media/upload", {
+      method: "PUT",
+      headers: { "content-type": "image/jpeg", [CHAT_MEDIA_GRANT_HEADER]: token },
+      body: photoSameSize,
+    }),
+    { CHAT_MEDIA: spyBucket, CHAT_MEDIA_SECRET: secret }
+  );
+  const sameSizeJson = await sameSizeDiff?.clone().json().catch(() => null);
+  assert(
+    sameSizeDiff?.status === 409 && sameSizeJson?.error === "upload_conflict",
+    "same size + same mime + different bytes → 409"
+  );
   const afterConflict = new Uint8Array((await (await spyBucket.get(`chat/${roomId}/${attachmentId}.jpg`))!.arrayBuffer()));
   assert(afterConflict[4] === photoA[4], "conflict 뒤 R2 object bytes unchanged");
+  assert(
+    retryMatchesExisting(
+      {
+        size: photoA.byteLength,
+        customMetadata: { mime: "image/jpeg", sha256: await sha256Hex(photoA) },
+      },
+      grantBody,
+      { size: photoA.byteLength, sha256: await sha256Hex(photoA) }
+    ),
+    "retry helper accepts mime+size+sha256"
+  );
+  assert(
+    !retryMatchesExisting(
+      {
+        size: photoA.byteLength,
+        customMetadata: { mime: "image/jpeg", sha256: await sha256Hex(photoA) },
+      },
+      grantBody,
+      { size: photoA.byteLength, sha256: await sha256Hex(photoSameSize) }
+    ),
+    "retry helper rejects different digest"
+  );
   const cond = await spyBucket.put(
     `chat/${roomId}/${attachmentId}.jpg`,
     photoB,
