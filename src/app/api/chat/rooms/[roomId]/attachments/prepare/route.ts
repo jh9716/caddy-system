@@ -43,6 +43,7 @@ export async function POST(
     });
     clock.mark("roomAccess");
     clock.flag("roomAccessFastPath", access.fastPath);
+    clock.reason("roomAccessFallbackReason", access.fallbackReason);
     const upload = await prepareChatPhotoUpload(
       prisma,
       {

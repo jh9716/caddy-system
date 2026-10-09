@@ -11,6 +11,7 @@ import {
   chatDirectoryRoomsUrl,
   chatDirectoryWsUrl,
   chatWsUrl,
+  warmChatPhotoMediaConnection,
 } from "@/lib/chatClientConfig";
 import {
   applyDeletedLine,
@@ -757,6 +758,8 @@ export default function ChatClient() {
         if (cancelled || !info) return;
         tokenRef.current = info;
         setTokenInfo(info);
+        warmChatPhotoMediaConnection();
+        warmChatPhotoMediaConnection();
         const requested =
           parseChatDeepLinkRoomId(new URLSearchParams(window.location.search).get("room")) ||
           readPendingChatRoomId(sessionStorage);
@@ -2346,10 +2349,19 @@ export default function ChatClient() {
                   ["finalizeBlobMs", photoDebugSample.finalizeBlobMs],
                   ["r2InspectMs", photoDebugSample.r2InspectMs],
                   ["workerIngressMs", photoDebugSample.workerIngressMs],
+                  ["workerHashMs", photoDebugSample.workerHashMs],
+                  ["workerTotalMs", photoDebugSample.workerTotalMs],
                   ["r2StoreMs", photoDebugSample.r2StoreMs],
                   ["receiptVerifyMs", photoDebugSample.receiptVerifyMs],
                   ["finalizeInspectSkipped", photoDebugSample.finalizeInspectSkipped],
                   ["roomAccessFastPath", photoDebugSample.roomAccessFastPath],
+                  ["roomAccessFallbackReason", photoDebugSample.roomAccessFallbackReason],
+                  ["xhrStartMs", photoDebugSample.xhrStartMs],
+                  ["xhrUploadCompleteMs", photoDebugSample.xhrUploadCompleteMs],
+                  ["xhrResponseCompleteMs", photoDebugSample.xhrResponseCompleteMs],
+                  ["clientUploadMs", photoDebugSample.clientUploadMs],
+                  ["responseWaitMs", photoDebugSample.responseWaitMs],
+                  ["connectionWaitMs", photoDebugSample.connectionWaitMs],
                   ["finalizeDbUpdateMs", photoDebugSample.finalizeDbUpdateMs],
                   ["finalizeSignMs", photoDebugSample.finalizeSignMs],
                 ] as const

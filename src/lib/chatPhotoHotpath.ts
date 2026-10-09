@@ -43,8 +43,20 @@ export const CHAT_PHOTO_HOTPATH_SAFE_FLAGS = [
   "finalizeInspectSkipped",
 ] as const;
 
+export const CHAT_PHOTO_HOTPATH_SAFE_REASONS = [
+  "missing_token",
+  "invalid_token",
+  "user_mismatch",
+  "acl_failed",
+  "fast",
+] as const;
+
+export const CHAT_PHOTO_HOTPATH_SAFE_REASON_KEYS = ["roomAccessFallbackReason"] as const;
+
 export type ChatPhotoHotpathStep = (typeof CHAT_PHOTO_HOTPATH_SAFE_STEPS)[number];
 export type ChatPhotoHotpathFlag = (typeof CHAT_PHOTO_HOTPATH_SAFE_FLAGS)[number];
+export type ChatPhotoHotpathReason = (typeof CHAT_PHOTO_HOTPATH_SAFE_REASONS)[number];
+export type ChatPhotoHotpathReasonKey = (typeof CHAT_PHOTO_HOTPATH_SAFE_REASON_KEYS)[number];
 
 export type ChatPhotoHotpathSummary = {
   route: "prepare" | "finalize";
@@ -53,6 +65,7 @@ export type ChatPhotoHotpathSummary = {
   totalMs: number;
   steps: Partial<Record<ChatPhotoHotpathStep, number>>;
   flags?: Partial<Record<ChatPhotoHotpathFlag, boolean>>;
+  reasons?: Partial<Record<ChatPhotoHotpathReasonKey, ChatPhotoHotpathReason>>;
 };
 
 type ChatPhotoHotpathGlobal = typeof globalThis & {
@@ -79,9 +92,18 @@ export function isSafeChatPhotoHotpathFlag(name: string): name is ChatPhotoHotpa
   return (CHAT_PHOTO_HOTPATH_SAFE_FLAGS as readonly string[]).includes(name);
 }
 
+export function isSafeChatPhotoHotpathReason(value: unknown): value is ChatPhotoHotpathReason {
+  return (CHAT_PHOTO_HOTPATH_SAFE_REASONS as readonly string[]).includes(String(value || ""));
+}
+
+export function isSafeChatPhotoHotpathReasonKey(name: string): name is ChatPhotoHotpathReasonKey {
+  return (CHAT_PHOTO_HOTPATH_SAFE_REASON_KEYS as readonly string[]).includes(name);
+}
+
 export function createChatPhotoHotpathClock() {
   const steps: Partial<Record<ChatPhotoHotpathStep, number>> = {};
   const flags: Partial<Record<ChatPhotoHotpathFlag, boolean>> = {};
+  const reasons: Partial<Record<ChatPhotoHotpathReasonKey, ChatPhotoHotpathReason>> = {};
   const started = nowMs();
   let last = started;
   return {
@@ -95,6 +117,10 @@ export function createChatPhotoHotpathClock() {
       if (!isSafeChatPhotoHotpathFlag(name)) return;
       flags[name] = value;
     },
+    reason(name: string, value: string) {
+      if (!isSafeChatPhotoHotpathReasonKey(name) || !isSafeChatPhotoHotpathReason(value)) return;
+      reasons[name] = value;
+    },
     summary(route: "prepare" | "finalize"): ChatPhotoHotpathSummary {
       const out: ChatPhotoHotpathSummary = {
         route,
@@ -104,6 +130,7 @@ export function createChatPhotoHotpathClock() {
         steps,
       };
       if (Object.keys(flags).length > 0) out.flags = flags;
+      if (Object.keys(reasons).length > 0) out.reasons = reasons;
       return out;
     },
   };
@@ -131,7 +158,14 @@ export function parseChatPhotoHotpath(value: unknown): ChatPhotoHotpathSummary |
   if (row.flags && typeof row.flags === "object") {
     for (const [key, raw] of Object.entries(row.flags as Record<string, unknown>)) {
       if (!isSafeChatPhotoHotpathFlag(key)) continue;
-      if (raw === true) flags[key] = true;
+      if (raw === true || raw === false) flags[key] = raw;
+    }
+  }
+  const reasons: Partial<Record<ChatPhotoHotpathReasonKey, ChatPhotoHotpathReason>> = {};
+  if (row.reasons && typeof row.reasons === "object") {
+    for (const [key, raw] of Object.entries(row.reasons as Record<string, unknown>)) {
+      if (!isSafeChatPhotoHotpathReasonKey(key) || !isSafeChatPhotoHotpathReason(raw)) continue;
+      reasons[key] = raw;
     }
   }
   const parsed: ChatPhotoHotpathSummary = {
@@ -142,6 +176,7 @@ export function parseChatPhotoHotpath(value: unknown): ChatPhotoHotpathSummary |
     steps,
   };
   if (Object.keys(flags).length > 0) parsed.flags = flags;
+  if (Object.keys(reasons).length > 0) parsed.reasons = reasons;
   return parsed;
 }
 

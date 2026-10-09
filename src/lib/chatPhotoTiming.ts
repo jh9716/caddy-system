@@ -20,7 +20,16 @@ export type ChatPhotoTimingBag = {
   finalizeHotpath?: ChatPhotoHotpathSummary;
   storageBackend?: "r2" | "blob";
   workerIngressMs?: number;
+  workerHashMs?: number;
+  workerTotalMs?: number;
   r2StoreMs?: number;
+  xhrStartMs?: number;
+  xhrUploadCompleteMs?: number;
+  xhrResponseCompleteMs?: number;
+  xhrFirstProgressMs?: number;
+  clientUploadMs?: number;
+  responseWaitMs?: number;
+  connectionWaitMs?: number;
 };
 
 export type ChatPhotoTimingSummary = {
@@ -61,10 +70,19 @@ export type ChatPhotoDebugSample = {
   finalizeBlobMs: number | null;
   r2InspectMs: number | null;
   workerIngressMs: number | null;
+  workerHashMs: number | null;
+  workerTotalMs: number | null;
   r2StoreMs: number | null;
   receiptVerifyMs: number | null;
   finalizeInspectSkipped: boolean | null;
   roomAccessFastPath: boolean | null;
+  roomAccessFallbackReason: string | null;
+  xhrStartMs: number | null;
+  xhrUploadCompleteMs: number | null;
+  xhrResponseCompleteMs: number | null;
+  clientUploadMs: number | null;
+  responseWaitMs: number | null;
+  connectionWaitMs: number | null;
   finalizeDbUpdateMs: number | null;
   finalizeSignMs: number | null;
 };
@@ -126,11 +144,34 @@ export function noteChatPhotoStorageBackend(backend: "r2" | "blob"): void {
 
 export function noteChatPhotoWorkerTiming(input: {
   ingressMs?: number;
+  hashMs?: number;
   storeMs?: number;
+  workerTotalMs?: number;
 }): void {
   const bag = timingBag();
   if (Number.isFinite(input.ingressMs)) bag.workerIngressMs = Math.max(0, Number(input.ingressMs));
+  if (Number.isFinite(input.hashMs)) bag.workerHashMs = Math.max(0, Number(input.hashMs));
   if (Number.isFinite(input.storeMs)) bag.r2StoreMs = Math.max(0, Number(input.storeMs));
+  if (Number.isFinite(input.workerTotalMs)) bag.workerTotalMs = Math.max(0, Number(input.workerTotalMs));
+}
+
+export function noteChatPhotoPutSplit(input: {
+  xhrStartMs?: number;
+  xhrUploadCompleteMs?: number;
+  xhrResponseCompleteMs?: number;
+  xhrFirstProgressMs?: number;
+  clientUploadMs?: number;
+  responseWaitMs?: number;
+  connectionWaitMs?: number;
+}): void {
+  const bag = timingBag();
+  if (Number.isFinite(input.xhrStartMs)) bag.xhrStartMs = Number(input.xhrStartMs);
+  if (Number.isFinite(input.xhrUploadCompleteMs)) bag.xhrUploadCompleteMs = Number(input.xhrUploadCompleteMs);
+  if (Number.isFinite(input.xhrResponseCompleteMs)) bag.xhrResponseCompleteMs = Number(input.xhrResponseCompleteMs);
+  if (Number.isFinite(input.xhrFirstProgressMs)) bag.xhrFirstProgressMs = Number(input.xhrFirstProgressMs);
+  if (Number.isFinite(input.clientUploadMs)) bag.clientUploadMs = Math.max(0, Number(input.clientUploadMs));
+  if (Number.isFinite(input.responseWaitMs)) bag.responseWaitMs = Math.max(0, Number(input.responseWaitMs));
+  if (Number.isFinite(input.connectionWaitMs)) bag.connectionWaitMs = Math.max(0, Number(input.connectionWaitMs));
 }
 
 export function noteChatPhotoServerHotpath(value: unknown): ChatPhotoHotpathSummary | null {
@@ -218,6 +259,8 @@ export function buildChatPhotoDebugSample(
     finalizeBlobMs: bag?.finalizeHotpath?.steps.blobInspect ?? null,
     r2InspectMs: bag?.finalizeHotpath?.steps.r2Inspect ?? null,
     workerIngressMs: bag?.workerIngressMs != null ? Math.round(bag.workerIngressMs) : null,
+    workerHashMs: bag?.workerHashMs != null ? Math.round(bag.workerHashMs) : null,
+    workerTotalMs: bag?.workerTotalMs != null ? Math.round(bag.workerTotalMs) : null,
     r2StoreMs: bag?.r2StoreMs != null ? Math.round(bag.r2StoreMs) : null,
     receiptVerifyMs: bag?.finalizeHotpath?.steps.receiptVerify ?? null,
     finalizeInspectSkipped: bag?.finalizeHotpath?.flags?.finalizeInspectSkipped ?? null,
@@ -225,6 +268,16 @@ export function buildChatPhotoDebugSample(
       bag?.prepareHotpath?.flags?.roomAccessFastPath ??
       bag?.finalizeHotpath?.flags?.roomAccessFastPath ??
       null,
+    roomAccessFallbackReason:
+      bag?.prepareHotpath?.reasons?.roomAccessFallbackReason ??
+      bag?.finalizeHotpath?.reasons?.roomAccessFallbackReason ??
+      null,
+    xhrStartMs: bag?.xhrStartMs != null ? Math.round(bag.xhrStartMs) : null,
+    xhrUploadCompleteMs: bag?.xhrUploadCompleteMs != null ? Math.round(bag.xhrUploadCompleteMs) : null,
+    xhrResponseCompleteMs: bag?.xhrResponseCompleteMs != null ? Math.round(bag.xhrResponseCompleteMs) : null,
+    clientUploadMs: bag?.clientUploadMs != null ? Math.round(bag.clientUploadMs) : null,
+    responseWaitMs: bag?.responseWaitMs != null ? Math.round(bag.responseWaitMs) : null,
+    connectionWaitMs: bag?.connectionWaitMs != null ? Math.round(bag.connectionWaitMs) : null,
     finalizeDbUpdateMs: bag?.finalizeHotpath?.steps.dbUpdate ?? null,
     finalizeSignMs: bag?.finalizeHotpath?.steps.claimSign ?? null,
   };
@@ -263,5 +316,14 @@ export function resetChatPhotoTiming(): void {
   delete bag.finalizeHotpath;
   delete bag.storageBackend;
   delete bag.workerIngressMs;
+  delete bag.workerHashMs;
+  delete bag.workerTotalMs;
   delete bag.r2StoreMs;
+  delete bag.xhrStartMs;
+  delete bag.xhrUploadCompleteMs;
+  delete bag.xhrResponseCompleteMs;
+  delete bag.xhrFirstProgressMs;
+  delete bag.clientUploadMs;
+  delete bag.responseWaitMs;
+  delete bag.connectionWaitMs;
 }

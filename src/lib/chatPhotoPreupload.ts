@@ -137,6 +137,7 @@ export async function finishChatPhotoOutgoingUploads(opts: {
   upload?: typeof uploadChatPhotoDirect;
   onProgress?: ChatPhotoPreuploadOptions["onProgress"];
   nowSec?: number;
+  chatToken?: string | null;
 }): Promise<ChatPhotoDirectResult[]> {
   const started = chatPhotoNow();
   const claimed = reusablePendingClaims(opts.pendingClaims, opts.nowSec);
@@ -153,6 +154,7 @@ export async function finishChatPhotoOutgoingUploads(opts: {
     upload: opts.upload,
     onProgress: opts.onProgress,
     nowSec: opts.nowSec,
+    chatToken: opts.chatToken,
   });
   markChatPhotoTiming("upload_direct", started);
   return uploaded;

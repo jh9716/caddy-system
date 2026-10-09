@@ -6,6 +6,20 @@ import { verifyChatToken } from "@/lib/chatToken";
 import type { PrismaClient } from "@prisma/client";
 import type { ResolvedAuthUser } from "@/lib/auth";
 
+export const CHAT_PHOTO_ROOM_ACCESS_REASONS = [
+  "missing_token",
+  "invalid_token",
+  "user_mismatch",
+  "acl_failed",
+  "fast",
+] as const;
+
+export type ChatPhotoRoomAccessReason = (typeof CHAT_PHOTO_ROOM_ACCESS_REASONS)[number];
+
+export function isChatPhotoRoomAccessReason(value: unknown): value is ChatPhotoRoomAccessReason {
+  return (CHAT_PHOTO_ROOM_ACCESS_REASONS as readonly string[]).includes(String(value || ""));
+}
+
 export function isChatPhotoRoomId(roomId: string): boolean {
   return isAllRoomId(roomId) || isCustomRoomId(roomId) || isDmRoomId(roomId);
 }
@@ -54,12 +68,35 @@ export type ChatPhotoRoomAccess = {
   userId: number;
   token: string;
   fastPath: boolean;
+  fallbackReason: ChatPhotoRoomAccessReason;
 };
+
+export function chatPhotoIdentityMatchesToken(
+  auth: Pick<ResolvedAuthUser, "userId" | "role">,
+  claims: { userId: number; role: string }
+): boolean {
+  if (auth.userId != null && auth.userId > 0) return claims.userId === auth.userId;
+  return (
+    auth.role === "admin" &&
+    claims.role === "admin" &&
+    Number.isInteger(claims.userId) &&
+    claims.userId > 0
+  );
+}
+
+export function chatPhotoIdentityMatchesReceipt(
+  auth: Pick<ResolvedAuthUser, "userId" | "role">,
+  receipt: { senderUserId: number }
+): boolean {
+  if (auth.userId != null && auth.userId > 0) return receipt.senderUserId === auth.userId;
+  return auth.role === "admin" && Number.isInteger(receipt.senderUserId) && receipt.senderUserId > 0;
+}
 
 /**
  * Cookie auth already happened. A still-valid chat token matching the
- * authenticated user skips issueChatAccessToken (caddy DB). ALL rooms use
- * local ACL only. CUSTOM/DM still check directory membership with the
+ * authenticated user skips issueChatAccessToken (caddy DB). Env-admin
+ * cookies have userId=null; a verified admin token is enough. ALL rooms
+ * use local ACL only. CUSTOM/DM still check directory membership with the
  * provided token. Missing/expired/mismatched tokens fall back to the
  * existing requireChatPhotoRoomAccess path.
  */
@@ -73,9 +110,14 @@ export async function resolveChatPhotoRoomAccess(
     throw new ChatAuthError("invalid_room", "invalid room", 400);
   }
   const raw = String(opts?.chatToken || "").trim();
-  if (raw && auth.userId && auth.userId > 0) {
+  let reason: ChatPhotoRoomAccessReason = "missing_token";
+  if (raw) {
     const claims = await verifyChatToken(raw);
-    if (claims && claims.userId === auth.userId) {
+    if (!claims) {
+      reason = "invalid_token";
+    } else if (!chatPhotoIdentityMatchesToken(auth, claims)) {
+      reason = "user_mismatch";
+    } else {
       const member = isAllRoomId(roomId) || (await isDirectoryMember(raw, roomId));
       const access = resolveChatRoomAccess({
         claims,
@@ -83,10 +125,11 @@ export async function resolveChatPhotoRoomAccess(
         isMember: member,
       });
       if (access.ok) {
-        return { userId: claims.userId, token: raw, fastPath: true };
+        return { userId: claims.userId, token: raw, fastPath: true, fallbackReason: "fast" };
       }
+      reason = "acl_failed";
     }
   }
   const issued = await requireChatPhotoRoomAccess(db, auth, roomId);
-  return { ...issued, fastPath: false };
+  return { ...issued, fastPath: false, fallbackReason: reason };
 }
