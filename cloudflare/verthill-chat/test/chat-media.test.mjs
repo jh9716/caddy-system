@@ -28,16 +28,19 @@ test("chat media routes and grant stay Worker-local", () => {
   assert.match(media, /deriveChatMediaR2Key/);
   assert.match(media, /inspectChatMediaMagic/);
   assert.match(media, /etagDoesNotMatch: "\*"/);
-  assert.match(media, /readPrefixThenRest/);
-  assert.match(media, /createBoundedConcatStream/);
+  assert.match(media, /readBoundedBody/);
   assert.match(media, /upload_conflict/);
   assert.match(media, /customMetadata/);
   assert.match(media, /signChatMediaUploadReceipt/);
+  assert.match(media, /chat_media_upload_failed/);
+  assert.match(media, /r2PutStarted/);
   assert.doesNotMatch(media, /await request\.arrayBuffer\(\)/);
-  assert.doesNotMatch(uploadFn, /readBoundedBody/);
-  assert.doesNotMatch(uploadFn, /sha256Hex/);
-  assert.match(uploadFn, /bounded\.stream/);
-  assert.match(uploadFn, /CHAT_MEDIA_MAGIC_PREFIX_BYTES/);
+  assert.match(uploadFn, /readBoundedBody/);
+  assert.match(uploadFn, /sha256Hex/);
+  assert.match(uploadFn, /sha256: digest/);
+  assert.doesNotMatch(uploadFn, /bounded\.stream/);
+  assert.match(uploadFn, /bounded\.bytes/);
+  assert.match(uploadFn, /upload_failed/);
   assert.doesNotMatch(media, /issueSignedToken|presignUrl|@vercel\/blob/);
   assert.doesNotMatch(grant, /BLOB_|R2_SECRET|accessKey|clientSigningToken/i);
   const grantType = grant.slice(

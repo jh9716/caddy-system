@@ -133,6 +133,9 @@ import {
   handleChatMediaRequest,
   readBoundedBody,
   readPrefixThenRest,
+  retryMatchesExisting,
+  safeChatMediaUploadFailureLog,
+  sha256Hex,
   type ChatMediaEnv,
 } from "../cloudflare/verthill-chat/src/chatMedia";
 import {
@@ -1407,15 +1410,16 @@ section("source wiring / no public blob");
   assert(!/storageKey/.test(grantSrc.slice(grantSrc.indexOf("export type ChatMediaPutGrant"), grantSrc.indexOf("export type ChatMediaGrantSecretEnv"))), "grant payload has no storageKey");
   assert(mediaSrc.includes("deriveChatMediaR2Key"), "Worker derives object key");
   assert(mediaSrc.includes("etagDoesNotMatch"), "first PUT is official R2 create-only");
-  assert(mediaSrc.includes("readPrefixThenRest"), "PUT reads a 256-byte magic prefix");
-  assert(mediaSrc.includes("createBoundedConcatStream"), "PUT streams prefix+rest to R2");
+  assert(mediaSrc.includes("readBoundedBody"), "PUT buffers a bounded Uint8Array");
+  assert(mediaSrc.includes("chat_media_upload_failed"), "PUT failures emit a safe category log");
   const uploadFn = mediaSrc.slice(
     mediaSrc.indexOf("export async function handleChatMediaUpload"),
     mediaSrc.indexOf("export async function handleChatMediaInspect")
   );
-  assert(!uploadFn.includes("readBoundedBody"), "normal R2 upload does not full-buffer");
-  assert(!uploadFn.includes("sha256Hex"), "hot path does not SHA-256 the full body");
-  assert(uploadFn.includes("bounded.stream"), "bucket.put receives a ReadableStream");
+  assert(uploadFn.includes("readBoundedBody"), "normal R2 upload uses bounded body");
+  assert(uploadFn.includes("sha256Hex"), "hot path hashes bounded bytes for retry");
+  assert(!uploadFn.includes("bounded.stream"), "bucket.put does not take a reconstructed stream");
+  assert(uploadFn.includes("bounded.bytes"), "bucket.put receives Uint8Array bytes");
   assert(!/await request\.arrayBuffer\(\)/.test(mediaSrc), "PUT does not unbounded arrayBuffer");
   assert(mediaSrc.includes("upload_conflict"), "different-size replay is 409");
   assert(mediaSrc.includes("signChatMediaUploadReceipt"), "successful PUT signs a receipt");
@@ -1600,10 +1604,11 @@ section("r2 grant / key / magic");
   );
   const firstAJson = await uploadJson(firstA);
   assert(firstA?.status === 200 && firstAJson?.receipt, "first PUT A → 200 receipt");
-  assert(putValues[0] instanceof ReadableStream, "normal R2 upload uses stream, not full Uint8Array buffering");
+  assert(putValues[0] instanceof Uint8Array, "normal R2 upload puts Uint8Array, not a reconstructed stream");
   const stored = await spyBucket.head(`chat/${roomId}/${attachmentId}.jpg`);
   assert(stored?.customMetadata?.mime === "image/jpeg", "stores mime metadata");
   assert(stored?.size === photoA.byteLength, "stores actual object size");
+  assert(stored?.customMetadata?.sha256 === (await sha256Hex(photoA)), "stores sha256 metadata");
   const sameA = await handleChatMediaRequest(
     new Request("http://chat-media.test/media/upload", {
       method: "PUT",
@@ -1624,8 +1629,45 @@ section("r2 grant / key / magic");
   );
   const conflictJson = await differentB?.clone().json().catch(() => null);
   assert(differentB?.status === 409 && conflictJson?.error === "upload_conflict", "same grant + different size B → 409");
+  const photoSameSize = jpegBytes(16, 99);
+  assert(photoSameSize.byteLength === photoA.byteLength && photoSameSize[4] !== photoA[4], "same-size different bytes fixture");
+  const sameSizeDiff = await handleChatMediaRequest(
+    new Request("http://chat-media.test/media/upload", {
+      method: "PUT",
+      headers: { "content-type": "image/jpeg", [CHAT_MEDIA_GRANT_HEADER]: token },
+      body: photoSameSize,
+    }),
+    { CHAT_MEDIA: spyBucket, CHAT_MEDIA_SECRET: secret }
+  );
+  const sameSizeJson = await sameSizeDiff?.clone().json().catch(() => null);
+  assert(
+    sameSizeDiff?.status === 409 && sameSizeJson?.error === "upload_conflict",
+    "same size + same mime + different bytes → 409"
+  );
   const afterConflict = new Uint8Array((await (await spyBucket.get(`chat/${roomId}/${attachmentId}.jpg`))!.arrayBuffer()));
   assert(afterConflict[4] === photoA[4], "conflict 뒤 R2 object bytes unchanged");
+  assert(
+    retryMatchesExisting(
+      {
+        size: photoA.byteLength,
+        customMetadata: { mime: "image/jpeg", sha256: await sha256Hex(photoA) },
+      },
+      grantBody,
+      { size: photoA.byteLength, sha256: await sha256Hex(photoA) }
+    ),
+    "retry helper accepts mime+size+sha256"
+  );
+  assert(
+    !retryMatchesExisting(
+      {
+        size: photoA.byteLength,
+        customMetadata: { mime: "image/jpeg", sha256: await sha256Hex(photoA) },
+      },
+      grantBody,
+      { size: photoA.byteLength, sha256: await sha256Hex(photoSameSize) }
+    ),
+    "retry helper rejects different digest"
+  );
   const cond = await spyBucket.put(
     `chat/${roomId}/${attachmentId}.jpg`,
     photoB,
@@ -1686,6 +1728,74 @@ section("r2 grant / key / magic");
     { CHAT_MEDIA: createMemoryChatMediaBucket(), CHAT_MEDIA_SECRET: secret }
   );
   assert(pngPut?.status === 200 && webpPut?.status === 200, "JPEG/PNG/WebP magic 기존 동작 유지");
+
+  const jpeg500 = jpegBytes(500 * 1024 - 4, 50);
+  const jpeg800 = jpegBytes(800 * 1024 - 4, 80);
+  const jpeg3mb = jpegBytes(CHAT_PHOTO_MAX_BYTES - 4, 33);
+  const jpegOver = jpegBytes(CHAT_PHOTO_MAX_BYTES - 3, 34);
+  async function putSized(bytes: Uint8Array, att = attachmentId) {
+    const bucket = createMemoryChatMediaBucket();
+    const grant = await signChatMediaPutGrant(secret, { ...grantBody, attachmentId: att });
+    const res = await handleChatMediaRequest(
+      new Request("http://x/media/upload", {
+        method: "PUT",
+        headers: {
+          "content-type": "image/jpeg",
+          "content-length": String(bytes.byteLength),
+          [CHAT_MEDIA_GRANT_HEADER]: grant,
+        },
+        body: bytes,
+      }),
+      { CHAT_MEDIA: bucket, CHAT_MEDIA_SECRET: secret }
+    );
+    const json = await uploadJson(res);
+    const stored = await bucket.get(`chat/${roomId}/${att}.jpg`);
+    const storedBytes = stored ? new Uint8Array(await stored.arrayBuffer()) : null;
+    return { res, json, storedBytes, bucket };
+  }
+  const put500 = await putSized(jpeg500, "22222222-2222-4222-8222-222222222222");
+  assert(put500.res?.status === 200 && put500.json?.receipt, "1장 500KB JPEG upload success");
+  assert(
+    put500.storedBytes?.byteLength === jpeg500.byteLength && put500.storedBytes?.[4] === jpeg500[4],
+    "500KB readback bytes identical"
+  );
+  const put800 = await putSized(jpeg800, "33333333-3333-4333-8333-333333333333");
+  assert(put800.res?.status === 200 && put800.storedBytes?.byteLength === jpeg800.byteLength, "800KB JPEG success");
+  const put3 = await putSized(jpeg3mb, "44444444-4444-4444-8444-444444444444");
+  assert(put3.res?.status === 200 && put3.storedBytes?.byteLength === CHAT_PHOTO_MAX_BYTES, "3MB boundary accepted");
+  const putOver = await putSized(jpegOver, "55555555-5555-4555-8555-555555555555");
+  assert(putOver.res?.status === 413 && !putOver.storedBytes, "3MB+1 reject");
+
+  const boomBucket = createMemoryChatMediaBucket();
+  boomBucket.put = async () => {
+    throw Object.assign(new Error("r2 exploded"), { name: "R2Error", code: "10044" });
+  };
+  const boom = await handleChatMediaRequest(
+    new Request("http://x/media/upload", {
+      method: "PUT",
+      headers: { "content-type": "image/jpeg", [CHAT_MEDIA_GRANT_HEADER]: token },
+      body: photoA,
+    }),
+    { CHAT_MEDIA: boomBucket, CHAT_MEDIA_SECRET: secret }
+  );
+  const boomJson = await boom?.clone().json().catch(() => null);
+  assert(boom?.status === 500 && boomJson?.error === "upload_failed", "R2 put exception is caught 500, not uncaught");
+  assert((await boomBucket.head(`chat/${roomId}/${attachmentId}.jpg`)) == null, "stream/put error does not create partial READY");
+  const failLog = safeChatMediaUploadFailureLog({
+    stage: "r2_put",
+    error: Object.assign(new Error("secret=abc url=https://evil key=chat/all/x bytes=ff"), {
+      name: "TypeError",
+      code: "ERR_STREAM_LOCKED",
+    }),
+    contentLength: jpeg500.byteLength,
+    prefixRead: true,
+    r2PutStarted: true,
+  });
+  const failText = JSON.stringify(failLog);
+  assert(failLog.event === "chat_media_upload_failed" && failLog.stage === "r2_put", "safe failure log categories");
+  assert(failLog.errorClass === "TypeError" && failLog.errorCode === "ERR_STREAM_LOCKED", "safe error class/code");
+  assert(failLog.contentLength === jpeg500.byteLength && failLog.prefixRead && failLog.r2PutStarted, "safe numeric flags");
+  assert(!failText.includes("secret") && !failText.includes("https://") && !failText.includes("chat/all"), "log omits secret/url/key/bytes");
 
   const prefixJpeg = jpegBytes(400, 8);
   const prefixPulled = { n: 0, cancelled: false };
