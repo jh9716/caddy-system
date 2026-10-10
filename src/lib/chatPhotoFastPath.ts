@@ -4,7 +4,7 @@ import {
   isHeicLikeFile,
 } from "@/lib/courseReportPhotoClient";
 import { CHAT_PHOTO_MAX_BYTES, CHAT_PHOTO_PASSTHROUGH_MAX_BYTES } from "@/lib/chatPhotoConstants";
-import { noteChatPhotoLiteStamp } from "@/lib/chatPhotoLiteTiming";
+import { noteChatPhotoLiteFlags, noteChatPhotoLiteStamp } from "@/lib/chatPhotoLiteTiming";
 import {
   bindChatPhotoTimingFile,
   chatPhotoTimingRunIdFor,
@@ -151,33 +151,46 @@ export async function prepareChatPhotoSource(
   const debug = isChatPhotoDebugTiming();
   const runId = debug ? chatPhotoTimingRunIdFor(file) : null;
   if (debug) noteChatPhotoBoundary(runId, "photoSourceEnterAt");
+  noteChatPhotoLiteStamp("sourceAfterDebugAt");
   const carried = carriedChatPhotoSourcePlan(carry);
   const watch = !carried && debug ? watchChatPhotoFileAccess(file) : null;
   const probed = watch ? watch.file : file;
   const flushWatch = () => {
     if (watch) noteChatPhotoFileAccess(runId, watch);
   };
+  noteChatPhotoLiteFlags({
+    sourceCarryPresent: Boolean(carry),
+    sourceMetaPresent: Boolean(carry?.sourceMeta),
+    sourcePlanPresent: Boolean(carry?.sourcePlan),
+    sourceUsedFallbackPath: !carried,
+  });
+  noteChatPhotoLiteStamp("sourceAfterCarryAt");
   const run =
     compress ||
     ((next: File) =>
       import("@/lib/chatPhotoAdaptive").then((mod) =>
         mod.prepareChatAdaptiveBlob(next, next === file ? carry : undefined)
       ));
+  noteChatPhotoLiteStamp("sourceAfterRunSetupAt");
   try {
     if (carried) {
       if (!carried.acceptable) {
         throw new Error(COURSE_REPORT_HEIC_MESSAGE);
       }
       if (debug) noteChatPhotoSourceSplit(runId, "sourceAcceptableEndAt");
+      noteChatPhotoLiteStamp("sourceAfterAcceptCheckAt");
       if (carried.fastPath) {
         if (debug) noteChatPhotoSourceSplit(runId, "sourceFastPathEndAt");
+        noteChatPhotoLiteStamp("sourceAfterFastPathCheckAt");
         return file;
       }
       if (debug) noteChatPhotoSourceSplit(runId, "sourceFastPathEndAt");
+      noteChatPhotoLiteStamp("sourceAfterFastPathCheckAt");
       if (debug) noteChatPhotoSourceSplit(runId, "sourceRunResolveEndAt");
       if (debug) noteChatPhotoSourceSplit(runId, "sourceHeicEndAt");
       const kindHeic = carried.heic || carried.kind === "heic";
       if (debug) noteChatPhotoSourceSplit(runId, "sourceKindEndAt");
+      noteChatPhotoLiteStamp("sourceAfterHeicPlanAt");
       if (kindHeic) {
         const converted = await decodeCourseReportPhotoSource(file);
         const convertedFile = new File(
@@ -216,13 +229,16 @@ export async function prepareChatPhotoSource(
     }
     if (debug) noteChatPhotoSourceSplit(runId, "sourceAcceptableEndAt");
     flushWatch();
+    noteChatPhotoLiteStamp("sourceAfterAcceptCheckAt");
     if (canUseChatPhotoFastPath(probed)) {
       if (debug) noteChatPhotoSourceSplit(runId, "sourceFastPathEndAt");
       flushWatch();
+      noteChatPhotoLiteStamp("sourceAfterFastPathCheckAt");
       return file;
     }
     if (debug) noteChatPhotoSourceSplit(runId, "sourceFastPathEndAt");
     flushWatch();
+    noteChatPhotoLiteStamp("sourceAfterFastPathCheckAt");
     if (debug) noteChatPhotoSourceSplit(runId, "sourceRunResolveEndAt");
     const heicLike = isHeicLikeFile(probed);
     if (debug) noteChatPhotoSourceSplit(runId, "sourceHeicEndAt");
@@ -230,6 +246,7 @@ export async function prepareChatPhotoSource(
     const kindHeic = heicLike || chatPhotoSourceKind(probed) === "heic";
     if (debug) noteChatPhotoSourceSplit(runId, "sourceKindEndAt");
     flushWatch();
+    noteChatPhotoLiteStamp("sourceAfterHeicPlanAt");
     if (kindHeic) {
       const converted = await decodeCourseReportPhotoSource(file);
       const convertedFile = new File(

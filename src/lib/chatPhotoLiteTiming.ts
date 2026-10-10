@@ -9,6 +9,12 @@ export type ChatPhotoLiteStampName =
   | "pendingStartAt"
   | "wrapperEnterAt"
   | "sourceEnterAt"
+  | "sourceAfterDebugAt"
+  | "sourceAfterCarryAt"
+  | "sourceAfterRunSetupAt"
+  | "sourceAfterAcceptCheckAt"
+  | "sourceAfterFastPathCheckAt"
+  | "sourceAfterHeicPlanAt"
   | "sourceBeforeRunAt"
   | "adaptiveEnterAt"
   | "adaptiveExitAt"
@@ -23,6 +29,17 @@ export type ChatPhotoLiteSample = {
   pendingToWrapperMs: number | null;
   wrapperToSourceMs: number | null;
   sourcePreRunMs: number | null;
+  sourceAfterDebugMs: number | null;
+  sourceAfterCarryMs: number | null;
+  sourceAfterRunSetupMs: number | null;
+  sourceAfterAcceptCheckMs: number | null;
+  sourceAfterFastPathCheckMs: number | null;
+  sourceAfterHeicPlanMs: number | null;
+  sourceBeforeRunMs: number | null;
+  sourceCarryPresent: boolean | null;
+  sourceMetaPresent: boolean | null;
+  sourcePlanPresent: boolean | null;
+  sourceUsedFallbackPath: boolean | null;
   runToAdaptiveMs: number | null;
   adaptiveMs: number | null;
   adaptiveToSourceExitMs: number | null;
@@ -46,6 +63,12 @@ export type ChatPhotoLiteSample = {
   pendingStartAt: number | null;
   wrapperEnterAt: number | null;
   sourceEnterAt: number | null;
+  sourceAfterDebugAt: number | null;
+  sourceAfterCarryAt: number | null;
+  sourceAfterRunSetupAt: number | null;
+  sourceAfterAcceptCheckAt: number | null;
+  sourceAfterFastPathCheckAt: number | null;
+  sourceAfterHeicPlanAt: number | null;
   sourceBeforeRunAt: number | null;
   adaptiveEnterAt: number | null;
   adaptiveExitAt: number | null;
@@ -95,6 +118,17 @@ function emptyLiteSample(): ChatPhotoLiteSample {
     pendingToWrapperMs: null,
     wrapperToSourceMs: null,
     sourcePreRunMs: null,
+    sourceAfterDebugMs: null,
+    sourceAfterCarryMs: null,
+    sourceAfterRunSetupMs: null,
+    sourceAfterAcceptCheckMs: null,
+    sourceAfterFastPathCheckMs: null,
+    sourceAfterHeicPlanMs: null,
+    sourceBeforeRunMs: null,
+    sourceCarryPresent: null,
+    sourceMetaPresent: null,
+    sourcePlanPresent: null,
+    sourceUsedFallbackPath: null,
     runToAdaptiveMs: null,
     adaptiveMs: null,
     adaptiveToSourceExitMs: null,
@@ -118,6 +152,12 @@ function emptyLiteSample(): ChatPhotoLiteSample {
     pendingStartAt: null,
     wrapperEnterAt: null,
     sourceEnterAt: null,
+    sourceAfterDebugAt: null,
+    sourceAfterCarryAt: null,
+    sourceAfterRunSetupAt: null,
+    sourceAfterAcceptCheckAt: null,
+    sourceAfterFastPathCheckAt: null,
+    sourceAfterHeicPlanAt: null,
     sourceBeforeRunAt: null,
     adaptiveEnterAt: null,
     adaptiveExitAt: null,
@@ -140,6 +180,13 @@ function publishLiteSpans(next: ChatPhotoLiteSample): void {
   next.pendingToWrapperMs = spanMs(next.pendingStartAt, next.wrapperEnterAt);
   next.wrapperToSourceMs = spanMs(next.wrapperEnterAt, next.sourceEnterAt);
   next.sourcePreRunMs = spanMs(next.sourceEnterAt, next.sourceBeforeRunAt);
+  next.sourceAfterDebugMs = spanMs(next.sourceEnterAt, next.sourceAfterDebugAt);
+  next.sourceAfterCarryMs = spanMs(next.sourceAfterDebugAt, next.sourceAfterCarryAt);
+  next.sourceAfterRunSetupMs = spanMs(next.sourceAfterCarryAt, next.sourceAfterRunSetupAt);
+  next.sourceAfterAcceptCheckMs = spanMs(next.sourceAfterRunSetupAt, next.sourceAfterAcceptCheckAt);
+  next.sourceAfterFastPathCheckMs = spanMs(next.sourceAfterAcceptCheckAt, next.sourceAfterFastPathCheckAt);
+  next.sourceAfterHeicPlanMs = spanMs(next.sourceAfterFastPathCheckAt, next.sourceAfterHeicPlanAt);
+  next.sourceBeforeRunMs = spanMs(next.sourceAfterHeicPlanAt, next.sourceBeforeRunAt);
   next.runToAdaptiveMs = spanMs(next.sourceBeforeRunAt, next.adaptiveEnterAt);
   next.adaptiveMs = spanMs(next.adaptiveEnterAt, next.adaptiveExitAt);
   next.adaptiveToSourceExitMs = spanMs(next.adaptiveExitAt, next.sourceExitAt);
@@ -153,6 +200,20 @@ export function noteChatPhotoLiteStamp(name: ChatPhotoLiteStampName, at?: number
   const next = liteBag();
   next[name] = ts;
   publishLiteSpans(next);
+}
+
+export function noteChatPhotoLiteFlags(flags: {
+  sourceCarryPresent?: boolean;
+  sourceMetaPresent?: boolean;
+  sourcePlanPresent?: boolean;
+  sourceUsedFallbackPath?: boolean;
+}): void {
+  if (!liteOn) return;
+  const next = liteBag();
+  if (flags.sourceCarryPresent != null) next.sourceCarryPresent = Boolean(flags.sourceCarryPresent);
+  if (flags.sourceMetaPresent != null) next.sourceMetaPresent = Boolean(flags.sourceMetaPresent);
+  if (flags.sourcePlanPresent != null) next.sourcePlanPresent = Boolean(flags.sourcePlanPresent);
+  if (flags.sourceUsedFallbackPath != null) next.sourceUsedFallbackPath = Boolean(flags.sourceUsedFallbackPath);
 }
 
 export function noteChatPhotoLiteAdaptive(result: {

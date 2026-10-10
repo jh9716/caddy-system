@@ -146,6 +146,7 @@ import {
   enableChatPhotoLiteTiming,
   isChatPhotoLiteTiming,
   noteChatPhotoLiteAdaptive,
+  noteChatPhotoLiteFlags,
   noteChatPhotoLiteReady,
   noteChatPhotoLiteStamp,
   readChatPhotoLiteSample,
@@ -2086,6 +2087,7 @@ section("photoLite timing copies adaptive fields without debug");
     uploadBytes: 700000,
   });
   noteChatPhotoLiteStamp("pendingStartAt", 1000);
+  noteChatPhotoLiteFlags({ sourceCarryPresent: true, sourceUsedFallbackPath: false });
   assert(readChatPhotoLiteSample() == null, "photoLite=0 stores no sample");
   assert(!isChatPhotoDebugTiming(), "photoLite=0 does not enable photoDebug");
   const offFile = new File([new Uint8Array([1, 2, 3])], "off.jpg", { type: "image/jpeg" });
@@ -2138,7 +2140,19 @@ section("photoLite timing copies adaptive fields without debug");
   noteChatPhotoLiteStamp("pendingStartAt", 1000);
   noteChatPhotoLiteStamp("wrapperEnterAt", 1012);
   noteChatPhotoLiteStamp("sourceEnterAt", 1018);
+  noteChatPhotoLiteStamp("sourceAfterDebugAt", 1020);
+  noteChatPhotoLiteStamp("sourceAfterCarryAt", 1030);
+  noteChatPhotoLiteStamp("sourceAfterRunSetupAt", 1040);
+  noteChatPhotoLiteStamp("sourceAfterAcceptCheckAt", 1050);
+  noteChatPhotoLiteStamp("sourceAfterFastPathCheckAt", 1060);
+  noteChatPhotoLiteStamp("sourceAfterHeicPlanAt", 1070);
   noteChatPhotoLiteStamp("sourceBeforeRunAt", 4980);
+  noteChatPhotoLiteFlags({
+    sourceCarryPresent: true,
+    sourceMetaPresent: true,
+    sourcePlanPresent: true,
+    sourceUsedFallbackPath: false,
+  });
   noteChatPhotoLiteStamp("adaptiveEnterAt", 4990);
   noteChatPhotoLiteStamp("adaptiveExitAt", 5310);
   noteChatPhotoLiteStamp("sourceExitAt", 5312);
@@ -2148,6 +2162,17 @@ section("photoLite timing copies adaptive fields without debug");
   assert(spans?.pendingToWrapperMs === 12, "lite pendingStart→wrapperEnter");
   assert(spans?.wrapperToSourceMs === 6, "lite wrapperEnter→sourceEnter");
   assert(spans?.sourcePreRunMs === 3962, "lite sourceEnter→sourceBeforeRun");
+  assert(spans?.sourceAfterDebugMs === 2, "lite sourceEnter→afterDebug");
+  assert(spans?.sourceAfterCarryMs === 10, "lite afterDebug→afterCarry");
+  assert(spans?.sourceAfterRunSetupMs === 10, "lite afterCarry→afterRunSetup");
+  assert(spans?.sourceAfterAcceptCheckMs === 10, "lite afterRunSetup→afterAccept");
+  assert(spans?.sourceAfterFastPathCheckMs === 10, "lite afterAccept→afterFastPath");
+  assert(spans?.sourceAfterHeicPlanMs === 10, "lite afterFastPath→afterHeicPlan");
+  assert(spans?.sourceBeforeRunMs === 3910, "lite afterHeicPlan→sourceBeforeRun");
+  assert(spans?.sourceCarryPresent === true, "lite records carry present");
+  assert(spans?.sourceMetaPresent === true, "lite records sourceMeta present");
+  assert(spans?.sourcePlanPresent === true, "lite records sourcePlan present");
+  assert(spans?.sourceUsedFallbackPath === false, "lite records carried path");
   assert(spans?.runToAdaptiveMs === 10, "lite sourceBeforeRun→adaptiveEnter");
   assert(spans?.adaptiveMs === 320, "lite adaptiveEnter→adaptiveExit");
   assert(spans?.adaptiveToSourceExitMs === 2, "lite adaptiveExit→sourceExit");
@@ -2168,6 +2193,15 @@ section("photoLite timing copies adaptive fields without debug");
   assert(sourced.size === 12, "photoLite source still runs compress");
   const live = readChatPhotoLiteSample();
   assert(live?.sourcePreRunMs != null, "photoLite stamps sourceEnter→beforeRun");
+  assert(live?.sourceAfterDebugMs != null, "photoLite stamps after debug gate");
+  assert(live?.sourceAfterCarryMs != null, "photoLite stamps after carry resolve");
+  assert(live?.sourceAfterRunSetupMs != null, "photoLite stamps after run setup");
+  assert(live?.sourceAfterAcceptCheckMs != null, "photoLite stamps after accept check");
+  assert(live?.sourceAfterFastPathCheckMs != null, "photoLite stamps after fastPath check");
+  assert(live?.sourceAfterHeicPlanMs != null, "photoLite stamps after heic/kind plan");
+  assert(live?.sourceBeforeRunMs != null, "photoLite stamps last pre-run gap");
+  assert(live?.sourceCarryPresent === false, "no-carry source records carry absent");
+  assert(live?.sourceUsedFallbackPath === true, "no-carry source uses fallback path");
   assert(live?.runToAdaptiveMs != null, "photoLite stamps beforeRun→adaptiveEnter");
   assert(live?.adaptiveMs != null, "photoLite stamps adaptiveEnter→adaptiveExit");
   assert(live?.adaptiveToSourceExitMs != null, "photoLite stamps adaptiveExit→sourceExit");
@@ -2294,7 +2328,8 @@ section("early meta carry: picker snapshot reused after preview");
 
   enableChatPhotoLiteTiming(true);
   resetChatPhotoLiteSample();
-  await prepareChatPhotoSource(heavy, async () => {
+  const trackedLite = trackMeta(heavy);
+  await prepareChatPhotoSource(trackedLite.file, async () => {
     noteChatPhotoLiteStamp("adaptiveEnterAt");
     noteChatPhotoLiteStamp("adaptiveExitAt");
     return new Blob([new Uint8Array(8)], { type: "image/jpeg" });
@@ -2304,7 +2339,19 @@ section("early meta carry: picker snapshot reused after preview");
   });
   const lite = readChatPhotoLiteSample();
   assert(lite?.sourcePreRunMs != null, "photoLite still stamps sourcePreRunMs with carry");
+  assert(lite?.sourceAfterDebugMs != null, "photoLite splits debug gate with carry");
+  assert(lite?.sourceAfterCarryMs != null, "photoLite splits carry resolve");
+  assert(lite?.sourceAfterRunSetupMs != null, "photoLite splits run setup");
+  assert(lite?.sourceAfterAcceptCheckMs != null, "photoLite splits accept check");
+  assert(lite?.sourceAfterFastPathCheckMs != null, "photoLite splits fastPath check");
+  assert(lite?.sourceAfterHeicPlanMs != null, "photoLite splits heic/kind plan");
+  assert(lite?.sourceBeforeRunMs != null, "photoLite splits last pre-run gap");
+  assert(lite?.sourceCarryPresent === true, "photoLite sees carry object");
+  assert(lite?.sourceMetaPresent === true, "photoLite sees sourceMeta");
+  assert(lite?.sourcePlanPresent === true, "photoLite sees sourcePlan");
+  assert(lite?.sourceUsedFallbackPath === false, "photoLite uses carried path");
   assert(lite?.adaptiveMs != null, "photoLite still stamps adaptiveMs with carry");
+  assert(trackedLite.counts.type === 0 && trackedLite.counts.name === 0 && trackedLite.counts.size === 0, "photoLite carry split does not reread File metadata");
   assert(!isChatPhotoDebugTiming(), "carry path does not enable photoDebug");
   enableChatPhotoLiteTiming(false);
   resetChatPhotoLiteSample();
@@ -2384,6 +2431,15 @@ section("source wiring / no public blob");
   assert(client.includes("pendingToWrapperMs"), "photoLite panel shows pending→wrapper");
   assert(client.includes("wrapperToSourceMs"), "photoLite panel shows wrapper→source");
   assert(client.includes("sourcePreRunMs"), "photoLite panel shows source pre-run");
+  assert(client.includes("sourceAfterDebugMs"), "photoLite panel shows debug-gate split");
+  assert(client.includes("sourceAfterCarryMs"), "photoLite panel shows carry-resolve split");
+  assert(client.includes("sourceAfterRunSetupMs"), "photoLite panel shows run-setup split");
+  assert(client.includes("sourceAfterAcceptCheckMs"), "photoLite panel shows accept-check split");
+  assert(client.includes("sourceAfterFastPathCheckMs"), "photoLite panel shows fastPath-check split");
+  assert(client.includes("sourceAfterHeicPlanMs"), "photoLite panel shows heic-plan split");
+  assert(client.includes("sourceBeforeRunMs"), "photoLite panel shows last pre-run split");
+  assert(client.includes("sourceCarryPresent"), "photoLite panel shows carry flag");
+  assert(client.includes("sourceUsedFallbackPath"), "photoLite panel shows fallback flag");
   assert(client.includes("runToAdaptiveMs"), "photoLite panel shows run→adaptive");
   assert(client.includes("adaptiveToSourceExitMs"), "photoLite panel shows adaptive→source exit");
   assert(client.includes("sourceToWrapperExitMs"), "photoLite panel shows source→wrapper exit");
