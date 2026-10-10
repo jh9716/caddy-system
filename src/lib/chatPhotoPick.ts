@@ -12,22 +12,9 @@ import {
   isChatPhotoAcceptableSource,
   prepareChatPhotoSource,
 } from "@/lib/chatPhotoFastPath";
-import {
-  chatPhotoTimingRunIdFor,
-  commitChatPhotoPrepareTiming,
-  noteChatPhotoBoundary,
-  noteChatPhotoPrepareScope,
-  startChatPhotoPrepareTiming,
-} from "@/lib/chatPhotoTiming";
+import { chatPhotoNow } from "@/lib/chatPhotoTiming";
 
 export const CHAT_PHOTO_UPLOAD_CONCURRENCY = 3;
-
-let chatPhotoComposerKeySeq = 0;
-
-export function nextChatPhotoComposerKey(fileId: string): string {
-  chatPhotoComposerKeySeq += 1;
-  return `cph-${chatPhotoComposerKeySeq}-${fileId}`;
-}
 
 export type ChatPendingPhotoStatus = "preparing" | "ready" | "failed";
 export type ChatPhotoSendPhase = "idle" | "prepare" | "put" | "finalize" | "done" | "error";
@@ -44,8 +31,6 @@ export type ChatPhotoMetrics = {
   sourceBytes: number;
   uploadBytes?: number;
   compressionMs?: number;
-  prepareOuterMs?: number;
-  timingRunId?: string;
 };
 
 export type ChatPendingPhoto = {
@@ -89,7 +74,7 @@ export function instantChatPhotoPicks(
     }
     seenIds.add(fileId);
     items.push({
-      key: nextChatPhotoComposerKey(fileId),
+      key: `${Date.now()}-${items.length}-${fileId}`,
       blob: file,
       previewUrl: URL.createObjectURL(file),
       fileId,
@@ -102,25 +87,10 @@ export function instantChatPhotoPicks(
   return { items, sources, note };
 }
 
-function defaultTimedPrepare(file: File): Promise<Blob> {
-  const runId = chatPhotoTimingRunIdFor(file);
-  noteChatPhotoBoundary(runId, "prepareWrapperEnterAt");
-  return prepareChatPhotoSource(file, prepareChatAdaptiveBlob).then(
-    (blob) => {
-      noteChatPhotoBoundary(runId, "prepareWrapperExitAt");
-      return blob;
-    },
-    (error) => {
-      noteChatPhotoBoundary(runId, "prepareWrapperExitAt");
-      throw error;
-    }
-  );
-}
-
 export async function prepareChatPendingPhoto(
   item: ChatPendingPhoto,
   file: File,
-  prepare: (file: File) => Promise<Blob> = defaultTimedPrepare
+  prepare: (file: File) => Promise<Blob> = (next) => prepareChatPhotoSource(next, prepareChatAdaptiveBlob)
 ): Promise<ChatPendingPhoto> {
   try {
     if (canUseChatPhotoFastPath(file) && prepare === prepareChatPhotoSource) {
@@ -133,13 +103,8 @@ export async function prepareChatPendingPhoto(
         metrics: { sourceBytes: file.size, uploadBytes: file.size, compressionMs: 0 },
       };
     }
-    const timingRunId = startChatPhotoPrepareTiming(item.key, file);
-    const started = noteChatPhotoBoundary(timingRunId, "pendingPrepareStartAt");
+    const started = chatPhotoNow();
     const blob = await prepare(file);
-    const ended = noteChatPhotoBoundary(timingRunId, "pendingPrepareEndAt");
-    const prepareOuterMs = Math.max(0, ended - started);
-    noteChatPhotoPrepareScope(timingRunId, { prepareOuterMs });
-    commitChatPhotoPrepareTiming(timingRunId);
     return {
       ...item,
       blob,
@@ -149,9 +114,7 @@ export async function prepareChatPendingPhoto(
       metrics: {
         sourceBytes: item.metrics?.sourceBytes ?? file.size,
         uploadBytes: blob.size,
-        compressionMs: prepareOuterMs,
-        prepareOuterMs,
-        timingRunId,
+        compressionMs: Math.max(0, chatPhotoNow() - started),
       },
     };
   } catch (e) {
