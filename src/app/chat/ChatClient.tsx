@@ -1438,7 +1438,7 @@ export default function ChatClient() {
     abandonChatPhotoPreupload(uploadJobsRef.current, [key]);
     const next = pendingPhotosRef.current.filter((item) => {
       if (item.key !== key) return true;
-      URL.revokeObjectURL(item.previewUrl);
+      revokeChatPhotoPreviewUrls([item]);
       return false;
     });
     setPendingPhotoList(next);
@@ -2392,20 +2392,6 @@ export default function ChatClient() {
                   ["pendingToWrapperMs", photoDebugSample.pendingToWrapperMs],
                   ["wrapperToSourceMs", photoDebugSample.wrapperToSourceMs],
                   ["sourceToAdaptiveBlobMs", photoDebugSample.sourceToAdaptiveBlobMs],
-                  ["sourceEnterToAcceptableMs", photoDebugSample.sourceEnterToAcceptableMs],
-                  ["acceptableToFastPathMs", photoDebugSample.acceptableToFastPathMs],
-                  ["fastPathToRunResolveMs", photoDebugSample.fastPathToRunResolveMs],
-                  ["runResolveToHeicMs", photoDebugSample.runResolveToHeicMs],
-                  ["heicToKindMs", photoDebugSample.heicToKindMs],
-                  ["kindToNoteScopeMs", photoDebugSample.kindToNoteScopeMs],
-                  ["noteScopeToRunInvokeMs", photoDebugSample.noteScopeToRunInvokeMs],
-                  ["runInvokeToAdaptiveBlobMs", photoDebugSample.runInvokeToAdaptiveBlobMs],
-                  ["fileTypeReads", photoDebugSample.fileTypeReads],
-                  ["fileNameReads", photoDebugSample.fileNameReads],
-                  ["fileSizeReads", photoDebugSample.fileSizeReads],
-                  ["fileTypeMs", photoDebugSample.fileTypeMs],
-                  ["fileNameMs", photoDebugSample.fileNameMs],
-                  ["fileSizeMs", photoDebugSample.fileSizeMs],
                   ["adaptiveBlobToAdaptiveMs", photoDebugSample.adaptiveBlobToAdaptiveMs],
                   ["adaptiveMs", photoDebugSample.adaptiveMs],
                   ["adaptiveExitToSourceExitMs", photoDebugSample.adaptiveExitToSourceExitMs],

@@ -1,4 +1,4 @@
-import type { ChatPendingPhoto } from "@/lib/chatPhotoPick";
+import { revokeChatPhotoPreviewUrl, type ChatPendingPhoto } from "@/lib/chatPhotoPick";
 
 export type OptimisticChatComposer = {
   draft: string;
@@ -41,10 +41,7 @@ export function buildOptimisticOutgoingLine(
 
 export function revokeChatPhotoPreviewUrls(photos: readonly { previewUrl?: string }[]): void {
   for (const item of photos) {
-    const url = item.previewUrl || "";
-    if (url.startsWith("blob:") && typeof URL.revokeObjectURL === "function") {
-      URL.revokeObjectURL(url);
-    }
+    revokeChatPhotoPreviewUrl(item.previewUrl);
   }
 }
 
