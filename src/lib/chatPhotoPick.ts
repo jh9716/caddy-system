@@ -13,6 +13,7 @@ import {
   prepareChatPhotoSource,
 } from "@/lib/chatPhotoFastPath";
 import {
+  chatPhotoNow,
   chatPhotoTimingRunIdFor,
   commitChatPhotoPrepareTiming,
   noteChatPhotoBoundary,
@@ -134,12 +135,18 @@ export async function prepareChatPendingPhoto(
       };
     }
     const timingRunId = startChatPhotoPrepareTiming(item.key, file);
-    const started = noteChatPhotoBoundary(timingRunId, "pendingPrepareStartAt");
+    const started = timingRunId
+      ? noteChatPhotoBoundary(timingRunId, "pendingPrepareStartAt")
+      : chatPhotoNow();
     const blob = await prepare(file);
-    const ended = noteChatPhotoBoundary(timingRunId, "pendingPrepareEndAt");
+    const ended = timingRunId
+      ? noteChatPhotoBoundary(timingRunId, "pendingPrepareEndAt")
+      : chatPhotoNow();
     const prepareOuterMs = Math.max(0, ended - started);
-    noteChatPhotoPrepareScope(timingRunId, { prepareOuterMs });
-    commitChatPhotoPrepareTiming(timingRunId);
+    if (timingRunId) {
+      noteChatPhotoPrepareScope(timingRunId, { prepareOuterMs });
+      commitChatPhotoPrepareTiming(timingRunId);
+    }
     return {
       ...item,
       blob,
@@ -151,7 +158,7 @@ export async function prepareChatPendingPhoto(
         uploadBytes: blob.size,
         compressionMs: prepareOuterMs,
         prepareOuterMs,
-        timingRunId,
+        timingRunId: timingRunId ?? undefined,
       },
     };
   } catch (e) {
