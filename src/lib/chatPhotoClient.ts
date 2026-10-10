@@ -72,6 +72,7 @@ export {
   isChatPhotoLiteTiming,
   noteChatPhotoLiteAdaptive,
   noteChatPhotoLiteReady,
+  noteChatPhotoLiteStamp,
   readChatPhotoLiteSample,
   type ChatPhotoLiteSample,
 } from "@/lib/chatPhotoLiteTiming";

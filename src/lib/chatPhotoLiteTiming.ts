@@ -1,12 +1,33 @@
 /**
- * photoLite=1 only. Copies already-computed adaptive timings.
- * Does not enable photoDebug, Proxy, prepare-scope maps, or File reads.
+ * photoLite=1 only. Copies already-computed adaptive timings and last-run
+ * boundary timestamps/deltas. No photoDebug, Proxy, or File reads.
  */
+
+import { chatPhotoNow } from "@/lib/chatPhotoTiming";
+
+export type ChatPhotoLiteStampName =
+  | "pendingStartAt"
+  | "wrapperEnterAt"
+  | "sourceEnterAt"
+  | "sourceBeforeRunAt"
+  | "adaptiveEnterAt"
+  | "adaptiveExitAt"
+  | "sourceExitAt"
+  | "wrapperExitAt"
+  | "pendingEndAt";
 
 export type ChatPhotoLiteSample = {
   selectToReadyMs: number | null;
   prepareOuterMs: number | null;
   adaptiveTotalMs: number | null;
+  pendingToWrapperMs: number | null;
+  wrapperToSourceMs: number | null;
+  sourcePreRunMs: number | null;
+  runToAdaptiveMs: number | null;
+  adaptiveMs: number | null;
+  adaptiveToSourceExitMs: number | null;
+  sourceToWrapperExitMs: number | null;
+  wrapperToPendingEndMs: number | null;
   hiddenBeforeDecodeMs: number | null;
   headerProbeMs: number | null;
   bitmapCreateMs: number | null;
@@ -22,6 +43,15 @@ export type ChatPhotoLiteSample = {
   outputWidth: number | null;
   outputHeight: number | null;
   uploadBytes: number | null;
+  pendingStartAt: number | null;
+  wrapperEnterAt: number | null;
+  sourceEnterAt: number | null;
+  sourceBeforeRunAt: number | null;
+  adaptiveEnterAt: number | null;
+  adaptiveExitAt: number | null;
+  sourceExitAt: number | null;
+  wrapperExitAt: number | null;
+  pendingEndAt: number | null;
 };
 
 declare global {
@@ -57,11 +87,19 @@ export function resetChatPhotoLiteSample(): void {
   if (typeof globalThis !== "undefined") delete globalThis.__CHAT_PHOTO_LITE__;
 }
 
-function liteBag(): ChatPhotoLiteSample {
-  return (globalThis.__CHAT_PHOTO_LITE__ ||= {
+function emptyLiteSample(): ChatPhotoLiteSample {
+  return {
     selectToReadyMs: null,
     prepareOuterMs: null,
     adaptiveTotalMs: null,
+    pendingToWrapperMs: null,
+    wrapperToSourceMs: null,
+    sourcePreRunMs: null,
+    runToAdaptiveMs: null,
+    adaptiveMs: null,
+    adaptiveToSourceExitMs: null,
+    sourceToWrapperExitMs: null,
+    wrapperToPendingEndMs: null,
     hiddenBeforeDecodeMs: null,
     headerProbeMs: null,
     bitmapCreateMs: null,
@@ -77,7 +115,44 @@ function liteBag(): ChatPhotoLiteSample {
     outputWidth: null,
     outputHeight: null,
     uploadBytes: null,
-  });
+    pendingStartAt: null,
+    wrapperEnterAt: null,
+    sourceEnterAt: null,
+    sourceBeforeRunAt: null,
+    adaptiveEnterAt: null,
+    adaptiveExitAt: null,
+    sourceExitAt: null,
+    wrapperExitAt: null,
+    pendingEndAt: null,
+  };
+}
+
+function liteBag(): ChatPhotoLiteSample {
+  return (globalThis.__CHAT_PHOTO_LITE__ ||= emptyLiteSample());
+}
+
+function spanMs(start: number | null, end: number | null): number | null {
+  if (start == null || end == null) return null;
+  return finiteMs(end - start);
+}
+
+function publishLiteSpans(next: ChatPhotoLiteSample): void {
+  next.pendingToWrapperMs = spanMs(next.pendingStartAt, next.wrapperEnterAt);
+  next.wrapperToSourceMs = spanMs(next.wrapperEnterAt, next.sourceEnterAt);
+  next.sourcePreRunMs = spanMs(next.sourceEnterAt, next.sourceBeforeRunAt);
+  next.runToAdaptiveMs = spanMs(next.sourceBeforeRunAt, next.adaptiveEnterAt);
+  next.adaptiveMs = spanMs(next.adaptiveEnterAt, next.adaptiveExitAt);
+  next.adaptiveToSourceExitMs = spanMs(next.adaptiveExitAt, next.sourceExitAt);
+  next.sourceToWrapperExitMs = spanMs(next.sourceExitAt, next.wrapperExitAt);
+  next.wrapperToPendingEndMs = spanMs(next.wrapperExitAt, next.pendingEndAt);
+}
+
+export function noteChatPhotoLiteStamp(name: ChatPhotoLiteStampName, at?: number): void {
+  if (!liteOn) return;
+  const ts = typeof at === "number" && Number.isFinite(at) ? at : chatPhotoNow();
+  const next = liteBag();
+  next[name] = ts;
+  publishLiteSpans(next);
 }
 
 export function noteChatPhotoLiteAdaptive(result: {

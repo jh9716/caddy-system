@@ -22,7 +22,7 @@ import {
   readImageSizeFromHeader,
   readJpegExifOrientation,
 } from "@/lib/imageHeaderSize";
-import { noteChatPhotoLiteAdaptive } from "@/lib/chatPhotoLiteTiming";
+import { noteChatPhotoLiteAdaptive, noteChatPhotoLiteStamp } from "@/lib/chatPhotoLiteTiming";
 import {
   chatPhotoNow,
   chatPhotoTimingRunIdFor,
@@ -404,6 +404,7 @@ async function encodeCanvas(
 function finishAdaptiveResult(result: ChatPhotoAdaptiveResult, file?: Blob): ChatPhotoAdaptiveResult {
   const runId = chatPhotoTimingRunIdFor(file);
   noteChatPhotoBoundary(runId, "adaptiveExitAt");
+  noteChatPhotoLiteStamp("adaptiveExitAt");
   noteChatPhotoCompressionBreakdown({
     runId,
     decodeMs: result.decodeMs ?? null,
@@ -443,6 +444,7 @@ export async function prepareChatAdaptivePhoto(
 ): Promise<ChatPhotoAdaptiveResult> {
   const now = opts.now || chatPhotoNow;
   const started = now();
+  noteChatPhotoLiteStamp("adaptiveEnterAt", started);
   const runId = chatPhotoTimingRunIdFor(file);
   noteChatPhotoBoundary(runId, "adaptiveEnterAt", started);
   noteChatPhotoPrepareScope(runId, { runIdResolved: Boolean(runId), sameFileBound: Boolean(runId) });

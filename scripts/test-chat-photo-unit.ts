@@ -147,6 +147,7 @@ import {
   isChatPhotoLiteTiming,
   noteChatPhotoLiteAdaptive,
   noteChatPhotoLiteReady,
+  noteChatPhotoLiteStamp,
   readChatPhotoLiteSample,
   resetChatPhotoLiteSample,
 } from "../src/lib/chatPhotoLiteTiming";
@@ -2084,6 +2085,7 @@ section("photoLite timing copies adaptive fields without debug");
     outputHeight: 900,
     uploadBytes: 700000,
   });
+  noteChatPhotoLiteStamp("pendingStartAt", 1000);
   assert(readChatPhotoLiteSample() == null, "photoLite=0 stores no sample");
   assert(!isChatPhotoDebugTiming(), "photoLite=0 does not enable photoDebug");
   const offFile = new File([new Uint8Array([1, 2, 3])], "off.jpg", { type: "image/jpeg" });
@@ -2133,11 +2135,55 @@ section("photoLite timing copies adaptive fields without debug");
   assert(sample?.encodePath === "offscreen", "lite copies encodePath");
   assert(sample?.outputWidth === 1600 && sample?.outputHeight === 900, "lite copies output size");
   assert(sample?.uploadBytes === 700000, "lite copies uploadBytes");
+  noteChatPhotoLiteStamp("pendingStartAt", 1000);
+  noteChatPhotoLiteStamp("wrapperEnterAt", 1012);
+  noteChatPhotoLiteStamp("sourceEnterAt", 1018);
+  noteChatPhotoLiteStamp("sourceBeforeRunAt", 4980);
+  noteChatPhotoLiteStamp("adaptiveEnterAt", 4990);
+  noteChatPhotoLiteStamp("adaptiveExitAt", 5310);
+  noteChatPhotoLiteStamp("sourceExitAt", 5312);
+  noteChatPhotoLiteStamp("wrapperExitAt", 5314);
+  noteChatPhotoLiteStamp("pendingEndAt", 5320);
+  const spans = readChatPhotoLiteSample();
+  assert(spans?.pendingToWrapperMs === 12, "lite pendingStart→wrapperEnter");
+  assert(spans?.wrapperToSourceMs === 6, "lite wrapperEnter→sourceEnter");
+  assert(spans?.sourcePreRunMs === 3962, "lite sourceEnter→sourceBeforeRun");
+  assert(spans?.runToAdaptiveMs === 10, "lite sourceBeforeRun→adaptiveEnter");
+  assert(spans?.adaptiveMs === 320, "lite adaptiveEnter→adaptiveExit");
+  assert(spans?.adaptiveToSourceExitMs === 2, "lite adaptiveExit→sourceExit");
+  assert(spans?.sourceToWrapperExitMs === 2, "lite sourceExit→wrapperExit");
+  assert(spans?.wrapperToPendingEndMs === 6, "lite wrapperExit→pendingEnd");
+  assert(spans?.adaptiveTotalMs === 1234, "lite keeps existing adaptive result timing");
   assert(!isChatPhotoDebugTiming(), "photoLite=1 does not enable photoDebug");
-  const liteFile = new File([new Uint8Array([4, 5, 6])], "lite.jpg", { type: "image/jpeg" });
+  const liteFile = new File([new Uint8Array(800 * 1024 + 8)], "lite.jpg", { type: "image/jpeg" });
   const liteWatch = watchChatPhotoFileAccess(liteFile);
   assert(liteWatch.file === liteFile, "photoLite=1 does not Proxy the File");
   assert(startChatPhotoPrepareTiming("lite-on", liteFile) === null, "photoLite=1 does not start prepare scope");
+  resetChatPhotoLiteSample();
+  const sourced = await prepareChatPhotoSource(liteFile, async () => {
+    noteChatPhotoLiteStamp("adaptiveEnterAt");
+    noteChatPhotoLiteStamp("adaptiveExitAt");
+    return new Blob([new Uint8Array(12)], { type: "image/jpeg" });
+  });
+  assert(sourced.size === 12, "photoLite source still runs compress");
+  const live = readChatPhotoLiteSample();
+  assert(live?.sourcePreRunMs != null, "photoLite stamps sourceEnter→beforeRun");
+  assert(live?.runToAdaptiveMs != null, "photoLite stamps beforeRun→adaptiveEnter");
+  assert(live?.adaptiveMs != null, "photoLite stamps adaptiveEnter→adaptiveExit");
+  assert(live?.adaptiveToSourceExitMs != null, "photoLite stamps adaptiveExit→sourceExit");
+  assert(!isChatPhotoDebugTiming(), "photoLite source path still leaves photoDebug off");
+  const liveWatch = watchChatPhotoFileAccess(liteFile);
+  assert(liveWatch.file === liteFile, "photoLite source path does not Proxy the File");
+  resetChatPhotoLiteSample();
+  const smallLite = new File([new Uint8Array([7, 8, 9])], "small-lite.jpg", { type: "image/jpeg" });
+  const pickedLite = instantChatPhotoPicks([smallLite], 1);
+  const pendingLite = await prepareChatPendingPhoto(pickedLite.items[0]!, smallLite);
+  assert(pendingLite.status === "ready", "photoLite pending prepare still succeeds");
+  const pendingSample = readChatPhotoLiteSample();
+  assert(pendingSample?.pendingToWrapperMs != null, "photoLite stamps pending→wrapper");
+  assert(pendingSample?.wrapperToSourceMs != null, "photoLite stamps wrapper→source");
+  assert(pendingSample?.wrapperToPendingEndMs != null, "photoLite stamps wrapper→pending end");
+  assert(!isChatPhotoDebugTiming(), "photoLite pending path still leaves photoDebug off");
   enableChatPhotoLiteTiming(false);
   resetChatPhotoLiteSample();
 }
@@ -2213,7 +2259,29 @@ section("source wiring / no public blob");
   assert(client.includes("photoLite"), "photoLite query panel");
   assert(client.includes("enableChatPhotoLiteTiming"), "photoLite enable is separate from photoDebug");
   assert(client.includes("noteChatPhotoLiteReady"), "photoLite publishes select→ready from existing marks");
+  assert(client.includes("pendingToWrapperMs"), "photoLite panel shows pending→wrapper");
+  assert(client.includes("wrapperToSourceMs"), "photoLite panel shows wrapper→source");
+  assert(client.includes("sourcePreRunMs"), "photoLite panel shows source pre-run");
+  assert(client.includes("runToAdaptiveMs"), "photoLite panel shows run→adaptive");
+  assert(client.includes("adaptiveToSourceExitMs"), "photoLite panel shows adaptive→source exit");
+  assert(client.includes("sourceToWrapperExitMs"), "photoLite panel shows source→wrapper exit");
+  assert(client.includes("wrapperToPendingEndMs"), "photoLite panel shows wrapper→pending end");
   assert(read("src/lib/chatPhotoAdaptive.ts").includes("noteChatPhotoLiteAdaptive(result)"), "adaptive result is copied into lite sample");
+  assert(read("src/lib/chatPhotoAdaptive.ts").includes('noteChatPhotoLiteStamp("adaptiveEnterAt"'), "adaptive enter is stamped for photoLite");
+  assert(read("src/lib/chatPhotoAdaptive.ts").includes('noteChatPhotoLiteStamp("adaptiveExitAt")'), "adaptive exit is stamped for photoLite");
+  assert(pickSrc.includes('noteChatPhotoLiteStamp("pendingStartAt"'), "pending start is stamped for photoLite");
+  assert(pickSrc.includes('noteChatPhotoLiteStamp("pendingEndAt"'), "pending end is stamped for photoLite");
+  assert(pickSrc.includes('noteChatPhotoLiteStamp("wrapperEnterAt"'), "wrapper enter is stamped for photoLite");
+  assert(pickSrc.includes('noteChatPhotoLiteStamp("wrapperExitAt"'), "wrapper exit is stamped for photoLite");
+  assert(fast.includes('noteChatPhotoLiteStamp("sourceEnterAt")'), "source enter is stamped for photoLite");
+  assert(fast.includes('noteChatPhotoLiteStamp("sourceBeforeRunAt")'), "source before run is stamped for photoLite");
+  assert(fast.includes('noteChatPhotoLiteStamp("sourceExitAt")'), "source exit is stamped for photoLite");
+  const liteSrc = read("src/lib/chatPhotoLiteTiming.ts");
+  assert(!liteSrc.includes("Proxy"), "lite timing has no Proxy");
+  assert(!liteSrc.includes("WeakMap"), "lite timing has no WeakMap");
+  assert(!liteSrc.includes("new Map"), "lite timing has no Map");
+  assert(!liteSrc.includes(".slice("), "lite timing does not slice files");
+  assert(!liteSrc.includes("arrayBuffer"), "lite timing does not read arrayBuffer");
   assert(!client.includes("enableChatPhotoDebugTiming(lite)"), "photoLite does not enable photoDebug");
   const adaptive = read("src/lib/chatPhotoAdaptive.ts");
   assert(adaptive.includes("createImageBitmap"), "adaptive prefers createImageBitmap");

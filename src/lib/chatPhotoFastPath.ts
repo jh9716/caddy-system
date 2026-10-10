@@ -4,6 +4,7 @@ import {
   isHeicLikeFile,
 } from "@/lib/courseReportPhotoClient";
 import { CHAT_PHOTO_MAX_BYTES, CHAT_PHOTO_PASSTHROUGH_MAX_BYTES } from "@/lib/chatPhotoConstants";
+import { noteChatPhotoLiteStamp } from "@/lib/chatPhotoLiteTiming";
 import {
   bindChatPhotoTimingFile,
   chatPhotoTimingRunIdFor,
@@ -132,6 +133,7 @@ export async function prepareChatPhotoSource(
   file: File,
   compress?: (file: File) => Promise<Blob>
 ): Promise<Blob> {
+  noteChatPhotoLiteStamp("sourceEnterAt");
   const debug = isChatPhotoDebugTiming();
   const runId = debug ? chatPhotoTimingRunIdFor(file) : null;
   if (debug) noteChatPhotoBoundary(runId, "photoSourceEnterAt");
@@ -182,7 +184,10 @@ export async function prepareChatPhotoSource(
       }
       if (canUseChatPhotoFastPath(convertedFile)) return converted;
       if (debug) noteChatPhotoSourceSplit(runId, "sourceRunInvokeAt");
-      return await run(convertedFile);
+      noteChatPhotoLiteStamp("sourceBeforeRunAt");
+      const convertedOut = await run(convertedFile);
+      noteChatPhotoLiteStamp("sourceExitAt");
+      return convertedOut;
     }
     if (debug) {
       noteChatPhotoPrepareScope(runId, { jpegDirectRun: true, sameFileBound: Boolean(runId) });
@@ -190,7 +195,10 @@ export async function prepareChatPhotoSource(
       flushWatch();
       noteChatPhotoSourceSplit(runId, "sourceRunInvokeAt");
     }
-    return await run(file);
+    noteChatPhotoLiteStamp("sourceBeforeRunAt");
+    const jpegOut = await run(file);
+    noteChatPhotoLiteStamp("sourceExitAt");
+    return jpegOut;
   } finally {
     if (debug) noteChatPhotoBoundary(runId, "photoSourceExitAt");
   }
