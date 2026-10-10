@@ -671,7 +671,7 @@ assert(
     chatClient.includes("shouldQueueNativeChatSend") &&
     chatClient.includes("abandonedNativePreviewIdsRef") &&
     chatClient.includes("준비 중") &&
-    read("src/lib/chatPhotoPick.ts").includes("item.nativePreview === true && Boolean(item.previewUrl)") &&
+    read("src/lib/chatPhotoPick.ts").includes("item.nativePreviewId && item.previewUrl") &&
     read("src/lib/chatPhotoPick.ts").includes("item.nativePreview !== true") &&
     read("src/lib/chatPhotoNativePreview.ts").includes("data:image/jpeg;base64,"),
   "web composer shows native preview, waits for HQ, and never uploads the thumbnail"

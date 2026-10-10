@@ -832,7 +832,7 @@ section("instant preview + parallel upload");
   assert(placeholder.previewUrl.startsWith("data:image/jpeg;base64,"), "composer shows JPEG data URL");
   assert(
     !chatPhotoComposerBusy(placeholder),
-    "visible native preview hides the loading spinner"
+    "native quick preview + no send -> spinner false"
   );
   assert(
     readyChatPhotosForUpload([placeholder]).length === 0,
@@ -854,8 +854,30 @@ section("instant preview + parallel upload");
   const swapped = applyNativeHqFile(appended.items, "nvp-3-abc123def456", hqFile);
   assert(swapped?.[0]?.status === "ready", "HQ JPEG replaces placeholder");
   assert(swapped?.[0]?.nativePreview === false, "HQ swap clears preview-only flag");
+  assert(swapped?.[0]?.nativePreviewId === "nvp-3-abc123def456", "HQ swap keeps native lineage id");
   assert(swapped?.[0]?.blob === hqFile, "HQ file is the upload blob");
   assert(readyChatPhotosForUpload(swapped || []).length === 1, "only the 1600 JPEG is uploadable");
+  assert(
+    !chatPhotoComposerBusy({ ...swapped![0]!, send: { phase: "prepare", progress: 10 } }),
+    "native HQ swapped + send.phase=prepare -> spinner false"
+  );
+  assert(
+    !chatPhotoComposerBusy({ ...swapped![0]!, send: { phase: "put", progress: 40 } }),
+    "native HQ swapped + send.phase=put -> spinner false"
+  );
+  assert(
+    !chatPhotoComposerBusy({ ...swapped![0]!, send: { phase: "finalize", progress: 80 } }),
+    "native HQ swapped + send.phase=finalize -> spinner false"
+  );
+  const nativeFailed = { ...swapped![0]!, status: "failed" as const, error: "변환 실패" };
+  const nativeSendError = { ...swapped![0]!, send: { phase: "error" as const, progress: 0, error: "upload down" } };
+  assert(!chatPhotoComposerBusy(nativeFailed), "native error is not a busy spinner");
+  assert(!chatPhotoComposerBusy(nativeSendError), "native send error is not a busy spinner");
+  assert(
+    read("src/app/chat/ChatClient.tsx").includes('item.status === "failed" || item.send?.phase === "error"') &&
+      read("src/app/chat/ChatClient.tsx").includes("vh-chat-pending-retry"),
+    "native error keeps retry/error UI"
+  );
   const lateAfterCancel = applyNativeHqFile([], "nvp-3-abc123def456", hqFile);
   assert(lateAfterCancel === null, "late HQ does not revive a removed attachment");
   assert(
@@ -1681,6 +1703,13 @@ section("phase 5 adaptive compression + debug");
   assert(shouldStartOptimisticChatSend("텍스트", triple.items), "text+photo");
   assert(buildOptimisticOutgoingLine("답글", triple.items).localPhotos.length === 3, "reply+photo");
   assert(chatPhotoComposerBusy({ ...preview.items[0]!, status: "preparing" }), "preparing shows quiet spinner");
+  assert(
+    !preview.items[0]?.nativePreviewId &&
+      chatPhotoComposerBusy({ ...preview.items[0]!, status: "ready", send: { phase: "prepare", progress: 10 } }) &&
+      chatPhotoComposerBusy({ ...preview.items[0]!, status: "ready", send: { phase: "put", progress: 40 } }) &&
+      chatPhotoComposerBusy({ ...preview.items[0]!, status: "ready", send: { phase: "finalize", progress: 80 } }),
+    "regular photo preparing/upload busy semantics unchanged"
+  );
   assert(!chatPhotoComposerBusy({ ...preparedMid, status: "ready", send: { phase: "done", progress: 100 } }), "ready hides indicator");
 
   assert(canShowChatPhotoDebug({ role: "admin", search: "?photoDebug=1" }), "admin + photoDebug=1");

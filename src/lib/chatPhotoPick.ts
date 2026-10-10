@@ -87,7 +87,7 @@ export function chatPhotoComposerBusy(item: ChatPendingPhoto): boolean {
   if (item.status === "failed" || item.send?.phase === "error" || item.send?.phase === "done") {
     return false;
   }
-  if (item.nativePreview === true && Boolean(item.previewUrl) && !item.send) {
+  if (item.nativePreviewId && item.previewUrl) {
     return false;
   }
   return item.status === "preparing" || Boolean(item.send && item.send.phase !== "idle");
