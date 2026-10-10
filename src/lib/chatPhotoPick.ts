@@ -13,6 +13,7 @@ import {
   prepareChatPhotoSource,
 } from "@/lib/chatPhotoFastPath";
 import {
+  chatPhotoNow,
   chatPhotoTimingRunIdFor,
   commitChatPhotoPrepareTiming,
   noteChatPhotoBoundary,
@@ -27,6 +28,25 @@ let chatPhotoComposerKeySeq = 0;
 export function nextChatPhotoComposerKey(fileId: string): string {
   chatPhotoComposerKeySeq += 1;
   return `cph-${chatPhotoComposerKeySeq}-${fileId}`;
+}
+
+const revokedChatPhotoPreviewUrls = new Set<string>();
+
+export function createDetachedChatPhotoPreviewUrl(source: Blob): string {
+  const previewBlob =
+    typeof source.slice === "function" ? source.slice(0, source.size, source.type) : source;
+  return URL.createObjectURL(previewBlob);
+}
+
+export function createChatPhotoPreviewUrl(blob: Blob): string {
+  return URL.createObjectURL(blob);
+}
+
+export function revokeChatPhotoPreviewUrl(url: string | undefined | null): void {
+  if (!url || !url.startsWith("blob:") || typeof URL.revokeObjectURL !== "function") return;
+  if (revokedChatPhotoPreviewUrls.has(url)) return;
+  revokedChatPhotoPreviewUrls.add(url);
+  URL.revokeObjectURL(url);
 }
 
 export type ChatPendingPhotoStatus = "preparing" | "ready" | "failed";
@@ -91,7 +111,7 @@ export function instantChatPhotoPicks(
     items.push({
       key: nextChatPhotoComposerKey(fileId),
       blob: file,
-      previewUrl: URL.createObjectURL(file),
+      previewUrl: createDetachedChatPhotoPreviewUrl(file),
       fileId,
       fingerprint: "",
       status: canUseChatPhotoFastPath(file) ? "ready" : "preparing",
@@ -134,12 +154,18 @@ export async function prepareChatPendingPhoto(
       };
     }
     const timingRunId = startChatPhotoPrepareTiming(item.key, file);
-    const started = noteChatPhotoBoundary(timingRunId, "pendingPrepareStartAt");
+    const started = timingRunId
+      ? noteChatPhotoBoundary(timingRunId, "pendingPrepareStartAt")
+      : chatPhotoNow();
     const blob = await prepare(file);
-    const ended = noteChatPhotoBoundary(timingRunId, "pendingPrepareEndAt");
+    const ended = timingRunId
+      ? noteChatPhotoBoundary(timingRunId, "pendingPrepareEndAt")
+      : chatPhotoNow();
     const prepareOuterMs = Math.max(0, ended - started);
-    noteChatPhotoPrepareScope(timingRunId, { prepareOuterMs });
-    commitChatPhotoPrepareTiming(timingRunId);
+    if (timingRunId) {
+      noteChatPhotoPrepareScope(timingRunId, { prepareOuterMs });
+      commitChatPhotoPrepareTiming(timingRunId);
+    }
     return {
       ...item,
       blob,
@@ -151,7 +177,7 @@ export async function prepareChatPendingPhoto(
         uploadBytes: blob.size,
         compressionMs: prepareOuterMs,
         prepareOuterMs,
-        timingRunId,
+        timingRunId: timingRunId ?? undefined,
       },
     };
   } catch (e) {
@@ -184,27 +210,31 @@ export function applyPreparedChatPhoto(
         row.fingerprint === prepared.fingerprint
     )
   ) {
-    URL.revokeObjectURL(current.previewUrl);
+    revokeChatPhotoPreviewUrl(current.previewUrl);
     return {
       items: prev.filter((row) => row.key !== prepared.key),
       note: COURSE_REPORT_PHOTO_DUPLICATE_MESSAGE,
     };
   }
-  return {
-    items: prev.map((row) =>
-      row.key === prepared.key
-        ? {
-            ...row,
-            blob: prepared.blob,
-            fingerprint: prepared.fingerprint,
-            status: "ready",
-            send: row.send,
-            metrics: prepared.metrics ?? row.metrics,
-          }
-        : row
-    ),
-    note: "",
-  };
+  const nextPreviewUrl =
+    prepared.blob !== current.blob ? createChatPhotoPreviewUrl(prepared.blob) : current.previewUrl;
+  const items = prev.map((row) =>
+    row.key === prepared.key
+      ? {
+          ...row,
+          blob: prepared.blob,
+          previewUrl: nextPreviewUrl,
+          fingerprint: prepared.fingerprint,
+          status: "ready" as const,
+          send: row.send,
+          metrics: prepared.metrics ?? row.metrics,
+        }
+      : row
+  );
+  if (nextPreviewUrl !== current.previewUrl) {
+    revokeChatPhotoPreviewUrl(current.previewUrl);
+  }
+  return { items, note: "" };
 }
 
 export function applyChatPhotoSendProgress(
