@@ -83,6 +83,7 @@ import {
   mapBoundedSettled,
   prepareChatPendingPhoto,
   readyChatPhotosForUpload,
+  revokeChatPhotoPreviewUrl,
 } from "../src/lib/chatPhotoPick";
 import {
   canUseChatPhotoFastPath,
@@ -604,7 +605,8 @@ section("instant preview + parallel upload");
   assert(prepared.blob !== jpgA, "upload blob replaced");
   const applied = applyPreparedChatPhoto(picked.items, prepared);
   assert(applied.items[0]?.status === "ready", "state blob replaced after prepare");
-  assert(applied.items[0]?.previewUrl === picked.items[0]?.previewUrl, "preview URL stays");
+  assert(applied.items[0]?.blob === prepared.blob, "composer blob matches prepared blob");
+  assert(applied.items[0]?.previewUrl !== picked.items[0]?.previewUrl, "prepare replaces pick preview URL");
 
   const failed = await prepareChatPendingPhoto(picked.items[1], jpgB, async () => {
     throw new Error("변환 실패");
@@ -797,6 +799,150 @@ section("instant preview + parallel upload");
   assert(failedLine.status === "failed", "upload/finalize fail → failed bubble");
   const retried = buildOptimisticOutgoingLine(failedLine.body, failedLine.localPhotos);
   assert(retried.localPhotos[0]?.previewUrl === failedLine.localPhotos[0]?.previewUrl, "retry reuses local photo blob");
+}
+
+section("composer preview URL detach + prepare swap");
+{
+  const createdBlobs: Blob[] = [];
+  const revokeCounts = new Map<string, number>();
+  const origCreate = URL.createObjectURL;
+  const origRevoke = URL.revokeObjectURL;
+  let createSeq = 0;
+  URL.createObjectURL = ((blob: Blob) => {
+    createdBlobs.push(blob);
+    if (typeof origCreate === "function") {
+      try {
+        return origCreate.call(URL, blob);
+      } catch {
+        // jsdom/test stubs may reject real Blob URLs; fall through to a stable token.
+      }
+    }
+    createSeq += 1;
+    return `blob:preview-${createSeq}`;
+  }) as typeof URL.createObjectURL;
+  URL.revokeObjectURL = ((url: string) => {
+    revokeCounts.set(url, (revokeCounts.get(url) || 0) + 1);
+    if (typeof origRevoke === "function") {
+      try {
+        origRevoke.call(URL, url);
+      } catch {
+        // ignore stub revoke failures
+      }
+    }
+  }) as typeof URL.revokeObjectURL;
+
+  try {
+    const srcA = new File([new Uint8Array([11, 22, 33])], "preview-a.jpg", {
+      type: "image/jpeg",
+      lastModified: 11,
+    });
+    const srcB = new File([new Uint8Array([44, 55, 66])], "preview-b.jpg", {
+      type: "image/jpeg",
+      lastModified: 22,
+    });
+    const createdBeforePick = createdBlobs.length;
+    const picked = instantChatPhotoPicks([srcA, srcB], 2);
+    const pickBlobs = createdBlobs.slice(createdBeforePick);
+    assert(picked.items.length === 2, "preview-swap pick accepts 2");
+    assert(pickBlobs.length === 2, "pick creates one preview URL per file");
+    assert(pickBlobs.every((blob) => blob !== srcA && blob !== srcB), "pick preview URL is detached from decode File");
+    assert(picked.items[0]?.blob === srcA && picked.items[1]?.blob === srcB, "decode/upload blob stays the original File");
+
+    const oldPreview = picked.items[0]!.previewUrl;
+    const preparedBlob = new Blob([new Uint8Array([9, 8, 7])], { type: "image/jpeg" });
+    const prepared = await prepareChatPendingPhoto(picked.items[0]!, srcA, async () => preparedBlob);
+    assert(prepared.previewUrl === oldPreview, "prepare result keeps pick preview until state commit");
+    const createdBeforeApply = createdBlobs.length;
+    const applied = applyPreparedChatPhoto(picked.items, prepared);
+    const createdDuringApply = createdBlobs.slice(createdBeforeApply);
+    assert(applied.items[0]?.blob === preparedBlob, "apply swaps blob in the same commit");
+    assert(applied.items[0]?.previewUrl !== oldPreview, "apply replaces preview URL");
+    assert(createdDuringApply.length === 1 && createdDuringApply[0] === preparedBlob, "new preview URL is created from prepared blob");
+    assert(revokeCounts.get(oldPreview) === 1, "old pick preview URL is revoked exactly once after swap");
+    revokeChatPhotoPreviewUrl(oldPreview);
+    revokeChatPhotoPreviewUrls([{ previewUrl: oldPreview }]);
+    assert(revokeCounts.get(oldPreview) === 1, "same URL is not double-revoked");
+
+    const failedPreview = applied.items[1]!.previewUrl;
+    const createdBeforeFail = createdBlobs.length;
+    const failed = await prepareChatPendingPhoto(applied.items[1]!, srcB, async () => {
+      throw new Error("변환 실패");
+    });
+    const failedApplied = applyPreparedChatPhoto(applied.items, failed);
+    assert(failedApplied.items[1]?.previewUrl === failedPreview, "failed prepare keeps existing preview URL");
+    assert(createdBlobs.length === createdBeforeFail, "failed prepare does not create a preview URL");
+
+    const createdBeforeRemoved = createdBlobs.length;
+    const removedApply = applyPreparedChatPhoto(
+      applied.items.filter((row) => row.key !== prepared.key),
+      { ...prepared, blob: new Blob([new Uint8Array([1])], { type: "image/jpeg" }) }
+    );
+    assert(removedApply.items.every((row) => row.key !== prepared.key), "removed item stays removed");
+    assert(createdBlobs.length === createdBeforeRemoved, "removed prepare does not create a preview URL");
+
+    const session = createChatPhotoComposerSession(applied.items);
+    session.beginSend();
+    const createdBeforeStale = createdBlobs.length;
+    const stalePrepared = applyComposerPreparedIfCurrent(
+      session.items,
+      {
+        ...prepared,
+        blob: new Blob([new Uint8Array([2])], { type: "image/jpeg" }),
+        status: "ready",
+      },
+      session.generation,
+      session.generation - 1
+    );
+    assert(stalePrepared.items === session.items, "stale prepare does not rewrite composer");
+    assert(createdBlobs.length === createdBeforeStale, "stale prepare does not leak a preview URL");
+
+    const leftoverSrc = instantChatPhotoPicks(
+      [
+        new File([new Uint8Array([3])], "keep-fail.jpg", { type: "image/jpeg", lastModified: 3 }),
+        new File([new Uint8Array([4])], "send-ok.jpg", { type: "image/jpeg", lastModified: 4 }),
+      ],
+      2
+    ).items;
+    leftoverSrc[0] = { ...leftoverSrc[0]!, status: "failed", error: "변환 실패" };
+    const leftoverPreparedBlob = new Blob([new Uint8Array([5])], { type: "image/jpeg" });
+    const leftoverPrepared = await prepareChatPendingPhoto(leftoverSrc[1]!, leftoverSrc[1]!.blob as File, async () => leftoverPreparedBlob);
+    const leftoverOldPreview = leftoverSrc[1]!.previewUrl;
+    const leftoverApplied = applyPreparedChatPhoto(leftoverSrc, leftoverPrepared);
+    assert(leftoverApplied.items[1]?.previewUrl !== leftoverOldPreview, "leftover path still swaps ready preview");
+    assert(revokeCounts.get(leftoverOldPreview) === 1, "leftover ready photo revokes pick preview once");
+    const leftover = leftoverComposerPhotosAfterSend(
+      leftoverApplied.items,
+      usableOptimisticChatPhotos(leftoverApplied.items).map((item) => item.key)
+    );
+    assert(leftover.length === 1 && leftover[0]?.status === "failed", "failed leftover stays after send");
+    const leftoverReadyPreview = leftoverApplied.items[1]!.previewUrl;
+    const leftoverRevokesBefore = revokeCounts.get(leftoverReadyPreview) || 0;
+    revokeChatPhotoPreviewUrls(leftover);
+    assert(
+      (revokeCounts.get(leftoverReadyPreview) || 0) === leftoverRevokesBefore,
+      "leftover revoke does not touch the sent photo preview URL"
+    );
+    assert(
+      outgoingChatPhotoSrc({
+        roomId: "all",
+        attachmentId: "att-preview-1",
+        previewUrl: leftoverReadyPreview,
+        chatPhotoSrc: (roomId, id) => `/api/chat/rooms/${roomId}/attachments/${id}`,
+      }).includes("att-preview-1"),
+      "send still prefers server attachment URL over local preview"
+    );
+    assert(
+      outgoingChatPhotoSrc({
+        roomId: "all",
+        previewUrl: leftoverReadyPreview,
+        chatPhotoSrc: (roomId, id) => `/api/chat/rooms/${roomId}/attachments/${id}`,
+      }) === leftoverReadyPreview,
+      "before attachment id, outgoing still uses local preview URL"
+    );
+  } finally {
+    URL.createObjectURL = origCreate;
+    URL.revokeObjectURL = origRevoke;
+  }
 }
 
 section("composer stale pending state");
@@ -1928,6 +2074,10 @@ section("source wiring / no public blob");
   const pickSrc = read("src/lib/chatPhotoPick.ts");
   const fast = read("src/lib/chatPhotoFastPath.ts");
   const optimistic = read("src/lib/chatPhotoOptimistic.ts");
+  assert(pickSrc.includes("createDetachedChatPhotoPreviewUrl(file)"), "pick preview URL is detached from the decode File");
+  assert(pickSrc.includes("createChatPhotoPreviewUrl(prepared.blob)"), "prepare commit builds preview URL from prepared blob");
+  assert(pickSrc.includes("revokeChatPhotoPreviewUrl(current.previewUrl)"), "prepare commit revokes the previous preview URL");
+  assert(optimistic.includes("revokeChatPhotoPreviewUrl(item.previewUrl)"), "bulk leftover/drop revoke uses the same single-revoke helper");
   assert(client.includes("startChatPhotoPreupload"), "select starts background pre-upload");
   assert(client.includes("uploadJobsRef"), "composer keeps in-flight pre-upload promises");
   assert(client.includes("finishChatPhotoOutgoingUploads"), "send reuses pre-upload jobs/claims");
