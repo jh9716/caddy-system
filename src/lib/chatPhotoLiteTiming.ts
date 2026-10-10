@@ -45,6 +45,10 @@ export type ChatPhotoLiteSample = {
   heicImportMs: number | null;
   heicConvertMs: number | null;
   heicTotalMs: number | null;
+  heicNativeAttemptMs: number | null;
+  heicNativeSucceeded: boolean | null;
+  heicFallbackUsed: boolean | null;
+  heicFallbackTotalMs: number | null;
   runToAdaptiveMs: number | null;
   adaptiveMs: number | null;
   adaptiveToSourceExitMs: number | null;
@@ -139,6 +143,10 @@ function emptyLiteSample(): ChatPhotoLiteSample {
     heicImportMs: null,
     heicConvertMs: null,
     heicTotalMs: null,
+    heicNativeAttemptMs: null,
+    heicNativeSucceeded: null,
+    heicFallbackUsed: null,
+    heicFallbackTotalMs: null,
     runToAdaptiveMs: null,
     adaptiveMs: null,
     adaptiveToSourceExitMs: null,
@@ -243,6 +251,22 @@ export function noteChatPhotoLiteHeic(input: {
   if (heicImportMs != null) next.heicImportMs = heicImportMs;
   if (heicConvertMs != null) next.heicConvertMs = heicConvertMs;
   if (heicTotalMs != null) next.heicTotalMs = heicTotalMs;
+}
+
+export function noteChatPhotoLiteHeicNative(input: {
+  heicNativeAttemptMs?: number | null;
+  heicNativeSucceeded?: boolean;
+  heicFallbackUsed?: boolean;
+  heicFallbackTotalMs?: number | null;
+}): void {
+  if (!liteOn) return;
+  const next = liteBag();
+  const heicNativeAttemptMs = finiteMs(input.heicNativeAttemptMs);
+  const heicFallbackTotalMs = finiteMs(input.heicFallbackTotalMs);
+  if (heicNativeAttemptMs != null) next.heicNativeAttemptMs = heicNativeAttemptMs;
+  if (input.heicNativeSucceeded != null) next.heicNativeSucceeded = Boolean(input.heicNativeSucceeded);
+  if (input.heicFallbackUsed != null) next.heicFallbackUsed = Boolean(input.heicFallbackUsed);
+  if (heicFallbackTotalMs != null) next.heicFallbackTotalMs = heicFallbackTotalMs;
 }
 
 export function noteChatPhotoLiteAdaptive(result: {

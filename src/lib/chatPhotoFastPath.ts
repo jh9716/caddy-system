@@ -1,12 +1,10 @@
 import {
   COURSE_REPORT_HEIC_MESSAGE,
-  decodeCourseReportPhotoSource,
   isHeicLikeFile,
 } from "@/lib/courseReportPhotoClient";
 import { CHAT_PHOTO_MAX_BYTES, CHAT_PHOTO_PASSTHROUGH_MAX_BYTES } from "@/lib/chatPhotoConstants";
 import { noteChatPhotoLiteFlags, noteChatPhotoLiteStamp } from "@/lib/chatPhotoLiteTiming";
 import {
-  bindChatPhotoTimingFile,
   chatPhotoTimingRunIdFor,
   isChatPhotoDebugTiming,
   noteChatPhotoBoundary,
@@ -194,26 +192,15 @@ export async function prepareChatPhotoSource(
       if (debug) noteChatPhotoSourceSplit(runId, "sourceKindEndAt");
       noteChatPhotoLiteStamp("sourceAfterHeicPlanAt");
       if (kindHeic) {
-        const converted = await decodeCourseReportPhotoSource(file);
-        const convertedFile = new File(
-          [converted],
-          (carry?.sourceMeta?.name || file.name || "photo").replace(/\.(heic|heif)$/i, ".jpg"),
-          {
-            type: converted.type || "image/jpeg",
-            lastModified: file.lastModified,
-          }
-        );
-        if (runId) bindChatPhotoTimingFile(convertedFile, runId);
         if (debug) {
-          noteChatPhotoPrepareScope(runId, { jpegDirectRun: false, sameFileBound: false });
+          noteChatPhotoPrepareScope(runId, { jpegDirectRun: false, sameFileBound: Boolean(runId) });
           noteChatPhotoSourceSplit(runId, "sourceNoteScopeEndAt");
+          noteChatPhotoSourceSplit(runId, "sourceRunInvokeAt");
         }
-        if (canUseChatPhotoFastPath(convertedFile)) return converted;
-        if (debug) noteChatPhotoSourceSplit(runId, "sourceRunInvokeAt");
         noteChatPhotoLiteStamp("sourceBeforeRunAt");
-        const convertedOut = await run(convertedFile);
+        const heicOut = await run(file);
         noteChatPhotoLiteStamp("sourceExitAt");
-        return convertedOut;
+        return heicOut;
       }
       if (debug) {
         noteChatPhotoPrepareScope(runId, { jpegDirectRun: true, sameFileBound: Boolean(runId) });
@@ -252,27 +239,16 @@ export async function prepareChatPhotoSource(
     flushWatch();
     noteChatPhotoLiteStamp("sourceAfterHeicPlanAt");
     if (kindHeic) {
-      const converted = await decodeCourseReportPhotoSource(file);
-      const convertedFile = new File(
-        [converted],
-        (file.name || "photo").replace(/\.(heic|heif)$/i, ".jpg"),
-        {
-          type: converted.type || "image/jpeg",
-          lastModified: file.lastModified,
-        }
-      );
-      if (runId) bindChatPhotoTimingFile(convertedFile, runId);
       if (debug) {
-        noteChatPhotoPrepareScope(runId, { jpegDirectRun: false, sameFileBound: false });
+        noteChatPhotoPrepareScope(runId, { jpegDirectRun: false, sameFileBound: Boolean(runId) });
         noteChatPhotoSourceSplit(runId, "sourceNoteScopeEndAt");
         flushWatch();
+        noteChatPhotoSourceSplit(runId, "sourceRunInvokeAt");
       }
-      if (canUseChatPhotoFastPath(convertedFile)) return converted;
-      if (debug) noteChatPhotoSourceSplit(runId, "sourceRunInvokeAt");
       noteChatPhotoLiteStamp("sourceBeforeRunAt");
-      const convertedOut = await run(convertedFile);
+      const heicOut = await run(file);
       noteChatPhotoLiteStamp("sourceExitAt");
-      return convertedOut;
+      return heicOut;
     }
     if (debug) {
       noteChatPhotoPrepareScope(runId, { jpegDirectRun: true, sameFileBound: Boolean(runId) });

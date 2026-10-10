@@ -74,6 +74,7 @@ export {
   noteChatPhotoLiteAdaptive,
   noteChatPhotoLiteFlags,
   noteChatPhotoLiteHeic,
+  noteChatPhotoLiteHeicNative,
   noteChatPhotoLiteReady,
   noteChatPhotoLiteStamp,
   readChatPhotoLiteSample,

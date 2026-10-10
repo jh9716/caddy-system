@@ -1465,12 +1465,21 @@ section("phase 5 adaptive compression + debug");
   assert(pngOut.uploadBytes <= 1024 * 1024, "PNG target around 700KB~1MB");
   assert(pngOut.outputWidth === 1600 && pngOut.outputHeight === 1120, "PNG long-edge scale is valid");
 
+  enableChatPhotoLiteTiming(true);
+  resetChatPhotoLiteSample();
   const heicOut = await prepareChatAdaptivePhoto(heic, {
     decodeHeic: async () => new Blob([new Uint8Array(2 * 1024 * 1024)], { type: "image/jpeg" }),
     inspect: async () => ({ width: 3000, height: 2000 }),
     encode: async ({ mime }) => new Blob([new Uint8Array(540 * 1024)], { type: mime }),
   });
   assert(heicOut.encoded && heicOut.uploadBytes === 540 * 1024, "HEIC conversion + chat target");
+  const heicFallbackLite = readChatPhotoLiteSample();
+  assert(heicFallbackLite?.heicNativeSucceeded === false, "node fixture native HEIC decode fails");
+  assert(heicFallbackLite?.heicFallbackUsed === true, "failed native HEIC uses heic-to fallback");
+  assert(heicFallbackLite?.heicNativeAttemptMs != null, "failed native HEIC still records attempt ms");
+  assert(heicFallbackLite?.heicFallbackTotalMs != null, "fallback records heic-to time");
+  enableChatPhotoLiteTiming(false);
+  resetChatPhotoLiteSample();
 
   const passthrough = await prepareChatAdaptivePhoto(smallJpeg, {
     encode: async () => {
@@ -2321,27 +2330,29 @@ section("early meta carry: picker snapshot reused after preview");
     assert(pickedHeic.items[0]?.sourceMeta?.name.endsWith(".heic"), "HEIC picker stores sourceMeta");
     assert(planChatPhotoSourceFromMeta(pickedHeic.items[0]!.sourceMeta!).heic, "HEIC picker plan stays heic");
     let heicCompress = 0;
-    const heicOut = await prepareChatPhotoSource(heic, async () => {
+    let heicCompressFile: File | null = null;
+    const heicOut = await prepareChatPhotoSource(heic, async (next) => {
       heicCompress += 1;
+      heicCompressFile = next;
       return new Blob([new Uint8Array(16)], { type: "image/jpeg" });
     }, {
       sourceMeta: pickedHeic.items[0]!.sourceMeta,
       sourcePlan: planChatPhotoSourceFromMeta(pickedHeic.items[0]!.sourceMeta!),
     });
-    assert(heicOut.type === "image/jpeg" && heicOut.size === 32, "carried HEIC still converts then passthrough");
-    assert(heicCompress === 0, "small converted HEIC does not re-encode");
+    assert(heicCompress === 1 && heicCompressFile === heic, "carried HEIC runs original file, no pre-convert");
+    assert(heicOut.type === "image/jpeg" && heicOut.size === 16, "carried HEIC compress result is used");
 
     setHeicConverterForTests(async () => new Blob([new Uint8Array(800 * 1024)], { type: "image/jpeg" }));
     let heicHeavyCompress = 0;
     const heicHeavyOut = await prepareChatPhotoSource(heic, async (next) => {
       heicHeavyCompress += 1;
-      assert(next !== heic, "HEIC heavy run receives converted File");
+      assert(next === heic, "HEIC heavy run still receives original File");
       return new Blob([new Uint8Array(20)], { type: "image/jpeg" });
     }, {
       sourceMeta: pickedHeic.items[0]!.sourceMeta,
       sourcePlan: planChatPhotoSourceFromMeta(pickedHeic.items[0]!.sourceMeta!),
     });
-    assert(heicHeavyCompress === 1 && heicHeavyOut.size === 20, "large converted HEIC still runs compress");
+    assert(heicHeavyCompress === 1 && heicHeavyOut.size === 20, "large HEIC still runs compress on original");
   } finally {
     setHeicConverterForTests(null);
   }
@@ -2386,14 +2397,142 @@ section("early meta carry: picker snapshot reused after preview");
       sourceMeta: pickedHeicLite.items[0]!.sourceMeta,
       sourcePlan: planChatPhotoSourceFromMeta(pickedHeicLite.items[0]!.sourceMeta!),
     });
-    assert(heicLiteOut.type === "image/jpeg" && heicLiteOut.size === 32, "photoLite HEIC carry still converts");
+    assert(heicLiteOut.type === "image/jpeg" && heicLiteOut.size === 16, "photoLite HEIC carry runs original through compress");
     const heicLiteSample = readChatPhotoLiteSample();
     assert(heicLiteSample?.sourceKind === "heic", "photoLite HEIC carry records sourceKind heic");
     assert(heicLiteSample?.sourceHeic === true, "photoLite HEIC carry records sourceHeic true");
-    assert(heicLiteSample?.heicImportMs == null && heicLiteSample?.heicConvertMs == null && heicLiteSample?.heicTotalMs == null, "test HEIC converter leaves import/convert stamps unset");
+    assert(heicLiteSample?.heicImportMs == null && heicLiteSample?.heicConvertMs == null && heicLiteSample?.heicTotalMs == null, "source-level HEIC no longer pre-converts");
+    assert(heicLiteSample?.heicNativeSucceeded == null && heicLiteSample?.heicFallbackUsed == null, "custom compress skips adaptive native/fallback stamps");
     assert(!isChatPhotoDebugTiming(), "photoLite HEIC path does not enable photoDebug");
   } finally {
     setHeicConverterForTests(null);
+  }
+
+  enableChatPhotoLiteTiming(false);
+  resetChatPhotoLiteSample();
+}
+
+section("native HEIC decode-first + heic-to fallback");
+{
+  enableChatPhotoDebugTiming(false);
+  enableChatPhotoLiteTiming(true);
+  resetChatPhotoLiteSample();
+
+  const heic = new File([heicBytes()], "native.heic", { type: "image/heic" });
+  const jpeg = new File([new Uint8Array(800 * 1024 + 8)], "keep.jpg", { type: "image/jpeg" });
+  const png = new File([new Uint8Array(900 * 1024)], "keep.png", { type: "image/png" });
+  const webp = new File([new Uint8Array(900 * 1024)], "keep.webp", { type: "image/webp" });
+
+  let jpegDecodeHeic = 0;
+  const jpegOut = await prepareChatAdaptivePhoto(jpeg, {
+    decodeHeic: async () => {
+      jpegDecodeHeic += 1;
+      return new Blob([new Uint8Array(8)], { type: "image/jpeg" });
+    },
+    inspect: async () => ({ width: 2000, height: 1500 }),
+    encode: async ({ mime }) => new Blob([new Uint8Array(120)], { type: mime }),
+  });
+  assert(jpegOut.uploadBytes === 120 && jpegDecodeHeic === 0, "JPEG adaptive does not enter HEIC convert");
+  const jpegLite = readChatPhotoLiteSample();
+  assert(jpegLite?.heicNativeSucceeded == null && jpegLite?.heicFallbackUsed == null, "JPEG leaves native HEIC flags empty");
+  assert(jpegLite?.heicNativeAttemptMs == null && jpegLite?.heicFallbackTotalMs == null, "JPEG leaves native HEIC timings empty");
+
+  resetChatPhotoLiteSample();
+  let pngDecodeHeic = 0;
+  const pngOut = await prepareChatAdaptivePhoto(png, {
+    decodeHeic: async () => {
+      pngDecodeHeic += 1;
+      return new Blob([new Uint8Array(8)], { type: "image/jpeg" });
+    },
+    hasAlpha: true,
+    inspect: async () => ({ width: 2000, height: 1400, hasAlpha: true }),
+    encode: async ({ mime }) => new Blob([new Uint8Array(200)], { type: mime }),
+  });
+  assert(pngOut.uploadBytes === 200 && pngDecodeHeic === 0, "PNG adaptive does not enter HEIC convert");
+
+  resetChatPhotoLiteSample();
+  let webpDecodeHeic = 0;
+  const webpOut = await prepareChatAdaptivePhoto(webp, {
+    decodeHeic: async () => {
+      webpDecodeHeic += 1;
+      return new Blob([new Uint8Array(8)], { type: "image/jpeg" });
+    },
+    inspect: async () => ({ width: 2400, height: 1800 }),
+    encode: async ({ mime }) => new Blob([new Uint8Array(180)], { type: mime }),
+  });
+  assert(webpOut.uploadBytes === 180 && webpDecodeHeic === 0, "WEBP adaptive does not enter HEIC convert");
+
+  resetChatPhotoLiteSample();
+  let fallbackCalls = 0;
+  const fallbackOut = await prepareChatAdaptivePhoto(heic, {
+    decodeHeic: async (file) => {
+      fallbackCalls += 1;
+      assert(file === heic, "fallback convert receives original HEIC");
+      return new Blob([new Uint8Array(2 * 1024 * 1024)], { type: "image/jpeg" });
+    },
+    inspect: async () => ({ width: 3000, height: 2000 }),
+    encode: async ({ mime, quality, width, height }) => {
+      assert(mime === "image/jpeg", "fallback HEIC still encodes JPEG");
+      assert(quality === 0.82 || quality === 0.7, "fallback HEIC keeps existing JPEG qualities");
+      assert(width === 1600 && height === 1067, "fallback HEIC keeps 1600 long-edge");
+      return new Blob([new Uint8Array(540 * 1024)], { type: mime });
+    },
+  });
+  assert(fallbackCalls === 1 && fallbackOut.uploadBytes === 540 * 1024, "native failure falls back to heic-to then encode");
+  const fallbackLite = readChatPhotoLiteSample();
+  assert(fallbackLite?.heicNativeSucceeded === false, "native failure records heicNativeSucceeded false");
+  assert(fallbackLite?.heicFallbackUsed === true, "native failure records heicFallbackUsed");
+  assert(fallbackLite?.heicNativeAttemptMs != null, "native failure records heicNativeAttemptMs");
+  assert(fallbackLite?.heicFallbackTotalMs != null, "native failure records heicFallbackTotalMs");
+
+  const bitmapCalls: unknown[] = [];
+  const previousBitmap = (globalThis as { createImageBitmap?: typeof createImageBitmap }).createImageBitmap;
+  (globalThis as { createImageBitmap: typeof createImageBitmap }).createImageBitmap = (async (
+    _blob: Blob,
+    opts?: ImageBitmapOptions
+  ) => {
+    bitmapCalls.push(opts);
+    if (opts && opts.imageOrientation === "from-image") {
+      return { width: 3000, height: 4000, close() {} } as ImageBitmap;
+    }
+    throw new Error("HEIC native decode must request from-image orientation");
+  }) as typeof createImageBitmap;
+  try {
+    resetChatPhotoLiteSample();
+    let nativeFallback = 0;
+    const nativeOut = await prepareChatAdaptivePhoto(heic, {
+      decodeHeic: async () => {
+        nativeFallback += 1;
+        return new Blob([new Uint8Array(32)], { type: "image/jpeg" });
+      },
+      inspect: async () => ({ width: 3000, height: 4000 }),
+      encode: async ({ mime, quality, width, height, source }) => {
+        assert(source === heic, "native success encodes original HEIC, no intermediate JPEG");
+        assert(mime === "image/jpeg", "native HEIC still encodes JPEG");
+        assert(quality === 0.82, "native HEIC first encode keeps quality 0.82");
+        assert(width === 1200 && height === 1600, "native HEIC keeps 1600 long-edge on portrait");
+        return new Blob([new Uint8Array(220 * 1024)], { type: mime });
+      },
+    });
+    assert(nativeFallback === 0, "native HEIC success does not call heic-to");
+    assert(nativeOut.encoded && nativeOut.uploadBytes === 220 * 1024, "native HEIC success still JPEG-encodes once");
+    assert(nativeOut.outputWidth === 1200 && nativeOut.outputHeight === 1600, "native HEIC output is 1600 long-edge");
+    assert(
+      bitmapCalls.some((opts) => opts && typeof opts === "object" && (opts as ImageBitmapOptions).imageOrientation === "from-image"),
+      "native HEIC createImageBitmap uses from-image orientation"
+    );
+    const nativeLite = readChatPhotoLiteSample();
+    assert(nativeLite?.heicNativeSucceeded === true, "native success records heicNativeSucceeded");
+    assert(nativeLite?.heicFallbackUsed === false, "native success does not use fallback");
+    assert(nativeLite?.heicNativeAttemptMs != null, "native success records heicNativeAttemptMs");
+    assert(nativeLite?.heicFallbackTotalMs == null, "native success leaves heicFallbackTotalMs empty");
+    assert(nativeLite?.heicImportMs == null && nativeLite?.heicConvertMs == null, "native success does not run heic-to timings");
+  } finally {
+    if (previousBitmap) {
+      (globalThis as { createImageBitmap: typeof createImageBitmap }).createImageBitmap = previousBitmap;
+    } else {
+      delete (globalThis as { createImageBitmap?: typeof createImageBitmap }).createImageBitmap;
+    }
   }
 
   enableChatPhotoLiteTiming(false);
@@ -2491,6 +2630,10 @@ section("source wiring / no public blob");
   assert(client.includes("heicImportMs"), "photoLite panel shows heicImportMs");
   assert(client.includes("heicConvertMs"), "photoLite panel shows heicConvertMs");
   assert(client.includes("heicTotalMs"), "photoLite panel shows heicTotalMs");
+  assert(client.includes("heicNativeAttemptMs"), "photoLite panel shows heicNativeAttemptMs");
+  assert(client.includes("heicNativeSucceeded"), "photoLite panel shows heicNativeSucceeded");
+  assert(client.includes("heicFallbackUsed"), "photoLite panel shows heicFallbackUsed");
+  assert(client.includes("heicFallbackTotalMs"), "photoLite panel shows heicFallbackTotalMs");
   assert(client.includes('typeof value === "boolean" ? String(value)'), "photoLite panel stringifies booleans");
   assert(client.includes("runToAdaptiveMs"), "photoLite panel shows run→adaptive");
   assert(client.includes("adaptiveToSourceExitMs"), "photoLite panel shows adaptive→source exit");
@@ -2508,6 +2651,10 @@ section("source wiring / no public blob");
   assert(fast.includes('noteChatPhotoLiteStamp("sourceExitAt")'), "source exit is stamped for photoLite");
   assert(fast.includes("sourceKind: carried?.kind"), "carried sourceKind is copied into photoLite");
   assert(fast.includes("sourceHeic: carried ? Boolean(carried.heic || carried.kind === \"heic\")"), "carried sourceHeic is copied into photoLite");
+  assert(!fast.includes("decodeCourseReportPhotoSource"), "source no longer pre-converts HEIC");
+  assert(read("src/lib/chatPhotoAdaptive.ts").includes("noteChatPhotoLiteHeicNative"), "adaptive records native HEIC attempt");
+  assert(read("src/lib/chatPhotoAdaptive.ts").includes("nativeDrawable = await loadDrawable(file, now)"), "adaptive tries native HEIC decode first");
+  assert(read("src/lib/chatPhotoAdaptive.ts").includes("opts.decodeHeic || decodeCourseReportPhotoSource"), "adaptive keeps heic-to fallback");
   assert(reportClient.includes("isChatPhotoLiteTiming()"), "HEIC convert gates stamps behind photoLite");
   assert(reportClient.includes("const importStarted = lite ? chatPhotoNow() : 0"), "HEIC import start uses chatPhotoNow");
   assert(reportClient.includes("const importEnded = lite ? chatPhotoNow() : 0"), "HEIC import end uses chatPhotoNow");
