@@ -56,6 +56,8 @@ import {
   canShowChatPhotoDebug,
   chatPhotoNow,
   emitChatPhotoTimingSummary,
+  enableChatPhotoDebugTiming,
+  isChatPhotoDebugTiming,
   markChatPhotoTiming,
   commitChatPhotoPrepareTiming,
   noteChatPhotoBytes,
@@ -888,12 +890,12 @@ export default function ChatClient() {
   }, []);
 
   useEffect(() => {
-    setPhotoDebug(
-      canShowChatPhotoDebug({
-        role: tokenInfo?.user.role,
-        search: typeof window !== "undefined" ? window.location.search : "",
-      })
-    );
+    const on = canShowChatPhotoDebug({
+      role: tokenInfo?.user.role,
+      search: typeof window !== "undefined" ? window.location.search : "",
+    });
+    setPhotoDebug(on);
+    enableChatPhotoDebugTiming(on);
   }, [tokenInfo?.user.role]);
 
   function refreshPhotoDebugSample() {
@@ -1396,8 +1398,10 @@ export default function ChatClient() {
       if (item.status === "ready" && !needsChatPhotoHeavyPrepare(file)) {
         markChatPhotoTiming("select_to_ready", selectedAt);
         stampChatPhotoTiming("prepare_complete");
-        noteChatPhotoCompression(0);
-        refreshPhotoDebugSample();
+        if (isChatPhotoDebugTiming()) {
+          noteChatPhotoCompression(0);
+          refreshPhotoDebugSample();
+        }
         startComposerPreupload(item, writeGeneration);
         continue;
       }
@@ -1407,9 +1411,6 @@ export default function ChatClient() {
         stampChatPhotoTiming("prepare_complete");
         if (prepared.metrics) {
           noteChatPhotoBytes(prepared.metrics.sourceBytes, prepared.metrics.uploadBytes);
-          if (prepared.metrics.prepareOuterMs != null || prepared.metrics.compressionMs != null) {
-            noteChatPhotoCompression(prepared.metrics.prepareOuterMs ?? prepared.metrics.compressionMs ?? 0);
-          }
         }
         const commitStarted = chatPhotoNow();
         const applied = applyComposerPreparedIfCurrent(
@@ -1420,11 +1421,16 @@ export default function ChatClient() {
         );
         if (applied.note) setError(applied.note);
         if (applied.items !== pendingPhotosRef.current) setPendingPhotoList(applied.items);
-        noteChatPhotoPrepareScope(prepared.metrics?.timingRunId, {
-          stateCommitMs: Math.max(0, chatPhotoNow() - commitStarted),
-        });
-        commitChatPhotoPrepareTiming(prepared.metrics?.timingRunId);
-        refreshPhotoDebugSample();
+        if (isChatPhotoDebugTiming()) {
+          if (prepared.metrics?.prepareOuterMs != null || prepared.metrics?.compressionMs != null) {
+            noteChatPhotoCompression(prepared.metrics?.prepareOuterMs ?? prepared.metrics?.compressionMs ?? 0);
+          }
+          noteChatPhotoPrepareScope(prepared.metrics?.timingRunId, {
+            stateCommitMs: Math.max(0, chatPhotoNow() - commitStarted),
+          });
+          commitChatPhotoPrepareTiming(prepared.metrics?.timingRunId);
+          refreshPhotoDebugSample();
+        }
         const current = applied.items.find((row) => row.key === prepared.key);
         if (current?.status === "ready") startComposerPreupload(current, writeGeneration);
         return prepared;

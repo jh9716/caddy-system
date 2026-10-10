@@ -121,9 +121,12 @@ import {
   buildChatPhotoDebugSample,
   canShowChatPhotoDebug,
   chatPhotoDebugApiUrl,
+  chatPhotoNow,
   emitChatPhotoTimingSummary,
   chatPhotoTimingRunIdFor,
   commitChatPhotoPrepareTiming,
+  enableChatPhotoDebugTiming,
+  isChatPhotoDebugTiming,
   markChatPhotoTiming,
   publicChatPhotoTimingKey,
   noteChatPhotoBoundary,
@@ -1528,7 +1531,9 @@ section("regression: header-probe bitmap resize + EXIF + fallback");
 
 section("hidden latency: scope isolation");
 {
+  enableChatPhotoDebugTiming(true);
   resetChatPhotoTiming();
+  enableChatPhotoDebugTiming(true);
   const fileA = new File([new Uint8Array(8)], "a.jpg", { type: "image/jpeg" });
   const fileB = new File([new Uint8Array(8)], "b.jpg", { type: "image/jpeg" });
   const runA = startChatPhotoPrepareTiming("key-a", fileA);
@@ -1571,7 +1576,9 @@ section("hidden latency: scope isolation");
 
 section("prepare boundary: stale bag + same File runId");
 {
+  enableChatPhotoDebugTiming(true);
   resetChatPhotoTiming();
+  enableChatPhotoDebugTiming(true);
   const fileA = new File([new Uint8Array(12)], "keep.jpg", { type: "image/jpeg" });
   const fileB = new File([new Uint8Array(2.2 * 1024 * 1024)], "next.jpg", { type: "image/jpeg" });
   const runA = startChatPhotoPrepareTiming("cph-1-keep.jpg|12|1|image/jpeg", fileA);
@@ -1655,6 +1662,7 @@ section("prepare boundary: stale bag + same File runId");
 
 section("source split: JPEG getter counts + unused one-read helper");
 {
+  enableChatPhotoDebugTiming(true);
   function spin(ms: number) {
     const end = Date.now() + ms;
     while (Date.now() < end) {}
@@ -1757,6 +1765,60 @@ section("source split: JPEG getter counts + unused one-read helper");
   assert(watched.typeReads === 2 && watched.nameReads === 1 && watched.sizeReads === 1, "watch counts metadata getters only");
   assert(watched.typeMs >= 8, "watch records File.type getter time");
   assert(watched.nameMs === 0 || watched.nameMs < watched.typeMs, "name getter time stays a number");
+}
+
+section("debug timing off: no proxy / scope / source-split");
+{
+  enableChatPhotoDebugTiming(false);
+  resetChatPhotoTiming();
+  enableChatPhotoDebugTiming(false);
+  assert(isChatPhotoDebugTiming() === false, "debug timing is off");
+  const heavy = new File([new Uint8Array(2.2 * 1024 * 1024)], "secret-vacation.jpg", { type: "image/jpeg" });
+  const started = startChatPhotoPrepareTiming("cph-1-secret-vacation.jpg|2200000|1|image/jpeg", heavy);
+  assert(started == null, "prepare-scope start is skipped when debug is off");
+  assert(chatPhotoTimingRunIdFor(heavy) == null, "WeakMap is not bound when debug is off");
+  const selectedAt = 10;
+  stampChatPhotoTiming("photo_selected", selectedAt);
+  let seen: File | null = null;
+  const t0 = chatPhotoNow();
+  const out = await prepareChatPhotoSource(heavy, async (next) => {
+    seen = next;
+    return new Blob([new Uint8Array(8)], { type: "image/jpeg" });
+  });
+  const wall = chatPhotoNow() - t0;
+  markChatPhotoTiming("select_to_ready", selectedAt);
+  stampChatPhotoTiming("prepare_complete");
+  assert(seen === heavy && out.size === 8, "debug-off JPEG still runs compress on the original File");
+  assert(wall >= 0, "debug-off prepare still has a wall time");
+  commitChatPhotoPrepareTiming("r1");
+  const sample = buildChatPhotoDebugSample();
+  assert(sample.fileTypeReads == null && sample.fileNameReads == null && sample.fileSizeReads == null, "no getter counts when debug is off");
+  assert(sample.sourceEnterToAcceptableMs == null && sample.kindToNoteScopeMs == null, "source-split stamps stay empty");
+  assert(sample.photoSourceEnterAt == null && sample.timingRunId == null, "prepare-scope bag is not published");
+  assert(sample.selectedToReadyMs != null, "select→ready wall time is still recorded");
+  const dumped = JSON.stringify(sample);
+  assert(!dumped.includes("secret-vacation"), "debug-off sample has no file name");
+  const rawWatch = watchChatPhotoFileAccess(heavy);
+  assert(rawWatch.file === heavy, "watch does not wrap File in a Proxy when debug is off");
+  void rawWatch.file.type;
+  void rawWatch.file.size;
+  assert(rawWatch.typeReads === 0 && rawWatch.sizeReads === 0, "off-path watch does not intercept getters");
+
+  const prepared = await prepareChatPendingPhoto(
+    {
+      key: "cph-off",
+      blob: heavy,
+      previewUrl: "blob:test-off",
+      fileId: "off",
+      fingerprint: "",
+      status: "preparing",
+    },
+    heavy,
+    async (next) => next
+  );
+  assert(prepared.status === "ready", "pending prepare still succeeds with debug off");
+  assert(prepared.metrics?.timingRunId == null, "pending prepare does not allocate a run id");
+  assert(typeof prepared.metrics?.prepareOuterMs === "number", "pending prepare still returns local wall time");
 }
 
 section("phase 6 hot-path timing / region / cleanup");
@@ -1952,6 +2014,12 @@ section("source wiring / no public blob");
   assert(!sourcePrepareFn.includes("planChatPhotoSourceFromMeta"), "live source does not use the unused planner");
   assert(fast.includes("planChatPhotoSourceFromMeta"), "one-read planner is present for a later wire");
   assert(timingSrc.includes("watchChatPhotoFileAccess"), "timing watches File metadata getters");
+  assert(timingSrc.includes("isChatPhotoDebugTiming"), "debug timing has an explicit gate");
+  assert(timingSrc.includes("enableChatPhotoDebugTiming"), "photoDebug can turn detailed timing on");
+  assert(fast.includes("isChatPhotoDebugTiming"), "source prepare skips debug bookkeeping when off");
+  assert(client.includes("enableChatPhotoDebugTiming"), "ChatClient arms debug timing only for photoDebug");
+  assert(sourcePrepareFn.includes("const debug = isChatPhotoDebugTiming()"), "live source branches on debug flag");
+  assert(sourcePrepareFn.includes("debug ? watchChatPhotoFileAccess(file) : null"), "Proxy is not created on the hot path");
   assert(client.includes('markChatPhotoTiming("select_to_ready"'), "heavy prepare stamps select_to_ready");
   assert(timingSrc.includes("clearPrepareScopeFromBag"), "commit replaces prepare-scope fields");
   assert(fast.includes("jpegDirectRun"), "JPEG source records same-file run");
