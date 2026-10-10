@@ -1428,6 +1428,7 @@ section("phase 5 adaptive compression + debug");
       debug.unaccountedPrepareMs == null,
     "phase 8/9/10 debug fields empty by default"
   );
+  enableChatPhotoDebugTiming(true);
   noteChatPhotoCompressionBreakdown({
     decodeMs: 12,
     drawResizeMs: 4,
