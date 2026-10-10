@@ -515,17 +515,77 @@ assert(
   "dialogs / permission / fullscreen / console stay on superclass"
 );
 assert(
+  heicConverter.includes("loadThumbnail") &&
+    heicConverter.includes("SDK_INT < 29") &&
+    heicConverter.includes("PATH_THUMBNAIL") &&
+    heicConverter.includes("tryLoadThumbnail"),
+  "API 29+ loadThumbnail is the first HEIC path"
+);
+assert(
   heicConverter.includes("ImageDecoder") &&
     heicConverter.includes("LONG_EDGE = 1600") &&
     heicConverter.includes("JPEG_QUALITY = 82") &&
     heicConverter.includes("ALLOCATOR_SOFTWARE") &&
-    heicConverter.includes("setTargetSize"),
-  "API 28+ ImageDecoder resizes HEIC to 1600 JPEG quality 82"
+    heicConverter.includes("setTargetSize") &&
+    heicConverter.includes("tryImageDecoder") &&
+    heicConverter.includes("PATH_IMAGEDECODER"),
+  "loadThumbnail failure falls back to API 28+ ImageDecoder 1600 JPEG quality 82"
 );
 assert(
   heicConverter.includes("SDK_INT < 28") &&
-    heicConverter.includes("return converted != null ? converted : uri"),
-  "API 24–27 or convert failure returns original HEIC URI"
+    heicConverter.includes("PATH_WEB") &&
+    heicConverter.includes("tryLoadThumbnail(context, uri)") &&
+    heicConverter.includes("tryImageDecoder(context, uri)"),
+  "thumbnail then ImageDecoder failure returns original HEIC URI for web heic-to"
+);
+assert(
+  heicConverter.includes("downscaleIfNeeded") &&
+    heicConverter.includes("Never upscale") &&
+    heicConverter.includes("Math.max(width, height) <= longEdge"),
+  "thumbnail bitmaps are never upscaled; only scaled down to 1600"
+);
+assert(
+  heicConverter.includes("thumbnailRequestSize") &&
+    heicConverter.includes("new Size(LONG_EDGE, LONG_EDGE)"),
+  "known source size keeps aspect; unknown size requests 1600x1600"
+);
+assert(
+  heicConverter.includes('endsWith(".jpg")') ||
+    heicConverter.includes('UUID.randomUUID().toString() + ".jpg"'),
+  "converted file keeps .jpg so JS heic-to does not run"
+);
+assert(
+  chromeClient.includes("BuildConfig.DEBUG") &&
+    chromeClient.includes("Toast.makeText") &&
+    heicConverter.includes("HEIC thumb OK") &&
+    heicConverter.includes("HEIC decoder") &&
+    heicConverter.includes("HEIC native FAIL → web") &&
+    heicConverter.includes("thumbnailMs") &&
+    heicConverter.includes("decoderMs") &&
+    heicConverter.includes("jpegCompressMs") &&
+    heicConverter.includes("totalNativeMs"),
+  "debug APK toasts thumbnail / imagedecoder / web timings without URIs"
+);
+assert(
+  !heicConverter.includes("uri.toString()") &&
+    !chromeClient.includes("uri.toString()") &&
+    chromeClient.includes("result.debugMessage()"),
+  "debug toast uses timing/size text, not personal URI/path"
+);
+assert(
+  heicConverter.includes("PATH_PASSTHROUGH") &&
+    heicConverter.includes("isHeicLike(mimeOf(context, uri), displayNameOf(context, uri))") &&
+    heicConverter.includes("return passthrough(uri)"),
+  "JPEG/PNG/WEBP stay on the original picker URI"
+);
+assert(
+  chromeClient.includes("super.onShowFileChooser(") &&
+    heicConverter.includes("isImageOnlyAccept") &&
+    heicConverter.includes('token.startsWith("image/")') &&
+    !heicConverter.includes(".csv") &&
+    !heicConverter.includes(".xlsx") &&
+    !heicConverter.includes("spreadsheet"),
+  "CSV/XLSX choosers stay on Capacitor and are not HEIC-converted"
 );
 assert(
   heicConverter.includes("heic-jpeg") &&

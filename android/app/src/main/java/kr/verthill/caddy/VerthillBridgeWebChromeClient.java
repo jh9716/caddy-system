@@ -8,6 +8,7 @@ import android.webkit.MimeTypeMap;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebView;
+import android.widget.Toast;
 import androidx.activity.result.ActivityResult;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
@@ -90,22 +91,44 @@ public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
         final Activity activity = bridge.getActivity();
         convertExecutor.execute(() -> {
             Uri[] resolved = new Uri[picked.length];
+            List<String> debugToasts = new ArrayList<>();
             for (int i = 0; i < picked.length; i++) {
-                resolved[i] = HeicNativeJpegConverter.resolveForWebView(
-                    activity != null ? activity : bridge.getContext(),
-                    picked[i]
-                );
+                HeicNativeJpegConverter.ConvertResult result =
+                    HeicNativeJpegConverter.resolveForWebView(
+                        activity != null ? activity : bridge.getContext(),
+                        picked[i]
+                    );
+                resolved[i] = result.uri;
+                if (BuildConfig.DEBUG && result.shouldToast()) {
+                    debugToasts.add(result.debugMessage());
+                }
             }
-            deliver(activity, callback, resolved);
+            deliver(activity, callback, resolved, debugToasts);
         });
     }
 
-    private static void deliver(Activity activity, ValueCallback<Uri[]> callback, Uri[] uris) {
+    private static void deliver(
+        Activity activity,
+        ValueCallback<Uri[]> callback,
+        Uri[] uris,
+        List<String> debugToasts
+    ) {
         if (activity == null) {
             callback.onReceiveValue(uris);
             return;
         }
-        activity.runOnUiThread(() -> callback.onReceiveValue(uris));
+        activity.runOnUiThread(() -> {
+            callback.onReceiveValue(uris);
+            if (!BuildConfig.DEBUG || debugToasts == null || debugToasts.isEmpty()) {
+                return;
+            }
+            StringBuilder message = new StringBuilder();
+            for (int i = 0; i < debugToasts.size(); i++) {
+                if (i > 0) message.append('\n');
+                message.append(debugToasts.get(i));
+            }
+            Toast.makeText(activity, message.toString(), Toast.LENGTH_LONG).show();
+        });
     }
 
     static Uri[] urisFromResult(Intent data) {
