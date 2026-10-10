@@ -1438,7 +1438,7 @@ export default function ChatClient() {
     abandonChatPhotoPreupload(uploadJobsRef.current, [key]);
     const next = pendingPhotosRef.current.filter((item) => {
       if (item.key !== key) return true;
-      URL.revokeObjectURL(item.previewUrl);
+      revokeChatPhotoPreviewUrls([item]);
       return false;
     });
     setPendingPhotoList(next);
