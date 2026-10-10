@@ -1,6 +1,6 @@
 /**
  * photoLite=1 only. Copies already-computed adaptive timings and last-run
- * boundary timestamps/deltas. No photoDebug, Proxy, or File reads.
+ * boundary timestamps/deltas. No photoDebug, wrapping, or File reads.
  */
 
 import { chatPhotoNow } from "@/lib/chatPhotoTiming";
