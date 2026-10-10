@@ -14,14 +14,20 @@ import {
 } from "@/lib/chatPhotoConstants";
 import {
   canUseChatPhotoFastPath,
+  carriedChatPhotoSourcePlan,
   chatPhotoSourceKind,
   isChatPhotoAcceptableSource,
+  isHeicLikeFromMeta,
+  type ChatPhotoFileMeta,
+  type ChatPhotoSourceCarry,
+  type ChatPhotoSourcePlan,
 } from "@/lib/chatPhotoFastPath";
 import {
   orientedImageHeaderSize,
   readImageSizeFromHeader,
   readJpegExifOrientation,
 } from "@/lib/imageHeaderSize";
+import { noteChatPhotoLiteAdaptive, noteChatPhotoLiteStamp } from "@/lib/chatPhotoLiteTiming";
 import {
   chatPhotoNow,
   chatPhotoTimingRunIdFor,
@@ -403,6 +409,7 @@ async function encodeCanvas(
 function finishAdaptiveResult(result: ChatPhotoAdaptiveResult, file?: Blob): ChatPhotoAdaptiveResult {
   const runId = chatPhotoTimingRunIdFor(file);
   noteChatPhotoBoundary(runId, "adaptiveExitAt");
+  noteChatPhotoLiteStamp("adaptiveExitAt");
   noteChatPhotoCompressionBreakdown({
     runId,
     decodeMs: result.decodeMs ?? null,
@@ -426,6 +433,7 @@ function finishAdaptiveResult(result: ChatPhotoAdaptiveResult, file?: Blob): Cha
     postEncodeMs: result.postEncodeMs ?? null,
     hiddenBeforeDecodeMs: result.hiddenBeforeDecodeMs ?? null,
   });
+  noteChatPhotoLiteAdaptive(result);
   return result;
 }
 
@@ -437,18 +445,30 @@ export async function prepareChatAdaptivePhoto(
     decodeHeic?: (file: File) => Promise<Blob>;
     now?: () => number;
     hasAlpha?: boolean;
+    sourceMeta?: ChatPhotoFileMeta | null;
+    sourcePlan?: ChatPhotoSourcePlan | null;
   } = {}
 ): Promise<ChatPhotoAdaptiveResult> {
   const now = opts.now || chatPhotoNow;
   const started = now();
+  noteChatPhotoLiteStamp("adaptiveEnterAt", started);
   const runId = chatPhotoTimingRunIdFor(file);
   noteChatPhotoBoundary(runId, "adaptiveEnterAt", started);
   noteChatPhotoPrepareScope(runId, { runIdResolved: Boolean(runId), sameFileBound: Boolean(runId) });
-  if (!isChatPhotoAcceptableSource(file)) {
+  const sourceMeta = opts.sourceMeta ?? null;
+  const sourcePlan = carriedChatPhotoSourcePlan({ sourceMeta, sourcePlan: opts.sourcePlan });
+  const usingCarry = Boolean(sourceMeta || sourcePlan);
+  if (usingCarry) {
+    if (sourcePlan && !sourcePlan.acceptable) {
+      throw new Error(COURSE_REPORT_HEIC_MESSAGE);
+    }
+  } else if (!isChatPhotoAcceptableSource(file)) {
     throw new Error(COURSE_REPORT_HEIC_MESSAGE);
   }
   let source: Blob = file;
-  const heic = isHeicLikeFile(file) || chatPhotoSourceKind(file) === "heic";
+  const heic = usingCarry
+    ? Boolean(sourcePlan?.heic || sourcePlan?.kind === "heic" || (sourceMeta ? isHeicLikeFromMeta(sourceMeta) : false))
+    : isHeicLikeFile(file) || chatPhotoSourceKind(file) === "heic";
   if (heic) {
     try {
       source = await (opts.decodeHeic || decodeCourseReportPhotoSource)(file);
@@ -456,16 +476,23 @@ export async function prepareChatAdaptivePhoto(
       throw new Error(COURSE_REPORT_HEIC_CONVERT_MESSAGE);
     }
   }
-  const probe = {
-    name: file.name || (heic ? "photo.jpg" : "photo"),
-    type: source.type || (heic ? "image/jpeg" : file.type),
-    size: source.size,
-  };
+  const probe = usingCarry && sourceMeta && !heic
+    ? {
+        name: sourceMeta.name || "photo",
+        type: sourceMeta.type,
+        size: sourceMeta.size,
+      }
+    : {
+        name: usingCarry && sourceMeta ? (sourceMeta.name || (heic ? "photo.jpg" : "photo")) : (file.name || (heic ? "photo.jpg" : "photo")),
+        type: source.type || (heic ? "image/jpeg" : usingCarry && sourceMeta ? sourceMeta.type : file.type),
+        size: heic ? source.size : usingCarry && sourceMeta ? sourceMeta.size : source.size,
+      };
+  const sourceBytes = usingCarry && sourceMeta ? sourceMeta.size : file.size;
   if (canUseChatPhotoFastPath(probe)) {
     return finishAdaptiveResult({
       blob: source,
-      sourceBytes: file.size,
-      uploadBytes: source.size,
+      sourceBytes,
+      uploadBytes: heic ? source.size : probe.size,
       compressionMs: Math.max(0, now() - started),
       encoded: false,
       attempts: 0,
@@ -507,7 +534,7 @@ export async function prepareChatAdaptivePhoto(
     }
     return finishAdaptiveResult({
       blob,
-      sourceBytes: file.size,
+      sourceBytes,
       uploadBytes: blob.size,
       compressionMs: Math.max(0, now() - started),
       encoded: true,
@@ -568,7 +595,7 @@ export async function prepareChatAdaptivePhoto(
     const postStarted = now();
     return finishAdaptiveResult({
       blob,
-      sourceBytes: file.size,
+      sourceBytes,
       uploadBytes: blob.size,
       compressionMs: Math.max(0, now() - started),
       encoded: true,
@@ -596,7 +623,15 @@ export async function prepareChatAdaptivePhoto(
   }
 }
 
-export async function prepareChatAdaptiveBlob(file: File): Promise<Blob> {
+export async function prepareChatAdaptiveBlob(
+  file: File,
+  carry?: ChatPhotoSourceCarry | null
+): Promise<Blob> {
   noteChatPhotoBoundary(chatPhotoTimingRunIdFor(file), "adaptiveBlobEnterAt");
-  return (await prepareChatAdaptivePhoto(file)).blob;
+  return (
+    await prepareChatAdaptivePhoto(file, {
+      sourceMeta: carry?.sourceMeta,
+      sourcePlan: carry?.sourcePlan,
+    })
+  ).blob;
 }

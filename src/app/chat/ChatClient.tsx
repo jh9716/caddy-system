@@ -37,6 +37,7 @@ import {
   CHAT_PHOTO_ACCEPT,
   CHAT_PHOTO_MAX,
   chatPhotoComposerBusy,
+  shouldRenderChatComposerPreview,
   chatPhotoSrc,
   commitComposerPhotoPicks,
   finishChatPhotoOutgoingUploads,
@@ -56,6 +57,8 @@ import {
   canShowChatPhotoDebug,
   chatPhotoNow,
   emitChatPhotoTimingSummary,
+  enableChatPhotoDebugTiming,
+  isChatPhotoDebugTiming,
   markChatPhotoTiming,
   commitChatPhotoPrepareTiming,
   noteChatPhotoBytes,
@@ -65,6 +68,14 @@ import {
   stampChatPhotoTiming,
   type ChatPhotoDebugSample,
 } from "@/lib/chatPhotoTiming";
+import {
+  canShowChatPhotoLite,
+  enableChatPhotoLiteTiming,
+  isChatPhotoLiteTiming,
+  noteChatPhotoLiteReady,
+  readChatPhotoLiteSample,
+  type ChatPhotoLiteSample,
+} from "@/lib/chatPhotoLiteTiming";
 import type { ChatPhotoDirectProgress, ChatPhotoDirectResult } from "@/lib/chatPhotoDirectClient";
 import {
   canProfileMention,
@@ -294,6 +305,8 @@ export default function ChatClient() {
   const uploadJobsRef = useRef(new Map<string, Promise<ChatPhotoDirectResult>>());
   const [photoDebug, setPhotoDebug] = useState(false);
   const [photoDebugSample, setPhotoDebugSample] = useState<ChatPhotoDebugSample | null>(null);
+  const [photoLite, setPhotoLite] = useState(false);
+  const [photoLiteSample, setPhotoLiteSample] = useState<ChatPhotoLiteSample | null>(null);
   const [lightbox, setLightbox] = useState<{ src: string } | null>(null);
   const [replyTo, setReplyTo] = useState<ChatLineReply | null>(null);
   const [actionLine, setActionLine] = useState<ChatLine | null>(null);
@@ -888,12 +901,16 @@ export default function ChatClient() {
   }, []);
 
   useEffect(() => {
-    setPhotoDebug(
-      canShowChatPhotoDebug({
-        role: tokenInfo?.user.role,
-        search: typeof window !== "undefined" ? window.location.search : "",
-      })
-    );
+    const search = typeof window !== "undefined" ? window.location.search : "";
+    const on = canShowChatPhotoDebug({
+      role: tokenInfo?.user.role,
+      search,
+    });
+    setPhotoDebug(on);
+    enableChatPhotoDebugTiming(on);
+    const lite = canShowChatPhotoLite(search);
+    setPhotoLite(lite);
+    enableChatPhotoLiteTiming(lite);
   }, [tokenInfo?.user.role]);
 
   function refreshPhotoDebugSample() {
@@ -1394,22 +1411,37 @@ export default function ChatClient() {
       if (!item || !file) continue;
       noteChatPhotoBytes(file.size, item.metrics?.uploadBytes);
       if (item.status === "ready" && !needsChatPhotoHeavyPrepare(file)) {
-        markChatPhotoTiming("select_to_ready", selectedAt);
+        const selectToReadyMs = markChatPhotoTiming("select_to_ready", selectedAt);
         stampChatPhotoTiming("prepare_complete");
-        noteChatPhotoCompression(0);
-        refreshPhotoDebugSample();
+        if (isChatPhotoLiteTiming()) {
+          noteChatPhotoLiteReady({
+            selectToReadyMs,
+            prepareOuterMs: item.metrics?.prepareOuterMs ?? item.metrics?.compressionMs ?? 0,
+            uploadBytes: item.metrics?.uploadBytes,
+          });
+          setPhotoLiteSample(readChatPhotoLiteSample());
+        }
+        if (isChatPhotoDebugTiming()) {
+          noteChatPhotoCompression(0);
+          refreshPhotoDebugSample();
+        }
         startComposerPreupload(item, writeGeneration);
         continue;
       }
       const job = prepareChatPendingPhoto(item, file).then((prepared) => {
         markChatPhotoTiming("select_to_prepared", selectedAt);
-        markChatPhotoTiming("select_to_ready", selectedAt);
+        const selectToReadyMs = markChatPhotoTiming("select_to_ready", selectedAt);
         stampChatPhotoTiming("prepare_complete");
         if (prepared.metrics) {
           noteChatPhotoBytes(prepared.metrics.sourceBytes, prepared.metrics.uploadBytes);
-          if (prepared.metrics.prepareOuterMs != null || prepared.metrics.compressionMs != null) {
-            noteChatPhotoCompression(prepared.metrics.prepareOuterMs ?? prepared.metrics.compressionMs ?? 0);
-          }
+        }
+        if (isChatPhotoLiteTiming()) {
+          noteChatPhotoLiteReady({
+            selectToReadyMs,
+            prepareOuterMs: prepared.metrics?.prepareOuterMs ?? prepared.metrics?.compressionMs,
+            uploadBytes: prepared.metrics?.uploadBytes,
+          });
+          setPhotoLiteSample(readChatPhotoLiteSample());
         }
         const commitStarted = chatPhotoNow();
         const applied = applyComposerPreparedIfCurrent(
@@ -1420,11 +1452,16 @@ export default function ChatClient() {
         );
         if (applied.note) setError(applied.note);
         if (applied.items !== pendingPhotosRef.current) setPendingPhotoList(applied.items);
-        noteChatPhotoPrepareScope(prepared.metrics?.timingRunId, {
-          stateCommitMs: Math.max(0, chatPhotoNow() - commitStarted),
-        });
-        commitChatPhotoPrepareTiming(prepared.metrics?.timingRunId);
-        refreshPhotoDebugSample();
+        if (isChatPhotoDebugTiming()) {
+          if (prepared.metrics?.prepareOuterMs != null || prepared.metrics?.compressionMs != null) {
+            noteChatPhotoCompression(prepared.metrics?.prepareOuterMs ?? prepared.metrics?.compressionMs ?? 0);
+          }
+          noteChatPhotoPrepareScope(prepared.metrics?.timingRunId, {
+            stateCommitMs: Math.max(0, chatPhotoNow() - commitStarted),
+          });
+          commitChatPhotoPrepareTiming(prepared.metrics?.timingRunId);
+          refreshPhotoDebugSample();
+        }
         const current = applied.items.find((row) => row.key === prepared.key);
         if (current?.status === "ready") startComposerPreupload(current, writeGeneration);
         return prepared;
@@ -1438,7 +1475,7 @@ export default function ChatClient() {
     abandonChatPhotoPreupload(uploadJobsRef.current, [key]);
     const next = pendingPhotosRef.current.filter((item) => {
       if (item.key !== key) return true;
-      URL.revokeObjectURL(item.previewUrl);
+      revokeChatPhotoPreviewUrls([item]);
       return false;
     });
     setPendingPhotoList(next);
@@ -2231,8 +2268,12 @@ export default function ChatClient() {
                           : "vh-chat-pending-photo"
                     }
                   >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={item.previewUrl} alt="" />
+                    {shouldRenderChatComposerPreview(item) ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={item.previewUrl} alt="" />
+                    ) : (
+                      <span className="vh-chat-pending-placeholder" aria-hidden="true" />
+                    )}
                     {chatPhotoComposerBusy(item) ? (
                       <span className="vh-chat-pending-spinner" aria-label="처리 중" />
                     ) : null}
@@ -2456,6 +2497,61 @@ export default function ChatClient() {
                 <div key={key}>
                   <span>{key}</span>
                   <span>{value == null ? "—" : value}</span>
+                </div>
+              ))}
+            </aside>
+          ) : null}
+          {photoLite && photoLiteSample ? (
+            <aside className="vh-chat-photo-debug" aria-label="Chat photo lite">
+              {(
+                [
+                  ["selectToReadyMs", photoLiteSample.selectToReadyMs],
+                  ["prepareOuterMs", photoLiteSample.prepareOuterMs],
+                  ["adaptiveTotalMs", photoLiteSample.adaptiveTotalMs],
+                  ["pendingToWrapperMs", photoLiteSample.pendingToWrapperMs],
+                  ["wrapperToSourceMs", photoLiteSample.wrapperToSourceMs],
+                  ["sourcePreRunMs", photoLiteSample.sourcePreRunMs],
+                  ["sourceAfterDebugMs", photoLiteSample.sourceAfterDebugMs],
+                  ["sourceAfterCarryMs", photoLiteSample.sourceAfterCarryMs],
+                  ["sourceAfterRunSetupMs", photoLiteSample.sourceAfterRunSetupMs],
+                  ["sourceAfterAcceptCheckMs", photoLiteSample.sourceAfterAcceptCheckMs],
+                  ["sourceAfterFastPathCheckMs", photoLiteSample.sourceAfterFastPathCheckMs],
+                  ["sourceAfterHeicPlanMs", photoLiteSample.sourceAfterHeicPlanMs],
+                  ["sourceBeforeRunMs", photoLiteSample.sourceBeforeRunMs],
+                  ["sourceCarryPresent", photoLiteSample.sourceCarryPresent],
+                  ["sourceMetaPresent", photoLiteSample.sourceMetaPresent],
+                  ["sourcePlanPresent", photoLiteSample.sourcePlanPresent],
+                  ["sourceUsedFallbackPath", photoLiteSample.sourceUsedFallbackPath],
+                  ["sourceKind", photoLiteSample.sourceKind],
+                  ["sourceHeic", photoLiteSample.sourceHeic],
+                  ["heicImportMs", photoLiteSample.heicImportMs],
+                  ["heicConvertMs", photoLiteSample.heicConvertMs],
+                  ["heicTotalMs", photoLiteSample.heicTotalMs],
+                  ["runToAdaptiveMs", photoLiteSample.runToAdaptiveMs],
+                  ["adaptiveMs", photoLiteSample.adaptiveMs],
+                  ["adaptiveToSourceExitMs", photoLiteSample.adaptiveToSourceExitMs],
+                  ["sourceToWrapperExitMs", photoLiteSample.sourceToWrapperExitMs],
+                  ["wrapperToPendingEndMs", photoLiteSample.wrapperToPendingEndMs],
+                  ["hiddenBeforeDecodeMs", photoLiteSample.hiddenBeforeDecodeMs],
+                  ["headerProbeMs", photoLiteSample.headerProbeMs],
+                  ["bitmapCreateMs", photoLiteSample.bitmapCreateMs],
+                  ["decodeMs", photoLiteSample.decodeMs],
+                  ["canvasCreateMs", photoLiteSample.canvasCreateMs],
+                  ["drawResizeMs", photoLiteSample.drawResizeMs],
+                  ["alphaProbeMs", photoLiteSample.alphaProbeMs],
+                  ["encode1Ms", photoLiteSample.encode1Ms],
+                  ["encode2Ms", photoLiteSample.encode2Ms],
+                  ["postEncodeMs", photoLiteSample.postEncodeMs],
+                  ["decodePath", photoLiteSample.decodePath],
+                  ["encodePath", photoLiteSample.encodePath],
+                  ["outputWidth", photoLiteSample.outputWidth],
+                  ["outputHeight", photoLiteSample.outputHeight],
+                  ["uploadBytes", photoLiteSample.uploadBytes],
+                ] as const
+              ).map(([key, value]) => (
+                <div key={key}>
+                  <span>{key}</span>
+                  <span>{value == null ? "—" : typeof value === "boolean" ? String(value) : value}</span>
                 </div>
               ))}
             </aside>
