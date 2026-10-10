@@ -3,6 +3,7 @@ package kr.verthill.caddy;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
 import android.net.Uri;
 import android.webkit.MimeTypeMap;
 import android.webkit.ValueCallback;
@@ -93,14 +94,14 @@ public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
             Uri[] resolved = new Uri[picked.length];
             List<String> debugToasts = new ArrayList<>();
             for (int i = 0; i < picked.length; i++) {
-                HeicNativeJpegConverter.ConvertResult result =
+                HeicNativeJpegConverter.ConvertResult converted =
                     HeicNativeJpegConverter.resolveForWebView(
                         activity != null ? activity : bridge.getContext(),
                         picked[i]
                     );
-                resolved[i] = result.uri;
-                if (BuildConfig.DEBUG && result.shouldToast()) {
-                    debugToasts.add(result.debugMessage());
+                resolved[i] = converted.uri;
+                if (isDebugApk(activity != null ? activity : bridge.getContext()) && converted.shouldToast()) {
+                    debugToasts.add(converted.debugMessage());
                 }
             }
             deliver(activity, callback, resolved, debugToasts);
@@ -119,7 +120,7 @@ public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
         }
         activity.runOnUiThread(() -> {
             callback.onReceiveValue(uris);
-            if (!BuildConfig.DEBUG || debugToasts == null || debugToasts.isEmpty()) {
+            if (!isDebugApk(activity) || debugToasts == null || debugToasts.isEmpty()) {
                 return;
             }
             StringBuilder message = new StringBuilder();
@@ -129,6 +130,12 @@ public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
             }
             Toast.makeText(activity, message.toString(), Toast.LENGTH_LONG).show();
         });
+    }
+
+    /** Debug APK only. Release builds do not show HEIC timing toasts. */
+    static boolean isDebugApk(android.content.Context context) {
+        if (context == null) return false;
+        return (context.getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
     }
 
     static Uri[] urisFromResult(Intent data) {

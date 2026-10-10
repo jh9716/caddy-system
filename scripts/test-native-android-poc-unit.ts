@@ -555,7 +555,8 @@ assert(
   "converted file keeps .jpg so JS heic-to does not run"
 );
 assert(
-  chromeClient.includes("BuildConfig.DEBUG") &&
+  chromeClient.includes("FLAG_DEBUGGABLE") &&
+    chromeClient.includes("isDebugApk") &&
     chromeClient.includes("Toast.makeText") &&
     heicConverter.includes("HEIC thumb OK") &&
     heicConverter.includes("HEIC decoder") &&
@@ -569,7 +570,7 @@ assert(
 assert(
   !heicConverter.includes("uri.toString()") &&
     !chromeClient.includes("uri.toString()") &&
-    chromeClient.includes("result.debugMessage()"),
+    chromeClient.includes("converted.debugMessage()"),
   "debug toast uses timing/size text, not personal URI/path"
 );
 assert(
