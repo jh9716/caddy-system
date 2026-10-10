@@ -167,7 +167,7 @@ import {
   readImageSizeFromHeader,
   readJpegExifOrientation,
 } from "../src/lib/imageHeaderSize";
-import { isHeicLikeFile } from "../src/lib/courseReportPhotoClient";
+import { isHeicLikeFile, setHeicConverterForTests } from "../src/lib/courseReportPhotoClient";
 import { CHAT_PHOTO_MAX_BYTES, CHAT_PHOTO_PASSTHROUGH_MAX_BYTES } from "../src/lib/chatPhotoConstants";
 import {
   abandonChatPhotoPreupload,
@@ -2188,6 +2188,128 @@ section("photoLite timing copies adaptive fields without debug");
   resetChatPhotoLiteSample();
 }
 
+section("early meta carry: picker snapshot reused after preview");
+{
+  enableChatPhotoDebugTiming(false);
+  enableChatPhotoLiteTiming(false);
+  resetChatPhotoLiteSample();
+
+  function trackMeta(file: File) {
+    const counts = { type: 0, name: 0, size: 0 };
+    const tracked = new Proxy(file, {
+      get(target, prop, receiver) {
+        if (prop === "type" || prop === "name" || prop === "size") {
+          counts[prop] += 1;
+          return Reflect.get(target, prop, target);
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+      },
+    });
+    return { file: tracked as File, counts };
+  }
+
+  const fixtures: File[] = [
+    new File([new Uint8Array(32)], "ok.jpg", { type: "image/jpeg" }),
+    new File([new Uint8Array(32)], "ok.JPG", { type: "image/jpg" }),
+    new File([new Uint8Array(32)], "ok.png", { type: "image/png" }),
+    new File([new Uint8Array(32)], "ok.webp", { type: "image/webp" }),
+    new File([new Uint8Array(2.2 * 1024 * 1024)], "mid.jpg", { type: "image/jpeg" }),
+    new File([new Uint8Array(8)], "a.heic", { type: "image/heic" }),
+    new File([new Uint8Array(8)], "x.pdf", { type: "application/pdf" }),
+  ];
+  for (const file of fixtures) {
+    const picked = instantChatPhotoPicks([file], 1);
+    if (!isChatPhotoAcceptableSource(file)) {
+      assert(picked.items.length === 0, "picker still rejects unknown sources");
+      continue;
+    }
+    const meta = picked.items[0]!.sourceMeta;
+    assert(meta != null, "picker stores sourceMeta");
+    const plan = planChatPhotoSourceFromMeta(meta);
+    assert(plan.kind === chatPhotoSourceKind(file), "carried kind matches live kind");
+    assert(plan.acceptable === isChatPhotoAcceptableSource(file), "carried acceptable matches live");
+    assert(plan.fastPath === canUseChatPhotoFastPath(file), "carried fastPath matches live");
+    assert(plan.heic === isHeicLikeFile(file), "carried heic matches live");
+  }
+
+  const heavy = new File([new Uint8Array(800 * 1024 + 8)], "carry.jpg", { type: "image/jpeg" });
+  const pickedHeavy = instantChatPhotoPicks([heavy], 1);
+  const heavyMeta = pickedHeavy.items[0]!.sourceMeta!;
+  const heavyPlan = planChatPhotoSourceFromMeta(heavyMeta);
+  assert(pickedHeavy.items[0]?.status === "preparing", "heavy JPEG stays preparing");
+  const trackedSource = trackMeta(heavy);
+  const sourced = await prepareChatPhotoSource(trackedSource.file, async () => new Blob([new Uint8Array(8)], { type: "image/jpeg" }), {
+    sourceMeta: heavyMeta,
+    sourcePlan: heavyPlan,
+  });
+  assert(sourced.size === 8, "carried source still runs compress");
+  assert(trackedSource.counts.type === 0, "carried source does not reread file.type");
+  assert(trackedSource.counts.name === 0, "carried source does not reread file.name");
+  assert(trackedSource.counts.size === 0, "carried source does not reread file.size");
+
+  const trackedAdaptive = trackMeta(heavy);
+  const adaptiveOut = await prepareChatAdaptivePhoto(trackedAdaptive.file, {
+    sourceMeta: heavyMeta,
+    sourcePlan: heavyPlan,
+    inspect: async () => ({ width: 2000, height: 1500 }),
+    encode: async ({ mime }) => new Blob([new Uint8Array(120)], { type: mime }),
+  });
+  assert(adaptiveOut.uploadBytes === 120, "carried adaptive still encodes");
+  assert(trackedAdaptive.counts.type === 0, "carried adaptive does not reread file.type");
+  assert(trackedAdaptive.counts.name === 0, "carried adaptive does not reread file.name");
+  assert(trackedAdaptive.counts.size === 0, "carried adaptive does not reread file.size");
+
+  try {
+    setHeicConverterForTests(async () => new Blob([new Uint8Array(32)], { type: "image/jpeg" }));
+    const heic = new File([new Uint8Array(8)], "a.heic", { type: "image/heic" });
+    const pickedHeic = instantChatPhotoPicks([heic], 1);
+    assert(pickedHeic.items[0]?.sourceMeta?.name.endsWith(".heic"), "HEIC picker stores sourceMeta");
+    assert(planChatPhotoSourceFromMeta(pickedHeic.items[0]!.sourceMeta!).heic, "HEIC picker plan stays heic");
+    let heicCompress = 0;
+    const heicOut = await prepareChatPhotoSource(heic, async () => {
+      heicCompress += 1;
+      return new Blob([new Uint8Array(16)], { type: "image/jpeg" });
+    }, {
+      sourceMeta: pickedHeic.items[0]!.sourceMeta,
+      sourcePlan: planChatPhotoSourceFromMeta(pickedHeic.items[0]!.sourceMeta!),
+    });
+    assert(heicOut.type === "image/jpeg" && heicOut.size === 32, "carried HEIC still converts then passthrough");
+    assert(heicCompress === 0, "small converted HEIC does not re-encode");
+
+    setHeicConverterForTests(async () => new Blob([new Uint8Array(800 * 1024)], { type: "image/jpeg" }));
+    let heicHeavyCompress = 0;
+    const heicHeavyOut = await prepareChatPhotoSource(heic, async (next) => {
+      heicHeavyCompress += 1;
+      assert(next !== heic, "HEIC heavy run receives converted File");
+      return new Blob([new Uint8Array(20)], { type: "image/jpeg" });
+    }, {
+      sourceMeta: pickedHeic.items[0]!.sourceMeta,
+      sourcePlan: planChatPhotoSourceFromMeta(pickedHeic.items[0]!.sourceMeta!),
+    });
+    assert(heicHeavyCompress === 1 && heicHeavyOut.size === 20, "large converted HEIC still runs compress");
+  } finally {
+    setHeicConverterForTests(null);
+  }
+
+  enableChatPhotoLiteTiming(true);
+  resetChatPhotoLiteSample();
+  await prepareChatPhotoSource(heavy, async () => {
+    noteChatPhotoLiteStamp("adaptiveEnterAt");
+    noteChatPhotoLiteStamp("adaptiveExitAt");
+    return new Blob([new Uint8Array(8)], { type: "image/jpeg" });
+  }, {
+    sourceMeta: heavyMeta,
+    sourcePlan: heavyPlan,
+  });
+  const lite = readChatPhotoLiteSample();
+  assert(lite?.sourcePreRunMs != null, "photoLite still stamps sourcePreRunMs with carry");
+  assert(lite?.adaptiveMs != null, "photoLite still stamps adaptiveMs with carry");
+  assert(!isChatPhotoDebugTiming(), "carry path does not enable photoDebug");
+  enableChatPhotoLiteTiming(false);
+  resetChatPhotoLiteSample();
+}
+
 section("source wiring / no public blob");
 
 {
@@ -2211,7 +2333,7 @@ section("source wiring / no public blob");
   const pickSrc = read("src/lib/chatPhotoPick.ts");
   const fast = read("src/lib/chatPhotoFastPath.ts");
   const optimistic = read("src/lib/chatPhotoOptimistic.ts");
-  assert(pickSrc.includes("createDetachedChatPhotoPreviewUrl(file)"), "pick preview URL is detached from the decode File");
+  assert(pickSrc.includes("createDetachedChatPhotoPreviewUrl(file, sourceMeta)"), "pick preview URL is detached using snapshot size/type");
   assert(pickSrc.includes("createChatPhotoPreviewUrl(prepared.blob)"), "prepare commit builds preview URL from prepared blob");
   assert(pickSrc.includes("revokeChatPhotoPreviewUrl(current.previewUrl)"), "prepare commit revokes the previous preview URL");
   assert(optimistic.includes("revokeChatPhotoPreviewUrl(item.previewUrl)"), "bulk leftover/drop revoke uses the same single-revoke helper");
@@ -2321,20 +2443,22 @@ section("source wiring / no public blob");
   assert(client.includes("timingKey"), "debug panel shows public timing key");
   assert(!client.includes("file.name"), "debug panel does not print file.name");
   const sourcePrepareFn = fast.slice(fast.indexOf("export async function prepareChatPhotoSource"));
-  assert(sourcePrepareFn.includes("isChatPhotoAcceptableSource"), "live source still calls acceptable helper");
-  assert(sourcePrepareFn.includes("canUseChatPhotoFastPath"), "live source still calls fast-path helper");
-  assert(sourcePrepareFn.includes("isHeicLikeFile"), "live source still calls heic helper");
-  assert(sourcePrepareFn.includes("chatPhotoSourceKind"), "live source still calls kind helper");
-  assert(!sourcePrepareFn.includes("readChatPhotoFileMeta"), "live source does not use the one-read snapshot");
-  assert(!sourcePrepareFn.includes("planChatPhotoSourceFromMeta"), "live source does not use the unused planner");
-  assert(fast.includes("planChatPhotoSourceFromMeta"), "one-read planner is present for a later wire");
+  assert(sourcePrepareFn.includes("carriedChatPhotoSourcePlan(carry)"), "live source uses carried picker snapshot when present");
+  assert(sourcePrepareFn.includes("isChatPhotoAcceptableSource(probed)"), "fallback source still calls acceptable helper");
+  assert(sourcePrepareFn.includes("canUseChatPhotoFastPath(probed)"), "fallback source still calls fast-path helper");
+  assert(sourcePrepareFn.includes("isHeicLikeFile(probed)"), "fallback source still calls heic helper");
+  assert(sourcePrepareFn.includes("chatPhotoSourceKind(probed)"), "fallback source still calls kind helper");
+  assert(pickSrc.includes("readChatPhotoFileMeta(file)"), "picker snapshots File metadata before preview");
+  assert(pickSrc.includes("sourceMeta"), "pending items store sourceMeta");
+  assert(fast.includes("planChatPhotoSourceFromMeta"), "one-read planner stays exported");
+  assert(read("src/lib/chatPhotoAdaptive.ts").includes("opts.sourceMeta"), "adaptive accepts carried sourceMeta");
   assert(timingSrc.includes("watchChatPhotoFileAccess"), "timing watches File metadata getters");
   assert(timingSrc.includes("isChatPhotoDebugTiming"), "debug timing has an explicit gate");
   assert(timingSrc.includes("enableChatPhotoDebugTiming"), "photoDebug can turn detailed timing on");
   assert(fast.includes("isChatPhotoDebugTiming"), "source prepare skips debug bookkeeping when off");
   assert(client.includes("enableChatPhotoDebugTiming"), "ChatClient arms debug timing only for photoDebug");
   assert(sourcePrepareFn.includes("const debug = isChatPhotoDebugTiming()"), "live source branches on debug flag");
-  assert(sourcePrepareFn.includes("debug ? watchChatPhotoFileAccess(file) : null"), "Proxy is not created on the hot path");
+  assert(sourcePrepareFn.includes("watchChatPhotoFileAccess(file)"), "Proxy is not created on the hot path");
   assert(client.includes('markChatPhotoTiming("select_to_ready"'), "heavy prepare stamps select_to_ready");
   assert(timingSrc.includes("clearPrepareScopeFromBag"), "commit replaces prepare-scope fields");
   assert(fast.includes("jpegDirectRun"), "JPEG source records same-file run");

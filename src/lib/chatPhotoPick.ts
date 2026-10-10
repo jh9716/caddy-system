@@ -9,8 +9,11 @@ import { CHAT_PHOTO_MAX } from "@/lib/chatPhotoConstants";
 import { prepareChatAdaptiveBlob } from "@/lib/chatPhotoAdaptive";
 import {
   canUseChatPhotoFastPath,
-  isChatPhotoAcceptableSource,
+  planChatPhotoSourceFromMeta,
   prepareChatPhotoSource,
+  readChatPhotoFileMeta,
+  type ChatPhotoFileMeta,
+  type ChatPhotoSourceCarry,
 } from "@/lib/chatPhotoFastPath";
 import { noteChatPhotoLiteStamp } from "@/lib/chatPhotoLiteTiming";
 import {
@@ -33,9 +36,14 @@ export function nextChatPhotoComposerKey(fileId: string): string {
 
 const revokedChatPhotoPreviewUrls = new Set<string>();
 
-export function createDetachedChatPhotoPreviewUrl(source: Blob): string {
+export function createDetachedChatPhotoPreviewUrl(
+  source: Blob,
+  meta?: Pick<ChatPhotoFileMeta, "size" | "type"> | null
+): string {
+  const size = meta && Number.isFinite(meta.size) ? meta.size : source.size;
+  const type = meta && meta.type ? meta.type : source.type;
   const previewBlob =
-    typeof source.slice === "function" ? source.slice(0, source.size, source.type) : source;
+    typeof source.slice === "function" ? source.slice(0, size, type) : source;
   return URL.createObjectURL(previewBlob);
 }
 
@@ -79,6 +87,7 @@ export type ChatPendingPhoto = {
   error?: string;
   send?: ChatPendingPhotoSend;
   metrics?: ChatPhotoMetrics;
+  sourceMeta?: ChatPhotoFileMeta;
 };
 
 export function chatPhotoComposerBusy(item: ChatPendingPhoto): boolean {
@@ -104,7 +113,9 @@ export function instantChatPhotoPicks(
       note = COURSE_REPORT_PHOTO_DUPLICATE_MESSAGE;
       continue;
     }
-    if (!isChatPhotoAcceptableSource(file)) {
+    const sourceMeta = readChatPhotoFileMeta(file);
+    const plan = planChatPhotoSourceFromMeta(sourceMeta);
+    if (!plan.acceptable) {
       note = COURSE_REPORT_HEIC_MESSAGE;
       continue;
     }
@@ -112,21 +123,30 @@ export function instantChatPhotoPicks(
     items.push({
       key: nextChatPhotoComposerKey(fileId),
       blob: file,
-      previewUrl: createDetachedChatPhotoPreviewUrl(file),
+      previewUrl: createDetachedChatPhotoPreviewUrl(file, sourceMeta),
       fileId,
       fingerprint: "",
-      status: canUseChatPhotoFastPath(file) ? "ready" : "preparing",
-      metrics: { sourceBytes: file.size, uploadBytes: canUseChatPhotoFastPath(file) ? file.size : undefined, compressionMs: canUseChatPhotoFastPath(file) ? 0 : undefined },
+      status: plan.fastPath ? "ready" : "preparing",
+      sourceMeta,
+      metrics: {
+        sourceBytes: sourceMeta.size,
+        uploadBytes: plan.fastPath ? sourceMeta.size : undefined,
+        compressionMs: plan.fastPath ? 0 : undefined,
+      },
     });
     sources.push(file);
   }
   return { items, sources, note };
 }
 
-function defaultTimedPrepare(file: File): Promise<Blob> {
+function defaultTimedPrepare(file: File, carry?: ChatPhotoSourceCarry | null): Promise<Blob> {
   const runId = chatPhotoTimingRunIdFor(file);
   noteChatPhotoLiteStamp("wrapperEnterAt", noteChatPhotoBoundary(runId, "prepareWrapperEnterAt"));
-  return prepareChatPhotoSource(file, prepareChatAdaptiveBlob).then(
+  return prepareChatPhotoSource(
+    file,
+    (next) => prepareChatAdaptiveBlob(next, next === file ? carry : undefined),
+    carry
+  ).then(
     (blob) => {
       noteChatPhotoLiteStamp("wrapperExitAt", noteChatPhotoBoundary(runId, "prepareWrapperExitAt"));
       return blob;
@@ -141,17 +161,22 @@ function defaultTimedPrepare(file: File): Promise<Blob> {
 export async function prepareChatPendingPhoto(
   item: ChatPendingPhoto,
   file: File,
-  prepare: (file: File) => Promise<Blob> = defaultTimedPrepare
+  prepare?: (file: File) => Promise<Blob>
 ): Promise<ChatPendingPhoto> {
+  const sourceMeta = item.sourceMeta;
+  const sourcePlan = sourceMeta ? planChatPhotoSourceFromMeta(sourceMeta) : undefined;
+  const carry = sourceMeta ? { sourceMeta, sourcePlan } : undefined;
+  const runPrepare = prepare ?? ((next) => defaultTimedPrepare(next, carry));
   try {
-    if (canUseChatPhotoFastPath(file) && prepare === prepareChatPhotoSource) {
+    if ((sourcePlan ? sourcePlan.fastPath : canUseChatPhotoFastPath(file)) && prepare === prepareChatPhotoSource) {
+      const size = sourceMeta?.size ?? file.size;
       return {
         ...item,
         blob: file,
         fingerprint: "",
         status: "ready",
         error: undefined,
-        metrics: { sourceBytes: file.size, uploadBytes: file.size, compressionMs: 0 },
+        metrics: { sourceBytes: size, uploadBytes: size, compressionMs: 0 },
       };
     }
     const timingRunId = startChatPhotoPrepareTiming(item.key, file);
@@ -159,7 +184,7 @@ export async function prepareChatPendingPhoto(
       ? noteChatPhotoBoundary(timingRunId, "pendingPrepareStartAt")
       : chatPhotoNow();
     noteChatPhotoLiteStamp("pendingStartAt", started);
-    const blob = await prepare(file);
+    const blob = await runPrepare(file);
     const ended = timingRunId
       ? noteChatPhotoBoundary(timingRunId, "pendingPrepareEndAt")
       : chatPhotoNow();
@@ -176,7 +201,7 @@ export async function prepareChatPendingPhoto(
       status: "ready",
       error: undefined,
       metrics: {
-        sourceBytes: item.metrics?.sourceBytes ?? file.size,
+        sourceBytes: item.metrics?.sourceBytes ?? sourceMeta?.size ?? file.size,
         uploadBytes: blob.size,
         compressionMs: prepareOuterMs,
         prepareOuterMs,
@@ -231,6 +256,7 @@ export function applyPreparedChatPhoto(
           status: "ready" as const,
           send: row.send,
           metrics: prepared.metrics ?? row.metrics,
+          sourceMeta: prepared.sourceMeta ?? row.sourceMeta,
         }
       : row
   );
