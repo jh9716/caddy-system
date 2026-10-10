@@ -22,6 +22,7 @@ import {
   readImageSizeFromHeader,
   readJpegExifOrientation,
 } from "@/lib/imageHeaderSize";
+import { noteChatPhotoLiteAdaptive } from "@/lib/chatPhotoLiteTiming";
 import {
   chatPhotoNow,
   chatPhotoTimingRunIdFor,
@@ -426,6 +427,7 @@ function finishAdaptiveResult(result: ChatPhotoAdaptiveResult, file?: Blob): Cha
     postEncodeMs: result.postEncodeMs ?? null,
     hiddenBeforeDecodeMs: result.hiddenBeforeDecodeMs ?? null,
   });
+  noteChatPhotoLiteAdaptive(result);
   return result;
 }
 

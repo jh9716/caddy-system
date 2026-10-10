@@ -67,6 +67,14 @@ import {
   stampChatPhotoTiming,
   type ChatPhotoDebugSample,
 } from "@/lib/chatPhotoTiming";
+import {
+  canShowChatPhotoLite,
+  enableChatPhotoLiteTiming,
+  isChatPhotoLiteTiming,
+  noteChatPhotoLiteReady,
+  readChatPhotoLiteSample,
+  type ChatPhotoLiteSample,
+} from "@/lib/chatPhotoLiteTiming";
 import type { ChatPhotoDirectProgress, ChatPhotoDirectResult } from "@/lib/chatPhotoDirectClient";
 import {
   canProfileMention,
@@ -296,6 +304,8 @@ export default function ChatClient() {
   const uploadJobsRef = useRef(new Map<string, Promise<ChatPhotoDirectResult>>());
   const [photoDebug, setPhotoDebug] = useState(false);
   const [photoDebugSample, setPhotoDebugSample] = useState<ChatPhotoDebugSample | null>(null);
+  const [photoLite, setPhotoLite] = useState(false);
+  const [photoLiteSample, setPhotoLiteSample] = useState<ChatPhotoLiteSample | null>(null);
   const [lightbox, setLightbox] = useState<{ src: string } | null>(null);
   const [replyTo, setReplyTo] = useState<ChatLineReply | null>(null);
   const [actionLine, setActionLine] = useState<ChatLine | null>(null);
@@ -890,12 +900,16 @@ export default function ChatClient() {
   }, []);
 
   useEffect(() => {
+    const search = typeof window !== "undefined" ? window.location.search : "";
     const on = canShowChatPhotoDebug({
       role: tokenInfo?.user.role,
-      search: typeof window !== "undefined" ? window.location.search : "",
+      search,
     });
     setPhotoDebug(on);
     enableChatPhotoDebugTiming(on);
+    const lite = canShowChatPhotoLite(search);
+    setPhotoLite(lite);
+    enableChatPhotoLiteTiming(lite);
   }, [tokenInfo?.user.role]);
 
   function refreshPhotoDebugSample() {
@@ -1396,8 +1410,16 @@ export default function ChatClient() {
       if (!item || !file) continue;
       noteChatPhotoBytes(file.size, item.metrics?.uploadBytes);
       if (item.status === "ready" && !needsChatPhotoHeavyPrepare(file)) {
-        markChatPhotoTiming("select_to_ready", selectedAt);
+        const selectToReadyMs = markChatPhotoTiming("select_to_ready", selectedAt);
         stampChatPhotoTiming("prepare_complete");
+        if (isChatPhotoLiteTiming()) {
+          noteChatPhotoLiteReady({
+            selectToReadyMs,
+            prepareOuterMs: item.metrics?.prepareOuterMs ?? item.metrics?.compressionMs ?? 0,
+            uploadBytes: item.metrics?.uploadBytes,
+          });
+          setPhotoLiteSample(readChatPhotoLiteSample());
+        }
         if (isChatPhotoDebugTiming()) {
           noteChatPhotoCompression(0);
           refreshPhotoDebugSample();
@@ -1407,10 +1429,18 @@ export default function ChatClient() {
       }
       const job = prepareChatPendingPhoto(item, file).then((prepared) => {
         markChatPhotoTiming("select_to_prepared", selectedAt);
-        markChatPhotoTiming("select_to_ready", selectedAt);
+        const selectToReadyMs = markChatPhotoTiming("select_to_ready", selectedAt);
         stampChatPhotoTiming("prepare_complete");
         if (prepared.metrics) {
           noteChatPhotoBytes(prepared.metrics.sourceBytes, prepared.metrics.uploadBytes);
+        }
+        if (isChatPhotoLiteTiming()) {
+          noteChatPhotoLiteReady({
+            selectToReadyMs,
+            prepareOuterMs: prepared.metrics?.prepareOuterMs ?? prepared.metrics?.compressionMs,
+            uploadBytes: prepared.metrics?.uploadBytes,
+          });
+          setPhotoLiteSample(readChatPhotoLiteSample());
         }
         const commitStarted = chatPhotoNow();
         const applied = applyComposerPreparedIfCurrent(
@@ -2457,6 +2487,37 @@ export default function ChatClient() {
                   ["connectionWaitMs", photoDebugSample.connectionWaitMs], // start → first upload progress (connection/preflight/scheduling)
                   ["finalizeDbUpdateMs", photoDebugSample.finalizeDbUpdateMs],
                   ["finalizeSignMs", photoDebugSample.finalizeSignMs],
+                ] as const
+              ).map(([key, value]) => (
+                <div key={key}>
+                  <span>{key}</span>
+                  <span>{value == null ? "—" : value}</span>
+                </div>
+              ))}
+            </aside>
+          ) : null}
+          {photoLite && photoLiteSample ? (
+            <aside className="vh-chat-photo-debug" aria-label="Chat photo lite">
+              {(
+                [
+                  ["selectToReadyMs", photoLiteSample.selectToReadyMs],
+                  ["prepareOuterMs", photoLiteSample.prepareOuterMs],
+                  ["adaptiveTotalMs", photoLiteSample.adaptiveTotalMs],
+                  ["hiddenBeforeDecodeMs", photoLiteSample.hiddenBeforeDecodeMs],
+                  ["headerProbeMs", photoLiteSample.headerProbeMs],
+                  ["bitmapCreateMs", photoLiteSample.bitmapCreateMs],
+                  ["decodeMs", photoLiteSample.decodeMs],
+                  ["canvasCreateMs", photoLiteSample.canvasCreateMs],
+                  ["drawResizeMs", photoLiteSample.drawResizeMs],
+                  ["alphaProbeMs", photoLiteSample.alphaProbeMs],
+                  ["encode1Ms", photoLiteSample.encode1Ms],
+                  ["encode2Ms", photoLiteSample.encode2Ms],
+                  ["postEncodeMs", photoLiteSample.postEncodeMs],
+                  ["decodePath", photoLiteSample.decodePath],
+                  ["encodePath", photoLiteSample.encodePath],
+                  ["outputWidth", photoLiteSample.outputWidth],
+                  ["outputHeight", photoLiteSample.outputHeight],
+                  ["uploadBytes", photoLiteSample.uploadBytes],
                 ] as const
               ).map(([key, value]) => (
                 <div key={key}>

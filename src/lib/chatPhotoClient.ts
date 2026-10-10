@@ -66,3 +66,12 @@ export {
   type ChatPhotoUploadJobMap,
 } from "@/lib/chatPhotoPreupload";
 export { CHAT_PHOTO_ACCEPT, CHAT_PHOTO_MAX, chatPhotoSrc } from "@/lib/chatPhotoConstants";
+export {
+  canShowChatPhotoLite,
+  enableChatPhotoLiteTiming,
+  isChatPhotoLiteTiming,
+  noteChatPhotoLiteAdaptive,
+  noteChatPhotoLiteReady,
+  readChatPhotoLiteSample,
+  type ChatPhotoLiteSample,
+} from "@/lib/chatPhotoLiteTiming";

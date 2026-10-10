@@ -142,6 +142,15 @@ import {
   summarizeChatPhotoTiming,
 } from "../src/lib/chatPhotoTiming";
 import {
+  canShowChatPhotoLite,
+  enableChatPhotoLiteTiming,
+  isChatPhotoLiteTiming,
+  noteChatPhotoLiteAdaptive,
+  noteChatPhotoLiteReady,
+  readChatPhotoLiteSample,
+  resetChatPhotoLiteSample,
+} from "../src/lib/chatPhotoLiteTiming";
+import {
   chatPhotoBitmapResizeOptions,
   chatPhotoDecodePathFromBitmap,
   chatPhotoEncodeBottleneck,
@@ -2051,6 +2060,88 @@ section("phase 6 hot-path timing / region / cleanup");
   assert(!/uploadUrl|claim/.test(JSON.stringify(serverDebug)), "server debug has no secrets");
 }
 
+
+section("photoLite timing copies adaptive fields without debug");
+{
+  enableChatPhotoDebugTiming(false);
+  enableChatPhotoLiteTiming(false);
+  resetChatPhotoLiteSample();
+  noteChatPhotoLiteAdaptive({
+    compressionMs: 1234,
+    hiddenBeforeDecodeMs: 10,
+    headerProbeMs: 20,
+    bitmapCreateMs: 30,
+    decodeMs: 40,
+    canvasCreateMs: 5,
+    drawResizeMs: 50,
+    alphaProbeMs: 2,
+    encode1Ms: 60,
+    encode2Ms: 0,
+    postEncodeMs: 1,
+    decodePath: "bitmap-resize",
+    encodePath: "offscreen",
+    outputWidth: 1600,
+    outputHeight: 900,
+    uploadBytes: 700000,
+  });
+  assert(readChatPhotoLiteSample() == null, "photoLite=0 stores no sample");
+  assert(!isChatPhotoDebugTiming(), "photoLite=0 does not enable photoDebug");
+  const offFile = new File([new Uint8Array([1, 2, 3])], "off.jpg", { type: "image/jpeg" });
+  const offWatch = watchChatPhotoFileAccess(offFile);
+  assert(offWatch.file === offFile, "photoLite=0 does not Proxy the File");
+  assert(startChatPhotoPrepareTiming("lite-off", offFile) === null, "photoLite=0 does not start prepare scope");
+
+  enableChatPhotoLiteTiming(true);
+  resetChatPhotoLiteSample();
+  assert(canShowChatPhotoLite("?photoLite=1"), "photoLite=1 query is recognized");
+  assert(!canShowChatPhotoLite("?photoDebug=1"), "photoDebug query does not enable lite");
+  assert(!canShowChatPhotoLite(""), "default search is not lite");
+  noteChatPhotoLiteAdaptive({
+    compressionMs: 1234.4,
+    hiddenBeforeDecodeMs: 10.2,
+    headerProbeMs: 20.6,
+    bitmapCreateMs: 30,
+    decodeMs: 40,
+    canvasCreateMs: 5,
+    drawResizeMs: 50,
+    alphaProbeMs: 2,
+    encode1Ms: 60,
+    encode2Ms: 0,
+    postEncodeMs: 1,
+    decodePath: "bitmap-resize",
+    encodePath: "offscreen",
+    outputWidth: 1600,
+    outputHeight: 900,
+    uploadBytes: 700000,
+  });
+  noteChatPhotoLiteReady({ selectToReadyMs: 5600, prepareOuterMs: 5400, uploadBytes: 700000 });
+  const sample = readChatPhotoLiteSample();
+  assert(sample?.selectToReadyMs === 5600, "lite copies selectToReadyMs");
+  assert(sample?.prepareOuterMs === 5400, "lite copies prepareOuterMs");
+  assert(sample?.adaptiveTotalMs === 1234, "lite copies adaptiveTotalMs from compressionMs");
+  assert(sample?.hiddenBeforeDecodeMs === 10, "lite copies hiddenBeforeDecodeMs");
+  assert(sample?.headerProbeMs === 21, "lite copies headerProbeMs");
+  assert(sample?.bitmapCreateMs === 30, "lite copies bitmapCreateMs");
+  assert(sample?.decodeMs === 40, "lite copies decodeMs");
+  assert(sample?.canvasCreateMs === 5, "lite copies canvasCreateMs");
+  assert(sample?.drawResizeMs === 50, "lite copies drawResizeMs");
+  assert(sample?.alphaProbeMs === 2, "lite copies alphaProbeMs");
+  assert(sample?.encode1Ms === 60, "lite copies encode1Ms");
+  assert(sample?.encode2Ms === 0, "lite copies encode2Ms");
+  assert(sample?.postEncodeMs === 1, "lite copies postEncodeMs");
+  assert(sample?.decodePath === "bitmap-resize", "lite copies decodePath");
+  assert(sample?.encodePath === "offscreen", "lite copies encodePath");
+  assert(sample?.outputWidth === 1600 && sample?.outputHeight === 900, "lite copies output size");
+  assert(sample?.uploadBytes === 700000, "lite copies uploadBytes");
+  assert(!isChatPhotoDebugTiming(), "photoLite=1 does not enable photoDebug");
+  const liteFile = new File([new Uint8Array([4, 5, 6])], "lite.jpg", { type: "image/jpeg" });
+  const liteWatch = watchChatPhotoFileAccess(liteFile);
+  assert(liteWatch.file === liteFile, "photoLite=1 does not Proxy the File");
+  assert(startChatPhotoPrepareTiming("lite-on", liteFile) === null, "photoLite=1 does not start prepare scope");
+  enableChatPhotoLiteTiming(false);
+  resetChatPhotoLiteSample();
+}
+
 section("source wiring / no public blob");
 
 {
@@ -2119,6 +2210,11 @@ section("source wiring / no public blob");
   assert(client.includes("chatPhotoComposerBusy"), "messenger-style busy spinner");
   assert(client.includes("canShowChatPhotoDebug"), "admin photo debug gate");
   assert(client.includes("photoDebug"), "photoDebug query panel");
+  assert(client.includes("photoLite"), "photoLite query panel");
+  assert(client.includes("enableChatPhotoLiteTiming"), "photoLite enable is separate from photoDebug");
+  assert(client.includes("noteChatPhotoLiteReady"), "photoLite publishes select→ready from existing marks");
+  assert(read("src/lib/chatPhotoAdaptive.ts").includes("noteChatPhotoLiteAdaptive(result)"), "adaptive result is copied into lite sample");
+  assert(!client.includes("enableChatPhotoDebugTiming(lite)"), "photoLite does not enable photoDebug");
   const adaptive = read("src/lib/chatPhotoAdaptive.ts");
   assert(adaptive.includes("createImageBitmap"), "adaptive prefers createImageBitmap");
   assert(adaptive.includes("imageOrientation"), "bitmap decode keeps EXIF orientation");
