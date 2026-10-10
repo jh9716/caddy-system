@@ -79,10 +79,12 @@ import {
   applyChatPhotoSendProgress,
   applyPreparedChatPhoto,
   chatPhotoComposerBusy,
+  shouldRenderChatComposerPreview,
   instantChatPhotoPicks,
   mapBoundedSettled,
   prepareChatPendingPhoto,
   readyChatPhotosForUpload,
+  revokeChatPhotoPreviewUrl,
 } from "../src/lib/chatPhotoPick";
 import {
   canUseChatPhotoFastPath,
@@ -121,9 +123,12 @@ import {
   buildChatPhotoDebugSample,
   canShowChatPhotoDebug,
   chatPhotoDebugApiUrl,
+  chatPhotoNow,
   emitChatPhotoTimingSummary,
   chatPhotoTimingRunIdFor,
   commitChatPhotoPrepareTiming,
+  enableChatPhotoDebugTiming,
+  isChatPhotoDebugTiming,
   markChatPhotoTiming,
   publicChatPhotoTimingKey,
   noteChatPhotoBoundary,
@@ -137,6 +142,18 @@ import {
   stampChatPhotoTiming,
   summarizeChatPhotoTiming,
 } from "../src/lib/chatPhotoTiming";
+import {
+  canShowChatPhotoLite,
+  enableChatPhotoLiteTiming,
+  isChatPhotoLiteTiming,
+  noteChatPhotoLiteAdaptive,
+  noteChatPhotoLiteFlags,
+  noteChatPhotoLiteHeic,
+  noteChatPhotoLiteReady,
+  noteChatPhotoLiteStamp,
+  readChatPhotoLiteSample,
+  resetChatPhotoLiteSample,
+} from "../src/lib/chatPhotoLiteTiming";
 import {
   chatPhotoBitmapResizeOptions,
   chatPhotoDecodePathFromBitmap,
@@ -153,7 +170,7 @@ import {
   readImageSizeFromHeader,
   readJpegExifOrientation,
 } from "../src/lib/imageHeaderSize";
-import { isHeicLikeFile } from "../src/lib/courseReportPhotoClient";
+import { isHeicLikeFile, setHeicConverterForTests } from "../src/lib/courseReportPhotoClient";
 import { CHAT_PHOTO_MAX_BYTES, CHAT_PHOTO_PASSTHROUGH_MAX_BYTES } from "../src/lib/chatPhotoConstants";
 import {
   abandonChatPhotoPreupload,
@@ -601,7 +618,8 @@ section("instant preview + parallel upload");
   assert(prepared.blob !== jpgA, "upload blob replaced");
   const applied = applyPreparedChatPhoto(picked.items, prepared);
   assert(applied.items[0]?.status === "ready", "state blob replaced after prepare");
-  assert(applied.items[0]?.previewUrl === picked.items[0]?.previewUrl, "preview URL stays");
+  assert(applied.items[0]?.blob === prepared.blob, "composer blob matches prepared blob");
+  assert(applied.items[0]?.previewUrl !== picked.items[0]?.previewUrl, "prepare replaces pick preview URL");
 
   const failed = await prepareChatPendingPhoto(picked.items[1], jpgB, async () => {
     throw new Error("변환 실패");
@@ -794,6 +812,150 @@ section("instant preview + parallel upload");
   assert(failedLine.status === "failed", "upload/finalize fail → failed bubble");
   const retried = buildOptimisticOutgoingLine(failedLine.body, failedLine.localPhotos);
   assert(retried.localPhotos[0]?.previewUrl === failedLine.localPhotos[0]?.previewUrl, "retry reuses local photo blob");
+}
+
+section("composer preview URL detach + prepare swap");
+{
+  const createdBlobs: Blob[] = [];
+  const revokeCounts = new Map<string, number>();
+  const origCreate = URL.createObjectURL;
+  const origRevoke = URL.revokeObjectURL;
+  let createSeq = 0;
+  URL.createObjectURL = ((blob: Blob) => {
+    createdBlobs.push(blob);
+    if (typeof origCreate === "function") {
+      try {
+        return origCreate.call(URL, blob);
+      } catch {
+        // jsdom/test stubs may reject real Blob URLs; fall through to a stable token.
+      }
+    }
+    createSeq += 1;
+    return `blob:preview-${createSeq}`;
+  }) as typeof URL.createObjectURL;
+  URL.revokeObjectURL = ((url: string) => {
+    revokeCounts.set(url, (revokeCounts.get(url) || 0) + 1);
+    if (typeof origRevoke === "function") {
+      try {
+        origRevoke.call(URL, url);
+      } catch {
+        // ignore stub revoke failures
+      }
+    }
+  }) as typeof URL.revokeObjectURL;
+
+  try {
+    const srcA = new File([new Uint8Array([11, 22, 33])], "preview-a.jpg", {
+      type: "image/jpeg",
+      lastModified: 11,
+    });
+    const srcB = new File([new Uint8Array([44, 55, 66])], "preview-b.jpg", {
+      type: "image/jpeg",
+      lastModified: 22,
+    });
+    const createdBeforePick = createdBlobs.length;
+    const picked = instantChatPhotoPicks([srcA, srcB], 2);
+    const pickBlobs = createdBlobs.slice(createdBeforePick);
+    assert(picked.items.length === 2, "preview-swap pick accepts 2");
+    assert(pickBlobs.length === 2, "pick creates one preview URL per file");
+    assert(pickBlobs.every((blob) => blob !== srcA && blob !== srcB), "pick preview URL is detached from decode File");
+    assert(picked.items[0]?.blob === srcA && picked.items[1]?.blob === srcB, "decode/upload blob stays the original File");
+
+    const oldPreview = picked.items[0]!.previewUrl;
+    const preparedBlob = new Blob([new Uint8Array([9, 8, 7])], { type: "image/jpeg" });
+    const prepared = await prepareChatPendingPhoto(picked.items[0]!, srcA, async () => preparedBlob);
+    assert(prepared.previewUrl === oldPreview, "prepare result keeps pick preview until state commit");
+    const createdBeforeApply = createdBlobs.length;
+    const applied = applyPreparedChatPhoto(picked.items, prepared);
+    const createdDuringApply = createdBlobs.slice(createdBeforeApply);
+    assert(applied.items[0]?.blob === preparedBlob, "apply swaps blob in the same commit");
+    assert(applied.items[0]?.previewUrl !== oldPreview, "apply replaces preview URL");
+    assert(createdDuringApply.length === 1 && createdDuringApply[0] === preparedBlob, "new preview URL is created from prepared blob");
+    assert(revokeCounts.get(oldPreview) === 1, "old pick preview URL is revoked exactly once after swap");
+    revokeChatPhotoPreviewUrl(oldPreview);
+    revokeChatPhotoPreviewUrls([{ previewUrl: oldPreview }]);
+    assert(revokeCounts.get(oldPreview) === 1, "same URL is not double-revoked");
+
+    const failedPreview = applied.items[1]!.previewUrl;
+    const createdBeforeFail = createdBlobs.length;
+    const failed = await prepareChatPendingPhoto(applied.items[1]!, srcB, async () => {
+      throw new Error("변환 실패");
+    });
+    const failedApplied = applyPreparedChatPhoto(applied.items, failed);
+    assert(failedApplied.items[1]?.previewUrl === failedPreview, "failed prepare keeps existing preview URL");
+    assert(createdBlobs.length === createdBeforeFail, "failed prepare does not create a preview URL");
+
+    const createdBeforeRemoved = createdBlobs.length;
+    const removedApply = applyPreparedChatPhoto(
+      applied.items.filter((row) => row.key !== prepared.key),
+      { ...prepared, blob: new Blob([new Uint8Array([1])], { type: "image/jpeg" }) }
+    );
+    assert(removedApply.items.every((row) => row.key !== prepared.key), "removed item stays removed");
+    assert(createdBlobs.length === createdBeforeRemoved, "removed prepare does not create a preview URL");
+
+    const session = createChatPhotoComposerSession(applied.items);
+    session.beginSend();
+    const createdBeforeStale = createdBlobs.length;
+    const stalePrepared = applyComposerPreparedIfCurrent(
+      session.items,
+      {
+        ...prepared,
+        blob: new Blob([new Uint8Array([2])], { type: "image/jpeg" }),
+        status: "ready",
+      },
+      session.generation,
+      session.generation - 1
+    );
+    assert(stalePrepared.items === session.items, "stale prepare does not rewrite composer");
+    assert(createdBlobs.length === createdBeforeStale, "stale prepare does not leak a preview URL");
+
+    const leftoverSrc = instantChatPhotoPicks(
+      [
+        new File([new Uint8Array([3])], "keep-fail.jpg", { type: "image/jpeg", lastModified: 3 }),
+        new File([new Uint8Array([4])], "send-ok.jpg", { type: "image/jpeg", lastModified: 4 }),
+      ],
+      2
+    ).items;
+    leftoverSrc[0] = { ...leftoverSrc[0]!, status: "failed", error: "변환 실패" };
+    const leftoverPreparedBlob = new Blob([new Uint8Array([5])], { type: "image/jpeg" });
+    const leftoverPrepared = await prepareChatPendingPhoto(leftoverSrc[1]!, leftoverSrc[1]!.blob as File, async () => leftoverPreparedBlob);
+    const leftoverOldPreview = leftoverSrc[1]!.previewUrl;
+    const leftoverApplied = applyPreparedChatPhoto(leftoverSrc, leftoverPrepared);
+    assert(leftoverApplied.items[1]?.previewUrl !== leftoverOldPreview, "leftover path still swaps ready preview");
+    assert(revokeCounts.get(leftoverOldPreview) === 1, "leftover ready photo revokes pick preview once");
+    const leftover = leftoverComposerPhotosAfterSend(
+      leftoverApplied.items,
+      usableOptimisticChatPhotos(leftoverApplied.items).map((item) => item.key)
+    );
+    assert(leftover.length === 1 && leftover[0]?.status === "failed", "failed leftover stays after send");
+    const leftoverReadyPreview = leftoverApplied.items[1]!.previewUrl;
+    const leftoverRevokesBefore = revokeCounts.get(leftoverReadyPreview) || 0;
+    revokeChatPhotoPreviewUrls(leftover);
+    assert(
+      (revokeCounts.get(leftoverReadyPreview) || 0) === leftoverRevokesBefore,
+      "leftover revoke does not touch the sent photo preview URL"
+    );
+    assert(
+      outgoingChatPhotoSrc({
+        roomId: "all",
+        attachmentId: "att-preview-1",
+        previewUrl: leftoverReadyPreview,
+        chatPhotoSrc: (roomId, id) => `/api/chat/rooms/${roomId}/attachments/${id}`,
+      }).includes("att-preview-1"),
+      "send still prefers server attachment URL over local preview"
+    );
+    assert(
+      outgoingChatPhotoSrc({
+        roomId: "all",
+        previewUrl: leftoverReadyPreview,
+        chatPhotoSrc: (roomId, id) => `/api/chat/rooms/${roomId}/attachments/${id}`,
+      }) === leftoverReadyPreview,
+      "before attachment id, outgoing still uses local preview URL"
+    );
+  } finally {
+    URL.createObjectURL = origCreate;
+    URL.revokeObjectURL = origRevoke;
+  }
 }
 
 section("composer stale pending state");
@@ -1303,12 +1465,21 @@ section("phase 5 adaptive compression + debug");
   assert(pngOut.uploadBytes <= 1024 * 1024, "PNG target around 700KB~1MB");
   assert(pngOut.outputWidth === 1600 && pngOut.outputHeight === 1120, "PNG long-edge scale is valid");
 
+  enableChatPhotoLiteTiming(true);
+  resetChatPhotoLiteSample();
   const heicOut = await prepareChatAdaptivePhoto(heic, {
     decodeHeic: async () => new Blob([new Uint8Array(2 * 1024 * 1024)], { type: "image/jpeg" }),
     inspect: async () => ({ width: 3000, height: 2000 }),
     encode: async ({ mime }) => new Blob([new Uint8Array(540 * 1024)], { type: mime }),
   });
   assert(heicOut.encoded && heicOut.uploadBytes === 540 * 1024, "HEIC conversion + chat target");
+  const heicFallbackLite = readChatPhotoLiteSample();
+  assert(heicFallbackLite?.heicNativeSucceeded === false, "node fixture native HEIC decode fails");
+  assert(heicFallbackLite?.heicFallbackUsed === true, "failed native HEIC uses heic-to fallback");
+  assert(heicFallbackLite?.heicNativeAttemptMs != null, "failed native HEIC still records attempt ms");
+  assert(heicFallbackLite?.heicFallbackTotalMs != null, "fallback records heic-to time");
+  enableChatPhotoLiteTiming(false);
+  resetChatPhotoLiteSample();
 
   const passthrough = await prepareChatAdaptivePhoto(smallJpeg, {
     encode: async () => {
@@ -1320,6 +1491,12 @@ section("phase 5 adaptive compression + debug");
   const preview = instantChatPhotoPicks([midJpeg], 1);
   assert(preview.items[0]?.previewUrl.startsWith("blob:"), "selected photo immediately previews");
   assert(preview.items[0]?.status === "preparing", "large JPEG previews before compression");
+  assert(!shouldRenderChatComposerPreview(preview.items[0]!), "heavy preparing does not render original preview img");
+  assert(shouldRenderChatComposerPreview({ ...preview.items[0]!, status: "ready" }), "ready renders prepared preview");
+  assert(shouldRenderChatComposerPreview({ ...preview.items[0]!, status: "failed" }), "failed keeps preview for retry");
+  const fastPreview = instantChatPhotoPicks([smallJpeg], 1);
+  assert(fastPreview.items[0]?.status === "ready", "fast-path pick is ready");
+  assert(shouldRenderChatComposerPreview(fastPreview.items[0]!), "fast-path preview renders immediately");
   const preparedMid = await prepareChatPendingPhoto(preview.items[0]!, midJpeg, async (file) =>
     (await prepareChatAdaptivePhoto(file, {
       inspect: async () => ({ width: 4000, height: 3000 }),
@@ -1425,6 +1602,7 @@ section("phase 5 adaptive compression + debug");
       debug.unaccountedPrepareMs == null,
     "phase 8/9/10 debug fields empty by default"
   );
+  enableChatPhotoDebugTiming(true);
   noteChatPhotoCompressionBreakdown({
     decodeMs: 12,
     drawResizeMs: 4,
@@ -1528,7 +1706,9 @@ section("regression: header-probe bitmap resize + EXIF + fallback");
 
 section("hidden latency: scope isolation");
 {
+  enableChatPhotoDebugTiming(true);
   resetChatPhotoTiming();
+  enableChatPhotoDebugTiming(true);
   const fileA = new File([new Uint8Array(8)], "a.jpg", { type: "image/jpeg" });
   const fileB = new File([new Uint8Array(8)], "b.jpg", { type: "image/jpeg" });
   const runA = startChatPhotoPrepareTiming("key-a", fileA);
@@ -1571,7 +1751,9 @@ section("hidden latency: scope isolation");
 
 section("prepare boundary: stale bag + same File runId");
 {
+  enableChatPhotoDebugTiming(true);
   resetChatPhotoTiming();
+  enableChatPhotoDebugTiming(true);
   const fileA = new File([new Uint8Array(12)], "keep.jpg", { type: "image/jpeg" });
   const fileB = new File([new Uint8Array(2.2 * 1024 * 1024)], "next.jpg", { type: "image/jpeg" });
   const runA = startChatPhotoPrepareTiming("cph-1-keep.jpg|12|1|image/jpeg", fileA);
@@ -1655,6 +1837,7 @@ section("prepare boundary: stale bag + same File runId");
 
 section("source split: JPEG getter counts + unused one-read helper");
 {
+  enableChatPhotoDebugTiming(true);
   function spin(ms: number) {
     const end = Date.now() + ms;
     while (Date.now() < end) {}
@@ -1759,6 +1942,60 @@ section("source split: JPEG getter counts + unused one-read helper");
   assert(watched.nameMs === 0 || watched.nameMs < watched.typeMs, "name getter time stays a number");
 }
 
+section("debug timing off: no proxy / scope / source-split");
+{
+  enableChatPhotoDebugTiming(false);
+  resetChatPhotoTiming();
+  enableChatPhotoDebugTiming(false);
+  assert(isChatPhotoDebugTiming() === false, "debug timing is off");
+  const heavy = new File([new Uint8Array(2.2 * 1024 * 1024)], "secret-vacation.jpg", { type: "image/jpeg" });
+  const started = startChatPhotoPrepareTiming("cph-1-secret-vacation.jpg|2200000|1|image/jpeg", heavy);
+  assert(started == null, "prepare-scope start is skipped when debug is off");
+  assert(chatPhotoTimingRunIdFor(heavy) == null, "WeakMap is not bound when debug is off");
+  const selectedAt = 10;
+  stampChatPhotoTiming("photo_selected", selectedAt);
+  let seen: File | null = null;
+  const t0 = chatPhotoNow();
+  const out = await prepareChatPhotoSource(heavy, async (next) => {
+    seen = next;
+    return new Blob([new Uint8Array(8)], { type: "image/jpeg" });
+  });
+  const wall = chatPhotoNow() - t0;
+  markChatPhotoTiming("select_to_ready", selectedAt);
+  stampChatPhotoTiming("prepare_complete");
+  assert(seen === heavy && out.size === 8, "debug-off JPEG still runs compress on the original File");
+  assert(wall >= 0, "debug-off prepare still has a wall time");
+  commitChatPhotoPrepareTiming("r1");
+  const sample = buildChatPhotoDebugSample();
+  assert(sample.fileTypeReads == null && sample.fileNameReads == null && sample.fileSizeReads == null, "no getter counts when debug is off");
+  assert(sample.sourceEnterToAcceptableMs == null && sample.kindToNoteScopeMs == null, "source-split stamps stay empty");
+  assert(sample.photoSourceEnterAt == null && sample.timingRunId == null, "prepare-scope bag is not published");
+  assert(sample.selectedToReadyMs != null, "select→ready wall time is still recorded");
+  const dumped = JSON.stringify(sample);
+  assert(!dumped.includes("secret-vacation"), "debug-off sample has no file name");
+  const rawWatch = watchChatPhotoFileAccess(heavy);
+  assert(rawWatch.file === heavy, "watch does not wrap File in a Proxy when debug is off");
+  void rawWatch.file.type;
+  void rawWatch.file.size;
+  assert(rawWatch.typeReads === 0 && rawWatch.sizeReads === 0, "off-path watch does not intercept getters");
+
+  const prepared = await prepareChatPendingPhoto(
+    {
+      key: "cph-off",
+      blob: heavy,
+      previewUrl: "blob:test-off",
+      fileId: "off",
+      fingerprint: "",
+      status: "preparing",
+    },
+    heavy,
+    async (next) => next
+  );
+  assert(prepared.status === "ready", "pending prepare still succeeds with debug off");
+  assert(prepared.metrics?.timingRunId == null, "pending prepare does not allocate a run id");
+  assert(typeof prepared.metrics?.prepareOuterMs === "number", "pending prepare still returns local wall time");
+}
+
 section("phase 6 hot-path timing / region / cleanup");
 
 {
@@ -1842,6 +2079,466 @@ section("phase 6 hot-path timing / region / cleanup");
   assert(!/uploadUrl|claim/.test(JSON.stringify(serverDebug)), "server debug has no secrets");
 }
 
+
+section("photoLite timing copies adaptive fields without debug");
+{
+  enableChatPhotoDebugTiming(false);
+  enableChatPhotoLiteTiming(false);
+  resetChatPhotoLiteSample();
+  noteChatPhotoLiteAdaptive({
+    compressionMs: 1234,
+    hiddenBeforeDecodeMs: 10,
+    headerProbeMs: 20,
+    bitmapCreateMs: 30,
+    decodeMs: 40,
+    canvasCreateMs: 5,
+    drawResizeMs: 50,
+    alphaProbeMs: 2,
+    encode1Ms: 60,
+    encode2Ms: 0,
+    postEncodeMs: 1,
+    decodePath: "bitmap-resize",
+    encodePath: "offscreen",
+    outputWidth: 1600,
+    outputHeight: 900,
+    uploadBytes: 700000,
+  });
+  noteChatPhotoLiteStamp("pendingStartAt", 1000);
+  noteChatPhotoLiteFlags({ sourceCarryPresent: true, sourceUsedFallbackPath: false, sourceKind: "heic", sourceHeic: true });
+  noteChatPhotoLiteHeic({ heicImportMs: 12, heicConvertMs: 4300, heicTotalMs: 4312 });
+  assert(readChatPhotoLiteSample() == null, "photoLite=0 stores no sample");
+  assert(!isChatPhotoDebugTiming(), "photoLite=0 does not enable photoDebug");
+  const offFile = new File([new Uint8Array([1, 2, 3])], "off.jpg", { type: "image/jpeg" });
+  const offWatch = watchChatPhotoFileAccess(offFile);
+  assert(offWatch.file === offFile, "photoLite=0 does not Proxy the File");
+  assert(startChatPhotoPrepareTiming("lite-off", offFile) === null, "photoLite=0 does not start prepare scope");
+
+  enableChatPhotoLiteTiming(true);
+  resetChatPhotoLiteSample();
+  assert(canShowChatPhotoLite("?photoLite=1"), "photoLite=1 query is recognized");
+  assert(!canShowChatPhotoLite("?photoDebug=1"), "photoDebug query does not enable lite");
+  assert(!canShowChatPhotoLite(""), "default search is not lite");
+  noteChatPhotoLiteAdaptive({
+    compressionMs: 1234.4,
+    hiddenBeforeDecodeMs: 10.2,
+    headerProbeMs: 20.6,
+    bitmapCreateMs: 30,
+    decodeMs: 40,
+    canvasCreateMs: 5,
+    drawResizeMs: 50,
+    alphaProbeMs: 2,
+    encode1Ms: 60,
+    encode2Ms: 0,
+    postEncodeMs: 1,
+    decodePath: "bitmap-resize",
+    encodePath: "offscreen",
+    outputWidth: 1600,
+    outputHeight: 900,
+    uploadBytes: 700000,
+  });
+  noteChatPhotoLiteReady({ selectToReadyMs: 5600, prepareOuterMs: 5400, uploadBytes: 700000 });
+  const sample = readChatPhotoLiteSample();
+  assert(sample?.selectToReadyMs === 5600, "lite copies selectToReadyMs");
+  assert(sample?.prepareOuterMs === 5400, "lite copies prepareOuterMs");
+  assert(sample?.adaptiveTotalMs === 1234, "lite copies adaptiveTotalMs from compressionMs");
+  assert(sample?.hiddenBeforeDecodeMs === 10, "lite copies hiddenBeforeDecodeMs");
+  assert(sample?.headerProbeMs === 21, "lite copies headerProbeMs");
+  assert(sample?.bitmapCreateMs === 30, "lite copies bitmapCreateMs");
+  assert(sample?.decodeMs === 40, "lite copies decodeMs");
+  assert(sample?.canvasCreateMs === 5, "lite copies canvasCreateMs");
+  assert(sample?.drawResizeMs === 50, "lite copies drawResizeMs");
+  assert(sample?.alphaProbeMs === 2, "lite copies alphaProbeMs");
+  assert(sample?.encode1Ms === 60, "lite copies encode1Ms");
+  assert(sample?.encode2Ms === 0, "lite copies encode2Ms");
+  assert(sample?.postEncodeMs === 1, "lite copies postEncodeMs");
+  assert(sample?.decodePath === "bitmap-resize", "lite copies decodePath");
+  assert(sample?.encodePath === "offscreen", "lite copies encodePath");
+  assert(sample?.outputWidth === 1600 && sample?.outputHeight === 900, "lite copies output size");
+  assert(sample?.uploadBytes === 700000, "lite copies uploadBytes");
+  noteChatPhotoLiteStamp("pendingStartAt", 1000);
+  noteChatPhotoLiteStamp("wrapperEnterAt", 1012);
+  noteChatPhotoLiteStamp("sourceEnterAt", 1018);
+  noteChatPhotoLiteStamp("sourceAfterDebugAt", 1020);
+  noteChatPhotoLiteStamp("sourceAfterCarryAt", 1030);
+  noteChatPhotoLiteStamp("sourceAfterRunSetupAt", 1040);
+  noteChatPhotoLiteStamp("sourceAfterAcceptCheckAt", 1050);
+  noteChatPhotoLiteStamp("sourceAfterFastPathCheckAt", 1060);
+  noteChatPhotoLiteStamp("sourceAfterHeicPlanAt", 1070);
+  noteChatPhotoLiteStamp("sourceBeforeRunAt", 4980);
+  noteChatPhotoLiteFlags({
+    sourceCarryPresent: true,
+    sourceMetaPresent: true,
+    sourcePlanPresent: true,
+    sourceUsedFallbackPath: false,
+    sourceKind: "heic",
+    sourceHeic: true,
+  });
+  noteChatPhotoLiteHeic({ heicImportMs: 12.4, heicConvertMs: 4300.6, heicTotalMs: 4313 });
+  noteChatPhotoLiteStamp("adaptiveEnterAt", 4990);
+  noteChatPhotoLiteStamp("adaptiveExitAt", 5310);
+  noteChatPhotoLiteStamp("sourceExitAt", 5312);
+  noteChatPhotoLiteStamp("wrapperExitAt", 5314);
+  noteChatPhotoLiteStamp("pendingEndAt", 5320);
+  const spans = readChatPhotoLiteSample();
+  assert(spans?.pendingToWrapperMs === 12, "lite pendingStart→wrapperEnter");
+  assert(spans?.wrapperToSourceMs === 6, "lite wrapperEnter→sourceEnter");
+  assert(spans?.sourcePreRunMs === 3962, "lite sourceEnter→sourceBeforeRun");
+  assert(spans?.sourceAfterDebugMs === 2, "lite sourceEnter→afterDebug");
+  assert(spans?.sourceAfterCarryMs === 10, "lite afterDebug→afterCarry");
+  assert(spans?.sourceAfterRunSetupMs === 10, "lite afterCarry→afterRunSetup");
+  assert(spans?.sourceAfterAcceptCheckMs === 10, "lite afterRunSetup→afterAccept");
+  assert(spans?.sourceAfterFastPathCheckMs === 10, "lite afterAccept→afterFastPath");
+  assert(spans?.sourceAfterHeicPlanMs === 10, "lite afterFastPath→afterHeicPlan");
+  assert(spans?.sourceBeforeRunMs === 3910, "lite afterHeicPlan→sourceBeforeRun");
+  assert(spans?.sourceCarryPresent === true, "lite records carry present");
+  assert(spans?.sourceMetaPresent === true, "lite records sourceMeta present");
+  assert(spans?.sourcePlanPresent === true, "lite records sourcePlan present");
+  assert(spans?.sourceUsedFallbackPath === false, "lite records carried path");
+  assert(spans?.sourceKind === "heic", "lite records sourceKind");
+  assert(spans?.sourceHeic === true, "lite records sourceHeic");
+  assert(spans?.heicImportMs === 12, "lite records heicImportMs");
+  assert(spans?.heicConvertMs === 4301, "lite records heicConvertMs");
+  assert(spans?.heicTotalMs === 4313, "lite records heicTotalMs");
+  assert(spans?.runToAdaptiveMs === 10, "lite sourceBeforeRun→adaptiveEnter");
+  assert(spans?.adaptiveMs === 320, "lite adaptiveEnter→adaptiveExit");
+  assert(spans?.adaptiveToSourceExitMs === 2, "lite adaptiveExit→sourceExit");
+  assert(spans?.sourceToWrapperExitMs === 2, "lite sourceExit→wrapperExit");
+  assert(spans?.wrapperToPendingEndMs === 6, "lite wrapperExit→pendingEnd");
+  assert(spans?.adaptiveTotalMs === 1234, "lite keeps existing adaptive result timing");
+  assert(!isChatPhotoDebugTiming(), "photoLite=1 does not enable photoDebug");
+  const liteFile = new File([new Uint8Array(800 * 1024 + 8)], "lite.jpg", { type: "image/jpeg" });
+  const liteWatch = watchChatPhotoFileAccess(liteFile);
+  assert(liteWatch.file === liteFile, "photoLite=1 does not Proxy the File");
+  assert(startChatPhotoPrepareTiming("lite-on", liteFile) === null, "photoLite=1 does not start prepare scope");
+  resetChatPhotoLiteSample();
+  const sourced = await prepareChatPhotoSource(liteFile, async () => {
+    noteChatPhotoLiteStamp("adaptiveEnterAt");
+    noteChatPhotoLiteStamp("adaptiveExitAt");
+    return new Blob([new Uint8Array(12)], { type: "image/jpeg" });
+  });
+  assert(sourced.size === 12, "photoLite source still runs compress");
+  const live = readChatPhotoLiteSample();
+  assert(live?.sourcePreRunMs != null, "photoLite stamps sourceEnter→beforeRun");
+  assert(live?.sourceAfterDebugMs != null, "photoLite stamps after debug gate");
+  assert(live?.sourceAfterCarryMs != null, "photoLite stamps after carry resolve");
+  assert(live?.sourceAfterRunSetupMs != null, "photoLite stamps after run setup");
+  assert(live?.sourceAfterAcceptCheckMs != null, "photoLite stamps after accept check");
+  assert(live?.sourceAfterFastPathCheckMs != null, "photoLite stamps after fastPath check");
+  assert(live?.sourceAfterHeicPlanMs != null, "photoLite stamps after heic/kind plan");
+  assert(live?.sourceBeforeRunMs != null, "photoLite stamps last pre-run gap");
+  assert(live?.sourceCarryPresent === false, "no-carry source records carry absent");
+  assert(live?.sourceUsedFallbackPath === true, "no-carry source uses fallback path");
+  assert(live?.sourceKind === "jpeg", "no-carry JPEG records sourceKind");
+  assert(live?.sourceHeic === false, "no-carry JPEG records sourceHeic false");
+  assert(live?.heicImportMs == null && live?.heicConvertMs == null && live?.heicTotalMs == null, "JPEG source leaves HEIC timings empty");
+  assert(live?.runToAdaptiveMs != null, "photoLite stamps beforeRun→adaptiveEnter");
+  assert(live?.adaptiveMs != null, "photoLite stamps adaptiveEnter→adaptiveExit");
+  assert(live?.adaptiveToSourceExitMs != null, "photoLite stamps adaptiveExit→sourceExit");
+  assert(!isChatPhotoDebugTiming(), "photoLite source path still leaves photoDebug off");
+  const liveWatch = watchChatPhotoFileAccess(liteFile);
+  assert(liveWatch.file === liteFile, "photoLite source path does not Proxy the File");
+  resetChatPhotoLiteSample();
+  const smallLite = new File([new Uint8Array([7, 8, 9])], "small-lite.jpg", { type: "image/jpeg" });
+  const pickedLite = instantChatPhotoPicks([smallLite], 1);
+  const pendingLite = await prepareChatPendingPhoto(pickedLite.items[0]!, smallLite);
+  assert(pendingLite.status === "ready", "photoLite pending prepare still succeeds");
+  const pendingSample = readChatPhotoLiteSample();
+  assert(pendingSample?.pendingToWrapperMs != null, "photoLite stamps pending→wrapper");
+  assert(pendingSample?.wrapperToSourceMs != null, "photoLite stamps wrapper→source");
+  assert(pendingSample?.wrapperToPendingEndMs != null, "photoLite stamps wrapper→pending end");
+  assert(!isChatPhotoDebugTiming(), "photoLite pending path still leaves photoDebug off");
+  enableChatPhotoLiteTiming(false);
+  resetChatPhotoLiteSample();
+}
+
+section("early meta carry: picker snapshot reused after preview");
+{
+  enableChatPhotoDebugTiming(false);
+  enableChatPhotoLiteTiming(false);
+  resetChatPhotoLiteSample();
+
+  function trackMeta(file: File) {
+    const counts = { type: 0, name: 0, size: 0 };
+    const tracked = new Proxy(file, {
+      get(target, prop, receiver) {
+        if (prop === "type" || prop === "name" || prop === "size") {
+          counts[prop] += 1;
+          return Reflect.get(target, prop, target);
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+      },
+    });
+    return { file: tracked as File, counts };
+  }
+
+  const fixtures: File[] = [
+    new File([new Uint8Array(32)], "ok.jpg", { type: "image/jpeg" }),
+    new File([new Uint8Array(32)], "ok.JPG", { type: "image/jpg" }),
+    new File([new Uint8Array(32)], "ok.png", { type: "image/png" }),
+    new File([new Uint8Array(32)], "ok.webp", { type: "image/webp" }),
+    new File([new Uint8Array(2.2 * 1024 * 1024)], "mid.jpg", { type: "image/jpeg" }),
+    new File([new Uint8Array(8)], "a.heic", { type: "image/heic" }),
+    new File([new Uint8Array(8)], "x.pdf", { type: "application/pdf" }),
+  ];
+  for (const file of fixtures) {
+    const picked = instantChatPhotoPicks([file], 1);
+    if (!isChatPhotoAcceptableSource(file)) {
+      assert(picked.items.length === 0, "picker still rejects unknown sources");
+      continue;
+    }
+    const meta = picked.items[0]!.sourceMeta;
+    assert(meta != null, "picker stores sourceMeta");
+    const plan = planChatPhotoSourceFromMeta(meta);
+    assert(plan.kind === chatPhotoSourceKind(file), "carried kind matches live kind");
+    assert(plan.acceptable === isChatPhotoAcceptableSource(file), "carried acceptable matches live");
+    assert(plan.fastPath === canUseChatPhotoFastPath(file), "carried fastPath matches live");
+    assert(plan.heic === isHeicLikeFile(file), "carried heic matches live");
+  }
+
+  const heavy = new File([new Uint8Array(800 * 1024 + 8)], "carry.jpg", { type: "image/jpeg" });
+  const pickedHeavy = instantChatPhotoPicks([heavy], 1);
+  const heavyMeta = pickedHeavy.items[0]!.sourceMeta!;
+  const heavyPlan = planChatPhotoSourceFromMeta(heavyMeta);
+  assert(pickedHeavy.items[0]?.status === "preparing", "heavy JPEG stays preparing");
+  const trackedSource = trackMeta(heavy);
+  const sourced = await prepareChatPhotoSource(trackedSource.file, async () => new Blob([new Uint8Array(8)], { type: "image/jpeg" }), {
+    sourceMeta: heavyMeta,
+    sourcePlan: heavyPlan,
+  });
+  assert(sourced.size === 8, "carried source still runs compress");
+  assert(trackedSource.counts.type === 0, "carried source does not reread file.type");
+  assert(trackedSource.counts.name === 0, "carried source does not reread file.name");
+  assert(trackedSource.counts.size === 0, "carried source does not reread file.size");
+
+  const trackedAdaptive = trackMeta(heavy);
+  const adaptiveOut = await prepareChatAdaptivePhoto(trackedAdaptive.file, {
+    sourceMeta: heavyMeta,
+    sourcePlan: heavyPlan,
+    inspect: async () => ({ width: 2000, height: 1500 }),
+    encode: async ({ mime }) => new Blob([new Uint8Array(120)], { type: mime }),
+  });
+  assert(adaptiveOut.uploadBytes === 120, "carried adaptive still encodes");
+  assert(trackedAdaptive.counts.type === 0, "carried adaptive does not reread file.type");
+  assert(trackedAdaptive.counts.name === 0, "carried adaptive does not reread file.name");
+  assert(trackedAdaptive.counts.size === 0, "carried adaptive does not reread file.size");
+
+  try {
+    setHeicConverterForTests(async () => new Blob([new Uint8Array(32)], { type: "image/jpeg" }));
+    const heic = new File([new Uint8Array(8)], "a.heic", { type: "image/heic" });
+    const pickedHeic = instantChatPhotoPicks([heic], 1);
+    assert(pickedHeic.items[0]?.sourceMeta?.name.endsWith(".heic"), "HEIC picker stores sourceMeta");
+    assert(planChatPhotoSourceFromMeta(pickedHeic.items[0]!.sourceMeta!).heic, "HEIC picker plan stays heic");
+    let heicCompress = 0;
+    let heicCompressFile: File | null = null;
+    const heicOut = await prepareChatPhotoSource(heic, async (next) => {
+      heicCompress += 1;
+      heicCompressFile = next;
+      return new Blob([new Uint8Array(16)], { type: "image/jpeg" });
+    }, {
+      sourceMeta: pickedHeic.items[0]!.sourceMeta,
+      sourcePlan: planChatPhotoSourceFromMeta(pickedHeic.items[0]!.sourceMeta!),
+    });
+    assert(heicCompress === 1 && heicCompressFile === heic, "carried HEIC runs original file, no pre-convert");
+    assert(heicOut.type === "image/jpeg" && heicOut.size === 16, "carried HEIC compress result is used");
+
+    setHeicConverterForTests(async () => new Blob([new Uint8Array(800 * 1024)], { type: "image/jpeg" }));
+    let heicHeavyCompress = 0;
+    const heicHeavyOut = await prepareChatPhotoSource(heic, async (next) => {
+      heicHeavyCompress += 1;
+      assert(next === heic, "HEIC heavy run still receives original File");
+      return new Blob([new Uint8Array(20)], { type: "image/jpeg" });
+    }, {
+      sourceMeta: pickedHeic.items[0]!.sourceMeta,
+      sourcePlan: planChatPhotoSourceFromMeta(pickedHeic.items[0]!.sourceMeta!),
+    });
+    assert(heicHeavyCompress === 1 && heicHeavyOut.size === 20, "large HEIC still runs compress on original");
+  } finally {
+    setHeicConverterForTests(null);
+  }
+
+  enableChatPhotoLiteTiming(true);
+  resetChatPhotoLiteSample();
+  const trackedLite = trackMeta(heavy);
+  await prepareChatPhotoSource(trackedLite.file, async () => {
+    noteChatPhotoLiteStamp("adaptiveEnterAt");
+    noteChatPhotoLiteStamp("adaptiveExitAt");
+    return new Blob([new Uint8Array(8)], { type: "image/jpeg" });
+  }, {
+    sourceMeta: heavyMeta,
+    sourcePlan: heavyPlan,
+  });
+  const lite = readChatPhotoLiteSample();
+  assert(lite?.sourcePreRunMs != null, "photoLite still stamps sourcePreRunMs with carry");
+  assert(lite?.sourceAfterDebugMs != null, "photoLite splits debug gate with carry");
+  assert(lite?.sourceAfterCarryMs != null, "photoLite splits carry resolve");
+  assert(lite?.sourceAfterRunSetupMs != null, "photoLite splits run setup");
+  assert(lite?.sourceAfterAcceptCheckMs != null, "photoLite splits accept check");
+  assert(lite?.sourceAfterFastPathCheckMs != null, "photoLite splits fastPath check");
+  assert(lite?.sourceAfterHeicPlanMs != null, "photoLite splits heic/kind plan");
+  assert(lite?.sourceBeforeRunMs != null, "photoLite splits last pre-run gap");
+  assert(lite?.sourceCarryPresent === true, "photoLite sees carry object");
+  assert(lite?.sourceMetaPresent === true, "photoLite sees sourceMeta");
+  assert(lite?.sourcePlanPresent === true, "photoLite sees sourcePlan");
+  assert(lite?.sourceUsedFallbackPath === false, "photoLite uses carried path");
+  assert(lite?.sourceKind === "jpeg", "photoLite carry records jpeg sourceKind");
+  assert(lite?.sourceHeic === false, "photoLite carry records sourceHeic false for jpeg");
+  assert(lite?.heicImportMs == null && lite?.heicConvertMs == null && lite?.heicTotalMs == null, "jpeg carry leaves HEIC timings empty");
+  assert(lite?.adaptiveMs != null, "photoLite still stamps adaptiveMs with carry");
+  assert(trackedLite.counts.type === 0 && trackedLite.counts.name === 0 && trackedLite.counts.size === 0, "photoLite carry split does not reread File metadata");
+  assert(!isChatPhotoDebugTiming(), "carry path does not enable photoDebug");
+
+  try {
+    setHeicConverterForTests(async () => new Blob([new Uint8Array(32)], { type: "image/jpeg" }));
+    resetChatPhotoLiteSample();
+    const heicLite = new File([new Uint8Array(8)], "lite.heic", { type: "image/heic" });
+    const pickedHeicLite = instantChatPhotoPicks([heicLite], 1);
+    const heicLiteOut = await prepareChatPhotoSource(heicLite, async () => new Blob([new Uint8Array(16)], { type: "image/jpeg" }), {
+      sourceMeta: pickedHeicLite.items[0]!.sourceMeta,
+      sourcePlan: planChatPhotoSourceFromMeta(pickedHeicLite.items[0]!.sourceMeta!),
+    });
+    assert(heicLiteOut.type === "image/jpeg" && heicLiteOut.size === 16, "photoLite HEIC carry runs original through compress");
+    const heicLiteSample = readChatPhotoLiteSample();
+    assert(heicLiteSample?.sourceKind === "heic", "photoLite HEIC carry records sourceKind heic");
+    assert(heicLiteSample?.sourceHeic === true, "photoLite HEIC carry records sourceHeic true");
+    assert(heicLiteSample?.heicImportMs == null && heicLiteSample?.heicConvertMs == null && heicLiteSample?.heicTotalMs == null, "source-level HEIC no longer pre-converts");
+    assert(heicLiteSample?.heicNativeSucceeded == null && heicLiteSample?.heicFallbackUsed == null, "custom compress skips adaptive native/fallback stamps");
+    assert(!isChatPhotoDebugTiming(), "photoLite HEIC path does not enable photoDebug");
+  } finally {
+    setHeicConverterForTests(null);
+  }
+
+  enableChatPhotoLiteTiming(false);
+  resetChatPhotoLiteSample();
+}
+
+section("native HEIC decode-first + heic-to fallback");
+{
+  enableChatPhotoDebugTiming(false);
+  enableChatPhotoLiteTiming(true);
+  resetChatPhotoLiteSample();
+
+  const heic = new File([heicBytes()], "native.heic", { type: "image/heic" });
+  const jpeg = new File([new Uint8Array(800 * 1024 + 8)], "keep.jpg", { type: "image/jpeg" });
+  const png = new File([new Uint8Array(900 * 1024)], "keep.png", { type: "image/png" });
+  const webp = new File([new Uint8Array(900 * 1024)], "keep.webp", { type: "image/webp" });
+
+  let jpegDecodeHeic = 0;
+  const jpegOut = await prepareChatAdaptivePhoto(jpeg, {
+    decodeHeic: async () => {
+      jpegDecodeHeic += 1;
+      return new Blob([new Uint8Array(8)], { type: "image/jpeg" });
+    },
+    inspect: async () => ({ width: 2000, height: 1500 }),
+    encode: async ({ mime }) => new Blob([new Uint8Array(120)], { type: mime }),
+  });
+  assert(jpegOut.uploadBytes === 120 && jpegDecodeHeic === 0, "JPEG adaptive does not enter HEIC convert");
+  const jpegLite = readChatPhotoLiteSample();
+  assert(jpegLite?.heicNativeSucceeded == null && jpegLite?.heicFallbackUsed == null, "JPEG leaves native HEIC flags empty");
+  assert(jpegLite?.heicNativeAttemptMs == null && jpegLite?.heicFallbackTotalMs == null, "JPEG leaves native HEIC timings empty");
+
+  resetChatPhotoLiteSample();
+  let pngDecodeHeic = 0;
+  const pngOut = await prepareChatAdaptivePhoto(png, {
+    decodeHeic: async () => {
+      pngDecodeHeic += 1;
+      return new Blob([new Uint8Array(8)], { type: "image/jpeg" });
+    },
+    hasAlpha: true,
+    inspect: async () => ({ width: 2000, height: 1400, hasAlpha: true }),
+    encode: async ({ mime }) => new Blob([new Uint8Array(200)], { type: mime }),
+  });
+  assert(pngOut.uploadBytes === 200 && pngDecodeHeic === 0, "PNG adaptive does not enter HEIC convert");
+
+  resetChatPhotoLiteSample();
+  let webpDecodeHeic = 0;
+  const webpOut = await prepareChatAdaptivePhoto(webp, {
+    decodeHeic: async () => {
+      webpDecodeHeic += 1;
+      return new Blob([new Uint8Array(8)], { type: "image/jpeg" });
+    },
+    inspect: async () => ({ width: 2400, height: 1800 }),
+    encode: async ({ mime }) => new Blob([new Uint8Array(180)], { type: mime }),
+  });
+  assert(webpOut.uploadBytes === 180 && webpDecodeHeic === 0, "WEBP adaptive does not enter HEIC convert");
+
+  resetChatPhotoLiteSample();
+  let fallbackCalls = 0;
+  const fallbackOut = await prepareChatAdaptivePhoto(heic, {
+    decodeHeic: async (file) => {
+      fallbackCalls += 1;
+      assert(file === heic, "fallback convert receives original HEIC");
+      return new Blob([new Uint8Array(2 * 1024 * 1024)], { type: "image/jpeg" });
+    },
+    inspect: async () => ({ width: 3000, height: 2000 }),
+    encode: async ({ mime, quality, width, height }) => {
+      assert(mime === "image/jpeg", "fallback HEIC still encodes JPEG");
+      assert(quality === 0.82 || quality === 0.7, "fallback HEIC keeps existing JPEG qualities");
+      assert(width === 1600 && height === 1067, "fallback HEIC keeps 1600 long-edge");
+      return new Blob([new Uint8Array(540 * 1024)], { type: mime });
+    },
+  });
+  assert(fallbackCalls === 1 && fallbackOut.uploadBytes === 540 * 1024, "native failure falls back to heic-to then encode");
+  const fallbackLite = readChatPhotoLiteSample();
+  assert(fallbackLite?.heicNativeSucceeded === false, "native failure records heicNativeSucceeded false");
+  assert(fallbackLite?.heicFallbackUsed === true, "native failure records heicFallbackUsed");
+  assert(fallbackLite?.heicNativeAttemptMs != null, "native failure records heicNativeAttemptMs");
+  assert(fallbackLite?.heicFallbackTotalMs != null, "native failure records heicFallbackTotalMs");
+
+  const bitmapCalls: unknown[] = [];
+  const previousBitmap = (globalThis as { createImageBitmap?: typeof createImageBitmap }).createImageBitmap;
+  (globalThis as { createImageBitmap: typeof createImageBitmap }).createImageBitmap = (async (
+    _blob: Blob,
+    opts?: ImageBitmapOptions
+  ) => {
+    bitmapCalls.push(opts);
+    if (opts && opts.imageOrientation === "from-image") {
+      return { width: 3000, height: 4000, close() {} } as ImageBitmap;
+    }
+    throw new Error("HEIC native decode must request from-image orientation");
+  }) as typeof createImageBitmap;
+  try {
+    resetChatPhotoLiteSample();
+    let nativeFallback = 0;
+    const nativeOut = await prepareChatAdaptivePhoto(heic, {
+      decodeHeic: async () => {
+        nativeFallback += 1;
+        return new Blob([new Uint8Array(32)], { type: "image/jpeg" });
+      },
+      inspect: async () => ({ width: 3000, height: 4000 }),
+      encode: async ({ mime, quality, width, height, source }) => {
+        assert(source === heic, "native success encodes original HEIC, no intermediate JPEG");
+        assert(mime === "image/jpeg", "native HEIC still encodes JPEG");
+        assert(quality === 0.82, "native HEIC first encode keeps quality 0.82");
+        assert(width === 1200 && height === 1600, "native HEIC keeps 1600 long-edge on portrait");
+        return new Blob([new Uint8Array(220 * 1024)], { type: mime });
+      },
+    });
+    assert(nativeFallback === 0, "native HEIC success does not call heic-to");
+    assert(nativeOut.encoded && nativeOut.uploadBytes === 220 * 1024, "native HEIC success still JPEG-encodes once");
+    assert(nativeOut.outputWidth === 1200 && nativeOut.outputHeight === 1600, "native HEIC output is 1600 long-edge");
+    assert(
+      bitmapCalls.some((opts) => opts && typeof opts === "object" && (opts as ImageBitmapOptions).imageOrientation === "from-image"),
+      "native HEIC createImageBitmap uses from-image orientation"
+    );
+    const nativeLite = readChatPhotoLiteSample();
+    assert(nativeLite?.heicNativeSucceeded === true, "native success records heicNativeSucceeded");
+    assert(nativeLite?.heicFallbackUsed === false, "native success does not use fallback");
+    assert(nativeLite?.heicNativeAttemptMs != null, "native success records heicNativeAttemptMs");
+    assert(nativeLite?.heicFallbackTotalMs == null, "native success leaves heicFallbackTotalMs empty");
+    assert(nativeLite?.heicImportMs == null && nativeLite?.heicConvertMs == null, "native success does not run heic-to timings");
+  } finally {
+    if (previousBitmap) {
+      (globalThis as { createImageBitmap: typeof createImageBitmap }).createImageBitmap = previousBitmap;
+    } else {
+      delete (globalThis as { createImageBitmap?: typeof createImageBitmap }).createImageBitmap;
+    }
+  }
+
+  enableChatPhotoLiteTiming(false);
+  resetChatPhotoLiteSample();
+}
+
 section("source wiring / no public blob");
 
 {
@@ -1865,6 +2562,10 @@ section("source wiring / no public blob");
   const pickSrc = read("src/lib/chatPhotoPick.ts");
   const fast = read("src/lib/chatPhotoFastPath.ts");
   const optimistic = read("src/lib/chatPhotoOptimistic.ts");
+  assert(pickSrc.includes("createDetachedChatPhotoPreviewUrl(file, sourceMeta)"), "pick preview URL is detached using snapshot size/type");
+  assert(pickSrc.includes("createChatPhotoPreviewUrl(prepared.blob)"), "prepare commit builds preview URL from prepared blob");
+  assert(pickSrc.includes("revokeChatPhotoPreviewUrl(current.previewUrl)"), "prepare commit revokes the previous preview URL");
+  assert(optimistic.includes("revokeChatPhotoPreviewUrl(item.previewUrl)"), "bulk leftover/drop revoke uses the same single-revoke helper");
   assert(client.includes("startChatPhotoPreupload"), "select starts background pre-upload");
   assert(client.includes("uploadJobsRef"), "composer keeps in-flight pre-upload promises");
   assert(client.includes("finishChatPhotoOutgoingUploads"), "send reuses pre-upload jobs/claims");
@@ -1904,8 +2605,71 @@ section("source wiring / no public blob");
   assert(!client.includes("준비 중"), "composer does not expose prepare stage");
   assert(!client.includes("vh-chat-pending-status"), "composer does not expose upload stage labels");
   assert(client.includes("chatPhotoComposerBusy"), "messenger-style busy spinner");
+  assert(client.includes("shouldRenderChatComposerPreview(item)"), "composer gates original preview img");
+  assert(client.includes("vh-chat-pending-placeholder"), "heavy preparing shows placeholder");
+  assert(client.includes("<img src={item.previewUrl} alt=\"\" />"), "ready/failed still render preview img");
   assert(client.includes("canShowChatPhotoDebug"), "admin photo debug gate");
   assert(client.includes("photoDebug"), "photoDebug query panel");
+  assert(client.includes("photoLite"), "photoLite query panel");
+  assert(client.includes("enableChatPhotoLiteTiming"), "photoLite enable is separate from photoDebug");
+  assert(client.includes("noteChatPhotoLiteReady"), "photoLite publishes select→ready from existing marks");
+  assert(client.includes("pendingToWrapperMs"), "photoLite panel shows pending→wrapper");
+  assert(client.includes("wrapperToSourceMs"), "photoLite panel shows wrapper→source");
+  assert(client.includes("sourcePreRunMs"), "photoLite panel shows source pre-run");
+  assert(client.includes("sourceAfterDebugMs"), "photoLite panel shows debug-gate split");
+  assert(client.includes("sourceAfterCarryMs"), "photoLite panel shows carry-resolve split");
+  assert(client.includes("sourceAfterRunSetupMs"), "photoLite panel shows run-setup split");
+  assert(client.includes("sourceAfterAcceptCheckMs"), "photoLite panel shows accept-check split");
+  assert(client.includes("sourceAfterFastPathCheckMs"), "photoLite panel shows fastPath-check split");
+  assert(client.includes("sourceAfterHeicPlanMs"), "photoLite panel shows heic-plan split");
+  assert(client.includes("sourceBeforeRunMs"), "photoLite panel shows last pre-run split");
+  assert(client.includes("sourceCarryPresent"), "photoLite panel shows carry flag");
+  assert(client.includes("sourceUsedFallbackPath"), "photoLite panel shows fallback flag");
+  assert(client.includes("sourceKind"), "photoLite panel shows sourceKind");
+  assert(client.includes("sourceHeic"), "photoLite panel shows sourceHeic");
+  assert(client.includes("heicImportMs"), "photoLite panel shows heicImportMs");
+  assert(client.includes("heicConvertMs"), "photoLite panel shows heicConvertMs");
+  assert(client.includes("heicTotalMs"), "photoLite panel shows heicTotalMs");
+  assert(client.includes("heicNativeAttemptMs"), "photoLite panel shows heicNativeAttemptMs");
+  assert(client.includes("heicNativeSucceeded"), "photoLite panel shows heicNativeSucceeded");
+  assert(client.includes("heicFallbackUsed"), "photoLite panel shows heicFallbackUsed");
+  assert(client.includes("heicFallbackTotalMs"), "photoLite panel shows heicFallbackTotalMs");
+  assert(client.includes('typeof value === "boolean" ? String(value)'), "photoLite panel stringifies booleans");
+  assert(client.includes("runToAdaptiveMs"), "photoLite panel shows run→adaptive");
+  assert(client.includes("adaptiveToSourceExitMs"), "photoLite panel shows adaptive→source exit");
+  assert(client.includes("sourceToWrapperExitMs"), "photoLite panel shows source→wrapper exit");
+  assert(client.includes("wrapperToPendingEndMs"), "photoLite panel shows wrapper→pending end");
+  assert(read("src/lib/chatPhotoAdaptive.ts").includes("noteChatPhotoLiteAdaptive(result)"), "adaptive result is copied into lite sample");
+  assert(read("src/lib/chatPhotoAdaptive.ts").includes('noteChatPhotoLiteStamp("adaptiveEnterAt"'), "adaptive enter is stamped for photoLite");
+  assert(read("src/lib/chatPhotoAdaptive.ts").includes('noteChatPhotoLiteStamp("adaptiveExitAt")'), "adaptive exit is stamped for photoLite");
+  assert(pickSrc.includes('noteChatPhotoLiteStamp("pendingStartAt"'), "pending start is stamped for photoLite");
+  assert(pickSrc.includes('noteChatPhotoLiteStamp("pendingEndAt"'), "pending end is stamped for photoLite");
+  assert(pickSrc.includes('noteChatPhotoLiteStamp("wrapperEnterAt"'), "wrapper enter is stamped for photoLite");
+  assert(pickSrc.includes('noteChatPhotoLiteStamp("wrapperExitAt"'), "wrapper exit is stamped for photoLite");
+  assert(fast.includes('noteChatPhotoLiteStamp("sourceEnterAt")'), "source enter is stamped for photoLite");
+  assert(fast.includes('noteChatPhotoLiteStamp("sourceBeforeRunAt")'), "source before run is stamped for photoLite");
+  assert(fast.includes('noteChatPhotoLiteStamp("sourceExitAt")'), "source exit is stamped for photoLite");
+  assert(fast.includes("sourceKind: carried?.kind"), "carried sourceKind is copied into photoLite");
+  assert(fast.includes("sourceHeic: carried ? Boolean(carried.heic || carried.kind === \"heic\")"), "carried sourceHeic is copied into photoLite");
+  assert(!fast.includes("decodeCourseReportPhotoSource"), "source no longer pre-converts HEIC");
+  assert(read("src/lib/chatPhotoAdaptive.ts").includes("noteChatPhotoLiteHeicNative"), "adaptive records native HEIC attempt");
+  assert(read("src/lib/chatPhotoAdaptive.ts").includes("nativeDrawable = await loadDrawable(file, now)"), "adaptive tries native HEIC decode first");
+  assert(read("src/lib/chatPhotoAdaptive.ts").includes("opts.decodeHeic || decodeCourseReportPhotoSource"), "adaptive keeps heic-to fallback");
+  assert(reportClient.includes("isChatPhotoLiteTiming()"), "HEIC convert gates stamps behind photoLite");
+  assert(reportClient.includes("const importStarted = lite ? chatPhotoNow() : 0"), "HEIC import start uses chatPhotoNow");
+  assert(reportClient.includes("const importEnded = lite ? chatPhotoNow() : 0"), "HEIC import end uses chatPhotoNow");
+  assert(reportClient.includes("const convertStarted = lite ? chatPhotoNow() : 0"), "HEIC convert start uses chatPhotoNow");
+  assert(reportClient.includes("const convertEnded = chatPhotoNow()"), "HEIC convert end uses chatPhotoNow");
+  assert(reportClient.includes("noteChatPhotoLiteHeic"), "HEIC convert notes photoLite timings");
+  assert(reportClient.includes('type: "image/jpeg"'), "HEIC convert type is unchanged");
+  assert(reportClient.includes("quality: 1"), "HEIC convert quality is unchanged");
+  const liteSrc = read("src/lib/chatPhotoLiteTiming.ts");
+  assert(!liteSrc.includes("Proxy"), "lite timing has no Proxy");
+  assert(!liteSrc.includes("WeakMap"), "lite timing has no WeakMap");
+  assert(!liteSrc.includes("new Map"), "lite timing has no Map");
+  assert(!liteSrc.includes(".slice("), "lite timing does not slice files");
+  assert(!liteSrc.includes("arrayBuffer"), "lite timing does not read arrayBuffer");
+  assert(!client.includes("enableChatPhotoDebugTiming(lite)"), "photoLite does not enable photoDebug");
   const adaptive = read("src/lib/chatPhotoAdaptive.ts");
   assert(adaptive.includes("createImageBitmap"), "adaptive prefers createImageBitmap");
   assert(adaptive.includes("imageOrientation"), "bitmap decode keeps EXIF orientation");
@@ -1944,14 +2708,22 @@ section("source wiring / no public blob");
   assert(client.includes("timingKey"), "debug panel shows public timing key");
   assert(!client.includes("file.name"), "debug panel does not print file.name");
   const sourcePrepareFn = fast.slice(fast.indexOf("export async function prepareChatPhotoSource"));
-  assert(sourcePrepareFn.includes("isChatPhotoAcceptableSource"), "live source still calls acceptable helper");
-  assert(sourcePrepareFn.includes("canUseChatPhotoFastPath"), "live source still calls fast-path helper");
-  assert(sourcePrepareFn.includes("isHeicLikeFile"), "live source still calls heic helper");
-  assert(sourcePrepareFn.includes("chatPhotoSourceKind"), "live source still calls kind helper");
-  assert(!sourcePrepareFn.includes("readChatPhotoFileMeta"), "live source does not use the one-read snapshot");
-  assert(!sourcePrepareFn.includes("planChatPhotoSourceFromMeta"), "live source does not use the unused planner");
-  assert(fast.includes("planChatPhotoSourceFromMeta"), "one-read planner is present for a later wire");
+  assert(sourcePrepareFn.includes("carriedChatPhotoSourcePlan(carry)"), "live source uses carried picker snapshot when present");
+  assert(sourcePrepareFn.includes("isChatPhotoAcceptableSource(probed)"), "fallback source still calls acceptable helper");
+  assert(sourcePrepareFn.includes("canUseChatPhotoFastPath(probed)"), "fallback source still calls fast-path helper");
+  assert(sourcePrepareFn.includes("isHeicLikeFile(probed)"), "fallback source still calls heic helper");
+  assert(sourcePrepareFn.includes("chatPhotoSourceKind(probed)"), "fallback source still calls kind helper");
+  assert(pickSrc.includes("readChatPhotoFileMeta(file)"), "picker snapshots File metadata before preview");
+  assert(pickSrc.includes("sourceMeta"), "pending items store sourceMeta");
+  assert(fast.includes("planChatPhotoSourceFromMeta"), "one-read planner stays exported");
+  assert(read("src/lib/chatPhotoAdaptive.ts").includes("opts.sourceMeta"), "adaptive accepts carried sourceMeta");
   assert(timingSrc.includes("watchChatPhotoFileAccess"), "timing watches File metadata getters");
+  assert(timingSrc.includes("isChatPhotoDebugTiming"), "debug timing has an explicit gate");
+  assert(timingSrc.includes("enableChatPhotoDebugTiming"), "photoDebug can turn detailed timing on");
+  assert(fast.includes("isChatPhotoDebugTiming"), "source prepare skips debug bookkeeping when off");
+  assert(client.includes("enableChatPhotoDebugTiming"), "ChatClient arms debug timing only for photoDebug");
+  assert(sourcePrepareFn.includes("const debug = isChatPhotoDebugTiming()"), "live source branches on debug flag");
+  assert(sourcePrepareFn.includes("watchChatPhotoFileAccess(file)"), "Proxy is not created on the hot path");
   assert(client.includes('markChatPhotoTiming("select_to_ready"'), "heavy prepare stamps select_to_ready");
   assert(timingSrc.includes("clearPrepareScopeFromBag"), "commit replaces prepare-scope fields");
   assert(fast.includes("jpegDirectRun"), "JPEG source records same-file run");

@@ -1,4 +1,6 @@
 import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
+import { isChatPhotoLiteTiming, noteChatPhotoLiteHeic } from "@/lib/chatPhotoLiteTiming";
+import { chatPhotoNow } from "@/lib/chatPhotoTiming";
 import {
   COURSE_REPORT_PHOTO_ACCEPT,
   COURSE_REPORT_PHOTO_JPEG_QUALITY,
@@ -32,12 +34,24 @@ export function setHeicConverterForTests(fn: HeicConverter | null) {
 
 async function convertHeicToJpegBlob(file: Blob): Promise<Blob> {
   if (heicConverterForTests) return heicConverterForTests(file);
+  const lite = isChatPhotoLiteTiming();
+  const importStarted = lite ? chatPhotoNow() : 0;
   const { heicTo } = await import("heic-to");
+  const importEnded = lite ? chatPhotoNow() : 0;
+  const convertStarted = lite ? chatPhotoNow() : 0;
   const out = await heicTo({
     blob: file,
     type: "image/jpeg",
     quality: 1,
   });
+  if (lite) {
+    const convertEnded = chatPhotoNow();
+    noteChatPhotoLiteHeic({
+      heicImportMs: importEnded - importStarted,
+      heicConvertMs: convertEnded - convertStarted,
+      heicTotalMs: convertEnded - importStarted,
+    });
+  }
   if (!(out instanceof Blob) || out.size <= 0) {
     throw new Error("convert_failed");
   }
