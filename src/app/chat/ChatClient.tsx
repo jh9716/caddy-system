@@ -31,11 +31,14 @@ import {
   abandonChatPhotoPreupload,
   appendComposerPhotos,
   appendNativeHqReadyPhoto,
+  appendNativePreviewChooserFile,
   appendNativePreviewPhoto,
   applyChatPhotoSendProgress,
   applyComposerPreparedIfCurrent,
   applyComposerProgressIfCurrent,
+  applyNativeHqFailed,
   applyNativeHqFile,
+  fileFromNativeHqDataUrl,
   buildOptimisticOutgoingLine,
   CHAT_PHOTO_ACCEPT,
   CHAT_PHOTO_MAX,
@@ -46,10 +49,13 @@ import {
   isAbandonedNativeHqFile,
   isNativePreviewPlaceholder,
   leftoverComposerPhotosAfterSend,
+  NATIVE_CHAT_PHOTO_HQ_READY_EVENT,
   NATIVE_CHAT_PHOTO_PREVIEW_EVENT,
   needsChatPhotoHeavyPrepare,
   outgoingChatPhotoSrc,
+  parseNativeChatPhotoHqReady,
   parseNativeChatPhotoPreview,
+  partitionNativeChooserFiles,
   partitionNativeHqFiles,
   prepareChatPendingPhoto,
   revokeChatPhotoPreviewUrls,
@@ -1380,8 +1386,47 @@ export default function ChatClient() {
       setPendingPhotoList(appended.items);
       markChatPhotoTiming("select_to_preview");
     };
+    const onHqReady = (event: Event) => {
+      const payload = parseNativeChatPhotoHqReady((event as CustomEvent).detail);
+      if (!payload) return;
+      if (
+        !shouldAcceptNativePreview(
+          payload,
+          abandonedNativePreviewIdsRef.current,
+          abandonedNativeSessionsRef.current
+        )
+      ) {
+        return;
+      }
+      const writeGeneration = composerGenRef.current;
+      if (payload.error) {
+        const failed = applyNativeHqFailed(pendingPhotosRef.current, payload.previewId);
+        if (!failed) return;
+        if (writeGeneration !== composerGenRef.current) return;
+        setPendingPhotoList(failed);
+        return;
+      }
+      const hqFile = payload.dataUrl
+        ? fileFromNativeHqDataUrl(payload.dataUrl, payload.previewId)
+        : null;
+      if (!hqFile) return;
+      const applied = applyNativeHqFile(pendingPhotosRef.current, payload.previewId, hqFile);
+      if (!applied) return;
+      if (writeGeneration !== composerGenRef.current) return;
+      if (abandonedNativePreviewIdsRef.current.has(payload.previewId)) return;
+      setPendingPhotoList(applied);
+      const current = applied.find(
+        (item) => item.nativePreviewId === payload.previewId && item.status === "ready"
+      );
+      if (current) startComposerPreupload(current, writeGeneration);
+      if (!applied.some(isNativePreviewPlaceholder)) flushQueuedNativeSend();
+    };
     window.addEventListener(NATIVE_CHAT_PHOTO_PREVIEW_EVENT, onPreview);
-    return () => window.removeEventListener(NATIVE_CHAT_PHOTO_PREVIEW_EVENT, onPreview);
+    window.addEventListener(NATIVE_CHAT_PHOTO_HQ_READY_EVENT, onHqReady);
+    return () => {
+      window.removeEventListener(NATIVE_CHAT_PHOTO_PREVIEW_EVENT, onPreview);
+      window.removeEventListener(NATIVE_CHAT_PHOTO_HQ_READY_EVENT, onHqReady);
+    };
   }, []);
 
   function abandonComposerPhotos() {
@@ -1449,11 +1494,23 @@ export default function ChatClient() {
           )
       );
       const writeGeneration = composerGenRef.current;
+      const chooser = partitionNativeChooserFiles(incoming);
+      let next = pendingPhotosRef.current;
+      for (const row of chooser.previews) {
+        if (abandonedNativePreviewIdsRef.current.has(row.previewId)) continue;
+        if (writeGeneration !== composerGenRef.current) return;
+        const appended = appendNativePreviewChooserFile(next, row.file, row.previewId);
+        if (appended.accepted) next = appended.items;
+      }
+      if (next !== pendingPhotosRef.current) {
+        setPendingPhotoList(next);
+        markChatPhotoTiming("select_to_preview", selectedAt);
+      }
+      incoming = chooser.leftovers;
       const { matched, unmatchedNamed, heicFallbacks, leftovers } = partitionNativeHqFiles(
-        pendingPhotosRef.current,
+        next,
         incoming
       );
-      let next = pendingPhotosRef.current;
       for (const row of matched) {
         if (abandonedNativePreviewIdsRef.current.has(row.previewId)) continue;
         if (writeGeneration !== composerGenRef.current) return;

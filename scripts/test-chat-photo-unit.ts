@@ -107,14 +107,20 @@ import {
   usableOptimisticChatPhotos,
 } from "../src/lib/chatPhotoOptimistic";
 import {
+  NATIVE_CHAT_PHOTO_HQ_READY_EVENT,
   NATIVE_CHAT_PHOTO_PREVIEW_EVENT,
   appendNativeHqReadyPhoto,
+  appendNativePreviewChooserFile,
   appendNativePreviewPhoto,
+  applyNativeHqFailed,
   applyNativeHqFile,
   createNativePreviewPhoto,
+  fileFromNativeHqDataUrl,
   isAbandonedNativeHqFile,
   isNativePreviewPlaceholder,
+  parseNativeChatPhotoHqReady,
   parseNativeChatPhotoPreview,
+  partitionNativeChooserFiles,
   partitionNativeHqFiles,
   shouldAcceptNativePreview,
   shouldQueueNativeChatSend,
@@ -796,6 +802,10 @@ section("instant preview + parallel upload");
     NATIVE_CHAT_PHOTO_PREVIEW_EVENT === "verthill:chat-photo-native-preview",
     "native preview event name"
   );
+  assert(
+    NATIVE_CHAT_PHOTO_HQ_READY_EVENT === "verthill:chat-photo-native-hq-ready",
+    "native HQ ready event name"
+  );
   const previewPayload = parseNativeChatPhotoPreview({
     previewId: "nvp-3-abc123def456",
     sessionId: "3",
@@ -940,6 +950,54 @@ section("instant preview + parallel upload");
   ];
   const threePart = partitionNativeHqFiles(threePreview, threeHq);
   assert(threePart.matched.length === 3 && threePart.leftovers.length === 0, "3장 HQ filenames match in order");
+  const previewChooser = new File([new Uint8Array([0xff, 0xd8, 0xff, 9])], "nvp-3-abc123def456-preview.jpg", {
+    type: "image/jpeg",
+    lastModified: 120,
+  });
+  const chooserSplit = partitionNativeChooserFiles([previewChooser, jpegLeftover]);
+  assert(chooserSplit.previews[0]?.previewId === "nvp-3-abc123def456", "chooser -preview.jpg is preview-only");
+  assert(chooserSplit.leftovers[0] === jpegLeftover, "mixed JPEG stays out of preview-only files");
+  const fromChooser = appendNativePreviewChooserFile([], previewChooser, "nvp-3-abc123def456");
+  assert(fromChooser.accepted?.nativePreview === true, "chooser thumbnail is visually ready / not uploadable");
+  assert(fromChooser.accepted?.blob.size === 0, "chooser thumbnail blob is never the upload source");
+  assert(
+    readyChatPhotosForUpload(fromChooser.items).length === 0,
+    "384x512 chooser JPEG is never uploaded"
+  );
+  const hqEvent = parseNativeChatPhotoHqReady({
+    previewId: "nvp-3-abc123def456",
+    sessionId: "3",
+    width: 1200,
+    height: 1600,
+    bytes: 180_000,
+    dataUrl: `data:image/jpeg;base64,${"E".repeat(64)}`,
+  });
+  assert(hqEvent?.previewId === "nvp-3-abc123def456", "HQ ready event parses JPEG data URL");
+  assert(
+    parseNativeChatPhotoHqReady({
+      previewId: "nvp-3-abc123def456",
+      dataUrl: "data:image/heic;base64,abc",
+    }) === null,
+    "HQ event rejects original HEIC data URL"
+  );
+  const hqFromEvent = fileFromNativeHqDataUrl(hqEvent!.dataUrl!, "nvp-3-abc123def456");
+  const eventSwapped = applyNativeHqFile(fromChooser.items, "nvp-3-abc123def456", hqFromEvent!);
+  assert(eventSwapped?.[0]?.status === "ready", "HQ event swaps the preview-only item");
+  assert(eventSwapped?.[0]?.nativePreview === false, "HQ event clears preview-only flag");
+  assert(readyChatPhotosForUpload(eventSwapped || []).length === 1, "only HQ event JPEG is uploadable");
+  assert(
+    applyNativeHqFile([], "nvp-3-abc123def456", hqFromEvent!) === null,
+    "late HQ event does not revive a removed attachment"
+  );
+  const hqFailed = parseNativeChatPhotoHqReady({
+    previewId: "nvp-3-abc123def456",
+    sessionId: "3",
+    error: "hq_failed",
+  });
+  assert(hqFailed?.error === "hq_failed", "HQ failure event is accepted without a data URL");
+  const failedFromEvent = applyNativeHqFailed(fromChooser.items, "nvp-3-abc123def456", "hq_failed");
+  assert(failedFromEvent?.[0]?.status === "failed", "HQ failure marks the preview item failed");
+  assert(!chatPhotoComposerBusy(failedFromEvent![0]!), "HQ failure is not a busy spinner");
   let threeSwapped = threePreview;
   for (const row of threePart.matched) {
     threeSwapped = applyNativeHqFile(threeSwapped, row.previewId, row.file) || threeSwapped;

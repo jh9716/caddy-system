@@ -525,21 +525,24 @@ assert(
 );
 assert(
   heicPreview.includes("loadThumbnail(") &&
-    heicPreview.includes("EVENT = \"verthill:chat-photo-native-preview\"") &&
+    heicPreview.includes("HQ_EVENT = \"verthill:chat-photo-native-hq-ready\"") &&
     heicPreview.includes("PREVIEW_EDGE = 512") &&
     heicPreview.includes("data:image/jpeg;base64,") &&
     heicPreview.includes("nvp-") &&
+    heicPreview.includes("-preview.jpg") &&
     !heicPreview.includes("FileProvider") &&
     !heicPreview.includes("resolveForWebView"),
   "loadThumbnail is preview-only and never the upload JPEG"
 );
 assert(
   chromeClient.includes("HeicNativePreview.tryPreview") &&
-    chromeClient.includes("emitPreview") &&
-    chromeClient.indexOf("emitPreview") < chromeClient.indexOf("resolveForWebView") &&
+    chromeClient.includes("writeJpegBytes") &&
+    chromeClient.includes("preview.previewFileName()") &&
+    chromeClient.indexOf("deliver(") < chromeClient.indexOf("resolveForWebView") &&
     chromeClient.includes("previewIds[i] + \".jpg\"") &&
+    chromeClient.includes("emitHqReady") &&
     chromeClient.includes("nativePreviewSession"),
-  "preview event is emitted before the HQ file-chooser callback"
+  "chooser callback returns the preview JPEG before HQ conversion"
 );
 assert(
   heicConverter.includes("BitmapFactory.decodeFileDescriptor") &&
@@ -605,14 +608,14 @@ assert(
     heicConverter.includes("SOURCE_FALLBACK") &&
     heicConverter.includes("meta query") &&
     heicConverter.includes("meta fallback") &&
-    chromeClient.includes("converted.meta.toastLabel()"),
+    heicConverter.includes("meta.toastLabel()"),
   "debug toast distinguishes meta query vs meta fallback"
 );
 assert(
   chromeClient.includes("FLAG_DEBUGGABLE") &&
     chromeClient.includes("isDebugApk") &&
     chromeClient.includes("Toast.makeText") &&
-    chromeClient.includes("\"preview \"") &&
+    chromeClient.includes("\"callback \"") &&
     chromeClient.includes("\"ms · HQ \"") &&
     heicConverter.includes("HEIC bitmap") &&
     heicConverter.includes("HEIC decoder-sampled") &&
@@ -659,22 +662,25 @@ assert(
 assert(
   !heicConverter.includes("Base64") &&
     !chromeClient.includes("Base64") &&
-    !heicConverter.includes("byte[]") &&
+    heicConverter.includes("writeJpegBytes") &&
+    heicConverter.includes("readCacheJpeg") &&
     !chromeClient.includes("JSObject") &&
-    heicPreview.includes("Base64.encodeToString"),
-  "no original HEIC/base64 on the HQ path; preview uses a JPEG data URL only"
+    heicPreview.includes("Base64.encodeToString") &&
+    heicPreview.includes("HQ_EVENT"),
+  "no original HEIC/base64 on the chooser path; HQ JPEG event is built in the preview helper"
 );
 assert(
-  chatClient.includes("NATIVE_CHAT_PHOTO_PREVIEW_EVENT") &&
-    chatClient.includes("appendNativePreviewPhoto") &&
+  chatClient.includes("NATIVE_CHAT_PHOTO_HQ_READY_EVENT") &&
+    chatClient.includes("appendNativePreviewChooserFile") &&
+    chatClient.includes("partitionNativeChooserFiles") &&
     chatClient.includes("applyNativeHqFile") &&
     chatClient.includes("shouldQueueNativeChatSend") &&
     chatClient.includes("abandonedNativePreviewIdsRef") &&
     chatClient.includes("준비 중") &&
     read("src/lib/chatPhotoPick.ts").includes("item.nativePreviewId && item.previewUrl") &&
     read("src/lib/chatPhotoPick.ts").includes("item.nativePreview !== true") &&
-    read("src/lib/chatPhotoNativePreview.ts").includes("data:image/jpeg;base64,"),
-  "web composer shows native preview, waits for HQ, and never uploads the thumbnail"
+    read("src/lib/chatPhotoNativePreview.ts").includes("-preview"),
+  "web composer shows chooser preview JPEG, waits for HQ event, and never uploads the thumbnail"
 );
 assert(
   filePaths.includes('<cache-path name="my_cache_images" path="." />') &&

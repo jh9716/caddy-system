@@ -67,15 +67,22 @@ export {
 } from "@/lib/chatPhotoPreupload";
 export { CHAT_PHOTO_ACCEPT, CHAT_PHOTO_MAX, chatPhotoSrc } from "@/lib/chatPhotoConstants";
 export {
+  NATIVE_CHAT_PHOTO_HQ_READY_EVENT,
   NATIVE_CHAT_PHOTO_PREVIEW_EVENT,
   appendNativeHqReadyPhoto,
+  appendNativePreviewChooserFile,
   appendNativePreviewPhoto,
+  applyNativeHqFailed,
   applyNativeHqFile,
+  fileFromNativeHqDataUrl,
   isAbandonedNativeHqFile,
   isNativePreviewPlaceholder,
+  parseNativeChatPhotoHqReady,
   parseNativeChatPhotoPreview,
+  partitionNativeChooserFiles,
   partitionNativeHqFiles,
   shouldAcceptNativePreview,
   shouldQueueNativeChatSend,
+  type NativeChatPhotoHqReadyPayload,
   type NativeChatPhotoPreviewPayload,
 } from "@/lib/chatPhotoNativePreview";

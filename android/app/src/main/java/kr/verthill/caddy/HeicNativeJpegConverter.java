@@ -16,6 +16,7 @@ import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import androidx.core.content.FileProvider;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.util.Locale;
 import java.util.UUID;
@@ -726,6 +727,67 @@ final class HeicNativeJpegConverter {
             if (pfd != null) {
                 try {
                     pfd.close();
+                } catch (Exception ignored) {
+                    // Ignore close errors after a successful read.
+                }
+            }
+        }
+    }
+
+    static Uri writeJpegBytes(Context context, String outputName, byte[] jpeg) {
+        if (context == null || jpeg == null || jpeg.length <= 0) return null;
+        File outFile = createJpegFile(context, outputName);
+        if (outFile == null) return null;
+        try {
+            FileOutputStream output = new FileOutputStream(outFile);
+            try {
+                output.write(jpeg);
+                output.flush();
+            } finally {
+                output.close();
+            }
+            if (!outFile.isFile() || outFile.length() <= 0) {
+                deleteQuietly(outFile);
+                return null;
+            }
+            Uri provided = FileProvider.getUriForFile(
+                context,
+                context.getPackageName() + ".fileprovider",
+                outFile
+            );
+            context.grantUriPermission(
+                context.getPackageName(),
+                provided,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            );
+            return provided;
+        } catch (Exception ignored) {
+            deleteQuietly(outFile);
+            return null;
+        }
+    }
+
+    static byte[] readCacheJpeg(Context context, String outputName) {
+        if (context == null || outputName == null || !outputName.endsWith(".jpg")) return null;
+        File file = new File(new File(context.getCacheDir(), CACHE_DIR_NAME), outputName);
+        if (!file.isFile() || file.length() <= 0) return null;
+        FileInputStream input = null;
+        try {
+            byte[] jpeg = new byte[(int) file.length()];
+            input = new FileInputStream(file);
+            int offset = 0;
+            while (offset < jpeg.length) {
+                int read = input.read(jpeg, offset, jpeg.length - offset);
+                if (read < 0) return null;
+                offset += read;
+            }
+            return jpeg;
+        } catch (Exception ignored) {
+            return null;
+        } finally {
+            if (input != null) {
+                try {
+                    input.close();
                 } catch (Exception ignored) {
                     // Ignore close errors after a successful read.
                 }

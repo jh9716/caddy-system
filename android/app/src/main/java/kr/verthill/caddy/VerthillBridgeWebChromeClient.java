@@ -11,7 +11,6 @@ import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebView;
 import android.widget.Toast;
-import org.json.JSONObject;
 import androidx.activity.result.ActivityResult;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
@@ -101,79 +100,92 @@ public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
             String[] previewIds = new String[picked.length];
             int lastW = 0;
             int lastH = 0;
-            String lastMeta = "";
-            long previewWall = 0L;
-            long hqWall = 0L;
 
-            long previewStarted = SystemClock.elapsedRealtime();
+            long callbackStarted = SystemClock.elapsedRealtime();
             for (int i = 0; i < picked.length; i++) {
                 HeicNativePreview.Preview preview = HeicNativePreview.tryPreview(context, picked[i], sessionId);
                 if (preview != null) {
                     previewIds[i] = preview.previewId;
-                    emitPreview(activity, preview, sessionId);
+                    Uri written = HeicNativeJpegConverter.writeJpegBytes(
+                        context,
+                        preview.previewFileName(),
+                        preview.jpeg
+                    );
+                    resolved[i] = written != null ? written : picked[i];
                     lastW = preview.width;
                     lastH = preview.height;
+                } else {
+                    resolved[i] = picked[i];
                 }
             }
-            previewWall = SystemClock.elapsedRealtime() - previewStarted;
+            long callbackWall = SystemClock.elapsedRealtime() - callbackStarted;
+            deliver(activity, callback, resolved, null);
 
             long hqStarted = SystemClock.elapsedRealtime();
             for (int i = 0; i < picked.length; i++) {
-                String outputName = previewIds[i] != null ? previewIds[i] + ".jpg" : null;
+                if (previewIds[i] == null) continue;
                 HeicNativeJpegConverter.ConvertResult converted =
-                    HeicNativeJpegConverter.resolveForWebView(context, picked[i], outputName);
-                resolved[i] = converted.uri;
+                    HeicNativeJpegConverter.resolveForWebView(
+                        context,
+                        picked[i],
+                        previewIds[i] + ".jpg"
+                    );
                 if (converted.outputWidth > 0 && converted.outputHeight > 0) {
                     lastW = converted.outputWidth;
                     lastH = converted.outputHeight;
-                    String metaLabel = converted.meta.toastLabel();
-                    if (!metaLabel.isEmpty()) lastMeta = metaLabel;
+                    emitHqReady(activity, context, previewIds[i], sessionId, converted);
+                } else {
+                    emitHqFailed(activity, previewIds[i], sessionId);
                 }
             }
-            hqWall = SystemClock.elapsedRealtime() - hqStarted;
+            long hqWall = SystemClock.elapsedRealtime() - hqStarted;
 
-            List<String> debugToasts = new ArrayList<>();
             if (isDebugApk(context) && lastW > 0) {
+                List<String> debugToasts = new ArrayList<>();
                 debugToasts.add(
-                    "preview " +
-                    previewWall +
+                    "callback " +
+                    callbackWall +
                     "ms · HQ " +
                     hqWall +
-                    "ms" +
-                    (lastMeta.isEmpty() ? "" : " · " + lastMeta) +
-                    " · " +
+                    "ms · " +
                     lastW +
                     "x" +
                     lastH
                 );
+                showDebugToasts(activity, debugToasts);
             }
-            deliver(activity, callback, resolved, debugToasts);
         });
     }
 
-    private void emitPreview(Activity activity, HeicNativePreview.Preview preview, int sessionId) {
-        if (activity == null || preview == null) return;
+    private void emitHqReady(
+        Activity activity,
+        android.content.Context context,
+        String previewId,
+        int sessionId,
+        HeicNativeJpegConverter.ConvertResult converted
+    ) {
         WebView webView = bridge.getWebView();
-        if (webView == null) return;
-        try {
-            JSONObject detail = new JSONObject();
-            detail.put("previewId", preview.previewId);
-            detail.put("sessionId", String.valueOf(sessionId));
-            detail.put("mime", "image/jpeg");
-            detail.put("width", preview.width);
-            detail.put("height", preview.height);
-            detail.put("bytes", preview.bytes);
-            detail.put("dataUrl", preview.dataUrl);
-            final String js =
-                "window.dispatchEvent(new CustomEvent('" +
-                HeicNativePreview.EVENT +
-                "',{detail:" +
-                detail.toString() +
-                "}));";
-            activity.runOnUiThread(() -> webView.evaluateJavascript(js, null));
-        } catch (Exception ignored) {
-            // Preview is optional. HQ callback still proceeds.
+        if (activity == null || webView == null || previewId == null) return;
+        final String js = HeicNativePreview.hqReadyJs(
+            context,
+            previewId,
+            sessionId,
+            converted.outputWidth,
+            converted.outputHeight
+        );
+        if (js == null) {
+            emitHqFailed(activity, previewId, sessionId);
+            return;
         }
+        activity.runOnUiThread(() -> webView.evaluateJavascript(js, null));
+    }
+
+    private void emitHqFailed(Activity activity, String previewId, int sessionId) {
+        WebView webView = bridge.getWebView();
+        if (activity == null || webView == null || previewId == null) return;
+        final String js = HeicNativePreview.hqFailedJs(previewId, sessionId);
+        if (js == null) return;
+        activity.runOnUiThread(() -> webView.evaluateJavascript(js, null));
     }
 
     private static void deliver(
@@ -188,9 +200,15 @@ public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
         }
         activity.runOnUiThread(() -> {
             callback.onReceiveValue(uris);
-            if (!isDebugApk(activity) || debugToasts == null || debugToasts.isEmpty()) {
-                return;
-            }
+            showDebugToasts(activity, debugToasts);
+        });
+    }
+
+    private static void showDebugToasts(Activity activity, List<String> debugToasts) {
+        if (activity == null || !isDebugApk(activity) || debugToasts == null || debugToasts.isEmpty()) {
+            return;
+        }
+        activity.runOnUiThread(() -> {
             StringBuilder message = new StringBuilder();
             for (int i = 0; i < debugToasts.size(); i++) {
                 if (i > 0) message.append('\n');

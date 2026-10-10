@@ -7,16 +7,16 @@ import android.os.Build;
 import android.os.SystemClock;
 import android.util.Base64;
 import android.util.Size;
-import java.io.ByteArrayOutputStream;
 import java.util.UUID;
 
 /**
  * Instant HEIC preview only. Never the upload JPEG.
- * Uses provider loadThumbnail (~384x512) and a JPEG data URL for the WebView.
+ * Uses provider loadThumbnail (~384x512) and a cache JPEG for the chooser.
  */
 final class HeicNativePreview {
 
     static final String EVENT = "verthill:chat-photo-native-preview";
+    static final String HQ_EVENT = "verthill:chat-photo-native-hq-ready";
     static final int PREVIEW_EDGE = 512;
     static final int PREVIEW_JPEG_QUALITY = 70;
 
@@ -24,19 +24,23 @@ final class HeicNativePreview {
 
     static final class Preview {
         final String previewId;
-        final String dataUrl;
+        final byte[] jpeg;
         final int width;
         final int height;
         final int bytes;
         final long previewMs;
 
-        Preview(String previewId, String dataUrl, int width, int height, int bytes, long previewMs) {
+        Preview(String previewId, byte[] jpeg, int width, int height, int bytes, long previewMs) {
             this.previewId = previewId;
-            this.dataUrl = dataUrl;
+            this.jpeg = jpeg;
             this.width = width;
             this.height = height;
             this.bytes = bytes;
             this.previewMs = previewMs;
+        }
+
+        String previewFileName() {
+            return previewId + "-preview.jpg";
         }
     }
 
@@ -64,17 +68,15 @@ final class HeicNativePreview {
             if (bitmap == null || bitmap.getWidth() < 1 || bitmap.getHeight() < 1) {
                 return null;
             }
-            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
             if (!bitmap.compress(Bitmap.CompressFormat.JPEG, PREVIEW_JPEG_QUALITY, output)) {
                 return null;
             }
             byte[] jpeg = output.toByteArray();
             if (jpeg.length <= 0) return null;
-            String dataUrl =
-                "data:image/jpeg;base64," + Base64.encodeToString(jpeg, Base64.NO_WRAP);
             return new Preview(
                 newPreviewId(sessionId),
-                dataUrl,
+                jpeg,
                 bitmap.getWidth(),
                 bitmap.getHeight(),
                 jpeg.length,
@@ -87,5 +89,54 @@ final class HeicNativePreview {
         }
     }
 
-}
+    static String hqReadyJs(
+        Context context,
+        String previewId,
+        int sessionId,
+        int width,
+        int height
+    ) {
+        byte[] jpeg = HeicNativeJpegConverter.readCacheJpeg(context, previewId + ".jpg");
+        if (jpeg == null || jpeg.length <= 0) return null;
+        org.json.JSONObject detail = new org.json.JSONObject();
+        try {
+            detail.put("previewId", previewId);
+            detail.put("sessionId", String.valueOf(sessionId));
+            detail.put("mime", "image/jpeg");
+            detail.put("width", width);
+            detail.put("height", height);
+            detail.put("bytes", jpeg.length);
+            detail.put(
+                "dataUrl",
+                "data:image/jpeg;base64," + Base64.encodeToString(jpeg, Base64.NO_WRAP)
+            );
+        } catch (Exception ignored) {
+            return null;
+        }
+        return (
+            "window.dispatchEvent(new CustomEvent('" +
+            HQ_EVENT +
+            "',{detail:" +
+            detail.toString() +
+            "}));"
+        );
+    }
 
+    static String hqFailedJs(String previewId, int sessionId) {
+        org.json.JSONObject detail = new org.json.JSONObject();
+        try {
+            detail.put("previewId", previewId);
+            detail.put("sessionId", String.valueOf(sessionId));
+            detail.put("error", "hq_failed");
+        } catch (Exception ignored) {
+            return null;
+        }
+        return (
+            "window.dispatchEvent(new CustomEvent('" +
+            HQ_EVENT +
+            "',{detail:" +
+            detail.toString() +
+            "}));"
+        );
+    }
+}
