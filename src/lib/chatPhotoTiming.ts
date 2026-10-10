@@ -51,6 +51,19 @@ export type ChatPhotoTimingBag = {
   photoSourceExitAt?: number;
   prepareWrapperExitAt?: number;
   pendingPrepareEndAt?: number;
+  sourceAcceptableEndAt?: number;
+  sourceFastPathEndAt?: number;
+  sourceRunResolveEndAt?: number;
+  sourceHeicEndAt?: number;
+  sourceKindEndAt?: number;
+  sourceNoteScopeEndAt?: number;
+  sourceRunInvokeAt?: number;
+  fileTypeReads?: number;
+  fileNameReads?: number;
+  fileSizeReads?: number;
+  fileTypeMs?: number;
+  fileNameMs?: number;
+  fileSizeMs?: number;
   prepareHotpath?: ChatPhotoHotpathSummary;
   finalizeHotpath?: ChatPhotoHotpathSummary;
   storageBackend?: "r2" | "blob";
@@ -122,6 +135,20 @@ export type ChatPhotoDebugSample = {
   adaptiveExitToSourceExitMs: number | null;
   sourceExitToWrapperExitMs: number | null;
   wrapperExitToPendingEndMs: number | null;
+  sourceEnterToAcceptableMs: number | null;
+  acceptableToFastPathMs: number | null;
+  fastPathToRunResolveMs: number | null;
+  runResolveToHeicMs: number | null;
+  heicToKindMs: number | null;
+  kindToNoteScopeMs: number | null;
+  noteScopeToRunInvokeMs: number | null;
+  runInvokeToAdaptiveBlobMs: number | null;
+  fileTypeReads: number | null;
+  fileNameReads: number | null;
+  fileSizeReads: number | null;
+  fileTypeMs: number | null;
+  fileNameMs: number | null;
+  fileSizeMs: number | null;
   unaccountedPrepareMs: number | null;
   selectedToUploadStartMs: number | null;
   prepareApiMs: number | null;
@@ -260,6 +287,19 @@ export type ChatPhotoPrepareScope = {
   photoSourceExitAt?: number;
   prepareWrapperExitAt?: number;
   pendingPrepareEndAt?: number;
+  sourceAcceptableEndAt?: number;
+  sourceFastPathEndAt?: number;
+  sourceRunResolveEndAt?: number;
+  sourceHeicEndAt?: number;
+  sourceKindEndAt?: number;
+  sourceNoteScopeEndAt?: number;
+  sourceRunInvokeAt?: number;
+  fileTypeReads?: number;
+  fileNameReads?: number;
+  fileSizeReads?: number;
+  fileTypeMs?: number;
+  fileNameMs?: number;
+  fileSizeMs?: number;
 };
 
 const PREPARE_SCOPE_BAG_KEYS = [
@@ -299,6 +339,19 @@ const PREPARE_SCOPE_BAG_KEYS = [
   "photoSourceExitAt",
   "prepareWrapperExitAt",
   "pendingPrepareEndAt",
+  "sourceAcceptableEndAt",
+  "sourceFastPathEndAt",
+  "sourceRunResolveEndAt",
+  "sourceHeicEndAt",
+  "sourceKindEndAt",
+  "sourceNoteScopeEndAt",
+  "sourceRunInvokeAt",
+  "fileTypeReads",
+  "fileNameReads",
+  "fileSizeReads",
+  "fileTypeMs",
+  "fileNameMs",
+  "fileSizeMs",
 ] as const;
 
 let prepareTimingSeq = 0;
@@ -394,6 +447,19 @@ function applyPrepareScopeToBag(row: ChatPhotoPrepareScope, bag: ChatPhotoTiming
   if (row.photoSourceExitAt != null) bag.photoSourceExitAt = row.photoSourceExitAt;
   if (row.prepareWrapperExitAt != null) bag.prepareWrapperExitAt = row.prepareWrapperExitAt;
   if (row.pendingPrepareEndAt != null) bag.pendingPrepareEndAt = row.pendingPrepareEndAt;
+  if (row.sourceAcceptableEndAt != null) bag.sourceAcceptableEndAt = row.sourceAcceptableEndAt;
+  if (row.sourceFastPathEndAt != null) bag.sourceFastPathEndAt = row.sourceFastPathEndAt;
+  if (row.sourceRunResolveEndAt != null) bag.sourceRunResolveEndAt = row.sourceRunResolveEndAt;
+  if (row.sourceHeicEndAt != null) bag.sourceHeicEndAt = row.sourceHeicEndAt;
+  if (row.sourceKindEndAt != null) bag.sourceKindEndAt = row.sourceKindEndAt;
+  if (row.sourceNoteScopeEndAt != null) bag.sourceNoteScopeEndAt = row.sourceNoteScopeEndAt;
+  if (row.sourceRunInvokeAt != null) bag.sourceRunInvokeAt = row.sourceRunInvokeAt;
+  if (row.fileTypeReads != null) bag.fileTypeReads = row.fileTypeReads;
+  if (row.fileNameReads != null) bag.fileNameReads = row.fileNameReads;
+  if (row.fileSizeReads != null) bag.fileSizeReads = row.fileSizeReads;
+  if (row.fileTypeMs != null) bag.fileTypeMs = row.fileTypeMs;
+  if (row.fileNameMs != null) bag.fileNameMs = row.fileNameMs;
+  if (row.fileSizeMs != null) bag.fileSizeMs = row.fileSizeMs;
 }
 
 export function noteChatPhotoBoundary(
@@ -403,6 +469,87 @@ export function noteChatPhotoBoundary(
 ): number {
   noteChatPhotoPrepareScope(runId, { [field]: at });
   return at;
+}
+
+export type ChatPhotoSourceSplitField =
+  | "sourceAcceptableEndAt"
+  | "sourceFastPathEndAt"
+  | "sourceRunResolveEndAt"
+  | "sourceHeicEndAt"
+  | "sourceKindEndAt"
+  | "sourceNoteScopeEndAt"
+  | "sourceRunInvokeAt";
+
+export type ChatPhotoFileAccessWatch<T extends object = File> = {
+  file: T;
+  typeReads: number;
+  nameReads: number;
+  sizeReads: number;
+  typeMs: number;
+  nameMs: number;
+  sizeMs: number;
+};
+
+/** Counts/times File.type|name|size only. Never stores the values. */
+export function watchChatPhotoFileAccess<T extends object>(file: T): ChatPhotoFileAccessWatch<T> {
+  const watch: ChatPhotoFileAccessWatch<T> = {
+    file,
+    typeReads: 0,
+    nameReads: 0,
+    sizeReads: 0,
+    typeMs: 0,
+    nameMs: 0,
+    sizeMs: 0,
+  };
+  watch.file = new Proxy(file, {
+    get(target, prop, receiver) {
+      if (prop === "type" || prop === "name" || prop === "size") {
+        const started = chatPhotoNow();
+        const value = Reflect.get(target, prop, target);
+        const ms = Math.max(0, chatPhotoNow() - started);
+        if (prop === "type") {
+          watch.typeReads += 1;
+          watch.typeMs += ms;
+        } else if (prop === "name") {
+          watch.nameReads += 1;
+          watch.nameMs += ms;
+        } else {
+          watch.sizeReads += 1;
+          watch.sizeMs += ms;
+        }
+        return value;
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+    },
+  }) as T;
+  return watch;
+}
+
+export function noteChatPhotoSourceSplit(
+  runId: string | null | undefined,
+  field: ChatPhotoSourceSplitField,
+  at = chatPhotoNow()
+): number {
+  noteChatPhotoPrepareScope(runId, { [field]: at });
+  return at;
+}
+
+export function noteChatPhotoFileAccess(
+  runId: string | null | undefined,
+  watch: Pick<
+    ChatPhotoFileAccessWatch,
+    "typeReads" | "nameReads" | "sizeReads" | "typeMs" | "nameMs" | "sizeMs"
+  >
+): void {
+  noteChatPhotoPrepareScope(runId, {
+    fileTypeReads: watch.typeReads,
+    fileNameReads: watch.nameReads,
+    fileSizeReads: watch.sizeReads,
+    fileTypeMs: watch.typeMs,
+    fileNameMs: watch.nameMs,
+    fileSizeMs: watch.sizeMs,
+  });
 }
 
 export function commitChatPhotoPrepareTiming(runId: string | null | undefined): ChatPhotoPrepareScope | null {
@@ -676,6 +823,20 @@ export function buildChatPhotoDebugSample(
     adaptiveExitToSourceExitMs: stampDelta(bag?.adaptiveExitAt, bag?.photoSourceExitAt),
     sourceExitToWrapperExitMs: stampDelta(bag?.photoSourceExitAt, bag?.prepareWrapperExitAt),
     wrapperExitToPendingEndMs: stampDelta(bag?.prepareWrapperExitAt, bag?.pendingPrepareEndAt),
+    sourceEnterToAcceptableMs: stampDelta(bag?.photoSourceEnterAt, bag?.sourceAcceptableEndAt),
+    acceptableToFastPathMs: stampDelta(bag?.sourceAcceptableEndAt, bag?.sourceFastPathEndAt),
+    fastPathToRunResolveMs: stampDelta(bag?.sourceFastPathEndAt, bag?.sourceRunResolveEndAt),
+    runResolveToHeicMs: stampDelta(bag?.sourceRunResolveEndAt, bag?.sourceHeicEndAt),
+    heicToKindMs: stampDelta(bag?.sourceHeicEndAt, bag?.sourceKindEndAt),
+    kindToNoteScopeMs: stampDelta(bag?.sourceKindEndAt, bag?.sourceNoteScopeEndAt),
+    noteScopeToRunInvokeMs: stampDelta(bag?.sourceNoteScopeEndAt, bag?.sourceRunInvokeAt),
+    runInvokeToAdaptiveBlobMs: stampDelta(bag?.sourceRunInvokeAt, bag?.adaptiveBlobEnterAt),
+    fileTypeReads: bag?.fileTypeReads ?? null,
+    fileNameReads: bag?.fileNameReads ?? null,
+    fileSizeReads: bag?.fileSizeReads ?? null,
+    fileTypeMs: bag?.fileTypeMs != null ? Math.round(bag.fileTypeMs) : null,
+    fileNameMs: bag?.fileNameMs != null ? Math.round(bag.fileNameMs) : null,
+    fileSizeMs: bag?.fileSizeMs != null ? Math.round(bag.fileSizeMs) : null,
     selectedToUploadStartMs: summary.select_to_put_start_ms,
     prepareApiMs: latestChatPhotoMark("prepare_api", bag),
     storageBackend: bag?.storageBackend ?? null,
@@ -796,6 +957,19 @@ export function resetChatPhotoTiming(): void {
   delete bag.photoSourceExitAt;
   delete bag.prepareWrapperExitAt;
   delete bag.pendingPrepareEndAt;
+  delete bag.sourceAcceptableEndAt;
+  delete bag.sourceFastPathEndAt;
+  delete bag.sourceRunResolveEndAt;
+  delete bag.sourceHeicEndAt;
+  delete bag.sourceKindEndAt;
+  delete bag.sourceNoteScopeEndAt;
+  delete bag.sourceRunInvokeAt;
+  delete bag.fileTypeReads;
+  delete bag.fileNameReads;
+  delete bag.fileSizeReads;
+  delete bag.fileTypeMs;
+  delete bag.fileNameMs;
+  delete bag.fileSizeMs;
   prepareTimingRuns.clear();
   delete bag.prepareHotpath;
   delete bag.finalizeHotpath;
