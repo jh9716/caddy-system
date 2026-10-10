@@ -210,6 +210,21 @@ assert(
   mainActivity.includes("registerPlugin(KakaoNativeAuthPlugin.class)"),
   "KakaoNativeAuth plugin registered"
 );
+assert(
+  mainActivity.indexOf("registerPlugin(KakaoNativeAuthPlugin.class)") <
+    mainActivity.indexOf("super.onCreate(savedInstanceState)"),
+  "KakaoNativeAuth still registers before BridgeActivity onCreate"
+);
+assert(
+  mainActivity.includes("new VerthillBridgeWebChromeClient(bridge)"),
+  "MainActivity installs HEIC file-chooser chrome client after Bridge create"
+);
+assert(
+  mainActivity.includes("super.onCreate(savedInstanceState)") &&
+    mainActivity.indexOf("super.onCreate(savedInstanceState)") <
+      mainActivity.indexOf("VerthillBridgeWebChromeClient"),
+  "chrome client is attached only after super.onCreate"
+);
 const kakaoPlugin = read(
   "android/app/src/main/java/kr/verthill/caddy/kakao/KakaoNativeAuthPlugin.java"
 );
@@ -267,6 +282,11 @@ assert(
   "VerthillApp calls KakaoSdk.init with SDK logging off"
 );
 assert(!manifest.includes("CAMERA"), "no CAMERA permission");
+assert(!manifest.includes("READ_MEDIA_IMAGES"), "no READ_MEDIA_IMAGES permission");
+assert(
+  !manifest.includes("READ_EXTERNAL_STORAGE"),
+  "no READ_EXTERNAL_STORAGE permission"
+);
 assert(
   manifest.includes("POST_NOTIFICATIONS"),
   "POST_NOTIFICATIONS for Android 13+ FCM"
@@ -454,6 +474,224 @@ assert(
   }) === "사용할 수 없는 계정입니다.",
   "mapped native-session Korean errors still pass through"
 );
+
+console.log("== Android native HEIC file chooser ==");
+const chromeClient = read(
+  "android/app/src/main/java/kr/verthill/caddy/VerthillBridgeWebChromeClient.java"
+);
+const heicConverter = read(
+  "android/app/src/main/java/kr/verthill/caddy/HeicNativeJpegConverter.java"
+);
+const chatClient = read("src/app/chat/ChatClient.tsx");
+const noticeForm = read("src/app/notice/new/ui/NewNoticeForm.tsx");
+assert(
+  chromeClient.includes("extends BridgeWebChromeClient"),
+  "chrome client subclasses Capacitor BridgeWebChromeClient"
+);
+assert(
+  chromeClient.includes("super.onShowFileChooser("),
+  "non-image / capture choosers stay on Capacitor"
+);
+assert(
+  chromeClient.includes("isImageOnlyAccept") &&
+    chromeClient.includes("EXTRA_ALLOW_MULTIPLE") &&
+    chromeClient.includes("getClipData()"),
+  "image chooser keeps multiple + ClipData"
+);
+assert(
+  chromeClient.includes("onReceiveValue(null)"),
+  "chooser cancel delivers null to WebView"
+);
+assert(
+  !chromeClient.includes("override") ||
+    chromeClient.includes("onShowFileChooser"),
+  "file chooser is the chrome override"
+);
+assert(
+  !chromeClient.includes("onJsAlert") &&
+    !chromeClient.includes("onPermissionRequest") &&
+    !chromeClient.includes("onShowCustomView") &&
+    !chromeClient.includes("onConsoleMessage"),
+  "dialogs / permission / fullscreen / console stay on superclass"
+);
+const heicPreview = read(
+  "android/app/src/main/java/kr/verthill/caddy/HeicNativePreview.java"
+);
+assert(
+  !heicConverter.includes("loadThumbnail(") &&
+    !heicConverter.includes("PATH_THUMBNAIL") &&
+    !heicConverter.includes("tryLoadThumbnail"),
+  "provider thumbnail API is not used for the upload JPEG"
+);
+assert(
+  heicPreview.includes("loadThumbnail(") &&
+    heicPreview.includes("EVENT = \"verthill:chat-photo-native-preview\"") &&
+    heicPreview.includes("PREVIEW_EDGE = 512") &&
+    heicPreview.includes("data:image/jpeg;base64,") &&
+    heicPreview.includes("nvp-") &&
+    !heicPreview.includes("FileProvider") &&
+    !heicPreview.includes("resolveForWebView"),
+  "loadThumbnail is preview-only and never the upload JPEG"
+);
+assert(
+  chromeClient.includes("HeicNativePreview.tryPreview") &&
+    chromeClient.includes("emitPreview") &&
+    chromeClient.indexOf("emitPreview") < chromeClient.indexOf("resolveForWebView") &&
+    chromeClient.includes("previewIds[i] + \".jpg\"") &&
+    chromeClient.includes("nativePreviewSession"),
+  "preview event is emitted before the HQ file-chooser callback"
+);
+assert(
+  heicConverter.includes("BitmapFactory.decodeFileDescriptor") &&
+    heicConverter.includes("inJustDecodeBounds") &&
+    heicConverter.includes("inSampleSize") &&
+    heicConverter.includes("powerOfTwoSampleSize") &&
+    heicConverter.includes("tryBitmapFactory") &&
+    heicConverter.includes("PATH_BITMAP"),
+  "BitmapFactory FileDescriptor + power-of-two inSampleSize is the first HEIC path"
+);
+assert(
+  heicConverter.includes("ImageDecoder") &&
+    heicConverter.includes("setTargetSampleSize") &&
+    !heicConverter.includes("setTargetSize") &&
+    heicConverter.includes("tryImageDecoderSampled") &&
+    heicConverter.includes("PATH_DECODER_SAMPLED") &&
+    heicConverter.includes("LONG_EDGE = 1600") &&
+    heicConverter.includes("JPEG_QUALITY = 82"),
+  "BitmapFactory failure falls back to ImageDecoder setTargetSampleSize"
+);
+assert(
+  heicConverter.includes("SDK_INT < 28") &&
+    heicConverter.includes("PATH_WEB") &&
+    heicConverter.includes("tryBitmapFactory(context, uri, outputName)") &&
+    heicConverter.includes("tryImageDecoderSampled(context, uri, outputName)") &&
+    heicConverter.includes("uri,\n            PATH_WEB"),
+  "both native paths failing returns original HEIC URI for web heic-to"
+);
+assert(
+  heicConverter.includes("ExifInterface") &&
+    heicConverter.includes("applyExifOrientation") &&
+    heicConverter.includes("ORIENTATION_ROTATE_90") &&
+    heicConverter.includes("ORIENTATION_ROTATE_270"),
+  "BitmapFactory path applies EXIF orientation"
+);
+assert(
+  heicConverter.includes("downscaleIfNeeded") &&
+    heicConverter.includes("Never upscale") &&
+    heicConverter.includes("Math.max(width, height) <= longEdge"),
+  "decoded bitmaps are never upscaled; only scaled down to 1600"
+);
+assert(
+  heicConverter.includes('UUID.randomUUID().toString() + ".jpg"'),
+  "converted file keeps .jpg so JS heic-to does not run"
+);
+assert(
+  heicConverter.includes("MediaStore.MediaColumns.WIDTH") &&
+    heicConverter.includes("MediaStore.MediaColumns.HEIGHT") &&
+    heicConverter.includes("MediaStore.Images.Media.ORIENTATION") &&
+    heicConverter.includes("queryMediaMeta") &&
+    heicConverter.includes("isTrustedOrientationDegrees") &&
+    heicConverter.includes("exifFromOrientationDegrees") &&
+    heicConverter.includes("if (!meta.hasSize())") &&
+    heicConverter.includes("inJustDecodeBounds") &&
+    heicConverter.includes("readExifOrientation") &&
+    heicConverter.includes("metadataQueryMs") &&
+    heicConverter.includes("boundsFallbackMs") &&
+    heicConverter.includes("orientationFallbackMs"),
+  "MediaStore WIDTH/HEIGHT/ORIENTATION skip bounds/EXIF when valid"
+);
+assert(
+  heicConverter.includes("SOURCE_QUERY") &&
+    heicConverter.includes("SOURCE_FALLBACK") &&
+    heicConverter.includes("meta query") &&
+    heicConverter.includes("meta fallback") &&
+    chromeClient.includes("converted.meta.toastLabel()"),
+  "debug toast distinguishes meta query vs meta fallback"
+);
+assert(
+  chromeClient.includes("FLAG_DEBUGGABLE") &&
+    chromeClient.includes("isDebugApk") &&
+    chromeClient.includes("Toast.makeText") &&
+    chromeClient.includes("\"preview \"") &&
+    chromeClient.includes("\"ms · HQ \"") &&
+    heicConverter.includes("HEIC bitmap") &&
+    heicConverter.includes("HEIC decoder-sampled") &&
+    heicConverter.includes("HEIC native FAIL → web") &&
+    heicConverter.includes("boundsMs") &&
+    heicConverter.includes("decodeMs") &&
+    heicConverter.includes("rotateMs") &&
+    heicConverter.includes("scaleMs") &&
+    heicConverter.includes("jpegMs") &&
+    heicConverter.includes("totalNativeMs"),
+  "debug APK toasts preview + HQ timings without URIs"
+);
+assert(
+  !heicConverter.includes("uri.toString()") &&
+    !chromeClient.includes("uri.toString()") &&
+    !heicPreview.includes("uri.toString()"),
+  "debug toast uses timing/size text, not personal URI/path"
+);
+assert(
+  heicConverter.includes("PATH_PASSTHROUGH") &&
+    heicConverter.includes("isHeicLike(mimeOf(context, uri), displayNameOf(context, uri))") &&
+    heicConverter.includes("return passthrough(uri)"),
+  "JPEG/PNG/WEBP stay on the original picker URI"
+);
+assert(
+  chromeClient.includes("super.onShowFileChooser(") &&
+    heicConverter.includes("isImageOnlyAccept") &&
+    heicConverter.includes('token.startsWith("image/")') &&
+    !heicConverter.includes(".csv") &&
+    !heicConverter.includes(".xlsx") &&
+    !heicConverter.includes("spreadsheet"),
+  "CSV/XLSX choosers stay on Capacitor and are not HEIC-converted"
+);
+assert(
+  heicConverter.includes("heic-jpeg") &&
+    heicConverter.includes("FileProvider.getUriForFile") &&
+    heicConverter.includes("FLAG_GRANT_READ_URI_PERMISSION"),
+  "converted JPEG is a cache FileProvider content URI"
+);
+assert(
+  heicConverter.includes("cleanupStale") && heicConverter.includes("STALE_AFTER_MS"),
+  "stale heic-jpeg cache is cleaned"
+);
+assert(
+  !heicConverter.includes("Base64") &&
+    !chromeClient.includes("Base64") &&
+    !heicConverter.includes("byte[]") &&
+    !chromeClient.includes("JSObject") &&
+    heicPreview.includes("Base64.encodeToString"),
+  "no original HEIC/base64 on the HQ path; preview uses a JPEG data URL only"
+);
+assert(
+  chatClient.includes("NATIVE_CHAT_PHOTO_PREVIEW_EVENT") &&
+    chatClient.includes("appendNativePreviewPhoto") &&
+    chatClient.includes("applyNativeHqFile") &&
+    chatClient.includes("shouldQueueNativeChatSend") &&
+    chatClient.includes("abandonedNativePreviewIdsRef") &&
+    chatClient.includes("준비 중") &&
+    read("src/lib/chatPhotoPick.ts").includes("item.nativePreview === true && Boolean(item.previewUrl)") &&
+    read("src/lib/chatPhotoPick.ts").includes("item.nativePreview !== true") &&
+    read("src/lib/chatPhotoNativePreview.ts").includes("data:image/jpeg;base64,"),
+  "web composer shows native preview, waits for HQ, and never uploads the thumbnail"
+);
+assert(
+  filePaths.includes('<cache-path name="my_cache_images" path="." />') &&
+    !filePaths.includes("heic-jpeg"),
+  "file_paths.xml is unchanged"
+);
+assert(chatClient.includes('type="file"'), "chat still uses input[type=file]");
+assert(photoForm.includes('type="file"'), "course-report still uses input[type=file]");
+assert(noticeForm.includes('type="file"'), "notice still uses input[type=file]");
+assert(
+  chatClient.includes("decodeCourseReportPhotoSource") ||
+    read("src/lib/chatPhotoFastPath.ts").includes("decodeCourseReportPhotoSource") ||
+    read("src/lib/chatPhotoAdaptive.ts").includes("decodeCourseReportPhotoSource"),
+  "JS heic-to fallback remains"
+);
+assert(appGradle.includes("versionCode 13"), "versionCode stays 13");
+assert(appGradle.includes('versionName "1.0.8"'), "versionName stays 1.0.8");
 
 if (failed) {
   console.error(`\nFAILED ${failed} / ${passed + failed}`);

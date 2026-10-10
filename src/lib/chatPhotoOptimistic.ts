@@ -1,4 +1,4 @@
-import type { ChatPendingPhoto } from "@/lib/chatPhotoPick";
+import { revokeChatPhotoPreviewUrl, type ChatPendingPhoto } from "@/lib/chatPhotoPick";
 
 export type OptimisticChatComposer = {
   draft: string;
@@ -19,7 +19,11 @@ export function usableOptimisticChatPhotos(photos: readonly ChatPendingPhoto[]):
 }
 
 export function shouldStartOptimisticChatSend(body: string, photos: readonly ChatPendingPhoto[]): boolean {
-  return Boolean(body.trim() || usableOptimisticChatPhotos(photos).length);
+  return Boolean(
+    body.trim() ||
+      usableOptimisticChatPhotos(photos).length ||
+      photos.some((item) => item.nativePreview === true && item.status === "preparing")
+  );
 }
 
 export function clearedComposerAfterOptimisticSend(): OptimisticChatComposer {
@@ -41,10 +45,7 @@ export function buildOptimisticOutgoingLine(
 
 export function revokeChatPhotoPreviewUrls(photos: readonly { previewUrl?: string }[]): void {
   for (const item of photos) {
-    const url = item.previewUrl || "";
-    if (url.startsWith("blob:") && typeof URL.revokeObjectURL === "function") {
-      URL.revokeObjectURL(url);
-    }
+    revokeChatPhotoPreviewUrl(item.previewUrl);
   }
 }
 
