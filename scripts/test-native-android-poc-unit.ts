@@ -210,6 +210,21 @@ assert(
   mainActivity.includes("registerPlugin(KakaoNativeAuthPlugin.class)"),
   "KakaoNativeAuth plugin registered"
 );
+assert(
+  mainActivity.indexOf("registerPlugin(KakaoNativeAuthPlugin.class)") <
+    mainActivity.indexOf("super.onCreate(savedInstanceState)"),
+  "KakaoNativeAuth still registers before BridgeActivity onCreate"
+);
+assert(
+  mainActivity.includes("new VerthillBridgeWebChromeClient(bridge)"),
+  "MainActivity installs HEIC file-chooser chrome client after Bridge create"
+);
+assert(
+  mainActivity.includes("super.onCreate(savedInstanceState)") &&
+    mainActivity.indexOf("super.onCreate(savedInstanceState)") <
+      mainActivity.indexOf("VerthillBridgeWebChromeClient"),
+  "chrome client is attached only after super.onCreate"
+);
 const kakaoPlugin = read(
   "android/app/src/main/java/kr/verthill/caddy/kakao/KakaoNativeAuthPlugin.java"
 );
@@ -267,6 +282,11 @@ assert(
   "VerthillApp calls KakaoSdk.init with SDK logging off"
 );
 assert(!manifest.includes("CAMERA"), "no CAMERA permission");
+assert(!manifest.includes("READ_MEDIA_IMAGES"), "no READ_MEDIA_IMAGES permission");
+assert(
+  !manifest.includes("READ_EXTERNAL_STORAGE"),
+  "no READ_EXTERNAL_STORAGE permission"
+);
 assert(
   manifest.includes("POST_NOTIFICATIONS"),
   "POST_NOTIFICATIONS for Android 13+ FCM"
@@ -454,6 +474,92 @@ assert(
   }) === "사용할 수 없는 계정입니다.",
   "mapped native-session Korean errors still pass through"
 );
+
+console.log("== Android native HEIC file chooser ==");
+const chromeClient = read(
+  "android/app/src/main/java/kr/verthill/caddy/VerthillBridgeWebChromeClient.java"
+);
+const heicConverter = read(
+  "android/app/src/main/java/kr/verthill/caddy/HeicNativeJpegConverter.java"
+);
+const chatClient = read("src/app/chat/ChatClient.tsx");
+const noticeForm = read("src/app/notice/new/ui/NewNoticeForm.tsx");
+assert(
+  chromeClient.includes("extends BridgeWebChromeClient"),
+  "chrome client subclasses Capacitor BridgeWebChromeClient"
+);
+assert(
+  chromeClient.includes("super.onShowFileChooser("),
+  "non-image / capture choosers stay on Capacitor"
+);
+assert(
+  chromeClient.includes("isImageOnlyAccept") &&
+    chromeClient.includes("EXTRA_ALLOW_MULTIPLE") &&
+    chromeClient.includes("getClipData()"),
+  "image chooser keeps multiple + ClipData"
+);
+assert(
+  chromeClient.includes("onReceiveValue(null)"),
+  "chooser cancel delivers null to WebView"
+);
+assert(
+  !chromeClient.includes("override") ||
+    chromeClient.includes("onShowFileChooser"),
+  "file chooser is the chrome override"
+);
+assert(
+  !chromeClient.includes("onJsAlert") &&
+    !chromeClient.includes("onPermissionRequest") &&
+    !chromeClient.includes("onShowCustomView") &&
+    !chromeClient.includes("onConsoleMessage"),
+  "dialogs / permission / fullscreen / console stay on superclass"
+);
+assert(
+  heicConverter.includes("ImageDecoder") &&
+    heicConverter.includes("LONG_EDGE = 1600") &&
+    heicConverter.includes("JPEG_QUALITY = 82") &&
+    heicConverter.includes("ALLOCATOR_SOFTWARE") &&
+    heicConverter.includes("setTargetSize"),
+  "API 28+ ImageDecoder resizes HEIC to 1600 JPEG quality 82"
+);
+assert(
+  heicConverter.includes("SDK_INT < 28") &&
+    heicConverter.includes("return converted != null ? converted : uri"),
+  "API 24–27 or convert failure returns original HEIC URI"
+);
+assert(
+  heicConverter.includes("heic-jpeg") &&
+    heicConverter.includes("FileProvider.getUriForFile") &&
+    heicConverter.includes("FLAG_GRANT_READ_URI_PERMISSION"),
+  "converted JPEG is a cache FileProvider content URI"
+);
+assert(
+  heicConverter.includes("cleanupStale") && heicConverter.includes("STALE_AFTER_MS"),
+  "stale heic-jpeg cache is cleaned"
+);
+assert(
+  !heicConverter.includes("Base64") &&
+    !chromeClient.includes("Base64") &&
+    !heicConverter.includes("byte[]") &&
+    !chromeClient.includes("JSObject"),
+  "no base64 / JS bridge byte payload"
+);
+assert(
+  filePaths.includes('<cache-path name="my_cache_images" path="." />') &&
+    !filePaths.includes("heic-jpeg"),
+  "file_paths.xml is unchanged"
+);
+assert(chatClient.includes('type="file"'), "chat still uses input[type=file]");
+assert(photoForm.includes('type="file"'), "course-report still uses input[type=file]");
+assert(noticeForm.includes('type="file"'), "notice still uses input[type=file]");
+assert(
+  chatClient.includes("decodeCourseReportPhotoSource") ||
+    read("src/lib/chatPhotoFastPath.ts").includes("decodeCourseReportPhotoSource") ||
+    read("src/lib/chatPhotoAdaptive.ts").includes("decodeCourseReportPhotoSource"),
+  "JS heic-to fallback remains"
+);
+assert(appGradle.includes("versionCode 13"), "versionCode stays 13");
+assert(appGradle.includes('versionName "1.0.8"'), "versionName stays 1.0.8");
 
 if (failed) {
   console.error(`\nFAILED ${failed} / ${passed + failed}`);
