@@ -157,7 +157,7 @@ import {
   readImageSizeFromHeader,
   readJpegExifOrientation,
 } from "../src/lib/imageHeaderSize";
-import { isHeicLikeFile } from "../src/lib/courseReportPhotoClient";
+import { isHeicLikeFile, setHeicConverterForTests } from "../src/lib/courseReportPhotoClient";
 import { CHAT_PHOTO_MAX_BYTES, CHAT_PHOTO_PASSTHROUGH_MAX_BYTES } from "../src/lib/chatPhotoConstants";
 import {
   abandonChatPhotoPreupload,
@@ -1807,7 +1807,7 @@ section("prepare boundary: stale bag + same File runId");
   );
 }
 
-section("source split: JPEG getter counts + unused one-read helper");
+section("source split: JPEG getter counts + one-read helper");
 {
   enableChatPhotoDebugTiming(true);
   function spin(ms: number) {
@@ -1828,9 +1828,9 @@ section("source split: JPEG getter counts + unused one-read helper");
   const sample = buildChatPhotoDebugSample();
   assert(sample.timingRunId === runId && sample.timingKey === "cph-1", "source split stays on the same public run");
   assert(seen === heavy, "JPEG run() still receives the original File");
-  assert(sample.fileTypeReads === 3, "heavy JPEG reads file.type 3 times (acceptable/heic/kind)");
-  assert(sample.fileNameReads === 3, "heavy JPEG reads file.name 3 times (acceptable/heic/kind)");
-  assert(sample.fileSizeReads === 5, "heavy JPEG reads file.size 5 times (acceptable×2 + fastPath×3)");
+  assert(sample.fileTypeReads === 1, "heavy JPEG snapshots file.type once");
+  assert(sample.fileNameReads === 1, "heavy JPEG snapshots file.name once");
+  assert(sample.fileSizeReads === 1, "heavy JPEG snapshots file.size once");
   assert(sample.sourceEnterToAcceptableMs != null, "sourceEnter→acceptable stamped");
   assert(sample.acceptableToFastPathMs != null, "acceptable→fastPath stamped");
   assert(sample.fastPathToRunResolveMs != null, "fastPath→runResolve stamped");
@@ -1862,9 +1862,9 @@ section("source split: JPEG getter counts + unused one-read helper");
   });
   commitChatPhotoPrepareTiming(runSmall);
   const smallSample = buildChatPhotoDebugSample();
-  assert(smallSample.fileTypeReads === 2, "passthrough JPEG reads type twice (acceptable + fastPath kind)");
-  assert(smallSample.fileNameReads === 2, "passthrough JPEG reads name twice (acceptable + fastPath kind)");
-  assert(smallSample.fileSizeReads === 6, "passthrough JPEG reads size six times (acceptable×2 + fastPath×4)");
+  assert(smallSample.fileTypeReads === 1, "passthrough JPEG snapshots type once");
+  assert(smallSample.fileNameReads === 1, "passthrough JPEG snapshots name once");
+  assert(smallSample.fileSizeReads === 1, "passthrough JPEG snapshots size once");
   assert(smallSample.sourceRunInvokeAt == null && smallSample.sourceHeicEndAt == null, "fast path stops before heic/run");
 
   const fixtures: File[] = [
@@ -1890,6 +1890,40 @@ section("source split: JPEG getter counts + unused one-read helper");
     assert(plan.fastPath === canUseChatPhotoFastPathFromMeta(meta), "meta fastPath matches helper");
     assert(plan.heic === isHeicLikeFile(file), "one-read heic matches live");
     assert(plan.heic === isHeicLikeFromMeta(meta), "meta heic matches helper");
+  }
+
+  resetChatPhotoTiming();
+  try {
+    setHeicConverterForTests(async () => new Blob([new Uint8Array(32)], { type: "image/jpeg" }));
+    const heicSrc = new File([new Uint8Array(8)], "a.heic", { type: "image/heic" });
+    const runHeic = startChatPhotoPrepareTiming("cph-heic", heicSrc);
+    let heicCompress = 0;
+    const heicOut = await prepareChatPhotoSource(heicSrc, async () => {
+      heicCompress += 1;
+      return new Blob([new Uint8Array(16)], { type: "image/jpeg" });
+    });
+    commitChatPhotoPrepareTiming(runHeic);
+    const heicSample = buildChatPhotoDebugSample();
+    assert(heicOut.type === "image/jpeg" && heicOut.size === 32, "small converted HEIC returns converted jpeg");
+    assert(heicCompress === 0, "small converted HEIC does not re-encode");
+    assert(heicSample.fileTypeReads === 1, "HEIC original snapshots file.type once");
+    assert(heicSample.fileNameReads === 1, "HEIC original snapshots file.name once");
+    assert(heicSample.fileSizeReads === 1, "HEIC original snapshots file.size once");
+
+    resetChatPhotoTiming();
+    setHeicConverterForTests(async () => new Blob([new Uint8Array(800 * 1024)], { type: "image/jpeg" }));
+    const heicHeavy = new File([new Uint8Array(8)], "b.heic", { type: "image/heic" });
+    let heicHeavyCompress = 0;
+    let seenConverted: File | null = null;
+    const heicHeavyOut = await prepareChatPhotoSource(heicHeavy, async (next) => {
+      heicHeavyCompress += 1;
+      seenConverted = next;
+      return new Blob([new Uint8Array(20)], { type: "image/jpeg" });
+    });
+    assert(heicHeavyCompress === 1 && heicHeavyOut.size === 20, "large converted HEIC still runs compress");
+    assert(seenConverted !== heicHeavy, "HEIC heavy run receives the converted File");
+  } finally {
+    setHeicConverterForTests(null);
   }
 
   const slowType = {
@@ -2157,13 +2191,18 @@ section("source wiring / no public blob");
   assert(client.includes("timingKey"), "debug panel shows public timing key");
   assert(!client.includes("file.name"), "debug panel does not print file.name");
   const sourcePrepareFn = fast.slice(fast.indexOf("export async function prepareChatPhotoSource"));
-  assert(sourcePrepareFn.includes("isChatPhotoAcceptableSource"), "live source still calls acceptable helper");
-  assert(sourcePrepareFn.includes("canUseChatPhotoFastPath"), "live source still calls fast-path helper");
-  assert(sourcePrepareFn.includes("isHeicLikeFile"), "live source still calls heic helper");
-  assert(sourcePrepareFn.includes("chatPhotoSourceKind"), "live source still calls kind helper");
-  assert(!sourcePrepareFn.includes("readChatPhotoFileMeta"), "live source does not use the one-read snapshot");
-  assert(!sourcePrepareFn.includes("planChatPhotoSourceFromMeta"), "live source does not use the unused planner");
-  assert(fast.includes("planChatPhotoSourceFromMeta"), "one-read planner is present for a later wire");
+  assert(sourcePrepareFn.includes("readChatPhotoFileMeta"), "live source snapshots File metadata once");
+  assert(sourcePrepareFn.includes("planChatPhotoSourceFromMeta"), "live source plans from the snapshot");
+  assert(!sourcePrepareFn.includes("isChatPhotoAcceptableSource("), "live source does not re-read via acceptable helper");
+  assert(!sourcePrepareFn.includes("canUseChatPhotoFastPath("), "live source does not re-read via fast-path helper");
+  assert(!sourcePrepareFn.includes("isHeicLikeFile("), "live source does not re-read via heic helper");
+  assert(!sourcePrepareFn.includes("chatPhotoSourceKind("), "live source does not re-read via kind helper");
+  assert(sourcePrepareFn.includes("plan.acceptable"), "live source uses snapshot acceptable");
+  assert(sourcePrepareFn.includes("plan.fastPath"), "live source uses snapshot fastPath");
+  assert(sourcePrepareFn.includes("plan.heic"), "live source uses snapshot heic");
+  assert(sourcePrepareFn.includes("plan.kind"), "live source uses snapshot kind");
+  assert(sourcePrepareFn.includes("convertedPlan"), "converted File uses a second snapshot only");
+  assert(fast.includes("planChatPhotoSourceFromMeta"), "one-read planner stays exported");
   assert(timingSrc.includes("watchChatPhotoFileAccess"), "timing watches File metadata getters");
   assert(timingSrc.includes("isChatPhotoDebugTiming"), "debug timing has an explicit gate");
   assert(timingSrc.includes("enableChatPhotoDebugTiming"), "photoDebug can turn detailed timing on");
