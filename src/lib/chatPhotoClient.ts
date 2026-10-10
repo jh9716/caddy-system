@@ -6,13 +6,16 @@ export {
   applyChatPhotoSendProgress,
   applyPreparedChatPhoto,
   CHAT_PHOTO_UPLOAD_CONCURRENCY,
+  chatPhotoComposerBusy,
   chatPhotoPickRoom,
+  createChatPhotoPreviewUrl,
+  createDetachedChatPhotoPreviewUrl,
   instantChatPhotoPicks,
   mapBoundedSettled,
-  chatPhotoComposerBusy,
   nextChatPhotoComposerKey,
   prepareChatPendingPhoto,
   readyChatPhotosForUpload,
+  revokeChatPhotoPreviewUrl,
   type ChatPendingPhoto,
 } from "@/lib/chatPhotoPick";
 export {
