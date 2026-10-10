@@ -30,9 +30,15 @@ import type { ChatAttachment } from "../../../cloudflare/verthill-chat/src/proto
 import {
   abandonChatPhotoPreupload,
   appendComposerPhotos,
+  appendNativeHqReadyPhoto,
+  appendNativePreviewChooserFile,
+  appendNativePreviewPhoto,
   applyChatPhotoSendProgress,
   applyComposerPreparedIfCurrent,
   applyComposerProgressIfCurrent,
+  applyNativeHqFailed,
+  applyNativeHqFile,
+  fileFromNativeHqDataUrl,
   buildOptimisticOutgoingLine,
   CHAT_PHOTO_ACCEPT,
   CHAT_PHOTO_MAX,
@@ -40,11 +46,21 @@ import {
   chatPhotoSrc,
   commitComposerPhotoPicks,
   finishChatPhotoOutgoingUploads,
+  isAbandonedNativeHqFile,
+  isNativePreviewPlaceholder,
   leftoverComposerPhotosAfterSend,
+  NATIVE_CHAT_PHOTO_HQ_READY_EVENT,
+  NATIVE_CHAT_PHOTO_PREVIEW_EVENT,
   needsChatPhotoHeavyPrepare,
   outgoingChatPhotoSrc,
+  parseNativeChatPhotoHqReady,
+  parseNativeChatPhotoPreview,
+  partitionNativeChooserFiles,
+  partitionNativeHqFiles,
   prepareChatPendingPhoto,
   revokeChatPhotoPreviewUrls,
+  shouldAcceptNativePreview,
+  shouldQueueNativeChatSend,
   shouldStartOptimisticChatSend,
   startChatPhotoPreupload,
   usableOptimisticChatPhotos,
@@ -56,6 +72,8 @@ import {
   canShowChatPhotoDebug,
   chatPhotoNow,
   emitChatPhotoTimingSummary,
+  enableChatPhotoDebugTiming,
+  isChatPhotoDebugTiming,
   markChatPhotoTiming,
   commitChatPhotoPrepareTiming,
   noteChatPhotoBytes,
@@ -66,6 +84,7 @@ import {
   type ChatPhotoDebugSample,
 } from "@/lib/chatPhotoTiming";
 import type { ChatPhotoDirectProgress, ChatPhotoDirectResult } from "@/lib/chatPhotoDirectClient";
+import { readCapacitorNativePlatform } from "@/lib/nativePlatformClient";
 import {
   canProfileMention,
   chatAuthorLine,
@@ -322,6 +341,10 @@ export default function ChatClient() {
   const createReqRef = useRef("");
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
+  const sendQueuedRef = useRef(false);
+  const [sendQueued, setSendQueued] = useState(false);
+  const abandonedNativePreviewIdsRef = useRef(new Set<string>());
+  const abandonedNativeSessionsRef = useRef(new Set<string>());
   const mentionCacheRef = useRef<{ roomId: string; users: MentionCandidate[] } | null>(null);
   const mentionFetchedRef = useRef("");
   const mentionNamesRef = useRef<Map<number, string>>(new Map());
@@ -888,12 +911,12 @@ export default function ChatClient() {
   }, []);
 
   useEffect(() => {
-    setPhotoDebug(
-      canShowChatPhotoDebug({
-        role: tokenInfo?.user.role,
-        search: typeof window !== "undefined" ? window.location.search : "",
-      })
-    );
+    const on = canShowChatPhotoDebug({
+      role: tokenInfo?.user.role,
+      search: typeof window !== "undefined" ? window.location.search : "",
+    });
+    setPhotoDebug(on);
+    enableChatPhotoDebugTiming(on);
   }, [tokenInfo?.user.role]);
 
   function refreshPhotoDebugSample() {
@@ -1321,12 +1344,103 @@ export default function ChatClient() {
     setPendingPhotos(unique);
   }
 
+  function rememberAbandonedNativePhoto(item: PendingChatPhoto | undefined) {
+    if (item?.nativePreviewId) abandonedNativePreviewIdsRef.current.add(item.nativePreviewId);
+  }
+
+  function flushQueuedNativeSend() {
+    if (!sendQueuedRef.current) return;
+    if (pendingPhotosRef.current.some(isNativePreviewPlaceholder)) return;
+    sendQueuedRef.current = false;
+    setSendQueued(false);
+    void handleSend();
+  }
+
+  useEffect(() => {
+    if (!readCapacitorNativePlatform()) return;
+    const onPreview = (event: Event) => {
+      const payload = parseNativeChatPhotoPreview((event as CustomEvent).detail);
+      if (!payload) return;
+      if (
+        !shouldAcceptNativePreview(
+          payload,
+          abandonedNativePreviewIdsRef.current,
+          abandonedNativeSessionsRef.current
+        )
+      ) {
+        return;
+      }
+      const writeGeneration = composerGenRef.current;
+      const appended = appendNativePreviewPhoto(pendingPhotosRef.current, payload);
+      if (!appended.accepted) return;
+      if (writeGeneration !== composerGenRef.current) return;
+      if (
+        !shouldAcceptNativePreview(
+          payload,
+          abandonedNativePreviewIdsRef.current,
+          abandonedNativeSessionsRef.current
+        )
+      ) {
+        return;
+      }
+      setPendingPhotoList(appended.items);
+      markChatPhotoTiming("select_to_preview");
+    };
+    const onHqReady = (event: Event) => {
+      const payload = parseNativeChatPhotoHqReady((event as CustomEvent).detail);
+      if (!payload) return;
+      if (
+        !shouldAcceptNativePreview(
+          payload,
+          abandonedNativePreviewIdsRef.current,
+          abandonedNativeSessionsRef.current
+        )
+      ) {
+        return;
+      }
+      const writeGeneration = composerGenRef.current;
+      if (payload.error) {
+        const failed = applyNativeHqFailed(pendingPhotosRef.current, payload.previewId);
+        if (!failed) return;
+        if (writeGeneration !== composerGenRef.current) return;
+        setPendingPhotoList(failed);
+        return;
+      }
+      const hqFile = payload.dataUrl
+        ? fileFromNativeHqDataUrl(payload.dataUrl, payload.previewId)
+        : null;
+      if (!hqFile) return;
+      const applied = applyNativeHqFile(pendingPhotosRef.current, payload.previewId, hqFile);
+      if (!applied) return;
+      if (writeGeneration !== composerGenRef.current) return;
+      if (abandonedNativePreviewIdsRef.current.has(payload.previewId)) return;
+      setPendingPhotoList(applied);
+      const current = applied.find(
+        (item) => item.nativePreviewId === payload.previewId && item.status === "ready"
+      );
+      if (current) startComposerPreupload(current, writeGeneration);
+      if (!applied.some(isNativePreviewPlaceholder)) flushQueuedNativeSend();
+    };
+    window.addEventListener(NATIVE_CHAT_PHOTO_PREVIEW_EVENT, onPreview);
+    window.addEventListener(NATIVE_CHAT_PHOTO_HQ_READY_EVENT, onHqReady);
+    return () => {
+      window.removeEventListener(NATIVE_CHAT_PHOTO_PREVIEW_EVENT, onPreview);
+      window.removeEventListener(NATIVE_CHAT_PHOTO_HQ_READY_EVENT, onHqReady);
+    };
+  }, []);
+
   function abandonComposerPhotos() {
     composerGenRef.current += 1;
     const keys = pendingPhotosRef.current.map((item) => item.key);
+    for (const item of pendingPhotosRef.current) {
+      rememberAbandonedNativePhoto(item);
+      if (item.nativeSessionId) abandonedNativeSessionsRef.current.add(item.nativeSessionId);
+    }
     for (const key of keys) prepareJobsRef.current.delete(key);
     abandonChatPhotoPreupload(uploadJobsRef.current, keys);
     revokeChatPhotoPreviewUrls(pendingPhotosRef.current);
+    sendQueuedRef.current = false;
+    setSendQueued(false);
     setPendingPhotoList([]);
   }
 
@@ -1369,7 +1483,83 @@ export default function ChatClient() {
 
   async function addPendingPhotos(files: FileList | File[]) {
     const selectedAt = chatPhotoNow();
-    const picked = commitComposerPhotoPicks(pendingPhotosRef.current, Array.from(files));
+    let incoming = Array.from(files);
+    if (readCapacitorNativePlatform()) {
+      incoming = incoming.filter(
+        (file) =>
+          !isAbandonedNativeHqFile(
+            file,
+            abandonedNativePreviewIdsRef.current,
+            abandonedNativeSessionsRef.current
+          )
+      );
+      const writeGeneration = composerGenRef.current;
+      const chooser = partitionNativeChooserFiles(incoming);
+      let next = pendingPhotosRef.current;
+      for (const row of chooser.previews) {
+        if (abandonedNativePreviewIdsRef.current.has(row.previewId)) continue;
+        if (writeGeneration !== composerGenRef.current) return;
+        const appended = appendNativePreviewChooserFile(next, row.file, row.previewId);
+        if (appended.accepted) next = appended.items;
+      }
+      if (next !== pendingPhotosRef.current) {
+        setPendingPhotoList(next);
+        markChatPhotoTiming("select_to_preview", selectedAt);
+      }
+      incoming = chooser.leftovers;
+      const { matched, unmatchedNamed, heicFallbacks, leftovers } = partitionNativeHqFiles(
+        next,
+        incoming
+      );
+      for (const row of matched) {
+        if (abandonedNativePreviewIdsRef.current.has(row.previewId)) continue;
+        if (writeGeneration !== composerGenRef.current) return;
+        const applied = applyNativeHqFile(next, row.previewId, row.file);
+        if (!applied) continue;
+        next = applied;
+      }
+      for (const row of unmatchedNamed) {
+        if (abandonedNativePreviewIdsRef.current.has(row.previewId)) continue;
+        if (writeGeneration !== composerGenRef.current) return;
+        const appended = appendNativeHqReadyPhoto(next, row.file, row.previewId);
+        if (appended.accepted) next = appended.items;
+      }
+      if (next !== pendingPhotosRef.current) setPendingPhotoList(next);
+      for (const row of matched.concat(unmatchedNamed)) {
+        const current = next.find(
+          (item) => item.nativePreviewId === row.previewId && item.status === "ready"
+        );
+        if (current) startComposerPreupload(current, writeGeneration);
+      }
+      for (const row of heicFallbacks) {
+        if (abandonedNativePreviewIdsRef.current.has(row.previewId)) continue;
+        const item = next.find((rowItem) => rowItem.nativePreviewId === row.previewId);
+        if (!item || item.status !== "preparing") continue;
+        const job = prepareChatPendingPhoto(item, row.file).then((prepared) => {
+          if (writeGeneration !== composerGenRef.current) return prepared;
+          if (abandonedNativePreviewIdsRef.current.has(row.previewId)) return prepared;
+          const applied = applyComposerPreparedIfCurrent(
+            pendingPhotosRef.current,
+            prepared,
+            composerGenRef.current,
+            writeGeneration
+          );
+          if (applied.note) setError(applied.note);
+          if (applied.items !== pendingPhotosRef.current) setPendingPhotoList(applied.items);
+          const current = applied.items.find((rowItem) => rowItem.key === prepared.key);
+          if (current?.status === "ready") startComposerPreupload(current, writeGeneration);
+          if (!applied.items.some(isNativePreviewPlaceholder)) flushQueuedNativeSend();
+          return prepared;
+        });
+        prepareJobsRef.current.set(item.key, job);
+      }
+      incoming = leftovers;
+      if (incoming.length === 0) {
+        if (!next.some(isNativePreviewPlaceholder)) flushQueuedNativeSend();
+        return;
+      }
+    }
+    const picked = commitComposerPhotoPicks(pendingPhotosRef.current, incoming);
     const committed = {
       ...picked,
       ...appendComposerPhotos(pendingPhotosRef.current, picked.accepted),
@@ -1396,8 +1586,10 @@ export default function ChatClient() {
       if (item.status === "ready" && !needsChatPhotoHeavyPrepare(file)) {
         markChatPhotoTiming("select_to_ready", selectedAt);
         stampChatPhotoTiming("prepare_complete");
-        noteChatPhotoCompression(0);
-        refreshPhotoDebugSample();
+        if (isChatPhotoDebugTiming()) {
+          noteChatPhotoCompression(0);
+          refreshPhotoDebugSample();
+        }
         startComposerPreupload(item, writeGeneration);
         continue;
       }
@@ -1407,9 +1599,6 @@ export default function ChatClient() {
         stampChatPhotoTiming("prepare_complete");
         if (prepared.metrics) {
           noteChatPhotoBytes(prepared.metrics.sourceBytes, prepared.metrics.uploadBytes);
-          if (prepared.metrics.prepareOuterMs != null || prepared.metrics.compressionMs != null) {
-            noteChatPhotoCompression(prepared.metrics.prepareOuterMs ?? prepared.metrics.compressionMs ?? 0);
-          }
         }
         const commitStarted = chatPhotoNow();
         const applied = applyComposerPreparedIfCurrent(
@@ -1420,17 +1609,24 @@ export default function ChatClient() {
         );
         if (applied.note) setError(applied.note);
         if (applied.items !== pendingPhotosRef.current) setPendingPhotoList(applied.items);
-        noteChatPhotoPrepareScope(prepared.metrics?.timingRunId, {
-          stateCommitMs: Math.max(0, chatPhotoNow() - commitStarted),
-        });
-        commitChatPhotoPrepareTiming(prepared.metrics?.timingRunId);
-        refreshPhotoDebugSample();
+        if (isChatPhotoDebugTiming()) {
+          if (prepared.metrics?.prepareOuterMs != null || prepared.metrics?.compressionMs != null) {
+            noteChatPhotoCompression(prepared.metrics?.prepareOuterMs ?? prepared.metrics?.compressionMs ?? 0);
+          }
+          noteChatPhotoPrepareScope(prepared.metrics?.timingRunId, {
+            stateCommitMs: Math.max(0, chatPhotoNow() - commitStarted),
+          });
+          commitChatPhotoPrepareTiming(prepared.metrics?.timingRunId);
+          refreshPhotoDebugSample();
+        }
         const current = applied.items.find((row) => row.key === prepared.key);
         if (current?.status === "ready") startComposerPreupload(current, writeGeneration);
+        if (!applied.items.some(isNativePreviewPlaceholder)) flushQueuedNativeSend();
         return prepared;
       });
       prepareJobsRef.current.set(item.key, job);
     }
+    if (!pendingPhotosRef.current.some(isNativePreviewPlaceholder)) flushQueuedNativeSend();
   }
 
   function removePendingPhoto(key: string) {
@@ -1438,10 +1634,18 @@ export default function ChatClient() {
     abandonChatPhotoPreupload(uploadJobsRef.current, [key]);
     const next = pendingPhotosRef.current.filter((item) => {
       if (item.key !== key) return true;
-      URL.revokeObjectURL(item.previewUrl);
+      rememberAbandonedNativePhoto(item);
+      revokeChatPhotoPreviewUrls([item]);
       return false;
     });
     setPendingPhotoList(next);
+    if (!next.some(isNativePreviewPlaceholder) && sendQueuedRef.current) {
+      if (shouldStartOptimisticChatSend(draft, next)) flushQueuedNativeSend();
+      else {
+        sendQueuedRef.current = false;
+        setSendQueued(false);
+      }
+    }
   }
 
   function applyDraft(next: string, cursor: number) {
@@ -1551,6 +1755,11 @@ export default function ChatClient() {
     const body = draft.trim();
     const photos = pendingPhotosRef.current;
     if (!shouldStartOptimisticChatSend(body, photos) || !tokenInfo) return;
+    if (shouldQueueNativeChatSend(photos)) {
+      sendQueuedRef.current = true;
+      setSendQueued(true);
+      return;
+    }
     const roomId = roomRef.current?.roomId || "";
     if (!roomId) return;
     const tokens = reconcileComposerMentions(body, mentionTokens);
@@ -2348,9 +2557,12 @@ export default function ChatClient() {
             <button
               type="submit"
               className="ui-btn ui-btn-primary vh-chat-send"
-              disabled={!draft.trim() && pendingPhotos.every((item) => item.status === "failed")}
+              disabled={
+                sendQueued ||
+                (!draft.trim() && pendingPhotos.every((item) => item.status === "failed"))
+              }
             >
-              전송
+              {sendQueued ? "준비 중" : "전송"}
             </button>
             </div>
           </form>
