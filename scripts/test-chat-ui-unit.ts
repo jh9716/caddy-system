@@ -83,7 +83,7 @@ section("android back room leave");
   assert(chat.includes('setView("list")'), "목록 still setView list");
   assert(chat.includes('useState<"list" | "room">("list")'), "chat still list/room state");
   assert(!chat.includes("useSearchParams"), "no Next searchParams hook");
-  assert(chat.includes("commitComposerPhotoPicks"), "composer pick commit helper");
+  assert(chat.includes("instantChatPhotoPicks"), "instant chat photo preview");
   assert(chat.includes("fetchTargetedRoom"), "targeted room deep link");
   assert(chat.includes("전체 채팅방은 모든 활성") || chat.includes("ALL_ROOM_ID"), "overall room");
   assert(chat.includes("+ 채팅방 만들기"), "create room CTA");

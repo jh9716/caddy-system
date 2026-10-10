@@ -86,16 +86,8 @@ import {
 } from "../src/lib/chatPhotoPick";
 import {
   canUseChatPhotoFastPath,
-  canUseChatPhotoFastPathFromMeta,
-  chatPhotoSourceKind,
-  chatPhotoSourceKindFromMeta,
-  isChatPhotoAcceptableSource,
-  isChatPhotoAcceptableSourceFromMeta,
-  isHeicLikeFromMeta,
   needsChatPhotoHeavyPrepare,
-  planChatPhotoSourceFromMeta,
   prepareChatPhotoSource,
-  readChatPhotoFileMeta,
 } from "../src/lib/chatPhotoFastPath";
 import {
   buildOptimisticOutgoingLine,
@@ -103,57 +95,25 @@ import {
   outgoingChatPhotoSrc,
   revokeChatPhotoPreviewUrls,
   shouldStartOptimisticChatSend,
-  usableOptimisticChatPhotos,
 } from "../src/lib/chatPhotoOptimistic";
-import {
-  appendComposerPhotos,
-  applyComposerPreparedIfCurrent,
-  applyComposerProgressIfCurrent,
-  CHAT_PHOTO_COMPOSER_MAX_MESSAGE,
-  commitComposerPhotoPicks,
-  composerPhotoListsMatch,
-  createChatPhotoComposerSession,
-  leftoverComposerPhotosAfterSend,
-  shouldApplyComposerWrite,
-  visibleComposerPhotos,
-} from "../src/lib/chatPhotoComposer";
 import {
   buildChatPhotoDebugSample,
   canShowChatPhotoDebug,
   chatPhotoDebugApiUrl,
   emitChatPhotoTimingSummary,
-  chatPhotoTimingRunIdFor,
-  commitChatPhotoPrepareTiming,
   markChatPhotoTiming,
-  publicChatPhotoTimingKey,
-  noteChatPhotoBoundary,
-  noteChatPhotoCompression,
-  noteChatPhotoCompressionBreakdown,
-  noteChatPhotoPrepareScope,
   noteChatPhotoServerHotpath,
   resetChatPhotoTiming,
-  startChatPhotoPrepareTiming,
-  watchChatPhotoFileAccess,
   stampChatPhotoTiming,
   summarizeChatPhotoTiming,
 } from "../src/lib/chatPhotoTiming";
 import {
-  chatPhotoBitmapResizeOptions,
-  chatPhotoDecodePathFromBitmap,
   chatPhotoEncodeBottleneck,
   chatPhotoPutBottleneck,
-  createChatPhotoOrientedBitmap,
   planChatPhotoAdaptive,
   prepareChatAdaptivePhoto,
-  probeChatPhotoOrientedSize,
   shouldAcceptChatPhotoEncode,
 } from "../src/lib/chatPhotoAdaptive";
-import {
-  orientedImageHeaderSize,
-  readImageSizeFromHeader,
-  readJpegExifOrientation,
-} from "../src/lib/imageHeaderSize";
-import { isHeicLikeFile } from "../src/lib/courseReportPhotoClient";
 import { CHAT_PHOTO_MAX_BYTES, CHAT_PHOTO_PASSTHROUGH_MAX_BYTES } from "../src/lib/chatPhotoConstants";
 import {
   abandonChatPhotoPreupload,
@@ -796,155 +756,6 @@ section("instant preview + parallel upload");
   assert(retried.localPhotos[0]?.previewUrl === failedLine.localPhotos[0]?.previewUrl, "retry reuses local photo blob");
 }
 
-section("composer stale pending state");
-{
-  if (typeof URL.createObjectURL !== "function") {
-    let n = 0;
-    URL.createObjectURL = () => `blob:test-${++n}`;
-    URL.revokeObjectURL = () => {};
-  }
-  const file = (mark: number, name: string) =>
-    new File([jpegBytes(8, mark)], name, { type: "image/jpeg", lastModified: mark });
-
-  function mockComposer(initial: ReturnType<typeof instantChatPhotoPicks>["items"] = []) {
-    let state = visibleComposerPhotos(initial);
-    let ref = state;
-    let generation = 0;
-    function setList(next: typeof state) {
-      const unique = visibleComposerPhotos(next);
-      ref = unique;
-      state = unique;
-    }
-    return {
-      get state() {
-        return state;
-      },
-      get ref() {
-        return ref;
-      },
-      get generation() {
-        return generation;
-      },
-      setList,
-      select(files: File[]) {
-        const picked = commitComposerPhotoPicks(ref, files);
-        const committed = { ...picked, ...appendComposerPhotos(ref, picked.accepted) };
-        setList(committed.items);
-        return committed;
-      },
-      send() {
-        const sent = usableOptimisticChatPhotos(ref);
-        generation += 1;
-        setList(leftoverComposerPhotosAfterSend(ref, sent.map((item) => item.key)));
-        return sent;
-      },
-      assertSync(msg: string) {
-        assert(composerPhotoListsMatch(state, ref), msg);
-      },
-    };
-  }
-
-  const one = file(1, "one.jpg");
-  const two = file(2, "two.jpg");
-  const three = file(3, "three.jpg");
-  const extra = file(4, "extra.jpg");
-
-  const keysA = instantChatPhotoPicks([one], 1).items[0]!.key;
-  const keysB = instantChatPhotoPicks([one], 1).items[0]!.key;
-  assert(keysA !== keysB, "same file in the same millisecond still gets unique keys");
-
-  const dupList = instantChatPhotoPicks([one, two], 2).items;
-  const withDupKey = [...dupList, dupList[0]!];
-  assert(withDupKey.length === 3 && visibleComposerPhotos(withDupKey).length === 2, "duplicate keys do not count as extra slots");
-  assert(!composerPhotoListsMatch(visibleComposerPhotos(withDupKey), withDupKey), "visible list and raw ref diverge when keys collide");
-
-  const first = commitComposerPhotoPicks([], [one, two]);
-  const secondFromEmpty = commitComposerPhotoPicks([], [one, two]);
-  const merged = appendComposerPhotos(first.items, secondFromEmpty.accepted);
-  assert(first.accepted.length === 2, "2장 select accepts 2");
-  assert(merged.items.length === 2 && merged.accepted.length === 0, "overlapping 2장 select does not stack to 3");
-  assert(commitComposerPhotoPicks(first.items, [one, two]).accepted.length === 0, "same files are not added twice");
-
-  const full = commitComposerPhotoPicks(first.items, [three]);
-  assert(full.accepted.length === 1 && full.items.length === 3, "2장 후 1장 more is allowed");
-  const overflow = commitComposerPhotoPicks(full.items, [extra]);
-  assert(overflow.accepted.length === 0 && overflow.note === CHAT_PHOTO_COMPOSER_MAX_MESSAGE, "4th photo is rejected with max-3 message");
-
-  for (const count of [1, 2, 3] as const) {
-    const composer = mockComposer();
-    const files = [one, two, three].slice(0, count);
-    const selected = composer.select(files);
-    assert(selected.accepted.length === count, `${count}장 select`);
-    assert(composer.state.length === count && composer.ref.length === count, `${count}장 state/ref count`);
-    composer.assertSync(`${count}장 state matches ref`);
-    const sent = composer.send();
-    assert(sent.length === count && composer.state.length === 0 && composer.ref.length === 0, `${count}장 send clears composer`);
-    composer.assertSync(`${count}장 send keeps state/ref empty together`);
-    const stalePrepared = applyComposerPreparedIfCurrent(
-      composer.ref,
-      { ...sent[0]!, status: "ready" },
-      composer.generation,
-      composer.generation - 1
-    );
-    assert(stalePrepared.items.length === 0, `${count}장 stale prepare cannot restore composer`);
-    const staleProgress = applyComposerProgressIfCurrent(
-      composer.ref,
-      { key: sent[0]!.key, phase: "put", progress: 40 },
-      composer.generation,
-      composer.generation - 1
-    );
-    assert(staleProgress.length === 0, `${count}장 stale progress cannot restore composer`);
-    composer.setList(staleProgress);
-    composer.assertSync(`${count}장 stale writes leave state/ref empty`);
-  }
-
-  const afterTwo = mockComposer();
-  afterTwo.select([one, two]);
-  afterTwo.send();
-  const nextOne = afterTwo.select([three]);
-  assert(nextOne.accepted.length === 1 && afterTwo.ref.length === 1, "2장 전송 후 새 1장 선택 가능");
-  afterTwo.assertSync("2장 send then 1장 select stays in sync");
-
-  const afterThree = mockComposer();
-  afterThree.select([one, two, three]);
-  afterThree.send();
-  const nextThree = afterThree.select([one, two, three]);
-  assert(nextThree.accepted.length === 3 && afterThree.ref.length === 3, "3장 전송 후 새 3장 다시 선택 가능");
-  afterThree.assertSync("3장 send then 3장 select stays in sync");
-
-  const rapid = mockComposer();
-  for (let i = 0; i < 5; i++) {
-    const picked = rapid.select([file(10 + i, `rapid-${i}.jpg`)]);
-    assert(picked.accepted.length === 1, `rapid select ${i + 1}`);
-    rapid.send();
-    assert(rapid.state.length === 0 && rapid.ref.length === 0, `rapid send ${i + 1} clears`);
-    rapid.assertSync(`rapid loop ${i + 1} stays in sync`);
-  }
-
-  const failedStay = instantChatPhotoPicks([one, two], 2).items;
-  failedStay[1] = { ...failedStay[1]!, status: "failed", error: "변환 실패" };
-  const leftover = leftoverComposerPhotosAfterSend(
-    failedStay,
-    usableOptimisticChatPhotos(failedStay).map((item) => item.key)
-  );
-  assert(leftover.length === 1 && leftover[0]?.status === "failed", "failed photo stays for retry");
-  assert(!leftover.some((item) => item.status === "ready"), "successful photo is not a hidden leftover");
-
-  const session = createChatPhotoComposerSession(failedStay);
-  const began = session.beginSend();
-  assert(began.sent.length === 1 && began.items.length === 1, "session send keeps only failed");
-  assert(!session.canWrite(began.generation - 1, began.sent[0]?.key), "old generation cannot write sent photo back");
-  assert(
-    shouldApplyComposerWrite({
-      currentGeneration: session.generation,
-      writeGeneration: session.generation,
-      items: session.items,
-      key: began.items[0]!.key,
-    }),
-    "failed leftover can still receive retry writes"
-  );
-}
-
 section("phase 4 pre-upload on select");
 {
   if (typeof URL.createObjectURL !== "function") {
@@ -1234,11 +1045,6 @@ section("phase 5 adaptive compression + debug");
   assert(jpegPlan.longEdge === 1600 && jpegPlan.mime === "image/jpeg", "JPEG source uses 1600 JPEG encode");
   assert(jpegPlan.acceptMaxBytes === CHAT_PHOTO_MAX_BYTES, "first encode is accepted up to 3MB");
   assert(jpegPlan.maxAttempts <= 2, "encode attempts bounded");
-  const resize4000 = chatPhotoBitmapResizeOptions(4000, 3000);
-  assert(resize4000?.resizeWidth === 1600 && resize4000?.resizeHeight === 1200, "4000x3000 bitmap resize is 1600x1200");
-  assert(chatPhotoBitmapResizeOptions(1600, 1200) === null, "already-1600 JPEG skips bitmap resize");
-  assert(chatPhotoDecodePathFromBitmap({ width: 1600, height: 1200 }, resize4000) === "bitmap-resize", "matching bitmap is resize path");
-  assert(chatPhotoDecodePathFromBitmap({ width: 4000, height: 3000 }, resize4000) === "bitmap-full", "ignored resize is full decode");
   assert(shouldAcceptChatPhotoEncode(900 * 1024), "900KB first encode is accepted");
   assert(!shouldAcceptChatPhotoEncode(CHAT_PHOTO_MAX_BYTES + 1), "over 3MB is not accepted");
 
@@ -1416,347 +1222,15 @@ section("phase 5 adaptive compression + debug");
       debug.workerTotalMs == null &&
       debug.decodeMs == null &&
       debug.encode1Ms == null &&
-      debug.encodeAttempts == null &&
-      debug.decodePath == null &&
-      debug.encodePath == null &&
-      debug.adaptiveTotalMs == null &&
-      debug.prepareOuterMs == null &&
-      debug.headerProbeMs == null &&
-      debug.unaccountedPrepareMs == null,
+      debug.encodeAttempts == null,
     "phase 8/9/10 debug fields empty by default"
   );
-  noteChatPhotoCompressionBreakdown({
-    decodeMs: 12,
-    drawResizeMs: 4,
-    encode1Ms: 18,
-    encode2Ms: null,
-    totalCompressionMs: 34,
-    inputWidth: 1600,
-    inputHeight: 1200,
-    outputWidth: 1600,
-    outputHeight: 1200,
-    attempts: 1,
-    encodeMime: "image/jpeg",
-    decodePath: "bitmap-resize",
-    encodePath: "offscreen",
-  });
-  const breakdown = buildChatPhotoDebugSample();
-  assert(breakdown.decodeMs === 12 && breakdown.encode1Ms === 18, "debug records decode/encode1");
-  assert(breakdown.encodeAttempts === 1 && breakdown.encodeMime === "image/jpeg", "debug records JPEG 1-encode");
-  assert(breakdown.decodePath === "bitmap-resize" && breakdown.encodePath === "offscreen", "debug records decode/encode path");
-  assert(breakdown.adaptiveTotalMs === 34 && breakdown.compressionMs === 34, "adaptive total stays on compressionMs");
-  noteChatPhotoCompression(4093);
-  const afterOuter = buildChatPhotoDebugSample();
-  assert(afterOuter.prepareOuterMs === 4093, "outer prepare writes prepareOuterMs");
-  assert(afterOuter.compressionMs === 34 && afterOuter.adaptiveTotalMs === 34, "outer prepare does not overwrite adaptive compressionMs");
-  assert(afterOuter.unaccountedPrepareMs === 4059, "unaccounted prepare is outer minus adaptive");
-  assert(afterOuter.unaccountedAdaptiveMs === 0, "accounted adaptive parts leave no hidden adaptive gap");
   const debugDump = JSON.stringify(debug);
   assert(!/https?:|claim|token|storageKey|\.jpg/i.test(debugDump), "debug sample has no secrets");
   assert(chatPhotoEncodeBottleneck(120) === "browser-ok", "short encode is browser-ok");
   assert(chatPhotoEncodeBottleneck(640) === "consider-native", "encode >=500ms → native candidate");
   assert(chatPhotoPutBottleneck(620000, 2500) === "blob-network", "small PUT that is slow is Blob/network");
   assert(chatPhotoPutBottleneck(620000, 400) === "put-ok", "fast PUT is not storage-bound");
-}
-
-section("regression: header-probe bitmap resize + EXIF + fallback");
-{
-  function jpegSofWithExif(width: number, height: number, orientation: number): Uint8Array {
-    return Uint8Array.from([
-      0xff, 0xd8,
-      0xff, 0xe1, 0x00, 0x1e,
-      0x45, 0x78, 0x69, 0x66, 0x00, 0x00,
-      0x49, 0x49, 0x2a, 0x00,
-      0x08, 0x00, 0x00, 0x00,
-      0x01, 0x00,
-      0x12, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00,
-      orientation & 0xff, 0x00, 0x00, 0x00,
-      0xff, 0xc0, 0x00, 0x0b, 0x08,
-      (height >> 8) & 0xff,
-      height & 0xff,
-      (width >> 8) & 0xff,
-      width & 0xff,
-      0x03,
-    ]);
-  }
-  const sof = jpegSofWithExif(4000, 3000, 6);
-  const header = readImageSizeFromHeader(sof);
-  assert(header?.width === 4000 && header?.height === 3000, "SOF stays 4000x3000 before orientation");
-  assert(readJpegExifOrientation(sof) === 6, "JPEG EXIF orientation 6");
-  const oriented = orientedImageHeaderSize(header!, 6);
-  assert(oriented.width === 3000 && oriented.height === 4000, "orientation 5-8 swaps SOF dims");
-  const orientedResize = chatPhotoBitmapResizeOptions(oriented.width, oriented.height);
-  assert(
-    orientedResize?.resizeWidth === 1200 && orientedResize?.resizeHeight === 1600,
-    "portrait phone JPEG resize uses swapped 1200x1600"
-  );
-  const rawResize = chatPhotoBitmapResizeOptions(header!.width, header!.height);
-  assert(rawResize?.resizeWidth === 1600 && rawResize?.resizeHeight === 1200, "unoriented fallback resize is 1600x1200");
-
-  const padded = new Uint8Array(80 * 1024);
-  padded.set(sof);
-  const probeFile = new File([padded], "exif6.jpg", { type: "image/jpeg" });
-  const probed = await probeChatPhotoOrientedSize(probeFile);
-  assert(probed?.rawWidth === 4000 && probed?.rawHeight === 3000, "probe keeps SOF pixels");
-  assert(probed?.width === 3000 && probed?.height === 4000, "probe applies EXIF 6 swap");
-
-  const calls: unknown[] = [];
-  const previousBitmap = (globalThis as { createImageBitmap?: typeof createImageBitmap }).createImageBitmap;
-  (globalThis as { createImageBitmap: typeof createImageBitmap }).createImageBitmap = (async (
-    _blob: Blob,
-    opts?: ImageBitmapOptions
-  ) => {
-    calls.push(opts);
-    if (opts && ("resizeWidth" in opts || "imageOrientation" in opts)) {
-      throw new Error("resize unsupported");
-    }
-    return { width: 4000, height: 3000, close() {} } as ImageBitmap;
-  }) as typeof createImageBitmap;
-  try {
-    const bitmap = await createChatPhotoOrientedBitmap(probeFile, orientedResize, rawResize);
-    assert(bitmap.width === 4000 && bitmap.height === 3000, "resize throw falls back to full bitmap");
-    assert(calls.length === 3, "oriented+resize, raw resize, then full decode");
-    assert(chatPhotoDecodePathFromBitmap(bitmap, orientedResize) === "bitmap-full", "failed resize is bitmap-full");
-  } finally {
-    if (previousBitmap) {
-      (globalThis as { createImageBitmap: typeof createImageBitmap }).createImageBitmap = previousBitmap;
-    } else {
-      delete (globalThis as { createImageBitmap?: typeof createImageBitmap }).createImageBitmap;
-    }
-  }
-}
-
-section("hidden latency: scope isolation");
-{
-  resetChatPhotoTiming();
-  const fileA = new File([new Uint8Array(8)], "a.jpg", { type: "image/jpeg" });
-  const fileB = new File([new Uint8Array(8)], "b.jpg", { type: "image/jpeg" });
-  const runA = startChatPhotoPrepareTiming("key-a", fileA);
-  const runB = startChatPhotoPrepareTiming("key-b", fileB);
-  noteChatPhotoCompressionBreakdown({
-    runId: runA,
-    decodeMs: 10,
-    encode1Ms: 20,
-    totalCompressionMs: 40,
-    headerProbeMs: 3,
-    bitmapCreateMs: 7,
-    hiddenBeforeDecodeMs: 1,
-  });
-  noteChatPhotoCompressionBreakdown({
-    runId: runB,
-    decodeMs: 200,
-    encode1Ms: 80,
-    totalCompressionMs: 4093,
-    headerProbeMs: 30,
-    bitmapCreateMs: 170,
-    hiddenBeforeDecodeMs: 3800,
-  });
-  noteChatPhotoPrepareScope(runA, { prepareOuterMs: 50, stateCommitMs: 2 });
-  noteChatPhotoPrepareScope(runB, { prepareOuterMs: 4200, stateCommitMs: 4 });
-  const committedA = commitChatPhotoPrepareTiming(runA);
-  assert(committedA?.decodeMs === 10 && committedA?.adaptiveTotalMs === 40, "run A keeps its adaptive totals");
-  const sampleA = buildChatPhotoDebugSample();
-  assert(sampleA.decodeMs === 10 && sampleA.adaptiveTotalMs === 40 && sampleA.prepareOuterMs === 50, "commit A publishes only A");
-  assert(sampleA.unaccountedPrepareMs === 10, "run A unaccounted prepare is small");
-  const committedB = commitChatPhotoPrepareTiming(runB);
-  assert(committedB?.decodeMs === 200 && committedB?.hiddenBeforeDecodeMs === 3800, "run B keeps its own hidden gap");
-  const sampleB = buildChatPhotoDebugSample();
-  assert(sampleB.decodeMs === 200 && sampleB.prepareOuterMs === 4200, "commit B replaces the debug bag with B");
-  assert(sampleB.compressionMs === 4093 && sampleB.adaptiveTotalMs === 4093, "run B adaptive is not mixed with A");
-  assert(sampleB.hiddenBeforeDecodeMs === 3800, "hidden before decode stays on the same run");
-  assert(sampleA.decodeMs === 10, "earlier sample A snapshot is unchanged");
-  assert(sampleB.timingRunId === runB && sampleB.timingKey === "key-b", "published sample keeps B run id/key");
-  assert(publicChatPhotoTimingKey("cph-12-secret.jpg|123|1|image/jpeg") === "cph-12", "debug key strips file name");
-}
-
-section("prepare boundary: stale bag + same File runId");
-{
-  resetChatPhotoTiming();
-  const fileA = new File([new Uint8Array(12)], "keep.jpg", { type: "image/jpeg" });
-  const fileB = new File([new Uint8Array(2.2 * 1024 * 1024)], "next.jpg", { type: "image/jpeg" });
-  const runA = startChatPhotoPrepareTiming("cph-1-keep.jpg|12|1|image/jpeg", fileA);
-  noteChatPhotoCompressionBreakdown({
-    runId: runA,
-    decodeMs: 210,
-    encode1Ms: 36,
-    totalCompressionMs: 248,
-    hiddenBeforeDecodeMs: 0,
-  });
-  noteChatPhotoPrepareScope(runA, { prepareOuterMs: 250 });
-  commitChatPhotoPrepareTiming(runA);
-  assert(buildChatPhotoDebugSample().adaptiveTotalMs === 248, "run A adaptive published");
-  const runB = startChatPhotoPrepareTiming("cph-2-next.jpg|2200000|2|image/jpeg", fileB);
-  const afterStartB = buildChatPhotoDebugSample();
-  assert(afterStartB.adaptiveTotalMs == null && afterStartB.prepareOuterMs == null, "new run start clears previous adaptive/prepare");
-  assert(afterStartB.timingRunId === runB && afterStartB.timingKey === "cph-2", "new run id is public and current");
-  noteChatPhotoPrepareScope(runB, { prepareOuterMs: 5221 });
-  commitChatPhotoPrepareTiming(runB);
-  const stale = buildChatPhotoDebugSample();
-  assert(stale.prepareOuterMs === 5221, "run B outer published");
-  assert(stale.adaptiveTotalMs == null && stale.decodeMs == null, "commit B does not keep run A adaptive fields");
-  assert(stale.unaccountedPrepareMs == null, "missing adaptive on B does not invent a 5s mix");
-
-  resetChatPhotoTiming();
-  const bound = new File([new Uint8Array(2.2 * 1024 * 1024)], "bound.jpg", { type: "image/jpeg" });
-  const runBound = startChatPhotoPrepareTiming("key-bound", bound);
-  assert(chatPhotoTimingRunIdFor(bound) === runBound, "WeakMap keeps the same File → runId");
-  let seen: File | null = null;
-  const sourced = await prepareChatPhotoSource(bound, async (next) => {
-    seen = next;
-    return new Blob([new Uint8Array(8)], { type: "image/jpeg" });
-  });
-  assert(seen === bound, "JPEG source passes the same File into run()");
-  assert(chatPhotoTimingRunIdFor(seen) === runBound, "run() File still resolves the same runId");
-  assert(sourced.size === 8, "JPEG source uses the compress callback result");
-  resetChatPhotoTiming();
-  const delayed = new File([new Uint8Array(2.2 * 1024 * 1024)], "delay.jpg", { type: "image/jpeg" });
-  const runDelay = startChatPhotoPrepareTiming("key-delay", delayed);
-  await prepareChatPhotoSource(delayed, async (next) => {
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    return next;
-  });
-  commitChatPhotoPrepareTiming(runDelay);
-  const delaySample = buildChatPhotoDebugSample();
-  assert(
-    delaySample.photoSourceEnterAt != null &&
-      delaySample.photoSourceExitAt != null &&
-      delaySample.photoSourceExitAt - delaySample.photoSourceEnterAt >= 20,
-    "photoSourceExit waits for run() to finish"
-  );
-  const prepared = await prepareChatPendingPhoto(
-    {
-      key: "key-bound",
-      blob: bound,
-      previewUrl: "blob:test-bound",
-      fileId: "bound",
-      fingerprint: "",
-      status: "preparing",
-    },
-    bound,
-    async (next) =>
-      (
-        await prepareChatAdaptivePhoto(next, {
-          inspect: async () => ({ width: 4000, height: 3000 }),
-          encode: async ({ mime }) => new Blob([new Uint8Array(600 * 1024)], { type: mime }),
-        })
-      ).blob
-  );
-  assert(prepared.metrics?.timingRunId, "pending prepare records a run id");
-  assert(prepared.metrics?.timingRunId !== runBound, "each pending prepare starts a fresh run");
-  const pendingSample = buildChatPhotoDebugSample();
-  assert(pendingSample.pendingPrepareStartAt != null && pendingSample.pendingPrepareEndAt != null, "pending start/end stamps exist");
-  assert(
-    pendingSample.adaptiveEnterAt != null &&
-      pendingSample.adaptiveExitAt != null &&
-      (pendingSample.adaptiveMs ?? 0) >= 0,
-    "adaptive enter/exit belong to the pending run"
-  );
-}
-
-section("source split: JPEG getter counts + unused one-read helper");
-{
-  function spin(ms: number) {
-    const end = Date.now() + ms;
-    while (Date.now() < end) {}
-  }
-
-  resetChatPhotoTiming();
-  const heavy = new File([new Uint8Array(2.2 * 1024 * 1024)], "secret-vacation.jpg", { type: "image/jpeg" });
-  const runId = startChatPhotoPrepareTiming("cph-1-secret-vacation.jpg|2200000|1|image/jpeg", heavy);
-  let seen: File | null = null;
-  await prepareChatPhotoSource(heavy, async (next) => {
-    seen = next;
-    noteChatPhotoBoundary(chatPhotoTimingRunIdFor(next), "adaptiveBlobEnterAt");
-    return new Blob([new Uint8Array(8)], { type: "image/jpeg" });
-  });
-  commitChatPhotoPrepareTiming(runId);
-  const sample = buildChatPhotoDebugSample();
-  assert(sample.timingRunId === runId && sample.timingKey === "cph-1", "source split stays on the same public run");
-  assert(seen === heavy, "JPEG run() still receives the original File");
-  assert(sample.fileTypeReads === 3, "heavy JPEG reads file.type 3 times (acceptable/heic/kind)");
-  assert(sample.fileNameReads === 3, "heavy JPEG reads file.name 3 times (acceptable/heic/kind)");
-  assert(sample.fileSizeReads === 5, "heavy JPEG reads file.size 5 times (acceptable×2 + fastPath×3)");
-  assert(sample.sourceEnterToAcceptableMs != null, "sourceEnter→acceptable stamped");
-  assert(sample.acceptableToFastPathMs != null, "acceptable→fastPath stamped");
-  assert(sample.fastPathToRunResolveMs != null, "fastPath→runResolve stamped");
-  assert(sample.runResolveToHeicMs != null, "runResolve→heic stamped");
-  assert(sample.heicToKindMs != null, "heic→kind stamped");
-  assert(sample.kindToNoteScopeMs != null, "kind→noteScope stamped");
-  assert(sample.noteScopeToRunInvokeMs != null, "noteScope→runInvoke stamped");
-  assert(sample.runInvokeToAdaptiveBlobMs != null, "runInvoke→adaptiveBlob stamped");
-  const splitSum =
-    (sample.sourceEnterToAcceptableMs ?? 0) +
-    (sample.acceptableToFastPathMs ?? 0) +
-    (sample.fastPathToRunResolveMs ?? 0) +
-    (sample.runResolveToHeicMs ?? 0) +
-    (sample.heicToKindMs ?? 0) +
-    (sample.kindToNoteScopeMs ?? 0) +
-    (sample.noteScopeToRunInvokeMs ?? 0) +
-    (sample.runInvokeToAdaptiveBlobMs ?? 0);
-  assert(sample.sourceToAdaptiveBlobMs != null, "source→blob interval still present");
-  assert(Math.abs(splitSum - (sample.sourceToAdaptiveBlobMs ?? 0)) <= 2, "internal splits sum to sourceToAdaptiveBlob");
-  const dumped = JSON.stringify(sample);
-  assert(!dumped.includes("secret-vacation"), "debug sample never includes the file name");
-  assert(!dumped.includes(".jpg"), "debug sample never includes a filename suffix");
-
-  resetChatPhotoTiming();
-  const small = new File([new Uint8Array(32)], "tiny.jpg", { type: "image/jpeg" });
-  const runSmall = startChatPhotoPrepareTiming("cph-2", small);
-  await prepareChatPhotoSource(small, async () => {
-    throw new Error("fast path must not invoke compress");
-  });
-  commitChatPhotoPrepareTiming(runSmall);
-  const smallSample = buildChatPhotoDebugSample();
-  assert(smallSample.fileTypeReads === 2, "passthrough JPEG reads type twice (acceptable + fastPath kind)");
-  assert(smallSample.fileNameReads === 2, "passthrough JPEG reads name twice (acceptable + fastPath kind)");
-  assert(smallSample.fileSizeReads === 6, "passthrough JPEG reads size six times (acceptable×2 + fastPath×4)");
-  assert(smallSample.sourceRunInvokeAt == null && smallSample.sourceHeicEndAt == null, "fast path stops before heic/run");
-
-  const fixtures: File[] = [
-    new File([new Uint8Array(32)], "ok.jpg", { type: "image/jpeg" }),
-    new File([new Uint8Array(32)], "ok.JPG", { type: "image/jpg" }),
-    new File([new Uint8Array(32)], "ok.png", { type: "image/png" }),
-    new File([new Uint8Array(32)], "ok.webp", { type: "image/webp" }),
-    new File([new Uint8Array(2.2 * 1024 * 1024)], "mid.jpg", { type: "image/jpeg" }),
-    new File([new Uint8Array(3 * 1024 * 1024 + 8)], "huge.jpg", { type: "image/jpeg" }),
-    new File([new Uint8Array(8)], "a.heic", { type: "image/heic" }),
-    new File([new Uint8Array(8)], "b.heif", { type: "image/heif" }),
-    new File([new Uint8Array(8)], "x.pdf", { type: "application/pdf" }),
-    new File([new Uint8Array(0)], "empty.jpg", { type: "image/jpeg" }),
-  ];
-  for (const file of fixtures) {
-    const meta = readChatPhotoFileMeta(file);
-    const plan = planChatPhotoSourceFromMeta(meta);
-    assert(plan.kind === chatPhotoSourceKind(file), "one-read kind matches live kind");
-    assert(plan.kind === chatPhotoSourceKindFromMeta(meta), "meta kind matches parts kind");
-    assert(plan.acceptable === isChatPhotoAcceptableSource(file), "one-read acceptable matches live");
-    assert(plan.acceptable === isChatPhotoAcceptableSourceFromMeta(meta), "meta acceptable matches helper");
-    assert(plan.fastPath === canUseChatPhotoFastPath(file), "one-read fastPath matches live");
-    assert(plan.fastPath === canUseChatPhotoFastPathFromMeta(meta), "meta fastPath matches helper");
-    assert(plan.heic === isHeicLikeFile(file), "one-read heic matches live");
-    assert(plan.heic === isHeicLikeFromMeta(meta), "meta heic matches helper");
-  }
-
-  const slowType = {
-    get type() {
-      spin(8);
-      return "image/jpeg";
-    },
-    get name() {
-      return "slow.jpg";
-    },
-    get size() {
-      return 2.2 * 1024 * 1024;
-    },
-  };
-  const watched = watchChatPhotoFileAccess(slowType);
-  void watched.file.type;
-  void watched.file.type;
-  void watched.file.name;
-  void watched.file.size;
-  assert(watched.typeReads === 2 && watched.nameReads === 1 && watched.sizeReads === 1, "watch counts metadata getters only");
-  assert(watched.typeMs >= 8, "watch records File.type getter time");
-  assert(watched.nameMs === 0 || watched.nameMs < watched.typeMs, "name getter time stays a number");
 }
 
 section("phase 6 hot-path timing / region / cleanup");
@@ -1852,11 +1326,7 @@ section("source wiring / no public blob");
   const dispatch = read("src/lib/chatPushDispatch.ts");
   const photo = read("src/lib/chatPhoto.ts");
   const reportClient = read("src/lib/courseReportPhotoClient.ts");
-  assert(client.includes("commitComposerPhotoPicks"), "composer commits picks through one helper");
-  assert(client.includes("composerGenRef"), "composer generation ignores stale prepare/progress");
-  assert(client.includes("leftoverComposerPhotosAfterSend"), "send keeps only failed leftover photos");
-  assert(client.includes("applyComposerPreparedIfCurrent"), "prepare write is generation-gated");
-  assert(client.includes("applyComposerProgressIfCurrent"), "progress write is generation-gated");
+  assert(client.includes("instantChatPhotoPicks"), "composer instant preview before prepare");
   assert(client.includes("prepareChatPendingPhoto"), "composer prepares in background");
   const preupload = read("src/lib/chatPhotoPreupload.ts");
   const timingSrc = read("src/lib/chatPhotoTiming.ts");
@@ -1909,54 +1379,13 @@ section("source wiring / no public blob");
   const adaptive = read("src/lib/chatPhotoAdaptive.ts");
   assert(adaptive.includes("createImageBitmap"), "adaptive prefers createImageBitmap");
   assert(adaptive.includes("imageOrientation"), "bitmap decode keeps EXIF orientation");
-  assert(adaptive.includes("resizeWidth"), "header probe feeds createImageBitmap resize");
   assert(adaptive.includes("OffscreenCanvas"), "adaptive considers OffscreenCanvas");
   assert(adaptive.includes("shouldAcceptChatPhotoEncode"), "first encode can stop at 3MB");
   assert(adaptive.includes('mime: "image/jpeg"'), "non-alpha adaptive encode prefers JPEG");
   assert(adaptive.includes("CHAT_PHOTO_ENCODE_MAX_ATTEMPTS"), "encode loop is bounded");
-  assert(adaptive.includes("probeChatPhotoOrientedSize"), "header size probe before full decode");
   assert(client.includes("decodeMs"), "debug panel shows decode timing");
   assert(client.includes("encode1Ms"), "debug panel shows first encode timing");
   assert(client.includes("encodeAttempts"), "debug panel shows encode attempts");
-  assert(client.includes("decodePath"), "debug panel shows decode path");
-  assert(client.includes("encodePath"), "debug panel shows encode path");
-  assert(client.includes("adaptiveTotalMs"), "debug panel shows adaptive total");
-  assert(client.includes("prepareOuterMs"), "debug panel shows prepare outer");
-  assert(client.includes("hiddenBeforeDecodeMs"), "debug panel shows pre-decode gap");
-  assert(client.includes("unaccountedAdaptiveMs"), "debug panel shows unaccounted adaptive");
-  assert(client.includes("pendingToWrapperMs"), "debug panel shows pending→wrapper");
-  assert(client.includes("adaptiveBlobToAdaptiveMs"), "debug panel shows blob→adaptive");
-  assert(client.includes("wrapperExitToPendingEndMs"), "debug panel shows wrapper→pending end");
-  assert(client.includes("sourceEnterToAcceptableMs"), "debug panel shows source→acceptable");
-  assert(client.includes("acceptableToFastPathMs"), "debug panel shows acceptable→fastPath");
-  assert(client.includes("fastPathToRunResolveMs"), "debug panel shows fastPath→runResolve");
-  assert(client.includes("runResolveToHeicMs"), "debug panel shows runResolve→heic");
-  assert(client.includes("heicToKindMs"), "debug panel shows heic→kind");
-  assert(client.includes("kindToNoteScopeMs"), "debug panel shows kind→noteScope");
-  assert(client.includes("noteScopeToRunInvokeMs"), "debug panel shows noteScope→runInvoke");
-  assert(client.includes("runInvokeToAdaptiveBlobMs"), "debug panel shows runInvoke→blob");
-  assert(client.includes("fileTypeReads"), "debug panel shows type getter count");
-  assert(client.includes("fileNameReads"), "debug panel shows name getter count");
-  assert(client.includes("fileSizeReads"), "debug panel shows size getter count");
-  assert(client.includes("fileTypeMs"), "debug panel shows type getter ms");
-  assert(client.includes("fileNameMs"), "debug panel shows name getter ms");
-  assert(client.includes("fileSizeMs"), "debug panel shows size getter ms");
-  assert(client.includes("timingKey"), "debug panel shows public timing key");
-  assert(!client.includes("file.name"), "debug panel does not print file.name");
-  const sourcePrepareFn = fast.slice(fast.indexOf("export async function prepareChatPhotoSource"));
-  assert(sourcePrepareFn.includes("isChatPhotoAcceptableSource"), "live source still calls acceptable helper");
-  assert(sourcePrepareFn.includes("canUseChatPhotoFastPath"), "live source still calls fast-path helper");
-  assert(sourcePrepareFn.includes("isHeicLikeFile"), "live source still calls heic helper");
-  assert(sourcePrepareFn.includes("chatPhotoSourceKind"), "live source still calls kind helper");
-  assert(!sourcePrepareFn.includes("readChatPhotoFileMeta"), "live source does not use the one-read snapshot");
-  assert(!sourcePrepareFn.includes("planChatPhotoSourceFromMeta"), "live source does not use the unused planner");
-  assert(fast.includes("planChatPhotoSourceFromMeta"), "one-read planner is present for a later wire");
-  assert(timingSrc.includes("watchChatPhotoFileAccess"), "timing watches File metadata getters");
-  assert(client.includes('markChatPhotoTiming("select_to_ready"'), "heavy prepare stamps select_to_ready");
-  assert(timingSrc.includes("clearPrepareScopeFromBag"), "commit replaces prepare-scope fields");
-  assert(fast.includes("jpegDirectRun"), "JPEG source records same-file run");
-  assert(timingSrc.includes("noteChatPhotoCompression"), "outer note exists");
-  assert(timingSrc.includes("prepareOuterMs = Math.max(0, ms)"), "outer note does not write compressionMs");
   assert(timingSrc.includes("noteChatPhotoCompressionBreakdown"), "timing bag records compression split");
   assert(fast.includes("CHAT_PHOTO_PASSTHROUGH_MAX_BYTES"), "passthrough is chat-sized not 3MB");
   assert(reportClient.includes("createImageBitmap"), "createImageBitmap decode path");

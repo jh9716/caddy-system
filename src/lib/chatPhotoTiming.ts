@@ -26,44 +26,6 @@ export type ChatPhotoTimingBag = {
   outputHeight?: number;
   encodeAttempts?: number;
   encodeMime?: string;
-  decodePath?: string;
-  encodePath?: string;
-  timingRunId?: string;
-  adaptiveTotalMs?: number;
-  prepareOuterMs?: number;
-  headerProbeMs?: number;
-  bitmapCreateMs?: number;
-  canvasCreateMs?: number;
-  alphaProbeMs?: number;
-  postEncodeMs?: number;
-  stateCommitMs?: number;
-  hiddenBeforeDecodeMs?: number;
-  timingKey?: string;
-  runIdResolved?: boolean;
-  jpegDirectRun?: boolean;
-  sameFileBound?: boolean;
-  pendingPrepareStartAt?: number;
-  prepareWrapperEnterAt?: number;
-  photoSourceEnterAt?: number;
-  adaptiveBlobEnterAt?: number;
-  adaptiveEnterAt?: number;
-  adaptiveExitAt?: number;
-  photoSourceExitAt?: number;
-  prepareWrapperExitAt?: number;
-  pendingPrepareEndAt?: number;
-  sourceAcceptableEndAt?: number;
-  sourceFastPathEndAt?: number;
-  sourceRunResolveEndAt?: number;
-  sourceHeicEndAt?: number;
-  sourceKindEndAt?: number;
-  sourceNoteScopeEndAt?: number;
-  sourceRunInvokeAt?: number;
-  fileTypeReads?: number;
-  fileNameReads?: number;
-  fileSizeReads?: number;
-  fileTypeMs?: number;
-  fileNameMs?: number;
-  fileSizeMs?: number;
   prepareHotpath?: ChatPhotoHotpathSummary;
   finalizeHotpath?: ChatPhotoHotpathSummary;
   storageBackend?: "r2" | "blob";
@@ -101,55 +63,6 @@ export type ChatPhotoDebugSample = {
   outputHeight: number | null;
   encodeAttempts: number | null;
   encodeMime: string | null;
-  decodePath: string | null;
-  encodePath: string | null;
-  timingRunId: string | null;
-  adaptiveTotalMs: number | null;
-  prepareOuterMs: number | null;
-  headerProbeMs: number | null;
-  bitmapCreateMs: number | null;
-  canvasCreateMs: number | null;
-  alphaProbeMs: number | null;
-  postEncodeMs: number | null;
-  stateCommitMs: number | null;
-  hiddenBeforeDecodeMs: number | null;
-  unaccountedAdaptiveMs: number | null;
-  timingKey: string | null;
-  runIdResolved: boolean | null;
-  jpegDirectRun: boolean | null;
-  sameFileBound: boolean | null;
-  pendingPrepareStartAt: number | null;
-  prepareWrapperEnterAt: number | null;
-  photoSourceEnterAt: number | null;
-  adaptiveBlobEnterAt: number | null;
-  adaptiveEnterAt: number | null;
-  adaptiveExitAt: number | null;
-  photoSourceExitAt: number | null;
-  prepareWrapperExitAt: number | null;
-  pendingPrepareEndAt: number | null;
-  pendingToWrapperMs: number | null;
-  wrapperToSourceMs: number | null;
-  sourceToAdaptiveBlobMs: number | null;
-  adaptiveBlobToAdaptiveMs: number | null;
-  adaptiveMs: number | null;
-  adaptiveExitToSourceExitMs: number | null;
-  sourceExitToWrapperExitMs: number | null;
-  wrapperExitToPendingEndMs: number | null;
-  sourceEnterToAcceptableMs: number | null;
-  acceptableToFastPathMs: number | null;
-  fastPathToRunResolveMs: number | null;
-  runResolveToHeicMs: number | null;
-  heicToKindMs: number | null;
-  kindToNoteScopeMs: number | null;
-  noteScopeToRunInvokeMs: number | null;
-  runInvokeToAdaptiveBlobMs: number | null;
-  fileTypeReads: number | null;
-  fileNameReads: number | null;
-  fileSizeReads: number | null;
-  fileTypeMs: number | null;
-  fileNameMs: number | null;
-  fileSizeMs: number | null;
-  unaccountedPrepareMs: number | null;
   selectedToUploadStartMs: number | null;
   prepareApiMs: number | null;
   storageBackend: "r2" | "blob" | null;
@@ -227,6 +140,9 @@ export function markChatPhotoTiming(name: string, startedAt: number): number {
   const ms = Math.max(0, chatPhotoNow() - startedAt);
   const bag = timingBag();
   bag.marks.push({ name, ms });
+  if (name === "select_to_prepared" || name === "select_to_ready") {
+    bag.compressionMs = bag.compressionMs ?? (name === "select_to_prepared" ? ms : 0);
+  }
   if (isChatPhotoTimingEnabled() && typeof console !== "undefined" && typeof console.debug === "function") {
     console.debug(`[chat-photo] ${name} ${Math.round(ms)}ms`);
   }
@@ -239,426 +155,40 @@ export function noteChatPhotoBytes(sourceBytes: number, uploadBytes?: number): v
   if (uploadBytes != null) bag.uploadBytes = uploadBytes;
 }
 
-export type ChatPhotoBoundaryField =
-  | "pendingPrepareStartAt"
-  | "prepareWrapperEnterAt"
-  | "photoSourceEnterAt"
-  | "adaptiveBlobEnterAt"
-  | "adaptiveEnterAt"
-  | "adaptiveExitAt"
-  | "photoSourceExitAt"
-  | "prepareWrapperExitAt"
-  | "pendingPrepareEndAt";
-
-export type ChatPhotoPrepareScope = {
-  runId: string;
-  key: string;
-  publicKey: string;
-  runIdResolved?: boolean;
-  jpegDirectRun?: boolean;
-  sameFileBound?: boolean;
-  adaptiveTotalMs?: number;
-  prepareOuterMs?: number;
-  headerProbeMs?: number;
-  bitmapCreateMs?: number;
-  canvasCreateMs?: number;
-  alphaProbeMs?: number;
-  postEncodeMs?: number;
-  stateCommitMs?: number;
-  hiddenBeforeDecodeMs?: number;
-  decodeMs?: number;
-  drawResizeMs?: number;
-  encode1Ms?: number;
-  encode2Ms?: number;
-  encodeAttempts?: number;
-  encodeMime?: string;
-  decodePath?: string;
-  encodePath?: string;
-  inputWidth?: number;
-  inputHeight?: number;
-  outputWidth?: number;
-  outputHeight?: number;
-  pendingPrepareStartAt?: number;
-  prepareWrapperEnterAt?: number;
-  photoSourceEnterAt?: number;
-  adaptiveBlobEnterAt?: number;
-  adaptiveEnterAt?: number;
-  adaptiveExitAt?: number;
-  photoSourceExitAt?: number;
-  prepareWrapperExitAt?: number;
-  pendingPrepareEndAt?: number;
-  sourceAcceptableEndAt?: number;
-  sourceFastPathEndAt?: number;
-  sourceRunResolveEndAt?: number;
-  sourceHeicEndAt?: number;
-  sourceKindEndAt?: number;
-  sourceNoteScopeEndAt?: number;
-  sourceRunInvokeAt?: number;
-  fileTypeReads?: number;
-  fileNameReads?: number;
-  fileSizeReads?: number;
-  fileTypeMs?: number;
-  fileNameMs?: number;
-  fileSizeMs?: number;
-};
-
-const PREPARE_SCOPE_BAG_KEYS = [
-  "timingRunId",
-  "timingKey",
-  "runIdResolved",
-  "jpegDirectRun",
-  "sameFileBound",
-  "compressionMs",
-  "adaptiveTotalMs",
-  "prepareOuterMs",
-  "headerProbeMs",
-  "bitmapCreateMs",
-  "canvasCreateMs",
-  "alphaProbeMs",
-  "postEncodeMs",
-  "stateCommitMs",
-  "hiddenBeforeDecodeMs",
-  "decodeMs",
-  "drawResizeMs",
-  "encode1Ms",
-  "encode2Ms",
-  "encodeAttempts",
-  "encodeMime",
-  "decodePath",
-  "encodePath",
-  "inputWidth",
-  "inputHeight",
-  "outputWidth",
-  "outputHeight",
-  "pendingPrepareStartAt",
-  "prepareWrapperEnterAt",
-  "photoSourceEnterAt",
-  "adaptiveBlobEnterAt",
-  "adaptiveEnterAt",
-  "adaptiveExitAt",
-  "photoSourceExitAt",
-  "prepareWrapperExitAt",
-  "pendingPrepareEndAt",
-  "sourceAcceptableEndAt",
-  "sourceFastPathEndAt",
-  "sourceRunResolveEndAt",
-  "sourceHeicEndAt",
-  "sourceKindEndAt",
-  "sourceNoteScopeEndAt",
-  "sourceRunInvokeAt",
-  "fileTypeReads",
-  "fileNameReads",
-  "fileSizeReads",
-  "fileTypeMs",
-  "fileNameMs",
-  "fileSizeMs",
-] as const;
-
-let prepareTimingSeq = 0;
-const prepareTimingRuns = new Map<string, ChatPhotoPrepareScope>();
-const prepareTimingByFile = new WeakMap<Blob, string>();
-
-/** Composer key without file name / size / type. `cph-12-name|...` → `cph-12`. */
-export function publicChatPhotoTimingKey(key: string): string {
-  const cph = /^cph-(\d+)/.exec(key);
-  if (cph) return `cph-${cph[1]}`;
-  if (/^[A-Za-z0-9._:-]{1,32}$/.test(key) && !key.includes("|")) return key;
-  return `k${key.length}`;
-}
-
-function clearPrepareScopeFromBag(bag: ChatPhotoTimingBag): void {
-  for (const key of PREPARE_SCOPE_BAG_KEYS) {
-    delete bag[key];
-  }
-}
-
-export function startChatPhotoPrepareTiming(key: string, file?: Blob): string {
-  const runId = `r${++prepareTimingSeq}`;
-  const publicKey = publicChatPhotoTimingKey(key);
-  prepareTimingRuns.set(runId, { runId, key: publicKey, publicKey });
-  if (file) prepareTimingByFile.set(file, runId);
-  clearPrepareScopeFromBag(timingBag());
-  timingBag().timingRunId = runId;
-  timingBag().timingKey = publicKey;
-  return runId;
-}
-
-export function bindChatPhotoTimingFile(file: Blob, runId: string): void {
-  prepareTimingByFile.set(file, runId);
-}
-
-export function chatPhotoTimingRunIdFor(file?: Blob | null): string | null {
-  if (!file) return null;
-  return prepareTimingByFile.get(file) ?? null;
-}
-
-export function noteChatPhotoPrepareScope(
-  runId: string | null | undefined,
-  patch: Partial<Omit<ChatPhotoPrepareScope, "runId" | "key">>
-): void {
-  if (!runId) return;
-  const row = prepareTimingRuns.get(runId);
-  if (!row) return;
-  Object.assign(row, patch);
-}
-
-function finiteMs(value: unknown): number | undefined {
-  if (!Number.isFinite(value)) return undefined;
-  return Math.max(0, Number(value));
-}
-
-function applyPrepareScopeToBag(row: ChatPhotoPrepareScope, bag: ChatPhotoTimingBag): void {
-  clearPrepareScopeFromBag(bag);
-  bag.timingRunId = row.runId;
-  bag.timingKey = row.publicKey;
-  if (row.runIdResolved != null) bag.runIdResolved = row.runIdResolved;
-  if (row.jpegDirectRun != null) bag.jpegDirectRun = row.jpegDirectRun;
-  if (row.sameFileBound != null) bag.sameFileBound = row.sameFileBound;
-  if (row.adaptiveTotalMs != null) {
-    bag.adaptiveTotalMs = row.adaptiveTotalMs;
-    bag.compressionMs = row.adaptiveTotalMs;
-  }
-  if (row.prepareOuterMs != null) bag.prepareOuterMs = row.prepareOuterMs;
-  if (row.headerProbeMs != null) bag.headerProbeMs = row.headerProbeMs;
-  if (row.bitmapCreateMs != null) bag.bitmapCreateMs = row.bitmapCreateMs;
-  if (row.canvasCreateMs != null) bag.canvasCreateMs = row.canvasCreateMs;
-  if (row.alphaProbeMs != null) bag.alphaProbeMs = row.alphaProbeMs;
-  if (row.postEncodeMs != null) bag.postEncodeMs = row.postEncodeMs;
-  if (row.stateCommitMs != null) bag.stateCommitMs = row.stateCommitMs;
-  if (row.hiddenBeforeDecodeMs != null) bag.hiddenBeforeDecodeMs = row.hiddenBeforeDecodeMs;
-  if (row.decodeMs != null) bag.decodeMs = row.decodeMs;
-  if (row.drawResizeMs != null) bag.drawResizeMs = row.drawResizeMs;
-  if (row.encode1Ms != null) bag.encode1Ms = row.encode1Ms;
-  if (row.encode2Ms != null) bag.encode2Ms = row.encode2Ms;
-  if (row.encodeAttempts != null) bag.encodeAttempts = row.encodeAttempts;
-  if (row.encodeMime) bag.encodeMime = row.encodeMime;
-  if (row.decodePath) bag.decodePath = row.decodePath;
-  if (row.encodePath) bag.encodePath = row.encodePath;
-  if (row.inputWidth != null) bag.inputWidth = row.inputWidth;
-  if (row.inputHeight != null) bag.inputHeight = row.inputHeight;
-  if (row.outputWidth != null) bag.outputWidth = row.outputWidth;
-  if (row.outputHeight != null) bag.outputHeight = row.outputHeight;
-  if (row.pendingPrepareStartAt != null) bag.pendingPrepareStartAt = row.pendingPrepareStartAt;
-  if (row.prepareWrapperEnterAt != null) bag.prepareWrapperEnterAt = row.prepareWrapperEnterAt;
-  if (row.photoSourceEnterAt != null) bag.photoSourceEnterAt = row.photoSourceEnterAt;
-  if (row.adaptiveBlobEnterAt != null) bag.adaptiveBlobEnterAt = row.adaptiveBlobEnterAt;
-  if (row.adaptiveEnterAt != null) bag.adaptiveEnterAt = row.adaptiveEnterAt;
-  if (row.adaptiveExitAt != null) bag.adaptiveExitAt = row.adaptiveExitAt;
-  if (row.photoSourceExitAt != null) bag.photoSourceExitAt = row.photoSourceExitAt;
-  if (row.prepareWrapperExitAt != null) bag.prepareWrapperExitAt = row.prepareWrapperExitAt;
-  if (row.pendingPrepareEndAt != null) bag.pendingPrepareEndAt = row.pendingPrepareEndAt;
-  if (row.sourceAcceptableEndAt != null) bag.sourceAcceptableEndAt = row.sourceAcceptableEndAt;
-  if (row.sourceFastPathEndAt != null) bag.sourceFastPathEndAt = row.sourceFastPathEndAt;
-  if (row.sourceRunResolveEndAt != null) bag.sourceRunResolveEndAt = row.sourceRunResolveEndAt;
-  if (row.sourceHeicEndAt != null) bag.sourceHeicEndAt = row.sourceHeicEndAt;
-  if (row.sourceKindEndAt != null) bag.sourceKindEndAt = row.sourceKindEndAt;
-  if (row.sourceNoteScopeEndAt != null) bag.sourceNoteScopeEndAt = row.sourceNoteScopeEndAt;
-  if (row.sourceRunInvokeAt != null) bag.sourceRunInvokeAt = row.sourceRunInvokeAt;
-  if (row.fileTypeReads != null) bag.fileTypeReads = row.fileTypeReads;
-  if (row.fileNameReads != null) bag.fileNameReads = row.fileNameReads;
-  if (row.fileSizeReads != null) bag.fileSizeReads = row.fileSizeReads;
-  if (row.fileTypeMs != null) bag.fileTypeMs = row.fileTypeMs;
-  if (row.fileNameMs != null) bag.fileNameMs = row.fileNameMs;
-  if (row.fileSizeMs != null) bag.fileSizeMs = row.fileSizeMs;
-}
-
-export function noteChatPhotoBoundary(
-  runId: string | null | undefined,
-  field: ChatPhotoBoundaryField,
-  at = chatPhotoNow()
-): number {
-  noteChatPhotoPrepareScope(runId, { [field]: at });
-  return at;
-}
-
-export type ChatPhotoSourceSplitField =
-  | "sourceAcceptableEndAt"
-  | "sourceFastPathEndAt"
-  | "sourceRunResolveEndAt"
-  | "sourceHeicEndAt"
-  | "sourceKindEndAt"
-  | "sourceNoteScopeEndAt"
-  | "sourceRunInvokeAt";
-
-export type ChatPhotoFileAccessWatch<T extends object = File> = {
-  file: T;
-  typeReads: number;
-  nameReads: number;
-  sizeReads: number;
-  typeMs: number;
-  nameMs: number;
-  sizeMs: number;
-};
-
-/** Counts/times File.type|name|size only. Never stores the values. */
-export function watchChatPhotoFileAccess<T extends object>(file: T): ChatPhotoFileAccessWatch<T> {
-  const watch: ChatPhotoFileAccessWatch<T> = {
-    file,
-    typeReads: 0,
-    nameReads: 0,
-    sizeReads: 0,
-    typeMs: 0,
-    nameMs: 0,
-    sizeMs: 0,
-  };
-  watch.file = new Proxy(file, {
-    get(target, prop, receiver) {
-      if (prop === "type" || prop === "name" || prop === "size") {
-        const started = chatPhotoNow();
-        const value = Reflect.get(target, prop, target);
-        const ms = Math.max(0, chatPhotoNow() - started);
-        if (prop === "type") {
-          watch.typeReads += 1;
-          watch.typeMs += ms;
-        } else if (prop === "name") {
-          watch.nameReads += 1;
-          watch.nameMs += ms;
-        } else {
-          watch.sizeReads += 1;
-          watch.sizeMs += ms;
-        }
-        return value;
-      }
-      const value = Reflect.get(target, prop, receiver);
-      return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
-    },
-  }) as T;
-  return watch;
-}
-
-export function noteChatPhotoSourceSplit(
-  runId: string | null | undefined,
-  field: ChatPhotoSourceSplitField,
-  at = chatPhotoNow()
-): number {
-  noteChatPhotoPrepareScope(runId, { [field]: at });
-  return at;
-}
-
-export function noteChatPhotoFileAccess(
-  runId: string | null | undefined,
-  watch: Pick<
-    ChatPhotoFileAccessWatch,
-    "typeReads" | "nameReads" | "sizeReads" | "typeMs" | "nameMs" | "sizeMs"
-  >
-): void {
-  noteChatPhotoPrepareScope(runId, {
-    fileTypeReads: watch.typeReads,
-    fileNameReads: watch.nameReads,
-    fileSizeReads: watch.sizeReads,
-    fileTypeMs: watch.typeMs,
-    fileNameMs: watch.nameMs,
-    fileSizeMs: watch.sizeMs,
-  });
-}
-
-export function commitChatPhotoPrepareTiming(runId: string | null | undefined): ChatPhotoPrepareScope | null {
-  if (!runId) return null;
-  const row = prepareTimingRuns.get(runId);
-  if (!row) return null;
-  applyPrepareScopeToBag(row, timingBag());
-  return row;
-}
-
-/** Outer prepare wall time only. Never overwrites adaptive compressionMs. */
 export function noteChatPhotoCompression(ms: number): void {
-  timingBag().prepareOuterMs = Math.max(0, ms);
+  timingBag().compressionMs = Math.max(0, ms);
 }
 
 export function noteChatPhotoCompressionBreakdown(input: {
-  runId?: string | null;
   decodeMs?: number | null;
   drawResizeMs?: number | null;
   encode1Ms?: number | null;
   encode2Ms?: number | null;
   totalCompressionMs?: number | null;
-  adaptiveTotalMs?: number | null;
-  headerProbeMs?: number | null;
-  bitmapCreateMs?: number | null;
-  canvasCreateMs?: number | null;
-  alphaProbeMs?: number | null;
-  postEncodeMs?: number | null;
-  hiddenBeforeDecodeMs?: number | null;
   inputWidth?: number | null;
   inputHeight?: number | null;
   outputWidth?: number | null;
   outputHeight?: number | null;
   attempts?: number | null;
   encodeMime?: string | null;
-  decodePath?: string | null;
-  encodePath?: string | null;
 }): void {
-  const adaptiveTotal = finiteMs(input.adaptiveTotalMs ?? input.totalCompressionMs);
-  const scoped: Partial<Omit<ChatPhotoPrepareScope, "runId" | "key">> = {};
-  const decodeMs = finiteMs(input.decodeMs);
-  const drawResizeMs = finiteMs(input.drawResizeMs);
-  const encode1Ms = finiteMs(input.encode1Ms);
-  const encode2Ms = finiteMs(input.encode2Ms);
-  const headerProbeMs = finiteMs(input.headerProbeMs);
-  const bitmapCreateMs = finiteMs(input.bitmapCreateMs);
-  const canvasCreateMs = finiteMs(input.canvasCreateMs);
-  const alphaProbeMs = finiteMs(input.alphaProbeMs);
-  const postEncodeMs = finiteMs(input.postEncodeMs);
-  const hiddenBeforeDecodeMs = finiteMs(input.hiddenBeforeDecodeMs);
-  if (adaptiveTotal != null) scoped.adaptiveTotalMs = adaptiveTotal;
-  if (decodeMs != null) scoped.decodeMs = decodeMs;
-  if (drawResizeMs != null) scoped.drawResizeMs = drawResizeMs;
-  if (encode1Ms != null) scoped.encode1Ms = encode1Ms;
-  if (encode2Ms != null) scoped.encode2Ms = encode2Ms;
-  if (headerProbeMs != null) scoped.headerProbeMs = headerProbeMs;
-  if (bitmapCreateMs != null) scoped.bitmapCreateMs = bitmapCreateMs;
-  if (canvasCreateMs != null) scoped.canvasCreateMs = canvasCreateMs;
-  if (alphaProbeMs != null) scoped.alphaProbeMs = alphaProbeMs;
-  if (postEncodeMs != null) scoped.postEncodeMs = postEncodeMs;
-  if (hiddenBeforeDecodeMs != null) scoped.hiddenBeforeDecodeMs = hiddenBeforeDecodeMs;
-  if (Number.isFinite(input.attempts)) scoped.encodeAttempts = Math.max(0, Math.round(Number(input.attempts)));
+  const bag = timingBag();
+  if (Number.isFinite(input.totalCompressionMs)) {
+    bag.compressionMs = Math.max(0, Number(input.totalCompressionMs));
+  }
+  if (Number.isFinite(input.decodeMs)) bag.decodeMs = Math.max(0, Number(input.decodeMs));
+  if (Number.isFinite(input.drawResizeMs)) bag.drawResizeMs = Math.max(0, Number(input.drawResizeMs));
+  if (Number.isFinite(input.encode1Ms)) bag.encode1Ms = Math.max(0, Number(input.encode1Ms));
+  if (Number.isFinite(input.encode2Ms)) bag.encode2Ms = Math.max(0, Number(input.encode2Ms));
+  if (Number.isFinite(input.inputWidth)) bag.inputWidth = Math.max(0, Math.round(Number(input.inputWidth)));
+  if (Number.isFinite(input.inputHeight)) bag.inputHeight = Math.max(0, Math.round(Number(input.inputHeight)));
+  if (Number.isFinite(input.outputWidth)) bag.outputWidth = Math.max(0, Math.round(Number(input.outputWidth)));
+  if (Number.isFinite(input.outputHeight)) bag.outputHeight = Math.max(0, Math.round(Number(input.outputHeight)));
+  if (Number.isFinite(input.attempts)) bag.encodeAttempts = Math.max(0, Math.round(Number(input.attempts)));
   if (typeof input.encodeMime === "string" && input.encodeMime) {
     const mime = input.encodeMime.toLowerCase().split(";", 1)[0] || "";
-    if (mime === "image/jpeg" || mime === "image/png" || mime === "image/webp") scoped.encodeMime = mime;
+    if (mime === "image/jpeg" || mime === "image/png" || mime === "image/webp") bag.encodeMime = mime;
   }
-  if (
-    input.decodePath === "bitmap-resize" ||
-    input.decodePath === "bitmap-full" ||
-    input.decodePath === "image-element"
-  ) {
-    scoped.decodePath = input.decodePath;
-  }
-  if (input.encodePath === "offscreen" || input.encodePath === "canvas") {
-    scoped.encodePath = input.encodePath;
-  }
-  if (Number.isFinite(input.inputWidth)) scoped.inputWidth = Math.max(0, Math.round(Number(input.inputWidth)));
-  if (Number.isFinite(input.inputHeight)) scoped.inputHeight = Math.max(0, Math.round(Number(input.inputHeight)));
-  if (Number.isFinite(input.outputWidth)) scoped.outputWidth = Math.max(0, Math.round(Number(input.outputWidth)));
-  if (Number.isFinite(input.outputHeight)) scoped.outputHeight = Math.max(0, Math.round(Number(input.outputHeight)));
-
-  if (input.runId && prepareTimingRuns.has(input.runId)) {
-    noteChatPhotoPrepareScope(input.runId, scoped);
-    return;
-  }
-
-  const bag = timingBag();
-  if (adaptiveTotal != null) {
-    bag.adaptiveTotalMs = adaptiveTotal;
-    bag.compressionMs = adaptiveTotal;
-  }
-  if (decodeMs != null) bag.decodeMs = decodeMs;
-  if (drawResizeMs != null) bag.drawResizeMs = drawResizeMs;
-  if (encode1Ms != null) bag.encode1Ms = encode1Ms;
-  if (encode2Ms != null) bag.encode2Ms = encode2Ms;
-  if (headerProbeMs != null) bag.headerProbeMs = headerProbeMs;
-  if (bitmapCreateMs != null) bag.bitmapCreateMs = bitmapCreateMs;
-  if (canvasCreateMs != null) bag.canvasCreateMs = canvasCreateMs;
-  if (alphaProbeMs != null) bag.alphaProbeMs = alphaProbeMs;
-  if (postEncodeMs != null) bag.postEncodeMs = postEncodeMs;
-  if (hiddenBeforeDecodeMs != null) bag.hiddenBeforeDecodeMs = hiddenBeforeDecodeMs;
-  if (scoped.inputWidth != null) bag.inputWidth = scoped.inputWidth;
-  if (scoped.inputHeight != null) bag.inputHeight = scoped.inputHeight;
-  if (scoped.outputWidth != null) bag.outputWidth = scoped.outputWidth;
-  if (scoped.outputHeight != null) bag.outputHeight = scoped.outputHeight;
-  if (scoped.encodeAttempts != null) bag.encodeAttempts = scoped.encodeAttempts;
-  if (scoped.encodeMime) bag.encodeMime = scoped.encodeMime;
-  if (scoped.decodePath) bag.decodePath = scoped.decodePath;
-  if (scoped.encodePath) bag.encodePath = scoped.encodePath;
 }
 
 export function noteChatPhotoStorageBackend(backend: "r2" | "blob"): void {
@@ -738,29 +268,6 @@ export function summarizeChatPhotoTiming(
   };
 }
 
-function unaccountedAdaptiveMs(bag?: ChatPhotoTimingBag): number | null {
-  const total = bag?.adaptiveTotalMs ?? bag?.compressionMs;
-  if (total == null) return null;
-  const parts = [bag?.hiddenBeforeDecodeMs, bag?.decodeMs, bag?.canvasCreateMs, bag?.drawResizeMs, bag?.alphaProbeMs, bag?.encode1Ms, bag?.encode2Ms, bag?.postEncodeMs];
-  if (parts.every((part) => part == null)) return null;
-  const accounted = parts.reduce((sum, part) => sum + (part ?? 0), 0);
-  return Math.max(0, Math.round(total - accounted));
-}
-
-function unaccountedPrepareMs(bag?: ChatPhotoTimingBag): number | null {
-  if (bag?.prepareOuterMs == null || bag?.adaptiveTotalMs == null) return null;
-  return Math.max(0, Math.round(bag.prepareOuterMs - bag.adaptiveTotalMs));
-}
-
-function stampDelta(from?: number | null, to?: number | null): number | null {
-  if (from == null || to == null || !Number.isFinite(from) || !Number.isFinite(to)) return null;
-  return Math.max(0, Math.round(to - from));
-}
-
-function roundStamp(value?: number | null): number | null {
-  return value != null && Number.isFinite(value) ? Math.round(value) : null;
-}
-
 export function buildChatPhotoDebugSample(
   bag = globalThis.__CHAT_PHOTO_TIMING__
 ): ChatPhotoDebugSample {
@@ -773,11 +280,7 @@ export function buildChatPhotoDebugSample(
     sourceBytes: bag?.sourceBytes ?? null,
     uploadBytes: bag?.uploadBytes ?? null,
     compressionMs:
-      bag?.compressionMs != null
-        ? Math.round(bag.compressionMs)
-        : bag?.adaptiveTotalMs != null
-          ? Math.round(bag.adaptiveTotalMs)
-          : null,
+      bag?.compressionMs != null ? Math.round(bag.compressionMs) : latestChatPhotoMark("select_to_prepared", bag),
     decodeMs: bag?.decodeMs != null ? Math.round(bag.decodeMs) : null,
     drawResizeMs: bag?.drawResizeMs != null ? Math.round(bag.drawResizeMs) : null,
     encode1Ms: bag?.encode1Ms != null ? Math.round(bag.encode1Ms) : null,
@@ -788,55 +291,6 @@ export function buildChatPhotoDebugSample(
     outputHeight: bag?.outputHeight ?? null,
     encodeAttempts: bag?.encodeAttempts ?? null,
     encodeMime: bag?.encodeMime ?? null,
-    decodePath: bag?.decodePath ?? null,
-    encodePath: bag?.encodePath ?? null,
-    timingRunId: bag?.timingRunId ?? null,
-    adaptiveTotalMs: bag?.adaptiveTotalMs != null ? Math.round(bag.adaptiveTotalMs) : null,
-    prepareOuterMs: bag?.prepareOuterMs != null ? Math.round(bag.prepareOuterMs) : null,
-    headerProbeMs: bag?.headerProbeMs != null ? Math.round(bag.headerProbeMs) : null,
-    bitmapCreateMs: bag?.bitmapCreateMs != null ? Math.round(bag.bitmapCreateMs) : null,
-    canvasCreateMs: bag?.canvasCreateMs != null ? Math.round(bag.canvasCreateMs) : null,
-    alphaProbeMs: bag?.alphaProbeMs != null ? Math.round(bag.alphaProbeMs) : null,
-    postEncodeMs: bag?.postEncodeMs != null ? Math.round(bag.postEncodeMs) : null,
-    stateCommitMs: bag?.stateCommitMs != null ? Math.round(bag.stateCommitMs) : null,
-    hiddenBeforeDecodeMs: bag?.hiddenBeforeDecodeMs != null ? Math.round(bag.hiddenBeforeDecodeMs) : null,
-    unaccountedAdaptiveMs: unaccountedAdaptiveMs(bag),
-    unaccountedPrepareMs: unaccountedPrepareMs(bag),
-    timingKey: bag?.timingKey ?? null,
-    runIdResolved: bag?.runIdResolved ?? null,
-    jpegDirectRun: bag?.jpegDirectRun ?? null,
-    sameFileBound: bag?.sameFileBound ?? null,
-    pendingPrepareStartAt: roundStamp(bag?.pendingPrepareStartAt),
-    prepareWrapperEnterAt: roundStamp(bag?.prepareWrapperEnterAt),
-    photoSourceEnterAt: roundStamp(bag?.photoSourceEnterAt),
-    adaptiveBlobEnterAt: roundStamp(bag?.adaptiveBlobEnterAt),
-    adaptiveEnterAt: roundStamp(bag?.adaptiveEnterAt),
-    adaptiveExitAt: roundStamp(bag?.adaptiveExitAt),
-    photoSourceExitAt: roundStamp(bag?.photoSourceExitAt),
-    prepareWrapperExitAt: roundStamp(bag?.prepareWrapperExitAt),
-    pendingPrepareEndAt: roundStamp(bag?.pendingPrepareEndAt),
-    pendingToWrapperMs: stampDelta(bag?.pendingPrepareStartAt, bag?.prepareWrapperEnterAt),
-    wrapperToSourceMs: stampDelta(bag?.prepareWrapperEnterAt, bag?.photoSourceEnterAt),
-    sourceToAdaptiveBlobMs: stampDelta(bag?.photoSourceEnterAt, bag?.adaptiveBlobEnterAt),
-    adaptiveBlobToAdaptiveMs: stampDelta(bag?.adaptiveBlobEnterAt, bag?.adaptiveEnterAt),
-    adaptiveMs: stampDelta(bag?.adaptiveEnterAt, bag?.adaptiveExitAt),
-    adaptiveExitToSourceExitMs: stampDelta(bag?.adaptiveExitAt, bag?.photoSourceExitAt),
-    sourceExitToWrapperExitMs: stampDelta(bag?.photoSourceExitAt, bag?.prepareWrapperExitAt),
-    wrapperExitToPendingEndMs: stampDelta(bag?.prepareWrapperExitAt, bag?.pendingPrepareEndAt),
-    sourceEnterToAcceptableMs: stampDelta(bag?.photoSourceEnterAt, bag?.sourceAcceptableEndAt),
-    acceptableToFastPathMs: stampDelta(bag?.sourceAcceptableEndAt, bag?.sourceFastPathEndAt),
-    fastPathToRunResolveMs: stampDelta(bag?.sourceFastPathEndAt, bag?.sourceRunResolveEndAt),
-    runResolveToHeicMs: stampDelta(bag?.sourceRunResolveEndAt, bag?.sourceHeicEndAt),
-    heicToKindMs: stampDelta(bag?.sourceHeicEndAt, bag?.sourceKindEndAt),
-    kindToNoteScopeMs: stampDelta(bag?.sourceKindEndAt, bag?.sourceNoteScopeEndAt),
-    noteScopeToRunInvokeMs: stampDelta(bag?.sourceNoteScopeEndAt, bag?.sourceRunInvokeAt),
-    runInvokeToAdaptiveBlobMs: stampDelta(bag?.sourceRunInvokeAt, bag?.adaptiveBlobEnterAt),
-    fileTypeReads: bag?.fileTypeReads ?? null,
-    fileNameReads: bag?.fileNameReads ?? null,
-    fileSizeReads: bag?.fileSizeReads ?? null,
-    fileTypeMs: bag?.fileTypeMs != null ? Math.round(bag.fileTypeMs) : null,
-    fileNameMs: bag?.fileNameMs != null ? Math.round(bag.fileNameMs) : null,
-    fileSizeMs: bag?.fileSizeMs != null ? Math.round(bag.fileSizeMs) : null,
     selectedToUploadStartMs: summary.select_to_put_start_ms,
     prepareApiMs: latestChatPhotoMark("prepare_api", bag),
     storageBackend: bag?.storageBackend ?? null,
@@ -911,7 +365,6 @@ export function canShowChatPhotoDebug(input: {
 }
 
 export function resetChatPhotoTiming(): void {
-  prepareTimingRuns.clear();
   const bag = globalThis.__CHAT_PHOTO_TIMING__;
   if (!bag) {
     globalThis.__CHAT_PHOTO_TIMING__ = { marks: [], stamps: {} };
@@ -932,45 +385,6 @@ export function resetChatPhotoTiming(): void {
   delete bag.outputHeight;
   delete bag.encodeAttempts;
   delete bag.encodeMime;
-  delete bag.decodePath;
-  delete bag.encodePath;
-  delete bag.timingRunId;
-  delete bag.adaptiveTotalMs;
-  delete bag.prepareOuterMs;
-  delete bag.headerProbeMs;
-  delete bag.bitmapCreateMs;
-  delete bag.canvasCreateMs;
-  delete bag.alphaProbeMs;
-  delete bag.postEncodeMs;
-  delete bag.stateCommitMs;
-  delete bag.hiddenBeforeDecodeMs;
-  delete bag.timingKey;
-  delete bag.runIdResolved;
-  delete bag.jpegDirectRun;
-  delete bag.sameFileBound;
-  delete bag.pendingPrepareStartAt;
-  delete bag.prepareWrapperEnterAt;
-  delete bag.photoSourceEnterAt;
-  delete bag.adaptiveBlobEnterAt;
-  delete bag.adaptiveEnterAt;
-  delete bag.adaptiveExitAt;
-  delete bag.photoSourceExitAt;
-  delete bag.prepareWrapperExitAt;
-  delete bag.pendingPrepareEndAt;
-  delete bag.sourceAcceptableEndAt;
-  delete bag.sourceFastPathEndAt;
-  delete bag.sourceRunResolveEndAt;
-  delete bag.sourceHeicEndAt;
-  delete bag.sourceKindEndAt;
-  delete bag.sourceNoteScopeEndAt;
-  delete bag.sourceRunInvokeAt;
-  delete bag.fileTypeReads;
-  delete bag.fileNameReads;
-  delete bag.fileSizeReads;
-  delete bag.fileTypeMs;
-  delete bag.fileNameMs;
-  delete bag.fileSizeMs;
-  prepareTimingRuns.clear();
   delete bag.prepareHotpath;
   delete bag.finalizeHotpath;
   delete bag.storageBackend;
