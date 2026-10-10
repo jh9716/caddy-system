@@ -101,6 +101,7 @@ public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
             String[] previewIds = new String[picked.length];
             int lastW = 0;
             int lastH = 0;
+            String lastMeta = "";
             long previewWall = 0L;
             long hqWall = 0L;
 
@@ -125,6 +126,8 @@ public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
                 if (converted.outputWidth > 0 && converted.outputHeight > 0) {
                     lastW = converted.outputWidth;
                     lastH = converted.outputHeight;
+                    String metaLabel = converted.meta.toastLabel();
+                    if (!metaLabel.isEmpty()) lastMeta = metaLabel;
                 }
             }
             hqWall = SystemClock.elapsedRealtime() - hqStarted;
@@ -136,7 +139,9 @@ public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
                     previewWall +
                     "ms · HQ " +
                     hqWall +
-                    "ms · " +
+                    "ms" +
+                    (lastMeta.isEmpty() ? "" : " · " + lastMeta) +
+                    " · " +
                     lastW +
                     "x" +
                     lastH

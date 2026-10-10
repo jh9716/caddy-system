@@ -12,6 +12,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
+import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import androidx.core.content.FileProvider;
 import java.io.File;
@@ -41,6 +42,38 @@ final class HeicNativeJpegConverter {
 
     private HeicNativeJpegConverter() {}
 
+    static final class MetaTimings {
+        static final String SOURCE_QUERY = "query";
+        static final String SOURCE_FALLBACK = "fallback";
+
+        final long metadataQueryMs;
+        final long boundsFallbackMs;
+        final long orientationFallbackMs;
+        final String source;
+
+        MetaTimings(
+            long metadataQueryMs,
+            long boundsFallbackMs,
+            long orientationFallbackMs,
+            String source
+        ) {
+            this.metadataQueryMs = metadataQueryMs;
+            this.boundsFallbackMs = boundsFallbackMs;
+            this.orientationFallbackMs = orientationFallbackMs;
+            this.source = source == null ? "" : source;
+        }
+
+        static MetaTimings empty() {
+            return new MetaTimings(0L, 0L, 0L, "");
+        }
+
+        String toastLabel() {
+            if (SOURCE_QUERY.equals(source)) return "meta query";
+            if (SOURCE_FALLBACK.equals(source)) return "meta fallback";
+            return "";
+        }
+    }
+
     static final class ConvertResult {
         final Uri uri;
         final String path;
@@ -53,6 +86,7 @@ final class HeicNativeJpegConverter {
         final int outputWidth;
         final int outputHeight;
         final long outputBytes;
+        final MetaTimings meta;
 
         ConvertResult(
             Uri uri,
@@ -67,6 +101,36 @@ final class HeicNativeJpegConverter {
             int outputHeight,
             long outputBytes
         ) {
+            this(
+                uri,
+                path,
+                boundsMs,
+                decodeMs,
+                rotateMs,
+                scaleMs,
+                jpegMs,
+                totalNativeMs,
+                outputWidth,
+                outputHeight,
+                outputBytes,
+                MetaTimings.empty()
+            );
+        }
+
+        ConvertResult(
+            Uri uri,
+            String path,
+            long boundsMs,
+            long decodeMs,
+            long rotateMs,
+            long scaleMs,
+            long jpegMs,
+            long totalNativeMs,
+            int outputWidth,
+            int outputHeight,
+            long outputBytes,
+            MetaTimings meta
+        ) {
             this.uri = uri;
             this.path = path;
             this.boundsMs = boundsMs;
@@ -78,6 +142,7 @@ final class HeicNativeJpegConverter {
             this.outputWidth = outputWidth;
             this.outputHeight = outputHeight;
             this.outputBytes = outputBytes;
+            this.meta = meta == null ? MetaTimings.empty() : meta;
         }
 
         boolean shouldToast() {
@@ -93,9 +158,16 @@ final class HeicNativeJpegConverter {
                 return "HEIC native FAIL → web";
             }
             String label = PATH_BITMAP.equals(path) ? "HEIC bitmap" : "HEIC decoder-sampled";
+            String metaLabel = meta.toastLabel();
             return (
                 label +
-                " · bounds " +
+                " · metadataQuery " +
+                meta.metadataQueryMs +
+                "ms · boundsFallback " +
+                meta.boundsFallbackMs +
+                "ms · orientationFallback " +
+                meta.orientationFallbackMs +
+                "ms · bounds " +
                 boundsMs +
                 "ms · decode " +
                 decodeMs +
@@ -108,6 +180,7 @@ final class HeicNativeJpegConverter {
                 "ms · total " +
                 totalNativeMs +
                 "ms · " +
+                (metaLabel.isEmpty() ? "" : metaLabel + " · ") +
                 outputWidth +
                 "x" +
                 outputHeight +
@@ -313,8 +386,106 @@ final class HeicNativeJpegConverter {
             totalNativeMs,
             result.outputWidth,
             result.outputHeight,
-            result.outputBytes
+            result.outputBytes,
+            result.meta
         );
+    }
+
+    static boolean isTrustedOrientationDegrees(int degrees) {
+        return degrees == 0 || degrees == 90 || degrees == 180 || degrees == 270;
+    }
+
+    static int exifFromOrientationDegrees(int degrees) {
+        switch (degrees) {
+            case 90:
+                return ExifInterface.ORIENTATION_ROTATE_90;
+            case 180:
+                return ExifInterface.ORIENTATION_ROTATE_180;
+            case 270:
+                return ExifInterface.ORIENTATION_ROTATE_270;
+            default:
+                return ExifInterface.ORIENTATION_NORMAL;
+        }
+    }
+
+    static final class MediaMeta {
+        final int width;
+        final int height;
+        final Integer orientationDegrees;
+
+        MediaMeta(int width, int height, Integer orientationDegrees) {
+            this.width = width;
+            this.height = height;
+            this.orientationDegrees = orientationDegrees;
+        }
+
+        boolean hasSize() {
+            return width >= 1 && height >= 1;
+        }
+
+        boolean hasOrientation() {
+            return orientationDegrees != null && isTrustedOrientationDegrees(orientationDegrees);
+        }
+    }
+
+    static MediaMeta queryMediaMeta(Context context, Uri uri) {
+        if (context == null || uri == null) return new MediaMeta(0, 0, null);
+        MediaMeta withOrientation = queryMediaMeta(context, uri, true);
+        if (withOrientation.hasSize() || withOrientation.hasOrientation()) {
+            return withOrientation;
+        }
+        return queryMediaMeta(context, uri, false);
+    }
+
+    private static MediaMeta queryMediaMeta(Context context, Uri uri, boolean includeOrientation) {
+        Cursor cursor = null;
+        try {
+            String[] projection = includeOrientation
+                ? new String[] {
+                    MediaStore.MediaColumns.WIDTH,
+                    MediaStore.MediaColumns.HEIGHT,
+                    MediaStore.Images.Media.ORIENTATION
+                }
+                : new String[] {
+                    MediaStore.MediaColumns.WIDTH,
+                    MediaStore.MediaColumns.HEIGHT
+                };
+            cursor = context.getContentResolver().query(uri, projection, null, null, null);
+            if (cursor == null || !cursor.moveToFirst()) {
+                return new MediaMeta(0, 0, null);
+            }
+            int width = readPositiveIntColumn(cursor, MediaStore.MediaColumns.WIDTH);
+            int height = readPositiveIntColumn(cursor, MediaStore.MediaColumns.HEIGHT);
+            Integer orientation = includeOrientation
+                ? readTrustedOrientationColumn(cursor)
+                : null;
+            return new MediaMeta(width, height, orientation);
+        } catch (Exception ignored) {
+            return new MediaMeta(0, 0, null);
+        } finally {
+            if (cursor != null) cursor.close();
+        }
+    }
+
+    private static int readPositiveIntColumn(Cursor cursor, String name) {
+        try {
+            int index = cursor.getColumnIndex(name);
+            if (index < 0 || cursor.isNull(index)) return 0;
+            return Math.max(0, cursor.getInt(index));
+        } catch (Exception ignored) {
+            return 0;
+        }
+    }
+
+    private static Integer readTrustedOrientationColumn(Cursor cursor) {
+        try {
+            int index = cursor.getColumnIndex(MediaStore.Images.Media.ORIENTATION);
+            if (index < 0 || cursor.isNull(index)) return null;
+            int degrees = cursor.getInt(index);
+            return isTrustedOrientationDegrees(degrees) ? degrees : null;
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private static ConvertResult tryBitmapFactory(Context context, Uri uri, String outputName) {
@@ -322,24 +493,52 @@ final class HeicNativeJpegConverter {
         if (outFile == null) return null;
         Bitmap bitmap = null;
         try {
-            long boundsStarted = SystemClock.elapsedRealtime();
-            BitmapFactory.Options bounds = new BitmapFactory.Options();
-            bounds.inJustDecodeBounds = true;
-            ParcelFileDescriptor boundsPfd = context.getContentResolver().openFileDescriptor(uri, "r");
-            if (boundsPfd == null) return null;
-            try {
-                BitmapFactory.decodeFileDescriptor(boundsPfd.getFileDescriptor(), null, bounds);
-            } finally {
-                boundsPfd.close();
+            long metaStarted = SystemClock.elapsedRealtime();
+            MediaMeta meta = queryMediaMeta(context, uri);
+            long metadataQueryMs = SystemClock.elapsedRealtime() - metaStarted;
+
+            int srcWidth = meta.width;
+            int srcHeight = meta.height;
+            long boundsFallbackMs = 0L;
+            if (!meta.hasSize()) {
+                long boundsStarted = SystemClock.elapsedRealtime();
+                BitmapFactory.Options bounds = new BitmapFactory.Options();
+                bounds.inJustDecodeBounds = true;
+                ParcelFileDescriptor boundsPfd = context.getContentResolver().openFileDescriptor(uri, "r");
+                if (boundsPfd == null) {
+                    deleteQuietly(outFile);
+                    return null;
+                }
+                try {
+                    BitmapFactory.decodeFileDescriptor(boundsPfd.getFileDescriptor(), null, bounds);
+                } finally {
+                    boundsPfd.close();
+                }
+                boundsFallbackMs = SystemClock.elapsedRealtime() - boundsStarted;
+                srcWidth = bounds.outWidth;
+                srcHeight = bounds.outHeight;
             }
-            long boundsMs = SystemClock.elapsedRealtime() - boundsStarted;
-            if (bounds.outWidth < 1 || bounds.outHeight < 1) {
+            if (srcWidth < 1 || srcHeight < 1) {
                 deleteQuietly(outFile);
                 return null;
             }
 
-            int orientation = readExifOrientation(context, uri);
-            int sample = powerOfTwoSampleSize(bounds.outWidth, bounds.outHeight, LONG_EDGE);
+            int orientation;
+            long orientationFallbackMs = 0L;
+            if (meta.hasOrientation()) {
+                orientation = exifFromOrientationDegrees(meta.orientationDegrees);
+            } else {
+                long orientationStarted = SystemClock.elapsedRealtime();
+                orientation = readExifOrientation(context, uri);
+                orientationFallbackMs = SystemClock.elapsedRealtime() - orientationStarted;
+            }
+            MetaTimings timings = new MetaTimings(
+                metadataQueryMs,
+                boundsFallbackMs,
+                orientationFallbackMs,
+                meta.hasSize() ? MetaTimings.SOURCE_QUERY : MetaTimings.SOURCE_FALLBACK
+            );
+            int sample = powerOfTwoSampleSize(srcWidth, srcHeight, LONG_EDGE);
 
             long decodeStarted = SystemClock.elapsedRealtime();
             BitmapFactory.Options decode = new BitmapFactory.Options();
@@ -387,10 +586,11 @@ final class HeicNativeJpegConverter {
                 outFile,
                 bitmap,
                 PATH_BITMAP,
-                boundsMs,
+                timings.boundsFallbackMs,
                 decodeMs,
                 rotateMs,
-                scaleMs
+                scaleMs,
+                timings
             );
         } catch (Exception ignored) {
             deleteQuietly(outFile);
@@ -441,7 +641,8 @@ final class HeicNativeJpegConverter {
                 0L,
                 decodeMs,
                 0L,
-                scaleMs
+                scaleMs,
+                MetaTimings.empty()
             );
         } catch (Exception ignored) {
             deleteQuietly(outFile);
@@ -459,7 +660,8 @@ final class HeicNativeJpegConverter {
         long boundsMs,
         long decodeMs,
         long rotateMs,
-        long scaleMs
+        long scaleMs,
+        MetaTimings meta
     ) {
         long jpegStarted = SystemClock.elapsedRealtime();
         try {
@@ -499,7 +701,8 @@ final class HeicNativeJpegConverter {
                 0L,
                 bitmap.getWidth(),
                 bitmap.getHeight(),
-                outFile.length()
+                outFile.length(),
+                meta
             );
         } catch (Exception ignored) {
             deleteQuietly(outFile);

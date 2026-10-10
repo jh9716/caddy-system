@@ -831,6 +831,10 @@ section("instant preview + parallel upload");
   assert(placeholder.blob.size === 0, "placeholder blob is not an upload source");
   assert(placeholder.previewUrl.startsWith("data:image/jpeg;base64,"), "composer shows JPEG data URL");
   assert(
+    !chatPhotoComposerBusy(placeholder),
+    "visible native preview hides the loading spinner"
+  );
+  assert(
     readyChatPhotosForUpload([placeholder]).length === 0,
     "quick 384x512 thumbnail is never uploaded"
   );

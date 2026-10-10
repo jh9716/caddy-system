@@ -586,6 +586,29 @@ assert(
   "converted file keeps .jpg so JS heic-to does not run"
 );
 assert(
+  heicConverter.includes("MediaStore.MediaColumns.WIDTH") &&
+    heicConverter.includes("MediaStore.MediaColumns.HEIGHT") &&
+    heicConverter.includes("MediaStore.Images.Media.ORIENTATION") &&
+    heicConverter.includes("queryMediaMeta") &&
+    heicConverter.includes("isTrustedOrientationDegrees") &&
+    heicConverter.includes("exifFromOrientationDegrees") &&
+    heicConverter.includes("if (!meta.hasSize())") &&
+    heicConverter.includes("inJustDecodeBounds") &&
+    heicConverter.includes("readExifOrientation") &&
+    heicConverter.includes("metadataQueryMs") &&
+    heicConverter.includes("boundsFallbackMs") &&
+    heicConverter.includes("orientationFallbackMs"),
+  "MediaStore WIDTH/HEIGHT/ORIENTATION skip bounds/EXIF when valid"
+);
+assert(
+  heicConverter.includes("SOURCE_QUERY") &&
+    heicConverter.includes("SOURCE_FALLBACK") &&
+    heicConverter.includes("meta query") &&
+    heicConverter.includes("meta fallback") &&
+    chromeClient.includes("converted.meta.toastLabel()"),
+  "debug toast distinguishes meta query vs meta fallback"
+);
+assert(
   chromeClient.includes("FLAG_DEBUGGABLE") &&
     chromeClient.includes("isDebugApk") &&
     chromeClient.includes("Toast.makeText") &&
@@ -648,6 +671,7 @@ assert(
     chatClient.includes("shouldQueueNativeChatSend") &&
     chatClient.includes("abandonedNativePreviewIdsRef") &&
     chatClient.includes("준비 중") &&
+    read("src/lib/chatPhotoPick.ts").includes("item.nativePreview === true && Boolean(item.previewUrl)") &&
     read("src/lib/chatPhotoPick.ts").includes("item.nativePreview !== true") &&
     read("src/lib/chatPhotoNativePreview.ts").includes("data:image/jpeg;base64,"),
   "web composer shows native preview, waits for HQ, and never uploads the thumbnail"
