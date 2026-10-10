@@ -515,57 +515,68 @@ assert(
   "dialogs / permission / fullscreen / console stay on superclass"
 );
 assert(
-  heicConverter.includes("loadThumbnail") &&
-    heicConverter.includes("SDK_INT < 29") &&
-    heicConverter.includes("PATH_THUMBNAIL") &&
-    heicConverter.includes("tryLoadThumbnail"),
-  "API 29+ loadThumbnail is the first HEIC path"
+  !heicConverter.includes("loadThumbnail(") &&
+    !heicConverter.includes("PATH_THUMBNAIL") &&
+    !heicConverter.includes("tryLoadThumbnail"),
+  "provider thumbnail API is not used for the upload JPEG"
+);
+assert(
+  heicConverter.includes("BitmapFactory.decodeFileDescriptor") &&
+    heicConverter.includes("inJustDecodeBounds") &&
+    heicConverter.includes("inSampleSize") &&
+    heicConverter.includes("powerOfTwoSampleSize") &&
+    heicConverter.includes("tryBitmapFactory") &&
+    heicConverter.includes("PATH_BITMAP"),
+  "BitmapFactory FileDescriptor + power-of-two inSampleSize is the first HEIC path"
 );
 assert(
   heicConverter.includes("ImageDecoder") &&
+    heicConverter.includes("setTargetSampleSize") &&
+    !heicConverter.includes("setTargetSize") &&
+    heicConverter.includes("tryImageDecoderSampled") &&
+    heicConverter.includes("PATH_DECODER_SAMPLED") &&
     heicConverter.includes("LONG_EDGE = 1600") &&
-    heicConverter.includes("JPEG_QUALITY = 82") &&
-    heicConverter.includes("ALLOCATOR_SOFTWARE") &&
-    heicConverter.includes("setTargetSize") &&
-    heicConverter.includes("tryImageDecoder") &&
-    heicConverter.includes("PATH_IMAGEDECODER"),
-  "loadThumbnail failure falls back to API 28+ ImageDecoder 1600 JPEG quality 82"
+    heicConverter.includes("JPEG_QUALITY = 82"),
+  "BitmapFactory failure falls back to ImageDecoder setTargetSampleSize"
 );
 assert(
   heicConverter.includes("SDK_INT < 28") &&
     heicConverter.includes("PATH_WEB") &&
-    heicConverter.includes("tryLoadThumbnail(context, uri)") &&
-    heicConverter.includes("tryImageDecoder(context, uri)"),
-  "thumbnail then ImageDecoder failure returns original HEIC URI for web heic-to"
+    heicConverter.includes("tryBitmapFactory(context, uri)") &&
+    heicConverter.includes("tryImageDecoderSampled(context, uri)"),
+  "both native paths failing returns original HEIC URI for web heic-to"
+);
+assert(
+  heicConverter.includes("ExifInterface") &&
+    heicConverter.includes("applyExifOrientation") &&
+    heicConverter.includes("ORIENTATION_ROTATE_90") &&
+    heicConverter.includes("ORIENTATION_ROTATE_270"),
+  "BitmapFactory path applies EXIF orientation"
 );
 assert(
   heicConverter.includes("downscaleIfNeeded") &&
     heicConverter.includes("Never upscale") &&
     heicConverter.includes("Math.max(width, height) <= longEdge"),
-  "thumbnail bitmaps are never upscaled; only scaled down to 1600"
+  "decoded bitmaps are never upscaled; only scaled down to 1600"
 );
 assert(
-  heicConverter.includes("thumbnailRequestSize") &&
-    heicConverter.includes("new Size(LONG_EDGE, LONG_EDGE)"),
-  "known source size keeps aspect; unknown size requests 1600x1600"
-);
-assert(
-  heicConverter.includes('endsWith(".jpg")') ||
-    heicConverter.includes('UUID.randomUUID().toString() + ".jpg"'),
+  heicConverter.includes('UUID.randomUUID().toString() + ".jpg"'),
   "converted file keeps .jpg so JS heic-to does not run"
 );
 assert(
   chromeClient.includes("FLAG_DEBUGGABLE") &&
     chromeClient.includes("isDebugApk") &&
     chromeClient.includes("Toast.makeText") &&
-    heicConverter.includes("HEIC thumb OK") &&
-    heicConverter.includes("HEIC decoder") &&
+    heicConverter.includes("HEIC bitmap") &&
+    heicConverter.includes("HEIC decoder-sampled") &&
     heicConverter.includes("HEIC native FAIL → web") &&
-    heicConverter.includes("thumbnailMs") &&
-    heicConverter.includes("decoderMs") &&
-    heicConverter.includes("jpegCompressMs") &&
+    heicConverter.includes("boundsMs") &&
+    heicConverter.includes("decodeMs") &&
+    heicConverter.includes("rotateMs") &&
+    heicConverter.includes("scaleMs") &&
+    heicConverter.includes("jpegMs") &&
     heicConverter.includes("totalNativeMs"),
-  "debug APK toasts thumbnail / imagedecoder / web timings without URIs"
+  "debug APK toasts subsample path timings without URIs"
 );
 assert(
   !heicConverter.includes("uri.toString()") &&

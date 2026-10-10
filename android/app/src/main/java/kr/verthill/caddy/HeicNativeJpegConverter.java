@@ -4,13 +4,15 @@ import android.content.Context;
 import android.content.Intent;
 import android.database.Cursor;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.ImageDecoder;
+import android.graphics.Matrix;
+import android.media.ExifInterface;
 import android.net.Uri;
 import android.os.Build;
+import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
-import android.provider.MediaStore;
 import android.provider.OpenableColumns;
-import android.util.Size;
 import androidx.core.content.FileProvider;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -20,8 +22,9 @@ import java.util.UUID;
 /**
  * HEIC/HEIF → 1600 long-edge JPEG for the WebView file chooser.
  *
- * API 29+: ContentResolver.loadThumbnail first, then ImageDecoder, then the
- * original HEIC URI (JS heic-to). JPEG/PNG/WEBP stay on the picker URI.
+ * Fast path: BitmapFactory FileDescriptor + power-of-two inSampleSize.
+ * Fallback: ImageDecoder setTargetSampleSize, then web heic-to.
+ * Provider thumbs are never the upload file. JPEG/PNG/WEBP stay on the picker URI.
  * No permissions, no base64.
  */
 final class HeicNativeJpegConverter {
@@ -31,8 +34,8 @@ final class HeicNativeJpegConverter {
     static final String CACHE_DIR_NAME = "heic-jpeg";
     static final long STALE_AFTER_MS = 60L * 60L * 1000L;
 
-    static final String PATH_THUMBNAIL = "thumbnail";
-    static final String PATH_IMAGEDECODER = "imagedecoder";
+    static final String PATH_BITMAP = "bitmap";
+    static final String PATH_DECODER_SAMPLED = "decoder-sampled";
     static final String PATH_WEB = "web";
     static final String PATH_PASSTHROUGH = "passthrough";
 
@@ -41,9 +44,11 @@ final class HeicNativeJpegConverter {
     static final class ConvertResult {
         final Uri uri;
         final String path;
-        final long thumbnailMs;
-        final long decoderMs;
-        final long jpegCompressMs;
+        final long boundsMs;
+        final long decodeMs;
+        final long rotateMs;
+        final long scaleMs;
+        final long jpegMs;
         final long totalNativeMs;
         final int outputWidth;
         final int outputHeight;
@@ -52,9 +57,11 @@ final class HeicNativeJpegConverter {
         ConvertResult(
             Uri uri,
             String path,
-            long thumbnailMs,
-            long decoderMs,
-            long jpegCompressMs,
+            long boundsMs,
+            long decodeMs,
+            long rotateMs,
+            long scaleMs,
+            long jpegMs,
             long totalNativeMs,
             int outputWidth,
             int outputHeight,
@@ -62,9 +69,11 @@ final class HeicNativeJpegConverter {
         ) {
             this.uri = uri;
             this.path = path;
-            this.thumbnailMs = thumbnailMs;
-            this.decoderMs = decoderMs;
-            this.jpegCompressMs = jpegCompressMs;
+            this.boundsMs = boundsMs;
+            this.decodeMs = decodeMs;
+            this.rotateMs = rotateMs;
+            this.scaleMs = scaleMs;
+            this.jpegMs = jpegMs;
             this.totalNativeMs = totalNativeMs;
             this.outputWidth = outputWidth;
             this.outputHeight = outputHeight;
@@ -73,8 +82,8 @@ final class HeicNativeJpegConverter {
 
         boolean shouldToast() {
             return (
-                PATH_THUMBNAIL.equals(path) ||
-                PATH_IMAGEDECODER.equals(path) ||
+                PATH_BITMAP.equals(path) ||
+                PATH_DECODER_SAMPLED.equals(path) ||
                 PATH_WEB.equals(path)
             );
         }
@@ -83,33 +92,28 @@ final class HeicNativeJpegConverter {
             if (PATH_WEB.equals(path)) {
                 return "HEIC native FAIL → web";
             }
-            String size = outputWidth + "x" + outputHeight;
-            String kb = Math.max(0, Math.round(outputBytes / 1024.0)) + "KB";
-            if (PATH_THUMBNAIL.equals(path)) {
-                return (
-                    "HEIC thumb OK · " +
-                    thumbnailMs +
-                    "ms · " +
-                    size +
-                    " · " +
-                    kb +
-                    " · jpeg " +
-                    jpegCompressMs +
-                    "ms · total " +
-                    totalNativeMs +
-                    "ms"
-                );
-            }
+            String label = PATH_BITMAP.equals(path) ? "HEIC bitmap" : "HEIC decoder-sampled";
             return (
-                "HEIC decoder · " +
-                decoderMs +
-                "ms · " +
-                size +
-                " · jpeg " +
-                jpegCompressMs +
+                label +
+                " · bounds " +
+                boundsMs +
+                "ms · decode " +
+                decodeMs +
+                "ms · rotate " +
+                rotateMs +
+                "ms · scale " +
+                scaleMs +
+                "ms · jpeg " +
+                jpegMs +
                 "ms · total " +
                 totalNativeMs +
-                "ms"
+                "ms · " +
+                outputWidth +
+                "x" +
+                outputHeight +
+                " · " +
+                Math.max(0, Math.round(outputBytes / 1024.0)) +
+                "KB"
             );
         }
     }
@@ -166,9 +170,18 @@ final class HeicNativeJpegConverter {
         };
     }
 
-    static Size thumbnailRequestSize(int width, int height) {
-        int[] sized = targetSize(width, height, LONG_EDGE);
-        return new Size(sized[0], sized[1]);
+    /**
+     * Largest power-of-two sample that keeps the decoded long edge >= 1600
+     * when the source is larger. Never samples below 1600 when avoidable.
+     */
+    static int powerOfTwoSampleSize(int width, int height, int longEdge) {
+        int longest = Math.max(Math.max(1, width), Math.max(1, height));
+        if (longest <= longEdge) return 1;
+        int sample = 1;
+        while (longest / (sample * 2) >= longEdge) {
+            sample *= 2;
+        }
+        return sample;
     }
 
     /**
@@ -190,6 +203,51 @@ final class HeicNativeJpegConverter {
         return scaled;
     }
 
+    static Bitmap applyExifOrientation(Bitmap src, int orientation) {
+        if (src == null) return null;
+        Matrix matrix = new Matrix();
+        switch (orientation) {
+            case ExifInterface.ORIENTATION_FLIP_HORIZONTAL:
+                matrix.setScale(-1f, 1f);
+                break;
+            case ExifInterface.ORIENTATION_ROTATE_180:
+                matrix.setRotate(180f);
+                break;
+            case ExifInterface.ORIENTATION_FLIP_VERTICAL:
+                matrix.setScale(1f, -1f);
+                break;
+            case ExifInterface.ORIENTATION_TRANSPOSE:
+                matrix.setRotate(90f);
+                matrix.postScale(-1f, 1f);
+                break;
+            case ExifInterface.ORIENTATION_ROTATE_90:
+                matrix.setRotate(90f);
+                break;
+            case ExifInterface.ORIENTATION_TRANSVERSE:
+                matrix.setRotate(-90f);
+                matrix.postScale(-1f, 1f);
+                break;
+            case ExifInterface.ORIENTATION_ROTATE_270:
+                matrix.setRotate(270f);
+                break;
+            default:
+                return src;
+        }
+        Bitmap rotated = Bitmap.createBitmap(
+            src,
+            0,
+            0,
+            src.getWidth(),
+            src.getHeight(),
+            matrix,
+            true
+        );
+        if (rotated != src) {
+            src.recycle();
+        }
+        return rotated;
+    }
+
     static ConvertResult resolveForWebView(Context context, Uri uri) {
         if (context == null || uri == null) {
             return passthrough(uri);
@@ -198,17 +256,19 @@ final class HeicNativeJpegConverter {
             return passthrough(uri);
         }
         long started = SystemClock.elapsedRealtime();
-        ConvertResult thumb = tryLoadThumbnail(context, uri);
-        if (thumb != null) {
-            return withTotal(thumb, SystemClock.elapsedRealtime() - started);
+        ConvertResult bitmapPath = tryBitmapFactory(context, uri);
+        if (bitmapPath != null) {
+            return withTotal(bitmapPath, SystemClock.elapsedRealtime() - started);
         }
-        ConvertResult decoded = tryImageDecoder(context, uri);
+        ConvertResult decoded = tryImageDecoderSampled(context, uri);
         if (decoded != null) {
             return withTotal(decoded, SystemClock.elapsedRealtime() - started);
         }
         return new ConvertResult(
             uri,
             PATH_WEB,
+            0L,
+            0L,
             0L,
             0L,
             0L,
@@ -234,16 +294,18 @@ final class HeicNativeJpegConverter {
     }
 
     private static ConvertResult passthrough(Uri uri) {
-        return new ConvertResult(uri, PATH_PASSTHROUGH, 0L, 0L, 0L, 0L, 0, 0, 0L);
+        return new ConvertResult(uri, PATH_PASSTHROUGH, 0L, 0L, 0L, 0L, 0L, 0L, 0, 0, 0L);
     }
 
     private static ConvertResult withTotal(ConvertResult result, long totalNativeMs) {
         return new ConvertResult(
             result.uri,
             result.path,
-            result.thumbnailMs,
-            result.decoderMs,
-            result.jpegCompressMs,
+            result.boundsMs,
+            result.decodeMs,
+            result.rotateMs,
+            result.scaleMs,
+            result.jpegMs,
             totalNativeMs,
             result.outputWidth,
             result.outputHeight,
@@ -251,31 +313,80 @@ final class HeicNativeJpegConverter {
         );
     }
 
-    private static ConvertResult tryLoadThumbnail(Context context, Uri uri) {
-        if (Build.VERSION.SDK_INT < 29) return null;
+    private static ConvertResult tryBitmapFactory(Context context, Uri uri) {
         File outFile = createJpegFile(context);
         if (outFile == null) return null;
         Bitmap bitmap = null;
-        long thumbStarted = SystemClock.elapsedRealtime();
-        long thumbnailMs = 0L;
         try {
-            Size request = thumbnailRequestFor(context, uri);
-            bitmap = context.getContentResolver().loadThumbnail(uri, request, null);
-            thumbnailMs = SystemClock.elapsedRealtime() - thumbStarted;
-            if (bitmap == null || bitmap.getWidth() < 1 || bitmap.getHeight() < 1) {
+            long boundsStarted = SystemClock.elapsedRealtime();
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            ParcelFileDescriptor boundsPfd = context.getContentResolver().openFileDescriptor(uri, "r");
+            if (boundsPfd == null) return null;
+            try {
+                BitmapFactory.decodeFileDescriptor(boundsPfd.getFileDescriptor(), null, bounds);
+            } finally {
+                boundsPfd.close();
+            }
+            long boundsMs = SystemClock.elapsedRealtime() - boundsStarted;
+            if (bounds.outWidth < 1 || bounds.outHeight < 1) {
+                deleteQuietly(outFile);
                 return null;
             }
+
+            int orientation = readExifOrientation(context, uri);
+            int sample = powerOfTwoSampleSize(bounds.outWidth, bounds.outHeight, LONG_EDGE);
+
+            long decodeStarted = SystemClock.elapsedRealtime();
+            BitmapFactory.Options decode = new BitmapFactory.Options();
+            decode.inJustDecodeBounds = false;
+            decode.inSampleSize = sample;
+            decode.inPreferredConfig = Bitmap.Config.ARGB_8888;
+            ParcelFileDescriptor decodePfd = context.getContentResolver().openFileDescriptor(uri, "r");
+            if (decodePfd == null) {
+                deleteQuietly(outFile);
+                return null;
+            }
+            try {
+                bitmap = BitmapFactory.decodeFileDescriptor(
+                    decodePfd.getFileDescriptor(),
+                    null,
+                    decode
+                );
+            } finally {
+                decodePfd.close();
+            }
+            long decodeMs = SystemClock.elapsedRealtime() - decodeStarted;
+            if (bitmap == null || bitmap.getWidth() < 1 || bitmap.getHeight() < 1) {
+                deleteQuietly(outFile);
+                return null;
+            }
+
+            long rotateStarted = SystemClock.elapsedRealtime();
+            bitmap = applyExifOrientation(bitmap, orientation);
+            long rotateMs = SystemClock.elapsedRealtime() - rotateStarted;
+            if (bitmap == null || bitmap.getWidth() < 1 || bitmap.getHeight() < 1) {
+                deleteQuietly(outFile);
+                return null;
+            }
+
+            long scaleStarted = SystemClock.elapsedRealtime();
             bitmap = downscaleIfNeeded(bitmap, LONG_EDGE);
+            long scaleMs = SystemClock.elapsedRealtime() - scaleStarted;
             if (bitmap == null || bitmap.getWidth() < 1 || bitmap.getHeight() < 1) {
+                deleteQuietly(outFile);
                 return null;
             }
+
             return compressToFile(
                 context,
                 outFile,
                 bitmap,
-                PATH_THUMBNAIL,
-                thumbnailMs,
-                0L
+                PATH_BITMAP,
+                boundsMs,
+                decodeMs,
+                rotateMs,
+                scaleMs
             );
         } catch (Exception ignored) {
             deleteQuietly(outFile);
@@ -285,36 +396,48 @@ final class HeicNativeJpegConverter {
         }
     }
 
-    private static ConvertResult tryImageDecoder(Context context, Uri uri) {
+    private static ConvertResult tryImageDecoderSampled(Context context, Uri uri) {
         if (Build.VERSION.SDK_INT < 28) return null;
         File outFile = createJpegFile(context);
         if (outFile == null) return null;
         Bitmap bitmap = null;
-        long decodeStarted = SystemClock.elapsedRealtime();
-        long decoderMs = 0L;
         try {
+            long decodeStarted = SystemClock.elapsedRealtime();
             ImageDecoder.Source source = ImageDecoder.createSource(context.getContentResolver(), uri);
             bitmap = ImageDecoder.decodeBitmap(source, (decoder, info, src) -> {
                 decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
-                int[] sized = targetSize(info.getSize().getWidth(), info.getSize().getHeight(), LONG_EDGE);
-                if (
-                    sized[0] != info.getSize().getWidth() ||
-                    sized[1] != info.getSize().getHeight()
-                ) {
-                    decoder.setTargetSize(sized[0], sized[1]);
+                int sample = powerOfTwoSampleSize(
+                    info.getSize().getWidth(),
+                    info.getSize().getHeight(),
+                    LONG_EDGE
+                );
+                if (sample > 1) {
+                    decoder.setTargetSampleSize(sample);
                 }
             });
-            decoderMs = SystemClock.elapsedRealtime() - decodeStarted;
+            long decodeMs = SystemClock.elapsedRealtime() - decodeStarted;
             if (bitmap == null || bitmap.getWidth() < 1 || bitmap.getHeight() < 1) {
+                deleteQuietly(outFile);
                 return null;
             }
+
+            long scaleStarted = SystemClock.elapsedRealtime();
+            bitmap = downscaleIfNeeded(bitmap, LONG_EDGE);
+            long scaleMs = SystemClock.elapsedRealtime() - scaleStarted;
+            if (bitmap == null || bitmap.getWidth() < 1 || bitmap.getHeight() < 1) {
+                deleteQuietly(outFile);
+                return null;
+            }
+
             return compressToFile(
                 context,
                 outFile,
                 bitmap,
-                PATH_IMAGEDECODER,
+                PATH_DECODER_SAMPLED,
                 0L,
-                decoderMs
+                decodeMs,
+                0L,
+                scaleMs
             );
         } catch (Exception ignored) {
             deleteQuietly(outFile);
@@ -329,8 +452,10 @@ final class HeicNativeJpegConverter {
         File outFile,
         Bitmap bitmap,
         String path,
-        long thumbnailMs,
-        long decoderMs
+        long boundsMs,
+        long decodeMs,
+        long rotateMs,
+        long scaleMs
     ) {
         long jpegStarted = SystemClock.elapsedRealtime();
         try {
@@ -344,7 +469,7 @@ final class HeicNativeJpegConverter {
             } finally {
                 output.close();
             }
-            long jpegCompressMs = SystemClock.elapsedRealtime() - jpegStarted;
+            long jpegMs = SystemClock.elapsedRealtime() - jpegStarted;
             if (!outFile.isFile() || outFile.length() <= 0) {
                 deleteQuietly(outFile);
                 return null;
@@ -362,9 +487,11 @@ final class HeicNativeJpegConverter {
             return new ConvertResult(
                 provided,
                 path,
-                thumbnailMs,
-                decoderMs,
-                jpegCompressMs,
+                boundsMs,
+                decodeMs,
+                rotateMs,
+                scaleMs,
+                jpegMs,
                 0L,
                 bitmap.getWidth(),
                 bitmap.getHeight(),
@@ -376,41 +503,27 @@ final class HeicNativeJpegConverter {
         }
     }
 
-    private static Size thumbnailRequestFor(Context context, Uri uri) {
-        int[] probed = probeSourceSize(context, uri);
-        if (probed != null) {
-            return thumbnailRequestSize(probed[0], probed[1]);
-        }
-        return new Size(LONG_EDGE, LONG_EDGE);
-    }
-
-    private static int[] probeSourceSize(Context context, Uri uri) {
-        Cursor cursor = null;
+    private static int readExifOrientation(Context context, Uri uri) {
+        ParcelFileDescriptor pfd = null;
         try {
-            cursor = context.getContentResolver().query(
-                uri,
-                new String[] { MediaStore.MediaColumns.WIDTH, MediaStore.MediaColumns.HEIGHT },
-                null,
-                null,
-                null
+            pfd = context.getContentResolver().openFileDescriptor(uri, "r");
+            if (pfd == null) return ExifInterface.ORIENTATION_NORMAL;
+            ExifInterface exif = new ExifInterface(pfd.getFileDescriptor());
+            return exif.getAttributeInt(
+                ExifInterface.TAG_ORIENTATION,
+                ExifInterface.ORIENTATION_NORMAL
             );
-            if (cursor != null && cursor.moveToFirst()) {
-                int widthIndex = cursor.getColumnIndex(MediaStore.MediaColumns.WIDTH);
-                int heightIndex = cursor.getColumnIndex(MediaStore.MediaColumns.HEIGHT);
-                if (widthIndex >= 0 && heightIndex >= 0) {
-                    int width = cursor.getInt(widthIndex);
-                    int height = cursor.getInt(heightIndex);
-                    if (width > 0 && height > 0) {
-                        return new int[] { width, height };
-                    }
+        } catch (Exception ignored) {
+            return ExifInterface.ORIENTATION_NORMAL;
+        } finally {
+            if (pfd != null) {
+                try {
+                    pfd.close();
+                } catch (Exception ignored) {
+                    // Ignore close errors after a successful read.
                 }
             }
-        } catch (Exception ignored) {
-            // Unknown size: request 1600x1600 and keep the provider aspect ratio.
-        } finally {
-            if (cursor != null) cursor.close();
         }
-        return null;
     }
 
     private static File createJpegFile(Context context) {
