@@ -97,6 +97,11 @@ export function chatPhotoComposerBusy(item: ChatPendingPhoto): boolean {
   return item.status === "preparing" || Boolean(item.send && item.send.phase !== "idle");
 }
 
+/** Heavy prepare hides the original gallery File <img> until the prepared JPEG is ready. */
+export function shouldRenderChatComposerPreview(item: Pick<ChatPendingPhoto, "status">): boolean {
+  return item.status !== "preparing";
+}
+
 export function instantChatPhotoPicks(
   files: File[],
   room: number,

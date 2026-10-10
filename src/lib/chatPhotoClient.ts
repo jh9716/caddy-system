@@ -7,6 +7,7 @@ export {
   applyPreparedChatPhoto,
   CHAT_PHOTO_UPLOAD_CONCURRENCY,
   chatPhotoComposerBusy,
+  shouldRenderChatComposerPreview,
   chatPhotoPickRoom,
   createChatPhotoPreviewUrl,
   createDetachedChatPhotoPreviewUrl,

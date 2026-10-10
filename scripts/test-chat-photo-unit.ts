@@ -79,6 +79,7 @@ import {
   applyChatPhotoSendProgress,
   applyPreparedChatPhoto,
   chatPhotoComposerBusy,
+  shouldRenderChatComposerPreview,
   instantChatPhotoPicks,
   mapBoundedSettled,
   prepareChatPendingPhoto,
@@ -1480,6 +1481,12 @@ section("phase 5 adaptive compression + debug");
   const preview = instantChatPhotoPicks([midJpeg], 1);
   assert(preview.items[0]?.previewUrl.startsWith("blob:"), "selected photo immediately previews");
   assert(preview.items[0]?.status === "preparing", "large JPEG previews before compression");
+  assert(!shouldRenderChatComposerPreview(preview.items[0]!), "heavy preparing does not render original preview img");
+  assert(shouldRenderChatComposerPreview({ ...preview.items[0]!, status: "ready" }), "ready renders prepared preview");
+  assert(shouldRenderChatComposerPreview({ ...preview.items[0]!, status: "failed" }), "failed keeps preview for retry");
+  const fastPreview = instantChatPhotoPicks([smallJpeg], 1);
+  assert(fastPreview.items[0]?.status === "ready", "fast-path pick is ready");
+  assert(shouldRenderChatComposerPreview(fastPreview.items[0]!), "fast-path preview renders immediately");
   const preparedMid = await prepareChatPendingPhoto(preview.items[0]!, midJpeg, async (file) =>
     (await prepareChatAdaptivePhoto(file, {
       inspect: async () => ({ width: 4000, height: 3000 }),
@@ -2423,6 +2430,9 @@ section("source wiring / no public blob");
   assert(!client.includes("준비 중"), "composer does not expose prepare stage");
   assert(!client.includes("vh-chat-pending-status"), "composer does not expose upload stage labels");
   assert(client.includes("chatPhotoComposerBusy"), "messenger-style busy spinner");
+  assert(client.includes("shouldRenderChatComposerPreview(item)"), "composer gates original preview img");
+  assert(client.includes("vh-chat-pending-placeholder"), "heavy preparing shows placeholder");
+  assert(client.includes("<img src={item.previewUrl} alt=\"\" />"), "ready/failed still render preview img");
   assert(client.includes("canShowChatPhotoDebug"), "admin photo debug gate");
   assert(client.includes("photoDebug"), "photoDebug query panel");
   assert(client.includes("photoLite"), "photoLite query panel");

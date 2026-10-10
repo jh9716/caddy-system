@@ -4891,10 +4891,15 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
   overflow: hidden;
   background: #e8eee9;
 }
-.vh-chat-pending-photo img {
+.vh-chat-pending-photo img,
+.vh-chat-pending-placeholder {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+.vh-chat-pending-placeholder {
+  display: block;
+  background: #e8eee9;
 }
 .vh-chat-pending-photo.is-preparing img,
 .vh-chat-pending-photo.is-failed img {

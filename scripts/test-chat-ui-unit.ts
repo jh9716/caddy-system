@@ -176,6 +176,8 @@ section("worker auth + directory");
   assert(dir.includes("clampReadSeq"), "malicious read seq clamped");
   const chat = read("src/app/chat/ChatClient.tsx");
   assert(chat.includes("revokeChatPhotoPreviewUrls([item])"), "composer remove uses shared preview revoke");
+  assert(chat.includes("shouldRenderChatComposerPreview(item)"), "composer defers heavy original preview img");
+  assert(chat.includes("vh-chat-pending-placeholder"), "heavy preparing uses placeholder");
   assert(chat.includes("photoLite"), "photoLite panel wiring");
   assert(chat.includes("enableChatPhotoLiteTiming"), "photoLite enable is independent");
   assert(chat.includes("pendingToWrapperMs"), "photoLite panel shows pending→wrapper");

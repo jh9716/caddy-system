@@ -37,6 +37,7 @@ import {
   CHAT_PHOTO_ACCEPT,
   CHAT_PHOTO_MAX,
   chatPhotoComposerBusy,
+  shouldRenderChatComposerPreview,
   chatPhotoSrc,
   commitComposerPhotoPicks,
   finishChatPhotoOutgoingUploads,
@@ -2267,8 +2268,12 @@ export default function ChatClient() {
                           : "vh-chat-pending-photo"
                     }
                   >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={item.previewUrl} alt="" />
+                    {shouldRenderChatComposerPreview(item) ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={item.previewUrl} alt="" />
+                    ) : (
+                      <span className="vh-chat-pending-placeholder" aria-hidden="true" />
+                    )}
                     {chatPhotoComposerBusy(item) ? (
                       <span className="vh-chat-pending-spinner" aria-label="처리 중" />
                     ) : null}
