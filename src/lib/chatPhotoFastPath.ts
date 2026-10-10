@@ -163,6 +163,8 @@ export async function prepareChatPhotoSource(
     sourceMetaPresent: Boolean(carry?.sourceMeta),
     sourcePlanPresent: Boolean(carry?.sourcePlan),
     sourceUsedFallbackPath: !carried,
+    sourceKind: carried?.kind,
+    sourceHeic: carried ? Boolean(carried.heic || carried.kind === "heic") : undefined,
   });
   noteChatPhotoLiteStamp("sourceAfterCarryAt");
   const run =
@@ -243,7 +245,9 @@ export async function prepareChatPhotoSource(
     const heicLike = isHeicLikeFile(probed);
     if (debug) noteChatPhotoSourceSplit(runId, "sourceHeicEndAt");
     flushWatch();
-    const kindHeic = heicLike || chatPhotoSourceKind(probed) === "heic";
+    const sourceKind = chatPhotoSourceKind(probed);
+    const kindHeic = heicLike || sourceKind === "heic";
+    noteChatPhotoLiteFlags({ sourceKind, sourceHeic: kindHeic });
     if (debug) noteChatPhotoSourceSplit(runId, "sourceKindEndAt");
     flushWatch();
     noteChatPhotoLiteStamp("sourceAfterHeicPlanAt");

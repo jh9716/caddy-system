@@ -2522,6 +2522,11 @@ export default function ChatClient() {
                   ["sourceMetaPresent", photoLiteSample.sourceMetaPresent],
                   ["sourcePlanPresent", photoLiteSample.sourcePlanPresent],
                   ["sourceUsedFallbackPath", photoLiteSample.sourceUsedFallbackPath],
+                  ["sourceKind", photoLiteSample.sourceKind],
+                  ["sourceHeic", photoLiteSample.sourceHeic],
+                  ["heicImportMs", photoLiteSample.heicImportMs],
+                  ["heicConvertMs", photoLiteSample.heicConvertMs],
+                  ["heicTotalMs", photoLiteSample.heicTotalMs],
                   ["runToAdaptiveMs", photoLiteSample.runToAdaptiveMs],
                   ["adaptiveMs", photoLiteSample.adaptiveMs],
                   ["adaptiveToSourceExitMs", photoLiteSample.adaptiveToSourceExitMs],
@@ -2546,7 +2551,7 @@ export default function ChatClient() {
               ).map(([key, value]) => (
                 <div key={key}>
                   <span>{key}</span>
-                  <span>{value == null ? "—" : value}</span>
+                  <span>{value == null ? "—" : typeof value === "boolean" ? String(value) : value}</span>
                 </div>
               ))}
             </aside>

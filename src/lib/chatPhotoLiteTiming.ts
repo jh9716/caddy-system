@@ -40,6 +40,11 @@ export type ChatPhotoLiteSample = {
   sourceMetaPresent: boolean | null;
   sourcePlanPresent: boolean | null;
   sourceUsedFallbackPath: boolean | null;
+  sourceKind: string | null;
+  sourceHeic: boolean | null;
+  heicImportMs: number | null;
+  heicConvertMs: number | null;
+  heicTotalMs: number | null;
   runToAdaptiveMs: number | null;
   adaptiveMs: number | null;
   adaptiveToSourceExitMs: number | null;
@@ -129,6 +134,11 @@ function emptyLiteSample(): ChatPhotoLiteSample {
     sourceMetaPresent: null,
     sourcePlanPresent: null,
     sourceUsedFallbackPath: null,
+    sourceKind: null,
+    sourceHeic: null,
+    heicImportMs: null,
+    heicConvertMs: null,
+    heicTotalMs: null,
     runToAdaptiveMs: null,
     adaptiveMs: null,
     adaptiveToSourceExitMs: null,
@@ -207,6 +217,8 @@ export function noteChatPhotoLiteFlags(flags: {
   sourceMetaPresent?: boolean;
   sourcePlanPresent?: boolean;
   sourceUsedFallbackPath?: boolean;
+  sourceKind?: string | null;
+  sourceHeic?: boolean;
 }): void {
   if (!liteOn) return;
   const next = liteBag();
@@ -214,6 +226,23 @@ export function noteChatPhotoLiteFlags(flags: {
   if (flags.sourceMetaPresent != null) next.sourceMetaPresent = Boolean(flags.sourceMetaPresent);
   if (flags.sourcePlanPresent != null) next.sourcePlanPresent = Boolean(flags.sourcePlanPresent);
   if (flags.sourceUsedFallbackPath != null) next.sourceUsedFallbackPath = Boolean(flags.sourceUsedFallbackPath);
+  if (typeof flags.sourceKind === "string" && flags.sourceKind) next.sourceKind = flags.sourceKind;
+  if (flags.sourceHeic != null) next.sourceHeic = Boolean(flags.sourceHeic);
+}
+
+export function noteChatPhotoLiteHeic(input: {
+  heicImportMs?: number | null;
+  heicConvertMs?: number | null;
+  heicTotalMs?: number | null;
+}): void {
+  if (!liteOn) return;
+  const next = liteBag();
+  const heicImportMs = finiteMs(input.heicImportMs);
+  const heicConvertMs = finiteMs(input.heicConvertMs);
+  const heicTotalMs = finiteMs(input.heicTotalMs);
+  if (heicImportMs != null) next.heicImportMs = heicImportMs;
+  if (heicConvertMs != null) next.heicConvertMs = heicConvertMs;
+  if (heicTotalMs != null) next.heicTotalMs = heicTotalMs;
 }
 
 export function noteChatPhotoLiteAdaptive(result: {

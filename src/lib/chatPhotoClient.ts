@@ -73,6 +73,7 @@ export {
   isChatPhotoLiteTiming,
   noteChatPhotoLiteAdaptive,
   noteChatPhotoLiteFlags,
+  noteChatPhotoLiteHeic,
   noteChatPhotoLiteReady,
   noteChatPhotoLiteStamp,
   readChatPhotoLiteSample,

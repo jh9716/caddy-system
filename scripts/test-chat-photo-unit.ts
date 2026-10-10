@@ -148,6 +148,7 @@ import {
   isChatPhotoLiteTiming,
   noteChatPhotoLiteAdaptive,
   noteChatPhotoLiteFlags,
+  noteChatPhotoLiteHeic,
   noteChatPhotoLiteReady,
   noteChatPhotoLiteStamp,
   readChatPhotoLiteSample,
@@ -2094,7 +2095,8 @@ section("photoLite timing copies adaptive fields without debug");
     uploadBytes: 700000,
   });
   noteChatPhotoLiteStamp("pendingStartAt", 1000);
-  noteChatPhotoLiteFlags({ sourceCarryPresent: true, sourceUsedFallbackPath: false });
+  noteChatPhotoLiteFlags({ sourceCarryPresent: true, sourceUsedFallbackPath: false, sourceKind: "heic", sourceHeic: true });
+  noteChatPhotoLiteHeic({ heicImportMs: 12, heicConvertMs: 4300, heicTotalMs: 4312 });
   assert(readChatPhotoLiteSample() == null, "photoLite=0 stores no sample");
   assert(!isChatPhotoDebugTiming(), "photoLite=0 does not enable photoDebug");
   const offFile = new File([new Uint8Array([1, 2, 3])], "off.jpg", { type: "image/jpeg" });
@@ -2159,7 +2161,10 @@ section("photoLite timing copies adaptive fields without debug");
     sourceMetaPresent: true,
     sourcePlanPresent: true,
     sourceUsedFallbackPath: false,
+    sourceKind: "heic",
+    sourceHeic: true,
   });
+  noteChatPhotoLiteHeic({ heicImportMs: 12.4, heicConvertMs: 4300.6, heicTotalMs: 4313 });
   noteChatPhotoLiteStamp("adaptiveEnterAt", 4990);
   noteChatPhotoLiteStamp("adaptiveExitAt", 5310);
   noteChatPhotoLiteStamp("sourceExitAt", 5312);
@@ -2180,6 +2185,11 @@ section("photoLite timing copies adaptive fields without debug");
   assert(spans?.sourceMetaPresent === true, "lite records sourceMeta present");
   assert(spans?.sourcePlanPresent === true, "lite records sourcePlan present");
   assert(spans?.sourceUsedFallbackPath === false, "lite records carried path");
+  assert(spans?.sourceKind === "heic", "lite records sourceKind");
+  assert(spans?.sourceHeic === true, "lite records sourceHeic");
+  assert(spans?.heicImportMs === 12, "lite records heicImportMs");
+  assert(spans?.heicConvertMs === 4301, "lite records heicConvertMs");
+  assert(spans?.heicTotalMs === 4313, "lite records heicTotalMs");
   assert(spans?.runToAdaptiveMs === 10, "lite sourceBeforeRun→adaptiveEnter");
   assert(spans?.adaptiveMs === 320, "lite adaptiveEnter→adaptiveExit");
   assert(spans?.adaptiveToSourceExitMs === 2, "lite adaptiveExit→sourceExit");
@@ -2209,6 +2219,9 @@ section("photoLite timing copies adaptive fields without debug");
   assert(live?.sourceBeforeRunMs != null, "photoLite stamps last pre-run gap");
   assert(live?.sourceCarryPresent === false, "no-carry source records carry absent");
   assert(live?.sourceUsedFallbackPath === true, "no-carry source uses fallback path");
+  assert(live?.sourceKind === "jpeg", "no-carry JPEG records sourceKind");
+  assert(live?.sourceHeic === false, "no-carry JPEG records sourceHeic false");
+  assert(live?.heicImportMs == null && live?.heicConvertMs == null && live?.heicTotalMs == null, "JPEG source leaves HEIC timings empty");
   assert(live?.runToAdaptiveMs != null, "photoLite stamps beforeRun→adaptiveEnter");
   assert(live?.adaptiveMs != null, "photoLite stamps adaptiveEnter→adaptiveExit");
   assert(live?.adaptiveToSourceExitMs != null, "photoLite stamps adaptiveExit→sourceExit");
@@ -2357,9 +2370,32 @@ section("early meta carry: picker snapshot reused after preview");
   assert(lite?.sourceMetaPresent === true, "photoLite sees sourceMeta");
   assert(lite?.sourcePlanPresent === true, "photoLite sees sourcePlan");
   assert(lite?.sourceUsedFallbackPath === false, "photoLite uses carried path");
+  assert(lite?.sourceKind === "jpeg", "photoLite carry records jpeg sourceKind");
+  assert(lite?.sourceHeic === false, "photoLite carry records sourceHeic false for jpeg");
+  assert(lite?.heicImportMs == null && lite?.heicConvertMs == null && lite?.heicTotalMs == null, "jpeg carry leaves HEIC timings empty");
   assert(lite?.adaptiveMs != null, "photoLite still stamps adaptiveMs with carry");
   assert(trackedLite.counts.type === 0 && trackedLite.counts.name === 0 && trackedLite.counts.size === 0, "photoLite carry split does not reread File metadata");
   assert(!isChatPhotoDebugTiming(), "carry path does not enable photoDebug");
+
+  try {
+    setHeicConverterForTests(async () => new Blob([new Uint8Array(32)], { type: "image/jpeg" }));
+    resetChatPhotoLiteSample();
+    const heicLite = new File([new Uint8Array(8)], "lite.heic", { type: "image/heic" });
+    const pickedHeicLite = instantChatPhotoPicks([heicLite], 1);
+    const heicLiteOut = await prepareChatPhotoSource(heicLite, async () => new Blob([new Uint8Array(16)], { type: "image/jpeg" }), {
+      sourceMeta: pickedHeicLite.items[0]!.sourceMeta,
+      sourcePlan: planChatPhotoSourceFromMeta(pickedHeicLite.items[0]!.sourceMeta!),
+    });
+    assert(heicLiteOut.type === "image/jpeg" && heicLiteOut.size === 32, "photoLite HEIC carry still converts");
+    const heicLiteSample = readChatPhotoLiteSample();
+    assert(heicLiteSample?.sourceKind === "heic", "photoLite HEIC carry records sourceKind heic");
+    assert(heicLiteSample?.sourceHeic === true, "photoLite HEIC carry records sourceHeic true");
+    assert(heicLiteSample?.heicImportMs == null && heicLiteSample?.heicConvertMs == null && heicLiteSample?.heicTotalMs == null, "test HEIC converter leaves import/convert stamps unset");
+    assert(!isChatPhotoDebugTiming(), "photoLite HEIC path does not enable photoDebug");
+  } finally {
+    setHeicConverterForTests(null);
+  }
+
   enableChatPhotoLiteTiming(false);
   resetChatPhotoLiteSample();
 }
@@ -2450,6 +2486,12 @@ section("source wiring / no public blob");
   assert(client.includes("sourceBeforeRunMs"), "photoLite panel shows last pre-run split");
   assert(client.includes("sourceCarryPresent"), "photoLite panel shows carry flag");
   assert(client.includes("sourceUsedFallbackPath"), "photoLite panel shows fallback flag");
+  assert(client.includes("sourceKind"), "photoLite panel shows sourceKind");
+  assert(client.includes("sourceHeic"), "photoLite panel shows sourceHeic");
+  assert(client.includes("heicImportMs"), "photoLite panel shows heicImportMs");
+  assert(client.includes("heicConvertMs"), "photoLite panel shows heicConvertMs");
+  assert(client.includes("heicTotalMs"), "photoLite panel shows heicTotalMs");
+  assert(client.includes('typeof value === "boolean" ? String(value)'), "photoLite panel stringifies booleans");
   assert(client.includes("runToAdaptiveMs"), "photoLite panel shows run→adaptive");
   assert(client.includes("adaptiveToSourceExitMs"), "photoLite panel shows adaptive→source exit");
   assert(client.includes("sourceToWrapperExitMs"), "photoLite panel shows source→wrapper exit");
@@ -2464,6 +2506,16 @@ section("source wiring / no public blob");
   assert(fast.includes('noteChatPhotoLiteStamp("sourceEnterAt")'), "source enter is stamped for photoLite");
   assert(fast.includes('noteChatPhotoLiteStamp("sourceBeforeRunAt")'), "source before run is stamped for photoLite");
   assert(fast.includes('noteChatPhotoLiteStamp("sourceExitAt")'), "source exit is stamped for photoLite");
+  assert(fast.includes("sourceKind: carried?.kind"), "carried sourceKind is copied into photoLite");
+  assert(fast.includes("sourceHeic: carried ? Boolean(carried.heic || carried.kind === \"heic\")"), "carried sourceHeic is copied into photoLite");
+  assert(reportClient.includes("isChatPhotoLiteTiming()"), "HEIC convert gates stamps behind photoLite");
+  assert(reportClient.includes("const importStarted = lite ? chatPhotoNow() : 0"), "HEIC import start uses chatPhotoNow");
+  assert(reportClient.includes("const importEnded = lite ? chatPhotoNow() : 0"), "HEIC import end uses chatPhotoNow");
+  assert(reportClient.includes("const convertStarted = lite ? chatPhotoNow() : 0"), "HEIC convert start uses chatPhotoNow");
+  assert(reportClient.includes("const convertEnded = chatPhotoNow()"), "HEIC convert end uses chatPhotoNow");
+  assert(reportClient.includes("noteChatPhotoLiteHeic"), "HEIC convert notes photoLite timings");
+  assert(reportClient.includes('type: "image/jpeg"'), "HEIC convert type is unchanged");
+  assert(reportClient.includes("quality: 1"), "HEIC convert quality is unchanged");
   const liteSrc = read("src/lib/chatPhotoLiteTiming.ts");
   assert(!liteSrc.includes("Proxy"), "lite timing has no Proxy");
   assert(!liteSrc.includes("WeakMap"), "lite timing has no WeakMap");
