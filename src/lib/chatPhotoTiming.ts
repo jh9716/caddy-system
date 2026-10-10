@@ -38,6 +38,19 @@ export type ChatPhotoTimingBag = {
   postEncodeMs?: number;
   stateCommitMs?: number;
   hiddenBeforeDecodeMs?: number;
+  timingKey?: string;
+  runIdResolved?: boolean;
+  jpegDirectRun?: boolean;
+  sameFileBound?: boolean;
+  pendingPrepareStartAt?: number;
+  prepareWrapperEnterAt?: number;
+  photoSourceEnterAt?: number;
+  adaptiveBlobEnterAt?: number;
+  adaptiveEnterAt?: number;
+  adaptiveExitAt?: number;
+  photoSourceExitAt?: number;
+  prepareWrapperExitAt?: number;
+  pendingPrepareEndAt?: number;
   prepareHotpath?: ChatPhotoHotpathSummary;
   finalizeHotpath?: ChatPhotoHotpathSummary;
   storageBackend?: "r2" | "blob";
@@ -88,6 +101,27 @@ export type ChatPhotoDebugSample = {
   stateCommitMs: number | null;
   hiddenBeforeDecodeMs: number | null;
   unaccountedAdaptiveMs: number | null;
+  timingKey: string | null;
+  runIdResolved: boolean | null;
+  jpegDirectRun: boolean | null;
+  sameFileBound: boolean | null;
+  pendingPrepareStartAt: number | null;
+  prepareWrapperEnterAt: number | null;
+  photoSourceEnterAt: number | null;
+  adaptiveBlobEnterAt: number | null;
+  adaptiveEnterAt: number | null;
+  adaptiveExitAt: number | null;
+  photoSourceExitAt: number | null;
+  prepareWrapperExitAt: number | null;
+  pendingPrepareEndAt: number | null;
+  pendingToWrapperMs: number | null;
+  wrapperToSourceMs: number | null;
+  sourceToAdaptiveBlobMs: number | null;
+  adaptiveBlobToAdaptiveMs: number | null;
+  adaptiveMs: number | null;
+  adaptiveExitToSourceExitMs: number | null;
+  sourceExitToWrapperExitMs: number | null;
+  wrapperExitToPendingEndMs: number | null;
   unaccountedPrepareMs: number | null;
   selectedToUploadStartMs: number | null;
   prepareApiMs: number | null;
@@ -178,9 +212,24 @@ export function noteChatPhotoBytes(sourceBytes: number, uploadBytes?: number): v
   if (uploadBytes != null) bag.uploadBytes = uploadBytes;
 }
 
+export type ChatPhotoBoundaryField =
+  | "pendingPrepareStartAt"
+  | "prepareWrapperEnterAt"
+  | "photoSourceEnterAt"
+  | "adaptiveBlobEnterAt"
+  | "adaptiveEnterAt"
+  | "adaptiveExitAt"
+  | "photoSourceExitAt"
+  | "prepareWrapperExitAt"
+  | "pendingPrepareEndAt";
+
 export type ChatPhotoPrepareScope = {
   runId: string;
   key: string;
+  publicKey: string;
+  runIdResolved?: boolean;
+  jpegDirectRun?: boolean;
+  sameFileBound?: boolean;
   adaptiveTotalMs?: number;
   prepareOuterMs?: number;
   headerProbeMs?: number;
@@ -198,16 +247,86 @@ export type ChatPhotoPrepareScope = {
   encodeMime?: string;
   decodePath?: string;
   encodePath?: string;
+  inputWidth?: number;
+  inputHeight?: number;
+  outputWidth?: number;
+  outputHeight?: number;
+  pendingPrepareStartAt?: number;
+  prepareWrapperEnterAt?: number;
+  photoSourceEnterAt?: number;
+  adaptiveBlobEnterAt?: number;
+  adaptiveEnterAt?: number;
+  adaptiveExitAt?: number;
+  photoSourceExitAt?: number;
+  prepareWrapperExitAt?: number;
+  pendingPrepareEndAt?: number;
 };
+
+const PREPARE_SCOPE_BAG_KEYS = [
+  "timingRunId",
+  "timingKey",
+  "runIdResolved",
+  "jpegDirectRun",
+  "sameFileBound",
+  "compressionMs",
+  "adaptiveTotalMs",
+  "prepareOuterMs",
+  "headerProbeMs",
+  "bitmapCreateMs",
+  "canvasCreateMs",
+  "alphaProbeMs",
+  "postEncodeMs",
+  "stateCommitMs",
+  "hiddenBeforeDecodeMs",
+  "decodeMs",
+  "drawResizeMs",
+  "encode1Ms",
+  "encode2Ms",
+  "encodeAttempts",
+  "encodeMime",
+  "decodePath",
+  "encodePath",
+  "inputWidth",
+  "inputHeight",
+  "outputWidth",
+  "outputHeight",
+  "pendingPrepareStartAt",
+  "prepareWrapperEnterAt",
+  "photoSourceEnterAt",
+  "adaptiveBlobEnterAt",
+  "adaptiveEnterAt",
+  "adaptiveExitAt",
+  "photoSourceExitAt",
+  "prepareWrapperExitAt",
+  "pendingPrepareEndAt",
+] as const;
 
 let prepareTimingSeq = 0;
 const prepareTimingRuns = new Map<string, ChatPhotoPrepareScope>();
 const prepareTimingByFile = new WeakMap<Blob, string>();
 
+/** Composer key without file name / size / type. `cph-12-name|...` → `cph-12`. */
+export function publicChatPhotoTimingKey(key: string): string {
+  const cph = /^cph-(\d+)/.exec(key);
+  if (cph) return `cph-${cph[1]}`;
+  if (/^[A-Za-z0-9._:-]{1,32}$/.test(key) && !key.includes("|")) return key;
+  return `k${key.length}`;
+}
+
+function clearPrepareScopeFromBag(bag: ChatPhotoTimingBag): void {
+  for (const key of PREPARE_SCOPE_BAG_KEYS) {
+    delete bag[key];
+  }
+}
+
 export function startChatPhotoPrepareTiming(key: string, file?: Blob): string {
-  const runId = `${++prepareTimingSeq}:${key}`;
-  prepareTimingRuns.set(runId, { runId, key });
+  const runId = `r${++prepareTimingSeq}`;
+  const publicKey = publicChatPhotoTimingKey(key);
+  prepareTimingRuns.set(runId, { runId, key: publicKey, publicKey });
   if (file) prepareTimingByFile.set(file, runId);
+  clearPrepareScopeFromBag(timingBag());
+  timingBag().timingRunId = runId;
+  timingBag().timingKey = publicKey;
   return runId;
 }
 
@@ -236,7 +355,12 @@ function finiteMs(value: unknown): number | undefined {
 }
 
 function applyPrepareScopeToBag(row: ChatPhotoPrepareScope, bag: ChatPhotoTimingBag): void {
+  clearPrepareScopeFromBag(bag);
   bag.timingRunId = row.runId;
+  bag.timingKey = row.publicKey;
+  if (row.runIdResolved != null) bag.runIdResolved = row.runIdResolved;
+  if (row.jpegDirectRun != null) bag.jpegDirectRun = row.jpegDirectRun;
+  if (row.sameFileBound != null) bag.sameFileBound = row.sameFileBound;
   if (row.adaptiveTotalMs != null) {
     bag.adaptiveTotalMs = row.adaptiveTotalMs;
     bag.compressionMs = row.adaptiveTotalMs;
@@ -257,6 +381,28 @@ function applyPrepareScopeToBag(row: ChatPhotoPrepareScope, bag: ChatPhotoTiming
   if (row.encodeMime) bag.encodeMime = row.encodeMime;
   if (row.decodePath) bag.decodePath = row.decodePath;
   if (row.encodePath) bag.encodePath = row.encodePath;
+  if (row.inputWidth != null) bag.inputWidth = row.inputWidth;
+  if (row.inputHeight != null) bag.inputHeight = row.inputHeight;
+  if (row.outputWidth != null) bag.outputWidth = row.outputWidth;
+  if (row.outputHeight != null) bag.outputHeight = row.outputHeight;
+  if (row.pendingPrepareStartAt != null) bag.pendingPrepareStartAt = row.pendingPrepareStartAt;
+  if (row.prepareWrapperEnterAt != null) bag.prepareWrapperEnterAt = row.prepareWrapperEnterAt;
+  if (row.photoSourceEnterAt != null) bag.photoSourceEnterAt = row.photoSourceEnterAt;
+  if (row.adaptiveBlobEnterAt != null) bag.adaptiveBlobEnterAt = row.adaptiveBlobEnterAt;
+  if (row.adaptiveEnterAt != null) bag.adaptiveEnterAt = row.adaptiveEnterAt;
+  if (row.adaptiveExitAt != null) bag.adaptiveExitAt = row.adaptiveExitAt;
+  if (row.photoSourceExitAt != null) bag.photoSourceExitAt = row.photoSourceExitAt;
+  if (row.prepareWrapperExitAt != null) bag.prepareWrapperExitAt = row.prepareWrapperExitAt;
+  if (row.pendingPrepareEndAt != null) bag.pendingPrepareEndAt = row.pendingPrepareEndAt;
+}
+
+export function noteChatPhotoBoundary(
+  runId: string | null | undefined,
+  field: ChatPhotoBoundaryField,
+  at = chatPhotoNow()
+): number {
+  noteChatPhotoPrepareScope(runId, { [field]: at });
+  return at;
 }
 
 export function commitChatPhotoPrepareTiming(runId: string | null | undefined): ChatPhotoPrepareScope | null {
@@ -333,9 +479,14 @@ export function noteChatPhotoCompressionBreakdown(input: {
   if (input.encodePath === "offscreen" || input.encodePath === "canvas") {
     scoped.encodePath = input.encodePath;
   }
+  if (Number.isFinite(input.inputWidth)) scoped.inputWidth = Math.max(0, Math.round(Number(input.inputWidth)));
+  if (Number.isFinite(input.inputHeight)) scoped.inputHeight = Math.max(0, Math.round(Number(input.inputHeight)));
+  if (Number.isFinite(input.outputWidth)) scoped.outputWidth = Math.max(0, Math.round(Number(input.outputWidth)));
+  if (Number.isFinite(input.outputHeight)) scoped.outputHeight = Math.max(0, Math.round(Number(input.outputHeight)));
 
   if (input.runId && prepareTimingRuns.has(input.runId)) {
     noteChatPhotoPrepareScope(input.runId, scoped);
+    return;
   }
 
   const bag = timingBag();
@@ -353,10 +504,10 @@ export function noteChatPhotoCompressionBreakdown(input: {
   if (alphaProbeMs != null) bag.alphaProbeMs = alphaProbeMs;
   if (postEncodeMs != null) bag.postEncodeMs = postEncodeMs;
   if (hiddenBeforeDecodeMs != null) bag.hiddenBeforeDecodeMs = hiddenBeforeDecodeMs;
-  if (Number.isFinite(input.inputWidth)) bag.inputWidth = Math.max(0, Math.round(Number(input.inputWidth)));
-  if (Number.isFinite(input.inputHeight)) bag.inputHeight = Math.max(0, Math.round(Number(input.inputHeight)));
-  if (Number.isFinite(input.outputWidth)) bag.outputWidth = Math.max(0, Math.round(Number(input.outputWidth)));
-  if (Number.isFinite(input.outputHeight)) bag.outputHeight = Math.max(0, Math.round(Number(input.outputHeight)));
+  if (scoped.inputWidth != null) bag.inputWidth = scoped.inputWidth;
+  if (scoped.inputHeight != null) bag.inputHeight = scoped.inputHeight;
+  if (scoped.outputWidth != null) bag.outputWidth = scoped.outputWidth;
+  if (scoped.outputHeight != null) bag.outputHeight = scoped.outputHeight;
   if (scoped.encodeAttempts != null) bag.encodeAttempts = scoped.encodeAttempts;
   if (scoped.encodeMime) bag.encodeMime = scoped.encodeMime;
   if (scoped.decodePath) bag.decodePath = scoped.decodePath;
@@ -454,6 +605,15 @@ function unaccountedPrepareMs(bag?: ChatPhotoTimingBag): number | null {
   return Math.max(0, Math.round(bag.prepareOuterMs - bag.adaptiveTotalMs));
 }
 
+function stampDelta(from?: number | null, to?: number | null): number | null {
+  if (from == null || to == null || !Number.isFinite(from) || !Number.isFinite(to)) return null;
+  return Math.max(0, Math.round(to - from));
+}
+
+function roundStamp(value?: number | null): number | null {
+  return value != null && Number.isFinite(value) ? Math.round(value) : null;
+}
+
 export function buildChatPhotoDebugSample(
   bag = globalThis.__CHAT_PHOTO_TIMING__
 ): ChatPhotoDebugSample {
@@ -495,6 +655,27 @@ export function buildChatPhotoDebugSample(
     hiddenBeforeDecodeMs: bag?.hiddenBeforeDecodeMs != null ? Math.round(bag.hiddenBeforeDecodeMs) : null,
     unaccountedAdaptiveMs: unaccountedAdaptiveMs(bag),
     unaccountedPrepareMs: unaccountedPrepareMs(bag),
+    timingKey: bag?.timingKey ?? null,
+    runIdResolved: bag?.runIdResolved ?? null,
+    jpegDirectRun: bag?.jpegDirectRun ?? null,
+    sameFileBound: bag?.sameFileBound ?? null,
+    pendingPrepareStartAt: roundStamp(bag?.pendingPrepareStartAt),
+    prepareWrapperEnterAt: roundStamp(bag?.prepareWrapperEnterAt),
+    photoSourceEnterAt: roundStamp(bag?.photoSourceEnterAt),
+    adaptiveBlobEnterAt: roundStamp(bag?.adaptiveBlobEnterAt),
+    adaptiveEnterAt: roundStamp(bag?.adaptiveEnterAt),
+    adaptiveExitAt: roundStamp(bag?.adaptiveExitAt),
+    photoSourceExitAt: roundStamp(bag?.photoSourceExitAt),
+    prepareWrapperExitAt: roundStamp(bag?.prepareWrapperExitAt),
+    pendingPrepareEndAt: roundStamp(bag?.pendingPrepareEndAt),
+    pendingToWrapperMs: stampDelta(bag?.pendingPrepareStartAt, bag?.prepareWrapperEnterAt),
+    wrapperToSourceMs: stampDelta(bag?.prepareWrapperEnterAt, bag?.photoSourceEnterAt),
+    sourceToAdaptiveBlobMs: stampDelta(bag?.photoSourceEnterAt, bag?.adaptiveBlobEnterAt),
+    adaptiveBlobToAdaptiveMs: stampDelta(bag?.adaptiveBlobEnterAt, bag?.adaptiveEnterAt),
+    adaptiveMs: stampDelta(bag?.adaptiveEnterAt, bag?.adaptiveExitAt),
+    adaptiveExitToSourceExitMs: stampDelta(bag?.adaptiveExitAt, bag?.photoSourceExitAt),
+    sourceExitToWrapperExitMs: stampDelta(bag?.photoSourceExitAt, bag?.prepareWrapperExitAt),
+    wrapperExitToPendingEndMs: stampDelta(bag?.prepareWrapperExitAt, bag?.pendingPrepareEndAt),
     selectedToUploadStartMs: summary.select_to_put_start_ms,
     prepareApiMs: latestChatPhotoMark("prepare_api", bag),
     storageBackend: bag?.storageBackend ?? null,
@@ -602,6 +783,19 @@ export function resetChatPhotoTiming(): void {
   delete bag.postEncodeMs;
   delete bag.stateCommitMs;
   delete bag.hiddenBeforeDecodeMs;
+  delete bag.timingKey;
+  delete bag.runIdResolved;
+  delete bag.jpegDirectRun;
+  delete bag.sameFileBound;
+  delete bag.pendingPrepareStartAt;
+  delete bag.prepareWrapperEnterAt;
+  delete bag.photoSourceEnterAt;
+  delete bag.adaptiveBlobEnterAt;
+  delete bag.adaptiveEnterAt;
+  delete bag.adaptiveExitAt;
+  delete bag.photoSourceExitAt;
+  delete bag.prepareWrapperExitAt;
+  delete bag.pendingPrepareEndAt;
   prepareTimingRuns.clear();
   delete bag.prepareHotpath;
   delete bag.finalizeHotpath;

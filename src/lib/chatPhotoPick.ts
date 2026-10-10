@@ -13,8 +13,9 @@ import {
   prepareChatPhotoSource,
 } from "@/lib/chatPhotoFastPath";
 import {
-  chatPhotoNow,
+  chatPhotoTimingRunIdFor,
   commitChatPhotoPrepareTiming,
+  noteChatPhotoBoundary,
   noteChatPhotoPrepareScope,
   startChatPhotoPrepareTiming,
 } from "@/lib/chatPhotoTiming";
@@ -101,10 +102,25 @@ export function instantChatPhotoPicks(
   return { items, sources, note };
 }
 
+function defaultTimedPrepare(file: File): Promise<Blob> {
+  const runId = chatPhotoTimingRunIdFor(file);
+  noteChatPhotoBoundary(runId, "prepareWrapperEnterAt");
+  return prepareChatPhotoSource(file, prepareChatAdaptiveBlob).then(
+    (blob) => {
+      noteChatPhotoBoundary(runId, "prepareWrapperExitAt");
+      return blob;
+    },
+    (error) => {
+      noteChatPhotoBoundary(runId, "prepareWrapperExitAt");
+      throw error;
+    }
+  );
+}
+
 export async function prepareChatPendingPhoto(
   item: ChatPendingPhoto,
   file: File,
-  prepare: (file: File) => Promise<Blob> = (next) => prepareChatPhotoSource(next, prepareChatAdaptiveBlob)
+  prepare: (file: File) => Promise<Blob> = defaultTimedPrepare
 ): Promise<ChatPendingPhoto> {
   try {
     if (canUseChatPhotoFastPath(file) && prepare === prepareChatPhotoSource) {
@@ -118,9 +134,10 @@ export async function prepareChatPendingPhoto(
       };
     }
     const timingRunId = startChatPhotoPrepareTiming(item.key, file);
-    const started = chatPhotoNow();
+    const started = noteChatPhotoBoundary(timingRunId, "pendingPrepareStartAt");
     const blob = await prepare(file);
-    const prepareOuterMs = Math.max(0, chatPhotoNow() - started);
+    const ended = noteChatPhotoBoundary(timingRunId, "pendingPrepareEndAt");
+    const prepareOuterMs = Math.max(0, ended - started);
     noteChatPhotoPrepareScope(timingRunId, { prepareOuterMs });
     commitChatPhotoPrepareTiming(timingRunId);
     return {
