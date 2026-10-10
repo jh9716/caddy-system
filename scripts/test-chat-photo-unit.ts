@@ -83,6 +83,7 @@ import {
   mapBoundedSettled,
   prepareChatPendingPhoto,
   readyChatPhotosForUpload,
+  revokeChatPhotoPreviewUrl,
 } from "../src/lib/chatPhotoPick";
 import {
   canUseChatPhotoFastPath,
@@ -106,6 +107,19 @@ import {
   usableOptimisticChatPhotos,
 } from "../src/lib/chatPhotoOptimistic";
 import {
+  NATIVE_CHAT_PHOTO_PREVIEW_EVENT,
+  appendNativeHqReadyPhoto,
+  appendNativePreviewPhoto,
+  applyNativeHqFile,
+  createNativePreviewPhoto,
+  isAbandonedNativeHqFile,
+  isNativePreviewPlaceholder,
+  parseNativeChatPhotoPreview,
+  partitionNativeHqFiles,
+  shouldAcceptNativePreview,
+  shouldQueueNativeChatSend,
+} from "../src/lib/chatPhotoNativePreview";
+import {
   appendComposerPhotos,
   applyComposerPreparedIfCurrent,
   applyComposerProgressIfCurrent,
@@ -121,9 +135,12 @@ import {
   buildChatPhotoDebugSample,
   canShowChatPhotoDebug,
   chatPhotoDebugApiUrl,
+  chatPhotoNow,
   emitChatPhotoTimingSummary,
   chatPhotoTimingRunIdFor,
   commitChatPhotoPrepareTiming,
+  enableChatPhotoDebugTiming,
+  isChatPhotoDebugTiming,
   markChatPhotoTiming,
   publicChatPhotoTimingKey,
   noteChatPhotoBoundary,
@@ -601,7 +618,8 @@ section("instant preview + parallel upload");
   assert(prepared.blob !== jpgA, "upload blob replaced");
   const applied = applyPreparedChatPhoto(picked.items, prepared);
   assert(applied.items[0]?.status === "ready", "state blob replaced after prepare");
-  assert(applied.items[0]?.previewUrl === picked.items[0]?.previewUrl, "preview URL stays");
+  assert(applied.items[0]?.blob === prepared.blob, "composer blob matches prepared blob");
+  assert(applied.items[0]?.previewUrl !== picked.items[0]?.previewUrl, "prepare replaces pick preview URL");
 
   const failed = await prepareChatPendingPhoto(picked.items[1], jpgB, async () => {
     throw new Error("변환 실패");
@@ -772,6 +790,139 @@ section("instant preview + parallel upload");
   assert(sendTapMs < 50, "send tap → local bubble <50ms");
   assert(shouldStartOptimisticChatSend("", picked.items), "photos-only send is allowed");
   assert(!shouldStartOptimisticChatSend("", []), "empty send is blocked");
+
+  console.log("== Android native instant preview ==");
+  assert(
+    NATIVE_CHAT_PHOTO_PREVIEW_EVENT === "verthill:chat-photo-native-preview",
+    "native preview event name"
+  );
+  const previewPayload = parseNativeChatPhotoPreview({
+    previewId: "nvp-3-abc123def456",
+    sessionId: "3",
+    width: 384,
+    height: 512,
+    bytes: 48_000,
+    dataUrl: `data:image/jpeg;base64,${"A".repeat(64)}`,
+  });
+  assert(previewPayload?.previewId === "nvp-3-abc123def456", "valid nvp preview payload");
+  assert(
+    parseNativeChatPhotoPreview({
+      previewId: "nvp-3-abc123def456",
+      dataUrl: "data:image/jpeg;base64,abc content://media/external/images/1",
+    }) === null,
+    "preview payload rejects content URI"
+  );
+  assert(
+    parseNativeChatPhotoPreview({
+      previewId: "bad",
+      dataUrl: "data:image/jpeg;base64,abc",
+    }) === null,
+    "preview payload requires nvp id"
+  );
+  assert(
+    parseNativeChatPhotoPreview({
+      previewId: "nvp-3-abc123def456",
+      dataUrl: "data:image/heic;base64,abc",
+    }) === null,
+    "preview payload rejects original HEIC data URL"
+  );
+  const placeholder = createNativePreviewPhoto(previewPayload!);
+  assert(isNativePreviewPlaceholder(placeholder), "thumbnail attachment is a preparing placeholder");
+  assert(placeholder.blob.size === 0, "placeholder blob is not an upload source");
+  assert(placeholder.previewUrl.startsWith("data:image/jpeg;base64,"), "composer shows JPEG data URL");
+  assert(
+    readyChatPhotosForUpload([placeholder]).length === 0,
+    "quick 384x512 thumbnail is never uploaded"
+  );
+  assert(shouldQueueNativeChatSend([placeholder]), "send waits while HQ is preparing");
+  assert(
+    shouldStartOptimisticChatSend("", [placeholder]),
+    "send tap during native preview is allowed so it can queue"
+  );
+  const appended = appendNativePreviewPhoto([], previewPayload!);
+  assert(appended.accepted?.nativePreviewId === "nvp-3-abc123def456", "preview lands in composer");
+  const dupPreview = appendNativePreviewPhoto(appended.items, previewPayload!);
+  assert(dupPreview.accepted === null, "duplicate preview id is ignored");
+  const hqFile = new File([new Uint8Array([0xff, 0xd8, 0xff, 1])], "nvp-3-abc123def456.jpg", {
+    type: "image/jpeg",
+    lastModified: 99,
+  });
+  const swapped = applyNativeHqFile(appended.items, "nvp-3-abc123def456", hqFile);
+  assert(swapped?.[0]?.status === "ready", "HQ JPEG replaces placeholder");
+  assert(swapped?.[0]?.nativePreview === false, "HQ swap clears preview-only flag");
+  assert(swapped?.[0]?.blob === hqFile, "HQ file is the upload blob");
+  assert(readyChatPhotosForUpload(swapped || []).length === 1, "only the 1600 JPEG is uploadable");
+  const lateAfterCancel = applyNativeHqFile([], "nvp-3-abc123def456", hqFile);
+  assert(lateAfterCancel === null, "late HQ does not revive a removed attachment");
+  assert(
+    !shouldAcceptNativePreview(previewPayload!, new Set(["nvp-3-abc123def456"]), new Set()),
+    "abandoned preview id drops late preview event"
+  );
+  assert(
+    !shouldAcceptNativePreview(previewPayload!, new Set(), new Set(["3"])),
+    "abandoned session drops late preview event"
+  );
+  assert(
+    isAbandonedNativeHqFile(hqFile, new Set(), new Set(["3"])),
+    "abandoned session also drops late HQ filename"
+  );
+  const mixedPreview = appendNativePreviewPhoto([], previewPayload!).items;
+  const jpegLeftover = new File([new Uint8Array([0xff, 0xd8, 0xff, 2])], "mixed.jpg", {
+    type: "image/jpeg",
+    lastModified: 100,
+  });
+  const heicFallback = new File([new Uint8Array([1, 2, 3])], "IMG_0001.HEIC", {
+    type: "image/heic",
+    lastModified: 101,
+  });
+  const partitioned = partitionNativeHqFiles(mixedPreview, [hqFile, jpegLeftover]);
+  assert(partitioned.matched[0]?.previewId === "nvp-3-abc123def456", "HQ filename matches preview id");
+  assert(partitioned.leftovers[0] === jpegLeftover, "mixed JPEG stays a leftover");
+  const failedHq = partitionNativeHqFiles(mixedPreview, [heicFallback]);
+  assert(failedHq.heicFallbacks[0]?.previewId === "nvp-3-abc123def456", "failed HQ HEIC pairs to preview");
+  assert(failedHq.matched.length === 0, "original HEIC is not treated as the HQ JPEG");
+  const hqFirst = partitionNativeHqFiles([], [hqFile, jpegLeftover]);
+  assert(hqFirst.unmatchedNamed[0]?.previewId === "nvp-3-abc123def456", "HQ-before-preview stays named");
+  const hqFirstItems = appendNativeHqReadyPhoto([], hqFile, "nvp-3-abc123def456");
+  const latePreview = appendNativePreviewPhoto(hqFirstItems.items, previewPayload!);
+  assert(latePreview.accepted === null, "late preview does not duplicate an already-ready HQ item");
+  const threePreview = [
+    parseNativeChatPhotoPreview({
+      previewId: "nvp-4-aaa111bbb222",
+      sessionId: "4",
+      dataUrl: `data:image/jpeg;base64,${"B".repeat(32)}`,
+    }),
+    parseNativeChatPhotoPreview({
+      previewId: "nvp-4-ccc333ddd444",
+      sessionId: "4",
+      dataUrl: `data:image/jpeg;base64,${"C".repeat(32)}`,
+    }),
+    parseNativeChatPhotoPreview({
+      previewId: "nvp-4-eee555fff666",
+      sessionId: "4",
+      dataUrl: `data:image/jpeg;base64,${"D".repeat(32)}`,
+    }),
+  ].reduce(
+    (items, payload) => appendNativePreviewPhoto(items, payload!).items,
+    [] as ReturnType<typeof createNativePreviewPhoto>[]
+  );
+  assert(threePreview.length === 3, "HEIC 3장 preview slots");
+  const threeHq = [
+    new File([new Uint8Array([3])], "nvp-4-aaa111bbb222.jpg", { type: "image/jpeg", lastModified: 1 }),
+    new File([new Uint8Array([4])], "nvp-4-ccc333ddd444.jpg", { type: "image/jpeg", lastModified: 2 }),
+    new File([new Uint8Array([5])], "nvp-4-eee555fff666.jpg", { type: "image/jpeg", lastModified: 3 }),
+  ];
+  const threePart = partitionNativeHqFiles(threePreview, threeHq);
+  assert(threePart.matched.length === 3 && threePart.leftovers.length === 0, "3장 HQ filenames match in order");
+  let threeSwapped = threePreview;
+  for (const row of threePart.matched) {
+    threeSwapped = applyNativeHqFile(threeSwapped, row.previewId, row.file) || threeSwapped;
+  }
+  assert(
+    readyChatPhotosForUpload(threeSwapped).length === 3 &&
+      threeSwapped.every((item) => item.nativePreview !== true),
+    "3장 swap to HQ JPEGs only"
+  );
   assert(
     outgoingChatPhotoSrc({
       roomId: "all",
@@ -794,6 +945,150 @@ section("instant preview + parallel upload");
   assert(failedLine.status === "failed", "upload/finalize fail → failed bubble");
   const retried = buildOptimisticOutgoingLine(failedLine.body, failedLine.localPhotos);
   assert(retried.localPhotos[0]?.previewUrl === failedLine.localPhotos[0]?.previewUrl, "retry reuses local photo blob");
+}
+
+section("composer preview URL detach + prepare swap");
+{
+  const createdBlobs: Blob[] = [];
+  const revokeCounts = new Map<string, number>();
+  const origCreate = URL.createObjectURL;
+  const origRevoke = URL.revokeObjectURL;
+  let createSeq = 0;
+  URL.createObjectURL = ((blob: Blob) => {
+    createdBlobs.push(blob);
+    if (typeof origCreate === "function") {
+      try {
+        return origCreate.call(URL, blob);
+      } catch {
+        // jsdom/test stubs may reject real Blob URLs; fall through to a stable token.
+      }
+    }
+    createSeq += 1;
+    return `blob:preview-${createSeq}`;
+  }) as typeof URL.createObjectURL;
+  URL.revokeObjectURL = ((url: string) => {
+    revokeCounts.set(url, (revokeCounts.get(url) || 0) + 1);
+    if (typeof origRevoke === "function") {
+      try {
+        origRevoke.call(URL, url);
+      } catch {
+        // ignore stub revoke failures
+      }
+    }
+  }) as typeof URL.revokeObjectURL;
+
+  try {
+    const srcA = new File([new Uint8Array([11, 22, 33])], "preview-a.jpg", {
+      type: "image/jpeg",
+      lastModified: 11,
+    });
+    const srcB = new File([new Uint8Array([44, 55, 66])], "preview-b.jpg", {
+      type: "image/jpeg",
+      lastModified: 22,
+    });
+    const createdBeforePick = createdBlobs.length;
+    const picked = instantChatPhotoPicks([srcA, srcB], 2);
+    const pickBlobs = createdBlobs.slice(createdBeforePick);
+    assert(picked.items.length === 2, "preview-swap pick accepts 2");
+    assert(pickBlobs.length === 2, "pick creates one preview URL per file");
+    assert(pickBlobs.every((blob) => blob !== srcA && blob !== srcB), "pick preview URL is detached from decode File");
+    assert(picked.items[0]?.blob === srcA && picked.items[1]?.blob === srcB, "decode/upload blob stays the original File");
+
+    const oldPreview = picked.items[0]!.previewUrl;
+    const preparedBlob = new Blob([new Uint8Array([9, 8, 7])], { type: "image/jpeg" });
+    const prepared = await prepareChatPendingPhoto(picked.items[0]!, srcA, async () => preparedBlob);
+    assert(prepared.previewUrl === oldPreview, "prepare result keeps pick preview until state commit");
+    const createdBeforeApply = createdBlobs.length;
+    const applied = applyPreparedChatPhoto(picked.items, prepared);
+    const createdDuringApply = createdBlobs.slice(createdBeforeApply);
+    assert(applied.items[0]?.blob === preparedBlob, "apply swaps blob in the same commit");
+    assert(applied.items[0]?.previewUrl !== oldPreview, "apply replaces preview URL");
+    assert(createdDuringApply.length === 1 && createdDuringApply[0] === preparedBlob, "new preview URL is created from prepared blob");
+    assert(revokeCounts.get(oldPreview) === 1, "old pick preview URL is revoked exactly once after swap");
+    revokeChatPhotoPreviewUrl(oldPreview);
+    revokeChatPhotoPreviewUrls([{ previewUrl: oldPreview }]);
+    assert(revokeCounts.get(oldPreview) === 1, "same URL is not double-revoked");
+
+    const failedPreview = applied.items[1]!.previewUrl;
+    const createdBeforeFail = createdBlobs.length;
+    const failed = await prepareChatPendingPhoto(applied.items[1]!, srcB, async () => {
+      throw new Error("변환 실패");
+    });
+    const failedApplied = applyPreparedChatPhoto(applied.items, failed);
+    assert(failedApplied.items[1]?.previewUrl === failedPreview, "failed prepare keeps existing preview URL");
+    assert(createdBlobs.length === createdBeforeFail, "failed prepare does not create a preview URL");
+
+    const createdBeforeRemoved = createdBlobs.length;
+    const removedApply = applyPreparedChatPhoto(
+      applied.items.filter((row) => row.key !== prepared.key),
+      { ...prepared, blob: new Blob([new Uint8Array([1])], { type: "image/jpeg" }) }
+    );
+    assert(removedApply.items.every((row) => row.key !== prepared.key), "removed item stays removed");
+    assert(createdBlobs.length === createdBeforeRemoved, "removed prepare does not create a preview URL");
+
+    const session = createChatPhotoComposerSession(applied.items);
+    session.beginSend();
+    const createdBeforeStale = createdBlobs.length;
+    const stalePrepared = applyComposerPreparedIfCurrent(
+      session.items,
+      {
+        ...prepared,
+        blob: new Blob([new Uint8Array([2])], { type: "image/jpeg" }),
+        status: "ready",
+      },
+      session.generation,
+      session.generation - 1
+    );
+    assert(stalePrepared.items === session.items, "stale prepare does not rewrite composer");
+    assert(createdBlobs.length === createdBeforeStale, "stale prepare does not leak a preview URL");
+
+    const leftoverSrc = instantChatPhotoPicks(
+      [
+        new File([new Uint8Array([3])], "keep-fail.jpg", { type: "image/jpeg", lastModified: 3 }),
+        new File([new Uint8Array([4])], "send-ok.jpg", { type: "image/jpeg", lastModified: 4 }),
+      ],
+      2
+    ).items;
+    leftoverSrc[0] = { ...leftoverSrc[0]!, status: "failed", error: "변환 실패" };
+    const leftoverPreparedBlob = new Blob([new Uint8Array([5])], { type: "image/jpeg" });
+    const leftoverPrepared = await prepareChatPendingPhoto(leftoverSrc[1]!, leftoverSrc[1]!.blob as File, async () => leftoverPreparedBlob);
+    const leftoverOldPreview = leftoverSrc[1]!.previewUrl;
+    const leftoverApplied = applyPreparedChatPhoto(leftoverSrc, leftoverPrepared);
+    assert(leftoverApplied.items[1]?.previewUrl !== leftoverOldPreview, "leftover path still swaps ready preview");
+    assert(revokeCounts.get(leftoverOldPreview) === 1, "leftover ready photo revokes pick preview once");
+    const leftover = leftoverComposerPhotosAfterSend(
+      leftoverApplied.items,
+      usableOptimisticChatPhotos(leftoverApplied.items).map((item) => item.key)
+    );
+    assert(leftover.length === 1 && leftover[0]?.status === "failed", "failed leftover stays after send");
+    const leftoverReadyPreview = leftoverApplied.items[1]!.previewUrl;
+    const leftoverRevokesBefore = revokeCounts.get(leftoverReadyPreview) || 0;
+    revokeChatPhotoPreviewUrls(leftover);
+    assert(
+      (revokeCounts.get(leftoverReadyPreview) || 0) === leftoverRevokesBefore,
+      "leftover revoke does not touch the sent photo preview URL"
+    );
+    assert(
+      outgoingChatPhotoSrc({
+        roomId: "all",
+        attachmentId: "att-preview-1",
+        previewUrl: leftoverReadyPreview,
+        chatPhotoSrc: (roomId, id) => `/api/chat/rooms/${roomId}/attachments/${id}`,
+      }).includes("att-preview-1"),
+      "send still prefers server attachment URL over local preview"
+    );
+    assert(
+      outgoingChatPhotoSrc({
+        roomId: "all",
+        previewUrl: leftoverReadyPreview,
+        chatPhotoSrc: (roomId, id) => `/api/chat/rooms/${roomId}/attachments/${id}`,
+      }) === leftoverReadyPreview,
+      "before attachment id, outgoing still uses local preview URL"
+    );
+  } finally {
+    URL.createObjectURL = origCreate;
+    URL.revokeObjectURL = origRevoke;
+  }
 }
 
 section("composer stale pending state");
@@ -1425,6 +1720,7 @@ section("phase 5 adaptive compression + debug");
       debug.unaccountedPrepareMs == null,
     "phase 8/9/10 debug fields empty by default"
   );
+  enableChatPhotoDebugTiming(true);
   noteChatPhotoCompressionBreakdown({
     decodeMs: 12,
     drawResizeMs: 4,
@@ -1528,7 +1824,9 @@ section("regression: header-probe bitmap resize + EXIF + fallback");
 
 section("hidden latency: scope isolation");
 {
+  enableChatPhotoDebugTiming(true);
   resetChatPhotoTiming();
+  enableChatPhotoDebugTiming(true);
   const fileA = new File([new Uint8Array(8)], "a.jpg", { type: "image/jpeg" });
   const fileB = new File([new Uint8Array(8)], "b.jpg", { type: "image/jpeg" });
   const runA = startChatPhotoPrepareTiming("key-a", fileA);
@@ -1571,7 +1869,9 @@ section("hidden latency: scope isolation");
 
 section("prepare boundary: stale bag + same File runId");
 {
+  enableChatPhotoDebugTiming(true);
   resetChatPhotoTiming();
+  enableChatPhotoDebugTiming(true);
   const fileA = new File([new Uint8Array(12)], "keep.jpg", { type: "image/jpeg" });
   const fileB = new File([new Uint8Array(2.2 * 1024 * 1024)], "next.jpg", { type: "image/jpeg" });
   const runA = startChatPhotoPrepareTiming("cph-1-keep.jpg|12|1|image/jpeg", fileA);
@@ -1655,6 +1955,7 @@ section("prepare boundary: stale bag + same File runId");
 
 section("source split: JPEG getter counts + unused one-read helper");
 {
+  enableChatPhotoDebugTiming(true);
   function spin(ms: number) {
     const end = Date.now() + ms;
     while (Date.now() < end) {}
@@ -1757,6 +2058,60 @@ section("source split: JPEG getter counts + unused one-read helper");
   assert(watched.typeReads === 2 && watched.nameReads === 1 && watched.sizeReads === 1, "watch counts metadata getters only");
   assert(watched.typeMs >= 8, "watch records File.type getter time");
   assert(watched.nameMs === 0 || watched.nameMs < watched.typeMs, "name getter time stays a number");
+}
+
+section("debug timing off: no proxy / scope / source-split");
+{
+  enableChatPhotoDebugTiming(false);
+  resetChatPhotoTiming();
+  enableChatPhotoDebugTiming(false);
+  assert(isChatPhotoDebugTiming() === false, "debug timing is off");
+  const heavy = new File([new Uint8Array(2.2 * 1024 * 1024)], "secret-vacation.jpg", { type: "image/jpeg" });
+  const started = startChatPhotoPrepareTiming("cph-1-secret-vacation.jpg|2200000|1|image/jpeg", heavy);
+  assert(started == null, "prepare-scope start is skipped when debug is off");
+  assert(chatPhotoTimingRunIdFor(heavy) == null, "WeakMap is not bound when debug is off");
+  const selectedAt = 10;
+  stampChatPhotoTiming("photo_selected", selectedAt);
+  let seen: File | null = null;
+  const t0 = chatPhotoNow();
+  const out = await prepareChatPhotoSource(heavy, async (next) => {
+    seen = next;
+    return new Blob([new Uint8Array(8)], { type: "image/jpeg" });
+  });
+  const wall = chatPhotoNow() - t0;
+  markChatPhotoTiming("select_to_ready", selectedAt);
+  stampChatPhotoTiming("prepare_complete");
+  assert(seen === heavy && out.size === 8, "debug-off JPEG still runs compress on the original File");
+  assert(wall >= 0, "debug-off prepare still has a wall time");
+  commitChatPhotoPrepareTiming("r1");
+  const sample = buildChatPhotoDebugSample();
+  assert(sample.fileTypeReads == null && sample.fileNameReads == null && sample.fileSizeReads == null, "no getter counts when debug is off");
+  assert(sample.sourceEnterToAcceptableMs == null && sample.kindToNoteScopeMs == null, "source-split stamps stay empty");
+  assert(sample.photoSourceEnterAt == null && sample.timingRunId == null, "prepare-scope bag is not published");
+  assert(sample.selectedToReadyMs != null, "select→ready wall time is still recorded");
+  const dumped = JSON.stringify(sample);
+  assert(!dumped.includes("secret-vacation"), "debug-off sample has no file name");
+  const rawWatch = watchChatPhotoFileAccess(heavy);
+  assert(rawWatch.file === heavy, "watch does not wrap File in a Proxy when debug is off");
+  void rawWatch.file.type;
+  void rawWatch.file.size;
+  assert(rawWatch.typeReads === 0 && rawWatch.sizeReads === 0, "off-path watch does not intercept getters");
+
+  const prepared = await prepareChatPendingPhoto(
+    {
+      key: "cph-off",
+      blob: heavy,
+      previewUrl: "blob:test-off",
+      fileId: "off",
+      fingerprint: "",
+      status: "preparing",
+    },
+    heavy,
+    async (next) => next
+  );
+  assert(prepared.status === "ready", "pending prepare still succeeds with debug off");
+  assert(prepared.metrics?.timingRunId == null, "pending prepare does not allocate a run id");
+  assert(typeof prepared.metrics?.prepareOuterMs === "number", "pending prepare still returns local wall time");
 }
 
 section("phase 6 hot-path timing / region / cleanup");
@@ -1865,6 +2220,10 @@ section("source wiring / no public blob");
   const pickSrc = read("src/lib/chatPhotoPick.ts");
   const fast = read("src/lib/chatPhotoFastPath.ts");
   const optimistic = read("src/lib/chatPhotoOptimistic.ts");
+  assert(pickSrc.includes("createDetachedChatPhotoPreviewUrl(file)"), "pick preview URL is detached from the decode File");
+  assert(pickSrc.includes("createChatPhotoPreviewUrl(prepared.blob)"), "prepare commit builds preview URL from prepared blob");
+  assert(pickSrc.includes("revokeChatPhotoPreviewUrl(current.previewUrl)"), "prepare commit revokes the previous preview URL");
+  assert(optimistic.includes("revokeChatPhotoPreviewUrl(item.previewUrl)"), "bulk leftover/drop revoke uses the same single-revoke helper");
   assert(client.includes("startChatPhotoPreupload"), "select starts background pre-upload");
   assert(client.includes("uploadJobsRef"), "composer keeps in-flight pre-upload promises");
   assert(client.includes("finishChatPhotoOutgoingUploads"), "send reuses pre-upload jobs/claims");
@@ -1901,7 +2260,11 @@ section("source wiring / no public blob");
   assert(direct.includes("/attachments/prepare"), "composer calls prepare");
   assert(direct.includes("/finalize"), "composer calls finalize");
   assert(client.includes("처리 중"), "preparing status copy");
-  assert(!client.includes("준비 중"), "composer does not expose prepare stage");
+  assert(
+    client.includes('sendQueued ? "준비 중" : "전송"') &&
+      client.split("준비 중").length === 2,
+    "준비 중 is only the native HQ send-button wait state"
+  );
   assert(!client.includes("vh-chat-pending-status"), "composer does not expose upload stage labels");
   assert(client.includes("chatPhotoComposerBusy"), "messenger-style busy spinner");
   assert(client.includes("canShowChatPhotoDebug"), "admin photo debug gate");
@@ -1952,6 +2315,12 @@ section("source wiring / no public blob");
   assert(!sourcePrepareFn.includes("planChatPhotoSourceFromMeta"), "live source does not use the unused planner");
   assert(fast.includes("planChatPhotoSourceFromMeta"), "one-read planner is present for a later wire");
   assert(timingSrc.includes("watchChatPhotoFileAccess"), "timing watches File metadata getters");
+  assert(timingSrc.includes("isChatPhotoDebugTiming"), "debug timing has an explicit gate");
+  assert(timingSrc.includes("enableChatPhotoDebugTiming"), "photoDebug can turn detailed timing on");
+  assert(fast.includes("isChatPhotoDebugTiming"), "source prepare skips debug bookkeeping when off");
+  assert(client.includes("enableChatPhotoDebugTiming"), "ChatClient arms debug timing only for photoDebug");
+  assert(sourcePrepareFn.includes("const debug = isChatPhotoDebugTiming()"), "live source branches on debug flag");
+  assert(sourcePrepareFn.includes("debug ? watchChatPhotoFileAccess(file) : null"), "Proxy is not created on the hot path");
   assert(client.includes('markChatPhotoTiming("select_to_ready"'), "heavy prepare stamps select_to_ready");
   assert(timingSrc.includes("clearPrepareScopeFromBag"), "commit replaces prepare-scope fields");
   assert(fast.includes("jpegDirectRun"), "JPEG source records same-file run");
