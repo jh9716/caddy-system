@@ -6,13 +6,16 @@ export {
   applyChatPhotoSendProgress,
   applyPreparedChatPhoto,
   CHAT_PHOTO_UPLOAD_CONCURRENCY,
+  chatPhotoComposerBusy,
   chatPhotoPickRoom,
+  createChatPhotoPreviewUrl,
+  createDetachedChatPhotoPreviewUrl,
   instantChatPhotoPicks,
   mapBoundedSettled,
-  chatPhotoComposerBusy,
   nextChatPhotoComposerKey,
   prepareChatPendingPhoto,
   readyChatPhotosForUpload,
+  revokeChatPhotoPreviewUrl,
   type ChatPendingPhoto,
 } from "@/lib/chatPhotoPick";
 export {
@@ -63,3 +66,13 @@ export {
   type ChatPhotoUploadJobMap,
 } from "@/lib/chatPhotoPreupload";
 export { CHAT_PHOTO_ACCEPT, CHAT_PHOTO_MAX, chatPhotoSrc } from "@/lib/chatPhotoConstants";
+export {
+  canShowChatPhotoLite,
+  enableChatPhotoLiteTiming,
+  isChatPhotoLiteTiming,
+  noteChatPhotoLiteAdaptive,
+  noteChatPhotoLiteReady,
+  noteChatPhotoLiteStamp,
+  readChatPhotoLiteSample,
+  type ChatPhotoLiteSample,
+} from "@/lib/chatPhotoLiteTiming";
