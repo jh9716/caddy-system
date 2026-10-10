@@ -31,6 +31,7 @@ export function nextChatPhotoComposerKey(fileId: string): string {
 const revokedChatPhotoPreviewUrls = new Set<string>();
 
 export function createDetachedChatPhotoPreviewUrl(source: Blob): string {
+  // Keep preview bytes off the decode File so later reads do not break the thumb.
   const previewBlob =
     typeof source.slice === "function" ? source.slice(0, source.size, source.type) : source;
   return URL.createObjectURL(previewBlob);
