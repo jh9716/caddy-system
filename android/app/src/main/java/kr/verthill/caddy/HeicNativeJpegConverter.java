@@ -249,6 +249,10 @@ final class HeicNativeJpegConverter {
     }
 
     static ConvertResult resolveForWebView(Context context, Uri uri) {
+        return resolveForWebView(context, uri, null);
+    }
+
+    static ConvertResult resolveForWebView(Context context, Uri uri, String outputName) {
         if (context == null || uri == null) {
             return passthrough(uri);
         }
@@ -256,11 +260,11 @@ final class HeicNativeJpegConverter {
             return passthrough(uri);
         }
         long started = SystemClock.elapsedRealtime();
-        ConvertResult bitmapPath = tryBitmapFactory(context, uri);
+        ConvertResult bitmapPath = tryBitmapFactory(context, uri, outputName);
         if (bitmapPath != null) {
             return withTotal(bitmapPath, SystemClock.elapsedRealtime() - started);
         }
-        ConvertResult decoded = tryImageDecoderSampled(context, uri);
+        ConvertResult decoded = tryImageDecoderSampled(context, uri, outputName);
         if (decoded != null) {
             return withTotal(decoded, SystemClock.elapsedRealtime() - started);
         }
@@ -313,8 +317,8 @@ final class HeicNativeJpegConverter {
         );
     }
 
-    private static ConvertResult tryBitmapFactory(Context context, Uri uri) {
-        File outFile = createJpegFile(context);
+    private static ConvertResult tryBitmapFactory(Context context, Uri uri, String outputName) {
+        File outFile = createJpegFile(context, outputName);
         if (outFile == null) return null;
         Bitmap bitmap = null;
         try {
@@ -396,9 +400,9 @@ final class HeicNativeJpegConverter {
         }
     }
 
-    private static ConvertResult tryImageDecoderSampled(Context context, Uri uri) {
+    private static ConvertResult tryImageDecoderSampled(Context context, Uri uri, String outputName) {
         if (Build.VERSION.SDK_INT < 28) return null;
-        File outFile = createJpegFile(context);
+        File outFile = createJpegFile(context, outputName);
         if (outFile == null) return null;
         Bitmap bitmap = null;
         try {
@@ -527,9 +531,16 @@ final class HeicNativeJpegConverter {
     }
 
     private static File createJpegFile(Context context) {
+        return createJpegFile(context, null);
+    }
+
+    private static File createJpegFile(Context context, String outputName) {
         File dir = new File(context.getCacheDir(), CACHE_DIR_NAME);
         if (!dir.isDirectory() && !dir.mkdirs()) return null;
-        return new File(dir, UUID.randomUUID().toString() + ".jpg");
+        String name = outputName != null && outputName.endsWith(".jpg")
+            ? outputName
+            : UUID.randomUUID().toString() + ".jpg";
+        return new File(dir, name);
     }
 
     private static void deleteQuietly(File file) {
@@ -538,7 +549,7 @@ final class HeicNativeJpegConverter {
         }
     }
 
-    private static String mimeOf(Context context, Uri uri) {
+    static String mimeOf(Context context, Uri uri) {
         try {
             return context.getContentResolver().getType(uri);
         } catch (Exception ignored) {
@@ -546,7 +557,7 @@ final class HeicNativeJpegConverter {
         }
     }
 
-    private static String displayNameOf(Context context, Uri uri) {
+    static String displayNameOf(Context context, Uri uri) {
         Cursor cursor = null;
         try {
             cursor = context.getContentResolver().query(

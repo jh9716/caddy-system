@@ -107,6 +107,19 @@ import {
   usableOptimisticChatPhotos,
 } from "../src/lib/chatPhotoOptimistic";
 import {
+  NATIVE_CHAT_PHOTO_PREVIEW_EVENT,
+  appendNativeHqReadyPhoto,
+  appendNativePreviewPhoto,
+  applyNativeHqFile,
+  createNativePreviewPhoto,
+  isAbandonedNativeHqFile,
+  isNativePreviewPlaceholder,
+  parseNativeChatPhotoPreview,
+  partitionNativeHqFiles,
+  shouldAcceptNativePreview,
+  shouldQueueNativeChatSend,
+} from "../src/lib/chatPhotoNativePreview";
+import {
   appendComposerPhotos,
   applyComposerPreparedIfCurrent,
   applyComposerProgressIfCurrent,
@@ -777,6 +790,139 @@ section("instant preview + parallel upload");
   assert(sendTapMs < 50, "send tap → local bubble <50ms");
   assert(shouldStartOptimisticChatSend("", picked.items), "photos-only send is allowed");
   assert(!shouldStartOptimisticChatSend("", []), "empty send is blocked");
+
+  console.log("== Android native instant preview ==");
+  assert(
+    NATIVE_CHAT_PHOTO_PREVIEW_EVENT === "verthill:chat-photo-native-preview",
+    "native preview event name"
+  );
+  const previewPayload = parseNativeChatPhotoPreview({
+    previewId: "nvp-3-abc123def456",
+    sessionId: "3",
+    width: 384,
+    height: 512,
+    bytes: 48_000,
+    dataUrl: `data:image/jpeg;base64,${"A".repeat(64)}`,
+  });
+  assert(previewPayload?.previewId === "nvp-3-abc123def456", "valid nvp preview payload");
+  assert(
+    parseNativeChatPhotoPreview({
+      previewId: "nvp-3-abc123def456",
+      dataUrl: "data:image/jpeg;base64,abc content://media/external/images/1",
+    }) === null,
+    "preview payload rejects content URI"
+  );
+  assert(
+    parseNativeChatPhotoPreview({
+      previewId: "bad",
+      dataUrl: "data:image/jpeg;base64,abc",
+    }) === null,
+    "preview payload requires nvp id"
+  );
+  assert(
+    parseNativeChatPhotoPreview({
+      previewId: "nvp-3-abc123def456",
+      dataUrl: "data:image/heic;base64,abc",
+    }) === null,
+    "preview payload rejects original HEIC data URL"
+  );
+  const placeholder = createNativePreviewPhoto(previewPayload!);
+  assert(isNativePreviewPlaceholder(placeholder), "thumbnail attachment is a preparing placeholder");
+  assert(placeholder.blob.size === 0, "placeholder blob is not an upload source");
+  assert(placeholder.previewUrl.startsWith("data:image/jpeg;base64,"), "composer shows JPEG data URL");
+  assert(
+    readyChatPhotosForUpload([placeholder]).length === 0,
+    "quick 384x512 thumbnail is never uploaded"
+  );
+  assert(shouldQueueNativeChatSend([placeholder]), "send waits while HQ is preparing");
+  assert(
+    shouldStartOptimisticChatSend("", [placeholder]),
+    "send tap during native preview is allowed so it can queue"
+  );
+  const appended = appendNativePreviewPhoto([], previewPayload!);
+  assert(appended.accepted?.nativePreviewId === "nvp-3-abc123def456", "preview lands in composer");
+  const dupPreview = appendNativePreviewPhoto(appended.items, previewPayload!);
+  assert(dupPreview.accepted === null, "duplicate preview id is ignored");
+  const hqFile = new File([new Uint8Array([0xff, 0xd8, 0xff, 1])], "nvp-3-abc123def456.jpg", {
+    type: "image/jpeg",
+    lastModified: 99,
+  });
+  const swapped = applyNativeHqFile(appended.items, "nvp-3-abc123def456", hqFile);
+  assert(swapped?.[0]?.status === "ready", "HQ JPEG replaces placeholder");
+  assert(swapped?.[0]?.nativePreview === false, "HQ swap clears preview-only flag");
+  assert(swapped?.[0]?.blob === hqFile, "HQ file is the upload blob");
+  assert(readyChatPhotosForUpload(swapped || []).length === 1, "only the 1600 JPEG is uploadable");
+  const lateAfterCancel = applyNativeHqFile([], "nvp-3-abc123def456", hqFile);
+  assert(lateAfterCancel === null, "late HQ does not revive a removed attachment");
+  assert(
+    !shouldAcceptNativePreview(previewPayload!, new Set(["nvp-3-abc123def456"]), new Set()),
+    "abandoned preview id drops late preview event"
+  );
+  assert(
+    !shouldAcceptNativePreview(previewPayload!, new Set(), new Set(["3"])),
+    "abandoned session drops late preview event"
+  );
+  assert(
+    isAbandonedNativeHqFile(hqFile, new Set(), new Set(["3"])),
+    "abandoned session also drops late HQ filename"
+  );
+  const mixedPreview = appendNativePreviewPhoto([], previewPayload!).items;
+  const jpegLeftover = new File([new Uint8Array([0xff, 0xd8, 0xff, 2])], "mixed.jpg", {
+    type: "image/jpeg",
+    lastModified: 100,
+  });
+  const heicFallback = new File([new Uint8Array([1, 2, 3])], "IMG_0001.HEIC", {
+    type: "image/heic",
+    lastModified: 101,
+  });
+  const partitioned = partitionNativeHqFiles(mixedPreview, [hqFile, jpegLeftover]);
+  assert(partitioned.matched[0]?.previewId === "nvp-3-abc123def456", "HQ filename matches preview id");
+  assert(partitioned.leftovers[0] === jpegLeftover, "mixed JPEG stays a leftover");
+  const failedHq = partitionNativeHqFiles(mixedPreview, [heicFallback]);
+  assert(failedHq.heicFallbacks[0]?.previewId === "nvp-3-abc123def456", "failed HQ HEIC pairs to preview");
+  assert(failedHq.matched.length === 0, "original HEIC is not treated as the HQ JPEG");
+  const hqFirst = partitionNativeHqFiles([], [hqFile, jpegLeftover]);
+  assert(hqFirst.unmatchedNamed[0]?.previewId === "nvp-3-abc123def456", "HQ-before-preview stays named");
+  const hqFirstItems = appendNativeHqReadyPhoto([], hqFile, "nvp-3-abc123def456");
+  const latePreview = appendNativePreviewPhoto(hqFirstItems.items, previewPayload!);
+  assert(latePreview.accepted === null, "late preview does not duplicate an already-ready HQ item");
+  const threePreview = [
+    parseNativeChatPhotoPreview({
+      previewId: "nvp-4-aaa111bbb222",
+      sessionId: "4",
+      dataUrl: `data:image/jpeg;base64,${"B".repeat(32)}`,
+    }),
+    parseNativeChatPhotoPreview({
+      previewId: "nvp-4-ccc333ddd444",
+      sessionId: "4",
+      dataUrl: `data:image/jpeg;base64,${"C".repeat(32)}`,
+    }),
+    parseNativeChatPhotoPreview({
+      previewId: "nvp-4-eee555fff666",
+      sessionId: "4",
+      dataUrl: `data:image/jpeg;base64,${"D".repeat(32)}`,
+    }),
+  ].reduce(
+    (items, payload) => appendNativePreviewPhoto(items, payload!).items,
+    [] as ReturnType<typeof createNativePreviewPhoto>[]
+  );
+  assert(threePreview.length === 3, "HEIC 3장 preview slots");
+  const threeHq = [
+    new File([new Uint8Array([3])], "nvp-4-aaa111bbb222.jpg", { type: "image/jpeg", lastModified: 1 }),
+    new File([new Uint8Array([4])], "nvp-4-ccc333ddd444.jpg", { type: "image/jpeg", lastModified: 2 }),
+    new File([new Uint8Array([5])], "nvp-4-eee555fff666.jpg", { type: "image/jpeg", lastModified: 3 }),
+  ];
+  const threePart = partitionNativeHqFiles(threePreview, threeHq);
+  assert(threePart.matched.length === 3 && threePart.leftovers.length === 0, "3장 HQ filenames match in order");
+  let threeSwapped = threePreview;
+  for (const row of threePart.matched) {
+    threeSwapped = applyNativeHqFile(threeSwapped, row.previewId, row.file) || threeSwapped;
+  }
+  assert(
+    readyChatPhotosForUpload(threeSwapped).length === 3 &&
+      threeSwapped.every((item) => item.nativePreview !== true),
+    "3장 swap to HQ JPEGs only"
+  );
   assert(
     outgoingChatPhotoSrc({
       roomId: "all",
@@ -2114,7 +2260,11 @@ section("source wiring / no public blob");
   assert(direct.includes("/attachments/prepare"), "composer calls prepare");
   assert(direct.includes("/finalize"), "composer calls finalize");
   assert(client.includes("처리 중"), "preparing status copy");
-  assert(!client.includes("준비 중"), "composer does not expose prepare stage");
+  assert(
+    client.includes('sendQueued ? "준비 중" : "전송"') &&
+      client.split("준비 중").length === 2,
+    "준비 중 is only the native HQ send-button wait state"
+  );
   assert(!client.includes("vh-chat-pending-status"), "composer does not expose upload stage labels");
   assert(client.includes("chatPhotoComposerBusy"), "messenger-style busy spinner");
   assert(client.includes("canShowChatPhotoDebug"), "admin photo debug gate");

@@ -78,6 +78,9 @@ export type ChatPendingPhoto = {
   error?: string;
   send?: ChatPendingPhotoSend;
   metrics?: ChatPhotoMetrics;
+  nativePreview?: boolean;
+  nativePreviewId?: string;
+  nativeSessionId?: string;
 };
 
 export function chatPhotoComposerBusy(item: ChatPendingPhoto): boolean {
@@ -226,6 +229,7 @@ export function applyPreparedChatPhoto(
           previewUrl: nextPreviewUrl,
           fingerprint: prepared.fingerprint,
           status: "ready" as const,
+          nativePreview: false,
           send: row.send,
           metrics: prepared.metrics ?? row.metrics,
         }
@@ -288,7 +292,13 @@ export async function mapBoundedSettled<T, R>(
 }
 
 export function readyChatPhotosForUpload(items: readonly ChatPendingPhoto[]): ChatPendingPhoto[] {
-  return items.filter((item) => item.status === "ready" && item.blob && item.blob.size > 0);
+  return items.filter(
+    (item) =>
+      item.status === "ready" &&
+      item.blob &&
+      item.blob.size > 0 &&
+      item.nativePreview !== true
+  );
 }
 
 export function chatPhotoPickRoom(currentCount: number, max = CHAT_PHOTO_MAX): number {

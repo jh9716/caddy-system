@@ -514,11 +514,32 @@ assert(
     !chromeClient.includes("onConsoleMessage"),
   "dialogs / permission / fullscreen / console stay on superclass"
 );
+const heicPreview = read(
+  "android/app/src/main/java/kr/verthill/caddy/HeicNativePreview.java"
+);
 assert(
   !heicConverter.includes("loadThumbnail(") &&
     !heicConverter.includes("PATH_THUMBNAIL") &&
     !heicConverter.includes("tryLoadThumbnail"),
   "provider thumbnail API is not used for the upload JPEG"
+);
+assert(
+  heicPreview.includes("loadThumbnail(") &&
+    heicPreview.includes("EVENT = \"verthill:chat-photo-native-preview\"") &&
+    heicPreview.includes("PREVIEW_EDGE = 512") &&
+    heicPreview.includes("data:image/jpeg;base64,") &&
+    heicPreview.includes("nvp-") &&
+    !heicPreview.includes("FileProvider") &&
+    !heicPreview.includes("resolveForWebView"),
+  "loadThumbnail is preview-only and never the upload JPEG"
+);
+assert(
+  chromeClient.includes("HeicNativePreview.tryPreview") &&
+    chromeClient.includes("emitPreview") &&
+    chromeClient.indexOf("emitPreview") < chromeClient.indexOf("resolveForWebView") &&
+    chromeClient.includes("previewIds[i] + \".jpg\"") &&
+    chromeClient.includes("nativePreviewSession"),
+  "preview event is emitted before the HQ file-chooser callback"
 );
 assert(
   heicConverter.includes("BitmapFactory.decodeFileDescriptor") &&
@@ -542,8 +563,9 @@ assert(
 assert(
   heicConverter.includes("SDK_INT < 28") &&
     heicConverter.includes("PATH_WEB") &&
-    heicConverter.includes("tryBitmapFactory(context, uri)") &&
-    heicConverter.includes("tryImageDecoderSampled(context, uri)"),
+    heicConverter.includes("tryBitmapFactory(context, uri, outputName)") &&
+    heicConverter.includes("tryImageDecoderSampled(context, uri, outputName)") &&
+    heicConverter.includes("uri,\n            PATH_WEB"),
   "both native paths failing returns original HEIC URI for web heic-to"
 );
 assert(
@@ -567,6 +589,8 @@ assert(
   chromeClient.includes("FLAG_DEBUGGABLE") &&
     chromeClient.includes("isDebugApk") &&
     chromeClient.includes("Toast.makeText") &&
+    chromeClient.includes("\"preview \"") &&
+    chromeClient.includes("\"ms · HQ \"") &&
     heicConverter.includes("HEIC bitmap") &&
     heicConverter.includes("HEIC decoder-sampled") &&
     heicConverter.includes("HEIC native FAIL → web") &&
@@ -576,12 +600,12 @@ assert(
     heicConverter.includes("scaleMs") &&
     heicConverter.includes("jpegMs") &&
     heicConverter.includes("totalNativeMs"),
-  "debug APK toasts subsample path timings without URIs"
+  "debug APK toasts preview + HQ timings without URIs"
 );
 assert(
   !heicConverter.includes("uri.toString()") &&
     !chromeClient.includes("uri.toString()") &&
-    chromeClient.includes("converted.debugMessage()"),
+    !heicPreview.includes("uri.toString()"),
   "debug toast uses timing/size text, not personal URI/path"
 );
 assert(
@@ -613,8 +637,20 @@ assert(
   !heicConverter.includes("Base64") &&
     !chromeClient.includes("Base64") &&
     !heicConverter.includes("byte[]") &&
-    !chromeClient.includes("JSObject"),
-  "no base64 / JS bridge byte payload"
+    !chromeClient.includes("JSObject") &&
+    heicPreview.includes("Base64.encodeToString"),
+  "no original HEIC/base64 on the HQ path; preview uses a JPEG data URL only"
+);
+assert(
+  chatClient.includes("NATIVE_CHAT_PHOTO_PREVIEW_EVENT") &&
+    chatClient.includes("appendNativePreviewPhoto") &&
+    chatClient.includes("applyNativeHqFile") &&
+    chatClient.includes("shouldQueueNativeChatSend") &&
+    chatClient.includes("abandonedNativePreviewIdsRef") &&
+    chatClient.includes("준비 중") &&
+    read("src/lib/chatPhotoPick.ts").includes("item.nativePreview !== true") &&
+    read("src/lib/chatPhotoNativePreview.ts").includes("data:image/jpeg;base64,"),
+  "web composer shows native preview, waits for HQ, and never uploads the thumbnail"
 );
 assert(
   filePaths.includes('<cache-path name="my_cache_images" path="." />') &&

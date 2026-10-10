@@ -19,7 +19,11 @@ export function usableOptimisticChatPhotos(photos: readonly ChatPendingPhoto[]):
 }
 
 export function shouldStartOptimisticChatSend(body: string, photos: readonly ChatPendingPhoto[]): boolean {
-  return Boolean(body.trim() || usableOptimisticChatPhotos(photos).length);
+  return Boolean(
+    body.trim() ||
+      usableOptimisticChatPhotos(photos).length ||
+      photos.some((item) => item.nativePreview === true && item.status === "preparing")
+  );
 }
 
 export function clearedComposerAfterOptimisticSend(): OptimisticChatComposer {

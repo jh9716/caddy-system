@@ -66,3 +66,16 @@ export {
   type ChatPhotoUploadJobMap,
 } from "@/lib/chatPhotoPreupload";
 export { CHAT_PHOTO_ACCEPT, CHAT_PHOTO_MAX, chatPhotoSrc } from "@/lib/chatPhotoConstants";
+export {
+  NATIVE_CHAT_PHOTO_PREVIEW_EVENT,
+  appendNativeHqReadyPhoto,
+  appendNativePreviewPhoto,
+  applyNativeHqFile,
+  isAbandonedNativeHqFile,
+  isNativePreviewPlaceholder,
+  parseNativeChatPhotoPreview,
+  partitionNativeHqFiles,
+  shouldAcceptNativePreview,
+  shouldQueueNativeChatSend,
+  type NativeChatPhotoPreviewPayload,
+} from "@/lib/chatPhotoNativePreview";
