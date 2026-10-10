@@ -7,6 +7,7 @@ import { CHAT_PHOTO_MAX_BYTES, CHAT_PHOTO_PASSTHROUGH_MAX_BYTES } from "@/lib/ch
 import {
   bindChatPhotoTimingFile,
   chatPhotoTimingRunIdFor,
+  isChatPhotoDebugTiming,
   noteChatPhotoBoundary,
   noteChatPhotoFileAccess,
   noteChatPhotoPrepareScope,
@@ -29,7 +30,7 @@ export type ChatPhotoSourcePlan = {
   kind: ChatPhotoSourceKind;
 };
 
-/** One snapshot of File metadata. Unused by prepareChatPhotoSource (MERGE HOLD). */
+/** One snapshot of File metadata for prepareChatPhotoSource. */
 export function readChatPhotoFileMeta(file: { name?: string; type?: string; size?: number }): ChatPhotoFileMeta {
   return {
     type: (file.type || "").toLowerCase(),
@@ -89,7 +90,7 @@ export function isChatPhotoAcceptableSourceFromMeta(meta: ChatPhotoFileMeta): bo
   return chatPhotoSourceKindFromMeta(meta) !== "unknown";
 }
 
-/** Same decisions as the live helpers, from one type/name/size read. Not wired into prepare. */
+/** Same decisions as the live helpers, from one type/name/size read. */
 export function planChatPhotoSourceFromMeta(meta: ChatPhotoFileMeta): ChatPhotoSourcePlan {
   const kind = chatPhotoSourceKindFromMeta(meta);
   return {
@@ -131,34 +132,39 @@ export async function prepareChatPhotoSource(
   file: File,
   compress?: (file: File) => Promise<Blob>
 ): Promise<Blob> {
-  const runId = chatPhotoTimingRunIdFor(file);
-  noteChatPhotoBoundary(runId, "photoSourceEnterAt");
-  const watch = watchChatPhotoFileAccess(file);
-  const probed = watch.file;
-  const flushWatch = () => noteChatPhotoFileAccess(runId, watch);
+  const debug = isChatPhotoDebugTiming();
+  const runId = debug ? chatPhotoTimingRunIdFor(file) : null;
+  if (debug) noteChatPhotoBoundary(runId, "photoSourceEnterAt");
+  const watch = debug ? watchChatPhotoFileAccess(file) : null;
+  const probed = watch ? watch.file : file;
+  const flushWatch = () => {
+    if (watch) noteChatPhotoFileAccess(runId, watch);
+  };
   try {
-    if (!isChatPhotoAcceptableSource(probed)) {
+    const meta = readChatPhotoFileMeta(probed);
+    const plan = planChatPhotoSourceFromMeta(meta);
+    if (!plan.acceptable) {
       flushWatch();
       throw new Error(COURSE_REPORT_HEIC_MESSAGE);
     }
-    noteChatPhotoSourceSplit(runId, "sourceAcceptableEndAt");
+    if (debug) noteChatPhotoSourceSplit(runId, "sourceAcceptableEndAt");
     flushWatch();
-    if (canUseChatPhotoFastPath(probed)) {
-      noteChatPhotoSourceSplit(runId, "sourceFastPathEndAt");
+    if (plan.fastPath) {
+      if (debug) noteChatPhotoSourceSplit(runId, "sourceFastPathEndAt");
       flushWatch();
       return file;
     }
-    noteChatPhotoSourceSplit(runId, "sourceFastPathEndAt");
+    if (debug) noteChatPhotoSourceSplit(runId, "sourceFastPathEndAt");
     flushWatch();
     const run =
       compress ||
       (await import("@/lib/chatPhotoAdaptive")).prepareChatAdaptiveBlob;
-    noteChatPhotoSourceSplit(runId, "sourceRunResolveEndAt");
-    const heicLike = isHeicLikeFile(probed);
-    noteChatPhotoSourceSplit(runId, "sourceHeicEndAt");
+    if (debug) noteChatPhotoSourceSplit(runId, "sourceRunResolveEndAt");
+    const heicLike = plan.heic;
+    if (debug) noteChatPhotoSourceSplit(runId, "sourceHeicEndAt");
     flushWatch();
-    const kindHeic = heicLike || chatPhotoSourceKind(probed) === "heic";
-    noteChatPhotoSourceSplit(runId, "sourceKindEndAt");
+    const kindHeic = heicLike || plan.kind === "heic";
+    if (debug) noteChatPhotoSourceSplit(runId, "sourceKindEndAt");
     flushWatch();
     if (kindHeic) {
       const converted = await decodeCourseReportPhotoSource(file);
@@ -171,19 +177,24 @@ export async function prepareChatPhotoSource(
         }
       );
       if (runId) bindChatPhotoTimingFile(convertedFile, runId);
-      noteChatPhotoPrepareScope(runId, { jpegDirectRun: false, sameFileBound: false });
-      noteChatPhotoSourceSplit(runId, "sourceNoteScopeEndAt");
-      flushWatch();
-      if (canUseChatPhotoFastPath(convertedFile)) return converted;
-      noteChatPhotoSourceSplit(runId, "sourceRunInvokeAt");
+      if (debug) {
+        noteChatPhotoPrepareScope(runId, { jpegDirectRun: false, sameFileBound: false });
+        noteChatPhotoSourceSplit(runId, "sourceNoteScopeEndAt");
+        flushWatch();
+      }
+      const convertedPlan = planChatPhotoSourceFromMeta(readChatPhotoFileMeta(convertedFile));
+      if (convertedPlan.fastPath) return converted;
+      if (debug) noteChatPhotoSourceSplit(runId, "sourceRunInvokeAt");
       return await run(convertedFile);
     }
-    noteChatPhotoPrepareScope(runId, { jpegDirectRun: true, sameFileBound: Boolean(runId) });
-    noteChatPhotoSourceSplit(runId, "sourceNoteScopeEndAt");
-    flushWatch();
-    noteChatPhotoSourceSplit(runId, "sourceRunInvokeAt");
+    if (debug) {
+      noteChatPhotoPrepareScope(runId, { jpegDirectRun: true, sameFileBound: Boolean(runId) });
+      noteChatPhotoSourceSplit(runId, "sourceNoteScopeEndAt");
+      flushWatch();
+      noteChatPhotoSourceSplit(runId, "sourceRunInvokeAt");
+    }
     return await run(file);
   } finally {
-    noteChatPhotoBoundary(runId, "photoSourceExitAt");
+    if (debug) noteChatPhotoBoundary(runId, "photoSourceExitAt");
   }
 }
