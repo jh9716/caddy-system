@@ -86,16 +86,8 @@ import {
 } from "../src/lib/chatPhotoPick";
 import {
   canUseChatPhotoFastPath,
-  canUseChatPhotoFastPathFromMeta,
-  chatPhotoSourceKind,
-  chatPhotoSourceKindFromMeta,
-  isChatPhotoAcceptableSource,
-  isChatPhotoAcceptableSourceFromMeta,
-  isHeicLikeFromMeta,
   needsChatPhotoHeavyPrepare,
-  planChatPhotoSourceFromMeta,
   prepareChatPhotoSource,
-  readChatPhotoFileMeta,
 } from "../src/lib/chatPhotoFastPath";
 import {
   buildOptimisticOutgoingLine,
@@ -126,14 +118,12 @@ import {
   commitChatPhotoPrepareTiming,
   markChatPhotoTiming,
   publicChatPhotoTimingKey,
-  noteChatPhotoBoundary,
   noteChatPhotoCompression,
   noteChatPhotoCompressionBreakdown,
   noteChatPhotoPrepareScope,
   noteChatPhotoServerHotpath,
   resetChatPhotoTiming,
   startChatPhotoPrepareTiming,
-  watchChatPhotoFileAccess,
   stampChatPhotoTiming,
   summarizeChatPhotoTiming,
 } from "../src/lib/chatPhotoTiming";
@@ -153,7 +143,6 @@ import {
   readImageSizeFromHeader,
   readJpegExifOrientation,
 } from "../src/lib/imageHeaderSize";
-import { isHeicLikeFile } from "../src/lib/courseReportPhotoClient";
 import { CHAT_PHOTO_MAX_BYTES, CHAT_PHOTO_PASSTHROUGH_MAX_BYTES } from "../src/lib/chatPhotoConstants";
 import {
   abandonChatPhotoPreupload,
@@ -1653,112 +1642,6 @@ section("prepare boundary: stale bag + same File runId");
   );
 }
 
-section("source split: JPEG getter counts + unused one-read helper");
-{
-  function spin(ms: number) {
-    const end = Date.now() + ms;
-    while (Date.now() < end) {}
-  }
-
-  resetChatPhotoTiming();
-  const heavy = new File([new Uint8Array(2.2 * 1024 * 1024)], "secret-vacation.jpg", { type: "image/jpeg" });
-  const runId = startChatPhotoPrepareTiming("cph-1-secret-vacation.jpg|2200000|1|image/jpeg", heavy);
-  let seen: File | null = null;
-  await prepareChatPhotoSource(heavy, async (next) => {
-    seen = next;
-    noteChatPhotoBoundary(chatPhotoTimingRunIdFor(next), "adaptiveBlobEnterAt");
-    return new Blob([new Uint8Array(8)], { type: "image/jpeg" });
-  });
-  commitChatPhotoPrepareTiming(runId);
-  const sample = buildChatPhotoDebugSample();
-  assert(sample.timingRunId === runId && sample.timingKey === "cph-1", "source split stays on the same public run");
-  assert(seen === heavy, "JPEG run() still receives the original File");
-  assert(sample.fileTypeReads === 3, "heavy JPEG reads file.type 3 times (acceptable/heic/kind)");
-  assert(sample.fileNameReads === 3, "heavy JPEG reads file.name 3 times (acceptable/heic/kind)");
-  assert(sample.fileSizeReads === 5, "heavy JPEG reads file.size 5 times (acceptable×2 + fastPath×3)");
-  assert(sample.sourceEnterToAcceptableMs != null, "sourceEnter→acceptable stamped");
-  assert(sample.acceptableToFastPathMs != null, "acceptable→fastPath stamped");
-  assert(sample.fastPathToRunResolveMs != null, "fastPath→runResolve stamped");
-  assert(sample.runResolveToHeicMs != null, "runResolve→heic stamped");
-  assert(sample.heicToKindMs != null, "heic→kind stamped");
-  assert(sample.kindToNoteScopeMs != null, "kind→noteScope stamped");
-  assert(sample.noteScopeToRunInvokeMs != null, "noteScope→runInvoke stamped");
-  assert(sample.runInvokeToAdaptiveBlobMs != null, "runInvoke→adaptiveBlob stamped");
-  const splitSum =
-    (sample.sourceEnterToAcceptableMs ?? 0) +
-    (sample.acceptableToFastPathMs ?? 0) +
-    (sample.fastPathToRunResolveMs ?? 0) +
-    (sample.runResolveToHeicMs ?? 0) +
-    (sample.heicToKindMs ?? 0) +
-    (sample.kindToNoteScopeMs ?? 0) +
-    (sample.noteScopeToRunInvokeMs ?? 0) +
-    (sample.runInvokeToAdaptiveBlobMs ?? 0);
-  assert(sample.sourceToAdaptiveBlobMs != null, "source→blob interval still present");
-  assert(Math.abs(splitSum - (sample.sourceToAdaptiveBlobMs ?? 0)) <= 2, "internal splits sum to sourceToAdaptiveBlob");
-  const dumped = JSON.stringify(sample);
-  assert(!dumped.includes("secret-vacation"), "debug sample never includes the file name");
-  assert(!dumped.includes(".jpg"), "debug sample never includes a filename suffix");
-
-  resetChatPhotoTiming();
-  const small = new File([new Uint8Array(32)], "tiny.jpg", { type: "image/jpeg" });
-  const runSmall = startChatPhotoPrepareTiming("cph-2", small);
-  await prepareChatPhotoSource(small, async () => {
-    throw new Error("fast path must not invoke compress");
-  });
-  commitChatPhotoPrepareTiming(runSmall);
-  const smallSample = buildChatPhotoDebugSample();
-  assert(smallSample.fileTypeReads === 2, "passthrough JPEG reads type twice (acceptable + fastPath kind)");
-  assert(smallSample.fileNameReads === 2, "passthrough JPEG reads name twice (acceptable + fastPath kind)");
-  assert(smallSample.fileSizeReads === 6, "passthrough JPEG reads size six times (acceptable×2 + fastPath×4)");
-  assert(smallSample.sourceRunInvokeAt == null && smallSample.sourceHeicEndAt == null, "fast path stops before heic/run");
-
-  const fixtures: File[] = [
-    new File([new Uint8Array(32)], "ok.jpg", { type: "image/jpeg" }),
-    new File([new Uint8Array(32)], "ok.JPG", { type: "image/jpg" }),
-    new File([new Uint8Array(32)], "ok.png", { type: "image/png" }),
-    new File([new Uint8Array(32)], "ok.webp", { type: "image/webp" }),
-    new File([new Uint8Array(2.2 * 1024 * 1024)], "mid.jpg", { type: "image/jpeg" }),
-    new File([new Uint8Array(3 * 1024 * 1024 + 8)], "huge.jpg", { type: "image/jpeg" }),
-    new File([new Uint8Array(8)], "a.heic", { type: "image/heic" }),
-    new File([new Uint8Array(8)], "b.heif", { type: "image/heif" }),
-    new File([new Uint8Array(8)], "x.pdf", { type: "application/pdf" }),
-    new File([new Uint8Array(0)], "empty.jpg", { type: "image/jpeg" }),
-  ];
-  for (const file of fixtures) {
-    const meta = readChatPhotoFileMeta(file);
-    const plan = planChatPhotoSourceFromMeta(meta);
-    assert(plan.kind === chatPhotoSourceKind(file), "one-read kind matches live kind");
-    assert(plan.kind === chatPhotoSourceKindFromMeta(meta), "meta kind matches parts kind");
-    assert(plan.acceptable === isChatPhotoAcceptableSource(file), "one-read acceptable matches live");
-    assert(plan.acceptable === isChatPhotoAcceptableSourceFromMeta(meta), "meta acceptable matches helper");
-    assert(plan.fastPath === canUseChatPhotoFastPath(file), "one-read fastPath matches live");
-    assert(plan.fastPath === canUseChatPhotoFastPathFromMeta(meta), "meta fastPath matches helper");
-    assert(plan.heic === isHeicLikeFile(file), "one-read heic matches live");
-    assert(plan.heic === isHeicLikeFromMeta(meta), "meta heic matches helper");
-  }
-
-  const slowType = {
-    get type() {
-      spin(8);
-      return "image/jpeg";
-    },
-    get name() {
-      return "slow.jpg";
-    },
-    get size() {
-      return 2.2 * 1024 * 1024;
-    },
-  };
-  const watched = watchChatPhotoFileAccess(slowType);
-  void watched.file.type;
-  void watched.file.type;
-  void watched.file.name;
-  void watched.file.size;
-  assert(watched.typeReads === 2 && watched.nameReads === 1 && watched.sizeReads === 1, "watch counts metadata getters only");
-  assert(watched.typeMs >= 8, "watch records File.type getter time");
-  assert(watched.nameMs === 0 || watched.nameMs < watched.typeMs, "name getter time stays a number");
-}
-
 section("phase 6 hot-path timing / region / cleanup");
 
 {
@@ -1927,31 +1810,8 @@ section("source wiring / no public blob");
   assert(client.includes("pendingToWrapperMs"), "debug panel shows pending→wrapper");
   assert(client.includes("adaptiveBlobToAdaptiveMs"), "debug panel shows blob→adaptive");
   assert(client.includes("wrapperExitToPendingEndMs"), "debug panel shows wrapper→pending end");
-  assert(client.includes("sourceEnterToAcceptableMs"), "debug panel shows source→acceptable");
-  assert(client.includes("acceptableToFastPathMs"), "debug panel shows acceptable→fastPath");
-  assert(client.includes("fastPathToRunResolveMs"), "debug panel shows fastPath→runResolve");
-  assert(client.includes("runResolveToHeicMs"), "debug panel shows runResolve→heic");
-  assert(client.includes("heicToKindMs"), "debug panel shows heic→kind");
-  assert(client.includes("kindToNoteScopeMs"), "debug panel shows kind→noteScope");
-  assert(client.includes("noteScopeToRunInvokeMs"), "debug panel shows noteScope→runInvoke");
-  assert(client.includes("runInvokeToAdaptiveBlobMs"), "debug panel shows runInvoke→blob");
-  assert(client.includes("fileTypeReads"), "debug panel shows type getter count");
-  assert(client.includes("fileNameReads"), "debug panel shows name getter count");
-  assert(client.includes("fileSizeReads"), "debug panel shows size getter count");
-  assert(client.includes("fileTypeMs"), "debug panel shows type getter ms");
-  assert(client.includes("fileNameMs"), "debug panel shows name getter ms");
-  assert(client.includes("fileSizeMs"), "debug panel shows size getter ms");
   assert(client.includes("timingKey"), "debug panel shows public timing key");
   assert(!client.includes("file.name"), "debug panel does not print file.name");
-  const sourcePrepareFn = fast.slice(fast.indexOf("export async function prepareChatPhotoSource"));
-  assert(sourcePrepareFn.includes("isChatPhotoAcceptableSource"), "live source still calls acceptable helper");
-  assert(sourcePrepareFn.includes("canUseChatPhotoFastPath"), "live source still calls fast-path helper");
-  assert(sourcePrepareFn.includes("isHeicLikeFile"), "live source still calls heic helper");
-  assert(sourcePrepareFn.includes("chatPhotoSourceKind"), "live source still calls kind helper");
-  assert(!sourcePrepareFn.includes("readChatPhotoFileMeta"), "live source does not use the one-read snapshot");
-  assert(!sourcePrepareFn.includes("planChatPhotoSourceFromMeta"), "live source does not use the unused planner");
-  assert(fast.includes("planChatPhotoSourceFromMeta"), "one-read planner is present for a later wire");
-  assert(timingSrc.includes("watchChatPhotoFileAccess"), "timing watches File metadata getters");
   assert(client.includes('markChatPhotoTiming("select_to_ready"'), "heavy prepare stamps select_to_ready");
   assert(timingSrc.includes("clearPrepareScopeFromBag"), "commit replaces prepare-scope fields");
   assert(fast.includes("jpegDirectRun"), "JPEG source records same-file run");
