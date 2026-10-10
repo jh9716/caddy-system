@@ -25,9 +25,7 @@ import {
 import {
   chatPhotoNow,
   chatPhotoTimingRunIdFor,
-  noteChatPhotoBoundary,
   noteChatPhotoCompressionBreakdown,
-  noteChatPhotoPrepareScope,
 } from "@/lib/chatPhotoTiming";
 
 export type ChatPhotoAdaptiveMime = "image/jpeg" | "image/png" | "image/webp";
@@ -401,10 +399,8 @@ async function encodeCanvas(
 }
 
 function finishAdaptiveResult(result: ChatPhotoAdaptiveResult, file?: Blob): ChatPhotoAdaptiveResult {
-  const runId = chatPhotoTimingRunIdFor(file);
-  noteChatPhotoBoundary(runId, "adaptiveExitAt");
   noteChatPhotoCompressionBreakdown({
-    runId,
+    runId: chatPhotoTimingRunIdFor(file),
     decodeMs: result.decodeMs ?? null,
     drawResizeMs: result.drawResizeMs ?? null,
     encode1Ms: result.encode1Ms ?? null,
@@ -441,9 +437,6 @@ export async function prepareChatAdaptivePhoto(
 ): Promise<ChatPhotoAdaptiveResult> {
   const now = opts.now || chatPhotoNow;
   const started = now();
-  const runId = chatPhotoTimingRunIdFor(file);
-  noteChatPhotoBoundary(runId, "adaptiveEnterAt", started);
-  noteChatPhotoPrepareScope(runId, { runIdResolved: Boolean(runId), sameFileBound: Boolean(runId) });
   if (!isChatPhotoAcceptableSource(file)) {
     throw new Error(COURSE_REPORT_HEIC_MESSAGE);
   }
@@ -597,6 +590,5 @@ export async function prepareChatAdaptivePhoto(
 }
 
 export async function prepareChatAdaptiveBlob(file: File): Promise<Blob> {
-  noteChatPhotoBoundary(chatPhotoTimingRunIdFor(file), "adaptiveBlobEnterAt");
   return (await prepareChatAdaptivePhoto(file)).blob;
 }
