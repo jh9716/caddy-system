@@ -57,10 +57,8 @@ import {
   chatPhotoNow,
   emitChatPhotoTimingSummary,
   markChatPhotoTiming,
-  commitChatPhotoPrepareTiming,
   noteChatPhotoBytes,
   noteChatPhotoCompression,
-  noteChatPhotoPrepareScope,
   resetChatPhotoTiming,
   stampChatPhotoTiming,
   type ChatPhotoDebugSample,
@@ -1407,11 +1405,9 @@ export default function ChatClient() {
         stampChatPhotoTiming("prepare_complete");
         if (prepared.metrics) {
           noteChatPhotoBytes(prepared.metrics.sourceBytes, prepared.metrics.uploadBytes);
-          if (prepared.metrics.prepareOuterMs != null || prepared.metrics.compressionMs != null) {
-            noteChatPhotoCompression(prepared.metrics.prepareOuterMs ?? prepared.metrics.compressionMs ?? 0);
-          }
+          if (prepared.metrics.compressionMs != null) noteChatPhotoCompression(prepared.metrics.compressionMs);
         }
-        const commitStarted = chatPhotoNow();
+        refreshPhotoDebugSample();
         const applied = applyComposerPreparedIfCurrent(
           pendingPhotosRef.current,
           prepared,
@@ -1420,11 +1416,6 @@ export default function ChatClient() {
         );
         if (applied.note) setError(applied.note);
         if (applied.items !== pendingPhotosRef.current) setPendingPhotoList(applied.items);
-        noteChatPhotoPrepareScope(prepared.metrics?.timingRunId, {
-          stateCommitMs: Math.max(0, chatPhotoNow() - commitStarted),
-        });
-        commitChatPhotoPrepareTiming(prepared.metrics?.timingRunId);
-        refreshPhotoDebugSample();
         const current = applied.items.find((row) => row.key === prepared.key);
         if (current?.status === "ready") startComposerPreupload(current, writeGeneration);
         return prepared;
@@ -1438,7 +1429,7 @@ export default function ChatClient() {
     abandonChatPhotoPreupload(uploadJobsRef.current, [key]);
     const next = pendingPhotosRef.current.filter((item) => {
       if (item.key !== key) return true;
-      URL.revokeObjectURL(item.previewUrl);
+      revokeChatPhotoPreviewUrls([item]);
       return false;
     });
     setPendingPhotoList(next);
@@ -2373,44 +2364,6 @@ export default function ChatClient() {
                   ["encodeMime", photoDebugSample.encodeMime],
                   ["decodePath", photoDebugSample.decodePath],
                   ["encodePath", photoDebugSample.encodePath],
-                  ["adaptiveTotalMs", photoDebugSample.adaptiveTotalMs],
-                  ["prepareOuterMs", photoDebugSample.prepareOuterMs],
-                  ["headerProbeMs", photoDebugSample.headerProbeMs],
-                  ["bitmapCreateMs", photoDebugSample.bitmapCreateMs],
-                  ["canvasCreateMs", photoDebugSample.canvasCreateMs],
-                  ["alphaProbeMs", photoDebugSample.alphaProbeMs],
-                  ["postEncodeMs", photoDebugSample.postEncodeMs],
-                  ["stateCommitMs", photoDebugSample.stateCommitMs],
-                  ["hiddenBeforeDecodeMs", photoDebugSample.hiddenBeforeDecodeMs],
-                  ["unaccountedAdaptiveMs", photoDebugSample.unaccountedAdaptiveMs],
-                  ["unaccountedPrepareMs", photoDebugSample.unaccountedPrepareMs],
-                  ["timingRunId", photoDebugSample.timingRunId],
-                  ["timingKey", photoDebugSample.timingKey],
-                  ["runIdResolved", photoDebugSample.runIdResolved],
-                  ["jpegDirectRun", photoDebugSample.jpegDirectRun],
-                  ["sameFileBound", photoDebugSample.sameFileBound],
-                  ["pendingToWrapperMs", photoDebugSample.pendingToWrapperMs],
-                  ["wrapperToSourceMs", photoDebugSample.wrapperToSourceMs],
-                  ["sourceToAdaptiveBlobMs", photoDebugSample.sourceToAdaptiveBlobMs],
-                  ["sourceEnterToAcceptableMs", photoDebugSample.sourceEnterToAcceptableMs],
-                  ["acceptableToFastPathMs", photoDebugSample.acceptableToFastPathMs],
-                  ["fastPathToRunResolveMs", photoDebugSample.fastPathToRunResolveMs],
-                  ["runResolveToHeicMs", photoDebugSample.runResolveToHeicMs],
-                  ["heicToKindMs", photoDebugSample.heicToKindMs],
-                  ["kindToNoteScopeMs", photoDebugSample.kindToNoteScopeMs],
-                  ["noteScopeToRunInvokeMs", photoDebugSample.noteScopeToRunInvokeMs],
-                  ["runInvokeToAdaptiveBlobMs", photoDebugSample.runInvokeToAdaptiveBlobMs],
-                  ["fileTypeReads", photoDebugSample.fileTypeReads],
-                  ["fileNameReads", photoDebugSample.fileNameReads],
-                  ["fileSizeReads", photoDebugSample.fileSizeReads],
-                  ["fileTypeMs", photoDebugSample.fileTypeMs],
-                  ["fileNameMs", photoDebugSample.fileNameMs],
-                  ["fileSizeMs", photoDebugSample.fileSizeMs],
-                  ["adaptiveBlobToAdaptiveMs", photoDebugSample.adaptiveBlobToAdaptiveMs],
-                  ["adaptiveMs", photoDebugSample.adaptiveMs],
-                  ["adaptiveExitToSourceExitMs", photoDebugSample.adaptiveExitToSourceExitMs],
-                  ["sourceExitToWrapperExitMs", photoDebugSample.sourceExitToWrapperExitMs],
-                  ["wrapperExitToPendingEndMs", photoDebugSample.wrapperExitToPendingEndMs],
                   ["selectedToUploadStartMs", photoDebugSample.selectedToUploadStartMs],
                   ["prepareApiMs", photoDebugSample.prepareApiMs],
                   ["storageBackend", photoDebugSample.storageBackend],

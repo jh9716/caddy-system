@@ -22,13 +22,7 @@ import {
   readImageSizeFromHeader,
   readJpegExifOrientation,
 } from "@/lib/imageHeaderSize";
-import {
-  chatPhotoNow,
-  chatPhotoTimingRunIdFor,
-  noteChatPhotoBoundary,
-  noteChatPhotoCompressionBreakdown,
-  noteChatPhotoPrepareScope,
-} from "@/lib/chatPhotoTiming";
+import { chatPhotoNow, noteChatPhotoCompressionBreakdown } from "@/lib/chatPhotoTiming";
 
 export type ChatPhotoAdaptiveMime = "image/jpeg" | "image/png" | "image/webp";
 
@@ -62,12 +56,6 @@ export type ChatPhotoAdaptiveResult = {
   outputHeight?: number | null;
   decodePath?: string | null;
   encodePath?: string | null;
-  headerProbeMs?: number | null;
-  bitmapCreateMs?: number | null;
-  canvasCreateMs?: number | null;
-  alphaProbeMs?: number | null;
-  postEncodeMs?: number | null;
-  hiddenBeforeDecodeMs?: number | null;
 };
 
 export type ChatPhotoDecodePath = "bitmap-resize" | "bitmap-full" | "image-element";
@@ -291,19 +279,9 @@ export async function probeChatPhotoOrientedSize(
   };
 }
 
-async function loadDrawable(
-  file: Blob,
-  now: () => number
-): Promise<
-  DrawableSource & {
-    decodePath: ChatPhotoDecodePath;
-    headerProbeMs: number;
-    bitmapCreateMs: number;
-  }
-> {
+async function loadDrawable(file: Blob): Promise<DrawableSource & { decodePath: ChatPhotoDecodePath }> {
   let orientedResize: { resizeWidth: number; resizeHeight: number } | null = null;
   let rawResize: { resizeWidth: number; resizeHeight: number } | null = null;
-  const probeStarted = now();
   try {
     const probed = await probeChatPhotoOrientedSize(file);
     if (probed) {
@@ -314,19 +292,14 @@ async function loadDrawable(
     orientedResize = null;
     rawResize = null;
   }
-  const headerProbeMs = Math.max(0, now() - probeStarted);
   if (typeof createImageBitmap === "function") {
     try {
-      const bitmapStarted = now();
       const bitmap = await createChatPhotoOrientedBitmap(file, orientedResize, rawResize);
-      const bitmapCreateMs = Math.max(0, now() - bitmapStarted);
       const decodePath = chatPhotoDecodePathFromBitmap(bitmap, orientedResize || rawResize);
       return {
         width: bitmap.width,
         height: bitmap.height,
         decodePath,
-        headerProbeMs,
-        bitmapCreateMs,
         draw(ctx, width, height) {
           ctx.drawImage(bitmap, 0, 0, width, height);
         },
@@ -338,14 +311,11 @@ async function loadDrawable(
       // HTMLImageElement fallback
     }
   }
-  const imageStarted = now();
   const img = await loadImage(file);
   return {
     width: img.width,
     height: img.height,
     decodePath: "image-element",
-    headerProbeMs,
-    bitmapCreateMs: Math.max(0, now() - imageStarted),
     draw(ctx, width, height) {
       ctx.drawImage(img, 0, 0, width, height);
     },
@@ -400,17 +370,13 @@ async function encodeCanvas(
   }
 }
 
-function finishAdaptiveResult(result: ChatPhotoAdaptiveResult, file?: Blob): ChatPhotoAdaptiveResult {
-  const runId = chatPhotoTimingRunIdFor(file);
-  noteChatPhotoBoundary(runId, "adaptiveExitAt");
+function finishAdaptiveResult(result: ChatPhotoAdaptiveResult): ChatPhotoAdaptiveResult {
   noteChatPhotoCompressionBreakdown({
-    runId,
     decodeMs: result.decodeMs ?? null,
     drawResizeMs: result.drawResizeMs ?? null,
     encode1Ms: result.encode1Ms ?? null,
     encode2Ms: result.encode2Ms ?? null,
     totalCompressionMs: result.compressionMs,
-    adaptiveTotalMs: result.compressionMs,
     inputWidth: result.inputWidth ?? null,
     inputHeight: result.inputHeight ?? null,
     outputWidth: result.outputWidth ?? null,
@@ -419,12 +385,6 @@ function finishAdaptiveResult(result: ChatPhotoAdaptiveResult, file?: Blob): Cha
     encodeMime: result.encoded ? result.mimeType : null,
     decodePath: result.decodePath ?? null,
     encodePath: result.encodePath ?? null,
-    headerProbeMs: result.headerProbeMs ?? null,
-    bitmapCreateMs: result.bitmapCreateMs ?? null,
-    canvasCreateMs: result.canvasCreateMs ?? null,
-    alphaProbeMs: result.alphaProbeMs ?? null,
-    postEncodeMs: result.postEncodeMs ?? null,
-    hiddenBeforeDecodeMs: result.hiddenBeforeDecodeMs ?? null,
   });
   return result;
 }
@@ -441,9 +401,6 @@ export async function prepareChatAdaptivePhoto(
 ): Promise<ChatPhotoAdaptiveResult> {
   const now = opts.now || chatPhotoNow;
   const started = now();
-  const runId = chatPhotoTimingRunIdFor(file);
-  noteChatPhotoBoundary(runId, "adaptiveEnterAt", started);
-  noteChatPhotoPrepareScope(runId, { runIdResolved: Boolean(runId), sameFileBound: Boolean(runId) });
   if (!isChatPhotoAcceptableSource(file)) {
     throw new Error(COURSE_REPORT_HEIC_MESSAGE);
   }
@@ -470,7 +427,7 @@ export async function prepareChatAdaptivePhoto(
       encoded: false,
       attempts: 0,
       mimeType: probe.type || "image/jpeg",
-    }, file);
+    });
   }
 
   const inspect = opts.inspect ? await opts.inspect(source) : null;
@@ -519,34 +476,25 @@ export async function prepareChatAdaptivePhoto(
       inputHeight: inspect?.height ?? null,
       outputWidth: dims.width,
       outputHeight: dims.height,
-    }, file);
+    });
   }
 
-  let drawable: DrawableSource & {
-    decodePath: ChatPhotoDecodePath;
-    headerProbeMs: number;
-    bitmapCreateMs: number;
-  };
-  const hiddenBeforeDecodeMs = Math.max(0, now() - started);
+  let drawable: DrawableSource & { decodePath: ChatPhotoDecodePath };
   const decodeStarted = now();
   try {
-    drawable = await loadDrawable(source, now);
+    drawable = await loadDrawable(source);
   } catch {
     throw new Error(heic ? COURSE_REPORT_HEIC_CONVERT_MESSAGE : COURSE_REPORT_HEIC_MESSAGE);
   }
   const decodeMs = Math.max(0, now() - decodeStarted);
   try {
     const sized = scaleChatPhotoSize(drawable.width, drawable.height, plan.longEdge);
-    const canvasStarted = now();
-    const { canvas, ctx, encodePath } = makeCanvas(sized.width, sized.height);
-    const canvasCreateMs = Math.max(0, now() - canvasStarted);
     const drawStarted = now();
+    const { canvas, ctx, encodePath } = makeCanvas(sized.width, sized.height);
     drawable.draw(ctx, sized.width, sized.height);
     const drawResizeMs = Math.max(0, now() - drawStarted);
-    const alphaStarted = now();
     const keepAlpha =
       plan.keepAlpha || (chatPhotoSourceKind(probe) === "png" && sampleHasAlpha(ctx, sized.width, sized.height));
-    const alphaProbeMs = Math.max(0, now() - alphaStarted);
     let blob: Blob | null = null;
     let attempts = 0;
     let encode1Ms: number | null = null;
@@ -565,7 +513,6 @@ export async function prepareChatAdaptivePhoto(
     if (blob.size > CHAT_PHOTO_MAX_BYTES) {
       throw new Error("사진은 장당 3MB 이하만 첨부할 수 있습니다.");
     }
-    const postStarted = now();
     return finishAdaptiveResult({
       blob,
       sourceBytes: file.size,
@@ -584,19 +531,12 @@ export async function prepareChatAdaptivePhoto(
       outputHeight: sized.height,
       decodePath: drawable.decodePath,
       encodePath,
-      headerProbeMs: drawable.headerProbeMs,
-      bitmapCreateMs: drawable.bitmapCreateMs,
-      canvasCreateMs,
-      alphaProbeMs,
-      postEncodeMs: Math.max(0, now() - postStarted),
-      hiddenBeforeDecodeMs,
-    }, file);
+    });
   } finally {
     drawable.close();
   }
 }
 
 export async function prepareChatAdaptiveBlob(file: File): Promise<Blob> {
-  noteChatPhotoBoundary(chatPhotoTimingRunIdFor(file), "adaptiveBlobEnterAt");
   return (await prepareChatAdaptivePhoto(file)).blob;
 }
