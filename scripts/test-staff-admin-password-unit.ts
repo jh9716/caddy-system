@@ -310,8 +310,8 @@ async function main() {
   );
   assert(
     !staffPageSrc.includes("<select") &&
-      !staffPageSrc.includes("승격") &&
-      !staffPageSrc.includes("role dropdown"),
+      !staffPageSrc.includes("/api/users/") &&
+      !staffPageSrc.includes("link-caddy"),
     "create UI has no role dropdown / Kakao promote"
   );
   assert(
@@ -1094,11 +1094,23 @@ async function main() {
     );
     assert(leaderCreate.status === 401, "leader create → 401");
 
+    const staffCreateSv = await prisma.user.findUnique({
+      where: { id: staffUser.id },
+      select: { sessionVersion: true, username: true },
+    });
+    const staffCreateCookie = `${SESSION_COOKIE_NAME}=${await signSessionClaims(
+      buildSessionClaims({
+        userId: staffUser.id,
+        username: staffCreateSv?.username || koreanUsername,
+        role: "admin",
+        sessionVersion: staffCreateSv?.sessionVersion ?? 0,
+      })
+    )}`;
     const staffCreateForbidden = await staffCreatePOST(
       jsonReq(
         "https://example.com/api/admin/staff-accounts",
         { username: createdUsername },
-        { cookie: newLoginCookie }
+        { cookie: staffCreateCookie }
       )
     );
     assert(staffCreateForbidden.status === 403, "일반 직원 admin create → 403");
