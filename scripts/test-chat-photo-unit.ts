@@ -245,8 +245,10 @@ import {
   PREVIEW296_R2_BUCKET,
   PREVIEW296_WORKER_NAME,
   assertIsolatedPreview296DatabaseUrl,
+  assertIsolatedPreview296RuntimeEnv,
   isForbiddenProductionChatWorkerUrl,
   isForbiddenProductionDatabaseHost,
+  isForbiddenProductionPushDispatchUrl,
   isPreview296BrowserHost,
   isProductionWebHost,
 } from "../src/lib/preview296Isolation";
@@ -1304,6 +1306,20 @@ section("preview296 isolation guards");
     assert(false, "production neon must throw");
   } catch (error) {
     assert(error instanceof Error && error.message.includes("production Neon"), "seed/app reject prod neon");
+  }
+  assert(
+    isForbiddenProductionPushDispatchUrl("https://www.verthill.kr/api/chat/push-dispatch"),
+    "production push dispatch blocked"
+  );
+  assert(!isForbiddenProductionPushDispatchUrl(""), "empty push dispatch is allowed");
+  try {
+    assertIsolatedPreview296RuntimeEnv({
+      DATABASE_URL: "postgresql://u:p@ep-claimable-example.us-east-2.aws.neon.tech/neondb",
+      CHAT_WORKER_URL: "https://verthill-chat.19970106s.workers.dev",
+    } as NodeJS.ProcessEnv);
+    assert(false, "production worker runtime env must throw");
+  } catch (error) {
+    assert(error instanceof Error && error.message.includes("production Chat Worker"), "runtime rejects prod worker");
   }
 }
 

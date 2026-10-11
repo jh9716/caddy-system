@@ -105,27 +105,39 @@ for (const [key, value] of Object.entries(upserts)) {
   });
 }
 
+const inheritedPush = envs.find((item) => {
+  const targets = item?.target || [];
+  if (item.key !== "CHAT_PUSH_DISPATCH_URL") return false;
+  if (targets.includes("production")) return false;
+  if (!targets.includes("preview")) return false;
+  return !item.gitBranch || item.gitBranch === BRANCH;
+});
+if (inheritedPush) {
+  console.log(
+    JSON.stringify({
+      warning: "CHAT_PUSH_DISPATCH_URL still listed on a Preview env row; boot assert rejects Production URLs",
+    })
+  );
+}
+
 let redeployed = false;
 try {
-  const deployments = await api(
-    `/v6/deployments?projectId=${encodeURIComponent(projectId)}&limit=10`
-  );
-  const match = (deployments?.deployments || []).find((d) => {
-    const ref = d?.meta?.githubCommitRef || d?.meta?.gitCommitRef || "";
-    return ref === BRANCH && d?.target !== "production";
+  const sha = String(process.env.GITHUB_SHA || "").trim();
+  await api(`/v13/deployments`, {
+    method: "POST",
+    body: JSON.stringify({
+      name: "caddy-system-gt8t",
+      gitSource: {
+        type: "github",
+        org: "jh9716",
+        repo: "caddy-system",
+        ref: BRANCH,
+        ...(sha ? { sha } : {}),
+      },
+      target: "preview",
+    }),
   });
-  if (match?.uid || match?.id) {
-    const id = match.uid || match.id;
-    await api(`/v13/deployments?forceNew=1`, {
-      method: "POST",
-      body: JSON.stringify({
-        name: match.name || "caddy-system-gt8t",
-        deploymentId: id,
-        target: "preview",
-      }),
-    });
-    redeployed = true;
-  }
+  redeployed = true;
 } catch (error) {
   console.log(
     JSON.stringify({

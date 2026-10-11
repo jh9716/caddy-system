@@ -78,3 +78,24 @@ export function assertIsolatedPreview296DatabaseUrl(url: string | undefined | nu
   }
   return url;
 }
+
+export function isForbiddenProductionPushDispatchUrl(url: string | undefined | null): boolean {
+  if (!url) return false;
+  const raw = String(url).trim().toLowerCase();
+  if (!raw) return false;
+  if (raw.includes("www.verthill.kr") || raw.includes("://verthill.kr")) return true;
+  return isForbiddenProductionChatWorkerUrl(raw);
+}
+
+/** Fail-closed boot for this branch Preview only. Production Vercel never calls this. */
+export function assertIsolatedPreview296RuntimeEnv(env: NodeJS.ProcessEnv = process.env): void {
+  assertIsolatedPreview296DatabaseUrl(env.DATABASE_URL);
+  const worker = String(env.CHAT_WORKER_URL || "").trim();
+  const ws = String(env.NEXT_PUBLIC_CHAT_WS_URL || "").trim();
+  if (isForbiddenProductionChatWorkerUrl(worker) || isForbiddenProductionChatWorkerUrl(ws)) {
+    throw new Error("⛔ preview296 이 production Chat Worker 를 사용합니다. 중단.");
+  }
+  if (isForbiddenProductionPushDispatchUrl(env.CHAT_PUSH_DISPATCH_URL)) {
+    throw new Error("⛔ preview296 이 production CHAT_PUSH_DISPATCH_URL 을 사용합니다. 중단.");
+  }
+}

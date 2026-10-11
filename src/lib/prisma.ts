@@ -1,12 +1,12 @@
 import { PrismaClient } from '@prisma/client';
 import { assertAppDatabaseUrl } from './dbSafety';
 import {
-  assertIsolatedPreview296DatabaseUrl,
+  assertIsolatedPreview296RuntimeEnv,
   isPreview296VercelBuild,
 } from './preview296Isolation';
 
 if (isPreview296VercelBuild()) {
-  assertIsolatedPreview296DatabaseUrl(process.env.DATABASE_URL);
+  assertIsolatedPreview296RuntimeEnv();
 }
 assertAppDatabaseUrl(process.env.DATABASE_URL);
 
