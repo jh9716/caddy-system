@@ -237,6 +237,7 @@ console.log("== API/UI source guards ==");
 const listRoute = readSrc("src/app/api/caddies/route.ts");
 const idRoute = readSrc("src/app/api/caddies/[id]/route.ts");
 const exportRoute = readSrc("src/app/api/caddies/export/route.ts");
+const exportXlsxRoute = readSrc("src/app/api/caddies/export.xlsx/route.ts");
 const meRoute = readSrc("src/app/api/me/route.ts");
 const page = readSrc("src/app/manage/caddies/page.tsx");
 const notes = readSrc("src/app/api/caddies/[id]/notes.ts/route.ts");
@@ -246,6 +247,10 @@ assert(/export async function GET/.test(idRoute), "detail GET exists");
 assert(/denyArchivedCaddyRead/.test(idRoute), "detail/PATCH deny archived read");
 assert(/requireAdmin/.test(idRoute) && !/requireSuperAdmin/.test(idRoute), "detail stays requireAdmin");
 assert(/filterArchivedCaddies/.test(exportRoute), "export filters archive for staff");
+assert(
+  /requireAdmin/.test(exportXlsxRoute) && /canReadArchivedCaddies/.test(exportXlsxRoute),
+  "xlsx export stays requireAdmin + archive ACL"
+);
 assert(/canReadArchivedCaddies/.test(meRoute), "/api/me exposes archive flag");
 assert(
   /canReadArchived \|\| value !== 'RETIRED'/.test(page) &&
