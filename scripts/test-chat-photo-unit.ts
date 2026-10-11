@@ -2878,6 +2878,7 @@ section("source wiring / no public blob");
   assert(!previewWf.includes("https://neon.new"), "preview workflow does not create Neon");
   assert(!previewWf.includes("npx prisma migrate"), "preview workflow does not migrate");
   assert(!previewWf.includes("secret put CHAT_PUSH_DISPATCH_URL"), "preview workflow does not set production push");
+  assert(read("scripts/preview296/prove-isolation.mjs").includes('apk: ready ? "allowed" : "STOP"'), "isolation proof stops APK when Preview env is missing");
   assert(!/"CHAT_MEDIA_SECRET"\s*:/.test(wrangler), "CHAT_MEDIA_SECRET is not a wrangler config value");
   const hideFn = worker.slice(worker.indexOf("private hideForMe"), worker.indexOf("private deleteMessage"));
   assert(!hideFn.includes("queueAttachmentCleanup"), "hide-for-me does not purge blob");

@@ -182,8 +182,10 @@ jobs:
         run: |
           set +x
           set -eu
-          if [ -z "${VERCEL_TOKEN:-}" ]; then
-            echo "VERCEL_TOKEN missing after healthy Worker. Isolation env not applied."
+          if [ -z "${VERCEL_TOKEN:-}" ] || [ -z "${VERCEL_ORG_ID:-}" ] || [ -z "${VERCEL_PROJECT_ID:-}" ]; then
+            echo "STOP: gt8t Preview env not applied. Worker isolation is live; APK must not be packed."
+            echo "missing VERCEL_TOKEN=${VERCEL_TOKEN:+set}/${VERCEL_TOKEN:-empty} VERCEL_ORG_ID=${VERCEL_ORG_ID:+set} VERCEL_PROJECT_ID=${VERCEL_PROJECT_ID:+set}"
+            echo "Set repo secrets/vars VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_GT8T_ID, then re-run this workflow."
             exit 1
           fi
           node scripts/preview296/set-gt8t-preview-env.mjs
