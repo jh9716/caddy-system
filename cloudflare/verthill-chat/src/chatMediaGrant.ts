@@ -12,6 +12,7 @@ import {
 } from "./protocol";
 
 export const CHAT_MEDIA_PUT_OP = "chat_media_put";
+export const CHAT_MEDIA_UPGRADE_OP = "chat_media_upgrade";
 export const CHAT_MEDIA_UPLOADED_OP = "chat_media_uploaded";
 export const CHAT_MEDIA_GRANT_HEADER = "x-chat-media-grant";
 export const CHAT_MEDIA_GRANT_TTL_SEC = 5 * 60;
@@ -30,9 +31,11 @@ export const CHAT_MEDIA_EXT: Record<ChatMediaMime, "jpg" | "png" | "webp"> = {
   "image/webp": "webp",
 };
 
+export type ChatMediaPutOp = typeof CHAT_MEDIA_PUT_OP | typeof CHAT_MEDIA_UPGRADE_OP;
+
 export type ChatMediaPutGrant = {
   v: 1;
-  op: typeof CHAT_MEDIA_PUT_OP;
+  op: ChatMediaPutOp;
   roomId: string;
   attachmentId: string;
   senderUserId: number;
@@ -40,6 +43,10 @@ export type ChatMediaPutGrant = {
   maxBytes: number;
   exp: number;
 };
+
+export function isChatMediaUpgradeGrant(grant: ChatMediaPutGrant | null | undefined): boolean {
+  return Boolean(grant && grant.op === CHAT_MEDIA_UPGRADE_OP);
+}
 
 export type ChatMediaGrantSecretEnv = {
   CHAT_MEDIA_SECRET?: string;
@@ -208,14 +215,16 @@ function parseGrantPayload(raw: unknown): ChatMediaPutGrant | null {
   const senderUserId = Number(row.senderUserId);
   const maxBytes = Number(row.maxBytes);
   const exp = Number(row.exp);
-  if (row.v !== 1 || row.op !== CHAT_MEDIA_PUT_OP || !mime) return null;
+  const op = row.op === CHAT_MEDIA_UPGRADE_OP ? CHAT_MEDIA_UPGRADE_OP : row.op === CHAT_MEDIA_PUT_OP ? CHAT_MEDIA_PUT_OP : null;
+  if (row.v !== 1 || !op || !mime) return null;
+  if (op === CHAT_MEDIA_UPGRADE_OP && mime !== "image/jpeg") return null;
   if (!isValidRoomName(roomId) || !CHAT_ATTACHMENT_ID_RE.test(attachmentId)) return null;
   if (!Number.isInteger(senderUserId) || senderUserId <= 0) return null;
   if (!Number.isInteger(maxBytes) || maxBytes <= 0 || maxBytes > CHAT_PHOTO_MAX_BYTES) return null;
   if (!Number.isFinite(exp) || !Number.isInteger(exp) || exp <= 0) return null;
   return {
     v: 1,
-    op: CHAT_MEDIA_PUT_OP,
+    op,
     roomId,
     attachmentId,
     senderUserId,

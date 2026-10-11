@@ -24,6 +24,10 @@ export const CHAT_PHOTO_PENDING_ORPHAN_MS = 15 * 60 * 1000;
 export const CHAT_PHOTO_SIGNED_PUT_TTL_MS = 5 * 60 * 1000;
 export const CHAT_PHOTO_CLEANUP_BATCH = 50;
 
-export function chatPhotoSrc(roomId: string, attachmentId: string): string {
-  return `/api/chat/rooms/${encodeURIComponent(roomId)}/attachments/${encodeURIComponent(attachmentId)}`;
+export function chatPhotoSrc(roomId: string, attachmentId: string, revision?: number): string {
+  const path = `/api/chat/rooms/${encodeURIComponent(roomId)}/attachments/${encodeURIComponent(attachmentId)}`;
+  if (Number.isInteger(revision) && (revision as number) > 0) {
+    return `${path}?s=${revision}`;
+  }
+  return path;
 }

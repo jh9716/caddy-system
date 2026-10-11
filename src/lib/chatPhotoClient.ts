@@ -48,6 +48,7 @@ export {
   shouldAcceptChatPhotoEncode,
 } from "@/lib/chatPhotoAdaptive";
 export {
+  applyAttachmentUpgradeToAttachments,
   buildOptimisticOutgoingLine,
   clearedComposerAfterOptimisticSend,
   outgoingChatPhotoSrc,
@@ -57,6 +58,7 @@ export {
 } from "@/lib/chatPhotoOptimistic";
 export {
   chatPhotoClaimStillValid,
+  upgradeChatPhotoDirect,
   uploadChatPhotoDirect,
 } from "@/lib/chatPhotoDirectClient";
 export {
@@ -79,6 +81,7 @@ export {
   fileFromNativeHqDataUrl,
   isAbandonedNativeHqFile,
   isNativePreviewPlaceholder,
+  logPreviewFirst,
   nativeChooserSafeName,
   parseNativeChatPhotoHqReady,
   parseNativeChatPhotoPreview,

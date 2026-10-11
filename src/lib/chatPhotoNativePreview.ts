@@ -37,11 +37,16 @@ export type NativeChatPhotoHqReadyPayload = {
 };
 
 export function isNativePreviewPlaceholder(item: ChatPendingPhoto | undefined | null): boolean {
-  return Boolean(item && item.nativePreview === true && item.status === "preparing");
+  return Boolean(item && item.nativePreview === true && !(item.blob && item.blob.size > 0));
 }
 
 export function shouldQueueNativeChatSend(photos: readonly ChatPendingPhoto[]): boolean {
   return photos.some(isNativePreviewPlaceholder);
+}
+
+export function logPreviewFirst(event: string, extra?: Record<string, unknown>): void {
+  if (typeof console === "undefined" || typeof console.info !== "function") return;
+  console.info("[preview-first]", event, extra || {});
 }
 
 export function parseNativeChatPhotoPreview(
@@ -172,34 +177,37 @@ export function createNativePreviewFromChooserFile(
   file: File,
   previewId: string
 ): ChatPendingPhoto {
+  const hasBytes = file.size > 0;
   return {
     key: nextChatPhotoComposerKey(previewId),
-    blob: new Blob(),
+    blob: hasBytes ? file : new Blob(),
     previewUrl: createChatPhotoPreviewUrl(file),
     fileId: previewId,
     fingerprint: "",
-    status: "preparing",
+    status: hasBytes ? "ready" : "preparing",
     nativePreview: true,
     nativePreviewId: previewId,
     nativeSessionId: nativeSessionIdFromPreviewId(previewId) || undefined,
-    metrics: { sourceBytes: file.size },
+    metrics: { sourceBytes: file.size, uploadBytes: hasBytes ? file.size : 0, compressionMs: 0 },
   };
 }
 
 export function createNativePreviewPhoto(
   payload: NativeChatPhotoPreviewPayload
 ): ChatPendingPhoto {
+  const file = fileFromNativeHqDataUrl(payload.dataUrl, `${payload.previewId}-preview`);
+  const hasBytes = Boolean(file && file.size > 0);
   return {
     key: nextChatPhotoComposerKey(payload.previewId),
-    blob: new Blob(),
+    blob: file || new Blob(),
     previewUrl: payload.dataUrl,
     fileId: payload.previewId,
     fingerprint: "",
-    status: "preparing",
+    status: hasBytes ? "ready" : "preparing",
     nativePreview: true,
     nativePreviewId: payload.previewId,
     nativeSessionId: payload.sessionId,
-    metrics: { sourceBytes: payload.bytes || 0 },
+    metrics: { sourceBytes: payload.bytes || file?.size || 0, uploadBytes: file?.size || 0, compressionMs: 0 },
   };
 }
 
@@ -278,9 +286,7 @@ export function applyNativeHqFile(
   file: File
 ): ChatPendingPhoto[] | null {
   const visible = visibleComposerPhotos(current);
-  const index = visible.findIndex(
-    (row) => row.nativePreviewId === previewId && row.status === "preparing"
-  );
+  const index = visible.findIndex((row) => row.nativePreviewId === previewId);
   if (index < 0) return null;
   const previous = visible[index]!;
   const nextPreviewUrl = createChatPhotoPreviewUrl(file);
@@ -342,7 +348,7 @@ export function partitionNativeHqFiles(
   leftovers: File[];
 } {
   const pendingIds = visibleComposerPhotos(current)
-    .filter(isNativePreviewPlaceholder)
+    .filter((row) => row.nativePreviewId && row.nativePreview !== false)
     .map((row) => row.nativePreviewId)
     .filter((id): id is string => Boolean(id));
   const pendingSet = new Set(pendingIds);

@@ -31,6 +31,7 @@ import {
   mentionsToWire,
   parseDeletionType,
   parseOptionalSeq,
+  parseAttachmentUpgraded,
   parseStoredAttachments,
   parseStoredMentionAll,
   parseStoredMentions,
@@ -594,6 +595,19 @@ export class ChatRoom extends DurableObject<Env> {
         .catch(() => undefined);
       return;
     }
+    if (type === "attachment_upgraded") {
+      const upgraded = parseAttachmentUpgraded(parsed);
+      if (!upgraded) {
+        sendJson(ws, {
+          type: "error",
+          code: "invalid_attachment",
+          message: "attachment rejected",
+        });
+        return;
+      }
+      this.applyAttachmentUpgrade(upgraded.attachmentId, upgraded.size);
+      return;
+    }
     const checked = validateIncomingMessage(parsed);
     if (!checked.ok) {
       sendJson(ws, {
@@ -999,6 +1013,33 @@ export class ChatRoom extends DurableObject<Env> {
     const claims = attach as ChatTokenClaims;
     if (claims.exp <= now) return this.expire(socket);
     return { claims, roomId: claims.v === 1 ? claims.room : "" };
+  }
+
+  private applyAttachmentUpgrade(attachmentId: string, size: number) {
+    const rows = this.ctx.storage.sql
+      .exec(`SELECT seq, attachments_json FROM messages WHERE attachments_json LIKE ?`, `%${attachmentId}%`)
+      .toArray() as Array<{ seq: number; attachments_json: string }>;
+    let found = false;
+    for (const row of rows) {
+      const attachments = parseStoredAttachments(row.attachments_json);
+      let changed = false;
+      const next = attachments.map((item) => {
+        if (item.id !== attachmentId) return item;
+        found = true;
+        if (item.size === size) return item;
+        changed = true;
+        return { ...item, size };
+      });
+      if (changed) {
+        this.ctx.storage.sql.exec(
+          `UPDATE messages SET attachments_json = ? WHERE seq = ?`,
+          JSON.stringify(next),
+          row.seq
+        );
+      }
+    }
+    if (!found) return;
+    this.broadcastJson({ type: "attachment_upgraded", attachmentId, size });
   }
 
   private broadcastVisible(event: ChatMessage) {

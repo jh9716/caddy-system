@@ -31,7 +31,9 @@ import {
   cleanupOrphanChatAttachments,
   consumeChatAttachments,
   finalizeChatPhotoUpload,
+  finalizeChatPhotoUpgrade,
   loadChatPhotoMeta,
+  prepareChatPhotoUpgrade,
   prepareChatPhotoUpload,
   purgeChatAttachments,
   uploadChatPhoto,
@@ -101,6 +103,7 @@ import {
 import {
   buildOptimisticOutgoingLine,
   clearedComposerAfterOptimisticSend,
+  applyAttachmentUpgradeToAttachments,
   outgoingChatPhotoSrc,
   revokeChatPhotoPreviewUrls,
   shouldStartOptimisticChatSend,
@@ -219,6 +222,7 @@ import {
 import {
   CHAT_MEDIA_GRANT_HEADER,
   CHAT_MEDIA_PUT_OP,
+  CHAT_MEDIA_UPGRADE_OP,
   CHAT_MEDIA_UPLOADED_OP,
   buildChatPhotoR2StorageKey,
   canonicalChatMediaPutGrant,
@@ -226,12 +230,15 @@ import {
   chatPhotoStorageBackend,
   deriveChatMediaR2Key,
   inspectChatMediaMagic,
+  isChatMediaUpgradeGrant,
   parseChatMediaObjectRef,
   signChatMediaPutGrant,
   signChatMediaUploadReceipt,
   verifyChatMediaPutGrant,
   verifyChatMediaUploadReceipt,
 } from "../cloudflare/verthill-chat/src/chatMediaGrant";
+import { parseAttachmentUpgraded } from "../cloudflare/verthill-chat/src/protocol";
+import { chatPhotoSrc } from "../src/lib/chatPhotoConstants";
 import {
   chatPhotoIdentityMatchesReceipt,
   chatPhotoIdentityMatchesToken,
@@ -851,18 +858,22 @@ section("instant preview + parallel upload");
     "preview payload rejects original HEIC data URL"
   );
   const placeholder = createNativePreviewPhoto(previewPayload!);
-  assert(isNativePreviewPlaceholder(placeholder), "thumbnail attachment is a preparing placeholder");
-  assert(placeholder.blob.size === 0, "placeholder blob is not an upload source");
+  assert(!isNativePreviewPlaceholder(placeholder), "decoded preview JPEG is not an empty placeholder");
+  assert(placeholder.blob.size > 0, "preview JPEG bytes stay uploadable");
+  assert(placeholder.status === "ready", "preview with bytes is READY before HQ");
   assert(placeholder.previewUrl.startsWith("data:image/jpeg;base64,"), "composer shows JPEG data URL");
   assert(
     !chatPhotoComposerBusy(placeholder),
     "native quick preview + no send -> spinner false"
   );
   assert(
-    readyChatPhotosForUpload([placeholder]).length === 0,
-    "quick 384x512 thumbnail is never uploaded"
+    readyChatPhotosForUpload([placeholder]).length === 1,
+    "quick preview JPEG is uploaded before HQ"
   );
-  assert(shouldQueueNativeChatSend([placeholder]), "send waits while HQ is preparing");
+  assert(!shouldQueueNativeChatSend([placeholder]), "send does not wait for HQ once preview bytes exist");
+  const emptyPreview = { ...placeholder, blob: new Blob(), status: "preparing" as const };
+  assert(isNativePreviewPlaceholder(emptyPreview), "empty preview blob still queues send");
+  assert(shouldQueueNativeChatSend([emptyPreview]), "send waits only while preview bytes are missing");
   assert(
     shouldStartOptimisticChatSend("", [placeholder]),
     "send tap during native preview is allowed so it can queue"
@@ -996,10 +1007,10 @@ section("instant preview + parallel upload");
   );
   assert(!chatPhotoComposerBusy(eventFirst.items[0]!), "event-first preview has no spinner");
   assert(
-    readyChatPhotosForUpload(eventFirst.items).length === 0,
-    "event-first 384x512 preview is never uploaded"
+    readyChatPhotosForUpload(eventFirst.items).length === 1,
+    "event-first preview JPEG is the first real upload"
   );
-  assert(shouldQueueNativeChatSend(eventFirst.items), "HQ-before-ready send stays queued");
+  assert(!shouldQueueNativeChatSend(eventFirst.items), "send tap before HQ uses preview READY");
   const eventThenHq = applyNativeHqFile(eventFirst.items, "nvp-3-abc123def456", hqFile);
   assert(eventThenHq?.[0]?.status === "ready", "HQ ready atomically swaps the event-first item");
   assert(eventThenHq?.[0]?.nativePreview === false, "HQ swap clears preview-only after event-first");
@@ -1028,11 +1039,11 @@ section("instant preview + parallel upload");
     "chooser debug overlay is not shown to users"
   );
   const fromChooser = appendNativePreviewChooserFile([], previewChooser, "nvp-3-abc123def456");
-  assert(fromChooser.accepted?.nativePreview === true, "chooser thumbnail is visually ready / not uploadable");
-  assert(fromChooser.accepted?.blob.size === 0, "chooser thumbnail blob is never the upload source");
+  assert(fromChooser.accepted?.nativePreview === true, "chooser thumbnail stays marked preview until HQ");
+  assert(fromChooser.accepted?.blob.size > 0, "chooser thumbnail bytes stay the first upload source");
   assert(
-    readyChatPhotosForUpload(fromChooser.items).length === 0,
-    "384x512 chooser JPEG is never uploaded"
+    readyChatPhotosForUpload(fromChooser.items).length === 1,
+    "384x512 chooser JPEG is uploaded as the preview attachment"
   );
   const hqEvent = parseNativeChatPhotoHqReady({
     previewId: "nvp-3-abc123def456",
@@ -1131,6 +1142,72 @@ section("chat photo lightbox pinch zoom");
   assert(lightbox.includes("vh-chat-lightbox-close") && lightbox.includes("onClose"), "close button still works");
   assert(!lightbox.includes("react-zoom") && !lightbox.includes("swiper"), "no external zoom library");
   assert(css.includes("touch-action: none") && css.includes(".vh-chat-lightbox-stage"), "css blocks browser zoom");
+}
+
+section("preview-first real send + HQ upgrade");
+{
+  const previewWithClaim = {
+    ...createNativePreviewPhoto({
+      previewId: "nvp-9-previewfirst1",
+      sessionId: "9",
+      dataUrl: `data:image/jpeg;base64,${"A".repeat(64)}`,
+    }),
+    send: {
+      phase: "done" as const,
+      progress: 100,
+      attachmentId: "11111111-1111-4111-8111-111111111111",
+      result: {
+        id: "11111111-1111-4111-8111-111111111111",
+        mimeType: "image/jpeg",
+        size: 48_000,
+        exp: Math.floor(Date.now() / 1000) + 60,
+        claim: "preview-claim",
+      },
+    },
+  };
+  const hqAfterReady = applyNativeHqFile(
+    [previewWithClaim],
+    "nvp-9-previewfirst1",
+    new File([new Uint8Array([0xff, 0xd8, 0xff, 7])], "nvp-9-previewfirst1.jpg", { type: "image/jpeg" })
+  );
+  assert(hqAfterReady?.[0]?.nativePreview === false, "HQ swap works after preview is network READY");
+  assert(hqAfterReady?.[0]?.send?.result?.id === previewWithClaim.send.result.id, "HQ swap keeps the preview attachment id");
+  assert(hqAfterReady?.[0]?.send?.result?.claim === "preview-claim", "actual WS claim stays the preview claim");
+  const upgraded = applyAttachmentUpgradeToAttachments(
+    [{ id: previewWithClaim.send.result.id, mimeType: "image/jpeg", size: 48_000 }],
+    previewWithClaim.send.result.id,
+    180_000
+  );
+  assert(upgraded[0]?.size === 180_000, "live swap updates attachment size");
+  assert(
+    chatPhotoSrc("all", previewWithClaim.send.result.id, 180_000).includes("?s=180000"),
+    "recipient cache-busts GET with HQ size"
+  );
+  const parsedUpgrade = parseAttachmentUpgraded({
+    type: "attachment_upgraded",
+    attachmentId: previewWithClaim.send.result.id,
+    size: 180_000,
+  });
+  assert(parsedUpgrade?.attachmentId === previewWithClaim.send.result.id, "attachment_upgraded parses");
+  assert(parseAttachmentUpgraded({ type: "attachment_upgraded", attachmentId: "nope", size: 1 }) === null, "upgrade event needs attachment id");
+  const client = read("src/app/chat/ChatClient.tsx");
+  assert(client.includes("upgradeChatPhotoDirect") && client.includes("emitAttachmentUpgraded"), "client upgrades then broadcasts");
+  assert(client.includes("logPreviewFirst(\"ws_send\""), "WS send is logged once");
+  assert(client.includes("startHqUpgrade"), "HQ after send upgrades the same id");
+  assert(!client.includes("preview XXms") && !client.includes("Native chooser debug"), "no user-visible preview diagnostic UI");
+  const grant = read("cloudflare/verthill-chat/src/chatMediaGrant.ts");
+  const media = read("cloudflare/verthill-chat/src/chatMedia.ts");
+  const chrome = read("src/lib/chatPhoto.ts");
+  assert(grant.includes("CHAT_MEDIA_UPGRADE_OP") && grant.includes("chat_media_upgrade"), "additive upgrade grant exists");
+  assert(media.includes("isChatMediaUpgradeGrant") && media.includes("CHAT_MEDIA_CREATE_ONLY"), "ordinary PUT stays create-only");
+  assert(media.includes("overwrite ? {} : { onlyIf: CHAT_MEDIA_CREATE_ONLY }"), "only upgrade grant omits create-only");
+  assert(chrome.includes("CHAT_MEDIA_UPGRADE_OP") && chrome.includes("consumedAt"), "upgrade allowed after consume");
+  assert(
+    read("src/app/api/chat/rooms/[roomId]/attachments/[attachmentId]/upgrade/route.ts").includes("finalizeChatPhotoUpgrade"),
+    "additive upgrade endpoint"
+  );
+  const worker = read("cloudflare/verthill-chat/src/index.ts");
+  assert(worker.includes("attachment_upgraded") && worker.includes("applyAttachmentUpgrade"), "DO broadcasts HQ swap");
 }
 
 section("composer preview URL detach + prepare swap");
@@ -2769,6 +2846,16 @@ section("r2 grant / key / magic");
   assert(!bad.ok, "tampered grant rejection");
   const otherSecret = await verifyChatMediaPutGrant("other-secret", token);
   assert(!otherSecret.ok && otherSecret.code === "unauthorized", "wrong secret rejection");
+  const upgradeBody = { ...grantBody, op: CHAT_MEDIA_UPGRADE_OP };
+  const upgradeToken = await signChatMediaPutGrant(secret, upgradeBody);
+  const upgradeOk = await verifyChatMediaPutGrant(secret, upgradeToken);
+  assert(upgradeOk.ok && isChatMediaUpgradeGrant(upgradeOk.grant), "upgrade grant verifies");
+  assert(!isChatMediaUpgradeGrant(ok.ok ? ok.grant : null), "ordinary PUT grant is not an upgrade");
+  const pngUpgrade = await signChatMediaPutGrant(secret, { ...upgradeBody, mimeType: "image/png" }).then(
+    () => "signed",
+    () => "rejected"
+  );
+  assert(pngUpgrade === "rejected", "upgrade grant is jpeg-only");
   const receiptBody = {
     v: 1 as const,
     op: CHAT_MEDIA_UPLOADED_OP,
@@ -3781,6 +3868,68 @@ if (!ALLOW_DB) {
         { params: Promise.resolve({ roomId: "all", attachmentId: prepared.attachmentId }) }
       );
       assert(readyGet.status === 200, "READY GET → success");
+
+      const upgradePrep = await prepareChatPhotoUpload(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        contentType: "image/jpeg",
+        size: 16,
+      });
+      await putSigned(upgradePrep.uploadUrl, jpegBytes(16, 21), "image/jpeg");
+      const upgradeReady = await finalizeChatPhotoUpload(prisma, {
+        roomId: "all",
+        attachmentId: upgradePrep.attachmentId,
+        senderUserId: user.id,
+      });
+      const previewGet = await GET_PHOTO(
+        req(`http://localhost/api/chat/rooms/all/attachments/${upgradeReady.id}`, {
+          headers: { cookie },
+        }),
+        { params: Promise.resolve({ roomId: "all", attachmentId: upgradeReady.id }) }
+      );
+      await consumeChatAttachments(prisma, [upgradeReady.id]);
+      const consumedUpgrade = await prisma.chatAttachment.findUnique({ where: { id: upgradeReady.id } });
+      assert(consumedUpgrade?.consumedAt, "preview can be consumed before HQ upgrade");
+      const upgradeGrant = await prepareChatPhotoUpgrade(prisma, {
+        roomId: "all",
+        attachmentId: upgradeReady.id,
+        senderUserId: user.id,
+      });
+      assert(upgradeGrant.attachmentId === upgradeReady.id, "upgrade reuses the same attachment id");
+      const hqBytes = jpegBytes(64, 22);
+      const upgradePut = await putSigned(upgradeGrant.uploadUrl, hqBytes, "image/jpeg");
+      assert(upgradePut.status === 204, "HQ overwrite PUT success");
+      const upgraded = await finalizeChatPhotoUpgrade(prisma, {
+        roomId: "all",
+        attachmentId: upgradeReady.id,
+        senderUserId: user.id,
+      });
+      assert(upgraded.id === upgradeReady.id && upgraded.size === hqBytes.byteLength, "HQ updates DB size");
+      const upgradedRow = await prisma.chatAttachment.findUnique({ where: { id: upgradeReady.id } });
+      assert(
+        upgradedRow?.storageKey === consumedUpgrade?.storageKey && upgradedRow?.mimeType === "image/jpeg",
+        "HQ keeps storageKey and jpeg mime"
+      );
+      const hqGet = await GET_PHOTO(
+        req(`http://localhost/api/chat/rooms/all/attachments/${upgradeReady.id}`, {
+          headers: { cookie },
+        }),
+        { params: Promise.resolve({ roomId: "all", attachmentId: upgradeReady.id }) }
+      );
+      assert(hqGet.status === 200 && hqGet.headers.get("etag") !== previewGet.headers.get("etag"), "reload GET uses HQ ETag");
+      assert((await hqGet.arrayBuffer()).byteLength === hqBytes.byteLength, "history GET returns HQ bytes");
+      await prisma.chatAttachment.delete({ where: { id: upgradeReady.id } });
+      let deletedUpgrade = "";
+      try {
+        await prepareChatPhotoUpgrade(prisma, {
+          roomId: "all",
+          attachmentId: upgradeReady.id,
+          senderUserId: user.id,
+        });
+      } catch (e) {
+        deletedUpgrade = e instanceof CourseReportPhotoValidationError ? e.code : "other";
+      }
+      assert(deletedUpgrade === "not_found", "deleted attachment upgrade denied");
 
       const again = await finalizeChatPhotoUpload(prisma, {
         roomId: "all",

@@ -155,6 +155,23 @@ export type DuplicateEvent = {
   clientMessageId: string;
 };
 
+export type AttachmentUpgradedEvent = {
+  type: "attachment_upgraded";
+  attachmentId: string;
+  size: number;
+};
+
+export function parseAttachmentUpgraded(raw: unknown): AttachmentUpgradedEvent | null {
+  if (!raw || typeof raw !== "object") return null;
+  const rec = raw as Record<string, unknown>;
+  if (String(rec.type || "") !== "attachment_upgraded") return null;
+  const attachmentId = String(rec.attachmentId || "").trim();
+  const size = Number(rec.size);
+  if (!CHAT_ATTACHMENT_ID_RE.test(attachmentId)) return null;
+  if (!Number.isInteger(size) || size <= 0 || size > CHAT_PHOTO_MAX_BYTES) return null;
+  return { type: "attachment_upgraded", attachmentId, size };
+}
+
 export type ChatRoomKind = "ALL" | "CUSTOM" | "DM";
 
 export type RoomSummary = {

@@ -27,7 +27,10 @@ import {
   SYNC_LIMIT,
   type ChatLineReply,
 } from "@/lib/chatPhase4";
-import type { ChatAttachment } from "../../../cloudflare/verthill-chat/src/protocol";
+import {
+  parseAttachmentUpgraded,
+  type ChatAttachment,
+} from "../../../cloudflare/verthill-chat/src/protocol";
 import {
   abandonChatPhotoPreupload,
   appendComposerPhotos,
@@ -37,9 +40,11 @@ import {
   applyChatPhotoSendProgress,
   applyComposerPreparedIfCurrent,
   applyComposerProgressIfCurrent,
+  applyAttachmentUpgradeToAttachments,
   applyNativeHqFailed,
   applyNativeHqFile,
   fileFromNativeHqDataUrl,
+  logPreviewFirst,
   buildOptimisticOutgoingLine,
   CHAT_PHOTO_ACCEPT,
   CHAT_PHOTO_MAX,
@@ -64,6 +69,7 @@ import {
   shouldQueueNativeChatSend,
   shouldStartOptimisticChatSend,
   startChatPhotoPreupload,
+  upgradeChatPhotoDirect,
   usableOptimisticChatPhotos,
   visibleComposerPhotos,
   type ChatPendingPhoto,
@@ -312,6 +318,8 @@ export default function ChatClient() {
   const composerGenRef = useRef(0);
   const prepareJobsRef = useRef(new Map<string, Promise<ChatPendingPhoto>>());
   const uploadJobsRef = useRef(new Map<string, Promise<ChatPhotoDirectResult>>());
+  const upgradeJobsRef = useRef(new Map<string, Promise<void>>());
+  const lastUpgradeRef = useRef(new Map<string, number>());
   const [photoDebug, setPhotoDebug] = useState(false);
   const [photoDebugSample, setPhotoDebugSample] = useState<ChatPhotoDebugSample | null>(null);
   const [lightbox, setLightbox] = useState<{ src: string } | null>(null);
@@ -772,6 +780,24 @@ export default function ChatClient() {
               l.clientMessageId === data.clientMessageId ? { ...l, status: "sent" } : l
             )
           );
+        }
+        const upgraded = parseAttachmentUpgraded(data);
+        if (upgraded) {
+          setLines((prev) => {
+            const next = prev.map((line) => {
+              if (!line.attachments?.some((item) => item.id === upgraded.attachmentId)) return line;
+              return {
+                ...line,
+                attachments: applyAttachmentUpgradeToAttachments(
+                  line.attachments,
+                  upgraded.attachmentId,
+                  upgraded.size
+                ),
+              };
+            });
+            linesRef.current = next;
+            return next;
+          });
         }
       });
     },
@@ -1386,6 +1412,11 @@ export default function ChatClient() {
       }
       setPendingPhotoList(appended.items);
       markChatPhotoTiming("select_to_preview");
+      logPreviewFirst("preview_ready", { previewId: payload.previewId, bytes: appended.accepted.blob.size });
+      if (appended.accepted.status === "ready") {
+        startComposerPreupload(appended.accepted, writeGeneration);
+      }
+      if (!appended.items.some(isNativePreviewPlaceholder)) flushQueuedNativeSend();
     };
     const onHqReady = (event: Event) => {
       const payload = parseNativeChatPhotoHqReady((event as CustomEvent).detail);
@@ -1412,15 +1443,32 @@ export default function ChatClient() {
         : null;
       if (!hqFile) return;
       const applied = applyNativeHqFile(pendingPhotosRef.current, payload.previewId, hqFile);
-      if (!applied) return;
-      if (writeGeneration !== composerGenRef.current) return;
-      if (abandonedNativePreviewIdsRef.current.has(payload.previewId)) return;
-      setPendingPhotoList(applied);
-      const current = applied.find(
-        (item) => item.nativePreviewId === payload.previewId && item.status === "ready"
+      if (applied && writeGeneration === composerGenRef.current) {
+        if (abandonedNativePreviewIdsRef.current.has(payload.previewId)) return;
+        setPendingPhotoList(applied);
+        const current = applied.find(
+          (item) => item.nativePreviewId === payload.previewId && item.status === "ready"
+        );
+        const attachmentId = current?.send?.result?.id;
+        if (attachmentId) startHqUpgrade(attachmentId, hqFile);
+        else if (current) startComposerPreupload(current, writeGeneration);
+        if (!applied.some(isNativePreviewPlaceholder)) flushQueuedNativeSend();
+        return;
+      }
+      const sent = linesRef.current.find((line) =>
+        line.localPhotos?.some((photo) => photo.nativePreviewId === payload.previewId)
       );
-      if (current) startComposerPreupload(current, writeGeneration);
-      if (!applied.some(isNativePreviewPlaceholder)) flushQueuedNativeSend();
+      if (!sent) return;
+      const nextPhotos = applyNativeHqFile(sent.localPhotos || [], payload.previewId, hqFile);
+      if (nextPhotos) {
+        patchOutgoingLine(sent.clientMessageId, (cur) => ({ ...cur, localPhotos: nextPhotos }));
+      }
+      const current =
+        (nextPhotos || sent.localPhotos || []).find((photo) => photo.nativePreviewId === payload.previewId);
+      const attachmentId =
+        current?.send?.result?.id ||
+        sent.attachments?.find((att) => att.id && current?.send?.attachmentId === att.id)?.id;
+      if (attachmentId) startHqUpgrade(attachmentId, hqFile);
     };
     window.addEventListener(NATIVE_CHAT_PHOTO_PREVIEW_EVENT, onPreview);
     window.addEventListener(NATIVE_CHAT_PHOTO_HQ_READY_EVENT, onHqReady);
@@ -1475,11 +1523,68 @@ export default function ChatClient() {
     if (!roomId || item.status !== "ready") return;
     if (!pendingPhotosRef.current.some((row) => row.key === item.key)) return;
     void startChatPhotoPreupload(uploadJobsRef.current, roomId, item, {
-      onProgress: (progress) => applyPhotoUploadProgress(progress, writeGeneration),
+      onProgress: (progress) => {
+        applyPhotoUploadProgress(progress, writeGeneration);
+        if (progress.phase === "done") {
+          logPreviewFirst("preview_upload_finalized", {
+            attachmentId: progress.attachmentId,
+            key: item.key,
+          });
+          if (!pendingPhotosRef.current.some(isNativePreviewPlaceholder)) flushQueuedNativeSend();
+        }
+      },
       chatToken: tokenRef.current?.token,
     }).catch(() => {
       // Composer stays usable; send/retry surfaces the error if the photo is still attached.
     });
+  }
+
+  function emitAttachmentUpgraded(attachmentId: string, size: number) {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "attachment_upgraded", attachmentId, size }));
+  }
+
+  function startHqUpgrade(attachmentId: string, blob: Blob) {
+    const roomId = roomRef.current?.roomId || "";
+    if (!roomId || !attachmentId || !blob.size) return;
+    const inflight = upgradeJobsRef.current.get(attachmentId);
+    if (inflight) return inflight;
+    const job = upgradeChatPhotoDirect(roomId, attachmentId, blob, {
+      chatToken: tokenRef.current?.token,
+    })
+      .then((upgraded) => {
+        logPreviewFirst("hq_upgrade_complete", {
+          attachmentId: upgraded.id,
+          size: upgraded.size,
+        });
+        lastUpgradeRef.current.set(upgraded.id, upgraded.size);
+        setLines((prev) => {
+          const next = prev.map((line) => {
+            if (!line.attachments?.some((item) => item.id === upgraded.id)) return line;
+            return {
+              ...line,
+              attachments: applyAttachmentUpgradeToAttachments(line.attachments, upgraded.id, upgraded.size),
+            };
+          });
+          linesRef.current = next;
+          return next;
+        });
+        emitAttachmentUpgraded(upgraded.id, upgraded.size);
+      })
+      .catch((error) => {
+        logPreviewFirst("hq_upgrade_failed", {
+          attachmentId,
+          message: error instanceof Error ? error.message : "upgrade_failed",
+        });
+      })
+      .finally(() => {
+        if (upgradeJobsRef.current.get(attachmentId) === job) {
+          upgradeJobsRef.current.delete(attachmentId);
+        }
+      });
+    upgradeJobsRef.current.set(attachmentId, job);
+    return job;
   }
 
   async function addPendingPhotos(files: FileList | File[]) {
@@ -1501,11 +1606,24 @@ export default function ChatClient() {
         if (abandonedNativePreviewIdsRef.current.has(row.previewId)) continue;
         if (writeGeneration !== composerGenRef.current) return;
         const appended = appendNativePreviewChooserFile(next, row.file, row.previewId);
-        if (appended.accepted) next = appended.items;
+        if (appended.accepted) {
+          next = appended.items;
+          if (appended.accepted.status === "ready") {
+            logPreviewFirst("preview_ready", {
+              previewId: row.previewId,
+              bytes: appended.accepted.blob.size,
+            });
+          }
+        }
       }
       if (next !== pendingPhotosRef.current) {
         setPendingPhotoList(next);
         markChatPhotoTiming("select_to_preview", selectedAt);
+        for (const item of next) {
+          if (item.nativePreview === true && item.status === "ready") {
+            startComposerPreupload(item, writeGeneration);
+          }
+        }
       }
       incoming = chooser.leftovers;
       const { matched, unmatchedNamed, heicFallbacks, leftovers } = partitionNativeHqFiles(
@@ -1745,6 +1863,14 @@ export default function ChatClient() {
     const wsStarted = chatPhotoNow();
     stampChatPhotoTiming("ws_send", wsStarted);
     await sendCurrent(line.body, line.clientMessageId, tokens, mentionAll, replySeq, uploaded);
+    logPreviewFirst("ws_send", {
+      clientMessageId: line.clientMessageId,
+      attachments: uploaded.map((item) => item.id),
+    });
+    for (const item of uploaded) {
+      const upgradedSize = lastUpgradeRef.current.get(item.id);
+      if (upgradedSize) emitAttachmentUpgraded(item.id, upgradedSize);
+    }
     markChatPhotoTiming("message_ws_send", wsStarted);
     markChatPhotoTiming("total_send", sendStarted);
     emitChatPhotoTimingSummary();
@@ -2332,6 +2458,7 @@ export default function ChatClient() {
                             src: outgoingChatPhotoSrc({
                               roomId: activeRoom?.roomId || roomRef.current?.roomId || "",
                               attachmentId: att.id,
+                              revision: att.size,
                               chatPhotoSrc,
                             }),
                             sending: false,

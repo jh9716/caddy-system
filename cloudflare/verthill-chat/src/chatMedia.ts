@@ -22,6 +22,7 @@ import {
   chatMediaSecret,
   deriveChatMediaR2Key,
   inspectChatMediaMagic,
+  isChatMediaUpgradeGrant,
   parseChatMediaObjectRef,
   signChatMediaUploadReceipt,
   verifyChatMediaPutGrant,
@@ -674,10 +675,14 @@ export async function handleChatMediaUpload(
     stage = "r2_put";
     r2PutStarted = true;
     const storeStarted = nowMs();
+    const overwrite = isChatMediaUpgradeGrant(grant);
+    if (overwrite && grant.mimeType !== "image/jpeg") {
+      return json({ error: "unsupported_type" }, 400);
+    }
     let created: unknown | null = null;
     try {
       created = await bucket.put(key, bounded.bytes, {
-        onlyIf: CHAT_MEDIA_CREATE_ONLY,
+        ...(overwrite ? {} : { onlyIf: CHAT_MEDIA_CREATE_ONLY }),
         httpMetadata: { contentType: grant.mimeType },
         customMetadata,
       });
@@ -696,7 +701,7 @@ export async function handleChatMediaUpload(
     }
     const storeMs = nowMs() - storeStarted;
     const workerTotalMs = nowMs() - started;
-    if (created) {
+    if (created || overwrite) {
       if (bounded.bytes.byteLength <= 0) return json({ error: "empty_file" }, 400);
       stage = "receipt";
       return uploadSuccessResponse(secret, grant, bounded.bytes.byteLength, nowSec, {

@@ -295,13 +295,7 @@ export async function mapBoundedSettled<T, R>(
 }
 
 export function readyChatPhotosForUpload(items: readonly ChatPendingPhoto[]): ChatPendingPhoto[] {
-  return items.filter(
-    (item) =>
-      item.status === "ready" &&
-      item.blob &&
-      item.blob.size > 0 &&
-      item.nativePreview !== true
-  );
+  return items.filter((item) => item.status === "ready" && item.blob && item.blob.size > 0);
 }
 
 export function chatPhotoPickRoom(currentCount: number, max = CHAT_PHOTO_MAX): number {

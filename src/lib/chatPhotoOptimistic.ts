@@ -53,8 +53,19 @@ export function outgoingChatPhotoSrc(input: {
   roomId: string;
   attachmentId?: string;
   previewUrl?: string;
-  chatPhotoSrc: (roomId: string, attachmentId: string) => string;
+  revision?: number;
+  chatPhotoSrc: (roomId: string, attachmentId: string, revision?: number) => string;
 }): string {
-  if (input.attachmentId) return input.chatPhotoSrc(input.roomId, input.attachmentId);
+  if (input.attachmentId) {
+    return input.chatPhotoSrc(input.roomId, input.attachmentId, input.revision);
+  }
   return input.previewUrl || "";
+}
+
+export function applyAttachmentUpgradeToAttachments<T extends { id: string; size: number }>(
+  attachments: readonly T[],
+  attachmentId: string,
+  size: number
+): T[] {
+  return attachments.map((item) => (item.id === attachmentId && item.size !== size ? { ...item, size } : item));
 }
