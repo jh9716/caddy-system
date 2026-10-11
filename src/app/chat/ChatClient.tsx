@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import ChatPhotoLightbox from "@/components/chat/ChatPhotoLightbox";
 import {
   registerAndroidChatOverlayClose,
   registerAndroidChatRoomLeave,
@@ -38,7 +39,6 @@ import {
   applyComposerProgressIfCurrent,
   applyNativeHqFailed,
   applyNativeHqFile,
-  emitNativeChooserDebug,
   fileFromNativeHqDataUrl,
   buildOptimisticOutgoingLine,
   CHAT_PHOTO_ACCEPT,
@@ -314,7 +314,6 @@ export default function ChatClient() {
   const uploadJobsRef = useRef(new Map<string, Promise<ChatPhotoDirectResult>>());
   const [photoDebug, setPhotoDebug] = useState(false);
   const [photoDebugSample, setPhotoDebugSample] = useState<ChatPhotoDebugSample | null>(null);
-  const [nativeChooserDebug, setNativeChooserDebug] = useState("");
   const [lightbox, setLightbox] = useState<{ src: string } | null>(null);
   const [replyTo, setReplyTo] = useState<ChatLineReply | null>(null);
   const [actionLine, setActionLine] = useState<ChatLine | null>(null);
@@ -1486,8 +1485,6 @@ export default function ChatClient() {
   async function addPendingPhotos(files: FileList | File[]) {
     const selectedAt = chatPhotoNow();
     let incoming = Array.from(files);
-    const chooserDebug = emitNativeChooserDebug(incoming);
-    if (chooserDebug) setNativeChooserDebug(chooserDebug);
     if (readCapacitorNativePlatform()) {
       incoming = incoming.filter(
         (file) =>
@@ -2570,11 +2567,6 @@ export default function ChatClient() {
             </button>
             </div>
           </form>
-          {nativeChooserDebug ? (
-            <aside className="vh-chat-photo-debug" aria-label="Native chooser debug">
-              <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{nativeChooserDebug}</pre>
-            </aside>
-          ) : null}
           {photoDebug && photoDebugSample ? (
             <aside className="vh-chat-photo-debug" aria-label="Chat photo debug">
               {(
@@ -2977,18 +2969,7 @@ export default function ChatClient() {
       ) : null}
 
       {lightbox ? (
-        <div
-          className="vh-chat-lightbox"
-          role="dialog"
-          aria-label="사진 보기"
-          onClick={() => setLightbox(null)}
-        >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={lightbox.src} alt="" onClick={(e) => e.stopPropagation()} />
-          <button type="button" className="vh-chat-lightbox-close" onClick={() => setLightbox(null)}>
-            닫기
-          </button>
-        </div>
+        <ChatPhotoLightbox src={lightbox.src} onClose={() => setLightbox(null)} />
       ) : null}
     </div>
   );

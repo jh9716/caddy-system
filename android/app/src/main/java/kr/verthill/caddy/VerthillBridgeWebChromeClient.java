@@ -3,16 +3,13 @@ package kr.verthill.caddy;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
-import android.content.pm.ApplicationInfo;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.SystemClock;
 import android.webkit.MimeTypeMap;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebView;
-import android.widget.Toast;
 import androidx.activity.result.ActivityResult;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
@@ -58,14 +55,9 @@ public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
             return super.onShowFileChooser(webView, filePathCallback, fileChooserParams);
         }
         if (fileChooserParams.isCaptureEnabled()) {
-            showDebugToasts(bridge.getActivity(), singleDebugToast("nativeChooser SKIP · capture"));
             return super.onShowFileChooser(webView, filePathCallback, fileChooserParams);
         }
         if (!HeicNativeJpegConverter.isImageOnlyAccept(fileChooserParams.getAcceptTypes())) {
-            showDebugToasts(
-                bridge.getActivity(),
-                singleDebugToast("nativeChooser SKIP · not_image_only")
-            );
             return super.onShowFileChooser(webView, filePathCallback, fileChooserParams);
         }
 
@@ -110,21 +102,12 @@ public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
             android.content.Context context = activity != null ? activity : bridge.getContext();
             Uri[] resolved = new Uri[picked.length];
             String[] previewIds = new String[picked.length];
-            int lastW = 0;
-            int lastH = 0;
-
-            long started = SystemClock.elapsedRealtime();
-            long previewWall = 0;
-            List<String> failToasts = new ArrayList<>();
             for (int i = 0; i < picked.length; i++) {
                 HeicNativePreview.PreviewAttempt attempt =
                     HeicNativePreview.tryPreviewAttempt(context, picked[i], sessionId);
                 HeicNativePreview.Preview preview = attempt.preview;
                 if (preview != null) {
                     emitPreview(activity, preview, sessionId);
-                    if (previewWall <= 0) {
-                        previewWall = SystemClock.elapsedRealtime() - started;
-                    }
                     previewIds[i] = preview.previewId;
                     Uri written = HeicNativeJpegConverter.writeJpegBytes(
                         context,
@@ -132,27 +115,18 @@ public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
                         preview.jpeg
                     );
                     resolved[i] = written != null ? written : picked[i];
-                    lastW = preview.width;
-                    lastH = preview.height;
                 } else {
                     resolved[i] = picked[i];
-                    failToasts.add(attempt.failToast());
                 }
             }
-            long callbackWall = SystemClock.elapsedRealtime() - started;
             scheduleChooserThenHq(
                 activity,
                 context,
                 callback,
                 resolved,
-                failToasts.isEmpty() ? null : failToasts,
                 picked,
                 previewIds,
-                sessionId,
-                previewWall,
-                callbackWall,
-                lastW,
-                lastH
+                sessionId
             );
         });
     }
@@ -170,27 +144,11 @@ public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
         android.content.Context context,
         ValueCallback<Uri[]> callback,
         Uri[] resolved,
-        List<String> failToasts,
         Uri[] picked,
         String[] previewIds,
-        int sessionId,
-        long previewWall,
-        long callbackWall,
-        int lastW,
-        int lastH
+        int sessionId
     ) {
-        Runnable hqTask = () ->
-            convertHqAfterYield(
-                activity,
-                context,
-                picked,
-                previewIds,
-                sessionId,
-                previewWall,
-                callbackWall,
-                lastW,
-                lastH
-            );
+        Runnable hqTask = () -> convertHqAfterYield(activity, context, picked, previewIds, sessionId);
         if (activity == null) {
             callback.onReceiveValue(resolved);
             convertExecutor.execute(hqTask);
@@ -198,7 +156,6 @@ public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
         }
         activity.runOnUiThread(() -> {
             callback.onReceiveValue(resolved);
-            showDebugToasts(activity, failToasts);
             mainHandler.postDelayed(() -> convertExecutor.execute(hqTask), HQ_YIELD_MS);
         });
     }
@@ -208,15 +165,8 @@ public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
         android.content.Context context,
         Uri[] picked,
         String[] previewIds,
-        int sessionId,
-        long previewWall,
-        long callbackWall,
-        int lastW,
-        int lastH
+        int sessionId
     ) {
-        int outW = lastW;
-        int outH = lastH;
-        long hqStarted = SystemClock.elapsedRealtime();
         for (int i = 0; i < picked.length; i++) {
             if (previewIds[i] == null) continue;
             HeicNativeJpegConverter.ConvertResult converted =
@@ -226,29 +176,10 @@ public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
                     previewIds[i] + ".jpg"
                 );
             if (converted.outputWidth > 0 && converted.outputHeight > 0) {
-                outW = converted.outputWidth;
-                outH = converted.outputHeight;
                 emitHqReady(activity, context, previewIds[i], sessionId, converted);
             } else {
                 emitHqFailed(activity, previewIds[i], sessionId);
             }
-        }
-        long hqWall = SystemClock.elapsedRealtime() - hqStarted;
-        if (isDebugApk(context) && outW > 0) {
-            List<String> debugToasts = new ArrayList<>();
-            debugToasts.add(
-                "preview " +
-                previewWall +
-                "ms · callback " +
-                callbackWall +
-                "ms · HQ " +
-                hqWall +
-                "ms · " +
-                outW +
-                "x" +
-                outH
-            );
-            showDebugToasts(activity, debugToasts);
         }
     }
 
@@ -281,32 +212,6 @@ public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
         final String js = HeicNativePreview.hqFailedJs(previewId, sessionId);
         if (js == null) return;
         activity.runOnUiThread(() -> webView.evaluateJavascript(js, null));
-    }
-
-    private static List<String> singleDebugToast(String message) {
-        List<String> debugToasts = new ArrayList<>();
-        debugToasts.add(message);
-        return debugToasts;
-    }
-
-    private static void showDebugToasts(Activity activity, List<String> debugToasts) {
-        if (activity == null || !isDebugApk(activity) || debugToasts == null || debugToasts.isEmpty()) {
-            return;
-        }
-        activity.runOnUiThread(() -> {
-            StringBuilder message = new StringBuilder();
-            for (int i = 0; i < debugToasts.size(); i++) {
-                if (i > 0) message.append('\n');
-                message.append(debugToasts.get(i));
-            }
-            Toast.makeText(activity, message.toString(), Toast.LENGTH_LONG).show();
-        });
-    }
-
-    /** Debug APK only. Release builds do not show HEIC timing toasts. */
-    static boolean isDebugApk(android.content.Context context) {
-        if (context == null) return false;
-        return (context.getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
     }
 
     static Uri[] urisFromResult(Intent data) {

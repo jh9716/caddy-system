@@ -623,15 +623,13 @@ assert(
   "debug toast distinguishes meta query vs meta fallback"
 );
 assert(
-  chromeClient.includes("FLAG_DEBUGGABLE") &&
-    chromeClient.includes("isDebugApk") &&
-    chromeClient.includes("Toast.makeText") &&
-    chromeClient.includes("\"preview \"") &&
-    chromeClient.includes("\"ms · callback \"") &&
-    chromeClient.includes("\"ms · HQ \"") &&
-    chromeClient.includes("attempt.failToast()") &&
-    chromeClient.includes("nativeChooser SKIP · capture") &&
-    chromeClient.includes("nativeChooser SKIP · not_image_only") &&
+  !chromeClient.includes("Toast.makeText") &&
+    !chromeClient.includes("isDebugApk") &&
+    !chromeClient.includes("FLAG_DEBUGGABLE") &&
+    !chromeClient.includes("\"preview \"") &&
+    !chromeClient.includes("\"ms · callback \"") &&
+    !chromeClient.includes("nativeChooser SKIP") &&
+    !chromeClient.includes("failToasts") &&
     heicConverter.includes("HEIC bitmap") &&
     heicConverter.includes("HEIC decoder-sampled") &&
     heicConverter.includes("HEIC native FAIL → web") &&
@@ -641,7 +639,7 @@ assert(
     heicConverter.includes("scaleMs") &&
     heicConverter.includes("jpegMs") &&
     heicConverter.includes("totalNativeMs"),
-  "debug APK toasts preview + HQ timings without URIs"
+  "HEIC timing/fail toasts are not shown to users"
 );
 assert(
   heicPreview.includes("tryPreviewAttempt") &&
@@ -664,15 +662,14 @@ assert(
   heicPreview.includes("Build.VERSION.SDK_INT") &&
     heicPreview.includes("safeMimeLabel") &&
     heicPreview.includes("heicLike") &&
-    chromeClient.includes("failToasts.add(attempt.failToast())") &&
     chromeClient.includes("resolved[i] = picked[i]"),
-  "failed HEIC preview keeps current URI fallback and still shows a debug toast"
+  "failed HEIC preview keeps current URI fallback without a user-visible toast"
 );
 assert(
   !heicConverter.includes("uri.toString()") &&
     !chromeClient.includes("uri.toString()") &&
     !heicPreview.includes("uri.toString()"),
-  "debug toast uses timing/size text, not personal URI/path"
+  "native HEIC path never prints a personal URI/path"
 );
 assert(
   heicConverter.includes("PATH_PASSTHROUGH") &&
@@ -722,8 +719,9 @@ assert(
     read("src/lib/chatPhotoPick.ts").includes("item.nativePreviewId && item.previewUrl") &&
     read("src/lib/chatPhotoPick.ts").includes("item.nativePreview !== true") &&
     read("src/lib/chatPhotoNativePreview.ts").includes("-preview") &&
-    read("src/lib/chatPhotoNativePreview.ts").includes("describeNativeChooserDebug") &&
-    chatClient.includes("emitNativeChooserDebug"),
+    !chatClient.includes("emitNativeChooserDebug") &&
+    !chatClient.includes("nativeChooserDebug") &&
+    !chatClient.includes("Native chooser debug"),
   "web composer shows chooser preview JPEG, waits for HQ event, and never uploads the thumbnail"
 );
 assert(

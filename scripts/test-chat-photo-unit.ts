@@ -129,6 +129,17 @@ import {
   shouldShowNativeChooserDebug,
 } from "../src/lib/chatPhotoNativePreview";
 import {
+  LIGHTBOX_MAX_SCALE,
+  LIGHTBOX_MIN_SCALE,
+  applyLightboxPan,
+  clampLightboxScale,
+  lightboxTransformCss,
+  nextLightboxDoubleTapScale,
+  pinchLightboxScale,
+  resetLightboxTransform,
+  shouldBlockLightboxBackdropClose,
+} from "../src/lib/chatPhotoLightboxZoom";
+import {
   appendComposerPhotos,
   applyComposerPreparedIfCurrent,
   applyComposerProgressIfCurrent,
@@ -1011,6 +1022,11 @@ section("instant preview + parallel upload");
     partitionNativeChooserFiles([pngLeftover]).leftovers[0] === pngLeftover,
     "regular PNG stays on the leftover/web path"
   );
+  assert(
+    !read("src/app/chat/ChatClient.tsx").includes("emitNativeChooserDebug") &&
+      !read("src/app/chat/ChatClient.tsx").includes("Native chooser debug"),
+    "chooser debug overlay is not shown to users"
+  );
   const fromChooser = appendNativePreviewChooserFile([], previewChooser, "nvp-3-abc123def456");
   assert(fromChooser.accepted?.nativePreview === true, "chooser thumbnail is visually ready / not uploadable");
   assert(fromChooser.accepted?.blob.size === 0, "chooser thumbnail blob is never the upload source");
@@ -1083,6 +1099,38 @@ section("instant preview + parallel upload");
   assert(failedLine.status === "failed", "upload/finalize fail → failed bubble");
   const retried = buildOptimisticOutgoingLine(failedLine.body, failedLine.localPhotos);
   assert(retried.localPhotos[0]?.previewUrl === failedLine.localPhotos[0]?.previewUrl, "retry reuses local photo blob");
+}
+
+section("chat photo lightbox pinch zoom");
+{
+  assert(clampLightboxScale(0.2) === LIGHTBOX_MIN_SCALE, "scale cannot go below 1");
+  assert(clampLightboxScale(9) === LIGHTBOX_MAX_SCALE, "scale cannot go above 4");
+  assert(nextLightboxDoubleTapScale(1) === 2, "double tap from 1x goes to 2x");
+  assert(nextLightboxDoubleTapScale(2) === 1, "double tap from zoomed state resets to 1x");
+  assert(pinchLightboxScale(1, 100, 200) === 2, "pinch out doubles scale");
+  assert(pinchLightboxScale(2, 100, 50) === 1, "pinch in clamps back to 1");
+  const panned = applyLightboxPan({ scale: 2, x: 0, y: 0 }, 80, 0, 200, 200);
+  assert(panned.x > 0 && panned.scale === 2, "zoomed image can pan");
+  const resetPan = applyLightboxPan({ scale: 1, x: 40, y: 10 }, 10, 10, 200, 200);
+  assert(resetPan.x === 0 && resetPan.y === 0, "1x scale cannot stay panned");
+  assert(
+    shouldBlockLightboxBackdropClose({ interacting: true, recentGesture: false }),
+    "pinch/drag does not close lightbox"
+  );
+  assert(
+    !shouldBlockLightboxBackdropClose({ interacting: false, recentGesture: false }),
+    "idle backdrop tap still closes"
+  );
+  assert(resetLightboxTransform().scale === 1, "reopen starts at 1x");
+  assert(lightboxTransformCss({ scale: 2, x: 8, y: -4 }).includes("scale(2)"), "css uses translate+scale");
+  const lightbox = read("src/components/chat/ChatPhotoLightbox.tsx");
+  const chatClient = read("src/app/chat/ChatClient.tsx");
+  const css = read("src/app/globals.css");
+  assert(chatClient.includes("ChatPhotoLightbox"), "chat uses the zoom lightbox");
+  assert(lightbox.includes("pinchLightboxScale") && lightbox.includes("nextLightboxDoubleTapScale"), "pinch + double tap");
+  assert(lightbox.includes("vh-chat-lightbox-close") && lightbox.includes("onClose"), "close button still works");
+  assert(!lightbox.includes("react-zoom") && !lightbox.includes("swiper"), "no external zoom library");
+  assert(css.includes("touch-action: none") && css.includes(".vh-chat-lightbox-stage"), "css blocks browser zoom");
 }
 
 section("composer preview URL detach + prepare swap");
