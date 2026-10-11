@@ -16,6 +16,8 @@ export default function StaffAccountsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [newUsername, setNewUsername] = useState("");
   const [issued, setIssued] = useState<{
     username: string;
     temporaryPassword: string;
@@ -80,6 +82,44 @@ export default function StaffAccountsPage() {
     }
   };
 
+  const createAccount = async () => {
+    const username = newUsername.trim();
+    if (!username) {
+      setError("아이디를 입력해 주세요.");
+      return;
+    }
+
+    setCreating(true);
+    setError(null);
+    setIssued(null);
+    try {
+      const res = await fetch("/api/admin/staff-accounts", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.message || data?.error || "계정 생성 실패");
+      }
+      const temporaryPassword = String(data?.temporaryPassword || "");
+      if (!temporaryPassword) {
+        throw new Error("임시 비밀번호를 받지 못했습니다.");
+      }
+      setIssued({
+        username: String(data?.user?.username || username),
+        temporaryPassword,
+      });
+      setNewUsername("");
+      await load();
+    } catch (e: any) {
+      setError(e?.message || "계정 생성 실패");
+    } finally {
+      setCreating(false);
+    }
+  };
+
   return (
     <div className="vh-page">
       <div className="vh-page-head">
@@ -89,6 +129,47 @@ export default function StaffAccountsPage() {
           <a href="/manage/users">계정 연결</a>에서 관리합니다.
         </p>
       </div>
+
+      <form
+        className="ui-card"
+        style={{ marginBottom: 16, padding: 16 }}
+        onSubmit={(e) => {
+          e.preventDefault();
+          void createAccount();
+        }}
+      >
+        <h2 style={{ margin: "0 0 8px", fontSize: 16 }}>관리자 계정 생성</h2>
+        <p style={{ margin: "0 0 12px", color: "var(--vh-ink-soft)" }}>
+          새 일반 관리자 ID/PW 계정을 만듭니다. 임시 비밀번호는 지금 한 번만
+          표시되며, 최초 로그인 시 비밀번호 변경이 필요합니다. 카카오 계정을
+          관리자로 승격하지 않습니다.
+        </p>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <input
+            aria-label="아이디"
+            value={newUsername}
+            onChange={(e) => setNewUsername(e.target.value)}
+            placeholder="아이디"
+            autoComplete="off"
+            disabled={creating}
+            style={{
+              minWidth: 200,
+              flex: "1 1 200px",
+              padding: "8px 10px",
+              border: "1px solid var(--vh-border-strong)",
+              borderRadius: 8,
+              fontSize: 16,
+            }}
+          />
+          <button
+            type="submit"
+            className="ui-btn"
+            disabled={creating || !newUsername.trim()}
+          >
+            {creating ? "생성 중…" : "계정 생성"}
+          </button>
+        </div>
+      </form>
 
       {issued && (
         <div
@@ -114,7 +195,7 @@ export default function StaffAccountsPage() {
           </div>
           <p style={{ margin: "8px 0 0", color: "var(--vh-ink-soft)" }}>
             이 값을 직원에게 전달한 뒤 이 안내를 닫으세요. 화면을 새로고침하면
-            다시 볼 수 없습니다.
+            다시 볼 수 없습니다. 최초 로그인 시 비밀번호 변경이 필요합니다.
           </p>
           <button
             type="button"
