@@ -71,6 +71,9 @@ jobs:
           auth="$(openssl rand -hex 32)"
           media="$(openssl rand -hex 32)"
           internal="$(openssl rand -hex 32)"
+          echo "::add-mask::$auth"
+          echo "::add-mask::$media"
+          echo "::add-mask::$internal"
           {
             echo "chat_auth<<EOF"
             echo "$auth"
@@ -115,6 +118,7 @@ jobs:
             exit 0
           fi
           host="$(PREVIEW296_DATABASE_URL="$db_url" node scripts/preview296/assert-isolated-url.mjs)"
+          echo "::add-mask::$db_url"
           {
             echo "present=yes"
             echo "host=$host"
