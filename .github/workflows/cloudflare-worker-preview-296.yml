@@ -1,0 +1,274 @@
+# Isolated #296 HQ test Worker only.
+# Never deploys Production verthill-chat. Never binds verthill-chat-media.
+name: Cloudflare Worker Preview 296
+
+on:
+  push:
+    branches:
+      - cursor/chat-photo-preview-first-send-1267
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verthill-chat-preview-296
+  cancel-in-progress: false
+
+jobs:
+  deploy-preview-296:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Refuse Production Worker deploy
+        run: |
+          set -eu
+          test -f cloudflare/verthill-chat/wrangler.jsonc
+          node scripts/preview296/assert-isolated-wrangler.mjs
+          if grep -n 'wrangler deploy$' .github/workflows/cloudflare-worker-preview-296.yml | grep -v 'preview296'; then
+            echo "bare wrangler deploy is forbidden in this workflow"
+            exit 1
+          fi
+
+      - name: Require Cloudflare account id
+        run: |
+          set -eu
+          if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            echo "CLOUDFLARE_ACCOUNT_ID is required"
+            exit 1
+          fi
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            echo "CLOUDFLARE_API_TOKEN is required"
+            exit 1
+          fi
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: npm
+          cache-dependency-path: cloudflare/verthill-chat/package-lock.json
+
+      - name: Install Worker dependencies
+        working-directory: cloudflare/verthill-chat
+        run: npm ci
+
+      - name: Create isolated R2 bucket if needed
+        working-directory: cloudflare/verthill-chat
+        run: |
+          set +x
+          set -eu
+          if ./node_modules/.bin/wrangler r2 bucket list | grep -Fq 'verthill-chat-media-preview-296'; then
+            echo "preview R2 bucket already exists"
+          else
+            ./node_modules/.bin/wrangler r2 bucket create verthill-chat-media-preview-296
+          fi
+          if ./node_modules/.bin/wrangler r2 bucket list | grep -Fq 'verthill-chat-media-preview-296'; then
+            echo "preview R2 bucket ready"
+          else
+            echo "failed to create isolated R2 bucket"
+            exit 1
+          fi
+          if ./node_modules/.bin/wrangler r2 bucket list | awk '$1=="verthill-chat-media-preview-296"{found=1} END{exit !found}'; then
+            echo "isolated bucket name confirmed"
+          fi
+
+      - name: Generate isolated Worker secrets
+        id: secrets
+        run: |
+          set +x
+          set -eu
+          auth="$(openssl rand -hex 32)"
+          media="$(openssl rand -hex 32)"
+          internal="$(openssl rand -hex 32)"
+          admin_pw="$(openssl rand -base64 18 | tr -d '/+=' | head -c 20)"
+          caddy_pw="$(openssl rand -base64 18 | tr -d '/+=' | head -c 20)"
+          {
+            echo "chat_auth<<EOF"
+            echo "$auth"
+            echo "EOF"
+            echo "chat_media<<EOF"
+            echo "$media"
+            echo "EOF"
+            echo "chat_internal<<EOF"
+            echo "$internal"
+            echo "EOF"
+            echo "admin_pw<<EOF"
+            echo "$admin_pw"
+            echo "EOF"
+            echo "caddy_pw<<EOF"
+            echo "$caddy_pw"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Deploy isolated preview296 Worker
+        working-directory: cloudflare/verthill-chat
+        run: |
+          set +x
+          set -eu
+          test -x ./node_modules/.bin/wrangler
+          ./node_modules/.bin/wrangler deploy --env preview296 | tee /tmp/preview296-deploy.txt
+          if grep -E 'Deployed verthill-chat[^[-]|name: verthill-chat$' /tmp/preview296-deploy.txt; then
+            echo "refusing output that looks like Production Worker"
+            exit 1
+          fi
+          grep -F 'verthill-chat-preview-296' /tmp/preview296-deploy.txt
+
+      - name: Put isolated secrets on preview Worker only
+        working-directory: cloudflare/verthill-chat
+        run: |
+          set +x
+          set -eu
+          printf '%s' "${{ steps.secrets.outputs.chat_auth }}" | ./node_modules/.bin/wrangler secret put CHAT_AUTH_SECRET --env preview296
+          printf '%s' "${{ steps.secrets.outputs.chat_media }}" | ./node_modules/.bin/wrangler secret put CHAT_MEDIA_SECRET --env preview296
+          printf '%s' "${{ steps.secrets.outputs.chat_internal }}" | ./node_modules/.bin/wrangler secret put CHAT_INTERNAL_SECRET --env preview296
+          echo "preview worker secrets set; CHAT_PUSH_DISPATCH_URL left unset"
+
+      - name: Create claimable isolated Neon
+        id: neon
+        run: |
+          set +x
+          set -eu
+          python3 - <<'PY'
+          import json, os, urllib.request
+          from urllib.parse import urlparse
+          req = urllib.request.Request(
+              "https://neon.new/api/v1/database",
+              data=json.dumps({"ref": "caddy-preview-296"}).encode(),
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          with urllib.request.urlopen(req, timeout=60) as res:
+              body = json.loads(res.read().decode())
+          url = body.get("connection_string") or body.get("database_url") or body.get("connString")
+          if not url:
+              raise SystemExit("claimable neon response missing connection string keys=" + ",".join(body.keys()))
+          host = urlparse(url).hostname or ""
+          if "ep-crimson-cell-a1i1tpce" in host:
+              raise SystemExit("refusing production neon host")
+          print("neon_host=" + host)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write("database_url<<EOF\n")
+              fh.write(url + "\n")
+              fh.write("EOF\n")
+              fh.write("host=" + host + "\n")
+          PY
+
+      - name: Install app dependencies for migrate/seed
+        run: npm ci
+
+      - name: Apply schema to isolated DB
+        env:
+          DATABASE_URL: ${{ steps.neon.outputs.database_url }}
+        run: |
+          set +x
+          set -eu
+          python3 - <<'PY'
+          import os
+          from urllib.parse import urlparse
+          url = os.environ["DATABASE_URL"]
+          host = urlparse(url).hostname or ""
+          if "ep-crimson-cell-a1i1tpce" in host:
+              raise SystemExit("migrate refused production neon host")
+          print("migrate host", host)
+          PY
+          npx prisma migrate deploy
+
+      - name: Seed isolated test accounts
+        id: seed
+        env:
+          DATABASE_URL: ${{ steps.neon.outputs.database_url }}
+          PREVIEW296_ADMIN_PASSWORD: ${{ steps.secrets.outputs.admin_pw }}
+          PREVIEW296_CADDY_PASSWORD: ${{ steps.secrets.outputs.caddy_pw }}
+        run: |
+          set +x
+          set -eu
+          # Reuse isolated hex secrets as strong test passwords; not production credentials.
+          npx tsx scripts/preview296/seed-isolated-db.ts | tee /tmp/preview296-seed.json
+
+      - name: Set gt8t branch-only Preview env
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_GT8T_ID }}
+          DATABASE_URL: ${{ steps.neon.outputs.database_url }}
+          CHAT_AUTH_SECRET: ${{ steps.secrets.outputs.chat_auth }}
+          CHAT_MEDIA_SECRET: ${{ steps.secrets.outputs.chat_media }}
+          CHAT_INTERNAL_SECRET: ${{ steps.secrets.outputs.chat_internal }}
+        run: |
+          set +x
+          set -eu
+          if [ -z "${VERCEL_TOKEN:-}" ]; then
+            echo "VERCEL_TOKEN missing; skip Vercel env. Isolation worker/DB are still ready."
+            echo "vercel_env=skipped" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          npm exec --yes vercel@41.7.8 -- env rm NEXT_PUBLIC_CHAT_WS_URL preview cursor/chat-photo-preview-first-send-1267 --yes || true
+          npm exec --yes vercel@41.7.8 -- env add NEXT_PUBLIC_CHAT_WS_URL preview cursor/chat-photo-preview-first-send-1267 --yes <<'EOF'
+          wss://verthill-chat-preview-296.19970106s.workers.dev
+          EOF
+          npm exec --yes vercel@41.7.8 -- env add CHAT_WORKER_URL preview cursor/chat-photo-preview-first-send-1267 --yes <<'EOF'
+          https://verthill-chat-preview-296.19970106s.workers.dev
+          EOF
+          printf '%s\n' "$DATABASE_URL" | npm exec --yes vercel@41.7.8 -- env add DATABASE_URL preview cursor/chat-photo-preview-first-send-1267 --yes
+          printf '%s\n' "$CHAT_AUTH_SECRET" | npm exec --yes vercel@41.7.8 -- env add CHAT_AUTH_SECRET preview cursor/chat-photo-preview-first-send-1267 --yes
+          printf '%s\n' "$CHAT_MEDIA_SECRET" | npm exec --yes vercel@41.7.8 -- env add CHAT_MEDIA_SECRET preview cursor/chat-photo-preview-first-send-1267 --yes
+          printf '%s\n' "$CHAT_INTERNAL_SECRET" | npm exec --yes vercel@41.7.8 -- env add CHAT_INTERNAL_SECRET preview cursor/chat-photo-preview-first-send-1267 --yes
+          printf '%s\n' "r2" | npm exec --yes vercel@41.7.8 -- env add CHAT_PHOTO_STORAGE preview cursor/chat-photo-preview-first-send-1267 --yes
+          echo "vercel_env=attempted"
+
+      - name: Write isolated runtime artifact
+        env:
+          DATABASE_URL: ${{ steps.neon.outputs.database_url }}
+          CHAT_AUTH_SECRET: ${{ steps.secrets.outputs.chat_auth }}
+          CHAT_MEDIA_SECRET: ${{ steps.secrets.outputs.chat_media }}
+          CHAT_INTERNAL_SECRET: ${{ steps.secrets.outputs.chat_internal }}
+          PREVIEW296_ADMIN_PASSWORD: ${{ steps.secrets.outputs.admin_pw }}
+          PREVIEW296_CADDY_PASSWORD: ${{ steps.secrets.outputs.caddy_pw }}
+        run: |
+          set +x
+          set -eu
+          umask 077
+          {
+            echo "NEXT_PUBLIC_CHAT_WS_URL=wss://verthill-chat-preview-296.19970106s.workers.dev"
+            echo "CHAT_WORKER_URL=https://verthill-chat-preview-296.19970106s.workers.dev"
+            echo "CHAT_PHOTO_STORAGE=r2"
+            echo "PREVIEW296_ADMIN_USERNAME=preview296_admin"
+            echo "PREVIEW296_CADDY_USERNAME=preview296_caddy"
+            echo "PREVIEW296_NEON_HOST=${{ steps.neon.outputs.host }}"
+            printf 'DATABASE_URL=%s\n' "$DATABASE_URL"
+            printf 'CHAT_AUTH_SECRET=%s\n' "$CHAT_AUTH_SECRET"
+            printf 'CHAT_MEDIA_SECRET=%s\n' "$CHAT_MEDIA_SECRET"
+            printf 'CHAT_INTERNAL_SECRET=%s\n' "$CHAT_INTERNAL_SECRET"
+            printf 'PREVIEW296_ADMIN_PASSWORD=%s\n' "$PREVIEW296_ADMIN_PASSWORD"
+            printf 'PREVIEW296_CADDY_PASSWORD=%s\n' "$PREVIEW296_CADDY_PASSWORD"
+          } > /tmp/preview296-runtime.env
+          cp /tmp/preview296-deploy.txt /tmp/preview296-deploy.log
+
+      - name: Upload isolated runtime artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview296-runtime
+          retention-days: 3
+          path: |
+            /tmp/preview296-runtime.env
+            /tmp/preview296-deploy.log
+
+      - name: Write public isolation summary
+        run: |
+          set -eu
+          echo "### preview296 isolation" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Worker: verthill-chat-preview-296" >> "$GITHUB_STEP_SUMMARY"
+          echo "- R2: verthill-chat-media-preview-296" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Neon host: ${{ steps.neon.outputs.host }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Production Worker/R2/DO/Postgres were not targeted." >> "$GITHUB_STEP_SUMMARY"
+          echo "- Test usernames: preview296_admin / preview296_caddy" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Passwords are the isolated Worker secrets (not printed)." >> "$GITHUB_STEP_SUMMARY"

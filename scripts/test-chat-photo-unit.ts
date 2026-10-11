@@ -241,6 +241,15 @@ import {
   parseAttachmentUpgraded,
   planOwnedAttachmentUpgrade,
 } from "../cloudflare/verthill-chat/src/protocol";
+import {
+  PREVIEW296_R2_BUCKET,
+  PREVIEW296_WORKER_NAME,
+  assertIsolatedPreview296DatabaseUrl,
+  isForbiddenProductionChatWorkerUrl,
+  isForbiddenProductionDatabaseHost,
+  isPreview296BrowserHost,
+  isProductionWebHost,
+} from "../src/lib/preview296Isolation";
 import { chatPhotoSrc } from "../src/lib/chatPhotoConstants";
 import {
   chatPhotoIdentityMatchesReceipt,
@@ -1255,6 +1264,47 @@ section("preview-first real send + HQ upgrade");
       worker.includes("attach.claims.userId"),
     "DO applies HQ swap only for the original sender"
   );
+  assert(
+    worker.includes("chat_media_upgrade: true") && worker.includes("attachment_upgraded: true"),
+    "health advertises upgrade capability"
+  );
+}
+
+section("preview296 isolation guards");
+{
+  assert(PREVIEW296_WORKER_NAME === "verthill-chat-preview-296", "preview worker name");
+  assert(PREVIEW296_R2_BUCKET === "verthill-chat-media-preview-296", "preview R2 name");
+  assert(PREVIEW296_R2_BUCKET !== "verthill-chat-media", "preview R2 is not production");
+  assert(isProductionWebHost("www.verthill.kr"), "production host detected");
+  assert(!isPreview296BrowserHost("www.verthill.kr"), "production host is never isolated");
+  assert(
+    isPreview296BrowserHost("caddy-system-gt8t-git-cursor-chat-photo-2bf5d3-jh9716s-projects.vercel.app"),
+    "gt8t preview host is isolated"
+  );
+  assert(
+    !isPreview296BrowserHost("caddy-system-git-other-branch-jh9716s-projects.vercel.app"),
+    "non-gt8t preview host is not isolated"
+  );
+  assert(
+    isForbiddenProductionDatabaseHost("postgresql://u:p@ep-crimson-cell-a1i1tpce.ap-southeast-1.aws.neon.tech/neondb"),
+    "production neon host blocked"
+  );
+  assert(
+    !isForbiddenProductionDatabaseHost("postgresql://u:p@ep-claimable-example.us-east-2.aws.neon.tech/neondb"),
+    "other neon host is allowed for isolated preview"
+  );
+  assert(
+    isForbiddenProductionChatWorkerUrl("wss://verthill-chat.19970106s.workers.dev"),
+    "production worker url blocked"
+  );
+  try {
+    assertIsolatedPreview296DatabaseUrl(
+      "postgresql://u:p@ep-crimson-cell-a1i1tpce.ap-southeast-1.aws.neon.tech/neondb"
+    );
+    assert(false, "production neon must throw");
+  } catch (error) {
+    assert(error instanceof Error && error.message.includes("production Neon"), "seed/app reject prod neon");
+  }
 }
 
 section("composer preview URL detach + prepare swap");
@@ -2821,6 +2871,9 @@ section("source wiring / no public blob");
   assert(/"r2_buckets"\s*:/.test(wrangler), "wrangler binds production R2");
   assert(wrangler.includes('"binding": "CHAT_MEDIA"'), "R2 binding name is CHAT_MEDIA");
   assert(wrangler.includes('"bucket_name": "verthill-chat-media"'), "R2 bucket is verthill-chat-media");
+  assert(wrangler.includes('"name": "verthill-chat-preview-296"'), "isolated preview worker name");
+  assert(wrangler.includes('"bucket_name": "verthill-chat-media-preview-296"'), "isolated preview R2");
+  assert(wrangler.includes("--env preview296") || read(".github/workflows/cloudflare-worker-preview-296.yml").includes("wrangler deploy --env preview296"), "preview workflow uses --env preview296");
   assert(!/"CHAT_MEDIA_SECRET"\s*:/.test(wrangler), "CHAT_MEDIA_SECRET is not a wrangler config value");
   const hideFn = worker.slice(worker.indexOf("private hideForMe"), worker.indexOf("private deleteMessage"));
   assert(!hideFn.includes("queueAttachmentCleanup"), "hide-for-me does not purge blob");

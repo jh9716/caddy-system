@@ -230,7 +230,14 @@ export default {
       return new Response(null, { status: 204, headers: corsHeaders() });
     }
     if (request.method === "GET" && url.pathname === "/health") {
-      return json({ ok: true, service: "verthill-chat" });
+      return json({
+        ok: true,
+        service: "verthill-chat",
+        capabilities: {
+          chat_media_upgrade: true,
+          attachment_upgraded: true,
+        },
+      });
     }
     if (url.pathname === "/ws") {
       const authorized = await authorizeSocket(request, env);
