@@ -148,6 +148,35 @@ try {
   );
 }
 
+let aliases = [];
+try {
+  const listed = await api(
+    `/v6/deployments?projectId=${encodeURIComponent(projectId)}&limit=8`
+  );
+  const previewDeploys = (listed?.deployments || []).filter((d) => d?.target !== "production");
+  for (const d of previewDeploys.slice(0, 3)) {
+    const id = d.uid || d.id;
+    if (!id) continue;
+    const detail = await api(`/v13/deployments/${id}`);
+    const row = {
+      id,
+      ready: detail?.readyState || d.readyState,
+      url: detail?.url || d.url,
+      aliases: detail?.aliases || d.aliases || [],
+      ref: d?.meta?.githubCommitRef || "",
+    };
+    aliases.push(row);
+    console.log(JSON.stringify({ deployment: row }));
+  }
+} catch (error) {
+  console.log(
+    JSON.stringify({
+      aliases: "failed",
+      message: error instanceof Error ? error.message : String(error),
+    })
+  );
+}
+
 console.log(
   JSON.stringify({
     ok: true,
@@ -157,5 +186,6 @@ console.log(
     dbHost: new URL(databaseUrl).hostname,
     pushDispatch: "unset",
     redeployed,
+    aliasCount: aliases.length,
   })
 );
