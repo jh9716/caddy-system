@@ -55,6 +55,7 @@ import {
   rosterImportApplySuccessMessage,
 } from '@/lib/caddyRosterImportApplyConfig';
 import { rosterImportContactSummary } from '@/lib/rosterImportContactSummary';
+import type { XlsxV2ApplyResult } from '@/lib/caddyRosterImportXlsxV2Apply';
 import type { XlsxV2WorkbookPreview } from '@/lib/caddyRosterImportXlsxV2Preview';
 import Link from 'next/link';
 
@@ -428,9 +429,12 @@ export default function ManageCaddiesPage() {
   const [xlsxV2Open, setXlsxV2Open] = useState(false);
   const [xlsxV2Busy, setXlsxV2Busy] = useState(false);
   const [xlsxV2FileName, setXlsxV2FileName] = useState<string | null>(null);
+  const [xlsxV2File, setXlsxV2File] = useState<File | null>(null);
   const [xlsxV2Preview, setXlsxV2Preview] = useState<XlsxV2WorkbookPreview | null>(
     null
   );
+  const [xlsxV2ApplyResult, setXlsxV2ApplyResult] =
+    useState<XlsxV2ApplyResult | null>(null);
   /** 슬롯 점유 계산용 — ACTIVE+LEAVE+RETIRED 전체 */
   const [slotPeers, setSlotPeers] = useState<SlotOccupant[]>([]);
   const [refreshError, setRefreshError] = useState(false);
@@ -1317,6 +1321,8 @@ export default function ManageCaddiesPage() {
               onClick={() => {
                 setXlsxV2Open(true);
                 setXlsxV2Preview(null);
+                setXlsxV2ApplyResult(null);
+                setXlsxV2File(null);
                 setXlsxV2FileName(null);
               }}
             >
@@ -2505,13 +2511,15 @@ export default function ManageCaddiesPage() {
       {viewMode === 'detail' && xlsxV2Open && (
         <section className="cm-card cm-import" aria-label="Excel 가져오기 V2">
           <div className="cm-import-head">
-            <h3>Excel 가져오기 (V2 미리보기)</h3>
+            <h3>Excel 가져오기 (V2)</h3>
             <button
               type="button"
               className="cm-btn cm-btn-sm"
               onClick={() => {
                 setXlsxV2Open(false);
                 setXlsxV2Preview(null);
+                setXlsxV2ApplyResult(null);
+                setXlsxV2File(null);
                 setXlsxV2FileName(null);
               }}
             >
@@ -2522,7 +2530,8 @@ export default function ManageCaddiesPage() {
             P1 <code>export.xlsx</code> 템플릿만 올립니다. 기본은 DELTA —
             파일에 있는 행만 비교하고, 빠진 기존 캐디는 퇴사하지 않습니다.
             수정/퇴사는 <strong>id</strong>만 사용합니다. 이름-only 매칭 없음.
-            이 단계는 DB를 변경하지 않습니다. 적용은 후속입니다.
+            미리보기를 확인한 뒤 <strong>변경사항 적용</strong>을 눌러야
+            DB에 반영됩니다. 자동 적용하지 않습니다.
           </p>
           <div className="cm-import-actions">
             <label className="cm-btn cm-btn-sm cm-file-label">
@@ -2538,6 +2547,8 @@ export default function ManageCaddiesPage() {
                   if (!file) return;
                   setXlsxV2Busy(true);
                   setXlsxV2Preview(null);
+                  setXlsxV2ApplyResult(null);
+                  setXlsxV2File(file);
                   setXlsxV2FileName(file.name);
                   setMessage(null);
                   try {
@@ -2575,13 +2586,93 @@ export default function ManageCaddiesPage() {
             <button
               type="button"
               className="cm-btn cm-btn-primary cm-btn-sm"
-              disabled
-              title="P2는 미리보기만. 적용은 후속"
+              disabled={
+                xlsxV2Busy ||
+                !xlsxV2File ||
+                !xlsxV2Preview?.summary.applyAvailable ||
+                xlsxV2Preview.summary.error > 0 ||
+                xlsxV2Preview.summary.create +
+                  xlsxV2Preview.summary.update +
+                  xlsxV2Preview.summary.retire +
+                  xlsxV2Preview.summary.drivingChange ===
+                  0
+              }
+              title={
+                !xlsxV2Preview
+                  ? '먼저 미리보기를 확인하세요'
+                  : xlsxV2Preview.summary.error > 0
+                    ? '오류가 있으면 적용할 수 없습니다'
+                    : !xlsxV2Preview.summary.applyAvailable
+                      ? '적용할 변경이 없습니다'
+                      : '미리보기와 동일한 해석으로 한 번에 반영합니다'
+              }
+              onClick={async () => {
+                if (!xlsxV2File || !xlsxV2Preview?.summary.applyAvailable) return;
+                const confirmText = [
+                  '변경사항을 적용할까요?',
+                  `생성 ${xlsxV2Preview.summary.create} / 수정 ${xlsxV2Preview.summary.update} / 퇴사 ${xlsxV2Preview.summary.retire} / 드라이빙 변경 ${xlsxV2Preview.summary.drivingChange}`,
+                  '중간 실패 시 전부 취소됩니다.',
+                ].join('\n');
+                if (!confirm(confirmText)) return;
+                setXlsxV2Busy(true);
+                setMessage(null);
+                try {
+                  const fd = new FormData();
+                  fd.append('file', xlsxV2File);
+                  fd.append(
+                    'fingerprint',
+                    xlsxV2Preview.confirmation.fingerprint
+                  );
+                  const res = await fetch(
+                    '/api/caddies/import-v2/xlsx/apply',
+                    {
+                      method: 'POST',
+                      body: fd,
+                      credentials: 'include',
+                    }
+                  );
+                  if (res.status === 401 || res.status === 403) {
+                    location.href = '/login?callbackUrl=/manage/caddies';
+                    return;
+                  }
+                  const data = await res.json();
+                  if (!res.ok) {
+                    setXlsxV2ApplyResult(null);
+                    setMessage(data?.error || 'Excel 적용 실패');
+                    return;
+                  }
+                  setXlsxV2ApplyResult(data as XlsxV2ApplyResult);
+                  setMessage(
+                    typeof data?.message === 'string'
+                      ? data.message
+                      : '명단을 반영했습니다.'
+                  );
+                  await reloadAfterMutation('all');
+                } catch {
+                  setXlsxV2ApplyResult(null);
+                  setMessage('Excel 적용 중 오류가 발생했습니다.');
+                } finally {
+                  setXlsxV2Busy(false);
+                }
+              }}
             >
-              적용 (후속)
+              변경사항 적용
             </button>
           </div>
-          {xlsxV2Busy && <p className="cm-muted">미리보기 중…</p>}
+          {xlsxV2Busy && (
+            <p className="cm-muted">
+              {xlsxV2Preview ? '적용 중…' : '미리보기 중…'}
+            </p>
+          )}
+          {xlsxV2ApplyResult && (
+            <div className="cm-import-summary" aria-label="Excel 적용 결과">
+              <span>적용 완료</span>
+              <span>신규 {xlsxV2ApplyResult.created}</span>
+              <span>수정 {xlsxV2ApplyResult.updated}</span>
+              <span>퇴사 {xlsxV2ApplyResult.retired}</span>
+              <span>드라이빙 {xlsxV2ApplyResult.drivingChanged}</span>
+            </div>
+          )}
           {xlsxV2Preview && (
             <>
               <div className="cm-import-summary">

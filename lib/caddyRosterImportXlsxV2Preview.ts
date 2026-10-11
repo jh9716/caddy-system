@@ -7,6 +7,7 @@
  * - 기존 import v2 apply 엔진을 호출·변경하지 않는다.
  */
 
+import { createHash } from "node:crypto";
 import * as XLSX from "xlsx";
 import { denyArchivedCaddyRead } from "../src/lib/caddyArchiveVisibility";
 import {
@@ -115,9 +116,32 @@ export type XlsxV2DrivingChangeLine = {
   fields: XlsxV2FieldDiff[];
 };
 
+export type XlsxV2Confirmation = {
+  fingerprint: string;
+};
+
+export type XlsxV2CaddyPatch = {
+  id: number;
+  name?: string;
+  team?: string;
+  teamOrder?: number;
+  employmentStatus?: EmploymentStatusValue;
+  phoneNormalized?: string | null;
+  thirdBandSubgroup?: ThirdBandSubgroup | null;
+  caddyType?: "HOUSE" | "THIRD" | "DRIVING";
+};
+
+export type XlsxV2ApplyPlan = {
+  updates: XlsxV2CaddyPatch[];
+  creates: XlsxV2CreateLine[];
+  retires: Array<{ id: number; previousEmployment: string }>;
+  driving: Array<XlsxV2CaddyPatch & { kind: "update" | "convert_to_driving" }>;
+};
+
 export type XlsxV2WorkbookPreview = {
   mode: typeof XLSX_V2_PREVIEW_MODE;
   format: typeof XLSX_V2_PREVIEW_FORMAT;
+  confirmation: XlsxV2Confirmation;
   creates: XlsxV2CreateLine[];
   updates: XlsxV2UpdateLine[];
   retires: XlsxV2RetireLine[];
@@ -133,7 +157,7 @@ export type XlsxV2WorkbookPreview = {
     warning: number;
     error: number;
     omittedExisting: number;
-    applyAvailable: false;
+    applyAvailable: boolean;
     applyBlocked: boolean;
   };
 };
@@ -203,14 +227,35 @@ function issue(
   return { code, sheet, rowNumber, id, name, message };
 }
 
+export function fingerprintRosterSnapshot(
+  rows: readonly XlsxV2PreviewExisting[]
+): string {
+  const normalized = [...rows]
+    .map((row) => ({
+      id: row.id,
+      name: row.name,
+      team: row.team,
+      teamOrder: Number(row.teamOrder) || 0,
+      employmentStatus: String(row.employmentStatus ?? ""),
+      caddyType: row.caddyType ?? null,
+      phoneNormalized: row.phoneNormalized ?? null,
+      thirdBandSubgroup: row.thirdBandSubgroup ?? null,
+    }))
+    .sort((a, b) => a.id - b.id);
+  return createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
+}
+
 function emptyPreview(
-  extras?: Partial<Pick<XlsxV2WorkbookPreview, "errors" | "warnings">>
+  extras?: Partial<Pick<XlsxV2WorkbookPreview, "errors" | "warnings">> & {
+    fingerprint?: string;
+  }
 ): XlsxV2WorkbookPreview {
   const errors = extras?.errors ?? [];
   const warnings = extras?.warnings ?? [];
   return {
     mode: XLSX_V2_PREVIEW_MODE,
     format: XLSX_V2_PREVIEW_FORMAT,
+    confirmation: { fingerprint: extras?.fingerprint ?? "" },
     creates: [],
     updates: [],
     retires: [],
@@ -230,6 +275,10 @@ function emptyPreview(
       applyBlocked: errors.length > 0,
     },
   };
+}
+
+export function emptyXlsxV2ApplyPlan(): XlsxV2ApplyPlan {
+  return { updates: [], creates: [], retires: [], driving: [] };
 }
 
 function readCell(cell: XLSX.CellObject | undefined): SafeCell {
@@ -841,35 +890,46 @@ function pushNameVerification(
   errors.push(issue("name_mismatch_severe", sheet, rowNumber, id, fileName, msg));
 }
 
-export function buildXlsxV2WorkbookPreview(
+export function buildXlsxV2PreviewBundle(
   buffer: Buffer,
   existing: readonly XlsxV2PreviewExisting[],
   options?: XlsxV2PreviewOptions
-): XlsxV2WorkbookPreview {
+): { preview: XlsxV2WorkbookPreview; plan: XlsxV2ApplyPlan } {
   const existingSnapshot = existing.map((row) => ({ ...row }));
+  const fingerprint = fingerprintRosterSnapshot(existingSnapshot);
   const canReadArchived = options?.canReadArchived === true;
   const errors: XlsxV2PreviewIssue[] = [];
   const warnings: XlsxV2PreviewIssue[] = [];
+  const plan = emptyXlsxV2ApplyPlan();
 
   const read = readWorkbookOrError(buffer);
-  if ("error" in read) return emptyPreview({ errors: [read.error] });
+  if ("error" in read) {
+    return {
+      preview: emptyPreview({ errors: [read.error], fingerprint }),
+      plan,
+    };
+  }
 
   const missingSheets = REQUIRED_SHEETS.filter(
     (name) => !read.wb.SheetNames.includes(name)
   );
   if (missingSheets.length) {
-    return emptyPreview({
-      errors: [
-        issue(
-          "missing_sheets",
-          "_workbook",
-          0,
-          null,
-          "",
-          `V2 템플릿 시트가 없습니다: ${missingSheets.join(", ")}. P1 export.xlsx 를 사용하세요.`
-        ),
-      ],
-    });
+    return {
+      preview: emptyPreview({
+        fingerprint,
+        errors: [
+          issue(
+            "missing_sheets",
+            "_workbook",
+            0,
+            null,
+            "",
+            `V2 템플릿 시트가 없습니다: ${missingSheets.join(", ")}. P1 export.xlsx 를 사용하세요.`
+          ),
+        ],
+      }),
+      plan,
+    };
   }
 
   const existingRows = parseExistingSheet(
@@ -1189,6 +1249,21 @@ export function buildXlsxV2WorkbookPreview(
         name: nextName,
         fields,
       });
+      const patch: XlsxV2CaddyPatch = { id: row.id };
+      for (const field of fields) {
+        if (field.key === "name") patch.name = nextName;
+        if (field.key === "team") {
+          patch.team = nextTeam;
+          patch.caddyType = resolveCaddyTypeFromTeam(nextTeam);
+        }
+        if (field.key === "teamOrder") patch.teamOrder = nextOrder;
+        if (field.key === "employmentStatus") {
+          patch.employmentStatus = nextEmp as EmploymentStatusValue;
+        }
+        if (field.key === "phone") patch.phoneNormalized = nextPhone;
+        if (field.key === "thirdBandSubgroup") patch.thirdBandSubgroup = nextSub;
+      }
+      plan.updates.push(patch);
     }
   }
 
@@ -1368,6 +1443,7 @@ export function buildXlsxV2WorkbookPreview(
       thirdBandSubgroup: subgroup,
       caddyType: resolveCaddyTypeFromTeam(row.teamRaw),
     });
+    plan.creates.push(creates[creates.length - 1]);
   }
 
   for (const row of retireRows) {
@@ -1418,6 +1494,10 @@ export function buildXlsxV2WorkbookPreview(
       name: cur.name,
       reason: row.reasonRaw,
       currentEmploymentStatus: empLabel(cur.employmentStatus),
+    });
+    plan.retires.push({
+      id: row.id,
+      previousEmployment: empLabel(cur.employmentStatus),
     });
   }
 
@@ -1531,6 +1611,24 @@ export function buildXlsxV2WorkbookPreview(
         kind,
         fields,
       });
+      const patch: XlsxV2CaddyPatch & { kind: "update" | "convert_to_driving" } = {
+        id: row.id,
+        kind,
+      };
+      if (kind === "convert_to_driving") {
+        patch.team = driving.team;
+        patch.teamOrder = driving.teamOrder;
+        patch.caddyType = driving.caddyType;
+        patch.thirdBandSubgroup = null;
+      }
+      for (const field of fields) {
+        if (field.key === "name") patch.name = nextName;
+        if (field.key === "employmentStatus") {
+          patch.employmentStatus = nextEmp as EmploymentStatusValue;
+        }
+        if (field.key === "phone") patch.phoneNormalized = nextPhone;
+      }
+      plan.driving.push(patch);
     }
   }
 
@@ -1652,9 +1750,16 @@ export function buildXlsxV2WorkbookPreview(
     return !touchedIds.has(row.id);
   }).length;
 
+  const hasChanges =
+    creates.length +
+      updates.length +
+      retires.length +
+      drivingChanges.length >
+    0;
   const preview: XlsxV2WorkbookPreview = {
     mode: XLSX_V2_PREVIEW_MODE,
     format: XLSX_V2_PREVIEW_FORMAT,
+    confirmation: { fingerprint },
     creates,
     updates,
     retires,
@@ -1670,11 +1775,22 @@ export function buildXlsxV2WorkbookPreview(
       warning: warnings.length,
       error: errors.length,
       omittedExisting,
-      applyAvailable: false,
+      applyAvailable: errors.length === 0 && hasChanges,
       applyBlocked: errors.length > 0,
     },
   };
-  return preview;
+  if (errors.length > 0) {
+    return { preview, plan: emptyXlsxV2ApplyPlan() };
+  }
+  return { preview, plan };
+}
+
+export function buildXlsxV2WorkbookPreview(
+  buffer: Buffer,
+  existing: readonly XlsxV2PreviewExisting[],
+  options?: XlsxV2PreviewOptions
+): XlsxV2WorkbookPreview {
+  return buildXlsxV2PreviewBundle(buffer, existing, options).preview;
 }
 
 export function assertExistingRowsUnchanged<T>(before: T, after: T): boolean {

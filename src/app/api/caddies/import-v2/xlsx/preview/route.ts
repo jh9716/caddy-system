@@ -12,7 +12,7 @@ const MAX_UPLOAD_BYTES = 2_000_000;
 /**
  * POST /api/caddies/import-v2/xlsx/preview
  * V2 workbook DELTA preview. DB write 없음 (findMany only).
- * Apply endpoint 없음.
+ * 적용은 POST /api/caddies/import-v2/xlsx/apply.
  */
 export async function POST(req: NextRequest) {
   const guard = await requireAdmin(req);
