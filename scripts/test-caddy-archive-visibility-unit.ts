@@ -238,6 +238,9 @@ const listRoute = readSrc("src/app/api/caddies/route.ts");
 const idRoute = readSrc("src/app/api/caddies/[id]/route.ts");
 const exportRoute = readSrc("src/app/api/caddies/export/route.ts");
 const exportXlsxRoute = readSrc("src/app/api/caddies/export.xlsx/route.ts");
+const xlsxV2PreviewRoute = readSrc(
+  "src/app/api/caddies/import-v2/xlsx/preview/route.ts"
+);
 const meRoute = readSrc("src/app/api/me/route.ts");
 const page = readSrc("src/app/manage/caddies/page.tsx");
 const notes = readSrc("src/app/api/caddies/[id]/notes.ts/route.ts");
@@ -250,6 +253,12 @@ assert(/filterArchivedCaddies/.test(exportRoute), "export filters archive for st
 assert(
   /requireAdmin/.test(exportXlsxRoute) && /canReadArchivedCaddies/.test(exportXlsxRoute),
   "xlsx export stays requireAdmin + archive ACL"
+);
+assert(
+  /requireAdmin/.test(xlsxV2PreviewRoute) &&
+    /canReadArchivedCaddies/.test(xlsxV2PreviewRoute) &&
+    !/prisma\.caddy\.(create|update|delete)/.test(xlsxV2PreviewRoute),
+  "xlsx v2 preview stays requireAdmin + archive ACL + read-only"
 );
 assert(/canReadArchivedCaddies/.test(meRoute), "/api/me exposes archive flag");
 assert(
