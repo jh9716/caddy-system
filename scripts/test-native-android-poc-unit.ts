@@ -525,7 +525,9 @@ assert(
 );
 assert(
   heicPreview.includes("loadThumbnail(") &&
+    heicPreview.includes("EVENT = \"verthill:chat-photo-native-preview\"") &&
     heicPreview.includes("HQ_EVENT = \"verthill:chat-photo-native-hq-ready\"") &&
+    heicPreview.includes("previewJs") &&
     heicPreview.includes("PREVIEW_EDGE = 512") &&
     heicPreview.includes("data:image/jpeg;base64,") &&
     heicPreview.includes("nvp-") &&
@@ -536,13 +538,22 @@ assert(
 );
 assert(
   chromeClient.includes("HeicNativePreview.tryPreviewAttempt") &&
+    chromeClient.includes("emitPreview") &&
+    chromeClient.includes("HeicNativePreview.previewJs") &&
     chromeClient.includes("writeJpegBytes") &&
     chromeClient.includes("preview.previewFileName()") &&
-    chromeClient.indexOf("deliver(") < chromeClient.indexOf("resolveForWebView") &&
+    chromeClient.includes("scheduleChooserThenHq") &&
+    chromeClient.includes("HQ_YIELD_MS = 64") &&
+    chromeClient.includes("postDelayed") &&
+    chromeClient.indexOf("emitPreview(") < chromeClient.indexOf("writeJpegBytes") &&
+    chromeClient.indexOf("writeJpegBytes") < chromeClient.indexOf("scheduleChooserThenHq") &&
+    chromeClient.includes("onReceiveValue(resolved)") &&
+    chromeClient.includes("mainHandler.postDelayed(() -> convertExecutor.execute(hqTask), HQ_YIELD_MS)") &&
+    chromeClient.indexOf("postDelayed") < chromeClient.indexOf("resolveForWebView") &&
     chromeClient.includes("previewIds[i] + \".jpg\"") &&
     chromeClient.includes("emitHqReady") &&
     chromeClient.includes("nativePreviewSession"),
-  "chooser callback returns the preview JPEG before HQ conversion"
+  "preview event emits before chooser callback; HQ starts after a short UI yield"
 );
 assert(
   heicConverter.includes("BitmapFactory.decodeFileDescriptor") &&
@@ -615,7 +626,8 @@ assert(
   chromeClient.includes("FLAG_DEBUGGABLE") &&
     chromeClient.includes("isDebugApk") &&
     chromeClient.includes("Toast.makeText") &&
-    chromeClient.includes("\"callback \"") &&
+    chromeClient.includes("\"preview \"") &&
+    chromeClient.includes("\"ms · callback \"") &&
     chromeClient.includes("\"ms · HQ \"") &&
     chromeClient.includes("attempt.failToast()") &&
     chromeClient.includes("nativeChooser SKIP · capture") &&
@@ -698,7 +710,9 @@ assert(
   "no original HEIC/base64 on the chooser path; HQ JPEG event is built in the preview helper"
 );
 assert(
-  chatClient.includes("NATIVE_CHAT_PHOTO_HQ_READY_EVENT") &&
+  chatClient.includes("NATIVE_CHAT_PHOTO_PREVIEW_EVENT") &&
+    chatClient.includes("appendNativePreviewPhoto") &&
+    chatClient.includes("NATIVE_CHAT_PHOTO_HQ_READY_EVENT") &&
     chatClient.includes("appendNativePreviewChooserFile") &&
     chatClient.includes("partitionNativeChooserFiles") &&
     chatClient.includes("applyNativeHqFile") &&

@@ -5,6 +5,8 @@ import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.net.Uri;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.SystemClock;
 import android.webkit.MimeTypeMap;
 import android.webkit.ValueCallback;
@@ -27,9 +29,12 @@ import java.util.concurrent.Executors;
  */
 public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
 
+    static final int HQ_YIELD_MS = 64;
+
     private final Bridge bridge;
     private final ActivityResultLauncher<Intent> imagePickerLauncher;
     private final ExecutorService convertExecutor = Executors.newSingleThreadExecutor();
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private ValueCallback<Uri[]> pendingCallback;
     private int nativePreviewSession;
 
@@ -108,13 +113,18 @@ public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
             int lastW = 0;
             int lastH = 0;
 
-            long callbackStarted = SystemClock.elapsedRealtime();
+            long started = SystemClock.elapsedRealtime();
+            long previewWall = 0;
             List<String> failToasts = new ArrayList<>();
             for (int i = 0; i < picked.length; i++) {
                 HeicNativePreview.PreviewAttempt attempt =
                     HeicNativePreview.tryPreviewAttempt(context, picked[i], sessionId);
                 HeicNativePreview.Preview preview = attempt.preview;
                 if (preview != null) {
+                    emitPreview(activity, preview, sessionId);
+                    if (previewWall <= 0) {
+                        previewWall = SystemClock.elapsedRealtime() - started;
+                    }
                     previewIds[i] = preview.previewId;
                     Uri written = HeicNativeJpegConverter.writeJpegBytes(
                         context,
@@ -129,43 +139,117 @@ public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
                     failToasts.add(attempt.failToast());
                 }
             }
-            long callbackWall = SystemClock.elapsedRealtime() - callbackStarted;
-            deliver(activity, callback, resolved, failToasts.isEmpty() ? null : failToasts);
-
-            long hqStarted = SystemClock.elapsedRealtime();
-            for (int i = 0; i < picked.length; i++) {
-                if (previewIds[i] == null) continue;
-                HeicNativeJpegConverter.ConvertResult converted =
-                    HeicNativeJpegConverter.resolveForWebView(
-                        context,
-                        picked[i],
-                        previewIds[i] + ".jpg"
-                    );
-                if (converted.outputWidth > 0 && converted.outputHeight > 0) {
-                    lastW = converted.outputWidth;
-                    lastH = converted.outputHeight;
-                    emitHqReady(activity, context, previewIds[i], sessionId, converted);
-                } else {
-                    emitHqFailed(activity, previewIds[i], sessionId);
-                }
-            }
-            long hqWall = SystemClock.elapsedRealtime() - hqStarted;
-
-            if (isDebugApk(context) && lastW > 0) {
-                List<String> debugToasts = new ArrayList<>();
-                debugToasts.add(
-                    "callback " +
-                    callbackWall +
-                    "ms · HQ " +
-                    hqWall +
-                    "ms · " +
-                    lastW +
-                    "x" +
-                    lastH
-                );
-                showDebugToasts(activity, debugToasts);
-            }
+            long callbackWall = SystemClock.elapsedRealtime() - started;
+            scheduleChooserThenHq(
+                activity,
+                context,
+                callback,
+                resolved,
+                failToasts.isEmpty() ? null : failToasts,
+                picked,
+                previewIds,
+                sessionId,
+                previewWall,
+                callbackWall,
+                lastW,
+                lastH
+            );
         });
+    }
+
+    private void emitPreview(Activity activity, HeicNativePreview.Preview preview, int sessionId) {
+        WebView webView = bridge.getWebView();
+        if (activity == null || webView == null || preview == null) return;
+        final String js = HeicNativePreview.previewJs(preview, sessionId);
+        if (js == null) return;
+        activity.runOnUiThread(() -> webView.evaluateJavascript(js, null));
+    }
+
+    private void scheduleChooserThenHq(
+        Activity activity,
+        android.content.Context context,
+        ValueCallback<Uri[]> callback,
+        Uri[] resolved,
+        List<String> failToasts,
+        Uri[] picked,
+        String[] previewIds,
+        int sessionId,
+        long previewWall,
+        long callbackWall,
+        int lastW,
+        int lastH
+    ) {
+        Runnable hqTask = () ->
+            convertHqAfterYield(
+                activity,
+                context,
+                picked,
+                previewIds,
+                sessionId,
+                previewWall,
+                callbackWall,
+                lastW,
+                lastH
+            );
+        if (activity == null) {
+            callback.onReceiveValue(resolved);
+            convertExecutor.execute(hqTask);
+            return;
+        }
+        activity.runOnUiThread(() -> {
+            callback.onReceiveValue(resolved);
+            showDebugToasts(activity, failToasts);
+            mainHandler.postDelayed(() -> convertExecutor.execute(hqTask), HQ_YIELD_MS);
+        });
+    }
+
+    private void convertHqAfterYield(
+        Activity activity,
+        android.content.Context context,
+        Uri[] picked,
+        String[] previewIds,
+        int sessionId,
+        long previewWall,
+        long callbackWall,
+        int lastW,
+        int lastH
+    ) {
+        int outW = lastW;
+        int outH = lastH;
+        long hqStarted = SystemClock.elapsedRealtime();
+        for (int i = 0; i < picked.length; i++) {
+            if (previewIds[i] == null) continue;
+            HeicNativeJpegConverter.ConvertResult converted =
+                HeicNativeJpegConverter.resolveForWebView(
+                    context,
+                    picked[i],
+                    previewIds[i] + ".jpg"
+                );
+            if (converted.outputWidth > 0 && converted.outputHeight > 0) {
+                outW = converted.outputWidth;
+                outH = converted.outputHeight;
+                emitHqReady(activity, context, previewIds[i], sessionId, converted);
+            } else {
+                emitHqFailed(activity, previewIds[i], sessionId);
+            }
+        }
+        long hqWall = SystemClock.elapsedRealtime() - hqStarted;
+        if (isDebugApk(context) && outW > 0) {
+            List<String> debugToasts = new ArrayList<>();
+            debugToasts.add(
+                "preview " +
+                previewWall +
+                "ms · callback " +
+                callbackWall +
+                "ms · HQ " +
+                hqWall +
+                "ms · " +
+                outW +
+                "x" +
+                outH
+            );
+            showDebugToasts(activity, debugToasts);
+        }
     }
 
     private void emitHqReady(
@@ -197,22 +281,6 @@ public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
         final String js = HeicNativePreview.hqFailedJs(previewId, sessionId);
         if (js == null) return;
         activity.runOnUiThread(() -> webView.evaluateJavascript(js, null));
-    }
-
-    private static void deliver(
-        Activity activity,
-        ValueCallback<Uri[]> callback,
-        Uri[] uris,
-        List<String> debugToasts
-    ) {
-        if (activity == null) {
-            callback.onReceiveValue(uris);
-            return;
-        }
-        activity.runOnUiThread(() -> {
-            callback.onReceiveValue(uris);
-            showDebugToasts(activity, debugToasts);
-        });
     }
 
     private static List<String> singleDebugToast(String message) {

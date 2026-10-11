@@ -970,6 +970,47 @@ section("instant preview + parallel upload");
   assert(chooserDebug.includes("chooser .jpg · mime=image/jpeg · preview=no"), "debug marks leftover JPEG as not preview");
   assert(chooserDebug.includes("partition preview=1 leftover=1"), "debug reports partition counts");
   assert(!chooserDebug.includes("content://"), "chooser debug never prints a URI");
+  const eventFirst = appendNativePreviewPhoto([], previewPayload!);
+  assert(eventFirst.items.length === 1, "preview event appends one composer item");
+  const chooserAfterEvent = appendNativePreviewChooserFile(
+    eventFirst.items,
+    previewChooser,
+    "nvp-3-abc123def456"
+  );
+  assert(chooserAfterEvent.accepted === null, "same previewId chooser file does not duplicate");
+  assert(chooserAfterEvent.items.length === 1, "event-first preview stays a single item");
+  assert(
+    chooserAfterEvent.items[0]?.nativePreviewId === "nvp-3-abc123def456",
+    "chooser after preview event keeps the same previewId"
+  );
+  assert(!chatPhotoComposerBusy(eventFirst.items[0]!), "event-first preview has no spinner");
+  assert(
+    readyChatPhotosForUpload(eventFirst.items).length === 0,
+    "event-first 384x512 preview is never uploaded"
+  );
+  assert(shouldQueueNativeChatSend(eventFirst.items), "HQ-before-ready send stays queued");
+  const eventThenHq = applyNativeHqFile(eventFirst.items, "nvp-3-abc123def456", hqFile);
+  assert(eventThenHq?.[0]?.status === "ready", "HQ ready atomically swaps the event-first item");
+  assert(eventThenHq?.[0]?.nativePreview === false, "HQ swap clears preview-only after event-first");
+  assert(eventThenHq?.[0]?.blob === hqFile, "upload blob is the HQ JPEG only");
+  assert(readyChatPhotosForUpload(eventThenHq || []).length === 1, "only HQ JPEG is uploadable");
+  assert(
+    applyNativeHqFile([], "nvp-3-abc123def456", hqFile) === null,
+    "X then late HQ is ignored"
+  );
+  assert(
+    partitionNativeChooserFiles([jpegLeftover]).leftovers[0] === jpegLeftover &&
+      partitionNativeChooserFiles([jpegLeftover]).previews.length === 0,
+    "regular JPEG is not treated as a native preview chooser file"
+  );
+  const pngLeftover = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "shot.png", {
+    type: "image/png",
+    lastModified: 121,
+  });
+  assert(
+    partitionNativeChooserFiles([pngLeftover]).leftovers[0] === pngLeftover,
+    "regular PNG stays on the leftover/web path"
+  );
   const fromChooser = appendNativePreviewChooserFile([], previewChooser, "nvp-3-abc123def456");
   assert(fromChooser.accepted?.nativePreview === true, "chooser thumbnail is visually ready / not uploadable");
   assert(fromChooser.accepted?.blob.size === 0, "chooser thumbnail blob is never the upload source");

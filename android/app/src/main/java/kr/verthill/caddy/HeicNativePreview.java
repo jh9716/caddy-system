@@ -228,6 +228,33 @@ final class HeicNativePreview {
         }
     }
 
+    static String previewJs(Preview preview, int sessionId) {
+        if (preview == null || preview.jpeg == null || preview.jpeg.length <= 0) return null;
+        if (preview.previewId == null || preview.previewId.isEmpty()) return null;
+        org.json.JSONObject detail = new org.json.JSONObject();
+        try {
+            detail.put("previewId", preview.previewId);
+            detail.put("sessionId", String.valueOf(sessionId));
+            detail.put("mime", "image/jpeg");
+            detail.put("width", preview.width);
+            detail.put("height", preview.height);
+            detail.put("bytes", preview.bytes);
+            detail.put(
+                "dataUrl",
+                "data:image/jpeg;base64," + Base64.encodeToString(preview.jpeg, Base64.NO_WRAP)
+            );
+        } catch (Exception ignored) {
+            return null;
+        }
+        return (
+            "window.dispatchEvent(new CustomEvent('" +
+            EVENT +
+            "',{detail:" +
+            detail.toString() +
+            "}));"
+        );
+    }
+
     static String hqReadyJs(
         Context context,
         String previewId,
