@@ -668,6 +668,57 @@ async function main() {
       noticeIds.push(created.id);
       const createdRow = await prisma.notice.findUnique({ where: { id: created.id } });
       assert(createdRow?.content === "created-via-body", "POST body writes content");
+      assert(createdRow?.author === "관리자", "unlinked admin POST author fallback");
+
+      const spoofCreate = await postNotice(adminCookie, {
+        title: `${tag}_post_spoof`,
+        content: "spoof",
+        author: "위조된이름",
+      });
+      const spoofed = await spoofCreate.json();
+      assert(spoofCreate.status === 200 && typeof spoofed.id === "number", "POST spoof 200");
+      noticeIds.push(spoofed.id);
+      const spoofRow = await prisma.notice.findUnique({ where: { id: spoofed.id } });
+      assert(spoofRow?.author === "관리자", "POST ignores client author");
+      assert(spoofRow?.author !== `${tag}_admin`, "POST does not expose username");
+
+      const authorBefore = afterContent?.author ?? null;
+      const spoofPatch = await patchNotice(adminCookie, nAll.id, { author: "위조된이름" });
+      assert(spoofPatch.status === 200, "PATCH spoof 200");
+      const afterSpoofPatch = await prisma.notice.findUnique({ where: { id: nAll.id } });
+      assert(afterSpoofPatch?.author === authorBefore, "PATCH does not rewrite author");
+
+      const linkedCaddy = await prisma.caddy.create({
+        data: {
+          name: `${tag}_adm_name`,
+          team: "1조",
+          caddyType: "HOUSE",
+          employmentStatus: "ACTIVE",
+        },
+      });
+      caddyIds.push(linkedCaddy.id);
+      const linkedAdmin = await prisma.user.create({
+        data: {
+          username: `${tag}_adm_linked`,
+          password: hash,
+          role: "admin",
+          caddyId: linkedCaddy.id,
+          sessionVersion: 0,
+        },
+      });
+      userIds.push(linkedAdmin.id);
+      const linkedCookie = await cookieFor({ ...linkedAdmin, role: "admin" });
+      const linkedCreate = await postNotice(linkedCookie, {
+        title: `${tag}_post_linked`,
+        content: "linked",
+        author: "위조된이름",
+      });
+      const linked = await linkedCreate.json();
+      assert(linkedCreate.status === 200 && typeof linked.id === "number", "linked admin POST 200");
+      noticeIds.push(linked.id);
+      const linkedRow = await prisma.notice.findUnique({ where: { id: linked.id } });
+      assert(linkedRow?.author === `${tag}_adm_name`, "linked admin uses Caddy.name");
+      assert(linkedRow?.author !== linkedAdmin.username, "linked admin does not expose username");
     }
 
     section("11-13 preview/send auth + confirm");

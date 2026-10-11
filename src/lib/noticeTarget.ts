@@ -235,7 +235,6 @@ export type NoticeWriteFields = {
   targetValue?: string | null;
   publishStartAt?: Date | null;
   publishEndAt?: Date | null;
-  author?: string;
 };
 
 export function parseNoticeWriteBody(
@@ -290,10 +289,6 @@ export function parseNoticeWriteBody(
   } else {
     if (window.publishStartAt !== undefined) out.publishStartAt = window.publishStartAt;
     if (window.publishEndAt !== undefined) out.publishEndAt = window.publishEndAt;
-  }
-
-  if (typeof rec.author === "string") {
-    out.author = rec.author;
   }
 
   return out;

@@ -4,6 +4,7 @@ import { getRequestAuthUser } from "@/lib/getRequestAuthUser";
 import { formatKstDisplay } from "@/lib/kstDate";
 import { loadNoticeViewer } from "@/lib/noticeAccess";
 import { isNoticePhotoTableMissing } from "@/lib/noticePhoto";
+import { formatNoticeAuthorDisplay } from "@/lib/noticeAuthor";
 import {
   formatNoticeTargetLabel,
   noticeListOrder,
@@ -22,6 +23,7 @@ export default async function NoticeListPage() {
   let notices: Array<{
     id: number;
     title: string;
+    author: string | null;
     createdAt: Date;
     important: boolean;
     pinned: boolean;
@@ -35,6 +37,7 @@ export default async function NoticeListPage() {
       select: {
         id: true,
         title: true,
+        author: true,
         createdAt: true,
         important: true,
         pinned: true,
@@ -56,6 +59,7 @@ export default async function NoticeListPage() {
       select: {
         id: true,
         title: true,
+        author: true,
         createdAt: true,
         important: true,
         pinned: true,
@@ -92,6 +96,7 @@ export default async function NoticeListPage() {
                 <span className="notice-list-title">{n.title}</span>
               </div>
               <div className="notice-list-meta">
+                <span>{formatNoticeAuthorDisplay(n.author)}</span>
                 <time>{formatKstDisplay(n.createdAt, "ymd")}</time>
                 {n.targetType !== NOTICE_TARGET_ALL ? (
                   <span>{formatNoticeTargetLabel(n)}</span>
