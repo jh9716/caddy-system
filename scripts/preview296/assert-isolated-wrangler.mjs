@@ -46,6 +46,12 @@ must(!prodWf.includes("verthill-chat-preview-296"), "production workflow must no
 const previewWf = fs.readFileSync(workflowPreview, "utf8");
 must(previewWf.includes("wrangler deploy --env preview296"), "preview workflow uses --env preview296");
 must(previewWf.includes("verthill-chat-preview-296"), "preview workflow targets isolated name");
+must(previewWf.includes("verthill-chat-media-preview-296"), "preview workflow names isolated R2");
 must(!/wrangler deploy\s*$/m.test(previewWf.replace(/wrangler deploy --env preview296/g, "")), "preview workflow never bare deploy");
+must(!previewWf.includes("https://neon.new"), "preview workflow must not create Neon");
+must(!previewWf.includes("npx prisma migrate"), "preview workflow must not migrate");
+must(!previewWf.includes("seed-isolated-db.ts"), "preview workflow must not re-seed");
+must(!/secret put CHAT_PUSH_DISPATCH_URL/.test(previewWf), "preview workflow never sets CHAT_PUSH_DISPATCH_URL");
+must(!previewWf.includes("wrangler deploy --env production"), "preview workflow never uses production env");
 
 console.log("preview296 wrangler isolation assert ok");
