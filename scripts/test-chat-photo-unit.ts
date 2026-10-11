@@ -122,8 +122,11 @@ import {
   parseNativeChatPhotoPreview,
   partitionNativeChooserFiles,
   partitionNativeHqFiles,
+  describeNativeChooserDebug,
+  nativeChooserSafeName,
   shouldAcceptNativePreview,
   shouldQueueNativeChatSend,
+  shouldShowNativeChooserDebug,
 } from "../src/lib/chatPhotoNativePreview";
 import {
   appendComposerPhotos,
@@ -957,6 +960,16 @@ section("instant preview + parallel upload");
   const chooserSplit = partitionNativeChooserFiles([previewChooser, jpegLeftover]);
   assert(chooserSplit.previews[0]?.previewId === "nvp-3-abc123def456", "chooser -preview.jpg is preview-only");
   assert(chooserSplit.leftovers[0] === jpegLeftover, "mixed JPEG stays out of preview-only files");
+  assert(nativeChooserSafeName("nvp-3-abc123def456-preview.jpg") === "nvp-3-abc123def456-preview.jpg", "debug keeps native preview filename");
+  assert(nativeChooserSafeName("/storage/emulated/0/DCIM/IMG_0001.HEIC") === ".heic", "debug name is extension only");
+  assert(nativeChooserSafeName("content://media/external/images/media/9") === "none", "debug name never prints a content URI");
+  assert(shouldShowNativeChooserDebug("www.verthill.kr") === false, "production host hides chooser debug");
+  assert(shouldShowNativeChooserDebug("caddy-system-gt8t-git-cursor-android-he-702a50-jh9716s-projects.vercel.app") === true, "preview host can show chooser debug");
+  const chooserDebug = describeNativeChooserDebug([previewChooser, jpegLeftover]);
+  assert(chooserDebug.includes("chooser nvp-3-abc123def456-preview.jpg · mime=image/jpeg · preview=yes"), "debug marks -preview.jpg as preview");
+  assert(chooserDebug.includes("chooser .jpg · mime=image/jpeg · preview=no"), "debug marks leftover JPEG as not preview");
+  assert(chooserDebug.includes("partition preview=1 leftover=1"), "debug reports partition counts");
+  assert(!chooserDebug.includes("content://"), "chooser debug never prints a URI");
   const fromChooser = appendNativePreviewChooserFile([], previewChooser, "nvp-3-abc123def456");
   assert(fromChooser.accepted?.nativePreview === true, "chooser thumbnail is visually ready / not uploadable");
   assert(fromChooser.accepted?.blob.size === 0, "chooser thumbnail blob is never the upload source");

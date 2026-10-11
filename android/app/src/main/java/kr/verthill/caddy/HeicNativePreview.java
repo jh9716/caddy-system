@@ -7,6 +7,7 @@ import android.os.Build;
 import android.os.SystemClock;
 import android.util.Base64;
 import android.util.Size;
+import java.util.Locale;
 import java.util.UUID;
 
 /**
@@ -44,18 +45,126 @@ final class HeicNativePreview {
         }
     }
 
+    /**
+     * Why tryPreview returned a JPEG or null. Never stores URI/path/bytes.
+     */
+    static final class PreviewAttempt {
+        static final String SUCCESS = "success";
+        static final String NOT_HEIC = "not_heic";
+        static final String SDK_LT_29 = "sdk_lt_29";
+        static final String LOAD_THUMBNAIL_NULL = "loadThumbnail_null";
+        static final String LOAD_THUMBNAIL_EXCEPTION_PREFIX = "loadThumbnail_exception:";
+        static final String JPEG_COMPRESS_FAIL = "jpeg_compress_fail";
+        static final String JPEG_EMPTY = "jpeg_empty";
+
+        final Preview preview;
+        final String reason;
+        final String mime;
+        final String nameExt;
+        final boolean heicLike;
+        final int sdk;
+
+        PreviewAttempt(
+            Preview preview,
+            String reason,
+            String mime,
+            String nameExt,
+            boolean heicLike,
+            int sdk
+        ) {
+            this.preview = preview;
+            this.reason = reason;
+            this.mime = mime;
+            this.nameExt = nameExt;
+            this.heicLike = heicLike;
+            this.sdk = sdk;
+        }
+
+        boolean ok() {
+            return preview != null && SUCCESS.equals(reason);
+        }
+
+        String failToast() {
+            return (
+                "nativePreview FAIL · " +
+                reason +
+                " · mime=" +
+                mime +
+                " · name=" +
+                nameExt
+            );
+        }
+    }
+
     static String newPreviewId(int sessionId) {
         return "nvp-" + sessionId + "-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
     }
 
+    /** Extension only (`.heic`). Never a path, URI, or full display name. */
+    static String extensionOf(String displayName) {
+        if (displayName == null || displayName.isEmpty()) return "none";
+        String base = displayName;
+        int slash = Math.max(base.lastIndexOf('/'), base.lastIndexOf('\\'));
+        if (slash >= 0 && slash + 1 < base.length()) {
+            base = base.substring(slash + 1);
+        } else if (slash >= 0) {
+            return "none";
+        }
+        int dot = base.lastIndexOf('.');
+        if (dot < 0 || dot >= base.length() - 1) return "none";
+        String ext = base.substring(dot).toLowerCase(Locale.US);
+        if (ext.length() > 8) return "none";
+        for (int i = 1; i < ext.length(); i++) {
+            char c = ext.charAt(i);
+            if ((c < 'a' || c > 'z') && (c < '0' || c > '9')) return "none";
+        }
+        return ext;
+    }
+
+    static String safeMimeLabel(String mime) {
+        if (mime == null || mime.trim().isEmpty()) return "unknown";
+        String trimmed = mime.trim().toLowerCase(Locale.US);
+        if (trimmed.length() > 64) return "unknown";
+        if (
+            trimmed.contains("://") ||
+            trimmed.contains("content:") ||
+            trimmed.contains("file:") ||
+            trimmed.contains("..")
+        ) {
+            return "unknown";
+        }
+        return trimmed;
+    }
+
+    static String exceptionReason(Exception error) {
+        String simple = error == null ? "Exception" : error.getClass().getSimpleName();
+        if (simple == null || simple.isEmpty()) simple = "Exception";
+        return PreviewAttempt.LOAD_THUMBNAIL_EXCEPTION_PREFIX + simple;
+    }
+
     static Preview tryPreview(Context context, Uri uri, int sessionId) {
-        if (context == null || uri == null) return null;
-        if (Build.VERSION.SDK_INT < 29) return null;
-        if (!HeicNativeJpegConverter.isHeicLike(
-            HeicNativeJpegConverter.mimeOf(context, uri),
-            HeicNativeJpegConverter.displayNameOf(context, uri)
-        )) {
-            return null;
+        return tryPreviewAttempt(context, uri, sessionId).preview;
+    }
+
+    static PreviewAttempt tryPreviewAttempt(Context context, Uri uri, int sessionId) {
+        int sdk = Build.VERSION.SDK_INT;
+        String mime = null;
+        String displayName = null;
+        if (context != null && uri != null) {
+            mime = HeicNativeJpegConverter.mimeOf(context, uri);
+            displayName = HeicNativeJpegConverter.displayNameOf(context, uri);
+        }
+        String nameExt = extensionOf(displayName);
+        String mimeLabel = safeMimeLabel(mime);
+        boolean heicLike = HeicNativeJpegConverter.isHeicLike(mime, displayName);
+        if (context == null || uri == null) {
+            return new PreviewAttempt(null, PreviewAttempt.NOT_HEIC, mimeLabel, nameExt, false, sdk);
+        }
+        if (sdk < 29) {
+            return new PreviewAttempt(null, PreviewAttempt.SDK_LT_29, mimeLabel, nameExt, heicLike, sdk);
+        }
+        if (!heicLike) {
+            return new PreviewAttempt(null, PreviewAttempt.NOT_HEIC, mimeLabel, nameExt, false, sdk);
         }
         Bitmap bitmap = null;
         long started = SystemClock.elapsedRealtime();
@@ -66,24 +175,54 @@ final class HeicNativePreview {
                 null
             );
             if (bitmap == null || bitmap.getWidth() < 1 || bitmap.getHeight() < 1) {
-                return null;
+                return new PreviewAttempt(
+                    null,
+                    PreviewAttempt.LOAD_THUMBNAIL_NULL,
+                    mimeLabel,
+                    nameExt,
+                    true,
+                    sdk
+                );
             }
             java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
             if (!bitmap.compress(Bitmap.CompressFormat.JPEG, PREVIEW_JPEG_QUALITY, output)) {
-                return null;
+                return new PreviewAttempt(
+                    null,
+                    PreviewAttempt.JPEG_COMPRESS_FAIL,
+                    mimeLabel,
+                    nameExt,
+                    true,
+                    sdk
+                );
             }
             byte[] jpeg = output.toByteArray();
-            if (jpeg.length <= 0) return null;
-            return new Preview(
-                newPreviewId(sessionId),
-                jpeg,
-                bitmap.getWidth(),
-                bitmap.getHeight(),
-                jpeg.length,
-                SystemClock.elapsedRealtime() - started
+            if (jpeg.length <= 0) {
+                return new PreviewAttempt(
+                    null,
+                    PreviewAttempt.JPEG_EMPTY,
+                    mimeLabel,
+                    nameExt,
+                    true,
+                    sdk
+                );
+            }
+            return new PreviewAttempt(
+                new Preview(
+                    newPreviewId(sessionId),
+                    jpeg,
+                    bitmap.getWidth(),
+                    bitmap.getHeight(),
+                    jpeg.length,
+                    SystemClock.elapsedRealtime() - started
+                ),
+                PreviewAttempt.SUCCESS,
+                mimeLabel,
+                nameExt,
+                true,
+                sdk
             );
-        } catch (Exception ignored) {
-            return null;
+        } catch (Exception error) {
+            return new PreviewAttempt(null, exceptionReason(error), mimeLabel, nameExt, true, sdk);
         } finally {
             if (bitmap != null) bitmap.recycle();
         }

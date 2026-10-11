@@ -38,6 +38,7 @@ import {
   applyComposerProgressIfCurrent,
   applyNativeHqFailed,
   applyNativeHqFile,
+  emitNativeChooserDebug,
   fileFromNativeHqDataUrl,
   buildOptimisticOutgoingLine,
   CHAT_PHOTO_ACCEPT,
@@ -313,6 +314,7 @@ export default function ChatClient() {
   const uploadJobsRef = useRef(new Map<string, Promise<ChatPhotoDirectResult>>());
   const [photoDebug, setPhotoDebug] = useState(false);
   const [photoDebugSample, setPhotoDebugSample] = useState<ChatPhotoDebugSample | null>(null);
+  const [nativeChooserDebug, setNativeChooserDebug] = useState("");
   const [lightbox, setLightbox] = useState<{ src: string } | null>(null);
   const [replyTo, setReplyTo] = useState<ChatLineReply | null>(null);
   const [actionLine, setActionLine] = useState<ChatLine | null>(null);
@@ -1484,6 +1486,8 @@ export default function ChatClient() {
   async function addPendingPhotos(files: FileList | File[]) {
     const selectedAt = chatPhotoNow();
     let incoming = Array.from(files);
+    const chooserDebug = emitNativeChooserDebug(incoming);
+    if (chooserDebug) setNativeChooserDebug(chooserDebug);
     if (readCapacitorNativePlatform()) {
       incoming = incoming.filter(
         (file) =>
@@ -2566,6 +2570,11 @@ export default function ChatClient() {
             </button>
             </div>
           </form>
+          {nativeChooserDebug ? (
+            <aside className="vh-chat-photo-debug" aria-label="Native chooser debug">
+              <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{nativeChooserDebug}</pre>
+            </aside>
+          ) : null}
           {photoDebug && photoDebugSample ? (
             <aside className="vh-chat-photo-debug" aria-label="Chat photo debug">
               {(

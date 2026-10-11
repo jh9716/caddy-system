@@ -49,11 +49,18 @@ public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
         ValueCallback<Uri[]> filePathCallback,
         FileChooserParams fileChooserParams
     ) {
-        if (
-            fileChooserParams == null ||
-            fileChooserParams.isCaptureEnabled() ||
-            !HeicNativeJpegConverter.isImageOnlyAccept(fileChooserParams.getAcceptTypes())
-        ) {
+        if (fileChooserParams == null) {
+            return super.onShowFileChooser(webView, filePathCallback, fileChooserParams);
+        }
+        if (fileChooserParams.isCaptureEnabled()) {
+            showDebugToasts(bridge.getActivity(), singleDebugToast("nativeChooser SKIP · capture"));
+            return super.onShowFileChooser(webView, filePathCallback, fileChooserParams);
+        }
+        if (!HeicNativeJpegConverter.isImageOnlyAccept(fileChooserParams.getAcceptTypes())) {
+            showDebugToasts(
+                bridge.getActivity(),
+                singleDebugToast("nativeChooser SKIP · not_image_only")
+            );
             return super.onShowFileChooser(webView, filePathCallback, fileChooserParams);
         }
 
@@ -102,8 +109,11 @@ public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
             int lastH = 0;
 
             long callbackStarted = SystemClock.elapsedRealtime();
+            List<String> failToasts = new ArrayList<>();
             for (int i = 0; i < picked.length; i++) {
-                HeicNativePreview.Preview preview = HeicNativePreview.tryPreview(context, picked[i], sessionId);
+                HeicNativePreview.PreviewAttempt attempt =
+                    HeicNativePreview.tryPreviewAttempt(context, picked[i], sessionId);
+                HeicNativePreview.Preview preview = attempt.preview;
                 if (preview != null) {
                     previewIds[i] = preview.previewId;
                     Uri written = HeicNativeJpegConverter.writeJpegBytes(
@@ -116,10 +126,11 @@ public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
                     lastH = preview.height;
                 } else {
                     resolved[i] = picked[i];
+                    failToasts.add(attempt.failToast());
                 }
             }
             long callbackWall = SystemClock.elapsedRealtime() - callbackStarted;
-            deliver(activity, callback, resolved, null);
+            deliver(activity, callback, resolved, failToasts.isEmpty() ? null : failToasts);
 
             long hqStarted = SystemClock.elapsedRealtime();
             for (int i = 0; i < picked.length; i++) {
@@ -202,6 +213,12 @@ public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
             callback.onReceiveValue(uris);
             showDebugToasts(activity, debugToasts);
         });
+    }
+
+    private static List<String> singleDebugToast(String message) {
+        List<String> debugToasts = new ArrayList<>();
+        debugToasts.add(message);
+        return debugToasts;
     }
 
     private static void showDebugToasts(Activity activity, List<String> debugToasts) {

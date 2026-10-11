@@ -535,7 +535,7 @@ assert(
   "loadThumbnail is preview-only and never the upload JPEG"
 );
 assert(
-  chromeClient.includes("HeicNativePreview.tryPreview") &&
+  chromeClient.includes("HeicNativePreview.tryPreviewAttempt") &&
     chromeClient.includes("writeJpegBytes") &&
     chromeClient.includes("preview.previewFileName()") &&
     chromeClient.indexOf("deliver(") < chromeClient.indexOf("resolveForWebView") &&
@@ -617,6 +617,9 @@ assert(
     chromeClient.includes("Toast.makeText") &&
     chromeClient.includes("\"callback \"") &&
     chromeClient.includes("\"ms · HQ \"") &&
+    chromeClient.includes("attempt.failToast()") &&
+    chromeClient.includes("nativeChooser SKIP · capture") &&
+    chromeClient.includes("nativeChooser SKIP · not_image_only") &&
     heicConverter.includes("HEIC bitmap") &&
     heicConverter.includes("HEIC decoder-sampled") &&
     heicConverter.includes("HEIC native FAIL → web") &&
@@ -627,6 +630,31 @@ assert(
     heicConverter.includes("jpegMs") &&
     heicConverter.includes("totalNativeMs"),
   "debug APK toasts preview + HQ timings without URIs"
+);
+assert(
+  heicPreview.includes("tryPreviewAttempt") &&
+    heicPreview.includes("NOT_HEIC = \"not_heic\"") &&
+    heicPreview.includes("SDK_LT_29 = \"sdk_lt_29\"") &&
+    heicPreview.includes("LOAD_THUMBNAIL_NULL = \"loadThumbnail_null\"") &&
+    heicPreview.includes("LOAD_THUMBNAIL_EXCEPTION_PREFIX = \"loadThumbnail_exception:\"") &&
+    heicPreview.includes("JPEG_COMPRESS_FAIL = \"jpeg_compress_fail\"") &&
+    heicPreview.includes("JPEG_EMPTY = \"jpeg_empty\"") &&
+    heicPreview.includes("SUCCESS = \"success\"") &&
+    heicPreview.includes("nativePreview FAIL · ") &&
+    heicPreview.includes("getSimpleName()") &&
+    heicPreview.includes("extensionOf") &&
+    !heicPreview.includes("getMessage()") &&
+    !heicPreview.includes("uri.toString()") &&
+    !heicPreview.includes("getLastPathSegment()"),
+  "tryPreview failures emit reason codes without URI/path/exception text"
+);
+assert(
+  heicPreview.includes("Build.VERSION.SDK_INT") &&
+    heicPreview.includes("safeMimeLabel") &&
+    heicPreview.includes("heicLike") &&
+    chromeClient.includes("failToasts.add(attempt.failToast())") &&
+    chromeClient.includes("resolved[i] = picked[i]"),
+  "failed HEIC preview keeps current URI fallback and still shows a debug toast"
 );
 assert(
   !heicConverter.includes("uri.toString()") &&
@@ -679,7 +707,9 @@ assert(
     chatClient.includes("준비 중") &&
     read("src/lib/chatPhotoPick.ts").includes("item.nativePreviewId && item.previewUrl") &&
     read("src/lib/chatPhotoPick.ts").includes("item.nativePreview !== true") &&
-    read("src/lib/chatPhotoNativePreview.ts").includes("-preview"),
+    read("src/lib/chatPhotoNativePreview.ts").includes("-preview") &&
+    read("src/lib/chatPhotoNativePreview.ts").includes("describeNativeChooserDebug") &&
+    chatClient.includes("emitNativeChooserDebug"),
   "web composer shows chooser preview JPEG, waits for HQ event, and never uploads the thumbnail"
 );
 assert(

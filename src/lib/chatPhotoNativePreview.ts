@@ -398,3 +398,53 @@ export function partitionNativeChooserFiles(files: File[]): {
   }
   return { previews, leftovers };
 }
+
+export function shouldShowNativeChooserDebug(hostname: string | undefined | null): boolean {
+  const host = String(hostname || "").trim().toLowerCase();
+  if (!host) return false;
+  return host !== "www.verthill.kr" && host !== "verthill.kr";
+}
+
+/** Basename for native preview ids; otherwise extension only. Never a path. */
+export function nativeChooserSafeName(name: string | undefined | null): string {
+  const raw = String(name || "").trim();
+  if (!raw) return "none";
+  const base = raw.split(/[/\\]/).pop() || "";
+  if (NATIVE_PREVIEW_CHOOSER_FILE_RE.test(base) || NATIVE_PREVIEW_FILE_RE.test(base)) {
+    return base;
+  }
+  const extMatch = /\.([a-z0-9]{1,7})$/i.exec(base);
+  return extMatch ? `.${extMatch[1].toLowerCase()}` : "none";
+}
+
+export function describeNativeChooserDebug(files: Iterable<File> | ArrayLike<File>): string {
+  const list = Array.from(files as Iterable<File>);
+  const partitioned = partitionNativeChooserFiles(list);
+  const lines = list.map((file) => {
+    const preview = Boolean(nativePreviewIdFromPreviewFileName(file.name));
+    const mime = file.type && file.type.trim() ? file.type.trim().toLowerCase() : "unknown";
+    return `chooser ${nativeChooserSafeName(file.name)} · mime=${mime} · preview=${preview ? "yes" : "no"}`;
+  });
+  lines.push(
+    `partition preview=${partitioned.previews.length} leftover=${partitioned.leftovers.length}`
+  );
+  return lines.join("\n");
+}
+
+export function emitNativeChooserDebug(
+  files: Iterable<File> | ArrayLike<File>,
+  hostname?: string
+): string | null {
+  const host =
+    hostname != null
+      ? hostname
+      : typeof window !== "undefined"
+        ? window.location.hostname
+        : "";
+  if (!shouldShowNativeChooserDebug(host)) return null;
+  const line = describeNativeChooserDebug(files);
+  if (typeof console !== "undefined" && typeof console.info === "function") {
+    console.info("[native-chooser]", line);
+  }
+  return line;
+}
