@@ -237,7 +237,10 @@ import {
   verifyChatMediaPutGrant,
   verifyChatMediaUploadReceipt,
 } from "../cloudflare/verthill-chat/src/chatMediaGrant";
-import { parseAttachmentUpgraded } from "../cloudflare/verthill-chat/src/protocol";
+import {
+  parseAttachmentUpgraded,
+  planOwnedAttachmentUpgrade,
+} from "../cloudflare/verthill-chat/src/protocol";
 import { chatPhotoSrc } from "../src/lib/chatPhotoConstants";
 import {
   chatPhotoIdentityMatchesReceipt,
@@ -1190,6 +1193,45 @@ section("preview-first real send + HQ upgrade");
   });
   assert(parsedUpgrade?.attachmentId === previewWithClaim.send.result.id, "attachment_upgraded parses");
   assert(parseAttachmentUpgraded({ type: "attachment_upgraded", attachmentId: "nope", size: 1 }) === null, "upgrade event needs attachment id");
+  assert(
+    parseAttachmentUpgraded({
+      type: "attachment_upgraded",
+      attachmentId: previewWithClaim.send.result.id,
+      size: 0,
+    }) === null,
+    "upgrade event rejects invalid size"
+  );
+  const ownerRows = [
+    {
+      seq: 11,
+      senderUserId: 8,
+      attachmentsJson: JSON.stringify([
+        { id: previewWithClaim.send.result.id, mimeType: "image/jpeg", size: 48_000 },
+      ]),
+    },
+  ];
+  const ownerPlan = planOwnedAttachmentUpgrade({
+    senderUserId: 8,
+    attachmentId: previewWithClaim.send.result.id,
+    size: 180_000,
+    rows: ownerRows,
+  });
+  assert(ownerPlan.ok && ownerPlan.broadcast?.size === 180_000, "original sender attachment_upgraded succeeds");
+  assert(ownerPlan.updates[0]?.attachmentsJson.includes("180000"), "owned upgrade rewrites attachments_json size");
+  const spoofPlan = planOwnedAttachmentUpgrade({
+    senderUserId: 40,
+    attachmentId: previewWithClaim.send.result.id,
+    size: 180_000,
+    rows: ownerRows,
+  });
+  assert(!spoofPlan.ok && spoofPlan.updates.length === 0 && !spoofPlan.broadcast, "other room member spoof is ignored");
+  const adminSpoof = planOwnedAttachmentUpgrade({
+    senderUserId: 1,
+    attachmentId: previewWithClaim.send.result.id,
+    size: 180_000,
+    rows: ownerRows,
+  });
+  assert(!adminSpoof.ok && !adminSpoof.broadcast, "admin is not an upgrade exception");
   const client = read("src/app/chat/ChatClient.tsx");
   assert(client.includes("upgradeChatPhotoDirect") && client.includes("emitAttachmentUpgraded"), "client upgrades then broadcasts");
   assert(client.includes("logPreviewFirst(\"ws_send\""), "WS send is logged once");
@@ -1207,7 +1249,12 @@ section("preview-first real send + HQ upgrade");
     "additive upgrade endpoint"
   );
   const worker = read("cloudflare/verthill-chat/src/index.ts");
-  assert(worker.includes("attachment_upgraded") && worker.includes("applyAttachmentUpgrade"), "DO broadcasts HQ swap");
+  assert(
+    worker.includes("planOwnedAttachmentUpgrade") &&
+      worker.includes("sender_user_id") &&
+      worker.includes("attach.claims.userId"),
+    "DO applies HQ swap only for the original sender"
+  );
 }
 
 section("composer preview URL detach + prepare swap");
