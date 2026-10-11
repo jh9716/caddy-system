@@ -1058,7 +1058,7 @@ export function buildXlsxV2WorkbookPreview(
     if (row.employmentRaw) {
       try {
         const parsed = parseImportEmploymentStatus(row.employmentRaw);
-        if (parsed === "RETIRED") {
+        if (parsed === "RETIRED" && empLabel(cur.employmentStatus) !== "RETIRED") {
           errors.push(
             issue(
               "retire_use_retire_sheet",
@@ -1452,7 +1452,7 @@ export function buildXlsxV2WorkbookPreview(
     if (row.employmentRaw) {
       try {
         const parsed = parseImportEmploymentStatus(row.employmentRaw);
-        if (parsed === "RETIRED") {
+        if (parsed === "RETIRED" && empLabel(cur.employmentStatus) !== "RETIRED") {
           errors.push(
             issue(
               "retire_use_retire_sheet",

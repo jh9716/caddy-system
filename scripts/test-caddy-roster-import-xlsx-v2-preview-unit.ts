@@ -120,7 +120,10 @@ assert(noChange.creates.length === 0, "reupload creates 0");
 assert(noChange.updates.length === 0, "reupload updates 0");
 assert(noChange.retires.length === 0, "reupload retires 0");
 assert(noChange.drivingChanges.length === 0, "reupload driving 0");
-assert(noChange.errors.length === 0, "reupload errors 0");
+assert(
+  noChange.errors.length === 0,
+  `reupload errors 0: ${noChange.errors.map((e) => e.code).join(",")}`
+);
 assert(noChange.summary.update === 0, "summary update 0");
 assert(
   assertExistingRowsUnchanged(beforeSnap, fixture),
