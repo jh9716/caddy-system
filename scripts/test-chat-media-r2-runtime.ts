@@ -13,6 +13,7 @@ import {
 import {
   CHAT_MEDIA_GRANT_HEADER,
   CHAT_MEDIA_PUT_OP,
+  CHAT_MEDIA_UPGRADE_OP,
   deriveChatMediaR2Key,
   signChatMediaPutGrant,
   verifyChatMediaUploadReceipt,
@@ -226,6 +227,36 @@ async function main() {
   const conflict = await putViaHandler(bucket, jpegBytes(80 * 1024, 10), { attachmentId: retryId });
   assert(conflict.res?.status === 409, "duplicate different size conflict");
   assert(sameBytes((await bucket.get(retry1.key).then(async (o) => new Uint8Array(await o!.arrayBuffer())))!, retryBytes), "conflict leaves original bytes");
+  const hqBytes = jpegBytes(96 * 1024, 12);
+  const upgradeGrant = await signChatMediaPutGrant(SECRET, {
+    v: 1,
+    op: CHAT_MEDIA_UPGRADE_OP,
+    roomId: ROOM,
+    attachmentId: retryId,
+    senderUserId: 7,
+    mimeType: "image/jpeg",
+    maxBytes: CHAT_PHOTO_MAX_BYTES,
+    exp: Math.floor(Date.now() / 1000) + 300,
+  });
+  const upgrade = await handleChatMediaRequest(
+    new Request("http://chat-media.test/media/upload", {
+      method: "PUT",
+      headers: {
+        "content-type": "image/jpeg",
+        [CHAT_MEDIA_GRANT_HEADER]: upgradeGrant,
+      },
+      body: hqBytes,
+    }),
+    { CHAT_MEDIA: bucket, CHAT_MEDIA_SECRET: SECRET }
+  );
+  assert(upgrade?.status === 200, "upgrade grant overwrites same key");
+  const upgradedObj = await bucket.get(retry1.key);
+  assert(
+    upgradedObj != null && sameBytes(new Uint8Array(await upgradedObj.arrayBuffer()), hqBytes),
+    "HQ overwrite replaces preview bytes"
+  );
+  const stillCreateOnly = await putViaHandler(bucket, jpegBytes(48 * 1024, 13), { attachmentId: retryId });
+  assert(stillCreateOnly.res?.status === 409, "ordinary PUT remains create-only after upgrade");
 
   const expired = await handleChatMediaRequest(
     new Request("http://chat-media.test/media/upload", {

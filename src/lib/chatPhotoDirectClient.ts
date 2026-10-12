@@ -301,3 +301,73 @@ export async function uploadChatPhotoDirect(
   notify({ key: item.key, phase: "done", progress: 100, attachmentId });
   return result;
 }
+
+export type ChatPhotoUpgradeResult = {
+  id: string;
+  mimeType: string;
+  size: number;
+};
+
+export async function upgradeChatPhotoDirect(
+  roomId: string,
+  attachmentId: string,
+  blob: Blob,
+  opts: {
+    fetchFn?: typeof fetch;
+    put?: (
+      uploadUrl: string,
+      blob: Blob,
+      contentType: string,
+      onProgress?: (pct: number) => void,
+      extraHeaders?: { grant?: string }
+    ) => Promise<ChatPhotoPutResult | void>;
+    chatToken?: string | null;
+  } = {}
+): Promise<ChatPhotoUpgradeResult> {
+  const fetchFn = opts.fetchFn || fetch;
+  const put = opts.put || putChatPhotoBytes;
+  const preparedRes = await fetchFn(
+    chatPhotoDebugApiUrl(
+      `/api/chat/rooms/${encodeURIComponent(roomId)}/attachments/${encodeURIComponent(attachmentId)}/upgrade-grant`
+    ),
+    {
+      method: "POST",
+      credentials: "include",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(opts.chatToken ? { chatToken: opts.chatToken } : {}),
+    }
+  );
+  const prepared = await preparedRes.json().catch(() => null);
+  const grantOk = Boolean(preparedRes.ok && prepared?.upload?.uploadUrl);
+  if (!grantOk) {
+    throw new Error(prepared?.message || "고화질 업로드 준비에 실패했습니다.");
+  }
+  const uploadUrl = String(prepared.upload.uploadUrl);
+  const contentType = String(prepared.upload.contentType || "image/jpeg");
+  const uploadGrant =
+    typeof prepared.upload.uploadGrant === "string" ? prepared.upload.uploadGrant : "";
+  const putResult =
+    (await put(uploadUrl, blob, contentType, undefined, uploadGrant ? { grant: uploadGrant } : undefined)) ||
+    {};
+  const upgradedRes = await fetchFn(
+    chatPhotoDebugApiUrl(
+      `/api/chat/rooms/${encodeURIComponent(roomId)}/attachments/${encodeURIComponent(attachmentId)}/upgrade`
+    ),
+    {
+      method: "POST",
+      credentials: "include",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(putResult.receipt ? { receipt: putResult.receipt } : {}),
+    }
+  );
+  const upgraded = await upgradedRes.json().catch(() => null);
+  const finalizeOk = Boolean(upgradedRes.ok && upgraded?.photo?.id);
+  if (!finalizeOk) {
+    throw new Error(upgraded?.message || "고화질 업로드에 실패했습니다.");
+  }
+  return {
+    id: String(upgraded.photo.id),
+    mimeType: String(upgraded.photo.mimeType || "image/jpeg"),
+    size: Number(upgraded.photo.size || blob.size),
+  };
+}

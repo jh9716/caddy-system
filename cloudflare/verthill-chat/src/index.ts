@@ -31,7 +31,9 @@ import {
   mentionsToWire,
   parseDeletionType,
   parseOptionalSeq,
+  parseAttachmentUpgraded,
   parseStoredAttachments,
+  planOwnedAttachmentUpgrade,
   parseStoredMentionAll,
   parseStoredMentions,
   replyTargetFromRow,
@@ -228,7 +230,14 @@ export default {
       return new Response(null, { status: 204, headers: corsHeaders() });
     }
     if (request.method === "GET" && url.pathname === "/health") {
-      return json({ ok: true, service: "verthill-chat" });
+      return json({
+        ok: true,
+        service: "verthill-chat",
+        capabilities: {
+          chat_media_upgrade: true,
+          attachment_upgraded: true,
+        },
+      });
     }
     if (url.pathname === "/ws") {
       const authorized = await authorizeSocket(request, env);
@@ -592,6 +601,19 @@ export class ChatRoom extends DurableObject<Env> {
       this.persistQueue = this.persistQueue
         .then(() => this.deleteMessage(ws, attach, del.seq, del.mode))
         .catch(() => undefined);
+      return;
+    }
+    if (type === "attachment_upgraded") {
+      const upgraded = parseAttachmentUpgraded(parsed);
+      if (!upgraded) {
+        sendJson(ws, {
+          type: "error",
+          code: "invalid_attachment",
+          message: "attachment rejected",
+        });
+        return;
+      }
+      this.applyAttachmentUpgrade(attach.claims.userId, upgraded.attachmentId, upgraded.size, ws);
       return;
     }
     const checked = validateIncomingMessage(parsed);
@@ -999,6 +1021,46 @@ export class ChatRoom extends DurableObject<Env> {
     const claims = attach as ChatTokenClaims;
     if (claims.exp <= now) return this.expire(socket);
     return { claims, roomId: claims.v === 1 ? claims.room : "" };
+  }
+
+  private applyAttachmentUpgrade(
+    senderUserId: number,
+    attachmentId: string,
+    size: number,
+    ws: WebSocket
+  ) {
+    const rows = this.ctx.storage.sql
+      .exec(
+        `SELECT seq, sender_user_id, attachments_json FROM messages WHERE attachments_json LIKE ?`,
+        `%${attachmentId}%`
+      )
+      .toArray() as Array<{ seq: number; sender_user_id: number; attachments_json: string }>;
+    const planned = planOwnedAttachmentUpgrade({
+      senderUserId,
+      attachmentId,
+      size,
+      rows: rows.map((row) => ({
+        seq: Number(row.seq),
+        senderUserId: Number(row.sender_user_id),
+        attachmentsJson: String(row.attachments_json || ""),
+      })),
+    });
+    if (!planned.ok) {
+      sendJson(ws, {
+        type: "error",
+        code: "forbidden",
+        message: "attachment rejected",
+      });
+      return;
+    }
+    for (const update of planned.updates) {
+      this.ctx.storage.sql.exec(
+        `UPDATE messages SET attachments_json = ? WHERE seq = ?`,
+        update.attachmentsJson,
+        update.seq
+      );
+    }
+    if (planned.broadcast) this.broadcastJson(planned.broadcast);
   }
 
   private broadcastVisible(event: ChatMessage) {

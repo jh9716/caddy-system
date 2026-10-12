@@ -53,6 +53,7 @@ import {
 } from "@/lib/chatPhotoR2";
 import {
   CHAT_MEDIA_PUT_OP,
+  CHAT_MEDIA_UPGRADE_OP,
   signChatMediaPutGrant,
   verifyChatMediaUploadReceipt,
   type ChatMediaPutGrant,
@@ -332,6 +333,199 @@ async function issueChatPhotoR2Grant(input: {
     exp: Math.floor(input.expiresAt / 1000),
   };
   return signChatMediaPutGrant(secret, grant);
+}
+
+async function issueChatPhotoR2UpgradeGrant(input: {
+  roomId: string;
+  attachmentId: string;
+  senderUserId: number;
+  expiresAt: number;
+}): Promise<string> {
+  const secret = chatMediaSecret(process.env);
+  if (!secret) {
+    throw new CourseReportPhotoStorageError(
+      "storage_not_configured",
+      "사진 저장소가 설정되지 않았습니다.",
+      503
+    );
+  }
+  const grant: ChatMediaPutGrant = {
+    v: 1,
+    op: CHAT_MEDIA_UPGRADE_OP,
+    roomId: input.roomId,
+    attachmentId: input.attachmentId,
+    senderUserId: input.senderUserId,
+    mimeType: "image/jpeg",
+    maxBytes: CHAT_PHOTO_MAX_BYTES,
+    exp: Math.floor(input.expiresAt / 1000),
+  };
+  return signChatMediaPutGrant(secret, grant);
+}
+
+function assertUpgradeableChatPhoto(
+  row: ChatAttachment | null,
+  input: { roomId: string; attachmentId: string; senderUserId: number }
+): ChatAttachment {
+  if (!row || row.roomId !== input.roomId || row.id !== input.attachmentId) {
+    throw new CourseReportPhotoValidationError("not_found", "사진을 찾을 수 없습니다.", 404);
+  }
+  if (row.senderUserId !== input.senderUserId) {
+    throw new CourseReportPhotoValidationError("forbidden", "사진을 첨부할 수 없습니다.", 403);
+  }
+  if (row.uploadState !== "READY") {
+    throw new CourseReportPhotoValidationError("not_found", "사진을 찾을 수 없습니다.", 404);
+  }
+  if (row.mimeType !== "image/jpeg") {
+    throw new CourseReportPhotoValidationError("unsupported_type", "이 사진은 고화질로 바꿀 수 없습니다.", 400);
+  }
+  return row;
+}
+
+export async function prepareChatPhotoUpgrade(
+  db: PrismaClient,
+  input: { roomId: string; attachmentId: string; senderUserId: number }
+): Promise<ChatPhotoPrepareResult> {
+  const r2 = chatPhotoStorageBackend() === "r2";
+  if (r2) {
+    assertR2WriteConfigured();
+  } else {
+    assertBlobStoreConfigured();
+  }
+  if (!Number.isInteger(input.senderUserId) || input.senderUserId <= 0) {
+    throw new CourseReportPhotoValidationError("forbidden", "사진을 첨부할 수 없습니다.", 403);
+  }
+  let row: ChatAttachment | null;
+  try {
+    row = await db.chatAttachment.findUnique({ where: { id: input.attachmentId } });
+  } catch (e) {
+    if (isChatAttachmentTableMissing(e)) photoTableNotReady();
+    throw e;
+  }
+  const ready = assertUpgradeableChatPhoto(row, input);
+  if (r2) {
+    const expiresAt = Date.now() + CHAT_PHOTO_SIGNED_PUT_TTL_MS;
+    const uploadGrant = await issueChatPhotoR2UpgradeGrant({
+      roomId: input.roomId,
+      attachmentId: ready.id,
+      senderUserId: input.senderUserId,
+      expiresAt,
+    });
+    return {
+      attachmentId: ready.id,
+      uploadUrl: chatMediaUploadUrl(),
+      expiresAt,
+      maxBytes: CHAT_PHOTO_MAX_BYTES,
+      contentType: "image/jpeg",
+      storageBackend: "r2",
+      uploadGrant,
+    };
+  }
+  const signed = await issueChatPhotoSignedPutUrl({
+    storageKey: ready.storageKey,
+    contentType: "image/jpeg",
+  });
+  return {
+    attachmentId: ready.id,
+    uploadUrl: signed.uploadUrl,
+    expiresAt: signed.expiresAt,
+    maxBytes: CHAT_PHOTO_MAX_BYTES,
+    contentType: "image/jpeg",
+    storageBackend: "blob",
+  };
+}
+
+export async function finalizeChatPhotoUpgrade(
+  db: PrismaClient,
+  input: {
+    roomId: string;
+    attachmentId: string;
+    senderUserId: number;
+    uploadReceipt?: string;
+  }
+): Promise<{ id: string; mimeType: string; size: number }> {
+  if (!Number.isInteger(input.senderUserId) || input.senderUserId <= 0) {
+    throw new CourseReportPhotoValidationError("forbidden", "사진을 첨부할 수 없습니다.", 403);
+  }
+  let row: ChatAttachment | null;
+  try {
+    row = await db.chatAttachment.findUnique({ where: { id: input.attachmentId } });
+  } catch (e) {
+    if (isChatAttachmentTableMissing(e)) photoTableNotReady();
+    throw e;
+  }
+  const ready = assertUpgradeableChatPhoto(row, input);
+  const rawReceipt = String(input.uploadReceipt || "").trim();
+  let nextSize = ready.size;
+  if (rawReceipt) {
+    const secret = chatMediaSecret(process.env);
+    if (!secret) {
+      throw new CourseReportPhotoStorageError(
+        "storage_not_configured",
+        "사진 저장소가 설정되지 않았습니다.",
+        503
+      );
+    }
+    const verified = await verifyChatMediaUploadReceipt(secret, rawReceipt);
+    if (!verified.ok) {
+      throw new CourseReportPhotoValidationError(
+        verified.code,
+        "업로드 확인에 실패했습니다.",
+        receiptStatusCode(verified.code)
+      );
+    }
+    const receipt = verified.receipt;
+    if (
+      receipt.roomId !== input.roomId ||
+      receipt.attachmentId !== input.attachmentId ||
+      receipt.senderUserId !== input.senderUserId ||
+      receipt.senderUserId !== ready.senderUserId ||
+      receipt.mimeType !== "image/jpeg"
+    ) {
+      throw new CourseReportPhotoValidationError("invalid_receipt", "업로드 확인에 실패했습니다.", 401);
+    }
+    if (receipt.actualSize <= 0 || receipt.actualSize > CHAT_PHOTO_MAX_BYTES) {
+      throw new CourseReportPhotoValidationError(
+        "file_too_large",
+        "사진은 장당 3MB 이하만 첨부할 수 있습니다."
+      );
+    }
+    nextSize = receipt.actualSize;
+  } else {
+    const inspected = await inspectUploadedChatPhoto(ready);
+    if (inspected.size <= 0 || inspected.prefix.byteLength === 0) {
+      throw new CourseReportPhotoValidationError(
+        "upload_incomplete",
+        "사진 업로드가 완료되지 않았습니다.",
+        409
+      );
+    }
+    if (inspected.size > CHAT_PHOTO_MAX_BYTES) {
+      throw new CourseReportPhotoValidationError(
+        "file_too_large",
+        "사진은 장당 3MB 이하만 첨부할 수 있습니다."
+      );
+    }
+    const mime = assertCourseReportPhotoPrefix({
+      prefix: inspected.prefix,
+      totalSize: inspected.size,
+    });
+    if (mime !== "image/jpeg") {
+      throw new CourseReportPhotoValidationError("unsupported_type", "이 사진은 고화질로 바꿀 수 없습니다.", 400);
+    }
+    nextSize = inspected.size;
+  }
+  if (nextSize !== ready.size) {
+    try {
+      await db.chatAttachment.update({
+        where: { id: ready.id },
+        data: { size: nextSize, mimeType: "image/jpeg" },
+      });
+    } catch (e) {
+      if (isChatAttachmentTableMissing(e)) photoTableNotReady();
+      throw e;
+    }
+  }
+  return { id: ready.id, mimeType: "image/jpeg", size: nextSize };
 }
 
 async function issueChatPhotoSignedPutUrl(input: {

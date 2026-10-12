@@ -37,11 +37,16 @@ export type NativeChatPhotoHqReadyPayload = {
 };
 
 export function isNativePreviewPlaceholder(item: ChatPendingPhoto | undefined | null): boolean {
-  return Boolean(item && item.nativePreview === true && item.status === "preparing");
+  return Boolean(item && item.nativePreview === true && !(item.blob && item.blob.size > 0));
 }
 
 export function shouldQueueNativeChatSend(photos: readonly ChatPendingPhoto[]): boolean {
   return photos.some(isNativePreviewPlaceholder);
+}
+
+export function logPreviewFirst(event: string, extra?: Record<string, unknown>): void {
+  if (typeof console === "undefined" || typeof console.info !== "function") return;
+  console.info("[preview-first]", event, extra || {});
 }
 
 export function parseNativeChatPhotoPreview(
@@ -108,6 +113,198 @@ export function isAbandonedNativeHqFile(
   return Boolean(sessionId && abandonedSessions.has(sessionId));
 }
 
+export type NativePreviewAttachmentMap = Map<string, string>;
+
+export function rememberNativePreviewAttachment(
+  map: NativePreviewAttachmentMap,
+  previewId: string | undefined | null,
+  attachmentId: string | undefined | null
+): boolean {
+  const id = typeof previewId === "string" ? previewId.trim() : "";
+  const att = typeof attachmentId === "string" ? attachmentId.trim() : "";
+  if (!NATIVE_PREVIEW_ID_RE.test(id) || !att) return false;
+  map.set(id, att);
+  return true;
+}
+
+export function lookupNativePreviewAttachment(
+  map: NativePreviewAttachmentMap,
+  previewId: string | undefined | null
+): string | null {
+  const id = typeof previewId === "string" ? previewId.trim() : "";
+  if (!NATIVE_PREVIEW_ID_RE.test(id)) return null;
+  return map.get(id) || null;
+}
+
+export function forgetNativePreviewAttachment(
+  map: NativePreviewAttachmentMap,
+  previewId: string | undefined | null
+): void {
+  const id = typeof previewId === "string" ? previewId.trim() : "";
+  if (id) map.delete(id);
+}
+
+export function forgetNativePreviewAttachmentByAttachmentId(
+  map: NativePreviewAttachmentMap,
+  attachmentId: string | undefined | null
+): void {
+  const att = typeof attachmentId === "string" ? attachmentId.trim() : "";
+  if (!att) return;
+  for (const [previewId, id] of map) {
+    if (id === att) map.delete(previewId);
+  }
+}
+
+export function clearNativePreviewAttachments(map: NativePreviewAttachmentMap): void {
+  map.clear();
+}
+
+export type NativePendingHqMap = Map<string, File>;
+
+export function rememberPendingNativeHq(
+  pending: NativePendingHqMap,
+  previewId: string | undefined | null,
+  file: File | null | undefined
+): boolean {
+  const id = typeof previewId === "string" ? previewId.trim() : "";
+  if (!NATIVE_PREVIEW_ID_RE.test(id) || !file || !(file.size > 0)) return false;
+  pending.set(id, file);
+  return true;
+}
+
+export function takePendingNativeHq(
+  pending: NativePendingHqMap,
+  previewId: string | undefined | null
+): File | null {
+  const id = typeof previewId === "string" ? previewId.trim() : "";
+  if (!NATIVE_PREVIEW_ID_RE.test(id)) return null;
+  const file = pending.get(id);
+  if (!file) return null;
+  pending.delete(id);
+  return file;
+}
+
+export function forgetPendingNativeHq(
+  pending: NativePendingHqMap,
+  previewId: string | undefined | null
+): void {
+  const id = typeof previewId === "string" ? previewId.trim() : "";
+  if (id) pending.delete(id);
+}
+
+export function clearPendingNativeHq(pending: NativePendingHqMap): void {
+  pending.clear();
+}
+
+export function forgetNativePreviewLifecycle(
+  map: NativePreviewAttachmentMap,
+  pending: NativePendingHqMap,
+  previewId: string | undefined | null
+): void {
+  forgetNativePreviewAttachment(map, previewId);
+  forgetPendingNativeHq(pending, previewId);
+}
+
+export function forgetNativePreviewLifecycleByAttachmentId(
+  map: NativePreviewAttachmentMap,
+  pending: NativePendingHqMap,
+  attachmentId: string | undefined | null
+): void {
+  const att = typeof attachmentId === "string" ? attachmentId.trim() : "";
+  if (!att) return;
+  for (const [previewId, id] of [...map]) {
+    if (id === att) {
+      map.delete(previewId);
+      pending.delete(previewId);
+    }
+  }
+}
+
+export function clearNativePreviewLifecycle(
+  map: NativePreviewAttachmentMap,
+  pending: NativePendingHqMap
+): void {
+  clearNativePreviewAttachments(map);
+  clearPendingNativeHq(pending);
+}
+
+export function planHqReadyAction(input: {
+  previewId: string;
+  hqFile: File;
+  map: NativePreviewAttachmentMap;
+  pending: NativePendingHqMap;
+  abandonedIds?: ReadonlySet<string>;
+}): { action: "upgrade" | "wait" | "ignore"; attachmentId: string | null } {
+  const previewId = typeof input.previewId === "string" ? input.previewId.trim() : "";
+  if (!NATIVE_PREVIEW_ID_RE.test(previewId) || !input.hqFile || !(input.hqFile.size > 0)) {
+    return { action: "ignore", attachmentId: null };
+  }
+  if (input.abandonedIds?.has(previewId)) {
+    forgetPendingNativeHq(input.pending, previewId);
+    return { action: "ignore", attachmentId: null };
+  }
+  const attachmentId = lookupNativePreviewAttachment(input.map, previewId);
+  if (attachmentId) {
+    forgetPendingNativeHq(input.pending, previewId);
+    return { action: "upgrade", attachmentId };
+  }
+  rememberPendingNativeHq(input.pending, previewId, input.hqFile);
+  return { action: "wait", attachmentId: null };
+}
+
+export function attachAndDrainPendingHq(input: {
+  previewId: string | undefined | null;
+  attachmentId: string | undefined | null;
+  map: NativePreviewAttachmentMap;
+  pending: NativePendingHqMap;
+  abandonedIds?: ReadonlySet<string>;
+}): { action: "upgrade" | "ready" | "ignore"; attachmentId: string | null; hqFile: File | null } {
+  const previewId = typeof input.previewId === "string" ? input.previewId.trim() : "";
+  const remembered = rememberNativePreviewAttachment(input.map, previewId, input.attachmentId);
+  const attachmentId = remembered ? lookupNativePreviewAttachment(input.map, previewId) : null;
+  if (!remembered || !attachmentId) {
+    return { action: "ignore", attachmentId: null, hqFile: null };
+  }
+  if (input.abandonedIds?.has(previewId)) {
+    forgetNativePreviewLifecycle(input.map, input.pending, previewId);
+    return { action: "ignore", attachmentId: null, hqFile: null };
+  }
+  const hqFile = takePendingNativeHq(input.pending, previewId);
+  if (hqFile) {
+    return { action: "upgrade", attachmentId, hqFile };
+  }
+  return { action: "ready", attachmentId, hqFile: null };
+}
+
+export function planNativeHqUpgrade(input: {
+  previewId: string;
+  map: NativePreviewAttachmentMap;
+  abandonedIds?: ReadonlySet<string>;
+}): { action: "upgrade" | "ignore"; attachmentId: string | null } {
+  const previewId = typeof input.previewId === "string" ? input.previewId.trim() : "";
+  if (!NATIVE_PREVIEW_ID_RE.test(previewId)) {
+    return { action: "ignore", attachmentId: null };
+  }
+  if (input.abandonedIds?.has(previewId)) {
+    return { action: "ignore", attachmentId: null };
+  }
+  const attachmentId = lookupNativePreviewAttachment(input.map, previewId);
+  if (!attachmentId) return { action: "ignore", attachmentId: null };
+  return { action: "upgrade", attachmentId };
+}
+
+/** After server echo strips localPhotos, only the previewId map can start HQ. */
+export function resolveHqUpgradeAfterServerEcho(input: {
+  previewId: string;
+  map: NativePreviewAttachmentMap;
+  abandonedIds?: ReadonlySet<string>;
+  localPhotos?: Array<{ nativePreviewId?: string }> | null;
+}): { attachmentId: string | null } {
+  void input.localPhotos;
+  const planned = planNativeHqUpgrade(input);
+  return { attachmentId: planned.attachmentId };
+}
+
 export function shouldAcceptNativePreview(
   payload: NativeChatPhotoPreviewPayload,
   abandonedIds: ReadonlySet<string>,
@@ -172,34 +369,37 @@ export function createNativePreviewFromChooserFile(
   file: File,
   previewId: string
 ): ChatPendingPhoto {
+  const hasBytes = file.size > 0;
   return {
     key: nextChatPhotoComposerKey(previewId),
-    blob: new Blob(),
+    blob: hasBytes ? file : new Blob(),
     previewUrl: createChatPhotoPreviewUrl(file),
     fileId: previewId,
     fingerprint: "",
-    status: "preparing",
+    status: hasBytes ? "ready" : "preparing",
     nativePreview: true,
     nativePreviewId: previewId,
     nativeSessionId: nativeSessionIdFromPreviewId(previewId) || undefined,
-    metrics: { sourceBytes: file.size },
+    metrics: { sourceBytes: file.size, uploadBytes: hasBytes ? file.size : 0, compressionMs: 0 },
   };
 }
 
 export function createNativePreviewPhoto(
   payload: NativeChatPhotoPreviewPayload
 ): ChatPendingPhoto {
+  const file = fileFromNativeHqDataUrl(payload.dataUrl, `${payload.previewId}-preview`);
+  const hasBytes = Boolean(file && file.size > 0);
   return {
     key: nextChatPhotoComposerKey(payload.previewId),
-    blob: new Blob(),
+    blob: file || new Blob(),
     previewUrl: payload.dataUrl,
     fileId: payload.previewId,
     fingerprint: "",
-    status: "preparing",
+    status: hasBytes ? "ready" : "preparing",
     nativePreview: true,
     nativePreviewId: payload.previewId,
     nativeSessionId: payload.sessionId,
-    metrics: { sourceBytes: payload.bytes || 0 },
+    metrics: { sourceBytes: payload.bytes || file?.size || 0, uploadBytes: file?.size || 0, compressionMs: 0 },
   };
 }
 
@@ -278,9 +478,7 @@ export function applyNativeHqFile(
   file: File
 ): ChatPendingPhoto[] | null {
   const visible = visibleComposerPhotos(current);
-  const index = visible.findIndex(
-    (row) => row.nativePreviewId === previewId && row.status === "preparing"
-  );
+  const index = visible.findIndex((row) => row.nativePreviewId === previewId);
   if (index < 0) return null;
   const previous = visible[index]!;
   const nextPreviewUrl = createChatPhotoPreviewUrl(file);
@@ -342,7 +540,7 @@ export function partitionNativeHqFiles(
   leftovers: File[];
 } {
   const pendingIds = visibleComposerPhotos(current)
-    .filter(isNativePreviewPlaceholder)
+    .filter((row) => row.nativePreviewId && row.nativePreview !== false)
     .map((row) => row.nativePreviewId)
     .filter((id): id is string => Boolean(id));
   const pendingSet = new Set(pendingIds);

@@ -155,6 +155,72 @@ export type DuplicateEvent = {
   clientMessageId: string;
 };
 
+export type AttachmentUpgradedEvent = {
+  type: "attachment_upgraded";
+  attachmentId: string;
+  size: number;
+};
+
+export function parseAttachmentUpgraded(raw: unknown): AttachmentUpgradedEvent | null {
+  if (!raw || typeof raw !== "object") return null;
+  const rec = raw as Record<string, unknown>;
+  if (String(rec.type || "") !== "attachment_upgraded") return null;
+  const attachmentId = String(rec.attachmentId || "").trim();
+  const size = Number(rec.size);
+  if (!CHAT_ATTACHMENT_ID_RE.test(attachmentId)) return null;
+  if (!Number.isInteger(size) || size <= 0 || size > CHAT_PHOTO_MAX_BYTES) return null;
+  return { type: "attachment_upgraded", attachmentId, size };
+}
+
+export type AttachmentUpgradeMessageRow = {
+  seq: number;
+  senderUserId: number;
+  attachmentsJson: string;
+};
+
+export function planOwnedAttachmentUpgrade(input: {
+  senderUserId: number;
+  attachmentId: string;
+  size: number;
+  rows: AttachmentUpgradeMessageRow[];
+}): {
+  ok: boolean;
+  updates: Array<{ seq: number; attachmentsJson: string }>;
+  broadcast: AttachmentUpgradedEvent | null;
+} {
+  if (!Number.isInteger(input.senderUserId) || input.senderUserId <= 0) {
+    return { ok: false, updates: [], broadcast: null };
+  }
+  const parsed = parseAttachmentUpgraded({
+    type: "attachment_upgraded",
+    attachmentId: input.attachmentId,
+    size: input.size,
+  });
+  if (!parsed) return { ok: false, updates: [], broadcast: null };
+
+  let owned = false;
+  const updates: Array<{ seq: number; attachmentsJson: string }> = [];
+  for (const row of input.rows) {
+    const attachments = parseStoredAttachments(row.attachmentsJson);
+    if (!attachments.some((item) => item.id === parsed.attachmentId)) continue;
+    if (row.senderUserId !== input.senderUserId) continue;
+    owned = true;
+    let changed = false;
+    const next = attachments.map((item) => {
+      if (item.id !== parsed.attachmentId || item.size === parsed.size) return item;
+      changed = true;
+      return { ...item, size: parsed.size };
+    });
+    if (changed) updates.push({ seq: row.seq, attachmentsJson: JSON.stringify(next) });
+  }
+  if (!owned) return { ok: false, updates: [], broadcast: null };
+  return {
+    ok: true,
+    updates,
+    broadcast: { type: "attachment_upgraded", attachmentId: parsed.attachmentId, size: parsed.size },
+  };
+}
+
 export type ChatRoomKind = "ALL" | "CUSTOM" | "DM";
 
 export type RoomSummary = {

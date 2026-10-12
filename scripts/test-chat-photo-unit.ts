@@ -31,7 +31,9 @@ import {
   cleanupOrphanChatAttachments,
   consumeChatAttachments,
   finalizeChatPhotoUpload,
+  finalizeChatPhotoUpgrade,
   loadChatPhotoMeta,
+  prepareChatPhotoUpgrade,
   prepareChatPhotoUpload,
   purgeChatAttachments,
   uploadChatPhoto,
@@ -41,7 +43,7 @@ import { POST as POST_PREPARE } from "../src/app/api/chat/rooms/[roomId]/attachm
 import { POST as POST_FINALIZE } from "../src/app/api/chat/rooms/[roomId]/attachments/[attachmentId]/finalize/route";
 import { PUT as PUT_LOCAL } from "../src/app/api/chat/local-blob-put/route";
 import { GET as GET_PHOTO } from "../src/app/api/chat/rooms/[roomId]/attachments/[attachmentId]/route";
-import { uploadChatPhotoDirect } from "../src/lib/chatPhotoDirectClient";
+import { upgradeChatPhotoDirect, uploadChatPhotoDirect } from "../src/lib/chatPhotoDirectClient";
 import {
   parseRequestedChatPhotoMime,
   verifyLocalChatPhotoPutToken,
@@ -101,6 +103,7 @@ import {
 import {
   buildOptimisticOutgoingLine,
   clearedComposerAfterOptimisticSend,
+  applyAttachmentUpgradeToAttachments,
   outgoingChatPhotoSrc,
   revokeChatPhotoPreviewUrls,
   shouldStartOptimisticChatSend,
@@ -127,6 +130,19 @@ import {
   shouldAcceptNativePreview,
   shouldQueueNativeChatSend,
   shouldShowNativeChooserDebug,
+  rememberNativePreviewAttachment,
+  lookupNativePreviewAttachment,
+  forgetNativePreviewAttachment,
+  forgetNativePreviewAttachmentByAttachmentId,
+  clearNativePreviewAttachments,
+  rememberPendingNativeHq,
+  takePendingNativeHq,
+  forgetNativePreviewLifecycle,
+  clearNativePreviewLifecycle,
+  planHqReadyAction,
+  attachAndDrainPendingHq,
+  planNativeHqUpgrade,
+  resolveHqUpgradeAfterServerEcho,
 } from "../src/lib/chatPhotoNativePreview";
 import {
   LIGHTBOX_MAX_SCALE,
@@ -219,6 +235,7 @@ import {
 import {
   CHAT_MEDIA_GRANT_HEADER,
   CHAT_MEDIA_PUT_OP,
+  CHAT_MEDIA_UPGRADE_OP,
   CHAT_MEDIA_UPLOADED_OP,
   buildChatPhotoR2StorageKey,
   canonicalChatMediaPutGrant,
@@ -226,12 +243,29 @@ import {
   chatPhotoStorageBackend,
   deriveChatMediaR2Key,
   inspectChatMediaMagic,
+  isChatMediaUpgradeGrant,
   parseChatMediaObjectRef,
   signChatMediaPutGrant,
   signChatMediaUploadReceipt,
   verifyChatMediaPutGrant,
   verifyChatMediaUploadReceipt,
 } from "../cloudflare/verthill-chat/src/chatMediaGrant";
+import {
+  parseAttachmentUpgraded,
+  planOwnedAttachmentUpgrade,
+} from "../cloudflare/verthill-chat/src/protocol";
+import {
+  PREVIEW296_R2_BUCKET,
+  PREVIEW296_WORKER_NAME,
+  assertIsolatedPreview296DatabaseUrl,
+  assertIsolatedPreview296RuntimeEnv,
+  isForbiddenProductionChatWorkerUrl,
+  isForbiddenProductionDatabaseHost,
+  isForbiddenProductionPushDispatchUrl,
+  isPreview296BrowserHost,
+  isProductionWebHost,
+} from "../src/lib/preview296Isolation";
+import { chatPhotoSrc } from "../src/lib/chatPhotoConstants";
 import {
   chatPhotoIdentityMatchesReceipt,
   chatPhotoIdentityMatchesToken,
@@ -851,18 +885,22 @@ section("instant preview + parallel upload");
     "preview payload rejects original HEIC data URL"
   );
   const placeholder = createNativePreviewPhoto(previewPayload!);
-  assert(isNativePreviewPlaceholder(placeholder), "thumbnail attachment is a preparing placeholder");
-  assert(placeholder.blob.size === 0, "placeholder blob is not an upload source");
+  assert(!isNativePreviewPlaceholder(placeholder), "decoded preview JPEG is not an empty placeholder");
+  assert(placeholder.blob.size > 0, "preview JPEG bytes stay uploadable");
+  assert(placeholder.status === "ready", "preview with bytes is READY before HQ");
   assert(placeholder.previewUrl.startsWith("data:image/jpeg;base64,"), "composer shows JPEG data URL");
   assert(
     !chatPhotoComposerBusy(placeholder),
     "native quick preview + no send -> spinner false"
   );
   assert(
-    readyChatPhotosForUpload([placeholder]).length === 0,
-    "quick 384x512 thumbnail is never uploaded"
+    readyChatPhotosForUpload([placeholder]).length === 1,
+    "quick preview JPEG is uploaded before HQ"
   );
-  assert(shouldQueueNativeChatSend([placeholder]), "send waits while HQ is preparing");
+  assert(!shouldQueueNativeChatSend([placeholder]), "send does not wait for HQ once preview bytes exist");
+  const emptyPreview = { ...placeholder, blob: new Blob(), status: "preparing" as const };
+  assert(isNativePreviewPlaceholder(emptyPreview), "empty preview blob still queues send");
+  assert(shouldQueueNativeChatSend([emptyPreview]), "send waits only while preview bytes are missing");
   assert(
     shouldStartOptimisticChatSend("", [placeholder]),
     "send tap during native preview is allowed so it can queue"
@@ -996,10 +1034,10 @@ section("instant preview + parallel upload");
   );
   assert(!chatPhotoComposerBusy(eventFirst.items[0]!), "event-first preview has no spinner");
   assert(
-    readyChatPhotosForUpload(eventFirst.items).length === 0,
-    "event-first 384x512 preview is never uploaded"
+    readyChatPhotosForUpload(eventFirst.items).length === 1,
+    "event-first preview JPEG is the first real upload"
   );
-  assert(shouldQueueNativeChatSend(eventFirst.items), "HQ-before-ready send stays queued");
+  assert(!shouldQueueNativeChatSend(eventFirst.items), "send tap before HQ uses preview READY");
   const eventThenHq = applyNativeHqFile(eventFirst.items, "nvp-3-abc123def456", hqFile);
   assert(eventThenHq?.[0]?.status === "ready", "HQ ready atomically swaps the event-first item");
   assert(eventThenHq?.[0]?.nativePreview === false, "HQ swap clears preview-only after event-first");
@@ -1028,11 +1066,11 @@ section("instant preview + parallel upload");
     "chooser debug overlay is not shown to users"
   );
   const fromChooser = appendNativePreviewChooserFile([], previewChooser, "nvp-3-abc123def456");
-  assert(fromChooser.accepted?.nativePreview === true, "chooser thumbnail is visually ready / not uploadable");
-  assert(fromChooser.accepted?.blob.size === 0, "chooser thumbnail blob is never the upload source");
+  assert(fromChooser.accepted?.nativePreview === true, "chooser thumbnail stays marked preview until HQ");
+  assert(fromChooser.accepted?.blob.size > 0, "chooser thumbnail bytes stay the first upload source");
   assert(
-    readyChatPhotosForUpload(fromChooser.items).length === 0,
-    "384x512 chooser JPEG is never uploaded"
+    readyChatPhotosForUpload(fromChooser.items).length === 1,
+    "384x512 chooser JPEG is uploaded as the preview attachment"
   );
   const hqEvent = parseNativeChatPhotoHqReady({
     previewId: "nvp-3-abc123def456",
@@ -1131,6 +1169,416 @@ section("chat photo lightbox pinch zoom");
   assert(lightbox.includes("vh-chat-lightbox-close") && lightbox.includes("onClose"), "close button still works");
   assert(!lightbox.includes("react-zoom") && !lightbox.includes("swiper"), "no external zoom library");
   assert(css.includes("touch-action: none") && css.includes(".vh-chat-lightbox-stage"), "css blocks browser zoom");
+}
+
+section("preview-first real send + HQ upgrade");
+{
+  const previewWithClaim = {
+    ...createNativePreviewPhoto({
+      previewId: "nvp-9-previewfirst1",
+      sessionId: "9",
+      dataUrl: `data:image/jpeg;base64,${"A".repeat(64)}`,
+    }),
+    send: {
+      phase: "done" as const,
+      progress: 100,
+      attachmentId: "11111111-1111-4111-8111-111111111111",
+      result: {
+        id: "11111111-1111-4111-8111-111111111111",
+        mimeType: "image/jpeg",
+        size: 48_000,
+        exp: Math.floor(Date.now() / 1000) + 60,
+        claim: "preview-claim",
+      },
+    },
+  };
+  const hqAfterReady = applyNativeHqFile(
+    [previewWithClaim],
+    "nvp-9-previewfirst1",
+    new File([new Uint8Array([0xff, 0xd8, 0xff, 7])], "nvp-9-previewfirst1.jpg", { type: "image/jpeg" })
+  );
+  assert(hqAfterReady?.[0]?.nativePreview === false, "HQ swap works after preview is network READY");
+  assert(hqAfterReady?.[0]?.send?.result?.id === previewWithClaim.send.result.id, "HQ swap keeps the preview attachment id");
+  assert(hqAfterReady?.[0]?.send?.result?.claim === "preview-claim", "actual WS claim stays the preview claim");
+  const upgraded = applyAttachmentUpgradeToAttachments(
+    [{ id: previewWithClaim.send.result.id, mimeType: "image/jpeg", size: 48_000 }],
+    previewWithClaim.send.result.id,
+    180_000
+  );
+  assert(upgraded[0]?.size === 180_000, "live swap updates attachment size");
+  assert(
+    chatPhotoSrc("all", previewWithClaim.send.result.id, 180_000).includes("?s=180000"),
+    "recipient cache-busts GET with HQ size"
+  );
+  const parsedUpgrade = parseAttachmentUpgraded({
+    type: "attachment_upgraded",
+    attachmentId: previewWithClaim.send.result.id,
+    size: 180_000,
+  });
+  assert(parsedUpgrade?.attachmentId === previewWithClaim.send.result.id, "attachment_upgraded parses");
+  assert(parseAttachmentUpgraded({ type: "attachment_upgraded", attachmentId: "nope", size: 1 }) === null, "upgrade event needs attachment id");
+  assert(
+    parseAttachmentUpgraded({
+      type: "attachment_upgraded",
+      attachmentId: previewWithClaim.send.result.id,
+      size: 0,
+    }) === null,
+    "upgrade event rejects invalid size"
+  );
+  const ownerRows = [
+    {
+      seq: 11,
+      senderUserId: 8,
+      attachmentsJson: JSON.stringify([
+        { id: previewWithClaim.send.result.id, mimeType: "image/jpeg", size: 48_000 },
+      ]),
+    },
+  ];
+  const ownerPlan = planOwnedAttachmentUpgrade({
+    senderUserId: 8,
+    attachmentId: previewWithClaim.send.result.id,
+    size: 180_000,
+    rows: ownerRows,
+  });
+  assert(ownerPlan.ok && ownerPlan.broadcast?.size === 180_000, "original sender attachment_upgraded succeeds");
+  assert(ownerPlan.updates[0]?.attachmentsJson.includes("180000"), "owned upgrade rewrites attachments_json size");
+  const spoofPlan = planOwnedAttachmentUpgrade({
+    senderUserId: 40,
+    attachmentId: previewWithClaim.send.result.id,
+    size: 180_000,
+    rows: ownerRows,
+  });
+  assert(!spoofPlan.ok && spoofPlan.updates.length === 0 && !spoofPlan.broadcast, "other room member spoof is ignored");
+  const adminSpoof = planOwnedAttachmentUpgrade({
+    senderUserId: 1,
+    attachmentId: previewWithClaim.send.result.id,
+    size: 180_000,
+    rows: ownerRows,
+  });
+  assert(!adminSpoof.ok && !adminSpoof.broadcast, "admin is not an upgrade exception");
+  const client = read("src/app/chat/ChatClient.tsx");
+  assert(client.includes("upgradeChatPhotoDirect") && client.includes("emitAttachmentUpgraded"), "client upgrades then broadcasts");
+  assert(client.includes("logPreviewFirst(\"ws_send\""), "WS send is logged once");
+  assert(client.includes("startHqUpgrade"), "HQ after send upgrades the same id");
+  assert(client.includes("nativePreviewAttachmentRef"), "previewId->attachmentId map survives server echo");
+  assert(client.includes("pendingNativeHqRef"), "pending HQ File map exists");
+  assert(client.includes("parseNativeChatPhotoHqReady"), "HQ_READY parse stays without TRACE wrapper");
+  assert(client.includes("planHqReadyAction"), "HQ_READY waits or upgrades from the attachment map");
+  assert(
+    !client.includes("observeHqReadyForTrace") &&
+      !client.includes("canShowHqTrace") &&
+      !client.includes("vh-hq-trace") &&
+      !client.includes("HQ TRACE isolated") &&
+      !client.includes("noteHqUpgradeCall") &&
+      !client.includes("onStage"),
+    "HQ TRACE panel and recorder are gone"
+  );
+  assert(!fs.existsSync(path.resolve("src/lib/chatPhotoHqTrace.ts")), "chatPhotoHqTrace.ts removed");
+  assert(!read("src/app/globals.css").includes("vh-hq-trace"), "HQ TRACE CSS removed");
+  assert(
+    client.includes("attachAndDrainPendingHq") && client.includes("rememberAttachmentThenDrainHq"),
+    "finalize stores previewId->attachmentId and drains pending HQ"
+  );
+  const hqReadyFn = client.slice(
+    client.indexOf("const onHqReady"),
+    client.indexOf("window.addEventListener(NATIVE_CHAT_PHOTO_HQ_READY_EVENT")
+  );
+  assert(hqReadyFn.includes("planHqReadyAction"), "onHqReady uses wait-or-upgrade");
+  assert(!hqReadyFn.includes("startComposerPreupload"), "HQ_READY map miss does not restart preview preupload");
+  assert(
+    (client.match(/rememberAttachmentThenDrainHq\(/g) || []).length >= 4,
+    "preview finalize drains pending HQ from progress, preupload, and send"
+  );
+  assert(client.includes("if (inflight) return inflight"), "in-flight HQ upgrade is not duplicated");
+  assert(!client.includes("preview XXms") && !client.includes("Native chooser debug"), "no user-visible preview diagnostic UI");
+  const grant = read("cloudflare/verthill-chat/src/chatMediaGrant.ts");
+  const media = read("cloudflare/verthill-chat/src/chatMedia.ts");
+  const chrome = read("src/lib/chatPhoto.ts");
+  assert(grant.includes("CHAT_MEDIA_UPGRADE_OP") && grant.includes("chat_media_upgrade"), "additive upgrade grant exists");
+  assert(media.includes("isChatMediaUpgradeGrant") && media.includes("CHAT_MEDIA_CREATE_ONLY"), "ordinary PUT stays create-only");
+  assert(media.includes("overwrite ? {} : { onlyIf: CHAT_MEDIA_CREATE_ONLY }"), "only upgrade grant omits create-only");
+  assert(chrome.includes("CHAT_MEDIA_UPGRADE_OP") && chrome.includes("consumedAt"), "upgrade allowed after consume");
+  assert(
+    read("src/app/api/chat/rooms/[roomId]/attachments/[attachmentId]/upgrade/route.ts").includes("finalizeChatPhotoUpgrade"),
+    "additive upgrade endpoint"
+  );
+  const worker = read("cloudflare/verthill-chat/src/index.ts");
+  assert(
+    worker.includes("planOwnedAttachmentUpgrade") &&
+      worker.includes("sender_user_id") &&
+      worker.includes("attach.claims.userId"),
+    "DO applies HQ swap only for the original sender"
+  );
+  assert(
+    worker.includes("chat_media_upgrade: true") && worker.includes("attachment_upgraded: true"),
+    "health advertises upgrade capability"
+  );
+}
+
+section("HQ upgrade after server echo race");
+{
+  const previewId = "nvp-7-echo1hqready";
+  const otherPreviewId = "nvp-7-otherphoto99";
+  const attachmentId = "att_preview_echo_1";
+  const otherAttachmentId = "att_other_photo_2";
+  const map = new Map<string, string>();
+  const upgrades: string[] = [];
+
+  assert(
+    rememberNativePreviewAttachment(map, previewId, attachmentId),
+    "preview finalize stores previewId->attachmentId"
+  );
+  assert(
+    rememberNativePreviewAttachment(map, otherPreviewId, otherAttachmentId),
+    "second photo stores its own attachment id"
+  );
+  assert(lookupNativePreviewAttachment(map, previewId) === attachmentId, "map remembers the finalized id");
+  assert(
+    !rememberNativePreviewAttachment(map, "not-a-preview-id", attachmentId),
+    "non-preview ids never enter the map"
+  );
+
+  const localPhotosBeforeEcho = [
+    {
+      nativePreviewId: previewId,
+      send: { result: { id: attachmentId } },
+    },
+  ];
+  const afterEcho = {
+    status: "sent" as const,
+    attachments: [{ id: attachmentId, mimeType: "image/jpeg", size: 48_000 }],
+    localPhotos: undefined as undefined,
+  };
+  const strippedLocalPhotos =
+    afterEcho.status === "sent" && afterEcho.attachments.length > 0
+      ? undefined
+      : localPhotosBeforeEcho;
+  assert(strippedLocalPhotos === undefined, "server echo removes localPhotos");
+
+  const legacy =
+    strippedLocalPhotos?.find((photo) => photo.nativePreviewId === previewId)?.send?.result?.id || null;
+  assert(legacy === null, "legacy composer/localPhotos lookup misses after echo");
+
+  const hqReady = parseNativeChatPhotoHqReady({
+    previewId,
+    sessionId: "7",
+    dataUrl: "data:image/jpeg;base64,/9j/4AAQ",
+  });
+  assert(hqReady?.previewId === previewId, "HQ_READY arrives after echo");
+  const resolved = resolveHqUpgradeAfterServerEcho({
+    previewId: hqReady!.previewId,
+    map,
+    localPhotos: strippedLocalPhotos,
+  });
+  assert(resolved.attachmentId === attachmentId, "map still upgrades the same attachment id");
+
+  const planned = planNativeHqUpgrade({ previewId: hqReady!.previewId, map });
+  assert(planned.action === "upgrade" && planned.attachmentId === attachmentId, "plan upgrades after echo");
+  if (planned.action === "upgrade" && planned.attachmentId) {
+    if (!upgrades.includes(planned.attachmentId)) upgrades.push(planned.attachmentId);
+  }
+  assert(upgrades.length === 1 && upgrades[0] === attachmentId, "first HQ starts one upgrade");
+
+  const replay = planNativeHqUpgrade({ previewId, map });
+  if (replay.action === "upgrade" && replay.attachmentId) {
+    if (!upgrades.includes(replay.attachmentId)) upgrades.push(replay.attachmentId);
+  }
+  assert(upgrades.length === 1, "duplicate HQ_READY does not start a second upgrade");
+
+  forgetNativePreviewAttachmentByAttachmentId(map, attachmentId);
+  const afterSuccess = planNativeHqUpgrade({ previewId, map });
+  assert(afterSuccess.action === "ignore" && afterSuccess.attachmentId === null, "successful HQ drops the map entry");
+  assert(lookupNativePreviewAttachment(map, otherPreviewId) === otherAttachmentId, "other previewId is untouched");
+
+  const otherPlan = planNativeHqUpgrade({ previewId: otherPreviewId, map });
+  assert(otherPlan.attachmentId === otherAttachmentId, "other previewId still maps to its own attachment");
+  assert(otherPlan.attachmentId !== attachmentId, "previewId match is exact");
+
+  const abandoned = new Set<string>([otherPreviewId]);
+  forgetNativePreviewAttachment(map, otherPreviewId);
+  const abandonedPlan = planNativeHqUpgrade({
+    previewId: otherPreviewId,
+    map,
+    abandonedIds: abandoned,
+  });
+  assert(abandonedPlan.action === "ignore", "removed/abandoned photo does not upgrade");
+
+  const leftover = new Map<string, string>([[previewId, attachmentId]]);
+  clearNativePreviewAttachments(leftover);
+  assert(
+    planNativeHqUpgrade({ previewId, map: leftover }).action === "ignore",
+    "room leave/abandon clears pending HQ map entries"
+  );
+}
+
+section("HQ before attachment race");
+{
+  const previewId = "nvp-1-cce71d6d86bd";
+  const attachmentId = "att_preview_hq_wait_1";
+  const hqFile = new File([new Uint8Array(64)], `${previewId}.jpg`, { type: "image/jpeg" });
+  const replayFile = new File([new Uint8Array(64)], `${previewId}.jpg`, { type: "image/jpeg" });
+
+  function runRace(order: "hq-first" | "map-first") {
+    const map = new Map<string, string>();
+    const pending = new Map<string, File>();
+    const upgrades: Array<{ attachmentId: string; bytes: number }> = [];
+    const started = new Set<string>();
+    const startUpgrade = (id: string, file: File) => {
+      if (started.has(id)) return;
+      started.add(id);
+      upgrades.push({ attachmentId: id, bytes: file.size });
+    };
+    const onHq = (file: File) => {
+      const planned = planHqReadyAction({ previewId, hqFile: file, map, pending });
+      if (planned.action === "upgrade" && planned.attachmentId) {
+        startUpgrade(planned.attachmentId, file);
+      }
+      return planned;
+    };
+    const onFinalize = () => {
+      const drained = attachAndDrainPendingHq({ previewId, attachmentId, map, pending });
+      if (drained.action === "upgrade" && drained.attachmentId && drained.hqFile) {
+        startUpgrade(drained.attachmentId, drained.hqFile);
+      }
+      return drained;
+    };
+    if (order === "hq-first") {
+      const first = onHq(hqFile);
+      assert(first.action === "wait" && first.attachmentId === null, "HQ_READY before map stores pending HQ");
+      assert(pending.get(previewId) === hqFile, "pending HQ map keeps the HQ File");
+      assert(lookupNativePreviewAttachment(map, previewId) === null, "attachment map is still empty");
+      assert(upgrades.length === 0, "upgrade does not start on map miss");
+      const drained = onFinalize();
+      assert(drained.action === "upgrade" && drained.attachmentId === attachmentId, "finalize drains pending HQ");
+      assert(drained.hqFile === hqFile, "drain uses the stashed HQ File");
+      assert(!pending.has(previewId), "pending HQ entry is consumed exactly once");
+    } else {
+      const ready = onFinalize();
+      assert(ready.action === "ready" && ready.attachmentId === attachmentId, "finalize first only stores the map");
+      assert(lookupNativePreviewAttachment(map, previewId) === attachmentId, "attachment map is ready");
+      assert(!pending.has(previewId), "no pending HQ before HQ_READY");
+      const planned = onHq(hqFile);
+      assert(planned.action === "upgrade" && planned.attachmentId === attachmentId, "HQ after map upgrades immediately");
+    }
+    const again = onHq(replayFile);
+    if (again.action === "upgrade" && again.attachmentId) startUpgrade(again.attachmentId, replayFile);
+    const againFinalize = onFinalize();
+    if (againFinalize.action === "upgrade" && againFinalize.attachmentId && againFinalize.hqFile) {
+      startUpgrade(againFinalize.attachmentId, againFinalize.hqFile);
+    }
+    assert(upgrades.length === 1 && upgrades[0]?.attachmentId === attachmentId, "same attachment id upgrades exactly once");
+    assert(upgrades[0]?.bytes === hqFile.size, "upgrade uses the HQ File bytes");
+    return { map, pending, upgrades };
+  }
+
+  runRace("hq-first");
+  runRace("map-first");
+
+  const abandonedMap = new Map<string, string>();
+  const abandonedPending = new Map<string, File>();
+  const abandoned = new Set<string>([previewId]);
+  const waitThenAbandon = planHqReadyAction({
+    previewId,
+    hqFile,
+    map: abandonedMap,
+    pending: abandonedPending,
+  });
+  assert(waitThenAbandon.action === "wait", "HQ before abandon is stored");
+  forgetNativePreviewLifecycle(abandonedMap, abandonedPending, previewId);
+  const afterAbandon = attachAndDrainPendingHq({
+    previewId,
+    attachmentId,
+    map: abandonedMap,
+    pending: abandonedPending,
+    abandonedIds: abandoned,
+  });
+  assert(afterAbandon.action === "ignore" && afterAbandon.hqFile === null, "abandon/remove does not drain pending HQ");
+  const leaveMap = new Map<string, string>([[previewId, attachmentId]]);
+  const leavePending = new Map<string, File>([[previewId, hqFile]]);
+  clearNativePreviewLifecycle(leaveMap, leavePending);
+  const afterLeave = attachAndDrainPendingHq({
+    previewId,
+    attachmentId,
+    map: leaveMap,
+    pending: leavePending,
+    abandonedIds: abandoned,
+  });
+  assert(afterLeave.action === "ignore" && afterLeave.hqFile === null, "room leave clears pending HQ and refuses drain");
+  assert(
+    planHqReadyAction({
+      previewId,
+      hqFile,
+      map: leaveMap,
+      pending: leavePending,
+      abandonedIds: abandoned,
+    }).action === "ignore",
+    "HQ_READY after leave/abandon does not upgrade"
+  );
+  assert(
+    attachAndDrainPendingHq({
+      previewId,
+      attachmentId: "",
+      map: new Map(),
+      pending: new Map([[previewId, hqFile]]),
+    }).action === "ignore",
+    "missing attachmentId never drains pending HQ"
+  );
+  assert(!rememberPendingNativeHq(new Map(), "not-a-preview-id", hqFile), "non-preview ids never enter pending HQ");
+  assert(takePendingNativeHq(new Map([[previewId, hqFile]]), previewId)?.size === hqFile.size, "take removes pending HQ");
+  const taken = new Map<string, File>([[previewId, hqFile]]);
+  takePendingNativeHq(taken, previewId);
+  assert(takePendingNativeHq(taken, previewId) === null, "second take is empty");
+}
+
+section("preview296 isolation guards");
+{
+  assert(PREVIEW296_WORKER_NAME === "verthill-chat-preview-296", "preview worker name");
+  assert(PREVIEW296_R2_BUCKET === "verthill-chat-media-preview-296", "preview R2 name");
+  assert(PREVIEW296_R2_BUCKET !== "verthill-chat-media", "preview R2 is not production");
+  assert(isProductionWebHost("www.verthill.kr"), "production host detected");
+  assert(!isPreview296BrowserHost("www.verthill.kr"), "production host is never isolated");
+  assert(
+    isPreview296BrowserHost("caddy-system-gt8t-git-cursor-chat-photo-2bf5d3-jh9716s-projects.vercel.app"),
+    "gt8t preview host is isolated"
+  );
+  assert(
+    !isPreview296BrowserHost("caddy-system-git-other-branch-jh9716s-projects.vercel.app"),
+    "non-gt8t preview host is not isolated"
+  );
+  assert(
+    isForbiddenProductionDatabaseHost("postgresql://u:p@ep-crimson-cell-a1i1tpce.ap-southeast-1.aws.neon.tech/neondb"),
+    "production neon host blocked"
+  );
+  assert(
+    !isForbiddenProductionDatabaseHost("postgresql://u:p@ep-claimable-example.us-east-2.aws.neon.tech/neondb"),
+    "other neon host is allowed for isolated preview"
+  );
+  assert(
+    isForbiddenProductionChatWorkerUrl("wss://verthill-chat.19970106s.workers.dev"),
+    "production worker url blocked"
+  );
+  try {
+    assertIsolatedPreview296DatabaseUrl(
+      "postgresql://u:p@ep-crimson-cell-a1i1tpce.ap-southeast-1.aws.neon.tech/neondb"
+    );
+    assert(false, "production neon must throw");
+  } catch (error) {
+    assert(error instanceof Error && error.message.includes("production Neon"), "seed/app reject prod neon");
+  }
+  assert(
+    isForbiddenProductionPushDispatchUrl("https://www.verthill.kr/api/chat/push-dispatch"),
+    "production push dispatch blocked"
+  );
+  assert(!isForbiddenProductionPushDispatchUrl(""), "empty push dispatch is allowed");
+  try {
+    assertIsolatedPreview296RuntimeEnv({
+      DATABASE_URL: "postgresql://u:p@ep-claimable-example.us-east-2.aws.neon.tech/neondb",
+      CHAT_WORKER_URL: "https://verthill-chat.19970106s.workers.dev",
+    } as NodeJS.ProcessEnv);
+    assert(false, "production worker runtime env must throw");
+  } catch (error) {
+    assert(error instanceof Error && error.message.includes("production Chat Worker"), "runtime rejects prod worker");
+  }
 }
 
 section("composer preview URL detach + prepare swap");
@@ -2697,6 +3145,14 @@ section("source wiring / no public blob");
   assert(/"r2_buckets"\s*:/.test(wrangler), "wrangler binds production R2");
   assert(wrangler.includes('"binding": "CHAT_MEDIA"'), "R2 binding name is CHAT_MEDIA");
   assert(wrangler.includes('"bucket_name": "verthill-chat-media"'), "R2 bucket is verthill-chat-media");
+  assert(wrangler.includes('"name": "verthill-chat-preview-296"'), "isolated preview worker name");
+  assert(wrangler.includes('"bucket_name": "verthill-chat-media-preview-296"'), "isolated preview R2");
+  const previewWf = read(".github/workflows/cloudflare-worker-preview-296.yml");
+  assert(previewWf.includes("wrangler deploy --env preview296"), "preview workflow uses --env preview296");
+  assert(!previewWf.includes("https://neon.new"), "preview workflow does not create Neon");
+  assert(!previewWf.includes("npx prisma migrate"), "preview workflow does not migrate");
+  assert(!previewWf.includes("secret put CHAT_PUSH_DISPATCH_URL"), "preview workflow does not set production push");
+  assert(read("scripts/preview296/prove-isolation.mjs").includes('apk: ready ? "allowed" : "STOP"'), "isolation proof stops APK when Preview env is missing");
   assert(!/"CHAT_MEDIA_SECRET"\s*:/.test(wrangler), "CHAT_MEDIA_SECRET is not a wrangler config value");
   const hideFn = worker.slice(worker.indexOf("private hideForMe"), worker.indexOf("private deleteMessage"));
   assert(!hideFn.includes("queueAttachmentCleanup"), "hide-for-me does not purge blob");
@@ -2769,6 +3225,16 @@ section("r2 grant / key / magic");
   assert(!bad.ok, "tampered grant rejection");
   const otherSecret = await verifyChatMediaPutGrant("other-secret", token);
   assert(!otherSecret.ok && otherSecret.code === "unauthorized", "wrong secret rejection");
+  const upgradeBody = { ...grantBody, op: CHAT_MEDIA_UPGRADE_OP };
+  const upgradeToken = await signChatMediaPutGrant(secret, upgradeBody);
+  const upgradeOk = await verifyChatMediaPutGrant(secret, upgradeToken);
+  assert(upgradeOk.ok && isChatMediaUpgradeGrant(upgradeOk.grant), "upgrade grant verifies");
+  assert(!isChatMediaUpgradeGrant(ok.ok ? ok.grant : null), "ordinary PUT grant is not an upgrade");
+  const pngUpgrade = await signChatMediaPutGrant(secret, { ...upgradeBody, mimeType: "image/png" }).then(
+    () => "signed",
+    () => "rejected"
+  );
+  assert(pngUpgrade === "rejected", "upgrade grant is jpeg-only");
   const receiptBody = {
     v: 1 as const,
     op: CHAT_MEDIA_UPLOADED_OP,
@@ -3781,6 +4247,68 @@ if (!ALLOW_DB) {
         { params: Promise.resolve({ roomId: "all", attachmentId: prepared.attachmentId }) }
       );
       assert(readyGet.status === 200, "READY GET → success");
+
+      const upgradePrep = await prepareChatPhotoUpload(prisma, {
+        roomId: "all",
+        senderUserId: user.id,
+        contentType: "image/jpeg",
+        size: 16,
+      });
+      await putSigned(upgradePrep.uploadUrl, jpegBytes(16, 21), "image/jpeg");
+      const upgradeReady = await finalizeChatPhotoUpload(prisma, {
+        roomId: "all",
+        attachmentId: upgradePrep.attachmentId,
+        senderUserId: user.id,
+      });
+      const previewGet = await GET_PHOTO(
+        req(`http://localhost/api/chat/rooms/all/attachments/${upgradeReady.id}`, {
+          headers: { cookie },
+        }),
+        { params: Promise.resolve({ roomId: "all", attachmentId: upgradeReady.id }) }
+      );
+      await consumeChatAttachments(prisma, [upgradeReady.id]);
+      const consumedUpgrade = await prisma.chatAttachment.findUnique({ where: { id: upgradeReady.id } });
+      assert(consumedUpgrade?.consumedAt, "preview can be consumed before HQ upgrade");
+      const upgradeGrant = await prepareChatPhotoUpgrade(prisma, {
+        roomId: "all",
+        attachmentId: upgradeReady.id,
+        senderUserId: user.id,
+      });
+      assert(upgradeGrant.attachmentId === upgradeReady.id, "upgrade reuses the same attachment id");
+      const hqBytes = jpegBytes(64, 22);
+      const upgradePut = await putSigned(upgradeGrant.uploadUrl, hqBytes, "image/jpeg");
+      assert(upgradePut.status === 204, "HQ overwrite PUT success");
+      const upgraded = await finalizeChatPhotoUpgrade(prisma, {
+        roomId: "all",
+        attachmentId: upgradeReady.id,
+        senderUserId: user.id,
+      });
+      assert(upgraded.id === upgradeReady.id && upgraded.size === hqBytes.byteLength, "HQ updates DB size");
+      const upgradedRow = await prisma.chatAttachment.findUnique({ where: { id: upgradeReady.id } });
+      assert(
+        upgradedRow?.storageKey === consumedUpgrade?.storageKey && upgradedRow?.mimeType === "image/jpeg",
+        "HQ keeps storageKey and jpeg mime"
+      );
+      const hqGet = await GET_PHOTO(
+        req(`http://localhost/api/chat/rooms/all/attachments/${upgradeReady.id}`, {
+          headers: { cookie },
+        }),
+        { params: Promise.resolve({ roomId: "all", attachmentId: upgradeReady.id }) }
+      );
+      assert(hqGet.status === 200 && hqGet.headers.get("etag") !== previewGet.headers.get("etag"), "reload GET uses HQ ETag");
+      assert((await hqGet.arrayBuffer()).byteLength === hqBytes.byteLength, "history GET returns HQ bytes");
+      await prisma.chatAttachment.delete({ where: { id: upgradeReady.id } });
+      let deletedUpgrade = "";
+      try {
+        await prepareChatPhotoUpgrade(prisma, {
+          roomId: "all",
+          attachmentId: upgradeReady.id,
+          senderUserId: user.id,
+        });
+      } catch (e) {
+        deletedUpgrade = e instanceof CourseReportPhotoValidationError ? e.code : "other";
+      }
+      assert(deletedUpgrade === "not_found", "deleted attachment upgrade denied");
 
       const again = await finalizeChatPhotoUpload(prisma, {
         roomId: "all",

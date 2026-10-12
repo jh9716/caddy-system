@@ -715,14 +715,20 @@ assert(
     chatClient.includes("applyNativeHqFile") &&
     chatClient.includes("shouldQueueNativeChatSend") &&
     chatClient.includes("abandonedNativePreviewIdsRef") &&
+    chatClient.includes("nativePreviewAttachmentRef") &&
+    chatClient.includes("pendingNativeHqRef") &&
+    chatClient.includes("planHqReadyAction") &&
+    !chatClient.includes("observeHqReadyForTrace") &&
+    !chatClient.includes("vh-hq-trace") &&
     chatClient.includes("준비 중") &&
     read("src/lib/chatPhotoPick.ts").includes("item.nativePreviewId && item.previewUrl") &&
-    read("src/lib/chatPhotoPick.ts").includes("item.nativePreview !== true") &&
     read("src/lib/chatPhotoNativePreview.ts").includes("-preview") &&
+    chatClient.includes("upgradeChatPhotoDirect") &&
+    chatClient.includes("attachment_upgraded") &&
     !chatClient.includes("emitNativeChooserDebug") &&
     !chatClient.includes("nativeChooserDebug") &&
     !chatClient.includes("Native chooser debug"),
-  "web composer shows chooser preview JPEG, waits for HQ event, and never uploads the thumbnail"
+  "web composer uploads preview JPEG first, then upgrades the same attachment to HQ"
 );
 assert(
   filePaths.includes('<cache-path name="my_cache_images" path="." />') &&
