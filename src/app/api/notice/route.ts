@@ -11,6 +11,7 @@ import {
   runNoticeCreatePush,
 } from "@/lib/noticeAutoPush";
 import { isNoticePhotoTableMissing } from "@/lib/noticePhoto";
+import { resolveNoticeAuthorForAuth } from "@/lib/noticeAuthor";
 import {
   NoticeValidationError,
   noticeListOrder,
@@ -51,11 +52,13 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   try {
     const parsed = parseNoticeWriteBody(body, "create");
+    const auth = await resolveAuthUser(req);
+    const author = await resolveNoticeAuthorForAuth(prisma, auth);
     const n = await prisma.notice.create({
       data: {
         title: parsed.title ?? "",
         content: parsed.content ?? "",
-        author: parsed.author ?? null,
+        author,
         important: parsed.important ?? false,
         pinned: parsed.pinned ?? false,
         targetType: parsed.targetType ?? "ALL",
@@ -64,7 +67,6 @@ export async function POST(req: NextRequest) {
         publishEndAt: parsed.publishEndAt ?? null,
       },
     });
-    const auth = await resolveAuthUser(req);
     const push = await runNoticeCreatePush({
       db: prisma,
       noticeId: n.id,

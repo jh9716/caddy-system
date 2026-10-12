@@ -42,6 +42,7 @@
     "test:notice-push-channel-unit": "bash scripts/tsx-safe.sh scripts/test-notice-push-channel-unit.ts",
     "test:notice-preview-channel-unit": "bash scripts/tsx-safe.sh scripts/test-notice-preview-channel-unit.ts",
     "test:notice-kst-display-unit": "bash scripts/tsx-safe.sh scripts/test-notice-kst-display-unit.ts",
+    "test:notice-author-unit": "bash scripts/tsx-safe.sh scripts/test-notice-author-unit.ts",
     "test:course-report-push-unit": "bash scripts/tsx-safe.sh scripts/test-course-report-push-unit.ts",
     "test:course-report-unit": "bash scripts/tsx-safe.sh scripts/test-course-report-unit.ts",
     "test:course-report-photo-unit": "bash scripts/tsx-safe.sh scripts/test-course-report-photo-unit.ts",

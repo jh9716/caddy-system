@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { getRequestAuthUser } from "@/lib/getRequestAuthUser";
 import { formatKstDisplay } from "@/lib/kstDate";
+import { formatNoticeAuthorDisplay } from "@/lib/noticeAuthor";
 import { loadNoticeViewer } from "@/lib/noticeAccess";
 import {
   canViewNotice,
@@ -51,6 +52,10 @@ export default async function NoticeDetailPage({
       </div>
       <h1 className="ui-page-title">{notice.title}</h1>
       <dl className="notice-detail-meta-list">
+        <div>
+          <dt>작성자</dt>
+          <dd>{formatNoticeAuthorDisplay(notice.author)}</dd>
+        </div>
         <div>
           <dt>작성일</dt>
           <dd>{formatKstDisplay(notice.createdAt, "ymd-hm")}</dd>

@@ -83,7 +83,6 @@ export async function PATCH(
       targetValue?: string | null;
       publishStartAt?: Date | null;
       publishEndAt?: Date | null;
-      author?: string;
     } = {};
     if (parsed.title !== undefined) data.title = parsed.title;
     if (parsed.content !== undefined) data.content = parsed.content;
@@ -93,7 +92,6 @@ export async function PATCH(
     if (parsed.targetValue !== undefined) data.targetValue = parsed.targetValue;
     if (parsed.publishStartAt !== undefined) data.publishStartAt = parsed.publishStartAt;
     if (parsed.publishEndAt !== undefined) data.publishEndAt = parsed.publishEndAt;
-    if (parsed.author !== undefined) data.author = parsed.author;
     const updated = await prisma.notice.update({
       where: { id },
       data,
