@@ -20,6 +20,7 @@ const BOTTOM = [
 const ADMIN_PREFETCH = [
   "/manage",
   "/manage/caddies",
+  "/manage/marshals",
   "/manage/off-requests",
   "/manage/assignments",
   "/manage/tools",

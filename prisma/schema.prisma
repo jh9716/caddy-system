@@ -122,6 +122,12 @@ model Caddy {
   dailyOpsDuties     DailyOpsDuty[]
   dailyOpsDutyOverrides DailyOpsDutyOverride[]
   dailyOffOverrides  DailyOffOverride[]
+  /// 마샬 명단 1:0..1. Assignment.MARSHAL / DailyOpsDuty 와 분리.
+  marshalProfile     MarshalProfile?
+  marshalJuniors     MarshalProfile[] @relation("MarshalSenior")
+  marshalMonthAssignments MarshalMonthAssignment[]
+  marshalMonthOverrides   MarshalMonthOverride[]
+  marshalMonthUnavails    MarshalMonthUnavail[]
   /// 승인 시 선택된 Caddy로 역참조 (이력). Caddy 물리 삭제 시 selectedCaddyId만 null
   linkRequestSelections CaddyLinkRequest[] @relation("CaddyLinkRequestSelectedCaddy")
   /// 로그인 User와 1:1 (미연결 시 null)
@@ -931,4 +937,131 @@ model DailyOpsSnapshot {
   updatedAt     DateTime @updatedAt
 
   @@index([capturedAt])
+}
+
+/// 마샬 자격 명단. Caddy.team / caddyType 은 여기 복제하지 않는다.
+/// Assignment.MARSHAL(기간 차단) · DailyOpsDuty(당일 슬롯) · MARSHAL_SUPPORT 와 분리.
+/// 월 근무표 SoT가 아니다. hard delete 대신 active=false.
+model MarshalProfile {
+  id            Int      @id @default(autoincrement())
+  caddyId       Int      @unique
+  caddy         Caddy    @relation(fields: [caddyId], references: [id])
+  active        Boolean  @default(true)
+  /// 마샬 시작일 (로컬 자정). Caddy 입사일 아님.
+  startedOn     DateTime
+  /// 후임의 선임 caddyId. 없으면 단독. rank enum 없음(P1 최소화).
+  seniorCaddyId Int?
+  seniorCaddy   Caddy?   @relation("MarshalSenior", fields: [seniorCaddyId], references: [id], onDelete: SetNull)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([active])
+  @@index([seniorCaddyId])
+}
+
+/// 월 마샬 근무표 창. P1는 테이블만. generate/finalize API 없음.
+enum MarshalMonthWindowStatus {
+  DRAFT
+  GENERATED
+  REVIEW
+  FINALIZED
+}
+
+enum MarshalSlotKind {
+  EARLY
+  LATE
+}
+
+enum MarshalUnavailKind {
+  OFF
+  SICK
+  BLOCKED
+  LEAVE
+}
+
+enum MarshalAssignSource {
+  ENGINE
+  MANUAL
+  IMPORTED
+}
+
+enum MarshalOverrideAction {
+  SET
+  CLEAR
+}
+
+model MarshalMonthWindow {
+  id                Int                      @id @default(autoincrement())
+  yearMonth         String                   @unique
+  status            MarshalMonthWindowStatus @default(DRAFT)
+  /// 현재 제품 기본: 조출 2 + 후출 1
+  earlySlotsPerDay  Int                      @default(2)
+  lateSlotsPerDay   Int                      @default(1)
+  statsSnapshot     Json?
+  ruleSnapshot      Json?
+  generatedAt       DateTime?
+  finalizedAt       DateTime?
+  finalizedByUserId Int?
+  engineVersion     Int                      @default(1)
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+  assignments       MarshalMonthAssignment[]
+  overrides         MarshalMonthOverride[]
+  unavails          MarshalMonthUnavail[]
+
+  @@index([status])
+}
+
+model MarshalMonthAssignment {
+  id           Int                 @id @default(autoincrement())
+  windowId     Int
+  window       MarshalMonthWindow  @relation(fields: [windowId], references: [id], onDelete: Restrict)
+  date         DateTime
+  /// 마샬_조출_1 | 마샬_조출_2 | 마샬_후출_1
+  roleKey      String
+  slotKind     MarshalSlotKind
+  caddyId      Int
+  caddy        Caddy               @relation(fields: [caddyId], references: [id])
+  teamSnapshot String
+  source       MarshalAssignSource @default(ENGINE)
+  scoreDebug   Json?
+  createdAt    DateTime            @default(now())
+
+  @@unique([windowId, date, roleKey])
+  @@unique([windowId, date, caddyId])
+  @@index([windowId, caddyId])
+}
+
+model MarshalMonthOverride {
+  id        Int                   @id @default(autoincrement())
+  windowId  Int
+  window    MarshalMonthWindow    @relation(fields: [windowId], references: [id], onDelete: Restrict)
+  date      DateTime
+  roleKey   String
+  action    MarshalOverrideAction
+  caddyId   Int?
+  caddy     Caddy?                @relation(fields: [caddyId], references: [id], onDelete: SetNull)
+  rawName   String?
+  reason    String?
+  createdAt DateTime              @default(now())
+  updatedAt DateTime              @updatedAt
+
+  @@unique([windowId, date, roleKey])
+  @@index([windowId])
+  @@index([caddyId])
+}
+
+model MarshalMonthUnavail {
+  id        Int                @id @default(autoincrement())
+  windowId  Int
+  window    MarshalMonthWindow @relation(fields: [windowId], references: [id], onDelete: Restrict)
+  caddyId   Int
+  caddy     Caddy              @relation(fields: [caddyId], references: [id])
+  date      DateTime
+  kind      MarshalUnavailKind
+  note      String?
+  createdAt DateTime           @default(now())
+
+  @@unique([windowId, caddyId, date])
+  @@index([windowId, date])
 }

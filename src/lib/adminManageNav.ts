@@ -117,6 +117,11 @@ export const ADMIN_MAIN_NAV: readonly AdminNavItem[] = [
     match: (p) => pathStartsWith(p, "/manage/caddies"),
   },
   {
+    href: "/manage/marshals",
+    label: "마샬 관리",
+    match: (p) => pathStartsWith(p, "/manage/marshals"),
+  },
+  {
     href: "/manage/off-requests",
     label: "휴무 신청",
     match: (p) => pathStartsWith(p, "/manage/off-requests"),

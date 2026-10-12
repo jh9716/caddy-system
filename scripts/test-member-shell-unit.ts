@@ -70,6 +70,7 @@ section("admin menus unchanged");
   const adminTools = manageToolItems(true).map((i) => i.href);
   const staffTools = manageToolItems(false).map((i) => i.href);
   assert(admin.includes("/manage/caddies"), "admin keeps 캐디 관리");
+  assert(admin.includes("/manage/marshals"), "admin has 마샬 관리");
   assert(admin.includes("/manage/assignments"), "admin keeps 자동배치");
   assert(admin.includes("/manage/tools"), "admin has 관리도구 hub");
   assert(!admin.includes("/manage/staff-accounts"), "직원 계정 is not on the main nav");
