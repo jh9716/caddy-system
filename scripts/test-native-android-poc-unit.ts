@@ -365,8 +365,8 @@ assert(
   "Kakao Android SDK v2-user is a Gradle dependency"
 );
 assert(
-  appGradle.includes("versionCode 13") && appGradle.includes('versionName "1.0.8"'),
-  "Play candidate versionCode 13 / versionName 1.0.8"
+  appGradle.includes("versionCode 14") && appGradle.includes('versionName "1.0.9"'),
+  "Play candidate versionCode 14 / versionName 1.0.9"
 );
 assert(
   !appGradle.includes("length()") &&
@@ -744,8 +744,8 @@ assert(
     read("src/lib/chatPhotoAdaptive.ts").includes("decodeCourseReportPhotoSource"),
   "JS heic-to fallback remains"
 );
-assert(appGradle.includes("versionCode 13"), "versionCode stays 13");
-assert(appGradle.includes('versionName "1.0.8"'), "versionName stays 1.0.8");
+assert(appGradle.includes("versionCode 14"), "versionCode stays 14");
+assert(appGradle.includes('versionName "1.0.9"'), "versionName stays 1.0.9");
 
 if (failed) {
   console.error(`\nFAILED ${failed} / ${passed + failed}`);
