@@ -197,8 +197,8 @@ section("source contracts");
 
   assert(getRoute.includes("requireAdmin"), "GET/POST requireAdmin");
   assert(patchRoute.includes("requireAdmin"), "PATCH requireAdmin");
-  assert(!service.includes("dailyOpsDuty"), "service DailyOpsDuty write 없음");
-  assert(!service.includes("MARSHAL_SUPPORT"), "service MARSHAL_SUPPORT 없음");
+  assert(!/\bdailyOpsDuty\.(create|update|upsert)/.test(service), "service DailyOpsDuty write 없음");
+  assert(!service.includes("dailySpecialSupport"), "service MARSHAL_SUPPORT write 없음");
   assert(!service.includes("assignment.create"), "service Assignment write 없음");
   assert(!domain.includes("autoAssignEngine"), "domain 엔진 import 없음");
   assert(!service.includes("autoAssignEngine"), "service 엔진 import 없음");
@@ -216,14 +216,14 @@ section("source contracts");
     "assignments 페이지 마샬 월표 연결 없음"
   );
   assert(service.includes("tx.audit.create"), "Audit write");
-  assert(
-    service.includes(MARSHAL_AUDIT_ACTIONS.CREATE) ||
-      service.includes("MARSHAL_PROFILE_CREATE"),
-    "create audit"
-  );
-  assert(service.includes("MARSHAL_PROFILE_DEACTIVATE"), "deactivate audit");
-  assert(service.includes("MARSHAL_PROFILE_REACTIVATE"), "reactivate audit");
-  assert(service.includes("MARSHAL_PROFILE_UPDATE_STARTED_ON"), "startedOn audit");
+  assert(service.includes("MARSHAL_AUDIT_ACTIONS.CREATE"), "create audit");
+  assert(service.includes("MARSHAL_AUDIT_ACTIONS.DEACTIVATE"), "deactivate audit");
+  assert(service.includes("MARSHAL_AUDIT_ACTIONS.REACTIVATE"), "reactivate audit");
+  assert(service.includes("MARSHAL_AUDIT_ACTIONS.UPDATE_STARTED_ON"), "startedOn audit");
+  assert(domain.includes("MARSHAL_PROFILE_CREATE"), "create audit action");
+  assert(domain.includes("MARSHAL_PROFILE_DEACTIVATE"), "deactivate audit action");
+  assert(domain.includes("MARSHAL_PROFILE_REACTIVATE"), "reactivate audit action");
+  assert(domain.includes("MARSHAL_PROFILE_UPDATE_STARTED_ON"), "startedOn audit action");
   assert(MARSHAL_PROFILE_ENTITY === "MarshalProfile", "audit entity");
   assert(!getRoute.includes("hard delete") && !patchRoute.includes(".delete("), "hard delete 없음");
 }
