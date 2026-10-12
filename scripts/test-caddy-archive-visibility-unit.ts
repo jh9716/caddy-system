@@ -254,6 +254,12 @@ assert(
 );
 assert(/requireAdmin/.test(notes) && /denyArchivedCaddyRead/.test(notes), "notes API is auth + archive gated");
 assert(
+  /caddyNoteDeleteWhere/.test(notes) &&
+    /deleteMany/.test(notes) &&
+    !/audit\.delete\(\s*\{\s*where:\s*\{\s*id:\s*noteId/.test(notes),
+  "notes DELETE is scoped to caddy CADDY_NOTE row"
+);
+assert(
   !/prisma\.caddy\.delete(Many)?\s*\(/.test(idRoute) &&
     !/prisma\.caddy\.delete(Many)?\s*\(/.test(listRoute),
   "no hard DELETE"

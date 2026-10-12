@@ -5,6 +5,11 @@ import {
   canReadArchivedCaddies,
   denyArchivedCaddyRead,
 } from '@/lib/caddyArchiveVisibility'
+import {
+  CADDY_NOTE_ACTION,
+  CADDY_NOTE_ENTITY,
+  caddyNoteDeleteWhere,
+} from '@/lib/caddyNoteAudit'
 
 // 메모 저장용 테이블이 없으니, 빠르게 쓰시라고 Audit 테이블을 재활용합니다.
 // action: 'CADDY_NOTE', entity: 'Caddy', entityId: caddyId, payload: { text }
@@ -28,7 +33,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const denied = await denyArchivedNotes(req, caddyId)
   if (denied) return denied
   const logs = await prisma.audit.findMany({
-    where: { entity: 'Caddy', entityId: caddyId, action: 'CADDY_NOTE' },
+    where: { entity: CADDY_NOTE_ENTITY, entityId: caddyId, action: CADDY_NOTE_ACTION },
     orderBy: { id: 'desc' },
     select: { id: true, payload: true, createdAt: true },
   })
@@ -44,7 +49,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const denied = await denyArchivedNotes(req, caddyId)
     if (denied) return denied
     const created = await prisma.audit.create({
-      data: { action: 'CADDY_NOTE', entity: 'Caddy', entityId: caddyId, payload: { text } },
+      data: { action: CADDY_NOTE_ACTION, entity: CADDY_NOTE_ENTITY, entityId: caddyId, payload: { text } },
     })
     return NextResponse.json({ id: created.id })
   } catch (e: any) {
@@ -60,7 +65,12 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
     if (!caddyId || !noteId) return NextResponse.json({ error: '잘못된 요청' }, { status: 400 })
     const denied = await denyArchivedNotes(req, caddyId)
     if (denied) return denied
-    await prisma.audit.delete({ where: { id: noteId } })
+    const deleted = await prisma.audit.deleteMany({
+      where: caddyNoteDeleteWhere(caddyId, noteId),
+    })
+    if (deleted.count === 0) {
+      return NextResponse.json({ error: '잘못된 요청' }, { status: 400 })
+    }
     return NextResponse.json({ ok: true })
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? '삭제 실패' }, { status: 500 })

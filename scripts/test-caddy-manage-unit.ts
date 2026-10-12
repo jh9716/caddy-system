@@ -933,6 +933,16 @@ console.log("== POST schedule/shifts exclude RETIRED only ==");
     "GET /api/shifts does not filter RETIRED (past lookup unchanged)"
   );
   assert(
+    /requireAdmin/.test(shiftsGet) && !/requirePublishedReader/.test(shiftsGet),
+    "GET /api/shifts stays requireAdmin (manage/shifts consumer)"
+  );
+  assert(
+    /\$transaction/.test(shiftsPost) &&
+      /deleteMany/.test(shiftsPost) &&
+      /createMany/.test(shiftsPost),
+    "POST /api/shifts deleteMany+createMany share one transaction"
+  );
+  assert(
     !/prisma\.caddy\.delete(Many)?\s*\(/.test(schedule) &&
       !/prisma\.caddy\.delete(Many)?\s*\(/.test(shifts),
     "schedule/shifts routes have no caddy hard-delete"
