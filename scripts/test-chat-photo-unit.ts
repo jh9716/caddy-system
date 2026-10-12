@@ -135,6 +135,12 @@ import {
   forgetNativePreviewAttachment,
   forgetNativePreviewAttachmentByAttachmentId,
   clearNativePreviewAttachments,
+  rememberPendingNativeHq,
+  takePendingNativeHq,
+  forgetNativePreviewLifecycle,
+  clearNativePreviewLifecycle,
+  planHqReadyAction,
+  attachAndDrainPendingHq,
   planNativeHqUpgrade,
   resolveHqUpgradeAfterServerEcho,
 } from "../src/lib/chatPhotoNativePreview";
@@ -142,7 +148,10 @@ import {
   canShowHqTrace,
   formatHqTraceLine,
   getHqTraceRows,
+  HQ_TRACE_STAGES,
+  noteAttachmentReady,
   noteHqUpgradeCall,
+  notePendingHqDrain,
   observeHqReadyForTrace,
   recordHqTrace,
   resetHqTrace,
@@ -1264,8 +1273,23 @@ section("preview-first real send + HQ upgrade");
   assert(client.includes("logPreviewFirst(\"ws_send\""), "WS send is logged once");
   assert(client.includes("startHqUpgrade"), "HQ after send upgrades the same id");
   assert(client.includes("nativePreviewAttachmentRef"), "previewId->attachmentId map survives server echo");
+  assert(client.includes("pendingNativeHqRef"), "pending HQ File map exists");
   assert(client.includes("observeHqReadyForTrace"), "HQ ready uses the preview attachment map");
-  assert(client.includes("rememberNativePreviewAttachment"), "finalize stores previewId->attachmentId");
+  assert(client.includes("planHqReadyAction"), "HQ_READY waits or upgrades from the attachment map");
+  assert(
+    client.includes("attachAndDrainPendingHq") && client.includes("rememberAttachmentThenDrainHq"),
+    "finalize stores previewId->attachmentId and drains pending HQ"
+  );
+  const hqReadyFn = client.slice(
+    client.indexOf("const onHqReady"),
+    client.indexOf("window.addEventListener(NATIVE_CHAT_PHOTO_HQ_READY_EVENT")
+  );
+  assert(hqReadyFn.includes("planHqReadyAction"), "onHqReady uses wait-or-upgrade");
+  assert(!hqReadyFn.includes("startComposerPreupload"), "HQ_READY map miss does not restart preview preupload");
+  assert(
+    (client.match(/rememberAttachmentThenDrainHq\(/g) || []).length >= 4,
+    "preview finalize drains pending HQ from progress, preupload, and send"
+  );
   assert(client.includes("if (inflight) return inflight"), "in-flight HQ upgrade is not duplicated");
   assert(!client.includes("preview XXms") && !client.includes("Native chooser debug"), "no user-visible preview diagnostic UI");
   const grant = read("cloudflare/verthill-chat/src/chatMediaGrant.ts");
@@ -1388,6 +1412,176 @@ section("HQ upgrade after server echo race");
   );
 }
 
+section("HQ before attachment race");
+{
+  const previewId = "nvp-1-cce71d6d86bd";
+  const attachmentId = "att_preview_hq_wait_1";
+  const hqFile = new File([new Uint8Array(64)], `${previewId}.jpg`, { type: "image/jpeg" });
+  const replayFile = new File([new Uint8Array(64)], `${previewId}.jpg`, { type: "image/jpeg" });
+
+  function runRace(order: "hq-first" | "map-first") {
+    const map = new Map<string, string>();
+    const pending = new Map<string, File>();
+    const upgrades: Array<{ attachmentId: string; bytes: number }> = [];
+    const started = new Set<string>();
+    const startUpgrade = (id: string, file: File) => {
+      if (started.has(id)) return;
+      started.add(id);
+      upgrades.push({ attachmentId: id, bytes: file.size });
+    };
+    const onHq = (file: File) => {
+      const planned = planHqReadyAction({ previewId, hqFile: file, map, pending });
+      if (planned.action === "upgrade" && planned.attachmentId) {
+        startUpgrade(planned.attachmentId, file);
+      }
+      return planned;
+    };
+    const onFinalize = () => {
+      const drained = attachAndDrainPendingHq({ previewId, attachmentId, map, pending });
+      if (drained.action === "upgrade" && drained.attachmentId && drained.hqFile) {
+        startUpgrade(drained.attachmentId, drained.hqFile);
+      }
+      return drained;
+    };
+    if (order === "hq-first") {
+      const first = onHq(hqFile);
+      assert(first.action === "wait" && first.attachmentId === null, "HQ_READY before map stores pending HQ");
+      assert(pending.get(previewId) === hqFile, "pending HQ map keeps the HQ File");
+      assert(lookupNativePreviewAttachment(map, previewId) === null, "attachment map is still empty");
+      assert(upgrades.length === 0, "upgrade does not start on map miss");
+      const drained = onFinalize();
+      assert(drained.action === "upgrade" && drained.attachmentId === attachmentId, "finalize drains pending HQ");
+      assert(drained.hqFile === hqFile, "drain uses the stashed HQ File");
+      assert(!pending.has(previewId), "pending HQ entry is consumed exactly once");
+    } else {
+      const ready = onFinalize();
+      assert(ready.action === "ready" && ready.attachmentId === attachmentId, "finalize first only stores the map");
+      assert(lookupNativePreviewAttachment(map, previewId) === attachmentId, "attachment map is ready");
+      assert(!pending.has(previewId), "no pending HQ before HQ_READY");
+      const planned = onHq(hqFile);
+      assert(planned.action === "upgrade" && planned.attachmentId === attachmentId, "HQ after map upgrades immediately");
+    }
+    const again = onHq(replayFile);
+    if (again.action === "upgrade" && again.attachmentId) startUpgrade(again.attachmentId, replayFile);
+    const againFinalize = onFinalize();
+    if (againFinalize.action === "upgrade" && againFinalize.attachmentId && againFinalize.hqFile) {
+      startUpgrade(againFinalize.attachmentId, againFinalize.hqFile);
+    }
+    assert(upgrades.length === 1 && upgrades[0]?.attachmentId === attachmentId, "same attachment id upgrades exactly once");
+    assert(upgrades[0]?.bytes === hqFile.size, "upgrade uses the HQ File bytes");
+    return { map, pending, upgrades };
+  }
+
+  runRace("hq-first");
+  runRace("map-first");
+
+  const abandonedMap = new Map<string, string>();
+  const abandonedPending = new Map<string, File>();
+  const abandoned = new Set<string>([previewId]);
+  const waitThenAbandon = planHqReadyAction({
+    previewId,
+    hqFile,
+    map: abandonedMap,
+    pending: abandonedPending,
+  });
+  assert(waitThenAbandon.action === "wait", "HQ before abandon is stored");
+  forgetNativePreviewLifecycle(abandonedMap, abandonedPending, previewId);
+  const afterAbandon = attachAndDrainPendingHq({
+    previewId,
+    attachmentId,
+    map: abandonedMap,
+    pending: abandonedPending,
+    abandonedIds: abandoned,
+  });
+  assert(afterAbandon.action === "ignore" && afterAbandon.hqFile === null, "abandon/remove does not drain pending HQ");
+  const leaveMap = new Map<string, string>([[previewId, attachmentId]]);
+  const leavePending = new Map<string, File>([[previewId, hqFile]]);
+  clearNativePreviewLifecycle(leaveMap, leavePending);
+  const afterLeave = attachAndDrainPendingHq({
+    previewId,
+    attachmentId,
+    map: leaveMap,
+    pending: leavePending,
+    abandonedIds: abandoned,
+  });
+  assert(afterLeave.action === "ignore" && afterLeave.hqFile === null, "room leave clears pending HQ and refuses drain");
+  assert(
+    planHqReadyAction({
+      previewId,
+      hqFile,
+      map: leaveMap,
+      pending: leavePending,
+      abandonedIds: abandoned,
+    }).action === "ignore",
+    "HQ_READY after leave/abandon does not upgrade"
+  );
+  assert(
+    attachAndDrainPendingHq({
+      previewId,
+      attachmentId: "",
+      map: new Map(),
+      pending: new Map([[previewId, hqFile]]),
+    }).action === "ignore",
+    "missing attachmentId never drains pending HQ"
+  );
+  assert(!rememberPendingNativeHq(new Map(), "not-a-preview-id", hqFile), "non-preview ids never enter pending HQ");
+  assert(takePendingNativeHq(new Map([[previewId, hqFile]]), previewId)?.size === hqFile.size, "take removes pending HQ");
+  const taken = new Map<string, File>([[previewId, hqFile]]);
+  takePendingNativeHq(taken, previewId);
+  assert(takePendingNativeHq(taken, previewId) === null, "second take is empty");
+}
+
+section("HQ before attachment trace");
+{
+  resetHqTrace();
+  assert(
+    HQ_TRACE_STAGES.includes("hq_wait_attachment") &&
+      HQ_TRACE_STAGES.includes("attachment_ready") &&
+      HQ_TRACE_STAGES.includes("pending_hq_drain") &&
+      HQ_TRACE_STAGES.includes("start_upgrade"),
+    "HQ trace stages include wait/drain/start"
+  );
+  const isolatedHost = "caddy-system-gt8t-oayarczvg-jh9716s-projects.vercel.app";
+  const previewId = "nvp-1-cce71d6d86bd";
+  const attachmentId = "att_preview_hq_wait_1";
+  const emptyMap = new Map<string, string>();
+  const observedMiss = observeHqReadyForTrace({
+    raw: {
+      previewId,
+      sessionId: "1",
+      width: 1200,
+      height: 1600,
+      bytes: 369040,
+      dataUrl: "data:image/jpeg;base64,/9j/4AAQ",
+    },
+    map: emptyMap,
+    host: isolatedHost,
+  });
+  assert(observedMiss.planned?.action === "ignore", "observe still reports map miss as ignore");
+  assert(
+    getHqTraceRows().some((row) => row.stage === "map_lookup" && row.mapHit === false),
+    "map_lookup miss is traced"
+  );
+  assert(
+    getHqTraceRows().some((row) => row.stage === "hq_wait_attachment" && row.previewId === previewId && row.ok === true),
+    "hq_wait_attachment is traced on map miss"
+  );
+  assert(
+    noteAttachmentReady({ previewId, attachmentId }, isolatedHost),
+    "attachment_ready is recorded"
+  );
+  assert(
+    notePendingHqDrain({ previewId, attachmentId }, isolatedHost),
+    "pending_hq_drain is recorded"
+  );
+  assert(noteHqUpgradeCall({ previewId, attachmentId, called: true }, isolatedHost), "start_upgrade after drain");
+  const stages = getHqTraceRows().map((row) => row.stage);
+  assert(stages.includes("hq_wait_attachment"), "wait stage present");
+  assert(stages.includes("attachment_ready"), "attachment_ready present");
+  assert(stages.includes("pending_hq_drain"), "pending_hq_drain present");
+  assert(stages.includes("start_upgrade"), "start_upgrade present");
+}
+
 section("isolated HQ path trace");
 {
   resetHqTrace();
@@ -1505,6 +1699,7 @@ section("isolated HQ path trace");
 
   const client = read("src/app/chat/ChatClient.tsx");
   assert(client.includes("observeHqReadyForTrace") && client.includes("canShowHqTrace"), "ChatClient wires isolated HQ trace");
+  assert(client.includes("noteAttachmentReady") && client.includes("notePendingHqDrain"), "finalize traces attachment_ready and pending_hq_drain");
   assert(client.includes("vh-hq-trace"), "isolated HQ trace panel exists");
   assert(!client.includes("chatToken") || client.includes("onStage"), "upgrade stages are recorded without new secrets");
 }

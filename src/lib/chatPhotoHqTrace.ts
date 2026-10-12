@@ -11,6 +11,9 @@ export const HQ_TRACE_STAGES = [
   "hq_event",
   "hq_parse",
   "map_lookup",
+  "hq_wait_attachment",
+  "attachment_ready",
+  "pending_hq_drain",
   "start_upgrade",
   "upgrade_grant",
   "upgrade_put",
@@ -198,7 +201,61 @@ export function observeHqReadyForTrace(input: {
     },
     input.host
   );
+  if (planned.action !== "upgrade" && !input.abandonedIds?.has(parsed.previewId)) {
+    recordHqTrace(
+      {
+        stage: "hq_wait_attachment",
+        previewId: parsed.previewId,
+        ok: true,
+      },
+      input.host
+    );
+  }
   return { parsed, planned };
+}
+
+export function noteHqWaitAttachment(
+  input: { previewId?: string },
+  host?: string | null
+): boolean {
+  return recordHqTrace(
+    {
+      stage: "hq_wait_attachment",
+      previewId: input.previewId,
+      ok: true,
+    },
+    host
+  );
+}
+
+export function noteAttachmentReady(
+  input: { previewId?: string; attachmentId?: string },
+  host?: string | null
+): boolean {
+  return recordHqTrace(
+    {
+      stage: "attachment_ready",
+      previewId: input.previewId,
+      attachmentId: input.attachmentId,
+      ok: Boolean(input.attachmentId),
+    },
+    host
+  );
+}
+
+export function notePendingHqDrain(
+  input: { previewId?: string; attachmentId?: string },
+  host?: string | null
+): boolean {
+  return recordHqTrace(
+    {
+      stage: "pending_hq_drain",
+      previewId: input.previewId,
+      attachmentId: input.attachmentId,
+      ok: Boolean(input.attachmentId),
+    },
+    host
+  );
 }
 
 export function noteHqUpgradeCall(

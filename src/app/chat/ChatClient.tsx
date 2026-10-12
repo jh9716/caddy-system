@@ -58,7 +58,9 @@ import {
   canShowHqTrace,
   formatHqTraceLine,
   getHqTraceRows,
+  noteAttachmentReady,
   noteHqUpgradeCall,
+  notePendingHqDrain,
   observeHqReadyForTrace,
   recordHqTrace,
   subscribeHqTrace,
@@ -70,16 +72,18 @@ import {
   partitionNativeChooserFiles,
   partitionNativeHqFiles,
   prepareChatPendingPhoto,
-  rememberNativePreviewAttachment,
+  attachAndDrainPendingHq,
+  planHqReadyAction,
   revokeChatPhotoPreviewUrls,
   shouldAcceptNativePreview,
   shouldQueueNativeChatSend,
   shouldStartOptimisticChatSend,
   startChatPhotoPreupload,
   upgradeChatPhotoDirect,
-  clearNativePreviewAttachments,
-  forgetNativePreviewAttachment,
-  forgetNativePreviewAttachmentByAttachmentId,
+  clearNativePreviewLifecycle,
+  forgetNativePreviewLifecycle,
+  forgetNativePreviewLifecycleByAttachmentId,
+  forgetPendingNativeHq,
   usableOptimisticChatPhotos,
   visibleComposerPhotos,
   type ChatPendingPhoto,
@@ -366,6 +370,7 @@ export default function ChatClient() {
   const abandonedNativePreviewIdsRef = useRef(new Set<string>());
   const abandonedNativeSessionsRef = useRef(new Set<string>());
   const nativePreviewAttachmentRef = useRef(new Map<string, string>());
+  const pendingNativeHqRef = useRef(new Map<string, File>());
   const mentionCacheRef = useRef<{ roomId: string; users: MentionCandidate[] } | null>(null);
   const mentionFetchedRef = useRef("");
   const mentionNamesRef = useRef<Map<number, string>>(new Map());
@@ -1392,7 +1397,11 @@ export default function ChatClient() {
   function rememberAbandonedNativePhoto(item: PendingChatPhoto | undefined) {
     if (item?.nativePreviewId) {
       abandonedNativePreviewIdsRef.current.add(item.nativePreviewId);
-      forgetNativePreviewAttachment(nativePreviewAttachmentRef.current, item.nativePreviewId);
+      forgetNativePreviewLifecycle(
+        nativePreviewAttachmentRef.current,
+        pendingNativeHqRef.current,
+        item.nativePreviewId
+      );
     }
   }
 
@@ -1454,11 +1463,13 @@ export default function ChatClient() {
           abandonedNativeSessionsRef.current
         )
       ) {
+        forgetPendingNativeHq(pendingNativeHqRef.current, payload.previewId);
         noteHqUpgradeCall({ previewId: payload.previewId, called: false });
         return;
       }
       const writeGeneration = composerGenRef.current;
       if (payload.error) {
+        forgetPendingNativeHq(pendingNativeHqRef.current, payload.previewId);
         noteHqUpgradeCall({ previewId: payload.previewId, called: false });
         const failed = applyNativeHqFailed(pendingPhotosRef.current, payload.previewId);
         if (!failed) return;
@@ -1473,61 +1484,41 @@ export default function ChatClient() {
         noteHqUpgradeCall({ previewId: payload.previewId, called: false });
         return;
       }
-      const planned = observed.planned || {
-        action: "ignore" as const,
-        attachmentId: null,
-      };
+      const planned = planHqReadyAction({
+        previewId: payload.previewId,
+        hqFile,
+        map: nativePreviewAttachmentRef.current,
+        pending: pendingNativeHqRef.current,
+        abandonedIds: abandonedNativePreviewIdsRef.current,
+      });
       const applied = applyNativeHqFile(pendingPhotosRef.current, payload.previewId, hqFile);
       if (applied && writeGeneration === composerGenRef.current) {
         if (abandonedNativePreviewIdsRef.current.has(payload.previewId)) {
+          forgetPendingNativeHq(pendingNativeHqRef.current, payload.previewId);
           noteHqUpgradeCall({ previewId: payload.previewId, called: false });
           return;
         }
         setPendingPhotoList(applied);
-        const current = applied.find(
-          (item) => item.nativePreviewId === payload.previewId && item.status === "ready"
-        );
-        if (planned.action === "upgrade" && planned.attachmentId) {
-          startHqUpgrade(planned.attachmentId, hqFile, payload.previewId);
-        } else if (current) {
-          noteHqUpgradeCall({ previewId: payload.previewId, called: false });
-          startComposerPreupload(current, writeGeneration);
-        } else {
-          noteHqUpgradeCall({ previewId: payload.previewId, called: false });
-        }
         if (!applied.some(isNativePreviewPlaceholder)) flushQueuedNativeSend();
-        return;
+      } else {
+        const sent = linesRef.current.find((line) =>
+          line.localPhotos?.some((photo) => photo.nativePreviewId === payload.previewId)
+        );
+        if (sent) {
+          const nextPhotos = applyNativeHqFile(sent.localPhotos || [], payload.previewId, hqFile);
+          if (nextPhotos) {
+            patchOutgoingLine(sent.clientMessageId, (cur) => ({ ...cur, localPhotos: nextPhotos }));
+          }
+        }
       }
       if (planned.action === "upgrade" && planned.attachmentId) {
         startHqUpgrade(planned.attachmentId, hqFile, payload.previewId);
         return;
       }
-      const sent = linesRef.current.find((line) =>
-        line.localPhotos?.some((photo) => photo.nativePreviewId === payload.previewId)
-      );
-      if (!sent) {
-        noteHqUpgradeCall({ previewId: payload.previewId, called: false });
+      if (planned.action === "wait") {
         return;
       }
-      const nextPhotos = applyNativeHqFile(sent.localPhotos || [], payload.previewId, hqFile);
-      if (nextPhotos) {
-        patchOutgoingLine(sent.clientMessageId, (cur) => ({ ...cur, localPhotos: nextPhotos }));
-      }
-      const current =
-        (nextPhotos || sent.localPhotos || []).find((photo) => photo.nativePreviewId === payload.previewId);
-      const attachmentId =
-        current?.send?.result?.id ||
-        sent.attachments?.find((att) => att.id && current?.send?.attachmentId === att.id)?.id;
-      if (attachmentId) {
-        rememberNativePreviewAttachment(
-          nativePreviewAttachmentRef.current,
-          payload.previewId,
-          attachmentId
-        );
-        startHqUpgrade(attachmentId, hqFile, payload.previewId);
-      } else {
-        noteHqUpgradeCall({ previewId: payload.previewId, called: false });
-      }
+      noteHqUpgradeCall({ previewId: payload.previewId, called: false });
     };
     window.addEventListener(NATIVE_CHAT_PHOTO_PREVIEW_EVENT, onPreview);
     window.addEventListener(NATIVE_CHAT_PHOTO_HQ_READY_EVENT, onHqReady);
@@ -1547,7 +1538,7 @@ export default function ChatClient() {
     for (const key of keys) prepareJobsRef.current.delete(key);
     abandonChatPhotoPreupload(uploadJobsRef.current, keys);
     revokeChatPhotoPreviewUrls(pendingPhotosRef.current);
-    clearNativePreviewAttachments(nativePreviewAttachmentRef.current);
+    clearNativePreviewLifecycle(nativePreviewAttachmentRef.current, pendingNativeHqRef.current);
     sendQueuedRef.current = false;
     setSendQueued(false);
     setPendingPhotoList([]);
@@ -1579,13 +1570,7 @@ export default function ChatClient() {
         .flatMap((row) => row.localPhotos || [])
         .find((photo) => photo.key === progress.key);
       const nativePreviewId = pending?.nativePreviewId || local?.nativePreviewId;
-      if (nativePreviewId && attachmentId) {
-        rememberNativePreviewAttachment(
-          nativePreviewAttachmentRef.current,
-          nativePreviewId,
-          attachmentId
-        );
-      }
+      rememberAttachmentThenDrainHq(nativePreviewId, attachmentId);
     }
     if (progress.phase === "done" || progress.phase === "error") {
       emitChatPhotoTimingSummary();
@@ -1601,13 +1586,7 @@ export default function ChatClient() {
       onProgress: (progress) => {
         applyPhotoUploadProgress(progress, writeGeneration);
         if (progress.phase === "done") {
-          if (item.nativePreviewId && progress.attachmentId) {
-            rememberNativePreviewAttachment(
-              nativePreviewAttachmentRef.current,
-              item.nativePreviewId,
-              progress.attachmentId
-            );
-          }
+          rememberAttachmentThenDrainHq(item.nativePreviewId, progress.attachmentId);
           logPreviewFirst("preview_upload_finalized", {
             attachmentId: progress.attachmentId,
             key: item.key,
@@ -1625,6 +1604,25 @@ export default function ChatClient() {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     ws.send(JSON.stringify({ type: "attachment_upgraded", attachmentId, size }));
+  }
+
+  function rememberAttachmentThenDrainHq(
+    previewId: string | undefined,
+    attachmentId: string | undefined
+  ) {
+    const drained = attachAndDrainPendingHq({
+      previewId,
+      attachmentId,
+      map: nativePreviewAttachmentRef.current,
+      pending: pendingNativeHqRef.current,
+      abandonedIds: abandonedNativePreviewIdsRef.current,
+    });
+    if (drained.action === "ignore") return;
+    noteAttachmentReady({ previewId, attachmentId: drained.attachmentId || undefined });
+    if (drained.action === "upgrade" && drained.attachmentId && drained.hqFile) {
+      notePendingHqDrain({ previewId, attachmentId: drained.attachmentId });
+      startHqUpgrade(drained.attachmentId, drained.hqFile, previewId);
+    }
   }
 
   function startHqUpgrade(attachmentId: string, blob: Blob, previewId?: string) {
@@ -1654,8 +1652,16 @@ export default function ChatClient() {
           attachmentId: upgraded.id,
           size: upgraded.size,
         });
-        forgetNativePreviewAttachment(nativePreviewAttachmentRef.current, previewId);
-        forgetNativePreviewAttachmentByAttachmentId(nativePreviewAttachmentRef.current, upgraded.id);
+        forgetNativePreviewLifecycle(
+          nativePreviewAttachmentRef.current,
+          pendingNativeHqRef.current,
+          previewId
+        );
+        forgetNativePreviewLifecycleByAttachmentId(
+          nativePreviewAttachmentRef.current,
+          pendingNativeHqRef.current,
+          upgraded.id
+        );
         lastUpgradeRef.current.set(upgraded.id, upgraded.size);
         setLines((prev) => {
           const next = prev.map((line) => {
@@ -1958,11 +1964,7 @@ export default function ChatClient() {
         })),
       }));
       for (let i = 0; i < ready.length; i++) {
-        rememberNativePreviewAttachment(
-          nativePreviewAttachmentRef.current,
-          ready[i]?.nativePreviewId,
-          uploaded[i]?.id
-        );
+        rememberAttachmentThenDrainHq(ready[i]?.nativePreviewId, uploaded[i]?.id);
       }
     }
     const wsStarted = chatPhotoNow();
@@ -2072,7 +2074,11 @@ export default function ChatClient() {
     if (line.seq) return;
     if (line.localPhotos?.length) {
       for (const photo of line.localPhotos) {
-        forgetNativePreviewAttachment(nativePreviewAttachmentRef.current, photo.nativePreviewId);
+        forgetNativePreviewLifecycle(
+          nativePreviewAttachmentRef.current,
+          pendingNativeHqRef.current,
+          photo.nativePreviewId
+        );
       }
       revokeChatPhotoPreviewUrls(line.localPhotos);
     }

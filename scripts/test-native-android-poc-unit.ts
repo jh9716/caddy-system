@@ -716,6 +716,7 @@ assert(
     chatClient.includes("shouldQueueNativeChatSend") &&
     chatClient.includes("abandonedNativePreviewIdsRef") &&
     chatClient.includes("nativePreviewAttachmentRef") &&
+    chatClient.includes("pendingNativeHqRef") &&
     chatClient.includes("observeHqReadyForTrace") &&
     chatClient.includes("canShowHqTrace") &&
     chatClient.includes("준비 중") &&

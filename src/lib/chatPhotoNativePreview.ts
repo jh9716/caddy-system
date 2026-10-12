@@ -159,6 +159,123 @@ export function clearNativePreviewAttachments(map: NativePreviewAttachmentMap): 
   map.clear();
 }
 
+export type NativePendingHqMap = Map<string, File>;
+
+export function rememberPendingNativeHq(
+  pending: NativePendingHqMap,
+  previewId: string | undefined | null,
+  file: File | null | undefined
+): boolean {
+  const id = typeof previewId === "string" ? previewId.trim() : "";
+  if (!NATIVE_PREVIEW_ID_RE.test(id) || !file || !(file.size > 0)) return false;
+  pending.set(id, file);
+  return true;
+}
+
+export function takePendingNativeHq(
+  pending: NativePendingHqMap,
+  previewId: string | undefined | null
+): File | null {
+  const id = typeof previewId === "string" ? previewId.trim() : "";
+  if (!NATIVE_PREVIEW_ID_RE.test(id)) return null;
+  const file = pending.get(id);
+  if (!file) return null;
+  pending.delete(id);
+  return file;
+}
+
+export function forgetPendingNativeHq(
+  pending: NativePendingHqMap,
+  previewId: string | undefined | null
+): void {
+  const id = typeof previewId === "string" ? previewId.trim() : "";
+  if (id) pending.delete(id);
+}
+
+export function clearPendingNativeHq(pending: NativePendingHqMap): void {
+  pending.clear();
+}
+
+export function forgetNativePreviewLifecycle(
+  map: NativePreviewAttachmentMap,
+  pending: NativePendingHqMap,
+  previewId: string | undefined | null
+): void {
+  forgetNativePreviewAttachment(map, previewId);
+  forgetPendingNativeHq(pending, previewId);
+}
+
+export function forgetNativePreviewLifecycleByAttachmentId(
+  map: NativePreviewAttachmentMap,
+  pending: NativePendingHqMap,
+  attachmentId: string | undefined | null
+): void {
+  const att = typeof attachmentId === "string" ? attachmentId.trim() : "";
+  if (!att) return;
+  for (const [previewId, id] of [...map]) {
+    if (id === att) {
+      map.delete(previewId);
+      pending.delete(previewId);
+    }
+  }
+}
+
+export function clearNativePreviewLifecycle(
+  map: NativePreviewAttachmentMap,
+  pending: NativePendingHqMap
+): void {
+  clearNativePreviewAttachments(map);
+  clearPendingNativeHq(pending);
+}
+
+export function planHqReadyAction(input: {
+  previewId: string;
+  hqFile: File;
+  map: NativePreviewAttachmentMap;
+  pending: NativePendingHqMap;
+  abandonedIds?: ReadonlySet<string>;
+}): { action: "upgrade" | "wait" | "ignore"; attachmentId: string | null } {
+  const previewId = typeof input.previewId === "string" ? input.previewId.trim() : "";
+  if (!NATIVE_PREVIEW_ID_RE.test(previewId) || !input.hqFile || !(input.hqFile.size > 0)) {
+    return { action: "ignore", attachmentId: null };
+  }
+  if (input.abandonedIds?.has(previewId)) {
+    forgetPendingNativeHq(input.pending, previewId);
+    return { action: "ignore", attachmentId: null };
+  }
+  const attachmentId = lookupNativePreviewAttachment(input.map, previewId);
+  if (attachmentId) {
+    forgetPendingNativeHq(input.pending, previewId);
+    return { action: "upgrade", attachmentId };
+  }
+  rememberPendingNativeHq(input.pending, previewId, input.hqFile);
+  return { action: "wait", attachmentId: null };
+}
+
+export function attachAndDrainPendingHq(input: {
+  previewId: string | undefined | null;
+  attachmentId: string | undefined | null;
+  map: NativePreviewAttachmentMap;
+  pending: NativePendingHqMap;
+  abandonedIds?: ReadonlySet<string>;
+}): { action: "upgrade" | "ready" | "ignore"; attachmentId: string | null; hqFile: File | null } {
+  const previewId = typeof input.previewId === "string" ? input.previewId.trim() : "";
+  const remembered = rememberNativePreviewAttachment(input.map, previewId, input.attachmentId);
+  const attachmentId = remembered ? lookupNativePreviewAttachment(input.map, previewId) : null;
+  if (!remembered || !attachmentId) {
+    return { action: "ignore", attachmentId: null, hqFile: null };
+  }
+  if (input.abandonedIds?.has(previewId)) {
+    forgetNativePreviewLifecycle(input.map, input.pending, previewId);
+    return { action: "ignore", attachmentId: null, hqFile: null };
+  }
+  const hqFile = takePendingNativeHq(input.pending, previewId);
+  if (hqFile) {
+    return { action: "upgrade", attachmentId, hqFile };
+  }
+  return { action: "ready", attachmentId, hqFile: null };
+}
+
 export function planNativeHqUpgrade(input: {
   previewId: string;
   map: NativePreviewAttachmentMap;
