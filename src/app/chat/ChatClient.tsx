@@ -55,15 +55,20 @@ import {
   isAbandonedNativeHqFile,
   isNativePreviewPlaceholder,
   leftoverComposerPhotosAfterSend,
+  canShowHqTrace,
+  formatHqTraceLine,
+  getHqTraceRows,
+  noteHqUpgradeCall,
+  observeHqReadyForTrace,
+  recordHqTrace,
+  subscribeHqTrace,
   NATIVE_CHAT_PHOTO_HQ_READY_EVENT,
   NATIVE_CHAT_PHOTO_PREVIEW_EVENT,
   needsChatPhotoHeavyPrepare,
   outgoingChatPhotoSrc,
-  parseNativeChatPhotoHqReady,
   parseNativeChatPhotoPreview,
   partitionNativeChooserFiles,
   partitionNativeHqFiles,
-  planNativeHqUpgrade,
   prepareChatPendingPhoto,
   rememberNativePreviewAttachment,
   revokeChatPhotoPreviewUrls,
@@ -327,6 +332,7 @@ export default function ChatClient() {
   const lastUpgradeRef = useRef(new Map<string, number>());
   const [photoDebug, setPhotoDebug] = useState(false);
   const [photoDebugSample, setPhotoDebugSample] = useState<ChatPhotoDebugSample | null>(null);
+  const [hqTraceRows, setHqTraceRows] = useState(() => (canShowHqTrace() ? getHqTraceRows() : []));
   const [lightbox, setLightbox] = useState<{ src: string } | null>(null);
   const [replyTo, setReplyTo] = useState<ChatLineReply | null>(null);
   const [actionLine, setActionLine] = useState<ChatLine | null>(null);
@@ -952,6 +958,12 @@ export default function ChatClient() {
     enableChatPhotoDebugTiming(on);
   }, [tokenInfo?.user.role]);
 
+  useEffect(() => {
+    if (!canShowHqTrace()) return;
+    setHqTraceRows(getHqTraceRows());
+    return subscribeHqTrace(() => setHqTraceRows(getHqTraceRows()));
+  }, []);
+
   function refreshPhotoDebugSample() {
     if (!photoDebug) return;
     setPhotoDebugSample(buildChatPhotoDebugSample());
@@ -1428,7 +1440,12 @@ export default function ChatClient() {
       if (!appended.items.some(isNativePreviewPlaceholder)) flushQueuedNativeSend();
     };
     const onHqReady = (event: Event) => {
-      const payload = parseNativeChatPhotoHqReady((event as CustomEvent).detail);
+      const observed = observeHqReadyForTrace({
+        raw: (event as CustomEvent).detail,
+        map: nativePreviewAttachmentRef.current,
+        abandonedIds: abandonedNativePreviewIdsRef.current,
+      });
+      const payload = observed.parsed;
       if (!payload) return;
       if (
         !shouldAcceptNativePreview(
@@ -1437,10 +1454,12 @@ export default function ChatClient() {
           abandonedNativeSessionsRef.current
         )
       ) {
+        noteHqUpgradeCall({ previewId: payload.previewId, called: false });
         return;
       }
       const writeGeneration = composerGenRef.current;
       if (payload.error) {
+        noteHqUpgradeCall({ previewId: payload.previewId, called: false });
         const failed = applyNativeHqFailed(pendingPhotosRef.current, payload.previewId);
         if (!failed) return;
         if (writeGeneration !== composerGenRef.current) return;
@@ -1450,15 +1469,20 @@ export default function ChatClient() {
       const hqFile = payload.dataUrl
         ? fileFromNativeHqDataUrl(payload.dataUrl, payload.previewId)
         : null;
-      if (!hqFile) return;
-      const planned = planNativeHqUpgrade({
-        previewId: payload.previewId,
-        map: nativePreviewAttachmentRef.current,
-        abandonedIds: abandonedNativePreviewIdsRef.current,
-      });
+      if (!hqFile) {
+        noteHqUpgradeCall({ previewId: payload.previewId, called: false });
+        return;
+      }
+      const planned = observed.planned || {
+        action: "ignore" as const,
+        attachmentId: null,
+      };
       const applied = applyNativeHqFile(pendingPhotosRef.current, payload.previewId, hqFile);
       if (applied && writeGeneration === composerGenRef.current) {
-        if (abandonedNativePreviewIdsRef.current.has(payload.previewId)) return;
+        if (abandonedNativePreviewIdsRef.current.has(payload.previewId)) {
+          noteHqUpgradeCall({ previewId: payload.previewId, called: false });
+          return;
+        }
         setPendingPhotoList(applied);
         const current = applied.find(
           (item) => item.nativePreviewId === payload.previewId && item.status === "ready"
@@ -1466,7 +1490,10 @@ export default function ChatClient() {
         if (planned.action === "upgrade" && planned.attachmentId) {
           startHqUpgrade(planned.attachmentId, hqFile, payload.previewId);
         } else if (current) {
+          noteHqUpgradeCall({ previewId: payload.previewId, called: false });
           startComposerPreupload(current, writeGeneration);
+        } else {
+          noteHqUpgradeCall({ previewId: payload.previewId, called: false });
         }
         if (!applied.some(isNativePreviewPlaceholder)) flushQueuedNativeSend();
         return;
@@ -1478,7 +1505,10 @@ export default function ChatClient() {
       const sent = linesRef.current.find((line) =>
         line.localPhotos?.some((photo) => photo.nativePreviewId === payload.previewId)
       );
-      if (!sent) return;
+      if (!sent) {
+        noteHqUpgradeCall({ previewId: payload.previewId, called: false });
+        return;
+      }
       const nextPhotos = applyNativeHqFile(sent.localPhotos || [], payload.previewId, hqFile);
       if (nextPhotos) {
         patchOutgoingLine(sent.clientMessageId, (cur) => ({ ...cur, localPhotos: nextPhotos }));
@@ -1495,6 +1525,8 @@ export default function ChatClient() {
           attachmentId
         );
         startHqUpgrade(attachmentId, hqFile, payload.previewId);
+      } else {
+        noteHqUpgradeCall({ previewId: payload.previewId, called: false });
       }
     };
     window.addEventListener(NATIVE_CHAT_PHOTO_PREVIEW_EVENT, onPreview);
@@ -1597,11 +1629,25 @@ export default function ChatClient() {
 
   function startHqUpgrade(attachmentId: string, blob: Blob, previewId?: string) {
     const roomId = roomRef.current?.roomId || "";
-    if (!roomId || !attachmentId || !blob.size) return;
+    if (!roomId || !attachmentId || !blob.size) {
+      noteHqUpgradeCall({ previewId, attachmentId, called: false });
+      return;
+    }
+    noteHqUpgradeCall({ previewId, attachmentId, called: true });
     const inflight = upgradeJobsRef.current.get(attachmentId);
     if (inflight) return inflight;
     const job = upgradeChatPhotoDirect(roomId, attachmentId, blob, {
       chatToken: tokenRef.current?.token,
+      onStage: (stage, info) => {
+        recordHqTrace({
+          stage,
+          previewId,
+          attachmentId,
+          status: info.status,
+          ok: info.ok,
+          size: info.size,
+        });
+      },
     })
       .then((upgraded) => {
         logPreviewFirst("hq_upgrade_complete", {
@@ -2758,6 +2804,14 @@ export default function ChatClient() {
             </button>
             </div>
           </form>
+          {canShowHqTrace() && hqTraceRows.length > 0 ? (
+            <aside className="vh-hq-trace" aria-label="HQ isolated trace">
+              <div>HQ TRACE isolated</div>
+              {hqTraceRows.map((row, index) => (
+                <div key={`${row.stage}-${row.at}-${index}`}>{formatHqTraceLine(row)}</div>
+              ))}
+            </aside>
+          ) : null}
           {photoDebug && photoDebugSample ? (
             <aside className="vh-chat-photo-debug" aria-label="Chat photo debug">
               {(

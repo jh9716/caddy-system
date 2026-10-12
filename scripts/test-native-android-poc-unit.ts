@@ -716,7 +716,8 @@ assert(
     chatClient.includes("shouldQueueNativeChatSend") &&
     chatClient.includes("abandonedNativePreviewIdsRef") &&
     chatClient.includes("nativePreviewAttachmentRef") &&
-    chatClient.includes("planNativeHqUpgrade") &&
+    chatClient.includes("observeHqReadyForTrace") &&
+    chatClient.includes("canShowHqTrace") &&
     chatClient.includes("준비 중") &&
     read("src/lib/chatPhotoPick.ts").includes("item.nativePreviewId && item.previewUrl") &&
     read("src/lib/chatPhotoNativePreview.ts").includes("-preview") &&

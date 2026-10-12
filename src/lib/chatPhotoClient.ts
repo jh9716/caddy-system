@@ -62,6 +62,17 @@ export {
   uploadChatPhotoDirect,
 } from "@/lib/chatPhotoDirectClient";
 export {
+  canShowHqTrace,
+  formatHqTraceLine,
+  getHqTraceRows,
+  noteHqUpgradeCall,
+  observeHqReadyForTrace,
+  recordHqTrace,
+  resetHqTrace,
+  subscribeHqTrace,
+  type HqTraceRow,
+} from "@/lib/chatPhotoHqTrace";
+export {
   abandonChatPhotoPreupload,
   finishChatPhotoOutgoingUploads,
   startChatPhotoPreupload,
