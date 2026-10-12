@@ -308,14 +308,6 @@ export type ChatPhotoUpgradeResult = {
   size: number;
 };
 
-export type ChatPhotoUpgradeStage = "upgrade_grant" | "upgrade_put" | "upgrade_finalize";
-
-export type ChatPhotoUpgradeStageInfo = {
-  status: number;
-  ok: boolean;
-  size?: number;
-};
-
 export async function upgradeChatPhotoDirect(
   roomId: string,
   attachmentId: string,
@@ -330,7 +322,6 @@ export async function upgradeChatPhotoDirect(
       extraHeaders?: { grant?: string }
     ) => Promise<ChatPhotoPutResult | void>;
     chatToken?: string | null;
-    onStage?: (stage: ChatPhotoUpgradeStage, info: ChatPhotoUpgradeStageInfo) => void;
   } = {}
 ): Promise<ChatPhotoUpgradeResult> {
   const fetchFn = opts.fetchFn || fetch;
@@ -348,7 +339,6 @@ export async function upgradeChatPhotoDirect(
   );
   const prepared = await preparedRes.json().catch(() => null);
   const grantOk = Boolean(preparedRes.ok && prepared?.upload?.uploadUrl);
-  opts.onStage?.("upgrade_grant", { status: preparedRes.status, ok: grantOk });
   if (!grantOk) {
     throw new Error(prepared?.message || "고화질 업로드 준비에 실패했습니다.");
   }
@@ -356,20 +346,9 @@ export async function upgradeChatPhotoDirect(
   const contentType = String(prepared.upload.contentType || "image/jpeg");
   const uploadGrant =
     typeof prepared.upload.uploadGrant === "string" ? prepared.upload.uploadGrant : "";
-  let putResult: ChatPhotoPutResult = {};
-  try {
-    putResult =
-      (await put(uploadUrl, blob, contentType, undefined, uploadGrant ? { grant: uploadGrant } : undefined)) ||
-      {};
-    opts.onStage?.("upgrade_put", {
-      status: 200,
-      ok: true,
-      size: putResult.actualSize || blob.size,
-    });
-  } catch (error) {
-    opts.onStage?.("upgrade_put", { status: 0, ok: false });
-    throw error;
-  }
+  const putResult =
+    (await put(uploadUrl, blob, contentType, undefined, uploadGrant ? { grant: uploadGrant } : undefined)) ||
+    {};
   const upgradedRes = await fetchFn(
     chatPhotoDebugApiUrl(
       `/api/chat/rooms/${encodeURIComponent(roomId)}/attachments/${encodeURIComponent(attachmentId)}/upgrade`
@@ -383,12 +362,6 @@ export async function upgradeChatPhotoDirect(
   );
   const upgraded = await upgradedRes.json().catch(() => null);
   const finalizeOk = Boolean(upgradedRes.ok && upgraded?.photo?.id);
-  const upgradedSize = Number(upgraded?.photo?.size || blob.size);
-  opts.onStage?.("upgrade_finalize", {
-    status: upgradedRes.status,
-    ok: finalizeOk,
-    size: Number.isFinite(upgradedSize) ? upgradedSize : undefined,
-  });
   if (!finalizeOk) {
     throw new Error(upgraded?.message || "고화질 업로드에 실패했습니다.");
   }

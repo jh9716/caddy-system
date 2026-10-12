@@ -145,18 +145,6 @@ import {
   resolveHqUpgradeAfterServerEcho,
 } from "../src/lib/chatPhotoNativePreview";
 import {
-  canShowHqTrace,
-  formatHqTraceLine,
-  getHqTraceRows,
-  HQ_TRACE_STAGES,
-  noteAttachmentReady,
-  noteHqUpgradeCall,
-  notePendingHqDrain,
-  observeHqReadyForTrace,
-  recordHqTrace,
-  resetHqTrace,
-} from "../src/lib/chatPhotoHqTrace";
-import {
   LIGHTBOX_MAX_SCALE,
   LIGHTBOX_MIN_SCALE,
   applyLightboxPan,
@@ -1274,8 +1262,19 @@ section("preview-first real send + HQ upgrade");
   assert(client.includes("startHqUpgrade"), "HQ after send upgrades the same id");
   assert(client.includes("nativePreviewAttachmentRef"), "previewId->attachmentId map survives server echo");
   assert(client.includes("pendingNativeHqRef"), "pending HQ File map exists");
-  assert(client.includes("observeHqReadyForTrace"), "HQ ready uses the preview attachment map");
+  assert(client.includes("parseNativeChatPhotoHqReady"), "HQ_READY parse stays without TRACE wrapper");
   assert(client.includes("planHqReadyAction"), "HQ_READY waits or upgrades from the attachment map");
+  assert(
+    !client.includes("observeHqReadyForTrace") &&
+      !client.includes("canShowHqTrace") &&
+      !client.includes("vh-hq-trace") &&
+      !client.includes("HQ TRACE isolated") &&
+      !client.includes("noteHqUpgradeCall") &&
+      !client.includes("onStage"),
+    "HQ TRACE panel and recorder are gone"
+  );
+  assert(!fs.existsSync(path.resolve("src/lib/chatPhotoHqTrace.ts")), "chatPhotoHqTrace.ts removed");
+  assert(!read("src/app/globals.css").includes("vh-hq-trace"), "HQ TRACE CSS removed");
   assert(
     client.includes("attachAndDrainPendingHq") && client.includes("rememberAttachmentThenDrainHq"),
     "finalize stores previewId->attachmentId and drains pending HQ"
@@ -1529,179 +1528,6 @@ section("HQ before attachment race");
   const taken = new Map<string, File>([[previewId, hqFile]]);
   takePendingNativeHq(taken, previewId);
   assert(takePendingNativeHq(taken, previewId) === null, "second take is empty");
-}
-
-section("HQ before attachment trace");
-{
-  resetHqTrace();
-  assert(
-    HQ_TRACE_STAGES.includes("hq_wait_attachment") &&
-      HQ_TRACE_STAGES.includes("attachment_ready") &&
-      HQ_TRACE_STAGES.includes("pending_hq_drain") &&
-      HQ_TRACE_STAGES.includes("start_upgrade"),
-    "HQ trace stages include wait/drain/start"
-  );
-  const isolatedHost = "caddy-system-gt8t-oayarczvg-jh9716s-projects.vercel.app";
-  const previewId = "nvp-1-cce71d6d86bd";
-  const attachmentId = "att_preview_hq_wait_1";
-  const emptyMap = new Map<string, string>();
-  const observedMiss = observeHqReadyForTrace({
-    raw: {
-      previewId,
-      sessionId: "1",
-      width: 1200,
-      height: 1600,
-      bytes: 369040,
-      dataUrl: "data:image/jpeg;base64,/9j/4AAQ",
-    },
-    map: emptyMap,
-    host: isolatedHost,
-  });
-  assert(observedMiss.planned?.action === "ignore", "observe still reports map miss as ignore");
-  assert(
-    getHqTraceRows().some((row) => row.stage === "map_lookup" && row.mapHit === false),
-    "map_lookup miss is traced"
-  );
-  assert(
-    getHqTraceRows().some((row) => row.stage === "hq_wait_attachment" && row.previewId === previewId && row.ok === true),
-    "hq_wait_attachment is traced on map miss"
-  );
-  assert(
-    noteAttachmentReady({ previewId, attachmentId }, isolatedHost),
-    "attachment_ready is recorded"
-  );
-  assert(
-    notePendingHqDrain({ previewId, attachmentId }, isolatedHost),
-    "pending_hq_drain is recorded"
-  );
-  assert(noteHqUpgradeCall({ previewId, attachmentId, called: true }, isolatedHost), "start_upgrade after drain");
-  const stages = getHqTraceRows().map((row) => row.stage);
-  assert(stages.includes("hq_wait_attachment"), "wait stage present");
-  assert(stages.includes("attachment_ready"), "attachment_ready present");
-  assert(stages.includes("pending_hq_drain"), "pending_hq_drain present");
-  assert(stages.includes("start_upgrade"), "start_upgrade present");
-}
-
-section("isolated HQ path trace");
-{
-  resetHqTrace();
-  const isolatedHost = "caddy-system-gt8t-oayarczvg-jh9716s-projects.vercel.app";
-  assert(canShowHqTrace(isolatedHost), "isolated gt8t hostname enables HQ trace");
-  assert(!canShowHqTrace("www.verthill.kr"), "production www disables HQ trace");
-  assert(!canShowHqTrace("verthill.kr"), "production apex disables HQ trace");
-  assert(!canShowHqTrace("caddy-system-gt8t.vercel.app"), "public gt8t alias does not show HQ trace");
-  assert(!canShowHqTrace(""), "empty host disables HQ trace");
-
-  resetHqTrace();
-  assert(
-    !recordHqTrace({ stage: "hq_parse", previewId: "nvp-7-prodblock1", ok: true }, "www.verthill.kr"),
-    "recordHqTrace is a no-op on production host"
-  );
-  assert(getHqTraceRows().length === 0, "production host stores no HQ trace rows");
-
-  const previewId = "nvp-7-hqtrace1ready";
-  const attachmentId = "att_hq_trace_1";
-  const map = new Map<string, string>();
-  rememberNativePreviewAttachment(map, previewId, attachmentId);
-  const raw = {
-    previewId,
-    sessionId: "7",
-    width: 1600,
-    height: 1200,
-    bytes: 180_000,
-    dataUrl: "data:image/jpeg;base64,/9j/4AAQ",
-  };
-  const observed = observeHqReadyForTrace({ raw, map, host: isolatedHost });
-  assert(observed.parsed?.previewId === previewId, "HQ_READY parsed");
-  assert(observed.planned?.action === "upgrade" && observed.planned.attachmentId === attachmentId, "map hit");
-  const stages = getHqTraceRows().map((row) => row.stage);
-  assert(stages.includes("native_hq") && stages.includes("hq_event") && stages.includes("hq_parse"), "native + event + parse recorded");
-  assert(getHqTraceRows().some((row) => row.stage === "map_lookup" && row.mapHit === true), "map lookup hit recorded");
-  assert(
-    noteHqUpgradeCall({ previewId, attachmentId, called: true }, isolatedHost),
-    "startHqUpgrade reached"
-  );
-  assert(getHqTraceRows().some((row) => row.stage === "start_upgrade" && row.called === true), "start_upgrade called=yes");
-
-  const stagesSeen: string[] = [];
-  const upgraded = await upgradeChatPhotoDirect(
-    "all",
-    attachmentId,
-    new Blob([new Uint8Array(32)], { type: "image/jpeg" }),
-    {
-      fetchFn: async (input, init) => {
-        const url = String(input);
-        if (url.includes("upgrade-grant") && init?.method === "POST") {
-          return new Response(
-            JSON.stringify({
-              upload: {
-                uploadUrl: "https://example.invalid/upgrade-put",
-                contentType: "image/jpeg",
-                uploadGrant: "grant",
-              },
-            }),
-            { status: 200 }
-          );
-        }
-        if (url.includes("/upgrade") && init?.method === "POST") {
-          return new Response(
-            JSON.stringify({ photo: { id: attachmentId, mimeType: "image/jpeg", size: 180_000 } }),
-            { status: 200 }
-          );
-        }
-        return new Response("no", { status: 404 });
-      },
-      put: async () => ({ actualSize: 180_000, receipt: "receipt" }),
-      onStage: (stage, info) => {
-        stagesSeen.push(`${stage}:${info.status}:${info.ok ? "ok" : "fail"}`);
-        recordHqTrace(
-          {
-            stage,
-            previewId,
-            attachmentId,
-            status: info.status,
-            ok: info.ok,
-            size: info.size,
-          },
-          isolatedHost
-        );
-      },
-    }
-  );
-  assert(upgraded.size === 180_000, "upgrade returns HQ size");
-  assert(
-    stagesSeen.join(" ") === "upgrade_grant:200:ok upgrade_put:200:ok upgrade_finalize:200:ok",
-    "grant/PUT/finalize stage status tracked"
-  );
-  assert(
-    getHqTraceRows().some((row) => row.stage === "upgrade_finalize" && row.size === 180_000 && row.status === 200),
-    "finalize size is traced"
-  );
-  const line = formatHqTraceLine({
-    stage: "upgrade_finalize",
-    previewId,
-    attachmentId,
-    status: 200,
-    size: 180_000,
-    ok: true,
-    at: 1,
-  });
-  assert(!line.includes("http://") && !line.includes("token") && !line.includes("secret"), "trace line has no secrets/URLs");
-
-  resetHqTrace();
-  observeHqReadyForTrace({
-    raw,
-    map,
-    host: "www.verthill.kr",
-  });
-  noteHqUpgradeCall({ previewId, attachmentId, called: true }, "www.verthill.kr");
-  assert(getHqTraceRows().length === 0, "trace itself is disabled on Production host");
-
-  const client = read("src/app/chat/ChatClient.tsx");
-  assert(client.includes("observeHqReadyForTrace") && client.includes("canShowHqTrace"), "ChatClient wires isolated HQ trace");
-  assert(client.includes("noteAttachmentReady") && client.includes("notePendingHqDrain"), "finalize traces attachment_ready and pending_hq_drain");
-  assert(client.includes("vh-hq-trace"), "isolated HQ trace panel exists");
-  assert(!client.includes("chatToken") || client.includes("onStage"), "upgrade stages are recorded without new secrets");
 }
 
 section("preview296 isolation guards");
