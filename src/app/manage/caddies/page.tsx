@@ -55,6 +55,7 @@ import {
   rosterImportApplySuccessMessage,
 } from '@/lib/caddyRosterImportApplyConfig';
 import { rosterImportContactSummary } from '@/lib/rosterImportContactSummary';
+import type { XlsxV2WorkbookPreview } from '@/lib/caddyRosterImportXlsxV2Preview';
 import Link from 'next/link';
 
 /** 한눈에 보기: 1~12조 */
@@ -424,6 +425,12 @@ export default function ManageCaddiesPage() {
   const [importFileName, setImportFileName] = useState<string | null>(null);
   /** Apply 실패 시 Preview와 구분 — 반영되지 않음 */
   const [importApplyFailed, setImportApplyFailed] = useState(false);
+  const [xlsxV2Open, setXlsxV2Open] = useState(false);
+  const [xlsxV2Busy, setXlsxV2Busy] = useState(false);
+  const [xlsxV2FileName, setXlsxV2FileName] = useState<string | null>(null);
+  const [xlsxV2Preview, setXlsxV2Preview] = useState<XlsxV2WorkbookPreview | null>(
+    null
+  );
   /** 슬롯 점유 계산용 — ACTIVE+LEAVE+RETIRED 전체 */
   const [slotPeers, setSlotPeers] = useState<SlotOccupant[]>([]);
   const [refreshError, setRefreshError] = useState(false);
@@ -1303,6 +1310,17 @@ export default function ManageCaddiesPage() {
               }}
             >
               명단 가져오기
+            </button>
+            <button
+              type="button"
+              className="cm-btn cm-btn-sm"
+              onClick={() => {
+                setXlsxV2Open(true);
+                setXlsxV2Preview(null);
+                setXlsxV2FileName(null);
+              }}
+            >
+              Excel 가져오기
             </button>
             <button
               type="button"
@@ -2478,6 +2496,195 @@ export default function ManageCaddiesPage() {
                   </tbody>
                 </table>
                 )}
+              </div>
+            </>
+          )}
+        </section>
+      )}
+
+      {viewMode === 'detail' && xlsxV2Open && (
+        <section className="cm-card cm-import" aria-label="Excel 가져오기 V2">
+          <div className="cm-import-head">
+            <h3>Excel 가져오기 (V2 미리보기)</h3>
+            <button
+              type="button"
+              className="cm-btn cm-btn-sm"
+              onClick={() => {
+                setXlsxV2Open(false);
+                setXlsxV2Preview(null);
+                setXlsxV2FileName(null);
+              }}
+            >
+              닫기
+            </button>
+          </div>
+          <p className="cm-import-help">
+            P1 <code>export.xlsx</code> 템플릿만 올립니다. 기본은 DELTA —
+            파일에 있는 행만 비교하고, 빠진 기존 캐디는 퇴사하지 않습니다.
+            수정/퇴사는 <strong>id</strong>만 사용합니다. 이름-only 매칭 없음.
+            이 단계는 DB를 변경하지 않습니다. 적용은 후속입니다.
+          </p>
+          <div className="cm-import-actions">
+            <label className="cm-btn cm-btn-sm cm-file-label">
+              파일 선택
+              <input
+                type="file"
+                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                hidden
+                disabled={xlsxV2Busy}
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = '';
+                  if (!file) return;
+                  setXlsxV2Busy(true);
+                  setXlsxV2Preview(null);
+                  setXlsxV2FileName(file.name);
+                  setMessage(null);
+                  try {
+                    const fd = new FormData();
+                    fd.append('file', file);
+                    const res = await fetch(
+                      '/api/caddies/import-v2/xlsx/preview',
+                      {
+                        method: 'POST',
+                        body: fd,
+                        credentials: 'include',
+                      }
+                    );
+                    if (res.status === 401 || res.status === 403) {
+                      location.href = '/login?callbackUrl=/manage/caddies';
+                      return;
+                    }
+                    const data = await res.json();
+                    if (!res.ok) {
+                      setMessage(data?.error || 'Excel 미리보기 실패');
+                      return;
+                    }
+                    setXlsxV2Preview(data as XlsxV2WorkbookPreview);
+                  } catch {
+                    setMessage('Excel 미리보기 중 오류가 발생했습니다.');
+                  } finally {
+                    setXlsxV2Busy(false);
+                  }
+                }}
+              />
+            </label>
+            {xlsxV2FileName && (
+              <span className="cm-muted">파일: {xlsxV2FileName}</span>
+            )}
+            <button
+              type="button"
+              className="cm-btn cm-btn-primary cm-btn-sm"
+              disabled
+              title="P2는 미리보기만. 적용은 후속"
+            >
+              적용 (후속)
+            </button>
+          </div>
+          {xlsxV2Busy && <p className="cm-muted">미리보기 중…</p>}
+          {xlsxV2Preview && (
+            <>
+              <div className="cm-import-summary">
+                <span>모드 {xlsxV2Preview.mode}</span>
+                <span>수정 {xlsxV2Preview.summary.update}</span>
+                <span>신규 {xlsxV2Preview.summary.create}</span>
+                <span>퇴사예정 {xlsxV2Preview.summary.retire}</span>
+                <span>드라이빙 {xlsxV2Preview.summary.drivingChange}</span>
+                <span>오류 {xlsxV2Preview.summary.error}</span>
+                <span>경고 {xlsxV2Preview.summary.warning}</span>
+                <span>파일 밖 기존 {xlsxV2Preview.summary.omittedExisting} (퇴사 아님)</span>
+              </div>
+              {xlsxV2Preview.errors.length > 0 && (
+                <ul className="cm-import-issues">
+                  {xlsxV2Preview.errors.map((err, i) => (
+                    <li key={`xv2-e-${i}`}>
+                      [오류:{err.code}] {err.sheet} {err.rowNumber}행
+                      {err.id != null ? ` id=${err.id}` : ''} {err.name} —{' '}
+                      {err.message}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {xlsxV2Preview.warnings.length > 0 && (
+                <ul className="cm-import-issues">
+                  {xlsxV2Preview.warnings.map((warn, i) => (
+                    <li key={`xv2-w-${i}`}>
+                      [경고:{warn.code}] {warn.sheet} {warn.rowNumber}행
+                      {warn.id != null ? ` id=${warn.id}` : ''} {warn.name} —{' '}
+                      {warn.message}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="cm-import-table-wrap">
+                <table className="cm-import-table">
+                  <thead>
+                    <tr>
+                      <th>구분</th>
+                      <th>id</th>
+                      <th>이름</th>
+                      <th>변경</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {xlsxV2Preview.updates.map((row) => (
+                      <tr key={`u-${row.id}-${row.rowNumber}`}>
+                        <td>수정</td>
+                        <td>{row.id}</td>
+                        <td>{row.name}</td>
+                        <td>
+                          {row.fields
+                            .map((f) => `${f.key}: ${f.before ?? '—'} → ${f.after ?? '—'}`)
+                            .join(' / ')}
+                        </td>
+                      </tr>
+                    ))}
+                    {xlsxV2Preview.creates.map((row) => (
+                      <tr key={`c-${row.rowNumber}`}>
+                        <td>신규</td>
+                        <td>—</td>
+                        <td>{row.name}</td>
+                        <td>
+                          {row.team} {row.teamOrder}번 · {row.employmentStatus}
+                          {row.maskedPhone ? ` · ${row.maskedPhone}` : ''}
+                        </td>
+                      </tr>
+                    ))}
+                    {xlsxV2Preview.retires.map((row) => (
+                      <tr key={`r-${row.id}`}>
+                        <td>퇴사예정</td>
+                        <td>{row.id}</td>
+                        <td>{row.name}</td>
+                        <td>{row.reason || row.currentEmploymentStatus}</td>
+                      </tr>
+                    ))}
+                    {xlsxV2Preview.drivingChanges.map((row) => (
+                      <tr key={`d-${row.id}`}>
+                        <td>
+                          {row.kind === 'convert_to_driving'
+                            ? '드라이빙전환'
+                            : '드라이빙'}
+                        </td>
+                        <td>{row.id}</td>
+                        <td>{row.name}</td>
+                        <td>
+                          {row.fields
+                            .map((f) => `${f.key}: ${f.before ?? '—'} → ${f.after ?? '—'}`)
+                            .join(' / ')}
+                        </td>
+                      </tr>
+                    ))}
+                    {xlsxV2Preview.updates.length +
+                      xlsxV2Preview.creates.length +
+                      xlsxV2Preview.retires.length +
+                      xlsxV2Preview.drivingChanges.length ===
+                      0 && (
+                      <tr>
+                        <td colSpan={4}>변경 없음 (미리보기만, DB 미변경)</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
               </div>
             </>
           )}
