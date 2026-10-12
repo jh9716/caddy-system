@@ -175,6 +175,51 @@ section("facts match schema/code (no invented collection)");
     page.includes("자동 파기 주기") || page.includes("자동 파기 주기는 없습니다"),
     "no invented retention years"
   );
+  assert(page.includes("채팅 메시지 본문"), "chat message body disclosed");
+  assert(
+    page.includes("채팅 사진") && page.includes("첨부 이미지"),
+    "chat photos disclosed"
+  );
+  assert(page.includes("공지 사진"), "notice photos disclosed");
+  assert(
+    page.includes("작성자 계정 번호") && page.includes("채팅방 식별값"),
+    "chat author/room identifiers disclosed"
+  );
+  assert(page.includes("Cloudflare R2"), "current chat photo store is R2");
+  assert(
+    page.includes("메시지 본문은") && page.includes("Neon") && page.includes("두지 않습니다"),
+    "chat bodies are not stored in Neon"
+  );
+  assert(
+    page.includes("제보·공지") && page.includes("Vercel 저장 경로를 쓰지 않습니다"),
+    "chat photos are not lumped into Vercel report/notice storage"
+  );
+  assert(page.includes("채팅 및 이미지 첨부 업무 기능 제공"), "chat purpose disclosed");
+  assert(page.includes("공지 사진 제공"), "notice photo purpose disclosed");
+  assert(
+    page.includes("180일") && page.includes("채팅 서버가 180일이 지난"),
+    "chat retention is the coded 180-day purge, not an invented cycle"
+  );
+  assert(schema.includes("ChatAttachment"), "schema has chat attachments");
+  assert(schema.includes("NoticePhoto"), "schema has notice photos");
+  const chatRetention = read("cloudflare/verthill-chat/src/protocol.ts");
+  assert(
+    chatRetention.includes("MESSAGE_RETENTION_DAYS = 180"),
+    "Worker retention constant is 180 days"
+  );
+  const chatPhotoR2 = read("src/lib/chatPhotoR2.ts");
+  assert(
+    chatPhotoR2.includes("CourseReport / Notice stay on Vercel Blob"),
+    "code still keeps report/notice on Vercel Blob"
+  );
+  assert(page.includes("Cloudflare: 채팅 메시지"), "Cloudflare processor named");
+  assert(
+    page.includes("제보 사진·공지 사진 비공개") &&
+      page.includes("현재 채팅 사진의 기본 저장소는 아닙니다"),
+    "Vercel role limited to hosting/cron/report/notice photos"
+  );
+  assert(page.includes("채팅 미리보기"), "FCM chat preview disclosed");
+  assert(!/채팅 사진[^.]*Vercel Blob에 저장/.test(page), "does not claim current chat photos live on Vercel Blob");
 }
 
 section("same-origin in-app links");
