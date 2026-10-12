@@ -8,7 +8,7 @@ export const PRIVACY_PUBLIC_URL = "https://www.verthill.kr/privacy";
 export const PRIVACY_LINK_LABEL = "개인정보처리방침";
 export const PRIVACY_SERVICE_NAME = "VERTHILL";
 export const PRIVACY_OPERATOR_NAME = "VERTHILL";
-export const PRIVACY_EFFECTIVE_DATE = "2026-09-22";
+export const PRIVACY_EFFECTIVE_DATE = "2026-10-12";
 export const PRIVACY_CONTACT_EMAIL_ENV = "PRIVACY_CONTACT_EMAIL";
 
 export const ACCOUNT_DELETION_PATH = "/account-deletion";
