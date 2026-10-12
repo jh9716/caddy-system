@@ -23,6 +23,7 @@
     "test:roster-import-v2-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-roster-import-v2-unit.ts",
     "test:roster-export-xlsx-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-roster-export-xlsx-unit.ts",
     "test:roster-import-xlsx-v2-preview-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-roster-import-xlsx-v2-preview-unit.ts",
+    "test:roster-import-xlsx-v2-apply-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-roster-import-xlsx-v2-apply-unit.ts",
     "test:roster-import-v1-safe-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-roster-import-v1-safe-unit.ts",
     "test:roster-import-v2-db": "bash scripts/tsx-safe.sh scripts/test-caddy-roster-import-v2-db.ts",
     "test:slot-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-slot-unit.ts",

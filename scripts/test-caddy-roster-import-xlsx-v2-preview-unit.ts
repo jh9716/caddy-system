@@ -116,6 +116,10 @@ const noChange = buildXlsxV2WorkbookPreview(adminBuf, fixture, {
 assert(noChange.mode === "delta", "mode is delta");
 assert(noChange.format === "xlsx-v2-workbook", "format is workbook v2");
 assert(noChange.summary.applyAvailable === false, "apply is not available");
+assert(
+  /^[a-f0-9]{64}$/.test(noChange.confirmation.fingerprint),
+  "preview includes roster fingerprint"
+);
 assert(noChange.creates.length === 0, "reupload creates 0");
 assert(noChange.updates.length === 0, "reupload updates 0");
 assert(noChange.retires.length === 0, "reupload retires 0");
@@ -148,6 +152,7 @@ assert(
 );
 assert(oneUpdate.creates.length === 0, "edit is not create");
 assert(oneUpdate.retires.length === 0, "edit is not retire");
+assert(oneUpdate.summary.applyAvailable === true, "one update is apply-available");
 assert(
   assertExistingRowsUnchanged(beforeSnap, fixture),
   "fixture unchanged after update preview"
@@ -370,7 +375,7 @@ assert(
   "employmentStatus values unchanged"
 );
 
-section("source: preview route is read-only / no apply");
+section("source: preview route is read-only");
 const previewRoute = readSrc(
   "src/app/api/caddies/import-v2/xlsx/preview/route.ts"
 );
@@ -383,12 +388,6 @@ assert(
   ),
   "preview route has no Caddy writes"
 );
-assert(
-  !fs.existsSync(
-    path.resolve("src/app/api/caddies/import-v2/xlsx/apply/route.ts")
-  ),
-  "no apply endpoint"
-);
 
 const page = readSrc("src/app/manage/caddies/page.tsx");
 assert(/Excel 가져오기/.test(page), "UI has Excel 가져오기");
@@ -396,7 +395,6 @@ assert(
   /\/api\/caddies\/import-v2\/xlsx\/preview/.test(page),
   "UI posts to v2 preview"
 );
-assert(/적용 \(후속\)/.test(page) && /disabled/.test(page), "apply button disabled");
 
 section("기존 import/CSV 회귀 source");
 const csvRoute = readSrc("src/app/api/caddies/export/route.ts");
