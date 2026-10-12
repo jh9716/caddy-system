@@ -1,7 +1,4 @@
-import { preview296ChatWsBaseUrl, usePreview296Isolation } from "@/lib/preview296Isolation";
-
 export function chatWsBaseUrl(): string {
-  if (usePreview296Isolation()) return preview296ChatWsBaseUrl();
   const fromEnv = String(process.env.NEXT_PUBLIC_CHAT_WS_URL || "").trim();
   if (fromEnv) return fromEnv.replace(/\/$/, "");
   if (typeof window !== "undefined") {

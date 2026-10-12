@@ -193,8 +193,8 @@ section("worker auth + directory");
   assert(/"r2_buckets"\s*:/.test(wrangler), "wrangler binds production R2");
   assert(wrangler.includes('"binding": "CHAT_MEDIA"'), "R2 binding name is CHAT_MEDIA");
   assert(wrangler.includes('"bucket_name": "verthill-chat-media"'), "R2 bucket is verthill-chat-media");
-  assert(wrangler.includes("verthill-chat-preview-296"), "isolated preview worker env");
-  assert(wrangler.includes("verthill-chat-media-preview-296"), "isolated preview R2 env");
+  assert(!wrangler.includes("verthill-chat-preview-296"), "isolated preview worker env removed");
+  assert(!wrangler.includes("verthill-chat-media-preview-296"), "isolated preview R2 env removed");
   assert(!/"CHAT_MEDIA_SECRET"\s*:/.test(wrangler), "CHAT_MEDIA_SECRET is not a wrangler config value");
 }
 

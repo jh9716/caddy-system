@@ -38,42 +38,5 @@
       "tag": "v2",
       "new_sqlite_classes": ["ChatDirectory"]
     }
-  ],
-  // Isolated #296 HQ test Worker. Deploy ONLY with: wrangler deploy --env preview296
-  // Never bind Production R2/DO. Never run this env from cloudflare-worker-deploy.yml.
-  "env": {
-    "preview296": {
-      "name": "verthill-chat-preview-296",
-      "workers_dev": true,
-      "preview_urls": false,
-      "r2_buckets": [
-        {
-          "binding": "CHAT_MEDIA",
-          "bucket_name": "verthill-chat-media-preview-296"
-        }
-      ],
-      "durable_objects": {
-        "bindings": [
-          {
-            "name": "CHAT_ROOM",
-            "class_name": "ChatRoom"
-          },
-          {
-            "name": "CHAT_DIRECTORY",
-            "class_name": "ChatDirectory"
-          }
-        ]
-      },
-      "migrations": [
-        {
-          "tag": "v1",
-          "new_sqlite_classes": ["ChatRoom"]
-        },
-        {
-          "tag": "v2",
-          "new_sqlite_classes": ["ChatDirectory"]
-        }
-      ]
-    }
-  }
+  ]
 }
