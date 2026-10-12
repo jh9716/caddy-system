@@ -130,6 +130,13 @@ import {
   shouldAcceptNativePreview,
   shouldQueueNativeChatSend,
   shouldShowNativeChooserDebug,
+  rememberNativePreviewAttachment,
+  lookupNativePreviewAttachment,
+  forgetNativePreviewAttachment,
+  forgetNativePreviewAttachmentByAttachmentId,
+  clearNativePreviewAttachments,
+  planNativeHqUpgrade,
+  resolveHqUpgradeAfterServerEcho,
 } from "../src/lib/chatPhotoNativePreview";
 import {
   LIGHTBOX_MAX_SCALE,
@@ -1247,6 +1254,10 @@ section("preview-first real send + HQ upgrade");
   assert(client.includes("upgradeChatPhotoDirect") && client.includes("emitAttachmentUpgraded"), "client upgrades then broadcasts");
   assert(client.includes("logPreviewFirst(\"ws_send\""), "WS send is logged once");
   assert(client.includes("startHqUpgrade"), "HQ after send upgrades the same id");
+  assert(client.includes("nativePreviewAttachmentRef"), "previewId->attachmentId map survives server echo");
+  assert(client.includes("planNativeHqUpgrade"), "HQ ready uses the preview attachment map");
+  assert(client.includes("rememberNativePreviewAttachment"), "finalize stores previewId->attachmentId");
+  assert(client.includes("if (inflight) return inflight"), "in-flight HQ upgrade is not duplicated");
   assert(!client.includes("preview XXms") && !client.includes("Native chooser debug"), "no user-visible preview diagnostic UI");
   const grant = read("cloudflare/verthill-chat/src/chatMediaGrant.ts");
   const media = read("cloudflare/verthill-chat/src/chatMedia.ts");
@@ -1269,6 +1280,102 @@ section("preview-first real send + HQ upgrade");
   assert(
     worker.includes("chat_media_upgrade: true") && worker.includes("attachment_upgraded: true"),
     "health advertises upgrade capability"
+  );
+}
+
+section("HQ upgrade after server echo race");
+{
+  const previewId = "nvp-7-echo1hqready";
+  const otherPreviewId = "nvp-7-otherphoto99";
+  const attachmentId = "att_preview_echo_1";
+  const otherAttachmentId = "att_other_photo_2";
+  const map = new Map<string, string>();
+  const upgrades: string[] = [];
+
+  assert(
+    rememberNativePreviewAttachment(map, previewId, attachmentId),
+    "preview finalize stores previewId->attachmentId"
+  );
+  assert(
+    rememberNativePreviewAttachment(map, otherPreviewId, otherAttachmentId),
+    "second photo stores its own attachment id"
+  );
+  assert(lookupNativePreviewAttachment(map, previewId) === attachmentId, "map remembers the finalized id");
+  assert(
+    !rememberNativePreviewAttachment(map, "not-a-preview-id", attachmentId),
+    "non-preview ids never enter the map"
+  );
+
+  const localPhotosBeforeEcho = [
+    {
+      nativePreviewId: previewId,
+      send: { result: { id: attachmentId } },
+    },
+  ];
+  const afterEcho = {
+    status: "sent" as const,
+    attachments: [{ id: attachmentId, mimeType: "image/jpeg", size: 48_000 }],
+    localPhotos: undefined as undefined,
+  };
+  const strippedLocalPhotos =
+    afterEcho.status === "sent" && afterEcho.attachments.length > 0
+      ? undefined
+      : localPhotosBeforeEcho;
+  assert(strippedLocalPhotos === undefined, "server echo removes localPhotos");
+
+  const legacy =
+    strippedLocalPhotos?.find((photo) => photo.nativePreviewId === previewId)?.send?.result?.id || null;
+  assert(legacy === null, "legacy composer/localPhotos lookup misses after echo");
+
+  const hqReady = parseNativeChatPhotoHqReady({
+    previewId,
+    sessionId: "7",
+    dataUrl: "data:image/jpeg;base64,/9j/4AAQ",
+  });
+  assert(hqReady?.previewId === previewId, "HQ_READY arrives after echo");
+  const resolved = resolveHqUpgradeAfterServerEcho({
+    previewId: hqReady!.previewId,
+    map,
+    localPhotos: strippedLocalPhotos,
+  });
+  assert(resolved.attachmentId === attachmentId, "map still upgrades the same attachment id");
+
+  const planned = planNativeHqUpgrade({ previewId: hqReady!.previewId, map });
+  assert(planned.action === "upgrade" && planned.attachmentId === attachmentId, "plan upgrades after echo");
+  if (planned.action === "upgrade" && planned.attachmentId) {
+    if (!upgrades.includes(planned.attachmentId)) upgrades.push(planned.attachmentId);
+  }
+  assert(upgrades.length === 1 && upgrades[0] === attachmentId, "first HQ starts one upgrade");
+
+  const replay = planNativeHqUpgrade({ previewId, map });
+  if (replay.action === "upgrade" && replay.attachmentId) {
+    if (!upgrades.includes(replay.attachmentId)) upgrades.push(replay.attachmentId);
+  }
+  assert(upgrades.length === 1, "duplicate HQ_READY does not start a second upgrade");
+
+  forgetNativePreviewAttachmentByAttachmentId(map, attachmentId);
+  const afterSuccess = planNativeHqUpgrade({ previewId, map });
+  assert(afterSuccess.action === "ignore" && afterSuccess.attachmentId === null, "successful HQ drops the map entry");
+  assert(lookupNativePreviewAttachment(map, otherPreviewId) === otherAttachmentId, "other previewId is untouched");
+
+  const otherPlan = planNativeHqUpgrade({ previewId: otherPreviewId, map });
+  assert(otherPlan.attachmentId === otherAttachmentId, "other previewId still maps to its own attachment");
+  assert(otherPlan.attachmentId !== attachmentId, "previewId match is exact");
+
+  const abandoned = new Set<string>([otherPreviewId]);
+  forgetNativePreviewAttachment(map, otherPreviewId);
+  const abandonedPlan = planNativeHqUpgrade({
+    previewId: otherPreviewId,
+    map,
+    abandonedIds: abandoned,
+  });
+  assert(abandonedPlan.action === "ignore", "removed/abandoned photo does not upgrade");
+
+  const leftover = new Map<string, string>([[previewId, attachmentId]]);
+  clearNativePreviewAttachments(leftover);
+  assert(
+    planNativeHqUpgrade({ previewId, map: leftover }).action === "ignore",
+    "room leave/abandon clears pending HQ map entries"
   );
 }
 

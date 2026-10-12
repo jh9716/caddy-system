@@ -113,6 +113,81 @@ export function isAbandonedNativeHqFile(
   return Boolean(sessionId && abandonedSessions.has(sessionId));
 }
 
+export type NativePreviewAttachmentMap = Map<string, string>;
+
+export function rememberNativePreviewAttachment(
+  map: NativePreviewAttachmentMap,
+  previewId: string | undefined | null,
+  attachmentId: string | undefined | null
+): boolean {
+  const id = typeof previewId === "string" ? previewId.trim() : "";
+  const att = typeof attachmentId === "string" ? attachmentId.trim() : "";
+  if (!NATIVE_PREVIEW_ID_RE.test(id) || !att) return false;
+  map.set(id, att);
+  return true;
+}
+
+export function lookupNativePreviewAttachment(
+  map: NativePreviewAttachmentMap,
+  previewId: string | undefined | null
+): string | null {
+  const id = typeof previewId === "string" ? previewId.trim() : "";
+  if (!NATIVE_PREVIEW_ID_RE.test(id)) return null;
+  return map.get(id) || null;
+}
+
+export function forgetNativePreviewAttachment(
+  map: NativePreviewAttachmentMap,
+  previewId: string | undefined | null
+): void {
+  const id = typeof previewId === "string" ? previewId.trim() : "";
+  if (id) map.delete(id);
+}
+
+export function forgetNativePreviewAttachmentByAttachmentId(
+  map: NativePreviewAttachmentMap,
+  attachmentId: string | undefined | null
+): void {
+  const att = typeof attachmentId === "string" ? attachmentId.trim() : "";
+  if (!att) return;
+  for (const [previewId, id] of map) {
+    if (id === att) map.delete(previewId);
+  }
+}
+
+export function clearNativePreviewAttachments(map: NativePreviewAttachmentMap): void {
+  map.clear();
+}
+
+export function planNativeHqUpgrade(input: {
+  previewId: string;
+  map: NativePreviewAttachmentMap;
+  abandonedIds?: ReadonlySet<string>;
+}): { action: "upgrade" | "ignore"; attachmentId: string | null } {
+  const previewId = typeof input.previewId === "string" ? input.previewId.trim() : "";
+  if (!NATIVE_PREVIEW_ID_RE.test(previewId)) {
+    return { action: "ignore", attachmentId: null };
+  }
+  if (input.abandonedIds?.has(previewId)) {
+    return { action: "ignore", attachmentId: null };
+  }
+  const attachmentId = lookupNativePreviewAttachment(input.map, previewId);
+  if (!attachmentId) return { action: "ignore", attachmentId: null };
+  return { action: "upgrade", attachmentId };
+}
+
+/** After server echo strips localPhotos, only the previewId map can start HQ. */
+export function resolveHqUpgradeAfterServerEcho(input: {
+  previewId: string;
+  map: NativePreviewAttachmentMap;
+  abandonedIds?: ReadonlySet<string>;
+  localPhotos?: Array<{ nativePreviewId?: string }> | null;
+}): { attachmentId: string | null } {
+  void input.localPhotos;
+  const planned = planNativeHqUpgrade(input);
+  return { attachmentId: planned.attachmentId };
+}
+
 export function shouldAcceptNativePreview(
   payload: NativeChatPhotoPreviewPayload,
   abandonedIds: ReadonlySet<string>,
