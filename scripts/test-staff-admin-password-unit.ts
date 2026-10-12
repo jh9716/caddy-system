@@ -28,8 +28,13 @@ import {
 } from "../src/lib/userPassword";
 import {
   STAFF_ADMIN_USERNAMES,
+  STAFF_CREATE_USERNAME_MAX,
   SUPER_ADMIN_USERNAME,
   isAccountManagerAuth,
+  normalizeStaffCreateUsername,
+  reservedEnvUsernames,
+  staffCreateUsernameIssue,
+  staffCreateUsernameIssueMessage,
 } from "../src/lib/staffAdminAccounts";
 import { manageNavItems, manageToolItems } from "../src/components/manage/ManageShell";
 import { middleware } from "../src/middleware";
@@ -191,6 +196,64 @@ async function main() {
     "staff names in requested order"
   );
 
+  section("staff create username validation (no DB)");
+  assert(
+    staffCreateUsernameIssue("admin") === "reserved_admin",
+    "admin username reserved"
+  );
+  assert(
+    staffCreateUsernameIssue("kakao_123") === "reserved_kakao",
+    "kakao_ prefix reserved"
+  );
+  assert(
+    staffCreateUsernameIssue("KAKAO_99") === "reserved_kakao",
+    "kakao_ prefix case-insensitive"
+  );
+  assert(
+    staffCreateUsernameIssue("playreview_admin") === "reserved_playreview",
+    "playreview_admin reserved"
+  );
+  assert(
+    staffCreateUsernameIssue("playreview_caddy") === "reserved_playreview",
+    "playreview_caddy reserved"
+  );
+  assert(
+    staffCreateUsernameIssue(normalizeStaffCreateUsername("  ")) === "empty",
+    "whitespace-only username empty after caller trim"
+  );
+  assert(
+    staffCreateUsernameIssue("a".repeat(STAFF_CREATE_USERNAME_MAX + 1)) ===
+      "too_long",
+    "username over max rejected"
+  );
+  assert(
+    staffCreateUsernameIssue("홍길동") === null,
+    "korean staff username allowed"
+  );
+  assert(
+    staffCreateUsernameIssue("env_shadow", {
+      ADMIN_USER: "env_shadow",
+    } as NodeJS.ProcessEnv) === "reserved_env",
+    "ADMIN_USER reserved even without password"
+  );
+  assert(
+    staffCreateUsernameIssue("caddy", {
+      CADDY_PASSWORD: "x",
+    } as NodeJS.ProcessEnv) === "reserved_env",
+    "active env caddy default username reserved"
+  );
+  assert(
+    reservedEnvUsernames({
+      ADMIN_PASSWORD: "secret",
+      ADMIN_USER: "ops",
+    } as NodeJS.ProcessEnv).includes("ops"),
+    "reservedEnvUsernames includes ADMIN_USER"
+  );
+  assert(
+    staffCreateUsernameIssueMessage("reserved_admin").includes("최고관리자"),
+    "reserved_admin message"
+  );
+
   section("source: 직원 계정 관리는 requireAccountManager");
   const staffListSrc = fs.readFileSync(
     path.resolve("src/app/api/admin/staff-accounts/route.ts"),
@@ -218,6 +281,38 @@ async function main() {
     staffListSrc.includes("requireAccountManager") &&
       !staffListSrc.includes("requireAdmin"),
     "list API uses requireAccountManager, not requireAdmin"
+  );
+  assert(
+    staffListSrc.includes("export async function POST") &&
+      staffListSrc.includes("generateTempNumericPassword") &&
+      staffListSrc.includes("mustChangePassword: true") &&
+      staffListSrc.includes("kakaoUserId: null"),
+    "list route also creates staff admin with temp password"
+  );
+  assert(
+    !staffListSrc.includes("select: {") ||
+      !/select:\s*\{[^}]*password:\s*true/.test(staffListSrc),
+    "create/list route never selects password hash"
+  );
+  const staffPageSrc = fs.readFileSync(
+    path.resolve("src/app/manage/staff-accounts/page.tsx"),
+    "utf8"
+  );
+  assert(
+    staffPageSrc.includes('method: "POST"') &&
+      staffPageSrc.includes('JSON.stringify({ username })') &&
+      staffPageSrc.includes("관리자 계정 생성"),
+    "staff-accounts UI has create form"
+  );
+  assert(
+    staffPageSrc.includes("최초 로그인 시 비밀번호 변경"),
+    "create UI mentions forced password change"
+  );
+  assert(
+    !staffPageSrc.includes("<select") &&
+      !staffPageSrc.includes("/api/users/") &&
+      !staffPageSrc.includes("link-caddy"),
+    "create UI has no role dropdown / Kakao promote"
   );
   assert(
     staffResetSrc.includes("requireAccountManager") &&
@@ -408,7 +503,7 @@ async function main() {
   const { POST: changePasswordPOST } = await import(
     "../src/app/api/auth/change-password/route"
   );
-  const { GET: staffListGET } = await import(
+  const { GET: staffListGET, POST: staffCreatePOST } = await import(
     "../src/app/api/admin/staff-accounts/route"
   );
   const { POST: staffResetPOST } = await import(
@@ -946,6 +1041,249 @@ async function main() {
       })
     );
     assert(logoutRes.status === 200, "logout still works");
+
+    section("POST /api/admin/staff-accounts create");
+    const createdUsername = `${tag}_created`;
+    const unauthCreate = await staffCreatePOST(
+      jsonReq("https://example.com/api/admin/staff-accounts", {
+        username: createdUsername,
+      })
+    );
+    assert(unauthCreate.status === 401, "unauth create → 401");
+
+    const caddyCreateCookie = `${SESSION_COOKIE_NAME}=${await signSessionClaims(
+      buildSessionClaims({
+        userId: kakaoUser.id,
+        username: kakaoUser.username,
+        role: "caddy",
+        sessionVersion: 0,
+      })
+    )}`;
+    const caddyCreate = await staffCreatePOST(
+      jsonReq(
+        "https://example.com/api/admin/staff-accounts",
+        { username: createdUsername },
+        { cookie: caddyCreateCookie }
+      )
+    );
+    assert(caddyCreate.status === 401, "caddy create → 401");
+
+    const leaderUser = await prisma.user.create({
+      data: {
+        username: `${tag}_leader`,
+        password: hashExisting,
+        role: "leader",
+        mustChangePassword: false,
+        managedTeams: ["1조"],
+      },
+    });
+    const leaderCreateCookie = `${SESSION_COOKIE_NAME}=${await signSessionClaims(
+      buildSessionClaims({
+        userId: leaderUser.id,
+        username: leaderUser.username,
+        role: "leader",
+        sessionVersion: leaderUser.sessionVersion,
+      })
+    )}`;
+    const leaderCreate = await staffCreatePOST(
+      jsonReq(
+        "https://example.com/api/admin/staff-accounts",
+        { username: createdUsername },
+        { cookie: leaderCreateCookie }
+      )
+    );
+    assert(leaderCreate.status === 401, "leader create → 401");
+
+    const staffCreateSv = await prisma.user.findUnique({
+      where: { id: staffUser.id },
+      select: { sessionVersion: true, username: true },
+    });
+    const staffCreateCookie = `${SESSION_COOKIE_NAME}=${await signSessionClaims(
+      buildSessionClaims({
+        userId: staffUser.id,
+        username: staffCreateSv?.username || koreanUsername,
+        role: "admin",
+        sessionVersion: staffCreateSv?.sessionVersion ?? 0,
+      })
+    )}`;
+    const staffCreateForbidden = await staffCreatePOST(
+      jsonReq(
+        "https://example.com/api/admin/staff-accounts",
+        { username: createdUsername },
+        { cookie: staffCreateCookie }
+      )
+    );
+    assert(staffCreateForbidden.status === 403, "일반 직원 admin create → 403");
+
+    const reservedAdminCreate = await staffCreatePOST(
+      jsonReq(
+        "https://example.com/api/admin/staff-accounts",
+        { username: "admin" },
+        { cookie: envCookie }
+      )
+    );
+    const reservedAdminJson = await reservedAdminCreate.json();
+    assert(reservedAdminCreate.status === 400, "username=admin create → 400");
+    assert(reservedAdminJson.error === "reserved_admin", "reserved_admin code");
+
+    const reservedKakaoCreate = await staffCreatePOST(
+      jsonReq(
+        "https://example.com/api/admin/staff-accounts",
+        { username: "kakao_999" },
+        { cookie: envCookie }
+      )
+    );
+    assert(reservedKakaoCreate.status === 400, "kakao_* create → 400");
+
+    const reservedPlayCreate = await staffCreatePOST(
+      jsonReq(
+        "https://example.com/api/admin/staff-accounts",
+        { username: "playreview_admin" },
+        { cookie: envCookie }
+      )
+    );
+    assert(reservedPlayCreate.status === 400, "playreview_* create → 400");
+
+    const reservedEnvCreate = await staffCreatePOST(
+      jsonReq(
+        "https://example.com/api/admin/staff-accounts",
+        { username: "env_admin_staff_test" },
+        { cookie: envCookie }
+      )
+    );
+    const reservedEnvJson = await reservedEnvCreate.json();
+    assert(reservedEnvCreate.status === 400, "env ADMIN_USER create → 400");
+    assert(reservedEnvJson.error === "reserved_env", "reserved_env code");
+
+    const emptyCreate = await staffCreatePOST(
+      jsonReq(
+        "https://example.com/api/admin/staff-accounts",
+        { username: "   " },
+        { cookie: envCookie }
+      )
+    );
+    assert(emptyCreate.status === 400, "blank username create → 400");
+
+    const createRes = await staffCreatePOST(
+      jsonReq(
+        "https://example.com/api/admin/staff-accounts",
+        { username: `  ${createdUsername}  ` },
+        { cookie: envCookie }
+      )
+    );
+    const createJson = await createRes.json();
+    assert(createRes.status === 200, "account manager create → 200");
+    assert(createJson.ok === true, "create ok=true");
+    assert(createJson.user?.username === createdUsername, "username trimmed");
+    assert(createJson.user?.role === "admin", "created role admin");
+    assert(
+      createJson.user?.mustChangePassword === true,
+      "created mustChangePassword=true"
+    );
+    const createdTemp = String(createJson.temporaryPassword || "");
+    assert(/^\d{8}$/.test(createdTemp), "create returns 8-digit temp once");
+    assert(
+      !isBannedTempNumericPassword(createdTemp),
+      "create temp is not a banned pattern"
+    );
+    const createBlob = JSON.stringify(createJson);
+    assert(!createBlob.includes("$2"), "create response has no password hash");
+    assert(!("password" in (createJson.user || {})), "create user has no hash field");
+    assert(!("password" in createJson), "create body has no password field");
+
+    const createdRow = await prisma.user.findUnique({
+      where: { username: createdUsername },
+      select: {
+        id: true,
+        role: true,
+        mustChangePassword: true,
+        caddyId: true,
+        kakaoUserId: true,
+        managedTeams: true,
+        password: true,
+      },
+    });
+    assert(createdRow?.role === "admin", "DB role admin");
+    assert(createdRow?.mustChangePassword === true, "DB mustChangePassword=true");
+    assert(createdRow?.caddyId == null, "DB caddyId null");
+    assert(createdRow?.kakaoUserId == null, "DB kakaoUserId null");
+    assert(
+      Array.isArray(createdRow?.managedTeams) && createdRow?.managedTeams.length === 0,
+      "DB managedTeams empty"
+    );
+    assert(
+      createdRow?.password && !createdRow.password.includes(createdTemp),
+      "DB stores hash not plaintext"
+    );
+    assert(
+      await verifyUserPassword(createdTemp, createdRow?.password),
+      "temp password matches stored hash"
+    );
+
+    const dupCreate = await staffCreatePOST(
+      jsonReq(
+        "https://example.com/api/admin/staff-accounts",
+        { username: createdUsername },
+        { cookie: envCookie }
+      )
+    );
+    const dupJson = await dupCreate.json();
+    assert(dupCreate.status === 409, "duplicate username → 409");
+    assert(dupJson.error === "username_taken", "username_taken code");
+
+    const kakaoNameCreate = await staffCreatePOST(
+      jsonReq(
+        "https://example.com/api/admin/staff-accounts",
+        { username: kakaoUser.username },
+        { cookie: envCookie }
+      )
+    );
+    assert(kakaoNameCreate.status === 400, "existing kakao_* username prefix → 400");
+
+    const dbSuperCreate = await staffCreatePOST(
+      jsonReq(
+        "https://example.com/api/admin/staff-accounts",
+        { username: `${tag}_from_db_super` },
+        { cookie: dbSuperCookie }
+      )
+    );
+    assert(dbSuperCreate.status === 200, "DB username=admin can create");
+
+    const createdLogin = await loginPOST(
+      jsonReq("https://example.com/api/login", {
+        username: createdUsername,
+        password: createdTemp,
+      })
+    );
+    const createdLoginJson = await createdLogin.json();
+    assert(createdLogin.status === 200, "created account login ok");
+    assert(
+      createdLoginJson.mustChangePassword === true,
+      "created login forces password change"
+    );
+    const createdLoginCookie = cookieHeaderFrom(createdLogin);
+    const createdBlocked = await caddiesGET(
+      new NextRequest("https://example.com/api/caddies", {
+        headers: { cookie: createdLoginCookie },
+      })
+    );
+    assert(createdBlocked.status === 403, "created account ops API blocked");
+    const createdChange = await changePasswordPOST(
+      jsonReq(
+        "https://example.com/api/auth/change-password",
+        { currentPassword: createdTemp, newPassword: "created-pass-9" },
+        { cookie: createdLoginCookie }
+      )
+    );
+    assert(createdChange.status === 200, "created account change-password ok");
+    const afterCreateChange = await prisma.user.findUnique({
+      where: { username: createdUsername },
+      select: { mustChangePassword: true },
+    });
+    assert(
+      afterCreateChange?.mustChangePassword === false,
+      "created account flag cleared after change"
+    );
 
     // unused generated temp kept out of logs; touch tempB so uniqueness path is used
     assert(tempB !== tempA, "generated temps for two users differ");
