@@ -175,6 +175,7 @@ section("worker auth + directory");
   assert(cfg.includes("chatDirectoryRoomUrl"), "client targeted room URL");
   assert(dir.includes("clampReadSeq"), "malicious read seq clamped");
   const chat = read("src/app/chat/ChatClient.tsx");
+  assert(chat.includes("revokeChatPhotoPreviewUrls([item])"), "composer remove uses shared preview revoke");
   assert(chat.includes("clientRequestId"), "create idempotency id");
   assert(chat.includes("beforeSeq"), "history pagination request");
   assert(chat.includes("이전 메시지"), "load older CTA");

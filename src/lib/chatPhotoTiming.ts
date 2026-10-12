@@ -198,7 +198,19 @@ export type ChatPhotoDebugSample = {
 declare global {
   // eslint-disable-next-line no-var
   var __CHAT_PHOTO_TIMING__: ChatPhotoTimingBag | undefined;
+  // eslint-disable-next-line no-var
+  var __CHAT_PHOTO_DEBUG_TIMING__: boolean | undefined;
 }
+
+const LITE_MARKS = new Set([
+  "select_to_ready",
+  "select_to_preview",
+  "select_to_prepared",
+  "prepare_api",
+  "direct_put",
+  "finalize_api",
+  "total_send",
+]);
 
 export function chatPhotoNow(): number {
   return typeof performance !== "undefined" && typeof performance.now === "function"
@@ -206,9 +218,23 @@ export function chatPhotoNow(): number {
     : Date.now();
 }
 
+/** Detailed prepare-scope / Proxy / source-split bookkeeping. Off unless photoDebug=1. */
+export function isChatPhotoDebugTiming(): boolean {
+  return typeof globalThis !== "undefined" && globalThis.__CHAT_PHOTO_DEBUG_TIMING__ === true;
+}
+
+export function enableChatPhotoDebugTiming(on: boolean): void {
+  if (typeof globalThis === "undefined") return;
+  if (on) {
+    globalThis.__CHAT_PHOTO_DEBUG_TIMING__ = true;
+    globalThis.__CHAT_PHOTO_TIMING__ ||= { marks: [], stamps: {} };
+    return;
+  }
+  delete globalThis.__CHAT_PHOTO_DEBUG_TIMING__;
+}
+
 export function isChatPhotoTimingEnabled(): boolean {
-  if (typeof globalThis !== "undefined" && globalThis.__CHAT_PHOTO_TIMING__) return true;
-  return typeof process !== "undefined" && process.env.NODE_ENV !== "production";
+  return isChatPhotoDebugTiming();
 }
 
 function timingBag(): ChatPhotoTimingBag {
@@ -225,9 +251,10 @@ export function stampChatPhotoTiming(name: string, at = chatPhotoNow()): number 
 
 export function markChatPhotoTiming(name: string, startedAt: number): number {
   const ms = Math.max(0, chatPhotoNow() - startedAt);
+  if (!isChatPhotoDebugTiming() && !LITE_MARKS.has(name)) return ms;
   const bag = timingBag();
   bag.marks.push({ name, ms });
-  if (isChatPhotoTimingEnabled() && typeof console !== "undefined" && typeof console.debug === "function") {
+  if (isChatPhotoDebugTiming() && typeof console !== "undefined" && typeof console.debug === "function") {
     console.debug(`[chat-photo] ${name} ${Math.round(ms)}ms`);
   }
   return ms;
@@ -372,7 +399,8 @@ function clearPrepareScopeFromBag(bag: ChatPhotoTimingBag): void {
   }
 }
 
-export function startChatPhotoPrepareTiming(key: string, file?: Blob): string {
+export function startChatPhotoPrepareTiming(key: string, file?: Blob): string | null {
+  if (!isChatPhotoDebugTiming()) return null;
   const runId = `r${++prepareTimingSeq}`;
   const publicKey = publicChatPhotoTimingKey(key);
   prepareTimingRuns.set(runId, { runId, key: publicKey, publicKey });
@@ -383,12 +411,13 @@ export function startChatPhotoPrepareTiming(key: string, file?: Blob): string {
   return runId;
 }
 
-export function bindChatPhotoTimingFile(file: Blob, runId: string): void {
+export function bindChatPhotoTimingFile(file: Blob, runId: string | null | undefined): void {
+  if (!runId || !isChatPhotoDebugTiming()) return;
   prepareTimingByFile.set(file, runId);
 }
 
 export function chatPhotoTimingRunIdFor(file?: Blob | null): string | null {
-  if (!file) return null;
+  if (!file || !isChatPhotoDebugTiming()) return null;
   return prepareTimingByFile.get(file) ?? null;
 }
 
@@ -396,7 +425,7 @@ export function noteChatPhotoPrepareScope(
   runId: string | null | undefined,
   patch: Partial<Omit<ChatPhotoPrepareScope, "runId" | "key">>
 ): void {
-  if (!runId) return;
+  if (!runId || !isChatPhotoDebugTiming()) return;
   const row = prepareTimingRuns.get(runId);
   if (!row) return;
   Object.assign(row, patch);
@@ -467,6 +496,7 @@ export function noteChatPhotoBoundary(
   field: ChatPhotoBoundaryField,
   at = chatPhotoNow()
 ): number {
+  if (!runId || !isChatPhotoDebugTiming()) return at;
   noteChatPhotoPrepareScope(runId, { [field]: at });
   return at;
 }
@@ -490,7 +520,7 @@ export type ChatPhotoFileAccessWatch<T extends object = File> = {
   sizeMs: number;
 };
 
-/** Counts/times File.type|name|size only. Never stores the values. */
+/** Counts/times File.type|name|size only. Never stores the values. No-op when debug is off. */
 export function watchChatPhotoFileAccess<T extends object>(file: T): ChatPhotoFileAccessWatch<T> {
   const watch: ChatPhotoFileAccessWatch<T> = {
     file,
@@ -501,6 +531,7 @@ export function watchChatPhotoFileAccess<T extends object>(file: T): ChatPhotoFi
     nameMs: 0,
     sizeMs: 0,
   };
+  if (!isChatPhotoDebugTiming()) return watch;
   watch.file = new Proxy(file, {
     get(target, prop, receiver) {
       if (prop === "type" || prop === "name" || prop === "size") {
@@ -531,6 +562,7 @@ export function noteChatPhotoSourceSplit(
   field: ChatPhotoSourceSplitField,
   at = chatPhotoNow()
 ): number {
+  if (!runId || !isChatPhotoDebugTiming()) return at;
   noteChatPhotoPrepareScope(runId, { [field]: at });
   return at;
 }
@@ -542,6 +574,7 @@ export function noteChatPhotoFileAccess(
     "typeReads" | "nameReads" | "sizeReads" | "typeMs" | "nameMs" | "sizeMs"
   >
 ): void {
+  if (!runId || !isChatPhotoDebugTiming()) return;
   noteChatPhotoPrepareScope(runId, {
     fileTypeReads: watch.typeReads,
     fileNameReads: watch.nameReads,
@@ -553,7 +586,7 @@ export function noteChatPhotoFileAccess(
 }
 
 export function commitChatPhotoPrepareTiming(runId: string | null | undefined): ChatPhotoPrepareScope | null {
-  if (!runId) return null;
+  if (!runId || !isChatPhotoDebugTiming()) return null;
   const row = prepareTimingRuns.get(runId);
   if (!row) return null;
   applyPrepareScopeToBag(row, timingBag());
@@ -562,6 +595,7 @@ export function commitChatPhotoPrepareTiming(runId: string | null | undefined): 
 
 /** Outer prepare wall time only. Never overwrites adaptive compressionMs. */
 export function noteChatPhotoCompression(ms: number): void {
+  if (!isChatPhotoDebugTiming()) return;
   timingBag().prepareOuterMs = Math.max(0, ms);
 }
 
@@ -588,6 +622,7 @@ export function noteChatPhotoCompressionBreakdown(input: {
   decodePath?: string | null;
   encodePath?: string | null;
 }): void {
+  if (!isChatPhotoDebugTiming()) return;
   const adaptiveTotal = finiteMs(input.adaptiveTotalMs ?? input.totalCompressionMs);
   const scoped: Partial<Omit<ChatPhotoPrepareScope, "runId" | "key">> = {};
   const decodeMs = finiteMs(input.decodeMs);
@@ -894,9 +929,8 @@ export function buildChatPhotoDebugSample(
 
 export function emitChatPhotoTimingSummary(): ChatPhotoTimingSummary {
   const summary = summarizeChatPhotoTiming();
-  const debug = buildChatPhotoDebugSample();
-  if (typeof console !== "undefined" && typeof console.info === "function") {
-    console.info("[chat-photo-timing]", JSON.stringify(debug));
+  if (isChatPhotoDebugTiming() && typeof console !== "undefined" && typeof console.info === "function") {
+    console.info("[chat-photo-timing]", JSON.stringify(buildChatPhotoDebugSample()));
   }
   return summary;
 }
@@ -912,6 +946,7 @@ export function canShowChatPhotoDebug(input: {
 
 export function resetChatPhotoTiming(): void {
   prepareTimingRuns.clear();
+  prepareTimingSeq = 0;
   const bag = globalThis.__CHAT_PHOTO_TIMING__;
   if (!bag) {
     globalThis.__CHAT_PHOTO_TIMING__ = { marks: [], stamps: {} };
