@@ -2,6 +2,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { requireAdmin } from '@/lib/auth'
+import {
+  ShiftDutyReplaceEmptyError,
+  isShiftDutyReplaceEmptyError,
+} from '@/lib/shiftDutyReplace'
 
 type GenerateBody = {
   date: string               // 'YYYY-MM-DD'
@@ -14,14 +18,10 @@ type GenerateBody = {
 // 특이사항 메모 기준 제외 키워드(필요 시 AssignmentType로 변경 가능)
 const EXCLUDE_KEYWORDS = ['휴무','병가','장기병가','경조사','타구사고']
 
-// 팀별 누적 배정 수 → 라운드로빈 시작 인덱스용
-async function getTeamAssignedCount(team: string) {
-  // 누적 개수를 세어 간단히 시작 인덱스 계산(더 정교하게 하려면 별도 테이블 추천)
-  const count = await prisma.shiftDuty.count({ where: { team } })
-  return count
-}
-
 export async function GET(req: NextRequest) {
+  const guard = await requireAdmin(req)
+  if (guard) return guard
+
   const { searchParams } = new URL(req.url)
   const date = searchParams.get('date')
   const part = searchParams.get('part') as GenerateBody['part'] | null
@@ -107,44 +107,49 @@ export async function POST(req: NextRequest) {
       teamMap.set(k, arr)
     }
 
-    // 3) 기존 동일 (date, part) 삭제
-    await prisma.shiftDuty.deleteMany({ where: { date: d, part } })
+    // 3–5) 같은 (date, part) 삭제 + 생성은 한 트랜잭션.
+    // count는 delete 이후라 기존 해당 일자 행을 라운드로빈에 넣지 않는다.
+    const createdCount = await prisma.$transaction(async (tx) => {
+      await tx.shiftDuty.deleteMany({ where: { date: d, part } })
 
-    // 4) 팀별 라운드로빈 배치 생성
-    let orderCounter = 1
-    const toCreate: {
-      date: Date; part: any; variant: any;
-      orderNo: number; caddyId: number; team?: string | null
-    }[] = []
+      let orderCounter = 1
+      const toCreate: {
+        date: Date; part: any; variant: any;
+        orderNo: number; caddyId: number; team?: string | null
+      }[] = []
 
-    for (const team of teams) {
-      const arr = teamMap.get(team) || []
-      if (arr.length === 0) continue
+      for (const team of teams) {
+        const arr = teamMap.get(team) || []
+        if (arr.length === 0) continue
 
-      const assignedCount = await getTeamAssignedCount(team)
-      let startIdx = assignedCount % arr.length
+        const assignedCount = await tx.shiftDuty.count({ where: { team } })
+        let startIdx = assignedCount % arr.length
 
-      for (let i = 0; i < slotsPerTeam; i++) {
-        const pick = arr[(startIdx + i) % arr.length]
-        toCreate.push({
-          date: d,
-          part,
-          variant,
-          orderNo: orderCounter++,
-          caddyId: pick.id,
-          team: team,
-        })
+        for (let i = 0; i < slotsPerTeam; i++) {
+          const pick = arr[(startIdx + i) % arr.length]
+          toCreate.push({
+            date: d,
+            part,
+            variant,
+            orderNo: orderCounter++,
+            caddyId: pick.id,
+            team: team,
+          })
+        }
       }
-    }
 
-    // 5) 생성
-    if (toCreate.length === 0) {
-      return NextResponse.json({ error: '할당 가능한 인원이 없습니다.' }, { status: 400 })
-    }
-    await prisma.shiftDuty.createMany({ data: toCreate })
+      if (toCreate.length === 0) {
+        throw new ShiftDutyReplaceEmptyError()
+      }
+      await tx.shiftDuty.createMany({ data: toCreate })
+      return toCreate.length
+    })
 
-    return NextResponse.json({ ok: true, count: toCreate.length })
+    return NextResponse.json({ ok: true, count: createdCount })
   } catch (e: any) {
+    if (isShiftDutyReplaceEmptyError(e)) {
+      return NextResponse.json({ error: e.message }, { status: 400 })
+    }
     console.error('POST /api/shifts error', e)
     return NextResponse.json({ error: e?.message ?? 'shift 생성 실패' }, { status: 500 })
   }

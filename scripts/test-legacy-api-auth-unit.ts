@@ -28,6 +28,7 @@ import { GET as scheduleTableGET } from "../src/app/api/schedule/table/route";
 import { POST as scheduleGeneratePOST } from "../src/app/api/schedule/generate/route";
 import { GET as dbcheckGET } from "../src/app/api/dbcheck/route";
 import { GET as publishedGET } from "../src/app/api/assignments/published/route";
+import { GET as shiftsGET } from "../src/app/api/shifts/route";
 
 let passed = 0;
 let failed = 0;
@@ -292,6 +293,14 @@ async function main() {
         !("count" in (dbc.body as object)),
       "unauth dbcheck has no count"
     );
+
+    const shifts = await jsonStatus(
+      await shiftsGET(
+        new NextRequest("http://localhost/api/shifts?date=2026-10-12&part=ONE")
+      )
+    );
+    assert(shifts.status === 401, `GET /api/shifts unauth ${shifts.status}`);
+    assert(Array.isArray(shifts.body) === false, "unauth shifts is not a duty list");
   }
 
   section("handlers: caddy cannot write / cannot read assignments");
@@ -340,6 +349,16 @@ async function main() {
       )
     );
     assert(caddyDel.status === 401, `caddy DELETE assignment ${caddyDel.status}`);
+
+    const caddyShifts = await jsonStatus(
+      await shiftsGET(
+        await cookieReq(
+          "caddy",
+          "http://localhost/api/shifts?date=2026-10-12&part=ONE"
+        )
+      )
+    );
+    assert(caddyShifts.status === 401, `caddy GET /api/shifts ${caddyShifts.status}`);
 
     const caddySchedPost = await jsonStatus(
       await schedulePOST(

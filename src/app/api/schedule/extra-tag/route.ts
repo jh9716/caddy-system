@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { requireAdmin } from '@/lib/auth'
+import { requireAdmin, resolveAuthUser } from '@/lib/auth'
+import { scheduleExtraTagCreatedBy } from '@/lib/scheduleExtraTagWrite'
 
 function toDateRange(ymd: string) {
   const start = new Date(ymd + 'T00:00:00.000Z');
@@ -13,10 +14,12 @@ export async function POST(req: NextRequest) {
     const _guard = await requireAdmin(req);
     if (_guard) return _guard;
 
-    const { date, caddyId, tag, createdBy } = await req.json();
+    const { date, caddyId, tag } = await req.json();
     if (!date || !caddyId || !tag) {
       return NextResponse.json({ error: 'date, caddyId, tag 필요' }, { status: 400 });
     }
+    const auth = await resolveAuthUser(req);
+    const createdBy = scheduleExtraTagCreatedBy(auth);
     const { start, end } = toDateRange(date);
 
     // 같은 날짜범위 동일 캐디 동일 태그가 없으면 생성
@@ -25,7 +28,7 @@ export async function POST(req: NextRequest) {
     });
     if (!exists) {
       await prisma.scheduleExtraTag.create({
-        data: { caddyId, tag, date: new Date(date), createdBy: createdBy ?? null },
+        data: { caddyId, tag, date: new Date(date), createdBy },
       });
     }
     return NextResponse.json({ ok: true });
