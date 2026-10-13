@@ -199,8 +199,8 @@ async function main() {
       assert(message.message.data.tag === "native-fcm-e2e", "payload tag");
       assert(
         message.message.android.notification.channelId === FCM_ANDROID_CHANNEL_ID &&
-          FCM_ANDROID_CHANNEL_ID === "verthill",
-        "channel verthill"
+          FCM_ANDROID_CHANNEL_ID === "verthill-private",
+        "channel verthill-private"
       );
     }
 

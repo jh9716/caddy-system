@@ -11,7 +11,9 @@ import type { CapacitorConfig } from "@capacitor/cli";
  * - iOS / APNs / Camera remain out of scope.
  * - Android FCM foundation is additive. google-services.json is gitignored.
  * - REST Kakao OAuth inside this WebView is terminated (Samsung Internet dump).
- *   Do not add more allowNavigation hosts.
+ *   Do not add Kakao hosts to allowNavigation. Native Kakao SDK login
+ *   (KakaoNativeAuthPlugin → POST /api/auth/kakao/native-session) does not
+ *   use WebView navigation.
  * - App Kakao login: Android SDK + POST /api/auth/kakao/native-session.
  *   Web/PWA keep REST /api/auth/kakao/start.
  */
@@ -32,13 +34,11 @@ const config: CapacitorConfig = {
     url: "https://www.verthill.kr",
     cleartext: false,
     androidScheme: "https",
-    // Frozen leftover from the REST-WebView attempt. No further Kakao hosts.
-    // Exact hosts only, no kakao.com wildcards. kapi is server-only.
+    // Exact first-party hosts only. No Kakao WebView OAuth hosts.
+    // Native Kakao SDK login does not need allowNavigation.
     allowNavigation: [
       "www.verthill.kr",
       "verthill.kr",
-      "kauth.kakao.com",
-      "accounts.kakao.com",
     ],
   },
 };

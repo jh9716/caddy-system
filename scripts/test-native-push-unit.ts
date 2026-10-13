@@ -367,6 +367,35 @@ async function main() {
   assert(transient.enabled === true, "failed keeps token enabled");
   assert(failResult.sentUserIds.length === 0, "gone/failed do not count as native success");
 
+  console.log("== Android channel privacy ==");
+  {
+    const bridge = read("src/lib/nativePushBridge.ts");
+    const channel = read("src/lib/nativePushChannel.ts");
+    const fcm = read("src/lib/fcmHttpV1.ts");
+    const manifest = read("android/app/src/main/AndroidManifest.xml");
+    assert(
+      channel.includes('NATIVE_PUSH_CHANNEL_ID = "verthill-private"') &&
+        channel.includes("NATIVE_PUSH_CHANNEL_VISIBILITY_PRIVATE = 0") &&
+        channel.includes("NATIVE_PUSH_CHANNEL_IMPORTANCE = 4"),
+      "channel helper is PRIVATE + HIGH"
+    );
+    assert(
+      bridge.includes("migrateNativePushPrivacyChannel") &&
+        !bridge.includes("visibility: 1"),
+      "bridge migrates off PUBLIC visibility"
+    );
+    assert(
+      fcm.includes("FCM_ANDROID_CHANNEL_ID = NATIVE_PUSH_CHANNEL_ID") ||
+        fcm.includes('FCM_ANDROID_CHANNEL_ID = "verthill-private"'),
+      "FCM payload uses PRIVATE channel id"
+    );
+    assert(
+      manifest.includes('android:value="verthill-private"') &&
+        !/android:value="verthill"\s*\/>/.test(manifest),
+      "manifest default channel migrated"
+    );
+  }
+
   console.log("== Kakao / Web Push files stay ==");
   assert(
     read("src/lib/kakaoNativeBridge.ts").includes("NATIVE_KAKAO_LOGIN_ENABLED"),

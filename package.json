@@ -161,6 +161,7 @@
     "test:daily-ops-snapshot-unit": "bash scripts/tsx-safe.sh scripts/test-daily-ops-snapshot-unit.ts",
     "test:reflow-feedback-unit": "bash scripts/tsx-safe.sh scripts/test-reflow-feedback-unit.ts",
     "test:native-android-poc-unit": "bash scripts/tsx-safe.sh scripts/test-native-android-poc-unit.ts",
+    "test:android-security-hardening-unit": "bash scripts/tsx-safe.sh scripts/test-android-security-hardening-unit.ts",
     "test:android-release-signing-unit": "bash scripts/tsx-safe.sh scripts/test-android-release-signing-unit.ts",
     "test:kakao-native-session-unit": "bash scripts/tsx-safe.sh scripts/test-kakao-native-session-unit.ts",
     "test:member-session-c8c9-unit": "bash scripts/tsx-safe.sh scripts/test-member-session-c8c9-unit.ts",

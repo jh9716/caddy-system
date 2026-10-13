@@ -96,8 +96,8 @@ assert(msg.message.notification.title === "T", "notification title");
 assert(msg.message.data.url === "/notice/3", "data.url relative");
 assert(msg.message.data.tag === "notice-3", "data.tag");
 assert(msg.message.android.notification.tag === "notice-3", "android notification tag");
-assert(msg.message.android.notification.channelId === FCM_ANDROID_CHANNEL_ID, "channel verthill");
-assert(FCM_ANDROID_CHANNEL_ID === "verthill", "channel id constant");
+assert(msg.message.android.notification.channelId === FCM_ANDROID_CHANNEL_ID, "channel verthill-private");
+assert(FCM_ANDROID_CHANNEL_ID === "verthill-private", "channel id constant");
 const evil = buildFcmHttpV1Message("tok-1", {
   title: "T",
   body: "B",
@@ -143,7 +143,7 @@ async function runHttp() {
     const body = JSON.parse(init.body) as { message: { data: { url?: string }; android: { notification: { channelId: string } } } };
     assert(url.includes("/v1/projects/verthill/messages:send"), "fcm project URL");
     assert(init.headers.Authorization === "Bearer atok", "bearer access token");
-    assert(body.message.android.notification.channelId === "verthill", "request channel");
+    assert(body.message.android.notification.channelId === "verthill-private", "request channel");
     assert(body.message.data.url === "/caddy", "request data.url");
     return { status: 200, json: async () => ({ name: "projects/verthill/messages/1" }) };
   };
