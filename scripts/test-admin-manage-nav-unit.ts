@@ -43,6 +43,7 @@ assert(
     [
       "/manage",
       "/manage/caddies",
+      "/manage/marshals",
       "/manage/off-requests",
       "/manage/assignments",
       "/board",
@@ -56,7 +57,7 @@ assert(
 );
 assert(
   ADMIN_MAIN_NAV.map((i) => i.label).join(",") ===
-    "대시보드,캐디 관리,휴무 신청,자동배치,배치표,공지,채팅,코스 제보,스케줄,관리도구",
+    "대시보드,캐디 관리,마샬 관리,휴무 신청,자동배치,배치표,공지,채팅,코스 제보,스케줄,관리도구",
   "main labels"
 );
 
@@ -68,6 +69,7 @@ assert(isAdminToolPath("/manage/caddy-search"), "caddy-search is a tool");
 assert(isAdminToolPath("/manage/assignments/preview"), "preview is a tool");
 assert(!isAdminToolPath("/manage/assignments"), "자동배치 is not a tool");
 assert(!isAdminToolPath("/manage/caddies"), "캐디 관리 is not a tool");
+assert(!isAdminToolPath("/manage/marshals"), "마샬 관리 is not a tool");
 assert(!isAdminToolPath("/manage"), "dashboard is not a tool");
 
 console.log("== active highlight ==");

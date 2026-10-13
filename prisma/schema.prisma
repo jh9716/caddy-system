@@ -122,6 +122,8 @@ model Caddy {
   dailyOpsDuties     DailyOpsDuty[]
   dailyOpsDutyOverrides DailyOpsDutyOverride[]
   dailyOffOverrides  DailyOffOverride[]
+  /// 마샬 명단 1:0..1. Assignment.MARSHAL / DailyOpsDuty 와 분리.
+  marshalProfile     MarshalProfile?
   /// 승인 시 선택된 Caddy로 역참조 (이력). Caddy 물리 삭제 시 selectedCaddyId만 null
   linkRequestSelections CaddyLinkRequest[] @relation("CaddyLinkRequestSelectedCaddy")
   /// 로그인 User와 1:1 (미연결 시 null)
@@ -931,4 +933,20 @@ model DailyOpsSnapshot {
   updatedAt     DateTime @updatedAt
 
   @@index([capturedAt])
+}
+
+/// 마샬 자격 명단. Caddy.team / caddyType 은 여기 복제하지 않는다.
+/// Assignment.MARSHAL(기간 차단) · DailyOpsDuty(당일 슬롯) · MARSHAL_SUPPORT 와 분리.
+/// 월 근무표 SoT가 아니다. hard delete 대신 active=false.
+model MarshalProfile {
+  id        Int      @id @default(autoincrement())
+  caddyId   Int      @unique
+  caddy     Caddy    @relation(fields: [caddyId], references: [id], onDelete: Restrict)
+  active    Boolean  @default(true)
+  /// 마샬 시작일 (로컬 자정). Caddy 입사일 아님.
+  startedOn DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([active])
 }

@@ -12,7 +12,7 @@ import {
   shouldUseManageShellForNotice,
   shouldUseMemberShell,
 } from "../src/lib/boardNav";
-import { manageNavItems, manageToolItems } from "../src/components/manage/ManageShell";
+import { manageNavItems, manageToolItems } from "../src/lib/adminManageNav";
 import { resolveCaddyPageGate } from "../src/lib/roleRouting";
 
 let passed = 0;
@@ -70,6 +70,7 @@ section("admin menus unchanged");
   const adminTools = manageToolItems(true).map((i) => i.href);
   const staffTools = manageToolItems(false).map((i) => i.href);
   assert(admin.includes("/manage/caddies"), "admin keeps 캐디 관리");
+  assert(admin.includes("/manage/marshals"), "admin has 마샬 관리");
   assert(admin.includes("/manage/assignments"), "admin keeps 자동배치");
   assert(admin.includes("/manage/tools"), "admin has 관리도구 hub");
   assert(!admin.includes("/manage/staff-accounts"), "직원 계정 is not on the main nav");
@@ -84,6 +85,11 @@ section("admin menus unchanged");
   const manageShell = read("src/components/manage/ManageShell.tsx");
   const manageNav = read("src/lib/adminManageNav.ts");
   assert(manageNav.includes('label: "캐디 관리"'), "ManageShell still has 캐디 관리");
+  assert(
+    manageShell.includes('export { manageNavItems, manageToolItems }'),
+    "shell re-exports nav catalog"
+  );
+  assert(manageShell.includes("/manage/marshals"), "shell prefetches 마샬 관리");
   assert(manageShell.includes('href: "/manage/caddies"'), "admin bottom/nav 캐디 path");
   assert(manageShell.includes('href: "#menu"'), "admin bottom still has 메뉴 tab");
   assert(!/BOTTOM[\s\S]*course-reports/.test(manageShell), "admin bottom nav not expanded");
