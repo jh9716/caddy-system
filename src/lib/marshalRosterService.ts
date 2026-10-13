@@ -11,7 +11,6 @@ import {
   assertCaddyEligibleForMarshal,
   formatMarshalYmd,
   parseMarshalStartedOn,
-  parseOptionalSeniorCaddyId,
   parsePositiveCaddyId,
   parsePositiveId,
   serializeMarshalProfile,
@@ -94,14 +93,12 @@ export async function createMarshalProfile(
   input: {
     caddyId: unknown;
     startedOn: unknown;
-    seniorCaddyId?: unknown;
     actor?: MarshalRosterActor;
   },
   client?: PrismaClient
 ): Promise<MarshalRosterRow> {
   const caddyId = parsePositiveCaddyId(input.caddyId);
   const startedOn = parseMarshalStartedOn(input.startedOn);
-  const seniorCaddyId = parseOptionalSeniorCaddyId(input.seniorCaddyId, caddyId);
   const prisma = db(client);
 
   const created = await prisma.$transaction(async (tx) => {
@@ -119,14 +116,10 @@ export async function createMarshalProfile(
       );
     }
     const caddy = await requireEligibleCaddy(tx, caddyId);
-    if (seniorCaddyId != null) {
-      await requireCaddy(tx, seniorCaddyId);
-    }
     const row = await tx.marshalProfile.create({
       data: {
         caddyId,
         startedOn,
-        seniorCaddyId,
         active: true,
       },
       include: { caddy: { select: CADDY_SELECT } },
@@ -140,7 +133,6 @@ export async function createMarshalProfile(
           caddyId,
           name: caddy.name,
           startedOn: formatMarshalYmd(startedOn),
-          seniorCaddyId,
           username: input.actor?.username ?? null,
           userId: input.actor?.userId ?? null,
         },
@@ -156,7 +148,6 @@ export async function updateMarshalProfile(
     id: unknown;
     active?: unknown;
     startedOn?: unknown;
-    seniorCaddyId?: unknown;
     actor?: MarshalRosterActor;
   },
   client?: PrismaClient
@@ -165,8 +156,7 @@ export async function updateMarshalProfile(
   const prisma = db(client);
   const hasActive = input.active !== undefined;
   const hasStartedOn = input.startedOn !== undefined;
-  const hasSenior = input.seniorCaddyId !== undefined;
-  if (!hasActive && !hasStartedOn && !hasSenior) {
+  if (!hasActive && !hasStartedOn) {
     throw new MarshalRosterError("수정할 값이 없습니다.", "empty_patch", 400);
   }
 
@@ -229,36 +219,6 @@ export async function updateMarshalProfile(
               name: current.caddy.name,
               from: prev,
               to: next,
-              username: input.actor?.username ?? null,
-              userId: input.actor?.userId ?? null,
-            },
-          })
-        );
-      }
-    }
-
-    if (hasSenior) {
-      const seniorCaddyId = parseOptionalSeniorCaddyId(
-        input.seniorCaddyId,
-        current.caddyId
-      );
-      if (seniorCaddyId !== current.seniorCaddyId) {
-        if (seniorCaddyId != null) {
-          await requireCaddy(tx, seniorCaddyId);
-        }
-        data.seniorCaddy = seniorCaddyId
-          ? { connect: { id: seniorCaddyId } }
-          : { disconnect: true };
-        audits.push(
-          auditRow({
-            action: MARSHAL_AUDIT_ACTIONS.UPDATE_SENIOR,
-            entityId: current.id,
-            ip: input.actor?.ip,
-            payload: {
-              caddyId: current.caddyId,
-              name: current.caddy.name,
-              from: current.seniorCaddyId,
-              to: seniorCaddyId,
               username: input.actor?.username ?? null,
               userId: input.actor?.userId ?? null,
             },

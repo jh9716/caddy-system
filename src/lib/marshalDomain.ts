@@ -3,15 +3,6 @@
  * 월 자동배정 / DailyOpsDuty 투영 / Assignment.MARSHAL 은 여기 없다.
  */
 
-import { OPS_DUTY_ROLE_KEYS } from "@/lib/opsDutyRoleKeys";
-
-export const MARSHAL_EARLY_SLOTS_PER_DAY = 2;
-export const MARSHAL_LATE_SLOTS_PER_DAY = 1;
-
-export const MARSHAL_ROLE_KEYS = OPS_DUTY_ROLE_KEYS.filter((key) =>
-  key.startsWith("마샬_")
-);
-
 export const MARSHAL_PROFILE_ENTITY = "MarshalProfile";
 
 export const MARSHAL_AUDIT_ACTIONS = {
@@ -19,7 +10,6 @@ export const MARSHAL_AUDIT_ACTIONS = {
   DEACTIVATE: "MARSHAL_PROFILE_DEACTIVATE",
   REACTIVATE: "MARSHAL_PROFILE_REACTIVATE",
   UPDATE_STARTED_ON: "MARSHAL_PROFILE_UPDATE_STARTED_ON",
-  UPDATE_SENIOR: "MARSHAL_PROFILE_UPDATE_SENIOR",
 } as const;
 
 export type MarshalAuditAction =
@@ -50,7 +40,6 @@ export type MarshalRosterRow = {
   caddyId: number;
   active: boolean;
   startedOn: string;
-  seniorCaddyId: number | null;
   caddy: MarshalRosterCaddy;
   createdAt: string;
   updatedAt: string;
@@ -135,22 +124,6 @@ export function parsePositiveCaddyId(value: unknown): number {
   return parsePositiveId(value, "caddyId");
 }
 
-export function parseOptionalSeniorCaddyId(
-  value: unknown,
-  selfCaddyId?: number
-): number | null {
-  if (value === undefined || value === null || value === "") return null;
-  const n = parsePositiveCaddyId(value);
-  if (selfCaddyId != null && n === selfCaddyId) {
-    throw new MarshalRosterError(
-      "선임은 본인과 같을 수 없습니다.",
-      "invalid_senior",
-      400
-    );
-  }
-  return n;
-}
-
 export function assertCaddyEligibleForMarshal(caddy: {
   id?: number;
   name?: string;
@@ -178,7 +151,6 @@ export function serializeMarshalProfile(row: {
   caddyId: number;
   active: boolean;
   startedOn: Date | string;
-  seniorCaddyId: number | null;
   createdAt: Date | string;
   updatedAt: Date | string;
   caddy: MarshalRosterCaddy;
@@ -188,7 +160,6 @@ export function serializeMarshalProfile(row: {
     caddyId: row.caddyId,
     active: row.active,
     startedOn: formatMarshalYmd(row.startedOn),
-    seniorCaddyId: row.seniorCaddyId,
     caddy: {
       id: row.caddy.id,
       name: row.caddy.name,

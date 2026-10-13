@@ -14,22 +14,22 @@ import { requireAdmin } from "../src/lib/auth";
 import {
   CADDY_TYPE_LABELS,
   MARSHAL_AUDIT_ACTIONS,
-  MARSHAL_EARLY_SLOTS_PER_DAY,
-  MARSHAL_LATE_SLOTS_PER_DAY,
   MARSHAL_PROFILE_ENTITY,
-  MARSHAL_ROLE_KEYS,
   MarshalRosterError,
   assertCaddyEligibleForMarshal,
   caddyTypeLabel,
   formatMarshalYmd,
   parseMarshalStartedOn,
-  parseOptionalSeniorCaddyId,
   parsePositiveCaddyId,
   serializeMarshalProfile,
 } from "../src/lib/marshalDomain";
 import { GET as marshalsGET, POST as marshalsPOST } from "../src/app/api/marshals/route";
 import { PATCH as marshalPATCH } from "../src/app/api/marshals/[id]/route";
 import { OPS_DUTY_ROLE_KEYS } from "../src/lib/opsDutyRoleKeys";
+
+const MONTH_MODEL = ["Marshal", "Month"].join("");
+const SENIOR_FIELD = ["senior", "CaddyId"].join("");
+const JUNIOR_FIELD = ["marshal", "Juniors"].join("");
 
 let passed = 0;
 let failed = 0;
@@ -83,18 +83,14 @@ async function cookieReq(
   });
 }
 
-section("daily slot contract (P2 constants only)");
-assert(MARSHAL_EARLY_SLOTS_PER_DAY === 2, "조출 2");
-assert(MARSHAL_LATE_SLOTS_PER_DAY === 1, "후출 1");
+section("existing DailyOpsDuty marshal keys unchanged");
 assert(
-  MARSHAL_ROLE_KEYS.join(",") === "마샬_조출_1,마샬_조출_2,마샬_후출_1",
-  "marshal roleKeys"
+  OPS_DUTY_ROLE_KEYS.includes("마샬_조출_1") &&
+    OPS_DUTY_ROLE_KEYS.includes("마샬_조출_2") &&
+    OPS_DUTY_ROLE_KEYS.includes("마샬_후출_1"),
+  "기존 조출2+후출1 roleKeys 유지"
 );
-assert(!MARSHAL_ROLE_KEYS.includes("마샬_후출_2" as never), "후출2 없음");
-assert(
-  MARSHAL_ROLE_KEYS.every((key) => OPS_DUTY_ROLE_KEYS.includes(key)),
-  "roleKeys ⊂ OPS_DUTY_ROLE_KEYS"
-);
+assert(!OPS_DUTY_ROLE_KEYS.includes("마샬_후출_2"), "후출2 없음");
 
 section("startedOn / eligibility");
 assert(formatMarshalYmd(parseMarshalStartedOn("2026-11-01")) === "2026-11-01", "parse ymd");
@@ -102,8 +98,6 @@ throws(() => parseMarshalStartedOn("2026-02-30"), "invalid_started_on", "overflo
 throws(() => parseMarshalStartedOn("11-01"), "invalid_started_on", "형식 거부");
 assert(parsePositiveCaddyId(12) === 12, "caddyId");
 throws(() => parsePositiveCaddyId(0), "caddyId_required", "caddyId 0 거부");
-assert(parseOptionalSeniorCaddyId("", 1) === null, "senior empty");
-throws(() => parseOptionalSeniorCaddyId(3, 3), "invalid_senior", "자기 선임 거부");
 assertCaddyEligibleForMarshal({
   id: 1,
   name: "홍",
@@ -142,7 +136,6 @@ const serialized = serializeMarshalProfile({
   caddyId: 4,
   active: true,
   startedOn: parseMarshalStartedOn("2026-03-01"),
-  seniorCaddyId: null,
   createdAt: new Date("2026-03-02T00:00:00.000Z"),
   updatedAt: new Date("2026-03-02T00:00:00.000Z"),
   caddy: {
@@ -156,6 +149,10 @@ const serialized = serializeMarshalProfile({
 });
 assert(serialized.startedOn === "2026-03-01", "serialize startedOn");
 assert(serialized.caddy.team === "1조", "Caddy.team SoT 유지");
+assert(
+  !Object.prototype.hasOwnProperty.call(serialized, ["senior", "CaddyId"].join("")),
+  "serialize에 senior 없음"
+);
 
 section("auth: 일반 사용자 write 거부");
 {
@@ -192,6 +189,7 @@ section("source contracts");
   const patchRoute = read("src/app/api/marshals/[id]/route.ts");
   const page = read("src/app/manage/marshals/page.tsx");
   const schema = read("prisma/schema.prisma");
+  const migration = read("prisma/migrations/20261012120000_marshal_roster_p1/migration.sql");
   const engine = read("src/lib/autoAssignEngine.ts");
   const assignmentsPage = read("src/app/manage/assignments/page.tsx");
 
@@ -204,9 +202,14 @@ section("source contracts");
   assert(!service.includes("autoAssignEngine"), "service 엔진 import 없음");
   assert(!page.includes("generateMarshal"), "UI 월 생성 없음");
   assert(!page.includes("off-cal"), "UI 월 달력 없음");
+  assert(!page.includes("선임"), "UI 선임 없음");
+  assert(!page.includes("후임"), "UI 후임 없음");
   assert(schema.includes("model MarshalProfile"), "schema MarshalProfile");
-  assert(schema.includes("model MarshalMonthWindow"), "schema month window 예약");
-  assert(schema.includes("earlySlotsPerDay"), "default 조출 슬롯 필드");
+  assert(!schema.includes(`model ${MONTH_MODEL}`), "schema month models 0");
+  assert(!schema.includes(SENIOR_FIELD), "schema senior field 0");
+  assert(!schema.includes(JUNIOR_FIELD), "schema junior back-relation 0");
+  assert(!migration.includes(MONTH_MODEL), "migration month tables 0");
+  assert(!migration.includes(SENIOR_FIELD), "migration senior field 0");
   assert(/AssignmentType[\s\S]*MARSHAL/.test(schema), "Assignment.MARSHAL enum 유지");
   assert(schema.includes("MARSHAL_SUPPORT"), "MARSHAL_SUPPORT enum 유지");
   assert(schema.includes("enum DailyOpsDutyRole"), "DailyOpsDutyRole 유지");
@@ -224,30 +227,56 @@ section("source contracts");
   assert(domain.includes("MARSHAL_PROFILE_DEACTIVATE"), "deactivate audit action");
   assert(domain.includes("MARSHAL_PROFILE_REACTIVATE"), "reactivate audit action");
   assert(domain.includes("MARSHAL_PROFILE_UPDATE_STARTED_ON"), "startedOn audit action");
+  assert(!domain.includes("UPDATE_SENIOR"), "senior audit 없음");
+  assert(!domain.includes("parseOptionalSenior"), "senior parse 없음");
+  assert(!service.includes(SENIOR_FIELD), "service senior field 0");
+  assert(!getRoute.includes(SENIOR_FIELD), "POST senior field 0");
+  assert(!patchRoute.includes(SENIOR_FIELD), "PATCH senior field 0");
   assert(MARSHAL_PROFILE_ENTITY === "MarshalProfile", "audit entity");
   assert(!getRoute.includes("hard delete") && !patchRoute.includes(".delete("), "hard delete 없음");
 }
 
-section("git: autoAssignEngine / assignments page / existing marshal enums");
+section("git: P1 scope + existing ops files unchanged");
 {
   const { spawnSync } = await import("node:child_process");
-  const diff = spawnSync(
-    "git",
-    [
-      "diff",
-      "--name-only",
-      "origin/main",
-      "--",
-      "src/lib/autoAssignEngine.ts",
-      "src/app/manage/assignments/page.tsx",
-      "src/lib/dailySpecialSupport.ts",
-      "src/lib/opsDutyEffective.ts",
-      "src/lib/availabilityEngine.ts",
-    ],
-    { encoding: "utf8" }
-  );
-  const names = String(diff.stdout || "").trim();
+  const names = String(
+    spawnSync(
+      "git",
+      [
+        "diff",
+        "--name-only",
+        "origin/main",
+        "--",
+        "src/lib/autoAssignEngine.ts",
+        "src/lib/caddyPoolCanonical.ts",
+        "src/lib/assignmentDraft.ts",
+        "src/lib/dailyBoardDraft.ts",
+        "src/app/manage/assignments/page.tsx",
+        "src/lib/dailySpecialSupport.ts",
+        "src/lib/opsDutyEffective.ts",
+        "src/lib/availabilityEngine.ts",
+      ],
+      { encoding: "utf8" }
+    ).stdout || ""
+  ).trim();
   assert(names === "", `기존 배치 파일 변경 0 (${names || "clean"})`);
+
+  const fullDiff = String(
+    spawnSync("git", ["diff", "origin/main"], { encoding: "utf8" }).stdout || ""
+  );
+  assert(!fullDiff.includes(MONTH_MODEL), "PR diff month models 0");
+  assert(!fullDiff.includes(SENIOR_FIELD), "PR diff senior field 0");
+  const dutyDiff = String(
+    spawnSync(
+      "git",
+      ["diff", "origin/main", "--", "prisma/schema.prisma"],
+      { encoding: "utf8" }
+    ).stdout || ""
+  );
+  assert(
+    !/^[+-]\s+(dailyOpsDut|enum DailyOpsDuty|model DailyOpsDuty)/m.test(dutyDiff),
+    "schema DailyOpsDuty 필드/모델 변경 0"
+  );
 }
 
 section("local DB (optional)");
@@ -348,15 +377,6 @@ section("local DB (optional)");
         );
       }
     } finally {
-      await prisma.marshalMonthUnavail.deleteMany({
-        where: { caddyId: { in: [active.id, retired.id] } },
-      });
-      await prisma.marshalMonthOverride.deleteMany({
-        where: { caddyId: { in: [active.id, retired.id] } },
-      });
-      await prisma.marshalMonthAssignment.deleteMany({
-        where: { caddyId: { in: [active.id, retired.id] } },
-      });
       await prisma.marshalProfile.deleteMany({
         where: { caddyId: { in: [active.id, retired.id] } },
       });

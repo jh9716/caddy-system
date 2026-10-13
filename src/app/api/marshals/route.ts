@@ -42,7 +42,6 @@ export async function POST(req: NextRequest) {
     const marshal = await createMarshalProfile({
       caddyId: (body as { caddyId?: unknown }).caddyId,
       startedOn: (body as { startedOn?: unknown }).startedOn,
-      seniorCaddyId: (body as { seniorCaddyId?: unknown }).seniorCaddyId,
       actor: {
         userId: auth?.id ?? null,
         username: auth?.username ?? null,
