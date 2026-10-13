@@ -77,6 +77,7 @@ type Caddy = {
   thirdBandSubgroup?: ThirdBandSubgroup | null;
   missingFromImport?: boolean;
   phoneNormalized?: string | null;
+  dormitoryResident?: boolean;
 };
 
 type Draft = {
@@ -90,6 +91,7 @@ type Draft = {
   phone: string;
   /** null = 일반 (또는 1~8조) */
   thirdBandSubgroup: ThirdBandSubgroup | null;
+  dormitoryResident: boolean;
 };
 
 const emptyDraft = (): Draft => ({
@@ -101,6 +103,7 @@ const emptyDraft = (): Draft => ({
   extraFlags: [],
   phone: '',
   thirdBandSubgroup: null,
+  dormitoryResident: false,
 });
 
 function affiliationFromCaddy(c: {
@@ -162,6 +165,7 @@ function toDraft(c: Caddy): Draft {
     phone: c.phoneNormalized ?? '',
     thirdBandSubgroup:
       affiliation === 'THIRD' && isThirdBandTeam(c.team) ? subgroup : null,
+    dormitoryResident: c.dormitoryResident === true,
   };
 }
 
@@ -803,6 +807,7 @@ export default function ManageCaddiesPage() {
             caddyType: 'DRIVING',
             employmentStatus: draft.employmentStatus,
             extraFlags: draft.extraFlags,
+            dormitoryResident: draft.dormitoryResident === true,
             phone: draft.phone.trim() === '' ? null : draft.phone.trim(),
           }),
         });
@@ -860,6 +865,7 @@ export default function ManageCaddiesPage() {
           thirdBandSubgroup: isThirdBandTeam(draft.team)
             ? draft.thirdBandSubgroup
             : null,
+          dormitoryResident: draft.dormitoryResident === true,
           phone: draft.phone.trim() === '' ? null : draft.phone.trim(),
         }),
       });
@@ -993,6 +999,7 @@ export default function ManageCaddiesPage() {
             name: createDraft.name.trim(),
             caddyType: 'DRIVING',
             employmentStatus: createDraft.employmentStatus,
+            dormitoryResident: createDraft.dormitoryResident === true,
             phone:
               createDraft.phone.trim() === '' ? null : createDraft.phone.trim(),
           }),
@@ -1036,6 +1043,7 @@ export default function ManageCaddiesPage() {
           thirdBandSubgroup: isThirdBandTeam(createDraft.team)
             ? createDraft.thirdBandSubgroup
             : null,
+          dormitoryResident: createDraft.dormitoryResident === true,
           phone:
             createDraft.phone.trim() === '' ? null : createDraft.phone.trim(),
         }),
@@ -1284,6 +1292,22 @@ export default function ManageCaddiesPage() {
             ))}
           </fieldset>
           )}
+          <fieldset className="cm-flags">
+            <legend>기숙사</legend>
+            <label className="cm-check">
+              <input
+                type="checkbox"
+                checked={createDraft.dormitoryResident}
+                onChange={(e) =>
+                  setCreateDraft((d) => ({
+                    ...d,
+                    dormitoryResident: e.target.checked,
+                  }))
+                }
+              />
+              기숙사 거주
+            </label>
+          </fieldset>
           <div className="cm-actions">
             <button type="button" className="cm-btn cm-btn-primary" disabled={creating} onClick={createCaddy}>
               {creating ? '등록 중…' : '등록'}
@@ -1593,6 +1617,21 @@ export default function ManageCaddiesPage() {
                             ))}
                           </fieldset>
                           )}
+                          <fieldset className="cm-flags">
+                            <legend>기숙사</legend>
+                            <label className="cm-check">
+                              <input
+                                type="checkbox"
+                                checked={draft.dormitoryResident}
+                                onChange={(e) =>
+                                  updateDraft(c.id, {
+                                    dormitoryResident: e.target.checked,
+                                  })
+                                }
+                              />
+                              기숙사 거주
+                            </label>
+                          </fieldset>
                           <div className="cm-item-actions">
                             <button
                               type="button"
@@ -1645,6 +1684,9 @@ export default function ManageCaddiesPage() {
                           </td>
                           <td className="cm-flags-cell">
                             {(c.extraFlags ?? []).join(' · ') || '—'}
+                            {c.dormitoryResident ? (
+                              <span className="cm-missing-tag">기숙사</span>
+                            ) : null}
                           </td>
                           <td>
                             <div className="cm-row-actions">
@@ -1904,6 +1946,21 @@ export default function ManageCaddiesPage() {
                             ))}
                           </fieldset>
                           )}
+                          <fieldset className="cm-flags">
+                            <legend>기숙사</legend>
+                            <label className="cm-check">
+                              <input
+                                type="checkbox"
+                                checked={draft.dormitoryResident}
+                                onChange={(e) =>
+                                  updateDraft(c.id, {
+                                    dormitoryResident: e.target.checked,
+                                  })
+                                }
+                              />
+                              기숙사 거주
+                            </label>
+                          </fieldset>
                           <div className="cm-item-actions">
                             <button
                               type="button"
@@ -2886,6 +2943,21 @@ export default function ManageCaddiesPage() {
                           ))}
                         </fieldset>
                       )}
+                      <fieldset className="cm-flags">
+                        <legend>기숙사</legend>
+                        <label className="cm-check">
+                          <input
+                            type="checkbox"
+                            checked={draft.dormitoryResident}
+                            onChange={(e) =>
+                              updateDraft(c.id, {
+                                dormitoryResident: e.target.checked,
+                              })
+                            }
+                          />
+                          기숙사 거주
+                        </label>
+                      </fieldset>
                       <div className="cm-sheet-actions">
                         <button
                           type="button"

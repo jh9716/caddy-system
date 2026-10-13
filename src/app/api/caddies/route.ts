@@ -30,6 +30,7 @@ import {
   caddyManageListWhere,
 } from "@/lib/caddyArchiveVisibility";
 import { writeCaddyRevokingRetiredSessions } from "@/lib/sessionRevocation";
+import { writeCaddyDormitoryAudit } from "@/lib/caddyDormitory";
 
 export const dynamic = "force-dynamic";
 
@@ -82,6 +83,8 @@ export async function POST(req: NextRequest) {
     const phoneNormalized =
       data.phone === undefined ? null : parseOptionalPhoneInput(data.phone);
 
+    const dormitoryResident = data.dormitoryResident === true;
+
     if (isDrivingCaddyType(data.caddyType)) {
       const driving = drivingPersistFields();
       const created = await prisma.caddy.create({
@@ -94,6 +97,7 @@ export async function POST(req: NextRequest) {
             incoming: data.extraFlags,
             mode: "create",
           }),
+          dormitoryResident,
           status: data.status ?? "근무중",
           memo: data.memo ?? null,
           phoneNormalized,
@@ -107,6 +111,17 @@ export async function POST(req: NextRequest) {
             : {}),
         },
       });
+      if (dormitoryResident) {
+        const auth = await resolveAuthUser(req);
+        await writeCaddyDormitoryAudit(prisma, {
+          caddyId: created.id,
+          name: created.name,
+          before: false,
+          after: true,
+          username: auth?.username ?? null,
+          userId: auth?.userId ?? null,
+        });
+      }
       return NextResponse.json(created);
     }
 
@@ -158,6 +173,7 @@ export async function POST(req: NextRequest) {
           incoming: data.extraFlags,
           mode: "create",
         }),
+        dormitoryResident,
         status: data.status ?? "근무중",
         memo: data.memo ?? null,
         phoneNormalized,
@@ -171,6 +187,17 @@ export async function POST(req: NextRequest) {
           : {}),
       },
     });
+    if (dormitoryResident) {
+      const auth = await resolveAuthUser(req);
+      await writeCaddyDormitoryAudit(prisma, {
+        caddyId: created.id,
+        name: created.name,
+        before: false,
+        after: true,
+        username: auth?.username ?? null,
+        userId: auth?.userId ?? null,
+      });
+    }
     return NextResponse.json(created);
   } catch (e: any) {
     if (e instanceof ThirdBandSubgroupError) {

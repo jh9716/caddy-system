@@ -55,6 +55,7 @@ export function memberNavItems() {
 
 const MEMBER_ADMIN_LABELS = [
   "캐디 관리",
+  "카트 관리",
   "자동배치",
   "직원 계정",
   "계정 연결",
