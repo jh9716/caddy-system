@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import MarshalManageNav from "@/components/manage/MarshalManageNav";
 import { employmentStatusLabel } from "@/lib/caddyManage";
 import { caddyTypeLabel } from "@/lib/marshalDomain";
 import type { MarshalRosterRow } from "@/lib/marshalDomain";
@@ -23,6 +24,7 @@ export default function ManageMarshalsPage() {
   const [creating, setCreating] = useState(false);
   const [caddyId, setCaddyId] = useState("");
   const [startedOn, setStartedOn] = useState("");
+  const [rotationOrder, setRotationOrder] = useState("");
   const [showInactive, setShowInactive] = useState(true);
 
   const load = useCallback(async () => {
@@ -69,7 +71,12 @@ export default function ManageMarshalsPage() {
         }),
     [caddies, registeredIds]
   );
-  const visible = showInactive ? marshals : marshals.filter((row) => row.active);
+  const visible = (showInactive ? marshals : marshals.filter((row) => row.active)).slice().sort((a, b) => {
+    const ao = a.rotationOrder ?? 9999;
+    const bo = b.rotationOrder ?? 9999;
+    if (ao !== bo) return ao - bo;
+    return a.id - b.id;
+  });
 
   const createMarshal = async () => {
     if (!caddyId || !startedOn) {
@@ -86,6 +93,7 @@ export default function ManageMarshalsPage() {
         body: JSON.stringify({
           caddyId: Number(caddyId),
           startedOn,
+          rotationOrder: rotationOrder ? Number(rotationOrder) : undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -94,6 +102,7 @@ export default function ManageMarshalsPage() {
       }
       setCaddyId("");
       setStartedOn("");
+      setRotationOrder("");
       await load();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "등록 실패");
@@ -104,7 +113,7 @@ export default function ManageMarshalsPage() {
 
   const patchMarshal = async (
     row: MarshalRosterRow,
-    body: { active?: boolean; startedOn?: string }
+    body: { active?: boolean; startedOn?: string; rotationOrder?: number | null }
   ) => {
     setBusyId(row.id);
     setError(null);
@@ -132,10 +141,10 @@ export default function ManageMarshalsPage() {
       <div className="vh-page-head">
         <h1>마샬 관리</h1>
         <p>
-          마샬 자격 명단만 다룹니다. 하루 슬롯은 조출 2·후출 1입니다. 월
-          근무표 자동배정과 당일 투영은 다음 단계에서 붙입니다.
+          관리자가 지정한 마샬만 순환 대상입니다. 순번은 월을 넘어 이어집니다.
         </p>
       </div>
+      <MarshalManageNav />
 
       <form
         className="ui-card"
@@ -172,6 +181,22 @@ export default function ManageMarshalsPage() {
               </option>
             ))}
           </select>
+          <input
+            aria-label="마샬 순번"
+            type="number"
+            min={1}
+            placeholder="순번"
+            value={rotationOrder}
+            onChange={(e) => setRotationOrder(e.target.value)}
+            disabled={creating}
+            style={{
+              width: 88,
+              padding: "8px 10px",
+              border: "1px solid var(--vh-border-strong)",
+              borderRadius: 8,
+              fontSize: 16,
+            }}
+          />
           <input
             aria-label="마샬 시작일"
             type="date"
@@ -225,6 +250,7 @@ export default function ManageMarshalsPage() {
           <table className="ui-table">
             <thead>
               <tr>
+                <th>순번</th>
                 <th>이름</th>
                 <th>조</th>
                 <th>유형</th>
@@ -237,11 +263,27 @@ export default function ManageMarshalsPage() {
             <tbody>
               {visible.length === 0 ? (
                 <tr>
-                  <td colSpan={7}>등록된 마샬이 없습니다.</td>
+                  <td colSpan={8}>등록된 마샬이 없습니다.</td>
                 </tr>
               ) : (
                 visible.map((row) => (
                   <tr key={row.id}>
+                    <td>
+                      <input
+                        aria-label={`${row.caddy.name} 순번`}
+                        type="number"
+                        min={1}
+                        defaultValue={row.rotationOrder ?? ""}
+                        disabled={busyId === row.id}
+                        onBlur={(e) => {
+                          const raw = e.target.value.trim();
+                          const next = raw === "" ? null : Number(raw);
+                          if (next === row.rotationOrder) return;
+                          void patchMarshal(row, { rotationOrder: next });
+                        }}
+                        style={{ width: 72 }}
+                      />
+                    </td>
                     <td>{row.caddy.name}</td>
                     <td>{row.caddy.team}</td>
                     <td>{caddyTypeLabel(row.caddy.caddyType)}</td>

@@ -10,6 +10,14 @@ export const MARSHAL_AUDIT_ACTIONS = {
   DEACTIVATE: "MARSHAL_PROFILE_DEACTIVATE",
   REACTIVATE: "MARSHAL_PROFILE_REACTIVATE",
   UPDATE_STARTED_ON: "MARSHAL_PROFILE_UPDATE_STARTED_ON",
+  ROTATION_ORDER_CHANGE: "MARSHAL_ROTATION_ORDER_CHANGE",
+  MONTH_GENERATE: "MARSHAL_MONTH_GENERATE",
+  MONTH_SLOT_CHANGE: "MARSHAL_MONTH_SLOT_CHANGE",
+  SUBSTITUTE: "MARSHAL_SUBSTITUTE",
+  PENALTY_CREATE: "MARSHAL_PENALTY_CREATE",
+  PENALTY_UPDATE: "MARSHAL_PENALTY_UPDATE",
+  ADJUSTMENT_CHANGE: "MARSHAL_ADJUSTMENT_CHANGE",
+  MONTH_FINALIZE: "MARSHAL_MONTH_FINALIZE",
 } as const;
 
 export type MarshalAuditAction =
@@ -40,10 +48,14 @@ export type MarshalRosterRow = {
   caddyId: number;
   active: boolean;
   startedOn: string;
+  rotationOrder: number | null;
   caddy: MarshalRosterCaddy;
   createdAt: string;
   updatedAt: string;
 };
+
+export const DEFAULT_AM_SLOTS_PER_DAY = 2;
+export const DEFAULT_PM_SLOTS_PER_DAY = 1;
 
 export class MarshalRosterError extends Error {
   readonly code: string;
@@ -146,11 +158,71 @@ export function assertCaddyEligibleForMarshal(caddy: {
   }
 }
 
+export function parseOptionalRotationOrder(value: unknown): number | null {
+  if (value === undefined || value === null || value === "") return null;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1) {
+    throw new MarshalRosterError(
+      "마샬 순번은 1 이상 정수여야 합니다.",
+      "invalid_rotation_order",
+      400
+    );
+  }
+  return n;
+}
+
+export function assertFinalActiveRotationOrder(input: {
+  profileId: number;
+  nextActive: boolean;
+  nextOrder: number | null;
+  otherActives: readonly { id: number; rotationOrder: number | null }[];
+}): void {
+  if (!input.nextActive) return;
+  if (input.nextOrder == null) {
+    throw new MarshalRosterError(
+      "활성 마샬은 순번이 필요합니다.",
+      "rotation_order_required",
+      400
+    );
+  }
+  assertUniqueActiveRotationOrders([
+    ...input.otherActives.map((row) => ({
+      id: row.id,
+      active: true,
+      rotationOrder: row.rotationOrder,
+    })),
+    {
+      id: input.profileId,
+      active: true,
+      rotationOrder: input.nextOrder,
+    },
+  ]);
+}
+
+export function assertUniqueActiveRotationOrders(
+  rows: readonly { id: number; active: boolean; rotationOrder: number | null }[]
+): void {
+  const seen = new Map<number, number>();
+  for (const row of rows) {
+    if (!row.active || row.rotationOrder == null) continue;
+    const prev = seen.get(row.rotationOrder);
+    if (prev != null && prev !== row.id) {
+      throw new MarshalRosterError(
+        `활성 마샬 순번 ${row.rotationOrder}이(가) 중복됩니다.`,
+        "duplicate_rotation_order",
+        409
+      );
+    }
+    seen.set(row.rotationOrder, row.id);
+  }
+}
+
 export function serializeMarshalProfile(row: {
   id: number;
   caddyId: number;
   active: boolean;
   startedOn: Date | string;
+  rotationOrder?: number | null;
   createdAt: Date | string;
   updatedAt: Date | string;
   caddy: MarshalRosterCaddy;
@@ -160,6 +232,8 @@ export function serializeMarshalProfile(row: {
     caddyId: row.caddyId,
     active: row.active,
     startedOn: formatMarshalYmd(row.startedOn),
+    rotationOrder:
+      row.rotationOrder == null ? null : Number(row.rotationOrder),
     caddy: {
       id: row.caddy.id,
       name: row.caddy.name,

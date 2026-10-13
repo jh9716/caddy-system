@@ -126,6 +126,10 @@ model Caddy {
   dailyOffOverrides  DailyOffOverride[]
   /// 마샬 명단 1:0..1. Assignment.MARSHAL / DailyOpsDuty 와 분리.
   marshalProfile     MarshalProfile?
+  marshalMonthSlots  MarshalMonthSlot[] @relation("MarshalSlotCaddy")
+  marshalMonthOriginalSlots MarshalMonthSlot[] @relation("MarshalSlotOriginal")
+  marshalPenaltyDuties MarshalPenaltyDuty[]
+  marshalCreditReplacements MarshalRotationCredit[] @relation("MarshalCreditReplaced")
   /// 승인 시 선택된 Caddy로 역참조 (이력). Caddy 물리 삭제 시 selectedCaddyId만 null
   linkRequestSelections CaddyLinkRequest[] @relation("CaddyLinkRequestSelectedCaddy")
   /// 고정카트 1대. DailyCartAssignment는 PR2.
@@ -973,14 +977,132 @@ model DailyOpsSnapshot {
 /// Assignment.MARSHAL(기간 차단) · DailyOpsDuty(당일 슬롯) · MARSHAL_SUPPORT 와 분리.
 /// 월 근무표 SoT가 아니다. hard delete 대신 active=false.
 model MarshalProfile {
-  id        Int      @id @default(autoincrement())
-  caddyId   Int      @unique
-  caddy     Caddy    @relation(fields: [caddyId], references: [id], onDelete: Restrict)
-  active    Boolean  @default(true)
+  id             Int      @id @default(autoincrement())
+  caddyId        Int      @unique
+  caddy          Caddy    @relation(fields: [caddyId], references: [id], onDelete: Restrict)
+  active         Boolean  @default(true)
   /// 마샬 시작일 (로컬 자정). Caddy 입사일 아님.
-  startedOn DateTime
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  startedOn      DateTime
+  /// 활성 마샬 순환 순번. 활성끼리 서비스에서 중복 금지. 월을 넘어 이어진다.
+  rotationOrder  Int?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  monthSlots     MarshalMonthSlot[]
+  penaltyDuties  MarshalPenaltyDuty[]
+  rotationCredits MarshalRotationCredit[]
 
   @@index([active])
+  @@index([rotationOrder])
+}
+
+enum MarshalMonthPlanStatus {
+  DRAFT
+  FINALIZED
+}
+
+enum MarshalMonthSlotSource {
+  ROTATION
+  MANUAL
+  SUBSTITUTE
+  PENALTY
+}
+
+enum MarshalShift {
+  AM
+  PM
+}
+
+enum MarshalCreditStatus {
+  OPEN
+  CONSUMED
+  CANCELLED
+}
+
+/// 월 마샬 순환 근무표. DailyOpsDuty / Sheet / autoAssignEngine 과 분리 (PR3 연결).
+model MarshalMonthPlan {
+  id                  Int                     @id @default(autoincrement())
+  year                Int
+  month               Int
+  amSlotsPerDay       Int                     @default(2)
+  pmSlotsPerDay       Int                     @default(1)
+  status              MarshalMonthPlanStatus  @default(DRAFT)
+  startRotationOrder  Int
+  nextRotationOrder   Int
+  /// 이전 월에서 물려받은 미처리 정상 turn. profileId 순서. 순번 재정렬과 무관.
+  startPendingProfileIds Int[] @default([])
+  /// 월 종료 후 다음 달로 넘길 미처리 정상 turn. profileId 순서.
+  nextPendingProfileIds  Int[] @default([])
+  generatedAt         DateTime?
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+  slots               MarshalMonthSlot[]
+  penalties           MarshalPenaltyDuty[]
+
+  @@unique([year, month])
+  @@index([status])
+}
+
+model MarshalMonthSlot {
+  id               Int                     @id @default(autoincrement())
+  planId           Int
+  plan             MarshalMonthPlan        @relation(fields: [planId], references: [id], onDelete: Restrict)
+  date             DateTime
+  shift            MarshalShift
+  slotIndex        Int
+  caddyId          Int
+  caddy            Caddy                   @relation("MarshalSlotCaddy", fields: [caddyId], references: [id], onDelete: Restrict)
+  marshalProfileId Int
+  marshalProfile   MarshalProfile          @relation(fields: [marshalProfileId], references: [id], onDelete: Restrict)
+  source           MarshalMonthSlotSource
+  originalCaddyId  Int?
+  originalCaddy    Caddy?                  @relation("MarshalSlotOriginal", fields: [originalCaddyId], references: [id], onDelete: SetNull)
+  note             String?
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+
+  @@unique([planId, date, shift, slotIndex])
+  @@unique([planId, date, caddyId])
+  @@index([planId, date])
+  @@index([caddyId])
+}
+
+/// 정상 순환을 소비하지 않는 추가 의무. shift는 관리자 지정.
+model MarshalPenaltyDuty {
+  id               Int              @id @default(autoincrement())
+  planId           Int
+  plan             MarshalMonthPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
+  date             DateTime
+  shift            MarshalShift
+  caddyId          Int
+  caddy            Caddy            @relation(fields: [caddyId], references: [id], onDelete: Restrict)
+  marshalProfileId Int
+  marshalProfile   MarshalProfile   @relation(fields: [marshalProfileId], references: [id], onDelete: Restrict)
+  reason           String
+  note             String?
+  createdByUserId  Int?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  @@unique([planId, date, caddyId])
+  @@index([planId, date])
+}
+
+/// 대타 추가근무에 대한 향후 정상 순환 1회 면제. 벌당과 분리.
+model MarshalRotationCredit {
+  id               Int                 @id @default(autoincrement())
+  marshalProfileId Int
+  marshalProfile   MarshalProfile      @relation(fields: [marshalProfileId], references: [id], onDelete: Restrict)
+  status           MarshalCreditStatus @default(OPEN)
+  sourceDate       DateTime?
+  replacedCaddyId  Int?
+  replacedCaddy    Caddy?              @relation("MarshalCreditReplaced", fields: [replacedCaddyId], references: [id], onDelete: SetNull)
+  reason           String?
+  note             String?
+  createdByUserId  Int?
+  consumedPlanId   Int?
+  consumedDate     DateTime?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  @@index([marshalProfileId, status])
 }

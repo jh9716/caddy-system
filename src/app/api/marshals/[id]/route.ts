@@ -33,6 +33,7 @@ export async function PATCH(
       id: resolved.id,
       active: (body as { active?: unknown }).active,
       startedOn: (body as { startedOn?: unknown }).startedOn,
+      rotationOrder: (body as { rotationOrder?: unknown }).rotationOrder,
       actor: {
         userId: auth?.id ?? null,
         username: auth?.username ?? null,

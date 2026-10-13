@@ -17,6 +17,7 @@ import {
   MARSHAL_PROFILE_ENTITY,
   MarshalRosterError,
   assertCaddyEligibleForMarshal,
+  assertFinalActiveRotationOrder,
   caddyTypeLabel,
   formatMarshalYmd,
   parseMarshalStartedOn,
@@ -128,6 +129,58 @@ throws(
   "inactive_caddy",
   "LEAVE fail closed"
 );
+section("reactivate / simultaneous order guard");
+{
+  const otherActives = [{ id: 10, rotationOrder: 3 }];
+  throws(
+    () =>
+      assertFinalActiveRotationOrder({
+        profileId: 2,
+        nextActive: true,
+        nextOrder: 3,
+        otherActives,
+      }),
+    "duplicate_rotation_order",
+    "inactive order=3 reactivate-only 409"
+  );
+  assertFinalActiveRotationOrder({
+    profileId: 2,
+    nextActive: true,
+    nextOrder: 4,
+    otherActives,
+  });
+  assert(true, "inactive order=3 + active+order=4 성공");
+  throws(
+    () =>
+      assertFinalActiveRotationOrder({
+        profileId: 10,
+        nextActive: true,
+        nextOrder: 3,
+        otherActives: [{ id: 11, rotationOrder: 3 }],
+      }),
+    "duplicate_rotation_order",
+    "active marshal 순번 변경 중복 409"
+  );
+  throws(
+    () =>
+      assertFinalActiveRotationOrder({
+        profileId: 2,
+        nextActive: true,
+        nextOrder: null,
+        otherActives,
+      }),
+    "rotation_order_required",
+    "reactivate without order 400"
+  );
+  assertFinalActiveRotationOrder({
+    profileId: 2,
+    nextActive: false,
+    nextOrder: 3,
+    otherActives,
+  });
+  assert(true, "deactivate keeps colliding stored order");
+}
+
 assert(caddyTypeLabel("HOUSE") === "하우스", "유형 라벨");
 assert(CADDY_TYPE_LABELS.THIRD === "3부반", "3부반 라벨");
 
@@ -136,6 +189,7 @@ const serialized = serializeMarshalProfile({
   caddyId: 4,
   active: true,
   startedOn: parseMarshalStartedOn("2026-03-01"),
+  rotationOrder: 3,
   createdAt: new Date("2026-03-02T00:00:00.000Z"),
   updatedAt: new Date("2026-03-02T00:00:00.000Z"),
   caddy: {
@@ -148,6 +202,7 @@ const serialized = serializeMarshalProfile({
   },
 });
 assert(serialized.startedOn === "2026-03-01", "serialize startedOn");
+assert(serialized.rotationOrder === 3, "serialize rotationOrder");
 assert(serialized.caddy.team === "1조", "Caddy.team SoT 유지");
 assert(
   !Object.prototype.hasOwnProperty.call(serialized, ["senior", "CaddyId"].join("")),
@@ -205,7 +260,8 @@ section("source contracts");
   assert(!page.includes("선임"), "UI 선임 없음");
   assert(!page.includes("후임"), "UI 후임 없음");
   assert(schema.includes("model MarshalProfile"), "schema MarshalProfile");
-  assert(!schema.includes(`model ${MONTH_MODEL}`), "schema month models 0");
+  assert(schema.includes(`model ${MONTH_MODEL}Plan`), "schema month plan");
+  assert(!schema.includes(`model ${MONTH_MODEL}Window`), "schema month window 0");
   assert(!schema.includes(SENIOR_FIELD), "schema senior field 0");
   assert(!schema.includes(JUNIOR_FIELD), "schema junior back-relation 0");
   assert(!migration.includes(MONTH_MODEL), "migration month tables 0");
@@ -223,6 +279,8 @@ section("source contracts");
   assert(service.includes("MARSHAL_AUDIT_ACTIONS.DEACTIVATE"), "deactivate audit");
   assert(service.includes("MARSHAL_AUDIT_ACTIONS.REACTIVATE"), "reactivate audit");
   assert(service.includes("MARSHAL_AUDIT_ACTIONS.UPDATE_STARTED_ON"), "startedOn audit");
+  assert(service.includes("assertFinalActiveRotationOrder"), "reactivate uses final-state order guard");
+  assert(service.includes("nextActive"), "simultaneous active+order uses nextActive");
   assert(domain.includes("MARSHAL_PROFILE_CREATE"), "create audit action");
   assert(domain.includes("MARSHAL_PROFILE_DEACTIVATE"), "deactivate audit action");
   assert(domain.includes("MARSHAL_PROFILE_REACTIVATE"), "reactivate audit action");
@@ -264,7 +322,7 @@ section("git: P1 scope + existing ops files unchanged");
   const fullDiff = String(
     spawnSync("git", ["diff", "origin/main"], { encoding: "utf8" }).stdout || ""
   );
-  assert(!fullDiff.includes(MONTH_MODEL), "PR diff month models 0");
+  assert(fullDiff.includes(`${MONTH_MODEL}Plan`), "PR2 month plan 있음");
   assert(!fullDiff.includes(SENIOR_FIELD), "PR diff senior field 0");
   const dutyDiff = String(
     spawnSync(
