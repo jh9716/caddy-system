@@ -171,6 +171,34 @@ export function parseOptionalRotationOrder(value: unknown): number | null {
   return n;
 }
 
+export function assertFinalActiveRotationOrder(input: {
+  profileId: number;
+  nextActive: boolean;
+  nextOrder: number | null;
+  otherActives: readonly { id: number; rotationOrder: number | null }[];
+}): void {
+  if (!input.nextActive) return;
+  if (input.nextOrder == null) {
+    throw new MarshalRosterError(
+      "활성 마샬은 순번이 필요합니다.",
+      "rotation_order_required",
+      400
+    );
+  }
+  assertUniqueActiveRotationOrders([
+    ...input.otherActives.map((row) => ({
+      id: row.id,
+      active: true,
+      rotationOrder: row.rotationOrder,
+    })),
+    {
+      id: input.profileId,
+      active: true,
+      rotationOrder: input.nextOrder,
+    },
+  ]);
+}
+
 export function assertUniqueActiveRotationOrders(
   rows: readonly { id: number; active: boolean; rotationOrder: number | null }[]
 ): void {

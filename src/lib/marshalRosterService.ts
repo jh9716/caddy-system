@@ -9,6 +9,7 @@ import {
   MARSHAL_PROFILE_ENTITY,
   MarshalRosterError,
   assertCaddyEligibleForMarshal,
+  assertFinalActiveRotationOrder,
   assertUniqueActiveRotationOrders,
   formatMarshalYmd,
   parseMarshalStartedOn,
@@ -197,9 +198,29 @@ export async function updateMarshalProfile(
 
     const data: Prisma.MarshalProfileUpdateInput = {};
     const audits: Prisma.AuditCreateInput[] = [];
+    const nextActive = hasActive
+      ? input.active === true || input.active === "true"
+      : current.active;
+    const nextOrder = hasOrder
+      ? parseOptionalRotationOrder(input.rotationOrder)
+      : current.rotationOrder;
+
+    if (hasActive || hasOrder) {
+      if (nextActive) {
+        const otherActives = await tx.marshalProfile.findMany({
+          where: { active: true, NOT: { id: current.id } },
+          select: { id: true, rotationOrder: true },
+        });
+        assertFinalActiveRotationOrder({
+          profileId: current.id,
+          nextActive,
+          nextOrder,
+          otherActives,
+        });
+      }
+    }
 
     if (hasActive) {
-      const nextActive = input.active === true || input.active === "true";
       if (nextActive !== current.active) {
         if (nextActive) {
           assertCaddyEligibleForMarshal(current.caddy);
@@ -226,18 +247,8 @@ export async function updateMarshalProfile(
     }
 
     if (hasOrder) {
-      const rotationOrder = parseOptionalRotationOrder(input.rotationOrder);
+      const rotationOrder = nextOrder;
       if (rotationOrder !== current.rotationOrder) {
-        if (rotationOrder != null) {
-          const actives = await tx.marshalProfile.findMany({
-            where: { active: true, NOT: { id: current.id } },
-            select: { id: true, rotationOrder: true, active: true },
-          });
-          assertUniqueActiveRotationOrders([
-            ...actives,
-            { id: current.id, active: current.active, rotationOrder },
-          ]);
-        }
         data.rotationOrder = rotationOrder;
         audits.push(
           auditRow({

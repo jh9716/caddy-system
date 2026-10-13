@@ -399,6 +399,7 @@ export function generateMonthRotation(input: {
     .filter((c) => byProfile.has(c.profileId))
     .sort((a, b) => a.id - b.id);
   let cursor = findStartIndex(members, input.startRotationOrder);
+  const pendingTurns: RotationMember[] = [];
   const counts = new Map<number, ShiftCounts>();
   const slots: GeneratedSlot[] = [];
   const consumedCredits: ConsumedCredit[] = [];
@@ -418,6 +419,7 @@ export function generateMonthRotation(input: {
       );
     }
     const picks: RotationMember[] = [];
+    const dayDeferred: RotationMember[] = [];
     let walked = 0;
     const maxWalk = Math.max(members.length * 4, rotationNeeded * members.length + 4);
     while (picks.length < rotationNeeded) {
@@ -429,9 +431,14 @@ export function generateMonthRotation(input: {
           400
         );
       }
-      const member = members[cursor % members.length];
-      cursor += 1;
-      if (penaltyIds.has(member.caddyId) || picks.some((p) => p.caddyId === member.caddyId)) {
+      const member = pendingTurns.length
+        ? pendingTurns.shift()!
+        : members[(cursor++) % members.length];
+      if (penaltyIds.has(member.caddyId)) {
+        dayDeferred.push(member);
+        continue;
+      }
+      if (picks.some((p) => p.caddyId === member.caddyId)) {
         continue;
       }
       const status =
@@ -470,6 +477,7 @@ export function generateMonthRotation(input: {
         });
       }
     }
+    pendingTurns.push(...dayDeferred);
 
     const dayKindByCaddy = new Map<number, { kind: MarshalDayKind; message: string | null }>();
     for (const member of [...picks, ...penalties.map((p) => byProfile.get(p.profileId)).filter(Boolean)]) {
@@ -522,6 +530,39 @@ export function assertReplaceConfirmed(replace: unknown, hasDraftSlots: boolean)
     "draft_exists",
     409
   );
+}
+
+export function canonicalOriginalCaddyId(slot: {
+  originalCaddyId?: number | null;
+  caddyId: number;
+}): number {
+  return slot.originalCaddyId ?? slot.caddyId;
+}
+
+export function assertSubstituteChangesCaddy(
+  fromCaddyId: number,
+  toCaddyId: number
+): void {
+  if (fromCaddyId === toCaddyId) {
+    throw new MarshalRosterError(
+      "같은 마샬로 대타할 수 없습니다.",
+      "substitute_unchanged",
+      400
+    );
+  }
+}
+
+export function assertSlotMatchesPlan(
+  slotPlanId: number,
+  requestedPlanId: number
+): void {
+  if (slotPlanId !== requestedPlanId) {
+    throw new MarshalRosterError(
+      "슬롯이 해당 월표에 없습니다.",
+      "slot_plan_mismatch",
+      404
+    );
+  }
 }
 
 export function assertPlanMutable(status: string, action: string): void {

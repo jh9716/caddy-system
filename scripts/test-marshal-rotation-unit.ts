@@ -8,6 +8,9 @@ import { MarshalRosterError, assertUniqueActiveRotationOrders } from "../src/lib
 import {
   assertPlanMutable,
   assertReplaceConfirmed,
+  assertSlotMatchesPlan,
+  assertSubstituteChangesCaddy,
+  canonicalOriginalCaddyId,
   classifyMarshalDayStatus,
   generateMonthRotation,
   listMonthYmds,
@@ -269,6 +272,46 @@ section("penalty does not consume rotation");
   assert(cDay2?.source === "ROTATION", "penalty does not skip later normal turn");
 }
 
+section("penalty === current rotation turn is deferred");
+{
+  const four = [
+    member(1, "A"),
+    member(2, "B"),
+    member(3, "C"),
+    member(4, "D"),
+  ];
+  const out = generateMonthRotation({
+    year: 2026,
+    month: 11,
+    startRotationOrder: 1,
+    members: four,
+    dates: ["2026-11-01", "2026-11-02"],
+    penaltiesByDate: new Map([
+      ["2026-11-01", [{ caddyId: 10, profileId: 1, shift: "AM" as const }]],
+    ]),
+    statusByDateCaddy: new Map(),
+    openCredits: [],
+  });
+  const day1 = out.slots.filter((s) => s.date === "2026-11-01");
+  const day2 = out.slots.filter((s) => s.date === "2026-11-02");
+  assert(namesOn(out.slots, "2026-11-01") === "A,B,C", "day1 A벌당 + B + C");
+  assert(
+    day1.find((s) => s.caddyId === 10)?.source === "PENALTY",
+    "A is penalty not rotation on collision day"
+  );
+  assert(
+    day1.filter((s) => s.source === "ROTATION").map((s) => s.caddyId).sort().join(",") ===
+      "20,30",
+    "collision day rotation is B,C only"
+  );
+  const aDay2 = day2.find((s) => s.caddyId === 10);
+  assert(aDay2?.source === "ROTATION", "A normal turn deferred to next day");
+  assert(
+    !day1.some((s) => s.source === "ROTATION" && s.caddyId === 10),
+    "A does not consume rotation slot the penalty day"
+  );
+}
+
 section("substitute credit skips one future turn and can cross month");
 {
   const first = generateMonthRotation({
@@ -334,6 +377,44 @@ section("AM/PM fairness among selected + deterministic");
   assert(Math.max(...pmVals) - Math.min(...pmVals) <= 2, "PM counts bounded");
 }
 
+section("substitute integrity + route plan guard");
+{
+  assert(canonicalOriginalCaddyId({ caddyId: 1, originalCaddyId: null }) === 1, "first original=A");
+  assert(
+    canonicalOriginalCaddyId({ caddyId: 2, originalCaddyId: 1 }) === 1,
+    "A->B keeps original A"
+  );
+  assert(
+    canonicalOriginalCaddyId({ caddyId: 3, originalCaddyId: 1 }) === 1,
+    "A->B->C original stays A"
+  );
+  throws(
+    () => assertSubstituteChangesCaddy(1, 1),
+    "substitute_unchanged",
+    "A->A cannot earn credit"
+  );
+  assertSubstituteChangesCaddy(1, 2);
+  assert(true, "A->B substitute allowed");
+  throws(
+    () => assertSlotMatchesPlan(11, 99),
+    "slot_plan_mismatch",
+    "wrong planId + valid slotId rejected"
+  );
+  assertSlotMatchesPlan(11, 11);
+  assert(true, "matching planId accepted");
+  const slotRoute = read("src/app/api/marshals/plans/[id]/slots/[slotId]/route.ts");
+  const service = read("src/lib/marshalRotationService.ts");
+  assert(slotRoute.includes("planId: resolved.id"), "route passes planId");
+  assert(service.includes("assertSlotMatchesPlan(slot.planId, planId)"), "service checks planId");
+  assert(service.includes("originalScheduledCaddyId"), "audit keeps scheduled original");
+  assert(service.includes("fromCaddyId"), "audit keeps immediate from");
+  const replaceFn = service.slice(
+    service.indexOf("export async function replaceMonthSlot"),
+    service.indexOf("export async function createPenaltyDuty")
+  );
+  assert(!replaceFn.includes("finalized_locked"), "FINALIZED slot substitute remains allowed");
+}
+
 section("fail-closed + overwrite guards");
 {
   throws(
@@ -352,7 +433,7 @@ section("fail-closed + overwrite guards");
   );
   throws(() => assertReplaceConfirmed(false, true), "draft_exists", "draft overwrite protected");
   assertReplaceConfirmed(true, true);
-  throws(() => assertPlanMutable("FINALIZED", "generate"), "finalized_locked", "finalized regen protected");
+  throws(() => assertPlanMutable("FINALIZED", "generate"), "finalized_locked", "FINALIZED regeneration remains rejected");
   assert(listMonthYmds(2026, 11).length === 30, "november days");
   assert(nextCursorOrder(orderedActiveMembers(roster), 6) === 1, "wrap 30→1 style");
 }

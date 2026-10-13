@@ -32,6 +32,7 @@ export async function PATCH(
       return NextResponse.json({ error: "JSON 필요" }, { status: 400 });
     }
     const slot = await replaceMonthSlot({
+      planId: resolved.id,
       slotId: resolved.slotId,
       ...(body as Record<string, unknown>),
       actor: {

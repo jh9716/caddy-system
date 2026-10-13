@@ -17,6 +17,7 @@ import {
   MARSHAL_PROFILE_ENTITY,
   MarshalRosterError,
   assertCaddyEligibleForMarshal,
+  assertFinalActiveRotationOrder,
   caddyTypeLabel,
   formatMarshalYmd,
   parseMarshalStartedOn,
@@ -128,6 +129,58 @@ throws(
   "inactive_caddy",
   "LEAVE fail closed"
 );
+section("reactivate / simultaneous order guard");
+{
+  const otherActives = [{ id: 10, rotationOrder: 3 }];
+  throws(
+    () =>
+      assertFinalActiveRotationOrder({
+        profileId: 2,
+        nextActive: true,
+        nextOrder: 3,
+        otherActives,
+      }),
+    "duplicate_rotation_order",
+    "inactive order=3 reactivate-only 409"
+  );
+  assertFinalActiveRotationOrder({
+    profileId: 2,
+    nextActive: true,
+    nextOrder: 4,
+    otherActives,
+  });
+  assert(true, "inactive order=3 + active+order=4 성공");
+  throws(
+    () =>
+      assertFinalActiveRotationOrder({
+        profileId: 10,
+        nextActive: true,
+        nextOrder: 3,
+        otherActives: [{ id: 11, rotationOrder: 3 }],
+      }),
+    "duplicate_rotation_order",
+    "active marshal 순번 변경 중복 409"
+  );
+  throws(
+    () =>
+      assertFinalActiveRotationOrder({
+        profileId: 2,
+        nextActive: true,
+        nextOrder: null,
+        otherActives,
+      }),
+    "rotation_order_required",
+    "reactivate without order 400"
+  );
+  assertFinalActiveRotationOrder({
+    profileId: 2,
+    nextActive: false,
+    nextOrder: 3,
+    otherActives,
+  });
+  assert(true, "deactivate keeps colliding stored order");
+}
+
 assert(caddyTypeLabel("HOUSE") === "하우스", "유형 라벨");
 assert(CADDY_TYPE_LABELS.THIRD === "3부반", "3부반 라벨");
 
@@ -226,6 +279,8 @@ section("source contracts");
   assert(service.includes("MARSHAL_AUDIT_ACTIONS.DEACTIVATE"), "deactivate audit");
   assert(service.includes("MARSHAL_AUDIT_ACTIONS.REACTIVATE"), "reactivate audit");
   assert(service.includes("MARSHAL_AUDIT_ACTIONS.UPDATE_STARTED_ON"), "startedOn audit");
+  assert(service.includes("assertFinalActiveRotationOrder"), "reactivate uses final-state order guard");
+  assert(service.includes("nextActive"), "simultaneous active+order uses nextActive");
   assert(domain.includes("MARSHAL_PROFILE_CREATE"), "create audit action");
   assert(domain.includes("MARSHAL_PROFILE_DEACTIVATE"), "deactivate audit action");
   assert(domain.includes("MARSHAL_PROFILE_REACTIVATE"), "reactivate audit action");

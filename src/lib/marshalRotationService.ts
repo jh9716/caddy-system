@@ -19,6 +19,9 @@ import {
 import {
   assertPlanMutable,
   assertReplaceConfirmed,
+  assertSlotMatchesPlan,
+  assertSubstituteChangesCaddy,
+  canonicalOriginalCaddyId,
   classifyMarshalDayStatus,
   effectiveOffForDay,
   generateMonthRotation,
@@ -645,6 +648,7 @@ export async function finalizeMonthPlan(
 
 export async function replaceMonthSlot(
   input: {
+    planId: unknown;
     slotId: unknown;
     caddyId: unknown;
     note?: unknown;
@@ -654,6 +658,7 @@ export async function replaceMonthSlot(
   },
   client?: PrismaClient
 ) {
+  const planId = parsePositiveId(input.planId, "planId");
   const slotId = parsePositiveId(input.slotId, "slotId");
   const caddyId = parsePositiveCaddyId(input.caddyId);
   const asSubstitute = input.asSubstitute === true || input.asSubstitute === "true";
@@ -666,6 +671,17 @@ export async function replaceMonthSlot(
     });
     if (!slot) {
       throw new MarshalRosterError("슬롯을 찾을 수 없습니다.", "slot_not_found", 404);
+    }
+    assertSlotMatchesPlan(slot.planId, planId);
+    if (caddyId === slot.caddyId) {
+      throw new MarshalRosterError(
+        "같은 마샬로 교체할 수 없습니다.",
+        "substitute_unchanged",
+        400
+      );
+    }
+    if (asSubstitute) {
+      assertSubstituteChangesCaddy(slot.caddyId, caddyId);
     }
     const profile = await tx.marshalProfile.findUnique({
       where: { caddyId },
@@ -693,14 +709,17 @@ export async function replaceMonthSlot(
         409
       );
     }
-    const originalCaddyId = slot.caddyId;
+    const fromCaddyId = slot.caddyId;
+    const originalScheduledCaddyId = canonicalOriginalCaddyId(slot);
     const saved = await tx.marshalMonthSlot.update({
       where: { id: slot.id },
       data: {
         caddyId,
         marshalProfileId: profile.id,
         source: asSubstitute ? "SUBSTITUTE" : "MANUAL",
-        originalCaddyId: asSubstitute ? originalCaddyId : slot.originalCaddyId,
+        originalCaddyId: asSubstitute
+          ? originalScheduledCaddyId
+          : slot.originalCaddyId,
         note: input.note == null ? slot.note : String(input.note),
       },
       include: {
@@ -719,7 +738,8 @@ export async function replaceMonthSlot(
         payload: {
           planId: slot.planId,
           date: formatMarshalYmd(slot.date),
-          fromCaddyId: originalCaddyId,
+          originalCaddyId: originalScheduledCaddyId,
+          fromCaddyId,
           toCaddyId: caddyId,
           asSubstitute,
           applyCredit,
@@ -728,13 +748,13 @@ export async function replaceMonthSlot(
         },
       }),
     });
-    if (asSubstitute && applyCredit) {
+    if (asSubstitute && applyCredit && caddyId !== fromCaddyId) {
       const credit = await tx.marshalRotationCredit.create({
         data: {
           marshalProfileId: profile.id,
           status: "OPEN",
           sourceDate: slot.date,
-          replacedCaddyId: originalCaddyId,
+          replacedCaddyId: originalScheduledCaddyId,
           reason: "대타 보정",
           note: input.note == null ? null : String(input.note),
           createdByUserId: input.actor?.userId ?? null,
@@ -749,7 +769,8 @@ export async function replaceMonthSlot(
           payload: {
             delta: 1,
             marshalProfileId: profile.id,
-            replacedCaddyId: originalCaddyId,
+            replacedCaddyId: originalScheduledCaddyId,
+            fromCaddyId,
             username: input.actor?.username ?? null,
             userId: input.actor?.userId ?? null,
           },
