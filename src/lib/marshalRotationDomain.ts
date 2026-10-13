@@ -73,6 +73,8 @@ export type DayWarning = {
 export type MonthGenerateResult = {
   startRotationOrder: number;
   nextRotationOrder: number;
+  startPendingProfileIds: number[];
+  nextPendingProfileIds: number[];
   slots: GeneratedSlot[];
   consumedCredits: ConsumedCredit[];
   warnings: DayWarning[];
@@ -233,6 +235,77 @@ export function nextCursorOrder(
   return members[wrapped].rotationOrder;
 }
 
+export function parsePendingProfileIds(value: unknown): number[] {
+  if (value == null) return [];
+  if (!Array.isArray(value)) {
+    throw new MarshalRosterError(
+      "이월 대기 목록이 올바르지 않습니다.",
+      "invalid_pending",
+      400
+    );
+  }
+  const out: number[] = [];
+  const seen = new Set<number>();
+  for (const item of value) {
+    const n = Number(item);
+    if (!Number.isInteger(n) || n < 1) {
+      throw new MarshalRosterError(
+        "이월 대기 목록이 올바르지 않습니다.",
+        "invalid_pending",
+        400
+      );
+    }
+    if (seen.has(n)) continue;
+    seen.add(n);
+    out.push(n);
+  }
+  return out;
+}
+
+/** 이미 생성된 월표는 저장된 start pending을 유지. 첫 생성만 이전 FINALIZED를 상속. */
+export function inheritStartPendingProfileIds(input: {
+  hasGeneratedPlan: boolean;
+  storedStartPendingProfileIds?: readonly number[] | null;
+  previousFinalizedNextPending?: readonly number[] | null;
+}): number[] {
+  if (input.hasGeneratedPlan) {
+    return parsePendingProfileIds(input.storedStartPendingProfileIds || []);
+  }
+  if (
+    input.previousFinalizedNextPending &&
+    input.previousFinalizedNextPending.length > 0
+  ) {
+    return parsePendingProfileIds(input.previousFinalizedNextPending);
+  }
+  return parsePendingProfileIds(input.storedStartPendingProfileIds || []);
+}
+
+/** 없는/비활성 profile은 그 turn만 소진. cursor를 되감거나 다른 사람을 넣지 않는다. */
+export function resolvePendingMembers(
+  pendingProfileIds: readonly number[],
+  members: readonly RotationMember[]
+): RotationMember[] {
+  const byProfile = new Map(members.map((row) => [row.profileId, row]));
+  const out: RotationMember[] = [];
+  const seen = new Set<number>();
+  for (const id of pendingProfileIds) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const member = byProfile.get(id);
+    if (!member) continue;
+    out.push(member);
+  }
+  return out;
+}
+
+function pushUniquePending(
+  queue: RotationMember[],
+  member: RotationMember
+): void {
+  if (queue.some((row) => row.profileId === member.profileId)) return;
+  queue.push(member);
+}
+
 type ShiftCounts = { am: number; pm: number };
 
 function countKey(counts: Map<number, ShiftCounts>, caddyId: number): ShiftCounts {
@@ -371,6 +444,7 @@ export function generateMonthRotation(input: {
   amSlotsPerDay?: number;
   pmSlotsPerDay?: number;
   startRotationOrder: number;
+  startPendingProfileIds?: readonly number[];
   members: readonly RotationMember[];
   penaltiesByDate: ReadonlyMap<string, readonly DayPenaltyInput[]>;
   statusByDateCaddy: ReadonlyMap<string, { kind: MarshalDayKind; message: string | null }>;
@@ -395,11 +469,14 @@ export function generateMonthRotation(input: {
     );
   }
   const byProfile = new Map(members.map((m) => [m.profileId, m]));
+  const startPendingProfileIds = parsePendingProfileIds(
+    input.startPendingProfileIds || []
+  );
   const creditQueue = [...input.openCredits]
     .filter((c) => byProfile.has(c.profileId))
     .sort((a, b) => a.id - b.id);
   let cursor = findStartIndex(members, input.startRotationOrder);
-  const pendingTurns: RotationMember[] = [];
+  const pendingTurns = resolvePendingMembers(startPendingProfileIds, members);
   const counts = new Map<number, ShiftCounts>();
   const slots: GeneratedSlot[] = [];
   const consumedCredits: ConsumedCredit[] = [];
@@ -435,7 +512,7 @@ export function generateMonthRotation(input: {
         ? pendingTurns.shift()!
         : members[(cursor++) % members.length];
       if (penaltyIds.has(member.caddyId)) {
-        dayDeferred.push(member);
+        pushUniquePending(dayDeferred, member);
         continue;
       }
       if (picks.some((p) => p.caddyId === member.caddyId)) {
@@ -477,7 +554,9 @@ export function generateMonthRotation(input: {
         });
       }
     }
-    pendingTurns.push(...dayDeferred);
+    for (const deferred of dayDeferred) {
+      pushUniquePending(pendingTurns, deferred);
+    }
 
     const dayKindByCaddy = new Map<number, { kind: MarshalDayKind; message: string | null }>();
     for (const member of [...picks, ...penalties.map((p) => byProfile.get(p.profileId)).filter(Boolean)]) {
@@ -505,6 +584,8 @@ export function generateMonthRotation(input: {
   return {
     startRotationOrder: input.startRotationOrder,
     nextRotationOrder: nextCursorOrder(members, cursor),
+    startPendingProfileIds,
+    nextPendingProfileIds: pendingTurns.map((row) => row.profileId),
     slots,
     consumedCredits,
     warnings,

@@ -25,6 +25,7 @@ import {
   classifyMarshalDayStatus,
   effectiveOffForDay,
   generateMonthRotation,
+  inheritStartPendingProfileIds,
   isYmdInMonth,
   listMonthYmds,
   parseMarshalShift,
@@ -242,7 +243,13 @@ export async function getMonthPlan(
       where: {
         year_month: previousYearMonth(year, month),
       },
-      select: { status: true, nextRotationOrder: true, year: true, month: true },
+      select: {
+        status: true,
+        nextRotationOrder: true,
+        nextPendingProfileIds: true,
+        year: true,
+        month: true,
+      },
     }),
     loadActiveMembers(prisma),
     prisma.marshalRotationCredit.findMany({
@@ -257,17 +264,28 @@ export async function getMonthPlan(
     }),
   ]);
 
+  const prevFinalized = prev?.status === "FINALIZED" ? prev : null;
   const suggestedStart =
-    prev?.status === "FINALIZED" ? prev.nextRotationOrder : null;
+    prevFinalized != null ? prevFinalized.nextRotationOrder : null;
+  const suggestedStartPendingProfileIds = prevFinalized
+    ? prevFinalized.nextPendingProfileIds || []
+    : [];
   const statusByDateCaddy = plan
     ? await loadDayStatuses(prisma, year, month, members)
     : new Map();
+  const pendingById = new Map(members.map((row) => [row.profileId, row]));
+  const pendingNames = (ids: readonly number[]) =>
+    ids
+      .map((id) => pendingById.get(id)?.name)
+      .filter((name): name is string => Boolean(name));
 
   return {
     year,
     month,
     suggestedStartRotationOrder: suggestedStart,
-    previousFinalized: prev?.status === "FINALIZED" ? prev : null,
+    suggestedStartPendingProfileIds,
+    suggestedStartPendingNames: pendingNames(suggestedStartPendingProfileIds),
+    previousFinalized: prevFinalized,
     members,
     credits: credits.map((row) => ({
       id: row.id,
@@ -297,6 +315,10 @@ export async function getMonthPlan(
           status: plan.status,
           startRotationOrder: plan.startRotationOrder,
           nextRotationOrder: plan.nextRotationOrder,
+          startPendingProfileIds: plan.startPendingProfileIds || [],
+          nextPendingProfileIds: plan.nextPendingProfileIds || [],
+          startPendingNames: pendingNames(plan.startPendingProfileIds || []),
+          nextPendingNames: pendingNames(plan.nextPendingProfileIds || []),
           generatedAt: plan.generatedAt?.toISOString() ?? null,
           slots: plan.slots.map((slot) =>
             serializeSlot(
@@ -362,11 +384,15 @@ export async function upsertMonthPlanSettings(
     input.startRotationOrder === undefined || input.startRotationOrder === ""
       ? null
       : parsePositiveId(input.startRotationOrder, "startRotationOrder");
+  const prev = await prisma.marshalMonthPlan.findUnique({
+    where: { year_month: previousYearMonth(year, month) },
+    select: {
+      status: true,
+      nextRotationOrder: true,
+      nextPendingProfileIds: true,
+    },
+  });
   if (startRotationOrder == null) {
-    const prev = await prisma.marshalMonthPlan.findUnique({
-      where: { year_month: previousYearMonth(year, month) },
-      select: { status: true, nextRotationOrder: true },
-    });
     if (prev?.status === "FINALIZED") {
       startRotationOrder = prev.nextRotationOrder;
     } else {
@@ -377,6 +403,12 @@ export async function upsertMonthPlanSettings(
       );
     }
   }
+  const startPendingProfileIds = inheritStartPendingProfileIds({
+    hasGeneratedPlan: Boolean(existing?.generatedAt),
+    storedStartPendingProfileIds: existing?.startPendingProfileIds,
+    previousFinalizedNextPending:
+      prev?.status === "FINALIZED" ? prev.nextPendingProfileIds : [],
+  });
   const row = existing
     ? await prisma.marshalMonthPlan.update({
         where: { id: existing.id },
@@ -387,6 +419,9 @@ export async function upsertMonthPlanSettings(
           nextRotationOrder: existing.generatedAt
             ? existing.nextRotationOrder
             : startRotationOrder,
+          startPendingProfileIds: existing.generatedAt
+            ? existing.startPendingProfileIds
+            : startPendingProfileIds,
         },
       })
     : await prisma.marshalMonthPlan.create({
@@ -397,6 +432,8 @@ export async function upsertMonthPlanSettings(
           pmSlotsPerDay,
           startRotationOrder,
           nextRotationOrder: startRotationOrder,
+          startPendingProfileIds,
+          nextPendingProfileIds: [],
         },
       });
   return getMonthPlan({ year, month }, client);
@@ -441,16 +478,20 @@ export async function generateMonthPlan(
     }
 
     const members = await loadActiveMembers(tx);
+    const prev = await tx.marshalMonthPlan.findUnique({
+      where: { year_month: previousYearMonth(year, month) },
+      select: {
+        status: true,
+        nextRotationOrder: true,
+        nextPendingProfileIds: true,
+      },
+    });
     let startRotationOrder =
       input.startRotationOrder === undefined || input.startRotationOrder === ""
         ? plan?.startRotationOrder ?? null
         : parsePositiveId(input.startRotationOrder, "startRotationOrder");
-    if (startRotationOrder == null) {
-      const prev = await tx.marshalMonthPlan.findUnique({
-        where: { year_month: previousYearMonth(year, month) },
-        select: { status: true, nextRotationOrder: true },
-      });
-      if (prev?.status === "FINALIZED") startRotationOrder = prev.nextRotationOrder;
+    if (startRotationOrder == null && prev?.status === "FINALIZED") {
+      startRotationOrder = prev.nextRotationOrder;
     }
     if (startRotationOrder == null) {
       throw new MarshalRosterError(
@@ -459,6 +500,12 @@ export async function generateMonthPlan(
         400
       );
     }
+    const startPendingProfileIds = inheritStartPendingProfileIds({
+      hasGeneratedPlan: Boolean(plan?.generatedAt),
+      storedStartPendingProfileIds: plan?.startPendingProfileIds,
+      previousFinalizedNextPending:
+        prev?.status === "FINALIZED" ? prev.nextPendingProfileIds : [],
+    });
     const amSlotsPerDay = parseSlotsPerDay(
       input.amSlotsPerDay,
       "조출 인원",
@@ -479,13 +526,22 @@ export async function generateMonthPlan(
           pmSlotsPerDay,
           startRotationOrder,
           nextRotationOrder: startRotationOrder,
+          startPendingProfileIds,
+          nextPendingProfileIds: [],
         },
         include: { slots: { select: { id: true, source: true } }, penalties: true },
       });
     } else {
       plan = await tx.marshalMonthPlan.update({
         where: { id: plan.id },
-        data: { amSlotsPerDay, pmSlotsPerDay, startRotationOrder },
+        data: {
+          amSlotsPerDay,
+          pmSlotsPerDay,
+          startRotationOrder,
+          startPendingProfileIds: plan.generatedAt
+            ? plan.startPendingProfileIds
+            : startPendingProfileIds,
+        },
         include: { slots: { select: { id: true, source: true } }, penalties: true },
       });
     }
@@ -523,6 +579,7 @@ export async function generateMonthPlan(
       amSlotsPerDay,
       pmSlotsPerDay,
       startRotationOrder,
+      startPendingProfileIds,
       members,
       penaltiesByDate,
       statusByDateCaddy,
@@ -563,7 +620,9 @@ export async function generateMonthPlan(
     const saved = await tx.marshalMonthPlan.update({
       where: { id: plan.id },
       data: {
+        startPendingProfileIds,
         nextRotationOrder: generated.nextRotationOrder,
+        nextPendingProfileIds: generated.nextPendingProfileIds,
         generatedAt: new Date(),
       },
     });
@@ -578,6 +637,8 @@ export async function generateMonthPlan(
           month,
           startRotationOrder,
           nextRotationOrder: generated.nextRotationOrder,
+          startPendingProfileIds,
+          nextPendingProfileIds: generated.nextPendingProfileIds,
           amSlotsPerDay,
           pmSlotsPerDay,
           slotCount: slots.length,
@@ -593,6 +654,8 @@ export async function generateMonthPlan(
       month,
       startRotationOrder,
       nextRotationOrder: generated.nextRotationOrder,
+      startPendingProfileIds,
+      nextPendingProfileIds: generated.nextPendingProfileIds,
       warnings: generated.warnings,
       slotCount: slots.length,
     };

@@ -52,6 +52,8 @@ type PlanPayload = {
   year: number;
   month: number;
   suggestedStartRotationOrder: number | null;
+  suggestedStartPendingProfileIds?: number[];
+  suggestedStartPendingNames?: string[];
   members: Member[];
   credits: OpenCredit[];
   creditRemaining: CreditRemain[];
@@ -62,6 +64,10 @@ type PlanPayload = {
     status: string;
     startRotationOrder: number;
     nextRotationOrder: number;
+    startPendingProfileIds?: number[];
+    nextPendingProfileIds?: number[];
+    startPendingNames?: string[];
+    nextPendingNames?: string[];
     generatedAt: string | null;
     slots: Slot[];
     penalties: Penalty[];
@@ -352,10 +358,21 @@ export default function ManageMarshalSchedulePage() {
         </div>
         <p style={{ margin: "8px 0 0", color: "var(--vh-ink-soft)" }}>
           상태 {data?.plan?.status || "없음"} · 다음 순번{" "}
-          {data?.plan?.nextRotationOrder ?? "—"}
-          {data?.suggestedStartRotationOrder != null && !data.plan
-            ? ` · 이전달 next ${data.suggestedStartRotationOrder}`
-            : ""}
+          {data?.plan?.nextRotationOrder ??
+            data?.suggestedStartRotationOrder ??
+            "—"}
+          {(() => {
+            const names =
+              data?.plan?.nextPendingNames ??
+              data?.suggestedStartPendingNames ??
+              [];
+            const count =
+              data?.plan?.nextPendingProfileIds?.length ??
+              data?.suggestedStartPendingProfileIds?.length ??
+              0;
+            if (count < 1) return " · 이월 대기 0명";
+            return ` · 이월 대기 ${count}명${names.length ? ` (${names.join(", ")})` : ""}`;
+          })()}
         </p>
       </form>
 

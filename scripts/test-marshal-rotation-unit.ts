@@ -13,10 +13,12 @@ import {
   canonicalOriginalCaddyId,
   classifyMarshalDayStatus,
   generateMonthRotation,
+  inheritStartPendingProfileIds,
   listMonthYmds,
   nextCursorOrder,
   orderedActiveMembers,
   previousYearMonth,
+  resolvePendingMembers,
   type RotationMember,
 } from "../src/lib/marshalRotationDomain";
 
@@ -124,6 +126,7 @@ section("month-to-month cursor + wrap");
   assert(namesOn(nov.slots, "2026-11-01") === "A,B,C", "day1 1,2,3");
   assert(namesOn(nov.slots, "2026-11-02") === "D,E,F", "day2 4,5,6");
   assert(nov.nextRotationOrder === 1, "after 6 wrap to 1");
+  assert(nov.nextPendingProfileIds.length === 0, "no month-end pending without collision");
   const day1Ids = first.map((s) => s.caddyId);
   assert(new Set(day1Ids).size === 3, "same-day duplicate 없음");
   const aDays = nov.slots.filter((s) => s.caddyId === 10).map((s) => s.date);
@@ -310,6 +313,149 @@ section("penalty === current rotation turn is deferred");
     !day1.some((s) => s.source === "ROTATION" && s.caddyId === 10),
     "A does not consume rotation slot the penalty day"
   );
+  assert(out.nextPendingProfileIds.length === 0, "mid-month collision leaves month-end pending 0");
+}
+
+section("month-boundary pending carry");
+{
+  const lastDay = generateMonthRotation({
+    year: 2026,
+    month: 10,
+    startRotationOrder: 1,
+    members: roster,
+    dates: ["2026-10-31"],
+    penaltiesByDate: new Map([
+      ["2026-10-31", [{ caddyId: 10, profileId: 1, shift: "AM" as const }]],
+    ]),
+    statusByDateCaddy: new Map(),
+    openCredits: [],
+  });
+  assert(
+    lastDay.nextPendingProfileIds.join(",") === "1",
+    "final-day penalty=current-turn carries A"
+  );
+  assert(lastDay.nextRotationOrder === 4, "cursor after B,C is D/E start 4");
+  assert(
+    lastDay.slots.find((s) => s.caddyId === 10)?.source === "PENALTY",
+    "Oct 31 A is penalty"
+  );
+
+  const nextMonth = generateMonthRotation({
+    year: 2026,
+    month: 11,
+    startRotationOrder: lastDay.nextRotationOrder,
+    startPendingProfileIds: lastDay.nextPendingProfileIds,
+    members: roster,
+    dates: ["2026-11-01"],
+    penaltiesByDate: new Map(),
+    statusByDateCaddy: new Map(),
+    openCredits: [],
+  });
+  const nov1 = nextMonth.slots.filter((s) => s.date === "2026-11-01");
+  assert(
+    nov1.find((s) => s.caddyId === 10)?.source === "ROTATION",
+    "pending A is ROTATION before cursor"
+  );
+  assert(namesOn(nextMonth.slots, "2026-11-01") === "A,D,E", "A then D,E; B/C not replayed");
+
+  const multi = generateMonthRotation({
+    year: 2026,
+    month: 11,
+    startRotationOrder: 5,
+    startPendingProfileIds: [1, 3],
+    members: roster,
+    dates: ["2026-11-01"],
+    penaltiesByDate: new Map(),
+    statusByDateCaddy: new Map(),
+    openCredits: [],
+  });
+  assert(namesOn(multi.slots, "2026-11-01") === "A,C,E", "pending A,C then cursor E");
+  assert(
+    !multi.slots.some((s) => s.caddyId === 20 || s.caddyId === 40),
+    "B,D not reassigned after being consumed"
+  );
+
+  const first = generateMonthRotation({
+    year: 2026,
+    month: 11,
+    startRotationOrder: 5,
+    startPendingProfileIds: [1, 3],
+    members: roster,
+    penaltiesByDate: new Map(),
+    statusByDateCaddy: new Map(),
+    openCredits: [],
+  });
+  const second = generateMonthRotation({
+    year: 2026,
+    month: 11,
+    startRotationOrder: 5,
+    startPendingProfileIds: [1, 3],
+    members: roster,
+    penaltiesByDate: new Map(),
+    statusByDateCaddy: new Map(),
+    openCredits: [],
+  });
+  assert(
+    JSON.stringify(first.slots) === JSON.stringify(second.slots) &&
+      JSON.stringify(first.nextPendingProfileIds) ===
+        JSON.stringify(second.nextPendingProfileIds),
+    "regenerate identical pending+cursor is deterministic"
+  );
+
+  assert(
+    inheritStartPendingProfileIds({
+      hasGeneratedPlan: false,
+      previousFinalizedNextPending: [1, 3],
+    }).join(",") === "1,3",
+    "previous FINALIZED carry auto inherit"
+  );
+  assert(
+    inheritStartPendingProfileIds({
+      hasGeneratedPlan: true,
+      storedStartPendingProfileIds: [1, 3],
+      previousFinalizedNextPending: [9],
+    }).join(",") === "1,3",
+    "regenerate keeps stored start pending"
+  );
+  assert(
+    inheritStartPendingProfileIds({
+      hasGeneratedPlan: false,
+      previousFinalizedNextPending: [],
+    }).length === 0,
+    "first month pending empty"
+  );
+
+  const reordered = [
+    member(2, "B", 2),
+    member(3, "C", 3),
+    member(4, "D", 4),
+    member(5, "E", 5),
+    member(6, "F", 6),
+    member(9, "A", 1),
+  ];
+  const byIdentity = generateMonthRotation({
+    year: 2026,
+    month: 11,
+    startRotationOrder: 5,
+    startPendingProfileIds: [1],
+    members: reordered,
+    dates: ["2026-11-01"],
+    penaltiesByDate: new Map(),
+    statusByDateCaddy: new Map(),
+    openCredits: [],
+  });
+  assert(
+    byIdentity.slots.find((s) => s.profileId === 1)?.source === "ROTATION",
+    "pending identity follows profileId after order change"
+  );
+  assert(
+    byIdentity.slots.filter((s) => s.date === "2026-11-01").map((s) => s.profileId).includes(1),
+    "A profile still assigned first from pending"
+  );
+  assert(
+    resolvePendingMembers([1, 99, 3], roster).map((m) => m.profileId).join(",") === "1,3",
+    "missing pending profile is consumed without rewind"
+  );
 }
 
 section("substitute credit skips one future turn and can cross month");
@@ -474,6 +620,18 @@ section("source contracts");
   assert(schema.includes("model MarshalPenaltyDuty"), "penalty model");
   assert(schema.includes("model MarshalRotationCredit"), "credit model");
   assert(schema.includes("rotationOrder"), "roster order field");
+  assert(schema.includes("startPendingProfileIds"), "start pending field");
+  assert(schema.includes("nextPendingProfileIds"), "next pending field");
+  assert(service.includes("inheritStartPendingProfileIds"), "service inherits previous pending");
+  assert(service.includes("startPendingProfileIds"), "service stores start pending");
+  assert(service.includes("nextPendingProfileIds"), "service stores next pending");
+  assert(read("src/app/manage/marshals/schedule/page.tsx").includes("이월 대기"), "UI carry hint");
+  assert(
+    read("prisma/migrations/20261013120000_marshal_month_rotation_p2/migration.sql").includes(
+      "startPendingProfileIds"
+    ),
+    "p2 migration has pending columns"
+  );
   assert(cart.includes("dormitoryResident") || cart.includes("Cart"), "cart domain still present");
   assert(read("src/lib/marshalDomain.ts").includes("MARSHAL_ROTATION_ORDER_CHANGE"), "order audit");
   assert(read("src/lib/marshalDomain.ts").includes("MARSHAL_MONTH_GENERATE"), "generate audit");

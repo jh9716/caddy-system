@@ -29,6 +29,8 @@ CREATE TABLE "MarshalMonthPlan" (
     "status" "MarshalMonthPlanStatus" NOT NULL DEFAULT 'DRAFT',
     "startRotationOrder" INTEGER NOT NULL,
     "nextRotationOrder" INTEGER NOT NULL,
+    "startPendingProfileIds" INTEGER[] NOT NULL DEFAULT ARRAY[]::INTEGER[],
+    "nextPendingProfileIds" INTEGER[] NOT NULL DEFAULT ARRAY[]::INTEGER[],
     "generatedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,

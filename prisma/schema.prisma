@@ -1028,6 +1028,10 @@ model MarshalMonthPlan {
   status              MarshalMonthPlanStatus  @default(DRAFT)
   startRotationOrder  Int
   nextRotationOrder   Int
+  /// 이전 월에서 물려받은 미처리 정상 turn. profileId 순서. 순번 재정렬과 무관.
+  startPendingProfileIds Int[] @default([])
+  /// 월 종료 후 다음 달로 넘길 미처리 정상 turn. profileId 순서.
+  nextPendingProfileIds  Int[] @default([])
   generatedAt         DateTime?
   createdAt           DateTime                @default(now())
   updatedAt           DateTime                @updatedAt
