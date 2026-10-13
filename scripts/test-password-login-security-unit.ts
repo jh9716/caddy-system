@@ -13,6 +13,7 @@ import { clientIpFromRequest } from "../src/lib/accountDeletionRequest";
 import {
   PASSWORD_LOGIN_FAIL_MESSAGE,
   PASSWORD_LOGIN_RATE_MESSAGE,
+  PASSWORD_LOGIN_UNAVAILABLE_MESSAGE,
 } from "../src/lib/passwordLoginHttp";
 import {
   PASSWORD_LOGIN_RATE_ACTION,
@@ -150,6 +151,16 @@ async function main() {
     assert(!authLogin.includes("존재하지 않거나 권한이 없습니다."), "auth/login no not_found copy");
     assert(authLogin.includes("claimPasswordLoginAttempt"), "auth/login claim-first");
     assert(login.includes("claimPasswordLoginAttempt"), "/api/login claim-first");
+    assert(authLogin.includes("claim.unavailable"), "auth/login store fail-closed");
+    assert(login.includes("claim.unavailable"), "/api/login store fail-closed");
+    assert(authLogin.includes("passwordLoginUnavailableResponse"), "auth/login 503 helper");
+    assert(login.includes("passwordLoginUnavailableResponse"), "/api/login 503 helper");
+    assert(helper.includes("unavailable"), "rate helper exposes unavailable");
+    assert(!helper.includes("Fail-open"), "no fail-open policy");
+    assert(
+      helper.includes("Release/cleanup errors are logged only"),
+      "release failure distinct from claim/count"
+    );
     assert(!authLogin.includes("clearPasswordLoginFailures"), "auth/login does not wipe fail history");
     assert(!login.includes("clearPasswordLoginFailures"), "/api/login does not wipe fail history");
     assert(!authLogin.includes("recordPasswordLoginFailure"), "auth/login no post-bcrypt record");
@@ -268,22 +279,43 @@ async function main() {
     );
   }
 
-  section("helper: store failure fail-open");
+  section("helper: store failure fail-closed");
   {
     const down = mockRateDb({ failCreate: true });
     const claim = await claimPasswordLoginAttempt(down, {
       ip: "203.0.113.12",
       username: "alice",
     });
-    assert(claim.limited === false && claim.claimId === null, "create failure does not lock");
+    assert(claim.limited === true && claim.unavailable === true, "create failure fail-closed");
+    assert(claim.claimId === null, "create failure has no claim");
     const countDown = mockRateDb({ failCount: true });
     const read = await readPasswordLoginRateLimit(countDown, {
       ip: "203.0.113.12",
       username: "alice",
     });
-    assert(read.limited === false, "count failure fail-open");
+    assert(read.limited === true && read.unavailable === true, "count failure fail-closed");
+    const claimCountDown = mockRateDb({ failCount: true });
+    const afterCreate = await claimPasswordLoginAttempt(claimCountDown, {
+      ip: "203.0.113.12",
+      username: "alice",
+    });
+    assert(
+      afterCreate.limited === true && afterCreate.unavailable === true,
+      "count-after-claim failure fail-closed"
+    );
+    assert(afterCreate.claimId != null, "count failure keeps claim id");
     await releasePasswordLoginClaim(down, 99);
     assert(true, "release on missing claim is safe");
+    const ok = mockRateDb();
+    const allowed = await claimPasswordLoginAttempt(ok, {
+      ip: "203.0.113.12",
+      username: "alice",
+    });
+    ok.audit.deleteMany = async () => {
+      throw new Error("release down");
+    };
+    await releasePasswordLoginClaim(ok, allowed.claimId);
+    assert(allowed.limited === false && allowed.unavailable === false, "release failure does not flip claim");
   }
 
   assertLocalDatabaseUrl(process.env.DATABASE_URL);
@@ -578,6 +610,75 @@ async function main() {
           assert(Number(res.headers.get("retry-after")) >= 1, "burst 429 has Retry-After");
         }
       }
+    }
+
+    section("C7 store outage HTTP fail-closed 503");
+    {
+      const origCreate = prisma.audit.create;
+      const origCount = prisma.audit.count;
+      const ip = "203.0.113.77";
+      try {
+        prisma.audit.create = (async () => {
+          throw new Error("audit create down");
+        }) as typeof prisma.audit.create;
+        const createDown = await loginPOST(
+          jsonReq(
+            "https://example.com/api/login",
+            { username: user.username, password: "correct-login-pw" },
+            ip
+          )
+        );
+        const createBody = await createDown.json();
+        assert(createDown.status === 503, "audit.create throw → 503");
+        assert(createBody.error === "auth_unavailable", "503 generic error");
+        assert(createBody.message === PASSWORD_LOGIN_UNAVAILABLE_MESSAGE, "503 generic message");
+        assert(!JSON.stringify(createBody).includes(user.username), "503 no username leak");
+        assert(!createDown.headers.get("retry-after"), "503 has no Retry-After");
+
+        const missingCreate = await loginPOST(
+          jsonReq(
+            "https://example.com/api/login",
+            { username: `${tag}_ghost`, password: "any-pass" },
+            ip
+          )
+        );
+        const missingCreateBody = await missingCreate.json();
+        assert(missingCreate.status === 503, "unknown user + audit.create throw still 503");
+        assert(
+          JSON.stringify(missingCreateBody) === JSON.stringify(createBody),
+          "503 body identical whether username exists"
+        );
+
+        prisma.audit.create = origCreate;
+        prisma.audit.count = (async () => {
+          throw new Error("audit count down");
+        }) as typeof prisma.audit.count;
+        const countDown = await loginPOST(
+          jsonReq(
+            "https://example.com/api/login",
+            { username: user.username, password: "wrong-pass" },
+            "203.0.113.78"
+          )
+        );
+        const countBody = await countDown.json();
+        assert(countDown.status === 503, "audit.count throw after claim → 503");
+        assert(countBody.error === "auth_unavailable", "count failure generic 503");
+        assert(!JSON.stringify(countBody).includes("비밀번호"), "503 not a password 401");
+      } finally {
+        prisma.audit.create = origCreate;
+        prisma.audit.count = origCount;
+      }
+
+      const recovered = await loginPOST(
+        jsonReq(
+          "https://example.com/api/login",
+          { username: user.username, password: "wrong-pass" },
+          "203.0.113.79"
+        )
+      );
+      const recoveredBody = await recovered.json();
+      assert(recovered.status === 401, "after store recovery invalid password still 401");
+      assert(recoveredBody.message === PASSWORD_LOGIN_FAIL_MESSAGE, "generic 401 after recovery");
     }
 
     section("passwordLogin reasons stay internal");

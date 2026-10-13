@@ -150,6 +150,8 @@ async function main() {
     assert(nextauth.includes("authorizePasswordCredentials"), "nextauth wires helper");
     assert(creds.includes("claimPasswordLoginAttempt"), "nextauth claim-first");
     assert(creds.includes("if (claim.limited) return null"), "nextauth limited is generic null");
+    assert(creds.includes('throw new Error("auth_unavailable")'), "nextauth store fail-closed throws");
+    assert(helper.includes("claim.unavailable"), "admin HTTP store fail-closed");
     assert(login.includes("claimPasswordLoginAttempt"), "C7 /api/login still claim-first");
     assert(authLogin.includes("claimPasswordLoginAttempt"), "C7 /api/auth/login still claim-first");
     assert(kakao.includes("findOrCreateKakaoSessionUser"), "Kakao callback untouched");
@@ -199,7 +201,8 @@ async function main() {
       username: ADMIN_ENV_PASSWORD_RATE_USERNAME,
       policy: ADMIN_ENV_PASSWORD_RATE_POLICY,
     });
-    assert(claim.limited === false && claim.claimId === null, "admin store fail-open");
+    assert(claim.limited === true && claim.unavailable === true, "admin store fail-closed");
+    assert(claim.claimId === null, "admin create failure has no claim");
   }
 
   section("helper: NextAuth header IP");

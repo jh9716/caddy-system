@@ -10,6 +10,7 @@ import { getEnvOnlyAdmin } from "@/lib/envCredentials";
 import {
   passwordLoginRateLimitedResponse,
   passwordLoginUnauthorizedResponse,
+  passwordLoginUnavailableResponse,
 } from "@/lib/passwordLoginHttp";
 import {
   ADMIN_ENV_PASSWORD_RATE_POLICY,
@@ -37,6 +38,9 @@ export async function postAdminEnvPasswordLogin(
     username: ADMIN_ENV_PASSWORD_RATE_USERNAME,
     policy: ADMIN_ENV_PASSWORD_RATE_POLICY,
   });
+  if (claim.unavailable) {
+    return passwordLoginUnavailableResponse();
+  }
   if (claim.limited) {
     return passwordLoginRateLimitedResponse(claim.retryAfterSec);
   }
