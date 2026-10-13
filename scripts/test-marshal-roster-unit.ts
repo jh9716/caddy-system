@@ -136,6 +136,7 @@ const serialized = serializeMarshalProfile({
   caddyId: 4,
   active: true,
   startedOn: parseMarshalStartedOn("2026-03-01"),
+  rotationOrder: 3,
   createdAt: new Date("2026-03-02T00:00:00.000Z"),
   updatedAt: new Date("2026-03-02T00:00:00.000Z"),
   caddy: {
@@ -148,6 +149,7 @@ const serialized = serializeMarshalProfile({
   },
 });
 assert(serialized.startedOn === "2026-03-01", "serialize startedOn");
+assert(serialized.rotationOrder === 3, "serialize rotationOrder");
 assert(serialized.caddy.team === "1조", "Caddy.team SoT 유지");
 assert(
   !Object.prototype.hasOwnProperty.call(serialized, ["senior", "CaddyId"].join("")),
@@ -205,7 +207,8 @@ section("source contracts");
   assert(!page.includes("선임"), "UI 선임 없음");
   assert(!page.includes("후임"), "UI 후임 없음");
   assert(schema.includes("model MarshalProfile"), "schema MarshalProfile");
-  assert(!schema.includes(`model ${MONTH_MODEL}`), "schema month models 0");
+  assert(schema.includes(`model ${MONTH_MODEL}Plan`), "schema month plan");
+  assert(!schema.includes(`model ${MONTH_MODEL}Window`), "schema month window 0");
   assert(!schema.includes(SENIOR_FIELD), "schema senior field 0");
   assert(!schema.includes(JUNIOR_FIELD), "schema junior back-relation 0");
   assert(!migration.includes(MONTH_MODEL), "migration month tables 0");
@@ -264,7 +267,7 @@ section("git: P1 scope + existing ops files unchanged");
   const fullDiff = String(
     spawnSync("git", ["diff", "origin/main"], { encoding: "utf8" }).stdout || ""
   );
-  assert(!fullDiff.includes(MONTH_MODEL), "PR diff month models 0");
+  assert(fullDiff.includes(`${MONTH_MODEL}Plan`), "PR2 month plan 있음");
   assert(!fullDiff.includes(SENIOR_FIELD), "PR diff senior field 0");
   const dutyDiff = String(
     spawnSync(
