@@ -373,11 +373,15 @@ async function main() {
         sessionVersion: 0,
       },
     });
+    const cOther = await prisma.caddy.create({
+      data: { name: `${tag}_o`, team: tag.slice(0, 8), teamOrder: 3, employmentStatus: "ACTIVE" },
+    });
     const uOther = await prisma.user.create({
       data: {
         username: `${tag}_other`,
         password: hash,
         role: "caddy",
+        caddyId: cOther.id,
         sessionVersion: 0,
         kakaoUserId: `k_${tag}`,
       },
@@ -488,7 +492,9 @@ async function main() {
       const unlinkedCookie = await cookieFor({ ...uUnlinked, role: "caddy" });
       const unlinkedEp = `https://fcm.googleapis.com/fcm/send/${tag}-unlinked`;
       const unlinkedPost = await jsonReq("POST", unlinkedCookie, validBody(unlinkedEp));
-      assert(unlinkedPost.status === 200, "caddyId=null User can register");
+      const unlinkedBody = await unlinkedPost.json();
+      assert(unlinkedPost.status === 403, "unlinked caddy push 403");
+      assert(unlinkedBody.error === "caddy_not_linked", "unlinked push error code");
 
       const badHttp = await jsonReq("POST", cookie, validBody("http://insecure.example/push"));
       assert(badHttp.status === 400, "http endpoint rejected");

@@ -306,7 +306,15 @@ async function main() {
       employmentStatus: "ACTIVE",
     },
   });
-  caddyIds.push(caddyA.id, caddyB.id);
+  const caddyOther = await prisma.caddy.create({
+    data: {
+      name: "댓글캐디C",
+      team: "3조",
+      caddyType: "HOUSE",
+      employmentStatus: "ACTIVE",
+    },
+  });
+  caddyIds.push(caddyA.id, caddyB.id, caddyOther.id);
   const userCaddy = await prisma.user.create({
     data: {
       username: `${tag}_caddy`,
@@ -327,7 +335,12 @@ async function main() {
     data: { username: `${tag}_admin`, password: hash, role: "admin" },
   });
   const userOther = await prisma.user.create({
-    data: { username: `${tag}_other`, password: hash, role: "caddy" },
+    data: {
+      username: `${tag}_other`,
+      password: hash,
+      role: "caddy",
+      caddyId: caddyOther.id,
+    },
   });
   userIds.push(userCaddy.id, userLeader.id, userAdmin.id, userOther.id);
 

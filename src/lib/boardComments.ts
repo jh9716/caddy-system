@@ -3,6 +3,7 @@ import type { CommentTargetType, Prisma, PrismaClient } from "@prisma/client";
 import {
   authUnavailableResponse,
   canReadPublishedBoard,
+  denyUnlinkedStaff,
   isAuthStoreUnavailable,
   mustChangePasswordResponse,
   resolveAuthUser,
@@ -105,6 +106,8 @@ export async function requireBoardCommentReader(
   if (shouldForcePasswordChange(auth)) {
     return mustChangePasswordResponse();
   }
+  const unlinked = denyUnlinkedStaff(auth);
+  if (unlinked) return unlinked;
   return auth;
 }
 

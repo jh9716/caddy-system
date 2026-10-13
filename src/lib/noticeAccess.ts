@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import type { PrismaClient } from "@prisma/client";
 import {
   authUnavailableResponse,
+  denyUnlinkedStaff,
   isAuthStoreUnavailable,
   mustChangePasswordResponse,
   resolveAuthUser,
@@ -75,6 +76,8 @@ export async function requireNoticeReader(
   if (shouldForcePasswordChange(auth)) {
     return mustChangePasswordResponse();
   }
+  const unlinked = denyUnlinkedStaff(auth);
+  if (unlinked) return unlinked;
   return auth;
 }
 

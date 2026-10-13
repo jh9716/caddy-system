@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   authUnavailableResponse,
+  denyUnlinkedStaff,
   isAuthStoreUnavailable,
   mustChangePasswordResponse,
   resolveAuthUser,
@@ -64,6 +65,8 @@ export async function requireCourseReportReader(
   if (shouldForcePasswordChange(auth)) {
     return mustChangePasswordResponse();
   }
+  const unlinked = denyUnlinkedStaff(auth);
+  if (unlinked) return unlinked;
   return auth;
 }
 
