@@ -115,6 +115,10 @@ assert(
   created.success && created.data.employmentStatus === "ACTIVE",
   "default ACTIVE"
 );
+assert(
+  created.success && created.data.dormitoryResident === false,
+  "create dormitoryResident default false"
+);
 assert(created.success && created.data.teamOrder === 2, "create teamOrder set");
 
 const createdKo = caddyCreateSchema.safeParse({
@@ -171,6 +175,11 @@ assert(updated.success, "update schema ok");
 assert(
   updated.success && updated.data.employmentStatus === "LEAVE",
   "update LEAVE"
+);
+const dormUpdate = caddyUpdateSchema.safeParse({ dormitoryResident: true });
+assert(
+  dormUpdate.success && dormUpdate.data.dormitoryResident === true,
+  "update accepts dormitoryResident"
 );
 
 assert(

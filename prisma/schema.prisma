@@ -108,6 +108,8 @@ model Caddy {
   status            String?          @default("근무중")
   /// 주중반 / 주말반 / 드라이빙 등 병행 분류 (레거시 extraFlags — Import 형식 유지)
   extraFlags        String[]         @default([])
+  /// 기숙사 거주 자격. 카트 배정 SoT. extraFlags/team/memo로 추정하지 않음.
+  dormitoryResident Boolean          @default(false)
   memo              String?
   /// 휴대폰 (canonical: 010XXXXXXXX). null=미등록. PG unique는 NULL 다수 허용.
   phoneNormalized   String?          @unique
@@ -126,6 +128,8 @@ model Caddy {
   marshalProfile     MarshalProfile?
   /// 승인 시 선택된 Caddy로 역참조 (이력). Caddy 물리 삭제 시 selectedCaddyId만 null
   linkRequestSelections CaddyLinkRequest[] @relation("CaddyLinkRequestSelectedCaddy")
+  /// 고정카트 1대. DailyCartAssignment는 PR2.
+  ownedCart         Cart?
   /// 로그인 User와 1:1 (미연결 시 null)
   user              User?
   /// 작성 시점 caddy snapshot. unlink/삭제 후에도 글 유지 (SetNull).
@@ -137,6 +141,36 @@ model Caddy {
   @@index([employmentStatus])
   @@index([caddyType])
   @@index([thirdBandSubgroup])
+  @@index([dormitoryResident])
+}
+
+/// 카트 실물 마스터. 날짜 배정(DailyCartAssignment)은 PR2.
+enum CartKind {
+  STANDARD
+  OTHER
+}
+
+enum CartOperationalStatus {
+  ACTIVE
+  MAINTENANCE
+  DISABLED
+}
+
+model Cart {
+  id                 Int                    @id @default(autoincrement())
+  number             String                 @unique
+  kind               CartKind               @default(STANDARD)
+  kindLabel          String?
+  ownerCaddyId       Int?                   @unique
+  ownerCaddy         Caddy?                 @relation(fields: [ownerCaddyId], references: [id], onDelete: Restrict)
+  dormitoryOnly      Boolean                @default(false)
+  operationalStatus  CartOperationalStatus  @default(ACTIVE)
+  note               String?
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+
+  @@index([operationalStatus])
+  @@index([dormitoryOnly])
 }
 
 model Assignment {

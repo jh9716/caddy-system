@@ -49,6 +49,7 @@ export const caddyCreateSchema = z
     caddyType: z.enum(["HOUSE", "THIRD", "DRIVING"]).optional(),
     missingFromImport: z.boolean().optional(),
     thirdBandSubgroup: thirdBandSubgroupSchema,
+    dormitoryResident: z.boolean().optional().default(false),
   })
   .superRefine((data, ctx) => {
     if (data.caddyType === "DRIVING") return;
@@ -82,6 +83,7 @@ export const caddyUpdateSchema = z.object({
   caddyType: z.enum(["HOUSE", "THIRD", "DRIVING"]).optional(),
   missingFromImport: z.boolean().optional(),
   thirdBandSubgroup: thirdBandSubgroupSchema,
+  dormitoryResident: z.boolean().optional(),
   /**
    * ↑↓ 스왑: 대상 캐디 id. 서버가 두 슬롯을 원자적으로 교환.
    * 조 이동(고정 슬롯)과 별개.

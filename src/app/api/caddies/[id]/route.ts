@@ -33,6 +33,7 @@ import {
   denyArchivedCaddyRead,
 } from "@/lib/caddyArchiveVisibility";
 import { writeCaddyRevokingRetiredSessions } from "@/lib/sessionRevocation";
+import { writeCaddyDormitoryAudit } from "@/lib/caddyDormitory";
 
 export const dynamic = "force-dynamic";
 
@@ -195,6 +196,9 @@ export async function PATCH(
       if (data.missingFromImport !== undefined) {
         updateData.missingFromImport = data.missingFromImport;
       }
+      if (data.dormitoryResident !== undefined) {
+        updateData.dormitoryResident = data.dormitoryResident === true;
+      }
 
       const updated = await writeCaddyRevokingRetiredSessions(prisma, {
         caddyId: id,
@@ -206,6 +210,16 @@ export async function PATCH(
             data: updateData as Prisma.CaddyUpdateInput,
           }),
       });
+      if (data.dormitoryResident !== undefined) {
+        await writeCaddyDormitoryAudit(prisma, {
+          caddyId: id,
+          name: updated.name,
+          before: current.dormitoryResident === true,
+          after: data.dormitoryResident === true,
+          username: auth?.username ?? null,
+          userId: auth?.userId ?? null,
+        });
+      }
       const auditPayload = { ...data } as Record<string, unknown>;
       if (Object.prototype.hasOwnProperty.call(auditPayload, "phone")) {
         auditPayload.phone = maskKrMobile(
@@ -309,6 +323,9 @@ export async function PATCH(
     if (data.missingFromImport !== undefined) {
       updateData.missingFromImport = data.missingFromImport;
     }
+    if (data.dormitoryResident !== undefined) {
+      updateData.dormitoryResident = data.dormitoryResident === true;
+    }
     // 조 기준 canonical invariant: 1~8 HOUSE, 9~12 THIRD (클라이언트 caddyType 무시)
     updateData.caddyType = resolveCaddyTypeFromTeam(nextTeam);
 
@@ -382,6 +399,16 @@ export async function PATCH(
       action: "UPDATE_CADDY",
       meta: { entity: "Caddy", entityId: id, payload: auditPayload },
     });
+    if (data.dormitoryResident !== undefined) {
+      await writeCaddyDormitoryAudit(prisma, {
+        caddyId: id,
+        name: updated.name,
+        before: current.dormitoryResident === true,
+        after: data.dormitoryResident === true,
+        username: auth?.username ?? null,
+        userId: auth?.userId ?? null,
+      });
+    }
 
     return NextResponse.json(updated);
   } catch (e: any) {
