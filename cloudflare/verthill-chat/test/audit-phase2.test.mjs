@@ -1,26 +1,7 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { once } from "node:events";
-import { createServer } from "node:net";
-import { dirname, join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 import { TEST_SECRET, signCreateGrant, signTestToken, signTestTokenV2 } from "./token-helper.mjs";
-
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const HOST = "127.0.0.1";
-
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.listen(0, HOST, () => {
-      const addr = server.address();
-      const port = typeof addr === "object" && addr ? addr.port : 0;
-      server.close((err) => (err ? reject(err) : resolve(port)));
-    });
-    server.on("error", reject);
-  });
-}
+import { HOST, startWrangler, stopWrangler } from "./wrangler-harness.mjs";
 
 function parseJson(event) {
   return JSON.parse(String(event.data));
@@ -90,75 +71,6 @@ function connectDirectory(port, token) {
       reject(new Error("directory ws error"));
     });
   });
-}
-
-async function startWrangler() {
-  const port = await freePort();
-  const child = spawn(
-    "npx",
-    [
-      "wrangler",
-      "dev",
-      "--local",
-      "--port",
-      String(port),
-      "--ip",
-      HOST,
-      "--var",
-      `CHAT_AUTH_SECRET:${TEST_SECRET}`,
-    ],
-    {
-      cwd: root,
-      env: {
-        ...process.env,
-        WRANGLER_SEND_METRICS: "false",
-        CI: "1",
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-      detached: true,
-    }
-  );
-  let output = "";
-  const ready = new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(`wrangler ready timeout\n${output}`));
-    }, 45000);
-    const onData = (buf) => {
-      output += buf.toString();
-      if (
-        (output.includes("Ready") || output.includes("ready") || /http:\/\/127\.0\.0\.1:\d+/.test(output)) &&
-        (output.includes("Ready on") || output.includes(`http://${HOST}:${port}`) || output.includes("Starting local server"))
-      ) {
-        clearTimeout(timer);
-        child.stdout?.off("data", onData);
-        child.stderr?.off("data", onData);
-        resolve();
-      }
-    };
-    child.stdout?.on("data", onData);
-    child.stderr?.on("data", onData);
-    child.on("exit", (code) => {
-      clearTimeout(timer);
-      reject(new Error(`wrangler exited ${code}\n${output}`));
-    });
-  });
-  await ready;
-  await new Promise((r) => setTimeout(r, 300));
-  return { port, child };
-}
-
-async function stopWrangler(child) {
-  if (!child.pid) return;
-  try {
-    process.kill(-child.pid, "SIGTERM");
-  } catch {
-    try {
-      child.kill("SIGTERM");
-    } catch {
-      // already gone
-    }
-  }
-  await Promise.race([once(child, "exit"), new Promise((r) => setTimeout(r, 2000))]);
 }
 
 function createGrant(roomId, ownerUserId, members) {

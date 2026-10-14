@@ -133,6 +133,7 @@ section("token hmac v2 + v1 compat");
     displayName: "홍길동",
     role: "caddy" as const,
     team: "1조",
+    sv: 1,
     iat: now,
     exp: now + CHAT_TOKEN_TTL_SEC,
   };
@@ -155,6 +156,17 @@ section("token hmac v2 + v1 compat");
   const cross = await verifyChatToken(nodeToken, { nowSec: now + 10 });
   assert(cross?.displayName === "홍길동" && cross.v === 2, "node hmac interoperable v2");
   assert(parseChatTokenClaims(canonical)?.v === 2, "parse v2 canonical");
+  assert(canonical.split("|").length === 8, "v2 canonical is 8 parts with sv");
+  assert(canonical.includes("|1|1700000000|"), "sv sits before iat/exp");
+  const sevenPart = "2|9|홍길동|caddy|1조|1700000000|1700001800";
+  assert(parseChatTokenClaims(sevenPart) == null, "legacy 7-part v2 rejected");
+  const tamperedParts = canonical.split("|");
+  tamperedParts[5] = "99";
+  const tamperedCanonical = tamperedParts.join("|");
+  const tamperedBody = Buffer.from(tamperedCanonical, "utf8").toString("base64url");
+  const tamperedToken = `${tamperedBody}.${nodeSig}`;
+  const tampered = await verifyChatToken(tamperedToken, { nowSec: now + 10 });
+  assert(tampered == null, "tampered sv rejected");
 
   const v1 = {
     v: 1 as const,
@@ -179,6 +191,7 @@ section("ACL");
     displayName: "홍길동",
     role: "caddy" as const,
     team: "1조",
+    sv: 1,
     iat: 1,
     exp: 9,
   };
@@ -245,8 +258,33 @@ section("issue identity token");
   );
   assert(!("room" in issued), "issued token is identity, not room-bound");
   assert(issued.user.displayName === "조장", "issued displayName");
+  assert(issued.sessionVersion === 1, "issued sessionVersion from User");
   const verified = await verifyChatToken(issued.token, { nowSec: 1_700_000_010 });
   assert(verified?.v === 2 && verified.userId === 8 && verified.team === "1조", "issued v2 verifies");
+  assert(verified?.v === 2 && verified.sv === 1, "issued token binds sessionVersion");
+
+  const unversionedAuth = {
+    ...auth,
+    sessionVersion: undefined,
+  } as ResolvedAuthUser;
+  let unversionedCode = "";
+  try {
+    await issueChatAccessToken(
+      {
+        user: { async findUnique() { throw new Error("no env map"); } },
+        caddy: {
+          async findUnique() {
+            return { id: 22, name: "조장", team: "1조", employmentStatus: "ACTIVE" };
+          },
+        },
+      },
+      unversionedAuth,
+      1_700_000_000
+    );
+  } catch (e) {
+    unversionedCode = e instanceof ChatAuthError ? e.code : "other";
+  }
+  assert(unversionedCode === "chat_session_unversioned", "unversioned session cannot mint chat token");
 }
 
 section("POST /api/chat/token");
@@ -630,6 +668,7 @@ section("env-admin chat identity mapping");
         displayName: issued.user.displayName,
         role: issued.user.role,
         team: issued.user.team,
+        sv: issued.sessionVersion,
         iat: 1,
         exp: 9,
       },

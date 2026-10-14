@@ -38,6 +38,7 @@ export function signTestTokenV2(partial, secret = TEST_SECRET) {
     displayName: "Tester",
     role: "caddy",
     team: "1조",
+    sv: 0,
     iat: now,
     exp: now + 600,
     ...partial,
@@ -48,6 +49,7 @@ export function signTestTokenV2(partial, secret = TEST_SECRET) {
     String(claims.displayName).replace(/\|/g, "").trim(),
     claims.role,
     claims.team || "-",
+    String(claims.sv ?? 0),
     String(claims.iat),
     String(claims.exp),
   ].join("|");

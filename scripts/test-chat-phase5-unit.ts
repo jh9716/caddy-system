@@ -57,6 +57,7 @@ function v2(userId = 8) {
     displayName: "신정훈",
     role: "caddy" as const,
     team: "7조",
+    sv: 1,
     iat: 1,
     exp: 9_999_999_999,
   };
