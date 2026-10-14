@@ -10,6 +10,8 @@ export type ChatTokenV2Claims = {
   displayName: string;
   role: AppRole;
   team: string;
+  /** DB User.sessionVersion. Required on v2. Env-admin uses the mapped User row. */
+  sv: number;
   iat: number;
   exp: number;
 };
@@ -29,6 +31,16 @@ export type ChatTokenClaims = ChatTokenV2Claims | ChatTokenV1Claims;
 
 export function isChatTokenV2(claims: ChatTokenClaims): claims is ChatTokenV2Claims {
   return claims.v === 2;
+}
+
+export function parseChatSessionVersion(raw: unknown): number | null {
+  const sv = Number(raw);
+  if (!Number.isInteger(sv) || sv < 0) return null;
+  return sv;
+}
+
+export function chatTokenSessionVersion(claims: ChatTokenClaims): number | null {
+  return claims.v === 2 ? parseChatSessionVersion(claims.sv) : null;
 }
 
 export function getChatAuthSecret(): string {
@@ -60,6 +72,7 @@ export function canonicalChatTokenPayload(claims: ChatTokenClaims): string {
       sanitizeChatDisplayName(claims.displayName),
       claims.role,
       normalizeChatTeam(claims.team),
+      String(claims.sv),
       String(claims.iat),
       String(claims.exp),
     ].join("|");
@@ -134,12 +147,14 @@ export async function signChatToken(
 
 export function parseChatTokenClaims(canonical: string): ChatTokenClaims | null {
   const parts = canonical.split("|");
-  if (parts[0] === "2" && parts.length === 7) {
-    const [, userIdRaw, displayName, role, team, iatRaw, expRaw] = parts;
+  if (parts[0] === "2" && parts.length === 8) {
+    const [, userIdRaw, displayName, role, team, svRaw, iatRaw, expRaw] = parts;
     const userId = Number(userIdRaw);
+    const sv = parseChatSessionVersion(svRaw);
     const iat = Number(iatRaw);
     const exp = Number(expRaw);
     if (!Number.isInteger(userId) || userId <= 0) return null;
+    if (sv == null) return null;
     if (!Number.isFinite(iat) || !Number.isFinite(exp)) return null;
     if (role !== "admin" && role !== "caddy" && role !== "leader") return null;
     const name = sanitizeChatDisplayName(displayName);
@@ -150,6 +165,7 @@ export function parseChatTokenClaims(canonical: string): ChatTokenClaims | null 
       displayName: name,
       role,
       team: normalizeChatTeam(team),
+      sv,
       iat,
       exp,
     };

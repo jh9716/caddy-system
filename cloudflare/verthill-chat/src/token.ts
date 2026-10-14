@@ -4,6 +4,8 @@ export type ChatTokenV2Claims = {
   displayName: string;
   role: "admin" | "caddy" | "leader";
   team: string;
+  /** DB User.sessionVersion. Required on v2. */
+  sv: number;
   iat: number;
   exp: number;
 };
@@ -23,6 +25,26 @@ export type ChatTokenClaims = ChatTokenV2Claims | ChatTokenV1Claims;
 
 export function isChatTokenV2(claims: ChatTokenClaims): claims is ChatTokenV2Claims {
   return claims.v === 2;
+}
+
+export function parseChatSessionVersion(raw: unknown): number | null {
+  const sv = Number(raw);
+  if (!Number.isInteger(sv) || sv < 0) return null;
+  return sv;
+}
+
+export function chatTokenSessionVersion(claims: ChatTokenClaims): number | null {
+  return claims.v === 2 ? parseChatSessionVersion(claims.sv) : null;
+}
+
+/** True when stored epoch is newer than the token (revoked). Missing epoch is unknown. */
+export function isChatSessionEpochStale(
+  tokenSv: number | null,
+  storedSv: number | null | undefined
+): boolean {
+  if (storedSv == null) return false;
+  if (tokenSv == null) return true;
+  return storedSv > tokenSv;
 }
 
 export function sanitizeChatDisplayName(name: string): string {
@@ -50,6 +72,7 @@ export function canonicalChatTokenPayload(claims: ChatTokenClaims): string {
       sanitizeChatDisplayName(claims.displayName),
       claims.role,
       normalizeTeam(claims.team),
+      String(claims.sv),
       String(claims.iat),
       String(claims.exp),
     ].join("|");
@@ -95,12 +118,14 @@ function timingSafeEqualBytes(a: Uint8Array, b: Uint8Array): boolean {
 
 export function parseChatTokenClaims(canonical: string): ChatTokenClaims | null {
   const parts = canonical.split("|");
-  if (parts[0] === "2" && parts.length === 7) {
-    const [, userIdRaw, displayName, role, team, iatRaw, expRaw] = parts;
+  if (parts[0] === "2" && parts.length === 8) {
+    const [, userIdRaw, displayName, role, team, svRaw, iatRaw, expRaw] = parts;
     const userId = Number(userIdRaw);
+    const sv = parseChatSessionVersion(svRaw);
     const iat = Number(iatRaw);
     const exp = Number(expRaw);
     if (!Number.isInteger(userId) || userId <= 0) return null;
+    if (sv == null) return null;
     if (!Number.isFinite(iat) || !Number.isFinite(exp)) return null;
     if (role !== "admin" && role !== "caddy" && role !== "leader") return null;
     const name = sanitizeChatDisplayName(displayName);
@@ -111,6 +136,7 @@ export function parseChatTokenClaims(canonical: string): ChatTokenClaims | null 
       displayName: name,
       role,
       team: normalizeTeam(team),
+      sv,
       iat,
       exp,
     };

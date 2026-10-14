@@ -53,11 +53,21 @@ import {
   type MessageDeletedEvent,
 } from "./protocol";
 import {
+  chatTokenSessionVersion,
+  isChatTokenV2,
+  isChatSessionEpochStale,
   resolveChatRoomAccess,
   verifyChatToken,
   type ChatTokenClaims,
 } from "./token";
 import { handleChatMediaRequest, type ChatMediaBucket } from "./chatMedia";
+import {
+  CHAT_ROOM_REVOKE_PATH,
+  CHAT_SESSION_EPOCH_PATH,
+  CHAT_SESSION_REVOKE_PATH,
+  assertChatSessionCurrent,
+  parseSessionRevokeBody,
+} from "./sessionCheck";
 
 export { validateIncomingMessage, isValidRoomName } from "./protocol";
 export { verifyChatToken } from "./token";
@@ -146,7 +156,32 @@ async function verifyIdentity(
   if (!token) return json({ error: "unauthorized" }, 401);
   const claims = await verifyChatToken(token, secret);
   if (!claims) return json({ error: "invalid_token" }, 401);
+  const session = await assertChatSessionCurrent(env, claims);
+  if (!session.ok) return json({ error: session.error }, session.status);
+  if (isChatTokenV2(claims)) {
+    void rememberSessionEpoch(env, claims.userId, claims.sv);
+  }
   return claims;
+}
+
+async function rememberSessionEpoch(
+  env: Env,
+  userId: number,
+  sessionVersion: number
+) {
+  try {
+    const path = CHAT_SESSION_EPOCH_PATH;
+    const headers = await internalAuthHeaders(chatInternalSecret(env), path);
+    await directoryStub(env).fetch(
+      new Request(`https://chat-directory${path}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ userId, sessionVersion }),
+      })
+    );
+  } catch {
+    // new-connection check already succeeded
+  }
 }
 
 async function listDirectoryMemberIds(env: Env, roomId: string): Promise<number[] | null> {
@@ -265,12 +300,61 @@ export default {
     if (request.method === "POST" && url.pathname === "/directory/rooms") {
       return createRoomFromGrant(request, env);
     }
+    if (request.method === "POST" && url.pathname === CHAT_SESSION_REVOKE_PATH) {
+      return revokeChatSession(request, env);
+    }
     // Chat photo media: PUT /media/upload, POST /internal/media/inspect, GET|DELETE /internal/media/object
     const media = await handleChatMediaRequest(request, env);
     if (media) return media;
     return json({ error: "not_found" }, 404);
   },
 };
+
+async function revokeChatSession(request: Request, env: Env): Promise<Response> {
+  if (request.headers.get("origin")) {
+    return json({ error: "server_only" }, 403);
+  }
+  if (!(await verifyInternalRequest(request, env, CHAT_SESSION_REVOKE_PATH))) {
+    return json({ error: "forbidden" }, 403);
+  }
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "invalid_payload" }, 400);
+  }
+  const parsed = parseSessionRevokeBody(body);
+  if (!parsed) return json({ error: "invalid_payload" }, 400);
+  const headers = await internalAuthHeaders(
+    chatInternalSecret(env),
+    CHAT_SESSION_REVOKE_PATH
+  );
+  const dirRes = await directoryStub(env).fetch(
+    new Request(`https://chat-directory${CHAT_SESSION_REVOKE_PATH}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(parsed),
+    })
+  );
+  // Worker always holds CHAT_ROOM. Directory poke is best-effort for custom rooms;
+  // overall room is the common open-socket case and must not depend on DO env wiring.
+  try {
+    const roomHeaders = await internalAuthHeaders(
+      chatInternalSecret(env),
+      CHAT_ROOM_REVOKE_PATH
+    );
+    await env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName("all")).fetch(
+      new Request(`https://chat-room${CHAT_ROOM_REVOKE_PATH}`, {
+        method: "POST",
+        headers: roomHeaders,
+        body: JSON.stringify(parsed),
+      })
+    );
+  } catch {
+    // directory poke / token TTL still bound residual access
+  }
+  return dirRes;
+}
 
 async function createRoomFromGrant(request: Request, env: Env): Promise<Response> {
   if (request.headers.get("origin")) {
@@ -488,11 +572,33 @@ export class ChatRoom extends DurableObject<Env> {
     this.ctx.storage.sql.exec(
       `CREATE INDEX IF NOT EXISTS hidden_messages_user ON hidden_messages(user_id)`
     );
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS revoked_sessions (
+        user_id INTEGER PRIMARY KEY,
+        session_version INTEGER NOT NULL
+      )
+    `);
     void this.ensureRetentionAlarm();
   }
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    if (request.method === "POST" && url.pathname === CHAT_ROOM_REVOKE_PATH) {
+      if (!(await verifyInternalRequest(request, this.env, url.pathname))) {
+        return json({ error: "forbidden" }, 403);
+      }
+      let body: unknown;
+      try {
+        body = await request.json();
+      } catch {
+        return json({ error: "invalid_payload" }, 400);
+      }
+      const parsed = parseSessionRevokeBody(body);
+      if (!parsed) return json({ error: "invalid_payload" }, 400);
+      this.rememberRevoked(parsed.userId, parsed.sessionVersion);
+      this.expireRevokedSockets(parsed.userId, parsed.sessionVersion);
+      return json({ ok: true });
+    }
     if (request.method === "POST" && url.pathname === "/internal/retention") {
       if (!(await verifyInternalRequest(request, this.env, url.pathname))) {
         return json({ error: "forbidden" }, 403);
@@ -746,25 +852,72 @@ export class ChatRoom extends DurableObject<Env> {
     if (!raw) return this.expire(ws);
     if ("claims" in raw && raw.claims) {
       if (raw.claims.exp <= Math.floor(Date.now() / 1000)) return this.expire(ws);
+      if (this.isRevoked(raw.claims)) return this.expire(ws, "stale_session");
       return raw;
     }
     const claims = raw as ChatTokenClaims;
     if (claims.exp <= Math.floor(Date.now() / 1000)) return this.expire(ws);
+    if (this.isRevoked(claims)) return this.expire(ws, "stale_session");
     return { claims, roomId: claims.v === 1 ? claims.room : "" };
   }
 
-  private expire(ws: WebSocket): null {
-    sendJson(ws, {
-      type: "error",
-      code: "expired_token",
-      message: "token expired",
-    });
+  private expire(ws: WebSocket, code: "expired_token" | "stale_session" = "expired_token"): null {
     try {
-      ws.close(4008, "expired_token");
+      sendJson(ws, {
+        type: "error",
+        code,
+        message: code === "stale_session" ? "session revoked" : "token expired",
+      });
+    } catch {
+      // still close
+    }
+    try {
+      ws.close(4008, code);
     } catch {
       // ignore
     }
     return null;
+  }
+
+  private rememberRevoked(userId: number, sessionVersion: number) {
+    const row = this.ctx.storage.sql
+      .exec(`SELECT session_version FROM revoked_sessions WHERE user_id = ?`, userId)
+      .toArray()[0];
+    const current = row ? Number(row.session_version) : -1;
+    const next = Math.max(current, sessionVersion);
+    this.ctx.storage.sql.exec(
+      `INSERT INTO revoked_sessions (user_id, session_version) VALUES (?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET session_version = excluded.session_version`,
+      userId,
+      next
+    );
+  }
+
+  private storedRevokedSv(userId: number): number | null {
+    const row = this.ctx.storage.sql
+      .exec(`SELECT session_version FROM revoked_sessions WHERE user_id = ?`, userId)
+      .toArray()[0];
+    if (!row) return null;
+    const sv = Number(row.session_version);
+    return Number.isInteger(sv) && sv >= 0 ? sv : null;
+  }
+
+  private isRevoked(claims: ChatTokenClaims): boolean {
+    return isChatSessionEpochStale(
+      chatTokenSessionVersion(claims),
+      this.storedRevokedSv(claims.userId)
+    );
+  }
+
+  private expireRevokedSockets(userId: number, sessionVersion: number) {
+    for (const socket of this.ctx.getWebSockets()) {
+      const attach = socket.deserializeAttachment() as SocketAttach | ChatTokenClaims | null;
+      if (!attach) continue;
+      const claims = "claims" in attach && attach.claims ? attach.claims : (attach as ChatTokenClaims);
+      if (!claims || Number(claims.userId) !== userId) continue;
+      if (!isChatSessionEpochStale(chatTokenSessionVersion(claims), sessionVersion)) continue;
+      this.expire(socket, "stale_session");
+    }
   }
 
   private messageSelectSql() {
@@ -1016,10 +1169,12 @@ export class ChatRoom extends DurableObject<Env> {
     if (!attach) return this.expire(socket);
     if ("claims" in attach && attach.claims) {
       if (attach.claims.exp <= now) return this.expire(socket);
+      if (this.isRevoked(attach.claims)) return this.expire(socket, "stale_session");
       return attach;
     }
     const claims = attach as ChatTokenClaims;
     if (claims.exp <= now) return this.expire(socket);
+    if (this.isRevoked(claims)) return this.expire(socket, "stale_session");
     return { claims, roomId: claims.v === 1 ? claims.room : "" };
   }
 

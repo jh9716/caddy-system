@@ -2,7 +2,7 @@ import { ChatAuthError, issueChatAccessToken } from "@/lib/chatAuth";
 import { resolveChatRoomAccess } from "@/lib/chatAcl";
 import { chatDirectoryMembersUrl } from "@/lib/chatClientConfig";
 import { isAllRoomId, isCustomRoomId, isDmRoomId } from "@/lib/chatRooms";
-import { verifyChatToken } from "@/lib/chatToken";
+import { isChatTokenV2, verifyChatToken } from "@/lib/chatToken";
 import type { PrismaClient } from "@prisma/client";
 import type { ResolvedAuthUser } from "@/lib/auth";
 
@@ -10,6 +10,7 @@ export const CHAT_PHOTO_ROOM_ACCESS_REASONS = [
   "missing_token",
   "invalid_token",
   "user_mismatch",
+  "stale_session",
   "acl_failed",
   "fast",
 ] as const;
@@ -52,6 +53,7 @@ export async function requireChatPhotoRoomAccess(
       displayName: issued.user.displayName,
       role: issued.user.role,
       team: issued.user.team,
+      sv: issued.sessionVersion,
       iat: 0,
       exp: issued.exp,
     },
@@ -117,6 +119,13 @@ export async function resolveChatPhotoRoomAccess(
       reason = "invalid_token";
     } else if (!chatPhotoIdentityMatchesToken(auth, claims)) {
       reason = "user_mismatch";
+    } else if (
+      auth.userId != null &&
+      auth.userId > 0 &&
+      isChatTokenV2(claims) &&
+      claims.sv !== auth.sessionVersion
+    ) {
+      reason = "stale_session";
     } else {
       const member = isAllRoomId(roomId) || (await isDirectoryMember(raw, roomId));
       const access = resolveChatRoomAccess({

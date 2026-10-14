@@ -9,6 +9,7 @@ import {
   CHAT_TOKEN_TTL_SEC,
   getChatAuthSecret,
   normalizeChatTeam,
+  parseChatSessionVersion,
   sanitizeChatDisplayName,
   signChatToken,
   type ChatTokenClaims,
@@ -150,6 +151,7 @@ export async function issueChatAccessToken(
   token: string;
   exp: number;
   ttlSec: number;
+  sessionVersion: number;
   user: { userId: number; displayName: string; role: AppRole; team: string };
 }> {
   const secret = getChatAuthSecret();
@@ -165,6 +167,7 @@ export async function issueChatAccessToken(
   let username = auth.username;
   let caddyId = auth.caddyId;
   let caddy: ChatCaddyRow | null = null;
+  let sessionVersion = parseChatSessionVersion(auth.sessionVersion);
 
   if ((userId == null || userId <= 0) && auth.role === "admin") {
     const mapped = await resolveEnvAdminChatIdentity(db);
@@ -175,6 +178,7 @@ export async function issueChatAccessToken(
     username = mapped.value.username;
     caddyId = mapped.value.caddyId;
     caddy = mapped.value.caddy;
+    sessionVersion = parseChatSessionVersion(mapped.value.sessionVersion);
   } else if (caddyId != null) {
     caddy = await db.caddy.findUnique({
       where: { id: caddyId },
@@ -192,12 +196,20 @@ export async function issueChatAccessToken(
   if (!checked.ok) {
     throw new ChatAuthError(checked.code, checked.message, checked.status);
   }
+  if (sessionVersion == null) {
+    throw new ChatAuthError(
+      "chat_session_unversioned",
+      "채팅 세션 버전을 확인할 수 없습니다.",
+      403
+    );
+  }
   const claims: ChatTokenClaims = {
     v: 2,
     userId: checked.value.userId,
     displayName: checked.value.displayName,
     role: checked.value.role,
     team: checked.value.team,
+    sv: sessionVersion,
     iat: nowSec,
     exp: nowSec + CHAT_TOKEN_TTL_SEC,
   };
@@ -206,6 +218,7 @@ export async function issueChatAccessToken(
     token,
     exp: claims.exp,
     ttlSec: CHAT_TOKEN_TTL_SEC,
+    sessionVersion,
     user: {
       userId: checked.value.userId,
       displayName: checked.value.displayName,

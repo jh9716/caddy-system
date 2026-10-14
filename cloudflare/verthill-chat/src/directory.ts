@@ -23,7 +23,18 @@ import {
   type ChatSenderRole,
   type RoomSummary,
 } from "./protocol";
-import { isChatTokenV2, type ChatTokenClaims } from "./token";
+import {
+  chatTokenSessionVersion,
+  isChatSessionEpochStale,
+  isChatTokenV2,
+  type ChatTokenClaims,
+} from "./token";
+import {
+  CHAT_ROOM_REVOKE_PATH,
+  CHAT_SESSION_EPOCH_PATH,
+  CHAT_SESSION_REVOKE_PATH,
+  parseSessionRevokeBody,
+} from "./sessionCheck";
 
 export type DirectoryEnv = {
   CHAT_AUTH_SECRET: string;
@@ -91,6 +102,13 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
     this.ctx.storage.sql.exec(
       `CREATE INDEX IF NOT EXISTS members_user ON members(user_id)`
     );
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS session_epochs (
+        user_id INTEGER PRIMARY KEY,
+        session_version INTEGER NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `);
     this.ensureAllRoom();
     void this.ensureRetentionSweep();
   }
@@ -131,6 +149,12 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
       if (request.method === "GET" && url.pathname === "/internal/member-ids") {
         const roomId = url.searchParams.get("room") || "";
         return json({ ok: true, ids: this.listMemberIds(roomId) });
+      }
+      if (request.method === "POST" && url.pathname === CHAT_SESSION_EPOCH_PATH) {
+        return this.handleSessionEpoch(request, false);
+      }
+      if (request.method === "POST" && url.pathname === CHAT_SESSION_REVOKE_PATH) {
+        return this.handleSessionEpoch(request, true);
       }
       return json({ error: "not_found" }, 404);
     }
@@ -193,15 +217,8 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
-    const claims = ws.deserializeAttachment() as ChatTokenClaims | null;
-    if (!claims || claims.exp <= Math.floor(Date.now() / 1000)) {
-      try {
-        ws.close(4008, "expired_token");
-      } catch {
-        // ignore
-      }
-      return;
-    }
+    const claims = this.liveDirectoryClaims(ws);
+    if (!claims) return;
     if (typeof message !== "string") return;
     let parsed: unknown;
     try {
@@ -527,11 +544,131 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
     );
   }
 
+  private storedEpoch(userId: number): number | null {
+    const row = this.ctx.storage.sql
+      .exec(`SELECT session_version FROM session_epochs WHERE user_id = ?`, userId)
+      .toArray()[0];
+    if (!row) return null;
+    const sv = Number(row.session_version);
+    return Number.isInteger(sv) && sv >= 0 ? sv : null;
+  }
+
+  private rememberEpoch(userId: number, sessionVersion: number) {
+    const current = this.storedEpoch(userId);
+    const next = current == null ? sessionVersion : Math.max(current, sessionVersion);
+    this.ctx.storage.sql.exec(
+      `INSERT INTO session_epochs (user_id, session_version, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET
+         session_version = excluded.session_version,
+         updated_at = excluded.updated_at`,
+      userId,
+      next,
+      new Date().toISOString()
+    );
+  }
+
+  private expireDirectoryUser(userId: number, sessionVersion: number) {
+    for (const ws of this.ctx.getWebSockets()) {
+      const claims = ws.deserializeAttachment() as ChatTokenClaims | null;
+      if (!claims || Number(claims.userId) !== userId) continue;
+      if (!isChatSessionEpochStale(chatTokenSessionVersion(claims), sessionVersion)) {
+        continue;
+      }
+      try {
+        sendJson(ws, {
+          type: "error",
+          code: "stale_session",
+          message: "session revoked",
+        });
+      } catch {
+        // ignore
+      }
+      try {
+        ws.close(4008, "stale_session");
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  private async pokeRoomsForRevoke(userId: number, sessionVersion: number) {
+    const ns = this.env.CHAT_ROOM;
+    if (!ns) return;
+    const secret = chatInternalSecret(this.env);
+    if (!secret) return;
+    const headers = await internalAuthHeaders(secret, CHAT_ROOM_REVOKE_PATH);
+    for (const roomId of this.listKnownRoomIds()) {
+      try {
+        await ns.get(ns.idFromName(roomId)).fetch(
+          new Request(`https://chat-room${CHAT_ROOM_REVOKE_PATH}`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ userId, sessionVersion }),
+          })
+        );
+      } catch {
+        // best-effort open-socket close
+      }
+    }
+  }
+
+  private async handleSessionEpoch(request: Request, revoke: boolean): Promise<Response> {
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return json({ error: "invalid_payload" }, 400);
+    }
+    const parsed = parseSessionRevokeBody(body);
+    if (!parsed) return json({ error: "invalid_payload" }, 400);
+    this.rememberEpoch(parsed.userId, parsed.sessionVersion);
+    if (revoke) {
+      this.expireDirectoryUser(parsed.userId, parsed.sessionVersion);
+      await this.pokeRoomsForRevoke(parsed.userId, parsed.sessionVersion);
+    }
+    return json({ ok: true });
+  }
+
   private liveDirectoryClaims(ws: WebSocket): ChatTokenClaims | null {
     const claims = ws.deserializeAttachment() as ChatTokenClaims | null;
-    if (!claims || claims.exp <= Math.floor(Date.now() / 1000)) {
+    if (!claims) {
       try {
         ws.close(4008, "expired_token");
+      } catch {
+        // ignore
+      }
+      return null;
+    }
+    if (claims.exp <= Math.floor(Date.now() / 1000)) {
+      try {
+        sendJson(ws, {
+          type: "error",
+          code: "expired_token",
+          message: "token expired",
+        });
+      } catch {
+        // ignore
+      }
+      try {
+        ws.close(4008, "expired_token");
+      } catch {
+        // ignore
+      }
+      return null;
+    }
+    if (isChatSessionEpochStale(chatTokenSessionVersion(claims), this.storedEpoch(claims.userId))) {
+      try {
+        sendJson(ws, {
+          type: "error",
+          code: "stale_session",
+          message: "session revoked",
+        });
+      } catch {
+        // ignore
+      }
+      try {
+        ws.close(4008, "stale_session");
       } catch {
         // ignore
       }

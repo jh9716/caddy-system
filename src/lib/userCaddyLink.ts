@@ -5,6 +5,7 @@
  */
 
 import { Prisma, type PrismaClient } from "@prisma/client";
+import { notifyChatSessionRevokedForUser } from "@/lib/chatSessionRevoke";
 import { normalizeAppRole } from "@/lib/sessionCookies";
 
 export type DbClient = PrismaClient | Prisma.TransactionClient;
@@ -280,5 +281,6 @@ export async function unlinkUserFromCaddy(
     );
   }
 
+  void notifyChatSessionRevokedForUser(db, userId);
   return { userId, previousCaddyId };
 }

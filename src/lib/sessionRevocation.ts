@@ -3,6 +3,7 @@
  * No schema changes. User.caddyId is unique (0 or 1 linked User per Caddy).
  */
 import type { Prisma, PrismaClient } from "@prisma/client";
+import { notifyChatSessionRevokedForCaddyLink } from "@/lib/chatSessionRevoke";
 
 export type SessionRevocationDb = PrismaClient | Prisma.TransactionClient;
 
@@ -53,9 +54,11 @@ export async function writeCaddyRevokingRetiredSessions<T>(
   ) {
     return input.write(db);
   }
-  return db.$transaction(async (tx) => {
-    const result = await input.write(tx);
+  const result = await db.$transaction(async (tx) => {
+    const written = await input.write(tx);
     await incrementSessionVersionForCaddyLink(tx, input.caddyId);
-    return result;
+    return written;
   });
+  void notifyChatSessionRevokedForCaddyLink(db, input.caddyId);
+  return result;
 }

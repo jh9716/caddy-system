@@ -10,6 +10,7 @@ import {
   disableAllPushSubscriptionsForUser,
   isPushStoreMissing,
 } from "@/lib/pushSubscriptionStore";
+import { notifyChatSessionRevoked } from "@/lib/chatSessionRevoke";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -39,9 +40,14 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    await prisma.user.update({
+    const bumped = await prisma.user.update({
       where: { id: auth.userId },
       data: { sessionVersion: { increment: 1 } },
+      select: { id: true, sessionVersion: true },
+    });
+    void notifyChatSessionRevoked({
+      userId: bumped.id,
+      sessionVersion: bumped.sessionVersion,
     });
     try {
       await disableAllDevicePushTokensForUser(prisma, auth.userId);
