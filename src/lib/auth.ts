@@ -63,6 +63,39 @@ export function isRetiredCaddySessionBlocked(input: {
   return String(input.employmentStatus ?? "").trim().toUpperCase() === "RETIRED";
 }
 
+/** Unlinked caddy/leader staff — login + /caddy/link only. Admin is not gated. */
+export const UNLINKED_STAFF_ERROR = "caddy_not_linked";
+export const UNLINKED_STAFF_MESSAGE = "연결된 캐디 계정이 필요합니다.";
+
+export function isUnlinkedStaffAccount(input: {
+  role: AppRole | null | undefined;
+  caddyId: number | null | undefined;
+}): boolean {
+  if (input.role !== "caddy" && input.role !== "leader") return false;
+  return input.caddyId == null;
+}
+
+export function unlinkedStaffForbiddenResponse(): NextResponse {
+  return NextResponse.json(
+    {
+      error: UNLINKED_STAFF_ERROR,
+      message: UNLINKED_STAFF_MESSAGE,
+    },
+    { status: 403 }
+  );
+}
+
+/**
+ * Block unlinked caddy/leader from staff-internal surfaces.
+ * Admin (DB or env-only) is never restricted here.
+ * Return this before resource lookup so missing ids do not leak 404 vs 403.
+ */
+export function denyUnlinkedStaff(
+  auth: Pick<ResolvedAuthUser, "role" | "caddyId">
+): NextResponse | void {
+  if (isUnlinkedStaffAccount(auth)) return unlinkedStaffForbiddenResponse();
+}
+
 /**
  * Full auth resolution for Node runtime (API / RSC).
  * - Requires valid signed vh_session
@@ -203,6 +236,8 @@ export async function requirePublishedReader(
   if (shouldForcePasswordChange(auth)) {
     return mustChangePasswordResponse();
   }
+  const unlinked = denyUnlinkedStaff(auth);
+  if (unlinked) return unlinked;
 }
 
 /** 직원 계정 관리 전용. 운영 requireAdmin과 분리. schema/role 변경 없음. */
@@ -272,6 +307,8 @@ export async function requireOffRequestActor(
   if (shouldForcePasswordChange(auth)) {
     return mustChangePasswordResponse();
   }
+  const unlinked = denyUnlinkedStaff(auth);
+  if (unlinked) return unlinked;
 
   return {
     role: auth.role,

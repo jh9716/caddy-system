@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import {
   authUnavailableResponse,
+  denyUnlinkedStaff,
   isAuthStoreUnavailable,
   resolveAuthUser,
 } from "@/lib/auth";
@@ -69,6 +70,8 @@ async function requireDbPushUser(req: NextRequest) {
     clearSessionCookies(res, req);
     return { error: res };
   }
+  const unlinked = denyUnlinkedStaff(auth);
+  if (unlinked) return { error: unlinked };
   const userId = await resolvePushSubscriptionUserId(prisma, auth);
   if (userId == null) {
     if (isEnvOnlyNonAdmin(auth)) {

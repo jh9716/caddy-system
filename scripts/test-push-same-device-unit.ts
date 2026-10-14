@@ -216,11 +216,15 @@ async function main() {
       },
     });
     userIds.push(userB.id);
+    const caddyOther = await prisma.caddy.create({
+      data: { name: `${tag}_other`, team: "2조", employmentStatus: "ACTIVE" },
+    });
     const userC = await prisma.user.create({
       data: {
         username: `${tag}_other`,
         password: hash,
         role: "caddy",
+        caddyId: caddyOther.id,
         sessionVersion: 0,
       },
     });

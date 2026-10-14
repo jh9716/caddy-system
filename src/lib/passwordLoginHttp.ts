@@ -4,6 +4,8 @@ export const PASSWORD_LOGIN_FAIL_MESSAGE =
   "아이디 또는 비밀번호를 확인해주세요.";
 export const PASSWORD_LOGIN_RATE_MESSAGE =
   "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.";
+export const PASSWORD_LOGIN_UNAVAILABLE_MESSAGE =
+  "로그인 서비스를 잠시 사용할 수 없습니다.";
 
 export function passwordLoginUnauthorizedResponse(): NextResponse {
   return NextResponse.json(
@@ -13,6 +15,17 @@ export function passwordLoginUnauthorizedResponse(): NextResponse {
       message: PASSWORD_LOGIN_FAIL_MESSAGE,
     },
     { status: 401 }
+  );
+}
+
+export function passwordLoginUnavailableResponse(): NextResponse {
+  return NextResponse.json(
+    {
+      ok: false,
+      error: "auth_unavailable",
+      message: PASSWORD_LOGIN_UNAVAILABLE_MESSAGE,
+    },
+    { status: 503 }
   );
 }
 

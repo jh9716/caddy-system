@@ -79,6 +79,85 @@ throws(
   "seed helper aborts on neon"
 );
 
+console.log("== create-admin.mjs requires password + prod confirm ==");
+{
+  const src = fs.readFileSync(path.resolve("scripts/create-admin.mjs"), "utf8");
+  assert(!src.includes("011697"), "no legacy default password");
+  assert(!src.includes("ADMIN_PASSWORD ||"), "no ADMIN_PASSWORD fallback");
+  assert(src.includes("ADMIN_PASSWORD 가 필요합니다"), "missing password fails closed");
+  assert(src.includes("PROD_MAINTENANCE_CONFIRM"), "reuses maintenance confirm");
+  assert(src.includes("CREATE_ADMIN"), "exact CREATE_ADMIN task id");
+  assert(!src.includes("ALLOW_PROD_DB=1"), "no ALLOW_PROD_DB=1 bypass");
+  assert(
+    src.includes("ALLOW_PROD_DB 같은 범용 스위치는 없습니다"),
+    "documents no generic prod-db switch"
+  );
+  assert(src.includes("select: { id: true, username: true, role: true }"), "upsert does not return password");
+  assert(!/console\.log\([^)]*plainPassword/.test(src), "does not log password var");
+  assert(!/console\.log\([^)]*ADMIN_PASSWORD/.test(src), "does not log ADMIN_PASSWORD");
+  assert(!/console\.log\([^)]*hashed/.test(src), "does not log hash");
+  const script = path.resolve("scripts/create-admin.mjs");
+  const noPw = spawnSync(process.execPath, [script], {
+    env: {
+      ...process.env,
+      ADMIN_PASSWORD: "",
+      DATABASE_URL: LOCAL,
+      NODE_ENV: "development",
+      VERCEL: "",
+      NODE_OPTIONS: "",
+      PROD_MAINTENANCE_CONFIRM: "",
+    },
+    encoding: "utf8",
+  });
+  assert(noPw.status !== 0, "no ADMIN_PASSWORD exits non-zero");
+  assert(
+    String(noPw.stderr || noPw.stdout).includes("ADMIN_PASSWORD"),
+    "missing password error mentions ADMIN_PASSWORD"
+  );
+  assert(
+    !String(noPw.stderr || noPw.stdout).includes("011697"),
+    "missing password error does not print a default password"
+  );
+  const neon = spawnSync(process.execPath, [script], {
+    env: {
+      ...process.env,
+      ADMIN_PASSWORD: "temporary-not-logged",
+      ADMIN_USERNAME: "should_not_create",
+      DATABASE_URL: NEON,
+      PRODUCTION_DATABASE_URL: NEON,
+      NODE_ENV: "development",
+      VERCEL: "",
+      NODE_OPTIONS: "",
+      PROD_MAINTENANCE_CONFIRM: "",
+      ALLOW_PROD_DB: "1",
+    },
+    encoding: "utf8",
+  });
+  assert(neon.status !== 0, "neon without confirm fail-closed");
+  assert(
+    String(neon.stderr || neon.stdout).includes("PROD_MAINTENANCE_CONFIRM=CREATE_ADMIN"),
+    "neon error names exact confirm token"
+  );
+  assert(
+    !String(neon.stderr || neon.stdout).includes("temporary-not-logged"),
+    "prod-block error does not log password"
+  );
+  const wrongConfirm = spawnSync(process.execPath, [script], {
+    env: {
+      ...process.env,
+      ADMIN_PASSWORD: "temporary-not-logged",
+      DATABASE_URL: NEON,
+      PRODUCTION_DATABASE_URL: NEON,
+      NODE_ENV: "development",
+      VERCEL: "",
+      NODE_OPTIONS: "",
+      PROD_MAINTENANCE_CONFIRM: "NOPE",
+    },
+    encoding: "utf8",
+  });
+  assert(wrongConfirm.status !== 0, "wrong confirm token fail-closed");
+}
+
 console.log("== guard-prod-db.cjs aborts ad-hoc neon DATABASE_URL ==");
 {
   const guard = path.resolve("scripts/guard-prod-db.cjs");

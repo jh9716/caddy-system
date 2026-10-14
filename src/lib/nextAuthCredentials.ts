@@ -28,6 +28,9 @@ export async function authorizePasswordCredentials(
 
   const ip = loginRateIpFromAuthHeaders(req?.headers);
   const claim = await claimPasswordLoginAttempt(prisma, { ip, username });
+  if (claim.unavailable) {
+    throw new Error("auth_unavailable");
+  }
   if (claim.limited) return null;
 
   const result = await passwordLogin(username, password, prisma);

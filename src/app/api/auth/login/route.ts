@@ -5,6 +5,7 @@ import { passwordLogin } from "@/lib/passwordLogin";
 import {
   passwordLoginRateLimitedResponse,
   passwordLoginUnauthorizedResponse,
+  passwordLoginUnavailableResponse,
 } from "@/lib/passwordLoginHttp";
 import {
   claimPasswordLoginAttempt,
@@ -23,6 +24,9 @@ export async function POST(req: NextRequest) {
 
   const ip = loginRateIpFromRequest(req);
   const claim = await claimPasswordLoginAttempt(prisma, { ip, username });
+  if (claim.unavailable) {
+    return passwordLoginUnavailableResponse();
+  }
   if (claim.limited) {
     return passwordLoginRateLimitedResponse(claim.retryAfterSec);
   }

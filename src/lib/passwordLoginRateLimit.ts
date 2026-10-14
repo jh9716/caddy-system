@@ -9,7 +9,8 @@
  *
  * Failures stay in Audit and age out of the window. Success deletes only
  * that request's speculative claim, not prior PASSWORD_LOGIN_FAIL history.
- * Fail-open: Audit errors do not 500 or change the generic 401 shape.
+ * Claim/count store errors fail-closed (unavailable) so bcrypt cannot run
+ * unbounded. Release/cleanup errors are logged only and do not reopen a slot.
  * Payload never stores password, hash, or session.
  */
 
@@ -156,6 +157,21 @@ export function loginRateIpFromAuthHeaders(headers: unknown): string {
   return rateLimitIp(clientIpFromRequest({ get }));
 }
 
+export type PasswordLoginRateDecision = {
+  limited: boolean;
+  /** Claim/count infrastructure failed. Callers must not proceed to bcrypt. */
+  unavailable: boolean;
+  retryAfterSec: number;
+  count: number;
+};
+
+const STORE_UNAVAILABLE: PasswordLoginRateDecision = {
+  limited: true,
+  unavailable: true,
+  retryAfterSec: 60,
+  count: 0,
+};
+
 export async function readPasswordLoginRateLimit(
   db: PasswordLoginRateDb,
   input: {
@@ -164,11 +180,11 @@ export async function readPasswordLoginRateLimit(
     now?: number;
     policy?: LoginRatePolicy;
   }
-): Promise<{ limited: boolean; retryAfterSec: number; count: number }> {
+): Promise<PasswordLoginRateDecision> {
   const policy = resolvePolicy(input.policy);
   const username = normalizeLoginRateUsername(input.username);
   if (!username) {
-    return { limited: false, retryAfterSec: 0, count: 0 };
+    return { limited: false, unavailable: false, retryAfterSec: 0, count: 0 };
   }
   const now = input.now ?? Date.now();
   const since = new Date(now - policy.windowMs);
@@ -177,21 +193,28 @@ export async function readPasswordLoginRateLimit(
       where: keyWhere(input.ip, username, policy, since),
     });
     if (count < policy.limit) {
-      return { limited: false, retryAfterSec: 0, count };
+      return { limited: false, unavailable: false, retryAfterSec: 0, count };
     }
-    const oldest = await db.audit.findFirst({
-      where: keyWhere(input.ip, username, policy, since),
-      orderBy: { createdAt: "asc" },
-      select: { createdAt: true },
-    });
+    let retryAfterSec = 60;
+    try {
+      const oldest = await db.audit.findFirst({
+        where: keyWhere(input.ip, username, policy, since),
+        orderBy: { createdAt: "asc" },
+        select: { createdAt: true },
+      });
+      retryAfterSec = retryAfterSecFromOldest(oldest, now, policy.windowMs);
+    } catch (e) {
+      console.error("[passwordLoginRateLimit] read oldest failed", e);
+    }
     return {
       limited: true,
-      retryAfterSec: retryAfterSecFromOldest(oldest, now, policy.windowMs),
+      unavailable: false,
+      retryAfterSec,
       count,
     };
   } catch (e) {
     console.error("[passwordLoginRateLimit] read failed", e);
-    return { limited: false, retryAfterSec: 0, count: 0 };
+    return { ...STORE_UNAVAILABLE };
   }
 }
 
@@ -203,16 +226,17 @@ export async function claimPasswordLoginAttempt(
     now?: number;
     policy?: LoginRatePolicy;
   }
-): Promise<{
-  limited: boolean;
-  retryAfterSec: number;
-  count: number;
-  claimId: number | null;
-}> {
+): Promise<PasswordLoginRateDecision & { claimId: number | null }> {
   const policy = resolvePolicy(input.policy);
   const username = normalizeLoginRateUsername(input.username);
   if (!username) {
-    return { limited: false, retryAfterSec: 0, count: 0, claimId: null };
+    return {
+      limited: false,
+      unavailable: false,
+      retryAfterSec: 0,
+      count: 0,
+      claimId: null,
+    };
   }
   const now = input.now ?? Date.now();
   const since = new Date(now - policy.windowMs);
@@ -231,32 +255,46 @@ export async function claimPasswordLoginAttempt(
     claimId = created.id;
   } catch (e) {
     console.error("[passwordLoginRateLimit] claim failed", e);
-    return { limited: false, retryAfterSec: 0, count: 0, claimId: null };
+    return { ...STORE_UNAVAILABLE, claimId: null };
   }
   try {
     const count = await db.audit.count({
       where: keyWhere(input.ip, username, policy, since),
     });
     if (count <= policy.limit) {
-      return { limited: false, retryAfterSec: 0, count, claimId };
+      return {
+        limited: false,
+        unavailable: false,
+        retryAfterSec: 0,
+        count,
+        claimId,
+      };
     }
-    const oldest = await db.audit.findFirst({
-      where: keyWhere(input.ip, username, policy, since),
-      orderBy: { createdAt: "asc" },
-      select: { createdAt: true },
-    });
+    let retryAfterSec = 60;
+    try {
+      const oldest = await db.audit.findFirst({
+        where: keyWhere(input.ip, username, policy, since),
+        orderBy: { createdAt: "asc" },
+        select: { createdAt: true },
+      });
+      retryAfterSec = retryAfterSecFromOldest(oldest, now, policy.windowMs);
+    } catch (e) {
+      console.error("[passwordLoginRateLimit] oldest after claim failed", e);
+    }
     return {
       limited: true,
-      retryAfterSec: retryAfterSecFromOldest(oldest, now, policy.windowMs),
+      unavailable: false,
+      retryAfterSec,
       count,
       claimId,
     };
   } catch (e) {
     console.error("[passwordLoginRateLimit] count after claim failed", e);
-    return { limited: false, retryAfterSec: 0, count: 0, claimId };
+    return { ...STORE_UNAVAILABLE, claimId };
   }
 }
 
+/** Best-effort cleanup. Release failure is not claim/count failure and does not fail-open bcrypt. */
 export async function releasePasswordLoginClaim(
   db: PasswordLoginRateDb,
   claimId: number | null,

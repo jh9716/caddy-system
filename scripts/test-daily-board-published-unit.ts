@@ -691,7 +691,18 @@ async function main() {
     const caddyGet = await requirePublishedReader(
       await cookieReq("caddy", "http://localhost/api/assignments/published?date=2026-08-26")
     );
-    assert(caddyGet === undefined, "caddy requirePublishedReader passes");
+    assert(
+      caddyGet instanceof Response && caddyGet.status === 403,
+      "env-only unlinked caddy requirePublishedReader 403"
+    );
+    if (caddyGet instanceof Response) {
+      const body = (await caddyGet.json()) as { error?: string };
+      assert(body.error === "caddy_not_linked", "unlinked published-reader error code");
+    }
+    const adminGet = await requirePublishedReader(
+      await cookieReq("admin", "http://localhost/api/assignments/published?date=2026-08-26")
+    );
+    assert(adminGet === undefined, "env-admin requirePublishedReader still passes");
     const caddyAdmin = await requireAdmin(
       await cookieReq("caddy", "http://localhost/api/assignments/draft?date=2026-08-26")
     );
@@ -1392,11 +1403,21 @@ async function main() {
     const pubGet = await publishedGET(
       await cookieReq("caddy", "http://localhost/api/assignments/published?date=2026-08-26")
     );
-    assert(pubGet.status === 200, `caddy Published GET 200 (status ${pubGet.status})`);
+    assert(pubGet.status === 403, `unlinked caddy Published GET 403 (status ${pubGet.status})`);
     const body = await pubGet.json();
-    assert(body.ok === true, "caddy Published GET 200 ok");
-    assert(body.published === null || typeof body.published === "object", "published or null");
+    assert(body.error === "caddy_not_linked", "unlinked published GET error code");
+    assert(body.published === undefined, "403 has no published payload");
     assert(!("draft" in body), "GET body has no draft field");
+    const adminPub = await publishedGET(
+      await cookieReq("admin", "http://localhost/api/assignments/published?date=2026-08-26")
+    );
+    assert(adminPub.status === 200, `env-admin Published GET 200 (status ${adminPub.status})`);
+    const adminBody = await adminPub.json();
+    assert(adminBody.ok === true, "env-admin Published GET ok");
+    assert(
+      adminBody.published === null || typeof adminBody.published === "object",
+      "published or null"
+    );
 
     const pubPost = await publishedPOST(
       await cookieReq("caddy", "http://localhost/api/assignments/published", {

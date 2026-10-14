@@ -185,11 +185,17 @@ async function main() {
     const caddyRead = await requirePublishedReader(
       await cookieReq("caddy", "http://localhost/api/assignments/published?date=2026-09-29")
     );
-    assert(caddyRead === undefined, "caddy published-reader passes");
+    assert(
+      caddyRead instanceof Response && caddyRead.status === 403,
+      "env-only unlinked caddy published-reader 403"
+    );
     const leaderRead = await requirePublishedReader(
       await cookieReq("leader", "http://localhost/api/assignments/published?date=2026-09-29")
     );
-    assert(leaderRead === undefined, "leader published-reader passes");
+    assert(
+      leaderRead instanceof Response && leaderRead.status === 403,
+      "env-only unlinked leader published-reader 403"
+    );
     const caddyScheduleAdmin = await requireAdmin(
       await cookieReq("caddy", "http://localhost/api/schedule/table?date=2026-09-29")
     );
@@ -497,12 +503,24 @@ async function main() {
         await cookieReq("caddy", "http://localhost/api/assignments/published?date=2026-09-29")
       )
     );
-    assert(caddyPublished.status === 200, `caddy published GET ${caddyPublished.status}`);
+    assert(caddyPublished.status === 403, `unlinked caddy published GET ${caddyPublished.status}`);
     assert(
       caddyPublished.body &&
         typeof caddyPublished.body === "object" &&
-        (caddyPublished.body as { ok?: unknown }).ok === true,
-      "caddy published GET ok"
+        (caddyPublished.body as { error?: unknown }).error === "caddy_not_linked",
+      "unlinked caddy published GET error code"
+    );
+    const adminPublished = await jsonStatus(
+      await publishedGET(
+        await cookieReq("admin", "http://localhost/api/assignments/published?date=2026-09-29")
+      )
+    );
+    assert(adminPublished.status === 200, `env-admin published GET ${adminPublished.status}`);
+    assert(
+      adminPublished.body &&
+        typeof adminPublished.body === "object" &&
+        (adminPublished.body as { ok?: unknown }).ok === true,
+      "env-admin published GET ok"
     );
 
     const adminDb = await jsonStatus(
