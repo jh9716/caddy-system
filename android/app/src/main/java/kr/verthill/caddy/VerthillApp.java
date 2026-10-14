@@ -8,6 +8,7 @@ public class VerthillApp extends Application {
     @Override
     public void onCreate() {
         super.onCreate();
+        VerthillPushChannels.ensurePrivateChannel(this);
         String key = getString(R.string.kakao_native_app_key);
         if (key != null && !key.isEmpty()) {
             KakaoSdk.init(this, key);

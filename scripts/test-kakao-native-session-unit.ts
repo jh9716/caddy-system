@@ -3,6 +3,8 @@
  *
  *   npm run test:kakao-native-session-unit
  */
+import fs from "node:fs";
+import path from "node:path";
 import {
   EXPECTED_DEBUG_KAKAO_KEY_HASH,
   computeDebugKakaoKeyHash,
@@ -369,6 +371,27 @@ assert(nativeKakaoSessionHttpStatus("kakao_config") === 503, "config 503");
   });
   assert(native.mode === "native", "app uses native mode");
   assert(native.mode === "native" && native.href === "/caddy", "native href");
+}
+
+{
+  const cfg = fs.readFileSync(path.resolve("capacitor.config.ts"), "utf8");
+  const plugin = fs.readFileSync(
+    path.resolve(
+      "android/app/src/main/java/kr/verthill/caddy/kakao/KakaoNativeAuthPlugin.java"
+    ),
+    "utf8"
+  );
+  assert(
+    !cfg.includes('"kauth.kakao.com"') && !cfg.includes('"accounts.kakao.com"'),
+    "native Kakao login does not need WebView Kakao allowNavigation"
+  );
+  assert(
+    plugin.includes("loginWithKakaoTalk") &&
+      plugin.includes("loginWithKakaoAccount") &&
+      !plugin.includes("allowNavigation") &&
+      !plugin.includes("kauth.kakao.com"),
+    "KakaoNativeAuthPlugin stays on native SDK, not WebView OAuth"
+  );
 }
 
 if (failed) {

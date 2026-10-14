@@ -78,10 +78,9 @@ assert(cfg.includes("cleartext: false"), "HTTPS only, no cleartext");
 assert(cfg.includes("allowMixedContent: false"), "mixed content disabled");
 assert(cfg.includes('"www.verthill.kr"'), "allowNavigation includes www.verthill.kr");
 assert(cfg.includes('"verthill.kr"'), "allowNavigation includes verthill.kr");
-assert(cfg.includes('"kauth.kakao.com"'), "allowNavigation includes kauth.kakao.com");
 assert(
-  cfg.includes('"accounts.kakao.com"'),
-  "allowNavigation includes accounts.kakao.com"
+  !cfg.includes('"kauth.kakao.com"') && !cfg.includes('"accounts.kakao.com"'),
+  "Kakao WebView hosts are not in allowNavigation"
 );
 assert(
   !cfg.includes('"*.kakao.com"') && !cfg.includes("*.kakao."),
@@ -278,8 +277,11 @@ assert(
   ) &&
     read("android/app/src/main/java/kr/verthill/caddy/VerthillApp.java").includes(
       "setLoggingEnabled(false)"
+    ) &&
+    read("android/app/src/main/java/kr/verthill/caddy/VerthillApp.java").includes(
+      "VerthillPushChannels.ensurePrivateChannel"
     ),
-  "VerthillApp calls KakaoSdk.init with SDK logging off"
+  "VerthillApp calls KakaoSdk.init with SDK logging off and ensures PRIVATE push channel"
 );
 assert(!manifest.includes("CAMERA"), "no CAMERA permission");
 assert(!manifest.includes("READ_MEDIA_IMAGES"), "no READ_MEDIA_IMAGES permission");
@@ -295,7 +297,16 @@ assert(
   manifest.includes('android:usesCleartextTraffic="false"'),
   "cleartext traffic disabled"
 );
-assert(filePaths.includes("cache-path"), "FileProvider paths exist for file chooser");
+assert(
+  manifest.includes('android:allowBackup="false"'),
+  "Android Auto Backup disabled"
+);
+assert(
+  filePaths.includes('<cache-path name="heic_jpeg" path="heic-jpeg/" />') &&
+    !filePaths.includes("external-path") &&
+    !filePaths.includes('path="."'),
+  "FileProvider is cache/heic-jpeg only"
+);
 assert(colors.includes("#163028"), "launcher/theme uses deep green");
 assert(launcherBg.includes("#163028"), "adaptive icon background is deep green");
 assert(
@@ -389,7 +400,7 @@ assert(
 );
 assert(
   cfg.includes("REST Kakao OAuth inside this WebView is terminated") ||
-    cfg.includes("Do not add more allowNavigation"),
+    cfg.includes("Do not add Kakao hosts to allowNavigation"),
   "allowNavigation expansion is frozen"
 );
 
@@ -731,9 +742,9 @@ assert(
   "web composer uploads preview JPEG first, then upgrades the same attachment to HQ"
 );
 assert(
-  filePaths.includes('<cache-path name="my_cache_images" path="." />') &&
-    !filePaths.includes("heic-jpeg"),
-  "file_paths.xml is unchanged"
+  filePaths.includes('<cache-path name="heic_jpeg" path="heic-jpeg/" />') &&
+    heicConverter.includes('CACHE_DIR_NAME = "heic-jpeg"'),
+  "file_paths.xml exposes only the heic-jpeg cache"
 );
 assert(chatClient.includes('type="file"'), "chat still uses input[type=file]");
 assert(photoForm.includes('type="file"'), "course-report still uses input[type=file]");

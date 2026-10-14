@@ -5,12 +5,13 @@
  */
 import { createPrivateKey, createSign } from "node:crypto";
 import { readFcmServiceAccount, type FcmServiceAccount } from "@/lib/fcmCredentials";
+import { NATIVE_PUSH_CHANNEL_ID } from "@/lib/nativePushChannel";
 import { safeReturnPath } from "@/lib/safeReturnPath";
 import type { WebPushPayload } from "@/lib/webPushSender";
 
 export const FCM_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 export const FCM_MESSAGING_SCOPE = "https://www.googleapis.com/auth/firebase.messaging";
-export const FCM_ANDROID_CHANNEL_ID = "verthill";
+export const FCM_ANDROID_CHANNEL_ID = NATIVE_PUSH_CHANNEL_ID;
 const FCM_OAUTH_CACHE_SKEW_SEC = 60;
 
 let oauthCache: { email: string; token: string; exp: number } | null = null;

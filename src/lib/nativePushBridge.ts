@@ -4,6 +4,7 @@
  */
 import { PushNotifications } from "@capacitor/push-notifications";
 import { readCapacitorNativePlatform } from "@/lib/nativePlatformClient";
+import { migrateNativePushPrivacyChannel } from "@/lib/nativePushChannel";
 import { assignNativePushPath, resolveNativePushOpenPath } from "@/lib/nativePushDeepLink";
 import {
   NATIVE_PUSH_TOKEN_PATH,
@@ -107,14 +108,12 @@ export async function bindNativePushListeners(input?: {
   });
 
   try {
-    await PushNotifications.createChannel({
-      id: "verthill",
-      name: "VERTHILL",
-      importance: 4,
-      visibility: 1,
+    await migrateNativePushPrivacyChannel({
+      createChannel: (channel) => PushNotifications.createChannel(channel),
+      deleteChannel: (id) => PushNotifications.deleteChannel({ id }),
     });
   } catch {
-    // Channel create is best-effort; register/tap still proceed.
+    // Channel migrate is best-effort; register/tap still proceed.
   }
 
   await PushNotifications.addListener("registration", (event) => {
