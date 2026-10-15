@@ -205,6 +205,7 @@ export async function issueChatAccessToken(
   }
   const claims: ChatTokenClaims = {
     v: 2,
+    binding: "session",
     userId: checked.value.userId,
     displayName: checked.value.displayName,
     role: checked.value.role,

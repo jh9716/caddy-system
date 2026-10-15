@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import test from "node:test";
-import { TEST_SECRET, signTestToken, signTestTokenV2 } from "./token-helper.mjs";
+import { TEST_SECRET, signTestToken, signTestTokenLegacyV2, signTestTokenV2 } from "./token-helper.mjs";
 import { HOST, startWrangler, stopWrangler } from "./wrangler-harness.mjs";
 
 function parseJson(event) {
@@ -254,7 +254,89 @@ test("session lifecycle: sv check, revoke, expiry, reconnect", async () => {
     const v1 = signTestToken({ userId: 28, displayName: "레거시", room: "team-1", team: "1조" });
     const v1ok = await wsStatus(port, "team-1", v1.token);
     assert.equal(v1ok.status, 426, "v1 keeps prior policy while check is down");
+    const workerFirst = signTestTokenLegacyV2({
+      userId: 29,
+      displayName: "기존운영",
+      role: "caddy",
+      team: "1조",
+    });
+    const workerFirstWs = await wsStatus(port, "all", workerFirst.token);
+    assert.equal(
+      workerFirstWs.status,
+      426,
+      "12. Worker-first: old Production 7-part Next token connects while session-check is unused"
+    );
+    const workerFirstDir = await dirStatus(port, workerFirst.token);
+    assert.equal(workerFirstDir.status, 200, "12. Worker-first: old 7-part directory HTTP allowed");
     mock.setUnavailable(false);
+
+    const legacyLive = signTestTokenLegacyV2({
+      userId: 30,
+      displayName: "레거시소켓",
+      role: "caddy",
+      team: "1조",
+    });
+    const legacyRoom = await connect(port, "all", legacyLive.token);
+    await waitMessage(legacyRoom, (d) => d.type === "history");
+    const legacyDir = await connectDirectory(port, legacyLive.token);
+    await waitMessage(legacyDir, (d) => d.type === "rooms");
+    const legacyRoomStale = waitMessage(
+      legacyRoom,
+      (d) => d.type === "error" && d.code === "stale_session"
+    );
+    const legacyDirStale = waitMessage(
+      legacyDir,
+      (d) => d.type === "error" && d.code === "stale_session"
+    );
+    const legacyRoomCloseP = waitClose(legacyRoom, 12000);
+    const legacyDirCloseP = waitClose(legacyDir, 12000);
+    const legacyRevoke = await fetch(`http://${HOST}:${port}/internal/session-revoke`, {
+      method: "POST",
+      headers: internalHeaders("/internal/session-revoke"),
+      body: JSON.stringify({ userId: 30, sessionVersion: 1 }),
+    });
+    assert.equal(legacyRevoke.status, 200, "legacy open sockets accept revoke fanout");
+    assert.equal((await legacyRoomStale).code, "stale_session", "legacy open room socket revoked");
+    assert.equal((await legacyDirStale).code, "stale_session", "legacy open directory socket revoked");
+    assert.equal((await legacyRoomCloseP).code, 4008, "legacy open room closed 4008");
+    assert.equal((await legacyDirCloseP).code, 4008, "legacy open directory closed 4008");
+
+    const leftoverHttp = await wsStatus(port, "all", legacyLive.token);
+    assert.equal(
+      leftoverHttp.status,
+      426,
+      "leftover 7-part HMAC still verifies (no fake session-check 401)"
+    );
+    const leftoverWs = await connect(port, "all", legacyLive.token);
+    const leftoverHist = await waitMessage(leftoverWs, (d) => d.type === "history");
+    assert.equal(
+      leftoverHist.type,
+      "history",
+      "leftover 7-part may open a new socket until TTL (honest 30m residual)"
+    );
+    leftoverWs.close();
+
+    const nowLegacy = Math.floor(Date.now() / 1000);
+    const expiredLegacy = signTestTokenLegacyV2({
+      userId: 31,
+      displayName: "만료레거시",
+      role: "caddy",
+      team: "1조",
+      iat: nowLegacy - 20,
+      exp: nowLegacy - 1,
+    });
+    const expiredLegacyWs = await wsStatus(port, "all", expiredLegacy.token);
+    assert.equal(expiredLegacyWs.status, 401, "legacy exp rejected");
+
+    const tamperedLegacy = signTestTokenLegacyV2({
+      userId: 32,
+      displayName: "변조",
+      role: "caddy",
+    });
+    const [legacyBody] = tamperedLegacy.token.split(".");
+    const badLegacy = `${legacyBody}.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`;
+    const tamperedLegacyWs = await wsStatus(port, "all", badLegacy);
+    assert.equal(tamperedLegacyWs.status, 401, "tampered legacy token rejected by Worker");
 
     const browserRevoke = await fetch(`http://${HOST}:${port}/internal/session-revoke`, {
       method: "POST",

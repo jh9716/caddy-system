@@ -2,7 +2,7 @@ import { ChatAuthError, issueChatAccessToken } from "@/lib/chatAuth";
 import { resolveChatRoomAccess } from "@/lib/chatAcl";
 import { chatDirectoryMembersUrl } from "@/lib/chatClientConfig";
 import { isAllRoomId, isCustomRoomId, isDmRoomId } from "@/lib/chatRooms";
-import { isChatTokenV2, verifyChatToken } from "@/lib/chatToken";
+import { isSessionBoundChatToken, verifyChatToken } from "@/lib/chatToken";
 import type { PrismaClient } from "@prisma/client";
 import type { ResolvedAuthUser } from "@/lib/auth";
 
@@ -122,7 +122,7 @@ export async function resolveChatPhotoRoomAccess(
     } else if (
       auth.userId != null &&
       auth.userId > 0 &&
-      isChatTokenV2(claims) &&
+      isSessionBoundChatToken(claims) &&
       claims.sv !== auth.sessionVersion
     ) {
       reason = "stale_session";

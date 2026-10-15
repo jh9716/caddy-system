@@ -54,7 +54,7 @@ import {
 } from "./protocol";
 import {
   chatTokenSessionVersion,
-  isChatTokenV2,
+  isSessionBoundChatToken,
   isChatSessionEpochStale,
   resolveChatRoomAccess,
   verifyChatToken,
@@ -158,7 +158,7 @@ async function verifyIdentity(
   if (!claims) return json({ error: "invalid_token" }, 401);
   const session = await assertChatSessionCurrent(env, claims);
   if (!session.ok) return json({ error: session.error }, session.status);
-  if (isChatTokenV2(claims)) {
+  if (isSessionBoundChatToken(claims)) {
     void rememberSessionEpoch(env, claims.userId, claims.sv);
   }
   return claims;

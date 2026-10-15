@@ -15,6 +15,8 @@ import { chatRoomIdToTeam, isChatRoomId, isCustomRoomId, teamToChatRoomId } from
 import {
   CHAT_TOKEN_TTL_SEC,
   canonicalChatTokenPayload,
+  isLegacyChatTokenV2,
+  isSessionBoundChatToken,
   parseChatTokenClaims,
   signChatToken,
   verifyChatToken,
@@ -159,7 +161,21 @@ section("token hmac v2 + v1 compat");
   assert(canonical.split("|").length === 8, "v2 canonical is 8 parts with sv");
   assert(canonical.includes("|1|1700000000|"), "sv sits before iat/exp");
   const sevenPart = "2|9|홍길동|caddy|1조|1700000000|1700001800";
-  assert(parseChatTokenClaims(sevenPart) == null, "legacy 7-part v2 rejected");
+  const legacyParsed = parseChatTokenClaims(sevenPart);
+  assert(
+    legacyParsed?.v === 2 &&
+      legacyParsed.binding === "legacy" &&
+      !("sv" in legacyParsed),
+    "legacy 7-part v2 parses as legacy (no sv)"
+  );
+  assert(
+    parseChatTokenClaims("2|9|홍길동|caddy|1조|x|1700000000|1700001800") == null,
+    "malformed 8-part v2 rejected"
+  );
+  assert(
+    parseChatTokenClaims("2|9|홍길동|caddy|1조|1700000000") == null,
+    "malformed 6-part v2 rejected"
+  );
   const tamperedParts = canonical.split("|");
   tamperedParts[5] = "99";
   const tamperedCanonical = tamperedParts.join("|");
@@ -821,6 +837,130 @@ section("POST /api/chat/token env-admin mapped + spoof");
     else process.env.ADMIN_CHAT_USER_ID = prev;
   }
 }
+
+  section("staged rollout: legacy 7-part + session-bound 8-part");
+  {
+    const now = 1_700_000_000;
+    const secret = process.env.CHAT_AUTH_SECRET || "";
+    const signLegacy = (canonical: string) => {
+      const body = Buffer.from(canonical, "utf8").toString("base64url");
+      const sig = createHmac("sha256", secret).update(canonical).digest("base64url");
+      return `${body}.${sig}`;
+    };
+    const legacyCanonical = "2|9|홍길동|caddy|1조|1700000000|1700001800";
+    const legacyToken = signLegacy(legacyCanonical);
+    const legacy = await verifyChatToken(legacyToken, { nowSec: now + 10 });
+    assert(
+      legacy != null && isLegacyChatTokenV2(legacy) && !("sv" in legacy),
+      "old 7-part valid v2 → new Next verifier accepts as legacy"
+    );
+    assert(
+      isSessionBoundChatToken(legacy) === false,
+      "legacy v2 is not treated as session-bound"
+    );
+
+    const sessionClaims = {
+      v: 2 as const,
+      userId: 9,
+      displayName: "홍길동",
+      role: "caddy" as const,
+      team: "1조",
+      sv: 4,
+      iat: now,
+      exp: now + CHAT_TOKEN_TTL_SEC,
+    };
+    const sessionToken = await signChatToken(sessionClaims);
+    const session = await verifyChatToken(sessionToken, { nowSec: now + 10 });
+    assert(
+      session != null && isSessionBoundChatToken(session) && session.sv === 4,
+      "new 8-part v2 verifies as session-bound"
+    );
+    assert(
+      canonicalChatTokenPayload(sessionClaims).split("|").length === 8,
+      "new Next issuer canonical is always 8-part"
+    );
+
+    const issued = await issueChatAccessToken(
+      {
+        user: { async findUnique() { throw new Error("no env map"); } },
+        caddy: {
+          async findUnique() {
+            return { id: 22, name: "조장", team: "1조", employmentStatus: "ACTIVE" };
+          },
+        },
+      },
+      {
+        userId: 8,
+        username: "lead",
+        role: "leader",
+        caddyId: 22,
+        managedTeams: [],
+        sessionVersion: 6,
+        mustChangePassword: false,
+        session: {} as ResolvedAuthUser["session"],
+      } as ResolvedAuthUser,
+      now
+    );
+    const issuedClaims = await verifyChatToken(issued.token, { nowSec: now + 10 });
+    assert(
+      issuedClaims != null &&
+        isSessionBoundChatToken(issuedClaims) &&
+        issued.token.split(".")[0] &&
+        Buffer.from(issued.token.split(".")[0], "base64url").toString("utf8").split("|").length === 8,
+      "issueChatAccessToken mints 8-part only"
+    );
+
+    let mintLegacy = "";
+    try {
+      await signChatToken({
+        v: 2,
+        binding: "legacy",
+        userId: 9,
+        displayName: "홍길동",
+        role: "caddy",
+        team: "1조",
+        iat: now,
+        exp: now + CHAT_TOKEN_TTL_SEC,
+      });
+    } catch (e) {
+      mintLegacy = e instanceof Error ? e.message : "other";
+    }
+    assert(
+      mintLegacy.includes("cannot be minted"),
+      "legacy token has no mint/refresh path"
+    );
+
+    const tamperedLegacy = `${Buffer.from(legacyCanonical, "utf8").toString("base64url")}.${createHmac(
+      "sha256",
+      secret
+    )
+      .update("2|9|홍길동|caddy|1조|1700000001|1700001800")
+      .digest("base64url")}`;
+    assert(
+      (await verifyChatToken(tamperedLegacy, { nowSec: now + 10 })) == null,
+      "tampered legacy token rejected"
+    );
+
+    const sessionCanonical = canonicalChatTokenPayload(sessionClaims);
+    const tamperedSession = `${Buffer.from(
+      sessionCanonical.replace("|4|", "|99|"),
+      "utf8"
+    ).toString("base64url")}.${createHmac("sha256", secret)
+      .update(sessionCanonical)
+      .digest("base64url")}`;
+    assert(
+      (await verifyChatToken(tamperedSession, { nowSec: now + 10 })) == null,
+      "tampered secure token rejected"
+    );
+
+    assert(parseChatTokenClaims("2|9|홍길동|caddy|1조|not-sv|1700000000|1700001800") == null, "malformed 8-part rejected");
+    assert(parseChatTokenClaims("2|9|홍길동|caddy|1조|abc|1700001800") == null, "malformed 7-part rejected");
+    assert(parseChatTokenClaims("2|9|홍길동|caddy|1조|1700000000|1700001800|extra") == null, "malformed 9-part rejected");
+    assert(
+      (await verifyChatToken(legacyToken, { nowSec: now + CHAT_TOKEN_TTL_SEC + 1 })) == null,
+      "legacy exp after 1800s rejected"
+    );
+  }
 
 if (failed > 0) {
   console.error(`\nchat-token tests failed: ${failed} (passed ${passed})`);

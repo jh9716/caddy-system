@@ -104,7 +104,15 @@ async function main() {
     assert(verified?.v === 2 && verified.sv === 3, "v2 token includes sessionVersion");
     const canonical = canonicalChatTokenPayload(claims);
     assert(canonical === "2|9|홍길동|caddy|1조|3|1700000000|1700001800", "canonical 8-part binds sv");
-    assert(parseChatTokenClaims("2|9|홍길동|caddy|1조|1700000000|1700001800") == null, "7-part v2 rejected");
+    const legacyClaims = parseChatTokenClaims("2|9|홍길동|caddy|1조|1700000000|1700001800");
+    assert(
+      legacyClaims?.v === 2 && legacyClaims.binding === "legacy" && !("sv" in legacyClaims),
+      "7-part v2 parses as legacy during transition"
+    );
+    assert(
+      parseChatTokenClaims("2|9|홍길동|caddy|1조|bad|1700000000|1700001800") == null,
+      "malformed 8-part v2 rejected"
+    );
     const parts = canonical.split("|");
     parts[5] = "4";
     const tampered = `${Buffer.from(parts.join("|"), "utf8").toString("base64url")}.${createHmac(
@@ -115,6 +123,23 @@ async function main() {
       .digest("base64url")}`;
     assert((await verifyChatToken(tampered, { nowSec: now + 1 })) == null, "sv tamper fails HMAC");
     assert(CHAT_TOKEN_TTL_SEC === 1800, "TTL remains 30 min — max stale window if notify fails");
+    const secret = process.env.CHAT_AUTH_SECRET || "";
+    const legacyCanonical = "2|9|홍길동|caddy|1조|1700000000|1700001800";
+    const legacyToken = `${Buffer.from(legacyCanonical, "utf8").toString("base64url")}.${createHmac(
+      "sha256",
+      secret
+    )
+      .update(legacyCanonical)
+      .digest("base64url")}`;
+    const legacyVerified = await verifyChatToken(legacyToken, { nowSec: now + 1 });
+    assert(
+      legacyVerified?.v === 2 && legacyVerified.binding === "legacy",
+      "old 7-part valid v2 → new Next verifier allows during transition"
+    );
+    assert(
+      (await verifyChatToken(legacyToken, { nowSec: now + CHAT_TOKEN_TTL_SEC + 1 })) == null,
+      "legacy token dies at existing 1800s TTL"
+    );
   }
 
   section("2/3. sessionVersion exact match (fail-closed)");
@@ -309,6 +334,12 @@ async function main() {
     assert(chat.includes("subscribeChatSessionReset"), "ChatClient listens for reset");
     assert(chat.includes("shouldCommitChatToken"), "in-flight token apply is gated");
     assert(chat.includes("shouldConnectWithChatToken"), "stale connect after reset is gated");
+    const tokenLib = read("src/lib/chatToken.ts");
+    const authLib = read("src/lib/chatAuth.ts");
+    assert(tokenLib.includes('binding: "legacy"'), "legacy v2 claims are a distinct type");
+    assert(tokenLib.includes("legacy v2 chat tokens cannot be minted"), "no 7-part mint path");
+    assert(authLib.includes('binding: "session"'), "Next issuer always marks session-bound");
+    assert(!authLib.includes('binding: "legacy"'), "Next issuer never mints legacy v2");
     assert(chat.includes("res.status === 401 || res.status === 403"), "revoked refresh returns null");
     assert(worker.includes("assertChatSessionCurrent"), "Worker re-checks current sv");
     assert(sessionCheck.includes("session_check_unconfigured"), "missing Next URL fail-closed");
@@ -429,6 +460,21 @@ async function main() {
     };
     const v1ok = await assertChatSessionCurrent({ CHAT_AUTH_SECRET: "x" }, v1);
     assert(v1ok.ok, "v1 tokens keep prior policy (no session-check)");
+    const legacy = {
+      v: 2 as const,
+      binding: "legacy" as const,
+      userId: 9,
+      displayName: "홍길동",
+      role: "caddy" as const,
+      team: "1조",
+      iat: 1,
+      exp: 9,
+    };
+    const legacyOk = await assertChatSessionCurrent({ CHAT_AUTH_SECRET: "x" }, legacy);
+    assert(
+      legacyOk.ok,
+      "legacy 7-part v2 skips session-check (HMAC+exp only; no fake sv check)"
+    );
   }
 
   section("notify helper posts revoke, does not mint tokens");

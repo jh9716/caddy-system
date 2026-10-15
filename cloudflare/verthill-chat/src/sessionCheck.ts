@@ -4,7 +4,7 @@ import {
 } from "./internalAuth";
 import {
   chatTokenSessionVersion,
-  isChatTokenV2,
+  isSessionBoundChatToken,
   type ChatTokenClaims,
 } from "./token";
 
@@ -50,7 +50,7 @@ export async function assertChatSessionCurrent(
   env: SessionCheckEnv,
   claims: ChatTokenClaims
 ): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
-  if (!isChatTokenV2(claims)) return { ok: true };
+  if (!isSessionBoundChatToken(claims)) return { ok: true };
   const sv = chatTokenSessionVersion(claims);
   if (sv == null) return { ok: false, status: 401, error: "stale_session" };
   const url = nextSessionCheckUrl(env);
