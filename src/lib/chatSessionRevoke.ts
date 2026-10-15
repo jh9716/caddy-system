@@ -15,6 +15,7 @@ import { parseChatSessionEpoch } from "@/lib/chatSessionEpoch";
 
 export const CHAT_SESSION_CHECK_PATH = "/api/chat/session-check";
 export const CHAT_SESSION_REVOKE_PATH = "/internal/session-revoke";
+export const CHAT_SESSION_REVOKE_TIMEOUT_MS = 2500;
 
 export type ChatSessionRevokeNotifyResult = "ok" | "skipped" | "failed";
 
@@ -45,7 +46,7 @@ export async function notifyChatSessionRevoked(
       },
       body: JSON.stringify({ userId, sessionVersion }),
       cache: "no-store",
-      signal: AbortSignal.timeout(2500),
+      signal: AbortSignal.timeout(CHAT_SESSION_REVOKE_TIMEOUT_MS),
     });
     return res.ok ? "ok" : "failed";
   } catch {

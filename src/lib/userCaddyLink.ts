@@ -281,6 +281,6 @@ export async function unlinkUserFromCaddy(
     );
   }
 
-  void notifyChatSessionRevokedForUser(db, userId);
+  await notifyChatSessionRevokedForUser(db, userId);
   return { userId, previousCaddyId };
 }

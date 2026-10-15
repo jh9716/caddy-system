@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
       data: { sessionVersion: { increment: 1 } },
       select: { id: true, sessionVersion: true },
     });
-    void notifyChatSessionRevoked({
+    await notifyChatSessionRevoked({
       userId: bumped.id,
       sessionVersion: bumped.sessionVersion,
     });

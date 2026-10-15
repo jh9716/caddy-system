@@ -85,7 +85,7 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    void notifyChatSessionRevoked({
+    await notifyChatSessionRevoked({
       userId: updated.id,
       sessionVersion: updated.sessionVersion,
     });

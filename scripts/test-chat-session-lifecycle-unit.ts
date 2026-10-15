@@ -21,15 +21,21 @@ import {
 import {
   CHAT_SESSION_CHECK_PATH,
   CHAT_SESSION_REVOKE_PATH,
+  CHAT_SESSION_REVOKE_TIMEOUT_MS,
   notifyChatSessionRevoked,
 } from "../src/lib/chatSessionRevoke";
 import {
+  applyChatSessionResetReason,
   clearChatSessionEnded,
+  handleChatSessionResetSignal,
   isChatSessionEnded,
   markChatSessionEnded,
+  parseChatSessionResetReason,
   requestChatSessionReset,
   resetChatSocketHandles,
   shouldAttemptChatReconnect,
+  shouldCommitChatToken,
+  shouldConnectWithChatToken,
 } from "../src/lib/chatSessionReset";
 import {
   CHAT_INTERNAL_AUTH_HEADER,
@@ -200,6 +206,66 @@ async function main() {
     assert(isChatSessionEnded() === false, "account switch allows B to fetch a new token");
   }
 
+  section("cross-tab logout/account-switch reset race");
+  {
+    clearChatSessionEnded();
+    const tabBReasons: string[] = [];
+    const storageLogout = handleChatSessionResetSignal("logout:1710000000000", (reason) => {
+      tabBReasons.push(reason);
+    });
+    assert(storageLogout === "logout", "tab A logout storage parses as logout");
+    assert(isChatSessionEnded() === true, "tab B storage logout marks sessionEnded before handler");
+    assert(tabBReasons.join(",") === "logout", "tab B handler runs after ended is set");
+
+    const startedGen = 4;
+    const afterResetGen = 5;
+    assert(
+      shouldCommitChatToken({ generationMatches: startedGen === afterResetGen }) === false,
+      "tab B in-flight fetchToken cannot commit after logout generation bump"
+    );
+    assert(shouldCommitChatToken() === false, "tab B in-flight fetchToken cannot commit while ended");
+
+    const tokenRef = { current: null as { token: string } | null };
+    assert(
+      shouldConnectWithChatToken({ token: "old-a" }, tokenRef) === false,
+      "pending reconnect cannot connect after tokenRef clear + logout"
+    );
+    assert(
+      shouldAttemptChatReconnect({
+        generationMatches: startedGen === afterResetGen,
+        hasToken: true,
+      }) === false,
+      "pending reconnect after logout is forbidden"
+    );
+
+    const switchReason = handleChatSessionResetSignal("account_switch:1710000001000");
+    assert(switchReason === "account_switch", "storage account_switch parses");
+    assert(isChatSessionEnded() === false, "account switch clears ended so B can mint");
+    tokenRef.current = { token: "new-b" };
+    assert(
+      shouldConnectWithChatToken({ token: "old-a" }, tokenRef) === false,
+      "A async result cannot reconnect after A→B"
+    );
+    assert(
+      shouldConnectWithChatToken({ token: "new-b" }, tokenRef) === true,
+      "only the new B token may reconnect"
+    );
+    assert(
+      shouldCommitChatToken({ generationMatches: true }) === true,
+      "account switch allows a fresh B fetchToken"
+    );
+
+    applyChatSessionResetReason("logout");
+    assert(isChatSessionEnded() === true, "same-tab logout still marks ended");
+    applyChatSessionResetReason("account_switch");
+    assert(isChatSessionEnded() === false, "same-tab account switch still clears ended");
+    assert(parseChatSessionResetReason("logout") === "logout", "same-tab logout reason");
+    assert(parseChatSessionResetReason("account_switch") === "account_switch", "same-tab switch reason");
+    requestChatSessionReset("logout");
+    assert(isChatSessionEnded() === true, "same-tab requestChatSessionReset(logout) still ends session");
+    clearChatSessionEnded();
+  }
+
   section("7/8/9. logout-all / password / RETIRED notify after sv bump");
   {
     const logoutAll = read("src/app/api/auth/logout-all/route.ts");
@@ -207,23 +273,42 @@ async function main() {
     const resetPw = read("src/app/api/admin/staff-accounts/[id]/reset-password/route.ts");
     const retired = read("src/lib/sessionRevocation.ts");
     const unlink = read("src/lib/userCaddyLink.ts");
+    const rosterApply = read("lib/caddyRosterImportXlsxV2Apply.ts");
     const logoutClient = read("src/lib/logoutClient.ts");
     const login = read("src/app/login/LoginClient.tsx");
     const chat = read("src/app/chat/ChatClient.tsx");
     const worker = read("cloudflare/verthill-chat/src/index.ts");
     const sessionCheck = read("cloudflare/verthill-chat/src/sessionCheck.ts");
     assert(logoutAll.includes("sessionVersion: { increment: 1 }"), "logout-all bumps sv");
-    assert(logoutAll.includes("notifyChatSessionRevoked"), "logout-all fans out revoke");
+    assert(logoutAll.includes("await notifyChatSessionRevoked"), "logout-all awaits revoke");
+    assert(!logoutAll.includes("void notifyChatSessionRevoked"), "logout-all is not fire-and-forget");
     assert(changePw.includes("sessionVersion: { increment: 1 }"), "password change bumps sv");
-    assert(changePw.includes("notifyChatSessionRevoked"), "password change fans out revoke");
+    assert(changePw.includes("await notifyChatSessionRevoked"), "password change awaits revoke");
+    assert(!changePw.includes("void notifyChatSessionRevoked"), "password change is not fire-and-forget");
     assert(resetPw.includes("sessionVersion: { increment: 1 }"), "password reset bumps sv");
-    assert(resetPw.includes("notifyChatSessionRevoked"), "password reset fans out revoke");
+    assert(resetPw.includes("await notifyChatSessionRevoked"), "password reset awaits revoke");
+    assert(!resetPw.includes("void notifyChatSessionRevoked"), "password reset is not fire-and-forget");
     assert(retired.includes("incrementSessionVersionForCaddyLink"), "RETIRED bumps linked sv");
-    assert(retired.includes("notifyChatSessionRevokedForCaddyLink"), "RETIRED fans out after commit");
-    assert(unlink.includes("notifyChatSessionRevokedForUser"), "unlink notifies after sv bump");
+    assert(retired.includes("await notifyChatSessionRevokedForCaddyLink"), "RETIRED awaits revoke after commit");
+    assert(!retired.includes("void notifyChatSessionRevokedForCaddyLink"), "RETIRED is not fire-and-forget");
+    assert(retired.includes("await db.$transaction"), "RETIRED sv bump stays in the DB tx");
+    assert(
+      retired.indexOf("await db.$transaction") < retired.indexOf("await notifyChatSessionRevokedForCaddyLink"),
+      "RETIRED notify is after the transaction"
+    );
+    assert(unlink.includes("await notifyChatSessionRevokedForUser"), "unlink awaits revoke after sv bump");
+    assert(!unlink.includes("void notifyChatSessionRevokedForUser"), "unlink is not fire-and-forget");
+    assert(rosterApply.includes("await notifyChatSessionRevokedForCaddyLink"), "xlsx apply awaits revoke after commit");
+    assert(!rosterApply.includes("void notifyChatSessionRevokedForCaddyLink"), "xlsx apply is not fire-and-forget");
+    assert(
+      rosterApply.indexOf("await db.$transaction") < rosterApply.indexOf("await notifyChatSessionRevokedForCaddyLink"),
+      "xlsx apply notify is after the transaction"
+    );
     assert(logoutClient.includes('requestChatSessionReset("logout")'), "device logout resets chat first");
     assert(login.includes('requestChatSessionReset("account_switch")'), "login switches off A sockets");
     assert(chat.includes("subscribeChatSessionReset"), "ChatClient listens for reset");
+    assert(chat.includes("shouldCommitChatToken"), "in-flight token apply is gated");
+    assert(chat.includes("shouldConnectWithChatToken"), "stale connect after reset is gated");
     assert(chat.includes("res.status === 401 || res.status === 403"), "revoked refresh returns null");
     assert(worker.includes("assertChatSessionCurrent"), "Worker re-checks current sv");
     assert(sessionCheck.includes("session_check_unconfigured"), "missing Next URL fail-closed");
@@ -374,6 +459,116 @@ async function main() {
       if (prevWorker == null) delete process.env.CHAT_WORKER_URL;
       else process.env.CHAT_WORKER_URL = prevWorker;
     }
+  }
+
+  section("awaited revoke: success, failure, timeout, one increment, no HTTP in tx");
+  {
+    const { writeCaddyRevokingRetiredSessions } = await import("../src/lib/sessionRevocation");
+    const prevWs = process.env.NEXT_PUBLIC_CHAT_WS_URL;
+    const prevWorker = process.env.CHAT_WORKER_URL;
+    delete process.env.NEXT_PUBLIC_CHAT_WS_URL;
+
+    let notifyHits = 0;
+    const okServer = createServer((_req, res) => {
+      notifyHits += 1;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    await new Promise<void>((resolve) => okServer.listen(0, "127.0.0.1", resolve));
+    const okPort = (okServer.address() as { port: number }).port;
+    process.env.CHAT_WORKER_URL = `http://127.0.0.1:${okPort}`;
+    try {
+      const started = Date.now();
+      const ok = await notifyChatSessionRevoked({ userId: 9, sessionVersion: 3 });
+      assert(ok === "ok" && notifyHits === 1, "notify success is awaited before continuing");
+      assert(Date.now() - started < 1500, "successful notify does not sit on the timeout");
+    } finally {
+      await new Promise<void>((resolve) => okServer.close(() => resolve()));
+    }
+
+    process.env.CHAT_WORKER_URL = "http://127.0.0.1:9";
+    const failed = await notifyChatSessionRevoked({ userId: 9, sessionVersion: 3 });
+    assert(failed === "failed", "notify failure is returned, not thrown");
+
+    const hang = createServer(() => {
+      // never respond — AbortSignal.timeout must win
+    });
+    await new Promise<void>((resolve) => hang.listen(0, "127.0.0.1", resolve));
+    const hangPort = (hang.address() as { port: number }).port;
+    process.env.CHAT_WORKER_URL = `http://127.0.0.1:${hangPort}`;
+    try {
+      const started = Date.now();
+      const timedOut = await notifyChatSessionRevoked({ userId: 9, sessionVersion: 3 });
+      const elapsed = Date.now() - started;
+      assert(timedOut === "failed", "notify timeout is failed, not thrown");
+      assert(
+        elapsed >= CHAT_SESSION_REVOKE_TIMEOUT_MS - 50 && elapsed < CHAT_SESSION_REVOKE_TIMEOUT_MS + 1500,
+        "notify timeout stays bounded"
+      );
+    } finally {
+      await new Promise<void>((resolve) => hang.close(() => resolve()));
+    }
+
+    let inTx = false;
+    let httpDuringTx = false;
+    let svBumps = 0;
+    const db: {
+      $transaction: (fn: (tx: unknown) => Promise<unknown>) => Promise<unknown>;
+      user: {
+        updateMany: () => Promise<{ count: number }>;
+        findMany: () => Promise<Array<{ id: number; sessionVersion: number }>>;
+      };
+      caddy: { update: () => Promise<{ employmentStatus: string }> };
+    } = {
+      async $transaction(fn) {
+        inTx = true;
+        try {
+          return await fn(db);
+        } finally {
+          inTx = false;
+        }
+      },
+      user: {
+        async updateMany() {
+          svBumps += 1;
+          return { count: 1 };
+        },
+        async findMany() {
+          if (inTx) httpDuringTx = true;
+          return [{ id: 9, sessionVersion: 2 }];
+        },
+      },
+      caddy: {
+        async update() {
+          return { employmentStatus: "RETIRED" };
+        },
+      },
+    };
+    const origFetch = globalThis.fetch;
+    let fetchDuringTx = false;
+    globalThis.fetch = (async () => {
+      if (inTx) fetchDuringTx = true;
+      throw new Error("worker down");
+    }) as typeof fetch;
+    try {
+      const retired = await writeCaddyRevokingRetiredSessions(db as never, {
+        caddyId: 7,
+        previousEmployment: "ACTIVE",
+        nextEmployment: "RETIRED",
+        write: (tx) =>
+          (tx as { caddy: { update: () => Promise<{ employmentStatus: string }> } }).caddy.update(),
+      });
+      assert(retired.employmentStatus === "RETIRED", "notify failure does not roll back RETIRED write");
+      assert(svBumps === 1, "sessionVersion increments exactly once");
+      assert(httpDuringTx === false && fetchDuringTx === false, "no Worker HTTP inside the DB transaction");
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+
+    if (prevWs == null) delete process.env.NEXT_PUBLIC_CHAT_WS_URL;
+    else process.env.NEXT_PUBLIC_CHAT_WS_URL = prevWs;
+    if (prevWorker == null) delete process.env.CHAT_WORKER_URL;
+    else process.env.CHAT_WORKER_URL = prevWorker;
   }
 
   section("12. reconnect rules");

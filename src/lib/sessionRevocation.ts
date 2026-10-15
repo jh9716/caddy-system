@@ -59,6 +59,6 @@ export async function writeCaddyRevokingRetiredSessions<T>(
     await incrementSessionVersionForCaddyLink(tx, input.caddyId);
     return written;
   });
-  void notifyChatSessionRevokedForCaddyLink(db, input.caddyId);
+  await notifyChatSessionRevokedForCaddyLink(db, input.caddyId);
   return result;
 }
