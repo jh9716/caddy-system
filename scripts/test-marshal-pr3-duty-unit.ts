@@ -30,6 +30,7 @@ import { buildOpsDutySheetTestSheets } from "../src/lib/opsDutySheetParser";
 import { OPS_DUTY_ROLE_KEYS } from "../src/lib/opsDutyRoleKeys";
 import { isOpsDutyRoleKey } from "../src/lib/opsDutyRoleKeys";
 import {
+  isMarshalDutyEligibleCaddy,
   isMonthlyExtraMarshalRoleKey,
   mapFinalizedMarshalSlots,
   marshalMonthSlotToRoleKey,
@@ -39,6 +40,7 @@ import {
 } from "../src/lib/marshalMonthDutySource";
 import { groupOpsDutyNames } from "../src/lib/adminOpsDashboard";
 import { opsDutyRoleFromKind } from "../src/lib/dailyOpsDuty";
+import { isOperationalCaddy } from "../src/lib/operationalRoster";
 
 let passed = 0;
 let failed = 0;
@@ -171,6 +173,26 @@ section("source contracts");
     OPS_DUTY_ROLE_KEYS.length === 8 && !OPS_DUTY_ROLE_KEYS.includes("마샬_후출_2" as never),
     "8-key editor/sheet contract 유지"
   );
+  assert(
+    !/from ["']@\/lib\/operationalRoster["']/.test(source),
+    "marshal source does not use global operational helper"
+  );
+  assert(
+    /isMarshalDutyEligibleCaddy/.test(source) && /isMarshalDutyEligibleCaddy/.test(readOnly),
+    "PR3 monthly display uses marshal-only ACTIVE eligibility"
+  );
+  assert(
+    isOperationalCaddy({ id: 1, employmentStatus: "LEAVE" }) === true,
+    "global isOperationalCaddy still treats LEAVE as operational"
+  );
+  assert(
+    isMarshalDutyEligibleCaddy({ employmentStatus: "LEAVE" }) === false,
+    "marshal duty eligibility excludes LEAVE"
+  );
+  assert(
+    isMarshalDutyEligibleCaddy({ employmentStatus: "ACTIVE" }) === true,
+    "marshal duty eligibility keeps ACTIVE"
+  );
   const names = String(
     spawnSync(
       "git",
@@ -184,6 +206,7 @@ section("source contracts");
         "src/lib/marshalRotationService.ts",
         "src/app/manage/marshals/schedule/page.tsx",
         "prisma/schema.prisma",
+        "src/lib/operationalRoster.ts",
       ],
       { encoding: "utf8" }
     ).stdout || ""
@@ -853,6 +876,112 @@ section("retired monthly hidden on dashboard full source and DB-first");
   const firstMarshal = dbFirst.opsDuties.find((g) => g.role === "MARSHAL_AM");
   assert(!firstMarshal?.names.includes("퇴사월마샬"), "dashboard DB-first hides retired monthly");
   assert(!firstMarshal?.names.includes("저장마샬"), "dashboard DB-first does not resurrect stored marshal");
+}
+
+section("LEAVE FINALIZED monthly hidden without resurrecting stored");
+{
+  const stored = [
+    storedRow("당번_조출_1", "DUTY_AM", 10, "당번A"),
+    storedRow("마샬_조출_1", "MARSHAL_AM", 20, "저장마샬"),
+  ];
+  const monthly = [
+    {
+      ...monthlyRow("마샬_조출_1", 30, "휴직월마샬", "MANUAL"),
+      employmentStatus: "LEAVE",
+    },
+  ];
+  const caddies = [
+    ...rosterFrom([
+      { id: 10, name: "당번A" },
+      { id: 20, name: "저장마샬" },
+    ]),
+    {
+      id: 30,
+      name: "휴직월마샬",
+      team: "1조",
+      teamOrder: 30,
+      employmentStatus: "LEAVE" as const,
+      caddyType: "HOUSE" as const,
+    },
+  ];
+  const resolved = await resolveOpsDutyReadOnly(DATE, {
+    listDuties: async () => stored,
+    listMonthlyMarshal: async () => monthly,
+    fetchOpsDutySheets: async () => [],
+  });
+  const rows = opsDutyPanelRowsFromReadOnly(resolved, caddies);
+  assert(!rows.some((row) => row.caddyId === 30), "LEAVE monthly row not rendered");
+  assert(!rows.some((row) => row.caddyId === 20), "stored marshal not resurrected for LEAVE monthly");
+  assert(rows.some((row) => row.caddyId === 10), "duty still shown");
+  assert(
+    marshalNonOperationalKeys(monthly, caddies).includes("마샬_조출_1"),
+    "warning key for LEAVE monthly"
+  );
+  const merged = mergedDutyExcelEntriesFromReadOnly(resolved);
+  assert(
+    !merged.some((entry) => entry.rawName === "휴직월마샬"),
+    "LEAVE monthly not in overlay names"
+  );
+  assert(
+    !merged.some((entry) => entry.roleKey === "마샬_조출_1" && entry.rawName === "저장마샬"),
+    "overlay does not revive stored marshal"
+  );
+
+  const effective = await resolveEffectiveOpsDuty(DATE, {
+    listDuties: async () => stored,
+    listMonthlyMarshal: async () => monthly,
+    listOverrides: async () => [],
+    listCaddies: async () => caddies,
+    fetchOpsDutySheets: async () => [],
+  });
+  assert(!effective.caddyIds.includes(30), "effective caddyIds omit LEAVE monthly");
+  assert(!effective.caddyIds.includes(20), "effective does not resurrect stored marshal");
+  assert(effective.caddyIds.includes(10), "effective keeps duty");
+  const excluded = exclusionIds(DATE, caddies, effective.entries);
+  assert(!excluded.includes(30), "LEAVE monthly not in assignment exclusion");
+  assert(!excluded.includes(20), "stored marshal not excluded after LEAVE suppress");
+
+  const mockAvail = async (ymd: string) =>
+    applyDailyExternalExclusions({
+      availability: computeAvailability({ date: ymd, caddies, assignments: [] }),
+      caddies,
+      offNames: [],
+      dutyEntries: [],
+    });
+  const full = await loadAdminOpsDashboardSource(DATE, {
+    loadAvailability: mockAvail,
+    listDuties: async () => stored,
+    listMonthlyMarshal: async () => monthly,
+    fetchOffSheets: async () => [],
+    fetchOpsDutySheets: async () => [],
+  });
+  const fullMarshal = full.dashboard.opsDuties.find((g) => g.role === "MARSHAL_AM");
+  assert(!fullMarshal?.names.includes("휴직월마샬"), "dashboard full-source hides LEAVE monthly");
+  assert(!fullMarshal?.names.includes("저장마샬"), "dashboard full-source does not resurrect stored marshal");
+  assert(
+    full.dashboard.opsDuties.some((g) => g.role === "DUTY_AM" && g.names.includes("당번A")),
+    "dashboard duty remains"
+  );
+
+  const dbFirst = await loadAdminOpsDashboardDbFirst(DATE, {
+    listRoster: async () => caddies,
+    listDuties: async () => stored,
+    listMonthlyMarshal: async () => monthly,
+  });
+  const firstMarshal = dbFirst.opsDuties.find((g) => g.role === "MARSHAL_AM");
+  assert(!firstMarshal?.names.includes("휴직월마샬"), "dashboard DB-first hides LEAVE monthly");
+  assert(!firstMarshal?.names.includes("저장마샬"), "dashboard DB-first does not resurrect stored marshal");
+
+  const staleMonthly = [monthlyRow("마샬_조출_1", 30, "휴직월마샬", "MANUAL")];
+  const currentPreferred = overlayMonthlyMarshalDutyEntries(
+    [{ kind: "marshal_am", roleKey: "마샬_조출_1", rawName: "저장마샬" }],
+    staleMonthly,
+    caddies
+  );
+  assert(
+    !currentPreferred.some((entry) => entry.rawName === "휴직월마샬" || entry.rawName === "저장마샬"),
+    "current roster LEAVE wins over stale ACTIVE monthly row"
+  );
 }
 
 section("3 AM + 2 PM marshal display order");

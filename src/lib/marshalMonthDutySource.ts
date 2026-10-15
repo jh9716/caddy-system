@@ -11,7 +11,6 @@ import type { PrismaClient } from "@prisma/client";
 import { parseYmd } from "@/lib/availabilityEngine";
 import type { DailyOpsDutyRole } from "@/lib/dailyOpsDuty";
 import { dutyEntriesFromStored } from "@/lib/dailyOpsDuty";
-import { isOperationalCaddy } from "@/lib/operationalRoster";
 import type { DutyExcelEntry } from "@/lib/opsDutyRoleKeys";
 import { isOpsDutyRoleKey } from "@/lib/opsDutyRoleKeys";
 import { prisma as defaultPrisma } from "@/lib/prisma";
@@ -52,6 +51,38 @@ export type LoadMonthlyMarshalDutyDeps = {
 };
 
 const MARSHAL_MONTH_ROLE_KEY_RE = /^마샬_(조출|후출)_([1-9]\d*)$/;
+
+type MarshalDutyEligibilityRow = {
+  id?: number;
+  caddyId?: number;
+  employmentStatus?: unknown;
+};
+
+/**
+ * Marshal PR3 duty eligibility. ACTIVE only.
+ * Does not use global isOperationalCaddy() — LEAVE stays operational on other screens.
+ */
+export function isMarshalDutyEligibleEmploymentStatus(value: unknown): boolean {
+  const raw = String(value ?? "").trim();
+  if (!raw) return true;
+  return raw.toUpperCase() === "ACTIVE";
+}
+
+export function isMarshalDutyEligibleCaddy(
+  row: MarshalDutyEligibilityRow | null | undefined
+): boolean {
+  if (!row) return false;
+  return isMarshalDutyEligibleEmploymentStatus(row.employmentStatus);
+}
+
+function marshalDutyEligibilityFromCurrent(
+  current: MarshalDutyEligibilityRow | undefined,
+  row: MarshalDutyEligibilityRow
+): MarshalDutyEligibilityRow {
+  const currentStatus = String(current?.employmentStatus ?? "").trim();
+  if (currentStatus) return { ...row, employmentStatus: currentStatus };
+  return row;
+}
 
 export function isMarshalMonthDutyRoleKey(value: unknown): boolean {
   return MARSHAL_MONTH_ROLE_KEY_RE.test(String(value || "").trim());
@@ -263,15 +294,22 @@ export function mergeLegacyDutyEntries(input: {
 
 export function overlayMonthlyMarshalDutyEntries(
   legacyEntries: readonly DutyExcelEntry[],
-  monthly: readonly MonthlyMarshalDutyRow[]
+  monthly: readonly MonthlyMarshalDutyRow[],
+  currentCaddies: readonly MarshalDutyEligibilityRow[] = []
 ): DutyExcelEntry[] {
   if (monthly.length === 0) return [...legacyEntries];
   const monthlyKeys = new Set<string>(monthly.map((row) => row.roleKey));
   const kept = legacyEntries.filter((entry) => !monthlyKeys.has(entry.roleKey));
+  const byId = new Map(
+    currentCaddies.map((row) => [Number(row.id ?? row.caddyId), row] as const)
+  );
   const extra: DutyExcelEntry[] = [];
   for (const row of monthly) {
     if (!isMarshalMonthDutyRoleKey(row.roleKey)) continue;
-    if (!isOperationalCaddy(row)) continue;
+    const current = byId.get(Number(row.caddyId));
+    if (!isMarshalDutyEligibleCaddy(marshalDutyEligibilityFromCurrent(current, row))) {
+      continue;
+    }
     const rawName = String(row.rawName || row.name || "").trim();
     if (!rawName) continue;
     extra.push({
@@ -308,12 +346,7 @@ export function monthlyMarshalToDutyEntries(
 
 export function marshalNonOperationalKeys(
   monthly: readonly MonthlyMarshalDutyRow[],
-  caddies: readonly {
-    id?: number;
-    caddyId?: number;
-    employmentStatus?: unknown;
-    excludedReasons?: readonly string[] | null;
-  }[]
+  caddies: readonly MarshalDutyEligibilityRow[]
 ): string[] {
   const byId = new Map(
     caddies.map((row) => [Number(row.id ?? row.caddyId), row] as const)
@@ -321,7 +354,9 @@ export function marshalNonOperationalKeys(
   const keys: string[] = [];
   for (const row of monthly) {
     const current = byId.get(Number(row.caddyId));
-    if (isOperationalCaddy(current || row)) continue;
+    if (isMarshalDutyEligibleCaddy(marshalDutyEligibilityFromCurrent(current, row))) {
+      continue;
+    }
     keys.push(row.roleKey);
   }
   return keys;

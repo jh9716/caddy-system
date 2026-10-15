@@ -113,7 +113,8 @@ export async function loadAdminOpsDashboardDbFirst(
   });
   const mergedDuty = overlayMonthlyMarshalDutyEntries(
     dutyEntriesFromStored(stored),
-    monthlyForDisplay
+    monthlyForDisplay,
+    caddies
   );
   const opsDutyNames =
     mergedDuty.length > 0

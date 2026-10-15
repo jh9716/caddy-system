@@ -24,6 +24,7 @@ import {
 } from "@/lib/opsDutySheetParser";
 import {
   isContractMarshalRoleKey,
+  isMarshalDutyEligibleCaddy,
   isMarshalMonthDutyRoleKey,
   listFinalizedMarshalMonthDutyRows,
   mergeLegacyDutyEntries,
@@ -279,9 +280,13 @@ export function opsDutyPanelRowsFromReadOnly(
   }
 
   const monthlyRows: OpsDutyPanelRow[] = [];
+  const currentById = new Map(caddies.map((row) => [Number(row.id), row]));
   for (const row of monthly) {
-    const current = operationalById.get(Number(row.caddyId));
-    if (!isOperationalCaddy(current || row)) continue;
+    const current = currentById.get(Number(row.caddyId));
+    const statusRow = current
+      ? { ...row, employmentStatus: current.employmentStatus ?? row.employmentStatus }
+      : row;
+    if (!isMarshalDutyEligibleCaddy(statusRow)) continue;
     monthlyRows.push({
       caddyId: row.caddyId,
       name: current?.name || row.name,
