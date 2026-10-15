@@ -261,13 +261,11 @@ test("session lifecycle: sv check, revoke, expiry, reconnect", async () => {
       team: "1조",
     });
     const workerFirstWs = await wsStatus(port, "all", workerFirst.token);
-    assert.equal(
-      workerFirstWs.status,
-      426,
-      "12. Worker-first: old Production 7-part Next token connects while session-check is unused"
-    );
+    assert.equal(workerFirstWs.status, 401, "7-part v2 rejected even while session-check is down");
+    assert.equal(workerFirstWs.body.error, "invalid_token");
     const workerFirstDir = await dirStatus(port, workerFirst.token);
-    assert.equal(workerFirstDir.status, 200, "12. Worker-first: old 7-part directory HTTP allowed");
+    assert.equal(workerFirstDir.status, 401, "7-part directory HTTP rejected");
+    assert.equal(workerFirstDir.body.error, "invalid_token");
     mock.setUnavailable(false);
 
     const legacyLive = signTestTokenLegacyV2({
@@ -276,45 +274,60 @@ test("session lifecycle: sv check, revoke, expiry, reconnect", async () => {
       role: "caddy",
       team: "1조",
     });
-    const legacyRoom = await connect(port, "all", legacyLive.token);
-    await waitMessage(legacyRoom, (d) => d.type === "history");
-    const legacyDir = await connectDirectory(port, legacyLive.token);
-    await waitMessage(legacyDir, (d) => d.type === "rooms");
-    const legacyRoomStale = waitMessage(
-      legacyRoom,
-      (d) => d.type === "error" && d.code === "stale_session"
-    );
-    const legacyDirStale = waitMessage(
-      legacyDir,
-      (d) => d.type === "error" && d.code === "stale_session"
-    );
-    const legacyRoomCloseP = waitClose(legacyRoom, 12000);
-    const legacyDirCloseP = waitClose(legacyDir, 12000);
-    const legacyRevoke = await fetch(`http://${HOST}:${port}/internal/session-revoke`, {
-      method: "POST",
-      headers: internalHeaders("/internal/session-revoke"),
-      body: JSON.stringify({ userId: 30, sessionVersion: 1 }),
-    });
-    assert.equal(legacyRevoke.status, 200, "legacy open sockets accept revoke fanout");
-    assert.equal((await legacyRoomStale).code, "stale_session", "legacy open room socket revoked");
-    assert.equal((await legacyDirStale).code, "stale_session", "legacy open directory socket revoked");
-    assert.equal((await legacyRoomCloseP).code, 4008, "legacy open room closed 4008");
-    assert.equal((await legacyDirCloseP).code, 4008, "legacy open directory closed 4008");
-
     const leftoverHttp = await wsStatus(port, "all", legacyLive.token);
-    assert.equal(
-      leftoverHttp.status,
-      426,
-      "leftover 7-part HMAC still verifies (no fake session-check 401)"
-    );
-    const leftoverWs = await connect(port, "all", legacyLive.token);
-    const leftoverHist = await waitMessage(leftoverWs, (d) => d.type === "history");
-    assert.equal(
-      leftoverHist.type,
-      "history",
-      "leftover 7-part may open a new socket until TTL (honest 30m residual)"
-    );
-    leftoverWs.close();
+    assert.equal(leftoverHttp.status, 401, "valid-HMAC 7-part v2 is invalid_token");
+    assert.equal(leftoverHttp.body.error, "invalid_token");
+    const leftoverDir = await dirStatus(port, legacyLive.token);
+    assert.equal(leftoverDir.status, 401, "valid-HMAC 7-part directory is invalid_token");
+
+    const missingSvNow = Math.floor(Date.now() / 1000);
+    const missingSvCanonical = `2|33|무버전|caddy|1조|${missingSvNow}|${missingSvNow + 600}`;
+    const missingSvToken = `${Buffer.from(missingSvCanonical, "utf8").toString("base64url")}.${createHmac(
+      "sha256",
+      TEST_SECRET
+    )
+      .update(missingSvCanonical)
+      .digest("base64url")}`;
+    const missingSvWs = await wsStatus(port, "all", missingSvToken);
+    assert.equal(missingSvWs.status, 401, "missing sv (7-part shape) rejected");
+    assert.equal(missingSvWs.body.error, "invalid_token");
+
+    const badSvCanonical = `2|34|무버전|caddy|1조|x|${missingSvNow}|${missingSvNow + 600}`;
+    const badSvToken = `${Buffer.from(badSvCanonical, "utf8").toString("base64url")}.${createHmac(
+      "sha256",
+      TEST_SECRET
+    )
+      .update(badSvCanonical)
+      .digest("base64url")}`;
+    const badSvWs = await wsStatus(port, "all", badSvToken);
+    assert.equal(badSvWs.status, 401, "invalid sv on 8-part rejected");
+
+    const sixCanonical = `2|35|육파트|caddy|1조|${missingSvNow}`;
+    const sixToken = `${Buffer.from(sixCanonical, "utf8").toString("base64url")}.${createHmac(
+      "sha256",
+      TEST_SECRET
+    )
+      .update(sixCanonical)
+      .digest("base64url")}`;
+    const sixWs = await wsStatus(port, "all", sixToken);
+    assert.equal(sixWs.status, 401, "malformed 6-part rejected");
+
+    const nineCanonical = `2|36|구파트|caddy|1조|1|${missingSvNow}|${missingSvNow + 600}|extra`;
+    const nineToken = `${Buffer.from(nineCanonical, "utf8").toString("base64url")}.${createHmac(
+      "sha256",
+      TEST_SECRET
+    )
+      .update(nineCanonical)
+      .digest("base64url")}`;
+    const nineWs = await wsStatus(port, "all", nineToken);
+    assert.equal(nineWs.status, 401, "malformed 9-part rejected");
+
+    const tamperLive = signTestTokenV2({ userId: 37, displayName: "변조", role: "caddy", sv: 2 });
+    mock.setEpoch(37, 2);
+    const [tamperBody] = tamperLive.token.split(".");
+    const tamperedSv = `${tamperBody}.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`;
+    const tamperedWs = await wsStatus(port, "all", tamperedSv);
+    assert.equal(tamperedWs.status, 401, "tampered 8-part HMAC rejected by Worker");
 
     const nowLegacy = Math.floor(Date.now() / 1000);
     const expiredLegacy = signTestTokenLegacyV2({
@@ -326,7 +339,7 @@ test("session lifecycle: sv check, revoke, expiry, reconnect", async () => {
       exp: nowLegacy - 1,
     });
     const expiredLegacyWs = await wsStatus(port, "all", expiredLegacy.token);
-    assert.equal(expiredLegacyWs.status, 401, "legacy exp rejected");
+    assert.equal(expiredLegacyWs.status, 401, "expired 7-part rejected");
 
     const tamperedLegacy = signTestTokenLegacyV2({
       userId: 32,
@@ -336,7 +349,7 @@ test("session lifecycle: sv check, revoke, expiry, reconnect", async () => {
     const [legacyBody] = tamperedLegacy.token.split(".");
     const badLegacy = `${legacyBody}.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`;
     const tamperedLegacyWs = await wsStatus(port, "all", badLegacy);
-    assert.equal(tamperedLegacyWs.status, 401, "tampered legacy token rejected by Worker");
+    assert.equal(tamperedLegacyWs.status, 401, "tampered 7-part token rejected by Worker");
 
     const browserRevoke = await fetch(`http://${HOST}:${port}/internal/session-revoke`, {
       method: "POST",

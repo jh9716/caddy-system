@@ -1,4 +1,4 @@
-/** 8-part v2 minted after PR #309. `binding` is parse-time only (not HMAC). */
+/** Secure 8-part v2. `binding` is parse-time only (not HMAC). */
 export type ChatTokenSessionBoundV2Claims = {
   v: 2;
   binding?: "session";
@@ -6,30 +6,13 @@ export type ChatTokenSessionBoundV2Claims = {
   displayName: string;
   role: "admin" | "caddy" | "leader";
   team: string;
-  /** DB User.sessionVersion. Required on session-bound v2. */
+  /** DB User.sessionVersion. Required on v2. */
   sv: number;
   iat: number;
   exp: number;
 };
 
-/**
- * Production 7-part v2 already in the wild.
- * Verify-only during Worker-first rollout. Never minted after #309.
- */
-export type ChatTokenLegacyV2Claims = {
-  v: 2;
-  binding: "legacy";
-  userId: number;
-  displayName: string;
-  role: "admin" | "caddy" | "leader";
-  team: string;
-  iat: number;
-  exp: number;
-};
-
-export type ChatTokenV2Claims =
-  | ChatTokenSessionBoundV2Claims
-  | ChatTokenLegacyV2Claims;
+export type ChatTokenV2Claims = ChatTokenSessionBoundV2Claims;
 
 export type ChatTokenV1Claims = {
   v: 1;
@@ -51,14 +34,7 @@ export function isChatTokenV2(claims: ChatTokenClaims): claims is ChatTokenV2Cla
 export function isSessionBoundChatToken(
   claims: ChatTokenClaims
 ): claims is ChatTokenSessionBoundV2Claims {
-  if (claims.v !== 2 || claims.binding === "legacy") return false;
-  return parseChatSessionVersion((claims as ChatTokenSessionBoundV2Claims).sv) != null;
-}
-
-export function isLegacyChatTokenV2(
-  claims: ChatTokenClaims
-): claims is ChatTokenLegacyV2Claims {
-  return claims.v === 2 && claims.binding === "legacy";
+  return claims.v === 2 && parseChatSessionVersion(claims.sv) != null;
 }
 
 export function parseChatSessionVersion(raw: unknown): number | null {
@@ -103,7 +79,7 @@ function normalizeTeam(team: string): string {
 export function canonicalChatTokenPayload(claims: ChatTokenClaims): string {
   if (claims.v === 2) {
     if (!isSessionBoundChatToken(claims)) {
-      throw new Error("legacy v2 chat tokens cannot be minted");
+      throw new Error("v2 chat tokens require sessionVersion");
     }
     return [
       "2",
@@ -177,27 +153,6 @@ export function parseChatTokenClaims(canonical: string): ChatTokenClaims | null 
       role,
       team: normalizeTeam(team),
       sv,
-      iat,
-      exp,
-    };
-  }
-  if (parts[0] === "2" && parts.length === 7) {
-    const [, userIdRaw, displayName, role, team, iatRaw, expRaw] = parts;
-    const userId = Number(userIdRaw);
-    const iat = Number(iatRaw);
-    const exp = Number(expRaw);
-    if (!Number.isInteger(userId) || userId <= 0) return null;
-    if (!Number.isFinite(iat) || !Number.isFinite(exp)) return null;
-    if (role !== "admin" && role !== "caddy" && role !== "leader") return null;
-    const name = sanitizeChatDisplayName(displayName);
-    if (!name) return null;
-    return {
-      v: 2,
-      binding: "legacy",
-      userId,
-      displayName: name,
-      role,
-      team: normalizeTeam(team),
       iat,
       exp,
     };
