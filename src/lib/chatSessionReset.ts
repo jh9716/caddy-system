@@ -71,9 +71,40 @@ export function shouldAttemptChatReconnect(input: {
   return input.generationMatches === true && input.hasToken === true;
 }
 
-export function requestChatSessionReset(reason: ChatSessionResetReason): void {
+export function parseChatSessionResetReason(raw: unknown): ChatSessionResetReason {
+  const value = String(raw || "");
+  return value === "account_switch" || value.startsWith("account_switch:")
+    ? "account_switch"
+    : "logout";
+}
+
+/** Same-tab CustomEvent and cross-tab StorageEvent must share this. */
+export function applyChatSessionResetReason(reason: ChatSessionResetReason): void {
   if (reason === "logout") markChatSessionEnded();
   else clearChatSessionEnded();
+}
+
+export function shouldCommitChatToken(input?: {
+  generationMatches?: boolean;
+  sessionEnded?: boolean;
+}): boolean {
+  if (input?.sessionEnded === true || isChatSessionEnded()) return false;
+  if (input?.generationMatches === false) return false;
+  return true;
+}
+
+export function shouldConnectWithChatToken<T extends { token?: string }>(
+  info: T | null | undefined,
+  tokenRef: { current: T | null }
+): boolean {
+  if (isChatSessionEnded()) return false;
+  const current = String(tokenRef.current?.token || "");
+  const incoming = String(info?.token || "");
+  return Boolean(current && incoming && current === incoming);
+}
+
+export function requestChatSessionReset(reason: ChatSessionResetReason): void {
+  applyChatSessionResetReason(reason);
   if (typeof window === "undefined") return;
   window.dispatchEvent(
     new CustomEvent(CHAT_SESSION_RESET_EVENT, { detail: { reason } })
@@ -88,21 +119,31 @@ export function requestChatSessionReset(reason: ChatSessionResetReason): void {
   }
 }
 
+export function handleChatSessionResetSignal(
+  raw: unknown,
+  handler?: (reason: ChatSessionResetReason) => void
+): ChatSessionResetReason {
+  const reason = parseChatSessionResetReason(raw);
+  applyChatSessionResetReason(reason);
+  handler?.(reason);
+  return reason;
+}
+
 export function subscribeChatSessionReset(
   handler: (reason: ChatSessionResetReason) => void
 ): () => void {
   if (typeof window === "undefined") return () => undefined;
+  const deliver = (raw: unknown) => {
+    handleChatSessionResetSignal(raw, handler);
+  };
   const onEvent = (event: Event) => {
-    const reason =
-      event instanceof CustomEvent && event.detail?.reason === "account_switch"
-        ? "account_switch"
-        : "logout";
-    handler(reason);
+    deliver(
+      event instanceof CustomEvent ? event.detail?.reason : "logout"
+    );
   };
   const onStorage = (event: StorageEvent) => {
     if (event.key !== CHAT_SESSION_RESET_STORAGE_KEY) return;
-    const value = String(event.newValue || "");
-    handler(value.startsWith("account_switch") ? "account_switch" : "logout");
+    deliver(event.newValue);
   };
   window.addEventListener(CHAT_SESSION_RESET_EVENT, onEvent);
   window.addEventListener("storage", onStorage);

@@ -156,6 +156,8 @@ import {
   isChatSessionEnded,
   resetChatSocketHandles,
   shouldAttemptChatReconnect,
+  shouldCommitChatToken,
+  shouldConnectWithChatToken,
   subscribeChatSessionReset,
 } from "@/lib/chatSessionReset";
 import {
@@ -467,17 +469,32 @@ export default function ChatClient() {
   }
 
   const fetchToken = useCallback(async () => {
-    if (isChatSessionEnded()) return null;
+    const startedGen = dirGenRef.current;
+    if (!shouldCommitChatToken()) return null;
     const res = await fetch("/api/chat/token", {
       method: "POST",
       credentials: "include",
       cache: "no-store",
     });
+    if (
+      !shouldCommitChatToken({
+        generationMatches: startedGen === dirGenRef.current,
+      })
+    ) {
+      return null;
+    }
     if (await consumeUnauthorizedMemberResponse(res)) return null;
     const data = await res.json().catch(() => null);
     if (!res.ok) {
       if (res.status === 401 || res.status === 403) return null;
       throw new Error(data?.message || data?.error || "채팅 입장에 실패했습니다.");
+    }
+    if (
+      !shouldCommitChatToken({
+        generationMatches: startedGen === dirGenRef.current,
+      })
+    ) {
+      return null;
     }
     return data as TokenPayload;
   }, []);
@@ -549,12 +566,14 @@ export default function ChatClient() {
     const delay = nextReconnectDelay(dirAttemptRef.current);
     dirAttemptRef.current += 1;
     dirTimerRef.current = window.setTimeout(() => {
+      if (isChatSessionEnded()) return;
       connectDirectoryRef.current(info);
     }, delay);
   }, []);
 
   const connectDirectory = useCallback(
     (info: TokenPayload) => {
+      if (!shouldConnectWithChatToken(info, tokenRef)) return;
       const url = chatDirectoryWsUrl(info.token);
       if (!url) return;
       const prev = dirRef.current;
@@ -589,7 +608,14 @@ export default function ChatClient() {
           let next = info;
           if (shouldRefreshTokenOnClose(ev.code)) {
             const fresh = await fetchToken();
-            if (!fresh) return;
+            if (
+              !fresh ||
+              !shouldCommitChatToken({
+                generationMatches: gen === dirGenRef.current,
+              })
+            ) {
+              return;
+            }
             tokenRef.current = fresh;
             setTokenInfo(fresh);
             next = fresh;
@@ -628,12 +654,14 @@ export default function ChatClient() {
     const delay = nextReconnectDelay(roomAttemptRef.current);
     roomAttemptRef.current += 1;
     roomTimerRef.current = window.setTimeout(() => {
+      if (isChatSessionEnded()) return;
       void connectSocketRef.current(info, roomId);
     }, delay);
   }, []);
 
   const connectSocket = useCallback(
     async (info: TokenPayload, roomId: string) => {
+      if (!shouldConnectWithChatToken(info, tokenRef)) return;
       const url = chatWsUrl({ roomId, token: info.token });
       if (!url) {
         setError("채팅 서버 주소가 없습니다.");
@@ -686,7 +714,14 @@ export default function ChatClient() {
           let next = info;
           if (shouldRefreshTokenOnClose(ev.code)) {
             const fresh = await fetchToken();
-            if (!fresh) return;
+            if (
+              !fresh ||
+              !shouldCommitChatToken({
+                generationMatches: gen === roomGenRef.current,
+              })
+            ) {
+              return;
+            }
             tokenRef.current = fresh;
             setTokenInfo(fresh);
             connectDirectory(fresh);
@@ -856,8 +891,17 @@ export default function ChatClient() {
       setConnected(false);
       setDirectoryConnected(false);
       if (reason === "logout" || isChatSessionEnded()) return;
+      const switchGen = dirGenRef.current;
       void fetchToken().then((info) => {
-        if (!info || cancelled || isChatSessionEnded()) return;
+        if (
+          !info ||
+          cancelled ||
+          !shouldCommitChatToken({
+            generationMatches: switchGen === dirGenRef.current,
+          })
+        ) {
+          return;
+        }
         tokenRef.current = info;
         setTokenInfo(info);
         connectDirectory(info);
@@ -866,9 +910,18 @@ export default function ChatClient() {
       });
     });
     (async () => {
+      const startedGen = dirGenRef.current;
       try {
         const info = await fetchToken();
-        if (cancelled || !info) return;
+        if (
+          cancelled ||
+          !info ||
+          !shouldCommitChatToken({
+            generationMatches: startedGen === dirGenRef.current,
+          })
+        ) {
+          return;
+        }
         tokenRef.current = info;
         setTokenInfo(info);
         warmChatPhotoMediaConnection();
