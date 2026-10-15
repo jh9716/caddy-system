@@ -153,6 +153,14 @@ import {
   shouldRefreshTokenOnClose,
 } from "@/lib/chatReconnect";
 import {
+  isChatSessionEnded,
+  resetChatSocketHandles,
+  shouldAttemptChatReconnect,
+  shouldCommitChatToken,
+  shouldConnectWithChatToken,
+  subscribeChatSessionReset,
+} from "@/lib/chatSessionReset";
+import {
   clearInviteIds,
   filterInviteUsers,
   invitePoolExcludingOwner,
@@ -461,15 +469,32 @@ export default function ChatClient() {
   }
 
   const fetchToken = useCallback(async () => {
+    const startedGen = dirGenRef.current;
+    if (!shouldCommitChatToken()) return null;
     const res = await fetch("/api/chat/token", {
       method: "POST",
       credentials: "include",
       cache: "no-store",
     });
+    if (
+      !shouldCommitChatToken({
+        generationMatches: startedGen === dirGenRef.current,
+      })
+    ) {
+      return null;
+    }
     if (await consumeUnauthorizedMemberResponse(res)) return null;
     const data = await res.json().catch(() => null);
     if (!res.ok) {
+      if (res.status === 401 || res.status === 403) return null;
       throw new Error(data?.message || data?.error || "채팅 입장에 실패했습니다.");
+    }
+    if (
+      !shouldCommitChatToken({
+        generationMatches: startedGen === dirGenRef.current,
+      })
+    ) {
+      return null;
     }
     return data as TokenPayload;
   }, []);
@@ -541,12 +566,14 @@ export default function ChatClient() {
     const delay = nextReconnectDelay(dirAttemptRef.current);
     dirAttemptRef.current += 1;
     dirTimerRef.current = window.setTimeout(() => {
+      if (isChatSessionEnded()) return;
       connectDirectoryRef.current(info);
     }, delay);
   }, []);
 
   const connectDirectory = useCallback(
     (info: TokenPayload) => {
+      if (!shouldConnectWithChatToken(info, tokenRef)) return;
       const url = chatDirectoryWsUrl(info.token);
       if (!url) return;
       const prev = dirRef.current;
@@ -581,10 +608,25 @@ export default function ChatClient() {
           let next = info;
           if (shouldRefreshTokenOnClose(ev.code)) {
             const fresh = await fetchToken();
-            if (!fresh) return;
+            if (
+              !fresh ||
+              !shouldCommitChatToken({
+                generationMatches: gen === dirGenRef.current,
+              })
+            ) {
+              return;
+            }
             tokenRef.current = fresh;
             setTokenInfo(fresh);
             next = fresh;
+          }
+          if (
+            !shouldAttemptChatReconnect({
+              generationMatches: gen === dirGenRef.current,
+              hasToken: Boolean(next?.token),
+            })
+          ) {
+            return;
           }
           scheduleDirectoryReconnect(next);
         };
@@ -612,12 +654,14 @@ export default function ChatClient() {
     const delay = nextReconnectDelay(roomAttemptRef.current);
     roomAttemptRef.current += 1;
     roomTimerRef.current = window.setTimeout(() => {
+      if (isChatSessionEnded()) return;
       void connectSocketRef.current(info, roomId);
     }, delay);
   }, []);
 
   const connectSocket = useCallback(
     async (info: TokenPayload, roomId: string) => {
+      if (!shouldConnectWithChatToken(info, tokenRef)) return;
       const url = chatWsUrl({ roomId, token: info.token });
       if (!url) {
         setError("채팅 서버 주소가 없습니다.");
@@ -670,11 +714,26 @@ export default function ChatClient() {
           let next = info;
           if (shouldRefreshTokenOnClose(ev.code)) {
             const fresh = await fetchToken();
-            if (!fresh) return;
+            if (
+              !fresh ||
+              !shouldCommitChatToken({
+                generationMatches: gen === roomGenRef.current,
+              })
+            ) {
+              return;
+            }
             tokenRef.current = fresh;
             setTokenInfo(fresh);
             connectDirectory(fresh);
             next = fresh;
+          }
+          if (
+            !shouldAttemptChatReconnect({
+              generationMatches: gen === roomGenRef.current,
+              hasToken: Boolean(next?.token),
+            })
+          ) {
+            return;
           }
           const room = roomRef.current;
           if (room) scheduleRoomReconnect(next, room.roomId);
@@ -817,10 +876,52 @@ export default function ChatClient() {
 
   useEffect(() => {
     let cancelled = false;
+    const unsubscribeReset = subscribeChatSessionReset((reason) => {
+      resetChatSocketHandles({
+        roomGenRef,
+        dirGenRef,
+        roomTimerRef,
+        dirTimerRef,
+        wsRef,
+        dirRef,
+        tokenRef,
+        reconnectingRef,
+      });
+      setTokenInfo(null);
+      setConnected(false);
+      setDirectoryConnected(false);
+      if (reason === "logout" || isChatSessionEnded()) return;
+      const switchGen = dirGenRef.current;
+      void fetchToken().then((info) => {
+        if (
+          !info ||
+          cancelled ||
+          !shouldCommitChatToken({
+            generationMatches: switchGen === dirGenRef.current,
+          })
+        ) {
+          return;
+        }
+        tokenRef.current = info;
+        setTokenInfo(info);
+        connectDirectory(info);
+        const room = roomRef.current;
+        if (room) void connectSocket(info, room.roomId);
+      });
+    });
     (async () => {
+      const startedGen = dirGenRef.current;
       try {
         const info = await fetchToken();
-        if (cancelled || !info) return;
+        if (
+          cancelled ||
+          !info ||
+          !shouldCommitChatToken({
+            generationMatches: startedGen === dirGenRef.current,
+          })
+        ) {
+          return;
+        }
         tokenRef.current = info;
         setTokenInfo(info);
         warmChatPhotoMediaConnection();
@@ -857,6 +958,7 @@ export default function ChatClient() {
     })();
     return () => {
       cancelled = true;
+      unsubscribeReset();
       roomGenRef.current += 1;
       dirGenRef.current += 1;
       clearTimer(roomTimerRef);
@@ -864,10 +966,11 @@ export default function ChatClient() {
       wsRef.current?.close();
       dirRef.current?.close();
     };
-  }, [connectDirectory, fetchRoomsHttp, fetchTargetedRoom, fetchToken]);
+  }, [connectDirectory, connectSocket, fetchRoomsHttp, fetchTargetedRoom, fetchToken]);
 
   useEffect(() => {
     const reconnect = () => {
+      if (isChatSessionEnded()) return;
       const info = tokenRef.current;
       if (!info) return;
       connectDirectory(info);
@@ -1042,6 +1145,7 @@ export default function ChatClient() {
   }, [view]);
 
   const refreshIfNeeded = useCallback(async () => {
+    if (isChatSessionEnded()) return null;
     const info = tokenRef.current;
     if (!info) return info;
     if (info.exp - 30 > Math.floor(Date.now() / 1000)) return info;

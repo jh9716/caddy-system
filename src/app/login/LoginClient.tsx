@@ -7,6 +7,7 @@ import { Capacitor } from "@capacitor/core";
 import LegalLinks from "@/components/LegalLinks";
 import PwaInstallCard from "@/components/PwaInstallCard";
 import { PWA_MONOGRAM, PWA_SPLASH_COURSE } from "@/lib/pwaManifest";
+import { requestChatSessionReset } from "@/lib/chatSessionReset";
 import { clearClientResourceCache } from "@/lib/clientResourceCache";
 import { resolvePostLoginHref } from "@/lib/roleRouting";
 import { safeReturnPath } from "@/lib/safeReturnPath";
@@ -58,6 +59,7 @@ export default function LoginClient() {
       if (!res.ok) {
         throw new Error(data?.message || data?.error || "로그인 실패");
       }
+      requestChatSessionReset("account_switch");
 
       location.replace(
         resolvePostLoginHref({
@@ -114,6 +116,7 @@ export default function LoginClient() {
         location.href = result.startUrl;
         return;
       }
+      requestChatSessionReset("account_switch");
       location.replace(result.href);
     } catch (e: unknown) {
       setErr(formatNativeKakaoBridgeError(e));

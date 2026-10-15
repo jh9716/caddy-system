@@ -30,7 +30,8 @@ export function signTestToken(partial, secret = TEST_SECRET) {
   return { token: `${body}.${sig}`, claims };
 }
 
-export function signTestTokenV2(partial, secret = TEST_SECRET) {
+/** Production Next (pre-#309) 7-part v2. Test-only — production issuer never mints this. */
+export function signTestTokenLegacyV2(partial, secret = TEST_SECRET) {
   const now = Math.floor(Date.now() / 1000);
   const claims = {
     v: 2,
@@ -43,11 +44,39 @@ export function signTestTokenV2(partial, secret = TEST_SECRET) {
     ...partial,
   };
   const canonical = [
+    "2",
+    String(claims.userId),
+    String(claims.displayName).replace(/\|/g, "").trim(),
+    claims.role,
+    claims.team || "-",
+    String(claims.iat),
+    String(claims.exp),
+  ].join("|");
+  const body = Buffer.from(canonical, "utf8").toString("base64url");
+  const sig = createHmac("sha256", secret).update(canonical).digest("base64url");
+  return { token: `${body}.${sig}`, claims, canonical };
+}
+
+export function signTestTokenV2(partial, secret = TEST_SECRET) {
+  const now = Math.floor(Date.now() / 1000);
+  const claims = {
+    v: 2,
+    userId: 11,
+    displayName: "Tester",
+    role: "caddy",
+    team: "1조",
+    sv: 0,
+    iat: now,
+    exp: now + 600,
+    ...partial,
+  };
+  const canonical = [
     String(claims.v),
     String(claims.userId),
     String(claims.displayName).replace(/\|/g, "").trim(),
     claims.role,
     claims.team || "-",
+    String(claims.sv ?? 0),
     String(claims.iat),
     String(claims.exp),
   ].join("|");

@@ -1,26 +1,7 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { once } from "node:events";
-import { createServer } from "node:net";
-import { dirname, join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
-import { TEST_SECRET, signTestToken } from "./token-helper.mjs";
-
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const HOST = "127.0.0.1";
-
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.listen(0, HOST, () => {
-      const addr = server.address();
-      const port = typeof addr === "object" && addr ? addr.port : 0;
-      server.close((err) => (err ? reject(err) : resolve(port)));
-    });
-    server.on("error", reject);
-  });
-}
+import { signTestToken } from "./token-helper.mjs";
+import { HOST, startWrangler, stopWrangler } from "./wrangler-harness.mjs";
 
 function waitMessage(ws, predicate, timeoutMs = 12000) {
   return new Promise((resolve, reject) => {
@@ -52,46 +33,6 @@ function connect(port, room, token) {
       reject(new Error("ws error"));
     });
   });
-}
-
-async function startWrangler() {
-  const port = await freePort();
-  const child = spawn(
-    "npx",
-    ["wrangler", "dev", "--local", "--port", String(port), "--ip", HOST, "--var", `CHAT_AUTH_SECRET:${TEST_SECRET}`],
-    {
-      cwd: root,
-      env: { ...process.env, WRANGLER_SEND_METRICS: "false", CI: "1" },
-      stdio: ["ignore", "pipe", "pipe"],
-      detached: true,
-    }
-  );
-  let output = "";
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(output)), 45000);
-    const onData = (buf) => {
-      output += buf.toString();
-      if (/Ready|http:\/\/127\.0\.0\.1/.test(output) && output.includes(String(port))) {
-        clearTimeout(timer);
-        resolve();
-      }
-    };
-    child.stdout?.on("data", onData);
-    child.stderr?.on("data", onData);
-    child.on("exit", (code) => reject(new Error(`exit ${code}\n${output}`)));
-  });
-  await new Promise((r) => setTimeout(r, 300));
-  return { port, child };
-}
-
-async function stopWrangler(child) {
-  if (!child.pid) return;
-  try {
-    process.kill(-child.pid, "SIGTERM");
-  } catch {
-    child.kill("SIGTERM");
-  }
-  await Promise.race([once(child, "exit"), new Promise((r) => setTimeout(r, 2000))]);
 }
 
 test("history persist + pagination, 200-cap, DO restart with auth", async () => {

@@ -8,6 +8,7 @@ export const CHAT_INTERNAL_AUTH_SKEW_SEC = 60;
 export const CHAT_PUSH_DISPATCH_PATH = "/api/chat/push-dispatch";
 export const CHAT_ATTACHMENT_CONSUME_PATH = "/api/chat/attachments/consume";
 export const CHAT_ATTACHMENT_CLEANUP_PATH = "/api/chat/attachments/cleanup";
+export const CHAT_SESSION_CHECK_PATH = "/api/chat/session-check";
 
 export function chatInternalSecret(env: NodeJS.ProcessEnv = process.env): string {
   return String(env.CHAT_INTERNAL_SECRET || env.CHAT_AUTH_SECRET || "").trim();

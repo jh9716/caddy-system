@@ -1,5 +1,24 @@
-export type ChatTokenV2Claims = {
+/** 8-part v2 minted after PR #309. `binding` is parse-time only (not HMAC). */
+export type ChatTokenSessionBoundV2Claims = {
   v: 2;
+  binding?: "session";
+  userId: number;
+  displayName: string;
+  role: "admin" | "caddy" | "leader";
+  team: string;
+  /** DB User.sessionVersion. Required on session-bound v2. */
+  sv: number;
+  iat: number;
+  exp: number;
+};
+
+/**
+ * Production 7-part v2 already in the wild.
+ * Verify-only during Worker-first rollout. Never minted after #309.
+ */
+export type ChatTokenLegacyV2Claims = {
+  v: 2;
+  binding: "legacy";
   userId: number;
   displayName: string;
   role: "admin" | "caddy" | "leader";
@@ -7,6 +26,10 @@ export type ChatTokenV2Claims = {
   iat: number;
   exp: number;
 };
+
+export type ChatTokenV2Claims =
+  | ChatTokenSessionBoundV2Claims
+  | ChatTokenLegacyV2Claims;
 
 export type ChatTokenV1Claims = {
   v: 1;
@@ -23,6 +46,41 @@ export type ChatTokenClaims = ChatTokenV2Claims | ChatTokenV1Claims;
 
 export function isChatTokenV2(claims: ChatTokenClaims): claims is ChatTokenV2Claims {
   return claims.v === 2;
+}
+
+export function isSessionBoundChatToken(
+  claims: ChatTokenClaims
+): claims is ChatTokenSessionBoundV2Claims {
+  if (claims.v !== 2 || claims.binding === "legacy") return false;
+  return parseChatSessionVersion((claims as ChatTokenSessionBoundV2Claims).sv) != null;
+}
+
+export function isLegacyChatTokenV2(
+  claims: ChatTokenClaims
+): claims is ChatTokenLegacyV2Claims {
+  return claims.v === 2 && claims.binding === "legacy";
+}
+
+export function parseChatSessionVersion(raw: unknown): number | null {
+  const sv = Number(raw);
+  if (!Number.isInteger(sv) || sv < 0) return null;
+  return sv;
+}
+
+export function chatTokenSessionVersion(claims: ChatTokenClaims): number | null {
+  return isSessionBoundChatToken(claims)
+    ? parseChatSessionVersion(claims.sv)
+    : null;
+}
+
+/** True when stored epoch is newer than the token (revoked). Missing epoch is unknown. */
+export function isChatSessionEpochStale(
+  tokenSv: number | null,
+  storedSv: number | null | undefined
+): boolean {
+  if (storedSv == null) return false;
+  if (tokenSv == null) return true;
+  return storedSv > tokenSv;
 }
 
 export function sanitizeChatDisplayName(name: string): string {
@@ -44,12 +102,16 @@ function normalizeTeam(team: string): string {
 
 export function canonicalChatTokenPayload(claims: ChatTokenClaims): string {
   if (claims.v === 2) {
+    if (!isSessionBoundChatToken(claims)) {
+      throw new Error("legacy v2 chat tokens cannot be minted");
+    }
     return [
       "2",
       String(claims.userId),
       sanitizeChatDisplayName(claims.displayName),
       claims.role,
       normalizeTeam(claims.team),
+      String(claims.sv),
       String(claims.iat),
       String(claims.exp),
     ].join("|");
@@ -95,6 +157,30 @@ function timingSafeEqualBytes(a: Uint8Array, b: Uint8Array): boolean {
 
 export function parseChatTokenClaims(canonical: string): ChatTokenClaims | null {
   const parts = canonical.split("|");
+  if (parts[0] === "2" && parts.length === 8) {
+    const [, userIdRaw, displayName, role, team, svRaw, iatRaw, expRaw] = parts;
+    const userId = Number(userIdRaw);
+    const sv = parseChatSessionVersion(svRaw);
+    const iat = Number(iatRaw);
+    const exp = Number(expRaw);
+    if (!Number.isInteger(userId) || userId <= 0) return null;
+    if (sv == null) return null;
+    if (!Number.isFinite(iat) || !Number.isFinite(exp)) return null;
+    if (role !== "admin" && role !== "caddy" && role !== "leader") return null;
+    const name = sanitizeChatDisplayName(displayName);
+    if (!name) return null;
+    return {
+      v: 2,
+      binding: "session",
+      userId,
+      displayName: name,
+      role,
+      team: normalizeTeam(team),
+      sv,
+      iat,
+      exp,
+    };
+  }
   if (parts[0] === "2" && parts.length === 7) {
     const [, userIdRaw, displayName, role, team, iatRaw, expRaw] = parts;
     const userId = Number(userIdRaw);
@@ -107,6 +193,7 @@ export function parseChatTokenClaims(canonical: string): ChatTokenClaims | null 
     if (!name) return null;
     return {
       v: 2,
+      binding: "legacy",
       userId,
       displayName: name,
       role,

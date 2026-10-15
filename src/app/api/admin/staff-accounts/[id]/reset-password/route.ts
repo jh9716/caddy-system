@@ -6,6 +6,7 @@ import {
   generateTempNumericPassword,
   hashPassword,
 } from "@/lib/userPassword";
+import { notifyChatSessionRevoked } from "@/lib/chatSessionRevoke";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -64,6 +65,10 @@ export async function POST(
       },
     });
 
+    await notifyChatSessionRevoked({
+      userId: updated.id,
+      sessionVersion: updated.sessionVersion,
+    });
     return NextResponse.json({
       ok: true,
       user: {

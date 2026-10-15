@@ -9,6 +9,7 @@ import {
   employmentBecameRetired,
   type SessionRevocationDb,
 } from "../src/lib/sessionRevocation";
+import { notifyChatSessionRevokedForCaddyLink } from "../src/lib/chatSessionRevoke";
 import {
   buildXlsxV2PreviewBundle,
   fingerprintRosterSnapshot,
@@ -150,7 +151,8 @@ export async function applyXlsxV2Workbook(
     );
   }
 
-  return db.$transaction(async (tx) => {
+  const revokedCaddyIds: number[] = [];
+  const result = await db.$transaction(async (tx) => {
     const live = asExisting(
       await tx.caddy.findMany({
         select: CADDY_SELECT,
@@ -212,6 +214,7 @@ export async function applyXlsxV2Workbook(
           tx as SessionRevocationDb,
           patch.id
         );
+        revokedCaddyIds.push(patch.id);
       }
     }
 
@@ -230,6 +233,7 @@ export async function applyXlsxV2Workbook(
           tx as SessionRevocationDb,
           patch.id
         );
+        revokedCaddyIds.push(patch.id);
       }
     }
 
@@ -244,6 +248,7 @@ export async function applyXlsxV2Workbook(
           tx as SessionRevocationDb,
           retire.id
         );
+        revokedCaddyIds.push(retire.id);
       }
     }
 
@@ -298,6 +303,20 @@ export async function applyXlsxV2Workbook(
       fingerprint: liveFingerprint,
     };
   }, { timeout: 60_000, maxWait: 10_000 });
+  for (const caddyId of revokedCaddyIds) {
+    await notifyChatSessionRevokedForCaddyLink(
+      db as {
+        user: {
+          findMany: (args: {
+            where: { caddyId: number };
+            select: { id: true; sessionVersion: true };
+          }) => Promise<Array<{ id: number; sessionVersion: number }>>;
+        };
+      },
+      caddyId
+    );
+  }
+  return result;
 }
 
 export function xlsxV2ApplySuccessMessage(result: XlsxV2ApplyResult): string {

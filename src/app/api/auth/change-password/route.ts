@@ -7,6 +7,7 @@ import {
   validateNewPassword,
 } from "@/lib/passwordPolicy";
 import { hashPassword, verifyUserPassword } from "@/lib/userPassword";
+import { notifyChatSessionRevoked } from "@/lib/chatSessionRevoke";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -84,6 +85,10 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    await notifyChatSessionRevoked({
+      userId: updated.id,
+      sessionVersion: updated.sessionVersion,
+    });
     const res = NextResponse.json({
       ok: true,
       mustChangePassword: updated.mustChangePassword === true,

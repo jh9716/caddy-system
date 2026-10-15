@@ -25,6 +25,7 @@ export type ChatEnvAdminUserRow = {
   id: number;
   username: string;
   role: string;
+  sessionVersion: number;
   caddyId: number | null;
   caddy: LinkedCaddyRow | null;
 };
@@ -37,6 +38,7 @@ export type ChatEnvAdminUserDb = {
         id: true;
         username: true;
         role: true;
+        sessionVersion: true;
         caddyId: true;
         caddy: {
           select: { id: true; name: true; team: true; employmentStatus: true };
@@ -49,6 +51,7 @@ export type ChatEnvAdminUserDb = {
 export type EnvAdminChatIdentity = {
   userId: number;
   username: string;
+  sessionVersion: number;
   caddyId: number | null;
   caddy: LinkedCaddyRow | null;
 };
@@ -61,6 +64,7 @@ const ENV_ADMIN_USER_SELECT = {
   id: true,
   username: true,
   role: true,
+  sessionVersion: true,
   caddyId: true,
   caddy: {
     select: { id: true, name: true, team: true, employmentStatus: true },
@@ -118,11 +122,15 @@ function identityFromAdminRow(
     return invalidAdminChatMapping();
   }
   if (normalizeAppRole(row.role) !== "admin") return invalidAdminChatMapping();
+  const sessionVersion = Number.isInteger(row.sessionVersion)
+    ? Math.max(0, row.sessionVersion)
+    : 0;
   return {
     ok: true,
     value: {
       userId: row.id,
       username: row.username,
+      sessionVersion,
       caddyId: row.caddyId ?? null,
       caddy: row.caddy ?? null,
     },

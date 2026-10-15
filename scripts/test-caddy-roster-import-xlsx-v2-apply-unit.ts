@@ -584,6 +584,19 @@ async function main() {
   assert(!/user\.delete/.test(applyLib), "engine no user.delete");
   assert(/incrementSessionVersionForCaddyLink/.test(applyLib), "engine revokes session");
   assert(/\$transaction/.test(applyLib), "single transaction");
+  assert(
+    /await notifyChatSessionRevokedForCaddyLink/.test(applyLib),
+    "engine awaits revoke after commit"
+  );
+  assert(
+    !/void notifyChatSessionRevokedForCaddyLink/.test(applyLib),
+    "engine revoke is not fire-and-forget"
+  );
+  assert(
+    applyLib.indexOf("await db.$transaction") <
+      applyLib.indexOf("await notifyChatSessionRevokedForCaddyLink"),
+    "engine notify is after the transaction"
+  );
   assert(/IMPORT_CADDIES_XLSX_V2/.test(applyLib), "audit action");
   assert(/xlsx_v2/.test(applyLib), "audit source");
   assert(/\/api\/caddies\/import-v2\/xlsx\/apply/.test(page), "UI posts apply");

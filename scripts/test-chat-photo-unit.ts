@@ -3553,6 +3553,7 @@ if (!ALLOW_DB) {
   assertLocalDatabaseUrl(process.env.DATABASE_URL || "");
   process.env.CHAT_AUTH_SECRET = process.env.CHAT_AUTH_SECRET || "chat-photo-unit-secret";
   process.env.CHAT_INTERNAL_SECRET = process.env.CHAT_INTERNAL_SECRET || "chat-photo-unit-internal";
+  process.env.SESSION_SECRET = process.env.SESSION_SECRET || "phase1-session-test";
 
   const store = createMemoryCourseReportPhotoStore();
   const storeStats = instrumentPhotoStore(store);
@@ -3676,6 +3677,7 @@ if (!ALLOW_DB) {
         displayName: user.username,
         role: "admin",
         team: "-",
+        sv: 0,
         iat: nowSec,
         exp: nowSec + 1800,
       });
@@ -3755,6 +3757,7 @@ if (!ALLOW_DB) {
         displayName: user.username,
         role: "admin",
         team: "-",
+        sv: 0,
         iat: nowSec - 2000,
         exp: nowSec - 10,
       });
@@ -3780,6 +3783,7 @@ if (!ALLOW_DB) {
         displayName: other.username,
         role: "caddy",
         team: "-",
+        sv: 0,
         iat: nowSec,
         exp: nowSec + 1800,
       });
@@ -3801,6 +3805,7 @@ if (!ALLOW_DB) {
         displayName: other.username,
         role: "caddy",
         team: "-",
+        sv: 0,
         iat: nowSec,
         exp: nowSec + 1800,
       });
