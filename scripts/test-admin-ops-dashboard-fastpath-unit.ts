@@ -36,6 +36,7 @@ import {
   setPublishedOpsDutySheetLoaderForTests,
 } from "../src/lib/opsDutySheetFetch";
 import type { OffSheet } from "../src/lib/offSheetParser";
+import { buildOpsDutySheetTestSheets } from "../src/lib/opsDutySheetParser";
 import type { AvailabilityWithSlotGrid } from "../src/lib/availabilityService";
 import { buildTeamSlotGrid } from "../src/lib/availabilitySlotGrid";
 import { computeAvailability } from "../src/lib/availabilityEngine";
@@ -81,6 +82,18 @@ const roster = [
     caddyType: "HOUSE",
   },
 ];
+
+function opsSheetsDateFound(ymd: string) {
+  return buildOpsDutySheetTestSheets([
+    {
+      name: "1001~1014",
+      startDate: ymd,
+      week1Dates: [ymd, "2099-01-02", "2099-01-03", "2099-01-04", "2099-01-05", "2099-01-06", "2099-01-07"],
+      week2Dates: ["2099-01-08", "2099-01-09", "2099-01-10", "2099-01-11", "2099-01-12", "2099-01-13", "2099-01-14"],
+      week1Names: [{}],
+    },
+  ]);
+}
 
 function offSheetsFor(ymd: string, names: string[]): OffSheet[] {
   const [y, m, d] = ymd.split("-");
@@ -149,7 +162,7 @@ function sourceDeps(opts?: {
     },
     fetchOpsDutySheets: async () => {
       if (opts?.failAll) throw new Error("ops_duty_sheet_failed");
-      return [];
+      return opsSheetsDateFound(DATE_A);
     },
   };
 }

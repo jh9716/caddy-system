@@ -16,11 +16,16 @@ import {
   type OpsDutyOverrideInput,
 } from "../src/lib/opsDutyEffective";
 import { resolveEffectiveOpsDuty } from "../src/lib/opsDutyEffectiveService";
+import { loadAdminOpsDashboardSource } from "../src/lib/adminOpsDashboardSource";
+import { loadAdminOpsDashboardDbFirst } from "../src/lib/adminOpsDashboardFastPath";
 import {
   mergedDutyExcelEntriesFromReadOnly,
   opsDutyPanelRowsFromReadOnly,
+  opsDutyReadCompleteForSnapshot,
   resolveOpsDutyReadOnly,
 } from "../src/lib/opsDutyReadOnlySource";
+import { filledMarshalSlots } from "../src/lib/opsStatusPanelView";
+import { sortMarshalSlotLabels } from "../src/lib/unavailablePanelView";
 import { buildOpsDutySheetTestSheets } from "../src/lib/opsDutySheetParser";
 import { OPS_DUTY_ROLE_KEYS } from "../src/lib/opsDutyRoleKeys";
 import { isOpsDutyRoleKey } from "../src/lib/opsDutyRoleKeys";
@@ -726,6 +731,147 @@ section("non-operational FINALIZED monthly does not resurrect stored marshal");
   assert(
     !merged.some((entry) => entry.roleKey === "마샬_조출_1" && entry.rawName === "저장마샬"),
     "exclusion entries do not revive stored marshal"
+  );
+  assert(
+    !merged.some((entry) => entry.rawName === "퇴사월마샬"),
+    "retired monthly not in overlay names"
+  );
+}
+
+section("required Sheet marshal fallback failure is incomplete");
+{
+  const stored = [
+    storedRow("당번_조출_1", "DUTY_AM", 10, "당번A"),
+    storedRow("조장_1", "LEADER", 11, "조장A"),
+  ];
+  const caddies = rosterFrom([
+    { id: 10, name: "당번A" },
+    { id: 11, name: "조장A" },
+  ]);
+  const failed = await resolveOpsDutyReadOnly(DATE, {
+    listDuties: async () => stored,
+    listMonthlyMarshal: async () => [],
+    fetchOpsDutySheets: async () => {
+      throw new Error("ops_duty_sheet_failed");
+    },
+  });
+  assert(failed.source === "stored", "stored duty/leader still readable");
+  assert(failed.error === "ops_duty_sheet_failed", "required Sheet fallback failure is explicit");
+  assert(!opsDutyReadCompleteForSnapshot(failed), "snapshot complete=false");
+  const failedRows = opsDutyPanelRowsFromReadOnly(failed, caddies);
+  assert(failedRows.some((row) => row.caddyId === 10), "stored duty remains");
+  assert(failedRows.some((row) => row.caddyId === 11), "stored leader remains");
+  assert(
+    !failedRows.some((row) => String(row.roleKey).startsWith("마샬_")),
+    "does not invent stale marshal"
+  );
+
+  const okEmpty = await resolveOpsDutyReadOnly(SHEET_DATE, {
+    listDuties: async () => stored,
+    listMonthlyMarshal: async () => [],
+    fetchOpsDutySheets: async () =>
+      buildOpsDutySheetTestSheets([
+        {
+          name: "0301~0314",
+          startDate: SHEET_DATE,
+          week1Dates: [
+            SHEET_DATE,
+            "2099-03-09",
+            "2099-03-10",
+            "2099-03-11",
+            "2099-03-12",
+            "2099-03-13",
+            "2099-03-14",
+          ],
+          week2Dates: [
+            "2099-03-15",
+            "2099-03-16",
+            "2099-03-17",
+            "2099-03-18",
+            "2099-03-19",
+            "2099-03-20",
+            "2099-03-21",
+          ],
+          week1Names: [{ 당번_조출_1: "시트당번무시" }],
+        },
+      ]),
+  });
+  assert(okEmpty.source === "stored" && okEmpty.error === null, "successful empty Sheet is not failure");
+  assert(opsDutyReadCompleteForSnapshot(okEmpty), "absent marshal key after successful Sheet read is complete");
+}
+
+section("retired monthly hidden on dashboard full source and DB-first");
+{
+  const stored = [
+    storedRow("당번_조출_1", "DUTY_AM", 10, "당번A"),
+    storedRow("마샬_조출_1", "MARSHAL_AM", 20, "저장마샬"),
+  ];
+  const monthly = [
+    {
+      ...monthlyRow("마샬_조출_1", 30, "퇴사월마샬", "MANUAL"),
+      employmentStatus: "RETIRED",
+    },
+  ];
+  const roster = [
+    ...rosterFrom([
+      { id: 10, name: "당번A" },
+      { id: 20, name: "저장마샬" },
+    ]),
+    {
+      id: 30,
+      name: "퇴사월마샬",
+      team: "1조",
+      teamOrder: 30,
+      employmentStatus: "RETIRED" as const,
+      caddyType: "HOUSE" as const,
+    },
+  ];
+  const mockAvail = async (ymd: string) =>
+    applyDailyExternalExclusions({
+      availability: computeAvailability({ date: ymd, caddies: roster, assignments: [] }),
+      caddies: roster,
+      offNames: [],
+      dutyEntries: [],
+    });
+  const full = await loadAdminOpsDashboardSource(DATE, {
+    loadAvailability: mockAvail,
+    listDuties: async () => stored,
+    listMonthlyMarshal: async () => monthly,
+    fetchOffSheets: async () => [],
+    fetchOpsDutySheets: async () => [],
+  });
+  const fullMarshal = full.dashboard.opsDuties.find((g) => g.role === "MARSHAL_AM");
+  assert(!fullMarshal?.names.includes("퇴사월마샬"), "dashboard full-source hides retired monthly");
+  assert(!fullMarshal?.names.includes("저장마샬"), "dashboard full-source does not resurrect stored marshal");
+  assert(full.dashboard.opsDuties.some((g) => g.role === "DUTY_AM" && g.names.includes("당번A")), "dashboard duty remains");
+
+  const dbFirst = await loadAdminOpsDashboardDbFirst(DATE, {
+    listRoster: async () => roster,
+    listDuties: async () => stored,
+    listMonthlyMarshal: async () => monthly,
+  });
+  const firstMarshal = dbFirst.opsDuties.find((g) => g.role === "MARSHAL_AM");
+  assert(!firstMarshal?.names.includes("퇴사월마샬"), "dashboard DB-first hides retired monthly");
+  assert(!firstMarshal?.names.includes("저장마샬"), "dashboard DB-first does not resurrect stored marshal");
+}
+
+section("3 AM + 2 PM marshal display order");
+{
+  assert(
+    sortMarshalSlotLabels(["후출2", "조출3", "후출1", "조출1", "조출2"]).join(",") ===
+      "조출1,조출2,조출3,후출1,후출2",
+    "sortMarshalSlotLabels AM then PM by index"
+  );
+  const filled = filledMarshalSlots([
+    { label: "후출1", people: [{ caddyId: 4, name: "C", badges: [] }] },
+    { label: "조출1", people: [{ caddyId: 1, name: "A", badges: [] }] },
+    { label: "조출3", people: [{ caddyId: 3, name: "A3", badges: [] }] },
+    { label: "조출2", people: [{ caddyId: 2, name: "B", badges: [] }] },
+    { label: "후출2", people: [{ caddyId: 5, name: "D", badges: [] }] },
+  ]);
+  assert(
+    filled.map((slot) => slot.label).join(",") === "조출1,조출2,조출3,후출1,후출2",
+    "3 AM + 2 PM display order"
   );
 }
 

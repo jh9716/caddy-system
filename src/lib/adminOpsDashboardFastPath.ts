@@ -100,9 +100,20 @@ export async function loadAdminOpsDashboardDbFirst(
     (row) => normalizeEmploymentStatus(row.employmentStatus) !== "RETIRED"
   );
   const now = new Date(deps.nowMs ?? Date.now());
+  const monthlyForDisplay = monthly.map((row) => {
+    const current = caddies.find((caddy) => Number(caddy.id) === Number(row.caddyId));
+    return current
+      ? {
+          ...row,
+          employmentStatus:
+            String(current.employmentStatus || row.employmentStatus || "") ||
+            row.employmentStatus,
+        }
+      : row;
+  });
   const mergedDuty = overlayMonthlyMarshalDutyEntries(
     dutyEntriesFromStored(stored),
-    monthly
+    monthlyForDisplay
   );
   const opsDutyNames =
     mergedDuty.length > 0

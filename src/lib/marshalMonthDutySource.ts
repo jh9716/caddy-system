@@ -271,6 +271,7 @@ export function overlayMonthlyMarshalDutyEntries(
   const extra: DutyExcelEntry[] = [];
   for (const row of monthly) {
     if (!isMarshalMonthDutyRoleKey(row.roleKey)) continue;
+    if (!isOperationalCaddy(row)) continue;
     const rawName = String(row.rawName || row.name || "").trim();
     if (!rawName) continue;
     extra.push({

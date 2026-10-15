@@ -23,6 +23,7 @@ import { fetchPublishedOpsDutySheets } from "@/lib/opsDutySheetFetch";
 import { type OpsDutySheet } from "@/lib/opsDutySheetParser";
 import {
   mergedDutyExcelEntriesFromReadOnly,
+  opsDutyReadCompleteForSnapshot,
   resolveOpsDutyReadOnly,
 } from "@/lib/opsDutyReadOnlySource";
 import type { MonthlyMarshalDutyRow } from "@/lib/marshalMonthDutySource";
@@ -108,8 +109,7 @@ export async function loadAdminOpsDashboardSource(
   const dutyError = resolvedDuty.error;
 
   const offOk = Boolean(offSheets && offDateFound && !offError);
-  const dutyOk =
-    dutySource === "stored" || (dutySource === "sheet" && dutyEntries.length > 0);
+  const dutyOk = opsDutyReadCompleteForSnapshot(resolvedDuty);
   const completeForSnapshot = offOk && dutyOk;
   const quality: AdminOpsSourceQuality = completeForSnapshot ? "complete" : "fallback";
   let skipReason: string | null = null;

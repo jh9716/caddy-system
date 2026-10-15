@@ -137,6 +137,7 @@ export async function resolveOpsDutyReadOnly(
           source: "stored",
           stored,
           sheetEntries: loaded.entries,
+          // Successful Sheet read: missing marshal keys are normal `none`.
           error: null,
         },
         monthlyMarshal
@@ -158,7 +159,8 @@ export async function resolveOpsDutyReadOnly(
           source: "stored",
           stored,
           sheetEntries: [],
-          error: null,
+          error:
+            error instanceof Error ? error.message : "ops_duty_sheet_failed",
         },
         monthlyMarshal
       );
@@ -173,6 +175,15 @@ export async function resolveOpsDutyReadOnly(
       monthlyMarshal
     );
   }
+}
+
+/** Snapshot/dashboard completeness. stored + required Sheet fallback failure is incomplete. */
+export function opsDutyReadCompleteForSnapshot(
+  resolved: ResolveOpsDutyReadOnlyResult
+): boolean {
+  if (resolved.error) return false;
+  if (resolved.source === "stored") return true;
+  return resolved.source === "sheet" && resolved.sheetEntries.length > 0;
 }
 
 export function mergedDutyExcelEntriesFromReadOnly(

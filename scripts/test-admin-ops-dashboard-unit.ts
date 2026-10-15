@@ -25,6 +25,7 @@ import {
 } from "../src/lib/adminOpsDashboardSource";
 import {
   mergedDutyExcelEntriesFromReadOnly,
+  opsDutyReadCompleteForSnapshot,
   resolveOpsDutyReadOnly,
 } from "../src/lib/opsDutyReadOnlySource";
 import { opsDutyRoleFromKind } from "../src/lib/dailyOpsDuty";
@@ -185,8 +186,7 @@ async function loadAdminOpsDashboardSourceSequential(
   const dutySource = resolvedDuty.source;
   const dutyError = resolvedDuty.error;
   const offOk = Boolean(offSheets && offDateFound && !offError);
-  const dutyOk =
-    dutySource === "stored" || (dutySource === "sheet" && dutyEntries.length > 0);
+  const dutyOk = opsDutyReadCompleteForSnapshot(resolvedDuty);
   const completeForSnapshot = offOk && dutyOk;
   const skipReason = !offOk
     ? offError || "off_sheet_incomplete"
@@ -711,7 +711,15 @@ section("read-only OFF/ops source overlay");
     fetchOffSheets: async () => [offSheetForDate(date, ["이휴무"])],
     fetchOpsDutySheets: async () => {
       writes.push("marshal_sheet_fallback");
-      return [];
+      return buildOpsDutySheetTestSheets([
+        {
+          name: "0901~0914",
+          startDate: date,
+          week1Dates: [date, "2099-01-02", "2099-01-03", "2099-01-04", "2099-01-05", "2099-01-06", "2099-01-07"],
+          week2Dates: ["2099-01-08", "2099-01-09", "2099-01-10", "2099-01-11", "2099-01-12", "2099-01-13", "2099-01-14"],
+          week1Names: [{}],
+        },
+      ]);
     },
   });
   assert(loaded.dashboard.availability.offCount === 1, "OFF Sheet 휴무가 offCount에 반영");
