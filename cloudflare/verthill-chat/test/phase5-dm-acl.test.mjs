@@ -136,6 +136,60 @@ function dropDmMember(persistTo, roomId, userId) {
   return left;
 }
 
+function addDmMember(persistTo, roomId, userId) {
+  const file = findDirectorySqlite(persistTo);
+  assert.ok(file, "Directory sqlite exists before extra seed");
+  const db = new DatabaseSync(file);
+  db.prepare(
+    `INSERT OR IGNORE INTO members (room_id, user_id, display_name, role, team, joined_at)
+     VALUES (?, ?, ?, 'caddy', '-', ?)`
+  ).run(roomId, userId, `extra-${userId}`, new Date().toISOString());
+  db.prepare(
+    `UPDATE rooms SET member_count = (SELECT COUNT(*) FROM members WHERE room_id = ?) WHERE room_id = ?`
+  ).run(roomId, roomId);
+  const members = db
+    .prepare("SELECT user_id FROM members WHERE room_id = ?")
+    .all(roomId)
+    .map((row) => Number(row.user_id))
+    .sort((a, b) => a - b);
+  const count = Number(
+    db.prepare("SELECT member_count FROM rooms WHERE room_id = ?").get(roomId)?.member_count || 0
+  );
+  db.close();
+  return { members, count };
+}
+
+function waitClose(ws, timeoutMs = 8000) {
+  return new Promise((resolve, reject) => {
+    if (ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+      resolve({ code: 4003, reason: "already-closing" });
+      return;
+    }
+    const timer = setTimeout(() => reject(new Error("close timeout")), timeoutMs);
+    const finish = (ev) => {
+      clearTimeout(timer);
+      clearInterval(poll);
+      resolve(ev);
+    };
+    ws.addEventListener("close", (ev) => finish(ev));
+    ws.addEventListener("message", (event) => {
+      try {
+        const data = JSON.parse(String(event.data));
+        if (data?.type === "error" && data.code === "room_forbidden") {
+          finish({ code: 4003, reason: "room_forbidden" });
+        }
+      } catch {
+        // ignore
+      }
+    });
+    const poll = setInterval(() => {
+      if (ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+        finish({ code: 4003, reason: "readyState-closing" });
+      }
+    }, 50);
+  });
+}
+
 test("phase5 dm acl: both sides, idempotent, repair, third-party, tokens", async () => {
   const persistTo = mkdtempSync(join(tmpdir(), "vh-dm-acl-"));
   const a = { userId: 8, displayName: "신정훈", role: "caddy", team: "7조" };
@@ -145,32 +199,10 @@ test("phase5 dm acl: both sides, idempotent, repair, third-party, tokens", async
   const staleB = { userId: 20, displayName: "B20", role: "caddy", team: "4조" };
   const roomId = "dm_8_40";
   const staleRoom = "dm_10_20";
+  const extraRoom = "dm_11_21";
+  const extraA = { userId: 11, displayName: "A11", role: "caddy", team: "3조" };
+  const extraB = { userId: 21, displayName: "B21", role: "caddy", team: "4조" };
   const customId = "room_bbbbbbbbbbbbbbbb";
-
-  const first = await startWrangler({ persistTo });
-  try {
-    const aTok = signTestTokenV2(a);
-    const staleATok = signTestTokenV2(staleA);
-    const staleBTok = signTestTokenV2(staleB);
-    const seed = await createDm(first.port, staleRoom, staleA.userId, [staleA, staleB]);
-    assert.equal(seed.status, 200, "seed stale room create");
-    assert.notEqual(seed.body.idempotent, true);
-    const seedMembers = await listMembers(first.port, staleRoom, staleATok.token);
-    assert.deepEqual(
-      seedMembers.members.map((m) => m.userId).sort((x, y) => x - y),
-      [10, 20]
-    );
-    const staleBOpen = await wsStatus(first.port, staleRoom, staleBTok.token);
-    assert.equal(staleBOpen.status, 426, "complete seed allows B HTTP upgrade_required");
-    const aOpen = await connect(first.port, staleRoom, staleATok.token);
-    await waitMessage(aOpen, (d) => d.type === "history");
-    aOpen.close();
-  } finally {
-    await stopWrangler(first.child);
-  }
-
-  const remaining = dropDmMember(persistTo, staleRoom, 20);
-  assert.deepEqual(remaining, [10], "persist surgery leaves only creator member");
 
   const { port, child, mock } = await startWrangler({ persistTo });
   try {
@@ -179,6 +211,22 @@ test("phase5 dm acl: both sides, idempotent, repair, third-party, tokens", async
     const cTok = signTestTokenV2(c);
     const staleATok = signTestTokenV2(staleA);
     const staleBTok = signTestTokenV2(staleB);
+
+    const seed = await createDm(port, staleRoom, staleA.userId, [staleA, staleB]);
+    assert.equal(seed.status, 200, "seed stale room create");
+    assert.notEqual(seed.body.idempotent, true);
+    const seedMembers = await listMembers(port, staleRoom, staleATok.token);
+    assert.deepEqual(
+      seedMembers.members.map((m) => m.userId).sort((x, y) => x - y),
+      [10, 20]
+    );
+    const staleBOpen = await wsStatus(port, staleRoom, staleBTok.token);
+    assert.equal(staleBOpen.status, 426, "complete seed allows B HTTP upgrade_required");
+    const seedOpen = await connect(port, staleRoom, staleATok.token);
+    await waitMessage(seedOpen, (d) => d.type === "history");
+    seedOpen.close();
+    const remaining = dropDmMember(persistTo, staleRoom, 20);
+    assert.deepEqual(remaining, [10], "live sqlite surgery leaves only creator member");
 
     const missingB = await wsStatus(port, staleRoom, staleBTok.token);
     assert.equal(missingB.status, 403, "stale missing member cannot open");
@@ -213,6 +261,71 @@ test("phase5 dm acl: both sides, idempotent, repair, third-party, tokens", async
       [10, 20],
       "wrong pair leaves membership untouched"
     );
+
+    const extraATok = signTestTokenV2(extraA);
+    const extraBTok = signTestTokenV2(extraB);
+    const extraSeed = await createDm(port, extraRoom, extraA.userId, [extraA, extraB], 7);
+    assert.equal(extraSeed.status, 200, "seed extra-member room create");
+    const extrasSeeded = addDmMember(persistTo, extraRoom, 99);
+    assert.deepEqual(extrasSeeded.members, [11, 21, 99], "live sqlite seed adds third party C");
+    assert.equal(extrasSeeded.count, 3, "stale extra member_count is 3");
+    const extraBefore = await listMembers(port, extraRoom, extraATok.token);
+    assert.deepEqual(
+      extraBefore.members.map((m) => m.userId).sort((x, y) => x - y),
+      [11, 21, 99],
+      "stale extras [A,B,C] visible before repair"
+    );
+    assert.equal((await listRooms(port, cTok.token)).rooms.some((r) => r.roomId === extraRoom), true);
+    assert.equal((await wsStatus(port, extraRoom, cTok.token)).status, 426, "C can still open before repair");
+    const cOpen = await connect(port, extraRoom, cTok.token);
+    await waitMessage(cOpen, (d) => d.type === "history");
+    const cClosed = waitClose(cOpen, 12000);
+
+    const wrongExtra = await createDm(
+      port,
+      extraRoom,
+      extraA.userId,
+      [extraA, { ...c, userId: 99 }],
+      8
+    );
+    assert.equal(wrongExtra.status, 400, "wrong pair cannot add/delete C");
+    assert.equal(wrongExtra.body.error, "dm_pair_mismatch");
+    const stillExtras = await listMembers(port, extraRoom, extraATok.token);
+    assert.deepEqual(
+      stillExtras.members.map((m) => m.userId).sort((x, y) => x - y),
+      [11, 21, 99],
+      "wrong pair leaves extra member C"
+    );
+
+    const extraRepaired = await createDm(port, extraRoom, extraA.userId, [extraA, extraB], 9);
+    assert.equal(extraRepaired.status, 200, "A/B grant removes extra C");
+    assert.equal(extraRepaired.body.repaired, true);
+    assert.deepEqual(
+      (Array.isArray(extraRepaired.body.removed) ? extraRepaired.body.removed : [])
+        .map((id) => Number(id))
+        .sort((x, y) => x - y),
+      [99],
+      `repair reports removed C: ${JSON.stringify(extraRepaired.body)}`
+    );
+    assert.equal(extraRepaired.body.evictStatus, 200, `Worker ChatRoom evict poke ok: ${JSON.stringify(extraRepaired.body)}`);
+    assert.ok(Number(extraRepaired.body.evicted) >= 1, `Worker evict closed C socket: ${JSON.stringify(extraRepaired.body)}`);
+    const closed = await cClosed;
+    assert.ok(closed, `open C socket closed after evict: ${JSON.stringify(extraRepaired.body)}`);
+    assert.notEqual(cOpen.readyState, WebSocket.OPEN, "C residual socket is not left open");
+    const extraAfter = await listMembers(port, extraRoom, extraATok.token);
+    assert.deepEqual(
+      extraAfter.members.map((m) => m.userId).sort((x, y) => x - y),
+      [11, 21],
+      "members exactly [A, B]"
+    );
+    const extraSummary = (await listRooms(port, extraATok.token)).rooms.find((r) => r.roomId === extraRoom);
+    assert.equal(extraSummary?.memberCount, 2, "member_count is 2 after exact-pair repair");
+    assert.equal((await listRooms(port, cTok.token)).rooms.some((r) => r.roomId === extraRoom), false, "C list drops DM");
+    const cDenied = await wsStatus(port, extraRoom, cTok.token);
+    assert.equal(cDenied.status, 403, "C new WS forbidden");
+    assert.equal(cDenied.body.error, "room_forbidden");
+    assert.equal((await wsStatus(port, extraRoom, extraATok.token)).status, 426, "A still opens extra room");
+    assert.equal((await wsStatus(port, extraRoom, extraBTok.token)).status, 426, "B still opens extra room");
 
     const created = await createDm(port, roomId, a.userId, [a, b], 3);
     assert.equal(created.status, 200);

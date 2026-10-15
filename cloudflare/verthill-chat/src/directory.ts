@@ -29,6 +29,7 @@ import {
   type ChatTokenClaims,
 } from "./token";
 import {
+  CHAT_ROOM_EVICT_PATH,
   CHAT_ROOM_REVOKE_PATH,
   CHAT_SESSION_EPOCH_PATH,
   CHAT_SESSION_REVOKE_PATH,
@@ -367,7 +368,7 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
       members: MemberSnap[];
     };
     if (isDmRoomId(body.roomId)) {
-      return this.handleInternalCreateDm(body);
+      return await this.handleInternalCreateDm(body);
     }
     if (!isCustomRoomId(body.roomId)) {
       return json({ error: "invalid_room" }, 400);
@@ -409,11 +410,11 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
     return json({ ok: true, roomId: body.roomId });
   }
 
-  private handleInternalCreateDm(body: {
+  private async handleInternalCreateDm(body: {
     roomId: string;
     ownerUserId: number;
     members: MemberSnap[];
-  }): Response {
+  }): Promise<Response> {
     const existingRow = this.ctx.storage.sql
       .exec(`SELECT room_id, type FROM rooms WHERE room_id = ?`, body.roomId)
       .toArray()[0];
@@ -457,6 +458,20 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
         now
       );
     }
+
+    const removed = plan.action === "repair" ? plan.remove : [];
+    for (const userId of removed) {
+      this.ctx.storage.sql.exec(
+        `DELETE FROM members WHERE room_id = ? AND user_id = ?`,
+        body.roomId,
+        userId
+      );
+      this.ctx.storage.sql.exec(
+        `DELETE FROM read_state WHERE room_id = ? AND user_id = ?`,
+        body.roomId,
+        userId
+      );
+    }
     this.ctx.storage.sql.exec(
       `UPDATE rooms SET member_count = (
          SELECT COUNT(*) FROM members WHERE room_id = ?
@@ -464,13 +479,36 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
       body.roomId,
       body.roomId
     );
-    this.broadcastRooms([plan.pair[0], plan.pair[1]]);
+    this.broadcastRooms([...plan.pair, ...removed]);
+    if (removed.length) {
+      await this.evictChatRoomMembers(body.roomId, removed);
+    }
     return json({
       ok: true,
       roomId: body.roomId,
       idempotent: plan.action === "idempotent",
       repaired: plan.action === "repair",
+      removed,
     });
+  }
+
+  private async evictChatRoomMembers(roomId: string, userIds: number[]) {
+    const ns = this.env.CHAT_ROOM;
+    if (!ns || userIds.length === 0) return;
+    const secret = chatInternalSecret(this.env);
+    if (!secret) return;
+    try {
+      const headers = await internalAuthHeaders(secret, CHAT_ROOM_EVICT_PATH);
+      await ns.get(ns.idFromName(roomId)).fetch(
+        new Request(`https://chat-room${CHAT_ROOM_EVICT_PATH}`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ userIds }),
+        })
+      );
+    } catch {
+      // Membership is already exact. New sockets fail closed. Open sockets may linger.
+    }
   }
 
   private async handleInternalMessage(request: Request): Promise<Response> {

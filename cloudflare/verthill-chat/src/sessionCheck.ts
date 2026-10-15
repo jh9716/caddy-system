@@ -12,6 +12,7 @@ export const CHAT_SESSION_CHECK_PATH = "/api/chat/session-check";
 export const CHAT_SESSION_REVOKE_PATH = "/internal/session-revoke";
 export const CHAT_SESSION_EPOCH_PATH = "/internal/session-epoch";
 export const CHAT_ROOM_REVOKE_PATH = "/internal/revoke-user";
+export const CHAT_ROOM_EVICT_PATH = "/internal/evict-members";
 export const SESSION_CHECK_TIMEOUT_MS = 2500;
 
 export type SessionCheckEnv = {
@@ -44,6 +45,21 @@ export function parseSessionRevokeBody(raw: unknown): {
   if (!Number.isInteger(userId) || userId <= 0) return null;
   if (!Number.isInteger(sessionVersion) || sessionVersion < 0) return null;
   return { userId, sessionVersion };
+}
+
+export function parseEvictMembersBody(raw: unknown): { userIds: number[] } | null {
+  if (!raw || typeof raw !== "object") return null;
+  const rec = raw as { userIds?: unknown };
+  if (!Array.isArray(rec.userIds) || rec.userIds.length > 32) return null;
+  const userIds: number[] = [];
+  const seen = new Set<number>();
+  for (const value of rec.userIds) {
+    const userId = Number(value);
+    if (!Number.isInteger(userId) || userId <= 0 || seen.has(userId)) continue;
+    seen.add(userId);
+    userIds.push(userId);
+  }
+  return { userIds };
 }
 
 export async function assertChatSessionCurrent(

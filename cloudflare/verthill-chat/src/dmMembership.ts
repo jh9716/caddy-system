@@ -10,7 +10,7 @@ export type CanonicalDmRejectError =
 export type CanonicalDmPlan =
   | { action: "reject"; error: CanonicalDmRejectError; status: 400 | 409 }
   | { action: "create"; pair: [number, number] }
-  | { action: "repair"; pair: [number, number]; add: number[] }
+  | { action: "repair"; pair: [number, number]; add: number[]; remove: number[] }
   | { action: "idempotent"; pair: [number, number] };
 
 export function uniquePositiveUserIds(raw: Iterable<unknown>): number[] {
@@ -26,8 +26,8 @@ export function uniquePositiveUserIds(raw: Iterable<unknown>): number[] {
 }
 
 /**
- * Valid HMAC create grant + canonical pair is enough to ensure both members.
- * Never adds a third party. Never rewrites a non-DM room.
+ * Valid HMAC create grant + exact canonical pair is enough to restore
+ * members to {low, high}. Extra userIds are removed. Never rewrites a non-DM room.
  */
 export function planCanonicalDmCreate(input: {
   roomId: string;
@@ -60,12 +60,14 @@ export function planCanonicalDmCreate(input: {
     if (String(input.existingType) !== "DM") {
       return { action: "reject", error: "room_exists", status: 409 };
     }
-    const existing = new Set(uniquePositiveUserIds(input.existingMemberIds));
-    const add = [pair.low, pair.high].filter((id) => !existing.has(id));
-    if (add.length === 0) {
+    const existing = uniquePositiveUserIds(input.existingMemberIds);
+    const existingSet = new Set(existing);
+    const add = [pair.low, pair.high].filter((id) => !existingSet.has(id));
+    const remove = existing.filter((id) => id !== pair.low && id !== pair.high);
+    if (add.length === 0 && remove.length === 0) {
       return { action: "idempotent", pair: [pair.low, pair.high] };
     }
-    return { action: "repair", pair: [pair.low, pair.high], add };
+    return { action: "repair", pair: [pair.low, pair.high], add, remove };
   }
 
   return { action: "create", pair: [pair.low, pair.high] };

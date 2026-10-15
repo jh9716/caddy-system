@@ -62,10 +62,12 @@ import {
 } from "./token";
 import { handleChatMediaRequest, type ChatMediaBucket } from "./chatMedia";
 import {
+  CHAT_ROOM_EVICT_PATH,
   CHAT_ROOM_REVOKE_PATH,
   CHAT_SESSION_EPOCH_PATH,
   CHAT_SESSION_REVOKE_PATH,
   assertChatSessionCurrent,
+  parseEvictMembersBody,
   parseSessionRevokeBody,
 } from "./sessionCheck";
 
@@ -371,7 +373,7 @@ async function createRoomFromGrant(request: Request, env: Env): Promise<Response
   const grant = await verifyCreateGrant(String(body.grant || ""), secret);
   if (!grant) return json({ error: "invalid_grant" }, 401);
   const headers = await internalAuthHeaders(secret, "/internal/create");
-  return directoryStub(env).fetch(
+  const dirRes = await directoryStub(env).fetch(
     new Request("https://chat-directory/internal/create", {
       method: "POST",
       headers,
@@ -383,6 +385,56 @@ async function createRoomFromGrant(request: Request, env: Env): Promise<Response
       }),
     })
   );
+  const data = (await dirRes.json().catch(() => null)) as {
+    error?: string;
+    ok?: boolean;
+    roomId?: string;
+    idempotent?: boolean;
+    repaired?: boolean;
+    removed?: unknown;
+    evicted?: number;
+    evictStatus?: number;
+  } | null;
+  if (dirRes.ok && isDmRoomId(grant.roomId)) {
+    const removed = Array.isArray(data?.removed)
+      ? data.removed.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)
+      : [];
+    if (removed.length) {
+      const evict = await evictChatRoomMembers(env, grant.roomId, removed);
+      if (data && evict) {
+        data.evicted = evict.evicted;
+        data.evictStatus = evict.status;
+      }
+    }
+  }
+  return json(data ?? { error: "dm_create_failed" }, dirRes.status);
+}
+
+async function evictChatRoomMembers(
+  env: Env,
+  roomId: string,
+  userIds: number[]
+): Promise<{ status: number; evicted: number } | null> {
+  const secret = chatInternalSecret(env);
+  if (!secret || userIds.length === 0) return null;
+  try {
+    const headers = await internalAuthHeaders(secret, CHAT_ROOM_EVICT_PATH);
+    const res = await env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(roomId)).fetch(
+      new Request(`https://chat-room${CHAT_ROOM_EVICT_PATH}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ userIds }),
+      })
+    );
+    const body = (await res.json().catch(() => null)) as { evicted?: unknown } | null;
+    return {
+      status: res.status,
+      evicted: Number(body?.evicted || 0),
+    };
+  } catch {
+    // Membership is already exact. New sockets fail closed.
+    return { status: 0, evicted: 0 };
+  }
 }
 
 type CreateGrant = {
@@ -578,6 +630,12 @@ export class ChatRoom extends DurableObject<Env> {
         session_version INTEGER NOT NULL
       )
     `);
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS evicted_members (
+        user_id INTEGER PRIMARY KEY,
+        evicted_at TEXT NOT NULL
+      )
+    `);
     void this.ensureRetentionAlarm();
   }
 
@@ -598,6 +656,27 @@ export class ChatRoom extends DurableObject<Env> {
       this.rememberRevoked(parsed.userId, parsed.sessionVersion);
       this.expireRevokedSockets(parsed.userId, parsed.sessionVersion);
       return json({ ok: true });
+    }
+    if (request.method === "POST" && url.pathname === CHAT_ROOM_EVICT_PATH) {
+      if (!(await verifyInternalRequest(request, this.env, url.pathname))) {
+        return json({ error: "forbidden" }, 403);
+      }
+      let evictBody: unknown;
+      try {
+        evictBody = await request.json();
+      } catch {
+        return json({ error: "invalid_payload" }, 400);
+      }
+      const evict = parseEvictMembersBody(evictBody);
+      if (!evict) return json({ error: "invalid_payload" }, 400);
+      this.rememberEvicted(evict.userIds);
+      const closed = this.evictMemberSockets(evict.userIds);
+      return json({
+        ok: true,
+        evicted: closed,
+        requested: evict.userIds.length,
+        sockets: this.ctx.getWebSockets().length,
+      });
     }
     if (request.method === "POST" && url.pathname === "/internal/retention") {
       if (!(await verifyInternalRequest(request, this.env, url.pathname))) {
@@ -853,26 +932,37 @@ export class ChatRoom extends DurableObject<Env> {
     if ("claims" in raw && raw.claims) {
       if (raw.claims.exp <= Math.floor(Date.now() / 1000)) return this.expire(ws);
       if (this.isRevoked(raw.claims)) return this.expire(ws, "stale_session");
+      if (this.isEvicted(raw.claims.userId)) return this.expire(ws, "room_forbidden");
       return raw;
     }
     const claims = raw as ChatTokenClaims;
     if (claims.exp <= Math.floor(Date.now() / 1000)) return this.expire(ws);
     if (this.isRevoked(claims)) return this.expire(ws, "stale_session");
+    if (this.isEvicted(claims.userId)) return this.expire(ws, "room_forbidden");
     return { claims, roomId: claims.v === 1 ? claims.room : "" };
   }
 
-  private expire(ws: WebSocket, code: "expired_token" | "stale_session" = "expired_token"): null {
+  private expire(
+    ws: WebSocket,
+    code: "expired_token" | "stale_session" | "room_forbidden" = "expired_token"
+  ): null {
+    const message =
+      code === "stale_session"
+        ? "session revoked"
+        : code === "room_forbidden"
+          ? "not a member"
+          : "token expired";
     try {
       sendJson(ws, {
         type: "error",
         code,
-        message: code === "stale_session" ? "session revoked" : "token expired",
+        message,
       });
     } catch {
       // still close
     }
     try {
-      ws.close(4008, code);
+      ws.close(code === "room_forbidden" ? 4003 : 4008, code);
     } catch {
       // ignore
     }
@@ -918,6 +1008,40 @@ export class ChatRoom extends DurableObject<Env> {
       if (!isChatSessionEpochStale(chatTokenSessionVersion(claims), sessionVersion)) continue;
       this.expire(socket, "stale_session");
     }
+  }
+
+  private rememberEvicted(userIds: number[]) {
+    const at = new Date().toISOString();
+    for (const userId of userIds) {
+      this.ctx.storage.sql.exec(
+        `INSERT INTO evicted_members (user_id, evicted_at) VALUES (?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET evicted_at = excluded.evicted_at`,
+        userId,
+        at
+      );
+    }
+  }
+
+  private isEvicted(userId: number): boolean {
+    const rows = this.ctx.storage.sql
+      .exec(`SELECT 1 AS ok FROM evicted_members WHERE user_id = ?`, userId)
+      .toArray();
+    return rows.length > 0;
+  }
+
+  private evictMemberSockets(userIds: number[]): number {
+    const deny = new Set(userIds);
+    if (deny.size === 0) return 0;
+    let closed = 0;
+    for (const socket of this.ctx.getWebSockets()) {
+      const attach = socket.deserializeAttachment() as SocketAttach | ChatTokenClaims | null;
+      if (!attach) continue;
+      const claims = "claims" in attach && attach.claims ? attach.claims : (attach as ChatTokenClaims);
+      if (!claims || !deny.has(Number(claims.userId))) continue;
+      this.expire(socket, "room_forbidden");
+      closed += 1;
+    }
+    return closed;
   }
 
   private messageSelectSql() {
@@ -1170,11 +1294,13 @@ export class ChatRoom extends DurableObject<Env> {
     if ("claims" in attach && attach.claims) {
       if (attach.claims.exp <= now) return this.expire(socket);
       if (this.isRevoked(attach.claims)) return this.expire(socket, "stale_session");
+      if (this.isEvicted(attach.claims.userId)) return this.expire(socket, "room_forbidden");
       return attach;
     }
     const claims = attach as ChatTokenClaims;
     if (claims.exp <= now) return this.expire(socket);
     if (this.isRevoked(claims)) return this.expire(socket, "stale_session");
+    if (this.isEvicted(claims.userId)) return this.expire(socket, "room_forbidden");
     return { claims, roomId: claims.v === 1 ? claims.room : "" };
   }
 

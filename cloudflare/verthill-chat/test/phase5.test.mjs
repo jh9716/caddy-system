@@ -18,6 +18,11 @@ test("phase5 dm worker wiring", () => {
   assert.match(index, /resolveMentionAll\(value\.mentionAll, senderRole, attach\.roomId\)/);
   assert.match(directory, /handleInternalCreateDm/);
   assert.match(directory, /planCanonicalDmCreate/);
+  assert.match(directory, /evictChatRoomMembers/);
+  assert.match(directory, /DELETE FROM members/);
+  assert.match(directory, /DELETE FROM read_state/);
+  assert.match(index, /CHAT_ROOM_EVICT_PATH|evictMemberSockets/);
+  assert.match(index, /evicted_members/);
   assert.match(directory, /type === "DM"/);
   assert.match(dmPlan, /dm_pair_mismatch/);
   assert.doesNotMatch(directory, /if \(!this\.isMember\(body\.roomId, body\.ownerUserId\)\)/);

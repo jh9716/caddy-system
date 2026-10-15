@@ -99,12 +99,29 @@ section("canonical DM membership plan");
   });
   assert(repaired.action === "repair", "missing peer is repairable");
   assert(repaired.action === "repair" && repaired.add.join(",") === "40", "repair adds only the missing peer");
+  assert(repaired.action === "repair" && repaired.remove.length === 0, "missing-peer repair does not delete");
   const empty = planCanonicalDmCreate({
     ...pair,
     existingType: "DM",
     existingMemberIds: [],
   });
   assert(empty.action === "repair" && empty.add.join(",") === "8,40", "zero members still repairable by valid grant");
+  const extras = planCanonicalDmCreate({
+    ...pair,
+    existingType: "DM",
+    existingMemberIds: [8, 40, 99],
+  });
+  assert(extras.action === "repair" && extras.remove.join(",") === "99", "extra third party is removed");
+  assert(extras.action === "repair" && extras.add.length === 0, "healthy pair is not re-added");
+  const mixed = planCanonicalDmCreate({
+    ...pair,
+    existingType: "DM",
+    existingMemberIds: [8, 99],
+  });
+  assert(
+    mixed.action === "repair" && mixed.add.join(",") === "40" && mixed.remove.join(",") === "99",
+    "missing peer add + extra remove"
+  );
   assert(
     planCanonicalDmCreate({
       roomId: "dm_8_40",
@@ -388,6 +405,10 @@ section("android back / source");
   assert(worker.includes("isDmRoomId"), "worker DM ACL");
   assert(dir.includes("handleInternalCreateDm"), "directory DM create");
   assert(dir.includes("planCanonicalDmCreate"), "directory uses shared DM plan");
+  assert(dir.includes("DELETE FROM members"), "directory deletes extra DM members");
+  assert(dir.includes("DELETE FROM read_state"), "directory clears extra read_state");
+  assert(worker.includes("evictMemberSockets"), "Worker evicts leftover extra sockets");
+  assert(worker.includes("evicted_members"), "room-local evict list for next message");
   assert(dmPlan.includes("dm_pair_mismatch"), "pair spoof rejected");
   assert(api.includes("self_dm"), "API rejects self DM");
   assert(api.includes("canonicalDmRoomId"), "API uses server pair");
