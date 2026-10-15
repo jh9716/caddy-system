@@ -137,7 +137,6 @@ import {
   resolveChatDeepLinkAction,
   resolveDirectoryHttpRoomsApply,
   resolveTargetedRoomResponse,
-  rollbackOptimisticChatRoom,
   upsertVisibleChatRoom,
   type ChatDeepLinkTargetedStatus,
 } from "@/lib/chatPhase6";
@@ -189,6 +188,15 @@ import {
   type MentionCandidate,
 } from "@/lib/chatMentions";
 import { ALL_ROOM_ID, isDmRoomId } from "@/lib/chatRooms";
+import {
+  CHAT_DM_OPEN_FAILED,
+  CHAT_DM_START_FAILED,
+  CHAT_WS_OPEN_TIMEOUT_MS,
+  diagnoseChatWsFailure,
+  formatChatClientError,
+  parseChatClientErrorCode,
+  type ChatSocketOpenResult,
+} from "@/lib/chatDmClient";
 import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
 
 type TokenPayload = {
@@ -559,7 +567,13 @@ export default function ChatClient() {
   }, [applyRooms]);
 
   const connectDirectoryRef = useRef<(info: TokenPayload) => void>(() => {});
-  const connectSocketRef = useRef<(info: TokenPayload, roomId: string) => Promise<void>>(async () => {});
+  const connectSocketRef = useRef<
+    (
+      info: TokenPayload,
+      roomId: string,
+      opts?: { waitForOpen?: boolean }
+    ) => Promise<ChatSocketOpenResult>
+  >(async () => ({ ok: true }));
 
   const scheduleDirectoryReconnect = useCallback((info: TokenPayload) => {
     clearTimer(dirTimerRef);
@@ -660,12 +674,16 @@ export default function ChatClient() {
   }, []);
 
   const connectSocket = useCallback(
-    async (info: TokenPayload, roomId: string) => {
-      if (!shouldConnectWithChatToken(info, tokenRef)) return;
+    async (
+      info: TokenPayload,
+      roomId: string,
+      opts?: { waitForOpen?: boolean }
+    ): Promise<ChatSocketOpenResult> => {
+      if (!shouldConnectWithChatToken(info, tokenRef)) return { ok: false, code: "stale_session" };
       const url = chatWsUrl({ roomId, token: info.token });
       if (!url) {
         setError("채팅 서버 주소가 없습니다.");
-        return;
+        return { ok: false, code: "chat_worker_unconfigured" };
       }
       const prev = wsRef.current;
       roomGenRef.current += 1;
@@ -866,6 +884,40 @@ export default function ChatClient() {
             return next;
           });
         }
+      });
+      if (!opts?.waitForOpen) return { ok: true };
+      return await new Promise<ChatSocketOpenResult>((resolve) => {
+        let settled = false;
+        const finish = (result: ChatSocketOpenResult) => {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timer);
+          ws.removeEventListener("open", onOpen);
+          ws.removeEventListener("error", onError);
+          ws.removeEventListener("close", onClose);
+          resolve(result);
+        };
+        const timer = window.setTimeout(() => {
+          finish({ ok: false, code: "ws_timeout" });
+        }, CHAT_WS_OPEN_TIMEOUT_MS);
+        const onOpen = () => finish({ ok: true });
+        const onError = () => {
+          void diagnoseChatWsFailure(url).then((code) => finish({ ok: false, code }));
+        };
+        const onClose = (ev: CloseEvent) => {
+          void diagnoseChatWsFailure(url, ev.code).then((code) => finish({ ok: false, code }));
+        };
+        if (ws.readyState === WebSocket.OPEN) {
+          finish({ ok: true });
+          return;
+        }
+        if (ws.readyState === WebSocket.CLOSING || ws.readyState === WebSocket.CLOSED) {
+          void diagnoseChatWsFailure(url).then((code) => finish({ ok: false, code }));
+          return;
+        }
+        ws.addEventListener("open", onOpen);
+        ws.addEventListener("error", onError);
+        ws.addEventListener("close", onClose);
       });
     },
     [connectDirectory, fetchToken, scheduleRoomReconnect, upsertLine]
@@ -1311,9 +1363,12 @@ export default function ChatClient() {
     };
   }, [sheet]);
 
-  async function openRoom(room: RoomSummary, opts?: { targetSeq?: number | null }) {
+  async function openRoom(
+    room: RoomSummary,
+    opts?: { targetSeq?: number | null }
+  ): Promise<ChatSocketOpenResult> {
     const info = await refreshIfNeeded();
-    if (!info) return;
+    if (!info) return { ok: false, code: "missing_token" };
     const urlSeq =
       typeof window !== "undefined"
         ? parseChatTargetSeqFromRoomUrl(room.roomId, window.location.search)
@@ -1374,7 +1429,11 @@ export default function ChatClient() {
       setMentionCandidates([]);
       mentionFetchedRef.current = "";
     }
-    await connectSocket(info, room.roomId);
+    const opened = await connectSocket(info, room.roomId, { waitForOpen: true });
+    if (!opened.ok && isDmRoomId(room.roomId)) {
+      setError(formatChatClientError(CHAT_DM_OPEN_FAILED, opened.code));
+    }
+    return opened;
   }
 
   useEffect(() => {
@@ -2182,7 +2241,9 @@ export default function ChatClient() {
     });
     const data = await res.json().catch(() => null);
     if (!res.ok) {
-      setError(data?.message || "1:1 채팅을 시작하지 못했습니다.");
+      setError(
+        formatChatClientError(data?.message || CHAT_DM_START_FAILED, data?.error || `http_${res.status}`)
+      );
       return;
     }
     setProfileTarget(null);
@@ -2207,13 +2268,15 @@ export default function ChatClient() {
       peerTeam: String(room.peerTeam || peer.team || "-"),
     };
     setRooms((prev) => upsertVisibleChatRoom(prev, optimistic));
+    const opened = await openRoom(optimistic);
+    if (!opened.ok) {
+      setError(formatChatClientError(CHAT_DM_OPEN_FAILED, opened.code || "dm_open_failed"));
+    }
     try {
-      await openRoom(optimistic);
       const info = tokenRef.current;
       if (info) await fetchRoomsHttp(info.token);
     } catch {
-      setRooms((prev) => rollbackOptimisticChatRoom(prev, optimistic.roomId));
-      setError("1:1 채팅을 열지 못했습니다.");
+      // Directory WS is the realtime source; HTTP refresh must not hide a created DM.
     }
   }
 
@@ -2341,7 +2404,11 @@ export default function ChatClient() {
             </button>
           </div>
           {loading ? <p className="vh-chat-status">입장 확인 중…</p> : null}
-          {error ? <p className="vh-chat-error">{error}</p> : null}
+          {error ? (
+            <p className="vh-chat-error" data-chat-error-code={parseChatClientErrorCode(error) || undefined}>
+              {error}
+            </p>
+          ) : null}
           {!directoryConnected && !loading ? (
             <p className="vh-chat-status">목록 연결 대기 중…</p>
           ) : null}
@@ -2456,7 +2523,11 @@ export default function ChatClient() {
               <span className="vh-chat-dot is-on" aria-hidden="true" />
             )}
           </div>
-          {error ? <p className="vh-chat-error">{error}</p> : null}
+          {error ? (
+            <p className="vh-chat-error" data-chat-error-code={parseChatClientErrorCode(error) || undefined}>
+              {error}
+            </p>
+          ) : null}
           <div
             ref={listRef}
             className="vh-chat-log"

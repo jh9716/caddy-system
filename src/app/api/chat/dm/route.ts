@@ -103,7 +103,11 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify({ grant }),
       cache: "no-store",
     });
-    const data = (await res.json().catch(() => null)) as { error?: string; idempotent?: boolean } | null;
+    const data = (await res.json().catch(() => null)) as {
+      error?: string;
+      idempotent?: boolean;
+      repaired?: boolean;
+    } | null;
     if (!res.ok) {
       return NextResponse.json(
         { error: data?.error || "dm_create_failed", message: "1:1 채팅을 시작하지 못했습니다." },
@@ -113,6 +117,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       idempotent: data?.idempotent === true,
+      repaired: data?.repaired === true,
       room: {
         roomId,
         name: hit.displayName,

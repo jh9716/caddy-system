@@ -117,6 +117,7 @@ section("android back room leave");
   const openStart = chat.indexOf("async function openRoom");
   const openEnd = chat.indexOf("async function saveNotifyMode", openStart);
   const openRoom = openStart >= 0 && openEnd > openStart ? chat.slice(openStart, openEnd) : "";
+  assert(openRoom.includes("waitForOpen: true"), "openRoom waits for socket authorize");
   assert(openRoom.includes("pendingScrollRestore.current = null"), "openRoom clears leftover restore");
   assert(openRoom.includes("loadingOlderRef.current = false"), "openRoom clears leftover older-load ref");
   assert(openRoom.includes("setLoadingOlder(false)"), "openRoom clears leftover older-load UI");

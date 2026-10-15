@@ -18,7 +18,6 @@ import {
   isDirectoryRoomId,
   isDmRoomId,
   isValidRoomName,
-  parseDmRoomId,
   truncatePreview,
   type ChatSenderRole,
   type RoomSummary,
@@ -30,11 +29,13 @@ import {
   type ChatTokenClaims,
 } from "./token";
 import {
+  CHAT_ROOM_EVICT_PATH,
   CHAT_ROOM_REVOKE_PATH,
   CHAT_SESSION_EPOCH_PATH,
   CHAT_SESSION_REVOKE_PATH,
   parseSessionRevokeBody,
 } from "./sessionCheck";
+import { planCanonicalDmCreate } from "./dmMembership";
 
 export type DirectoryEnv = {
   CHAT_AUTH_SECRET: string;
@@ -367,7 +368,7 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
       members: MemberSnap[];
     };
     if (isDmRoomId(body.roomId)) {
-      return this.handleInternalCreateDm(body);
+      return await this.handleInternalCreateDm(body);
     }
     if (!isCustomRoomId(body.roomId)) {
       return json({ error: "invalid_room" }, 400);
@@ -409,60 +410,105 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
     return json({ ok: true, roomId: body.roomId });
   }
 
-  private handleInternalCreateDm(body: {
+  private async handleInternalCreateDm(body: {
     roomId: string;
     ownerUserId: number;
     members: MemberSnap[];
-  }): Response {
-    const pair = parseDmRoomId(body.roomId);
-    if (!pair) return json({ error: "invalid_room" }, 400);
-    const ids = [...new Set(body.members.map((m) => Number(m.userId)).filter((id) => Number.isInteger(id) && id > 0))];
-    if (ids.length !== 2 || ids[0] === ids[1]) {
-      return json({ error: "invalid_dm_members" }, 400);
-    }
-    const [low, high] = ids[0]! < ids[1]! ? [ids[0]!, ids[1]!] : [ids[1]!, ids[0]!];
-    if (low !== pair.low || high !== pair.high) {
-      return json({ error: "dm_pair_mismatch" }, 400);
-    }
-    if (body.ownerUserId !== low && body.ownerUserId !== high) {
-      return json({ error: "dm_owner_mismatch" }, 400);
-    }
-    const existing = this.ctx.storage.sql
+  }): Promise<Response> {
+    const existingRow = this.ctx.storage.sql
       .exec(`SELECT room_id, type FROM rooms WHERE room_id = ?`, body.roomId)
-      .toArray();
-    if (existing.length) {
-      if (String(existing[0]?.type) !== "DM") {
-        return json({ error: "room_exists" }, 409);
-      }
-      if (!this.isMember(body.roomId, body.ownerUserId)) {
-        return json({ error: "room_forbidden" }, 403);
-      }
-      this.broadcastRooms([low, high]);
-      return json({ ok: true, roomId: body.roomId, idempotent: true });
+      .toArray()[0];
+    const existingType = existingRow ? String(existingRow.type) : null;
+    const existingMemberIds = existingRow ? this.listMemberIds(body.roomId) : [];
+    const plan = planCanonicalDmCreate({
+      roomId: body.roomId,
+      ownerUserId: body.ownerUserId,
+      grantMemberIds: body.members.map((member) => member.userId),
+      existingType,
+      existingMemberIds,
+    });
+    if (plan.action === "reject") {
+      return json({ error: plan.error }, plan.status);
     }
+
     const now = new Date().toISOString();
-    this.ctx.storage.sql.exec(
-      `INSERT INTO rooms (room_id, name, type, owner_user_id, created_at, member_count)
-       VALUES (?, 'DM', 'DM', ?, ?, 2)`,
-      body.roomId,
-      body.ownerUserId,
-      now
-    );
+    if (plan.action === "create") {
+      this.ctx.storage.sql.exec(
+        `INSERT INTO rooms (room_id, name, type, owner_user_id, created_at, member_count)
+         VALUES (?, 'DM', 'DM', ?, ?, 2)`,
+        body.roomId,
+        body.ownerUserId,
+        now
+      );
+    }
+
+    const allow = new Set(plan.pair);
     for (const member of body.members) {
+      const userId = Number(member.userId);
+      if (!allow.has(userId)) continue;
       this.ctx.storage.sql.exec(
         `INSERT OR IGNORE INTO members
           (room_id, user_id, display_name, role, team, joined_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
         body.roomId,
-        member.userId,
-        member.displayName,
-        member.role,
-        member.team,
+        userId,
+        String(member.displayName || ""),
+        String(member.role || "caddy"),
+        String(member.team || "-"),
         now
       );
     }
-    this.broadcastRooms([low, high]);
-    return json({ ok: true, roomId: body.roomId });
+
+    const removed = plan.action === "repair" ? plan.remove : [];
+    for (const userId of removed) {
+      this.ctx.storage.sql.exec(
+        `DELETE FROM members WHERE room_id = ? AND user_id = ?`,
+        body.roomId,
+        userId
+      );
+      this.ctx.storage.sql.exec(
+        `DELETE FROM read_state WHERE room_id = ? AND user_id = ?`,
+        body.roomId,
+        userId
+      );
+    }
+    this.ctx.storage.sql.exec(
+      `UPDATE rooms SET member_count = (
+         SELECT COUNT(*) FROM members WHERE room_id = ?
+       ) WHERE room_id = ?`,
+      body.roomId,
+      body.roomId
+    );
+    this.broadcastRooms([...plan.pair, ...removed]);
+    if (removed.length) {
+      await this.evictChatRoomMembers(body.roomId, removed);
+    }
+    return json({
+      ok: true,
+      roomId: body.roomId,
+      idempotent: plan.action === "idempotent",
+      repaired: plan.action === "repair",
+      removed,
+    });
+  }
+
+  private async evictChatRoomMembers(roomId: string, userIds: number[]) {
+    const ns = this.env.CHAT_ROOM;
+    if (!ns || userIds.length === 0) return;
+    const secret = chatInternalSecret(this.env);
+    if (!secret) return;
+    try {
+      const headers = await internalAuthHeaders(secret, CHAT_ROOM_EVICT_PATH);
+      await ns.get(ns.idFromName(roomId)).fetch(
+        new Request(`https://chat-room${CHAT_ROOM_EVICT_PATH}`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ userIds }),
+        })
+      );
+    } catch {
+      // Membership is already exact. New sockets fail closed. Open sockets may linger.
+    }
   }
 
   private async handleInternalMessage(request: Request): Promise<Response> {
