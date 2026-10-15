@@ -153,6 +153,7 @@ section("9/7 회귀: stored 8 + override 0");
   ]);
   const effective = await resolveEffectiveOpsDuty(DATE, {
     listDuties: async () => stored,
+    listMonthlyMarshal: async () => [],
     listOverrides: async () => [],
     listCaddies: async () => caddies,
     fetchOpsDutySheets: async () => {
@@ -171,6 +172,7 @@ section("9/7 회귀: stored 8 + override 0");
   assert(excluded.join(",") === expected.join(","), "자동배치 exclusion = 같은 8명");
   const getBase = await resolveOpsDutyReadOnly(DATE, {
     listDuties: async () => stored,
+    listMonthlyMarshal: async () => [],
     fetchOpsDutySheets: async () => [],
   });
   const getRows = opsDutyPanelRowsFromReadOnly(getBase, caddies);
@@ -234,6 +236,7 @@ section("sheet-only: stored 0 + sheet names + override 0");
   ]);
   const effective = await resolveEffectiveOpsDuty(SHEET_DATE, {
     listDuties: async () => [],
+    listMonthlyMarshal: async () => [],
     listOverrides: async () => [],
     listCaddies: async () => caddies,
     fetchOpsDutySheets: async () => sheets,
@@ -265,6 +268,7 @@ section("SET / CLEAR / RESTORE exclusion");
   const caddies = rosterFrom([a, b, other, { id: 77, name: "일반" }]);
   const depsBase = {
     listDuties: async () => stored,
+    listMonthlyMarshal: async () => [],
     listCaddies: async () => caddies,
     fetchOpsDutySheets: async () => [],
   };

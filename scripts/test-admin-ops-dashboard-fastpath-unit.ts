@@ -36,6 +36,7 @@ import {
   setPublishedOpsDutySheetLoaderForTests,
 } from "../src/lib/opsDutySheetFetch";
 import type { OffSheet } from "../src/lib/offSheetParser";
+import { buildOpsDutySheetTestSheets } from "../src/lib/opsDutySheetParser";
 import type { AvailabilityWithSlotGrid } from "../src/lib/availabilityService";
 import { buildTeamSlotGrid } from "../src/lib/availabilitySlotGrid";
 import { computeAvailability } from "../src/lib/availabilityEngine";
@@ -81,6 +82,18 @@ const roster = [
     caddyType: "HOUSE",
   },
 ];
+
+function opsSheetsDateFound(ymd: string) {
+  return buildOpsDutySheetTestSheets([
+    {
+      name: "1001~1014",
+      startDate: ymd,
+      week1Dates: [ymd, "2099-01-02", "2099-01-03", "2099-01-04", "2099-01-05", "2099-01-06", "2099-01-07"],
+      week2Dates: ["2099-01-08", "2099-01-09", "2099-01-10", "2099-01-11", "2099-01-12", "2099-01-13", "2099-01-14"],
+      week1Names: [{}],
+    },
+  ]);
+}
 
 function offSheetsFor(ymd: string, names: string[]): OffSheet[] {
   const [y, m, d] = ymd.split("-");
@@ -139,6 +152,7 @@ function sourceDeps(opts?: {
   return {
     listRoster: async () => roster,
     listDuties: async () => [],
+    listMonthlyMarshal: async () => [],
     loadAvailability: async (ymd: string) => mockAvailability(ymd, opts?.offNames ?? ["이휴무"]),
     fetchOffSheets: async () => {
       opts?.onOffFetch?.();
@@ -148,7 +162,7 @@ function sourceDeps(opts?: {
     },
     fetchOpsDutySheets: async () => {
       if (opts?.failAll) throw new Error("ops_duty_sheet_failed");
-      return [];
+      return opsSheetsDateFound(DATE_A);
     },
   };
 }
@@ -253,6 +267,7 @@ section("date isolation");
     }),
     listRoster: async () => roster,
     listDuties: async () => [],
+    listMonthlyMarshal: async () => [],
   });
   assert(other.date === DATE_B, "10/2 payload date");
   assert(other.freshness === "refreshing", "10/2 has no last-success");
@@ -269,6 +284,7 @@ section("warm peek compute, zero extra HTTP");
   const view = await loadAdminOpsDashboardFastView(DATE_A, {
     listRoster: async () => roster,
     listDuties: async () => [],
+    listMonthlyMarshal: async () => [],
     loadAvailability: async (ymd) => mockAvailability(ymd, ["이휴무"]),
     fetchOffSheets: async () => {
       throw new Error("warm peek must not call fetchOffSheets dep");
@@ -290,6 +306,7 @@ section("warm peek date-match + ops peek required");
   const other = await loadAdminOpsDashboardFastView(DATE_B, {
     listRoster: async () => roster,
     listDuties: async () => [],
+    listMonthlyMarshal: async () => [],
     loadAvailability: async (ymd) => mockAvailability(ymd, []),
     fetchOffSheets: async () => {
       throw new Error("other-date peek must not fetch");
@@ -306,6 +323,7 @@ section("warm peek date-match + ops peek required");
   const offOnly = await loadAdminOpsDashboardFastView(DATE_A, {
     listRoster: async () => roster,
     listDuties: async () => [],
+    listMonthlyMarshal: async () => [],
     loadAvailability: async (ymd) => mockAvailability(ymd, ["이휴무"]),
     fetchOffSheets: async () => {
       throw new Error("off-only peek must not fetch");
@@ -342,6 +360,7 @@ section("refresh keeps complete last-success when duty falls back");
     nowMs: replayNow,
     listRoster: async () => roster,
     listDuties: async () => [stored],
+    listMonthlyMarshal: async () => [],
     fetchOffSheets: async () => {
       throw new Error("stale replay must not fetch");
     },
@@ -356,6 +375,7 @@ section("refresh keeps complete last-success when duty falls back");
   const dutyFail = await loadAdminOpsDashboardRefreshView(DATE_A, {
     listRoster: async () => roster,
     listDuties: async () => [],
+    listMonthlyMarshal: async () => [],
     loadAvailability: async (ymd) => mockAvailability(ymd, ["이휴무"]),
     fetchOffSheets: async () => offSheetsFor(DATE_A, ["이휴무"]),
     fetchOpsDutySheets: async () => [],
@@ -452,6 +472,7 @@ section("wiring / no date-bundle / snapshot untouched");
   assert(!/prisma\.(create|update|upsert|delete)/.test(source), "dashboard source no prisma write");
   const dbFirst = await loadAdminOpsDashboardDbFirst(DATE_A, {
     listRoster: async () => roster,
+    listMonthlyMarshal: async () => [],
     listDuties: async () => [
       {
         id: 9,

@@ -897,12 +897,12 @@ const opsDutyFallbackChecks = Promise.all([
         employmentStatus: "ACTIVE",
       },
     ],
-    fetchOpsDutySheets: async () => {
-      throw new Error("stored가 있으면 sheet를 읽지 않음");
-    },
+    listMonthlyMarshal: async () => [],
+    fetchOpsDutySheets: async () => [],
   }),
   resolveOpsDutyReadOnly("2026-08-28", {
     listDuties: async () => [],
+    listMonthlyMarshal: async () => [],
     fetchOpsDutySheets: async () => {
       throw new Error("선택한 날짜 2026-08-28를 운영 탭에서 찾지 못했습니다.");
     },

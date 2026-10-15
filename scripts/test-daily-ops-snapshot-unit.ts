@@ -157,13 +157,38 @@ function completeSourceDeps(
       return mockLoadAvailability()(date, options);
     },
     listDuties: async () => [storedDuty("이제이")],
+    listMonthlyMarshal: async () => [],
     fetchOffSheets: async () => {
       extras?.onOffFetch?.();
       return [offSheetForDate(ymd, ["김지윤"])];
     },
     fetchOpsDutySheets: async () => {
       extras?.onOpsFetch?.();
-      return [];
+      return buildOpsDutySheetTestSheets([
+        {
+          name: "0901~0914",
+          startDate: ymd,
+          week1Dates: [
+            ymd,
+            "2099-01-02",
+            "2099-01-03",
+            "2099-01-04",
+            "2099-01-05",
+            "2099-01-06",
+            "2099-01-07",
+          ],
+          week2Dates: [
+            "2099-01-08",
+            "2099-01-09",
+            "2099-01-10",
+            "2099-01-11",
+            "2099-01-12",
+            "2099-01-13",
+            "2099-01-14",
+          ],
+          week1Names: [{}],
+        },
+      ]);
     },
   };
 }
@@ -397,6 +422,7 @@ section("OFF/ops 불완전 → snapshot skip");
     sourceDeps: {
       loadAvailability: mockLoadAvailability(),
       listDuties: async () => [storedDuty("이제이")],
+      listMonthlyMarshal: async () => [],
       fetchOffSheets: async () => {
         throw new Error("off_sheet_fetch_failed");
       },
@@ -414,6 +440,7 @@ section("OFF/ops 불완전 → snapshot skip");
     sourceDeps: {
       loadAvailability: mockLoadAvailability(),
       listDuties: async () => [storedDuty("이제이")],
+      listMonthlyMarshal: async () => [],
       fetchOffSheets: async () => [offSheetForDate("2026-08-01", ["김지윤"])],
     },
   });
@@ -425,6 +452,7 @@ section("OFF/ops 불완전 → snapshot skip");
     sourceDeps: {
       loadAvailability: mockLoadAvailability(),
       listDuties: async () => [],
+      listMonthlyMarshal: async () => [],
       fetchOffSheets: async () => [offSheetForDate("2026-09-03", ["김지윤"])],
       fetchOpsDutySheets: async () =>
         buildOpsDutySheetTestSheets([
@@ -446,6 +474,7 @@ section("OFF/ops 불완전 → snapshot skip");
     sourceDeps: {
       loadAvailability: mockLoadAvailability(),
       listDuties: async () => [],
+      listMonthlyMarshal: async () => [],
       fetchOffSheets: async () => [offSheetForDate("2026-09-03", ["김지윤"])],
       fetchOpsDutySheets: async () => {
         throw new Error("ops_duty_sheet_failed");
@@ -461,11 +490,75 @@ section("OFF/ops 불완전 → snapshot skip");
     sourceDeps: {
       loadAvailability: mockLoadAvailability(),
       listDuties: async () => [],
+      listMonthlyMarshal: async () => [],
       fetchOffSheets: async () => [offSheetForDate("2026-09-03", ["김지윤"])],
       fetchOpsDutySheets: async () => opsSheetsForDate("2026-09-03"),
     },
   });
   assert(fromSheet.status === "created", "운영배치 Sheet read-only로도 capture 가능");
+}
+
+section("required marshal Sheet fallback failure → snapshot skip");
+{
+  const db = memoryDb();
+  const failed = await captureDailyOpsSnapshot("2026-09-05", {
+    db,
+    sourceDeps: {
+      loadAvailability: mockLoadAvailability(),
+      listDuties: async () => [storedDuty("이제이")],
+      listMonthlyMarshal: async () => [],
+      fetchOffSheets: async () => [offSheetForDate("2026-09-05", ["김지윤"])],
+      fetchOpsDutySheets: async () => {
+        throw new Error("ops_duty_sheet_failed");
+      },
+    },
+  });
+  assert(failed.status === "skipped", "stored duty + missing marshal + Sheet throw → skip");
+  assert(failed.reason === "ops_duty_sheet_failed", "marshal Sheet fallback failure reason");
+  assert(
+    (await db.dailyOpsSnapshot.findUnique({
+      where: { date: new Date("2026-09-05T00:00:00") },
+    })) === null,
+    "incomplete marshal fallback is not captured"
+  );
+
+  const absentKey = await captureDailyOpsSnapshot("2026-09-06", {
+    db,
+    now: new Date("2026-09-07T00:30:00+09:00"),
+    sourceDeps: {
+      loadAvailability: mockLoadAvailability(),
+      listDuties: async () => [storedDuty("이제이")],
+      listMonthlyMarshal: async () => [],
+      fetchOffSheets: async () => [offSheetForDate("2026-09-06", ["김지윤"])],
+      fetchOpsDutySheets: async () =>
+        buildOpsDutySheetTestSheets([
+          {
+            name: "0901~0914",
+            startDate: "2026-09-06",
+            week1Dates: [
+              "2026-09-06",
+              "2099-01-02",
+              "2099-01-03",
+              "2099-01-04",
+              "2099-01-05",
+              "2099-01-06",
+              "2099-01-07",
+            ],
+            week2Dates: [
+              "2099-01-08",
+              "2099-01-09",
+              "2099-01-10",
+              "2099-01-11",
+              "2099-01-12",
+              "2099-01-13",
+              "2099-01-14",
+            ],
+            week1Names: [{}],
+          },
+        ]),
+    },
+  });
+  assert(absentKey.status === "created", "successful Sheet read with absent marshal key is not failure");
 }
 
 section("live Sheet 실패 → fallback metadata");
@@ -487,6 +580,7 @@ section("live Sheet 실패 → fallback metadata");
     sourceDeps: {
       loadAvailability: mockLoadAvailability(),
       listDuties: async () => [storedDuty("이제이")],
+      listMonthlyMarshal: async () => [],
       fetchOffSheets: async () => {
         throw new Error("off_sheet_fetch_failed");
       },

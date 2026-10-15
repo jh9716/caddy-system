@@ -32,6 +32,7 @@ import {
   listDailyOpsDutyOverrides,
   type StoredOpsDutyOverrideRow,
 } from "@/lib/opsDutyEffectiveService";
+import { marshalNonOperationalKeys } from "@/lib/marshalMonthDutySource";
 import {
   opsDutyPanelRowsFromReadOnly,
   resolveOpsDutyReadOnly,
@@ -98,12 +99,14 @@ export type AssignmentsDateBundlePublishedMeta = {
 export type AssignmentsDateBundleOpsDuty = {
   date: string;
   source: string;
+  marshalSource: string;
   persisted: boolean;
   count: number;
   byRole: ReturnType<typeof countByOpsRole>;
   caddyIds: number[];
   rows: ReturnType<typeof opsDutyPanelRowsFromReadOnly>;
   error: string | null;
+  marshalWarnings?: string[];
   slots?: ReturnType<typeof buildOpsDutySlotStates>;
 };
 
@@ -425,12 +428,17 @@ export async function loadAssignmentsDateBundle(
     const payload: AssignmentsDateBundleOpsDuty = {
       date: ymd,
       source: resolved.source,
+      marshalSource: resolved.marshalSource ?? "none",
       persisted: resolved.source === "stored",
       count: rows.length,
       byRole: countByOpsRole(rows),
       caddyIds: [...new Set(rows.map((row) => row.caddyId))],
       rows,
       error: resolved.error,
+      marshalWarnings: marshalNonOperationalKeys(
+        resolved.monthlyMarshal ?? [],
+        caddies
+      ),
     };
     try {
       payload.slots = buildOpsDutySlotStates(rows, overrides);

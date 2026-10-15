@@ -14,6 +14,10 @@ import { DailyOpsDutyError } from "@/lib/dailyOpsDutyService";
 import type { DutyExcelEntry } from "@/lib/opsDutyRoleKeys";
 import { isOpsDutyRoleKey } from "@/lib/opsDutyRoleKeys";
 import {
+  isMonthlyExtraMarshalRoleKey,
+  type OpsDutyMarshalSource,
+} from "@/lib/marshalMonthDutySource";
+import {
   opsDutyPanelRowsFromReadOnly,
   resolveOpsDutyReadOnly,
   type OpsDutyPanelRow,
@@ -42,6 +46,7 @@ export type StoredOpsDutyOverrideRow = OpsDutyOverrideInput & {
 export type EffectiveOpsDutyResult = {
   date: string;
   baseSource: OpsDutyReadOnlySource;
+  marshalSource: OpsDutyMarshalSource;
   persisted: boolean;
   error: string | null;
   storedCount: number;
@@ -127,10 +132,15 @@ export async function resolveEffectiveOpsDuty(
     listCaddies(),
   ]);
   const baseRows = opsDutyPanelRowsFromReadOnly(base, caddies);
-  const rows = applyOpsDutyOverrides(baseRows, overrides);
+  const contractRows = applyOpsDutyOverrides(baseRows, overrides);
+  const extraMonthly = baseRows
+    .filter((row) => isMonthlyExtraMarshalRoleKey(row.roleKey))
+    .map((row) => ({ ...row, overridden: false }));
+  const rows = extraMonthly.length > 0 ? [...contractRows, ...extraMonthly] : contractRows;
   return {
     date: ymd,
     baseSource: base.source,
+    marshalSource: base.marshalSource ?? "none",
     persisted: base.source === "stored",
     error: base.error,
     storedCount: base.stored.length,
@@ -391,6 +401,7 @@ export function overrideWriteJson(result: OpsDutyOverrideWriteResult) {
     roleKey: result.roleKey,
     date: result.date,
     source: result.baseSource,
+    marshalSource: result.marshalSource,
     persisted: result.persisted,
     count: result.rows.length,
     byRole: result.byRole,

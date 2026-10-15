@@ -60,6 +60,7 @@
     "test:admin-manage-nav-unit": "bash scripts/tsx-safe.sh scripts/test-admin-manage-nav-unit.ts",
     "test:marshal-roster-unit": "bash scripts/tsx-safe.sh scripts/test-marshal-roster-unit.ts",
     "test:marshal-rotation-unit": "bash scripts/tsx-safe.sh scripts/test-marshal-rotation-unit.ts",
+    "test:marshal-pr3-duty-unit": "bash scripts/tsx-safe.sh scripts/test-marshal-pr3-duty-unit.ts",
     "test:cart-manage-unit": "bash scripts/tsx-safe.sh scripts/test-cart-manage-unit.ts",
     "test:cart-local": "bash scripts/tsx-safe.sh scripts/test-cart-local.ts",
     "test:admin-ops-workspace-unit": "bash scripts/tsx-safe.sh scripts/test-admin-ops-workspace-unit.ts",

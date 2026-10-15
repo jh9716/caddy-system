@@ -80,6 +80,17 @@ console.log("== duty/marshal empty slots ==");
     marshal.map((s) => s.label).join(",") === "조출1,조출2,후출1",
     "마샬은 기존 3슬롯만 (후출2 없음)"
   );
+  const extraOrder = filledMarshalSlots([
+    { label: "후출1", people: [{ caddyId: 4, name: "C", badges: [] }] },
+    { label: "조출1", people: [{ caddyId: 1, name: "A", badges: [] }] },
+    { label: "조출3", people: [{ caddyId: 3, name: "A3", badges: [] }] },
+    { label: "조출2", people: [{ caddyId: 2, name: "B", badges: [] }] },
+    { label: "후출2", people: [{ caddyId: 5, name: "D", badges: [] }] },
+  ]);
+  assert(
+    extraOrder.map((s) => s.label).join(",") === "조출1,조출2,조출3,후출1,후출2",
+    "3 AM + 2 PM display order"
+  );
 }
 
 console.log("== special duty / support summaries ==");

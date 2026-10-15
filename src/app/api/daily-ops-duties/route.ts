@@ -5,6 +5,7 @@ import { DailyOpsDutyError } from "@/lib/dailyOpsDutyService";
 import { countByOpsRole } from "@/lib/dailyOpsDuty";
 import { buildOpsDutySlotStates } from "@/lib/opsDutyEffective";
 import { listDailyOpsDutyOverrides } from "@/lib/opsDutyEffectiveService";
+import { marshalNonOperationalKeys } from "@/lib/marshalMonthDutySource";
 import {
   opsDutyPanelRowsFromReadOnly,
   resolveOpsDutyReadOnly,
@@ -26,15 +27,21 @@ export async function GET(req: NextRequest) {
       select: { id: true, name: true, team: true, employmentStatus: true },
     });
     const rows = opsDutyPanelRowsFromReadOnly(resolved, caddies);
+    const marshalWarnings = marshalNonOperationalKeys(
+      resolved.monthlyMarshal ?? [],
+      caddies
+    );
     const payload: Record<string, unknown> = {
       date,
       source: resolved.source,
+      marshalSource: resolved.marshalSource ?? "none",
       persisted: resolved.source === "stored",
       count: rows.length,
       byRole: countByOpsRole(rows),
       caddyIds: [...new Set(rows.map((r) => r.caddyId))],
       rows,
       error: resolved.error,
+      marshalWarnings,
     };
     try {
       const overrides = await listDailyOpsDutyOverrides(date);

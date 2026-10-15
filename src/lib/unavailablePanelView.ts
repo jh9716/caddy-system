@@ -168,7 +168,36 @@ export function specialBandFromTeam(
 
 export function slotLabelFromRoleKey(roleKey: string): string | null {
   const key = String(roleKey || "").trim();
-  return DUTY_ROLEKEY_SLOTS[key] || MARSHAL_ROLEKEY_SLOTS[key] || null;
+  const known = DUTY_ROLEKEY_SLOTS[key] || MARSHAL_ROLEKEY_SLOTS[key];
+  if (known) return known;
+  const extra = key.match(/^마샬_(조출|후출)_([1-9]\d*)$/);
+  if (extra) return `${extra[1]}${extra[2]}`;
+  return null;
+}
+
+export function marshalSlotLabelOrder(label: string): number {
+  const match = String(label || "").trim().match(/^(조출|후출)([1-9]\d*)$/);
+  if (!match) return Number.MAX_SAFE_INTEGER;
+  return (match[1] === "조출" ? 0 : 100) + Number(match[2]);
+}
+
+export function sortMarshalSlotLabels(labels: readonly string[]): string[] {
+  return [...labels].sort((a, b) => marshalSlotLabelOrder(a) - marshalSlotLabelOrder(b));
+}
+
+export function extraMarshalSlotLabels(
+  slots: readonly { label?: string | null }[]
+): string[] {
+  const seen = new Set<string>();
+  const extra: string[] = [];
+  for (const slot of slots) {
+    const label = String(slot.label || "").trim();
+    if (!label || (MARSHAL_SLOT_LABELS as readonly string[]).includes(label)) continue;
+    if (seen.has(label)) continue;
+    seen.add(label);
+    extra.push(label);
+  }
+  return sortMarshalSlotLabels(extra);
 }
 
 export function opsRoleFromReason(reason: string): OpsRoleKind | null {
@@ -510,6 +539,16 @@ export function buildUnavailableBoardView(
     people: specialByBand.get(band) || [],
   }));
 
+  const marshalLabels = sortMarshalSlotLabels([
+    ...MARSHAL_SLOT_LABELS,
+    ...extraMarshalSlotLabels(
+      marshalCandidates.map((row) => ({
+        label: row.slotLabel,
+      }))
+    ),
+  ]);
+  const marshalAmCount = marshalLabels.filter((label) => label.startsWith("조출")).length;
+
   return {
     total: unavailablePanelTotal(groups),
     offTeams,
@@ -517,7 +556,7 @@ export function buildUnavailableBoardView(
     sick,
     absent,
     dutySlots: assignSlots(dutyCandidates, DUTY_SLOT_LABELS, 2),
-    marshalSlots: assignSlots(marshalCandidates, MARSHAL_SLOT_LABELS, 2),
+    marshalSlots: assignSlots(marshalCandidates, marshalLabels, marshalAmCount),
     leaders,
     specialBands,
     other,

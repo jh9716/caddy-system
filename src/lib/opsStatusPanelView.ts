@@ -20,6 +20,8 @@ import {
 import {
   DUTY_SLOT_LABELS,
   MARSHAL_SLOT_LABELS,
+  extraMarshalSlotLabels,
+  sortMarshalSlotLabels,
   type UnavailableBoardView,
   type UnavailableSlotBlock,
 } from "@/lib/unavailablePanelView";
@@ -86,8 +88,13 @@ export function filledDutySlots(
 export function filledMarshalSlots(
   slots: readonly UnavailableSlotBlock[]
 ): UnavailableSlotBlock[] {
-  return MARSHAL_SLOT_LABELS.map(
-    (label) => slots.find((slot) => slot.label === label) || { label, people: [] }
+  const byLabel = new Map(slots.map((slot) => [slot.label, slot]));
+  const extras = extraMarshalSlotLabels(slots).filter(
+    (label) => (byLabel.get(label)?.people.length || 0) > 0
+  );
+  const labels = sortMarshalSlotLabels([...MARSHAL_SLOT_LABELS, ...extras]);
+  return labels.map(
+    (label) => byLabel.get(label) || { label, people: [] }
   );
 }
 

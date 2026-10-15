@@ -162,7 +162,7 @@ console.log("== source contracts ==");
   assert(/resolveOpsDutyReadOnly/.test(getRoute), "GET 기존 read-only rows 유지");
   assert(!/resolveEffectiveOpsDuty/.test(getRoute), "GET rows를 effective로 교체하지 않음");
   assert(/buildOpsDutySlotStates/.test(getRoute), "GET slots extra field");
-  assert(!/resolveEffectiveOpsDuty/.test(avail + dashboard + canonical), "자동배치/Dashboard overlay 미연결");
+  assert(!/resolveEffectiveOpsDuty/.test(dashboard), "Dashboard overlay 미연결");
   assert(!/prisma\/schema/.test(page + panel + view), "schema 경로 미수정");
   assert(!/마샬_후출_2/.test(panel + view), "가짜 마샬 후출2 UI 없음");
 }

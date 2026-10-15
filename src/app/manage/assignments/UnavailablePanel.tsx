@@ -20,6 +20,7 @@ import {
 } from "@/lib/opsStatusPanelView";
 import {
   buildUnavailableBoardView,
+  extraMarshalSlotLabels,
   pickOpsStatusSummary,
   type OpsStatusSummary,
   type UnavailableBoardPerson,
@@ -462,6 +463,9 @@ export function UnavailablePanel({
   const countChips = opsStatusCountChips(view, stats.off);
   const dutySlots = filledDutySlots(view.dutySlots);
   const marshalSlots = filledMarshalSlots(view.marshalSlots);
+  const extraMarshalSlots = extraMarshalSlotLabels(marshalSlots)
+    .map((label) => marshalSlots.find((slot) => slot.label === label))
+    .filter((slot): slot is UnavailableSlotBlock => Boolean(slot?.people?.length));
   const specialChips = opsSpecialDutyChips(specialDutyGroups);
   const supportBlocks = opsSpecialSupportBlocks(specialSupportItems);
   const supportTotal = supportBlocks.reduce((n, block) => n + block.count, 0);
@@ -751,7 +755,12 @@ export function UnavailablePanel({
         </OpsSection>
         <OpsSection title="마샬" defaultOpen>
           {canEdit && marshalEditSlots.length === 3 ? (
-            <SlotEditor slots={marshalEditSlots} {...editorProps} />
+            <>
+              <SlotEditor slots={marshalEditSlots} {...editorProps} />
+              {extraMarshalSlots.length > 0 ? (
+                <SlotBlocks slots={extraMarshalSlots} />
+              ) : null}
+            </>
           ) : (
             <SlotBlocks slots={marshalSlots} />
           )}
