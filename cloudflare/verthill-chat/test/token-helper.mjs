@@ -30,7 +30,7 @@ export function signTestToken(partial, secret = TEST_SECRET) {
   return { token: `${body}.${sig}`, claims };
 }
 
-/** Production Next (pre-#309) 7-part v2. Test-only — production issuer never mints this. */
+/** Pre-#309 7-part v2. Test-only reject fixture — production never mints or accepts this. */
 export function signTestTokenLegacyV2(partial, secret = TEST_SECRET) {
   const now = Math.floor(Date.now() / 1000);
   const claims = {

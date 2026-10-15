@@ -66,7 +66,10 @@ export async function assertChatSessionCurrent(
   env: SessionCheckEnv,
   claims: ChatTokenClaims
 ): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
-  if (!isSessionBoundChatToken(claims)) return { ok: true };
+  if (claims.v !== 2) return { ok: true };
+  if (!isSessionBoundChatToken(claims)) {
+    return { ok: false, status: 401, error: "invalid_token" };
+  }
   const sv = chatTokenSessionVersion(claims);
   if (sv == null) return { ok: false, status: 401, error: "stale_session" };
   const url = nextSessionCheckUrl(env);
