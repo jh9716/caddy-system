@@ -8,8 +8,18 @@ import {
   parseDmRoomId,
   resolveMentionAll,
 } from "../cloudflare/verthill-chat/src/protocol";
+import { planCanonicalDmCreate } from "../cloudflare/verthill-chat/src/dmMembership";
 import { resolveChatRoomAccess as workerAccess } from "../cloudflare/verthill-chat/src/token";
 import { resolveChatRoomAccess } from "../src/lib/chatAcl";
+import {
+  CHAT_DM_OPEN_FAILED,
+  chatWsDiagnoseUrl,
+  chatWsFailureCode,
+  diagnoseChatWsFailure,
+  formatChatClientError,
+  parseChatClientErrorCode,
+  sanitizeChatErrorCode,
+} from "../src/lib/chatDmClient";
 import { sortChatRoomSummaries } from "../src/lib/chatRooms";
 import {
   applyDeletedLine,
@@ -70,6 +80,106 @@ section("DM identity");
   assert(canonicalDmRoomId(8, 8) == null, "self DM rejected");
   assert(parseDmRoomId("dm_40_8") == null, "unsorted id rejected");
   assert(isDmRoomId("dm_8_40") && !isDmRoomId("room_0123456789abcdef"), "dm vs custom");
+}
+
+section("canonical DM membership plan");
+{
+  const pair = { roomId: "dm_8_40", ownerUserId: 8, grantMemberIds: [40, 8] };
+  assert(planCanonicalDmCreate({ ...pair, existingType: null, existingMemberIds: [] }).action === "create", "new pair creates");
+  assert(
+    planCanonicalDmCreate({ ...pair, existingType: "DM", existingMemberIds: [8, 40] }).action === "idempotent",
+    "healthy existing is idempotent"
+  );
+  const repaired = planCanonicalDmCreate({
+    ...pair,
+    ownerUserId: 40,
+    grantMemberIds: [40, 8],
+    existingType: "DM",
+    existingMemberIds: [8],
+  });
+  assert(repaired.action === "repair", "missing peer is repairable");
+  assert(repaired.action === "repair" && repaired.add.join(",") === "40", "repair adds only the missing peer");
+  const empty = planCanonicalDmCreate({
+    ...pair,
+    existingType: "DM",
+    existingMemberIds: [],
+  });
+  assert(empty.action === "repair" && empty.add.join(",") === "8,40", "zero members still repairable by valid grant");
+  assert(
+    planCanonicalDmCreate({
+      roomId: "dm_8_40",
+      ownerUserId: 8,
+      grantMemberIds: [8, 99],
+      existingType: "DM",
+      existingMemberIds: [8],
+    }).error === "dm_pair_mismatch",
+    "wrong canonical pair cannot repair"
+  );
+  assert(
+    planCanonicalDmCreate({
+      roomId: "dm_8_8",
+      ownerUserId: 8,
+      grantMemberIds: [8, 8],
+      existingType: null,
+      existingMemberIds: [],
+    }).error === "invalid_room",
+    "self DM room id rejected"
+  );
+  assert(
+    planCanonicalDmCreate({
+      roomId: "room_0123456789abcdef",
+      ownerUserId: 8,
+      grantMemberIds: [8, 40],
+      existingType: "CUSTOM",
+      existingMemberIds: [8, 40],
+    }).error === "invalid_room",
+    "custom room is not a DM repair target"
+  );
+  assert(
+    planCanonicalDmCreate({
+      roomId: "dm_8_40",
+      ownerUserId: 8,
+      grantMemberIds: [8, 40],
+      existingType: "CUSTOM",
+      existingMemberIds: [8],
+    }).error === "room_exists",
+    "non-DM existing row is not rewritten"
+  );
+}
+
+section("DM client error codes");
+{
+  assert(formatChatClientError(CHAT_DM_OPEN_FAILED, "room_forbidden") === `${CHAT_DM_OPEN_FAILED} [room_forbidden]`, "friendly + code");
+  assert(parseChatClientErrorCode(`${CHAT_DM_OPEN_FAILED} [room_forbidden]`) === "room_forbidden", "parse code");
+  assert(sanitizeChatErrorCode("room_forbidden / secret") === "unknown", "reject unsafe codes");
+  assert(sanitizeChatErrorCode("https://evil") === "unknown", "reject urls");
+  assert(chatWsFailureCode({ closeCode: 4008 }) === "stale_session", "close 4008 is stale_session");
+  assert(chatWsFailureCode({ timeout: true }) === "ws_timeout", "timeout code");
+  assert(chatWsDiagnoseUrl("wss://chat.example/ws?room=dm_8_40&token=abc")?.startsWith("https://") === true, "diagnose uses http");
+}
+
+function runDmDiagnoseTests() {
+  return diagnoseChatWsFailure(
+    "wss://chat.example/ws?room=dm_8_40&token=hidden",
+    1006,
+    async () =>
+      new Response(JSON.stringify({ error: "room_forbidden" }), {
+        status: 403,
+        headers: { "content-type": "application/json" },
+      })
+  ).then((forbidden) => {
+    section("DM WS diagnose");
+    assert(forbidden === "room_forbidden", "HTTP diagnose returns worker code");
+    return diagnoseChatWsFailure(
+      "wss://chat.example/ws?room=dm_8_40&token=hidden",
+      1006,
+      async () => {
+        throw new Error("offline");
+      }
+    );
+  }).then((fallback) => {
+    assert(fallback === "ws_1006", "diagnose falls back to close code");
+  });
 }
 
 section("DM ACL");
@@ -250,6 +360,7 @@ section("android back / source");
   const css = fs.readFileSync("src/app/globals.css", "utf8");
   const worker = fs.readFileSync("cloudflare/verthill-chat/src/index.ts", "utf8");
   const dir = fs.readFileSync("cloudflare/verthill-chat/src/directory.ts", "utf8");
+  const dmPlan = fs.readFileSync("cloudflare/verthill-chat/src/dmMembership.ts", "utf8");
   const api = fs.readFileSync("src/app/api/chat/dm/route.ts", "utf8");
   assert(client.includes("vh-chat-profile-sheet"), "profile sheet");
   assert(client.includes("/api/chat/dm"), "DM start from profile");
@@ -263,13 +374,21 @@ section("android back / source");
     client.indexOf("async function handleCreate")
   );
   assert(startDmBlock.includes("fetchRoomsHttp"), "startDm refreshes Directory snapshot");
+  assert(startDmBlock.includes("formatChatClientError"), "startDm keeps deterministic error codes");
+  assert(startDmBlock.includes("CHAT_DM_OPEN_FAILED"), "open failure stays user-safe");
+  assert(!startDmBlock.includes("rollbackOptimisticChatRoom"), "directory refresh cannot hide created DM");
+  assert(client.includes("waitForOpen: true"), "openRoom waits for WS authorize");
+  assert(client.includes("data-chat-error-code"), "error code is inspectable");
+  assert(client.includes("diagnoseChatWsFailure"), "failed WS is diagnosed without token logs");
+  assert(api.includes("repaired: data?.repaired === true"), "API forwards repair flag");
   assert(client.includes("vh-chat-date"), "date divider");
   assert(client.includes("vh-chat-tombstone"), "compact tombstone");
   assert(css.includes("max-width: 76%"), "bubble width");
   assert(!css.includes("align-self: stretch;\n  max-width: 100%;"), "no full-width admin card");
   assert(worker.includes("isDmRoomId"), "worker DM ACL");
   assert(dir.includes("handleInternalCreateDm"), "directory DM create");
-  assert(dir.includes("dm_pair_mismatch"), "pair spoof rejected");
+  assert(dir.includes("planCanonicalDmCreate"), "directory uses shared DM plan");
+  assert(dmPlan.includes("dm_pair_mismatch"), "pair spoof rejected");
   assert(api.includes("self_dm"), "API rejects self DM");
   assert(api.includes("canonicalDmRoomId"), "API uses server pair");
   assert(!api.includes("phone"), "DM API no phone");
@@ -280,8 +399,14 @@ section("android back / source");
   assert(!wrangler.includes("v3"), "no new DO class");
 }
 
-if (failed > 0) {
-  console.error(`\nchat-phase5 tests failed: ${failed} (passed ${passed})`);
-  process.exit(1);
-}
-console.log(`\nchat-phase5 tests passed: ${passed}`);
+runDmDiagnoseTests()
+  .catch((err) => {
+    assert(false, `diagnose tests threw: ${err instanceof Error ? err.message : String(err)}`);
+  })
+  .then(() => {
+    if (failed > 0) {
+      console.error(`\nchat-phase5 tests failed: ${failed} (passed ${passed})`);
+      process.exit(1);
+    }
+    console.log(`\nchat-phase5 tests passed: ${passed}`);
+  });
