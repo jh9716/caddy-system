@@ -29,6 +29,7 @@ export async function GET(req: NextRequest) {
     const payload: Record<string, unknown> = {
       date,
       source: resolved.source,
+      marshalSource: resolved.marshalSource ?? "none",
       persisted: resolved.source === "stored",
       count: rows.length,
       byRole: countByOpsRole(rows),

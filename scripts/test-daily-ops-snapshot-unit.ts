@@ -157,6 +157,7 @@ function completeSourceDeps(
       return mockLoadAvailability()(date, options);
     },
     listDuties: async () => [storedDuty("이제이")],
+    listMonthlyMarshal: async () => [],
     fetchOffSheets: async () => {
       extras?.onOffFetch?.();
       return [offSheetForDate(ymd, ["김지윤"])];
@@ -397,6 +398,7 @@ section("OFF/ops 불완전 → snapshot skip");
     sourceDeps: {
       loadAvailability: mockLoadAvailability(),
       listDuties: async () => [storedDuty("이제이")],
+      listMonthlyMarshal: async () => [],
       fetchOffSheets: async () => {
         throw new Error("off_sheet_fetch_failed");
       },
@@ -414,6 +416,7 @@ section("OFF/ops 불완전 → snapshot skip");
     sourceDeps: {
       loadAvailability: mockLoadAvailability(),
       listDuties: async () => [storedDuty("이제이")],
+      listMonthlyMarshal: async () => [],
       fetchOffSheets: async () => [offSheetForDate("2026-08-01", ["김지윤"])],
     },
   });
@@ -425,6 +428,7 @@ section("OFF/ops 불완전 → snapshot skip");
     sourceDeps: {
       loadAvailability: mockLoadAvailability(),
       listDuties: async () => [],
+      listMonthlyMarshal: async () => [],
       fetchOffSheets: async () => [offSheetForDate("2026-09-03", ["김지윤"])],
       fetchOpsDutySheets: async () =>
         buildOpsDutySheetTestSheets([
@@ -446,6 +450,7 @@ section("OFF/ops 불완전 → snapshot skip");
     sourceDeps: {
       loadAvailability: mockLoadAvailability(),
       listDuties: async () => [],
+      listMonthlyMarshal: async () => [],
       fetchOffSheets: async () => [offSheetForDate("2026-09-03", ["김지윤"])],
       fetchOpsDutySheets: async () => {
         throw new Error("ops_duty_sheet_failed");
@@ -461,6 +466,7 @@ section("OFF/ops 불완전 → snapshot skip");
     sourceDeps: {
       loadAvailability: mockLoadAvailability(),
       listDuties: async () => [],
+      listMonthlyMarshal: async () => [],
       fetchOffSheets: async () => [offSheetForDate("2026-09-03", ["김지윤"])],
       fetchOpsDutySheets: async () => opsSheetsForDate("2026-09-03"),
     },
@@ -487,6 +493,7 @@ section("live Sheet 실패 → fallback metadata");
     sourceDeps: {
       loadAvailability: mockLoadAvailability(),
       listDuties: async () => [storedDuty("이제이")],
+      listMonthlyMarshal: async () => [],
       fetchOffSheets: async () => {
         throw new Error("off_sheet_fetch_failed");
       },

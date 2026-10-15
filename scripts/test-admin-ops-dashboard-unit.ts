@@ -23,7 +23,10 @@ import {
   loadAdminOpsDashboardSource,
   type AdminOpsDashboardSourceDeps,
 } from "../src/lib/adminOpsDashboardSource";
-import { resolveOpsDutyReadOnly } from "../src/lib/opsDutyReadOnlySource";
+import {
+  mergedDutyExcelEntriesFromReadOnly,
+  resolveOpsDutyReadOnly,
+} from "../src/lib/opsDutyReadOnlySource";
 import { opsDutyRoleFromKind } from "../src/lib/dailyOpsDuty";
 import { computeAvailability } from "../src/lib/availabilityEngine";
 import { applyDailyExternalExclusions } from "../src/lib/dailyAvailabilityOverlay";
@@ -134,6 +137,10 @@ function offSheetForDate(ymd: string, names: string[]): OffSheet {
   };
 }
 
+const noMonthlyMarshal = {
+  listMonthlyMarshal: async () => [],
+};
+
 function storedDuty(name: string, role: StoredOpsDutyRow["role"] = "DUTY_AM"): StoredOpsDutyRow {
   return {
     id: 1,
@@ -170,9 +177,11 @@ async function loadAdminOpsDashboardSourceSequential(
   const resolvedDuty = await resolveOpsDutyReadOnly(ymd, {
     listDuties,
     fetchOpsDutySheets: fetchOps,
+    listMonthlyMarshal: deps.listMonthlyMarshal,
   });
   const stored = resolvedDuty.stored;
   const dutyEntries = resolvedDuty.sheetEntries;
+  const mergedDutyEntries = mergedDutyExcelEntriesFromReadOnly(resolvedDuty);
   const dutySource = resolvedDuty.source;
   const dutyError = resolvedDuty.error;
   const offOk = Boolean(offSheets && offDateFound && !offError);
@@ -189,16 +198,26 @@ async function loadAdminOpsDashboardSourceSequential(
     offSheets: offOk && offSheets ? offSheets : undefined,
     includeStoredOpsDuty: false,
     dutyEntries:
-      dutySource === "stored" || dutySource === "sheet" ? dutyEntries : undefined,
+      mergedDutyEntries.length > 0
+        ? mergedDutyEntries
+        : dutySource === "stored" || dutySource === "sheet"
+          ? dutyEntries
+          : undefined,
   });
   const opsDuties =
-    dutySource === "stored"
-      ? stored.map((row) => ({ role: row.role, name: row.name, rawName: row.rawName }))
-      : dutyEntries.map((entry) => ({
+    mergedDutyEntries.length > 0
+      ? mergedDutyEntries.map((entry) => ({
           role: opsDutyRoleFromKind(entry.kind),
           name: entry.rawName,
           rawName: entry.rawName,
-        }));
+        }))
+      : dutySource === "stored"
+        ? stored.map((row) => ({ role: row.role, name: row.name, rawName: row.rawName }))
+        : dutyEntries.map((entry) => ({
+            role: opsDutyRoleFromKind(entry.kind),
+            name: entry.rawName,
+            rawName: entry.rawName,
+          }));
   return {
     dashboard: buildAdminOpsDashboard({ date: ymd, availability, opsDuties }),
     quality: completeForSnapshot ? ("complete" as const) : ("fallback" as const),
@@ -209,7 +228,11 @@ async function loadAdminOpsDashboardSourceSequential(
     availabilityInput: {
       includeOffSheet: offOk,
       dutyEntries:
-        dutySource === "stored" || dutySource === "sheet" ? dutyEntries : undefined,
+        mergedDutyEntries.length > 0
+          ? mergedDutyEntries
+          : dutySource === "stored" || dutySource === "sheet"
+            ? dutyEntries
+            : undefined,
     },
   };
 }
@@ -471,6 +494,7 @@ section("OFF와 duty source 병렬");
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
   await loadAdminOpsDashboardSource(date, {
     loadAvailability: mockLoadAvailability(),
+    ...noMonthlyMarshal,
     listDuties: async () => {
       events.push("duty-start");
       await sleep(20);
@@ -587,6 +611,7 @@ section("parallel vs sequential payload / fallback");
     },
   ];
   for (const fixture of fixtures) {
+    fixture.deps = { ...noMonthlyMarshal, ...fixture.deps };
     const seqAvail: Array<{ includeOffSheet?: boolean; dutyLen: number }> = [];
     const parAvail: Array<{ includeOffSheet?: boolean; dutyLen: number }> = [];
     const wrap = (
@@ -635,6 +660,7 @@ section("Sheet call-count cache / inflight");
     setPublishedOpsDutySheetLoaderForTests(async () => dutySheetsForDate(date));
     const deps = {
       loadAvailability: mockLoadAvailability(),
+      ...noMonthlyMarshal,
       listDuties: async () => [] as StoredOpsDutyRow[],
     };
     await loadAdminOpsDashboardSource(date, deps);
@@ -663,6 +689,7 @@ section("Sheet call-count cache / inflight");
     });
     await loadAdminOpsDashboardSource(date, {
       loadAvailability: mockLoadAvailability(),
+      ...noMonthlyMarshal,
       listDuties: async () => [storedDuty("김가용")],
     });
     assert(getOffSheetHttpFetchCount() === 1, "duty DB hit: OFF 1");
@@ -678,6 +705,7 @@ section("read-only OFF/ops source overlay");
   const writes: string[] = [];
   const loaded = await loadAdminOpsDashboardSource(date, {
     loadAvailability: mockLoadAvailability(),
+    ...noMonthlyMarshal,
     listDuties: async () => [storedDuty("김가용")],
     fetchOffSheets: async () => [offSheetForDate(date, ["이휴무"])],
     fetchOpsDutySheets: async () => {
@@ -697,6 +725,7 @@ section("Sheet overlay는 DB write / apply 없음");
   const date = "2026-09-03";
   await loadAdminOpsDashboardSource(date, {
     loadAvailability: mockLoadAvailability(),
+    ...noMonthlyMarshal,
     listDuties: async () => [],
     fetchOffSheets: async () => [offSheetForDate(date, ["이휴무"])],
     fetchOpsDutySheets: async () =>
@@ -723,6 +752,7 @@ section("DailyOpsDuty 없이 운영배치 Sheet read-only");
   let opsFetch = 0;
   const loaded = await loadAdminOpsDashboardSource(date, {
     loadAvailability: mockLoadAvailability(),
+    ...noMonthlyMarshal,
     listDuties: async () => [],
     fetchOffSheets: async () => [offSheetForDate(date, ["이휴무"])],
     fetchOpsDutySheets: async () => {
@@ -753,6 +783,7 @@ section("Sheet fetch 실패 시 DB fallback + incomplete metadata");
   const date = "2026-09-03";
   const loaded = await loadAdminOpsDashboardSource(date, {
     loadAvailability: mockLoadAvailability(),
+    ...noMonthlyMarshal,
     listDuties: async () => [storedDuty("김가용")],
     fetchOffSheets: async () => {
       throw new Error("off_sheet_fetch_failed");

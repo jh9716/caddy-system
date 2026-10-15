@@ -21,7 +21,11 @@ import {
 import { offNamesForDate, type OffSheet } from "@/lib/offSheetParser";
 import { fetchPublishedOpsDutySheets } from "@/lib/opsDutySheetFetch";
 import { type OpsDutySheet } from "@/lib/opsDutySheetParser";
-import { resolveOpsDutyReadOnly } from "@/lib/opsDutyReadOnlySource";
+import {
+  mergedDutyExcelEntriesFromReadOnly,
+  resolveOpsDutyReadOnly,
+} from "@/lib/opsDutyReadOnlySource";
+import type { MonthlyMarshalDutyRow } from "@/lib/marshalMonthDutySource";
 
 export type AdminOpsSourceQuality = "complete" | "fallback";
 export type AdminOpsOffSource = "sheet" | "assignment_only";
@@ -41,6 +45,7 @@ export type AdminOpsDashboardSourceDeps = {
   listDuties?: (ymd: string) => Promise<StoredOpsDutyRow[]>;
   fetchOffSheets?: () => Promise<OffSheet[]>;
   fetchOpsDutySheets?: () => Promise<OpsDutySheet[]>;
+  listMonthlyMarshal?: (ymd: string) => Promise<MonthlyMarshalDutyRow[]>;
 };
 
 function dutyInputsFromEntries(entries: DutyExcelEntry[]): AdminOpsDutyNameInput[] {
@@ -90,6 +95,7 @@ export async function loadAdminOpsDashboardSource(
     resolveOpsDutyReadOnly(ymd, {
       listDuties,
       fetchOpsDutySheets: fetchOps,
+      listMonthlyMarshal: deps.listMonthlyMarshal,
     }),
   ]);
   const offSheets = offResult.offSheets;
@@ -97,6 +103,7 @@ export async function loadAdminOpsDashboardSource(
   const offError = offResult.offError;
   const stored = resolvedDuty.stored;
   const dutyEntries = resolvedDuty.sheetEntries;
+  const mergedDutyEntries = mergedDutyExcelEntriesFromReadOnly(resolvedDuty);
   const dutySource = resolvedDuty.source;
   const dutyError = resolvedDuty.error;
 
@@ -112,16 +119,22 @@ export async function loadAdminOpsDashboardSource(
   const availability = await loadAvailability(ymd, {
     includeOffSheet: offOk,
     offSheets: offOk && offSheets ? offSheets : undefined,
-    // Dashboard는 stored/sheet base만. override는 운영현황 slots에서만 본다.
+    // Dashboard는 stored/sheet + FINALIZED monthly marshal base. override는 운영현황 slots에서만 본다.
     includeStoredOpsDuty: false,
     dutyEntries:
-      dutySource === "stored" || dutySource === "sheet" ? dutyEntries : undefined,
+      mergedDutyEntries.length > 0
+        ? mergedDutyEntries
+        : dutySource === "stored" || dutySource === "sheet"
+          ? dutyEntries
+          : undefined,
   });
 
   const opsDuties =
-    dutySource === "stored"
-      ? dutyInputsFromStored(stored)
-      : dutyInputsFromEntries(dutyEntries);
+    mergedDutyEntries.length > 0
+      ? dutyInputsFromEntries(mergedDutyEntries)
+      : dutySource === "stored"
+        ? dutyInputsFromStored(stored)
+        : dutyInputsFromEntries(dutyEntries);
 
   return {
     dashboard: buildAdminOpsDashboard({

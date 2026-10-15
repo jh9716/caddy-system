@@ -98,6 +98,7 @@ export type AssignmentsDateBundlePublishedMeta = {
 export type AssignmentsDateBundleOpsDuty = {
   date: string;
   source: string;
+  marshalSource: string;
   persisted: boolean;
   count: number;
   byRole: ReturnType<typeof countByOpsRole>;
@@ -425,6 +426,7 @@ export async function loadAssignmentsDateBundle(
     const payload: AssignmentsDateBundleOpsDuty = {
       date: ymd,
       source: resolved.source,
+      marshalSource: resolved.marshalSource ?? "none",
       persisted: resolved.source === "stored",
       count: rows.length,
       byRole: countByOpsRole(rows),

@@ -13,6 +13,7 @@ import { countByOpsRole, type DailyOpsDutyRole } from "@/lib/dailyOpsDuty";
 import { DailyOpsDutyError } from "@/lib/dailyOpsDutyService";
 import type { DutyExcelEntry } from "@/lib/opsDutyRoleKeys";
 import { isOpsDutyRoleKey } from "@/lib/opsDutyRoleKeys";
+import type { OpsDutyMarshalSource } from "@/lib/marshalMonthDutySource";
 import {
   opsDutyPanelRowsFromReadOnly,
   resolveOpsDutyReadOnly,
@@ -42,6 +43,7 @@ export type StoredOpsDutyOverrideRow = OpsDutyOverrideInput & {
 export type EffectiveOpsDutyResult = {
   date: string;
   baseSource: OpsDutyReadOnlySource;
+  marshalSource: OpsDutyMarshalSource;
   persisted: boolean;
   error: string | null;
   storedCount: number;
@@ -131,6 +133,7 @@ export async function resolveEffectiveOpsDuty(
   return {
     date: ymd,
     baseSource: base.source,
+    marshalSource: base.marshalSource ?? "none",
     persisted: base.source === "stored",
     error: base.error,
     storedCount: base.stored.length,
@@ -391,6 +394,7 @@ export function overrideWriteJson(result: OpsDutyOverrideWriteResult) {
     roleKey: result.roleKey,
     date: result.date,
     source: result.baseSource,
+    marshalSource: result.marshalSource,
     persisted: result.persisted,
     count: result.rows.length,
     byRole: result.byRole,
