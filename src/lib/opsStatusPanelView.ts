@@ -20,6 +20,7 @@ import {
 import {
   DUTY_SLOT_LABELS,
   MARSHAL_SLOT_LABELS,
+  extraMarshalSlotLabels,
   type UnavailableBoardView,
   type UnavailableSlotBlock,
 } from "@/lib/unavailablePanelView";
@@ -86,9 +87,13 @@ export function filledDutySlots(
 export function filledMarshalSlots(
   slots: readonly UnavailableSlotBlock[]
 ): UnavailableSlotBlock[] {
-  return MARSHAL_SLOT_LABELS.map(
+  const contract = MARSHAL_SLOT_LABELS.map(
     (label) => slots.find((slot) => slot.label === label) || { label, people: [] }
   );
+  const extra = extraMarshalSlotLabels(slots)
+    .map((label) => slots.find((slot) => slot.label === label))
+    .filter((slot): slot is UnavailableSlotBlock => Boolean(slot?.people?.length));
+  return [...contract, ...extra];
 }
 
 export function opsStatusCountChips(

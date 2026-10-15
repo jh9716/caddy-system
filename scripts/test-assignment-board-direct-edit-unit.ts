@@ -898,9 +898,7 @@ const opsDutyFallbackChecks = Promise.all([
       },
     ],
     listMonthlyMarshal: async () => [],
-    fetchOpsDutySheets: async () => {
-      throw new Error("stored가 있으면 sheet를 읽지 않음");
-    },
+    fetchOpsDutySheets: async () => [],
   }),
   resolveOpsDutyReadOnly("2026-08-28", {
     listDuties: async () => [],

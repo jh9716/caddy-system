@@ -684,16 +684,17 @@ section("Sheet call-count cache / inflight");
 
     cleanup();
     setPublishedOffSheetLoaderForTests(async () => [offSheetForDate(date, ["이휴무"])]);
-    setPublishedOpsDutySheetLoaderForTests(async () => {
-      throw new Error("duty sheet should not run on stored hit");
-    });
+    setPublishedOpsDutySheetLoaderForTests(async () => dutySheetsForDate(date));
     await loadAdminOpsDashboardSource(date, {
       loadAvailability: mockLoadAvailability(),
       ...noMonthlyMarshal,
       listDuties: async () => [storedDuty("김가용")],
     });
     assert(getOffSheetHttpFetchCount() === 1, "duty DB hit: OFF 1");
-    assert(getOpsDutySheetHttpFetchCount() === 0, "duty DB hit: duty Sheet 0");
+    assert(
+      getOpsDutySheetHttpFetchCount() === 1,
+      "stored duty/leader still reads sheet for missing marshal keys"
+    );
   } finally {
     cleanup();
   }
@@ -709,7 +710,7 @@ section("read-only OFF/ops source overlay");
     listDuties: async () => [storedDuty("김가용")],
     fetchOffSheets: async () => [offSheetForDate(date, ["이휴무"])],
     fetchOpsDutySheets: async () => {
-      writes.push("unexpected_ops_fetch");
+      writes.push("marshal_sheet_fallback");
       return [];
     },
   });
@@ -717,7 +718,7 @@ section("read-only OFF/ops source overlay");
   const offCaddy = loaded.dashboard.caddies.find((c) => c.name === "이휴무");
   assert(offCaddy?.status === "excluded" && offCaddy.statusTone === "off", "OFF Sheet 휴무가 캐디 상태에 반영");
   assert(loaded.offSource === "sheet" && loaded.quality === "complete", "OFF Sheet source complete");
-  assert(writes.length === 0, "저장된 DailyOpsDuty가 있으면 운영배치 Sheet를 읽지 않음");
+  assert(writes.length === 1, "stored duty without marshal still reads sheet marshal fallback");
 }
 
 section("Sheet overlay는 DB write / apply 없음");

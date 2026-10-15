@@ -32,6 +32,7 @@ import {
   listDailyOpsDutyOverrides,
   type StoredOpsDutyOverrideRow,
 } from "@/lib/opsDutyEffectiveService";
+import { marshalNonOperationalKeys } from "@/lib/marshalMonthDutySource";
 import {
   opsDutyPanelRowsFromReadOnly,
   resolveOpsDutyReadOnly,
@@ -105,6 +106,7 @@ export type AssignmentsDateBundleOpsDuty = {
   caddyIds: number[];
   rows: ReturnType<typeof opsDutyPanelRowsFromReadOnly>;
   error: string | null;
+  marshalWarnings?: string[];
   slots?: ReturnType<typeof buildOpsDutySlotStates>;
 };
 
@@ -433,6 +435,10 @@ export async function loadAssignmentsDateBundle(
       caddyIds: [...new Set(rows.map((row) => row.caddyId))],
       rows,
       error: resolved.error,
+      marshalWarnings: marshalNonOperationalKeys(
+        resolved.monthlyMarshal ?? [],
+        caddies
+      ),
     };
     try {
       payload.slots = buildOpsDutySlotStates(rows, overrides);

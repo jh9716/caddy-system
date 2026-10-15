@@ -2,27 +2,35 @@
  * FINALIZED 월 마샬 슬롯 → Daily Ops marshal duty read-only source.
  * DailyOpsDuty materialize / rotation generate / Sheet write 없음.
  * P2 slot 값(caddyId, source)을 다시 계산하지 않고 그대로 읽는다.
+ *
+ * 기존 8-key editor/Sheet 계약(마샬_조출_1/2, 마샬_후출_1)은 확장하지 않는다.
+ * AM2+/PM1+ 는 monthly-only extra roleKey 로만 전달한다.
  */
 
 import type { PrismaClient } from "@prisma/client";
 import { parseYmd } from "@/lib/availabilityEngine";
 import type { DailyOpsDutyRole } from "@/lib/dailyOpsDuty";
+import { dutyEntriesFromStored } from "@/lib/dailyOpsDuty";
+import { isOperationalCaddy } from "@/lib/operationalRoster";
 import type { DutyExcelEntry } from "@/lib/opsDutyRoleKeys";
 import { isOpsDutyRoleKey } from "@/lib/opsDutyRoleKeys";
 import { prisma as defaultPrisma } from "@/lib/prisma";
 
-export const MARSHAL_MONTH_DUTY_ROLE_KEYS = [
+/** Sheet/editor 8-key 안에 있는 마샬 칸. extra monthly slot은 여기 넣지 않는다. */
+export const CONTRACT_MARSHAL_MONTH_ROLE_KEYS = [
   "마샬_조출_1",
   "마샬_조출_2",
   "마샬_후출_1",
 ] as const;
 
-export type MarshalMonthDutyRoleKey = (typeof MARSHAL_MONTH_DUTY_ROLE_KEYS)[number];
+export const MARSHAL_MONTH_DUTY_ROLE_KEYS = CONTRACT_MARSHAL_MONTH_ROLE_KEYS;
+
+export type MarshalMonthDutyRoleKey = (typeof CONTRACT_MARSHAL_MONTH_ROLE_KEYS)[number];
 
 export type OpsDutyMarshalSource = "monthly" | "stored" | "sheet" | "none";
 
 export type MonthlyMarshalDutyRow = {
-  roleKey: MarshalMonthDutyRoleKey;
+  roleKey: string;
   role: Extract<DailyOpsDutyRole, "MARSHAL_AM" | "MARSHAL_PM">;
   caddyId: number;
   name: string;
@@ -43,38 +51,45 @@ export type LoadMonthlyMarshalDutyDeps = {
   prisma?: PrismaClient;
 };
 
-const ROLE_FROM_KEY: Record<
-  MarshalMonthDutyRoleKey,
-  Extract<DailyOpsDutyRole, "MARSHAL_AM" | "MARSHAL_PM">
-> = {
-  마샬_조출_1: "MARSHAL_AM",
-  마샬_조출_2: "MARSHAL_AM",
-  마샬_후출_1: "MARSHAL_PM",
-};
+const MARSHAL_MONTH_ROLE_KEY_RE = /^마샬_(조출|후출)_([1-9]\d*)$/;
 
-export function isMarshalMonthDutyRoleKey(
-  value: unknown
-): value is MarshalMonthDutyRoleKey {
-  return MARSHAL_MONTH_DUTY_ROLE_KEYS.includes(String(value) as MarshalMonthDutyRoleKey);
+export function isMarshalMonthDutyRoleKey(value: unknown): boolean {
+  return MARSHAL_MONTH_ROLE_KEY_RE.test(String(value || "").trim());
 }
 
-/** 기존 8-key 계약에 있는 마샬 칸만 매핑. PM2+ / AM3+ 는 새 key를 만들지 않는다. */
+export function isContractMarshalRoleKey(value: unknown): boolean {
+  return CONTRACT_MARSHAL_MONTH_ROLE_KEYS.includes(
+    String(value || "").trim() as MarshalMonthDutyRoleKey
+  );
+}
+
+/** 8-key editor/Sheet에 없는 FINALIZED extra slot (PM1+, AM2+). */
+export function isMonthlyExtraMarshalRoleKey(value: unknown): boolean {
+  const key = String(value || "").trim();
+  return isMarshalMonthDutyRoleKey(key) && !isOpsDutyRoleKey(key);
+}
+
+export function opsDutyRoleFromMarshalMonthKey(
+  roleKey: string
+): Extract<DailyOpsDutyRole, "MARSHAL_AM" | "MARSHAL_PM"> | null {
+  const match = String(roleKey || "").trim().match(MARSHAL_MONTH_ROLE_KEY_RE);
+  if (!match) return null;
+  return match[1] === "조출" ? "MARSHAL_AM" : "MARSHAL_PM";
+}
+
+/**
+ * P2 slotIndex 0..7 → 마샬_조출_N / 마샬_후출_N.
+ * 계약 3칸과 같은 이름을 쓰되, extra 칸은 OPS_DUTY_ROLE_KEYS에 추가하지 않는다.
+ */
 export function marshalMonthSlotToRoleKey(
   shift: unknown,
   slotIndex: unknown
-): MarshalMonthDutyRoleKey | null {
+): string | null {
   const normalized = String(shift ?? "").trim().toUpperCase();
   const index = Number(slotIndex);
-  if (!Number.isInteger(index) || index < 0) return null;
-  if (normalized === "AM" || normalized === "조출") {
-    if (index === 0) return "마샬_조출_1";
-    if (index === 1) return "마샬_조출_2";
-    return null;
-  }
-  if (normalized === "PM" || normalized === "후출") {
-    if (index === 0) return "마샬_후출_1";
-    return null;
-  }
+  if (!Number.isInteger(index) || index < 0 || index > 7) return null;
+  if (normalized === "AM" || normalized === "조출") return `마샬_조출_${index + 1}`;
+  if (normalized === "PM" || normalized === "후출") return `마샬_후출_${index + 1}`;
   return null;
 }
 
@@ -116,13 +131,14 @@ export function mapFinalizedMarshalSlots(input: {
   for (const slot of input.slots) {
     const roleKey = marshalMonthSlotToRoleKey(slot.shift, slot.slotIndex);
     if (!roleKey || usedKeys.has(roleKey)) continue;
+    const role = opsDutyRoleFromMarshalMonthKey(roleKey);
     const caddyId = Number(slot.caddyId);
     const name = String(slot.name || slot.rawName || "").trim();
-    if (!Number.isInteger(caddyId) || caddyId < 1 || !name) continue;
+    if (!role || !Number.isInteger(caddyId) || caddyId < 1 || !name) continue;
     usedKeys.add(roleKey);
     rows.push({
       roleKey,
-      role: ROLE_FROM_KEY[roleKey],
+      role,
       caddyId,
       name,
       team: String(slot.team || "").trim() || "—",
@@ -147,8 +163,7 @@ function isMissingMarshalMonthTable(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return (
     code === "P2021" ||
-    ((/MarshalMonthPlan|MarshalMonthSlot/.test(message) &&
-      /does not exist/i.test(message)))
+    (/MarshalMonthPlan|MarshalMonthSlot/.test(message) && /does not exist/i.test(message))
   );
 }
 
@@ -212,6 +227,40 @@ export async function listFinalizedMarshalMonthDutyRows(
   return loaded.rows;
 }
 
+export function missingContractMarshalKeys(input: {
+  storedRoleKeys?: readonly string[];
+  monthlyRoleKeys?: readonly string[];
+}): MarshalMonthDutyRoleKey[] {
+  const have = new Set(
+    [...(input.storedRoleKeys || []), ...(input.monthlyRoleKeys || [])].map((key) =>
+      String(key || "").trim()
+    )
+  );
+  return CONTRACT_MARSHAL_MONTH_ROLE_KEYS.filter((key) => !have.has(key));
+}
+
+/**
+ * duty/leader: stored가 있으면 date-level stored (sheet duty/leader 차단).
+ * marshal: key별로 stored marshal > sheet marshal.
+ */
+export function mergeLegacyDutyEntries(input: {
+  stored: readonly {
+    role: DailyOpsDutyRole | string;
+    roleKey: string;
+    rawName?: string | null;
+    name?: string | null;
+  }[];
+  sheetEntries: readonly DutyExcelEntry[];
+}): DutyExcelEntry[] {
+  if (input.stored.length === 0) return [...input.sheetEntries];
+  const storedEntries = dutyEntriesFromStored(input.stored);
+  const storedKeys = new Set(storedEntries.map((entry) => entry.roleKey));
+  const sheetMarshal = input.sheetEntries.filter(
+    (entry) => isContractMarshalRoleKey(entry.roleKey) && !storedKeys.has(entry.roleKey)
+  );
+  return [...storedEntries, ...sheetMarshal];
+}
+
 export function overlayMonthlyMarshalDutyEntries(
   legacyEntries: readonly DutyExcelEntry[],
   monthly: readonly MonthlyMarshalDutyRow[]
@@ -221,7 +270,7 @@ export function overlayMonthlyMarshalDutyEntries(
   const kept = legacyEntries.filter((entry) => !monthlyKeys.has(entry.roleKey));
   const extra: DutyExcelEntry[] = [];
   for (const row of monthly) {
-    if (!isOpsDutyRoleKey(row.roleKey)) continue;
+    if (!isMarshalMonthDutyRoleKey(row.roleKey)) continue;
     const rawName = String(row.rawName || row.name || "").trim();
     if (!rawName) continue;
     extra.push({
@@ -235,16 +284,18 @@ export function overlayMonthlyMarshalDutyEntries(
 
 export function resolveMarshalDutySource(input: {
   monthlyRows: readonly MonthlyMarshalDutyRow[];
-  legacySource: "stored" | "sheet" | "none";
-  legacyEntries: readonly { roleKey?: string }[];
+  storedRoleKeys?: readonly string[];
+  sheetMarshalRoleKeys?: readonly string[];
 }): OpsDutyMarshalSource {
   if (input.monthlyRows.length > 0) return "monthly";
-  const hasLegacyMarshal = input.legacyEntries.some((row) =>
-    isMarshalMonthDutyRoleKey(row.roleKey)
+  const storedMarshal = (input.storedRoleKeys || []).some((key) =>
+    isContractMarshalRoleKey(key)
   );
-  if (!hasLegacyMarshal) return "none";
-  if (input.legacySource === "stored") return "stored";
-  if (input.legacySource === "sheet") return "sheet";
+  if (storedMarshal) return "stored";
+  const sheetMarshal = (input.sheetMarshalRoleKeys || []).some((key) =>
+    isContractMarshalRoleKey(key)
+  );
+  if (sheetMarshal) return "sheet";
   return "none";
 }
 
@@ -254,9 +305,23 @@ export function monthlyMarshalToDutyEntries(
   return overlayMonthlyMarshalDutyEntries([], monthly);
 }
 
-export function opsDutyRoleFromMarshalMonthKey(
-  roleKey: string
-): DailyOpsDutyRole | null {
-  if (!isMarshalMonthDutyRoleKey(roleKey)) return null;
-  return ROLE_FROM_KEY[roleKey];
+export function marshalNonOperationalKeys(
+  monthly: readonly MonthlyMarshalDutyRow[],
+  caddies: readonly {
+    id?: number;
+    caddyId?: number;
+    employmentStatus?: unknown;
+    excludedReasons?: readonly string[] | null;
+  }[]
+): string[] {
+  const byId = new Map(
+    caddies.map((row) => [Number(row.id ?? row.caddyId), row] as const)
+  );
+  const keys: string[] = [];
+  for (const row of monthly) {
+    const current = byId.get(Number(row.caddyId));
+    if (isOperationalCaddy(current || row)) continue;
+    keys.push(row.roleKey);
+  }
+  return keys;
 }

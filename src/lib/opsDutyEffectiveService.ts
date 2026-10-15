@@ -13,7 +13,10 @@ import { countByOpsRole, type DailyOpsDutyRole } from "@/lib/dailyOpsDuty";
 import { DailyOpsDutyError } from "@/lib/dailyOpsDutyService";
 import type { DutyExcelEntry } from "@/lib/opsDutyRoleKeys";
 import { isOpsDutyRoleKey } from "@/lib/opsDutyRoleKeys";
-import type { OpsDutyMarshalSource } from "@/lib/marshalMonthDutySource";
+import {
+  isMonthlyExtraMarshalRoleKey,
+  type OpsDutyMarshalSource,
+} from "@/lib/marshalMonthDutySource";
 import {
   opsDutyPanelRowsFromReadOnly,
   resolveOpsDutyReadOnly,
@@ -129,7 +132,11 @@ export async function resolveEffectiveOpsDuty(
     listCaddies(),
   ]);
   const baseRows = opsDutyPanelRowsFromReadOnly(base, caddies);
-  const rows = applyOpsDutyOverrides(baseRows, overrides);
+  const contractRows = applyOpsDutyOverrides(baseRows, overrides);
+  const extraMonthly = baseRows
+    .filter((row) => isMonthlyExtraMarshalRoleKey(row.roleKey))
+    .map((row) => ({ ...row, overridden: false }));
+  const rows = extraMonthly.length > 0 ? [...contractRows, ...extraMonthly] : contractRows;
   return {
     date: ymd,
     baseSource: base.source,

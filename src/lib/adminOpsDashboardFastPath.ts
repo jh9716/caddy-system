@@ -25,7 +25,12 @@ import {
 import type { AdminOpsDashboardSourceDeps } from "@/lib/adminOpsDashboardSource";
 import { loadAdminOpsDashboardWithSource } from "@/lib/adminOpsDashboardService";
 import { dashboardViewFromLive } from "@/lib/dailyOpsSnapshot";
+import { dutyEntriesFromStored, opsDutyRoleFromKind } from "@/lib/dailyOpsDuty";
 import { listDailyOpsDuties } from "@/lib/dailyOpsDutyService";
+import {
+  listFinalizedMarshalMonthDutyRows,
+  overlayMonthlyMarshalDutyEntries,
+} from "@/lib/marshalMonthDutySource";
 import { peekCachedOffSheetsForDate } from "@/lib/offSheetFetch";
 import { peekCachedOpsDutySheets } from "@/lib/opsDutySheetFetch";
 import { prisma } from "@/lib/prisma";
@@ -71,6 +76,8 @@ export async function loadAdminOpsDashboardDbFirst(
 ): Promise<AdminOpsDashboardFreshView> {
   parseYmd(ymd);
   const listDuties = deps.listDuties ?? listDailyOpsDuties;
+  const listMonthly =
+    deps.listMonthlyMarshal ?? ((date: string) => listFinalizedMarshalMonthDutyRows(date));
   const roster =
     deps.listRoster ??
     (async () =>
@@ -84,11 +91,27 @@ export async function loadAdminOpsDashboardDbFirst(
         },
         orderBy: [{ team: "asc" }, { id: "asc" }],
       }));
-  const [caddies, stored] = await Promise.all([roster(), listDuties(ymd)]);
+  const [caddies, stored, monthly] = await Promise.all([
+    roster(),
+    listDuties(ymd),
+    listMonthly(ymd),
+  ]);
   const visible = caddies.filter(
     (row) => normalizeEmploymentStatus(row.employmentStatus) !== "RETIRED"
   );
   const now = new Date(deps.nowMs ?? Date.now());
+  const mergedDuty = overlayMonthlyMarshalDutyEntries(
+    dutyEntriesFromStored(stored),
+    monthly
+  );
+  const opsDutyNames =
+    mergedDuty.length > 0
+      ? mergedDuty.map((entry) => ({
+          role: opsDutyRoleFromKind(entry.kind),
+          name: entry.rawName,
+          rawName: entry.rawName,
+        }))
+      : stored;
   return attachDashboardFreshness(
     {
       date: ymd,
@@ -106,7 +129,7 @@ export async function loadAdminOpsDashboardDbFirst(
         offCount: 0,
         reasonCounts: [],
       },
-      opsDuties: groupOpsDutyNames(stored),
+      opsDuties: groupOpsDutyNames(opsDutyNames),
       caddies: visible.map(pendingAdminOpsCaddyRow),
       freshness: "refreshing",
       sourceAsOf: null,

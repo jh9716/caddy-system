@@ -168,7 +168,26 @@ export function specialBandFromTeam(
 
 export function slotLabelFromRoleKey(roleKey: string): string | null {
   const key = String(roleKey || "").trim();
-  return DUTY_ROLEKEY_SLOTS[key] || MARSHAL_ROLEKEY_SLOTS[key] || null;
+  const known = DUTY_ROLEKEY_SLOTS[key] || MARSHAL_ROLEKEY_SLOTS[key];
+  if (known) return known;
+  const extra = key.match(/^마샬_(조출|후출)_([1-9]\d*)$/);
+  if (extra) return `${extra[1]}${extra[2]}`;
+  return null;
+}
+
+export function extraMarshalSlotLabels(
+  slots: readonly { label?: string | null }[]
+): string[] {
+  const seen = new Set<string>();
+  const extra: string[] = [];
+  for (const slot of slots) {
+    const label = String(slot.label || "").trim();
+    if (!label || (MARSHAL_SLOT_LABELS as readonly string[]).includes(label)) continue;
+    if (seen.has(label)) continue;
+    seen.add(label);
+    extra.push(label);
+  }
+  return extra;
 }
 
 export function opsRoleFromReason(reason: string): OpsRoleKind | null {
@@ -517,7 +536,18 @@ export function buildUnavailableBoardView(
     sick,
     absent,
     dutySlots: assignSlots(dutyCandidates, DUTY_SLOT_LABELS, 2),
-    marshalSlots: assignSlots(marshalCandidates, MARSHAL_SLOT_LABELS, 2),
+    marshalSlots: assignSlots(
+      marshalCandidates,
+      [
+        ...MARSHAL_SLOT_LABELS,
+        ...extraMarshalSlotLabels(
+          marshalCandidates.map((row) => ({
+            label: row.slotLabel,
+          }))
+        ),
+      ],
+      2
+    ),
     leaders,
     specialBands,
     other,
