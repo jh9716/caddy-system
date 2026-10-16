@@ -54,6 +54,7 @@ export type MarshalRosterDenseView = {
   team: string;
   typeLabel: string;
   employmentLabel: string;
+  metaText: string;
   statusLabel: "활성" | "비활성";
   active: boolean;
   rotationOrder: number | null;
@@ -192,17 +193,35 @@ export function toMarshalRosterCardView(
   };
 }
 
+export function formatMarshalRosterDenseMeta(input: {
+  team: string;
+  typeLabel: string;
+  employmentLabel: string;
+}): string {
+  const parts = [input.team, input.typeLabel, input.employmentLabel]
+    .map((part) => String(part ?? "").trim())
+    .filter((part) => part && part !== "—");
+  return parts.join(" · ") || "—";
+}
+
 export function toMarshalRosterDenseView(
   row: MarshalRosterRow
 ): MarshalRosterDenseView {
   const team = String(row.caddy.team ?? "").trim() || "—";
+  const typeLabel = caddyTypeLabel(row.caddy.caddyType);
+  const employmentLabel = employmentStatusLabel(row.caddy.employmentStatus);
   return {
     id: row.id,
     orderText: formatMarshalRosterOrder(row.rotationOrder),
     name: String(row.caddy.name ?? "").trim() || "이름없음",
     team,
-    typeLabel: caddyTypeLabel(row.caddy.caddyType),
-    employmentLabel: employmentStatusLabel(row.caddy.employmentStatus),
+    typeLabel,
+    employmentLabel,
+    metaText: formatMarshalRosterDenseMeta({
+      team,
+      typeLabel,
+      employmentLabel,
+    }),
     statusLabel: row.active ? "활성" : "비활성",
     active: row.active,
     rotationOrder: row.rotationOrder,

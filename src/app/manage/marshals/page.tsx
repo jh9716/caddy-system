@@ -299,10 +299,7 @@ export default function ManageMarshalsPage() {
                         className="mr-dense-panel"
                         data-marshal-panel={row.id}
                       >
-                        <p className="mr-dense-meta">
-                          조 {view.team} · 유형 {view.typeLabel} · 재직{" "}
-                          {view.employmentLabel}
-                        </p>
+                        <p className="mr-dense-meta">{view.metaText}</p>
                         <div className="mr-dense-actions">
                           <label className="mr-dense-order-field">
                             <span>순번</span>

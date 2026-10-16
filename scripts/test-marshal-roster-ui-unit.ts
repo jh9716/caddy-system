@@ -14,6 +14,7 @@ import {
   filterMarshalPickerOptions,
   firstMarshalPickerMatch,
   formatMarshalCaddyOptionLabel,
+  formatMarshalRosterDenseMeta,
   listMarshalAddableCaddies,
   marshalRosterSaveErrorMessage,
   matchesMarshalCaddyQuery,
@@ -215,6 +216,23 @@ section("roster rendering contracts");
     dense.employmentLabel === employmentStatusLabel("ACTIVE"),
     "dense 재직"
   );
+  assert(dense.metaText === "8조 · 하우스 · 재직", "dense meta 중복 없음");
+  assert(
+    formatMarshalRosterDenseMeta({
+      team: "1조",
+      typeLabel: "하우스",
+      employmentLabel: "재직",
+    }) === "1조 · 하우스 · 재직",
+    "1조 하우스 재직 자연 표기"
+  );
+  assert(
+    formatMarshalRosterDenseMeta({
+      team: "10조",
+      typeLabel: "3부반",
+      employmentLabel: "휴직",
+    }) === "10조 · 3부반 · 휴직",
+    "휴직 라벨 접두어 없음"
+  );
   assert(dense.actionLabel === "비활성", "dense 활성→비활성");
   const denseOff = toMarshalRosterDenseView(inactive);
   assert(denseOff.statusLabel === "비활성", "dense 비활성 상태");
@@ -262,6 +280,9 @@ section("source contracts");
   assert(page.includes('data-marshal-roster="table"'), "desktop table");
   assert(page.includes("colSpan={7}"), "empty row colSpan 7");
   assert(page.includes("toMarshalRosterDenseView"), "dense contract 사용");
+  assert(page.includes("view.metaText"), "dense meta helper 사용");
+  assert(!page.includes("조 {view.team}"), "조 중복 prefix 없음");
+  assert(!/재직\s*\{/.test(page), "재직 중복 prefix 없음");
   assert(page.includes("aria-expanded"), "dense 펼침 상태");
   assert(page.includes("data-marshal-panel"), "dense 관리 패널");
   assert(page.includes("marshalRosterSaveErrorMessage"), "409 안내 helper");
