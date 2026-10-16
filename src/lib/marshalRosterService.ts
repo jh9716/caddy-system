@@ -3,6 +3,7 @@
  */
 
 import type { Prisma, PrismaClient } from "@prisma/client";
+import { kstYmd } from "@/lib/kstDate";
 import { prisma as defaultPrisma } from "@/lib/prisma";
 import {
   MARSHAL_AUDIT_ACTIONS,
@@ -14,6 +15,7 @@ import {
   formatMarshalYmd,
   parseMarshalStartedOn,
   parseOptionalRotationOrder,
+  resolveMarshalCreateStartedOn,
   parsePositiveCaddyId,
   parsePositiveId,
   serializeMarshalProfile,
@@ -96,14 +98,18 @@ export async function listMarshalProfiles(
 export async function createMarshalProfile(
   input: {
     caddyId: unknown;
-    startedOn: unknown;
+    startedOn?: unknown;
     rotationOrder?: unknown;
+    now?: Date;
     actor?: MarshalRosterActor;
   },
   client?: PrismaClient
 ): Promise<MarshalRosterRow> {
   const caddyId = parsePositiveCaddyId(input.caddyId);
-  const startedOn = parseMarshalStartedOn(input.startedOn);
+  const startedOn = resolveMarshalCreateStartedOn(
+    input.startedOn,
+    kstYmd(input.now)
+  );
   const requestedOrder = parseOptionalRotationOrder(input.rotationOrder);
   const prisma = db(client);
 

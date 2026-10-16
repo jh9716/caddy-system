@@ -23,7 +23,6 @@ export default function ManageMarshalsPage() {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [creating, setCreating] = useState(false);
   const [caddyId, setCaddyId] = useState("");
-  const [startedOn, setStartedOn] = useState("");
   const [rotationOrder, setRotationOrder] = useState("");
   const [showInactive, setShowInactive] = useState(true);
 
@@ -79,8 +78,8 @@ export default function ManageMarshalsPage() {
   });
 
   const createMarshal = async () => {
-    if (!caddyId || !startedOn) {
-      setError("캐디와 시작일을 선택하세요.");
+    if (!caddyId) {
+      setError("캐디를 선택하세요.");
       return;
     }
     setCreating(true);
@@ -92,7 +91,6 @@ export default function ManageMarshalsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           caddyId: Number(caddyId),
-          startedOn,
           rotationOrder: rotationOrder ? Number(rotationOrder) : undefined,
         }),
       });
@@ -101,7 +99,6 @@ export default function ManageMarshalsPage() {
         throw new Error(data?.error || "등록 실패");
       }
       setCaddyId("");
-      setStartedOn("");
       setRotationOrder("");
       await load();
     } catch (e: unknown) {
@@ -197,24 +194,10 @@ export default function ManageMarshalsPage() {
               fontSize: 16,
             }}
           />
-          <input
-            aria-label="마샬 시작일"
-            type="date"
-            value={startedOn}
-            onChange={(e) => setStartedOn(e.target.value)}
-            disabled={creating}
-            style={{
-              minWidth: 160,
-              padding: "8px 10px",
-              border: "1px solid var(--vh-border-strong)",
-              borderRadius: 8,
-              fontSize: 16,
-            }}
-          />
           <button
             type="submit"
             className="ui-btn"
-            disabled={creating || !caddyId || !startedOn}
+            disabled={creating || !caddyId}
           >
             {creating ? "등록 중…" : "명단에 추가"}
           </button>
