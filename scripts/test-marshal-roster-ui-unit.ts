@@ -15,8 +15,10 @@ import {
   firstMarshalPickerMatch,
   formatMarshalCaddyOptionLabel,
   listMarshalAddableCaddies,
+  marshalRosterSaveErrorMessage,
   matchesMarshalCaddyQuery,
   toMarshalRosterCardView,
+  toMarshalRosterDenseView,
   visibleMarshalRoster,
   type MarshalPickerCaddy,
 } from "../src/lib/marshalRosterUi";
@@ -203,6 +205,35 @@ section("roster rendering contracts");
   const off = toMarshalRosterCardView(inactive);
   assert(off.statusLabel === "비활성", "card 비활성 상태");
   assert(off.actionLabel === "복구", "card 비활성→복구");
+  const dense = toMarshalRosterDenseView(active);
+  assert(dense.orderText === "3", "dense 순번");
+  assert(dense.name === "양현철", "dense 이름");
+  assert(dense.team === "8조", "dense 조");
+  assert(dense.statusLabel === "활성", "dense 활성");
+  assert(dense.typeLabel === "하우스", "dense 유형");
+  assert(
+    dense.employmentLabel === employmentStatusLabel("ACTIVE"),
+    "dense 재직"
+  );
+  assert(dense.actionLabel === "비활성", "dense 활성→비활성");
+  const denseOff = toMarshalRosterDenseView(inactive);
+  assert(denseOff.statusLabel === "비활성", "dense 비활성 상태");
+  assert(denseOff.actionLabel === "복구", "dense 비활성→복구");
+  assert(
+    marshalRosterSaveErrorMessage({
+      status: 409,
+      code: "duplicate_rotation_order",
+      error: "활성 마샬 순번 3이(가) 중복됩니다.",
+    }).includes("중복"),
+    "409 순번 중복 안내"
+  );
+  assert(
+    marshalRosterSaveErrorMessage({
+      status: 409,
+      code: "duplicate_rotation_order",
+    }) === "활성 마샬 순번이 중복됩니다. 다른 순번을 입력하세요.",
+    "409 fallback 안내"
+  );
   const shown = visibleMarshalRoster([active, inactive], false);
   assert(shown.length === 1 && shown[0].id === 1, "비활성 제외");
   const all = visibleMarshalRoster([active, inactive], true);
@@ -227,11 +258,16 @@ section("source contracts");
   assert(page.includes('aria-label="마샬 순번"'), "추가 UI 순번");
   assert(page.includes("명단에 추가"), "추가 UI 버튼");
   assert(page.includes("비활성 포함"), "비활성 포함 유지");
-  assert(page.includes('data-marshal-roster="cards"'), "mobile cards");
+  assert(page.includes('data-marshal-roster="dense"'), "mobile dense list");
   assert(page.includes('data-marshal-roster="table"'), "desktop table");
   assert(page.includes("colSpan={7}"), "empty row colSpan 7");
-  assert(page.includes("toMarshalRosterCardView"), "card contract 사용");
+  assert(page.includes("toMarshalRosterDenseView"), "dense contract 사용");
+  assert(page.includes("aria-expanded"), "dense 펼침 상태");
+  assert(page.includes("data-marshal-panel"), "dense 관리 패널");
+  assert(page.includes("marshalRosterSaveErrorMessage"), "409 안내 helper");
   assert(page.includes("MARSHAL_ROSTER_TABLE_COLUMNS"), "table contract 사용");
+  assert(!page.includes('data-marshal-roster="cards"'), "대형 카드 목록 제거");
+  assert(!page.includes("mr-roster-card-name"), "대형 카드 이름 제거");
   assert(page.includes("buildMarshalCreateBody"), "create payload helper");
   assert(page.includes("buildMarshalActivePatch"), "active patch helper");
   assert(page.includes("buildMarshalRotationPatch"), "rotation patch helper");
@@ -249,13 +285,21 @@ section("source contracts");
   assert(picker.includes('role="listbox"'), "picker listbox");
   assert(picker.includes("onKeyDown"), "picker keyboard");
   assert(css.includes("@media (max-width: 719px)"), "mobile breakpoint");
-  assert(css.includes(".mr-roster-cards"), "card css");
+  assert(css.includes(".mr-roster-dense"), "dense css");
+  assert(css.includes(".mr-dense-main"), "dense row css");
   assert(css.includes(".mr-roster-table"), "table css");
+  assert(!css.includes(".mr-roster-cards"), "card list css 제거");
   assert(
     /@media \(max-width: 719px\)[\s\S]*\.mr-roster-table\s*\{\s*display:\s*none/m.test(
       css
     ),
     "모바일에서 table 숨김"
+  );
+  assert(
+    /@media \(max-width: 719px\)[\s\S]*\.mr-roster-dense\s*\{\s*display:\s*block/m.test(
+      css
+    ),
+    "모바일에서 dense 표시"
   );
   assert(!ui.includes("autoAssignEngine"), "ui helper 엔진 없음");
   assert(!page.includes("generateMarshal"), "UI 월 생성 없음");
