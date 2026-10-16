@@ -22,8 +22,10 @@ import {
   formatMarshalYmd,
   parseMarshalStartedOn,
   parsePositiveCaddyId,
+  resolveMarshalCreateStartedOn,
   serializeMarshalProfile,
 } from "../src/lib/marshalDomain";
+import { kstYmd } from "../src/lib/kstDate";
 import { GET as marshalsGET, POST as marshalsPOST } from "../src/app/api/marshals/route";
 import { PATCH as marshalPATCH } from "../src/app/api/marshals/[id]/route";
 import { OPS_DUTY_ROLE_KEYS } from "../src/lib/opsDutyRoleKeys";
@@ -84,6 +86,7 @@ async function cookieReq(
   });
 }
 
+async function main() {
 section("existing DailyOpsDuty marshal keys unchanged");
 assert(
   OPS_DUTY_ROLE_KEYS.includes("마샬_조출_1") &&
@@ -97,6 +100,38 @@ section("startedOn / eligibility");
 assert(formatMarshalYmd(parseMarshalStartedOn("2026-11-01")) === "2026-11-01", "parse ymd");
 throws(() => parseMarshalStartedOn("2026-02-30"), "invalid_started_on", "overflow 거부");
 throws(() => parseMarshalStartedOn("11-01"), "invalid_started_on", "형식 거부");
+{
+  const utcEvening = new Date("2026-10-15T15:30:00.000Z");
+  const utcAfternoon = new Date("2026-10-15T14:59:00.000Z");
+  assert(kstYmd(utcEvening) === "2026-10-16", "UTC 저녁은 KST 다음날");
+  assert(kstYmd(utcAfternoon) === "2026-10-15", "UTC 오후는 같은 KST 날짜");
+  assert(
+    formatMarshalYmd(resolveMarshalCreateStartedOn(undefined, kstYmd(utcEvening))) ===
+      "2026-10-16",
+    "startedOn 생략 → KST 오늘"
+  );
+  assert(
+    formatMarshalYmd(resolveMarshalCreateStartedOn(null, kstYmd(utcEvening))) ===
+      "2026-10-16",
+    "startedOn null → KST 오늘"
+  );
+  assert(
+    formatMarshalYmd(resolveMarshalCreateStartedOn("", kstYmd(utcEvening))) ===
+      "2026-10-16",
+    "startedOn 빈값 → KST 오늘"
+  );
+  assert(
+    formatMarshalYmd(
+      resolveMarshalCreateStartedOn("2099-01-15", kstYmd(utcEvening))
+    ) === "2099-01-15",
+    "startedOn 명시 시 기존 동작 유지"
+  );
+  throws(
+    () => resolveMarshalCreateStartedOn("11-01", kstYmd(utcEvening)),
+    "invalid_started_on",
+    "명시 invalid startedOn 거부"
+  );
+}
 assert(parsePositiveCaddyId(12) === 12, "caddyId");
 throws(() => parsePositiveCaddyId(0), "caddyId_required", "caddyId 0 거부");
 assertCaddyEligibleForMarshal({
@@ -259,6 +294,27 @@ section("source contracts");
   assert(!page.includes("off-cal"), "UI 월 달력 없음");
   assert(!page.includes("선임"), "UI 선임 없음");
   assert(!page.includes("후임"), "UI 후임 없음");
+  assert(!page.includes('aria-label="마샬 시작일"'), "추가 UI startedOn 없음");
+  assert(!page.includes("캐디와 시작일을 선택하세요"), "추가 UI 시작일 필수 문구 없음");
+  assert(!page.includes(">시작일<") && !page.includes("<th>시작일</th>"), "목록 시작일 header 없음");
+  assert(!/시작일/.test(page), "페이지에 시작일 UI 없음");
+  assert(!page.includes('type="date"'), "startedOn date input 없음");
+  assert(page.includes("colSpan={7}"), "empty row colSpan 7");
+  assert(page.includes('aria-label="캐디"'), "추가 UI 캐디 선택");
+  assert(page.includes('aria-label="마샬 순번"'), "추가 UI 순번");
+  assert(page.includes("명단에 추가"), "추가 UI 버튼");
+  {
+    const createFn = page.split("const createMarshal")[1]?.split("const patchMarshal")[0] || "";
+    assert(createFn.includes("caddyId"), "create POST caddyId");
+    assert(!createFn.includes("startedOn"), "create POST omits startedOn");
+    const patchType = page.split("const patchMarshal")[1]?.split("return (")[0] || "";
+    assert(!/startedOn\?:/.test(patchType), "patchMarshal UI type omits startedOn");
+  }
+  assert(patchRoute.includes("startedOn:"), "PATCH API still accepts startedOn");
+  assert(service.includes("resolveMarshalCreateStartedOn"), "생략 startedOn 서버 기본값");
+  assert(service.includes("kstYmd"), "startedOn 기본값은 KST");
+  assert(domain.includes("resolveMarshalCreateStartedOn"), "create startedOn helper");
+  assert(/startedOn\s+DateTime/.test(schema), "schema startedOn 컬럼 유지");
   assert(schema.includes("model MarshalProfile"), "schema MarshalProfile");
   assert(schema.includes(`model ${MONTH_MODEL}Plan`), "schema month plan");
   assert(!schema.includes(`model ${MONTH_MODEL}Window`), "schema month window 0");
@@ -313,6 +369,10 @@ section("git: P1 scope + existing ops files unchanged");
         "src/lib/dailySpecialSupport.ts",
         "src/lib/opsDutyEffective.ts",
         "src/lib/availabilityEngine.ts",
+        "src/lib/marshalRotationService.ts",
+        "src/lib/marshalRotationDomain.ts",
+        "src/app/manage/marshals/schedule/page.tsx",
+        "prisma/schema.prisma",
       ],
       { encoding: "utf8" }
     ).stdout || ""
@@ -322,7 +382,10 @@ section("git: P1 scope + existing ops files unchanged");
   const fullDiff = String(
     spawnSync("git", ["diff", "origin/main"], { encoding: "utf8" }).stdout || ""
   );
-  assert(fullDiff.includes(`${MONTH_MODEL}Plan`), "PR2 month plan 있음");
+  assert(
+    read("prisma/schema.prisma").includes(`model ${MONTH_MODEL}Plan`),
+    "schema month plan 유지"
+  );
   assert(!fullDiff.includes(SENIOR_FIELD), "PR diff senior field 0");
   const dutyDiff = String(
     spawnSync(
@@ -359,6 +422,15 @@ section("local DB (optional)");
         caddyType: "HOUSE",
       },
     });
+    const omitted = await prisma.caddy.create({
+      data: {
+        name: `마샬P1생략${stamp}`,
+        team: "1조",
+        teamOrder: 9802,
+        employmentStatus: "ACTIVE",
+        caddyType: "HOUSE",
+      },
+    });
     const retired = await prisma.caddy.create({
       data: {
         name: `마샬P1퇴사${stamp}`,
@@ -375,6 +447,11 @@ section("local DB (optional)");
       });
       assert(created.caddyId === active.id, "ACTIVE 등록");
       assert(created.startedOn === "2099-01-15", "시작일 저장");
+      const defaulted = await createMarshalProfile({
+        caddyId: omitted.id,
+        now: new Date("2026-10-15T15:30:00.000Z"),
+      });
+      assert(defaulted.startedOn === "2026-10-16", "생략 startedOn은 KST 오늘");
       const audit = await prisma.audit.findFirst({
         where: { entity: "MarshalProfile", entityId: created.id, action: "MARSHAL_PROFILE_CREATE" },
         orderBy: { id: "desc" },
@@ -436,10 +513,10 @@ section("local DB (optional)");
       }
     } finally {
       await prisma.marshalProfile.deleteMany({
-        where: { caddyId: { in: [active.id, retired.id] } },
+        where: { caddyId: { in: [active.id, omitted.id, retired.id] } },
       });
       await prisma.caddy.deleteMany({
-        where: { id: { in: [active.id, retired.id] } },
+        where: { id: { in: [active.id, omitted.id, retired.id] } },
       });
     }
   }
@@ -450,3 +527,9 @@ if (failed > 0) {
   process.exit(1);
 }
 console.log(`\nOK ${passed}`);
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

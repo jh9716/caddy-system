@@ -106,6 +106,20 @@ export function parseMarshalStartedOn(value: unknown): Date {
   return date;
 }
 
+/**
+ * 등록 시 startedOn 생략/빈값 → todayYmd (호출측이 KST 오늘을 넘긴다).
+ * 명시값(YYYY-MM-DD)은 기존 parse 규칙을 유지한다.
+ */
+export function resolveMarshalCreateStartedOn(
+  value: unknown,
+  todayYmd: string
+): Date {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return parseMarshalStartedOn(todayYmd);
+  }
+  return parseMarshalStartedOn(value);
+}
+
 export function formatMarshalYmd(value: Date | string): string {
   if (typeof value === "string" && isMarshalYmd(value.slice(0, 10))) {
     return value.slice(0, 10);
