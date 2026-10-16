@@ -375,7 +375,6 @@ section("git: P1 scope + existing ops files unchanged");
         "src/lib/availabilityEngine.ts",
         "src/lib/marshalRotationService.ts",
         "src/lib/marshalRotationDomain.ts",
-        "src/app/manage/marshals/schedule/page.tsx",
         "prisma/schema.prisma",
       ],
       { encoding: "utf8" }

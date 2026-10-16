@@ -204,7 +204,6 @@ section("source contracts");
         "src/lib/autoAssignEngine.ts",
         "src/lib/dailySpecialSupport.ts",
         "src/lib/marshalRotationService.ts",
-        "src/app/manage/marshals/schedule/page.tsx",
         "prisma/schema.prisma",
         "src/lib/operationalRoster.ts",
       ],
