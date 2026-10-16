@@ -1,17 +1,23 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import MarshalCaddyPicker from "@/components/manage/MarshalCaddyPicker";
 import MarshalManageNav from "@/components/manage/MarshalManageNav";
 import { employmentStatusLabel } from "@/lib/caddyManage";
 import { caddyTypeLabel } from "@/lib/marshalDomain";
 import type { MarshalRosterRow } from "@/lib/marshalDomain";
+import {
+  MARSHAL_ROSTER_TABLE_COLUMNS,
+  buildMarshalActivePatch,
+  buildMarshalCreateBody,
+  buildMarshalRotationPatch,
+  listMarshalAddableCaddies,
+  toMarshalRosterCardView,
+  visibleMarshalRoster,
+  type MarshalPickerCaddy,
+} from "@/lib/marshalRosterUi";
 
-type CaddyOption = {
-  id: number;
-  name: string;
-  team: string;
-  teamOrder: number;
-  caddyType?: string | null;
+type CaddyOption = MarshalPickerCaddy & {
   employmentStatus?: string | null;
 };
 
@@ -60,22 +66,10 @@ export default function ManageMarshalsPage() {
     [marshals]
   );
   const addable = useMemo(
-    () =>
-      caddies
-        .filter((caddy) => !registeredIds.has(caddy.id))
-        .sort((a, b) => {
-          const team = String(a.team).localeCompare(String(b.team), "ko");
-          if (team !== 0) return team;
-          return (a.teamOrder || 0) - (b.teamOrder || 0);
-        }),
+    () => listMarshalAddableCaddies(caddies, registeredIds),
     [caddies, registeredIds]
   );
-  const visible = (showInactive ? marshals : marshals.filter((row) => row.active)).slice().sort((a, b) => {
-    const ao = a.rotationOrder ?? 9999;
-    const bo = b.rotationOrder ?? 9999;
-    if (ao !== bo) return ao - bo;
-    return a.id - b.id;
-  });
+  const visible = visibleMarshalRoster(marshals, showInactive);
 
   const createMarshal = async () => {
     if (!caddyId) {
@@ -89,10 +83,7 @@ export default function ManageMarshalsPage() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          caddyId: Number(caddyId),
-          rotationOrder: rotationOrder ? Number(rotationOrder) : undefined,
-        }),
+        body: JSON.stringify(buildMarshalCreateBody({ caddyId, rotationOrder })),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -133,6 +124,12 @@ export default function ManageMarshalsPage() {
     }
   };
 
+  const commitRotation = (row: MarshalRosterRow, raw: string) => {
+    const next = raw.trim() === "" ? null : Number(raw);
+    if (next === row.rotationOrder) return;
+    void patchMarshal(row, buildMarshalRotationPatch(next));
+  };
+
   return (
     <div className="vh-page">
       <div className="vh-page-head">
@@ -144,59 +141,41 @@ export default function ManageMarshalsPage() {
       <MarshalManageNav />
 
       <form
-        className="ui-card"
-        style={{ marginBottom: 16, padding: 16 }}
+        className="ui-card mr-add-card"
+        data-marshal-add-form="1"
         onSubmit={(e) => {
           e.preventDefault();
           void createMarshal();
         }}
       >
-        <h2 style={{ margin: "0 0 8px", fontSize: 16 }}>마샬 추가</h2>
-        <p style={{ margin: "0 0 12px", color: "var(--vh-ink-soft)" }}>
+        <h2>마샬 추가</h2>
+        <p>
           재직(ACTIVE) 캐디만 등록할 수 있습니다. 조·유형은 캐디 관리 값을
           그대로 표시합니다.
         </p>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <select
-            aria-label="캐디"
-            value={caddyId}
-            onChange={(e) => setCaddyId(e.target.value)}
-            disabled={creating}
-            style={{
-              minWidth: 220,
-              flex: "1 1 220px",
-              padding: "8px 10px",
-              border: "1px solid var(--vh-border-strong)",
-              borderRadius: 8,
-              fontSize: 16,
-            }}
-          >
-            <option value="">캐디 선택</option>
-            {addable.map((caddy) => (
-              <option key={caddy.id} value={caddy.id}>
-                {caddy.team} {caddy.name} · {caddyTypeLabel(caddy.caddyType)}
-              </option>
-            ))}
-          </select>
+        <div className="mr-add-row">
+          <div className="mr-add-picker">
+            <MarshalCaddyPicker
+              aria-label="캐디"
+              options={addable}
+              value={caddyId}
+              onChange={setCaddyId}
+              disabled={creating}
+            />
+          </div>
           <input
             aria-label="마샬 순번"
+            className="ui-input mr-add-order"
             type="number"
             min={1}
             placeholder="순번"
             value={rotationOrder}
             onChange={(e) => setRotationOrder(e.target.value)}
             disabled={creating}
-            style={{
-              width: 88,
-              padding: "8px 10px",
-              border: "1px solid var(--vh-border-strong)",
-              borderRadius: 8,
-              fontSize: 16,
-            }}
           />
           <button
             type="submit"
-            className="ui-btn"
+            className="ui-btn ui-btn-primary mr-add-submit"
             disabled={creating || !caddyId}
           >
             {creating ? "등록 중…" : "명단에 추가"}
@@ -210,14 +189,7 @@ export default function ManageMarshalsPage() {
         </p>
       )}
 
-      <label
-        style={{
-          display: "inline-flex",
-          gap: 8,
-          alignItems: "center",
-          marginBottom: 12,
-        }}
-      >
+      <label className="mr-inactive-toggle">
         <input
           type="checkbox"
           checked={showInactive}
@@ -229,70 +201,131 @@ export default function ManageMarshalsPage() {
       {loading ? (
         <p>불러오는 중…</p>
       ) : (
-        <div className="ui-table-wrap">
-          <table className="ui-table">
-            <thead>
-              <tr>
-                <th>순번</th>
-                <th>이름</th>
-                <th>조</th>
-                <th>유형</th>
-                <th>재직</th>
-                <th>상태</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {visible.length === 0 ? (
-                <tr>
-                  <td colSpan={7}>등록된 마샬이 없습니다.</td>
-                </tr>
-              ) : (
-                visible.map((row) => (
-                  <tr key={row.id}>
-                    <td>
+        <>
+          <div className="mr-roster-cards" data-marshal-roster="cards">
+            {visible.length === 0 ? (
+              <p className="ui-card mr-roster-empty">등록된 마샬이 없습니다.</p>
+            ) : (
+              visible.map((row) => {
+                const card = toMarshalRosterCardView(row);
+                const busy = busyId === row.id;
+                return (
+                  <article
+                    key={row.id}
+                    className="ui-card mr-roster-card"
+                    data-marshal-card={row.id}
+                  >
+                    <h3 className="mr-roster-card-name">{card.name}</h3>
+                    <p className="mr-roster-card-meta">{card.summary}</p>
+                    <p className="mr-roster-card-emp">{card.employmentLabel}</p>
+                    <span className={`ui-pill${card.active ? "" : " muted"}`}>
+                      {card.statusLabel}
+                    </span>
+                    <div className="mr-roster-card-actions">
                       <input
                         aria-label={`${row.caddy.name} 순번`}
+                        className="ui-input mr-order-input"
                         type="number"
                         min={1}
                         defaultValue={row.rotationOrder ?? ""}
-                        disabled={busyId === row.id}
-                        onBlur={(e) => {
-                          const raw = e.target.value.trim();
-                          const next = raw === "" ? null : Number(raw);
-                          if (next === row.rotationOrder) return;
-                          void patchMarshal(row, { rotationOrder: next });
-                        }}
-                        style={{ width: 72 }}
+                        disabled={busy}
+                        onBlur={(e) => commitRotation(row, e.target.value)}
                       />
-                    </td>
-                    <td>{row.caddy.name}</td>
-                    <td>{row.caddy.team}</td>
-                    <td>{caddyTypeLabel(row.caddy.caddyType)}</td>
-                    <td>{employmentStatusLabel(row.caddy.employmentStatus)}</td>
-                    <td>{row.active ? "활성" : "비활성"}</td>
-                    <td>
                       <button
                         type="button"
-                        className="ui-btn"
-                        disabled={busyId === row.id}
+                        className={`ui-btn mr-action-btn${
+                          row.active ? "" : " ui-btn-primary"
+                        }`}
+                        disabled={busy}
                         onClick={() =>
-                          void patchMarshal(row, { active: !row.active })
+                          void patchMarshal(
+                            row,
+                            buildMarshalActivePatch(!row.active)
+                          )
                         }
                       >
-                        {busyId === row.id
-                          ? "저장 중…"
-                          : row.active
-                            ? "비활성"
-                            : "복구"}
+                        {busy ? "저장 중…" : card.actionLabel}
                       </button>
-                    </td>
+                    </div>
+                  </article>
+                );
+              })
+            )}
+          </div>
+
+          <div
+            className="ui-table-wrap mr-roster-table"
+            data-marshal-roster="table"
+          >
+            <table className="ui-table">
+              <thead>
+                <tr>
+                  {MARSHAL_ROSTER_TABLE_COLUMNS.map((col) => (
+                    <th key={col}>{col}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {visible.length === 0 ? (
+                  <tr>
+                    <td colSpan={7}>등록된 마샬이 없습니다.</td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+                ) : (
+                  visible.map((row) => {
+                    const busy = busyId === row.id;
+                    return (
+                      <tr key={row.id}>
+                        <td className="mr-order-cell">
+                          <input
+                            aria-label={`${row.caddy.name} 순번`}
+                            className="ui-input mr-order-input"
+                            type="number"
+                            min={1}
+                            defaultValue={row.rotationOrder ?? ""}
+                            disabled={busy}
+                            onBlur={(e) => commitRotation(row, e.target.value)}
+                          />
+                        </td>
+                        <td className="mr-name">{row.caddy.name}</td>
+                        <td>{row.caddy.team}</td>
+                        <td>{caddyTypeLabel(row.caddy.caddyType)}</td>
+                        <td>{employmentStatusLabel(row.caddy.employmentStatus)}</td>
+                        <td>
+                          <span
+                            className={`ui-pill${row.active ? "" : " muted"}`}
+                          >
+                            {row.active ? "활성" : "비활성"}
+                          </span>
+                        </td>
+                        <td className="mr-action-cell">
+                          <button
+                            type="button"
+                            className={`ui-btn mr-action-btn${
+                              row.active ? "" : " ui-btn-primary"
+                            }`}
+                            disabled={busy}
+                            onClick={() =>
+                              void patchMarshal(
+                                row,
+                                buildMarshalActivePatch(!row.active)
+                              )
+                            }
+                          >
+                            {busy
+                              ? "저장 중…"
+                              : row.active
+                                ? "비활성"
+                                : "복구"}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </div>
   );
