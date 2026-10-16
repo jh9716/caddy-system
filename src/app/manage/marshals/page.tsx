@@ -110,7 +110,7 @@ export default function ManageMarshalsPage() {
 
   const patchMarshal = async (
     row: MarshalRosterRow,
-    body: { active?: boolean; startedOn?: string; rotationOrder?: number | null }
+    body: { active?: boolean; rotationOrder?: number | null }
   ) => {
     setBusyId(row.id);
     setError(null);
@@ -238,7 +238,6 @@ export default function ManageMarshalsPage() {
                 <th>조</th>
                 <th>유형</th>
                 <th>재직</th>
-                <th>시작일</th>
                 <th>상태</th>
                 <th></th>
               </tr>
@@ -246,7 +245,7 @@ export default function ManageMarshalsPage() {
             <tbody>
               {visible.length === 0 ? (
                 <tr>
-                  <td colSpan={8}>등록된 마샬이 없습니다.</td>
+                  <td colSpan={7}>등록된 마샬이 없습니다.</td>
                 </tr>
               ) : (
                 visible.map((row) => (
@@ -271,19 +270,6 @@ export default function ManageMarshalsPage() {
                     <td>{row.caddy.team}</td>
                     <td>{caddyTypeLabel(row.caddy.caddyType)}</td>
                     <td>{employmentStatusLabel(row.caddy.employmentStatus)}</td>
-                    <td>
-                      <input
-                        aria-label={`${row.caddy.name} 시작일`}
-                        type="date"
-                        defaultValue={row.startedOn}
-                        disabled={busyId === row.id}
-                        onBlur={(e) => {
-                          const next = e.target.value;
-                          if (!next || next === row.startedOn) return;
-                          void patchMarshal(row, { startedOn: next });
-                        }}
-                      />
-                    </td>
                     <td>{row.active ? "활성" : "비활성"}</td>
                     <td>
                       <button
