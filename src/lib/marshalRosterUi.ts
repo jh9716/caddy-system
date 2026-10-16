@@ -47,6 +47,20 @@ export type MarshalRosterCardView = {
   actionLabel: "비활성" | "복구";
 };
 
+export type MarshalRosterDenseView = {
+  id: number;
+  orderText: string;
+  name: string;
+  team: string;
+  typeLabel: string;
+  employmentLabel: string;
+  metaText: string;
+  statusLabel: "활성" | "비활성";
+  active: boolean;
+  rotationOrder: number | null;
+  actionLabel: "비활성" | "복구";
+};
+
 export type MarshalCreateBody = {
   caddyId: number;
   rotationOrder?: number;
@@ -154,6 +168,12 @@ export function visibleMarshalRoster(
     });
 }
 
+export function formatMarshalRosterOrder(
+  rotationOrder: number | null | undefined
+): string {
+  return rotationOrder == null ? "—" : String(rotationOrder);
+}
+
 export function toMarshalRosterCardView(
   row: MarshalRosterRow
 ): MarshalRosterCardView {
@@ -171,6 +191,59 @@ export function toMarshalRosterCardView(
     rotationOrder: row.rotationOrder,
     actionLabel: row.active ? "비활성" : "복구",
   };
+}
+
+export function formatMarshalRosterDenseMeta(input: {
+  team: string;
+  typeLabel: string;
+  employmentLabel: string;
+}): string {
+  const parts = [input.team, input.typeLabel, input.employmentLabel]
+    .map((part) => String(part ?? "").trim())
+    .filter((part) => part && part !== "—");
+  return parts.join(" · ") || "—";
+}
+
+export function toMarshalRosterDenseView(
+  row: MarshalRosterRow
+): MarshalRosterDenseView {
+  const team = String(row.caddy.team ?? "").trim() || "—";
+  const typeLabel = caddyTypeLabel(row.caddy.caddyType);
+  const employmentLabel = employmentStatusLabel(row.caddy.employmentStatus);
+  return {
+    id: row.id,
+    orderText: formatMarshalRosterOrder(row.rotationOrder),
+    name: String(row.caddy.name ?? "").trim() || "이름없음",
+    team,
+    typeLabel,
+    employmentLabel,
+    metaText: formatMarshalRosterDenseMeta({
+      team,
+      typeLabel,
+      employmentLabel,
+    }),
+    statusLabel: row.active ? "활성" : "비활성",
+    active: row.active,
+    rotationOrder: row.rotationOrder,
+    actionLabel: row.active ? "비활성" : "복구",
+  };
+}
+
+export function marshalRosterSaveErrorMessage(input: {
+  status?: number;
+  code?: unknown;
+  error?: unknown;
+  fallback?: string;
+}): string {
+  const code = String(input.code ?? "").trim();
+  const error = String(input.error ?? "").trim();
+  const fallback = input.fallback || "수정 실패";
+  if (code === "duplicate_rotation_order" || input.status === 409) {
+    return (
+      error || "활성 마샬 순번이 중복됩니다. 다른 순번을 입력하세요."
+    );
+  }
+  return error || fallback;
 }
 
 export function buildMarshalCreateBody(input: {
