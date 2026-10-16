@@ -303,6 +303,10 @@ section("source contracts");
   assert(page.includes('aria-label="캐디"'), "추가 UI 캐디 선택");
   assert(page.includes('aria-label="마샬 순번"'), "추가 UI 순번");
   assert(page.includes("명단에 추가"), "추가 UI 버튼");
+  assert(page.includes("MarshalCaddyPicker"), "검색 가능한 캐디 picker");
+  assert(page.includes('data-marshal-roster="cards"'), "모바일 카드 roster");
+  assert(page.includes('data-marshal-roster="table"'), "PC table roster");
+  assert(page.includes("비활성 포함"), "비활성 포함 유지");
   {
     const createFn = page.split("const createMarshal")[1]?.split("const patchMarshal")[0] || "";
     assert(createFn.includes("caddyId"), "create POST caddyId");

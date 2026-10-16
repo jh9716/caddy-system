@@ -5245,3 +5245,249 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
 .vh-chat-members span {
   color: var(--vh-muted);
 }
+
+/* ——— Marshal roster (/manage/marshals) ——— */
+.mr-add-card {
+  margin-bottom: 16px;
+  padding: 16px;
+  overflow: visible;
+}
+
+.mr-add-card h2 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+.mr-add-card > p {
+  margin: 0 0 12px;
+  color: var(--vh-ink-soft);
+}
+
+.mr-add-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 88px auto;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.mr-add-picker,
+.mr-add-order,
+.mr-add-submit {
+  min-height: 44px;
+}
+
+.mr-add-order,
+.mr-add-submit {
+  height: 44px;
+}
+
+.mr-add-order {
+  width: 88px;
+  min-width: 88px;
+  padding: 8px 10px;
+}
+
+.mr-add-submit {
+  padding-left: 16px;
+  padding-right: 16px;
+  white-space: nowrap;
+}
+
+.mr-picker {
+  position: relative;
+  min-width: 0;
+}
+
+.mr-picker-input {
+  width: 100%;
+  min-height: 44px;
+  height: 44px;
+}
+
+.mr-picker-input.is-selected {
+  border-color: var(--vh-green-700);
+  background: var(--vh-green-50);
+  font-weight: 600;
+}
+
+.mr-picker-selected {
+  margin: 6px 0 0;
+  color: var(--vh-green-800);
+  font-size: 0.82rem;
+  font-weight: 600;
+  word-break: keep-all;
+}
+
+.mr-picker-list {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 30;
+  max-height: min(280px, 50dvh);
+  overflow: auto;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  background: var(--vh-paper);
+  border: 1px solid var(--vh-border-strong);
+  border-radius: var(--vh-radius);
+  box-shadow: var(--vh-shadow);
+}
+
+.mr-picker-empty {
+  padding: 12px 10px;
+  color: var(--vh-muted);
+  font-size: 0.88rem;
+}
+
+.mr-picker-option {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--vh-radius-sm);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font: inherit;
+  font-size: 0.95rem;
+  word-break: keep-all;
+  cursor: pointer;
+}
+
+.mr-picker-option.is-active,
+.mr-picker-option:hover {
+  background: var(--vh-green-50);
+}
+
+.mr-picker-option.is-selected {
+  font-weight: 700;
+  color: var(--vh-green-900);
+}
+
+.mr-inactive-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 6px 10px;
+  border: 1px solid var(--vh-border);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--vh-ink-soft);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.mr-inactive-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--vh-green-800);
+}
+
+.mr-roster-empty {
+  margin: 0;
+  padding: 16px;
+  color: var(--vh-muted);
+}
+
+.mr-roster-cards {
+  display: none;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mr-roster-card {
+  padding: 12px 14px;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+.mr-roster-card-name {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--vh-green-900);
+  line-height: 1.3;
+}
+
+.mr-roster-card-meta,
+.mr-roster-card-emp {
+  margin: 4px 0 0;
+  font-size: 0.84rem;
+  color: var(--vh-ink-soft);
+  line-height: 1.4;
+}
+
+.mr-roster-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.mr-order-input {
+  width: 72px;
+  min-height: 40px;
+  padding: 8px 10px;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.mr-roster-card .mr-order-input {
+  width: 76px;
+}
+
+.mr-action-btn {
+  min-height: 40px;
+  min-width: 72px;
+  padding: 8px 12px;
+}
+
+.mr-roster-table .ui-table th,
+.mr-roster-table .ui-table td {
+  padding: 12px 14px;
+  vertical-align: middle;
+  word-break: keep-all;
+}
+
+.mr-roster-table .mr-name {
+  font-weight: 700;
+  color: var(--vh-green-900);
+}
+
+.mr-roster-table .mr-order-cell {
+  width: 88px;
+}
+
+.mr-roster-table .mr-action-cell {
+  text-align: right;
+  white-space: nowrap;
+}
+
+@media (max-width: 719px) {
+  .mr-add-row {
+    grid-template-columns: 88px minmax(0, 1fr);
+  }
+
+  .mr-add-picker {
+    grid-column: 1 / -1;
+  }
+
+  .mr-add-order {
+    width: 88px;
+    min-width: 88px;
+  }
+
+  .mr-roster-cards {
+    display: flex;
+  }
+
+  .mr-roster-table {
+    display: none;
+  }
+}
