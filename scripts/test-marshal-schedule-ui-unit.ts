@@ -10,8 +10,13 @@ import {
   formatCompactShifts,
   listMonthDayBoards,
   marshalScheduleIntroText,
+  matchesRequestedYearMonth,
+  nextScheduleRequestId,
   planStatusLabel,
+  scheduleMutationBlocked,
   shiftYearMonth,
+  shouldApplyScheduleFetch,
+  shouldScrollPcDayDetail,
   summarizeMarshalNames,
   weekdayIndexFromYmd,
   type MarshalScheduleSlotView,
@@ -150,6 +155,72 @@ section("copy");
   assert(!intro.includes("당일 투영은 다음 단계"), "오래된 투영 문구 제거");
 }
 
+section("month fetch safety");
+{
+  assert(nextScheduleRequestId(3) === 4, "request id 증가");
+  assert(
+    matchesRequestedYearMonth({ year: 2099, month: 10 }, 2099, 10),
+    "year/month 일치"
+  );
+  assert(
+    !matchesRequestedYearMonth({ year: 2099, month: 10 }, 2099, 11),
+    "다른 월 불일치"
+  );
+  assert(
+    !matchesRequestedYearMonth({ year: 2099, month: 10 }, 2098, 10),
+    "다른 연 불일치"
+  );
+  assert(
+    !matchesRequestedYearMonth(null, 2099, 10),
+    "빈 payload 불일치"
+  );
+  assert(
+    shouldApplyScheduleFetch({
+      requestId: 2,
+      latestRequestId: 2,
+      payload: { year: 2099, month: 11 },
+      year: 2099,
+      month: 11,
+    }),
+    "최신 일치 응답 적용"
+  );
+  assert(
+    !shouldApplyScheduleFetch({
+      requestId: 1,
+      latestRequestId: 2,
+      payload: { year: 2099, month: 10 },
+      year: 2099,
+      month: 10,
+    }),
+    "이전 응답 순서 무시"
+  );
+  assert(
+    !shouldApplyScheduleFetch({
+      requestId: 2,
+      latestRequestId: 2,
+      payload: { year: 2099, month: 10 },
+      year: 2099,
+      month: 11,
+    }),
+    "다른 월 응답 무시"
+  );
+  assert(scheduleMutationBlocked({ loading: true, busy: false }), "조회 중 변경 차단");
+  assert(scheduleMutationBlocked({ loading: false, busy: true }), "처리 중 변경 차단");
+  assert(!scheduleMutationBlocked({ loading: false, busy: false }), "대기 시 변경 가능");
+  assert(
+    shouldScrollPcDayDetail({ selectedDate: "2099-10-16", calendarDisplay: "block" }),
+    "PC 달력 상세 스크롤"
+  );
+  assert(
+    !shouldScrollPcDayDetail({ selectedDate: "2099-10-16", calendarDisplay: "none" }),
+    "모바일 숨김 달력은 스크롤 없음"
+  );
+  assert(
+    !shouldScrollPcDayDetail({ selectedDate: null, calendarDisplay: "block" }),
+    "미선택 시 스크롤 없음"
+  );
+}
+
 section("source contracts");
 {
   const page = read("src/app/manage/marshals/schedule/page.tsx");
@@ -165,6 +236,19 @@ section("source contracts");
   assert(page.includes("벌당 관리"), "벌당 패널");
   assert(page.includes("대타 보정 관리"), "보정 패널");
   assert(page.includes("아직 생성된 마샬 월표가 없습니다"), "빈 월표 안내");
+  assert(page.includes("월표 설정 열기"), "빈 월표 설정 버튼");
+  assert(page.includes('data-marshal-open-settings="1"'), "설정 열기 마커");
+  assert(page.includes('data-marshal-open-settings="toolbar"'), "툴바 설정 열기");
+  assert(page.includes("openSettings"), "설정 열기 핸들러");
+  assert(page.includes("shouldApplyScheduleFetch"), "stale GET 가드");
+  assert(page.includes("matchesRequestedYearMonth"), "year/month 일치 가드");
+  assert(page.includes('data-marshal-loading="1"'), "로딩 표시");
+  assert(page.includes("scheduleMutationBlocked"), "조회 중 변경 차단");
+  assert(page.includes("load(\"month-change\")"), "월 변경 시 조회 리셋");
+  assert(page.includes("clearDisplayedPlan"), "이전 월 데이터 제거");
+  assert(page.includes('data-marshal-day-detail="pc"'), "PC 날짜 상세");
+  assert(page.includes("scrollIntoView"), "PC 상세 즉시 표시");
+  assert(page.includes("shouldScrollPcDayDetail"), "모바일 달력 스크롤 가드");
   assert(!page.includes("당일 투영은 다음 단계입니다"), "오래된 문구 없음");
   assert(page.includes("/api/marshals/plans?year="), "GET plans");
   assert(page.includes('method: "PUT"'), "PUT settings");
@@ -178,8 +262,15 @@ section("source contracts");
   {
     const effect =
       page.split("useEffect(")[1]?.split("}, [load]")[0] || "";
-    assert(effect.includes("load()"), "mount 시 GET load");
+    assert(effect.includes("load("), "mount 시 GET load");
     assert(!effect.includes("generate("), "조회 시 자동생성 없음");
+  }
+  {
+    const empty =
+      page.split('data-marshal-empty-plan="1"')[1]?.split("ms-board")[0] || "";
+    assert(empty.includes("월표 설정 열기"), "빈 월표 상단 버튼");
+    assert(!empty.includes("generate("), "빈 월표 버튼은 생성 호출 없음");
+    assert(empty.includes("openSettings"), "빈 월표 버튼은 설정만 연다");
   }
   assert(css.includes(".ms-calendar"), "calendar css");
   assert(css.includes(".ms-dense"), "dense css");

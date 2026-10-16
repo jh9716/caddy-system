@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import MarshalManageNav from "@/components/manage/MarshalManageNav";
 import {
   MARSHAL_WEEKDAY_LABELS,
@@ -11,8 +11,13 @@ import {
   marshalScheduleIntroText,
   marshalShiftText,
   marshalSlotSourceText,
+  matchesRequestedYearMonth,
+  nextScheduleRequestId,
   planStatusLabel,
+  scheduleMutationBlocked,
   shiftYearMonth,
+  shouldApplyScheduleFetch,
+  shouldScrollPcDayDetail,
   summarizeMarshalNames,
   type MarshalDayBoard,
   type MarshalScheduleSlotView,
@@ -126,7 +131,11 @@ export default function ManageMarshalSchedulePage() {
   const [pmSlots, setPmSlots] = useState("1");
   const [startOrder, setStartOrder] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const requestSeq = useRef(0);
+  const dayDetailRef = useRef<HTMLDivElement>(null);
+  const settingsPanelRef = useRef<HTMLElement>(null);
   const [penaltyDate, setPenaltyDate] = useState("");
   const [penaltyCaddyId, setPenaltyCaddyId] = useState("");
   const [penaltyShift, setPenaltyShift] = useState("AM");
@@ -141,14 +150,7 @@ export default function ManageMarshalSchedulePage() {
   const [creditOpen, setCreditOpen] = useState(false);
   const [creditQuery, setCreditQuery] = useState("");
 
-  const load = useCallback(async () => {
-    setError(null);
-    const res = await fetch(
-      `/api/marshals/plans?year=${year}&month=${month}`,
-      { credentials: "include" }
-    );
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(json?.error || "월표 조회 실패");
+  const applyFetchedPlan = (json: PlanPayload) => {
     setData(json);
     if (json.plan) {
       setAmSlots(String(json.plan.amSlotsPerDay));
@@ -161,12 +163,63 @@ export default function ManageMarshalSchedulePage() {
         setStartOrder(String(json.suggestedStartRotationOrder));
       }
     }
+  };
+
+  const clearDisplayedPlan = () => {
+    setData(null);
+    setSelectedDate(null);
+    setSubSlotId(null);
+    setAmSlots("2");
+    setPmSlots("1");
+    setStartOrder("");
+  };
+
+  const load = useCallback(async (mode: "month-change" | "refresh" = "refresh") => {
+    const requestedYear = Number(year);
+    const requestedMonth = Number(month);
+    const requestId = nextScheduleRequestId(requestSeq.current);
+    requestSeq.current = requestId;
+    setError(null);
+    setLoading(true);
+    if (mode === "month-change") {
+      clearDisplayedPlan();
+    }
+    try {
+      const res = await fetch(
+        `/api/marshals/plans?year=${requestedYear}&month=${requestedMonth}`,
+        { credentials: "include" }
+      );
+      const json = await res.json().catch(() => ({}));
+      if (requestId !== requestSeq.current) return;
+      if (!res.ok) {
+        if (mode === "month-change") setData(null);
+        throw new Error(json?.error || "월표 조회 실패");
+      }
+      if (
+        !shouldApplyScheduleFetch({
+          requestId,
+          latestRequestId: requestSeq.current,
+          payload: json,
+          year: requestedYear,
+          month: requestedMonth,
+        })
+      ) {
+        setData(null);
+        throw new Error("조회한 월이 선택한 월과 다릅니다.");
+      }
+      applyFetchedPlan(json as PlanPayload);
+    } catch (e: unknown) {
+      if (requestId !== requestSeq.current) return;
+      setError(e instanceof Error ? e.message : "조회 실패");
+    } finally {
+      if (requestId === requestSeq.current) {
+        setLoading(false);
+      }
+    }
   }, [year, month]);
 
   useEffect(() => {
-    void load().catch((e: unknown) => {
-      setError(e instanceof Error ? e.message : "조회 실패");
-    });
+    void load("month-change");
   }, [load]);
 
   const yearNum = Number(year);
@@ -176,8 +229,15 @@ export default function ManageMarshalSchedulePage() {
     Number.isInteger(monthNum) &&
     monthNum >= 1 &&
     monthNum <= 12;
-  const slots = useMemo(() => data?.plan?.slots || [], [data]);
-  const penalties = useMemo(() => data?.plan?.penalties || [], [data]);
+  const dataForMonth =
+    data && monthValid && matchesRequestedYearMonth(data, yearNum, monthNum)
+      ? data
+      : null;
+  const slots = useMemo(() => dataForMonth?.plan?.slots || [], [dataForMonth]);
+  const penalties = useMemo(
+    () => dataForMonth?.plan?.penalties || [],
+    [dataForMonth]
+  );
   const calendar = useMemo(
     () => (monthValid ? buildMonthCalendar(yearNum, monthNum) : []),
     [monthValid, yearNum, monthNum]
@@ -199,11 +259,12 @@ export default function ManageMarshalSchedulePage() {
     : null;
 
   const run = async (fn: () => Promise<void>) => {
+    if (scheduleMutationBlocked({ loading, busy })) return;
     setBusy(true);
     setError(null);
     try {
       await fn();
-      await load();
+      await load("refresh");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "처리 실패");
     } finally {
@@ -262,7 +323,8 @@ export default function ManageMarshalSchedulePage() {
 
   const finalize = () =>
     run(async () => {
-      if (!data?.plan?.id) return;
+      const planId = dataForMonth?.plan?.id;
+      if (!planId) return;
       if (
         !window.confirm(
           "이 월표를 FINALIZED(마감) 할까요? 마감 후에는 일반 재생성·설정 변경을 할 수 없습니다."
@@ -270,7 +332,7 @@ export default function ManageMarshalSchedulePage() {
       ) {
         return;
       }
-      const res = await fetch(`/api/marshals/plans/${data.plan.id}/finalize`, {
+      const res = await fetch(`/api/marshals/plans/${planId}/finalize`, {
         method: "POST",
         credentials: "include",
       });
@@ -300,9 +362,10 @@ export default function ManageMarshalSchedulePage() {
 
   const replaceSlot = () =>
     run(async () => {
-      if (!data?.plan?.id || !subSlotId) return;
+      const planId = dataForMonth?.plan?.id;
+      if (!planId || !subSlotId) return;
       const res = await fetch(
-        `/api/marshals/plans/${data.plan.id}/slots/${subSlotId}`,
+        `/api/marshals/plans/${planId}/slots/${subSlotId}`,
         {
           method: "PATCH",
           credentials: "include",
@@ -352,11 +415,11 @@ export default function ManageMarshalSchedulePage() {
     });
 
   const moveMonth = (delta: number) => {
+    if (busy) return;
     const next = shiftYearMonth(yearNum, monthNum, delta);
     setYear(String(next.year));
     setMonth(String(next.month));
-    setSelectedDate(null);
-    setSubSlotId(null);
+    clearDisplayedPlan();
   };
 
   const toggleDay = (ymd: string) => {
@@ -364,16 +427,41 @@ export default function ManageMarshalSchedulePage() {
     setSubSlotId(null);
   };
 
-  const finalized = data?.plan?.status === "FINALIZED";
-  const hasPlan = Boolean(data?.plan);
-  const creditRows = (data?.creditRemaining || []).filter((row) =>
+  const openSettings = () => {
+    setSettingsOpen(true);
+    requestAnimationFrame(() => {
+      settingsPanelRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+  };
+
+  useEffect(() => {
+    if (!selectedDate) return;
+    const el = dayDetailRef.current;
+    if (!el) return;
+    const calendar = el.closest("[data-marshal-schedule='calendar']");
+    const calendarDisplay = calendar
+      ? window.getComputedStyle(calendar).display
+      : "none";
+    if (!shouldScrollPcDayDetail({ selectedDate, calendarDisplay })) return;
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [selectedDate]);
+
+  const finalized = dataForMonth?.plan?.status === "FINALIZED";
+  const hasPlan = Boolean(dataForMonth?.plan);
+  const locked = scheduleMutationBlocked({ loading, busy });
+  const creditRows = (dataForMonth?.creditRemaining || []).filter((row) =>
     row.name.includes(creditQuery.trim())
   );
   const pendingNames =
-    data?.plan?.nextPendingNames ?? data?.suggestedStartPendingNames ?? [];
+    dataForMonth?.plan?.nextPendingNames ??
+    dataForMonth?.suggestedStartPendingNames ??
+    [];
   const pendingCount =
-    data?.plan?.nextPendingProfileIds?.length ??
-    data?.suggestedStartPendingProfileIds?.length ??
+    dataForMonth?.plan?.nextPendingProfileIds?.length ??
+    dataForMonth?.suggestedStartPendingProfileIds?.length ??
     0;
 
   const renderDayDetail = (day: MarshalDayBoard, panelId: string) => (
@@ -408,7 +496,7 @@ export default function ManageMarshalSchedulePage() {
                     <button
                       type="button"
                       className="ui-btn ms-mini-btn"
-                      disabled={busy}
+                      disabled={locked}
                       onClick={() => {
                         setSubSlotId(slot.id);
                         setSubCaddyId("");
@@ -424,7 +512,7 @@ export default function ManageMarshalSchedulePage() {
                           onChange={(e) => setSubCaddyId(e.target.value)}
                         >
                           <option value="">마샬 선택</option>
-                          {(data?.members || []).map((member) => (
+                          {(dataForMonth?.members || []).map((member) => (
                             <option key={member.profileId} value={member.caddyId}>
                               {member.rotationOrder} {member.name}
                             </option>
@@ -447,7 +535,7 @@ export default function ManageMarshalSchedulePage() {
                         <button
                           type="button"
                           className="ui-btn ui-btn-primary"
-                          disabled={busy || !subCaddyId}
+                          disabled={locked || !subCaddyId}
                           onClick={() => void replaceSlot()}
                         >
                           저장
@@ -479,6 +567,7 @@ export default function ManageMarshalSchedulePage() {
             className="ui-btn"
             onClick={() => moveMonth(-1)}
             aria-label="이전 달"
+            disabled={busy}
           >
             이전 달
           </button>
@@ -488,9 +577,10 @@ export default function ManageMarshalSchedulePage() {
               aria-label="연"
               type="number"
               value={year}
+              disabled={busy}
               onChange={(e) => {
                 setYear(e.target.value);
-                setSelectedDate(null);
+                clearDisplayedPlan();
               }}
             />
           </label>
@@ -502,9 +592,10 @@ export default function ManageMarshalSchedulePage() {
               min={1}
               max={12}
               value={month}
+              disabled={busy}
               onChange={(e) => {
                 setMonth(e.target.value);
-                setSelectedDate(null);
+                clearDisplayedPlan();
               }}
             />
           </label>
@@ -513,36 +604,61 @@ export default function ManageMarshalSchedulePage() {
             className="ui-btn"
             onClick={() => moveMonth(1)}
             aria-label="다음 달"
+            disabled={busy}
           >
             다음 달
           </button>
+          {!loading && !hasPlan ? (
+            <button
+              type="button"
+              className="ui-btn ui-btn-primary"
+              data-marshal-open-settings="toolbar"
+              onClick={openSettings}
+            >
+              월표 설정 열기
+            </button>
+          ) : null}
         </div>
         <p className="ms-status-line">
           <span
-            className={`ms-status is-${(data?.plan?.status || "none").toLowerCase()}`}
-            data-marshal-plan-status={data?.plan?.status || "none"}
+            className={`ms-status is-${(dataForMonth?.plan?.status || "none").toLowerCase()}`}
+            data-marshal-plan-status={dataForMonth?.plan?.status || "none"}
           >
-            {planStatusLabel(data?.plan?.status)}
+            {loading ? "조회 중" : planStatusLabel(dataForMonth?.plan?.status)}
           </span>
-          <span>
-            조출 {data?.plan?.amSlotsPerDay ?? amSlots}명 · 후출{" "}
-            {data?.plan?.pmSlotsPerDay ?? pmSlots}명
-          </span>
-          <span>
-            다음 순번{" "}
-            {data?.plan?.nextRotationOrder ??
-              data?.suggestedStartRotationOrder ??
-              "—"}
-          </span>
-          <span>
-            {pendingCount < 1
-              ? "이월 대기 0명"
-              : `이월 대기 ${pendingCount}명${
-                  pendingNames.length ? ` (${pendingNames.join(", ")})` : ""
-                }`}
-          </span>
+          {loading ? (
+            <span data-marshal-loading-status="1">월표를 불러오는 중…</span>
+          ) : hasPlan ? (
+            <>
+              <span>
+                조출 {dataForMonth?.plan?.amSlotsPerDay ?? amSlots}명 · 후출{" "}
+                {dataForMonth?.plan?.pmSlotsPerDay ?? pmSlots}명
+              </span>
+              <span>
+                다음 순번{" "}
+                {dataForMonth?.plan?.nextRotationOrder ??
+                  dataForMonth?.suggestedStartRotationOrder ??
+                  "—"}
+              </span>
+              <span>
+                {pendingCount < 1
+                  ? "이월 대기 0명"
+                  : `이월 대기 ${pendingCount}명${
+                      pendingNames.length ? ` (${pendingNames.join(", ")})` : ""
+                    }`}
+              </span>
+            </>
+          ) : (
+            <span data-marshal-empty-status="1">이 달에는 월표가 없습니다.</span>
+          )}
         </p>
       </div>
+
+      {loading ? (
+        <p className="ms-loading" aria-live="polite" data-marshal-loading="1">
+          월표를 불러오는 중…
+        </p>
+      ) : null}
 
       {error && (
         <p className="vh-auth-error" role="alert" style={{ marginBottom: 12 }}>
@@ -550,15 +666,41 @@ export default function ManageMarshalSchedulePage() {
         </p>
       )}
 
-      {!hasPlan ? (
+      {!loading && !hasPlan ? (
         <div className="ms-empty" data-marshal-empty-plan="1">
           <p>아직 생성된 마샬 월표가 없습니다.</p>
-          <p>설정을 확인한 후 월표를 생성하세요. 이 화면을 열어도 월표는 자동 생성되지 않습니다.</p>
+          <p>
+            설정을 확인한 후 월표를 생성하세요. 이 화면을 열어도 월표는 자동
+            생성되지 않습니다.
+          </p>
+          <div className="ms-empty-actions">
+            <button
+              type="button"
+              className="ui-btn ui-btn-primary"
+              data-marshal-open-settings="1"
+              onClick={openSettings}
+            >
+              월표 설정 열기
+            </button>
+          </div>
         </div>
       ) : null}
 
-      <section className="ms-board" data-marshal-schedule="board">
+      <section
+        className="ms-board"
+        data-marshal-schedule="board"
+        aria-busy={loading || undefined}
+      >
         <div className="ms-calendar" data-marshal-schedule="calendar">
+          {selected ? (
+            <div
+              ref={dayDetailRef}
+              className="ms-cal-detail"
+              data-marshal-day-detail="pc"
+            >
+              {renderDayDetail(selected, `marshal-cal-panel-${selected.ymd}`)}
+            </div>
+          ) : null}
           <div className="ms-cal-head">
             {MARSHAL_WEEKDAY_LABELS.map((label) => (
               <div key={label}>{label}</div>
@@ -608,7 +750,6 @@ export default function ManageMarshalSchedulePage() {
               );
             })}
           </div>
-          {selected ? renderDayDetail(selected, `marshal-cal-panel-${selected.ymd}`) : null}
         </div>
 
         <ul className="ms-dense" data-marshal-schedule="dense">
@@ -645,7 +786,11 @@ export default function ManageMarshalSchedulePage() {
         </ul>
       </section>
 
-      <section className="ms-panel ui-card">
+      <section
+        ref={settingsPanelRef}
+        className="ms-panel ui-card"
+        data-marshal-settings-panel="1"
+      >
         <PanelToggle
           open={settingsOpen}
           onToggle={() => setSettingsOpen((value) => !value)}
@@ -674,7 +819,7 @@ export default function ManageMarshalSchedulePage() {
                   placeholder="시작 순번"
                   value={startOrder}
                   onChange={(e) => setStartOrder(e.target.value)}
-                  disabled={finalized}
+                  disabled={locked || finalized}
                 />
               </label>
               <label className="ms-field">
@@ -685,7 +830,7 @@ export default function ManageMarshalSchedulePage() {
                   min={0}
                   value={amSlots}
                   onChange={(e) => setAmSlots(e.target.value)}
-                  disabled={finalized}
+                  disabled={locked || finalized}
                 />
               </label>
               <label className="ms-field">
@@ -696,26 +841,26 @@ export default function ManageMarshalSchedulePage() {
                   min={0}
                   value={pmSlots}
                   onChange={(e) => setPmSlots(e.target.value)}
-                  disabled={finalized}
+                  disabled={locked || finalized}
                 />
               </label>
             </div>
             <div className="ms-actions">
-              <button type="submit" className="ui-btn" disabled={busy || finalized}>
+              <button type="submit" className="ui-btn" disabled={locked || finalized}>
                 설정 저장
               </button>
               <button
                 type="button"
                 className="ui-btn"
-                disabled={busy || finalized}
-                onClick={() => void generate(Boolean(data?.plan?.slots.length))}
+                disabled={locked || finalized}
+                onClick={() => void generate(Boolean(dataForMonth?.plan?.slots.length))}
               >
-                {data?.plan?.slots.length ? "DRAFT 다시 생성" : "월표 생성"}
+                {dataForMonth?.plan?.slots.length ? "DRAFT 다시 생성" : "월표 생성"}
               </button>
               <button
                 type="button"
                 className="ui-btn"
-                disabled={busy || !data?.plan?.id || finalized}
+                disabled={locked || !dataForMonth?.plan?.id || finalized}
                 onClick={() => void finalize()}
               >
                 마감 (FINALIZE)
@@ -747,7 +892,7 @@ export default function ManageMarshalSchedulePage() {
                 onChange={(e) => setPenaltyCaddyId(e.target.value)}
               >
                 <option value="">마샬 선택</option>
-                {(data?.members || []).map((member) => (
+                {(dataForMonth?.members || []).map((member) => (
                   <option key={member.profileId} value={member.caddyId}>
                     {member.rotationOrder} {member.name}
                   </option>
@@ -771,7 +916,7 @@ export default function ManageMarshalSchedulePage() {
                 type="button"
                 className="ui-btn"
                 disabled={
-                  busy || finalized || !penaltyDate || !penaltyCaddyId || !penaltyReason
+                  locked || finalized || !penaltyDate || !penaltyCaddyId || !penaltyReason
                 }
                 onClick={() => void addPenalty()}
               >
@@ -794,7 +939,7 @@ export default function ManageMarshalSchedulePage() {
           open={creditOpen}
           onToggle={() => setCreditOpen((value) => !value)}
           label="대타 보정 관리"
-          count={data?.creditRemaining?.length || 0}
+          count={dataForMonth?.creditRemaining?.length || 0}
         />
         {creditOpen ? (
           <div className="ms-panel-body">
@@ -814,7 +959,7 @@ export default function ManageMarshalSchedulePage() {
                   <button
                     type="button"
                     className="ui-btn ms-mini-btn"
-                    disabled={busy}
+                    disabled={locked}
                     onClick={() => void addCredit(row.profileId)}
                   >
                     +1
@@ -822,15 +967,15 @@ export default function ManageMarshalSchedulePage() {
                 </li>
               ))}
             </ul>
-            {(data?.credits || []).length > 0 ? (
+            {(dataForMonth?.credits || []).length > 0 ? (
               <ul className="ms-list">
-                {data!.credits.map((row) => (
+                {dataForMonth!.credits.map((row) => (
                   <li key={row.id}>
                     {row.caddy.name} {row.reason || "보정"}{" "}
                     <button
                       type="button"
                       className="ui-btn ms-mini-btn"
-                      disabled={busy}
+                      disabled={locked}
                       onClick={() => void cancelCredit(row.id)}
                     >
                       -1

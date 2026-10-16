@@ -5644,9 +5644,29 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
   margin: 0 0 6px;
 }
 
-.ms-empty p:last-child {
+.ms-empty p:last-of-type {
   margin-bottom: 0;
   color: var(--vh-ink-soft);
+}
+
+.ms-empty-actions {
+  margin-top: 10px;
+}
+
+.ms-loading {
+  margin: 0 0 12px;
+  color: var(--vh-ink-soft);
+}
+
+.ms-cal-detail {
+  position: sticky;
+  top: 8px;
+  z-index: 3;
+  margin: 0 0 12px;
+  border: 1px solid var(--vh-border);
+  border-radius: var(--vh-radius-sm);
+  overflow: hidden;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
 }
 
 .ms-calendar {

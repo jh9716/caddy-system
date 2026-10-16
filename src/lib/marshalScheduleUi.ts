@@ -217,3 +217,41 @@ export function marshalScheduleIntroText(): string {
     "당번 데이터로 복사하거나 저장하지는 않습니다.",
   ].join(" ");
 }
+
+export function nextScheduleRequestId(current: number): number {
+  return Number(current) + 1;
+}
+
+export function matchesRequestedYearMonth(
+  payload: { year?: unknown; month?: unknown } | null | undefined,
+  year: number,
+  month: number
+): boolean {
+  return Number(payload?.year) === Number(year) && Number(payload?.month) === Number(month);
+}
+
+export function shouldApplyScheduleFetch(input: {
+  requestId: number;
+  latestRequestId: number;
+  payload: { year?: unknown; month?: unknown } | null | undefined;
+  year: number;
+  month: number;
+}): boolean {
+  if (Number(input.requestId) !== Number(input.latestRequestId)) return false;
+  return matchesRequestedYearMonth(input.payload, input.year, input.month);
+}
+
+export function scheduleMutationBlocked(input: {
+  loading: boolean;
+  busy: boolean;
+}): boolean {
+  return Boolean(input.loading) || Boolean(input.busy);
+}
+
+export function shouldScrollPcDayDetail(input: {
+  selectedDate: string | null | undefined;
+  calendarDisplay: string | null | undefined;
+}): boolean {
+  if (!input.selectedDate) return false;
+  return String(input.calendarDisplay || "").trim() !== "none";
+}
