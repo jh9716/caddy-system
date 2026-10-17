@@ -973,7 +973,10 @@ console.log("== 총원 excludes RETIRED (source) ==");
   );
   assert(
     caddiesPage.includes("drivingHeadcount") &&
-      caddiesPage.includes("countsTowardRosterHeadcount(r.employmentStatus)) cur.total"),
+      caddiesPage.includes("buildRosterColumns") &&
+      fs
+        .readFileSync(path.resolve("src/lib/caddyRosterBoard.ts"), "utf8")
+        .includes("countsTowardRosterHeadcount(r.employmentStatus)"),
     "한눈에 조별/드라이빙 총원 excludes RETIRED"
   );
   assert(
@@ -996,19 +999,24 @@ console.log("== caddies roster board UI source ==");
     path.resolve("src/app/manage/caddies/page.tsx"),
     "utf8"
   );
+  const rosterLib = fs.readFileSync(
+    path.resolve("src/lib/caddyRosterBoard.ts"),
+    "utf8"
+  );
   const rosterBlock =
     src.split("const rosterColumns = useMemo")[1]?.split("function startEdit")[0] ||
     "";
   const sheetBlock = src.split("{menuCaddy && (")[1]?.split("<style>{`")[0] || "";
   assert(/className="cm-roster"/.test(src), "default view is horizontal roster");
   assert(
-    /GLANCE_TEAMS\.map\(\(team\) =>/.test(rosterBlock) &&
-      /a\.teamOrder - b\.teamOrder/.test(rosterBlock),
+    /buildRosterColumns/.test(rosterBlock) &&
+      /PRIMARY_TEAMS\.map\(\(team\) =>/.test(rosterLib) &&
+      /a\.teamOrder - b\.teamOrder/.test(rosterLib),
     "roster columns are 1~12조 sorted by teamOrder"
   );
   assert(
-    /normalizeEmploymentStatus\(r\.employmentStatus\) !== 'RETIRED'/.test(
-      rosterBlock
+    /normalizeEmploymentStatus\(r\.employmentStatus\) !== ["']RETIRED["']/.test(
+      rosterLib
     ),
     "RETIRED hidden from default roster"
   );
@@ -1061,8 +1069,14 @@ console.log("== caddies roster board UI source ==");
     /min-width:\s*168px/.test(src) &&
       /overflow-x:\s*auto/.test(src) &&
       /position:\s*sticky/.test(src) &&
-      /min-height:\s*44px/.test(src),
-    "mobile roster has min column width, horizontal scroll, sticky headers"
+      /min-height:\s*44px/.test(src) &&
+      /cm-roster-desktop/.test(src) &&
+      /cm-roster-mobile/.test(src) &&
+      /cm-team-chip/.test(src) &&
+      /useState<RosterDensity>\(['"]compact['"]\)/.test(src) &&
+      /--cm-col-min:\s*116px/.test(src) &&
+      /cm-density-toggle/.test(src),
+    "PC roster has min column width, horizontal scroll, sticky headers; mobile uses team chips"
   );
   assert(
     /rosterPersonName\(c\)/.test(src) &&
@@ -1132,8 +1146,9 @@ console.log("== caddy delete UX (soft-retire, 삭제/삭제됨/복귀) ==");
     "default roster 복귀 is LEAVE only, not deleted caddies"
   );
   assert(
-    /normalizeEmploymentStatus\(r\.employmentStatus\) !== 'RETIRED'/.test(src) &&
-      /cm-leave-badge">휴직/.test(src),
+    /normalizeEmploymentStatus\(r\.employmentStatus\) !== ["']RETIRED["']/.test(
+      fs.readFileSync(path.resolve("src/lib/caddyRosterBoard.ts"), "utf8")
+    ) && /cm-leave-badge">휴직/.test(src),
     "RETIRED hidden from roster; LEAVE stays as 휴직"
   );
   assert(
