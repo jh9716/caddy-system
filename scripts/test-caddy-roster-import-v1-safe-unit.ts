@@ -58,7 +58,17 @@ function createTransactionalPrisma(
   }
 ) {
   let nextCreateId = opts?.nextCreateId ?? 1000;
-  const executeBatchUpdate = async (query: { values: readonly unknown[] }) => {
+  const executeBatchUpdate = async (query: {
+    values: readonly unknown[];
+    strings?: readonly string[];
+  }) => {
+    const sqlText = Array.isArray(query.strings) ? query.strings.join("") : "";
+    if (
+      query.values.length === 0 ||
+      /LOCK\s+TABLE\s+"Caddy"/i.test(sqlText)
+    ) {
+      return 0;
+    }
     const fieldsPerRow = 13;
     if (query.values.length % fieldsPerRow !== 0) {
       throw new Error("unexpected batch SQL parameter count");
@@ -101,7 +111,20 @@ function createTransactionalPrisma(
   };
 
   const caddy = {
-    findMany: async () => [...store.values()],
+    findMany: async (args?: {
+      where?: { id?: { in: number[] }; team?: { in: string[] } };
+    }) => {
+      let rows = [...store.values()];
+      if (args?.where?.id?.in) {
+        const ids = new Set(args.where.id.in);
+        rows = rows.filter((row) => ids.has(row.id));
+      }
+      if (args?.where?.team?.in) {
+        const teams = new Set(args.where.team.in);
+        rows = rows.filter((row) => teams.has(row.team));
+      }
+      return rows;
+    },
     createManyAndReturn: async ({
       data,
     }: {
@@ -651,6 +674,12 @@ async function main() {
       !v1Src.includes("teamOrder: r.rowNumber") &&
       !v1Src.includes("teamOrder: i +"),
     "v1-safe reuses v1 match + v2 apply; no caddy.delete; file order is not teamOrder"
+  );
+  assert(
+    v1Src.includes("lockCaddyTableForSlotMutation") &&
+      v1Src.indexOf("lockCaddyTableForSlotMutation") <
+        v1Src.indexOf("loadExisting(client)"),
+    "v1-safe table-locks before loading occupancy for matching"
   );
   assert(
     v1Src.includes("파일 순서") || v1Src.includes("teamOrder 변환 없음"),

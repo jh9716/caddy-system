@@ -20,6 +20,7 @@ import {
   type RosterExisting,
 } from "./caddyRosterImportV2";
 import { occupiesHouseThirdSlot } from "../src/lib/caddyManage";
+import { lockCaddyTableForSlotMutation } from "../src/lib/caddySlotLock";
 import {
   listV1ProjectedEmptySlots,
   mergeV1SafeResolutions,
@@ -366,6 +367,9 @@ export async function applyXlsxV1SafePayload(
     }));
 
   const run = async (client: typeof prisma) => {
+    if (typeof client.$executeRaw === "function") {
+      await lockCaddyTableForSlotMutation(client);
+    }
     const existing = await loadExisting(client);
     return applyXlsxV1SafeAgainstExisting(input, client, existing);
   };

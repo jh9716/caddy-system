@@ -276,6 +276,66 @@ export class SlotOccupiedError extends Error {
   }
 }
 
+export const STALE_CADDY_SLOT_MESSAGE =
+  "다른 관리자가 조/순번/재직상태를 먼저 변경했습니다. 새로고침 후 다시 시도하세요.";
+
+export const STALE_IMPORT_SLOT_MESSAGE =
+  "명단이 적용 준비 이후 변경되었습니다. 다시 미리보기하세요.";
+
+export class SlotStaleError extends Error {
+  status = 409;
+  code = "stale_roster";
+  constructor(message = STALE_CADDY_SLOT_MESSAGE) {
+    super(message);
+    this.name = "SlotStaleError";
+  }
+}
+
+export type CaddySlotGuardRow = {
+  id: number;
+  team: string;
+  teamOrder: number;
+  employmentStatus: unknown;
+  caddyType?: string | null;
+};
+
+export function caddySlotGuardSignature(
+  rows: readonly CaddySlotGuardRow[]
+): string {
+  return [...rows]
+    .map((row) =>
+      [
+        row.id,
+        String(row.team ?? "").trim(),
+        Number(row.teamOrder) || 0,
+        String(row.employmentStatus ?? ""),
+      ].join("|")
+    )
+    .sort()
+    .join("\n");
+}
+
+export function caddySlotGuardUnchanged(
+  expected: readonly CaddySlotGuardRow[],
+  live: readonly CaddySlotGuardRow[]
+): boolean {
+  return caddySlotGuardSignature(expected) === caddySlotGuardSignature(live);
+}
+
+export function assertCaddyRowSlotUnchanged(
+  previous: CaddySlotGuardRow,
+  live: CaddySlotGuardRow | null | undefined
+): asserts live is CaddySlotGuardRow {
+  if (!live) {
+    const err = new Error("캐디 없음") as Error & { status: number };
+    err.status = 404;
+    throw err;
+  }
+  if (!caddySlotGuardUnchanged([previous], [live])) {
+    throw new SlotStaleError();
+  }
+}
+
 export function assertSlotAvailable(
   people: SlotOccupant[],
   team: string,

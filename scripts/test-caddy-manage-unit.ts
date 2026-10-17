@@ -1208,7 +1208,7 @@ for (const rel of apiFiles) {
     idRoute.includes("shouldPersistAsDriving") &&
       idRoute.includes("drivingPersistFields") &&
       idRoute.includes("resolveThirdBandSubgroup") &&
-      /prisma\.caddy\.update/.test(idRoute) &&
+      /\.caddy\.update/.test(idRoute) &&
       !/prisma\.caddy\.create/.test(idRoute),
     "PATCH affiliation transfer updates existing caddy, no recreate"
   );

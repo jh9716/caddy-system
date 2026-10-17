@@ -24,6 +24,8 @@ import {
 import {
   SlotOccupiedError,
   SlotOutOfRangeError,
+  SlotStaleError,
+  assertCaddyRowSlotUnchanged,
   assertSlotAvailable,
   assertSlotWithinConfiguredCapacity,
 } from "@/lib/caddySlot";
@@ -32,7 +34,14 @@ import {
   canReadArchivedCaddies,
   denyArchivedCaddyRead,
 } from "@/lib/caddyArchiveVisibility";
-import { writeCaddyRevokingRetiredSessions } from "@/lib/sessionRevocation";
+import { withCaddySlotMutation } from "@/lib/caddySlotLock";
+import {
+  employmentBecameRetired,
+  incrementSessionVersionForCaddyLink,
+  writeCaddyRevokingRetiredSessions,
+  writeCaddyUnderSlotLockRevokingRetired,
+} from "@/lib/sessionRevocation";
+import { notifyChatSessionRevokedForCaddyLink } from "@/lib/chatSessionRevoke";
 import { writeCaddyDormitoryAudit } from "@/lib/caddyDormitory";
 
 export const dynamic = "force-dynamic";
@@ -133,29 +142,50 @@ export async function PATCH(
           { status: 400 }
         );
       }
-      const orderA = current.teamOrder;
-      const orderB = other.teamOrder;
-      const [updated] = await prisma.$transaction([
-        prisma.caddy.update({
+      const updated = await withCaddySlotMutation(prisma, async (tx) => {
+        const lockedCurrent = await tx.caddy.findUnique({ where: { id } });
+        const lockedOther = await tx.caddy.findUnique({ where: { id: otherId } });
+        if (!lockedCurrent || !lockedOther) {
+          const err = new Error("스왑 대상 캐디 없음") as Error & { status: number };
+          err.status = 404;
+          throw err;
+        }
+        assertCaddyRowSlotUnchanged(current, lockedCurrent);
+        assertCaddyRowSlotUnchanged(other, lockedOther);
+        if (lockedOther.team !== lockedCurrent.team) {
+          const err = new Error("같은 조에서만 슬롯을 교환할 수 있습니다.") as Error & {
+            status: number;
+          };
+          err.status = 400;
+          throw err;
+        }
+        const orderA = lockedCurrent.teamOrder;
+        const orderB = lockedOther.teamOrder;
+        const first = await tx.caddy.update({
           where: { id },
           data: { teamOrder: orderB },
-        }),
-        prisma.caddy.update({
+        });
+        await tx.caddy.update({
           where: { id: otherId },
           data: { teamOrder: orderA },
-        }),
-      ]);
+        });
+        return {
+          caddy: first,
+          team: lockedCurrent.team,
+          orders: [orderA, orderB] as [number, number],
+        };
+      });
       await logAudit({
         action: "SWAP_CADDY_SLOT",
         meta: {
           entity: "Caddy",
           entityId: id,
           swapWithId: otherId,
-          team: current.team,
-          orders: [orderA, orderB],
+          team: updated.team,
+          orders: updated.orders,
         },
       });
-      return NextResponse.json(updated);
+      return NextResponse.json(updated.caddy);
     }
 
     const nextIsDriving = shouldPersistAsDriving({
@@ -200,15 +230,18 @@ export async function PATCH(
         updateData.dormitoryResident = data.dormitoryResident === true;
       }
 
-      const updated = await writeCaddyRevokingRetiredSessions(prisma, {
+      const updated = await writeCaddyUnderSlotLockRevokingRetired(prisma, {
         caddyId: id,
         previousEmployment: current.employmentStatus,
         nextEmployment: updateData.employmentStatus ?? current.employmentStatus,
-        write: (tx) =>
-          tx.caddy.update({
+        write: async (tx) => {
+          const locked = await tx.caddy.findUnique({ where: { id } });
+          assertCaddyRowSlotUnchanged(current, locked);
+          return tx.caddy.update({
             where: { id },
             data: updateData as Prisma.CaddyUpdateInput,
-          }),
+          });
+        },
       });
       if (data.dormitoryResident !== undefined) {
         await writeCaddyDormitoryAudit(prisma, {
@@ -272,26 +305,6 @@ export async function PATCH(
         allowCurrentOverCapacity:
           nextTeam === current.team ? current.teamOrder : null,
       });
-      const peers = await prisma.caddy.findMany({
-        where: { team: nextTeam },
-        select: {
-          id: true,
-          name: true,
-          team: true,
-          teamOrder: true,
-          employmentStatus: true,
-          caddyType: true,
-        },
-      });
-      assertSlotAvailable(
-        peers.map((p) => ({
-          ...p,
-          employmentStatus: String(p.employmentStatus),
-        })),
-        nextTeam,
-        nextOrder,
-        id
-      );
     }
 
     const updateData: Record<string, unknown> = {};
@@ -344,46 +357,82 @@ export async function PATCH(
           .thirdBandSubgroup ?? null,
     });
 
-    // LEAVE/ACTIVE로 복귀·변경 시에도 최종 슬롯 점유 재확인
-    if (data.employmentStatus !== undefined) {
-      const emp = normalizeEmploymentStatus(data.employmentStatus);
-      if (emp === "ACTIVE" || emp === "LEAVE") {
-        const finalTeam = (updateData.team as string) ?? current.team;
-        const finalOrder =
-          (updateData.teamOrder as number | undefined) ?? current.teamOrder;
-        const peers = await prisma.caddy.findMany({
-          where: { team: finalTeam },
-          select: {
-            id: true,
-            name: true,
-            team: true,
-            teamOrder: true,
-            employmentStatus: true,
-            caddyType: true,
-          },
-        });
-        assertSlotAvailable(
-          peers.map((p) => ({
-            ...p,
-            employmentStatus: String(p.employmentStatus),
-          })),
-          finalTeam,
-          finalOrder,
-          id
-        );
-      }
+    const nextEmployment =
+      updateData.employmentStatus ?? current.employmentStatus;
+    const occupancyRecheck =
+      slotChanging ||
+      (data.employmentStatus !== undefined &&
+        (normalizeEmploymentStatus(data.employmentStatus) === "ACTIVE" ||
+          normalizeEmploymentStatus(data.employmentStatus) === "LEAVE"));
+
+    const writeUpdate = (tx: Prisma.TransactionClient | typeof prisma) =>
+      tx.caddy.update({
+        where: { id },
+        data: updateData as Prisma.CaddyUpdateInput,
+      });
+
+    async function assertLockedSlotAvailable(
+      tx: Prisma.TransactionClient,
+      team: string,
+      teamOrder: number
+    ) {
+      const peers = await tx.caddy.findMany({
+        where: { team },
+        select: {
+          id: true,
+          name: true,
+          team: true,
+          teamOrder: true,
+          employmentStatus: true,
+          caddyType: true,
+        },
+      });
+      assertSlotAvailable(
+        peers.map((p) => ({
+          ...p,
+          employmentStatus: String(p.employmentStatus),
+        })),
+        team,
+        teamOrder,
+        id
+      );
     }
 
-    const updated = await writeCaddyRevokingRetiredSessions(prisma, {
-      caddyId: id,
-      previousEmployment: current.employmentStatus,
-      nextEmployment: updateData.employmentStatus ?? current.employmentStatus,
-      write: (tx) =>
-        tx.caddy.update({
-          where: { id },
-          data: updateData as Prisma.CaddyUpdateInput,
-        }),
-    });
+    const updated = occupancyRecheck
+      ? await withCaddySlotMutation(prisma, async (tx) => {
+          const locked = await tx.caddy.findUnique({ where: { id } });
+          assertCaddyRowSlotUnchanged(current, locked);
+          const finalTeam = (updateData.team as string) ?? locked.team;
+          const finalOrder =
+            (updateData.teamOrder as number | undefined) ?? locked.teamOrder;
+          if (slotChanging) {
+            await assertLockedSlotAvailable(tx, nextTeam, nextOrder);
+          }
+          if (data.employmentStatus !== undefined) {
+            const emp = normalizeEmploymentStatus(data.employmentStatus);
+            if (emp === "ACTIVE" || emp === "LEAVE") {
+              await assertLockedSlotAvailable(tx, finalTeam, finalOrder);
+            }
+          }
+          const written = await writeUpdate(tx);
+          if (employmentBecameRetired(locked.employmentStatus, nextEmployment)) {
+            await incrementSessionVersionForCaddyLink(tx, id);
+          }
+          return written;
+        })
+      : await writeCaddyRevokingRetiredSessions(prisma, {
+          caddyId: id,
+          previousEmployment: current.employmentStatus,
+          nextEmployment,
+          write: (tx) => writeUpdate(tx),
+        });
+
+    if (
+      occupancyRecheck &&
+      employmentBecameRetired(current.employmentStatus, nextEmployment)
+    ) {
+      await notifyChatSessionRevokedForCaddyLink(prisma, id);
+    }
 
     const auditPayload = { ...data } as Record<string, unknown>;
     if (Object.prototype.hasOwnProperty.call(auditPayload, "phone")) {
@@ -418,7 +467,11 @@ export async function PATCH(
         { status: e.status }
       );
     }
-    if (e instanceof SlotOccupiedError || e instanceof SlotOutOfRangeError) {
+    if (
+      e instanceof SlotOccupiedError ||
+      e instanceof SlotOutOfRangeError ||
+      e instanceof SlotStaleError
+    ) {
       return NextResponse.json(
         {
           error: e.message,
@@ -484,7 +537,7 @@ export async function DELETE(
       return archivedNotFound();
     }
 
-    const updated = await writeCaddyRevokingRetiredSessions(prisma, {
+    const updated = await writeCaddyUnderSlotLockRevokingRetired(prisma, {
       caddyId: id,
       previousEmployment: current.employmentStatus,
       nextEmployment: "RETIRED",
