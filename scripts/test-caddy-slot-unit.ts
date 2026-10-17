@@ -18,6 +18,10 @@ import {
   resolveSelectableSlotCount,
   SlotOccupiedError,
   SlotOutOfRangeError,
+  SlotStaleError,
+  caddySlotGuardSignature,
+  caddySlotGuardUnchanged,
+  assertCaddyRowSlotUnchanged,
 } from "../src/lib/caddySlot";
 import { buildTeamSlotGrid } from "../src/lib/availabilitySlotGrid";
 import {
@@ -358,6 +362,35 @@ assert(
   af.excluded.some((r) => r.id === 51 && r.excludedReasons.some((x) => x.includes("경조"))),
   "FAMILY_EVENT reason"
 );
+
+section("slot stale guard");
+{
+  const a = {
+    id: 1,
+    team: "8조",
+    teamOrder: 20,
+    employmentStatus: "ACTIVE",
+    caddyType: "HOUSE",
+  };
+  const same = { ...a };
+  const moved = { ...a, teamOrder: 21 };
+  assert(caddySlotGuardUnchanged([a], [same]), "unchanged signature matches");
+  assert(!caddySlotGuardUnchanged([a], [moved]), "teamOrder change is stale");
+  assert(
+    caddySlotGuardSignature([a, { ...a, id: 2, teamOrder: 21 }]) ===
+      caddySlotGuardSignature([{ ...a, id: 2, teamOrder: 21 }, a]),
+    "signature is order-independent"
+  );
+  try {
+    assertCaddyRowSlotUnchanged(a, moved);
+    assert(false, "stale row should throw");
+  } catch (e) {
+    assert(
+      e instanceof SlotStaleError && e.status === 409 && e.code === "stale_roster",
+      "assertCaddyRowSlotUnchanged throws stale_roster 409"
+    );
+  }
+}
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

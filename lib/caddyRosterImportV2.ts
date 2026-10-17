@@ -36,7 +36,12 @@ import {
   type EmploymentStatusValue,
 } from "./caddyImportRules";
 import { parseXlsxRosterBuffer } from "./caddyImportXlsx";
-import { getConfiguredSlotCapacity } from "../src/lib/caddySlot";
+import {
+  STALE_IMPORT_SLOT_MESSAGE,
+  caddySlotGuardUnchanged,
+  getConfiguredSlotCapacity,
+} from "../src/lib/caddySlot";
+import { lockCaddyTableForSlotMutation } from "../src/lib/caddySlotLock";
 import {
   isPrimaryTeam,
   occupiesHouseThirdSlot,
@@ -1679,6 +1684,10 @@ type PrismaLike = {
     }) => Promise<Array<{ id: number }>>;
     findMany: (args?: {
       select?: Record<string, boolean>;
+      where?: {
+        id?: { in: number[] };
+        team?: { in: string[] };
+      };
     }) => Promise<RosterExisting[]>;
     updateMany: (args: {
       where: { id: { in: number[] } };
@@ -1695,6 +1704,121 @@ type PrismaLike = {
     options?: RosterImportApplyTransactionOptions
   ) => Promise<T>;
 };
+
+const IMPORT_SLOT_GUARD_SELECT = {
+  id: true,
+  name: true,
+  team: true,
+  teamOrder: true,
+  employmentStatus: true,
+  caddyType: true,
+} as const;
+
+function throwStaleImportRoster(): never {
+  throw new RosterImportApplyError(
+    STALE_IMPORT_SLOT_MESSAGE,
+    409,
+    "stale_roster"
+  );
+}
+
+async function assertImportSlotGuardAfterLock(
+  client: PrismaLike,
+  existing: RosterExisting[],
+  existingById: Map<number, RosterExisting>,
+  normUpdates: Array<{
+    id: number;
+    team?: string;
+    teamOrder?: number;
+    employmentStatus?: EmploymentStatusValue;
+  }>,
+  normCreates: Array<{
+    name: string;
+    team: string;
+    teamOrder?: number;
+    employmentStatus?: EmploymentStatusValue;
+  }>
+): Promise<void> {
+  await lockCaddyTableForSlotMutation(client);
+
+  const guardIds = existing.map((row) => row.id);
+  const liveGuarded =
+    guardIds.length > 0
+      ? await client.caddy.findMany({
+          where: { id: { in: guardIds } },
+          select: IMPORT_SLOT_GUARD_SELECT,
+        })
+      : [];
+  if (liveGuarded.length !== existing.length) throwStaleImportRoster();
+  if (!caddySlotGuardUnchanged(existing, liveGuarded)) {
+    throwStaleImportRoster();
+  }
+
+  const destTeams = new Set<string>();
+  for (const created of normCreates) destTeams.add(created.team.trim());
+  for (const update of normUpdates) {
+    if (update.team == null && update.teamOrder == null) continue;
+    const current = existingById.get(update.id);
+    if (!current || !occupiesHouseThirdSlot(current)) continue;
+    destTeams.add(String(update.team ?? current.team).trim());
+  }
+  if (destTeams.size === 0) return;
+
+  const liveDest = await client.caddy.findMany({
+    where: { team: { in: [...destTeams] } },
+    select: IMPORT_SLOT_GUARD_SELECT,
+  });
+  const finalState = new Map<
+    number,
+    {
+      name: string;
+      team: string;
+      teamOrder: number;
+      emp: string;
+      caddyType?: string | null;
+    }
+  >();
+  for (const row of liveDest) {
+    finalState.set(row.id, {
+      name: row.name,
+      team: row.team,
+      teamOrder: row.teamOrder,
+      emp: empLabel(row.employmentStatus) || "ACTIVE",
+      caddyType: row.caddyType,
+    });
+  }
+  for (const update of normUpdates) {
+    const current = finalState.get(update.id);
+    const existingRow = existingById.get(update.id);
+    if (existingRow && !occupiesHouseThirdSlot(existingRow)) continue;
+    if (!current) continue;
+    finalState.set(update.id, {
+      name: current.name,
+      team: update.team ?? current.team,
+      teamOrder: update.teamOrder ?? current.teamOrder,
+      emp: update.employmentStatus ?? current.emp,
+      caddyType: current.caddyType,
+    });
+  }
+  const conflicts = findTeamOrderConflicts([
+    ...[...finalState.values()].map((row) => ({
+      id: null as number | null,
+      name: row.name,
+      team: row.team,
+      teamOrder: row.teamOrder,
+      emp: row.emp,
+      caddyType: row.caddyType,
+    })),
+    ...normCreates.map((created) => ({
+      id: null as number | null,
+      name: created.name,
+      team: created.team,
+      teamOrder: created.teamOrder ?? 0,
+      emp: created.employmentStatus ?? "ACTIVE",
+    })),
+  ]);
+  if (conflicts.length > 0) throwStaleImportRoster();
+}
 
 export const ROSTER_IMPORT_APPLY_TX_OPTIONS: RosterImportApplyTransactionOptions =
   {
@@ -2191,6 +2315,14 @@ export async function applyRosterImportPayloadV2(
   }
 
   const run = async (client: PrismaLike) => {
+    await assertImportSlotGuardAfterLock(
+      client,
+      existing,
+      existingById,
+      normUpdates,
+      normCreates
+    );
+
     let updated = 0;
     if (batchUpdates.length > 0) {
       updated = await client.$executeRaw(

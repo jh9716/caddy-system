@@ -281,6 +281,64 @@ async function main() {
     "apply uses explicit transaction timeout/maxWait"
   );
 
+  section("apply post-lock slot guard 409");
+  {
+    const staleStore = cloneStore(
+      new Map(existing.map((e) => [e.id, { ...e }]))
+    );
+    staleStore.get(2)!.team = "8조";
+    staleStore.get(2)!.teamOrder = 8;
+    const stalePrisma = createTransactionalPrisma(staleStore);
+    try {
+      await applyRosterImportPayloadV2(happy.applyPayload, stalePrisma, {
+        existingForGuard: existing,
+      });
+      assert(false, "stale slot snapshot should fail apply");
+    } catch (e) {
+      assert(
+        e instanceof RosterImportApplyError &&
+          e.status === 409 &&
+          e.code === "stale_roster",
+        "guard mismatch is stale_roster 409"
+      );
+    }
+    assert(
+      staleStore.get(2)?.team === "8조" &&
+        staleStore.get(2)?.employmentStatus === "ACTIVE" &&
+        !staleStore.has(100),
+      "stale apply does not write updates or creates"
+    );
+
+    const destStore = cloneStore(
+      new Map(existing.map((e) => [e.id, { ...e }]))
+    );
+    destStore.set(777, {
+      id: 777,
+      name: "끼어든신규",
+      team: "2조",
+      teamOrder: 1,
+      employmentStatus: "ACTIVE",
+    });
+    const destPrisma = createTransactionalPrisma(destStore);
+    try {
+      await applyRosterImportPayloadV2(happy.applyPayload, destPrisma, {
+        existingForGuard: existing,
+      });
+      assert(false, "dest insert during apply should fail");
+    } catch (e) {
+      assert(
+        e instanceof RosterImportApplyError &&
+          e.status === 409 &&
+          e.code === "stale_roster",
+        "dest occupancy change is stale_roster 409"
+      );
+    }
+    assert(
+      destStore.get(2)?.team === "1조" && destStore.get(777)?.teamOrder === 1,
+      "dest race does not overwrite existing rows"
+    );
+  }
+
   section("apply cannot move DRIVING into HOUSE slot");
   {
     const drivingGuard: RosterExisting[] = [
@@ -765,7 +823,15 @@ async function main() {
     let nextCreateId = opts?.nextCreateId ?? 50_000;
     const executeBatchUpdate = async (query: {
       values: readonly unknown[];
+      strings?: readonly string[];
     }) => {
+      const sqlText = Array.isArray(query.strings) ? query.strings.join("") : "";
+      if (
+        query.values.length === 0 ||
+        /LOCK\s+TABLE\s+"Caddy"/i.test(sqlText)
+      ) {
+        return 0;
+      }
       opts?.metrics && opts.metrics.executeRaw++;
       const fieldsPerRow = 13;
       if (query.values.length % fieldsPerRow !== 0) {
@@ -815,7 +881,20 @@ async function main() {
     };
 
     const caddy = {
-      findMany: async () => [...store.values()],
+      findMany: async (args?: {
+        where?: { id?: { in: number[] }; team?: { in: string[] } };
+      }) => {
+        let rows = [...store.values()];
+        if (args?.where?.id?.in) {
+          const ids = new Set(args.where.id.in);
+          rows = rows.filter((row) => ids.has(row.id));
+        }
+        if (args?.where?.team?.in) {
+          const teams = new Set(args.where.team.in);
+          rows = rows.filter((row) => teams.has(row.team));
+        }
+        return rows;
+      },
       createManyAndReturn: async ({
         data,
       }: {
@@ -1967,6 +2046,14 @@ async function main() {
     !importLibSrc.includes("caddy.delete") &&
       !importLibSrc.includes("deleteMany"),
     "import apply does not delete caddies"
+  );
+  assert(
+    importLibSrc.includes("assertImportSlotGuardAfterLock") &&
+      importLibSrc.includes("stale_roster") &&
+      importLibSrc.includes("lockCaddyTableForSlotMutation") &&
+      importLibSrc.indexOf("assertImportSlotGuardAfterLock") <
+        importLibSrc.indexOf("buildRosterBatchUpdateSql(batchUpdates)"),
+    "import apply locks and revalidates occupancy before writes"
   );
   const assignPageSrc = fs.readFileSync(
     path.join(root, "src/app/manage/assignments/page.tsx"),

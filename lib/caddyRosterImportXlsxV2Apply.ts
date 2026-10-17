@@ -9,6 +9,7 @@ import {
   employmentBecameRetired,
   type SessionRevocationDb,
 } from "../src/lib/sessionRevocation";
+import { lockCaddyTableForSlotMutation } from "../src/lib/caddySlotLock";
 import { notifyChatSessionRevokedForCaddyLink } from "../src/lib/chatSessionRevoke";
 import {
   buildXlsxV2PreviewBundle,
@@ -48,6 +49,7 @@ export type XlsxV2ApplyDb = {
 };
 
 export type XlsxV2ApplyTx = {
+  $executeRaw: (query: unknown) => Promise<unknown>;
   caddy: {
     findMany: (args: unknown) => Promise<XlsxV2PreviewExisting[]>;
     update: (args: {
@@ -153,6 +155,7 @@ export async function applyXlsxV2Workbook(
 
   const revokedCaddyIds: number[] = [];
   const result = await db.$transaction(async (tx) => {
+    await lockCaddyTableForSlotMutation(tx);
     const live = asExisting(
       await tx.caddy.findMany({
         select: CADDY_SELECT,
