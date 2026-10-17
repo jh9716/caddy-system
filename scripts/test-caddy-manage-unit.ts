@@ -1072,7 +1072,10 @@ console.log("== caddies roster board UI source ==");
       /min-height:\s*44px/.test(src) &&
       /cm-roster-desktop/.test(src) &&
       /cm-roster-mobile/.test(src) &&
-      /cm-team-chip/.test(src),
+      /cm-team-chip/.test(src) &&
+      /useState<RosterDensity>\(['"]compact['"]\)/.test(src) &&
+      /--cm-col-min:\s*86px/.test(src) &&
+      /cm-density-toggle/.test(src),
     "PC roster has min column width, horizontal scroll, sticky headers; mobile uses team chips"
   );
   assert(

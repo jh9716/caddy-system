@@ -77,6 +77,29 @@ export function rosterPersonName(c: { name?: string | null }): string {
   return String(c.name ?? "").trim() || "이름없음";
 }
 
+/** 1 이상만 조 내 고정 슬롯. 0/빈값/비정수는 미지정. DB 값은 바꾸지 않는다. */
+export function hasAssignedRosterSlot(teamOrder: unknown): boolean {
+  const n = Number(teamOrder);
+  return Number.isInteger(n) && n >= 1;
+}
+
+/** 화면 표시용. 미지정은 "—" 이며 0을 순번처럼 보이지 않게 한다. */
+export function rosterSlotDisplay(teamOrder: unknown): string {
+  if (!hasAssignedRosterSlot(teamOrder)) return "—";
+  return String(Math.floor(Number(teamOrder)));
+}
+
+export type RosterDensity = "compact" | "normal";
+
+export function normalizeRosterDensity(input: unknown): RosterDensity {
+  return String(input ?? "").trim() === "normal" ? "normal" : "compact";
+}
+
+/** 압축 보기 컬럼 하한(px). 이보다 작으면 글씨 가독성을 위해 가로 스크롤. */
+export const ROSTER_COMPACT_COL_MIN_PX = 86;
+export const ROSTER_NORMAL_COL_MIN_PX = 168;
+export const ROSTER_SHEET_COL_COUNT = 13;
+
 export function rosterQueryMatches(
   c: { id: number; name?: string | null },
   query: string

@@ -16,7 +16,13 @@ import {
   ownedCartNumberByCaddyId,
   rosterPersonName,
   rosterQueryMatches,
+  rosterSlotDisplay,
   rosterSubgroupLabel,
+  hasAssignedRosterSlot,
+  normalizeRosterDensity,
+  ROSTER_COMPACT_COL_MIN_PX,
+  ROSTER_NORMAL_COL_MIN_PX,
+  ROSTER_SHEET_COL_COUNT,
 } from "../src/lib/caddyRosterBoard";
 
 let passed = 0;
@@ -197,6 +203,26 @@ console.log("== no inferred colors / no batch API ==");
   );
 }
 
+console.log("== slot display / density ==");
+{
+  assert(hasAssignedRosterSlot(1) === true, "slot 1 is assigned");
+  assert(hasAssignedRosterSlot(12) === true, "slot 12 is assigned");
+  assert(hasAssignedRosterSlot(0) === false, "slot 0 is unset");
+  assert(hasAssignedRosterSlot(null) === false, "null slot is unset");
+  assert(hasAssignedRosterSlot(undefined) === false, "undefined slot is unset");
+  assert(hasAssignedRosterSlot(1.5) === false, "non-integer slot is unset");
+  assert(rosterSlotDisplay(0) === "—", "0 displays as dash, not 0");
+  assert(rosterSlotDisplay(3) === "3", "assigned slot shows number");
+  assert(rosterSlotDisplay("") === "—", "blank slot displays as dash");
+  assert(normalizeRosterDensity(undefined) === "compact", "default density compact");
+  assert(normalizeRosterDensity("normal") === "normal", "normal density kept");
+  assert(normalizeRosterDensity("compact") === "compact", "compact density kept");
+  assert(normalizeRosterDensity("wide") === "compact", "unknown density falls back compact");
+  assert(ROSTER_COMPACT_COL_MIN_PX === 86, "compact col min 86");
+  assert(ROSTER_NORMAL_COL_MIN_PX === 168, "normal col min 168");
+  assert(ROSTER_SHEET_COL_COUNT === 13, "sheet has 13 columns");
+}
+
 console.log("== page wiring ==");
 {
   const page = fs.readFileSync(
@@ -232,9 +258,25 @@ console.log("== page wiring ==");
     "PC sheet keeps column width, scroll, sticky, 44px rows"
   );
   assert(
+    /useState<RosterDensity>\(['"]compact['"]\)/.test(page) &&
+      /density-\$\{density\}/.test(page) &&
+      /--cm-col-min:\s*86px/.test(page) &&
+      /일반 보기/.test(page) &&
+      /압축 보기/.test(page) &&
+      /cm-density-toggle/.test(page) &&
+      /cm-ord \$\{slotAssigned \? '' : 'is-unset'\}/.test(page) &&
+      /\.cm-ord\.is-unset/.test(page) &&
+      /순번 없음/.test(page) &&
+      /repeat\(13, minmax\(var\(--cm-col-min\), 1fr\)\)/.test(page) &&
+      /is-house/.test(page) &&
+      /cm-cell-main/.test(page),
+    "PC default compact density, toggle, unset slot, 13-col grid"
+  );
+  assert(
     /@media \(min-width: 960px\)/.test(page) &&
-      /cm-roster-mobile \{ display: none; \}/.test(page),
-    "12 columns are not forced onto mobile"
+      /cm-roster-mobile \{ display: none; \}/.test(page) &&
+      /cm-density-toggle \{ display: inline-flex; \}/.test(page),
+    "12 columns are not forced onto mobile; density toggle is desktop-only"
   );
 }
 

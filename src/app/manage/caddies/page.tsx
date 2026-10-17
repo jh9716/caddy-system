@@ -50,7 +50,10 @@ import {
   listMobileRosterRows,
   normalizeMobileRosterKey,
   ownedCartNumberByCaddyId,
+  hasAssignedRosterSlot,
+  rosterSlotDisplay,
   rosterSubgroupLabel,
+  type RosterDensity,
 } from '@/lib/caddyRosterBoard';
 import {
   listV1ProjectedEmptySlots,
@@ -369,6 +372,8 @@ export default function ManageCaddiesPage() {
   const [cartByCaddyId, setCartByCaddyId] = useState<Record<number, string>>(
     {}
   );
+  /** PC 현장표 밀도. 기본 압축. 모바일 조 칩 레이아웃과는 무관 */
+  const [density, setDensity] = useState<RosterDensity>('compact');
 
   /** 명단 Import v2 Preview */
   type ImportPreviewLine = {
@@ -1088,7 +1093,7 @@ export default function ManageCaddiesPage() {
 
   return (
     <div
-      className={`caddy-manage mode-${viewMode}`}
+      className={`caddy-manage mode-${viewMode} density-${density}`}
       aria-busy={loading || undefined}
       data-resource-cache={rows.length > 0 ? 'ready' : 'empty'}
     >
@@ -1119,6 +1124,18 @@ export default function ManageCaddiesPage() {
               onChange={(e) => setQ(e.target.value)}
               aria-label="이름 검색"
             />
+          ) : null}
+          {viewMode === 'summary' ? (
+            <button
+              type="button"
+              className="cm-btn cm-btn-sm cm-density-toggle"
+              aria-pressed={density === 'compact'}
+              onClick={() =>
+                setDensity((mode) => (mode === 'compact' ? 'normal' : 'compact'))
+              }
+            >
+              {density === 'compact' ? '일반 보기' : '압축 보기'}
+            </button>
           ) : null}
           <button
             type="button"
@@ -1481,7 +1498,7 @@ export default function ManageCaddiesPage() {
             카트·1·3부 신청 색은 명단 고정값이 없어 칠하지 않습니다.
           </p>
           <div className="cm-roster-scroll cm-roster-desktop" aria-label="조별 현장표">
-            <div className="cm-roster-bands" aria-hidden>
+            <div className="cm-roster">
               <div className="cm-roster-band is-house">
                 {ROSTER_HOUSE_LABEL} 1~8조
               </div>
@@ -1489,13 +1506,16 @@ export default function ManageCaddiesPage() {
                 {ROSTER_THIRD_LABEL} 9~12조
               </div>
               <div className="cm-roster-band is-driving">{ROSTER_DRIVING_LABEL}</div>
-            </div>
-            <div className="cm-roster">
               {rosterColumns.map((col) => (
                 <section
                   key={col.key}
-                  className={`cm-roster-col ${col.driving ? 'is-driving' : ''} ${
-                    col.band === 'THIRD' ? 'is-third' : ''
+                  data-band={col.band}
+                  className={`cm-roster-col ${
+                    col.band === 'DRIVING'
+                      ? 'is-driving'
+                      : col.band === 'THIRD'
+                        ? 'is-third'
+                        : 'is-house'
                   }`}
                 >
                   <header className="cm-roster-col-head">
@@ -1511,6 +1531,8 @@ export default function ManageCaddiesPage() {
                         const leave = st === 'LEAVE';
                         const cartNo = cartByCaddyId[c.id];
                         const subgroup = rosterSubgroupLabel(c.thirdBandSubgroup);
+                        const slot = rosterSlotDisplay(c.teamOrder);
+                        const slotAssigned = hasAssignedRosterSlot(c.teamOrder);
                         return (
                           <li key={c.id}>
                             <button
@@ -1522,20 +1544,27 @@ export default function ManageCaddiesPage() {
                               }}
                             >
                               {!col.driving ? (
-                                <span className="cm-ord">{c.teamOrder}</span>
+                                <span
+                                  className={`cm-ord ${slotAssigned ? '' : 'is-unset'}`}
+                                  title={slotAssigned ? `${slot}번` : '순번 없음'}
+                                >
+                                  {slot}
+                                </span>
                               ) : null}
                               <span className={`cm-cart ${cartNo ? '' : 'is-empty'}`}>
                                 {cartNo || '—'}
                               </span>
-                              <span className="cm-cell-name">
-                                {rosterPersonName(c)}
+                              <span className="cm-cell-main">
+                                <span className="cm-cell-name">
+                                  {rosterPersonName(c)}
+                                </span>
+                                {leave ? (
+                                  <span className="cm-leave-badge">휴직</span>
+                                ) : null}
+                                {subgroup ? (
+                                  <span className="cm-band-badge">{subgroup}</span>
+                                ) : null}
                               </span>
-                              {leave ? (
-                                <span className="cm-leave-badge">휴직</span>
-                              ) : null}
-                              {subgroup ? (
-                                <span className="cm-band-badge">{subgroup}</span>
-                              ) : null}
                             </button>
                           </li>
                         );
@@ -1655,7 +1684,9 @@ export default function ManageCaddiesPage() {
                           <span className="cm-mobile-meta">
                             {c.driving
                               ? ROSTER_DRIVING_LABEL
-                              : `${c.columnTitle} ${c.teamOrder}번`}
+                              : hasAssignedRosterSlot(c.teamOrder)
+                                ? `${c.columnTitle} ${c.teamOrder}번`
+                                : `${c.columnTitle} · 순번 없음`}
                             {leave ? ' · 휴직' : ''}
                             {subgroup ? ` · ${subgroup}` : ''}
                           </span>
@@ -3005,7 +3036,9 @@ export default function ManageCaddiesPage() {
                 <strong>{formatCaddyLabel(menuCaddy)}</strong>
                 {!isDrivingCaddy(menuCaddy) ? (
                   <span className="cm-sheet-sub">
-                    {menuCaddy.teamOrder}번
+                    {hasAssignedRosterSlot(menuCaddy.teamOrder)
+                      ? `${menuCaddy.teamOrder}번`
+                      : '순번 없음'}
                     {cartByCaddyId[menuCaddy.id]
                       ? ` · 카트 ${cartByCaddyId[menuCaddy.id]}`
                       : ''}
@@ -3425,83 +3458,102 @@ export default function ManageCaddiesPage() {
         .cm-stats-hint {
           color: var(--vh-warn);
         }
+        .cm-density-toggle { display: none; }
         .cm-roster-note {
           margin: 0 0 8px;
           color: var(--vh-muted);
           font-size: 0.74rem;
           line-height: 1.45;
         }
+        .caddy-manage {
+          --cm-col-min: 168px;
+          --cm-band-h: 26px;
+        }
+        .caddy-manage.density-compact {
+          --cm-col-min: 86px;
+          --cm-band-h: 22px;
+        }
+        .caddy-manage.density-normal {
+          --cm-col-min: 168px;
+        }
         .cm-roster-scroll {
           overflow-x: auto;
-          overflow-y: auto;
+          overflow-y: hidden;
+          height: calc(100dvh - 196px);
           max-height: calc(100dvh - 196px);
           -webkit-overflow-scrolling: touch;
           border: 1px solid #c5cdd0;
           border-radius: var(--vh-radius-sm);
           background: #fff;
         }
-        .cm-roster-bands {
-          display: flex;
+        .cm-roster {
+          display: grid;
+          grid-template-columns: repeat(13, minmax(var(--cm-col-min), 1fr));
+          grid-template-rows: auto minmax(0, 1fr);
+          width: max(100%, calc(var(--cm-col-min) * 13));
+          height: 100%;
+          min-height: 100%;
+          align-items: stretch;
+        }
+        .cm-roster-band {
           position: sticky;
           top: 0;
           z-index: 3;
-          min-width: max-content;
-        }
-        .cm-roster-band {
-          flex: 0 0 auto;
-          min-height: 28px;
+          min-height: var(--cm-band-h);
           display: flex;
           align-items: center;
           justify-content: center;
-          font-size: 0.72rem;
+          font-size: 0.7rem;
           font-weight: 800;
           letter-spacing: 0.04em;
           color: #fff;
           border-right: 1px solid rgba(255,255,255,0.18);
         }
         .cm-roster-band.is-house {
-          width: calc(168px * 8);
+          grid-column: 1 / span 8;
           background: #1f4d3a;
         }
         .cm-roster-band.is-third {
-          width: calc(168px * 4);
+          grid-column: 9 / span 4;
           background: #1d4e89;
         }
         .cm-roster-band.is-driving {
-          width: 168px;
+          grid-column: 13;
           background: #5b21b6;
         }
-        .cm-roster {
-          display: flex;
-          align-items: flex-start;
-          min-width: max-content;
-        }
         .cm-roster-col {
-          flex: 0 0 168px;
-          min-width: 168px;
+          display: flex;
+          flex-direction: column;
+          min-width: 0;
+          min-height: 0;
+          height: 100%;
           border-right: 1px solid #d0d7da;
-          background: #fff;
+          background: #fff7ee;
         }
         .cm-roster-col:last-child {
           border-right: 0;
         }
+        .cm-roster-col.is-house + .cm-roster-col.is-third {
+          border-left: 3px solid #1d4e89;
+        }
         .cm-roster-col.is-third {
-          background: #f8fbff;
+          background: #eef4fc;
         }
         .cm-roster-col.is-driving {
           background: #faf8ff;
         }
         .cm-roster-col-head {
           position: sticky;
-          top: 28px;
+          top: var(--cm-band-h);
           z-index: 2;
+          flex: 0 0 auto;
           display: flex;
           align-items: baseline;
           justify-content: space-between;
-          gap: 6px;
+          gap: 4px;
           min-height: 44px;
-          padding: 8px 10px;
-          background: var(--vh-green-900);
+          padding: 6px 6px;
+          background: #245c44;
           color: #fff;
           font-weight: 700;
           border-bottom: 1px solid #c5cdd0;
@@ -3513,34 +3565,39 @@ export default function ManageCaddiesPage() {
           background: #5b21b6;
         }
         .cm-roster-col-title {
-          font-size: 0.92rem;
+          font-size: 0.86rem;
         }
         .cm-roster-col-count {
-          font-size: 0.75rem;
+          font-size: 0.7rem;
           font-weight: 600;
-          opacity: 0.9;
+          opacity: 0.92;
           white-space: nowrap;
         }
         .cm-roster-list {
           list-style: none;
           margin: 0;
           padding: 0;
+          flex: 1 1 auto;
+          min-height: 0;
+          overflow-y: auto;
+          overflow-x: hidden;
         }
         .cm-roster-list > li:nth-child(even) .cm-roster-cell {
-          background: #f7f8f6;
+          background: rgba(255,255,255,0.55);
         }
         .cm-roster-empty {
-          padding: 12px 10px;
+          padding: 12px 8px;
           color: var(--vh-muted);
-          font-size: 0.8rem;
+          font-size: 0.78rem;
         }
         .cm-roster-cell {
           width: 100%;
           min-height: 44px;
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          padding: 5px 8px;
+          display: grid;
+          grid-template-columns: 1.1em 2.15em minmax(0, 1fr);
+          column-gap: 4px;
+          align-items: start;
+          padding: 4px 5px;
           border: 0;
           border-bottom: 1px solid #e5e8ea;
           background: transparent;
@@ -3548,6 +3605,9 @@ export default function ManageCaddiesPage() {
           font: inherit;
           cursor: pointer;
           color: inherit;
+        }
+        .cm-roster-col.is-driving .cm-roster-cell {
+          grid-template-columns: 2.15em minmax(0, 1fr);
         }
         .cm-roster-cell:hover,
         .cm-roster-cell:focus-visible {
@@ -3558,35 +3618,89 @@ export default function ManageCaddiesPage() {
           color: #78716c;
         }
         .cm-ord {
-          flex: 0 0 1.35em;
           font-variant-numeric: tabular-nums;
           font-weight: 700;
-          font-size: 0.72rem;
+          font-size: 0.66rem;
           color: #64748b;
           text-align: right;
+          padding-top: 3px;
+          line-height: 1.2;
+        }
+        .cm-ord.is-unset {
+          color: #cbd5e1;
+          font-weight: 600;
         }
         .cm-ord-sep {
           color: #cbd5e1;
           font-weight: 600;
         }
         .cm-cart {
-          flex: 0 0 2.4em;
           font-variant-numeric: tabular-nums;
           font-weight: 800;
-          font-size: 0.86rem;
-          color: var(--vh-green-900);
+          font-size: 0.8rem;
+          color: #1f4d3a;
           text-align: right;
+          padding-top: 1px;
+          line-height: 1.25;
+          border-right: 1px solid #d9e0dc;
+          padding-right: 4px;
         }
         .cm-cart.is-empty {
           color: #cbd5e1;
           font-weight: 600;
         }
-        .cm-cell-name {
-          flex: 1 1 auto;
+        .cm-cell-main {
           min-width: 0;
-          font-size: 0.92rem;
+          display: flex;
+          flex-wrap: wrap;
+          align-items: baseline;
+          gap: 2px 4px;
+        }
+        .cm-cell-name {
+          min-width: 0;
+          font-size: 0.8rem;
           font-weight: 700;
           line-height: 1.25;
+          overflow: visible;
+          white-space: normal;
+          overflow-wrap: anywhere;
+          word-break: keep-all;
+        }
+        .caddy-manage.density-normal .cm-roster-col {
+          min-width: 168px;
+        }
+        .caddy-manage.density-normal .cm-roster-cell {
+          min-height: 44px;
+          padding: 5px 8px;
+        }
+        .caddy-manage.density-normal .cm-cell-name {
+          font-size: 0.92rem;
+        }
+        .caddy-manage.density-normal .cm-cart {
+          font-size: 0.86rem;
+        }
+        .caddy-manage.density-compact .cm-roster-col-head {
+          min-height: 32px;
+          padding: 4px 5px;
+        }
+        .caddy-manage.density-compact .cm-roster-cell {
+          min-height: 32px;
+        }
+        .caddy-manage.density-compact .cm-roster-col-title {
+          font-size: 0.76rem;
+        }
+        .caddy-manage.density-compact .cm-roster-col-count {
+          font-size: 0.64rem;
+        }
+        .caddy-manage.density-compact .cm-cell-name {
+          font-size: 0.74rem;
+        }
+        .caddy-manage.density-compact .cm-cart {
+          font-size: 0.72rem;
+        }
+        .caddy-manage.density-compact .cm-leave-badge,
+        .caddy-manage.density-compact .cm-band-badge {
+          font-size: 0.56rem;
         }
         .cm-leave-badge,
         .cm-band-badge {
@@ -3609,6 +3723,7 @@ export default function ManageCaddiesPage() {
         @media (min-width: 960px) {
           .cm-roster-desktop { display: block; }
           .cm-roster-mobile { display: none; }
+          .cm-density-toggle { display: inline-flex; }
         }
         .cm-mobile-team-block {
           margin-bottom: 10px;
