@@ -21,6 +21,7 @@ import {
   scheduleFetchFailureKind,
   scheduleMutationBlocked,
   schedulePlanDisplayAllowed,
+  scheduleWorkspaceVisible,
   shiftYearMonth,
   shouldApplyScheduleFetch,
   shouldScrollPcDayDetail,
@@ -370,6 +371,10 @@ section("fetch state machine");
   assert(!scheduleEmptyAllowed("ERROR"), "실패 시 빈 월표 안내 금지");
   assert(schedulePlanDisplayAllowed("SUCCESS_PLAN"), "성공 시 월표 표시");
   assert(!schedulePlanDisplayAllowed("ERROR"), "실패 시 이전 월표 표시 금지");
+  assert(!scheduleWorkspaceVisible("ERROR"), "ERROR에서 달력/관리 패널 숨김");
+  assert(scheduleWorkspaceVisible("SUCCESS_EMPTY"), "EMPTY에서 작업 영역 유지");
+  assert(scheduleWorkspaceVisible("SUCCESS_PLAN"), "PLAN에서 작업 영역 유지");
+  assert(scheduleWorkspaceVisible("LOADING"), "LOADING에서 기존 영역 유지");
   assert(
     shouldScrollPcDayDetail({ selectedDate: "2099-10-16", calendarDisplay: "block" }),
     "PC 달력 상세 스크롤"
@@ -411,6 +416,8 @@ section("source contracts");
   assert(page.includes('load("retry")'), "재시도는 GET만");
   assert(page.includes("classifyScheduleFetchResult"), "조회 결과 분류");
   assert(page.includes("scheduleEmptyAllowed"), "빈 월표는 성공만");
+  assert(page.includes("scheduleWorkspaceVisible"), "ERROR 작업 영역 가드");
+  assert(page.includes("showWorkspace"), "ERROR에서 board/패널 조건부 렌더");
   assert(page.includes("scheduleMutationBlocked"), "조회 중 변경 차단");
   assert(page.includes("load(\"month-change\")"), "월 변경 시 조회 리셋");
   assert(page.includes("clearDisplayedPlan"), "이전 월 데이터 제거");

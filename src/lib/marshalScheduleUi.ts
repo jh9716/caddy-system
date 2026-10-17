@@ -322,6 +322,12 @@ export function schedulePlanDisplayAllowed(
   return state === "SUCCESS_PLAN";
 }
 
+export function scheduleWorkspaceVisible(
+  state: MarshalScheduleFetchState
+): boolean {
+  return state !== "ERROR";
+}
+
 export function scheduleMutationBlocked(input: {
   loading: boolean;
   busy: boolean;

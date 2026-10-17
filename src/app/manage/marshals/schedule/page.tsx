@@ -21,6 +21,7 @@ import {
   scheduleFetchFailureKind,
   scheduleMutationBlocked,
   schedulePlanDisplayAllowed,
+  scheduleWorkspaceVisible,
   shiftYearMonth,
   shouldScrollPcDayDetail,
   summarizeMarshalNames,
@@ -486,6 +487,7 @@ export default function ManageMarshalSchedulePage() {
   const hasPlan =
     schedulePlanDisplayAllowed(fetchState) && Boolean(dataForMonth?.plan);
   const showEmpty = scheduleEmptyAllowed(fetchState);
+  const showWorkspace = scheduleWorkspaceVisible(fetchState);
   const locked = scheduleMutationBlocked({ loading, busy, fetchState });
   const creditRows = (dataForMonth?.creditRemaining || []).filter((row) =>
     row.name.includes(creditQuery.trim())
@@ -733,7 +735,7 @@ export default function ManageMarshalSchedulePage() {
         </p>
       ) : null}
 
-      {showEmpty ? (
+      {showWorkspace && showEmpty ? (
         <div className="ms-empty" data-marshal-empty-plan="1">
           <p>아직 생성된 마샬 월표가 없습니다.</p>
           <p>
@@ -753,6 +755,7 @@ export default function ManageMarshalSchedulePage() {
         </div>
       ) : null}
 
+      {showWorkspace ? (
       <section
         className="ms-board"
         data-marshal-schedule="board"
@@ -852,7 +855,10 @@ export default function ManageMarshalSchedulePage() {
           })}
         </ul>
       </section>
+      ) : null}
 
+      {showWorkspace ? (
+      <>
       <section
         ref={settingsPanelRef}
         className="ms-panel ui-card"
@@ -1054,6 +1060,8 @@ export default function ManageMarshalSchedulePage() {
           </div>
         ) : null}
       </section>
+      </>
+      ) : null}
     </div>
   );
 }
