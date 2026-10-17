@@ -5,7 +5,9 @@
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { logAudit } from "@/lib/audit";
-import { isPrimaryTeam, type ThirdBandSubgroup } from "@/lib/caddyManage";
+import { isPrimaryTeam, occupiesHouseThirdSlot, type ThirdBandSubgroup } from "@/lib/caddyManage";
+import { findSlotHoldingConflicts } from "@/lib/caddySlot";
+import { lockCaddyTableForSlotMutation } from "@/lib/caddySlotLock";
 import {
   CADDY_REASSIGN_APPLY_TX_MAX_WAIT_MS,
   CADDY_REASSIGN_APPLY_TX_TIMEOUT_MS,
@@ -145,6 +147,7 @@ export async function applyCaddyReassign(options: {
 
   try {
     const result = await db.$transaction(async (tx) => {
+      await lockCaddyTableForSlotMutation(tx);
       const lockIds = options.placements.map((p) => p.id);
       const lockedIdsRaw = await tx.$queryRaw<
         Array<{
@@ -220,6 +223,61 @@ export async function applyCaddyReassign(options: {
       if (updated !== plan.patches.length) {
         throw new Error(
           `Caddy reassign update count mismatch: expected ${plan.patches.length}, got ${updated}`
+        );
+      }
+
+      const finalRows = await tx.$queryRaw<
+        Array<{
+          id: number;
+          name: string;
+          team: string;
+          teamOrder: number;
+          employmentStatus: string;
+          caddyType: string | null;
+        }>
+      >(
+        Prisma.sql`
+          SELECT
+            id,
+            name,
+            team,
+            "teamOrder",
+            "employmentStatus"::text AS "employmentStatus",
+            "caddyType"::text AS "caddyType"
+          FROM "Caddy"
+          WHERE team IN (${Prisma.join(plan.affectedTeams.length > 0 ? plan.affectedTeams : ["__none__"])})
+        `
+      );
+      const finalConflicts = findSlotHoldingConflicts(
+        finalRows
+          .filter((row) => occupiesHouseThirdSlot(row))
+          .map((row) => ({
+            id: row.id,
+            name: row.name,
+            team: row.team,
+            teamOrder: row.teamOrder,
+            emp: row.employmentStatus,
+            caddyType: row.caddyType,
+          }))
+      );
+      if (finalConflicts.length > 0) {
+        const conflict = finalConflicts[0];
+        throw new CaddyReassignError(
+          `${conflict.team} ${conflict.teamOrder}번 슬롯이 최종 상태에서 중복입니다: ${conflict.names.join(", ")}`,
+          {
+            status: 409,
+            code: "slot_conflict",
+            issues: [
+              {
+                code: "slot_conflict",
+                message: `${conflict.team} ${conflict.teamOrder}번 슬롯이 최종 상태에서 중복입니다: ${conflict.names.join(", ")}`,
+                team: conflict.team,
+                teamOrder: conflict.teamOrder,
+                names: conflict.names,
+                caddyIds: conflict.ids.filter((id): id is number => id != null),
+              },
+            ],
+          }
         );
       }
 

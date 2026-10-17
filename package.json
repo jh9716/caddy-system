@@ -31,6 +31,7 @@
     "test:slot-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-slot-unit.ts",
     "test:caddy-reassign-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-reassign-unit.ts",
     "test:caddy-reassign-db": "bash scripts/tsx-safe.sh scripts/test-caddy-reassign-db.ts",
+    "test:caddy-reassign-concurrency-db": "bash scripts/tsx-safe.sh scripts/test-caddy-reassign-concurrency-db.ts",
     "test:caddy-search-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-search-unit.ts",
     "test:alimtalk-preview-unit": "bash scripts/tsx-safe.sh scripts/test-alimtalk-preview-unit.ts",
     "test:alimtalk-freshness-unit": "bash scripts/tsx-safe.sh scripts/test-alimtalk-freshness-unit.ts",

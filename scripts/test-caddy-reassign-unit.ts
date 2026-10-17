@@ -371,6 +371,8 @@ section("소스 가드 — 기존 엔진/연관 데이터 손대지 않음");
     "utf8"
   );
   const patch = fs.readFileSync(path.join(root, "src/app/api/caddies/[id]/route.ts"), "utf8");
+  const post = fs.readFileSync(path.join(root, "src/app/api/caddies/route.ts"), "utf8");
+  const slotLock = fs.readFileSync(path.join(root, "src/lib/caddySlotLock.ts"), "utf8");
   const engine = fs.readFileSync(path.join(root, "src/lib/autoAssignEngine.ts"), "utf8");
   const schema = fs.readFileSync(path.join(root, "prisma/schema.prisma"), "utf8");
   const all = reassign + apply + preview + applyRoute;
@@ -393,6 +395,28 @@ section("소스 가드 — 기존 엔진/연관 데이터 손대지 않음");
   assert(applyRoute.includes("$transaction") || apply.includes("$transaction"), "apply uses transaction");
   assert(all.includes("FOR UPDATE"), "apply locks rows");
   assert(all.includes("REASSIGN_CADDY_SLOTS"), "audit action recorded");
+  assert(
+    slotLock.includes('LOCK TABLE "Caddy" IN SHARE ROW EXCLUSIVE MODE'),
+    "shared table lock conflicts with INSERT ROW EXCLUSIVE"
+  );
+  assert(
+    apply.includes("lockCaddyTableForSlotMutation") &&
+      apply.indexOf("lockCaddyTableForSlotMutation") <
+        apply.indexOf("buildCaddyReassignLockSql"),
+    "apply table-locks before FOR UPDATE"
+  );
+  const postFn = post.slice(post.indexOf("export async function POST"));
+  assert(
+    postFn.includes("withCaddySlotMutation") &&
+      postFn.indexOf("withCaddySlotMutation") < postFn.indexOf("assertSlotAvailable"),
+    "POST re-checks occupancy after table lock"
+  );
+  assert(
+    patch.includes("withCaddySlotMutation") &&
+      patch.includes("assertLockedSlotAvailable"),
+    "PATCH slot writes re-check after table lock"
+  );
+  assert(!slotLock.includes("pg_advisory"), "does not rely on advisory lock alone");
 }
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);

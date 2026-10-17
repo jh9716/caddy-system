@@ -24,6 +24,7 @@ import {
   assertSlotAvailable,
   assertSlotWithinConfiguredCapacity,
 } from "@/lib/caddySlot";
+import { withCaddySlotMutation } from "@/lib/caddySlotLock";
 import { requireAdmin, resolveAuthUser } from "@/lib/auth";
 import {
   canReadArchivedCaddies,
@@ -135,26 +136,6 @@ export async function POST(req: NextRequest) {
     }
     assertSlotWithinConfiguredCapacity(team, teamOrder);
 
-    const peers = await prisma.caddy.findMany({
-      where: { team },
-      select: {
-        id: true,
-        name: true,
-        team: true,
-        teamOrder: true,
-        employmentStatus: true,
-        caddyType: true,
-      },
-    });
-    assertSlotAvailable(
-      peers.map((p) => ({
-        ...p,
-        employmentStatus: String(p.employmentStatus),
-      })),
-      team,
-      teamOrder
-    );
-
     const thirdBandSubgroup = resolveThirdBandSubgroup({
       team,
       requested: Object.prototype.hasOwnProperty.call(body, "thirdBandSubgroup")
@@ -163,29 +144,50 @@ export async function POST(req: NextRequest) {
       current: null,
     });
 
-    const created = await prisma.caddy.create({
-      data: {
-        name: data.name.trim(),
+    const created = await withCaddySlotMutation(prisma, async (tx) => {
+      const peers = await tx.caddy.findMany({
+        where: { team },
+        select: {
+          id: true,
+          name: true,
+          team: true,
+          teamOrder: true,
+          employmentStatus: true,
+          caddyType: true,
+        },
+      });
+      assertSlotAvailable(
+        peers.map((p) => ({
+          ...p,
+          employmentStatus: String(p.employmentStatus),
+        })),
         team,
-        teamOrder,
-        employmentStatus: normalizeEmploymentStatus(data.employmentStatus),
-        extraFlags: mergeExtraFlagsForPersist({
-          incoming: data.extraFlags,
-          mode: "create",
-        }),
-        dormitoryResident,
-        status: data.status ?? "근무중",
-        memo: data.memo ?? null,
-        phoneNormalized,
-        thirdBandSubgroup,
-        caddyType: resolveCaddyTypeFromTeam(team),
-        ...(data.employeeCode !== undefined
-          ? { employeeCode: data.employeeCode }
-          : {}),
-        ...(data.missingFromImport !== undefined
-          ? { missingFromImport: data.missingFromImport }
-          : {}),
-      },
+        teamOrder
+      );
+      return tx.caddy.create({
+        data: {
+          name: data.name.trim(),
+          team,
+          teamOrder,
+          employmentStatus: normalizeEmploymentStatus(data.employmentStatus),
+          extraFlags: mergeExtraFlagsForPersist({
+            incoming: data.extraFlags,
+            mode: "create",
+          }),
+          dormitoryResident,
+          status: data.status ?? "근무중",
+          memo: data.memo ?? null,
+          phoneNormalized,
+          thirdBandSubgroup,
+          caddyType: resolveCaddyTypeFromTeam(team),
+          ...(data.employeeCode !== undefined
+            ? { employeeCode: data.employeeCode }
+            : {}),
+          ...(data.missingFromImport !== undefined
+            ? { missingFromImport: data.missingFromImport }
+            : {}),
+        },
+      });
     });
     if (dormitoryResident) {
       const auth = await resolveAuthUser(req);
