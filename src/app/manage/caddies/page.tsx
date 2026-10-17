@@ -3470,7 +3470,7 @@ export default function ManageCaddiesPage() {
           --cm-band-h: 26px;
         }
         .caddy-manage.density-compact {
-          --cm-col-min: 86px;
+          --cm-col-min: 116px;
           --cm-band-h: 22px;
         }
         .caddy-manage.density-normal {
@@ -3666,6 +3666,14 @@ export default function ManageCaddiesPage() {
           overflow-wrap: anywhere;
           word-break: keep-all;
         }
+        .cm-roster-cell .cm-cell-main {
+          min-width: 3.2em;
+        }
+        .cm-roster-cell .cm-cell-name {
+          min-width: 3.2em;
+          overflow-wrap: break-word;
+          word-break: keep-all;
+        }
         .caddy-manage.density-normal .cm-roster-col {
           min-width: 168px;
         }
@@ -3685,6 +3693,10 @@ export default function ManageCaddiesPage() {
         }
         .caddy-manage.density-compact .cm-roster-cell {
           min-height: 32px;
+          grid-template-columns: 1em 1.85em minmax(3.2em, 1fr);
+        }
+        .caddy-manage.density-compact .cm-roster-col.is-driving .cm-roster-cell {
+          grid-template-columns: 1.85em minmax(3.2em, 1fr);
         }
         .caddy-manage.density-compact .cm-roster-col-title {
           font-size: 0.76rem;

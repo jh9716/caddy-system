@@ -218,7 +218,7 @@ console.log("== slot display / density ==");
   assert(normalizeRosterDensity("normal") === "normal", "normal density kept");
   assert(normalizeRosterDensity("compact") === "compact", "compact density kept");
   assert(normalizeRosterDensity("wide") === "compact", "unknown density falls back compact");
-  assert(ROSTER_COMPACT_COL_MIN_PX === 86, "compact col min 86");
+  assert(ROSTER_COMPACT_COL_MIN_PX === 116, "compact col min 116");
   assert(ROSTER_NORMAL_COL_MIN_PX === 168, "normal col min 168");
   assert(ROSTER_SHEET_COL_COUNT === 13, "sheet has 13 columns");
 }
@@ -260,7 +260,9 @@ console.log("== page wiring ==");
   assert(
     /useState<RosterDensity>\(['"]compact['"]\)/.test(page) &&
       /density-\$\{density\}/.test(page) &&
-      /--cm-col-min:\s*86px/.test(page) &&
+      /--cm-col-min:\s*116px/.test(page) &&
+      /\.cm-roster-cell \.cm-cell-name/.test(page) &&
+      /overflow-wrap:\s*break-word/.test(page) &&
       /일반 보기/.test(page) &&
       /압축 보기/.test(page) &&
       /cm-density-toggle/.test(page) &&

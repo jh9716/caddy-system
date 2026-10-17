@@ -95,8 +95,9 @@ export function normalizeRosterDensity(input: unknown): RosterDensity {
   return String(input ?? "").trim() === "normal" ? "normal" : "compact";
 }
 
-/** 압축 보기 컬럼 하한(px). 이보다 작으면 글씨 가독성을 위해 가로 스크롤. */
-export const ROSTER_COMPACT_COL_MIN_PX = 86;
+/** 압축 보기 컬럼 하한(px). 86은 이름 1글자 세로 줄바꿈. 112~120 중 116.
+ * 13×116=1508 → 1920 본문(~1634)은 한 화면, 1366은 가로 스크롤. */
+export const ROSTER_COMPACT_COL_MIN_PX = 116;
 export const ROSTER_NORMAL_COL_MIN_PX = 168;
 export const ROSTER_SHEET_COL_COUNT = 13;
 
