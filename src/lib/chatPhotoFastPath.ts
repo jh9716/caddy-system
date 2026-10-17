@@ -30,7 +30,7 @@ export type ChatPhotoSourcePlan = {
   kind: ChatPhotoSourceKind;
 };
 
-/** One snapshot of File metadata. Unused by prepareChatPhotoSource (MERGE HOLD). */
+/** One snapshot of File metadata for prepareChatPhotoSource. */
 export function readChatPhotoFileMeta(file: { name?: string; type?: string; size?: number }): ChatPhotoFileMeta {
   return {
     type: (file.type || "").toLowerCase(),
@@ -90,7 +90,7 @@ export function isChatPhotoAcceptableSourceFromMeta(meta: ChatPhotoFileMeta): bo
   return chatPhotoSourceKindFromMeta(meta) !== "unknown";
 }
 
-/** Same decisions as the live helpers, from one type/name/size read. Not wired into prepare. */
+/** Same decisions as the live helpers, from one type/name/size read. */
 export function planChatPhotoSourceFromMeta(meta: ChatPhotoFileMeta): ChatPhotoSourcePlan {
   const kind = chatPhotoSourceKindFromMeta(meta);
   return {
@@ -141,13 +141,15 @@ export async function prepareChatPhotoSource(
     if (watch) noteChatPhotoFileAccess(runId, watch);
   };
   try {
-    if (!isChatPhotoAcceptableSource(probed)) {
+    const meta = readChatPhotoFileMeta(probed);
+    const plan = planChatPhotoSourceFromMeta(meta);
+    if (!plan.acceptable) {
       flushWatch();
       throw new Error(COURSE_REPORT_HEIC_MESSAGE);
     }
     if (debug) noteChatPhotoSourceSplit(runId, "sourceAcceptableEndAt");
     flushWatch();
-    if (canUseChatPhotoFastPath(probed)) {
+    if (plan.fastPath) {
       if (debug) noteChatPhotoSourceSplit(runId, "sourceFastPathEndAt");
       flushWatch();
       return file;
@@ -158,10 +160,10 @@ export async function prepareChatPhotoSource(
       compress ||
       (await import("@/lib/chatPhotoAdaptive")).prepareChatAdaptiveBlob;
     if (debug) noteChatPhotoSourceSplit(runId, "sourceRunResolveEndAt");
-    const heicLike = isHeicLikeFile(probed);
+    const heicLike = plan.heic;
     if (debug) noteChatPhotoSourceSplit(runId, "sourceHeicEndAt");
     flushWatch();
-    const kindHeic = heicLike || chatPhotoSourceKind(probed) === "heic";
+    const kindHeic = heicLike || plan.kind === "heic";
     if (debug) noteChatPhotoSourceSplit(runId, "sourceKindEndAt");
     flushWatch();
     if (kindHeic) {
@@ -180,7 +182,8 @@ export async function prepareChatPhotoSource(
         noteChatPhotoSourceSplit(runId, "sourceNoteScopeEndAt");
         flushWatch();
       }
-      if (canUseChatPhotoFastPath(convertedFile)) return converted;
+      const convertedPlan = planChatPhotoSourceFromMeta(readChatPhotoFileMeta(convertedFile));
+      if (convertedPlan.fastPath) return converted;
       if (debug) noteChatPhotoSourceSplit(runId, "sourceRunInvokeAt");
       return await run(convertedFile);
     }
