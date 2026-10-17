@@ -193,7 +193,8 @@ console.log("== no inferred colors / no batch API ==");
     "no new batch/reorder API; pairwise swap remains"
   );
   assert(
-    /prisma\.caddy\.update/.test(idRoute) && !/prisma\.caddy\.create/.test(idRoute),
+    /(?:prisma|tx)\.caddy\.update/.test(idRoute) &&
+      !/(?:prisma|tx)\.caddy\.create/.test(idRoute),
     "PATCH keeps existing caddy id"
   );
   assert(!/prisma\.caddy\.delete(Many)?\s*\(/.test(idRoute), "no hard delete");
@@ -243,8 +244,21 @@ console.log("== page wiring ==");
     "affiliation move reuses PATCH, keeps id"
   );
   assert(
-    !/onDragStart|draggable|일괄 저장|batchSave/.test(page),
-    "no fake drag or batch save UI"
+    /배치 편집/.test(page) &&
+      /onDragStart/.test(page) &&
+      /draggable/.test(page) &&
+      /postCaddyReassignPreview/.test(page) &&
+      /postCaddyReassignApply/.test(page) &&
+      /previewResult\.base/.test(page) &&
+      /되돌리기/.test(page) &&
+      /조·순번 이동/.test(page),
+    "placement edit uses drag + preview/apply, not a fake batch save"
+  );
+  assert(
+    !/batchSave/.test(page) &&
+      !/autoAssignEngine/.test(page) &&
+      !/marshalRotationService/.test(page),
+    "no batchSave helper or engine rewires"
   );
   assert(
     /조장·기숙사\s*카트·1·3부 신청 색은 명단 고정값이 없어/.test(page),

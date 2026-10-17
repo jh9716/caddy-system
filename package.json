@@ -30,6 +30,7 @@
     "test:roster-import-v2-db": "bash scripts/tsx-safe.sh scripts/test-caddy-roster-import-v2-db.ts",
     "test:slot-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-slot-unit.ts",
     "test:caddy-reassign-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-reassign-unit.ts",
+    "test:caddy-roster-reassign-ui-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-roster-reassign-ui-unit.ts",
     "test:caddy-reassign-db": "bash scripts/tsx-safe.sh scripts/test-caddy-reassign-db.ts",
     "test:caddy-reassign-concurrency-db": "bash scripts/tsx-safe.sh scripts/test-caddy-reassign-concurrency-db.ts",
     "test:caddy-search-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-search-unit.ts",
