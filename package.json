@@ -20,6 +20,8 @@
     "tsx:safe": "bash scripts/tsx-safe.sh",
     "test:db-safety-unit": "bash scripts/tsx-safe.sh scripts/test-db-safety-unit.ts",
     "test:roster-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-roster-unit.ts",
+    "test:caddy-roster-board-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-roster-board-unit.ts",
+    "test:caddy-manage-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-manage-unit.ts",
     "test:roster-import-v2-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-roster-import-v2-unit.ts",
     "test:roster-export-xlsx-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-roster-export-xlsx-unit.ts",
     "test:roster-import-xlsx-v2-preview-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-roster-import-xlsx-v2-preview-unit.ts",

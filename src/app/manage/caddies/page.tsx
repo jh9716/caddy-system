@@ -43,6 +43,16 @@ import {
   type SlotOccupant,
 } from '@/lib/caddySlot';
 import {
+  ROSTER_DRIVING_LABEL,
+  ROSTER_HOUSE_LABEL,
+  ROSTER_THIRD_LABEL,
+  buildRosterColumns,
+  listMobileRosterRows,
+  normalizeMobileRosterKey,
+  ownedCartNumberByCaddyId,
+  rosterSubgroupLabel,
+} from '@/lib/caddyRosterBoard';
+import {
   listV1ProjectedEmptySlots,
   mergeV1SafeResolutions,
   v1SafeApplyReady,
@@ -353,6 +363,12 @@ export default function ManageCaddiesPage() {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   /** 현장표 이름 클릭 메뉴 */
   const [menuCaddyId, setMenuCaddyId] = useState<number | null>(null);
+  /** 모바일 현장표: 조 선택. 12열 가로 축소 없음 */
+  const [mobileTeam, setMobileTeam] = useState<string>('1조');
+  /** 고정카트 번호. 기숙사 전용 카트는 주인 없어 포함되지 않음 */
+  const [cartByCaddyId, setCartByCaddyId] = useState<Record<number, string>>(
+    {}
+  );
 
   /** 명단 Import v2 Preview */
   type ImportPreviewLine = {
@@ -554,17 +570,38 @@ export default function ManageCaddiesPage() {
     [employmentFilter, viewMode, refreshSlotPeers]
   );
 
+  const loadOwnedCarts = useCallback(async () => {
+    try {
+      const res = await fetch('/api/carts', {
+        cache: 'no-store',
+        credentials: 'include',
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      setCartByCaddyId(
+        ownedCartNumberByCaddyId(Array.isArray(data?.carts) ? data.carts : [])
+      );
+    } catch {
+      /* 카트 마스터를 못 읽어도 명단은 유지. 번호는 비움 */
+    }
+  }, []);
+
   const reloadAfterMutation = useCallback(
     async (employmentOverride?: EmploymentStatus | 'all') => {
       invalidateCaddyRosters();
-      await load(employmentOverride);
+      await Promise.all([load(employmentOverride), loadOwnedCarts()]);
     },
-    [invalidateCaddyRosters, load]
+    [invalidateCaddyRosters, load, loadOwnedCarts]
   );
 
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (viewMode !== 'summary') return;
+    void loadOwnedCarts();
+  }, [viewMode, loadOwnedCarts]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -684,70 +721,38 @@ export default function ManageCaddiesPage() {
     return { total: filtered.length, teams: byTeam.size };
   }, [filtered]);
 
-  const teamSummaries = useMemo(() => {
-    const map = new Map(
-      GLANCE_TEAMS.map((team) => [
-        team,
-        { team, total: 0, active: 0, leave: 0, retired: 0, other: 0 },
-      ])
-    );
-    for (const r of rows) {
-      if (isDrivingCaddyType(r.caddyType) || r.team === DRIVING_POOL_TEAM) continue;
-      const cur = map.get(r.team);
-      if (!cur) continue;
-      const st = normalizeEmploymentStatus(r.employmentStatus);
-      if (st === 'ACTIVE') cur.active += 1;
-      else if (st === 'LEAVE') cur.leave += 1;
-      else if (st === 'RETIRED') cur.retired += 1;
-      else cur.other += 1;
-      if (countsTowardRosterHeadcount(r.employmentStatus)) cur.total += 1;
-    }
-    return GLANCE_TEAMS.map((t) => map.get(t)!);
-  }, [rows]);
-
   const menuCaddy = useMemo(
     () => rows.find((r) => r.id === menuCaddyId) ?? null,
     [rows, menuCaddyId]
   );
 
-  const rosterColumns = useMemo(() => {
-    const query = q.trim();
-    const columns = GLANCE_TEAMS.map((team) => {
-      const summary = teamSummaries.find((t) => t.team === team);
-      const members = rows
-        .filter(
-          (r) =>
-            !isDrivingCaddy(r) &&
-            r.team === team &&
-            normalizeEmploymentStatus(r.employmentStatus) !== 'RETIRED'
-        )
-        .filter((r) => !query || r.name.includes(query))
-        .sort((a, b) => a.teamOrder - b.teamOrder || a.id - b.id);
-      return {
-        key: team,
-        title: team,
-        count: summary?.total ?? 0,
-        driving: false,
-        members,
-      };
-    });
-    const drivingMembers = rows
-      .filter(
-        (r) =>
-          isDrivingCaddy(r) &&
-          normalizeEmploymentStatus(r.employmentStatus) !== 'RETIRED'
-      )
-      .filter((r) => !query || r.name.includes(query))
-      .sort((a, b) => a.name.localeCompare(b.name, 'ko') || a.id - b.id);
-    columns.push({
-      key: DRIVING_POOL_TEAM,
-      title: '드라이빙',
-      count: rosterCounts.drivingHeadcount,
-      driving: true,
-      members: drivingMembers,
-    });
-    return columns;
-  }, [rows, q, teamSummaries, rosterCounts.drivingHeadcount]);
+  const rosterColumns = useMemo(
+    () =>
+      buildRosterColumns({
+        rows,
+        query: q,
+        drivingHeadcount: rosterCounts.drivingHeadcount,
+      }),
+    [rows, q, rosterCounts.drivingHeadcount]
+  );
+
+  const mobileRosterRows = useMemo(
+    () =>
+      listMobileRosterRows({
+        columns: rosterColumns,
+        selectedKey: mobileTeam,
+        query: q,
+      }),
+    [rosterColumns, mobileTeam, q]
+  );
+
+  const selectedMobileColumn = useMemo(
+    () =>
+      rosterColumns.find(
+        (col) => col.key === normalizeMobileRosterKey(mobileTeam)
+      ) ?? rosterColumns[0],
+    [rosterColumns, mobileTeam]
+  );
 
   function startEdit(c: Caddy) {
     setEditingId(c.id);
@@ -1470,58 +1475,199 @@ export default function ManageCaddiesPage() {
         <p className="cm-muted">갱신 실패</p>
       ) : null}
       {viewMode === 'summary' ? (
-        <div className="cm-roster-scroll" aria-label="조별 현장표">
-          <div className="cm-roster">
-            {rosterColumns.map((col) => (
-              <section
-                key={col.key}
-                className={`cm-roster-col ${col.driving ? 'is-driving' : ''}`}
-              >
-                <header className="cm-roster-col-head">
-                  <span className="cm-roster-col-title">{col.title}</span>
-                  <span className="cm-roster-col-count">{col.count}명</span>
-                </header>
-                <ul className="cm-roster-list">
-                  {col.members.length === 0 ? (
-                    <li className="cm-roster-empty">없음</li>
-                  ) : (
-                    col.members.map((c) => {
-                      const st = normalizeEmploymentStatus(c.employmentStatus);
-                      const leave = st === 'LEAVE';
-                      return (
-                        <li key={c.id}>
-                          <button
-                            type="button"
-                            className={`cm-roster-cell ${leave ? 'is-leave' : ''}`}
-                            onClick={() => {
-                              setEditingId(null);
-                              setMenuCaddyId(c.id);
-                            }}
-                          >
-                            {!col.driving ? (
-                              <span className="cm-ord">{c.teamOrder}</span>
-                            ) : null}
-                            {!col.driving ? (
-                              <span className="cm-ord-sep" aria-hidden>
-                                |
+        <>
+          <p className="cm-roster-note">
+            고정카트가 있는 경우만 카트번호를 표시합니다. 조장·기숙사
+            카트·1·3부 신청 색은 명단 고정값이 없어 칠하지 않습니다.
+          </p>
+          <div className="cm-roster-scroll cm-roster-desktop" aria-label="조별 현장표">
+            <div className="cm-roster-bands" aria-hidden>
+              <div className="cm-roster-band is-house">
+                {ROSTER_HOUSE_LABEL} 1~8조
+              </div>
+              <div className="cm-roster-band is-third">
+                {ROSTER_THIRD_LABEL} 9~12조
+              </div>
+              <div className="cm-roster-band is-driving">{ROSTER_DRIVING_LABEL}</div>
+            </div>
+            <div className="cm-roster">
+              {rosterColumns.map((col) => (
+                <section
+                  key={col.key}
+                  className={`cm-roster-col ${col.driving ? 'is-driving' : ''} ${
+                    col.band === 'THIRD' ? 'is-third' : ''
+                  }`}
+                >
+                  <header className="cm-roster-col-head">
+                    <span className="cm-roster-col-title">{col.title}</span>
+                    <span className="cm-roster-col-count">{col.count}명</span>
+                  </header>
+                  <ul className="cm-roster-list">
+                    {col.members.length === 0 ? (
+                      <li className="cm-roster-empty">없음</li>
+                    ) : (
+                      col.members.map((c) => {
+                        const st = normalizeEmploymentStatus(c.employmentStatus);
+                        const leave = st === 'LEAVE';
+                        const cartNo = cartByCaddyId[c.id];
+                        const subgroup = rosterSubgroupLabel(c.thirdBandSubgroup);
+                        return (
+                          <li key={c.id}>
+                            <button
+                              type="button"
+                              className={`cm-roster-cell ${leave ? 'is-leave' : ''}`}
+                              onClick={() => {
+                                setEditingId(null);
+                                setMenuCaddyId(c.id);
+                              }}
+                            >
+                              {!col.driving ? (
+                                <span className="cm-ord">{c.teamOrder}</span>
+                              ) : null}
+                              <span className={`cm-cart ${cartNo ? '' : 'is-empty'}`}>
+                                {cartNo || '—'}
                               </span>
-                            ) : null}
-                            <span className="cm-cell-name">
-                              {rosterPersonName(c)}
-                            </span>
-                            {leave ? (
-                              <span className="cm-leave-badge">휴직</span>
-                            ) : null}
-                          </button>
-                        </li>
-                      );
-                    })
-                  )}
-                </ul>
-              </section>
-            ))}
+                              <span className="cm-cell-name">
+                                {rosterPersonName(c)}
+                              </span>
+                              {leave ? (
+                                <span className="cm-leave-badge">휴직</span>
+                              ) : null}
+                              {subgroup ? (
+                                <span className="cm-band-badge">{subgroup}</span>
+                              ) : null}
+                            </button>
+                          </li>
+                        );
+                      })
+                    )}
+                  </ul>
+                </section>
+              ))}
+            </div>
           </div>
-        </div>
+
+          <div className="cm-roster-mobile" aria-label="조별 명단">
+            <div className="cm-mobile-team-block">
+              <p className="cm-mobile-band-label">{ROSTER_HOUSE_LABEL}</p>
+              <div className="cm-team-chips" role="tablist" aria-label="하우스 조">
+                {GLANCE_TEAMS.filter((team) =>
+                  (HOUSE_TEAMS as readonly string[]).includes(team)
+                ).map((team) => (
+                  <button
+                    key={team}
+                    type="button"
+                    role="tab"
+                    aria-selected={mobileTeam === team}
+                    className={`cm-team-chip ${mobileTeam === team ? 'is-on' : ''}`}
+                    onClick={() => setMobileTeam(team)}
+                  >
+                    {team}
+                    <span>
+                      {rosterColumns.find((col) => col.key === team)?.count ?? 0}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <p className="cm-mobile-band-label">{ROSTER_THIRD_LABEL}</p>
+              <div className="cm-team-chips" role="tablist" aria-label="3부반 조">
+                {THIRD_BAND_TEAMS.map((team) => (
+                  <button
+                    key={team}
+                    type="button"
+                    role="tab"
+                    aria-selected={mobileTeam === team}
+                    className={`cm-team-chip ${mobileTeam === team ? 'is-on' : ''}`}
+                    onClick={() => setMobileTeam(team)}
+                  >
+                    {team}
+                    <span>
+                      {rosterColumns.find((col) => col.key === team)?.count ?? 0}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <div className="cm-team-chips">
+                <button
+                  type="button"
+                  className={`cm-team-chip is-driving ${
+                    mobileTeam === DRIVING_POOL_TEAM ? 'is-on' : ''
+                  }`}
+                  onClick={() => setMobileTeam(DRIVING_POOL_TEAM)}
+                >
+                  {ROSTER_DRIVING_LABEL}
+                  <span>{rosterCounts.drivingHeadcount}</span>
+                </button>
+              </div>
+            </div>
+            <header className="cm-mobile-list-head">
+              <strong>
+                {q.trim()
+                  ? `검색 ${mobileRosterRows.length}명`
+                  : `${selectedMobileColumn?.title ?? ''} ${selectedMobileColumn?.count ?? 0}명`}
+              </strong>
+              <button
+                type="button"
+                className="cm-btn cm-btn-primary cm-btn-sm"
+                onClick={() => {
+                  setCreateKind('regular');
+                  if (
+                    selectedMobileColumn &&
+                    !selectedMobileColumn.driving
+                  ) {
+                    setCreateDraft((d) => ({
+                      ...emptyDraft(),
+                      affiliation: selectedMobileColumn.band === 'THIRD' ? 'THIRD' : 'HOUSE',
+                      team: selectedMobileColumn.key,
+                      phone: d.phone,
+                    }));
+                  }
+                  setCreateOpen(true);
+                }}
+              >
+                신규 등록
+              </button>
+            </header>
+            {mobileRosterRows.length === 0 ? (
+              <p className="cm-roster-empty">없음</p>
+            ) : (
+              <ul className="cm-mobile-list">
+                {mobileRosterRows.map((c) => {
+                  const st = normalizeEmploymentStatus(c.employmentStatus);
+                  const leave = st === 'LEAVE';
+                  const cartNo = cartByCaddyId[c.id];
+                  const subgroup = rosterSubgroupLabel(c.thirdBandSubgroup);
+                  return (
+                    <li key={c.id}>
+                      <button
+                        type="button"
+                        className={`cm-mobile-row ${leave ? 'is-leave' : ''}`}
+                        onClick={() => {
+                          setEditingId(null);
+                          setMenuCaddyId(c.id);
+                        }}
+                      >
+                        <span className={`cm-cart ${cartNo ? '' : 'is-empty'}`}>
+                          {cartNo || '—'}
+                        </span>
+                        <span className="cm-mobile-row-body">
+                          <span className="cm-cell-name">{rosterPersonName(c)}</span>
+                          <span className="cm-mobile-meta">
+                            {c.driving
+                              ? ROSTER_DRIVING_LABEL
+                              : `${c.columnTitle} ${c.teamOrder}번`}
+                            {leave ? ' · 휴직' : ''}
+                            {subgroup ? ` · ${subgroup}` : ''}
+                          </span>
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        </>
       ) : filtered.length === 0 ? (
         <p className="cm-muted">조건에 맞는 캐디가 없습니다.</p>
       ) : (
@@ -2860,6 +3006,9 @@ export default function ManageCaddiesPage() {
                 {!isDrivingCaddy(menuCaddy) ? (
                   <span className="cm-sheet-sub">
                     {menuCaddy.teamOrder}번
+                    {cartByCaddyId[menuCaddy.id]
+                      ? ` · 카트 ${cartByCaddyId[menuCaddy.id]}`
+                      : ''}
                   </span>
                 ) : null}
               </div>
@@ -3017,6 +3166,26 @@ export default function ManageCaddiesPage() {
                         >
                           소속/조 변경
                         </button>
+                      ) : null}
+                      {!isDriving && !leave ? (
+                        <>
+                          <button
+                            type="button"
+                            className="cm-btn"
+                            disabled={busy}
+                            onClick={() => moveOrder(c, -1)}
+                          >
+                            순번↑
+                          </button>
+                          <button
+                            type="button"
+                            className="cm-btn"
+                            disabled={busy}
+                            onClick={() => moveOrder(c, 1)}
+                          >
+                            순번↓
+                          </button>
+                        </>
                       ) : null}
                       {!leave ? (
                         <button
@@ -3256,14 +3425,51 @@ export default function ManageCaddiesPage() {
         .cm-stats-hint {
           color: var(--vh-warn);
         }
+        .cm-roster-note {
+          margin: 0 0 8px;
+          color: var(--vh-muted);
+          font-size: 0.74rem;
+          line-height: 1.45;
+        }
         .cm-roster-scroll {
           overflow-x: auto;
           overflow-y: auto;
-          max-height: calc(100dvh - 170px);
+          max-height: calc(100dvh - 196px);
           -webkit-overflow-scrolling: touch;
-          border: 1px solid var(--vh-border);
+          border: 1px solid #c5cdd0;
           border-radius: var(--vh-radius-sm);
-          background: var(--vh-paper);
+          background: #fff;
+        }
+        .cm-roster-bands {
+          display: flex;
+          position: sticky;
+          top: 0;
+          z-index: 3;
+          min-width: max-content;
+        }
+        .cm-roster-band {
+          flex: 0 0 auto;
+          min-height: 28px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 0.72rem;
+          font-weight: 800;
+          letter-spacing: 0.04em;
+          color: #fff;
+          border-right: 1px solid rgba(255,255,255,0.18);
+        }
+        .cm-roster-band.is-house {
+          width: calc(168px * 8);
+          background: #1f4d3a;
+        }
+        .cm-roster-band.is-third {
+          width: calc(168px * 4);
+          background: #1d4e89;
+        }
+        .cm-roster-band.is-driving {
+          width: 168px;
+          background: #5b21b6;
         }
         .cm-roster {
           display: flex;
@@ -3273,17 +3479,21 @@ export default function ManageCaddiesPage() {
         .cm-roster-col {
           flex: 0 0 168px;
           min-width: 168px;
-          border-right: 1px solid var(--vh-border);
+          border-right: 1px solid #d0d7da;
+          background: #fff;
         }
         .cm-roster-col:last-child {
           border-right: 0;
+        }
+        .cm-roster-col.is-third {
+          background: #f8fbff;
         }
         .cm-roster-col.is-driving {
           background: #faf8ff;
         }
         .cm-roster-col-head {
           position: sticky;
-          top: 0;
+          top: 28px;
           z-index: 2;
           display: flex;
           align-items: baseline;
@@ -3294,6 +3504,10 @@ export default function ManageCaddiesPage() {
           background: var(--vh-green-900);
           color: #fff;
           font-weight: 700;
+          border-bottom: 1px solid #c5cdd0;
+        }
+        .cm-roster-col.is-third .cm-roster-col-head {
+          background: #1e4d7b;
         }
         .cm-roster-col.is-driving .cm-roster-col-head {
           background: #5b21b6;
@@ -3310,7 +3524,10 @@ export default function ManageCaddiesPage() {
         .cm-roster-list {
           list-style: none;
           margin: 0;
-          padding: 4px 0 8px;
+          padding: 0;
+        }
+        .cm-roster-list > li:nth-child(even) .cm-roster-cell {
+          background: #f7f8f6;
         }
         .cm-roster-empty {
           padding: 12px 10px;
@@ -3323,8 +3540,9 @@ export default function ManageCaddiesPage() {
           display: flex;
           align-items: center;
           gap: 6px;
-          padding: 6px 10px;
+          padding: 5px 8px;
           border: 0;
+          border-bottom: 1px solid #e5e8ea;
           background: transparent;
           text-align: left;
           font: inherit;
@@ -3333,39 +3551,148 @@ export default function ManageCaddiesPage() {
         }
         .cm-roster-cell:hover,
         .cm-roster-cell:focus-visible {
-          background: #fff7e6;
+          background: #eef6f0;
         }
         .cm-roster-cell.is-leave {
           opacity: 0.72;
           color: #78716c;
         }
         .cm-ord {
-          flex: 0 0 1.6em;
+          flex: 0 0 1.35em;
           font-variant-numeric: tabular-nums;
-          font-weight: 800;
-          font-size: 0.92rem;
-          color: var(--vh-green-900);
+          font-weight: 700;
+          font-size: 0.72rem;
+          color: #64748b;
           text-align: right;
         }
         .cm-ord-sep {
           color: #cbd5e1;
           font-weight: 600;
         }
+        .cm-cart {
+          flex: 0 0 2.4em;
+          font-variant-numeric: tabular-nums;
+          font-weight: 800;
+          font-size: 0.86rem;
+          color: var(--vh-green-900);
+          text-align: right;
+        }
+        .cm-cart.is-empty {
+          color: #cbd5e1;
+          font-weight: 600;
+        }
         .cm-cell-name {
           flex: 1 1 auto;
           min-width: 0;
-          font-size: 0.95rem;
+          font-size: 0.92rem;
           font-weight: 700;
           line-height: 1.25;
         }
-        .cm-leave-badge {
+        .cm-leave-badge,
+        .cm-band-badge {
           flex: 0 0 auto;
-          font-size: 0.65rem;
+          font-size: 0.62rem;
           font-weight: 800;
-          color: #92400e;
-          background: #fef3c7;
           border-radius: 4px;
           padding: 1px 5px;
+        }
+        .cm-leave-badge {
+          color: #92400e;
+          background: #fef3c7;
+        }
+        .cm-band-badge {
+          color: #1e3a5f;
+          background: #e8eef7;
+        }
+        .cm-roster-desktop { display: none; }
+        .cm-roster-mobile { display: block; }
+        @media (min-width: 960px) {
+          .cm-roster-desktop { display: block; }
+          .cm-roster-mobile { display: none; }
+        }
+        .cm-mobile-team-block {
+          margin-bottom: 10px;
+        }
+        .cm-mobile-band-label {
+          margin: 8px 0 6px;
+          font-size: 0.72rem;
+          font-weight: 800;
+          color: var(--vh-green-900);
+        }
+        .cm-team-chips {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+        }
+        .cm-team-chip {
+          min-height: 40px;
+          padding: 6px 10px;
+          border: 1px solid var(--vh-border);
+          border-radius: 999px;
+          background: #fff;
+          font-size: 0.8rem;
+          font-weight: 700;
+          color: var(--vh-ink);
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+        }
+        .cm-team-chip span {
+          font-variant-numeric: tabular-nums;
+          font-size: 0.7rem;
+          color: var(--vh-muted);
+        }
+        .cm-team-chip.is-on {
+          background: var(--vh-green-900);
+          border-color: var(--vh-green-900);
+          color: #fff;
+        }
+        .cm-team-chip.is-on span { color: #dbe7df; }
+        .cm-team-chip.is-driving.is-on {
+          background: #5b21b6;
+          border-color: #5b21b6;
+        }
+        .cm-mobile-list-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+          margin: 10px 0 8px;
+        }
+        .cm-mobile-list {
+          list-style: none;
+          margin: 0;
+          padding: 0;
+          border: 1px solid var(--vh-border);
+          border-radius: var(--vh-radius-sm);
+          overflow: hidden;
+          background: #fff;
+        }
+        .cm-mobile-row {
+          width: 100%;
+          min-height: 52px;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 8px 12px;
+          border: 0;
+          border-bottom: 1px solid #edf0ee;
+          background: #fff;
+          text-align: left;
+          font: inherit;
+          cursor: pointer;
+        }
+        .cm-mobile-row.is-leave { opacity: 0.75; }
+        .cm-mobile-row-body {
+          display: grid;
+          gap: 2px;
+          min-width: 0;
+          flex: 1;
+        }
+        .cm-mobile-meta {
+          font-size: 0.72rem;
+          color: var(--vh-muted);
+          font-weight: 600;
         }
         .cm-sheet-overlay {
           position: fixed;
