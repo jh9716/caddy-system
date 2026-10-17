@@ -18,6 +18,10 @@ import { PATCH as caddyPATCH } from "../src/app/api/caddies/[id]/route";
 import { POST as previewPOST } from "../src/app/api/caddies/reassign/preview/route";
 import { POST as applyPOST } from "../src/app/api/caddies/reassign/apply/route";
 import { POST as importApplyPOST } from "../src/app/api/caddies/import/apply/route";
+import {
+  applyRosterImportPayloadV2,
+  RosterImportApplyError,
+} from "../lib/caddyRosterImportV2";
 import { lockCaddyTableForSlotMutation } from "../src/lib/caddySlotLock";
 import { DRIVING_POOL_TEAM } from "../src/lib/caddyManage";
 import { CADDY_REASSIGN_AUDIT_ACTION } from "../src/lib/caddyReassign";
@@ -429,6 +433,247 @@ async function main() {
       where: { id: mover.id },
       data: { team, teamOrder: slotA, employmentStatus: "ACTIVE" },
     });
+
+    section("Import employment-only restore vs same-slot POST");
+    const empTeam = "7조";
+    const emptyHigh: number[] = [];
+    for (const n of [20, 21, 22, 23, 24]) {
+      const occ = await occupancy(empTeam, n);
+      if (holdersOnSlot(occ.rows, empTeam, n).length === 0) emptyHigh.push(n);
+    }
+    assert(
+      emptyHigh.length >= 2,
+      `${empTeam} has two empty high slots for employment restore tests`
+    );
+    const empSlot = emptyHigh[0];
+    const leaveSlot = emptyHigh[1];
+    const empStart = await occupancy(empTeam, empSlot);
+    assert(
+      holdersOnSlot(empStart.rows, empTeam, empSlot).length === 0,
+      `${empTeam} ${empSlot} start empty`
+    );
+    const restoreA = await createTagged("RESTOREA", empTeam, empSlot);
+    await prisma.caddy.update({
+      where: { id: restoreA.id },
+      data: { employmentStatus: "RETIRED" },
+    });
+    const staleExisting = await prisma.caddy.findMany({
+      select: {
+        id: true,
+        name: true,
+        team: true,
+        teamOrder: true,
+        employmentStatus: true,
+        phoneNormalized: true,
+        thirdBandSubgroup: true,
+        caddyType: true,
+      },
+    });
+    const postedB = await jsonStatus(
+      await caddiesPOST(
+        await adminReq("http://local/api/caddies", {
+          name: `${TAG}RESTOREB`,
+          team: empTeam,
+          teamOrder: empSlot,
+        })
+      )
+    );
+    assert(postedB.status === 200, "POST into retired slot succeeds after preview snapshot");
+    try {
+      await applyRosterImportPayloadV2(
+        { updates: [{ id: restoreA.id, employmentStatus: "ACTIVE" }], creates: [] },
+        prisma,
+        {
+          existingForGuard: staleExisting.map((row) => ({
+            ...row,
+            employmentStatus: String(row.employmentStatus),
+          })),
+        }
+      );
+      assert(false, "retired→ACTIVE import onto occupied slot should throw");
+    } catch (e) {
+      assert(
+        e instanceof RosterImportApplyError &&
+          e.status === 409 &&
+          e.code === "stale_roster",
+        "employment-only restore is 409 stale_roster"
+      );
+    }
+    const restoreAfter = await prisma.caddy.findUniqueOrThrow({
+      where: { id: restoreA.id },
+    });
+    const restoreOcc = await occupancy(empTeam, empSlot);
+    assert(
+      restoreAfter.employmentStatus === "RETIRED",
+      "import employment restore rolled back"
+    );
+    assert(
+      restoreOcc.people.length === 1 && restoreOcc.people[0].id === postedB.body.id,
+      "exactly one ACTIVE holder after retired restore race"
+    );
+    assert(
+      holdersOnSlot(restoreOcc.rows, empTeam, empSlot).length === 1,
+      "no numbered slot duplicates after restore race"
+    );
+
+    const leaveStart = await occupancy(empTeam, leaveSlot);
+    assert(
+      holdersOnSlot(leaveStart.rows, empTeam, leaveSlot).length === 0,
+      `${empTeam} ${leaveSlot} start empty`
+    );
+    const leaveA = await createTagged("LEAVEA", empTeam, leaveSlot);
+    await prisma.caddy.update({
+      where: { id: leaveA.id },
+      data: { employmentStatus: "LEAVE" },
+    });
+    const leaveGuard = await prisma.caddy.findMany({
+      select: {
+        id: true,
+        name: true,
+        team: true,
+        teamOrder: true,
+        employmentStatus: true,
+        phoneNormalized: true,
+        thirdBandSubgroup: true,
+        caddyType: true,
+      },
+    });
+    const leaveOk = await applyRosterImportPayloadV2(
+      { updates: [{ id: leaveA.id, employmentStatus: "ACTIVE" }], creates: [] },
+      prisma,
+      {
+        existingForGuard: leaveGuard.map((row) => ({
+          ...row,
+          employmentStatus: String(row.employmentStatus),
+        })),
+      }
+    );
+    assert(leaveOk.updated === 1, "LEAVE→ACTIVE apply commits when slot is exclusive");
+    const leaveAfterOk = await prisma.caddy.findUniqueOrThrow({
+      where: { id: leaveA.id },
+    });
+    assert(leaveAfterOk.employmentStatus === "ACTIVE", "LEAVE→ACTIVE persisted");
+
+    await prisma.caddy.update({
+      where: { id: leaveA.id },
+      data: { employmentStatus: "LEAVE" },
+    });
+    const leaveGuard2 = await prisma.caddy.findMany({
+      select: {
+        id: true,
+        name: true,
+        team: true,
+        teamOrder: true,
+        employmentStatus: true,
+        phoneNormalized: true,
+        thirdBandSubgroup: true,
+        caddyType: true,
+      },
+    });
+    const extraLeave = await prisma.caddy.create({
+      data: {
+        name: `${TAG}LEAVEEXTRA`,
+        team: empTeam,
+        teamOrder: leaveSlot,
+        employmentStatus: "ACTIVE",
+        caddyType: "HOUSE",
+      },
+    });
+    try {
+      await applyRosterImportPayloadV2(
+        { updates: [{ id: leaveA.id, employmentStatus: "ACTIVE" }], creates: [] },
+        prisma,
+        {
+          existingForGuard: leaveGuard2.map((row) => ({
+            ...row,
+            employmentStatus: String(row.employmentStatus),
+          })),
+        }
+      );
+      assert(false, "LEAVE→ACTIVE onto extra occupant should throw");
+    } catch (e) {
+      assert(
+        e instanceof RosterImportApplyError &&
+          e.status === 409 &&
+          e.code === "stale_roster",
+        "LEAVE/ACTIVE-only dest occupancy is 409"
+      );
+    }
+    const leaveAfterConflict = await prisma.caddy.findUniqueOrThrow({
+      where: { id: leaveA.id },
+    });
+    assert(
+      leaveAfterConflict.employmentStatus === "LEAVE",
+      "LEAVE→ACTIVE conflict rolled back"
+    );
+    const leaveConflictOcc = await occupancy(empTeam, leaveSlot);
+    assert(
+      leaveConflictOcc.people.filter((p) => p.employmentStatus === "ACTIVE").length === 1,
+      "LEAVE/ACTIVE conflict left a single ACTIVE occupant"
+    );
+
+    const [empImportRace, empPostRace] = await Promise.all([
+      applyRosterImportPayloadV2(
+        { updates: [{ id: restoreA.id, employmentStatus: "ACTIVE" }], creates: [] },
+        prisma,
+        {
+          existingForGuard: staleExisting.map((row) => ({
+            ...row,
+            employmentStatus: String(row.employmentStatus),
+          })),
+        }
+      )
+        .then((body) => ({ status: 200 as const, body }))
+        .catch((e) => ({
+          status: e instanceof RosterImportApplyError ? e.status : 500,
+          body: e instanceof RosterImportApplyError ? { code: e.code } : null,
+        })),
+      jsonStatus(
+        await caddiesPOST(
+          await adminReq("http://local/api/caddies", {
+            name: `${TAG}RESTORECONC`,
+            team: empTeam,
+            teamOrder: empSlot,
+          })
+        )
+      ),
+    ]);
+    const empRacePair = [empImportRace, empPostRace];
+    assert(
+      empRacePair.every((r) => r.status === 200 || r.status === 409),
+      "concurrent restore/POST is 200 or 409, not 500"
+    );
+    const concOcc = await occupancy(empTeam, empSlot);
+    assert(concOcc.people.length === 1, "concurrent restore/POST did not double-book");
+    assert(
+      holdersOnSlot(concOcc.rows, empTeam, empSlot).length === 1,
+      "no duplicates after concurrent restore/POST"
+    );
+
+    await prisma.caddy.deleteMany({
+      where: {
+        id: {
+          in: [
+            restoreA.id,
+            postedB.body.id,
+            leaveA.id,
+            extraLeave.id,
+            ...(empPostRace.status === 200 && empPostRace.body?.id
+              ? [empPostRace.body.id]
+              : []),
+          ].filter(Boolean),
+        },
+      },
+    });
+    const concCreated = await prisma.caddy.findMany({
+      where: { name: { startsWith: `${TAG}RESTORE` } },
+      select: { id: true },
+    });
+    if (concCreated.length > 0) {
+      await prisma.caddy.deleteMany({
+        where: { id: { in: concCreated.map((row) => row.id) } },
+      });
+    }
 
     section("재직/휴직 변경 vs 재배치 동시 경합");
     const retired = await createTagged("RETIRED22", team, slotC);

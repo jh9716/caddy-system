@@ -1755,12 +1755,30 @@ async function assertImportSlotGuardAfterLock(
   }
 
   const destTeams = new Set<string>();
-  for (const created of normCreates) destTeams.add(created.team.trim());
+  const destSlots = new Set<string>();
+  for (const created of normCreates) {
+    const team = created.team.trim();
+    const order = created.teamOrder ?? 0;
+    destTeams.add(team);
+    if (order >= 1) destSlots.add(`${team}#${order}`);
+  }
   for (const update of normUpdates) {
-    if (update.team == null && update.teamOrder == null) continue;
     const current = existingById.get(update.id);
     if (!current || !occupiesHouseThirdSlot(current)) continue;
-    destTeams.add(String(update.team ?? current.team).trim());
+    const nextTeam = String(update.team ?? current.team).trim();
+    const nextOrder = Number(update.teamOrder ?? current.teamOrder) || 0;
+    const nextEmp =
+      update.employmentStatus ??
+      (empLabel(current.employmentStatus) || "ACTIVE");
+    const touchesOccupyingSlot =
+      update.team != null ||
+      update.teamOrder != null ||
+      isActiveOrLeaveStatus(update.employmentStatus);
+    if (!touchesOccupyingSlot) continue;
+    destTeams.add(nextTeam);
+    if (nextOrder >= 1 && isActiveOrLeaveStatus(nextEmp)) {
+      destSlots.add(`${nextTeam}#${nextOrder}`);
+    }
   }
   if (destTeams.size === 0) return;
 
@@ -1816,7 +1834,9 @@ async function assertImportSlotGuardAfterLock(
       teamOrder: created.teamOrder ?? 0,
       emp: created.employmentStatus ?? "ACTIVE",
     })),
-  ]);
+  ]).filter((conflict) =>
+    destSlots.has(`${conflict.team}#${conflict.teamOrder}`)
+  );
   if (conflicts.length > 0) throwStaleImportRoster();
 }
 
