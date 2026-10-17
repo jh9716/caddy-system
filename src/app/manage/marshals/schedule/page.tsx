@@ -11,15 +11,21 @@ import {
   marshalScheduleIntroText,
   marshalShiftText,
   marshalSlotSourceText,
+  classifyScheduleFetchResult,
   matchesRequestedYearMonth,
+  nextFetchStateAfterLoad,
   nextScheduleRequestId,
   planStatusLabel,
+  scheduleEmptyAllowed,
+  scheduleFetchErrorMessage,
+  scheduleFetchFailureKind,
   scheduleMutationBlocked,
+  schedulePlanDisplayAllowed,
   shiftYearMonth,
-  shouldApplyScheduleFetch,
   shouldScrollPcDayDetail,
   summarizeMarshalNames,
   type MarshalDayBoard,
+  type MarshalScheduleFetchState,
   type MarshalScheduleSlotView,
 } from "@/lib/marshalScheduleUi";
 
@@ -130,8 +136,10 @@ export default function ManageMarshalSchedulePage() {
   const [amSlots, setAmSlots] = useState("2");
   const [pmSlots, setPmSlots] = useState("1");
   const [startOrder, setStartOrder] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [fetchState, setFetchState] =
+    useState<MarshalScheduleFetchState>("LOADING");
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const requestSeq = useRef(0);
   const dayDetailRef = useRef<HTMLDivElement>(null);
@@ -174,14 +182,16 @@ export default function ManageMarshalSchedulePage() {
     setStartOrder("");
   };
 
-  const load = useCallback(async (mode: "month-change" | "refresh" = "refresh") => {
+  const load = useCallback(async (
+    mode: "month-change" | "refresh" | "retry" = "refresh"
+  ) => {
     const requestedYear = Number(year);
     const requestedMonth = Number(month);
     const requestId = nextScheduleRequestId(requestSeq.current);
     requestSeq.current = requestId;
-    setError(null);
-    setLoading(true);
-    if (mode === "month-change") {
+    setFetchState("LOADING");
+    setFetchError(null);
+    if (mode === "month-change" || mode === "retry") {
       clearDisplayedPlan();
     }
     try {
@@ -191,30 +201,49 @@ export default function ManageMarshalSchedulePage() {
       );
       const json = await res.json().catch(() => ({}));
       if (requestId !== requestSeq.current) return;
-      if (!res.ok) {
-        if (mode === "month-change") setData(null);
-        throw new Error(json?.error || "월표 조회 실패");
-      }
-      if (
-        !shouldApplyScheduleFetch({
-          requestId,
-          latestRequestId: requestSeq.current,
-          payload: json,
-          year: requestedYear,
-          month: requestedMonth,
-        })
-      ) {
-        setData(null);
-        throw new Error("조회한 월이 선택한 월과 다릅니다.");
+      const result = classifyScheduleFetchResult({
+        requestId,
+        latestRequestId: requestSeq.current,
+        ok: res.ok,
+        payload: json,
+        year: requestedYear,
+        month: requestedMonth,
+      });
+      const nextState = nextFetchStateAfterLoad({
+        previous: "LOADING",
+        result,
+        hasPlan: Boolean((json as PlanPayload)?.plan),
+      });
+      if (result === "stale") return;
+      if (result === "error") {
+        clearDisplayedPlan();
+        const kind = scheduleFetchFailureKind({
+          ok: res.ok,
+          payloadMatches: matchesRequestedYearMonth(
+            json,
+            requestedYear,
+            requestedMonth
+          ),
+        });
+        setFetchError(
+          (res.ok ? null : json?.error) || scheduleFetchErrorMessage(kind)
+        );
+        setFetchState("ERROR");
+        return;
       }
       applyFetchedPlan(json as PlanPayload);
-    } catch (e: unknown) {
+      setFetchState(nextState);
+    } catch {
       if (requestId !== requestSeq.current) return;
-      setError(e instanceof Error ? e.message : "조회 실패");
-    } finally {
-      if (requestId === requestSeq.current) {
-        setLoading(false);
-      }
+      clearDisplayedPlan();
+      setFetchError(scheduleFetchErrorMessage("network"));
+      setFetchState(
+        nextFetchStateAfterLoad({
+          previous: "LOADING",
+          result: "error",
+          hasPlan: false,
+        })
+      );
     }
   }, [year, month]);
 
@@ -259,14 +288,16 @@ export default function ManageMarshalSchedulePage() {
     : null;
 
   const run = async (fn: () => Promise<void>) => {
-    if (scheduleMutationBlocked({ loading, busy })) return;
+    if (scheduleMutationBlocked({ loading: fetchState === "LOADING", busy, fetchState })) {
+      return;
+    }
     setBusy(true);
-    setError(null);
+    setActionError(null);
     try {
       await fn();
       await load("refresh");
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "처리 실패");
+      setActionError(e instanceof Error ? e.message : "처리 실패");
     } finally {
       setBusy(false);
     }
@@ -449,9 +480,13 @@ export default function ManageMarshalSchedulePage() {
     el.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [selectedDate]);
 
+  const loading = fetchState === "LOADING";
+  const fetchFailed = fetchState === "ERROR";
   const finalized = dataForMonth?.plan?.status === "FINALIZED";
-  const hasPlan = Boolean(dataForMonth?.plan);
-  const locked = scheduleMutationBlocked({ loading, busy });
+  const hasPlan =
+    schedulePlanDisplayAllowed(fetchState) && Boolean(dataForMonth?.plan);
+  const showEmpty = scheduleEmptyAllowed(fetchState);
+  const locked = scheduleMutationBlocked({ loading, busy, fetchState });
   const creditRows = (dataForMonth?.creditRemaining || []).filter((row) =>
     row.name.includes(creditQuery.trim())
   );
@@ -553,7 +588,7 @@ export default function ManageMarshalSchedulePage() {
   );
 
   return (
-    <div className="vh-page">
+    <div className="vh-page" data-marshal-fetch-state={fetchState}>
       <div className="vh-page-head">
         <h1>마샬 월표</h1>
         <p>{marshalScheduleIntroText()}</p>
@@ -608,7 +643,7 @@ export default function ManageMarshalSchedulePage() {
           >
             다음 달
           </button>
-          {!loading && !hasPlan ? (
+          {showEmpty ? (
             <button
               type="button"
               className="ui-btn ui-btn-primary"
@@ -621,10 +656,21 @@ export default function ManageMarshalSchedulePage() {
         </div>
         <p className="ms-status-line">
           <span
-            className={`ms-status is-${(dataForMonth?.plan?.status || "none").toLowerCase()}`}
-            data-marshal-plan-status={dataForMonth?.plan?.status || "none"}
+            className={`ms-status is-${
+              fetchFailed
+                ? "error"
+                : (dataForMonth?.plan?.status || "none").toLowerCase()
+            }`}
+            data-marshal-plan-status={
+              fetchFailed ? "error" : dataForMonth?.plan?.status || "none"
+            }
+            data-marshal-fetch-state={fetchState}
           >
-            {loading ? "조회 중" : planStatusLabel(dataForMonth?.plan?.status)}
+            {loading
+              ? "조회 중"
+              : fetchFailed
+                ? "조회 실패"
+                : planStatusLabel(dataForMonth?.plan?.status)}
           </span>
           {loading ? (
             <span data-marshal-loading-status="1">월표를 불러오는 중…</span>
@@ -648,9 +694,11 @@ export default function ManageMarshalSchedulePage() {
                     }`}
               </span>
             </>
-          ) : (
+          ) : showEmpty ? (
             <span data-marshal-empty-status="1">이 달에는 월표가 없습니다.</span>
-          )}
+          ) : fetchFailed ? (
+            <span data-marshal-fetch-error-status="1">다시 조회한 뒤에 관리할 수 있습니다.</span>
+          ) : null}
         </p>
       </div>
 
@@ -660,13 +708,32 @@ export default function ManageMarshalSchedulePage() {
         </p>
       ) : null}
 
-      {error && (
-        <p className="vh-auth-error" role="alert" style={{ marginBottom: 12 }}>
-          {error}
-        </p>
-      )}
+      {fetchFailed ? (
+        <div
+          className="ms-fetch-error"
+          role="alert"
+          data-marshal-fetch-error="1"
+        >
+          <p>{fetchError || scheduleFetchErrorMessage("http")}</p>
+          <button
+            type="button"
+            className="ui-btn"
+            data-marshal-retry-fetch="1"
+            disabled={busy}
+            onClick={() => void load("retry")}
+          >
+            다시 조회
+          </button>
+        </div>
+      ) : null}
 
-      {!loading && !hasPlan ? (
+      {actionError && !fetchFailed ? (
+        <p className="vh-auth-error" role="alert" style={{ marginBottom: 12 }}>
+          {actionError}
+        </p>
+      ) : null}
+
+      {showEmpty ? (
         <div className="ms-empty" data-marshal-empty-plan="1">
           <p>아직 생성된 마샬 월표가 없습니다.</p>
           <p>

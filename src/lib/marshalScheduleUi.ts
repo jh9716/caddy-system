@@ -241,11 +241,94 @@ export function shouldApplyScheduleFetch(input: {
   return matchesRequestedYearMonth(input.payload, input.year, input.month);
 }
 
+export const MARSHAL_SCHEDULE_FETCH_STATES = [
+  "LOADING",
+  "SUCCESS_EMPTY",
+  "SUCCESS_PLAN",
+  "ERROR",
+] as const;
+
+export type MarshalScheduleFetchState =
+  (typeof MARSHAL_SCHEDULE_FETCH_STATES)[number];
+
+export type ScheduleFetchResultKind = "stale" | "success" | "error";
+
+export type ScheduleFetchFailureKind = "http" | "network" | "mismatch";
+
+export function resolveMarshalScheduleFetchState(input: {
+  loading: boolean;
+  fetchError: boolean;
+  hasMatchingPayload: boolean;
+  hasPlan: boolean;
+}): MarshalScheduleFetchState {
+  if (input.loading) return "LOADING";
+  if (input.fetchError || !input.hasMatchingPayload) return "ERROR";
+  return input.hasPlan ? "SUCCESS_PLAN" : "SUCCESS_EMPTY";
+}
+
+export function classifyScheduleFetchResult(input: {
+  requestId: number;
+  latestRequestId: number;
+  ok: boolean;
+  networkError?: boolean;
+  payload: { year?: unknown; month?: unknown } | null | undefined;
+  year: number;
+  month: number;
+}): ScheduleFetchResultKind {
+  if (Number(input.requestId) !== Number(input.latestRequestId)) return "stale";
+  if (input.networkError || !input.ok) return "error";
+  if (!matchesRequestedYearMonth(input.payload, input.year, input.month)) {
+    return "error";
+  }
+  return "success";
+}
+
+export function scheduleFetchFailureKind(input: {
+  networkError?: boolean;
+  ok?: boolean;
+  payloadMatches: boolean;
+}): ScheduleFetchFailureKind | null {
+  if (input.networkError) return "network";
+  if (input.ok === false) return "http";
+  if (!input.payloadMatches) return "mismatch";
+  return null;
+}
+
+export function scheduleFetchErrorMessage(
+  kind: ScheduleFetchFailureKind | null | undefined
+): string {
+  if (kind === "network") return "월표를 불러오지 못했습니다. 네트워크 오류입니다.";
+  if (kind === "mismatch") return "조회한 월이 선택한 월과 다릅니다.";
+  return "월표 조회에 실패했습니다.";
+}
+
+export function nextFetchStateAfterLoad(input: {
+  previous: MarshalScheduleFetchState;
+  result: ScheduleFetchResultKind;
+  hasPlan: boolean;
+}): MarshalScheduleFetchState {
+  if (input.result === "stale") return input.previous;
+  if (input.result === "error") return "ERROR";
+  return input.hasPlan ? "SUCCESS_PLAN" : "SUCCESS_EMPTY";
+}
+
+export function scheduleEmptyAllowed(state: MarshalScheduleFetchState): boolean {
+  return state === "SUCCESS_EMPTY";
+}
+
+export function schedulePlanDisplayAllowed(
+  state: MarshalScheduleFetchState
+): boolean {
+  return state === "SUCCESS_PLAN";
+}
+
 export function scheduleMutationBlocked(input: {
   loading: boolean;
   busy: boolean;
+  fetchState?: MarshalScheduleFetchState | null;
 }): boolean {
-  return Boolean(input.loading) || Boolean(input.busy);
+  if (Boolean(input.loading) || Boolean(input.busy)) return true;
+  return input.fetchState === "ERROR" || input.fetchState === "LOADING";
 }
 
 export function shouldScrollPcDayDetail(input: {

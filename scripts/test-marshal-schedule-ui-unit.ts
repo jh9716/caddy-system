@@ -10,10 +10,17 @@ import {
   formatCompactShifts,
   listMonthDayBoards,
   marshalScheduleIntroText,
+  classifyScheduleFetchResult,
   matchesRequestedYearMonth,
+  nextFetchStateAfterLoad,
   nextScheduleRequestId,
   planStatusLabel,
+  resolveMarshalScheduleFetchState,
+  scheduleEmptyAllowed,
+  scheduleFetchErrorMessage,
+  scheduleFetchFailureKind,
   scheduleMutationBlocked,
+  schedulePlanDisplayAllowed,
   shiftYearMonth,
   shouldApplyScheduleFetch,
   shouldScrollPcDayDetail,
@@ -208,6 +215,162 @@ section("month fetch safety");
   assert(scheduleMutationBlocked({ loading: false, busy: true }), "처리 중 변경 차단");
   assert(!scheduleMutationBlocked({ loading: false, busy: false }), "대기 시 변경 가능");
   assert(
+    scheduleMutationBlocked({
+      loading: false,
+      busy: false,
+      fetchState: "ERROR",
+    }),
+    "조회 실패 중 변경 차단"
+  );
+  assert(
+    !scheduleMutationBlocked({
+      loading: false,
+      busy: false,
+      fetchState: "SUCCESS_EMPTY",
+    }),
+    "정상 빈 월표는 설정 가능"
+  );
+  assert(
+    shouldScrollPcDayDetail({ selectedDate: "2099-10-16", calendarDisplay: "block" }),
+    "PC 달력 상세 스크롤"
+  );
+  assert(
+    !shouldScrollPcDayDetail({ selectedDate: "2099-10-16", calendarDisplay: "none" }),
+    "모바일 숨김 달력은 스크롤 없음"
+  );
+  assert(
+    !shouldScrollPcDayDetail({ selectedDate: null, calendarDisplay: "block" }),
+    "미선택 시 스크롤 없음"
+  );
+}
+
+section("fetch state machine");
+{
+  assert(
+    resolveMarshalScheduleFetchState({
+      loading: true,
+      fetchError: false,
+      hasMatchingPayload: false,
+      hasPlan: false,
+    }) === "LOADING",
+    "LOADING"
+  );
+  assert(
+    resolveMarshalScheduleFetchState({
+      loading: false,
+      fetchError: false,
+      hasMatchingPayload: true,
+      hasPlan: false,
+    }) === "SUCCESS_EMPTY",
+    "정상 조회 월표 없음"
+  );
+  assert(
+    resolveMarshalScheduleFetchState({
+      loading: false,
+      fetchError: false,
+      hasMatchingPayload: true,
+      hasPlan: true,
+    }) === "SUCCESS_PLAN",
+    "정상 조회 월표 존재"
+  );
+  assert(
+    resolveMarshalScheduleFetchState({
+      loading: false,
+      fetchError: true,
+      hasMatchingPayload: false,
+      hasPlan: false,
+    }) === "ERROR",
+    "조회 실패"
+  );
+  assert(
+    classifyScheduleFetchResult({
+      requestId: 2,
+      latestRequestId: 2,
+      ok: true,
+      payload: { year: 2099, month: 11 },
+      year: 2099,
+      month: 11,
+    }) === "success",
+    "월표 없는 정상 응답"
+  );
+  assert(
+    classifyScheduleFetchResult({
+      requestId: 2,
+      latestRequestId: 2,
+      ok: false,
+      payload: { error: "boom" },
+      year: 2099,
+      month: 11,
+    }) === "error",
+    "HTTP 500"
+  );
+  assert(
+    classifyScheduleFetchResult({
+      requestId: 2,
+      latestRequestId: 2,
+      ok: false,
+      networkError: true,
+      payload: null,
+      year: 2099,
+      month: 11,
+    }) === "error",
+    "네트워크 오류"
+  );
+  assert(
+    classifyScheduleFetchResult({
+      requestId: 2,
+      latestRequestId: 2,
+      ok: true,
+      payload: { year: 2099, month: 10 },
+      year: 2099,
+      month: 11,
+    }) === "error",
+    "잘못된 응답 year/month"
+  );
+  assert(
+    classifyScheduleFetchResult({
+      requestId: 1,
+      latestRequestId: 2,
+      ok: true,
+      payload: { year: 2099, month: 10 },
+      year: 2099,
+      month: 10,
+    }) === "stale",
+    "빠른 월 이동 stale GET"
+  );
+  assert(
+    nextFetchStateAfterLoad({
+      previous: "ERROR",
+      result: "success",
+      hasPlan: true,
+    }) === "SUCCESS_PLAN",
+    "조회 실패 후 재시도 성공"
+  );
+  assert(
+    nextFetchStateAfterLoad({
+      previous: "LOADING",
+      result: "stale",
+      hasPlan: true,
+    }) === "LOADING",
+    "stale 응답은 로딩 유지"
+  );
+  assert(scheduleFetchFailureKind({ ok: false, payloadMatches: false }) === "http", "http kind");
+  assert(
+    scheduleFetchFailureKind({ networkError: true, payloadMatches: false }) === "network",
+    "network kind"
+  );
+  assert(
+    scheduleFetchFailureKind({ ok: true, payloadMatches: false }) === "mismatch",
+    "mismatch kind"
+  );
+  assert(scheduleFetchErrorMessage("http").includes("실패"), "http 안내");
+  assert(scheduleFetchErrorMessage("network").includes("네트워크"), "network 안내");
+  assert(scheduleFetchErrorMessage("mismatch").includes("월과 다릅니다"), "mismatch 안내");
+  assert(scheduleEmptyAllowed("SUCCESS_EMPTY"), "빈 월표 안내 허용");
+  assert(!scheduleEmptyAllowed("ERROR"), "실패 시 빈 월표 안내 금지");
+  assert(schedulePlanDisplayAllowed("SUCCESS_PLAN"), "성공 시 월표 표시");
+  assert(!schedulePlanDisplayAllowed("ERROR"), "실패 시 이전 월표 표시 금지");
+  assert(
     shouldScrollPcDayDetail({ selectedDate: "2099-10-16", calendarDisplay: "block" }),
     "PC 달력 상세 스크롤"
   );
@@ -240,9 +403,14 @@ section("source contracts");
   assert(page.includes('data-marshal-open-settings="1"'), "설정 열기 마커");
   assert(page.includes('data-marshal-open-settings="toolbar"'), "툴바 설정 열기");
   assert(page.includes("openSettings"), "설정 열기 핸들러");
-  assert(page.includes("shouldApplyScheduleFetch"), "stale GET 가드");
   assert(page.includes("matchesRequestedYearMonth"), "year/month 일치 가드");
   assert(page.includes('data-marshal-loading="1"'), "로딩 표시");
+  assert(page.includes("data-marshal-fetch-state"), "fetch state 마커");
+  assert(page.includes('data-marshal-fetch-error="1"'), "조회 실패 안내");
+  assert(page.includes('data-marshal-retry-fetch="1"'), "읽기 전용 재시도");
+  assert(page.includes('load("retry")'), "재시도는 GET만");
+  assert(page.includes("classifyScheduleFetchResult"), "조회 결과 분류");
+  assert(page.includes("scheduleEmptyAllowed"), "빈 월표는 성공만");
   assert(page.includes("scheduleMutationBlocked"), "조회 중 변경 차단");
   assert(page.includes("load(\"month-change\")"), "월 변경 시 조회 리셋");
   assert(page.includes("clearDisplayedPlan"), "이전 월 데이터 제거");
@@ -271,6 +439,13 @@ section("source contracts");
     assert(empty.includes("월표 설정 열기"), "빈 월표 상단 버튼");
     assert(!empty.includes("generate("), "빈 월표 버튼은 생성 호출 없음");
     assert(empty.includes("openSettings"), "빈 월표 버튼은 설정만 연다");
+  }
+  {
+    const fail =
+      page.split('data-marshal-fetch-error="1"')[1]?.split("actionError")[0] || "";
+    assert(fail.includes("다시 조회"), "실패 시 재시도");
+    assert(!fail.includes("아직 생성된 마샬 월표가 없습니다"), "실패 시 빈 월표 안내 없음");
+    assert(!fail.includes("generate("), "재시도는 생성 호출 없음");
   }
   assert(css.includes(".ms-calendar"), "calendar css");
   assert(css.includes(".ms-dense"), "dense css");
