@@ -361,6 +361,10 @@ section("소스 가드 — 기존 엔진/연관 데이터 손대지 않음");
 {
   const root = path.join(__dirname, "..");
   const reassign = fs.readFileSync(path.join(root, "src/lib/caddyReassign.ts"), "utf8");
+  const reassignSql = fs.readFileSync(
+    path.join(root, "src/lib/caddyReassignSql.ts"),
+    "utf8"
+  );
   const apply = fs.readFileSync(path.join(root, "src/lib/caddyReassignApply.ts"), "utf8");
   const preview = fs.readFileSync(
     path.join(root, "src/app/api/caddies/reassign/preview/route.ts"),
@@ -375,7 +379,11 @@ section("소스 가드 — 기존 엔진/연관 데이터 손대지 않음");
   const slotLock = fs.readFileSync(path.join(root, "src/lib/caddySlotLock.ts"), "utf8");
   const engine = fs.readFileSync(path.join(root, "src/lib/autoAssignEngine.ts"), "utf8");
   const schema = fs.readFileSync(path.join(root, "prisma/schema.prisma"), "utf8");
-  const all = reassign + apply + preview + applyRoute;
+  const all = reassign + reassignSql + apply + preview + applyRoute;
+  assert(
+    !reassign.includes("@prisma/client") && reassignSql.includes("@prisma/client"),
+    "plan module stays prisma-free; SQL builders stay server-only"
+  );
   assert(!all.includes("autoAssignEngine"), "reassign does not import auto-assign engine");
   assert(!all.includes("marshalRotationService"), "reassign does not import marshal engine");
   assert(!all.includes("marshalRosterService"), "reassign does not import marshal roster");

@@ -461,6 +461,20 @@ section("page wiring");
     /mode: "insert"/.test(draftLib) && /explicitPlacementsFromDraft/.test(draftLib),
     "local insert then explicit save"
   );
+  assert(
+    !draftLib.includes("@prisma/client") &&
+      !client.includes("@prisma/client") &&
+      !/@prisma\/client/.test(page),
+    "client roster edit path does not import Prisma"
+  );
+  const plan = fs.readFileSync(path.resolve("src/lib/caddyReassign.ts"), "utf8");
+  const sql = fs.readFileSync(path.resolve("src/lib/caddyReassignSql.ts"), "utf8");
+  assert(
+    !plan.includes("@prisma/client") &&
+      sql.includes("@prisma/client") &&
+      sql.includes("buildCaddyReassignUpdateSql"),
+    "Prisma SQL stays in server-only module"
+  );
 }
 
 if (failed > 0) {
