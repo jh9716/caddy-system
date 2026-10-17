@@ -1,6 +1,7 @@
 /**
  * /manage/caddies 현장표(엑셀형) 순수 헬퍼.
- * 드래그/일괄 저장/색상 추정 없음. 기존 GET/PATCH/POST 만 전제로 한다.
+ * 컬럼/검색/밀도 헬퍼만 담당. 배치 편집 드래그와 Preview/Apply 는
+ * caddyRosterReassignDraft / caddyReassignClient 가 맡는다.
  */
 import {
   DRIVING_POOL_TEAM,
