@@ -27,6 +27,22 @@ export function buildCaddySlotTableLockSql(): Prisma.Sql {
   return Prisma.sql`LOCK TABLE "Caddy" IN SHARE ROW EXCLUSIVE MODE`;
 }
 
+export function isCaddySlotTableLockQuery(query: unknown): boolean {
+  if (!query || typeof query !== "object") return false;
+  const sql = query as {
+    strings?: readonly string[];
+    text?: string;
+  };
+  const text = Array.isArray(sql.strings)
+    ? sql.strings.join("")
+    : typeof sql.text === "string"
+      ? sql.text
+      : "";
+  return /LOCK\s+TABLE\s+"Caddy"\s+IN\s+SHARE\s+ROW\s+EXCLUSIVE\s+MODE/i.test(
+    text
+  );
+}
+
 export async function lockCaddyTableForSlotMutation(tx: {
   $executeRaw: (query: Prisma.Sql) => Promise<unknown>;
 }): Promise<void> {

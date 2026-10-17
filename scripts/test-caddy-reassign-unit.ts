@@ -413,8 +413,39 @@ section("소스 가드 — 기존 엔진/연관 데이터 손대지 않음");
   );
   assert(
     patch.includes("withCaddySlotMutation") &&
-      patch.includes("assertLockedSlotAvailable"),
-    "PATCH slot writes re-check after table lock"
+      patch.includes("assertLockedSlotAvailable") &&
+      patch.includes("assertCaddyRowSlotUnchanged") &&
+      patch.includes("writeCaddyUnderSlotLockRevokingRetired"),
+    "PATCH slot/employment/driving writes re-check after table lock"
+  );
+  assert(
+    patch.includes("orders: updated.orders"),
+    "swap audit uses post-lock orders from the transaction result"
+  );
+  const postDelete = post.slice(post.indexOf("export async function DELETE"));
+  assert(
+    postDelete.includes("writeCaddyUnderSlotLockRevokingRetired"),
+    "list DELETE retires under the same table lock"
+  );
+  const importV2 = fs.readFileSync(
+    path.join(root, "lib/caddyRosterImportV2.ts"),
+    "utf8"
+  );
+  const importV1 = fs.readFileSync(
+    path.join(root, "lib/caddyRosterImportV1Safe.ts"),
+    "utf8"
+  );
+  const importXlsxV2 = fs.readFileSync(
+    path.join(root, "lib/caddyRosterImportXlsxV2Apply.ts"),
+    "utf8"
+  );
+  assert(
+    importV2.includes("assertImportSlotGuardAfterLock") &&
+      importV1.includes("lockCaddyTableForSlotMutation") &&
+      importXlsxV2.includes("lockCaddyTableForSlotMutation") &&
+      importXlsxV2.indexOf("lockCaddyTableForSlotMutation") <
+        importXlsxV2.indexOf("tx.caddy.findMany"),
+    "import apply paths lock and revalidate before occupancy writes"
   );
   assert(!slotLock.includes("pg_advisory"), "does not rely on advisory lock alone");
 }

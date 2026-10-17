@@ -120,6 +120,7 @@ function createApplyDb(input: {
   }
 
   const tx = {
+    $executeRaw: async () => 0,
     caddy: {
       findMany: async () =>
         [...caddies.values()].sort(
@@ -584,6 +585,12 @@ async function main() {
   assert(!/user\.delete/.test(applyLib), "engine no user.delete");
   assert(/incrementSessionVersionForCaddyLink/.test(applyLib), "engine revokes session");
   assert(/\$transaction/.test(applyLib), "single transaction");
+  assert(
+    applyLib.includes("lockCaddyTableForSlotMutation") &&
+      applyLib.indexOf("lockCaddyTableForSlotMutation") <
+        applyLib.indexOf("tx.caddy.findMany"),
+    "xlsx v2 locks before fingerprint/live occupancy read"
+  );
   assert(
     /await notifyChatSessionRevokedForCaddyLink/.test(applyLib),
     "engine awaits revoke after commit"

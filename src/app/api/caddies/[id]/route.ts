@@ -24,6 +24,8 @@ import {
 import {
   SlotOccupiedError,
   SlotOutOfRangeError,
+  SlotStaleError,
+  assertCaddyRowSlotUnchanged,
   assertSlotAvailable,
   assertSlotWithinConfiguredCapacity,
 } from "@/lib/caddySlot";
@@ -37,6 +39,7 @@ import {
   employmentBecameRetired,
   incrementSessionVersionForCaddyLink,
   writeCaddyRevokingRetiredSessions,
+  writeCaddyUnderSlotLockRevokingRetired,
 } from "@/lib/sessionRevocation";
 import { notifyChatSessionRevokedForCaddyLink } from "@/lib/chatSessionRevoke";
 import { writeCaddyDormitoryAudit } from "@/lib/caddyDormitory";
@@ -147,6 +150,8 @@ export async function PATCH(
           err.status = 404;
           throw err;
         }
+        assertCaddyRowSlotUnchanged(current, lockedCurrent);
+        assertCaddyRowSlotUnchanged(other, lockedOther);
         if (lockedOther.team !== lockedCurrent.team) {
           const err = new Error("같은 조에서만 슬롯을 교환할 수 있습니다.") as Error & {
             status: number;
@@ -164,7 +169,11 @@ export async function PATCH(
           where: { id: otherId },
           data: { teamOrder: orderA },
         });
-        return first;
+        return {
+          caddy: first,
+          team: lockedCurrent.team,
+          orders: [orderA, orderB] as [number, number],
+        };
       });
       await logAudit({
         action: "SWAP_CADDY_SLOT",
@@ -172,11 +181,11 @@ export async function PATCH(
           entity: "Caddy",
           entityId: id,
           swapWithId: otherId,
-          team: current.team,
-          orders: [orderA, orderB],
+          team: updated.team,
+          orders: updated.orders,
         },
       });
-      return NextResponse.json(updated);
+      return NextResponse.json(updated.caddy);
     }
 
     const nextIsDriving = shouldPersistAsDriving({
@@ -221,15 +230,18 @@ export async function PATCH(
         updateData.dormitoryResident = data.dormitoryResident === true;
       }
 
-      const updated = await writeCaddyRevokingRetiredSessions(prisma, {
+      const updated = await writeCaddyUnderSlotLockRevokingRetired(prisma, {
         caddyId: id,
         previousEmployment: current.employmentStatus,
         nextEmployment: updateData.employmentStatus ?? current.employmentStatus,
-        write: (tx) =>
-          tx.caddy.update({
+        write: async (tx) => {
+          const locked = await tx.caddy.findUnique({ where: { id } });
+          assertCaddyRowSlotUnchanged(current, locked);
+          return tx.caddy.update({
             where: { id },
             data: updateData as Prisma.CaddyUpdateInput,
-          }),
+          });
+        },
       });
       if (data.dormitoryResident !== undefined) {
         await writeCaddyDormitoryAudit(prisma, {
@@ -388,21 +400,22 @@ export async function PATCH(
 
     const updated = occupancyRecheck
       ? await withCaddySlotMutation(prisma, async (tx) => {
+          const locked = await tx.caddy.findUnique({ where: { id } });
+          assertCaddyRowSlotUnchanged(current, locked);
+          const finalTeam = (updateData.team as string) ?? locked.team;
+          const finalOrder =
+            (updateData.teamOrder as number | undefined) ?? locked.teamOrder;
           if (slotChanging) {
             await assertLockedSlotAvailable(tx, nextTeam, nextOrder);
           }
           if (data.employmentStatus !== undefined) {
             const emp = normalizeEmploymentStatus(data.employmentStatus);
             if (emp === "ACTIVE" || emp === "LEAVE") {
-              const finalTeam = (updateData.team as string) ?? current.team;
-              const finalOrder =
-                (updateData.teamOrder as number | undefined) ??
-                current.teamOrder;
               await assertLockedSlotAvailable(tx, finalTeam, finalOrder);
             }
           }
           const written = await writeUpdate(tx);
-          if (employmentBecameRetired(current.employmentStatus, nextEmployment)) {
+          if (employmentBecameRetired(locked.employmentStatus, nextEmployment)) {
             await incrementSessionVersionForCaddyLink(tx, id);
           }
           return written;
@@ -454,7 +467,11 @@ export async function PATCH(
         { status: e.status }
       );
     }
-    if (e instanceof SlotOccupiedError || e instanceof SlotOutOfRangeError) {
+    if (
+      e instanceof SlotOccupiedError ||
+      e instanceof SlotOutOfRangeError ||
+      e instanceof SlotStaleError
+    ) {
       return NextResponse.json(
         {
           error: e.message,
@@ -520,7 +537,7 @@ export async function DELETE(
       return archivedNotFound();
     }
 
-    const updated = await writeCaddyRevokingRetiredSessions(prisma, {
+    const updated = await writeCaddyUnderSlotLockRevokingRetired(prisma, {
       caddyId: id,
       previousEmployment: current.employmentStatus,
       nextEmployment: "RETIRED",

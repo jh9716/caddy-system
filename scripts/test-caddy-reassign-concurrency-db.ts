@@ -17,6 +17,9 @@ import { POST as caddiesPOST } from "../src/app/api/caddies/route";
 import { PATCH as caddyPATCH } from "../src/app/api/caddies/[id]/route";
 import { POST as previewPOST } from "../src/app/api/caddies/reassign/preview/route";
 import { POST as applyPOST } from "../src/app/api/caddies/reassign/apply/route";
+import { POST as importApplyPOST } from "../src/app/api/caddies/import/apply/route";
+import { lockCaddyTableForSlotMutation } from "../src/lib/caddySlotLock";
+import { DRIVING_POOL_TEAM } from "../src/lib/caddyManage";
 import { CADDY_REASSIGN_AUDIT_ACTION } from "../src/lib/caddyReassign";
 import {
   findSlotHoldingConflicts,
@@ -158,12 +161,14 @@ async function main() {
     const slotA = 20;
     const slotB = 21;
     const slotC = 22;
+    const slotD = 23;
     const before = await occupancy(team, slotA);
     assert(
       holdersOnSlot(before.rows, team, slotA).length === 0 &&
         holdersOnSlot(before.rows, team, slotB).length === 0 &&
-        holdersOnSlot(before.rows, team, slotC).length === 0,
-      `${team} ${slotA}-${slotC} start empty`
+        holdersOnSlot(before.rows, team, slotC).length === 0 &&
+        holdersOnSlot(before.rows, team, slotD).length === 0,
+      `${team} ${slotA}-${slotD} start empty`
     );
 
     const mover = await createTagged("MOVER", team, slotA);
@@ -360,6 +365,250 @@ async function main() {
     assert(applyLosers.length === 1 && applyLosers[0].status === 409, "other reassign 409");
     const dualOcc = await occupancy(team, slotC);
     assert(dualOcc.people.length === 1, "two applies did not double-book");
+
+    await prisma.caddy.update({
+      where: { id: mover.id },
+      data: { team, teamOrder: slotA, caddyType: "HOUSE", employmentStatus: "ACTIVE" },
+    });
+    await prisma.caddy.update({
+      where: { id: other.id },
+      data: { team, teamOrder: slotB, caddyType: "HOUSE", employmentStatus: "ACTIVE" },
+    });
+
+    section("Import Apply vs 재배치 동시 경합");
+    const previewImport = await jsonStatus(
+      await previewPOST(
+        await adminReq("http://local/preview", {
+          placements: [{ id: mover.id, team, teamOrder: slotC }],
+        })
+      )
+    );
+    const [importRace, applyImportRace] = await Promise.all([
+      importApplyPOST(
+        await adminReq("http://local/api/caddies/import/apply", {
+          applyPayload: {
+            updates: [],
+            creates: [
+              {
+                name: `${TAG}IMPORT`,
+                team,
+                teamOrder: slotC,
+                employmentStatus: "ACTIVE",
+              },
+            ],
+          },
+        })
+      ).then(jsonStatus),
+      applyPOST(
+        await adminReq("http://local/applyImport", {
+          placements: [{ id: mover.id, team, teamOrder: slotC }],
+          base: previewImport.body.base,
+        })
+      ).then(jsonStatus),
+    ]);
+    const importWinners = [importRace, applyImportRace].filter((r) => r.status === 200);
+    const importLosers = [importRace, applyImportRace].filter((r) => r.status >= 400);
+    assert(importWinners.length === 1, "exactly one of import/apply succeeded");
+    assert(
+      importLosers.length === 1 && importLosers[0].status === 409,
+      "import race loser is 409 not 500"
+    );
+    const importOcc = await occupancy(team, slotC);
+    assert(importOcc.people.length === 1, "no duplicate occupancy after import race");
+    assert(importOcc.conflicts.length === 0, "no team slot conflicts after import race");
+    const imported = await prisma.caddy.findMany({
+      where: { name: `${TAG}IMPORT` },
+      select: { id: true },
+    });
+    if (imported.length > 0) {
+      await prisma.caddy.deleteMany({
+        where: { id: { in: imported.map((row) => row.id) } },
+      });
+    }
+    await prisma.caddy.update({
+      where: { id: mover.id },
+      data: { team, teamOrder: slotA, employmentStatus: "ACTIVE" },
+    });
+
+    section("재직/휴직 변경 vs 재배치 동시 경합");
+    const retired = await createTagged("RETIRED22", team, slotC);
+    await prisma.caddy.update({
+      where: { id: retired.id },
+      data: { employmentStatus: "RETIRED" },
+    });
+    const previewEmp = await jsonStatus(
+      await previewPOST(
+        await adminReq("http://local/previewEmp", {
+          placements: [{ id: mover.id, team, teamOrder: slotC }],
+        })
+      )
+    );
+    const [empRace, applyEmpRace] = await Promise.all([
+      caddyPATCH(
+        await adminReq(
+          "http://local/api/caddies/" + retired.id,
+          { employmentStatus: "ACTIVE" },
+          "PATCH"
+        ),
+        { params: { id: String(retired.id) } }
+      ).then(jsonStatus),
+      applyPOST(
+        await adminReq("http://local/applyEmp", {
+          placements: [{ id: mover.id, team, teamOrder: slotC }],
+          base: previewEmp.body.base,
+        })
+      ).then(jsonStatus),
+    ]);
+    const empWinners = [empRace, applyEmpRace].filter((r) => r.status === 200);
+    const empLosers = [empRace, applyEmpRace].filter((r) => r.status >= 400);
+    assert(empWinners.length === 1, "exactly one of employment/apply succeeded");
+    assert(empLosers.length === 1 && empLosers[0].status === 409, "employment race loser 409");
+    const empOcc = await occupancy(team, slotC);
+    assert(empOcc.people.length === 1, "no duplicate occupancy after employment race");
+    await prisma.caddy.delete({ where: { id: retired.id } });
+    await prisma.caddy.update({
+      where: { id: mover.id },
+      data: { team, teamOrder: slotA, employmentStatus: "ACTIVE" },
+    });
+
+    section("드라이빙 전환 vs 재배치 동시 경합");
+    await prisma.caddy.update({
+      where: { id: other.id },
+      data: { team, teamOrder: slotB, caddyType: "HOUSE", employmentStatus: "ACTIVE" },
+    });
+    const previewDrive = await jsonStatus(
+      await previewPOST(
+        await adminReq("http://local/previewDrive", {
+          placements: [{ id: mover.id, team, teamOrder: slotB }],
+        })
+      )
+    );
+    const [driveRace, applyDriveRace] = await Promise.all([
+      caddyPATCH(
+        await adminReq(
+          "http://local/api/caddies/" + other.id,
+          { caddyType: "DRIVING" },
+          "PATCH"
+        ),
+        { params: { id: String(other.id) } }
+      ).then(jsonStatus),
+      applyPOST(
+        await adminReq("http://local/applyDrive", {
+          placements: [{ id: mover.id, team, teamOrder: slotB }],
+          base: previewDrive.body.base,
+        })
+      ).then(jsonStatus),
+    ]);
+    assert(
+      [driveRace, applyDriveRace].every((r) => r.status === 200 || r.status === 409),
+      "driving race is 200 or 409, not 500"
+    );
+    const driveOcc = await occupancy(team, slotB);
+    assert(driveOcc.people.length <= 1, "no duplicate occupancy after driving race");
+    assert(driveOcc.conflicts.length === 0, "no team slot conflicts after driving race");
+    const otherAfterDrive = await prisma.caddy.findUniqueOrThrow({
+      where: { id: other.id },
+    });
+    const moverAfterDrive = await prisma.caddy.findUniqueOrThrow({
+      where: { id: mover.id },
+    });
+    if (driveRace.status === 200 && applyDriveRace.status === 200) {
+      assert(
+        otherAfterDrive.team === DRIVING_POOL_TEAM &&
+          moverAfterDrive.teamOrder === slotB,
+        "serialized vacate-then-take kept a single occupant"
+      );
+    }
+    if (driveRace.status === 200) {
+      assert(otherAfterDrive.caddyType === "DRIVING", "driving PATCH persisted");
+    }
+    await prisma.caddy.update({
+      where: { id: mover.id },
+      data: { team, teamOrder: slotA, caddyType: "HOUSE", employmentStatus: "ACTIVE" },
+    });
+    await prisma.caddy.update({
+      where: { id: other.id },
+      data: {
+        team,
+        teamOrder: slotB,
+        caddyType: "HOUSE",
+        employmentStatus: "ACTIVE",
+      },
+    });
+
+    section("기존 단건 PATCH 동시 수정");
+    const [patchOne, patchTwo] = await Promise.all([
+      caddyPATCH(
+        await adminReq(
+          "http://local/api/caddies/" + mover.id,
+          { team, teamOrder: slotC },
+          "PATCH"
+        ),
+        { params: { id: String(mover.id) } }
+      ).then(jsonStatus),
+      caddyPATCH(
+        await adminReq(
+          "http://local/api/caddies/" + mover.id,
+          { team, teamOrder: slotD },
+          "PATCH"
+        ),
+        { params: { id: String(mover.id) } }
+      ).then(jsonStatus),
+    ]);
+    const patchSameWinners = [patchOne, patchTwo].filter((r) => r.status === 200);
+    const patchSameLosers = [patchOne, patchTwo].filter((r) => r.status >= 400);
+    assert(patchSameWinners.length === 1, "exactly one concurrent PATCH committed");
+    assert(
+      patchSameLosers.length === 1 &&
+        patchSameLosers[0].status === 409 &&
+        (patchSameLosers[0].body?.code === "stale_roster" ||
+          patchSameLosers[0].body?.code === "slot_occupied"),
+      "other PATCH is 409 stale/occupied"
+    );
+    const patchSameOccC = await occupancy(team, slotC);
+    const patchSameOccD = await occupancy(team, slotD);
+    assert(
+      patchSameOccC.people.length + patchSameOccD.people.length === 1,
+      "concurrent PATCH did not double-book dest slots"
+    );
+    await prisma.caddy.update({
+      where: { id: mover.id },
+      data: { team, teamOrder: slotA },
+    });
+
+    section("잠금 대기 후 기존 PATCH는 500 없이 완료");
+    const lockWaitStarted = Date.now();
+    const blocker = prisma.$transaction(
+      async (tx) => {
+        await lockCaddyTableForSlotMutation(tx);
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      },
+      { timeout: 10_000, maxWait: 5_000 }
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const waitedPatch = await jsonStatus(
+      await caddyPATCH(
+        await adminReq(
+          "http://local/api/caddies/" + other.id,
+          { employmentStatus: "LEAVE" },
+          "PATCH"
+        ),
+        { params: { id: String(other.id) } }
+      )
+    );
+    await blocker;
+    const lockWaitMs = Date.now() - lockWaitStarted;
+    assert(waitedPatch.status === 200, "lock wait PATCH succeeds without 500");
+    assert(
+      waitedPatch.body?.employmentStatus === "LEAVE",
+      "lock wait PATCH applied employment"
+    );
+    assert(lockWaitMs >= 300, "PATCH waited for the table lock");
+    assert(lockWaitMs < 8_000, "lock wait did not hit the 20s transaction timeout");
+    await prisma.caddy.update({
+      where: { id: other.id },
+      data: { employmentStatus: "ACTIVE" },
+    });
 
     section("실패 시 부분 저장 없음 / 연관 데이터 보존");
     const relatedAssignment = await prisma.assignment.findUniqueOrThrow({

@@ -30,7 +30,7 @@ import {
   canReadArchivedCaddies,
   caddyManageListWhere,
 } from "@/lib/caddyArchiveVisibility";
-import { writeCaddyRevokingRetiredSessions } from "@/lib/sessionRevocation";
+import { writeCaddyUnderSlotLockRevokingRetired } from "@/lib/sessionRevocation";
 import { writeCaddyDormitoryAudit } from "@/lib/caddyDormitory";
 
 export const dynamic = "force-dynamic";
@@ -267,7 +267,7 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: "캐디 없음" }, { status: 404 });
     }
 
-    const updated = await writeCaddyRevokingRetiredSessions(prisma, {
+    const updated = await writeCaddyUnderSlotLockRevokingRetired(prisma, {
       caddyId: id,
       previousEmployment: current.employmentStatus,
       nextEmployment: "RETIRED",
