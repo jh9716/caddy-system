@@ -73,6 +73,8 @@ function serializeOccurrence(row: {
   targetYear: number;
   targetMonth: number;
   scheduledOn: Date | null;
+  pinnedOn?: Date | null;
+  autoHeldOn?: Date | null;
   scheduledPlanId: number | null;
   status: string;
   deferReason: string | null;
@@ -89,6 +91,9 @@ function serializeOccurrence(row: {
     targetYear: row.targetYear,
     targetMonth: row.targetMonth,
     scheduledOn: row.scheduledOn ? formatMarshalYmd(row.scheduledOn) : null,
+    pinnedOn: row.pinnedOn ? formatMarshalYmd(row.pinnedOn) : null,
+    autoHeldOn: row.autoHeldOn ? formatMarshalYmd(row.autoHeldOn) : null,
+    scheduleSource: row.pinnedOn ? ("MANUAL" as const) : ("AUTO" as const),
     scheduledPlanId: row.scheduledPlanId,
     status: row.status,
     deferReason: row.deferReason,
@@ -367,6 +372,8 @@ export async function cancelPenaltyOccurrence(
       data: {
         status: "CANCELLED",
         scheduledOn: null,
+        pinnedOn: null,
+        autoHeldOn: null,
         scheduledPlanId: null,
         deferReason: "운영자가 취소했습니다.",
       },
@@ -420,6 +427,37 @@ export async function applyOccurrencesToMonth(
   leftoverIds: number[];
 }> {
   await lockTargetOccurrences(tx, input.year, input.month);
+  const currentRows = await tx.marshalPenaltyOccurrence.findMany({
+    where: {
+      targetYear: input.year,
+      targetMonth: input.month,
+      status: { in: ["OPEN", "SCHEDULED"] },
+    },
+    orderBy: [{ occurredOn: "asc" }, { id: "asc" }],
+  });
+  const autoHeldOnById = new Map<number, string>();
+  const persistHeld: { id: number; date: Date }[] = [];
+  for (const row of currentRows) {
+    if (row.pinnedOn) continue;
+    const held = row.autoHeldOn
+      ? formatMarshalYmd(row.autoHeldOn)
+      : row.status === "SCHEDULED" && row.scheduledOn
+        ? formatMarshalYmd(row.scheduledOn)
+        : null;
+    if (!held) continue;
+    autoHeldOnById.set(row.id, held);
+    if (!row.autoHeldOn) {
+      persistHeld.push({ id: row.id, date: new Date(`${held}T00:00:00`) });
+    }
+  }
+  await Promise.all(
+    persistHeld.map((row) =>
+      tx.marshalPenaltyOccurrence.update({
+        where: { id: row.id },
+        data: { autoHeldOn: row.date },
+      })
+    )
+  );
   await tx.marshalPenaltyOccurrence.updateMany({
     where: { scheduledPlanId: input.planId, status: "SCHEDULED" },
     data: {
@@ -453,6 +491,10 @@ export async function applyOccurrencesToMonth(
       caddyId: row.caddyId,
       profileId: row.marshalProfileId,
       occurredOn: formatMarshalYmd(row.occurredOn),
+      pinnedOn: row.pinnedOn ? formatMarshalYmd(row.pinnedOn) : null,
+      autoHeldOn:
+        autoHeldOnById.get(row.id) ??
+        (row.autoHeldOn ? formatMarshalYmd(row.autoHeldOn) : null),
     });
   }
   const packed = scheduleOccurrencesForMonth({
@@ -473,6 +515,9 @@ export async function applyOccurrencesToMonth(
           scheduledOn: new Date(`${row.date}T00:00:00`),
           scheduledPlanId: input.planId,
           deferReason: null,
+          ...(row.pinned || autoHeldOnById.has(row.id)
+            ? {}
+            : { autoHeldOn: new Date(`${row.date}T00:00:00`) }),
         },
       })
     )

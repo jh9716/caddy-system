@@ -31,7 +31,10 @@ export type OccurrenceAssignment = {
   caddyId: number;
   profileId: number;
   date: string;
+  pinned: boolean;
 };
+
+export type OccurrenceScheduleSource = "AUTO" | "MANUAL";
 
 export type OccurrenceLeftover = {
   id: number;
@@ -178,11 +181,61 @@ function dayTakenCaddies(
   return new Set((existingByDate.get(date) || []).map((row) => row.caddyId));
 }
 
+function tryPlaceOccurrence(input: {
+  date: string;
+  occurrence: { id: number; caddyId: number; profileId: number };
+  pinned: boolean;
+  amSlots: number;
+  pmSlots: number;
+  occupancy: Map<string, { am: number; pm: number }>;
+  taken: Map<string, Set<number>>;
+  assignedDates: Set<string>;
+  existingByDate: ReadonlyMap<string, readonly DayPenaltyInput[]>;
+  statusByDateCaddy: ReadonlyMap<string, { kind: MarshalDayKind; message: string | null }>;
+}): { ok: true } | { ok: false; reason: string } {
+  const status = input.statusByDateCaddy.get(
+    `${input.date}:${input.occurrence.caddyId}`
+  );
+  if (status?.kind === "hard_skip") {
+    return {
+      ok: false,
+      reason: status.message
+        ? `${status.message} 날짜는 건너뜁니다.`
+        : "병가/장기병가 날짜는 건너뜁니다.",
+    };
+  }
+  if ((input.existingByDate.get(input.date) || []).length > 0) {
+    return { ok: false, reason: "이미 수동 벌당이 있는 날입니다." };
+  }
+  if (input.assignedDates.has(input.date)) {
+    return { ok: false, reason: "같은 날 이미 벌당이 있습니다." };
+  }
+  const cap = input.occupancy.get(input.date);
+  const dayTaken = input.taken.get(input.date);
+  if (!cap || !dayTaken) {
+    return { ok: false, reason: "대상 월 범위를 벗어난 날짜입니다." };
+  }
+  if (dayTaken.has(input.occurrence.caddyId)) {
+    return { ok: false, reason: "같은 날 이미 벌당이 있습니다." };
+  }
+  if (cap.am + 1 > input.amSlots || cap.pm + 1 > input.pmSlots) {
+    return { ok: false, reason: "하루 벌당 정원을 초과합니다." };
+  }
+  cap.am += 1;
+  cap.pm += 1;
+  dayTaken.add(input.occurrence.caddyId);
+  input.assignedDates.add(input.date);
+  return { ok: true };
+}
+
 /**
  * 발생 순서대로 1일부터 FULL_DAY 배정. 하루 발생 벌당은 1명.
  * 후출 정원 2여도 A·B를 같은 날에 넣지 않는다.
  * 앞선 건이 병가로 밀리면 다음 건도 그 날짜 이후로만 본다(순서 보존).
  * 수동 PenaltyDuty가 있는 날은 건너뛴다.
+ * pinnedOn(MANUAL)은 그 날짜에 먼저 고정한다.
+ * autoHeldOn(최초 AUTO 배정일)은 leftover 여도 그 날짜를 유지하고 다른 날로 당기지 않는다.
+ * pinnedOn이 없는 신규 OPEN만 빈 날을 채운다.
  * 못 넣은 건 삭제하지 않고 leftover + deferReason.
  */
 export function scheduleOccurrencesForMonth(input: {
@@ -194,6 +247,9 @@ export function scheduleOccurrencesForMonth(input: {
     caddyId: number;
     profileId: number;
     occurredOn: string;
+    pinnedOn?: string | null;
+    /** 최초 AUTO 배정일. 재생성·leftover 뒤에도 다른 날로 당기지 않는다. */
+    autoHeldOn?: string | null;
   }[];
   existingByDate: ReadonlyMap<string, readonly DayPenaltyInput[]>;
   statusByDateCaddy: ReadonlyMap<string, { kind: MarshalDayKind; message: string | null }>;
@@ -210,43 +266,90 @@ export function scheduleOccurrencesForMonth(input: {
 
   const assignments: OccurrenceAssignment[] = [];
   const leftover: OccurrenceLeftover[] = [];
-  const ordered = sortOccurrencesForSchedule(input.occurrences);
-  let startIndex = 0;
+  const assignedDates = new Set<string>();
+  const placeCtx = {
+    amSlots: input.amSlots,
+    pmSlots: input.pmSlots,
+    occupancy,
+    taken,
+    assignedDates,
+    existingByDate: input.existingByDate,
+    statusByDateCaddy: input.statusByDateCaddy,
+  };
 
-  for (const occurrence of ordered) {
+  const pinned = sortOccurrencesForSchedule(
+    input.occurrences.filter((row) => Boolean(row.pinnedOn))
+  );
+  for (const occurrence of pinned) {
+    const date = occurrence.pinnedOn as string;
+    const placed = tryPlaceOccurrence({
+      ...placeCtx,
+      date,
+      occurrence,
+      pinned: true,
+    });
+    if (!placed.ok) {
+      leftover.push({ id: occurrence.id, deferReason: placed.reason });
+      continue;
+    }
+    assignments.push({
+      id: occurrence.id,
+      caddyId: occurrence.caddyId,
+      profileId: occurrence.profileId,
+      date,
+      pinned: true,
+    });
+  }
+
+  const held = sortOccurrencesForSchedule(
+    input.occurrences.filter((row) => !row.pinnedOn && Boolean(row.autoHeldOn))
+  );
+  for (const occurrence of held) {
+    const date = occurrence.autoHeldOn as string;
+    const placed = tryPlaceOccurrence({
+      ...placeCtx,
+      date,
+      occurrence,
+      pinned: false,
+    });
+    if (!placed.ok) {
+      leftover.push({ id: occurrence.id, deferReason: placed.reason });
+      continue;
+    }
+    assignments.push({
+      id: occurrence.id,
+      caddyId: occurrence.caddyId,
+      profileId: occurrence.profileId,
+      date,
+      pinned: false,
+    });
+  }
+
+  const autos = sortOccurrencesForSchedule(
+    input.occurrences.filter((row) => !row.pinnedOn && !row.autoHeldOn)
+  );
+  let startIndex = 0;
+  for (const occurrence of autos) {
     let placed = false;
     let lastReason = "배정할 날짜가 없습니다.";
     for (let i = startIndex; i < input.dates.length; i += 1) {
       const date = input.dates[i];
-      const status = input.statusByDateCaddy.get(`${date}:${occurrence.caddyId}`);
-      if (status?.kind === "hard_skip") {
-        lastReason = status.message
-          ? `${status.message} 날짜는 건너뜁니다.`
-          : "병가/장기병가 날짜는 건너뜁니다.";
+      const result = tryPlaceOccurrence({
+        ...placeCtx,
+        date,
+        occurrence,
+        pinned: false,
+      });
+      if (!result.ok) {
+        lastReason = result.reason;
         continue;
       }
-      if ((input.existingByDate.get(date) || []).length > 0) {
-        lastReason = "이미 수동 벌당이 있는 날입니다.";
-        continue;
-      }
-      const cap = occupancy.get(date)!;
-      const dayTaken = taken.get(date)!;
-      if (dayTaken.has(occurrence.caddyId)) {
-        lastReason = "같은 날 이미 벌당이 있습니다.";
-        continue;
-      }
-      if (cap.am + 1 > input.amSlots || cap.pm + 1 > input.pmSlots) {
-        lastReason = "하루 벌당 정원을 초과합니다.";
-        continue;
-      }
-      cap.am += 1;
-      cap.pm += 1;
-      dayTaken.add(occurrence.caddyId);
       assignments.push({
         id: occurrence.id,
         caddyId: occurrence.caddyId,
         profileId: occurrence.profileId,
         date,
+        pinned: false,
       });
       startIndex = i + 1;
       placed = true;
