@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   OCCURRENCE_PANEL_TITLE,
   canCancelOccurrence,
@@ -9,17 +9,21 @@ import {
   newOccurrenceNonce,
   occurrenceConflictMessage,
   occurrenceRegisterBlocked,
+  occurrenceRegisterSuccessNotice,
   occurrenceSourceLabel,
   occurrenceStatusLabel,
   occurrenceTargetLabel,
   occurrenceWaitLabel,
   previewChangedNormalNames,
   previewExistingPenaltyNames,
+  previewNetworkErrorMessage,
   previewOtherDatesUnchanged,
   previewOverrideNames,
+  previewResultUsable,
   targetMonthFromOccurredOnYmd,
   type OccurrenceListItem,
   type OccurrencePreviewView,
+  type OccurrenceRegisterNotice,
 } from "@/lib/marshalPenaltyOccurrenceUi";
 
 type Member = {
@@ -41,11 +45,14 @@ function readError(json: ApiErrorBody, fallback: string): string {
 export default function MarshalPenaltyOccurrencePanel(input: {
   members: Member[];
   occurrences: OccurrenceListItem[];
+  viewYear: number;
+  viewMonth: number;
   planStatus?: string | null;
   needsRegeneration?: boolean;
   planGenerated?: boolean;
   locked: boolean;
   onMutate: (fn: () => Promise<void>) => Promise<void>;
+  onMoveToMonth: (year: number, month: number) => void;
 }) {
   const [open, setOpen] = useState(true);
   const [caddyId, setCaddyId] = useState("");
@@ -57,6 +64,8 @@ export default function MarshalPenaltyOccurrencePanel(input: {
   const [confirmOff, setConfirmOff] = useState(false);
   const [preview, setPreview] = useState<OccurrencePreviewView | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [registerNotice, setRegisterNotice] =
+    useState<OccurrenceRegisterNotice | null>(null);
   const [localBusy, setLocalBusy] = useState(false);
   const nonceRef = useRef<string | null>(null);
   const names = useMemo(
@@ -76,6 +85,16 @@ export default function MarshalPenaltyOccurrencePanel(input: {
   });
   const finalized = String(input.planStatus || "").toUpperCase() === "FINALIZED";
 
+  useEffect(() => {
+    if (!registerNotice) return;
+    if (
+      registerNotice.year === Number(input.viewYear) &&
+      registerNotice.month === Number(input.viewMonth)
+    ) {
+      setRegisterNotice(null);
+    }
+  }, [input.viewYear, input.viewMonth, registerNotice]);
+
   const toggleRow = (id: number) => {
     setSelectedId((current) => (current === id ? null : id));
     setPreview(null);
@@ -88,6 +107,7 @@ export default function MarshalPenaltyOccurrencePanel(input: {
   const runPreview = async () => {
     if (!selected || !toDate) return;
     setLocalBusy(true);
+    setPreview(null);
     setPreviewError(null);
     try {
       const res = await fetch(
@@ -101,11 +121,18 @@ export default function MarshalPenaltyOccurrencePanel(input: {
       );
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setPreview(null);
         setPreviewError(readError(json, "미리보기 실패"));
         return;
       }
-      setPreview(json.preview || json);
+      const next = (json.preview || json) as OccurrencePreviewView;
+      if (!previewResultUsable(next)) {
+        setPreviewError("미리보기 결과가 올바르지 않습니다.");
+        return;
+      }
+      setPreview(next);
+    } catch {
+      setPreview(null);
+      setPreviewError(previewNetworkErrorMessage());
     } finally {
       setLocalBusy(false);
     }
@@ -164,6 +191,13 @@ export default function MarshalPenaltyOccurrencePanel(input: {
                   throw new Error(readError(json, "벌당 발생 등록 실패"));
                 }
                 nonceRef.current = null;
+                setRegisterNotice(
+                  occurrenceRegisterSuccessNotice({
+                    occurredOn,
+                    viewYear: input.viewYear,
+                    viewMonth: input.viewMonth,
+                  })
+                );
                 setReason("");
                 setNote("");
               });
@@ -215,6 +249,22 @@ export default function MarshalPenaltyOccurrencePanel(input: {
             <p className="ms-muted">
               대상 근무 월 {occurrenceTargetLabel(targetHint.year, targetHint.month)} ·
               기본 배정은 자동입니다.
+            </p>
+          ) : null}
+          {registerNotice ? (
+            <p className="ms-occ-ok" data-marshal-occurrence-registered="1" role="status">
+              <span>{registerNotice.text}</span>
+              <button
+                type="button"
+                className="ui-btn ui-btn-primary"
+                data-marshal-occurrence-goto-target="1"
+                disabled={input.locked || localBusy}
+                onClick={() =>
+                  input.onMoveToMonth(registerNotice.year, registerNotice.month)
+                }
+              >
+                대상 월로 이동
+              </button>
             </p>
           ) : null}
 

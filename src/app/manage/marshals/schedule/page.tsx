@@ -479,12 +479,17 @@ export default function ManageMarshalSchedulePage() {
       if (!res.ok) throw new Error(json?.error || "보정 취소 실패");
     });
 
-  const moveMonth = (delta: number) => {
+  const goToYearMonth = (nextYear: number, nextMonth: number) => {
     if (busy) return;
-    const next = shiftYearMonth(yearNum, monthNum, delta);
-    setYear(String(next.year));
-    setMonth(String(next.month));
+    if (Number(nextYear) === yearNum && Number(nextMonth) === monthNum) return;
+    setYear(String(nextYear));
+    setMonth(String(nextMonth));
     clearDisplayedPlan();
+  };
+
+  const moveMonth = (delta: number) => {
+    const next = shiftYearMonth(yearNum, monthNum, delta);
+    goToYearMonth(next.year, next.month);
   };
 
   const toggleDay = (ymd: string) => {
@@ -817,11 +822,14 @@ export default function ManageMarshalSchedulePage() {
         <MarshalPenaltyOccurrencePanel
           members={dataForMonth?.members || []}
           occurrences={occurrences}
+          viewYear={yearNum}
+          viewMonth={monthNum}
           planStatus={dataForMonth?.plan?.status}
           needsRegeneration={Boolean(dataForMonth?.plan?.needsRegeneration)}
           planGenerated={Boolean(dataForMonth?.plan?.generatedAt)}
           locked={locked}
           onMutate={run}
+          onMoveToMonth={goToYearMonth}
         />
       ) : null}
 

@@ -6022,6 +6022,16 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
   flex: 1 1 120px;
 }
 
+.ms-occ-ok {
+  margin: 8px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  color: var(--vh-ok);
+  font-size: 0.88rem;
+}
+
 .ms-occ-list {
   list-style: none;
   margin: 8px 0 0;

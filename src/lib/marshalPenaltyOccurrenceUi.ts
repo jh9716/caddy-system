@@ -109,6 +109,42 @@ export function targetMonthFromOccurredOnYmd(ymd: string): {
   return nextYearMonth(year, month);
 }
 
+export type OccurrenceRegisterNotice = {
+  year: number;
+  month: number;
+  text: string;
+};
+
+export function occurrenceRegisterSuccessNotice(input: {
+  occurredOn: string;
+  viewYear: number;
+  viewMonth: number;
+}): OccurrenceRegisterNotice | null {
+  const target = targetMonthFromOccurredOnYmd(input.occurredOn);
+  if (!target) return null;
+  if (
+    Number(input.viewYear) === target.year &&
+    Number(input.viewMonth) === target.month
+  ) {
+    return null;
+  }
+  return {
+    year: target.year,
+    month: target.month,
+    text: `등록 완료 · ${occurrenceTargetLabel(target.year, target.month)} 대상`,
+  };
+}
+
+export function previewNetworkErrorMessage(): string {
+  return "미리보기를 불러오지 못했습니다. 다시 시도하세요.";
+}
+
+export function previewResultUsable(
+  preview: { previewToken?: string | null } | null | undefined
+): boolean {
+  return Boolean(preview && String(preview.previewToken || "").trim());
+}
+
 export function makeOccurrenceIdempotencyKey(input: {
   caddyId: number;
   occurredOn: string;
