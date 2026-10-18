@@ -290,7 +290,7 @@ async function main() {
         "B is the normal rotation person"
       );
 
-      let omittedInsertFailed = false;
+      let prismaOmitFailed = false;
       try {
         await prisma.marshalPenaltyDuty.create({
           data: {
@@ -303,9 +303,73 @@ async function main() {
           } as never,
         });
       } catch {
-        omittedInsertFailed = true;
+        prismaOmitFailed = true;
       }
-      assert(omittedInsertFailed, "INSERT without coverage fails after DROP DEFAULT");
+      assert(prismaOmitFailed, "new Prisma client still requires coverage");
+
+      await prisma.$executeRaw`
+        INSERT INTO "MarshalPenaltyDuty"
+          ("planId","date","shift","caddyId","marshalProfileId","reason","createdAt","updatedAt")
+        VALUES
+          (
+            ${afterPatch.plan!.id},
+            ${new Date(`${YEAR}-11-03T00:00:00`)},
+            'AM'::"MarshalShift",
+            ${B.caddy.id},
+            ${B.profile.id},
+            ${"legacy-omit-coverage"},
+            NOW(),
+            NOW()
+          )
+      `;
+      const filled = await prisma.marshalPenaltyDuty.findFirst({
+        where: { planId: afterPatch.plan!.id, caddyId: B.caddy.id },
+      });
+      assert(filled?.coverage === "AM", "legacy INSERT omit coverage fills AM from shift");
+      await prisma.marshalPenaltyDuty.delete({ where: { id: filled!.id } });
+    }
+
+    section("PATCH shift/coverage stays consistent");
+    {
+      const D = roster[3];
+      const E = roster[4];
+      const single = await createPenaltyDuty({
+        year: YEAR,
+        month: MONTH,
+        date: `${YEAR}-11-04`,
+        caddyId: D.caddy.id,
+        shift: "AM",
+        reason: "patch-shift-only",
+      });
+      const shifted = await updatePenaltyDuty({ id: single.id, shift: "PM" });
+      assert(
+        shifted.shift === "PM" && shifted.coverage === "PM",
+        "single-shift PATCH shift also updates coverage"
+      );
+      const full = await createPenaltyDuty({
+        year: YEAR,
+        month: MONTH,
+        date: `${YEAR}-11-04`,
+        caddyId: E.caddy.id,
+        shift: "AM",
+        coverage: "FULL_DAY",
+        reason: "patch-full-day",
+      });
+      const fullShift = await updatePenaltyDuty({ id: full.id, shift: "PM" });
+      assert(
+        fullShift.shift === "PM" && fullShift.coverage === "FULL_DAY",
+        "FULL_DAY PATCH shift keeps FULL_DAY"
+      );
+      const toAm = await updatePenaltyDuty({ id: full.id, coverage: "AM" });
+      assert(
+        toAm.shift === "AM" && toAm.coverage === "AM",
+        "FULL_DAY → AM sets display shift"
+      );
+      await throwsCode(
+        () => updatePenaltyDuty({ id: single.id, shift: "AM", coverage: "PM" }),
+        "shift_coverage_mismatch",
+        "contradictory PATCH rejected"
+      );
     }
 
     section("7. FULL_DAY pair replace locked; normal sub allowed");

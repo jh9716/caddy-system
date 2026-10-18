@@ -21,6 +21,7 @@ import {
   penaltyShiftOccupancy,
   resolveCreatePenaltyCoverage,
   resolvePenaltyCoverage,
+  resolveUpdatePenaltyShiftCoverage,
   type DayPenaltyInput,
   type GeneratedSlot,
   type RotationMember,
@@ -139,6 +140,78 @@ section("coverage helpers keep legacy shift occupancy");
     "legacy PM occupies 1"
   );
   throws(() => parsePenaltyCoverage("DAY"), "invalid_coverage", "bad coverage rejected");
+}
+
+section("PATCH shift/coverage policy");
+{
+  const am = resolveUpdatePenaltyShiftCoverage({
+    currentShift: "AM",
+    currentCoverage: "AM",
+    shift: "PM",
+  });
+  assert(am.shift === "PM" && am.coverage === "PM", "single-shift PATCH shift syncs coverage");
+  const keepFull = resolveUpdatePenaltyShiftCoverage({
+    currentShift: "AM",
+    currentCoverage: "FULL_DAY",
+    shift: "PM",
+  });
+  assert(
+    keepFull.shift === "PM" && keepFull.coverage === "FULL_DAY",
+    "FULL_DAY PATCH shift keeps FULL_DAY"
+  );
+  const covPm = resolveUpdatePenaltyShiftCoverage({
+    currentShift: "AM",
+    currentCoverage: "AM",
+    coverage: "PM",
+  });
+  assert(covPm.shift === "PM" && covPm.coverage === "PM", "coverage-only AM→PM also sets shift");
+  const toFull = resolveUpdatePenaltyShiftCoverage({
+    currentShift: "AM",
+    currentCoverage: "AM",
+    coverage: "FULL_DAY",
+  });
+  assert(
+    toFull.shift === "AM" && toFull.coverage === "FULL_DAY",
+    "coverage-only → FULL_DAY keeps display shift"
+  );
+  const fromFull = resolveUpdatePenaltyShiftCoverage({
+    currentShift: "PM",
+    currentCoverage: "FULL_DAY",
+    coverage: "AM",
+  });
+  assert(
+    fromFull.shift === "AM" && fromFull.coverage === "AM",
+    "FULL_DAY → AM sets shift=AM"
+  );
+  const bothOk = resolveUpdatePenaltyShiftCoverage({
+    currentShift: "AM",
+    currentCoverage: "AM",
+    shift: "PM",
+    coverage: "FULL_DAY",
+  });
+  assert(
+    bothOk.shift === "PM" && bothOk.coverage === "FULL_DAY",
+    "explicit FULL_DAY + shift=PM allowed"
+  );
+  throws(
+    () =>
+      resolveUpdatePenaltyShiftCoverage({
+        currentShift: "AM",
+        currentCoverage: "AM",
+        shift: "AM",
+        coverage: "PM",
+      }),
+    "shift_coverage_mismatch",
+    "AM shift + PM coverage rejected"
+  );
+  const reasonOnly = resolveUpdatePenaltyShiftCoverage({
+    currentShift: "AM",
+    currentCoverage: "FULL_DAY",
+  });
+  assert(
+    reasonOnly.shift === "AM" && reasonOnly.coverage === "FULL_DAY",
+    "reason-only PATCH leaves pair"
+  );
 }
 
 section("1. 벌당 없는 기존 월표");
@@ -647,6 +720,21 @@ section("source contracts");
   assert(
     service.includes("resolveCreatePenaltyCoverage(input.coverage, shift)"),
     "createPenaltyDuty omit coverage follows shift"
+  );
+  assert(
+    service.includes("resolveUpdatePenaltyShiftCoverage"),
+    "updatePenaltyDuty uses PATCH shift/coverage policy"
+  );
+  assert(
+    fs
+      .readFileSync(
+        path.resolve(
+          "prisma/migrations/20261018140000_marshal_penalty_coverage_insert_fill/migration.sql"
+        ),
+        "utf8"
+      )
+      .includes("marshal_penalty_fill_coverage"),
+    "INSERT trigger fills omitted coverage from shift"
   );
   assert(service.includes("penalty.coverage"), "generate reads coverage column");
   assert(service.includes("coverage: row.coverage"), "GET plan serializes coverage");
