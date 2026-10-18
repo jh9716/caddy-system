@@ -69,8 +69,10 @@ import {
   changedRosterPlacementIds,
   explicitPlacementsFromDraft,
   formatReassignTypeNote,
+  formatRosterPreviewAnomalySummary,
   formatRosterSlotLabel,
   isRosterSearchLocked,
+  rosterPreviewHasBlockingError,
   listRosterEditSlots,
   listRosterMoveTargets,
   pushRosterUndoSnapshot,
@@ -426,6 +428,7 @@ export default function ManageCaddiesPage() {
     []
   );
   const [staleRoster, setStaleRoster] = useState(false);
+  const [previewAnomaliesOpen, setPreviewAnomaliesOpen] = useState(false);
 
   /** 명단 Import v2 Preview */
   type ImportPreviewLine = {
@@ -838,6 +841,7 @@ export default function ManageCaddiesPage() {
     setPreviewError(null);
     setPreviewIssues([]);
     setStaleRoster(false);
+    setPreviewAnomaliesOpen(false);
     setPendingPlacements([]);
   }
 
@@ -896,6 +900,7 @@ export default function ManageCaddiesPage() {
     setPreviewError(null);
     setPreviewIssues([]);
     setStaleRoster(false);
+    setPreviewAnomaliesOpen(false);
     try {
       const result = await postCaddyReassignPreview({
         placements,
@@ -3528,22 +3533,20 @@ export default function ManageCaddiesPage() {
               <p className="cm-muted">Preview를 불러오는 중…</p>
             ) : (
               <>
-                {previewError ? (
-                  <p className="cm-place-error">{previewError}</p>
-                ) : null}
-                {previewIssues.length > 0 ? (
-                  <ul className="cm-place-issues">
-                    {previewIssues.map((issue, index) => (
-                      <li key={`${issue.code}-${index}`}>{issue.message}</li>
-                    ))}
-                  </ul>
-                ) : null}
-                {previewResult?.existingAnomalies?.length ? (
-                  <ul className="cm-place-issues">
-                    {previewResult.existingAnomalies.map((issue, index) => (
-                      <li key={`anom-${issue.code}-${index}`}>{issue.message}</li>
-                    ))}
-                  </ul>
+                {rosterPreviewHasBlockingError(previewError, previewIssues) ? (
+                  <div className="cm-place-block" role="alert">
+                    <strong>저장할 수 없습니다</strong>
+                    {previewError ? (
+                      <p className="cm-place-error">{previewError}</p>
+                    ) : null}
+                    {previewIssues.length > 0 ? (
+                      <ul className="cm-place-issues">
+                        {previewIssues.map((issue, index) => (
+                          <li key={`${issue.code}-${index}`}>{issue.message}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
                 ) : null}
                 {previewResult ? (
                   <ol className="cm-place-preview-list">
@@ -3571,7 +3574,32 @@ export default function ManageCaddiesPage() {
                     })}
                   </ol>
                 ) : null}
-                <div className="cm-sheet-actions" style={{ marginTop: 12 }}>
+                {previewResult?.existingAnomalies?.length ? (
+                  <div className="cm-place-anomaly">
+                    <button
+                      type="button"
+                      className="cm-place-anomaly-toggle"
+                      aria-expanded={previewAnomaliesOpen}
+                      onClick={() =>
+                        setPreviewAnomaliesOpen((open) => !open)
+                      }
+                    >
+                      {formatRosterPreviewAnomalySummary(
+                        previewResult.existingAnomalies.length
+                      )}
+                    </button>
+                    {previewAnomaliesOpen ? (
+                      <ul className="cm-place-anomaly-list">
+                        {previewResult.existingAnomalies.map((issue, index) => (
+                          <li key={`anom-${issue.code}-${index}`}>
+                            {issue.message}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
+                ) : null}
+                <div className="cm-sheet-actions">
                   {staleRoster ? (
                     <button
                       type="button"
@@ -4084,10 +4112,31 @@ export default function ManageCaddiesPage() {
           color: var(--vh-danger);
           font-size: 0.8rem;
         }
+        .cm-place-block {
+          margin: 0 0 10px;
+          padding: 10px 12px;
+          border-radius: 10px;
+          background: var(--vh-danger-bg);
+        }
+        .cm-place-block strong {
+          display: block;
+          margin-bottom: 6px;
+          color: var(--vh-danger);
+          font-size: 0.86rem;
+        }
+        .cm-place-block .cm-place-error {
+          margin: 0 0 6px;
+        }
+        .cm-place-block .cm-place-issues {
+          margin: 0;
+        }
         .cm-place-preview-list {
           list-style: none;
           margin: 0;
           padding: 0;
+          overflow: auto;
+          min-height: 4.5rem;
+          max-height: min(42vh, 360px);
         }
         .cm-place-preview-list li {
           display: grid;
@@ -4101,8 +4150,43 @@ export default function ManageCaddiesPage() {
           color: var(--vh-muted);
           font-style: normal;
         }
+        .cm-place-anomaly {
+          margin-top: 10px;
+        }
+        .cm-place-anomaly-toggle {
+          width: 100%;
+          min-height: 40px;
+          padding: 8px 10px;
+          border: 1px solid #f3d19a;
+          border-radius: 8px;
+          background: #fffbeb;
+          color: #92400e;
+          font-size: 0.82rem;
+          font-weight: 700;
+          text-align: left;
+        }
+        .cm-place-anomaly-list {
+          margin: 6px 0 0;
+          padding-left: 18px;
+          max-height: 22vh;
+          overflow: auto;
+          color: #92400e;
+          font-size: 0.78rem;
+        }
         .cm-sheet-preview {
           max-width: 560px;
+          max-height: min(88vh, 720px);
+          display: flex;
+          flex-direction: column;
+        }
+        .cm-sheet-preview .cm-sheet-actions {
+          position: sticky;
+          bottom: 0;
+          z-index: 1;
+          margin-top: 10px;
+          padding-top: 10px;
+          background: #fff;
+          border-top: 1px solid #ececec;
         }
         .cm-roster-gap {
           display: grid;

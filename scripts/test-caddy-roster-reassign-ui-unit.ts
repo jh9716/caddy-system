@@ -17,8 +17,10 @@ import {
   changedRosterPlacementIds,
   explicitPlacementsFromDraft,
   formatReassignTypeNote,
+  formatRosterPreviewAnomalySummary,
   formatRosterSlotLabel,
   isRosterSearchLocked,
+  rosterPreviewHasBlockingError,
   listRosterEditSlots,
   listRosterMoveTargets,
   pushRosterUndoSnapshot,
@@ -414,6 +416,59 @@ section("mock preview / apply / stale");
     assert(apply2.ok === false && isStaleRosterError(apply2), "409 stale_roster, no auto retry");
   }
 
+section("same-team occupied preview lists every shifted caddy");
+{
+  const fetchOcc = createMemoryReassignFetch(fixture);
+  const rotated = applyRosterInsertMove(fixture, {
+    id: 103,
+    team: "7조",
+    teamOrder: 3,
+  });
+  assert(rotated.ok, "C → occupied 3");
+  const occPlacements = explicitPlacementsFromDraft(
+    fixture,
+    rotated.ok ? rotated.rows : []
+  );
+  const occPreview = await postCaddyReassignPreview(
+    { placements: occPlacements, mode: ROSTER_REASSIGN_MODE },
+    { fetch: fetchOcc }
+  );
+  assert(occPreview.ok === true, "occupied-slot preview ok");
+  if (occPreview.ok) {
+    const byId = new Map(occPreview.changes.map((change) => [change.id, change]));
+    assert(
+      byId.get(103)?.to.teamOrder === 3 &&
+        byId.get(101)?.to.teamOrder === 4 &&
+        byId.get(102)?.to.teamOrder === 5,
+      "preview lists C=3 and shifted A/B=4/5"
+    );
+    assert(occPreview.changes.length === 3, "three occupied-slot shifts in preview");
+  }
+}
+
+section("preview warning presentation");
+{
+  assert(formatRosterPreviewAnomalySummary(0) === "", "0 anomalies → empty summary");
+  assert(
+    formatRosterPreviewAnomalySummary(24) === "기존 명단 주의사항 24건",
+    "24 anomalies collapsed to count"
+  );
+  assert(
+    rosterPreviewHasBlockingError("용량을 넘었습니다.", []) === true,
+    "previewError is blocking"
+  );
+  assert(
+    rosterPreviewHasBlockingError(null, [
+      { code: "capacity_exceeded", message: "24명 초과" },
+    ]) === true,
+    "issues are blocking"
+  );
+  assert(
+    rosterPreviewHasBlockingError(null, []) === false,
+    "anomalies-only is not blocking"
+  );
+}
+
 section("page wiring");
 {
   const page = fs.readFileSync(
@@ -466,6 +521,21 @@ section("page wiring");
       !client.includes("@prisma/client") &&
       !/@prisma\/client/.test(page),
     "client roster edit path does not import Prisma"
+  );
+  const previewJsx = page.slice(page.indexOf('aria-label="변경사항 확인"'));
+  const blockAt = previewJsx.indexOf("저장할 수 없습니다");
+  const listAt = previewJsx.indexOf("cm-place-preview-list");
+  const anomalyAt = previewJsx.indexOf("cm-place-anomaly-toggle");
+  assert(
+    blockAt > 0 && listAt > blockAt && anomalyAt > listAt,
+    "blocking error, then change list, then collapsed anomalies"
+  );
+  assert(
+    /기존 명단 주의사항/.test(draftLib) &&
+      /aria-expanded=\{previewAnomaliesOpen\}/.test(page) &&
+      /cm-place-anomaly-toggle/.test(page) &&
+      /cm-sheet-preview \.cm-sheet-actions/.test(page),
+    "anomaly toggle + sticky save"
   );
   const plan = fs.readFileSync(path.resolve("src/lib/caddyReassign.ts"), "utf8");
   const sql = fs.readFileSync(path.resolve("src/lib/caddyReassignSql.ts"), "utf8");

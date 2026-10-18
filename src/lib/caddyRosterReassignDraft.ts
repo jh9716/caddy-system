@@ -289,3 +289,17 @@ export function pushRosterUndoSnapshot<T>(
   if (next.length <= limit) return next;
   return next.slice(next.length - limit);
 }
+
+/** Preview 모달: 기존 명단 주의사항은 접고 건수만 보여 준다. */
+export function formatRosterPreviewAnomalySummary(count: number): string {
+  const n = Math.max(0, Math.floor(Number(count) || 0));
+  if (n < 1) return "";
+  return `기존 명단 주의사항 ${n}건`;
+}
+
+export function rosterPreviewHasBlockingError(
+  previewError: string | null | undefined,
+  issues: ReassignIssue[] | null | undefined
+): boolean {
+  return Boolean(previewError?.trim()) || (issues?.length ?? 0) > 0;
+}
