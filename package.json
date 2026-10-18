@@ -75,6 +75,7 @@
     "test:marshal-penalty-occurrence-db": "bash scripts/tsx-safe.sh scripts/test-marshal-penalty-occurrence-db.ts",
     "test:marshal-penalty-schedule-unit": "bash scripts/tsx-safe.sh scripts/test-marshal-penalty-schedule-unit.ts",
     "test:marshal-penalty-schedule-db": "bash scripts/tsx-safe.sh scripts/test-marshal-penalty-schedule-db.ts",
+    "test:marshal-penalty-occurrence-ui-unit": "bash scripts/tsx-safe.sh scripts/test-marshal-penalty-occurrence-ui-unit.ts",
     "test:cart-manage-unit": "bash scripts/tsx-safe.sh scripts/test-cart-manage-unit.ts",
     "test:cart-local": "bash scripts/tsx-safe.sh scripts/test-cart-local.ts",
     "test:admin-ops-workspace-unit": "bash scripts/tsx-safe.sh scripts/test-admin-ops-workspace-unit.ts",
