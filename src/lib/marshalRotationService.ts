@@ -41,6 +41,7 @@ import {
   type OpenCredit,
   type RotationMember,
 } from "@/lib/marshalRotationDomain";
+import { assertPlanReadyToFinalize } from "@/lib/marshalPenaltyOccurrenceDomain";
 import {
   applyOccurrencesToMonth,
   listPenaltyOccurrences,
@@ -330,6 +331,7 @@ export async function getMonthPlan(
           startPendingNames: pendingNames(plan.startPendingProfileIds || []),
           nextPendingNames: pendingNames(plan.nextPendingProfileIds || []),
           generatedAt: plan.generatedAt?.toISOString() ?? null,
+          needsRegeneration: plan.needsRegeneration,
           slots: plan.slots.map((slot) =>
             serializeSlot(
               slot,
@@ -656,6 +658,7 @@ export async function generateMonthPlan(
         nextRotationOrder: generated.nextRotationOrder,
         nextPendingProfileIds: generated.nextPendingProfileIds,
         generatedAt: new Date(),
+        needsRegeneration: false,
       },
     });
     await tx.audit.create({
@@ -679,6 +682,7 @@ export async function generateMonthPlan(
           leftoverOccurrences: occurrencePack.leftoverCount,
           assignedOccurrenceIds: occurrencePack.assignedIds,
           leftoverOccurrenceIds: occurrencePack.leftoverIds,
+          needsRegeneration: false,
           username: input.actor?.username ?? null,
           userId: input.actor?.userId ?? null,
         },
@@ -709,9 +713,15 @@ export async function finalizeMonthPlan(
   const id = parsePositiveId(input.id, "id");
   const prisma = db(client);
   return prisma.$transaction(async (tx) => {
+    await lockMonthPlanRow(tx, id);
     const plan = await tx.marshalMonthPlan.findUnique({
       where: { id },
-      include: { slots: { select: { id: true } } },
+      include: {
+        slots: {
+          select: { id: true, date: true, shift: true, caddyId: true, source: true },
+        },
+        penalties: { select: { date: true, caddyId: true } },
+      },
     });
     if (!plan) {
       throw new MarshalRosterError("월표를 찾을 수 없습니다.", "plan_not_found", 404);
@@ -719,13 +729,29 @@ export async function finalizeMonthPlan(
     if (plan.status === "FINALIZED") {
       throw new MarshalRosterError("이미 FINALIZED 입니다.", "already_finalized", 409);
     }
-    if (!plan.generatedAt || plan.slots.length === 0) {
-      throw new MarshalRosterError(
-        "생성되지 않은 월표는 마감할 수 없습니다.",
-        "not_generated",
-        400
-      );
-    }
+    const scheduled = await tx.marshalPenaltyOccurrence.findMany({
+      where: { scheduledPlanId: plan.id, status: "SCHEDULED" },
+      select: { scheduledOn: true, caddyId: true },
+    });
+    assertPlanReadyToFinalize({
+      needsRegeneration: plan.needsRegeneration,
+      generatedAt: plan.generatedAt,
+      slotCount: plan.slots.length,
+      penaltySlots: plan.slots.map((slot) => ({
+        date: formatMarshalYmd(slot.date),
+        caddyId: slot.caddyId,
+        shift: slot.shift,
+        source: slot.source,
+      })),
+      duties: plan.penalties.map((row) => ({
+        date: formatMarshalYmd(row.date),
+        caddyId: row.caddyId,
+      })),
+      scheduledOccurrences: scheduled.map((row) => ({
+        date: row.scheduledOn ? formatMarshalYmd(row.scheduledOn) : "",
+        caddyId: row.caddyId,
+      })),
+    });
     const saved = await tx.marshalMonthPlan.update({
       where: { id },
       data: { status: "FINALIZED" },

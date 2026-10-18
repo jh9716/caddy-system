@@ -58,7 +58,10 @@ export async function POST(req: NextRequest) {
       },
       prisma
     );
-    return NextResponse.json({ occurrence }, { status: 201 });
+    return NextResponse.json(
+      { occurrence },
+      { status: occurrence.replayed ? 200 : 201 }
+    );
   } catch (error) {
     console.error("POST /api/marshals/penalty-occurrences", error);
     const { status, body } = marshalErrorResponse(error);

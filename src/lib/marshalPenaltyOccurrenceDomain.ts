@@ -68,6 +68,23 @@ export function parseOccurredOn(value: unknown): Date {
   }
 }
 
+const IDEMPOTENCY_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+
+/** 생략/빈값 = 별건 발생. 같은 키 재전송만 동일 건으로 본다. */
+export function parseIdempotencyKey(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  const key = String(value).trim();
+  if (!key) return null;
+  if (!IDEMPOTENCY_RE.test(key)) {
+    throw new MarshalRosterError(
+      "idempotencyKey 형식이 올바르지 않습니다.",
+      "invalid_idempotency_key",
+      400
+    );
+  }
+  return key;
+}
+
 export function sortOccurrencesForSchedule<T extends { occurredOn: string; id: number }>(
   rows: readonly T[]
 ): T[] {
@@ -104,8 +121,10 @@ function dayTakenCaddies(
 }
 
 /**
- * 발생 순서대로 1일부터 FULL_DAY 배정.
- * 병가/장기병가는 건너뛰고, PM/AM 정원을 넘기지 않는다.
+ * 발생 순서대로 1일부터 FULL_DAY 배정. 하루 발생 벌당은 1명.
+ * 후출 정원 2여도 A·B를 같은 날에 넣지 않는다.
+ * 앞선 건이 병가로 밀리면 다음 건도 그 날짜 이후로만 본다(순서 보존).
+ * 수동 PenaltyDuty가 있는 날은 건너뛴다.
  * 못 넣은 건 삭제하지 않고 leftover + deferReason.
  */
 export function scheduleOccurrencesForMonth(input: {
@@ -134,16 +153,22 @@ export function scheduleOccurrencesForMonth(input: {
   const assignments: OccurrenceAssignment[] = [];
   const leftover: OccurrenceLeftover[] = [];
   const ordered = sortOccurrencesForSchedule(input.occurrences);
+  let startIndex = 0;
 
   for (const occurrence of ordered) {
     let placed = false;
     let lastReason = "배정할 날짜가 없습니다.";
-    for (const date of input.dates) {
+    for (let i = startIndex; i < input.dates.length; i += 1) {
+      const date = input.dates[i];
       const status = input.statusByDateCaddy.get(`${date}:${occurrence.caddyId}`);
       if (status?.kind === "hard_skip") {
         lastReason = status.message
           ? `${status.message} 날짜는 건너뜁니다.`
           : "병가/장기병가 날짜는 건너뜁니다.";
+        continue;
+      }
+      if ((input.existingByDate.get(date) || []).length > 0) {
+        lastReason = "이미 수동 벌당이 있는 날입니다.";
         continue;
       }
       const cap = occupancy.get(date)!;
@@ -165,6 +190,7 @@ export function scheduleOccurrencesForMonth(input: {
         profileId: occurrence.profileId,
         date,
       });
+      startIndex = i + 1;
       placed = true;
       break;
     }
@@ -218,6 +244,76 @@ export function assertOccurrenceTargetMutable(planStatus?: string | null): void 
       "FINALIZED 월에는 벌당 발생을 등록할 수 없습니다.",
       "finalized_locked",
       409
+    );
+  }
+}
+
+function regenerationRequired(message: string): never {
+  throw new MarshalRosterError(message, "regeneration_required", 409);
+}
+
+/**
+ * FINALIZE 직전: 취소된 발생 벌당 슬롯이 남아 있으면 확정하지 않는다.
+ * 자동 재생성은 수동/대타를 지우므로, 재생성 필요 플래그 + 슬롯/발생 일치만 검사한다.
+ */
+export function assertPlanReadyToFinalize(input: {
+  needsRegeneration: boolean;
+  generatedAt: Date | string | null;
+  slotCount: number;
+  penaltySlots: readonly {
+    date: string;
+    caddyId: number;
+    shift: string;
+    source: string;
+  }[];
+  duties: readonly { date: string; caddyId: number }[];
+  scheduledOccurrences: readonly {
+    date: string;
+    caddyId: number;
+  }[];
+}): void {
+  if (!input.generatedAt || input.slotCount === 0) {
+    throw new MarshalRosterError(
+      "생성되지 않은 월표는 마감할 수 없습니다.",
+      "not_generated",
+      400
+    );
+  }
+  if (input.needsRegeneration) {
+    regenerationRequired("벌당이 변경되어 월표를 다시 생성해야 합니다.");
+  }
+  const dutyKeys = new Set(input.duties.map((row) => `${row.date}:${row.caddyId}`));
+  const scheduledKeys = new Set(
+    input.scheduledOccurrences.map((row) => `${row.date}:${row.caddyId}`)
+  );
+  const shiftsByKey = new Map<string, Set<string>>();
+  for (const slot of input.penaltySlots) {
+    if (slot.source !== "PENALTY") continue;
+    const key = `${slot.date}:${slot.caddyId}`;
+    const shifts = shiftsByKey.get(key) || new Set<string>();
+    shifts.add(slot.shift);
+    shiftsByKey.set(key, shifts);
+  }
+  for (const occ of input.scheduledOccurrences) {
+    const shifts = shiftsByKey.get(`${occ.date}:${occ.caddyId}`);
+    if (!shifts?.has("AM") || !shifts?.has("PM")) {
+      regenerationRequired(
+        "배정된 전일 벌당의 조출/후출 쌍이 월표와 일치하지 않습니다. 다시 생성하세요."
+      );
+    }
+  }
+  for (const [key, shifts] of shiftsByKey) {
+    if (dutyKeys.has(key)) continue;
+    if (scheduledKeys.has(key)) {
+      if (!shifts.has("AM") || !shifts.has("PM")) {
+        regenerationRequired(
+          "배정된 전일 벌당의 조출/후출 쌍이 월표와 일치하지 않습니다. 다시 생성하세요."
+        );
+      }
+      continue;
+    }
+    regenerationRequired(
+      "취소된 벌당 슬롯이 월표에 남아 있습니다. 다시 생성하세요."
     );
   }
 }

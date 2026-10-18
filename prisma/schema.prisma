@@ -1048,6 +1048,8 @@ model MarshalMonthPlan {
   startPendingProfileIds Int[] @default([])
   /// 월 종료 후 다음 달로 넘길 미처리 정상 turn. profileId 순서.
   nextPendingProfileIds  Int[] @default([])
+  /// SCHEDULED 벌당 취소 등으로 슬롯과 발생 기록이 어긋남. true면 FINALIZE 금지.
+  needsRegeneration   Boolean                 @default(false)
   generatedAt         DateTime?
   createdAt           DateTime                @default(now())
   updatedAt           DateTime                @updatedAt
@@ -1130,11 +1132,13 @@ model MarshalPenaltyOccurrence {
   deferReason      String?
   reason           String
   note             String?
+  /// 동일 요청 재전송 방지. null이면 같은 날 같은 캐디의 별건 발생을 허용한다.
+  idempotencyKey   String?                         @unique
   createdByUserId  Int?
   createdAt        DateTime                        @default(now())
   updatedAt        DateTime                        @updatedAt
 
-  @@unique([caddyId, occurredOn])
+  @@index([caddyId, occurredOn])
   @@index([targetYear, targetMonth, status])
   @@index([scheduledPlanId])
   @@index([caddyId])
