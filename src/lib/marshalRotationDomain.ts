@@ -120,10 +120,15 @@ export function parseMarshalShift(value: unknown): MarshalShiftKind {
 
 export function parsePenaltyCoverage(
   value: unknown,
-  fallback: MarshalPenaltyCoverage = "FULL_DAY"
+  fallback?: MarshalPenaltyCoverage
 ): MarshalPenaltyCoverage {
   if (value === undefined || value === null || String(value).trim() === "") {
-    return fallback;
+    if (fallback) return fallback;
+    throw new MarshalRosterError(
+      "coverage는 FULL_DAY, AM, PM 이어야 합니다.",
+      "invalid_coverage",
+      400
+    );
   }
   const v = String(value).trim().toUpperCase();
   if (v === "FULL_DAY" || v === "전일") return "FULL_DAY";
@@ -136,7 +141,21 @@ export function parsePenaltyCoverage(
   );
 }
 
-/** coverage 생략(레거시)은 shift 한 칸. 신규 create는 FULL_DAY. */
+/**
+ * 기존 UI는 shift만 POST한다. coverage 생략/빈값 → shift 한 칸.
+ * 전일 벌당은 coverage: "FULL_DAY" 를 명시한 경우에만 생성한다.
+ */
+export function resolveCreatePenaltyCoverage(
+  coverage: unknown,
+  shift: MarshalShiftKind
+): MarshalPenaltyCoverage {
+  if (coverage === undefined || coverage === null || String(coverage).trim() === "") {
+    return shift;
+  }
+  return parsePenaltyCoverage(coverage);
+}
+
+/** 엔진 입력: coverage 생략은 shift 한 칸(레거시 테스트/기존 행). */
 export function resolvePenaltyCoverage(
   penalty: Pick<DayPenaltyInput, "shift" | "coverage">
 ): MarshalPenaltyCoverage {

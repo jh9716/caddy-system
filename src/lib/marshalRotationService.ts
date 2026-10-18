@@ -31,6 +31,7 @@ import {
   listMonthYmds,
   parseMarshalShift,
   parsePenaltyCoverage,
+  resolveCreatePenaltyCoverage,
   parseSlotsPerDay,
   parseYearMonth,
   previousYearMonth,
@@ -880,7 +881,7 @@ export async function createPenaltyDuty(
   }
   const caddyId = parsePositiveCaddyId(input.caddyId);
   const shift = parseMarshalShift(input.shift);
-  const coverage = parsePenaltyCoverage(input.coverage, "FULL_DAY");
+  const coverage = resolveCreatePenaltyCoverage(input.coverage, shift);
   const reason = String(input.reason ?? "").trim();
   if (!reason) {
     throw new MarshalRosterError("벌당 사유가 필요합니다.", "reason_required", 400);

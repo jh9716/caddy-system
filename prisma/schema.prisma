@@ -1076,14 +1076,15 @@ model MarshalMonthSlot {
 }
 
 /// 정상 순환을 소비하지 않는 추가 의무.
-/// 전일 벌당 1건 = 1 레코드(coverage=FULL_DAY). shift는 기존 API 호환.
+/// 전일 벌당 1건 = 1 레코드(coverage=FULL_DAY, API가 명시).
+/// coverage 생략 POST는 shift(AM/PM) 한 칸. DB default 없음 — 앱이 항상 기록.
 model MarshalPenaltyDuty {
   id               Int              @id @default(autoincrement())
   planId           Int
   plan             MarshalMonthPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
   date             DateTime
   shift            MarshalShift
-  coverage         MarshalPenaltyCoverage @default(FULL_DAY)
+  coverage         MarshalPenaltyCoverage
   caddyId          Int
   caddy            Caddy            @relation(fields: [caddyId], references: [id], onDelete: Restrict)
   marshalProfileId Int
