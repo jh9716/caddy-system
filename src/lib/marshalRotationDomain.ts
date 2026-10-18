@@ -155,6 +155,58 @@ export function resolveCreatePenaltyCoverage(
   return parsePenaltyCoverage(coverage);
 }
 
+function isCoverageProvided(value: unknown): boolean {
+  return value !== undefined && value !== null && String(value).trim() !== "";
+}
+
+/**
+ * PATCH 정책:
+ * - 단일 시프트(AM/PM): shift-only → coverage도 같은 칸으로 맞춤
+ * - FULL_DAY: shift-only → coverage는 FULL_DAY 유지
+ * - coverage-only AM/PM → shift도 같은 칸
+ * - coverage-only FULL_DAY → 기존 shift 표시 유지
+ * - 둘 다 오면 AM/PM coverage는 shift와 같아야 함. FULL_DAY + AM/PM shift는 허용
+ */
+export function resolveUpdatePenaltyShiftCoverage(input: {
+  currentShift: MarshalShiftKind;
+  currentCoverage: MarshalPenaltyCoverage;
+  shift?: unknown;
+  coverage?: unknown;
+}): { shift: MarshalShiftKind; coverage: MarshalPenaltyCoverage } {
+  const shiftProvided = input.shift !== undefined;
+  const coverageProvided = isCoverageProvided(input.coverage);
+  if (!shiftProvided && !coverageProvided) {
+    return {
+      shift: input.currentShift,
+      coverage: input.currentCoverage,
+    };
+  }
+  const shift = shiftProvided
+    ? parseMarshalShift(input.shift)
+    : input.currentShift;
+  if (shiftProvided && !coverageProvided) {
+    if (input.currentCoverage === "FULL_DAY") {
+      return { shift, coverage: "FULL_DAY" };
+    }
+    return { shift, coverage: shift };
+  }
+  const coverage = parsePenaltyCoverage(input.coverage);
+  if (!shiftProvided) {
+    if (coverage === "FULL_DAY") {
+      return { shift: input.currentShift, coverage: "FULL_DAY" };
+    }
+    return { shift: coverage, coverage };
+  }
+  if (coverage !== "FULL_DAY" && shift !== coverage) {
+    throw new MarshalRosterError(
+      "shift와 coverage가 모순됩니다.",
+      "shift_coverage_mismatch",
+      400
+    );
+  }
+  return { shift, coverage };
+}
+
 /** 엔진 입력: coverage 생략은 shift 한 칸(레거시 테스트/기존 행). */
 export function resolvePenaltyCoverage(
   penalty: Pick<DayPenaltyInput, "shift" | "coverage">

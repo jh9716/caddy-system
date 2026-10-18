@@ -30,8 +30,8 @@ import {
   isYmdInMonth,
   listMonthYmds,
   parseMarshalShift,
-  parsePenaltyCoverage,
   resolveCreatePenaltyCoverage,
+  resolveUpdatePenaltyShiftCoverage,
   parseSlotsPerDay,
   parseYearMonth,
   previousYearMonth,
@@ -984,15 +984,17 @@ export async function updatePenaltyDuty(
         409
       );
     }
+    const next = resolveUpdatePenaltyShiftCoverage({
+      currentShift: current.shift,
+      currentCoverage: current.coverage,
+      shift: input.shift,
+      coverage: input.coverage,
+    });
     const saved = await tx.marshalPenaltyDuty.update({
       where: { id },
       data: {
-        shift:
-          input.shift === undefined ? undefined : parseMarshalShift(input.shift),
-        coverage:
-          input.coverage === undefined
-            ? undefined
-            : parsePenaltyCoverage(input.coverage, current.coverage),
+        shift: next.shift,
+        coverage: next.coverage,
         reason:
           input.reason === undefined ? undefined : String(input.reason).trim(),
         note: input.note === undefined ? undefined : String(input.note),

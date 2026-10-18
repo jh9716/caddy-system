@@ -1077,7 +1077,8 @@ model MarshalMonthSlot {
 
 /// 정상 순환을 소비하지 않는 추가 의무.
 /// 전일 벌당 1건 = 1 레코드(coverage=FULL_DAY, API가 명시).
-/// coverage 생략 POST는 shift(AM/PM) 한 칸. DB default 없음 — 앱이 항상 기록.
+/// coverage 생략 POST는 shift(AM/PM) 한 칸. DB column default 없음.
+/// 구서버 INSERT는 trigger marshal_penalty_fill_coverage 가 shift로 채움.
 model MarshalPenaltyDuty {
   id               Int              @id @default(autoincrement())
   planId           Int
