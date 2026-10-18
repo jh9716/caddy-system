@@ -597,6 +597,61 @@ async function main() {
       );
     }
 
+    section("다른 날짜 Preview Token 재사용");
+    {
+      const before = await prisma.marshalPenaltyOccurrence.findUnique({
+        where: { id: occA.id },
+      });
+      const previewNov24 = await previewPenaltyOccurrenceSchedule(
+        { id: occA.id, date: `${YEAR}-11-24` },
+        prisma
+      );
+      const previewNov25 = await previewPenaltyOccurrenceSchedule(
+        { id: occA.id, date: `${YEAR}-11-25` },
+        prisma
+      );
+      assert(
+        previewNov24.previewToken !== previewNov25.previewToken,
+        "tokens for different toDate are distinct"
+      );
+      await throwsCode(
+        () =>
+          applyPenaltyOccurrenceSchedule(
+            {
+              id: occA.id,
+              date: `${YEAR}-11-25`,
+              previewToken: previewNov24.previewToken,
+            },
+            prisma
+          ),
+        "stale_preview",
+        "token from Nov 24 cannot apply Nov 25"
+      );
+      const after = await prisma.marshalPenaltyOccurrence.findUnique({
+        where: { id: occA.id },
+      });
+      assert(
+        before &&
+          after &&
+          formatMarshalYmd(before.scheduledOn!) === formatMarshalYmd(after.scheduledOn!) &&
+          formatMarshalYmd(before.pinnedOn!) === formatMarshalYmd(after.pinnedOn!),
+        "other-date apply does not move A"
+      );
+      const same = await applyPenaltyOccurrenceSchedule(
+        {
+          id: occA.id,
+          date: `${YEAR}-11-24`,
+          previewToken: previewNov24.previewToken,
+        },
+        prisma
+      );
+      assert(
+        same.occurrence.scheduledOn === `${YEAR}-11-24` &&
+          same.occurrence.pinnedOn === `${YEAR}-11-24`,
+        "same-date Preview/Apply succeeds"
+      );
+    }
+
     section("동시 수정 409");
     {
       const preview = await previewPenaltyOccurrenceSchedule(

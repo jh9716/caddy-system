@@ -473,6 +473,36 @@ section("preview token stale");
     "preview_token_required",
     "missing token"
   );
+  const nov6 = makeSchedulePreviewToken({
+    occurrenceId: 9,
+    plan: { id: 1, updatedAt: "t" },
+    toDate: "2095-11-06",
+  });
+  const nov8 = makeSchedulePreviewToken({
+    occurrenceId: 9,
+    plan: { id: 1, updatedAt: "t" },
+    toDate: "2095-11-08",
+  });
+  assert(nov6 !== nov8, "different toDate different token");
+  assert(
+    nov6 ===
+      makeSchedulePreviewToken({
+        plan: { updatedAt: "t", id: 1 },
+        occurrenceId: 9,
+        toDate: "2095-11-06",
+      }),
+    "same toDate same token"
+  );
+  throws(
+    () => assertPreviewToken(nov6, nov8),
+    "stale_preview",
+    "reusing other-date token is 409"
+  );
+  const service = fs.readFileSync(
+    path.join(process.cwd(), "src/lib/marshalPenaltyScheduleService.ts"),
+    "utf8"
+  );
+  assert(service.includes("toDate: input.date"), "token payload binds requested toDate");
 }
 
 if (failed > 0) {
