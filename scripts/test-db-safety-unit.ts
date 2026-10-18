@@ -229,6 +229,18 @@ console.log("== readonly inspect allowlist includes push subscription ==");
     guardSrc.includes("inspect-device-push-token-prod-readonly"),
     "guard allowlists device push token inspect"
   );
+  assert(
+    guardSrc.includes("inspect-marshal-penalty-p1p3-prod-readonly"),
+    "guard allowlists marshal P1–P3 inspect"
+  );
+  assert(
+    guardSrc.includes("deploy-marshal-penalty-p1p3-migration"),
+    "guard knows marshal P1–P3 deploy script"
+  );
+  assert(
+    guardSrc.includes("--sync-checksums"),
+    "guard treats marshal checksum sync as a write"
+  );
   const devicePushDeploy = fs.readFileSync(
     path.resolve("scripts/maintenance/deploy-device-push-token-migration.ts"),
     "utf8"
