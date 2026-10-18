@@ -113,6 +113,7 @@ function snapshotSlot(slot: {
 }
 
 function tokenPayload(input: {
+  toDate: string;
   occurrence: {
     id: number;
     updatedAt: Date;
@@ -138,6 +139,7 @@ function tokenPayload(input: {
   }[];
 }) {
   return {
+    toDate: input.toDate,
     occurrenceId: input.occurrence.id,
     occurrenceUpdatedAt: input.occurrence.updatedAt.toISOString(),
     pinnedOn: input.occurrence.pinnedOn ? formatMarshalYmd(input.occurrence.pinnedOn) : null,
@@ -342,6 +344,7 @@ async function buildSchedulePreview(
 
   const previewToken = makeSchedulePreviewToken(
     tokenPayload({
+      toDate: input.date,
       occurrence,
       plan: lockedPlan && plan
         ? {
