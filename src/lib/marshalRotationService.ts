@@ -41,6 +41,11 @@ import {
   type OpenCredit,
   type RotationMember,
 } from "@/lib/marshalRotationDomain";
+import {
+  applyOccurrencesToMonth,
+  listPenaltyOccurrences,
+  lockMonthPlanRow,
+} from "@/lib/marshalPenaltyOccurrenceService";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -225,7 +230,7 @@ export async function getMonthPlan(
 ) {
   const { year, month } = parseYearMonth(input.year, input.month);
   const prisma = db(client);
-  const [plan, prev, members, credits] = await Promise.all([
+  const [plan, prev, members, penaltyOccurrences, credits] = await Promise.all([
     prisma.marshalMonthPlan.findUnique({
       where: { year_month: { year, month } },
       include: {
@@ -255,6 +260,7 @@ export async function getMonthPlan(
       },
     }),
     loadActiveMembers(prisma),
+    listPenaltyOccurrences({ year, month }, prisma),
     prisma.marshalRotationCredit.findMany({
       where: { status: "OPEN" },
       include: {
@@ -290,6 +296,7 @@ export async function getMonthPlan(
     suggestedStartPendingNames: pendingNames(suggestedStartPendingProfileIds),
     previousFinalized: prevFinalized,
     members,
+    penaltyOccurrences,
     credits: credits.map((row) => ({
       id: row.id,
       marshalProfileId: row.marshalProfileId,
@@ -457,11 +464,19 @@ export async function generateMonthPlan(
 ) {
   const { year, month } = parseYearMonth(input.year, input.month);
   const prisma = db(client);
-  return prisma.$transaction(async (tx) => {
+  return prisma.$transaction(
+    async (tx) => {
     let plan = await tx.marshalMonthPlan.findUnique({
       where: { year_month: { year, month } },
       include: { slots: { select: { id: true, source: true } }, penalties: true },
     });
+    if (plan) {
+      await lockMonthPlanRow(tx, plan.id);
+      plan = await tx.marshalMonthPlan.findUnique({
+        where: { id: plan.id },
+        include: { slots: { select: { id: true, source: true } }, penalties: true },
+      });
+    }
     assertPlanMutable(plan?.status || "DRAFT", "generate");
     assertReplaceConfirmed(input.replace, Boolean(plan?.slots.length));
     if (plan?.slots.length) {
@@ -535,6 +550,7 @@ export async function generateMonthPlan(
         },
         include: { slots: { select: { id: true, source: true } }, penalties: true },
       });
+      await lockMonthPlanRow(tx, plan.id);
     } else {
       plan = await tx.marshalMonthPlan.update({
         where: { id: plan.id },
@@ -578,6 +594,17 @@ export async function generateMonthPlan(
       penaltiesByDate.set(ymd, list);
     }
 
+    const occurrencePack = await applyOccurrencesToMonth(tx, {
+      planId: plan.id,
+      year,
+      month,
+      amSlotsPerDay,
+      pmSlotsPerDay,
+      members,
+      penaltiesByDate,
+      statusByDateCaddy,
+    });
+
     const generated = generateMonthRotation({
       year,
       month,
@@ -586,7 +613,7 @@ export async function generateMonthPlan(
       startRotationOrder,
       startPendingProfileIds,
       members,
-      penaltiesByDate,
+      penaltiesByDate: occurrencePack.penaltiesByDate,
       statusByDateCaddy,
       openCredits,
     });
@@ -648,6 +675,10 @@ export async function generateMonthPlan(
           pmSlotsPerDay,
           slotCount: slots.length,
           consumedCredits: generated.consumedCredits.length,
+          assignedOccurrences: occurrencePack.assignedCount,
+          leftoverOccurrences: occurrencePack.leftoverCount,
+          assignedOccurrenceIds: occurrencePack.assignedIds,
+          leftoverOccurrenceIds: occurrencePack.leftoverIds,
           username: input.actor?.username ?? null,
           userId: input.actor?.userId ?? null,
         },
@@ -663,8 +694,12 @@ export async function generateMonthPlan(
       nextPendingProfileIds: generated.nextPendingProfileIds,
       warnings: generated.warnings,
       slotCount: slots.length,
+      assignedOccurrences: occurrencePack.assignedCount,
+      leftoverOccurrences: occurrencePack.leftoverCount,
     };
-  });
+  },
+    { timeout: 20000 }
+  );
 }
 
 export async function finalizeMonthPlan(

@@ -129,6 +129,7 @@ model Caddy {
   marshalMonthSlots  MarshalMonthSlot[] @relation("MarshalSlotCaddy")
   marshalMonthOriginalSlots MarshalMonthSlot[] @relation("MarshalSlotOriginal")
   marshalPenaltyDuties MarshalPenaltyDuty[]
+  marshalPenaltyOccurrences MarshalPenaltyOccurrence[]
   marshalCreditReplacements MarshalRotationCredit[] @relation("MarshalCreditReplaced")
   /// 승인 시 선택된 Caddy로 역참조 (이력). Caddy 물리 삭제 시 selectedCaddyId만 null
   linkRequestSelections CaddyLinkRequest[] @relation("CaddyLinkRequestSelectedCaddy")
@@ -989,6 +990,7 @@ model MarshalProfile {
   updatedAt      DateTime @updatedAt
   monthSlots     MarshalMonthSlot[]
   penaltyDuties  MarshalPenaltyDuty[]
+  penaltyOccurrences MarshalPenaltyOccurrence[]
   rotationCredits MarshalRotationCredit[]
 
   @@index([active])
@@ -1026,6 +1028,12 @@ enum MarshalCreditStatus {
   CANCELLED
 }
 
+enum MarshalPenaltyOccurrenceStatus {
+  OPEN
+  SCHEDULED
+  CANCELLED
+}
+
 /// 월 마샬 순환 근무표. DailyOpsDuty / Sheet / autoAssignEngine 과 분리 (PR3 연결).
 model MarshalMonthPlan {
   id                  Int                     @id @default(autoincrement())
@@ -1045,6 +1053,7 @@ model MarshalMonthPlan {
   updatedAt           DateTime                @updatedAt
   slots               MarshalMonthSlot[]
   penalties           MarshalPenaltyDuty[]
+  scheduledPenaltyOccurrences MarshalPenaltyOccurrence[]
 
   @@unique([year, month])
   @@index([status])
@@ -1098,6 +1107,37 @@ model MarshalPenaltyDuty {
 
   @@unique([planId, date, caddyId])
   @@index([planId, date])
+}
+
+/// P2: 벌당 발생 기록. 월표 없이 등록 가능. 발생일과 배정일을 분리한다.
+/// 다음 달 월표 생성 시 OPEN 건을 발생 순서대로 FULL_DAY로 배정한다.
+model MarshalPenaltyOccurrence {
+  id               Int                             @id @default(autoincrement())
+  caddyId          Int
+  caddy            Caddy                           @relation(fields: [caddyId], references: [id], onDelete: Restrict)
+  marshalProfileId Int
+  marshalProfile   MarshalProfile                  @relation(fields: [marshalProfileId], references: [id], onDelete: Restrict)
+  /// 벌당이 발생한 날. 실제 근무일과 다를 수 있다.
+  occurredOn       DateTime
+  targetYear       Int
+  targetMonth      Int
+  /// 월표에 배정된 실제 전일 근무일. OPEN/CANCELLED 이면 null.
+  scheduledOn      DateTime?
+  scheduledPlanId  Int?
+  scheduledPlan    MarshalMonthPlan?               @relation(fields: [scheduledPlanId], references: [id], onDelete: Restrict)
+  status           MarshalPenaltyOccurrenceStatus  @default(OPEN)
+  /// 미배정 대기 이유. SCHEDULED 이면 null.
+  deferReason      String?
+  reason           String
+  note             String?
+  createdByUserId  Int?
+  createdAt        DateTime                        @default(now())
+  updatedAt        DateTime                        @updatedAt
+
+  @@unique([caddyId, occurredOn])
+  @@index([targetYear, targetMonth, status])
+  @@index([scheduledPlanId])
+  @@index([caddyId])
 }
 
 /// 대타 추가근무에 대한 향후 정상 순환 1회 면제. 벌당과 분리.
