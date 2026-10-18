@@ -41,6 +41,14 @@ import {
   type OpenCredit,
   type RotationMember,
 } from "@/lib/marshalRotationDomain";
+import { assertPlanReadyToFinalize } from "@/lib/marshalPenaltyOccurrenceDomain";
+import {
+  applyOccurrencesToMonth,
+  countPostGenerateOpenOccurrences,
+  listPenaltyOccurrences,
+  lockMonthPlanRow,
+  lockOccurrenceTargetMonth,
+} from "@/lib/marshalPenaltyOccurrenceService";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -225,7 +233,7 @@ export async function getMonthPlan(
 ) {
   const { year, month } = parseYearMonth(input.year, input.month);
   const prisma = db(client);
-  const [plan, prev, members, credits] = await Promise.all([
+  const [plan, prev, members, penaltyOccurrences, credits] = await Promise.all([
     prisma.marshalMonthPlan.findUnique({
       where: { year_month: { year, month } },
       include: {
@@ -255,6 +263,7 @@ export async function getMonthPlan(
       },
     }),
     loadActiveMembers(prisma),
+    listPenaltyOccurrences({ year, month }, prisma),
     prisma.marshalRotationCredit.findMany({
       where: { status: "OPEN" },
       include: {
@@ -290,6 +299,7 @@ export async function getMonthPlan(
     suggestedStartPendingNames: pendingNames(suggestedStartPendingProfileIds),
     previousFinalized: prevFinalized,
     members,
+    penaltyOccurrences,
     credits: credits.map((row) => ({
       id: row.id,
       marshalProfileId: row.marshalProfileId,
@@ -323,6 +333,7 @@ export async function getMonthPlan(
           startPendingNames: pendingNames(plan.startPendingProfileIds || []),
           nextPendingNames: pendingNames(plan.nextPendingProfileIds || []),
           generatedAt: plan.generatedAt?.toISOString() ?? null,
+          needsRegeneration: plan.needsRegeneration,
           slots: plan.slots.map((slot) =>
             serializeSlot(
               slot,
@@ -457,11 +468,20 @@ export async function generateMonthPlan(
 ) {
   const { year, month } = parseYearMonth(input.year, input.month);
   const prisma = db(client);
-  return prisma.$transaction(async (tx) => {
+  return prisma.$transaction(
+    async (tx) => {
+    await lockOccurrenceTargetMonth(tx, year, month);
     let plan = await tx.marshalMonthPlan.findUnique({
       where: { year_month: { year, month } },
       include: { slots: { select: { id: true, source: true } }, penalties: true },
     });
+    if (plan) {
+      await lockMonthPlanRow(tx, plan.id);
+      plan = await tx.marshalMonthPlan.findUnique({
+        where: { id: plan.id },
+        include: { slots: { select: { id: true, source: true } }, penalties: true },
+      });
+    }
     assertPlanMutable(plan?.status || "DRAFT", "generate");
     assertReplaceConfirmed(input.replace, Boolean(plan?.slots.length));
     if (plan?.slots.length) {
@@ -535,6 +555,7 @@ export async function generateMonthPlan(
         },
         include: { slots: { select: { id: true, source: true } }, penalties: true },
       });
+      await lockMonthPlanRow(tx, plan.id);
     } else {
       plan = await tx.marshalMonthPlan.update({
         where: { id: plan.id },
@@ -578,6 +599,17 @@ export async function generateMonthPlan(
       penaltiesByDate.set(ymd, list);
     }
 
+    const occurrencePack = await applyOccurrencesToMonth(tx, {
+      planId: plan.id,
+      year,
+      month,
+      amSlotsPerDay,
+      pmSlotsPerDay,
+      members,
+      penaltiesByDate,
+      statusByDateCaddy,
+    });
+
     const generated = generateMonthRotation({
       year,
       month,
@@ -586,7 +618,7 @@ export async function generateMonthPlan(
       startRotationOrder,
       startPendingProfileIds,
       members,
-      penaltiesByDate,
+      penaltiesByDate: occurrencePack.penaltiesByDate,
       statusByDateCaddy,
       openCredits,
     });
@@ -629,6 +661,7 @@ export async function generateMonthPlan(
         nextRotationOrder: generated.nextRotationOrder,
         nextPendingProfileIds: generated.nextPendingProfileIds,
         generatedAt: new Date(),
+        needsRegeneration: false,
       },
     });
     await tx.audit.create({
@@ -648,6 +681,11 @@ export async function generateMonthPlan(
           pmSlotsPerDay,
           slotCount: slots.length,
           consumedCredits: generated.consumedCredits.length,
+          assignedOccurrences: occurrencePack.assignedCount,
+          leftoverOccurrences: occurrencePack.leftoverCount,
+          assignedOccurrenceIds: occurrencePack.assignedIds,
+          leftoverOccurrenceIds: occurrencePack.leftoverIds,
+          needsRegeneration: false,
           username: input.actor?.username ?? null,
           userId: input.actor?.userId ?? null,
         },
@@ -663,8 +701,12 @@ export async function generateMonthPlan(
       nextPendingProfileIds: generated.nextPendingProfileIds,
       warnings: generated.warnings,
       slotCount: slots.length,
+      assignedOccurrences: occurrencePack.assignedCount,
+      leftoverOccurrences: occurrencePack.leftoverCount,
     };
-  });
+  },
+    { timeout: 20000 }
+  );
 }
 
 export async function finalizeMonthPlan(
@@ -674,9 +716,15 @@ export async function finalizeMonthPlan(
   const id = parsePositiveId(input.id, "id");
   const prisma = db(client);
   return prisma.$transaction(async (tx) => {
+    await lockMonthPlanRow(tx, id);
     const plan = await tx.marshalMonthPlan.findUnique({
       where: { id },
-      include: { slots: { select: { id: true } } },
+      include: {
+        slots: {
+          select: { id: true, date: true, shift: true, caddyId: true, source: true },
+        },
+        penalties: { select: { date: true, caddyId: true } },
+      },
     });
     if (!plan) {
       throw new MarshalRosterError("월표를 찾을 수 없습니다.", "plan_not_found", 404);
@@ -684,13 +732,35 @@ export async function finalizeMonthPlan(
     if (plan.status === "FINALIZED") {
       throw new MarshalRosterError("이미 FINALIZED 입니다.", "already_finalized", 409);
     }
-    if (!plan.generatedAt || plan.slots.length === 0) {
-      throw new MarshalRosterError(
-        "생성되지 않은 월표는 마감할 수 없습니다.",
-        "not_generated",
-        400
-      );
-    }
+    const scheduled = await tx.marshalPenaltyOccurrence.findMany({
+      where: { scheduledPlanId: plan.id, status: "SCHEDULED" },
+      select: { scheduledOn: true, caddyId: true },
+    });
+    const postGenerateOpenCount = await countPostGenerateOpenOccurrences(tx, {
+      year: plan.year,
+      month: plan.month,
+      generatedAt: plan.generatedAt,
+    });
+    assertPlanReadyToFinalize({
+      needsRegeneration: plan.needsRegeneration,
+      postGenerateOpenCount,
+      generatedAt: plan.generatedAt,
+      slotCount: plan.slots.length,
+      penaltySlots: plan.slots.map((slot) => ({
+        date: formatMarshalYmd(slot.date),
+        caddyId: slot.caddyId,
+        shift: slot.shift,
+        source: slot.source,
+      })),
+      duties: plan.penalties.map((row) => ({
+        date: formatMarshalYmd(row.date),
+        caddyId: row.caddyId,
+      })),
+      scheduledOccurrences: scheduled.map((row) => ({
+        date: row.scheduledOn ? formatMarshalYmd(row.scheduledOn) : "",
+        caddyId: row.caddyId,
+      })),
+    });
     const saved = await tx.marshalMonthPlan.update({
       where: { id },
       data: { status: "FINALIZED" },
