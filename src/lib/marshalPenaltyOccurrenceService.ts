@@ -73,6 +73,7 @@ function serializeOccurrence(row: {
   targetYear: number;
   targetMonth: number;
   scheduledOn: Date | null;
+  pinnedOn?: Date | null;
   scheduledPlanId: number | null;
   status: string;
   deferReason: string | null;
@@ -89,6 +90,8 @@ function serializeOccurrence(row: {
     targetYear: row.targetYear,
     targetMonth: row.targetMonth,
     scheduledOn: row.scheduledOn ? formatMarshalYmd(row.scheduledOn) : null,
+    pinnedOn: row.pinnedOn ? formatMarshalYmd(row.pinnedOn) : null,
+    scheduleSource: row.pinnedOn ? ("MANUAL" as const) : ("AUTO" as const),
     scheduledPlanId: row.scheduledPlanId,
     status: row.status,
     deferReason: row.deferReason,
@@ -367,6 +370,7 @@ export async function cancelPenaltyOccurrence(
       data: {
         status: "CANCELLED",
         scheduledOn: null,
+        pinnedOn: null,
         scheduledPlanId: null,
         deferReason: "운영자가 취소했습니다.",
       },
@@ -453,6 +457,7 @@ export async function applyOccurrencesToMonth(
       caddyId: row.caddyId,
       profileId: row.marshalProfileId,
       occurredOn: formatMarshalYmd(row.occurredOn),
+      pinnedOn: row.pinnedOn ? formatMarshalYmd(row.pinnedOn) : null,
     });
   }
   const packed = scheduleOccurrencesForMonth({

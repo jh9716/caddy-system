@@ -119,7 +119,7 @@ function serializeSlot(
   };
 }
 
-async function loadActiveMembers(tx: DbClient): Promise<RotationMember[]> {
+export async function loadActiveMembers(tx: DbClient): Promise<RotationMember[]> {
   const rows = await tx.marshalProfile.findMany({
     where: { active: true },
     include: { caddy: { select: CADDY_SELECT } },
@@ -133,7 +133,7 @@ async function loadActiveMembers(tx: DbClient): Promise<RotationMember[]> {
   }));
 }
 
-async function loadDayStatuses(
+export async function loadDayStatuses(
   tx: DbClient,
   year: number,
   month: number,
