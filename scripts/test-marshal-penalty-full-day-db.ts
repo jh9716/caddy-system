@@ -17,6 +17,7 @@ import {
   upsertMonthPlanSettings,
   finalizeMonthPlan,
   changeRotationCredit,
+  updatePenaltyDuty,
 } from "../src/lib/marshalRotationService";
 
 const TAG = "__MARSHAL_FD_P1__";
@@ -24,6 +25,7 @@ const YEAR = 2097;
 const MONTH = 11;
 const UNIQUE_MONTH = 12;
 const DAY1 = `${YEAR}-11-01`;
+const DAY2 = `${YEAR}-11-02`;
 
 const prisma = new PrismaClient();
 
@@ -188,7 +190,7 @@ async function main() {
       assert(amDup, "DB rejects same caddy AM+AM");
     }
 
-    section("createPenaltyDuty defaults FULL_DAY + generate mixed day");
+    section("shift-only POST keeps AM; explicit FULL_DAY; DRAFT coverage regenerate");
     {
       await upsertMonthPlanSettings({
         year: YEAR,
@@ -197,15 +199,15 @@ async function main() {
         pmSlotsPerDay: 1,
         startRotationOrder: 9101,
       });
-      const penalty = await createPenaltyDuty({
+      const shiftOnly = await createPenaltyDuty({
         year: YEAR,
         month: MONTH,
         date: DAY1,
         caddyId: A.caddy.id,
         shift: "AM",
-        reason: "전일 벌당 P1",
+        reason: "UI shift-only",
       });
-      assert(penalty.coverage === "FULL_DAY", "create defaults coverage FULL_DAY");
+      assert(shiftOnly.coverage === "AM", "UI omit coverage stores AM");
       await generateMonthPlan({
         year: YEAR,
         month: MONTH,
@@ -214,25 +216,96 @@ async function main() {
         startRotationOrder: 9101,
         replace: true,
       });
-      const generated = await getMonthPlan({ year: YEAR, month: MONTH });
-      const day1 = generated.plan!.slots.filter((s) => s.date === DAY1);
-      assert(day1.length === 3, "generated day keeps 3 slots");
-      const aSlots = day1.filter((s) => s.caddyId === A.caddy.id);
+      const afterShift = await getMonthPlan({ year: YEAR, month: MONTH });
+      const day1Shift = afterShift.plan!.slots.filter((s) => s.date === DAY1);
+      const aShiftSlots = day1Shift.filter((s) => s.caddyId === A.caddy.id);
+      assert(aShiftSlots.length === 1 && aShiftSlots[0].shift === "AM", "shift-only occupies AM only");
       assert(
-        aSlots.length === 2 &&
-          aSlots.every((s) => s.source === "PENALTY") &&
-          aSlots.some((s) => s.shift === "AM") &&
-          aSlots.some((s) => s.shift === "PM"),
-        "A stored as AM+PM PENALTY"
+        aShiftSlots[0].source === "PENALTY",
+        "shift-only slot is PENALTY"
       );
       assert(
-        day1.filter((s) => s.source === "ROTATION").length === 1,
-        "only 1 rotation slot stored"
+        day1Shift.filter((s) => s.source === "ROTATION").length === 2,
+        "shift-only leaves 2 rotation slots"
+      );
+
+      const explicit = await createPenaltyDuty({
+        year: YEAR,
+        month: MONTH,
+        date: DAY2,
+        caddyId: A.caddy.id,
+        shift: "AM",
+        coverage: "FULL_DAY",
+        reason: "explicit FULL_DAY",
+      });
+      assert(explicit.coverage === "FULL_DAY", "explicit FULL_DAY POST stored");
+      await generateMonthPlan({
+        year: YEAR,
+        month: MONTH,
+        replace: true,
+        startRotationOrder: 9101,
+      });
+      const afterExplicit = await getMonthPlan({ year: YEAR, month: MONTH });
+      const day2 = afterExplicit.plan!.slots.filter((s) => s.date === DAY2);
+      const aDay2 = day2.filter((s) => s.caddyId === A.caddy.id);
+      assert(
+        aDay2.length === 2 &&
+          aDay2.every((s) => s.source === "PENALTY") &&
+          aDay2.some((s) => s.shift === "AM") &&
+          aDay2.some((s) => s.shift === "PM"),
+        "explicit FULL_DAY occupies AM+PM"
+      );
+      const day1Still = afterExplicit.plan!.slots.filter((s) => s.date === DAY1);
+      assert(
+        day1Still.filter((s) => s.caddyId === A.caddy.id).length === 1,
+        "DAY1 remains shift-only until coverage patch"
+      );
+
+      await updatePenaltyDuty({
+        id: shiftOnly.id,
+        coverage: "FULL_DAY",
+      });
+      await generateMonthPlan({
+        year: YEAR,
+        month: MONTH,
+        replace: true,
+        startRotationOrder: 9101,
+      });
+      const afterPatch = await getMonthPlan({ year: YEAR, month: MONTH });
+      const day1Full = afterPatch.plan!.slots.filter((s) => s.date === DAY1);
+      const aFull = day1Full.filter((s) => s.caddyId === A.caddy.id);
+      assert(
+        aFull.length === 2 &&
+          aFull.every((s) => s.source === "PENALTY") &&
+          aFull.some((s) => s.shift === "AM") &&
+          aFull.some((s) => s.shift === "PM"),
+        "DRAFT coverage FULL_DAY regenerate writes AM+PM pair"
       );
       assert(
-        day1.some((s) => s.caddyId === B.caddy.id && s.source === "ROTATION"),
+        day1Full.filter((s) => s.source === "ROTATION").length === 1,
+        "after FULL_DAY patch only 1 rotation slot"
+      );
+      assert(
+        day1Full.some((s) => s.caddyId === B.caddy.id && s.source === "ROTATION"),
         "B is the normal rotation person"
       );
+
+      let omittedInsertFailed = false;
+      try {
+        await prisma.marshalPenaltyDuty.create({
+          data: {
+            planId: afterPatch.plan!.id,
+            date: new Date(`${YEAR}-11-03T00:00:00`),
+            shift: "AM",
+            caddyId: B.caddy.id,
+            marshalProfileId: B.profile.id,
+            reason: "omit-coverage",
+          } as never,
+        });
+      } catch {
+        omittedInsertFailed = true;
+      }
+      assert(omittedInsertFailed, "INSERT without coverage fails after DROP DEFAULT");
     }
 
     section("7. FULL_DAY pair replace locked; normal sub allowed");

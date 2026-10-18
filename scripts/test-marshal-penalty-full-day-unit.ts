@@ -19,6 +19,7 @@ import {
   parsePenaltyCoverage,
   penaltyOccupiedSlotCount,
   penaltyShiftOccupancy,
+  resolveCreatePenaltyCoverage,
   resolvePenaltyCoverage,
   type DayPenaltyInput,
   type GeneratedSlot,
@@ -102,9 +103,26 @@ function fullDayA(): DayPenaltyInput {
 
 section("coverage helpers keep legacy shift occupancy");
 {
-  assert(parsePenaltyCoverage(undefined) === "FULL_DAY", "create default FULL_DAY");
+  throws(
+    () => parsePenaltyCoverage(undefined),
+    "invalid_coverage",
+    "parse omit without fallback rejected"
+  );
+  assert(parsePenaltyCoverage(undefined, "AM") === "AM", "parse fallback AM");
   assert(parsePenaltyCoverage("전일") === "FULL_DAY", "한글 전일");
   assert(parsePenaltyCoverage("AM") === "AM", "explicit AM");
+  assert(
+    resolveCreatePenaltyCoverage(undefined, "AM") === "AM",
+    "UI shift-only POST → AM"
+  );
+  assert(
+    resolveCreatePenaltyCoverage("", "PM") === "PM",
+    "empty coverage → shift PM"
+  );
+  assert(
+    resolveCreatePenaltyCoverage("FULL_DAY", "AM") === "FULL_DAY",
+    "explicit FULL_DAY POST"
+  );
   assert(
     resolvePenaltyCoverage({ shift: "PM" }) === "PM",
     "legacy omit coverage → shift"
@@ -603,7 +621,50 @@ section("source contracts");
   const engine = fs.readFileSync(path.resolve("src/lib/autoAssignEngine.ts"), "utf8");
   const keys = fs.readFileSync(path.resolve("src/lib/opsDutyRoleKeys.ts"), "utf8");
   assert(schema.includes("enum MarshalPenaltyCoverage"), "schema coverage enum");
-  assert(schema.includes("@default(FULL_DAY)"), "new rows default FULL_DAY");
+  const penaltyModel = schema.slice(
+    schema.indexOf("model MarshalPenaltyDuty"),
+    schema.indexOf("model MarshalRotationCredit")
+  );
+  assert(
+    !penaltyModel.includes("@default(FULL_DAY)"),
+    "no silent DB default FULL_DAY"
+  );
+  assert(
+    fs
+      .readFileSync(
+        path.resolve(
+          "prisma/migrations/20261018133000_marshal_penalty_coverage_no_silent_default/migration.sql"
+        ),
+        "utf8"
+      )
+      .includes("DROP DEFAULT"),
+    "follow-up migration drops coverage default"
+  );
+  const service = fs.readFileSync(
+    path.resolve("src/lib/marshalRotationService.ts"),
+    "utf8"
+  );
+  assert(
+    service.includes("resolveCreatePenaltyCoverage(input.coverage, shift)"),
+    "createPenaltyDuty omit coverage follows shift"
+  );
+  assert(service.includes("penalty.coverage"), "generate reads coverage column");
+  assert(service.includes("coverage: row.coverage"), "GET plan serializes coverage");
+  assert(
+    !service
+      .slice(
+        service.indexOf("export async function replaceMonthSlot"),
+        service.indexOf("export async function createPenaltyDuty")
+      )
+      .includes("coverage"),
+    "replaceMonthSlot does not read coverage column"
+  );
+  const page = fs.readFileSync(
+    path.resolve("src/app/manage/marshals/schedule/page.tsx"),
+    "utf8"
+  );
+  assert(page.includes("shift: penaltyShift"), "existing UI still POSTs shift");
+  assert(!/coverage:\s*penalty/.test(page), "existing UI omits coverage (P4 later)");
   assert(
     schema.includes("@@unique([planId, date, shift, caddyId])"),
     "slot unique per shift+caddy"
