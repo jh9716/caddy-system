@@ -203,8 +203,6 @@ section("source contracts");
         "--",
         "src/lib/autoAssignEngine.ts",
         "src/lib/dailySpecialSupport.ts",
-        "src/lib/marshalRotationService.ts",
-        "prisma/schema.prisma",
         "src/lib/operationalRoster.ts",
       ],
       { encoding: "utf8" }
