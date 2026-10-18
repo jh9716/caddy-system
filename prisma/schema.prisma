@@ -1127,6 +1127,8 @@ model MarshalPenaltyOccurrence {
   scheduledOn      DateTime?
   /// 관리자가 지정한 전일 근무일. null이면 자동 배정(AUTO).
   pinnedOn         DateTime?
+  /// 최초 AUTO 배정일. leftover 여도 유지. 관리자 취소 외에는 지우지 않는다.
+  autoHeldOn       DateTime?
   scheduledPlanId  Int?
   scheduledPlan    MarshalMonthPlan?               @relation(fields: [scheduledPlanId], references: [id], onDelete: Restrict)
   status           MarshalPenaltyOccurrenceStatus  @default(OPEN)

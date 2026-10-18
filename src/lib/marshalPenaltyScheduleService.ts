@@ -134,6 +134,7 @@ function tokenPayload(input: {
     status: string;
     scheduledOn: Date | null;
     pinnedOn: Date | null;
+    autoHeldOn: Date | null;
   }[];
 }) {
   return {
@@ -170,6 +171,7 @@ function tokenPayload(input: {
       status: row.status,
       scheduledOn: row.scheduledOn ? formatMarshalYmd(row.scheduledOn) : null,
       pinnedOn: row.pinnedOn ? formatMarshalYmd(row.pinnedOn) : null,
+      autoHeldOn: row.autoHeldOn ? formatMarshalYmd(row.autoHeldOn) : null,
     })),
   };
 }
@@ -245,6 +247,7 @@ async function buildSchedulePreview(
       status: true,
       scheduledOn: true,
       pinnedOn: true,
+      autoHeldOn: true,
       updatedAt: true,
     },
     orderBy: { id: "asc" },
@@ -533,6 +536,7 @@ export async function applyPenaltyOccurrenceSchedule(
           targetMonth: saved.targetMonth,
           scheduledOn: saved.scheduledOn ? formatMarshalYmd(saved.scheduledOn) : null,
           pinnedOn: saved.pinnedOn ? formatMarshalYmd(saved.pinnedOn) : null,
+          autoHeldOn: saved.autoHeldOn ? formatMarshalYmd(saved.autoHeldOn) : null,
           scheduleSource: scheduleSourceOf(saved.pinnedOn),
           scheduledPlanId: saved.scheduledPlanId,
           status: saved.status,
