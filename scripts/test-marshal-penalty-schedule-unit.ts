@@ -61,7 +61,8 @@ function occ(
   id: number,
   caddyId: number,
   occurredOn: string,
-  pinnedOn?: string | null
+  pinnedOn?: string | null,
+  autoHeldOn?: string | null
 ) {
   return {
     id,
@@ -69,6 +70,7 @@ function occ(
     profileId: Math.floor(caddyId / 10),
     occurredOn,
     pinnedOn,
+    autoHeldOn,
   };
 }
 
@@ -105,6 +107,18 @@ section("source contracts — P1 engine / autoAssign untouched");
   assert(
     domain.includes("월 전체 generateMonthRotation 을 돌리지 않는다"),
     "local two-day repair, not full regenerate"
+  );
+  const migration = fs.readFileSync(
+    path.join(
+      process.cwd(),
+      "prisma/migrations/20261018210000_marshal_penalty_occurrence_auto_held_on/migration.sql"
+    ),
+    "utf8"
+  );
+  assert(
+    migration.includes("ADD COLUMN \"autoHeldOn\"") &&
+      migration.includes("Production migrate 실행은 이 PR에서 하지 않는다"),
+    "local autoHeldOn migration, no prod migrate"
   );
 }
 
@@ -181,9 +195,9 @@ section("held AUTO dates stay put around a pin");
     amSlots: 2,
     pmSlots: 1,
     occurrences: [
-      { ...occ(1, 10, "2095-10-01"), heldOn: "2095-11-01" },
+      { ...occ(1, 10, "2095-10-01"), autoHeldOn: "2095-11-01" },
       occ(2, 20, "2095-10-02", "2095-11-06"),
-      { ...occ(3, 30, "2095-10-03"), heldOn: "2095-11-03" },
+      { ...occ(3, 30, "2095-10-03"), autoHeldOn: "2095-11-03" },
     ],
     existingByDate: new Map(),
     statusByDateCaddy: new Map(),
@@ -204,8 +218,8 @@ section("held date that is now sick stays leftover, is not moved");
     amSlots: 2,
     pmSlots: 1,
     occurrences: [
-      { ...occ(1, 10, "2095-10-01"), heldOn: "2095-11-01" },
-      { ...occ(3, 30, "2095-10-03"), heldOn: "2095-11-03" },
+      { ...occ(1, 10, "2095-10-01"), autoHeldOn: "2095-11-01" },
+      { ...occ(3, 30, "2095-10-03"), autoHeldOn: "2095-11-03" },
     ],
     existingByDate: new Map(),
     statusByDateCaddy: new Map([
@@ -354,6 +368,94 @@ section("fillers skip sick, keep off with warning");
       }),
     "insufficient_marshals",
     "all remaining sick → 409, no arbitrary pick"
+  );
+}
+
+section("leftover autoHeldOn is not packed as a new OPEN");
+{
+  const dates = ["2095-11-01", "2095-11-02", "2095-11-03", "2095-11-06"];
+  const sickC = new Map([
+    ["2095-11-03:30", { kind: "hard_skip" as const, message: "병가" }],
+  ]);
+  const first = scheduleOccurrencesForMonth({
+    dates,
+    amSlots: 2,
+    pmSlots: 1,
+    occurrences: [
+      { ...occ(1, 10, "2095-10-01"), autoHeldOn: "2095-11-01" },
+      occ(2, 20, "2095-10-02", "2095-11-06"),
+      { ...occ(3, 30, "2095-10-03"), autoHeldOn: "2095-11-03" },
+    ],
+    existingByDate: new Map(),
+    statusByDateCaddy: sickC,
+  });
+  assert(
+    first.leftover.length === 1 && first.leftover[0].id === 3,
+    "C leftover on sick held date"
+  );
+  const second = scheduleOccurrencesForMonth({
+    dates,
+    amSlots: 2,
+    pmSlots: 1,
+    occurrences: [
+      { ...occ(1, 10, "2095-10-01"), autoHeldOn: "2095-11-01" },
+      occ(2, 20, "2095-10-02", "2095-11-06"),
+      { ...occ(3, 30, "2095-10-03"), autoHeldOn: "2095-11-03" },
+    ],
+    existingByDate: new Map(),
+    statusByDateCaddy: sickC,
+  });
+  assert(
+    second.assignments.every((row) => row.id !== 3) &&
+      second.leftover[0]?.id === 3,
+    "second regenerate still does not move C to Nov 2"
+  );
+}
+
+section("autoHeldOn restores when the held date is free again");
+{
+  const packed = scheduleOccurrencesForMonth({
+    dates: ["2095-11-01", "2095-11-02", "2095-11-03", "2095-11-06"],
+    amSlots: 2,
+    pmSlots: 1,
+    occurrences: [
+      { ...occ(1, 10, "2095-10-01"), autoHeldOn: "2095-11-01" },
+      occ(2, 20, "2095-10-02", "2095-11-06"),
+      { ...occ(3, 30, "2095-10-03"), autoHeldOn: "2095-11-03" },
+    ],
+    existingByDate: new Map(),
+    statusByDateCaddy: new Map(),
+  });
+  assert(
+    packed.assignments
+      .sort((a, b) => a.id - b.id)
+      .map((row) => `${row.id}@${row.date}${row.pinned ? "P" : ""}`)
+      .join(",") === "1@2095-11-01,2@2095-11-06P,3@2095-11-03",
+    "C returns to Nov 3 after sick is lifted"
+  );
+}
+
+section("pinnedOn beats autoHeldOn; new OPEN fills leftover gaps");
+{
+  const packed = scheduleOccurrencesForMonth({
+    dates: ["2095-11-01", "2095-11-02", "2095-11-03", "2095-11-06"],
+    amSlots: 2,
+    pmSlots: 1,
+    occurrences: [
+      { ...occ(1, 10, "2095-10-01"), autoHeldOn: "2095-11-01" },
+      { ...occ(2, 20, "2095-10-02", "2095-11-06"), autoHeldOn: "2095-11-02" },
+      { ...occ(3, 30, "2095-10-03"), autoHeldOn: "2095-11-03" },
+      occ(4, 40, "2095-10-04"),
+    ],
+    existingByDate: new Map(),
+    statusByDateCaddy: new Map(),
+  });
+  assert(
+    packed.assignments
+      .sort((a, b) => a.id - b.id)
+      .map((row) => `${row.id}@${row.date}${row.pinned ? "P" : ""}`)
+      .join(",") === "1@2095-11-01,2@2095-11-06P,3@2095-11-03,4@2095-11-02",
+    "B stays on pin Nov 6; D OPEN takes the Nov 2 gap"
   );
 }
 

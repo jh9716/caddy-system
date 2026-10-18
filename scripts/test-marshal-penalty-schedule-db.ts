@@ -339,16 +339,25 @@ async function main() {
       const b = byId.get(occB.id);
       const c = byId.get(occC.id);
       assert(
-        a?.scheduledOn === NOV1 && a.pinnedOn == null && a.scheduleSource === "AUTO",
+        a?.scheduledOn === NOV1 &&
+          a.pinnedOn == null &&
+          a.autoHeldOn === NOV1 &&
+          a.scheduleSource === "AUTO",
         "regenerate keeps AUTO A on Nov 1"
       );
       assert(
-        c?.scheduledOn === NOV3 && c.pinnedOn == null && c.scheduleSource === "AUTO",
+        c?.scheduledOn === NOV3 &&
+          c.pinnedOn == null &&
+          c.autoHeldOn === NOV3 &&
+          c.scheduleSource === "AUTO",
         "regenerate keeps AUTO C on Nov 3; does not pull C to Nov 2"
       );
       assert(
-        b?.scheduledOn === NOV6 && b.pinnedOn === NOV6 && b.scheduleSource === "MANUAL",
-        "regenerate keeps MANUAL B on Nov 6"
+        b?.scheduledOn === NOV6 &&
+          b.pinnedOn === NOV6 &&
+          b.autoHeldOn === NOV2 &&
+          b.scheduleSource === "MANUAL",
+        "regenerate keeps MANUAL B on Nov 6 and remembers first AUTO date"
       );
       assert(
         penaltyDays(view.plan!, A.caddy.id).join(",") === NOV1 &&
@@ -356,6 +365,70 @@ async function main() {
           penaltyDays(view.plan!, B.caddy.id).join(",") === NOV6,
         "FULL_DAY pairs still follow frozen dates after replace=true"
       );
+    }
+
+    section("leftover AUTO 날짜 영속 보존 후 복귀");
+    {
+      const D = roster[3];
+      await prisma.assignment.create({
+        data: {
+          caddyId: C.caddy.id,
+          type: "SICK",
+          startDate: new Date(`${NOV3}T00:00:00`),
+          endDate: new Date(`${NOV3}T00:00:00`),
+          comment: TAG,
+        },
+      });
+      await generateTarget();
+      const leftover = await prisma.marshalPenaltyOccurrence.findUnique({
+        where: { id: occC.id },
+      });
+      assert(
+        leftover?.status === "OPEN" &&
+          leftover.scheduledOn == null &&
+          leftover.autoHeldOn &&
+          formatMarshalYmd(leftover.autoHeldOn) === NOV3,
+        "sick C becomes OPEN leftover but remembers Nov 3"
+      );
+      await generateTarget();
+      const leftoverAgain = await prisma.marshalPenaltyOccurrence.findUnique({
+        where: { id: occC.id },
+      });
+      assert(
+        leftoverAgain?.status === "OPEN" &&
+          leftoverAgain.scheduledOn == null &&
+          leftoverAgain.autoHeldOn &&
+          formatMarshalYmd(leftoverAgain.autoHeldOn) === NOV3,
+        "second regenerate does not move leftover C to another day"
+      );
+      await prisma.assignment.deleteMany({
+        where: { caddyId: C.caddy.id, comment: TAG, type: "SICK" },
+      });
+      await generateTarget();
+      const restored = await getMonthPlan({ year: YEAR, month: TARGET_MONTH });
+      const c = restored.penaltyOccurrences.find((row) => row.id === occC.id);
+      assert(
+        c?.status === "SCHEDULED" &&
+          c.scheduledOn === NOV3 &&
+          c.autoHeldOn === NOV3 &&
+          c.scheduleSource === "AUTO",
+        "C returns to Nov 3 after sick is lifted"
+      );
+
+      const occD = await createPenaltyOccurrence(
+        { caddyId: D.caddy.id, occurredOn: `${YEAR}-10-04`, reason: "p3-D-open" },
+        prisma
+      );
+      await generateTarget();
+      const withD = await getMonthPlan({ year: YEAR, month: TARGET_MONTH });
+      const d = withD.penaltyOccurrences.find((row) => row.id === occD.id);
+      const cAfterD = withD.penaltyOccurrences.find((row) => row.id === occC.id);
+      const aAfterD = withD.penaltyOccurrences.find((row) => row.id === occA.id);
+      assert(d?.scheduledOn === NOV2 && d.autoHeldOn === NOV2, "new OPEN D fills Nov 2 gap");
+      assert(aAfterD?.scheduledOn === NOV1, "A stays Nov 1 around new OPEN");
+      assert(cAfterD?.scheduledOn === NOV3, "C stays Nov 3 around new OPEN");
+      await prisma.marshalPenaltyOccurrence.delete({ where: { id: occD.id } });
+      await generateTarget();
     }
 
     section("Audit 전후 기록");
