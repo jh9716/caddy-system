@@ -42,7 +42,10 @@ function isDeployedApp() {
 
 function isReadonlyInspectArgv() {
   const s = process.argv.join(" ");
-  return /inspect-db-schema-readonly|check-migration-checksums-readonly|export-caddies-snapshot|preview-roster-import|inspect-special-assign-prod-readonly|inspect-reflow-prod-readonly|inspect-sick-spare-prod-readonly|inspect-unavail-ops-prod-readonly|inspect-daily-special-support-prod-readonly|inspect-push-subscription-prod-readonly|inspect-board-push-freshness-prod-readonly|inspect-notice-v2-prod-readonly|inspect-course-report-v1-prod-readonly|inspect-course-report-photo-v1-prod-readonly|inspect-comment-v1-prod-readonly|inspect-device-push-token-prod-readonly/.test(
+  if (/deploy-marshal-penalty-p1p3-migration/.test(s)) {
+    return !/--apply/.test(s) && !/--sync-checksums/.test(s);
+  }
+  return /inspect-db-schema-readonly|check-migration-checksums-readonly|export-caddies-snapshot|preview-roster-import|inspect-special-assign-prod-readonly|inspect-reflow-prod-readonly|inspect-sick-spare-prod-readonly|inspect-unavail-ops-prod-readonly|inspect-daily-special-support-prod-readonly|inspect-push-subscription-prod-readonly|inspect-board-push-freshness-prod-readonly|inspect-notice-v2-prod-readonly|inspect-course-report-v1-prod-readonly|inspect-course-report-photo-v1-prod-readonly|inspect-comment-v1-prod-readonly|inspect-device-push-token-prod-readonly|inspect-marshal-penalty-p1p3-prod-readonly/.test(
     s
   );
 }

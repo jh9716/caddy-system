@@ -111,3 +111,46 @@ DATABASE_URL="$PRODUCTION_DATABASE_URL" \
 
 No migrate / db push / hard delete. Does not modify username=admin or real staff User/Caddy.
 
+Marshal P1–P3 schema (FULL_DAY coverage, occurrence carry, pin/autoHeld). Default is READ-ONLY inspect. Checksum sync, `prisma migrate deploy`, and Neon PITR are **separate** approval steps. This tool never runs `psql -f`, `prisma db execute`, or `prisma migrate resolve`.
+
+Inspect (local throwaway or production, no confirm):
+
+```
+DATABASE_URL=postgresql://caddy:caddy@127.0.0.1:5432/caddy_maint_throwaway \
+  npm run maint:marshal-p1p3
+```
+
+```
+DATABASE_URL="$PRODUCTION_DATABASE_URL" \
+  npm run inspect:marshal-p1p3-readonly
+```
+
+Local apply (throwaway DB only; refuses `caddy_local`):
+
+```
+PROD_MAINTENANCE_CONFIRM=MARSHAL_P1P3_MIGRATE_LOCAL \
+MARSHAL_WRITE_FREEZE_CONFIRM=HELD \
+DATABASE_URL=postgresql://caddy:caddy@127.0.0.1:5432/caddy_maint_throwaway \
+  npm run maint:marshal-p1p3 -- --apply
+```
+
+Production apply (explicit ops approval only):
+
+```
+PROD_MAINTENANCE_CONFIRM=MARSHAL_P1P3_MIGRATE_20261018 \
+MARSHAL_WRITE_FREEZE_CONFIRM=HELD \
+NEON_PITR_WINDOW_CONFIRMED=YES \
+DATABASE_URL="$PRODUCTION_DATABASE_URL" \
+  npm run maint:marshal-p1p3 -- --apply
+```
+
+Production checksum sync (does **not** migrate; reconstructed 20260809 files only):
+
+```
+PROD_MAINTENANCE_CONFIRM=MARSHAL_P1P3_CHECKSUM_SYNC_20261018 \
+DATABASE_URL="$PRODUCTION_DATABASE_URL" \
+  npm run maint:marshal-p1p3 -- --sync-checksums
+```
+
+`prisma migrate deploy` only, Prisma CLI 5.22.x. Keep marshal write freeze until P1 files 1–3 finish. Neon PITR is confirmed in the Neon console — this script does not create or restore backups. MERGE HOLD.
+
