@@ -20,6 +20,7 @@ export const MARSHAL_HARD_SKIP_ASSIGNMENT_TYPES = [
 ] as const;
 
 export type MarshalShiftKind = "AM" | "PM";
+export type MarshalPenaltyCoverage = "FULL_DAY" | "AM" | "PM";
 export type MarshalSlotSourceKind =
   | "ROTATION"
   | "MANUAL"
@@ -40,6 +41,8 @@ export type DayPenaltyInput = {
   caddyId: number;
   profileId: number;
   shift: MarshalShiftKind;
+  /** 생략 시 shift와 동일한 단일 칸(기존 테스트/레거시 행). */
+  coverage?: MarshalPenaltyCoverage;
 };
 
 export type OpenCredit = {
@@ -113,6 +116,204 @@ export function parseMarshalShift(value: unknown): MarshalShiftKind {
   if (v === "AM" || v === "조출") return "AM";
   if (v === "PM" || v === "후출") return "PM";
   throw new MarshalRosterError("shift는 AM 또는 PM 이어야 합니다.", "invalid_shift", 400);
+}
+
+export function parsePenaltyCoverage(
+  value: unknown,
+  fallback?: MarshalPenaltyCoverage
+): MarshalPenaltyCoverage {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    if (fallback) return fallback;
+    throw new MarshalRosterError(
+      "coverage는 FULL_DAY, AM, PM 이어야 합니다.",
+      "invalid_coverage",
+      400
+    );
+  }
+  const v = String(value).trim().toUpperCase();
+  if (v === "FULL_DAY" || v === "전일") return "FULL_DAY";
+  if (v === "AM" || v === "조출") return "AM";
+  if (v === "PM" || v === "후출") return "PM";
+  throw new MarshalRosterError(
+    "coverage는 FULL_DAY, AM, PM 이어야 합니다.",
+    "invalid_coverage",
+    400
+  );
+}
+
+/**
+ * 기존 UI는 shift만 POST한다. coverage 생략/빈값 → shift 한 칸.
+ * 전일 벌당은 coverage: "FULL_DAY" 를 명시한 경우에만 생성한다.
+ */
+export function resolveCreatePenaltyCoverage(
+  coverage: unknown,
+  shift: MarshalShiftKind
+): MarshalPenaltyCoverage {
+  if (coverage === undefined || coverage === null || String(coverage).trim() === "") {
+    return shift;
+  }
+  return parsePenaltyCoverage(coverage);
+}
+
+function isCoverageProvided(value: unknown): boolean {
+  return value !== undefined && value !== null && String(value).trim() !== "";
+}
+
+/**
+ * PATCH 정책:
+ * - 단일 시프트(AM/PM): shift-only → coverage도 같은 칸으로 맞춤
+ * - FULL_DAY: shift-only → coverage는 FULL_DAY 유지
+ * - coverage-only AM/PM → shift도 같은 칸
+ * - coverage-only FULL_DAY → 기존 shift 표시 유지
+ * - 둘 다 오면 AM/PM coverage는 shift와 같아야 함. FULL_DAY + AM/PM shift는 허용
+ */
+export function resolveUpdatePenaltyShiftCoverage(input: {
+  currentShift: MarshalShiftKind;
+  currentCoverage: MarshalPenaltyCoverage;
+  shift?: unknown;
+  coverage?: unknown;
+}): { shift: MarshalShiftKind; coverage: MarshalPenaltyCoverage } {
+  const shiftProvided = input.shift !== undefined;
+  const coverageProvided = isCoverageProvided(input.coverage);
+  if (!shiftProvided && !coverageProvided) {
+    return {
+      shift: input.currentShift,
+      coverage: input.currentCoverage,
+    };
+  }
+  const shift = shiftProvided
+    ? parseMarshalShift(input.shift)
+    : input.currentShift;
+  if (shiftProvided && !coverageProvided) {
+    if (input.currentCoverage === "FULL_DAY") {
+      return { shift, coverage: "FULL_DAY" };
+    }
+    return { shift, coverage: shift };
+  }
+  const coverage = parsePenaltyCoverage(input.coverage);
+  if (!shiftProvided) {
+    if (coverage === "FULL_DAY") {
+      return { shift: input.currentShift, coverage: "FULL_DAY" };
+    }
+    return { shift: coverage, coverage };
+  }
+  if (coverage !== "FULL_DAY" && shift !== coverage) {
+    throw new MarshalRosterError(
+      "shift와 coverage가 모순됩니다.",
+      "shift_coverage_mismatch",
+      400
+    );
+  }
+  return { shift, coverage };
+}
+
+/** 엔진 입력: coverage 생략은 shift 한 칸(레거시 테스트/기존 행). */
+export function resolvePenaltyCoverage(
+  penalty: Pick<DayPenaltyInput, "shift" | "coverage">
+): MarshalPenaltyCoverage {
+  if (
+    penalty.coverage === "FULL_DAY" ||
+    penalty.coverage === "AM" ||
+    penalty.coverage === "PM"
+  ) {
+    return penalty.coverage;
+  }
+  return penalty.shift;
+}
+
+export function penaltyOccupiedShifts(
+  coverage: MarshalPenaltyCoverage
+): MarshalShiftKind[] {
+  if (coverage === "FULL_DAY") return ["AM", "PM"];
+  return [coverage];
+}
+
+export function penaltyShiftOccupancy(penalties: readonly DayPenaltyInput[]): {
+  am: number;
+  pm: number;
+} {
+  let am = 0;
+  let pm = 0;
+  for (const penalty of penalties) {
+    for (const shift of penaltyOccupiedShifts(resolvePenaltyCoverage(penalty))) {
+      if (shift === "AM") am += 1;
+      else pm += 1;
+    }
+  }
+  return { am, pm };
+}
+
+export function penaltyOccupiedSlotCount(
+  penalties: readonly DayPenaltyInput[]
+): number {
+  const occ = penaltyShiftOccupancy(penalties);
+  return occ.am + occ.pm;
+}
+
+export function assertGeneratedSlotsSameDayIntegrity(
+  date: string,
+  slots: readonly GeneratedSlot[]
+): void {
+  const byShiftCaddy = new Set<string>();
+  const byCaddy = new Map<number, GeneratedSlot[]>();
+  for (const slot of slots) {
+    const key = `${slot.shift}:${slot.caddyId}`;
+    if (byShiftCaddy.has(key)) {
+      throw new MarshalRosterError(
+        `${date}: 같은 날 같은 시프트 중복 배정 (${slot.caddyId})`,
+        "same_day_duplicate",
+        400
+      );
+    }
+    byShiftCaddy.add(key);
+    const list = byCaddy.get(slot.caddyId) || [];
+    list.push(slot);
+    byCaddy.set(slot.caddyId, list);
+  }
+  for (const [caddyId, list] of byCaddy) {
+    if (list.length === 1) continue;
+    const shifts = new Set(list.map((slot) => slot.shift));
+    const allPenalty = list.every((slot) => slot.source === "PENALTY");
+    if (
+      list.length === 2 &&
+      shifts.has("AM") &&
+      shifts.has("PM") &&
+      allPenalty
+    ) {
+      continue;
+    }
+    throw new MarshalRosterError(
+      `${date}: 같은 날 중복 배정 (${caddyId})`,
+      "same_day_duplicate",
+      400
+    );
+  }
+}
+
+/** FULL_DAY 벌당 AM+PM 쌍은 한쪽만 교체 금지. */
+export function assertFullDayPenaltyPairLocked(input: {
+  slotId: number;
+  slotCaddyId: number;
+  slotSource: string;
+  daySlots: readonly {
+    id: number;
+    caddyId: number;
+    shift: string;
+    source: string;
+  }[];
+}): void {
+  if (input.slotSource !== "PENALTY") return;
+  const penaltySlots = input.daySlots.filter(
+    (slot) => slot.caddyId === input.slotCaddyId && slot.source === "PENALTY"
+  );
+  const shifts = new Set(penaltySlots.map((slot) => slot.shift));
+  if (penaltySlots.length >= 2 && shifts.has("AM") && shifts.has("PM")) {
+    throw new MarshalRosterError(
+      "전일 벌당은 한쪽 슬롯만 교체할 수 없습니다.",
+      "full_day_penalty_locked",
+      409
+    );
+  }
 }
 
 export function listMonthYmds(year: number, month: number): string[] {
@@ -336,34 +537,39 @@ export function balanceDayShifts(input: {
     return status?.kind === "off_conflict" ? status.message : null;
   };
 
+  const seenPenaltyCaddy = new Set<number>();
   for (const penalty of input.penalties) {
-    if (taken.has(penalty.caddyId)) {
+    if (seenPenaltyCaddy.has(penalty.caddyId) || taken.has(penalty.caddyId)) {
       throw new MarshalRosterError(
         `${input.date}: 같은 날 중복 배정 (${penalty.caddyId})`,
         "same_day_duplicate",
         400
       );
     }
-    const row: GeneratedSlot = {
-      date: input.date,
-      shift: penalty.shift,
-      slotIndex: 0,
-      caddyId: penalty.caddyId,
-      profileId: penalty.profileId,
-      source: "PENALTY",
-      warning: warningOf(penalty.caddyId),
-    };
-    const lane = penalty.shift === "AM" ? am : pm;
-    const empty = lane.findIndex((slot) => slot == null);
-    if (empty < 0) {
-      throw new MarshalRosterError(
-        `${input.date}: ${penalty.shift} 슬롯보다 벌당이 많습니다.`,
-        "penalty_overflow",
-        400
-      );
+    seenPenaltyCaddy.add(penalty.caddyId);
+    const shifts = penaltyOccupiedShifts(resolvePenaltyCoverage(penalty));
+    for (const shift of shifts) {
+      const row: GeneratedSlot = {
+        date: input.date,
+        shift,
+        slotIndex: 0,
+        caddyId: penalty.caddyId,
+        profileId: penalty.profileId,
+        source: "PENALTY",
+        warning: warningOf(penalty.caddyId),
+      };
+      const lane = shift === "AM" ? am : pm;
+      const empty = lane.findIndex((slot) => slot == null);
+      if (empty < 0) {
+        throw new MarshalRosterError(
+          `${input.date}: ${shift} 슬롯보다 벌당이 많습니다.`,
+          "penalty_overflow",
+          400
+        );
+      }
+      row.slotIndex = empty;
+      lane[empty] = row;
     }
-    row.slotIndex = empty;
-    lane[empty] = row;
     taken.add(penalty.caddyId);
   }
 
@@ -419,14 +625,7 @@ export function balanceDayShifts(input: {
       400
     );
   }
-  const ids = slots.map((s) => s.caddyId);
-  if (new Set(ids).size !== ids.length) {
-    throw new MarshalRosterError(
-      `${input.date}: 같은 날 중복 배정`,
-      "same_day_duplicate",
-      400
-    );
-  }
+  assertGeneratedSlotsSameDayIntegrity(input.date, slots);
   for (const slot of slots) {
     const cur = countKey(input.counts, slot.caddyId);
     if (slot.shift === "AM") cur.am += 1;
@@ -486,8 +685,23 @@ export function generateMonthRotation(input: {
   for (const date of ymds) {
     const penalties = input.penaltiesByDate.get(date) || [];
     const penaltyIds = new Set(penalties.map((p) => p.caddyId));
+    if (penaltyIds.size !== penalties.length) {
+      throw new MarshalRosterError(
+        `${date}: 같은 날 중복 배정`,
+        "same_day_duplicate",
+        400
+      );
+    }
+    const occupancy = penaltyShiftOccupancy(penalties);
+    if (occupancy.am > amSlots || occupancy.pm > pmSlots) {
+      throw new MarshalRosterError(
+        `${date}: 벌당이 하루 슬롯 수보다 많습니다.`,
+        "penalty_overflow",
+        400
+      );
+    }
     const total = amSlots + pmSlots;
-    const rotationNeeded = total - penalties.length;
+    const rotationNeeded = total - occupancy.am - occupancy.pm;
     if (rotationNeeded < 0) {
       throw new MarshalRosterError(
         `${date}: 벌당이 하루 슬롯 수보다 많습니다.`,

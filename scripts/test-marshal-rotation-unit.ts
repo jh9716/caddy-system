@@ -4,6 +4,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { MarshalRosterError, assertUniqueActiveRotationOrders } from "../src/lib/marshalDomain";
 import {
   assertPlanMutable,
@@ -559,6 +560,10 @@ section("substitute integrity + route plan guard");
     service.indexOf("export async function createPenaltyDuty")
   );
   assert(!replaceFn.includes("finalized_locked"), "FINALIZED slot substitute remains allowed");
+  assert(
+    service.includes("assertFullDayPenaltyPairLocked"),
+    "FULL_DAY pair replace is locked"
+  );
 }
 
 section("fail-closed + overwrite guards");
@@ -618,6 +623,8 @@ section("source contracts");
   assert(schema.includes("model MarshalMonthPlan"), "plan model");
   assert(schema.includes("model MarshalMonthSlot"), "slot model");
   assert(schema.includes("model MarshalPenaltyDuty"), "penalty model");
+  assert(schema.includes("enum MarshalPenaltyCoverage"), "FULL_DAY coverage enum");
+  assert(schema.includes("@@unique([planId, date, shift, caddyId])"), "slot unique per shift");
   assert(schema.includes("model MarshalRotationCredit"), "credit model");
   assert(schema.includes("rotationOrder"), "roster order field");
   assert(schema.includes("startPendingProfileIds"), "start pending field");
@@ -632,6 +639,12 @@ section("source contracts");
     ),
     "p2 migration has pending columns"
   );
+  assert(
+    read("prisma/migrations/20261018120000_marshal_penalty_full_day_p1/migration.sql").includes(
+      "MarshalMonthSlot_planId_date_shift_caddyId_key"
+    ),
+    "p1 migration adds shift+caddy unique"
+  );
   assert(cart.includes("dormitoryResident") || cart.includes("Cart"), "cart domain still present");
   assert(read("src/lib/marshalDomain.ts").includes("MARSHAL_ROTATION_ORDER_CHANGE"), "order audit");
   assert(read("src/lib/marshalDomain.ts").includes("MARSHAL_MONTH_GENERATE"), "generate audit");
@@ -644,7 +657,6 @@ section("source contracts");
 
 section("git protected files");
 {
-  const { spawnSync } = await import("node:child_process");
   const names = String(
     spawnSync(
       "git",

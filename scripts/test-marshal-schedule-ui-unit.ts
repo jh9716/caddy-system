@@ -430,6 +430,8 @@ section("source contracts");
   assert(page.includes("/api/marshals/plans/generate"), "POST generate");
   assert(page.includes("/finalize"), "POST finalize");
   assert(page.includes("/api/marshals/penalties"), "POST penalty");
+  assert(page.includes("shift: penaltyShift"), "UI penalty POST sends shift");
+  assert(!/coverage:\s*penalty/.test(page), "UI penalty POST omits coverage");
   assert(page.includes("/api/marshals/credits"), "POST credit");
   assert(page.includes("/slots/${subSlotId}"), "PATCH slot");
   assert(page.includes("asSubstitute: true"), "substitute flag");
