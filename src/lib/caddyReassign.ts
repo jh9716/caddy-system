@@ -1,5 +1,6 @@
 /**
  * 캐디관리 V2 — 조/순번 일괄 재배치 (순수 계획·검증).
+ * Prisma SQL 빌더는 caddyReassignSql.ts. 이 파일은 클라이언트 초안이 import 해도 된다.
  *
  * 기존 PATCH /api/caddies/:id 와 Import Apply 를 대체하지 않는다.
  * Caddy.id / User.caddyId / 카카오 연결 / 근무·휴무 / 마샬 / 카트 / 자동배치 엔진은
@@ -9,7 +10,6 @@
  * 최종 occupancy 만 검증하므로 중간 슬롯 겹침(맞교환)은 허용.
  */
 import { z } from "zod";
-import { Prisma } from "@prisma/client";
 import {
   DRIVING_POOL_TEAM,
   isDrivingCaddyType,
@@ -750,103 +750,4 @@ export function throwIfPlanBlocked(plan: ReassignPlan): void {
     code: first?.code ?? "invalid_placement",
     issues: plan.issues,
   });
-}
-
-/**
- * Caddy 조/순번/타입/3부반만 갱신. id 및 그 외 컬럼은 SQL에 등장하지 않는다.
- */
-export function buildCaddyReassignUpdateSql(patches: ReassignPatch[]): Prisma.Sql {
-  if (patches.length === 0) {
-    throw new Error("reassign update requires at least one row");
-  }
-  const values = patches.map(
-    (patch) => Prisma.sql`(
-      ${patch.id}::integer,
-      ${patch.team}::text,
-      ${patch.teamOrder}::integer,
-      ${patch.caddyType}::text,
-      ${patch.thirdBandSubgroup}::text
-    )`
-  );
-  return Prisma.sql`
-    UPDATE "Caddy" AS c
-    SET
-      "team" = v."team",
-      "teamOrder" = v."teamOrder",
-      "caddyType" = v."caddyType"::"CaddyType",
-      "thirdBandSubgroup" = v."thirdBandSubgroup"::"ThirdBandSubgroup",
-      "updatedAt" = CURRENT_TIMESTAMP
-    FROM (
-      VALUES ${Prisma.join(values, ",")}
-    ) AS v(
-      "id",
-      "team",
-      "teamOrder",
-      "caddyType",
-      "thirdBandSubgroup"
-    )
-    WHERE c."id" = v."id"
-  `;
-}
-
-export function buildCaddyReassignLockSql(
-  teams: string[],
-  ids: number[]
-): Prisma.Sql {
-  const teamList = teams
-    .filter((team) => isPrimaryTeam(team))
-    .sort((a, b) => Number(a.replace("조", "")) - Number(b.replace("조", "")));
-  const idList = ids
-    .filter((id) => Number.isInteger(id) && id > 0)
-    .sort((a, b) => a - b);
-  if (teamList.length === 0 && idList.length === 0) {
-    throw new Error("reassign lock requires teams or ids");
-  }
-  if (teamList.length > 0 && idList.length > 0) {
-    return Prisma.sql`
-      SELECT
-        id,
-        name,
-        team,
-        "teamOrder",
-        "employmentStatus"::text AS "employmentStatus",
-        "caddyType"::text AS "caddyType",
-        "thirdBandSubgroup"::text AS "thirdBandSubgroup",
-        "updatedAt"
-      FROM "Caddy"
-      WHERE team IN (${Prisma.join(teamList)})
-         OR id IN (${Prisma.join(idList)})
-      FOR UPDATE
-    `;
-  }
-  if (teamList.length > 0) {
-    return Prisma.sql`
-      SELECT
-        id,
-        name,
-        team,
-        "teamOrder",
-        "employmentStatus"::text AS "employmentStatus",
-        "caddyType"::text AS "caddyType",
-        "thirdBandSubgroup"::text AS "thirdBandSubgroup",
-        "updatedAt"
-      FROM "Caddy"
-      WHERE team IN (${Prisma.join(teamList)})
-      FOR UPDATE
-    `;
-  }
-  return Prisma.sql`
-    SELECT
-      id,
-      name,
-      team,
-      "teamOrder",
-      "employmentStatus"::text AS "employmentStatus",
-      "caddyType"::text AS "caddyType",
-      "thirdBandSubgroup"::text AS "thirdBandSubgroup",
-      "updatedAt"
-    FROM "Caddy"
-    WHERE id IN (${Prisma.join(idList)})
-    FOR UPDATE
-  `;
 }

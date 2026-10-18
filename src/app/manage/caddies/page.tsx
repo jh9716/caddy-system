@@ -1,6 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+} from 'react';
 import {
   CLIENT_RESOURCE,
   clearClientResourceCache,
@@ -26,6 +33,7 @@ import {
   countsTowardRosterHeadcount,
   employmentStatusUiLabel,
   isDrivingCaddyType,
+  isPrimaryTeam,
   rosterHeadcount,
   isHouseTeam,
   isThirdBandTeam,
@@ -55,6 +63,30 @@ import {
   rosterSubgroupLabel,
   type RosterDensity,
 } from '@/lib/caddyRosterBoard';
+import {
+  applyRosterInsertMove,
+  canRosterReassignCaddy,
+  changedRosterPlacementIds,
+  explicitPlacementsFromDraft,
+  formatReassignTypeNote,
+  formatRosterPreviewAnomalySummary,
+  formatRosterSlotLabel,
+  isRosterSearchLocked,
+  rosterPreviewHasBlockingError,
+  listRosterEditSlots,
+  listRosterMoveTargets,
+  pushRosterUndoSnapshot,
+  rosterPlacementKey,
+  ROSTER_REASSIGN_MODE,
+  ROSTER_REASSIGN_SEARCH_LOCK_MESSAGE,
+} from '@/lib/caddyRosterReassignDraft';
+import {
+  isStaleRosterError,
+  postCaddyReassignApply,
+  postCaddyReassignPreview,
+  type ReassignPreviewOk,
+} from '@/lib/caddyReassignClient';
+import type { ReassignIssue, ReassignPlacement } from '@/lib/caddyReassign';
 import {
   listV1ProjectedEmptySlots,
   mergeV1SafeResolutions,
@@ -374,6 +406,29 @@ export default function ManageCaddiesPage() {
   );
   /** PC 현장표 밀도. 기본 압축. 모바일 조 칩 레이아웃과는 무관 */
   const [density, setDensity] = useState<RosterDensity>('compact');
+  /** 현장표 배치 편집. 저장 전 DB 변경 없음 */
+  const [placementEdit, setPlacementEdit] = useState(false);
+  const [draftRows, setDraftRows] = useState<Caddy[]>([]);
+  const [baselineRows, setBaselineRows] = useState<Caddy[]>([]);
+  const [undoStack, setUndoStack] = useState<Caddy[][]>([]);
+  const [dragCaddyId, setDragCaddyId] = useState<number | null>(null);
+  const [dropKey, setDropKey] = useState<string | null>(null);
+  const [moveCaddyId, setMoveCaddyId] = useState<number | null>(null);
+  const [moveTeam, setMoveTeam] = useState('1조');
+  const [placementMoveOrder, setPlacementMoveOrder] = useState(1);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [applyLoading, setApplyLoading] = useState(false);
+  const [previewResult, setPreviewResult] = useState<ReassignPreviewOk | null>(
+    null
+  );
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewIssues, setPreviewIssues] = useState<ReassignIssue[]>([]);
+  const [pendingPlacements, setPendingPlacements] = useState<ReassignPlacement[]>(
+    []
+  );
+  const [staleRoster, setStaleRoster] = useState(false);
+  const [previewAnomaliesOpen, setPreviewAnomaliesOpen] = useState(false);
 
   /** 명단 Import v2 Preview */
   type ImportPreviewLine = {
@@ -518,10 +573,10 @@ export default function ManageCaddiesPage() {
       setLoading(true);
       setMessage(null);
       const ns = await ensureClientAuthNamespace();
-      if (!isCurrentLoadGen(gen, loadGen.current)) return;
+      if (!isCurrentLoadGen(gen, loadGen.current)) return cached?.value;
       if (shouldSkipFreshResourceRefresh(cached) && ns) {
         setLoading(false);
-        return;
+        return cached?.value;
       }
       try {
         const res = await runDedupedClientResource(
@@ -534,14 +589,14 @@ export default function ManageCaddiesPage() {
               credentials: 'include',
             })
         );
-        if (!isCurrentLoadGen(gen, loadGen.current)) return;
+        if (!isCurrentLoadGen(gen, loadGen.current)) return cached?.value;
         if (res.status === 401 || res.status === 403) {
           clearClientResourceCache();
           location.href = '/login?callbackUrl=/manage/caddies';
           return;
         }
         const data = await res.json();
-        if (!isCurrentLoadGen(gen, loadGen.current)) return;
+        if (!isCurrentLoadGen(gen, loadGen.current)) return cached?.value;
         if (!res.ok) {
           setMessage(data?.error || '목록을 불러오지 못했습니다.');
           setRefreshError(true);
@@ -568,6 +623,7 @@ export default function ManageCaddiesPage() {
         } else {
           void refreshSlotPeers();
         }
+        return next;
       } finally {
         if (isCurrentLoadGen(gen, loadGen.current)) setLoading(false);
       }
@@ -594,7 +650,11 @@ export default function ManageCaddiesPage() {
   const reloadAfterMutation = useCallback(
     async (employmentOverride?: EmploymentStatus | 'all') => {
       invalidateCaddyRosters();
-      await Promise.all([load(employmentOverride), loadOwnedCarts()]);
+      const [next] = await Promise.all([
+        load(employmentOverride),
+        loadOwnedCarts(),
+      ]);
+      return next;
     },
     [invalidateCaddyRosters, load, loadOwnedCarts]
   );
@@ -727,18 +787,27 @@ export default function ManageCaddiesPage() {
   }, [filtered]);
 
   const menuCaddy = useMemo(
-    () => rows.find((r) => r.id === menuCaddyId) ?? null,
-    [rows, menuCaddyId]
+    () =>
+      placementEdit ? null : rows.find((r) => r.id === menuCaddyId) ?? null,
+    [rows, menuCaddyId, placementEdit]
   );
+
+  const displayRows = placementEdit ? draftRows : rows;
+  const searchLocked = placementEdit && isRosterSearchLocked(q);
+  const dirtyIdSet = useMemo(
+    () => new Set(changedRosterPlacementIds(baselineRows, draftRows)),
+    [baselineRows, draftRows]
+  );
+  const dirtyCount = dirtyIdSet.size;
 
   const rosterColumns = useMemo(
     () =>
       buildRosterColumns({
-        rows,
+        rows: displayRows,
         query: q,
         drivingHeadcount: rosterCounts.drivingHeadcount,
       }),
-    [rows, q, rosterCounts.drivingHeadcount]
+    [displayRows, q, rosterCounts.drivingHeadcount]
   );
 
   const mobileRosterRows = useMemo(
@@ -758,6 +827,238 @@ export default function ManageCaddiesPage() {
       ) ?? rosterColumns[0],
     [rosterColumns, mobileTeam]
   );
+
+  function resetPlacementDraft(nextRows: Caddy[]) {
+    setBaselineRows(nextRows);
+    setDraftRows(nextRows);
+    setUndoStack([]);
+    setDragCaddyId(null);
+    setDropKey(null);
+    setMoveCaddyId(null);
+    setPlacementMoveOrder(1);
+    setPreviewOpen(false);
+    setPreviewResult(null);
+    setPreviewError(null);
+    setPreviewIssues([]);
+    setStaleRoster(false);
+    setPreviewAnomaliesOpen(false);
+    setPendingPlacements([]);
+  }
+
+  function beginPlacementEdit() {
+    setPlacementEdit(true);
+    resetPlacementDraft(rows);
+    setMenuCaddyId(null);
+    setEditingId(null);
+    setMessage(null);
+  }
+
+  function cancelPlacementEdit() {
+    setPlacementEdit(false);
+    resetPlacementDraft(rows);
+  }
+
+  function applyLocalMove(id: number, team: string, teamOrder: number): boolean {
+    if (!placementEdit) return false;
+    if (searchLocked) {
+      setMessage(ROSTER_REASSIGN_SEARCH_LOCK_MESSAGE);
+      return false;
+    }
+    const result = applyRosterInsertMove(draftRows, { id, team, teamOrder });
+    if (!result.ok) {
+      setMessage(result.issues[0]?.message ?? '이동할 수 없습니다.');
+      return false;
+    }
+    if (result.changes.length === 0) return true;
+    setUndoStack((stack) => pushRosterUndoSnapshot(stack, draftRows));
+    setDraftRows(result.rows);
+    setMessage(null);
+    return true;
+  }
+
+  function undoLastPlacementMove() {
+    const prev = undoStack[undoStack.length - 1];
+    if (!prev) return;
+    setUndoStack((stack) => stack.slice(0, -1));
+    setDraftRows(prev);
+  }
+
+  async function openPlacementPreview() {
+    if (searchLocked) {
+      setMessage(ROSTER_REASSIGN_SEARCH_LOCK_MESSAGE);
+      return;
+    }
+    const placements = explicitPlacementsFromDraft(baselineRows, draftRows);
+    if (placements.length === 0) {
+      setMessage('변경된 배치가 없습니다.');
+      return;
+    }
+    setPendingPlacements(placements);
+    setPreviewOpen(true);
+    setPreviewLoading(true);
+    setPreviewResult(null);
+    setPreviewError(null);
+    setPreviewIssues([]);
+    setStaleRoster(false);
+    setPreviewAnomaliesOpen(false);
+    try {
+      const result = await postCaddyReassignPreview({
+        placements,
+        mode: ROSTER_REASSIGN_MODE,
+      });
+      if (!result.ok) {
+        setPreviewError(result.error);
+        setPreviewIssues(result.issues ?? []);
+        if (isStaleRosterError(result)) setStaleRoster(true);
+        return;
+      }
+      setPreviewResult(result);
+      setPreviewIssues(result.issues);
+    } catch {
+      setPreviewError('배치 미리보기 중 오류가 발생했습니다.');
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  async function applyPlacementPreview() {
+    if (!previewResult?.ok || applyLoading || staleRoster) return;
+    setApplyLoading(true);
+    setPreviewError(null);
+    try {
+      const result = await postCaddyReassignApply({
+        placements: pendingPlacements,
+        mode: ROSTER_REASSIGN_MODE,
+        base: previewResult.base,
+      });
+      if (!result.ok) {
+        setPreviewError(result.error);
+        setPreviewIssues(result.issues ?? []);
+        if (isStaleRosterError(result)) setStaleRoster(true);
+        return;
+      }
+      const changed = result.changes.length;
+      setPlacementEdit(false);
+      resetPlacementDraft([]);
+      await reloadAfterMutation('all');
+      setMessage(`배치를 저장했습니다. ${changed}명 변경.`);
+    } catch {
+      setPreviewError('배치 저장 중 오류가 발생했습니다. 자동 재시도하지 않습니다.');
+    } finally {
+      setApplyLoading(false);
+    }
+  }
+
+  async function reloadAfterStaleRoster() {
+    setPreviewOpen(false);
+    setPreviewResult(null);
+    setPreviewError(null);
+    setPreviewIssues([]);
+    setStaleRoster(false);
+    setPendingPlacements([]);
+    setUndoStack([]);
+    const next = await reloadAfterMutation('all');
+    const fresh = Array.isArray(next) ? next : rows;
+    setBaselineRows(fresh);
+    setDraftRows(fresh);
+    setMessage('명단을 다시 불러왔습니다. 변경을 다시 확인한 뒤 저장하세요.');
+  }
+
+  function bindDropTarget(team: string, teamOrder: number) {
+    const key = rosterPlacementKey(team, teamOrder);
+    return {
+      onDragOver: (event: DragEvent) => {
+        if (!placementEdit || searchLocked || dragCaddyId == null) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        setDropKey(key);
+      },
+      onDrop: (event: DragEvent) => {
+        event.preventDefault();
+        const id = Number(event.dataTransfer.getData('text/plain'));
+        setDropKey(null);
+        setDragCaddyId(null);
+        if (!Number.isInteger(id) || id < 1) return;
+        applyLocalMove(id, team, teamOrder);
+      },
+    };
+  }
+
+  function renderDesktopRosterCell(
+    c: {
+      id: number;
+      name: string;
+      team: string;
+      teamOrder: number;
+      employmentStatus?: string | null;
+      caddyType?: string | null;
+      thirdBandSubgroup?: ThirdBandSubgroup | null;
+    },
+    col: { key: string; driving: boolean },
+    options?: { dropOrder?: number }
+  ) {
+    const st = normalizeEmploymentStatus(c.employmentStatus);
+    const leave = st === 'LEAVE';
+    const cartNo = cartByCaddyId[c.id];
+    const subgroup = rosterSubgroupLabel(c.thirdBandSubgroup);
+    const slot = rosterSlotDisplay(c.teamOrder);
+    const slotAssigned = hasAssignedRosterSlot(c.teamOrder);
+    const canDrag =
+      placementEdit && !col.driving && !searchLocked && canRosterReassignCaddy(c);
+    const dropOrder = options?.dropOrder ?? c.teamOrder;
+    const key = rosterPlacementKey(col.key, dropOrder);
+    const dropBind =
+      placementEdit && !col.driving && !searchLocked && slotAssigned
+        ? bindDropTarget(col.key, dropOrder)
+        : {};
+    return (
+      <button
+        type="button"
+        draggable={canDrag}
+        className={`cm-roster-cell${leave ? ' is-leave' : ''}${
+          dirtyIdSet.has(c.id) ? ' is-dirty' : ''
+        }${dragCaddyId === c.id ? ' is-dragging' : ''}${
+          dropKey === key ? ' is-drop-target' : ''
+        }`}
+        onClick={() => {
+          if (placementEdit) return;
+          setEditingId(null);
+          setMenuCaddyId(c.id);
+        }}
+        onDragStart={(event) => {
+          if (!canDrag) {
+            event.preventDefault();
+            return;
+          }
+          event.dataTransfer.setData('text/plain', String(c.id));
+          event.dataTransfer.effectAllowed = 'move';
+          setDragCaddyId(c.id);
+        }}
+        onDragEnd={() => {
+          setDragCaddyId(null);
+          setDropKey(null);
+        }}
+        {...dropBind}
+      >
+        {!col.driving ? (
+          <span
+            className={`cm-ord ${slotAssigned ? '' : 'is-unset'}`}
+            title={slotAssigned ? `${slot}번` : '순번 없음'}
+          >
+            {slot}
+          </span>
+        ) : null}
+        <span className={`cm-cart ${cartNo ? '' : 'is-empty'}`}>
+          {cartNo || '—'}
+        </span>
+        <span className="cm-cell-main">
+          <span className="cm-cell-name">{rosterPersonName(c)}</span>
+          {leave ? <span className="cm-leave-badge">휴직</span> : null}
+          {subgroup ? <span className="cm-band-badge">{subgroup}</span> : null}
+        </span>
+      </button>
+    );
+  }
 
   function startEdit(c: Caddy) {
     setEditingId(c.id);
@@ -1093,9 +1394,12 @@ export default function ManageCaddiesPage() {
 
   return (
     <div
-      className={`caddy-manage mode-${viewMode} density-${density}`}
+      className={`caddy-manage mode-${viewMode} density-${density}${
+        placementEdit ? ' is-placing' : ''
+      }`}
       aria-busy={loading || undefined}
       data-resource-cache={rows.length > 0 ? 'ready' : 'empty'}
+      data-placement-edit={placementEdit ? 'on' : 'off'}
     >
       <header className="cm-header">
         <div>
@@ -1137,12 +1441,32 @@ export default function ManageCaddiesPage() {
               {density === 'compact' ? '일반 보기' : '압축 보기'}
             </button>
           ) : null}
+          {viewMode === 'summary' && !placementEdit ? (
+            <button
+              type="button"
+              className="cm-btn cm-btn-sm"
+              onClick={beginPlacementEdit}
+            >
+              배치 편집
+            </button>
+          ) : null}
           <button
             type="button"
             className={`cm-btn cm-btn-sm ${viewMode === 'detail' ? 'cm-btn-primary' : ''}`}
-            onClick={() =>
-              setViewMode((mode) => (mode === 'detail' ? 'summary' : 'detail'))
-            }
+            onClick={() => {
+              if (viewMode === 'summary' && placementEdit) {
+                if (
+                  dirtyCount > 0 &&
+                  !window.confirm(
+                    '배치 편집을 취소할까요? 저장하지 않은 이동은 사라집니다.'
+                  )
+                ) {
+                  return;
+                }
+                cancelPlacementEdit();
+              }
+              setViewMode((mode) => (mode === 'detail' ? 'summary' : 'detail'));
+            }}
           >
             {viewMode === 'detail' ? '현장표' : '상세 관리'}
           </button>
@@ -1497,6 +1821,45 @@ export default function ManageCaddiesPage() {
             고정카트가 있는 경우만 카트번호를 표시합니다. 조장·기숙사
             카트·1·3부 신청 색은 명단 고정값이 없어 칠하지 않습니다.
           </p>
+          {placementEdit ? (
+            <div className="cm-place-bar" aria-label="배치 편집">
+              <strong>변경 {dirtyCount}명</strong>
+              <button
+                type="button"
+                className="cm-btn cm-btn-sm"
+                disabled={undoStack.length === 0}
+                onClick={undoLastPlacementMove}
+              >
+                되돌리기
+              </button>
+              <button
+                type="button"
+                className="cm-btn cm-btn-sm"
+                disabled={dirtyCount === 0 || previewLoading}
+                onClick={() => void openPlacementPreview()}
+              >
+                변경사항 확인
+              </button>
+              <button
+                type="button"
+                className="cm-btn cm-btn-primary cm-btn-sm"
+                disabled={dirtyCount === 0 || previewLoading}
+                onClick={() => void openPlacementPreview()}
+              >
+                저장
+              </button>
+              <button
+                type="button"
+                className="cm-btn cm-btn-sm"
+                onClick={cancelPlacementEdit}
+              >
+                취소
+              </button>
+            </div>
+          ) : null}
+          {searchLocked ? (
+            <p className="cm-place-warn">{ROSTER_REASSIGN_SEARCH_LOCK_MESSAGE}</p>
+          ) : null}
           <div className="cm-roster-scroll cm-roster-desktop" aria-label="조별 현장표">
             <div className="cm-roster">
               <div className="cm-roster-band is-house">
@@ -1523,53 +1886,61 @@ export default function ManageCaddiesPage() {
                     <span className="cm-roster-col-count">{col.count}명</span>
                   </header>
                   <ul className="cm-roster-list">
-                    {col.members.length === 0 ? (
-                      <li className="cm-roster-empty">없음</li>
-                    ) : (
-                      col.members.map((c) => {
-                        const st = normalizeEmploymentStatus(c.employmentStatus);
-                        const leave = st === 'LEAVE';
-                        const cartNo = cartByCaddyId[c.id];
-                        const subgroup = rosterSubgroupLabel(c.thirdBandSubgroup);
-                        const slot = rosterSlotDisplay(c.teamOrder);
-                        const slotAssigned = hasAssignedRosterSlot(c.teamOrder);
-                        return (
-                          <li key={c.id}>
-                            <button
-                              type="button"
-                              className={`cm-roster-cell ${leave ? 'is-leave' : ''}`}
-                              onClick={() => {
-                                setEditingId(null);
-                                setMenuCaddyId(c.id);
-                              }}
-                            >
-                              {!col.driving ? (
-                                <span
-                                  className={`cm-ord ${slotAssigned ? '' : 'is-unset'}`}
-                                  title={slotAssigned ? `${slot}번` : '순번 없음'}
-                                >
-                                  {slot}
-                                </span>
-                              ) : null}
-                              <span className={`cm-cart ${cartNo ? '' : 'is-empty'}`}>
-                                {cartNo || '—'}
-                              </span>
-                              <span className="cm-cell-main">
-                                <span className="cm-cell-name">
-                                  {rosterPersonName(c)}
-                                </span>
-                                {leave ? (
-                                  <span className="cm-leave-badge">휴직</span>
-                                ) : null}
-                                {subgroup ? (
-                                  <span className="cm-band-badge">{subgroup}</span>
-                                ) : null}
-                              </span>
-                            </button>
-                          </li>
-                        );
-                      })
-                    )}
+                    {(() => {
+                      const showSlots =
+                        placementEdit && !col.driving && !searchLocked;
+                      if (!showSlots) {
+                        if (col.members.length === 0) {
+                          return <li className="cm-roster-empty">없음</li>;
+                        }
+                        return col.members.map((c) => (
+                          <li key={c.id}>{renderDesktopRosterCell(c, col)}</li>
+                        ));
+                      }
+                      const { slots, unset } = listRosterEditSlots(
+                        col.members,
+                        col.key
+                      );
+                      return (
+                        <>
+                          {slots.map((slot, index) => {
+                            if (!slot.caddy) {
+                              const key = rosterPlacementKey(
+                                col.key,
+                                slot.teamOrder
+                              );
+                              return (
+                                <li key={`gap-${col.key}-${slot.teamOrder}`}>
+                                  <div
+                                    className={`cm-roster-gap${
+                                      dropKey === key ? ' is-drop-target' : ''
+                                    }`}
+                                    {...bindDropTarget(col.key, slot.teamOrder)}
+                                  >
+                                    <span className="cm-ord">{slot.teamOrder}</span>
+                                    <span className="cm-gap-label">빈자리</span>
+                                  </div>
+                                </li>
+                              );
+                            }
+                            return (
+                              <li
+                                key={`${slot.caddy.id}-${slot.teamOrder}-${index}`}
+                              >
+                                {renderDesktopRosterCell(slot.caddy, col, {
+                                  dropOrder: slot.teamOrder,
+                                })}
+                              </li>
+                            );
+                          })}
+                          {unset.map((c) => (
+                            <li key={`unset-${c.id}`}>
+                              {renderDesktopRosterCell(c, col)}
+                            </li>
+                          ))}
+                        </>
+                      );
+                    })()}
                   </ul>
                 </section>
               ))}
@@ -1670,8 +2041,28 @@ export default function ManageCaddiesPage() {
                     <li key={c.id}>
                       <button
                         type="button"
-                        className={`cm-mobile-row ${leave ? 'is-leave' : ''}`}
+                        className={`cm-mobile-row${leave ? ' is-leave' : ''}${
+                          dirtyIdSet.has(c.id) ? ' is-dirty' : ''
+                        }`}
                         onClick={() => {
+                          if (placementEdit) {
+                            if (searchLocked) {
+                              setMessage(ROSTER_REASSIGN_SEARCH_LOCK_MESSAGE);
+                              return;
+                            }
+                            if (!canRosterReassignCaddy(c)) {
+                              setMessage(
+                                '드라이빙·삭제 캐디는 이번 재배치에서 제외합니다.'
+                              );
+                              return;
+                            }
+                            setMoveCaddyId(c.id);
+                            setMoveTeam(isPrimaryTeam(c.team) ? c.team : '1조');
+                            setPlacementMoveOrder(
+                              hasAssignedRosterSlot(c.teamOrder) ? c.teamOrder : 1
+                            );
+                            return;
+                          }
                           setEditingId(null);
                           setMenuCaddyId(c.id);
                         }}
@@ -3016,6 +3407,228 @@ export default function ManageCaddiesPage() {
         </section>
       )}
 
+      {moveCaddyId != null && placementEdit ? (
+        <div
+          className="cm-sheet-overlay"
+          role="presentation"
+          onClick={() => setMoveCaddyId(null)}
+        >
+          <div
+            className="cm-sheet"
+            role="dialog"
+            aria-label="조·순번 이동"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {(() => {
+              const mover =
+                draftRows.find((row) => row.id === moveCaddyId) ??
+                displayRows.find((row) => row.id === moveCaddyId) ??
+                null;
+              if (!mover) return <p className="cm-muted">대상을 찾을 수 없습니다.</p>;
+              const targets = listRosterMoveTargets(draftRows, moveTeam, mover.id);
+              return (
+                <>
+                  <div className="cm-sheet-head">
+                    <div className="cm-sheet-title">
+                      <strong>조·순번 이동</strong>
+                      <span className="cm-sheet-sub">
+                        {rosterPersonName(mover)} ·{' '}
+                        {formatRosterSlotLabel(mover.team, mover.teamOrder)}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="cm-btn cm-btn-sm"
+                      onClick={() => setMoveCaddyId(null)}
+                    >
+                      닫기
+                    </button>
+                  </div>
+                  <div className="cm-form-grid">
+                    <label>
+                      이동할 조
+                      <select
+                        value={moveTeam}
+                        onChange={(e) => {
+                          setMoveTeam(e.target.value);
+                          setPlacementMoveOrder(1);
+                        }}
+                      >
+                        {PRIMARY_TEAMS.map((team) => (
+                          <option key={team} value={team}>
+                            {team}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      이동할 순번
+                      <select
+                        value={placementMoveOrder}
+                        onChange={(e) => setPlacementMoveOrder(Number(e.target.value) || 1)}
+                      >
+                        {targets.map((target) => (
+                          <option key={target.teamOrder} value={target.teamOrder}>
+                            {target.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="cm-sheet-actions" style={{ marginTop: 12 }}>
+                    <button
+                      type="button"
+                      className="cm-btn cm-btn-primary"
+                      onClick={() => {
+                        if (applyLocalMove(mover.id, moveTeam, placementMoveOrder)) {
+                          setMoveCaddyId(null);
+                        }
+                      }}
+                    >
+                      이동 반영
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        </div>
+      ) : null}
+
+      {previewOpen ? (
+        <div
+          className="cm-sheet-overlay"
+          role="presentation"
+          onClick={() => {
+            if (!applyLoading) setPreviewOpen(false);
+          }}
+        >
+          <div
+            className="cm-sheet cm-sheet-preview"
+            role="dialog"
+            aria-label="변경사항 확인"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="cm-sheet-head">
+              <div className="cm-sheet-title">
+                <strong>변경사항 확인</strong>
+                <span className="cm-sheet-sub">
+                  {previewLoading
+                    ? '미리보기 확인 중…'
+                    : previewResult
+                      ? `변경 예정: 총 ${previewResult.changes.length}명`
+                      : '저장 전 미리보기'}
+                </span>
+              </div>
+              <button
+                type="button"
+                className="cm-btn cm-btn-sm"
+                disabled={applyLoading}
+                onClick={() => setPreviewOpen(false)}
+              >
+                닫기
+              </button>
+            </div>
+            {previewLoading ? (
+              <p className="cm-muted">Preview를 불러오는 중…</p>
+            ) : (
+              <>
+                {rosterPreviewHasBlockingError(previewError, previewIssues) ? (
+                  <div className="cm-place-block" role="alert">
+                    <strong>저장할 수 없습니다</strong>
+                    {previewError ? (
+                      <p className="cm-place-error">{previewError}</p>
+                    ) : null}
+                    {previewIssues.length > 0 ? (
+                      <ul className="cm-place-issues">
+                        {previewIssues.map((issue, index) => (
+                          <li key={`${issue.code}-${index}`}>{issue.message}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
+                ) : null}
+                {previewResult ? (
+                  <ol className="cm-place-preview-list">
+                    {previewResult.changes.map((change) => {
+                      const typeNote = formatReassignTypeNote(change);
+                      return (
+                        <li key={change.id}>
+                          <strong>{change.name}</strong>
+                          <span>
+                            {formatRosterSlotLabel(
+                              change.from.team,
+                              change.from.teamOrder
+                            )}{' '}
+                            →{' '}
+                            {formatRosterSlotLabel(
+                              change.to.team,
+                              change.to.teamOrder
+                            )}
+                          </span>
+                          {typeNote ? (
+                            <em className="cm-place-type-note">{typeNote}</em>
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                  </ol>
+                ) : null}
+                {previewResult?.existingAnomalies?.length ? (
+                  <div className="cm-place-anomaly">
+                    <button
+                      type="button"
+                      className="cm-place-anomaly-toggle"
+                      aria-expanded={previewAnomaliesOpen}
+                      onClick={() =>
+                        setPreviewAnomaliesOpen((open) => !open)
+                      }
+                    >
+                      {formatRosterPreviewAnomalySummary(
+                        previewResult.existingAnomalies.length
+                      )}
+                    </button>
+                    {previewAnomaliesOpen ? (
+                      <ul className="cm-place-anomaly-list">
+                        {previewResult.existingAnomalies.map((issue, index) => (
+                          <li key={`anom-${issue.code}-${index}`}>
+                            {issue.message}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
+                ) : null}
+                <div className="cm-sheet-actions">
+                  {staleRoster ? (
+                    <button
+                      type="button"
+                      className="cm-btn cm-btn-primary"
+                      onClick={() => void reloadAfterStaleRoster()}
+                    >
+                      명단 다시 불러오기
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="cm-btn cm-btn-primary"
+                      disabled={
+                        !previewResult?.ok ||
+                        applyLoading ||
+                        previewResult.changes.length === 0
+                      }
+                      onClick={() => void applyPlacementPreview()}
+                    >
+                      {applyLoading ? '저장 중…' : '저장'}
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      ) : null}
+
       {menuCaddy && (
         <div
           className="cm-sheet-overlay"
@@ -3465,6 +4078,143 @@ export default function ManageCaddiesPage() {
           font-size: 0.74rem;
           line-height: 1.45;
         }
+        .cm-place-bar {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          gap: 6px;
+          margin: 0 0 8px;
+          font-size: 0.78rem;
+        }
+        .cm-place-bar strong {
+          font-size: 0.78rem;
+          color: var(--vh-green-900);
+        }
+        .cm-place-warn,
+        .cm-place-error {
+          margin: 0 0 8px;
+          padding: 6px 10px;
+          border-radius: 8px;
+          font-size: 0.78rem;
+          line-height: 1.4;
+        }
+        .cm-place-warn {
+          color: #92400e;
+          background: #fef3c7;
+        }
+        .cm-place-error {
+          color: var(--vh-danger);
+          background: var(--vh-danger-bg);
+        }
+        .cm-place-issues {
+          margin: 0 0 8px;
+          padding-left: 18px;
+          color: var(--vh-danger);
+          font-size: 0.8rem;
+        }
+        .cm-place-block {
+          margin: 0 0 10px;
+          padding: 10px 12px;
+          border-radius: 10px;
+          background: var(--vh-danger-bg);
+        }
+        .cm-place-block strong {
+          display: block;
+          margin-bottom: 6px;
+          color: var(--vh-danger);
+          font-size: 0.86rem;
+        }
+        .cm-place-block .cm-place-error {
+          margin: 0 0 6px;
+        }
+        .cm-place-block .cm-place-issues {
+          margin: 0;
+        }
+        .cm-place-preview-list {
+          list-style: none;
+          margin: 0;
+          padding: 0;
+          overflow: auto;
+          min-height: 4.5rem;
+          max-height: min(42vh, 360px);
+        }
+        .cm-place-preview-list li {
+          display: grid;
+          gap: 2px;
+          padding: 8px 0;
+          border-bottom: 1px solid #ececec;
+          font-size: 0.86rem;
+        }
+        .cm-place-type-note {
+          font-size: 0.75rem;
+          color: var(--vh-muted);
+          font-style: normal;
+        }
+        .cm-place-anomaly {
+          margin-top: 10px;
+        }
+        .cm-place-anomaly-toggle {
+          width: 100%;
+          min-height: 40px;
+          padding: 8px 10px;
+          border: 1px solid #f3d19a;
+          border-radius: 8px;
+          background: #fffbeb;
+          color: #92400e;
+          font-size: 0.82rem;
+          font-weight: 700;
+          text-align: left;
+        }
+        .cm-place-anomaly-list {
+          margin: 6px 0 0;
+          padding-left: 18px;
+          max-height: 22vh;
+          overflow: auto;
+          color: #92400e;
+          font-size: 0.78rem;
+        }
+        .cm-sheet-preview {
+          max-width: 560px;
+          max-height: min(88vh, 720px);
+          display: flex;
+          flex-direction: column;
+        }
+        .cm-sheet-preview .cm-sheet-actions {
+          position: sticky;
+          bottom: 0;
+          z-index: 1;
+          margin-top: 10px;
+          padding-top: 10px;
+          background: #fff;
+          border-top: 1px solid #ececec;
+        }
+        .cm-roster-gap {
+          display: grid;
+          grid-template-columns: 1.1em minmax(0, 1fr);
+          column-gap: 4px;
+          align-items: center;
+          min-height: 16px;
+          padding: 1px 5px;
+          color: #94a3b8;
+          font-size: 0.66rem;
+          border-bottom: 1px dashed #e2e8f0;
+        }
+        .cm-gap-label { color: #cbd5e1; }
+        .cm-roster-cell.is-dirty,
+        .cm-mobile-row.is-dirty {
+          background: #fff7d6;
+          box-shadow: inset 2px 0 0 #d4a017;
+        }
+        .cm-roster-cell.is-dragging { opacity: 0.42; }
+        .cm-roster-cell.is-drop-target,
+        .cm-roster-gap.is-drop-target {
+          outline: 2px solid #1f4d3a;
+          background: #dcfce7;
+        }
+        .caddy-manage.density-compact .cm-roster-gap {
+          grid-template-columns: 1em minmax(0, 1fr);
+          min-height: 14px;
+        }
         .caddy-manage {
           --cm-col-min: 168px;
           --cm-band-h: 26px;
@@ -3810,6 +4560,7 @@ export default function ManageCaddiesPage() {
           cursor: pointer;
         }
         .cm-mobile-row.is-leave { opacity: 0.75; }
+        .cm-mobile-row.is-dirty { opacity: 1; }
         .cm-mobile-row-body {
           display: grid;
           gap: 2px;

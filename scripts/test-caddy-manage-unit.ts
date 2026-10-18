@@ -1084,6 +1084,14 @@ console.log("== caddies roster board UI source ==");
       !/cm-ord[\s\S]{0,40}\{c\.id\}/.test(src),
     "roster cell does not render caddyId"
   );
+  assert(
+    /배치 편집/.test(src) &&
+      /조·순번 이동/.test(src) &&
+      /postCaddyReassignPreview/.test(src) &&
+      /postCaddyReassignApply/.test(src) &&
+      /previewResult\.base/.test(src),
+    "현장표 placement edit previews then applies with server base"
+  );
 }
 
 console.log("== caddy delete UX (soft-retire, 삭제/삭제됨/복귀) ==");

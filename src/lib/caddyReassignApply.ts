@@ -15,8 +15,6 @@ import {
   CADDY_REASSIGN_AUDIT_ENTITY,
   CaddyReassignError,
   assertReassignBase,
-  buildCaddyReassignLockSql,
-  buildCaddyReassignUpdateSql,
   caddyReassignRequestSchema,
   planCaddyReassign,
   throwIfPlanBlocked,
@@ -29,6 +27,10 @@ import {
   type ReassignPlacement,
   type ReassignPlan,
 } from "@/lib/caddyReassign";
+import {
+  buildCaddyReassignLockSql,
+  buildCaddyReassignUpdateSql,
+} from "@/lib/caddyReassignSql";
 
 export type ReassignLockedRow = {
   id: number;
