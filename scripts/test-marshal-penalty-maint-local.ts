@@ -9,7 +9,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { assertLocalDatabaseUrl } from "../src/lib/dbSafety";
-import { APPLIED_AFTER, PENDING_NAMES, TASK } from "./maintenance/marshalPenaltyMaint";
+import {
+  APPLIED_AFTER,
+  EXPECTED_PROD_RECONSTRUCTED_CHECKSUMS,
+  PENDING_NAMES,
+  RECONSTRUCTED_NAMES,
+  TASK,
+  gitChecksumFor,
+} from "./maintenance/marshalPenaltyMaint";
 
 const ROOT = path.resolve(__dirname, "..");
 const DUMP = "/tmp/marshal-rehearse/at53-seeded.dump";
@@ -225,6 +232,121 @@ try {
     });
     assert(apply.status !== 0, "unexpected checksum apply refused");
     assert(psql("caddy_maint_seed53", "SELECT COUNT(*) FROM _prisma_migrations;") === "53", "checksum refuse did not migrate");
+  }
+
+  console.log("== checksum sync transaction + second-update rollback ==");
+  createDb("caddy_maint_csync", DUMP);
+  createDb("caddy_maint_csync_fail", DUMP);
+  {
+    const names = [...RECONSTRUCTED_NAMES];
+    const oldA = EXPECTED_PROD_RECONSTRUCTED_CHECKSUMS[names[0]];
+    const oldB = EXPECTED_PROD_RECONSTRUCTED_CHECKSUMS[names[1]];
+    const gitA = gitChecksumFor(names[0]);
+    const gitB = gitChecksumFor(names[1]);
+    const stampSql = `SELECT migration_name || '|' || checksum || '|' || started_at::text || '|' || COALESCE(finished_at::text,'') || '|' || applied_steps_count::text || '|' || COALESCE(rolled_back_at::text,'') || '|' || md5(COALESCE(logs,''))
+       FROM "_prisma_migrations" WHERE migration_name IN ('${names[0]}','${names[1]}')
+       ORDER BY migration_name`;
+    for (const db of ["caddy_maint_csync", "caddy_maint_csync_fail"] as const) {
+      psql(db, `UPDATE "_prisma_migrations" SET checksum = '${oldA}' WHERE migration_name = '${names[0]}'`);
+      psql(db, `UPDATE "_prisma_migrations" SET checksum = '${oldB}' WHERE migration_name = '${names[1]}'`);
+    }
+    const beforeFail = psql("caddy_maint_csync_fail", stampSql);
+    const fail = runMaint("caddy_maint_csync_fail", ["--sync-checksums"], {
+      PROD_MAINTENANCE_CONFIRM: TASK.checksumLocal,
+      MARSHAL_MAINT_FAIL_SECOND_CHECKSUM_UPDATE: "1",
+    });
+    assert(fail.status !== 0, "injected second UPDATE exits non-zero");
+    assert(fail.out.includes("injected second checksum UPDATE failure"), "inject message");
+    const afterFail = psql("caddy_maint_csync_fail", stampSql);
+    assert(afterFail === beforeFail, "failed tx left both reconstructed rows unchanged");
+    assert(
+      psql(
+        "caddy_maint_csync_fail",
+        `SELECT checksum FROM "_prisma_migrations" WHERE migration_name = '${names[0]}'`
+      ) === oldA,
+      "first checksum rolled back to expected old"
+    );
+    assert(
+      psql(
+        "caddy_maint_csync_fail",
+        `SELECT checksum FROM "_prisma_migrations" WHERE migration_name = '${names[1]}'`
+      ) === oldB,
+      "second checksum never committed"
+    );
+
+    const beforeOk = psql(
+      "caddy_maint_csync",
+      `SELECT started_at::text || '|' || COALESCE(finished_at::text,'') || '|' || applied_steps_count::text || '|' || COALESCE(rolled_back_at::text,'') || '|' || md5(COALESCE(logs,''))
+       FROM "_prisma_migrations" WHERE migration_name IN ('${names[0]}','${names[1]}')
+       ORDER BY migration_name`
+    );
+    const ok = runMaint("caddy_maint_csync", ["--sync-checksums"], {
+      PROD_MAINTENANCE_CONFIRM: TASK.checksumLocal,
+    });
+    assert(ok.status === 0, "checksum sync exits 0");
+    const j = jsonFrom(ok.out);
+    assert(j.ok === true, "checksum sync ok");
+    assert(j.wrote === true, "checksum sync wrote");
+    const sync = j.checksumSync as {
+      transaction: string;
+      updated: number;
+      rows: Array<{
+        name: string;
+        action: string;
+        identityUnchanged: boolean;
+        checksumMatchesGitAfter: boolean;
+        afterChecksum: string;
+      }>;
+    };
+    assert(sync.transaction === "committed", "single transaction committed");
+    assert(sync.updated === 2, "updated both reconstructed rows");
+    assert(
+      sync.rows.every((r) => r.action === "update" && r.identityUnchanged && r.checksumMatchesGitAfter),
+      "identity unchanged and checksums match git"
+    );
+    assert(
+      psql(
+        "caddy_maint_csync",
+        `SELECT checksum FROM "_prisma_migrations" WHERE migration_name = '${names[0]}'`
+      ) === gitA,
+      "first checksum is git after sync"
+    );
+    assert(
+      psql(
+        "caddy_maint_csync",
+        `SELECT checksum FROM "_prisma_migrations" WHERE migration_name = '${names[1]}'`
+      ) === gitB,
+      "second checksum is git after sync"
+    );
+    const afterOk = psql(
+      "caddy_maint_csync",
+      `SELECT started_at::text || '|' || COALESCE(finished_at::text,'') || '|' || applied_steps_count::text || '|' || COALESCE(rolled_back_at::text,'') || '|' || md5(COALESCE(logs,''))
+       FROM "_prisma_migrations" WHERE migration_name IN ('${names[0]}','${names[1]}')
+       ORDER BY migration_name`
+    );
+    assert(afterOk === beforeOk, "started_at/finished_at/applied_steps_count/rolled_back_at/logs unchanged");
+
+    psql(
+      "caddy_maint_csync_fail",
+      `UPDATE "_prisma_migrations"
+       SET checksum = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+       WHERE migration_name = '${names[1]}'`
+    );
+    const firstBefore = psql(
+      "caddy_maint_csync_fail",
+      `SELECT checksum FROM "_prisma_migrations" WHERE migration_name = '${names[0]}'`
+    );
+    const bad = runMaint("caddy_maint_csync_fail", ["--sync-checksums"], {
+      PROD_MAINTENANCE_CONFIRM: TASK.checksumLocal,
+    });
+    assert(bad.status !== 0, "unexpected second checksum aborts");
+    assert(
+      psql(
+        "caddy_maint_csync_fail",
+        `SELECT checksum FROM "_prisma_migrations" WHERE migration_name = '${names[0]}'`
+      ) === firstBefore,
+      "abort leaves first reconstructed checksum untouched"
+    );
   }
 
   console.log("== happy local migrate deploy 53 → 60 ==");

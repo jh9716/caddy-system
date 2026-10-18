@@ -196,6 +196,17 @@ assert(INSPECT.includes("refuses apply/sync"), "readonly wrapper rejects apply")
 assert(GUARD.includes("inspect-marshal-penalty-p1p3-prod-readonly"), "guard allowlists inspect wrapper");
 assert(GUARD.includes("deploy-marshal-penalty-p1p3-migration"), "guard knows deploy script");
 assert(GUARD.includes("--sync-checksums"), "guard treats sync as write");
+assert(SRC.includes("$transaction"), "checksum sync uses one DB transaction");
+assert(SRC.includes("FOR UPDATE"), "checksum sync locks reconstructed rows");
+assert(SRC.includes("SET checksum ="), "checksum UPDATE sets checksum only");
+assert(
+  SRC.includes("injected second checksum UPDATE failure"),
+  "can inject second UPDATE failure for local rollback proof"
+);
+assert(
+  SRC.includes("checksum UPDATE failure inject is forbidden on production"),
+  "failure inject refused on production"
+);
 
 console.log("== spawn refusals (no production connect) ==");
 {
