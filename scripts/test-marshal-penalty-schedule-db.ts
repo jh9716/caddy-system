@@ -193,6 +193,82 @@ async function main() {
           .join(",") === `${NOV1},${NOV2},${NOV3}`,
         "initial A Nov1 B Nov2 C Nov3"
       );
+      const nextBefore = before.plan!.nextRotationOrder;
+      const pendingBefore = [...(before.plan!.nextPendingProfileIds || [])].join(",");
+
+      const dry = await previewPenaltyOccurrenceSchedule(
+        { id: occB.id, date: NOV6 },
+        prisma
+      );
+      assert(dry.rotationImpact.fillers.length === 2, "preview proposes two Nov 2 fillers");
+      const wouldFill = dry.rotationImpact.fillers[0];
+      const offVictim = dry.rotationImpact.fillers[1];
+      await prisma.assignment.create({
+        data: {
+          caddyId: wouldFill.caddyId,
+          type: "SICK",
+          startDate: new Date(`${NOV2}T00:00:00`),
+          endDate: new Date(`${NOV2}T00:00:00`),
+          comment: TAG,
+        },
+      });
+      const afterSick = await previewPenaltyOccurrenceSchedule(
+        { id: occB.id, date: NOV6 },
+        prisma
+      );
+      assert(
+        !afterSick.rotationImpact.fillers.some((row) => row.caddyId === wouldFill.caddyId),
+        "sick marshal is not chosen as Nov 2 filler"
+      );
+      await prisma.assignment.deleteMany({
+        where: { caddyId: wouldFill.caddyId, comment: TAG, type: "SICK" },
+      });
+
+      await prisma.assignment.create({
+        data: {
+          caddyId: offVictim.caddyId,
+          type: "LONG_SICK",
+          startDate: new Date(`${NOV2}T00:00:00`),
+          endDate: new Date(`${NOV2}T00:00:00`),
+          comment: TAG,
+        },
+      });
+      const afterLongSick = await previewPenaltyOccurrenceSchedule(
+        { id: occB.id, date: NOV6 },
+        prisma
+      );
+      assert(
+        !afterLongSick.rotationImpact.fillers.some((row) => row.caddyId === offVictim.caddyId),
+        "long-sick marshal is not chosen as Nov 2 filler"
+      );
+      await prisma.assignment.deleteMany({
+        where: { caddyId: offVictim.caddyId, comment: TAG, type: "LONG_SICK" },
+      });
+
+      await prisma.assignment.create({
+        data: {
+          caddyId: offVictim.caddyId,
+          type: "OFF",
+          startDate: new Date(`${NOV2}T00:00:00`),
+          endDate: new Date(`${NOV2}T00:00:00`),
+          comment: TAG,
+        },
+      });
+      const afterOff = await previewPenaltyOccurrenceSchedule(
+        { id: occB.id, date: NOV6 },
+        prisma
+      );
+      const offFiller = afterOff.rotationImpact.fillers.find(
+        (row) => row.caddyId === offVictim.caddyId
+      );
+      assert(
+        offFiller != null && offFiller.warning === "휴무 충돌",
+        "OFF filler is allowed with P1 warning"
+      );
+      await prisma.assignment.deleteMany({
+        where: { caddyId: offVictim.caddyId, comment: TAG, type: "OFF" },
+      });
+
       const preview = await previewPenaltyOccurrenceSchedule(
         { id: occB.id, date: NOV6 },
         prisma
@@ -201,6 +277,11 @@ async function main() {
       assert(
         preview.otherOccurrences.every((row) => row.unchanged),
         "preview keeps other occurrence dates"
+      );
+      assert(
+        preview.rotationImpact.nextRotationUnchanged === true &&
+          preview.rotationImpact.nextRotationOrder === nextBefore,
+        "preview does not change month-end nextRotationOrder"
       );
       const applied = await applyPenaltyOccurrenceSchedule(
         { id: occB.id, date: NOV6, previewToken: preview.previewToken },
@@ -225,6 +306,55 @@ async function main() {
           (s) => s.date === NOV2 && s.caddyId === B.caddy.id && s.source === "PENALTY"
         ).length === 0,
         "B penalty pair left Nov 2"
+      );
+      assert(
+        after.plan!.nextRotationOrder === nextBefore &&
+          [...(after.plan!.nextPendingProfileIds || [])].join(",") === pendingBefore,
+        "month-end rotation cursor unchanged after date apply"
+      );
+      const appliedNov2 = after.plan!.slots
+        .filter((s) => s.date === NOV2)
+        .map((s) => `${s.id}:${s.caddyId}:${s.source}`)
+        .sort();
+      const previewNov2 = preview.fromDay.after
+        .map((s) => `${s.id}:${s.caddyId}:${s.source}`)
+        .sort();
+      assert(appliedNov2.join("|") === previewNov2.join("|"), "Apply Nov 2 matches Preview");
+      const appliedNov6 = after.plan!.slots
+        .filter((s) => s.date === NOV6)
+        .map((s) => `${s.id}:${s.caddyId}:${s.source}`)
+        .sort();
+      const previewNov6 = preview.toDay.after
+        .map((s) => `${s.id}:${s.caddyId}:${s.source}`)
+        .sort();
+      assert(appliedNov6.join("|") === previewNov6.join("|"), "Apply Nov 6 matches Preview");
+    }
+
+    section("재생성 후에도 AUTO A/C 날짜 유지");
+    {
+      await generateTarget();
+      const view = await getMonthPlan({ year: YEAR, month: TARGET_MONTH });
+      const byId = new Map(view.penaltyOccurrences.map((row) => [row.id, row]));
+      const a = byId.get(occA.id);
+      const b = byId.get(occB.id);
+      const c = byId.get(occC.id);
+      assert(
+        a?.scheduledOn === NOV1 && a.pinnedOn == null && a.scheduleSource === "AUTO",
+        "regenerate keeps AUTO A on Nov 1"
+      );
+      assert(
+        c?.scheduledOn === NOV3 && c.pinnedOn == null && c.scheduleSource === "AUTO",
+        "regenerate keeps AUTO C on Nov 3; does not pull C to Nov 2"
+      );
+      assert(
+        b?.scheduledOn === NOV6 && b.pinnedOn === NOV6 && b.scheduleSource === "MANUAL",
+        "regenerate keeps MANUAL B on Nov 6"
+      );
+      assert(
+        penaltyDays(view.plan!, A.caddy.id).join(",") === NOV1 &&
+          penaltyDays(view.plan!, C.caddy.id).join(",") === NOV3 &&
+          penaltyDays(view.plan!, B.caddy.id).join(",") === NOV6,
+        "FULL_DAY pairs still follow frozen dates after replace=true"
       );
     }
 
@@ -292,11 +422,24 @@ async function main() {
 
     section("수동 지정 후 재생성");
     {
+      const beforeGen = await getMonthPlan({ year: YEAR, month: TARGET_MONTH });
+      const aBefore = beforeGen.penaltyOccurrences.find((row) => row.id === occA.id);
+      const cBefore = beforeGen.penaltyOccurrences.find((row) => row.id === occC.id);
       await generateTarget();
       const view = await getMonthPlan({ year: YEAR, month: TARGET_MONTH });
+      const a = view.penaltyOccurrences.find((row) => row.id === occA.id);
       const b = view.penaltyOccurrences.find((row) => row.id === occB.id);
+      const c = view.penaltyOccurrences.find((row) => row.id === occC.id);
       assert(b?.pinnedOn === NOV6 && b.scheduledOn === NOV6, "pin survives regenerate");
       assert(b?.scheduleSource === "MANUAL", "source stays MANUAL");
+      assert(
+        a?.scheduledOn === aBefore?.scheduledOn && a?.scheduleSource === "MANUAL",
+        "A pinned date survives regenerate"
+      );
+      assert(
+        c?.scheduledOn === cBefore?.scheduledOn && c?.scheduledOn === NOV3,
+        "AUTO C stays Nov 3; not pulled forward"
+      );
     }
 
     section("병가 날짜 거부");

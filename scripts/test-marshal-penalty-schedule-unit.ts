@@ -15,6 +15,7 @@ import {
   assertScheduleTargetMutable,
   makeSchedulePreviewToken,
   parsePinnedOn,
+  pickRotationFillers,
   planLocalFullDayMove,
   type ScheduleSlotSnapshot,
 } from "../src/lib/marshalPenaltyScheduleDomain";
@@ -150,7 +151,7 @@ section("pinned date guards");
   );
 }
 
-section("policy A: pin B, auto A/C fill remaining from day 1");
+section("policy A: pin B, OPEN autos fill remaining from day 1");
 {
   const packed = scheduleOccurrencesForMonth({
     dates: ["2095-11-01", "2095-11-02", "2095-11-03", "2095-11-06"],
@@ -169,7 +170,55 @@ section("policy A: pin B, auto A/C fill remaining from day 1");
       .sort((a, b) => a.id - b.id)
       .map((row) => `${row.id}@${row.date}${row.pinned ? "P" : ""}`)
       .join(",") === "1@2095-11-01,2@2095-11-06P,3@2095-11-02",
-    "regenerate keeps B pin; A/C pack into remaining days"
+    "first generate / leftover OPEN packs around the pin"
+  );
+}
+
+section("held AUTO dates stay put around a pin");
+{
+  const packed = scheduleOccurrencesForMonth({
+    dates: ["2095-11-01", "2095-11-02", "2095-11-03", "2095-11-06"],
+    amSlots: 2,
+    pmSlots: 1,
+    occurrences: [
+      { ...occ(1, 10, "2095-10-01"), heldOn: "2095-11-01" },
+      occ(2, 20, "2095-10-02", "2095-11-06"),
+      { ...occ(3, 30, "2095-10-03"), heldOn: "2095-11-03" },
+    ],
+    existingByDate: new Map(),
+    statusByDateCaddy: new Map(),
+  });
+  assert(
+    packed.assignments
+      .sort((a, b) => a.id - b.id)
+      .map((row) => `${row.id}@${row.date}${row.pinned ? "P" : ""}`)
+      .join(",") === "1@2095-11-01,2@2095-11-06P,3@2095-11-03",
+    "regenerate keeps A Nov1 and C Nov3; does not pull C to Nov2"
+  );
+}
+
+section("held date that is now sick stays leftover, is not moved");
+{
+  const packed = scheduleOccurrencesForMonth({
+    dates: ["2095-11-01", "2095-11-02", "2095-11-03"],
+    amSlots: 2,
+    pmSlots: 1,
+    occurrences: [
+      { ...occ(1, 10, "2095-10-01"), heldOn: "2095-11-01" },
+      { ...occ(3, 30, "2095-10-03"), heldOn: "2095-11-03" },
+    ],
+    existingByDate: new Map(),
+    statusByDateCaddy: new Map([
+      ["2095-11-03:30", { kind: "hard_skip" as const, message: "병가" }],
+    ]),
+  });
+  assert(
+    packed.assignments.map((row) => `${row.id}@${row.date}`).join(",") === "1@2095-11-01",
+    "A held date kept"
+  );
+  assert(
+    packed.leftover.length === 1 && packed.leftover[0].id === 3,
+    "C is leftover instead of silently moving to Nov 2"
   );
 }
 
@@ -185,14 +234,14 @@ section("apply-style freeze is not packer's job — local move keeps C");
     slot({ id: 5, date: "2095-11-06", shift: "AM", slotIndex: 1, caddyId: 60, source: "ROTATION" }),
     slot({ id: 6, date: "2095-11-06", shift: "PM", slotIndex: 0, caddyId: 70, source: "ROTATION" }),
   ];
+  const roster = [member(1, "A"), member(2, "B"), member(3, "C"), member(4, "D"), member(5, "E"), member(6, "F"), member(7, "G")];
   const move = planLocalFullDayMove({
     fromDate: "2095-11-02",
     toDate: "2095-11-06",
     moving: { caddyId: 20, profileId: 2 },
     fromSlots,
     toSlots,
-    members: [member(1, "A"), member(2, "B"), member(3, "C"), member(4, "D"), member(5, "E"), member(6, "F"), member(7, "G")],
-    monthCounts: new Map(),
+    members: roster,
   });
   assert(
     move.toUpdates.every((row) => row.caddyId === 20 && row.source === "PENALTY") &&
@@ -200,9 +249,8 @@ section("apply-style freeze is not packer's job — local move keeps C");
     "B FULL_DAY pair moves to Nov 6"
   );
   assert(
-    move.fromUpdates.length === 2 &&
-      move.fromUpdates.every((row) => row.source === "ROTATION" && row.caddyId !== 20),
-    "Nov 2 penalty pair becomes rotation fillers"
+    move.fillers.map((row) => row.caddyId).join(",") === "50,60",
+    "fillers continue rotation after remaining D (40) → E then F"
   );
   assert(
     move.displacedRotation.map((row) => row.caddyId).join(",") === "50,70",
@@ -226,7 +274,6 @@ section("local move does not touch substitutes");
         fromSlots: [],
         toSlots,
         members: [member(1, "A"), member(2, "B")],
-        monthCounts: new Map(),
       }),
     "override_conflict",
     "cannot displace substitute to place FULL_DAY"
@@ -251,10 +298,62 @@ section("same-day penalty conflict");
           slot({ id: 6, date: "2095-11-06", shift: "AM", slotIndex: 1, caddyId: 60, source: "ROTATION" }),
         ],
         members: [member(1, "A"), member(2, "B"), member(3, "C")],
-        monthCounts: new Map(),
       }),
     "date_taken",
     "cannot land on another penalty day"
+  );
+}
+
+section("fillers skip sick, keep off with warning");
+{
+  const roster = [member(1, "A"), member(2, "B"), member(3, "C"), member(4, "D"), member(5, "E"), member(6, "F"), member(7, "G")];
+  const statusByDateCaddy = new Map([
+    ["2095-11-02:50", { kind: "hard_skip" as const, message: "병가" }],
+    ["2095-11-02:60", { kind: "off_conflict" as const, message: "휴무 충돌" }],
+  ]);
+  const picked = pickRotationFillers({
+    date: "2095-11-02",
+    members: roster,
+    busyCaddyIds: new Set([20, 40]),
+    statusByDateCaddy,
+    anchor: { caddyId: 40, profileId: 4 },
+    count: 2,
+  });
+  assert(
+    picked.map((row) => row.member.caddyId).join(",") === "60,70",
+    "skips sick E (50), keeps off F then G"
+  );
+  assert(picked[0].warning === "휴무 충돌", "OFF filler carries warning");
+  assert(picked[1].warning == null, "next filler has no warning");
+  throws(
+    () =>
+      pickRotationFillers({
+        date: "2095-11-02",
+        members: roster,
+        busyCaddyIds: new Set([20, 40]),
+        statusByDateCaddy,
+        anchor: null,
+        count: 2,
+      }),
+    "rotation_unresolvable",
+    "no remaining rotation → 409, no arbitrary pick"
+  );
+  throws(
+    () =>
+      pickRotationFillers({
+        date: "2095-11-02",
+        members: roster,
+        busyCaddyIds: new Set([10, 20, 30, 40]),
+        statusByDateCaddy: new Map([
+          ["2095-11-02:50", { kind: "hard_skip", message: "병가" }],
+          ["2095-11-02:60", { kind: "hard_skip", message: "장기병가" }],
+          ["2095-11-02:70", { kind: "hard_skip", message: "병가" }],
+        ]),
+        anchor: { caddyId: 40, profileId: 4 },
+        count: 2,
+      }),
+    "insufficient_marshals",
+    "all remaining sick → 409, no arbitrary pick"
   );
 }
 
