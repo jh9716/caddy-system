@@ -80,7 +80,15 @@ async function cleanup() {
   if (planIds.length) {
     await prisma.marshalMonthSlot.deleteMany({ where: { planId: { in: planIds } } });
     await prisma.marshalPenaltyDuty.deleteMany({ where: { planId: { in: planIds } } });
+    await prisma.marshalPenaltyOccurrence.deleteMany({
+      where: { scheduledPlanId: { in: planIds } },
+    });
     await prisma.marshalMonthPlan.deleteMany({ where: { id: { in: planIds } } });
+  }
+  if (caddyIds.length) {
+    await prisma.marshalPenaltyOccurrence.deleteMany({
+      where: { caddyId: { in: caddyIds } },
+    });
   }
   if (profileIds.length) {
     await prisma.marshalRotationCredit.deleteMany({
