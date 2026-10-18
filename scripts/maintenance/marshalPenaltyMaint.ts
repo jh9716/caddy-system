@@ -866,43 +866,194 @@ function publicReport(bundle: InspectBundle, extra: Record<string, unknown> = {}
   };
 }
 
-async function syncChecksums(prisma: PrismaClient, bundle: InspectBundle): Promise<void> {
+type ChecksumRow = {
+  id: string;
+  migration_name: string;
+  checksum: string;
+  started_at: Date | string;
+  finished_at: Date | string | null;
+  applied_steps_count: bigint | number;
+  rolled_back_at: Date | string | null;
+  logs: string | null;
+};
+
+function isoTs(v: Date | string | null | undefined): string | null {
+  if (v == null) return null;
+  const d = v instanceof Date ? v : new Date(v);
+  if (Number.isNaN(d.getTime())) hold(`HOLD: unreadable timestamp ${String(v)}`);
+  return d.toISOString();
+}
+
+function checksumIdentity(row: ChecksumRow) {
+  return {
+    id: String(row.id),
+    started_at: isoTs(row.started_at),
+    finished_at: isoTs(row.finished_at),
+    applied_steps_count: Number(row.applied_steps_count),
+    rolled_back_at: isoTs(row.rolled_back_at),
+    logsSha256: row.logs == null ? null : sha256Bytes(row.logs),
+  };
+}
+
+function identitiesEqual(
+  a: ReturnType<typeof checksumIdentity>,
+  b: ReturnType<typeof checksumIdentity>
+): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+async function loadChecksumRows(
+  client: { $queryRaw: PrismaClient["$queryRaw"] },
+  forUpdate: boolean
+): Promise<ChecksumRow[]> {
+  const rows: ChecksumRow[] = [];
+  for (const name of RECONSTRUCTED_NAMES) {
+    const found = forUpdate
+      ? await client.$queryRaw<ChecksumRow[]>`
+          SELECT id, migration_name, checksum, started_at, finished_at,
+                 applied_steps_count, rolled_back_at, logs
+          FROM "_prisma_migrations"
+          WHERE migration_name = ${name}
+          FOR UPDATE
+        `
+      : await client.$queryRaw<ChecksumRow[]>`
+          SELECT id, migration_name, checksum, started_at, finished_at,
+                 applied_steps_count, rolled_back_at, logs
+          FROM "_prisma_migrations"
+          WHERE migration_name = ${name}
+        `;
+    if (!found[0]) hold(`HOLD: reconstructed migration ${name} is not applied`);
+    rows.push(found[0]);
+  }
+  return rows;
+}
+
+function classifyChecksumRow(row: ChecksumRow): "already-synced" | "update" {
+  const git = gitChecksumFor(row.migration_name as (typeof RECONSTRUCTED_NAMES)[number]);
+  if (row.checksum === git) return "already-synced";
+  const expectedOld =
+    EXPECTED_PROD_RECONSTRUCTED_CHECKSUMS[
+      row.migration_name as (typeof RECONSTRUCTED_NAMES)[number]
+    ];
+  if (row.checksum !== expectedOld) {
+    hold(
+      `HOLD: ${row.migration_name} checksum is neither git nor the known reconstructed production value`
+    );
+  }
+  return "update";
+}
+
+async function syncChecksums(
+  prisma: PrismaClient,
+  bundle: InspectBundle,
+  env: NodeJS.ProcessEnv
+): Promise<void> {
   if (bundle.holds.length) {
     hold(`HOLD: inspect holds block checksum sync: ${bundle.holds.join("; ")}`);
   }
-  const results: Array<{ name: string; action: string }> = [];
-  for (const name of RECONSTRUCTED_NAMES) {
-    const git = gitChecksumFor(name);
-    const row = (
-      await prisma.$queryRaw<Array<{ checksum: string }>>`
-        SELECT checksum FROM "_prisma_migrations" WHERE migration_name = ${name}
-      `
-    )[0];
-    if (!row) hold(`HOLD: reconstructed migration ${name} is not applied`);
-    if (row.checksum === git) {
-      results.push({ name, action: "already-synced" });
-      continue;
-    }
-    const expectedOld = EXPECTED_PROD_RECONSTRUCTED_CHECKSUMS[name];
-    if (row.checksum !== expectedOld) {
-      hold(
-        `HOLD: ${name} checksum is neither git nor the known reconstructed production value`
-      );
-    }
-    const updated = await prisma.$executeRaw`
-      UPDATE "_prisma_migrations"
-      SET checksum = ${git}
-      WHERE migration_name = ${name}
-        AND checksum = ${expectedOld}
-    `;
-    if (Number(updated) !== 1) {
-      hold(`HOLD: checksum UPDATE for ${name} affected ${updated} rows`);
-    }
-    results.push({ name, action: "updated" });
+  const injectSecondFail = env.MARSHAL_MAINT_FAIL_SECOND_CHECKSUM_UPDATE === "1";
+  if (injectSecondFail && bundle.isProd) {
+    hold("HOLD: checksum UPDATE failure inject is forbidden on production");
   }
+
+  const beforeRows = await loadChecksumRows(prisma, false);
+  const plan = beforeRows.map((row) => ({
+    name: row.migration_name,
+    action: classifyChecksumRow(row),
+    git: gitChecksumFor(row.migration_name as (typeof RECONSTRUCTED_NAMES)[number]),
+    expectedOld:
+      EXPECTED_PROD_RECONSTRUCTED_CHECKSUMS[
+        row.migration_name as (typeof RECONSTRUCTED_NAMES)[number]
+      ],
+    before: checksumIdentity(row),
+    beforeChecksum: row.checksum,
+  }));
+  const needsUpdate = plan.filter((p) => p.action === "update");
+
+  if (needsUpdate.length) {
+    await prisma.$transaction(async (tx) => {
+      const locked = await loadChecksumRows(tx, true);
+      let updates = 0;
+      for (const row of locked) {
+        const item = plan.find((p) => p.name === row.migration_name);
+        if (!item) hold(`HOLD: unexpected locked row ${row.migration_name}`);
+        const live = classifyChecksumRow(row);
+        if (live !== item.action) {
+          hold(`HOLD: ${row.migration_name} changed under lock (${item.action} → ${live})`);
+        }
+        if (!identitiesEqual(item.before, checksumIdentity(row))) {
+          hold(`HOLD: ${row.migration_name} identity columns changed under lock`);
+        }
+        if (live === "already-synced") continue;
+        if (injectSecondFail && updates === 1) {
+          hold("HOLD: injected second checksum UPDATE failure");
+        }
+        const updated = await tx.$executeRaw`
+          UPDATE "_prisma_migrations"
+          SET checksum = ${item.git}
+          WHERE migration_name = ${item.name}
+            AND checksum = ${item.expectedOld}
+        `;
+        if (Number(updated) !== 1) {
+          hold(`HOLD: checksum UPDATE for ${item.name} affected ${updated} rows`);
+        }
+        updates += 1;
+      }
+      const innerAfter = await loadChecksumRows(tx, false);
+      for (const row of innerAfter) {
+        const item = plan.find((p) => p.name === row.migration_name);
+        if (!item) continue;
+        if (row.checksum !== item.git) {
+          hold(`HOLD: ${row.migration_name} checksum was not git after UPDATE`);
+        }
+        if (!identitiesEqual(item.before, checksumIdentity(row))) {
+          hold(`HOLD: ${row.migration_name} non-checksum columns changed inside the transaction`);
+        }
+      }
+    });
+  }
+
+  const afterRows = await loadChecksumRows(prisma, false);
+  const rows = plan.map((item) => {
+    const after = afterRows.find((r) => r.migration_name === item.name);
+    if (!after) hold(`HOLD: ${item.name} missing after checksum sync`);
+    const afterId = checksumIdentity(after);
+    const identityUnchanged = identitiesEqual(item.before, afterId);
+    const checksumMatchesGitAfter = after.checksum === item.git;
+    if (!identityUnchanged) {
+      hold(`HOLD: ${item.name} non-checksum columns changed after checksum sync`);
+    }
+    if (!checksumMatchesGitAfter) {
+      hold(`HOLD: ${item.name} checksum is not git after checksum sync`);
+    }
+    return {
+      name: item.name,
+      action: item.action,
+      beforeChecksum: item.beforeChecksum,
+      afterChecksum: after.checksum,
+      expectedOld: item.expectedOld,
+      git: item.git,
+      before: item.before,
+      after: afterId,
+      identityUnchanged,
+      checksumMatchedExpectedBefore:
+        item.action === "already-synced" || item.beforeChecksum === item.expectedOld,
+      checksumMatchesGitAfter,
+    };
+  });
+
   console.log(
     JSON.stringify(
-      publicReport(bundle, { ok: true, checksumSync: results, wrote: true }),
+      publicReport(bundle, {
+        ok: true,
+        wrote: needsUpdate.length > 0,
+        checksumSync: {
+          transaction: needsUpdate.length > 0 ? "committed" : "not-needed",
+          updated: needsUpdate.length,
+          alreadySynced: plan.length - needsUpdate.length,
+          rows,
+        },
+      }),
       null,
       2
     )
@@ -1000,7 +1151,7 @@ export async function runMarshalPenaltyMaint(opts?: {
     }
 
     if (mode === "sync-checksums") {
-      await syncChecksums(prisma, bundle);
+      await syncChecksums(prisma, bundle, env);
       return 0;
     }
 
