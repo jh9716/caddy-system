@@ -183,29 +183,105 @@ function penaltyPair(
   return { am, pm };
 }
 
-function pickFillers(input: {
+export type FillerPick = {
+  member: RotationMember;
+  warning: string | null;
+};
+
+function remainingRotationAnchor(
+  slots: readonly ScheduleSlotSnapshot[],
+  excludeIds: ReadonlySet<number>
+): ScheduleSlotSnapshot | null {
+  const remaining = slots
+    .filter((slot) => !excludeIds.has(slot.id) && slot.source === "ROTATION")
+    .sort((a, b) => {
+      if (a.shift !== b.shift) return a.shift === "AM" ? -1 : 1;
+      return a.slotIndex - b.slotIndex;
+    });
+  return remaining[remaining.length - 1] ?? null;
+}
+
+/**
+ * 빠진 날에 남은 ROTATION 을 기준으로 순환 순번을 이어 간다.
+ * 병가/장기병가는 건너뛴다. 휴무는 P1과 같이 넣고 경고만 단다.
+ * 횟수 휴리스틱으로 임의 선정하지 않는다.
+ */
+export function pickRotationFillers(input: {
+  date: string;
   members: readonly RotationMember[];
   busyCaddyIds: ReadonlySet<number>;
-  monthCounts: ReadonlyMap<number, number>;
+  statusByDateCaddy: ReadonlyMap<
+    string,
+    { kind: MarshalDayKind; message: string | null }
+  >;
+  anchor: { caddyId: number; profileId: number } | null;
   count: number;
-}): RotationMember[] {
-  const pool = input.members
-    .filter((row) => !input.busyCaddyIds.has(row.caddyId))
-    .sort((a, b) => {
-      const ca = input.monthCounts.get(a.caddyId) ?? 0;
-      const cb = input.monthCounts.get(b.caddyId) ?? 0;
-      if (ca !== cb) return ca - cb;
-      if (a.rotationOrder !== b.rotationOrder) return a.rotationOrder - b.rotationOrder;
-      return a.caddyId - b.caddyId;
-    });
-  if (pool.length < input.count) {
+}): FillerPick[] {
+  if (!input.anchor) {
+    throw new MarshalRosterError(
+      "빠진 날의 순환 기준을 알 수 없어 대체자를 정하지 않습니다. 월표를 다시 생성하세요.",
+      "rotation_unresolvable",
+      409
+    );
+  }
+  const ordered = [...input.members].sort((a, b) => {
+    if (a.rotationOrder !== b.rotationOrder) return a.rotationOrder - b.rotationOrder;
+    return a.caddyId - b.caddyId;
+  });
+  if (ordered.length === 0) {
     throw new MarshalRosterError(
       "비운 날을 채울 마샬이 부족합니다.",
       "insufficient_marshals",
       409
     );
   }
-  return pool.slice(0, input.count);
+  let start = ordered.findIndex(
+    (row) =>
+      row.profileId === input.anchor!.profileId ||
+      row.caddyId === input.anchor!.caddyId
+  );
+  if (start < 0) start = 0;
+  const picked: FillerPick[] = [];
+  const seen = new Set<number>();
+  for (let step = 1; step <= ordered.length * 2 && picked.length < input.count; step += 1) {
+    const member = ordered[(start + step) % ordered.length];
+    if (seen.has(member.caddyId)) continue;
+    seen.add(member.caddyId);
+    if (input.busyCaddyIds.has(member.caddyId)) continue;
+    const status = input.statusByDateCaddy.get(`${input.date}:${member.caddyId}`);
+    if (status?.kind === "hard_skip") continue;
+    picked.push({
+      member,
+      warning: status?.kind === "off_conflict" ? status.message || "휴무 충돌" : null,
+    });
+  }
+  if (picked.length < input.count) {
+    throw new MarshalRosterError(
+      "병가/장기병가를 제외하면 비운 날을 채울 순환 마샬이 부족합니다.",
+      "insufficient_marshals",
+      409
+    );
+  }
+  return picked;
+}
+
+export function overlaySlotPatches(
+  slots: readonly ScheduleSlotSnapshot[],
+  patches: readonly ScheduleSlotPatch[]
+): ScheduleSlotSnapshot[] {
+  const byId = new Map(patches.map((row) => [row.id, row]));
+  return slots.map((slot) => {
+    const patch = byId.get(slot.id);
+    if (!patch) return slot;
+    return {
+      ...slot,
+      caddyId: patch.caddyId,
+      profileId: patch.profileId,
+      source: patch.source,
+      originalCaddyId: patch.originalCaddyId,
+      note: patch.note,
+    };
+  });
 }
 
 /**
@@ -219,13 +295,22 @@ export function planLocalFullDayMove(input: {
   fromSlots: readonly ScheduleSlotSnapshot[];
   toSlots: readonly ScheduleSlotSnapshot[];
   members: readonly RotationMember[];
-  monthCounts: ReadonlyMap<number, number>;
+  statusByDateCaddy?: ReadonlyMap<
+    string,
+    { kind: MarshalDayKind; message: string | null }
+  >;
   offWarning?: boolean;
 }): {
   fromUpdates: ScheduleSlotPatch[];
   toUpdates: ScheduleSlotPatch[];
   displacedRotation: { caddyId: number; shift: string; slotIndex: number }[];
-  fillers: { caddyId: number; shift: string; slotIndex: number }[];
+  fillers: {
+    caddyId: number;
+    profileId: number;
+    shift: string;
+    slotIndex: number;
+    warning: string | null;
+  }[];
 } {
   if (input.fromDate === input.toDate) {
     return { fromUpdates: [], toUpdates: [], displacedRotation: [], fillers: [] };
@@ -269,7 +354,13 @@ export function planLocalFullDayMove(input: {
   }));
 
   const fromUpdates: ScheduleSlotPatch[] = [];
-  const fillers: { caddyId: number; shift: string; slotIndex: number }[] = [];
+  const fillers: {
+    caddyId: number;
+    profileId: number;
+    shift: string;
+    slotIndex: number;
+    warning: string | null;
+  }[] = [];
   if (input.fromDate) {
     const pair = penaltyPair(input.fromSlots, input.moving.caddyId);
     if (!pair) {
@@ -279,18 +370,29 @@ export function planLocalFullDayMove(input: {
         409
       );
     }
+    const exclude = new Set([pair.am.id, pair.pm.id]);
     const remainingBusy = new Set(
       input.fromSlots
-        .filter((slot) => slot.id !== pair.am.id && slot.id !== pair.pm.id)
+        .filter((slot) => !exclude.has(slot.id))
         .map((slot) => slot.caddyId)
     );
     remainingBusy.add(input.moving.caddyId);
-    remainingBusy.add(toAm.caddyId);
-    remainingBusy.add(toPm.caddyId);
-    const picked = pickFillers({
+    const anchorSlot = remainingRotationAnchor(input.fromSlots, exclude);
+    const anchorMember = anchorSlot
+      ? input.members.find(
+          (row) =>
+            row.caddyId === anchorSlot.caddyId ||
+            row.profileId === anchorSlot.profileId
+        )
+      : null;
+    const picked = pickRotationFillers({
+      date: input.fromDate,
       members: input.members,
       busyCaddyIds: remainingBusy,
-      monthCounts: input.monthCounts,
+      statusByDateCaddy: input.statusByDateCaddy || new Map(),
+      anchor: anchorMember
+        ? { caddyId: anchorMember.caddyId, profileId: anchorMember.profileId }
+        : null,
       count: 2,
     });
     const fromPair = [pair.am, pair.pm];
@@ -298,16 +400,18 @@ export function planLocalFullDayMove(input: {
       const filler = picked[i];
       fromUpdates.push({
         id: slot.id,
-        caddyId: filler.caddyId,
-        profileId: filler.profileId,
+        caddyId: filler.member.caddyId,
+        profileId: filler.member.profileId,
         source: "ROTATION",
         originalCaddyId: null,
-        note: null,
+        note: filler.warning,
       });
       fillers.push({
-        caddyId: filler.caddyId,
+        caddyId: filler.member.caddyId,
+        profileId: filler.member.profileId,
         shift: slot.shift,
         slotIndex: slot.slotIndex,
+        warning: filler.warning,
       });
     });
   }

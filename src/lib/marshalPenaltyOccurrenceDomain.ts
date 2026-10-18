@@ -233,7 +233,9 @@ function tryPlaceOccurrence(input: {
  * 후출 정원 2여도 A·B를 같은 날에 넣지 않는다.
  * 앞선 건이 병가로 밀리면 다음 건도 그 날짜 이후로만 본다(순서 보존).
  * 수동 PenaltyDuty가 있는 날은 건너뛴다.
- * pinnedOn(MANUAL)은 그 날짜에 먼저 고정하고, AUTO만 빈 날을 채운다.
+ * pinnedOn(MANUAL)은 그 날짜에 먼저 고정한다.
+ * heldOn(이미 배정된 AUTO)은 그 날짜를 유지하고 다른 날로 당기지 않는다.
+ * 날짜가 없는 OPEN만 빈 날을 채운다.
  * 못 넣은 건 삭제하지 않고 leftover + deferReason.
  */
 export function scheduleOccurrencesForMonth(input: {
@@ -246,6 +248,8 @@ export function scheduleOccurrencesForMonth(input: {
     profileId: number;
     occurredOn: string;
     pinnedOn?: string | null;
+    /** 이미 배정된 AUTO 날짜. 재생성 때 다른 날로 당기지 않는다. */
+    heldOn?: string | null;
   }[];
   existingByDate: ReadonlyMap<string, readonly DayPenaltyInput[]>;
   statusByDateCaddy: ReadonlyMap<string, { kind: MarshalDayKind; message: string | null }>;
@@ -297,8 +301,32 @@ export function scheduleOccurrencesForMonth(input: {
     });
   }
 
+  const held = sortOccurrencesForSchedule(
+    input.occurrences.filter((row) => !row.pinnedOn && Boolean(row.heldOn))
+  );
+  for (const occurrence of held) {
+    const date = occurrence.heldOn as string;
+    const placed = tryPlaceOccurrence({
+      ...placeCtx,
+      date,
+      occurrence,
+      pinned: false,
+    });
+    if (!placed.ok) {
+      leftover.push({ id: occurrence.id, deferReason: placed.reason });
+      continue;
+    }
+    assignments.push({
+      id: occurrence.id,
+      caddyId: occurrence.caddyId,
+      profileId: occurrence.profileId,
+      date,
+      pinned: false,
+    });
+  }
+
   const autos = sortOccurrencesForSchedule(
-    input.occurrences.filter((row) => !row.pinnedOn)
+    input.occurrences.filter((row) => !row.pinnedOn && !row.heldOn)
   );
   let startIndex = 0;
   for (const occurrence of autos) {

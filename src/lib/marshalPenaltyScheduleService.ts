@@ -26,6 +26,7 @@ import {
   assertPreviewToken,
   assertScheduleTargetMutable,
   makeSchedulePreviewToken,
+  overlaySlotPatches,
   parsePinnedOn,
   planLocalFullDayMove,
   scheduleSourceOf,
@@ -65,6 +66,26 @@ function auditRow(input: {
     ip: input.ip || null,
     payload: input.payload as Prisma.InputJsonValue,
   };
+}
+
+function dayPreview(
+  slots: readonly ScheduleSlotSnapshot[],
+  names: ReadonlyMap<number, string>
+) {
+  return [...slots]
+    .sort((a, b) => {
+      if (a.shift !== b.shift) return a.shift === "AM" ? -1 : 1;
+      return a.slotIndex - b.slotIndex;
+    })
+    .map((slot) => ({
+      id: slot.id,
+      shift: slot.shift,
+      slotIndex: slot.slotIndex,
+      caddyId: slot.caddyId,
+      source: slot.source,
+      name: names.get(slot.caddyId) ?? null,
+      warning: slot.note,
+    }));
 }
 
 function snapshotSlot(slot: {
@@ -298,10 +319,6 @@ async function buildSchedulePreview(
   const toSlots = (plan?.slots || [])
     .filter((slot) => formatMarshalYmd(slot.date) === input.date)
     .map(snapshotSlot);
-  const monthCounts = new Map<number, number>();
-  for (const slot of plan?.slots || []) {
-    monthCounts.set(slot.caddyId, (monthCounts.get(slot.caddyId) || 0) + 1);
-  }
 
   let move: ReturnType<typeof planLocalFullDayMove> | null = null;
   if (canApplySlots && (fromDate !== input.date || occurrence.status === "OPEN")) {
@@ -315,7 +332,7 @@ async function buildSchedulePreview(
       fromSlots,
       toSlots,
       members,
-      monthCounts,
+      statusByDateCaddy,
       offWarning: requiresOffConfirm,
     });
   }
@@ -348,6 +365,11 @@ async function buildSchedulePreview(
       unchanged: true,
     }));
 
+  const names = new Map(members.map((row) => [row.caddyId, row.name]));
+  const fromAfter = move
+    ? overlaySlotPatches(fromSlots, move.fromUpdates)
+    : fromSlots;
+  const toAfter = move ? overlaySlotPatches(toSlots, move.toUpdates) : toSlots;
   return {
     occurrence,
     plan,
@@ -369,9 +391,20 @@ async function buildSchedulePreview(
       slotsDeferred,
       canApplySlots,
       otherOccurrences,
+      fromDay: {
+        before: dayPreview(fromSlots, names),
+        after: dayPreview(fromAfter, names),
+      },
+      toDay: {
+        before: dayPreview(toSlots, names),
+        after: dayPreview(toAfter, names),
+      },
       rotationImpact: {
         displaced: move?.displacedRotation ?? [],
         fillers: move?.fillers ?? [],
+        nextRotationOrder: plan?.nextRotationOrder ?? null,
+        nextPendingProfileIds: plan?.nextPendingProfileIds ?? [],
+        nextRotationUnchanged: true,
       },
       fromUpdates: move?.fromUpdates ?? [],
       toUpdates: move?.toUpdates ?? [],

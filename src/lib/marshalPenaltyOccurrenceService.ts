@@ -424,6 +424,19 @@ export async function applyOccurrencesToMonth(
   leftoverIds: number[];
 }> {
   await lockTargetOccurrences(tx, input.year, input.month);
+  const currentRows = await tx.marshalPenaltyOccurrence.findMany({
+    where: {
+      targetYear: input.year,
+      targetMonth: input.month,
+      status: { in: ["OPEN", "SCHEDULED"] },
+    },
+    orderBy: [{ occurredOn: "asc" }, { id: "asc" }],
+  });
+  const heldOnById = new Map<number, string>();
+  for (const row of currentRows) {
+    if (row.pinnedOn || row.status !== "SCHEDULED" || !row.scheduledOn) continue;
+    heldOnById.set(row.id, formatMarshalYmd(row.scheduledOn));
+  }
   await tx.marshalPenaltyOccurrence.updateMany({
     where: { scheduledPlanId: input.planId, status: "SCHEDULED" },
     data: {
@@ -458,6 +471,7 @@ export async function applyOccurrencesToMonth(
       profileId: row.marshalProfileId,
       occurredOn: formatMarshalYmd(row.occurredOn),
       pinnedOn: row.pinnedOn ? formatMarshalYmd(row.pinnedOn) : null,
+      heldOn: heldOnById.get(row.id) ?? null,
     });
   }
   const packed = scheduleOccurrencesForMonth({
