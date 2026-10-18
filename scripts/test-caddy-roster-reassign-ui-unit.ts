@@ -488,8 +488,92 @@ section("click menu / dirty block / drag click");
     ROSTER_DIRTY_IMMEDIATE_BLOCK_MESSAGE.includes("저장하거나 취소"),
     "dirty block asks to save or cancel first"
   );
-  assert(shouldSuppressRosterClick(true) === true, "drag suppresses following click");
-  assert(shouldSuppressRosterClick(false) === false, "plain click opens menu");
+  assert(
+    shouldSuppressRosterClick({ nowMs: 1000, dragEndedAtMs: 900 }) === true,
+    "click 100ms after drag is ignored"
+  );
+  assert(
+    shouldSuppressRosterClick({ nowMs: 1400, dragEndedAtMs: 1000 }) === false,
+    "later intentional click is not ignored"
+  );
+  assert(
+    shouldSuppressRosterClick({ nowMs: 2000, dragEndedAtMs: null }) === false,
+    "no drag timestamp → menu opens"
+  );
+  assert(
+    shouldSuppressRosterClick({
+      nowMs: 1050,
+      dragEndedAtMs: 1000,
+      clickedCaddyId: 2,
+      draggedCaddyId: 1,
+    }) === false,
+    "other caddy click right after drag opens menu"
+  );
+  assert(
+    shouldSuppressRosterClick({
+      nowMs: 1050,
+      dragEndedAtMs: 1000,
+      clickedCaddyId: 1,
+      draggedCaddyId: 1,
+    }) === true,
+    "ghost click on the dragged caddy is ignored"
+  );
+  assert(
+    shouldSuppressRosterClick({
+      nowMs: 1300,
+      dragEndedAtMs: 1000,
+      clickedCaddyId: 1,
+      draggedCaddyId: 1,
+    }) === false,
+    "same caddy click after suppress window opens menu"
+  );
+}
+
+section("immediate mutation leaves stale draft");
+{
+  const draftRows = [
+    row({ id: 1, name: "KEEP", team: "7조", teamOrder: 1 }),
+    row({ id: 2, name: "GONE", team: "7조", teamOrder: 2 }),
+  ];
+  const freshRows = [row({ id: 1, name: "KEEP", team: "7조", teamOrder: 1 })];
+  const staleDisplay = true ? draftRows : freshRows;
+  assert(
+    staleDisplay.some((r) => r.id === 2),
+    "edit-mode display would keep the deleted caddy"
+  );
+  const afterExit = false ? draftRows : freshRows;
+  assert(
+    afterExit.every((r) => r.id !== 2),
+    "exit placement edit + reload hides the deleted caddy"
+  );
+}
+
+section("normal-view slot rows align by teamOrder");
+{
+  const seven = [
+    row({ id: 1, name: "A", team: "7조", teamOrder: 1 }),
+    row({ id: 2, name: "C", team: "7조", teamOrder: 3 }),
+  ];
+  const ten = [
+    row({ id: 3, name: "D", team: "10조", teamOrder: 1 }),
+    row({ id: 4, name: "E", team: "10조", teamOrder: 2 }),
+    row({ id: 5, name: "F", team: "10조", teamOrder: 3 }),
+  ];
+  const sevenSlots = listRosterEditSlots(seven, "7조").slots;
+  const tenSlots = listRosterEditSlots(ten, "10조").slots;
+  assert(sevenSlots[1]?.caddy == null && sevenSlots[1]?.teamOrder === 2, "7조 mid gap at row 2");
+  assert(tenSlots[1]?.caddy?.name === "E" && tenSlots[1]?.teamOrder === 2, "10조 2번 at row 2");
+  assert(
+    sevenSlots[2]?.teamOrder === 3 && tenSlots[2]?.teamOrder === 3,
+    "same order shares the same row index"
+  );
+  assert(
+    sevenSlots[3]?.caddy == null &&
+      sevenSlots[3]?.teamOrder === 4 &&
+      tenSlots[3]?.caddy == null &&
+      tenSlots[3]?.teamOrder === 4,
+    "last-assigned + trailing empty stays aligned"
+  );
 }
 
 section("page wiring");
@@ -532,8 +616,23 @@ section("page wiring");
       /삭제\(퇴사 처리\)/.test(page) &&
       /ROSTER_DIRTY_IMMEDIATE_BLOCK_MESSAGE/.test(page) &&
       /shouldSuppressRosterClick/.test(page) &&
-      /is-caddy-menu/.test(page),
-    "two-level menu + dirty block + compact sheet"
+      /draggedCaddyId/.test(page) &&
+      /rosterDragCaddyIdRef/.test(page) &&
+      /is-caddy-menu/.test(page) &&
+      /finishImmediateRosterMutation/.test(page) &&
+      /setPlacementEdit\(false\)/.test(page),
+    "two-level menu + dirty block + compact sheet + draft refresh"
+  );
+  const dragStartAt = page.indexOf("onDragStart={(event) => {");
+  const dragEndAt = page.indexOf("onDragEnd={() => {");
+  const dragStartBlock = page.slice(dragStartAt, dragEndAt);
+  assert(
+    !/rosterDragEndedAtRef\.current = Date\.now\(\)/.test(dragStartBlock),
+    "dragStart does not start the click-suppress window"
+  );
+  assert(
+    /placementEdit \|\| !q\.trim\(\)/.test(page),
+    "normal view shows empty slots so orders line up"
   );
   assert(
     !/autoAssignEngine/.test(page) &&

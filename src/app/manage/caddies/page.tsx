@@ -405,7 +405,8 @@ export default function ManageCaddiesPage() {
   /** 현장표 이름 클릭 메뉴 */
   const [menuCaddyId, setMenuCaddyId] = useState<number | null>(null);
   const [menuPanel, setMenuPanel] = useState<RosterActionMenuPanel>('root');
-  const suppressRosterClickRef = useRef(false);
+  const rosterDragEndedAtRef = useRef<number | null>(null);
+  const rosterDragCaddyIdRef = useRef<number | null>(null);
   /** 모바일 현장표: 조 선택. 12열 가로 축소 없음 */
   const [mobileTeam, setMobileTeam] = useState<string>('1조');
   /** 고정카트 번호. 기숙사 전용 카트는 주인 없어 포함되지 않음 */
@@ -875,8 +876,14 @@ export default function ManageCaddiesPage() {
   }
 
   function openCaddyMenu(c: Caddy) {
-    if (shouldSuppressRosterClick(suppressRosterClickRef.current)) {
-      suppressRosterClickRef.current = false;
+    if (
+      shouldSuppressRosterClick({
+        nowMs: Date.now(),
+        dragEndedAtMs: rosterDragEndedAtRef.current,
+        clickedCaddyId: c.id,
+        draggedCaddyId: rosterDragCaddyIdRef.current,
+      })
+    ) {
       return;
     }
     setEditingId(null);
@@ -890,6 +897,19 @@ export default function ManageCaddiesPage() {
       return false;
     }
     return true;
+  }
+
+  async function finishImmediateRosterMutation(
+    employmentOverride?: EmploymentStatus | 'all'
+  ) {
+    const next = await reloadAfterMutation(employmentOverride);
+    if (placementEdit) {
+      setPlacementEdit(false);
+      resetPlacementDraft(Array.isArray(next) ? next : []);
+      setMenuCaddyId(null);
+      setEditingId(null);
+    }
+    return next;
   }
 
   function openPlacementMoveSheet(c: Caddy) {
@@ -1080,13 +1100,14 @@ export default function ManageCaddiesPage() {
             event.preventDefault();
             return;
           }
-          suppressRosterClickRef.current = true;
+          rosterDragCaddyIdRef.current = c.id;
           event.dataTransfer.setData('text/plain', String(c.id));
           event.dataTransfer.effectAllowed = 'move';
           setDragCaddyId(c.id);
         }}
         onDragEnd={() => {
-          suppressRosterClickRef.current = true;
+          rosterDragEndedAtRef.current = Date.now();
+          rosterDragCaddyIdRef.current = c.id;
           setDragCaddyId(null);
           setDropKey(null);
         }}
@@ -1192,7 +1213,7 @@ export default function ManageCaddiesPage() {
         }
         setEditingId(null);
         setMenuCaddyId(null);
-        await reloadAfterMutation();
+        await finishImmediateRosterMutation();
         setMessage(`${formatCaddyLabel({ ...draft, caddyType: 'DRIVING' })} 저장됨`);
       } finally {
         setSavingId(null);
@@ -1250,7 +1271,7 @@ export default function ManageCaddiesPage() {
       }
       setEditingId(null);
       setMenuCaddyId(null);
-      await reloadAfterMutation();
+      await finishImmediateRosterMutation();
       setMessage(`${formatCaddyLabel(draft)} 저장됨`);
     } finally {
       setSavingId(null);
@@ -1283,7 +1304,7 @@ export default function ManageCaddiesPage() {
         alert(data?.error || '변경 실패');
         return;
       }
-      await reloadAfterMutation();
+      await finishImmediateRosterMutation();
       setMenuCaddyId(null);
       setMessage(`${formatCaddyLabel({ ...c, caddyType: 'DRIVING' })}: 드라이빙 캐디로 변경 (슬롯 해제)`);
     } finally {
@@ -1314,7 +1335,7 @@ export default function ManageCaddiesPage() {
         alert(data?.error || '순번 교환 실패');
         return;
       }
-      await reloadAfterMutation();
+      await finishImmediateRosterMutation();
     } finally {
       setSavingId(null);
     }
@@ -1347,9 +1368,9 @@ export default function ManageCaddiesPage() {
       // 상세 관리에서는 해당 필터로 전환. 현장표는 전체 로드를 유지한다.
       if (viewMode === 'detail') {
         setEmploymentFilter(status);
-        await reloadAfterMutation(status);
+        await finishImmediateRosterMutation(status);
       } else {
-        await reloadAfterMutation('all');
+        await finishImmediateRosterMutation('all');
       }
       setMenuCaddyId(null);
       const toast =
@@ -1954,7 +1975,9 @@ export default function ManageCaddiesPage() {
                   <ul className="cm-roster-list">
                     {(() => {
                       const showSlots =
-                        placementEdit && !col.driving && !searchLocked;
+                        !col.driving &&
+                        !searchLocked &&
+                        (placementEdit || !q.trim());
                       if (!showSlots) {
                         if (col.members.length === 0) {
                           return <li className="cm-roster-empty">없음</li>;
