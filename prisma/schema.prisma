@@ -1012,6 +1012,14 @@ enum MarshalShift {
   PM
 }
 
+/// FULL_DAY = 전일 벌당 1건이 조출 1칸 + 후출 1칸.
+/// AM/PM = 기존 단일 시프트 벌당 의미 유지 (migration backfill).
+enum MarshalPenaltyCoverage {
+  FULL_DAY
+  AM
+  PM
+}
+
 enum MarshalCreditStatus {
   OPEN
   CONSUMED
@@ -1061,18 +1069,21 @@ model MarshalMonthSlot {
   updatedAt        DateTime                @updatedAt
 
   @@unique([planId, date, shift, slotIndex])
-  @@unique([planId, date, caddyId])
+  /// AM+PM 동일 캐디는 허용(전일 벌당). 같은 shift 중복은 금지.
+  @@unique([planId, date, shift, caddyId])
   @@index([planId, date])
   @@index([caddyId])
 }
 
-/// 정상 순환을 소비하지 않는 추가 의무. shift는 관리자 지정.
+/// 정상 순환을 소비하지 않는 추가 의무.
+/// 전일 벌당 1건 = 1 레코드(coverage=FULL_DAY). shift는 기존 API 호환.
 model MarshalPenaltyDuty {
   id               Int              @id @default(autoincrement())
   planId           Int
   plan             MarshalMonthPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
   date             DateTime
   shift            MarshalShift
+  coverage         MarshalPenaltyCoverage @default(FULL_DAY)
   caddyId          Int
   caddy            Caddy            @relation(fields: [caddyId], references: [id], onDelete: Restrict)
   marshalProfileId Int

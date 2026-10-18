@@ -17,6 +17,7 @@ import {
   parsePositiveId,
 } from "@/lib/marshalDomain";
 import {
+  assertFullDayPenaltyPairLocked,
   assertPlanMutable,
   assertReplaceConfirmed,
   assertSlotMatchesPlan,
@@ -29,6 +30,7 @@ import {
   isYmdInMonth,
   listMonthYmds,
   parseMarshalShift,
+  parsePenaltyCoverage,
   parseSlotsPerDay,
   parseYearMonth,
   previousYearMonth,
@@ -336,6 +338,7 @@ export async function getMonthPlan(
             id: row.id,
             date: formatMarshalYmd(row.date),
             shift: row.shift,
+            coverage: row.coverage,
             caddyId: row.caddyId,
             marshalProfileId: row.marshalProfileId,
             reason: row.reason,
@@ -569,6 +572,7 @@ export async function generateMonthPlan(
         caddyId: penalty.caddyId,
         profileId: penalty.marshalProfileId,
         shift: penalty.shift,
+        coverage: penalty.coverage,
       });
       penaltiesByDate.set(ymd, list);
     }
@@ -746,6 +750,16 @@ export async function replaceMonthSlot(
     if (asSubstitute) {
       assertSubstituteChangesCaddy(slot.caddyId, caddyId);
     }
+    const daySlots = await tx.marshalMonthSlot.findMany({
+      where: { planId: slot.planId, date: slot.date },
+      select: { id: true, caddyId: true, shift: true, source: true },
+    });
+    assertFullDayPenaltyPairLocked({
+      slotId: slot.id,
+      slotCaddyId: slot.caddyId,
+      slotSource: slot.source,
+      daySlots,
+    });
     const profile = await tx.marshalProfile.findUnique({
       where: { caddyId },
       include: { caddy: { select: CADDY_SELECT } },
@@ -851,6 +865,7 @@ export async function createPenaltyDuty(
     date: unknown;
     caddyId: unknown;
     shift: unknown;
+    coverage?: unknown;
     reason: unknown;
     note?: unknown;
     actor?: MarshalActor;
@@ -865,6 +880,7 @@ export async function createPenaltyDuty(
   }
   const caddyId = parsePositiveCaddyId(input.caddyId);
   const shift = parseMarshalShift(input.shift);
+  const coverage = parsePenaltyCoverage(input.coverage, "FULL_DAY");
   const reason = String(input.reason ?? "").trim();
   if (!reason) {
     throw new MarshalRosterError("벌당 사유가 필요합니다.", "reason_required", 400);
@@ -900,6 +916,7 @@ export async function createPenaltyDuty(
         planId: plan.id,
         date,
         shift,
+        coverage,
         caddyId,
         marshalProfileId: profile.id,
         reason,
@@ -918,6 +935,7 @@ export async function createPenaltyDuty(
           date: ymd,
           caddyId,
           shift,
+          coverage,
           reason,
           username: input.actor?.username ?? null,
           userId: input.actor?.userId ?? null,
@@ -928,6 +946,7 @@ export async function createPenaltyDuty(
       id: row.id,
       date: ymd,
       shift: row.shift,
+      coverage: row.coverage,
       caddyId: row.caddyId,
       reason: row.reason,
       note: row.note,
@@ -940,6 +959,7 @@ export async function updatePenaltyDuty(
   input: {
     id: unknown;
     shift?: unknown;
+    coverage?: unknown;
     reason?: unknown;
     note?: unknown;
     actor?: MarshalActor;
@@ -968,6 +988,10 @@ export async function updatePenaltyDuty(
       data: {
         shift:
           input.shift === undefined ? undefined : parseMarshalShift(input.shift),
+        coverage:
+          input.coverage === undefined
+            ? undefined
+            : parsePenaltyCoverage(input.coverage, current.coverage),
         reason:
           input.reason === undefined ? undefined : String(input.reason).trim(),
         note: input.note === undefined ? undefined : String(input.note),
@@ -981,6 +1005,7 @@ export async function updatePenaltyDuty(
         ip: input.actor?.ip,
         payload: {
           shift: saved.shift,
+          coverage: saved.coverage,
           reason: saved.reason,
           username: input.actor?.username ?? null,
           userId: input.actor?.userId ?? null,
