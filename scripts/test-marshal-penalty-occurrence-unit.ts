@@ -7,11 +7,16 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { MarshalRosterError } from "../src/lib/marshalDomain";
 import {
+  POST_GENERATE_OPEN_DEFER_REASON,
+  assertIdempotencyReplay,
   assertOccurrenceCancellable,
   assertOccurrenceTargetMutable,
   assertPlanReadyToFinalize,
+  idempotencyPayloadMatches,
   mergeAssignedOccurrences,
   nextYearMonth,
+  normalizeOccurrenceNote,
+  normalizeOccurrenceReason,
   occurrenceToFullDayPenalty,
   parseIdempotencyKey,
   scheduleOccurrencesForMonth,
@@ -106,8 +111,10 @@ section("source contracts — P1 engine reuse, autoAssign untouched");
     "no autoAssignEngine import"
   );
   assert(
-    rotation.includes("applyOccurrencesToMonth"),
-    "generateMonthPlan hooks occurrence pack"
+    rotation.includes("applyOccurrencesToMonth") &&
+      rotation.includes("lockOccurrenceTargetMonth") &&
+      rotation.includes("countPostGenerateOpenOccurrences"),
+    "generate serializes on target month; finalize counts post-generate OPEN"
   );
   const names = String(
     spawnSync(
@@ -365,6 +372,92 @@ section("idempotency key parse");
   );
 }
 
+section("idempotency payload includes reason and note");
+{
+  const reason = normalizeOccurrenceReason("  지각  ");
+  const note = normalizeOccurrenceNote("  메모  ");
+  assert(reason === "지각", "reason trim");
+  assert(note === "메모", "note trim");
+  assert(normalizeOccurrenceNote("") === null, "empty note → null");
+  assert(normalizeOccurrenceNote("   ") === null, "whitespace note → null");
+  assert(normalizeOccurrenceNote(undefined) === null, "omit note → null");
+  throws(
+    () => normalizeOccurrenceReason("  "),
+    "reason_required",
+    "blank reason rejected"
+  );
+  const existing = {
+    caddyId: 10,
+    occurredOn: "2096-10-01",
+    reason: "지각",
+    note: "메모",
+  };
+  assert(
+    idempotencyPayloadMatches({
+      existing,
+      caddyId: 10,
+      occurredOn: "2096-10-01",
+      reason: "지각",
+      note: "메모",
+    }),
+    "same payload matches"
+  );
+  assert(
+    !idempotencyPayloadMatches({
+      existing,
+      caddyId: 10,
+      occurredOn: "2096-10-01",
+      reason: "결근",
+      note: "메모",
+    }),
+    "different reason mismatches"
+  );
+  assert(
+    !idempotencyPayloadMatches({
+      existing,
+      caddyId: 10,
+      occurredOn: "2096-10-01",
+      reason: "지각",
+      note: "다른메모",
+    }),
+    "different note mismatches"
+  );
+  assert(
+    idempotencyPayloadMatches({
+      existing: { ...existing, note: null },
+      caddyId: 10,
+      occurredOn: "2096-10-01",
+      reason: "지각",
+      note: null,
+    }),
+    "null notes match"
+  );
+  throws(
+    () =>
+      assertIdempotencyReplay({
+        existing,
+        caddyId: 10,
+        occurredOn: "2096-10-01",
+        reason: "결근",
+        note: "메모",
+      }),
+    "idempotency_conflict",
+    "reason mismatch → 409"
+  );
+  throws(
+    () =>
+      assertIdempotencyReplay({
+        existing,
+        caddyId: 10,
+        occurredOn: "2096-10-01",
+        reason: "지각",
+        note: null,
+      }),
+    "idempotency_conflict",
+    "note mismatch → 409"
+  );
+}
+
 section("finalize blocked when stale or orphan penalty slots");
 {
   throws(
@@ -396,7 +489,7 @@ section("finalize blocked when stale or orphan penalty slots");
     "regeneration_required",
     "orphan cancelled slots block finalize"
   );
-  assertPlanReadyToFinalize({
+  const ready = {
     needsRegeneration: false,
     generatedAt: new Date(),
     slotCount: 3,
@@ -404,10 +497,41 @@ section("finalize blocked when stale or orphan penalty slots");
       { date: "2096-11-01", caddyId: 10, shift: "AM", source: "PENALTY" },
       { date: "2096-11-01", caddyId: 10, shift: "PM", source: "PENALTY" },
     ],
-    duties: [],
+    duties: [] as { date: string; caddyId: number }[],
     scheduledOccurrences: [{ date: "2096-11-01", caddyId: 10 }],
-  });
+  };
+  assertPlanReadyToFinalize(ready);
   assert(true, "matching FULL_DAY pair allows finalize");
+  assertPlanReadyToFinalize({ ...ready, postGenerateOpenCount: 0 });
+  assert(true, "leftover OPEN (postGenerateOpenCount=0) does not block finalize");
+  throws(
+    () =>
+      assertPlanReadyToFinalize({
+        ...ready,
+        needsRegeneration: false,
+        postGenerateOpenCount: 1,
+      }),
+    "regeneration_required",
+    "post-generate OPEN blocks finalize even without flag"
+  );
+}
+
+section("capacity leftover reason is not post-generate reason");
+{
+  const packed = scheduleOccurrencesForMonth({
+    dates: ["2096-11-01"],
+    amSlots: 2,
+    pmSlots: 1,
+    occurrences: [occ(1, 10, "2096-10-01"), occ(2, 20, "2096-10-02")],
+    existingByDate: new Map(),
+    statusByDateCaddy: new Map(),
+  });
+  assert(packed.leftover.length === 1, "second occurrence leftover");
+  assert(
+    Boolean(packed.leftover[0].deferReason) &&
+      packed.leftover[0].deferReason !== POST_GENERATE_OPEN_DEFER_REASON,
+    "capacity leftover keeps its own deferReason"
+  );
 }
 
 section("cancel / FINALIZED guards");

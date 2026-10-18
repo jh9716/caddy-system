@@ -8,6 +8,7 @@ import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { assertLocalDatabaseUrl } from "./assertLocalDatabaseUrl";
 import { MarshalRosterError, formatMarshalYmd } from "../src/lib/marshalDomain";
+import { POST_GENERATE_OPEN_DEFER_REASON } from "../src/lib/marshalPenaltyOccurrenceDomain";
 import {
   cancelPenaltyOccurrence,
   createPenaltyOccurrence,
@@ -152,6 +153,54 @@ async function generateTarget(replace = true) {
     startRotationOrder: 9201,
     replace,
   });
+}
+
+async function deleteTargetPlan() {
+  const plans = await prisma.marshalMonthPlan.findMany({
+    where: { year: YEAR, month: TARGET_MONTH },
+    select: { id: true },
+  });
+  const planIds = plans.map((row) => row.id);
+  if (!planIds.length) return;
+  await prisma.marshalRotationCredit.updateMany({
+    where: { consumedPlanId: { in: planIds } },
+    data: { status: "OPEN", consumedPlanId: null, consumedDate: null },
+  });
+  await prisma.marshalMonthSlot.deleteMany({ where: { planId: { in: planIds } } });
+  await prisma.marshalPenaltyDuty.deleteMany({ where: { planId: { in: planIds } } });
+  await prisma.marshalPenaltyOccurrence.updateMany({
+    where: { scheduledPlanId: { in: planIds } },
+    data: {
+      scheduledPlanId: null,
+      scheduledOn: null,
+      status: "OPEN",
+      deferReason: null,
+    },
+  });
+  await prisma.marshalMonthPlan.deleteMany({ where: { id: { in: planIds } } });
+}
+
+async function assertPackedOrStale(
+  occId: number,
+  msg: string
+): Promise<{ scheduled: boolean }> {
+  const occ = await prisma.marshalPenaltyOccurrence.findUnique({
+    where: { id: occId },
+  });
+  const plan = await prisma.marshalMonthPlan.findUnique({
+    where: { year_month: { year: YEAR, month: TARGET_MONTH } },
+  });
+  assert(occ != null && plan != null, `${msg}: occurrence and plan exist`);
+  const scheduled = occ!.status === "SCHEDULED";
+  const staleOpen =
+    occ!.status === "OPEN" &&
+    occ!.deferReason === POST_GENERATE_OPEN_DEFER_REASON &&
+    plan!.needsRegeneration === true;
+  assert(
+    scheduled || staleOpen,
+    `${msg}: packed into plan or marked post-generate OPEN (status=${occ!.status})`
+  );
+  return { scheduled };
 }
 
 function penaltySlotsOn(
@@ -820,6 +869,311 @@ async function main() {
           .map((s) => s.date)
       );
       assert(days.size === 1, "A has exactly one penalty day");
+    }
+
+    section("월표 생성 이후 신규 벌당은 재생성 필요 + FINALIZE 차단");
+    {
+      await wipeOccurrences(ids);
+      await prisma.marshalPenaltyDuty.deleteMany({
+        where: { plan: { year: YEAR, month: TARGET_MONTH } },
+      });
+      const first = await createPenaltyOccurrence(
+        { caddyId: A.caddy.id, occurredOn: OCT1, reason: "pre-generate" },
+        prisma
+      );
+      await generateTarget();
+      const before = await getMonthPlan({ year: YEAR, month: TARGET_MONTH });
+      const rotationSlot = before.plan!.slots.find((s) => s.source === "ROTATION");
+      const busyOnDay = new Set(
+        before.plan!.slots
+          .filter((s) => s.date === rotationSlot!.date)
+          .map((s) => s.caddyId)
+      );
+      const subCaddyId = roster.find((row) => !busyOnDay.has(row.caddy.id))!.caddy
+        .id;
+      const sub = await replaceMonthSlot({
+        planId: before.plan!.id,
+        slotId: rotationSlot!.id,
+        caddyId: subCaddyId,
+        asSubstitute: true,
+      });
+      const late = await createPenaltyOccurrence(
+        {
+          caddyId: B.caddy.id,
+          occurredOn: OCT2,
+          reason: "post-generate",
+          note: "신규",
+        },
+        prisma
+      );
+      assert(late.status === "OPEN", "new occurrence stays OPEN");
+      assert(
+        late.deferReason === POST_GENERATE_OPEN_DEFER_REASON,
+        "post-generate deferReason is distinct"
+      );
+      const stale = await getMonthPlan({ year: YEAR, month: TARGET_MONTH });
+      assert(stale.plan!.needsRegeneration === true, "DRAFT marked needsRegeneration");
+      assert(
+        penaltySlotsOn(stale.plan!, NOV1, A.caddy.id).length === 2,
+        "existing scheduled FULL_DAY stays until regenerate"
+      );
+      assert(
+        !stale.plan!.slots.some(
+          (s) => s.caddyId === B.caddy.id && s.source === "PENALTY"
+        ),
+        "new occurrence is not in slots yet"
+      );
+      assert(
+        stale.plan!.slots.some(
+          (s) => s.id === sub.id && s.source === "SUBSTITUTE" && s.caddyId === subCaddyId
+        ),
+        "manual substitute preserved until regenerate"
+      );
+      await throwsCode(
+        () => finalizeMonthPlan({ id: stale.plan!.id }),
+        "regeneration_required",
+        "post-generate OPEN blocks FINALIZE"
+      );
+      await throwsCode(
+        () =>
+          generateMonthPlan({
+            year: YEAR,
+            month: TARGET_MONTH,
+            startRotationOrder: 9201,
+          }),
+        "draft_exists",
+        "regenerate without replace keeps substitute"
+      );
+      const stillSub = await getMonthPlan({ year: YEAR, month: TARGET_MONTH });
+      assert(
+        stillSub.plan!.slots.some((s) => s.id === sub.id && s.source === "SUBSTITUTE"),
+        "substitute still present after refused regenerate"
+      );
+      await generateTarget();
+      const refreshed = await getMonthPlan({ year: YEAR, month: TARGET_MONTH });
+      assert(refreshed.plan!.needsRegeneration === false, "regenerate clears stale flag");
+      const a = refreshed.penaltyOccurrences.find((row) => row.id === first.id);
+      const b = refreshed.penaltyOccurrences.find((row) => row.id === late.id);
+      assert(a?.status === "SCHEDULED" && a.scheduledOn === NOV1, "A still Nov 1");
+      assert(b?.status === "SCHEDULED" && b.scheduledOn === NOV2, "new B assigned Nov 2");
+      assert(
+        penaltySlotsOn(refreshed.plan!, NOV2, B.caddy.id).length === 2,
+        "B FULL_DAY appears after regenerate"
+      );
+    }
+
+    section("정원 부족 leftover OPEN 은 FINALIZE 가능, 이후 신규 OPEN 은 차단");
+    {
+      await wipeOccurrences(ids);
+      await prisma.marshalPenaltyDuty.deleteMany({
+        where: { plan: { year: YEAR, month: TARGET_MONTH } },
+      });
+      for (let day = 1; day <= 31; day += 1) {
+        await createPenaltyOccurrence(
+          {
+            caddyId: A.caddy.id,
+            occurredOn: `${YEAR}-10-${String(day).padStart(2, "0")}`,
+            reason: `leftover-${day}`,
+          },
+          prisma
+        );
+      }
+      const packed = await generateTarget();
+      assert(packed.leftoverOccurrences === 1, "one capacity leftover");
+      const leftover = await prisma.marshalPenaltyOccurrence.findFirst({
+        where: {
+          caddyId: A.caddy.id,
+          status: "OPEN",
+          targetYear: YEAR,
+          targetMonth: TARGET_MONTH,
+        },
+      });
+      assert(
+        leftover != null &&
+          Boolean(leftover.deferReason) &&
+          leftover.deferReason !== POST_GENERATE_OPEN_DEFER_REASON,
+        "capacity leftover keeps packing deferReason"
+      );
+      const leftoverPlan = await getMonthPlan({ year: YEAR, month: TARGET_MONTH });
+      assert(leftoverPlan.plan!.needsRegeneration === false, "leftover does not stale plan");
+      await finalizeMonthPlan({ id: leftoverPlan.plan!.id });
+      const finalized = await prisma.marshalMonthPlan.findUnique({
+        where: { id: leftoverPlan.plan!.id },
+      });
+      assert(finalized?.status === "FINALIZED", "leftover OPEN allows FINALIZE");
+      await prisma.marshalMonthPlan.update({
+        where: { id: leftoverPlan.plan!.id },
+        data: { status: "DRAFT" },
+      });
+
+      const late = await createPenaltyOccurrence(
+        { caddyId: B.caddy.id, occurredOn: OCT1, reason: "after-full-month" },
+        prisma
+      );
+      assert(
+        late.deferReason === POST_GENERATE_OPEN_DEFER_REASON,
+        "new OPEN after generate is post-generate, not leftover"
+      );
+      const mixed = await getMonthPlan({ year: YEAR, month: TARGET_MONTH });
+      assert(mixed.plan!.needsRegeneration === true, "new OPEN marks regenerate");
+      const leftoverStill = mixed.penaltyOccurrences.find((row) => row.id === leftover!.id);
+      assert(
+        leftoverStill?.status === "OPEN" &&
+          leftoverStill.deferReason !== POST_GENERATE_OPEN_DEFER_REASON,
+        "original leftover reason unchanged"
+      );
+      await throwsCode(
+        () => finalizeMonthPlan({ id: mixed.plan!.id }),
+        "regeneration_required",
+        "post-generate OPEN blocks FINALIZE even with leftover"
+      );
+    }
+
+    async function settleCreateVsGenerate(
+      label: string,
+      caddyId: number,
+      occurredOn: string,
+      reason: string,
+      startGenerateFirst: boolean
+    ) {
+      const first = startGenerateFirst
+        ? generateTarget()
+        : createPenaltyOccurrence({ caddyId, occurredOn, reason }, prisma);
+      const second = startGenerateFirst
+        ? createPenaltyOccurrence({ caddyId, occurredOn, reason }, prisma)
+        : generateTarget();
+      const raced = await Promise.allSettled([first, second]);
+      const createResult = startGenerateFirst ? raced[1] : raced[0];
+      const generateResult = startGenerateFirst ? raced[0] : raced[1];
+      if (createResult.status !== "fulfilled") {
+        console.error(`${label} create failed`, createResult.reason);
+      }
+      if (generateResult.status !== "fulfilled") {
+        console.error(`${label} generate failed`, generateResult.reason);
+      }
+      assert(createResult.status === "fulfilled", `${label}: create completed`);
+      assert(generateResult.status === "fulfilled", `${label}: generate completed`);
+      const createdId = (
+        createResult as PromiseFulfilledResult<{ id: number }>
+      ).value.id;
+      const outcome = await assertPackedOrStale(createdId, label);
+      if (!outcome.scheduled) {
+        const stalePlan = await getMonthPlan({ year: YEAR, month: TARGET_MONTH });
+        await throwsCode(
+          () => finalizeMonthPlan({ id: stalePlan.plan!.id }),
+          "regeneration_required",
+          `${label}: stale cannot FINALIZE`
+        );
+        await generateTarget();
+        const after = await prisma.marshalPenaltyOccurrence.findUnique({
+          where: { id: createdId },
+        });
+        assert(after?.status === "SCHEDULED", `${label}: regenerate applies occurrence`);
+        console.log(`  → ${label}: generate-first/stale then regenerate`);
+      } else {
+        console.log(`  → ${label}: packed into generated plan`);
+      }
+    }
+
+    section("벌당 등록 vs 월표 생성 동시 요청");
+    {
+      for (let i = 0; i < 4; i += 1) {
+        await wipeOccurrences(ids);
+        await prisma.marshalPenaltyDuty.deleteMany({
+          where: { plan: { year: YEAR, month: TARGET_MONTH } },
+        });
+        await generateTarget();
+        await settleCreateVsGenerate(
+          `create vs generate #${i + 1}`,
+          C.caddy.id,
+          `${YEAR}-10-21`,
+          `race-create-${i}`,
+          i % 2 === 1
+        );
+      }
+    }
+
+    section("첫 월표 생성 vs 벌당 등록 동시 요청");
+    {
+      for (let i = 0; i < 4; i += 1) {
+        await wipeOccurrences(ids);
+        await prisma.marshalPenaltyDuty.deleteMany({
+          where: { plan: { year: YEAR, month: TARGET_MONTH } },
+        });
+        await deleteTargetPlan();
+        await settleCreateVsGenerate(
+          `first generate vs create #${i + 1}`,
+          D.caddy.id,
+          `${YEAR}-10-22`,
+          `first-gen-race-${i}`,
+          i % 2 === 1
+        );
+      }
+    }
+
+    section("idempotencyKey reason/note 일치와 충돌");
+    {
+      await wipeOccurrences(ids);
+      const same = await createPenaltyOccurrence(
+        {
+          caddyId: A.caddy.id,
+          occurredOn: OCT1,
+          reason: "  사유  ",
+          note: "  메모  ",
+          idempotencyKey: "payload-same",
+        },
+        prisma
+      );
+      const replay = await createPenaltyOccurrence(
+        {
+          caddyId: A.caddy.id,
+          occurredOn: OCT1,
+          reason: "사유",
+          note: "메모",
+          idempotencyKey: "payload-same",
+        },
+        prisma
+      );
+      assert(replay.replayed === true && replay.id === same.id, "same payload replays");
+      await throwsCode(
+        () =>
+          createPenaltyOccurrence(
+            {
+              caddyId: A.caddy.id,
+              occurredOn: OCT1,
+              reason: "다른사유",
+              note: "메모",
+              idempotencyKey: "payload-same",
+            },
+            prisma
+          ),
+        "idempotency_conflict",
+        "same key different reason 409"
+      );
+      await throwsCode(
+        () =>
+          createPenaltyOccurrence(
+            {
+              caddyId: A.caddy.id,
+              occurredOn: OCT1,
+              reason: "사유",
+              note: "다른메모",
+              idempotencyKey: "payload-same",
+            },
+            prisma
+          ),
+        "idempotency_conflict",
+        "same key different note 409"
+      );
+      const keylessA = await createPenaltyOccurrence(
+        { caddyId: A.caddy.id, occurredOn: OCT2, reason: "keyless-1", note: "n" },
+        prisma
+      );
+      const keylessB = await createPenaltyOccurrence(
+        { caddyId: A.caddy.id, occurredOn: OCT2, reason: "keyless-1", note: "n" },
+        prisma
+      );
+      assert(keylessA.id !== keylessB.id, "keyless POST allows genuine twins");
     }
   } finally {
     await cleanup();
