@@ -81,6 +81,12 @@ import {
   ROSTER_REASSIGN_SEARCH_LOCK_MESSAGE,
 } from '@/lib/caddyRosterReassignDraft';
 import {
+  isImmediateRosterMutationBlocked,
+  ROSTER_DIRTY_IMMEDIATE_BLOCK_MESSAGE,
+  shouldSuppressRosterClick,
+  type RosterActionMenuPanel,
+} from '@/lib/caddyRosterActionMenu';
+import {
   isStaleRosterError,
   postCaddyReassignApply,
   postCaddyReassignPreview,
@@ -398,6 +404,9 @@ export default function ManageCaddiesPage() {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   /** 현장표 이름 클릭 메뉴 */
   const [menuCaddyId, setMenuCaddyId] = useState<number | null>(null);
+  const [menuPanel, setMenuPanel] = useState<RosterActionMenuPanel>('root');
+  const rosterDragEndedAtRef = useRef<number | null>(null);
+  const rosterDragCaddyIdRef = useRef<number | null>(null);
   /** 모바일 현장표: 조 선택. 12열 가로 축소 없음 */
   const [mobileTeam, setMobileTeam] = useState<string>('1조');
   /** 고정카트 번호. 기숙사 전용 카트는 주인 없어 포함되지 않음 */
@@ -786,11 +795,11 @@ export default function ManageCaddiesPage() {
     return { total: filtered.length, teams: byTeam.size };
   }, [filtered]);
 
-  const menuCaddy = useMemo(
-    () =>
-      placementEdit ? null : rows.find((r) => r.id === menuCaddyId) ?? null,
-    [rows, menuCaddyId, placementEdit]
-  );
+  const menuCaddy = useMemo(() => {
+    if (menuCaddyId == null) return null;
+    const source = placementEdit ? draftRows : rows;
+    return source.find((r) => r.id === menuCaddyId) ?? null;
+  }, [rows, draftRows, menuCaddyId, placementEdit]);
 
   const displayRows = placementEdit ? draftRows : rows;
   const searchLocked = placementEdit && isRosterSearchLocked(q);
@@ -842,6 +851,7 @@ export default function ManageCaddiesPage() {
     setPreviewIssues([]);
     setStaleRoster(false);
     setPreviewAnomaliesOpen(false);
+    setMenuPanel('root');
     setPendingPlacements([]);
   }
 
@@ -856,6 +866,68 @@ export default function ManageCaddiesPage() {
   function cancelPlacementEdit() {
     setPlacementEdit(false);
     resetPlacementDraft(rows);
+    setMessage(null);
+  }
+
+  function closeCaddyMenu() {
+    setMenuCaddyId(null);
+    setMenuPanel('root');
+    if (menuCaddy && editingId === menuCaddy.id) cancelEdit();
+  }
+
+  function openCaddyMenu(c: Caddy) {
+    if (
+      shouldSuppressRosterClick({
+        nowMs: Date.now(),
+        dragEndedAtMs: rosterDragEndedAtRef.current,
+        clickedCaddyId: c.id,
+        draggedCaddyId: rosterDragCaddyIdRef.current,
+      })
+    ) {
+      return;
+    }
+    setEditingId(null);
+    setMenuPanel('root');
+    setMenuCaddyId(c.id);
+  }
+
+  function requireCleanPlacementForImmediate(): boolean {
+    if (placementEdit && isImmediateRosterMutationBlocked(dirtyCount)) {
+      setMessage(ROSTER_DIRTY_IMMEDIATE_BLOCK_MESSAGE);
+      return false;
+    }
+    return true;
+  }
+
+  async function finishImmediateRosterMutation(
+    employmentOverride?: EmploymentStatus | 'all'
+  ) {
+    const next = await reloadAfterMutation(employmentOverride);
+    if (placementEdit) {
+      setPlacementEdit(false);
+      resetPlacementDraft(Array.isArray(next) ? next : []);
+      setMenuCaddyId(null);
+      setEditingId(null);
+    }
+    return next;
+  }
+
+  function openPlacementMoveSheet(c: Caddy) {
+    if (searchLocked) {
+      setMessage(ROSTER_REASSIGN_SEARCH_LOCK_MESSAGE);
+      return;
+    }
+    if (!canRosterReassignCaddy(c)) {
+      setMessage('드라이빙·삭제 캐디는 이번 재배치에서 제외합니다.');
+      return;
+    }
+    setMenuCaddyId(null);
+    setMenuPanel('root');
+    setMoveCaddyId(c.id);
+    setMoveTeam(isPrimaryTeam(c.team) ? c.team : '1조');
+    setPlacementMoveOrder(
+      hasAssignedRosterSlot(c.teamOrder) ? c.teamOrder : 1
+    );
   }
 
   function applyLocalMove(id: number, team: string, teamOrder: number): boolean {
@@ -1021,20 +1093,21 @@ export default function ManageCaddiesPage() {
           dropKey === key ? ' is-drop-target' : ''
         }`}
         onClick={() => {
-          if (placementEdit) return;
-          setEditingId(null);
-          setMenuCaddyId(c.id);
+          openCaddyMenu(c);
         }}
         onDragStart={(event) => {
           if (!canDrag) {
             event.preventDefault();
             return;
           }
+          rosterDragCaddyIdRef.current = c.id;
           event.dataTransfer.setData('text/plain', String(c.id));
           event.dataTransfer.effectAllowed = 'move';
           setDragCaddyId(c.id);
         }}
         onDragEnd={() => {
+          rosterDragEndedAtRef.current = Date.now();
+          rosterDragCaddyIdRef.current = c.id;
           setDragCaddyId(null);
           setDropKey(null);
         }}
@@ -1052,9 +1125,19 @@ export default function ManageCaddiesPage() {
           {cartNo || '—'}
         </span>
         <span className="cm-cell-main">
-          <span className="cm-cell-name">{rosterPersonName(c)}</span>
-          {leave ? <span className="cm-leave-badge">휴직</span> : null}
-          {subgroup ? <span className="cm-band-badge">{subgroup}</span> : null}
+          <span className="cm-cell-name" title={rosterPersonName(c)}>
+            {rosterPersonName(c)}
+          </span>
+          {leave ? (
+            <span className="cm-leave-badge" title="휴직">
+              휴직
+            </span>
+          ) : null}
+          {subgroup ? (
+            <span className="cm-band-badge" title={subgroup}>
+              {subgroup}
+            </span>
+          ) : null}
         </span>
       </button>
     );
@@ -1083,6 +1166,7 @@ export default function ManageCaddiesPage() {
   }
 
   async function saveEdit(id: number) {
+    if (!requireCleanPlacementForImmediate()) return;
     const draft = drafts[id];
     if (!draft) return;
     const original = rows.find((r) => r.id === id);
@@ -1129,7 +1213,7 @@ export default function ManageCaddiesPage() {
         }
         setEditingId(null);
         setMenuCaddyId(null);
-        await reloadAfterMutation();
+        await finishImmediateRosterMutation();
         setMessage(`${formatCaddyLabel({ ...draft, caddyType: 'DRIVING' })} 저장됨`);
       } finally {
         setSavingId(null);
@@ -1187,7 +1271,7 @@ export default function ManageCaddiesPage() {
       }
       setEditingId(null);
       setMenuCaddyId(null);
-      await reloadAfterMutation();
+      await finishImmediateRosterMutation();
       setMessage(`${formatCaddyLabel(draft)} 저장됨`);
     } finally {
       setSavingId(null);
@@ -1195,6 +1279,7 @@ export default function ManageCaddiesPage() {
   }
 
   async function convertToDriving(c: Caddy) {
+    if (!requireCleanPlacementForImmediate()) return;
     const slotNote =
       c.team && Number(c.teamOrder) >= 1
         ? `${c.team} ${c.teamOrder}번 고정 슬롯은 빈자리가 됩니다.`
@@ -1219,7 +1304,7 @@ export default function ManageCaddiesPage() {
         alert(data?.error || '변경 실패');
         return;
       }
-      await reloadAfterMutation();
+      await finishImmediateRosterMutation();
       setMenuCaddyId(null);
       setMessage(`${formatCaddyLabel({ ...c, caddyType: 'DRIVING' })}: 드라이빙 캐디로 변경 (슬롯 해제)`);
     } finally {
@@ -1228,6 +1313,7 @@ export default function ManageCaddiesPage() {
   }
 
   async function moveOrder(c: Caddy, direction: -1 | 1) {
+    if (!requireCleanPlacementForImmediate()) return;
     if (isDrivingCaddyType(c.caddyType) || c.team === DRIVING_POOL_TEAM) return;
     const sameTeam = rows
       .filter((r) => r.team === c.team)
@@ -1249,13 +1335,14 @@ export default function ManageCaddiesPage() {
         alert(data?.error || '순번 교환 실패');
         return;
       }
-      await reloadAfterMutation();
+      await finishImmediateRosterMutation();
     } finally {
       setSavingId(null);
     }
   }
 
   async function setEmployment(c: Caddy, status: EmploymentStatus) {
+    if (!requireCleanPlacementForImmediate()) return;
     const confirmText =
       status === 'RETIRED'
         ? '이 캐디를 명단에서 삭제하시겠습니까?\n삭제하면 현재 명단과 자동배치에서 제외됩니다. 과거 배치 기록은 보존됩니다.'
@@ -1281,9 +1368,9 @@ export default function ManageCaddiesPage() {
       // 상세 관리에서는 해당 필터로 전환. 현장표는 전체 로드를 유지한다.
       if (viewMode === 'detail') {
         setEmploymentFilter(status);
-        await reloadAfterMutation(status);
+        await finishImmediateRosterMutation(status);
       } else {
-        await reloadAfterMutation('all');
+        await finishImmediateRosterMutation('all');
       }
       setMenuCaddyId(null);
       const toast =
@@ -1888,7 +1975,9 @@ export default function ManageCaddiesPage() {
                   <ul className="cm-roster-list">
                     {(() => {
                       const showSlots =
-                        placementEdit && !col.driving && !searchLocked;
+                        !col.driving &&
+                        !searchLocked &&
+                        (placementEdit || !q.trim());
                       if (!showSlots) {
                         if (col.members.length === 0) {
                           return <li className="cm-roster-empty">없음</li>;
@@ -2045,26 +2134,7 @@ export default function ManageCaddiesPage() {
                           dirtyIdSet.has(c.id) ? ' is-dirty' : ''
                         }`}
                         onClick={() => {
-                          if (placementEdit) {
-                            if (searchLocked) {
-                              setMessage(ROSTER_REASSIGN_SEARCH_LOCK_MESSAGE);
-                              return;
-                            }
-                            if (!canRosterReassignCaddy(c)) {
-                              setMessage(
-                                '드라이빙·삭제 캐디는 이번 재배치에서 제외합니다.'
-                              );
-                              return;
-                            }
-                            setMoveCaddyId(c.id);
-                            setMoveTeam(isPrimaryTeam(c.team) ? c.team : '1조');
-                            setPlacementMoveOrder(
-                              hasAssignedRosterSlot(c.teamOrder) ? c.teamOrder : 1
-                            );
-                            return;
-                          }
-                          setEditingId(null);
-                          setMenuCaddyId(c.id);
+                          openCaddyMenu(c);
                         }}
                       >
                         <span className={`cm-cart ${cartNo ? '' : 'is-empty'}`}>
@@ -3631,15 +3701,12 @@ export default function ManageCaddiesPage() {
 
       {menuCaddy && (
         <div
-          className="cm-sheet-overlay"
+          className="cm-sheet-overlay is-caddy-menu"
           role="presentation"
-          onClick={() => {
-            setMenuCaddyId(null);
-            if (editingId === menuCaddy.id) cancelEdit();
-          }}
+          onClick={closeCaddyMenu}
         >
           <div
-            className="cm-sheet"
+            className="cm-sheet cm-sheet-menu"
             role="dialog"
             aria-label={formatCaddyLabel(menuCaddy)}
             onClick={(e) => e.stopPropagation()}
@@ -3647,24 +3714,21 @@ export default function ManageCaddiesPage() {
             <div className="cm-sheet-head">
               <div className="cm-sheet-title">
                 <strong>{formatCaddyLabel(menuCaddy)}</strong>
-                {!isDrivingCaddy(menuCaddy) ? (
-                  <span className="cm-sheet-sub">
-                    {hasAssignedRosterSlot(menuCaddy.teamOrder)
+                <span className="cm-sheet-sub">
+                  {isDrivingCaddy(menuCaddy)
+                    ? ROSTER_DRIVING_LABEL
+                    : hasAssignedRosterSlot(menuCaddy.teamOrder)
                       ? `${menuCaddy.teamOrder}번`
                       : '순번 없음'}
-                    {cartByCaddyId[menuCaddy.id]
-                      ? ` · 카트 ${cartByCaddyId[menuCaddy.id]}`
-                      : ''}
-                  </span>
-                ) : null}
+                  {cartByCaddyId[menuCaddy.id]
+                    ? ` · 카트 ${cartByCaddyId[menuCaddy.id]}`
+                    : ''}
+                </span>
               </div>
               <button
                 type="button"
                 className="cm-btn cm-btn-sm"
-                onClick={() => {
-                  setMenuCaddyId(null);
-                  if (editingId === menuCaddy.id) cancelEdit();
-                }}
+                onClick={closeCaddyMenu}
               >
                 닫기
               </button>
@@ -3783,81 +3847,166 @@ export default function ManageCaddiesPage() {
                   const st = normalizeEmploymentStatus(c.employmentStatus);
                   const isDriving = isDrivingCaddy(c);
                   const leave = st === 'LEAVE';
-                  return (
-                    <>
-                      {leave ? (
+                  const back = (
+                    <button
+                      type="button"
+                      className="cm-btn"
+                      onClick={() => setMenuPanel('root')}
+                    >
+                      뒤로
+                    </button>
+                  );
+                  if (menuPanel === 'move') {
+                    return (
+                      <>
+                        {placementEdit ? (
+                          <button
+                            type="button"
+                            className="cm-btn cm-btn-primary"
+                            onClick={() => openPlacementMoveSheet(c)}
+                          >
+                            조·순번 선택
+                          </button>
+                        ) : (
+                          <>
+                            {!leave ? (
+                              <button
+                                type="button"
+                                className="cm-btn"
+                                disabled={busy}
+                                aria-label="소속/조 변경"
+                                onClick={() => startEdit(c)}
+                              >
+                                조 변경
+                              </button>
+                            ) : null}
+                            {!isDriving && !leave ? (
+                              <>
+                                <button
+                                  type="button"
+                                  className="cm-btn"
+                                  disabled={busy}
+                                  onClick={() => void moveOrder(c, -1)}
+                                >
+                                  순번↑
+                                </button>
+                                <button
+                                  type="button"
+                                  className="cm-btn"
+                                  disabled={busy}
+                                  onClick={() => void moveOrder(c, 1)}
+                                >
+                                  순번↓
+                                </button>
+                              </>
+                            ) : null}
+                          </>
+                        )}
+                        {back}
+                      </>
+                    );
+                  }
+                  if (menuPanel === 'status') {
+                    return (
+                      <>
+                        {leave ? (
+                          <button
+                            type="button"
+                            className="cm-btn cm-btn-primary"
+                            disabled={busy}
+                            onClick={() => void setEmployment(c, 'ACTIVE')}
+                          >
+                            복직
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="cm-btn"
+                            disabled={busy}
+                            onClick={() => void setEmployment(c, 'LEAVE')}
+                          >
+                            휴직
+                          </button>
+                        )}
+                        {!isDriving && !leave ? (
+                          <button
+                            type="button"
+                            className="cm-btn"
+                            disabled={busy}
+                            onClick={() => void convertToDriving(c)}
+                          >
+                            드라이빙 전환
+                          </button>
+                        ) : null}
+                        {back}
+                      </>
+                    );
+                  }
+                  if (menuPanel === 'delete') {
+                    return (
+                      <>
+                        <p className="cm-menu-warn">
+                          삭제하면 현재 명단과 자동배치에서 제외됩니다. 캐디
+                          기록은 지우지 않고 퇴사(RETIRED)로 처리합니다.
+                        </p>
                         <button
                           type="button"
-                          className="cm-btn cm-btn-primary"
+                          className="cm-btn cm-btn-danger"
                           disabled={busy}
-                          onClick={() => setEmployment(c, 'ACTIVE')}
+                          onClick={() => void setEmployment(c, 'RETIRED')}
                         >
-                          복귀
+                          삭제(퇴사 처리)
                         </button>
-                      ) : null}
+                        {back}
+                      </>
+                    );
+                  }
+                  return (
+                    <>
                       <button
                         type="button"
                         className="cm-btn"
                         disabled={busy}
-                        onClick={() => startEdit(c)}
+                        onClick={() => {
+                          if (placementEdit) {
+                            openPlacementMoveSheet(c);
+                            return;
+                          }
+                          setMenuPanel('move');
+                        }}
+                      >
+                        이동
+                      </button>
+                      <button
+                        type="button"
+                        className="cm-btn"
+                        disabled={busy}
+                        onClick={() => {
+                          if (!requireCleanPlacementForImmediate()) return;
+                          startEdit(c);
+                        }}
                       >
                         수정
                       </button>
-                      {!leave ? (
-                        <button
-                          type="button"
-                          className="cm-btn"
-                          disabled={busy}
-                          onClick={() => startEdit(c)}
-                        >
-                          소속/조 변경
-                        </button>
-                      ) : null}
-                      {!isDriving && !leave ? (
-                        <>
-                          <button
-                            type="button"
-                            className="cm-btn"
-                            disabled={busy}
-                            onClick={() => moveOrder(c, -1)}
-                          >
-                            순번↑
-                          </button>
-                          <button
-                            type="button"
-                            className="cm-btn"
-                            disabled={busy}
-                            onClick={() => moveOrder(c, 1)}
-                          >
-                            순번↓
-                          </button>
-                        </>
-                      ) : null}
-                      {!leave ? (
-                        <button
-                          type="button"
-                          className="cm-btn"
-                          disabled={busy}
-                          onClick={() => setEmployment(c, 'LEAVE')}
-                        >
-                          휴직
-                        </button>
-                      ) : null}
-                      {!isDriving && !leave ? (
-                        <button
-                          type="button"
-                          className="cm-btn"
-                          disabled={busy}
-                          onClick={() => convertToDriving(c)}
-                        >
-                          드라이빙 전환
-                        </button>
-                      ) : null}
+                      <button
+                        type="button"
+                        className="cm-btn"
+                        disabled={busy}
+                        onClick={() => {
+                          if (!requireCleanPlacementForImmediate()) return;
+                          setMenuPanel('status');
+                        }}
+                      >
+                        상태 변경
+                      </button>
                       <button
                         type="button"
                         className="cm-btn cm-btn-danger"
                         disabled={busy}
-                        onClick={() => setEmployment(c, 'RETIRED')}
+                        onClick={() => {
+                          if (!requireCleanPlacementForImmediate()) return;
+                          setMenuPanel('delete');
+                        }}
                       >
                         삭제
                       </button>
@@ -4193,8 +4342,10 @@ export default function ManageCaddiesPage() {
           grid-template-columns: 1.1em minmax(0, 1fr);
           column-gap: 4px;
           align-items: center;
-          min-height: 16px;
-          padding: 1px 5px;
+          height: var(--cm-row-h);
+          min-height: var(--cm-row-h);
+          box-sizing: border-box;
+          padding: 0 5px;
           color: #94a3b8;
           font-size: 0.66rem;
           border-bottom: 1px dashed #e2e8f0;
@@ -4213,18 +4364,23 @@ export default function ManageCaddiesPage() {
         }
         .caddy-manage.density-compact .cm-roster-gap {
           grid-template-columns: 1em minmax(0, 1fr);
-          min-height: 14px;
         }
         .caddy-manage {
           --cm-col-min: 168px;
           --cm-band-h: 26px;
+          --cm-head-h: 44px;
+          --cm-row-h: 44px;
         }
         .caddy-manage.density-compact {
           --cm-col-min: 116px;
           --cm-band-h: 22px;
+          --cm-head-h: 32px;
+          --cm-row-h: 28px;
         }
         .caddy-manage.density-normal {
           --cm-col-min: 168px;
+          --cm-head-h: 44px;
+          --cm-row-h: 36px;
         }
         .cm-roster-scroll {
           overflow-x: auto;
@@ -4298,11 +4454,12 @@ export default function ManageCaddiesPage() {
           z-index: 2;
           flex: 0 0 auto;
           display: flex;
-          align-items: baseline;
+          align-items: center;
           justify-content: space-between;
           gap: 4px;
-          min-height: 44px;
-          padding: 6px 6px;
+          height: var(--cm-head-h);
+          min-height: var(--cm-head-h);
+          padding: 0 6px;
           background: #245c44;
           color: #fff;
           font-weight: 700;
@@ -4342,12 +4499,13 @@ export default function ManageCaddiesPage() {
         }
         .cm-roster-cell {
           width: 100%;
-          min-height: 44px;
+          height: var(--cm-row-h);
+          min-height: var(--cm-row-h);
           display: grid;
           grid-template-columns: 1.1em 2.15em minmax(0, 1fr);
           column-gap: 4px;
-          align-items: start;
-          padding: 4px 5px;
+          align-items: center;
+          padding: 0 5px;
           border: 0;
           border-bottom: 1px solid #e5e8ea;
           background: transparent;
@@ -4355,6 +4513,7 @@ export default function ManageCaddiesPage() {
           font: inherit;
           cursor: pointer;
           color: inherit;
+          overflow: hidden;
         }
         .cm-roster-col.is-driving .cm-roster-cell {
           grid-template-columns: 2.15em minmax(0, 1fr);
@@ -4373,8 +4532,7 @@ export default function ManageCaddiesPage() {
           font-size: 0.66rem;
           color: #64748b;
           text-align: right;
-          padding-top: 3px;
-          line-height: 1.2;
+          line-height: 1;
         }
         .cm-ord.is-unset {
           color: #cbd5e1;
@@ -4390,8 +4548,7 @@ export default function ManageCaddiesPage() {
           font-size: 0.8rem;
           color: #1f4d3a;
           text-align: right;
-          padding-top: 1px;
-          line-height: 1.25;
+          line-height: 1;
           border-right: 1px solid #d9e0dc;
           padding-right: 4px;
         }
@@ -4402,34 +4559,35 @@ export default function ManageCaddiesPage() {
         .cm-cell-main {
           min-width: 0;
           display: flex;
-          flex-wrap: wrap;
-          align-items: baseline;
-          gap: 2px 4px;
+          flex-wrap: nowrap;
+          align-items: center;
+          gap: 4px;
+          overflow: hidden;
         }
         .cm-cell-name {
           min-width: 0;
+          flex: 1 1 auto;
           font-size: 0.8rem;
           font-weight: 700;
-          line-height: 1.25;
-          overflow: visible;
-          white-space: normal;
-          overflow-wrap: anywhere;
-          word-break: keep-all;
+          line-height: 1.15;
+          overflow: hidden;
+          white-space: nowrap;
+          text-overflow: ellipsis;
         }
         .cm-roster-cell .cm-cell-main {
-          min-width: 3.2em;
+          min-width: 0;
         }
         .cm-roster-cell .cm-cell-name {
-          min-width: 3.2em;
-          overflow-wrap: break-word;
-          word-break: keep-all;
+          min-width: 0;
+        }
+        .caddy-manage.density-normal .cm-roster-col-head {
+          min-height: 44px;
         }
         .caddy-manage.density-normal .cm-roster-col {
           min-width: 168px;
         }
         .caddy-manage.density-normal .cm-roster-cell {
-          min-height: 44px;
-          padding: 5px 8px;
+          padding: 0 8px;
         }
         .caddy-manage.density-normal .cm-cell-name {
           font-size: 0.92rem;
@@ -4438,12 +4596,11 @@ export default function ManageCaddiesPage() {
           font-size: 0.86rem;
         }
         .caddy-manage.density-compact .cm-roster-col-head {
-          min-height: 32px;
-          padding: 4px 5px;
+          min-height: var(--cm-head-h);
+          padding: 0 5px;
         }
         .caddy-manage.density-compact .cm-roster-cell {
-          min-height: 32px;
-          grid-template-columns: 1em 1.85em minmax(3.2em, 1fr);
+          grid-template-columns: 1em 1.85em minmax(0, 1fr);
         }
         .caddy-manage.density-compact .cm-roster-col.is-driving .cm-roster-cell {
           grid-template-columns: 1.85em minmax(3.2em, 1fr);
@@ -4470,7 +4627,9 @@ export default function ManageCaddiesPage() {
           font-size: 0.62rem;
           font-weight: 800;
           border-radius: 4px;
-          padding: 1px 5px;
+          padding: 1px 4px;
+          line-height: 1.2;
+          white-space: nowrap;
         }
         .cm-leave-badge {
           color: #92400e;
@@ -4580,6 +4739,35 @@ export default function ManageCaddiesPage() {
           display: flex;
           align-items: flex-end;
           justify-content: center;
+        }
+        .cm-sheet-menu .cm-sheet-actions {
+          gap: 6px;
+        }
+        .cm-sheet-menu .cm-sheet-actions .cm-btn {
+          min-height: 42px;
+          font-size: 0.92rem;
+        }
+        .cm-sheet-menu .cm-sheet-title strong {
+          font-size: 1rem;
+        }
+        .cm-menu-warn {
+          margin: 0 0 4px;
+          font-size: 0.78rem;
+          line-height: 1.4;
+          color: #92400e;
+        }
+        @media (min-width: 960px) {
+          .cm-sheet-overlay.is-caddy-menu {
+            align-items: center;
+            padding: 24px;
+          }
+          .cm-sheet-overlay.is-caddy-menu .cm-sheet-menu {
+            width: 320px;
+            max-width: 92vw;
+            border-radius: 12px;
+            box-shadow: 0 16px 40px rgba(15, 23, 42, 0.22);
+            padding: 10px 12px 12px;
+          }
         }
         .cm-sheet {
           width: 100%;

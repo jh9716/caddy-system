@@ -276,7 +276,8 @@ console.log("== page wiring ==");
       /density-\$\{density\}/.test(page) &&
       /--cm-col-min:\s*116px/.test(page) &&
       /\.cm-roster-cell \.cm-cell-name/.test(page) &&
-      /overflow-wrap:\s*break-word/.test(page) &&
+      /text-overflow:\s*ellipsis/.test(page) &&
+      /--cm-row-h/.test(page) &&
       /일반 보기/.test(page) &&
       /압축 보기/.test(page) &&
       /cm-density-toggle/.test(page) &&
