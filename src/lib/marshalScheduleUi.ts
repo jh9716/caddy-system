@@ -29,6 +29,12 @@ export type MarshalCalendarCell = {
   inMonth: boolean;
 };
 
+export type MarshalDayOccurrenceBadge = {
+  caddyId: number;
+  name: string;
+  source: "AUTO" | "MANUAL";
+};
+
 export type MarshalDayBoard = {
   ymd: string;
   day: number;
@@ -42,6 +48,7 @@ export type MarshalDayBoard = {
   hasSubstitute: boolean;
   hasPenalty: boolean;
   penaltyCount: number;
+  occurrenceBadges: MarshalDayOccurrenceBadge[];
 };
 
 export function weekdayIndexFromYmd(ymd: string): number {
@@ -154,6 +161,13 @@ export function buildMarshalDayBoard(input: {
   ymd: string;
   slots?: readonly MarshalScheduleSlotView[];
   penalties?: readonly { date: string }[];
+  occurrences?: readonly {
+    scheduledOn?: string | null;
+    status?: string;
+    caddyId: number;
+    scheduleSource?: string | null;
+    caddy?: { name?: string | null } | null;
+  }[];
 }): MarshalDayBoard {
   const ymd = String(input.ymd);
   const weekday = weekdayIndexFromYmd(ymd);
@@ -161,6 +175,19 @@ export function buildMarshalDayBoard(input: {
   const am = slotsForShift(daySlots, "AM");
   const pm = slotsForShift(daySlots, "PM");
   const penaltyCount = (input.penalties || []).filter((row) => row.date === ymd).length;
+  const occurrenceBadges = (input.occurrences || [])
+    .filter(
+      (row) =>
+        String(row.status || "SCHEDULED").toUpperCase() === "SCHEDULED" &&
+        row.scheduledOn === ymd
+    )
+    .map((row) => ({
+      caddyId: row.caddyId,
+      name: String(row.caddy?.name || "").trim() || "이름없음",
+      source: String(row.scheduleSource || "").toUpperCase() === "MANUAL"
+        ? ("MANUAL" as const)
+        : ("AUTO" as const),
+    }));
   return {
     ymd,
     day: Number(ymd.slice(8)) || 0,
@@ -174,8 +201,12 @@ export function buildMarshalDayBoard(input: {
     hasSubstitute: daySlots.some(
       (slot) => slot.source === "SUBSTITUTE" || Boolean(slot.originalCaddy)
     ),
-    hasPenalty: penaltyCount > 0 || daySlots.some((slot) => slot.source === "PENALTY"),
+    hasPenalty:
+      penaltyCount > 0 ||
+      daySlots.some((slot) => slot.source === "PENALTY") ||
+      occurrenceBadges.length > 0,
     penaltyCount,
+    occurrenceBadges,
   };
 }
 
@@ -192,12 +223,20 @@ export function listMonthDayBoards(input: {
   month: number;
   slots?: readonly MarshalScheduleSlotView[];
   penalties?: readonly { date: string }[];
+  occurrences?: readonly {
+    scheduledOn?: string | null;
+    status?: string;
+    caddyId: number;
+    scheduleSource?: string | null;
+    caddy?: { name?: string | null } | null;
+  }[];
 }): MarshalDayBoard[] {
   return listMonthYmds(input.year, input.month).map((ymd) =>
     buildMarshalDayBoard({
       ymd,
       slots: input.slots,
       penalties: input.penalties,
+      occurrences: input.occurrences,
     })
   );
 }

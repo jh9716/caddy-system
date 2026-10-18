@@ -2,6 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import MarshalManageNav from "@/components/manage/MarshalManageNav";
+import MarshalPenaltyOccurrencePanel from "@/components/manage/MarshalPenaltyOccurrencePanel";
+import {
+  DUTY_PANEL_TITLE,
+  occurrenceCalendarBadgeText,
+  regenerationBannerText,
+  type OccurrenceListItem,
+} from "@/lib/marshalPenaltyOccurrenceUi";
 import {
   MARSHAL_WEEKDAY_LABELS,
   buildMarshalDayBoard,
@@ -70,11 +77,13 @@ type PlanPayload = {
   members: Member[];
   credits: OpenCredit[];
   creditRemaining: CreditRemain[];
+  penaltyOccurrences?: OccurrenceListItem[];
   plan: {
     id: number;
     amSlotsPerDay: number;
     pmSlotsPerDay: number;
     status: string;
+    needsRegeneration?: boolean;
     startRotationOrder: number;
     nextRotationOrder: number;
     startPendingProfileIds?: number[];
@@ -120,11 +129,25 @@ function PanelToggle({
 }
 
 function DayFlags({ day }: { day: MarshalDayBoard }) {
+  const occ = day.occurrenceBadges || [];
   return (
     <span className="ms-flags">
       {day.hasWarning ? <span className="ms-flag is-warn">경고</span> : null}
       {day.hasSubstitute ? <span className="ms-flag is-sub">대타</span> : null}
-      {day.hasPenalty ? <span className="ms-flag is-penalty">벌당</span> : null}
+      {occ.length === 0 && day.hasPenalty ? (
+        <span className="ms-flag is-penalty">벌당</span>
+      ) : null}
+      {occ.slice(0, 2).map((badge) => (
+        <span
+          key={`${badge.caddyId}-${badge.source}`}
+          className={`ms-flag is-occ is-${badge.source.toLowerCase()}`}
+        >
+          {occurrenceCalendarBadgeText(badge)}
+        </span>
+      ))}
+      {occ.length > 2 ? (
+        <span className="ms-flag is-occ">전일 +{occ.length - 2}</span>
+      ) : null}
     </span>
   );
 }
@@ -268,6 +291,10 @@ export default function ManageMarshalSchedulePage() {
     () => dataForMonth?.plan?.penalties || [],
     [dataForMonth]
   );
+  const occurrences = useMemo(
+    () => dataForMonth?.penaltyOccurrences || [],
+    [dataForMonth]
+  );
   const calendar = useMemo(
     () => (monthValid ? buildMonthCalendar(yearNum, monthNum) : []),
     [monthValid, yearNum, monthNum]
@@ -280,12 +307,18 @@ export default function ManageMarshalSchedulePage() {
             month: monthNum,
             slots,
             penalties,
+            occurrences,
           })
         : [],
-    [monthValid, yearNum, monthNum, slots, penalties]
+    [monthValid, yearNum, monthNum, slots, penalties, occurrences]
   );
   const selected = selectedDate
-    ? buildMarshalDayBoard({ ymd: selectedDate, slots, penalties })
+    ? buildMarshalDayBoard({
+        ymd: selectedDate,
+        slots,
+        penalties,
+        occurrences,
+      })
     : null;
 
   const run = async (fn: () => Promise<void>) => {
@@ -511,6 +544,14 @@ export default function ManageMarshalSchedulePage() {
         {day.ymd} {day.weekdayLabel}요일
         <DayFlags day={day} />
       </p>
+      {day.occurrenceBadges.length > 0 ? (
+        <p className="ms-muted">
+          전일 벌당(조출+후출){" "}
+          {day.occurrenceBadges
+            .map((badge) => occurrenceCalendarBadgeText(badge))
+            .join(" · ")}
+        </p>
+      ) : null}
       {(["AM", "PM"] as const).map((shift) => {
         const lane = shift === "AM" ? day.am : day.pm;
         return (
@@ -735,6 +776,23 @@ export default function ManageMarshalSchedulePage() {
         </p>
       ) : null}
 
+      {showWorkspace &&
+      regenerationBannerText({
+        needsRegeneration: dataForMonth?.plan?.needsRegeneration,
+        planStatus: dataForMonth?.plan?.status,
+      }) ? (
+        <p
+          className="ms-regen"
+          role="status"
+          data-marshal-regen-banner="1"
+        >
+          {regenerationBannerText({
+            needsRegeneration: dataForMonth?.plan?.needsRegeneration,
+            planStatus: dataForMonth?.plan?.status,
+          })}
+        </p>
+      ) : null}
+
       {showWorkspace && showEmpty ? (
         <div className="ms-empty" data-marshal-empty-plan="1">
           <p>아직 생성된 마샬 월표가 없습니다.</p>
@@ -753,6 +811,18 @@ export default function ManageMarshalSchedulePage() {
             </button>
           </div>
         </div>
+      ) : null}
+
+      {showWorkspace ? (
+        <MarshalPenaltyOccurrencePanel
+          members={dataForMonth?.members || []}
+          occurrences={occurrences}
+          planStatus={dataForMonth?.plan?.status}
+          needsRegeneration={Boolean(dataForMonth?.plan?.needsRegeneration)}
+          planGenerated={Boolean(dataForMonth?.plan?.generatedAt)}
+          locked={locked}
+          onMutate={run}
+        />
       ) : null}
 
       {showWorkspace ? (
@@ -933,7 +1003,12 @@ export default function ManageMarshalSchedulePage() {
               <button
                 type="button"
                 className="ui-btn"
-                disabled={locked || !dataForMonth?.plan?.id || finalized}
+                disabled={
+                  locked ||
+                  !dataForMonth?.plan?.id ||
+                  finalized ||
+                  Boolean(dataForMonth?.plan?.needsRegeneration)
+                }
                 onClick={() => void finalize()}
               >
                 마감 (FINALIZE)
@@ -947,11 +1022,15 @@ export default function ManageMarshalSchedulePage() {
         <PanelToggle
           open={penaltyOpen}
           onToggle={() => setPenaltyOpen((value) => !value)}
-          label="벌당 관리"
+          label={DUTY_PANEL_TITLE}
           count={penalties.length}
         />
         {penaltyOpen ? (
           <div className="ms-panel-body">
+            <p className="ms-muted">
+              이번 달 월표에 조출 또는 후출 한 칸을 직접 넣는 기능입니다. 다음 달
+              전일 벌당 발생과는 다릅니다.
+            </p>
             <div className="ms-actions">
               <input
                 aria-label="벌당 날짜"
