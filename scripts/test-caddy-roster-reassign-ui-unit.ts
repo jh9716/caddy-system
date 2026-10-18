@@ -33,6 +33,11 @@ import {
   postCaddyReassignPreview,
   type CaddyReassignFetch,
 } from "../src/lib/caddyReassignClient";
+import {
+  isImmediateRosterMutationBlocked,
+  ROSTER_DIRTY_IMMEDIATE_BLOCK_MESSAGE,
+  shouldSuppressRosterClick,
+} from "../src/lib/caddyRosterActionMenu";
 
 let passed = 0;
 let failed = 0;
@@ -469,6 +474,24 @@ section("preview warning presentation");
   );
 }
 
+section("click menu / dirty block / drag click");
+{
+  assert(
+    isImmediateRosterMutationBlocked(0) === false,
+    "clean draft allows immediate mutation"
+  );
+  assert(
+    isImmediateRosterMutationBlocked(2) === true,
+    "dirty draft blocks immediate mutation"
+  );
+  assert(
+    ROSTER_DIRTY_IMMEDIATE_BLOCK_MESSAGE.includes("저장하거나 취소"),
+    "dirty block asks to save or cancel first"
+  );
+  assert(shouldSuppressRosterClick(true) === true, "drag suppresses following click");
+  assert(shouldSuppressRosterClick(false) === false, "plain click opens menu");
+}
+
 section("page wiring");
 {
   const page = fs.readFileSync(
@@ -498,8 +521,19 @@ section("page wiring");
     "stale requires reload, no auto save"
   );
   assert(
-    /placementEdit/.test(page) && /setMenuCaddyId\(c\.id\)/.test(page),
-    "normal click menu remains outside edit"
+    /placementEdit/.test(page) &&
+      /setMenuCaddyId\(c\.id\)/.test(page) &&
+      /openCaddyMenu/.test(page) &&
+      !/placementEdit \? null/.test(page),
+    "click menu stays available in placement edit"
+  );
+  assert(
+    /상태 변경/.test(page) &&
+      /삭제\(퇴사 처리\)/.test(page) &&
+      /ROSTER_DIRTY_IMMEDIATE_BLOCK_MESSAGE/.test(page) &&
+      /shouldSuppressRosterClick/.test(page) &&
+      /is-caddy-menu/.test(page),
+    "two-level menu + dirty block + compact sheet"
   );
   assert(
     !/autoAssignEngine/.test(page) &&
