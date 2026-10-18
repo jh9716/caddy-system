@@ -14,13 +14,16 @@ import {
   occurrenceCalendarBadgeText,
   occurrenceConflictMessage,
   occurrenceRegisterBlocked,
+  occurrenceRegisterSuccessNotice,
   occurrenceSourceLabel,
   occurrenceStatusLabel,
   occurrenceWaitLabel,
   previewChangedNormalNames,
   previewExistingPenaltyNames,
   previewOtherDatesUnchanged,
+  previewNetworkErrorMessage,
   previewOverrideNames,
+  previewResultUsable,
   regenerationBannerText,
   scheduledOccurrencesOnDate,
   targetMonthFromOccurredOnYmd,
@@ -113,6 +116,35 @@ section("guards and keys");
   assert(
     targetMonthFromOccurredOnYmd("2095-10-18")?.month === 11,
     "발생일 다음 달이 대상 월"
+  );
+  assert(
+    occurrenceRegisterSuccessNotice({
+      occurredOn: "2095-10-18",
+      viewYear: 2095,
+      viewMonth: 10,
+    })?.text === "등록 완료 · 2095년 11월 대상",
+    "다른 조회 월이면 대상 월 안내"
+  );
+  assert(
+    occurrenceRegisterSuccessNotice({
+      occurredOn: "2095-10-18",
+      viewYear: 2095,
+      viewMonth: 11,
+    }) === null,
+    "대상 월을 보고 있으면 안내 없음"
+  );
+  assert(
+    previewNetworkErrorMessage().includes("미리보기"),
+    "Preview 네트워크 오류 문구"
+  );
+  assert(!previewResultUsable(null), "실패한 Preview는 Apply 불가");
+  assert(
+    !previewResultUsable({ previewToken: "" }),
+    "토큰 없는 Preview는 Apply 불가"
+  );
+  assert(
+    previewResultUsable({ previewToken: "abc" }),
+    "토큰 있는 Preview만 Apply"
   );
   const key = makeOccurrenceIdempotencyKey({
     caddyId: 12,
@@ -267,6 +299,11 @@ section("source contracts");
   assert(panel.includes("data-marshal-occurrence-cancel"), "취소 버튼 마커");
   assert(panel.includes("stale_preview"), "stale 재미리보기");
   assert(panel.includes("confirmOff"), "휴무 승인");
+  assert(panel.includes("대상 월로 이동"), "대상 월 이동 버튼");
+  assert(panel.includes("previewNetworkErrorMessage"), "Preview 네트워크 오류");
+  assert(panel.includes("setPreview(null)"), "실패 Preview 폐기");
+  assert(page.includes("goToYearMonth"), "기존 월 이동 재사용");
+  assert(page.includes("onMoveToMonth"), "대상 월 이동 연결");
   assert(panel.includes("기존 벌당자"), "미리보기 기존 벌당");
   assert(panel.includes("대타/수동배치"), "미리보기 대타 충돌");
   assert(panel.includes("휴무 충돌을 확인하고"), "휴무 명시 승인");

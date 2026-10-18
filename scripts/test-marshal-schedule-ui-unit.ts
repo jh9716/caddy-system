@@ -423,6 +423,7 @@ section("source contracts");
   assert(page.includes("월표 설정"), "설정 패널");
   assert(page.includes("DUTY_PANEL_TITLE"), "기존 벌당 패널 명칭");
   assert(page.includes("MarshalPenaltyOccurrencePanel"), "발생 벌당 패널");
+  assert(page.includes("goToYearMonth"), "대상 월 이동 재사용");
   assert(page.includes("data-marshal-regen-banner"), "재생성 배너");
   assert(page.includes("대타 보정 관리"), "보정 패널");
   assert(page.includes("아직 생성된 마샬 월표가 없습니다"), "빈 월표 안내");
