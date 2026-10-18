@@ -18,6 +18,7 @@ import {
   finalizeMonthPlan,
   generateMonthPlan,
   getMonthPlan,
+  replaceMonthSlot,
   upsertMonthPlanSettings,
 } from "../src/lib/marshalRotationService";
 
@@ -170,6 +171,7 @@ async function main() {
   const A = roster[0];
   const B = roster[1];
   const C = roster[2];
+  const D = roster[3];
   const ids = roster.map((row) => row.caddy.id);
 
   try {
@@ -196,19 +198,6 @@ async function main() {
           where: { year: YEAR, month: TARGET_MONTH },
         })) === beforePlans,
         "did not create a month plan"
-      );
-      await throwsCode(
-        () =>
-          createPenaltyOccurrence(
-            {
-              caddyId: A.caddy.id,
-              occurredOn: OCT1,
-              reason: "중복",
-            },
-            prisma
-          ),
-        "duplicate_occurrence",
-        "same caddy+occurredOn 409"
       );
     }
 
@@ -426,6 +415,266 @@ async function main() {
       assert(aPenaltyDays.size === 30, "still 30 penalty days, not 60");
     }
 
+    section("SCHEDULED 취소 후 FINALIZE 차단·재생성·다른 벌당·대타 보존");
+    {
+      await wipeOccurrences(ids);
+      await prisma.marshalPenaltyDuty.deleteMany({
+        where: { plan: { year: YEAR, month: TARGET_MONTH } },
+      });
+      const occA = await createPenaltyOccurrence(
+        { caddyId: A.caddy.id, occurredOn: OCT1, reason: "cancel-A" },
+        prisma
+      );
+      const occB = await createPenaltyOccurrence(
+        { caddyId: B.caddy.id, occurredOn: OCT2, reason: "keep-B" },
+        prisma
+      );
+      await generateTarget();
+      const beforeCancel = await getMonthPlan({ year: YEAR, month: TARGET_MONTH });
+      const rotationSlot = beforeCancel.plan!.slots.find(
+        (s) => s.date === NOV1 && s.source === "ROTATION"
+      );
+      const subCaddyId =
+        rotationSlot!.caddyId === C.caddy.id ? D.caddy.id : C.caddy.id;
+      const sub = await replaceMonthSlot({
+        planId: beforeCancel.plan!.id,
+        slotId: rotationSlot!.id,
+        caddyId: subCaddyId,
+        asSubstitute: true,
+      });
+      assert(sub.source === "SUBSTITUTE" && sub.caddyId === subCaddyId, "manual sub placed");
+      await cancelPenaltyOccurrence({ id: occA.id }, prisma);
+      const stale = await getMonthPlan({ year: YEAR, month: TARGET_MONTH });
+      assert(stale.plan!.needsRegeneration === true, "cancel marks needsRegeneration");
+      assert(stale.plan!.status === "DRAFT", "plan stays DRAFT");
+      const stillB = stale.penaltyOccurrences.find((row) => row.id === occB.id);
+      assert(stillB?.status === "SCHEDULED", "other occurrence stays SCHEDULED");
+      assert(
+        penaltySlotsOn(stale.plan!, stillB!.scheduledOn!, B.caddy.id).length === 2,
+        "B FULL_DAY pair still present"
+      );
+      assert(
+        penaltySlotsOn(stale.plan!, NOV1, A.caddy.id).length === 2,
+        "cancelled A slots remain until regenerate"
+      );
+      assert(
+        stale.plan!.slots.some(
+          (s) => s.id === sub.id && s.source === "SUBSTITUTE" && s.caddyId === subCaddyId
+        ),
+        "substitute not silently deleted on cancel"
+      );
+      await throwsCode(
+        () => finalizeMonthPlan({ id: stale.plan!.id }),
+        "regeneration_required",
+        "stale DRAFT cannot FINALIZE"
+      );
+      assert(
+        (await prisma.marshalMonthPlan.findUnique({ where: { id: stale.plan!.id } }))
+          ?.status === "DRAFT",
+        "failed finalize stays DRAFT"
+      );
+      await generateTarget();
+      const refreshed = await getMonthPlan({ year: YEAR, month: TARGET_MONTH });
+      assert(refreshed.plan!.needsRegeneration === false, "regenerate clears stale flag");
+      assert(
+        penaltySlotsOn(refreshed.plan!, NOV1, A.caddy.id).length === 0,
+        "cancelled A not rescheduled"
+      );
+      const bAfter = refreshed.penaltyOccurrences.find((row) => row.id === occB.id);
+      assert(bAfter?.status === "SCHEDULED", "B still scheduled after regenerate");
+      assert(
+        penaltySlotsOn(refreshed.plan!, bAfter!.scheduledOn!, B.caddy.id).length === 2,
+        "B FULL_DAY pair preserved through regenerate"
+      );
+    }
+
+    section("후출 2명이어도 벌당 하루 1명");
+    {
+      await wipeOccurrences(ids);
+      await createPenaltyOccurrence(
+        { caddyId: A.caddy.id, occurredOn: OCT1, reason: "pm2-A" },
+        prisma
+      );
+      await createPenaltyOccurrence(
+        { caddyId: B.caddy.id, occurredOn: OCT2, reason: "pm2-B" },
+        prisma
+      );
+      await createPenaltyOccurrence(
+        { caddyId: C.caddy.id, occurredOn: OCT3, reason: "pm2-C" },
+        prisma
+      );
+      await generateMonthPlan({
+        year: YEAR,
+        month: TARGET_MONTH,
+        amSlotsPerDay: 2,
+        pmSlotsPerDay: 2,
+        startRotationOrder: 9201,
+        replace: true,
+      });
+      const view = await getMonthPlan({ year: YEAR, month: TARGET_MONTH });
+      const scheduled = view.penaltyOccurrences
+        .filter((row) => row.status === "SCHEDULED")
+        .sort((a, b) => a.occurredOn.localeCompare(b.occurredOn));
+      assert(
+        scheduled.map((row) => `${row.caddyId}:${row.scheduledOn}`).join(",") ===
+          `${A.caddy.id}:${NOV1},${B.caddy.id}:${NOV2},${C.caddy.id}:${NOV3}`,
+        "A Nov1, B Nov2, C Nov3 even when PM=2"
+      );
+      const nov1PenaltyPeople = new Set(
+        view.plan!.slots
+          .filter((s) => s.date === NOV1 && s.source === "PENALTY")
+          .map((s) => s.caddyId)
+      );
+      assert(nov1PenaltyPeople.size === 1, "Nov 1 has one penalty person");
+    }
+
+    section("같은 캐디 같은 날 벌당 2건 + idempotency");
+    {
+      await wipeOccurrences(ids);
+      const first = await createPenaltyOccurrence(
+        {
+          caddyId: A.caddy.id,
+          occurredOn: OCT1,
+          reason: "twin-1",
+          idempotencyKey: "occ-a-oct1-1",
+        },
+        prisma
+      );
+      const second = await createPenaltyOccurrence(
+        {
+          caddyId: A.caddy.id,
+          occurredOn: OCT1,
+          reason: "twin-2",
+          idempotencyKey: "occ-a-oct1-2",
+        },
+        prisma
+      );
+      assert(first.id !== second.id, "two occurrence ids");
+      const replay = await createPenaltyOccurrence(
+        {
+          caddyId: A.caddy.id,
+          occurredOn: OCT1,
+          reason: "twin-1",
+          idempotencyKey: "occ-a-oct1-1",
+        },
+        prisma
+      );
+      assert(replay.replayed === true && replay.id === first.id, "replay returns same id");
+      await throwsCode(
+        () =>
+          createPenaltyOccurrence(
+            {
+              caddyId: B.caddy.id,
+              occurredOn: OCT2,
+              reason: "clash",
+              idempotencyKey: "occ-a-oct1-1",
+            },
+            prisma
+          ),
+        "idempotency_conflict",
+        "same key different payload 409"
+      );
+      await generateMonthPlan({
+        year: YEAR,
+        month: TARGET_MONTH,
+        amSlotsPerDay: 2,
+        pmSlotsPerDay: 1,
+        startRotationOrder: 9201,
+        replace: true,
+      });
+      const view = await getMonthPlan({ year: YEAR, month: TARGET_MONTH });
+      const days = view.penaltyOccurrences
+        .filter((row) => row.caddyId === A.caddy.id && row.status === "SCHEDULED")
+        .map((row) => row.scheduledOn)
+        .sort();
+      assert(days.join(",") === `${NOV1},${NOV2}`, "two duties on consecutive days");
+    }
+
+    section("병가 건너뛰기 후에도 발생 순서 보존");
+    {
+      await wipeOccurrences(ids);
+      await prisma.assignment.deleteMany({ where: { comment: TAG } });
+      await createPenaltyOccurrence(
+        { caddyId: A.caddy.id, occurredOn: OCT1, reason: "order-A" },
+        prisma
+      );
+      await createPenaltyOccurrence(
+        { caddyId: B.caddy.id, occurredOn: OCT2, reason: "order-B" },
+        prisma
+      );
+      await prisma.assignment.create({
+        data: {
+          caddyId: A.caddy.id,
+          type: "SICK",
+          startDate: new Date(`${NOV1}T00:00:00`),
+          endDate: new Date(`${NOV1}T00:00:00`),
+          comment: TAG,
+        },
+      });
+      await generateTarget();
+      const view = await getMonthPlan({ year: YEAR, month: TARGET_MONTH });
+      const a = view.penaltyOccurrences.find((row) => row.caddyId === A.caddy.id);
+      const b = view.penaltyOccurrences.find((row) => row.caddyId === B.caddy.id);
+      assert(a?.scheduledOn === NOV2, "A skips Nov 1 → Nov 2");
+      assert(b?.scheduledOn === NOV3, "B does not take Nov 1 ahead of A");
+      await prisma.assignment.deleteMany({ where: { comment: TAG } });
+    }
+
+    section("트랜잭션 롤백: duty overflow 시 occurrence 미적용");
+    {
+      await wipeOccurrences(ids);
+      await prisma.marshalPenaltyDuty.deleteMany({
+        where: { plan: { year: YEAR, month: TARGET_MONTH } },
+      });
+      const openOcc = await createPenaltyOccurrence(
+        { caddyId: A.caddy.id, occurredOn: OCT1, reason: "rollback" },
+        prisma
+      );
+      await createPenaltyDuty({
+        year: YEAR,
+        month: TARGET_MONTH,
+        date: NOV1,
+        caddyId: B.caddy.id,
+        shift: "AM",
+        coverage: "FULL_DAY",
+        reason: "overflow-b",
+      });
+      await createPenaltyDuty({
+        year: YEAR,
+        month: TARGET_MONTH,
+        date: NOV1,
+        caddyId: C.caddy.id,
+        shift: "AM",
+        coverage: "FULL_DAY",
+        reason: "overflow-c",
+      });
+      const before = await prisma.marshalMonthSlot.findMany({
+        where: { plan: { year: YEAR, month: TARGET_MONTH } },
+        orderBy: [{ date: "asc" }, { id: "asc" }],
+      });
+      await throwsCode(
+        () => generateTarget(),
+        "penalty_overflow",
+        "two FULL_DAY duties overflow generate"
+      );
+      const afterOcc = await prisma.marshalPenaltyOccurrence.findUnique({
+        where: { id: openOcc.id },
+      });
+      assert(afterOcc?.status === "OPEN", "overflow rolls back occurrence schedule");
+      const afterSlots = await prisma.marshalMonthSlot.findMany({
+        where: { plan: { year: YEAR, month: TARGET_MONTH } },
+        orderBy: [{ date: "asc" }, { id: "asc" }],
+      });
+      assert(
+        before.length === afterSlots.length &&
+          before.every((row, i) => row.id === afterSlots[i].id),
+        "overflow generate rolls back slots"
+      );
+      await prisma.marshalPenaltyDuty.deleteMany({
+        where: { plan: { year: YEAR, month: TARGET_MONTH } },
+      });
+    }
+
     section("취소 및 FINALIZED 보호");
     {
       await wipeOccurrences(ids);
@@ -491,10 +740,10 @@ async function main() {
       );
     }
 
-    section("동시 등록은 unique 충돌만 통과");
+    section("동시 등록: 별건 2건 vs 같은 idempotency key");
     {
       const occurredOn = `${YEAR}-10-18`;
-      const results = await Promise.allSettled([
+      const distinct = await Promise.allSettled([
         createPenaltyOccurrence(
           { caddyId: C.caddy.id, occurredOn, reason: "concurrent-a" },
           prisma
@@ -504,19 +753,43 @@ async function main() {
           prisma
         ),
       ]);
-      const ok = results.filter((row) => row.status === "fulfilled");
-      const dup = results.filter(
-        (row) =>
-          row.status === "rejected" &&
-          row.reason instanceof MarshalRosterError &&
-          row.reason.code === "duplicate_occurrence"
-      );
-      assert(ok.length === 1, "one concurrent create succeeds");
-      assert(dup.length === 1, "other concurrent create is 409");
+      const distinctOk = distinct.filter((row) => row.status === "fulfilled");
+      assert(distinctOk.length === 2, "no-key concurrent creates two genuine rows");
       const count = await prisma.marshalPenaltyOccurrence.count({
         where: { caddyId: C.caddy.id, occurredOn: new Date(`${occurredOn}T00:00:00`) },
       });
-      assert(count === 1, "only one occurrence row");
+      assert(count === 2, "same day two occurrence rows");
+
+      const key = "concurrent-same-key";
+      const keyed = await Promise.allSettled([
+        createPenaltyOccurrence(
+          {
+            caddyId: B.caddy.id,
+            occurredOn: `${YEAR}-10-19`,
+            reason: "keyed",
+            idempotencyKey: key,
+          },
+          prisma
+        ),
+        createPenaltyOccurrence(
+          {
+            caddyId: B.caddy.id,
+            occurredOn: `${YEAR}-10-19`,
+            reason: "keyed",
+            idempotencyKey: key,
+          },
+          prisma
+        ),
+      ]);
+      const keyedOk = keyed.filter((row) => row.status === "fulfilled");
+      assert(keyedOk.length === 2, "same-key concurrent both return");
+      const keyedIds = new Set(
+        keyedOk.map(
+          (row) =>
+            (row as PromiseFulfilledResult<{ id: number }>).value.id
+        )
+      );
+      assert(keyedIds.size === 1, "same-key concurrent is one occurrence");
     }
 
     section("동시 월표 생성도 중복 배정하지 않는다");

@@ -9,9 +9,11 @@ import { MarshalRosterError } from "../src/lib/marshalDomain";
 import {
   assertOccurrenceCancellable,
   assertOccurrenceTargetMutable,
+  assertPlanReadyToFinalize,
   mergeAssignedOccurrences,
   nextYearMonth,
   occurrenceToFullDayPenalty,
+  parseIdempotencyKey,
   scheduleOccurrencesForMonth,
   sortOccurrencesForSchedule,
   targetMonthFromOccurredOn,
@@ -252,7 +254,7 @@ section("existing PenaltyDuty consumes capacity; leftover stays OPEN");
   assert(
     packed.leftover.length === 1 &&
       packed.leftover[0].id === 1 &&
-      packed.leftover[0].deferReason.includes("정원"),
+      packed.leftover[0].deferReason.includes("수동"),
     "unassigned leftover keeps deferReason"
   );
 }
@@ -293,6 +295,119 @@ section("merge into penaltiesByDate does not mutate source");
       merged.get("2096-11-01")?.length === 1,
     "original day 1 unchanged in source map"
   );
+}
+
+section("PM=2 still one occurrence per day");
+{
+  const packed = scheduleOccurrencesForMonth({
+    dates: ["2096-11-01", "2096-11-02", "2096-11-03"],
+    amSlots: 2,
+    pmSlots: 2,
+    occurrences: [
+      occ(1, 10, "2096-10-01"),
+      occ(2, 20, "2096-10-02"),
+      occ(3, 30, "2096-10-03"),
+    ],
+    existingByDate: new Map(),
+    statusByDateCaddy: new Map(),
+  });
+  assert(
+    packed.assignments.map((row) => `${row.caddyId}@${row.date}`).join(",") ===
+      "10@2096-11-01,20@2096-11-02,30@2096-11-03",
+    "A,B,C each get their own day even when PM=2"
+  );
+}
+
+section("sick skip does not invert occurrence order");
+{
+  const packed = scheduleOccurrencesForMonth({
+    dates: ["2096-11-01", "2096-11-02", "2096-11-03"],
+    amSlots: 2,
+    pmSlots: 2,
+    occurrences: [occ(1, 10, "2096-10-01"), occ(2, 20, "2096-10-02")],
+    existingByDate: new Map(),
+    statusByDateCaddy: new Map([
+      ["2096-11-01:10", { kind: "hard_skip" as const, message: "병가" }],
+    ]),
+  });
+  assert(
+    packed.assignments.map((row) => `${row.id}@${row.date}`).join(",") ===
+      "1@2096-11-02,2@2096-11-03",
+    "A skips Nov 1 so B starts after A, not on Nov 1"
+  );
+}
+
+section("same occurredOn two ids take consecutive days");
+{
+  const packed = scheduleOccurrencesForMonth({
+    dates: ["2096-11-01", "2096-11-02"],
+    amSlots: 2,
+    pmSlots: 1,
+    occurrences: [occ(1, 10, "2096-10-05"), occ(2, 10, "2096-10-05")],
+    existingByDate: new Map(),
+    statusByDateCaddy: new Map(),
+  });
+  assert(
+    packed.assignments.map((row) => `${row.id}@${row.date}`).join(",") ===
+      "1@2096-11-01,2@2096-11-02",
+    "same caddy same day 2건 → Nov 1 then Nov 2"
+  );
+}
+
+section("idempotency key parse");
+{
+  assert(parseIdempotencyKey(undefined) == null, "omit key");
+  assert(parseIdempotencyKey("req-1") === "req-1", "valid key");
+  throws(
+    () => parseIdempotencyKey("has space"),
+    "invalid_idempotency_key",
+    "spaces rejected"
+  );
+}
+
+section("finalize blocked when stale or orphan penalty slots");
+{
+  throws(
+    () =>
+      assertPlanReadyToFinalize({
+        needsRegeneration: true,
+        generatedAt: new Date(),
+        slotCount: 3,
+        penaltySlots: [],
+        duties: [],
+        scheduledOccurrences: [],
+      }),
+    "regeneration_required",
+    "needsRegeneration blocks finalize"
+  );
+  throws(
+    () =>
+      assertPlanReadyToFinalize({
+        needsRegeneration: false,
+        generatedAt: new Date(),
+        slotCount: 3,
+        penaltySlots: [
+          { date: "2096-11-01", caddyId: 10, shift: "AM", source: "PENALTY" },
+          { date: "2096-11-01", caddyId: 10, shift: "PM", source: "PENALTY" },
+        ],
+        duties: [],
+        scheduledOccurrences: [],
+      }),
+    "regeneration_required",
+    "orphan cancelled slots block finalize"
+  );
+  assertPlanReadyToFinalize({
+    needsRegeneration: false,
+    generatedAt: new Date(),
+    slotCount: 3,
+    penaltySlots: [
+      { date: "2096-11-01", caddyId: 10, shift: "AM", source: "PENALTY" },
+      { date: "2096-11-01", caddyId: 10, shift: "PM", source: "PENALTY" },
+    ],
+    duties: [],
+    scheduledOccurrences: [{ date: "2096-11-01", caddyId: 10 }],
+  });
+  assert(true, "matching FULL_DAY pair allows finalize");
 }
 
 section("cancel / FINALIZED guards");
