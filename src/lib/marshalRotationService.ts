@@ -44,8 +44,10 @@ import {
 import { assertPlanReadyToFinalize } from "@/lib/marshalPenaltyOccurrenceDomain";
 import {
   applyOccurrencesToMonth,
+  countPostGenerateOpenOccurrences,
   listPenaltyOccurrences,
   lockMonthPlanRow,
+  lockOccurrenceTargetMonth,
 } from "@/lib/marshalPenaltyOccurrenceService";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
@@ -468,6 +470,7 @@ export async function generateMonthPlan(
   const prisma = db(client);
   return prisma.$transaction(
     async (tx) => {
+    await lockOccurrenceTargetMonth(tx, year, month);
     let plan = await tx.marshalMonthPlan.findUnique({
       where: { year_month: { year, month } },
       include: { slots: { select: { id: true, source: true } }, penalties: true },
@@ -733,8 +736,14 @@ export async function finalizeMonthPlan(
       where: { scheduledPlanId: plan.id, status: "SCHEDULED" },
       select: { scheduledOn: true, caddyId: true },
     });
+    const postGenerateOpenCount = await countPostGenerateOpenOccurrences(tx, {
+      year: plan.year,
+      month: plan.month,
+      generatedAt: plan.generatedAt,
+    });
     assertPlanReadyToFinalize({
       needsRegeneration: plan.needsRegeneration,
+      postGenerateOpenCount,
       generatedAt: plan.generatedAt,
       slotCount: plan.slots.length,
       penaltySlots: plan.slots.map((slot) => ({

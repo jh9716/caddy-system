@@ -18,9 +18,13 @@ import {
   type RotationMember,
 } from "@/lib/marshalRotationDomain";
 import {
+  POST_GENERATE_OPEN_DEFER_REASON,
+  assertIdempotencyReplay,
   assertOccurrenceCancellable,
   assertOccurrenceTargetMutable,
   mergeAssignedOccurrences,
+  normalizeOccurrenceNote,
+  normalizeOccurrenceReason,
   parseIdempotencyKey,
   parseOccurredOn,
   scheduleOccurrencesForMonth,
@@ -112,6 +116,37 @@ export async function lockTargetOccurrences(
   );
 }
 
+/** 월표 유무와 관계없이 해당 대상 월의 등록/생성을 직렬화한다. */
+export async function lockOccurrenceTargetMonth(
+  tx: DbClient,
+  year: number,
+  month: number
+): Promise<void> {
+  const space = 910041;
+  const key = year * 12 + month;
+  await tx.$executeRaw(
+    Prisma.sql`SELECT pg_advisory_xact_lock(${space}::int, ${key}::int)`
+  );
+}
+
+export async function countPostGenerateOpenOccurrences(
+  tx: DbClient,
+  input: { year: number; month: number; generatedAt: Date | null }
+): Promise<number> {
+  if (!input.generatedAt) return 0;
+  return tx.marshalPenaltyOccurrence.count({
+    where: {
+      targetYear: input.year,
+      targetMonth: input.month,
+      status: "OPEN",
+      OR: [
+        { deferReason: POST_GENERATE_OPEN_DEFER_REASON },
+        { createdAt: { gt: input.generatedAt } },
+      ],
+    },
+  });
+}
+
 export async function listPenaltyOccurrences(
   input: { year: unknown; month: unknown },
   client: PrismaClient
@@ -154,32 +189,40 @@ export async function createPenaltyOccurrence(
       400
     );
   }
-  const reason = String(input.reason ?? "").trim();
-  if (!reason) {
-    throw new MarshalRosterError("벌당 사유가 필요합니다.", "reason_required", 400);
-  }
-  const note = input.note == null ? null : String(input.note);
+  const reason = normalizeOccurrenceReason(input.reason);
+  const note = normalizeOccurrenceNote(input.note);
   const idempotencyKey = parseIdempotencyKey(input.idempotencyKey);
+  const replayOf = (row: {
+    caddyId: number;
+    occurredOn: Date;
+    reason: string;
+    note: string | null;
+    caddy?: { id: number; name: string; team: string };
+  } & Parameters<typeof serializeOccurrence>[0]) => {
+    assertIdempotencyReplay({
+      existing: {
+        caddyId: row.caddyId,
+        occurredOn: formatMarshalYmd(row.occurredOn),
+        reason: row.reason,
+        note: row.note,
+      },
+      caddyId,
+      occurredOn: occurredYmd,
+      reason,
+      note,
+    });
+    return { ...serializeOccurrence(row), replayed: true };
+  };
   try {
-    return await client.$transaction(async (tx) => {
+    return await client.$transaction(
+      async (tx) => {
+      await lockOccurrenceTargetMonth(tx, target.year, target.month);
       if (idempotencyKey) {
         const existing = await tx.marshalPenaltyOccurrence.findUnique({
           where: { idempotencyKey },
           include: { caddy: { select: CADDY_SELECT } },
         });
-        if (existing) {
-          if (
-            existing.caddyId !== caddyId ||
-            formatMarshalYmd(existing.occurredOn) !== occurredYmd
-          ) {
-            throw new MarshalRosterError(
-              "같은 idempotencyKey가 다른 벌당에 사용되었습니다.",
-              "idempotency_conflict",
-              409
-            );
-          }
-          return { ...serializeOccurrence(existing), replayed: true };
-        }
+        if (existing) return replayOf(existing);
       }
       const profile = await tx.marshalProfile.findUnique({
         where: { caddyId },
@@ -195,13 +238,23 @@ export async function createPenaltyOccurrence(
       const targetPlan = await tx.marshalMonthPlan.findUnique({
         where: { year_month: { year: target.year, month: target.month } },
       });
+      let deferReason: string | null = null;
+      let markedStale = false;
       if (targetPlan) {
         await lockMonthPlanRow(tx, targetPlan.id);
         const locked = await tx.marshalMonthPlan.findUnique({
           where: { id: targetPlan.id },
-          select: { status: true },
+          select: { id: true, status: true, generatedAt: true },
         });
         assertOccurrenceTargetMutable(locked?.status);
+        if (locked?.status === "DRAFT" && locked.generatedAt) {
+          await tx.marshalMonthPlan.update({
+            where: { id: locked.id },
+            data: { needsRegeneration: true },
+          });
+          deferReason = POST_GENERATE_OPEN_DEFER_REASON;
+          markedStale = true;
+        }
       }
       const row = await tx.marshalPenaltyOccurrence.create({
         data: {
@@ -211,6 +264,7 @@ export async function createPenaltyOccurrence(
           targetYear: target.year,
           targetMonth: target.month,
           status: "OPEN",
+          deferReason,
           reason,
           note,
           idempotencyKey,
@@ -229,27 +283,27 @@ export async function createPenaltyOccurrence(
             targetYear: target.year,
             targetMonth: target.month,
             reason,
+            note,
             idempotencyKey,
+            needsRegeneration: markedStale,
+            deferReason,
             username: input.actor?.username ?? null,
             userId: input.actor?.userId ?? null,
           },
         }),
       });
       return serializeOccurrence(row);
-    });
+    },
+      { timeout: 20000 }
+    );
   } catch (error) {
+    if (error instanceof MarshalRosterError) throw error;
     if (isUniqueConflict(error) && idempotencyKey) {
       const existing = await client.marshalPenaltyOccurrence.findUnique({
         where: { idempotencyKey },
         include: { caddy: { select: CADDY_SELECT } },
       });
-      if (
-        existing &&
-        existing.caddyId === caddyId &&
-        formatMarshalYmd(existing.occurredOn) === occurredYmd
-      ) {
-        return { ...serializeOccurrence(existing), replayed: true };
-      }
+      if (existing) return replayOf(existing);
       throw new MarshalRosterError(
         "같은 idempotencyKey가 다른 벌당에 사용되었습니다.",
         "idempotency_conflict",

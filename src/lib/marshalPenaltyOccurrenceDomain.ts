@@ -68,7 +68,65 @@ export function parseOccurredOn(value: unknown): Date {
   }
 }
 
+export const POST_GENERATE_OPEN_DEFER_REASON =
+  "월표 생성 이후 등록되어 재생성이 필요합니다.";
+
 const IDEMPOTENCY_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+
+export function normalizeOccurrenceReason(value: unknown): string {
+  const reason = String(value ?? "").trim();
+  if (!reason) {
+    throw new MarshalRosterError("벌당 사유가 필요합니다.", "reason_required", 400);
+  }
+  return reason;
+}
+
+export function normalizeOccurrenceNote(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  const note = String(value).trim();
+  return note === "" ? null : note;
+}
+
+export function idempotencyPayloadMatches(input: {
+  existing: {
+    caddyId: number;
+    occurredOn: string;
+    reason: string;
+    note: string | null;
+  };
+  caddyId: number;
+  occurredOn: string;
+  reason: string;
+  note: string | null;
+}): boolean {
+  return (
+    input.existing.caddyId === input.caddyId &&
+    input.existing.occurredOn === input.occurredOn &&
+    input.existing.reason === input.reason &&
+    (input.existing.note ?? null) === (input.note ?? null)
+  );
+}
+
+export function assertIdempotencyReplay(input: {
+  existing: {
+    caddyId: number;
+    occurredOn: string;
+    reason: string;
+    note: string | null;
+  };
+  caddyId: number;
+  occurredOn: string;
+  reason: string;
+  note: string | null;
+}): void {
+  if (!idempotencyPayloadMatches(input)) {
+    throw new MarshalRosterError(
+      "같은 idempotencyKey가 다른 벌당에 사용되었습니다.",
+      "idempotency_conflict",
+      409
+    );
+  }
+}
 
 /** 생략/빈값 = 별건 발생. 같은 키 재전송만 동일 건으로 본다. */
 export function parseIdempotencyKey(value: unknown): string | null {
@@ -258,6 +316,7 @@ function regenerationRequired(message: string): never {
  */
 export function assertPlanReadyToFinalize(input: {
   needsRegeneration: boolean;
+  postGenerateOpenCount?: number;
   generatedAt: Date | string | null;
   slotCount: number;
   penaltySlots: readonly {
@@ -281,6 +340,11 @@ export function assertPlanReadyToFinalize(input: {
   }
   if (input.needsRegeneration) {
     regenerationRequired("벌당이 변경되어 월표를 다시 생성해야 합니다.");
+  }
+  if ((input.postGenerateOpenCount ?? 0) > 0) {
+    regenerationRequired(
+      "월표 생성 이후 등록된 벌당이 있어 다시 생성해야 합니다."
+    );
   }
   const dutyKeys = new Set(input.duties.map((row) => `${row.date}:${row.caddyId}`));
   const scheduledKeys = new Set(
