@@ -149,6 +149,26 @@ section("warnings substitute empty");
   assert(day.hasWarning && day.hasSubstitute && day.hasPenalty, "경고/대타/벌당 플래그");
   const empty = listMonthDayBoards({ year: 2026, month: 11 })[0];
   assert(empty.amNames.length === 0 && empty.pmNames.length === 0, "월표 없음 빈 칸");
+  assert(empty.occurrenceBadges.length === 0, "발생 배지 기본 없음");
+  const occDay = listMonthDayBoards({
+    year: 2026,
+    month: 10,
+    occurrences: [
+      {
+        caddyId: 7,
+        scheduledOn: "2026-10-01",
+        status: "SCHEDULED",
+        scheduleSource: "MANUAL",
+        caddy: { name: "전일자" },
+      },
+    ],
+  }).find((row) => row.ymd === "2026-10-01")!;
+  assert(
+    occDay.occurrenceBadges[0]?.name === "전일자" &&
+      occDay.occurrenceBadges[0]?.source === "MANUAL" &&
+      occDay.hasPenalty,
+    "전일 벌당 달력 배지"
+  );
   assert(planStatusLabel(null) === "없음", "상태 없음");
   assert(planStatusLabel("DRAFT") === "초안 (DRAFT)", "상태 DRAFT");
   assert(planStatusLabel("FINALIZED") === "마감 (FINALIZED)", "상태 FINALIZED");
@@ -401,7 +421,10 @@ section("source contracts");
   assert(page.includes('aria-label="조출 인원"'), "조출 인원 라벨");
   assert(page.includes('aria-label="후출 인원"'), "후출 인원 라벨");
   assert(page.includes("월표 설정"), "설정 패널");
-  assert(page.includes("벌당 관리"), "벌당 패널");
+  assert(page.includes("DUTY_PANEL_TITLE"), "기존 벌당 패널 명칭");
+  assert(page.includes("MarshalPenaltyOccurrencePanel"), "발생 벌당 패널");
+  assert(page.includes("goToYearMonth"), "대상 월 이동 재사용");
+  assert(page.includes("data-marshal-regen-banner"), "재생성 배너");
   assert(page.includes("대타 보정 관리"), "보정 패널");
   assert(page.includes("아직 생성된 마샬 월표가 없습니다"), "빈 월표 안내");
   assert(page.includes("월표 설정 열기"), "빈 월표 설정 버튼");
@@ -430,6 +453,8 @@ section("source contracts");
   assert(page.includes("/api/marshals/plans/generate"), "POST generate");
   assert(page.includes("/finalize"), "POST finalize");
   assert(page.includes("/api/marshals/penalties"), "POST penalty");
+  assert(page.includes("shift: penaltyShift"), "UI penalty POST sends shift");
+  assert(!/coverage:\s*penalty/.test(page), "UI penalty POST omits coverage");
   assert(page.includes("/api/marshals/credits"), "POST credit");
   assert(page.includes("/slots/${subSlotId}"), "PATCH slot");
   assert(page.includes("asSubstitute: true"), "substitute flag");

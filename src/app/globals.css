@@ -5972,6 +5972,190 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
   font-size: 0.84rem;
 }
 
+.ms-regen {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--vh-gold-line);
+  border-radius: var(--vh-radius-sm);
+  background: var(--vh-warn-bg);
+  color: var(--vh-warn);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.ms-flag.is-occ {
+  background: var(--vh-danger-bg);
+  color: var(--vh-danger);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ms-flag.is-occ.is-manual {
+  background: var(--vh-gold-soft);
+  color: var(--vh-gold-deep);
+}
+
+.ms-occ-form,
+.ms-occ-change {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0;
+}
+
+.ms-occ-form input,
+.ms-occ-form select,
+.ms-occ-change input,
+.ms-occ-form .ui-btn,
+.ms-occ-change .ui-btn,
+.ms-occ-detail .ui-btn {
+  min-height: 44px;
+  min-width: 0;
+}
+
+.ms-occ-form input,
+.ms-occ-form select,
+.ms-occ-change input {
+  flex: 1 1 120px;
+}
+
+.ms-occ-ok {
+  margin: 8px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  color: var(--vh-ok);
+  font-size: 0.88rem;
+}
+
+.ms-occ-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  border: 1px solid var(--vh-border);
+  border-radius: var(--vh-radius-sm);
+  overflow: hidden;
+}
+
+.ms-occ-head {
+  display: none;
+}
+
+.ms-occ-item {
+  border-top: 1px solid var(--vh-border);
+}
+
+.ms-occ-item:first-child {
+  border-top: 0;
+}
+
+.ms-occ-item.is-open {
+  background: var(--vh-ivory);
+}
+
+.ms-occ-main {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) 52px 48px 48px 18px;
+  gap: 6px;
+  align-items: center;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.ms-occ-pc {
+  display: none;
+}
+
+.ms-occ-name {
+  font-weight: 700;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ms-occ-date,
+.ms-occ-duty {
+  font-variant-numeric: tabular-nums;
+  color: var(--vh-ink-soft);
+  font-size: 0.82rem;
+}
+
+.ms-occ-src,
+.ms-occ-st {
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.ms-occ-st.is-open {
+  color: var(--vh-warn);
+}
+
+.ms-occ-st.is-scheduled {
+  color: var(--vh-ok);
+}
+
+.ms-occ-st.is-cancelled {
+  color: var(--vh-muted);
+}
+
+.ms-occ-wait {
+  margin: 0;
+  padding: 0 10px 8px;
+  color: var(--vh-warn);
+  font-size: 0.78rem;
+}
+
+.ms-occ-detail {
+  padding: 0 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.84rem;
+}
+
+.ms-occ-preview {
+  padding: 8px;
+  border: 1px dashed var(--vh-border);
+  border-radius: var(--vh-radius-sm);
+  background: var(--vh-paper);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+@media (min-width: 720px) {
+  .ms-occ-head,
+  .ms-occ-main {
+    grid-template-columns: minmax(0, 1.3fr) 64px 64px 64px 56px 18px;
+  }
+
+  .ms-occ-head {
+    display: grid;
+    gap: 6px;
+    padding: 6px 10px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--vh-ink-soft);
+    background: var(--vh-ivory-deep);
+  }
+
+  .ms-occ-pc {
+    display: inline;
+  }
+}
+
 @media (max-width: 719px) {
   .ms-calendar {
     display: none;

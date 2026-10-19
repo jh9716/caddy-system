@@ -129,6 +129,7 @@ model Caddy {
   marshalMonthSlots  MarshalMonthSlot[] @relation("MarshalSlotCaddy")
   marshalMonthOriginalSlots MarshalMonthSlot[] @relation("MarshalSlotOriginal")
   marshalPenaltyDuties MarshalPenaltyDuty[]
+  marshalPenaltyOccurrences MarshalPenaltyOccurrence[]
   marshalCreditReplacements MarshalRotationCredit[] @relation("MarshalCreditReplaced")
   /// 승인 시 선택된 Caddy로 역참조 (이력). Caddy 물리 삭제 시 selectedCaddyId만 null
   linkRequestSelections CaddyLinkRequest[] @relation("CaddyLinkRequestSelectedCaddy")
@@ -989,6 +990,7 @@ model MarshalProfile {
   updatedAt      DateTime @updatedAt
   monthSlots     MarshalMonthSlot[]
   penaltyDuties  MarshalPenaltyDuty[]
+  penaltyOccurrences MarshalPenaltyOccurrence[]
   rotationCredits MarshalRotationCredit[]
 
   @@index([active])
@@ -1012,9 +1014,23 @@ enum MarshalShift {
   PM
 }
 
+/// FULL_DAY = 전일 벌당 1건이 조출 1칸 + 후출 1칸.
+/// AM/PM = 기존 단일 시프트 벌당 의미 유지 (migration backfill).
+enum MarshalPenaltyCoverage {
+  FULL_DAY
+  AM
+  PM
+}
+
 enum MarshalCreditStatus {
   OPEN
   CONSUMED
+  CANCELLED
+}
+
+enum MarshalPenaltyOccurrenceStatus {
+  OPEN
+  SCHEDULED
   CANCELLED
 }
 
@@ -1032,11 +1048,14 @@ model MarshalMonthPlan {
   startPendingProfileIds Int[] @default([])
   /// 월 종료 후 다음 달로 넘길 미처리 정상 turn. profileId 순서.
   nextPendingProfileIds  Int[] @default([])
+  /// SCHEDULED 벌당 취소 등으로 슬롯과 발생 기록이 어긋남. true면 FINALIZE 금지.
+  needsRegeneration   Boolean                 @default(false)
   generatedAt         DateTime?
   createdAt           DateTime                @default(now())
   updatedAt           DateTime                @updatedAt
   slots               MarshalMonthSlot[]
   penalties           MarshalPenaltyDuty[]
+  scheduledPenaltyOccurrences MarshalPenaltyOccurrence[]
 
   @@unique([year, month])
   @@index([status])
@@ -1061,18 +1080,23 @@ model MarshalMonthSlot {
   updatedAt        DateTime                @updatedAt
 
   @@unique([planId, date, shift, slotIndex])
-  @@unique([planId, date, caddyId])
+  /// AM+PM 동일 캐디는 허용(전일 벌당). 같은 shift 중복은 금지.
+  @@unique([planId, date, shift, caddyId])
   @@index([planId, date])
   @@index([caddyId])
 }
 
-/// 정상 순환을 소비하지 않는 추가 의무. shift는 관리자 지정.
+/// 정상 순환을 소비하지 않는 추가 의무.
+/// 전일 벌당 1건 = 1 레코드(coverage=FULL_DAY, API가 명시).
+/// coverage 생략 POST는 shift(AM/PM) 한 칸. DB column default 없음.
+/// 구서버 INSERT는 trigger marshal_penalty_fill_coverage 가 shift로 채움.
 model MarshalPenaltyDuty {
   id               Int              @id @default(autoincrement())
   planId           Int
   plan             MarshalMonthPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
   date             DateTime
   shift            MarshalShift
+  coverage         MarshalPenaltyCoverage
   caddyId          Int
   caddy            Caddy            @relation(fields: [caddyId], references: [id], onDelete: Restrict)
   marshalProfileId Int
@@ -1085,6 +1109,43 @@ model MarshalPenaltyDuty {
 
   @@unique([planId, date, caddyId])
   @@index([planId, date])
+}
+
+/// P2: 벌당 발생 기록. 월표 없이 등록 가능. 발생일과 배정일을 분리한다.
+/// 다음 달 월표 생성 시 OPEN 건을 발생 순서대로 FULL_DAY로 배정한다.
+model MarshalPenaltyOccurrence {
+  id               Int                             @id @default(autoincrement())
+  caddyId          Int
+  caddy            Caddy                           @relation(fields: [caddyId], references: [id], onDelete: Restrict)
+  marshalProfileId Int
+  marshalProfile   MarshalProfile                  @relation(fields: [marshalProfileId], references: [id], onDelete: Restrict)
+  /// 벌당이 발생한 날. 실제 근무일과 다를 수 있다.
+  occurredOn       DateTime
+  targetYear       Int
+  targetMonth      Int
+  /// 월표에 배정된 실제 전일 근무일. OPEN/CANCELLED 이면 null.
+  scheduledOn      DateTime?
+  /// 관리자가 지정한 전일 근무일. null이면 자동 배정(AUTO).
+  pinnedOn         DateTime?
+  /// 최초 AUTO 배정일. leftover 여도 유지. 관리자 취소 외에는 지우지 않는다.
+  autoHeldOn       DateTime?
+  scheduledPlanId  Int?
+  scheduledPlan    MarshalMonthPlan?               @relation(fields: [scheduledPlanId], references: [id], onDelete: Restrict)
+  status           MarshalPenaltyOccurrenceStatus  @default(OPEN)
+  /// 미배정 대기 이유. SCHEDULED 이면 null.
+  deferReason      String?
+  reason           String
+  note             String?
+  /// 동일 요청 재전송 방지. null이면 같은 날 같은 캐디의 별건 발생을 허용한다.
+  idempotencyKey   String?                         @unique
+  createdByUserId  Int?
+  createdAt        DateTime                        @default(now())
+  updatedAt        DateTime                        @updatedAt
+
+  @@index([caddyId, occurredOn])
+  @@index([targetYear, targetMonth, status])
+  @@index([scheduledPlanId])
+  @@index([caddyId])
 }
 
 /// 대타 추가근무에 대한 향후 정상 순환 1회 면제. 벌당과 분리.

@@ -1,0 +1,548 @@
+/**
+ * P2 벌당 발생 기록. 월표 없이 등록하고, 월 생성 시 FULL_DAY 로 합친다.
+ * MarshalPenaltyDuty 행을 만들지 않는다. autoAssignEngine 은 건드리지 않는다.
+ */
+
+import { Prisma, type PrismaClient } from "@prisma/client";
+import {
+  MARSHAL_AUDIT_ACTIONS,
+  MarshalRosterError,
+  formatMarshalYmd,
+  parsePositiveCaddyId,
+  parsePositiveId,
+} from "@/lib/marshalDomain";
+import {
+  listMonthYmds,
+  type DayPenaltyInput,
+  type MarshalDayKind,
+  type RotationMember,
+} from "@/lib/marshalRotationDomain";
+import {
+  POST_GENERATE_OPEN_DEFER_REASON,
+  assertIdempotencyReplay,
+  assertOccurrenceCancellable,
+  assertOccurrenceTargetMutable,
+  mergeAssignedOccurrences,
+  normalizeOccurrenceNote,
+  normalizeOccurrenceReason,
+  parseIdempotencyKey,
+  parseOccurredOn,
+  scheduleOccurrencesForMonth,
+  targetMonthFromOccurredOn,
+} from "@/lib/marshalPenaltyOccurrenceDomain";
+type DbClient = PrismaClient | Prisma.TransactionClient;
+
+type OccurrenceActor = {
+  userId?: number | null;
+  username?: string | null;
+  ip?: string | null;
+};
+
+const CADDY_SELECT = {
+  id: true,
+  name: true,
+  team: true,
+} as const;
+
+function isUniqueConflict(error: unknown): boolean {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002"
+  );
+}
+
+function auditRow(input: {
+  action: string;
+  entityId: number;
+  ip?: string | null;
+  payload: Record<string, unknown>;
+}): Prisma.AuditCreateInput {
+  return {
+    action: input.action,
+    entity: "MarshalPenaltyOccurrence",
+    entityId: input.entityId,
+    ip: input.ip || null,
+    payload: input.payload as Prisma.InputJsonValue,
+  };
+}
+
+function serializeOccurrence(row: {
+  id: number;
+  caddyId: number;
+  marshalProfileId: number;
+  occurredOn: Date;
+  targetYear: number;
+  targetMonth: number;
+  scheduledOn: Date | null;
+  pinnedOn?: Date | null;
+  autoHeldOn?: Date | null;
+  scheduledPlanId: number | null;
+  status: string;
+  deferReason: string | null;
+  reason: string;
+  note: string | null;
+  idempotencyKey?: string | null;
+  caddy?: { id: number; name: string; team: string };
+}) {
+  return {
+    id: row.id,
+    caddyId: row.caddyId,
+    marshalProfileId: row.marshalProfileId,
+    occurredOn: formatMarshalYmd(row.occurredOn),
+    targetYear: row.targetYear,
+    targetMonth: row.targetMonth,
+    scheduledOn: row.scheduledOn ? formatMarshalYmd(row.scheduledOn) : null,
+    pinnedOn: row.pinnedOn ? formatMarshalYmd(row.pinnedOn) : null,
+    autoHeldOn: row.autoHeldOn ? formatMarshalYmd(row.autoHeldOn) : null,
+    scheduleSource: row.pinnedOn ? ("MANUAL" as const) : ("AUTO" as const),
+    scheduledPlanId: row.scheduledPlanId,
+    status: row.status,
+    deferReason: row.deferReason,
+    reason: row.reason,
+    note: row.note,
+    idempotencyKey: row.idempotencyKey ?? null,
+    caddy: row.caddy ?? null,
+    replayed: false as boolean,
+  };
+}
+
+export async function lockMonthPlanRow(tx: DbClient, planId: number): Promise<void> {
+  await tx.$queryRaw(
+    Prisma.sql`SELECT id FROM "MarshalMonthPlan" WHERE id = ${planId} FOR UPDATE`
+  );
+}
+
+export async function lockTargetOccurrences(
+  tx: DbClient,
+  year: number,
+  month: number
+): Promise<void> {
+  await tx.$queryRaw(
+    Prisma.sql`SELECT id FROM "MarshalPenaltyOccurrence" WHERE "targetYear" = ${year} AND "targetMonth" = ${month} FOR UPDATE`
+  );
+}
+
+/** 월표 유무와 관계없이 해당 대상 월의 등록/생성을 직렬화한다. */
+export async function lockOccurrenceTargetMonth(
+  tx: DbClient,
+  year: number,
+  month: number
+): Promise<void> {
+  const space = 910041;
+  const key = year * 12 + month;
+  await tx.$executeRaw(
+    Prisma.sql`SELECT pg_advisory_xact_lock(${space}::int, ${key}::int)`
+  );
+}
+
+export async function countPostGenerateOpenOccurrences(
+  tx: DbClient,
+  input: { year: number; month: number; generatedAt: Date | null }
+): Promise<number> {
+  if (!input.generatedAt) return 0;
+  return tx.marshalPenaltyOccurrence.count({
+    where: {
+      targetYear: input.year,
+      targetMonth: input.month,
+      status: "OPEN",
+      OR: [
+        { deferReason: POST_GENERATE_OPEN_DEFER_REASON },
+        { createdAt: { gt: input.generatedAt } },
+      ],
+    },
+  });
+}
+
+export async function listPenaltyOccurrences(
+  input: { year: unknown; month: unknown },
+  client: PrismaClient
+) {
+  const year = Number(input.year);
+  const month = Number(input.month);
+  if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+    throw new MarshalRosterError("연도가 올바르지 않습니다.", "invalid_year", 400);
+  }
+  if (!Number.isInteger(month) || month < 1 || month > 12) {
+    throw new MarshalRosterError("월이 올바르지 않습니다.", "invalid_month", 400);
+  }
+  const rows = await client.marshalPenaltyOccurrence.findMany({
+    where: { targetYear: year, targetMonth: month },
+    include: { caddy: { select: CADDY_SELECT } },
+    orderBy: [{ occurredOn: "asc" }, { id: "asc" }],
+  });
+  return rows.map(serializeOccurrence);
+}
+
+export async function createPenaltyOccurrence(
+  input: {
+    caddyId: unknown;
+    occurredOn: unknown;
+    reason: unknown;
+    note?: unknown;
+    idempotencyKey?: unknown;
+    actor?: OccurrenceActor;
+  },
+  client: PrismaClient
+) {
+  const caddyId = parsePositiveCaddyId(input.caddyId);
+  const occurredOn = parseOccurredOn(input.occurredOn);
+  const occurredYmd = formatMarshalYmd(occurredOn);
+  const target = targetMonthFromOccurredOn(occurredOn);
+  if (target.year > 2100) {
+    throw new MarshalRosterError(
+      "대상 월이 허용 범위를 넘습니다.",
+      "invalid_year",
+      400
+    );
+  }
+  const reason = normalizeOccurrenceReason(input.reason);
+  const note = normalizeOccurrenceNote(input.note);
+  const idempotencyKey = parseIdempotencyKey(input.idempotencyKey);
+  const replayOf = (row: {
+    caddyId: number;
+    occurredOn: Date;
+    reason: string;
+    note: string | null;
+    caddy?: { id: number; name: string; team: string };
+  } & Parameters<typeof serializeOccurrence>[0]) => {
+    assertIdempotencyReplay({
+      existing: {
+        caddyId: row.caddyId,
+        occurredOn: formatMarshalYmd(row.occurredOn),
+        reason: row.reason,
+        note: row.note,
+      },
+      caddyId,
+      occurredOn: occurredYmd,
+      reason,
+      note,
+    });
+    return { ...serializeOccurrence(row), replayed: true };
+  };
+  try {
+    return await client.$transaction(
+      async (tx) => {
+      await lockOccurrenceTargetMonth(tx, target.year, target.month);
+      if (idempotencyKey) {
+        const existing = await tx.marshalPenaltyOccurrence.findUnique({
+          where: { idempotencyKey },
+          include: { caddy: { select: CADDY_SELECT } },
+        });
+        if (existing) return replayOf(existing);
+      }
+      const profile = await tx.marshalProfile.findUnique({
+        where: { caddyId },
+        include: { caddy: { select: CADDY_SELECT } },
+      });
+      if (!profile?.active) {
+        throw new MarshalRosterError(
+          "활성 마샬만 벌당할 수 있습니다.",
+          "inactive_marshal",
+          400
+        );
+      }
+      const targetPlan = await tx.marshalMonthPlan.findUnique({
+        where: { year_month: { year: target.year, month: target.month } },
+      });
+      let deferReason: string | null = null;
+      let markedStale = false;
+      if (targetPlan) {
+        await lockMonthPlanRow(tx, targetPlan.id);
+        const locked = await tx.marshalMonthPlan.findUnique({
+          where: { id: targetPlan.id },
+          select: { id: true, status: true, generatedAt: true },
+        });
+        assertOccurrenceTargetMutable(locked?.status);
+        if (locked?.status === "DRAFT" && locked.generatedAt) {
+          await tx.marshalMonthPlan.update({
+            where: { id: locked.id },
+            data: { needsRegeneration: true },
+          });
+          deferReason = POST_GENERATE_OPEN_DEFER_REASON;
+          markedStale = true;
+        }
+      }
+      const row = await tx.marshalPenaltyOccurrence.create({
+        data: {
+          caddyId,
+          marshalProfileId: profile.id,
+          occurredOn,
+          targetYear: target.year,
+          targetMonth: target.month,
+          status: "OPEN",
+          deferReason,
+          reason,
+          note,
+          idempotencyKey,
+          createdByUserId: input.actor?.userId ?? null,
+        },
+        include: { caddy: { select: CADDY_SELECT } },
+      });
+      await tx.audit.create({
+        data: auditRow({
+          action: MARSHAL_AUDIT_ACTIONS.PENALTY_OCCURRENCE_CREATE,
+          entityId: row.id,
+          ip: input.actor?.ip,
+          payload: {
+            caddyId,
+            occurredOn: occurredYmd,
+            targetYear: target.year,
+            targetMonth: target.month,
+            reason,
+            note,
+            idempotencyKey,
+            needsRegeneration: markedStale,
+            deferReason,
+            username: input.actor?.username ?? null,
+            userId: input.actor?.userId ?? null,
+          },
+        }),
+      });
+      return serializeOccurrence(row);
+    },
+      { timeout: 20000 }
+    );
+  } catch (error) {
+    if (error instanceof MarshalRosterError) throw error;
+    if (isUniqueConflict(error) && idempotencyKey) {
+      const existing = await client.marshalPenaltyOccurrence.findUnique({
+        where: { idempotencyKey },
+        include: { caddy: { select: CADDY_SELECT } },
+      });
+      if (existing) return replayOf(existing);
+      throw new MarshalRosterError(
+        "같은 idempotencyKey가 다른 벌당에 사용되었습니다.",
+        "idempotency_conflict",
+        409
+      );
+    }
+    throw error;
+  }
+}
+
+export async function cancelPenaltyOccurrence(
+  input: { id: unknown; actor?: OccurrenceActor },
+  client: PrismaClient
+) {
+  const id = parsePositiveId(input.id, "id");
+  return client.$transaction(async (tx) => {
+    const current = await tx.marshalPenaltyOccurrence.findUnique({
+      where: { id },
+      include: {
+        scheduledPlan: { select: { id: true, status: true } },
+        caddy: { select: CADDY_SELECT },
+      },
+    });
+    if (!current) {
+      throw new MarshalRosterError(
+        "벌당 발생을 찾을 수 없습니다.",
+        "occurrence_not_found",
+        404
+      );
+    }
+    if (current.scheduledPlanId) {
+      await lockMonthPlanRow(tx, current.scheduledPlanId);
+    }
+    const planStatus = current.scheduledPlanId
+      ? (
+          await tx.marshalMonthPlan.findUnique({
+            where: { id: current.scheduledPlanId },
+            select: { status: true },
+          })
+        )?.status
+      : current.scheduledPlan?.status;
+    assertOccurrenceCancellable({
+      status: current.status,
+      planStatus,
+    });
+    const wasScheduled = current.status === "SCHEDULED" && current.scheduledPlanId;
+    if (wasScheduled) {
+      const plan = await tx.marshalMonthPlan.findUnique({
+        where: { id: current.scheduledPlanId! },
+        select: { id: true, status: true, generatedAt: true },
+      });
+      if (plan?.status === "DRAFT" && plan.generatedAt) {
+        await tx.marshalMonthPlan.update({
+          where: { id: plan.id },
+          data: { needsRegeneration: true },
+        });
+      }
+    }
+    const saved = await tx.marshalPenaltyOccurrence.update({
+      where: { id },
+      data: {
+        status: "CANCELLED",
+        scheduledOn: null,
+        pinnedOn: null,
+        autoHeldOn: null,
+        scheduledPlanId: null,
+        deferReason: "운영자가 취소했습니다.",
+      },
+      include: { caddy: { select: CADDY_SELECT } },
+    });
+    await tx.audit.create({
+      data: auditRow({
+        action: MARSHAL_AUDIT_ACTIONS.PENALTY_OCCURRENCE_CANCEL,
+        entityId: saved.id,
+        ip: input.actor?.ip,
+        payload: {
+          previousStatus: current.status,
+          scheduledOn: current.scheduledOn
+            ? formatMarshalYmd(current.scheduledOn)
+            : null,
+          scheduledPlanId: current.scheduledPlanId,
+          needsRegeneration: Boolean(wasScheduled),
+          username: input.actor?.username ?? null,
+          userId: input.actor?.userId ?? null,
+        },
+      }),
+    });
+    return serializeOccurrence(saved);
+  });
+}
+
+/**
+ * 이 월에 배정된 SCHEDULED 를 OPEN 으로 되돌린 뒤 다시 싼다.
+ * PenaltyDuty 행은 만들지 않고 DayPenaltyInput 만 합친다.
+ */
+export async function applyOccurrencesToMonth(
+  tx: DbClient,
+  input: {
+    planId: number;
+    year: number;
+    month: number;
+    amSlotsPerDay: number;
+    pmSlotsPerDay: number;
+    members: readonly RotationMember[];
+    penaltiesByDate: ReadonlyMap<string, readonly DayPenaltyInput[]>;
+    statusByDateCaddy: ReadonlyMap<
+      string,
+      { kind: MarshalDayKind; message: string | null }
+    >;
+  }
+): Promise<{
+  penaltiesByDate: Map<string, DayPenaltyInput[]>;
+  assignedCount: number;
+  leftoverCount: number;
+  assignedIds: number[];
+  leftoverIds: number[];
+}> {
+  await lockTargetOccurrences(tx, input.year, input.month);
+  const currentRows = await tx.marshalPenaltyOccurrence.findMany({
+    where: {
+      targetYear: input.year,
+      targetMonth: input.month,
+      status: { in: ["OPEN", "SCHEDULED"] },
+    },
+    orderBy: [{ occurredOn: "asc" }, { id: "asc" }],
+  });
+  const autoHeldOnById = new Map<number, string>();
+  const persistHeld: { id: number; date: Date }[] = [];
+  for (const row of currentRows) {
+    if (row.pinnedOn) continue;
+    const held = row.autoHeldOn
+      ? formatMarshalYmd(row.autoHeldOn)
+      : row.status === "SCHEDULED" && row.scheduledOn
+        ? formatMarshalYmd(row.scheduledOn)
+        : null;
+    if (!held) continue;
+    autoHeldOnById.set(row.id, held);
+    if (!row.autoHeldOn) {
+      persistHeld.push({ id: row.id, date: new Date(`${held}T00:00:00`) });
+    }
+  }
+  await Promise.all(
+    persistHeld.map((row) =>
+      tx.marshalPenaltyOccurrence.update({
+        where: { id: row.id },
+        data: { autoHeldOn: row.date },
+      })
+    )
+  );
+  await tx.marshalPenaltyOccurrence.updateMany({
+    where: { scheduledPlanId: input.planId, status: "SCHEDULED" },
+    data: {
+      status: "OPEN",
+      scheduledOn: null,
+      scheduledPlanId: null,
+      deferReason: null,
+    },
+  });
+  const openRows = await tx.marshalPenaltyOccurrence.findMany({
+    where: {
+      targetYear: input.year,
+      targetMonth: input.month,
+      status: "OPEN",
+    },
+    orderBy: [{ occurredOn: "asc" }, { id: "asc" }],
+  });
+  const activeCaddyIds = new Set(input.members.map((row) => row.caddyId));
+  const eligible = [];
+  const inactiveLeftover: { id: number; deferReason: string }[] = [];
+  for (const row of openRows) {
+    if (!activeCaddyIds.has(row.caddyId)) {
+      inactiveLeftover.push({
+        id: row.id,
+        deferReason: "활성 마샬이 아닙니다.",
+      });
+      continue;
+    }
+    eligible.push({
+      id: row.id,
+      caddyId: row.caddyId,
+      profileId: row.marshalProfileId,
+      occurredOn: formatMarshalYmd(row.occurredOn),
+      pinnedOn: row.pinnedOn ? formatMarshalYmd(row.pinnedOn) : null,
+      autoHeldOn:
+        autoHeldOnById.get(row.id) ??
+        (row.autoHeldOn ? formatMarshalYmd(row.autoHeldOn) : null),
+    });
+  }
+  const packed = scheduleOccurrencesForMonth({
+    dates: listMonthYmds(input.year, input.month),
+    amSlots: input.amSlotsPerDay,
+    pmSlots: input.pmSlotsPerDay,
+    occurrences: eligible,
+    existingByDate: input.penaltiesByDate,
+    statusByDateCaddy: input.statusByDateCaddy,
+  });
+  const leftover = [...inactiveLeftover, ...packed.leftover];
+  await Promise.all(
+    packed.assignments.map((row) =>
+      tx.marshalPenaltyOccurrence.update({
+        where: { id: row.id },
+        data: {
+          status: "SCHEDULED",
+          scheduledOn: new Date(`${row.date}T00:00:00`),
+          scheduledPlanId: input.planId,
+          deferReason: null,
+          ...(row.pinned || autoHeldOnById.has(row.id)
+            ? {}
+            : { autoHeldOn: new Date(`${row.date}T00:00:00`) }),
+        },
+      })
+    )
+  );
+  await Promise.all(
+    leftover.map((row) =>
+      tx.marshalPenaltyOccurrence.update({
+        where: { id: row.id },
+        data: {
+          status: "OPEN",
+          scheduledOn: null,
+          scheduledPlanId: null,
+          deferReason: row.deferReason,
+        },
+      })
+    )
+  );
+  return {
+    penaltiesByDate: mergeAssignedOccurrences(
+      input.penaltiesByDate,
+      packed.assignments
+    ),
+    assignedCount: packed.assignments.length,
+    leftoverCount: leftover.length,
+    assignedIds: packed.assignments.map((row) => row.id),
+    leftoverIds: leftover.map((row) => row.id),
+  };
+}

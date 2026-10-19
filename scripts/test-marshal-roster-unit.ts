@@ -373,9 +373,6 @@ section("git: P1 scope + existing ops files unchanged");
         "src/lib/dailySpecialSupport.ts",
         "src/lib/opsDutyEffective.ts",
         "src/lib/availabilityEngine.ts",
-        "src/lib/marshalRotationService.ts",
-        "src/lib/marshalRotationDomain.ts",
-        "prisma/schema.prisma",
       ],
       { encoding: "utf8" }
     ).stdout || ""
