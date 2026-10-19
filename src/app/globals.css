@@ -5563,11 +5563,24 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
   padding: 8px 12px;
 }
 
-.mr-roster-board {
+.mr-roster-workspace {
   display: none;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  margin: 0 0 12px;
+}
+
+.mr-roster-workspace.is-split {
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
+}
+
+.mr-roster-board {
+  display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
-  margin: 0 0 12px;
+  min-width: 0;
+  margin: 0;
   align-items: start;
 }
 
@@ -5646,13 +5659,79 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
   padding: 1px 6px;
 }
 
-.mr-roster-board .mr-dense-panel {
-  padding: 8px;
+.mr-detail {
+  min-width: 0;
+  position: sticky;
+  top: 12px;
+  padding: 16px;
+}
+
+.mr-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.mr-detail-head h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  color: var(--vh-green-900);
+}
+
+.mr-detail-meta {
+  margin: 4px 0 0;
+  color: var(--vh-ink-soft);
+  font-size: 0.78rem;
+  line-height: 1.4;
+  word-break: keep-all;
+}
+
+.mr-detail-dl {
+  display: grid;
+  grid-template-columns: 3.2em minmax(0, 1fr);
+  gap: 6px 10px;
+  margin: 0 0 14px;
+  font-size: 0.85rem;
+}
+
+.mr-detail-dl dt {
+  color: var(--vh-ink-soft);
+  font-weight: 600;
+}
+
+.mr-detail-dl dd {
+  margin: 0;
+  font-weight: 700;
+  color: var(--vh-green-900);
+}
+
+.mr-detail-order-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--vh-ink-soft);
+}
+
+.mr-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 @media (min-width: 720px) {
-  .mr-roster-board {
+  .mr-roster-workspace {
     display: grid;
+  }
+}
+
+@media (min-width: 1100px) {
+  .mr-roster-workspace.is-split {
+    grid-template-columns: minmax(0, 1fr) 320px;
   }
 }
 
@@ -5679,7 +5758,9 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
     display: block;
   }
 
-  .mr-roster-board {
+  .mr-roster-workspace,
+  .mr-roster-board,
+  .mr-detail {
     display: none;
   }
 }

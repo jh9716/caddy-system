@@ -9,8 +9,10 @@ import { caddyTypeLabel, type MarshalRosterRow } from "../src/lib/marshalDomain"
 import {
   MARSHAL_ROSTER_COMPACT_FIELDS,
   MARSHAL_ROSTER_PC_COLUMN_COUNT,
+  MARSHAL_ROSTER_UNSAVED_LEAVE_MESSAGE,
   buildMarshalActivePatch,
   buildMarshalCreateBody,
+  buildMarshalEditorPatch,
   buildMarshalRotationPatch,
   columnizeMarshalRoster,
   filterMarshalPickerOptions,
@@ -20,8 +22,11 @@ import {
   listMarshalAddableCaddies,
   marshalRosterBoardRowCount,
   marshalRosterColumnTitle,
+  marshalRosterEditorDraftFromRow,
+  marshalRosterEditorIsDirty,
   marshalRosterSaveErrorMessage,
   matchesMarshalCaddyQuery,
+  parseMarshalRosterOrderInput,
   toMarshalRosterCardView,
   toMarshalRosterDenseView,
   visibleMarshalRoster,
@@ -331,6 +336,78 @@ section("PC 3-column compact board");
   );
 }
 
+section("PC editor draft / unsaved / save payload");
+{
+  const active = row({
+    id: 1,
+    caddyId: 11,
+    name: "양현철",
+    rotationOrder: 3,
+    active: true,
+  });
+  const draft = marshalRosterEditorDraftFromRow(active);
+  assert(draft.marshalId === 1, "draft id");
+  assert(draft.orderText === "3", "draft 순번 텍스트");
+  assert(draft.active === true, "draft 활성");
+  assert(!marshalRosterEditorIsDirty(active, draft), "초기 draft는 깨끗");
+  assert(
+    marshalRosterEditorIsDirty(active, { ...draft, orderText: "4" }),
+    "순번 변경 dirty"
+  );
+  assert(
+    marshalRosterEditorIsDirty(active, { ...draft, active: false }),
+    "상태 변경 dirty"
+  );
+  assert(
+    !marshalRosterEditorIsDirty(active, { ...draft, marshalId: 99 }),
+    "다른 마샬 draft는 dirty 아님"
+  );
+  const parsedBad = parseMarshalRosterOrderInput("0");
+  assert(!parsedBad.ok, "순번 0 거부");
+  const parsedOk = parseMarshalRosterOrderInput("4");
+  assert(parsedOk.ok && parsedOk.value === 4, "순번 4 파싱");
+  const noChange = buildMarshalEditorPatch({ row: active, draft });
+  assert(noChange.ok && noChange.body === null, "변경 없으면 PATCH 없음");
+  const orderPatch = buildMarshalEditorPatch({
+    row: active,
+    draft: { ...draft, orderText: "4" },
+  });
+  assert(
+    orderPatch.ok &&
+      orderPatch.body != null &&
+      orderPatch.body.rotationOrder === 4 &&
+      orderPatch.body.active === undefined,
+    "순번만 PATCH"
+  );
+  const activePatch = buildMarshalEditorPatch({
+    row: active,
+    draft: { ...draft, active: false },
+  });
+  assert(
+    activePatch.ok &&
+      activePatch.body != null &&
+      activePatch.body.active === false &&
+      activePatch.body.rotationOrder === undefined,
+    "상태만 PATCH"
+  );
+  const both = buildMarshalEditorPatch({
+    row: active,
+    draft: { ...draft, orderText: "8", active: false },
+  });
+  assert(
+    both.ok &&
+      both.body != null &&
+      both.body.rotationOrder === 8 &&
+      both.body.active === false &&
+      !("startedOn" in both.body),
+    "순번+상태 PATCH, startedOn 없음"
+  );
+  assert(
+    MARSHAL_ROSTER_UNSAVED_LEAVE_MESSAGE.includes("저장하지 않은"),
+    "미저장 이탈 안내"
+  );
+}
+
 section("source contracts");
 {
   const page = read("src/app/manage/marshals/page.tsx");
@@ -358,6 +435,13 @@ section("source contracts");
   assert(!/재직\s*\{/.test(page), "재직 중복 prefix 없음");
   assert(page.includes("aria-expanded"), "dense 펼침 상태");
   assert(page.includes("data-marshal-panel"), "dense 관리 패널");
+  assert(page.includes("data-marshal-detail-panel"), "PC 우측 상세 패널");
+  assert(page.includes("mr-roster-workspace"), "PC board+panel workspace");
+  assert(page.includes("window.confirm"), "미저장 이탈 confirm");
+  assert(page.includes("MARSHAL_ROSTER_UNSAVED_LEAVE_MESSAGE"), "미저장 문구 helper");
+  assert(page.includes("buildMarshalEditorPatch"), "PC 저장은 기존 PATCH helper");
+  assert(page.includes('pcBusy ? "저장 중…" : "저장"'), "PC 저장 버튼");
+  assert(page.includes("beforeunload"), "탭 이탈 시 미저장 보호");
   assert(page.includes("marshalRosterSaveErrorMessage"), "409 안내 helper");
   assert(!page.includes("MARSHAL_ROSTER_TABLE_COLUMNS"), "table contract 제거");
   assert(!page.includes('data-marshal-roster="cards"'), "대형 카드 목록 제거");
@@ -382,14 +466,16 @@ section("source contracts");
   assert(css.includes(".mr-roster-dense"), "dense css");
   assert(css.includes(".mr-dense-main"), "dense row css");
   assert(css.includes(".mr-roster-board"), "PC board css");
+  assert(css.includes(".mr-detail"), "PC 상세 패널 css");
   assert(css.includes("repeat(3, minmax(0, 1fr))"), "PC 3열 grid");
+  assert(css.includes(".mr-roster-workspace.is-split"), "패널 열림 시 split");
   assert(!css.includes(".mr-roster-table"), "table css 제거");
   assert(!css.includes(".mr-roster-cards"), "card list css 제거");
   assert(
-    /@media \(max-width: 719px\)[\s\S]*\.mr-roster-board\s*\{\s*display:\s*none/m.test(
+    /@media \(max-width: 719px\)[\s\S]*\.mr-roster-workspace,[\s\S]*display:\s*none/m.test(
       css
     ),
-    "모바일에서 board 숨김"
+    "모바일에서 workspace/board/detail 숨김"
   );
   assert(
     /@media \(max-width: 719px\)[\s\S]*\.mr-roster-dense\s*\{\s*display:\s*block/m.test(
@@ -398,10 +484,10 @@ section("source contracts");
     "모바일에서 dense 표시"
   );
   assert(
-    /@media \(min-width: 720px\)[\s\S]*\.mr-roster-board\s*\{\s*display:\s*grid/m.test(
+    /@media \(min-width: 720px\)[\s\S]*\.mr-roster-workspace\s*\{\s*display:\s*grid/m.test(
       css
     ),
-    "PC에서 board 표시"
+    "PC에서 workspace 표시"
   );
   assert(!ui.includes("autoAssignEngine"), "ui helper 엔진 없음");
   assert(!page.includes("generateMarshal"), "UI 월 생성 없음");

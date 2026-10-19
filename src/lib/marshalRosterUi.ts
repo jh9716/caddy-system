@@ -326,3 +326,78 @@ export function buildMarshalRotationPatch(
 ): { rotationOrder: number | null } {
   return { rotationOrder };
 }
+
+export const MARSHAL_ROSTER_UNSAVED_LEAVE_MESSAGE =
+  "저장하지 않은 변경사항이 있습니다. 이동하면 사라집니다. 계속할까요?";
+
+export type MarshalRosterEditorDraft = {
+  marshalId: number;
+  orderText: string;
+  active: boolean;
+};
+
+export type MarshalEditorPatchBody = {
+  active?: boolean;
+  rotationOrder?: number | null;
+};
+
+export function marshalRosterSavedOrderText(
+  row: { rotationOrder?: number | null } | null | undefined
+): string {
+  return row?.rotationOrder == null ? "" : String(row.rotationOrder);
+}
+
+export function marshalRosterEditorDraftFromRow(
+  row: MarshalRosterRow
+): MarshalRosterEditorDraft {
+  return {
+    marshalId: row.id,
+    orderText: marshalRosterSavedOrderText(row),
+    active: row.active,
+  };
+}
+
+export function marshalRosterEditorIsDirty(
+  row: MarshalRosterRow | null | undefined,
+  draft: MarshalRosterEditorDraft | null | undefined
+): boolean {
+  if (!row || !draft || draft.marshalId !== row.id) return false;
+  return (
+    draft.orderText !== marshalRosterSavedOrderText(row) ||
+    draft.active !== row.active
+  );
+}
+
+export function parseMarshalRosterOrderInput(raw: string):
+  | { ok: true; value: number | null }
+  | { ok: false; message: string } {
+  const trimmed = String(raw ?? "").trim();
+  if (trimmed === "") return { ok: true, value: null };
+  const next = Number(trimmed);
+  if (!Number.isInteger(next) || next < 1) {
+    return { ok: false, message: "마샬 순번은 1 이상 정수여야 합니다." };
+  }
+  return { ok: true, value: next };
+}
+
+export function buildMarshalEditorPatch(input: {
+  row: MarshalRosterRow;
+  draft: MarshalRosterEditorDraft;
+}):
+  | { ok: false; message: string }
+  | { ok: true; body: MarshalEditorPatchBody | null } {
+  if (input.draft.marshalId !== input.row.id) {
+    return { ok: false, message: "선택한 마샬이 바뀌었습니다." };
+  }
+  const parsed = parseMarshalRosterOrderInput(input.draft.orderText);
+  if (!parsed.ok) return parsed;
+  const body: MarshalEditorPatchBody = {};
+  if (parsed.value !== input.row.rotationOrder) {
+    body.rotationOrder = parsed.value;
+  }
+  if (input.draft.active !== input.row.active) {
+    body.active = input.draft.active;
+  }
+  if (Object.keys(body).length === 0) return { ok: true, body: null };
+  return { ok: true, body };
+}
