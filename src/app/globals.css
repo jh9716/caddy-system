@@ -5563,23 +5563,30 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
   padding: 8px 12px;
 }
 
-.mr-roster-workspace {
+.mr-roster-frame {
   display: none;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 12px;
-  align-items: start;
+  container-type: inline-size;
+  container-name: mr-roster;
   margin: 0 0 12px;
 }
 
-.mr-roster-workspace.is-split {
-  grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
+.mr-roster-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.mr-roster-board-scroll {
+  min-width: 0;
+  overflow-x: auto;
 }
 
 .mr-roster-board {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(220px, 1fr));
   gap: 8px;
-  min-width: 0;
+  min-width: 676px;
   margin: 0;
   align-items: start;
 }
@@ -5659,11 +5666,63 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
   padding: 1px 6px;
 }
 
+.mr-detail-backdrop {
+  display: none;
+}
+
+.mr-roster-workspace.is-split .mr-detail-backdrop {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  background: rgba(15, 31, 24, 0.48);
+  cursor: pointer;
+}
+
+.mr-roster-workspace.is-split .mr-detail {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 46;
+  width: min(360px, 92vw);
+  max-width: 360px;
+  margin: 0;
+  border-radius: 0;
+  overflow: auto;
+  box-shadow: -12px 0 28px rgba(15, 31, 24, 0.18);
+}
+
 .mr-detail {
   min-width: 0;
-  position: sticky;
-  top: 12px;
   padding: 16px;
+}
+
+@container mr-roster (min-width: 1008px) {
+  .mr-roster-workspace.is-split {
+    grid-template-columns: minmax(0, 1fr) 320px;
+  }
+
+  .mr-roster-workspace.is-split .mr-detail-backdrop {
+    display: none;
+  }
+
+  .mr-roster-workspace.is-split .mr-detail {
+    position: sticky;
+    top: 12px;
+    right: auto;
+    bottom: auto;
+    z-index: auto;
+    width: auto;
+    max-width: none;
+    height: auto;
+    overflow: visible;
+    border-radius: var(--vh-radius);
+    box-shadow: var(--vh-shadow);
+  }
 }
 
 .mr-detail-head {
@@ -5724,14 +5783,8 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
 }
 
 @media (min-width: 720px) {
-  .mr-roster-workspace {
-    display: grid;
-  }
-}
-
-@media (min-width: 1100px) {
-  .mr-roster-workspace.is-split {
-    grid-template-columns: minmax(0, 1fr) 320px;
+  .mr-roster-frame {
+    display: block;
   }
 }
 
@@ -5758,10 +5811,12 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
     display: block;
   }
 
+  .mr-roster-frame,
   .mr-roster-workspace,
   .mr-roster-board,
-  .mr-detail {
-    display: none;
+  .mr-detail,
+  .mr-detail-backdrop {
+    display: none !important;
   }
 }
 

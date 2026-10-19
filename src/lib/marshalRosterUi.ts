@@ -26,6 +26,30 @@ export type MarshalPickerCaddy = {
 /** PC 압축형 명단 열 수. 인원이 늘면 행만 늘어나고 열 수는 고정. */
 export const MARSHAL_ROSTER_PC_COLUMN_COUNT = 3;
 
+/** 한 열에서 순번·이름·조·유형이 잘리지 않는 하한. */
+export const MARSHAL_ROSTER_COL_MIN_PX = 220;
+export const MARSHAL_ROSTER_BOARD_GAP_PX = 8;
+export const MARSHAL_ROSTER_DETAIL_PANEL_PX = 320;
+export const MARSHAL_ROSTER_SPLIT_GAP_PX = 12;
+
+export function marshalRosterBoardMinWidthPx(
+  columns = MARSHAL_ROSTER_PC_COLUMN_COUNT
+): number {
+  const cols = Math.max(1, Math.floor(Number(columns) || MARSHAL_ROSTER_PC_COLUMN_COUNT));
+  return cols * MARSHAL_ROSTER_COL_MIN_PX + (cols - 1) * MARSHAL_ROSTER_BOARD_GAP_PX;
+}
+
+/** 사이드바를 뺀 콘텐츠 너비가 이 값 이상일 때만 우측 패널을 옆에 붙인다. */
+export function marshalRosterSplitMinWidthPx(
+  columns = MARSHAL_ROSTER_PC_COLUMN_COUNT
+): number {
+  return (
+    marshalRosterBoardMinWidthPx(columns) +
+    MARSHAL_ROSTER_SPLIT_GAP_PX +
+    MARSHAL_ROSTER_DETAIL_PANEL_PX
+  );
+}
+
 export const MARSHAL_ROSTER_COMPACT_FIELDS = [
   "순번",
   "이름",

@@ -135,6 +135,16 @@ export default function ManageMarshalsPage() {
     return true;
   };
 
+  useEffect(() => {
+    if (selectedRow == null) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      closePcPanel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedRow, pcDirty]);
+
   const openPcEditor = (row: MarshalRosterRow) => {
     if (selectedId === row.id) {
       closePcPanel();
@@ -470,11 +480,16 @@ export default function ManageMarshalsPage() {
           </ul>
 
           <div
+            className="mr-roster-frame"
+            data-marshal-roster-frame="1"
+          >
+          <div
             className={`mr-roster-workspace${
               selectedRow ? " is-split" : ""
             }`}
             data-marshal-workspace={selectedRow ? "split" : "board"}
           >
+            <div className="mr-roster-board-scroll">
             <div
               className="mr-roster-board"
               data-marshal-roster="board"
@@ -514,8 +529,17 @@ export default function ManageMarshalsPage() {
                 ))
               )}
             </div>
+            </div>
 
             {selectedRow && selectedView && pcEditor ? (
+              <>
+              <button
+                type="button"
+                className="mr-detail-backdrop"
+                data-marshal-detail-backdrop="1"
+                aria-label="상세 패널 닫기"
+                onClick={() => closePcPanel()}
+              />
               <aside
                 id="marshal-detail-panel"
                 className="ui-card mr-detail"
@@ -609,7 +633,9 @@ export default function ManageMarshalsPage() {
                   </button>
                 </div>
               </aside>
+              </>
             ) : null}
+          </div>
           </div>
         </>
       )}

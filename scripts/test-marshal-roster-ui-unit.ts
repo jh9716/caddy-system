@@ -7,6 +7,7 @@ import path from "node:path";
 import { employmentStatusLabel } from "../src/lib/caddyManage";
 import { caddyTypeLabel, type MarshalRosterRow } from "../src/lib/marshalDomain";
 import {
+  MARSHAL_ROSTER_COL_MIN_PX,
   MARSHAL_ROSTER_COMPACT_FIELDS,
   MARSHAL_ROSTER_PC_COLUMN_COUNT,
   MARSHAL_ROSTER_UNSAVED_LEAVE_MESSAGE,
@@ -20,8 +21,10 @@ import {
   formatMarshalCaddyOptionLabel,
   formatMarshalRosterDenseMeta,
   listMarshalAddableCaddies,
+  marshalRosterBoardMinWidthPx,
   marshalRosterBoardRowCount,
   marshalRosterColumnTitle,
+  marshalRosterSplitMinWidthPx,
   marshalRosterEditorDraftFromRow,
   marshalRosterEditorIsDirty,
   marshalRosterSaveErrorMessage,
@@ -334,6 +337,9 @@ section("PC 3-column compact board");
     emptyCols.length === 3 && emptyCols.every((col) => col.length === 0),
     "빈 명단도 3열 슬롯"
   );
+  assert(MARSHAL_ROSTER_COL_MIN_PX === 220, "열 최소 너비 220");
+  assert(marshalRosterBoardMinWidthPx() === 676, "3열 보드 최소 676");
+  assert(marshalRosterSplitMinWidthPx() === 1008, "옆 패널 최소 콘텐츠 1008");
 }
 
 section("PC editor draft / unsaved / save payload");
@@ -437,6 +443,8 @@ section("source contracts");
   assert(page.includes("data-marshal-panel"), "dense 관리 패널");
   assert(page.includes("data-marshal-detail-panel"), "PC 우측 상세 패널");
   assert(page.includes("mr-roster-workspace"), "PC board+panel workspace");
+  assert(page.includes("data-marshal-roster-frame"), "콘텐츠 너비 container");
+  assert(page.includes("data-marshal-detail-backdrop"), "좁은 PC drawer backdrop");
   assert(page.includes("window.confirm"), "미저장 이탈 confirm");
   assert(page.includes("MARSHAL_ROSTER_UNSAVED_LEAVE_MESSAGE"), "미저장 문구 helper");
   assert(page.includes("buildMarshalEditorPatch"), "PC 저장은 기존 PATCH helper");
@@ -467,12 +475,19 @@ section("source contracts");
   assert(css.includes(".mr-dense-main"), "dense row css");
   assert(css.includes(".mr-roster-board"), "PC board css");
   assert(css.includes(".mr-detail"), "PC 상세 패널 css");
-  assert(css.includes("repeat(3, minmax(0, 1fr))"), "PC 3열 grid");
+  assert(css.includes("repeat(3, minmax(220px, 1fr))"), "PC 3열 grid 최소너비");
+  assert(css.includes("min-width: 676px"), "보드 최소 너비 압축 금지");
+  assert(css.includes("container-type: inline-size"), "콘텐츠 너비 container");
+  assert(
+    css.includes("@container mr-roster (min-width: 1008px)"),
+    "넓은 콘텐츠만 옆 패널"
+  );
+  assert(css.includes(".mr-detail-backdrop"), "좁은 PC drawer backdrop css");
   assert(css.includes(".mr-roster-workspace.is-split"), "패널 열림 시 split");
   assert(!css.includes(".mr-roster-table"), "table css 제거");
   assert(!css.includes(".mr-roster-cards"), "card list css 제거");
   assert(
-    /@media \(max-width: 719px\)[\s\S]*\.mr-roster-workspace,[\s\S]*display:\s*none/m.test(
+    /@media \(max-width: 719px\)[\s\S]*\.mr-roster-frame,[\s\S]*display:\s*none/m.test(
       css
     ),
     "모바일에서 workspace/board/detail 숨김"
@@ -484,10 +499,10 @@ section("source contracts");
     "모바일에서 dense 표시"
   );
   assert(
-    /@media \(min-width: 720px\)[\s\S]*\.mr-roster-workspace\s*\{\s*display:\s*grid/m.test(
+    /@media \(min-width: 720px\)[\s\S]*\.mr-roster-frame\s*\{\s*display:\s*block/m.test(
       css
     ),
-    "PC에서 workspace 표시"
+    "PC에서 frame 표시"
   );
   assert(!ui.includes("autoAssignEngine"), "ui helper 엔진 없음");
   assert(!page.includes("generateMarshal"), "UI 월 생성 없음");
