@@ -23,18 +23,19 @@ export type MarshalPickerCaddy = {
   caddyType?: string | null;
 };
 
-export const MARSHAL_ROSTER_TABLE_COLUMNS = [
+/** PC 압축형 명단 열 수. 인원이 늘면 행만 늘어나고 열 수는 고정. */
+export const MARSHAL_ROSTER_PC_COLUMN_COUNT = 3;
+
+export const MARSHAL_ROSTER_COMPACT_FIELDS = [
   "순번",
   "이름",
   "조",
   "유형",
-  "재직",
   "상태",
-  "액션",
 ] as const;
 
-export type MarshalRosterTableColumn =
-  (typeof MARSHAL_ROSTER_TABLE_COLUMNS)[number];
+export type MarshalRosterCompactField =
+  (typeof MARSHAL_ROSTER_COMPACT_FIELDS)[number];
 
 export type MarshalRosterCardView = {
   id: number;
@@ -166,6 +167,62 @@ export function visibleMarshalRoster(
       if (ao !== bo) return ao - bo;
       return a.id - b.id;
     });
+}
+
+function positiveIntOr(
+  value: unknown,
+  fallback: number,
+  min = 1
+): number {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < min) return fallback;
+  return n;
+}
+
+/** 3열 배치의 행 수. 30명→10행, 인원 증가 시 ceil(n/3). 상한 없음. */
+export function marshalRosterBoardRowCount(
+  count: number,
+  columns = MARSHAL_ROSTER_PC_COLUMN_COUNT
+): number {
+  const n = positiveIntOr(count, 0, 0);
+  const cols = positiveIntOr(columns, MARSHAL_ROSTER_PC_COLUMN_COUNT);
+  if (n === 0) return 0;
+  return Math.ceil(n / cols);
+}
+
+/**
+ * rotationOrder 정렬 명단을 PC 3열로 나눈다.
+ * 30명이면 10/10/10, 나머지는 앞 열부터 한 명씩 더한다.
+ * 30명 상한 없음.
+ */
+export function columnizeMarshalRoster<T>(
+  rows: readonly T[],
+  columns = MARSHAL_ROSTER_PC_COLUMN_COUNT
+): T[][] {
+  const cols = positiveIntOr(columns, MARSHAL_ROSTER_PC_COLUMN_COUNT);
+  const list = Array.from(rows ?? []);
+  const result: T[][] = Array.from({ length: cols }, () => []);
+  const n = list.length;
+  if (n === 0) return result;
+  const base = Math.floor(n / cols);
+  const rem = n % cols;
+  let offset = 0;
+  for (let c = 0; c < cols; c++) {
+    const size = base + (c < rem ? 1 : 0);
+    result[c] = list.slice(offset, offset + size);
+    offset += size;
+  }
+  return result;
+}
+
+export function marshalRosterColumnTitle(
+  rows: readonly { rotationOrder?: number | null }[]
+): string {
+  if (!rows.length) return "—";
+  const first = formatMarshalRosterOrder(rows[0]?.rotationOrder);
+  const last = formatMarshalRosterOrder(rows[rows.length - 1]?.rotationOrder);
+  if (first === last) return `순번 ${first}`;
+  return `순번 ${first}–${last}`;
 }
 
 export function formatMarshalRosterOrder(

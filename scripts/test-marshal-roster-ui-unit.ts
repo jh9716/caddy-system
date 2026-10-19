@@ -7,15 +7,19 @@ import path from "node:path";
 import { employmentStatusLabel } from "../src/lib/caddyManage";
 import { caddyTypeLabel, type MarshalRosterRow } from "../src/lib/marshalDomain";
 import {
-  MARSHAL_ROSTER_TABLE_COLUMNS,
+  MARSHAL_ROSTER_COMPACT_FIELDS,
+  MARSHAL_ROSTER_PC_COLUMN_COUNT,
   buildMarshalActivePatch,
   buildMarshalCreateBody,
   buildMarshalRotationPatch,
+  columnizeMarshalRoster,
   filterMarshalPickerOptions,
   firstMarshalPickerMatch,
   formatMarshalCaddyOptionLabel,
   formatMarshalRosterDenseMeta,
   listMarshalAddableCaddies,
+  marshalRosterBoardRowCount,
+  marshalRosterColumnTitle,
   marshalRosterSaveErrorMessage,
   matchesMarshalCaddyQuery,
   toMarshalRosterCardView,
@@ -257,11 +261,74 @@ section("roster rendering contracts");
   const all = visibleMarshalRoster([active, inactive], true);
   assert(all.map((r) => r.id).join(",") === "2,1", "순번 정렬 + 비활성 포함");
   assert(
-    MARSHAL_ROSTER_TABLE_COLUMNS.join(",") ===
-      "순번,이름,조,유형,재직,상태,액션",
-    "PC table columns"
+    MARSHAL_ROSTER_COMPACT_FIELDS.join(",") === "순번,이름,조,유형,상태",
+    "PC compact fields"
   );
+  assert(MARSHAL_ROSTER_PC_COLUMN_COUNT === 3, "PC 3열 고정");
   assert(caddyTypeLabel("HOUSE") === "하우스", "유형 라벨 유지");
+}
+
+section("PC 3-column compact board");
+{
+  const thirty = Array.from({ length: 30 }, (_, i) =>
+    row({
+      id: i + 1,
+      caddyId: i + 1,
+      name: `마샬${i + 1}`,
+      rotationOrder: i + 1,
+    })
+  );
+  const cols30 = columnizeMarshalRoster(thirty);
+  assert(cols30.length === 3, "30명 → 3열");
+  assert(
+    cols30.map((col) => col.length).join(",") === "10,10,10",
+    "30명 → 열당 10명"
+  );
+  assert(
+    cols30[0].map((r) => r.rotationOrder).join(",") ===
+      "1,2,3,4,5,6,7,8,9,10",
+    "1열 순번 1-10"
+  );
+  assert(
+    cols30[1][0].rotationOrder === 11 && cols30[2][9].rotationOrder === 30,
+    "2열 11 / 3열 30"
+  );
+  assert(marshalRosterBoardRowCount(30) === 10, "30명 행 수 10");
+  assert(marshalRosterColumnTitle(cols30[0]) === "순번 1–10", "1열 제목 1-10");
+  assert(marshalRosterColumnTitle(cols30[2]) === "순번 21–30", "3열 제목 21-30");
+
+  const thirtyOne = [
+    ...thirty,
+    row({ id: 31, caddyId: 31, name: "마샬31", rotationOrder: 31 }),
+  ];
+  const cols31 = columnizeMarshalRoster(thirtyOne);
+  assert(
+    cols31.map((col) => col.length).join(",") === "11,10,10",
+    "31명 → 행 자동 확장 11/10/10"
+  );
+  assert(marshalRosterBoardRowCount(31) === 11, "31명 행 수 11");
+
+  const fifty = Array.from({ length: 50 }, (_, i) =>
+    row({
+      id: i + 1,
+      caddyId: i + 1,
+      name: `마샬${i + 1}`,
+      rotationOrder: i + 1,
+    })
+  );
+  const cols50 = columnizeMarshalRoster(fifty);
+  assert(cols50.length === 3, "50명도 3열");
+  assert(
+    cols50.map((col) => col.length).join(",") === "17,17,16",
+    "50명 → 17/17/16 상한 없음"
+  );
+  assert(marshalRosterBoardRowCount(50) === 17, "50명 행 수 17");
+  assert(marshalRosterBoardRowCount(0) === 0, "0명 행 수 0");
+  const emptyCols = columnizeMarshalRoster([]);
+  assert(
+    emptyCols.length === 3 && emptyCols.every((col) => col.length === 0),
+    "빈 명단도 3열 슬롯"
+  );
 }
 
 section("source contracts");
@@ -276,17 +343,23 @@ section("source contracts");
   assert(page.includes('aria-label="마샬 순번"'), "추가 UI 순번");
   assert(page.includes("명단에 추가"), "추가 UI 버튼");
   assert(page.includes("비활성 포함"), "비활성 포함 유지");
+  assert(page.includes('data-marshal-add-toggle="1"'), "추가 패널 토글 버튼");
+  assert(page.includes('data-marshal-add-panel="1"'), "검색·등록 패널");
+  assert(page.includes("마샬 추가"), "상단 마샬 추가 버튼");
   assert(page.includes('data-marshal-roster="dense"'), "mobile dense list");
-  assert(page.includes('data-marshal-roster="table"'), "desktop table");
-  assert(page.includes("colSpan={7}"), "empty row colSpan 7");
+  assert(page.includes('data-marshal-roster="board"'), "PC 3열 compact board");
+  assert(!page.includes('data-marshal-roster="table"'), "desktop table 제거");
+  assert(!page.includes("colSpan={7}"), "table empty row 제거");
   assert(page.includes("toMarshalRosterDenseView"), "dense contract 사용");
   assert(page.includes("view.metaText"), "dense meta helper 사용");
+  assert(page.includes("columnizeMarshalRoster"), "3열 배치 helper 사용");
+  assert(page.includes("MARSHAL_ROSTER_PC_COLUMN_COUNT"), "3열 상수 사용");
   assert(!page.includes("조 {view.team}"), "조 중복 prefix 없음");
   assert(!/재직\s*\{/.test(page), "재직 중복 prefix 없음");
   assert(page.includes("aria-expanded"), "dense 펼침 상태");
   assert(page.includes("data-marshal-panel"), "dense 관리 패널");
   assert(page.includes("marshalRosterSaveErrorMessage"), "409 안내 helper");
-  assert(page.includes("MARSHAL_ROSTER_TABLE_COLUMNS"), "table contract 사용");
+  assert(!page.includes("MARSHAL_ROSTER_TABLE_COLUMNS"), "table contract 제거");
   assert(!page.includes('data-marshal-roster="cards"'), "대형 카드 목록 제거");
   assert(!page.includes("mr-roster-card-name"), "대형 카드 이름 제거");
   assert(page.includes("buildMarshalCreateBody"), "create payload helper");
@@ -308,19 +381,27 @@ section("source contracts");
   assert(css.includes("@media (max-width: 719px)"), "mobile breakpoint");
   assert(css.includes(".mr-roster-dense"), "dense css");
   assert(css.includes(".mr-dense-main"), "dense row css");
-  assert(css.includes(".mr-roster-table"), "table css");
+  assert(css.includes(".mr-roster-board"), "PC board css");
+  assert(css.includes("repeat(3, minmax(0, 1fr))"), "PC 3열 grid");
+  assert(!css.includes(".mr-roster-table"), "table css 제거");
   assert(!css.includes(".mr-roster-cards"), "card list css 제거");
   assert(
-    /@media \(max-width: 719px\)[\s\S]*\.mr-roster-table\s*\{\s*display:\s*none/m.test(
+    /@media \(max-width: 719px\)[\s\S]*\.mr-roster-board\s*\{\s*display:\s*none/m.test(
       css
     ),
-    "모바일에서 table 숨김"
+    "모바일에서 board 숨김"
   );
   assert(
     /@media \(max-width: 719px\)[\s\S]*\.mr-roster-dense\s*\{\s*display:\s*block/m.test(
       css
     ),
     "모바일에서 dense 표시"
+  );
+  assert(
+    /@media \(min-width: 720px\)[\s\S]*\.mr-roster-board\s*\{\s*display:\s*grid/m.test(
+      css
+    ),
+    "PC에서 board 표시"
   );
   assert(!ui.includes("autoAssignEngine"), "ui helper 엔진 없음");
   assert(!page.includes("generateMarshal"), "UI 월 생성 없음");

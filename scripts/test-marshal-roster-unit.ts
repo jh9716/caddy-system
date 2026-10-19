@@ -299,13 +299,14 @@ section("source contracts");
   assert(!page.includes(">시작일<") && !page.includes("<th>시작일</th>"), "목록 시작일 header 없음");
   assert(!/시작일/.test(page), "페이지에 시작일 UI 없음");
   assert(!page.includes('type="date"'), "startedOn date input 없음");
-  assert(page.includes("colSpan={7}"), "empty row colSpan 7");
+  assert(!page.includes("colSpan={7}"), "table empty row 제거");
   assert(page.includes('aria-label="캐디"'), "추가 UI 캐디 선택");
   assert(page.includes('aria-label="마샬 순번"'), "추가 UI 순번");
   assert(page.includes("명단에 추가"), "추가 UI 버튼");
   assert(page.includes("MarshalCaddyPicker"), "검색 가능한 캐디 picker");
   assert(page.includes('data-marshal-roster="dense"'), "모바일 dense roster");
-  assert(page.includes('data-marshal-roster="table"'), "PC table roster");
+  assert(page.includes('data-marshal-roster="board"'), "PC compact board");
+  assert(!page.includes('data-marshal-roster="table"'), "PC table 제거");
   assert(page.includes("비활성 포함"), "비활성 포함 유지");
   {
     const createFn = page.split("const createMarshal")[1]?.split("const patchMarshal")[0] || "";
