@@ -23,18 +23,43 @@ export type MarshalPickerCaddy = {
   caddyType?: string | null;
 };
 
-export const MARSHAL_ROSTER_TABLE_COLUMNS = [
+/** PC 압축형 명단 열 수. 인원이 늘면 행만 늘어나고 열 수는 고정. */
+export const MARSHAL_ROSTER_PC_COLUMN_COUNT = 3;
+
+/** 한 열에서 순번·이름·조·유형이 잘리지 않는 하한. */
+export const MARSHAL_ROSTER_COL_MIN_PX = 220;
+export const MARSHAL_ROSTER_BOARD_GAP_PX = 8;
+export const MARSHAL_ROSTER_DETAIL_PANEL_PX = 320;
+export const MARSHAL_ROSTER_SPLIT_GAP_PX = 12;
+
+export function marshalRosterBoardMinWidthPx(
+  columns = MARSHAL_ROSTER_PC_COLUMN_COUNT
+): number {
+  const cols = Math.max(1, Math.floor(Number(columns) || MARSHAL_ROSTER_PC_COLUMN_COUNT));
+  return cols * MARSHAL_ROSTER_COL_MIN_PX + (cols - 1) * MARSHAL_ROSTER_BOARD_GAP_PX;
+}
+
+/** 사이드바를 뺀 콘텐츠 너비가 이 값 이상일 때만 우측 패널을 옆에 붙인다. */
+export function marshalRosterSplitMinWidthPx(
+  columns = MARSHAL_ROSTER_PC_COLUMN_COUNT
+): number {
+  return (
+    marshalRosterBoardMinWidthPx(columns) +
+    MARSHAL_ROSTER_SPLIT_GAP_PX +
+    MARSHAL_ROSTER_DETAIL_PANEL_PX
+  );
+}
+
+export const MARSHAL_ROSTER_COMPACT_FIELDS = [
   "순번",
   "이름",
   "조",
   "유형",
-  "재직",
   "상태",
-  "액션",
 ] as const;
 
-export type MarshalRosterTableColumn =
-  (typeof MARSHAL_ROSTER_TABLE_COLUMNS)[number];
+export type MarshalRosterCompactField =
+  (typeof MARSHAL_ROSTER_COMPACT_FIELDS)[number];
 
 export type MarshalRosterCardView = {
   id: number;
@@ -168,6 +193,62 @@ export function visibleMarshalRoster(
     });
 }
 
+function positiveIntOr(
+  value: unknown,
+  fallback: number,
+  min = 1
+): number {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < min) return fallback;
+  return n;
+}
+
+/** 3열 배치의 행 수. 30명→10행, 인원 증가 시 ceil(n/3). 상한 없음. */
+export function marshalRosterBoardRowCount(
+  count: number,
+  columns = MARSHAL_ROSTER_PC_COLUMN_COUNT
+): number {
+  const n = positiveIntOr(count, 0, 0);
+  const cols = positiveIntOr(columns, MARSHAL_ROSTER_PC_COLUMN_COUNT);
+  if (n === 0) return 0;
+  return Math.ceil(n / cols);
+}
+
+/**
+ * rotationOrder 정렬 명단을 PC 3열로 나눈다.
+ * 30명이면 10/10/10, 나머지는 앞 열부터 한 명씩 더한다.
+ * 30명 상한 없음.
+ */
+export function columnizeMarshalRoster<T>(
+  rows: readonly T[],
+  columns = MARSHAL_ROSTER_PC_COLUMN_COUNT
+): T[][] {
+  const cols = positiveIntOr(columns, MARSHAL_ROSTER_PC_COLUMN_COUNT);
+  const list = Array.from(rows ?? []);
+  const result: T[][] = Array.from({ length: cols }, () => []);
+  const n = list.length;
+  if (n === 0) return result;
+  const base = Math.floor(n / cols);
+  const rem = n % cols;
+  let offset = 0;
+  for (let c = 0; c < cols; c++) {
+    const size = base + (c < rem ? 1 : 0);
+    result[c] = list.slice(offset, offset + size);
+    offset += size;
+  }
+  return result;
+}
+
+export function marshalRosterColumnTitle(
+  rows: readonly { rotationOrder?: number | null }[]
+): string {
+  if (!rows.length) return "—";
+  const first = formatMarshalRosterOrder(rows[0]?.rotationOrder);
+  const last = formatMarshalRosterOrder(rows[rows.length - 1]?.rotationOrder);
+  if (first === last) return `순번 ${first}`;
+  return `순번 ${first}–${last}`;
+}
+
 export function formatMarshalRosterOrder(
   rotationOrder: number | null | undefined
 ): string {
@@ -268,4 +349,79 @@ export function buildMarshalRotationPatch(
   rotationOrder: number | null
 ): { rotationOrder: number | null } {
   return { rotationOrder };
+}
+
+export const MARSHAL_ROSTER_UNSAVED_LEAVE_MESSAGE =
+  "저장하지 않은 변경사항이 있습니다. 이동하면 사라집니다. 계속할까요?";
+
+export type MarshalRosterEditorDraft = {
+  marshalId: number;
+  orderText: string;
+  active: boolean;
+};
+
+export type MarshalEditorPatchBody = {
+  active?: boolean;
+  rotationOrder?: number | null;
+};
+
+export function marshalRosterSavedOrderText(
+  row: { rotationOrder?: number | null } | null | undefined
+): string {
+  return row?.rotationOrder == null ? "" : String(row.rotationOrder);
+}
+
+export function marshalRosterEditorDraftFromRow(
+  row: MarshalRosterRow
+): MarshalRosterEditorDraft {
+  return {
+    marshalId: row.id,
+    orderText: marshalRosterSavedOrderText(row),
+    active: row.active,
+  };
+}
+
+export function marshalRosterEditorIsDirty(
+  row: MarshalRosterRow | null | undefined,
+  draft: MarshalRosterEditorDraft | null | undefined
+): boolean {
+  if (!row || !draft || draft.marshalId !== row.id) return false;
+  return (
+    draft.orderText !== marshalRosterSavedOrderText(row) ||
+    draft.active !== row.active
+  );
+}
+
+export function parseMarshalRosterOrderInput(raw: string):
+  | { ok: true; value: number | null }
+  | { ok: false; message: string } {
+  const trimmed = String(raw ?? "").trim();
+  if (trimmed === "") return { ok: true, value: null };
+  const next = Number(trimmed);
+  if (!Number.isInteger(next) || next < 1) {
+    return { ok: false, message: "마샬 순번은 1 이상 정수여야 합니다." };
+  }
+  return { ok: true, value: next };
+}
+
+export function buildMarshalEditorPatch(input: {
+  row: MarshalRosterRow;
+  draft: MarshalRosterEditorDraft;
+}):
+  | { ok: false; message: string }
+  | { ok: true; body: MarshalEditorPatchBody | null } {
+  if (input.draft.marshalId !== input.row.id) {
+    return { ok: false, message: "선택한 마샬이 바뀌었습니다." };
+  }
+  const parsed = parseMarshalRosterOrderInput(input.draft.orderText);
+  if (!parsed.ok) return parsed;
+  const body: MarshalEditorPatchBody = {};
+  if (parsed.value !== input.row.rotationOrder) {
+    body.rotationOrder = parsed.value;
+  }
+  if (input.draft.active !== input.row.active) {
+    body.active = input.draft.active;
+  }
+  if (Object.keys(body).length === 0) return { ok: true, body: null };
+  return { ok: true, body };
 }

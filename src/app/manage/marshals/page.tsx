@@ -3,19 +3,25 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import MarshalCaddyPicker from "@/components/manage/MarshalCaddyPicker";
 import MarshalManageNav from "@/components/manage/MarshalManageNav";
-import { employmentStatusLabel } from "@/lib/caddyManage";
-import { caddyTypeLabel } from "@/lib/marshalDomain";
 import type { MarshalRosterRow } from "@/lib/marshalDomain";
 import {
-  MARSHAL_ROSTER_TABLE_COLUMNS,
+  MARSHAL_ROSTER_PC_COLUMN_COUNT,
+  MARSHAL_ROSTER_UNSAVED_LEAVE_MESSAGE,
   buildMarshalActivePatch,
   buildMarshalCreateBody,
+  buildMarshalEditorPatch,
   buildMarshalRotationPatch,
+  columnizeMarshalRoster,
   listMarshalAddableCaddies,
+  marshalRosterColumnTitle,
+  marshalRosterEditorDraftFromRow,
+  marshalRosterEditorIsDirty,
   marshalRosterSaveErrorMessage,
+  parseMarshalRosterOrderInput,
   toMarshalRosterDenseView,
   visibleMarshalRoster,
   type MarshalPickerCaddy,
+  type MarshalRosterEditorDraft,
 } from "@/lib/marshalRosterUi";
 
 type CaddyOption = MarshalPickerCaddy & {
@@ -32,8 +38,12 @@ export default function ManageMarshalsPage() {
   const [caddyId, setCaddyId] = useState("");
   const [rotationOrder, setRotationOrder] = useState("");
   const [showInactive, setShowInactive] = useState(true);
-  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
   const [orderDrafts, setOrderDrafts] = useState<Record<number, string>>({});
+  const [pcEditor, setPcEditor] = useState<MarshalRosterEditorDraft | null>(
+    null
+  );
 
   const load = useCallback(async (opts?: { silent?: boolean }) => {
     if (!opts?.silent) setLoading(true);
@@ -73,13 +83,36 @@ export default function ManageMarshalsPage() {
     [caddies, registeredIds]
   );
   const visible = visibleMarshalRoster(marshals, showInactive);
+  const boardColumns = useMemo(
+    () => columnizeMarshalRoster(visible, MARSHAL_ROSTER_PC_COLUMN_COUNT),
+    [visible]
+  );
+  const selectedRow =
+    selectedId == null
+      ? null
+      : (visible.find((row) => row.id === selectedId) ?? null);
+  const selectedView = selectedRow
+    ? toMarshalRosterDenseView(selectedRow)
+    : null;
+  const pcDirty = marshalRosterEditorIsDirty(selectedRow, pcEditor);
 
   useEffect(() => {
-    if (expandedId == null) return;
-    if (!visible.some((row) => row.id === expandedId)) {
-      setExpandedId(null);
+    if (selectedId == null) return;
+    if (!visible.some((row) => row.id === selectedId)) {
+      setSelectedId(null);
+      setPcEditor(null);
     }
-  }, [visible, expandedId]);
+  }, [visible, selectedId]);
+
+  useEffect(() => {
+    if (!pcDirty) return;
+    const onLeave = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onLeave);
+    return () => window.removeEventListener("beforeunload", onLeave);
+  }, [pcDirty]);
 
   const clearOrderDraft = (id: number) => {
     setOrderDrafts((current) => {
@@ -88,6 +121,41 @@ export default function ManageMarshalsPage() {
       delete next[id];
       return next;
     });
+  };
+
+  const confirmLeaveUnsaved = () => {
+    if (!pcDirty) return true;
+    return window.confirm(MARSHAL_ROSTER_UNSAVED_LEAVE_MESSAGE);
+  };
+
+  const closePcPanel = (opts?: { force?: boolean }) => {
+    if (!opts?.force && !confirmLeaveUnsaved()) return false;
+    setSelectedId(null);
+    setPcEditor(null);
+    return true;
+  };
+
+  useEffect(() => {
+    if (selectedRow == null) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      closePcPanel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedRow, pcDirty]);
+
+  const openPcEditor = (row: MarshalRosterRow) => {
+    if (selectedId === row.id) {
+      closePcPanel();
+      return;
+    }
+    if (selectedId != null && selectedId !== row.id && !confirmLeaveUnsaved()) {
+      return;
+    }
+    setSelectedId(row.id);
+    setPcEditor(marshalRosterEditorDraftFromRow(row));
+    setError(null);
   };
 
   const createMarshal = async () => {
@@ -117,6 +185,7 @@ export default function ManageMarshalsPage() {
       }
       setCaddyId("");
       setRotationOrder("");
+      setAddOpen(false);
       await load({ silent: true });
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "등록 실패");
@@ -152,8 +221,10 @@ export default function ManageMarshalsPage() {
       }
       clearOrderDraft(row.id);
       await load({ silent: true });
+      return true;
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "수정 실패");
+      return false;
     } finally {
       setBusyId(null);
     }
@@ -167,19 +238,149 @@ export default function ManageMarshalsPage() {
         : String(row.rotationOrder);
 
   const commitRotation = (row: MarshalRosterRow, raw: string) => {
-    const trimmed = raw.trim();
-    const next = trimmed === "" ? null : Number(trimmed);
-    if (trimmed !== "" && (!Number.isInteger(next) || Number(next) < 1)) {
-      setError("마샬 순번은 1 이상 정수여야 합니다.");
+    const parsed = parseMarshalRosterOrderInput(raw);
+    if (!parsed.ok) {
+      setError(parsed.message);
       clearOrderDraft(row.id);
       return;
     }
-    if (next === row.rotationOrder) {
+    if (parsed.value === row.rotationOrder) {
       clearOrderDraft(row.id);
       return;
     }
-    void patchMarshal(row, buildMarshalRotationPatch(next));
+    void patchMarshal(row, buildMarshalRotationPatch(parsed.value));
   };
+
+  const savePcEditor = async () => {
+    if (!selectedRow || !pcEditor) return;
+    const next = buildMarshalEditorPatch({ row: selectedRow, draft: pcEditor });
+    if (!next.ok) {
+      setError(next.message);
+      return;
+    }
+    if (next.body == null) {
+      setPcEditor(marshalRosterEditorDraftFromRow(selectedRow));
+      return;
+    }
+    const ok = await patchMarshal(selectedRow, next.body);
+    if (ok) {
+      setPcEditor((current) =>
+        current && current.marshalId === selectedRow.id
+          ? {
+              marshalId: selectedRow.id,
+              orderText: current.orderText,
+              active: current.active,
+            }
+          : current
+      );
+    }
+  };
+
+  const renderRosterRow = (
+    row: MarshalRosterRow,
+    opts?: { showType?: boolean; surface?: "dense" | "board" }
+  ) => {
+    const view = toMarshalRosterDenseView(row);
+    const busy = busyId === row.id;
+    const surface = opts?.surface ?? "dense";
+    const inlineEdit = surface === "dense";
+    const open = selectedId === row.id;
+    const panelId = inlineEdit
+      ? `marshal-panel-${surface}-${row.id}`
+      : "marshal-detail-panel";
+    const showType = opts?.showType === true;
+    return (
+      <li
+        key={row.id}
+        className={`mr-dense-row${view.active ? "" : " is-inactive"}${
+          open ? " is-open" : ""
+        }`}
+        data-marshal-row={row.id}
+        data-marshal-surface={surface}
+      >
+        <button
+          type="button"
+          className="mr-dense-main"
+          aria-expanded={open}
+          aria-controls={panelId}
+          onClick={() => {
+            if (inlineEdit) {
+              setSelectedId((id) => (id === row.id ? null : row.id));
+              return;
+            }
+            openPcEditor(row);
+          }}
+        >
+          <span className="mr-dense-order">{view.orderText}</span>
+          {showType ? (
+            <span className="mr-dense-copy">
+              <span className="mr-dense-name">{view.name}</span>
+              <span className="mr-dense-sub">
+                {view.team} · {view.typeLabel}
+              </span>
+            </span>
+          ) : (
+            <>
+              <span className="mr-dense-name">{view.name}</span>
+              <span className="mr-dense-team">{view.team}</span>
+            </>
+          )}
+          <span
+            className={`ui-pill mr-dense-status${view.active ? "" : " muted"}`}
+          >
+            {view.statusLabel}
+          </span>
+          <span className="mr-dense-more" aria-hidden>
+            {open ? (inlineEdit ? "▾" : "‹") : "›"}
+          </span>
+        </button>
+        {inlineEdit && open ? (
+          <div
+            id={panelId}
+            className="mr-dense-panel"
+            data-marshal-panel={row.id}
+          >
+            <p className="mr-dense-meta">{view.metaText}</p>
+            <div className="mr-dense-actions">
+              <label className="mr-dense-order-field">
+                <span>순번</span>
+                <input
+                  aria-label={`${row.caddy.name} 순번`}
+                  className="ui-input mr-order-input"
+                  type="number"
+                  min={1}
+                  value={orderValue(row)}
+                  disabled={busy}
+                  onChange={(e) =>
+                    setOrderDrafts((current) => ({
+                      ...current,
+                      [row.id]: e.target.value,
+                    }))
+                  }
+                  onBlur={(e) => commitRotation(row, e.target.value)}
+                />
+              </label>
+              <button
+                type="button"
+                className={`ui-btn mr-action-btn${
+                  row.active ? "" : " ui-btn-primary"
+                }`}
+                disabled={busy}
+                onClick={() =>
+                  void patchMarshal(row, buildMarshalActivePatch(!row.active))
+                }
+              >
+                {busy ? "저장 중…" : view.actionLabel}
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </li>
+    );
+  };
+
+  const pcBusy = selectedRow != null && busyId === selectedRow.id;
+  const pcActive = pcEditor?.active ?? selectedRow?.active ?? false;
 
   return (
     <div className="vh-page">
@@ -191,63 +392,80 @@ export default function ManageMarshalsPage() {
       </div>
       <MarshalManageNav />
 
-      <form
-        className="ui-card mr-add-card"
-        data-marshal-add-form="1"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void createMarshal();
-        }}
-      >
-        <h2>마샬 추가</h2>
-        <p>
-          재직(ACTIVE) 캐디만 등록할 수 있습니다. 조·유형은 캐디 관리 값을
-          그대로 표시합니다.
-        </p>
-        <div className="mr-add-row">
-          <div className="mr-add-picker">
-            <MarshalCaddyPicker
-              aria-label="캐디"
-              options={addable}
-              value={caddyId}
-              onChange={setCaddyId}
+      <div className="mr-toolbar">
+        <button
+          type="button"
+          className="ui-btn ui-btn-primary"
+          aria-expanded={addOpen}
+          aria-controls="marshal-add-panel"
+          data-marshal-add-toggle="1"
+          onClick={() => setAddOpen((open) => !open)}
+        >
+          {addOpen ? "추가 닫기" : "마샬 추가"}
+        </button>
+        <label className="mr-inactive-toggle">
+          <input
+            type="checkbox"
+            checked={showInactive}
+            onChange={(e) => setShowInactive(e.target.checked)}
+          />
+          비활성 포함
+        </label>
+        <span className="mr-toolbar-count">명단 {visible.length}명</span>
+      </div>
+
+      {addOpen ? (
+        <form
+          id="marshal-add-panel"
+          className="ui-card mr-add-card"
+          data-marshal-add-form="1"
+          data-marshal-add-panel="1"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void createMarshal();
+          }}
+        >
+          <h2>마샬 추가</h2>
+          <p>
+            재직(ACTIVE) 캐디만 등록할 수 있습니다. 조·유형은 캐디 관리 값을
+            그대로 표시합니다.
+          </p>
+          <div className="mr-add-row">
+            <div className="mr-add-picker">
+              <MarshalCaddyPicker
+                aria-label="캐디"
+                options={addable}
+                value={caddyId}
+                onChange={setCaddyId}
+                disabled={creating}
+              />
+            </div>
+            <input
+              aria-label="마샬 순번"
+              className="ui-input mr-add-order"
+              type="number"
+              min={1}
+              placeholder="순번"
+              value={rotationOrder}
+              onChange={(e) => setRotationOrder(e.target.value)}
               disabled={creating}
             />
+            <button
+              type="submit"
+              className="ui-btn ui-btn-primary mr-add-submit"
+              disabled={creating || !caddyId}
+            >
+              {creating ? "등록 중…" : "명단에 추가"}
+            </button>
           </div>
-          <input
-            aria-label="마샬 순번"
-            className="ui-input mr-add-order"
-            type="number"
-            min={1}
-            placeholder="순번"
-            value={rotationOrder}
-            onChange={(e) => setRotationOrder(e.target.value)}
-            disabled={creating}
-          />
-          <button
-            type="submit"
-            className="ui-btn ui-btn-primary mr-add-submit"
-            disabled={creating || !caddyId}
-          >
-            {creating ? "등록 중…" : "명단에 추가"}
-          </button>
-        </div>
-      </form>
+        </form>
+      ) : null}
 
       {error && (
         <p className="vh-auth-error" role="alert" style={{ marginBottom: 12 }}>
           {error}
         </p>
       )}
-
-      <label className="mr-inactive-toggle">
-        <input
-          type="checkbox"
-          checked={showInactive}
-          onChange={(e) => setShowInactive(e.target.checked)}
-        />
-        비활성 포함
-      </label>
 
       {loading ? (
         <p>불러오는 중…</p>
@@ -257,169 +475,167 @@ export default function ManageMarshalsPage() {
             {visible.length === 0 ? (
               <li className="mr-roster-dense-empty">등록된 마샬이 없습니다.</li>
             ) : (
-              visible.map((row) => {
-                const view = toMarshalRosterDenseView(row);
-                const busy = busyId === row.id;
-                const open = expandedId === row.id;
-                const panelId = `marshal-panel-${row.id}`;
-                return (
-                  <li
-                    key={row.id}
-                    className={`mr-dense-row${view.active ? "" : " is-inactive"}${
-                      open ? " is-open" : ""
-                    }`}
-                    data-marshal-row={row.id}
-                  >
-                    <button
-                      type="button"
-                      className="mr-dense-main"
-                      aria-expanded={open}
-                      aria-controls={panelId}
-                      onClick={() =>
-                        setExpandedId((id) => (id === row.id ? null : row.id))
-                      }
-                    >
-                      <span className="mr-dense-order">{view.orderText}</span>
-                      <span className="mr-dense-name">{view.name}</span>
-                      <span className="mr-dense-team">{view.team}</span>
-                      <span
-                        className={`ui-pill mr-dense-status${
-                          view.active ? "" : " muted"
-                        }`}
-                      >
-                        {view.statusLabel}
-                      </span>
-                      <span className="mr-dense-more" aria-hidden>
-                        {open ? "▾" : "›"}
-                      </span>
-                    </button>
-                    {open ? (
-                      <div
-                        id={panelId}
-                        className="mr-dense-panel"
-                        data-marshal-panel={row.id}
-                      >
-                        <p className="mr-dense-meta">{view.metaText}</p>
-                        <div className="mr-dense-actions">
-                          <label className="mr-dense-order-field">
-                            <span>순번</span>
-                            <input
-                              aria-label={`${row.caddy.name} 순번`}
-                              className="ui-input mr-order-input"
-                              type="number"
-                              min={1}
-                              value={orderValue(row)}
-                              disabled={busy}
-                              onChange={(e) =>
-                                setOrderDrafts((current) => ({
-                                  ...current,
-                                  [row.id]: e.target.value,
-                                }))
-                              }
-                              onBlur={(e) => commitRotation(row, e.target.value)}
-                            />
-                          </label>
-                          <button
-                            type="button"
-                            className={`ui-btn mr-action-btn${
-                              row.active ? "" : " ui-btn-primary"
-                            }`}
-                            disabled={busy}
-                            onClick={() =>
-                              void patchMarshal(
-                                row,
-                                buildMarshalActivePatch(!row.active)
-                              )
-                            }
-                          >
-                            {busy ? "저장 중…" : view.actionLabel}
-                          </button>
-                        </div>
-                      </div>
-                    ) : null}
-                  </li>
-                );
-              })
+              visible.map((row) => renderRosterRow(row, { surface: "dense" }))
             )}
           </ul>
 
           <div
-            className="ui-table-wrap mr-roster-table"
-            data-marshal-roster="table"
+            className="mr-roster-frame"
+            data-marshal-roster-frame="1"
           >
-            <table className="ui-table">
-              <thead>
-                <tr>
-                  {MARSHAL_ROSTER_TABLE_COLUMNS.map((col) => (
-                    <th key={col}>{col}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {visible.length === 0 ? (
-                  <tr>
-                    <td colSpan={7}>등록된 마샬이 없습니다.</td>
-                  </tr>
-                ) : (
-                  visible.map((row) => {
-                    const busy = busyId === row.id;
-                    return (
-                      <tr key={row.id}>
-                        <td className="mr-order-cell">
-                          <input
-                            aria-label={`${row.caddy.name} 순번`}
-                            className="ui-input mr-order-input"
-                            type="number"
-                            min={1}
-                            value={orderValue(row)}
-                            disabled={busy}
-                            onChange={(e) =>
-                              setOrderDrafts((current) => ({
-                                ...current,
-                                [row.id]: e.target.value,
-                              }))
-                            }
-                            onBlur={(e) => commitRotation(row, e.target.value)}
-                          />
-                        </td>
-                        <td className="mr-name">{row.caddy.name}</td>
-                        <td>{row.caddy.team}</td>
-                        <td>{caddyTypeLabel(row.caddy.caddyType)}</td>
-                        <td>{employmentStatusLabel(row.caddy.employmentStatus)}</td>
-                        <td>
-                          <span
-                            className={`ui-pill${row.active ? "" : " muted"}`}
-                          >
-                            {row.active ? "활성" : "비활성"}
-                          </span>
-                        </td>
-                        <td className="mr-action-cell">
-                          <button
-                            type="button"
-                            className={`ui-btn mr-action-btn${
-                              row.active ? "" : " ui-btn-primary"
-                            }`}
-                            disabled={busy}
-                            onClick={() =>
-                              void patchMarshal(
-                                row,
-                                buildMarshalActivePatch(!row.active)
-                              )
-                            }
-                          >
-                            {busy
-                              ? "저장 중…"
-                              : row.active
-                                ? "비활성"
-                                : "복구"}
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
+          <div
+            className={`mr-roster-workspace${
+              selectedRow ? " is-split" : ""
+            }`}
+            data-marshal-workspace={selectedRow ? "split" : "board"}
+          >
+            <div className="mr-roster-board-scroll">
+            <div
+              className="mr-roster-board"
+              data-marshal-roster="board"
+              data-marshal-board-cols={MARSHAL_ROSTER_PC_COLUMN_COUNT}
+              aria-label="마샬 압축 명단"
+            >
+              {visible.length === 0 ? (
+                <p className="mr-roster-board-empty">등록된 마샬이 없습니다.</p>
+              ) : (
+                boardColumns.map((column, index) => (
+                  <section
+                    key={index}
+                    className="mr-roster-col"
+                    data-marshal-col={index}
+                  >
+                    <header className="mr-roster-col-head">
+                      <span className="mr-roster-col-title">
+                        {marshalRosterColumnTitle(column)}
+                      </span>
+                      <span className="mr-roster-col-count">
+                        {column.length}명
+                      </span>
+                    </header>
+                    <ul className="mr-roster-col-list">
+                      {column.length === 0 ? (
+                        <li className="mr-roster-dense-empty">없음</li>
+                      ) : (
+                        column.map((row) =>
+                          renderRosterRow(row, {
+                            showType: true,
+                            surface: "board",
+                          })
+                        )
+                      )}
+                    </ul>
+                  </section>
+                ))
+              )}
+            </div>
+            </div>
+
+            {selectedRow && selectedView && pcEditor ? (
+              <>
+              <button
+                type="button"
+                className="mr-detail-backdrop"
+                data-marshal-detail-backdrop="1"
+                aria-label="상세 패널 닫기"
+                onClick={() => closePcPanel()}
+              />
+              <aside
+                id="marshal-detail-panel"
+                className="ui-card mr-detail"
+                data-marshal-detail-panel="1"
+                data-marshal-detail-dirty={pcDirty ? "1" : "0"}
+                aria-label={`${selectedView.name} 상세 편집`}
+              >
+                <div className="mr-detail-head">
+                  <div>
+                    <h2>{selectedView.name}</h2>
+                    <p className="mr-detail-meta">{selectedView.metaText}</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="ui-btn"
+                    onClick={() => closePcPanel()}
+                  >
+                    닫기
+                  </button>
+                </div>
+                <dl className="mr-detail-dl">
+                  <dt>조</dt>
+                  <dd>{selectedView.team}</dd>
+                  <dt>유형</dt>
+                  <dd>{selectedView.typeLabel}</dd>
+                  <dt>재직</dt>
+                  <dd>{selectedView.employmentLabel}</dd>
+                  <dt>상태</dt>
+                  <dd>
+                    <span
+                      className={`ui-pill${pcActive ? "" : " muted"}`}
+                    >
+                      {pcActive ? "활성" : "비활성"}
+                    </span>
+                  </dd>
+                </dl>
+                <label className="mr-detail-order-field">
+                  <span>순번</span>
+                  <input
+                    aria-label={`${selectedRow.caddy.name} 순번`}
+                    className="ui-input mr-order-input"
+                    type="number"
+                    min={1}
+                    value={pcEditor.orderText}
+                    disabled={pcBusy}
+                    onChange={(e) =>
+                      setPcEditor((current) =>
+                        current
+                          ? { ...current, orderText: e.target.value }
+                          : current
+                      )
+                    }
+                  />
+                </label>
+                <div className="mr-detail-actions">
+                  <button
+                    type="button"
+                    className={`ui-btn mr-action-btn${
+                      pcActive ? "" : " ui-btn-primary"
+                    }`}
+                    disabled={pcBusy}
+                    onClick={() =>
+                      setPcEditor((current) =>
+                        current
+                          ? { ...current, active: !current.active }
+                          : current
+                      )
+                    }
+                  >
+                    {pcActive ? "비활성" : "복구"}
+                  </button>
+                  <button
+                    type="button"
+                    className="ui-btn"
+                    disabled={pcBusy || !pcDirty}
+                    onClick={() =>
+                      setPcEditor(
+                        marshalRosterEditorDraftFromRow(selectedRow)
+                      )
+                    }
+                  >
+                    취소
+                  </button>
+                  <button
+                    type="button"
+                    className="ui-btn ui-btn-primary"
+                    disabled={pcBusy || !pcDirty}
+                    onClick={() => void savePcEditor()}
+                  >
+                    {pcBusy ? "저장 중…" : "저장"}
+                  </button>
+                </div>
+              </aside>
+              </>
+            ) : null}
+          </div>
           </div>
         </>
       )}
