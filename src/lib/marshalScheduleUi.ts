@@ -383,3 +383,136 @@ export function shouldScrollPcDayDetail(input: {
   if (!input.selectedDate) return false;
   return String(input.calendarDisplay || "").trim() !== "none";
 }
+
+/* ------------------------------------------------------------------ */
+/* 모바일 엑셀형 월표 그리드 (P1)                                       */
+/* 날짜+요일 | 조출1 | 조출2 | 후출                                     */
+/* 순번은 슬롯에 없으므로 members[].rotationOrder 를 caddyId 로 조인.   */
+/* 순번을 찾지 못하면 null (임의 숫자 금지).                            */
+/* 초록 강조는 source === "SUBSTITUTE" 만. ROTATION 은 절대 대타 아님.  */
+/* ------------------------------------------------------------------ */
+
+export type MarshalGridMember = { caddyId: number; rotationOrder: number };
+
+export type MarshalGridEntry = {
+  slotId: number;
+  caddyId: number;
+  name: string;
+  /** 활성 members 에서 찾은 순번. 없으면 null — 화면에 숫자를 만들어 넣지 않는다. */
+  rotationOrder: number | null;
+  source: string;
+  isSubstitute: boolean;
+  isPenalty: boolean;
+  originalName: string | null;
+};
+
+export type MarshalGridCell = {
+  key: string;
+  label: string;
+  entries: MarshalGridEntry[];
+};
+
+export type MarshalGridRow = {
+  ymd: string;
+  day: number;
+  weekday: number;
+  weekdayLabel: string;
+  isToday: boolean;
+  isWeekend: boolean;
+  am1: MarshalGridCell;
+  am2: MarshalGridCell;
+  pm: MarshalGridCell;
+  board: MarshalDayBoard;
+};
+
+export const MARSHAL_GRID_COLUMNS = ["날짜", "조출1", "조출2", "후출"] as const;
+
+export function buildRotationOrderMap(
+  members: readonly MarshalGridMember[] | null | undefined
+): Map<number, number> {
+  const map = new Map<number, number>();
+  for (const member of members || []) {
+    const caddyId = Number(member?.caddyId);
+    const order = Number(member?.rotationOrder);
+    if (!Number.isInteger(caddyId) || caddyId <= 0) continue;
+    if (!Number.isFinite(order) || order <= 0) continue;
+    if (!map.has(caddyId)) map.set(caddyId, order);
+  }
+  return map;
+}
+
+export function toMarshalGridEntry(
+  slot: MarshalScheduleSlotView,
+  orderByCaddyId: ReadonlyMap<number, number>
+): MarshalGridEntry {
+  const source = String(slot.source || "").toUpperCase();
+  const isSubstitute = source === "SUBSTITUTE";
+  return {
+    slotId: slot.id,
+    caddyId: slot.caddyId,
+    name: String(slot.caddy?.name ?? "").trim() || "이름없음",
+    rotationOrder: orderByCaddyId.get(Number(slot.caddyId)) ?? null,
+    source,
+    isSubstitute,
+    isPenalty: source === "PENALTY",
+    originalName: isSubstitute
+      ? String(slot.originalCaddy?.name ?? "").trim() || null
+      : null,
+  };
+}
+
+export function marshalGridEntryOrderText(entry: MarshalGridEntry): string {
+  return entry.rotationOrder == null ? "–" : String(entry.rotationOrder);
+}
+
+export function marshalGridEntryText(entry: MarshalGridEntry): string {
+  return entry.rotationOrder == null
+    ? entry.name
+    : `${entry.rotationOrder} ${entry.name}`;
+}
+
+/** 오늘 날짜(Asia/Seoul) YYYY-MM-DD */
+export function seoulTodayYmd(now: Date = new Date()): string {
+  const kst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  return kst.toISOString().slice(0, 10);
+}
+
+export function buildMarshalMonthGridRows(input: {
+  days: readonly MarshalDayBoard[];
+  members?: readonly MarshalGridMember[] | null;
+  todayYmd?: string | null;
+}): MarshalGridRow[] {
+  const orderMap = buildRotationOrderMap(input.members);
+  const today = String(input.todayYmd || "");
+  return input.days.map((day) => {
+    const am = day.am.map((slot) => toMarshalGridEntry(slot, orderMap));
+    const pm = day.pm.map((slot) => toMarshalGridEntry(slot, orderMap));
+    // 조출1 = AM slotIndex 최소, 조출2 = 나머지 모두(설정이 3명 이상이어도 누락 없음)
+    const am1 = am.slice(0, 1);
+    const am2 = am.slice(1);
+    return {
+      ymd: day.ymd,
+      day: day.day,
+      weekday: day.weekday,
+      weekdayLabel: day.weekdayLabel,
+      isToday: Boolean(today) && day.ymd === today,
+      isWeekend: day.weekday === 0 || day.weekday === 6,
+      am1: { key: `${day.ymd}-am1`, label: "조출1", entries: am1 },
+      am2: { key: `${day.ymd}-am2`, label: "조출2", entries: am2 },
+      // 후출 2명 이상이면 같은 칸에 세로로 쌓는다
+      pm: { key: `${day.ymd}-pm`, label: "후출", entries: pm },
+      board: day,
+    };
+  });
+}
+
+export type MarshalPlanStatusKind = "NONE" | "DRAFT" | "FINALIZED";
+
+export function marshalPlanStatusKind(
+  plan: { status?: string | null } | null | undefined
+): MarshalPlanStatusKind {
+  if (!plan) return "NONE";
+  const raw = String(plan.status ?? "").trim().toUpperCase();
+  if (raw === "FINALIZED") return "FINALIZED";
+  return "DRAFT";
+}

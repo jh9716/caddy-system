@@ -68,6 +68,7 @@
     "test:marshal-roster-ui-unit": "bash scripts/tsx-safe.sh scripts/test-marshal-roster-ui-unit.ts",
     "test:marshal-rotation-unit": "bash scripts/tsx-safe.sh scripts/test-marshal-rotation-unit.ts",
     "test:marshal-schedule-ui-unit": "bash scripts/tsx-safe.sh scripts/test-marshal-schedule-ui-unit.ts",
+    "test:marshal-month-mobile-grid-unit": "bash scripts/tsx-safe.sh scripts/test-marshal-month-mobile-grid-unit.ts",
     "test:marshal-pr3-duty-unit": "bash scripts/tsx-safe.sh scripts/test-marshal-pr3-duty-unit.ts",
     "test:marshal-penalty-full-day-unit": "bash scripts/tsx-safe.sh scripts/test-marshal-penalty-full-day-unit.ts",
     "test:marshal-penalty-full-day-db": "bash scripts/tsx-safe.sh scripts/test-marshal-penalty-full-day-db.ts",

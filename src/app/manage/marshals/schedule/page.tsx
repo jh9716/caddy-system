@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import MarshalManageNav from "@/components/manage/MarshalManageNav";
 import MarshalPenaltyOccurrencePanel from "@/components/manage/MarshalPenaltyOccurrencePanel";
+import MarshalMonthMobileGrid from "@/components/manage/MarshalMonthMobileGrid";
 import {
   DUTY_PANEL_TITLE,
   occurrenceCalendarBadgeText,
@@ -12,8 +13,10 @@ import {
 import {
   MARSHAL_WEEKDAY_LABELS,
   buildMarshalDayBoard,
+  buildMarshalMonthGridRows,
+  marshalPlanStatusKind,
+  seoulTodayYmd,
   buildMonthCalendar,
-  formatCompactShifts,
   listMonthDayBoards,
   marshalScheduleIntroText,
   marshalShiftText,
@@ -311,6 +314,19 @@ export default function ManageMarshalSchedulePage() {
           })
         : [],
     [monthValid, yearNum, monthNum, slots, penalties, occurrences]
+  );
+  const members = useMemo(
+    () => dataForMonth?.members || [],
+    [dataForMonth]
+  );
+  const gridRows = useMemo(
+    () =>
+      buildMarshalMonthGridRows({
+        days,
+        members,
+        todayYmd: seoulTodayYmd(),
+      }),
+    [days, members]
   );
   const selected = selectedDate
     ? buildMarshalDayBoard({
@@ -900,38 +916,13 @@ export default function ManageMarshalSchedulePage() {
           </div>
         </div>
 
-        <ul className="ms-dense" data-marshal-schedule="dense">
-          {days.map((day) => {
-            const open = selectedDate === day.ymd;
-            return (
-              <li
-                key={day.ymd}
-                className={`ms-dense-row${open ? " is-open" : ""}${
-                  day.weekday === 0 || day.weekday === 6 ? " is-weekend" : ""
-                }`}
-              >
-                <button
-                  type="button"
-                  className="ms-dense-main"
-                  aria-expanded={open}
-                  aria-controls={`marshal-dense-panel-${day.ymd}`}
-                  data-marshal-day={day.ymd}
-                  onClick={() => toggleDay(day.ymd)}
-                >
-                  <span className="ms-dense-date">
-                    {day.day} {day.weekdayLabel}
-                  </span>
-                  <span className="ms-dense-line">{formatCompactShifts(day)}</span>
-                  <DayFlags day={day} />
-                  <span className="ms-dense-more" aria-hidden>
-                    {open ? "▾" : "›"}
-                  </span>
-                </button>
-                {open ? renderDayDetail(day, `marshal-dense-panel-${day.ymd}`) : null}
-              </li>
-            );
-          })}
-        </ul>
+        <MarshalMonthMobileGrid
+          rows={gridRows}
+          status={marshalPlanStatusKind(dataForMonth?.plan)}
+          selectedDate={selectedDate}
+          onToggleDay={toggleDay}
+          renderDayDetail={(row, panelId) => renderDayDetail(row.board, panelId)}
+        />
       </section>
       ) : null}
 
