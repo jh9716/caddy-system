@@ -6651,3 +6651,14 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
   overflow: visible;
   overflow: clip;
 }
+
+/* sticky 헤더를 앱 상단 바(.vh-mobile-bar: sticky top 0, z-index 30, 약 53px) 바로 아래에 고정.
+   값은 컴포넌트가 실제 바 높이로 갱신. z-index 는 앱 바(30)보다 낮고 그리드 본문보다 높게. */
+.ms-xg {
+  --ms-xg-sticky-top: 53px;
+}
+
+.ms-xg .ms-xg-head {
+  top: var(--ms-xg-sticky-top);
+  z-index: 5;
+}

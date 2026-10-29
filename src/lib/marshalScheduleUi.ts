@@ -361,6 +361,14 @@ export function schedulePlanDisplayAllowed(
   return state === "SUCCESS_PLAN";
 }
 
+/** 모바일 엑셀 그리드는 월표가 실제로 있을 때(SUCCESS_PLAN + plan)만 표시 */
+export function marshalMobileGridVisible(
+  state: MarshalScheduleFetchState,
+  plan: unknown
+): boolean {
+  return schedulePlanDisplayAllowed(state) && Boolean(plan);
+}
+
 export function scheduleWorkspaceVisible(
   state: MarshalScheduleFetchState
 ): boolean {

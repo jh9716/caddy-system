@@ -14,6 +14,9 @@ import {
   marshalPlanStatusKind,
   marshalDayFlagBadges,
   msUntilNextSeoulMidnight,
+  marshalMobileGridVisible,
+  scheduleEmptyAllowed,
+  scheduleWorkspaceVisible,
   buildMarshalDayBoard,
   seoulTodayYmd,
   type MarshalScheduleSlotView,
@@ -278,6 +281,27 @@ section("자정 갱신 타이머");
   assert(msUntilNextSeoulMidnight(new Date("2026-10-31T14:59:59.900Z")) === 1000, "최소 1초");
 }
 
+section("월표 상태별 모바일 그리드 표시 (LOADING / SUCCESS_EMPTY / SUCCESS_PLAN / ERROR)");
+{
+  const plan = { status: "DRAFT" };
+  assert(!marshalMobileGridVisible("LOADING", plan), "LOADING → 그리드 숨김");
+  assert(!marshalMobileGridVisible("SUCCESS_EMPTY", null), "SUCCESS_EMPTY(월표 없음) → 그리드 숨김");
+  assert(scheduleEmptyAllowed("SUCCESS_EMPTY"), "SUCCESS_EMPTY → 기존 빈 월표 안내 유지");
+  assert(scheduleWorkspaceVisible("SUCCESS_EMPTY"), "SUCCESS_EMPTY → 월표 설정 영역 유지");
+  assert(marshalMobileGridVisible("SUCCESS_PLAN", plan), "SUCCESS_PLAN + DRAFT → 표시");
+  assert(marshalMobileGridVisible("SUCCESS_PLAN", { status: "FINALIZED" }), "SUCCESS_PLAN + FINALIZED → 표시");
+  assert(!marshalMobileGridVisible("SUCCESS_PLAN", null), "SUCCESS_PLAN 인데 plan 없음 → 숨김");
+  assert(!marshalMobileGridVisible("ERROR", plan), "ERROR → 숨김");
+  assert(!scheduleWorkspaceVisible("ERROR"), "ERROR → 기존과 같이 작업영역 숨김");
+  // 월표가 있어도 일부 슬롯이 비면 미배정 유지
+  const rows = buildMarshalMonthGridRows({ days: listMonthDayBoards({ year: 2026, month: 10, slots: [
+    { id: 1, date: "2026-10-01", shift: "AM", slotIndex: 0, caddyId: 1, source: "ROTATION", warning: null, note: null, caddy: { id: 1, name: "김하나" }, originalCaddy: null } as MarshalScheduleSlotView,
+  ] }) });
+  assert(rows[0].am1.entries.length === 1 && rows[0].am2.entries.length === 0 && rows[0].pm.entries.length === 0, "부분 빈 슬롯 → 빈 칸(미배정) 유지");
+  const comp0 = fs.readFileSync(path.resolve("src/components/manage/MarshalMonthMobileGrid.tsx"), "utf8");
+  assert(comp0.includes("미배정"), "빈 칸 미배정 문구 유지");
+}
+
 section("source contracts");
 {
   const read = (rel: string) => fs.readFileSync(path.resolve(rel), "utf8");
@@ -293,6 +317,10 @@ section("source contracts");
   assert(comp.includes("marshalDayFlagBadges(row.board, occurrenceCalendarBadgeText)"), "그리드가 DayFlags 동일 헬퍼 사용");
   assert(comp.includes("벌당 근무 배정"), "벌 태그 스크린리더 문구 = 벌당 근무 배정");
   assert(comp.includes("visibilitychange") && comp.includes("msUntilNextSeoulMidnight"), "오늘 자정/복귀 갱신");
+  assert(/marshalMobileGridVisible\(fetchState, dataForMonth\?\.plan\) \? \(\s*<MarshalMonthMobileGrid/.test(page), "page: 그리드는 marshalMobileGridVisible 조건에서만");
+  assert(page.includes('data-marshal-empty-plan="1"') && page.includes("월표 설정 열기"), "빈 월표 안내·설정 버튼 유지");
+  assert(comp.includes(".vh-mobile-bar") && comp.includes("--ms-xg-sticky-top"), "sticky top = 앱 상단 바 높이");
+  assert(/\.ms-xg \.ms-xg-head \{[^}]*top: var\(--ms-xg-sticky-top\)/.test(css), "그리드 헤더 top 변수 사용");
   assert(page.includes("function DayFlags") && page.includes("<DayFlags day={day} />"), "PC 달력 DayFlags 유지");
 }
 

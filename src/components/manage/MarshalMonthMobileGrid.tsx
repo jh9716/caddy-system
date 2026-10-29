@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { occurrenceCalendarBadgeText } from "@/lib/marshalPenaltyOccurrenceUi";
 import {
   MARSHAL_GRID_COLUMNS,
@@ -110,6 +110,34 @@ function useSeoulToday(): string {
   return today;
 }
 
+/**
+ * 앱 상단 고정 바(.vh-mobile-bar, sticky top:0, z-index 30) 높이를 읽어
+ * 그리드 헤더를 그 바로 아래에 고정한다. 공통 헤더는 건드리지 않고
+ * 그리드 요소의 CSS 변수만 설정한다. (CSS 기본값 53px)
+ */
+function useAppBarOffset(ref: RefObject<HTMLDivElement | null>) {
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof window === "undefined") return;
+    const bar = document.querySelector<HTMLElement>(".vh-mobile-bar");
+    const apply = () => {
+      const h =
+        bar && getComputedStyle(bar).position === "sticky" && bar.offsetParent !== null
+          ? bar.getBoundingClientRect().height
+          : 0;
+      el.style.setProperty("--ms-xg-sticky-top", `${Math.round(h)}px`);
+    };
+    apply();
+    const ro = typeof ResizeObserver !== "undefined" && bar ? new ResizeObserver(apply) : null;
+    if (ro && bar) ro.observe(bar);
+    window.addEventListener("resize", apply);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener("resize", apply);
+    };
+  }, [ref]);
+}
+
 export default function MarshalMonthMobileGrid({
   rows,
   status,
@@ -124,8 +152,11 @@ export default function MarshalMonthMobileGrid({
   renderDayDetail?: (row: MarshalGridRow, panelId: string) => ReactNode;
 }) {
   const today = useSeoulToday();
+  const rootRef = useRef<HTMLDivElement>(null);
+  useAppBarOffset(rootRef);
   return (
     <div
+      ref={rootRef}
       className="ms-dense ms-xg"
       data-marshal-schedule="dense"
       data-marshal-grid-status={status}

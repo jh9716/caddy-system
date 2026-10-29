@@ -15,6 +15,7 @@ import {
   buildMarshalDayBoard,
   buildMarshalMonthGridRows,
   marshalPlanStatusKind,
+  marshalMobileGridVisible,
   seoulTodayYmd,
   buildMonthCalendar,
   listMonthDayBoards,
@@ -916,13 +917,16 @@ export default function ManageMarshalSchedulePage() {
           </div>
         </div>
 
-        <MarshalMonthMobileGrid
-          rows={gridRows}
-          status={marshalPlanStatusKind(dataForMonth?.plan)}
-          selectedDate={selectedDate}
-          onToggleDay={toggleDay}
-          renderDayDetail={(row, panelId) => renderDayDetail(row.board, panelId)}
-        />
+        {/* 모바일: 월표 없음/로딩 중에는 빈 그리드를 그리지 않는다 (안내 메시지는 위 ms-empty) */}
+        {marshalMobileGridVisible(fetchState, dataForMonth?.plan) ? (
+          <MarshalMonthMobileGrid
+            rows={gridRows}
+            status={marshalPlanStatusKind(dataForMonth?.plan)}
+            selectedDate={selectedDate}
+            onToggleDay={toggleDay}
+            renderDayDetail={(row, panelId) => renderDayDetail(row.board, panelId)}
+          />
+        ) : null}
       </section>
       ) : null}
 
