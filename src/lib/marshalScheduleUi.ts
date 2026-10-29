@@ -477,6 +477,67 @@ export function seoulTodayYmd(now: Date = new Date()): string {
   return kst.toISOString().slice(0, 10);
 }
 
+/** 다음 Asia/Seoul 자정까지 남은 ms (최소 1초). 모바일 그리드 '오늘' 갱신용 */
+export function msUntilNextSeoulMidnight(now: Date = new Date()): number {
+  const DAY = 24 * 60 * 60 * 1000;
+  const kstMs = now.getTime() + 9 * 60 * 60 * 1000;
+  const remain = DAY - (((kstMs % DAY) + DAY) % DAY);
+  return Math.max(1000, remain);
+}
+
+export type MarshalDayFlagKind = "warn" | "sub" | "penalty" | "occ" | "occ-more";
+
+export type MarshalDayFlagBadge = {
+  kind: MarshalDayFlagKind;
+  key: string;
+  /** 화면 표시 텍스트 (기존 DayFlags 와 동일) */
+  text: string;
+  /** 스크린리더용 설명 */
+  srText: string;
+  /** occ 일 때 AUTO/MANUAL */
+  source?: "AUTO" | "MANUAL";
+};
+
+/**
+ * 기존 DayFlags(page.tsx)와 같은 조건·같은 순서·같은 문구.
+ * - 경고: day.hasWarning
+ * - 대타: day.hasSubstitute (source SUBSTITUTE 또는 originalCaddy 존재)
+ * - 벌당: 전일 벌당 발생 기록이 없고 day.hasPenalty 일 때
+ * - 전일 벌당 발생 기록: occurrenceBadges 앞 2개 + "전일 +N"
+ * occTextFn 은 occurrenceCalendarBadgeText 를 주입한다(같은 문구 보장).
+ */
+export function marshalDayFlagBadges(
+  day: Pick<MarshalDayBoard, "ymd" | "hasWarning" | "hasSubstitute" | "hasPenalty" | "occurrenceBadges">,
+  occTextFn: (badge: { name: string; source?: string | null }) => string
+): MarshalDayFlagBadge[] {
+  const out: MarshalDayFlagBadge[] = [];
+  const occ = day.occurrenceBadges || [];
+  if (day.hasWarning) out.push({ kind: "warn", key: "warn", text: "경고", srText: "경고 있음" });
+  if (day.hasSubstitute) out.push({ kind: "sub", key: "sub", text: "대타", srText: "대타 근무 있음" });
+  if (occ.length === 0 && day.hasPenalty) {
+    out.push({ kind: "penalty", key: "penalty", text: "벌당", srText: "벌당 있음" });
+  }
+  for (const badge of occ.slice(0, 2)) {
+    const text = occTextFn(badge);
+    out.push({
+      kind: "occ",
+      key: `${badge.caddyId}-${badge.source}`,
+      text,
+      srText: `벌당 발생 기록: ${text}`,
+      source: badge.source,
+    });
+  }
+  if (occ.length > 2) {
+    out.push({
+      kind: "occ-more",
+      key: "occ-more",
+      text: `전일 +${occ.length - 2}`,
+      srText: `벌당 발생 기록 ${occ.length - 2}건 더 있음`,
+    });
+  }
+  return out;
+}
+
 export function buildMarshalMonthGridRows(input: {
   days: readonly MarshalDayBoard[];
   members?: readonly MarshalGridMember[] | null;

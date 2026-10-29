@@ -6595,3 +6595,59 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
     font-size: 0.78rem;
   }
 }
+
+/* 마샬 월표 모바일 엑셀형 — DayFlags 상태 배지(4열 아래 전체 폭 한 줄) */
+.ms-xg-flags {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 0 4px 4px 4px;
+}
+
+.ms-xg-flag {
+  font-size: 0.64rem;
+  font-weight: 700;
+  line-height: 1.3;
+  padding: 0 6px;
+  border-radius: 999px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.ms-xg-flag.is-warn {
+  background: var(--vh-warn-bg);
+  color: var(--vh-warn);
+}
+
+.ms-xg-flag.is-sub {
+  background: var(--vh-gold-soft);
+  color: var(--vh-gold-deep);
+}
+
+.ms-xg-flag.is-penalty {
+  background: var(--vh-danger-bg);
+  color: var(--vh-danger);
+}
+
+/* 벌당 발생 기록: 점선 테두리로 벌당 근무 배정("벌" 태그)과 구분 */
+.ms-xg-flag.is-occ,
+.ms-xg-flag.is-occ-more {
+  background: #fff;
+  color: var(--vh-danger);
+  border: 1px dashed currentColor;
+}
+
+.ms-xg-flag.is-occ.is-manual {
+  color: var(--vh-gold-deep);
+}
+
+.ms-xg-main {
+  min-height: 44px;
+}
+
+/* sticky 헤더: .ms-dense 의 overflow:hidden 은 sticky 를 막으므로 그리드에서만 해제 */
+.ms-xg {
+  overflow: visible;
+  overflow: clip;
+}

@@ -3,6 +3,7 @@
  * 실행: npm run test:marshal-month-mobile-grid-unit
  */
 import fs from "node:fs";
+import { occurrenceCalendarBadgeText } from "../src/lib/marshalPenaltyOccurrenceUi";
 import path from "node:path";
 import {
   buildMarshalMonthGridRows,
@@ -11,6 +12,9 @@ import {
   marshalGridEntryOrderText,
   marshalGridEntryText,
   marshalPlanStatusKind,
+  marshalDayFlagBadges,
+  msUntilNextSeoulMidnight,
+  buildMarshalDayBoard,
   seoulTodayYmd,
   type MarshalScheduleSlotView,
 } from "../src/lib/marshalScheduleUi";
@@ -212,6 +216,68 @@ section("오늘(Asia/Seoul)");
   assert(seoulTodayYmd(new Date("2026-10-31T14:59:00Z")) === "2026-10-31", "UTC 14:59 → KST 당일");
 }
 
+section("DayFlags 상태 배지 (기존 DayFlags 와 동일 조건)");
+{
+  const D = "2026-10-10";
+  const sl = (o: Partial<MarshalScheduleSlotView>): MarshalScheduleSlotView => ({
+    id: Math.floor(Math.random() * 1e9), date: D, shift: "AM", slotIndex: 0, caddyId: 1,
+    source: "ROTATION", warning: null, note: null, caddy: { id: 1, name: "김하나" },
+    originalCaddy: null, ...o,
+  } as MarshalScheduleSlotView);
+  const occ = (caddyId: number, name: string, src: string) => ({
+    caddyId, status: "SCHEDULED", scheduledOn: D, scheduleSource: src, caddy: { name },
+  });
+  const flags = (input: Parameters<typeof buildMarshalDayBoard>[0]) =>
+    marshalDayFlagBadges(buildMarshalDayBoard(input), occurrenceCalendarBadgeText);
+  // 기존 DayFlags JSX 를 그대로 옮긴 참조 구현
+  const ref = (day: ReturnType<typeof buildMarshalDayBoard>) => {
+    const o = day.occurrenceBadges || [];
+    const r: string[] = [];
+    if (day.hasWarning) r.push("경고");
+    if (day.hasSubstitute) r.push("대타");
+    if (o.length === 0 && day.hasPenalty) r.push("벌당");
+    for (const b of o.slice(0, 2)) r.push(occurrenceCalendarBadgeText(b));
+    if (o.length > 2) r.push(`전일 +${o.length - 2}`);
+    return r;
+  };
+  const kinds = (f: ReturnType<typeof flags>) => f.map((x) => x.kind).join(",");
+  assert(flags({ ymd: D, slots: [sl({})] }).length === 0, "일반 근무만 → 배지 없음");
+  assert(kinds(flags({ ymd: D, slots: [sl({ warning: "연속" })] })) === "warn", "warning → 경고");
+  assert(kinds(flags({ ymd: D, slots: [sl({ source: "SUBSTITUTE" })] })) === "sub", "SUBSTITUTE → 대타");
+  assert(
+    kinds(flags({ ymd: D, slots: [sl({ source: "ROTATION", originalCaddy: { id: 2, name: "이둘" } })] })) === "sub",
+    "originalCaddy 있는 슬롯 → 대타 (DayFlags 원래 조건 유지)"
+  );
+  assert(kinds(flags({ ymd: D, slots: [sl({ source: "PENALTY" })] })) === "penalty", "PENALTY 슬롯 → 벌당");
+  assert(
+    kinds(flags({ ymd: D, slots: [sl({})], penalties: [{ date: D }] } as never)) === "penalty",
+    "벌당 기록(penalties) → 벌당"
+  );
+  const o1 = flags({ ymd: D, slots: [sl({ source: "PENALTY" })], occurrences: [occ(3, "박셋째", "AUTO")] } as never);
+  assert(kinds(o1) === "occ", "발생 기록 있으면 '벌당' 대신 발생 기록 배지만 (DayFlags 동일)");
+  assert(o1[0].text === "박셋째 전일·" + occurrenceCalendarBadgeText({ name: "박셋째", source: "AUTO" }).split("전일·")[1], "발생 기록 문구 = occurrenceCalendarBadgeText");
+  assert(o1[0].srText.startsWith("벌당 발생 기록"), "발생 기록 스크린리더 문구 구분");
+  assert(o1[0].kind !== "penalty", "벌당 발생 기록 ≠ 벌당 근무 배정");
+  const o3 = flags({ ymd: D, slots: [], occurrences: [occ(1, "가", "AUTO"), occ(2, "나", "MANUAL"), occ(3, "다", "AUTO"), occ(4, "라", "AUTO")] } as never);
+  assert(kinds(o3) === "occ,occ,occ-more" && o3[2].text === "전일 +2", "발생 기록 3건 이상 → 2개 + 전일 +N");
+  assert(o3[1].source === "MANUAL", "수동 발생 기록 source 보존");
+  const cancelled = flags({ ymd: D, slots: [], occurrences: [{ ...occ(1, "가", "AUTO"), status: "CANCELLED" }] } as never);
+  assert(cancelled.length === 0, "SCHEDULED 아닌 발생 기록은 표시 안 함");
+  const all = buildMarshalDayBoard({ ymd: D, slots: [sl({ warning: "w", source: "SUBSTITUTE" }), sl({ source: "PENALTY", shift: "PM" })], occurrences: [occ(5, "정다섯", "MANUAL")] } as never);
+  assert(JSON.stringify(marshalDayFlagBadges(all, occurrenceCalendarBadgeText).map((x) => x.text)) === JSON.stringify(ref(all)), "모든 플래그 조합: 참조 DayFlags 와 텍스트·순서 동일");
+  for (const combo of [[], [sl({ warning: "x" })], [sl({ source: "PENALTY" })], [sl({ originalCaddy: { id: 9, name: "x" } })]]) {
+    const b = buildMarshalDayBoard({ ymd: D, slots: combo });
+    assert(JSON.stringify(marshalDayFlagBadges(b, occurrenceCalendarBadgeText).map((x) => x.text)) === JSON.stringify(ref(b)), `참조 DayFlags 일치 (${combo.length}슬롯)`);
+  }
+}
+
+section("자정 갱신 타이머");
+{
+  assert(msUntilNextSeoulMidnight(new Date("2026-10-31T14:59:00Z")) === 60_000, "KST 23:59 → 60초");
+  assert(msUntilNextSeoulMidnight(new Date("2026-10-31T15:00:00Z")) === 86_400_000, "KST 00:00 → 24시간");
+  assert(msUntilNextSeoulMidnight(new Date("2026-10-31T14:59:59.900Z")) === 1000, "최소 1초");
+}
+
 section("source contracts");
 {
   const read = (rel: string) => fs.readFileSync(path.resolve(rel), "utf8");
@@ -224,6 +290,10 @@ section("source contracts");
   const xg = css.slice(css.indexOf("마샬 월표 모바일 엑셀형"));
   assert(!/ellipsis/.test(xg), "그리드 CSS 말줄임 없음");
   assert(!/fetch\(/.test(comp), "그리드 컴포넌트는 새 API 호출 없음");
+  assert(comp.includes("marshalDayFlagBadges(row.board, occurrenceCalendarBadgeText)"), "그리드가 DayFlags 동일 헬퍼 사용");
+  assert(comp.includes("벌당 근무 배정"), "벌 태그 스크린리더 문구 = 벌당 근무 배정");
+  assert(comp.includes("visibilitychange") && comp.includes("msUntilNextSeoulMidnight"), "오늘 자정/복귀 갱신");
+  assert(page.includes("function DayFlags") && page.includes("<DayFlags day={day} />"), "PC 달력 DayFlags 유지");
 }
 
 console.log(`\n${failed ? "FAIL" : "PASS"} ${failed} (passed ${passed})`);
