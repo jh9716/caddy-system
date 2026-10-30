@@ -11,7 +11,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { chatDirectoryWsUrl, chatWsUrl } from "@/lib/chatClientConfig";
-import { displayTombstone, lastKnownSeq, mergeChatLines } from "@/lib/chatPhase4";
+import { SYNC_LIMIT, displayTombstone, lastKnownSeq, mergeChatLines } from "@/lib/chatPhase4";
 import { defaultAvatarInitial, isVisibleChatListRoom, roomListTitle } from "@/lib/chatPhase5";
 import { upsertVisibleChatRoom } from "@/lib/chatPhase6";
 import { chatPhotoSrc } from "@/lib/chatPhotoConstants";
@@ -24,7 +24,9 @@ import {
   FLOATING_CHAT_STORAGE_KEY,
   canShowFloatingChat,
   floatingChatSockets,
+  nextFloatingSyncAfter,
   normalizeOutgoingBody,
+  shouldSendFloatingRead,
   parseFloatingChatState,
   serializeFloatingChatState,
   totalUnread,
@@ -132,6 +134,10 @@ export default function FloatingChat({ role }: { role: string | null }) {
   const dirAttempt = useRef(0);
   const roomAttempt = useRef(0);
   const linesRef = useRef<Line[]>([]);
+  /** 현재 방 소켓이 가리키는 방 */
+  const socketRoomId = useRef<string | null>(null);
+  /** 진행 중인 재연결 sync 의 afterSeq (0 = 진행 중 아님) */
+  const syncAfter = useRef(0);
   const oldestSeq = useRef<number | null>(null);
   const stickRef = useRef(true);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -219,12 +225,23 @@ export default function FloatingChat({ role }: { role: string | null }) {
     }
   };
 
+  /** 이벤트 무시(gen)와 별개로 실제 소켓을 닫는다. 연결 중(CONNECTING) 소켓도 닫는다. */
+  const shutSocket = (ws: WebSocket | null) => {
+    if (ws && ws.readyState <= WebSocket.OPEN) {
+      try {
+        ws.close(1000);
+      } catch {
+        // already closing
+      }
+    }
+  };
+
   const closeDirectory = useCallback(() => {
     dirGen.current += 1;
     clearTimer(dirTimer);
     const ws = dirRef.current;
     dirRef.current = null;
-    if (ws && ws.readyState <= WebSocket.OPEN) ws.close();
+    shutSocket(ws);
   }, []);
 
   const closeRoom = useCallback(() => {
@@ -233,11 +250,16 @@ export default function FloatingChat({ role }: { role: string | null }) {
     const ws = roomRef.current;
     roomRef.current = null;
     setRoomConnected(false);
-    if (ws && ws.readyState <= WebSocket.OPEN) ws.close();
+    shutSocket(ws);
   }, []);
 
   const openDirectory = useCallback(async () => {
     const gen = ++dirGen.current;
+    clearTimer(dirTimer);
+    // 이전 목록 소켓이 남아 있으면 먼저 실제로 닫는다 (중복 연결 방지)
+    const prevDir = dirRef.current;
+    dirRef.current = null;
+    shutSocket(prevDir);
     const info = await fetchToken();
     if (!info || gen !== dirGen.current) return;
     const url = chatDirectoryWsUrl(info.token);
@@ -245,6 +267,7 @@ export default function FloatingChat({ role }: { role: string | null }) {
       setError("채팅 서버 주소가 없습니다.");
       return;
     }
+    shutSocket(dirRef.current);
     const ws = new WebSocket(url);
     dirRef.current = ws;
     ws.addEventListener("open", () => {
@@ -280,10 +303,16 @@ export default function FloatingChat({ role }: { role: string | null }) {
   const openDirectoryRef = useRef(openDirectory);
   openDirectoryRef.current = openDirectory;
 
+  // 방별로 이미 보낸 마지막 read seq (재연결·방 재진입에도 유지 → 같은 seq 재전송 안 함)
+  const lastReadSent = useRef(new Map<string, number>());
   const sendRead = (ws: WebSocket, seq: number | undefined) => {
-    if (seq && ws.readyState === WebSocket.OPEN) {
+    const rid = socketRoomId.current;
+    if (!rid) return;
+    if (!shouldSendFloatingRead(seq, lastReadSent.current.get(rid) || 0)) return;
+    if (ws.readyState === WebSocket.OPEN) {
       try {
         ws.send(JSON.stringify({ type: "read", seq }));
+        lastReadSent.current.set(rid, Number(seq));
       } catch {
         // ignore
       }
@@ -299,6 +328,12 @@ export default function FloatingChat({ role }: { role: string | null }) {
     async (targetRoomId: string, reconnect = false) => {
       const gen = ++roomGen.current;
       clearTimer(roomTimer);
+      // 방 전환·재연결 모두: 이전 방 소켓을 실제로 닫는다 (gen 무시만으로는 연결이 남는다)
+      const prevRoom = roomRef.current;
+      roomRef.current = null;
+      setRoomConnected(false);
+      shutSocket(prevRoom);
+      syncAfter.current = 0;
       if (!reconnect) {
         setLinesBoth([]);
         oldestSeq.current = null;
@@ -312,6 +347,7 @@ export default function FloatingChat({ role }: { role: string | null }) {
         setError("채팅 서버 주소가 없습니다.");
         return;
       }
+      shutSocket(roomRef.current);
       const ws = new WebSocket(url);
       roomRef.current = ws;
       ws.addEventListener("open", () => {
@@ -321,7 +357,8 @@ export default function FloatingChat({ role }: { role: string | null }) {
         const after = lastKnownSeq(linesRef.current);
         if (reconnect && after > 0) {
           try {
-            ws.send(JSON.stringify({ type: "sync", afterSeq: after, limit: 100 }));
+            syncAfter.current = after;
+            ws.send(JSON.stringify({ type: "sync", afterSeq: after, limit: SYNC_LIMIT }));
           } catch {
             // history still arrives
           }
@@ -341,14 +378,35 @@ export default function FloatingChat({ role }: { role: string | null }) {
           if (hist.length) oldestSeq.current = Number(hist[0]!.seq) || oldestSeq.current;
           const next = mergeChatLines(hist, linesRef.current);
           setLinesBoth(next);
-          sendRead(ws, next[next.length - 1]?.seq);
+          if (syncAfter.current === 0) sendRead(ws, lastKnownSeq(next));
           return;
         }
-        if ((data?.type === "sync" && Array.isArray(data.messages)) || data?.type === "message") {
-          const extra = data.type === "message" ? [toLine(data)] : (data.messages as unknown[]).map(toLine);
+        if (data?.type === "sync" && Array.isArray(data.messages)) {
+          // ChatClient 와 같은 규칙: hasMore=true 면 newestSeq 이후로 이어서 sync. 중복은 clientMessageId/seq 로 병합, seq 순 정렬.
+          const extra = (data.messages as unknown[]).map(toLine);
           const next = mergeChatLines(linesRef.current, extra);
           setLinesBoth(next);
-          sendRead(ws, extra[extra.length - 1]?.seq);
+          const pageLast = extra.length ? Number(extra[extra.length - 1]!.seq) || 0 : 0;
+          const after = nextFloatingSyncAfter({
+            hasMore: data.hasMore,
+            newestSeq: data.newestSeq,
+            pageLastSeq: pageLast,
+            requestedAfter: syncAfter.current,
+          });
+          if (after != null && ws.readyState === WebSocket.OPEN) {
+            syncAfter.current = after;
+            ws.send(JSON.stringify({ type: "sync", afterSeq: after, limit: SYNC_LIMIT }));
+            return; // 마지막 페이지에서 한 번만 read
+          }
+          syncAfter.current = 0;
+          sendRead(ws, lastKnownSeq(next));
+          return;
+        }
+        if (data?.type === "message") {
+          const extra = [toLine(data)];
+          const next = mergeChatLines(linesRef.current, extra);
+          setLinesBoth(next);
+          if (syncAfter.current === 0) sendRead(ws, extra[0]?.seq);
           return;
         }
         if (data?.type === "duplicate" && data.clientMessageId) {
@@ -380,6 +438,7 @@ export default function FloatingChat({ role }: { role: string | null }) {
       ws.addEventListener("close", (ev) => {
         if (gen !== roomGen.current) return;
         setRoomConnected(false);
+        syncAfter.current = 0;
         if (shouldRefreshTokenOnClose(ev.code)) tokenRef.current = null;
         const delay = nextReconnectDelay(roomAttempt.current++);
         roomTimer.current = window.setTimeout(() => {
@@ -402,7 +461,6 @@ export default function FloatingChat({ role }: { role: string | null }) {
     }
   }, [restored, want.directory, openDirectory, closeDirectory]);
 
-  const socketRoomId = useRef<string | null>(null);
   useEffect(() => {
     if (!restored) return;
     if (want.room && roomId) {
@@ -425,6 +483,7 @@ export default function FloatingChat({ role }: { role: string | null }) {
       closeDirectory();
       socketRoomId.current = null;
       setRooms([]);
+      lastReadSent.current.clear();
       setLinesBoth([]);
     });
   }, [closeRoom, closeDirectory]);

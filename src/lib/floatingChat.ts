@@ -72,3 +72,27 @@ export function normalizeOutgoingBody(raw: string): string | null {
   if (body.length > FLOATING_CHAT_BODY_MAX) return null;
   return body;
 }
+
+/**
+ * 재연결 sync 페이지 이어받기 (ChatClient 와 같은 규칙: hasMore=true 면 newestSeq 이후로 다시 sync).
+ * 커서가 앞으로 가지 않으면(서버 이상) 무한 반복을 막기 위해 null.
+ */
+export function nextFloatingSyncAfter(input: {
+  hasMore: unknown;
+  newestSeq: unknown;
+  pageLastSeq: number | null | undefined;
+  requestedAfter: number;
+}): number | null {
+  if (input.hasMore !== true) return null;
+  const newest = Number(input.newestSeq);
+  const fallback = Number(input.pageLastSeq) || 0;
+  const next = Number.isInteger(newest) && newest > 0 ? newest : fallback;
+  if (!Number.isInteger(next) || next <= input.requestedAfter) return null;
+  return next;
+}
+
+/** 읽음은 이미 보낸 seq 보다 클 때만 (중복 read 방지). */
+export function shouldSendFloatingRead(seq: number | null | undefined, lastSent: number): boolean {
+  const n = Number(seq);
+  return Number.isInteger(n) && n > 0 && n > lastSent;
+}

@@ -7,7 +7,9 @@ import path from "node:path";
 import {
   canShowFloatingChat,
   floatingChatSockets,
+  nextFloatingSyncAfter,
   normalizeOutgoingBody,
+  shouldSendFloatingRead,
   parseFloatingChatState,
   serializeFloatingChatState,
   totalUnread,
@@ -52,6 +54,17 @@ assert(normalizeOutgoingBody("  hi \r\n") === "hi", "본문 trim");
 assert(normalizeOutgoingBody("   ") === null, "빈 본문 거부");
 assert(normalizeOutgoingBody("a".repeat(2001)) === null, "2000자 초과 거부");
 
+// 재연결 sync 페이지 이어받기
+assert(nextFloatingSyncAfter({ hasMore: true, newestSeq: 200, pageLastSeq: 200, requestedAfter: 100 }) === 200, "hasMore → newestSeq 부터 다음 sync");
+assert(nextFloatingSyncAfter({ hasMore: true, newestSeq: undefined, pageLastSeq: 150, requestedAfter: 50 }) === 150, "newestSeq 없으면 페이지 마지막 seq");
+assert(nextFloatingSyncAfter({ hasMore: false, newestSeq: 300, pageLastSeq: 300, requestedAfter: 200 }) === null, "hasMore=false → 종료");
+assert(nextFloatingSyncAfter({ hasMore: true, newestSeq: 100, pageLastSeq: 100, requestedAfter: 100 }) === null, "커서 정지 → 무한 반복 방지");
+assert(nextFloatingSyncAfter({ hasMore: true, newestSeq: 0, pageLastSeq: 0, requestedAfter: 0 }) === null, "빈 페이지 → 종료");
+assert(nextFloatingSyncAfter({ hasMore: "true", newestSeq: 9, pageLastSeq: 9, requestedAfter: 1 }) === null, "hasMore 는 true 만 인정");
+// 읽음 중복 방지
+assert(shouldSendFloatingRead(5, 0) && !shouldSendFloatingRead(5, 5) && !shouldSendFloatingRead(4, 5), "read 는 증가할 때만");
+assert(!shouldSendFloatingRead(undefined, 0) && !shouldSendFloatingRead(0, 0), "seq 없음/0 은 보내지 않음");
+
 const root = path.join(__dirname, "..");
 const comp = fs.readFileSync(path.join(root, "src/components/chat/FloatingChat.tsx"), "utf8");
 const layout = fs.readFileSync(path.join(root, "src/app/layout.tsx"), "utf8");
@@ -63,6 +76,10 @@ assert(!comp.includes("consumeUnauthorizedMemberResponse"), "플로팅에서는 
 assert(comp.includes("subscribeChatSessionReset"), "세션 리셋 구독");
 assert(/\.vh-fc-launcher,\s*\.vh-fc-panel \{\s*display: none;/.test(css), "모바일 기본 숨김 CSS");
 assert(css.includes("@media (min-width: 960px) {\n  .vh-fc-launcher {"), "PC 전용 스타일");
+
+assert(/const prevRoom = roomRef\.current;\s*roomRef\.current = null;\s*setRoomConnected\(false\);\s*shutSocket\(prevRoom\);/.test(comp), "방 전환 시 이전 방 소켓 실제 종료");
+assert(/const prevDir = dirRef\.current;\s*dirRef\.current = null;\s*shutSocket\(prevDir\);/.test(comp), "목록 재연결 시 이전 목록 소켓 종료");
+assert(comp.includes("limit: SYNC_LIMIT") && !comp.includes("limit: 100"), "sync limit = 기존 SYNC_LIMIT");
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
