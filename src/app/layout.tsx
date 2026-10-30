@@ -9,6 +9,7 @@ import ChatPushOnboarding from "@/components/ChatPushOnboarding";
 import NativePushBootstrap from "@/components/NativePushBootstrap";
 import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
 import { shouldUseMemberShell } from "@/lib/boardNav";
+import FloatingChat from "@/components/chat/FloatingChat";
 import { getVerifiedSessionFromCookies } from "@/lib/sessionCookies";
 import {
   PWA_APPLE_TOUCH_ICON,
@@ -95,6 +96,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             <main className="vh-main">{children}</main>
           </>
         )}
+        <FloatingChat role={role} />
       </body>
     </html>
   );
