@@ -8,43 +8,17 @@
  * 비밀값·URL 값은 로그/응답에 쓰지 않는다.
  */
 import type { ChatTokenAudience } from "@/lib/chatToken";
+import { currentChatAppEnv, resolveChatAppEnv } from "@/lib/chatAppEnv";
 
 export const PRODUCTION_CHAT_WORKER_NAME = "verthill-chat";
 export const PREVIEW_CHAT_WORKER_NAME = "verthill-chat-preview";
 
 type EnvLike = Record<string, string | undefined>;
 
-/**
- * 앱 실행 환경 판정 (fail-closed).
- * - VERCEL_ENV=production 일 때만 운영. preview 신호가 하나라도 있으면 preview.
- * - Vercel 위(VERCEL=1)인데 VERCEL_ENV 가 없거나 알 수 없는 값이면 preview 로 본다.
- * - 로컬(VERCEL 없음)이나 NODE_ENV=development 의 `vercel dev` 는 기존처럼 운영 취급(로컬 Worker).
- * - 브라우저는 next.config 가 빌드 시 계산해 넣는 NEXT_PUBLIC_CHAT_APP_ENV 를 우선 사용한다
- *   (Vercel 의 NEXT_PUBLIC_VERCEL_ENV 자동 노출 설정에 의존하지 않기 위함).
- */
-export function resolveChatAppEnv(e: EnvLike): "production" | "preview" {
-  const build = String(e.NEXT_PUBLIC_CHAT_APP_ENV || "").trim().toLowerCase();
-  const venv = String(e.VERCEL_ENV || e.NEXT_PUBLIC_VERCEL_ENV || "").trim().toLowerCase();
-  const onVercel = String(e.VERCEL || "").trim() === "1";
-  if (build === "preview" || venv === "preview") return "preview";
-  if (venv === "production") return "production";
-  if (venv === "development" && String(e.NODE_ENV || "") === "development") return "production";
-  if (venv) return "preview"; // 알 수 없는 값
-  if (onVercel) return "preview"; // Vercel 인데 환경값 없음
-  return "production"; // 로컬·비 Vercel
-}
+export { resolveChatAppEnv } from "@/lib/chatAppEnv";
 
 function readVercelEnv(env?: EnvLike): string {
-  if (env) return resolveChatAppEnv(env);
-  // NEXT_PUBLIC_* 는 빌드 시 문자열로 치환되므로 직접 참조해야 한다
-  const p = typeof process !== "undefined" ? process.env : ({} as EnvLike);
-  return resolveChatAppEnv({
-    NEXT_PUBLIC_CHAT_APP_ENV: process.env.NEXT_PUBLIC_CHAT_APP_ENV,
-    NEXT_PUBLIC_VERCEL_ENV: process.env.NEXT_PUBLIC_VERCEL_ENV,
-    VERCEL_ENV: p.VERCEL_ENV,
-    VERCEL: p.VERCEL,
-    NODE_ENV: process.env.NODE_ENV,
-  });
+  return env ? resolveChatAppEnv(env) : currentChatAppEnv();
 }
 
 /** 이 앱 배포가 발급·허용하는 채팅 토큰 환경 */

@@ -158,6 +158,31 @@ async function main() {
   assert((await verifyChatToken(prodTok, { secret: S1 })) !== null, "기본(VERCEL_ENV 없음) = production 검증");
   process.env.VERCEL_ENV = "preview";
   assert((await verifyChatToken(prodTok, { secret: S1 })) === null, "VERCEL_ENV=preview 에서 운영 토큰 거부(사진 접근 등)");
+  // 발급(appChatAudience) ↔ 검증(verifyChatToken 기본) audience 일치 매트릭스
+  {
+    const keys = ["VERCEL", "VERCEL_ENV", "NEXT_PUBLIC_VERCEL_ENV", "NEXT_PUBLIC_CHAT_APP_ENV"] as const;
+    const backup = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+    const cases: Array<[string, Record<string, string | undefined>, "production" | "preview"]> = [
+      ["운영", { VERCEL: "1", VERCEL_ENV: "production" }, "production"],
+      ["preview", { VERCEL: "1", VERCEL_ENV: "preview" }, "preview"],
+      ["VERCEL=1 + VERCEL_ENV 없음", { VERCEL: "1" }, "preview"],
+      ["알 수 없는 값", { VERCEL: "1", VERCEL_ENV: "staging" }, "preview"],
+      ["로컬(신호 없음)", {}, "production"],
+      ["빌드값 preview 만", { NEXT_PUBLIC_CHAT_APP_ENV: "preview" }, "preview"],
+    ];
+    for (const [label, envs, want] of cases) {
+      for (const k of keys) delete process.env[k];
+      Object.assign(process.env, envs);
+      const issued = appChatAudience();
+      const tok = await signChatToken(issued === "preview" ? { ...base, aud: "preview" } : base, S1);
+      const ok = (await verifyChatToken(tok, { secret: S1 })) !== null;
+      const otherTok = await signChatToken(issued === "preview" ? base : { ...base, aud: "preview" }, S1);
+      const otherOk = (await verifyChatToken(otherTok, { secret: S1 })) !== null;
+      assert(issued === want && ok && !otherOk, `발급·검증 audience 일치: ${label} → ${want}`);
+    }
+    const penv = process.env as Record<string, string | undefined>;
+    for (const k of keys) { if (backup[k] === undefined) delete penv[k]; else penv[k] = backup[k]!; }
+  }
   if (saved === undefined) delete process.env.VERCEL_ENV; else process.env.VERCEL_ENV = saved;
 
   console.log(`\n${passed} passed, ${failed} failed`);

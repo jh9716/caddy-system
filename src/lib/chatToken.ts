@@ -1,4 +1,5 @@
 import type { AppRole } from "@/lib/sessionCookies";
+import { currentChatAppEnv } from "@/lib/chatAppEnv";
 
 export const CHAT_TOKEN_TTL_SEC = 60 * 30;
 export const CHAT_TOKEN_VERSION = 2 as const;
@@ -266,8 +267,8 @@ export async function verifyChatToken(
   if (!timingSafeEqualBytes(expected, got)) return null;
   const claims = parseChatTokenClaims(canonical);
   if (!claims) return null;
-  // 이 배포의 환경과 다른 토큰은 거부 (기본: VERCEL_ENV 기준)
-  const expectedAud = opts?.audience ?? (String(process.env.VERCEL_ENV || "").toLowerCase() === "preview" ? "preview" : "production");
+  // 이 배포의 환경과 다른 토큰은 거부 (기본: 발급 측과 같은 공통 판정기 chatAppEnv)
+  const expectedAud = opts?.audience ?? (currentChatAppEnv() === "preview" ? "preview" : "production");
   if (chatTokenAudience(claims) !== expectedAud) return null;
   const now = opts?.nowSec ?? Math.floor(Date.now() / 1000);
   if (claims.exp <= now) return null;
