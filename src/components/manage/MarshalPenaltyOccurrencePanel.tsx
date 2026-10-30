@@ -216,13 +216,18 @@ export default function MarshalPenaltyOccurrencePanel(input: {
                 </option>
               ))}
             </select>
-            <input
-              aria-label="벌당 발생일"
-              type="date"
-              value={occurredOn}
-              disabled={input.locked || localBusy}
-              onChange={(e) => setOccurredOn(e.target.value)}
-            />
+            <label className="ms-date-field">
+              <span className="ms-date-cap" aria-hidden>
+                발생일
+              </span>
+              <input
+                aria-label="벌당 발생일"
+                type="date"
+                value={occurredOn}
+                disabled={input.locked || localBusy}
+                onChange={(e) => setOccurredOn(e.target.value)}
+              />
+            </label>
             <input
               aria-label="벌당 발생 사유"
               placeholder="사유"
@@ -246,7 +251,7 @@ export default function MarshalPenaltyOccurrencePanel(input: {
             </button>
           </form>
           {targetHint ? (
-            <p className="ms-muted">
+            <p className="ms-muted ms-occ-hint">
               대상 근무 월 {occurrenceTargetLabel(targetHint.year, targetHint.month)} ·
               기본 배정은 자동입니다.
             </p>

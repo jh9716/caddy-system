@@ -664,15 +664,17 @@ export default function ManageMarshalSchedulePage() {
         <div className="ms-month-nav">
           <button
             type="button"
-            className="ui-btn"
+            className="ui-btn ms-nav-step is-prev"
             onClick={() => moveMonth(-1)}
             aria-label="이전 달"
             disabled={busy}
           >
-            이전 달
+            <span className="ms-nav-ico" aria-hidden>〈</span>
+            <span className="ms-nav-txt">이전 달</span>
           </button>
-          <label className="ms-field">
-            <span>연도</span>
+          <div className="ms-nav-center">
+          <label className="ms-field ms-nav-ym is-year">
+            <span className="ms-nav-cap">연도</span>
             <input
               aria-label="연"
               type="number"
@@ -683,9 +685,10 @@ export default function ManageMarshalSchedulePage() {
                 clearDisplayedPlan();
               }}
             />
+            <span className="ms-nav-unit" aria-hidden>년</span>
           </label>
-          <label className="ms-field">
-            <span>월</span>
+          <label className="ms-field ms-nav-ym is-month">
+            <span className="ms-nav-cap">월</span>
             <input
               aria-label="월"
               type="number"
@@ -698,20 +701,23 @@ export default function ManageMarshalSchedulePage() {
                 clearDisplayedPlan();
               }}
             />
+            <span className="ms-nav-unit" aria-hidden>월</span>
           </label>
+          </div>
           <button
             type="button"
-            className="ui-btn"
+            className="ui-btn ms-nav-step is-next"
             onClick={() => moveMonth(1)}
             aria-label="다음 달"
             disabled={busy}
           >
-            다음 달
+            <span className="ms-nav-txt">다음 달</span>
+            <span className="ms-nav-ico" aria-hidden>〉</span>
           </button>
           {showEmpty ? (
             <button
               type="button"
-              className="ui-btn ui-btn-primary"
+              className="ui-btn ui-btn-primary ms-nav-settings"
               data-marshal-open-settings="toolbar"
               onClick={openSettings}
             >
@@ -955,7 +961,7 @@ export default function ManageMarshalSchedulePage() {
               조회만으로는 저장되지 않습니다. 조출/후출 인원은 이 월의 슬롯 수이며
               순환 엔진 규칙을 바꾸지 않습니다.
             </p>
-            <div className="ms-settings-grid">
+            <div className="ms-settings-grid ms-set-fields">
               <label className="ms-field">
                 <span>시작 순번</span>
                 <input
@@ -991,13 +997,17 @@ export default function ManageMarshalSchedulePage() {
                 />
               </label>
             </div>
-            <div className="ms-actions">
-              <button type="submit" className="ui-btn" disabled={locked || finalized}>
+            <div className="ms-actions ms-set-actions">
+              <button
+                type="submit"
+                className="ui-btn ms-set-save"
+                disabled={locked || finalized}
+              >
                 설정 저장
               </button>
               <button
                 type="button"
-                className="ui-btn"
+                className="ui-btn ms-set-gen"
                 disabled={locked || finalized}
                 onClick={() => void generate(Boolean(dataForMonth?.plan?.slots.length))}
               >
@@ -1005,7 +1015,8 @@ export default function ManageMarshalSchedulePage() {
               </button>
               <button
                 type="button"
-                className="ui-btn"
+                className="ui-btn ms-set-final"
+                data-marshal-danger-action="finalize"
                 disabled={
                   locked ||
                   !dataForMonth?.plan?.id ||
@@ -1034,13 +1045,18 @@ export default function ManageMarshalSchedulePage() {
               이번 달 월표에 조출 또는 후출 한 칸을 직접 넣는 기능입니다. 다음 달
               전일 벌당 발생과는 다릅니다.
             </p>
-            <div className="ms-actions">
-              <input
-                aria-label="벌당 날짜"
-                type="date"
-                value={penaltyDate}
-                onChange={(e) => setPenaltyDate(e.target.value)}
-              />
+            <div className="ms-actions ms-duty-form">
+              <label className="ms-date-field">
+                <span className="ms-date-cap" aria-hidden>
+                  날짜
+                </span>
+                <input
+                  aria-label="벌당 날짜"
+                  type="date"
+                  value={penaltyDate}
+                  onChange={(e) => setPenaltyDate(e.target.value)}
+                />
+              </label>
               <select
                 aria-label="벌당 마샬"
                 value={penaltyCaddyId}
