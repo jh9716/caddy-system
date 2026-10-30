@@ -1,0 +1,89 @@
+# Preview 전용 채팅 Worker(verthill-chat-preview) 수동 배포.
+# - 수동 실행(workflow_dispatch) 전용. push/PR 로는 절대 실행되지 않는다.
+# - 항상 `--env preview` 로만 배포한다. 운영 Worker(verthill-chat)·운영 DO·운영 R2 는 건드리지 않는다.
+# - 실행 전 별도 승인 필요. 실행 전 준비: R2 버킷 verthill-chat-media-preview 생성,
+#   preview 비밀값(CHAT_AUTH_SECRET/CHAT_INTERNAL_SECRET/CHAT_MEDIA_SECRET)은 운영 값과 다른 새 값으로 별도 등록.
+name: Cloudflare Worker Deploy (PREVIEW only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: git ref or full commit SHA to deploy to the PREVIEW worker
+        required: true
+        type: string
+      confirm:
+        description: 'Type exactly: deploy-verthill-chat-preview'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-verthill-chat-preview-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy-preview-worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: Require explicit confirmation
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -eu
+          if [ "$CONFIRM" != "deploy-verthill-chat-preview" ]; then
+            echo "confirmation text mismatch; refusing to deploy"
+            exit 1
+          fi
+
+      - name: Checkout requested ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Guard preview environment config
+        working-directory: cloudflare/verthill-chat
+        run: |
+          set -eu
+          test -f wrangler.jsonc
+          grep -q '"verthill-chat-preview"' wrangler.jsonc || { echo "env.preview worker name missing"; exit 1; }
+          grep -q '"verthill-chat-media-preview"' wrangler.jsonc || { echo "preview R2 bucket missing"; exit 1; }
+          grep -q '"CHAT_TOKEN_AUDIENCE": "preview"' wrangler.jsonc || { echo "preview audience var missing"; exit 1; }
+          if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then echo "CLOUDFLARE_ACCOUNT_ID variable required"; exit 1; fi
+          echo "preview config guard passed"
+
+      - name: Set up Node from package.json engines
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: npm
+          cache-dependency-path: cloudflare/verthill-chat/package-lock.json
+
+      - name: Install Worker dependencies
+        working-directory: cloudflare/verthill-chat
+        run: npm ci
+
+      - name: Dry-run and verify target is the PREVIEW worker
+        working-directory: cloudflare/verthill-chat
+        run: |
+          set +x
+          set -eu
+          out="$(./node_modules/.bin/wrangler deploy --env preview --dry-run --outdir /tmp/preview-dry 2>&1)"
+          printf '%s\n' "$out" | grep -E 'verthill-chat-media-preview|CHAT_TOKEN_AUDIENCE' 
+          printf '%s\n' "$out" | grep -q 'verthill-chat-media-preview' || { echo "dry-run is not targeting preview bucket"; exit 1; }
+          if printf '%s\n' "$out" | grep -Eq '\(verthill-chat-media\)'; then echo "production bucket detected; refusing"; exit 1; fi
+
+      - name: Deploy PREVIEW worker only
+        working-directory: cloudflare/verthill-chat
+        run: |
+          set +x
+          set -eu
+          ./node_modules/.bin/wrangler --version
+          ./node_modules/.bin/wrangler deploy --env preview

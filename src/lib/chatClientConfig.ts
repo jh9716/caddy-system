@@ -1,4 +1,8 @@
+import { chatEnvironmentStatus } from "@/lib/chatEnvironment";
+
 export function chatWsBaseUrl(): string {
+  // Preview 배포인데 Preview 전용 채팅 주소가 없거나 운영 주소면 연결하지 않는다 (운영으로 폴백 금지)
+  if (!chatEnvironmentStatus().ok) return "";
   const fromEnv = String(process.env.NEXT_PUBLIC_CHAT_WS_URL || "").trim();
   if (fromEnv) return fromEnv.replace(/\/$/, "");
   if (typeof window !== "undefined") {
@@ -11,6 +15,7 @@ export function chatWsBaseUrl(): string {
 }
 
 export function chatHttpBaseUrl(): string {
+  if (!chatEnvironmentStatus().ok) return "";
   const ws = chatWsBaseUrl();
   if (ws) return ws.replace(/^ws/i, (m) => (m.toLowerCase() === "wss" ? "https" : "http"));
   const worker = String(process.env.CHAT_WORKER_URL || "").trim();

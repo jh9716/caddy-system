@@ -114,7 +114,7 @@ export async function startWrangler(opts = {}) {
     "--ip",
     HOST,
     "--var",
-    `CHAT_AUTH_SECRET:${TEST_SECRET}`,
+    `CHAT_AUTH_SECRET:${opts.secret || TEST_SECRET}`,
     "--var",
     `CHAT_PUSH_DISPATCH_URL:http://${HOST}:${mock.port}`,
   ];

@@ -1,4 +1,5 @@
 import type { AppRole } from "@/lib/sessionCookies";
+import { CHAT_PREVIEW_DISABLED_MESSAGE, chatEnvironmentStatus } from "@/lib/chatEnvironment";
 import type { ResolvedAuthUser } from "@/lib/auth";
 import { resolveChatRoomAccess } from "@/lib/chatAcl";
 import {
@@ -154,6 +155,11 @@ export async function issueChatAccessToken(
   sessionVersion: number;
   user: { userId: number; displayName: string; role: AppRole; team: string };
 }> {
+  const envStatus = chatEnvironmentStatus();
+  if (!envStatus.ok) {
+    // Preview 에서 운영 채팅으로 붙지 않도록 토큰 발급 자체를 막는다 (fail-closed)
+    throw new ChatAuthError(envStatus.code, CHAT_PREVIEW_DISABLED_MESSAGE, 503);
+  }
   const secret = getChatAuthSecret();
   if (!secret) {
     throw new ChatAuthError(
@@ -213,6 +219,7 @@ export async function issueChatAccessToken(
     sv: sessionVersion,
     iat: nowSec,
     exp: nowSec + CHAT_TOKEN_TTL_SEC,
+    ...(envStatus.audience === "preview" ? { aud: "preview" as const } : {}),
   };
   const token = await signChatToken(claims, secret);
   return {

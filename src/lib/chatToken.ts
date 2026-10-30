@@ -16,6 +16,12 @@ export type ChatTokenSessionBoundV2Claims = {
   sv: number;
   iat: number;
   exp: number;
+  /**
+   * 환경 구분(audience). 없으면 production (기존 8-part 토큰 그대로).
+   * "preview" 이면 canonical 9번째 칸에 `aud=preview` 가 붙어 HMAC 에 포함된다.
+   * 기존(배포된) production Worker 는 9-part 를 파싱하지 않으므로 preview 토큰을 거부한다.
+   */
+  aud?: ChatTokenAudience;
 };
 
 export type ChatTokenV2Claims = ChatTokenSessionBoundV2Claims;
@@ -32,6 +38,22 @@ export type ChatTokenV1Claims = {
 };
 
 export type ChatTokenClaims = ChatTokenV2Claims | ChatTokenV1Claims;
+
+export type ChatTokenAudience = "production" | "preview";
+export const CHAT_TOKEN_PREVIEW_AUD_PART = "aud=preview";
+
+/** 토큰의 환경. v1 과 aud 없는 v2 는 production. */
+export function chatTokenAudience(claims: ChatTokenClaims): ChatTokenAudience {
+  return claims.v === 2 && claims.aud === "preview" ? "preview" : "production";
+}
+
+/** 설정값 → audience. 비어 있으면 production, 알 수 없는 값은 null(설정 오류, fail-closed). */
+export function parseChatTokenAudience(raw: unknown): ChatTokenAudience | null {
+  const v = String(raw ?? "").trim().toLowerCase();
+  if (v === "" || v === "production") return "production";
+  if (v === "preview") return "preview";
+  return null;
+}
 
 export function isChatTokenV2(claims: ChatTokenClaims): claims is ChatTokenV2Claims {
   return claims.v === 2;
@@ -81,7 +103,7 @@ export function canonicalChatTokenPayload(claims: ChatTokenClaims): string {
     if (!isSessionBoundChatToken(claims)) {
       throw new Error("v2 chat tokens require sessionVersion");
     }
-    return [
+    const parts = [
       "2",
       String(claims.userId),
       sanitizeChatDisplayName(claims.displayName),
@@ -90,7 +112,9 @@ export function canonicalChatTokenPayload(claims: ChatTokenClaims): string {
       String(claims.sv),
       String(claims.iat),
       String(claims.exp),
-    ].join("|");
+    ];
+    if (claims.aud === "preview") parts.push(CHAT_TOKEN_PREVIEW_AUD_PART);
+    return parts.join("|");
   }
   return [
     "1",
@@ -162,7 +186,8 @@ export async function signChatToken(
 
 export function parseChatTokenClaims(canonical: string): ChatTokenClaims | null {
   const parts = canonical.split("|");
-  if (parts[0] === "2" && parts.length === 8) {
+  const previewAud = parts[0] === "2" && parts.length === 9 && parts[8] === CHAT_TOKEN_PREVIEW_AUD_PART;
+  if (parts[0] === "2" && (parts.length === 8 || previewAud)) {
     const [, userIdRaw, displayName, role, team, svRaw, iatRaw, expRaw] = parts;
     const userId = Number(userIdRaw);
     const sv = parseChatSessionVersion(svRaw);
@@ -184,6 +209,7 @@ export function parseChatTokenClaims(canonical: string): ChatTokenClaims | null 
       sv,
       iat,
       exp,
+      ...(previewAud ? { aud: "preview" as const } : {}),
     };
   }
   if (parts[0] === "1" && parts.length === 8) {
@@ -212,7 +238,7 @@ export function parseChatTokenClaims(canonical: string): ChatTokenClaims | null 
 
 export async function verifyChatToken(
   token: string | undefined | null,
-  opts?: { secret?: string; nowSec?: number }
+  opts?: { secret?: string; nowSec?: number; audience?: ChatTokenAudience }
 ): Promise<ChatTokenClaims | null> {
   if (!token || typeof token !== "string") return null;
   const secret = opts?.secret ?? getChatAuthSecret();
@@ -240,6 +266,9 @@ export async function verifyChatToken(
   if (!timingSafeEqualBytes(expected, got)) return null;
   const claims = parseChatTokenClaims(canonical);
   if (!claims) return null;
+  // 이 배포의 환경과 다른 토큰은 거부 (기본: VERCEL_ENV 기준)
+  const expectedAud = opts?.audience ?? (String(process.env.VERCEL_ENV || "").toLowerCase() === "preview" ? "preview" : "production");
+  if (chatTokenAudience(claims) !== expectedAud) return null;
   const now = opts?.nowSec ?? Math.floor(Date.now() / 1000);
   if (claims.exp <= now) return null;
   if (claims.iat > now + 30) return null;

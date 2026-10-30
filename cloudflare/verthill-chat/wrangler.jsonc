@@ -38,5 +38,47 @@
       "tag": "v2",
       "new_sqlite_classes": ["ChatDirectory"]
     }
-  ]
+  ],
+  // ===== Preview 전용 환경 (verthill-chat-preview) =====
+  // 운영(위 최상위 설정)과 Worker 이름·Durable Object 저장소·R2 버킷·비밀값이 모두 분리된다.
+  // 배포: `wrangler deploy --env preview` (수동 workflow 전용, 별도 승인 후). 운영 설정은 바뀌지 않는다.
+  // 비밀값(별도 생성, 운영 값 재사용 금지): CHAT_AUTH_SECRET, CHAT_INTERNAL_SECRET, CHAT_MEDIA_SECRET
+  "env": {
+    "preview": {
+      "name": "verthill-chat-preview",
+      "workers_dev": true,
+      "preview_urls": false,
+      "vars": {
+        "CHAT_TOKEN_AUDIENCE": "preview"
+      },
+      "r2_buckets": [
+        {
+          "binding": "CHAT_MEDIA",
+          "bucket_name": "verthill-chat-media-preview"
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "CHAT_ROOM",
+            "class_name": "ChatRoom"
+          },
+          {
+            "name": "CHAT_DIRECTORY",
+            "class_name": "ChatDirectory"
+          }
+        ]
+      },
+      "migrations": [
+        {
+          "tag": "v1",
+          "new_sqlite_classes": ["ChatRoom"]
+        },
+        {
+          "tag": "v2",
+          "new_sqlite_classes": ["ChatDirectory"]
+        }
+      ]
+    }
+  }
 }
