@@ -6931,3 +6931,29 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
     font-size: 0.95em;
   }
 }
+
+/* ---- 모바일 하단 채팅 메뉴 P1: 현재 탭 강조 (하단 탭은 <960px 에서만 표시) ---- */
+.vh-tab {
+  position: relative;
+  min-height: 44px;
+}
+
+.vh-tab.is-active::before {
+  content: "";
+  position: absolute;
+  top: -6px;
+  left: 22%;
+  right: 22%;
+  height: 3px;
+  border-radius: 0 0 3px 3px;
+  background: var(--vh-green-800);
+}
+
+.vh-tab.is-active {
+  font-weight: 800;
+}
+
+.vh-tab.is-active .vh-tab-icon {
+  border-radius: 999px;
+  background: var(--vh-green-50);
+}

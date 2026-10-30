@@ -2,6 +2,7 @@
 
 import AppChrome, {
   IconCaddy,
+  IconChat,
   IconDash,
   IconHome,
   IconMenu,
@@ -14,6 +15,7 @@ const BOTTOM = [
   { href: "/", label: "홈", Icon: IconHome },
   { href: "/manage", label: "대시보드", Icon: IconDash },
   { href: "/manage/caddies", label: "캐디", Icon: IconCaddy },
+  { href: "/chat", label: "채팅", Icon: IconChat },
   { href: "#menu", label: "메뉴", Icon: IconMenu },
 ] as const;
 
@@ -47,6 +49,7 @@ export default function ManageShell({
       rightAriaLabel="대시보드"
       RightIcon={IconDash}
       prefetchHrefs={ADMIN_PREFETCH}
+      bottomTabsClassName="vh-bottom-tabs-5"
     >
       {children}
     </AppChrome>

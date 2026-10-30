@@ -77,6 +77,15 @@ export function IconReport() {
     </svg>
   );
 }
+export function IconChat() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden>
+      <path d="M5 6h14v9H10l-4 3v-3H5z" />
+      <path d="M9 10h6M9 12.5h4" />
+    </svg>
+  );
+}
+
 export function IconBoard() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden>
@@ -240,6 +249,7 @@ export default function AppChrome({
                 href={item.href}
                 prefetch
                 className={`vh-tab${active ? " is-active" : ""}`}
+                aria-current={active ? "page" : undefined}
               >
                 <span className="vh-tab-icon">
                   <Icon />

@@ -2,22 +2,22 @@
 
 import AppChrome, {
   IconBoard,
+  IconChat,
   IconDash,
   IconHome,
   IconNotice,
-  IconReport,
 } from "@/components/manage/AppChrome";
 import { memberNavItems } from "@/lib/boardNav";
 
 const BOTTOM = [
   { href: "/", label: "홈", Icon: IconHome },
   { href: "/notice", label: "공지", Icon: IconNotice },
-  { href: "/course-reports", label: "제보", Icon: IconReport },
   { href: "/board", label: "배치표", Icon: IconBoard },
+  { href: "/chat", label: "채팅", Icon: IconChat },
   { href: "/caddy", label: "내 대시보드", Icon: IconDash },
 ] as const;
 
-const PREFETCH = ["/", "/notice", "/course-reports", "/board", "/caddy"] as const;
+const PREFETCH = ["/", "/notice", "/board", "/chat", "/caddy", "/course-reports"] as const;
 
 export default function MemberShell({ children }: { children: React.ReactNode }) {
   return (
