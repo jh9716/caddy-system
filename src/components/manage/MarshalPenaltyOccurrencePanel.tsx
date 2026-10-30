@@ -246,7 +246,7 @@ export default function MarshalPenaltyOccurrencePanel(input: {
             </button>
           </form>
           {targetHint ? (
-            <p className="ms-muted">
+            <p className="ms-muted ms-occ-hint">
               대상 근무 월 {occurrenceTargetLabel(targetHint.year, targetHint.month)} ·
               기본 배정은 자동입니다.
             </p>
