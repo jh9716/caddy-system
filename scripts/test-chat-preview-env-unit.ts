@@ -30,7 +30,18 @@ async function main() {
   // 환경 판정
   assert(appChatAudience({}) === "production", "환경값 없음(로컬) → production");
   assert(appChatAudience({ VERCEL_ENV: "production" }) === "production", "VERCEL_ENV=production → production");
-  assert(appChatAudience({ VERCEL_ENV: "development" }) === "production", "development → production");
+  assert(appChatAudience({ VERCEL_ENV: "development", NODE_ENV: "development" }) === "production", "vercel dev(로컬) → production");
+  assert(appChatAudience({ VERCEL_ENV: "production", VERCEL: "1" }) === "production", "Vercel 운영 → production");
+  assert(appChatAudience({ VERCEL_ENV: "production", VERCEL: "1", NEXT_PUBLIC_CHAT_APP_ENV: "production" }) === "production", "Vercel 운영 빌드값 → production");
+  assert(appChatAudience({ VERCEL_ENV: "development", NODE_ENV: "production" }) === "preview", "development 이지만 production 빌드 → preview(fail-closed)");
+  assert(appChatAudience({ VERCEL_ENV: "staging" }) === "preview", "알 수 없는 VERCEL_ENV → preview");
+  assert(appChatAudience({ VERCEL_ENV: "Preview " }) === "preview", "대소문자·공백 정규화");
+  assert(appChatAudience({ VERCEL: "1" }) === "preview", "Vercel 인데 VERCEL_ENV 없음 → preview");
+  assert(appChatAudience({ NEXT_PUBLIC_CHAT_APP_ENV: "preview" }) === "preview", "브라우저 빌드값 preview(NEXT_PUBLIC_VERCEL_ENV 없음) → preview");
+  assert(appChatAudience({ NEXT_PUBLIC_CHAT_APP_ENV: "preview", VERCEL_ENV: "production" }) === "preview", "preview 신호가 하나라도 있으면 preview");
+  assert(!chatEnvironmentStatus({ VERCEL: "1", NEXT_PUBLIC_CHAT_WS_URL: "wss://verthill-chat.example.workers.dev" }).ok, "VERCEL_ENV 없음 + 운영 주소 → 차단");
+  assert(!chatEnvironmentStatus({ VERCEL_ENV: "staging", NEXT_PUBLIC_CHAT_WS_URL: "wss://verthill-chat.example.workers.dev" }).ok, "알 수 없는 값 + 운영 주소 → 차단");
+  assert(!chatEnvironmentStatus({ NEXT_PUBLIC_CHAT_APP_ENV: "preview", NEXT_PUBLIC_CHAT_WS_URL: "wss://verthill-chat.example.workers.dev" }).ok, "브라우저 빌드값 preview + 운영 주소 → 차단");
   assert(appChatAudience({ VERCEL_ENV: "preview" }) === "preview", "VERCEL_ENV=preview → preview");
   assert(appChatAudience({ NEXT_PUBLIC_VERCEL_ENV: "preview" }) === "preview", "브라우저 NEXT_PUBLIC_VERCEL_ENV=preview → preview");
 

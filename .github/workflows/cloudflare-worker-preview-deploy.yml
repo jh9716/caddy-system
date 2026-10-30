@@ -4,8 +4,10 @@
 # - ref 규칙: 브랜치 이름만 허용 — `main` 또는 `preview-chat-<영숫자.-_>`.
 #   임의 SHA·태그·포크 ref 는 거부. origin 에서 브랜치 HEAD SHA 로 해석해 그 SHA 를 고정 checkout 한다.
 # - Vercel 관련 단계 없음 (Vercel env 변경 불가). 권한은 contents: read.
-# - 실행 전 준비(별도 승인): R2 버킷 verthill-chat-media-preview 생성,
-#   `wrangler secret put --env preview` 로 CHAT_AUTH_SECRET / CHAT_INTERNAL_SECRET 를 운영과 다른 새 값으로 등록.
+# - 실행 전 준비(별도 승인):
+#   1) Cloudflare 대시보드에서 R2 버킷 verthill-chat-media-preview 생성 (배포 시 바인딩 대상이 있어야 함)
+#   2) GitHub Actions secrets 에 PREVIEW_CHAT_AUTH_SECRET / PREVIEW_CHAT_INTERNAL_SECRET 를 운영과 다른 새 값(32자+)으로 등록
+#   Worker 가 없어도 `wrangler deploy --secrets-file` 로 생성과 비밀값 등록이 한 번에 된다.
 name: Cloudflare Worker Deploy (PREVIEW only)
 
 on:
@@ -110,34 +112,39 @@ jobs:
           if printf '%s\n' "$out" | grep -Eq '\(verthill-chat-media\)'; then echo "production bucket detected; refusing"; exit 1; fi
           echo "dry-run ok"
 
-      - name: Require Cloudflare credentials and preview worker secrets (presence only)
-        working-directory: cloudflare/verthill-chat
+      - name: Require Cloudflare credentials and preview secrets (presence only)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          PREVIEW_CHAT_AUTH_SECRET: ${{ secrets.PREVIEW_CHAT_AUTH_SECRET }}
+          PREVIEW_CHAT_INTERNAL_SECRET: ${{ secrets.PREVIEW_CHAT_INTERNAL_SECRET }}
         run: |
           set +x
           set -eu
           [ -n "${CLOUDFLARE_API_TOKEN:-}" ] || { echo "CLOUDFLARE_API_TOKEN secret missing"; exit 1; }
           [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || { echo "CLOUDFLARE_ACCOUNT_ID variable missing"; exit 1; }
-          # `wrangler secret list` 는 이름만 반환한다(값 없음). 출력은 저장만 하고 그대로 찍지 않는다.
-          names="$(./node_modules/.bin/wrangler secret list --env "$DEPLOY_ENV" --format json 2>/dev/null | node -e '
-            let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const a=JSON.parse(s);console.log(a.map(x=>x.name).join("\n"))}catch{process.exit(1)}})')" \
-            || { echo "cannot list secrets of verthill-chat-preview (worker/secret not prepared?)"; exit 1; }
-          for n in CHAT_AUTH_SECRET CHAT_INTERNAL_SECRET; do
-            printf '%s\n' "$names" | grep -qx "$n" || { echo "preview worker secret $n missing; refusing to deploy"; exit 1; }
-          done
+          # 값은 출력하지 않고 길이만 확인 (32자 이상, 두 값은 서로 달라야 함)
+          [ "${#PREVIEW_CHAT_AUTH_SECRET}" -ge 32 ] || { echo "PREVIEW_CHAT_AUTH_SECRET missing or too short"; exit 1; }
+          [ "${#PREVIEW_CHAT_INTERNAL_SECRET}" -ge 32 ] || { echo "PREVIEW_CHAT_INTERNAL_SECRET missing or too short"; exit 1; }
+          [ "$PREVIEW_CHAT_AUTH_SECRET" != "$PREVIEW_CHAT_INTERNAL_SECRET" ] || { echo "preview secrets must differ"; exit 1; }
           echo "required preview secrets present"
 
-      - name: Deploy PREVIEW worker only
+      - name: Deploy PREVIEW worker only (secrets uploaded with the deploy)
         working-directory: cloudflare/verthill-chat
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          PREVIEW_CHAT_AUTH_SECRET: ${{ secrets.PREVIEW_CHAT_AUTH_SECRET }}
+          PREVIEW_CHAT_INTERNAL_SECRET: ${{ secrets.PREVIEW_CHAT_INTERNAL_SECRET }}
         run: |
           set +x
           set -eu
           test "$DEPLOY_ENV" = "preview"
           node scripts/assert-preview-config.cjs wrangler.jsonc
           ./node_modules/.bin/wrangler --version
-          ./node_modules/.bin/wrangler deploy --env preview --name verthill-chat-preview
+          # Worker 가 아직 없어도 동작: 배포와 동시에 비밀값을 올린다 (wrangler secret put 선행 불필요).
+          umask 077
+          sf="$(mktemp)"
+          trap 'rm -f "$sf"' EXIT
+          node -e 'process.stdout.write(JSON.stringify({CHAT_AUTH_SECRET:process.env.PREVIEW_CHAT_AUTH_SECRET,CHAT_INTERNAL_SECRET:process.env.PREVIEW_CHAT_INTERNAL_SECRET}))' > "$sf"
+          ./node_modules/.bin/wrangler deploy --env preview --name verthill-chat-preview --secrets-file "$sf"

@@ -1,7 +1,19 @@
 // next.config.ts
 import type { NextConfig } from 'next'
 
+// 채팅 환경(운영/Preview)을 빌드 시 고정해 브라우저 번들에 넣는다 (fail-closed).
+// VERCEL_ENV=production 일 때만 production, Vercel 빌드인데 그 외 값/없음이면 preview, 로컬 빌드는 빈 값.
+function chatAppEnvAtBuild(): string {
+  const venv = String(process.env.VERCEL_ENV || '').trim().toLowerCase()
+  if (venv === 'production') return 'production'
+  if (venv || process.env.VERCEL === '1') return 'preview'
+  return ''
+}
+
 const nextConfig: NextConfig = {
+  env: {
+    NEXT_PUBLIC_CHAT_APP_ENV: chatAppEnvAtBuild(),
+  },
   // 빌드 중 eslint 에러 무시 (배포 통과용)
   eslint: {
     ignoreDuringBuilds: true,
