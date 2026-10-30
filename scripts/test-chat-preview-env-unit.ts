@@ -6,6 +6,7 @@ import {
   appChatAudience,
   chatEnvironmentStatus,
   isPreviewChatHost,
+  parseHostList,
 } from "../src/lib/chatEnvironment";
 import {
   canonicalChatTokenPayload,
@@ -40,6 +41,72 @@ async function main() {
   assert(!isPreviewChatHost("not a url"), "잘못된 URL 거부");
   assert(!isPreviewChatHost(""), "빈 값 거부");
   assert(!isPreviewChatHost("wss://evil.com/verthill-chat-preview"), "경로에만 preview 있는 주소 거부");
+
+  // 공격 케이스 표 (kind 별)
+  const A = "acct1";
+  const table: Array<[string, "ws" | "http", boolean, string]> = [
+    [`wss://verthill-chat-preview.${A}.workers.dev`, "ws", true, "정상 WS"],
+    [`wss://verthill-chat-preview.${A}.workers.dev/`, "ws", true, "정상 WS (끝 슬래시)"],
+    [`https://verthill-chat-preview.${A}.workers.dev`, "http", true, "정상 HTTP"],
+    [`https://verthill-chat-preview.${A}.workers.dev`, "ws", false, "WS 자리에 https 거부"],
+    [`wss://verthill-chat-preview.${A}.workers.dev`, "http", false, "HTTP 자리에 wss 거부"],
+    [`ws://verthill-chat-preview.${A}.workers.dev`, "ws", false, "ws 평문 거부"],
+    [`http://verthill-chat-preview.${A}.workers.dev`, "http", false, "http 평문 거부"],
+    [`ftp://verthill-chat-preview.${A}.workers.dev`, "http", false, "다른 스킴 거부"],
+    [`javascript:alert(1)`, "http", false, "javascript: 거부"],
+    [`wss://verthill-chat.${A}.workers.dev`, "ws", false, "운영 Worker 거부"],
+    [`https://verthill-chat.${A}.workers.dev`, "http", false, "운영 Worker(HTTP) 거부"],
+    [`wss://verthill-chat-preview.evil.com`, "ws", false, "다른 도메인 거부"],
+    [`wss://evil-verthill-chat-preview.${A}.workers.dev`, "ws", false, "접두 위장 거부"],
+    [`wss://verthill-chat-preview-evil.${A}.workers.dev`, "ws", false, "접미 위장 거부"],
+    [`wss://verthill-chat-preview.workers.dev.evil.com`, "ws", false, "workers.dev 뒤 도메인 거부"],
+    [`wss://verthill-chat-preview.${A}.workers.dev.evil.com`, "ws", false, "정상 호스트 뒤 도메인 거부"],
+    [`wss://preview.verthill-chat.${A}.workers.dev`, "ws", false, "preview.verthill-chat 거부"],
+    [`wss://verthill-chat-preview.workers.dev`, "ws", false, "계정 라벨 없음 거부"],
+    [`wss://verthill-chat-preview.a.b.workers.dev`, "ws", false, "계정 라벨 2개 거부"],
+    [`wss://verthill-chat-preview.-bad.workers.dev`, "ws", false, "잘못된 라벨(- 시작) 거부"],
+    [`wss://verthill-chat-preview.${A}.workers.dev.`, "ws", false, "끝 점 거부"],
+    [`wss://VERTHILL-CHAT-PREVIEW.${A}.workers.dev`, "ws", false, "대문자 거부"],
+    [`wss://user:pass@verthill-chat-preview.${A}.workers.dev`, "ws", false, "userinfo 거부"],
+    [`wss://verthill-chat-preview.${A}.workers.dev@evil.com`, "ws", false, "@ 로 호스트 바꿔치기 거부"],
+    [`wss://evil.com@verthill-chat-preview.${A}.workers.dev`, "ws", false, "userinfo 위장 거부"],
+    [`wss://verthill-chat-preview.${A}.workers.dev:8443`, "ws", false, "포트 지정 거부"],
+    [`wss://verthill-chat-preview.${A}.workers.dev:443`, "ws", false, "기본 포트 명시 표기 거부"],
+    [`wss://verthill-chat-preview.${A}.workers.dev/ws`, "ws", false, "경로 거부"],
+    [`wss://verthill-chat-preview.${A}.workers.dev?x=1`, "ws", false, "쿼리 거부"],
+    [`wss://verthill-chat-preview.${A}.workers.dev#x`, "ws", false, "해시 거부"],
+    [`wss://evil.com/verthill-chat-preview.${A}.workers.dev`, "ws", false, "경로에 숨긴 호스트 거부"],
+    [`wss://evil.com\\@verthill-chat-preview.${A}.workers.dev`, "ws", false, "백슬래시 우회 거부"],
+    [`wss://verthill-chat-preview%2E${A}.workers.dev`, "ws", false, "퍼센트 인코딩 거부"],
+    [`wss://verthill-chat-prevіew.${A}.workers.dev`, "ws", false, "키릴 문자 위장(IDN) 거부"],
+    [`wss://xn--verthill-chat-preview-abc.${A}.workers.dev`, "ws", false, "punycode 거부"],
+    [`wss://127.0.0.1`, "ws", false, "IPv4 거부"],
+    [`wss://[::1]`, "ws", false, "IPv6 거부"],
+    [`wss://2130706433`, "ws", false, "정수 IP 거부"],
+    [` wss://verthill-chat-preview.${A}.workers.dev`, "ws", false, "앞 공백 거부"],
+    [`wss://verthill-chat-preview.${A}.workers.dev\n`, "ws", false, "개행 거부"],
+    [`wss:/verthill-chat-preview.${A}.workers.dev`, "ws", false, "슬래시 1개 거부"],
+    [`//verthill-chat-preview.${A}.workers.dev`, "ws", false, "스킴 없음 거부"],
+    [`wss://chat-preview.verthill.kr`, "ws", false, "승인 안 된 커스텀 도메인 거부"],
+  ];
+  for (const [url, kind, want, label] of table) {
+    assert(isPreviewChatHost(url, { kind }) === want, `호스트표: ${label}`);
+  }
+  // 커스텀 도메인 허용 목록 (정확 일치만)
+  const allowed = parseHostList("chat-preview.verthill.kr, BAD.Example.com,127.0.0.1,xn--abc.com,ok-host.test.");
+  assert(JSON.stringify(allowed) === JSON.stringify(["chat-preview.verthill.kr"]), "허용목록: 대문자·IP·punycode·끝 점 항목은 버림");
+  assert(isPreviewChatHost("wss://chat-preview.verthill.kr", { kind: "ws", allowedHosts: allowed }), "허용목록 정확 일치 허용");
+  assert(!isPreviewChatHost("wss://x.chat-preview.verthill.kr", { kind: "ws", allowedHosts: allowed }), "허용목록 하위 도메인 거부");
+  assert(!isPreviewChatHost("wss://chat-preview.verthill.kr.evil.com", { kind: "ws", allowedHosts: allowed }), "허용목록 뒤 도메인 거부");
+  assert(!isPreviewChatHost("ws://chat-preview.verthill.kr", { kind: "ws", allowedHosts: allowed }), "허용목록이어도 ws 평문 거부");
+  assert(!isPreviewChatHost("wss://chat.verthill.kr", { kind: "ws", allowedHosts: ["chat.verthill.kr"], productionHosts: ["chat.verthill.kr"] }), "운영 호스트는 허용목록에 있어도 거부");
+  assert(!isPreviewChatHost(`wss://verthill-chat-preview.${A}.workers.dev`, { kind: "ws", productionHosts: [`verthill-chat-preview.${A}.workers.dev`] }), "운영 호스트 목록과 같으면 거부");
+  const envAllowed = chatEnvironmentStatus({ VERCEL_ENV: "preview", NEXT_PUBLIC_CHAT_WS_URL: "wss://chat-preview.verthill.kr", CHAT_PREVIEW_ALLOWED_HOSTS: "chat-preview.verthill.kr" });
+  assert(envAllowed.ok, "env 허용목록으로 커스텀 도메인 허용");
+  const envNot = chatEnvironmentStatus({ VERCEL_ENV: "preview", NEXT_PUBLIC_CHAT_WS_URL: "wss://chat-preview.verthill.kr" });
+  assert(!envNot.ok, "허용목록 없으면 커스텀 도메인 차단(기본 빈 목록)");
+  const envHttpWorker = chatEnvironmentStatus({ VERCEL_ENV: "preview", NEXT_PUBLIC_CHAT_WS_URL: PREV_WS, CHAT_WORKER_URL: "http://verthill-chat-preview.example.workers.dev" });
+  assert(!envHttpWorker.ok, "서버측 Worker 주소 http 평문 차단");
 
   // 상태 (fail-closed)
   assert(chatEnvironmentStatus({ VERCEL_ENV: "production", NEXT_PUBLIC_CHAT_WS_URL: PROD_WS }).ok, "운영: 기존 설정 그대로 ok");
