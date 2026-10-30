@@ -361,6 +361,14 @@ export function schedulePlanDisplayAllowed(
   return state === "SUCCESS_PLAN";
 }
 
+/** 모바일 엑셀 그리드는 월표가 실제로 있을 때(SUCCESS_PLAN + plan)만 표시 */
+export function marshalMobileGridVisible(
+  state: MarshalScheduleFetchState,
+  plan: unknown
+): boolean {
+  return schedulePlanDisplayAllowed(state) && Boolean(plan);
+}
+
 export function scheduleWorkspaceVisible(
   state: MarshalScheduleFetchState
 ): boolean {
@@ -382,4 +390,198 @@ export function shouldScrollPcDayDetail(input: {
 }): boolean {
   if (!input.selectedDate) return false;
   return String(input.calendarDisplay || "").trim() !== "none";
+}
+
+/* ------------------------------------------------------------------ */
+/* 모바일 엑셀형 월표 그리드 (P1)                                       */
+/* 날짜+요일 | 조출1 | 조출2 | 후출                                     */
+/* 순번은 슬롯에 없으므로 members[].rotationOrder 를 caddyId 로 조인.   */
+/* 순번을 찾지 못하면 null (임의 숫자 금지).                            */
+/* 초록 강조는 source === "SUBSTITUTE" 만. ROTATION 은 절대 대타 아님.  */
+/* ------------------------------------------------------------------ */
+
+export type MarshalGridMember = { caddyId: number; rotationOrder: number };
+
+export type MarshalGridEntry = {
+  slotId: number;
+  caddyId: number;
+  name: string;
+  /** 활성 members 에서 찾은 순번. 없으면 null — 화면에 숫자를 만들어 넣지 않는다. */
+  rotationOrder: number | null;
+  source: string;
+  isSubstitute: boolean;
+  isPenalty: boolean;
+  originalName: string | null;
+};
+
+export type MarshalGridCell = {
+  key: string;
+  label: string;
+  entries: MarshalGridEntry[];
+};
+
+export type MarshalGridRow = {
+  ymd: string;
+  day: number;
+  weekday: number;
+  weekdayLabel: string;
+  isToday: boolean;
+  isWeekend: boolean;
+  am1: MarshalGridCell;
+  am2: MarshalGridCell;
+  pm: MarshalGridCell;
+  board: MarshalDayBoard;
+};
+
+export const MARSHAL_GRID_COLUMNS = ["날짜", "조출1", "조출2", "후출"] as const;
+
+export function buildRotationOrderMap(
+  members: readonly MarshalGridMember[] | null | undefined
+): Map<number, number> {
+  const map = new Map<number, number>();
+  for (const member of members || []) {
+    const caddyId = Number(member?.caddyId);
+    const order = Number(member?.rotationOrder);
+    if (!Number.isInteger(caddyId) || caddyId <= 0) continue;
+    if (!Number.isFinite(order) || order <= 0) continue;
+    if (!map.has(caddyId)) map.set(caddyId, order);
+  }
+  return map;
+}
+
+export function toMarshalGridEntry(
+  slot: MarshalScheduleSlotView,
+  orderByCaddyId: ReadonlyMap<number, number>
+): MarshalGridEntry {
+  const source = String(slot.source || "").toUpperCase();
+  const isSubstitute = source === "SUBSTITUTE";
+  return {
+    slotId: slot.id,
+    caddyId: slot.caddyId,
+    name: String(slot.caddy?.name ?? "").trim() || "이름없음",
+    rotationOrder: orderByCaddyId.get(Number(slot.caddyId)) ?? null,
+    source,
+    isSubstitute,
+    isPenalty: source === "PENALTY",
+    originalName: isSubstitute
+      ? String(slot.originalCaddy?.name ?? "").trim() || null
+      : null,
+  };
+}
+
+export function marshalGridEntryOrderText(entry: MarshalGridEntry): string {
+  return entry.rotationOrder == null ? "–" : String(entry.rotationOrder);
+}
+
+export function marshalGridEntryText(entry: MarshalGridEntry): string {
+  return entry.rotationOrder == null
+    ? entry.name
+    : `${entry.rotationOrder} ${entry.name}`;
+}
+
+/** 오늘 날짜(Asia/Seoul) YYYY-MM-DD */
+export function seoulTodayYmd(now: Date = new Date()): string {
+  const kst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  return kst.toISOString().slice(0, 10);
+}
+
+/** 다음 Asia/Seoul 자정까지 남은 ms (최소 1초). 모바일 그리드 '오늘' 갱신용 */
+export function msUntilNextSeoulMidnight(now: Date = new Date()): number {
+  const DAY = 24 * 60 * 60 * 1000;
+  const kstMs = now.getTime() + 9 * 60 * 60 * 1000;
+  const remain = DAY - (((kstMs % DAY) + DAY) % DAY);
+  return Math.max(1000, remain);
+}
+
+export type MarshalDayFlagKind = "warn" | "sub" | "penalty" | "occ" | "occ-more";
+
+export type MarshalDayFlagBadge = {
+  kind: MarshalDayFlagKind;
+  key: string;
+  /** 화면 표시 텍스트 (기존 DayFlags 와 동일) */
+  text: string;
+  /** 스크린리더용 설명 */
+  srText: string;
+  /** occ 일 때 AUTO/MANUAL */
+  source?: "AUTO" | "MANUAL";
+};
+
+/**
+ * 기존 DayFlags(page.tsx)와 같은 조건·같은 순서·같은 문구.
+ * - 경고: day.hasWarning
+ * - 대타: day.hasSubstitute (source SUBSTITUTE 또는 originalCaddy 존재)
+ * - 벌당: 전일 벌당 발생 기록이 없고 day.hasPenalty 일 때
+ * - 전일 벌당 발생 기록: occurrenceBadges 앞 2개 + "전일 +N"
+ * occTextFn 은 occurrenceCalendarBadgeText 를 주입한다(같은 문구 보장).
+ */
+export function marshalDayFlagBadges(
+  day: Pick<MarshalDayBoard, "ymd" | "hasWarning" | "hasSubstitute" | "hasPenalty" | "occurrenceBadges">,
+  occTextFn: (badge: { name: string; source?: string | null }) => string
+): MarshalDayFlagBadge[] {
+  const out: MarshalDayFlagBadge[] = [];
+  const occ = day.occurrenceBadges || [];
+  if (day.hasWarning) out.push({ kind: "warn", key: "warn", text: "경고", srText: "경고 있음" });
+  if (day.hasSubstitute) out.push({ kind: "sub", key: "sub", text: "대타", srText: "대타 근무 있음" });
+  if (occ.length === 0 && day.hasPenalty) {
+    out.push({ kind: "penalty", key: "penalty", text: "벌당", srText: "벌당 있음" });
+  }
+  for (const badge of occ.slice(0, 2)) {
+    const text = occTextFn(badge);
+    out.push({
+      kind: "occ",
+      key: `${badge.caddyId}-${badge.source}`,
+      text,
+      srText: `벌당 발생 기록: ${text}`,
+      source: badge.source,
+    });
+  }
+  if (occ.length > 2) {
+    out.push({
+      kind: "occ-more",
+      key: "occ-more",
+      text: `전일 +${occ.length - 2}`,
+      srText: `벌당 발생 기록 ${occ.length - 2}건 더 있음`,
+    });
+  }
+  return out;
+}
+
+export function buildMarshalMonthGridRows(input: {
+  days: readonly MarshalDayBoard[];
+  members?: readonly MarshalGridMember[] | null;
+  todayYmd?: string | null;
+}): MarshalGridRow[] {
+  const orderMap = buildRotationOrderMap(input.members);
+  const today = String(input.todayYmd || "");
+  return input.days.map((day) => {
+    const am = day.am.map((slot) => toMarshalGridEntry(slot, orderMap));
+    const pm = day.pm.map((slot) => toMarshalGridEntry(slot, orderMap));
+    // 조출1 = AM slotIndex 최소, 조출2 = 나머지 모두(설정이 3명 이상이어도 누락 없음)
+    const am1 = am.slice(0, 1);
+    const am2 = am.slice(1);
+    return {
+      ymd: day.ymd,
+      day: day.day,
+      weekday: day.weekday,
+      weekdayLabel: day.weekdayLabel,
+      isToday: Boolean(today) && day.ymd === today,
+      isWeekend: day.weekday === 0 || day.weekday === 6,
+      am1: { key: `${day.ymd}-am1`, label: "조출1", entries: am1 },
+      am2: { key: `${day.ymd}-am2`, label: "조출2", entries: am2 },
+      // 후출 2명 이상이면 같은 칸에 세로로 쌓는다
+      pm: { key: `${day.ymd}-pm`, label: "후출", entries: pm },
+      board: day,
+    };
+  });
+}
+
+export type MarshalPlanStatusKind = "NONE" | "DRAFT" | "FINALIZED";
+
+export function marshalPlanStatusKind(
+  plan: { status?: string | null } | null | undefined
+): MarshalPlanStatusKind {
+  if (!plan) return "NONE";
+  const raw = String(plan.status ?? "").trim().toUpperCase();
+  if (raw === "FINALIZED") return "FINALIZED";
+  return "DRAFT";
 }

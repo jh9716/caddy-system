@@ -415,7 +415,13 @@ section("source contracts");
   const css = read("src/app/globals.css");
   const ui = read("src/lib/marshalScheduleUi.ts");
   assert(page.includes('data-marshal-schedule="calendar"'), "PC calendar");
-  assert(page.includes('data-marshal-schedule="dense"'), "mobile dense");
+  assert(
+    page.includes("<MarshalMonthMobileGrid") &&
+      read("src/components/manage/MarshalMonthMobileGrid.tsx").includes(
+        'data-marshal-schedule="dense"'
+      ),
+    "mobile dense (엑셀형 그리드)"
+  );
   assert(page.includes("이월 대기"), "UI carry hint");
   assert(page.includes('aria-label="시작 순번"'), "시작 순번 라벨");
   assert(page.includes('aria-label="조출 인원"'), "조출 인원 라벨");
