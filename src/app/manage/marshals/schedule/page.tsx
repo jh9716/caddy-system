@@ -1046,12 +1046,17 @@ export default function ManageMarshalSchedulePage() {
               전일 벌당 발생과는 다릅니다.
             </p>
             <div className="ms-actions ms-duty-form">
-              <input
-                aria-label="벌당 날짜"
-                type="date"
-                value={penaltyDate}
-                onChange={(e) => setPenaltyDate(e.target.value)}
-              />
+              <label className="ms-date-field">
+                <span className="ms-date-cap" aria-hidden>
+                  날짜
+                </span>
+                <input
+                  aria-label="벌당 날짜"
+                  type="date"
+                  value={penaltyDate}
+                  onChange={(e) => setPenaltyDate(e.target.value)}
+                />
+              </label>
               <select
                 aria-label="벌당 마샬"
                 value={penaltyCaddyId}

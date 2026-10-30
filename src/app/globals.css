@@ -6674,6 +6674,15 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
   display: contents;
 }
 
+/* P2 후속: 날짜 입력 라벨 (PC는 기존 배치 그대로) */
+.ms-date-field {
+  display: contents;
+}
+
+.ms-date-cap {
+  display: none;
+}
+
 @media (max-width: 719px) {
   /* 1. 〈 2026년 10월 〉 한 줄 */
   .ms-month-nav {
@@ -6764,10 +6773,37 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
     width: 1.9em;
   }
 
+  /* 월표 없음: 모바일에서는 안내 영역의 '월표 설정 열기' 하나만 표시 */
   .ms-nav-settings.ui-btn {
-    grid-column: 1 / -1;
+    display: none;
+  }
+
+  .ms-date-field {
+    display: block;
+    position: relative;
+  }
+
+  .ms-date-field input {
+    display: block;
     width: 100%;
+    min-width: 0;
     min-height: 44px;
+    box-sizing: border-box;
+    padding-top: 15px;
+    padding-bottom: 3px;
+  }
+
+  .ms-date-cap {
+    display: block;
+    position: absolute;
+    top: 3px;
+    left: 11px;
+    font-size: 0.66rem;
+    font-weight: 700;
+    line-height: 12px;
+    color: var(--vh-green-900);
+    pointer-events: none;
+    z-index: 1;
   }
 
   .ms-status-line {
