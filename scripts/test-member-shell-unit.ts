@@ -107,7 +107,18 @@ section("wiring");
   const member = read("src/components/manage/MemberShell.tsx");
   assert(member.includes("vh-bottom-tabs-5"), "member 5 equal bottom tabs");
   assert(member.includes('label: "내 대시보드"'), "member bottom 내 대시보드");
-  assert(member.includes('href: "/course-reports"'), "member bottom 제보");
+  // 모바일 하단 채팅 메뉴 P1: 하단 제보 → 채팅 교체, 제보는 드로어(memberNavItems)에 유지
+  assert(member.includes('{ href: "/chat", label: "채팅", Icon: IconChat }'), "member bottom 채팅");
+  assert(!member.includes('href: "/course-reports"'), "member bottom 제보 → 채팅 교체");
+  assert(
+    /memberNavItems[\s\S]*href: "\/course-reports"/.test(read("src/lib/boardNav.ts")),
+    "member drawer keeps 제보"
+  );
+  assert(
+    read("src/components/manage/ManageShell.tsx").includes('{ href: "/chat", label: "채팅", Icon: IconChat }') &&
+      read("src/components/manage/ManageShell.tsx").includes('bottomTabsClassName="vh-bottom-tabs-5"'),
+    "admin bottom 채팅 + 5 tabs"
+  );
   assert(!member.includes("/manage/caddies"), "MemberShell no 캐디 관리 href");
   assert(!member.includes("/manage/carts"), "MemberShell no 카트 관리 href");
   assert(!member.includes("카트 관리"), "MemberShell no 카트 관리 label");
