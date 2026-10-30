@@ -58,6 +58,7 @@ import {
   isChatSessionEpochStale,
   resolveChatRoomAccess,
   verifyChatToken,
+  parseChatTokenAudience,
   type ChatTokenClaims,
 } from "./token";
 import { handleChatMediaRequest, type ChatMediaBucket } from "./chatMedia";
@@ -89,6 +90,8 @@ export interface Env {
   CHAT_MEDIA?: ChatMediaBucket;
   /** Optional Next origin for best-effort chat push. Example: https://www.verthill.kr/api/chat/push-dispatch */
   CHAT_PUSH_DISPATCH_URL?: string;
+  /** "preview" = Preview 전용 Worker. 미설정/"production" = 운영. 그 외 값은 503(fail-closed). */
+  CHAT_TOKEN_AUDIENCE?: string;
 }
 
 function nextInternalUrl(env: Env, pathname: string): string {
@@ -150,13 +153,16 @@ async function verifyIdentity(
   const url = new URL(request.url);
   const secret = String(env.CHAT_AUTH_SECRET || "").trim();
   if (!secret) return json({ error: "chat_auth_unconfigured" }, 503);
+  // CHAT_TOKEN_AUDIENCE 미설정 = production (기존 운영 Worker 동작 그대로). preview Worker 는 "preview".
+  const audience = parseChatTokenAudience(env.CHAT_TOKEN_AUDIENCE);
+  if (!audience) return json({ error: "chat_audience_misconfigured" }, 503);
   const header = (request.headers.get("authorization") || "").trim();
   const bearer = header.toLowerCase().startsWith("bearer ")
     ? header.slice(7).trim()
     : "";
   const token = (url.searchParams.get("token") || bearer).trim();
   if (!token) return json({ error: "unauthorized" }, 401);
-  const claims = await verifyChatToken(token, secret);
+  const claims = await verifyChatToken(token, secret, undefined, audience);
   if (!claims) return json({ error: "invalid_token" }, 401);
   const session = await assertChatSessionCurrent(env, claims);
   if (!session.ok) return json({ error: session.error }, session.status);

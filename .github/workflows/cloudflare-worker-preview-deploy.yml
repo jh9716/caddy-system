@@ -1,0 +1,150 @@
+# Preview 전용 채팅 Worker(verthill-chat-preview) 수동 배포.
+# - workflow_dispatch 전용. push/PR 로는 절대 실행되지 않는다.
+# - 항상 `--env preview` 로만 배포한다. 운영 Worker(verthill-chat)·운영 DO·운영 R2 는 건드리지 않는다.
+# - ref 규칙: 브랜치 이름만 허용 — `main` 또는 `preview-chat-<영숫자.-_>`.
+#   임의 SHA·태그·포크 ref 는 거부. origin 에서 브랜치 HEAD SHA 로 해석해 그 SHA 를 고정 checkout 한다.
+# - Vercel 관련 단계 없음 (Vercel env 변경 불가). 권한은 contents: read.
+# - 실행 전 준비(별도 승인):
+#   1) Cloudflare 대시보드에서 R2 버킷 verthill-chat-media-preview 생성 (배포 시 바인딩 대상이 있어야 함)
+#   2) GitHub Actions secrets 에 PREVIEW_CHAT_AUTH_SECRET / PREVIEW_CHAT_INTERNAL_SECRET 를 운영과 다른 새 값(32자+)으로 등록
+#   Worker 가 없어도 `wrangler deploy --secrets-file` 로 생성과 비밀값 등록이 한 번에 된다.
+name: Cloudflare Worker Deploy (PREVIEW only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch to deploy: main or preview-chat-*'
+        required: true
+        type: string
+      confirm:
+        description: 'Type exactly: deploy-verthill-chat-preview'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-verthill-chat-preview-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy-preview-worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DEPLOY_ENV: preview
+      EXPECTED_WORKER: verthill-chat-preview
+    steps:
+      - name: Require explicit confirmation and allowed ref
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+          REF: ${{ inputs.ref }}
+        run: |
+          set -eu
+          if [ "$CONFIRM" != "deploy-verthill-chat-preview" ]; then
+            echo "confirmation text mismatch; refusing to deploy"; exit 1
+          fi
+          case "$REF" in
+            main) ;;
+            preview-chat-*)
+              if ! printf '%s' "$REF" | grep -Eq '^preview-chat-[A-Za-z0-9._-]{1,80}$' || printf '%s' "$REF" | grep -q '\.\.'; then
+                echo "invalid preview-chat-* branch name"; exit 1
+              fi ;;
+            *) echo "ref must be 'main' or a 'preview-chat-*' branch"; exit 1 ;;
+          esac
+          if [ "$GITHUB_REPOSITORY" != "jh9716/caddy-system" ]; then echo "unexpected repository"; exit 1; fi
+
+      - name: Resolve ref to a SHA on origin
+        id: resolve
+        env:
+          REF: ${{ inputs.ref }}
+          REPO_URL: https://github.com/${{ github.repository }}.git
+        run: |
+          set -eu
+          sha="$(git ls-remote --heads "$REPO_URL" "refs/heads/$REF" | awk '{print $1}')"
+          if ! printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "branch $REF not found on origin"; exit 1
+          fi
+          echo "resolved $REF -> $sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout resolved SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.resolve.outputs.sha }}
+          persist-credentials: false
+
+      - name: Verify checkout matches resolved SHA
+        env:
+          SHA: ${{ steps.resolve.outputs.sha }}
+        run: |
+          set -eu
+          test "$(git rev-parse HEAD)" = "$SHA" || { echo "checked-out HEAD differs from resolved SHA"; exit 1; }
+
+      - name: Set up Node from package.json engines
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: npm
+          cache-dependency-path: cloudflare/verthill-chat/package-lock.json
+
+      - name: Install Worker dependencies
+        working-directory: cloudflare/verthill-chat
+        run: npm ci
+
+      - name: Guard preview config (parsed, no network)
+        working-directory: cloudflare/verthill-chat
+        run: |
+          set -eu
+          test "$DEPLOY_ENV" = "preview" || { echo "DEPLOY_ENV must be preview"; exit 1; }
+          test "$EXPECTED_WORKER" = "verthill-chat-preview" || { echo "EXPECTED_WORKER must be verthill-chat-preview"; exit 1; }
+          node scripts/assert-preview-config.cjs wrangler.jsonc
+
+      - name: Dry-run and verify target is the PREVIEW worker
+        working-directory: cloudflare/verthill-chat
+        run: |
+          set +x
+          set -eu
+          out="$(./node_modules/.bin/wrangler deploy --env "$DEPLOY_ENV" --dry-run --outdir /tmp/preview-dry 2>&1)"
+          printf '%s\n' "$out" | grep -q 'verthill-chat-media-preview' || { echo "dry-run is not targeting preview bucket"; exit 1; }
+          if printf '%s\n' "$out" | grep -Eq '\(verthill-chat-media\)'; then echo "production bucket detected; refusing"; exit 1; fi
+          echo "dry-run ok"
+
+      - name: Require Cloudflare credentials and preview secrets (presence only)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          PREVIEW_CHAT_AUTH_SECRET: ${{ secrets.PREVIEW_CHAT_AUTH_SECRET }}
+          PREVIEW_CHAT_INTERNAL_SECRET: ${{ secrets.PREVIEW_CHAT_INTERNAL_SECRET }}
+        run: |
+          set +x
+          set -eu
+          [ -n "${CLOUDFLARE_API_TOKEN:-}" ] || { echo "CLOUDFLARE_API_TOKEN secret missing"; exit 1; }
+          [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || { echo "CLOUDFLARE_ACCOUNT_ID variable missing"; exit 1; }
+          # 값은 출력하지 않고 길이만 확인 (32자 이상, 두 값은 서로 달라야 함)
+          [ "${#PREVIEW_CHAT_AUTH_SECRET}" -ge 32 ] || { echo "PREVIEW_CHAT_AUTH_SECRET missing or too short"; exit 1; }
+          [ "${#PREVIEW_CHAT_INTERNAL_SECRET}" -ge 32 ] || { echo "PREVIEW_CHAT_INTERNAL_SECRET missing or too short"; exit 1; }
+          [ "$PREVIEW_CHAT_AUTH_SECRET" != "$PREVIEW_CHAT_INTERNAL_SECRET" ] || { echo "preview secrets must differ"; exit 1; }
+          echo "required preview secrets present"
+
+      - name: Deploy PREVIEW worker only (secrets uploaded with the deploy)
+        working-directory: cloudflare/verthill-chat
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          PREVIEW_CHAT_AUTH_SECRET: ${{ secrets.PREVIEW_CHAT_AUTH_SECRET }}
+          PREVIEW_CHAT_INTERNAL_SECRET: ${{ secrets.PREVIEW_CHAT_INTERNAL_SECRET }}
+        run: |
+          set +x
+          set -eu
+          test "$DEPLOY_ENV" = "preview"
+          node scripts/assert-preview-config.cjs wrangler.jsonc
+          ./node_modules/.bin/wrangler --version
+          # Worker 가 아직 없어도 동작: 배포와 동시에 비밀값을 올린다 (wrangler secret put 선행 불필요).
+          umask 077
+          sf="$(mktemp)"
+          trap 'rm -f "$sf"' EXIT
+          node -e 'process.stdout.write(JSON.stringify({CHAT_AUTH_SECRET:process.env.PREVIEW_CHAT_AUTH_SECRET,CHAT_INTERNAL_SECRET:process.env.PREVIEW_CHAT_INTERNAL_SECRET}))' > "$sf"
+          ./node_modules/.bin/wrangler deploy --env preview --name verthill-chat-preview --secrets-file "$sf"

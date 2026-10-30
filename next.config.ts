@@ -1,7 +1,13 @@
 // next.config.ts
 import type { NextConfig } from 'next'
 
+import { chatAppEnvBuildMarker } from './src/lib/chatAppEnv'
+
+// 채팅 환경(운영/Preview)을 빌드 시 고정해 브라우저 번들에 넣는다 — 서버와 같은 판정기 사용.
 const nextConfig: NextConfig = {
+  env: {
+    NEXT_PUBLIC_CHAT_APP_ENV: chatAppEnvBuildMarker(process.env),
+  },
   // 빌드 중 eslint 에러 무시 (배포 통과용)
   eslint: {
     ignoreDuringBuilds: true,

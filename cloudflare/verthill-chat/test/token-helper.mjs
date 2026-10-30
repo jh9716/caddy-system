@@ -79,6 +79,7 @@ export function signTestTokenV2(partial, secret = TEST_SECRET) {
     String(claims.sv ?? 0),
     String(claims.iat),
     String(claims.exp),
+    ...(claims.aud === "preview" ? ["aud=preview"] : []),
   ].join("|");
   const body = Buffer.from(canonical, "utf8").toString("base64url");
   const sig = createHmac("sha256", secret).update(canonical).digest("base64url");
