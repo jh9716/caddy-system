@@ -1,0 +1,143 @@
+# VERTHILL Preview 전용 Neon DB 구축 (lucky-mode-29989630 / neondb).
+# - workflow_dispatch 전용. push/PR/schedule 트리거 없음.
+# - DB 비밀값은 secrets.PREVIEW_DATABASE_URL 하나만 사용 (운영 DATABASE_URL 참조 금지 — scripts/test-preview-db-workflow-unit.cjs 가 검사).
+# - 모드별 별도 실행·별도 승인: precheck → migrate → seed → verify. 확인 문구가 모드마다 다르다.
+# - 모든 DB 접근 전에 scripts/preview-db/validate-url.cjs 가 주소를 검증(출력 없이)하고 실패 시 즉시 중단.
+# - migrate 는 `prisma migrate deploy` 만 사용 (reset / db push / --force 금지), 재시도 없음.
+# - ref 는 main 또는 preview-db-* 브랜치만 허용.
+name: Preview DB Build (lucky-mode-29989630 only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: precheck | migrate | seed | verify
+        required: true
+        type: choice
+        options: [precheck, migrate, seed, verify]
+      confirm:
+        description: 'Exact phrase: PREVIEW-DB-<MODE> lucky-mode-29989630  (e.g. PREVIEW-DB-PRECHECK lucky-mode-29989630)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: preview-db-build-lucky-mode-29989630
+  cancel-in-progress: false
+
+jobs:
+  preview-db:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: preview-db
+    env:
+      PREVIEW_PROJECT_ID: lucky-mode-29989630
+      PRISMA_HIDE_UPDATE_MESSAGE: "1"
+      CHECKPOINT_DISABLE: "1"
+    steps:
+      - name: Check mode, confirmation phrase and ref
+        env:
+          MODE: ${{ inputs.mode }}
+          CONFIRM: ${{ inputs.confirm }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -eu
+          case "$MODE" in precheck|migrate|seed|verify) ;; *) echo "invalid mode"; exit 1;; esac
+          upper="$(printf '%s' "$MODE" | tr '[:lower:]' '[:upper:]')"
+          expected="PREVIEW-DB-${upper} lucky-mode-29989630"
+          if [ "$CONFIRM" != "$expected" ]; then echo "confirmation phrase mismatch for mode $MODE"; exit 1; fi
+          if [ "$REF_TYPE" != "branch" ]; then echo "must run from a branch"; exit 1; fi
+          case "$REF_NAME" in main|preview-db-*) ;; *) echo "ref must be main or preview-db-*"; exit 1;; esac
+          if [ "$GITHUB_REPOSITORY" != "jh9716/caddy-system" ]; then echo "unexpected repository"; exit 1; fi
+          echo "mode=$MODE ref=$REF_NAME sha=$GITHUB_SHA"
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Validate PREVIEW_DATABASE_URL (no output of value) before any DB access
+        env:
+          DATABASE_URL: ${{ secrets.PREVIEW_DATABASE_URL }}
+        run: |
+          set +x
+          set -eu
+          [ -n "${DATABASE_URL:-}" ] || { echo "PREVIEW_DATABASE_URL secret missing"; exit 1; }
+          node scripts/preview-db/validate-url.cjs
+
+      - name: Check repo migrations count is exactly 60
+        run: |
+          set -eu
+          n="$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l)"
+          echo "repo migrations: $n"
+          [ "$n" = "60" ] || { echo "expected 60 migrations"; exit 1; }
+          grep -q 'url *= *env("DATABASE_URL")' prisma/schema.prisma || { echo "unexpected datasource config"; exit 1; }
+          if grep -q 'directUrl' prisma/schema.prisma; then echo "directUrl present; review needed"; exit 1; fi
+
+      - name: Install psql client
+        run: |
+          set -eu
+          command -v psql >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client >/dev/null; }
+          psql --version
+
+      - name: Read-only precheck
+        env:
+          DATABASE_URL: ${{ secrets.PREVIEW_DATABASE_URL }}
+        run: |
+          set +x
+          set -eu
+          node scripts/preview-db/validate-url.cjs
+          node scripts/preview-db/state.cjs precheck
+
+      - uses: actions/setup-node@v4
+        if: inputs.mode == 'migrate' || inputs.mode == 'seed'
+        with:
+          node-version-file: package.json
+          cache: npm
+
+      - name: Install dependencies (no DB access)
+        if: inputs.mode == 'migrate' || inputs.mode == 'seed'
+        env:
+          DATABASE_URL: postgresql://placeholder:placeholder@127.0.0.1:1/placeholder
+        run: npm ci --no-audit --no-fund
+
+      - name: Migrate (prisma migrate deploy only, no retry)
+        if: inputs.mode == 'migrate'
+        env:
+          DATABASE_URL: ${{ secrets.PREVIEW_DATABASE_URL }}
+        run: |
+          set +x
+          set -eu
+          node scripts/preview-db/validate-url.cjs
+          node scripts/preview-db/state.cjs migrate-gate
+          set -o pipefail
+          ./node_modules/.bin/prisma migrate deploy 2>&1 | sed -E 's#postgres(ql)?://[^ ]+#<url>#g'
+          node scripts/preview-db/state.cjs verify
+
+      - name: Seed synthetic preview data (refuse if data exists)
+        if: inputs.mode == 'seed'
+        env:
+          DATABASE_URL: ${{ secrets.PREVIEW_DATABASE_URL }}
+          PREVIEW_SEED_PASSWORD: ${{ secrets.PREVIEW_SEED_PASSWORD }}
+          PREVIEW_DB_CONFIRM: lucky-mode-29989630
+          TZ: UTC
+        run: |
+          set +x
+          set -eu
+          [ "${#PREVIEW_SEED_PASSWORD}" -ge 12 ] || { echo "PREVIEW_SEED_PASSWORD secret missing or shorter than 12"; exit 1; }
+          node scripts/preview-db/validate-url.cjs
+          node scripts/preview-db/state.cjs seed-gate
+          node scripts/preview-db/seed-preview.cjs
+          node scripts/preview-db/state.cjs verify
+
+      - name: Verify (read-only)
+        if: inputs.mode == 'verify'
+        env:
+          DATABASE_URL: ${{ secrets.PREVIEW_DATABASE_URL }}
+        run: |
+          set +x
+          set -eu
+          node scripts/preview-db/validate-url.cjs
+          node scripts/preview-db/state.cjs verify
