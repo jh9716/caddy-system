@@ -2,6 +2,8 @@ import {
   chatInternalSecret,
   internalAuthHeaders,
 } from "./internalAuth";
+import { diagSessionResponse, type DiagFields } from "./diag"; // TEMPORARY DIAGNOSTIC
+import { isPreviewWorker, isRedirectResponse, nextAppExtraHeaders, nextAppFetchInit, nextAppUrl, type NextAppEnv } from "./nextApp";
 import {
   chatTokenSessionVersion,
   isSessionBoundChatToken,
@@ -15,23 +17,14 @@ export const CHAT_ROOM_REVOKE_PATH = "/internal/revoke-user";
 export const CHAT_ROOM_EVICT_PATH = "/internal/evict-members";
 export const SESSION_CHECK_TIMEOUT_MS = 2500;
 
-export type SessionCheckEnv = {
+export type SessionCheckEnv = NextAppEnv & {
   CHAT_AUTH_SECRET: string;
   CHAT_INTERNAL_SECRET?: string;
-  CHAT_PUSH_DISPATCH_URL?: string;
 };
 
+/** 운영: 기존과 동일하게 CHAT_PUSH_DISPATCH_URL 에서 유도. Preview: 검증된 Preview 호스트만 (아니면 ""). */
 export function nextSessionCheckUrl(env: SessionCheckEnv): string {
-  const pushUrl = String(env.CHAT_PUSH_DISPATCH_URL || "").trim();
-  if (!pushUrl) return "";
-  try {
-    const parsed = new URL(pushUrl);
-    parsed.pathname = CHAT_SESSION_CHECK_PATH;
-    parsed.search = "";
-    return parsed.toString();
-  } catch {
-    return "";
-  }
+  return nextAppUrl(env, CHAT_SESSION_CHECK_PATH);
 }
 
 export function parseSessionRevokeBody(raw: unknown): {
@@ -64,7 +57,9 @@ export function parseEvictMembersBody(raw: unknown): { userIds: number[] } | nul
 
 export async function assertChatSessionCurrent(
   env: SessionCheckEnv,
-  claims: ChatTokenClaims
+  claims: ChatTokenClaims,
+  // TEMPORARY DIAGNOSTIC — remove after Preview 401 diagnosis. Preview 에서만 전달됨 (운영은 undefined).
+  onDiag?: (fields: DiagFields) => void
 ): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
   if (claims.v !== 2) return { ok: true };
   if (!isSessionBoundChatToken(claims)) {
@@ -73,17 +68,35 @@ export async function assertChatSessionCurrent(
   const sv = chatTokenSessionVersion(claims);
   if (sv == null) return { ok: false, status: 401, error: "stale_session" };
   const url = nextSessionCheckUrl(env);
-  if (!url) return { ok: false, status: 503, error: "session_check_unconfigured" };
+  if (!url) {
+    onDiag?.({ stage: "session_check", code: "session_check_unconfigured", dispatch_url_configured: !!String(env.CHAT_PUSH_DISPATCH_URL || "") });
+    return { ok: false, status: 503, error: "session_check_unconfigured" };
+  }
   const secret = chatInternalSecret(env);
-  if (!secret) return { ok: false, status: 503, error: "session_check_unconfigured" };
+  if (!secret) {
+    onDiag?.({ stage: "session_check", code: "session_check_unconfigured", internal_secret_configured: false });
+    return { ok: false, status: 503, error: "session_check_unconfigured" };
+  }
   try {
-    const headers = await internalAuthHeaders(secret, CHAT_SESSION_CHECK_PATH);
+    const headers = {
+      ...(await internalAuthHeaders(secret, CHAT_SESSION_CHECK_PATH)),
+      ...nextAppExtraHeaders(env, url),
+    };
     const res = await fetch(url, {
       method: "POST",
       headers,
       body: JSON.stringify({ userId: claims.userId, sv }),
       signal: AbortSignal.timeout(SESSION_CHECK_TIMEOUT_MS),
+      ...nextAppFetchInit(env),
     });
+    if (onDiag) {
+      // TEMPORARY DIAGNOSTIC — remove after Preview 401 diagnosis.
+      onDiag({ stage: "session_check_response", redirect: isRedirectResponse(res), ...(await diagSessionResponse(res)) });
+    }
+    // Preview: 리다이렉트는 따라가지 않고 실패(503) — 비밀 헤더가 다른 호스트로 가지 않게.
+    if (isPreviewWorker(env) && isRedirectResponse(res)) {
+      return { ok: false, status: 503, error: "session_check_unavailable" };
+    }
     if (res.status === 503) {
       return { ok: false, status: 503, error: "session_check_unavailable" };
     }
@@ -96,6 +109,7 @@ export async function assertChatSessionCurrent(
     }
     return { ok: true };
   } catch {
+    onDiag?.({ stage: "session_check", code: "session_check_fetch_error" });
     return { ok: false, status: 503, error: "session_check_unavailable" };
   }
 }
