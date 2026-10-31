@@ -3115,6 +3115,45 @@ body.manage-mode .vh-auth-frame {
   justify-self: start;
 }
 
+/* Board comments P1: edit/actions/counter (mobile 44px touch) */
+.board-comment-actions {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 4px;
+}
+.board-comment-actions .board-comment-action {
+  margin-left: 0;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 8px;
+}
+.board-comment-edited {
+  font-size: 11px;
+  color: var(--vh-muted);
+}
+.board-comment-edit-form {
+  margin-top: 8px;
+}
+.board-comment-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.board-comment-counter {
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--vh-muted);
+}
+.board-comments-error {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--vh-danger, #c0392b);
+}
+.board-comments-count {
+  color: var(--vh-accent, inherit);
+}
+
 .board-comments {
   margin-top: 16px;
   padding-top: 12px;
