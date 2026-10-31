@@ -15,7 +15,7 @@ import {
   assertCourseReportPhotoBytes,
 } from "@/lib/courseReportPhotoMagic";
 import { CourseReportPhotoStorageError } from "@/lib/courseReportPhotoStorage";
-import { getFreeBoardPhotoStore } from "@/lib/freeBoardPhotoStorage";
+import { FREE_BOARD_KEY_RE, getFreeBoardPhotoStore } from "@/lib/freeBoardPhotoStorage";
 import {
   FREE_BOARD_PHOTO_MAX,
   FREE_BOARD_PHOTO_MAX_BYTES,
@@ -39,7 +39,9 @@ export function buildFreeBoardPhotoStorageKey(
 
 /** 이 모듈이 다루는 key 는 반드시 free-board/ prefix. 다른 기능 객체 삭제 방지. */
 export function isFreeBoardStorageKey(key: string): boolean {
-  return key.startsWith(`${FREE_BOARD_STORAGE_PREFIX}/`) && !key.includes("..");
+  return (
+    key.startsWith(`${FREE_BOARD_STORAGE_PREFIX}/`) && !key.includes("..") && FREE_BOARD_KEY_RE.test(key)
+  );
 }
 
 export function toFreeBoardPhotoPublic(row: FreeBoardPhoto): FreeBoardPhotoPublic {

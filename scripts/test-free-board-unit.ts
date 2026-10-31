@@ -151,6 +151,8 @@ async function main() {
     VERCEL_ENV: process.env.VERCEL_ENV,
     FREE_BOARD_STORAGE_ENV: process.env.FREE_BOARD_STORAGE_ENV,
     FREE_BOARD_BLOB_READ_WRITE_TOKEN: process.env.FREE_BOARD_BLOB_READ_WRITE_TOKEN,
+    FREE_BOARD_PREVIEW_BLOB_STORE_ID: process.env.FREE_BOARD_PREVIEW_BLOB_STORE_ID,
+    FREE_BOARD_PRODUCTION_BLOB_STORE_ID: process.env.FREE_BOARD_PRODUCTION_BLOB_STORE_ID,
     BLOB_READ_WRITE_TOKEN: process.env.BLOB_READ_WRITE_TOKEN,
     BLOB_STORE_ID: process.env.BLOB_STORE_ID,
   };
@@ -161,35 +163,97 @@ async function main() {
     VERCEL_ENV: "preview",
     FREE_BOARD_STORAGE_ENV: "preview",
     FREE_BOARD_BLOB_READ_WRITE_TOKEN: FAKE_PREVIEW,
+    FREE_BOARD_PREVIEW_BLOB_STORE_ID: "previewstore111",
+    FREE_BOARD_PRODUCTION_BLOB_STORE_ID: "prodstore999",
     BLOB_READ_WRITE_TOKEN: FAKE_PROD,
   });
   delete process.env.BLOB_STORE_ID;
 
-  section("storage isolation policy");
+  section("storage isolation policy (fail-closed)");
   {
     const D = (env: Record<string, string>) => resolveFreeBoardStorageDecision(env);
-    const ok = D({ VERCEL_ENV: "preview", FREE_BOARD_STORAGE_ENV: "preview", FREE_BOARD_BLOB_READ_WRITE_TOKEN: FAKE_PREVIEW, BLOB_READ_WRITE_TOKEN: FAKE_PROD });
-    assert(ok.ok && ok.mode === "dedicated", "preview + 전용 토큰 + 마커 → dedicated");
-    const noTok = D({ VERCEL_ENV: "preview", FREE_BOARD_STORAGE_ENV: "preview", BLOB_READ_WRITE_TOKEN: FAKE_PROD });
-    assert(!noTok.ok && noTok.code === "free_board_preview_storage_missing", "preview 전용 토큰 없음 → 차단 (공용 fallback 없음)");
-    const noMarker = D({ VERCEL_ENV: "preview", FREE_BOARD_BLOB_READ_WRITE_TOKEN: FAKE_PREVIEW });
-    assert(!noMarker.ok && noMarker.code === "free_board_preview_storage_missing", "마커 없음 → 차단");
-    const same = D({ VERCEL_ENV: "preview", FREE_BOARD_STORAGE_ENV: "preview", FREE_BOARD_BLOB_READ_WRITE_TOKEN: FAKE_PROD, BLOB_READ_WRITE_TOKEN: FAKE_PROD });
-    assert(!same.ok && same.code === "free_board_storage_shared", "공용 토큰과 동일 → 차단");
-    const sameStore = D({ VERCEL_ENV: "preview", FREE_BOARD_STORAGE_ENV: "preview", FREE_BOARD_BLOB_READ_WRITE_TOKEN: "vercel_blob_rw_prodstore999_other", BLOB_READ_WRITE_TOKEN: FAKE_PROD });
-    assert(!sameStore.ok && sameStore.code === "free_board_storage_shared", "같은 store id (다른 토큰) → 차단");
-    const sameStoreId = D({ VERCEL_ENV: "preview", FREE_BOARD_STORAGE_ENV: "preview", FREE_BOARD_BLOB_READ_WRITE_TOKEN: FAKE_PREVIEW, BLOB_STORE_ID: "store_previewstore111" });
-    assert(!sameStoreId.ok && sameStoreId.code === "free_board_storage_shared", "BLOB_STORE_ID 와 같은 store → 차단");
-    const badFmt = D({ VERCEL_ENV: "preview", FREE_BOARD_STORAGE_ENV: "preview", FREE_BOARD_BLOB_READ_WRITE_TOKEN: "garbage" });
-    assert(!badFmt.ok && badFmt.code === "free_board_storage_token_invalid", "토큰 형식 불명 → 차단");
-    const local = D({});
-    assert(!local.ok, "로컬/미설정 → 차단");
-    const prod = D({ VERCEL_ENV: "production" });
-    assert(prod.ok && prod.mode === "shared", "production → 기존 공용 store (free-board/ prefix)");
-    const prodMarker = D({ VERCEL_ENV: "production", FREE_BOARD_STORAGE_ENV: "preview" });
-    assert(!prodMarker.ok && prodMarker.code === "free_board_storage_env_mismatch", "production 에 preview 마커 → 차단");
-    const msgs = [noTok, same, sameStore, badFmt].map((d) => JSON.stringify(d)).join(" ");
-    assert(!msgs.includes("fakesecret") && !msgs.includes("prodstore999"), "판정 결과에 토큰/스토어 값 미포함");
+    const GOOD = {
+      VERCEL_ENV: "preview",
+      FREE_BOARD_STORAGE_ENV: "preview",
+      FREE_BOARD_BLOB_READ_WRITE_TOKEN: FAKE_PREVIEW,
+      FREE_BOARD_PREVIEW_BLOB_STORE_ID: "previewstore111",
+      FREE_BOARD_PRODUCTION_BLOB_STORE_ID: "prodstore999",
+    };
+    const code = (d: ReturnType<typeof D>) => (d.ok ? "ALLOW" : d.code);
+    const without = (k: string) => {
+      const e: Record<string, string> = { ...GOOD };
+      delete e[k];
+      return e;
+    };
+    assert(code(D(GOOD)) === "ALLOW", "allow: 모든 증명 충족 (공용 자격증명 없음)");
+    assert(code(D({ ...GOOD, BLOB_READ_WRITE_TOKEN: FAKE_PROD })) === "ALLOW", "allow: 공용 토큰 있고 다른 store");
+    assert(code(D({ ...GOOD, VERCEL_ENV: "development" })) === "ALLOW", "allow: development 도 동일 규칙");
+    assert(code(D(without("FREE_BOARD_STORAGE_ENV"))) === "free_board_preview_storage_missing", "block: 마커 없음");
+    assert(code(D({ ...GOOD, FREE_BOARD_STORAGE_ENV: "production" })) === "free_board_preview_storage_missing", "block: 마커 값 다름");
+    assert(code(D(without("FREE_BOARD_BLOB_READ_WRITE_TOKEN"))) === "free_board_preview_storage_missing", "block: 전용 토큰 없음 (공용 fallback 없음)");
+    assert(code(D({ ...GOOD, FREE_BOARD_BLOB_READ_WRITE_TOKEN: "garbage" })) === "free_board_storage_token_invalid", "block: 토큰 형식 불명");
+    assert(code(D(without("FREE_BOARD_PREVIEW_BLOB_STORE_ID"))) === "free_board_storage_isolation_unproven", "block: preview store id 선언 없음");
+    assert(code(D({ ...GOOD, FREE_BOARD_PREVIEW_BLOB_STORE_ID: "otherstore" })) === "free_board_storage_isolation_unproven", "block: 선언 id ≠ 토큰 id");
+    assert(code(D({ ...GOOD, FREE_BOARD_PREVIEW_BLOB_STORE_ID: "bad id!" })) === "free_board_storage_isolation_unproven", "block: 선언 id 형식 오류");
+    assert(code(D(without("FREE_BOARD_PRODUCTION_BLOB_STORE_ID"))) === "free_board_storage_isolation_unproven", "block: 운영 store id 모름 (증명 불가)");
+    assert(code(D({ ...GOOD, FREE_BOARD_PRODUCTION_BLOB_STORE_ID: "??" })) === "free_board_storage_isolation_unproven", "block: 운영 store id 형식 오류");
+    assert(code(D({ ...GOOD, FREE_BOARD_PRODUCTION_BLOB_STORE_ID: "previewstore111" })) === "free_board_storage_shared", "block: 운영 id == preview id");
+    assert(code(D({ ...GOOD, FREE_BOARD_PRODUCTION_BLOB_STORE_ID: "store_PreviewStore111" })) === "free_board_storage_shared", "block: store_ 접두/대소문자 정규화 후 동일");
+    assert(code(D({ ...GOOD, BLOB_READ_WRITE_TOKEN: FAKE_PREVIEW })) === "free_board_storage_shared", "block: 공용 토큰과 동일");
+    assert(code(D({ ...GOOD, BLOB_READ_WRITE_TOKEN: "vercel_blob_rw_previewstore111_other" })) === "free_board_storage_shared", "block: 공용 토큰 store 동일");
+    assert(code(D({ ...GOOD, BLOB_READ_WRITE_TOKEN: "weird-format" })) === "free_board_storage_isolation_unproven", "block: 공용 토큰 파싱 불가");
+    assert(code(D({ ...GOOD, BLOB_STORE_ID: "store_previewstore111" })) === "free_board_storage_shared", "block: BLOB_STORE_ID 동일");
+    assert(code(D({ ...GOOD, BLOB_STORE_ID: "!!" })) === "free_board_storage_isolation_unproven", "block: BLOB_STORE_ID 파싱 불가");
+    assert(code(D({})) === "free_board_preview_storage_missing", "block: 로컬/미설정");
+    assert(code(D({ VERCEL_ENV: "production" })) === "ALLOW" && (D({ VERCEL_ENV: "production" }) as { mode: string }).mode === "shared", "production: 기존 공용 store 그대로 (변경 없음)");
+    assert(code(D({ VERCEL_ENV: "production", FREE_BOARD_STORAGE_ENV: "preview" })) === "free_board_storage_env_mismatch", "production + preview 마커 차단");
+    // no-leak sentinel: 모든 판정 결과 직렬화에 토큰/스토어 id 미포함
+    const SENT = "zzsentinel777";
+    const leakCases = [
+      { ...GOOD, FREE_BOARD_BLOB_READ_WRITE_TOKEN: `vercel_blob_rw_${SENT}_secretpart`, FREE_BOARD_PREVIEW_BLOB_STORE_ID: SENT },
+      { ...GOOD, FREE_BOARD_PRODUCTION_BLOB_STORE_ID: SENT },
+      { ...GOOD, BLOB_READ_WRITE_TOKEN: `vercel_blob_rw_${SENT}_x` },
+      { ...GOOD, FREE_BOARD_BLOB_READ_WRITE_TOKEN: `${SENT}secretpart` },
+    ];
+    const out = leakCases.map((e) => JSON.stringify(D(e))).join(" ");
+    assert(!out.includes(SENT) && !out.includes("secretpart"), "no-leak: 판정 결과에 id/토큰 조각 없음");
+    const src = read("src/lib/freeBoardPhotoStorage.ts");
+    assert(!/console\.(log|error|warn|info)/.test(src), "storage 정책 모듈 로그 출력 없음");
+    const photoSrc = read("src/lib/freeBoardPhoto.ts");
+    assert(!/storageKey,?\s*\}|key:\s*it\.storageKey/.test(photoSrc.slice(photoSrc.indexOf("orphanLogger"))), "orphan 로그에 key 없음");
+  }
+
+  section("storage prefix guard");
+  {
+    const { guardFreeBoardStore, FREE_BOARD_KEY_RE } = await import("../src/lib/freeBoardPhotoStorage");
+    const calls: string[] = [];
+    const inner = createMemoryCourseReportPhotoStore();
+    const spy: CourseReportPhotoStore = {
+      ...inner,
+      async put(k, b, m) { calls.push(k); return inner.put(k, b, m); },
+      async get(k) { calls.push(k); return inner.get(k); },
+      async delete(k) { calls.push(k); return inner.delete(k); },
+    };
+    const g = guardFreeBoardStore(spy);
+    const okKey = "free-board/12/0f8fad5b-d9cb-469f-a165-70867728950e.png";
+    assert(FREE_BOARD_KEY_RE.test(okKey), "정상 key 허용");
+    await g.put(okKey, png(), "image/png");
+    for (const bad of [
+      "notices/1/0f8fad5b-d9cb-469f-a165-70867728950e.png",
+      "course-reports/1/0f8fad5b-d9cb-469f-a165-70867728950e.png",
+      "free-board/../notices/x.png",
+      "free-board/1/../../notices/0f8fad5b-d9cb-469f-a165-70867728950e.png",
+      "free-board/abc/0f8fad5b-d9cb-469f-a165-70867728950e.png",
+      "free-board/1/anything.png",
+      "free-board/",
+    ]) {
+      let threw = 0;
+      for (const fn of [() => g.get(bad), () => g.delete(bad), () => g.put(bad, png(), "image/png")]) {
+        try { await fn(); } catch { threw++; }
+      }
+      assert(threw === 3, `차단: ${bad.split("/")[0]}/… (get/delete/put)`);
+    }
+    assert(calls.length === 1 && calls[0] === okKey, "inner store 는 free-board key 만 호출됨");
   }
   try {
     const cA = await prisma.caddy.create({
