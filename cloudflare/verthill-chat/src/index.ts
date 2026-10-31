@@ -71,6 +71,7 @@ import {
   parseEvictMembersBody,
   parseSessionRevokeBody,
 } from "./sessionCheck";
+import { nextAppExtraHeaders, nextAppUrl, nextPushDispatchUrl } from "./nextApp";
 
 export { validateIncomingMessage, isValidRoomName } from "./protocol";
 export { verifyChatToken } from "./token";
@@ -92,19 +93,14 @@ export interface Env {
   CHAT_PUSH_DISPATCH_URL?: string;
   /** "preview" = Preview 전용 Worker. 미설정/"production" = 운영. 그 외 값은 503(fail-closed). */
   CHAT_TOKEN_AUDIENCE?: string;
+  /** Preview 전용: 추가로 허용할 Next 앱 호스트(정확 일치, 쉼표 구분). 운영에서는 무시. */
+  CHAT_PREVIEW_APP_ALLOWED_HOSTS?: string;
+  /** Preview 전용 secret: 배포 보호 자동화 우회 값. 운영에서는 절대 사용 안 함. */
+  PREVIEW_APP_BYPASS_SECRET?: string;
 }
 
 function nextInternalUrl(env: Env, pathname: string): string {
-  const pushUrl = String(env.CHAT_PUSH_DISPATCH_URL || "").trim();
-  if (!pushUrl) return "";
-  try {
-    const parsed = new URL(pushUrl);
-    parsed.pathname = pathname;
-    parsed.search = "";
-    return parsed.toString();
-  } catch {
-    return "";
-  }
+  return nextAppUrl(env, pathname);
 }
 
 function uniqueAttachmentIds(raw: string[], limit: number): string[] {
@@ -1557,10 +1553,10 @@ export class ChatRoom extends DurableObject<Env> {
     const url = nextInternalUrl(this.env, "/api/chat/attachments/cleanup");
     if (!url || !roomId || attachmentIds.length === 0) return;
     try {
-      const headers = await internalAuthHeaders(
-        chatInternalSecret(this.env),
-        "/api/chat/attachments/cleanup"
-      );
+      const headers = {
+        ...(await internalAuthHeaders(chatInternalSecret(this.env), "/api/chat/attachments/cleanup")),
+        ...nextAppExtraHeaders(this.env, url),
+      };
       const res = await fetch(url, {
         method: "POST",
         headers,
@@ -1582,10 +1578,10 @@ export class ChatRoom extends DurableObject<Env> {
     const consumeUrl = nextInternalUrl(this.env, "/api/chat/attachments/consume");
     if (!consumeUrl || attachmentIds.length === 0) return;
     try {
-      const headers = await internalAuthHeaders(
-        chatInternalSecret(this.env),
-        "/api/chat/attachments/consume"
-      );
+      const headers = {
+        ...(await internalAuthHeaders(chatInternalSecret(this.env), "/api/chat/attachments/consume")),
+        ...nextAppExtraHeaders(this.env, consumeUrl),
+      };
       await fetch(consumeUrl, {
         method: "POST",
         headers,
@@ -1605,7 +1601,7 @@ export class ChatRoom extends DurableObject<Env> {
   }
 
   private async sendChatPushDispatch(roomId: string, message: ChatMessage) {
-    const url = String(this.env.CHAT_PUSH_DISPATCH_URL || "").trim();
+    const url = nextPushDispatchUrl(this.env);
     if (!url || message.deletionType) return;
     try {
       let roomType = "ALL";
@@ -1617,10 +1613,10 @@ export class ChatRoom extends DurableObject<Env> {
         roomType = "DM";
         memberUserIds = (await listDirectoryMemberIds(this.env, roomId)) ?? [];
       }
-      const headers = await internalAuthHeaders(
-        chatInternalSecret(this.env),
-        "/api/chat/push-dispatch"
-      );
+      const headers = {
+        ...(await internalAuthHeaders(chatInternalSecret(this.env), "/api/chat/push-dispatch")),
+        ...nextAppExtraHeaders(this.env, url),
+      };
       await fetch(url, {
         method: "POST",
         headers,

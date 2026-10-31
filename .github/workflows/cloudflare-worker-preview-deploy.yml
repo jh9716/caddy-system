@@ -21,6 +21,10 @@ on:
         description: 'Type exactly: deploy-verthill-chat-preview'
         required: true
         type: string
+      app_origin:
+        description: 'Preview Next origin for session-check (e.g. https://caddy-system-gt8t-git-<branch>-jh9716s-projects.vercel.app)'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -118,9 +122,13 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           PREVIEW_CHAT_AUTH_SECRET: ${{ secrets.PREVIEW_CHAT_AUTH_SECRET }}
           PREVIEW_CHAT_INTERNAL_SECRET: ${{ secrets.PREVIEW_CHAT_INTERNAL_SECRET }}
+          PREVIEW_VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.PREVIEW_VERCEL_AUTOMATION_BYPASS_SECRET }}
+          APP_ORIGIN: ${{ inputs.app_origin }}
         run: |
           set +x
           set -eu
+          node cloudflare/verthill-chat/scripts/assert-preview-app-origin.cjs "$APP_ORIGIN"
+          [ "${#PREVIEW_VERCEL_AUTOMATION_BYPASS_SECRET}" -ge 16 ] || { echo "PREVIEW_VERCEL_AUTOMATION_BYPASS_SECRET missing or too short"; exit 1; }
           [ -n "${CLOUDFLARE_API_TOKEN:-}" ] || { echo "CLOUDFLARE_API_TOKEN secret missing"; exit 1; }
           [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || { echo "CLOUDFLARE_ACCOUNT_ID variable missing"; exit 1; }
           # 값은 출력하지 않고 길이만 확인 (32자 이상, 두 값은 서로 달라야 함)
@@ -136,15 +144,18 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           PREVIEW_CHAT_AUTH_SECRET: ${{ secrets.PREVIEW_CHAT_AUTH_SECRET }}
           PREVIEW_CHAT_INTERNAL_SECRET: ${{ secrets.PREVIEW_CHAT_INTERNAL_SECRET }}
+          PREVIEW_VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.PREVIEW_VERCEL_AUTOMATION_BYPASS_SECRET }}
+          APP_ORIGIN: ${{ inputs.app_origin }}
         run: |
           set +x
           set -eu
           test "$DEPLOY_ENV" = "preview"
+          node scripts/assert-preview-app-origin.cjs "$APP_ORIGIN"
           node scripts/assert-preview-config.cjs wrangler.jsonc
           ./node_modules/.bin/wrangler --version
           # Worker 가 아직 없어도 동작: 배포와 동시에 비밀값을 올린다 (wrangler secret put 선행 불필요).
           umask 077
           sf="$(mktemp)"
           trap 'rm -f "$sf"' EXIT
-          node -e 'process.stdout.write(JSON.stringify({CHAT_AUTH_SECRET:process.env.PREVIEW_CHAT_AUTH_SECRET,CHAT_INTERNAL_SECRET:process.env.PREVIEW_CHAT_INTERNAL_SECRET}))' > "$sf"
+          node -e 'process.stdout.write(JSON.stringify({CHAT_AUTH_SECRET:process.env.PREVIEW_CHAT_AUTH_SECRET,CHAT_INTERNAL_SECRET:process.env.PREVIEW_CHAT_INTERNAL_SECRET,PREVIEW_APP_BYPASS_SECRET:process.env.PREVIEW_VERCEL_AUTOMATION_BYPASS_SECRET,CHAT_PUSH_DISPATCH_URL:process.env.APP_ORIGIN.replace(/\/$/,"")+"/api/chat/push-dispatch"}))' > "$sf"
           ./node_modules/.bin/wrangler deploy --env preview --name verthill-chat-preview --secrets-file "$sf"

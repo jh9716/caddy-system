@@ -117,6 +117,9 @@ export async function startWrangler(opts = {}) {
     `CHAT_AUTH_SECRET:${opts.secret || TEST_SECRET}`,
     "--var",
     `CHAT_PUSH_DISPATCH_URL:http://${HOST}:${mock.port}`,
+    // 로컬 하네스 전용: preview Worker 가 로컬 mock(127.0.0.1)으로 session-check 하도록 허용. 배포 설정에는 없음.
+    "--var",
+    "CHAT_PREVIEW_LOCAL_HARNESS:1",
   ];
   if (opts.persistTo) {
     args.push("--persist-to", opts.persistTo);
