@@ -71,6 +71,7 @@ import {
   parseEvictMembersBody,
   parseSessionRevokeBody,
 } from "./sessionCheck";
+import { diagEnabled, diagLog, diagPath, diagnoseTokenFailure } from "./diag"; // TEMPORARY DIAGNOSTIC
 import { nextAppExtraHeaders, nextAppFetchInit, nextAppUrl, nextPushDispatchUrl } from "./nextApp";
 
 export { validateIncomingMessage, isValidRoomName } from "./protocol";
@@ -155,11 +156,32 @@ async function verifyIdentity(
     ? header.slice(7).trim()
     : "";
   const token = (url.searchParams.get("token") || bearer).trim();
-  if (!token) return json({ error: "unauthorized" }, 401);
+  // TEMPORARY DIAGNOSTIC — remove after Preview 401 diagnosis. diag 는 preview 에서만 출력 (운영 무출력).
+  const diag = diagEnabled(env);
+  const dpath = diag ? diagPath(url.pathname) : "";
+  if (!token) {
+    if (diag) diagLog(env, { path: dpath, stage: "token", code: "unauthorized", token_reason: "missing", status: 401 });
+    return json({ error: "unauthorized" }, 401);
+  }
   const claims = await verifyChatToken(token, secret, undefined, audience);
-  if (!claims) return json({ error: "invalid_token" }, 401);
-  const session = await assertChatSessionCurrent(env, claims);
-  if (!session.ok) return json({ error: session.error }, session.status);
+  if (!claims) {
+    if (diag) {
+      const reason = await diagnoseTokenFailure(token, secret, audience);
+      diagLog(env, { path: dpath, stage: "token", code: "invalid_token", token_reason: reason, status: 401,
+        auth_secret_mismatch_suspect: reason === "bad_signature" });
+    }
+    return json({ error: "invalid_token" }, 401);
+  }
+  const session = diag
+    ? await assertChatSessionCurrent(env, claims, (f) => diagLog(env, { path: dpath, ...f,
+        dispatch_url_configured: !!String(env.CHAT_PUSH_DISPATCH_URL || ""),
+        bypass_configured: !!String(env.PREVIEW_APP_BYPASS_SECRET || "").trim() }))
+    : await assertChatSessionCurrent(env, claims);
+  if (!session.ok) {
+    if (diag) diagLog(env, { path: dpath, stage: "result", code: session.error, status: session.status });
+    return json({ error: session.error }, session.status);
+  }
+  if (diag) diagLog(env, { path: dpath, stage: "result", code: "ok", status: 200 });
   if (isSessionBoundChatToken(claims)) {
     void rememberSessionEpoch(env, claims.userId, claims.sv);
   }
