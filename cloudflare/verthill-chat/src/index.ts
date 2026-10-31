@@ -175,7 +175,8 @@ async function verifyIdentity(
   const session = diag
     ? await assertChatSessionCurrent(env, claims, (f) => diagLog(env, { path: dpath, ...f,
         dispatch_url_configured: !!String(env.CHAT_PUSH_DISPATCH_URL || ""),
-        bypass_configured: !!String(env.PREVIEW_APP_BYPASS_SECRET || "").trim() }))
+        bypass_configured: !!String(env.PREVIEW_APP_BYPASS_SECRET || "").trim(),
+        internal_secret_configured: !!String(env.CHAT_INTERNAL_SECRET || "").trim() }))
     : await assertChatSessionCurrent(env, claims);
   if (!session.ok) {
     if (diag) diagLog(env, { path: dpath, stage: "result", code: session.error, status: session.status });

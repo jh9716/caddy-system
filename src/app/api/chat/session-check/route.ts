@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAuthStoreUnavailable, isRetiredCaddySessionBlocked } from "@/lib/auth";
 import { CHAT_SESSION_CHECK_PATH, verifyChatInternalRequest } from "@/lib/chatInternalAuth";
+import {
+  chatInternalDiagEnabled,
+  diagnoseChatInternalRequest,
+  formatChatInternalDiag,
+} from "@/lib/chatInternalAuthDiag"; // TEMPORARY DIAGNOSTIC
 import { evaluateChatSessionEpoch } from "@/lib/chatSessionEpoch";
 import { normalizeAppRole } from "@/lib/sessionCookies";
 import { prisma } from "@/lib/prisma";
@@ -10,6 +15,15 @@ export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
   if (!(await verifyChatInternalRequest(req, CHAT_SESSION_CHECK_PATH))) {
+    // TEMPORARY DIAGNOSTIC — remove after Preview 403 diagnosis. Vercel Preview 에서만 (운영 미실행).
+    if (chatInternalDiagEnabled()) {
+      try {
+        const d = await diagnoseChatInternalRequest(req, CHAT_SESSION_CHECK_PATH);
+        console.log(formatChatInternalDiag(CHAT_SESSION_CHECK_PATH, false, d));
+      } catch {
+        // 진단 실패는 무시
+      }
+    }
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
   const body = (await req.json().catch(() => null)) as {
