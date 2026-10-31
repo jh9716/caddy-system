@@ -25,7 +25,12 @@ import {
   GET as GET_COMMENTS,
   POST as POST_COMMENT,
 } from "../src/app/api/board/[date]/comments/route";
-import { DELETE as DELETE_COMMENT } from "../src/app/api/board/[date]/comments/[commentId]/route";
+import {
+  DELETE as DELETE_COMMENT,
+  PATCH as PATCH_COMMENT,
+} from "../src/app/api/board/[date]/comments/[commentId]/route";
+import { shouldApplyCommentsResponse } from "../src/app/board/BoardComments";
+import { canEditComment, isCommentEdited } from "../src/lib/comment";
 
 let passed = 0;
 let failed = 0;
@@ -255,14 +260,14 @@ async function main() {
     where: {
       thread: {
         targetType: "BOARD_DATE",
-        targetKey: { in: [pubDate, unpublishedDate, draftOnlyDate, "2099-06-20"] },
+        targetKey: { in: [pubDate, unpublishedDate, draftOnlyDate, "2099-06-20", "2099-06-21"] },
       },
     },
   });
   await prisma.commentThread.deleteMany({
     where: {
       targetType: "BOARD_DATE",
-      targetKey: { in: [pubDate, unpublishedDate, draftOnlyDate, "2099-06-20"] },
+      targetKey: { in: [pubDate, unpublishedDate, draftOnlyDate, "2099-06-20", "2099-06-21"] },
     },
   });
   await prisma.dailyBoardPublished.deleteMany({
@@ -655,6 +660,181 @@ async function main() {
       await prisma.dailyBoardPublished.delete({ where: { date: parseYmd(raceDate).start } });
     }
 
+    section("edit policy (P1)");
+    {
+      const pure = canEditComment({ userId: 5, authorUserId: 5, deletedAt: null });
+      assert(pure === true, "canEditComment author true");
+      assert(
+        canEditComment({ userId: 6, authorUserId: 5, deletedAt: null }) === false,
+        "canEditComment non-author false"
+      );
+      assert(
+        canEditComment({ userId: null, authorUserId: 5, deletedAt: null }) === false,
+        "canEditComment null user false"
+      );
+      assert(
+        canEditComment({ userId: 5, authorUserId: 5, deletedAt: new Date() }) === false,
+        "canEditComment deleted false"
+      );
+      const t0 = new Date("2099-01-01T00:00:00Z");
+      assert(!isCommentEdited(t0, new Date(t0.getTime() + 300)), "not edited within 1s");
+      assert(isCommentEdited(t0, new Date(t0.getTime() + 5000)), "edited after 1s");
+      assert(shouldApplyCommentsResponse("2099-06-19", "2099-06-19", false), "apply same date");
+      assert(!shouldApplyCommentsResponse("2099-06-19", "2099-06-21", false), "stale date ignored");
+      assert(!shouldApplyCommentsResponse("2099-06-19", "2099-06-19", true), "aborted ignored");
+
+      const mine = await POST_COMMENT(
+        req(`http://local/api/board/${pubDate}/comments`, {
+          method: "POST",
+          headers: { cookie: caddyCookie, "content-type": "application/json" },
+          body: JSON.stringify({ body: "수정 전" }),
+        }),
+        dateParams(pubDate)
+      );
+      const mineBody = await jsonOf(mine);
+      const mineId = Number(mineBody.comment.id);
+      assert(mineBody.comment.canEdit === true, "author sees canEdit on create");
+      assert(mineBody.comment.edited === false, "fresh comment not edited");
+
+      const patch = (cookie: string | null, id: number, body: unknown, date = pubDate) =>
+        PATCH_COMMENT(
+          req(`http://local/api/board/${date}/comments/${id}`, {
+            method: "PATCH",
+            headers: {
+              ...(cookie ? { cookie } : {}),
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({ body }),
+          }),
+          commentParams(date, id)
+        );
+
+      const unauth = await patch(null, mineId, "x");
+      assert(unauth.status === 401, "unauth PATCH 401");
+      const other = await patch(otherCookie, mineId, "타인 수정");
+      assert(other.status === 403, "non-author PATCH 403");
+      const admin = await patch(adminCookie, mineId, "관리자 수정");
+      assert(admin.status === 403, "admin cannot edit others 403");
+      const empty = await patch(caddyCookie, mineId, "   ");
+      assert(empty.status === 400, "empty PATCH 400");
+      const tooLong = await patch(caddyCookie, mineId, "가".repeat(COMMENT_BODY_MAX + 1));
+      assert(tooLong.status === 400, "too long PATCH 400");
+      const badId = await patch(caddyCookie, 0, "x");
+      assert(badId.status === 404, "bad id PATCH 404");
+      const wrongDate = await patch(caddyCookie, mineId, "다른 날짜", "2099-06-21");
+      assert(wrongDate.status === 404, "PATCH via other date 404 (unpublished)");
+      let row = await prisma.comment.findUnique({ where: { id: mineId } });
+      assert(row?.body === "수정 전", "denied PATCH keeps body");
+
+      await new Promise((r) => setTimeout(r, 1100));
+      const ok = await patch(caddyCookie, mineId, "  수정 후  ");
+      const okBody = await jsonOf(ok);
+      assert(ok.status === 200, "author PATCH 200");
+      assert(okBody.comment?.body === "수정 후", "PATCH body trimmed");
+      assert(okBody.comment?.edited === true, "PATCH edited flag");
+      row = await prisma.comment.findUnique({ where: { id: mineId } });
+      assert(row?.body === "수정 후", "DB body updated");
+      assert(row?.authorUserId === Number(mineBody.comment.authorUserId), "author unchanged");
+
+      const listed = await jsonOf(
+        await GET_COMMENTS(
+          req(`http://local/api/board/${pubDate}/comments`, { headers: { cookie: otherCookie } }),
+          dateParams(pubDate)
+        )
+      );
+      const seen = listed.comments.find((c: { id: number }) => c.id === mineId);
+      assert(seen?.body === "수정 후" && seen?.edited === true, "list reflects edit");
+      assert(seen?.canEdit === false, "other viewer canEdit false");
+
+      const del = await DELETE_COMMENT(
+        req(`http://local/api/board/${pubDate}/comments/${mineId}`, {
+          method: "DELETE",
+          headers: { cookie: caddyCookie },
+        }),
+        commentParams(pubDate, mineId)
+      );
+      assert(del.status === 200, "own delete before edit-after-delete");
+      const afterDel = await patch(caddyCookie, mineId, "삭제 후 수정");
+      assert(afterDel.status === 404, "PATCH deleted 404");
+    }
+
+    section("date isolation (P1)");
+    {
+      const isoDate = "2099-06-21";
+      let isoThreadId: number | null = null;
+      await prisma.dailyBoardPublished.create({
+        data: {
+          date: parseYmd(isoDate).start,
+          payload: publishedPayload(isoDate),
+          schemaVersion: 1,
+          sourceDraftVersion: 1,
+          publishedAt: new Date(),
+        },
+      });
+      try {
+        const a = await POST_COMMENT(
+          req(`http://local/api/board/${isoDate}/comments`, {
+            method: "POST",
+            headers: { cookie: caddyCookie, "content-type": "application/json" },
+            body: JSON.stringify({ body: "21일 댓글" }),
+          }),
+          dateParams(isoDate)
+        );
+        const aId = Number((await jsonOf(a)).comment.id);
+        const t = await prisma.commentThread.findFirst({
+          where: { targetType: "BOARD_DATE", targetKey: isoDate },
+        });
+        if (t) {
+          threadIds.push(t.id);
+          isoThreadId = t.id;
+        }
+        const l21 = await jsonOf(
+          await GET_COMMENTS(
+            req(`http://local/api/board/${isoDate}/comments`, { headers: { cookie: caddyCookie } }),
+            dateParams(isoDate)
+          )
+        );
+        const l19 = await jsonOf(
+          await GET_COMMENTS(
+            req(`http://local/api/board/${pubDate}/comments`, { headers: { cookie: caddyCookie } }),
+            dateParams(pubDate)
+          )
+        );
+        assert(
+          l21.comments.length === 1 && l21.comments[0].id === aId,
+          "21일 목록은 21일 댓글만"
+        );
+        assert(
+          l19.comments.every((c: { id: number }) => c.id !== aId),
+          "19일 목록에 21일 댓글 없음"
+        );
+        const crossPatch = await PATCH_COMMENT(
+          req(`http://local/api/board/${pubDate}/comments/${aId}`, {
+            method: "PATCH",
+            headers: { cookie: caddyCookie, "content-type": "application/json" },
+            body: JSON.stringify({ body: "교차" }),
+          }),
+          commentParams(pubDate, aId)
+        );
+        assert(crossPatch.status === 404, "다른 날짜 경로로 PATCH 404");
+        const crossDel = await DELETE_COMMENT(
+          req(`http://local/api/board/${pubDate}/comments/${aId}`, {
+            method: "DELETE",
+            headers: { cookie: adminCookie },
+          }),
+          commentParams(pubDate, aId)
+        );
+        assert(crossDel.status === 404, "다른 날짜 경로로 DELETE 404");
+      } finally {
+        if (isoThreadId != null) {
+          await prisma.comment.deleteMany({ where: { threadId: isoThreadId } });
+        }
+        await prisma.dailyBoardPublished.deleteMany({
+          where: { date: parseYmd(isoDate).start },
+        });
+      }
+    }
+
     section("CourseReport thread isolation");
     {
       const created = await POST_REPORT(
@@ -711,7 +891,7 @@ async function main() {
     await prisma.commentThread.deleteMany({
       where: {
         OR: [
-          { targetType: "BOARD_DATE", targetKey: { in: [pubDate, unpublishedDate, draftOnlyDate, "2099-06-20"] } },
+          { targetType: "BOARD_DATE", targetKey: { in: [pubDate, unpublishedDate, draftOnlyDate, "2099-06-20", "2099-06-21"] } },
           { targetType: "COURSE_REPORT", targetKey: { in: reportIds.map(String) } },
         ],
       },

@@ -134,6 +134,29 @@ export function canSoftDeleteComment(input: {
   return input.userId != null && input.userId === input.authorUserId;
 }
 
+/**
+ * 댓글 수정: 작성자 본인만 (관리자도 타인 댓글 수정 불가). 삭제된 댓글 수정 불가.
+ */
+export function canEditComment(input: {
+  userId: number | null;
+  authorUserId: number;
+  deletedAt: Date | null;
+}): boolean {
+  if (input.deletedAt) return false;
+  return (
+    typeof input.userId === "number" &&
+    Number.isInteger(input.userId) &&
+    input.userId > 0 &&
+    input.userId === input.authorUserId
+  );
+}
+
+/** createdAt 이후 1초 넘게 갱신된 경우만 "수정됨" (생성 직후 @updatedAt 오차 무시). */
+export function isCommentEdited(createdAt: Date, updatedAt: Date | null | undefined): boolean {
+  if (!updatedAt) return false;
+  return updatedAt.getTime() - createdAt.getTime() > 1000;
+}
+
 export function resolveCommentAuthorDisplayName(author: {
   username: string;
   caddy: { name: string | null } | null;
@@ -151,6 +174,11 @@ export type CommentPublic = {
   deleted: boolean;
   createdAt: string;
   canDelete: boolean;
+  /** 작성자 본인만 true. */
+  canEdit?: boolean;
+  /** 생성 후 수정된 댓글. */
+  edited?: boolean;
+  updatedAt?: string | null;
 };
 
 export function toCommentPublic(
@@ -160,6 +188,7 @@ export function toCommentPublic(
     body: string;
     deletedAt: Date | null;
     createdAt: Date;
+    updatedAt?: Date | null;
     author: { username: string; caddy: { name: string | null } | null };
   },
   viewer: { role: ResolvedAuthUser["role"]; userId: number | null }
@@ -174,6 +203,9 @@ export function toCommentPublic(
       deleted: true,
       createdAt: row.createdAt.toISOString(),
       canDelete: false,
+      canEdit: false,
+      edited: false,
+      updatedAt: null,
     };
   }
   return {
@@ -189,5 +221,12 @@ export function toCommentPublic(
       authorUserId: row.authorUserId,
       deletedAt: row.deletedAt,
     }),
+    canEdit: canEditComment({
+      userId: viewer.userId,
+      authorUserId: row.authorUserId,
+      deletedAt: row.deletedAt,
+    }),
+    edited: isCommentEdited(row.createdAt, row.updatedAt),
+    updatedAt: row.updatedAt ? row.updatedAt.toISOString() : null,
   };
 }
