@@ -31,6 +31,14 @@ import {
 } from "../src/app/api/board/[date]/comments/[commentId]/route";
 import { shouldApplyCommentsResponse } from "../src/app/board/BoardComments";
 import { canEditComment, isCommentEdited } from "../src/lib/comment";
+import {
+  appendCommentUnique,
+  commentMutationErrorMessage,
+  createMutationGate,
+  liveCommentCount,
+  markCommentDeleted,
+  replaceComment,
+} from "../src/lib/boardCommentsState";
 
 let passed = 0;
 let failed = 0;
@@ -115,6 +123,55 @@ async function main() {
   const threadIds: number[] = [];
   let publishedCreated = false;
   let draftCreated = false;
+
+  section("client state robustness (P1 final)");
+  {
+    const mk = (id: number, body = `c${id}`) => ({
+      id,
+      authorUserId: 1,
+      authorDisplayName: "A",
+      body,
+      deleted: false,
+      createdAt: new Date(0).toISOString(),
+      canDelete: true,
+      canEdit: true,
+    });
+    const l0 = [mk(1), mk(2)];
+    const l1 = appendCommentUnique(l0, mk(3));
+    assert(l1.length === 3 && liveCommentCount(l1) === 3, "append new");
+    assert(appendCommentUnique(l1, mk(3, "dup")).length === 3, "append duplicate id → no ghost duplicate");
+    assert(replaceComment(l1, mk(2, "edited")).find((c) => c.id === 2)?.body === "edited", "replace edited");
+    assert(replaceComment(l1, mk(99)).length === 3, "replace unknown → no ghost");
+    const d = markCommentDeleted(l1, 2);
+    const t = d.find((c) => c.id === 2)!;
+    assert(t.deleted && t.body == null && t.authorDisplayName == null && !t.canEdit && !t.canDelete, "tombstone hides body/author/actions");
+    assert(liveCommentCount(d) === 2, "count excludes deleted");
+    assert(l0.length === 2, "pure (input not mutated)");
+    assert(
+      commentMutationErrorMessage("edit", { network: true }).includes("네트워크"),
+      "network error message"
+    );
+    assert(commentMutationErrorMessage("delete", { message: "forbidden msg" }) === "forbidden msg", "server message shown");
+    assert(commentMutationErrorMessage("create", {}) === "댓글 등록 실패", "fallback message");
+    const g = createMutationGate();
+    const tok = g.start();
+    assert(g.isCurrent(tok), "gate current");
+    g.invalidate(); // date switch
+    assert(!g.isCurrent(tok), "date switch invalidates in-flight mutation");
+    const tok2 = g.start();
+    assert(g.isCurrent(tok2) && !g.isCurrent(tok), "new mutation current, old stale");
+
+    const ui = read("src/app/board/BoardComments.tsx");
+    assert(!ui.includes("alert("), "no alert() (inline errors)");
+    const fetchCalls = (ui.match(/fetch\(/g) || []).length;
+    const viaRun = (ui.match(/\(\) =>\s*fetch\(`\/api\/board\/\$\{encodeURIComponent\(forDate\)\}/g) || []).length;
+    assert(viaRun === 3, "create/edit/delete fetch all go through runMutation");
+    assert(fetchCalls === viaRun + 2, "other fetches = initial load + refresh only");
+    assert(/try \{\s*res = await request\(\);\s*\} catch/.test(ui), "network failure caught (busy reset)");
+    assert(/gateRef\.current\.invalidate\(\);\s*setBusy\(false\);\s*setBody\(""\);\s*setEditingId\(null\);\s*setEditBody\(""\);\s*setError\(null\);/.test(ui), "date switch resets busy/draft/edit/error");
+    assert(/if \(!stillHere\(\)\) return;/.test(ui), "stale mutation result discarded");
+    assert(/void refreshNow\(forDate\)/.test(ui), "server re-sync after success");
+  }
 
   section("source safety");
   {
@@ -745,6 +802,12 @@ async function main() {
       const seen = listed.comments.find((c: { id: number }) => c.id === mineId);
       assert(seen?.body === "수정 후" && seen?.edited === true, "list reflects edit");
       assert(seen?.canEdit === false, "other viewer canEdit false");
+      // PATCH 응답(클라이언트가 반영하는 값) == 서버 목록 값
+      assert(
+        JSON.stringify({ ...okBody.comment, canEdit: undefined, canDelete: undefined }) ===
+          JSON.stringify({ ...seen, canEdit: undefined, canDelete: undefined }),
+        "PATCH response matches server list (UI/server consistent)"
+      );
 
       const del = await DELETE_COMMENT(
         req(`http://local/api/board/${pubDate}/comments/${mineId}`, {

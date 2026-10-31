@@ -14,6 +14,14 @@ import {
   writeClientResource,
 } from "@/lib/clientResourceCache";
 import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
+import {
+  appendCommentUnique,
+  commentMutationErrorMessage,
+  createMutationGate,
+  liveCommentCount,
+  markCommentDeleted,
+  replaceComment,
+} from "@/lib/boardCommentsState";
 
 type CommentsCache = {
   comments: CommentPublic[];
@@ -75,10 +83,9 @@ export default function BoardComments({ date }: { date: string }) {
   const dateRef = useRef(date);
   dateRef.current = date;
   const refreshAbortRef = useRef<AbortController | null>(null);
-  const liveCount = useMemo(
-    () => comments.filter((c) => !c.deleted).length,
-    [comments]
-  );
+  const liveCount = useMemo(() => liveCommentCount(comments), [comments]);
+  /** 진행 중 작성/수정/삭제 토큰. 날짜 전환 시 무효화 → 이전 날짜 작업 결과는 적용되지 않음. */
+  const gateRef = useRef(createMutationGate());
 
   const applyList = useCallback((forDate: string, next: CommentsCache) => {
     if (forDate !== dateRef.current) return;
@@ -131,6 +138,9 @@ export default function BoardComments({ date }: { date: string }) {
       setComments([]);
       setCanCompose(false);
     }
+    // 날짜 전환: 초안·수정 상태·오류·busy 초기화, 이전 날짜 작업 무효화
+    gateRef.current.invalidate();
+    setBusy(false);
     setBody("");
     setEditingId(null);
     setEditBody("");
@@ -172,6 +182,45 @@ export default function BoardComments({ date }: { date: string }) {
     };
   }, [date]);
 
+  /**
+   * 공통 mutation 실행: 네트워크 오류·HTTP 오류 모두 busy 해제 + 오류 표시.
+   * 날짜가 바뀌었거나(forDate) 토큰이 무효화되면 결과를 버린다.
+   */
+  async function runMutation(
+    action: "create" | "edit" | "delete",
+    forDate: string,
+    request: () => Promise<Response>,
+    onSuccess: (data: Record<string, unknown>) => void
+  ) {
+    const token = gateRef.current.start();
+    setBusy(true);
+    setError(null);
+    const stillHere = () => gateRef.current.isCurrent(token) && forDate === dateRef.current;
+    let res: Response;
+    try {
+      res = await request();
+    } catch {
+      if (stillHere()) {
+        setBusy(false);
+        setError(commentMutationErrorMessage(action, { network: true }));
+      }
+      return;
+    }
+    if (consumeUnauthorizedMemberResponse(res)) {
+      if (stillHere()) setBusy(false);
+      return;
+    }
+    const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!stillHere()) return;
+    setBusy(false);
+    if (!res.ok) {
+      setError(commentMutationErrorMessage(action, { message: data.message }));
+      return;
+    }
+    onSuccess(data);
+    void refreshNow(forDate);
+  }
+
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (busy || !canCompose) return;
@@ -180,34 +229,27 @@ export default function BoardComments({ date }: { date: string }) {
       return;
     }
     const forDate = date;
-    setBusy(true);
-    setError(null);
-    const res = await fetch(`/api/board/${encodeURIComponent(forDate)}/comments`, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ body }),
-    });
-    if (consumeUnauthorizedMemberResponse(res)) {
-      setBusy(false);
-      return;
-    }
-    const data = await res.json().catch(() => ({}));
-    setBusy(false);
-    if (forDate !== dateRef.current) return;
-    if (!res.ok) {
-      setError(typeof data.message === "string" ? data.message : "댓글 등록 실패");
-      return;
-    }
-    if (data.comment) {
-      setComments((cur) => {
-        const next = [...cur, data.comment as CommentPublic];
-        rememberComments(forDate, { comments: next, canCompose });
-        return next;
-      });
-      setBody("");
-    }
-    void refreshNow(forDate);
+    await runMutation(
+      "create",
+      forDate,
+      () =>
+        fetch(`/api/board/${encodeURIComponent(forDate)}/comments`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ body }),
+        }),
+      (data) => {
+        if (data.comment) {
+          setComments((cur) => {
+            const next = appendCommentUnique(cur, data.comment as CommentPublic);
+            rememberComments(forDate, { comments: next, canCompose });
+            return next;
+          });
+        }
+        setBody("");
+      }
+    );
   }
 
   function startEdit(item: CommentPublic) {
@@ -228,79 +270,49 @@ export default function BoardComments({ date }: { date: string }) {
       return;
     }
     const forDate = date;
-    setBusy(true);
-    setError(null);
-    const res = await fetch(
-      `/api/board/${encodeURIComponent(forDate)}/comments/${commentId}`,
-      {
-        method: "PATCH",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body: editBody }),
+    await runMutation(
+      "edit",
+      forDate,
+      () =>
+        fetch(`/api/board/${encodeURIComponent(forDate)}/comments/${commentId}`, {
+          method: "PATCH",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ body: editBody }),
+        }),
+      (data) => {
+        if (data.comment) {
+          setComments((cur) => {
+            const next = replaceComment(cur, data.comment as CommentPublic);
+            rememberComments(forDate, { comments: next, canCompose });
+            return next;
+          });
+        }
+        cancelEdit();
       }
     );
-    if (consumeUnauthorizedMemberResponse(res)) {
-      setBusy(false);
-      return;
-    }
-    const data = await res.json().catch(() => ({}));
-    setBusy(false);
-    if (forDate !== dateRef.current) return;
-    if (!res.ok) {
-      setError(typeof data.message === "string" ? data.message : "댓글 수정 실패");
-      return;
-    }
-    if (data.comment) {
-      setComments((cur) => {
-        const next = cur.map((c) =>
-          c.id === commentId ? (data.comment as CommentPublic) : c
-        );
-        rememberComments(forDate, { comments: next, canCompose });
-        return next;
-      });
-    }
-    cancelEdit();
-    void refreshNow(forDate);
   }
 
   async function onDelete(commentId: number) {
     if (!confirm("이 댓글을 삭제할까요?")) return;
     const forDate = date;
-    setBusy(true);
-    setError(null);
-    const res = await fetch(
-      `/api/board/${encodeURIComponent(forDate)}/comments/${commentId}`,
-      { method: "DELETE", credentials: "include" }
+    await runMutation(
+      "delete",
+      forDate,
+      () =>
+        fetch(`/api/board/${encodeURIComponent(forDate)}/comments/${commentId}`, {
+          method: "DELETE",
+          credentials: "include",
+        }),
+      () => {
+        setComments((cur) => {
+          const next = markCommentDeleted(cur, commentId);
+          rememberComments(forDate, { comments: next, canCompose });
+          return next;
+        });
+        setEditingId((cur) => (cur === commentId ? null : cur));
+      }
     );
-    if (consumeUnauthorizedMemberResponse(res)) {
-      setBusy(false);
-      return;
-    }
-    setBusy(false);
-    if (forDate !== dateRef.current) return;
-    if (!res.ok) {
-      setError("댓글 삭제 실패");
-      return;
-    }
-    setComments((cur) => {
-      const next = cur.map((c) =>
-        c.id === commentId
-          ? {
-              ...c,
-              deleted: true,
-              authorUserId: null,
-              authorDisplayName: null,
-              body: null,
-              canDelete: false,
-              canEdit: false,
-            }
-          : c
-      );
-      rememberComments(forDate, { comments: next, canCompose });
-      return next;
-    });
-    if (editingId === commentId) cancelEdit();
-    void refreshNow(forDate);
   }
 
   if (!visible) return null;
