@@ -70,6 +70,7 @@ export async function middleware(req: NextRequest) {
     pathname.startsWith("/board") ||
     pathname.startsWith("/notice") ||
     pathname.startsWith("/course-reports") ||
+    pathname.startsWith("/community") ||
     pathname.startsWith("/off-requests") ||
     pathname.startsWith("/chat")
   ) {
@@ -102,6 +103,8 @@ export const config = {
     "/notice/:path*",
     "/course-reports",
     "/course-reports/:path*",
+    "/community",
+    "/community/:path*",
     "/off-requests",
     "/off-requests/:path*",
     "/chat",

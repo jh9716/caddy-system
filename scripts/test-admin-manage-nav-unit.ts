@@ -38,9 +38,13 @@ function read(rel: string) {
 }
 
 console.log("== main menu order ==");
+// 자유게시판 V1: NEXT_PUBLIC_FREE_BOARD_ENABLED=1 일 때만 "코스 제보" 뒤에 추가. OFF 면 기존과 완전히 동일.
+const FB_ON = process.env.NEXT_PUBLIC_FREE_BOARD_ENABLED === "1";
+const withFb = (list: string[], after: string, item: string) =>
+  FB_ON ? list.flatMap((x) => (x === after ? [x, item] : [x])) : list;
 assert(
   ADMIN_MAIN_NAV_HREFS.join(",") ===
-    [
+    withFb([
       "/manage",
       "/manage/caddies",
       "/manage/marshals",
@@ -53,12 +57,16 @@ assert(
       "/course-reports",
       "/schedule",
       "/manage/tools",
-    ].join(","),
+    ], "/course-reports", "/community").join(","),
   "main href order"
 );
 assert(
   ADMIN_MAIN_NAV.map((i) => i.label).join(",") ===
-    "대시보드,캐디 관리,마샬 관리,카트 관리,휴무 신청,자동배치,배치표,공지,채팅,코스 제보,스케줄,관리도구",
+    withFb(
+      "대시보드,캐디 관리,마샬 관리,카트 관리,휴무 신청,자동배치,배치표,공지,채팅,코스 제보,스케줄,관리도구".split(","),
+      "코스 제보",
+      "자유게시판"
+    ).join(","),
   "main labels"
 );
 

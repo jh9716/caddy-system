@@ -7061,3 +7061,27 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
   .vh-fc-compose { display: flex; gap: 8px; align-items: flex-end; padding: 10px; border-top: 1px solid var(--vh-border); background: var(--vh-paper); }
   .vh-fc-compose textarea { flex: 1; resize: none; min-height: 44px; max-height: 120px; padding: 8px 10px; border: 1px solid var(--vh-border-strong); border-radius: 10px; font: inherit; font-size: 14px; }
 }
+
+/* 자유게시판 V1 (/community). 기존 course-report 스타일 재사용 + 최소 보강 */
+.free-board-comment-count {
+  margin-left: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--vh-accent, var(--vh-ink-soft));
+}
+.free-board-error {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--vh-danger, #c0392b);
+}
+.free-board-touch {
+  min-height: 44px;
+  min-width: 44px;
+}
+.free-board-photo-composer {
+  flex-wrap: wrap;
+}
+.free-board-photo-marked img {
+  opacity: 0.35;
+  filter: grayscale(1);
+}

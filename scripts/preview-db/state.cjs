@@ -6,7 +6,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { validatePreviewDbUrl } = require("./validate-url.cjs");
 
-const EXPECTED_MIGRATIONS = 60;
+const { listRepoMigrations, classifyMigrationState } = require("./migration-state.cjs");
 const mode = process.argv[2];
 const localHarness = process.argv.includes("--local-harness");
 if (localHarness && process.env.GITHUB_ACTIONS === "true") die("--local-harness not allowed in Actions");
@@ -51,12 +51,13 @@ const tables = Number(base.public_tables);
 const hasPm = base.has_prisma_migrations === "true";
 const report = { ...base };
 
-const repoMigrations = fs
-  .readdirSync(path.join(__dirname, "..", "..", "prisma", "migrations"), { withFileTypes: true })
-  .filter((d) => d.isDirectory())
-  .map((d) => d.name)
-  .sort();
-if (repoMigrations.length !== EXPECTED_MIGRATIONS) die(`repo has ${repoMigrations.length} migrations, expected ${EXPECTED_MIGRATIONS}`);
+let repoMigrations;
+try {
+  // 기대 migration = 체크아웃된 ref 의 prisma/migrations (하드코딩 없음)
+  repoMigrations = listRepoMigrations(path.join(__dirname, "..", "..", "prisma", "migrations"));
+} catch (e) {
+  die(`repo migrations invalid (${e.message})`);
+}
 report.repo_migrations = String(repoMigrations.length);
 
 let applied = [];
@@ -71,14 +72,18 @@ ROLLBACK;`);
   report.applied_migrations = String(applied.length);
   report.failed_migrations = String(failed);
 }
-const unknownApplied = applied.filter((m) => !repoMigrations.includes(m));
-
-let state;
-if (tables === 0 && Number(base.public_other_objects) === 0) state = "EMPTY";
-else if (!hasPm) state = "UNEXPECTED_NON_PRISMA";
-else if (failed > 0 || unknownApplied.length > 0) state = "UNEXPECTED_PRISMA_STATE";
-else if (applied.length === EXPECTED_MIGRATIONS) state = "MIGRATED";
-else state = "PARTIALLY_MIGRATED";
+const cls = classifyMigrationState({
+  tables,
+  otherObjects: Number(base.public_other_objects),
+  hasPm,
+  applied,
+  failed,
+  repo: repoMigrations,
+});
+const state = cls.state;
+report.expected_migrations = String(cls.expected);
+report.missing_migrations = String(cls.missing.length);
+report.unknown_migrations = String(cls.unknown.length);
 report.state = state;
 
 if (mode === "seed-gate" && state === "MIGRATED") {
@@ -108,7 +113,7 @@ if (mode === "migrate-gate") {
   die(`refusing to migrate in state ${state}`);
 }
 if (mode === "seed-gate") {
-  if (state !== "MIGRATED") die(`seed requires all ${EXPECTED_MIGRATIONS} migrations applied (state ${state})`);
+  if (state !== "MIGRATED") die(`seed requires all ${repoMigrations.length} repo migrations applied (state ${state})`);
   if (Number(report.users) || Number(report.caddies) || Number(report.plans)) die("seed data already present; refusing (refuse-by-default)");
   process.exit(0);
 }
