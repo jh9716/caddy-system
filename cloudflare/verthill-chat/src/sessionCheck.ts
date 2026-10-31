@@ -2,7 +2,7 @@ import {
   chatInternalSecret,
   internalAuthHeaders,
 } from "./internalAuth";
-import { nextAppExtraHeaders, nextAppUrl, type NextAppEnv } from "./nextApp";
+import { isPreviewWorker, isRedirectResponse, nextAppExtraHeaders, nextAppFetchInit, nextAppUrl, type NextAppEnv } from "./nextApp";
 import {
   chatTokenSessionVersion,
   isSessionBoundChatToken,
@@ -78,7 +78,12 @@ export async function assertChatSessionCurrent(
       headers,
       body: JSON.stringify({ userId: claims.userId, sv }),
       signal: AbortSignal.timeout(SESSION_CHECK_TIMEOUT_MS),
+      ...nextAppFetchInit(env),
     });
+    // Preview: 리다이렉트는 따라가지 않고 실패(503) — 비밀 헤더가 다른 호스트로 가지 않게.
+    if (isPreviewWorker(env) && isRedirectResponse(res)) {
+      return { ok: false, status: 503, error: "session_check_unavailable" };
+    }
     if (res.status === 503) {
       return { ok: false, status: 503, error: "session_check_unavailable" };
     }

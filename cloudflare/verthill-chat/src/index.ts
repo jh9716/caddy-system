@@ -71,7 +71,7 @@ import {
   parseEvictMembersBody,
   parseSessionRevokeBody,
 } from "./sessionCheck";
-import { nextAppExtraHeaders, nextAppUrl, nextPushDispatchUrl } from "./nextApp";
+import { nextAppExtraHeaders, nextAppFetchInit, nextAppUrl, nextPushDispatchUrl } from "./nextApp";
 
 export { validateIncomingMessage, isValidRoomName } from "./protocol";
 export { verifyChatToken } from "./token";
@@ -93,8 +93,6 @@ export interface Env {
   CHAT_PUSH_DISPATCH_URL?: string;
   /** "preview" = Preview 전용 Worker. 미설정/"production" = 운영. 그 외 값은 503(fail-closed). */
   CHAT_TOKEN_AUDIENCE?: string;
-  /** Preview 전용: 추가로 허용할 Next 앱 호스트(정확 일치, 쉼표 구분). 운영에서는 무시. */
-  CHAT_PREVIEW_APP_ALLOWED_HOSTS?: string;
   /** Preview 전용 secret: 배포 보호 자동화 우회 값. 운영에서는 절대 사용 안 함. */
   PREVIEW_APP_BYPASS_SECRET?: string;
 }
@@ -1561,6 +1559,7 @@ export class ChatRoom extends DurableObject<Env> {
         method: "POST",
         headers,
         body: JSON.stringify({ roomId, attachmentIds }),
+        ...nextAppFetchInit(this.env),
       });
       if (!res.ok) {
         console.error("[chat-photo] attachment cleanup request failed", {
@@ -1586,6 +1585,7 @@ export class ChatRoom extends DurableObject<Env> {
         method: "POST",
         headers,
         body: JSON.stringify({ attachmentIds }),
+        ...nextAppFetchInit(this.env),
       });
     } catch {
       // persist already succeeded
@@ -1640,6 +1640,7 @@ export class ChatRoom extends DurableObject<Env> {
           memberUserIds,
           roomName: isAllRoomId(roomId) ? "전체 채팅방" : null,
         }),
+        ...nextAppFetchInit(this.env),
       });
     } catch {
       // chat persist already succeeded

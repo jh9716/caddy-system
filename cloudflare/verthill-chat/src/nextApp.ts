@@ -9,18 +9,21 @@ import { parseChatTokenAudience } from "./token";
 export const VERCEL_BYPASS_HEADER = "x-vercel-protection-bypass";
 export const PUSH_DISPATCH_PATH = "/api/chat/push-dispatch";
 
-/** Vercel Preview 배포/브랜치 별칭: caddy-system-gt8t-<...>-jh9716s-projects.vercel.app */
-const PREVIEW_VERCEL_HOST = /^caddy-system-gt8t-[a-z0-9](?:[a-z0-9-]{0,80}[a-z0-9])?-jh9716s-projects\.vercel\.app$/;
-const HOST_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
-/** Preview Worker 가 절대 호출하면 안 되는 운영 호스트 */
-const PRODUCTION_APP_HOSTS = new Set(["www.verthill.kr", "verthill.kr"]);
+/** 허용되는 유일한 Preview Next 호스트 (Vercel 브랜치 별칭). 설정으로 넓힐 수 없다. */
+export const PREVIEW_APP_HOST = "caddy-system-gt8t-git-preview-db-workflow-jh9716s-projects.vercel.app";
+/** bypass 헤더를 붙여도 되는 Next 내부 호출 경로 (정확 일치). */
+const NEXT_CALL_PATHS = new Set([
+  "/api/chat/session-check",
+  "/api/chat/attachments/cleanup",
+  "/api/chat/attachments/consume",
+  PUSH_DISPATCH_PATH,
+]);
+const ALLOWED_PATHS = new Set(["/", PUSH_DISPATCH_PATH]);
 
 export type NextAppEnv = {
   CHAT_PUSH_DISPATCH_URL?: string;
   CHAT_TOKEN_AUDIENCE?: string;
-  /** Preview 전용. 쉼표 구분 정확 일치 호스트 (예: 커스텀 Preview 도메인). */
-  CHAT_PREVIEW_APP_ALLOWED_HOSTS?: string;
-  /** Preview 전용 Worker secret. Vercel "Protection Bypass for Automation" 값. */
+  /** Preview 전용 Worker secret. 배포 보호 자동화 우회 값. */
   PREVIEW_APP_BYPASS_SECRET?: string;
   /** 로컬 테스트 하네스 전용("1"). 배포 설정·워크플로에는 절대 넣지 않는다 (assert-preview-config 가 검사). */
   CHAT_PREVIEW_LOCAL_HARNESS?: string;
@@ -30,34 +33,20 @@ export function isPreviewWorker(env: NextAppEnv): boolean {
   return parseChatTokenAudience(env.CHAT_TOKEN_AUDIENCE) === "preview";
 }
 
-function allowedExtraHosts(env: NextAppEnv): string[] {
-  return String(env.CHAT_PREVIEW_APP_ALLOWED_HOSTS || "")
-    .split(",")
-    .map((h) => h.trim())
-    .filter((h) => h && h === h.toLowerCase() && !h.endsWith(".") && !h.includes("xn--") &&
-      h.split(".").length >= 2 && h.split(".").every((l) => HOST_LABEL.test(l)) && !/^[0-9.]+$/.test(h));
-}
-
-/** Preview Worker 가 호출해도 되는 Next 앱 URL 인지 (원문 기준 엄격 검사). */
-export function isAllowedPreviewAppUrl(raw: string, env: NextAppEnv): boolean {
-  const s = String(raw || "");
-  if (!s || s !== s.trim() || s.length > 2048) return false;
-  if (/[\s\\%\u0000-\u001f\u007f-\uffff]/.test(s)) return false;
-  let u: URL;
+/** Preview Worker 가 호출해도 되는 Next 앱 URL 인지: 원문이 정확히 https://<PREVIEW_APP_HOST>[/|/api/chat/push-dispatch]. */
+export function isAllowedPreviewAppUrl(raw: string, _env?: NextAppEnv): boolean {
+  const s = String(raw ?? "");
+  const prefix = `https://${PREVIEW_APP_HOST}`;
+  if (s !== prefix && !s.startsWith(prefix + "/")) return false; // 원문 정확 비교: 대문자·userinfo·포트·끝점·유사 호스트 차단
+  const rest = s.slice(prefix.length) || "/";
+  if (!ALLOWED_PATHS.has(rest)) return false; // 쿼리·fragment·인코딩·기타 경로 차단
   try {
-    u = new URL(s);
+    const u = new URL(s);
+    return u.protocol === "https:" && u.hostname === PREVIEW_APP_HOST && u.port === "" &&
+      !u.username && !u.password && ALLOWED_PATHS.has(u.pathname) && !u.search && !u.hash;
   } catch {
     return false;
   }
-  if (u.protocol !== "https:") return false;
-  if (u.username || u.password || u.port !== "" || u.search || u.hash) return false;
-  const m = /^https:\/\/([^/?#]*)/.exec(s);
-  if (!m || m[1] !== u.hostname) return false; // 대문자·userinfo·포트 표기·정규화 우회 차단
-  if (u.pathname !== "/" && u.pathname !== PUSH_DISPATCH_PATH) return false;
-  const host = u.hostname;
-  if (PRODUCTION_APP_HOSTS.has(host) || host.endsWith(".verthill.kr")) return false;
-  if (PREVIEW_VERCEL_HOST.test(host)) return true;
-  return allowedExtraHosts(env).includes(host);
 }
 
 /** 로컬 하네스: http://127.0.0.1:<port> 만. bypass 헤더는 이 경로로 절대 보내지 않는다. */
@@ -81,7 +70,8 @@ function deriveFrom(raw: string, pathname: string): string {
 export function nextAppUrl(env: NextAppEnv, pathname: string): string {
   const raw = String(env.CHAT_PUSH_DISPATCH_URL || "").trim();
   if (!raw) return "";
-  if (isPreviewWorker(env) && !isAllowedPreviewAppUrl(raw, env) && !isLocalHarnessAppUrl(raw, env)) return "";
+  const exact = String(env.CHAT_PUSH_DISPATCH_URL || ""); // Preview 는 trim 전 원문으로 검증
+  if (isPreviewWorker(env) && !isAllowedPreviewAppUrl(exact) && !isLocalHarnessAppUrl(exact, env)) return "";
   return deriveFrom(raw, pathname);
 }
 
@@ -90,7 +80,8 @@ export function nextPushDispatchUrl(env: NextAppEnv): string {
   const raw = String(env.CHAT_PUSH_DISPATCH_URL || "").trim();
   if (!raw) return "";
   if (!isPreviewWorker(env)) return raw;
-  return isAllowedPreviewAppUrl(raw, env) || isLocalHarnessAppUrl(raw, env)
+  const exact = String(env.CHAT_PUSH_DISPATCH_URL || "");
+  return isAllowedPreviewAppUrl(exact) || isLocalHarnessAppUrl(exact, env)
     ? deriveFrom(raw, PUSH_DISPATCH_PATH)
     : "";
 }
@@ -106,6 +97,20 @@ export function nextAppExtraHeaders(env: NextAppEnv, url: string): Record<string
   } catch {
     return {};
   }
-  if (!isAllowedPreviewAppUrl(`https://${host}`, env)) return {};
+  if (host !== PREVIEW_APP_HOST || !isAllowedPreviewAppUrl(`https://${host}`)) return {};
+  if (!NEXT_CALL_PATHS.has(url.slice(`https://${PREVIEW_APP_HOST}`.length)) || !url.startsWith(`https://${PREVIEW_APP_HOST}/`)) return {};
   return { [VERCEL_BYPASS_HEADER]: secret };
+}
+
+/**
+ * Next 호출 fetch 추가 옵션. Preview: redirect 를 따라가지 않음(비밀 헤더 재전송 방지).
+ * 운영: {} — 기존 fetch 옵션 그대로(기존처럼 redirect 를 따라감).
+ */
+export function nextAppFetchInit(env: NextAppEnv): { redirect?: "manual" } {
+  return isPreviewWorker(env) ? { redirect: "manual" } : {};
+}
+
+/** 3xx / opaqueredirect / status 0 → 리다이렉트(실패로 처리). */
+export function isRedirectResponse(res: { status: number; type?: string }): boolean {
+  return res.type === "opaqueredirect" || res.status === 0 || (res.status >= 300 && res.status < 400);
 }

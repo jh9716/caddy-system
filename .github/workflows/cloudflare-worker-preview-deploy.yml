@@ -22,7 +22,7 @@ on:
         required: true
         type: string
       app_origin:
-        description: 'Preview Next origin for session-check (e.g. https://caddy-system-gt8t-git-<branch>-jh9716s-projects.vercel.app)'
+        description: 'Must be exactly https://caddy-system-gt8t-git-preview-db-workflow-jh9716s-projects.vercel.app'
         required: true
         type: string
 
