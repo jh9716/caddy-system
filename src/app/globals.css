@@ -7081,3 +7081,7 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
 .free-board-photo-composer {
   flex-wrap: wrap;
 }
+.free-board-photo-marked img {
+  opacity: 0.35;
+  filter: grayscale(1);
+}

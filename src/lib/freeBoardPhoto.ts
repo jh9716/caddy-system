@@ -4,7 +4,7 @@
  * 기존 notices/ · course-reports/ 객체는 읽거나 지우지 않는다.
  */
 import { randomUUID } from "node:crypto";
-import type { FreeBoardPhoto, PrismaClient } from "@prisma/client";
+import { Prisma, type FreeBoardPhoto, type FreeBoardPost, type PrismaClient } from "@prisma/client";
 import type { ResolvedAuthUser } from "@/lib/auth";
 import {
   COURSE_REPORT_PHOTO_EXT,
@@ -14,10 +14,8 @@ import {
   CourseReportPhotoValidationError,
   assertCourseReportPhotoBytes,
 } from "@/lib/courseReportPhotoMagic";
-import {
-  CourseReportPhotoStorageError,
-  getCourseReportPhotoStore,
-} from "@/lib/courseReportPhotoStorage";
+import { CourseReportPhotoStorageError } from "@/lib/courseReportPhotoStorage";
+import { getFreeBoardPhotoStore } from "@/lib/freeBoardPhotoStorage";
 import {
   FREE_BOARD_PHOTO_MAX,
   FREE_BOARD_PHOTO_MAX_BYTES,
@@ -65,17 +63,55 @@ export async function listFreeBoardPhotos(
   return rows.map(toFreeBoardPhotoPublic);
 }
 
-async function deleteObjectsBestEffort(keys: string[]): Promise<number> {
-  const store = getCourseReportPhotoStore();
-  if (!store.configured) return 0;
+function requireStore() {
+  const r = getFreeBoardPhotoStore();
+  if (!r.ok) throw new CourseReportPhotoStorageError(r.code, r.message, 503);
+  return r.store;
+}
+
+export type OrphanLogger = (info: { postId: number | null; photoId: number | null; reason: string }) => void;
+
+/** 정리 실패 객체는 orphan 으로 기록 (storage key/값은 로그에 남기지 않음 — postId/photoId 로 추적). */
+let orphanLogger: OrphanLogger = (info) => {
+  console.error("[free-board-orphan] blob cleanup failed", info);
+};
+export function setFreeBoardOrphanLoggerForTests(fn: OrphanLogger | null) {
+  orphanLogger =
+    fn ??
+    ((info) => {
+      console.error("[free-board-orphan] blob cleanup failed", info);
+    });
+}
+
+/**
+ * DB commit 이후에만 호출. 객체 삭제는 best-effort, 키마다 최대 attempts 회 재시도.
+ * 실패한 수를 반환하고 orphan 으로 기록한다 (DB 는 이미 일관된 상태).
+ */
+export async function deleteFreeBoardObjectsBestEffort(
+  items: { storageKey: string; postId?: number; photoId?: number }[],
+  attempts = 2
+): Promise<number> {
+  if (items.length === 0) return 0;
+  const r = getFreeBoardPhotoStore();
+  if (!r.ok) {
+    for (const it of items) orphanLogger({ postId: it.postId ?? null, photoId: it.photoId ?? null, reason: r.code });
+    return items.length;
+  }
   let failed = 0;
-  for (const key of keys) {
-    if (!isFreeBoardStorageKey(key)) continue;
-    try {
-      await store.delete(key);
-    } catch {
+  for (const it of items) {
+    if (!isFreeBoardStorageKey(it.storageKey)) continue;
+    let done = false;
+    for (let i = 0; i < attempts && !done; i++) {
+      try {
+        await r.store.delete(it.storageKey);
+        done = true;
+      } catch {
+        /* retry */
+      }
+    }
+    if (!done) {
       failed += 1;
-      console.error("[free-board-photo] object cleanup failed");
+      orphanLogger({ postId: it.postId ?? null, photoId: it.photoId ?? null, reason: "delete_failed" });
     }
   }
   return failed;
@@ -111,19 +147,14 @@ export async function uploadFreeBoardPhoto(
       413
     );
   }
-  const existing = await db.freeBoardPhoto.count({ where: { postId: input.postId } });
-  if (existing >= FREE_BOARD_PHOTO_MAX) {
+  // 저장소 격리 정책 먼저 (Preview 전용 저장소 없으면 503, 공용 fallback 없음)
+  const store = requireStore();
+  // 빠른 사전 거부 (최종 판정은 아래 트랜잭션의 행 잠금 안에서)
+  const pre = await db.freeBoardPhoto.count({ where: { postId: input.postId } });
+  if (pre >= FREE_BOARD_PHOTO_MAX) {
     throw new CourseReportPhotoValidationError("photo_limit", LIMIT_MESSAGE, 409);
   }
   const mime = assertCourseReportPhotoBytes(input.bytes);
-  const store = getCourseReportPhotoStore();
-  if (!store.configured) {
-    throw new CourseReportPhotoStorageError(
-      "storage_not_configured",
-      "사진 저장소가 설정되지 않았습니다.",
-      503
-    );
-  }
   const storageKey = buildFreeBoardPhotoStorageKey(input.postId, mime);
   try {
     await store.put(storageKey, input.bytes, mime);
@@ -133,25 +164,36 @@ export async function uploadFreeBoardPhoto(
   }
   let row: FreeBoardPhoto;
   try {
-    row = await db.freeBoardPhoto.create({
-      data: {
-        postId: input.postId,
-        storageKey,
-        mimeType: mime,
-        size: input.bytes.byteLength,
-        sortOrder: existing,
-      },
+    row = await db.$transaction(async (tx) => {
+      // 게시글 행 잠금 → 같은 게시글의 동시 업로드는 직렬화되어 9장 제한이 깨지지 않는다.
+      const locked = await tx.$queryRaw<{ id: number }[]>(
+        Prisma.sql`SELECT "id" FROM "FreeBoardPost" WHERE "id" = ${input.postId} AND "deletedAt" IS NULL FOR UPDATE`
+      );
+      if (locked.length === 0) {
+        throw new CourseReportPhotoValidationError("not_found", "게시글을 찾을 수 없습니다.", 404);
+      }
+      const count = await tx.freeBoardPhoto.count({ where: { postId: input.postId } });
+      if (count >= FREE_BOARD_PHOTO_MAX) {
+        throw new CourseReportPhotoValidationError("photo_limit", LIMIT_MESSAGE, 409);
+      }
+      const last = await tx.freeBoardPhoto.aggregate({
+        where: { postId: input.postId },
+        _max: { sortOrder: true },
+      });
+      return tx.freeBoardPhoto.create({
+        data: {
+          postId: input.postId,
+          storageKey,
+          mimeType: mime,
+          size: input.bytes.byteLength,
+          sortOrder: (last._max.sortOrder ?? -1) + 1,
+        },
+      });
     });
   } catch (e) {
-    await deleteObjectsBestEffort([storageKey]);
+    // DB 반영 실패/한도 초과 → 방금 올린 객체 정리 (orphan 방지)
+    await deleteFreeBoardObjectsBestEffort([{ storageKey, postId: input.postId }]);
     throw e;
-  }
-  // 동시 업로드 경합 보정: 9장 초과 시 방금 올린 사진 롤백.
-  const after = await db.freeBoardPhoto.count({ where: { postId: input.postId } });
-  if (after > FREE_BOARD_PHOTO_MAX) {
-    await db.freeBoardPhoto.delete({ where: { id: row.id } }).catch(() => undefined);
-    await deleteObjectsBestEffort([storageKey]);
-    throw new CourseReportPhotoValidationError("photo_limit", LIMIT_MESSAGE, 409);
   }
   return toFreeBoardPhotoPublic(row);
 }
@@ -182,7 +224,9 @@ export async function deleteFreeBoardPhoto(
     throw new CourseReportPhotoValidationError("not_found", "사진을 찾을 수 없습니다.", 404);
   }
   await db.freeBoardPhoto.delete({ where: { id: photo.id } });
-  const failed = await deleteObjectsBestEffort([photo.storageKey]);
+  const failed = await deleteFreeBoardObjectsBestEffort([
+    { storageKey: photo.storageKey, postId: input.postId, photoId: photo.id },
+  ]);
   return { blobCleanupFailed: failed > 0 };
 }
 
@@ -197,7 +241,9 @@ export async function cleanupFreeBoardPostPhotos(
   });
   if (rows.length === 0) return;
   await db.freeBoardPhoto.deleteMany({ where: { postId } });
-  await deleteObjectsBestEffort(rows.map((r) => r.storageKey));
+  await deleteFreeBoardObjectsBestEffort(
+    rows.map((r) => ({ storageKey: r.storageKey, postId, photoId: r.id }))
+  );
 }
 
 export async function loadFreeBoardPhotoMeta(
@@ -222,18 +268,63 @@ export async function openFreeBoardPhotoBody(storageKey: string, abortSignal?: A
   if (!isFreeBoardStorageKey(storageKey)) {
     throw new CourseReportPhotoValidationError("not_found", "사진을 찾을 수 없습니다.", 404);
   }
-  const store = getCourseReportPhotoStore();
-  if (!store.configured) {
-    throw new CourseReportPhotoStorageError(
-      "storage_not_configured",
-      "사진 저장소가 설정되지 않았습니다.",
-      503
-    );
-  }
+  const store = requireStore();
   const opts = abortSignal ? { abortSignal } : undefined;
   const body = store.open ? await store.open(storageKey, opts) : await store.get(storageKey, opts);
   if (!body) {
     throw new CourseReportPhotoValidationError("not_found", "사진을 찾을 수 없습니다.", 404);
   }
   return body;
+}
+
+/** removedPhotoIds 파싱: 정수 배열, 중복 제거, 최대 9개. */
+export function parseRemovedPhotoIds(input: unknown): number[] {
+  if (input == null) return [];
+  if (!Array.isArray(input)) {
+    throw new CourseReportPhotoValidationError("invalid_removed_photos", "삭제할 사진 목록이 올바르지 않습니다.", 400);
+  }
+  const ids = Array.from(new Set(input.map((v) => Number(v))));
+  if (ids.length > FREE_BOARD_PHOTO_MAX || ids.some((n) => !Number.isInteger(n) || n <= 0)) {
+    throw new CourseReportPhotoValidationError("invalid_removed_photos", "삭제할 사진 목록이 올바르지 않습니다.", 400);
+  }
+  return ids;
+}
+
+/**
+ * 글 수정 최종 저장: 본문 수정 + 사진 삭제를 하나의 DB 트랜잭션으로 반영.
+ * - removedPhotoIds 중 하나라도 이 게시글 소속이 아니면 전체 거부 (404), 아무것도 바뀌지 않음.
+ * - DB 실패 → 롤백, 객체 삭제 안 함.
+ * - DB 성공 후 객체 삭제는 best-effort(재시도), 실패분은 orphan 기록. 사용자 응답은 성공.
+ */
+export async function saveFreeBoardPostEdit(
+  db: PrismaClient,
+  input: { postId: number; title: string; body: string; removedPhotoIds: number[] }
+): Promise<{ post: FreeBoardPost; removed: number; blobCleanupFailed: number }> {
+  const { post, removed } = await db.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<{ id: number }[]>(
+      Prisma.sql`SELECT "id" FROM "FreeBoardPost" WHERE "id" = ${input.postId} AND "deletedAt" IS NULL FOR UPDATE`
+    );
+    if (locked.length === 0) {
+      throw new CourseReportPhotoValidationError("not_found", "게시글을 찾을 수 없습니다.", 404);
+    }
+    let removed: FreeBoardPhoto[] = [];
+    if (input.removedPhotoIds.length) {
+      removed = await tx.freeBoardPhoto.findMany({
+        where: { id: { in: input.removedPhotoIds }, postId: input.postId },
+      });
+      if (removed.length !== input.removedPhotoIds.length) {
+        throw new CourseReportPhotoValidationError("photo_not_found", "사진을 찾을 수 없습니다.", 404);
+      }
+      await tx.freeBoardPhoto.deleteMany({ where: { id: { in: removed.map((r) => r.id) } } });
+    }
+    const post = await tx.freeBoardPost.update({
+      where: { id: input.postId },
+      data: { title: input.title, body: input.body },
+    });
+    return { post, removed };
+  });
+  const blobCleanupFailed = await deleteFreeBoardObjectsBestEffort(
+    removed.map((r) => ({ storageKey: r.storageKey, postId: input.postId, photoId: r.id }))
+  );
+  return { post, removed: removed.length, blobCleanupFailed };
 }

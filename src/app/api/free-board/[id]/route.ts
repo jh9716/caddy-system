@@ -11,7 +11,13 @@ import {
   requireFreeBoardReader,
   toFreeBoardPostPublic,
 } from "@/lib/freeBoard";
-import { cleanupFreeBoardPostPhotos, listFreeBoardPhotos } from "@/lib/freeBoardPhoto";
+import {
+  FreeBoardPhotoValidationError,
+  cleanupFreeBoardPostPhotos,
+  listFreeBoardPhotos,
+  parseRemovedPhotoIds,
+  saveFreeBoardPostEdit,
+} from "@/lib/freeBoardPhoto";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -61,13 +67,26 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   const payload = await req.json().catch(() => ({}));
   try {
     const parsed = parseFreeBoardPostBody(payload);
-    const updated = await prisma.freeBoardPost.update({
-      where: { id: post.id },
-      data: parsed,
+    const removedPhotoIds = parseRemovedPhotoIds(
+      payload && typeof payload === "object"
+        ? (payload as { removedPhotoIds?: unknown }).removedPhotoIds
+        : undefined
+    );
+    // 본문 + 사진 삭제를 한 트랜잭션으로. 객체 삭제는 commit 후 best-effort.
+    const saved = await saveFreeBoardPostEdit(prisma, {
+      postId: post.id,
+      title: parsed.title,
+      body: parsed.body,
+      removedPhotoIds,
     });
-    return NextResponse.json({ ok: true, post: toFreeBoardPostPublic(updated, auth) });
+    return NextResponse.json({
+      ok: true,
+      post: toFreeBoardPostPublic(saved.post, auth),
+      removedPhotos: saved.removed,
+      ...(saved.blobCleanupFailed ? { blobCleanupFailed: saved.blobCleanupFailed } : {}),
+    });
   } catch (e) {
-    if (e instanceof FreeBoardValidationError) {
+    if (e instanceof FreeBoardValidationError || e instanceof FreeBoardPhotoValidationError) {
       return NextResponse.json({ error: e.code, message: e.message }, { status: e.status });
     }
     throw e;

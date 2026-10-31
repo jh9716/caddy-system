@@ -54,8 +54,20 @@ section("member menus");
   const items = memberNavItems();
   const labels = items.map((i) => i.label);
   const hrefs = items.map((i) => i.href);
-  assert(labels.join(",") === "홈,공지,제보,배치표,휴무 신청,채팅,내 대시보드", "member menu labels");
-  assert(hrefs.join(",") === "/,/notice,/course-reports,/board,/off-requests,/chat,/caddy", "member hrefs");
+  // 자유게시판 V1: flag ON 일 때만 "제보" 뒤에 추가. OFF 면 기존과 동일.
+  const fbOn = process.env.NEXT_PUBLIC_FREE_BOARD_ENABLED === "1";
+  assert(
+    labels.join(",") ===
+      (fbOn ? "홈,공지,제보,자유게시판,배치표,휴무 신청,채팅,내 대시보드" : "홈,공지,제보,배치표,휴무 신청,채팅,내 대시보드"),
+    "member menu labels"
+  );
+  assert(
+    hrefs.join(",") ===
+      (fbOn
+        ? "/,/notice,/course-reports,/community,/board,/off-requests,/chat,/caddy"
+        : "/,/notice,/course-reports,/board,/off-requests,/chat,/caddy"),
+    "member hrefs"
+  );
   assert(memberNavExposesAdminMenu() === false, "member nav admin menu 0");
   assert(!hrefs.some((h) => h.startsWith("/manage")), "member href no /manage");
   for (const banned of ["캐디 관리", "자동배치", "직원 계정", "계정 연결", "관리자"]) {

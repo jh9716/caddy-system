@@ -30,7 +30,8 @@ export default function FreeBoardComments({
   const base = `/api/free-board/${postId}/comments`;
 
   async function reload() {
-    const res = await fetch(base, { credentials: "include", cache: "no-store" });
+    const res = await fetch(base, { credentials: "include", cache: "no-store" }).catch(() => null);
+    if (!res) return;
     if (consumeUnauthorizedMemberResponse(res) || !res.ok) return;
     const data = await res.json().catch(() => ({}));
     if (Array.isArray(data.comments)) setComments(data.comments as CommentPublic[]);
@@ -41,12 +42,19 @@ export default function FreeBoardComments({
     if (busy || !body.trim()) return;
     setBusy(true);
     setError(null);
-    const res = await fetch(base, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ body }),
-    });
+    let res: Response;
+    try {
+      res = await fetch(base, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ body }),
+      });
+    } catch {
+      setBusy(false);
+      setError("네트워크 오류로 등록하지 못했습니다.");
+      return;
+    }
     if (consumeUnauthorizedMemberResponse(res)) {
       setBusy(false);
       return;
@@ -66,7 +74,14 @@ export default function FreeBoardComments({
     if (!confirm("이 댓글을 삭제할까요?")) return;
     setBusy(true);
     setError(null);
-    const res = await fetch(`${base}/${id}`, { method: "DELETE", credentials: "include" });
+    let res: Response;
+    try {
+      res = await fetch(`${base}/${id}`, { method: "DELETE", credentials: "include" });
+    } catch {
+      setBusy(false);
+      setError("네트워크 오류로 삭제하지 못했습니다.");
+      return;
+    }
     if (consumeUnauthorizedMemberResponse(res)) {
       setBusy(false);
       return;

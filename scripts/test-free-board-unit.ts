@@ -11,8 +11,12 @@ import { SESSION_COOKIE_NAME, buildSessionClaims, signSessionClaims } from "../s
 import { assertLocalDatabaseUrl } from "./assertLocalDatabaseUrl";
 import {
   createMemoryCourseReportPhotoStore,
-  setCourseReportPhotoStoreForTests,
+  type CourseReportPhotoStore,
 } from "../src/lib/courseReportPhotoStorage";
+import {
+  resolveFreeBoardStorageDecision,
+  setFreeBoardStoreFactoryForTests,
+} from "../src/lib/freeBoardPhotoStorage";
 
 let passed = 0;
 let failed = 0;
@@ -53,6 +57,27 @@ async function main() {
   const { memberNavItems } = await import("../src/lib/boardNav");
   assert(isFreeBoardEnabled() === false, "flag default off");
   assert(!memberNavItems().some((i) => i.href === "/community"), "member nav hides /community when off");
+  const { ADMIN_MAIN_NAV } = await import("../src/lib/adminManageNav");
+  assert(!ADMIN_MAIN_NAV.some((i) => i.href === "/community"), "admin nav hides /community when off");
+  {
+    const layout = read("src/app/community/layout.tsx");
+    assert(/if \(!isFreeBoardEnabled\(\)\) notFound\(\)/.test(layout), "layout: flag OFF → notFound");
+    const access = read("src/lib/freeBoard.ts");
+    assert(/if \(!isFreeBoardEnabled\(\)\) return freeBoardDisabledResponse\(\)/.test(access), "API guard: flag OFF → 404 before auth");
+    for (const f of [
+      "src/app/api/free-board/route.ts",
+      "src/app/api/free-board/[id]/route.ts",
+      "src/app/api/free-board/[id]/photos/route.ts",
+      "src/app/api/free-board/[id]/photos/[photoId]/route.ts",
+      "src/app/api/free-board/[id]/comments/route.ts",
+      "src/app/api/free-board/[id]/comments/[commentId]/route.ts",
+    ]) {
+      const src = read(f);
+      const handlers = (src.match(/export async function (GET|POST|PATCH|DELETE)/g) || []).length;
+      const guards = (src.match(/requireFreeBoardReader\(req\)/g) || []).length;
+      assert(handlers > 0 && handlers === guards, `${f}: 모든 handler 가 flag/auth guard 사용`);
+    }
+  }
   const listMod = await import("../src/app/api/free-board/route");
   const off = await listMod.GET(req("http://local/api/free-board"));
   assert(off.status === 404, "API 404 when flag off");
@@ -96,8 +121,76 @@ async function main() {
   const caddyIds: number[] = [];
   const userIds: number[] = [];
   const postIds: number[] = [];
+  // 실제 Blob 호출 없음: 정책 판정은 실제 코드, store 만 메모리 mock.
   const mem = createMemoryCourseReportPhotoStore();
-  setCourseReportPhotoStoreForTests(mem);
+  const sharedMem = createMemoryCourseReportPhotoStore();
+  let sharedCalls = 0;
+  let deleteCalls = 0;
+  let failDeleteKeys = new Set<string>();
+  const dedicated: CourseReportPhotoStore = {
+    ...mem,
+    async delete(key) {
+      deleteCalls++;
+      if (failDeleteKeys.has(key)) throw new Error("mock delete failure");
+      return mem.delete(key);
+    },
+  };
+  const sharedSpy: CourseReportPhotoStore = {
+    ...sharedMem,
+    async put(...a) {
+      sharedCalls++;
+      return sharedMem.put(...a);
+    },
+    async delete(k) {
+      sharedCalls++;
+      return sharedMem.delete(k);
+    },
+  };
+  setFreeBoardStoreFactoryForTests({ dedicated: () => dedicated, shared: () => sharedSpy });
+  const prevEnv = {
+    VERCEL_ENV: process.env.VERCEL_ENV,
+    FREE_BOARD_STORAGE_ENV: process.env.FREE_BOARD_STORAGE_ENV,
+    FREE_BOARD_BLOB_READ_WRITE_TOKEN: process.env.FREE_BOARD_BLOB_READ_WRITE_TOKEN,
+    BLOB_READ_WRITE_TOKEN: process.env.BLOB_READ_WRITE_TOKEN,
+    BLOB_STORE_ID: process.env.BLOB_STORE_ID,
+  };
+  // 가짜 값 (실제 토큰 아님)
+  const FAKE_PREVIEW = "vercel_blob_rw_previewstore111_fakesecret";
+  const FAKE_PROD = "vercel_blob_rw_prodstore999_fakesecret";
+  Object.assign(process.env, {
+    VERCEL_ENV: "preview",
+    FREE_BOARD_STORAGE_ENV: "preview",
+    FREE_BOARD_BLOB_READ_WRITE_TOKEN: FAKE_PREVIEW,
+    BLOB_READ_WRITE_TOKEN: FAKE_PROD,
+  });
+  delete process.env.BLOB_STORE_ID;
+
+  section("storage isolation policy");
+  {
+    const D = (env: Record<string, string>) => resolveFreeBoardStorageDecision(env);
+    const ok = D({ VERCEL_ENV: "preview", FREE_BOARD_STORAGE_ENV: "preview", FREE_BOARD_BLOB_READ_WRITE_TOKEN: FAKE_PREVIEW, BLOB_READ_WRITE_TOKEN: FAKE_PROD });
+    assert(ok.ok && ok.mode === "dedicated", "preview + 전용 토큰 + 마커 → dedicated");
+    const noTok = D({ VERCEL_ENV: "preview", FREE_BOARD_STORAGE_ENV: "preview", BLOB_READ_WRITE_TOKEN: FAKE_PROD });
+    assert(!noTok.ok && noTok.code === "free_board_preview_storage_missing", "preview 전용 토큰 없음 → 차단 (공용 fallback 없음)");
+    const noMarker = D({ VERCEL_ENV: "preview", FREE_BOARD_BLOB_READ_WRITE_TOKEN: FAKE_PREVIEW });
+    assert(!noMarker.ok && noMarker.code === "free_board_preview_storage_missing", "마커 없음 → 차단");
+    const same = D({ VERCEL_ENV: "preview", FREE_BOARD_STORAGE_ENV: "preview", FREE_BOARD_BLOB_READ_WRITE_TOKEN: FAKE_PROD, BLOB_READ_WRITE_TOKEN: FAKE_PROD });
+    assert(!same.ok && same.code === "free_board_storage_shared", "공용 토큰과 동일 → 차단");
+    const sameStore = D({ VERCEL_ENV: "preview", FREE_BOARD_STORAGE_ENV: "preview", FREE_BOARD_BLOB_READ_WRITE_TOKEN: "vercel_blob_rw_prodstore999_other", BLOB_READ_WRITE_TOKEN: FAKE_PROD });
+    assert(!sameStore.ok && sameStore.code === "free_board_storage_shared", "같은 store id (다른 토큰) → 차단");
+    const sameStoreId = D({ VERCEL_ENV: "preview", FREE_BOARD_STORAGE_ENV: "preview", FREE_BOARD_BLOB_READ_WRITE_TOKEN: FAKE_PREVIEW, BLOB_STORE_ID: "store_previewstore111" });
+    assert(!sameStoreId.ok && sameStoreId.code === "free_board_storage_shared", "BLOB_STORE_ID 와 같은 store → 차단");
+    const badFmt = D({ VERCEL_ENV: "preview", FREE_BOARD_STORAGE_ENV: "preview", FREE_BOARD_BLOB_READ_WRITE_TOKEN: "garbage" });
+    assert(!badFmt.ok && badFmt.code === "free_board_storage_token_invalid", "토큰 형식 불명 → 차단");
+    const local = D({});
+    assert(!local.ok, "로컬/미설정 → 차단");
+    const prod = D({ VERCEL_ENV: "production" });
+    assert(prod.ok && prod.mode === "shared", "production → 기존 공용 store (free-board/ prefix)");
+    const prodMarker = D({ VERCEL_ENV: "production", FREE_BOARD_STORAGE_ENV: "preview" });
+    assert(!prodMarker.ok && prodMarker.code === "free_board_storage_env_mismatch", "production 에 preview 마커 → 차단");
+    const msgs = [noTok, same, sameStore, badFmt].map((d) => JSON.stringify(d)).join(" ");
+    assert(!msgs.includes("fakesecret") && !msgs.includes("prodstore999"), "판정 결과에 토큰/스토어 값 미포함");
+  }
   try {
     const cA = await prisma.caddy.create({
       data: { name: "자유캐디A", team: "1조", caddyType: "HOUSE", employmentStatus: "ACTIVE" },
@@ -239,6 +332,7 @@ async function main() {
     );
     assert(pdel.status === 200, "author photo delete 200");
     assert((await up(A, png())).status === 201, "upload again after delete (8→9)");
+    assert(sharedCalls === 0, "preview 에서 공용 store 미사용");
 
     section("comments");
     const cpost = (cookie: string, body: unknown) =>
@@ -266,6 +360,93 @@ async function main() {
     const thread = await prisma.commentThread.findFirst({ where: { targetType: "FREE_BOARD_POST", targetKey: String(pid) } });
     assert(thread != null, "FREE_BOARD_POST thread");
 
+    section("upload blocked when preview storage missing");
+    {
+      const saved = process.env.FREE_BOARD_BLOB_READ_WRITE_TOKEN;
+      delete process.env.FREE_BOARD_BLOB_READ_WRITE_TOKEN;
+      const r = await up(A, png());
+      const b = await json(r);
+      assert(r.status === 503 && b.error === "free_board_preview_storage_missing", "전용 저장소 없음 → 503 code");
+      process.env.FREE_BOARD_BLOB_READ_WRITE_TOKEN = saved;
+      assert(sharedCalls === 0, "공용 store 호출 0회 (preview)");
+    }
+
+    section("concurrent uploads (race-safe 9 limit)");
+    {
+      const p2 = await json(
+        await CREATE(req("http://local/api/free-board", { method: "POST", headers: H(A), body: JSON.stringify({ title: "동시", body: "b" }) }))
+      );
+      const id2 = Number(p2.id);
+      postIds.push(id2);
+      const results = await Promise.all(Array.from({ length: 15 }, () => up(A, png(), id2)));
+      const okN = results.filter((r) => r.status === 201).length;
+      const limitN = results.filter((r) => r.status === 409).length;
+      assert(okN === 9, `동시 15건 중 성공 9 (실제 ${okN})`);
+      assert(limitN === 6, `나머지 6건 409 (실제 ${limitN})`);
+      assert((await prisma.freeBoardPhoto.count({ where: { postId: id2 } })) === 9, "DB 9장");
+      const keys2 = await prisma.freeBoardPhoto.findMany({ where: { postId: id2 }, select: { storageKey: true } });
+      let stored = 0;
+      for (const k of keys2) if (await mem.head(k.storageKey)) stored++;
+      assert(stored === 9, "DB 행마다 객체 존재");
+    }
+
+    section("edit with removedPhotoIds (deferred delete)");
+    {
+      const before = await prisma.freeBoardPhoto.findMany({ where: { postId: pid }, orderBy: { id: "asc" } });
+      const [r1, r2] = before;
+      // 다른 글 사진 포함 → 전체 거부, 아무것도 바뀌지 않음
+      const otherPhoto = await prisma.freeBoardPhoto.findFirst({ where: { postId: { not: pid } } });
+      const delBefore = deleteCalls;
+      const bad = await patch(A, { title: "t2", body: "b2", removedPhotoIds: [r1.id, otherPhoto!.id] });
+      assert(bad.status === 404, "타 게시글 사진 포함 → 404");
+      assert((await prisma.freeBoardPhoto.count({ where: { postId: pid } })) === before.length, "거부 시 사진 그대로");
+      assert((await prisma.freeBoardPost.findUnique({ where: { id: pid } }))?.title === "수정 제목", "거부 시 본문 그대로");
+      assert(deleteCalls === delBefore, "거부 시 객체 삭제 없음");
+      assert((await patch(A, { title: "t", body: "b", removedPhotoIds: "x" })).status === 400, "removedPhotoIds 형식 오류 400");
+      assert((await patch(B, { title: "t", body: "b", removedPhotoIds: [r1.id] })).status === 403, "타인 removedPhotoIds 403");
+      // 부분 성공: r2 객체 삭제 실패 → 응답 성공, DB 일관, orphan 기록
+      const { setFreeBoardOrphanLoggerForTests } = await import("../src/lib/freeBoardPhoto");
+      const orphans: unknown[] = [];
+      setFreeBoardOrphanLoggerForTests((i) => orphans.push(i));
+      failDeleteKeys = new Set([r2.storageKey]);
+      const ok2 = await patch(A, { title: "사진 정리", body: "본문", removedPhotoIds: [r1.id, r2.id] });
+      const okBody = await json(ok2);
+      assert(ok2.status === 200, "부분 성공도 200");
+      assert(okBody.removedPhotos === 2 && okBody.blobCleanupFailed === 1, "removed 2, blobCleanupFailed 1");
+      assert((await prisma.freeBoardPhoto.count({ where: { id: { in: [r1.id, r2.id] } } })) === 0, "DB 행 삭제됨");
+      assert(!(await mem.head(r1.storageKey)), "성공 객체 삭제됨");
+      assert(Boolean(await mem.head(r2.storageKey)), "실패 객체는 남음 (orphan)");
+      assert(orphans.length === 1 && JSON.stringify(orphans).includes(String(r2.id)), "orphan 1건 기록 (photoId)");
+      assert(!JSON.stringify(orphans).includes(r2.storageKey), "orphan 로그에 storage key 미포함");
+      setFreeBoardOrphanLoggerForTests(null);
+      failDeleteKeys = new Set();
+      // DB 실패 → 롤백, 객체 삭제 없음
+      const { saveFreeBoardPostEdit } = await import("../src/lib/freeBoardPhoto");
+      const r3 = (await prisma.freeBoardPhoto.findFirst({ where: { postId: pid } }))!;
+      const failingDb = new Proxy(prisma, {
+        get(t, k) {
+          if (k === "$transaction") return async () => { throw new Error("db down"); };
+          return Reflect.get(t, k);
+        },
+      }) as typeof prisma;
+      const delBefore2 = deleteCalls;
+      let threw = false;
+      try {
+        await saveFreeBoardPostEdit(failingDb, { postId: pid, title: "x", body: "y", removedPhotoIds: [r3.id] });
+      } catch {
+        threw = true;
+      }
+      assert(threw, "DB 실패 → 예외");
+      assert(deleteCalls === delBefore2, "DB 실패 시 객체 삭제 호출 0");
+      assert(Boolean(await prisma.freeBoardPhoto.findUnique({ where: { id: r3.id } })), "DB 실패 시 사진 유지");
+      assert(Boolean(await mem.head(r3.storageKey)), "DB 실패 시 객체 유지");
+      // 취소 = 요청 없음 → 서버 변화 없음 (클라이언트 구조 확인)
+      const form = read("src/app/community/FreeBoardForm.tsx");
+      assert(!/method: "DELETE"/.test(form), "수정 화면에서 즉시 DELETE 호출 없음");
+      assert(form.includes("removedPhotoIds: removedIds"), "저장 시 removedPhotoIds 전송");
+      assert(form.lastIndexOf("uploadPendingPhotos(postId") > form.indexOf("isEdit ? { title, body"), "새 사진은 저장 성공 후 업로드 (취소 시 업로드 없음)");
+    }
+
     section("post delete");
     assert((await DEL(req(`http://local/api/free-board/${pid}`, { method: "DELETE", headers: { cookie: B } }), idP(pid))).status === 403, "other delete 403");
     const second = await json(
@@ -283,7 +464,11 @@ async function main() {
     const l2 = await json(await LIST(req("http://local/api/free-board", { headers: { cookie: A } })));
     assert(!l2.posts.some((p: { id: number }) => p.id === pid), "deleted hidden from list");
   } finally {
-    setCourseReportPhotoStoreForTests(null);
+    setFreeBoardStoreFactoryForTests(null);
+    for (const [k, v] of Object.entries(prevEnv)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
     const threads = await prisma.commentThread.findMany({
       where: { targetType: "FREE_BOARD_POST", targetKey: { in: postIds.map(String) } },
     });

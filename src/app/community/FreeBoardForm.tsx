@@ -26,11 +26,17 @@ async function uploadPendingPhotos(postId: number, items: { blob: Blob }[]) {
     const ext = mime.includes("png") ? "png" : mime.includes("webp") ? "webp" : "jpg";
     const fd = new FormData();
     fd.append("file", blob, `photo-${i}.${ext}`);
-    const res = await fetch(`/api/free-board/${postId}/photos`, {
-      method: "POST",
-      credentials: "include",
-      body: fd,
-    });
+    let res: Response;
+    try {
+      res = await fetch(`/api/free-board/${postId}/photos`, {
+        method: "POST",
+        credentials: "include",
+        body: fd,
+      });
+    } catch {
+      failed += 1;
+      continue;
+    }
     if (consumeUnauthorizedMemberResponse(res)) return failed + (items.length - i);
     if (!res.ok) failed += 1;
   }
@@ -49,17 +55,20 @@ export default function FreeBoardForm({
   const isEdit = mode === "edit";
   const [title, setTitle] = useState(initial?.title ?? "");
   const [body, setBody] = useState(initial?.body ?? "");
-  const [existing, setExisting] = useState<FreeBoardPhotoPublic[]>(initial?.photos ?? []);
+  const [existing] = useState<FreeBoardPhotoPublic[]>(initial?.photos ?? []);
+  /** 수정 화면에서 삭제 표시만 한 사진. 최종 저장 시 서버에 removedPhotoIds 로 전달, 취소하면 버려짐. */
+  const [removedIds, setRemovedIds] = useState<number[]>([]);
   const [pending, setPending] = useState<Pending[]>([]);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
-  const total = existing.length + pending.length;
+  const kept = existing.filter((p) => !removedIds.includes(p.id));
+  const total = kept.length + pending.length;
   const canAdd = total < FREE_BOARD_PHOTO_MAX;
 
   async function onPick(files: FileList | null) {
     if (!files) return;
     setNote("");
-    const room = FREE_BOARD_PHOTO_MAX - existing.length - pending.length;
+    const room = FREE_BOARD_PHOTO_MAX - kept.length - pending.length;
     if (files.length > room) setNote(`사진은 최대 ${FREE_BOARD_PHOTO_MAX}장까지 첨부할 수 있습니다.`);
     const picked = await pickCourseReportPhotos(Array.from(files), room, undefined, {
       fileIds: pending.map((p) => p.fileId),
@@ -68,7 +77,7 @@ export default function FreeBoardForm({
     if (picked.note) setNote(picked.note);
     if (picked.items.length) {
       setPending((cur) => {
-        const left = FREE_BOARD_PHOTO_MAX - existing.length - cur.length;
+        const left = FREE_BOARD_PHOTO_MAX - kept.length - cur.length;
         return [...cur, ...picked.items.slice(0, Math.max(0, left))];
       });
     }
@@ -83,18 +92,11 @@ export default function FreeBoardForm({
     });
   }
 
-  async function removeExisting(photoId: number) {
-    if (!initial) return;
-    const res = await fetch(`/api/free-board/${initial.id}/photos/${photoId}`, {
-      method: "DELETE",
-      credentials: "include",
-    });
-    if (consumeUnauthorizedMemberResponse(res)) return;
-    if (!res.ok) {
-      setNote("사진 삭제 실패");
-      return;
-    }
-    setExisting((cur) => cur.filter((p) => p.id !== photoId));
+  /** 서버 삭제 없이 표시만 (취소 시 원복). */
+  function toggleRemoveExisting(photoId: number) {
+    setRemovedIds((cur) =>
+      cur.includes(photoId) ? cur.filter((id) => id !== photoId) : [...cur, photoId]
+    );
   }
 
   async function onSubmit(e: React.FormEvent) {
@@ -106,12 +108,19 @@ export default function FreeBoardForm({
     }
     setBusy(true);
     setNote("");
-    const res = await fetch(isEdit ? `/api/free-board/${initial?.id}` : "/api/free-board", {
+    let res: Response;
+    try {
+      res = await fetch(isEdit ? `/api/free-board/${initial?.id}` : "/api/free-board", {
       method: isEdit ? "PATCH" : "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, body }),
-    });
+      body: JSON.stringify(isEdit ? { title, body, removedPhotoIds: removedIds } : { title, body }),
+      });
+    } catch {
+      setBusy(false);
+      setNote("네트워크 오류로 저장하지 못했습니다. 다시 시도해 주세요.");
+      return;
+    }
     if (consumeUnauthorizedMemberResponse(res)) {
       setBusy(false);
       return;
@@ -163,20 +172,27 @@ export default function FreeBoardForm({
           사진 ({total}/{FREE_BOARD_PHOTO_MAX})
         </legend>
         <div className="course-report-photo-composer free-board-photo-composer">
-          {existing.map((photo) => (
-            <div key={photo.id} className="course-report-photo-item">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={freeBoardPhotoSrc(initial!.id, photo.id)} alt="" />
-              <button
-                type="button"
-                className="course-report-photo-remove"
-                aria-label="사진 삭제"
-                onClick={() => void removeExisting(photo.id)}
+          {existing.map((photo) => {
+            const marked = removedIds.includes(photo.id);
+            return (
+              <div
+                key={photo.id}
+                className={`course-report-photo-item${marked ? " free-board-photo-marked" : ""}`}
               >
-                ×
-              </button>
-            </div>
-          ))}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={freeBoardPhotoSrc(initial!.id, photo.id)} alt="" />
+                <button
+                  type="button"
+                  className="course-report-photo-remove"
+                  aria-label={marked ? "사진 삭제 취소" : "사진 삭제 (저장 시 반영)"}
+                  aria-pressed={marked}
+                  onClick={() => toggleRemoveExisting(photo.id)}
+                >
+                  {marked ? "↺" : "×"}
+                </button>
+              </div>
+            );
+          })}
           {pending.map((photo) => (
             <div key={photo.key} className="course-report-photo-item">
               {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -203,6 +219,11 @@ export default function FreeBoardForm({
             />
           </label>
         </div>
+        {removedIds.length ? (
+          <p className="course-report-photo-note">
+            사진 {removedIds.length}장은 저장하면 삭제됩니다. 취소하면 그대로 유지됩니다.
+          </p>
+        ) : null}
         {note ? <p className="course-report-photo-note">{note}</p> : null}
       </fieldset>
       <div className="course-report-form-actions">
