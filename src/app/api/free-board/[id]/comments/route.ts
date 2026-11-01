@@ -11,7 +11,7 @@ import {
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-type Ctx = { params: Promise<{ id: string }> | { id: string } };
+type Ctx = { params: Promise<{ id: string }> };
 
 function fail(e: unknown) {
   if (e instanceof CommentValidationError) {

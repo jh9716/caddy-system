@@ -23,7 +23,7 @@ import {
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-type Ctx = { params: Promise<{ id: string }> | { id: string } };
+type Ctx = { params: Promise<{ id: string }> };
 
 async function postId(ctx: Ctx): Promise<number> {
   return Number((await Promise.resolve(ctx.params)).id);

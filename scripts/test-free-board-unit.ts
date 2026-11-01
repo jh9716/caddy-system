@@ -34,6 +34,8 @@ function section(t: string) {
 }
 const read = (rel: string) => fs.readFileSync(path.resolve(rel), "utf8");
 const png = () => Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 1, 2, 3]);
+const jpeg = () => Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46, 0, 1]);
+const webp = () => Uint8Array.from([0x52, 0x49, 0x46, 0x46, 4, 0, 0, 0, 0x57, 0x45, 0x42, 0x50]);
 
 async function cookieFor(u: { id: number | null; username: string; role: "admin" | "caddy" | "leader" }) {
   return `${SESSION_COOKIE_NAME}=${await signSessionClaims(
@@ -43,7 +45,7 @@ async function cookieFor(u: { id: number | null; username: string; role: "admin"
 const req = (url: string, init?: ConstructorParameters<typeof NextRequest>[1]) =>
   new NextRequest(url, init);
 const json = (r: Response) => r.json().catch(() => ({}));
-const idP = (id: number) => ({ params: { id: String(id) } });
+const idP = (id: number) => ({ params: Promise.resolve({ id: String(id) }) });
 
 async function main() {
   assertLocalDatabaseUrl(process.env.DATABASE_URL);
@@ -140,8 +142,14 @@ async function main() {
     for (const rel of files) {
       const src = read(rel);
       assert(!src.includes("dangerouslySetInnerHTML"), `${rel} no innerHTML`);
-      assert(!/chat/i.test(src.replace(/chatgpt/gi, "")), `${rel} no chat dependency`);
+      if (rel === "src/lib/freeBoard.ts") {
+        const chatImports = src.match(/^import .*chat.*$/gim) ?? [];
+        assert(chatImports.length === 1 && chatImports[0].includes("chatEnvAdminIdentity"), `${rel} only env-admin identity dependency`);
+      } else {
+        assert(!/chat/i.test(src.replace(/chatgpt/gi, "")), `${rel} no chat dependency`);
+      }
     }
+    assert(read("src/lib/freeBoard.ts").includes("resolveEnvAdminChatIdentity"), "env 관리자 DB User 매핑 재사용");
     assert(!fs.existsSync("src/app/board/community"), "/board 경로 미사용");
     const mig = read("prisma/migrations/20261031220000_free_board_v1/migration.sql");
     assert(!/DROP|ALTER TABLE "(?!FreeBoard)/.test(mig.replace(/ALTER TABLE "FreeBoard\w*"/g, "")), "migration additive only");
@@ -209,6 +217,7 @@ async function main() {
     FREE_BOARD_PRODUCTION_BLOB_STORE_ID: process.env.FREE_BOARD_PRODUCTION_BLOB_STORE_ID,
     BLOB_READ_WRITE_TOKEN: process.env.BLOB_READ_WRITE_TOKEN,
     BLOB_STORE_ID: process.env.BLOB_STORE_ID,
+    ADMIN_CHAT_USER_ID: process.env.ADMIN_CHAT_USER_ID,
   };
   // 가짜 값 (실제 토큰 아님)
   const FAKE_PREVIEW = "vercel_blob_rw_previewstore111_fakesecret";
@@ -316,7 +325,10 @@ async function main() {
     const cB = await prisma.caddy.create({
       data: { name: "자유캐디B", team: "2조", caddyType: "HOUSE", employmentStatus: "ACTIVE" },
     });
-    caddyIds.push(cA.id, cB.id);
+    const cLeader = await prisma.caddy.create({
+      data: { name: "자유조장", team: "1조", caddyType: "HOUSE", employmentStatus: "ACTIVE" },
+    });
+    caddyIds.push(cA.id, cB.id, cLeader.id);
     const uA = await prisma.user.create({
       data: { username: `${tag}_a`, password: hash, role: "caddy", caddyId: cA.id },
     });
@@ -326,10 +338,16 @@ async function main() {
     const uAdmin = await prisma.user.create({
       data: { username: `${tag}_admin`, password: hash, role: "admin" },
     });
-    userIds.push(uA.id, uB.id, uAdmin.id);
+    const uLeader = await prisma.user.create({
+      data: { username: `${tag}_leader`, password: hash, role: "leader", managedTeams: ["1조"], caddyId: cLeader.id },
+    });
+    userIds.push(uA.id, uB.id, uAdmin.id, uLeader.id);
     const A = await cookieFor({ id: uA.id, username: uA.username, role: "caddy" });
     const B = await cookieFor({ id: uB.id, username: uB.username, role: "caddy" });
     const ADM = await cookieFor({ id: uAdmin.id, username: uAdmin.username, role: "admin" });
+    const L = await cookieFor({ id: uLeader.id, username: uLeader.username, role: "leader" });
+    const ENV_ADM = await cookieFor({ id: null, username: "env-admin", role: "admin" });
+    process.env.ADMIN_CHAT_USER_ID = String(uAdmin.id);
     const H = (cookie: string) => ({ cookie, "content-type": "application/json" });
 
     section("auth");
@@ -350,6 +368,7 @@ async function main() {
     section("create / validation / 관리자 전용");
     assert((await CREATE(req("http://local/api/free-board", { method: "POST", headers: H(A), body: JSON.stringify({ title: "t", body: "b" }) }))).status === 403, "caddy create 403");
     assert((await CREATE(req("http://local/api/free-board", { method: "POST", headers: H(B), body: JSON.stringify({ title: "t", body: "b" }) }))).status === 403, "other caddy create 403");
+    assert((await CREATE(req("http://local/api/free-board", { method: "POST", headers: H(L), body: JSON.stringify({ title: "t", body: "b" }) }))).status === 403, "leader create 403");
     const bad1 = await CREATE(
       req("http://local/api/free-board", { method: "POST", headers: H(ADM), body: JSON.stringify({ title: " ", body: "b" }) })
     );
@@ -385,6 +404,12 @@ async function main() {
     assert(cBody.post.body === "<b>내용</b>", "body stored as plain text");
     assert(cBody.post.authorDisplayName === uAdmin.username, "author display = admin username");
     assert(cBody.post.canEdit && cBody.post.canDelete, "admin can edit/delete");
+    const envCreated = await CREATE(
+      req("http://local/api/free-board", { method: "POST", headers: H(ENV_ADM), body: JSON.stringify({ title: "환경 관리자", body: "b" }) })
+    );
+    const envCreatedBody = await json(envCreated);
+    postIds.push(Number(envCreatedBody.id));
+    assert(envCreated.status === 201 && envCreatedBody.post.authorUserId === uAdmin.id, "env 관리자 → 지정 DB admin User 매핑 후 작성");
 
     section("list / detail");
     const list = await json(await LIST(req("http://local/api/free-board", { headers: { cookie: B } })));
@@ -396,8 +421,9 @@ async function main() {
     assert(arow.canDelete === true && arow.canEdit === true, "admin: edit/delete yes");
     const det = await DETAIL(req(`http://local/api/free-board/${pid}`, { headers: { cookie: B } }), idP(pid));
     assert(det.status === 200, "detail 200");
+    assert((await DETAIL(req(`http://local/api/free-board/${pid}`, { headers: { cookie: L } }), idP(pid))).status === 200, "leader detail 200");
     assert((await DETAIL(req(`http://local/api/free-board/999999`, { headers: { cookie: B } }), idP(999999))).status === 404, "missing 404");
-    assert((await DETAIL(req(`http://local/api/free-board/abc`, { headers: { cookie: B } }), { params: { id: "abc" } })).status === 404, "bad id 404");
+    assert((await DETAIL(req(`http://local/api/free-board/abc`, { headers: { cookie: B } }), { params: Promise.resolve({ id: "abc" }) })).status === 404, "bad id 404");
 
     section("edit (admin only)");
     const patch = (cookie: string, body: unknown) =>
@@ -413,12 +439,50 @@ async function main() {
     section("photos (max 9, type, permission, prefix)");
     const up = (cookie: string, bytes: Uint8Array, id = pid) => {
       const fd = new FormData();
-      fd.append("file", new Blob([bytes], { type: "image/png" }), "p.png");
+      fd.append("file", new Blob([bytes as BlobPart], { type: "image/png" }), "p.png");
       return PHOTO_POST(req(`http://local/api/free-board/${id}/photos`, { method: "POST", headers: { cookie }, body: fd }), idP(id));
+    };
+    const streamedUpload = (id: number, cookie: string, chunks: Uint8Array[], headers: Record<string, string> = {}) => {
+      let index = 0;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (index >= chunks.length) return controller.close();
+          controller.enqueue(chunks[index++]);
+        },
+      });
+      return PHOTO_POST(
+        new NextRequest(`http://local/api/free-board/${id}/photos`, {
+          method: "POST",
+          headers: { cookie, "content-type": "image/png", ...headers },
+          body,
+          duplex: "half",
+        }),
+        idP(id)
+      );
     };
     assert((await up(B, png())).status === 403, "other upload 403");
     const notImg = await up(ADM, Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]));
     assert(notImg.status >= 400 && notImg.status < 500, "non-image rejected 4xx");
+
+    const securityPost = await json(
+      await CREATE(req("http://local/api/free-board", { method: "POST", headers: H(ADM), body: JSON.stringify({ title: "업로드 보안", body: "b" }) }))
+    );
+    const securityPostId = Number(securityPost.id);
+    postIds.push(securityPostId);
+    const exact3Mb = new Uint8Array(3 * 1024 * 1024);
+    exact3Mb.set(png());
+    assert((await streamedUpload(securityPostId, ADM, [exact3Mb])).status === 201, "Content-Length 없이 정확히 3MB PNG 허용");
+    assert((await streamedUpload(securityPostId, ADM, [jpeg()], { "content-type": "image/jpeg" })).status === 201, "JPEG 업로드 유지");
+    assert((await streamedUpload(securityPostId, ADM, [webp()], { "content-type": "image/webp" })).status === 201, "WebP 업로드 유지");
+    const requestLimit = 3 * 1024 * 1024 + 64 * 1024;
+    const oversizedChunks = [Uint8Array.from(png()), new Uint8Array(requestLimit)];
+    const noLengthOversize = await streamedUpload(securityPostId, ADM, oversizedChunks);
+    assert(noLengthOversize.status === 413, "Content-Length 없는 초과 스트림 → 413");
+    const spoofedLengthOversize = await streamedUpload(securityPostId, ADM, oversizedChunks, { "content-length": "12" });
+    assert(spoofedLengthOversize.status === 413, "조작된 작은 Content-Length + 초과 스트림 → 413");
+    const declaredOversize = await streamedUpload(securityPostId, ADM, [png()], { "content-length": String(requestLimit + 1) });
+    assert(declaredOversize.status === 413, "선언 Content-Length 초과 → body 파싱 전 413");
+    assert((await prisma.freeBoardPhoto.count({ where: { postId: securityPostId } })) === 3, "차단 요청은 사진 행을 만들지 않음");
     let lastPhotoId = 0;
     for (let i = 0; i < 9; i++) {
       const r = await up(ADM, png());
@@ -437,17 +501,17 @@ async function main() {
     assert(!isFreeBoardStorageKey("free-board/../notices/x.png"), "traversal rejected");
     const pget = await PHOTO_GET(
       req(`http://local/api/free-board/${pid}/photos/${lastPhotoId}`, { headers: { cookie: B } }),
-      { params: { id: String(pid), photoId: String(lastPhotoId) } }
+      { params: Promise.resolve({ id: String(pid), photoId: String(lastPhotoId) }) }
     );
     assert(pget.status === 200, "photo GET 200 for reader");
     const pdelOther = await PHOTO_DEL(
       req(`http://local/api/free-board/${pid}/photos/${lastPhotoId}`, { method: "DELETE", headers: { cookie: B } }),
-      { params: { id: String(pid), photoId: String(lastPhotoId) } }
+      { params: Promise.resolve({ id: String(pid), photoId: String(lastPhotoId) }) }
     );
     assert(pdelOther.status === 403, "other photo delete 403");
     const pdel = await PHOTO_DEL(
       req(`http://local/api/free-board/${pid}/photos/${lastPhotoId}`, { method: "DELETE", headers: { cookie: ADM } }),
-      { params: { id: String(pid), photoId: String(lastPhotoId) } }
+      { params: Promise.resolve({ id: String(pid), photoId: String(lastPhotoId) }) }
     );
     assert(pdel.status === 200, "admin photo delete 200");
     assert((await up(ADM, png())).status === 201, "upload again after delete (8→9)");
@@ -459,30 +523,44 @@ async function main() {
     const c1 = await cpost(B, "B 댓글");
     assert(c1.status === 201, "comment create 201");
     const c1id = Number((await json(c1)).comment.id);
+    const leaderComment = await cpost(L, "조장 댓글");
+    const leaderCommentId = Number((await json(leaderComment)).comment.id);
+    assert(leaderComment.status === 201, "leader comment create 201");
+    const adminComment = await cpost(ADM, "관리자 댓글");
+    const adminCommentId = Number((await json(adminComment)).comment.id);
+    assert(adminComment.status === 201, "admin comment create 201");
+    const envAdminComment = await cpost(ENV_ADM, "환경 관리자 댓글");
+    const envAdminCommentBody = await json(envAdminComment);
+    const envAdminCommentId = Number(envAdminCommentBody.comment.id);
+    assert(envAdminComment.status === 201 && envAdminCommentBody.comment?.authorUserId === uAdmin.id, "env 관리자 댓글 DB User 매핑");
     assert((await cpost(B, "  ")).status === 400, "empty comment 400");
     const cl = await json(await C_LIST(req(`http://local/api/free-board/${pid}/comments`, { headers: { cookie: A } }), idP(pid)));
-    assert(cl.comments.length === 1 && cl.comments[0].authorDisplayName === "자유캐디B", "comment list with author");
+    assert(cl.comments.length === 4 && cl.comments[0].authorDisplayName === "자유캐디B", "comment list with authors");
     assert(
       (await json(await LIST(req("http://local/api/free-board", { headers: { cookie: A } })))).posts.find(
         (p: { id: number }) => p.id === pid
-      ).commentCount === 1,
-      "list commentCount 1"
+      ).commentCount === 4,
+      "list commentCount 4"
     );
     const cdel = (cookie: string, cid: number) =>
       C_DEL(req(`http://local/api/free-board/${pid}/comments/${cid}`, { method: "DELETE", headers: { cookie } }), {
-        params: { id: String(pid), commentId: String(cid) },
+        params: Promise.resolve({ id: String(pid), commentId: String(cid) }),
       });
     const cpatch = (cookie: string, cid: number, body: string) =>
       C_PATCH(req(`http://local/api/free-board/${pid}/comments/${cid}`, { method: "PATCH", headers: H(cookie), body: JSON.stringify({ body }) }), {
-        params: { id: String(pid), commentId: String(cid) },
+        params: Promise.resolve({ id: String(pid), commentId: String(cid) }),
       });
     assert((await cdel(A, c1id)).status === 403, "non-author comment delete 403");
     assert((await cpatch(A, c1id, "x")).status === 403, "non-author comment edit 403");
     assert((await cpatch(ADM, c1id, "x")).status === 403, "admin cannot edit another user's comment");
     assert((await cpatch(B, c1id, "B 댓글 수정")).status === 200, "comment author edit 200");
+    assert((await cpatch(L, leaderCommentId, "조장 댓글 수정")).status === 200, "leader own comment edit 200");
+    assert((await cpatch(ENV_ADM, envAdminCommentId, "환경 관리자 댓글 수정")).status === 200, "env admin own comment edit 200");
+    assert((await cpatch(L, adminCommentId, "x")).status === 403, "leader cannot edit admin comment");
     const c2id = Number((await json(await cpost(A, "A 댓글"))).comment.id);
     assert((await cdel(ADM, c1id)).status === 200, "admin comment delete 200");
     assert((await cdel(A, c2id)).status === 200, "own comment delete 200");
+    assert((await cdel(L, leaderCommentId)).status === 200, "leader own comment delete 200");
     const thread = await prisma.commentThread.findFirst({ where: { targetType: "FREE_BOARD_POST", targetKey: String(pid) } });
     assert(thread != null, "FREE_BOARD_POST thread");
 
@@ -534,7 +612,7 @@ async function main() {
         if (netFail.has(n)) throw new TypeError("Failed to fetch");
         const id = Number(String(url).split("/")[3]);
         return PHOTO_POST(
-          req(`http://local${url}`, { method: "POST", headers: { ...(init.headers as Record<string, string>), cookie: A }, body: init.body as FormData }),
+          req(`http://local${url}`, { method: "POST", headers: { ...(init.headers as Record<string, string>), cookie: ADM }, body: init.body as FormData }),
           idP(id)
         );
       }) as unknown as typeof fetch;

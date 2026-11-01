@@ -19,7 +19,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 type Ctx = {
-  params: Promise<{ id: string; photoId: string }> | { id: string; photoId: string };
+  params: Promise<{ id: string; photoId: string }>;
 };
 
 async function ids(ctx: Ctx) {

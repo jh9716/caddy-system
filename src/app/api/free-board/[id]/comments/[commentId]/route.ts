@@ -6,7 +6,7 @@ import { CommentValidationError, softDeleteFreeBoardComment, updateFreeBoardComm
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-type Ctx = { params: Promise<{ id: string; commentId: string }> | { id: string; commentId: string } };
+type Ctx = { params: Promise<{ id: string; commentId: string }> };
 
 function fail(e: unknown) {
   if (e instanceof CommentValidationError) {
