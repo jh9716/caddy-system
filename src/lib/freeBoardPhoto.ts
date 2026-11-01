@@ -32,7 +32,7 @@ const LIMIT_MESSAGE = `사진은 최대 ${FREE_BOARD_PHOTO_MAX}장까지 첨부�
 export function buildFreeBoardPhotoStorageKey(
   postId: number,
   mime: CourseReportPhotoMime,
-  id = randomUUID()
+  id: string = randomUUID()
 ): string {
   return `${FREE_BOARD_STORAGE_PREFIX}/${postId}/${id}.${COURSE_REPORT_PHOTO_EXT[mime]}`;
 }

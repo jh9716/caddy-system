@@ -9,7 +9,11 @@ import {
 } from "@/lib/courseReportPhotoConstants";
 
 export const FREE_BOARD_PATH = "/community";
-export const FREE_BOARD_LABEL = "자유게시판";
+/** 화면 표시 명칭 (내부 식별자·경로·API 는 free-board / community 그대로). */
+export const FREE_BOARD_LABEL = "가배치표 게시판";
+/** 엑셀 캡처 가독성: 긴 변 2560px 까지 유지 (서버 3MB 제한은 그대로). */
+export const FREE_BOARD_PHOTO_LONG_EDGE = 2560;
+export const FREE_BOARD_PHOTO_JPEG_QUALITY = 0.9;
 export const FREE_BOARD_TITLE_MAX = 100;
 export const FREE_BOARD_BODY_MAX = 5000;
 /** 게시글당 사진 최대 장수 (서버 강제). */

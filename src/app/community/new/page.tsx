@@ -11,7 +11,7 @@ export default async function NewFreeBoardPostPage() {
   if (!canComposeFreeBoard(auth)) redirect("/community");
   return (
     <div className="course-report-page free-board-page">
-      <h1 className="ui-page-title">글쓰기</h1>
+      <h1 className="ui-page-title">가배치표 올리기</h1>
       <FreeBoardForm />
     </div>
   );

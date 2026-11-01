@@ -26,7 +26,7 @@ export default async function EditFreeBoardPostPage({
   const photos = await listFreeBoardPhotos(prisma, row.id);
   return (
     <div className="course-report-page free-board-page">
-      <h1 className="ui-page-title">글 수정</h1>
+      <h1 className="ui-page-title">가배치표 수정</h1>
       <FreeBoardForm mode="edit" initial={{ id: row.id, title: row.title, body: row.body, photos }} />
     </div>
   );

@@ -3,7 +3,7 @@ import dayjs from "dayjs";
 import { prisma } from "@/lib/prisma";
 import { getRequestAuthUser } from "@/lib/getRequestAuthUser";
 import { canComposeFreeBoard, listFreeBoardPosts } from "@/lib/freeBoard";
-import { FREE_BOARD_LIST_TAKE } from "@/lib/freeBoardConstants";
+import { FREE_BOARD_LABEL, FREE_BOARD_LIST_TAKE } from "@/lib/freeBoardConstants";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -17,13 +17,16 @@ export default async function CommunityListPage() {
   return (
     <div className="course-report-page free-board-page">
       <div className="course-report-page-head">
-        <h1 className="ui-page-title">자유게시판</h1>
+        <h1 className="ui-page-title">{FREE_BOARD_LABEL}</h1>
         {canCompose ? (
           <Link href="/community/new" className="ui-btn ui-btn-primary course-report-compose-link">
-            + 글쓰기
+            + 가배치표 올리기
           </Link>
         ) : null}
       </div>
+      <p className="free-board-intro">
+        경기과에서 올리는 가배치표입니다. 확정된 배치는 <Link href="/board">배치표</Link> 메뉴에서 확인하세요.
+      </p>
       <ul className="course-report-list">
         {posts.map((row) => (
           <li key={row.id}>
@@ -48,7 +51,7 @@ export default async function CommunityListPage() {
             </Link>
           </li>
         ))}
-        {posts.length === 0 && <li className="course-report-empty">등록된 글이 없습니다.</li>}
+        {posts.length === 0 && <li className="course-report-empty">등록된 가배치표가 없습니다.</li>}
       </ul>
     </div>
   );

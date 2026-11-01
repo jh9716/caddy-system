@@ -18,7 +18,7 @@ export default function FreeBoardDetailActions({
   if (!canEdit && !canDelete) return null;
 
   async function onDelete() {
-    if (!confirm("이 글을 삭제할까요?")) return;
+    if (!confirm("이 가배치표를 삭제할까요? 사진과 댓글도 함께 보이지 않게 됩니다.")) return;
     setBusy(true);
     const res = await fetch(`/api/free-board/${id}`, { method: "DELETE", credentials: "include" });
     if (consumeUnauthorizedMemberResponse(res)) {

@@ -2,11 +2,11 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { prepareFreeBoardPhoto } from "@/lib/freeBoardPhotoClient";
 import {
   courseReportPhotoBlobFingerprint,
   courseReportPhotoFileId,
   isHeicLikeFile,
-  prepareCourseReportPhoto,
   COURSE_REPORT_PHOTO_DUPLICATE_MESSAGE,
 } from "@/lib/courseReportPhotoClient";
 import {
@@ -129,7 +129,7 @@ export default function FreeBoardForm({
         }
         let blob: Blob;
         try {
-          blob = await prepareCourseReportPhoto(file);
+          blob = await prepareFreeBoardPhoto(file);
         } catch (e) {
           const heic = isHeicLikeFile(file);
           setPickFailures((cur) => [
@@ -212,7 +212,7 @@ export default function FreeBoardForm({
       return;
     }
     if (!title.trim() || !body.trim()) {
-      setNote("제목과 내용을 입력해 주세요.");
+      setNote("제목과 안내 내용을 입력해 주세요.");
       return;
     }
     setBusy(true);
@@ -269,7 +269,7 @@ export default function FreeBoardForm({
     setBusy(false);
     if (result.failed > 0) {
       setNote(
-        `글은 저장되었지만 사진 ${result.failed}장이 업로드되지 않았습니다. 실패한 사진만 다시 올리거나, 사진 없이 완료할 수 있습니다.`
+        `가배치표 글은 저장되었지만 사진 ${result.failed}장이 업로드되지 않았습니다. 실패한 사진만 다시 올리거나, 사진 없이 완료할 수 있습니다.`
       );
       return;
     }
@@ -290,7 +290,7 @@ export default function FreeBoardForm({
         ? `실패한 사진 ${failedCount}장 다시 올리기`
         : isEdit
           ? "수정"
-          : "등록";
+          : "가배치표 올리기";
 
   return (
     <form onSubmit={onSubmit} className="course-report-form free-board-form">
@@ -299,7 +299,7 @@ export default function FreeBoardForm({
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="제목"
+          placeholder="예: 11월 2일(월) 가배치표"
           required
           maxLength={FREE_BOARD_TITLE_MAX}
         />
@@ -309,7 +309,7 @@ export default function FreeBoardForm({
         <textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}
-          placeholder="내용"
+          placeholder="안내 사항 (변경·주의 사항 등)"
           required
           maxLength={FREE_BOARD_BODY_MAX}
         />

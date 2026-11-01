@@ -1,16 +1,17 @@
 import { notFound, redirect } from "next/navigation";
 import ManageShell from "@/components/manage/ManageShell";
 import { canReadFreeBoard } from "@/lib/freeBoard";
-import { isFreeBoardEnabled } from "@/lib/freeBoardConstants";
+import { FREE_BOARD_LABEL, isFreeBoardEnabled } from "@/lib/freeBoardConstants";
 import { shouldUseManageShellForBoard } from "@/lib/boardNav";
 import { getRequestAuthUser } from "@/lib/getRequestAuthUser";
 import { shouldForcePasswordChange } from "@/lib/passwordPolicy";
 import { isAccountManagerAuth } from "@/lib/staffAdminAccounts";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: FREE_BOARD_LABEL };
 
 /**
- * /community (자유게시판 V1) gate.
+ * /community (가배치표 게시판, 내부명 free-board V1) gate.
  * Feature flag OFF → 404 (Production 기본값). 로그인 caddy/leader/admin 만.
  * Admin 은 ManageShell, caddy/leader 는 root AppHeader (공지·제보와 동일 패턴).
  */

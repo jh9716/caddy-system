@@ -82,6 +82,52 @@ async function main() {
   const off = await listMod.GET(req("http://local/api/free-board"));
   assert(off.status === 404, "API 404 when flag off");
 
+  section("가배치표 게시판 명칭 / 사진 보기");
+  {
+    const C = await import("../src/lib/freeBoardConstants");
+    assert(C.FREE_BOARD_LABEL === "가배치표 게시판", "표시 명칭 = 가배치표 게시판");
+    const visibleFiles = [
+      "src/app/community/page.tsx",
+      "src/app/community/new/page.tsx",
+      "src/app/community/[id]/page.tsx",
+      "src/app/community/[id]/edit/page.tsx",
+      "src/app/community/[id]/FreeBoardDetailActions.tsx",
+      "src/app/community/[id]/FreeBoardComments.tsx",
+      "src/app/community/FreeBoardForm.tsx",
+      "src/app/community/FreeBoardPhotoGallery.tsx",
+      "src/app/community/loading.tsx",
+      "src/lib/boardNav.ts",
+      "src/lib/adminManageNav.ts",
+    ];
+    const strip = (t: string) => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+    for (const f of visibleFiles) {
+      assert(!strip(read(f)).includes("자유게시판"), `사용자 표시 '자유게시판' 없음: ${f}`);
+    }
+    assert(read("src/lib/boardNav.ts").includes("label: FREE_BOARD_LABEL") && read("src/lib/adminManageNav.ts").includes("label: FREE_BOARD_LABEL"), "메뉴 라벨 = FREE_BOARD_LABEL");
+    assert(read("src/lib/boardNav.ts").includes('label: "배치표"'), "확정 배치표(/board) 메뉴 라벨 유지");
+    assert(read("src/app/community/page.tsx").includes("+ 가배치표 올리기"), "목록: 가배치표 올리기 버튼");
+    assert(read("src/app/community/new/page.tsx").includes("가배치표 올리기"), "작성 화면 제목");
+    assert(read("src/app/community/[id]/edit/page.tsx").includes("가배치표 수정"), "수정 화면 제목");
+    assert(/metadata = \{ title: FREE_BOARD_LABEL \}/.test(read("src/app/community/layout.tsx")), "페이지 title metadata");
+    const g = read("src/app/community/FreeBoardPhotoGallery.tsx");
+    assert(g.includes('target="_blank"') && g.includes("원본 보기"), "상세 사진: 탭/링크로 원본 새 탭 (핀치 줌)");
+    assert(!g.includes("course-report-photo-grid") && !g.includes("course-report-photo-lightbox"), "공용 코스제보 갤러리/라이트박스 미사용");
+    const css = read("src/app/globals.css");
+    assert(/\.free-board-sheet-img \{[^}]*width: 100%;[^}]*height: auto;[^}]*object-fit: contain;/.test(css), "상세 사진 전체 폭 + contain (잘림 없음)");
+    assert(!/user-scalable|maximumScale/.test(read("src/app/layout.tsx")), "viewport 확대 금지 설정 없음");
+    const pc = await import("../src/lib/freeBoardPhotoClient");
+    assert(C.FREE_BOARD_PHOTO_LONG_EDGE === 2560 && C.FREE_BOARD_PHOTO_JPEG_QUALITY === 0.9, "가배치표 전처리 2560px / 0.9");
+    assert(C.FREE_BOARD_PHOTO_MAX_BYTES === 3 * 1024 * 1024, "서버 장당 3MB 제한 그대로");
+    const t1 = pc.freeBoardTargetSize(1170, 2532, 2560);
+    assert(t1.width === 1170 && t1.height === 2532, "아이폰 세로 캡처(1170x2532) 축소 없음");
+    const t2 = pc.freeBoardTargetSize(4032, 3024, 2560);
+    assert(t2.width === 2560 && t2.height === 1920, "카메라 4032x3024 → 2560x1920");
+    assert(pc.FREE_BOARD_ENCODE_STEPS.every(([e, q]) => e >= 1600 && q >= 0.75), "3MB 초과 시 단계 축소 (최소 1600px)");
+    const cc = await import("../src/lib/courseReportPhotoConstants");
+    assert(cc.COURSE_REPORT_PHOTO_LONG_EDGE === 1200 && cc.COURSE_REPORT_PHOTO_JPEG_QUALITY === 0.8, "공용 코스제보/공지 전처리 1200/0.8 변경 없음");
+    assert(read("src/app/community/FreeBoardForm.tsx").includes("prepareFreeBoardPhoto(file)"), "폼은 가배치표 전용 전처리 사용");
+  }
+
   section("source safety");
   {
     const files = [

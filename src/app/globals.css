@@ -7134,3 +7134,43 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
 .free-board-photo-failname {
   word-break: break-all;
 }
+/* 가배치표 게시판: 상세 사진 (엑셀 캡처) — 잘림 없이 전체 폭, 탭하면 원본 */
+.free-board-intro {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--vh-ink-soft);
+}
+.free-board-sheets {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 12px 0;
+}
+.free-board-sheets-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--vh-ink-soft);
+}
+.free-board-sheet {
+  margin: 0;
+}
+.free-board-sheet-link {
+  display: block;
+  border: 1px solid var(--vh-border);
+  border-radius: var(--vh-radius-sm);
+  overflow: hidden;
+  background: #fff;
+}
+.free-board-sheet-img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: none;
+  object-fit: contain;
+  min-height: 80px;
+}
+.free-board-sheet-caption {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--vh-ink-soft);
+}

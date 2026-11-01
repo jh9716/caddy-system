@@ -32,7 +32,7 @@ export default async function FreeBoardDetailPage({
   return (
     <div className="course-report-page course-report-detail free-board-page">
       <Link href="/community" className="ui-btn ui-btn-ghost course-report-back">
-        ← 목록
+        ← 가배치표 목록
       </Link>
       <h1 className="ui-page-title">{post.title}</h1>
       <p className="course-report-detail-meta">

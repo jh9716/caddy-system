@@ -1,5 +1,5 @@
 import type { AppRole } from "@/lib/sessionCookies";
-import { isFreeBoardEnabled } from "@/lib/freeBoardConstants";
+import { FREE_BOARD_LABEL, isFreeBoardEnabled } from "@/lib/freeBoardConstants";
 
 /**
  * /board · /notice 는 캐디 공용 화면이다. 관리자 셸(사이드바/햄버거)은 admin만 재사용한다.
@@ -31,12 +31,12 @@ export function memberNavItems() {
       label: "제보",
       match: (p: string) => p.startsWith("/course-reports"),
     },
-    // 자유게시판 V1: feature flag ON 일 때만 (기본 OFF → 기존 메뉴와 동일)
+    // 가배치표 게시판 (free-board V1): feature flag ON 일 때만 (기본 OFF → 기존 메뉴와 동일)
     ...(isFreeBoardEnabled()
       ? ([
           {
             href: "/community",
-            label: "자유게시판",
+            label: FREE_BOARD_LABEL,
             match: (p: string) => p.startsWith("/community"),
           },
         ] as const)
