@@ -18,6 +18,7 @@ import {
   listCommentsByTarget,
   resolveCommentAuthorUserId,
   softDeleteCommentByTarget,
+  updateCommentByTarget,
   type CommentPublic,
 } from "@/lib/commentThread";
 import {
@@ -155,6 +156,26 @@ export async function softDeleteBoardDateComment(
     targetKey,
     commentId,
     auth,
+    (client) => requirePublishedBoardDate(client, date)
+  );
+}
+
+export async function updateBoardDateComment(
+  db: PrismaClient,
+  ymd: string,
+  commentId: number,
+  auth: ResolvedAuthUser,
+  rawBody: unknown
+): Promise<CommentPublic> {
+  const date = parseBoardCommentDate(ymd);
+  const { targetType, targetKey } = boardDateTarget(date);
+  return updateCommentByTarget(
+    db,
+    targetType,
+    targetKey,
+    commentId,
+    auth,
+    rawBody,
     (client) => requirePublishedBoardDate(client, date)
   );
 }

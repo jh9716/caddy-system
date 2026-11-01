@@ -4,6 +4,7 @@ import {
   CommentValidationError,
   canComposeComment,
   canComposeCommentAs,
+  canEditComment,
   canSoftDeleteComment,
   isCommentTableMissing,
   isCommentUniqueConflict,
@@ -17,6 +18,7 @@ export {
   CommentValidationError,
   canComposeComment,
   canComposeCommentAs,
+  canEditComment,
   canSoftDeleteComment,
   resolveCommentAuthorUserId,
 };
@@ -175,6 +177,60 @@ export async function softDeleteCommentByTarget(
         data: { deletedAt: new Date() },
       });
     });
+  } catch (e) {
+    if (e instanceof CommentValidationError) throw e;
+    if (isCommentTableMissing(e)) commentsUnavailable();
+    throw e;
+  }
+}
+
+/**
+ * 댓글 수정 — 작성자 본인만. 같은 thread(대상) 안의 댓글만 찾는다 (다른 날짜/대상 id 차단).
+ * env-only admin(userId=null)은 resolveCommentAuthorUserId 로 정확히 매칭된 User.id 만 사용.
+ */
+export async function updateCommentByTarget(
+  db: PrismaClient,
+  targetType: CommentTargetType,
+  targetKey: string,
+  commentId: number,
+  auth: ResolvedAuthUser,
+  rawBody: unknown,
+  ensureTarget: EnsureCommentTarget
+): Promise<CommentPublic> {
+  if (!Number.isInteger(commentId) || commentId <= 0) {
+    throw new CommentValidationError("not_found", "Not found", 404);
+  }
+  const body = parseCommentBody(rawBody);
+  const editorUserId = await resolveCommentAuthorUserId(db, auth);
+  try {
+    const updated = await db.$transaction(async (tx) => {
+      await ensureTarget(tx);
+      const thread = await findCommentThread(tx, targetType, targetKey);
+      if (!thread) {
+        throw new CommentValidationError("not_found", "Not found", 404);
+      }
+      const row = await tx.comment.findFirst({
+        where: { id: commentId, threadId: thread.id },
+      });
+      if (!row || row.deletedAt) {
+        throw new CommentValidationError("not_found", "Not found", 404);
+      }
+      if (
+        !canEditComment({
+          userId: editorUserId,
+          authorUserId: row.authorUserId,
+          deletedAt: row.deletedAt,
+        })
+      ) {
+        throw new CommentValidationError("forbidden", "본인 댓글만 수정할 수 있습니다.", 403);
+      }
+      return tx.comment.update({
+        where: { id: row.id },
+        data: { body },
+        include: { author: { select: COMMENT_AUTHOR_SELECT } },
+      });
+    });
+    return toCommentPublic(updated, { role: auth.role, userId: editorUserId });
   } catch (e) {
     if (e instanceof CommentValidationError) throw e;
     if (isCommentTableMissing(e)) commentsUnavailable();
