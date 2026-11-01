@@ -44,6 +44,24 @@ export function isFreeBoardStorageKey(key: string): boolean {
   );
 }
 
+/** 클라이언트 재시도 멱등 키 (UUID v4 소문자). 형식이 다르면 null → 서버가 새 UUID 사용. */
+const UPLOAD_KEY_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+export function normalizeFreeBoardUploadKey(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const k = v.trim().toLowerCase();
+  return UPLOAD_KEY_RE.test(k) ? k : null;
+}
+
+async function findByUploadKey(
+  db: Pick<PrismaClient, "freeBoardPhoto">,
+  postId: number,
+  uploadKey: string
+) {
+  return db.freeBoardPhoto.findFirst({
+    where: { postId, storageKey: { startsWith: `${FREE_BOARD_STORAGE_PREFIX}/${postId}/${uploadKey}.` } },
+  });
+}
+
 export function toFreeBoardPhotoPublic(row: FreeBoardPhoto): FreeBoardPhotoPublic {
   return {
     id: row.id,
@@ -122,8 +140,8 @@ export async function deleteFreeBoardObjectsBestEffort(
 /** 업로드: 게시글 작성자 본인만. 9장 초과 409, 형식(magic bytes) 검증, 크기 제한. */
 export async function uploadFreeBoardPhoto(
   db: PrismaClient,
-  input: { postId: number; bytes: Uint8Array; auth: ResolvedAuthUser }
-): Promise<FreeBoardPhotoPublic> {
+  input: { postId: number; bytes: Uint8Array; auth: ResolvedAuthUser; uploadKey?: string | null }
+): Promise<FreeBoardPhotoPublic & { duplicate?: boolean }> {
   const post = await db.freeBoardPost.findFirst({
     where: { id: input.postId, deletedAt: null },
   });
@@ -151,13 +169,19 @@ export async function uploadFreeBoardPhoto(
   }
   // 저장소 격리 정책 먼저 (Preview 전용 저장소 없으면 503, 공용 fallback 없음)
   const store = requireStore();
+  const uploadKey = normalizeFreeBoardUploadKey(input.uploadKey);
+  // 멱등: 같은 uploadKey 로 이미 저장된 사진이면 새로 만들지 않고 그대로 반환 (재시도 중복 방지)
+  if (uploadKey) {
+    const hit = await findByUploadKey(db, input.postId, uploadKey);
+    if (hit) return { ...toFreeBoardPhotoPublic(hit), duplicate: true };
+  }
   // 빠른 사전 거부 (최종 판정은 아래 트랜잭션의 행 잠금 안에서)
   const pre = await db.freeBoardPhoto.count({ where: { postId: input.postId } });
   if (pre >= FREE_BOARD_PHOTO_MAX) {
     throw new CourseReportPhotoValidationError("photo_limit", LIMIT_MESSAGE, 409);
   }
   const mime = assertCourseReportPhotoBytes(input.bytes);
-  const storageKey = buildFreeBoardPhotoStorageKey(input.postId, mime);
+  const storageKey = buildFreeBoardPhotoStorageKey(input.postId, mime, uploadKey ?? undefined);
   try {
     await store.put(storageKey, input.bytes, mime);
   } catch (e) {
@@ -165,6 +189,7 @@ export async function uploadFreeBoardPhoto(
     throw new CourseReportPhotoStorageError("storage_put_failed", "사진 저장에 실패했습니다.", 502);
   }
   let row: FreeBoardPhoto;
+  let duplicate = false;
   try {
     row = await db.$transaction(async (tx) => {
       // 게시글 행 잠금 → 같은 게시글의 동시 업로드는 직렬화되어 9장 제한이 깨지지 않는다.
@@ -173,6 +198,14 @@ export async function uploadFreeBoardPhoto(
       );
       if (locked.length === 0) {
         throw new CourseReportPhotoValidationError("not_found", "게시글을 찾을 수 없습니다.", 404);
+      }
+      if (uploadKey) {
+        // 동시 재시도: 잠금 안에서 재확인. 같은 키 객체는 기존 행 소유이므로 삭제하지 않는다.
+        const again = await findByUploadKey(tx, input.postId, uploadKey);
+        if (again) {
+          duplicate = true;
+          return again;
+        }
       }
       const count = await tx.freeBoardPhoto.count({ where: { postId: input.postId } });
       if (count >= FREE_BOARD_PHOTO_MAX) {
@@ -194,10 +227,12 @@ export async function uploadFreeBoardPhoto(
     });
   } catch (e) {
     // DB 반영 실패/한도 초과 → 방금 올린 객체 정리 (orphan 방지)
-    await deleteFreeBoardObjectsBestEffort([{ storageKey, postId: input.postId }]);
+    // 단, 같은 uploadKey 행이 (동시 요청으로) 이미 있으면 그 행 소유 객체이므로 지우지 않는다.
+    const owned = uploadKey ? await findByUploadKey(db, input.postId, uploadKey).catch(() => null) : null;
+    if (!owned) await deleteFreeBoardObjectsBestEffort([{ storageKey, postId: input.postId }]);
     throw e;
   }
-  return toFreeBoardPhotoPublic(row);
+  return duplicate ? { ...toFreeBoardPhotoPublic(row), duplicate: true } : toFreeBoardPhotoPublic(row);
 }
 
 /** 사진 삭제: 작성자 본인 또는 관리자. */

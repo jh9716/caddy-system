@@ -4,6 +4,7 @@ import { isFreeBoardAuthResponse, requireFreeBoardReader } from "@/lib/freeBoard
 import {
   FreeBoardPhotoStorageError,
   FreeBoardPhotoValidationError,
+  normalizeFreeBoardUploadKey,
   uploadFreeBoardPhoto,
 } from "@/lib/freeBoardPhoto";
 import { FREE_BOARD_PHOTO_MAX_BYTES } from "@/lib/freeBoardConstants";
@@ -11,7 +12,8 @@ import { FREE_BOARD_PHOTO_MAX_BYTES } from "@/lib/freeBoardConstants";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-async function readUploadBytes(req: NextRequest): Promise<Uint8Array> {
+async function readUpload(req: NextRequest): Promise<{ bytes: Uint8Array; uploadKey: string | null }> {
+  const headerKey = req.headers.get("x-upload-key");
   const declared = Number(req.headers.get("content-length") || 0);
   // multipart overhead 여유 64KB
   if (declared > FREE_BOARD_PHOTO_MAX_BYTES + 64 * 1024) {
@@ -24,13 +26,17 @@ async function readUploadBytes(req: NextRequest): Promise<Uint8Array> {
     if (!(file instanceof Blob)) {
       throw new FreeBoardPhotoValidationError("empty_file", "사진 파일이 필요합니다.");
     }
-    return new Uint8Array(await file.arrayBuffer());
+    const formKey = form?.get("uploadKey");
+    return {
+      bytes: new Uint8Array(await file.arrayBuffer()),
+      uploadKey: normalizeFreeBoardUploadKey(typeof formKey === "string" ? formKey : headerKey),
+    };
   }
   const buf = await req.arrayBuffer().catch(() => null);
   if (!buf || buf.byteLength === 0) {
     throw new FreeBoardPhotoValidationError("empty_file", "사진 파일이 필요합니다.");
   }
-  return new Uint8Array(buf);
+  return { bytes: new Uint8Array(buf), uploadKey: normalizeFreeBoardUploadKey(headerKey) };
 }
 
 /** 사진 1장 업로드. 작성자 본인만, 게시글당 최대 9장 (서버 강제). */
@@ -45,9 +51,9 @@ export async function POST(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   try {
-    const bytes = await readUploadBytes(req);
-    const photo = await uploadFreeBoardPhoto(prisma, { postId: id, bytes, auth });
-    return NextResponse.json({ ok: true, photo }, { status: 201 });
+    const { bytes, uploadKey } = await readUpload(req);
+    const { duplicate, ...photo } = await uploadFreeBoardPhoto(prisma, { postId: id, bytes, auth, uploadKey });
+    return NextResponse.json({ ok: true, photo, duplicate: !!duplicate }, { status: duplicate ? 200 : 201 });
   } catch (e) {
     if (e instanceof FreeBoardPhotoValidationError || e instanceof FreeBoardPhotoStorageError) {
       return NextResponse.json({ error: e.code, message: e.message }, { status: e.status });

@@ -7085,3 +7085,52 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
   opacity: 0.35;
   filter: grayscale(1);
 }
+/* 자유게시판 사진 선택 UX */
+.free-board-photo-add {
+  cursor: pointer;
+  width: 100%;
+}
+.free-board-photo-add.is-full {
+  opacity: 0.6;
+  border-style: solid;
+  font-size: 12px;
+}
+.free-board-photo-pending.is-failed {
+  outline: 2px solid var(--vh-danger, #c0392b);
+}
+.free-board-photo-pending.is-uploading img {
+  opacity: 0.6;
+}
+.free-board-photo-badge {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+}
+.free-board-photo-badge.is-ok {
+  background: rgba(30, 120, 60, 0.85);
+}
+.free-board-photo-badge.is-fail {
+  background: var(--vh-danger, #c0392b);
+}
+.free-board-photo-preparing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--vh-ink-soft);
+}
+.free-board-photo-failures {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--vh-danger, #c0392b);
+}
+.free-board-photo-failname {
+  word-break: break-all;
+}

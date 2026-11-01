@@ -127,8 +127,16 @@ async function main() {
   let sharedCalls = 0;
   let deleteCalls = 0;
   let failDeleteKeys = new Set<string>();
+  let failPutRemaining = 0;
   const dedicated: CourseReportPhotoStore = {
     ...mem,
+    async put(...a) {
+      if (failPutRemaining > 0) {
+        failPutRemaining--;
+        throw new Error("mock put failure");
+      }
+      return mem.put(...a);
+    },
     async delete(key) {
       deleteCalls++;
       if (failDeleteKeys.has(key)) throw new Error("mock delete failure");
@@ -454,6 +462,113 @@ async function main() {
       assert(stored === 9, "DB 행마다 객체 존재");
     }
 
+    section("client upload helper: 1/5/9장, 부분 실패 → 실패분만 재시도, 멱등");
+    {
+      const { uploadFreeBoardPhotos, newFreeBoardUploadKey } = await import("../src/lib/freeBoardUploadClient");
+      const { normalizeFreeBoardUploadKey } = await import("../src/lib/freeBoardPhoto");
+      const mkPost = async (title: string) => {
+        const r = await json(
+          await CREATE(req("http://local/api/free-board", { method: "POST", headers: H(A), body: JSON.stringify({ title, body: "b" }) }))
+        );
+        postIds.push(Number(r.id));
+        return Number(r.id);
+      };
+      let netFail = new Set<number>();
+      let calls = 0;
+      const post = (async (url: string, init: RequestInit) => {
+        const n = calls++;
+        if (netFail.has(n)) throw new TypeError("Failed to fetch");
+        const id = Number(String(url).split("/")[3]);
+        return PHOTO_POST(
+          req(`http://local${url}`, { method: "POST", headers: { ...(init.headers as Record<string, string>), cookie: A }, body: init.body as FormData }),
+          idP(id)
+        );
+      }) as unknown as typeof fetch;
+      const mkItems = (n: number) =>
+        Array.from({ length: n }, (_, i) => ({
+          key: `k${i}`,
+          uploadKey: newFreeBoardUploadKey(),
+          blob: new Blob([png()], { type: "image/png" }),
+          status: "ready" as const,
+        })) as { key: string; uploadKey: string; blob: Blob; status: "ready" | "uploading" | "done" | "failed"; error?: string }[];
+      const apply = (items: ReturnType<typeof mkItems>) => (key: string, patch: object) => {
+        const it = items.find((x) => x.key === key)!;
+        Object.assign(it, patch);
+      };
+      for (const n of [1, 5, 9]) {
+        const id = await mkPost(`n${n}`);
+        const items = mkItems(n);
+        const prog: string[] = [];
+        const r = await uploadFreeBoardPhotos(id, items, { post, onItem: apply(items), onProgress: (d, t) => prog.push(`${d}/${t}`) });
+        assert(r.uploaded === n && r.failed === 0, `${n}장 업로드 성공`);
+        assert((await prisma.freeBoardPhoto.count({ where: { postId: id } })) === n, `${n}장 DB 저장`);
+        assert(prog[prog.length - 1] === `${n}/${n}` && prog[0] === `0/${n}`, `${n}장 진행률 0/${n}→${n}/${n}`);
+      }
+      // 부분 실패: 9장 중 네트워크 오류 2건 + 저장소 오류 1건
+      const id9 = await mkPost("partial");
+      const items = mkItems(9);
+      calls = 0;
+      netFail = new Set([2, 6]);
+      failPutRemaining = 0;
+      const realPut = dedicated.put;
+      let putN = 0;
+      dedicated.put = async (...a) => {
+        if (putN++ === 3) throw new Error("mock put failure");
+        return realPut(...a);
+      };
+      const r1 = await uploadFreeBoardPhotos(id9, items, { post, onItem: apply(items) });
+      dedicated.put = realPut;
+      assert(r1.uploaded === 6 && r1.failed === 3, `부분 실패 6 성공 / 3 실패 (실제 ${r1.uploaded}/${r1.failed})`);
+      assert(items.filter((i) => i.status === "failed").length === 3, "실패 3장 표시");
+      assert(items.filter((i) => i.status === "failed").every((i) => typeof i.error === "string" && i.error.length > 0), "실패 사유 표시");
+      assert((await prisma.freeBoardPhoto.count({ where: { postId: id9 } })) === 6, "DB 6장");
+      // 재시도: 실패분만 전송
+      calls = 0;
+      netFail = new Set();
+      const r2 = await uploadFreeBoardPhotos(id9, items, { post, onItem: apply(items) });
+      assert(calls === 3 && r2.uploaded === 3 && r2.failed === 0, "재시도는 실패한 3장만 전송");
+      assert((await prisma.freeBoardPhoto.count({ where: { postId: id9 } })) === 9, "재시도 후 정확히 9장");
+      // 응답 유실 시나리오: 서버는 저장했지만 클라이언트는 실패로 알고 전부 재전송 → 중복 0
+      for (const it of items) it.status = "failed";
+      calls = 0;
+      const r3 = await uploadFreeBoardPhotos(id9, items, { post, onItem: apply(items) });
+      assert(r3.uploaded === 9 && r3.failed === 0, "같은 uploadKey 재전송 9건 모두 ok (duplicate)");
+      assert((await prisma.freeBoardPhoto.count({ where: { postId: id9 } })) === 9, "중복 생성 없음 (여전히 9장, 409 아님)");
+      const keys9 = await prisma.freeBoardPhoto.findMany({ where: { postId: id9 }, select: { storageKey: true } });
+      assert(new Set(keys9.map((k) => k.storageKey)).size === 9, "storageKey 고유");
+      assert(keys9.every((k) => isFreeBoardStorageKey(k.storageKey)), "멱등 키도 free-board/<postId>/<uuid> 형식");
+      let objs = 0;
+      for (const k of keys9) if (await mem.head(k.storageKey)) objs++;
+      assert(objs === 9, "중복 재전송 후에도 객체 9개 유지 (삭제되지 않음)");
+      // 새 uploadKey 10번째는 여전히 409 (9장 제한 유지)
+      const tenth = await uploadFreeBoardPhotos(id9, mkItems(1), { post });
+      assert(tenth.failed === 1, "새 키 10번째 → 실패 (409)");
+      // 동시 같은 키 2건 → 1행
+      const idC = await mkPost("same-key-concurrent");
+      const k = newFreeBoardUploadKey();
+      const same = [0, 1].map((i) => ({ key: `s${i}`, uploadKey: k, blob: new Blob([png()], { type: "image/png" }), status: "ready" as const }));
+      await Promise.all(same.map((it) => uploadFreeBoardPhotos(idC, [it], { post })));
+      assert((await prisma.freeBoardPhoto.count({ where: { postId: idC } })) === 1, "동시 같은 키 2건 → 1행");
+      const rowC = await prisma.freeBoardPhoto.findFirst({ where: { postId: idC } });
+      assert(Boolean(await mem.head(rowC!.storageKey)), "동시 같은 키: 객체 유지");
+      // 키 형식 검증
+      assert(normalizeFreeBoardUploadKey(k.toUpperCase()) === k, "uploadKey 대소문자 정규화");
+      for (const bad of ["../x", "notices/1", "", "1234", "00000000-0000-0000-0000-000000000000", 5, null]) {
+        assert(normalizeFreeBoardUploadKey(bad) === null, `잘못된 uploadKey 무시: ${String(bad)}`);
+      }
+      // 타인이 남의 키로 재전송해도 남의 글이면 403
+      const other = await PHOTO_POST(
+        (() => {
+          const fd = new FormData();
+          fd.append("uploadKey", items[0].uploadKey);
+          fd.append("file", new Blob([png()], { type: "image/png" }), "p.png");
+          return req(`http://local/api/free-board/${id9}/photos`, { method: "POST", headers: { cookie: B }, body: fd });
+        })(),
+        idP(id9)
+      );
+      assert(other.status === 403, "타인 + 기존 uploadKey → 403 (정보 노출 없음)");
+    }
+
     section("edit with removedPhotoIds (deferred delete)");
     {
       const before = await prisma.freeBoardPhoto.findMany({ where: { postId: pid }, orderBy: { id: "asc" } });
@@ -508,7 +623,18 @@ async function main() {
       const form = read("src/app/community/FreeBoardForm.tsx");
       assert(!/method: "DELETE"/.test(form), "수정 화면에서 즉시 DELETE 호출 없음");
       assert(form.includes("removedPhotoIds: removedIds"), "저장 시 removedPhotoIds 전송");
-      assert(form.lastIndexOf("uploadPendingPhotos(postId") > form.indexOf("isEdit ? { title, body"), "새 사진은 저장 성공 후 업로드 (취소 시 업로드 없음)");
+      assert(form.lastIndexOf("uploadFreeBoardPhotos(postId") > form.indexOf("isEdit ? { title, body"), "새 사진은 저장 성공 후 업로드 (취소 시 업로드 없음)");
+      // 폼 UX 정적 점검 (P1/P2)
+      assert(/className="is-revealed"/.test(form) && (form.match(/is-revealed/g) || []).length >= 2, "미리보기/기존 사진 img 에 is-revealed (opacity:0 빈 썸네일 방지)");
+      assert(!/<img src=\{photo\.previewUrl\} alt="" \/>/.test(form), "빈 썸네일 원인 패턴 제거");
+      assert(/disabled=\{busy \|\| preparing > 0\}/.test(form), "전처리 중 등록 버튼 비활성");
+      assert(form.includes("사진 업로드 ${Math.min(progress.done + 1, progress.total)}/${progress.total}"), "진행률 표시 (사진 업로드 n/N)");
+      assert(form.includes("beforeunload") && form.includes('closest?.("a[href]")'), "이탈 방지 (beforeunload + 앱 내 링크)");
+      assert(form.includes("savedPostId") && /if \(postId === null\)/.test(form), "재시도 시 글 재생성 없음 (postId 보존)");
+      assert(!/[^-]disabled=\{!canAdd/.test(form) && form.includes("onAddClick") && form.includes("aria-disabled"), "+사진: 무반응 disabled 대신 안내");
+      assert(form.includes("pickFailures") && form.includes("f.name"), "변환 실패 사진 파일명+사유 표시");
+      assert(form.includes("실패한 사진") && form.includes("사진 없이 완료"), "실패분 재시도/완료 버튼");
+      assert(!/revokeObjectURL\(url\)/.test(form), "표시 중 object URL 조기 해제 없음");
     }
 
     section("post delete");
