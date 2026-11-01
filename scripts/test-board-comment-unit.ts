@@ -582,6 +582,64 @@ async function main() {
         dateParams(pubDate)
       );
       assert(envWrongRole.status === 403, "env admin cannot use caddy username User");
+
+      section("canEdit flags: 작성 직후 + 재조회 (env 관리자 포함)");
+      assert(envLinkedJson.comment?.canEdit === true, "env admin POST 응답 canEdit=true (작성 직후 수정 버튼)");
+      assert(envLinkedJson.comment?.canDelete === true, "env admin POST 응답 canDelete=true");
+      const envOwnId = Number(envLinkedJson.comment?.id);
+      const list = async (cookie: string) => {
+        const r = await GET_COMMENTS(
+          req(`http://local/api/board/${pubDate}/comments`, { headers: { cookie } }),
+          dateParams(pubDate)
+        );
+        return ((await jsonOf(r)).comments ?? []) as Array<{
+          id: number; authorUserId: number | null; body: string | null; canEdit: boolean; canDelete: boolean;
+        }>;
+      };
+      const byBody = (rows: Awaited<ReturnType<typeof list>>, body: string) => rows.find((c) => c.body === body)!;
+      // env 관리자 (DB admin username 일치)
+      const envRows = await list(envLinkedCookie);
+      assert(byBody(envRows, "env-linked").canEdit === true, "env admin 재조회: 본인 댓글 canEdit=true");
+      assert(byBody(envRows, "관리자 댓글").canEdit === true, "env admin 재조회: 같은 DB admin User 댓글 = 본인 → canEdit=true");
+      assert(byBody(envRows, "캐디 댓글").canEdit === false, "env admin: 캐디 댓글 canEdit=false");
+      assert(byBody(envRows, "조장 댓글").canEdit === false, "env admin: 조장 댓글 canEdit=false");
+      assert(envRows.every((c) => c.canDelete === true), "env admin: 모든 댓글 canDelete=true (관리자 삭제 유지)");
+      // DB 세션 관리자
+      const admRows = await list(adminCookie);
+      assert(byBody(admRows, "관리자 댓글").canEdit === true && byBody(admRows, "env-linked").canEdit === true, "DB admin: 본인 댓글 canEdit=true");
+      assert(byBody(admRows, "캐디 댓글").canEdit === false && byBody(admRows, "조장 댓글").canEdit === false, "DB admin: 타인 canEdit=false");
+      assert(admRows.every((c) => c.canDelete === true), "DB admin: canDelete 전체");
+      // 캐디
+      const cadRows = await list(caddyCookie);
+      assert(byBody(cadRows, "캐디 댓글").canEdit && byBody(cadRows, "캐디 댓글").canDelete, "caddy: 본인 edit/delete");
+      assert(!byBody(cadRows, "관리자 댓글").canEdit && !byBody(cadRows, "관리자 댓글").canDelete, "caddy: 관리자 댓글 edit/delete 불가");
+      assert(!byBody(cadRows, "조장 댓글").canEdit && !byBody(cadRows, "조장 댓글").canDelete, "caddy: 조장 댓글 edit/delete 불가");
+      // 조장
+      const ldRows = await list(leaderCookie);
+      assert(byBody(ldRows, "조장 댓글").canEdit && byBody(ldRows, "조장 댓글").canDelete, "leader: 본인 edit/delete");
+      assert(!byBody(ldRows, "캐디 댓글").canEdit && !byBody(ldRows, "캐디 댓글").canDelete, "leader: 캐디 댓글 edit/delete 불가");
+      // 매칭 안 되는 env 관리자 / 캐디 username 사칭 env 관리자
+      const unRows = await list(envAdminCookie);
+      assert(unRows.every((c) => c.canEdit === false) && unRows.every((c) => c.canDelete === true), "unmatched env admin: edit 없음, delete 유지");
+      const spoofRows = await list(envCaddyNameCookie);
+      assert(spoofRows.every((c) => c.canEdit === false), "env admin + caddy username: 캐디 댓글 canEdit=false (admin role User 만 매칭)");
+      // PATCH 실제 동작과 일치
+      const patchAs = (cookie: string, id: number, body: string) =>
+        PATCH_COMMENT(
+          req(`http://local/api/board/${pubDate}/comments/${id}`, {
+            method: "PATCH",
+            headers: { cookie, "content-type": "application/json" },
+            body: JSON.stringify({ body }),
+          }),
+          commentParams(pubDate, id)
+        );
+      const envPatch = await patchAs(envLinkedCookie, envOwnId, "env-linked");
+      assert(envPatch.status === 200 && (await jsonOf(envPatch)).comment?.canEdit === true, "env admin 본인 PATCH 200, 응답 canEdit=true");
+      const caddyRowId = byBody(envRows, "캐디 댓글").id;
+      assert((await patchAs(envLinkedCookie, caddyRowId, "x")).status === 403, "env admin 타인 PATCH 403");
+      assert((await patchAs(adminCookie, caddyRowId, "x")).status === 403, "DB admin 타인 PATCH 403");
+      const after = await list(envLinkedCookie);
+      assert(byBody(after, "env-linked").canEdit === true && byBody(after, "캐디 댓글").body === "캐디 댓글", "PATCH 후 재조회 일관 + 타인 본문 불변");
     }
 
     section("validation");

@@ -115,7 +115,7 @@ export async function requireBoardCommentReader(
 export async function listBoardDateComments(
   db: PrismaClient,
   ymd: string,
-  viewer: { role: ResolvedAuthUser["role"]; userId: number | null }
+  viewer: { role: ResolvedAuthUser["role"]; userId: number | null; username?: string | null }
 ): Promise<CommentPublic[]> {
   const date = parseBoardCommentDate(ymd);
   const { targetType, targetKey } = boardDateTarget(date);
