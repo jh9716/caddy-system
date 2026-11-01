@@ -1,7 +1,8 @@
 import { notFound, redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getRequestAuthUser } from "@/lib/getRequestAuthUser";
-import { canEditFreeBoardPost, findLiveFreeBoardPost } from "@/lib/freeBoard";
+import { canEditFreeBoardPost, findLiveFreeBoardPost, resolveFreeBoardActor } from "@/lib/freeBoard";
+import { isFreeBoardEnabled } from "@/lib/freeBoardConstants";
 import { listFreeBoardPhotos } from "@/lib/freeBoardPhoto";
 import FreeBoardForm from "../../FreeBoardForm";
 
@@ -13,13 +14,15 @@ export default async function EditFreeBoardPostPage({
 }: {
   params: Promise<{ id: string }> | { id: string };
 }) {
+  if (!isFreeBoardEnabled()) notFound();
   const auth = await getRequestAuthUser();
   if (!auth) redirect("/login?callbackUrl=/community");
+  const actor = await resolveFreeBoardActor(prisma, auth).catch(() => auth);
   const id = Number((await Promise.resolve(params)).id);
   const row = await findLiveFreeBoardPost(prisma, id);
   if (!row) notFound();
   if (
-    !canEditFreeBoardPost({ userId: auth.userId, authorUserId: row.authorUserId, deletedAt: row.deletedAt })
+    !canEditFreeBoardPost({ role: actor.role, userId: actor.userId, authorUserId: row.authorUserId, deletedAt: row.deletedAt })
   ) {
     redirect(`/community/${row.id}`);
   }

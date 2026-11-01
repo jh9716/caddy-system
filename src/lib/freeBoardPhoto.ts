@@ -150,6 +150,7 @@ export async function uploadFreeBoardPhoto(
   }
   if (
     !canEditFreeBoardPost({
+      role: input.auth.role,
       userId: input.auth.userId,
       authorUserId: post.authorUserId,
       deletedAt: post.deletedAt,

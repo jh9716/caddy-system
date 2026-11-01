@@ -3,7 +3,8 @@ import dayjs from "dayjs";
 import { notFound, redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getRequestAuthUser } from "@/lib/getRequestAuthUser";
-import { findLiveFreeBoardPost, toFreeBoardPostPublic } from "@/lib/freeBoard";
+import { findLiveFreeBoardPost, resolveFreeBoardActor, toFreeBoardPostPublic } from "@/lib/freeBoard";
+import { isFreeBoardEnabled } from "@/lib/freeBoardConstants";
 import { listFreeBoardPhotos } from "@/lib/freeBoardPhoto";
 import { canComposeCommentAs, listFreeBoardComments } from "@/lib/freeBoardComments";
 import FreeBoardPhotoGallery from "../FreeBoardPhotoGallery";
@@ -19,15 +20,17 @@ export default async function FreeBoardDetailPage({
 }: {
   params: Promise<{ id: string }> | { id: string };
 }) {
+  if (!isFreeBoardEnabled()) notFound();
   const auth = await getRequestAuthUser();
   if (!auth) redirect("/login?callbackUrl=/community");
+  const actor = await resolveFreeBoardActor(prisma, auth).catch(() => auth);
   const id = Number((await Promise.resolve(params)).id);
   const row = await findLiveFreeBoardPost(prisma, id);
   if (!row) notFound();
   const photos = await listFreeBoardPhotos(prisma, row.id);
-  const post = toFreeBoardPostPublic(row, auth, { photoCount: photos.length });
-  const comments = await listFreeBoardComments(prisma, row.id, auth);
-  const canCompose = await canComposeCommentAs(prisma, auth);
+  const post = toFreeBoardPostPublic(row, actor, { photoCount: photos.length });
+  const comments = await listFreeBoardComments(prisma, row.id, actor);
+  const canCompose = await canComposeCommentAs(prisma, actor);
 
   return (
     <div className="course-report-page course-report-detail free-board-page">

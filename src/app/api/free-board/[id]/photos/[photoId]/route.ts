@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { isFreeBoardAuthResponse, requireFreeBoardReader } from "@/lib/freeBoard";
+import { FreeBoardValidationError, isFreeBoardAuthResponse, requireFreeBoardReader, resolveFreeBoardActor } from "@/lib/freeBoard";
 import {
   FreeBoardPhotoStorageError,
   FreeBoardPhotoValidationError,
@@ -32,7 +32,7 @@ function invalid(postId: number, photoId: number) {
 }
 
 function fail(e: unknown) {
-  if (e instanceof FreeBoardPhotoValidationError || e instanceof FreeBoardPhotoStorageError) {
+  if (e instanceof FreeBoardValidationError || e instanceof FreeBoardPhotoValidationError || e instanceof FreeBoardPhotoStorageError) {
     return NextResponse.json({ error: e.code, message: e.message }, { status: e.status });
   }
   throw e;
@@ -65,7 +65,8 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
   const { postId, photoId } = await ids(ctx);
   if (invalid(postId, photoId)) return NextResponse.json({ error: "Not found" }, { status: 404 });
   try {
-    const result = await deleteFreeBoardPhoto(prisma, { postId, photoId, auth });
+    const actor = await resolveFreeBoardActor(prisma, auth);
+    const result = await deleteFreeBoardPhoto(prisma, { postId, photoId, auth: actor });
     return NextResponse.json({
       ok: true,
       ...(result.blobCleanupFailed ? { blobCleanupFailed: true } : {}),

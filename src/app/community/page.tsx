@@ -2,17 +2,20 @@ import Link from "next/link";
 import dayjs from "dayjs";
 import { prisma } from "@/lib/prisma";
 import { getRequestAuthUser } from "@/lib/getRequestAuthUser";
-import { canComposeFreeBoard, listFreeBoardPosts } from "@/lib/freeBoard";
-import { FREE_BOARD_LABEL, FREE_BOARD_LIST_TAKE } from "@/lib/freeBoardConstants";
+import { canComposeFreeBoard, listFreeBoardPosts, resolveFreeBoardActor } from "@/lib/freeBoard";
+import { FREE_BOARD_LABEL, FREE_BOARD_LIST_TAKE, isFreeBoardEnabled } from "@/lib/freeBoardConstants";
+import { notFound } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export default async function CommunityListPage() {
+  if (!isFreeBoardEnabled()) notFound();
   const auth = await getRequestAuthUser();
   if (!auth) return null;
-  const posts = await listFreeBoardPosts(prisma, auth, FREE_BOARD_LIST_TAKE);
-  const canCompose = canComposeFreeBoard(auth);
+  const actor = await resolveFreeBoardActor(prisma, auth).catch(() => auth);
+  const posts = await listFreeBoardPosts(prisma, actor, FREE_BOARD_LIST_TAKE);
+  const canCompose = canComposeFreeBoard(actor);
 
   return (
     <div className="course-report-page free-board-page">

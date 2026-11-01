@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { CommentPublic } from "@/lib/comment";
+import type { FreeBoardCommentPublic } from "@/lib/freeBoardComments";
 import { COMMENT_BODY_MAX, COMMENT_DELETED_PLACEHOLDER } from "@/lib/commentConstants";
 import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
 
@@ -19,13 +19,15 @@ export default function FreeBoardComments({
   canCompose,
 }: {
   postId: number;
-  initialComments: CommentPublic[];
+  initialComments: FreeBoardCommentPublic[];
   canCompose: boolean;
 }) {
   const [comments, setComments] = useState(initialComments);
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingBody, setEditingBody] = useState("");
   const liveCount = comments.filter((c) => !c.deleted).length;
   const base = `/api/free-board/${postId}/comments`;
 
@@ -34,7 +36,7 @@ export default function FreeBoardComments({
     if (!res) return;
     if (consumeUnauthorizedMemberResponse(res) || !res.ok) return;
     const data = await res.json().catch(() => ({}));
-    if (Array.isArray(data.comments)) setComments(data.comments as CommentPublic[]);
+    if (Array.isArray(data.comments)) setComments(data.comments as FreeBoardCommentPublic[]);
   }
 
   async function onSubmit(e: React.FormEvent) {
@@ -65,9 +67,29 @@ export default function FreeBoardComments({
       setError(typeof data.message === "string" ? data.message : "댓글 등록 실패");
       return;
     }
-    if (data.comment) setComments((cur) => [...cur, data.comment as CommentPublic]);
+    if (data.comment) setComments((cur) => [...cur, data.comment as FreeBoardCommentPublic]);
     setBody("");
     void reload();
+  }
+
+  async function onEdit(id: number) {
+    if (busy || !editingBody.trim()) return;
+    setBusy(true);
+    setError(null);
+    const res = await fetch(`${base}/${id}`, {
+      method: "PATCH",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body: editingBody }),
+    }).catch(() => null);
+    setBusy(false);
+    if (!res) return setError("네트워크 오류로 수정하지 못했습니다.");
+    if (consumeUnauthorizedMemberResponse(res)) return;
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return setError(typeof data.message === "string" ? data.message : "댓글 수정 실패");
+    if (data.comment) setComments((cur) => cur.map((c) => (c.id === id ? data.comment : c)));
+    setEditingId(null);
+    setEditingBody("");
   }
 
   async function onDelete(id: number) {
@@ -122,6 +144,16 @@ export default function FreeBoardComments({
                   <div className="course-report-comment-meta">
                     <span className="course-report-comment-author">{item.authorDisplayName}</span>
                     <time dateTime={item.createdAt}>{formatTime(item.createdAt)}</time>
+                    {item.canEdit ? (
+                      <button
+                        type="button"
+                        className="course-report-comment-delete free-board-touch"
+                        disabled={busy}
+                        onClick={() => { setEditingId(item.id); setEditingBody(item.body ?? ""); }}
+                      >
+                        수정
+                      </button>
+                    ) : null}
                     {item.canDelete ? (
                       <button
                         type="button"
@@ -133,7 +165,24 @@ export default function FreeBoardComments({
                       </button>
                     ) : null}
                   </div>
-                  <p className="course-report-comment-body">{item.body}</p>
+                  {editingId === item.id ? (
+                    <div className="course-report-comment-form">
+                      <textarea
+                        aria-label="댓글 수정"
+                        value={editingBody}
+                        maxLength={COMMENT_BODY_MAX}
+                        rows={3}
+                        disabled={busy}
+                        onChange={(e) => setEditingBody(e.target.value)}
+                      />
+                      <div>
+                        <button type="button" className="ui-btn ui-btn-primary" disabled={busy || !editingBody.trim()} onClick={() => void onEdit(item.id)}>저장</button>
+                        <button type="button" className="ui-btn ui-btn-ghost" disabled={busy} onClick={() => { setEditingId(null); setEditingBody(""); }}>취소</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="course-report-comment-body">{item.body}</p>
+                  )}
                 </>
               )}
             </li>

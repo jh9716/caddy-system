@@ -159,7 +159,7 @@ async function main() {
     "../src/app/api/free-board/[id]/photos/[photoId]/route"
   );
   const { GET: C_LIST, POST: C_POST } = await import("../src/app/api/free-board/[id]/comments/route");
-  const { DELETE: C_DEL } = await import("../src/app/api/free-board/[id]/comments/[commentId]/route");
+  const { PATCH: C_PATCH, DELETE: C_DEL } = await import("../src/app/api/free-board/[id]/comments/[commentId]/route");
   const { buildFreeBoardPhotoStorageKey, isFreeBoardStorageKey } = await import("../src/lib/freeBoardPhoto");
 
   const tag = `fb_${Date.now()}`;
@@ -347,15 +347,17 @@ async function main() {
       "unauth create 401"
     );
 
-    section("create / validation");
+    section("create / validation / 관리자 전용");
+    assert((await CREATE(req("http://local/api/free-board", { method: "POST", headers: H(A), body: JSON.stringify({ title: "t", body: "b" }) }))).status === 403, "caddy create 403");
+    assert((await CREATE(req("http://local/api/free-board", { method: "POST", headers: H(B), body: JSON.stringify({ title: "t", body: "b" }) }))).status === 403, "other caddy create 403");
     const bad1 = await CREATE(
-      req("http://local/api/free-board", { method: "POST", headers: H(A), body: JSON.stringify({ title: " ", body: "b" }) })
+      req("http://local/api/free-board", { method: "POST", headers: H(ADM), body: JSON.stringify({ title: " ", body: "b" }) })
     );
     assert(bad1.status === 400, "empty title 400");
     const bad2 = await CREATE(
       req("http://local/api/free-board", {
         method: "POST",
-        headers: H(A),
+        headers: H(ADM),
         body: JSON.stringify({ title: "x".repeat(101), body: "b" }),
       })
     );
@@ -363,7 +365,7 @@ async function main() {
     const bad3 = await CREATE(
       req("http://local/api/free-board", {
         method: "POST",
-        headers: H(A),
+        headers: H(ADM),
         body: JSON.stringify({ title: "t", body: "b".repeat(5001) }),
       })
     );
@@ -371,7 +373,7 @@ async function main() {
     const created = await CREATE(
       req("http://local/api/free-board", {
         method: "POST",
-        headers: H(A),
+        headers: H(ADM),
         body: JSON.stringify({ title: " 첫 글 ", body: "<b>내용</b>" }),
       })
     );
@@ -381,32 +383,32 @@ async function main() {
     postIds.push(pid);
     assert(cBody.post.title === "첫 글", "title trimmed");
     assert(cBody.post.body === "<b>내용</b>", "body stored as plain text");
-    assert(cBody.post.authorDisplayName === "자유캐디A", "author display = caddy name");
-    assert(cBody.post.canEdit && cBody.post.canDelete, "author can edit/delete");
+    assert(cBody.post.authorDisplayName === uAdmin.username, "author display = admin username");
+    assert(cBody.post.canEdit && cBody.post.canDelete, "admin can edit/delete");
 
     section("list / detail");
     const list = await json(await LIST(req("http://local/api/free-board", { headers: { cookie: B } })));
     const row = list.posts.find((p: { id: number }) => p.id === pid);
     assert(row && row.canEdit === false && row.canDelete === false, "other: no edit/delete flags");
-    assert(list.canCompose === true, "caddy canCompose");
+    assert(list.canCompose === false, "caddy cannot compose");
     const adminList = await json(await LIST(req("http://local/api/free-board", { headers: { cookie: ADM } })));
     const arow = adminList.posts.find((p: { id: number }) => p.id === pid);
-    assert(arow.canDelete === true && arow.canEdit === false, "admin: delete yes, edit no");
+    assert(arow.canDelete === true && arow.canEdit === true, "admin: edit/delete yes");
     const det = await DETAIL(req(`http://local/api/free-board/${pid}`, { headers: { cookie: B } }), idP(pid));
     assert(det.status === 200, "detail 200");
     assert((await DETAIL(req(`http://local/api/free-board/999999`, { headers: { cookie: B } }), idP(999999))).status === 404, "missing 404");
     assert((await DETAIL(req(`http://local/api/free-board/abc`, { headers: { cookie: B } }), { params: { id: "abc" } })).status === 404, "bad id 404");
 
-    section("edit (author only)");
+    section("edit (admin only)");
     const patch = (cookie: string, body: unknown) =>
       PATCH(req(`http://local/api/free-board/${pid}`, { method: "PATCH", headers: H(cookie), body: JSON.stringify(body) }), idP(pid));
     assert((await patch(B, { title: "x", body: "y" })).status === 403, "other PATCH 403");
-    assert((await patch(ADM, { title: "x", body: "y" })).status === 403, "admin PATCH others 403");
-    assert((await patch(A, { title: "", body: "y" })).status === 400, "author PATCH invalid 400");
-    const ok = await patch(A, { title: "수정 제목", body: "수정 내용" });
-    assert(ok.status === 200, "author PATCH 200");
+    assert((await patch(A, { title: "x", body: "y" })).status === 403, "caddy PATCH 403");
+    assert((await patch(ADM, { title: "", body: "y" })).status === 400, "admin PATCH invalid 400");
+    const ok = await patch(ADM, { title: "수정 제목", body: "수정 내용" });
+    assert(ok.status === 200, "admin PATCH 200");
     const after = await prisma.freeBoardPost.findUnique({ where: { id: pid } });
-    assert(after?.title === "수정 제목" && after?.authorUserId === uA.id, "DB updated, author unchanged");
+    assert(after?.title === "수정 제목" && after?.authorUserId === uAdmin.id, "DB updated, author unchanged");
 
     section("photos (max 9, type, permission, prefix)");
     const up = (cookie: string, bytes: Uint8Array, id = pid) => {
@@ -415,18 +417,17 @@ async function main() {
       return PHOTO_POST(req(`http://local/api/free-board/${id}/photos`, { method: "POST", headers: { cookie }, body: fd }), idP(id));
     };
     assert((await up(B, png())).status === 403, "other upload 403");
-    assert((await up(ADM, png())).status === 403, "admin upload to others 403");
-    const notImg = await up(A, Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]));
+    const notImg = await up(ADM, Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]));
     assert(notImg.status >= 400 && notImg.status < 500, "non-image rejected 4xx");
     let lastPhotoId = 0;
     for (let i = 0; i < 9; i++) {
-      const r = await up(A, png());
+      const r = await up(ADM, png());
       const b = await json(r);
       if (r.status !== 201) console.error("upload", i, r.status, b);
       lastPhotoId = Number(b.photo?.id);
     }
     assert((await prisma.freeBoardPhoto.count({ where: { postId: pid } })) === 9, "9 photos stored");
-    const tenth = await up(A, png());
+    const tenth = await up(ADM, png());
     assert(tenth.status === 409, "10th photo 409");
     assert((await prisma.freeBoardPhoto.count({ where: { postId: pid } })) === 9, "still 9 after 10th");
     const keys = await prisma.freeBoardPhoto.findMany({ where: { postId: pid }, select: { storageKey: true } });
@@ -445,11 +446,11 @@ async function main() {
     );
     assert(pdelOther.status === 403, "other photo delete 403");
     const pdel = await PHOTO_DEL(
-      req(`http://local/api/free-board/${pid}/photos/${lastPhotoId}`, { method: "DELETE", headers: { cookie: A } }),
+      req(`http://local/api/free-board/${pid}/photos/${lastPhotoId}`, { method: "DELETE", headers: { cookie: ADM } }),
       { params: { id: String(pid), photoId: String(lastPhotoId) } }
     );
-    assert(pdel.status === 200, "author photo delete 200");
-    assert((await up(A, png())).status === 201, "upload again after delete (8→9)");
+    assert(pdel.status === 200, "admin photo delete 200");
+    assert((await up(ADM, png())).status === 201, "upload again after delete (8→9)");
     assert(sharedCalls === 0, "preview 에서 공용 store 미사용");
 
     section("comments");
@@ -471,7 +472,14 @@ async function main() {
       C_DEL(req(`http://local/api/free-board/${pid}/comments/${cid}`, { method: "DELETE", headers: { cookie } }), {
         params: { id: String(pid), commentId: String(cid) },
       });
+    const cpatch = (cookie: string, cid: number, body: string) =>
+      C_PATCH(req(`http://local/api/free-board/${pid}/comments/${cid}`, { method: "PATCH", headers: H(cookie), body: JSON.stringify({ body }) }), {
+        params: { id: String(pid), commentId: String(cid) },
+      });
     assert((await cdel(A, c1id)).status === 403, "non-author comment delete 403");
+    assert((await cpatch(A, c1id, "x")).status === 403, "non-author comment edit 403");
+    assert((await cpatch(ADM, c1id, "x")).status === 403, "admin cannot edit another user's comment");
+    assert((await cpatch(B, c1id, "B 댓글 수정")).status === 200, "comment author edit 200");
     const c2id = Number((await json(await cpost(A, "A 댓글"))).comment.id);
     assert((await cdel(ADM, c1id)).status === 200, "admin comment delete 200");
     assert((await cdel(A, c2id)).status === 200, "own comment delete 200");
@@ -482,7 +490,7 @@ async function main() {
     {
       const saved = process.env.FREE_BOARD_BLOB_READ_WRITE_TOKEN;
       delete process.env.FREE_BOARD_BLOB_READ_WRITE_TOKEN;
-      const r = await up(A, png());
+      const r = await up(ADM, png());
       const b = await json(r);
       assert(r.status === 503 && b.error === "free_board_preview_storage_missing", "전용 저장소 없음 → 503 code");
       process.env.FREE_BOARD_BLOB_READ_WRITE_TOKEN = saved;
@@ -492,11 +500,11 @@ async function main() {
     section("concurrent uploads (race-safe 9 limit)");
     {
       const p2 = await json(
-        await CREATE(req("http://local/api/free-board", { method: "POST", headers: H(A), body: JSON.stringify({ title: "동시", body: "b" }) }))
+        await CREATE(req("http://local/api/free-board", { method: "POST", headers: H(ADM), body: JSON.stringify({ title: "동시", body: "b" }) }))
       );
       const id2 = Number(p2.id);
       postIds.push(id2);
-      const results = await Promise.all(Array.from({ length: 15 }, () => up(A, png(), id2)));
+      const results = await Promise.all(Array.from({ length: 15 }, () => up(ADM, png(), id2)));
       const okN = results.filter((r) => r.status === 201).length;
       const limitN = results.filter((r) => r.status === 409).length;
       assert(okN === 9, `동시 15건 중 성공 9 (실제 ${okN})`);
@@ -514,7 +522,7 @@ async function main() {
       const { normalizeFreeBoardUploadKey } = await import("../src/lib/freeBoardPhoto");
       const mkPost = async (title: string) => {
         const r = await json(
-          await CREATE(req("http://local/api/free-board", { method: "POST", headers: H(A), body: JSON.stringify({ title, body: "b" }) }))
+          await CREATE(req("http://local/api/free-board", { method: "POST", headers: H(ADM), body: JSON.stringify({ title, body: "b" }) }))
         );
         postIds.push(Number(r.id));
         return Number(r.id);
@@ -622,19 +630,19 @@ async function main() {
       // 다른 글 사진 포함 → 전체 거부, 아무것도 바뀌지 않음
       const otherPhoto = await prisma.freeBoardPhoto.findFirst({ where: { postId: { not: pid } } });
       const delBefore = deleteCalls;
-      const bad = await patch(A, { title: "t2", body: "b2", removedPhotoIds: [r1.id, otherPhoto!.id] });
+      const bad = await patch(ADM, { title: "t2", body: "b2", removedPhotoIds: [r1.id, otherPhoto!.id] });
       assert(bad.status === 404, "타 게시글 사진 포함 → 404");
       assert((await prisma.freeBoardPhoto.count({ where: { postId: pid } })) === before.length, "거부 시 사진 그대로");
       assert((await prisma.freeBoardPost.findUnique({ where: { id: pid } }))?.title === "수정 제목", "거부 시 본문 그대로");
       assert(deleteCalls === delBefore, "거부 시 객체 삭제 없음");
-      assert((await patch(A, { title: "t", body: "b", removedPhotoIds: "x" })).status === 400, "removedPhotoIds 형식 오류 400");
+      assert((await patch(ADM, { title: "t", body: "b", removedPhotoIds: "x" })).status === 400, "removedPhotoIds 형식 오류 400");
       assert((await patch(B, { title: "t", body: "b", removedPhotoIds: [r1.id] })).status === 403, "타인 removedPhotoIds 403");
       // 부분 성공: r2 객체 삭제 실패 → 응답 성공, DB 일관, orphan 기록
       const { setFreeBoardOrphanLoggerForTests } = await import("../src/lib/freeBoardPhoto");
       const orphans: unknown[] = [];
       setFreeBoardOrphanLoggerForTests((i) => orphans.push(i));
       failDeleteKeys = new Set([r2.storageKey]);
-      const ok2 = await patch(A, { title: "사진 정리", body: "본문", removedPhotoIds: [r1.id, r2.id] });
+      const ok2 = await patch(ADM, { title: "사진 정리", body: "본문", removedPhotoIds: [r1.id, r2.id] });
       const okBody = await json(ok2);
       assert(ok2.status === 200, "부분 성공도 200");
       assert(okBody.removedPhotos === 2 && okBody.blobCleanupFailed === 1, "removed 2, blobCleanupFailed 1");
@@ -686,11 +694,12 @@ async function main() {
     section("post delete");
     assert((await DEL(req(`http://local/api/free-board/${pid}`, { method: "DELETE", headers: { cookie: B } }), idP(pid))).status === 403, "other delete 403");
     const second = await json(
-      await CREATE(req("http://local/api/free-board", { method: "POST", headers: H(B), body: JSON.stringify({ title: "B글", body: "b" }) }))
+      await CREATE(req("http://local/api/free-board", { method: "POST", headers: H(ADM), body: JSON.stringify({ title: "관리자 글", body: "b" }) }))
     );
     postIds.push(Number(second.id));
     assert((await DEL(req(`http://local/api/free-board/${second.id}`, { method: "DELETE", headers: { cookie: ADM } }), idP(Number(second.id)))).status === 200, "admin delete others 200");
-    assert((await DEL(req(`http://local/api/free-board/${pid}`, { method: "DELETE", headers: { cookie: A } }), idP(pid))).status === 200, "author delete 200");
+    assert((await DEL(req(`http://local/api/free-board/${pid}`, { method: "DELETE", headers: { cookie: A } }), idP(pid))).status === 403, "caddy delete 403");
+    assert((await DEL(req(`http://local/api/free-board/${pid}`, { method: "DELETE", headers: { cookie: ADM } }), idP(pid))).status === 200, "admin delete 200");
     const gone = await prisma.freeBoardPost.findUnique({ where: { id: pid } });
     assert(gone?.deletedAt != null, "soft deleted");
     assert((await prisma.freeBoardPhoto.count({ where: { postId: pid } })) === 0, "photo rows cleaned");

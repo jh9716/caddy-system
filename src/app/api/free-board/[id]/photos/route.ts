@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { isFreeBoardAuthResponse, requireFreeBoardReader } from "@/lib/freeBoard";
+import { FreeBoardValidationError, isFreeBoardAuthResponse, requireFreeBoardReader, resolveFreeBoardActor } from "@/lib/freeBoard";
 import {
   FreeBoardPhotoStorageError,
   FreeBoardPhotoValidationError,
@@ -51,11 +51,12 @@ export async function POST(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   try {
+    const actor = await resolveFreeBoardActor(prisma, auth);
     const { bytes, uploadKey } = await readUpload(req);
-    const { duplicate, ...photo } = await uploadFreeBoardPhoto(prisma, { postId: id, bytes, auth, uploadKey });
+    const { duplicate, ...photo } = await uploadFreeBoardPhoto(prisma, { postId: id, bytes, auth: actor, uploadKey });
     return NextResponse.json({ ok: true, photo, duplicate: !!duplicate }, { status: duplicate ? 200 : 201 });
   } catch (e) {
-    if (e instanceof FreeBoardPhotoValidationError || e instanceof FreeBoardPhotoStorageError) {
+    if (e instanceof FreeBoardValidationError || e instanceof FreeBoardPhotoValidationError || e instanceof FreeBoardPhotoStorageError) {
       return NextResponse.json({ error: e.code, message: e.message }, { status: e.status });
     }
     throw e;

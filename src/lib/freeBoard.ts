@@ -10,6 +10,7 @@ import {
 } from "@/lib/auth";
 import { shouldForcePasswordChange } from "@/lib/passwordPolicy";
 import { clearSessionCookies } from "@/lib/sessionCookies";
+import { resolveEnvAdminChatIdentity } from "@/lib/chatEnvAdminIdentity";
 import {
   FREE_BOARD_BODY_MAX,
   FREE_BOARD_TITLE_MAX,
@@ -32,34 +33,33 @@ export function canReadFreeBoard(role: ResolvedAuthUser["role"] | null | undefin
   return role === "admin" || role === "caddy" || role === "leader";
 }
 
-/** 작성은 DB User.id 필요 (env-only admin 은 읽기/관리자 삭제만). */
+/** 게시글 작성·수정·삭제·사진 관리는 관리자만. 작성에는 검증된 DB User.id가 필요하다. */
 export function canComposeFreeBoard(auth: {
   role: ResolvedAuthUser["role"] | null | undefined;
   userId: number | null;
 }): boolean {
   return (
-    canReadFreeBoard(auth.role) &&
+    auth.role === "admin" &&
     typeof auth.userId === "number" &&
     Number.isInteger(auth.userId) &&
     auth.userId > 0
   );
 }
 
-/** 수정: 작성자 본인만 (관리자도 타인 글 수정 불가). */
+/** 수정: 관리자면 작성자와 무관하게 가능. */
 export function canEditFreeBoardPost(input: {
+  role: ResolvedAuthUser["role"];
   userId: number | null;
   authorUserId: number;
   deletedAt: Date | null;
 }): boolean {
   if (input.deletedAt) return false;
   return (
-    typeof input.userId === "number" &&
-    input.userId > 0 &&
-    input.userId === input.authorUserId
+    input.role === "admin"
   );
 }
 
-/** 삭제: 작성자 본인 또는 관리자. */
+/** 삭제: 관리자만. */
 export function canDeleteFreeBoardPost(input: {
   role: ResolvedAuthUser["role"];
   userId: number | null;
@@ -67,8 +67,34 @@ export function canDeleteFreeBoardPost(input: {
   deletedAt: Date | null;
 }): boolean {
   if (input.deletedAt) return false;
-  if (input.role === "admin") return true;
-  return canEditFreeBoardPost(input);
+  return input.role === "admin";
+}
+
+/**
+ * env-only 관리자(uid=null)를 서버에서 검증된 DB 관리자 User에 연결한다.
+ * 명시 ADMIN_CHAT_USER_ID(관리자 검증) 또는 전용 username=admin 계정만 사용하며
+ * 첫 관리자/클라이언트 id/표시명 추측은 하지 않는다.
+ */
+export async function resolveFreeBoardActor(
+  db: PrismaClient,
+  auth: ResolvedAuthUser
+): Promise<ResolvedAuthUser> {
+  if (auth.userId != null || auth.role !== "admin") return auth;
+  const mapped = await resolveEnvAdminChatIdentity(db);
+  if (!mapped.ok) {
+    throw new FreeBoardValidationError(
+      "free_board_admin_user_missing",
+      "관리자 게시판 계정 연결이 필요합니다.",
+      403
+    );
+  }
+  return {
+    ...auth,
+    userId: mapped.value.userId,
+    username: mapped.value.username,
+    sessionVersion: mapped.value.sessionVersion,
+    caddyId: mapped.value.caddyId,
+  };
 }
 
 export function freeBoardDisabledResponse(): NextResponse {
@@ -171,6 +197,7 @@ export function toFreeBoardPostPublic(
     photoCount: counts.photoCount ?? 0,
     ...(counts.commentCount != null ? { commentCount: counts.commentCount } : {}),
     canEdit: canEditFreeBoardPost({
+      role: viewer.role,
       userId: viewer.userId,
       authorUserId: row.authorUserId,
       deletedAt: row.deletedAt,

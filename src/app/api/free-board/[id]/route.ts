@@ -9,6 +9,7 @@ import {
   isFreeBoardAuthResponse,
   parseFreeBoardPostBody,
   requireFreeBoardReader,
+  resolveFreeBoardActor,
   toFreeBoardPostPublic,
 } from "@/lib/freeBoard";
 import {
@@ -33,12 +34,13 @@ const notFound = () => NextResponse.json({ error: "Not found" }, { status: 404 }
 export async function GET(req: NextRequest, ctx: Ctx) {
   const auth = await requireFreeBoardReader(req);
   if (isFreeBoardAuthResponse(auth)) return auth;
+  const actor = await resolveFreeBoardActor(prisma, auth).catch(() => auth);
   const post = await findLiveFreeBoardPost(prisma, await postId(ctx));
   if (!post) return notFound();
   const photos = await listFreeBoardPhotos(prisma, post.id);
   const counts = await countFreeBoardComments(prisma, [post.id]);
   return NextResponse.json({
-    post: toFreeBoardPostPublic(post, auth, {
+    post: toFreeBoardPostPublic(post, actor, {
       photoCount: photos.length,
       commentCount: counts.get(post.id) ?? 0,
     }),
@@ -50,17 +52,23 @@ export async function GET(req: NextRequest, ctx: Ctx) {
 export async function PATCH(req: NextRequest, ctx: Ctx) {
   const auth = await requireFreeBoardReader(req);
   if (isFreeBoardAuthResponse(auth)) return auth;
+  let actor;
+  try { actor = await resolveFreeBoardActor(prisma, auth); } catch (e) {
+    if (e instanceof FreeBoardValidationError) return NextResponse.json({ error: e.code, message: e.message }, { status: e.status });
+    throw e;
+  }
   const post = await findLiveFreeBoardPost(prisma, await postId(ctx));
   if (!post) return notFound();
   if (
     !canEditFreeBoardPost({
-      userId: auth.userId,
+      role: actor.role,
+      userId: actor.userId,
       authorUserId: post.authorUserId,
       deletedAt: post.deletedAt,
     })
   ) {
     return NextResponse.json(
-      { error: "forbidden", message: "본인 글만 수정할 수 있습니다." },
+      { error: "forbidden", message: "관리자만 수정할 수 있습니다." },
       { status: 403 }
     );
   }
@@ -81,7 +89,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     });
     return NextResponse.json({
       ok: true,
-      post: toFreeBoardPostPublic(saved.post, auth),
+      post: toFreeBoardPostPublic(saved.post, actor),
       removedPhotos: saved.removed,
       ...(saved.blobCleanupFailed ? { blobCleanupFailed: saved.blobCleanupFailed } : {}),
     });
@@ -97,12 +105,13 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
 export async function DELETE(req: NextRequest, ctx: Ctx) {
   const auth = await requireFreeBoardReader(req);
   if (isFreeBoardAuthResponse(auth)) return auth;
+  const actor = await resolveFreeBoardActor(prisma, auth).catch(() => auth);
   const post = await findLiveFreeBoardPost(prisma, await postId(ctx));
   if (!post) return notFound();
   if (
     !canDeleteFreeBoardPost({
-      role: auth.role,
-      userId: auth.userId,
+      role: actor.role,
+      userId: actor.userId,
       authorUserId: post.authorUserId,
       deletedAt: post.deletedAt,
     })
