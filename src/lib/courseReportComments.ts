@@ -49,7 +49,7 @@ function courseReportTarget(reportId: number) {
 export async function listCourseReportComments(
   db: PrismaClient,
   reportId: number,
-  viewer: { role: ResolvedAuthUser["role"]; userId: number | null }
+  viewer: { role: ResolvedAuthUser["role"]; userId: number | null; username?: string | null }
 ): Promise<CommentPublic[]> {
   const { targetType, targetKey } = courseReportTarget(reportId);
   return listCommentsByTarget(db, targetType, targetKey, viewer, (client) =>

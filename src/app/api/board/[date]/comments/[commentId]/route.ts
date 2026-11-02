@@ -17,14 +17,12 @@ export async function DELETE(
   {
     params,
   }: {
-    params:
-      | Promise<{ date: string; commentId: string }>
-      | { date: string; commentId: string };
+    params: Promise<{ date: string; commentId: string }>;
   }
 ) {
   const auth = await requireBoardCommentReader(req);
   if (isBoardCommentAuthResponse(auth)) return auth;
-  const resolved = await Promise.resolve(params);
+  const resolved = await params;
   try {
     await softDeleteBoardDateComment(
       prisma,
@@ -50,14 +48,12 @@ export async function PATCH(
   {
     params,
   }: {
-    params:
-      | Promise<{ date: string; commentId: string }>
-      | { date: string; commentId: string };
+    params: Promise<{ date: string; commentId: string }>;
   }
 ) {
   const auth = await requireBoardCommentReader(req);
   if (isBoardCommentAuthResponse(auth)) return auth;
-  const resolved = await Promise.resolve(params);
+  const resolved = await params;
   const payload = await req.json().catch(() => ({}));
   try {
     const comment = await updateBoardDateComment(
