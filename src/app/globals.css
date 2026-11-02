@@ -38,6 +38,9 @@
 
   --background: var(--vh-ivory);
   --foreground: var(--vh-ink);
+  --font-display-loaded: "Cormorant Garamond";
+  --font-display-kr-loaded: "Noto Serif KR";
+  --font-sans-loaded: "Source Sans 3";
   --font-display: var(--font-display-loaded), var(--font-display-kr-loaded), "Times New Roman", serif;
   --font-display-kr: var(--font-display-kr-loaded), var(--font-display-loaded), serif;
   --font-sans: var(--font-sans-loaded), "Helvetica Neue", sans-serif;
