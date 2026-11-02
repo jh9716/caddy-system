@@ -1,7 +1,16 @@
 import "./globals.css";
 import type { Metadata, Viewport } from "next";
 import { cookies } from "next/headers";
-import { Cormorant_Garamond, Noto_Serif_KR, Source_Sans_3 } from "next/font/google";
+import "@fontsource/cormorant-garamond/500.css";
+import "@fontsource/cormorant-garamond/600.css";
+import "@fontsource/cormorant-garamond/700.css";
+import "@fontsource/noto-serif-kr/500.css";
+import "@fontsource/noto-serif-kr/600.css";
+import "@fontsource/noto-serif-kr/700.css";
+import "@fontsource/source-sans-3/400.css";
+import "@fontsource/source-sans-3/500.css";
+import "@fontsource/source-sans-3/600.css";
+import "@fontsource/source-sans-3/700.css";
 import AppHeader from "@/components/AppHeader";
 import MemberShell from "@/components/manage/MemberShell";
 import AndroidSystemBackBootstrap from "@/components/AndroidSystemBackBootstrap";
@@ -50,36 +59,12 @@ export const viewport: Viewport = {
   initialScale: 1,
 };
 
-const display = Cormorant_Garamond({
-  subsets: ["latin"],
-  weight: ["500", "600", "700"],
-  variable: "--font-display-loaded",
-  display: "swap",
-});
-
-const displayKr = Noto_Serif_KR({
-  subsets: ["latin"],
-  weight: ["500", "600", "700"],
-  variable: "--font-display-kr-loaded",
-  display: "swap",
-});
-
-const sans = Source_Sans_3({
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
-  variable: "--font-sans-loaded",
-  display: "swap",
-});
-
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const store = await cookies();
   const role = (await getVerifiedSessionFromCookies(store))?.role ?? null;
 
   return (
-    <html
-      lang="ko"
-      className={`${display.variable} ${displayKr.variable} ${sans.variable}`}
-    >
+    <html lang="ko">
       <head>
         <meta name="apple-mobile-web-app-capable" content="yes" />
       </head>
