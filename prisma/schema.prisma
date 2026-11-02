@@ -295,6 +295,8 @@ model User {
   courseReports CourseReport[] @relation("CourseReportAuthor")
   /// 공용 댓글. User 물리 삭제는 Restrict. 표시명은 조회 시 Caddy.name 우선.
   comments Comment[]
+  /// 자유게시판 V1 작성 이력. User 물리 삭제는 Restrict.
+  freeBoardPosts FreeBoardPost[] @relation("FreeBoardPostAuthor")
   createdAt DateTime @default(now())
 }
 
@@ -348,6 +350,8 @@ enum CommentTargetType {
   COURSE_REPORT
   BOARD_DATE
   NOTICE
+  /// 자유게시판 V1 게시글 댓글. targetKey = FreeBoardPost.id
+  FREE_BOARD_POST
 }
 
 /// 대상당 thread 1개. GET empty 는 thread 를 만들지 않음.
@@ -1166,4 +1170,36 @@ model MarshalRotationCredit {
   updatedAt        DateTime            @updatedAt
 
   @@index([marshalProfileId, status])
+}
+/// 자유게시판 V1. 공지(Notice)·확정 배치표(/board)와 별도. soft delete.
+/// 사진은 FreeBoardPhoto (private Blob, prefix free-board/). 댓글은 CommentThread(FREE_BOARD_POST).
+model FreeBoardPost {
+  id                Int              @id @default(autoincrement())
+  authorUserId      Int
+  author            User             @relation("FreeBoardPostAuthor", fields: [authorUserId], references: [id], onDelete: Restrict)
+  /// 작성 시점 표시명 snapshot (Caddy.name 우선, 없으면 username).
+  authorDisplayName String
+  title             String
+  body              String
+  deletedAt         DateTime?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  photos            FreeBoardPhoto[]
+
+  @@index([deletedAt, createdAt])
+  @@index([authorUserId])
+}
+
+/// 자유게시판 사진. Bytes는 private object storage (free-board/ prefix). 게시글당 최대 9장 (서버 검증).
+model FreeBoardPhoto {
+  id         Int           @id @default(autoincrement())
+  postId     Int
+  post       FreeBoardPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  storageKey String        @unique
+  mimeType   String
+  size       Int
+  sortOrder  Int           @default(0)
+  createdAt  DateTime      @default(now())
+
+  @@index([postId, sortOrder])
 }

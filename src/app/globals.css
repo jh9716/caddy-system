@@ -7100,3 +7100,116 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
   .vh-fc-compose { display: flex; gap: 8px; align-items: flex-end; padding: 10px; border-top: 1px solid var(--vh-border); background: var(--vh-paper); }
   .vh-fc-compose textarea { flex: 1; resize: none; min-height: 44px; max-height: 120px; padding: 8px 10px; border: 1px solid var(--vh-border-strong); border-radius: 10px; font: inherit; font-size: 14px; }
 }
+
+/* 자유게시판 V1 (/community). 기존 course-report 스타일 재사용 + 최소 보강 */
+.free-board-comment-count {
+  margin-left: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--vh-accent, var(--vh-ink-soft));
+}
+.free-board-error {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--vh-danger, #c0392b);
+}
+.free-board-touch {
+  min-height: 44px;
+  min-width: 44px;
+}
+.free-board-photo-composer {
+  flex-wrap: wrap;
+}
+.free-board-photo-marked img {
+  opacity: 0.35;
+  filter: grayscale(1);
+}
+/* 자유게시판 사진 선택 UX */
+.free-board-photo-add {
+  cursor: pointer;
+  width: 100%;
+}
+.free-board-photo-add.is-full {
+  opacity: 0.6;
+  border-style: solid;
+  font-size: 12px;
+}
+.free-board-photo-pending.is-failed {
+  outline: 2px solid var(--vh-danger, #c0392b);
+}
+.free-board-photo-pending.is-uploading img {
+  opacity: 0.6;
+}
+.free-board-photo-badge {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+}
+.free-board-photo-badge.is-ok {
+  background: rgba(30, 120, 60, 0.85);
+}
+.free-board-photo-badge.is-fail {
+  background: var(--vh-danger, #c0392b);
+}
+.free-board-photo-preparing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--vh-ink-soft);
+}
+.free-board-photo-failures {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--vh-danger, #c0392b);
+}
+.free-board-photo-failname {
+  word-break: break-all;
+}
+/* 가배치표 게시판: 상세 사진 (엑셀 캡처) — 잘림 없이 전체 폭, 탭하면 원본 */
+.free-board-intro {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--vh-ink-soft);
+}
+.free-board-sheets {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 12px 0;
+}
+.free-board-sheets-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--vh-ink-soft);
+}
+.free-board-sheet {
+  margin: 0;
+}
+.free-board-sheet-link {
+  display: block;
+  border: 1px solid var(--vh-border);
+  border-radius: var(--vh-radius-sm);
+  overflow: hidden;
+  background: #fff;
+}
+.free-board-sheet-img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: none;
+  object-fit: contain;
+  min-height: 80px;
+}
+.free-board-sheet-caption {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--vh-ink-soft);
+}

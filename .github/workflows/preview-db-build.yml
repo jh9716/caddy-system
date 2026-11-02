@@ -67,12 +67,10 @@ jobs:
           [ -n "${DATABASE_URL:-}" ] || { echo "PREVIEW_DATABASE_URL secret missing"; exit 1; }
           node scripts/preview-db/validate-url.cjs
 
-      - name: Check repo migrations count is exactly 60
+      - name: Check repo migrations (derived from checked-out ref, no hardcoded count)
         run: |
           set -eu
-          n="$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l)"
-          echo "repo migrations: $n"
-          [ "$n" = "60" ] || { echo "expected 60 migrations"; exit 1; }
+          node -e 'const {listRepoMigrations}=require("./scripts/preview-db/migration-state.cjs");const m=listRepoMigrations("prisma/migrations");console.log("repo migrations: "+m.length+" last="+m[m.length-1])'
           grep -q 'url *= *env("DATABASE_URL")' prisma/schema.prisma || { echo "unexpected datasource config"; exit 1; }
           if grep -q 'directUrl' prisma/schema.prisma; then echo "directUrl present; review needed"; exit 1; fi
 

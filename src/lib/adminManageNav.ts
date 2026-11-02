@@ -1,3 +1,4 @@
+import { FREE_BOARD_LABEL, isFreeBoardEnabled } from "@/lib/freeBoardConstants";
 /**
  * 관리자 좌측/드로어 메뉴. 화면 이동만 정의한다.
  * route 삭제·redirect·권한 변경 없음.
@@ -149,6 +150,16 @@ export const ADMIN_MAIN_NAV: readonly AdminNavItem[] = [
     label: "코스 제보",
     match: (p) => pathStartsWith(p, "/course-reports"),
   },
+  // 가배치표 게시판 (free-board V1): feature flag ON 일 때만 노출 (기본 OFF → 기존 메뉴와 동일)
+  ...(isFreeBoardEnabled()
+    ? [
+        {
+          href: "/community",
+          label: FREE_BOARD_LABEL,
+          match: (p: string) => pathStartsWith(p, "/community"),
+        },
+      ]
+    : []),
   {
     href: "/schedule",
     label: "스케줄",

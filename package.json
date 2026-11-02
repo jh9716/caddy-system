@@ -57,6 +57,7 @@
     "test:course-report-photo-unit": "bash scripts/tsx-safe.sh scripts/test-course-report-photo-unit.ts",
     "test:course-report-comment-unit": "bash scripts/tsx-safe.sh scripts/test-course-report-comment-unit.ts",
     "test:board-comment-unit": "bash scripts/tsx-safe.sh scripts/test-board-comment-unit.ts",
+    "test:free-board-unit": "bash scripts/tsx-safe.sh scripts/test-free-board-unit.ts",
     "test:chat-preview-env-unit": "bash scripts/tsx-safe.sh scripts/test-chat-preview-env-unit.ts",
     "test:preview-db-workflow-unit": "node scripts/test-preview-db-workflow-unit.cjs",
     "test:floating-chat-unit": "bash scripts/tsx-safe.sh scripts/test-floating-chat-unit.ts",
