@@ -4,6 +4,7 @@ import {
   CommentValidationError,
   canComposeComment,
   canComposeCommentAs,
+  canEditComment,
   canSoftDeleteComment,
   isCommentTableMissing,
   isCommentUniqueConflict,
@@ -17,6 +18,7 @@ export {
   CommentValidationError,
   canComposeComment,
   canComposeCommentAs,
+  canEditComment,
   canSoftDeleteComment,
   resolveCommentAuthorUserId,
 };
@@ -74,11 +76,33 @@ export async function getOrCreateCommentThread(
   }
 }
 
+export type CommentViewer = {
+  role: ResolvedAuthUser["role"];
+  userId: number | null;
+  username?: string | null;
+};
+
+/**
+ * 목록 권한 계산용 viewer. DB 세션(userId>0)은 그대로.
+ * env-only 관리자(userId=null)는 작성 시와 같은 resolveCommentAuthorUserId 로 DB User.id 를 찾아
+ * 본인 댓글만 canEdit=true 가 되게 한다 (타인 댓글은 여전히 false). 그 외는 변경 없음.
+ */
+export async function resolveCommentViewer(
+  db: PrismaClient,
+  viewer: CommentViewer
+): Promise<{ role: ResolvedAuthUser["role"]; userId: number | null }> {
+  if (viewer.userId != null || viewer.role !== "admin") {
+    return { role: viewer.role, userId: viewer.userId };
+  }
+  const id = await resolveCommentAuthorUserId(db, viewer).catch(() => null);
+  return { role: viewer.role, userId: id };
+}
+
 export async function listCommentsByTarget(
   db: PrismaClient,
   targetType: CommentTargetType,
   targetKey: string,
-  viewer: { role: ResolvedAuthUser["role"]; userId: number | null },
+  viewer: CommentViewer,
   ensureTarget: EnsureCommentTarget
 ): Promise<CommentPublic[]> {
   try {
@@ -90,7 +114,8 @@ export async function listCommentsByTarget(
       include: { author: { select: COMMENT_AUTHOR_SELECT } },
       orderBy: { createdAt: "asc" },
     });
-    return rows.map((row) => toCommentPublic(row, viewer));
+    const resolved = await resolveCommentViewer(db, viewer);
+    return rows.map((row) => toCommentPublic(row, resolved));
   } catch (e) {
     if (e instanceof CommentValidationError) throw e;
     if (isCommentTableMissing(e)) return [];
@@ -128,7 +153,8 @@ export async function createCommentByTarget(
         include: { author: { select: COMMENT_AUTHOR_SELECT } },
       });
     });
-    return toCommentPublic(created, auth);
+    // 작성자 본인 → POST 응답에서도 작성자 판정은 실제 저장된 authorUserId 기준 (env 관리자 포함)
+    return toCommentPublic(created, { role: auth.role, userId: authorUserId });
   } catch (e) {
     if (e instanceof CommentValidationError) throw e;
     if (isCommentTableMissing(e)) commentsUnavailable();
@@ -175,6 +201,60 @@ export async function softDeleteCommentByTarget(
         data: { deletedAt: new Date() },
       });
     });
+  } catch (e) {
+    if (e instanceof CommentValidationError) throw e;
+    if (isCommentTableMissing(e)) commentsUnavailable();
+    throw e;
+  }
+}
+
+/**
+ * 댓글 수정 — 작성자 본인만. 같은 thread(대상) 안의 댓글만 찾는다 (다른 날짜/대상 id 차단).
+ * env-only admin(userId=null)은 resolveCommentAuthorUserId 로 정확히 매칭된 User.id 만 사용.
+ */
+export async function updateCommentByTarget(
+  db: PrismaClient,
+  targetType: CommentTargetType,
+  targetKey: string,
+  commentId: number,
+  auth: ResolvedAuthUser,
+  rawBody: unknown,
+  ensureTarget: EnsureCommentTarget
+): Promise<CommentPublic> {
+  if (!Number.isInteger(commentId) || commentId <= 0) {
+    throw new CommentValidationError("not_found", "Not found", 404);
+  }
+  const body = parseCommentBody(rawBody);
+  const editorUserId = await resolveCommentAuthorUserId(db, auth);
+  try {
+    const updated = await db.$transaction(async (tx) => {
+      await ensureTarget(tx);
+      const thread = await findCommentThread(tx, targetType, targetKey);
+      if (!thread) {
+        throw new CommentValidationError("not_found", "Not found", 404);
+      }
+      const row = await tx.comment.findFirst({
+        where: { id: commentId, threadId: thread.id },
+      });
+      if (!row || row.deletedAt) {
+        throw new CommentValidationError("not_found", "Not found", 404);
+      }
+      if (
+        !canEditComment({
+          userId: editorUserId,
+          authorUserId: row.authorUserId,
+          deletedAt: row.deletedAt,
+        })
+      ) {
+        throw new CommentValidationError("forbidden", "본인 댓글만 수정할 수 있습니다.", 403);
+      }
+      return tx.comment.update({
+        where: { id: row.id },
+        data: { body },
+        include: { author: { select: COMMENT_AUTHOR_SELECT } },
+      });
+    });
+    return toCommentPublic(updated, { role: auth.role, userId: editorUserId });
   } catch (e) {
     if (e instanceof CommentValidationError) throw e;
     if (isCommentTableMissing(e)) commentsUnavailable();

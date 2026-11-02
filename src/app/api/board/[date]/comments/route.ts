@@ -14,9 +14,9 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 async function boardDate(
-  params: Promise<{ date: string }> | { date: string }
+  params: Promise<{ date: string }>
 ): Promise<string> {
-  const resolved = await Promise.resolve(params);
+  const resolved = await params;
   return resolved.date;
 }
 
@@ -32,7 +32,7 @@ function fail(e: unknown) {
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: Promise<{ date: string }> | { date: string } }
+  { params }: { params: Promise<{ date: string }> }
 ) {
   const auth = await requireBoardCommentReader(req);
   if (isBoardCommentAuthResponse(auth)) return auth;
@@ -53,7 +53,7 @@ export async function GET(
 
 export async function POST(
   req: NextRequest,
-  { params }: { params: Promise<{ date: string }> | { date: string } }
+  { params }: { params: Promise<{ date: string }> }
 ) {
   const auth = await requireBoardCommentReader(req);
   if (isBoardCommentAuthResponse(auth)) return auth;
