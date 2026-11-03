@@ -1,43 +1,46 @@
 /**
- * Client redirect-loop guard (sessionStorage, no PII).
- * Same target redirected more than MAX times within WINDOW_MS → stop and show an error instead.
+ * Client auto-redirect loop guard (sessionStorage, PII 없음). 경로 무관(path-agnostic).
+ * - 자동 리다이렉트 직전 recordAutoRedirect()를 호출한다. WINDOW_MS 안에 MAX회를 넘으면 false → 이동 중단, 오류 화면.
+ * - 화면이 정상 렌더되면 resetAutoRedirects()로 카운터를 비운다 (정상 이동·새로고침·뒤로가기는 매번 렌더로 초기화).
+ * - sessionStorage 오류 시 허용(fail-open: 기존 동작 유지).
  */
-export const REDIRECT_LOOP_KEY = "vh.redirectLoop.v1";
-export const REDIRECT_LOOP_MAX = 3;
-export const REDIRECT_LOOP_WINDOW_MS = 15_000;
+export const AUTO_REDIRECT_KEY = "vh.autoRedirect.v2";
+export const AUTO_REDIRECT_MAX = 4;
+export const AUTO_REDIRECT_WINDOW_MS = 15_000;
 
-type Entry = { target: string; at: number[] };
-
-export function nextRedirectLoopState(
+export function nextAutoRedirectState(
   raw: string | null | undefined,
-  target: string,
   now: number
 ): { allow: boolean; serialized: string } {
-  let entry: Entry | null = null;
+  let at: number[] = [];
   try {
     const p = raw ? JSON.parse(raw) : null;
-    if (p && typeof p.target === "string" && Array.isArray(p.at)) entry = p;
+    if (Array.isArray(p)) at = p.filter((t) => typeof t === "number");
   } catch {
-    entry = null;
+    at = [];
   }
-  const recent =
-    entry && entry.target === target
-      ? entry.at.filter((t) => typeof t === "number" && now - t < REDIRECT_LOOP_WINDOW_MS)
-      : [];
-  if (recent.length >= REDIRECT_LOOP_MAX) {
-    return { allow: false, serialized: JSON.stringify({ target, at: recent }) };
+  const recent = at.filter((t) => now - t >= 0 && now - t < AUTO_REDIRECT_WINDOW_MS);
+  if (recent.length >= AUTO_REDIRECT_MAX) {
+    return { allow: false, serialized: JSON.stringify(recent) };
   }
-  return { allow: true, serialized: JSON.stringify({ target, at: [...recent, now] }) };
+  return { allow: true, serialized: JSON.stringify([...recent, now]) };
 }
 
-/** true면 리다이렉트해도 됨. 저장소 접근 실패 시 허용(fail-open: 기존 동작 유지). */
-export function allowClientRedirect(target: string): boolean {
+export function recordAutoRedirect(): boolean {
   try {
     const s = window.sessionStorage;
-    const r = nextRedirectLoopState(s.getItem(REDIRECT_LOOP_KEY), target, Date.now());
-    s.setItem(REDIRECT_LOOP_KEY, r.serialized);
+    const r = nextAutoRedirectState(s.getItem(AUTO_REDIRECT_KEY), Date.now());
+    s.setItem(AUTO_REDIRECT_KEY, r.serialized);
     return r.allow;
   } catch {
     return true;
+  }
+}
+
+export function resetAutoRedirects(): void {
+  try {
+    window.sessionStorage.removeItem(AUTO_REDIRECT_KEY);
+  } catch {
+    /* ignore */
   }
 }

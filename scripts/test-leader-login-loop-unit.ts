@@ -13,10 +13,11 @@ import {
 } from "../src/lib/roleRouting";
 import { isLinkableKakaoUser } from "../src/lib/userCaddyLink";
 import {
-  REDIRECT_LOOP_MAX,
-  REDIRECT_LOOP_WINDOW_MS,
-  nextRedirectLoopState,
+  AUTO_REDIRECT_MAX,
+  AUTO_REDIRECT_WINDOW_MS,
+  nextAutoRedirectState,
 } from "../src/lib/redirectLoopGuard";
+import { parseMineLinkPayload, resolveCaddyLinkScreen } from "../src/lib/caddyLinkRequestUi";
 
 let passed = 0;
 let failed = 0;
@@ -101,20 +102,53 @@ assert(isLinkableKakaoUser({ kakaoUserId: "k1", role: "caddy" }), "Kakao caddy �
 assert(!isLinkableKakaoUser({ kakaoUserId: "k1", role: "admin" }), "admin 거부");
 assert(!isLinkableKakaoUser({ kakaoUserId: null, role: "leader" }), "Kakao 없는 ID/PW leader는 거부(403 오류 표시, 루프 아님)");
 
-console.log("\n== E 리다이렉트 루프 가드 ==");
+console.log("\n== E 루프 가드 (경로 무관 누적, 정상 렌더 시 초기화) ==");
 {
-  let raw: string | null = null;
-  const t0 = 1_000_000;
-  const allows: boolean[] = [];
-  for (let i = 0; i < REDIRECT_LOOP_MAX + 2; i++) {
-    const r = nextRedirectLoopState(raw, "/caddy/link", t0 + i * 100);
-    raw = r.serialized; allows.push(r.allow);
+  const run = (targets: string[], step = 100, resetAfter: number[] = []) => {
+    let raw: string | null = null;
+    const allows: boolean[] = [];
+    targets.forEach((_t, i) => {
+      if (resetAfter.includes(i)) raw = null; // 정상 렌더 → resetAutoRedirects
+      const r = nextAutoRedirectState(raw, 1_000_000 + i * step);
+      raw = r.serialized;
+      allows.push(r.allow);
+    });
+    return allows;
+  };
+  const alt = Array.from({ length: 10 }, (_, i) => (i % 2 ? "/caddy" : "/caddy/link"));
+  const a1 = run(alt);
+  assert(a1.slice(0, AUTO_REDIRECT_MAX).every(Boolean), `교대 이동도 ${AUTO_REDIRECT_MAX}회까지 허용`);
+  assert(a1.indexOf(false) === AUTO_REDIRECT_MAX, "/caddy ↔ /caddy/link 교대 루프 차단 (이전 대상별 가드는 0회 차단)");
+  assert(run(["/caddy/link"]).every(Boolean), "정상: 로그인 → /caddy → /caddy/link 1회 통과");
+  assert(run(["/caddy/link", "/caddy"]).every(Boolean), "정상: 승인 후 /caddy/link → /caddy 통과");
+  const reloads = Array.from({ length: 8 }, () => "/caddy/link");
+  assert(run(reloads, 100, [1, 2, 3, 4, 5, 6, 7]).every(Boolean), "새로고침·뒤로가기 8회: 매번 정상 렌더로 초기화 → 차단 없음");
+  assert(run(Array.from({ length: 8 }, () => "/x"), AUTO_REDIRECT_WINDOW_MS).every(Boolean), "시간창 밖 이동은 차단 없음");
+  assert(nextAutoRedirectState("{bad", 1).allow, "손상 저장값 → 허용(fail-open)");
+}
+
+console.log("\n== G /caddy/link 화면 상태 (무한 '불러오는 중' 없음) ==");
+{
+  const m = { linked: false, caddyId: null, request: null };
+  const S = resolveCaddyLinkScreen;
+  assert(S({ loading: true, redirecting: false, fatalError: "", mine: null }) === "loading", "로딩 중");
+  assert(S({ loading: false, redirecting: false, fatalError: "본인확인을 진행할 수 없는", mine: null }) === "error", "역할 불가 → 오류 화면");
+  assert(S({ loading: false, redirecting: false, fatalError: "조회 실패", mine: null }) === "error", "/mine 비정상 응답 → 오류 화면");
+  assert(S({ loading: false, redirecting: false, fatalError: "", mine: null }) === "error", "로딩 종료 + mine 없음 → 오류 화면 (불러오는 중 아님)");
+  assert(S({ loading: false, redirecting: true, fatalError: "", mine: null }) === "redirecting", "자동 이동 중 → 이동 중 표시");
+  assert(S({ loading: false, redirecting: false, fatalError: "", mine: m }) === "content", "정상 → 본인확인 화면");
+  assert(S({ loading: false, redirecting: false, fatalError: "x", mine: m }) === "error", "오류 우선");
+  // 전수: loading=false 이면 절대 loading 이 아님
+  let ok = true;
+  for (const r of [true, false]) for (const f of ["", "e"]) for (const mm of [null, m]) {
+    if (S({ loading: false, redirecting: r, fatalError: f, mine: mm }) === "loading") ok = false;
   }
-  assert(allows.slice(0, REDIRECT_LOOP_MAX).every(Boolean), `같은 대상 ${REDIRECT_LOOP_MAX}회까지 허용`);
-  assert(!allows[REDIRECT_LOOP_MAX], "초과 시 차단");
-  assert(nextRedirectLoopState(raw, "/caddy/link", t0 + REDIRECT_LOOP_WINDOW_MS + 1000).allow, "시간창 경과 후 다시 허용");
-  assert(nextRedirectLoopState(raw, "/caddy", t0 + 600).allow, "다른 대상은 허용");
-  assert(nextRedirectLoopState("{bad", "/x", 1).allow, "손상 저장값 → 허용(fail-open)");
+  assert(ok, "로딩 종료 후 모든 조합이 content·error·redirecting 중 하나");
+  assert(parseMineLinkPayload({ ok: true, linked: false, caddyId: null, request: null }) !== null, "정상 /mine 응답 파싱");
+  assert(parseMineLinkPayload(null) === null, "null 응답 → 형식 오류");
+  assert(parseMineLinkPayload({ error: "x" }) === null, "linked 누락 → 형식 오류");
+  assert(parseMineLinkPayload({ linked: "yes" }) === null, "linked 타입 오류 → 형식 오류");
+  assert(parseMineLinkPayload({ linked: false, request: "x" }) === null, "request 타입 오류 → 형식 오류");
 }
 
 console.log("\n== F 소스 연결 ==");
@@ -122,10 +156,15 @@ console.log("\n== F 소스 연결 ==");
   const link = read("src/app/caddy/link/CaddyLinkClient.tsx");
   assert(link.includes("resolveCaddyLinkPageGate(roleData.role)"), "CaddyLinkClient가 공용 게이트 사용");
   assert(!link.includes('roleData.role !== "caddy"'), "caddy 단독 검사 제거");
-  assert(!link.includes('/login?callbackUrl=/caddy/link'), "/caddy/link → /login 되돌림 제거");
-  assert(link.includes('allowClientRedirect("/caddy")'), "/caddy 복귀에 루프 가드");
+  assert(!link.includes("/login?callbackUrl=/caddy/link"), "/caddy/link → /login 자동 되돌림 없음");
+  assert(!link.includes("if (loading || !mine)"), "무한 로딩 조건 제거");
+  assert(link.includes("resolveCaddyLinkScreen("), "화면 상태 함수 사용");
+  assert(link.includes("다시 시도") && link.includes("로그아웃 후 로그인 화면으로"), "오류 화면 사용자 동작 버튼");
+  assert(link.includes("parseMineLinkPayload(data)"), "/mine 응답 형식 검사");
+  assert(link.includes("recordAutoRedirect()") && link.includes("resetAutoRedirects()"), "link: 가드 기록·초기화");
   const caddy = read("src/app/caddy/page.tsx");
-  assert(caddy.includes("allowClientRedirect('/caddy/link')"), "/caddy → /caddy/link 루프 가드");
+  assert(caddy.includes("recordAutoRedirect()") && caddy.includes("resetAutoRedirects()"), "/caddy: 가드 기록·초기화");
+  assert(!/allowClientRedirect/.test(caddy + link), "이전 대상별 가드 제거");
   const login = read("src/app/login/page.tsx");
   assert(login.includes("resolveLoginPageRedirect(auth)"), "/login이 공용 규칙 사용");
   const mw = read("src/middleware.ts");

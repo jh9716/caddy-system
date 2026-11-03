@@ -145,3 +145,32 @@ export function assertAdminQueueSafeView(request: unknown): boolean {
   if (user && ("nickname" in user || "email" in user)) return false;
   return true;
 }
+
+export type CaddyLinkScreen = "loading" | "redirecting" | "error" | "content";
+
+/** /caddy/link 화면 상태. 로딩이 끝나면 반드시 content·error·redirecting 중 하나 (무한 '불러오는 중' 방지). */
+export function resolveCaddyLinkScreen(input: {
+  loading: boolean;
+  redirecting: boolean;
+  fatalError: string;
+  mine: unknown;
+}): CaddyLinkScreen {
+  if (input.redirecting) return "redirecting";
+  if (input.loading) return "loading";
+  if (input.fatalError || !input.mine) return "error";
+  return "content";
+}
+
+/** /mine 응답 형식 검사. 잘못된 응답은 null. */
+export function parseMineLinkPayload(data: unknown): MineLinkPayload | null {
+  if (!data || typeof data !== "object") return null;
+  const d = data as Record<string, unknown>;
+  if (typeof d.linked !== "boolean") return null;
+  const req = d.request;
+  if (req != null && typeof req !== "object") return null;
+  return {
+    linked: d.linked,
+    caddyId: typeof d.caddyId === "number" ? d.caddyId : null,
+    request: (req ?? null) as MineLinkPayload["request"],
+  };
+}
