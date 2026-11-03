@@ -71,6 +71,8 @@ import {
   parseEvictMembersBody,
   parseSessionRevokeBody,
 } from "./sessionCheck";
+import { diagEnabled, diagLog, diagPath, diagnoseTokenFailure } from "./diag"; // TEMPORARY DIAGNOSTIC
+import { nextAppExtraHeaders, nextAppFetchInit, nextAppUrl, nextPushDispatchUrl } from "./nextApp";
 
 export { validateIncomingMessage, isValidRoomName } from "./protocol";
 export { verifyChatToken } from "./token";
@@ -92,19 +94,12 @@ export interface Env {
   CHAT_PUSH_DISPATCH_URL?: string;
   /** "preview" = Preview 전용 Worker. 미설정/"production" = 운영. 그 외 값은 503(fail-closed). */
   CHAT_TOKEN_AUDIENCE?: string;
+  /** Preview 전용 secret: 배포 보호 자동화 우회 값. 운영에서는 절대 사용 안 함. */
+  PREVIEW_APP_BYPASS_SECRET?: string;
 }
 
 function nextInternalUrl(env: Env, pathname: string): string {
-  const pushUrl = String(env.CHAT_PUSH_DISPATCH_URL || "").trim();
-  if (!pushUrl) return "";
-  try {
-    const parsed = new URL(pushUrl);
-    parsed.pathname = pathname;
-    parsed.search = "";
-    return parsed.toString();
-  } catch {
-    return "";
-  }
+  return nextAppUrl(env, pathname);
 }
 
 function uniqueAttachmentIds(raw: string[], limit: number): string[] {
@@ -161,11 +156,33 @@ async function verifyIdentity(
     ? header.slice(7).trim()
     : "";
   const token = (url.searchParams.get("token") || bearer).trim();
-  if (!token) return json({ error: "unauthorized" }, 401);
+  // TEMPORARY DIAGNOSTIC — remove after Preview 401 diagnosis. diag 는 preview 에서만 출력 (운영 무출력).
+  const diag = diagEnabled(env);
+  const dpath = diag ? diagPath(url.pathname) : "";
+  if (!token) {
+    if (diag) diagLog(env, { path: dpath, stage: "token", code: "unauthorized", token_reason: "missing", status: 401 });
+    return json({ error: "unauthorized" }, 401);
+  }
   const claims = await verifyChatToken(token, secret, undefined, audience);
-  if (!claims) return json({ error: "invalid_token" }, 401);
-  const session = await assertChatSessionCurrent(env, claims);
-  if (!session.ok) return json({ error: session.error }, session.status);
+  if (!claims) {
+    if (diag) {
+      const reason = await diagnoseTokenFailure(token, secret, audience);
+      diagLog(env, { path: dpath, stage: "token", code: "invalid_token", token_reason: reason, status: 401,
+        auth_secret_mismatch_suspect: reason === "bad_signature" });
+    }
+    return json({ error: "invalid_token" }, 401);
+  }
+  const session = diag
+    ? await assertChatSessionCurrent(env, claims, (f) => diagLog(env, { path: dpath, ...f,
+        dispatch_url_configured: !!String(env.CHAT_PUSH_DISPATCH_URL || ""),
+        bypass_configured: !!String(env.PREVIEW_APP_BYPASS_SECRET || "").trim(),
+        internal_secret_configured: !!String(env.CHAT_INTERNAL_SECRET || "").trim() }))
+    : await assertChatSessionCurrent(env, claims);
+  if (!session.ok) {
+    if (diag) diagLog(env, { path: dpath, stage: "result", code: session.error, status: session.status });
+    return json({ error: session.error }, session.status);
+  }
+  if (diag) diagLog(env, { path: dpath, stage: "result", code: "ok", status: 200 });
   if (isSessionBoundChatToken(claims)) {
     void rememberSessionEpoch(env, claims.userId, claims.sv);
   }
@@ -1557,14 +1574,15 @@ export class ChatRoom extends DurableObject<Env> {
     const url = nextInternalUrl(this.env, "/api/chat/attachments/cleanup");
     if (!url || !roomId || attachmentIds.length === 0) return;
     try {
-      const headers = await internalAuthHeaders(
-        chatInternalSecret(this.env),
-        "/api/chat/attachments/cleanup"
-      );
+      const headers = {
+        ...(await internalAuthHeaders(chatInternalSecret(this.env), "/api/chat/attachments/cleanup")),
+        ...nextAppExtraHeaders(this.env, url),
+      };
       const res = await fetch(url, {
         method: "POST",
         headers,
         body: JSON.stringify({ roomId, attachmentIds }),
+        ...nextAppFetchInit(this.env),
       });
       if (!res.ok) {
         console.error("[chat-photo] attachment cleanup request failed", {
@@ -1582,14 +1600,15 @@ export class ChatRoom extends DurableObject<Env> {
     const consumeUrl = nextInternalUrl(this.env, "/api/chat/attachments/consume");
     if (!consumeUrl || attachmentIds.length === 0) return;
     try {
-      const headers = await internalAuthHeaders(
-        chatInternalSecret(this.env),
-        "/api/chat/attachments/consume"
-      );
+      const headers = {
+        ...(await internalAuthHeaders(chatInternalSecret(this.env), "/api/chat/attachments/consume")),
+        ...nextAppExtraHeaders(this.env, consumeUrl),
+      };
       await fetch(consumeUrl, {
         method: "POST",
         headers,
         body: JSON.stringify({ attachmentIds }),
+        ...nextAppFetchInit(this.env),
       });
     } catch {
       // persist already succeeded
@@ -1605,7 +1624,7 @@ export class ChatRoom extends DurableObject<Env> {
   }
 
   private async sendChatPushDispatch(roomId: string, message: ChatMessage) {
-    const url = String(this.env.CHAT_PUSH_DISPATCH_URL || "").trim();
+    const url = nextPushDispatchUrl(this.env);
     if (!url || message.deletionType) return;
     try {
       let roomType = "ALL";
@@ -1617,10 +1636,10 @@ export class ChatRoom extends DurableObject<Env> {
         roomType = "DM";
         memberUserIds = (await listDirectoryMemberIds(this.env, roomId)) ?? [];
       }
-      const headers = await internalAuthHeaders(
-        chatInternalSecret(this.env),
-        "/api/chat/push-dispatch"
-      );
+      const headers = {
+        ...(await internalAuthHeaders(chatInternalSecret(this.env), "/api/chat/push-dispatch")),
+        ...nextAppExtraHeaders(this.env, url),
+      };
       await fetch(url, {
         method: "POST",
         headers,
@@ -1644,6 +1663,7 @@ export class ChatRoom extends DurableObject<Env> {
           memberUserIds,
           roomName: isAllRoomId(roomId) ? "전체 채팅방" : null,
         }),
+        ...nextAppFetchInit(this.env),
       });
     } catch {
       // chat persist already succeeded
