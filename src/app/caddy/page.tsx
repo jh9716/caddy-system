@@ -11,6 +11,7 @@ import {
   writeClientResource,
 } from '@/lib/clientResourceCache'
 import { resolveCaddyPageGate } from '@/lib/roleRouting'
+import { allowClientRedirect } from '@/lib/redirectLoopGuard'
 import { formatKstDisplay } from '@/lib/kstDate'
 import {
   consumeUnauthorizedMemberResponse,
@@ -152,6 +153,9 @@ export default function CaddyPage() {
           }
           // 미연결만 /caddy/link로. APPROVED(+미연결 레이스)는 루프 방지로 대시보드 유지
           if (shouldRedirectUnlinked(mine)) {
+            if (!allowClientRedirect('/caddy/link')) {
+              throw new Error('redirect_loop')
+            }
             router.replace('/caddy/link')
             return
           }

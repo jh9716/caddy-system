@@ -3,14 +3,15 @@ import { redirect } from "next/navigation";
 import LoginClient from "./LoginClient";
 import { getRequestAuthUser } from "@/lib/getRequestAuthUser";
 import { shouldForcePasswordChange } from "@/lib/passwordPolicy";
+import { resolveLoginPageRedirect } from "@/lib/roleRouting";
 
 export const dynamic = "force-dynamic";
 
 export default async function LoginPage() {
   const auth = await getRequestAuthUser();
   if (shouldForcePasswordChange(auth)) redirect("/change-password");
-  if (auth?.role === "admin") redirect("/manage");
-  if (auth?.role === "caddy" || auth?.role === "leader") redirect("/caddy");
+  const dest = resolveLoginPageRedirect(auth);
+  if (dest) redirect(dest);
 
   return (
     <Suspense

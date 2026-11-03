@@ -9,6 +9,8 @@ import {
   type StaffLinkRequestView,
 } from "@/lib/caddyLinkRequestUi";
 import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
+import { resolveCaddyLinkPageGate } from "@/lib/roleRouting";
+import { allowClientRedirect } from "@/lib/redirectLoopGuard";
 
 export default function CaddyLinkClient() {
   const router = useRouter();
@@ -24,7 +26,11 @@ export default function CaddyLinkClient() {
       setMine(data);
       const mode = resolveStaffLinkUiMode(data);
       if (mode === "redirect_caddy") {
-        router.replace("/caddy");
+        if (allowClientRedirect("/caddy")) {
+          router.replace("/caddy");
+        } else {
+          setError("화면 이동이 반복되어 중단했습니다. 잠시 후 다시 시도해 주세요.");
+        }
       }
       return mode;
     },
@@ -64,8 +70,13 @@ export default function CaddyLinkClient() {
         });
         if (consumeUnauthorizedMemberResponse(roleRes)) return;
         const roleData = await roleRes.json().catch(() => ({}));
-        if (roleData.role !== "caddy") {
-          router.replace("/login?callbackUrl=/caddy/link");
+        const gate = resolveCaddyLinkPageGate(roleData.role);
+        if (gate.action === "replace") {
+          router.replace(gate.href);
+          return;
+        }
+        if (gate.action === "error") {
+          if (!cancelled) setError("본인확인을 진행할 수 없는 계정입니다. 다시 로그인해 주세요.");
           return;
         }
         await refreshMine();
