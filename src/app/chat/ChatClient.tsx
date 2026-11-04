@@ -104,6 +104,15 @@ import {
   recordChatEntryTiming,
 } from "@/lib/chatEntryTiming";
 import {
+  CHAT_OPEN_ROOM_EVENT,
+  invalidateChatToken,
+  placeholderChatRoomSummary,
+  readCachedChatRooms,
+  readReusableChatToken,
+  rememberChatRooms,
+  rememberChatToken,
+} from "@/lib/chatFastEntry";
+import {
   canProfileMention,
   chatAuthorLine,
   chatRoleLabel,
@@ -322,6 +331,10 @@ export default function ChatClient() {
   const [initFailed, setInitFailed] = useState(false);
   const [initAttempt, setInitAttempt] = useState(0);
   const notifyDirtyRef = useRef(new Set<string>());
+  // P0: 같은 세션 메모리 토큰 재사용 여부(거절 시 1회 새 발급), 딥링크 즉시 입장 대상
+  const usedCachedTokenRef = useRef(false);
+  const earlyDeepLinkRef = useRef("");
+  const roomsRef = useRef<RoomSummary[]>([]);
   const roomsShownRef = useRef(false);
   const entryTimingRef = useRef<{
     mountAt: number | null;
@@ -513,7 +526,10 @@ export default function ChatClient() {
     if (await consumeUnauthorizedMemberResponse(res)) return null;
     const data = await res.json().catch(() => null);
     if (!res.ok) {
-      if (res.status === 401 || res.status === 403) return null;
+      if (res.status === 401 || res.status === 403) {
+        invalidateChatToken();
+        return null;
+      }
       throw new Error(data?.message || data?.error || "채팅 입장에 실패했습니다.");
     }
     if (
@@ -523,12 +539,15 @@ export default function ChatClient() {
     ) {
       return null;
     }
+    rememberChatToken(data as TokenPayload);
     return data as TokenPayload;
   }, []);
 
   const applyRooms = useCallback((next: RoomSummary[]) => {
     const visible = next.filter((r) => isVisibleChatListRoom(r.type));
     setRooms(visible);
+    roomsRef.current = visible;
+    rememberChatRooms(tokenRef.current?.user?.userId, visible);
     if (!roomsShownRef.current) {
       // Directory WS snapshot 과 HTTP 목록 중 먼저 정상 도착한 쪽에서 초기 UI 를 연다.
       roomsShownRef.current = true;
@@ -628,8 +647,11 @@ export default function ChatClient() {
       }
       const ws = new WebSocket(url);
       dirRef.current = ws;
+      let dirOpened = false;
       ws.addEventListener("open", () => {
         if (gen !== dirGenRef.current) return;
+        dirOpened = true;
+        usedCachedTokenRef.current = false;
         setDirectoryConnected(true);
         dirAttemptRef.current = 0;
         try {
@@ -649,7 +671,13 @@ export default function ChatClient() {
         setDirectorySnapshotReady(nextDirectorySnapshotReady(true, "socket_close"));
         const run = async () => {
           let next = info;
-          if (shouldRefreshTokenOnClose(ev.code)) {
+          // 메모리 재사용 토큰이 한 번도 열리지 못하고 닫히면 폐기하고 새로 발급 (서버 판정 존중)
+          const staleCached = !dirOpened && usedCachedTokenRef.current;
+          if (staleCached) {
+            usedCachedTokenRef.current = false;
+            invalidateChatToken();
+          }
+          if (shouldRefreshTokenOnClose(ev.code) || staleCached) {
             const fresh = await fetchToken();
             if (
               !fresh ||
@@ -790,6 +818,7 @@ export default function ChatClient() {
           ) {
             return;
           }
+          if (tokenRef.current && tokenRef.current !== next && tokenRef.current.token) next = tokenRef.current;
           const room = roomRef.current;
           if (room) scheduleRoomReconnect(next, room.roomId);
         };
@@ -1026,7 +1055,9 @@ export default function ChatClient() {
     (async () => {
       const startedGen = dirGenRef.current;
       try {
-        const info = await fetchToken();
+        const cachedToken = initAttempt === 0 ? readReusableChatToken<TokenPayload>() : null;
+        usedCachedTokenRef.current = Boolean(cachedToken);
+        const info = cachedToken ?? (await fetchToken());
         if (
           cancelled ||
           !info ||
@@ -1044,9 +1075,14 @@ export default function ChatClient() {
           parseChatDeepLinkRoomId(new URLSearchParams(window.location.search).get("room")) ||
           readPendingChatRoomId(sessionStorage);
         entryTimingRef.current.roomsReqAt = chatEntryNow();
+        const cachedRooms = readCachedChatRooms<RoomSummary>(info.user.userId);
+        if (cachedRooms) applyRooms(cachedRooms); // 같은 세션 목록 즉시 표시, 아래에서 재검증
         connectDirectory(info);
         if (requested) {
           void fetchTargetedRoom(info.token, requested);
+          // 딥링크/알림: 목록을 기다리지 않고 방 WS 를 바로 연다. 권한은 Worker 가 판정,
+          // 대상 방 조회가 forbidden 이면 아래 딥링크 effect 가 즉시 닫고 안내한다.
+          startEarlyDeepLink(requested);
         }
         // 알림 설정은 목록 표시를 막지 않는다. 실패하면 기본값(ALL) 유지.
         // 늦게 와도 사용자가 이미 바꾼 방 설정(notifyDirtyRef)은 덮지 않는다.
@@ -1435,6 +1471,46 @@ export default function ChatClient() {
     };
   }, [sheet]);
 
+  function startEarlyDeepLink(requested: string) {
+    if (deepLinkTriedRef.current === requested) return;
+    deepLinkTriedRef.current = requested;
+    earlyDeepLinkRef.current = requested;
+    const known = roomsRef.current.find((r) => r.roomId === requested);
+    const room = (known ?? (placeholderChatRoomSummary(requested) as RoomSummary));
+    const targetSeq =
+      typeof window !== "undefined" ? parseChatTargetSeqFromRoomUrl(requested, window.location.search) : null;
+    entryTimingRef.current.deepLinkOpen = true;
+    void openRoom(room, { targetSeq });
+  }
+
+  function closeEarlyDeepLinkDenied() {
+    earlyDeepLinkRef.current = "";
+    setView("list");
+    setActiveRoom(null);
+    roomRef.current = null;
+    reconnectingRef.current = false;
+    roomGenRef.current += 1;
+    clearTimer(roomTimerRef);
+    wsRef.current?.close();
+    clearLocalLines([]);
+    setError("참여할 수 없는 채팅방입니다.");
+  }
+
+  useEffect(() => {
+    const onOpenRoom = (ev: Event) => {
+      const roomId = parseChatDeepLinkRoomId((ev as CustomEvent<{ roomId?: string }>).detail?.roomId);
+      const info = tokenRef.current;
+      if (!roomId || !info) return;
+      deepLinkTriedRef.current = "";
+      setTargetedRoom(null);
+      setTargetedStatus("idle");
+      if (!roomsRef.current.some((r) => r.roomId === roomId)) void fetchTargetedRoom(info.token, roomId);
+      startEarlyDeepLink(roomId);
+    };
+    window.addEventListener(CHAT_OPEN_ROOM_EVENT, onOpenRoom);
+    return () => window.removeEventListener(CHAT_OPEN_ROOM_EVENT, onOpenRoom);
+  });
+
   async function openRoom(
     room: RoomSummary,
     opts?: { targetSeq?: number | null }
@@ -1526,6 +1602,24 @@ export default function ChatClient() {
     });
     if (action === "none" || !requested) return;
     if (action === "wait") return;
+    if (earlyDeepLinkRef.current === requested) {
+      if (action === "fallback") {
+        clearPendingChatRoomId(typeof sessionStorage === "undefined" ? null : sessionStorage);
+        closeEarlyDeepLinkDenied();
+        return;
+      }
+      // open: 서버가 확인한 실제 요약으로 헤더 교체 (메시지·소켓은 그대로)
+      const real =
+        rooms.find((row) => row.roomId === requested) ||
+        (targetedRoom?.roomId === requested ? targetedRoom : null);
+      earlyDeepLinkRef.current = "";
+      clearPendingChatRoomId(typeof sessionStorage === "undefined" ? null : sessionStorage);
+      if (real && roomRef.current?.roomId === requested) {
+        roomRef.current = real;
+        setActiveRoom(real);
+      }
+      return;
+    }
     if (deepLinkTriedRef.current === requested) return;
     deepLinkTriedRef.current = requested;
     if (action === "fallback") {

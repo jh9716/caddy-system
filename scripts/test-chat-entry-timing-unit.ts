@@ -56,7 +56,7 @@ ok(chatTokenServerTiming(NaN, -5) === "auth;dur=0, issue;dur=0", "server-timing 
 
 // source checks: prefs no longer awaited before loading end; no identifiers passed to timing
 const src = readFileSync("src/app/chat/ChatClient.tsx", "utf8");
-const init = src.slice(src.indexOf("const info = await fetchToken();\n        if (\n          cancelled"), src.indexOf("}, [connectDirectory, connectSocket, fetchRoomsHttp"));
+const init = src.slice(src.indexOf("const info = cachedToken ?? (await fetchToken());"), src.indexOf("}, [connectDirectory, connectSocket, fetchRoomsHttp"));
 ok(/void \(async \(\) => \{\s*try \{\s*const prefRes = await fetch\("\/api\/chat\/notification-prefs"/.test(init), "prefs fetched non-blocking");
 ok(init.indexOf("notification-prefs") < init.indexOf("await fetchRoomsHttp"), "prefs started before rooms await");
 ok(/mergeLateNotifyPrefs\(cur, incoming, notifyDirtyRef\.current\)/.test(init), "late prefs merge used");

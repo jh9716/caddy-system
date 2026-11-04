@@ -97,6 +97,13 @@ export async function deactivateNativePushOnLogout(
   }
 }
 
+let nativePushInAppAssign: ((href: string) => boolean) | null = null;
+
+/** 알림 탭 시 SPA 이동 함수 등록 (true 반환 = 처리됨). null 이면 기존 location.assign. */
+export function setNativePushInAppAssign(fn: ((href: string) => boolean) | null): void {
+  nativePushInAppAssign = fn;
+}
+
 export async function bindNativePushListeners(input?: {
   assign?: (href: string) => void;
 }): Promise<void> {
@@ -104,6 +111,8 @@ export async function bindNativePushListeners(input?: {
   if (!(await nativePushPluginAvailable())) return;
   listenersBound = true;
   const assign = input?.assign ?? ((href: string) => {
+    // P0: 앱 안 SPA 이동이 등록돼 있으면 새로고침 없이 이동, 실패 시 기존 전체 이동
+    if (nativePushInAppAssign && nativePushInAppAssign(href)) return;
     if (typeof window !== "undefined") window.location.assign(href);
   });
 
