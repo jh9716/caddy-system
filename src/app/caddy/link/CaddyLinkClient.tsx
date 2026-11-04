@@ -3,32 +3,54 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  parseMineLinkPayload,
+  resolveCaddyLinkScreen,
   resolveStaffLinkUiMode,
   staffLinkErrorMessage,
   type MineLinkPayload,
   type StaffLinkRequestView,
 } from "@/lib/caddyLinkRequestUi";
 import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
+import { resolveCaddyLinkPageGate } from "@/lib/roleRouting";
+import { recordAutoRedirect, resetAutoRedirects } from "@/lib/redirectLoopGuard";
+import { logoutCurrentDevice } from "@/lib/logoutClient";
 
 export default function CaddyLinkClient() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  /** 초기 로드 실패(역할 불가·API 오류·네트워크·응답 형식) → 오류 화면 */
+  const [fatalError, setFatalError] = useState("");
+  const [redirecting, setRedirecting] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [mine, setMine] = useState<MineLinkPayload | null>(null);
+
+  const autoRedirect = useCallback(
+    (href: string) => {
+      if (!recordAutoRedirect()) {
+        setRedirecting(false);
+        setFatalError("화면 이동이 반복되어 중단했습니다. 잠시 후 다시 시도해 주세요.");
+        return;
+      }
+      setRedirecting(true);
+      router.replace(href);
+    },
+    [router]
+  );
 
   const applyMine = useCallback(
     (data: MineLinkPayload) => {
       setMine(data);
       const mode = resolveStaffLinkUiMode(data);
       if (mode === "redirect_caddy") {
-        router.replace("/caddy");
+        autoRedirect("/caddy");
       }
       return mode;
     },
-    [router]
+    [autoRedirect]
   );
 
   const refreshMine = useCallback(async () => {
@@ -37,41 +59,50 @@ export default function CaddyLinkClient() {
       cache: "no-store",
     });
     if (consumeUnauthorizedMemberResponse(res)) {
+      setRedirecting(true);
       return null;
     }
-    const data = await res.json().catch(() => ({}));
+    const data = await res.json().catch(() => null);
     if (!res.ok) {
       throw new Error(
         staffLinkErrorMessage(data?.error, data?.message) || "조회 실패"
       );
     }
-    const payload: MineLinkPayload = {
-      linked: !!data.linked,
-      caddyId: data.caddyId ?? null,
-      request: data.request ?? null,
-    };
+    const payload = parseMineLinkPayload(data);
+    if (!payload) throw new Error("본인확인 정보를 읽지 못했습니다.");
     applyMine(payload);
     return payload;
-  }, [applyMine, router]);
+  }, [applyMine]);
 
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
+    setFatalError("");
     (async () => {
       try {
         const roleRes = await fetch("/api/check-role", {
           credentials: "include",
           cache: "no-store",
         });
-        if (consumeUnauthorizedMemberResponse(roleRes)) return;
+        if (consumeUnauthorizedMemberResponse(roleRes)) {
+          if (!cancelled) setRedirecting(true);
+          return;
+        }
+        if (!roleRes.ok) throw new Error("계정 정보를 확인하지 못했습니다.");
         const roleData = await roleRes.json().catch(() => ({}));
-        if (roleData.role !== "caddy") {
-          router.replace("/login?callbackUrl=/caddy/link");
+        const gate = resolveCaddyLinkPageGate(roleData.role);
+        if (gate.action === "replace") {
+          if (!cancelled) autoRedirect(gate.href);
+          return;
+        }
+        if (gate.action === "error") {
+          if (!cancelled) setFatalError("본인확인을 진행할 수 없는 계정입니다. 다시 로그인해 주세요.");
           return;
         }
         await refreshMine();
-      } catch (e: any) {
+      } catch (e: unknown) {
         if (!cancelled) {
-          setError(e?.message || "정보를 불러오지 못했습니다.");
+          setFatalError((e instanceof Error && e.message) || "정보를 불러오지 못했습니다.");
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -80,7 +111,12 @@ export default function CaddyLinkClient() {
     return () => {
       cancelled = true;
     };
-  }, [refreshMine, router]);
+  }, [refreshMine, autoRedirect, reloadKey]);
+
+  const screen = resolveCaddyLinkScreen({ loading, redirecting, fatalError, mine });
+  useEffect(() => {
+    if (screen === "content") resetAutoRedirects();
+  }, [screen]);
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -148,9 +184,47 @@ export default function CaddyLinkClient() {
     }
   };
 
-  if (loading || !mine) {
+  if (screen === "loading") {
     return (
       <p className="mt-16 text-center text-slate-500">불러오는 중…</p>
+    );
+  }
+  if (screen === "redirecting") {
+    return (
+      <p className="mt-16 text-center text-slate-500">이동 중…</p>
+    );
+  }
+  if (screen === "error" || !mine) {
+    return (
+      <div className="mx-auto mt-16 max-w-md text-center" role="alert" data-caddy-link-error>
+        <p className="mb-4 text-sm text-red-700">
+          {fatalError || "정보를 불러오지 못했습니다."}
+        </p>
+        <div className="flex justify-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              resetAutoRedirects();
+              setMine(null);
+              setReloadKey((k) => k + 1);
+            }}
+            className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700"
+          >
+            다시 시도
+          </button>
+          <button
+            type="button"
+            onClick={async () => {
+              resetAutoRedirects();
+              await logoutCurrentDevice().catch(() => undefined);
+              location.replace("/login");
+            }}
+            className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white"
+          >
+            로그아웃 후 로그인 화면으로
+          </button>
+        </div>
+      </div>
     );
   }
 

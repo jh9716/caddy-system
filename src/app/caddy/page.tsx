@@ -11,6 +11,7 @@ import {
   writeClientResource,
 } from '@/lib/clientResourceCache'
 import { resolveCaddyPageGate } from '@/lib/roleRouting'
+import { recordAutoRedirect, resetAutoRedirects } from '@/lib/redirectLoopGuard'
 import { formatKstDisplay } from '@/lib/kstDate'
 import {
   consumeUnauthorizedMemberResponse,
@@ -71,6 +72,11 @@ export default function CaddyPage() {
   const [summary, setSummary] = useState<Summary | null>(() => cachedSummary)
   const [refreshError, setRefreshError] = useState(false)
   const loadGen = useRef(0)
+  const [loopError, setLoopError] = useState(false)
+  const dashboardReady = allowed && summary != null && !loading
+  useEffect(() => {
+    if (dashboardReady) resetAutoRedirects()
+  }, [dashboardReady])
 
   useEffect(() => {
     const run = async () => {
@@ -152,6 +158,11 @@ export default function CaddyPage() {
           }
           // 미연결만 /caddy/link로. APPROVED(+미연결 레이스)는 루프 방지로 대시보드 유지
           if (shouldRedirectUnlinked(mine)) {
+            if (!recordAutoRedirect()) {
+              setLoopError(true)
+              return
+            }
+            redirected = true
             router.replace('/caddy/link')
             return
           }
@@ -182,6 +193,24 @@ export default function CaddyPage() {
     }
     run()
   }, [router])
+
+  if (loopError) {
+    return (
+      <div role="alert" data-caddy-loop-error style={{ textAlign: 'center', marginTop: 100 }}>
+        <p style={{ marginBottom: 16 }}>화면 이동이 반복되어 중단했습니다.</p>
+        <button
+          type="button"
+          className="ui-btn"
+          onClick={() => {
+            resetAutoRedirects()
+            location.reload()
+          }}
+        >
+          다시 시도
+        </button>
+      </div>
+    )
+  }
 
   if (!summary && (loading || !allowed)) {
     return <p style={{ textAlign:'center', marginTop:100 }}>로딩 중…</p>
