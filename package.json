@@ -206,7 +206,8 @@
     "measure:photo-ux-chromium": "bash scripts/tsx-safe.sh scripts/measure-photo-ux-chromium.ts",
     "compute:android-kakao-debug-key-hash": "bash scripts/tsx-safe.sh scripts/compute-android-kakao-debug-key-hash.ts",
     "native:sync:android": "npx cap sync android",
-    "test:caddy-ops-roster-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-ops-roster-unit.ts"
+    "test:caddy-ops-roster-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-ops-roster-unit.ts",
+    "test:caddy-ops-roster-concurrency-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-ops-roster-concurrency-unit.ts"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.2",

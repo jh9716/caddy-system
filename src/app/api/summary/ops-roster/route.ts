@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isNoticeAuthResponse, requireNoticeReader } from "@/lib/noticeAccess";
-import { loadAdminOpsDashboardView, todayKstYmd } from "@/lib/dailyOpsSnapshotService";
-import { toCaddyOpsRoster } from "@/lib/caddyOpsRoster";
+import { todayKstYmd } from "@/lib/dailyOpsSnapshotService";
+import { loadCaddyOpsRosterShared } from "@/lib/caddyOpsRosterServer";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -18,8 +18,9 @@ export async function GET(req: NextRequest) {
   try {
     const date = todayKstYmd();
     const refresh = req.nextUrl.searchParams.get("refresh") === "1";
-    const view = await loadAdminOpsDashboardView(date, { waitForSheet: refresh });
-    return NextResponse.json(toCaddyOpsRoster(view), {
+    // 관리자와 같은 loadAdminOpsDashboardView를 공유 memo/in-flight로 호출
+    const payload = await loadCaddyOpsRosterShared(date, refresh);
+    return NextResponse.json(payload, {
       headers: { "Cache-Control": "no-store" },
     });
   } catch (e: unknown) {

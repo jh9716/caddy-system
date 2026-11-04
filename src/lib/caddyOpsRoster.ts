@@ -78,7 +78,50 @@ export function toCaddyOpsRoster(view: ViewSubset): CaddyOpsRosterPayload {
   };
 }
 
-export type CaddyOpsRosterRowState = "assigned" | "unassigned" | "pending";
+export type CaddyOpsRosterRowState = "assigned" | "unassigned" | "pending" | "unknown";
+
+/**
+ * 화면 전체 상태.
+ * - loading: 첫 응답 전 (조회 진행 중)
+ * - failed: 표시할 응답 없음 (조회 실패)
+ * - ok: ready && freshness=fresh (정상 조회 완료)
+ * - refreshing: 응답은 있으나 최신 확인 요청 진행 중
+ * - refresh_failed: 최신 확인이 끝났는데 fresh가 아님(HTTP 200 + error/stale/refreshing 포함) 또는 요청 실패
+ *   → 이전 데이터는 '갱신 실패 · 기준 시각'으로만 표시, 최신처럼 보이지 않게.
+ */
+export type CaddyOpsDisplayState = "loading" | "failed" | "ok" | "refreshing" | "refresh_failed";
+
+export function caddyOpsDisplayState(
+  data: Pick<CaddyOpsRosterPayload, "ready" | "freshness"> | null,
+  flags: { inFlight: boolean; requestFailed: boolean }
+): CaddyOpsDisplayState {
+  if (!data) return flags.requestFailed && !flags.inFlight ? "failed" : "loading";
+  if (data.ready && data.freshness === "fresh" && !flags.requestFailed) return "ok";
+  if (flags.inFlight) return "refreshing";
+  return "refresh_failed";
+}
+
+export function caddyOpsRowState(
+  group: Pick<CaddyOpsRosterGroup, "count">,
+  data: Pick<CaddyOpsRosterPayload, "ready">,
+  display: CaddyOpsDisplayState
+): CaddyOpsRosterRowState {
+  if (group.count > 0) return "assigned";
+  if (display === "ok") return "unassigned";
+  if (display === "refreshing" || display === "loading") return "pending";
+  // refresh_failed: 이전 성공 데이터(ready)면 그 기준의 미배정, 아니면 확인 불가
+  return data.ready ? "unassigned" : "unknown";
+}
+
+/** 통계 값 문구. null(미준비)은 상태에 따라 확인 중 / 갱신 실패. */
+export function caddyOpsStatText(
+  v: number | null | undefined,
+  display: CaddyOpsDisplayState
+): string {
+  if (display === "failed") return "조회 실패";
+  if (typeof v === "number") return `${v}명`;
+  return display === "refresh_failed" ? "갱신 실패" : "확인 중";
+}
 
 export function caddyOpsRosterRowState(
   group: Pick<CaddyOpsRosterGroup, "count">,

@@ -7233,3 +7233,7 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
 .caddy-ops-stats-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .caddy-home-stat-value.is-muted { color: #94a3b8; font-size: 14px; font-weight: 600; }
 .caddy-ops-stats-note { margin: 6px 2px 0; font-size: 12px; color: #64748b; }
+.caddy-ops-roster-banner { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 8px; padding: 8px 10px; border-radius: 10px; font-size: 13px; color: #475569; background: #f1f5f9; }
+.caddy-ops-roster-banner.is-error { color: #b45309; background: #fffbeb; border: 1px solid #fde68a; }
+.caddy-ops-roster-note.is-error { color: #b45309; font-weight: 600; }
+[data-stale] .caddy-ops-roster-names, [data-stale] .caddy-home-stat-value { opacity: .7; }

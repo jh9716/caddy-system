@@ -138,7 +138,7 @@ async function main() {
   console.log("\n== route 정적 검사 ==");
   const route = src("src/app/api/summary/ops-roster/route.ts");
   assert(/requireNoticeReader\(req\)/.test(route), "caddy/leader/admin 로그인 필수 (비로그인 401)");
-  assert(/loadAdminOpsDashboardView\(/.test(route), "관리자와 같은 view 로더 사용");
+  assert(/loadCaddyOpsRosterShared\(/.test(route) && /loadAdminOpsDashboardView\(/.test(src("src/lib/caddyOpsRosterServer.ts")), "관리자와 같은 view 로더 사용 (공유 memo 경유)");
   assert(/todayKstYmd\(\)/.test(route) && !/searchParams\.get\("date"\)/.test(route), "KST 오늘 고정, date 파라미터 없음");
   assert(!/export async function (POST|PUT|PATCH|DELETE)/.test(route), "write 메서드 없음 (405)");
   assert(!/prisma\.|\.create\(|\.update\(|\.delete\(|\.upsert\(/.test(route), "route에 DB write 없음");
