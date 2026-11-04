@@ -334,6 +334,9 @@ export default function ChatClient() {
   // P0: 같은 세션 메모리 토큰 재사용 여부(거절 시 1회 새 발급), 딥링크 즉시 입장 대상
   const usedCachedTokenRef = useRef(false);
   const earlyDeepLinkRef = useRef("");
+  // 알림/딥링크로 요약(unread) 없이 먼저 연결한 방: 실제 요약이 올 때까지 첫 스크롤·읽음 전송 보류.
+  const entryHoldRef = useRef<{ roomId: string; timer: ReturnType<typeof setTimeout> | null } | null>(null);
+  const heldReadSeqRef = useRef(0);
   const roomsRef = useRef<RoomSummary[]>([]);
   const roomsShownRef = useRef(false);
   const entryTimingRef = useRef<{
@@ -851,9 +854,7 @@ export default function ChatClient() {
             linesRef.current = next;
             lastSeqRef.current = lastKnownSeq(next);
             const last = next[next.length - 1];
-            if (last?.seq && ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({ type: "read", seq: last.seq }));
-            }
+            if (last?.seq) sendReadOrHold(ws, last.seq);
             queueEntrySeek(next);
             {
               const t = entryTimingRef.current;
@@ -900,9 +901,7 @@ export default function ChatClient() {
             reconnectingRef.current = false;
           }
           const last = extra[extra.length - 1];
-          if (last?.seq && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "read", seq: last.seq }));
-          }
+          if (last?.seq) sendReadOrHold(ws, last.seq);
           return;
         }
         if (data.type === "message") {
@@ -911,9 +910,7 @@ export default function ChatClient() {
             setUnseenCount((n) => n + 1);
           }
           upsertLine(line);
-          if (line.seq && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "read", seq: line.seq }));
-          }
+          if (line.seq) sendReadOrHold(ws, line.seq);
           return;
         }
         if (data.type === "hidden" && Number(data.seq) > 0) {
@@ -1237,6 +1234,56 @@ export default function ChatClient() {
     });
   }
 
+  function sendReadOrHold(ws: WebSocket, seq: number) {
+    const hold = entryHoldRef.current;
+    if (hold && roomRef.current?.roomId === hold.roomId) {
+      heldReadSeqRef.current = Math.max(heldReadSeqRef.current, Number(seq) || 0);
+      return;
+    }
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "read", seq }));
+  }
+
+  function clearEntryHold() {
+    const hold = entryHoldRef.current;
+    if (hold?.timer) clearTimeout(hold.timer);
+    entryHoldRef.current = null;
+    heldReadSeqRef.current = 0;
+  }
+
+  /** 실제 요약(또는 시간 초과 시 알려진 값)으로 진입 위치를 다시 잡고, 보류한 읽음을 보낸다. */
+  function releaseEntryHold(real: RoomSummary | null) {
+    const hold = entryHoldRef.current;
+    if (!hold) return;
+    if (hold.timer) clearTimeout(hold.timer);
+    entryHoldRef.current = null;
+    const pendingRead = heldReadSeqRef.current;
+    heldReadSeqRef.current = 0;
+    if (roomRef.current?.roomId !== hold.roomId) return;
+    const prev = entrySnapshotRef.current;
+    const snapshot = real
+      ? snapshotChatEntry({
+          unread: real.unread,
+          lastMessageSeq: real.lastMessageSeq,
+          explicitSeq: prev?.explicitSeq ?? null,
+        })
+      : prev;
+    if (snapshot) {
+      entrySnapshotRef.current = snapshot;
+      entryTargetRef.current = resolveChatEntryTarget(snapshot);
+    }
+    if (!userMovedScrollRef.current) {
+      entrySeekRef.current = true;
+      entryPagesRef.current = 0;
+      stickRef.current = entryTargetRef.current?.kind === "bottom";
+      // 첫 history 전이면 history 핸들러가 위치를 잡는다(빈 목록으로 seek 를 끝내지 않음).
+      if (!historyResetRef.current) queueEntrySeek(linesRef.current);
+    }
+    const ws = wsRef.current;
+    if (pendingRead > 0 && ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "read", seq: pendingRead }));
+    }
+  }
+
   function queueEntrySeek(nextLines: ChatLine[]) {
     const target = entryTargetRef.current;
     if (!target || !entrySeekRef.current) return;
@@ -1480,11 +1527,12 @@ export default function ChatClient() {
     const targetSeq =
       typeof window !== "undefined" ? parseChatTargetSeqFromRoomUrl(requested, window.location.search) : null;
     entryTimingRef.current.deepLinkOpen = true;
-    void openRoom(room, { targetSeq });
+    void openRoom(room, { targetSeq, holdForSummary: true });
   }
 
   function closeEarlyDeepLinkDenied() {
     earlyDeepLinkRef.current = "";
+    clearEntryHold();
     setView("list");
     setActiveRoom(null);
     roomRef.current = null;
@@ -1513,7 +1561,7 @@ export default function ChatClient() {
 
   async function openRoom(
     room: RoomSummary,
-    opts?: { targetSeq?: number | null }
+    opts?: { targetSeq?: number | null; holdForSummary?: boolean }
   ): Promise<ChatSocketOpenResult> {
     entryTimingRef.current.roomSelectAt = chatEntryNow();
     entryTimingRef.current.wsOpenAt = null;
@@ -1530,11 +1578,25 @@ export default function ChatClient() {
     });
     entrySnapshotRef.current = snapshot;
     entryTargetRef.current = resolveChatEntryTarget(snapshot);
-    entrySeekRef.current = true;
+    clearEntryHold();
     entryPinRef.current = null;
     entryPagesRef.current = 0;
     userMovedScrollRef.current = false;
-    stickRef.current = entryTargetRef.current.kind === "bottom";
+    if (opts?.holdForSummary && snapshot.explicitSeq == null) {
+      // 요약(unread)을 아직 모른다 → 첫 스크롤·읽음 보류. 요약이 끝내 안 오면 5초 뒤 알려진 값으로 진행(기존 동작).
+      entrySeekRef.current = false;
+      stickRef.current = false;
+      const roomId = room.roomId;
+      entryHoldRef.current = {
+        roomId,
+        timer: setTimeout(() => {
+          if (entryHoldRef.current?.roomId === roomId) releaseEntryHold(null);
+        }, 5000),
+      };
+    } else {
+      entrySeekRef.current = true;
+      stickRef.current = entryTargetRef.current.kind === "bottom";
+    }
     roomRef.current = room;
     setActiveRoom(room);
     setView("room");
@@ -1618,6 +1680,7 @@ export default function ChatClient() {
         roomRef.current = real;
         setActiveRoom(real);
       }
+      releaseEntryHold(real && real.roomId === requested ? real : null);
       return;
     }
     if (deepLinkTriedRef.current === requested) return;
@@ -2653,6 +2716,7 @@ export default function ChatClient() {
                 setView("list");
                 setActiveRoom(null);
                 roomRef.current = null;
+                clearEntryHold();
                 entrySeekRef.current = false;
                 entryPinRef.current = null;
                 entrySnapshotRef.current = null;

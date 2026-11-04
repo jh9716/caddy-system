@@ -81,11 +81,14 @@ export function readCachedChatRooms<R>(userId: number | null | undefined): R[] |
 }
 
 /** 딥링크 즉시 입장용 최소 요약. 권한은 Worker 가 WS 에서 판정한다. */
+export const PLACEHOLDER_ROOM_TITLE = "불러오는 중…";
+
 export function placeholderChatRoomSummary(roomId: string) {
   const type: "ALL" | "CUSTOM" | "DM" = isAllRoomId(roomId) ? "ALL" : isDmRoomId(roomId) ? "DM" : "CUSTOM";
   return {
     roomId,
-    name: type === "ALL" ? "전체 채팅방" : "채팅방",
+    // 실제 방 이름은 서버 요약이 오면 교체. 캐시에 없으면 오해 소지 있는 고정 이름 대신 로딩 표시.
+    name: type === "ALL" ? "전체 채팅방" : PLACEHOLDER_ROOM_TITLE,
     type,
     ownerUserId: null,
     memberCount: 0,

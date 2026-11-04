@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import {
-  clearChatFastEntryCache, invalidateChatToken, isReusableChatToken, openPushPathInApp, placeholderChatRoomSummary,
+  clearChatFastEntryCache, invalidateChatToken, isReusableChatToken, openPushPathInApp, placeholderChatRoomSummary, PLACEHOLDER_ROOM_TITLE,
   readCachedChatRooms, readReusableChatToken, rememberChatRooms, rememberChatToken, safeInAppPath, CHAT_OPEN_ROOM_EVENT,
 } from "../src/lib/chatFastEntry";
 import { applyChatSessionResetReason, clearChatSessionEnded } from "../src/lib/chatSessionReset";
@@ -48,5 +48,10 @@ ok(/fetchTargetedRoom\(info\.token, requested\);\s*\/\/[^\n]*\n[^\n]*\n\s*startE
 ok(!/localStorage\.setItem\([^)]*token/i.test(src) && !/sessionStorage\.setItem\([^)]*token/i.test(src), "no token persistence");
 const sw = readFileSync("public/sw.js", "utf8");
 ok(/tryInAppRoute\(client, url\)\) return;\s*if \(typeof client\.navigate !== "function"\) continue;/.test(sw), "sw falls back to navigate");
-ok(/setTimeout\(\(\) => finish\(false\), 1200\)/.test(sw), "sw ack timeout");
+ok(/setTimeout\(\(\) => finish\(false\), 700\)/.test(sw), "sw ack timeout 700ms");
+ok(placeholderChatRoomSummary("room_aaaaaaaaaaaaaaaa").name === PLACEHOLDER_ROOM_TITLE && PLACEHOLDER_ROOM_TITLE !== "채팅방", "placeholder title is loading, not fake name");
+ok(/openRoom\(room, \{ targetSeq, holdForSummary: true \}\)/.test(src), "early deep link holds entry");
+ok(/releaseEntryHold\(real && real\.roomId === requested \? real : null\)/.test(src), "real summary releases hold");
+ok(!/ws\.send\(JSON\.stringify\(\{ type: "read", seq: (last|line)\.seq \}\)\)/.test(src), "all read sends go through hold gate");
+ok(/if \(!historyResetRef\.current\) queueEntrySeek/.test(src), "release before history defers seek");
 console.log(`${pass} passed, ${fail} failed`); if (fail) process.exit(1);

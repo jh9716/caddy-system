@@ -123,7 +123,8 @@ function tryInAppRoute(client, url) {
       channel.port1.onmessage = (ev) => finish(Boolean(ev && ev.data && ev.data.ok === true));
       const u = new URL(url);
       client.postMessage({ type: "vh-push-open", path: u.pathname + u.search }, [channel.port2]);
-      setTimeout(() => finish(false), 1200);
+      // 열린 창의 ack 는 보통 수 ms. 구버전 페이지(리스너 없음)는 700ms 뒤 기존 navigate 로 폴백.
+      setTimeout(() => finish(false), 700);
     } catch (_e) {
       finish(false);
     }
