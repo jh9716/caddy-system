@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import DevicePushSettings from '@/components/DevicePushSettings'
 import PwaInstallCard from '@/components/PwaInstallCard'
+import CaddyOpsRosterSection from '@/components/caddy/CaddyOpsRosterSection'
 import {
   CLIENT_RESOURCE,
   ensureClientAuthNamespace,
@@ -258,6 +259,8 @@ export default function CaddyPage() {
               <Stat label="마샬" value={summary.today.marshal} />
             </div>
           </section>
+
+          <CaddyOpsRosterSection />
 
           <section className="caddy-home-section" aria-label="최근 공지">
             <div className="caddy-home-section-row">

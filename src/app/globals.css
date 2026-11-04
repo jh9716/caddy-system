@@ -7216,3 +7216,17 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
   font-size: 12px;
   color: var(--vh-ink-soft);
 }
+
+/* 캐디 대시보드: 운영 당번·마샬·조장 (read-only) */
+.caddy-ops-roster-list { list-style: none; margin: 0; padding: 0; border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; background: #fff; }
+.caddy-ops-roster-row { display: grid; grid-template-columns: 76px 1fr auto; align-items: start; gap: 8px; padding: 11px 12px; border-top: 1px solid #f1f5f9; font-size: 14px; }
+.caddy-ops-roster-row:first-child { border-top: 0; }
+.caddy-ops-roster-label { font-weight: 700; color: #334155; white-space: nowrap; }
+.caddy-ops-roster-names { color: #0f172a; word-break: keep-all; overflow-wrap: anywhere; line-height: 1.45; }
+.caddy-ops-roster-count { color: #475569; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.caddy-ops-roster-row[data-state="unassigned"] .caddy-ops-roster-names,
+.caddy-ops-roster-row[data-state="pending"] .caddy-ops-roster-names { color: #94a3b8; }
+.caddy-ops-roster-note { font-size: 12px; color: #64748b; }
+.caddy-ops-roster-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 14px 12px; border: 1px solid #e5e7eb; border-radius: 12px; color: #64748b; font-size: 14px; margin: 0; background: #fff; }
+.caddy-ops-roster-status.is-error { color: #b91c1c; border-color: #fecaca; background: #fef2f2; }
+.caddy-ops-roster-retry { min-height: 36px; padding: 0 14px; border-radius: 8px; border: 1px solid #fca5a5; background: #fff; color: #b91c1c; font-weight: 600; }
