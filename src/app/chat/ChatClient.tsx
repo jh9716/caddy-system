@@ -99,6 +99,11 @@ import {
 import type { ChatPhotoDirectProgress, ChatPhotoDirectResult } from "@/lib/chatPhotoDirectClient";
 import { readCapacitorNativePlatform } from "@/lib/nativePlatformClient";
 import {
+  chatEntryNow,
+  mergeLateNotifyPrefs,
+  recordChatEntryTiming,
+} from "@/lib/chatEntryTiming";
+import {
   canProfileMention,
   chatAuthorLine,
   chatRoleLabel,
@@ -314,6 +319,18 @@ export default function ChatClient() {
   const [activeRoom, setActiveRoom] = useState<RoomSummary | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [initFailed, setInitFailed] = useState(false);
+  const [initAttempt, setInitAttempt] = useState(0);
+  const notifyDirtyRef = useRef(new Set<string>());
+  const roomsShownRef = useRef(false);
+  const entryTimingRef = useRef<{
+    mountAt: number | null;
+    roomsReqAt: number | null;
+    roomSelectAt: number | null;
+    wsOpenAt: number | null;
+    fullLoadEntry: boolean;
+    deepLinkOpen: boolean;
+  }>({ mountAt: null, roomsReqAt: null, roomSelectAt: null, wsOpenAt: null, fullLoadEntry: false, deepLinkOpen: false });
   const [connected, setConnected] = useState(false);
   const [directoryConnected, setDirectoryConnected] = useState(false);
   const [directorySnapshotReady, setDirectorySnapshotReady] = useState(false);
@@ -479,11 +496,13 @@ export default function ChatClient() {
   const fetchToken = useCallback(async () => {
     const startedGen = dirGenRef.current;
     if (!shouldCommitChatToken()) return null;
+    const tokenReqAt = chatEntryNow();
     const res = await fetch("/api/chat/token", {
       method: "POST",
       credentials: "include",
       cache: "no-store",
     });
+    recordChatEntryTiming("token", tokenReqAt);
     if (
       !shouldCommitChatToken({
         generationMatches: startedGen === dirGenRef.current,
@@ -510,6 +529,16 @@ export default function ChatClient() {
   const applyRooms = useCallback((next: RoomSummary[]) => {
     const visible = next.filter((r) => isVisibleChatListRoom(r.type));
     setRooms(visible);
+    if (!roomsShownRef.current) {
+      // Directory WS snapshot 과 HTTP 목록 중 먼저 정상 도착한 쪽에서 초기 UI 를 연다.
+      roomsShownRef.current = true;
+      setLoading(false);
+      const t = entryTimingRef.current;
+      const now = chatEntryNow();
+      recordChatEntryTiming("rooms_to_shown", t.roomsReqAt, now);
+      recordChatEntryTiming("entry_to_ui", t.mountAt, now);
+      if (t.fullLoadEntry) recordChatEntryTiming("nav_to_ui", 0, now);
+    }
     setActiveRoom((cur) => {
       if (!cur) return cur;
       const match = visible.find((r) => r.roomId === cur.roomId);
@@ -702,6 +731,14 @@ export default function ChatClient() {
         if (gen !== roomGenRef.current) return;
         setConnected(true);
         setFailingSince(null);
+        {
+          const t = entryTimingRef.current;
+          if (t.roomSelectAt != null) {
+            t.wsOpenAt = chatEntryNow();
+            recordChatEntryTiming("room_select_to_ws_open", t.roomSelectAt, t.wsOpenAt);
+            t.roomSelectAt = null;
+          }
+        }
         roomAttemptRef.current = 0;
         const afterSeq = lastSeqRef.current;
         if (reconnectingRef.current && afterSeq > 0) {
@@ -789,6 +826,18 @@ export default function ChatClient() {
               ws.send(JSON.stringify({ type: "read", seq: last.seq }));
             }
             queueEntrySeek(next);
+            {
+              const t = entryTimingRef.current;
+              if (t.wsOpenAt != null) {
+                const now = chatEntryNow();
+                recordChatEntryTiming("ws_open_to_history", t.wsOpenAt, now);
+                t.wsOpenAt = null;
+                if (t.deepLinkOpen) {
+                  t.deepLinkOpen = false;
+                  if (t.fullLoadEntry) recordChatEntryTiming("push_nav_to_room", 0, now);
+                }
+              }
+            }
           } else if (!reconnectingRef.current) {
             const el = listRef.current;
             if (el) pendingScrollRestore.current = el.scrollHeight;
@@ -961,6 +1010,19 @@ export default function ChatClient() {
         if (room) void connectSocket(info, room.roomId);
       });
     });
+    roomsShownRef.current = false;
+    setInitFailed(false);
+    {
+      const t = entryTimingRef.current;
+      t.mountAt = chatEntryNow();
+      t.roomsReqAt = null;
+      try {
+        const nav = performance.getEntriesByType?.("navigation")?.[0] as PerformanceNavigationTiming | undefined;
+        t.fullLoadEntry = initAttempt === 0 && Boolean(nav && new URL(nav.name).pathname === "/chat");
+      } catch {
+        t.fullLoadEntry = false;
+      }
+    }
     (async () => {
       const startedGen = dirGenRef.current;
       try {
@@ -981,29 +1043,39 @@ export default function ChatClient() {
         const requested =
           parseChatDeepLinkRoomId(new URLSearchParams(window.location.search).get("room")) ||
           readPendingChatRoomId(sessionStorage);
+        entryTimingRef.current.roomsReqAt = chatEntryNow();
         connectDirectory(info);
         if (requested) {
           void fetchTargetedRoom(info.token, requested);
         }
+        // 알림 설정은 목록 표시를 막지 않는다. 실패하면 기본값(ALL) 유지.
+        // 늦게 와도 사용자가 이미 바꾼 방 설정(notifyDirtyRef)은 덮지 않는다.
+        void (async () => {
+          try {
+            const prefRes = await fetch("/api/chat/notification-prefs", {
+              credentials: "include",
+              cache: "no-store",
+            });
+            const prefData = (await prefRes.json().catch(() => null)) as {
+              prefs?: Record<string, ChatNotifyMode>;
+            } | null;
+            if (cancelled || !prefRes.ok || !prefData?.prefs) return;
+            const incoming = prefData.prefs;
+            setNotifyPrefs((cur) => mergeLateNotifyPrefs(cur, incoming, notifyDirtyRef.current));
+          } catch {
+            // default ALL
+          }
+        })();
         try {
           await fetchRoomsHttp(info.token);
         } catch {
           // Directory WS is the realtime source; HTTP is a same-session fallback.
         }
-        try {
-          const prefRes = await fetch("/api/chat/notification-prefs", {
-            credentials: "include",
-            cache: "no-store",
-          });
-          const prefData = (await prefRes.json().catch(() => null)) as {
-            prefs?: Record<string, ChatNotifyMode>;
-          } | null;
-          if (prefRes.ok && prefData?.prefs) setNotifyPrefs(prefData.prefs);
-        } catch {
-          // default ALL
-        }
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : "채팅을 열 수 없습니다.");
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : "채팅을 열 수 없습니다.");
+          setInitFailed(true);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -1018,7 +1090,7 @@ export default function ChatClient() {
       wsRef.current?.close();
       dirRef.current?.close();
     };
-  }, [connectDirectory, connectSocket, fetchRoomsHttp, fetchTargetedRoom, fetchToken]);
+  }, [connectDirectory, connectSocket, fetchRoomsHttp, fetchTargetedRoom, fetchToken, initAttempt]);
 
   useEffect(() => {
     const reconnect = () => {
@@ -1367,6 +1439,8 @@ export default function ChatClient() {
     room: RoomSummary,
     opts?: { targetSeq?: number | null }
   ): Promise<ChatSocketOpenResult> {
+    entryTimingRef.current.roomSelectAt = chatEntryNow();
+    entryTimingRef.current.wsOpenAt = null;
     const info = await refreshIfNeeded();
     if (!info) return { ok: false, code: "missing_token" };
     const urlSeq =
@@ -1469,6 +1543,7 @@ export default function ChatClient() {
       typeof window !== "undefined"
         ? parseChatTargetSeqFromRoomUrl(room.roomId, window.location.search)
         : null;
+    entryTimingRef.current.deepLinkOpen = true;
     void openRoom(room, { targetSeq });
   }, [directorySnapshotReady, rooms, targetedRoom, targetedStatus]);
 
@@ -1476,6 +1551,7 @@ export default function ChatClient() {
     const room = activeRoom;
     if (!room) return;
     const prev = notifyPrefs[room.roomId] ?? DEFAULT_CHAT_NOTIFY_MODE;
+    notifyDirtyRef.current.add(room.roomId);
     setNotifyPrefs((cur) => ({ ...cur, [room.roomId]: mode }));
     const res = await fetch(
       `/api/chat/rooms/${encodeURIComponent(room.roomId)}/notification`,
@@ -2408,6 +2484,20 @@ export default function ChatClient() {
             <p className="vh-chat-error" data-chat-error-code={parseChatClientErrorCode(error) || undefined}>
               {error}
             </p>
+          ) : null}
+          {initFailed && !loading ? (
+            <button
+              type="button"
+              className="vh-chat-retry-btn"
+              data-chat-init-retry
+              onClick={() => {
+                setError("");
+                setLoading(true);
+                setInitAttempt((n) => n + 1);
+              }}
+            >
+              다시 시도
+            </button>
           ) : null}
           {!directoryConnected && !loading ? (
             <p className="vh-chat-status">목록 연결 대기 중…</p>
