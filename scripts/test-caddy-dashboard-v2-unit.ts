@@ -33,11 +33,13 @@ assert(page.includes("개인 상태 정보 없음"), "no invented personal duty"
 assert(!page.includes("정상 근무"), "does not infer 정상 근무");
 
 console.log("== today counts compact ==");
-assert(page.includes('label="휴무"'), "휴무");
-assert(page.includes('label="병가"'), "병가");
-assert(page.includes('label="장기병가"'), "장기병가");
-assert(page.includes('label="당번"'), "당번");
-assert(page.includes('label="마샬"'), "마샬");
+// #339: '오늘 현황'은 관리자와 같은 운영자료(CaddyOpsRosterSection)로 이동.
+// Assignment 집계 숫자 카드(휴무·병가·장기병가·당번·마샬) 제거.
+const opsSection = read("src/components/caddy/CaddyOpsRosterSection.tsx");
+assert(!page.includes('label="당번"') && !page.includes('label="마샬"'), "당번·마샬 숫자 카드 제거");
+assert(!page.includes('label="병가"') && !page.includes('label="장기병가"'), "검증 안 된 병가·장기병가 0 표시 제거");
+assert(opsSection.includes("재직 캐디") && opsSection.includes("해당일 가용") && opsSection.includes("'휴무'"), "재직·가용·휴무 (운영자료)");
+assert(opsSection.includes("병가·장기병가 미제공"), "병가·장기병가 미제공 안내");
 assert(css.includes("caddy-home-stats"), "compact stats grid");
 assert(css.includes("grid-template-columns: repeat(5, minmax(0, 1fr))"), "5-col compact grid");
 assert(css.includes(".caddy-home-stat-label"), "stat label class");
