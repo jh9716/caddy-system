@@ -29,13 +29,16 @@ export function startSessionCheckMock() {
   const epochs = new Map();
   const blocked = new Set();
   let unavailable = false;
+  let delayMs = 0;
+  let calls = 0;
 
   const server = createHttpServer((req, res) => {
     const url = String(req.url || "").split("?")[0];
     if (req.method === "POST" && url === "/api/chat/session-check") {
       const chunks = [];
       req.on("data", (chunk) => chunks.push(chunk));
-      req.on("end", () => {
+      calls += 1;
+      req.on("end", () => setTimeout(() => {
         res.setHeader("content-type", "application/json; charset=utf-8");
         if (unavailable) {
           res.statusCode = 503;
@@ -67,7 +70,7 @@ export function startSessionCheckMock() {
         }
         res.statusCode = 200;
         res.end(JSON.stringify({ ok: true, userId, sv }));
-      });
+      }, delayMs));
       return;
     }
     res.statusCode = 404;
@@ -90,6 +93,16 @@ export function startSessionCheckMock() {
         setBlocked(userId, value = true) {
           if (value) blocked.add(userId);
           else blocked.delete(userId);
+        },
+        /** 로컬 측정용: session-check 응답 지연(ms) 주입. */
+        setDelay(ms) {
+          delayMs = Math.max(0, Number(ms) || 0);
+        },
+        sessionCheckCalls() {
+          return calls;
+        },
+        resetCalls() {
+          calls = 0;
         },
         setUnavailable(value) {
           unavailable = value === true;

@@ -74,6 +74,8 @@ import {
 import { diagEnabled, diagLog, diagPath, diagnoseTokenFailure } from "./diag"; // TEMPORARY DIAGNOSTIC
 import { nextAppExtraHeaders, nextAppFetchInit, nextAppUrl, nextPushDispatchUrl } from "./nextApp";
 
+import { attachWsAssertion, readWsAssertion, stripWsAssertionHeaders } from "./wsAssertion";
+
 export { validateIncomingMessage, isValidRoomName } from "./protocol";
 export { verifyChatToken } from "./token";
 export { ChatDirectory };
@@ -306,7 +308,17 @@ export default {
         return json({ error: "upgrade_required" }, 426);
       }
       const id = env.CHAT_ROOM.idFromName(authorized.room);
-      return env.CHAT_ROOM.get(id).fetch(request);
+      // 진입부에서 토큰·세션·방 권한을 모두 확인했다. DO 가 같은 확인(session-check 왕복)을
+      // 반복하지 않도록 짧은 서명 확인서를 붙인다. 클라이언트가 보낸 같은 헤더는 먼저 지운다.
+      // (inbound Request 를 그대로 복제해야 WebSocket 업그레이드가 유지된다 — forwardDirectory 와 동일)
+      const forwarded = new Request(request.url, request);
+      stripWsAssertionHeaders(forwarded.headers);
+      try {
+        await attachWsAssertion(forwarded.headers, env, authorized.room, authorized.claims);
+      } catch {
+        stripWsAssertionHeaders(forwarded.headers);
+      }
+      return env.CHAT_ROOM.get(id).fetch(forwarded);
     }
     if (url.pathname === "/directory/ws") {
       return forwardDirectory(request, env);
@@ -713,8 +725,17 @@ export class ChatRoom extends DurableObject<Env> {
       this.queueAttachmentCleanup(roomId, attachmentIds);
       return json({ ok: true, purged: attachmentIds.length });
     }
-    const authorized = await authorizeSocket(request, this.env);
+    const assertedRoom = (url.searchParams.get("room") || "").trim();
+    const asserted = isValidRoomName(assertedRoom)
+      ? await readWsAssertion(request.headers, this.env, assertedRoom)
+      : null;
+    // 확인서가 없거나 틀리면(구버전 Worker, 위조, 만료) 기존 전체 검증 그대로.
+    const authorized = asserted
+      ? { room: assertedRoom, claims: asserted }
+      : await authorizeSocket(request, this.env);
     if (authorized instanceof Response) return authorized;
+    // DO 로컬 세션 폐기 기록은 확인서 경로에서도 확인한다(메시지 경로와 같은 기준).
+    if (asserted && this.isRevoked(authorized.claims)) return json({ error: "stale_session" }, 401);
     const cap = isAllRoomId(authorized.room) ? MAX_CONNECTIONS_ALL : MAX_CONNECTIONS;
     if (this.ctx.getWebSockets().length >= cap) {
       return json({ error: "room_full" }, 503);
