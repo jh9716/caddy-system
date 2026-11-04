@@ -99,6 +99,20 @@ import {
 import type { ChatPhotoDirectProgress, ChatPhotoDirectResult } from "@/lib/chatPhotoDirectClient";
 import { readCapacitorNativePlatform } from "@/lib/nativePlatformClient";
 import {
+  chatEntryNow,
+  mergeLateNotifyPrefs,
+  recordChatEntryTiming,
+} from "@/lib/chatEntryTiming";
+import {
+  CHAT_OPEN_ROOM_EVENT,
+  invalidateChatToken,
+  placeholderChatRoomSummary,
+  readCachedChatRooms,
+  readReusableChatToken,
+  rememberChatRooms,
+  rememberChatToken,
+} from "@/lib/chatFastEntry";
+import {
   canProfileMention,
   chatAuthorLine,
   chatRoleLabel,
@@ -314,6 +328,25 @@ export default function ChatClient() {
   const [activeRoom, setActiveRoom] = useState<RoomSummary | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [initFailed, setInitFailed] = useState(false);
+  const [initAttempt, setInitAttempt] = useState(0);
+  const notifyDirtyRef = useRef(new Set<string>());
+  // P0: 같은 세션 메모리 토큰 재사용 여부(거절 시 1회 새 발급), 딥링크 즉시 입장 대상
+  const usedCachedTokenRef = useRef(false);
+  const earlyDeepLinkRef = useRef("");
+  // 알림/딥링크로 요약(unread) 없이 먼저 연결한 방: 실제 요약이 올 때까지 첫 스크롤·읽음 전송 보류.
+  const entryHoldRef = useRef<{ roomId: string; timer: ReturnType<typeof setTimeout> | null } | null>(null);
+  const heldReadSeqRef = useRef(0);
+  const roomsRef = useRef<RoomSummary[]>([]);
+  const roomsShownRef = useRef(false);
+  const entryTimingRef = useRef<{
+    mountAt: number | null;
+    roomsReqAt: number | null;
+    roomSelectAt: number | null;
+    wsOpenAt: number | null;
+    fullLoadEntry: boolean;
+    deepLinkOpen: boolean;
+  }>({ mountAt: null, roomsReqAt: null, roomSelectAt: null, wsOpenAt: null, fullLoadEntry: false, deepLinkOpen: false });
   const [connected, setConnected] = useState(false);
   const [directoryConnected, setDirectoryConnected] = useState(false);
   const [directorySnapshotReady, setDirectorySnapshotReady] = useState(false);
@@ -479,11 +512,13 @@ export default function ChatClient() {
   const fetchToken = useCallback(async () => {
     const startedGen = dirGenRef.current;
     if (!shouldCommitChatToken()) return null;
+    const tokenReqAt = chatEntryNow();
     const res = await fetch("/api/chat/token", {
       method: "POST",
       credentials: "include",
       cache: "no-store",
     });
+    recordChatEntryTiming("token", tokenReqAt);
     if (
       !shouldCommitChatToken({
         generationMatches: startedGen === dirGenRef.current,
@@ -494,7 +529,10 @@ export default function ChatClient() {
     if (await consumeUnauthorizedMemberResponse(res)) return null;
     const data = await res.json().catch(() => null);
     if (!res.ok) {
-      if (res.status === 401 || res.status === 403) return null;
+      if (res.status === 401 || res.status === 403) {
+        invalidateChatToken();
+        return null;
+      }
       throw new Error(data?.message || data?.error || "채팅 입장에 실패했습니다.");
     }
     if (
@@ -504,12 +542,25 @@ export default function ChatClient() {
     ) {
       return null;
     }
+    rememberChatToken(data as TokenPayload);
     return data as TokenPayload;
   }, []);
 
   const applyRooms = useCallback((next: RoomSummary[]) => {
     const visible = next.filter((r) => isVisibleChatListRoom(r.type));
     setRooms(visible);
+    roomsRef.current = visible;
+    rememberChatRooms(tokenRef.current?.user?.userId, visible);
+    if (!roomsShownRef.current) {
+      // Directory WS snapshot 과 HTTP 목록 중 먼저 정상 도착한 쪽에서 초기 UI 를 연다.
+      roomsShownRef.current = true;
+      setLoading(false);
+      const t = entryTimingRef.current;
+      const now = chatEntryNow();
+      recordChatEntryTiming("rooms_to_shown", t.roomsReqAt, now);
+      recordChatEntryTiming("entry_to_ui", t.mountAt, now);
+      if (t.fullLoadEntry) recordChatEntryTiming("nav_to_ui", 0, now);
+    }
     setActiveRoom((cur) => {
       if (!cur) return cur;
       const match = visible.find((r) => r.roomId === cur.roomId);
@@ -599,8 +650,11 @@ export default function ChatClient() {
       }
       const ws = new WebSocket(url);
       dirRef.current = ws;
+      let dirOpened = false;
       ws.addEventListener("open", () => {
         if (gen !== dirGenRef.current) return;
+        dirOpened = true;
+        usedCachedTokenRef.current = false;
         setDirectoryConnected(true);
         dirAttemptRef.current = 0;
         try {
@@ -620,7 +674,13 @@ export default function ChatClient() {
         setDirectorySnapshotReady(nextDirectorySnapshotReady(true, "socket_close"));
         const run = async () => {
           let next = info;
-          if (shouldRefreshTokenOnClose(ev.code)) {
+          // 메모리 재사용 토큰이 한 번도 열리지 못하고 닫히면 폐기하고 새로 발급 (서버 판정 존중)
+          const staleCached = !dirOpened && usedCachedTokenRef.current;
+          if (staleCached) {
+            usedCachedTokenRef.current = false;
+            invalidateChatToken();
+          }
+          if (shouldRefreshTokenOnClose(ev.code) || staleCached) {
             const fresh = await fetchToken();
             if (
               !fresh ||
@@ -702,6 +762,14 @@ export default function ChatClient() {
         if (gen !== roomGenRef.current) return;
         setConnected(true);
         setFailingSince(null);
+        {
+          const t = entryTimingRef.current;
+          if (t.roomSelectAt != null) {
+            t.wsOpenAt = chatEntryNow();
+            recordChatEntryTiming("room_select_to_ws_open", t.roomSelectAt, t.wsOpenAt);
+            t.roomSelectAt = null;
+          }
+        }
         roomAttemptRef.current = 0;
         const afterSeq = lastSeqRef.current;
         if (reconnectingRef.current && afterSeq > 0) {
@@ -753,6 +821,7 @@ export default function ChatClient() {
           ) {
             return;
           }
+          if (tokenRef.current && tokenRef.current !== next && tokenRef.current.token) next = tokenRef.current;
           const room = roomRef.current;
           if (room) scheduleRoomReconnect(next, room.roomId);
         };
@@ -785,10 +854,20 @@ export default function ChatClient() {
             linesRef.current = next;
             lastSeqRef.current = lastKnownSeq(next);
             const last = next[next.length - 1];
-            if (last?.seq && ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({ type: "read", seq: last.seq }));
-            }
+            if (last?.seq) sendReadOrHold(ws, last.seq);
             queueEntrySeek(next);
+            {
+              const t = entryTimingRef.current;
+              if (t.wsOpenAt != null) {
+                const now = chatEntryNow();
+                recordChatEntryTiming("ws_open_to_history", t.wsOpenAt, now);
+                t.wsOpenAt = null;
+                if (t.deepLinkOpen) {
+                  t.deepLinkOpen = false;
+                  if (t.fullLoadEntry) recordChatEntryTiming("push_nav_to_room", 0, now);
+                }
+              }
+            }
           } else if (!reconnectingRef.current) {
             const el = listRef.current;
             if (el) pendingScrollRestore.current = el.scrollHeight;
@@ -822,9 +901,7 @@ export default function ChatClient() {
             reconnectingRef.current = false;
           }
           const last = extra[extra.length - 1];
-          if (last?.seq && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "read", seq: last.seq }));
-          }
+          if (last?.seq) sendReadOrHold(ws, last.seq);
           return;
         }
         if (data.type === "message") {
@@ -833,9 +910,7 @@ export default function ChatClient() {
             setUnseenCount((n) => n + 1);
           }
           upsertLine(line);
-          if (line.seq && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "read", seq: line.seq }));
-          }
+          if (line.seq) sendReadOrHold(ws, line.seq);
           return;
         }
         if (data.type === "hidden" && Number(data.seq) > 0) {
@@ -961,10 +1036,25 @@ export default function ChatClient() {
         if (room) void connectSocket(info, room.roomId);
       });
     });
+    roomsShownRef.current = false;
+    setInitFailed(false);
+    {
+      const t = entryTimingRef.current;
+      t.mountAt = chatEntryNow();
+      t.roomsReqAt = null;
+      try {
+        const nav = performance.getEntriesByType?.("navigation")?.[0] as PerformanceNavigationTiming | undefined;
+        t.fullLoadEntry = initAttempt === 0 && Boolean(nav && new URL(nav.name).pathname === "/chat");
+      } catch {
+        t.fullLoadEntry = false;
+      }
+    }
     (async () => {
       const startedGen = dirGenRef.current;
       try {
-        const info = await fetchToken();
+        const cachedToken = initAttempt === 0 ? readReusableChatToken<TokenPayload>() : null;
+        usedCachedTokenRef.current = Boolean(cachedToken);
+        const info = cachedToken ?? (await fetchToken());
         if (
           cancelled ||
           !info ||
@@ -981,29 +1071,44 @@ export default function ChatClient() {
         const requested =
           parseChatDeepLinkRoomId(new URLSearchParams(window.location.search).get("room")) ||
           readPendingChatRoomId(sessionStorage);
+        entryTimingRef.current.roomsReqAt = chatEntryNow();
+        const cachedRooms = readCachedChatRooms<RoomSummary>(info.user.userId);
+        if (cachedRooms) applyRooms(cachedRooms); // 같은 세션 목록 즉시 표시, 아래에서 재검증
         connectDirectory(info);
         if (requested) {
           void fetchTargetedRoom(info.token, requested);
+          // 딥링크/알림: 목록을 기다리지 않고 방 WS 를 바로 연다. 권한은 Worker 가 판정,
+          // 대상 방 조회가 forbidden 이면 아래 딥링크 effect 가 즉시 닫고 안내한다.
+          startEarlyDeepLink(requested);
         }
+        // 알림 설정은 목록 표시를 막지 않는다. 실패하면 기본값(ALL) 유지.
+        // 늦게 와도 사용자가 이미 바꾼 방 설정(notifyDirtyRef)은 덮지 않는다.
+        void (async () => {
+          try {
+            const prefRes = await fetch("/api/chat/notification-prefs", {
+              credentials: "include",
+              cache: "no-store",
+            });
+            const prefData = (await prefRes.json().catch(() => null)) as {
+              prefs?: Record<string, ChatNotifyMode>;
+            } | null;
+            if (cancelled || !prefRes.ok || !prefData?.prefs) return;
+            const incoming = prefData.prefs;
+            setNotifyPrefs((cur) => mergeLateNotifyPrefs(cur, incoming, notifyDirtyRef.current));
+          } catch {
+            // default ALL
+          }
+        })();
         try {
           await fetchRoomsHttp(info.token);
         } catch {
           // Directory WS is the realtime source; HTTP is a same-session fallback.
         }
-        try {
-          const prefRes = await fetch("/api/chat/notification-prefs", {
-            credentials: "include",
-            cache: "no-store",
-          });
-          const prefData = (await prefRes.json().catch(() => null)) as {
-            prefs?: Record<string, ChatNotifyMode>;
-          } | null;
-          if (prefRes.ok && prefData?.prefs) setNotifyPrefs(prefData.prefs);
-        } catch {
-          // default ALL
-        }
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : "채팅을 열 수 없습니다.");
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : "채팅을 열 수 없습니다.");
+          setInitFailed(true);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -1018,7 +1123,7 @@ export default function ChatClient() {
       wsRef.current?.close();
       dirRef.current?.close();
     };
-  }, [connectDirectory, connectSocket, fetchRoomsHttp, fetchTargetedRoom, fetchToken]);
+  }, [connectDirectory, connectSocket, fetchRoomsHttp, fetchTargetedRoom, fetchToken, initAttempt]);
 
   useEffect(() => {
     const reconnect = () => {
@@ -1127,6 +1232,56 @@ export default function ChatClient() {
     requestAnimationFrame(() => {
       programmaticScrollRef.current = false;
     });
+  }
+
+  function sendReadOrHold(ws: WebSocket, seq: number) {
+    const hold = entryHoldRef.current;
+    if (hold && roomRef.current?.roomId === hold.roomId) {
+      heldReadSeqRef.current = Math.max(heldReadSeqRef.current, Number(seq) || 0);
+      return;
+    }
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "read", seq }));
+  }
+
+  function clearEntryHold() {
+    const hold = entryHoldRef.current;
+    if (hold?.timer) clearTimeout(hold.timer);
+    entryHoldRef.current = null;
+    heldReadSeqRef.current = 0;
+  }
+
+  /** 실제 요약(또는 시간 초과 시 알려진 값)으로 진입 위치를 다시 잡고, 보류한 읽음을 보낸다. */
+  function releaseEntryHold(real: RoomSummary | null) {
+    const hold = entryHoldRef.current;
+    if (!hold) return;
+    if (hold.timer) clearTimeout(hold.timer);
+    entryHoldRef.current = null;
+    const pendingRead = heldReadSeqRef.current;
+    heldReadSeqRef.current = 0;
+    if (roomRef.current?.roomId !== hold.roomId) return;
+    const prev = entrySnapshotRef.current;
+    const snapshot = real
+      ? snapshotChatEntry({
+          unread: real.unread,
+          lastMessageSeq: real.lastMessageSeq,
+          explicitSeq: prev?.explicitSeq ?? null,
+        })
+      : prev;
+    if (snapshot) {
+      entrySnapshotRef.current = snapshot;
+      entryTargetRef.current = resolveChatEntryTarget(snapshot);
+    }
+    if (!userMovedScrollRef.current) {
+      entrySeekRef.current = true;
+      entryPagesRef.current = 0;
+      stickRef.current = entryTargetRef.current?.kind === "bottom";
+      // 첫 history 전이면 history 핸들러가 위치를 잡는다(빈 목록으로 seek 를 끝내지 않음).
+      if (!historyResetRef.current) queueEntrySeek(linesRef.current);
+    }
+    const ws = wsRef.current;
+    if (pendingRead > 0 && ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "read", seq: pendingRead }));
+    }
   }
 
   function queueEntrySeek(nextLines: ChatLine[]) {
@@ -1363,10 +1518,53 @@ export default function ChatClient() {
     };
   }, [sheet]);
 
+  function startEarlyDeepLink(requested: string) {
+    if (deepLinkTriedRef.current === requested) return;
+    deepLinkTriedRef.current = requested;
+    earlyDeepLinkRef.current = requested;
+    const known = roomsRef.current.find((r) => r.roomId === requested);
+    const room = (known ?? (placeholderChatRoomSummary(requested) as RoomSummary));
+    const targetSeq =
+      typeof window !== "undefined" ? parseChatTargetSeqFromRoomUrl(requested, window.location.search) : null;
+    entryTimingRef.current.deepLinkOpen = true;
+    void openRoom(room, { targetSeq, holdForSummary: true });
+  }
+
+  function closeEarlyDeepLinkDenied() {
+    earlyDeepLinkRef.current = "";
+    clearEntryHold();
+    setView("list");
+    setActiveRoom(null);
+    roomRef.current = null;
+    reconnectingRef.current = false;
+    roomGenRef.current += 1;
+    clearTimer(roomTimerRef);
+    wsRef.current?.close();
+    clearLocalLines([]);
+    setError("참여할 수 없는 채팅방입니다.");
+  }
+
+  useEffect(() => {
+    const onOpenRoom = (ev: Event) => {
+      const roomId = parseChatDeepLinkRoomId((ev as CustomEvent<{ roomId?: string }>).detail?.roomId);
+      const info = tokenRef.current;
+      if (!roomId || !info) return;
+      deepLinkTriedRef.current = "";
+      setTargetedRoom(null);
+      setTargetedStatus("idle");
+      if (!roomsRef.current.some((r) => r.roomId === roomId)) void fetchTargetedRoom(info.token, roomId);
+      startEarlyDeepLink(roomId);
+    };
+    window.addEventListener(CHAT_OPEN_ROOM_EVENT, onOpenRoom);
+    return () => window.removeEventListener(CHAT_OPEN_ROOM_EVENT, onOpenRoom);
+  });
+
   async function openRoom(
     room: RoomSummary,
-    opts?: { targetSeq?: number | null }
+    opts?: { targetSeq?: number | null; holdForSummary?: boolean }
   ): Promise<ChatSocketOpenResult> {
+    entryTimingRef.current.roomSelectAt = chatEntryNow();
+    entryTimingRef.current.wsOpenAt = null;
     const info = await refreshIfNeeded();
     if (!info) return { ok: false, code: "missing_token" };
     const urlSeq =
@@ -1380,11 +1578,25 @@ export default function ChatClient() {
     });
     entrySnapshotRef.current = snapshot;
     entryTargetRef.current = resolveChatEntryTarget(snapshot);
-    entrySeekRef.current = true;
+    clearEntryHold();
     entryPinRef.current = null;
     entryPagesRef.current = 0;
     userMovedScrollRef.current = false;
-    stickRef.current = entryTargetRef.current.kind === "bottom";
+    if (opts?.holdForSummary && snapshot.explicitSeq == null) {
+      // 요약(unread)을 아직 모른다 → 첫 스크롤·읽음 보류. 요약이 끝내 안 오면 5초 뒤 알려진 값으로 진행(기존 동작).
+      entrySeekRef.current = false;
+      stickRef.current = false;
+      const roomId = room.roomId;
+      entryHoldRef.current = {
+        roomId,
+        timer: setTimeout(() => {
+          if (entryHoldRef.current?.roomId === roomId) releaseEntryHold(null);
+        }, 5000),
+      };
+    } else {
+      entrySeekRef.current = true;
+      stickRef.current = entryTargetRef.current.kind === "bottom";
+    }
     roomRef.current = room;
     setActiveRoom(room);
     setView("room");
@@ -1452,6 +1664,25 @@ export default function ChatClient() {
     });
     if (action === "none" || !requested) return;
     if (action === "wait") return;
+    if (earlyDeepLinkRef.current === requested) {
+      if (action === "fallback") {
+        clearPendingChatRoomId(typeof sessionStorage === "undefined" ? null : sessionStorage);
+        closeEarlyDeepLinkDenied();
+        return;
+      }
+      // open: 서버가 확인한 실제 요약으로 헤더 교체 (메시지·소켓은 그대로)
+      const real =
+        rooms.find((row) => row.roomId === requested) ||
+        (targetedRoom?.roomId === requested ? targetedRoom : null);
+      earlyDeepLinkRef.current = "";
+      clearPendingChatRoomId(typeof sessionStorage === "undefined" ? null : sessionStorage);
+      if (real && roomRef.current?.roomId === requested) {
+        roomRef.current = real;
+        setActiveRoom(real);
+      }
+      releaseEntryHold(real && real.roomId === requested ? real : null);
+      return;
+    }
     if (deepLinkTriedRef.current === requested) return;
     deepLinkTriedRef.current = requested;
     if (action === "fallback") {
@@ -1469,6 +1700,7 @@ export default function ChatClient() {
       typeof window !== "undefined"
         ? parseChatTargetSeqFromRoomUrl(room.roomId, window.location.search)
         : null;
+    entryTimingRef.current.deepLinkOpen = true;
     void openRoom(room, { targetSeq });
   }, [directorySnapshotReady, rooms, targetedRoom, targetedStatus]);
 
@@ -1476,6 +1708,7 @@ export default function ChatClient() {
     const room = activeRoom;
     if (!room) return;
     const prev = notifyPrefs[room.roomId] ?? DEFAULT_CHAT_NOTIFY_MODE;
+    notifyDirtyRef.current.add(room.roomId);
     setNotifyPrefs((cur) => ({ ...cur, [room.roomId]: mode }));
     const res = await fetch(
       `/api/chat/rooms/${encodeURIComponent(room.roomId)}/notification`,
@@ -2409,6 +2642,20 @@ export default function ChatClient() {
               {error}
             </p>
           ) : null}
+          {initFailed && !loading ? (
+            <button
+              type="button"
+              className="vh-chat-retry-btn"
+              data-chat-init-retry
+              onClick={() => {
+                setError("");
+                setLoading(true);
+                setInitAttempt((n) => n + 1);
+              }}
+            >
+              다시 시도
+            </button>
+          ) : null}
           {!directoryConnected && !loading ? (
             <p className="vh-chat-status">목록 연결 대기 중…</p>
           ) : null}
@@ -2469,6 +2716,7 @@ export default function ChatClient() {
                 setView("list");
                 setActiveRoom(null);
                 roomRef.current = null;
+                clearEntryHold();
                 entrySeekRef.current = false;
                 entryPinRef.current = null;
                 entrySnapshotRef.current = null;

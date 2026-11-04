@@ -106,6 +106,31 @@ function notificationClickUrlsEqual(left, right) {
   }
 }
 
+/**
+ * 이미 열린 앱 창에 경로 이동을 요청 (새로고침 없이 SPA 이동). 창이 ack 를 보내지 않으면 false
+ * → 기존 client.navigate 로 폴백. 같은 origin 경로만 보낸다.
+ */
+function tryInAppRoute(client, url) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      resolve(ok);
+    };
+    try {
+      const channel = new MessageChannel();
+      channel.port1.onmessage = (ev) => finish(Boolean(ev && ev.data && ev.data.ok === true));
+      const u = new URL(url);
+      client.postMessage({ type: "vh-push-open", path: u.pathname + u.search }, [channel.port2]);
+      // 열린 창의 ack 는 보통 수 ms. 구버전 페이지(리스너 없음)는 700ms 뒤 기존 navigate 로 폴백.
+      setTimeout(() => finish(false), 700);
+    } catch (_e) {
+      finish(false);
+    }
+  });
+}
+
 async function openNotificationClickUrl(clients, url) {
   const list = await clients.matchAll({
     type: "window",
@@ -124,6 +149,14 @@ async function openNotificationClickUrl(clients, url) {
       same = false;
     }
     if (!same) continue;
+    if (typeof client.focus === "function") {
+      try {
+        await client.focus();
+      } catch (_e) {
+        // focus may be refused; routing still attempted
+      }
+    }
+    if (await tryInAppRoute(client, url)) return;
     if (typeof client.navigate !== "function") continue;
     let next = null;
     try {
