@@ -9,6 +9,7 @@ import { resetAdminOpsDashboardLastSuccessForTests } from "../src/lib/adminOpsDa
 import { invalidateOffSheetCache } from "../src/lib/offSheetFetch";
 import { invalidateOpsDutySheetCache } from "../src/lib/opsDutySheetFetch";
 import { computeAvailability } from "../src/lib/availabilityEngine";
+import { applyDailyExternalExclusions } from "../src/lib/dailyAvailabilityOverlay";
 import { buildTeamSlotGrid } from "../src/lib/availabilitySlotGrid";
 import type { AvailabilityWithSlotGrid } from "../src/lib/availabilityService";
 import type { StoredOpsDutyRow } from "../src/lib/dailyOpsDutyService";
@@ -42,7 +43,8 @@ function avail(ymd: string): AvailabilityWithSlotGrid {
     caddies: roster.map((r, i) => ({ ...r, teamOrder: i + 1, extraFlags: [], thirdBandSubgroup: null })),
     assignments: [], extraTags: [],
   });
-  return { ...base, slotGrid: buildTeamSlotGrid({ availability: base,
+  const ov = applyDailyExternalExclusions({ availability: base, caddies: roster, offNames: ["한조장"], dutyEntries: [] });
+  return { ...ov, slotGrid: buildTeamSlotGrid({ availability: ov,
     occupants: roster.map((r, i) => ({ id: r.id, name: r.name, team: r.team, teamOrder: i + 1, employmentStatus: r.employmentStatus })) }) };
 }
 function stored(id: number, role: StoredOpsDutyRow["role"], roleKey: string): StoredOpsDutyRow {
@@ -64,7 +66,7 @@ function deps(opts: { duties?: StoredOpsDutyRow[]; monthly?: MonthlyMarshalDutyR
     loadAvailability: async (ymd: string) => avail(ymd),
     listDuties: async () => opts.duties ?? storedRows,
     listMonthlyMarshal: async () => opts.monthly ?? monthly,
-    fetchOffSheets: async () => [],
+    fetchOffSheets: async () => [{ name: "1104", matrix: [["2026.11.04 (수)", "", ""], ["1조", "2조", "3조"], ["", "", "한조장"]] }],
     fetchOpsDutySheets: async () => [],
   };
 }
@@ -84,7 +86,16 @@ async function main() {
       assert(JSON.stringify(c.names) === JSON.stringify(g.names) && c.count === g.names.length,
         `${g.label} 이름/인원 동일 [${g.names.join(",")}] (waitForSheet=${waitForSheet})`);
     }
+    assert(pub.stats.activeCount === view.roster.activeCount, `재직 동일 ${pub.stats.activeCount} (waitForSheet=${waitForSheet})`);
+    if (view.sheetDerivedReady) {
+      assert(pub.stats.finalAvailable === view.availability.finalAvailable, `가용 동일 ${pub.stats.finalAvailable}`);
+      assert(pub.stats.offCount === view.availability.offCount, `휴무 동일 ${pub.stats.offCount}`);
+    } else {
+      assert(pub.stats.finalAvailable === null && pub.stats.offCount === null, "미준비: 가용·휴무 null (0 아님, 관리자 '—'와 동일)");
+    }
     if (waitForSheet) {
+      assert(pub.stats.offCount === 1, "합성 휴무 1명 (한조장)");
+      assert(pub.stats.activeCount === 6, "합성 재직 6명");
       const by = Object.fromEntries(pub.groups.map((g) => [g.role, g.names]));
       assert(by.DUTY_AM?.join() === "김조출", "조출 당번 김조출");
       assert(by.DUTY_PM?.join() === "이후출", "후출 당번 이후출");
@@ -114,7 +125,9 @@ async function main() {
   for (const bad of ["caddyId", "phone", "username", "employmentStatus", "rawName", "team", "\"id\"", "caddies", "accounts"]) {
     assert(!json.includes(bad), `응답에 ${bad} 없음`);
   }
-  assert(Object.keys(toCaddyOpsRoster(v)).sort().join() === "date,freshness,groups,ok,ready,sourceAsOf", "최상위 키 제한");
+  assert(Object.keys(toCaddyOpsRoster(v)).sort().join() === "date,freshness,groups,ok,ready,sourceAsOf,stats", "최상위 키 제한");
+  assert(Object.keys(toCaddyOpsRoster(v).stats).sort().join() === "activeCount,finalAvailable,offCount", "stats 키 제한 (병가·장기병가 미제공)");
+  assert(!/sick/i.test(json), "sick 필드 없음");
   assert(isCaddyOpsRosterPayload(JSON.parse(json)), "payload 형식 검사 통과");
   assert(!isCaddyOpsRosterPayload({ error: "x" }) && !isCaddyOpsRosterPayload(null) && !isCaddyOpsRosterPayload("<html>"), "오류/HTML 형식 거부");
 
@@ -135,7 +148,11 @@ async function main() {
   assert(!/method:\s*'(POST|PUT|PATCH|DELETE)'/.test(comp) && !/manage\/dashboard/.test(comp), "캐디 컴포넌트는 GET만, 관리자 API 미호출");
   for (const label of ["미배정", "정보 확인 중", "조회 실패", "다시 시도"]) assert(comp.includes(label), `상태 문구 '${label}'`);
   const page = src("src/app/caddy/page.tsx");
-  for (const k of ["휴무", "병가", "최근 공지", "월간 휴무 신청", "CaddyOpsRosterSection"]) assert(page.includes(k), `캐디 대시보드 유지/추가: ${k}`);
+  assert(!/summary\.today\./.test(page), "캐디 '오늘 현황'은 /api/summary Assignment 집계를 쓰지 않음");
+  assert(!/label="당번"|label="마샬"|label="병가"/.test(page), "당번·마샬·병가 숫자 카드 제거");
+  for (const k of ["재직 캐디", "해당일 가용", "병가·장기병가 미제공", "조회 실패"]) assert(comp.includes(k), `통계 문구 '${k}'`);
+  assert((comp.match(/fetch\(/g) || []).length === 1, "통계·명단 단일 fetch 함수");
+  for (const k of ["최근 공지", "월간 휴무 신청", "CaddyOpsRosterSection"]) assert(page.includes(k), `캐디 대시보드 유지/추가: ${k}`);
 
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed) process.exit(1);

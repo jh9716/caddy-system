@@ -74,6 +74,7 @@ export default function CaddyPage() {
   const [refreshError, setRefreshError] = useState(false)
   const loadGen = useRef(0)
   const [loopError, setLoopError] = useState(false)
+  const [opsDate, setOpsDate] = useState<string | null>(null)
   const dashboardReady = allowed && summary != null && !loading
   useEffect(() => {
     if (dashboardReady) resetAutoRedirects()
@@ -217,7 +218,8 @@ export default function CaddyPage() {
     return <p style={{ textAlign:'center', marginTop:100 }}>로딩 중…</p>
   }
 
-  const todayDate = summary ? formatCaddyHomeDate(summary.date) : null
+  // 오늘 날짜는 운영 현황 응답(KST)을 우선 사용 → 통계·명단과 같은 날짜
+  const todayDate = summary ? formatCaddyHomeDate(opsDate ?? summary.date) : null
   const notices = summary?.latestNotices.slice(0, NOTICE_PREVIEW) ?? []
 
   return (
@@ -249,18 +251,7 @@ export default function CaddyPage() {
             <p className="caddy-home-today-status">개인 상태 정보 없음</p>
           </section>
 
-          <section className="caddy-home-section" aria-label="오늘 현황">
-            <h2 className="caddy-home-section-title">오늘 현황</h2>
-            <div className="caddy-home-stats">
-              <Stat label="휴무" value={summary.today.off} />
-              <Stat label="병가" value={summary.today.sick} />
-              <Stat label="장기병가" value={summary.today.longSick} />
-              <Stat label="당번" value={summary.today.duty} />
-              <Stat label="마샬" value={summary.today.marshal} />
-            </div>
-          </section>
-
-          <CaddyOpsRosterSection />
+          <CaddyOpsRosterSection onDate={setOpsDate} />
 
           <section className="caddy-home-section" aria-label="최근 공지">
             <div className="caddy-home-section-row">
@@ -307,15 +298,6 @@ export default function CaddyPage() {
       <div className="caddy-home-push">
         <DevicePushSettings />
       </div>
-    </div>
-  )
-}
-
-function Stat({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="caddy-home-stat">
-      <div className="caddy-home-stat-label">{label}</div>
-      <div className="caddy-home-stat-value">{value}</div>
     </div>
   )
 }

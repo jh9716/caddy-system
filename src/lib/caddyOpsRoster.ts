@@ -29,13 +29,26 @@ export type CaddyOpsRosterPayload = {
   ready: boolean;
   freshness: AdminOpsDashboardView["freshness"];
   sourceAsOf: string | null;
+  /**
+   * 관리자 '선택일 요약' 카드와 같은 값. 관리자 화면과 같은 규칙:
+   * 재직은 항상, 가용·휴무는 sheetDerivedReady일 때만 (아니면 null = 확인 중).
+   * 병가·장기병가는 제공하지 않음 (실데이터 기준 검증 전).
+   */
+  stats: {
+    activeCount: number | null;
+    finalAvailable: number | null;
+    offCount: number | null;
+  };
   groups: CaddyOpsRosterGroup[];
 };
 
 type ViewSubset = Pick<
   AdminOpsDashboardView,
   "date" | "opsDuties" | "sheetDerivedReady" | "freshness" | "sourceAsOf"
->;
+> & {
+  roster?: Pick<AdminOpsDashboardView["roster"], "activeCount">;
+  availability?: Pick<AdminOpsDashboardView["availability"], "finalAvailable" | "offCount">;
+};
 
 /** 관리자 view → 공개 명단. 5개 역할을 항상 고정 순서로 반환. */
 export function toCaddyOpsRoster(view: ViewSubset): CaddyOpsRosterPayload {
@@ -48,10 +61,17 @@ export function toCaddyOpsRoster(view: ViewSubset): CaddyOpsRosterPayload {
       .filter(Boolean);
     return { role, label: OPS_DUTY_DASHBOARD_LABELS[role], names, count: names.length };
   });
+  const ready = Boolean(view.sheetDerivedReady);
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
   return {
     ok: true,
     date: view.date,
-    ready: Boolean(view.sheetDerivedReady),
+    ready,
+    stats: {
+      activeCount: num(view.roster?.activeCount),
+      finalAvailable: ready ? num(view.availability?.finalAvailable) : null,
+      offCount: ready ? num(view.availability?.offCount) : null,
+    },
     freshness: view.freshness,
     sourceAsOf: view.sourceAsOf ?? null,
     groups,
@@ -74,6 +94,9 @@ export function isCaddyOpsRosterPayload(v: unknown): v is CaddyOpsRosterPayload 
   return (
     o.ok === true &&
     typeof o.date === "string" &&
+    !!o.stats &&
+    typeof o.stats === "object" &&
+    "activeCount" in (o.stats as Record<string, unknown>) &&
     Array.isArray(o.groups) &&
     o.groups.every(
       (g) =>

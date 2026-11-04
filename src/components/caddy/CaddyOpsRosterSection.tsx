@@ -20,8 +20,20 @@ async function fetchRoster(refresh: boolean): Promise<CaddyOpsRosterPayload> {
   return json
 }
 
-/** 읽기 전용. 배정 변경 UI/요청 없음. */
-export default function CaddyOpsRosterSection() {
+function statText(v: number | null | undefined, phase: Phase, hasData: boolean): string {
+  if (!hasData) return phase === 'error' ? '조회 실패' : '확인 중'
+  return typeof v === 'number' ? `${v}명` : '확인 중'
+}
+
+/**
+ * 읽기 전용. '오늘 현황'(재직/가용/휴무) + '운영 당번·마샬·조장'을
+ * 하나의 /api/summary/ops-roster 응답(관리자와 같은 view)으로 그린다.
+ */
+export default function CaddyOpsRosterSection({
+  onDate,
+}: {
+  onDate?: (ymd: string) => void
+} = {}) {
   const [phase, setPhase] = useState<Phase>('loading')
   const [data, setData] = useState<CaddyOpsRosterPayload | null>(null)
   const [refreshFailed, setRefreshFailed] = useState(false)
@@ -59,7 +71,40 @@ export default function CaddyOpsRosterSection() {
     void load()
   }, [load])
 
+  useEffect(() => {
+    if (data?.date) onDate?.(data.date)
+  }, [data?.date, onDate])
+
+  const has = Boolean(data)
+  const st = data?.stats
   return (
+    <>
+    <section
+      className="caddy-home-section caddy-ops-stats"
+      aria-label="오늘 현황"
+      data-ops-stats-phase={phase}
+    >
+      <h2 className="caddy-home-section-title">오늘 현황</h2>
+      <div className="caddy-home-stats caddy-ops-stats-grid">
+        {([
+          ['재직 캐디', st?.activeCount],
+          ['해당일 가용', st?.finalAvailable],
+          ['휴무', st?.offCount],
+        ] as const).map(([label, v]) => (
+          <div key={label} className="caddy-home-stat" data-stat={label}>
+            <div className="caddy-home-stat-label">{label}</div>
+            <div
+              className={`caddy-home-stat-value${typeof v === 'number' ? '' : ' is-muted'}`}
+            >
+              {statText(v, phase, has)}
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="caddy-ops-stats-note">
+        관리자 대시보드와 같은 운영자료 기준{data ? ` · ${data.date} (KST)` : ''} · 병가·장기병가 미제공
+      </p>
+    </section>
     <section
       className="caddy-home-section caddy-ops-roster"
       aria-label="운영 당번·마샬·조장"
@@ -107,5 +152,6 @@ export default function CaddyOpsRosterSection() {
         </ul>
       ) : null}
     </section>
+    </>
   )
 }
