@@ -199,6 +199,7 @@ import {
 } from "@/lib/chatDmClient";
 import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
 import { chatPerf, classifyEntry, CHAT_PERF_PING, CHAT_PERF_PING_COUNT, CHAT_PERF_PONG } from "@/lib/chatPerfDiag";
+import { canResumeParked, isParkExpired, isResumeRevalidationOk, CHAT_WS_REUSE_HISTORY_BEFORE, CHAT_WS_REUSE_STORAGE_KEY, CHAT_WS_REUSE_TTL_MS, resolveChatWsReuse, type ParkedSocketMeta } from "@/lib/chatWsReuse";
 import ChatPerfPanel from "@/components/chat/ChatPerfPanel";
 
 type TokenPayload = {
@@ -359,6 +360,90 @@ export default function ChatClient() {
   const [failingSince, setFailingSince] = useState<number | null>(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const wsRef = useRef<WebSocket | null>(null);
+  // Preview 전용 방 소켓 재사용(파킹). 기본 꺼짐.
+  const wsReuseEnabledRef = useRef(false);
+  const parkedRoomRef = useRef<(ParkedSocketMeta & { ws: WebSocket; timer: number; parkedAt: number }) | null>(null);
+  const socketStopPingRef = useRef(new WeakMap<WebSocket, () => void>());
+  const socketResumeRef = useRef(new WeakMap<WebSocket, () => ChatSocketOpenResult | null>());
+  const socketMetaRef = useRef(new WeakMap<WebSocket, ParkedSocketMeta>());
+  /** 파킹 해제(타이머 정리 + 필요 시 닫기). */
+  const dropParkedRoomSocket = () => {
+    const parked = parkedRoomRef.current;
+    if (!parked) return;
+    parkedRoomRef.current = null;
+    window.clearTimeout(parked.timer);
+    try {
+      parked.ws.close();
+    } catch {
+      // already closed
+    }
+  };
+  /**
+   * 방 나가기 시 호출. 재사용이 켜져 있고 소켓이 OPEN 이면 닫지 않고 TTL 동안 파킹한다(이미 roomGen 이 바뀌어
+   * 이 소켓의 모든 이벤트는 무시됨 = 읽음 전송 없음). 파킹하지 않으면 false → 호출부가 기존처럼 닫는다.
+   */
+  const parkRoomSocket = (): boolean => {
+    if (!wsReuseEnabledRef.current) return false;
+    const ws = wsRef.current;
+    const meta = ws ? socketMetaRef.current.get(ws) : undefined;
+    if (!ws || !meta || ws.readyState !== WebSocket.OPEN || !socketResumeRef.current.has(ws)) return false;
+    if (parkedRoomRef.current && parkedRoomRef.current.ws !== ws) dropParkedRoomSocket();
+    else if (parkedRoomRef.current) window.clearTimeout(parkedRoomRef.current.timer);
+    const timer = window.setTimeout(() => {
+      if (parkedRoomRef.current?.ws !== ws) return;
+      parkedRoomRef.current = null;
+      try {
+        ws.close();
+      } catch {
+        // already closed
+      }
+    }, CHAT_WS_REUSE_TTL_MS);
+    // 파킹 중 진단 핑 타이머는 즉시 정리(세대 불일치로도 막히지만 타이머 자체를 남기지 않음).
+    try {
+      socketStopPingRef.current.get(ws)?.();
+    } catch {
+      // ignore
+    }
+    parkedRoomRef.current = { ...meta, ws, timer, parkedAt: Date.now() };
+    return true;
+  };
+  // 백그라운드 복귀(visibilitychange/pageshow) 시 실제 경과가 TTL 을 넘었으면 타이머와 무관하게 즉시 폐기.
+  useEffect(() => {
+    const check = () => {
+      const parked = parkedRoomRef.current;
+      if (parked && isParkExpired(parked.parkedAt, Date.now())) dropParkedRoomSocket();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") check();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pageshow", check);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pageshow", check);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    try {
+      let stored: string | null = null;
+      try {
+        stored = window.sessionStorage.getItem(CHAT_WS_REUSE_STORAGE_KEY);
+      } catch {
+        stored = null;
+      }
+      const r = resolveChatWsReuse({ NEXT_PUBLIC_CHAT_APP_ENV: process.env.NEXT_PUBLIC_CHAT_APP_ENV, NEXT_PUBLIC_VERCEL_ENV: process.env.NEXT_PUBLIC_VERCEL_ENV, NODE_ENV: process.env.NODE_ENV }, window.location.search, stored);
+      try {
+        if (r.store === "1") window.sessionStorage.setItem(CHAT_WS_REUSE_STORAGE_KEY, "1");
+        else if (r.store === null) window.sessionStorage.removeItem(CHAT_WS_REUSE_STORAGE_KEY);
+      } catch {
+        // storage unavailable
+      }
+      wsReuseEnabledRef.current = r.enabled;
+    } catch {
+      wsReuseEnabledRef.current = false;
+    }
+  }, []);
   const dirRef = useRef<WebSocket | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const stickRef = useRef(true);
@@ -696,9 +781,57 @@ export default function ChatClient() {
         setError("채팅 서버 주소가 없습니다.");
         return { ok: false, code: "chat_worker_unconfigured" };
       }
+      // Preview 전용 재사용: 같은 방·같은 토큰·OPEN 인 파킹 소켓이면 재개, 아니면 닫고 새 연결(기존 경로).
+      const parked = parkedRoomRef.current;
+      if (parked) {
+        parkedRoomRef.current = null;
+        window.clearTimeout(parked.timer);
+        const resume = socketResumeRef.current.get(parked.ws);
+        const eligible = () =>
+          !!resume &&
+          wsRef.current === parked.ws &&
+          canResumeParked(parked, {
+            roomId,
+            token: info.token,
+            nowSec: Math.floor(Date.now() / 1000),
+            socketOpen: parked.ws.readyState === WebSocket.OPEN,
+            parkedAt: parked.parkedAt,
+            nowMs: Date.now(),
+          });
+        if (eligible()) {
+          // 재개 직전 권한 재확인: 기존 Worker 방 조회(같은 토큰)로 새 연결과 같은 검사(토큰·DB 세션·퇴사·멤버십)를 다시 거친다.
+          // 실패·오류·응답 불일치면 재사용하지 않는다(fail-closed → 아래에서 닫고 기존 새 연결).
+          const genBefore = roomGenRef.current;
+          let revalidated = false;
+          try {
+            const checkUrl = chatDirectoryRoomUrl(roomId, info.token);
+            if (checkUrl) {
+              const res = await fetch(checkUrl, { cache: "no-store" });
+              const body = await res.json().catch(() => null);
+              revalidated = isResumeRevalidationOk(res.status, body, roomId);
+            }
+          } catch {
+            revalidated = false;
+          }
+          // 확인 중 사용자가 나가거나 다른 방으로 이동: 이 진입은 폐기(소켓은 그 나가기/진입 경로가 이미 파킹·닫기 처리).
+          if (roomGenRef.current !== genBefore) return { ok: false, code: "superseded" };
+          // TTL·소켓 상태를 다시 확인. 하나라도 어긋나면 재사용 금지 → 아래에서 닫고 새 연결.
+          if (revalidated && eligible()) {
+            const resumed = resume!();
+            if (resumed) return resumed;
+          }
+        }
+        if (wsRef.current !== parked.ws) {
+          try {
+            parked.ws.close();
+          } catch {
+            // already closed
+          }
+        }
+      }
       const prev = wsRef.current;
       roomGenRef.current += 1;
-      const gen = roomGenRef.current;
+      let gen = roomGenRef.current;
       if (prev && (prev.readyState === WebSocket.OPEN || prev.readyState === WebSocket.CONNECTING)) {
         prev.close();
       }
@@ -731,6 +864,33 @@ export default function ChatClient() {
         }
       };
       wsRef.current = ws;
+      if (wsReuseEnabledRef.current) {
+        socketStopPingRef.current.set(ws, stopPerfPing);
+        // 이 소켓을 같은 방 재진입에 재개하는 함수(소켓 클로저의 gen 을 새 세대로 옮긴다). Preview 재사용이 켜진 경우에만 등록.
+        socketResumeRef.current.set(ws, () => {
+          if (ws.readyState !== WebSocket.OPEN || wsRef.current !== ws) return null;
+          try {
+            roomGenRef.current += 1;
+            gen = roomGenRef.current;
+            stopPerfPing();
+            historyResetRef.current = true;
+            oldestSeqRef.current = null;
+            setHasMore(false);
+            reconnectingRef.current = false;
+            chatPerf.roomReused();
+            chatPerf.roomOpen();
+            setConnected(true);
+            setFailingSince(null);
+            roomAttemptRef.current = 0;
+            // 첫 진입과 같은 최신 history 를 다시 받는다 → 기존 history 처리(읽음 전송·진입 위치)를 그대로 탄다.
+            ws.send(JSON.stringify({ type: "history", beforeSeq: CHAT_WS_REUSE_HISTORY_BEFORE }));
+            return { ok: true } as ChatSocketOpenResult;
+          } catch {
+            return null;
+          }
+        });
+        socketMetaRef.current.set(ws, { roomId, token: info.token, exp: info.exp });
+      }
       if (!reconnectingRef.current) {
         historyResetRef.current = true;
         oldestSeqRef.current = null;
@@ -988,6 +1148,7 @@ export default function ChatClient() {
   useEffect(() => {
     let cancelled = false;
     const unsubscribeReset = subscribeChatSessionReset((reason) => {
+      dropParkedRoomSocket();
       resetChatSocketHandles({
         roomGenRef,
         dirGenRef,
@@ -1074,6 +1235,7 @@ export default function ChatClient() {
       dirGenRef.current += 1;
       clearTimer(roomTimerRef);
       clearTimer(dirTimerRef);
+      dropParkedRoomSocket();
       wsRef.current?.close();
       dirRef.current?.close();
     };
@@ -1247,7 +1409,7 @@ export default function ChatClient() {
       reconnectingRef.current = false;
       roomGenRef.current += 1;
       clearTimer(roomTimerRef);
-      wsRef.current?.close();
+      if (!parkRoomSocket()) wsRef.current?.close();
       abandonComposerPhotos();
       clearLocalLines([]);
       setReplyTo(null);
@@ -2554,7 +2716,7 @@ export default function ChatClient() {
                 reconnectingRef.current = false;
                 roomGenRef.current += 1;
                 clearTimer(roomTimerRef);
-                wsRef.current?.close();
+                if (!parkRoomSocket()) wsRef.current?.close();
                 abandonComposerPhotos();
                 clearLocalLines([]);
                 setReplyTo(null);

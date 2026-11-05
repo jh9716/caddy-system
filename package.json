@@ -204,7 +204,8 @@
     "measure:photo-ux-chromium": "bash scripts/tsx-safe.sh scripts/measure-photo-ux-chromium.ts",
     "compute:android-kakao-debug-key-hash": "bash scripts/tsx-safe.sh scripts/compute-android-kakao-debug-key-hash.ts",
     "native:sync:android": "npx cap sync android",
-    "test:chat-perf-diag-unit": "bash scripts/tsx-safe.sh scripts/test-chat-perf-diag-unit.ts"
+    "test:chat-perf-diag-unit": "bash scripts/tsx-safe.sh scripts/test-chat-perf-diag-unit.ts",
+    "test:chat-ws-reuse-unit": "bash scripts/tsx-safe.sh scripts/test-chat-ws-reuse-unit.ts"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.2",

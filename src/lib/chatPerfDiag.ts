@@ -17,6 +17,8 @@ export type ChatPerfRecord = {
   openToHistoryMs: number | null;
   historyToRenderMs: number | null;
   tapToVisibleMs: number | null;
+  /** Preview 소켓 재사용(파킹 재개)으로 들어온 진입이면 true. */
+  reused: boolean;
   ok: boolean;
 };
 
@@ -182,6 +184,7 @@ type Pending = {
   open: number | null;
   history: number | null;
   commit: number | null;
+  reused?: boolean;
 };
 
 export function buildRecord(n: number, p: Pending, visible: number | null, ok: boolean): ChatPerfRecord {
@@ -194,6 +197,7 @@ export function buildRecord(n: number, p: Pending, visible: number | null, ok: b
     openToHistoryMs: diffMs(p.open, p.history),
     historyToRenderMs: diffMs(p.history, p.commit),
     tapToVisibleMs: diffMs(p.tap, visible),
+    reused: p.reused === true,
     ok,
   };
 }
@@ -281,6 +285,7 @@ export const chatPerf = {
       pending.tokenEnd = pending.tokenFetched ? tokenFetchEnd : now();
     });
   },
+  roomReused() { safe(() => { if (pending && pending.open == null) pending.reused = true; }); },
   roomOpen() { safe(() => { if (pending && pending.open == null) pending.open = now(); }); },
   roomHistory() {
     safe(() => {
@@ -374,7 +379,7 @@ const f = (v: number | null) => (v == null ? "-" : `${v}ms`);
 export function chatPerfText(s: ChatPerfState): string {
   const lines = ["[chatPerf]"];
   for (const e of s.entries) {
-    lines.push(`#${e.n} ${kindLabel(e.kind)}${e.ok ? "" : "(실패)"} 토큰${e.tokenFetched ? "발급" : "재사용"} ${f(e.tokenMs)} | 탭→WS ${f(e.tapToOpenMs)} | WS→history ${f(e.openToHistoryMs)} | history→렌더 ${f(e.historyToRenderMs)} | 전체 ${f(e.tapToVisibleMs)}`);
+    lines.push(`#${e.n} ${kindLabel(e.kind)}${e.ok ? "" : "(실패)"} ${e.reused ? "소켓재사용" : "새소켓"} 토큰${e.tokenFetched ? "발급" : "재사용"} ${f(e.tokenMs)} | 탭→WS ${f(e.tapToOpenMs)} | WS→history ${f(e.openToHistoryMs)} | history→렌더 ${f(e.historyToRenderMs)} | 전체 ${f(e.tapToVisibleMs)}`);
   }
   for (const l of s.list) lines.push(`목록#${l.n} 토큰 ${f(l.tokenMs)} | 연결→목록 ${f(l.connectToListMs)}`);
   for (const r of s.server || []) lines.push(serverPerfLine(r));
