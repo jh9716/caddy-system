@@ -74,6 +74,7 @@ import {
 import { diagEnabled, diagLog, diagPath, diagnoseTokenFailure } from "./diag"; // TEMPORARY DIAGNOSTIC
 import { nextAppExtraHeaders, nextAppFetchInit, nextAppUrl, nextPushDispatchUrl } from "./nextApp";
 
+import { WS_PERF_HEADER, decodePerf, encodePerf, perfEnabled, perfFrame, type PerfMarks } from "./perfTiming";
 import { attachWsAssertion, readWsAssertion, stripWsAssertionHeaders } from "./wsAssertion";
 
 export { validateIncomingMessage, isValidRoomName } from "./protocol";
@@ -145,7 +146,8 @@ function directoryStub(env: Env) {
 
 async function verifyIdentity(
   request: Request,
-  env: Env
+  env: Env,
+  perf?: PerfMarks
 ): Promise<ChatTokenClaims | Response> {
   const url = new URL(request.url);
   const secret = String(env.CHAT_AUTH_SECRET || "").trim();
@@ -165,7 +167,9 @@ async function verifyIdentity(
     if (diag) diagLog(env, { path: dpath, stage: "token", code: "unauthorized", token_reason: "missing", status: 401 });
     return json({ error: "unauthorized" }, 401);
   }
+  const tTok = Date.now();
   const claims = await verifyChatToken(token, secret, undefined, audience);
+  if (perf) perf.tok = Date.now() - tTok;
   if (!claims) {
     if (diag) {
       const reason = await diagnoseTokenFailure(token, secret, audience);
@@ -178,8 +182,8 @@ async function verifyIdentity(
     ? await assertChatSessionCurrent(env, claims, (f) => diagLog(env, { path: dpath, ...f,
         dispatch_url_configured: !!String(env.CHAT_PUSH_DISPATCH_URL || ""),
         bypass_configured: !!String(env.PREVIEW_APP_BYPASS_SECRET || "").trim(),
-        internal_secret_configured: !!String(env.CHAT_INTERNAL_SECRET || "").trim() }))
-    : await assertChatSessionCurrent(env, claims);
+        internal_secret_configured: !!String(env.CHAT_INTERNAL_SECRET || "").trim() }), perf)
+    : await assertChatSessionCurrent(env, claims, undefined, perf);
   if (!session.ok) {
     if (diag) diagLog(env, { path: dpath, stage: "result", code: session.error, status: session.status });
     return json({ error: session.error }, session.status);
@@ -246,22 +250,26 @@ async function isDirectoryMember(
 
 async function authorizeSocket(
   request: Request,
-  env: Env
+  env: Env,
+  perf?: PerfMarks
 ): Promise<{ room: string; claims: ChatTokenClaims } | Response> {
   const url = new URL(request.url);
   const room = (url.searchParams.get("room") || "").trim();
   if (!isValidRoomName(room)) {
     return json({ error: "invalid_room" }, 400);
   }
-  const identity = await verifyIdentity(request, env);
+  const identity = await verifyIdentity(request, env, perf);
   if (identity instanceof Response) return identity;
+  const tMem = Date.now();
+  const isMember =
+    isCustomRoomId(room) || isDmRoomId(room)
+      ? await isDirectoryMember(env, room, identity.userId)
+      : isAllRoomId(room);
+  if (perf) perf.mem = Date.now() - tMem;
   const access = resolveChatRoomAccess({
     claims: identity,
     roomId: room,
-    isMember:
-      isCustomRoomId(room) || isDmRoomId(room)
-        ? await isDirectoryMember(env, room, identity.userId)
-        : isAllRoomId(room),
+    isMember,
     isAll: isAllRoomId(room),
     isCustom: isCustomRoomId(room),
     isDm: isDmRoomId(room),
@@ -302,7 +310,10 @@ export default {
       });
     }
     if (url.pathname === "/ws") {
-      const authorized = await authorizeSocket(request, env);
+      // Preview 전용 계측(ms 숫자만). 운영은 perf=undefined → 기존 동작 그대로.
+      const perf: PerfMarks | undefined = perfEnabled(env) ? {} : undefined;
+      const tEdge = Date.now();
+      const authorized = await authorizeSocket(request, env, perf);
       if (authorized instanceof Response) return authorized;
       if ((request.headers.get("Upgrade") || "").toLowerCase() !== "websocket") {
         return json({ error: "upgrade_required" }, 426);
@@ -317,6 +328,16 @@ export default {
         await attachWsAssertion(forwarded.headers, env, authorized.room, authorized.claims);
       } catch {
         stripWsAssertionHeaders(forwarded.headers);
+      }
+      if (perf) {
+        try {
+          forwarded.headers.delete(WS_PERF_HEADER);
+          perf.edge = Date.now() - tEdge;
+          perf.sign = Math.max(0, perf.edge - (perf.tok ?? 0) - (perf.sc ?? 0) - (perf.mem ?? 0));
+          forwarded.headers.set(WS_PERF_HEADER, encodePerf(perf));
+        } catch {
+          forwarded.headers.delete(WS_PERF_HEADER);
+        }
       }
       return env.CHAT_ROOM.get(id).fetch(forwarded);
     }
@@ -725,6 +746,8 @@ export class ChatRoom extends DurableObject<Env> {
       this.queueAttachmentCleanup(roomId, attachmentIds);
       return json({ ok: true, purged: attachmentIds.length });
     }
+    const perfOn = perfEnabled(this.env); // Preview 전용 계측
+    const tDo = Date.now();
     const assertedRoom = (url.searchParams.get("room") || "").trim();
     const asserted = isValidRoomName(assertedRoom)
       ? await readWsAssertion(request.headers, this.env, assertedRoom)
@@ -733,6 +756,7 @@ export class ChatRoom extends DurableObject<Env> {
     const authorized = asserted
       ? { room: assertedRoom, claims: asserted }
       : await authorizeSocket(request, this.env);
+    const doAssert = Date.now() - tDo;
     if (authorized instanceof Response) return authorized;
     // DO 로컬 세션 폐기 기록은 확인서 경로에서도 확인한다(메시지 경로와 같은 기준).
     if (asserted && this.isRevoked(authorized.claims)) return json({ error: "stale_session" }, 401);
@@ -747,7 +771,18 @@ export class ChatRoom extends DurableObject<Env> {
     const attach: SocketAttach = { claims: authorized.claims, roomId: authorized.room };
     server.serializeAttachment(attach);
     void this.rememberRoomId(authorized.room);
+    const doAccept = Date.now() - tDo - doAssert;
     this.sendHistory(server, authorized.claims.userId, null, HISTORY_LIMIT);
+    if (perfOn) {
+      try {
+        // history 뒤에 보낸다 → 기존 history 타이밍에 영향 없음. 클라이언트는 모르는 type 을 무시.
+        server.send(perfFrame(decodePerf(request.headers.get(WS_PERF_HEADER)), {
+          doAssert, doAccept, doHist: Date.now() - tDo - doAssert - doAccept,
+        }));
+      } catch {
+        // 계측 실패 무시
+      }
+    }
     return new Response(null, { status: 101, webSocket: client });
   }
 

@@ -2,6 +2,7 @@ import {
   chatInternalSecret,
   internalAuthHeaders,
 } from "./internalAuth";
+import { parseSessionServerTiming, type PerfMarks } from "./perfTiming"; // Preview 전용 계측 (ms 숫자만)
 import { diagSessionResponse, type DiagFields } from "./diag"; // TEMPORARY DIAGNOSTIC
 import { isPreviewWorker, isRedirectResponse, nextAppExtraHeaders, nextAppFetchInit, nextAppUrl, type NextAppEnv } from "./nextApp";
 import {
@@ -59,7 +60,9 @@ export async function assertChatSessionCurrent(
   env: SessionCheckEnv,
   claims: ChatTokenClaims,
   // TEMPORARY DIAGNOSTIC — remove after Preview 401 diagnosis. Preview 에서만 전달됨 (운영은 undefined).
-  onDiag?: (fields: DiagFields) => void
+  onDiag?: (fields: DiagFields) => void,
+  // Preview 전용 계측 — 운영 호출부는 undefined. 판정 결과에 영향 없음.
+  perf?: PerfMarks
 ): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
   if (claims.v !== 2) return { ok: true };
   if (!isSessionBoundChatToken(claims)) {
@@ -82,6 +85,7 @@ export async function assertChatSessionCurrent(
       ...(await internalAuthHeaders(secret, CHAT_SESSION_CHECK_PATH)),
       ...nextAppExtraHeaders(env, url),
     };
+    const tSc = Date.now();
     const res = await fetch(url, {
       method: "POST",
       headers,
@@ -89,6 +93,14 @@ export async function assertChatSessionCurrent(
       signal: AbortSignal.timeout(SESSION_CHECK_TIMEOUT_MS),
       ...nextAppFetchInit(env),
     });
+    if (perf) {
+      try {
+        perf.sc = Date.now() - tSc;
+        Object.assign(perf, parseSessionServerTiming(res.headers.get("server-timing")));
+      } catch {
+        // 계측 실패 무시
+      }
+    }
     if (onDiag) {
       // TEMPORARY DIAGNOSTIC — remove after Preview 401 diagnosis.
       onDiag({ stage: "session_check_response", redirect: isRedirectResponse(res), ...(await diagSessionResponse(res)) });
