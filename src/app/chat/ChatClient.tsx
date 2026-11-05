@@ -778,6 +778,11 @@ export default function ChatClient() {
         } catch {
           return;
         }
+        if (data && data.type === "perf") {
+          // Preview Worker 전용 계측 프레임(ms 숫자만). 비활성이면 chatPerf 가 즉시 무시.
+          chatPerf.serverPerf(data.t);
+          return;
+        }
         if (data.type === "history" && Array.isArray(data.messages)) {
           const hist = data.messages.map(payloadToLine);
           const reset = historyResetRef.current && !reconnectingRef.current;

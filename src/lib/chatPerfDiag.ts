@@ -22,7 +22,29 @@ export type ChatPerfRecord = {
 
 export type ChatPerfListRecord = { n: number; tokenMs: number | null; connectToListMs: number | null };
 
-export type ChatPerfState = { entries: ChatPerfRecord[]; list: ChatPerfListRecord[] };
+/** Preview Worker 가 보낸 서버 구간(ms). 허용 키·정수만. */
+export const CHAT_PERF_SERVER_KEYS = ["tok", "sc", "scApp", "scDb", "scCold", "mem", "sign", "edge", "doAssert", "doAccept", "doHist"] as const;
+export type ChatPerfServerRecord = { n: number; t: Partial<Record<(typeof CHAT_PERF_SERVER_KEYS)[number], number>> };
+
+export type ChatPerfState = { entries: ChatPerfRecord[]; list: ChatPerfListRecord[]; server: ChatPerfServerRecord[] };
+
+/** 순수: perf 프레임의 t 에서 허용 키의 0~600000 정수만 남긴다. */
+export function sanitizeServerPerf(raw: unknown): ChatPerfServerRecord["t"] {
+  const out: ChatPerfServerRecord["t"] = {};
+  if (!raw || typeof raw !== "object") return out;
+  for (const k of CHAT_PERF_SERVER_KEYS) {
+    const v = (raw as Record<string, unknown>)[k];
+    if (typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 600000) out[k] = v;
+  }
+  return out;
+}
+
+/** 순수: 서버 구간 한 줄 텍스트. */
+export function serverPerfLine(r: ChatPerfServerRecord): string {
+  const t = r.t;
+  const g = (k: keyof typeof t) => (t[k] == null ? "-" : String(t[k]));
+  return `서버#${r.n} 토큰검증 ${g("tok")} | session-check왕복 ${g("sc")} (함수 ${g("scApp")} / DB ${g("scDb")} / cold ${g("scCold")}) | 멤버 ${g("mem")} | 서명 ${g("sign")} | Worker합계 ${g("edge")} | DO검증 ${g("doAssert")} | DO수락 ${g("doAccept")} | DO history ${g("doHist")}`;
+}
 
 export const CHAT_PERF_MAX = 5;
 
@@ -79,7 +101,8 @@ export function buildRecord(n: number, p: Pending, visible: number | null, ok: b
 
 // ---- 메모리 상태 (탭 세션 한정) ----
 let enabled = false;
-let state: ChatPerfState = { entries: [], list: [] };
+let state: ChatPerfState = { entries: [], list: [], server: [] };
+let serverSeq = 0;
 let pending: Pending | null = null;
 let seq = 0;
 let listSeq = 0;
@@ -92,7 +115,7 @@ function now(): number {
   return typeof performance !== "undefined" ? performance.now() : Date.now();
 }
 function emit() {
-  state = { entries: state.entries.slice(), list: state.list.slice() };
+  state = { entries: state.entries.slice(), list: state.list.slice(), server: state.server.slice() };
   listeners.forEach((l) => {
     try { l(); } catch { /* ignore */ }
   });
@@ -175,7 +198,15 @@ export const chatPerf = {
       emit();
     });
   },
-  clear() { safe(() => { state = { entries: [], list: [] }; emit(); }); },
+  serverPerf(raw: unknown) {
+    safe(() => {
+      const t = sanitizeServerPerf(raw);
+      if (Object.keys(t).length === 0) return;
+      state.server = [{ n: ++serverSeq, t }, ...state.server].slice(0, CHAT_PERF_MAX);
+      emit();
+    });
+  },
+  clear() { safe(() => { state = { entries: [], list: [], server: [] }; emit(); }); },
 };
 
 const KIND_LABEL: Record<ChatPerfEntryKind, string> = { first: "첫 진입", switch: "방 전환", reentry: "재진입", deeplink: "링크/알림" };
@@ -189,5 +220,6 @@ export function chatPerfText(s: ChatPerfState): string {
     lines.push(`#${e.n} ${kindLabel(e.kind)}${e.ok ? "" : "(실패)"} 토큰${e.tokenFetched ? "발급" : "재사용"} ${f(e.tokenMs)} | 탭→WS ${f(e.tapToOpenMs)} | WS→history ${f(e.openToHistoryMs)} | history→렌더 ${f(e.historyToRenderMs)} | 전체 ${f(e.tapToVisibleMs)}`);
   }
   for (const l of s.list) lines.push(`목록#${l.n} 토큰 ${f(l.tokenMs)} | 연결→목록 ${f(l.connectToListMs)}`);
+  for (const r of s.server || []) lines.push(serverPerfLine(r));
   return lines.join("\n");
 }

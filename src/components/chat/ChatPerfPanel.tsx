@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { chatPerf, chatPerfEnabled, chatPerfText, getChatPerfState, initChatPerf, kindLabel, subscribeChatPerf } from "@/lib/chatPerfDiag";
+import { chatPerf, chatPerfEnabled, chatPerfText, getChatPerfState, initChatPerf, kindLabel, serverPerfLine, subscribeChatPerf } from "@/lib/chatPerfDiag";
 
 const empty = getChatPerfState();
 const f = (v: number | null) => (v == null ? "-" : String(v));
@@ -30,6 +30,7 @@ export default function ChatPerfPanel() {
             {s.list.map((l) => (<tr key={`l${l.n}`}><td>L{l.n}</td><td>목록</td><td>{f(l.tokenMs)}</td><td colSpan={4}>연결→목록 {f(l.connectToListMs)}</td></tr>))}
           </tbody></table>
       ) : null}
+      {open ? (s.server || []).map((r) => <div key={`s${r.n}`} style={{ whiteSpace: "normal" }}>{serverPerfLine(r)}</div>) : null}
     </div>
   );
 }
