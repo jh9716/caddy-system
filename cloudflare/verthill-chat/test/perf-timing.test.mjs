@@ -2,6 +2,9 @@
 // session-check 지연(mock 300ms 주입)이 sc 값에 반영되며, 운영 모드에서는 perf 프레임이 없다.
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import WebSocket from "ws";
 import { signTestTokenV2 } from "./token-helper.mjs";
 import { HOST, startWrangler, stopWrangler } from "./wrangler-harness.mjs";
@@ -22,7 +25,11 @@ function open(port, token) {
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 test("preview: perf 프레임(숫자만) history 뒤, session-check 지연 반영", async () => {
-  const { port, child, mock } = await startWrangler({ extraArgs: ["--var", "CHAT_TOKEN_AUDIENCE:preview"] });
+  const { port, child, mock } = await startWrangler({
+    extraArgs: ["--var", "CHAT_TOKEN_AUDIENCE:preview"],
+    // "새 DO 인스턴스" 판정이 앞선 테스트의 공유 상태(보존 알람 시각)에 좌우되지 않도록 전용 저장 경로
+    persistTo: mkdtempSync(join(tmpdir(), "vh-perf-")),
+  });
   try {
     mock.setDelay(300);
     const tok = signTestTokenV2({ userId: 51, displayName: "x", team: "A", sv: 0, aud: "preview" }).token;

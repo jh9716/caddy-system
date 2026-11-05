@@ -290,7 +290,24 @@ async function forwardDirectory(request: Request, env: Env): Promise<Response> {
   // forwards `request` unchanged. Directory list/WS used the rebuilt Request.
   const forwarded = new Request(request.url, request);
   forwarded.headers.set("x-chat-claims", JSON.stringify(identity));
-  return directoryStub(env).fetch(forwarded);
+  const res = await directoryStub(env).fetch(forwarded);
+  return withDirectoryHttpCors(res);
+}
+
+/**
+ * Directory DO 의 HTTP 응답(JSON)에 Worker 공통 CORS 헤더(corsHeaders, json() 과 동일 정책)를 붙인다.
+ * 브라우저 교차 출처 GET(/directory/rooms, /directory/rooms/{id}, /members)이 본문을 읽을 수 있게 하기 위함.
+ * WebSocket 101 업그레이드 응답은 손대지 않고 그대로 반환한다. 상태·본문·인증 결과는 변경하지 않는다.
+ */
+function withDirectoryHttpCors(res: Response): Response {
+  if (res.status === 101 || (res as Response & { webSocket?: unknown }).webSocket) return res;
+  try {
+    const headers = new Headers(res.headers);
+    for (const [k, v] of Object.entries(corsHeaders())) headers.set(k, v);
+    return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+  } catch {
+    return res;
+  }
 }
 
 export default {
