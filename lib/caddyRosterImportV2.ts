@@ -47,7 +47,10 @@ import {
   incrementSessionVersionForCaddyLink,
   type SessionRevocationDb,
 } from "../src/lib/sessionRevocation";
-import { notifyChatSessionRevokedForCaddyLinks } from "../src/lib/chatSessionRevoke";
+import {
+  notifyChatSessionRevokedForCaddyLinksDetailed,
+  type ChatRevokeBulkSummary,
+} from "../src/lib/chatSessionRevoke";
 import {
   isPrimaryTeam,
   occupiesHouseThirdSlot,
@@ -62,6 +65,7 @@ import {
   ROSTER_IMPORT_APPLY_FAILED_USER_MESSAGE,
   ROSTER_IMPORT_APPLY_TX_MAX_WAIT_MS,
   ROSTER_IMPORT_APPLY_TX_TIMEOUT_MS,
+  ROSTER_IMPORT_APPLY_NOTIFY_DEADLINE_MS,
 } from "../src/lib/caddyRosterImportApplyConfig";
 
 export {
@@ -204,8 +208,10 @@ export type RosterApplyResult = {
   createdIds: number[];
   /** 이번 반영으로 RETIRED 로 바뀐 캐디에 연결된 계정의 sessionVersion 증가 수(개별 퇴사와 같은 규칙). */
   sessionsRevoked?: number;
-  /** 채팅 세션 폐기 알림 실패 수(재시도 후). 0 이 아니면 열린 채팅 소켓이 토큰 만료까지 남을 수 있음. */
+  /** 채팅 세션 폐기 알림 실패+미전송 수(설정 없음·시간 상한 포함). 0 이 아니면 열린 채팅 소켓이 토큰 만료까지 남을 수 있음. */
   chatRevokeFailed?: number;
+  /** 알림 요약(개수·상태만). status: none|ok|not_configured|partial|failed. DB 반영은 이미 커밋된 상태. */
+  chatRevoke?: ChatRevokeBulkSummary;
 };
 
 function splitCsvLine(line: string): string[] {
@@ -2018,6 +2024,7 @@ export async function applyRosterImportPayloadV2(
     allowExplicitNeedsReviewCreates?: boolean;
   }
 ): Promise<RosterApplyResult> {
+  const applyStartedAt = Date.now();
   for (const c of payload.creates) {
     if (!c.name?.trim() || !c.team?.trim()) {
       throw new RosterImportApplyError("create에 name, team 필수");
@@ -2443,35 +2450,28 @@ export async function applyRosterImportPayloadV2(
 
   // 커밋 이후에만 채팅 세션 폐기 알림(기존 개별 퇴사와 같은 순서). 실패는 집계·로그(식별자 없음).
   const finish = async (r: Awaited<ReturnType<typeof run>>): Promise<RosterApplyResult> => {
-    let chatRevokeFailed = 0;
-    if (r.retiringIds.length > 0) {
-      const results = await notifyChatSessionRevokedForCaddyLinks(
-        prisma as unknown as Parameters<typeof notifyChatSessionRevokedForCaddyLinks>[0],
-        r.retiringIds
-      );
-      chatRevokeFailed = results.filter((x) => x === "failed").length;
-      if (chatRevokeFailed > 0) {
-        console.error(
-          `[roster-import] chat session revoke notify failed: ${chatRevokeFailed}/${results.length}`
-        );
-      }
-    }
+    const chatRevoke = await notifyChatSessionRevokedForCaddyLinksDetailed(
+      prisma as unknown as Parameters<typeof notifyChatSessionRevokedForCaddyLinksDetailed>[0],
+      r.retiringIds,
+      { deadlineAt: applyStartedAt + ROSTER_IMPORT_APPLY_NOTIFY_DEADLINE_MS }
+    );
     return {
       updated: r.updated,
       created: r.created,
       phoneUpdated: r.phoneUpdated,
       createdIds: r.createdIds,
       sessionsRevoked: r.sessionsRevoked,
-      chatRevokeFailed,
+      chatRevokeFailed: chatRevoke.failed + chatRevoke.notConfigured + chatRevoke.deadlineSkipped,
+      chatRevoke,
     };
   };
 
+  let committed: Awaited<ReturnType<typeof run>>;
   try {
-    const committed =
+    committed =
       typeof prisma.$transaction === "function"
         ? await prisma.$transaction((tx) => run(tx), ROSTER_IMPORT_APPLY_TX_OPTIONS)
         : await run(prisma);
-    return await finish(committed);
   } catch (e) {
     if (e instanceof RosterImportApplyError) throw e;
     if (e instanceof ThirdBandSubgroupError) {
@@ -2494,6 +2494,8 @@ export async function applyRosterImportPayloadV2(
       "apply_failed"
     );
   }
+  // 커밋 이후 단계는 try 밖: 알림 문제로 이미 커밋된 반영이 "반영 실패"로 보고되지 않게 한다.
+  return await finish(committed);
 }
 
 /** Excel formula injection 방어: = + - @ 선두면 앞에 ' 부여 */

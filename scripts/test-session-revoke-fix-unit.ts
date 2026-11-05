@@ -10,12 +10,16 @@ import { applyRosterImportPayloadV2, type RosterExisting } from "../lib/caddyRos
 import {
   notifyChatSessionRevoked,
   notifyChatSessionRevokedForCaddyLinks,
+  notifyChatSessionRevokedForCaddyLinksDetailed,
+  summarizeRevokeResults,
   isRetryableRevokeStatus,
   CHAT_SESSION_REVOKE_MAX_ATTEMPTS,
   CHAT_SESSION_REVOKE_TOTAL_BUDGET_MS,
   CHAT_SESSION_REVOKE_TIMEOUT_MS,
 } from "../src/lib/chatSessionRevoke";
 import { employmentBecameRetired } from "../src/lib/sessionRevocation";
+import { xlsxV2ApplySuccessMessage } from "../lib/caddyRosterImportXlsxV2Apply";
+import { ROSTER_IMPORT_APPLY_NOTIFY_DEADLINE_MS, ROSTER_IMPORT_APPLY_ROUTE_MAX_DURATION_SECONDS } from "../src/lib/caddyRosterImportApplyConfig";
 
 let passed = 0, failed = 0;
 function assert(c: unknown, m: string) { if (c) { passed++; console.log("  ✓", m); } else { failed++; console.error("  ✗", m); } }
@@ -196,6 +200,62 @@ const base = (id: number, team: string, order: number, emp: string): Row => ({ i
     const res = await notifyChatSessionRevokedForCaddyLinks(db, [1, 2, 2]);
     assert(res.length === 2 && res.filter((x) => x === "failed").length === 1, "중복 caddyId 제거, 실패 1건 집계");
   }
+
+  console.log("skipped/설정 없음 구분 (결함 보완 1)");
+  {
+    const { db } = makeDb([], [{ id: 41, caddyId: 1, sessionVersion: 1 }, { id: 42, caddyId: 2, sessionVersion: 1 }]);
+    calls = []; errs.length = 0;
+    const nc = await notifyChatSessionRevokedForCaddyLinksDetailed(db, [1, 2], { configured: false });
+    assert(nc.status === "not_configured" && nc.notConfigured === 2 && nc.notified === 0 && calls.length === 0, "대상 있음 + 설정 없음 → not_configured(성공 아님), 전송 없음");
+    assert(errs.some((e) => e.includes("not configured: 2 target")) && !errs.some((e) => e.includes("unit-test-only") || e.includes("invalid")), "로그에 개수만, 설정 값 없음");
+    const none = await notifyChatSessionRevokedForCaddyLinksDetailed(db, [99]);
+    assert(none.status === "none" && none.targets === 0, "연결 계정 없는 캐디 → none(정상)");
+    plan = [200, 200];
+    const okS = await notifyChatSessionRevokedForCaddyLinksDetailed(db, [1, 2]);
+    assert(okS.status === "ok" && okS.notified === 2, "전부 성공 → ok");
+    plan = [200, 400];
+    const part = await notifyChatSessionRevokedForCaddyLinksDetailed(db, [1, 2]);
+    assert(part.status === "partial" && part.failed === 1, "일부 실패 → partial");
+    assert(summarizeRevokeResults(["failed", "failed"], 2).status === "failed", "전부 실패 → failed");
+    const badLookup = await notifyChatSessionRevokedForCaddyLinksDetailed({ user: { findMany: async () => { throw new Error("db"); } } }, [1, 2]);
+    assert(badLookup.status === "failed" && badLookup.failed === 2, "대상 조회 실패 → failed(성공 아님)");
+  }
+
+  console.log("시간 상한(결함 보완 2)");
+  {
+    const users = Array.from({ length: 20 }, (_, i) => ({ id: 100 + i, caddyId: 200 + i, sessionVersion: 1 }));
+    const { db } = makeDb([], users);
+    calls = []; plan = [];
+    const dl = await notifyChatSessionRevokedForCaddyLinksDetailed(db, users.map((u) => u.caddyId), { deadlineAt: Date.now() + 1000, concurrency: 8 });
+    assert(dl.deadlineSkipped === 20 && dl.status === "failed" && calls.length === 0, "남은 시간 < 계정당 상한 → 시작 안 하고 deadline 으로 보고");
+    calls = []; plan = [];
+    const ok20 = await notifyChatSessionRevokedForCaddyLinksDetailed(db, users.map((u) => u.caddyId), { deadlineAt: Date.now() + 60_000, concurrency: 8 });
+    assert(ok20.status === "ok" && ok20.notified === 20 && calls.length === 20, "충분하면 전부 전송");
+    assert(ROSTER_IMPORT_APPLY_NOTIFY_DEADLINE_MS === ROSTER_IMPORT_APPLY_ROUTE_MAX_DURATION_SECONDS * 1000 - 15_000, "알림 상한 = maxDuration − 15초");
+  }
+
+  console.log("CSV 반영 결과 보고");
+  {
+    const rows = [base(51, "5조", 1, "ACTIVE")];
+    const { db } = makeDb(rows, [{ id: 61, caddyId: 51, sessionVersion: 0 }]);
+    const prevUrl = process.env.NEXT_PUBLIC_CHAT_WS_URL; const prevSec = process.env.CHAT_INTERNAL_SECRET;
+    delete process.env.CHAT_INTERNAL_SECRET;
+    const r = await applyRosterImportPayloadV2({ updates: [{ id: 51, employmentStatus: "RETIRED" }], creates: [] } as any, db, { existingForGuard: rows });
+    process.env.NEXT_PUBLIC_CHAT_WS_URL = prevUrl; process.env.CHAT_INTERNAL_SECRET = prevSec;
+    assert(r.sessionsRevoked === 1 && r.chatRevoke?.status === "not_configured" && r.chatRevokeFailed === 1, "설정 없음 → 커밋 결과 유지 + 미전송 1건 보고(성공으로 표시 안 함)");
+  }
+  {
+    const rows = [base(52, "5조", 2, "ACTIVE")];
+    const { db, userMap } = makeDb(rows, [{ id: 62, caddyId: 52, sessionVersion: 0 }]);
+    calls = []; plan = [500, 500, 500];
+    const r = await applyRosterImportPayloadV2({ updates: [{ id: 52, employmentStatus: "RETIRED" }], creates: [] } as any, db, { existingForGuard: rows });
+    assert(r.updated === 1 && userMap.get(62)!.sessionVersion === 1 && r.chatRevoke?.status === "failed", "알림 실패여도 반영은 성공으로 반환(이미 커밋), 실패 개수 보고");
+    calls = [];
+    const again = await applyRosterImportPayloadV2({ updates: [{ id: 52, employmentStatus: "RETIRED" }], creates: [] } as any, db, { existingForGuard: [{ ...rows[0], employmentStatus: "RETIRED" }] });
+    assert(userMap.get(62)!.sessionVersion === 1 && again.sessionsRevoked === 0 && calls.length === 0, "같은 반영 중복 요청 → sv 추가 증가 없음·알림 없음");
+  }
+  assert(xlsxV2ApplySuccessMessage({ ok: true, created: 0, updated: 0, retired: 2, drivingChanged: 0, sessionsRevoked: 2, chatRevoke: { status: "partial", targets: 2, notified: 1, failed: 1, notConfigured: 0, deadlineSkipped: 0 } } as any).includes("미완료 1건"), "XLSX 메시지에 미완료 표시");
+  assert(!xlsxV2ApplySuccessMessage({ ok: true, created: 0, updated: 0, retired: 1, drivingChanged: 0, sessionsRevoked: 1, chatRevoke: { status: "ok", targets: 1, notified: 1, failed: 0, notConfigured: 0, deadlineSkipped: 0 } } as any).includes("미완료"), "모두 성공이면 기존 메시지");
 
   globalThis.fetch = realFetch;
   console.error = realErr;

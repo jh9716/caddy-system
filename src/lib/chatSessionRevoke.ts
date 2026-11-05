@@ -49,7 +49,11 @@ export async function notifyChatSessionRevoked(
   }
   const worker = chatHttpBaseUrl();
   const secret = chatInternalSecret(env);
-  if (!worker || !secret) return "skipped";
+  if (!worker || !secret) {
+    // 설정 값은 출력하지 않음. 전송 안 됨 = 성공 아님(호출부가 skipped 로 구분).
+    console.warn("[chat-session-revoke] notify not configured");
+    return "skipped";
+  }
   // Worker 는 같은 사용자에 대해 max(sessionVersion) 만 기억하므로 재시도·중복 전송은 안전(되돌림 없음).
   let lastStatus: number | null = null;
   const deadline = Date.now() + CHAT_SESSION_REVOKE_TOTAL_BUDGET_MS;
@@ -167,11 +171,48 @@ export async function notifyChatSessionRevokedForCaddyLink(
   }
 }
 
+/** 일괄 폐기 알림 요약(개수만, 식별자 없음). */
+export type ChatRevokeBulkStatus =
+  | "none" // 알림 대상 계정 없음(연결된 계정이 없는 캐디)
+  | "ok" // 모두 전송 성공
+  | "not_configured" // Worker 주소/내부 인증 설정 없음 → 전송 안 됨(성공 아님)
+  | "partial" // 일부 실패·미전송
+  | "failed"; // 전부 실패·미전송
+export type ChatRevokeBulkSummary = {
+  status: ChatRevokeBulkStatus;
+  targets: number;
+  notified: number;
+  failed: number;
+  notConfigured: number;
+  deadlineSkipped: number;
+};
+
+export const CHAT_SESSION_REVOKE_BULK_CONCURRENCY = 8;
+
+export function summarizeRevokeResults(
+  results: Array<ChatSessionRevokeNotifyResult | "deadline">,
+  targets: number
+): ChatRevokeBulkSummary {
+  const notified = results.filter((r) => r === "ok").length;
+  const failed = results.filter((r) => r === "failed").length;
+  const notConfigured = results.filter((r) => r === "skipped").length;
+  const deadlineSkipped = results.filter((r) => r === "deadline").length;
+  let status: ChatRevokeBulkStatus;
+  if (targets === 0 && results.length === 0) status = "none";
+  else if (notified === targets && targets > 0 && notified === results.length) status = "ok";
+  else if (notified === 0 && notConfigured > 0 && failed === 0 && deadlineSkipped === 0) status = "not_configured";
+  else if (notified === 0) status = "failed";
+  else status = "partial";
+  return { status, targets, notified, failed, notConfigured, deadlineSkipped };
+}
+
 /**
- * 여러 캐디(일괄 퇴사)의 연결 계정에 폐기 알림. 커밋 이후 호출. 동시 CHAT_SESSION_REVOKE_CONCURRENCY 개.
- * 알림 시점의 최신 sessionVersion 을 읽어 보낸다(Worker 는 max 로 기억 → 중복·순서 뒤바뀜에도 되돌림 없음).
+ * 여러 캐디(일괄 퇴사)의 연결 계정에 폐기 알림. 커밋 이후 호출.
+ * - 알림 시점의 최신 sessionVersion 을 읽어 보낸다(Worker 는 max 로 기억 → 중복·순서 뒤바뀜에도 되돌림 없음).
+ * - deadlineAt(에포크 ms)까지 끝낼 수 없는 계정은 시작하지 않고 "deadline" 으로 집계(조용히 성공 처리하지 않음).
+ *   요청 시간 제한을 넘겨 이미 커밋된 결과까지 실패로 보이게 되는 것을 막기 위함.
  */
-export async function notifyChatSessionRevokedForCaddyLinks(
+export async function notifyChatSessionRevokedForCaddyLinksDetailed(
   db: {
     user: {
       findMany: (args: {
@@ -180,10 +221,11 @@ export async function notifyChatSessionRevokedForCaddyLinks(
       }) => Promise<Array<{ id: number; sessionVersion: number }>>;
     };
   },
-  caddyIds: number[]
-): Promise<ChatSessionRevokeNotifyResult[]> {
+  caddyIds: number[],
+  opts?: { deadlineAt?: number; concurrency?: number; configured?: boolean }
+): Promise<ChatRevokeBulkSummary> {
   const ids = Array.from(new Set(caddyIds.filter((id) => Number.isInteger(id) && id > 0)));
-  if (ids.length === 0) return [];
+  if (ids.length === 0) return summarizeRevokeResults([], 0);
   let rows: Array<{ id: number; sessionVersion: number }>;
   try {
     rows = await db.user.findMany({
@@ -192,11 +234,23 @@ export async function notifyChatSessionRevokedForCaddyLinks(
     });
   } catch {
     console.error("[chat-session-revoke] notify lookup failed");
-    return ["failed"];
+    // 대상 수를 모르므로 캐디 수 기준 실패로 보고
+    return summarizeRevokeResults(ids.map(() => "failed"), ids.length);
   }
-  const out: ChatSessionRevokeNotifyResult[] = [];
-  for (let i = 0; i < rows.length; i += CHAT_SESSION_REVOKE_CONCURRENCY) {
-    const chunk = rows.slice(i, i + CHAT_SESSION_REVOKE_CONCURRENCY);
+  if (rows.length === 0) return summarizeRevokeResults([], 0);
+  const configured = opts?.configured ?? isChatSessionRevokeConfigured();
+  if (!configured) {
+    console.error(`[chat-session-revoke] notify not configured: ${rows.length} target(s) not notified`);
+    return summarizeRevokeResults(rows.map(() => "skipped"), rows.length);
+  }
+  const conc = Math.max(1, opts?.concurrency ?? CHAT_SESSION_REVOKE_BULK_CONCURRENCY);
+  const out: Array<ChatSessionRevokeNotifyResult | "deadline"> = [];
+  for (let i = 0; i < rows.length; i += conc) {
+    const chunk = rows.slice(i, i + conc);
+    if (opts?.deadlineAt != null && Date.now() + CHAT_SESSION_REVOKE_TOTAL_BUDGET_MS > opts.deadlineAt) {
+      for (let j = i; j < rows.length; j++) out.push("deadline");
+      break;
+    }
     out.push(
       ...(await Promise.all(
         chunk.map((row) =>
@@ -205,5 +259,29 @@ export async function notifyChatSessionRevokedForCaddyLinks(
       ))
     );
   }
-  return out;
+  const summary = summarizeRevokeResults(out, rows.length);
+  if (summary.status !== "ok") {
+    console.error(
+      `[chat-session-revoke] bulk notify ${summary.status}: notified=${summary.notified} failed=${summary.failed} notConfigured=${summary.notConfigured} deadline=${summary.deadlineSkipped} of ${summary.targets}`
+    );
+  }
+  return summary;
+}
+
+/** 설정 존재 여부만(값은 읽기만, 출력하지 않음). */
+export function isChatSessionRevokeConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+  return !!chatHttpBaseUrl() && !!chatInternalSecret(env);
+}
+
+/** 이전 호환(결과 배열). */
+export async function notifyChatSessionRevokedForCaddyLinks(
+  db: Parameters<typeof notifyChatSessionRevokedForCaddyLinksDetailed>[0],
+  caddyIds: number[]
+): Promise<ChatSessionRevokeNotifyResult[]> {
+  const s = await notifyChatSessionRevokedForCaddyLinksDetailed(db, caddyIds);
+  return [
+    ...Array(s.notified).fill("ok"),
+    ...Array(s.failed + s.deadlineSkipped).fill("failed"),
+    ...Array(s.notConfigured).fill("skipped"),
+  ];
 }

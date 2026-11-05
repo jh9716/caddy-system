@@ -42,3 +42,10 @@ export function rosterImportApplySuccessMessage(result: {
       : "";
   return `명단 반영 완료: 갱신 ${result.updated} · 신규 ${result.created}${phone}`;
 }
+
+/**
+ * 커밋 이후 채팅 세션 폐기 알림에 쓸 수 있는 시간 상한(ms, apply 함수 시작 기준).
+ * 라우트 maxDuration 에서 감사 기록·응답 여유 15초를 뺀다. 넘기면 남은 알림은 시작하지 않고 개수로 보고한다.
+ */
+export const ROSTER_IMPORT_APPLY_NOTIFY_DEADLINE_MS =
+  ROSTER_IMPORT_APPLY_ROUTE_MAX_DURATION_SECONDS * 1000 - 15_000;
