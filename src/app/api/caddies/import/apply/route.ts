@@ -13,6 +13,7 @@ import { isNeedsReviewName } from "@/lib/caddyImportRules";
 import { maskKrMobile } from "@/lib/caddyPhone";
 import { logAudit } from "@/lib/audit";
 import { requireAdmin } from "@/lib/auth";
+import { recordRosterImportAuditSafe } from "@/lib/rosterImportAudit";
 import { ROSTER_IMPORT_APPLY_FAILED_USER_MESSAGE } from "@/lib/caddyRosterImportApplyConfig";
 
 export const dynamic = "force-dynamic";
@@ -55,15 +56,18 @@ export async function POST(req: NextRequest) {
         },
         prisma
       );
-      await logAudit({
-        action: "IMPORT_CADDIES_V1_SAFE",
-        meta: {
-          entity: "Caddy",
-          updated: result.updated,
-          created: result.created,
-        },
-      });
-      return NextResponse.json({ ok: true, ...result });
+      // 커밋 이후: 감사 기록 실패가 반영 실패(500)로 바뀌지 않게 분리하고 응답에 표시
+      const audit = await recordRosterImportAuditSafe("IMPORT_CADDIES_V1_SAFE", () =>
+        logAudit({
+          action: "IMPORT_CADDIES_V1_SAFE",
+          meta: {
+            entity: "Caddy",
+            updated: result.updated,
+            created: result.created,
+          },
+        })
+      );
+      return NextResponse.json({ ok: true, ...result, auditRecorded: audit.auditRecorded });
     }
 
     const payload = body?.applyPayload as RosterApplyPayload | undefined;
@@ -200,50 +204,55 @@ export async function POST(req: NextRequest) {
       }
     );
 
-    const maskedUpdates = payload.updates.map((u) => ({
-      id: Number(u.id),
-      ...(u.team !== undefined ? { team: String(u.team) } : {}),
-      ...(u.teamOrder !== undefined ? { teamOrder: Number(u.teamOrder) } : {}),
-      ...(u.employmentStatus !== undefined
-        ? { employmentStatus: u.employmentStatus }
-        : {}),
-      ...(u.phone !== undefined
-        ? { phone: maskKrMobile(String(u.phone)) }
-        : {}),
-      ...(Object.prototype.hasOwnProperty.call(u, "thirdBandSubgroup")
-        ? { thirdBandSubgroup: u.thirdBandSubgroup ?? null }
-        : {}),
-    }));
-    const maskedCreates = payload.creates.map((c) => ({
-      name: String(c.name),
-      team: String(c.team),
-      ...(c.teamOrder !== undefined ? { teamOrder: Number(c.teamOrder) } : {}),
-      ...(c.employmentStatus !== undefined
-        ? { employmentStatus: c.employmentStatus }
-        : {}),
-      ...(c.phone !== undefined
-        ? { phone: maskKrMobile(String(c.phone)) }
-        : {}),
-      ...(Object.prototype.hasOwnProperty.call(c, "thirdBandSubgroup")
-        ? { thirdBandSubgroup: c.thirdBandSubgroup ?? null }
-        : {}),
-    }));
+    // 커밋 이후(applyRosterImportPayloadV2 반환 = 트랜잭션 커밋 완료): 마스킹·감사 기록 예외는
+    // 반영 실패로 바꾸지 않고 auditRecorded=false 로 경고한다. 트랜잭션 실패는 위 apply 에서 throw → 기존 catch.
+    const audit = await recordRosterImportAuditSafe("IMPORT_CADDIES_V2", () => {
+      const maskedUpdates = payload.updates.map((u) => ({
+        id: Number(u.id),
+        ...(u.team !== undefined ? { team: String(u.team) } : {}),
+        ...(u.teamOrder !== undefined ? { teamOrder: Number(u.teamOrder) } : {}),
+        ...(u.employmentStatus !== undefined
+          ? { employmentStatus: u.employmentStatus }
+          : {}),
+        ...(u.phone !== undefined
+          ? { phone: maskKrMobile(String(u.phone)) }
+          : {}),
+        ...(Object.prototype.hasOwnProperty.call(u, "thirdBandSubgroup")
+          ? { thirdBandSubgroup: u.thirdBandSubgroup ?? null }
+          : {}),
+      }));
+      const maskedCreates = payload.creates.map((c) => ({
+        name: String(c.name),
+        team: String(c.team),
+        ...(c.teamOrder !== undefined ? { teamOrder: Number(c.teamOrder) } : {}),
+        ...(c.employmentStatus !== undefined
+          ? { employmentStatus: c.employmentStatus }
+          : {}),
+        ...(c.phone !== undefined
+          ? { phone: maskKrMobile(String(c.phone)) }
+          : {}),
+        ...(Object.prototype.hasOwnProperty.call(c, "thirdBandSubgroup")
+          ? { thirdBandSubgroup: c.thirdBandSubgroup ?? null }
+          : {}),
+      }));
 
-    await logAudit({
-      action: "IMPORT_CADDIES_V2",
-      meta: {
-        entity: "Caddy",
-        updated: result.updated,
-        created: result.created,
-        phoneUpdated: result.phoneUpdated,
-        updates: maskedUpdates,
-        creates: maskedCreates,
-      },
+      return logAudit({
+        action: "IMPORT_CADDIES_V2",
+        meta: {
+          entity: "Caddy",
+          updated: result.updated,
+          created: result.created,
+          phoneUpdated: result.phoneUpdated,
+          updates: maskedUpdates,
+          creates: maskedCreates,
+        },
+      });
     });
 
     return NextResponse.json({
       ok: true,
       ...result,
+      auditRecorded: audit.auditRecorded,
     });
   } catch (e: any) {
     if (e instanceof XlsxV1SafeApplyError) {

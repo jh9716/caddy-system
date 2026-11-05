@@ -21,6 +21,8 @@ import { employmentBecameRetired } from "../src/lib/sessionRevocation";
 import { xlsxV2ApplySuccessMessage } from "../lib/caddyRosterImportXlsxV2Apply";
 import { notifyChatSessionRevokedForCaddyLinksSafe, isChatSessionRevokeConfigured } from "../src/lib/chatSessionRevoke";
 import { rosterImportApplySuccessMessage } from "../src/lib/caddyRosterImportApplyConfig";
+import { recordRosterImportAuditSafe, rosterImportAuditWarningSuffix } from "../src/lib/rosterImportAudit";
+import { readFileSync } from "node:fs";
 import { ROSTER_IMPORT_APPLY_NOTIFY_DEADLINE_MS, ROSTER_IMPORT_APPLY_ROUTE_MAX_DURATION_SECONDS } from "../src/lib/caddyRosterImportApplyConfig";
 
 let passed = 0, failed = 0;
@@ -313,6 +315,30 @@ const base = (id: number, team: string, order: number, emp: string): Row => ({ i
       const a = csv(rv).slice(csv(rv).indexOf(" (")), b = xlsx(rv).slice(xlsx(rv).indexOf(" ("));
       assert(csv(rv).includes(" (") ? a === b : !xlsx(rv).includes(" ("), `CSV/XLSX 알림 꼬리 동일 (${rv.status})`);
     }
+  }
+
+  console.log("AUDIT — 커밋 후 감사 기록 보호");
+  {
+    const prevErr = console.error; const logs: string[] = [];
+    console.error = (...a: unknown[]) => { logs.push(a.map(String).join(" ")); };
+    let ran = 0;
+    const ok = await recordRosterImportAuditSafe("IMPORT_CADDIES_V2", async () => { ran++; });
+    assert(ok.auditRecorded === true && ran === 1 && logs.length === 0, "정상 커밋 + 감사 성공 → auditRecorded=true, 경고 로그 없음");
+    assert(rosterImportAuditWarningSuffix(true) === "" && rosterImportAuditWarningSuffix(undefined) === "", "감사 성공/구 응답 → 기존 메시지 유지");
+    const secretish = "010-1234-5678 홍길동 id=42 unit-test-only-not-a-secret";
+    const bad = await recordRosterImportAuditSafe("IMPORT_CADDIES_V2", async () => { throw new TypeError(secretish); });
+    const badSync = await recordRosterImportAuditSafe("IMPORT_CADDIES_V1_SAFE", () => { throw { weird: secretish }; });
+    assert(bad.auditRecorded === false && badSync.auditRecorded === false, "정상 커밋 + 감사 실패(async/sync/비 Error) → throw 안 함, auditRecorded=false");
+    assert(logs.length === 2 && logs.every((l) => l.startsWith("[AUDIT_MISSING]") && l.includes("committed=true")), "감사 실패 → 조용히 무시하지 않고 [AUDIT_MISSING] 로그");
+    assert(logs.every((l) => !/010|홍길동|42|secret/.test(l)), "감사 실패 로그에 전화·이름·식별자·secret·오류 원문 없음");
+    const msg = rosterImportApplySuccessMessage({ updated: 3, created: 1, phoneUpdated: 0 }) + rosterImportAuditWarningSuffix(false);
+    assert(msg.startsWith("명단 반영 완료") && msg.includes("감사 기록 저장 실패") && msg.includes("다시 반영하지 말고"), "감사 실패 → 반영 완료 + 명확 경고 + 재적용 금지 안내");
+    console.error = prevErr;
+    const route = readFileSync("src/app/api/caddies/import/apply/route.ts", "utf8");
+    const iApply = route.indexOf("await applyRosterImportPayloadV2("), iAudit = route.indexOf('recordRosterImportAuditSafe("IMPORT_CADDIES_V2"');
+    const iCatch = route.lastIndexOf("} catch (e: any)");
+    assert(iApply > 0 && iAudit > iApply && iAudit < iCatch && !/\n\s*await logAudit\(/.test(route), "route: 감사는 apply(커밋) 이후·보호 래퍼 안에서만, 보호 없는 logAudit 없음");
+    assert(route.includes("auditRecorded: audit.auditRecorded") && route.includes('code: "apply_failed"'), "route: 응답에 auditRecorded, txn 실패는 기존 apply_failed 유지");
   }
 
   globalThis.fetch = realFetch;
