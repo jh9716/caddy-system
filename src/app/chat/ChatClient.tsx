@@ -199,7 +199,7 @@ import {
 } from "@/lib/chatDmClient";
 import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
 import { chatPerf, classifyEntry, CHAT_PERF_PING, CHAT_PERF_PING_COUNT, CHAT_PERF_PONG } from "@/lib/chatPerfDiag";
-import { canResumeParked, isParkExpired, isResumeRevalidationOk, CHAT_WS_REUSE_HISTORY_BEFORE, CHAT_WS_REUSE_STORAGE_KEY, CHAT_WS_REUSE_TTL_MS, resolveChatWsReuse, type ParkedSocketMeta } from "@/lib/chatWsReuse";
+import { canResumeParked, isParkExpired, reuseEligibilityFailReason, revalidateParkedRoom, CHAT_WS_REUSE_REVALIDATE_TIMEOUT_MS, type ChatWsReuseFailReason, CHAT_WS_REUSE_HISTORY_BEFORE, CHAT_WS_REUSE_STORAGE_KEY, CHAT_WS_REUSE_TTL_MS, resolveChatWsReuse, type ParkedSocketMeta } from "@/lib/chatWsReuse";
 import ChatPerfPanel from "@/components/chat/ChatPerfPanel";
 
 type TokenPayload = {
@@ -787,6 +787,19 @@ export default function ChatClient() {
         parkedRoomRef.current = null;
         window.clearTimeout(parked.timer);
         const resume = socketResumeRef.current.get(parked.ws);
+        const eligibilityReason = (): ChatWsReuseFailReason | null =>
+          !resume
+            ? "no_resume"
+            : wsRef.current !== parked.ws
+              ? "socket"
+              : reuseEligibilityFailReason(parked, {
+                  roomId,
+                  token: info.token,
+                  nowSec: Math.floor(Date.now() / 1000),
+                  socketOpen: parked.ws.readyState === WebSocket.OPEN,
+                  parkedAt: parked.parkedAt,
+                  nowMs: Date.now(),
+                });
         const eligible = () =>
           !!resume &&
           wsRef.current === parked.ws &&
@@ -798,29 +811,34 @@ export default function ChatClient() {
             parkedAt: parked.parkedAt,
             nowMs: Date.now(),
           });
+        let failReason: ChatWsReuseFailReason | null = null;
         if (eligible()) {
           // 재개 직전 권한 재확인: 기존 Worker 방 조회(같은 토큰)로 새 연결과 같은 검사(토큰·DB 세션·퇴사·멤버십)를 다시 거친다.
-          // 실패·오류·응답 불일치면 재사용하지 않는다(fail-closed → 아래에서 닫고 기존 새 연결).
+          // 실패·오류·시간 초과·응답 불일치면 재사용하지 않는다(fail-closed → 아래에서 닫고 기존 새 연결).
           const genBefore = roomGenRef.current;
-          let revalidated = false;
-          try {
-            const checkUrl = chatDirectoryRoomUrl(roomId, info.token);
-            if (checkUrl) {
-              const res = await fetch(checkUrl, { cache: "no-store" });
-              const body = await res.json().catch(() => null);
-              revalidated = isResumeRevalidationOk(res.status, body, roomId);
-            }
-          } catch {
-            revalidated = false;
-          }
+          const check = await revalidateParkedRoom(
+            (u, init) => fetch(u, init),
+            chatDirectoryRoomUrl(roomId, info.token),
+            roomId,
+            CHAT_WS_REUSE_REVALIDATE_TIMEOUT_MS
+          );
+          const revalidated = check.ok;
+          failReason = check.reason;
           // 확인 중 사용자가 나가거나 다른 방으로 이동: 이 진입은 폐기(소켓은 그 나가기/진입 경로가 이미 파킹·닫기 처리).
           if (roomGenRef.current !== genBefore) return { ok: false, code: "superseded" };
           // TTL·소켓 상태를 다시 확인. 하나라도 어긋나면 재사용 금지 → 아래에서 닫고 새 연결.
-          if (revalidated && eligible()) {
-            const resumed = resume!();
-            if (resumed) return resumed;
+          if (revalidated) {
+            failReason = eligibilityReason();
+            if (failReason === null) {
+              const resumed = resume!();
+              if (resumed) return resumed;
+              failReason = "resume_failed";
+            }
           }
+        } else {
+          failReason = eligibilityReason() ?? "resume_failed";
         }
+        chatPerf.roomReuseFail(failReason ?? "resume_failed");
         if (wsRef.current !== parked.ws) {
           try {
             parked.ws.close();
@@ -828,6 +846,8 @@ export default function ChatClient() {
             // already closed
           }
         }
+      } else if (wsReuseEnabledRef.current && !reconnectingRef.current) {
+        chatPerf.roomReuseFail("not_parked");
       }
       const prev = wsRef.current;
       roomGenRef.current += 1;

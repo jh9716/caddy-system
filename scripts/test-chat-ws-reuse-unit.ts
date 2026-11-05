@@ -1,6 +1,6 @@
 /** Preview 전용 방 WebSocket 재사용(파킹) — no DB, no network. 순수 판정 + ChatClient 배선 정적 검사. */
 import { readFileSync } from "node:fs";
-import { canResumeParked, isParkExpired, isResumeRevalidationOk, resolveChatWsReuse, CHAT_WS_REUSE_TTL_MS, CHAT_WS_REUSE_HISTORY_BEFORE } from "../src/lib/chatWsReuse";
+import { canResumeParked, isParkExpired, isResumeRevalidationOk, revalidateParkedRoom, reuseEligibilityFailReason, revalidationFailReason, revalidationErrorReason, sanitizeReuseFailReason, CHAT_WS_REUSE_REVALIDATE_TIMEOUT_MS, resolveChatWsReuse, CHAT_WS_REUSE_TTL_MS, CHAT_WS_REUSE_HISTORY_BEFORE } from "../src/lib/chatWsReuse";
 import { buildRecord } from "../src/lib/chatPerfDiag";
 let passed = 0, failed = 0;
 function assert(c: unknown, m: string) { if (c) { passed++; console.log("  ✓", m); } else { failed++; console.error("  ✗", m); } }
@@ -75,12 +75,54 @@ assert(/parkedAt: Date\.now\(\)/.test(src), "파킹 시작 시각 기록");
 assert(/addEventListener\("visibilitychange"/.test(src) && /addEventListener\("pageshow", check\)/.test(src) && /isParkExpired\(parked\.parkedAt, Date\.now\(\)\)\) dropParkedRoomSocket\(\)/.test(src), "복귀(visibility/pageshow) 시 TTL 초과면 즉시 폐기");
 assert(/socketStopPingRef\.current\.get\(ws\)\?\.\(\);[\s\S]{0,200}parkedRoomRef\.current = \{ \.\.\.meta, ws, timer, parkedAt/.test(src), "파킹 시 진단 핑 타이머 정리");
 const resumeBlock = src.slice(src.indexOf("const eligible = () =>"), src.indexOf("const prev = wsRef.current;"));
-assert(/chatDirectoryRoomUrl\(roomId, info\.token\)/.test(resumeBlock) && /isResumeRevalidationOk\(res\.status, body, roomId\)/.test(resumeBlock), "재개 전 Worker 방 조회로 권한 재확인");
-assert(resumeBlock.indexOf("isResumeRevalidationOk") < resumeBlock.indexOf("resume!()"), "재확인 통과 후에만 재개");
-assert(/if \(revalidated && eligible\(\)\)/.test(resumeBlock), "재확인 후 TTL·소켓 상태 재검사");
+assert(/revalidateParkedRoom\(\s*\(u, init\) => fetch\(u, init\),\s*chatDirectoryRoomUrl\(roomId, info\.token\),\s*roomId,\s*CHAT_WS_REUSE_REVALIDATE_TIMEOUT_MS/.test(resumeBlock), "재개 전 Worker 방 조회로 권한 재확인(시간 제한)");
+assert(resumeBlock.indexOf("revalidateParkedRoom") < resumeBlock.indexOf("resume!()"), "재확인 통과 후에만 재개");
+assert(/if \(revalidated\) \{\s*failReason = eligibilityReason\(\);\s*if \(failReason === null\)/.test(resumeBlock), "재확인 후 TTL·소켓 상태 재검사");
+assert(/chatPerf\.roomReuseFail\(failReason \?\? "resume_failed"\)/.test(resumeBlock), "실패 사유를 chatPerf 에 기록(코드만)");
 assert(/if \(roomGenRef\.current !== genBefore\) return \{ ok: false, code: "superseded" \}/.test(resumeBlock), "확인 중 나가기/방 이동 → 이 진입 폐기(섞임 방지)");
-assert(/catch \{\s*revalidated = false;/.test(resumeBlock), "재확인 오류 → 재사용 금지");
 assert(/try \{\s*parked\.ws\.close\(\);/.test(resumeBlock), "재사용 실패 → 파킹 소켓 닫고 기존 새 연결로");
 
-console.log(`\nchat-ws-reuse-unit: ${passed} passed, ${failed} failed`);
-if (failed) process.exit(1);
+// 실패 사유(진단) — 코드만
+assert(reuseEligibilityFailReason(null, req) === "not_parked", "사유: 파킹 없음");
+assert(reuseEligibilityFailReason(p, { ...req, nowMs: T0 + 45_000 }) === "ttl", "사유: TTL");
+assert(reuseEligibilityFailReason(p, { ...req, socketOpen: false }) === "socket", "사유: 소켓");
+assert(reuseEligibilityFailReason(p, { ...req, roomId: "B" }) === "room_mismatch", "사유: 방 불일치");
+assert(reuseEligibilityFailReason(p, { ...req, token: "t2" }) === "token", "사유: 토큰 교체");
+assert(reuseEligibilityFailReason({ ...p, exp: now + 5 }, req) === "token_exp", "사유: 토큰 만료 임박");
+assert(reuseEligibilityFailReason(p, req) === null, "사유: 통과");
+assert(revalidationFailReason(401, null, "A") === "revalidate_401" && revalidationFailReason(403, null, "A") === "revalidate_403" && revalidationFailReason(404, null, "A") === "revalidate_404" && revalidationFailReason(502, null, "A") === "revalidate_5xx" && revalidationFailReason(429, null, "A") === "revalidate_4xx", "사유: HTTP 상태");
+assert(revalidationFailReason(200, { room: { roomId: "B" } }, "A") === "room_mismatch" && revalidationFailReason(200, {}, "A") === "revalidate_body" && revalidationFailReason(200, ok, "A") === null, "사유: 200 본문");
+assert(revalidationErrorReason(new TypeError("Failed to fetch"), false) === "network_or_cors", "사유: CORS/네트워크(TypeError)");
+assert(revalidationErrorReason({ name: "AbortError" }, false) === "timeout" && revalidationErrorReason(new Error("x"), true) === "timeout", "사유: 시간 초과");
+assert(sanitizeReuseFailReason("cors<script>") === null && sanitizeReuseFailReason("ttl") === "ttl", "사유 화이트리스트");
+assert(CHAT_WS_REUSE_REVALIDATE_TIMEOUT_MS >= 2000 && CHAT_WS_REUSE_REVALIDATE_TIMEOUT_MS <= 3000, "재확인 시간 제한 2~3초");
+const perfRec = buildRecord(3, { ...base, reuseFail: "network_or_cors" }, 4, true) as { reuseFail: string | null };
+assert(perfRec.reuseFail === "network_or_cors", "chatPerf: 실패 사유 기록");
+assert((buildRecord(4, { ...base, reuseFail: "room=abc" as string }, 4, true) as { reuseFail: string | null }).reuseFail === null, "chatPerf: 임의 문자열 거부");
+
+// 재확인 실행(mock fetch) — 성공/실패/시간 초과, fail-closed
+const mk = (status: number, body: unknown) => async () => ({ status, json: async () => body });
+const runs: Array<[string, Promise<{ ok: boolean; reason: string | null }>, boolean, string | null]> = [
+  ["200 성공", revalidateParkedRoom(mk(200, ok), "u", "A", 200), true, null],
+  ["401", revalidateParkedRoom(mk(401, { error: "stale_session" }), "u", "A", 200), false, "revalidate_401"],
+  ["403", revalidateParkedRoom(mk(403, { error: "room_forbidden" }), "u", "A", 200), false, "revalidate_403"],
+  ["404", revalidateParkedRoom(mk(404, null), "u", "A", 200), false, "revalidate_404"],
+  ["503", revalidateParkedRoom(mk(503, null), "u", "A", 200), false, "revalidate_5xx"],
+  ["CORS 차단(TypeError)", revalidateParkedRoom(async () => { throw new TypeError("Failed to fetch"); }, "u", "A", 200), false, "network_or_cors"],
+  ["응답 없음 → 시간 초과", revalidateParkedRoom(() => new Promise(() => undefined), "u", "A", 50), false, "timeout"],
+  ["본문 지연 → 시간 초과", revalidateParkedRoom(async () => ({ status: 200, json: () => new Promise(() => undefined) }), "u", "A", 50), false, "timeout"],
+  ["URL 없음", revalidateParkedRoom(mk(200, ok), "", "A", 200), false, "network_or_cors"],
+  ["다른 방 200", revalidateParkedRoom(mk(200, { ok: true, room: { roomId: "B" } }), "u", "A", 200), false, "room_mismatch"],
+];
+
+(async () => {
+  for (const [name, pr, wantOk, wantReason] of runs) {
+    const r = await pr;
+    assert(r.ok === wantOk && r.reason === wantReason, `재확인 ${name} → ok=${wantOk} ${wantReason ?? ""}`);
+  }
+  const t0 = Date.now();
+  await revalidateParkedRoom(() => new Promise(() => undefined), "u", "A", 80);
+  assert(Date.now() - t0 < 1000, "시간 초과는 오래 기다리지 않음");
+  console.log(`\nchat-ws-reuse-unit: ${passed} passed, ${failed} failed`);
+  if (failed) process.exit(1);
+})();

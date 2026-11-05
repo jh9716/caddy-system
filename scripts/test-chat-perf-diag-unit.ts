@@ -20,7 +20,7 @@ assert(classifyEntry({ hasPrevious: true, sameAsPrevious: true, deepLink: true }
 
 const r = buildRecord(1, { kind: "switch", tap: 0, tokenStart: 0, tokenEnd: 40, tokenFetched: true, open: 300, history: 420, commit: 450 }, 470, true);
 assert(r.tapToOpenMs === 300 && r.openToHistoryMs === 120 && r.historyToRenderMs === 30 && r.tapToVisibleMs === 470 && r.tokenMs === 40, "구간 계산");
-const allowed = ["n", "kind", "tokenMs", "tokenFetched", "tapToOpenMs", "openToHistoryMs", "historyToRenderMs", "tapToVisibleMs", "reused", "ok"];
+const allowed = ["n", "kind", "tokenMs", "tokenFetched", "tapToOpenMs", "openToHistoryMs", "historyToRenderMs", "tapToVisibleMs", "reused", "reuseFail", "ok"];
 assert(Object.keys(r).every((k) => allowed.includes(k)) && Object.keys(r).length === allowed.length, "레코드 필드는 ms/라벨만 (PII 필드 없음)");
 assert(Object.values(r).every((v) => typeof v === "number" || typeof v === "boolean" || v === null || ["first","switch","reentry","deeplink"].includes(v as string)), "레코드 값은 숫자/불리언/일반 라벨만");
 const t = chatPerfText({ entries: [r], list: [{ n: 1, tokenMs: 50, connectToListMs: 200 }], server: [], net: [] });
