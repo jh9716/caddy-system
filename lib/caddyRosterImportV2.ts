@@ -43,6 +43,12 @@ import {
 } from "../src/lib/caddySlot";
 import { lockCaddyTableForSlotMutation } from "../src/lib/caddySlotLock";
 import {
+  employmentBecameRetired,
+  incrementSessionVersionForCaddyLink,
+  type SessionRevocationDb,
+} from "../src/lib/sessionRevocation";
+import { notifyChatSessionRevokedForCaddyLinks } from "../src/lib/chatSessionRevoke";
+import {
   isPrimaryTeam,
   occupiesHouseThirdSlot,
   parseImportThirdBandSubgroup,
@@ -196,6 +202,10 @@ export type RosterApplyResult = {
   created: number;
   phoneUpdated: number;
   createdIds: number[];
+  /** 이번 반영으로 RETIRED 로 바뀐 캐디에 연결된 계정의 sessionVersion 증가 수(개별 퇴사와 같은 규칙). */
+  sessionsRevoked?: number;
+  /** 채팅 세션 폐기 알림 실패 수(재시도 후). 0 이 아니면 열린 채팅 소켓이 토큰 만료까지 남을 수 있음. */
+  chatRevokeFailed?: number;
 };
 
 function splitCsvLine(line: string): string[] {
@@ -2334,6 +2344,14 @@ export async function applyRosterImportPayloadV2(
     createData.push(data);
   }
 
+  const retireCandidateIds = Array.from(
+    new Set(
+      normUpdates
+        .filter((u) => String(u.employmentStatus ?? "").toUpperCase() === "RETIRED")
+        .map((u) => u.id)
+    )
+  );
+
   const run = async (client: PrismaLike) => {
     await assertImportSlotGuardAfterLock(
       client,
@@ -2342,6 +2360,20 @@ export async function applyRosterImportPayloadV2(
       normUpdates,
       normCreates
     );
+
+    // 퇴사 전환 대상: 잠금 이후 실제 현재 상태를 다시 읽어 "RETIRED 가 아니던 → RETIRED" 인 캐디만(개별 퇴사와 같은 규칙).
+    const retiringIds: number[] = [];
+    if (retireCandidateIds.length > 0) {
+      const liveRows = await client.caddy.findMany({
+        where: { id: { in: retireCandidateIds } },
+        select: { id: true, employmentStatus: true },
+      });
+      for (const row of liveRows) {
+        if (employmentBecameRetired(row.employmentStatus, "RETIRED")) {
+          retiringIds.push(row.id);
+        }
+      }
+    }
 
     let updated = 0;
     if (batchUpdates.length > 0) {
@@ -2384,22 +2416,62 @@ export async function applyRosterImportPayloadV2(
       }
     }
 
+    // 같은 트랜잭션에서 sessionVersion 증가(개별 퇴사 writeCaddyRevokingRetiredSessions 와 동일). 실패 시 전체 롤백.
+    let sessionsRevoked = 0;
+    if (retiringIds.length > 0) {
+      const userDb = (client as unknown as { user?: unknown }).user;
+      if (!userDb) {
+        throw new Error("session revocation unavailable for retire import");
+      }
+      for (const caddyId of retiringIds) {
+        sessionsRevoked += await incrementSessionVersionForCaddyLink(
+          client as unknown as SessionRevocationDb,
+          caddyId
+        );
+      }
+    }
+
     return {
       updated,
       created: createdIds.length,
       phoneUpdated,
       createdIds,
-    } satisfies RosterApplyResult;
+      sessionsRevoked,
+      retiringIds,
+    };
+  };
+
+  // 커밋 이후에만 채팅 세션 폐기 알림(기존 개별 퇴사와 같은 순서). 실패는 집계·로그(식별자 없음).
+  const finish = async (r: Awaited<ReturnType<typeof run>>): Promise<RosterApplyResult> => {
+    let chatRevokeFailed = 0;
+    if (r.retiringIds.length > 0) {
+      const results = await notifyChatSessionRevokedForCaddyLinks(
+        prisma as unknown as Parameters<typeof notifyChatSessionRevokedForCaddyLinks>[0],
+        r.retiringIds
+      );
+      chatRevokeFailed = results.filter((x) => x === "failed").length;
+      if (chatRevokeFailed > 0) {
+        console.error(
+          `[roster-import] chat session revoke notify failed: ${chatRevokeFailed}/${results.length}`
+        );
+      }
+    }
+    return {
+      updated: r.updated,
+      created: r.created,
+      phoneUpdated: r.phoneUpdated,
+      createdIds: r.createdIds,
+      sessionsRevoked: r.sessionsRevoked,
+      chatRevokeFailed,
+    };
   };
 
   try {
-    if (typeof prisma.$transaction === "function") {
-      return await prisma.$transaction(
-        (tx) => run(tx),
-        ROSTER_IMPORT_APPLY_TX_OPTIONS
-      );
-    }
-    return await run(prisma);
+    const committed =
+      typeof prisma.$transaction === "function"
+        ? await prisma.$transaction((tx) => run(tx), ROSTER_IMPORT_APPLY_TX_OPTIONS)
+        : await run(prisma);
+    return await finish(committed);
   } catch (e) {
     if (e instanceof RosterImportApplyError) throw e;
     if (e instanceof ThirdBandSubgroupError) {

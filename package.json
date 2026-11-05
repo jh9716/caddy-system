@@ -19,6 +19,7 @@
     "postinstall": "prisma generate",
     "tsx:safe": "bash scripts/tsx-safe.sh",
     "test:db-safety-unit": "bash scripts/tsx-safe.sh scripts/test-db-safety-unit.ts",
+    "test:session-revoke-fix-unit": "bash scripts/tsx-safe.sh scripts/test-session-revoke-fix-unit.ts",
     "test:roster-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-roster-unit.ts",
     "test:caddy-roster-board-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-roster-board-unit.ts",
     "test:caddy-manage-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-manage-unit.ts",
