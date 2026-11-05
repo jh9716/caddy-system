@@ -10,7 +10,7 @@ import { isPreviewWorker, type NextAppEnv } from "./nextApp";
 
 export const WS_PERF_HEADER = "x-chat-ws-perf";
 const KEYS = ["tok", "sc", "scApp", "scDb", "scCold", "mem", "sign", "edge"] as const;
-const DO_KEYS = ["doAssert", "doAccept", "doHist"] as const;
+const DO_KEYS = ["doAssert", "doAccept", "doHist", "doFirst", "doAge"] as const;
 export type PerfKey = (typeof KEYS)[number];
 export type PerfMarks = Partial<Record<PerfKey, number>>;
 const MAX_MS = 600000;
@@ -68,4 +68,31 @@ export function perfFrame(edge: PerfMarks, dO: Partial<Record<(typeof DO_KEYS)[n
   for (const k of KEYS) { const v = clampMs(edge[k]); if (v != null) t[k] = v; }
   for (const k of DO_KEYS) { const v = clampMs(dO[k]); if (v != null) t[k] = v; }
   return JSON.stringify({ type: "perf", v: 1, t });
+}
+
+/** 휴대폰↔WS 응답 경로 RTT 측정용 자동응답 문자열 (JSON 아님 → 기존 핸들러가 처리하지 않음). Preview DO 에서만 설정. */
+export const PERF_PING = "vh-perf-ping";
+export const PERF_PONG = "vh-perf-pong";
+/** Worker → DO 로 colo 를 넘기는 Preview 전용 내부 헤더 (클라이언트 입력은 항상 제거 후 덮어씀). */
+export const WS_COLO_HEADER = "x-chat-ws-colo";
+
+/** Cloudflare colo 는 정확히 대문자 3글자(IATA)만 허용. 그 외는 null. */
+export function safeColo(v: unknown): string | null {
+  return typeof v === "string" && /^[A-Z]{3}$/.test(v) ? v : null;
+}
+
+/** DO 인스턴스 나이 구간: 0 <10s, 1 <60s, 2 <10m, 3 ≥10m (DO 시계, I/O 기준 근사). */
+export function doAgeBucket(ms: number): number {
+  if (!Number.isFinite(ms) || ms < 10000) return 0;
+  if (ms < 60000) return 1;
+  if (ms < 600000) return 2;
+  return 3;
+}
+
+/** perfFrame + colo(검증된 3글자만). */
+export function perfFrameWithColo(edge: PerfMarks, dO: Parameters<typeof perfFrame>[1], colo: unknown): string {
+  const base = JSON.parse(perfFrame(edge, dO)) as { type: string; v: number; t: Record<string, number>; colo?: string };
+  const c = safeColo(colo);
+  if (c) base.colo = c;
+  return JSON.stringify(base);
 }

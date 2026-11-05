@@ -74,7 +74,7 @@ import {
 import { diagEnabled, diagLog, diagPath, diagnoseTokenFailure } from "./diag"; // TEMPORARY DIAGNOSTIC
 import { nextAppExtraHeaders, nextAppFetchInit, nextAppUrl, nextPushDispatchUrl } from "./nextApp";
 
-import { WS_PERF_HEADER, decodePerf, encodePerf, perfEnabled, perfFrame, type PerfMarks } from "./perfTiming";
+import { PERF_PING, PERF_PONG, WS_COLO_HEADER, WS_PERF_HEADER, decodePerf, doAgeBucket, encodePerf, perfEnabled, perfFrameWithColo, safeColo, type PerfMarks } from "./perfTiming";
 import { attachWsAssertion, readWsAssertion, stripWsAssertionHeaders } from "./wsAssertion";
 
 export { validateIncomingMessage, isValidRoomName } from "./protocol";
@@ -330,6 +330,13 @@ export default {
         stripWsAssertionHeaders(forwarded.headers);
       }
       if (perf) {
+        try {
+          forwarded.headers.delete(WS_COLO_HEADER);
+          const colo = safeColo((request as { cf?: { colo?: unknown } }).cf?.colo);
+          if (colo) forwarded.headers.set(WS_COLO_HEADER, colo);
+        } catch {
+          forwarded.headers.delete(WS_COLO_HEADER);
+        }
         try {
           forwarded.headers.delete(WS_PERF_HEADER);
           perf.edge = Date.now() - tEdge;
@@ -590,8 +597,21 @@ type SocketAttach = { claims: ChatTokenClaims; roomId: string };
 export class ChatRoom extends DurableObject<Env> {
   private persistQueue: Promise<void> = Promise.resolve();
 
+  // Preview 전용 계측: 이 인스턴스의 fetch 횟수·생성 시각 (DO 시계).
+  private perfFetchCount = 0;
+  private perfBornAt = Date.now();
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    // Preview 전용: 휴대폰↔WS 응답 경로 RTT 측정용 자동응답. 운영(audience≠preview)에서는 호출하지 않는다.
+    // 자동응답은 DO JS 를 깨우지 않으며, 정확히 PERF_PING 문자열에만 반응한다(기존 클라이언트는 이 문자열을 보내지 않음).
+    if (perfEnabled(env)) {
+      try {
+        this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(PERF_PING, PERF_PONG));
+      } catch {
+        // 계측 실패 무시
+      }
+    }
     this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS messages (
         seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -696,6 +716,9 @@ export class ChatRoom extends DurableObject<Env> {
   }
 
   async fetch(request: Request): Promise<Response> {
+    // Preview 계측용: 이 인스턴스의 첫 fetch 여부(내부 요청 포함). 값은 Preview perf 프레임에서만 쓰인다.
+    const perfFirst = this.perfFetchCount === 0 ? 1 : 0;
+    this.perfFetchCount += 1;
     const url = new URL(request.url);
     if (request.method === "POST" && url.pathname === CHAT_ROOM_REVOKE_PATH) {
       if (!(await verifyInternalRequest(request, this.env, url.pathname))) {
@@ -776,9 +799,10 @@ export class ChatRoom extends DurableObject<Env> {
     if (perfOn) {
       try {
         // history 뒤에 보낸다 → 기존 history 타이밍에 영향 없음. 클라이언트는 모르는 type 을 무시.
-        server.send(perfFrame(decodePerf(request.headers.get(WS_PERF_HEADER)), {
+        server.send(perfFrameWithColo(decodePerf(request.headers.get(WS_PERF_HEADER)), {
           doAssert, doAccept, doHist: Date.now() - tDo - doAssert - doAccept,
-        }));
+          doFirst: perfFirst, doAge: doAgeBucket(tDo - this.perfBornAt),
+        }, request.headers.get(WS_COLO_HEADER)));
       } catch {
         // 계측 실패 무시
       }
