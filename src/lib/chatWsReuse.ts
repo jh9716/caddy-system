@@ -31,12 +31,36 @@ export function resolveChatWsReuse(
 
 export type ParkedSocketMeta = { roomId: string; token: string; exp: number };
 
-/** 재사용 가능: 같은 방 + 같은 토큰 + 토큰 만료 30초 이상 남음 + 소켓 OPEN. 하나라도 아니면 새 연결. */
+/**
+ * 파킹 경과 판정(벽시계 기준). 모바일 백그라운드에서 setTimeout 이 늦게 돌아도 실제 경과로 판단한다.
+ * 시작 시각이 없거나 시계가 거꾸로 가면(음수) 만료로 본다(fail-closed).
+ */
+export function isParkExpired(parkedAt: number | null | undefined, nowMs: number, ttlMs: number = CHAT_WS_REUSE_TTL_MS): boolean {
+  if (typeof parkedAt !== "number" || !Number.isFinite(parkedAt) || !Number.isFinite(nowMs)) return true;
+  const elapsed = nowMs - parkedAt;
+  return elapsed < 0 || elapsed > ttlMs;
+}
+
+/**
+ * 재개 직전 권한 재확인 결과 판정(fail-closed).
+ * 기존 Worker GET /directory/rooms/{roomId}?token=(파킹 소켓과 같은 토큰) 은 새 연결과 같은 확인을 거친다:
+ * 토큰 서명·만료 → Worker→앱 session-check(DB sessionVersion·퇴사/채팅 차단) → Directory 멤버십(전체방 제외).
+ * HTTP 200 이고 응답 방이 요청 방과 같을 때만 통과. 그 외(401/403/404/5xx/네트워크/형식 오류)는 재사용 금지 → 새 연결.
+ */
+export function isResumeRevalidationOk(status: number | null | undefined, body: unknown, roomId: string): boolean {
+  if (status !== 200 || !roomId || !body || typeof body !== "object") return false;
+  const room = (body as { room?: unknown }).room;
+  if (!room || typeof room !== "object") return false;
+  return (room as { roomId?: unknown }).roomId === roomId;
+}
+
+/** 재사용 가능: 파킹 경과 ≤ TTL + 같은 방 + 같은 토큰 + 토큰 만료 30초 이상 남음 + 소켓 OPEN. 하나라도 아니면 새 연결. */
 export function canResumeParked(
   parked: ParkedSocketMeta | null | undefined,
-  req: { roomId: string; token: string; nowSec: number; socketOpen: boolean }
+  req: { roomId: string; token: string; nowSec: number; socketOpen: boolean; parkedAt?: number | null; nowMs?: number }
 ): boolean {
   if (!parked || !req.socketOpen) return false;
+  if (isParkExpired(req.parkedAt, typeof req.nowMs === "number" ? req.nowMs : NaN)) return false;
   if (!parked.roomId || parked.roomId !== req.roomId) return false;
   if (!parked.token || parked.token !== req.token) return false;
   if (!Number.isFinite(parked.exp) || parked.exp - 30 <= req.nowSec) return false;
