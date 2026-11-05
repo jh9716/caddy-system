@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { chatPerf, chatPerfEnabled, chatPerfText, getChatPerfState, initChatPerf, kindLabel, serverPerfLine, subscribeChatPerf } from "@/lib/chatPerfDiag";
+import { chatPerf, chatPerfEnabled, chatPerfText, getChatPerfState, initChatPerf, kindLabel, netPerfLine, serverPerfLine, subscribeChatPerf } from "@/lib/chatPerfDiag";
 
 const empty = getChatPerfState();
 const f = (v: number | null) => (v == null ? "-" : String(v));
@@ -31,6 +31,7 @@ export default function ChatPerfPanel() {
           </tbody></table>
       ) : null}
       {open ? (s.server || []).map((r) => <div key={`s${r.n}`} style={{ whiteSpace: "normal" }}>{serverPerfLine(r)}</div>) : null}
+      {open ? (s.net || []).map((r) => <div key={`n${r.n}`} style={{ whiteSpace: "normal" }}>{netPerfLine(r)}</div>) : null}
     </div>
   );
 }

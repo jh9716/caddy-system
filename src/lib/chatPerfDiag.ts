@@ -23,11 +23,88 @@ export type ChatPerfRecord = {
 export type ChatPerfListRecord = { n: number; tokenMs: number | null; connectToListMs: number | null };
 
 /** Preview Worker 가 보낸 서버 구간(ms). 허용 키·정수만. */
-export const CHAT_PERF_SERVER_KEYS = ["tok", "sc", "scApp", "scDb", "scCold", "mem", "sign", "edge", "doAssert", "doAccept", "doHist"] as const;
+export const CHAT_PERF_SERVER_KEYS = ["tok", "sc", "scApp", "scDb", "scCold", "mem", "sign", "edge", "doAssert", "doAccept", "doHist", "doFirst", "doAge"] as const;
 /** entry: 같은 소켓(시도)으로 측정된 진입 기록 번호. 아직 진행 중이면 null. 다른 방/시도에는 절대 붙지 않는다. */
 export type ChatPerfServerRecord = { n: number; attempt: number; entry: number | null; t: Partial<Record<(typeof CHAT_PERF_SERVER_KEYS)[number], number>> };
 
-export type ChatPerfState = { entries: ChatPerfRecord[]; list: ChatPerfListRecord[]; server: ChatPerfServerRecord[] };
+/**
+ * 연결(소켓) 단위 네트워크 기록. attempt 는 그 진입의 "첫 소켓"에만 부여된다(재연결 소켓은 null → 기록 안 함).
+ * - tapToCtorMs: 탭 → new WebSocket 직전
+ * - ctorToOpenMs: new WebSocket 직전 → open 이벤트 발생 시각(event.timeStamp)
+ * - evToHandlerMs: open 이벤트 발생 → 핸들러 실행(메인 스레드 대기)
+ * - colo: 실제 WS 를 처리한 Worker colo(대문자 3글자만), doFirst: DO 인스턴스 첫 fetch(0/1)
+ * - rtt: 휴대폰↔WS 응답 경로 RTT 샘플(ms). Worker→DO 전용 RTT 가 아님.
+ */
+export type ChatPerfNetRecord = {
+  n: number;
+  attempt: number;
+  entry: number | null;
+  tapToCtorMs: number | null;
+  ctorToOpenMs: number | null;
+  evToHandlerMs: number | null;
+  colo: string | null;
+  doFirst: 0 | 1 | null;
+  rtt: number[];
+};
+export const CHAT_PERF_PING = "vh-perf-ping";
+export const CHAT_PERF_PONG = "vh-perf-pong";
+export const CHAT_PERF_PING_COUNT = 3;
+
+export type ChatPerfState = { entries: ChatPerfRecord[]; list: ChatPerfListRecord[]; server: ChatPerfServerRecord[]; net: ChatPerfNetRecord[] };
+
+/** 순수: 진입(attempt)의 첫 소켓에만 번호 부여. 이미 쓴 번호(같은 진입의 재연결 소켓)면 null. */
+export function bindSocketAttempt(pendingAttempt: number | null | undefined, bound: Set<number>): number | null {
+  if (typeof pendingAttempt !== "number" || !Number.isInteger(pendingAttempt) || pendingAttempt <= 0) return null;
+  if (bound.has(pendingAttempt)) return null;
+  bound.add(pendingAttempt);
+  if (bound.size > 50) bound.delete(bound.values().next().value as number);
+  return pendingAttempt;
+}
+
+/** 순수: colo 는 정확히 대문자 3글자만. */
+export function safeColo(v: unknown): string | null {
+  return typeof v === "string" && /^[A-Z]{3}$/.test(v) ? v : null;
+}
+
+/**
+ * 순수: open 이벤트 시각 정리. event.timeStamp 는 최신 브라우저에서 performance.now() 와 같은 기준(DOMHighResTimeStamp).
+ * 구형 브라우저가 epoch ms 를 주거나 값이 이상하면(음수, 생성자 이전, 핸들러 이후) null.
+ */
+export function openTimings(ctor: number | null, evTs: unknown, handlerNow: number): { ctorToOpenMs: number | null; evToHandlerMs: number | null } {
+  const ev = typeof evTs === "number" && Number.isFinite(evTs) && evTs > 0 && evTs <= handlerNow + 1 && (ctor == null || evTs >= ctor) ? evTs : null;
+  return {
+    ctorToOpenMs: ev == null ? null : diffMs(ctor, ev),
+    evToHandlerMs: ev == null ? null : diffMs(ev, Math.max(ev, handlerNow)),
+  };
+}
+
+/** 순수: RTT 샘플 추가 (정수 0~60000, 최대 PING_COUNT 개). */
+export function addRttSample(rtt: readonly number[], ms: unknown): number[] {
+  if (rtt.length >= CHAT_PERF_PING_COUNT) return rtt.slice();
+  const v = typeof ms === "number" && Number.isFinite(ms) ? Math.round(ms) : NaN;
+  if (!Number.isInteger(v) || v < 0 || v > 60000) return rtt.slice();
+  return [...rtt, v];
+}
+
+export function rttStats(rtt: readonly number[]): { min: number | null; median: number | null } {
+  if (!rtt.length) return { min: null, median: null };
+  const s = [...rtt].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return { min: s[0]!, median: s.length % 2 ? s[mid]! : Math.round((s[mid - 1]! + s[mid]!) / 2) };
+}
+
+/** 순수: attempt 가 일치하는 기록에만 갱신 적용. 없으면 그대로(다른 방/시도로 절대 새지 않음). */
+export function updateNet(records: readonly ChatPerfNetRecord[], attempt: number | null | undefined, fn: (r: ChatPerfNetRecord) => ChatPerfNetRecord): ChatPerfNetRecord[] {
+  if (typeof attempt !== "number" || !Number.isInteger(attempt) || attempt <= 0) return records.slice();
+  return records.map((r) => (r.attempt === attempt ? fn(r) : r));
+}
+
+/** 순수: 네트워크 한 줄. 숫자·colo·플래그만. */
+export function netPerfLine(r: ChatPerfNetRecord): string {
+  const f = (v: number | null) => (v == null ? "-" : String(v));
+  const st = rttStats(r.rtt);
+  return `연결#${r.n}(진입#${r.entry ?? "-"}) colo ${r.colo ?? "-"} | 탭→생성 ${f(r.tapToCtorMs)} | 생성→open ${f(r.ctorToOpenMs)} | 이벤트→핸들러 ${f(r.evToHandlerMs)} | DO첫fetch ${r.doFirst == null ? "-" : r.doFirst} | 휴대폰↔WS 응답경로 RTT min ${f(st.min)} / 중앙값 ${f(st.median)} (n=${r.rtt.length})`;
+}
 
 /** 순수: perf 프레임의 t 에서 허용 키의 0~600000 정수만 남긴다. */
 export function sanitizeServerPerf(raw: unknown): ChatPerfServerRecord["t"] {
@@ -123,13 +200,16 @@ export function buildRecord(n: number, p: Pending, visible: number | null, ok: b
 
 // ---- 메모리 상태 (탭 세션 한정) ----
 let enabled = false;
-let state: ChatPerfState = { entries: [], list: [], server: [] };
+let state: ChatPerfState = { entries: [], list: [], server: [], net: [] };
+let netSeq = 0;
+const boundAttempts = new Set<number>();
 let serverSeq = 0;
 let attemptSeq = 0;
 const attemptToEntry = new Map<number, number>();
 const seenAttempts = new Set<number>();
 let pending: Pending | null = null;
 let seq = 0;
+const ctorAt = new Map<number, number>();
 let listSeq = 0;
 let listPending: { tokenStart: number | null; tokenEnd: number | null; connect: number | null } | null = null;
 let tokenFetchStart: number | null = null;
@@ -140,7 +220,7 @@ function now(): number {
   return typeof performance !== "undefined" ? performance.now() : Date.now();
 }
 function emit() {
-  state = { entries: state.entries.slice(), list: state.list.slice(), server: state.server.slice() };
+  state = { entries: state.entries.slice(), list: state.list.slice(), server: state.server.slice(), net: state.net.slice() };
   listeners.forEach((l) => {
     try { l(); } catch { /* ignore */ }
   });
@@ -223,6 +303,7 @@ export const chatPerf = {
         attemptToEntry.set(p.attempt, rec.n);
         if (attemptToEntry.size > 50) attemptToEntry.delete(attemptToEntry.keys().next().value as number);
         state.server = state.server.map((sr) => (sr.attempt === p.attempt && sr.entry == null ? { ...sr, entry: rec.n } : sr));
+        state.net = updateNet(state.net, p.attempt, (r) => (r.entry == null ? { ...r, entry: rec.n } : r));
       }
       state.entries = [rec, ...state.entries].slice(0, CHAT_PERF_MAX);
       emit();
@@ -231,11 +312,49 @@ export const chatPerf = {
   /** new WebSocket 직후 호출: 이 소켓이 속한 시도 번호(없으면 null). 소켓 클로저에 보관한다. */
   socketAttempt(): number | null {
     if (!enabled) return null;
-    try { return pending?.attempt ?? null; } catch { return null; }
+    try {
+      // 진입당 첫 소켓에만 부여: 같은 진입 중 재연결 소켓은 null → 값이 섞이지 않음.
+      return bindSocketAttempt(pending?.attempt ?? null, boundAttempts);
+    } catch { return null; }
   },
-  serverPerf(raw: unknown, attempt: number | null) {
+  /** new WebSocket 직전 호출(socketAttempt 결과로). 탭→생성 시간 기록. */
+  wsCtor(attempt: number | null) {
+    safe(() => {
+      if (attempt == null || !pending || pending.attempt !== attempt) return;
+      const t = now();
+      const rec: ChatPerfNetRecord = { n: ++netSeq, attempt, entry: null, tapToCtorMs: diffMs(pending.tap, t), ctorToOpenMs: null, evToHandlerMs: null, colo: null, doFirst: null, rtt: [] };
+      ctorAt.set(attempt, t);
+      if (ctorAt.size > 20) ctorAt.delete(ctorAt.keys().next().value as number);
+      state.net = [rec, ...state.net].slice(0, CHAT_PERF_MAX);
+      emit();
+    });
+  },
+  /** open 핸들러 첫 줄에서 호출. */
+  wsOpen(attempt: number | null, evTimeStamp: unknown) {
+    safe(() => {
+      if (attempt == null) return;
+      const h = now();
+      const ot = openTimings(ctorAt.get(attempt) ?? null, evTimeStamp, h);
+      state.net = updateNet(state.net, attempt, (r) => (r.ctorToOpenMs == null && r.evToHandlerMs == null ? { ...r, ...ot } : r));
+      emit();
+    });
+  },
+  /** 휴대폰↔WS 응답 경로 RTT 샘플. 같은 소켓(attempt)의 기록에만. */
+  pingRtt(attempt: number | null, ms: number) {
+    safe(() => {
+      state.net = updateNet(state.net, attempt, (r) => ({ ...r, rtt: addRttSample(r.rtt, ms) }));
+      emit();
+    });
+  },
+  now(): number { return now(); },
+  serverPerf(raw: unknown, attempt: number | null, colo?: unknown) {
     safe(() => {
       const t = sanitizeServerPerf(raw);
+      const c = safeColo(colo);
+      const df = t.doFirst === 0 || t.doFirst === 1 ? t.doFirst : null;
+      if (attempt != null && !seenAttempts.has(attempt)) {
+        state.net = updateNet(state.net, attempt, (r) => ({ ...r, colo: r.colo ?? c, doFirst: r.doFirst ?? (df as 0 | 1 | null) }));
+      }
       if (Object.keys(t).length === 0) return;
       const r = resolveServerEntry(attempt, pending?.attempt ?? null, attemptToEntry, seenAttempts);
       if (!r.accept || attempt == null) return;
@@ -244,7 +363,7 @@ export const chatPerf = {
       emit();
     });
   },
-  clear() { safe(() => { state = { entries: [], list: [], server: [] }; attemptToEntry.clear(); emit(); }); },
+  clear() { safe(() => { state = { entries: [], list: [], server: [], net: [] }; attemptToEntry.clear(); emit(); }); },
 };
 
 const KIND_LABEL: Record<ChatPerfEntryKind, string> = { first: "첫 진입", switch: "방 전환", reentry: "재진입", deeplink: "링크/알림" };
@@ -259,5 +378,6 @@ export function chatPerfText(s: ChatPerfState): string {
   }
   for (const l of s.list) lines.push(`목록#${l.n} 토큰 ${f(l.tokenMs)} | 연결→목록 ${f(l.connectToListMs)}`);
   for (const r of s.server || []) lines.push(serverPerfLine(r));
+  for (const r of s.net || []) lines.push(netPerfLine(r));
   return lines.join("\n");
 }
