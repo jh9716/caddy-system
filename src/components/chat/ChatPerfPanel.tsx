@@ -25,7 +25,7 @@ export default function ChatPerfPanel() {
         <table><thead><tr><th>#</th><th>종류</th><th>토큰</th><th>탭→WS</th><th>WS→hist</th><th>hist→렌더</th><th>전체</th></tr></thead>
           <tbody>
             {s.entries.map((e) => (
-              <tr key={e.n}><td>{e.n}</td><td>{kindLabel(e.kind)}{e.reused ? "♻" : ""}{e.ok ? "" : "✗"}</td><td>{f(e.tokenMs)}{e.tokenFetched ? "" : "*"}</td><td>{f(e.tapToOpenMs)}</td><td>{f(e.openToHistoryMs)}</td><td>{f(e.historyToRenderMs)}</td><td><b>{f(e.tapToVisibleMs)}</b></td></tr>
+              <tr key={e.n}><td>{e.n}</td><td>{kindLabel(e.kind)}{e.reused ? "♻" : ""}{e.reuseFail ? ` ${e.reuseFail}` : ""}{e.ok ? "" : "✗"}</td><td>{f(e.tokenMs)}{e.tokenFetched ? "" : "*"}</td><td>{f(e.tapToOpenMs)}</td><td>{f(e.openToHistoryMs)}</td><td>{f(e.historyToRenderMs)}</td><td><b>{f(e.tapToVisibleMs)}</b></td></tr>
             ))}
             {s.list.map((l) => (<tr key={`l${l.n}`}><td>L{l.n}</td><td>목록</td><td>{f(l.tokenMs)}</td><td colSpan={4}>연결→목록 {f(l.connectToListMs)}</td></tr>))}
           </tbody></table>
