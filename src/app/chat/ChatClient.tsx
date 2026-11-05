@@ -198,7 +198,7 @@ import {
   type ChatSocketOpenResult,
 } from "@/lib/chatDmClient";
 import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
-import { chatPerf, classifyEntry } from "@/lib/chatPerfDiag";
+import { chatPerf, classifyEntry, CHAT_PERF_PING, CHAT_PERF_PING_COUNT, CHAT_PERF_PONG } from "@/lib/chatPerfDiag";
 import ChatPerfPanel from "@/components/chat/ChatPerfPanel";
 
 type TokenPayload = {
@@ -702,17 +702,43 @@ export default function ChatClient() {
       if (prev && (prev.readyState === WebSocket.OPEN || prev.readyState === WebSocket.CONNECTING)) {
         prev.close();
       }
-      const ws = new WebSocket(url);
       // Preview chatPerf: 이 소켓의 측정 시도 번호를 소켓별로 고정(전역 "현재" 값에 붙이지 않음). 비활성이면 null.
       const perfAttempt = chatPerf.socketAttempt();
+      chatPerf.wsCtor(perfAttempt);
+      const ws = new WebSocket(url);
+      // Preview chatPerf 핑(휴대폰↔WS 응답 경로 RTT): 이 소켓 전용 큐/타이머. 새 Worker 의 perf 프레임(doFirst) 수신 후에만 시작.
+      const perfPingSent: number[] = [];
+      const perfPingTimers: number[] = [];
+      let perfPingStarted = false;
+      const stopPerfPing = () => {
+        for (const t of perfPingTimers) window.clearTimeout(t);
+        perfPingTimers.length = 0;
+        perfPingSent.length = 0;
+      };
+      const startPerfPing = () => {
+        if (perfPingStarted || perfAttempt == null) return;
+        perfPingStarted = true;
+        for (let i = 0; i < CHAT_PERF_PING_COUNT; i++) {
+          perfPingTimers.push(window.setTimeout(() => {
+            try {
+              if (gen !== roomGenRef.current || ws.readyState !== WebSocket.OPEN) return stopPerfPing();
+              perfPingSent.push(chatPerf.now());
+              ws.send(CHAT_PERF_PING);
+            } catch {
+              // 계측 실패 무시
+            }
+          }, 300 + i * 400));
+        }
+      };
       wsRef.current = ws;
       if (!reconnectingRef.current) {
         historyResetRef.current = true;
         oldestSeqRef.current = null;
         setHasMore(false);
       }
-      ws.addEventListener("open", () => {
+      ws.addEventListener("open", (ev) => {
         if (gen !== roomGenRef.current) return;
+        chatPerf.wsOpen(perfAttempt, ev.timeStamp);
         chatPerf.roomOpen();
         setConnected(true);
         setFailingSince(null);
@@ -735,6 +761,7 @@ export default function ChatClient() {
         setFailingSince((cur) => cur ?? Date.now());
       });
       ws.addEventListener("close", (ev) => {
+        stopPerfPing();
         if (gen !== roomGenRef.current) return;
         setConnected(false);
         setFailingSince((cur) => cur ?? Date.now());
@@ -773,7 +800,16 @@ export default function ChatClient() {
         void run();
       });
       ws.addEventListener("message", (event) => {
-        if (gen !== roomGenRef.current) return;
+        if (gen !== roomGenRef.current) {
+          stopPerfPing();
+          return;
+        }
+        if (event.data === CHAT_PERF_PONG) {
+          // Preview 전용 핑 응답(JSON 아님). 이 소켓이 보낸 핑에만 대응.
+          const t0 = perfPingSent.shift();
+          if (t0 != null) chatPerf.pingRtt(perfAttempt, chatPerf.now() - t0);
+          return;
+        }
         let data: any;
         try {
           data = JSON.parse(String(event.data));
@@ -781,8 +817,11 @@ export default function ChatClient() {
           return;
         }
         if (data && data.type === "perf") {
-          // Preview Worker 전용 계측 프레임(ms 숫자만). 비활성이면 chatPerf 가 즉시 무시.
-          if (ws.readyState === WebSocket.OPEN) chatPerf.serverPerf(data.t, perfAttempt);
+          // Preview Worker 전용 계측 프레임(ms 숫자·colo·플래그만). 비활성이면 chatPerf 가 즉시 무시.
+          if (ws.readyState === WebSocket.OPEN) {
+            chatPerf.serverPerf(data.t, perfAttempt, data.colo);
+            if (data.t && (data.t.doFirst === 0 || data.t.doFirst === 1)) startPerfPing();
+          }
           return;
         }
         if (data.type === "history" && Array.isArray(data.messages)) {
