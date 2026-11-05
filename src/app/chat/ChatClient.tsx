@@ -703,6 +703,8 @@ export default function ChatClient() {
         prev.close();
       }
       const ws = new WebSocket(url);
+      // Preview chatPerf: 이 소켓의 측정 시도 번호를 소켓별로 고정(전역 "현재" 값에 붙이지 않음). 비활성이면 null.
+      const perfAttempt = chatPerf.socketAttempt();
       wsRef.current = ws;
       if (!reconnectingRef.current) {
         historyResetRef.current = true;
@@ -780,7 +782,7 @@ export default function ChatClient() {
         }
         if (data && data.type === "perf") {
           // Preview Worker 전용 계측 프레임(ms 숫자만). 비활성이면 chatPerf 가 즉시 무시.
-          chatPerf.serverPerf(data.t);
+          if (ws.readyState === WebSocket.OPEN) chatPerf.serverPerf(data.t, perfAttempt);
           return;
         }
         if (data.type === "history" && Array.isArray(data.messages)) {
