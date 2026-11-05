@@ -198,6 +198,8 @@ import {
   type ChatSocketOpenResult,
 } from "@/lib/chatDmClient";
 import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
+import { chatPerf, classifyEntry } from "@/lib/chatPerfDiag";
+import ChatPerfPanel from "@/components/chat/ChatPerfPanel";
 
 type TokenPayload = {
   token: string;
@@ -312,12 +314,17 @@ export default function ChatClient() {
   const [tokenInfo, setTokenInfo] = useState<TokenPayload | null>(null);
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
   const [activeRoom, setActiveRoom] = useState<RoomSummary | null>(null);
+  /** chatPerf 진단 전용: 직전 방과 같은지 비교만 (메모리, 기록·전송 안 함) */
+  const perfLastRoomRef = useRef<string | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [connected, setConnected] = useState(false);
   const [directoryConnected, setDirectoryConnected] = useState(false);
   const [directorySnapshotReady, setDirectorySnapshotReady] = useState(false);
   const [lines, setLines] = useState<ChatLine[]>([]);
+  useEffect(() => {
+    chatPerf.roomCommitted();
+  }, [lines]);
   const [draft, setDraft] = useState("");
   const [mentionTokens, setMentionTokens] = useState<ComposerMention[]>([]);
   const [mentionAllDraft, setMentionAllDraft] = useState(false);
@@ -479,11 +486,13 @@ export default function ChatClient() {
   const fetchToken = useCallback(async () => {
     const startedGen = dirGenRef.current;
     if (!shouldCommitChatToken()) return null;
+    chatPerf.tokenStart();
     const res = await fetch("/api/chat/token", {
       method: "POST",
       credentials: "include",
       cache: "no-store",
     });
+    chatPerf.tokenEnd();
     if (
       !shouldCommitChatToken({
         generationMatches: startedGen === dirGenRef.current,
@@ -597,6 +606,7 @@ export default function ChatClient() {
       if (prev && (prev.readyState === WebSocket.OPEN || prev.readyState === WebSocket.CONNECTING)) {
         prev.close();
       }
+      chatPerf.listConnectStart();
       const ws = new WebSocket(url);
       dirRef.current = ws;
       ws.addEventListener("open", () => {
@@ -656,6 +666,7 @@ export default function ChatClient() {
         }
         if ((data.type === "rooms" || data.type === "room_summary") && Array.isArray(data.rooms)) {
           applyRooms(data.rooms);
+          chatPerf.listReceived();
           setDirectorySnapshotReady(nextDirectorySnapshotReady(false, "authoritative_rooms"));
         }
       });
@@ -700,6 +711,7 @@ export default function ChatClient() {
       }
       ws.addEventListener("open", () => {
         if (gen !== roomGenRef.current) return;
+        chatPerf.roomOpen();
         setConnected(true);
         setFailingSince(null);
         roomAttemptRef.current = 0;
@@ -780,6 +792,7 @@ export default function ChatClient() {
             oldestSeqRef.current = data.oldestSeq;
           }
           if (reset) {
+            chatPerf.roomHistory();
             const next = redactHiddenReplies(hist, hiddenSeqsRef.current);
             setLines(next);
             linesRef.current = next;
@@ -1367,8 +1380,25 @@ export default function ChatClient() {
     room: RoomSummary,
     opts?: { targetSeq?: number | null }
   ): Promise<ChatSocketOpenResult> {
+    try {
+      const prevRoomId = perfLastRoomRef.current;
+      perfLastRoomRef.current = room.roomId;
+      const deep =
+        opts?.targetSeq != null ||
+        (typeof window !== "undefined" &&
+          parseChatTargetSeqFromRoomUrl(room.roomId, window.location.search) != null);
+      chatPerf.roomTap(
+        classifyEntry({ hasPrevious: prevRoomId != null, sameAsPrevious: prevRoomId === room.roomId, deepLink: deep })
+      );
+    } catch {
+      // 진단 전용
+    }
     const info = await refreshIfNeeded();
-    if (!info) return { ok: false, code: "missing_token" };
+    chatPerf.roomTokenReady();
+    if (!info) {
+      chatPerf.roomFailed();
+      return { ok: false, code: "missing_token" };
+    }
     const urlSeq =
       typeof window !== "undefined"
         ? parseChatTargetSeqFromRoomUrl(room.roomId, window.location.search)
@@ -1430,6 +1460,7 @@ export default function ChatClient() {
       mentionFetchedRef.current = "";
     }
     const opened = await connectSocket(info, room.roomId, { waitForOpen: true });
+    if (!opened.ok) chatPerf.roomFailed();
     if (!opened.ok && isDmRoomId(room.roomId)) {
       setError(formatChatClientError(CHAT_DM_OPEN_FAILED, opened.code));
     }
@@ -2395,6 +2426,7 @@ export default function ChatClient() {
 
   return (
     <div className={`vh-chat ${view === "room" ? "is-room" : "is-list"}`}>
+      <ChatPerfPanel />
       {view === "list" ? (
         <>
           <div className="vh-chat-list-head">
