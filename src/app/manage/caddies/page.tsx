@@ -2810,6 +2810,10 @@ export default function ManageCaddiesPage() {
                       updated: Number(data.updated) || 0,
                       created: Number(data.created) || 0,
                       phoneUpdated: Number(data.phoneUpdated) || 0,
+                      chatRevoke:
+                        data.chatRevoke && typeof data.chatRevoke.status === 'string'
+                          ? data.chatRevoke
+                          : null,
                     })
                   );
                   setImportPreview(null);

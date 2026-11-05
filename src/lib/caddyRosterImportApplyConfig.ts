@@ -1,3 +1,4 @@
+import { chatRevokePendingSuffix, type ChatRevokeBulkSummary } from "./chatRevokeSummary";
 /**
  * Import Apply v2 — transaction / route timeout + 사용자 노출 메시지.
  * Preview 규칙·matching·partial commit과 무관.
@@ -35,12 +36,13 @@ export function rosterImportApplySuccessMessage(result: {
   updated: number;
   created: number;
   phoneUpdated?: number;
+  chatRevoke?: ChatRevokeBulkSummary | null;
 }): string {
   const phone =
     typeof result.phoneUpdated === "number"
       ? ` · 전화 ${result.phoneUpdated}`
       : "";
-  return `명단 반영 완료: 갱신 ${result.updated} · 신규 ${result.created}${phone}`;
+  return `명단 반영 완료: 갱신 ${result.updated} · 신규 ${result.created}${phone}${chatRevokePendingSuffix(result.chatRevoke)}`;
 }
 
 /**

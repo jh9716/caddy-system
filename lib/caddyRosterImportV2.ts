@@ -49,6 +49,9 @@ import {
 } from "../src/lib/sessionRevocation";
 import {
   notifyChatSessionRevokedForCaddyLinksDetailed,
+  notifyChatSessionRevokedForCaddyLinksSafe,
+  chatRevokePendingCount,
+  unknownRevokeSummary,
   type ChatRevokeBulkSummary,
 } from "../src/lib/chatSessionRevoke";
 import {
@@ -208,8 +211,8 @@ export type RosterApplyResult = {
   createdIds: number[];
   /** 이번 반영으로 RETIRED 로 바뀐 캐디에 연결된 계정의 sessionVersion 증가 수(개별 퇴사와 같은 규칙). */
   sessionsRevoked?: number;
-  /** 채팅 세션 폐기 알림 실패+미전송 수(설정 없음·시간 상한 포함). 0 이 아니면 열린 채팅 소켓이 토큰 만료까지 남을 수 있음. */
-  chatRevokeFailed?: number;
+  /** 채팅 세션 폐기 알림 실패+미전송 수(설정 없음·시간 상한 포함). null = 알림 처리 예외로 건수 확정 불가(성공 아님). */
+  chatRevokeFailed?: number | null;
   /** 알림 요약(개수·상태만). status: none|ok|not_configured|partial|failed. DB 반영은 이미 커밋된 상태. */
   chatRevoke?: ChatRevokeBulkSummary;
 };
@@ -2450,18 +2453,23 @@ export async function applyRosterImportPayloadV2(
 
   // 커밋 이후에만 채팅 세션 폐기 알림(기존 개별 퇴사와 같은 순서). 실패는 집계·로그(식별자 없음).
   const finish = async (r: Awaited<ReturnType<typeof run>>): Promise<RosterApplyResult> => {
-    const chatRevoke = await notifyChatSessionRevokedForCaddyLinksDetailed(
-      prisma as unknown as Parameters<typeof notifyChatSessionRevokedForCaddyLinksDetailed>[0],
-      r.retiringIds,
-      { deadlineAt: applyStartedAt + ROSTER_IMPORT_APPLY_NOTIFY_DEADLINE_MS }
-    );
+    let chatRevoke: ChatRevokeBulkSummary;
+    try {
+      chatRevoke = await notifyChatSessionRevokedForCaddyLinksSafe(
+        prisma as unknown as Parameters<typeof notifyChatSessionRevokedForCaddyLinksDetailed>[0],
+        r.retiringIds,
+        { deadlineAt: applyStartedAt + ROSTER_IMPORT_APPLY_NOTIFY_DEADLINE_MS }
+      );
+    } catch {
+      chatRevoke = unknownRevokeSummary();
+    }
     return {
       updated: r.updated,
       created: r.created,
       phoneUpdated: r.phoneUpdated,
       createdIds: r.createdIds,
       sessionsRevoked: r.sessionsRevoked,
-      chatRevokeFailed: chatRevoke.failed + chatRevoke.notConfigured + chatRevoke.deadlineSkipped,
+      chatRevokeFailed: chatRevokePendingCount(chatRevoke),
       chatRevoke,
     };
   };
@@ -2494,8 +2502,21 @@ export async function applyRosterImportPayloadV2(
       "apply_failed"
     );
   }
-  // 커밋 이후 단계는 try 밖: 알림 문제로 이미 커밋된 반영이 "반영 실패"로 보고되지 않게 한다.
-  return await finish(committed);
+  // 커밋 이후 단계는 트랜잭션 try 밖 + 자체 예외 차단: 알림 문제로 이미 커밋된 반영이 "반영 실패"로 보고되지 않게 한다.
+  try {
+    return await finish(committed);
+  } catch {
+    console.error("[roster-import-v2] post-commit finish error: status=unknown");
+    return {
+      updated: committed.updated,
+      created: committed.created,
+      phoneUpdated: committed.phoneUpdated,
+      createdIds: committed.createdIds,
+      sessionsRevoked: committed.sessionsRevoked,
+      chatRevokeFailed: null,
+      chatRevoke: unknownRevokeSummary(),
+    };
+  }
 }
 
 /** Excel formula injection 방어: = + - @ 선두면 앞에 ' 부여 */

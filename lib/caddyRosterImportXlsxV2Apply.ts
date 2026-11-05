@@ -12,6 +12,9 @@ import {
 import { lockCaddyTableForSlotMutation } from "../src/lib/caddySlotLock";
 import {
   notifyChatSessionRevokedForCaddyLinksDetailed,
+  notifyChatSessionRevokedForCaddyLinksSafe,
+  chatRevokePendingSuffix,
+  unknownRevokeSummary,
   type ChatRevokeBulkSummary,
 } from "../src/lib/chatSessionRevoke";
 import { ROSTER_IMPORT_APPLY_NOTIFY_DEADLINE_MS } from "../src/lib/caddyRosterImportApplyConfig";
@@ -314,21 +317,22 @@ export async function applyXlsxV2Workbook(
     };
   }, { timeout: 60_000, maxWait: 10_000 });
   // 커밋 이후 폐기 알림: 순차 → 동시 처리 + 시간 상한(요청 제한 초과로 커밋 결과가 실패처럼 보이는 것 방지). 결과는 개수로 보고.
-  const chatRevoke = await notifyChatSessionRevokedForCaddyLinksDetailed(
-    db as unknown as Parameters<typeof notifyChatSessionRevokedForCaddyLinksDetailed>[0],
-    revokedCaddyIds,
-    { deadlineAt: applyStartedAt + ROSTER_IMPORT_APPLY_NOTIFY_DEADLINE_MS }
-  );
+  let chatRevoke: ChatRevokeBulkSummary;
+  try {
+    chatRevoke = await notifyChatSessionRevokedForCaddyLinksSafe(
+      db as unknown as Parameters<typeof notifyChatSessionRevokedForCaddyLinksDetailed>[0],
+      revokedCaddyIds,
+      { deadlineAt: applyStartedAt + ROSTER_IMPORT_APPLY_NOTIFY_DEADLINE_MS }
+    );
+  } catch {
+    console.error("[xlsx-v2-apply] post-commit notify error: status=unknown");
+    chatRevoke = unknownRevokeSummary();
+  }
 
   return { ...result, chatRevoke };
 }
 
 export function xlsxV2ApplySuccessMessage(result: XlsxV2ApplyResult): string {
   const base = `명단 반영 완료: 신규 ${result.created} · 수정 ${result.updated} · 퇴사 ${result.retired} · 드라이빙 ${result.drivingChanged}`;
-  const rv = result.chatRevoke;
-  if (rv && rv.status !== "ok" && rv.status !== "none") {
-    const pending = rv.failed + rv.notConfigured + rv.deadlineSkipped;
-    return `${base} (채팅 접속 종료 알림 미완료 ${pending}건 — 해당 계정의 새 접속은 차단됨)`;
-  }
-  return base;
+  return `${base}${chatRevokePendingSuffix(result.chatRevoke)}`;
 }

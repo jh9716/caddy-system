@@ -19,10 +19,12 @@ import {
 } from "../src/lib/chatSessionRevoke";
 import { employmentBecameRetired } from "../src/lib/sessionRevocation";
 import { xlsxV2ApplySuccessMessage } from "../lib/caddyRosterImportXlsxV2Apply";
+import { notifyChatSessionRevokedForCaddyLinksSafe, isChatSessionRevokeConfigured } from "../src/lib/chatSessionRevoke";
+import { rosterImportApplySuccessMessage } from "../src/lib/caddyRosterImportApplyConfig";
 import { ROSTER_IMPORT_APPLY_NOTIFY_DEADLINE_MS, ROSTER_IMPORT_APPLY_ROUTE_MAX_DURATION_SECONDS } from "../src/lib/caddyRosterImportApplyConfig";
 
 let passed = 0, failed = 0;
-function assert(c: unknown, m: string) { if (c) { passed++; console.log("  ✓", m); } else { failed++; console.error("  ✗", m); } }
+function assert(c: unknown, m: string) { if (c) { passed++; console.log("  ✓", m); } else { failed++; console.log("  ✗", m); } }
 
 // ---- fetch mock ----
 type Plan = Array<number | "throw" | "hang">;
@@ -218,7 +220,7 @@ const base = (id: number, team: string, order: number, emp: string): Row => ({ i
     assert(part.status === "partial" && part.failed === 1, "일부 실패 → partial");
     assert(summarizeRevokeResults(["failed", "failed"], 2).status === "failed", "전부 실패 → failed");
     const badLookup = await notifyChatSessionRevokedForCaddyLinksDetailed({ user: { findMany: async () => { throw new Error("db"); } } }, [1, 2]);
-    assert(badLookup.status === "failed" && badLookup.failed === 2, "대상 조회 실패 → failed(성공 아님)");
+    assert(badLookup.status === "unknown" && badLookup.notified === 0, "대상 조회 실패 → unknown(성공 아님·캐디 수로 추정 안 함)");
   }
 
   console.log("시간 상한(결함 보완 2)");
@@ -256,6 +258,62 @@ const base = (id: number, team: string, order: number, emp: string): Row => ({ i
   }
   assert(xlsxV2ApplySuccessMessage({ ok: true, created: 0, updated: 0, retired: 2, drivingChanged: 0, sessionsRevoked: 2, chatRevoke: { status: "partial", targets: 2, notified: 1, failed: 1, notConfigured: 0, deadlineSkipped: 0 } } as any).includes("미완료 1건"), "XLSX 메시지에 미완료 표시");
   assert(!xlsxV2ApplySuccessMessage({ ok: true, created: 0, updated: 0, retired: 1, drivingChanged: 0, sessionsRevoked: 1, chatRevoke: { status: "ok", targets: 1, notified: 1, failed: 0, notConfigured: 0, deadlineSkipped: 0 } } as any).includes("미완료"), "모두 성공이면 기존 메시지");
+
+  console.log("D1 — 커밋 이후 알림 예외 보호");
+  {
+    // 3) 반영 성공 + 알림 처리 중 예외(행 읽기에서 throw → Promise.all reject)
+    const rows = [base(71, "6조", 1, "ACTIVE")];
+    const { db, userMap, caddies } = makeDb(rows, [{ id: 81, caddyId: 71, sessionVersion: 0 }]);
+    const realTx = db.$transaction;
+    db.$transaction = async (fn: any, o: any) => {
+      const out = await realTx(fn, o);
+      db.user.findMany = async () => [{ id: 81, get sessionVersion(): number { throw new Error("boom-after-commit"); } }];
+      return out;
+    };
+    calls = []; plan = []; errs.length = 0;
+    let threw = false; let r: any;
+    try { r = await applyRosterImportPayloadV2({ updates: [{ id: 71, employmentStatus: "RETIRED" }], creates: [] } as any, db, { existingForGuard: rows }); } catch { threw = true; }
+    assert(!threw, "커밋 후 알림 예외 → apply 가 throw 하지 않음(route 가 apply_failed/500 으로 오인 안 함)");
+    assert(r && r.updated === 1 && caddies.get(71)!.employmentStatus === "RETIRED" && userMap.get(81)!.sessionVersion === 1 && r.sessionsRevoked === 1, "커밋된 명단 반영·sv 증가 결과 보존");
+    assert(r && r.chatRevoke?.status === "unknown" && r.chatRevokeFailed === null, "미완료 건수 확정 불가 → unknown/null (0·추정치로 성공 표시 안 함)");
+    const msg = rosterImportApplySuccessMessage({ updated: r.updated, created: r.created, phoneUpdated: r.phoneUpdated, chatRevoke: r.chatRevoke });
+    assert(msg.startsWith("명단 반영 완료") && msg.includes("미완료(건수 확인 불가)") && !/미완료 0건/.test(msg), "CSV 메시지: 반영 완료 + 알림 미완료(건수 확인 불가)");
+    assert(errs.every((e) => !e.includes("81") && !e.includes("boom") && !e.includes("unit-test-only")), "로그에 식별자·예외 원문·secret 없음");
+  }
+  {
+    // 대상 조회 실패 → 캐디 수로 추정하지 않음
+    const rows = [base(72, "6조", 2, "ACTIVE"), base(73, "6조", 3, "ACTIVE")];
+    const { db } = makeDb(rows, [{ id: 82, caddyId: 72, sessionVersion: 0 }, { id: 83, caddyId: 73, sessionVersion: 0 }]);
+    const realTx = db.$transaction;
+    db.$transaction = async (fn: any, o: any) => { const out = await realTx(fn, o); db.user.findMany = async () => { throw new Error("lookup down"); }; return out; };
+    const r = await applyRosterImportPayloadV2({ updates: [{ id: 72, employmentStatus: "RETIRED" }, { id: 73, employmentStatus: "RETIRED" }], creates: [] } as any, db, { existingForGuard: rows });
+    assert(r.updated === 2 && r.chatRevoke?.status === "unknown" && r.chatRevokeFailed === null, "대상 조회 실패 → unknown(추정 2건 표시 안 함)");
+  }
+  {
+    const s = await notifyChatSessionRevokedForCaddyLinksSafe({ user: { findMany: async () => [{ id: 1, get sessionVersion(): number { throw new Error("x"); } }] } } as any, [1]);
+    assert(s.status === "unknown", "Safe 래퍼: 내부 예외를 삼키고 unknown 반환");
+    const badEnv = new Proxy({} as NodeJS.ProcessEnv, { get() { throw new Error("env boom"); } });
+    let t = false; let c: boolean | undefined; let n: string | undefined;
+    try { c = isChatSessionRevokeConfigured(badEnv); n = await notifyChatSessionRevoked({ userId: 1, sessionVersion: 1 }, badEnv); } catch { t = true; }
+    assert(!t && c === false && n === "failed", "설정 해석 throw → configured=false, 단건 알림 failed(throw 안 함·성공 아님)");
+  }
+
+  console.log("D2 — CSV/XLSX 메시지 일관성");
+  {
+    const sum = (status: any, failed = 0, notConfigured = 0, deadlineSkipped = 0, notified = 0) => ({ status, targets: failed + notConfigured + deadlineSkipped + notified, notified, failed, notConfigured, deadlineSkipped });
+    const csv = (rv: any) => rosterImportApplySuccessMessage({ updated: 3, created: 1, phoneUpdated: 0, chatRevoke: rv });
+    const xlsx = (rv: any) => xlsxV2ApplySuccessMessage({ ok: true, created: 1, updated: 3, retired: 2, drivingChanged: 0, sessionsRevoked: 2, chatRevoke: rv } as any);
+    assert(csv(sum("ok", 0, 0, 0, 2)) === "명단 반영 완료: 갱신 3 · 신규 1 · 전화 0", "CSV 알림 성공 → 기존 메시지 그대로");
+    assert(csv(null) === "명단 반영 완료: 갱신 3 · 신규 1 · 전화 0" && csv(sum("none")) === csv(null), "CSV 대상 없음/구 응답 → 기존 메시지");
+    assert(csv(sum("partial", 1, 0, 0, 1)).endsWith("(채팅 접속 종료 알림 미완료 1건 — 해당 계정의 새 접속은 차단됨)"), "CSV 일부 실패 → 미완료 1건");
+    assert(csv(sum("failed", 2)).includes("미완료 2건"), "CSV 전체 실패 → 미완료 2건");
+    assert(csv(sum("not_configured", 0, 3)).includes("미완료 3건"), "CSV Worker 설정 누락 → 성공 아님(미완료 3건)");
+    assert(csv(sum("failed", 0, 0, 4)).includes("미완료 4건"), "CSV 기한 초과 → 미완료 4건");
+    for (const rv of [sum("partial", 1, 0, 0, 1), sum("not_configured", 0, 3), sum("unknown"), sum("ok", 0, 0, 0, 1)]) {
+      const a = csv(rv).slice(csv(rv).indexOf(" (")), b = xlsx(rv).slice(xlsx(rv).indexOf(" ("));
+      assert(csv(rv).includes(" (") ? a === b : !xlsx(rv).includes(" ("), `CSV/XLSX 알림 꼬리 동일 (${rv.status})`);
+    }
+  }
 
   globalThis.fetch = realFetch;
   console.error = realErr;

@@ -47,8 +47,16 @@ export async function notifyChatSessionRevoked(
   if (!Number.isInteger(userId) || userId <= 0 || sessionVersion == null) {
     return "skipped";
   }
-  const worker = chatHttpBaseUrl();
-  const secret = chatInternalSecret(env);
+  let worker: string | null | undefined;
+  let secret: string | null | undefined;
+  try {
+    // 설정 해석 자체가 throw 할 수 있으므로 try 안에서(값은 출력하지 않음).
+    worker = chatHttpBaseUrl();
+    secret = chatInternalSecret(env);
+  } catch {
+    console.error("[chat-session-revoke] notify config error");
+    return "failed";
+  }
   if (!worker || !secret) {
     // 설정 값은 출력하지 않음. 전송 안 됨 = 성공 아님(호출부가 skipped 로 구분).
     console.warn("[chat-session-revoke] notify not configured");
@@ -171,21 +179,9 @@ export async function notifyChatSessionRevokedForCaddyLink(
   }
 }
 
-/** 일괄 폐기 알림 요약(개수만, 식별자 없음). */
-export type ChatRevokeBulkStatus =
-  | "none" // 알림 대상 계정 없음(연결된 계정이 없는 캐디)
-  | "ok" // 모두 전송 성공
-  | "not_configured" // Worker 주소/내부 인증 설정 없음 → 전송 안 됨(성공 아님)
-  | "partial" // 일부 실패·미전송
-  | "failed"; // 전부 실패·미전송
-export type ChatRevokeBulkSummary = {
-  status: ChatRevokeBulkStatus;
-  targets: number;
-  notified: number;
-  failed: number;
-  notConfigured: number;
-  deadlineSkipped: number;
-};
+import type { ChatRevokeBulkStatus, ChatRevokeBulkSummary } from "@/lib/chatRevokeSummary";
+export type { ChatRevokeBulkStatus, ChatRevokeBulkSummary } from "@/lib/chatRevokeSummary";
+export { chatRevokePendingCount, chatRevokePendingSuffix } from "@/lib/chatRevokeSummary";
 
 export const CHAT_SESSION_REVOKE_BULK_CONCURRENCY = 8;
 
@@ -234,8 +230,8 @@ export async function notifyChatSessionRevokedForCaddyLinksDetailed(
     });
   } catch {
     console.error("[chat-session-revoke] notify lookup failed");
-    // 대상 수를 모르므로 캐디 수 기준 실패로 보고
-    return summarizeRevokeResults(ids.map(() => "failed"), ids.length);
+    // 대상 계정 수를 모르므로 추정하지 않고 unknown 으로 보고
+    return unknownRevokeSummary();
   }
   if (rows.length === 0) return summarizeRevokeResults([], 0);
   const configured = opts?.configured ?? isChatSessionRevokeConfigured();
@@ -270,7 +266,11 @@ export async function notifyChatSessionRevokedForCaddyLinksDetailed(
 
 /** 설정 존재 여부만(값은 읽기만, 출력하지 않음). */
 export function isChatSessionRevokeConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
-  return !!chatHttpBaseUrl() && !!chatInternalSecret(env);
+  try {
+    return !!chatHttpBaseUrl() && !!chatInternalSecret(env);
+  } catch {
+    return false;
+  }
 }
 
 /** 이전 호환(결과 배열). */
@@ -285,3 +285,24 @@ export async function notifyChatSessionRevokedForCaddyLinks(
     ...Array(s.notConfigured).fill("skipped"),
   ];
 }
+
+/** 미완료 건수를 확정할 수 없는 요약(성공 아님). */
+export function unknownRevokeSummary(): ChatRevokeBulkSummary {
+  return { status: "unknown", targets: 0, notified: 0, failed: 0, notConfigured: 0, deadlineSkipped: 0 };
+}
+
+/**
+ * 커밋 이후 전용: 절대 throw 하지 않는 일괄 알림. 예외 시 unknown 요약(건수·식별자 없이 로그).
+ * 이미 커밋된 명단 반영이 알림 예외로 "반영 실패"로 보이지 않게 한다.
+ */
+export async function notifyChatSessionRevokedForCaddyLinksSafe(
+  ...args: Parameters<typeof notifyChatSessionRevokedForCaddyLinksDetailed>
+): Promise<ChatRevokeBulkSummary> {
+  try {
+    return await notifyChatSessionRevokedForCaddyLinksDetailed(...args);
+  } catch {
+    console.error("[chat-session-revoke] bulk notify error after commit: status=unknown");
+    return unknownRevokeSummary();
+  }
+}
+
