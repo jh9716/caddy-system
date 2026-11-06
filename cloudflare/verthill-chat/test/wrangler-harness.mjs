@@ -123,6 +123,9 @@ export async function startWrangler(opts = {}) {
     `CHAT_AUTH_SECRET:${opts.secret || TEST_SECRET}`,
     "--var",
     `CHAT_PUSH_DISPATCH_URL:http://${HOST}:${mock.port}`,
+    // 로컬 하네스 전용: Preview Worker(--env preview)도 127.0.0.1 mock 허용 (bypass 헤더는 보내지 않음). 배포 설정에는 없음.
+    "--var",
+    "CHAT_PREVIEW_LOCAL_HARNESS:1",
   ];
   if (opts.persistTo) {
     args.push("--persist-to", opts.persistTo);

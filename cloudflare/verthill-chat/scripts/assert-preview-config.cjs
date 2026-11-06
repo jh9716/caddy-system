@@ -20,6 +20,7 @@ const cfg = unstable_readConfig({ config: configPath, env: "preview" });
 if (prod.name !== PRODUCTION_NAME) fail(`unexpected top-level worker name ${JSON.stringify(prod.name)}`);
 if (cfg.name !== PREVIEW_NAME) fail(`env.preview worker name must be ${PREVIEW_NAME}, got ${JSON.stringify(cfg.name)}`);
 if (cfg.name === PRODUCTION_NAME || cfg.name === prod.name) fail("preview resolves to the production worker name");
+if (/CHAT_PREVIEW_LOCAL_HARNESS|PREVIEW_APP_BYPASS_SECRET/.test(require("fs").readFileSync(process.argv[2] || "wrangler.jsonc", "utf8"))) fail("local-harness flag or bypass secret must not appear in wrangler config");
 if ((cfg.vars || {}).CHAT_TOKEN_AUDIENCE !== "preview") fail("CHAT_TOKEN_AUDIENCE must be \"preview\"");
 
 const buckets = cfg.r2_buckets || [];

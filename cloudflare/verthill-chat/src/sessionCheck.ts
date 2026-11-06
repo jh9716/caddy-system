@@ -8,6 +8,7 @@ import {
   type ChatTokenClaims,
 } from "./token";
 import { classifySessionProbe, type SessionProbeResult } from "./openSocketRecheck";
+import { isPreviewWorker, isRedirectResponse, nextAppExtraHeaders, nextAppFetchInit, nextAppUrl, type NextAppEnv } from "./nextApp";
 
 export const CHAT_SESSION_CHECK_PATH = "/api/chat/session-check";
 export const CHAT_SESSION_REVOKE_PATH = "/internal/session-revoke";
@@ -16,23 +17,14 @@ export const CHAT_ROOM_REVOKE_PATH = "/internal/revoke-user";
 export const CHAT_ROOM_EVICT_PATH = "/internal/evict-members";
 export const SESSION_CHECK_TIMEOUT_MS = 2500;
 
-export type SessionCheckEnv = {
+export type SessionCheckEnv = NextAppEnv & {
   CHAT_AUTH_SECRET: string;
   CHAT_INTERNAL_SECRET?: string;
-  CHAT_PUSH_DISPATCH_URL?: string;
 };
 
+/** 운영: 기존과 동일하게 CHAT_PUSH_DISPATCH_URL 에서 유도. Preview: 검증된 Preview 호스트만 (아니면 ""). */
 export function nextSessionCheckUrl(env: SessionCheckEnv): string {
-  const pushUrl = String(env.CHAT_PUSH_DISPATCH_URL || "").trim();
-  if (!pushUrl) return "";
-  try {
-    const parsed = new URL(pushUrl);
-    parsed.pathname = CHAT_SESSION_CHECK_PATH;
-    parsed.search = "";
-    return parsed.toString();
-  } catch {
-    return "";
-  }
+  return nextAppUrl(env, CHAT_SESSION_CHECK_PATH);
 }
 
 export function parseSessionRevokeBody(raw: unknown): {
@@ -78,13 +70,21 @@ export async function assertChatSessionCurrent(
   const secret = chatInternalSecret(env);
   if (!secret) return { ok: false, status: 503, error: "session_check_unconfigured" };
   try {
-    const headers = await internalAuthHeaders(secret, CHAT_SESSION_CHECK_PATH);
+    const headers = {
+      ...(await internalAuthHeaders(secret, CHAT_SESSION_CHECK_PATH)),
+      ...nextAppExtraHeaders(env, url),
+    };
     const res = await fetch(url, {
       method: "POST",
       headers,
       body: JSON.stringify({ userId: claims.userId, sv }),
       signal: AbortSignal.timeout(SESSION_CHECK_TIMEOUT_MS),
+      ...nextAppFetchInit(env),
     });
+    // Preview: 리다이렉트는 따라가지 않고 실패(503) — 비밀 헤더가 다른 호스트로 가지 않게.
+    if (isPreviewWorker(env) && isRedirectResponse(res)) {
+      return { ok: false, status: 503, error: "session_check_unavailable" };
+    }
     if (res.status === 503) {
       return { ok: false, status: 503, error: "session_check_unavailable" };
     }
@@ -117,13 +117,19 @@ export async function probeChatSession(
   const secret = chatInternalSecret(env);
   if (!url || !secret) return "unknown";
   try {
-    const headers = await internalAuthHeaders(secret, CHAT_SESSION_CHECK_PATH);
+    const headers = {
+      ...(await internalAuthHeaders(secret, CHAT_SESSION_CHECK_PATH)),
+      ...nextAppExtraHeaders(env, url),
+    };
     const res = await fetch(url, {
       method: "POST",
       headers,
       body: JSON.stringify({ userId: claims.userId, sv }),
       signal: AbortSignal.timeout(SESSION_CHECK_TIMEOUT_MS),
+      ...nextAppFetchInit(env),
     });
+    // Preview 리다이렉트 = 판정 불가(unknown) → 소켓 유지, 재요청 없음.
+    if (isPreviewWorker(env) && isRedirectResponse(res)) return "unknown";
     const body = await res.json().catch(() => null);
     return classifySessionProbe(res.status, body);
   } catch {

@@ -72,6 +72,7 @@ import {
   parseSessionRevokeBody,
   probeChatSession,
 } from "./sessionCheck";
+import { nextAppExtraHeaders, nextAppFetchInit, nextAppUrl, nextPushDispatchUrl } from "./nextApp";
 import {
   isRecheckDue,
   openSocketRecheckIntervalMs,
@@ -105,19 +106,15 @@ export interface Env {
   CHAT_TOKEN_AUDIENCE?: string;
   /** 로컬 테스트 전용: 열린 소켓 재검증 주기(ms). 미설정 = 5분. 운영 설정 불필요. */
   CHAT_OPEN_SOCKET_RECHECK_MS?: string;
+  /** Preview Worker 전용 secret (배포 보호 자동화 우회). 운영 Worker 에는 등록하지 않으며, 등록돼도 운영에서는 전송 안 함. */
+  PREVIEW_APP_BYPASS_SECRET?: string;
+  /** 로컬 테스트 하네스 전용("1"). 배포 설정에 넣지 않는다. */
+  CHAT_PREVIEW_LOCAL_HARNESS?: string;
 }
 
+/** 운영: 기존과 동일. Preview: 검증된 Preview 호스트만 (nextApp.ts). */
 function nextInternalUrl(env: Env, pathname: string): string {
-  const pushUrl = String(env.CHAT_PUSH_DISPATCH_URL || "").trim();
-  if (!pushUrl) return "";
-  try {
-    const parsed = new URL(pushUrl);
-    parsed.pathname = pathname;
-    parsed.search = "";
-    return parsed.toString();
-  } catch {
-    return "";
-  }
+  return nextAppUrl(env, pathname);
 }
 
 function uniqueAttachmentIds(raw: string[], limit: number): string[] {
@@ -1679,8 +1676,9 @@ export class ChatRoom extends DurableObject<Env> {
       );
       const res = await fetch(url, {
         method: "POST",
-        headers,
+        headers: { ...headers, ...nextAppExtraHeaders(this.env, url) },
         body: JSON.stringify({ roomId, attachmentIds }),
+        ...nextAppFetchInit(this.env),
       });
       if (!res.ok) {
         console.error("[chat-photo] attachment cleanup request failed", {
@@ -1704,8 +1702,9 @@ export class ChatRoom extends DurableObject<Env> {
       );
       await fetch(consumeUrl, {
         method: "POST",
-        headers,
+        headers: { ...headers, ...nextAppExtraHeaders(this.env, consumeUrl) },
         body: JSON.stringify({ attachmentIds }),
+        ...nextAppFetchInit(this.env),
       });
     } catch {
       // persist already succeeded
@@ -1721,7 +1720,7 @@ export class ChatRoom extends DurableObject<Env> {
   }
 
   private async sendChatPushDispatch(roomId: string, message: ChatMessage) {
-    const url = String(this.env.CHAT_PUSH_DISPATCH_URL || "").trim();
+    const url = nextPushDispatchUrl(this.env);
     if (!url || message.deletionType) return;
     try {
       let roomType = "ALL";
@@ -1739,7 +1738,7 @@ export class ChatRoom extends DurableObject<Env> {
       );
       await fetch(url, {
         method: "POST",
-        headers,
+        headers: { ...headers, ...nextAppExtraHeaders(this.env, url) },
         body: JSON.stringify({
           roomId,
           seq: message.seq || 0,
@@ -1760,6 +1759,7 @@ export class ChatRoom extends DurableObject<Env> {
           memberUserIds,
           roomName: isAllRoomId(roomId) ? "전체 채팅방" : null,
         }),
+        ...nextAppFetchInit(this.env),
       });
     } catch {
       // chat persist already succeeded
