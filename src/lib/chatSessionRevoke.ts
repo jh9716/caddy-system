@@ -63,19 +63,30 @@ export async function notifyChatSessionRevoked(
     return "skipped";
   }
   // Worker 는 같은 사용자에 대해 max(sessionVersion) 만 기억하므로 재시도·중복 전송은 안전(되돌림 없음).
+  // 성공 = Worker 가 2xx 로 "Directory epoch + Directory 소켓 + 대상 Room 전부" 확인(status=ok).
+  // Worker 502(partial)/503(failed) 는 성공 아님 → 재시도, 소진 시 failed.
   let lastStatus: number | null = null;
-  const deadline = Date.now() + CHAT_SESSION_REVOKE_TOTAL_BUDGET_MS;
+  let last: RevokeAttempt | null = null;
+  let attempts = 0;
+  const startedAt = Date.now();
+  const deadline = startedAt + CHAT_SESSION_REVOKE_TOTAL_BUDGET_MS;
   for (let attempt = 1; attempt <= CHAT_SESSION_REVOKE_MAX_ATTEMPTS; attempt++) {
     const remaining = deadline - Date.now();
     if (attempt > 1 && remaining < MIN_ATTEMPT_MS) break;
-    lastStatus = await postSessionRevoke(
+    attempts = attempt;
+    last = await postSessionRevoke(
       worker,
       secret,
       userId,
       sessionVersion,
       Math.max(MIN_ATTEMPT_MS, Math.min(CHAT_SESSION_REVOKE_TIMEOUT_MS, remaining))
     );
-    if (lastStatus !== null && lastStatus >= 200 && lastStatus < 300) return "ok";
+    lastStatus = last.status;
+    if (last.ok) return "ok";
+    // 식별자·URL·토큰·오류 원문 없이 진단 필드만.
+    console.warn(
+      `[chat-session-revoke] attempt failed ${formatRevokeAttemptDiag(last, attempt)}`
+    );
     if (!isRetryableRevokeStatus(lastStatus)) break;
     if (attempt < CHAT_SESSION_REVOKE_MAX_ATTEMPTS) {
       const wait = CHAT_SESSION_REVOKE_BACKOFF_MS[attempt - 1] ?? 750;
@@ -85,9 +96,63 @@ export async function notifyChatSessionRevoked(
   }
   // 조용히 무시하지 않음: 식별자 없이 상태만 기록. 새 연결은 DB 확인으로 이미 차단, 열린 소켓은 토큰 만료까지 남을 수 있음.
   console.error(
-    `[chat-session-revoke] notify failed status=${lastStatus === null ? "network" : lastStatus}`
+    `[chat-session-revoke] notify failed status=${lastStatus === null ? "network" : lastStatus} attempts=${attempts} totalMs=${Date.now() - startedAt}${last ? ` last=(${formatRevokeAttemptDiag(last, attempts)})` : ""}`
   );
   return "failed";
+}
+
+/** 한 번의 revoke POST 결과(진단 필드는 모두 분류된 값·숫자만; 식별자·URL·원문 없음). */
+export type RevokeAttempt = {
+  ok: boolean;
+  status: number | null;
+  stage: "sign" | "fetch" | "response";
+  elapsedMs: number;
+  errName?: string;
+  abort?: "abort" | "timeout" | "no";
+  causeCode?: string;
+  workerStatus?: "ok" | "partial" | "failed" | "unknown";
+  rooms?: { ok: number; total: number };
+};
+
+const SAFE_CODE_RE = /^[A-Z][A-Z0-9_]{1,47}$/;
+const SAFE_NAME_RE = /^[A-Za-z][A-Za-z0-9_]{0,47}$/;
+
+/**
+ * err.cause.code 만 안전하게 분류(DOMException 의 숫자 err.code 는 보지 않음). 추측하지 않는다:
+ * cause/code 없음 → "none", 대문자/숫자/밑줄 형식이 아니면(호스트·경로 등이 섞일 수 있음) → "unknown".
+ */
+export function classifyRevokeCauseCode(err: unknown): string {
+  const e = err as { cause?: { code?: unknown } } | null;
+  const code = e?.cause && typeof e.cause === "object" ? e.cause.code : undefined;
+  if (code == null || code === "") return "none";
+  return typeof code === "string" && SAFE_CODE_RE.test(code) ? code : "unknown";
+}
+
+export function classifyRevokeError(err: unknown): Pick<RevokeAttempt, "errName" | "abort" | "causeCode"> {
+  const rawName = (err as { name?: unknown } | null)?.name;
+  const errName = typeof rawName === "string" && SAFE_NAME_RE.test(rawName) ? rawName : "unknown";
+  const abort = errName === "AbortError" ? "abort" : errName === "TimeoutError" ? "timeout" : "no";
+  return { errName, abort, causeCode: classifyRevokeCauseCode(err) };
+}
+
+export function formatRevokeAttemptDiag(a: RevokeAttempt, attempt: number): string {
+  const parts = [
+    `stage=${a.stage}`,
+    `attempt=${attempt}/${CHAT_SESSION_REVOKE_MAX_ATTEMPTS}`,
+    `elapsedMs=${Math.max(0, Math.round(a.elapsedMs))}`,
+    `status=${a.status === null ? "network" : a.status}`,
+  ];
+  if (a.errName) parts.push(`err=${a.errName}`);
+  if (a.abort) parts.push(`abort=${a.abort}`);
+  if (a.causeCode) parts.push(`cause=${a.causeCode}`);
+  if (a.workerStatus) parts.push(`worker=${a.workerStatus}`);
+  if (a.rooms) parts.push(`rooms=${a.rooms.ok}/${a.rooms.total}`);
+  return parts.join(" ");
+}
+
+function toCount(v: unknown): number {
+  const n = Number(v);
+  return Number.isInteger(n) && n >= 0 && n < 1_000_000 ? n : 0;
 }
 
 async function postSessionRevoke(
@@ -96,28 +161,54 @@ async function postSessionRevoke(
   userId: number,
   sessionVersion: number,
   timeoutMs: number
-): Promise<number | null> {
-  const ts = Math.floor(Date.now() / 1000);
+): Promise<RevokeAttempt> {
+  const t0 = Date.now();
+  const ts = Math.floor(t0 / 1000);
+  let auth: string;
   try {
-    const res = await fetch(`${worker}${CHAT_SESSION_REVOKE_PATH}`, {
+    auth = await signChatInternalAuth(secret, CHAT_SESSION_REVOKE_PATH, ts);
+  } catch (err) {
+    return { ok: false, status: null, stage: "sign", elapsedMs: Date.now() - t0, ...classifyRevokeError(err) };
+  }
+  let res: Response;
+  try {
+    res = await fetch(`${worker}${CHAT_SESSION_REVOKE_PATH}`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         [CHAT_INTERNAL_TS_HEADER]: String(ts),
-        [CHAT_INTERNAL_AUTH_HEADER]: await signChatInternalAuth(
-          secret,
-          CHAT_SESSION_REVOKE_PATH,
-          ts
-        ),
+        [CHAT_INTERNAL_AUTH_HEADER]: auth,
       },
       body: JSON.stringify({ userId, sessionVersion }),
       cache: "no-store",
       signal: AbortSignal.timeout(timeoutMs),
     });
-    return res.status;
-  } catch {
-    return null;
+  } catch (err) {
+    return { ok: false, status: null, stage: "fetch", elapsedMs: Date.now() - t0, ...classifyRevokeError(err) };
   }
+  // 응답 본문은 분류용 enum·숫자만 읽는다(구 Worker 는 {ok:true} 만 → 2xx 면 성공으로 유지).
+  const body = (await res.json().catch(() => null)) as {
+    status?: unknown;
+    rooms?: { ok?: unknown; total?: unknown };
+  } | null;
+  const ws = body?.status;
+  const workerStatus =
+    ws === "ok" || ws === "partial" || ws === "failed" ? ws : body ? "unknown" : undefined;
+  const rooms =
+    body?.rooms && typeof body.rooms === "object"
+      ? { ok: toCount(body.rooms.ok), total: toCount(body.rooms.total) }
+      : undefined;
+  const is2xx = res.status >= 200 && res.status < 300;
+  // 2xx 라도 Worker 가 partial/failed 라고 하면 성공 아님(재시도 대상: 5xx 처럼 취급).
+  const notOkBody = workerStatus === "partial" || workerStatus === "failed";
+  return {
+    ok: is2xx && !notOkBody,
+    status: is2xx && notOkBody ? 502 : res.status,
+    stage: "response",
+    elapsedMs: Date.now() - t0,
+    workerStatus,
+    rooms,
+  };
 }
 
 export async function notifyChatSessionRevokedForUser(

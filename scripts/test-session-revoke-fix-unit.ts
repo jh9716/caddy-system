@@ -169,7 +169,9 @@ const base = (id: number, team: string, order: number, emp: string): Row => ({ i
   assert((await notifyChatSessionRevoked({ userId: 21, sessionVersion: 2 })) === "ok" && calls.length === 3, "네트워크·503 후 재시도 성공");
   calls = []; plan = ["hang", "hang", "hang"]; errs.length = 0;
   assert((await notifyChatSessionRevoked({ userId: 21, sessionVersion: 2 })) === "failed" && calls.length >= 2 && calls.length <= CHAT_SESSION_REVOKE_MAX_ATTEMPTS, "시간 초과 반복 → failed(최대 3회)");
-  assert(errs.some((e) => e.includes("notify failed status=network")) && !errs.some((e) => /21|sessionVersion|secret/.test(e)), "실패 로그(식별자·비밀값 없음)");
+  // 진단 숫자 필드(elapsedMs/totalMs)는 우연히 "21" 을 포함할 수 있으므로 제외하고 식별자 검사.
+  assert(errs.some((e) => e.includes("notify failed status=network")) && !errs.some((e) => /21|sessionVersion|secret|invalid/.test(e.replace(/(elapsedMs|totalMs)=\d+/g, ""))), "실패 로그(식별자·비밀값·URL 없음)");
+  assert(errs.some((e) => /stage=fetch .*err=TimeoutError abort=timeout cause=none/.test(e)), "실패 로그에 stage/attempt/elapsed/err/abort/cause 진단");
   calls = []; plan = [403];
   assert((await notifyChatSessionRevoked({ userId: 21, sessionVersion: 2 })) === "failed" && calls.length === 1, "403(서명/설정) → 재시도 없이 실패");
   calls = []; plan = [429, 200];
