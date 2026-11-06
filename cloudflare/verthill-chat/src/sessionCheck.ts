@@ -7,6 +7,7 @@ import {
   isSessionBoundChatToken,
   type ChatTokenClaims,
 } from "./token";
+import { classifySessionProbe, type SessionProbeResult } from "./openSocketRecheck";
 
 export const CHAT_SESSION_CHECK_PATH = "/api/chat/session-check";
 export const CHAT_SESSION_REVOKE_PATH = "/internal/session-revoke";
@@ -97,5 +98,35 @@ export async function assertChatSessionCurrent(
     return { ok: true };
   } catch {
     return { ok: false, status: 503, error: "session_check_unavailable" };
+  }
+}
+
+/**
+ * 이미 열린 소켓 재검증용(새 연결 gate 아님). assertChatSessionCurrent 와 달리 fail-open:
+ * 명확한 폐기 응답만 "revoked", 그 외(장애·시간 초과·미설정·v1)는 "unknown"/"current".
+ */
+export async function probeChatSession(
+  env: SessionCheckEnv,
+  claims: ChatTokenClaims
+): Promise<SessionProbeResult> {
+  if (claims.v !== 2) return "current";
+  if (!isSessionBoundChatToken(claims)) return "unknown";
+  const sv = chatTokenSessionVersion(claims);
+  if (sv == null) return "unknown";
+  const url = nextSessionCheckUrl(env);
+  const secret = chatInternalSecret(env);
+  if (!url || !secret) return "unknown";
+  try {
+    const headers = await internalAuthHeaders(secret, CHAT_SESSION_CHECK_PATH);
+    const res = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ userId: claims.userId, sv }),
+      signal: AbortSignal.timeout(SESSION_CHECK_TIMEOUT_MS),
+    });
+    const body = await res.json().catch(() => null);
+    return classifySessionProbe(res.status, body);
+  } catch {
+    return "unknown";
   }
 }

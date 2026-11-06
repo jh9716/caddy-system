@@ -29,10 +29,12 @@ export function startSessionCheckMock() {
   const epochs = new Map();
   const blocked = new Set();
   let unavailable = false;
+  let checks = 0;
 
   const server = createHttpServer((req, res) => {
     const url = String(req.url || "").split("?")[0];
     if (req.method === "POST" && url === "/api/chat/session-check") {
+      checks += 1;
       const chunks = [];
       req.on("data", (chunk) => chunks.push(chunk));
       req.on("end", () => {
@@ -93,6 +95,10 @@ export function startSessionCheckMock() {
         },
         setUnavailable(value) {
           unavailable = value === true;
+        },
+        /** session-check 호출 수(테스트 관측용). */
+        checkCount() {
+          return checks;
         },
         close() {
           return new Promise((done) => server.close(() => done()));

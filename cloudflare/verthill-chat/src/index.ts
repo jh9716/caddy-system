@@ -70,7 +70,18 @@ import {
   assertChatSessionCurrent,
   parseEvictMembersBody,
   parseSessionRevokeBody,
+  probeChatSession,
 } from "./sessionCheck";
+import {
+  isRecheckDue,
+  openSocketRecheckIntervalMs,
+  retryCheckedAt,
+} from "./openSocketRecheck";
+import {
+  ROOM_REVOKE_BUDGET_MS,
+  ROOM_REVOKE_TIMEOUT_MS,
+  revokeHttpStatus,
+} from "./revokeFanout";
 
 export { validateIncomingMessage, isValidRoomName } from "./protocol";
 export { verifyChatToken } from "./token";
@@ -92,6 +103,8 @@ export interface Env {
   CHAT_PUSH_DISPATCH_URL?: string;
   /** "preview" = Preview 전용 Worker. 미설정/"production" = 운영. 그 외 값은 503(fail-closed). */
   CHAT_TOKEN_AUDIENCE?: string;
+  /** 로컬 테스트 전용: 열린 소켓 재검증 주기(ms). 미설정 = 5분. 운영 설정 불필요. */
+  CHAT_OPEN_SOCKET_RECHECK_MS?: string;
 }
 
 function nextInternalUrl(env: Env, pathname: string): string {
@@ -333,35 +346,85 @@ async function revokeChatSession(request: Request, env: Env): Promise<Response> 
   }
   const parsed = parseSessionRevokeBody(body);
   if (!parsed) return json({ error: "invalid_payload" }, 400);
-  const headers = await internalAuthHeaders(
-    chatInternalSecret(env),
-    CHAT_SESSION_REVOKE_PATH
-  );
-  const dirRes = await directoryStub(env).fetch(
-    new Request(`https://chat-directory${CHAT_SESSION_REVOKE_PATH}`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(parsed),
-    })
-  );
-  // Worker always holds CHAT_ROOM. Directory poke is best-effort for custom rooms;
-  // overall room is the common open-socket case and must not depend on DO env wiring.
-  try {
-    const roomHeaders = await internalAuthHeaders(
-      chatInternalSecret(env),
-      CHAT_ROOM_REVOKE_PATH
+  const secret = chatInternalSecret(env);
+  const dirHeaders = await internalAuthHeaders(secret, CHAT_SESSION_REVOKE_PATH);
+  const roomHeaders = await internalAuthHeaders(secret, CHAT_ROOM_REVOKE_PATH);
+  // Directory(epoch + directory 소켓 + Room fanout)와 전체방 직접 poke 를 병렬로, 각각 시간 상한.
+  // 전체방 직접 poke 는 기존과 같이 보조(best-effort) — 성공 판정은 Directory 결과로만 한다.
+  const [dir, allRoom] = await Promise.all([
+    settleWithin(() =>
+      directoryStub(env).fetch(
+        new Request(`https://chat-directory${CHAT_SESSION_REVOKE_PATH}`, {
+          method: "POST",
+          headers: dirHeaders,
+          body: JSON.stringify(parsed),
+        })
+      ),
+      DIRECTORY_REVOKE_TIMEOUT_MS
+    ),
+    settleWithin(() =>
+      env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName("all")).fetch(
+        new Request(`https://chat-room${CHAT_ROOM_REVOKE_PATH}`, {
+          method: "POST",
+          headers: roomHeaders,
+          body: JSON.stringify(parsed),
+        })
+      ),
+      ROOM_REVOKE_TIMEOUT_MS
+    ),
+  ]);
+  const allRoomOutcome =
+    allRoom.kind === "ok" ? (allRoom.value.ok ? "ok" : "failed") : allRoom.kind;
+  if (dir.kind !== "ok") {
+    // epoch 기록 여부를 알 수 없음 → 실패(503, Next 재시도). 식별자·비밀값 없이 단계만.
+    console.warn(`[chat-session-revoke] directory ${dir.kind}`);
+    return json(
+      { ok: false, status: "failed", stage: "directory", reason: dir.kind, allRoom: allRoomOutcome },
+      revokeHttpStatus("failed")
     );
-    await env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName("all")).fetch(
-      new Request(`https://chat-room${CHAT_ROOM_REVOKE_PATH}`, {
-        method: "POST",
-        headers: roomHeaders,
-        body: JSON.stringify(parsed),
-      })
-    );
-  } catch {
-    // directory poke / token TTL still bound residual access
   }
-  return dirRes;
+  const dirRes = dir.value;
+  const data = (await dirRes.json().catch(() => null)) as
+    | ({ status?: unknown } & Record<string, unknown>)
+    | null;
+  if (dirRes.status >= 400 && dirRes.status < 500) {
+    return json(data ?? { error: "directory_rejected" }, dirRes.status);
+  }
+  const status = data?.status === "ok" || data?.status === "partial" ? data.status : null;
+  if (!data || !status) {
+    return json(
+      { ok: false, status: "failed", stage: "directory", reason: "bad_response", allRoom: allRoomOutcome },
+      revokeHttpStatus("failed")
+    );
+  }
+  if (status !== "ok") {
+    const rooms = (data.rooms || {}) as Record<string, unknown>;
+    console.warn(
+      `[chat-session-revoke] partial rooms ok=${Number(rooms.ok) || 0}/${Number(rooms.total) || 0} failed=${Number(rooms.failed) || 0} timeout=${Number(rooms.timeout) || 0} skipped=${Number(rooms.skipped) || 0}`
+    );
+  }
+  return json({ ...data, allRoom: allRoomOutcome }, revokeHttpStatus(status));
+}
+
+/** Directory 단계 상한: Room fanout 예산 + 여유. Next 시도당 2.5s 안에 응답이 도착하도록. */
+const DIRECTORY_REVOKE_TIMEOUT_MS = ROOM_REVOKE_BUDGET_MS + 600;
+
+type Settled<T> = { kind: "ok"; value: T } | { kind: "timeout" } | { kind: "error" };
+
+async function settleWithin<T>(run: () => Promise<T>, ms: number): Promise<Settled<T>> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      run().then((value) => ({ kind: "ok" as const, value })),
+      new Promise<Settled<T>>((resolve) => {
+        timer = setTimeout(() => resolve({ kind: "timeout" }), ms);
+      }),
+    ]);
+  } catch {
+    return { kind: "error" };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function createRoomFromGrant(request: Request, env: Env): Promise<Response> {
@@ -535,10 +598,13 @@ async function verifyCreateGrant(
   return grant;
 }
 
-type SocketAttach = { claims: ChatTokenClaims; roomId: string };
+/** sc = 마지막 세션 확인 시각(ms). 접속 시 session-check 통과 시각으로 시작. */
+type SocketAttach = { claims: ChatTokenClaims; roomId: string; sc?: number };
 
 export class ChatRoom extends DurableObject<Env> {
   private persistQueue: Promise<void> = Promise.resolve();
+  /** 열린 소켓 재검증 진행 중인 userId(메모리; 유실돼도 다음 활동 때 다시 시작될 뿐). */
+  private recheckInflight = new Set<number>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -660,8 +726,8 @@ export class ChatRoom extends DurableObject<Env> {
       const parsed = parseSessionRevokeBody(body);
       if (!parsed) return json({ error: "invalid_payload" }, 400);
       this.rememberRevoked(parsed.userId, parsed.sessionVersion);
-      this.expireRevokedSockets(parsed.userId, parsed.sessionVersion);
-      return json({ ok: true });
+      const closed = this.expireRevokedSockets(parsed.userId, parsed.sessionVersion);
+      return json({ ok: true, closed });
     }
     if (request.method === "POST" && url.pathname === CHAT_ROOM_EVICT_PATH) {
       if (!(await verifyInternalRequest(request, this.env, url.pathname))) {
@@ -706,7 +772,11 @@ export class ChatRoom extends DurableObject<Env> {
     const client = pair[0];
     const server = pair[1];
     this.ctx.acceptWebSocket(server);
-    const attach: SocketAttach = { claims: authorized.claims, roomId: authorized.room };
+    const attach: SocketAttach = {
+      claims: authorized.claims,
+      roomId: authorized.room,
+      sc: Date.now(),
+    };
     server.serializeAttachment(attach);
     void this.rememberRoomId(authorized.room);
     this.sendHistory(server, authorized.claims.userId, null, HISTORY_LIMIT);
@@ -939,6 +1009,7 @@ export class ChatRoom extends DurableObject<Env> {
       if (raw.claims.exp <= Math.floor(Date.now() / 1000)) return this.expire(ws);
       if (this.isRevoked(raw.claims)) return this.expire(ws, "stale_session");
       if (this.isEvicted(raw.claims.userId)) return this.expire(ws, "room_forbidden");
+      this.maybeRecheckOpenSession(raw);
       return raw;
     }
     const claims = raw as ChatTokenClaims;
@@ -1005,7 +1076,8 @@ export class ChatRoom extends DurableObject<Env> {
     );
   }
 
-  private expireRevokedSockets(userId: number, sessionVersion: number) {
+  private expireRevokedSockets(userId: number, sessionVersion: number): number {
+    let closed = 0;
     for (const socket of this.ctx.getWebSockets()) {
       const attach = socket.deserializeAttachment() as SocketAttach | ChatTokenClaims | null;
       if (!attach) continue;
@@ -1013,6 +1085,49 @@ export class ChatRoom extends DurableObject<Env> {
       if (!claims || Number(claims.userId) !== userId) continue;
       if (!isChatSessionEpochStale(chatTokenSessionVersion(claims), sessionVersion)) continue;
       this.expire(socket, "stale_session");
+      closed += 1;
+    }
+    return closed;
+  }
+
+  /** 핫패스: 숫자 비교만. 주기가 지난 v2 소켓이면 사용자별 1회 비동기 재검증 시작. */
+  private maybeRecheckOpenSession(attach: SocketAttach) {
+    const claims = attach.claims;
+    if (claims.v !== 2) return;
+    const interval = openSocketRecheckIntervalMs(this.env.CHAT_OPEN_SOCKET_RECHECK_MS);
+    if (!isRecheckDue(attach.sc, Date.now(), interval)) return;
+    const userId = Number(claims.userId);
+    if (this.recheckInflight.has(userId)) return;
+    this.recheckInflight.add(userId);
+    void this.recheckOpenSession(claims, interval)
+      .catch(() => undefined)
+      .finally(() => this.recheckInflight.delete(userId));
+  }
+
+  private async recheckOpenSession(claims: ChatTokenClaims, interval: number) {
+    const result = await probeChatSession(this.env, claims);
+    const userId = Number(claims.userId);
+    const tokenSv = chatTokenSessionVersion(claims);
+    const now = Date.now();
+    for (const socket of this.ctx.getWebSockets()) {
+      const raw = socket.deserializeAttachment() as SocketAttach | ChatTokenClaims | null;
+      if (!raw || !("claims" in raw) || !raw.claims) continue;
+      if (Number(raw.claims.userId) !== userId) continue;
+      const sv = chatTokenSessionVersion(raw.claims);
+      if (result === "revoked") {
+        // 같은/더 낮은 sv 만 종료(같은 사용자의 더 새 토큰 소켓은 별도 확인). 상태 저장 없음.
+        if (tokenSv != null && sv != null && sv <= tokenSv) this.expire(socket, "stale_session");
+        continue;
+      }
+      if (sv !== tokenSv) continue;
+      try {
+        socket.serializeAttachment({
+          ...raw,
+          sc: result === "current" ? now : retryCheckedAt(now, interval),
+        });
+      } catch {
+        // closing socket
+      }
     }
   }
 
@@ -1301,6 +1416,7 @@ export class ChatRoom extends DurableObject<Env> {
       if (attach.claims.exp <= now) return this.expire(socket);
       if (this.isRevoked(attach.claims)) return this.expire(socket, "stale_session");
       if (this.isEvicted(attach.claims.userId)) return this.expire(socket, "room_forbidden");
+      this.maybeRecheckOpenSession(attach);
       return attach;
     }
     const claims = attach as ChatTokenClaims;
