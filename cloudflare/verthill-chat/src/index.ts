@@ -71,6 +71,7 @@ import {
   parseEvictMembersBody,
   parseSessionRevokeBody,
   probeChatSession,
+  shouldSkipWorkerSessionCheck,
 } from "./sessionCheck";
 import { nextAppExtraHeaders, nextAppFetchInit, nextAppUrl, nextPushDispatchUrl } from "./nextApp";
 import {
@@ -156,9 +157,19 @@ function directoryStub(env: Env) {
   return env.CHAT_DIRECTORY.get(env.CHAT_DIRECTORY.idFromName(DIRECTORY_NAME));
 }
 
+type VerifyIdentityOptions = {
+  /**
+   * "skip": 토큰 서명·만료·audience 만 확인. Next/DB session-check 생략.
+   * ChatRoom DO 의 authorizeSocket 이 최종 session-check 를 수행한다.
+   * Directory 경로에서는 쓰지 않는다. c679e51 확인서(DO 인증 생략) 와는 반대.
+   */
+  sessionCheck?: "required" | "skip";
+};
+
 async function verifyIdentity(
   request: Request,
-  env: Env
+  env: Env,
+  options?: VerifyIdentityOptions
 ): Promise<ChatTokenClaims | Response> {
   const url = new URL(request.url);
   const secret = String(env.CHAT_AUTH_SECRET || "").trim();
@@ -174,10 +185,12 @@ async function verifyIdentity(
   if (!token) return json({ error: "unauthorized" }, 401);
   const claims = await verifyChatToken(token, secret, undefined, audience);
   if (!claims) return json({ error: "invalid_token" }, 401);
-  const session = await assertChatSessionCurrent(env, claims);
-  if (!session.ok) return json({ error: session.error }, session.status);
-  if (isSessionBoundChatToken(claims)) {
-    void rememberSessionEpoch(env, claims.userId, claims.sv);
+  if (options?.sessionCheck !== "skip") {
+    const session = await assertChatSessionCurrent(env, claims);
+    if (!session.ok) return json({ error: session.error }, session.status);
+    if (isSessionBoundChatToken(claims)) {
+      void rememberSessionEpoch(env, claims.userId, claims.sv);
+    }
   }
   return claims;
 }
@@ -237,14 +250,15 @@ async function isDirectoryMember(
 
 async function authorizeSocket(
   request: Request,
-  env: Env
+  env: Env,
+  options?: VerifyIdentityOptions
 ): Promise<{ room: string; claims: ChatTokenClaims } | Response> {
   const url = new URL(request.url);
   const room = (url.searchParams.get("room") || "").trim();
   if (!isValidRoomName(room)) {
     return json({ error: "invalid_room" }, 400);
   }
-  const identity = await verifyIdentity(request, env);
+  const identity = await verifyIdentity(request, env, options);
   if (identity instanceof Response) return identity;
   const access = resolveChatRoomAccess({
     claims: identity,
@@ -293,9 +307,13 @@ export default {
       });
     }
     if (url.pathname === "/ws") {
-      const authorized = await authorizeSocket(request, env);
+      const upgrade = request.headers.get("Upgrade");
+      const sessionCheck = shouldSkipWorkerSessionCheck(url.pathname, upgrade)
+        ? "skip"
+        : "required";
+      const authorized = await authorizeSocket(request, env, { sessionCheck });
       if (authorized instanceof Response) return authorized;
-      if ((request.headers.get("Upgrade") || "").toLowerCase() !== "websocket") {
+      if ((upgrade || "").toLowerCase() !== "websocket") {
         return json({ error: "upgrade_required" }, 426);
       }
       const id = env.CHAT_ROOM.idFromName(authorized.room);
@@ -759,6 +777,8 @@ export class ChatRoom extends DurableObject<Env> {
       this.queueAttachmentCleanup(roomId, attachmentIds);
       return json({ ok: true, purged: attachmentIds.length });
     }
+    // 최종 인가: 토큰 + Next/DB session-check + 멤버십. Worker /ws 가 session-check 를
+    // 생략해도 여기서 다시 수행한다. c679e51 확인서로 이 호출을 건너뛰지 말 것.
     const authorized = await authorizeSocket(request, this.env);
     if (authorized instanceof Response) return authorized;
     const cap = isAllRoomId(authorized.room) ? MAX_CONNECTIONS_ALL : MAX_CONNECTIONS;

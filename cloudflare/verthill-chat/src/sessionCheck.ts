@@ -17,6 +17,19 @@ export const CHAT_ROOM_REVOKE_PATH = "/internal/revoke-user";
 export const CHAT_ROOM_EVICT_PATH = "/internal/evict-members";
 export const SESSION_CHECK_TIMEOUT_MS = 2500;
 
+/**
+ * Worker /ws WebSocket 업그레이드만: 진입부의 Next/DB session-check 를 생략한다.
+ * ChatRoom.authorizeSocket 이 최종 session-check 를 수행한다.
+ * Directory 와 HTTP(비업그레이드) /ws 프로브는 생략하지 않는다.
+ * c679e51 확인서(DO authorizeSocket 생략) 와는 반대 방향이다.
+ */
+export function shouldSkipWorkerSessionCheck(
+  pathname: string,
+  upgradeHeader: string | null | undefined
+): boolean {
+  return pathname === "/ws" && String(upgradeHeader || "").toLowerCase() === "websocket";
+}
+
 export type SessionCheckEnv = NextAppEnv & {
   CHAT_AUTH_SECRET: string;
   CHAT_INTERNAL_SECRET?: string;

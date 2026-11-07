@@ -90,6 +90,16 @@ async function withFetch(fn, impl) {
 }
 const PE = prev({ CHAT_AUTH_SECRET: "a", CHAT_INTERNAL_SECRET: "i", CHAT_PUSH_DISPATCH_URL: PV + "/api/chat/push-dispatch", PREVIEW_APP_BYPASS_SECRET: BYPASS });
 
+test("W1: Worker session-check skip is /ws WebSocket upgrade only", () => {
+  assert.equal(sc.shouldSkipWorkerSessionCheck("/ws", "websocket"), true);
+  assert.equal(sc.shouldSkipWorkerSessionCheck("/ws", "WebSocket"), true);
+  assert.equal(sc.shouldSkipWorkerSessionCheck("/ws", null), false, "HTTP /ws probe still checks");
+  assert.equal(sc.shouldSkipWorkerSessionCheck("/ws", ""), false);
+  assert.equal(sc.shouldSkipWorkerSessionCheck("/directory/ws", "websocket"), false, "Directory never skips");
+  assert.equal(sc.shouldSkipWorkerSessionCheck("/directory/rooms", "websocket"), false);
+  assert.equal(sc.shouldSkipWorkerSessionCheck("/health", "websocket"), false);
+});
+
 test("preview session-check: 200/401/403/503/redirect/미설정", async () => {
   let { r, calls } = await withFetch(() => sc.assertChatSessionCurrent(PE, claims));
   assert.deepEqual(r, { ok: true });

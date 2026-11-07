@@ -1,7 +1,7 @@
 /**
  * 채팅 목록 진입: Directory WS 는 수락 직후 rooms 스냅샷을 보낸다 → 클라이언트 open 직후 sync 는 중복.
  * 같은 로컬 wrangler(DO 실제 코드) + mock session-check 로 before(open 직후 sync 전송) / after(sync 없음)를 같은 기준으로 비교.
- * 추가로 방 WS 1회 진입당 session-check 호출 수를 센다(이 브랜치 Worker 기준 관측값, 수정 없음).
+ * 추가로 방 WS 1회 진입당 session-check 호출 수를 센다(W1: 방 WS=1, Directory=1).
  * Local wrangler only. No Production/Preview, no DB.
  */
 import assert from "node:assert/strict";
@@ -90,6 +90,8 @@ test("directory snapshot arrives without client sync; open-time sync only duplic
     const scBeforeDir = scCalls;
     for (let i = 0; i < N; i++) await dirEntry(port, tok.token, false);
     const scPerDirEntry = (scCalls - scBeforeDir) / N;
+    assert.equal(scPerRoomEntry, 1, "W1: room WS session-check once (ChatRoom DO)");
+    assert.equal(scPerDirEntry, 1, "Directory still one Worker session-check");
 
     const summary = {
       env: "local wrangler dev --local + mock session-check (127.0.0.1, 네트워크 지연 없음)",
