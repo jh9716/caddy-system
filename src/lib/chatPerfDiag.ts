@@ -187,6 +187,13 @@ type Pending = {
   reused?: boolean;
 };
 
+/** 순수: 늦게 도착한 이전 진입의 갱신인지 판정. attempt 를 모르면(구 호출) 기존 동작(현재 진입)을 유지. */
+export function isPendingAttempt(p: { attempt?: number } | null | undefined, attempt: number | null | undefined): boolean {
+  if (!p) return false;
+  if (attempt == null) return true;
+  return p.attempt === attempt;
+}
+
 export function buildRecord(n: number, p: Pending, visible: number | null, ok: boolean): ChatPerfRecord {
   return {
     n,
@@ -271,15 +278,20 @@ export const chatPerf = {
       emit();
     });
   },
-  roomTap(kind: ChatPerfEntryKind) {
+  /** 진입 시작. 이 진입의 시도 번호를 돌려준다(비활성이면 null). */
+  roomTap(kind: ChatPerfEntryKind): number | null {
+    let attempt: number | null = null;
     safe(() => {
-      pending = { attempt: ++attemptSeq, kind, tap: now(), tokenStart: null, tokenEnd: null, tokenFetched: false, open: null, history: null, commit: null };
+      attempt = ++attemptSeq;
+      pending = { attempt, kind, tap: now(), tokenStart: null, tokenEnd: null, tokenFetched: false, open: null, history: null, commit: null };
       tokenFetchStart = null; tokenFetchEnd = null;
     });
+    return attempt;
   },
-  roomTokenReady() {
+  /** attempt: roomTap 이 준 번호. 더 새 진입이 시작됐으면(번호 불일치) 아무것도 하지 않는다. */
+  roomTokenReady(attempt?: number | null) {
     safe(() => {
-      if (!pending) return;
+      if (!pending || !isPendingAttempt(pending, attempt)) return;
       pending.tokenFetched = tokenFetchStart != null && tokenFetchStart >= pending.tap;
       pending.tokenStart = pending.tokenFetched ? tokenFetchStart : pending.tap;
       pending.tokenEnd = pending.tokenFetched ? tokenFetchEnd : now();
@@ -297,7 +309,8 @@ export const chatPerf = {
     });
   },
   roomCommitted() { safe(() => { if (pending && pending.history != null && pending.commit == null) pending.commit = now(); }); },
-  roomFailed() { safe(() => { if (pending) chatPerf.finish(pending, false); }); },
+  /** attempt 가 현재 진행 중인 진입과 같을 때만 실패로 기록(이전 진입의 늦은 실패가 새 진입을 덮지 않음). */
+  roomFailed(attempt?: number | null) { safe(() => { if (pending && isPendingAttempt(pending, attempt)) chatPerf.finish(pending, false); }); },
   finish(p: Pending, ok: boolean) {
     safe(() => {
       if (pending !== p) return;

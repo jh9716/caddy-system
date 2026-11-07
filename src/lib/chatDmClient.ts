@@ -67,4 +67,19 @@ export async function diagnoseChatWsFailure(
   return chatWsFailureCode({ closeCode });
 }
 
+/**
+ * WS 열기 실패 결과. 소켓이 더 새 진입·나가기로 대체된 경우(superseded)에는 진단 HTTP 프로브를 보내지 않는다.
+ * 그 프로브는 Worker 전체 인증(session-check 1회)을 다시 일으키고, 결과는 이미 폐기된 진입에만 쓰이기 때문이다.
+ * 대체되지 않은 실제 실패는 기존과 같이 diagnoseChatWsFailure 로 원인 코드를 구한다.
+ */
+export async function chatWsOpenFailureCode(
+  superseded: boolean,
+  wsUrl: string,
+  closeCode?: number,
+  fetchImpl: typeof fetch = fetch
+): Promise<string> {
+  if (superseded) return "superseded";
+  return diagnoseChatWsFailure(wsUrl, closeCode, fetchImpl);
+}
+
 export type ChatSocketOpenResult = { ok: true } | { ok: false; code: string };

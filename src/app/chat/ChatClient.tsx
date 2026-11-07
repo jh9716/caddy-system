@@ -193,6 +193,7 @@ import {
   CHAT_DM_START_FAILED,
   CHAT_WS_OPEN_TIMEOUT_MS,
   diagnoseChatWsFailure,
+  chatWsOpenFailureCode,
   formatChatClientError,
   parseChatClientErrorCode,
   type ChatSocketOpenResult,
@@ -1119,11 +1120,13 @@ export default function ChatClient() {
           finish({ ok: false, code: "ws_timeout" });
         }, CHAT_WS_OPEN_TIMEOUT_MS);
         const onOpen = () => finish({ ok: true });
+        // 더 새 진입·나가기가 이 소켓을 대체(roomGenRef 증가 후 close)한 경우: 실패 진단 HTTP 프로브(전체 인증 1회 추가)를
+        // 보내지 않고 즉시 superseded 로 끝낸다. 이 진입은 이미 폐기됐고 UI·계측은 새 진입이 소유한다.
         const onError = () => {
-          void diagnoseChatWsFailure(url).then((code) => finish({ ok: false, code }));
+          void chatWsOpenFailureCode(gen !== roomGenRef.current, url).then((code) => finish({ ok: false, code }));
         };
         const onClose = (ev: CloseEvent) => {
-          void diagnoseChatWsFailure(url, ev.code).then((code) => finish({ ok: false, code }));
+          void chatWsOpenFailureCode(gen !== roomGenRef.current, url, ev.code).then((code) => finish({ ok: false, code }));
         };
         if (ws.readyState === WebSocket.OPEN) {
           finish({ ok: true });
@@ -1609,6 +1612,8 @@ export default function ChatClient() {
     room: RoomSummary,
     opts?: { targetSeq?: number | null }
   ): Promise<ChatSocketOpenResult> {
+    // Preview chatPerf: 이 진입의 측정 시도 번호. 실패 기록은 이 번호에만 적용(더 새 진입을 실패로 덮지 않음).
+    let perfEntry: number | null = null;
     try {
       const prevRoomId = perfLastRoomRef.current;
       perfLastRoomRef.current = room.roomId;
@@ -1616,16 +1621,16 @@ export default function ChatClient() {
         opts?.targetSeq != null ||
         (typeof window !== "undefined" &&
           parseChatTargetSeqFromRoomUrl(room.roomId, window.location.search) != null);
-      chatPerf.roomTap(
+      perfEntry = chatPerf.roomTap(
         classifyEntry({ hasPrevious: prevRoomId != null, sameAsPrevious: prevRoomId === room.roomId, deepLink: deep })
       );
     } catch {
       // 진단 전용
     }
     const info = await refreshIfNeeded();
-    chatPerf.roomTokenReady();
+    chatPerf.roomTokenReady(perfEntry);
     if (!info) {
-      chatPerf.roomFailed();
+      chatPerf.roomFailed(perfEntry);
       return { ok: false, code: "missing_token" };
     }
     const urlSeq =
@@ -1689,8 +1694,9 @@ export default function ChatClient() {
       mentionFetchedRef.current = "";
     }
     const opened = await connectSocket(info, room.roomId, { waitForOpen: true });
-    if (!opened.ok) chatPerf.roomFailed();
-    if (!opened.ok && isDmRoomId(room.roomId)) {
+    // superseded = 사용자가 다른 진입·나가기로 이미 이동. 실패 표시·오류 문구 없음(새 진입이 화면을 소유).
+    if (!opened.ok && opened.code !== "superseded") chatPerf.roomFailed(perfEntry);
+    if (!opened.ok && opened.code !== "superseded" && isDmRoomId(room.roomId)) {
       setError(formatChatClientError(CHAT_DM_OPEN_FAILED, opened.code));
     }
     return opened;
@@ -2529,7 +2535,7 @@ export default function ChatClient() {
     };
     setRooms((prev) => upsertVisibleChatRoom(prev, optimistic));
     const opened = await openRoom(optimistic);
-    if (!opened.ok) {
+    if (!opened.ok && opened.code !== "superseded") {
       setError(formatChatClientError(CHAT_DM_OPEN_FAILED, opened.code || "dm_open_failed"));
     }
     try {

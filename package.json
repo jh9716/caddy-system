@@ -208,7 +208,8 @@
     "native:sync:android": "npx cap sync android",
     "test:chat-perf-diag-unit": "bash scripts/tsx-safe.sh scripts/test-chat-perf-diag-unit.ts",
     "test:chat-ws-reuse-unit": "bash scripts/tsx-safe.sh scripts/test-chat-ws-reuse-unit.ts",
-    "test:chat-resume-reconnect-unit": "bash scripts/tsx-safe.sh scripts/test-chat-resume-reconnect-unit.ts"
+    "test:chat-resume-reconnect-unit": "bash scripts/tsx-safe.sh scripts/test-chat-resume-reconnect-unit.ts",
+    "test:chat-ws-entry-supersede-unit": "bash scripts/tsx-safe.sh scripts/test-chat-ws-entry-supersede-unit.ts"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.2",
