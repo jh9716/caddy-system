@@ -54,9 +54,9 @@ const meta: ParkedSocketMeta = { roomId: "all", token: "tok-a", exp: 2_000_000_0
 
 async function main() {
   section("production default off");
-  assert(PRODUCTION_CHAT_WS_REUSE_ENABLED === false, "PRODUCTION_CHAT_WS_REUSE_ENABLED is false");
-  assert(resolveChatWsReuse(prodEnv).enabled === false, "production resolve is off");
-  assert(resolveChatWsReuse(previewEnv).enabled === false, "preview resolve is also off on this slice");
+  assert(PRODUCTION_CHAT_WS_REUSE_ENABLED === true, "PRODUCTION_CHAT_WS_REUSE_ENABLED is true");
+  assert(resolveChatWsReuse(prodEnv).enabled === true, "production resolve is on");
+  assert(resolveChatWsReuse(previewEnv).enabled === false, "preview resolve stays off");
   assert(resolveChatWsReuse(prodEnv, { productionEnabled: false }).enabled === false, "explicit off");
   assert(
     resolveChatWsReuse({}).enabled === (PRODUCTION_CHAT_WS_REUSE_ENABLED === true),

@@ -32,7 +32,7 @@ export const CHAT_WS_REUSE_RUNTIME_RESPONSE_HEADERS: Record<string, string> = {
  * Hard off for production until an explicit enable. Not an env/secret flag.
  * When true, resolveChatWsReuse enables reuse only for production (and local-as-production) builds.
  */
-export const PRODUCTION_CHAT_WS_REUSE_ENABLED: boolean = false;
+export const PRODUCTION_CHAT_WS_REUSE_ENABLED: boolean = true;
 
 export function resolveChatWsReuse(
   env: ChatAppEnvInput,
