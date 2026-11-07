@@ -10,7 +10,14 @@ import {
   type SessionRevocationDb,
 } from "../src/lib/sessionRevocation";
 import { lockCaddyTableForSlotMutation } from "../src/lib/caddySlotLock";
-import { notifyChatSessionRevokedForCaddyLink } from "../src/lib/chatSessionRevoke";
+import {
+  notifyChatSessionRevokedForCaddyLinksDetailed,
+  notifyChatSessionRevokedForCaddyLinksSafe,
+  chatRevokePendingSuffix,
+  unknownRevokeSummary,
+  type ChatRevokeBulkSummary,
+} from "../src/lib/chatSessionRevoke";
+import { ROSTER_IMPORT_APPLY_NOTIFY_DEADLINE_MS } from "../src/lib/caddyRosterImportApplyConfig";
 import {
   buildXlsxV2PreviewBundle,
   fingerprintRosterSnapshot,
@@ -76,6 +83,8 @@ export type XlsxV2ApplyResult = {
   retired: number;
   drivingChanged: number;
   sessionsRevoked: number;
+  /** 커밋 이후 채팅 폐기 알림 요약(개수·상태만). */
+  chatRevoke?: ChatRevokeBulkSummary;
   createdIds: number[];
   updatedIds: number[];
   retiredIds: number[];
@@ -145,6 +154,7 @@ export async function applyXlsxV2Workbook(
   },
   db: XlsxV2ApplyDb
 ): Promise<XlsxV2ApplyResult> {
+  const applyStartedAt = Date.now();
   if (!input.fingerprint || !/^[a-f0-9]{64}$/i.test(input.fingerprint)) {
     throw new XlsxV2ApplyError(
       "미리보기 확인값(fingerprint)이 필요합니다.",
@@ -306,22 +316,23 @@ export async function applyXlsxV2Workbook(
       fingerprint: liveFingerprint,
     };
   }, { timeout: 60_000, maxWait: 10_000 });
-  for (const caddyId of revokedCaddyIds) {
-    await notifyChatSessionRevokedForCaddyLink(
-      db as {
-        user: {
-          findMany: (args: {
-            where: { caddyId: number };
-            select: { id: true; sessionVersion: true };
-          }) => Promise<Array<{ id: number; sessionVersion: number }>>;
-        };
-      },
-      caddyId
+  // 커밋 이후 폐기 알림: 순차 → 동시 처리 + 시간 상한(요청 제한 초과로 커밋 결과가 실패처럼 보이는 것 방지). 결과는 개수로 보고.
+  let chatRevoke: ChatRevokeBulkSummary;
+  try {
+    chatRevoke = await notifyChatSessionRevokedForCaddyLinksSafe(
+      db as unknown as Parameters<typeof notifyChatSessionRevokedForCaddyLinksDetailed>[0],
+      revokedCaddyIds,
+      { deadlineAt: applyStartedAt + ROSTER_IMPORT_APPLY_NOTIFY_DEADLINE_MS }
     );
+  } catch {
+    console.error("[xlsx-v2-apply] post-commit notify error: status=unknown");
+    chatRevoke = unknownRevokeSummary();
   }
-  return result;
+
+  return { ...result, chatRevoke };
 }
 
 export function xlsxV2ApplySuccessMessage(result: XlsxV2ApplyResult): string {
-  return `명단 반영 완료: 신규 ${result.created} · 수정 ${result.updated} · 퇴사 ${result.retired} · 드라이빙 ${result.drivingChanged}`;
+  const base = `명단 반영 완료: 신규 ${result.created} · 수정 ${result.updated} · 퇴사 ${result.retired} · 드라이빙 ${result.drivingChanged}`;
+  return `${base}${chatRevokePendingSuffix(result.chatRevoke)}`;
 }

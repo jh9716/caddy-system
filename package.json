@@ -19,6 +19,8 @@
     "postinstall": "prisma generate",
     "tsx:safe": "bash scripts/tsx-safe.sh",
     "test:db-safety-unit": "bash scripts/tsx-safe.sh scripts/test-db-safety-unit.ts",
+    "test:session-revoke-fix-unit": "bash scripts/tsx-safe.sh scripts/test-session-revoke-fix-unit.ts",
+    "test:session-revoke-stability-unit": "bash scripts/tsx-safe.sh scripts/test-session-revoke-stability-unit.ts",
     "test:roster-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-roster-unit.ts",
     "test:caddy-roster-board-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-roster-board-unit.ts",
     "test:caddy-manage-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-manage-unit.ts",
@@ -205,7 +207,10 @@
     "compute:android-kakao-debug-key-hash": "bash scripts/tsx-safe.sh scripts/compute-android-kakao-debug-key-hash.ts",
     "native:sync:android": "npx cap sync android",
     "test:chat-perf-diag-unit": "bash scripts/tsx-safe.sh scripts/test-chat-perf-diag-unit.ts",
-    "test:chat-ws-reuse-unit": "bash scripts/tsx-safe.sh scripts/test-chat-ws-reuse-unit.ts"
+    "test:chat-ws-reuse-unit": "bash scripts/tsx-safe.sh scripts/test-chat-ws-reuse-unit.ts",
+    "test:chat-resume-reconnect-unit": "bash scripts/tsx-safe.sh scripts/test-chat-resume-reconnect-unit.ts",
+    "test:chat-ws-entry-supersede-unit": "bash scripts/tsx-safe.sh scripts/test-chat-ws-entry-supersede-unit.ts",
+    "test:parked-resume-unit": "bash scripts/tsx-safe.sh scripts/test-parked-resume-unit.ts"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.2",

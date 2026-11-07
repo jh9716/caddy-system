@@ -1,3 +1,4 @@
+import { chatRevokePendingSuffix, type ChatRevokeBulkSummary } from "./chatRevokeSummary";
 /**
  * Import Apply v2 — transaction / route timeout + 사용자 노출 메시지.
  * Preview 규칙·matching·partial commit과 무관.
@@ -35,10 +36,18 @@ export function rosterImportApplySuccessMessage(result: {
   updated: number;
   created: number;
   phoneUpdated?: number;
+  chatRevoke?: ChatRevokeBulkSummary | null;
 }): string {
   const phone =
     typeof result.phoneUpdated === "number"
       ? ` · 전화 ${result.phoneUpdated}`
       : "";
-  return `명단 반영 완료: 갱신 ${result.updated} · 신규 ${result.created}${phone}`;
+  return `명단 반영 완료: 갱신 ${result.updated} · 신규 ${result.created}${phone}${chatRevokePendingSuffix(result.chatRevoke)}`;
 }
+
+/**
+ * 커밋 이후 채팅 세션 폐기 알림에 쓸 수 있는 시간 상한(ms, apply 함수 시작 기준).
+ * 라우트 maxDuration 에서 감사 기록·응답 여유 15초를 뺀다. 넘기면 남은 알림은 시작하지 않고 개수로 보고한다.
+ */
+export const ROSTER_IMPORT_APPLY_NOTIFY_DEADLINE_MS =
+  ROSTER_IMPORT_APPLY_ROUTE_MAX_DURATION_SECONDS * 1000 - 15_000;

@@ -47,6 +47,7 @@ import {
   validateIncomingHistory,
   validateIncomingMessage,
   validateIncomingRead,
+  validateIncomingResume,
   validateIncomingSync,
   type ChatDeletionType,
   type ChatMessage,
@@ -70,7 +71,35 @@ import {
   assertChatSessionCurrent,
   parseEvictMembersBody,
   parseSessionRevokeBody,
+  probeChatSession,
+  shouldSkipWorkerSessionCheck,
 } from "./sessionCheck";
+import { isPreviewWorker, nextAppExtraHeaders, nextAppFetchInit, nextAppUrl, nextPushDispatchUrl } from "./nextApp";
+import {
+  CHAT_PERF_HEADER,
+  CHAT_PERF_PONG,
+  emptyChatPerf,
+  encodeChatPerfHeader,
+  isPreviewChatPerf,
+  isPreviewPerfPing,
+  previewColo,
+  previewPerfFrame,
+  readChatPerfHeader,
+  roundPerfMs,
+  type ChatPerfT,
+} from "./chatPerf";
+import { BROWSER_CORS, withBrowserCors } from "./browserCors";
+import {
+  isRecheckDue,
+  openSocketRecheckIntervalMs,
+  retryCheckedAt,
+} from "./openSocketRecheck";
+import {
+  ROOM_REVOKE_BUDGET_MS,
+  ROOM_REVOKE_TIMEOUT_MS,
+  revokeHttpStatus,
+} from "./revokeFanout";
+import { parkedResumeVerdict } from "./parkedResume";
 
 export { validateIncomingMessage, isValidRoomName } from "./protocol";
 export { verifyChatToken } from "./token";
@@ -92,19 +121,17 @@ export interface Env {
   CHAT_PUSH_DISPATCH_URL?: string;
   /** "preview" = Preview 전용 Worker. 미설정/"production" = 운영. 그 외 값은 503(fail-closed). */
   CHAT_TOKEN_AUDIENCE?: string;
+  /** 로컬 테스트 전용: 열린 소켓 재검증 주기(ms). 미설정 = 5분. 운영 설정 불필요. */
+  CHAT_OPEN_SOCKET_RECHECK_MS?: string;
+  /** Preview Worker 전용 secret (배포 보호 자동화 우회). 운영 Worker 에는 등록하지 않으며, 등록돼도 운영에서는 전송 안 함. */
+  PREVIEW_APP_BYPASS_SECRET?: string;
+  /** 로컬 테스트 하네스 전용("1"). 배포 설정에 넣지 않는다. */
+  CHAT_PREVIEW_LOCAL_HARNESS?: string;
 }
 
+/** 운영: 기존과 동일. Preview: 검증된 Preview 호스트만 (nextApp.ts). */
 function nextInternalUrl(env: Env, pathname: string): string {
-  const pushUrl = String(env.CHAT_PUSH_DISPATCH_URL || "").trim();
-  if (!pushUrl) return "";
-  try {
-    const parsed = new URL(pushUrl);
-    parsed.pathname = pathname;
-    parsed.search = "";
-    return parsed.toString();
-  } catch {
-    return "";
-  }
+  return nextAppUrl(env, pathname);
 }
 
 function uniqueAttachmentIds(raw: string[], limit: number): string[] {
@@ -121,11 +148,7 @@ function uniqueAttachmentIds(raw: string[], limit: number): string[] {
 }
 
 function corsHeaders(): Record<string, string> {
-  return {
-    "access-control-allow-origin": "*",
-    "access-control-allow-headers": "content-type, authorization, x-chat-media-grant",
-    "access-control-allow-methods": "GET, POST, PUT, OPTIONS",
-  };
+  return { ...BROWSER_CORS };
 }
 
 function json(data: unknown, status = 200): Response {
@@ -142,13 +165,46 @@ function sendJson(ws: WebSocket, data: unknown) {
   ws.send(JSON.stringify(data));
 }
 
+function previewPerfBag(env: Env): ChatPerfT | undefined {
+  return isPreviewChatPerf(env) ? emptyChatPerf() : undefined;
+}
+
+function attachPreviewPerf(request: Request, env: Env, perf: ChatPerfT | undefined): Request {
+  if (!perf || !isPreviewChatPerf(env)) return request;
+  const forwarded = new Request(request.url, request);
+  forwarded.headers.delete(CHAT_PERF_HEADER);
+  forwarded.headers.set(CHAT_PERF_HEADER, encodeChatPerfHeader(perf));
+  return forwarded;
+}
+
+function sendPreviewPerf(env: Env, ws: WebSocket, t: ChatPerfT, request: Request) {
+  if (!isPreviewChatPerf(env)) return;
+  try {
+    sendJson(ws, previewPerfFrame(t, previewColo(request.cf)));
+  } catch {
+    // 계측 실패는 채팅에 영향 없음
+  }
+}
+
 function directoryStub(env: Env) {
   return env.CHAT_DIRECTORY.get(env.CHAT_DIRECTORY.idFromName(DIRECTORY_NAME));
 }
 
+type VerifyIdentityOptions = {
+  /**
+   * "skip": 토큰 서명·만료·audience 만 확인. Next/DB session-check 생략.
+   * ChatRoom DO 의 authorizeSocket 이 최종 session-check 를 수행한다.
+   * Directory 경로에서는 쓰지 않는다. c679e51 확인서(DO 인증 생략) 와는 반대.
+   */
+  sessionCheck?: "required" | "skip";
+  /** Preview 전용 계측 가방. 운영에서는 넘기지 않는다. */
+  perf?: ChatPerfT;
+};
+
 async function verifyIdentity(
   request: Request,
-  env: Env
+  env: Env,
+  options?: VerifyIdentityOptions
 ): Promise<ChatTokenClaims | Response> {
   const url = new URL(request.url);
   const secret = String(env.CHAT_AUTH_SECRET || "").trim();
@@ -162,12 +218,16 @@ async function verifyIdentity(
     : "";
   const token = (url.searchParams.get("token") || bearer).trim();
   if (!token) return json({ error: "unauthorized" }, 401);
+  const tTok = performance.now();
   const claims = await verifyChatToken(token, secret, undefined, audience);
+  if (options?.perf) options.perf.tok = roundPerfMs(performance.now() - tTok);
   if (!claims) return json({ error: "invalid_token" }, 401);
-  const session = await assertChatSessionCurrent(env, claims);
-  if (!session.ok) return json({ error: session.error }, session.status);
-  if (isSessionBoundChatToken(claims)) {
-    void rememberSessionEpoch(env, claims.userId, claims.sv);
+  if (options?.sessionCheck !== "skip") {
+    const session = await assertChatSessionCurrent(env, claims, options?.perf);
+    if (!session.ok) return json({ error: session.error }, session.status);
+    if (isSessionBoundChatToken(claims)) {
+      void rememberSessionEpoch(env, claims.userId, claims.sv);
+    }
   }
   return claims;
 }
@@ -227,22 +287,26 @@ async function isDirectoryMember(
 
 async function authorizeSocket(
   request: Request,
-  env: Env
+  env: Env,
+  options?: VerifyIdentityOptions
 ): Promise<{ room: string; claims: ChatTokenClaims } | Response> {
   const url = new URL(request.url);
   const room = (url.searchParams.get("room") || "").trim();
   if (!isValidRoomName(room)) {
     return json({ error: "invalid_room" }, 400);
   }
-  const identity = await verifyIdentity(request, env);
+  const identity = await verifyIdentity(request, env, options);
   if (identity instanceof Response) return identity;
+  const tMem = performance.now();
+  const member =
+    isCustomRoomId(room) || isDmRoomId(room)
+      ? await isDirectoryMember(env, room, identity.userId)
+      : isAllRoomId(room);
+  if (options?.perf) options.perf.mem = roundPerfMs(performance.now() - tMem);
   const access = resolveChatRoomAccess({
     claims: identity,
     roomId: room,
-    isMember:
-      isCustomRoomId(room) || isDmRoomId(room)
-        ? await isDirectoryMember(env, room, identity.userId)
-        : isAllRoomId(room),
+    isMember: member,
     isAll: isAllRoomId(room),
     isCustom: isCustomRoomId(room),
     isDm: isDmRoomId(room),
@@ -256,14 +320,27 @@ async function authorizeSocket(
 }
 
 async function forwardDirectory(request: Request, env: Env): Promise<Response> {
-  const identity = await verifyIdentity(request, env);
+  const t0 = performance.now();
+  const perf = previewPerfBag(env);
+  const identity = await verifyIdentity(request, env, perf ? { perf } : undefined);
   if (identity instanceof Response) return identity;
+  if (perf) perf.edge = roundPerfMs(performance.now() - t0);
   // Must keep the inbound Request object. Rebuilding Request(url, {headers, body})
   // drops Cloudflare's WebSocket upgrade binding — ChatRoom works because it
   // forwards `request` unchanged. Directory list/WS used the rebuilt Request.
   const forwarded = new Request(request.url, request);
   forwarded.headers.set("x-chat-claims", JSON.stringify(identity));
-  return directoryStub(env).fetch(forwarded);
+  if (perf) {
+    forwarded.headers.delete(CHAT_PERF_HEADER);
+    forwarded.headers.set(CHAT_PERF_HEADER, encodeChatPerfHeader(perf));
+  } else {
+    forwarded.headers.delete(CHAT_PERF_HEADER);
+  }
+  // Directory DO json() has no CORS. Browser GET /directory/rooms/:id (WS reuse revalidation)
+  // is cross-origin from the app origin; without these headers fetch() throws and reuse fail-closes.
+  // 101 Directory WS is returned unchanged.
+  const res = await directoryStub(env).fetch(forwarded);
+  return withBrowserCors(res);
 }
 
 export default {
@@ -283,13 +360,20 @@ export default {
       });
     }
     if (url.pathname === "/ws") {
-      const authorized = await authorizeSocket(request, env);
+      const upgrade = request.headers.get("Upgrade");
+      const sessionCheck = shouldSkipWorkerSessionCheck(url.pathname, upgrade)
+        ? "skip"
+        : "required";
+      const t0 = performance.now();
+      const perf = previewPerfBag(env);
+      const authorized = await authorizeSocket(request, env, { sessionCheck, perf });
       if (authorized instanceof Response) return authorized;
-      if ((request.headers.get("Upgrade") || "").toLowerCase() !== "websocket") {
+      if (perf) perf.edge = roundPerfMs(performance.now() - t0);
+      if ((upgrade || "").toLowerCase() !== "websocket") {
         return json({ error: "upgrade_required" }, 426);
       }
       const id = env.CHAT_ROOM.idFromName(authorized.room);
-      return env.CHAT_ROOM.get(id).fetch(request);
+      return env.CHAT_ROOM.get(id).fetch(attachPreviewPerf(request, env, perf));
     }
     if (url.pathname === "/directory/ws") {
       return forwardDirectory(request, env);
@@ -333,35 +417,85 @@ async function revokeChatSession(request: Request, env: Env): Promise<Response> 
   }
   const parsed = parseSessionRevokeBody(body);
   if (!parsed) return json({ error: "invalid_payload" }, 400);
-  const headers = await internalAuthHeaders(
-    chatInternalSecret(env),
-    CHAT_SESSION_REVOKE_PATH
-  );
-  const dirRes = await directoryStub(env).fetch(
-    new Request(`https://chat-directory${CHAT_SESSION_REVOKE_PATH}`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(parsed),
-    })
-  );
-  // Worker always holds CHAT_ROOM. Directory poke is best-effort for custom rooms;
-  // overall room is the common open-socket case and must not depend on DO env wiring.
-  try {
-    const roomHeaders = await internalAuthHeaders(
-      chatInternalSecret(env),
-      CHAT_ROOM_REVOKE_PATH
+  const secret = chatInternalSecret(env);
+  const dirHeaders = await internalAuthHeaders(secret, CHAT_SESSION_REVOKE_PATH);
+  const roomHeaders = await internalAuthHeaders(secret, CHAT_ROOM_REVOKE_PATH);
+  // Directory(epoch + directory 소켓 + Room fanout)와 전체방 직접 poke 를 병렬로, 각각 시간 상한.
+  // 전체방 직접 poke 는 기존과 같이 보조(best-effort) — 성공 판정은 Directory 결과로만 한다.
+  const [dir, allRoom] = await Promise.all([
+    settleWithin(() =>
+      directoryStub(env).fetch(
+        new Request(`https://chat-directory${CHAT_SESSION_REVOKE_PATH}`, {
+          method: "POST",
+          headers: dirHeaders,
+          body: JSON.stringify(parsed),
+        })
+      ),
+      DIRECTORY_REVOKE_TIMEOUT_MS
+    ),
+    settleWithin(() =>
+      env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName("all")).fetch(
+        new Request(`https://chat-room${CHAT_ROOM_REVOKE_PATH}`, {
+          method: "POST",
+          headers: roomHeaders,
+          body: JSON.stringify(parsed),
+        })
+      ),
+      ROOM_REVOKE_TIMEOUT_MS
+    ),
+  ]);
+  const allRoomOutcome =
+    allRoom.kind === "ok" ? (allRoom.value.ok ? "ok" : "failed") : allRoom.kind;
+  if (dir.kind !== "ok") {
+    // epoch 기록 여부를 알 수 없음 → 실패(503, Next 재시도). 식별자·비밀값 없이 단계만.
+    console.warn(`[chat-session-revoke] directory ${dir.kind}`);
+    return json(
+      { ok: false, status: "failed", stage: "directory", reason: dir.kind, allRoom: allRoomOutcome },
+      revokeHttpStatus("failed")
     );
-    await env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName("all")).fetch(
-      new Request(`https://chat-room${CHAT_ROOM_REVOKE_PATH}`, {
-        method: "POST",
-        headers: roomHeaders,
-        body: JSON.stringify(parsed),
-      })
-    );
-  } catch {
-    // directory poke / token TTL still bound residual access
   }
-  return dirRes;
+  const dirRes = dir.value;
+  const data = (await dirRes.json().catch(() => null)) as
+    | ({ status?: unknown } & Record<string, unknown>)
+    | null;
+  if (dirRes.status >= 400 && dirRes.status < 500) {
+    return json(data ?? { error: "directory_rejected" }, dirRes.status);
+  }
+  const status = data?.status === "ok" || data?.status === "partial" ? data.status : null;
+  if (!data || !status) {
+    return json(
+      { ok: false, status: "failed", stage: "directory", reason: "bad_response", allRoom: allRoomOutcome },
+      revokeHttpStatus("failed")
+    );
+  }
+  if (status !== "ok") {
+    const rooms = (data.rooms || {}) as Record<string, unknown>;
+    console.warn(
+      `[chat-session-revoke] partial rooms ok=${Number(rooms.ok) || 0}/${Number(rooms.total) || 0} failed=${Number(rooms.failed) || 0} timeout=${Number(rooms.timeout) || 0} skipped=${Number(rooms.skipped) || 0}`
+    );
+  }
+  return json({ ...data, allRoom: allRoomOutcome }, revokeHttpStatus(status));
+}
+
+/** Directory 단계 상한: Room fanout 예산 + 여유. Next 시도당 2.5s 안에 응답이 도착하도록. */
+const DIRECTORY_REVOKE_TIMEOUT_MS = ROOM_REVOKE_BUDGET_MS + 600;
+
+type Settled<T> = { kind: "ok"; value: T } | { kind: "timeout" } | { kind: "error" };
+
+async function settleWithin<T>(run: () => Promise<T>, ms: number): Promise<Settled<T>> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      run().then((value) => ({ kind: "ok" as const, value })),
+      new Promise<Settled<T>>((resolve) => {
+        timer = setTimeout(() => resolve({ kind: "timeout" }), ms);
+      }),
+    ]);
+  } catch {
+    return { kind: "error" };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function createRoomFromGrant(request: Request, env: Env): Promise<Response> {
@@ -535,10 +669,18 @@ async function verifyCreateGrant(
   return grant;
 }
 
-type SocketAttach = { claims: ChatTokenClaims; roomId: string };
+/** sc = 마지막 세션 확인 시각(ms). 접속 시 session-check 통과 시각으로 시작. */
+type SocketAttach = { claims: ChatTokenClaims; roomId: string; sc?: number };
 
 export class ChatRoom extends DurableObject<Env> {
   private persistQueue: Promise<void> = Promise.resolve();
+  /** {type:"resume"} 진행 중. 이 동안 history 는 인증 완료 뒤로 미뤄 유출을 막는다. */
+  private resumeInflight = new WeakSet<WebSocket>();
+  /** 열린 소켓 재검증 진행 중인 userId(메모리; 유실돼도 다음 활동 때 다시 시작될 뿐). */
+  private recheckInflight = new Set<number>();
+  /** Preview 계측: 이 isolate 생성 시각·WS 핸드셰이크 횟수(비밀 아님). */
+  private readonly bornAt = Date.now();
+  private wsHandshakes = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -660,8 +802,8 @@ export class ChatRoom extends DurableObject<Env> {
       const parsed = parseSessionRevokeBody(body);
       if (!parsed) return json({ error: "invalid_payload" }, 400);
       this.rememberRevoked(parsed.userId, parsed.sessionVersion);
-      this.expireRevokedSockets(parsed.userId, parsed.sessionVersion);
-      return json({ ok: true });
+      const closed = this.expireRevokedSockets(parsed.userId, parsed.sessionVersion);
+      return json({ ok: true, closed });
     }
     if (request.method === "POST" && url.pathname === CHAT_ROOM_EVICT_PATH) {
       if (!(await verifyInternalRequest(request, this.env, url.pathname))) {
@@ -696,8 +838,25 @@ export class ChatRoom extends DurableObject<Env> {
       this.queueAttachmentCleanup(roomId, attachmentIds);
       return json({ ok: true, purged: attachmentIds.length });
     }
-    const authorized = await authorizeSocket(request, this.env);
+    // 최종 인가: 토큰 + Next/DB session-check + 멤버십. Worker /ws 가 session-check 를
+    // 생략해도 여기서 다시 수행한다. c679e51 확인서로 이 호출을 건너뛰지 말 것.
+    const preview = isPreviewChatPerf(this.env);
+    const perf: ChatPerfT | undefined = preview
+      ? { ...readChatPerfHeader(request.headers) }
+      : undefined;
+    const tDo = performance.now();
+    const authorized = await authorizeSocket(
+      request,
+      this.env,
+      perf ? { perf } : undefined
+    );
     if (authorized instanceof Response) return authorized;
+    if (perf) {
+      perf.doAssert = roundPerfMs(performance.now() - tDo);
+      perf.doFirst = this.wsHandshakes === 0 ? 1 : 0;
+      perf.doAge = roundPerfMs(Date.now() - this.bornAt);
+      this.wsHandshakes += 1;
+    }
     const cap = isAllRoomId(authorized.room) ? MAX_CONNECTIONS_ALL : MAX_CONNECTIONS;
     if (this.ctx.getWebSockets().length >= cap) {
       return json({ error: "room_full" }, 503);
@@ -705,17 +864,36 @@ export class ChatRoom extends DurableObject<Env> {
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
+    const tAccept = performance.now();
     this.ctx.acceptWebSocket(server);
-    const attach: SocketAttach = { claims: authorized.claims, roomId: authorized.room };
+    const attach: SocketAttach = {
+      claims: authorized.claims,
+      roomId: authorized.room,
+      sc: Date.now(),
+    };
     server.serializeAttachment(attach);
+    if (perf) perf.doAccept = roundPerfMs(performance.now() - tAccept);
     void this.rememberRoomId(authorized.room);
+    const tHist = performance.now();
     this.sendHistory(server, authorized.claims.userId, null, HISTORY_LIMIT);
+    if (perf) {
+      perf.doHist = roundPerfMs(performance.now() - tHist);
+      sendPreviewPerf(this.env, server, perf, request);
+    }
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
+  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
     const attach = this.readAttach(ws);
     if (!attach) return;
+    if (typeof message === "string" && isPreviewPerfPing(this.env, message)) {
+      try {
+        ws.send(CHAT_PERF_PONG);
+      } catch {
+        // ignore
+      }
+      return;
+    }
     if (typeof message !== "string") {
       sendJson(ws, {
         type: "error",
@@ -754,10 +932,51 @@ export class ChatRoom extends DurableObject<Env> {
       void this.notifyDirectoryRead(attach.roomId, attach.claims.userId, read.seq);
       return;
     }
+    if (type === "resume") {
+      const resume = validateIncomingResume(parsed);
+      if (!resume.ok) {
+        sendJson(ws, { type: "error", code: resume.code, message: resume.message });
+        return;
+      }
+      this.resumeInflight.add(ws);
+      const run = this.persistQueue
+        .then(() => this.handleParkedResume(ws, attach))
+        .catch(() => {
+          // ignore
+        })
+        .finally(() => this.resumeInflight.delete(ws));
+      this.persistQueue = run;
+      try {
+        this.ctx.waitUntil(run);
+      } catch {
+        // local runtime may not expose waitUntil
+      }
+      await run;
+      return;
+    }
     if (type === "history") {
       const hist = validateIncomingHistory(parsed);
       if (!hist.ok) {
         sendJson(ws, { type: "error", code: hist.code, message: hist.message });
+        return;
+      }
+      if (this.resumeInflight.has(ws)) {
+        const run = this.persistQueue
+          .then(() => {
+            const still = this.readAttach(ws);
+            if (!still) return;
+            this.sendHistory(ws, still.claims.userId, hist.beforeSeq, hist.limit);
+          })
+          .catch(() => {
+            // ignore
+          });
+        this.persistQueue = run;
+        try {
+          this.ctx.waitUntil(run);
+        } catch {
+          // local runtime may not expose waitUntil
+        }
+        await run;
         return;
       }
       this.sendHistory(ws, attach.claims.userId, hist.beforeSeq, hist.limit);
@@ -939,6 +1158,7 @@ export class ChatRoom extends DurableObject<Env> {
       if (raw.claims.exp <= Math.floor(Date.now() / 1000)) return this.expire(ws);
       if (this.isRevoked(raw.claims)) return this.expire(ws, "stale_session");
       if (this.isEvicted(raw.claims.userId)) return this.expire(ws, "room_forbidden");
+      this.maybeRecheckOpenSession(raw);
       return raw;
     }
     const claims = raw as ChatTokenClaims;
@@ -946,6 +1166,59 @@ export class ChatRoom extends DurableObject<Env> {
     if (this.isRevoked(claims)) return this.expire(ws, "stale_session");
     if (this.isEvicted(claims.userId)) return this.expire(ws, "room_forbidden");
     return { claims, roomId: claims.v === 1 ? claims.room : "" };
+  }
+
+  /**
+   * Parked resume: fail-closed session-check + membership, then latest history.
+   * History is not sent until both checks pass. Open-socket recheck probe is not used here.
+   */
+  private async handleParkedResume(ws: WebSocket, attach: SocketAttach): Promise<void> {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    const session = await assertChatSessionCurrent(this.env, attach.claims);
+    const roomId = attach.roomId;
+    const member =
+      isCustomRoomId(roomId) || isDmRoomId(roomId)
+        ? await isDirectoryMember(this.env, roomId, attach.claims.userId)
+        : isAllRoomId(roomId);
+    const access = resolveChatRoomAccess({
+      claims: attach.claims,
+      roomId,
+      isMember: member,
+      isAll: isAllRoomId(roomId),
+      isCustom: isCustomRoomId(roomId),
+      isDm: isDmRoomId(roomId),
+      isLegacy: isLegacyTeamRoomId(roomId),
+    });
+    const verdict = parkedResumeVerdict({ session, access });
+    if (verdict.action === "deny") {
+      if (verdict.close === "unavailable") {
+        this.expireUnavailable(ws);
+        return;
+      }
+      this.expire(ws, verdict.close);
+      return;
+    }
+    const still = this.readAttach(ws);
+    if (!still) return;
+    this.sendHistory(ws, still.claims.userId, null, HISTORY_LIMIT);
+  }
+
+  private expireUnavailable(ws: WebSocket): null {
+    try {
+      sendJson(ws, {
+        type: "error",
+        code: "session_check_unavailable",
+        message: "session check unavailable",
+      });
+    } catch {
+      // still close
+    }
+    try {
+      ws.close(1011, "session_check_unavailable");
+    } catch {
+      // ignore
+    }
+    return null;
   }
 
   private expire(
@@ -1005,7 +1278,8 @@ export class ChatRoom extends DurableObject<Env> {
     );
   }
 
-  private expireRevokedSockets(userId: number, sessionVersion: number) {
+  private expireRevokedSockets(userId: number, sessionVersion: number): number {
+    let closed = 0;
     for (const socket of this.ctx.getWebSockets()) {
       const attach = socket.deserializeAttachment() as SocketAttach | ChatTokenClaims | null;
       if (!attach) continue;
@@ -1013,6 +1287,49 @@ export class ChatRoom extends DurableObject<Env> {
       if (!claims || Number(claims.userId) !== userId) continue;
       if (!isChatSessionEpochStale(chatTokenSessionVersion(claims), sessionVersion)) continue;
       this.expire(socket, "stale_session");
+      closed += 1;
+    }
+    return closed;
+  }
+
+  /** 핫패스: 숫자 비교만. 주기가 지난 v2 소켓이면 사용자별 1회 비동기 재검증 시작. */
+  private maybeRecheckOpenSession(attach: SocketAttach) {
+    const claims = attach.claims;
+    if (claims.v !== 2) return;
+    const interval = openSocketRecheckIntervalMs(this.env.CHAT_OPEN_SOCKET_RECHECK_MS);
+    if (!isRecheckDue(attach.sc, Date.now(), interval)) return;
+    const userId = Number(claims.userId);
+    if (this.recheckInflight.has(userId)) return;
+    this.recheckInflight.add(userId);
+    void this.recheckOpenSession(claims, interval)
+      .catch(() => undefined)
+      .finally(() => this.recheckInflight.delete(userId));
+  }
+
+  private async recheckOpenSession(claims: ChatTokenClaims, interval: number) {
+    const result = await probeChatSession(this.env, claims);
+    const userId = Number(claims.userId);
+    const tokenSv = chatTokenSessionVersion(claims);
+    const now = Date.now();
+    for (const socket of this.ctx.getWebSockets()) {
+      const raw = socket.deserializeAttachment() as SocketAttach | ChatTokenClaims | null;
+      if (!raw || !("claims" in raw) || !raw.claims) continue;
+      if (Number(raw.claims.userId) !== userId) continue;
+      const sv = chatTokenSessionVersion(raw.claims);
+      if (result === "revoked") {
+        // 같은/더 낮은 sv 만 종료(같은 사용자의 더 새 토큰 소켓은 별도 확인). 상태 저장 없음.
+        if (tokenSv != null && sv != null && sv <= tokenSv) this.expire(socket, "stale_session");
+        continue;
+      }
+      if (sv !== tokenSv) continue;
+      try {
+        socket.serializeAttachment({
+          ...raw,
+          sc: result === "current" ? now : retryCheckedAt(now, interval),
+        });
+      } catch {
+        // closing socket
+      }
     }
   }
 
@@ -1301,6 +1618,7 @@ export class ChatRoom extends DurableObject<Env> {
       if (attach.claims.exp <= now) return this.expire(socket);
       if (this.isRevoked(attach.claims)) return this.expire(socket, "stale_session");
       if (this.isEvicted(attach.claims.userId)) return this.expire(socket, "room_forbidden");
+      this.maybeRecheckOpenSession(attach);
       return attach;
     }
     const claims = attach as ChatTokenClaims;
@@ -1563,8 +1881,9 @@ export class ChatRoom extends DurableObject<Env> {
       );
       const res = await fetch(url, {
         method: "POST",
-        headers,
+        headers: { ...headers, ...nextAppExtraHeaders(this.env, url) },
         body: JSON.stringify({ roomId, attachmentIds }),
+        ...nextAppFetchInit(this.env),
       });
       if (!res.ok) {
         console.error("[chat-photo] attachment cleanup request failed", {
@@ -1588,8 +1907,9 @@ export class ChatRoom extends DurableObject<Env> {
       );
       await fetch(consumeUrl, {
         method: "POST",
-        headers,
+        headers: { ...headers, ...nextAppExtraHeaders(this.env, consumeUrl) },
         body: JSON.stringify({ attachmentIds }),
+        ...nextAppFetchInit(this.env),
       });
     } catch {
       // persist already succeeded
@@ -1605,7 +1925,7 @@ export class ChatRoom extends DurableObject<Env> {
   }
 
   private async sendChatPushDispatch(roomId: string, message: ChatMessage) {
-    const url = String(this.env.CHAT_PUSH_DISPATCH_URL || "").trim();
+    const url = nextPushDispatchUrl(this.env);
     if (!url || message.deletionType) return;
     try {
       let roomType = "ALL";
@@ -1623,7 +1943,7 @@ export class ChatRoom extends DurableObject<Env> {
       );
       await fetch(url, {
         method: "POST",
-        headers,
+        headers: { ...headers, ...nextAppExtraHeaders(this.env, url) },
         body: JSON.stringify({
           roomId,
           seq: message.seq || 0,
@@ -1644,6 +1964,7 @@ export class ChatRoom extends DurableObject<Env> {
           memberUserIds,
           roomName: isAllRoomId(roomId) ? "전체 채팅방" : null,
         }),
+        ...nextAppFetchInit(this.env),
       });
     } catch {
       // chat persist already succeeded

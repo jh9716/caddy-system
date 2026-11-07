@@ -43,6 +43,18 @@ import {
 } from "../src/lib/caddySlot";
 import { lockCaddyTableForSlotMutation } from "../src/lib/caddySlotLock";
 import {
+  employmentBecameRetired,
+  incrementSessionVersionForCaddyLink,
+  type SessionRevocationDb,
+} from "../src/lib/sessionRevocation";
+import {
+  notifyChatSessionRevokedForCaddyLinksDetailed,
+  notifyChatSessionRevokedForCaddyLinksSafe,
+  chatRevokePendingCount,
+  unknownRevokeSummary,
+  type ChatRevokeBulkSummary,
+} from "../src/lib/chatSessionRevoke";
+import {
   isPrimaryTeam,
   occupiesHouseThirdSlot,
   parseImportThirdBandSubgroup,
@@ -56,6 +68,7 @@ import {
   ROSTER_IMPORT_APPLY_FAILED_USER_MESSAGE,
   ROSTER_IMPORT_APPLY_TX_MAX_WAIT_MS,
   ROSTER_IMPORT_APPLY_TX_TIMEOUT_MS,
+  ROSTER_IMPORT_APPLY_NOTIFY_DEADLINE_MS,
 } from "../src/lib/caddyRosterImportApplyConfig";
 
 export {
@@ -196,6 +209,12 @@ export type RosterApplyResult = {
   created: number;
   phoneUpdated: number;
   createdIds: number[];
+  /** 이번 반영으로 RETIRED 로 바뀐 캐디에 연결된 계정의 sessionVersion 증가 수(개별 퇴사와 같은 규칙). */
+  sessionsRevoked?: number;
+  /** 채팅 세션 폐기 알림 실패+미전송 수(설정 없음·시간 상한 포함). null = 알림 처리 예외로 건수 확정 불가(성공 아님). */
+  chatRevokeFailed?: number | null;
+  /** 알림 요약(개수·상태만). status: none|ok|not_configured|partial|failed. DB 반영은 이미 커밋된 상태. */
+  chatRevoke?: ChatRevokeBulkSummary;
 };
 
 function splitCsvLine(line: string): string[] {
@@ -2008,6 +2027,7 @@ export async function applyRosterImportPayloadV2(
     allowExplicitNeedsReviewCreates?: boolean;
   }
 ): Promise<RosterApplyResult> {
+  const applyStartedAt = Date.now();
   for (const c of payload.creates) {
     if (!c.name?.trim() || !c.team?.trim()) {
       throw new RosterImportApplyError("create에 name, team 필수");
@@ -2334,6 +2354,14 @@ export async function applyRosterImportPayloadV2(
     createData.push(data);
   }
 
+  const retireCandidateIds = Array.from(
+    new Set(
+      normUpdates
+        .filter((u) => String(u.employmentStatus ?? "").toUpperCase() === "RETIRED")
+        .map((u) => u.id)
+    )
+  );
+
   const run = async (client: PrismaLike) => {
     await assertImportSlotGuardAfterLock(
       client,
@@ -2342,6 +2370,20 @@ export async function applyRosterImportPayloadV2(
       normUpdates,
       normCreates
     );
+
+    // 퇴사 전환 대상: 잠금 이후 실제 현재 상태를 다시 읽어 "RETIRED 가 아니던 → RETIRED" 인 캐디만(개별 퇴사와 같은 규칙).
+    const retiringIds: number[] = [];
+    if (retireCandidateIds.length > 0) {
+      const liveRows = await client.caddy.findMany({
+        where: { id: { in: retireCandidateIds } },
+        select: { id: true, employmentStatus: true },
+      });
+      for (const row of liveRows) {
+        if (employmentBecameRetired(row.employmentStatus, "RETIRED")) {
+          retiringIds.push(row.id);
+        }
+      }
+    }
 
     let updated = 0;
     if (batchUpdates.length > 0) {
@@ -2384,22 +2426,60 @@ export async function applyRosterImportPayloadV2(
       }
     }
 
+    // 같은 트랜잭션에서 sessionVersion 증가(개별 퇴사 writeCaddyRevokingRetiredSessions 와 동일). 실패 시 전체 롤백.
+    let sessionsRevoked = 0;
+    if (retiringIds.length > 0) {
+      const userDb = (client as unknown as { user?: unknown }).user;
+      if (!userDb) {
+        throw new Error("session revocation unavailable for retire import");
+      }
+      for (const caddyId of retiringIds) {
+        sessionsRevoked += await incrementSessionVersionForCaddyLink(
+          client as unknown as SessionRevocationDb,
+          caddyId
+        );
+      }
+    }
+
     return {
       updated,
       created: createdIds.length,
       phoneUpdated,
       createdIds,
-    } satisfies RosterApplyResult;
+      sessionsRevoked,
+      retiringIds,
+    };
   };
 
-  try {
-    if (typeof prisma.$transaction === "function") {
-      return await prisma.$transaction(
-        (tx) => run(tx),
-        ROSTER_IMPORT_APPLY_TX_OPTIONS
+  // 커밋 이후에만 채팅 세션 폐기 알림(기존 개별 퇴사와 같은 순서). 실패는 집계·로그(식별자 없음).
+  const finish = async (r: Awaited<ReturnType<typeof run>>): Promise<RosterApplyResult> => {
+    let chatRevoke: ChatRevokeBulkSummary;
+    try {
+      chatRevoke = await notifyChatSessionRevokedForCaddyLinksSafe(
+        prisma as unknown as Parameters<typeof notifyChatSessionRevokedForCaddyLinksDetailed>[0],
+        r.retiringIds,
+        { deadlineAt: applyStartedAt + ROSTER_IMPORT_APPLY_NOTIFY_DEADLINE_MS }
       );
+    } catch {
+      chatRevoke = unknownRevokeSummary();
     }
-    return await run(prisma);
+    return {
+      updated: r.updated,
+      created: r.created,
+      phoneUpdated: r.phoneUpdated,
+      createdIds: r.createdIds,
+      sessionsRevoked: r.sessionsRevoked,
+      chatRevokeFailed: chatRevokePendingCount(chatRevoke),
+      chatRevoke,
+    };
+  };
+
+  let committed: Awaited<ReturnType<typeof run>>;
+  try {
+    committed =
+      typeof prisma.$transaction === "function"
+        ? await prisma.$transaction((tx) => run(tx), ROSTER_IMPORT_APPLY_TX_OPTIONS)
+        : await run(prisma);
   } catch (e) {
     if (e instanceof RosterImportApplyError) throw e;
     if (e instanceof ThirdBandSubgroupError) {
@@ -2421,6 +2501,21 @@ export async function applyRosterImportPayloadV2(
       500,
       "apply_failed"
     );
+  }
+  // 커밋 이후 단계는 트랜잭션 try 밖 + 자체 예외 차단: 알림 문제로 이미 커밋된 반영이 "반영 실패"로 보고되지 않게 한다.
+  try {
+    return await finish(committed);
+  } catch {
+    console.error("[roster-import-v2] post-commit finish error: status=unknown");
+    return {
+      updated: committed.updated,
+      created: committed.created,
+      phoneUpdated: committed.phoneUpdated,
+      createdIds: committed.createdIds,
+      sessionsRevoked: committed.sessionsRevoked,
+      chatRevokeFailed: null,
+      chatRevoke: unknownRevokeSummary(),
+    };
   }
 }
 

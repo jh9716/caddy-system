@@ -34,14 +34,43 @@ import {
   CHAT_SESSION_EPOCH_PATH,
   CHAT_SESSION_REVOKE_PATH,
   parseSessionRevokeBody,
+  probeChatSession,
 } from "./sessionCheck";
+import {
+  isRecheckDue,
+  openSocketRecheckIntervalMs,
+  retryCheckedAt,
+} from "./openSocketRecheck";
 import { planCanonicalDmCreate } from "./dmMembership";
+import {
+  fanoutRoomRevoke,
+  revokeHttpStatus,
+  type RoomFanoutSummary,
+} from "./revokeFanout";
+import {
+  CHAT_PERF_PONG,
+  isPreviewChatPerf,
+  isPreviewPerfPing,
+  previewColo,
+  previewPerfFrame,
+  readChatPerfHeader,
+  roundPerfMs,
+  type ChatPerfT,
+} from "./chatPerf";
 
 export type DirectoryEnv = {
   CHAT_AUTH_SECRET: string;
   CHAT_INTERNAL_SECRET?: string;
   CHAT_ROOM?: DurableObjectNamespace;
+  CHAT_PUSH_DISPATCH_URL?: string;
+  /** "preview" = Preview 전용 Worker. 미설정/"production" = 운영. */
+  CHAT_TOKEN_AUDIENCE?: string;
+  /** 로컬 테스트 전용: 열린 소켓 재검증 주기(ms). 미설정 = 5분. */
+  CHAT_OPEN_SOCKET_RECHECK_MS?: string;
 };
+
+/** Directory 소켓 attachment: claims + sc(마지막 세션 확인 시각 ms). */
+type DirectoryAttach = ChatTokenClaims & { sc?: number };
 
 type MemberSnap = {
   userId: number;
@@ -62,6 +91,12 @@ function sendJson(ws: WebSocket, data: unknown) {
 }
 
 export class ChatDirectory extends DurableObject<DirectoryEnv> {
+  /** 같은 (userId, sessionVersion) revoke 동시 요청의 Room fanout 공유(메모리, 멱등이라 유실돼도 안전). */
+  private revokeInflight = new Map<string, Promise<RoomFanoutSummary>>();
+  private recheckInflight = new Set<number>();
+  private readonly bornAt = Date.now();
+  private wsHandshakes = 0;
+
   constructor(ctx: DurableObjectState, env: DirectoryEnv) {
     super(ctx, env);
     this.ctx.storage.sql.exec(`
@@ -178,12 +213,33 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
       if (this.ctx.getWebSockets().length >= MAX_DIRECTORY_CONNECTIONS) {
         return json({ error: "directory_full" }, 503);
       }
+      const preview = isPreviewChatPerf(this.env);
+      const perf: ChatPerfT | undefined = preview
+        ? { ...readChatPerfHeader(request.headers) }
+        : undefined;
       const pair = new WebSocketPair();
       const client = pair[0];
       const server = pair[1];
+      const tAccept = performance.now();
       this.ctx.acceptWebSocket(server);
-      server.serializeAttachment(claims);
+      const attach: DirectoryAttach = { ...claims, sc: Date.now() };
+      server.serializeAttachment(attach);
+      if (perf) {
+        perf.doAccept = roundPerfMs(performance.now() - tAccept);
+        perf.doFirst = this.wsHandshakes === 0 ? 1 : 0;
+        perf.doAge = roundPerfMs(Date.now() - this.bornAt);
+        this.wsHandshakes += 1;
+      }
+      const tList = performance.now();
       sendJson(server, { type: "rooms", rooms: this.listForUser(claims.userId) });
+      if (perf) {
+        perf.doHist = roundPerfMs(performance.now() - tList);
+        try {
+          sendJson(server, previewPerfFrame(perf, previewColo(request.cf)));
+        } catch {
+          // 계측 실패는 목록 전송에 영향 없음
+        }
+      }
       return new Response(null, { status: 101, webSocket: client });
     }
 
@@ -220,6 +276,14 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
     const claims = this.liveDirectoryClaims(ws);
     if (!claims) return;
+    if (typeof message === "string" && isPreviewPerfPing(this.env, message)) {
+      try {
+        ws.send(CHAT_PERF_PONG);
+      } catch {
+        // ignore
+      }
+      return;
+    }
     if (typeof message !== "string") return;
     let parsed: unknown;
     try {
@@ -614,7 +678,8 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
     );
   }
 
-  private expireDirectoryUser(userId: number, sessionVersion: number) {
+  private expireDirectoryUser(userId: number, sessionVersion: number): number {
+    let closed = 0;
     for (const ws of this.ctx.getWebSockets()) {
       const claims = ws.deserializeAttachment() as ChatTokenClaims | null;
       if (!claims || Number(claims.userId) !== userId) continue;
@@ -635,28 +700,62 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
       } catch {
         // ignore
       }
+      closed += 1;
     }
+    return closed;
   }
 
-  private async pokeRoomsForRevoke(userId: number, sessionVersion: number) {
-    const ns = this.env.CHAT_ROOM;
-    if (!ns) return;
-    const secret = chatInternalSecret(this.env);
-    if (!secret) return;
-    const headers = await internalAuthHeaders(secret, CHAT_ROOM_REVOKE_PATH);
-    for (const roomId of this.listKnownRoomIds()) {
-      try {
-        await ns.get(ns.idFromName(roomId)).fetch(
-          new Request(`https://chat-room${CHAT_ROOM_REVOKE_PATH}`, {
-            method: "POST",
-            headers,
-            body: JSON.stringify({ userId, sessionVersion }),
-          })
-        );
-      } catch {
-        // best-effort open-socket close
-      }
+  /**
+   * 폐기 대상 Room: 전체방 + 레거시 팀방(v1 토큰) + 이 사용자가 멤버인 custom/DM 방.
+   * v2 소켓은 custom/DM 접속 시 Directory members 로 인가되므로(authorizeSocket), 멤버가 아닌 방에는
+   * 해당 사용자의 v2 소켓이 있을 수 없다. 이전에는 알려진 모든 방(DM 포함)을 순차 await 했다.
+   */
+  private revokeTargetRoomIds(userId: number): string[] {
+    const ids = new Set<string>([ALL_ROOM_ID, ...ALLOWED_ROOMS]);
+    const rows = this.ctx.storage.sql
+      .exec(`SELECT room_id FROM members WHERE user_id = ?`, userId)
+      .toArray();
+    for (const row of rows) {
+      const id = String(row.room_id || "");
+      if (id) ids.add(id);
     }
+    return [...ids];
+  }
+
+  private async pokeRoomsForRevoke(
+    userId: number,
+    sessionVersion: number
+  ): Promise<RoomFanoutSummary> {
+    const ns = this.env.CHAT_ROOM;
+    const secret = chatInternalSecret(this.env);
+    const roomIds = this.revokeTargetRoomIds(userId);
+    if (!ns || !secret) {
+      // 설정 누락을 성공으로 보지 않는다.
+      return {
+        status: "partial",
+        total: roomIds.length,
+        ok: 0,
+        failed: roomIds.length,
+        timeout: 0,
+        skipped: 0,
+        socketsClosed: 0,
+        elapsedMs: 0,
+      };
+    }
+    const headers = await internalAuthHeaders(secret, CHAT_ROOM_REVOKE_PATH);
+    const body = JSON.stringify({ userId, sessionVersion });
+    return fanoutRoomRevoke(roomIds, async (roomId) => {
+      const res = await ns.get(ns.idFromName(roomId)).fetch(
+        new Request(`https://chat-room${CHAT_ROOM_REVOKE_PATH}`, {
+          method: "POST",
+          headers,
+          body,
+        })
+      );
+      if (!res.ok) return { ok: false };
+      const data = (await res.json().catch(() => null)) as { closed?: unknown } | null;
+      return { ok: true, closed: Number(data?.closed) || 0 };
+    });
   }
 
   private async handleSessionEpoch(request: Request, revoke: boolean): Promise<Response> {
@@ -668,12 +767,31 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
     }
     const parsed = parseSessionRevokeBody(body);
     if (!parsed) return json({ error: "invalid_payload" }, 400);
+    // 1) 동기 보장 단계: epoch 기록(max) + Directory 소켓 종료. 실패 시 throw → 상위에서 failed.
     this.rememberEpoch(parsed.userId, parsed.sessionVersion);
-    if (revoke) {
-      this.expireDirectoryUser(parsed.userId, parsed.sessionVersion);
-      await this.pokeRoomsForRevoke(parsed.userId, parsed.sessionVersion);
+    if (!revoke) return json({ ok: true });
+    const directoryClosed = this.expireDirectoryUser(parsed.userId, parsed.sessionVersion);
+    // 2) Room fanout: 제한 동시성 + Room 별 timeout + 전체 예산. 같은 (userId, sv) 동시 요청은 한 번만 fanout.
+    const key = `${parsed.userId}:${parsed.sessionVersion}`;
+    let pending = this.revokeInflight.get(key);
+    if (!pending) {
+      pending = this.pokeRoomsForRevoke(parsed.userId, parsed.sessionVersion).finally(() => {
+        this.revokeInflight.delete(key);
+      });
+      this.revokeInflight.set(key, pending);
     }
-    return json({ ok: true });
+    const rooms = await pending;
+    const status = rooms.status === "ok" ? "ok" : "partial";
+    return json(
+      {
+        ok: status === "ok",
+        status,
+        epochStored: true,
+        directoryClosed,
+        rooms,
+      },
+      revokeHttpStatus(status)
+    );
   }
 
   private liveDirectoryClaims(ws: WebSocket): ChatTokenClaims | null {
@@ -720,7 +838,56 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
       }
       return null;
     }
+    this.maybeRecheckOpenSession(claims as DirectoryAttach);
     return claims;
+  }
+
+  /** 핫패스: 숫자 비교만. 주기가 지난 소켓이면 사용자별 1회 비동기 재검증(ChatRoom 과 동일 규칙). */
+  private maybeRecheckOpenSession(attach: DirectoryAttach) {
+    if (attach.v !== 2) return;
+    const interval = openSocketRecheckIntervalMs(this.env.CHAT_OPEN_SOCKET_RECHECK_MS);
+    if (!isRecheckDue(attach.sc, Date.now(), interval)) return;
+    const userId = Number(attach.userId);
+    if (this.recheckInflight.has(userId)) return;
+    this.recheckInflight.add(userId);
+    void this.recheckOpenSession(attach, interval)
+      .catch(() => undefined)
+      .finally(() => this.recheckInflight.delete(userId));
+  }
+
+  private async recheckOpenSession(claims: ChatTokenClaims, interval: number) {
+    const result = await probeChatSession(this.env, claims);
+    const userId = Number(claims.userId);
+    const tokenSv = chatTokenSessionVersion(claims);
+    const now = Date.now();
+    for (const ws of this.ctx.getWebSockets()) {
+      const attach = ws.deserializeAttachment() as DirectoryAttach | null;
+      if (!attach || Number(attach.userId) !== userId) continue;
+      const sv = chatTokenSessionVersion(attach);
+      if (result === "revoked") {
+        if (tokenSv == null || sv == null || sv > tokenSv) continue;
+        try {
+          sendJson(ws, { type: "error", code: "stale_session", message: "session revoked" });
+        } catch {
+          // ignore
+        }
+        try {
+          ws.close(4008, "stale_session");
+        } catch {
+          // ignore
+        }
+        continue;
+      }
+      if (sv !== tokenSv) continue;
+      try {
+        ws.serializeAttachment({
+          ...attach,
+          sc: result === "current" ? now : retryCheckedAt(now, interval),
+        });
+      } catch {
+        // closing socket
+      }
+    }
   }
 
   private broadcastAffected(roomId: string) {

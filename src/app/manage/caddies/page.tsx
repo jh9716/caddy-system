@@ -109,6 +109,7 @@ import { rosterImportContactSummary } from '@/lib/rosterImportContactSummary';
 import type { XlsxV2ApplyResult } from '@/lib/caddyRosterImportXlsxV2Apply';
 import type { XlsxV2WorkbookPreview } from '@/lib/caddyRosterImportXlsxV2Preview';
 import Link from 'next/link';
+import { rosterImportAuditWarningSuffix } from '@/lib/rosterImportAudit';
 
 /** 한눈에 보기: 1~12조 */
 const GLANCE_TEAMS = PRIMARY_TEAMS;
@@ -2757,7 +2758,7 @@ export default function ManageCaddiesPage() {
                         updated: Number(data.updated) || 0,
                         created: Number(data.created) || 0,
                         phoneUpdated: Number(data.phoneUpdated) || 0,
-                      })
+                      }) + rosterImportAuditWarningSuffix(data.auditRecorded)
                     );
                     setImportPreview(null);
                     setV1Resolutions({});
@@ -2810,7 +2811,11 @@ export default function ManageCaddiesPage() {
                       updated: Number(data.updated) || 0,
                       created: Number(data.created) || 0,
                       phoneUpdated: Number(data.phoneUpdated) || 0,
-                    })
+                      chatRevoke:
+                        data.chatRevoke && typeof data.chatRevoke.status === 'string'
+                          ? data.chatRevoke
+                          : null,
+                    }) + rosterImportAuditWarningSuffix(data.auditRecorded)
                   );
                   setImportPreview(null);
                   setV1Resolutions({});

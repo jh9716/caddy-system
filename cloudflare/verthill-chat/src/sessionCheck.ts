@@ -7,6 +7,13 @@ import {
   isSessionBoundChatToken,
   type ChatTokenClaims,
 } from "./token";
+import { classifySessionProbe, type SessionProbeResult } from "./openSocketRecheck";
+import { isPreviewWorker, isRedirectResponse, nextAppExtraHeaders, nextAppFetchInit, nextAppUrl, type NextAppEnv } from "./nextApp";
+import {
+  parseSessionCheckServerTiming,
+  roundPerfMs,
+  type ChatPerfT,
+} from "./chatPerf";
 
 export const CHAT_SESSION_CHECK_PATH = "/api/chat/session-check";
 export const CHAT_SESSION_REVOKE_PATH = "/internal/session-revoke";
@@ -15,23 +22,27 @@ export const CHAT_ROOM_REVOKE_PATH = "/internal/revoke-user";
 export const CHAT_ROOM_EVICT_PATH = "/internal/evict-members";
 export const SESSION_CHECK_TIMEOUT_MS = 2500;
 
-export type SessionCheckEnv = {
+/**
+ * Worker /ws WebSocket 업그레이드만: 진입부의 Next/DB session-check 를 생략한다.
+ * ChatRoom.authorizeSocket 이 최종 session-check 를 수행한다.
+ * Directory 와 HTTP(비업그레이드) /ws 프로브는 생략하지 않는다.
+ * c679e51 확인서(DO authorizeSocket 생략) 와는 반대 방향이다.
+ */
+export function shouldSkipWorkerSessionCheck(
+  pathname: string,
+  upgradeHeader: string | null | undefined
+): boolean {
+  return pathname === "/ws" && String(upgradeHeader || "").toLowerCase() === "websocket";
+}
+
+export type SessionCheckEnv = NextAppEnv & {
   CHAT_AUTH_SECRET: string;
   CHAT_INTERNAL_SECRET?: string;
-  CHAT_PUSH_DISPATCH_URL?: string;
 };
 
+/** 운영: 기존과 동일하게 CHAT_PUSH_DISPATCH_URL 에서 유도. Preview: 검증된 Preview 호스트만 (아니면 ""). */
 export function nextSessionCheckUrl(env: SessionCheckEnv): string {
-  const pushUrl = String(env.CHAT_PUSH_DISPATCH_URL || "").trim();
-  if (!pushUrl) return "";
-  try {
-    const parsed = new URL(pushUrl);
-    parsed.pathname = CHAT_SESSION_CHECK_PATH;
-    parsed.search = "";
-    return parsed.toString();
-  } catch {
-    return "";
-  }
+  return nextAppUrl(env, CHAT_SESSION_CHECK_PATH);
 }
 
 export function parseSessionRevokeBody(raw: unknown): {
@@ -64,7 +75,8 @@ export function parseEvictMembersBody(raw: unknown): { userIds: number[] } | nul
 
 export async function assertChatSessionCurrent(
   env: SessionCheckEnv,
-  claims: ChatTokenClaims
+  claims: ChatTokenClaims,
+  perf?: ChatPerfT
 ): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
   if (claims.v !== 2) return { ok: true };
   if (!isSessionBoundChatToken(claims)) {
@@ -76,14 +88,32 @@ export async function assertChatSessionCurrent(
   if (!url) return { ok: false, status: 503, error: "session_check_unconfigured" };
   const secret = chatInternalSecret(env);
   if (!secret) return { ok: false, status: 503, error: "session_check_unconfigured" };
+  const tSc = performance.now();
   try {
-    const headers = await internalAuthHeaders(secret, CHAT_SESSION_CHECK_PATH);
+    const headers = {
+      ...(await internalAuthHeaders(secret, CHAT_SESSION_CHECK_PATH)),
+      ...nextAppExtraHeaders(env, url),
+    };
     const res = await fetch(url, {
       method: "POST",
       headers,
       body: JSON.stringify({ userId: claims.userId, sv }),
       signal: AbortSignal.timeout(SESSION_CHECK_TIMEOUT_MS),
+      ...nextAppFetchInit(env),
     });
+    if (perf) {
+      perf.sc = roundPerfMs(performance.now() - tSc);
+      if (isPreviewWorker(env)) {
+        const parts = parseSessionCheckServerTiming(res.headers.get("Server-Timing"));
+        if (parts.scApp != null) perf.scApp = parts.scApp;
+        if (parts.scDb != null) perf.scDb = parts.scDb;
+        if (parts.scCold != null) perf.scCold = parts.scCold;
+      }
+    }
+    // Preview: 리다이렉트는 따라가지 않고 실패(503) — 비밀 헤더가 다른 호스트로 가지 않게.
+    if (isPreviewWorker(env) && isRedirectResponse(res)) {
+      return { ok: false, status: 503, error: "session_check_unavailable" };
+    }
     if (res.status === 503) {
       return { ok: false, status: 503, error: "session_check_unavailable" };
     }
@@ -96,6 +126,43 @@ export async function assertChatSessionCurrent(
     }
     return { ok: true };
   } catch {
+    if (perf && perf.sc == null) perf.sc = roundPerfMs(performance.now() - tSc);
     return { ok: false, status: 503, error: "session_check_unavailable" };
+  }
+}
+
+/**
+ * 이미 열린 소켓 재검증용(새 연결 gate 아님). assertChatSessionCurrent 와 달리 fail-open:
+ * 명확한 폐기 응답만 "revoked", 그 외(장애·시간 초과·미설정·v1)는 "unknown"/"current".
+ */
+export async function probeChatSession(
+  env: SessionCheckEnv,
+  claims: ChatTokenClaims
+): Promise<SessionProbeResult> {
+  if (claims.v !== 2) return "current";
+  if (!isSessionBoundChatToken(claims)) return "unknown";
+  const sv = chatTokenSessionVersion(claims);
+  if (sv == null) return "unknown";
+  const url = nextSessionCheckUrl(env);
+  const secret = chatInternalSecret(env);
+  if (!url || !secret) return "unknown";
+  try {
+    const headers = {
+      ...(await internalAuthHeaders(secret, CHAT_SESSION_CHECK_PATH)),
+      ...nextAppExtraHeaders(env, url),
+    };
+    const res = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ userId: claims.userId, sv }),
+      signal: AbortSignal.timeout(SESSION_CHECK_TIMEOUT_MS),
+      ...nextAppFetchInit(env),
+    });
+    // Preview 리다이렉트 = 판정 불가(unknown) → 소켓 유지, 재요청 없음.
+    if (isPreviewWorker(env) && isRedirectResponse(res)) return "unknown";
+    const body = await res.json().catch(() => null);
+    return classifySessionProbe(res.status, body);
+  } catch {
+    return "unknown";
   }
 }

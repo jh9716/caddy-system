@@ -26,12 +26,14 @@ test("protocol limits and team rooms exist", () => {
 test("worker stays isolated from Next/Neon/Vercel", () => {
   const index = readFileSync(join(root, "../src/index.ts"), "utf8");
   const directory = readFileSync(join(root, "../src/directory.ts"), "utf8");
+  const browserCors = readFileSync(join(root, "../src/browserCors.ts"), "utf8");
+  const parkedResume = readFileSync(join(root, "../src/parkedResume.ts"), "utf8");
   assert.doesNotMatch(index, /vercel|neon|prisma|vh_session|FCM|D1|KV/i);
   assert.doesNotMatch(directory, /vercel|neon|prisma|vh_session|FCM|D1|R2|KV/i);
   assert.match(index, /CHAT_MEDIA/);
   assert.match(index, /\/media\/upload/);
   assert.match(index, /handleChatMediaRequest/);
-  assert.match(index, /x-chat-media-grant/);
+  assert.match(browserCors, /x-chat-media-grant/);
   assert.match(index, /DurableObject/);
   assert.match(index, /CHAT_ROOM/);
   assert.match(index, /CHAT_DIRECTORY/);
@@ -47,7 +49,14 @@ test("worker stays isolated from Next/Neon/Vercel", () => {
   assert.doesNotMatch(index, /trimHistory/);
   assert.doesNotMatch(index, /DELETE FROM messages\s*;/);
   assert.match(index, /DELETE FROM messages WHERE seq = \? AND sent_at < \?/);
+  assert.match(src, /validateIncomingResume/);
   assert.match(index, /validateIncomingHistory/);
+  assert.match(index, /validateIncomingResume/);
+  assert.match(index, /handleParkedResume/);
+  assert.match(index, /parkedResumeVerdict/);
+  assert.match(index, /await assertChatSessionCurrent\(this\.env, attach\.claims\)/);
+  assert.match(index, /type === "resume"/);
+  assert.doesNotMatch(parkedResume, /vercel|neon|prisma|vh_session|FCM|D1|KV/i);
   assert.match(index, /server_only/);
   assert.match(index, /CHAT_INTERNAL_SECRET/);
   assert.match(index, /new Request\(request\.url, request\)/);

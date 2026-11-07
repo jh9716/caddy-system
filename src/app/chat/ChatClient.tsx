@@ -193,13 +193,15 @@ import {
   CHAT_DM_START_FAILED,
   CHAT_WS_OPEN_TIMEOUT_MS,
   diagnoseChatWsFailure,
+  chatWsOpenFailureCode,
   formatChatClientError,
   parseChatClientErrorCode,
   type ChatSocketOpenResult,
 } from "@/lib/chatDmClient";
 import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
 import { chatPerf, classifyEntry, CHAT_PERF_PING, CHAT_PERF_PING_COUNT, CHAT_PERF_PONG } from "@/lib/chatPerfDiag";
-import { canResumeParked, isParkExpired, isResumeRevalidationOk, CHAT_WS_REUSE_HISTORY_BEFORE, CHAT_WS_REUSE_STORAGE_KEY, CHAT_WS_REUSE_TTL_MS, resolveChatWsReuse, type ParkedSocketMeta } from "@/lib/chatWsReuse";
+import { canResumeParked, classifyParkedResumeSkip, isParkExpired, parkedResumeClientGate, CHAT_WS_RESUME_TIMEOUT_MS, CHAT_WS_REUSE_STORAGE_KEY, CHAT_WS_REUSE_TTL_MS, resolveChatWsReuse, type ParkedSocketMeta, type ResumeSkipCode } from "@/lib/chatWsReuse";
+import { shouldSkipResumeReconnect, type ChatResumeStamp } from "@/lib/chatResumeReconnect";
 import ChatPerfPanel from "@/components/chat/ChatPerfPanel";
 
 type TokenPayload = {
@@ -364,8 +366,11 @@ export default function ChatClient() {
   const wsReuseEnabledRef = useRef(false);
   const parkedRoomRef = useRef<(ParkedSocketMeta & { ws: WebSocket; timer: number; parkedAt: number }) | null>(null);
   const socketStopPingRef = useRef(new WeakMap<WebSocket, () => void>());
-  const socketResumeRef = useRef(new WeakMap<WebSocket, () => ChatSocketOpenResult | null>());
+  const socketResumeRef = useRef(new WeakMap<WebSocket, () => Promise<ChatSocketOpenResult | null>>());
   const socketMetaRef = useRef(new WeakMap<WebSocket, ParkedSocketMeta>());
+  const resumeAuthRef = useRef<WebSocket | null>(null);
+  const resumeOwnedCloseRef = useRef(new WeakSet<WebSocket>());
+  const parkedResumeWaitRef = useRef<{ ws: WebSocket; finish: (ok: boolean) => void } | null>(null);
   /** 파킹 해제(타이머 정리 + 필요 시 닫기). */
   const dropParkedRoomSocket = () => {
     const parked = parkedRoomRef.current;
@@ -387,6 +392,11 @@ export default function ChatClient() {
     const ws = wsRef.current;
     const meta = ws ? socketMetaRef.current.get(ws) : undefined;
     if (!ws || !meta || ws.readyState !== WebSocket.OPEN || !socketResumeRef.current.has(ws)) return false;
+    if (parkedResumeWaitRef.current?.ws === ws) {
+      parkedResumeWaitRef.current.finish(false);
+      parkedResumeWaitRef.current = null;
+      resumeAuthRef.current = null;
+    }
     if (parkedRoomRef.current && parkedRoomRef.current.ws !== ws) dropParkedRoomSocket();
     else if (parkedRoomRef.current) window.clearTimeout(parkedRoomRef.current.timer);
     const timer = window.setTimeout(() => {
@@ -445,6 +455,7 @@ export default function ChatClient() {
     }
   }, []);
   const dirRef = useRef<WebSocket | null>(null);
+  const resumeStampRef = useRef<ChatResumeStamp<WebSocket> | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const stickRef = useRef(true);
   const tokenRef = useRef<TokenPayload | null>(null);
@@ -698,11 +709,8 @@ export default function ChatClient() {
         if (gen !== dirGenRef.current) return;
         setDirectoryConnected(true);
         dirAttemptRef.current = 0;
-        try {
-          ws.send(JSON.stringify({ type: "sync" }));
-        } catch {
-          // snapshot still arrives on connect
-        }
+        // Directory DO 는 수락 직후 rooms 스냅샷을 먼저 보낸다(운영·Preview Worker 공통). open 직후 sync 를 또 보내면
+        // 같은 목록을 한 번 더 계산·전송·적용하므로 보내지 않는다. 이후 변경은 Directory 브로드캐스트로 온다.
       });
       ws.addEventListener("error", () => {
         if (gen !== dirGenRef.current) return;
@@ -787,40 +795,49 @@ export default function ChatClient() {
         parkedRoomRef.current = null;
         window.clearTimeout(parked.timer);
         const resume = socketResumeRef.current.get(parked.ws);
+        const parkedReq = () => ({
+          roomId,
+          token: info.token,
+          nowSec: Math.floor(Date.now() / 1000),
+          socketOpen: parked.ws.readyState === WebSocket.OPEN,
+          parkedAt: parked.parkedAt,
+          nowMs: Date.now(),
+        });
         const eligible = () =>
           !!resume &&
           wsRef.current === parked.ws &&
-          canResumeParked(parked, {
-            roomId,
-            token: info.token,
-            nowSec: Math.floor(Date.now() / 1000),
-            socketOpen: parked.ws.readyState === WebSocket.OPEN,
-            parkedAt: parked.parkedAt,
-            nowMs: Date.now(),
-          });
-        if (eligible()) {
-          // 재개 직전 권한 재확인: 기존 Worker 방 조회(같은 토큰)로 새 연결과 같은 검사(토큰·DB 세션·퇴사·멤버십)를 다시 거친다.
-          // 실패·오류·응답 불일치면 재사용하지 않는다(fail-closed → 아래에서 닫고 기존 새 연결).
-          const genBefore = roomGenRef.current;
-          let revalidated = false;
+          canResumeParked(parked, parkedReq());
+        let skipCode: ResumeSkipCode | null = classifyParkedResumeSkip(parked, {
+          ...parkedReq(),
+          hasResume: !!resume,
+          wsRefMatch: wsRef.current === parked.ws,
+        });
+        let revalidateMs: number | null = null;
+        if (eligible() && resume) {
+          // 재개: 별도 HTTP 없이 기존 소켓에 {type:"resume"} → ChatRoom 이 session-check·멤버십 후 history.
+          // 인증 전 history 는 화면에 올리지 않는다. 실패면 소켓 폐기 후 기존 새 연결.
+          const tRv = chatPerf.now();
           try {
-            const checkUrl = chatDirectoryRoomUrl(roomId, info.token);
-            if (checkUrl) {
-              const res = await fetch(checkUrl, { cache: "no-store" });
-              const body = await res.json().catch(() => null);
-              revalidated = isResumeRevalidationOk(res.status, body, roomId);
+            const resumed = await resume();
+            revalidateMs = Math.round(chatPerf.now() - tRv);
+            if (resumed?.ok) {
+              chatPerf.reuseOutcome("ok", revalidateMs, null);
+              return resumed;
             }
+            if (resumed && resumed.code === "superseded") {
+              chatPerf.reuseOutcome("superseded", revalidateMs, null);
+              return resumed;
+            }
+            skipCode =
+              resumed?.code === "resume_timeout" || resumed?.code === "resume_auth"
+                ? resumed.code
+                : "resume_null";
           } catch {
-            revalidated = false;
-          }
-          // 확인 중 사용자가 나가거나 다른 방으로 이동: 이 진입은 폐기(소켓은 그 나가기/진입 경로가 이미 파킹·닫기 처리).
-          if (roomGenRef.current !== genBefore) return { ok: false, code: "superseded" };
-          // TTL·소켓 상태를 다시 확인. 하나라도 어긋나면 재사용 금지 → 아래에서 닫고 새 연결.
-          if (revalidated && eligible()) {
-            const resumed = resume!();
-            if (resumed) return resumed;
+            revalidateMs = Math.round(chatPerf.now() - tRv);
+            skipCode = "resume_auth";
           }
         }
+        chatPerf.reuseOutcome(skipCode || "resume_null", revalidateMs, null);
         if (wsRef.current !== parked.ws) {
           try {
             parked.ws.close();
@@ -867,25 +884,52 @@ export default function ChatClient() {
       if (wsReuseEnabledRef.current) {
         socketStopPingRef.current.set(ws, stopPerfPing);
         // 이 소켓을 같은 방 재진입에 재개하는 함수(소켓 클로저의 gen 을 새 세대로 옮긴다). Preview 재사용이 켜진 경우에만 등록.
-        socketResumeRef.current.set(ws, () => {
+        socketResumeRef.current.set(ws, async () => {
           if (ws.readyState !== WebSocket.OPEN || wsRef.current !== ws) return null;
           try {
             roomGenRef.current += 1;
             gen = roomGenRef.current;
+            const myGen = gen;
             stopPerfPing();
             historyResetRef.current = true;
             oldestSeqRef.current = null;
             setHasMore(false);
             reconnectingRef.current = false;
-            chatPerf.roomReused();
-            chatPerf.roomOpen();
-            setConnected(true);
             setFailingSince(null);
             roomAttemptRef.current = 0;
-            // 첫 진입과 같은 최신 history 를 다시 받는다 → 기존 history 처리(읽음 전송·진입 위치)를 그대로 탄다.
-            ws.send(JSON.stringify({ type: "history", beforeSeq: CHAT_WS_REUSE_HISTORY_BEFORE }));
+            resumeAuthRef.current = ws;
+            resumeOwnedCloseRef.current.add(ws);
+            let waitFail: "resume_auth" | "resume_timeout" = "resume_timeout";
+            const wait = new Promise<boolean>((resolve) => {
+              let settled = false;
+              const finish = (ok: boolean, kind?: "resume_auth" | "resume_timeout") => {
+                if (settled) return;
+                settled = true;
+                if (!ok && kind) waitFail = kind;
+                window.clearTimeout(timer);
+                if (parkedResumeWaitRef.current?.ws === ws) parkedResumeWaitRef.current = null;
+                resolve(ok);
+              };
+              const timer = window.setTimeout(() => finish(false, "resume_timeout"), CHAT_WS_RESUME_TIMEOUT_MS);
+              parkedResumeWaitRef.current = { ws, finish: (ok) => finish(ok, ok ? undefined : "resume_auth") };
+            });
+            ws.send(JSON.stringify({ type: "resume" }));
+            chatPerf.roomOpen();
+            const gotHistory = await wait;
+            resumeOwnedCloseRef.current.delete(ws);
+            if (roomGenRef.current !== myGen) return { ok: false, code: "superseded" };
+            if (!gotHistory) {
+              resumeAuthRef.current = null;
+              roomGenRef.current += 1;
+              return { ok: false, code: waitFail };
+            }
+            resumeAuthRef.current = null;
+            chatPerf.roomReused();
+            setConnected(true);
             return { ok: true } as ChatSocketOpenResult;
           } catch {
+            resumeAuthRef.current = null;
+            resumeOwnedCloseRef.current.delete(ws);
             return null;
           }
         });
@@ -922,6 +966,12 @@ export default function ChatClient() {
       });
       ws.addEventListener("close", (ev) => {
         stopPerfPing();
+        if (resumeOwnedCloseRef.current.has(ws)) {
+          parkedResumeWaitRef.current?.finish(false);
+          parkedResumeWaitRef.current = null;
+          resumeAuthRef.current = null;
+          return;
+        }
         if (gen !== roomGenRef.current) return;
         setConnected(false);
         setFailingSince((cur) => cur ?? Date.now());
@@ -962,6 +1012,11 @@ export default function ChatClient() {
       ws.addEventListener("message", (event) => {
         if (gen !== roomGenRef.current) {
           stopPerfPing();
+          if (resumeAuthRef.current === ws) {
+            parkedResumeWaitRef.current?.finish(false);
+            parkedResumeWaitRef.current = null;
+            resumeAuthRef.current = null;
+          }
           return;
         }
         if (event.data === CHAT_PERF_PONG) {
@@ -983,6 +1038,24 @@ export default function ChatClient() {
             if (data.t && (data.t.doFirst === 0 || data.t.doFirst === 1)) startPerfPing();
           }
           return;
+        }
+        if (resumeAuthRef.current === ws) {
+          const gate = parkedResumeClientGate(String(data.type || ""));
+          if (gate === "history") {
+            if (!Array.isArray(data.messages)) {
+              parkedResumeWaitRef.current?.finish(false);
+              resumeAuthRef.current = null;
+              return;
+            }
+            parkedResumeWaitRef.current?.finish(true);
+            resumeAuthRef.current = null;
+          } else if (gate === "fail") {
+            parkedResumeWaitRef.current?.finish(false);
+            resumeAuthRef.current = null;
+            return;
+          } else if (gate === "hold") {
+            return;
+          }
         }
         if (data.type === "history" && Array.isArray(data.messages)) {
           const hist = data.messages.map(payloadToLine);
@@ -1120,11 +1193,13 @@ export default function ChatClient() {
           finish({ ok: false, code: "ws_timeout" });
         }, CHAT_WS_OPEN_TIMEOUT_MS);
         const onOpen = () => finish({ ok: true });
+        // 더 새 진입·나가기가 이 소켓을 대체(roomGenRef 증가 후 close)한 경우: 실패 진단 HTTP 프로브(전체 인증 1회 추가)를
+        // 보내지 않고 즉시 superseded 로 끝낸다. 이 진입은 이미 폐기됐고 UI·계측은 새 진입이 소유한다.
         const onError = () => {
-          void diagnoseChatWsFailure(url).then((code) => finish({ ok: false, code }));
+          void chatWsOpenFailureCode(gen !== roomGenRef.current, url).then((code) => finish({ ok: false, code }));
         };
         const onClose = (ev: CloseEvent) => {
-          void diagnoseChatWsFailure(url, ev.code).then((code) => finish({ ok: false, code }));
+          void chatWsOpenFailureCode(gen !== roomGenRef.current, url, ev.code).then((code) => finish({ ok: false, code }));
         };
         if (ws.readyState === WebSocket.OPEN) {
           finish({ ok: true });
@@ -1246,12 +1321,34 @@ export default function ChatClient() {
       if (isChatSessionEnded()) return;
       const info = tokenRef.current;
       if (!info) return;
-      connectDirectory(info);
       const room = roomRef.current;
+      // 앱 복귀 때 visibilitychange·appStateChange·online 이 겹쳐 오면 방금 시작한 연결을 끊고 다시 여는 중복을 막는다.
+      // 같은 토큰·같은 방·같은 소켓이 살아 있을 때(2초 이내)만 건너뛰고, 그 밖에는 기존처럼 다시 연결한다.
+      if (
+        shouldSkipResumeReconnect(resumeStampRef.current, {
+          nowMs: Date.now(),
+          token: info.token,
+          roomId: room?.roomId ?? null,
+          dirWs: dirRef.current,
+          dirState: dirRef.current?.readyState,
+          roomWs: room ? wsRef.current : null,
+          roomState: room ? wsRef.current?.readyState : null,
+        })
+      ) {
+        return;
+      }
+      connectDirectory(info);
       if (room) {
         reconnectingRef.current = true;
         void connectSocket(info, room.roomId);
       }
+      resumeStampRef.current = {
+        at: Date.now(),
+        token: info.token,
+        roomId: room?.roomId ?? null,
+        dirWs: dirRef.current,
+        roomWs: room ? wsRef.current : null,
+      };
     };
     const onVisible = () => {
       if (document.visibilityState === "visible") reconnect();
@@ -1588,6 +1685,8 @@ export default function ChatClient() {
     room: RoomSummary,
     opts?: { targetSeq?: number | null }
   ): Promise<ChatSocketOpenResult> {
+    // Preview chatPerf: 이 진입의 측정 시도 번호. 실패 기록은 이 번호에만 적용(더 새 진입을 실패로 덮지 않음).
+    let perfEntry: number | null = null;
     try {
       const prevRoomId = perfLastRoomRef.current;
       perfLastRoomRef.current = room.roomId;
@@ -1595,16 +1694,16 @@ export default function ChatClient() {
         opts?.targetSeq != null ||
         (typeof window !== "undefined" &&
           parseChatTargetSeqFromRoomUrl(room.roomId, window.location.search) != null);
-      chatPerf.roomTap(
+      perfEntry = chatPerf.roomTap(
         classifyEntry({ hasPrevious: prevRoomId != null, sameAsPrevious: prevRoomId === room.roomId, deepLink: deep })
       );
     } catch {
       // 진단 전용
     }
     const info = await refreshIfNeeded();
-    chatPerf.roomTokenReady();
+    chatPerf.roomTokenReady(perfEntry);
     if (!info) {
-      chatPerf.roomFailed();
+      chatPerf.roomFailed(perfEntry);
       return { ok: false, code: "missing_token" };
     }
     const urlSeq =
@@ -1668,8 +1767,9 @@ export default function ChatClient() {
       mentionFetchedRef.current = "";
     }
     const opened = await connectSocket(info, room.roomId, { waitForOpen: true });
-    if (!opened.ok) chatPerf.roomFailed();
-    if (!opened.ok && isDmRoomId(room.roomId)) {
+    // superseded = 사용자가 다른 진입·나가기로 이미 이동. 실패 표시·오류 문구 없음(새 진입이 화면을 소유).
+    if (!opened.ok && opened.code !== "superseded") chatPerf.roomFailed(perfEntry);
+    if (!opened.ok && opened.code !== "superseded" && isDmRoomId(room.roomId)) {
       setError(formatChatClientError(CHAT_DM_OPEN_FAILED, opened.code));
     }
     return opened;
@@ -2508,7 +2608,7 @@ export default function ChatClient() {
     };
     setRooms((prev) => upsertVisibleChatRoom(prev, optimistic));
     const opened = await openRoom(optimistic);
-    if (!opened.ok) {
+    if (!opened.ok && opened.code !== "superseded") {
       setError(formatChatClientError(CHAT_DM_OPEN_FAILED, opened.code || "dm_open_failed"));
     }
     try {

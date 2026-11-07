@@ -5,6 +5,7 @@
  * - 네트워크 전송 없음. 모든 함수는 예외를 밖으로 던지지 않는다(비활성 시 즉시 반환).
  */
 import { resolveChatAppEnv, type ChatAppEnvInput } from "./chatAppEnv";
+import { isResumeSkipCode, type ResumeSkipCode } from "./chatWsReuse";
 
 export type ChatPerfEntryKind = "first" | "switch" | "reentry" | "deeplink";
 
@@ -52,7 +53,24 @@ export const CHAT_PERF_PING = "vh-perf-ping";
 export const CHAT_PERF_PONG = "vh-perf-pong";
 export const CHAT_PERF_PING_COUNT = 3;
 
-export type ChatPerfState = { entries: ChatPerfRecord[]; list: ChatPerfListRecord[]; server: ChatPerfServerRecord[]; net: ChatPerfNetRecord[] };
+/**
+ * Preview 소켓 재사용 시도 결과. code 는 허용 목록만. revalidateMs = 권한 재확인 fetch 시간.
+ * http 는 100~599 만(상태 코드). 토큰·방 ID·URL 없음.
+ */
+export type ChatPerfReuseRecord = {
+  n: number;
+  code: ResumeSkipCode;
+  revalidateMs: number | null;
+  http: number | null;
+};
+
+export type ChatPerfState = {
+  entries: ChatPerfRecord[];
+  list: ChatPerfListRecord[];
+  server: ChatPerfServerRecord[];
+  net: ChatPerfNetRecord[];
+  reuse?: ChatPerfReuseRecord[];
+};
 
 /** 순수: 진입(attempt)의 첫 소켓에만 번호 부여. 이미 쓴 번호(같은 진입의 재연결 소켓)면 null. */
 export function bindSocketAttempt(pendingAttempt: number | null | undefined, bound: Set<number>): number | null {
@@ -139,6 +157,32 @@ export function resolveServerEntry(
   return { accept: false, entry: null };
 }
 
+/** 순수: 재사용 시도 한 줄. 코드·ms·상태숫자만. `http` 문자열은 쓰지 않음(복사 텍스트 URL 검사). */
+export function reusePerfLine(r: ChatPerfReuseRecord): string {
+  const f = (v: number | null) => (v == null ? "-" : String(v));
+  const label = r.code === "ok" ? "재사용" : "건너뜀";
+  return `재사용#${r.n} ${label} ${r.code} | 재확인 ${f(r.revalidateMs)} | st ${f(r.http)}`;
+}
+
+/** 순수: 허용 코드·0~600000ms·HTTP 100~599 만. */
+export function sanitizeReuseOutcome(raw: {
+  code?: unknown;
+  revalidateMs?: unknown;
+  http?: unknown;
+}): Omit<ChatPerfReuseRecord, "n"> | null {
+  if (!isResumeSkipCode(raw.code)) return null;
+  const ms =
+    typeof raw.revalidateMs === "number" && Number.isFinite(raw.revalidateMs)
+      ? Math.round(raw.revalidateMs)
+      : null;
+  const revalidateMs = ms != null && ms >= 0 && ms <= 600000 ? ms : null;
+  const http =
+    typeof raw.http === "number" && Number.isInteger(raw.http) && raw.http >= 100 && raw.http <= 599
+      ? raw.http
+      : null;
+  return { code: raw.code, revalidateMs, http };
+}
+
 /** 순수: 서버 구간 한 줄 텍스트. */
 export function serverPerfLine(r: ChatPerfServerRecord): string {
   const t = r.t;
@@ -187,6 +231,13 @@ type Pending = {
   reused?: boolean;
 };
 
+/** 순수: 늦게 도착한 이전 진입의 갱신인지 판정. attempt 를 모르면(구 호출) 기존 동작(현재 진입)을 유지. */
+export function isPendingAttempt(p: { attempt?: number } | null | undefined, attempt: number | null | undefined): boolean {
+  if (!p) return false;
+  if (attempt == null) return true;
+  return p.attempt === attempt;
+}
+
 export function buildRecord(n: number, p: Pending, visible: number | null, ok: boolean): ChatPerfRecord {
   return {
     n,
@@ -204,7 +255,7 @@ export function buildRecord(n: number, p: Pending, visible: number | null, ok: b
 
 // ---- 메모리 상태 (탭 세션 한정) ----
 let enabled = false;
-let state: ChatPerfState = { entries: [], list: [], server: [], net: [] };
+let state: ChatPerfState = { entries: [], list: [], server: [], net: [], reuse: [] };
 let netSeq = 0;
 const boundAttempts = new Set<number>();
 let serverSeq = 0;
@@ -215,6 +266,7 @@ let pending: Pending | null = null;
 let seq = 0;
 const ctorAt = new Map<number, number>();
 let listSeq = 0;
+let reuseSeq = 0;
 let listPending: { tokenStart: number | null; tokenEnd: number | null; connect: number | null } | null = null;
 let tokenFetchStart: number | null = null;
 let tokenFetchEnd: number | null = null;
@@ -224,7 +276,13 @@ function now(): number {
   return typeof performance !== "undefined" ? performance.now() : Date.now();
 }
 function emit() {
-  state = { entries: state.entries.slice(), list: state.list.slice(), server: state.server.slice(), net: state.net.slice() };
+  state = {
+    entries: state.entries.slice(),
+    list: state.list.slice(),
+    server: state.server.slice(),
+    net: state.net.slice(),
+    reuse: (state.reuse || []).slice(),
+  };
   listeners.forEach((l) => {
     try { l(); } catch { /* ignore */ }
   });
@@ -271,15 +329,20 @@ export const chatPerf = {
       emit();
     });
   },
-  roomTap(kind: ChatPerfEntryKind) {
+  /** 진입 시작. 이 진입의 시도 번호를 돌려준다(비활성이면 null). */
+  roomTap(kind: ChatPerfEntryKind): number | null {
+    let attempt: number | null = null;
     safe(() => {
-      pending = { attempt: ++attemptSeq, kind, tap: now(), tokenStart: null, tokenEnd: null, tokenFetched: false, open: null, history: null, commit: null };
+      attempt = ++attemptSeq;
+      pending = { attempt, kind, tap: now(), tokenStart: null, tokenEnd: null, tokenFetched: false, open: null, history: null, commit: null };
       tokenFetchStart = null; tokenFetchEnd = null;
     });
+    return attempt;
   },
-  roomTokenReady() {
+  /** attempt: roomTap 이 준 번호. 더 새 진입이 시작됐으면(번호 불일치) 아무것도 하지 않는다. */
+  roomTokenReady(attempt?: number | null) {
     safe(() => {
-      if (!pending) return;
+      if (!pending || !isPendingAttempt(pending, attempt)) return;
       pending.tokenFetched = tokenFetchStart != null && tokenFetchStart >= pending.tap;
       pending.tokenStart = pending.tokenFetched ? tokenFetchStart : pending.tap;
       pending.tokenEnd = pending.tokenFetched ? tokenFetchEnd : now();
@@ -297,7 +360,8 @@ export const chatPerf = {
     });
   },
   roomCommitted() { safe(() => { if (pending && pending.history != null && pending.commit == null) pending.commit = now(); }); },
-  roomFailed() { safe(() => { if (pending) chatPerf.finish(pending, false); }); },
+  /** attempt 가 현재 진행 중인 진입과 같을 때만 실패로 기록(이전 진입의 늦은 실패가 새 진입을 덮지 않음). */
+  roomFailed(attempt?: number | null) { safe(() => { if (pending && isPendingAttempt(pending, attempt)) chatPerf.finish(pending, false); }); },
   finish(p: Pending, ok: boolean) {
     safe(() => {
       if (pending !== p) return;
@@ -368,7 +432,19 @@ export const chatPerf = {
       emit();
     });
   },
-  clear() { safe(() => { state = { entries: [], list: [], server: [], net: [] }; attemptToEntry.clear(); emit(); }); },
+  /**
+   * Preview 소켓 재사용 시도 결과. 파킹이 있을 때만 호출.
+   * code 허용 목록·재확인 ms·HTTP 상태만. 토큰·방 ID·URL 없음.
+   */
+  reuseOutcome(code: unknown, revalidateMs?: unknown, http?: unknown) {
+    safe(() => {
+      const row = sanitizeReuseOutcome({ code, revalidateMs, http });
+      if (!row) return;
+      state.reuse = [{ n: ++reuseSeq, ...row }, ...state.reuse].slice(0, CHAT_PERF_MAX);
+      emit();
+    });
+  },
+  clear() { safe(() => { state = { entries: [], list: [], server: [], net: [], reuse: [] }; attemptToEntry.clear(); emit(); }); },
 };
 
 const KIND_LABEL: Record<ChatPerfEntryKind, string> = { first: "첫 진입", switch: "방 전환", reentry: "재진입", deeplink: "링크/알림" };
@@ -384,5 +460,6 @@ export function chatPerfText(s: ChatPerfState): string {
   for (const l of s.list) lines.push(`목록#${l.n} 토큰 ${f(l.tokenMs)} | 연결→목록 ${f(l.connectToListMs)}`);
   for (const r of s.server || []) lines.push(serverPerfLine(r));
   for (const r of s.net || []) lines.push(netPerfLine(r));
+  for (const r of s.reuse || []) lines.push(reusePerfLine(r));
   return lines.join("\n");
 }
