@@ -40,8 +40,10 @@ export function startSessionCheckMock() {
       req.on("data", (chunk) => chunks.push(chunk));
       req.on("end", () => {
         const wait = delayMs;
+        const cold = checks === 1;
         const finish = () => {
           res.setHeader("content-type", "application/json; charset=utf-8");
+          res.setHeader("Server-Timing", `app;dur=${wait}, db;dur=1, cold;dur=${cold ? 1 : 0}`);
           if (unavailable) {
             res.statusCode = 503;
             res.end(JSON.stringify({ error: "auth_unavailable" }));

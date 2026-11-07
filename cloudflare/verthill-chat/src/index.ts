@@ -73,7 +73,20 @@ import {
   probeChatSession,
   shouldSkipWorkerSessionCheck,
 } from "./sessionCheck";
-import { nextAppExtraHeaders, nextAppFetchInit, nextAppUrl, nextPushDispatchUrl } from "./nextApp";
+import { isPreviewWorker, nextAppExtraHeaders, nextAppFetchInit, nextAppUrl, nextPushDispatchUrl } from "./nextApp";
+import {
+  CHAT_PERF_HEADER,
+  CHAT_PERF_PONG,
+  emptyChatPerf,
+  encodeChatPerfHeader,
+  isPreviewChatPerf,
+  isPreviewPerfPing,
+  previewColo,
+  previewPerfFrame,
+  readChatPerfHeader,
+  roundPerfMs,
+  type ChatPerfT,
+} from "./chatPerf";
 import {
   isRecheckDue,
   openSocketRecheckIntervalMs,
@@ -153,6 +166,27 @@ function sendJson(ws: WebSocket, data: unknown) {
   ws.send(JSON.stringify(data));
 }
 
+function previewPerfBag(env: Env): ChatPerfT | undefined {
+  return isPreviewChatPerf(env) ? emptyChatPerf() : undefined;
+}
+
+function attachPreviewPerf(request: Request, env: Env, perf: ChatPerfT | undefined): Request {
+  if (!perf || !isPreviewChatPerf(env)) return request;
+  const forwarded = new Request(request.url, request);
+  forwarded.headers.delete(CHAT_PERF_HEADER);
+  forwarded.headers.set(CHAT_PERF_HEADER, encodeChatPerfHeader(perf));
+  return forwarded;
+}
+
+function sendPreviewPerf(env: Env, ws: WebSocket, t: ChatPerfT, request: Request) {
+  if (!isPreviewChatPerf(env)) return;
+  try {
+    sendJson(ws, previewPerfFrame(t, previewColo(request.cf)));
+  } catch {
+    // 계측 실패는 채팅에 영향 없음
+  }
+}
+
 function directoryStub(env: Env) {
   return env.CHAT_DIRECTORY.get(env.CHAT_DIRECTORY.idFromName(DIRECTORY_NAME));
 }
@@ -164,6 +198,8 @@ type VerifyIdentityOptions = {
    * Directory 경로에서는 쓰지 않는다. c679e51 확인서(DO 인증 생략) 와는 반대.
    */
   sessionCheck?: "required" | "skip";
+  /** Preview 전용 계측 가방. 운영에서는 넘기지 않는다. */
+  perf?: ChatPerfT;
 };
 
 async function verifyIdentity(
@@ -183,10 +219,12 @@ async function verifyIdentity(
     : "";
   const token = (url.searchParams.get("token") || bearer).trim();
   if (!token) return json({ error: "unauthorized" }, 401);
+  const tTok = performance.now();
   const claims = await verifyChatToken(token, secret, undefined, audience);
+  if (options?.perf) options.perf.tok = roundPerfMs(performance.now() - tTok);
   if (!claims) return json({ error: "invalid_token" }, 401);
   if (options?.sessionCheck !== "skip") {
-    const session = await assertChatSessionCurrent(env, claims);
+    const session = await assertChatSessionCurrent(env, claims, options?.perf);
     if (!session.ok) return json({ error: session.error }, session.status);
     if (isSessionBoundChatToken(claims)) {
       void rememberSessionEpoch(env, claims.userId, claims.sv);
@@ -260,13 +298,16 @@ async function authorizeSocket(
   }
   const identity = await verifyIdentity(request, env, options);
   if (identity instanceof Response) return identity;
+  const tMem = performance.now();
+  const member =
+    isCustomRoomId(room) || isDmRoomId(room)
+      ? await isDirectoryMember(env, room, identity.userId)
+      : isAllRoomId(room);
+  if (options?.perf) options.perf.mem = roundPerfMs(performance.now() - tMem);
   const access = resolveChatRoomAccess({
     claims: identity,
     roomId: room,
-    isMember:
-      isCustomRoomId(room) || isDmRoomId(room)
-        ? await isDirectoryMember(env, room, identity.userId)
-        : isAllRoomId(room),
+    isMember: member,
     isAll: isAllRoomId(room),
     isCustom: isCustomRoomId(room),
     isDm: isDmRoomId(room),
@@ -280,13 +321,22 @@ async function authorizeSocket(
 }
 
 async function forwardDirectory(request: Request, env: Env): Promise<Response> {
-  const identity = await verifyIdentity(request, env);
+  const t0 = performance.now();
+  const perf = previewPerfBag(env);
+  const identity = await verifyIdentity(request, env, perf ? { perf } : undefined);
   if (identity instanceof Response) return identity;
+  if (perf) perf.edge = roundPerfMs(performance.now() - t0);
   // Must keep the inbound Request object. Rebuilding Request(url, {headers, body})
   // drops Cloudflare's WebSocket upgrade binding — ChatRoom works because it
   // forwards `request` unchanged. Directory list/WS used the rebuilt Request.
   const forwarded = new Request(request.url, request);
   forwarded.headers.set("x-chat-claims", JSON.stringify(identity));
+  if (perf) {
+    forwarded.headers.delete(CHAT_PERF_HEADER);
+    forwarded.headers.set(CHAT_PERF_HEADER, encodeChatPerfHeader(perf));
+  } else {
+    forwarded.headers.delete(CHAT_PERF_HEADER);
+  }
   return directoryStub(env).fetch(forwarded);
 }
 
@@ -311,13 +361,16 @@ export default {
       const sessionCheck = shouldSkipWorkerSessionCheck(url.pathname, upgrade)
         ? "skip"
         : "required";
-      const authorized = await authorizeSocket(request, env, { sessionCheck });
+      const t0 = performance.now();
+      const perf = previewPerfBag(env);
+      const authorized = await authorizeSocket(request, env, { sessionCheck, perf });
       if (authorized instanceof Response) return authorized;
+      if (perf) perf.edge = roundPerfMs(performance.now() - t0);
       if ((upgrade || "").toLowerCase() !== "websocket") {
         return json({ error: "upgrade_required" }, 426);
       }
       const id = env.CHAT_ROOM.idFromName(authorized.room);
-      return env.CHAT_ROOM.get(id).fetch(request);
+      return env.CHAT_ROOM.get(id).fetch(attachPreviewPerf(request, env, perf));
     }
     if (url.pathname === "/directory/ws") {
       return forwardDirectory(request, env);
@@ -620,6 +673,9 @@ export class ChatRoom extends DurableObject<Env> {
   private persistQueue: Promise<void> = Promise.resolve();
   /** 열린 소켓 재검증 진행 중인 userId(메모리; 유실돼도 다음 활동 때 다시 시작될 뿐). */
   private recheckInflight = new Set<number>();
+  /** Preview 계측: 이 isolate 생성 시각·WS 핸드셰이크 횟수(비밀 아님). */
+  private readonly bornAt = Date.now();
+  private wsHandshakes = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -779,8 +835,23 @@ export class ChatRoom extends DurableObject<Env> {
     }
     // 최종 인가: 토큰 + Next/DB session-check + 멤버십. Worker /ws 가 session-check 를
     // 생략해도 여기서 다시 수행한다. c679e51 확인서로 이 호출을 건너뛰지 말 것.
-    const authorized = await authorizeSocket(request, this.env);
+    const preview = isPreviewChatPerf(this.env);
+    const perf: ChatPerfT | undefined = preview
+      ? { ...readChatPerfHeader(request.headers) }
+      : undefined;
+    const tDo = performance.now();
+    const authorized = await authorizeSocket(
+      request,
+      this.env,
+      perf ? { perf } : undefined
+    );
     if (authorized instanceof Response) return authorized;
+    if (perf) {
+      perf.doAssert = roundPerfMs(performance.now() - tDo);
+      perf.doFirst = this.wsHandshakes === 0 ? 1 : 0;
+      perf.doAge = roundPerfMs(Date.now() - this.bornAt);
+      this.wsHandshakes += 1;
+    }
     const cap = isAllRoomId(authorized.room) ? MAX_CONNECTIONS_ALL : MAX_CONNECTIONS;
     if (this.ctx.getWebSockets().length >= cap) {
       return json({ error: "room_full" }, 503);
@@ -788,6 +859,7 @@ export class ChatRoom extends DurableObject<Env> {
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
+    const tAccept = performance.now();
     this.ctx.acceptWebSocket(server);
     const attach: SocketAttach = {
       claims: authorized.claims,
@@ -795,14 +867,28 @@ export class ChatRoom extends DurableObject<Env> {
       sc: Date.now(),
     };
     server.serializeAttachment(attach);
+    if (perf) perf.doAccept = roundPerfMs(performance.now() - tAccept);
     void this.rememberRoomId(authorized.room);
+    const tHist = performance.now();
     this.sendHistory(server, authorized.claims.userId, null, HISTORY_LIMIT);
+    if (perf) {
+      perf.doHist = roundPerfMs(performance.now() - tHist);
+      sendPreviewPerf(this.env, server, perf, request);
+    }
     return new Response(null, { status: 101, webSocket: client });
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
     const attach = this.readAttach(ws);
     if (!attach) return;
+    if (typeof message === "string" && isPreviewPerfPing(this.env, message)) {
+      try {
+        ws.send(CHAT_PERF_PONG);
+      } catch {
+        // ignore
+      }
+      return;
+    }
     if (typeof message !== "string") {
       sendJson(ws, {
         type: "error",

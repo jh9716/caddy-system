@@ -9,6 +9,11 @@ import {
 } from "./token";
 import { classifySessionProbe, type SessionProbeResult } from "./openSocketRecheck";
 import { isPreviewWorker, isRedirectResponse, nextAppExtraHeaders, nextAppFetchInit, nextAppUrl, type NextAppEnv } from "./nextApp";
+import {
+  parseSessionCheckServerTiming,
+  roundPerfMs,
+  type ChatPerfT,
+} from "./chatPerf";
 
 export const CHAT_SESSION_CHECK_PATH = "/api/chat/session-check";
 export const CHAT_SESSION_REVOKE_PATH = "/internal/session-revoke";
@@ -70,7 +75,8 @@ export function parseEvictMembersBody(raw: unknown): { userIds: number[] } | nul
 
 export async function assertChatSessionCurrent(
   env: SessionCheckEnv,
-  claims: ChatTokenClaims
+  claims: ChatTokenClaims,
+  perf?: ChatPerfT
 ): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
   if (claims.v !== 2) return { ok: true };
   if (!isSessionBoundChatToken(claims)) {
@@ -82,6 +88,7 @@ export async function assertChatSessionCurrent(
   if (!url) return { ok: false, status: 503, error: "session_check_unconfigured" };
   const secret = chatInternalSecret(env);
   if (!secret) return { ok: false, status: 503, error: "session_check_unconfigured" };
+  const tSc = performance.now();
   try {
     const headers = {
       ...(await internalAuthHeaders(secret, CHAT_SESSION_CHECK_PATH)),
@@ -94,6 +101,15 @@ export async function assertChatSessionCurrent(
       signal: AbortSignal.timeout(SESSION_CHECK_TIMEOUT_MS),
       ...nextAppFetchInit(env),
     });
+    if (perf) {
+      perf.sc = roundPerfMs(performance.now() - tSc);
+      if (isPreviewWorker(env)) {
+        const parts = parseSessionCheckServerTiming(res.headers.get("Server-Timing"));
+        if (parts.scApp != null) perf.scApp = parts.scApp;
+        if (parts.scDb != null) perf.scDb = parts.scDb;
+        if (parts.scCold != null) perf.scCold = parts.scCold;
+      }
+    }
     // Preview: 리다이렉트는 따라가지 않고 실패(503) — 비밀 헤더가 다른 호스트로 가지 않게.
     if (isPreviewWorker(env) && isRedirectResponse(res)) {
       return { ok: false, status: 503, error: "session_check_unavailable" };
@@ -110,6 +126,7 @@ export async function assertChatSessionCurrent(
     }
     return { ok: true };
   } catch {
+    if (perf && perf.sc == null) perf.sc = roundPerfMs(performance.now() - tSc);
     return { ok: false, status: 503, error: "session_check_unavailable" };
   }
 }

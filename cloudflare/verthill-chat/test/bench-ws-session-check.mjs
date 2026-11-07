@@ -4,12 +4,14 @@
  * No Production/Preview deploy. No DB.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
-import { signTestTokenV2 } from "./token-helper.mjs";
+import { TEST_SECRET, signTestTokenV2 } from "./token-helper.mjs";
 import { HOST, startWrangler, stopWrangler } from "./wrangler-harness.mjs";
 
 const N = Number(process.env.CHAT_SC_BENCH_N || 8);
 const DELAY_MS = Number(process.env.CHAT_SC_DELAY_MS || 0);
 const LABEL = process.env.CHAT_SC_BENCH_LABEL || "current";
+const PREVIEW = process.env.CHAT_SC_BENCH_PREVIEW === "1";
+const PREVIEW_SECRET = "preview-local-bench-only";
 
 function median(xs) {
   const s = xs.filter((x) => x != null).sort((a, b) => a - b);
@@ -24,17 +26,24 @@ function roomEntry(port, room, token) {
       `ws://${HOST}:${port}/ws?room=${encodeURIComponent(room)}&token=${encodeURIComponent(token)}`
     );
     let openMs = null;
+    const got = { perf: null, historyMs: null };
     const timer = setTimeout(() => reject(new Error("room timeout")), 15000);
     ws.addEventListener("open", () => {
       openMs = performance.now() - t0;
     });
     ws.addEventListener("message", (ev) => {
-      const d = JSON.parse(String(ev.data));
-      if (d.type === "history") {
+      let d;
+      try {
+        d = JSON.parse(String(ev.data));
+      } catch {
+        return;
+      }
+      if (d.type === "perf" && got.perf == null) got.perf = d.t;
+      if (d.type === "history" && got.historyMs == null) got.historyMs = performance.now() - t0;
+      if (got.historyMs != null && (!PREVIEW || got.perf != null)) {
         clearTimeout(timer);
-        const historyMs = performance.now() - t0;
         ws.close();
-        resolve({ openMs, historyMs });
+        resolve({ openMs, historyMs: got.historyMs, perf: got.perf });
       }
     });
     ws.addEventListener("error", () => {
@@ -62,10 +71,17 @@ function dirEntry(port, token) {
   });
 }
 
-const { port, child, mock } = await startWrangler();
+const secret = PREVIEW ? PREVIEW_SECRET : TEST_SECRET;
+const { port, child, mock } = await startWrangler({
+  secret,
+  extraArgs: PREVIEW ? ["--env", "preview"] : [],
+});
 try {
   if (DELAY_MS > 0) mock.setDelayMs(DELAY_MS);
-  const tok = signTestTokenV2({ userId: 81, displayName: "벤치", role: "caddy", sv: 1 });
+  const tok = signTestTokenV2(
+    { userId: 81, displayName: "벤치", role: "caddy", sv: 1, ...(PREVIEW ? { aud: "preview" } : {}) },
+    secret
+  );
   mock.setEpoch(81, 1);
   await roomEntry(port, "all", tok.token);
   await dirEntry(port, tok.token);
@@ -77,16 +93,28 @@ try {
   const dirs = [];
   for (let i = 0; i < N; i++) dirs.push(await dirEntry(port, tok.token));
   const scAfterDir = mock.checkCount();
+  const perfs = rooms.map((r) => r.perf).filter(Boolean);
+  const med = (k) => r1(median(perfs.map((p) => p?.[k])));
 
   const summary = {
     label: LABEL,
-    env: "local wrangler dev --local + mock session-check",
+    env: PREVIEW
+      ? "local wrangler --env preview + mock session-check"
+      : "local wrangler dev --local + mock session-check",
     N,
     delayMs: DELAY_MS,
+    previewPerf: PREVIEW,
     roomAll: {
       sessionCheckPerEntry: (scAfterRoom - sc0) / N,
       medianOpenMs: r1(median(rooms.map((r) => r.openMs))),
       medianHistoryMs: r1(median(rooms.map((r) => r.historyMs))),
+      medianScMs: med("sc"),
+      medianTokMs: med("tok"),
+      medianMemMs: med("mem"),
+      medianEdgeMs: med("edge"),
+      medianDoAssertMs: med("doAssert"),
+      medianDoAcceptMs: med("doAccept"),
+      medianDoHistMs: med("doHist"),
     },
     directory: {
       sessionCheckPerEntry: (scAfterDir - scAfterRoom) / N,

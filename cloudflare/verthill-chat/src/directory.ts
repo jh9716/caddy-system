@@ -47,12 +47,24 @@ import {
   revokeHttpStatus,
   type RoomFanoutSummary,
 } from "./revokeFanout";
+import {
+  CHAT_PERF_PONG,
+  isPreviewChatPerf,
+  isPreviewPerfPing,
+  previewColo,
+  previewPerfFrame,
+  readChatPerfHeader,
+  roundPerfMs,
+  type ChatPerfT,
+} from "./chatPerf";
 
 export type DirectoryEnv = {
   CHAT_AUTH_SECRET: string;
   CHAT_INTERNAL_SECRET?: string;
   CHAT_ROOM?: DurableObjectNamespace;
   CHAT_PUSH_DISPATCH_URL?: string;
+  /** "preview" = Preview 전용 Worker. 미설정/"production" = 운영. */
+  CHAT_TOKEN_AUDIENCE?: string;
   /** 로컬 테스트 전용: 열린 소켓 재검증 주기(ms). 미설정 = 5분. */
   CHAT_OPEN_SOCKET_RECHECK_MS?: string;
 };
@@ -82,6 +94,8 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
   /** 같은 (userId, sessionVersion) revoke 동시 요청의 Room fanout 공유(메모리, 멱등이라 유실돼도 안전). */
   private revokeInflight = new Map<string, Promise<RoomFanoutSummary>>();
   private recheckInflight = new Set<number>();
+  private readonly bornAt = Date.now();
+  private wsHandshakes = 0;
 
   constructor(ctx: DurableObjectState, env: DirectoryEnv) {
     super(ctx, env);
@@ -199,13 +213,33 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
       if (this.ctx.getWebSockets().length >= MAX_DIRECTORY_CONNECTIONS) {
         return json({ error: "directory_full" }, 503);
       }
+      const preview = isPreviewChatPerf(this.env);
+      const perf: ChatPerfT | undefined = preview
+        ? { ...readChatPerfHeader(request.headers) }
+        : undefined;
       const pair = new WebSocketPair();
       const client = pair[0];
       const server = pair[1];
+      const tAccept = performance.now();
       this.ctx.acceptWebSocket(server);
       const attach: DirectoryAttach = { ...claims, sc: Date.now() };
       server.serializeAttachment(attach);
+      if (perf) {
+        perf.doAccept = roundPerfMs(performance.now() - tAccept);
+        perf.doFirst = this.wsHandshakes === 0 ? 1 : 0;
+        perf.doAge = roundPerfMs(Date.now() - this.bornAt);
+        this.wsHandshakes += 1;
+      }
+      const tList = performance.now();
       sendJson(server, { type: "rooms", rooms: this.listForUser(claims.userId) });
+      if (perf) {
+        perf.doHist = roundPerfMs(performance.now() - tList);
+        try {
+          sendJson(server, previewPerfFrame(perf, previewColo(request.cf)));
+        } catch {
+          // 계측 실패는 목록 전송에 영향 없음
+        }
+      }
       return new Response(null, { status: 101, webSocket: client });
     }
 
@@ -242,6 +276,14 @@ export class ChatDirectory extends DurableObject<DirectoryEnv> {
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
     const claims = this.liveDirectoryClaims(ws);
     if (!claims) return;
+    if (typeof message === "string" && isPreviewPerfPing(this.env, message)) {
+      try {
+        ws.send(CHAT_PERF_PONG);
+      } catch {
+        // ignore
+      }
+      return;
+    }
     if (typeof message !== "string") return;
     let parsed: unknown;
     try {
