@@ -88,7 +88,7 @@ async function main() {
   assert(/if \(!shouldConnectWithChatToken\(info, tokenRef\)\) return \{ ok: false, code: "stale_session" \};/.test(cc), "connectSocket stale 토큰 차단 유지");
   assert(/if \(shouldRefreshTokenOnClose\(ev\.code\)\) \{/.test(cc), "close 코드(4008 등) 토큰 재발급 경로 유지");
   assert(/revalidated = isResumeRevalidationOk\(res\.status, body, roomId\);/.test(cc), "소켓 재사용 재확인(fail-closed) 유지");
-  assert(/if \(roomGenRef\.current !== genBefore\) return \{ ok: false, code: "superseded" \};/.test(cc), "재사용 재확인 중 이동 → superseded 유지");
+  assert(/if \(roomGenRef\.current !== genBefore\) \{\s*chatPerf\.reuseOutcome\("superseded"[\s\S]*?return \{ ok: false, code: "superseded" \};/.test(cc), "재사용 재확인 중 이동 → superseded 유지");
   assert(/applyAttachmentUpgradeToAttachments\(/.test(cc) && /type: "read", seq: last\.seq/.test(cc), "사진 업그레이드·읽음 전송 경로 존재(변경 없음)");
 
   // ---------- 4) 결정적 모델: 빠른 재진입 ----------

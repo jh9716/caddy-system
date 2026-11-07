@@ -1,5 +1,5 @@
 /** Preview 전용 chatPerf 진단 — no DB, no network. */
-import { buildRecord, chatPerfText, classifyEntry, diffMs, isChatPerfAllowed, resolveServerEntry, sanitizeServerPerf, serverPerfLine, safeColo, bindSocketAttempt, openTimings, addRttSample, rttStats, updateNet, netPerfLine, CHAT_PERF_PING, CHAT_PERF_PONG, type ChatPerfNetRecord } from "../src/lib/chatPerfDiag";
+import { buildRecord, chatPerfText, classifyEntry, diffMs, isChatPerfAllowed, resolveServerEntry, sanitizeServerPerf, sanitizeReuseOutcome, serverPerfLine, reusePerfLine, safeColo, bindSocketAttempt, openTimings, addRttSample, rttStats, updateNet, netPerfLine, CHAT_PERF_PING, CHAT_PERF_PONG, type ChatPerfNetRecord } from "../src/lib/chatPerfDiag";
 let passed = 0, failed = 0;
 function assert(c: unknown, m: string) { if (c) { passed++; console.log("  ✓", m); } else { failed++; console.error("  ✗", m); } }
 
@@ -77,6 +77,16 @@ assert(sl.includes("session-check왕복 1200") && !/http|\?|token=|user/i.test(s
   assert(CHAT_PERF_PING === "vh-perf-ping" && CHAT_PERF_PONG === "vh-perf-pong", "핑 문자열(Worker 와 동일)");
   const full = chatPerfText({ entries: [], list: [], server: [], net: [{ ...mk(1, 1), colo: "NRT", doFirst: 0, rtt: [20] }] });
   assert(!/[a-z0-9]{20,}|\?|=|http/i.test(full.replace(/\(n=\d\)/g, "")), "복사 텍스트: 토큰/URL/쿼리 형태 없음");
+}
+{
+  const ok = sanitizeReuseOutcome({ code: "ok", revalidateMs: 240.4, http: 200 });
+  assert(ok && ok.code === "ok" && ok.revalidateMs === 240 && ok.http === 200, "재사용 성공 계측 정제");
+  assert(sanitizeReuseOutcome({ code: "revalidate_net", revalidateMs: -1, http: 99 })?.http === null, "비정상 상태코드 버림");
+  assert(sanitizeReuseOutcome({ code: "token=abc" }) === null, "비허용 코드 버림");
+  const rl = reusePerfLine({ n: 2, code: "revalidate_net", revalidateMs: 512, http: null });
+  assert(rl.includes("건너뜀") && rl.includes("revalidate_net") && !/http:|\?|token=/i.test(rl), "재사용 줄: URL/토큰 없음");
+  const withReuse = chatPerfText({ entries: [], list: [], server: [], net: [], reuse: [{ n: 1, code: "ok", revalidateMs: 200, http: 200 }] });
+  assert(withReuse.includes("재사용#1") && !/http:|\?|=/i.test(withReuse), "복사 텍스트에 재사용 줄, URL 없음");
 }
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

@@ -87,6 +87,7 @@ import {
   roundPerfMs,
   type ChatPerfT,
 } from "./chatPerf";
+import { BROWSER_CORS, withBrowserCors } from "./browserCors";
 import {
   isRecheckDue,
   openSocketRecheckIntervalMs,
@@ -145,11 +146,7 @@ function uniqueAttachmentIds(raw: string[], limit: number): string[] {
 }
 
 function corsHeaders(): Record<string, string> {
-  return {
-    "access-control-allow-origin": "*",
-    "access-control-allow-headers": "content-type, authorization, x-chat-media-grant",
-    "access-control-allow-methods": "GET, POST, PUT, OPTIONS",
-  };
+  return { ...BROWSER_CORS };
 }
 
 function json(data: unknown, status = 200): Response {
@@ -337,7 +334,11 @@ async function forwardDirectory(request: Request, env: Env): Promise<Response> {
   } else {
     forwarded.headers.delete(CHAT_PERF_HEADER);
   }
-  return directoryStub(env).fetch(forwarded);
+  // Directory DO json() has no CORS. Browser GET /directory/rooms/:id (WS reuse revalidation)
+  // is cross-origin from the app origin; without these headers fetch() throws and reuse fail-closes.
+  // 101 Directory WS is returned unchanged.
+  const res = await directoryStub(env).fetch(forwarded);
+  return withBrowserCors(res);
 }
 
 export default {

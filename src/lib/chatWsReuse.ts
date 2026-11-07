@@ -31,6 +31,70 @@ export function resolveChatWsReuse(
 
 export type ParkedSocketMeta = { roomId: string; token: string; exp: number };
 
+/** Preview chatPerf 허용 코드. 토큰·방 ID·URL 없음. ok = 재사용 성공. */
+export const RESUME_SKIP_CODES = [
+  "ok",
+  "no_park",
+  "no_resume",
+  "ws_ref",
+  "socket_closed",
+  "park_expired",
+  "room_mismatch",
+  "token_mismatch",
+  "token_expiring",
+  "revalidate_url",
+  "revalidate_net",
+  "revalidate_http",
+  "revalidate_body",
+  "superseded",
+  "resume_null",
+] as const;
+export type ResumeSkipCode = (typeof RESUME_SKIP_CODES)[number];
+
+export function isResumeSkipCode(v: unknown): v is ResumeSkipCode {
+  return typeof v === "string" && (RESUME_SKIP_CODES as readonly string[]).includes(v);
+}
+
+export type ParkedResumeRequest = {
+  roomId: string;
+  token: string;
+  nowSec: number;
+  socketOpen: boolean;
+  parkedAt?: number | null;
+  nowMs?: number;
+  hasResume?: boolean;
+  wsRefMatch?: boolean;
+};
+
+/**
+ * 파킹 재개 자격 실패 코드. null = 재개 후보(권한 재확인 전).
+ * hasResume/wsRefMatch 를 생략하면 그 검사는 건너뛴다(순수 canResumeParked 와 동일).
+ */
+export function classifyParkedResumeSkip(
+  parked: ParkedSocketMeta | null | undefined,
+  req: ParkedResumeRequest
+): ResumeSkipCode | null {
+  if (!parked) return "no_park";
+  if (req.hasResume === false) return "no_resume";
+  if (req.wsRefMatch === false) return "ws_ref";
+  if (!req.socketOpen) return "socket_closed";
+  if (isParkExpired(req.parkedAt, typeof req.nowMs === "number" ? req.nowMs : NaN)) return "park_expired";
+  if (!parked.roomId || parked.roomId !== req.roomId) return "room_mismatch";
+  if (!parked.token || parked.token !== req.token) return "token_mismatch";
+  if (!Number.isFinite(parked.exp) || parked.exp - 30 <= req.nowSec) return "token_expiring";
+  return null;
+}
+
+/** 재확인 실패 코드. null = HTTP 200 + 같은 방. 네트워크 예외는 호출부가 revalidate_net. */
+export function classifyRevalidationSkip(
+  status: number | null | undefined,
+  body: unknown,
+  roomId: string
+): Extract<ResumeSkipCode, "revalidate_http" | "revalidate_body"> | null {
+  if (isResumeRevalidationOk(status, body, roomId)) return null;
+  return status === 200 ? "revalidate_body" : "revalidate_http";
+}
+
 /**
  * 파킹 경과 판정(벽시계 기준). 모바일 백그라운드에서 setTimeout 이 늦게 돌아도 실제 경과로 판단한다.
  * 시작 시각이 없거나 시계가 거꾸로 가면(음수) 만료로 본다(fail-closed).
@@ -59,10 +123,5 @@ export function canResumeParked(
   parked: ParkedSocketMeta | null | undefined,
   req: { roomId: string; token: string; nowSec: number; socketOpen: boolean; parkedAt?: number | null; nowMs?: number }
 ): boolean {
-  if (!parked || !req.socketOpen) return false;
-  if (isParkExpired(req.parkedAt, typeof req.nowMs === "number" ? req.nowMs : NaN)) return false;
-  if (!parked.roomId || parked.roomId !== req.roomId) return false;
-  if (!parked.token || parked.token !== req.token) return false;
-  if (!Number.isFinite(parked.exp) || parked.exp - 30 <= req.nowSec) return false;
-  return true;
+  return classifyParkedResumeSkip(parked, req) === null;
 }

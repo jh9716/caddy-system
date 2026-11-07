@@ -200,7 +200,7 @@ import {
 } from "@/lib/chatDmClient";
 import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
 import { chatPerf, classifyEntry, CHAT_PERF_PING, CHAT_PERF_PING_COUNT, CHAT_PERF_PONG } from "@/lib/chatPerfDiag";
-import { canResumeParked, isParkExpired, isResumeRevalidationOk, CHAT_WS_REUSE_HISTORY_BEFORE, CHAT_WS_REUSE_STORAGE_KEY, CHAT_WS_REUSE_TTL_MS, resolveChatWsReuse, type ParkedSocketMeta } from "@/lib/chatWsReuse";
+import { canResumeParked, classifyParkedResumeSkip, classifyRevalidationSkip, isParkExpired, isResumeRevalidationOk, CHAT_WS_REUSE_HISTORY_BEFORE, CHAT_WS_REUSE_STORAGE_KEY, CHAT_WS_REUSE_TTL_MS, resolveChatWsReuse, type ParkedSocketMeta, type ResumeSkipCode } from "@/lib/chatWsReuse";
 import { shouldSkipResumeReconnect, type ChatResumeStamp } from "@/lib/chatResumeReconnect";
 import ChatPerfPanel from "@/components/chat/ChatPerfPanel";
 
@@ -787,40 +787,72 @@ export default function ChatClient() {
         parkedRoomRef.current = null;
         window.clearTimeout(parked.timer);
         const resume = socketResumeRef.current.get(parked.ws);
+        const parkedReq = () => ({
+          roomId,
+          token: info.token,
+          nowSec: Math.floor(Date.now() / 1000),
+          socketOpen: parked.ws.readyState === WebSocket.OPEN,
+          parkedAt: parked.parkedAt,
+          nowMs: Date.now(),
+        });
         const eligible = () =>
           !!resume &&
           wsRef.current === parked.ws &&
-          canResumeParked(parked, {
-            roomId,
-            token: info.token,
-            nowSec: Math.floor(Date.now() / 1000),
-            socketOpen: parked.ws.readyState === WebSocket.OPEN,
-            parkedAt: parked.parkedAt,
-            nowMs: Date.now(),
-          });
+          canResumeParked(parked, parkedReq());
+        let skipCode: ResumeSkipCode | null = classifyParkedResumeSkip(parked, {
+          ...parkedReq(),
+          hasResume: !!resume,
+          wsRefMatch: wsRef.current === parked.ws,
+        });
+        let revalidateMs: number | null = null;
+        let revalidateHttp: number | null = null;
         if (eligible()) {
           // 재개 직전 권한 재확인: 기존 Worker 방 조회(같은 토큰)로 새 연결과 같은 검사(토큰·DB 세션·퇴사·멤버십)를 다시 거친다.
           // 실패·오류·응답 불일치면 재사용하지 않는다(fail-closed → 아래에서 닫고 기존 새 연결).
           const genBefore = roomGenRef.current;
           let revalidated = false;
+          const tRv = chatPerf.now();
           try {
             const checkUrl = chatDirectoryRoomUrl(roomId, info.token);
             if (checkUrl) {
-              const res = await fetch(checkUrl, { cache: "no-store" });
+              const res = await fetch(checkUrl, { cache: "no-store", mode: "cors" });
               const body = await res.json().catch(() => null);
+              revalidateMs = Math.round(chatPerf.now() - tRv);
+              revalidateHttp = res.status;
               revalidated = isResumeRevalidationOk(res.status, body, roomId);
+              skipCode = revalidated ? null : classifyRevalidationSkip(res.status, body, roomId);
+            } else {
+              revalidateMs = Math.round(chatPerf.now() - tRv);
+              skipCode = "revalidate_url";
             }
           } catch {
             revalidated = false;
+            revalidateMs = Math.round(chatPerf.now() - tRv);
+            skipCode = "revalidate_net";
           }
           // 확인 중 사용자가 나가거나 다른 방으로 이동: 이 진입은 폐기(소켓은 그 나가기/진입 경로가 이미 파킹·닫기 처리).
-          if (roomGenRef.current !== genBefore) return { ok: false, code: "superseded" };
+          if (roomGenRef.current !== genBefore) {
+            chatPerf.reuseOutcome("superseded", revalidateMs, revalidateHttp);
+            return { ok: false, code: "superseded" };
+          }
           // TTL·소켓 상태를 다시 확인. 하나라도 어긋나면 재사용 금지 → 아래에서 닫고 새 연결.
           if (revalidated && eligible()) {
             const resumed = resume!();
-            if (resumed) return resumed;
+            if (resumed) {
+              chatPerf.reuseOutcome("ok", revalidateMs, revalidateHttp);
+              return resumed;
+            }
+            skipCode = "resume_null";
+          } else if (revalidated) {
+            skipCode =
+              classifyParkedResumeSkip(parked, {
+                ...parkedReq(),
+                hasResume: !!resume,
+                wsRefMatch: wsRef.current === parked.ws,
+              }) || "resume_null";
           }
         }
+        chatPerf.reuseOutcome(skipCode || "resume_null", revalidateMs, revalidateHttp);
         if (wsRef.current !== parked.ws) {
           try {
             parked.ws.close();

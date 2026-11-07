@@ -163,7 +163,11 @@ section("worker auth + directory");
   assert(worker.includes("CHAT_MEDIA"), "optional chat media binding");
   assert(worker.includes("/media/upload"), "chat media upload route");
   assert(read("cloudflare/verthill-chat/src/chatMedia.ts").includes("CHAT_MEDIA_UPLOAD_PATH"), "media handler module");
-  assert(worker.includes("x-chat-media-grant"), "upload grant header");
+  assert(
+    read("cloudflare/verthill-chat/src/browserCors.ts").includes("x-chat-media-grant") &&
+      read("cloudflare/verthill-chat/src/chatMedia.ts").includes("x-chat-media-grant"),
+    "upload grant header"
+  );
   assert(worker.includes("server_only"), "browser origin cannot create rooms");
   assert(worker.includes("queueChatPushDispatch"), "async chat push after persist");
   assert(worker.includes("CHAT_PUSH_DISPATCH_URL"), "optional Next dispatch URL");
@@ -172,6 +176,7 @@ section("worker auth + directory");
   assert(dir.includes("verifyInternalRequest"), "directory internals require internal auth");
   assert(dir.includes("getRoomRow"), "targeted room summary lookup");
   assert(worker.includes("roomSummaryMatch"), "worker forwards GET /directory/rooms/:id");
+  assert(worker.includes("withBrowserCors(res)"), "Directory HTTP responses get browser CORS");
   const cfg = read("src/lib/chatClientConfig.ts");
   assert(cfg.includes("chatDirectoryRoomUrl"), "client targeted room URL");
   assert(dir.includes("clampReadSeq"), "malicious read seq clamped");

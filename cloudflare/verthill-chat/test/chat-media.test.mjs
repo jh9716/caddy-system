@@ -19,7 +19,7 @@ test("chat media routes and grant stay Worker-local", () => {
   assert.match(index, /handleChatMediaRequest/);
   assert.match(index, /CHAT_MEDIA\?:/);
   assert.match(index, /CHAT_MEDIA_SECRET\?:/);
-  assert.match(index, /x-chat-media-grant/);
+  assert.match(media, /x-chat-media-grant/);
   assert.match(media, /CHAT_MEDIA_UPLOAD_PATH = "\/media\/upload"/);
   assert.match(media, /CHAT_MEDIA_INSPECT_PATH = "\/internal\/media\/inspect"/);
   assert.match(media, /CHAT_MEDIA_OBJECT_PATH = "\/internal\/media\/object"/);

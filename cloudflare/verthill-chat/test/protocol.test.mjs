@@ -26,12 +26,13 @@ test("protocol limits and team rooms exist", () => {
 test("worker stays isolated from Next/Neon/Vercel", () => {
   const index = readFileSync(join(root, "../src/index.ts"), "utf8");
   const directory = readFileSync(join(root, "../src/directory.ts"), "utf8");
+  const browserCors = readFileSync(join(root, "../src/browserCors.ts"), "utf8");
   assert.doesNotMatch(index, /vercel|neon|prisma|vh_session|FCM|D1|KV/i);
   assert.doesNotMatch(directory, /vercel|neon|prisma|vh_session|FCM|D1|R2|KV/i);
   assert.match(index, /CHAT_MEDIA/);
   assert.match(index, /\/media\/upload/);
   assert.match(index, /handleChatMediaRequest/);
-  assert.match(index, /x-chat-media-grant/);
+  assert.match(browserCors, /x-chat-media-grant/);
   assert.match(index, /DurableObject/);
   assert.match(index, /CHAT_ROOM/);
   assert.match(index, /CHAT_DIRECTORY/);
