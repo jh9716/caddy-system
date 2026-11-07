@@ -200,6 +200,7 @@ import {
 import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
 import { chatPerf, classifyEntry, CHAT_PERF_PING, CHAT_PERF_PING_COUNT, CHAT_PERF_PONG } from "@/lib/chatPerfDiag";
 import { canResumeParked, isParkExpired, isResumeRevalidationOk, CHAT_WS_REUSE_HISTORY_BEFORE, CHAT_WS_REUSE_STORAGE_KEY, CHAT_WS_REUSE_TTL_MS, resolveChatWsReuse, type ParkedSocketMeta } from "@/lib/chatWsReuse";
+import { shouldSkipResumeReconnect, type ChatResumeStamp } from "@/lib/chatResumeReconnect";
 import ChatPerfPanel from "@/components/chat/ChatPerfPanel";
 
 type TokenPayload = {
@@ -445,6 +446,7 @@ export default function ChatClient() {
     }
   }, []);
   const dirRef = useRef<WebSocket | null>(null);
+  const resumeStampRef = useRef<ChatResumeStamp<WebSocket> | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const stickRef = useRef(true);
   const tokenRef = useRef<TokenPayload | null>(null);
@@ -698,11 +700,8 @@ export default function ChatClient() {
         if (gen !== dirGenRef.current) return;
         setDirectoryConnected(true);
         dirAttemptRef.current = 0;
-        try {
-          ws.send(JSON.stringify({ type: "sync" }));
-        } catch {
-          // snapshot still arrives on connect
-        }
+        // Directory DO 는 수락 직후 rooms 스냅샷을 먼저 보낸다(운영·Preview Worker 공통). open 직후 sync 를 또 보내면
+        // 같은 목록을 한 번 더 계산·전송·적용하므로 보내지 않는다. 이후 변경은 Directory 브로드캐스트로 온다.
       });
       ws.addEventListener("error", () => {
         if (gen !== dirGenRef.current) return;
@@ -1246,12 +1245,34 @@ export default function ChatClient() {
       if (isChatSessionEnded()) return;
       const info = tokenRef.current;
       if (!info) return;
-      connectDirectory(info);
       const room = roomRef.current;
+      // 앱 복귀 때 visibilitychange·appStateChange·online 이 겹쳐 오면 방금 시작한 연결을 끊고 다시 여는 중복을 막는다.
+      // 같은 토큰·같은 방·같은 소켓이 살아 있을 때(2초 이내)만 건너뛰고, 그 밖에는 기존처럼 다시 연결한다.
+      if (
+        shouldSkipResumeReconnect(resumeStampRef.current, {
+          nowMs: Date.now(),
+          token: info.token,
+          roomId: room?.roomId ?? null,
+          dirWs: dirRef.current,
+          dirState: dirRef.current?.readyState,
+          roomWs: room ? wsRef.current : null,
+          roomState: room ? wsRef.current?.readyState : null,
+        })
+      ) {
+        return;
+      }
+      connectDirectory(info);
       if (room) {
         reconnectingRef.current = true;
         void connectSocket(info, room.roomId);
       }
+      resumeStampRef.current = {
+        at: Date.now(),
+        token: info.token,
+        roomId: room?.roomId ?? null,
+        dirWs: dirRef.current,
+        roomWs: room ? wsRef.current : null,
+      };
     };
     const onVisible = () => {
       if (document.visibilityState === "visible") reconnect();
