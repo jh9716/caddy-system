@@ -77,6 +77,7 @@ assert(resumeFn.indexOf("parkedResumeVerdict") < resumeFn.indexOf("sendHistory")
 assert(/expireUnavailable/.test(resumeFn) && /expire\(ws, verdict\.close\)/.test(resumeFn), "실패 시 소켓 폐기");
 assert(/this\.resumeInflight\.add\(ws\)/.test(worker), "resume 진행 중 history 직행 금지");
 assert(/if \(this\.resumeInflight\.has\(ws\)\)/.test(worker), "inflight history 는 인증 뒤로");
+assert(/async webSocketMessage/.test(worker) && /await run/.test(worker), "resume 동안 isolate 가 session-check 를 끝까지 수행");
 
 const phoneRtt = 240;
 const phoneSc = 250;

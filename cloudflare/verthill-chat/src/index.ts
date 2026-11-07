@@ -883,7 +883,7 @@ export class ChatRoom extends DurableObject<Env> {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
+  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
     const attach = this.readAttach(ws);
     if (!attach) return;
     if (typeof message === "string" && isPreviewPerfPing(this.env, message)) {
@@ -946,7 +946,13 @@ export class ChatRoom extends DurableObject<Env> {
         })
         .finally(() => this.resumeInflight.delete(ws));
       this.persistQueue = run;
-      return run;
+      try {
+        this.ctx.waitUntil(run);
+      } catch {
+        // local runtime may not expose waitUntil
+      }
+      await run;
+      return;
     }
     if (type === "history") {
       const hist = validateIncomingHistory(parsed);
@@ -965,7 +971,13 @@ export class ChatRoom extends DurableObject<Env> {
             // ignore
           });
         this.persistQueue = run;
-        return run;
+        try {
+          this.ctx.waitUntil(run);
+        } catch {
+          // local runtime may not expose waitUntil
+        }
+        await run;
+        return;
       }
       this.sendHistory(ws, attach.claims.userId, hist.beforeSeq, hist.limit);
       return;

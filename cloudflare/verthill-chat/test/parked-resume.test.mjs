@@ -4,7 +4,8 @@
  */
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -130,6 +131,8 @@ test("source: resume awaits session-check then history; no probe", () => {
     /probeChatSession/
   );
   assert.match(index, /this\.resumeInflight\.add\(ws\)/);
+  assert.match(index, /async webSocketMessage/);
+  assert.match(index, /await run/);
   assert.match(index, /parkedResumeVerdict/);
   const fn = index.slice(
     index.indexOf("private async handleParkedResume"),
@@ -139,10 +142,12 @@ test("source: resume awaits session-check then history; no probe", () => {
 });
 
 test("wrangler: resume rechecks session then history; revoke/block/unavailable drop socket", async () => {
-  const { port, child, mock } = await startWrangler();
+  const persistTo = mkdtempSync(join(tmpdir(), "parked-resume-"));
+  const uid = 300000 + (Date.now() % 100000);
+  const { port, child, mock } = await startWrangler({ persistTo });
   try {
-    const tok = signTestTokenV2({ userId: 201, displayName: "재개", role: "caddy", sv: 2 });
-    mock.setEpoch(201, 2);
+    const tok = signTestTokenV2({ userId: uid, displayName: "재개", role: "caddy", sv: 2 });
+    mock.setEpoch(uid, 2);
     const ws = await connect(port, "all", tok.token);
     await waitMessage(ws, (d) => d.type === "history");
 
@@ -190,25 +195,25 @@ test("wrangler: resume rechecks session then history; revoke/block/unavailable d
     collector.stop();
     mock.setDelayMs(0);
 
-    mock.setEpoch(201, 3);
+    mock.setEpoch(uid, 3);
     const staleEvt = waitMessage(ws, (d) => d.type === "error");
     const closed = waitClose(ws, 12000);
     const fanout = await fetch(`http://${HOST}:${port}/internal/session-revoke`, {
       method: "POST",
       headers: internalHeaders("/internal/session-revoke"),
-      body: JSON.stringify({ userId: 201, sessionVersion: 3 }),
+      body: JSON.stringify({ userId: uid, sessionVersion: 3 }),
     });
     assert.equal(fanout.status, 200);
     const err = await staleEvt;
     assert.equal(err.code, "stale_session");
     assert.equal((await closed).code, 4008);
-    mock.setEpoch(201, 3);
+    mock.setEpoch(uid, 3);
 
-    const tok2 = signTestTokenV2({ userId: 202, displayName: "차단재개", role: "caddy", sv: 1 });
-    mock.setEpoch(202, 1);
+    const tok2 = signTestTokenV2({ userId: uid + 1, displayName: "차단재개", role: "caddy", sv: 1 });
+    mock.setEpoch(uid + 1, 1);
     const ws2 = await connect(port, "all", tok2.token);
     await waitMessage(ws2, (d) => d.type === "history");
-    mock.setBlocked(202, true);
+    mock.setBlocked(uid + 1, true);
     const frames2 = collectFrames(ws2);
     const err2 = waitMessage(ws2, (d) => d.type === "error");
     const close2 = waitClose(ws2, 12000);
@@ -222,8 +227,8 @@ test("wrangler: resume rechecks session then history; revoke/block/unavailable d
     );
     frames2.stop();
 
-    const tok3 = signTestTokenV2({ userId: 203, displayName: "장애재개", role: "caddy", sv: 1 });
-    mock.setEpoch(203, 1);
+    const tok3 = signTestTokenV2({ userId: uid + 2, displayName: "장애재개", role: "caddy", sv: 1 });
+    mock.setEpoch(uid + 2, 1);
     const ws3 = await connect(port, "all", tok3.token);
     await waitMessage(ws3, (d) => d.type === "history");
     mock.setUnavailable(true);
@@ -241,11 +246,13 @@ test("wrangler: resume rechecks session then history; revoke/block/unavailable d
     frames3.stop();
     mock.setUnavailable(false);
 
-    const a = { userId: 204, displayName: "멤버A", role: "caddy", team: "1조" };
-    const b = { userId: 205, displayName: "멤버B", role: "caddy", team: "2조" };
-    const roomId = "dm_204_205";
-    mock.setEpoch(204, 1);
-    mock.setEpoch(205, 1);
+    const a = { userId: uid + 3, displayName: "멤버A", role: "caddy", team: "1조" };
+    const b = { userId: uid + 4, displayName: "멤버B", role: "caddy", team: "2조" };
+    const lo = Math.min(a.userId, b.userId);
+    const hi = Math.max(a.userId, b.userId);
+    const roomId = `dm_${lo}_${hi}`;
+    mock.setEpoch(a.userId, 1);
+    mock.setEpoch(b.userId, 1);
     const created = await createDm(port, roomId, a, b);
     assert.equal(created.status, 200, "DM create");
     const aTok = signTestTokenV2({ ...a, sv: 1 });
@@ -258,8 +265,8 @@ test("wrangler: resume rechecks session then history; revoke/block/unavailable d
     assert.equal(mock.checkCount() - scDm, 1, "DM resume session-check 1");
     memberWs.close();
 
-    const tok4 = signTestTokenV2({ userId: 206, displayName: "경합재개", role: "caddy", sv: 1 });
-    mock.setEpoch(206, 1);
+    const tok4 = signTestTokenV2({ userId: uid + 5, displayName: "경합재개", role: "caddy", sv: 1 });
+    mock.setEpoch(uid + 5, 1);
     const ws4 = await connect(port, "all", tok4.token);
     await waitMessage(ws4, (d) => d.type === "history");
     mock.setDelayMs(180);
@@ -268,11 +275,11 @@ test("wrangler: resume rechecks session then history; revoke/block/unavailable d
     const close4 = waitClose(ws4, 12000);
     ws4.send(JSON.stringify({ type: "resume" }));
     await sleep(40);
-    mock.setEpoch(206, 2);
+    mock.setEpoch(uid + 5, 2);
     const raceRevoke = await fetch(`http://${HOST}:${port}/internal/session-revoke`, {
       method: "POST",
       headers: internalHeaders("/internal/session-revoke"),
-      body: JSON.stringify({ userId: 206, sessionVersion: 2 }),
+      body: JSON.stringify({ userId: uid + 5, sessionVersion: 2 }),
     });
     assert.equal(raceRevoke.status, 200);
     const raceErr = await err4;
@@ -290,5 +297,10 @@ test("wrangler: resume rechecks session then history; revoke/block/unavailable d
     mock.setDelayMs(0);
   } finally {
     await stopWrangler(child);
+    try {
+      rmSync(persistTo, { recursive: true, force: true });
+    } catch {
+      // temp state
+    }
   }
 });
