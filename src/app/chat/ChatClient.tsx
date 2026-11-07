@@ -215,12 +215,12 @@ import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
 import {
   applyWsReuseRuntimeEnabled,
   canResumeParked,
+  fetchChatWsReuseRuntimeEnabled,
   isParkExpired,
   parkedResumeClientGate,
-  parseWsReuseRuntimeResponse,
   shouldParkChatWsReuse,
   CHAT_WS_RESUME_TIMEOUT_MS,
-  CHAT_WS_REUSE_RUNTIME_PATH,
+  CHAT_WS_REUSE_RUNTIME_POLL_MS,
   CHAT_WS_REUSE_TTL_MS,
   resolveChatWsReuse,
   type ParkedSocketMeta,
@@ -429,20 +429,25 @@ export default function ChatClient() {
   };
   /**
    * Leave-room: if reuse is on and the socket is OPEN, park for TTL instead of closing.
-   * roomGen already advanced, so parked events are ignored (no read receipts).
+   * Re-checks GET /api/chat/ws-reuse first so Instant Rollback turns park off
+   * for this tab without waiting for a reload. roomGen already advanced, so
+   * parked events are ignored (no read receipts).
    */
-  const parkRoomSocket = (): boolean => {
+  const parkRoomSocket = async (): Promise<boolean> => {
+    const ws = wsRef.current;
+    const meta = ws ? socketMetaRef.current.get(ws) : undefined;
+    if (!ws || !meta || ws.readyState !== WebSocket.OPEN || !socketResumeRef.current.has(ws)) return false;
+    if (!wsReuseEnabledRef.current) return false;
+    const runtimeEnabled = await refreshWsReuseRuntime();
+    if (wsRef.current !== ws || ws.readyState !== WebSocket.OPEN) return false;
     if (
       !shouldParkChatWsReuse({
         compileEnabled: wsReuseEnabledRef.current,
-        runtimeEnabled: wsReuseRuntimeRef.current,
+        runtimeEnabled,
       })
     ) {
       return false;
     }
-    const ws = wsRef.current;
-    const meta = ws ? socketMetaRef.current.get(ws) : undefined;
-    if (!ws || !meta || ws.readyState !== WebSocket.OPEN || !socketResumeRef.current.has(ws)) return false;
     if (parkedResumeWaitRef.current?.ws === ws) {
       parkedResumeWaitRef.current.finish(false);
       parkedResumeWaitRef.current = null;
@@ -471,30 +476,35 @@ export default function ChatClient() {
     );
     return true;
   };
+  const leaveRoomSocket = () => {
+    const ws = wsRef.current;
+    void parkRoomSocket().then((parked) => {
+      if (parked || !ws || wsRef.current !== ws) return;
+      try {
+        ws.close();
+      } catch {
+        // already closed
+      }
+    });
+  };
   const applyRuntimeParkState = (enabled: boolean) => {
     const applied = applyWsReuseRuntimeEnabled(enabled);
     wsReuseRuntimeRef.current = applied.runtimeEnabled;
     if (applied.dropParked) dropParkedRoomSocket();
+    return applied.runtimeEnabled;
   };
-  const refreshWsReuseRuntime = () => {
+  const refreshWsReuseRuntime = async (): Promise<boolean> => {
     if (!wsReuseEnabledRef.current) {
-      applyRuntimeParkState(false);
-      return;
+      return applyRuntimeParkState(false);
     }
-    void fetch(CHAT_WS_REUSE_RUNTIME_PATH, { cache: "no-store" })
-      .then(async (res) => {
-        const data = await res.json().catch(() => null);
-        applyRuntimeParkState(res.ok && parseWsReuseRuntimeResponse(data));
-      })
-      .catch(() => {
-        applyRuntimeParkState(false);
-      });
+    const enabled = await fetchChatWsReuseRuntimeEnabled({ fetch: window.fetch.bind(window) });
+    return applyRuntimeParkState(enabled);
   };
   useEffect(() => {
     const check = () => {
       const parked = parkedRoomRef.current;
       if (parked && isParkExpired(parked.parkedAt, Date.now())) dropParkedRoomSocket();
-      if (wsReuseEnabledRef.current) refreshWsReuseRuntime();
+      if (wsReuseEnabledRef.current) void refreshWsReuseRuntime();
     };
     const onVisibility = () => {
       if (document.visibilityState === "visible") check();
@@ -518,7 +528,12 @@ export default function ChatClient() {
     } catch {
       wsReuseEnabledRef.current = false;
     }
-    refreshWsReuseRuntime();
+    void refreshWsReuseRuntime();
+    if (!wsReuseEnabledRef.current) return;
+    const id = window.setInterval(() => {
+      void refreshWsReuseRuntime();
+    }, CHAT_WS_REUSE_RUNTIME_POLL_MS);
+    return () => window.clearInterval(id);
   }, []);
   const dirRef = useRef<WebSocket | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -1604,7 +1619,7 @@ export default function ChatClient() {
       reconnectingRef.current = false;
       roomGenRef.current += 1;
       clearTimer(roomTimerRef);
-      if (!parkRoomSocket()) wsRef.current?.close();
+      leaveRoomSocket();
       abandonComposerPhotos();
       clearLocalLines([]);
       setReplyTo(null);
@@ -2985,7 +3000,7 @@ export default function ChatClient() {
                 reconnectingRef.current = false;
                 roomGenRef.current += 1;
                 clearTimer(roomTimerRef);
-                if (!parkRoomSocket()) wsRef.current?.close();
+                leaveRoomSocket();
                 abandonComposerPhotos();
                 clearLocalLines([]);
                 setReplyTo(null);

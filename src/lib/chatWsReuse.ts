@@ -3,8 +3,11 @@
  * Flip PRODUCTION_CHAT_WS_REUSE_ENABLED only after explicit production approval.
  * Tests may pass { productionEnabled: true } without changing that const or any secret.
  *
- * ON deploy is that const flip only. Immediate OFF after ON: set server env
- * CHAT_WS_REUSE_RUNTIME=0 (not NEXT_PUBLIC_; no rebuild). Unset env follows the const.
+ * Emergency OFF is Vercel Instant Rollback to the previous OFF production
+ * deployment (no rebuild). Vercel env changes do not apply to an existing
+ * deployment — CHAT_WS_REUSE_RUNTIME=0 only takes effect on a new deploy.
+ * Open ON tabs re-check GET /api/chat/ws-reuse before park and on a short poll;
+ * a false/error/timeout response drops parked sockets (fail-closed).
  */
 import { resolveChatAppEnv, type ChatAppEnv, type ChatAppEnvInput } from "./chatAppEnv";
 
@@ -13,6 +16,17 @@ export const CHAT_WS_REUSE_TTL_MS = 20000;
 export const CHAT_WS_RESUME_TIMEOUT_MS = 4000;
 export const CHAT_WS_REUSE_RUNTIME_PATH = "/api/chat/ws-reuse";
 export const CHAT_WS_REUSE_RUNTIME_ENV = "CHAT_WS_REUSE_RUNTIME";
+/** Fail-closed wait before parking. Instant Rollback must be visible on the next leave. */
+export const CHAT_WS_REUSE_RUNTIME_FETCH_TIMEOUT_MS = 800;
+/** Open-tab poll so Instant Rollback drops parks without waiting for hide/pageshow. */
+export const CHAT_WS_REUSE_RUNTIME_POLL_MS = 5000;
+export const CHAT_WS_REUSE_RUNTIME_RESPONSE_HEADERS: Record<string, string> = {
+  "cache-control": "private, no-store, no-cache, must-revalidate, max-age=0",
+  "cdn-cache-control": "no-store",
+  "vercel-cdn-cache-control": "no-store",
+  pragma: "no-cache",
+  expires: "0",
+};
 
 /**
  * Hard off for production until an explicit enable. Not an env/secret flag.
@@ -34,7 +48,11 @@ export function resolveChatWsReuse(
   }
 }
 
-/** Kill switch after compile-ON. Unset/unknown follows compile. 0/false/off forces off. */
+/**
+ * Compile-ON override baked into a deployment. Unset/unknown follows compile.
+ * 0/false/off forces off for that deployment only — changing the Vercel project
+ * env does not update an already-running deployment.
+ */
 export function resolveChatWsReuseRuntime(input: {
   compileEnabled: boolean;
   appEnv: ChatAppEnv | string;
@@ -66,7 +84,7 @@ export function shouldParkChatWsReuse(input: {
 
 /**
  * Apply a runtime poll. Anything other than boolean true drops a parked socket
- * so CHAT_WS_REUSE_RUNTIME=0 closes reuse without waiting for TTL.
+ * so Instant Rollback (API false/404) closes reuse without waiting for TTL.
  */
 export function applyWsReuseRuntimeEnabled(enabled: boolean): {
   runtimeEnabled: boolean;
@@ -74,6 +92,49 @@ export function applyWsReuseRuntimeEnabled(enabled: boolean): {
 } {
   const runtimeEnabled = enabled === true;
   return { runtimeEnabled, dropParked: !runtimeEnabled };
+}
+
+export async function fetchChatWsReuseRuntimeEnabled(input: {
+  fetch: (url: string, init?: RequestInit) => Promise<Response>;
+  url?: string;
+  timeoutMs?: number;
+}): Promise<boolean> {
+  const url = input.url ?? CHAT_WS_REUSE_RUNTIME_PATH;
+  const timeoutMs = input.timeoutMs ?? CHAT_WS_REUSE_RUNTIME_FETCH_TIMEOUT_MS;
+  const ctrl = new AbortController();
+  const timedOut = new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => {
+      ctrl.abort();
+      resolve(false);
+    }, timeoutMs);
+    ctrl.signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+      },
+      { once: true }
+    );
+  });
+  const requested = (async () => {
+    try {
+      const res = await input.fetch(url, {
+        cache: "no-store",
+        headers: {
+          "cache-control": "no-cache",
+          pragma: "no-cache",
+        },
+        signal: ctrl.signal,
+      });
+      if (!res.ok) return false;
+      const data = await res.json().catch(() => null);
+      return parseWsReuseRuntimeResponse(data);
+    } catch {
+      return false;
+    } finally {
+      ctrl.abort();
+    }
+  })();
+  return Promise.race([requested, timedOut]);
 }
 
 export type ParkedSocketMeta = { roomId: string; token: string; exp: number };

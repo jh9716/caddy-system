@@ -9,10 +9,14 @@ import {
   CHAT_WS_REUSE_TTL_MS,
   CHAT_WS_REUSE_RUNTIME_PATH,
   CHAT_WS_REUSE_RUNTIME_ENV,
+  CHAT_WS_REUSE_RUNTIME_FETCH_TIMEOUT_MS,
+  CHAT_WS_REUSE_RUNTIME_POLL_MS,
+  CHAT_WS_REUSE_RUNTIME_RESPONSE_HEADERS,
   applyWsReuseRuntimeEnabled,
   canResumeParked,
   classifyParkedResumeSkip,
   classifyParkedResumeWaitResult,
+  fetchChatWsReuseRuntimeEnabled,
   isParkExpired,
   parkedResumeClientGate,
   parseWsReuseRuntimeResponse,
@@ -236,14 +240,17 @@ async function main() {
   const client = read("src/app/chat/ChatClient.tsx");
   assert(client.includes("dropParkedRoomSocket();"), "logout/session reset drops parked socket");
   assert(client.includes("subscribeChatSessionReset"), "session reset subscription present");
-  assert(client.includes("if (!parkRoomSocket()) wsRef.current?.close()"), "leave parks only when enabled");
+  assert(client.includes("leaveRoomSocket();"), "leave parks only when enabled");
+  assert(client.includes("await refreshWsReuseRuntime()"), "park re-checks runtime API first");
+  assert(client.includes("CHAT_WS_REUSE_RUNTIME_POLL_MS"), "open tabs poll after Instant Rollback");
+  assert(client.includes("fetchChatWsReuseRuntimeEnabled"), "runtime fetch is fail-closed");
+  assert(client.includes("wsRef.current !== ws"), "park aborts if the tab opened another room");
   assert(client.includes('{ type: "resume" }') || client.includes("{ type: \"resume\" }") || client.includes('type: "resume"'), "resume frame is sent");
   assert(!client.includes("chatPerfDiag"), "no chatPerf in ChatClient");
   assert(!client.includes("CHAT_WS_REUSE_STORAGE_KEY"), "no Preview sessionStorage reuse flag");
   assert(client.includes("PRODUCTION_CHAT_WS_REUSE_ENABLED") === false, "ChatClient uses resolveChatWsReuse, not a local flip");
   assert(client.includes("shouldParkChatWsReuse"), "park checks compile + runtime");
   assert(client.includes("applyWsReuseRuntimeEnabled"), "runtime poll drops parked sockets");
-  assert(client.includes("CHAT_WS_REUSE_RUNTIME_PATH"), "client fetches runtime kill switch");
   assert(client.includes('addEventListener(\n      "close"') || client.includes('addEventListener(\n      "close",') || /addEventListener\(\s*"close"/.test(client), "parked socket close clears park");
   const eligibleAt = client.indexOf("const eligible = () =>");
   const eligible = client.slice(eligibleAt, eligibleAt + 450);
@@ -276,7 +283,13 @@ async function main() {
   assert(runtimeApi.includes("PRODUCTION_CHAT_WS_REUSE_ENABLED"), "API honors compile const");
   assert(!/prisma/i.test(runtimeApi), "runtime API does not touch Prisma");
   assert(!/DATABASE_URL|neon/i.test(runtimeApi), "runtime API has no DB URL");
-  assert(runtimeApi.includes("no-store"), "runtime API is not cached");
+  assert(runtimeApi.includes("CHAT_WS_REUSE_RUNTIME_RESPONSE_HEADERS"), "runtime API uses shared no-store headers");
+  assert(runtimeApi.includes('fetchCache = "force-no-store"'), "runtime API disables Next fetch cache");
+  assert(runtimeApi.includes("revalidate = 0"), "runtime API is not ISR");
+  assert(!runtimeApi.includes("without a rebuild"), "API does not claim env changes skip redeploy");
+  const reuseLib = read("src/lib/chatWsReuse.ts");
+  assert(reuseLib.includes("Instant Rollback"), "docs Instant Rollback as emergency OFF");
+  assert(reuseLib.includes("do not apply to an existing"), "docs that Vercel env changes skip live deployments");
 
   section("runtime API GET");
   const { GET } = await import("../src/app/api/chat/ws-reuse/route");
@@ -289,7 +302,56 @@ async function main() {
     body.enabled === (PRODUCTION_CHAT_WS_REUSE_ENABLED === true),
     "API enabled follows compile const on local production env"
   );
-  assert(res.headers.get("cache-control") === "no-store", "runtime API Cache-Control no-store");
+  assert(
+    String(res.headers.get("cache-control") || "").includes("no-store"),
+    "runtime API Cache-Control includes no-store"
+  );
+  assert(res.headers.get("cdn-cache-control") === "no-store", "runtime API CDN cache is no-store");
+  assert(res.headers.get("vercel-cdn-cache-control") === "no-store", "Vercel CDN cache is no-store");
+  assert(CHAT_WS_REUSE_RUNTIME_RESPONSE_HEADERS["cache-control"].includes("no-store"), "shared headers no-store");
+  assert(CHAT_WS_REUSE_RUNTIME_POLL_MS === 5000, "open-tab poll is 5s");
+  assert(CHAT_WS_REUSE_RUNTIME_FETCH_TIMEOUT_MS === 800, "park-time fetch timeout is 800ms");
+
+  section("runtime fetch fail-closed");
+  assert(
+    (await fetchChatWsReuseRuntimeEnabled({
+      fetch: async () => new Response(JSON.stringify({ enabled: true }), { status: 200 }),
+    })) === true,
+    "200 {enabled:true} allows park"
+  );
+  assert(
+    (await fetchChatWsReuseRuntimeEnabled({
+      fetch: async () => new Response(JSON.stringify({ enabled: false }), { status: 200 }),
+    })) === false,
+    "200 {enabled:false} after Instant Rollback disables park"
+  );
+  assert(
+    (await fetchChatWsReuseRuntimeEnabled({
+      fetch: async () => new Response("not found", { status: 404 }),
+    })) === false,
+    "404 (older OFF deploy without the route) disables park"
+  );
+  assert(
+    (await fetchChatWsReuseRuntimeEnabled({
+      fetch: async () => {
+        throw new Error("network");
+      },
+    })) === false,
+    "network error disables park"
+  );
+  assert(
+    (await fetchChatWsReuseRuntimeEnabled({
+      timeoutMs: 20,
+      fetch: async (_url, init) =>
+        new Promise((_, reject) => {
+          const signal = init?.signal;
+          if (signal) {
+            signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+          }
+        }),
+    })) === false,
+    "timeout disables park"
+  );
   process.env.CHAT_WS_REUSE_RUNTIME = "0";
   const off = await GET();
   const offBody = (await off.json()) as { enabled?: unknown };
