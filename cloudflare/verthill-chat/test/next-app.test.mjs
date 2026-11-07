@@ -7,13 +7,14 @@ import { readFileSync } from "node:fs";
 
 const require = createRequire(import.meta.url);
 const out = await build({
-  entryPoints: { nextApp: "src/nextApp.ts", sessionCheck: "src/sessionCheck.ts" },
+  entryPoints: { nextApp: "src/nextApp.ts", sessionCheck: "src/sessionCheck.ts", chatPerf: "src/chatPerf.ts" },
   bundle: true, format: "esm", platform: "neutral", write: false, outdir: "/tmp/na",
 });
 const load = async (name) => import("data:text/javascript;base64," +
   Buffer.from(out.outputFiles.find((f) => f.path.endsWith(`${name}.js`)).text).toString("base64"));
 const na = await load("nextApp");
 const sc = await load("sessionCheck");
+const cp = await load("chatPerf");
 const originCli = require("../scripts/assert-preview-app-origin.cjs");
 
 const H = "caddy-system-gt8t-git-preview-session-r-fd6310-jh9716s-projects.vercel.app";
@@ -98,6 +99,36 @@ test("W1: Worker session-check skip is /ws WebSocket upgrade only", () => {
   assert.equal(sc.shouldSkipWorkerSessionCheck("/directory/ws", "websocket"), false, "Directory never skips");
   assert.equal(sc.shouldSkipWorkerSessionCheck("/directory/rooms", "websocket"), false);
   assert.equal(sc.shouldSkipWorkerSessionCheck("/health", "websocket"), false);
+});
+
+test("Preview chatPerf: Server-Timing 숫자만, 반환값·운영 fetch 불변", async () => {
+  const parsed = cp.parseSessionCheckServerTiming("app;dur=900, db;dur=40.4, cold;dur=1, other;dur=9");
+  assert.deepEqual(parsed, { scApp: 900, scDb: 40, scCold: 1 });
+  assert.deepEqual(cp.parseSessionCheckServerTiming("token=abc, user=1"), {});
+  assert.equal(cp.CHAT_PERF_PING, "vh-perf-ping");
+  const perf = {};
+  const { r } = await withFetch(
+    () => sc.assertChatSessionCurrent(PE, claims, perf),
+    () => new Response('{"ok":true}', { status: 200, headers: { "Server-Timing": "app;dur=12, db;dur=3, cold;dur=0" } })
+  );
+  assert.deepEqual(r, { ok: true });
+  assert.equal(perf.scApp, 12);
+  assert.equal(perf.scDb, 3);
+  assert.equal(perf.scCold, 0);
+  assert.ok(typeof perf.sc === "number" && perf.sc >= 0);
+  const prodPerf = {};
+  const pr = { CHAT_AUTH_SECRET: "a", CHAT_INTERNAL_SECRET: "i", CHAT_PUSH_DISPATCH_URL: "https://www.verthill.kr/api/chat/push-dispatch" };
+  const { r: rp } = await withFetch(
+    () => sc.assertChatSessionCurrent(pr, claims, prodPerf),
+    () => new Response('{"ok":true}', { status: 200, headers: { "Server-Timing": "app;dur=99" } })
+  );
+  assert.deepEqual(rp, { ok: true });
+  assert.equal(prodPerf.scApp, undefined, "운영은 Server-Timing 을 읽지 않음");
+  const frame = cp.previewPerfFrame({ tok: 1, sc: 80, userId: 9, token: "abc" }, "ICN");
+  assert.equal(frame.type, "perf");
+  assert.deepEqual(frame.t, { tok: 1, sc: 80 });
+  assert.equal(frame.colo, "ICN");
+  assert.equal(cp.previewColo({ colo: "lax" }), undefined);
 });
 
 test("preview session-check: 200/401/403/503/redirect/미설정", async () => {

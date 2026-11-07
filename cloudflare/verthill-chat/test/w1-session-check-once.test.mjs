@@ -169,8 +169,13 @@ test("W1 source: DO still authorizeSocket; no c679e51 assertion", () => {
   assert.doesNotMatch(index, /wsAssertion|attachWsAssertion|readWsAssertion/);
   assert.match(
     index,
-    /const authorized = await authorizeSocket\(request, this\.env\)/,
+    /const authorized = await authorizeSocket\(\s*request,\s*this\.env/,
     "ChatRoom must keep full authorizeSocket"
+  );
+  assert.doesNotMatch(
+    index,
+    /authorizeSocket\(\s*request,\s*this\.env,\s*\{[^}]*sessionCheck:\s*"skip"/,
+    "ChatRoom must not skip session-check"
   );
   assert.match(index, /shouldSkipWorkerSessionCheck/);
   assert.match(index, /sessionCheck !== "skip"/);
