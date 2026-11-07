@@ -47,6 +47,7 @@ import {
   validateIncomingHistory,
   validateIncomingMessage,
   validateIncomingRead,
+  validateIncomingResume,
   validateIncomingSync,
   type ChatDeletionType,
   type ChatMessage,
@@ -70,7 +71,10 @@ import {
   assertChatSessionCurrent,
   parseEvictMembersBody,
   parseSessionRevokeBody,
+  shouldSkipWorkerSessionCheck,
 } from "./sessionCheck";
+import { withBrowserCors } from "./browserCors";
+import { parkedResumeVerdict } from "./parkedResume";
 
 export { validateIncomingMessage, isValidRoomName } from "./protocol";
 export { verifyChatToken } from "./token";
@@ -146,9 +150,19 @@ function directoryStub(env: Env) {
   return env.CHAT_DIRECTORY.get(env.CHAT_DIRECTORY.idFromName(DIRECTORY_NAME));
 }
 
+type VerifyIdentityOptions = {
+  /**
+   * "skip": token signature/expiry/audience only. Next/DB session-check omitted.
+   * ChatRoom DO authorizeSocket still performs the final session-check.
+   * Directory paths must not use skip. Opposite of c679e51 (DO auth skip).
+   */
+  sessionCheck?: "required" | "skip";
+};
+
 async function verifyIdentity(
   request: Request,
-  env: Env
+  env: Env,
+  options?: VerifyIdentityOptions
 ): Promise<ChatTokenClaims | Response> {
   const url = new URL(request.url);
   const secret = String(env.CHAT_AUTH_SECRET || "").trim();
@@ -164,10 +178,12 @@ async function verifyIdentity(
   if (!token) return json({ error: "unauthorized" }, 401);
   const claims = await verifyChatToken(token, secret, undefined, audience);
   if (!claims) return json({ error: "invalid_token" }, 401);
-  const session = await assertChatSessionCurrent(env, claims);
-  if (!session.ok) return json({ error: session.error }, session.status);
-  if (isSessionBoundChatToken(claims)) {
-    void rememberSessionEpoch(env, claims.userId, claims.sv);
+  if (options?.sessionCheck !== "skip") {
+    const session = await assertChatSessionCurrent(env, claims);
+    if (!session.ok) return json({ error: session.error }, session.status);
+    if (isSessionBoundChatToken(claims)) {
+      void rememberSessionEpoch(env, claims.userId, claims.sv);
+    }
   }
   return claims;
 }
@@ -227,14 +243,15 @@ async function isDirectoryMember(
 
 async function authorizeSocket(
   request: Request,
-  env: Env
+  env: Env,
+  options?: VerifyIdentityOptions
 ): Promise<{ room: string; claims: ChatTokenClaims } | Response> {
   const url = new URL(request.url);
   const room = (url.searchParams.get("room") || "").trim();
   if (!isValidRoomName(room)) {
     return json({ error: "invalid_room" }, 400);
   }
-  const identity = await verifyIdentity(request, env);
+  const identity = await verifyIdentity(request, env, options);
   if (identity instanceof Response) return identity;
   const access = resolveChatRoomAccess({
     claims: identity,
@@ -263,7 +280,10 @@ async function forwardDirectory(request: Request, env: Env): Promise<Response> {
   // forwards `request` unchanged. Directory list/WS used the rebuilt Request.
   const forwarded = new Request(request.url, request);
   forwarded.headers.set("x-chat-claims", JSON.stringify(identity));
-  return directoryStub(env).fetch(forwarded);
+  // Directory DO json() has no CORS. Browser GET /directory/rooms is cross-origin
+  // from the app origin. 101 Directory WS is returned unchanged.
+  const res = await directoryStub(env).fetch(forwarded);
+  return withBrowserCors(res);
 }
 
 export default {
@@ -283,9 +303,13 @@ export default {
       });
     }
     if (url.pathname === "/ws") {
-      const authorized = await authorizeSocket(request, env);
+      const upgrade = request.headers.get("Upgrade");
+      const sessionCheck = shouldSkipWorkerSessionCheck(url.pathname, upgrade)
+        ? "skip"
+        : "required";
+      const authorized = await authorizeSocket(request, env, { sessionCheck });
       if (authorized instanceof Response) return authorized;
-      if ((request.headers.get("Upgrade") || "").toLowerCase() !== "websocket") {
+      if ((upgrade || "").toLowerCase() !== "websocket") {
         return json({ error: "upgrade_required" }, 426);
       }
       const id = env.CHAT_ROOM.idFromName(authorized.room);
@@ -539,6 +563,8 @@ type SocketAttach = { claims: ChatTokenClaims; roomId: string };
 
 export class ChatRoom extends DurableObject<Env> {
   private persistQueue: Promise<void> = Promise.resolve();
+  /** {type:"resume"} in flight. History is held until auth completes so it cannot leak. */
+  private resumeInflight = new WeakSet<WebSocket>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -713,7 +739,7 @@ export class ChatRoom extends DurableObject<Env> {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
+  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
     const attach = this.readAttach(ws);
     if (!attach) return;
     if (typeof message !== "string") {
@@ -754,10 +780,51 @@ export class ChatRoom extends DurableObject<Env> {
       void this.notifyDirectoryRead(attach.roomId, attach.claims.userId, read.seq);
       return;
     }
+    if (type === "resume") {
+      const resume = validateIncomingResume(parsed);
+      if (!resume.ok) {
+        sendJson(ws, { type: "error", code: resume.code, message: resume.message });
+        return;
+      }
+      this.resumeInflight.add(ws);
+      const run = this.persistQueue
+        .then(() => this.handleParkedResume(ws, attach))
+        .catch(() => {
+          // ignore
+        })
+        .finally(() => this.resumeInflight.delete(ws));
+      this.persistQueue = run;
+      try {
+        this.ctx.waitUntil(run);
+      } catch {
+        // local runtime may not expose waitUntil
+      }
+      await run;
+      return;
+    }
     if (type === "history") {
       const hist = validateIncomingHistory(parsed);
       if (!hist.ok) {
         sendJson(ws, { type: "error", code: hist.code, message: hist.message });
+        return;
+      }
+      if (this.resumeInflight.has(ws)) {
+        const run = this.persistQueue
+          .then(() => {
+            const still = this.readAttach(ws);
+            if (!still) return;
+            this.sendHistory(ws, still.claims.userId, hist.beforeSeq, hist.limit);
+          })
+          .catch(() => {
+            // ignore
+          });
+        this.persistQueue = run;
+        try {
+          this.ctx.waitUntil(run);
+        } catch {
+          // local runtime may not expose waitUntil
+        }
+        await run;
         return;
       }
       this.sendHistory(ws, attach.claims.userId, hist.beforeSeq, hist.limit);
@@ -946,6 +1013,59 @@ export class ChatRoom extends DurableObject<Env> {
     if (this.isRevoked(claims)) return this.expire(ws, "stale_session");
     if (this.isEvicted(claims.userId)) return this.expire(ws, "room_forbidden");
     return { claims, roomId: claims.v === 1 ? claims.room : "" };
+  }
+
+  /**
+   * Parked resume: fail-closed session-check + membership, then latest history.
+   * History is not sent until both checks pass.
+   */
+  private async handleParkedResume(ws: WebSocket, attach: SocketAttach): Promise<void> {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    const session = await assertChatSessionCurrent(this.env, attach.claims);
+    const roomId = attach.roomId;
+    const member =
+      isCustomRoomId(roomId) || isDmRoomId(roomId)
+        ? await isDirectoryMember(this.env, roomId, attach.claims.userId)
+        : isAllRoomId(roomId);
+    const access = resolveChatRoomAccess({
+      claims: attach.claims,
+      roomId,
+      isMember: member,
+      isAll: isAllRoomId(roomId),
+      isCustom: isCustomRoomId(roomId),
+      isDm: isDmRoomId(roomId),
+      isLegacy: isLegacyTeamRoomId(roomId),
+    });
+    const verdict = parkedResumeVerdict({ session, access });
+    if (verdict.action === "deny") {
+      if (verdict.close === "unavailable") {
+        this.expireUnavailable(ws);
+        return;
+      }
+      this.expire(ws, verdict.close);
+      return;
+    }
+    const still = this.readAttach(ws);
+    if (!still) return;
+    this.sendHistory(ws, still.claims.userId, null, HISTORY_LIMIT);
+  }
+
+  private expireUnavailable(ws: WebSocket): null {
+    try {
+      sendJson(ws, {
+        type: "error",
+        code: "session_check_unavailable",
+        message: "session check unavailable",
+      });
+    } catch {
+      // still close
+    }
+    try {
+      ws.close(1011, "session_check_unavailable");
+    } catch {
+      // ignore
+    }
+    return null;
   }
 
   private expire(

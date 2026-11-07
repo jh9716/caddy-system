@@ -48,6 +48,10 @@ test("worker stays isolated from Next/Neon/Vercel", () => {
   assert.doesNotMatch(index, /DELETE FROM messages\s*;/);
   assert.match(index, /DELETE FROM messages WHERE seq = \? AND sent_at < \?/);
   assert.match(index, /validateIncomingHistory/);
+  assert.match(index, /validateIncomingResume/);
+  assert.match(index, /shouldSkipWorkerSessionCheck/);
+  assert.match(index, /handleParkedResume/);
+  assert.match(index, /withBrowserCors/);
   assert.match(index, /server_only/);
   assert.match(index, /CHAT_INTERNAL_SECRET/);
   assert.match(index, /new Request\(request\.url, request\)/);
