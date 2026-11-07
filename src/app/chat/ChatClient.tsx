@@ -200,7 +200,7 @@ import {
 } from "@/lib/chatDmClient";
 import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
 import { chatPerf, classifyEntry, CHAT_PERF_PING, CHAT_PERF_PING_COUNT, CHAT_PERF_PONG } from "@/lib/chatPerfDiag";
-import { canResumeParked, classifyParkedResumeSkip, classifyRevalidationSkip, isParkExpired, isResumeRevalidationOk, CHAT_WS_REUSE_HISTORY_BEFORE, CHAT_WS_REUSE_STORAGE_KEY, CHAT_WS_REUSE_TTL_MS, resolveChatWsReuse, type ParkedSocketMeta, type ResumeSkipCode } from "@/lib/chatWsReuse";
+import { canResumeParked, classifyParkedResumeSkip, isParkExpired, parkedResumeClientGate, CHAT_WS_RESUME_TIMEOUT_MS, CHAT_WS_REUSE_STORAGE_KEY, CHAT_WS_REUSE_TTL_MS, resolveChatWsReuse, type ParkedSocketMeta, type ResumeSkipCode } from "@/lib/chatWsReuse";
 import { shouldSkipResumeReconnect, type ChatResumeStamp } from "@/lib/chatResumeReconnect";
 import ChatPerfPanel from "@/components/chat/ChatPerfPanel";
 
@@ -366,8 +366,11 @@ export default function ChatClient() {
   const wsReuseEnabledRef = useRef(false);
   const parkedRoomRef = useRef<(ParkedSocketMeta & { ws: WebSocket; timer: number; parkedAt: number }) | null>(null);
   const socketStopPingRef = useRef(new WeakMap<WebSocket, () => void>());
-  const socketResumeRef = useRef(new WeakMap<WebSocket, () => ChatSocketOpenResult | null>());
+  const socketResumeRef = useRef(new WeakMap<WebSocket, () => Promise<ChatSocketOpenResult | null>>());
   const socketMetaRef = useRef(new WeakMap<WebSocket, ParkedSocketMeta>());
+  const resumeAuthRef = useRef<WebSocket | null>(null);
+  const resumeOwnedCloseRef = useRef(new WeakSet<WebSocket>());
+  const parkedResumeWaitRef = useRef<{ ws: WebSocket; finish: (ok: boolean) => void } | null>(null);
   /** 파킹 해제(타이머 정리 + 필요 시 닫기). */
   const dropParkedRoomSocket = () => {
     const parked = parkedRoomRef.current;
@@ -389,6 +392,11 @@ export default function ChatClient() {
     const ws = wsRef.current;
     const meta = ws ? socketMetaRef.current.get(ws) : undefined;
     if (!ws || !meta || ws.readyState !== WebSocket.OPEN || !socketResumeRef.current.has(ws)) return false;
+    if (parkedResumeWaitRef.current?.ws === ws) {
+      parkedResumeWaitRef.current.finish(false);
+      parkedResumeWaitRef.current = null;
+      resumeAuthRef.current = null;
+    }
     if (parkedRoomRef.current && parkedRoomRef.current.ws !== ws) dropParkedRoomSocket();
     else if (parkedRoomRef.current) window.clearTimeout(parkedRoomRef.current.timer);
     const timer = window.setTimeout(() => {
@@ -805,54 +813,31 @@ export default function ChatClient() {
           wsRefMatch: wsRef.current === parked.ws,
         });
         let revalidateMs: number | null = null;
-        let revalidateHttp: number | null = null;
-        if (eligible()) {
-          // 재개 직전 권한 재확인: 기존 Worker 방 조회(같은 토큰)로 새 연결과 같은 검사(토큰·DB 세션·퇴사·멤버십)를 다시 거친다.
-          // 실패·오류·응답 불일치면 재사용하지 않는다(fail-closed → 아래에서 닫고 기존 새 연결).
-          const genBefore = roomGenRef.current;
-          let revalidated = false;
+        if (eligible() && resume) {
+          // 재개: 별도 HTTP 없이 기존 소켓에 {type:"resume"} → ChatRoom 이 session-check·멤버십 후 history.
+          // 인증 전 history 는 화면에 올리지 않는다. 실패면 소켓 폐기 후 기존 새 연결.
           const tRv = chatPerf.now();
           try {
-            const checkUrl = chatDirectoryRoomUrl(roomId, info.token);
-            if (checkUrl) {
-              const res = await fetch(checkUrl, { cache: "no-store", mode: "cors" });
-              const body = await res.json().catch(() => null);
-              revalidateMs = Math.round(chatPerf.now() - tRv);
-              revalidateHttp = res.status;
-              revalidated = isResumeRevalidationOk(res.status, body, roomId);
-              skipCode = revalidated ? null : classifyRevalidationSkip(res.status, body, roomId);
-            } else {
-              revalidateMs = Math.round(chatPerf.now() - tRv);
-              skipCode = "revalidate_url";
-            }
-          } catch {
-            revalidated = false;
+            const resumed = await resume();
             revalidateMs = Math.round(chatPerf.now() - tRv);
-            skipCode = "revalidate_net";
-          }
-          // 확인 중 사용자가 나가거나 다른 방으로 이동: 이 진입은 폐기(소켓은 그 나가기/진입 경로가 이미 파킹·닫기 처리).
-          if (roomGenRef.current !== genBefore) {
-            chatPerf.reuseOutcome("superseded", revalidateMs, revalidateHttp);
-            return { ok: false, code: "superseded" };
-          }
-          // TTL·소켓 상태를 다시 확인. 하나라도 어긋나면 재사용 금지 → 아래에서 닫고 새 연결.
-          if (revalidated && eligible()) {
-            const resumed = resume!();
-            if (resumed) {
-              chatPerf.reuseOutcome("ok", revalidateMs, revalidateHttp);
+            if (resumed?.ok) {
+              chatPerf.reuseOutcome("ok", revalidateMs, null);
               return resumed;
             }
-            skipCode = "resume_null";
-          } else if (revalidated) {
+            if (resumed && resumed.code === "superseded") {
+              chatPerf.reuseOutcome("superseded", revalidateMs, null);
+              return resumed;
+            }
             skipCode =
-              classifyParkedResumeSkip(parked, {
-                ...parkedReq(),
-                hasResume: !!resume,
-                wsRefMatch: wsRef.current === parked.ws,
-              }) || "resume_null";
+              resumed?.code === "resume_timeout" || resumed?.code === "resume_auth"
+                ? resumed.code
+                : "resume_null";
+          } catch {
+            revalidateMs = Math.round(chatPerf.now() - tRv);
+            skipCode = "resume_auth";
           }
         }
-        chatPerf.reuseOutcome(skipCode || "resume_null", revalidateMs, revalidateHttp);
+        chatPerf.reuseOutcome(skipCode || "resume_null", revalidateMs, null);
         if (wsRef.current !== parked.ws) {
           try {
             parked.ws.close();
@@ -899,25 +884,52 @@ export default function ChatClient() {
       if (wsReuseEnabledRef.current) {
         socketStopPingRef.current.set(ws, stopPerfPing);
         // 이 소켓을 같은 방 재진입에 재개하는 함수(소켓 클로저의 gen 을 새 세대로 옮긴다). Preview 재사용이 켜진 경우에만 등록.
-        socketResumeRef.current.set(ws, () => {
+        socketResumeRef.current.set(ws, async () => {
           if (ws.readyState !== WebSocket.OPEN || wsRef.current !== ws) return null;
           try {
             roomGenRef.current += 1;
             gen = roomGenRef.current;
+            const myGen = gen;
             stopPerfPing();
             historyResetRef.current = true;
             oldestSeqRef.current = null;
             setHasMore(false);
             reconnectingRef.current = false;
-            chatPerf.roomReused();
-            chatPerf.roomOpen();
-            setConnected(true);
             setFailingSince(null);
             roomAttemptRef.current = 0;
-            // 첫 진입과 같은 최신 history 를 다시 받는다 → 기존 history 처리(읽음 전송·진입 위치)를 그대로 탄다.
-            ws.send(JSON.stringify({ type: "history", beforeSeq: CHAT_WS_REUSE_HISTORY_BEFORE }));
+            resumeAuthRef.current = ws;
+            resumeOwnedCloseRef.current.add(ws);
+            let waitFail: "resume_auth" | "resume_timeout" = "resume_timeout";
+            const wait = new Promise<boolean>((resolve) => {
+              let settled = false;
+              const finish = (ok: boolean, kind?: "resume_auth" | "resume_timeout") => {
+                if (settled) return;
+                settled = true;
+                if (!ok && kind) waitFail = kind;
+                window.clearTimeout(timer);
+                if (parkedResumeWaitRef.current?.ws === ws) parkedResumeWaitRef.current = null;
+                resolve(ok);
+              };
+              const timer = window.setTimeout(() => finish(false, "resume_timeout"), CHAT_WS_RESUME_TIMEOUT_MS);
+              parkedResumeWaitRef.current = { ws, finish: (ok) => finish(ok, ok ? undefined : "resume_auth") };
+            });
+            ws.send(JSON.stringify({ type: "resume" }));
+            chatPerf.roomOpen();
+            const gotHistory = await wait;
+            resumeOwnedCloseRef.current.delete(ws);
+            if (roomGenRef.current !== myGen) return { ok: false, code: "superseded" };
+            if (!gotHistory) {
+              resumeAuthRef.current = null;
+              roomGenRef.current += 1;
+              return { ok: false, code: waitFail };
+            }
+            resumeAuthRef.current = null;
+            chatPerf.roomReused();
+            setConnected(true);
             return { ok: true } as ChatSocketOpenResult;
           } catch {
+            resumeAuthRef.current = null;
+            resumeOwnedCloseRef.current.delete(ws);
             return null;
           }
         });
@@ -954,6 +966,12 @@ export default function ChatClient() {
       });
       ws.addEventListener("close", (ev) => {
         stopPerfPing();
+        if (resumeOwnedCloseRef.current.has(ws)) {
+          parkedResumeWaitRef.current?.finish(false);
+          parkedResumeWaitRef.current = null;
+          resumeAuthRef.current = null;
+          return;
+        }
         if (gen !== roomGenRef.current) return;
         setConnected(false);
         setFailingSince((cur) => cur ?? Date.now());
@@ -994,6 +1012,11 @@ export default function ChatClient() {
       ws.addEventListener("message", (event) => {
         if (gen !== roomGenRef.current) {
           stopPerfPing();
+          if (resumeAuthRef.current === ws) {
+            parkedResumeWaitRef.current?.finish(false);
+            parkedResumeWaitRef.current = null;
+            resumeAuthRef.current = null;
+          }
           return;
         }
         if (event.data === CHAT_PERF_PONG) {
@@ -1015,6 +1038,24 @@ export default function ChatClient() {
             if (data.t && (data.t.doFirst === 0 || data.t.doFirst === 1)) startPerfPing();
           }
           return;
+        }
+        if (resumeAuthRef.current === ws) {
+          const gate = parkedResumeClientGate(String(data.type || ""));
+          if (gate === "history") {
+            if (!Array.isArray(data.messages)) {
+              parkedResumeWaitRef.current?.finish(false);
+              resumeAuthRef.current = null;
+              return;
+            }
+            parkedResumeWaitRef.current?.finish(true);
+            resumeAuthRef.current = null;
+          } else if (gate === "fail") {
+            parkedResumeWaitRef.current?.finish(false);
+            resumeAuthRef.current = null;
+            return;
+          } else if (gate === "hold") {
+            return;
+          }
         }
         if (data.type === "history" && Array.isArray(data.messages)) {
           const hist = data.messages.map(payloadToLine);

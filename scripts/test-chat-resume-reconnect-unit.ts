@@ -51,7 +51,7 @@ assert(dirOpen.includes("setDirectoryConnected(true)") && dirOpen.includes("dirA
 assert(src.includes("subscribeChatSessionReset((reason) => {") && src.includes("resetChatSocketHandles({"), "세션 리셋 → 소켓 정리 경로 유지");
 assert(src.includes("shouldRefreshTokenOnClose(ev.code)"), "4008 토큰 만료 → 재발급 경로 유지");
 assert((src.match(/shouldConnectWithChatToken\(info, tokenRef\)/g) || []).length >= 2, "stale 토큰 연결 차단 유지(Directory·방)");
-assert(src.includes("isResumeRevalidationOk(res.status, body, roomId)"), "Preview 재사용 재확인(fail-closed) 유지");
+assert(src.includes('type: "resume"') && src.includes("parkedResumeClientGate"), "Preview 재사용은 WS resume 후 인증·history(fail-closed)");
 
 // ---------- 3) 결정적 모델 하네스 ----------
 // 모델: reconnect 호출마다 기존 소켓(OPEN/CONNECTING)을 닫고 새 소켓을 만든다(ChatClient connectDirectory/connectSocket 과 같은 의미).

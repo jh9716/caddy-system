@@ -47,6 +47,7 @@ import {
   validateIncomingHistory,
   validateIncomingMessage,
   validateIncomingRead,
+  validateIncomingResume,
   validateIncomingSync,
   type ChatDeletionType,
   type ChatMessage,
@@ -98,6 +99,7 @@ import {
   ROOM_REVOKE_TIMEOUT_MS,
   revokeHttpStatus,
 } from "./revokeFanout";
+import { parkedResumeVerdict } from "./parkedResume";
 
 export { validateIncomingMessage, isValidRoomName } from "./protocol";
 export { verifyChatToken } from "./token";
@@ -672,6 +674,8 @@ type SocketAttach = { claims: ChatTokenClaims; roomId: string; sc?: number };
 
 export class ChatRoom extends DurableObject<Env> {
   private persistQueue: Promise<void> = Promise.resolve();
+  /** {type:"resume"} 진행 중. 이 동안 history 는 인증 완료 뒤로 미뤄 유출을 막는다. */
+  private resumeInflight = new WeakSet<WebSocket>();
   /** 열린 소켓 재검증 진행 중인 userId(메모리; 유실돼도 다음 활동 때 다시 시작될 뿐). */
   private recheckInflight = new Set<number>();
   /** Preview 계측: 이 isolate 생성 시각·WS 핸드셰이크 횟수(비밀 아님). */
@@ -928,11 +932,40 @@ export class ChatRoom extends DurableObject<Env> {
       void this.notifyDirectoryRead(attach.roomId, attach.claims.userId, read.seq);
       return;
     }
+    if (type === "resume") {
+      const resume = validateIncomingResume(parsed);
+      if (!resume.ok) {
+        sendJson(ws, { type: "error", code: resume.code, message: resume.message });
+        return;
+      }
+      this.resumeInflight.add(ws);
+      const run = this.persistQueue
+        .then(() => this.handleParkedResume(ws, attach))
+        .catch(() => {
+          // ignore
+        })
+        .finally(() => this.resumeInflight.delete(ws));
+      this.persistQueue = run;
+      return run;
+    }
     if (type === "history") {
       const hist = validateIncomingHistory(parsed);
       if (!hist.ok) {
         sendJson(ws, { type: "error", code: hist.code, message: hist.message });
         return;
+      }
+      if (this.resumeInflight.has(ws)) {
+        const run = this.persistQueue
+          .then(() => {
+            const still = this.readAttach(ws);
+            if (!still) return;
+            this.sendHistory(ws, still.claims.userId, hist.beforeSeq, hist.limit);
+          })
+          .catch(() => {
+            // ignore
+          });
+        this.persistQueue = run;
+        return run;
       }
       this.sendHistory(ws, attach.claims.userId, hist.beforeSeq, hist.limit);
       return;
@@ -1121,6 +1154,59 @@ export class ChatRoom extends DurableObject<Env> {
     if (this.isRevoked(claims)) return this.expire(ws, "stale_session");
     if (this.isEvicted(claims.userId)) return this.expire(ws, "room_forbidden");
     return { claims, roomId: claims.v === 1 ? claims.room : "" };
+  }
+
+  /**
+   * Parked resume: fail-closed session-check + membership, then latest history.
+   * History is not sent until both checks pass. Open-socket recheck probe is not used here.
+   */
+  private async handleParkedResume(ws: WebSocket, attach: SocketAttach): Promise<void> {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    const session = await assertChatSessionCurrent(this.env, attach.claims);
+    const roomId = attach.roomId;
+    const member =
+      isCustomRoomId(roomId) || isDmRoomId(roomId)
+        ? await isDirectoryMember(this.env, roomId, attach.claims.userId)
+        : isAllRoomId(roomId);
+    const access = resolveChatRoomAccess({
+      claims: attach.claims,
+      roomId,
+      isMember: member,
+      isAll: isAllRoomId(roomId),
+      isCustom: isCustomRoomId(roomId),
+      isDm: isDmRoomId(roomId),
+      isLegacy: isLegacyTeamRoomId(roomId),
+    });
+    const verdict = parkedResumeVerdict({ session, access });
+    if (verdict.action === "deny") {
+      if (verdict.close === "unavailable") {
+        this.expireUnavailable(ws);
+        return;
+      }
+      this.expire(ws, verdict.close);
+      return;
+    }
+    const still = this.readAttach(ws);
+    if (!still) return;
+    this.sendHistory(ws, still.claims.userId, null, HISTORY_LIMIT);
+  }
+
+  private expireUnavailable(ws: WebSocket): null {
+    try {
+      sendJson(ws, {
+        type: "error",
+        code: "session_check_unavailable",
+        message: "session check unavailable",
+      });
+    } catch {
+      // still close
+    }
+    try {
+      ws.close(1011, "session_check_unavailable");
+    } catch {
+      // ignore
+    }
+    return null;
   }
 
   private expire(

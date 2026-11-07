@@ -11,6 +11,8 @@ export const CHAT_WS_REUSE_TTL_MS = 20000;
 export const CHAT_WS_REUSE_STORAGE_KEY = "vh_chat_ws_reuse";
 /** 최신 페이지 history 요청용 beforeSeq (서버 sendHistory(null) 과 같은 결과: seq < 이 값). */
 export const CHAT_WS_REUSE_HISTORY_BEFORE = Number.MAX_SAFE_INTEGER;
+/** 파킹 재개: 서버 {type:"resume"} 후 history 대기 상한. session-check 2500ms + 멤버십 + history. */
+export const CHAT_WS_RESUME_TIMEOUT_MS = 4000;
 
 /** Preview + (쿼리 chatReuse=1 또는 저장된 '1') 일 때만 true. chatReuse=0 이면 끔. 저장 값 변경도 반환. */
 export function resolveChatWsReuse(
@@ -48,6 +50,8 @@ export const RESUME_SKIP_CODES = [
   "revalidate_body",
   "superseded",
   "resume_null",
+  "resume_auth",
+  "resume_timeout",
 ] as const;
 export type ResumeSkipCode = (typeof RESUME_SKIP_CODES)[number];
 
@@ -124,4 +128,29 @@ export function canResumeParked(
   req: { roomId: string; token: string; nowSec: number; socketOpen: boolean; parkedAt?: number | null; nowMs?: number }
 ): boolean {
   return classifyParkedResumeSkip(parked, req) === null;
+}
+
+/**
+ * 파킹 재개 중 수신 프레임 처리.
+ * history 가 오기 전에는 메시지·sync 를 화면에 올리지 않는다.
+ * error/close/timeout 은 재사용 실패(소켓 폐기).
+ */
+export function parkedResumeClientGate(
+  type: string
+): "history" | "fail" | "hold" | "other" {
+  if (type === "history") return "history";
+  if (type === "error") return "fail";
+  if (type === "message" || type === "sync") return "hold";
+  return "other";
+}
+
+export function classifyParkedResumeWaitResult(opts: {
+  gotHistory: boolean;
+  gotError: boolean;
+  closed: boolean;
+  timedOut: boolean;
+}): Extract<ResumeSkipCode, "ok" | "resume_auth" | "resume_timeout"> {
+  if (opts.gotHistory) return "ok";
+  if (opts.timedOut && !opts.gotError && !opts.closed) return "resume_timeout";
+  return "resume_auth";
 }

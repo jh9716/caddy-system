@@ -75,8 +75,8 @@ assert(leaves.length === 2, "뒤로가기·안드로이드 나가기: 세대 변
 assert(/dropParkedRoomSocket\(\);\s*wsRef\.current\?\.close\(\);\s*dirRef\.current\?\.close\(\);/.test(src), "언마운트: 파킹 소켓 닫기");
 assert(/subscribeChatSessionReset\(\(reason\) => \{\s*dropParkedRoomSocket\(\);/.test(src), "로그아웃/세션 리셋: 파킹 소켓 닫기");
 assert(/if \(gen !== roomGenRef\.current\) return;\s*[\s\S]{0,400}type === "message"/.test(src) || (src.match(/gen !== roomGenRef\.current/g) || []).length >= 5, "파킹 중 이벤트는 세대 불일치로 무시(읽음 전송 없음)");
-assert(/let gen = roomGenRef\.current;/.test(src) && /gen = roomGenRef\.current;\s*stopPerfPing\(\);\s*historyResetRef\.current = true;/.test(src), "재개 시 새 세대 + history 리셋 경로");
-assert(/type: "history", beforeSeq: CHAT_WS_REUSE_HISTORY_BEFORE/.test(src), "재개 시 서버 history 재요청(서버 readAttach 권한·만료·폐기 재검사)");
+assert(/let gen = roomGenRef\.current;/.test(src) && /gen = roomGenRef\.current;\s*const myGen = gen;\s*stopPerfPing\(\);\s*historyResetRef\.current = true;/.test(src), "재개 시 새 세대 + history 리셋 경로");
+assert(/type: "resume"/.test(src), "재개 시 서버 resume(session-check·멤버십 후 history)");
 assert(/if \(wsReuseEnabledRef\.current\) \{\s*socketStopPingRef\.current\.set\(ws, stopPerfPing\);\s*\/\/[^\n]*\n\s*socketResumeRef\.current\.set/.test(src), "재사용 꺼짐이면 재개 함수 미등록(기존 동작)");
 assert(!/type: "read"[^\n]*parked/.test(src), "파킹 경로에서 읽음 전송 없음");
 
@@ -84,16 +84,13 @@ assert(/parkedAt: Date\.now\(\)/.test(src), "파킹 시작 시각 기록");
 assert(/addEventListener\("visibilitychange"/.test(src) && /addEventListener\("pageshow", check\)/.test(src) && /isParkExpired\(parked\.parkedAt, Date\.now\(\)\)\) dropParkedRoomSocket\(\)/.test(src), "복귀(visibility/pageshow) 시 TTL 초과면 즉시 폐기");
 assert(/socketStopPingRef\.current\.get\(ws\)\?\.\(\);[\s\S]{0,200}parkedRoomRef\.current = \{ \.\.\.meta, ws, timer, parkedAt/.test(src), "파킹 시 진단 핑 타이머 정리");
 const resumeBlock = src.slice(src.indexOf("const eligible = () =>"), src.indexOf("const prev = wsRef.current;"));
-assert(/chatDirectoryRoomUrl\(roomId, info\.token\)/.test(resumeBlock) && /isResumeRevalidationOk\(res\.status, body, roomId\)/.test(resumeBlock), "재개 전 Worker 방 조회로 권한 재확인");
-assert(resumeBlock.indexOf("isResumeRevalidationOk") < resumeBlock.indexOf("resume!()"), "재확인 통과 후에만 재개");
-assert(/if \(revalidated && eligible\(\)\)/.test(resumeBlock), "재확인 후 TTL·소켓 상태 재검사");
-assert(/if \(roomGenRef\.current !== genBefore\) \{\s*chatPerf\.reuseOutcome\("superseded"/.test(resumeBlock), "확인 중 나가기/방 이동 → 이 진입 폐기(섞임 방지)");
-assert(/return \{ ok: false, code: "superseded" \}/.test(resumeBlock), "superseded 반환 유지");
-assert(/catch \{\s*revalidated = false;/.test(resumeBlock), "재확인 오류 → 재사용 금지");
-assert(/skipCode = "revalidate_net"/.test(resumeBlock), "fetch 예외(CORS 포함) → revalidate_net");
+assert(/await resume\(\)/.test(resumeBlock), "재개는 서버 인증+history 완료까지 대기");
+assert(!/isResumeRevalidationOk/.test(resumeBlock) && !/chatDirectoryRoomUrl\(roomId, info\.token\)/.test(resumeBlock), "재개 경로 Directory HTTP 제거");
+assert(/code === "superseded"/.test(resumeBlock) && /reuseOutcome\("superseded"/.test(resumeBlock), "확인 중 나가기/방 이동 → 이 진입 폐기(섞임 방지)");
+assert(/return \{ ok: false, code: "superseded" \}/.test(src), "superseded 반환 유지");
+assert(/skipCode = "resume_auth"/.test(resumeBlock), "재개 인증 실패 → resume_auth");
 assert(/try \{\s*parked\.ws\.close\(\);/.test(resumeBlock), "재사용 실패 → 파킹 소켓 닫고 기존 새 연결로");
 assert(/chatPerf\.reuseOutcome\("ok"/.test(resumeBlock), "재사용 성공 계측");
-assert(/mode: "cors"/.test(resumeBlock), "재확인 fetch 는 CORS 모드(브라우저가 본문 읽음)");
 
 // Worker: Directory HTTP 에 브라우저 CORS 부여 (Preview 앱 origin 에서 GET /directory/rooms/:id 읽기)
 const worker = readFileSync("cloudflare/verthill-chat/src/index.ts", "utf8");
