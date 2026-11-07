@@ -55,7 +55,7 @@ async function main() {
   assert(resolveChatWsReuse(previewEnv).enabled === false, "preview resolve is also off on this slice");
   assert(resolveChatWsReuse(prodEnv, { productionEnabled: false }).enabled === false, "explicit off");
   assert(
-    resolveChatWsReuse({}).enabled === false,
+    resolveChatWsReuse({}).enabled === (PRODUCTION_CHAT_WS_REUSE_ENABLED === true),
     "local default (treated as production env) still follows the const"
   );
 
