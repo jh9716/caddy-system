@@ -25,6 +25,6 @@ test("slice files do not pull Preview-only or roster/CSV stacks", () => {
   assert.doesNotMatch(sessionCheck, /nextApp|PREVIEW_APP_HOST|PREVIEW_APP_BYPASS/);
   assert.doesNotMatch(client, /chatPerfDiag|ChatPerfPanel|CHAT_PERF_PING|PREVIEW_APP_BYPASS/);
   assert.doesNotMatch(reuse, /CHAT_WS_REUSE_STORAGE_KEY|chatReuse=/);
-  assert.match(reuse, /PRODUCTION_CHAT_WS_REUSE_ENABLED = false/);
+  assert.match(reuse, /PRODUCTION_CHAT_WS_REUSE_ENABLED(?:: boolean)? = false/);
   assert.doesNotMatch(index, /roster|csv|employmentStatus/i);
 });

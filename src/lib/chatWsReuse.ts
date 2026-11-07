@@ -13,7 +13,7 @@ export const CHAT_WS_RESUME_TIMEOUT_MS = 4000;
  * Hard off for production until an explicit enable. Not an env/secret flag.
  * When true, resolveChatWsReuse enables reuse only for production (and local-as-production) builds.
  */
-export const PRODUCTION_CHAT_WS_REUSE_ENABLED = false;
+export const PRODUCTION_CHAT_WS_REUSE_ENABLED: boolean = false;
 
 export function resolveChatWsReuse(
   env: ChatAppEnvInput,
