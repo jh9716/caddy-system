@@ -33,6 +33,7 @@ section("routes and nav");
   assert(fs.existsSync("src/app/api/chat/token/route.ts"), "token API");
   assert(fs.existsSync("src/app/api/chat/users/route.ts"), "user search API");
   assert(fs.existsSync("src/app/api/chat/rooms/route.ts"), "room create API");
+  assert(fs.existsSync("src/app/api/chat/ws-reuse/route.ts"), "ws-reuse runtime API");
   const users = read("src/app/api/chat/users/route.ts");
   assert(users.includes("resolveAuthUser"), "user search requires login");
   assert(users.includes("q.length < 1"), "empty q does not dump staff");

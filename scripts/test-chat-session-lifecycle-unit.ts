@@ -351,6 +351,16 @@ async function main() {
     assert(sessionCheck.includes("session_check_unconfigured"), "missing Next URL fail-closed");
     assert(sessionCheck.includes("session_check_unavailable"), "Next/DB down fail-closed");
     assert(!sessionCheck.includes("ok: true") || sessionCheck.includes("data.ok !== true"), "check is not fail-open");
+    const resetAt = chat.lastIndexOf("subscribeChatSessionReset(");
+    const reset = chat.slice(resetAt, resetAt + 400);
+    assert(reset.includes("dropParkedRoomSocket"), "logout/account-switch drops parked socket first");
+    assert(chat.includes("applyWsReuseRuntimeEnabled"), "runtime kill switch can drop parked sockets");
+    assert(/addEventListener\(\s*"close"/.test(chat), "Worker close of parked socket clears client park");
+    assert(worker.includes("this.expireRevokedSockets("), "session revoke closes parked room sockets");
+    assert(worker.includes("this.evictMemberSockets("), "membership removal closes parked room sockets");
+    const directory = read("cloudflare/verthill-chat/src/directory.ts");
+    assert(directory.includes("pokeRoomsForRevoke"), "directory revoke pokes custom-room parked sockets");
+    assert(directory.includes("await this.evictChatRoomMembers"), "membership repair evicts room sockets");
   }
 
   section("session-check route + Worker helper fail-closed");

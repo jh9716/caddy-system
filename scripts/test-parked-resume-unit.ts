@@ -26,7 +26,7 @@ function section(title: string) {
   console.log("\n==", title, "==");
 }
 
-function main() {
+async function main() {
   section("W1 skip only /ws websocket");
   assert(shouldSkipWorkerSessionCheck("/ws", "websocket") === true, "/ws + websocket skips Worker check");
   assert(shouldSkipWorkerSessionCheck("/ws", "WebSocket") === true, "Upgrade header is case-insensitive");
@@ -73,6 +73,17 @@ function main() {
     "membership removal denies"
   );
 
+  section("parked socket cleanup wiring");
+  const { readFileSync } = await import("node:fs");
+  const worker = readFileSync(new URL("../cloudflare/verthill-chat/src/index.ts", import.meta.url), "utf8");
+  const client = readFileSync(new URL("../src/app/chat/ChatClient.tsx", import.meta.url), "utf8");
+  assert(worker.includes("expireRevokedSockets"), "logout-all/retire revoke expires open and parked sockets");
+  assert(worker.includes("evictMemberSockets"), "membership eviction expires parked sockets");
+  assert(worker.includes('this.expire(socket, "stale_session")'), "revoke close code is stale_session");
+  assert(worker.includes('this.expire(socket, "room_forbidden")'), "evict close code is room_forbidden");
+  assert(client.includes("dropParkedRoomSocket"), "client can close parked sockets locally");
+  assert(/addEventListener\(\s*"close"/.test(client), "client clears park when Worker closes the socket");
+
   section("CORS does not rewrite 101");
   const http = withBrowserCors(new Response("{}", { status: 200, headers: { "content-type": "application/json" } }));
   assert(
@@ -99,4 +110,7 @@ function main() {
   console.log(`\nparked-resume unit tests passed: ${passed}`);
 }
 
-main();
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

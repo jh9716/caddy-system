@@ -2,12 +2,17 @@
  * Parked room WebSocket reuse. Production default is off.
  * Flip PRODUCTION_CHAT_WS_REUSE_ENABLED only after explicit production approval.
  * Tests may pass { productionEnabled: true } without changing that const or any secret.
+ *
+ * ON deploy is that const flip only. Immediate OFF after ON: set server env
+ * CHAT_WS_REUSE_RUNTIME=0 (not NEXT_PUBLIC_; no rebuild). Unset env follows the const.
  */
-import { resolveChatAppEnv, type ChatAppEnvInput } from "./chatAppEnv";
+import { resolveChatAppEnv, type ChatAppEnv, type ChatAppEnvInput } from "./chatAppEnv";
 
 export const CHAT_WS_REUSE_TTL_MS = 20000;
 /** Parked resume: wait for server {type:"resume"} then history. session-check 2500ms + membership + history. */
 export const CHAT_WS_RESUME_TIMEOUT_MS = 4000;
+export const CHAT_WS_REUSE_RUNTIME_PATH = "/api/chat/ws-reuse";
+export const CHAT_WS_REUSE_RUNTIME_ENV = "CHAT_WS_REUSE_RUNTIME";
 
 /**
  * Hard off for production until an explicit enable. Not an env/secret flag.
@@ -27,6 +32,48 @@ export function resolveChatWsReuse(
   } catch {
     return { enabled: false };
   }
+}
+
+/** Kill switch after compile-ON. Unset/unknown follows compile. 0/false/off forces off. */
+export function resolveChatWsReuseRuntime(input: {
+  compileEnabled: boolean;
+  appEnv: ChatAppEnv | string;
+  runtime?: string | null;
+}): boolean {
+  if (input.compileEnabled !== true) return false;
+  if (input.appEnv !== "production") return false;
+  const v = String(input.runtime ?? "").trim().toLowerCase();
+  if (v === "0" || v === "false" || v === "off") return false;
+  return true;
+}
+
+export function parseWsReuseRuntimeResponse(data: unknown): boolean {
+  return Boolean(
+    data &&
+      typeof data === "object" &&
+      !Array.isArray(data) &&
+      (data as { enabled?: unknown }).enabled === true
+  );
+}
+
+/** Park only when compile gate and runtime kill switch both allow. */
+export function shouldParkChatWsReuse(input: {
+  compileEnabled: boolean;
+  runtimeEnabled: boolean;
+}): boolean {
+  return input.compileEnabled === true && input.runtimeEnabled === true;
+}
+
+/**
+ * Apply a runtime poll. Anything other than boolean true drops a parked socket
+ * so CHAT_WS_REUSE_RUNTIME=0 closes reuse without waiting for TTL.
+ */
+export function applyWsReuseRuntimeEnabled(enabled: boolean): {
+  runtimeEnabled: boolean;
+  dropParked: boolean;
+} {
+  const runtimeEnabled = enabled === true;
+  return { runtimeEnabled, dropParked: !runtimeEnabled };
 }
 
 export type ParkedSocketMeta = { roomId: string; token: string; exp: number };
