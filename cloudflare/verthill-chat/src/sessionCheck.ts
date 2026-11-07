@@ -15,6 +15,18 @@ export const CHAT_ROOM_REVOKE_PATH = "/internal/revoke-user";
 export const CHAT_ROOM_EVICT_PATH = "/internal/evict-members";
 export const SESSION_CHECK_TIMEOUT_MS = 2500;
 
+/**
+ * Worker `/ws` WebSocket upgrade only. ChatRoom DO still runs authorizeSocket
+ * (token + session-check + sessionVersion). Directory and HTTP `/ws` probes
+ * keep Worker session-check. Opposite of c679e51 (DO auth skip).
+ */
+export function shouldSkipWorkerSessionCheck(
+  pathname: string,
+  upgradeHeader: string | null | undefined
+): boolean {
+  return pathname === "/ws" && String(upgradeHeader || "").toLowerCase() === "websocket";
+}
+
 export type SessionCheckEnv = {
   CHAT_AUTH_SECRET: string;
   CHAT_INTERNAL_SECRET?: string;

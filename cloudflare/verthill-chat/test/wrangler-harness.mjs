@@ -29,44 +29,52 @@ export function startSessionCheckMock() {
   const epochs = new Map();
   const blocked = new Set();
   let unavailable = false;
+  let checks = 0;
+  let delayMs = 0;
 
   const server = createHttpServer((req, res) => {
     const url = String(req.url || "").split("?")[0];
     if (req.method === "POST" && url === "/api/chat/session-check") {
+      checks += 1;
       const chunks = [];
       req.on("data", (chunk) => chunks.push(chunk));
       req.on("end", () => {
-        res.setHeader("content-type", "application/json; charset=utf-8");
-        if (unavailable) {
-          res.statusCode = 503;
-          res.end(JSON.stringify({ error: "auth_unavailable" }));
-          return;
-        }
-        let body = {};
-        try {
-          body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
-        } catch {
-          body = {};
-        }
-        const userId = Number(body.userId);
-        const sv = Number(body.sv);
-        if (!Number.isInteger(userId) || userId <= 0) {
-          res.statusCode = 401;
-          res.end(JSON.stringify({ ok: false, code: "user_unavailable" }));
-          return;
-        }
-        if (blocked.has(userId)) {
-          res.statusCode = 401;
-          res.end(JSON.stringify({ ok: false, code: "user_unavailable" }));
-          return;
-        }
-        if (epochs.has(userId) && epochs.get(userId) !== sv) {
-          res.statusCode = 401;
-          res.end(JSON.stringify({ ok: false, code: "stale_session" }));
-          return;
-        }
-        res.statusCode = 200;
-        res.end(JSON.stringify({ ok: true, userId, sv }));
+        const wait = delayMs;
+        const finish = () => {
+          res.setHeader("content-type", "application/json; charset=utf-8");
+          if (unavailable) {
+            res.statusCode = 503;
+            res.end(JSON.stringify({ error: "auth_unavailable" }));
+            return;
+          }
+          let body = {};
+          try {
+            body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+          } catch {
+            body = {};
+          }
+          const userId = Number(body.userId);
+          const sv = Number(body.sv);
+          if (!Number.isInteger(userId) || userId <= 0) {
+            res.statusCode = 401;
+            res.end(JSON.stringify({ ok: false, code: "user_unavailable" }));
+            return;
+          }
+          if (blocked.has(userId)) {
+            res.statusCode = 401;
+            res.end(JSON.stringify({ ok: false, code: "user_unavailable" }));
+            return;
+          }
+          if (epochs.has(userId) && epochs.get(userId) !== sv) {
+            res.statusCode = 401;
+            res.end(JSON.stringify({ ok: false, code: "stale_session" }));
+            return;
+          }
+          res.statusCode = 200;
+          res.end(JSON.stringify({ ok: true, userId, sv }));
+        };
+        if (wait > 0) setTimeout(finish, wait);
+        else finish();
       });
       return;
     }
@@ -93,6 +101,12 @@ export function startSessionCheckMock() {
         },
         setUnavailable(value) {
           unavailable = value === true;
+        },
+        checkCount() {
+          return checks;
+        },
+        setDelayMs(ms) {
+          delayMs = Number(ms) > 0 ? Number(ms) : 0;
         },
         close() {
           return new Promise((done) => server.close(() => done()));

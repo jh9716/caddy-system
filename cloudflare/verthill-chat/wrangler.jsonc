@@ -5,6 +5,9 @@
   "compatibility_date": "2026-10-03",
   "workers_dev": true,
   "preview_urls": false,
+  // Top-level only. wrangler deploy reads this (GitHub Actions does not pass --keep-vars).
+  // Keeps dashboard plaintext vars; secrets are never deleted by deploy either way.
+  "keep_vars": true,
   // Optional later (do not set in this PR): wrangler secret put CHAT_INTERNAL_SECRET
   // Worker/Next fall back to CHAT_AUTH_SECRET until both sides set the new name together.
   // Optional later: wrangler secret put CHAT_PUSH_DISPATCH_URL
