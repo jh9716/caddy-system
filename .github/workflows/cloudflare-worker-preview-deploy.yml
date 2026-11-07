@@ -4,10 +4,13 @@
 # - ref 규칙: 브랜치 이름만 허용 — `main` 또는 `preview-chat-<영숫자.-_>`.
 #   임의 SHA·태그·포크 ref 는 거부. origin 에서 브랜치 HEAD SHA 로 해석해 그 SHA 를 고정 checkout 한다.
 # - Vercel 관련 단계 없음 (Vercel env 변경 불가). 권한은 contents: read.
-# - 실행 전 준비(별도 승인):
-#   1) Cloudflare 대시보드에서 R2 버킷 verthill-chat-media-preview 생성 (배포 시 바인딩 대상이 있어야 함)
-#   2) GitHub Actions secrets 에 PREVIEW_CHAT_AUTH_SECRET / PREVIEW_CHAT_INTERNAL_SECRET 를 운영과 다른 새 값(32자+)으로 등록
-#   Worker 가 없어도 `wrangler deploy --secrets-file` 로 생성과 비밀값 등록이 한 번에 된다.
+# - 코드만 배포: `--secrets-file` / `secret put` 없음. 이미 있는 Preview Worker Secret 은
+#   Wrangler 가 유지한다(공식: Secrets are never deleted by a deployment).
+# - `--keep-vars`: wrangler.jsonc 에 없는 원격 vars 를 지우지 않는다. preview vars 는
+#   CHAT_TOKEN_AUDIENCE=preview 만 설정한다.
+# - 전제: verthill-chat-preview 가 이미 존재하고 Secret 이 있다(현재 719c90f).
+#   최초 생성용 secrets-file 경로는 이 워크플로에 두지 않는다.
+# - 롤백: 이 워크플로를 ref=preview-chat-pr349-719c90f 로 다시 실행(코드만 복구, Secret 유지).
 name: Cloudflare Worker Deploy (PREVIEW only)
 
 on:
@@ -111,40 +114,29 @@ jobs:
         run: |
           set +x
           set -eu
-          out="$(./node_modules/.bin/wrangler deploy --env "$DEPLOY_ENV" --dry-run --outdir /tmp/preview-dry 2>&1)"
+          out="$(./node_modules/.bin/wrangler deploy --env "$DEPLOY_ENV" --name verthill-chat-preview --keep-vars --dry-run --outdir /tmp/preview-dry 2>&1)"
           printf '%s\n' "$out" | grep -q 'verthill-chat-media-preview' || { echo "dry-run is not targeting preview bucket"; exit 1; }
           if printf '%s\n' "$out" | grep -Eq '\(verthill-chat-media\)'; then echo "production bucket detected; refusing"; exit 1; fi
           echo "dry-run ok"
 
-      - name: Require Cloudflare credentials and preview secrets (presence only)
+      - name: Require Cloudflare credentials only (do not read Worker secrets)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          PREVIEW_CHAT_AUTH_SECRET: ${{ secrets.PREVIEW_CHAT_AUTH_SECRET }}
-          PREVIEW_CHAT_INTERNAL_SECRET: ${{ secrets.PREVIEW_CHAT_INTERNAL_SECRET }}
-          PREVIEW_VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.PREVIEW_VERCEL_AUTOMATION_BYPASS_SECRET }}
           APP_ORIGIN: ${{ inputs.app_origin }}
         run: |
           set +x
           set -eu
           node cloudflare/verthill-chat/scripts/assert-preview-app-origin.cjs "$APP_ORIGIN"
-          [ "${#PREVIEW_VERCEL_AUTOMATION_BYPASS_SECRET}" -ge 16 ] || { echo "PREVIEW_VERCEL_AUTOMATION_BYPASS_SECRET missing or too short"; exit 1; }
           [ -n "${CLOUDFLARE_API_TOKEN:-}" ] || { echo "CLOUDFLARE_API_TOKEN secret missing"; exit 1; }
           [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || { echo "CLOUDFLARE_ACCOUNT_ID variable missing"; exit 1; }
-          # 값은 출력하지 않고 길이만 확인 (32자 이상, 두 값은 서로 달라야 함)
-          [ "${#PREVIEW_CHAT_AUTH_SECRET}" -ge 32 ] || { echo "PREVIEW_CHAT_AUTH_SECRET missing or too short"; exit 1; }
-          [ "${#PREVIEW_CHAT_INTERNAL_SECRET}" -ge 32 ] || { echo "PREVIEW_CHAT_INTERNAL_SECRET missing or too short"; exit 1; }
-          [ "$PREVIEW_CHAT_AUTH_SECRET" != "$PREVIEW_CHAT_INTERNAL_SECRET" ] || { echo "preview secrets must differ"; exit 1; }
-          echo "required preview secrets present"
+          echo "cloudflare deploy credentials present"
 
-      - name: Deploy PREVIEW worker only (secrets uploaded with the deploy)
+      - name: Deploy PREVIEW worker code only (keep existing secrets and vars)
         working-directory: cloudflare/verthill-chat
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          PREVIEW_CHAT_AUTH_SECRET: ${{ secrets.PREVIEW_CHAT_AUTH_SECRET }}
-          PREVIEW_CHAT_INTERNAL_SECRET: ${{ secrets.PREVIEW_CHAT_INTERNAL_SECRET }}
-          PREVIEW_VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.PREVIEW_VERCEL_AUTOMATION_BYPASS_SECRET }}
           APP_ORIGIN: ${{ inputs.app_origin }}
         run: |
           set +x
@@ -153,9 +145,6 @@ jobs:
           node scripts/assert-preview-app-origin.cjs "$APP_ORIGIN"
           node scripts/assert-preview-config.cjs wrangler.jsonc
           ./node_modules/.bin/wrangler --version
-          # Worker 가 아직 없어도 동작: 배포와 동시에 비밀값을 올린다 (wrangler secret put 선행 불필요).
-          umask 077
-          sf="$(mktemp)"
-          trap 'rm -f "$sf"' EXIT
-          node -e 'process.stdout.write(JSON.stringify({CHAT_AUTH_SECRET:process.env.PREVIEW_CHAT_AUTH_SECRET,CHAT_INTERNAL_SECRET:process.env.PREVIEW_CHAT_INTERNAL_SECRET,PREVIEW_APP_BYPASS_SECRET:process.env.PREVIEW_VERCEL_AUTOMATION_BYPASS_SECRET,CHAT_PUSH_DISPATCH_URL:process.env.APP_ORIGIN.replace(/\/$/,"")+"/api/chat/push-dispatch"}))' > "$sf"
-          ./node_modules/.bin/wrangler deploy --env preview --name verthill-chat-preview --secrets-file "$sf"
+          # 코드만 업로드. --secrets-file 없음 → 기존 Preview Secret 유지.
+          # --keep-vars: 원격 vars 를 비우지 않음. secret put/delete 없음.
+          ./node_modules/.bin/wrangler deploy --env preview --name verthill-chat-preview --keep-vars

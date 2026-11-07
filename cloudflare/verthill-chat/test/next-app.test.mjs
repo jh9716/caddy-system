@@ -207,6 +207,26 @@ test("Preview: bypass secret 미설정 → 헤더 없이 호출(=Vercel 401) →
   assert.ok(calls[0].init.headers["x-chat-internal-auth"]);
 });
 
+test("Preview 배포 워크플로: 코드만 배포, secrets-file/secret put 없음, 운영 워크플로 불변", () => {
+  const previewWf = readFileSync("../../.github/workflows/cloudflare-worker-preview-deploy.yml", "utf8");
+  const prodWf = readFileSync("../../.github/workflows/cloudflare-worker-deploy.yml", "utf8");
+  const wranglerLines = previewWf.split("\n").filter((l) => /wrangler deploy/.test(l));
+  assert.ok(wranglerLines.length >= 2, "dry-run + deploy");
+  for (const line of wranglerLines) {
+    assert.doesNotMatch(line, /--secrets-file/);
+    assert.match(line, /--env preview|--env "\$DEPLOY_ENV"/);
+    assert.match(line, /--name verthill-chat-preview/);
+    assert.match(line, /--keep-vars/);
+  }
+  assert.doesNotMatch(previewWf, /wrangler secret /);
+  assert.doesNotMatch(previewWf, /PREVIEW_CHAT_AUTH_SECRET|PREVIEW_CHAT_INTERNAL_SECRET|PREVIEW_VERCEL_AUTOMATION_BYPASS_SECRET/);
+  assert.doesNotMatch(previewWf, /JSON\.stringify\(\{CHAT_AUTH_SECRET/);
+  assert.match(previewWf, /wrangler deploy --env preview --name verthill-chat-preview --keep-vars/);
+  assert.match(previewWf, /preview-chat-pr349-719c90f/);
+  assert.match(prodWf, /No delete \/ reset \/ secret put/);
+  assert.doesNotMatch(prodWf, /--env preview|--secrets-file|verthill-chat-preview/);
+});
+
 test("소스: secret 하드코딩·로그 출력 없음", () => {
   for (const f of ["src/nextApp.ts", "src/sessionCheck.ts", "src/index.ts", "src/directory.ts"]) {
     const s = readFileSync(f, "utf8");
