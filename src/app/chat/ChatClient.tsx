@@ -121,6 +121,8 @@ import {
   markChatRoomOpenStarted,
   readCachedChatRoomLines,
   rememberChatRoomLines,
+  retainCachedChatRooms,
+  shouldPaintCachedChatRoomLines,
   shouldShowChatHistoryWait,
 } from "@/lib/chatRoomLineCache";
 import {
@@ -174,7 +176,9 @@ import {
 import {
   chatReconnectStatus,
   nextReconnectDelay,
+  ROOM_FORBIDDEN_CLOSE,
   shouldRefreshTokenOnClose,
+  TOKEN_EXPIRED_CLOSE,
 } from "@/lib/chatReconnect";
 import {
   isChatSessionEnded,
@@ -219,6 +223,7 @@ import {
   CHAT_WS_OPEN_TIMEOUT_MS,
   diagnoseChatWsFailure,
   formatChatClientError,
+  isChatRoomAccessDenied,
   parseChatClientErrorCode,
   type ChatSocketOpenResult,
 } from "@/lib/chatDmClient";
@@ -520,10 +525,16 @@ export default function ChatClient() {
     parkedRoomRef.current = { ...meta, ws, timer, parkedAt: Date.now() };
     ws.addEventListener(
       "close",
-      () => {
+      (ev) => {
         if (parkedRoomRef.current?.ws !== ws) return;
         window.clearTimeout(parkedRoomRef.current.timer);
+        const parkedRoomId = parkedRoomRef.current.roomId;
         parkedRoomRef.current = null;
+        if (ev.code === ROOM_FORBIDDEN_CLOSE || ev.reason === "room_forbidden") {
+          dropCachedChatRoom(tokenRef.current?.user.userId, parkedRoomId);
+        } else if (ev.code === TOKEN_EXPIRED_CLOSE || ev.reason === "stale_session") {
+          clearChatRoomLineCache();
+        }
       },
       { once: true }
     );
@@ -774,6 +785,10 @@ export default function ChatClient() {
     const visible = next.filter((r) => isVisibleChatListRoom(r.type));
     setRooms(visible);
     roomsRef.current = visible;
+    retainCachedChatRooms(
+      tokenRef.current?.user?.userId,
+      visible.map((r) => r.roomId)
+    );
     rememberChatRooms(tokenRef.current?.user?.userId, visible);
     if (!roomsShownRef.current) {
       // Directory WS snapshot 과 HTTP 목록 중 먼저 정상 도착한 쪽에서 초기 UI 를 연다.
@@ -814,6 +829,9 @@ export default function ChatClient() {
       if (resolved.status === "ready" && data?.room) {
         setTargetedRoom(data.room);
         setRooms((prev) => upsertVisibleChatRoom(prev, data.room as RoomSummary));
+      }
+      if (resolved.status === "forbidden") {
+        dropCachedChatRoom(tokenRef.current?.user.userId, roomId);
       }
       setTargetedStatus(resolved.status);
     } catch {
@@ -1143,6 +1161,13 @@ export default function ChatClient() {
           parkedResumeWaitRef.current?.finish(false);
           parkedResumeWaitRef.current = null;
           resumeAuthRef.current = null;
+          if (ev.code === ROOM_FORBIDDEN_CLOSE || ev.reason === "room_forbidden") {
+            dropCachedChatRoom(tokenRef.current?.user.userId, socketMetaRef.current.get(ws)?.roomId);
+            clearLocalLines([]);
+          } else if (ev.code === TOKEN_EXPIRED_CLOSE || ev.reason === "stale_session") {
+            clearChatRoomLineCache();
+            clearLocalLines([]);
+          }
           return;
         }
         if (gen !== roomGenRef.current) return;
@@ -1150,6 +1175,14 @@ export default function ChatClient() {
         setFailingSince((cur) => cur ?? Date.now());
         setNowTick(Date.now());
         window.setTimeout(() => setNowTick(Date.now()), 15100);
+        if (ev.code === ROOM_FORBIDDEN_CLOSE || ev.reason === "room_forbidden") {
+          dropCachedChatRoom(tokenRef.current?.user.userId, roomRef.current?.roomId);
+          clearLocalLines([]);
+          return;
+        }
+        if (ev.code === TOKEN_EXPIRED_CLOSE || ev.reason === "stale_session") {
+          clearChatRoomLineCache();
+        }
         if (!roomRef.current) return;
         reconnectingRef.current = true;
         const run = async () => {
@@ -2013,7 +2046,11 @@ export default function ChatClient() {
     setActiveRoom(room);
     setView("room");
     const paintCachedLines = (userId: number | undefined) => {
-      const cached = userId ? readCachedChatRoomLines(userId, room.roomId) : null;
+      const canPaint = shouldPaintCachedChatRoomLines({
+        roomId: room.roomId,
+        memberRoomIds: roomsRef.current.map((row) => row.roomId),
+      });
+      const cached = canPaint && userId ? readCachedChatRoomLines(userId, room.roomId) : null;
       const cachedLines = (cached?.lines || []) as ChatLine[];
       clearLocalLines(cachedLines);
       pendingScrollRestore.current = null;
@@ -2099,7 +2136,7 @@ export default function ChatClient() {
       if (opened.code === "stale_session" || opened.code === "missing_token") {
         clearChatRoomLineCache();
         clearLocalLines([]);
-      } else if (opened.code === "room_forbidden") {
+      } else if (isChatRoomAccessDenied(opened.code)) {
         dropCachedChatRoom(info.user.userId, room.roomId);
         clearLocalLines([]);
       }

@@ -251,6 +251,42 @@ export function dropCachedChatRoom(
   rooms.delete(roomKey(uid, rid));
 }
 
+/** Instant paint is allowed only for rooms still in this tab's membership list. */
+export function shouldPaintCachedChatRoomLines(input: {
+  roomId: string | null | undefined;
+  memberRoomIds: Iterable<string> | null | undefined;
+}): boolean {
+  if (isChatSessionEnded()) return false;
+  const rid = asRoomId(input.roomId);
+  if (!rid || !input.memberRoomIds) return false;
+  for (const id of input.memberRoomIds) {
+    if (asRoomId(id) === rid) return true;
+  }
+  return false;
+}
+
+/** Drop this user's cached rooms that are no longer in the directory snapshot. */
+export function retainCachedChatRooms(
+  userId: number | null | undefined,
+  allowedRoomIds: Iterable<string>
+): number {
+  const uid = asFiniteId(userId);
+  if (!uid) return 0;
+  const allowed = new Set<string>();
+  for (const id of allowedRoomIds) {
+    const rid = asRoomId(id);
+    if (rid) allowed.add(rid);
+  }
+  let dropped = 0;
+  for (const [key, page] of [...rooms.entries()]) {
+    if (page.userId !== uid) continue;
+    if (allowed.has(page.roomId)) continue;
+    rooms.delete(key);
+    dropped += 1;
+  }
+  return dropped;
+}
+
 export function shouldShowChatHistoryWait(input: {
   lineCount: number;
   lastMessageSeq: number | null | undefined;

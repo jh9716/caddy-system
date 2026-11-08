@@ -18,10 +18,14 @@ import {
   readCachedChatRoomLines,
   rememberChatRoomLines,
   resetChatRoomLineCacheForTests,
+  retainCachedChatRooms,
   sanitizeChatRoomLinesForCache,
+  shouldPaintCachedChatRoomLines,
   shouldShowChatHistoryWait,
 } from "../src/lib/chatRoomLineCache";
 import { applyChatSessionResetReason, clearChatSessionEnded } from "../src/lib/chatSessionReset";
+import { chatWsFailureCode, isChatRoomAccessDenied } from "../src/lib/chatDmClient";
+import { ROOM_FORBIDDEN_CLOSE, TOKEN_EXPIRED_CLOSE } from "../src/lib/chatReconnect";
 
 let passed = 0;
 let failed = 0;
@@ -132,6 +136,31 @@ rememberChatRoomLines(1, "all", { lines: [line(9)] });
 clearChatRoomLineCache();
 assert(readCachedChatRoomLines(1, "all") === null, "full clear");
 
+section("membership paint gate / retain");
+resetChatRoomLineCacheForTests();
+clearChatSessionEnded();
+rememberChatRoomLines(1, "custom_a", { lines: [line(1)] });
+rememberChatRoomLines(1, "custom_b", { lines: [line(2)] });
+rememberChatRoomLines(2, "custom_a", { lines: [line(9)] });
+assert(shouldPaintCachedChatRoomLines({ roomId: "custom_a", memberRoomIds: ["custom_a"] }) === true, "member room may paint");
+assert(shouldPaintCachedChatRoomLines({ roomId: "custom_a", memberRoomIds: ["custom_b"] }) === false, "removed room must not paint");
+assert(shouldPaintCachedChatRoomLines({ roomId: "custom_a", memberRoomIds: [] }) === false, "empty membership must not paint");
+assert(retainCachedChatRooms(1, ["custom_b"]) === 1, "directory snapshot drops removed room");
+assert(readCachedChatRoomLines(1, "custom_a") === null, "removed room cache is gone");
+assert(readCachedChatRoomLines(1, "custom_b")?.lines[0]?.seq === 2, "kept room still cached");
+assert(readCachedChatRoomLines(2, "custom_a")?.lines[0]?.seq === 9, "other user cache untouched");
+applyChatSessionResetReason("logout");
+assert(shouldPaintCachedChatRoomLines({ roomId: "custom_b", memberRoomIds: ["custom_b"] }) === false, "ended session cannot paint");
+clearChatSessionEnded();
+
+section("close codes");
+assert(ROOM_FORBIDDEN_CLOSE === 4003, "worker membership close is 4003");
+assert(chatWsFailureCode({ closeCode: 4003 }) === "room_forbidden", "4003 maps without HTTP diagnose");
+assert(chatWsFailureCode({ closeCode: TOKEN_EXPIRED_CLOSE }) === "stale_session", "4008 stays stale_session");
+assert(isChatRoomAccessDenied("room_forbidden") === true, "room_forbidden is deny");
+assert(isChatRoomAccessDenied("ws_4003") === true, "legacy ws_4003 is still deny");
+assert(isChatRoomAccessDenied("ws_timeout") === false, "timeout is not membership deny");
+
 section("wait UX + paint timing");
 assert(shouldShowChatHistoryWait({ lineCount: 0, lastMessageSeq: 12 }) === true, "empty + known seq → wait");
 assert(shouldShowChatHistoryWait({ lineCount: 3, lastMessageSeq: 12 }) === false, "cached/history lines hide wait");
@@ -157,6 +186,13 @@ assert(chat.includes("waitForOpen: true"), "openRoom still waits for socket auth
 assert(chat.includes("rememberActiveRoomLines()"), "leave/history remember lines");
 assert(chat.includes("clearChatRoomLineCache()"), "logout wipes cache");
 assert(chat.includes("dropCachedChatRoom"), "forbidden drops that room");
+assert(chat.includes("shouldPaintCachedChatRoomLines"), "paint requires membership list");
+assert(chat.includes("retainCachedChatRooms"), "directory snapshot retains membership");
+assert(chat.includes("isChatRoomAccessDenied"), "open fail treats deny codes");
+assert(chat.includes('resolved.status === "forbidden"'), "targeted 403 drops that room");
+assert(chat.includes("ROOM_FORBIDDEN_CLOSE"), "4003 drops cache");
+assert(chat.includes("ev.reason === \"room_forbidden\""), "parked/live forbidden reason drops cache");
+assert(chat.includes("ev.reason === \"stale_session\""), "stale parked/live socket wipes cache");
 assert(chat.includes("메시지를 불러오는 중"), "first-visit wait copy");
 assert(chat.includes("markChatRoomCachePainted()"), "cache paint timing");
 assert(chat.includes("markChatRoomHistoryPainted()"), "history verify timing");
