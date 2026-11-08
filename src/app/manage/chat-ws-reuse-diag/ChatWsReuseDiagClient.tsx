@@ -3,13 +3,15 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
+  CHAT_WS_REUSE_DIAG_MIN_COMPARE_SAMPLES,
+  diagLatencyStat,
   getChatWsReuseDiagSnapshot,
-  percentileMs,
   resetChatWsReuseDiag,
-  reuseSuccessRate,
+  reuseSuccessRateParts,
   startChatWsReuseDiag,
   stopChatWsReuseDiag,
   subscribeChatWsReuseDiag,
+  type ChatWsReuseDiagLatencyStat,
   type ChatWsReuseDiagSnapshot,
 } from "@/lib/chatWsReuseDiag";
 
@@ -54,11 +56,10 @@ export default function ChatWsReuseDiagClient({
 
   useEffect(() => subscribeChatWsReuseDiag(() => setSnap(getChatWsReuseDiagSnapshot())), []);
 
-  const rate = useMemo(() => reuseSuccessRate(snap), [snap]);
-  const reentryP50 = useMemo(() => percentileMs(snap.reentryMs, 50), [snap]);
-  const reentryP95 = useMemo(() => percentileMs(snap.reentryMs, 95), [snap]);
-  const newWsP50 = useMemo(() => percentileMs(snap.newWsMs, 50), [snap]);
-  const newWsP95 = useMemo(() => percentileMs(snap.newWsMs, 95), [snap]);
+  const rate = useMemo(() => reuseSuccessRateParts(snap), [snap]);
+  const resumeStat = useMemo(() => diagLatencyStat(snap.resumeMs), [snap]);
+  const newWsStat = useMemo(() => diagLatencyStat(snap.newWsMs), [snap]);
+  const reentryStat = useMemo(() => diagLatencyStat(snap.reentryMs), [snap]);
   const fails = useMemo(() => failEntries(snap), [snap]);
 
   return (
@@ -105,21 +106,47 @@ export default function ChatWsReuseDiagClient({
         전체 새로고침은 집계만 유지하고, 로그아웃하면 즉시 삭제합니다.
       </p>
 
-      <section className="wsd-grid" aria-label="측정 결과">
-        <Metric label="신규 WebSocket" value={String(snap.newWs)} />
-        <Metric label="재입장 신규 연결" value={String(snap.newWsOnReentry)} />
+      <section className="wsd-grid" aria-label="측정 횟수">
+        <Metric label="신규 WebSocket" value={String(snap.newWs)} hint="최초 입장 포함" />
+        <Metric label="재입장 신규 연결" value={String(snap.newWsOnReentry)} hint="속도 비교 분모" />
         <Metric label="park 시도" value={String(snap.parkAttempts)} />
         <Metric label="park 성공" value={String(snap.parkOk)} />
         <Metric label="resume 시도" value={String(snap.resumeAttempts)} />
-        <Metric label="resume 성공" value={String(snap.resumeOk)} />
+        <Metric label="resume 성공" value={String(snap.resumeOk)} hint="history 수신 후" />
         <Metric label="resume 실패" value={String(snap.resumeFail)} />
-        <Metric label="재사용 성공률" value={formatRate(rate)} />
-        <Metric label="재입장 p50" value={formatMs(reentryP50)} />
-        <Metric label="재입장 p95" value={formatMs(reentryP95)} />
-        <Metric label="신규 연결 p50" value={formatMs(newWsP50)} />
-        <Metric label="신규 연결 p95" value={formatMs(newWsP95)} />
         <Metric label="20초 TTL 만료" value={String(snap.ttlExpired)} />
         <Metric label="park 건너뜀" value={String(snap.parkSkip)} />
+      </section>
+
+      <section className="wsd-rate" aria-label="재사용 성공률">
+        <h2 className="wsd-section-title">재사용 성공률</h2>
+        <p className="wsd-rate-value">{formatRate(rate.rate)}</p>
+        <p className="wsd-rate-formula">
+          resume 성공 {rate.ok} / (resume 성공 {rate.ok} + 재입장 신규 연결 {rate.newWsOnReentry})
+          {rate.den > 0 ? ` · n=${rate.den}` : ""}
+        </p>
+        <p className="wsd-note">
+          분자: parked resume 이후 history가 정상 수신된 횟수. 분모: 그 성공 + 재입장에서 새로 연
+          소켓. 최초 방 입장 소켓은 분모에 넣지 않습니다. resume 프레임만 보낸 것은 성공이 아닙니다.
+        </p>
+        {rate.den === 0 ? (
+          <p className="wsd-warn">재입장 표본이 없습니다.</p>
+        ) : rate.sufficient ? null : (
+          <p className="wsd-warn">
+            참고용 · 표본 부족 (n={rate.den}, 비교는 {CHAT_WS_REUSE_DIAG_MIN_COMPARE_SAMPLES}회 이상).
+            개선이 확정된 수치는 아닙니다.
+          </p>
+        )}
+      </section>
+
+      <section className="wsd-latencies" aria-label="재입장 속도">
+        <h2 className="wsd-section-title">재입장 속도</h2>
+        <p className="wsd-note">
+          최초 채팅방 입장은 속도 비교에 넣지 않습니다. 값이 있어도 표본이 적으면 참고용입니다.
+        </p>
+        <LatencyRow label="resume 재입장" stat={resumeStat} />
+        <LatencyRow label="신규 연결 재입장" stat={newWsStat} />
+        <LatencyRow label="전체 재입장" stat={reentryStat} />
       </section>
 
       <section className="wsd-fails">
@@ -192,10 +219,45 @@ export default function ChatWsReuseDiagClient({
           display: block; margin-top: 6px; font-size: 1.18rem; font-weight: 800;
           color: var(--vh-green-900); font-variant-numeric: tabular-nums;
         }
+        .wsd-metric-hint {
+          display: block; margin-top: 4px; font-size: 0.66rem; color: var(--vh-muted);
+        }
         .wsd-section-title {
           margin: 0 0 8px; font-size: 0.78rem; font-weight: 800; color: var(--vh-green-800);
         }
+        .wsd-rate, .wsd-latencies, .wsd-fails { margin-bottom: 16px; }
+        .wsd-rate, .wsd-lat-row {
+          padding: 12px; border: 1px solid var(--vh-border); border-radius: 12px;
+          background: var(--vh-paper);
+        }
+        .wsd-latencies { display: grid; gap: 8px; }
+        .wsd-rate-value {
+          margin: 0; font-size: 1.35rem; font-weight: 800; color: var(--vh-green-900);
+          font-variant-numeric: tabular-nums;
+        }
+        .wsd-rate-formula {
+          margin: 6px 0 0; font-size: 0.74rem; font-weight: 700; color: var(--vh-green-800);
+          line-height: 1.4;
+        }
+        .wsd-note { margin: 6px 0 0; font-size: 0.72rem; color: var(--vh-muted); line-height: 1.45; }
+        .wsd-warn {
+          margin: 8px 0 0; font-size: 0.74rem; font-weight: 700; color: var(--vh-ink);
+          line-height: 1.4;
+        }
         .wsd-empty { margin: 0; font-size: 0.8rem; color: var(--vh-muted); }
+        .wsd-lat-head {
+          display: flex; justify-content: space-between; gap: 8px; align-items: baseline;
+        }
+        .wsd-lat-name { font-size: 0.8rem; font-weight: 800; color: var(--vh-green-900); }
+        .wsd-lat-n { font-size: 0.7rem; font-weight: 800; color: var(--vh-green-800); }
+        .wsd-lat-grid {
+          display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px;
+        }
+        .wsd-lat-k { display: block; font-size: 0.66rem; font-weight: 800; color: var(--vh-green-800); }
+        .wsd-lat-v {
+          display: block; margin-top: 2px; font-size: 1.05rem; font-weight: 800;
+          color: var(--vh-green-900); font-variant-numeric: tabular-nums;
+        }
         .wsd-fail-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
         .wsd-fail-row {
           display: flex; justify-content: space-between; gap: 10px; align-items: baseline;
@@ -215,11 +277,55 @@ export default function ChatWsReuseDiagClient({
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function Metric({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+}) {
   return (
     <div className="wsd-metric">
       <span className="wsd-metric-label">{label}</span>
       <span className="wsd-metric-value">{value}</span>
+      {hint ? <span className="wsd-metric-hint">{hint}</span> : null}
+    </div>
+  );
+}
+
+function LatencyRow({
+  label,
+  stat,
+}: {
+  label: string;
+  stat: ChatWsReuseDiagLatencyStat;
+}) {
+  return (
+    <div className="wsd-lat-row">
+      <div className="wsd-lat-head">
+        <span className="wsd-lat-name">{label}</span>
+        <span className="wsd-lat-n">n={stat.n}</span>
+      </div>
+      <div className="wsd-lat-grid">
+        <div>
+          <span className="wsd-lat-k">{label} p50</span>
+          <span className="wsd-lat-v">{formatMs(stat.p50)}</span>
+        </div>
+        <div>
+          <span className="wsd-lat-k">{label} p95</span>
+          <span className="wsd-lat-v">{formatMs(stat.p95)}</span>
+        </div>
+      </div>
+      {stat.n === 0 ? (
+        <p className="wsd-note">표본 없음</p>
+      ) : stat.sufficient ? null : (
+        <p className="wsd-warn">
+          참고용 · 표본 부족 (n={stat.n}, 비교는 {CHAT_WS_REUSE_DIAG_MIN_COMPARE_SAMPLES}회 이상).
+          개선이 확정된 수치는 아닙니다.
+        </p>
+      )}
     </div>
   );
 }

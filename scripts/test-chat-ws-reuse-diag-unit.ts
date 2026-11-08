@@ -27,6 +27,9 @@ import {
   resetChatWsReuseDiag,
   resetChatWsReuseDiagForTests,
   reuseSuccessRate,
+  reuseSuccessRateParts,
+  diagLatencyStat,
+  CHAT_WS_REUSE_DIAG_MIN_COMPARE_SAMPLES,
   startChatWsReuseDiag,
   stopChatWsReuseDiag,
 } from "../src/lib/chatWsReuseDiag";
@@ -117,6 +120,19 @@ async function main() {
   assert(startChatWsReuseDiag({ adminAllowed: true }) === true, "restart keeps prior counts");
   assert(getChatWsReuseDiagSnapshot().newWs === afterStop, "restart does not reset counts");
 
+  section("first entry vs reentry latencies");
+  resetChatWsReuseDiag();
+  markChatWsReuseDiagRoomSelect();
+  noteChatWsReuseDiagNewRoomSocket();
+  noteChatWsReuseDiagNewWsHistory();
+  let snap = getChatWsReuseDiagSnapshot();
+  assert(snap.newWs === 1, "first entry still counts as a new WS");
+  assert(snap.newWsOnReentry === 0, "first entry is not a reentry new WS");
+  assert(snap.newWsMs.length === 0, "first entry is not in new-WS reentry latency");
+  assert(snap.resumeMs.length === 0, "first entry is not in resume latency");
+  assert(snap.reentryMs.length === 0, "first entry is not in overall reentry latency");
+  assert(reuseSuccessRate(snap) === null, "success rate ignores first-entry sockets");
+
   section("new WS vs park / resume");
   resetChatWsReuseDiag();
   noteChatWsReuseDiagParkAttempt();
@@ -125,15 +141,20 @@ async function main() {
   markChatWsReuseDiagRoomSelect();
   noteChatWsReuseDiagResumeAttempt();
   noteChatWsReuseDiagResumeOk();
-  let snap = getChatWsReuseDiagSnapshot();
+  snap = getChatWsReuseDiagSnapshot();
   assert(snap.parkAttempts === 1, "park attempt counted");
   assert(snap.parkOk === 1, "park success counted");
   assert(snap.resumeAttempts === 1, "resume attempt counted");
   assert(snap.resumeOk === 1, "resume success counted");
   assert(snap.newWs === 0, "resume success is not a new WS");
   assert(snap.newWsOnReentry === 0, "resume success is not reentry new WS");
-  assert(snap.reentryMs.length === 1, "resume success records reentry latency");
+  assert(snap.resumeMs.length === 1, "resume success records resume reentry latency");
+  assert(snap.newWsMs.length === 0, "resume success is not in new-WS reentry latency");
+  assert(snap.reentryMs.length === 1, "resume success records overall reentry latency");
   assert(reuseSuccessRate(snap) === 1, "100% reuse when only resume ok");
+  assert(reuseSuccessRateParts(snap).ok === 1, "rate numerator is resumeOk");
+  assert(reuseSuccessRateParts(snap).den === 1, "rate denominator is resumeOk + newWsOnReentry");
+  assert(reuseSuccessRateParts(snap).sufficient === false, "n=1 is not enough to confirm");
 
   markChatWsReuseDiagLeftRoom();
   markChatWsReuseDiagRoomSelect();
@@ -142,9 +163,14 @@ async function main() {
   snap = getChatWsReuseDiagSnapshot();
   assert(snap.newWs === 1, "fallback new WS counted");
   assert(snap.newWsOnReentry === 1, "fallback new WS on reentry counted");
-  assert(snap.newWsMs.length === 1, "new WS latency recorded");
+  assert(snap.newWsMs.length === 1, "reentry new WS latency recorded");
+  assert(snap.resumeMs.length === 1, "resume latency unchanged after fallback");
+  assert(snap.reentryMs.length === 2, "overall reentry includes resume + new WS");
   assert(snap.resumeOk === 1, "resume ok unchanged after fallback");
   assert(reuseSuccessRate(snap) === 0.5, "success rate is resumeOk / (resumeOk + newWsOnReentry)");
+  assert(diagLatencyStat(snap.resumeMs).n === 1, "resume latency n is resume samples");
+  assert(diagLatencyStat(snap.newWsMs).n === 1, "new-WS latency n is reentry new WS samples");
+  assert(diagLatencyStat(snap.reentryMs).n === 2, "overall reentry n is both paths");
 
   section("history before success");
   resetChatWsReuseDiag();
@@ -154,6 +180,7 @@ async function main() {
   snap = getChatWsReuseDiagSnapshot();
   assert(snap.resumeAttempts === 1, "sending resume is an attempt");
   assert(snap.resumeOk === 0, "attempt is not success");
+  assert(snap.resumeMs.length === 0, "resume latency waits for history");
   assert(snap.reentryMs.length === 0, "no reentry latency before history");
   noteChatWsReuseDiagResumeFail("resume_timeout");
   snap = getChatWsReuseDiagSnapshot();
@@ -173,6 +200,15 @@ async function main() {
   assert(percentileMs([], 50) === null, "empty p50 is null");
   assert(percentileMs([10, 20, 30, 40, 50], 50) === 30, "nearest-rank p50");
   assert(percentileMs([10, 20, 30, 40, 50], 95) === 50, "nearest-rank p95");
+  assert(diagLatencyStat([]).sufficient === false, "empty latency is insufficient");
+  assert(diagLatencyStat([1, 2, 3, 4]).sufficient === false, "n=4 is reference-only");
+  assert(
+    diagLatencyStat([1, 2, 3, 4, 5]).sufficient === true,
+    `n=${CHAT_WS_REUSE_DIAG_MIN_COMPARE_SAMPLES} is enough to compare`
+  );
+  assert(diagLatencyStat([10, 20, 30, 40, 50]).p50 === 30, "stat p50");
+  assert(diagLatencyStat([10, 20, 30, 40, 50]).p95 === 50, "stat p95");
+  assert(diagLatencyStat([10, 20, 30, 40, 50]).n === 5, "stat n");
 
   section("SPA navigation keeps memory");
   resetChatWsReuseDiag();
@@ -207,6 +243,7 @@ async function main() {
   assert(snap.running === false, "logout stops recording");
   assert(snap.newWs === 0, "logout clears new WS");
   assert(snap.resumeOk === 0, "logout clears resume ok");
+  assert(snap.resumeMs.length === 0 && snap.newWsMs.length === 0 && snap.reentryMs.length === 0, "logout clears latency samples");
   assert(storage.getItem(CHAT_WS_REUSE_DIAG_STORAGE_KEY) == null, "logout removes tab storage");
 
   section("ChatClient observe-only wiring");
@@ -257,11 +294,17 @@ async function main() {
     "resume 성공",
     "resume 실패",
     "재사용 성공률",
-    "재입장 p50",
-    "재입장 p95",
-    "신규 연결 p50",
-    "신규 연결 p95",
+    "resume 재입장",
+    "신규 연결 재입장",
+    "전체 재입장",
+    "{label} p50",
+    "{label} p95",
+    "n={stat.n}",
     "20초 TTL 만료",
+    "history가 정상 수신된 횟수",
+    "최초 방 입장 소켓은 분모에 넣지 않습니다",
+    "개선이 확정된 수치는 아닙니다",
+    "표본 부족",
   ]) {
     assert(ui.includes(label), `UI shows ${label}`);
   }

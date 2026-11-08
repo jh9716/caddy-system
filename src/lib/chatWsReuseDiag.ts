@@ -9,8 +9,11 @@
  */
 import { subscribeChatSessionReset } from "./chatSessionReset";
 
-export const CHAT_WS_REUSE_DIAG_STORAGE_KEY = "vh.chatWsReuseDiag.v1";
+export const CHAT_WS_REUSE_DIAG_STORAGE_KEY = "vh.chatWsReuseDiag.v2";
+export const CHAT_WS_REUSE_DIAG_STORAGE_VERSION = 2;
 export const CHAT_WS_REUSE_DIAG_MAX_LATENCIES = 80;
+/** Below this n, p50/p95 and reuse rate are reference-only — not a confirmed win. */
+export const CHAT_WS_REUSE_DIAG_MIN_COMPARE_SAMPLES = 5;
 
 export const CHAT_WS_REUSE_DIAG_FORBIDDEN_KEYS = [
   "token",
@@ -58,13 +61,23 @@ export type ChatWsReuseDiagSnapshot = {
   resumeOk: number;
   resumeFail: number;
   failReasons: Record<string, number>;
+  /** Reentry latencies that succeeded via parked resume + history. */
   resumeMs: number[];
+  /** Reentry latencies that opened a new room WebSocket. First entry is excluded. */
   newWsMs: number[];
+  /** All reentry latencies (resumeMs ∪ newWsMs). First entry is excluded. */
   reentryMs: number[];
   ttlExpired: number;
 };
 
-type PersistedSnapshot = ChatWsReuseDiagSnapshot & { v: 1 };
+export type ChatWsReuseDiagLatencyStat = {
+  n: number;
+  p50: number | null;
+  p95: number | null;
+  sufficient: boolean;
+};
+
+type PersistedSnapshot = ChatWsReuseDiagSnapshot & { v: 2 };
 
 const EMPTY: ChatWsReuseDiagSnapshot = {
   running: false,
@@ -130,6 +143,38 @@ export function reuseSuccessRate(snapshot: ChatWsReuseDiagSnapshot): number | nu
   return snapshot.resumeOk / den;
 }
 
+export function reuseSuccessRateParts(snapshot: ChatWsReuseDiagSnapshot): {
+  ok: number;
+  newWsOnReentry: number;
+  den: number;
+  rate: number | null;
+  sufficient: boolean;
+} {
+  const ok = snapshot.resumeOk;
+  const newWsOnReentry = snapshot.newWsOnReentry;
+  const den = ok + newWsOnReentry;
+  return {
+    ok,
+    newWsOnReentry,
+    den,
+    rate: den > 0 ? ok / den : null,
+    sufficient: den >= CHAT_WS_REUSE_DIAG_MIN_COMPARE_SAMPLES,
+  };
+}
+
+export function isDiagSampleSufficient(n: number): boolean {
+  return n >= CHAT_WS_REUSE_DIAG_MIN_COMPARE_SAMPLES;
+}
+
+export function diagLatencyStat(values: readonly number[]): ChatWsReuseDiagLatencyStat {
+  return {
+    n: values.length,
+    p50: percentileMs(values, 50),
+    p95: percentileMs(values, 95),
+    sufficient: isDiagSampleSufficient(values.length),
+  };
+}
+
 export function getChatWsReuseDiagSnapshot(): ChatWsReuseDiagSnapshot {
   return cloneSnapshot(state);
 }
@@ -171,7 +216,7 @@ function persist() {
       sessionStorage.removeItem(CHAT_WS_REUSE_DIAG_STORAGE_KEY);
       return;
     }
-    const payload: PersistedSnapshot = { v: 1, ...cloneSnapshot(state) };
+    const payload: PersistedSnapshot = { v: CHAT_WS_REUSE_DIAG_STORAGE_VERSION, ...cloneSnapshot(state) };
     const json = JSON.stringify(payload);
     for (const key of CHAT_WS_REUSE_DIAG_FORBIDDEN_KEYS) {
       if (json.includes(`"${key}"`)) return;
@@ -188,7 +233,7 @@ function isSafePersisted(raw: unknown): raw is PersistedSnapshot {
   for (const key of Object.keys(rec)) {
     if ((CHAT_WS_REUSE_DIAG_FORBIDDEN_KEYS as readonly string[]).includes(key)) return false;
   }
-  if (rec.v !== 1) return false;
+  if (rec.v !== CHAT_WS_REUSE_DIAG_STORAGE_VERSION) return false;
   if (typeof rec.running !== "boolean") return false;
   return true;
 }
@@ -354,9 +399,9 @@ export function noteChatWsReuseDiagResumeOk(): void {
   if (!state.running) return;
   state.resumeOk += 1;
   const timed = consumeRoomSelectMs();
-  if (timed) {
+  if (timed?.reentry) {
     pushMs(state.resumeMs, timed.ms);
-    if (timed.reentry) pushMs(state.reentryMs, timed.ms);
+    pushMs(state.reentryMs, timed.ms);
   }
   emit();
 }
@@ -391,9 +436,9 @@ export function noteChatWsReuseDiagNewRoomSocket(): void {
 export function noteChatWsReuseDiagNewWsHistory(): void {
   if (!state.running) return;
   const timed = consumeRoomSelectMs();
-  if (!timed) return;
+  if (!timed?.reentry) return;
   pushMs(state.newWsMs, timed.ms);
-  if (timed.reentry) pushMs(state.reentryMs, timed.ms);
+  pushMs(state.reentryMs, timed.ms);
   emit();
 }
 
