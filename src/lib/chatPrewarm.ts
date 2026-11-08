@@ -190,3 +190,8 @@ export function beginChatPrewarm(state: ChatPrewarmState, roomId: string): numbe
 export function isChatPrewarmGenerationCurrent(state: ChatPrewarmState, generation: number): boolean {
   return state.generation === generation && state.roomId != null;
 }
+
+/** List teardown must wipe lines and ignore the old socket. Active room view keeps its own socket. */
+export function shouldWipePrewarmAfterDrop(input: { viewIsRoom: boolean }): boolean {
+  return input.viewIsRoom !== true;
+}

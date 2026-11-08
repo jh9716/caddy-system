@@ -17,6 +17,7 @@ import {
   shouldPaintPrewarmLines,
   shouldReuseInflightPrewarmSocket,
   shouldStartChatPrewarm,
+  shouldWipePrewarmAfterDrop,
 } from "../src/lib/chatPrewarm";
 import { PRODUCTION_CHAT_WS_REUSE_ENABLED } from "../src/lib/chatWsReuse";
 import {
@@ -302,6 +303,8 @@ dropped.roomId = null;
 assert(dropGot[0] === false, "session/membership drop fails waiters");
 assert(cleared[0] === 7, "drop clears timer");
 assert(isChatPrewarmGenerationCurrent(dropped, gen) === false, "drop supersedes in-flight connect");
+assert(shouldWipePrewarmAfterDrop({ viewIsRoom: false }) === true, "list drop wipes messages and ignores socket");
+assert(shouldWipePrewarmAfterDrop({ viewIsRoom: true }) === false, "active room drop does not steal the live socket");
 
 console.log("== shown timing ==");
 resetChatEntryTimingForTests(true);
@@ -331,6 +334,9 @@ assert(chat.includes("shouldReuseInflightPrewarmSocket"), "same-room click reuse
 assert(chat.includes("shouldPaintPrewarmLines"), "no paint before history");
 assert(chat.includes("shouldHoldChatReadWhilePrewarm"), "read held on list");
 assert(chat.includes("dropChatPrewarm"), "deny/session drops prewarm");
+assert(chat.includes("shouldWipePrewarmAfterDrop"), "list drop bumps roomGen so parked events cannot send read");
+assert(chat.includes("lastOpenedRoomIdRef.current = null"), "session reset forgets last opened room");
+assert(/subscribeChatSessionReset[\s\S]{0,400}clearLocalLines\(\[\]\)/.test(chat), "session reset wipes prewarmed lines");
 assert(chat.includes("beginChatPrewarm"), "generation bump on start");
 assert(chat.includes("prewarmGen"), "connect aborted when superseded");
 assert(chat.includes('window.addEventListener("offline"'), "offline fail-closed");

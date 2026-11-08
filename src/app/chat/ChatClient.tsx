@@ -121,6 +121,7 @@ import {
   shouldPaintPrewarmLines,
   shouldReuseInflightPrewarmSocket,
   shouldStartChatPrewarm,
+  shouldWipePrewarmAfterDrop,
 } from "@/lib/chatPrewarm";
 import {
   CHAT_OPEN_ROOM_EVENT,
@@ -555,8 +556,10 @@ export default function ChatClient() {
     pre.ready = false;
     pre.inflight = false;
     pre.roomId = null;
-    if (opts?.close && viewRef.current !== "room") {
-      leaveRoomSocket();
+    if (shouldWipePrewarmAfterDrop({ viewIsRoom: viewRef.current === "room" })) {
+      roomGenRef.current += 1;
+      clearLocalLines([]);
+      if (opts?.close) leaveRoomSocket();
     }
   }
   function markChatPrewarmReady(roomId: string) {
@@ -1494,7 +1497,9 @@ export default function ChatClient() {
     let cancelled = false;
     const unsubscribeReset = subscribeChatSessionReset((reason) => {
       handleChatWsReuseDiagSessionReset();
+      lastOpenedRoomIdRef.current = null;
       dropChatPrewarm({ close: false });
+      clearLocalLines([]);
       dropParkedRoomSocket();
       resetChatSocketHandles({
         roomGenRef,
@@ -1612,6 +1617,7 @@ export default function ChatClient() {
       dirGenRef.current += 1;
       clearTimer(roomTimerRef);
       clearTimer(dirTimerRef);
+      dropChatPrewarm({ close: true });
       dropParkedRoomSocket();
       wsRef.current?.close();
       dirRef.current?.close();
