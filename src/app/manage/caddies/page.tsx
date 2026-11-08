@@ -45,7 +45,7 @@ import {
   type ThirdBandSubgroup,
 } from '@/lib/caddyManage';
 import { formatCaddyLabel } from '@/lib/caddyDisplay';
-import { maskKrMobile } from '@/lib/caddyPhone';
+import { formatKrMobileDisplay } from '@/lib/caddyPhone';
 import {
   listSelectableEmptySlots,
   type SlotOccupant,
@@ -128,6 +128,7 @@ type Caddy = {
   thirdBandSubgroup?: ThirdBandSubgroup | null;
   missingFromImport?: boolean;
   phoneNormalized?: string | null;
+  vehicleNumber?: string | null;
   dormitoryResident?: boolean;
 };
 
@@ -138,8 +139,10 @@ type Draft = {
   teamOrder: number;
   employmentStatus: EmploymentStatus;
   extraFlags: ExtraFlagOption[];
-  /** 입력용 원문/정규화 번호. 목록 표시는 maskKrMobile 사용 */
+  /** 입력용 원문/정규화 번호. 목록 표시는 formatKrMobileDisplay 사용 */
   phone: string;
+  /** 입력용 차량번호. 빈 문자열 = 미등록 */
+  vehicleNumber: string;
   /** null = 일반 (또는 1~8조) */
   thirdBandSubgroup: ThirdBandSubgroup | null;
   dormitoryResident: boolean;
@@ -153,6 +156,7 @@ const emptyDraft = (): Draft => ({
   employmentStatus: 'ACTIVE',
   extraFlags: [],
   phone: '',
+  vehicleNumber: '',
   thirdBandSubgroup: null,
   dormitoryResident: false,
 });
@@ -214,6 +218,7 @@ function toDraft(c: Caddy): Draft {
       (EDITABLE_EXTRA_FLAG_OPTIONS as readonly string[]).includes(f)
     ),
     phone: c.phoneNormalized ?? '',
+    vehicleNumber: c.vehicleNumber ?? '',
     thirdBandSubgroup:
       affiliation === 'THIRD' && isThirdBandTeam(c.team) ? subgroup : null,
     dormitoryResident: c.dormitoryResident === true,
@@ -221,7 +226,12 @@ function toDraft(c: Caddy): Draft {
 }
 
 function formatPhoneDisplay(phoneNormalized: string | null | undefined): string {
-  return maskKrMobile(phoneNormalized) ?? '—';
+  return formatKrMobileDisplay(phoneNormalized) ?? '—';
+}
+
+function formatVehicleDisplay(vehicleNumber: string | null | undefined): string {
+  const v = String(vehicleNumber ?? '').trim();
+  return v || '—';
 }
 
 function isDrivingCaddy(c: { caddyType?: string | null; team?: string | null }): boolean {
@@ -1204,6 +1214,8 @@ export default function ManageCaddiesPage() {
             extraFlags: draft.extraFlags,
             dormitoryResident: draft.dormitoryResident === true,
             phone: draft.phone.trim() === '' ? null : draft.phone.trim(),
+            vehicleNumber:
+              draft.vehicleNumber.trim() === '' ? null : draft.vehicleNumber.trim(),
           }),
         });
         const data = await res.json();
@@ -1262,6 +1274,8 @@ export default function ManageCaddiesPage() {
             : null,
           dormitoryResident: draft.dormitoryResident === true,
           phone: draft.phone.trim() === '' ? null : draft.phone.trim(),
+          vehicleNumber:
+            draft.vehicleNumber.trim() === '' ? null : draft.vehicleNumber.trim(),
         }),
       });
       const data = await res.json();
@@ -1400,6 +1414,10 @@ export default function ManageCaddiesPage() {
             dormitoryResident: createDraft.dormitoryResident === true,
             phone:
               createDraft.phone.trim() === '' ? null : createDraft.phone.trim(),
+            vehicleNumber:
+              createDraft.vehicleNumber.trim() === ''
+                ? null
+                : createDraft.vehicleNumber.trim(),
           }),
         });
         const data = await res.json();
@@ -1444,6 +1462,10 @@ export default function ManageCaddiesPage() {
           dormitoryResident: createDraft.dormitoryResident === true,
           phone:
             createDraft.phone.trim() === '' ? null : createDraft.phone.trim(),
+          vehicleNumber:
+            createDraft.vehicleNumber.trim() === ''
+              ? null
+              : createDraft.vehicleNumber.trim(),
         }),
       });
       const data = await res.json();
@@ -1680,6 +1702,17 @@ export default function ManageCaddiesPage() {
                   setCreateDraft((d) => ({ ...d, phone: e.target.value }))
                 }
                 placeholder="010-1234-5678"
+              />
+            </label>
+            <label>
+              차량번호
+              <input
+                value={createDraft.vehicleNumber}
+                onChange={(e) =>
+                  setCreateDraft((d) => ({ ...d, vehicleNumber: e.target.value }))
+                }
+                placeholder="12가3456"
+                autoComplete="off"
               />
             </label>
             {createKind === 'regular' && isThirdBandTeam(createDraft.team) && (
@@ -2109,6 +2142,7 @@ export default function ManageCaddiesPage() {
                       affiliation: selectedMobileColumn.band === 'THIRD' ? 'THIRD' : 'HOUSE',
                       team: selectedMobileColumn.key,
                       phone: d.phone,
+                      vehicleNumber: d.vehicleNumber,
                     }));
                   }
                   setCreateOpen(true);
@@ -2174,6 +2208,7 @@ export default function ManageCaddiesPage() {
                   <th>순번</th>
                   <th>상태</th>
                   <th>휴대폰</th>
+                  <th>차량번호</th>
                   <th>속성</th>
                   <th>작업</th>
                 </tr>
@@ -2193,7 +2228,7 @@ export default function ManageCaddiesPage() {
                       className={st === 'RETIRED' ? 'is-retired' : ''}
                     >
                       {editing ? (
-                        <td colSpan={7} className="cm-edit-cell">
+                        <td colSpan={8} className="cm-edit-cell">
                           <div className="cm-form-grid">
                             <label>
                               이름
@@ -2237,6 +2272,17 @@ export default function ManageCaddiesPage() {
                                 onChange={(e) =>
                                   updateDraft(c.id, { phone: e.target.value })
                                 }
+                              />
+                            </label>
+                            <label>
+                              차량번호
+                              <input
+                                value={draft.vehicleNumber}
+                                onChange={(e) =>
+                                  updateDraft(c.id, { vehicleNumber: e.target.value })
+                                }
+                                placeholder="12가3456"
+                                autoComplete="off"
                               />
                             </label>
                           </div>
@@ -2319,6 +2365,9 @@ export default function ManageCaddiesPage() {
                           </td>
                           <td className="cm-phone">
                             {formatPhoneDisplay(c.phoneNormalized)}
+                          </td>
+                          <td className="cm-vehicle">
+                            {formatVehicleDisplay(c.vehicleNumber)}
                           </td>
                           <td className="cm-flags-cell">
                             {(c.extraFlags ?? []).join(' · ') || '—'}
@@ -2448,6 +2497,7 @@ export default function ManageCaddiesPage() {
                     <div className="cm-dense-panel">
                       <div className="cm-phone-line">
                         휴대폰 {formatPhoneDisplay(c.phoneNormalized)}
+                        {` · 차량 ${formatVehicleDisplay(c.vehicleNumber)}`}
                         {(c.extraFlags?.length ?? 0) > 0 &&
                           ` · ${c.extraFlags.join('/')}`}
                       </div>
@@ -2566,6 +2616,17 @@ export default function ManageCaddiesPage() {
                                 onChange={(e) =>
                                   updateDraft(c.id, { phone: e.target.value })
                                 }
+                              />
+                            </label>
+                            <label>
+                              차량번호
+                              <input
+                                value={draft.vehicleNumber}
+                                onChange={(e) =>
+                                  updateDraft(c.id, { vehicleNumber: e.target.value })
+                                }
+                                placeholder="12가3456"
+                                autoComplete="off"
                               />
                             </label>
                           </div>
@@ -3723,6 +3784,9 @@ export default function ManageCaddiesPage() {
                   {cartByCaddyId[menuCaddy.id]
                     ? ` · 카트 ${cartByCaddyId[menuCaddy.id]}`
                     : ''}
+                  {formatVehicleDisplay(menuCaddy.vehicleNumber) !== '—'
+                    ? ` · 차량 ${formatVehicleDisplay(menuCaddy.vehicleNumber)}`
+                    : ''}
                 </span>
               </div>
               <button
@@ -3784,6 +3848,17 @@ export default function ManageCaddiesPage() {
                             onChange={(e) =>
                               updateDraft(c.id, { phone: e.target.value })
                             }
+                          />
+                        </label>
+                        <label>
+                          차량번호
+                          <input
+                            value={draft.vehicleNumber}
+                            onChange={(e) =>
+                              updateDraft(c.id, { vehicleNumber: e.target.value })
+                            }
+                            placeholder="12가3456"
+                            autoComplete="off"
                           />
                         </label>
                       </div>
@@ -4993,7 +5068,7 @@ export default function ManageCaddiesPage() {
           font-weight: 700;
           color: var(--vh-green-800);
         }
-        .cm-phone, .cm-flags-cell {
+        .cm-phone, .cm-vehicle, .cm-flags-cell {
           color: var(--vh-muted);
           font-size: 0.74rem;
           white-space: nowrap;

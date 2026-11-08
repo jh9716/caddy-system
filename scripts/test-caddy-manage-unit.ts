@@ -1066,6 +1066,13 @@ console.log("== caddies roster board UI source ==");
     "create/import/export remain reachable from 상세 관리"
   );
   assert(
+    /차량번호/.test(src) &&
+      /formatKrMobileDisplay/.test(src) &&
+      /vehicleNumber:/.test(src) &&
+      /className="cm-roster"/.test(src),
+    "vehicle field added without replacing excel roster UI"
+  );
+  assert(
     /min-width:\s*168px/.test(src) &&
       /overflow-x:\s*auto/.test(src) &&
       /position:\s*sticky/.test(src) &&

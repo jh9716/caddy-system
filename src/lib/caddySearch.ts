@@ -1,12 +1,14 @@
 /**
  * 관리자 통합 캐디 검색 matcher.
  * phoneNormalized(010XXXXXXXX)를 canonical source로 쓴다.
- * 차량번호/알림톡 발송은 다루지 않는다.
+ * 차량번호는 관리자 결과 표시만 하고 검색 키로는 쓰지 않는다.
+ * 알림톡 발송은 다루지 않는다.
  */
 
 import { normalizePersonName } from "@/lib/dailyCaddyNameMatch";
 import { employmentStatusLabel } from "@/lib/caddyManage";
-import { maskKrMobile } from "@/lib/caddyPhone";
+import { formatKrMobileDisplay } from "@/lib/caddyPhone";
+import { formatVehicleDisplay } from "@/lib/caddyVehicle";
 
 export type CaddySearchRecord = {
   id: number;
@@ -16,6 +18,7 @@ export type CaddySearchRecord = {
   caddyType?: string | null;
   employmentStatus?: string | null;
   phoneNormalized?: string | null;
+  vehicleNumber?: string | null;
 };
 
 /** 관리자 검색 API 공개 필드. phoneNormalized/memo 등 raw Prisma 키 금지. */
@@ -29,9 +32,10 @@ export const CADDY_SEARCH_API_KEYS = [
   "teamOrder",
   "caddyType",
   "employmentStatus",
-  "maskedPhone",
+  "displayPhone",
   "hasPhone",
   "telPhone",
+  "vehicleNumber",
 ] as const;
 
 export type CaddySearchApiHit = {
@@ -41,9 +45,10 @@ export type CaddySearchApiHit = {
   teamOrder: number;
   caddyType: string;
   employmentStatus: string;
-  maskedPhone: string | null;
+  displayPhone: string | null;
   hasPhone: boolean;
   telPhone: string | null;
+  vehicleNumber: string | null;
 };
 
 export type CaddySearchApiResponse = {
@@ -65,9 +70,10 @@ export type CaddySearchView = {
   team: string;
   typeLabel: string;
   statusLabel: string;
-  maskedPhone: string | null;
+  displayPhone: string | null;
   phoneMissing: boolean;
   telHref: string | null;
+  vehicleNumber: string | null;
 };
 
 export type SearchPlacementHit = {
@@ -219,9 +225,10 @@ export function toCaddySearchApiHit(caddy: CaddySearchRecord): CaddySearchApiHit
     teamOrder: Number.isInteger(caddy.teamOrder) ? Number(caddy.teamOrder) : 0,
     caddyType: String(caddy.caddyType ?? "HOUSE").trim() || "HOUSE",
     employmentStatus: String(caddy.employmentStatus ?? "ACTIVE") || "ACTIVE",
-    maskedPhone: maskKrMobile(caddy.phoneNormalized),
+    displayPhone: formatKrMobileDisplay(caddy.phoneNormalized),
     hasPhone: telPhone != null,
     telPhone,
+    vehicleNumber: formatVehicleDisplay(caddy.vehicleNumber),
   };
 }
 
@@ -284,9 +291,10 @@ export function toCaddySearchView(caddy: CaddySearchRecord): CaddySearchView {
     team: String(caddy.team ?? "").trim(),
     typeLabel: String(caddy.caddyType ?? "HOUSE").trim() || "HOUSE",
     statusLabel: employmentStatusLabel(caddy.employmentStatus),
-    maskedPhone: maskKrMobile(caddy.phoneNormalized),
+    displayPhone: formatKrMobileDisplay(caddy.phoneNormalized),
     phoneMissing: telHref == null,
     telHref,
+    vehicleNumber: formatVehicleDisplay(caddy.vehicleNumber),
   };
 }
 

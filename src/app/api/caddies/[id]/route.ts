@@ -22,6 +22,11 @@ import {
   parseOptionalPhoneInput,
 } from "@/lib/caddyPhone";
 import {
+  CaddyVehicleError,
+  auditVehicleNumber,
+  parseOptionalVehicleInput,
+} from "@/lib/caddyVehicle";
+import {
   SlotOccupiedError,
   SlotOutOfRangeError,
   SlotStaleError,
@@ -220,6 +225,9 @@ export async function PATCH(
       if (Object.prototype.hasOwnProperty.call(body, "phone")) {
         updateData.phoneNormalized = parseOptionalPhoneInput(data.phone);
       }
+      if (Object.prototype.hasOwnProperty.call(body, "vehicleNumber")) {
+        updateData.vehicleNumber = parseOptionalVehicleInput(data.vehicleNumber);
+      }
       if (data.employeeCode !== undefined) {
         updateData.employeeCode = data.employeeCode;
       }
@@ -258,6 +266,13 @@ export async function PATCH(
         auditPayload.phone = maskKrMobile(
           typeof updateData.phoneNormalized === "string"
             ? updateData.phoneNormalized
+            : null
+        );
+      }
+      if (Object.prototype.hasOwnProperty.call(auditPayload, "vehicleNumber")) {
+        auditPayload.vehicleNumber = auditVehicleNumber(
+          typeof updateData.vehicleNumber === "string"
+            ? updateData.vehicleNumber
             : null
         );
       }
@@ -329,6 +344,9 @@ export async function PATCH(
     if (data.memo !== undefined) updateData.memo = data.memo;
     if (Object.prototype.hasOwnProperty.call(body, "phone")) {
       updateData.phoneNormalized = parseOptionalPhoneInput(data.phone);
+    }
+    if (Object.prototype.hasOwnProperty.call(body, "vehicleNumber")) {
+      updateData.vehicleNumber = parseOptionalVehicleInput(data.vehicleNumber);
     }
     if (data.employeeCode !== undefined) {
       updateData.employeeCode = data.employeeCode;
@@ -442,6 +460,13 @@ export async function PATCH(
           : null
       );
     }
+    if (Object.prototype.hasOwnProperty.call(auditPayload, "vehicleNumber")) {
+      auditPayload.vehicleNumber = auditVehicleNumber(
+        typeof updateData.vehicleNumber === "string"
+          ? updateData.vehicleNumber
+          : null
+      );
+    }
     delete auditPayload.swapWithId;
 
     await logAudit({
@@ -483,7 +508,7 @@ export async function PATCH(
         { status: e.status }
       );
     }
-    if (e instanceof CaddyPhoneError) {
+    if (e instanceof CaddyPhoneError || e instanceof CaddyVehicleError) {
       return NextResponse.json(
         { error: e.message, code: e.code },
         { status: e.status }

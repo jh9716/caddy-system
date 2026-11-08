@@ -19,6 +19,10 @@ import {
   parseOptionalPhoneInput,
 } from "@/lib/caddyPhone";
 import {
+  CaddyVehicleError,
+  parseOptionalVehicleInput,
+} from "@/lib/caddyVehicle";
+import {
   SlotOccupiedError,
   SlotOutOfRangeError,
   assertSlotAvailable,
@@ -83,6 +87,10 @@ export async function POST(req: NextRequest) {
     const data = parsed.data;
     const phoneNormalized =
       data.phone === undefined ? null : parseOptionalPhoneInput(data.phone);
+    const vehicleNumber =
+      data.vehicleNumber === undefined
+        ? null
+        : parseOptionalVehicleInput(data.vehicleNumber);
 
     const dormitoryResident = data.dormitoryResident === true;
 
@@ -102,6 +110,7 @@ export async function POST(req: NextRequest) {
           status: data.status ?? "근무중",
           memo: data.memo ?? null,
           phoneNormalized,
+          vehicleNumber,
           thirdBandSubgroup: driving.thirdBandSubgroup,
           caddyType: driving.caddyType,
           ...(data.employeeCode !== undefined
@@ -178,6 +187,7 @@ export async function POST(req: NextRequest) {
           status: data.status ?? "근무중",
           memo: data.memo ?? null,
           phoneNormalized,
+          vehicleNumber,
           thirdBandSubgroup,
           caddyType: resolveCaddyTypeFromTeam(team),
           ...(data.employeeCode !== undefined
@@ -220,7 +230,7 @@ export async function POST(req: NextRequest) {
         { status: e.status }
       );
     }
-    if (e instanceof CaddyPhoneError) {
+    if (e instanceof CaddyPhoneError || e instanceof CaddyVehicleError) {
       return NextResponse.json(
         { error: e.message, code: e.code },
         { status: e.status }
