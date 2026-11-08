@@ -35,11 +35,36 @@ export function isChatEntryTimingEnabledFor(appEnv: ChatAppEnv, nodeEnv: string 
   return appEnv === "preview" || nodeEnv === "development";
 }
 
+/** Opt-in only. `?chatEntry=1` — step name + ms, no env/DB/identifiers. */
+export function isChatEntryQueryEnabled(search: string | null | undefined): boolean {
+  try {
+    const raw = String(search || "");
+    if (!raw) return false;
+    const q = raw.startsWith("?") ? raw.slice(1) : raw;
+    return new URLSearchParams(q).get("chatEntry") === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function enableChatEntryTimingFromSearch(search: string | null | undefined): boolean {
+  try {
+    if (!isChatEntryQueryEnabled(search)) return isChatEntryTimingEnabled();
+    enabledCache = true;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 let enabledCache: boolean | null = null;
 export function isChatEntryTimingEnabled(): boolean {
   if (enabledCache != null) return enabledCache;
   try {
-    enabledCache = isChatEntryTimingEnabledFor(currentChatAppEnv(), process.env.NODE_ENV);
+    const fromQuery =
+      typeof window !== "undefined" && isChatEntryQueryEnabled(window.location.search);
+    enabledCache =
+      fromQuery || isChatEntryTimingEnabledFor(currentChatAppEnv(), process.env.NODE_ENV);
   } catch {
     enabledCache = false;
   }

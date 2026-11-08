@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import {
   clearChatFastEntryCache, invalidateChatToken, isReusableChatToken, openPushPathInApp, placeholderChatRoomSummary, PLACEHOLDER_ROOM_TITLE,
-  readCachedChatRooms, readReusableChatToken, rememberChatRooms, rememberChatToken, safeInAppPath, CHAT_OPEN_ROOM_EVENT,
+  readCachedChatRooms, readLastOpenedChatRoom, readReusableChatToken, rememberChatRooms, rememberChatToken, rememberLastOpenedChatRoom, safeInAppPath, CHAT_OPEN_ROOM_EVENT,
 } from "../src/lib/chatFastEntry";
 import { applyChatSessionResetReason, clearChatSessionEnded } from "../src/lib/chatSessionReset";
 let pass = 0, fail = 0;
@@ -15,6 +15,7 @@ const tok = (uid: number, exp = Math.floor(Date.now() / 1000) + 1800) => ({ toke
 clearChatFastEntryCache();
 ok(readReusableChatToken() === null, "empty cache");
 rememberChatToken(tok(1)); ok(readReusableChatToken()?.user.userId === 1, "cached");
+rememberLastOpenedChatRoom("dm_1_2"); ok(readLastOpenedChatRoom() === "dm_1_2", "last opened cached");
 rememberChatRooms(1, [{ roomId: "all" }]); ok(readCachedChatRooms(1)?.length === 1, "rooms cached");
 ok(readCachedChatRooms(2) === null, "other user no rooms");
 rememberChatToken(tok(2)); ok(readCachedChatRooms(1) === null, "user change drops rooms");

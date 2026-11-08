@@ -155,6 +155,7 @@
     "test:chat-fast-entry-unit": "bash scripts/tsx-safe.sh scripts/test-chat-fast-entry-unit.ts",
     "test:chat-prewarm-unit": "bash scripts/tsx-safe.sh scripts/test-chat-prewarm-unit.ts",
     "test:chat-entry-timing-unit": "bash scripts/tsx-safe.sh scripts/test-chat-entry-timing-unit.ts",
+    "test:chat-entry-speed-unit": "bash scripts/tsx-safe.sh scripts/test-chat-entry-speed-unit.ts",
     "test:chat-token-unit": "bash scripts/tsx-safe.sh scripts/test-chat-token-unit.ts",
     "test:chat-ui-unit": "bash scripts/tsx-safe.sh scripts/test-chat-ui-unit.ts",
     "test:chat-scroll-unit": "bash scripts/tsx-safe.sh scripts/test-chat-scroll-unit.ts",

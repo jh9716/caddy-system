@@ -3,6 +3,8 @@ import {
   CHAT_ENTRY_TIMING_STEPS,
   chatTokenServerTiming,
   classifyChatInitFailure,
+  enableChatEntryTimingFromSearch,
+  isChatEntryQueryEnabled,
   isChatEntryTimingEnabledFor,
   mergeLateNotifyPrefs,
   readChatEntryTimings,
@@ -18,6 +20,12 @@ ok(isChatEntryTimingEnabledFor("preview", "production"), "preview on");
 ok(isChatEntryTimingEnabledFor("production", "development"), "local dev on");
 ok(!isChatEntryTimingEnabledFor("production", "production"), "production off");
 ok(!isChatEntryTimingEnabledFor("production", undefined), "unknown off");
+ok(isChatEntryQueryEnabled("?chatEntry=1"), "query opt-in");
+ok(!isChatEntryQueryEnabled("?room=all"), "other query is not timing");
+resetChatEntryTimingForTests(false);
+ok(enableChatEntryTimingFromSearch("?chatEntry=1") === true, "query enables production marks");
+ok(recordChatEntryTiming("token", 0, 40) === 40, "opt-in records name+ms");
+resetChatEntryTimingForTests(null);
 
 // disabled → nothing recorded
 resetChatEntryTimingForTests(false);
@@ -70,6 +78,8 @@ const calls = src.match(/recordChatEntryTiming\([^)]*\)/g) || [];
 ok(calls.length >= 7, "timing calls present");
 ok(calls.every((c) => !/roomId|userId|token\b|\.search|location|message/i.test(c.replace('"token"', ""))), "no identifiers in timing calls");
 ok(/if \(!roomsShownRef\.current\) \{[\s\S]{0,200}setLoading\(false\)/.test(src), "first valid rooms (WS or HTTP) ends loading");
+ok(src.includes("enableChatEntryTimingFromSearch"), "opt-in ?chatEntry=1 from client search");
+ok(src.includes("shouldPaintCachedRoomsNow"), "cached list may paint before token POST");
 const route = readFileSync("src/app/api/chat/token/route.ts", "utf8");
 ok(/isChatEntryTimingEnabledFor\(currentChatAppEnv\(\), process\.env\.NODE_ENV\)/.test(route), "server-timing gated");
 
