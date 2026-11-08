@@ -229,6 +229,8 @@ import {
   diagnoseChatWsFailure,
   formatChatClientError,
   parseChatClientErrorCode,
+  resolveChatWsOpenWait,
+  chatWsReadyStateOpen,
   type ChatSocketOpenResult,
 } from "@/lib/chatDmClient";
 import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
@@ -1208,6 +1210,7 @@ export default function ChatClient() {
       });
       ws.addEventListener("error", () => {
         if (gen !== roomGenRef.current) return;
+        if (ws.readyState === WebSocket.OPEN) return;
         setConnected(false);
         setFailingSince((cur) => cur ?? Date.now());
       });
@@ -1464,22 +1467,33 @@ export default function ChatClient() {
           ws.removeEventListener("close", onClose);
           resolve(result);
         };
-        const timer = window.setTimeout(() => {
-          finish({ ok: false, code: "ws_timeout" });
-        }, CHAT_WS_OPEN_TIMEOUT_MS);
-        const onOpen = () => finish({ ok: true });
+        const apply = (event: "open" | "error" | "close" | "timeout" | "diagnose", extra?: { diagnoseCode?: string; closeCode?: number }) => {
+          const settledWait = resolveChatWsOpenWait({
+            event,
+            readyState: ws.readyState,
+            diagnoseCode: extra?.diagnoseCode,
+            closeCode: extra?.closeCode,
+          });
+          if (settledWait.action === "success") finish({ ok: true });
+          else if (settledWait.action === "fail") finish({ ok: false, code: settledWait.code || "ws_error" });
+        };
+        const timer = window.setTimeout(() => apply("timeout"), CHAT_WS_OPEN_TIMEOUT_MS);
+        const onOpen = () => apply("open");
         const onError = () => {
-          void diagnoseChatWsFailure(url).then((code) => finish({ ok: false, code }));
+          apply("error");
+          void diagnoseChatWsFailure(url).then((code) => apply("diagnose", { diagnoseCode: code }));
         };
         const onClose = (ev: CloseEvent) => {
-          void diagnoseChatWsFailure(url, ev.code).then((code) => finish({ ok: false, code }));
+          void diagnoseChatWsFailure(url, ev.code).then((code) =>
+            apply("close", { diagnoseCode: code, closeCode: ev.code })
+          );
         };
         if (ws.readyState === WebSocket.OPEN) {
           finish({ ok: true });
           return;
         }
         if (ws.readyState === WebSocket.CLOSING || ws.readyState === WebSocket.CLOSED) {
-          void diagnoseChatWsFailure(url).then((code) => finish({ ok: false, code }));
+          void diagnoseChatWsFailure(url).then((code) => apply("close", { diagnoseCode: code }));
           return;
         }
         ws.addEventListener("open", onOpen);
@@ -2211,6 +2225,9 @@ export default function ChatClient() {
       // Failed/timed out: one replacement connect, never a parallel socket.
     }
     const opened = await connectSocket(info, room.roomId, { waitForOpen: true });
+    if (!opened.ok && chatWsReadyStateOpen(wsRef.current?.readyState)) {
+      return { ok: true };
+    }
     if (!opened.ok && isDmRoomId(room.roomId)) {
       setError(formatChatClientError(CHAT_DM_OPEN_FAILED, opened.code));
     }
