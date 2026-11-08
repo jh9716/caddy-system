@@ -252,10 +252,8 @@ export function dropCachedChatRoom(
 }
 
 /**
- * Cache may paint only after the Worker/DO accepted this socket.
- * New WS: browser `open` means ChatRoom `authorizeSocket` returned 101
- * (session-check + membership). Parked resume has no earlier frame than
- * `{type:"history"}` — do not use the list cache or token TTL as auth.
+ * Cache may paint only after `{type:"authorized"}` (session + membership).
+ * 101 / room list / token TTL are not membership. Missing authorized → wait for history.
  */
 export function shouldPaintCachedChatRoomLines(input: {
   serverSocketAuthorized: boolean;

@@ -122,7 +122,7 @@ section("android back room leave");
   assert(openRoom.includes("waitForOpen: true"), "openRoom waits for socket authorize");
   assert(openRoom.includes("clearLocalLines([])"), "openRoom does not paint cache before auth");
   assert(!openRoom.includes("readCachedChatRoomLines"), "openRoom does not read cache before socket");
-  assert(chat.includes("paintCachedLinesAfterServerAuth(roomId)"), "new WS open paints cache after 101");
+  assert(chat.includes("shouldPaintOnAuthorizedFrame"), "cache paints on authorized, not 101");
   assert(openRoom.includes("firstPaintAt"), "first paint start survives ws open");
   assert(openRoom.includes("pendingScrollRestore.current = null"), "openRoom clears leftover restore");
   assert(openRoom.includes("loadingOlderRef.current = false"), "openRoom clears leftover older-load ref");

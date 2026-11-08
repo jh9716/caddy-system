@@ -179,7 +179,9 @@ test("source: resume awaits session-check then history; no probe", () => {
     index.indexOf("private async handleParkedResume"),
     index.indexOf("private expireUnavailable")
   );
-  assert.ok(fn.indexOf("assertChatSessionCurrent") < fn.indexOf("sendHistory"));
+  assert.ok(fn.indexOf("assertChatSessionCurrent") < fn.indexOf("sendAuthorized"));
+  assert.ok(fn.indexOf("sendAuthorized") < fn.indexOf("sendHistory"));
+  assert.ok(fn.indexOf('verdict.action === "deny"') < fn.indexOf("sendAuthorized"));
 });
 
 test("wrangler: resume rechecks session then history; revoke/block/unavailable/membership drop socket", async () => {
@@ -259,6 +261,11 @@ test("wrangler: resume rechecks session then history; revoke/block/unavailable/m
       0,
       "blocked resume sends no history"
     );
+    assert.equal(
+      frames2.frames.filter((f) => f.data.type === "authorized").length,
+      0,
+      "blocked resume sends no authorized"
+    );
     frames2.stop();
 
     const tok3 = signTestTokenV2({ userId: uid + 2, displayName: "장애재개", role: "caddy", sv: 1 });
@@ -276,6 +283,11 @@ test("wrangler: resume rechecks session then history; revoke/block/unavailable/m
       frames3.frames.filter((f) => f.data.type === "history").length,
       0,
       "unavailable resume sends no history"
+    );
+    assert.equal(
+      frames3.frames.filter((f) => f.data.type === "authorized").length,
+      0,
+      "unavailable resume sends no authorized"
     );
     frames3.stop();
     mock.setUnavailable(false);
@@ -311,6 +323,11 @@ test("wrangler: resume rechecks session then history; revoke/block/unavailable/m
       0,
       "membership-removed resume sends no history"
     );
+    assert.equal(
+      framesMem.frames.filter((f) => f.data.type === "authorized").length,
+      0,
+      "membership-removed resume sends no authorized"
+    );
     framesMem.stop();
 
     const tok4 = signTestTokenV2({ userId: uid + 5, displayName: "경합재개", role: "caddy", sv: 1 });
@@ -340,6 +357,11 @@ test("wrangler: resume rechecks session then history; revoke/block/unavailable/m
       frames4.frames.filter((f) => f.data.type === "history").length,
       0,
       "revoke during resume sends no history"
+    );
+    assert.equal(
+      frames4.frames.filter((f) => f.data.type === "authorized").length,
+      0,
+      "revoke during resume sends no authorized"
     );
     frames4.stop();
     mock.setDelayMs(0);

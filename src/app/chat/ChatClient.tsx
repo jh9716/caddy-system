@@ -98,10 +98,12 @@ import {
 } from "@/lib/chatPhotoTiming";
 import type { ChatPhotoDirectProgress, ChatPhotoDirectResult } from "@/lib/chatPhotoDirectClient";
 import { readCapacitorNativePlatform } from "@/lib/nativePlatformClient";
+import { shouldPaintOnAuthorizedFrame } from "@/lib/chatAuthorized";
 import {
   chatEntryNow,
   mergeLateNotifyPrefs,
   recordChatEntryTiming,
+  scheduleChatCacheShown,
 } from "@/lib/chatEntryTiming";
 import {
   CHAT_OPEN_ROOM_EVENT,
@@ -696,7 +698,7 @@ export default function ChatClient() {
     });
   }
 
-  /** New-WS 101 only. Parked resume must wait for `{type:"history"}`. */
+  /** `{type:"authorized"}` only. Production Workers without the frame wait for history. */
   function paintCachedLinesAfterServerAuth(roomId: string) {
     if (!shouldPaintCachedChatRoomLines({ serverSocketAuthorized: true })) return;
     if (roomRef.current?.roomId !== roomId) return;
@@ -715,10 +717,12 @@ export default function ChatClient() {
     hiddenSeqsRef.current = new Set(cached.hiddenSeqs);
     markChatRoomCachePainted();
     const t = entryTimingRef.current;
+    const selectAt = t.roomSelectAt ?? t.firstPaintAt;
     if (t.firstPaintAt != null) {
       recordChatEntryTiming("room_select_to_first_paint", t.firstPaintAt);
       t.firstPaintAt = null;
     }
+    if (selectAt != null) scheduleChatCacheShown(selectAt);
     if (entrySeekRef.current) {
       const target = entryTargetRef.current;
       const canPinNow =
@@ -1166,10 +1170,9 @@ export default function ChatClient() {
         setFailingSince(null);
         {
           const t = entryTimingRef.current;
-          if (t.roomSelectAt != null) {
+          if (t.roomSelectAt != null && t.wsOpenAt == null) {
             t.wsOpenAt = chatEntryNow();
             recordChatEntryTiming("room_select_to_ws_open", t.roomSelectAt, t.wsOpenAt);
-            t.roomSelectAt = null;
           }
         }
         roomAttemptRef.current = 0;
@@ -1183,7 +1186,6 @@ export default function ChatClient() {
         } else {
           historyResetRef.current = true;
           reconnectingRef.current = false;
-          paintCachedLinesAfterServerAuth(roomId);
         }
       });
       ws.addEventListener("error", () => {
@@ -1286,6 +1288,15 @@ export default function ChatClient() {
             return;
           }
         }
+        if (shouldPaintOnAuthorizedFrame(data)) {
+          const authRoom = socketMetaRef.current.get(ws)?.roomId || roomRef.current?.roomId;
+          const t = entryTimingRef.current;
+          if (t.roomSelectAt != null) {
+            recordChatEntryTiming("room_select_to_authorized", t.roomSelectAt);
+          }
+          if (authRoom) paintCachedLinesAfterServerAuth(authRoom);
+          return;
+        }
         if (data.type === "history" && Array.isArray(data.messages)) {
           const hist = data.messages.map(payloadToLine);
           const reset = historyResetRef.current && !reconnectingRef.current;
@@ -1318,8 +1329,12 @@ export default function ChatClient() {
             }
             {
               const t = entryTimingRef.current;
+              const now = chatEntryNow();
+              if (t.roomSelectAt != null) {
+                recordChatEntryTiming("room_select_to_history", t.roomSelectAt, now);
+                t.roomSelectAt = null;
+              }
               if (t.wsOpenAt != null) {
-                const now = chatEntryNow();
                 recordChatEntryTiming("ws_open_to_history", t.wsOpenAt, now);
                 t.wsOpenAt = null;
                 if (t.deepLinkOpen) {

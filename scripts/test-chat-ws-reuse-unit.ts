@@ -207,6 +207,7 @@ async function main() {
   assert(parkedResumeClientGate("error") === "fail", "error fails resume");
   assert(parkedResumeClientGate("message") === "hold", "message held until history");
   assert(parkedResumeClientGate("sync") === "hold", "sync held until history");
+  assert(parkedResumeClientGate("authorized") === "other", "authorized does not finish resume wait");
   assert(parkedResumeClientGate("read") === "other", "other frames ignored for wait");
   assert(
     classifyParkedResumeWaitResult({

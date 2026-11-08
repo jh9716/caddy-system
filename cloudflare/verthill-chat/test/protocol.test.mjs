@@ -20,6 +20,8 @@ test("protocol limits and team rooms exist", () => {
   assert.match(src, /MAX_MENTIONS = 20/);
   assert.match(src, /canMentionAll/);
   assert.match(src, /resolveMentionAll/);
+  assert.match(src, /parseAuthorized/);
+  assert.match(src, /type: "authorized"/);
   assert.doesNotMatch(src, /poc-room/);
 });
 
@@ -49,6 +51,8 @@ test("worker stays isolated from Next/Neon/Vercel", () => {
   assert.match(index, /DELETE FROM messages WHERE seq = \? AND sent_at < \?/);
   assert.match(index, /validateIncomingHistory/);
   assert.match(index, /validateIncomingResume/);
+  assert.match(index, /sendAuthorized/);
+  assert.match(index, /type: "authorized"/);
   assert.match(index, /shouldSkipWorkerSessionCheck/);
   assert.match(index, /handleParkedResume/);
   assert.match(index, /withBrowserCors/);
