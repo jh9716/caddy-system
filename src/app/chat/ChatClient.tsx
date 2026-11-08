@@ -102,7 +102,16 @@ import {
   chatEntryNow,
   mergeLateNotifyPrefs,
   recordChatEntryTiming,
+  schedulePrewarmShown,
 } from "@/lib/chatEntryTiming";
+import {
+  canAdoptChatPrewarm,
+  chatPrewarmReadyFromFrame,
+  pickChatPrewarmRoom,
+  shouldDropPrewarmOnDirectory,
+  shouldHoldChatReadWhilePrewarm,
+  shouldStartChatPrewarm,
+} from "@/lib/chatPrewarm";
 import {
   CHAT_OPEN_ROOM_EVENT,
   invalidateChatToken,
@@ -369,6 +378,16 @@ export default function ChatClient() {
   const heldReadSeqRef = useRef(0);
   const roomsRef = useRef<RoomSummary[]>([]);
   const roomsShownRef = useRef(false);
+  const viewRef = useRef<"list" | "room">("list");
+  viewRef.current = view;
+  const lastOpenedRoomIdRef = useRef<string | null>(null);
+  const listShownAtRef = useRef<number | null>(null);
+  const prewarmRef = useRef<{
+    roomId: string | null;
+    ready: boolean;
+    inflight: boolean;
+    wait: { finish: (ok: boolean) => void } | null;
+  }>({ roomId: null, ready: false, inflight: false, wait: null });
   const entryTimingRef = useRef<{
     mountAt: number | null;
     roomsReqAt: number | null;
@@ -524,6 +543,26 @@ export default function ChatClient() {
       }
     });
   };
+  function dropChatPrewarm(opts?: { close?: boolean }) {
+    const pre = prewarmRef.current;
+    pre.wait?.finish(false);
+    pre.wait = null;
+    pre.ready = false;
+    pre.inflight = false;
+    pre.roomId = null;
+    if (opts?.close && viewRef.current !== "room") {
+      leaveRoomSocket();
+    }
+  }
+  function markChatPrewarmReady(roomId: string) {
+    const pre = prewarmRef.current;
+    if (pre.roomId !== roomId) return;
+    pre.ready = true;
+    pre.inflight = false;
+    pre.wait?.finish(true);
+    pre.wait = null;
+    recordChatEntryTiming("list_to_prewarm_ready", listShownAtRef.current);
+  }
   const applyRuntimeParkState = (enabled: boolean) => {
     const applied = applyWsReuseRuntimeEnabled(enabled);
     wsReuseRuntimeRef.current = applied.runtimeEnabled;
@@ -749,9 +788,20 @@ export default function ChatClient() {
       setLoading(false);
       const t = entryTimingRef.current;
       const now = chatEntryNow();
+      listShownAtRef.current = now;
       recordChatEntryTiming("rooms_to_shown", t.roomsReqAt, now);
       recordChatEntryTiming("entry_to_ui", t.mountAt, now);
       if (t.fullLoadEntry) recordChatEntryTiming("nav_to_ui", 0, now);
+    }
+    const pre = prewarmRef.current;
+    if (
+      pre.roomId &&
+      shouldDropPrewarmOnDirectory({
+        prewarmRoomId: pre.roomId,
+        memberRoomIds: visible.map((row) => row.roomId),
+      })
+    ) {
+      dropChatPrewarm({ close: true });
     }
     setActiveRoom((cur) => {
       if (!cur) return cur;
@@ -814,7 +864,7 @@ export default function ChatClient() {
     (
       info: TokenPayload,
       roomId: string,
-      opts?: { waitForOpen?: boolean }
+      opts?: { waitForOpen?: boolean; waitForHistory?: boolean; prewarm?: boolean }
     ) => Promise<ChatSocketOpenResult>
   >(async () => ({ ok: true }));
 
@@ -929,9 +979,15 @@ export default function ChatClient() {
     async (
       info: TokenPayload,
       roomId: string,
-      opts?: { waitForOpen?: boolean }
+      opts?: { waitForOpen?: boolean; waitForHistory?: boolean; prewarm?: boolean }
     ): Promise<ChatSocketOpenResult> => {
       if (!shouldConnectWithChatToken(info, tokenRef)) return { ok: false, code: "stale_session" };
+      if (opts?.prewarm) {
+        const pre = prewarmRef.current;
+        pre.roomId = roomId;
+        pre.ready = false;
+        pre.inflight = true;
+      }
       const url = chatWsUrl({ roomId, token: info.token });
       if (!url) {
         setError("채팅 서버 주소가 없습니다.");
@@ -1118,6 +1174,10 @@ export default function ChatClient() {
         setFailingSince((cur) => cur ?? Date.now());
         setNowTick(Date.now());
         window.setTimeout(() => setNowTick(Date.now()), 15100);
+        if (prewarmRef.current.roomId && viewRef.current !== "room") {
+          dropChatPrewarm({ close: false });
+          return;
+        }
         if (!roomRef.current) return;
         reconnectingRef.current = true;
         const run = async () => {
@@ -1206,6 +1266,16 @@ export default function ChatClient() {
             lastSeqRef.current = lastKnownSeq(next);
             const last = next[next.length - 1];
             if (last?.seq) sendReadOrHold(ws, last.seq);
+            if (
+              viewRef.current !== "room" &&
+              prewarmRef.current.roomId === roomId &&
+              chatPrewarmReadyFromFrame("history", data.messages)
+            ) {
+              markChatPrewarmReady(roomId);
+            } else if (viewRef.current === "room") {
+              recordChatEntryTiming("cold_click_to_history", entryTimingRef.current.roomSelectAt);
+              entryTimingRef.current.roomSelectAt = null;
+            }
             queueEntrySeek(next);
             {
               const t = entryTimingRef.current;
@@ -1318,6 +1388,28 @@ export default function ChatClient() {
           });
         }
       });
+      if (opts?.waitForHistory) {
+        if (prewarmRef.current.ready && prewarmRef.current.roomId === roomId) return { ok: true };
+        const histResult = await new Promise<ChatSocketOpenResult>((resolve) => {
+          let settled = false;
+          const finish = (result: ChatSocketOpenResult) => {
+            if (settled) return;
+            settled = true;
+            window.clearTimeout(timer);
+            resolve(result);
+          };
+          const timer = window.setTimeout(() => finish({ ok: false, code: "ws_timeout" }), CHAT_WS_OPEN_TIMEOUT_MS);
+          prewarmRef.current.wait = {
+            finish: (ok) => finish(ok ? { ok: true } : { ok: false, code: "resume_auth" }),
+          };
+          ws.addEventListener(
+            "close",
+            () => finish({ ok: false, code: "ws_error" }),
+            { once: true }
+          );
+        });
+        return histResult;
+      }
       if (!opts?.waitForOpen) return { ok: true };
       return await new Promise<ChatSocketOpenResult>((resolve) => {
         let settled = false;
@@ -1363,6 +1455,7 @@ export default function ChatClient() {
     let cancelled = false;
     const unsubscribeReset = subscribeChatSessionReset((reason) => {
       handleChatWsReuseDiagSessionReset();
+      dropChatPrewarm({ close: false });
       dropParkedRoomSocket();
       resetChatSocketHandles({
         roomGenRef,
@@ -1501,7 +1594,9 @@ export default function ChatClient() {
     const onVisible = () => {
       if (document.visibilityState === "visible") reconnect();
     };
+    const onOffline = () => dropChatPrewarm({ close: true });
     window.addEventListener("online", reconnect);
+    window.addEventListener("offline", onOffline);
     document.addEventListener("visibilitychange", onVisible);
     let removed = false;
     let appHandle: { remove: () => Promise<void> } | undefined;
@@ -1524,6 +1619,7 @@ export default function ChatClient() {
     return () => {
       removed = true;
       window.removeEventListener("online", reconnect);
+      window.removeEventListener("offline", onOffline);
       document.removeEventListener("visibilitychange", onVisible);
       void appHandle?.remove();
     };
@@ -1596,6 +1692,14 @@ export default function ChatClient() {
   }
 
   function sendReadOrHold(ws: WebSocket, seq: number) {
+    if (
+      shouldHoldChatReadWhilePrewarm({
+        prewarming: Boolean(prewarmRef.current.roomId && viewRef.current !== "room"),
+        viewIsRoom: viewRef.current === "room",
+      })
+    ) {
+      return;
+    }
     const hold = entryHoldRef.current;
     if (hold && roomRef.current?.roomId === hold.roomId) {
       heldReadSeqRef.current = Math.max(heldReadSeqRef.current, Number(seq) || 0);
@@ -1924,13 +2028,32 @@ export default function ChatClient() {
     room: RoomSummary,
     opts?: { targetSeq?: number | null; holdForSummary?: boolean }
   ): Promise<ChatSocketOpenResult> {
-    entryTimingRef.current.roomSelectAt = chatEntryNow();
+    const selectedAt = chatEntryNow();
+    entryTimingRef.current.roomSelectAt = selectedAt;
     entryTimingRef.current.wsOpenAt = null;
     if (isChatWsReuseDiagRecording() && tokenRef.current?.user.role === "admin") {
       markChatWsReuseDiagRoomSelect();
     }
     const info = await refreshIfNeeded();
     if (!info) return { ok: false, code: "missing_token" };
+    const pre = prewarmRef.current;
+    const wsNow = wsRef.current;
+    const adoptReady = canAdoptChatPrewarm({
+      prewarmRoomId: pre.roomId,
+      targetRoomId: room.roomId,
+      ready: pre.ready,
+      socketOpen: wsNow?.readyState === WebSocket.OPEN,
+      sessionEnded: isChatSessionEnded(),
+    });
+    const adoptInflight =
+      !adoptReady &&
+      pre.roomId === room.roomId &&
+      pre.inflight &&
+      Boolean(wsNow) &&
+      wsNow!.readyState !== WebSocket.CLOSED;
+    if (!adoptReady && !adoptInflight && (pre.roomId || pre.inflight)) {
+      dropChatPrewarm({ close: true });
+    }
     const urlSeq =
       typeof window !== "undefined"
         ? parseChatTargetSeqFromRoomUrl(room.roomId, window.location.search)
@@ -1964,12 +2087,22 @@ export default function ChatClient() {
     roomRef.current = room;
     setActiveRoom(room);
     setView("room");
-    clearLocalLines([]);
+    lastOpenedRoomIdRef.current = room.roomId;
+    const keepPrewarmLines = adoptReady || adoptInflight;
+    if (!keepPrewarmLines) {
+      clearLocalLines([]);
+      hasMoreRef.current = false;
+      setHasMore(false);
+      lastSeqRef.current = 0;
+      linesRef.current = [];
+      hiddenSeqsRef.current = new Set();
+    } else {
+      setLines(linesRef.current);
+      setHasMore(hasMoreRef.current);
+    }
     pendingScrollRestore.current = null;
     loadingOlderRef.current = false;
     setLoadingOlder(false);
-    hasMoreRef.current = false;
-    setHasMore(false);
     setError("");
     setDraft("");
     setMentionTokens([]);
@@ -1981,9 +2114,6 @@ export default function ChatClient() {
     setProfileTarget(null);
     setUnseenCount(0);
     reconnectingRef.current = false;
-    lastSeqRef.current = 0;
-    linesRef.current = [];
-    hiddenSeqsRef.current = new Set();
     if (isDmRoomId(room.roomId)) {
       const next = nextDmMentionState({
         roomId: room.roomId,
@@ -2005,12 +2135,89 @@ export default function ChatClient() {
       setMentionCandidates([]);
       mentionFetchedRef.current = "";
     }
+    if (adoptReady) {
+      pre.ready = false;
+      pre.inflight = false;
+      pre.roomId = null;
+      const last = lastSeqRef.current;
+      if (last > 0 && wsNow && wsNow.readyState === WebSocket.OPEN) sendReadOrHold(wsNow, last);
+      recordChatEntryTiming("prewarm_click_to_paint", selectedAt);
+      schedulePrewarmShown(selectedAt);
+      entryTimingRef.current.roomSelectAt = null;
+      queueEntrySeek(linesRef.current);
+      return { ok: true };
+    }
+    if (adoptInflight) {
+      const waited = await new Promise<boolean>((resolve) => {
+        if (pre.ready) {
+          resolve(true);
+          return;
+        }
+        const prev = pre.wait;
+        pre.wait = {
+          finish: (ok) => {
+            prev?.finish(ok);
+            resolve(ok);
+          },
+        };
+      });
+      if (waited && wsRef.current?.readyState === WebSocket.OPEN) {
+        pre.ready = false;
+        pre.inflight = false;
+        pre.roomId = null;
+        const last = lastSeqRef.current;
+        if (last > 0) sendReadOrHold(wsRef.current, last);
+        recordChatEntryTiming("prewarm_click_to_paint", selectedAt);
+        schedulePrewarmShown(selectedAt);
+        entryTimingRef.current.roomSelectAt = null;
+        queueEntrySeek(linesRef.current);
+        return { ok: true };
+      }
+    }
     const opened = await connectSocket(info, room.roomId, { waitForOpen: true });
     if (!opened.ok && isDmRoomId(room.roomId)) {
       setError(formatChatClientError(CHAT_DM_OPEN_FAILED, opened.code));
     }
     return opened;
   }
+
+  async function startChatPrewarm(roomId: string) {
+    if (viewRef.current !== "list" || isChatSessionEnded() || !navigator.onLine) return;
+    const info = tokenRef.current;
+    if (!info) return;
+    const opened = await connectSocket(info, roomId, { waitForHistory: true, prewarm: true });
+    if (viewRef.current !== "list") return;
+    if (!opened.ok) dropChatPrewarm({ close: true });
+  }
+
+  useEffect(() => {
+    if (view !== "list") return;
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      dropChatPrewarm({ close: true });
+      return;
+    }
+    const target = pickChatPrewarmRoom({
+      directorySnapshotReady,
+      sessionEnded: isChatSessionEnded(),
+      rooms,
+      lastOpenedRoomId: lastOpenedRoomIdRef.current,
+    });
+    const pre = prewarmRef.current;
+    if (
+      !shouldStartChatPrewarm({
+        viewIsList: true,
+        directorySnapshotReady,
+        sessionEnded: isChatSessionEnded(),
+        hasTarget: Boolean(target),
+        currentRoomId: pre.roomId,
+        inflightOrReady: pre.inflight || pre.ready,
+      })
+    ) {
+      return;
+    }
+    if (!target) return;
+    void startChatPrewarm(target);
+  }, [view, directorySnapshotReady, rooms]);
 
   useEffect(() => {
     const requested =
