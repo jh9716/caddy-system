@@ -144,6 +144,8 @@ section("admin API / UI source guards");
   assert(/requireAdmin/.test(searchApi), "search GET requireAdmin");
   assert(/vehicleNumber: true/.test(searchApi), "search select vehicle");
   assert(/hit\.vehicleNumber/.test(searchPage), "search UI shows vehicle");
+  assert(/차량번호/.test(searchPage), "search UI copy mentions vehicle search");
+  assert(/12가5432/.test(searchPage), "search placeholder vehicle example");
   assert(/hit\.displayPhone/.test(searchPage), "search UI shows full phone");
   assert(/차량번호/.test(caddiesPage), "manage UI vehicle field");
   assert(/formatKrMobileDisplay/.test(caddiesPage), "manage UI unmasks phone");

@@ -1,7 +1,7 @@
 /**
  * 관리자 통합 캐디 검색 matcher.
  * phoneNormalized(010XXXXXXXX)를 canonical source로 쓴다.
- * 차량번호는 관리자 결과 표시만 하고 검색 키로는 쓰지 않는다.
+ * 차량번호는 관리자 검색 키·결과 표시에만 쓴다. 회원 API에는 노출하지 않는다.
  * 알림톡 발송은 다루지 않는다.
  */
 
@@ -85,6 +85,8 @@ export type SearchPlacementHit = {
 
 const PHONE_CANONICAL = /^010\d{8}$/;
 const MIN_PHONE_DIGITS = 3;
+/** 조 숫자(1, 12)와 겹치지 않도록 차량번호 쿼리는 3글자 이상. */
+export const MIN_VEHICLE_QUERY_LEN = 3;
 
 export function searchDigits(query: unknown): string {
   return String(query ?? "").replace(/\D/g, "");
@@ -96,6 +98,15 @@ export function compactSearchText(query: unknown): string {
     .trim()
     .toLowerCase()
     .replace(/\s+/g, "");
+}
+
+/** 차량번호 비교용: 공백·하이픈 무시. */
+export function compactVehicleSearchText(input: unknown): string {
+  return String(input ?? "")
+    .replace(/\u00a0/g, " ")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s\-]/g, "");
 }
 
 function isDigitOnlyQuery(query: string): boolean {
@@ -152,6 +163,17 @@ export function matchesPhoneQuery(
   return phoneNormalized.includes(digits);
 }
 
+export function matchesVehicleQuery(
+  vehicleNumber: string | null | undefined,
+  query: string
+): boolean {
+  const plate = compactVehicleSearchText(vehicleNumber);
+  const q = compactVehicleSearchText(query);
+  if (!plate || !q) return false;
+  if (q.length < MIN_VEHICLE_QUERY_LEN) return false;
+  return plate.includes(q);
+}
+
 export function matchesCaddySearch(
   caddy: CaddySearchRecord,
   query: string
@@ -164,7 +186,8 @@ export function matchesCaddySearch(
     matchesNameQuery(caddy.name, raw) ||
     matchesTeamQuery(caddy.team, raw) ||
     matchesIdQuery(caddy.id, raw) ||
-    matchesPhoneQuery(caddy.phoneNormalized, raw)
+    matchesPhoneQuery(caddy.phoneNormalized, raw) ||
+    matchesVehicleQuery(caddy.vehicleNumber, raw)
   );
 }
 
@@ -212,6 +235,7 @@ export function rankCaddySearchHit(
   }
   if (matchesNameQuery(caddy.name, raw)) return CADDY_SEARCH_RANK.NAME_CONTAINS;
   if (matchesTeamQuery(caddy.team, raw)) return CADDY_SEARCH_RANK.TEAM;
+  // 차량번호 전용 hit는 OTHER. 이름·ID·휴대폰 순위를 끌어올리지 않는다.
   return CADDY_SEARCH_RANK.OTHER;
 }
 

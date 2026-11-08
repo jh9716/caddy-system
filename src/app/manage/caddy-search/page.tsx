@@ -106,7 +106,7 @@ export default function ManageCaddySearchPage() {
         <div>
           <h1 className="cs-title">캐디 검색</h1>
           <p className="cs-sub">
-            이름 · 조 · 번호 · 휴대폰 뒤자리. 연락처·차량번호는 관리자만 봅니다.
+            이름 · 조 · 번호 · 휴대폰 뒤자리 · 차량번호. 연락처·차량번호는 관리자만 봅니다.
           </p>
         </div>
         <Link href="/manage/caddies" className="cs-link">
@@ -121,7 +121,7 @@ export default function ManageCaddySearchPage() {
           className="cs-search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="김현정 / 7조 / 123 / 5678"
+          placeholder="김현정 / 7조 / 123 / 5678 / 12가5432"
           autoComplete="off"
           autoCorrect="off"
           spellCheck={false}
@@ -137,7 +137,9 @@ export default function ManageCaddySearchPage() {
       {loading ? <p className="cs-muted">검색 중…</p> : null}
 
       {!loading && !query.trim() ? (
-        <p className="cs-empty">이름, 조, 캐디 번호, 휴대폰 뒤 4자리를 입력하세요.</p>
+        <p className="cs-empty">
+          이름, 조, 캐디 번호, 휴대폰 뒤 4자리, 차량번호를 입력하세요.
+        </p>
       ) : null}
 
       {!loading && query.trim() ? (

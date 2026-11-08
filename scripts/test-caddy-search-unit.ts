@@ -17,6 +17,7 @@ import {
   matchesNameQuery,
   matchesPhoneQuery,
   matchesTeamQuery,
+  matchesVehicleQuery,
   rankCaddySearchHit,
   searchCaddiesLimited,
   todayPlacementSummary,
@@ -241,6 +242,9 @@ section("검색 UI / 권한 / 개인정보 source guard");
   assert(!/\{hit\.telPhone\}/.test(page.replace(/tel:\$\{hit\.telPhone\}/g, "")), "raw telPhone 화면 텍스트 없음");
   assert(/hit\.displayPhone/.test(page), "화면은 displayPhone");
   assert(/hit\.vehicleNumber/.test(page), "검색 결과 차량번호");
+  assert(/차량번호/.test(page), "검색 UI 안내 차량번호");
+  assert(/12가5432/.test(page), "placeholder 차량번호 예시");
+  assert(/matchesVehicleQuery/.test(matcher), "matcher 차량번호 검색");
   assert(!/hit\.maskedPhone/.test(page), "검색 화면 maskedPhone 미사용");
   assert(!/console\.(log|info|debug|warn)\([^)]*phone/i.test(page), "검색 페이지 phone console 없음");
   assert(!/console\.(log|info|debug|warn)\([^)]*phone/i.test(matcher), "matcher phone console 없음");
@@ -328,7 +332,7 @@ section("V2 API 응답 최소화 / telPhone / 빈 query");
   const withCarRecord: CaddySearchRecord = { ...kim, vehicleNumber: "77하9999" };
   const withCar = toCaddySearchApiHit(withCarRecord);
   assert(withCar.vehicleNumber === "77하9999", "vehicle in search hit");
-  assert(!matchesCaddySearch(withCarRecord, "77하9999"), "차량번호는 검색 키 아님");
+  assert(matchesCaddySearch(withCarRecord, "77하9999"), "전체 차량번호 검색");
 
   const empty = caddySearchApiResponse(roster, "");
   assert(Array.isArray(empty.results) && empty.results.length === 0, "empty q → []");
@@ -364,6 +368,125 @@ section("V2 API 응답 최소화 / telPhone / 빈 query");
   assert(rankCaddySearchHit(kim, "5678") === CADDY_SEARCH_RANK.EXACT_PHONE, "rank last4");
   assert(rankCaddySearchHit(kim, "김현정") === CADDY_SEARCH_RANK.NAME_CONTAINS, "rank name contains");
   assert(rankCaddySearchHit(kim, "7조") === CADDY_SEARCH_RANK.TEAM, "rank team");
+}
+
+section("차량번호 검색 (관리자 전용 matcher)");
+{
+  const marshal: CaddySearchRecord = {
+    id: 501,
+    name: "테스트마샬01",
+    team: "9조",
+    teamOrder: 1,
+    caddyType: "HOUSE",
+    employmentStatus: "ACTIVE",
+    phoneNormalized: "01088101234",
+    vehicleNumber: "12가5432",
+  };
+  const previousPlate: CaddySearchRecord = {
+    ...marshal,
+    vehicleNumber: "99하1111",
+  };
+  const noVehicleCaddy: CaddySearchRecord = {
+    id: 502,
+    name: "차량미등록캐디",
+    team: "4조",
+    teamOrder: 2,
+    caddyType: "HOUSE",
+    employmentStatus: "ACTIVE",
+    phoneNormalized: "01033334444",
+    vehicleNumber: null,
+  };
+  const phoneLast4Overlap: CaddySearchRecord = {
+    ...kim,
+    id: 503,
+    name: "전화우선캐디",
+    vehicleNumber: "12가5678",
+  };
+  const vehicleRoster = [
+    ...roster,
+    marshal,
+    noVehicleCaddy,
+    phoneLast4Overlap,
+  ];
+
+  assert(matchesVehicleQuery("12가5432", "12가5432"), "전체 번호");
+  assert(matchesVehicleQuery("12가5432", "5432"), "뒷자리");
+  assert(matchesVehicleQuery("12가5432", "가5432"), "일부 번호");
+  assert(matchesVehicleQuery("12가5432", "12 가 5432"), "공백 차이");
+  assert(matchesVehicleQuery("12가5432", "12-가-5432"), "하이픈 차이");
+  assert(matchesVehicleQuery("12가5432", "  12가5432  "), "trim");
+  assert(matchesCaddySearch(marshal, "5432"), "5432 → 테스트마샬01");
+  assert(matchesCaddySearch(marshal, "12가5432"), "12가5432 → 테스트마샬01");
+  assert(matchesCaddySearch(marshal, "가5432"), "가5432 → 테스트마샬01");
+  assert(matchesCaddySearch(marshal, "12 가 5432"), "공백 쿼리 → 테스트마샬01");
+  assert(matchesCaddySearch(marshal, "12-가-5432"), "하이픈 쿼리 → 테스트마샬01");
+  assert(!matchesCaddySearch(previousPlate, "5432"), "변경 전 값 5432 제외");
+  assert(!matchesCaddySearch(previousPlate, "12가5432"), "변경 전 전체번호 제외");
+  assert(matchesCaddySearch(previousPlate, "99하1111"), "변경 전 레코드는 옛 번호만");
+  assert(
+    searchCaddiesLimited([marshal], "5432").map((h) => h.id).join() === "501",
+    "최신 차량번호만 검색"
+  );
+  assert(
+    searchCaddiesLimited([previousPlate], "99하1111")[0]?.id === 501,
+    "변경 전 스냅샷은 옛 번호로 검색"
+  );
+  assert(
+    searchCaddiesLimited([marshal], "99하1111").length === 0,
+    "변경 후 옛 번호 제외"
+  );
+  assert(!matchesVehicleQuery(null, "5432"), "미등록 차량은 번호 검색 안 함");
+  assert(!matchesCaddySearch(noVehicleCaddy, "5432"), "미등록 캐디 5432 제외");
+  assert(matchesCaddySearch(noVehicleCaddy, "차량미등록캐디"), "미등록 캐디 이름 검색");
+  assert(matchesCaddySearch(noVehicleCaddy, "01033334444"), "미등록 캐디 휴대폰 검색");
+  assert(matchesCaddySearch(noVehicleCaddy, "4조"), "미등록 캐디 조 검색");
+  assert(!matchesVehicleQuery("12가5432", "12"), "짧은 숫자는 차량 오탐 없음");
+  assert(!matchesVehicleQuery("12가5432", "7"), "1자리 숫자는 차량 검색 아님");
+  assert(
+    searchCaddiesLimited(vehicleRoster, "5432").some((h) => h.id === 501),
+    "통합검색 5432에 마샬 포함"
+  );
+  assert(
+    searchCaddiesLimited(vehicleRoster, "12가5432")[0]?.id === 501,
+    "통합검색 전체 차량번호"
+  );
+  assert(
+    rankCaddySearchHit(marshal, "5432") === CADDY_SEARCH_RANK.OTHER,
+    "차량 전용 hit는 OTHER"
+  );
+  assert(
+    rankCaddySearchHit(marshal, "12가5432") === CADDY_SEARCH_RANK.OTHER,
+    "전체 차량번호도 OTHER"
+  );
+  const last4Ranked = searchCaddiesLimited(
+    [kim, { ...marshal, vehicleNumber: "12가5678" }],
+    "5678"
+  );
+  assert(last4Ranked[0]?.id === 12, "휴대폰 last4가 차량번호보다 앞");
+  assert(
+    rankCaddySearchHit(phoneLast4Overlap, "5678") === CADDY_SEARCH_RANK.EXACT_PHONE,
+    "전화 last4 순위 유지"
+  );
+  assert(
+    rankCaddySearchHit(kim, "김현정") === CADDY_SEARCH_RANK.NAME_CONTAINS,
+    "이름 순위 차량 추가로 불변"
+  );
+  assert(
+    searchCaddiesLimited(vehicleRoster, "김현정")[0]?.id === 12,
+    "이름 검색 회귀"
+  );
+  assert(
+    searchCaddiesLimited(vehicleRoster, "7조")[0]?.id === 12,
+    "조 검색 회귀"
+  );
+  assert(
+    searchCaddiesLimited(vehicleRoster, "01012345678")[0]?.id === 12,
+    "휴대폰 검색 회귀"
+  );
+  assert(
+    searchCaddiesLimited(vehicleRoster, "원다빈")[0]?.id === 14,
+    "차량 없는 캐디 이름 회귀"
+  );
 }
 
 section("20건 limit");
