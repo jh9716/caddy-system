@@ -40,6 +40,7 @@ export const BOARD_XLSX_DATA_START_ROW = 5;
 
 const LINKED_KIND_TAG: Partial<Record<AssignmentKind, string>> = {
   oneTwo: "1·2",
+  two: "2",
   twoThree: "2·3",
   oneThree: "1·3",
   fiftyFourHole: "54",

@@ -1498,7 +1498,17 @@ section("source / UI / migration / 권한");
     (name) =>
       /^\d{14}/.test(name) && name > "20260915120000_daily_off_override"
   );
-  assert(migDirs.length === 0, "새 migration 없음");
+  assert(
+    migDirs.includes("20261108120000_special_duty_two_only"),
+    "2부 단독 additive migration 포함"
+  );
+  const twoMig = readSrc(
+    "prisma/migrations/20261108120000_special_duty_two_only/migration.sql"
+  );
+  assert(/ADD VALUE IF NOT EXISTS 'TWO'/.test(twoMig), "TWO enum additive");
+  assert(/ADD COLUMN IF NOT EXISTS "course"/.test(twoMig), "course nullable");
+  assert(/ADD COLUMN IF NOT EXISTS "teeTime"/.test(twoMig), "teeTime nullable");
+  assert(!/DROP TABLE/.test(twoMig) && !/DROP TYPE/.test(twoMig), "TWO migration no drop");
   assert(
     /후출마샬이 1부 지원으로 등록된 경우/.test(supportDomain) &&
       /조출마샬/.test(supportDomain) &&

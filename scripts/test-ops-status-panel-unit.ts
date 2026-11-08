@@ -106,8 +106,9 @@ console.log("== special duty / support summaries ==");
       { kind: "FIFTY_FOUR", label: "54홀", count: 0, items: [] },
     ])
   );
-  assert(chips.length === 5, "특수근무 UI 5종");
+  assert(chips.length === 6, "특수근무 UI 6종(2부 단독 포함)");
   assert(chips[0]?.label === "1막" && chips[0]?.count === 0, "없는 1막은 0");
+  assert(chips.find((c) => c.kind === "TWO")?.label === "2부", "2부 단독 칩");
   assert(
     chips.find((c) => c.kind === "ONE_TWO")?.names.join("·") === "임형구·구본의",
     "1·2부 이름 재사용"

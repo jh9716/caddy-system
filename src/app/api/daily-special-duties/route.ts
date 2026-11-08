@@ -12,6 +12,7 @@ import {
   reorderDailySpecialDuties,
   upsertDailySpecialPlacement,
   upsertSpecialStartAnchor,
+  updateDailySpecialDutySlot,
 } from "@/lib/dailySpecialDutyService";
 
 export const dynamic = "force-dynamic";
@@ -71,6 +72,9 @@ export async function POST(req: NextRequest) {
       caddyIds,
       namesText,
       caddies,
+      slots: Array.isArray(body?.slots) ? body.slots : undefined,
+      course: body?.course,
+      teeTime: body?.teeTime,
     });
     const payload = await buildDailySpecialDutyPayload(date);
     return NextResponse.json({
@@ -89,6 +93,19 @@ export async function PATCH(req: NextRequest) {
   if (guard) return guard;
   try {
     const body = await req.json().catch(() => null);
+    if (body?.action === "updateSlot") {
+      const id = Number(body?.id);
+      if (!Number.isInteger(id) || id < 1) {
+        return NextResponse.json({ error: "id가 필요합니다." }, { status: 400 });
+      }
+      const updated = await updateDailySpecialDutySlot({
+        id,
+        course: body?.course ?? body?.slot?.course,
+        teeTime: body?.teeTime ?? body?.slot?.teeTime,
+      });
+      return NextResponse.json(await buildDailySpecialDutyPayload(updated.date));
+    }
+
     if (body?.action === "commitKind") {
       const date = String(body?.date || "");
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {

@@ -426,7 +426,7 @@ section("기존 이미지 export 회귀 문구");
   const menu = read("src/components/board/BoardImageExportMenu.tsx");
   assert(menu.includes("{busy ? \"준비 중…\" : \"이미지\"}"), "이미지 버튼 라벨");
   const page = read("src/app/manage/assignments/page.tsx");
-  assert(page.includes("직접편집"), "직접편집 토글 유지");
+  assert(page.includes("엑셀편집"), "엑셀편집 토글 유지");
   assert(page.includes("+ 추가팀"), "추가팀 유지");
 }
 

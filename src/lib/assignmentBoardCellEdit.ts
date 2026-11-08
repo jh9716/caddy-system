@@ -104,6 +104,7 @@ const LINKED_SPECIAL_KINDS = new Set<AutoAssignmentRow["kind"]>([
   "fiftyFourHole",
   "oneThree",
   "oneTwo",
+  "two",
   "twoThree",
   "oneMak",
   "fixed",
@@ -866,6 +867,64 @@ export function applyDirectCaddyEdit(
     if (broken) return broken;
   }
   return next;
+}
+
+export function applyDirectCaddyVacate(
+  draft: AssignmentDraft,
+  reservationKeyValue: string
+): DirectCaddyEditResult {
+  const resKey = String(reservationKeyValue || "");
+  const assigned = findTargetAssignment(draft, resKey);
+  if (!assigned) {
+    return {
+      ok: false,
+      code: "RESERVATION_NOT_FOUND",
+      message: DIRECT_EDIT_NOT_FOUND_MESSAGE,
+    };
+  }
+  if (isDirectEditProtected(assigned)) {
+    return {
+      ok: false,
+      code: "DIRECT_EDIT_PROTECTED",
+      message: DIRECT_EDIT_PROTECTED_MESSAGE,
+    };
+  }
+  if (isDirectEditVacant(assigned)) {
+    return {
+      ok: true,
+      action: "noop",
+      draft,
+      toast: "",
+      affectedKeys: [resKey],
+    };
+  }
+  const displaced = cloneCaddy(assigned.caddy);
+  const nextDraft = markEdited({
+    ...draft,
+    assignments: draft.assignments.map((row) =>
+      reservationKey(row.reservation) === resKey
+        ? {
+            ...cloneRow(row),
+            caddy: { ...VACANT_CADDY_PLACEHOLDER },
+            reason: `DIRECT_EDIT_VACATE(${row.reason})`,
+          }
+        : row
+    ),
+    sparesByShift: offerSpare(
+      draft.sparesByShift || [],
+      assignmentShift(assigned),
+      displaced
+    ),
+  });
+  const broken = rejectBrokenInvariants(nextDraft);
+  if (broken) return broken;
+  return {
+    ok: true,
+    action: "place",
+    draft: nextDraft,
+    toast: `${displaced.name} 빈 칸`,
+    affectedKeys: [resKey],
+  };
 }
 
 export function groupDirectEditCandidates(
