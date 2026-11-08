@@ -128,6 +128,7 @@ import {
   clearChatFastEntryCache,
   invalidateChatToken,
   placeholderChatRoomSummary,
+  readCachedChatRooms,
   readReusableChatToken,
   rememberChatRooms,
   rememberChatToken,
@@ -135,6 +136,7 @@ import {
 import {
   discardLegacyChatListPersist,
   shouldApplyChatRoomList,
+  shouldPaintSameSessionCachedRooms,
   shouldReuseChatSocket,
   shouldStartDirectoryHttpFallback,
 } from "@/lib/chatListEntry";
@@ -822,22 +824,28 @@ export default function ChatClient() {
     return data as TokenPayload;
   }, []);
 
-  const applyRooms = useCallback((next: RoomSummary[]) => {
-    if (
-      !shouldApplyChatRoomList({
-        source: "directory",
-        sessionEnded: isChatSessionEnded(),
-        authenticated: Boolean(tokenRef.current?.user?.userId),
-      })
-    ) {
-      return;
-    }
+  const applyRooms = useCallback((next: RoomSummary[], source: "directory" | "cache" = "directory") => {
+    const tokenUserId = tokenRef.current?.user?.userId;
+    const allowed =
+      source === "directory"
+        ? shouldApplyChatRoomList({
+            source: "directory",
+            sessionEnded: isChatSessionEnded(),
+            authenticated: Boolean(tokenUserId),
+          })
+        : shouldPaintSameSessionCachedRooms({
+            sessionEnded: isChatSessionEnded(),
+            tokenUserId,
+            cacheUserId: tokenUserId,
+            cachedRoomCount: next.length,
+          });
+    if (!allowed) return;
     const visible = next.filter((r) => isVisibleChatListRoom(r.type));
     setRooms(visible);
     roomsRef.current = visible;
     rememberChatRooms(tokenRef.current?.user?.userId, visible);
     if (!roomsShownRef.current) {
-      // Directory WS snapshot 과 HTTP 목록 중 먼저 정상 도착한 쪽에서 초기 UI 를 연다.
+      // 같은 세션 메모리(토큰 확인 후) 또는 Directory 선착 스냅샷. 멤버십은 Directory 가 덮어쓴다.
       roomsShownRef.current = true;
       setLoading(false);
       const t = entryTimingRef.current;
@@ -1624,6 +1632,18 @@ export default function ChatClient() {
           readPendingChatRoomId(sessionStorage);
         if (entryTimingRef.current.roomsReqAt == null) {
           entryTimingRef.current.roomsReqAt = chatEntryNow();
+        }
+        const cachedRooms = readCachedChatRooms<RoomSummary>(info.user.userId);
+        if (
+          cachedRooms &&
+          shouldPaintSameSessionCachedRooms({
+            sessionEnded: isChatSessionEnded(),
+            tokenUserId: info.user.userId,
+            cacheUserId: info.user.userId,
+            cachedRoomCount: cachedRooms.length,
+          })
+        ) {
+          applyRooms(cachedRooms, "cache");
         }
         connectDirectory(info);
         if (requested) {

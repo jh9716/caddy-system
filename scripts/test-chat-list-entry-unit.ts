@@ -6,6 +6,7 @@ import {
   setChatRoomsPersistStorage,
   shouldApplyChatRoomList,
   shouldPaintPersistedRooms,
+  shouldPaintSameSessionCachedRooms,
   shouldReuseChatSocket,
   shouldStartDirectoryHttpFallback,
   WS_CONNECTING,
@@ -81,6 +82,51 @@ ok(
 ok(
   shouldApplyChatRoomList({ source: "directory", sessionEnded: false, authenticated: true }) === true,
   "auth directory list applies"
+);
+ok(
+  shouldPaintSameSessionCachedRooms({
+    sessionEnded: false,
+    tokenUserId: 1,
+    cacheUserId: 1,
+    cachedRoomCount: 2,
+  }) === true,
+  "same-session cache paint after token"
+);
+ok(
+  shouldPaintSameSessionCachedRooms({
+    sessionEnded: true,
+    tokenUserId: 1,
+    cacheUserId: 1,
+    cachedRoomCount: 2,
+  }) === false,
+  "ended session no cache paint"
+);
+ok(
+  shouldPaintSameSessionCachedRooms({
+    sessionEnded: false,
+    tokenUserId: 2,
+    cacheUserId: 1,
+    cachedRoomCount: 2,
+  }) === false,
+  "other user cache blocked"
+);
+ok(
+  shouldPaintSameSessionCachedRooms({
+    sessionEnded: false,
+    tokenUserId: 1,
+    cacheUserId: 1,
+    cachedRoomCount: 0,
+  }) === false,
+  "empty cache not painted"
+);
+ok(
+  shouldPaintSameSessionCachedRooms({
+    sessionEnded: false,
+    tokenUserId: null,
+    cacheUserId: 1,
+    cachedRoomCount: 2,
+  }) === false,
+  "no token no cache paint"
 );
 ok(shouldReuseChatSocket(WS_OPEN) === true, "reuse OPEN");
 ok(shouldReuseChatSocket(WS_CONNECTING) === true, "reuse CONNECTING");
@@ -159,10 +205,22 @@ function finish() {
   const src = readFileSync("src/app/chat/ChatClient.tsx", "utf8");
   ok(/discardLegacyChatListPersist/.test(src), "startup wipes leftover persist");
   ok(!/readPersistedChatListForPaint/.test(src), "no persist paint helper");
-  ok(!/readCachedChatRooms/.test(src), "ChatClient does not paint memory cache as list");
+  ok(/shouldPaintSameSessionCachedRooms/.test(src) && /readCachedChatRooms/.test(src), "same-session cache after token");
+  ok(
+    /tokenRef\.current = info[\s\S]*readCachedChatRooms[\s\S]*connectDirectory\(info\)/.test(src),
+    "cache paint is after token and before Directory"
+  );
+  const layoutStart = src.indexOf("discardLegacyChatListPersist");
+  const layoutEnd = src.indexOf("useEffect(() => {", layoutStart);
+  const layout = layoutStart >= 0 && layoutEnd > layoutStart ? src.slice(layoutStart, layoutEnd) : "";
+  ok(layout.length > 0 && !/readCachedChatRooms/.test(layout), "layout does not paint memory cache before token");
   ok(/shouldApplyChatRoomList/.test(src), "directory-only apply gate");
   ok(/warmChatPhotoMediaConnection\(\);\s*\n\s*const cachedToken/.test(src), "Worker warm overlaps token POST");
   ok(/shouldStartDirectoryHttpFallback/.test(src) && /await fetchRoomsHttp/.test(src), "HTTP fallback always after token");
+  ok(
+    /shouldStartDirectoryHttpFallback\(\{[\s\S]*hasToken: Boolean\(info\.token\)/.test(src),
+    "HTTP still starts when cache may have painted"
+  );
   ok(/shouldReuseChatSocket\(dirRef/.test(src) && /shouldReuseChatSocket\(wsRef/.test(src), "visibility reuses OPEN sockets");
   ok(/clearChatFastEntryCache\(\)/.test(src), "401/403 wipe cache");
   ok(/입장 확인 중/.test(src), "PII-free loading copy");

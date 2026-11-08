@@ -64,6 +64,25 @@ export function shouldApplyChatRoomList(input: {
   return input.source === "directory";
 }
 
+/**
+ * Same-tab memory list after the current user's token is confirmed.
+ * Not membership. Directory WS/HTTP must still replace the rows.
+ */
+export function shouldPaintSameSessionCachedRooms(input: {
+  sessionEnded: boolean;
+  tokenUserId: number | null | undefined;
+  cacheUserId: number | null | undefined;
+  cachedRoomCount: number;
+}): boolean {
+  if (input.sessionEnded === true) return false;
+  const tokenUserId = Number(input.tokenUserId);
+  const cacheUserId = Number(input.cacheUserId);
+  if (!Number.isInteger(tokenUserId) || tokenUserId <= 0) return false;
+  if (!Number.isInteger(cacheUserId) || cacheUserId <= 0) return false;
+  if (tokenUserId !== cacheUserId) return false;
+  return input.cachedRoomCount > 0;
+}
+
 export function shouldPaintPersistedRooms(_input?: {
   sessionEnded: boolean;
   roomCount: number;
