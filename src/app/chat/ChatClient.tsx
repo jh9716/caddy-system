@@ -128,17 +128,15 @@ import {
   clearChatFastEntryCache,
   invalidateChatToken,
   placeholderChatRoomSummary,
-  readCachedChatRooms,
-  readPersistedChatListForPaint,
   readReusableChatToken,
   rememberChatRooms,
   rememberChatToken,
 } from "@/lib/chatFastEntry";
 import {
-  shouldAwaitDirectoryHttp,
-  shouldDropPersistedRoomsOnToken,
-  shouldPaintPersistedRooms,
+  discardLegacyChatListPersist,
+  shouldApplyChatRoomList,
   shouldReuseChatSocket,
+  shouldStartDirectoryHttpFallback,
 } from "@/lib/chatListEntry";
 import {
   canProfileMention,
@@ -825,6 +823,15 @@ export default function ChatClient() {
   }, []);
 
   const applyRooms = useCallback((next: RoomSummary[]) => {
+    if (
+      !shouldApplyChatRoomList({
+        source: "directory",
+        sessionEnded: isChatSessionEnded(),
+        authenticated: Boolean(tokenRef.current?.user?.userId),
+      })
+    ) {
+      return;
+    }
     const visible = next.filter((r) => isVisibleChatListRoom(r.type));
     setRooms(visible);
     roomsRef.current = visible;
@@ -1519,19 +1526,9 @@ export default function ChatClient() {
   connectSocketRef.current = connectSocket;
 
   useLayoutEffect(() => {
-    const persisted = readPersistedChatListForPaint<RoomSummary>();
-    if (
-      !persisted ||
-      !shouldPaintPersistedRooms({
-        sessionEnded: isChatSessionEnded(),
-        roomCount: persisted.rooms.length,
-      })
-    ) {
-      return;
-    }
-    applyRooms(persisted.rooms);
+    discardLegacyChatListPersist();
     warmChatPhotoMediaConnection();
-  }, [applyRooms]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1573,6 +1570,14 @@ export default function ChatClient() {
         tokenRef.current = info;
         setTokenInfo(info);
         connectDirectory(info);
+        if (
+          shouldStartDirectoryHttpFallback({
+            sessionEnded: isChatSessionEnded(),
+            hasToken: Boolean(info.token),
+          })
+        ) {
+          void fetchRoomsHttp(info.token).catch(() => undefined);
+        }
         const room = roomRef.current;
         if (room) void connectSocket(info, room.roomId);
       });
@@ -1611,17 +1616,6 @@ export default function ChatClient() {
           }
           return;
         }
-        const persistedUserId = readPersistedChatListForPaint<RoomSummary>()?.userId;
-        if (
-          shouldDropPersistedRoomsOnToken({
-            persistedUserId,
-            tokenUserId: info.user.userId,
-          })
-        ) {
-          clearChatFastEntryCache();
-          roomsShownRef.current = false;
-          setRooms([]);
-        }
         tokenRef.current = info;
         setTokenInfo(info);
         rememberChatToken(info);
@@ -1631,8 +1625,6 @@ export default function ChatClient() {
         if (entryTimingRef.current.roomsReqAt == null) {
           entryTimingRef.current.roomsReqAt = chatEntryNow();
         }
-        const cachedRooms = readCachedChatRooms<RoomSummary>(info.user.userId);
-        if (cachedRooms) applyRooms(cachedRooms); // persist/메모리 목록 표시, 아래에서 Directory 가 재검증
         connectDirectory(info);
         if (requested) {
           void fetchTargetedRoom(info.token, requested);
@@ -1660,14 +1652,15 @@ export default function ChatClient() {
         })();
         try {
           if (
-            shouldAwaitDirectoryHttp({
-              paintedRoomCount: roomsRef.current.length,
+            shouldStartDirectoryHttpFallback({
+              sessionEnded: isChatSessionEnded(),
+              hasToken: Boolean(info.token),
             })
           ) {
             await fetchRoomsHttp(info.token);
           }
         } catch {
-          // Directory WS is the realtime source; HTTP is a same-session fallback.
+          // Directory WS is the realtime source; HTTP is the fallback when WS is slow or fails.
         }
       } catch (e) {
         if (!cancelled) {

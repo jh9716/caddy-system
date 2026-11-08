@@ -1,15 +1,13 @@
 import { readFileSync } from "node:fs";
 import {
   CHAT_ROOMS_STORAGE_KEY,
-  clearPersistedChatRooms,
-  parsePersistedChatRooms,
-  readPersistedChatRooms,
+  discardLegacyChatListPersist,
+  hasLegacyChatListPersist,
   setChatRoomsPersistStorage,
-  shouldAwaitDirectoryHttp,
-  shouldDropPersistedRoomsOnToken,
+  shouldApplyChatRoomList,
   shouldPaintPersistedRooms,
   shouldReuseChatSocket,
-  writePersistedChatRooms,
+  shouldStartDirectoryHttpFallback,
   WS_CONNECTING,
   WS_OPEN,
 } from "../src/lib/chatListEntry";
@@ -17,7 +15,6 @@ import {
   clearChatFastEntryCache,
   prefetchChatTokenIfNeeded,
   readCachedChatRooms,
-  readPersistedChatListForPaint,
   rememberChatRooms,
   rememberChatToken,
 } from "../src/lib/chatFastEntry";
@@ -49,17 +46,18 @@ function memoryStorage() {
 
 const room = (id: string) => ({
   roomId: id,
-  name: id === "all" ? "전체 채팅방" : "방",
+  name: id === "all" ? "전체 채팅방" : "비공개 방",
   type: id === "all" ? ("ALL" as const) : ("CUSTOM" as const),
   ownerUserId: null,
   memberCount: 2,
   lastMessageSeq: 1,
-  lastMessagePreview: "안녕",
+  lastMessagePreview: "안녕 민감 미리보기",
   lastMessageAt: "2026-11-08T00:00:00.000Z",
-  lastSenderName: "A",
+  lastSenderName: "홍길동",
   lastSenderRole: "caddy",
   unread: 0,
   createdAt: "2026-11-01T00:00:00.000Z",
+  peerDisplayName: "상대방",
 });
 
 clearChatSessionEnded();
@@ -67,70 +65,120 @@ clearChatFastEntryCache();
 const store = memoryStorage();
 setChatRoomsPersistStorage(store);
 
-ok(shouldPaintPersistedRooms({ sessionEnded: false, roomCount: 2 }) === true, "paint when rooms exist");
-ok(shouldPaintPersistedRooms({ sessionEnded: true, roomCount: 2 }) === false, "no paint after logout");
-ok(shouldPaintPersistedRooms({ sessionEnded: false, roomCount: 0 }) === false, "no paint empty");
-ok(shouldDropPersistedRoomsOnToken({ persistedUserId: 1, tokenUserId: 2 }) === true, "other user dropped");
-ok(shouldDropPersistedRoomsOnToken({ persistedUserId: 1, tokenUserId: 1 }) === false, "same user kept");
-ok(shouldDropPersistedRoomsOnToken({ persistedUserId: null, tokenUserId: 1 }) === false, "no persist");
+ok(shouldPaintPersistedRooms({ sessionEnded: false, roomCount: 2 }) === false, "never paint persist");
+ok(
+  shouldApplyChatRoomList({ source: "cache", sessionEnded: false, authenticated: true }) === false,
+  "cache is not membership"
+);
+ok(
+  shouldApplyChatRoomList({ source: "directory", sessionEnded: false, authenticated: false }) === false,
+  "unauthenticated directory ignored"
+);
+ok(
+  shouldApplyChatRoomList({ source: "directory", sessionEnded: true, authenticated: true }) === false,
+  "ended session no list"
+);
+ok(
+  shouldApplyChatRoomList({ source: "directory", sessionEnded: false, authenticated: true }) === true,
+  "auth directory list applies"
+);
 ok(shouldReuseChatSocket(WS_OPEN) === true, "reuse OPEN");
 ok(shouldReuseChatSocket(WS_CONNECTING) === true, "reuse CONNECTING");
 ok(shouldReuseChatSocket(2) === false, "CLOSING not reused");
 ok(shouldReuseChatSocket(3) === false, "CLOSED not reused");
-ok(shouldAwaitDirectoryHttp({ paintedRoomCount: 0 }) === true, "cold awaits HTTP");
-ok(shouldAwaitDirectoryHttp({ paintedRoomCount: 3 }) === false, "painted skips HTTP");
 
-ok(parsePersistedChatRooms({ v: 1, userId: 1, rooms: [room("all")], token: "secret" }) === null, "token field rejected");
-ok(parsePersistedChatRooms({ v: 1, userId: 1, rooms: [{ roomId: "all" }] }) === null, "typeless row rejected");
-ok(parsePersistedChatRooms({ v: 1, userId: 1, rooms: [room("all")] })?.rooms.length === 1, "valid persist");
+ok(
+  shouldStartDirectoryHttpFallback({ sessionEnded: false, hasToken: true }) === true,
+  "HTTP fallback with token"
+);
+ok(
+  shouldStartDirectoryHttpFallback({
+    sessionEnded: false,
+    hasToken: true,
+    hasCachedRooms: true,
+    directoryWsSlow: true,
+  }) === true,
+  "WS delay still starts HTTP"
+);
+ok(
+  shouldStartDirectoryHttpFallback({
+    sessionEnded: false,
+    hasToken: true,
+    directoryWsFailed: true,
+  }) === true,
+  "WS fail still starts HTTP"
+);
+ok(
+  shouldStartDirectoryHttpFallback({ sessionEnded: true, hasToken: true }) === false,
+  "logout skips HTTP"
+);
+ok(
+  shouldStartDirectoryHttpFallback({ sessionEnded: false, hasToken: false }) === false,
+  "no token skips HTTP"
+);
+
+const leftover = JSON.stringify({
+  v: 1,
+  userId: 1,
+  rooms: [room("all"), room("room_aaaaaaaaaaaaaaaa")],
+});
+store.setItem(CHAT_ROOMS_STORAGE_KEY, leftover);
+ok(hasLegacyChatListPersist() === true, "legacy v1 present");
+ok(leftover.includes("안녕 민감 미리보기") && leftover.includes("상대방"), "legacy held PII");
+discardLegacyChatListPersist();
+ok(hasLegacyChatListPersist() === false, "legacy PII wiped");
+ok(store.getItem(CHAT_ROOMS_STORAGE_KEY) === null, "storage key removed");
 
 rememberChatRooms(1, [room("all"), room("room_aaaaaaaaaaaaaaaa")]);
-ok(readCachedChatRooms(1)?.length === 2, "memory rooms");
-ok(readPersistedChatRooms()?.userId === 1, "persist written");
-ok(!String(store.getItem(CHAT_ROOMS_STORAGE_KEY) || "").includes("token"), "persist json has no token");
-
-const json = store.getItem(CHAT_ROOMS_STORAGE_KEY);
-clearChatFastEntryCache();
-ok(readPersistedChatRooms() === null, "logout/clear wipes persist");
-ok(json, "snapshot kept for hydrate");
-store.setItem(CHAT_ROOMS_STORAGE_KEY, json!);
-ok(readCachedChatRooms(1)?.length === 2, "hydrate persist after memory death");
-ok(readCachedChatRooms(2) === null, "other user cannot read persist");
-ok(readPersistedChatListForPaint()?.userId === 1, "paint helper reads persist");
+ok(readCachedChatRooms(1)?.length === 2, "same-tab memory rooms");
+ok(store.getItem(CHAT_ROOMS_STORAGE_KEY) === null, "rememberChatRooms does not persist");
+ok(readCachedChatRooms(2) === null, "other user no memory rooms");
 
 applyChatSessionResetReason("logout");
-ok(readPersistedChatListForPaint() === null, "ended session no paint");
+ok(readCachedChatRooms(1) === null, "logout: no cached rooms");
+ok(
+  shouldApplyChatRoomList({ source: "directory", sessionEnded: true, authenticated: true }) === false,
+  "logout: list apply blocked"
+);
 clearChatFastEntryCache();
-ok(store.getItem(CHAT_ROOMS_STORAGE_KEY) === null, "logout clear removes storage key");
-ok(readPersistedChatRooms() === null, "persist gone after clear");
+ok(store.getItem(CHAT_ROOMS_STORAGE_KEY) === null, "logout clear keeps storage empty");
 clearChatSessionEnded();
 
 rememberChatRooms(1, [room("all")]);
 rememberChatToken({ token: "x", exp: Math.floor(Date.now() / 1000) + 1800, user: { userId: 2 } });
-ok(readCachedChatRooms(1) === null, "user switch drops memory rooms");
-ok(readPersistedChatRooms() === null, "user switch drops persist");
+ok(readCachedChatRooms(1) === null, "A→B drops A rooms");
+ok(readCachedChatRooms(2) === null, "B has no A leftover rooms");
+clearChatFastEntryCache();
 
-writePersistedChatRooms(3, [room("all")]);
-ok(readPersistedChatRooms()?.userId === 3, "direct write");
-clearPersistedChatRooms();
-ok(readPersistedChatRooms() === null, "direct clear");
+store.setItem(CHAT_ROOMS_STORAGE_KEY, leftover);
+rememberChatRooms(1, [room("all")]);
+ok(store.getItem(CHAT_ROOMS_STORAGE_KEY) === null, "writing memory cache discards leftover persist");
 clearChatFastEntryCache();
 
 function finish() {
   const src = readFileSync("src/app/chat/ChatClient.tsx", "utf8");
-  ok(/readPersistedChatListForPaint/.test(src) && /useLayoutEffect/.test(src), "layout paints persist");
+  ok(/discardLegacyChatListPersist/.test(src), "startup wipes leftover persist");
+  ok(!/readPersistedChatListForPaint/.test(src), "no persist paint helper");
+  ok(!/readCachedChatRooms/.test(src), "ChatClient does not paint memory cache as list");
+  ok(/shouldApplyChatRoomList/.test(src), "directory-only apply gate");
   ok(/warmChatPhotoMediaConnection\(\);\s*\n\s*const cachedToken/.test(src), "Worker warm overlaps token POST");
-  ok(/shouldAwaitDirectoryHttp/.test(src), "HTTP skipped when list already painted");
+  ok(/shouldStartDirectoryHttpFallback/.test(src) && /await fetchRoomsHttp/.test(src), "HTTP fallback always after token");
   ok(/shouldReuseChatSocket\(dirRef/.test(src) && /shouldReuseChatSocket\(wsRef/.test(src), "visibility reuses OPEN sockets");
-  ok(/clearChatFastEntryCache\(\)/.test(src), "401/403 wipe persist");
+  ok(/clearChatFastEntryCache\(\)/.test(src), "401/403 wipe cache");
+  ok(/입장 확인 중/.test(src), "PII-free loading copy");
   ok(!/localStorage\.setItem\([^)]*token/i.test(src) && !/sessionStorage\.setItem\([^)]*token/i.test(src), "no token persistence");
+  ok(!/localStorage\.setItem\(CHAT_ROOMS_STORAGE_KEY/.test(src), "ChatClient does not persist rooms");
   ok(!/skip.*session-check/i.test(src), "client does not skip session-check");
 
   const chrome = readFileSync("src/components/manage/AppChrome.tsx", "utf8");
   ok(/prefetchChatTokenIfNeeded/.test(chrome) && /warmChatPhotoMediaConnection/.test(chrome), "shell warms Worker and token");
+  const fast = readFileSync("src/lib/chatFastEntry.ts", "utf8");
+  ok(!/writePersistedChatRooms/.test(fast) && /discardLegacyChatListPersist/.test(fast), "fast entry does not persist rooms");
   const worker = readFileSync("cloudflare/verthill-chat/src/index.ts", "utf8");
   ok(/assertChatSessionCurrent/.test(worker), "Worker session-check unchanged");
   ok(/handleParkedResume/.test(worker), "Worker resume unchanged");
+  const listLib = readFileSync("src/lib/chatListEntry.ts", "utf8");
+  ok(!/lastMessagePreview/.test(listLib) && !/peerDisplayName/.test(listLib), "list helper stores no PII fields");
 
   console.log(`${pass} passed, ${fail} failed`);
   if (fail) process.exit(1);

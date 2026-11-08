@@ -1,16 +1,13 @@
 /**
  * 채팅 빠른 진입 (P0 + P1 목록).
- * - 토큰은 같은 탭 메모리만. localStorage 에 토큰을 쓰지 않는다.
- * - 방 목록 행은 메모리 + localStorage(userId 키). 로그아웃/계정전환 시 즉시 폐기.
+ * - 토큰은 같은 탭 메모리만. localStorage 에 토큰·목록을 쓰지 않는다.
+ * - 방 목록은 Directory WS/HTTP 응답만 화면에 쓴다. 캐시는 멤버십이 아니다.
+ * - 로그인/로그아웃/계정전환 시 즉시 폐기. 레거시 v1 persist 도 삭제한다.
  * - 재사용 토큰이 Worker 에서 거절되면 호출측이 invalidate 후 새로 발급한다 (권한 검사는 항상 Worker/서버).
  */
 import { isChatSessionEnded, subscribeChatSessionReset } from "@/lib/chatSessionReset";
 import { isAllRoomId, isDmRoomId } from "@/lib/chatRooms";
-import {
-  clearPersistedChatRooms,
-  readPersistedChatRooms,
-  writePersistedChatRooms,
-} from "@/lib/chatListEntry";
+import { discardLegacyChatListPersist } from "@/lib/chatListEntry";
 
 export const CHAT_TOKEN_REUSE_MARGIN_SEC = 120;
 export const CHAT_OPEN_ROOM_EVENT = "vh-chat-open-room";
@@ -36,7 +33,7 @@ export function clearChatFastEntryCache(): void {
   cache.token = null;
   cache.rooms = null;
   cache.roomsUserId = null;
-  clearPersistedChatRooms();
+  discardLegacyChatListPersist();
 }
 
 export function isReusableChatToken(
@@ -68,7 +65,7 @@ export function rememberChatToken(info: TokenLike | null | undefined): void {
   ) {
     cache.rooms = null;
     cache.roomsUserId = null;
-    clearPersistedChatRooms();
+    discardLegacyChatListPersist();
   }
   cache.token = info;
 }
@@ -79,35 +76,18 @@ export function invalidateChatToken(): void {
 
 export function rememberChatRooms<R>(userId: number | null | undefined, rooms: R[]): void {
   ensureSubscribed();
+  discardLegacyChatListPersist();
   if (!userId || isChatSessionEnded()) return;
   cache.rooms = rooms.slice();
   cache.roomsUserId = userId;
-  writePersistedChatRooms(userId, rooms);
 }
 
 export function readCachedChatRooms<R>(userId: number | null | undefined): R[] | null {
   ensureSubscribed();
+  discardLegacyChatListPersist();
   if (!userId || isChatSessionEnded()) return null;
-  if (cache.roomsUserId === userId && cache.rooms) return (cache.rooms as R[]).slice();
-  const persisted = readPersistedChatRooms(isChatSessionEnded());
-  if (!persisted || persisted.userId !== userId) return null;
-  cache.rooms = persisted.rooms.slice();
-  cache.roomsUserId = userId;
+  if (cache.roomsUserId !== userId || !cache.rooms) return null;
   return (cache.rooms as R[]).slice();
-}
-
-/** WebView 재시작용. 토큰 없이 마지막 본인 목록만. session ended 이면 없음. */
-export function readPersistedChatListForPaint<R>(): { userId: number; rooms: R[] } | null {
-  ensureSubscribed();
-  if (isChatSessionEnded()) return null;
-  if (cache.rooms && cache.roomsUserId) {
-    return { userId: cache.roomsUserId, rooms: (cache.rooms as R[]).slice() };
-  }
-  const persisted = readPersistedChatRooms(isChatSessionEnded());
-  if (!persisted) return null;
-  cache.rooms = persisted.rooms.slice();
-  cache.roomsUserId = persisted.userId;
-  return { userId: persisted.userId, rooms: persisted.rooms.slice() as R[] };
 }
 
 /** Best-effort idle prefetch. Full payload only; never logs the token. */
