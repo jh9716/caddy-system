@@ -17,7 +17,9 @@ import {
   chatWsFailureCode,
   diagnoseChatWsFailure,
   formatChatClientError,
+  isChatWsDiagnoseNoise,
   parseChatClientErrorCode,
+  resolveChatWsOpenWait,
   sanitizeChatErrorCode,
 } from "../src/lib/chatDmClient";
 import { sortChatRoomSummaries } from "../src/lib/chatRooms";
@@ -173,6 +175,16 @@ section("DM client error codes");
   assert(chatWsFailureCode({ closeCode: 4008 }) === "stale_session", "close 4008 is stale_session");
   assert(chatWsFailureCode({ timeout: true }) === "ws_timeout", "timeout code");
   assert(chatWsDiagnoseUrl("wss://chat.example/ws?room=dm_8_40&token=abc")?.startsWith("https://") === true, "diagnose uses http");
+  assert(isChatWsDiagnoseNoise("upgrade_required") === true, "426 body is probe noise");
+  assert(isChatWsDiagnoseNoise("unknown", 426) === true, "426 status is probe noise");
+  assert(isChatWsDiagnoseNoise("room_forbidden") === false, "real worker errors stay");
+  assert(chatWsFailureCode({ httpError: "upgrade_required", closeCode: 1006 }) === "ws_1006", "noise does not override close code");
+  assert(resolveChatWsOpenWait({ event: "error", readyState: 0 }).action === "hold", "error while CONNECTING waits for open");
+  assert(resolveChatWsOpenWait({ event: "diagnose", readyState: 0, diagnoseCode: "upgrade_required" }).action === "hold", "upgrade_required diagnose while CONNECTING is ignored");
+  assert(resolveChatWsOpenWait({ event: "diagnose", readyState: 1, diagnoseCode: "upgrade_required" }).action === "success", "OPEN wins over late diagnose");
+  assert(resolveChatWsOpenWait({ event: "open", readyState: 1 }).action === "success", "open is success");
+  assert(resolveChatWsOpenWait({ event: "close", readyState: 3, closeCode: 1006 }).action === "fail", "closed socket fails");
+  assert(resolveChatWsOpenWait({ event: "timeout", readyState: 0 }).code === "ws_timeout", "timeout code");
 }
 
 function runDmDiagnoseTests() {
@@ -196,6 +208,17 @@ function runDmDiagnoseTests() {
     );
   }).then((fallback) => {
     assert(fallback === "ws_1006", "diagnose falls back to close code");
+    return diagnoseChatWsFailure(
+      "wss://chat.example/ws?room=dm_8_40&token=hidden",
+      1006,
+      async () =>
+        new Response(JSON.stringify({ error: "upgrade_required" }), {
+          status: 426,
+          headers: { "content-type": "application/json" },
+        })
+    );
+  }).then((ignored) => {
+    assert(ignored === "ws_1006", "426 upgrade_required is not the WS failure");
   });
 }
 
@@ -395,8 +418,12 @@ section("android back / source");
   assert(startDmBlock.includes("CHAT_DM_OPEN_FAILED"), "open failure stays user-safe");
   assert(!startDmBlock.includes("rollbackOptimisticChatRoom"), "directory refresh cannot hide created DM");
   assert(client.includes("waitForOpen: true"), "openRoom waits for WS authorize");
+  assert(client.includes("resolveChatWsOpenWait"), "open wait ignores error-before-open");
+  assert(client.includes("chatWsReadyStateOpen(wsRef.current?.readyState)"), "DM error not shown if socket is open");
+  assert(client.includes("if (ws.readyState === WebSocket.OPEN) return;"), "error after open does not drop connected");
   assert(client.includes("data-chat-error-code"), "error code is inspectable");
   assert(client.includes("diagnoseChatWsFailure"), "failed WS is diagnosed without token logs");
+  assert(!client.includes('finish({ ok: false, code })'), "waitForOpen no longer fails on raw diagnose");
   assert(api.includes("repaired: data?.repaired === true"), "API forwards repair flag");
   assert(client.includes("vh-chat-date"), "date divider");
   assert(client.includes("vh-chat-tombstone"), "compact tombstone");

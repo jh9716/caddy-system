@@ -36,12 +36,53 @@ export function chatWsFailureCode(input: {
 }): string {
   if (input.timeout) return "ws_timeout";
   const http = sanitizeChatErrorCode(input.httpError);
-  if (http !== "unknown") return http;
+  if (http !== "unknown" && !isChatWsDiagnoseNoise(http)) return http;
   if (input.closeCode === 4008) return "stale_session";
   if (Number.isInteger(input.closeCode) && Number(input.closeCode) > 0) {
     return `ws_${input.closeCode}`;
   }
   return "ws_error";
+}
+
+/**
+ * GET on the WS URL has no Upgrade header. The Worker then returns 426
+ * `{error:"upgrade_required"}` even when the socket itself is fine.
+ * That is probe noise, not the handshake result.
+ */
+export function isChatWsDiagnoseNoise(error: unknown, httpStatus?: number): boolean {
+  if (httpStatus === 426) return true;
+  return sanitizeChatErrorCode(error) === "upgrade_required";
+}
+
+/**
+ * Android often fires `error` while CONNECTING, then `open`.
+ * OPEN always wins. error/diagnose while CONNECTING must not fail the wait.
+ */
+export function resolveChatWsOpenWait(input: {
+  event: "open" | "error" | "close" | "timeout" | "diagnose";
+  readyState: number;
+  diagnoseCode?: string;
+  closeCode?: number;
+}): { action: "success" | "fail" | "hold"; code?: string } {
+  if (input.readyState === 1) return { action: "success" };
+  if (input.event === "open") return { action: "success" };
+  if (input.event === "timeout") return { action: "fail", code: "ws_timeout" };
+  if (input.readyState === 0 && (input.event === "error" || input.event === "diagnose")) {
+    return { action: "hold" };
+  }
+  const diagnose = isChatWsDiagnoseNoise(input.diagnoseCode) ? undefined : input.diagnoseCode;
+  return {
+    action: "fail",
+    code: chatWsFailureCode({
+      httpError: diagnose,
+      closeCode: input.closeCode,
+      timeout: false,
+    }),
+  };
+}
+
+export function chatWsReadyStateOpen(readyState: number | null | undefined): boolean {
+  return readyState === 1;
 }
 
 export async function diagnoseChatWsFailure(
@@ -58,6 +99,9 @@ export async function diagnoseChatWsFailure(
         signal: AbortSignal.timeout(2500),
       });
       const data = (await res.json().catch(() => null)) as { error?: unknown } | null;
+      if (isChatWsDiagnoseNoise(data?.error, res.status)) {
+        return chatWsFailureCode({ closeCode });
+      }
       const fromBody = sanitizeChatErrorCode(data?.error);
       if (fromBody !== "unknown") return fromBody;
     } catch {
