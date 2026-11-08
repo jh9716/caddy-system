@@ -146,6 +146,11 @@ function sendJson(ws: WebSocket, data: unknown) {
   ws.send(JSON.stringify(data));
 }
 
+/** Latest session+membership passed. Never include PII. Always before history. */
+function sendAuthorized(ws: WebSocket) {
+  sendJson(ws, { type: "authorized" });
+}
+
 function directoryStub(env: Env) {
   return env.CHAT_DIRECTORY.get(env.CHAT_DIRECTORY.idFromName(DIRECTORY_NAME));
 }
@@ -735,6 +740,7 @@ export class ChatRoom extends DurableObject<Env> {
     const attach: SocketAttach = { claims: authorized.claims, roomId: authorized.room };
     server.serializeAttachment(attach);
     void this.rememberRoomId(authorized.room);
+    sendAuthorized(server);
     this.sendHistory(server, authorized.claims.userId, null, HISTORY_LIMIT);
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -1016,8 +1022,8 @@ export class ChatRoom extends DurableObject<Env> {
   }
 
   /**
-   * Parked resume: fail-closed session-check + membership, then latest history.
-   * History is not sent until both checks pass.
+   * Parked resume: fail-closed session-check + membership, then authorized, then history.
+   * authorized/history are not sent until both checks pass.
    */
   private async handleParkedResume(ws: WebSocket, attach: SocketAttach): Promise<void> {
     if (ws.readyState !== WebSocket.OPEN) return;
@@ -1047,6 +1053,7 @@ export class ChatRoom extends DurableObject<Env> {
     }
     const still = this.readAttach(ws);
     if (!still) return;
+    sendAuthorized(ws);
     this.sendHistory(ws, still.claims.userId, null, HISTORY_LIMIT);
   }
 

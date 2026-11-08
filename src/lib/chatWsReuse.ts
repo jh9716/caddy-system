@@ -220,7 +220,8 @@ export function canResumeParked(
 
 /**
  * Frames received while waiting for parked resume history.
- * history → apply; error → drop socket; message/sync → hold until history; other → ignore for the wait.
+ * history → apply; error → drop socket; message/sync → hold until history;
+ * authorized → other (paint cache in the message handler, wait still needs history).
  */
 export function parkedResumeClientGate(type: string): "history" | "fail" | "hold" | "other" {
   if (type === "history") return "history";

@@ -12,9 +12,12 @@ export const CHAT_ENTRY_TIMING_STEPS = [
   "nav_to_ui", // 1-보조. 문서 navigation 시작 → 초기 UI (전체 로드 진입일 때만 의미)
   "token", // 2. 토큰 요청 → 응답
   "rooms_to_shown", // 3. 목록 요청 시작 → 첫 정상 목록 반영
-  "room_select_to_ws_open", // 4. new-WS 101 after DO authorizeSocket (not resume)
-  "room_select_to_first_paint", // 4b. cache after 101, or first history (resume has no earlier auth frame)
-  "ws_open_to_history", // 5. server history verified (latest page)
+  "room_select_to_ws_open", // 4. new-WS 101 (handshake; not latest membership for resume)
+  "room_select_to_authorized", // 4a. Worker authorized frame (session + membership)
+  "room_select_to_first_paint", // 4b. setState of cache after authorized, or first history
+  "room_select_to_cache_shown", // 4c. rAF after cache setState (closest to pixels)
+  "room_select_to_history", // 5a. click → history frame
+  "ws_open_to_history", // 5. new-WS open → history (legacy)
   "push_nav_to_room", // 6. 알림/딥링크 진입: navigation 시작 → 대상 방 메시지 표시 (클릭 시각 자체는 측정 불가)
 ] as const;
 export type ChatEntryTimingStep = (typeof CHAT_ENTRY_TIMING_STEPS)[number];
@@ -81,6 +84,35 @@ export function recordChatEntryTiming(
 
 export function readChatEntryTimings(): ChatEntryTimingMark[] {
   return [...(globalThis.__CHAT_ENTRY_TIMING__ || [])];
+}
+
+/**
+ * Closest client stand-in for "pixels on screen" after cache setState.
+ * Double rAF ≈ after paint. Does not delay history. No identifiers.
+ */
+export function scheduleChatCacheShown(
+  startedAt: number,
+  opts?: {
+    now?: () => number;
+    raf?: ((cb: () => void) => unknown) | null;
+  }
+): void {
+  const mark = () => {
+    const now = opts?.now ? opts.now() : chatEntryNow();
+    recordChatEntryTiming("room_select_to_cache_shown", startedAt, now);
+  };
+  const raf = opts?.raf;
+  const native =
+    typeof raf === "function"
+      ? raf
+      : typeof requestAnimationFrame === "function"
+        ? (cb: () => void) => requestAnimationFrame(cb)
+        : null;
+  if (!native) {
+    mark();
+    return;
+  }
+  native(() => native(mark));
 }
 
 /** 늦게 온 알림설정 응답이 사용자가 바꾼(저장 중/저장 완료) 방 설정을 덮지 않게 병합. */

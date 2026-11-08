@@ -144,6 +144,20 @@ export type HistoryEvent = {
   oldestSeq: number | null;
 };
 
+/**
+ * Membership + session already passed. No room id, token, or message body.
+ * Always sent before the following `{type:"history"}` on new WS and parked resume.
+ */
+export type AuthorizedEvent = {
+  type: "authorized";
+};
+
+export function parseAuthorized(raw: unknown): AuthorizedEvent | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  if (String((raw as { type?: unknown }).type || "") !== "authorized") return null;
+  return { type: "authorized" };
+}
+
 export type ErrorEvent = {
   type: "error";
   code: string;
