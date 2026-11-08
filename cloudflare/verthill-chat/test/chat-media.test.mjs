@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+
+const require = createRequire(import.meta.url);
 
 const root = dirname(fileURLToPath(import.meta.url));
 const index = readFileSync(join(root, "../src/index.ts"), "utf8");
@@ -63,4 +66,37 @@ test("production wrangler binds CHAT_MEDIA to verthill-chat-media", () => {
   assert.match(wrangler, /"binding":\s*"CHAT_MEDIA"/);
   assert.match(wrangler, /"bucket_name":\s*"verthill-chat-media"/);
   assert.doesNotMatch(wrangler, /"CHAT_MEDIA_SECRET"\s*:/);
+});
+
+test("production wrangler keep_vars is top-level true; name/R2/DO/migrations unchanged", () => {
+  assert.match(wrangler, /"keep_vars"\s*:\s*true/);
+  const previewBlock = wrangler.slice(wrangler.indexOf('"env"'));
+  assert.doesNotMatch(previewBlock, /"keep_vars"/, "keep_vars is not inside env.preview");
+
+  const { unstable_readConfig } = require("wrangler");
+  const configPath = join(root, "../wrangler.jsonc");
+  const prod = unstable_readConfig({ config: configPath });
+  const preview = unstable_readConfig({ config: configPath, env: "preview" });
+
+  assert.equal(prod.keep_vars, true, "parsed production keep_vars");
+  assert.equal(prod.name, "verthill-chat");
+  assert.equal(preview.name, "verthill-chat-preview");
+  assert.equal(preview.keep_vars, true, "top-level keep_vars applies to --env preview parse");
+  assert.equal(preview.vars?.CHAT_TOKEN_AUDIENCE, "preview");
+
+  const prodR2 = (prod.r2_buckets || []).map((b) => b.bucket_name);
+  const prevR2 = (preview.r2_buckets || []).map((b) => b.bucket_name);
+  assert.deepEqual(prodR2, ["verthill-chat-media"]);
+  assert.deepEqual(prevR2, ["verthill-chat-media-preview"]);
+
+  const prodDo = (prod.durable_objects?.bindings || []).map((b) => `${b.name}:${b.class_name}`);
+  const prevDo = (preview.durable_objects?.bindings || []).map((b) => `${b.name}:${b.class_name}`);
+  assert.deepEqual(prodDo, ["CHAT_ROOM:ChatRoom", "CHAT_DIRECTORY:ChatDirectory"]);
+  assert.deepEqual(prevDo, ["CHAT_ROOM:ChatRoom", "CHAT_DIRECTORY:ChatDirectory"]);
+  assert.equal((preview.durable_objects?.bindings || []).some((b) => b.script_name), false);
+
+  const tags = (prod.migrations || []).map((m) => m.tag);
+  assert.deepEqual(tags, ["v1", "v2"]);
+  const previewTags = (preview.migrations || []).map((m) => m.tag);
+  assert.deepEqual(previewTags, ["v1", "v2"]);
 });

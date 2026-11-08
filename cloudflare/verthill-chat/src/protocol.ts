@@ -628,6 +628,19 @@ export function validateIncomingHistory(raw: unknown):
   return { ok: true, beforeSeq, limit: Math.min(HISTORY_PAGE_MAX, rawLimit) };
 }
 
+export function validateIncomingResume(raw: unknown):
+  | { ok: true }
+  | { ok: false; code: string; message: string } {
+  if (raw == null || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ok: false, code: "invalid_payload", message: "JSON object required" };
+  }
+  const input = raw as Record<string, unknown>;
+  if (input.type !== "resume") {
+    return { ok: false, code: "invalid_type", message: "type must be resume" };
+  }
+  return { ok: true };
+}
+
 export function parseOptionalSeq(raw: unknown): number | null {
   if (raw == null || raw === "") return null;
   const seq = Number(raw);

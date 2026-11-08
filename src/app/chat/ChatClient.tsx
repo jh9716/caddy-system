@@ -212,6 +212,19 @@ import {
   type ChatSocketOpenResult,
 } from "@/lib/chatDmClient";
 import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
+import {
+  applyWsReuseRuntimeEnabled,
+  canResumeParked,
+  fetchChatWsReuseRuntimeEnabled,
+  isParkExpired,
+  parkedResumeClientGate,
+  shouldParkChatWsReuse,
+  CHAT_WS_RESUME_TIMEOUT_MS,
+  CHAT_WS_REUSE_RUNTIME_POLL_MS,
+  CHAT_WS_REUSE_TTL_MS,
+  resolveChatWsReuse,
+  type ParkedSocketMeta,
+} from "@/lib/chatWsReuse";
 
 type TokenPayload = {
   token: string;
@@ -385,6 +398,143 @@ export default function ChatClient() {
   const [failingSince, setFailingSince] = useState<number | null>(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const wsRef = useRef<WebSocket | null>(null);
+  const wsReuseEnabledRef = useRef(
+    resolveChatWsReuse({
+      NEXT_PUBLIC_CHAT_APP_ENV: process.env.NEXT_PUBLIC_CHAT_APP_ENV,
+      NEXT_PUBLIC_VERCEL_ENV: process.env.NEXT_PUBLIC_VERCEL_ENV,
+      VERCEL_ENV: process.env.VERCEL_ENV,
+      VERCEL: process.env.VERCEL,
+      NODE_ENV: process.env.NODE_ENV,
+    }).enabled
+  );
+  const wsReuseRuntimeRef = useRef(false);
+  const parkedRoomRef = useRef<(ParkedSocketMeta & { ws: WebSocket; timer: number; parkedAt: number }) | null>(
+    null
+  );
+  const socketResumeRef = useRef(new WeakMap<WebSocket, () => Promise<ChatSocketOpenResult | null>>());
+  const socketMetaRef = useRef(new WeakMap<WebSocket, ParkedSocketMeta>());
+  const resumeAuthRef = useRef<WebSocket | null>(null);
+  const resumeOwnedCloseRef = useRef(new WeakSet<WebSocket>());
+  const parkedResumeWaitRef = useRef<{ ws: WebSocket; finish: (ok: boolean) => void } | null>(null);
+  const dropParkedRoomSocket = () => {
+    const parked = parkedRoomRef.current;
+    if (!parked) return;
+    parkedRoomRef.current = null;
+    window.clearTimeout(parked.timer);
+    try {
+      parked.ws.close();
+    } catch {
+      // already closed
+    }
+  };
+  /**
+   * Leave-room: if reuse is on and the socket is OPEN, park for TTL instead of closing.
+   * Re-checks GET /api/chat/ws-reuse first so Instant Rollback turns park off
+   * for this tab without waiting for a reload. roomGen already advanced, so
+   * parked events are ignored (no read receipts).
+   */
+  const parkRoomSocket = async (): Promise<boolean> => {
+    const ws = wsRef.current;
+    const meta = ws ? socketMetaRef.current.get(ws) : undefined;
+    if (!ws || !meta || ws.readyState !== WebSocket.OPEN || !socketResumeRef.current.has(ws)) return false;
+    if (!wsReuseEnabledRef.current) return false;
+    const runtimeEnabled = await refreshWsReuseRuntime();
+    if (wsRef.current !== ws || ws.readyState !== WebSocket.OPEN) return false;
+    if (
+      !shouldParkChatWsReuse({
+        compileEnabled: wsReuseEnabledRef.current,
+        runtimeEnabled,
+      })
+    ) {
+      return false;
+    }
+    if (parkedResumeWaitRef.current?.ws === ws) {
+      parkedResumeWaitRef.current.finish(false);
+      parkedResumeWaitRef.current = null;
+      resumeAuthRef.current = null;
+    }
+    if (parkedRoomRef.current && parkedRoomRef.current.ws !== ws) dropParkedRoomSocket();
+    else if (parkedRoomRef.current) window.clearTimeout(parkedRoomRef.current.timer);
+    const timer = window.setTimeout(() => {
+      if (parkedRoomRef.current?.ws !== ws) return;
+      parkedRoomRef.current = null;
+      try {
+        ws.close();
+      } catch {
+        // already closed
+      }
+    }, CHAT_WS_REUSE_TTL_MS);
+    parkedRoomRef.current = { ...meta, ws, timer, parkedAt: Date.now() };
+    ws.addEventListener(
+      "close",
+      () => {
+        if (parkedRoomRef.current?.ws !== ws) return;
+        window.clearTimeout(parkedRoomRef.current.timer);
+        parkedRoomRef.current = null;
+      },
+      { once: true }
+    );
+    return true;
+  };
+  const leaveRoomSocket = () => {
+    const ws = wsRef.current;
+    void parkRoomSocket().then((parked) => {
+      if (parked || !ws || wsRef.current !== ws) return;
+      try {
+        ws.close();
+      } catch {
+        // already closed
+      }
+    });
+  };
+  const applyRuntimeParkState = (enabled: boolean) => {
+    const applied = applyWsReuseRuntimeEnabled(enabled);
+    wsReuseRuntimeRef.current = applied.runtimeEnabled;
+    if (applied.dropParked) dropParkedRoomSocket();
+    return applied.runtimeEnabled;
+  };
+  const refreshWsReuseRuntime = async (): Promise<boolean> => {
+    if (!wsReuseEnabledRef.current) {
+      return applyRuntimeParkState(false);
+    }
+    const enabled = await fetchChatWsReuseRuntimeEnabled({ fetch: window.fetch.bind(window) });
+    return applyRuntimeParkState(enabled);
+  };
+  useEffect(() => {
+    const check = () => {
+      const parked = parkedRoomRef.current;
+      if (parked && isParkExpired(parked.parkedAt, Date.now())) dropParkedRoomSocket();
+      if (wsReuseEnabledRef.current) void refreshWsReuseRuntime();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") check();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pageshow", check);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pageshow", check);
+    };
+  }, []);
+  useEffect(() => {
+    try {
+      wsReuseEnabledRef.current = resolveChatWsReuse({
+        NEXT_PUBLIC_CHAT_APP_ENV: process.env.NEXT_PUBLIC_CHAT_APP_ENV,
+        NEXT_PUBLIC_VERCEL_ENV: process.env.NEXT_PUBLIC_VERCEL_ENV,
+        VERCEL_ENV: process.env.VERCEL_ENV,
+        VERCEL: process.env.VERCEL,
+        NODE_ENV: process.env.NODE_ENV,
+      }).enabled;
+    } catch {
+      wsReuseEnabledRef.current = false;
+    }
+    void refreshWsReuseRuntime();
+    if (!wsReuseEnabledRef.current) return;
+    const id = window.setInterval(() => {
+      void refreshWsReuseRuntime();
+    }, CHAT_WS_REUSE_RUNTIME_POLL_MS);
+    return () => window.clearInterval(id);
+  }, []);
   const dirRef = useRef<WebSocket | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const stickRef = useRef(true);
@@ -745,14 +895,107 @@ export default function ChatClient() {
         setError("채팅 서버 주소가 없습니다.");
         return { ok: false, code: "chat_worker_unconfigured" };
       }
+      const parked = parkedRoomRef.current;
+      if (parked) {
+        parkedRoomRef.current = null;
+        window.clearTimeout(parked.timer);
+        const resume = socketResumeRef.current.get(parked.ws);
+        const parkedReq = () => ({
+          roomId,
+          token: info.token,
+          nowSec: Math.floor(Date.now() / 1000),
+          socketOpen: parked.ws.readyState === WebSocket.OPEN,
+          parkedAt: parked.parkedAt,
+          nowMs: Date.now(),
+        });
+        const eligible = () =>
+          !!resume &&
+          wsRef.current === parked.ws &&
+          shouldParkChatWsReuse({
+            compileEnabled: wsReuseEnabledRef.current,
+            runtimeEnabled: wsReuseRuntimeRef.current,
+          }) &&
+          canResumeParked(parked, parkedReq());
+        if (eligible() && resume) {
+          try {
+            const resumed = await resume();
+            if (resumed?.ok) return resumed;
+            if (resumed && resumed.code === "superseded") return resumed;
+          } catch {
+            // fail-closed: drop parked socket and open a new connection
+          }
+        }
+        if (wsRef.current !== parked.ws) {
+          try {
+            parked.ws.close();
+          } catch {
+            // already closed
+          }
+        }
+      }
       const prev = wsRef.current;
       roomGenRef.current += 1;
-      const gen = roomGenRef.current;
+      let gen = roomGenRef.current;
       if (prev && (prev.readyState === WebSocket.OPEN || prev.readyState === WebSocket.CONNECTING)) {
         prev.close();
       }
       const ws = new WebSocket(url);
       wsRef.current = ws;
+      if (wsReuseEnabledRef.current) {
+        socketResumeRef.current.set(ws, async () => {
+          if (ws.readyState !== WebSocket.OPEN || wsRef.current !== ws) return null;
+          try {
+            roomGenRef.current += 1;
+            gen = roomGenRef.current;
+            const myGen = gen;
+            historyResetRef.current = true;
+            oldestSeqRef.current = null;
+            setHasMore(false);
+            reconnectingRef.current = false;
+            setFailingSince(null);
+            roomAttemptRef.current = 0;
+            resumeAuthRef.current = ws;
+            resumeOwnedCloseRef.current.add(ws);
+            let waitFail: "resume_auth" | "resume_timeout" = "resume_timeout";
+            const wait = new Promise<boolean>((resolve) => {
+              let settled = false;
+              const finish = (ok: boolean, kind?: "resume_auth" | "resume_timeout") => {
+                if (settled) return;
+                settled = true;
+                if (!ok && kind) waitFail = kind;
+                window.clearTimeout(timer);
+                if (parkedResumeWaitRef.current?.ws === ws) parkedResumeWaitRef.current = null;
+                resolve(ok);
+              };
+              const timer = window.setTimeout(
+                () => finish(false, "resume_timeout"),
+                CHAT_WS_RESUME_TIMEOUT_MS
+              );
+              parkedResumeWaitRef.current = {
+                ws,
+                finish: (ok) => finish(ok, ok ? undefined : "resume_auth"),
+              };
+            });
+            ws.send(JSON.stringify({ type: "resume" }));
+            const gotHistory = await wait;
+            resumeOwnedCloseRef.current.delete(ws);
+            if (roomGenRef.current !== myGen) return { ok: false, code: "superseded" };
+            if (!gotHistory) {
+              resumeAuthRef.current = null;
+              roomGenRef.current += 1;
+              return { ok: false, code: waitFail };
+            }
+            resumeAuthRef.current = null;
+            setConnected(true);
+            return { ok: true } as ChatSocketOpenResult;
+          } catch {
+            resumeAuthRef.current = null;
+            resumeOwnedCloseRef.current.delete(ws);
+            return null;
+          }
+        });
+        socketMetaRef.current.set(ws, { roomId, token: info.token, exp: info.exp });
+      }
       if (!reconnectingRef.current) {
         historyResetRef.current = true;
         oldestSeqRef.current = null;
@@ -789,6 +1032,12 @@ export default function ChatClient() {
         setFailingSince((cur) => cur ?? Date.now());
       });
       ws.addEventListener("close", (ev) => {
+        if (resumeOwnedCloseRef.current.has(ws)) {
+          parkedResumeWaitRef.current?.finish(false);
+          parkedResumeWaitRef.current = null;
+          resumeAuthRef.current = null;
+          return;
+        }
         if (gen !== roomGenRef.current) return;
         setConnected(false);
         setFailingSince((cur) => cur ?? Date.now());
@@ -828,12 +1077,37 @@ export default function ChatClient() {
         void run();
       });
       ws.addEventListener("message", (event) => {
-        if (gen !== roomGenRef.current) return;
+        if (gen !== roomGenRef.current) {
+          if (resumeAuthRef.current === ws) {
+            parkedResumeWaitRef.current?.finish(false);
+            parkedResumeWaitRef.current = null;
+            resumeAuthRef.current = null;
+          }
+          return;
+        }
         let data: any;
         try {
           data = JSON.parse(String(event.data));
         } catch {
           return;
+        }
+        if (resumeAuthRef.current === ws) {
+          const gate = parkedResumeClientGate(String(data.type || ""));
+          if (gate === "history") {
+            if (!Array.isArray(data.messages)) {
+              parkedResumeWaitRef.current?.finish(false);
+              resumeAuthRef.current = null;
+              return;
+            }
+            parkedResumeWaitRef.current?.finish(true);
+            resumeAuthRef.current = null;
+          } else if (gate === "fail") {
+            parkedResumeWaitRef.current?.finish(false);
+            resumeAuthRef.current = null;
+            return;
+          } else if (gate === "hold") {
+            return;
+          }
         }
         if (data.type === "history" && Array.isArray(data.messages)) {
           const hist = data.messages.map(payloadToLine);
@@ -1004,6 +1278,7 @@ export default function ChatClient() {
   useEffect(() => {
     let cancelled = false;
     const unsubscribeReset = subscribeChatSessionReset((reason) => {
+      dropParkedRoomSocket();
       resetChatSocketHandles({
         roomGenRef,
         dirGenRef,
@@ -1120,6 +1395,7 @@ export default function ChatClient() {
       dirGenRef.current += 1;
       clearTimer(roomTimerRef);
       clearTimer(dirTimerRef);
+      dropParkedRoomSocket();
       wsRef.current?.close();
       dirRef.current?.close();
     };
@@ -1343,7 +1619,7 @@ export default function ChatClient() {
       reconnectingRef.current = false;
       roomGenRef.current += 1;
       clearTimer(roomTimerRef);
-      wsRef.current?.close();
+      leaveRoomSocket();
       abandonComposerPhotos();
       clearLocalLines([]);
       setReplyTo(null);
@@ -2724,7 +3000,7 @@ export default function ChatClient() {
                 reconnectingRef.current = false;
                 roomGenRef.current += 1;
                 clearTimer(roomTimerRef);
-                wsRef.current?.close();
+                leaveRoomSocket();
                 abandonComposerPhotos();
                 clearLocalLines([]);
                 setReplyTo(null);
