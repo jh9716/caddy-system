@@ -215,6 +215,7 @@ import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
 import {
   applyWsReuseRuntimeEnabled,
   canResumeParked,
+  classifyParkedResumeSkip,
   fetchChatWsReuseRuntimeEnabled,
   isParkExpired,
   parkedResumeClientGate,
@@ -225,6 +226,22 @@ import {
   resolveChatWsReuse,
   type ParkedSocketMeta,
 } from "@/lib/chatWsReuse";
+import {
+  handleChatWsReuseDiagSessionReset,
+  isChatWsReuseDiagRecording,
+  markChatWsReuseDiagLeftRoom,
+  markChatWsReuseDiagRoomSelect,
+  noteChatWsReuseDiagNewRoomSocket,
+  noteChatWsReuseDiagNewWsHistory,
+  noteChatWsReuseDiagParkAttempt,
+  noteChatWsReuseDiagParkOk,
+  noteChatWsReuseDiagParkSkip,
+  noteChatWsReuseDiagResumeAttempt,
+  noteChatWsReuseDiagResumeFail,
+  noteChatWsReuseDiagResumeOk,
+  noteChatWsReuseDiagResumeSkip,
+  noteChatWsReuseDiagTtlExpired,
+} from "@/lib/chatWsReuseDiag";
 
 type TokenPayload = {
   token: string;
@@ -436,16 +453,29 @@ export default function ChatClient() {
   const parkRoomSocket = async (): Promise<boolean> => {
     const ws = wsRef.current;
     const meta = ws ? socketMetaRef.current.get(ws) : undefined;
-    if (!ws || !meta || ws.readyState !== WebSocket.OPEN || !socketResumeRef.current.has(ws)) return false;
-    if (!wsReuseEnabledRef.current) return false;
+    const diagOn =
+      isChatWsReuseDiagRecording() && tokenRef.current?.user.role === "admin";
+    if (diagOn) noteChatWsReuseDiagParkAttempt();
+    if (!ws || !meta || ws.readyState !== WebSocket.OPEN || !socketResumeRef.current.has(ws)) {
+      if (diagOn) noteChatWsReuseDiagParkSkip("socket_not_open");
+      return false;
+    }
+    if (!wsReuseEnabledRef.current) {
+      if (diagOn) noteChatWsReuseDiagParkSkip("compile_off");
+      return false;
+    }
     const runtimeEnabled = await refreshWsReuseRuntime();
-    if (wsRef.current !== ws || ws.readyState !== WebSocket.OPEN) return false;
+    if (wsRef.current !== ws || ws.readyState !== WebSocket.OPEN) {
+      if (diagOn) noteChatWsReuseDiagParkSkip("socket_not_open");
+      return false;
+    }
     if (
       !shouldParkChatWsReuse({
         compileEnabled: wsReuseEnabledRef.current,
         runtimeEnabled,
       })
     ) {
+      if (diagOn) noteChatWsReuseDiagParkSkip(wsReuseEnabledRef.current ? "runtime_off" : "compile_off");
       return false;
     }
     if (parkedResumeWaitRef.current?.ws === ws) {
@@ -458,6 +488,9 @@ export default function ChatClient() {
     const timer = window.setTimeout(() => {
       if (parkedRoomRef.current?.ws !== ws) return;
       parkedRoomRef.current = null;
+      if (isChatWsReuseDiagRecording() && tokenRef.current?.user.role === "admin") {
+        noteChatWsReuseDiagTtlExpired();
+      }
       try {
         ws.close();
       } catch {
@@ -474,9 +507,13 @@ export default function ChatClient() {
       },
       { once: true }
     );
+    if (diagOn) noteChatWsReuseDiagParkOk();
     return true;
   };
   const leaveRoomSocket = () => {
+    if (isChatWsReuseDiagRecording() && tokenRef.current?.user.role === "admin") {
+      markChatWsReuseDiagLeftRoom();
+    }
     const ws = wsRef.current;
     void parkRoomSocket().then((parked) => {
       if (parked || !ws || wsRef.current !== ws) return;
@@ -503,7 +540,12 @@ export default function ChatClient() {
   useEffect(() => {
     const check = () => {
       const parked = parkedRoomRef.current;
-      if (parked && isParkExpired(parked.parkedAt, Date.now())) dropParkedRoomSocket();
+      if (parked && isParkExpired(parked.parkedAt, Date.now())) {
+        if (isChatWsReuseDiagRecording() && tokenRef.current?.user.role === "admin") {
+          noteChatWsReuseDiagTtlExpired();
+        }
+        dropParkedRoomSocket();
+      }
       if (wsReuseEnabledRef.current) void refreshWsReuseRuntime();
     };
     const onVisibility = () => {
@@ -916,13 +958,43 @@ export default function ChatClient() {
             runtimeEnabled: wsReuseRuntimeRef.current,
           }) &&
           canResumeParked(parked, parkedReq());
+        const diagOn =
+          isChatWsReuseDiagRecording() && tokenRef.current?.user.role === "admin";
         if (eligible() && resume) {
           try {
+            if (diagOn) noteChatWsReuseDiagResumeAttempt();
             const resumed = await resume();
-            if (resumed?.ok) return resumed;
-            if (resumed && resumed.code === "superseded") return resumed;
+            if (resumed?.ok) {
+              if (diagOn) noteChatWsReuseDiagResumeOk();
+              return resumed;
+            }
+            if (resumed && resumed.code === "superseded") {
+              if (diagOn) noteChatWsReuseDiagResumeFail("superseded");
+              return resumed;
+            }
+            if (diagOn) {
+              noteChatWsReuseDiagResumeFail(
+                resumed?.code === "resume_auth" || resumed?.code === "resume_timeout"
+                  ? resumed.code
+                  : "resume_null"
+              );
+            }
           } catch {
+            if (diagOn) noteChatWsReuseDiagResumeFail("resume_null");
             // fail-closed: drop parked socket and open a new connection
+          }
+        } else if (diagOn) {
+          const skip = classifyParkedResumeSkip(parked, {
+            ...parkedReq(),
+            hasResume: !!resume,
+            wsRefMatch: wsRef.current === parked.ws,
+          });
+          if (skip === "park_expired") noteChatWsReuseDiagTtlExpired();
+          else if (skip) noteChatWsReuseDiagResumeSkip(skip);
+          else {
+            noteChatWsReuseDiagResumeSkip(
+              wsReuseEnabledRef.current ? "runtime_off" : "compile_off"
+            );
           }
         }
         if (wsRef.current !== parked.ws) {
@@ -938,6 +1010,9 @@ export default function ChatClient() {
       let gen = roomGenRef.current;
       if (prev && (prev.readyState === WebSocket.OPEN || prev.readyState === WebSocket.CONNECTING)) {
         prev.close();
+      }
+      if (isChatWsReuseDiagRecording() && tokenRef.current?.user.role === "admin") {
+        noteChatWsReuseDiagNewRoomSocket();
       }
       const ws = new WebSocket(url);
       wsRef.current = ws;
@@ -1091,6 +1166,7 @@ export default function ChatClient() {
         } catch {
           return;
         }
+        let parkedResumeHistory = false;
         if (resumeAuthRef.current === ws) {
           const gate = parkedResumeClientGate(String(data.type || ""));
           if (gate === "history") {
@@ -1099,6 +1175,7 @@ export default function ChatClient() {
               resumeAuthRef.current = null;
               return;
             }
+            parkedResumeHistory = true;
             parkedResumeWaitRef.current?.finish(true);
             resumeAuthRef.current = null;
           } else if (gate === "fail") {
@@ -1141,6 +1218,13 @@ export default function ChatClient() {
                   if (t.fullLoadEntry) recordChatEntryTiming("push_nav_to_room", 0, now);
                 }
               }
+            }
+            if (
+              !parkedResumeHistory &&
+              isChatWsReuseDiagRecording() &&
+              tokenRef.current?.user.role === "admin"
+            ) {
+              noteChatWsReuseDiagNewWsHistory();
             }
           } else if (!reconnectingRef.current) {
             const el = listRef.current;
@@ -1278,6 +1362,7 @@ export default function ChatClient() {
   useEffect(() => {
     let cancelled = false;
     const unsubscribeReset = subscribeChatSessionReset((reason) => {
+      handleChatWsReuseDiagSessionReset();
       dropParkedRoomSocket();
       resetChatSocketHandles({
         roomGenRef,
@@ -1841,6 +1926,9 @@ export default function ChatClient() {
   ): Promise<ChatSocketOpenResult> {
     entryTimingRef.current.roomSelectAt = chatEntryNow();
     entryTimingRef.current.wsOpenAt = null;
+    if (isChatWsReuseDiagRecording() && tokenRef.current?.user.role === "admin") {
+      markChatWsReuseDiagRoomSelect();
+    }
     const info = await refreshIfNeeded();
     if (!info) return { ok: false, code: "missing_token" };
     const urlSeq =

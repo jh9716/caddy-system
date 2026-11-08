@@ -165,6 +165,7 @@
     "test:chat-photo-unit": "bash scripts/tsx-safe.sh scripts/test-chat-photo-unit.ts",
     "test:chat-session-lifecycle-unit": "bash scripts/tsx-safe.sh scripts/test-chat-session-lifecycle-unit.ts",
     "test:chat-ws-reuse-unit": "bash scripts/tsx-safe.sh scripts/test-chat-ws-reuse-unit.ts",
+    "test:chat-ws-reuse-diag-unit": "bash scripts/tsx-safe.sh scripts/test-chat-ws-reuse-diag-unit.ts",
     "test:parked-resume-unit": "bash scripts/tsx-safe.sh scripts/test-parked-resume-unit.ts",
     "test:chat-media-r2-runtime": "bash scripts/tsx-safe.sh scripts/test-chat-media-r2-runtime.ts",
     "test:android-system-back-unit": "bash scripts/tsx-safe.sh scripts/test-android-system-back-unit.ts",
