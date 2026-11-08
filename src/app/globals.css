@@ -4614,6 +4614,12 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
   gap: 4px;
   padding: 8px 2px 12px;
 }
+.vh-chat-history-wait {
+  align-self: center;
+  margin: 28px 8px 0;
+  color: var(--vh-muted);
+  font-size: 0.82rem;
+}
 .vh-chat-more {
   align-self: center;
   border: 0;

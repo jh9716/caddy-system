@@ -113,6 +113,17 @@ import {
   rememberChatToken,
 } from "@/lib/chatFastEntry";
 import {
+  clearChatRoomLineCache,
+  dropCachedChatRoom,
+  getChatRoomPaintTiming,
+  markChatRoomCachePainted,
+  markChatRoomHistoryPainted,
+  markChatRoomOpenStarted,
+  readCachedChatRoomLines,
+  rememberChatRoomLines,
+  shouldShowChatHistoryWait,
+} from "@/lib/chatRoomLineCache";
+import {
   canProfileMention,
   chatAuthorLine,
   chatRoleLabel,
@@ -373,10 +384,19 @@ export default function ChatClient() {
     mountAt: number | null;
     roomsReqAt: number | null;
     roomSelectAt: number | null;
+    firstPaintAt: number | null;
     wsOpenAt: number | null;
     fullLoadEntry: boolean;
     deepLinkOpen: boolean;
-  }>({ mountAt: null, roomsReqAt: null, roomSelectAt: null, wsOpenAt: null, fullLoadEntry: false, deepLinkOpen: false });
+  }>({
+    mountAt: null,
+    roomsReqAt: null,
+    roomSelectAt: null,
+    firstPaintAt: null,
+    wsOpenAt: null,
+    fullLoadEntry: false,
+    deepLinkOpen: false,
+  });
   const [connected, setConnected] = useState(false);
   const [directoryConnected, setDirectoryConnected] = useState(false);
   const [directorySnapshotReady, setDirectorySnapshotReady] = useState(false);
@@ -651,6 +671,18 @@ export default function ChatClient() {
     }
     linesRef.current = next;
     setLines(next);
+  }
+
+  function rememberActiveRoomLines() {
+    const uid = tokenRef.current?.user.userId;
+    const roomId = roomRef.current?.roomId;
+    if (!uid || !roomId) return;
+    rememberChatRoomLines(uid, roomId, {
+      lines: linesRef.current,
+      hasMore: hasMoreRef.current,
+      oldestSeq: oldestSeqRef.current,
+      hiddenSeqs: hiddenSeqsRef.current,
+    });
   }
 
   function payloadToLine(raw: any): ChatLine {
@@ -1207,6 +1239,15 @@ export default function ChatClient() {
             const last = next[next.length - 1];
             if (last?.seq) sendReadOrHold(ws, last.seq);
             queueEntrySeek(next);
+            markChatRoomHistoryPainted();
+            rememberActiveRoomLines();
+            if (!getChatRoomPaintTiming().paintedFromCache) {
+              const t = entryTimingRef.current;
+              if (t.firstPaintAt != null) {
+                recordChatEntryTiming("room_select_to_first_paint", t.firstPaintAt);
+                t.firstPaintAt = null;
+              }
+            }
             {
               const t = entryTimingRef.current;
               if (t.wsOpenAt != null) {
@@ -1363,6 +1404,7 @@ export default function ChatClient() {
     let cancelled = false;
     const unsubscribeReset = subscribeChatSessionReset((reason) => {
       handleChatWsReuseDiagSessionReset();
+      clearChatRoomLineCache();
       dropParkedRoomSocket();
       resetChatSocketHandles({
         roomGenRef,
@@ -1377,6 +1419,7 @@ export default function ChatClient() {
       setTokenInfo(null);
       setConnected(false);
       setDirectoryConnected(false);
+      clearLocalLines([]);
       if (reason === "logout" || isChatSessionEnded()) return;
       const switchGen = dirGenRef.current;
       void fetchToken().then((info) => {
@@ -1475,6 +1518,7 @@ export default function ChatClient() {
     })();
     return () => {
       cancelled = true;
+      rememberActiveRoomLines();
       unsubscribeReset();
       roomGenRef.current += 1;
       dirGenRef.current += 1;
@@ -1704,6 +1748,7 @@ export default function ChatClient() {
       reconnectingRef.current = false;
       roomGenRef.current += 1;
       clearTimer(roomTimerRef);
+      rememberActiveRoomLines();
       leaveRoomSocket();
       abandonComposerPhotos();
       clearLocalLines([]);
@@ -1892,6 +1937,7 @@ export default function ChatClient() {
   }
 
   function closeEarlyDeepLinkDenied() {
+    const deniedRoomId = earlyDeepLinkRef.current;
     earlyDeepLinkRef.current = "";
     clearEntryHold();
     setView("list");
@@ -1901,6 +1947,7 @@ export default function ChatClient() {
     roomGenRef.current += 1;
     clearTimer(roomTimerRef);
     wsRef.current?.close();
+    dropCachedChatRoom(tokenRef.current?.user.userId, deniedRoomId);
     clearLocalLines([]);
     setError("참여할 수 없는 채팅방입니다.");
   }
@@ -1924,13 +1971,14 @@ export default function ChatClient() {
     room: RoomSummary,
     opts?: { targetSeq?: number | null; holdForSummary?: boolean }
   ): Promise<ChatSocketOpenResult> {
-    entryTimingRef.current.roomSelectAt = chatEntryNow();
+    const selectedAt = chatEntryNow();
+    entryTimingRef.current.roomSelectAt = selectedAt;
+    entryTimingRef.current.firstPaintAt = selectedAt;
     entryTimingRef.current.wsOpenAt = null;
     if (isChatWsReuseDiagRecording() && tokenRef.current?.user.role === "admin") {
       markChatWsReuseDiagRoomSelect();
     }
-    const info = await refreshIfNeeded();
-    if (!info) return { ok: false, code: "missing_token" };
+    markChatRoomOpenStarted();
     const urlSeq =
       typeof window !== "undefined"
         ? parseChatTargetSeqFromRoomUrl(room.roomId, window.location.search)
@@ -1964,12 +2012,56 @@ export default function ChatClient() {
     roomRef.current = room;
     setActiveRoom(room);
     setView("room");
-    clearLocalLines([]);
-    pendingScrollRestore.current = null;
-    loadingOlderRef.current = false;
-    setLoadingOlder(false);
-    hasMoreRef.current = false;
-    setHasMore(false);
+    const paintCachedLines = (userId: number | undefined) => {
+      const cached = userId ? readCachedChatRoomLines(userId, room.roomId) : null;
+      const cachedLines = (cached?.lines || []) as ChatLine[];
+      clearLocalLines(cachedLines);
+      pendingScrollRestore.current = null;
+      loadingOlderRef.current = false;
+      setLoadingOlder(false);
+      if (cached) {
+        hasMoreRef.current = cached.hasMore;
+        setHasMore(cached.hasMore);
+        oldestSeqRef.current = cached.oldestSeq;
+        lastSeqRef.current = lastKnownSeq(cachedLines);
+        hiddenSeqsRef.current = new Set(cached.hiddenSeqs);
+        markChatRoomCachePainted();
+        const t = entryTimingRef.current;
+        if (t.firstPaintAt != null) {
+          recordChatEntryTiming("room_select_to_first_paint", t.firstPaintAt);
+          t.firstPaintAt = null;
+        }
+        if (entrySeekRef.current) {
+          const target = entryTargetRef.current;
+          const canPinNow =
+            !target ||
+            target.kind === "bottom" ||
+            target.seq == null ||
+            firstLoadedSeqAtOrAfter(cachedLines, target.seq) != null;
+          if (canPinNow) queueEntrySeek(cachedLines);
+        }
+      } else {
+        hasMoreRef.current = false;
+        setHasMore(false);
+        oldestSeqRef.current = null;
+        lastSeqRef.current = 0;
+        hiddenSeqsRef.current = new Set();
+      }
+    };
+    const priorUserId = tokenRef.current?.user.userId;
+    paintCachedLines(priorUserId);
+    const info = await refreshIfNeeded();
+    if (!info) {
+      clearChatRoomLineCache();
+      clearLocalLines([]);
+      setView("list");
+      setActiveRoom(null);
+      roomRef.current = null;
+      return { ok: false, code: "missing_token" };
+    }
+    if (info.user.userId !== priorUserId) {
+      paintCachedLines(info.user.userId);
+    }
     setError("");
     setDraft("");
     setMentionTokens([]);
@@ -1981,9 +2073,6 @@ export default function ChatClient() {
     setProfileTarget(null);
     setUnseenCount(0);
     reconnectingRef.current = false;
-    lastSeqRef.current = 0;
-    linesRef.current = [];
-    hiddenSeqsRef.current = new Set();
     if (isDmRoomId(room.roomId)) {
       const next = nextDmMentionState({
         roomId: room.roomId,
@@ -2006,8 +2095,17 @@ export default function ChatClient() {
       mentionFetchedRef.current = "";
     }
     const opened = await connectSocket(info, room.roomId, { waitForOpen: true });
-    if (!opened.ok && isDmRoomId(room.roomId)) {
-      setError(formatChatClientError(CHAT_DM_OPEN_FAILED, opened.code));
+    if (!opened.ok) {
+      if (opened.code === "stale_session" || opened.code === "missing_token") {
+        clearChatRoomLineCache();
+        clearLocalLines([]);
+      } else if (opened.code === "room_forbidden") {
+        dropCachedChatRoom(info.user.userId, room.roomId);
+        clearLocalLines([]);
+      }
+      if (isDmRoomId(room.roomId)) {
+        setError(formatChatClientError(CHAT_DM_OPEN_FAILED, opened.code));
+      }
     }
     return opened;
   }
@@ -3088,6 +3186,7 @@ export default function ChatClient() {
                 reconnectingRef.current = false;
                 roomGenRef.current += 1;
                 clearTimer(roomTimerRef);
+                rememberActiveRoomLines();
                 leaveRoomSocket();
                 abandonComposerPhotos();
                 clearLocalLines([]);
@@ -3177,6 +3276,12 @@ export default function ChatClient() {
               >
                 {loadingOlder ? "이전 메시지 불러오는 중…" : "이전 메시지"}
               </button>
+            ) : null}
+            {shouldShowChatHistoryWait({
+              lineCount: lines.length,
+              lastMessageSeq: activeRoom?.lastMessageSeq,
+            }) ? (
+              <p className="vh-chat-history-wait">메시지를 불러오는 중…</p>
             ) : null}
             {lines.map((line, index) => {
               const mine = tokenInfo ? line.senderUserId === tokenInfo.user.userId : false;

@@ -35,7 +35,8 @@ ok(marks.length === 2, "two marks");
 ok(marks.every((m) => Object.keys(m).sort().join() === "ms,name"), "only name+ms keys");
 for (let i = 0; i < 300; i++) recordChatEntryTiming("token", 0, 1);
 ok(readChatEntryTimings().length === 200, "bounded");
-ok(CHAT_ENTRY_TIMING_STEPS.length === 7, "7 steps");
+ok(CHAT_ENTRY_TIMING_STEPS.length === 8, "8 steps");
+ok(CHAT_ENTRY_TIMING_STEPS.includes("room_select_to_first_paint"), "first paint step");
 ok(CHAT_ENTRY_TIMING_STEPS.every((s) => !/id|room=|token=|user/i.test(s.replace(/^token$/, "")) ), "step names carry no identifiers");
 
 // late prefs merge
@@ -66,6 +67,8 @@ const calls = src.match(/recordChatEntryTiming\([^)]*\)/g) || [];
 ok(calls.length >= 7, "timing calls present");
 ok(calls.every((c) => !/roomId|userId|token\b|\.search|location|message/i.test(c.replace('"token"', ""))), "no identifiers in timing calls");
 ok(/if \(!roomsShownRef\.current\) \{[\s\S]{0,200}setLoading\(false\)/.test(src), "first valid rooms (WS or HTTP) ends loading");
+ok(src.includes("firstPaintAt"), "first paint start is kept after ws open");
+ok(src.includes("room_select_to_first_paint"), "first paint step is recorded");
 const route = readFileSync("src/app/api/chat/token/route.ts", "utf8");
 ok(/isChatEntryTimingEnabledFor\(currentChatAppEnv\(\), process\.env\.NODE_ENV\)/.test(route), "server-timing gated");
 

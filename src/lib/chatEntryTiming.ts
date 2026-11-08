@@ -13,7 +13,8 @@ export const CHAT_ENTRY_TIMING_STEPS = [
   "token", // 2. 토큰 요청 → 응답
   "rooms_to_shown", // 3. 목록 요청 시작 → 첫 정상 목록 반영
   "room_select_to_ws_open", // 4
-  "ws_open_to_history", // 5
+  "room_select_to_first_paint", // 4b. cache paint or first history page (not WS RTT)
+  "ws_open_to_history", // 5. server history verified
   "push_nav_to_room", // 6. 알림/딥링크 진입: navigation 시작 → 대상 방 메시지 표시 (클릭 시각 자체는 측정 불가)
 ] as const;
 export type ChatEntryTimingStep = (typeof CHAT_ENTRY_TIMING_STEPS)[number];
