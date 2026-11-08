@@ -35,7 +35,11 @@ ok(marks.length === 2, "two marks");
 ok(marks.every((m) => Object.keys(m).sort().join() === "ms,name"), "only name+ms keys");
 for (let i = 0; i < 300; i++) recordChatEntryTiming("token", 0, 1);
 ok(readChatEntryTimings().length === 200, "bounded");
-ok(CHAT_ENTRY_TIMING_STEPS.length === 7, "7 steps");
+ok(CHAT_ENTRY_TIMING_STEPS.length === 11, "11 steps");
+ok(CHAT_ENTRY_TIMING_STEPS.includes("list_to_prewarm_ready"), "prewarm ready step");
+ok(CHAT_ENTRY_TIMING_STEPS.includes("prewarm_click_to_paint"), "prewarm click paint step");
+ok(CHAT_ENTRY_TIMING_STEPS.includes("prewarm_click_to_shown"), "prewarm shown step");
+ok(CHAT_ENTRY_TIMING_STEPS.includes("cold_click_to_history"), "cold history step");
 ok(CHAT_ENTRY_TIMING_STEPS.every((s) => !/id|room=|token=|user/i.test(s.replace(/^token$/, "")) ), "step names carry no identifiers");
 
 // late prefs merge

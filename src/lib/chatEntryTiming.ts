@@ -14,6 +14,10 @@ export const CHAT_ENTRY_TIMING_STEPS = [
   "rooms_to_shown", // 3. 목록 요청 시작 → 첫 정상 목록 반영
   "room_select_to_ws_open", // 4
   "ws_open_to_history", // 5
+  "list_to_prewarm_ready", // list shown → Worker history on the single prewarm socket
+  "prewarm_click_to_paint", // ready room click → first paint (setView)
+  "prewarm_click_to_shown", // ready room click → rAF (pixels)
+  "cold_click_to_history", // unready click → history (existing path)
   "push_nav_to_room", // 6. 알림/딥링크 진입: navigation 시작 → 대상 방 메시지 표시 (클릭 시각 자체는 측정 불가)
 ] as const;
 export type ChatEntryTimingStep = (typeof CHAT_ENTRY_TIMING_STEPS)[number];
@@ -80,6 +84,28 @@ export function recordChatEntryTiming(
 
 export function readChatEntryTimings(): ChatEntryTimingMark[] {
   return [...(globalThis.__CHAT_ENTRY_TIMING__ || [])];
+}
+
+/** Double rAF ≈ pixels after prewarm adopt. No identifiers. Does not delay history. */
+export function schedulePrewarmShown(
+  startedAt: number,
+  opts?: { now?: () => number; raf?: ((cb: () => void) => unknown) | null }
+): void {
+  const mark = () => {
+    const now = opts?.now ? opts.now() : chatEntryNow();
+    recordChatEntryTiming("prewarm_click_to_shown", startedAt, now);
+  };
+  const native =
+    typeof opts?.raf === "function"
+      ? opts.raf
+      : typeof requestAnimationFrame === "function"
+        ? (cb: () => void) => requestAnimationFrame(cb)
+        : null;
+  if (!native) {
+    mark();
+    return;
+  }
+  native(() => native(mark));
 }
 
 /** 늦게 온 알림설정 응답이 사용자가 바꾼(저장 중/저장 완료) 방 설정을 덮지 않게 병합. */
