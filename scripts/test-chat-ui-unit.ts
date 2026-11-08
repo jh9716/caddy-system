@@ -120,9 +120,14 @@ section("android back room leave");
   const openEnd = chat.indexOf("async function saveNotifyMode", openStart);
   const openRoom = openStart >= 0 && openEnd > openStart ? chat.slice(openStart, openEnd) : "";
   assert(openRoom.includes("waitForOpen: true"), "openRoom waits for socket authorize");
+  assert(openRoom.includes("clearLocalLines([])"), "openRoom does not paint cache before auth");
+  assert(!openRoom.includes("readCachedChatRoomLines"), "openRoom does not read cache before socket");
+  assert(chat.includes("paintCachedLinesAfterServerAuth(roomId)"), "new WS open paints cache after 101");
+  assert(openRoom.includes("firstPaintAt"), "first paint start survives ws open");
   assert(openRoom.includes("pendingScrollRestore.current = null"), "openRoom clears leftover restore");
   assert(openRoom.includes("loadingOlderRef.current = false"), "openRoom clears leftover older-load ref");
   assert(openRoom.includes("setLoadingOlder(false)"), "openRoom clears leftover older-load UI");
+  assert(chat.includes("메시지를 불러오는 중"), "first visit history wait");
 }
 
 section("no neon chat schema");

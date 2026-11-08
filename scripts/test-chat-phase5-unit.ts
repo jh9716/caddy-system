@@ -171,6 +171,7 @@ section("DM client error codes");
   assert(sanitizeChatErrorCode("room_forbidden / secret") === "unknown", "reject unsafe codes");
   assert(sanitizeChatErrorCode("https://evil") === "unknown", "reject urls");
   assert(chatWsFailureCode({ closeCode: 4008 }) === "stale_session", "close 4008 is stale_session");
+  assert(chatWsFailureCode({ closeCode: 4003 }) === "room_forbidden", "close 4003 is room_forbidden");
   assert(chatWsFailureCode({ timeout: true }) === "ws_timeout", "timeout code");
   assert(chatWsDiagnoseUrl("wss://chat.example/ws?room=dm_8_40&token=abc")?.startsWith("https://") === true, "diagnose uses http");
 }

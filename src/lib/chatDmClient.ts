@@ -38,10 +38,16 @@ export function chatWsFailureCode(input: {
   const http = sanitizeChatErrorCode(input.httpError);
   if (http !== "unknown") return http;
   if (input.closeCode === 4008) return "stale_session";
+  if (input.closeCode === 4003) return "room_forbidden";
   if (Number.isInteger(input.closeCode) && Number(input.closeCode) > 0) {
     return `ws_${input.closeCode}`;
   }
   return "ws_error";
+}
+
+export function isChatRoomAccessDenied(code: unknown): boolean {
+  const value = sanitizeChatErrorCode(code);
+  return value === "room_forbidden" || value === "invalid_room" || value === "ws_4003";
 }
 
 export async function diagnoseChatWsFailure(

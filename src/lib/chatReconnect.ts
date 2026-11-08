@@ -1,6 +1,8 @@
 export const RECONNECT_DELAYS_MS = [500, 1000, 2000, 4000, 8000, 15000] as const;
 export const RECONNECT_FAIL_MS = 15_000;
 export const TOKEN_EXPIRED_CLOSE = 4008;
+/** Worker `expire(..., "room_forbidden")` — membership deny, not a network drop. */
+export const ROOM_FORBIDDEN_CLOSE = 4003;
 
 export type ChatReconnectStatus = "ok" | "reconnecting" | "failed";
 
