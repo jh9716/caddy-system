@@ -153,6 +153,7 @@
     "test:off-request-admin-ui-unit": "bash scripts/tsx-safe.sh scripts/test-off-request-admin-ui-unit.ts",
     "test:off-request-phase2-unit": "bash scripts/tsx-safe.sh scripts/test-off-request-phase2-unit.ts",
     "test:chat-fast-entry-unit": "bash scripts/tsx-safe.sh scripts/test-chat-fast-entry-unit.ts",
+    "test:chat-list-entry-unit": "bash scripts/tsx-safe.sh scripts/test-chat-list-entry-unit.ts",
     "test:chat-prewarm-unit": "bash scripts/tsx-safe.sh scripts/test-chat-prewarm-unit.ts",
     "test:chat-entry-timing-unit": "bash scripts/tsx-safe.sh scripts/test-chat-entry-timing-unit.ts",
     "test:chat-token-unit": "bash scripts/tsx-safe.sh scripts/test-chat-token-unit.ts",

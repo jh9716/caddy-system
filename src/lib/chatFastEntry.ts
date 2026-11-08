@@ -1,11 +1,16 @@
 /**
- * 채팅 빠른 진입 (P0).
- * - 같은 탭·같은 세션 메모리에서만 토큰/목록 재사용. localStorage·sessionStorage 에는 저장하지 않는다.
- * - 로그인/로그아웃/계정전환(subscribeChatSessionReset) 시 즉시 폐기. 전체 새로고침 시 자동 소멸.
+ * 채팅 빠른 진입 (P0 + P1 목록).
+ * - 토큰은 같은 탭 메모리만. localStorage 에 토큰을 쓰지 않는다.
+ * - 방 목록 행은 메모리 + localStorage(userId 키). 로그아웃/계정전환 시 즉시 폐기.
  * - 재사용 토큰이 Worker 에서 거절되면 호출측이 invalidate 후 새로 발급한다 (권한 검사는 항상 Worker/서버).
  */
 import { isChatSessionEnded, subscribeChatSessionReset } from "@/lib/chatSessionReset";
 import { isAllRoomId, isDmRoomId } from "@/lib/chatRooms";
+import {
+  clearPersistedChatRooms,
+  readPersistedChatRooms,
+  writePersistedChatRooms,
+} from "@/lib/chatListEntry";
 
 export const CHAT_TOKEN_REUSE_MARGIN_SEC = 120;
 export const CHAT_OPEN_ROOM_EVENT = "vh-chat-open-room";
@@ -18,7 +23,7 @@ const cache: Cache<TokenLike, unknown> = { token: null, rooms: null, roomsUserId
 let subscribed = false;
 
 function ensureSubscribed(): void {
-  if (subscribed || typeof window === "undefined") return;
+  if (subscribed) return;
   subscribed = true;
   try {
     subscribeChatSessionReset(() => clearChatFastEntryCache());
@@ -31,6 +36,7 @@ export function clearChatFastEntryCache(): void {
   cache.token = null;
   cache.rooms = null;
   cache.roomsUserId = null;
+  clearPersistedChatRooms();
 }
 
 export function isReusableChatToken(
@@ -56,9 +62,13 @@ export function readReusableChatToken<T extends TokenLike>(nowSec?: number): T |
 export function rememberChatToken(info: TokenLike | null | undefined): void {
   ensureSubscribed();
   if (!info || !info.token || isChatSessionEnded()) return;
-  if (cache.token && cache.token.user?.userId !== info.user?.userId) {
+  if (
+    (cache.token && cache.token.user?.userId !== info.user?.userId) ||
+    (cache.roomsUserId != null && cache.roomsUserId !== info.user?.userId)
+  ) {
     cache.rooms = null;
     cache.roomsUserId = null;
+    clearPersistedChatRooms();
   }
   cache.token = info;
 }
@@ -72,12 +82,54 @@ export function rememberChatRooms<R>(userId: number | null | undefined, rooms: R
   if (!userId || isChatSessionEnded()) return;
   cache.rooms = rooms.slice();
   cache.roomsUserId = userId;
+  writePersistedChatRooms(userId, rooms);
 }
 
 export function readCachedChatRooms<R>(userId: number | null | undefined): R[] | null {
   ensureSubscribed();
-  if (!userId || isChatSessionEnded() || cache.roomsUserId !== userId || !cache.rooms) return null;
+  if (!userId || isChatSessionEnded()) return null;
+  if (cache.roomsUserId === userId && cache.rooms) return (cache.rooms as R[]).slice();
+  const persisted = readPersistedChatRooms(isChatSessionEnded());
+  if (!persisted || persisted.userId !== userId) return null;
+  cache.rooms = persisted.rooms.slice();
+  cache.roomsUserId = userId;
   return (cache.rooms as R[]).slice();
+}
+
+/** WebView 재시작용. 토큰 없이 마지막 본인 목록만. session ended 이면 없음. */
+export function readPersistedChatListForPaint<R>(): { userId: number; rooms: R[] } | null {
+  ensureSubscribed();
+  if (isChatSessionEnded()) return null;
+  if (cache.rooms && cache.roomsUserId) {
+    return { userId: cache.roomsUserId, rooms: (cache.rooms as R[]).slice() };
+  }
+  const persisted = readPersistedChatRooms(isChatSessionEnded());
+  if (!persisted) return null;
+  cache.rooms = persisted.rooms.slice();
+  cache.roomsUserId = persisted.userId;
+  return { userId: persisted.userId, rooms: persisted.rooms.slice() as R[] };
+}
+
+/** Best-effort idle prefetch. Full payload only; never logs the token. */
+export async function prefetchChatTokenIfNeeded(
+  fetchFn: (url: string, init?: RequestInit) => Promise<Response> = fetch
+): Promise<boolean> {
+  ensureSubscribed();
+  if (isChatSessionEnded()) return false;
+  if (readReusableChatToken()) return false;
+  try {
+    const res = await fetchFn("/api/chat/token", {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+    });
+    const data = (await res.json().catch(() => null)) as TokenLike | null;
+    if (!res.ok || !data?.token || !data?.exp || !data?.user?.userId) return false;
+    rememberChatToken(data);
+    return Boolean(readReusableChatToken());
+  } catch {
+    return false;
+  }
 }
 
 /** 딥링크 즉시 입장용 최소 요약. 권한은 Worker 가 WS 에서 판정한다. */

@@ -125,13 +125,21 @@ import {
 } from "@/lib/chatPrewarm";
 import {
   CHAT_OPEN_ROOM_EVENT,
+  clearChatFastEntryCache,
   invalidateChatToken,
   placeholderChatRoomSummary,
   readCachedChatRooms,
+  readPersistedChatListForPaint,
   readReusableChatToken,
   rememberChatRooms,
   rememberChatToken,
 } from "@/lib/chatFastEntry";
+import {
+  shouldAwaitDirectoryHttp,
+  shouldDropPersistedRoomsOnToken,
+  shouldPaintPersistedRooms,
+  shouldReuseChatSocket,
+} from "@/lib/chatListEntry";
 import {
   canProfileMention,
   chatAuthorLine,
@@ -793,11 +801,14 @@ export default function ChatClient() {
     ) {
       return null;
     }
-    if (await consumeUnauthorizedMemberResponse(res)) return null;
+    if (await consumeUnauthorizedMemberResponse(res)) {
+      clearChatFastEntryCache();
+      return null;
+    }
     const data = await res.json().catch(() => null);
     if (!res.ok) {
       if (res.status === 401 || res.status === 403) {
-        invalidateChatToken();
+        clearChatFastEntryCache();
         return null;
       }
       throw new Error(data?.message || data?.error || "채팅 입장에 실패했습니다.");
@@ -1507,10 +1518,26 @@ export default function ChatClient() {
   connectDirectoryRef.current = connectDirectory;
   connectSocketRef.current = connectSocket;
 
+  useLayoutEffect(() => {
+    const persisted = readPersistedChatListForPaint<RoomSummary>();
+    if (
+      !persisted ||
+      !shouldPaintPersistedRooms({
+        sessionEnded: isChatSessionEnded(),
+        roomCount: persisted.rooms.length,
+      })
+    ) {
+      return;
+    }
+    applyRooms(persisted.rooms);
+    warmChatPhotoMediaConnection();
+  }, [applyRooms]);
+
   useEffect(() => {
     let cancelled = false;
     const unsubscribeReset = subscribeChatSessionReset((reason) => {
       handleChatWsReuseDiagSessionReset();
+      clearChatFastEntryCache();
       lastOpenedRoomIdRef.current = null;
       dropChatPrewarm({ close: false });
       clearLocalLines([]);
@@ -1528,6 +1555,9 @@ export default function ChatClient() {
       setTokenInfo(null);
       setConnected(false);
       setDirectoryConnected(false);
+      setRooms([]);
+      roomsRef.current = [];
+      roomsShownRef.current = false;
       if (reason === "logout" || isChatSessionEnded()) return;
       const switchGen = dirGenRef.current;
       void fetchToken().then((info) => {
@@ -1563,28 +1593,46 @@ export default function ChatClient() {
     (async () => {
       const startedGen = dirGenRef.current;
       try {
+        warmChatPhotoMediaConnection();
         const cachedToken = initAttempt === 0 ? readReusableChatToken<TokenPayload>() : null;
         usedCachedTokenRef.current = Boolean(cachedToken);
         const info = cachedToken ?? (await fetchToken());
+        if (cancelled) return;
         if (
-          cancelled ||
           !info ||
           !shouldCommitChatToken({
             generationMatches: startedGen === dirGenRef.current,
           })
         ) {
+          if (!info) {
+            setRooms([]);
+            roomsRef.current = [];
+            roomsShownRef.current = false;
+          }
           return;
+        }
+        const persistedUserId = readPersistedChatListForPaint<RoomSummary>()?.userId;
+        if (
+          shouldDropPersistedRoomsOnToken({
+            persistedUserId,
+            tokenUserId: info.user.userId,
+          })
+        ) {
+          clearChatFastEntryCache();
+          roomsShownRef.current = false;
+          setRooms([]);
         }
         tokenRef.current = info;
         setTokenInfo(info);
-        warmChatPhotoMediaConnection();
-        warmChatPhotoMediaConnection();
+        rememberChatToken(info);
         const requested =
           parseChatDeepLinkRoomId(new URLSearchParams(window.location.search).get("room")) ||
           readPendingChatRoomId(sessionStorage);
-        entryTimingRef.current.roomsReqAt = chatEntryNow();
+        if (entryTimingRef.current.roomsReqAt == null) {
+          entryTimingRef.current.roomsReqAt = chatEntryNow();
+        }
         const cachedRooms = readCachedChatRooms<RoomSummary>(info.user.userId);
-        if (cachedRooms) applyRooms(cachedRooms); // 같은 세션 목록 즉시 표시, 아래에서 재검증
+        if (cachedRooms) applyRooms(cachedRooms); // persist/메모리 목록 표시, 아래에서 Directory 가 재검증
         connectDirectory(info);
         if (requested) {
           void fetchTargetedRoom(info.token, requested);
@@ -1611,7 +1659,13 @@ export default function ChatClient() {
           }
         })();
         try {
-          await fetchRoomsHttp(info.token);
+          if (
+            shouldAwaitDirectoryHttp({
+              paintedRoomCount: roomsRef.current.length,
+            })
+          ) {
+            await fetchRoomsHttp(info.token);
+          }
         } catch {
           // Directory WS is the realtime source; HTTP is a same-session fallback.
         }
@@ -1643,9 +1697,11 @@ export default function ChatClient() {
       if (isChatSessionEnded()) return;
       const info = tokenRef.current;
       if (!info) return;
-      connectDirectory(info);
+      if (!shouldReuseChatSocket(dirRef.current?.readyState)) {
+        connectDirectory(info);
+      }
       const room = roomRef.current;
-      if (room) {
+      if (room && !shouldReuseChatSocket(wsRef.current?.readyState)) {
         reconnectingRef.current = true;
         void connectSocket(info, room.roomId);
       }

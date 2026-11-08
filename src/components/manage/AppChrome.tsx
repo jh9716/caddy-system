@@ -7,6 +7,8 @@ import LogoutButton from "@/components/LogoutButton";
 import AccountDeletionLink from "@/components/AccountDeletionLink";
 import PrivacyPolicyLink from "@/components/PrivacyPolicyLink";
 import { registerAndroidDrawerClose } from "@/lib/androidSystemBack";
+import { warmChatPhotoMediaConnection } from "@/lib/chatClientConfig";
+import { prefetchChatTokenIfNeeded } from "@/lib/chatFastEntry";
 
 export type AppChromeNavItem = {
   href: string;
@@ -145,6 +147,8 @@ export default function AppChrome({
     let cancelled = false;
     const run = () => {
       if (cancelled) return;
+      warmChatPhotoMediaConnection();
+      void prefetchChatTokenIfNeeded();
       for (const href of toPrefetch) router.prefetch(href);
     };
 
