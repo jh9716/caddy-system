@@ -124,7 +124,7 @@ const legacy = legacyAdminToolItems(allTools);
 const grouped = groupAdminToolItems(primary);
 assert(grouped.map((g) => g.label).join(",") === "운영 보조,알림,계정 / 시스템", "group labels");
 assert(
-  grouped[0].items.map((i) => i.label).join(",") === "캐디 검색",
+  grouped[0].items.map((i) => i.label).join(",") === "캐디 검색,채팅 성능 진단",
   "ops tools default"
 );
 assert(
@@ -191,6 +191,17 @@ assert(
   "알림톡 stays primary and marks preview"
 );
 assert(
+  ADMIN_TOOL_ITEMS.some(
+    (i) =>
+      i.href === "/manage/chat-ws-reuse-diag" &&
+      i.label === "채팅 성능 진단" &&
+      i.description.includes("DB 저장 없음") &&
+      i.group === "ops" &&
+      !i.legacy
+  ),
+  "chat ws reuse diag is primary ops"
+);
+assert(
   allTools.some((i) => i.href === "/manage/assignments/preview"),
   "manageToolItems still includes preview"
 );
@@ -198,6 +209,7 @@ assert(
 console.log("== routes still exist (no delete / no redirect) ==");
 const routes = [
   "src/app/manage/caddy-search/page.tsx",
+  "src/app/manage/chat-ws-reuse-diag/page.tsx",
   "src/app/manage/assignments/preview/page.tsx",
   "src/app/manage/reservations/page.tsx",
   "src/app/manage/alimtalk/page.tsx",

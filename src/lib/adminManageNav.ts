@@ -45,6 +45,12 @@ export const ADMIN_TOOL_ITEMS: readonly AdminToolItem[] = [
     group: "ops",
   },
   {
+    href: "/manage/chat-ws-reuse-diag",
+    label: "채팅 성능 진단",
+    description: "WebSocket 재사용·재입장 속도 · 이 기기만 · DB 저장 없음",
+    group: "ops",
+  },
+  {
     href: "/manage/assignments/preview",
     label: "배치 미리보기",
     description: "자동배치 결과를 미리 확인합니다 · DB 저장 없음",
