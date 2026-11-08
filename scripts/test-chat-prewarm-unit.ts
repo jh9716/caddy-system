@@ -1,11 +1,21 @@
 import { readFileSync } from "node:fs";
 import {
   CHAT_PREWARM_MAX_ROOMS,
+  addChatPrewarmWaiter,
+  armChatPrewarmTimeout,
+  beginChatPrewarm,
   canAdoptChatPrewarm,
   chatPrewarmReadyFromFrame,
+  createChatPrewarmState,
+  isChatPrewarmGenerationCurrent,
+  isChatPrewarmSocketAlive,
   pickChatPrewarmRoom,
+  settleChatPrewarmWaiters,
   shouldDropPrewarmOnDirectory,
   shouldHoldChatReadWhilePrewarm,
+  shouldMarkChatPrewarmReady,
+  shouldPaintPrewarmLines,
+  shouldReuseInflightPrewarmSocket,
   shouldStartChatPrewarm,
 } from "../src/lib/chatPrewarm";
 import { PRODUCTION_CHAT_WS_REUSE_ENABLED } from "../src/lib/chatWsReuse";
@@ -87,7 +97,7 @@ assert(
     socketOpen: true,
     sessionEnded: false,
   }) === false,
-  "unready must use cold entry"
+  "unready must use cold entry unless inflight reuse"
 );
 assert(
   canAdoptChatPrewarm({
@@ -120,13 +130,19 @@ assert(
   "ended session cannot adopt"
 );
 assert(
-  shouldHoldChatReadWhilePrewarm({ prewarming: true, viewIsRoom: false }) === true,
+  shouldHoldChatReadWhilePrewarm({ prewarming: true, viewIsRoom: false, ready: false }) === true,
   "list prewarm does not send read"
 );
 assert(
-  shouldHoldChatReadWhilePrewarm({ prewarming: true, viewIsRoom: true }) === false,
-  "opened room may send read"
+  shouldHoldChatReadWhilePrewarm({ prewarming: true, viewIsRoom: true, ready: false }) === true,
+  "clicked but history not in: still no read"
 );
+assert(
+  shouldHoldChatReadWhilePrewarm({ prewarming: true, viewIsRoom: true, ready: true }) === false,
+  "opened room after history may send read"
+);
+assert(shouldPaintPrewarmLines({ ready: false }) === false, "do not paint before history");
+assert(shouldPaintPrewarmLines({ ready: true }) === true, "paint only after history");
 assert(shouldDropPrewarmOnDirectory({ prewarmRoomId: "all", memberRoomIds: ["room_aaa"] }) === true, "membership drop");
 assert(shouldDropPrewarmOnDirectory({ prewarmRoomId: "all", memberRoomIds: ["all"] }) === false, "still a member");
 assert(
@@ -163,6 +179,130 @@ assert(
   "in-room does not prewarm another"
 );
 
+console.log("== inflight click / history race ==");
+assert(
+  shouldMarkChatPrewarmReady({
+    prewarmRoomId: "all",
+    historyRoomId: "all",
+    isHistory: true,
+  }) === true,
+  "history marks ready even after view is room"
+);
+assert(
+  shouldMarkChatPrewarmReady({
+    prewarmRoomId: "all",
+    historyRoomId: "all",
+    isHistory: false,
+  }) === false,
+  "non-history does not mark ready"
+);
+assert(
+  shouldReuseInflightPrewarmSocket({
+    prewarmRoomId: "all",
+    targetRoomId: "all",
+    inflight: true,
+    ready: false,
+    socketAlive: false,
+    socketPending: true,
+    sessionEnded: false,
+  }) === true,
+  "click during start reuses pending socket, no second WS"
+);
+assert(
+  shouldReuseInflightPrewarmSocket({
+    prewarmRoomId: "all",
+    targetRoomId: "all",
+    inflight: true,
+    ready: false,
+    socketAlive: true,
+    socketPending: false,
+    sessionEnded: false,
+  }) === true,
+  "click while CONNECTING/OPEN reuses that socket"
+);
+assert(
+  shouldReuseInflightPrewarmSocket({
+    prewarmRoomId: "all",
+    targetRoomId: "dm_1_2",
+    inflight: true,
+    ready: false,
+    socketAlive: true,
+    socketPending: false,
+    sessionEnded: false,
+  }) === false,
+  "other room does not reuse prewarm socket"
+);
+assert(isChatPrewarmSocketAlive(0) === true, "CONNECTING is alive");
+assert(isChatPrewarmSocketAlive(1) === true, "OPEN is alive");
+assert(isChatPrewarmSocketAlive(2) === false, "CLOSING is not reusable");
+assert(isChatPrewarmSocketAlive(3) === false, "CLOSED is not reusable");
+
+const raced = createChatPrewarmState();
+const gen = beginChatPrewarm(raced, "all");
+assert(isChatPrewarmGenerationCurrent(raced, gen) === true, "begin generation current");
+const got: boolean[] = [];
+addChatPrewarmWaiter(raced, (ok) => got.push(ok));
+addChatPrewarmWaiter(raced, (ok) => got.push(ok));
+const viewIsRoom = true;
+assert(
+  shouldMarkChatPrewarmReady({
+    prewarmRoomId: raced.roomId,
+    historyRoomId: "all",
+    isHistory: true,
+  }) === true,
+  "view=room does not block mark"
+);
+assert(viewIsRoom === true, "click already switched view");
+raced.ready = true;
+raced.inflight = false;
+settleChatPrewarmWaiters(raced, true, () => {});
+assert(got.length === 2 && got[0] === true && got[1] === true, "connect wait + click wait both complete");
+assert(raced.waiters.length === 0, "waiters drained");
+
+const timed = createChatPrewarmState();
+beginChatPrewarm(timed, "all");
+let timeoutFired = false;
+const scheduled: Array<() => void> = [];
+armChatPrewarmTimeout(timed, 1, (cb) => {
+  scheduled.push(cb);
+  return 99;
+}, () => {
+  timeoutFired = true;
+  settleChatPrewarmWaiters(timed, false, () => {});
+  timed.inflight = false;
+  timed.roomId = null;
+});
+armChatPrewarmTimeout(timed, 1, (cb) => {
+  scheduled.push(cb);
+  return 100;
+}, () => {
+  throw new Error("second timer must not arm");
+});
+assert(timed.timer === 99, "one shared timeout");
+assert(scheduled.length === 1, "second arm is a no-op");
+const timeoutGot: boolean[] = [];
+addChatPrewarmWaiter(timed, (ok) => timeoutGot.push(ok));
+scheduled[0]!();
+assert(timeoutFired === true, "timeout runs");
+assert(timeoutGot[0] === false, "timeout fails waiters");
+assert(timed.timer === null, "timeout clears timer");
+assert(timed.waiters.length === 0, "timeout drains waiters");
+
+const dropped = createChatPrewarmState();
+beginChatPrewarm(dropped, "all");
+dropped.timer = 7;
+const cleared: number[] = [];
+const dropGot: boolean[] = [];
+addChatPrewarmWaiter(dropped, (ok) => dropGot.push(ok));
+dropped.generation += 1;
+settleChatPrewarmWaiters(dropped, false, (id) => cleared.push(id));
+dropped.ready = false;
+dropped.inflight = false;
+dropped.roomId = null;
+assert(dropGot[0] === false, "session/membership drop fails waiters");
+assert(cleared[0] === 7, "drop clears timer");
+assert(isChatPrewarmGenerationCurrent(dropped, gen) === false, "drop supersedes in-flight connect");
+
 console.log("== shown timing ==");
 resetChatEntryTimingForTests(true);
 const rafs: Array<() => void> = [];
@@ -184,9 +324,15 @@ console.log("== ChatClient / no 354 cache / reuse ==");
 const chat = readFileSync("src/app/chat/ChatClient.tsx", "utf8");
 assert(chat.includes("startChatPrewarm"), "prewarm starter");
 assert(chat.includes("waitForHistory: true"), "prewarm waits for Worker history");
-assert(chat.includes("canAdoptChatPrewarm"), "click adopts only when ready");
+assert(chat.includes("waitChatPrewarmSettled"), "shared waiter for connect + click");
+assert(chat.includes("shouldMarkChatPrewarmReady"), "history marks ready independent of view");
+assert(!/viewRef\.current !== "room" &&\s*prewarmRef\.current\.roomId === roomId/.test(chat), "view=room no longer blocks mark");
+assert(chat.includes("shouldReuseInflightPrewarmSocket"), "same-room click reuses inflight socket");
+assert(chat.includes("shouldPaintPrewarmLines"), "no paint before history");
 assert(chat.includes("shouldHoldChatReadWhilePrewarm"), "read held on list");
 assert(chat.includes("dropChatPrewarm"), "deny/session drops prewarm");
+assert(chat.includes("beginChatPrewarm"), "generation bump on start");
+assert(chat.includes("prewarmGen"), "connect aborted when superseded");
 assert(chat.includes('window.addEventListener("offline"'), "offline fail-closed");
 assert(chat.includes("waitForOpen: true"), "cold path still waits for socket");
 assert(chat.includes("shouldParkChatWsReuse"), "park/resume kept");
