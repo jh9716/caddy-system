@@ -59,10 +59,13 @@ section("lightbox contain, no new viewer");
   const noticeCss = sliceCss(css, ".notice-photos {", ".notice-back {");
   assert(gallery.includes("setOpenId"), "keeps existing click-to-open lightbox");
   assert(!gallery.includes("react-image-lightbox"), "no new viewer lib");
+  assert(gallery.includes("notice-photos-lightbox-stage"), "scrollable original-size stage");
+  assert(/\.notice-photos-lightbox-stage\s*\{[^}]*max-height:\s*90vh/.test(noticeCss), "stage fits screen");
+  assert(/\.notice-photos-lightbox-stage\s*\{[^}]*overflow:\s*auto/.test(noticeCss), "stage scrolls");
   assert(/\.notice-photos-lightbox img\s*\{[^}]*object-fit:\s*contain/.test(noticeCss), "lightbox contain");
-  assert(/\.notice-photos-lightbox img\s*\{[^}]*max-height:\s*90vh/.test(noticeCss), "lightbox fits screen");
-  assert(/\.notice-photos-lightbox img\s*\{[^}]*width:\s*auto/.test(noticeCss), "lightbox width auto");
+  assert(/\.notice-photos-lightbox img\s*\{[^}]*width:\s*100%/.test(noticeCss), "lightbox width 100%");
   assert(/\.notice-photos-lightbox img\s*\{[^}]*height:\s*auto/.test(noticeCss), "lightbox height auto");
+  assert(/\.notice-photos-lightbox img\s*\{[^}]*max-height:\s*none/.test(noticeCss), "lightbox img not capped");
 }
 
 section("list and report thumbs unchanged");

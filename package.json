@@ -206,6 +206,8 @@
     "test:play-review-accounts-unit": "bash scripts/tsx-safe.sh scripts/test-play-review-accounts-unit.ts",
     "test:notice-photo-unit": "bash scripts/tsx-safe.sh scripts/test-notice-photo-unit.ts",
     "test:notice-photo-display-unit": "bash scripts/tsx-safe.sh scripts/test-notice-photo-display-unit.ts",
+    "test:notice-photo-prepare-unit": "bash scripts/tsx-safe.sh scripts/test-notice-photo-prepare-unit.ts",
+    "test:notice-file-unit": "bash scripts/tsx-safe.sh scripts/test-notice-file-unit.ts",
     "test:photo-http-cache-unit": "bash scripts/tsx-safe.sh scripts/test-photo-http-cache-unit.ts",
     "test:image-header-size-unit": "bash scripts/tsx-safe.sh scripts/test-image-header-size-unit.ts",
     "test:photo-stream-unit": "bash scripts/tsx-safe.sh scripts/test-photo-stream-unit.ts",

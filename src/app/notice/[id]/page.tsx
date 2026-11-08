@@ -10,7 +10,9 @@ import {
   formatNoticeTargetLabel,
 } from "@/lib/noticeTarget";
 import { listNoticePhotos } from "@/lib/noticePhoto";
+import { listNoticeFiles } from "@/lib/noticeFile";
 import NoticeDetailActions from "@/components/notice/NoticeDetailActions";
+import NoticeFileList from "@/components/notice/NoticeFileList";
 import NoticePhotoGallery from "@/components/notice/NoticePhotoGallery";
 import NoticePushNotifyCard from "@/components/notice/NoticePushNotifyCard";
 
@@ -39,6 +41,7 @@ export default async function NoticeDetailPage({
   const isAdmin = auth.role === "admin";
   const content = notice.content ?? "";
   const photos = await listNoticePhotos(prisma, id);
+  const files = await listNoticeFiles(prisma, id);
   const hasWindow = Boolean(notice.publishStartAt || notice.publishEndAt);
 
   return (
@@ -81,6 +84,7 @@ export default async function NoticeDetailPage({
       </dl>
       <div className="notice-detail-body">{content || "내용이 없습니다."}</div>
       <NoticePhotoGallery noticeId={id} photos={photos} />
+      <NoticeFileList noticeId={id} files={files} />
       {isAdmin ? (
         <>
           <NoticeDetailActions id={id} />

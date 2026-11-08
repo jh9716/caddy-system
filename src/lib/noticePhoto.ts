@@ -7,16 +7,15 @@ import {
   COURSE_REPORT_PHOTO_EXT,
   type CourseReportPhotoMime,
 } from "@/lib/courseReportPhotoConstants";
-import {
-  CourseReportPhotoValidationError,
-  assertCourseReportPhotoBytes,
-} from "@/lib/courseReportPhotoMagic";
+import { CourseReportPhotoValidationError } from "@/lib/courseReportPhotoMagic";
+import { assertNoticePhotoBytes } from "@/lib/noticePhotoMagic";
 import {
   CourseReportPhotoStorageError,
   getCourseReportPhotoStore,
 } from "@/lib/courseReportPhotoStorage";
 import {
   NOTICE_PHOTO_MAX,
+  noticePhotoLimitMessage,
   type NoticePhotoPublic,
 } from "@/lib/noticePhotoConstants";
 
@@ -127,12 +126,12 @@ export async function uploadNoticePhoto(
   if (existing >= NOTICE_PHOTO_MAX) {
     throw new CourseReportPhotoValidationError(
       "photo_limit",
-      "사진은 최대 3장까지 첨부할 수 있습니다.",
+      noticePhotoLimitMessage(),
       409
     );
   }
 
-  const mime = assertCourseReportPhotoBytes(input.bytes);
+  const mime = assertNoticePhotoBytes(input.bytes);
   const storageKey = buildNoticePhotoStorageKey(input.noticeId, mime);
   try {
     await store.put(storageKey, input.bytes, mime);
@@ -168,7 +167,7 @@ export async function uploadNoticePhoto(
     await store.delete(storageKey).catch(() => undefined);
     throw new CourseReportPhotoValidationError(
       "photo_limit",
-      "사진은 최대 3장까지 첨부할 수 있습니다.",
+      noticePhotoLimitMessage(),
       409
     );
   }

@@ -110,6 +110,29 @@ async function postPhoto(cookie: string, noticeId: number, bytes: Uint8Array) {
 }
 
 async function main() {
+  section("notice photo limits are independent");
+  {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const read = (rel: string) => fs.readFileSync(path.resolve(rel), "utf8");
+    const constants = read("src/lib/noticePhotoConstants.ts");
+    const form = read("src/app/notice/new/ui/NewNoticeForm.tsx");
+    const noticeClient = read("src/lib/noticePhotoClient.ts");
+    const reportClient = read("src/lib/courseReportPhotoClient.ts");
+    const chatClient = read("src/lib/chatPhotoClient.ts");
+    assert(NOTICE_PHOTO_MAX === 10, "notice max 10");
+    assert(constants.includes("NOTICE_PHOTO_MAX = 10"), "constant 10");
+    assert(!constants.includes("NOTICE_PHOTO_MAX = COURSE_REPORT_PHOTO_MAX"), "notice max not aliased");
+    assert(form.includes("NOTICE_PHOTO_MAX"), "form uses notice max");
+    assert(!form.includes("COURSE_REPORT_PHOTO_MAX"), "form does not use report max");
+    assert(form.includes("pickNoticePhotos"), "form uses notice picker");
+    assert(noticeClient.includes("prepareNoticePhoto"), "notice client has dedicated prepare");
+    assert(noticeClient.includes("pickCourseReportPhotos(files, room, prepareNoticePhoto"), "picker injects notice prepare");
+    assert(reportClient.includes("COURSE_REPORT_PHOTO_LONG_EDGE"), "report still uses 1200-edge encode");
+    assert(reportClient.includes("COURSE_REPORT_PHOTO_JPEG_QUALITY"), "report quality unchanged");
+    assert(chatClient.includes("prepareCourseReportPhoto as prepareChatPhoto"), "chat still uses report prepare");
+  }
+
   assertLocalDatabaseUrl(process.env.DATABASE_URL);
   const prevSecret = process.env.SESSION_SECRET;
   process.env.SESSION_SECRET = "notice-photo-unit-secret-32chars!!!";
@@ -177,6 +200,8 @@ async function main() {
       assert(detail.status === 200, "notice without photos still 200");
       assert(Array.isArray(body.photos) && body.photos.length === 0, "photos []");
       assert(body.photoCount === 0, "photoCount 0");
+      assert(Array.isArray(body.files) && body.files.length === 0, "files []");
+      assert(body.fileCount === 0, "fileCount 0");
     }
 
     section("admin upload / caddy blocked");
@@ -255,11 +280,12 @@ async function main() {
 
     section("multi photo + limit");
     {
-      await postPhoto(adminCookie, createdJson.id, jpegBytes(32, 2));
-      const third = await postPhoto(adminCookie, createdJson.id, jpegBytes(32, 3));
-      assert(third.status === 200, "third photo ok");
-      const fourth = await postPhoto(adminCookie, createdJson.id, jpegBytes(32, 4));
-      assert(fourth.status === 409, `over ${NOTICE_PHOTO_MAX} rejected`);
+      for (let i = 2; i <= NOTICE_PHOTO_MAX; i++) {
+        const res = await postPhoto(adminCookie, createdJson.id, jpegBytes(32, i));
+        assert(res.status === 200, `photo ${i} ok`);
+      }
+      const over = await postPhoto(adminCookie, createdJson.id, jpegBytes(32, 99));
+      assert(over.status === 409, `over ${NOTICE_PHOTO_MAX} rejected`);
       const detail = await GET_NOTICE(
         req(`https://www.verthill.kr/api/notice/${createdJson.id}`, {
           headers: { cookie: adminCookie },
@@ -267,8 +293,8 @@ async function main() {
         { params: { id: String(createdJson.id) } }
       );
       const body = await detail.json();
-      assert(body.photos.length === 3, "three photos listed");
-      assert(body.photoCount === 3, "photoCount 3");
+      assert(body.photos.length === NOTICE_PHOTO_MAX, `${NOTICE_PHOTO_MAX} photos listed`);
+      assert(body.photoCount === NOTICE_PHOTO_MAX, `photoCount ${NOTICE_PHOTO_MAX}`);
     }
 
     section("future notice photo hidden from caddy");
@@ -320,7 +346,7 @@ async function main() {
       const rows = await prisma.noticePhoto.findMany({
         where: { noticeId: createdJson.id },
       });
-      assert(rows.length === 3, "three stored keys");
+      assert(rows.length === NOTICE_PHOTO_MAX, `${NOTICE_PHOTO_MAX} stored keys`);
       const firstKey = rows[0].storageKey;
       const restKeys = rows.slice(1).map((r) => r.storageKey);
       assert((await store.get(firstKey)) != null, "blob exists before individual delete");
@@ -335,8 +361,9 @@ async function main() {
       assert(delOne.status === 200, "individual photo delete 200");
       assert((await store.get(firstKey)) == null, "individual delete removes blob");
       assert(
-        (await prisma.noticePhoto.count({ where: { noticeId: createdJson.id } })) === 2,
-        "two photos remain after individual delete"
+        (await prisma.noticePhoto.count({ where: { noticeId: createdJson.id } })) ===
+          NOTICE_PHOTO_MAX - 1,
+        "remaining photos stay after individual delete"
       );
 
       const doomed = await POST_NOTICE(
@@ -655,8 +682,8 @@ async function main() {
       );
       const lightboxCss = noticePhotoCss.slice(noticePhotoCss.indexOf(".notice-photos-lightbox img"));
       assert(lightboxCss.includes("object-fit: contain"), "lightbox contain");
-      assert(lightboxCss.includes("max-height: 90vh"), "lightbox fits viewport");
-      assert(lightboxCss.includes("width: auto") && lightboxCss.includes("height: auto"), "lightbox keeps ratio");
+      assert(noticePhotoCss.includes("max-height: 90vh"), "lightbox stage fits viewport");
+      assert(lightboxCss.includes("height: auto"), "lightbox keeps ratio");
       assert(!/include:\s*\{\s*photos:/.test(apiOne), "GET detail does not include photos on Notice");
       assert(!/include:\s*\{\s*photos:/.test(rscDetail), "RSC detail does not include photos on Notice");
       assert(!summary.includes("photos:"), "summary notice query has no photos include");
@@ -830,7 +857,7 @@ async function main() {
         { params: { id: String(createdJson.id) } }
       );
       const body = await after.json();
-      assert(body.photos.length === 2, "remaining photos survive text patch");
+      assert(body.photos.length === NOTICE_PHOTO_MAX - 1, "remaining photos survive text patch");
     }
   } finally {
     setCourseReportPhotoStoreForTests(null);

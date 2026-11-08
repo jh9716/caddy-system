@@ -15,13 +15,23 @@ import { isFutureNoticeStart, planNoticeClientAutoPush } from '@/lib/noticeAutoP
 import { requestNoticePushSend } from '@/lib/noticePushClient'
 import { DRIVING_POOL_TEAM, PRIMARY_TEAMS } from '@/lib/caddyManage'
 import {
-  COURSE_REPORT_PHOTO_ACCEPT,
-  COURSE_REPORT_PHOTO_MAX,
-  pickCourseReportPhotos,
-} from '@/lib/courseReportPhotoClient'
-import type { NoticePhotoPublic } from '@/lib/noticePhotoConstants'
+  NOTICE_PHOTO_ACCEPT,
+  NOTICE_PHOTO_MAX,
+  type NoticePhotoPublic,
+} from '@/lib/noticePhotoConstants'
 import { noticePhotoSrc } from '@/lib/noticePhotoConstants'
-import { uploadNoticePendingPhotos } from '@/lib/noticePhotoClient'
+import { pickNoticePhotos, uploadNoticePendingPhotos } from '@/lib/noticePhotoClient'
+import {
+  NOTICE_FILE_ACCEPT,
+  NOTICE_FILE_MAX,
+  type NoticeFilePublic,
+} from '@/lib/noticeFileConstants'
+import { noticeFileSrc } from '@/lib/noticeFileConstants'
+import {
+  pickNoticeFiles,
+  uploadNoticePendingFiles,
+  type NoticePendingFile,
+} from '@/lib/noticeFileClient'
 import {
   consumeUnauthorizedMemberResponse,
   isMemberSessionRedirectScheduled,
@@ -40,6 +50,7 @@ type Props = {
     publishStartAt?: string | null
     publishEndAt?: string | null
     photos?: NoticePhotoPublic[]
+    files?: NoticeFilePublic[]
   }
 }
 
@@ -85,6 +96,7 @@ function pushResultMessage(push: {
 export default function NewNoticeForm({ mode = 'new', initial }: Props) {
   const router = useRouter()
   const fileRef = useRef<HTMLInputElement>(null)
+  const pdfRef = useRef<HTMLInputElement>(null)
   const [title, setTitle] = useState(initial?.title ?? '')
   const [body, setBody] = useState(initial?.body ?? '')
   const [important, setImportant] = useState(Boolean(initial?.important))
@@ -104,10 +116,16 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
     initial?.photos ?? []
   )
   const [pending, setPending] = useState<PendingPhoto[]>([])
+  const [existingFiles, setExistingFiles] = useState<NoticeFilePublic[]>(
+    initial?.files ?? []
+  )
+  const [pendingFiles, setPendingFiles] = useState<NoticePendingFile[]>([])
   const isEdit = mode === 'edit'
   const scheduled = isFutureNoticeStart(publishStartAt || null)
   const totalPhotos = existingPhotos.length + pending.length
-  const canAdd = totalPhotos < COURSE_REPORT_PHOTO_MAX
+  const canAdd = totalPhotos < NOTICE_PHOTO_MAX
+  const totalFiles = existingFiles.length + pendingFiles.length
+  const canAddFile = totalFiles < NOTICE_FILE_MAX
 
   const teamOptions = useMemo(
     () => [...PRIMARY_TEAMS, DRIVING_POOL_TEAM],
@@ -117,15 +135,15 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
   async function onPick(files: FileList | null) {
     if (!files) return
     setStatusNote('')
-    const room = COURSE_REPORT_PHOTO_MAX - existingPhotos.length - pending.length
-    const { items, note } = await pickCourseReportPhotos(Array.from(files), room, undefined, {
+    const room = NOTICE_PHOTO_MAX - existingPhotos.length - pending.length
+    const { items, note } = await pickNoticePhotos(Array.from(files), room, {
       fileIds: pending.map((p) => p.fileId),
       fingerprints: pending.map((p) => p.fingerprint),
     })
     if (note) setStatusNote(note)
     if (items.length) {
       setPending((cur) => {
-        const roomLeft = COURSE_REPORT_PHOTO_MAX - existingPhotos.length - cur.length
+        const roomLeft = NOTICE_PHOTO_MAX - existingPhotos.length - cur.length
         return [...cur, ...items.slice(0, Math.max(0, roomLeft))]
       })
     }
@@ -153,6 +171,42 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
       return
     }
     setExistingPhotos((cur) => cur.filter((p) => p.id !== photoId))
+  }
+
+  async function onPickPdf(files: FileList | null) {
+    if (!files) return
+    setStatusNote('')
+    const room = NOTICE_FILE_MAX - existingFiles.length - pendingFiles.length
+    const { items, note } = pickNoticeFiles(Array.from(files), room, {
+      fileIds: pendingFiles.map((p) => p.fileId),
+    })
+    if (note) setStatusNote(note)
+    if (items.length) {
+      setPendingFiles((cur) => {
+        const roomLeft = NOTICE_FILE_MAX - existingFiles.length - cur.length
+        return [...cur, ...items.slice(0, Math.max(0, roomLeft))]
+      })
+    }
+    if (pdfRef.current) pdfRef.current.value = ''
+  }
+
+  function removePendingFile(key: string) {
+    setPendingFiles((cur) => cur.filter((p) => p.key !== key))
+  }
+
+  async function removeExistingFile(fileId: number) {
+    if (!initial?.id) return
+    const res = await fetch(`/api/notice/${initial.id}/files/${fileId}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    })
+    if (consumeUnauthorizedMemberResponse(res)) return
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      setStatusNote(typeof data.message === 'string' ? data.message : '첨부파일 삭제 실패')
+      return
+    }
+    setExistingFiles((cur) => cur.filter((f) => f.id !== fileId))
   }
 
   async function onSubmit(e: React.FormEvent) {
@@ -213,17 +267,39 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
         ? data.id
         : null
 
+    let photoFailed = 0
+    let fileFailed = 0
     if (noticeId && pending.length > 0) {
       const uploaded = await uploadNoticePendingPhotos(noticeId, pending)
       if (isMemberSessionRedirectScheduled()) return
-      if (uploaded.failed > 0) {
-        setBusy(false)
-        alert(
-          `공지는 저장됐지만 사진 ${uploaded.failed}장을 올리지 못했습니다. 자동 푸시는 보내지 않았습니다.`
-        )
-        router.replace(`/notice/${noticeId}`)
-        return
+      photoFailed = uploaded.failed
+      if (uploaded.failedIndexes.length > 0) {
+        setPending((cur) => cur.filter((_, i) => uploaded.failedIndexes.includes(i)))
+      } else {
+        setPending([])
       }
+    }
+    if (noticeId && pendingFiles.length > 0) {
+      const uploadedFiles = await uploadNoticePendingFiles(noticeId, pendingFiles)
+      if (isMemberSessionRedirectScheduled()) return
+      fileFailed = uploadedFiles.failed
+      if (uploadedFiles.failedIndexes.length > 0) {
+        setPendingFiles((cur) => cur.filter((_, i) => uploadedFiles.failedIndexes.includes(i)))
+      } else {
+        setPendingFiles([])
+      }
+    }
+    if (photoFailed > 0 || fileFailed > 0) {
+      setBusy(false)
+      const parts = [
+        photoFailed > 0 ? `사진 ${photoFailed}장` : '',
+        fileFailed > 0 ? `PDF ${fileFailed}개` : '',
+      ].filter(Boolean)
+      alert(
+        `공지는 저장됐지만 ${parts.join(', ')}를 올리지 못했습니다. 기존 첨부 파일은 그대로 두었습니다. 자동 푸시는 보내지 않았습니다.`
+      )
+      router.replace(`/notice/${noticeId}/edit`)
+      return
     }
 
     if (noticeId && plan.sendAfterPhotos) {
@@ -274,7 +350,7 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
         />
       </label>
       <fieldset className="course-report-fieldset">
-        <legend>사진 첨부 (최대 {COURSE_REPORT_PHOTO_MAX}장)</legend>
+        <legend>사진 첨부 (최대 {NOTICE_PHOTO_MAX}장)</legend>
         <div className="course-report-photo-composer">
           {existingPhotos.map((photo) => (
             <div key={photo.id} className="course-report-photo-item">
@@ -309,7 +385,7 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
             <input
               ref={fileRef}
               type="file"
-              accept={COURSE_REPORT_PHOTO_ACCEPT}
+              accept={NOTICE_PHOTO_ACCEPT}
               multiple
               disabled={!canAdd || busy}
               onChange={(e) => void onPick(e.target.files)}
@@ -317,6 +393,50 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
           </label>
         </div>
         {statusNote ? <p className="course-report-photo-note">{statusNote}</p> : null}
+      </fieldset>
+      <fieldset className="course-report-fieldset">
+        <legend>PDF 첨부 (최대 {NOTICE_FILE_MAX}개)</legend>
+        <ul className="notice-files-composer">
+          {existingFiles.map((file) => (
+            <li key={file.id} className="notice-files-composer-item">
+              <a href={noticeFileSrc(initial!.id, file.id)} target="_blank" rel="noopener">
+                {file.originalName}
+              </a>
+              <button
+                type="button"
+                className="notice-files-composer-remove"
+                aria-label="첨부파일 삭제"
+                onClick={() => void removeExistingFile(file.id)}
+              >
+                삭제
+              </button>
+            </li>
+          ))}
+          {pendingFiles.map((file) => (
+            <li key={file.key} className="notice-files-composer-item">
+              <span>{file.file.name}</span>
+              <button
+                type="button"
+                className="notice-files-composer-remove"
+                aria-label="첨부파일 삭제"
+                onClick={() => removePendingFile(file.key)}
+              >
+                삭제
+              </button>
+            </li>
+          ))}
+        </ul>
+        <label className={`notice-file-add${canAddFile ? '' : ' is-disabled'}`}>
+          + PDF
+          <input
+            ref={pdfRef}
+            type="file"
+            accept={NOTICE_FILE_ACCEPT}
+            multiple
+            disabled={!canAddFile || busy}
+            onChange={(e) => void onPickPdf(e.target.files)}
+          />
+        </label>
       </fieldset>
       <label className="notice-field">
         <span>대상</span>

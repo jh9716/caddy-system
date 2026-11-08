@@ -246,6 +246,8 @@ model Notice {
   pushSentByUserId Int?
   /// 첨부 사진. Bytes는 private Blob. 기존 Notice row는 0장.
   photos NoticePhoto[]
+  /// PDF 첨부. Bytes는 private Blob. NoticePhoto와 분리. 기존 Notice row는 0개.
+  files  NoticeFile[]
 
   @@index([pinned, important, createdAt])
   @@index([targetType, targetValue])
@@ -262,6 +264,22 @@ model NoticePhoto {
   size       Int
   sortOrder  Int      @default(0)
   createdAt  DateTime @default(now())
+
+  @@index([noticeId, sortOrder])
+}
+
+/// Notice PDF attachment. Bytes live in private object storage, not Postgres.
+/// Separate from NoticePhoto — not a photo MIME add-on. public URL column 없음.
+model NoticeFile {
+  id           Int      @id @default(autoincrement())
+  noticeId     Int
+  notice       Notice   @relation(fields: [noticeId], references: [id], onDelete: Cascade)
+  storageKey   String   @unique
+  originalName String
+  mimeType     String
+  size         Int
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
 
   @@index([noticeId, sortOrder])
 }

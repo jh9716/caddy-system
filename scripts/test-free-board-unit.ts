@@ -126,7 +126,7 @@ async function main() {
     assert(t2.width === 2560 && t2.height === 1920, "카메라 4032x3024 → 2560x1920");
     assert(pc.FREE_BOARD_ENCODE_STEPS.every(([e, q]) => e >= 1600 && q >= 0.75), "3MB 초과 시 단계 축소 (최소 1600px)");
     const cc = await import("../src/lib/courseReportPhotoConstants");
-    assert(cc.COURSE_REPORT_PHOTO_LONG_EDGE === 1200 && cc.COURSE_REPORT_PHOTO_JPEG_QUALITY === 0.8, "공용 코스제보/공지 전처리 1200/0.8 변경 없음");
+    assert(cc.COURSE_REPORT_PHOTO_LONG_EDGE === 1200 && cc.COURSE_REPORT_PHOTO_JPEG_QUALITY === 0.8, "코스제보 전처리 1200/0.8 변경 없음");
     assert(read("src/app/community/FreeBoardForm.tsx").includes("prepareFreeBoardPhoto(file)"), "폼은 가배치표 전용 전처리 사용");
   }
 
