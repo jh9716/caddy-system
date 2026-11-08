@@ -251,18 +251,16 @@ export function dropCachedChatRoom(
   rooms.delete(roomKey(uid, rid));
 }
 
-/** Instant paint is allowed only for rooms still in this tab's membership list. */
+/**
+ * Cache may paint only after the Worker/DO accepted this socket.
+ * New WS: browser `open` means ChatRoom `authorizeSocket` returned 101
+ * (session-check + membership). Parked resume has no earlier frame than
+ * `{type:"history"}` — do not use the list cache or token TTL as auth.
+ */
 export function shouldPaintCachedChatRoomLines(input: {
-  roomId: string | null | undefined;
-  memberRoomIds: Iterable<string> | null | undefined;
+  serverSocketAuthorized: boolean;
 }): boolean {
-  if (isChatSessionEnded()) return false;
-  const rid = asRoomId(input.roomId);
-  if (!rid || !input.memberRoomIds) return false;
-  for (const id of input.memberRoomIds) {
-    if (asRoomId(id) === rid) return true;
-  }
-  return false;
+  return input.serverSocketAuthorized === true && !isChatSessionEnded();
 }
 
 /** Drop this user's cached rooms that are no longer in the directory snapshot. */

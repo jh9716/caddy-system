@@ -696,6 +696,40 @@ export default function ChatClient() {
     });
   }
 
+  /** New-WS 101 only. Parked resume must wait for `{type:"history"}`. */
+  function paintCachedLinesAfterServerAuth(roomId: string) {
+    if (!shouldPaintCachedChatRoomLines({ serverSocketAuthorized: true })) return;
+    if (roomRef.current?.roomId !== roomId) return;
+    const uid = tokenRef.current?.user.userId;
+    const cached = uid ? readCachedChatRoomLines(uid, roomId) : null;
+    if (!cached?.lines.length) return;
+    const cachedLines = cached.lines as ChatLine[];
+    clearLocalLines(cachedLines);
+    pendingScrollRestore.current = null;
+    loadingOlderRef.current = false;
+    setLoadingOlder(false);
+    hasMoreRef.current = cached.hasMore;
+    setHasMore(cached.hasMore);
+    oldestSeqRef.current = cached.oldestSeq;
+    lastSeqRef.current = lastKnownSeq(cachedLines);
+    hiddenSeqsRef.current = new Set(cached.hiddenSeqs);
+    markChatRoomCachePainted();
+    const t = entryTimingRef.current;
+    if (t.firstPaintAt != null) {
+      recordChatEntryTiming("room_select_to_first_paint", t.firstPaintAt);
+      t.firstPaintAt = null;
+    }
+    if (entrySeekRef.current) {
+      const target = entryTargetRef.current;
+      const canPinNow =
+        !target ||
+        target.kind === "bottom" ||
+        target.seq == null ||
+        firstLoadedSeqAtOrAfter(cachedLines, target.seq) != null;
+      if (canPinNow) queueEntrySeek(cachedLines);
+    }
+  }
+
   function payloadToLine(raw: any): ChatLine {
     const replyTo = raw?.replyTo && typeof raw.replyTo === "object" ? raw.replyTo : null;
     return {
@@ -1149,6 +1183,7 @@ export default function ChatClient() {
         } else {
           historyResetRef.current = true;
           reconnectingRef.current = false;
+          paintCachedLinesAfterServerAuth(roomId);
         }
       });
       ws.addEventListener("error", () => {
@@ -2045,48 +2080,15 @@ export default function ChatClient() {
     roomRef.current = room;
     setActiveRoom(room);
     setView("room");
-    const paintCachedLines = (userId: number | undefined) => {
-      const canPaint = shouldPaintCachedChatRoomLines({
-        roomId: room.roomId,
-        memberRoomIds: roomsRef.current.map((row) => row.roomId),
-      });
-      const cached = canPaint && userId ? readCachedChatRoomLines(userId, room.roomId) : null;
-      const cachedLines = (cached?.lines || []) as ChatLine[];
-      clearLocalLines(cachedLines);
-      pendingScrollRestore.current = null;
-      loadingOlderRef.current = false;
-      setLoadingOlder(false);
-      if (cached) {
-        hasMoreRef.current = cached.hasMore;
-        setHasMore(cached.hasMore);
-        oldestSeqRef.current = cached.oldestSeq;
-        lastSeqRef.current = lastKnownSeq(cachedLines);
-        hiddenSeqsRef.current = new Set(cached.hiddenSeqs);
-        markChatRoomCachePainted();
-        const t = entryTimingRef.current;
-        if (t.firstPaintAt != null) {
-          recordChatEntryTiming("room_select_to_first_paint", t.firstPaintAt);
-          t.firstPaintAt = null;
-        }
-        if (entrySeekRef.current) {
-          const target = entryTargetRef.current;
-          const canPinNow =
-            !target ||
-            target.kind === "bottom" ||
-            target.seq == null ||
-            firstLoadedSeqAtOrAfter(cachedLines, target.seq) != null;
-          if (canPinNow) queueEntrySeek(cachedLines);
-        }
-      } else {
-        hasMoreRef.current = false;
-        setHasMore(false);
-        oldestSeqRef.current = null;
-        lastSeqRef.current = 0;
-        hiddenSeqsRef.current = new Set();
-      }
-    };
-    const priorUserId = tokenRef.current?.user.userId;
-    paintCachedLines(priorUserId);
+    clearLocalLines([]);
+    pendingScrollRestore.current = null;
+    loadingOlderRef.current = false;
+    setLoadingOlder(false);
+    hasMoreRef.current = false;
+    setHasMore(false);
+    oldestSeqRef.current = null;
+    lastSeqRef.current = 0;
+    hiddenSeqsRef.current = new Set();
     const info = await refreshIfNeeded();
     if (!info) {
       clearChatRoomLineCache();
@@ -2095,9 +2097,6 @@ export default function ChatClient() {
       setActiveRoom(null);
       roomRef.current = null;
       return { ok: false, code: "missing_token" };
-    }
-    if (info.user.userId !== priorUserId) {
-      paintCachedLines(info.user.userId);
     }
     setError("");
     setDraft("");

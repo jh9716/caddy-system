@@ -142,15 +142,14 @@ clearChatSessionEnded();
 rememberChatRoomLines(1, "custom_a", { lines: [line(1)] });
 rememberChatRoomLines(1, "custom_b", { lines: [line(2)] });
 rememberChatRoomLines(2, "custom_a", { lines: [line(9)] });
-assert(shouldPaintCachedChatRoomLines({ roomId: "custom_a", memberRoomIds: ["custom_a"] }) === true, "member room may paint");
-assert(shouldPaintCachedChatRoomLines({ roomId: "custom_a", memberRoomIds: ["custom_b"] }) === false, "removed room must not paint");
-assert(shouldPaintCachedChatRoomLines({ roomId: "custom_a", memberRoomIds: [] }) === false, "empty membership must not paint");
+assert(shouldPaintCachedChatRoomLines({ serverSocketAuthorized: true }) === true, "101/DO auth may paint");
+assert(shouldPaintCachedChatRoomLines({ serverSocketAuthorized: false }) === false, "no socket auth must not paint");
 assert(retainCachedChatRooms(1, ["custom_b"]) === 1, "directory snapshot drops removed room");
 assert(readCachedChatRoomLines(1, "custom_a") === null, "removed room cache is gone");
 assert(readCachedChatRoomLines(1, "custom_b")?.lines[0]?.seq === 2, "kept room still cached");
 assert(readCachedChatRoomLines(2, "custom_a")?.lines[0]?.seq === 9, "other user cache untouched");
 applyChatSessionResetReason("logout");
-assert(shouldPaintCachedChatRoomLines({ roomId: "custom_b", memberRoomIds: ["custom_b"] }) === false, "ended session cannot paint");
+assert(shouldPaintCachedChatRoomLines({ serverSocketAuthorized: true }) === false, "ended session cannot paint");
 clearChatSessionEnded();
 
 section("close codes");
@@ -173,20 +172,36 @@ assert(timing.paintedFromCache === true, "first paint was cache");
 assert(timing.cachePaintMs === 12 && timing.historyMs === 696, "cache paint is not history RTT");
 assert(timing.cachePaintMs !== timing.historyMs, "do not report cache as server speed");
 
+section("protocol has no pre-history auth frame");
+const worker = read("cloudflare/verthill-chat/src/index.ts");
+const proto = read("cloudflare/verthill-chat/src/protocol.ts");
+assert(worker.includes("this.sendHistory(server, authorized.claims.userId"), "new WS sends history after 101 auth");
+assert(worker.includes("this.sendHistory(ws, still.claims.userId, null, HISTORY_LIMIT)"), "resume sends history after membership");
+assert(!/type:\s*"authorized"/.test(worker), "worker has no authorized frame");
+assert(!/type:\s*"authorized"/.test(proto), "protocol has no authorized event");
+
 section("ChatClient wiring");
 const chat = read("src/app/chat/ChatClient.tsx");
-assert(chat.includes("readCachedChatRoomLines"), "openRoom reads cache");
-assert(chat.includes("clearLocalLines(cachedLines)"), "openRoom paints cache instead of always emptying");
-assert(
-  chat.indexOf("paintCachedLines(priorUserId)") < chat.indexOf("await refreshIfNeeded()"),
-  "cache paint is before token refresh"
-);
+const openStart = chat.indexOf("async function openRoom");
+const openEnd = chat.indexOf("async function saveNotifyMode", openStart);
+const openRoom = openStart >= 0 && openEnd > openStart ? chat.slice(openStart, openEnd) : "";
+assert(chat.includes("readCachedChatRoomLines"), "cache reader exists");
+assert(chat.includes("paintCachedLinesAfterServerAuth(roomId)"), "new WS open paints after 101");
+{
+  const resumeStart = chat.indexOf("socketResumeRef.current.set");
+  const resumeEnd = chat.indexOf("const ws = new WebSocket");
+  const resumeFn = resumeStart >= 0 && resumeEnd > resumeStart ? chat.slice(resumeStart, resumeEnd) : "";
+  assert(!resumeFn.includes("paintCachedLinesAfterServerAuth"), "parked resume does not paint before history");
+}
+assert(!openRoom.includes("readCachedChatRoomLines"), "openRoom does not paint before socket");
+assert(openRoom.includes("clearLocalLines([])"), "openRoom stays empty until auth");
 assert(chat.includes("firstPaintAt"), "first-visit paint timing is not ws-open");
 assert(chat.includes("waitForOpen: true"), "openRoom still waits for socket authorize");
 assert(chat.includes("rememberActiveRoomLines()"), "leave/history remember lines");
 assert(chat.includes("clearChatRoomLineCache()"), "logout wipes cache");
 assert(chat.includes("dropCachedChatRoom"), "forbidden drops that room");
-assert(chat.includes("shouldPaintCachedChatRoomLines"), "paint requires membership list");
+assert(chat.includes("serverSocketAuthorized: true"), "paint requires socket 101 auth");
+assert(!chat.includes("memberRoomIds"), "list cache is not used as membership auth");
 assert(chat.includes("retainCachedChatRooms"), "directory snapshot retains membership");
 assert(chat.includes("isChatRoomAccessDenied"), "open fail treats deny codes");
 assert(chat.includes('resolved.status === "forbidden"'), "targeted 403 drops that room");

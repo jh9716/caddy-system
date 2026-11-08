@@ -12,9 +12,9 @@ export const CHAT_ENTRY_TIMING_STEPS = [
   "nav_to_ui", // 1-보조. 문서 navigation 시작 → 초기 UI (전체 로드 진입일 때만 의미)
   "token", // 2. 토큰 요청 → 응답
   "rooms_to_shown", // 3. 목록 요청 시작 → 첫 정상 목록 반영
-  "room_select_to_ws_open", // 4
-  "room_select_to_first_paint", // 4b. cache paint or first history page (not WS RTT)
-  "ws_open_to_history", // 5. server history verified
+  "room_select_to_ws_open", // 4. new-WS 101 after DO authorizeSocket (not resume)
+  "room_select_to_first_paint", // 4b. cache after 101, or first history (resume has no earlier auth frame)
+  "ws_open_to_history", // 5. server history verified (latest page)
   "push_nav_to_room", // 6. 알림/딥링크 진입: navigation 시작 → 대상 방 메시지 표시 (클릭 시각 자체는 측정 불가)
 ] as const;
 export type ChatEntryTimingStep = (typeof CHAT_ENTRY_TIMING_STEPS)[number];
