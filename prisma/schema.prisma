@@ -387,7 +387,8 @@ model CommentThread {
   @@index([targetType, targetKey])
 }
 
-/// 공용 댓글 V1. 대댓글/좋아요/이미지/push/hard delete 없음.
+/// 공용 댓글. 좋아요/이미지/push/hard delete 없음.
+/// parentId NULL = 원댓글. 답글은 같은 thread의 원댓글 id만 저장 (1단계).
 model Comment {
   id           Int       @id @default(autoincrement())
   threadId     Int
@@ -396,12 +397,17 @@ model Comment {
   deletedAt    DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
+  parentId     Int?
 
-  thread CommentThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
-  author User          @relation(fields: [authorUserId], references: [id], onDelete: Restrict)
+  thread  CommentThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  author  User          @relation(fields: [authorUserId], references: [id], onDelete: Restrict)
+  parent  Comment?      @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Restrict)
+  replies Comment[]     @relation("CommentReplies")
 
   @@index([threadId, createdAt])
   @@index([authorUserId])
+  @@index([parentId])
+  @@index([threadId, parentId, createdAt])
 }
 
 /// 기기별 Web Push subscription (1 User : N devices).

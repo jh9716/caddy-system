@@ -52,6 +52,16 @@ npx tsx scripts/maintenance/deploy-comment-v1-migration.ts
 
 `prisma migrate deploy` only. No db push / migrate reset / seed / Comment INSERT/UPDATE/DELETE.
 
+Comment replies V1 (`parentId`, additive, no backfill). **App code that SELECTs parentId must ship AFTER this migrate.** Preview migrate first, separate approval:
+
+```
+PROD_MAINTENANCE_CONFIRM=COMMENT_REPLIES_V1_20261109 \
+DATABASE_URL="$PRODUCTION_DATABASE_URL" \
+npx tsx scripts/maintenance/deploy-comment-replies-migration.ts
+```
+
+`prisma migrate deploy` only. No db push / migrate reset / seed / Comment INSERT/UPDATE/DELETE.
+
 ChatAttachment Photo V1 production schema:
 
 ```
