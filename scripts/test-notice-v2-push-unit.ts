@@ -1117,6 +1117,15 @@ async function main() {
         !withPhoto.sendOnCreate && withPhoto.sendAfterPhotos,
         "photos: push only after uploads"
       );
+      const withFile = planNoticeClientAutoPush({
+        sendPushRequested: true,
+        pendingPhotoCount: 0,
+        pendingFileCount: 1,
+      });
+      assert(
+        !withFile.sendOnCreate && withFile.sendAfterPhotos,
+        "pdf: push only after uploads"
+      );
       const photoOff = planNoticeClientAutoPush({
         sendPushRequested: true,
         pendingPhotoCount: 2,

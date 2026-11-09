@@ -11,6 +11,7 @@ import {
   runNoticeCreatePush,
 } from "@/lib/noticeAutoPush";
 import { isNoticePhotoTableMissing } from "@/lib/noticePhoto";
+import { isNoticeFileTableMissing } from "@/lib/noticeFile";
 import { resolveNoticeAuthorForAuth } from "@/lib/noticeAuthor";
 import {
   NoticeValidationError,
@@ -31,18 +32,36 @@ export async function GET(req: NextRequest) {
     const list = await prisma.notice.findMany({
       where: visibleNoticeWhere(viewer),
       orderBy: noticeListOrder(),
-      include: { _count: { select: { photos: true } } },
+      include: { _count: { select: { photos: true, files: true } } },
     });
     return NextResponse.json(
-      list.map(({ _count, ...row }) => ({ ...row, photoCount: _count.photos }))
+      list.map(({ _count, ...row }) => ({
+        ...row,
+        photoCount: _count.photos,
+        fileCount: _count.files,
+      }))
     );
   } catch (e) {
-    if (!isNoticePhotoTableMissing(e)) throw e;
+    if (isNoticeFileTableMissing(e) && !isNoticePhotoTableMissing(e)) {
+      const list = await prisma.notice.findMany({
+        where: visibleNoticeWhere(viewer),
+        orderBy: noticeListOrder(),
+        include: { _count: { select: { photos: true } } },
+      });
+      return NextResponse.json(
+        list.map(({ _count, ...row }) => ({
+          ...row,
+          photoCount: _count.photos,
+          fileCount: 0,
+        }))
+      );
+    }
+    if (!isNoticePhotoTableMissing(e) && !isNoticeFileTableMissing(e)) throw e;
     const list = await prisma.notice.findMany({
       where: visibleNoticeWhere(viewer),
       orderBy: noticeListOrder(),
     });
-    return NextResponse.json(list.map((row) => ({ ...row, photoCount: 0 })));
+    return NextResponse.json(list.map((row) => ({ ...row, photoCount: 0, fileCount: 0 })));
   }
 }
 

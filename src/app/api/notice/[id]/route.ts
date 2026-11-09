@@ -18,6 +18,11 @@ import {
   listNoticePhotos,
 } from "@/lib/noticePhoto";
 import {
+  cleanupNoticeFileBlobsBestEffort,
+  listNoticeFileStorageKeys,
+  listNoticeFiles,
+} from "@/lib/noticeFile";
+import {
   NoticeValidationError,
   canViewNotice,
   parseNoticeWriteBody,
@@ -54,10 +59,24 @@ export async function GET(
   }
   try {
     const photos = await listNoticePhotos(prisma, id);
-    return NextResponse.json({ ...notice, photos, photoCount: photos.length });
+    const files = await listNoticeFiles(prisma, id);
+    return NextResponse.json({
+      ...notice,
+      photos,
+      photoCount: photos.length,
+      files,
+      fileCount: files.length,
+    });
   } catch (e) {
     if (!isNoticePhotoTableMissing(e)) throw e;
-    return NextResponse.json({ ...notice, photos: [], photoCount: 0 });
+    const files = await listNoticeFiles(prisma, id);
+    return NextResponse.json({
+      ...notice,
+      photos: [],
+      photoCount: 0,
+      files,
+      fileCount: files.length,
+    });
   }
 }
 
@@ -129,12 +148,18 @@ export async function DELETE(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   const photoKeys = await listNoticePhotoStorageKeys(prisma, id);
+  const fileKeys = await listNoticeFileStorageKeys(prisma, id);
   await prisma.notice.delete({ where: { id } });
-  const cleanup = await cleanupNoticePhotoBlobsBestEffort(photoKeys, {
+  const photoCleanup = await cleanupNoticePhotoBlobsBestEffort(photoKeys, {
+    noticeId: id,
+  });
+  const fileCleanup = await cleanupNoticeFileBlobsBestEffort(fileKeys, {
     noticeId: id,
   });
   return NextResponse.json({
     ok: true,
-    ...(cleanup.failed.length > 0 ? { blobCleanupFailed: true } : {}),
+    ...(photoCleanup.failed.length > 0 || fileCleanup.failed.length > 0
+      ? { blobCleanupFailed: true }
+      : {}),
   });
 }
