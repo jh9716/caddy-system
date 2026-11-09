@@ -6,6 +6,13 @@ import {
   noticeFileSrc,
   sanitizeNoticeFileName,
 } from "@/lib/noticeFileConstants";
+import {
+  NOTICE_MEDIA_UPLOAD_CONCURRENCY,
+  mapNoticeBoundedSettled,
+  resolveNoticeUploadOptions,
+  type NoticeUploadOptions,
+  type NoticeUploadProgress,
+} from "@/lib/noticeMediaUpload";
 
 export { NOTICE_FILE_ACCEPT };
 
@@ -65,30 +72,64 @@ export function pickNoticeFiles(
 export async function uploadNoticePendingFiles(
   noticeId: number,
   items: { file: File }[],
-  post: typeof fetch = fetch
+  postOrOpts?: typeof fetch | NoticeUploadOptions,
+  onProgressArg?: (progress: NoticeUploadProgress) => void
 ): Promise<{ uploaded: number; failed: number; failedIndexes: number[] }> {
+  const { post, onProgress, sortOrderStart } = resolveNoticeUploadOptions(
+    postOrOpts,
+    onProgressArg
+  );
+  const failedIndexes: number[] = [];
   let uploaded = 0;
   let failed = 0;
-  const failedIndexes: number[] = [];
-  for (let i = 0; i < items.length; i++) {
-    const file = items[i].file;
-    const fd = new FormData();
-    fd.append("file", file, sanitizeNoticeFileName(file.name));
-    const res = await post(`/api/notice/${noticeId}/files`, {
-      method: "POST",
-      credentials: "include",
-      body: fd,
-    });
-    if (consumeUnauthorizedMemberResponse(res)) {
-      for (let j = i; j < items.length; j++) failedIndexes.push(j);
-      return { uploaded, failed: failed + (items.length - i), failedIndexes };
-    }
-    if (res.ok) uploaded += 1;
-    else {
+  let unauthorized = false;
+  let done = 0;
+  const total = items.length;
+  onProgress?.({ done, total });
+
+  await mapNoticeBoundedSettled(items, NOTICE_MEDIA_UPLOAD_CONCURRENCY, async (item, i) => {
+    try {
+      if (unauthorized) {
+        failed += 1;
+        failedIndexes.push(i);
+        done += 1;
+        onProgress?.({ done, total });
+        return;
+      }
+      const fd = new FormData();
+      fd.append("file", item.file, sanitizeNoticeFileName(item.file.name));
+      if (sortOrderStart != null) {
+        fd.append("sortOrder", String(sortOrderStart + i));
+      }
+      const res = await post(`/api/notice/${noticeId}/files`, {
+        method: "POST",
+        credentials: "include",
+        body: fd,
+      });
+      if (consumeUnauthorizedMemberResponse(res)) {
+        unauthorized = true;
+        failed += 1;
+        failedIndexes.push(i);
+        done += 1;
+        onProgress?.({ done, total });
+        return;
+      }
+      if (res.ok) uploaded += 1;
+      else {
+        failed += 1;
+        failedIndexes.push(i);
+      }
+      done += 1;
+      onProgress?.({ done, total });
+    } catch {
       failed += 1;
       failedIndexes.push(i);
+      done += 1;
+      onProgress?.({ done, total });
     }
-  }
+  });
+
+  failedIndexes.sort((a, b) => a - b);
   return { uploaded, failed, failedIndexes };
 }
 

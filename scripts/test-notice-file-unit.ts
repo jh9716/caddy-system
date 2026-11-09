@@ -383,6 +383,10 @@ async function main() {
       const photoRoute = read("src/app/api/notice/[id]/photos/route.ts");
       assert(form.includes("NOTICE_FILE_MAX"), "form pdf max constant");
       assert(form.includes("pickNoticeFiles"), "form pdf picker");
+      assert(form.includes("notice-form-progress"), "form save progress");
+      assert(form.includes("pendingFileCount"), "pdf defers auto-push");
+      assert(client.includes("NOTICE_MEDIA_UPLOAD_CONCURRENCY"), "bounded parallel pdf upload");
+      assert(read("src/lib/noticeMediaLock.ts").includes("FOR UPDATE"), "pdf inserts lock notice row");
       assert(form.includes("/api/notice/${initial.id}/files/${fileId}"), "admin can delete pdf");
       assert(form.includes("기존 첨부 파일은 그대로 두었습니다"), "failed upload keeps existing");
       assert(detail.includes("NoticeFileList"), "detail shows pdf list");

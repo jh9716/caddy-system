@@ -68,6 +68,16 @@ section("lightbox contain, no new viewer");
   assert(/\.notice-photos-lightbox img\s*\{[^}]*max-height:\s*none/.test(noticeCss), "lightbox img not capped");
 }
 
+section("notice form composer thumbs are visible");
+{
+  const form = read("src/app/notice/new/ui/NewNoticeForm.tsx");
+  const css = read("src/app/globals.css");
+  assert(form.includes('className="is-revealed"'), "form thumbs opt out of opacity 0");
+  assert(form.includes("instantNoticePhotoPicks"), "form uses original-file object URL");
+  assert(css.includes(".notice-form .course-report-photo-item img"), "notice-form opacity override");
+  assert(css.includes("opacity: 1"), "override forces visible thumbs");
+}
+
 section("list and report thumbs unchanged");
 {
   const list = read("src/app/notice/page.tsx");

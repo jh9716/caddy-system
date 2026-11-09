@@ -5,6 +5,7 @@ import {
   isNoticeAuthResponse,
   requireNoticeAdmin,
 } from "@/lib/noticeAccess";
+import { parseRequestedSortOrder } from "@/lib/noticeMediaLock";
 import { uploadNoticeFile, NoticeFileValidationError } from "@/lib/noticeFile";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +18,9 @@ async function noticeId(
   return Number(resolved.id);
 }
 
-async function readUpload(req: NextRequest): Promise<{ bytes: Uint8Array; originalName: string }> {
+async function readUpload(
+  req: NextRequest
+): Promise<{ bytes: Uint8Array; originalName: string; requestedSortOrder: number | null }> {
   const contentType = req.headers.get("content-type") || "";
   if (contentType.includes("multipart/form-data")) {
     const form = await req.formData().catch(() => null);
@@ -27,13 +30,17 @@ async function readUpload(req: NextRequest): Promise<{ bytes: Uint8Array; origin
     }
     const originalName =
       file instanceof File && typeof file.name === "string" ? file.name : "attachment.pdf";
-    return { bytes: new Uint8Array(await file.arrayBuffer()), originalName };
+    return {
+      bytes: new Uint8Array(await file.arrayBuffer()),
+      originalName,
+      requestedSortOrder: parseRequestedSortOrder(form?.get("sortOrder")),
+    };
   }
   const buf = await req.arrayBuffer().catch(() => null);
   if (!buf || buf.byteLength === 0) {
     throw new NoticeFileValidationError("empty_file", "PDF 파일이 필요합니다.");
   }
-  return { bytes: new Uint8Array(buf), originalName: "attachment.pdf" };
+  return { bytes: new Uint8Array(buf), originalName: "attachment.pdf", requestedSortOrder: null };
 }
 
 export async function POST(
@@ -49,12 +56,13 @@ export async function POST(
   }
 
   try {
-    const { bytes, originalName } = await readUpload(req);
+    const { bytes, originalName, requestedSortOrder } = await readUpload(req);
     const file = await uploadNoticeFile(prisma, {
       noticeId: id,
       bytes,
       originalName,
       auth,
+      requestedSortOrder,
     });
     return NextResponse.json({ ok: true, file });
   } catch (e) {

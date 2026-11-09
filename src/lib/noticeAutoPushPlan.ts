@@ -27,6 +27,7 @@ export function isFutureNoticeStart(
 export function planNoticeClientAutoPush(input: {
   sendPushRequested: boolean;
   pendingPhotoCount: number;
+  pendingFileCount?: number;
   publishStartAt?: string | Date | null;
   now?: Date;
 }): NoticeClientAutoPushPlan {
@@ -34,7 +35,9 @@ export function planNoticeClientAutoPush(input: {
   if (scheduled || !input.sendPushRequested) {
     return { scheduled, sendOnCreate: false, sendAfterPhotos: false };
   }
-  if (input.pendingPhotoCount > 0) {
+  const pendingMedia =
+    input.pendingPhotoCount + (input.pendingFileCount ?? 0);
+  if (pendingMedia > 0) {
     return { scheduled: false, sendOnCreate: false, sendAfterPhotos: true };
   }
   return { scheduled: false, sendOnCreate: true, sendAfterPhotos: false };

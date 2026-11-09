@@ -1,10 +1,19 @@
 import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
 import {
+  NOTICE_MEDIA_UPLOAD_CONCURRENCY,
+  mapNoticeBoundedSettled,
+  resolveNoticeUploadOptions,
+  type NoticeUploadOptions,
+  type NoticeUploadProgress,
+} from "@/lib/noticeMediaUpload";
+import {
   COURSE_REPORT_HEIC_CONVERT_MESSAGE,
   COURSE_REPORT_HEIC_MESSAGE,
+  COURSE_REPORT_PHOTO_DUPLICATE_MESSAGE,
+  courseReportPhotoBlobFingerprint,
+  courseReportPhotoFileId,
   decodeCourseReportPhotoSource,
   isHeicLikeFile,
-  pickCourseReportPhotos,
 } from "@/lib/courseReportPhotoClient";
 import {
   NOTICE_PHOTO_JPEG_QUALITY,
@@ -17,35 +26,159 @@ import {
   noticePhotoTargetSize,
 } from "@/lib/noticePhotoPrepare";
 
+export {
+  NOTICE_MEDIA_UPLOAD_CONCURRENCY,
+  mapNoticeBoundedSettled,
+  type NoticeUploadOptions,
+  type NoticeUploadProgress,
+} from "@/lib/noticeMediaUpload";
+
+export type NoticePendingPhotoStatus = "preparing" | "ready" | "failed";
+
+export type NoticePendingPick = {
+  key: string;
+  file: File;
+  blob: Blob | null;
+  previewUrl: string;
+  fileId: string;
+  fingerprint: string;
+  status: NoticePendingPhotoStatus;
+  error?: string;
+};
+
+export function revokeNoticePreviewUrl(url: string | undefined | null) {
+  if (!url || !url.startsWith("blob:") || typeof URL.revokeObjectURL !== "function") return;
+  URL.revokeObjectURL(url);
+}
+
+export function instantNoticePhotoPicks(
+  files: File[],
+  room: number,
+  already: { fileIds?: Iterable<string> } = {}
+): { items: NoticePendingPick[]; note: string } {
+  const seenIds = new Set(already.fileIds ?? []);
+  const items: NoticePendingPick[] = [];
+  let note = "";
+  for (const file of files) {
+    if (items.length >= Math.max(0, room)) break;
+    const fileId = courseReportPhotoFileId(file);
+    if (seenIds.has(fileId)) {
+      note = COURSE_REPORT_PHOTO_DUPLICATE_MESSAGE;
+      continue;
+    }
+    seenIds.add(fileId);
+    const previewUrl = isHeicLikeFile(file) ? "" : URL.createObjectURL(file);
+    items.push({
+      key: `${Date.now()}-${items.length}-${fileId}`,
+      file,
+      blob: null,
+      previewUrl,
+      fileId,
+      fingerprint: "",
+      status: "preparing",
+    });
+  }
+  return { items, note };
+}
+
+export async function prepareNoticePendingPhoto(
+  item: NoticePendingPick
+): Promise<NoticePendingPick> {
+  try {
+    const blob = await prepareNoticePhoto(item.file);
+    const fingerprint = await courseReportPhotoBlobFingerprint(blob);
+    let previewUrl = item.previewUrl;
+    if (!previewUrl) {
+      previewUrl = URL.createObjectURL(blob);
+    }
+    return {
+      ...item,
+      blob,
+      fingerprint,
+      previewUrl,
+      status: "ready",
+      error: undefined,
+    };
+  } catch (e) {
+    return {
+      ...item,
+      status: "failed",
+      error: e instanceof Error ? e.message : COURSE_REPORT_HEIC_CONVERT_MESSAGE,
+    };
+  }
+}
+
 export async function uploadNoticePendingPhotos(
   noticeId: number,
-  items: { blob: Blob }[],
-  post: typeof fetch = fetch
+  items: { blob: Blob | null }[],
+  postOrOpts?: typeof fetch | NoticeUploadOptions,
+  onProgressArg?: (progress: NoticeUploadProgress) => void
 ): Promise<{ uploaded: number; failed: number; failedIndexes: number[] }> {
+  const { post, onProgress, sortOrderStart } = resolveNoticeUploadOptions(
+    postOrOpts,
+    onProgressArg
+  );
+  const failedIndexes: number[] = [];
   let uploaded = 0;
   let failed = 0;
-  const failedIndexes: number[] = [];
-  for (let i = 0; i < items.length; i++) {
-    const blob = items[i].blob;
-    const mime = (blob.type || "image/jpeg").toLowerCase();
-    const ext = mime.includes("png") ? "png" : mime.includes("webp") ? "webp" : "jpg";
-    const fd = new FormData();
-    fd.append("file", blob, `photo-${i}.${ext}`);
-    const res = await post(`/api/notice/${noticeId}/photos`, {
-      method: "POST",
-      credentials: "include",
-      body: fd,
-    });
-    if (consumeUnauthorizedMemberResponse(res)) {
-      for (let j = i; j < items.length; j++) failedIndexes.push(j);
-      return { uploaded, failed: failed + (items.length - i), failedIndexes };
-    }
-    if (res.ok) uploaded += 1;
-    else {
+  let unauthorized = false;
+  let done = 0;
+  const total = items.length;
+  onProgress?.({ done, total });
+
+  await mapNoticeBoundedSettled(items, NOTICE_MEDIA_UPLOAD_CONCURRENCY, async (item, i) => {
+    try {
+      if (unauthorized) {
+        failed += 1;
+        failedIndexes.push(i);
+        done += 1;
+        onProgress?.({ done, total });
+        return;
+      }
+      const blob = item.blob;
+      if (!blob || blob.size <= 0) {
+        failed += 1;
+        failedIndexes.push(i);
+        done += 1;
+        onProgress?.({ done, total });
+        return;
+      }
+      const mime = (blob.type || "image/jpeg").toLowerCase();
+      const ext = mime.includes("png") ? "png" : mime.includes("webp") ? "webp" : "jpg";
+      const fd = new FormData();
+      fd.append("file", blob, `photo-${i}.${ext}`);
+      if (sortOrderStart != null) {
+        fd.append("sortOrder", String(sortOrderStart + i));
+      }
+      const res = await post(`/api/notice/${noticeId}/photos`, {
+        method: "POST",
+        credentials: "include",
+        body: fd,
+      });
+      if (consumeUnauthorizedMemberResponse(res)) {
+        unauthorized = true;
+        failed += 1;
+        failedIndexes.push(i);
+        done += 1;
+        onProgress?.({ done, total });
+        return;
+      }
+      if (res.ok) uploaded += 1;
+      else {
+        failed += 1;
+        failedIndexes.push(i);
+      }
+      done += 1;
+      onProgress?.({ done, total });
+    } catch {
       failed += 1;
       failedIndexes.push(i);
+      done += 1;
+      onProgress?.({ done, total });
     }
-  }
+  });
+
+  failedIndexes.sort((a, b) => a - b);
   return { uploaded, failed, failedIndexes };
 }
 
@@ -180,6 +313,7 @@ export async function prepareNoticePhoto(file: File): Promise<Blob> {
   }
 }
 
+/** Kept for tests: prepare then return. The form uses instantNoticePhotoPicks instead. */
 export async function pickNoticePhotos(
   files: File[],
   room: number,
@@ -188,5 +322,24 @@ export async function pickNoticePhotos(
     fingerprints?: Iterable<string>;
   } = {}
 ) {
-  return pickCourseReportPhotos(files, room, prepareNoticePhoto, already);
+  const started = instantNoticePhotoPicks(files, room, already);
+  const seenPrints = new Set(already.fingerprints ?? []);
+  const items: NoticePendingPick[] = [];
+  let note = started.note;
+  for (const item of started.items) {
+    const prepared = await prepareNoticePendingPhoto(item);
+    if (prepared.status !== "ready" || !prepared.blob) {
+      revokeNoticePreviewUrl(prepared.previewUrl);
+      note = prepared.error || COURSE_REPORT_HEIC_CONVERT_MESSAGE;
+      continue;
+    }
+    if (prepared.fingerprint && seenPrints.has(prepared.fingerprint)) {
+      revokeNoticePreviewUrl(prepared.previewUrl);
+      note = COURSE_REPORT_PHOTO_DUPLICATE_MESSAGE;
+      continue;
+    }
+    if (prepared.fingerprint) seenPrints.add(prepared.fingerprint);
+    items.push(prepared);
+  }
+  return { items, note };
 }

@@ -7,6 +7,7 @@ import {
   CourseReportPhotoStorageError,
   getCourseReportPhotoStore,
 } from "@/lib/courseReportPhotoStorage";
+import { lockNoticeRow, resolveLockedSortOrder } from "@/lib/noticeMediaLock";
 import {
   NOTICE_FILE_EXT,
   NOTICE_FILE_MAX,
@@ -125,6 +126,7 @@ export async function uploadNoticeFile(
     bytes: Uint8Array;
     originalName?: string;
     auth: ResolvedAuthUser;
+    requestedSortOrder?: number | null;
   }
 ): Promise<NoticeFilePublic> {
   if (!canManageNoticeFiles(input.auth.role)) {
@@ -144,17 +146,6 @@ export async function uploadNoticeFile(
     throw new NoticeFileValidationError("not_found", "공지를 찾을 수 없습니다.", 404);
   }
 
-  let existing: number;
-  try {
-    existing = await db.noticeFile.count({ where: { noticeId: input.noticeId } });
-  } catch (e) {
-    if (isNoticeFileTableMissing(e)) fileTableNotReady();
-    throw e;
-  }
-  if (existing >= NOTICE_FILE_MAX) {
-    throw new NoticeFileValidationError("file_limit", noticeFileLimitMessage(), 409);
-  }
-
   const mime = assertNoticePdfBytes(input.bytes);
   const originalName = sanitizeNoticeFileName(input.originalName);
   const storageKey = buildNoticeFileStorageKey(input.noticeId);
@@ -171,27 +162,51 @@ export async function uploadNoticeFile(
 
   let row: NoticeFile;
   try {
-    row = await db.noticeFile.create({
-      data: {
-        noticeId: input.noticeId,
-        storageKey,
-        originalName,
-        mimeType: mime,
-        size: input.bytes.byteLength,
-        sortOrder: existing,
-      },
+    row = await db.$transaction(async (tx) => {
+      const locked = await lockNoticeRow(tx, input.noticeId);
+      if (!locked) {
+        throw new NoticeFileValidationError("not_found", "공지를 찾을 수 없습니다.", 404);
+      }
+      let existing: number;
+      try {
+        existing = await tx.noticeFile.count({ where: { noticeId: input.noticeId } });
+      } catch (e) {
+        if (isNoticeFileTableMissing(e)) fileTableNotReady();
+        throw e;
+      }
+      if (existing >= NOTICE_FILE_MAX) {
+        throw new NoticeFileValidationError("file_limit", noticeFileLimitMessage(), 409);
+      }
+      const agg = await tx.noticeFile.aggregate({
+        where: { noticeId: input.noticeId },
+        _max: { sortOrder: true },
+      });
+      const requested = input.requestedSortOrder ?? null;
+      const taken =
+        requested != null
+          ? Boolean(
+              await tx.noticeFile.findFirst({
+                where: { noticeId: input.noticeId, sortOrder: requested },
+                select: { id: true },
+              })
+            )
+          : false;
+      return tx.noticeFile.create({
+        data: {
+          noticeId: input.noticeId,
+          storageKey,
+          originalName,
+          mimeType: mime,
+          size: input.bytes.byteLength,
+          sortOrder: resolveLockedSortOrder(agg._max.sortOrder, requested, taken),
+        },
+      });
     });
   } catch (e) {
     await store.delete(storageKey).catch(() => undefined);
+    if (e instanceof NoticeFileValidationError) throw e;
     if (isNoticeFileTableMissing(e)) fileTableNotReady();
     throw e;
-  }
-
-  const after = await db.noticeFile.count({ where: { noticeId: input.noticeId } });
-  if (after > NOTICE_FILE_MAX) {
-    await db.noticeFile.delete({ where: { id: row.id } }).catch(() => undefined);
-    await store.delete(storageKey).catch(() => undefined);
-    throw new NoticeFileValidationError("file_limit", noticeFileLimitMessage(), 409);
   }
   return toNoticeFilePublic(row);
 }

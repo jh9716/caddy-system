@@ -2899,6 +2899,44 @@ html.vh-chat-open .vh-work-inner,
   margin-top: 8px;
 }
 
+.notice-form-progress {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--vh-border);
+  border-radius: var(--vh-radius-sm);
+  background: var(--vh-paper);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--vh-ink-soft);
+}
+
+.notice-form .course-report-photo-item img,
+.notice-form .course-report-photo-item img.is-revealed {
+  opacity: 1;
+}
+
+.notice-photo-thumb-fallback,
+.notice-photo-thumb-status {
+  position: absolute;
+  inset: auto 8px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--vh-ink-soft);
+  pointer-events: none;
+}
+
+.notice-photo-thumb-fallback {
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--vh-ivory-deep);
+}
+
+.course-report-photo-item.is-failed {
+  outline: 1px solid var(--vh-danger, #b42318);
+}
+
 .notice-form-actions .ui-btn {
   min-height: 48px;
   flex: 1;

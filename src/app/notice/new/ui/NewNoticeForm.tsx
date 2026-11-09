@@ -1,7 +1,7 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   NOTICE_CADDY_TYPES,
   NOTICE_CREATE_SEND_PUSH_LABEL,
@@ -20,7 +20,13 @@ import {
   type NoticePhotoPublic,
 } from '@/lib/noticePhotoConstants'
 import { noticePhotoSrc } from '@/lib/noticePhotoConstants'
-import { pickNoticePhotos, uploadNoticePendingPhotos } from '@/lib/noticePhotoClient'
+import {
+  instantNoticePhotoPicks,
+  prepareNoticePendingPhoto,
+  revokeNoticePreviewUrl,
+  uploadNoticePendingPhotos,
+  type NoticePendingPick,
+} from '@/lib/noticePhotoClient'
 import {
   NOTICE_FILE_ACCEPT,
   NOTICE_FILE_MAX,
@@ -52,14 +58,6 @@ type Props = {
     photos?: NoticePhotoPublic[]
     files?: NoticeFilePublic[]
   }
-}
-
-type PendingPhoto = {
-  key: string
-  blob: Blob
-  previewUrl: string
-  fileId: string
-  fingerprint: string
 }
 
 function toDatetimeLocalValue(iso: string | null | undefined): string {
@@ -115,7 +113,10 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
   const [existingPhotos, setExistingPhotos] = useState<NoticePhotoPublic[]>(
     initial?.photos ?? []
   )
-  const [pending, setPending] = useState<PendingPhoto[]>([])
+  const [pending, setPending] = useState<NoticePendingPick[]>([])
+  const [saveProgress, setSaveProgress] = useState('')
+  const pendingRef = useRef<NoticePendingPick[]>([])
+  const submitLock = useRef(false)
   const [existingFiles, setExistingFiles] = useState<NoticeFilePublic[]>(
     initial?.files ?? []
   )
@@ -132,13 +133,22 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
     []
   )
 
+  useEffect(() => {
+    pendingRef.current = pending
+  }, [pending])
+
+  useEffect(() => {
+    return () => {
+      for (const item of pendingRef.current) revokeNoticePreviewUrl(item.previewUrl)
+    }
+  }, [])
+
   async function onPick(files: FileList | null) {
-    if (!files) return
+    if (!files || busy) return
     setStatusNote('')
     const room = NOTICE_PHOTO_MAX - existingPhotos.length - pending.length
-    const { items, note } = await pickNoticePhotos(Array.from(files), room, {
+    const { items, note } = instantNoticePhotoPicks(Array.from(files), room, {
       fileIds: pending.map((p) => p.fileId),
-      fingerprints: pending.map((p) => p.fingerprint),
     })
     if (note) setStatusNote(note)
     if (items.length) {
@@ -146,6 +156,29 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
         const roomLeft = NOTICE_PHOTO_MAX - existingPhotos.length - cur.length
         return [...cur, ...items.slice(0, Math.max(0, roomLeft))]
       })
+      for (const item of items) {
+        const prepared = await prepareNoticePendingPhoto(item)
+        setPending((cur) => {
+          const still = cur.find((p) => p.key === item.key)
+          if (!still) {
+            if (prepared.previewUrl !== item.previewUrl) {
+              revokeNoticePreviewUrl(prepared.previewUrl)
+            }
+            return cur
+          }
+          if (
+            prepared.status === 'ready' &&
+            prepared.fingerprint &&
+            cur.some((p) => p.key !== item.key && p.fingerprint === prepared.fingerprint)
+          ) {
+            revokeNoticePreviewUrl(prepared.previewUrl)
+            setStatusNote('이미 추가한 사진입니다.')
+            return cur.filter((p) => p.key !== item.key)
+          }
+          return cur.map((p) => (p.key === item.key ? prepared : p))
+        })
+        if (prepared.status === 'failed' && prepared.error) setStatusNote(prepared.error)
+      }
     }
     if (fileRef.current) fileRef.current.value = ''
   }
@@ -153,7 +186,7 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
   function removePending(key: string) {
     setPending((cur) => {
       const hit = cur.find((p) => p.key === key)
-      if (hit) URL.revokeObjectURL(hit.previewUrl)
+      if (hit) revokeNoticePreviewUrl(hit.previewUrl)
       return cur.filter((p) => p.key !== key)
     })
   }
@@ -174,7 +207,7 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
   }
 
   async function onPickPdf(files: FileList | null) {
-    if (!files) return
+    if (!files || busy) return
     setStatusNote('')
     const room = NOTICE_FILE_MAX - existingFiles.length - pendingFiles.length
     const { items, note } = pickNoticeFiles(Array.from(files), room, {
@@ -211,121 +244,173 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
+    if (submitLock.current || busy) return
+    submitLock.current = true
     setBusy(true)
     setStatusNote('')
-    const plan = planNoticeClientAutoPush({
-      sendPushRequested: sendPush && !scheduled,
-      pendingPhotoCount: pending.length,
-      publishStartAt: publishStartAt || null,
-    })
-    const payload = {
-      title,
-      content: body,
-      body,
-      important,
-      pinned,
-      targetType,
-      targetValue:
-        targetType === NOTICE_TARGET_ALL ? null : targetValue || null,
-      publishStartAt: publishStartAt ? new Date(publishStartAt).toISOString() : null,
-      publishEndAt: publishEndAt ? new Date(publishEndAt).toISOString() : null,
-      sendPush: plan.sendOnCreate,
-    }
-
-    const url = isEdit ? `/api/notice/${initial?.id}` : '/api/notice'
-    const method = isEdit ? 'PATCH' : 'POST'
-
-    const res = await fetch(url, {
-      method,
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-
-    if (consumeUnauthorizedMemberResponse(res)) {
-      setBusy(false)
-      return
-    }
-
-    if (!res.ok) {
-      setBusy(false)
-      const data = await res.json().catch(() => ({}))
-      alert(
-        typeof data.message === 'string'
-          ? data.message
-          : isEdit
-            ? '수정 실패'
-            : '등록 실패'
-      )
-      return
-    }
-
-    const data = await res.json().catch(() => ({}))
-    const noticeId = isEdit
-      ? initial?.id
-      : typeof data.id === 'number'
-        ? data.id
-        : null
-
-    let photoFailed = 0
-    let fileFailed = 0
-    if (noticeId && pending.length > 0) {
-      const uploaded = await uploadNoticePendingPhotos(noticeId, pending)
-      if (isMemberSessionRedirectScheduled()) return
-      photoFailed = uploaded.failed
-      if (uploaded.failedIndexes.length > 0) {
-        setPending((cur) => cur.filter((_, i) => uploaded.failedIndexes.includes(i)))
-      } else {
-        setPending([])
+    try {
+      if (pendingRef.current.some((p) => p.status === 'preparing')) {
+        setSaveProgress('사진 준비 중…')
+        const deadline = Date.now() + 60_000
+        while (pendingRef.current.some((p) => p.status === 'preparing')) {
+          if (Date.now() > deadline) {
+            setStatusNote('사진 준비가 너무 오래 걸립니다. 다시 시도해 주세요.')
+            return
+          }
+          await new Promise((r) => setTimeout(r, 50))
+        }
       }
-    }
-    if (noticeId && pendingFiles.length > 0) {
-      const uploadedFiles = await uploadNoticePendingFiles(noticeId, pendingFiles)
-      if (isMemberSessionRedirectScheduled()) return
-      fileFailed = uploadedFiles.failed
-      if (uploadedFiles.failedIndexes.length > 0) {
-        setPendingFiles((cur) => cur.filter((_, i) => uploadedFiles.failedIndexes.includes(i)))
-      } else {
-        setPendingFiles([])
-      }
-    }
-    if (photoFailed > 0 || fileFailed > 0) {
-      setBusy(false)
-      const parts = [
-        photoFailed > 0 ? `사진 ${photoFailed}장` : '',
-        fileFailed > 0 ? `PDF ${fileFailed}개` : '',
-      ].filter(Boolean)
-      alert(
-        `공지는 저장됐지만 ${parts.join(', ')}를 올리지 못했습니다. 기존 첨부 파일은 그대로 두었습니다. 자동 푸시는 보내지 않았습니다.`
-      )
-      router.replace(`/notice/${noticeId}/edit`)
-      return
-    }
-
-    if (noticeId && plan.sendAfterPhotos) {
-      const after = await requestNoticePushSend(noticeId)
-      setBusy(false)
-      if (!after.ok) {
-        alert(after.message || '공지와 사진은 저장됐지만 푸시 알림 발송에 실패했습니다.')
-        router.replace(`/notice/${noticeId}`)
+      const currentPending = pendingRef.current
+      if (currentPending.some((p) => p.status === 'failed')) {
+        setStatusNote('준비에 실패한 사진이 있습니다. 삭제 후 다시 선택해 주세요.')
         return
       }
-      const pushNote = pushResultMessage({
-        ok: after.ok,
-        error: after.error,
-        message: after.message,
-      })
-      if (pushNote) alert(pushNote)
-    } else {
-      const pushNote = pushResultMessage(data.push)
-      setBusy(false)
-      if (pushNote) alert(pushNote)
-    }
+      if (currentPending.some((p) => p.status !== 'ready' || !p.blob)) {
+        setStatusNote('아직 준비되지 않은 사진이 있습니다. 잠시 후 다시 저장해 주세요.')
+        return
+      }
 
-    if (noticeId) {
-      router.replace(`/notice/${noticeId}`)
-    } else {
-      router.replace('/notice')
+      setSaveProgress('공지 저장 중…')
+      const plan = planNoticeClientAutoPush({
+        sendPushRequested: sendPush && !scheduled,
+        pendingPhotoCount: currentPending.length,
+        pendingFileCount: pendingFiles.length,
+        publishStartAt: publishStartAt || null,
+      })
+      const payload = {
+        title,
+        content: body,
+        body,
+        important,
+        pinned,
+        targetType,
+        targetValue:
+          targetType === NOTICE_TARGET_ALL ? null : targetValue || null,
+        publishStartAt: publishStartAt ? new Date(publishStartAt).toISOString() : null,
+        publishEndAt: publishEndAt ? new Date(publishEndAt).toISOString() : null,
+        sendPush: plan.sendOnCreate,
+      }
+
+      const url = isEdit ? `/api/notice/${initial?.id}` : '/api/notice'
+      const method = isEdit ? 'PATCH' : 'POST'
+
+      const res = await fetch(url, {
+        method,
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+
+      if (consumeUnauthorizedMemberResponse(res)) return
+
+      if (!res.ok) {
+        const failData = await res.json().catch(() => ({}))
+        alert(
+          typeof failData.message === 'string'
+            ? failData.message
+            : isEdit
+              ? '공지 수정에 실패했습니다. 네트워크 상태를 확인한 뒤 다시 시도해 주세요.'
+              : '공지 등록에 실패했습니다. 네트워크 상태를 확인한 뒤 다시 시도해 주세요.'
+        )
+        return
+      }
+
+      const data = await res.json().catch(() => ({}))
+      const noticeId = isEdit
+        ? initial?.id
+        : typeof data.id === 'number'
+          ? data.id
+          : null
+
+      let photoFailed = 0
+      let fileFailed = 0
+      const readyPhotos = currentPending.filter((p) => p.status === 'ready' && p.blob)
+      const photoSortStart =
+        existingPhotos.reduce((max, photo) => Math.max(max, photo.sortOrder), -1) + 1
+      if (noticeId && readyPhotos.length > 0) {
+        setSaveProgress(`사진 업로드 중 0/${readyPhotos.length}`)
+        const uploaded = await uploadNoticePendingPhotos(noticeId, readyPhotos, {
+          onProgress: (p) =>
+            setSaveProgress(`사진 업로드 중 ${p.done}/${p.total}`),
+          sortOrderStart: photoSortStart,
+        })
+        if (isMemberSessionRedirectScheduled()) return
+        photoFailed = uploaded.failed
+        if (uploaded.failedIndexes.length > 0) {
+          const failedKeys = new Set(
+            uploaded.failedIndexes.map((i) => readyPhotos[i]?.key).filter(Boolean)
+          )
+          setPending((cur) => cur.filter((p) => failedKeys.has(p.key)))
+        } else {
+          for (const item of readyPhotos) revokeNoticePreviewUrl(item.previewUrl)
+          setPending([])
+        }
+      }
+      const fileSortStart =
+        existingFiles.reduce((max, file) => Math.max(max, file.sortOrder), -1) + 1
+      if (noticeId && pendingFiles.length > 0) {
+        setSaveProgress(`PDF 업로드 중 0/${pendingFiles.length}`)
+        const uploadedFiles = await uploadNoticePendingFiles(noticeId, pendingFiles, {
+          onProgress: (p) =>
+            setSaveProgress(`PDF 업로드 중 ${p.done}/${p.total}`),
+          sortOrderStart: fileSortStart,
+        })
+        if (isMemberSessionRedirectScheduled()) return
+        fileFailed = uploadedFiles.failed
+        if (uploadedFiles.failedIndexes.length > 0) {
+          setPendingFiles((cur) => cur.filter((_, i) => uploadedFiles.failedIndexes.includes(i)))
+        } else {
+          setPendingFiles([])
+        }
+      }
+      if (photoFailed > 0 || fileFailed > 0) {
+        const parts = [
+          photoFailed > 0 ? `사진 ${photoFailed}장` : '',
+          fileFailed > 0 ? `PDF ${fileFailed}개` : '',
+        ].filter(Boolean)
+        alert(
+          `공지는 저장됐지만 ${parts.join(', ')}를 올리지 못했습니다. 기존 첨부 파일은 그대로 두었습니다. 자동 푸시는 보내지 않았습니다.`
+        )
+        router.replace(`/notice/${noticeId}/edit`)
+        return
+      }
+
+      if (noticeId && plan.sendAfterPhotos) {
+        setSaveProgress('푸시 발송 중…')
+        const after = await requestNoticePushSend(noticeId)
+        if (!after.ok) {
+          alert(after.message || '공지와 첨부 파일은 저장됐지만 푸시 알림 발송에 실패했습니다.')
+          router.replace(`/notice/${noticeId}`)
+          return
+        }
+        const pushNote = pushResultMessage({
+          ok: after.ok,
+          error: after.error,
+          message: after.message,
+        })
+        if (pushNote) alert(pushNote)
+      } else {
+        const pushNote = pushResultMessage(data.push)
+        if (pushNote) alert(pushNote)
+      }
+
+      if (noticeId) {
+        router.replace(`/notice/${noticeId}`)
+      } else {
+        router.replace('/notice')
+      }
+    } catch {
+      alert(
+        isEdit
+          ? '공지 수정 중 오류가 발생했습니다. 네트워크 상태를 확인한 뒤 다시 시도해 주세요.'
+          : '공지 등록 중 오류가 발생했습니다. 네트워크 상태를 확인한 뒤 다시 시도해 주세요.'
+      )
+    } finally {
+      if (!isMemberSessionRedirectScheduled()) {
+        submitLock.current = false
+        setBusy(false)
+        setSaveProgress('')
+      }
     }
   }
 
@@ -354,8 +439,9 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
         <div className="course-report-photo-composer">
           {existingPhotos.map((photo) => (
             <div key={photo.id} className="course-report-photo-item">
+              {/* object URL / 저장된 사진은 즉시 표시 (is-revealed: 공용 CSS 의 opacity:0 페이드 대상에서 제외) */}
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={noticePhotoSrc(initial!.id, photo.id)} alt="" />
+              <img className="is-revealed" src={noticePhotoSrc(initial!.id, photo.id)} alt="" />
               <button
                 type="button"
                 className="course-report-photo-remove"
@@ -367,13 +453,36 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
             </div>
           ))}
           {pending.map((photo) => (
-            <div key={photo.key} className="course-report-photo-item">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={photo.previewUrl} alt="" />
+            <div
+              key={photo.key}
+              className={`course-report-photo-item${photo.status === 'failed' ? ' is-failed' : ''}${photo.status === 'preparing' ? ' is-preparing' : ''}`}
+            >
+              {photo.previewUrl ? (
+                /* eslint-disable-next-line @next/next/no-img-element */
+                <img
+                  className="is-revealed"
+                  src={photo.previewUrl}
+                  alt=""
+                  onError={(e) => {
+                    e.currentTarget.style.opacity = '1'
+                  }}
+                />
+              ) : (
+                <span className="notice-photo-thumb-fallback" aria-hidden>
+                  {photo.status === 'preparing' ? '준비 중' : '미리보기 없음'}
+                </span>
+              )}
+              {photo.status === 'preparing' ? (
+                <span className="notice-photo-thumb-status">사진 준비 중…</span>
+              ) : null}
+              {photo.status === 'failed' ? (
+                <span className="notice-photo-thumb-status">준비 실패</span>
+              ) : null}
               <button
                 type="button"
                 className="course-report-photo-remove"
                 aria-label="사진 삭제"
+                disabled={busy}
                 onClick={() => removePending(photo.key)}
               >
                 ×
@@ -525,9 +634,18 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
           {isEdit ? NOTICE_EDIT_SEND_PUSH_LABEL : NOTICE_CREATE_SEND_PUSH_LABEL}
         </label>
       )}
+      {saveProgress ? (
+        <p className="notice-form-progress" role="status" aria-live="polite">
+          {saveProgress}
+        </p>
+      ) : null}
       <div className="notice-form-actions">
         <button type="submit" disabled={busy} className="ui-btn ui-btn-primary">
-          {busy ? (isEdit ? '수정 중…' : '등록 중…') : (isEdit ? '수정' : '등록')}
+          {busy
+            ? saveProgress || (isEdit ? '수정 중…' : '등록 중…')
+            : isEdit
+              ? '수정'
+              : '등록'}
         </button>
         <a href={isEdit ? `/notice/${initial?.id}` : '/notice'} className="ui-btn ui-btn-ghost">
           취소
