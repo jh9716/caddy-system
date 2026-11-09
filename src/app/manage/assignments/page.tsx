@@ -90,8 +90,10 @@ import {
   COURSE_CODES,
   COURSE_LABELS,
   type CourseCode,
+  type CourseTeeSlot,
   type ShiftPart,
 } from "@/lib/reservationParser";
+import { cloneCourseTeeSheet } from "@/lib/assignmentBoardTeeSheet";
 
 type RunResponse = AutoAssignResultV1 & {
   error?: string;
@@ -99,6 +101,7 @@ type RunResponse = AutoAssignResultV1 & {
   availabilityCounts?: { available: number; special: number; excluded: number };
   specialDutySkipped?: Array<{ caddyId?: number; name?: string }>;
   rosterBaseline?: AutoAssignCaddy[];
+  teeSheet?: CourseTeeSlot[];
 };
 
 const SHIFTS: ShiftPart[] = ["1부", "2부", "3부"];
@@ -425,7 +428,10 @@ const BoardAssignedSlots = memo(function BoardAssignedSlots({
               className="bc-team"
               onClick={() => onTeamTap(row)}
             >
-              <span className="bc-team-name">
+              <span
+                className="bc-team-name"
+                title={row.reservation.teamName || "팀"}
+              >
                 {row.reservation.teamName || "팀"}
               </span>
               {marks.houseRequest ? (
@@ -442,11 +448,14 @@ const BoardAssignedSlots = memo(function BoardAssignedSlots({
               }`}
               onClick={() => onCaddyTap(row)}
             >
-              <span className="bc-name">
+              <span
+                className="bc-name"
+                title={vacant ? undefined : row.caddy.name}
+              >
                 {vacant ? "빈칸" : row.caddy.name}
               </span>
-              <span className="bc-affil">
-                {vacant ? "미배치" : caddyAffiliation(row.caddy)}
+              <span className="bc-affil" title={vacant ? undefined : caddyAffiliation(row.caddy)}>
+                {vacant ? "" : caddyAffiliation(row.caddy)}
               </span>
               <AssignmentMarkBadges
                 twoWork={marks.twoWork}
@@ -603,7 +612,38 @@ async function putAssignmentDraft(
   return { res, data };
 }
 
+/** 배치표 컬럼 헤더를 .vh-mobile-bar 바로 아래에 붙인다. 공통 앱 바는 건드리지 않는다. */
+function useOpsBoardMobileBarOffset() {
+  useEffect(() => {
+    const root = document.querySelector<HTMLElement>(".ops-root");
+    if (!root) return;
+    const bar = document.querySelector<HTMLElement>(".vh-mobile-bar");
+    const apply = () => {
+      const style = bar ? getComputedStyle(bar) : null;
+      const visible =
+        !!bar &&
+        style?.display !== "none" &&
+        (style?.position === "sticky" || style?.position === "fixed") &&
+        bar.offsetParent !== null;
+      const h = visible ? Math.round(bar.getBoundingClientRect().height) : 0;
+      root.style.setProperty("--ops-board-sticky-top", `${h}px`);
+    };
+    apply();
+    const ro =
+      typeof ResizeObserver !== "undefined" && bar
+        ? new ResizeObserver(apply)
+        : null;
+    if (ro && bar) ro.observe(bar);
+    window.addEventListener("resize", apply);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener("resize", apply);
+    };
+  }, []);
+}
+
 export default function ManageAssignmentsOpsPage() {
+  useOpsBoardMobileBarOffset();
   const [date, setDate] = useState("");
   const [specialSupportByShift, setSpecialSupportByShift] = useState(
     emptySpecialSupportByShift
@@ -2371,10 +2411,16 @@ export default function ManageAssignmentsOpsPage() {
         data,
         mergeRosterBaseline(caddyPool, data.rosterBaseline)
       );
-      const seeded =
-        isUsableOffSnapshot(offSnapshotRef.current, next.date)
-          ? { ...next, offSnapshot: offSnapshotRef.current }
-          : next;
+      const teeSheet =
+        cloneCourseTeeSheet(data.teeSheet) ||
+        cloneCourseTeeSheet(draftRef.current?.teeSheet);
+      const seeded = {
+        ...next,
+        ...(isUsableOffSnapshot(offSnapshotRef.current, next.date)
+          ? { offSnapshot: offSnapshotRef.current }
+          : {}),
+        ...(teeSheet ? { teeSheet } : {}),
+      };
       setDraft(seeded);
       confirmedDraftRef.current = seeded;
       pendingIntentsRef.current = [];
@@ -2502,9 +2548,14 @@ export default function ManageAssignmentsOpsPage() {
         data,
         mergeRosterBaseline(caddyPool, data.rosterBaseline)
       );
-      const next = isUsableOffSnapshot(offSnapshotRef.current, created.date)
-        ? { ...created, offSnapshot: offSnapshotRef.current }
-        : created;
+      const teeSheet = cloneCourseTeeSheet(current?.teeSheet);
+      const next = {
+        ...created,
+        ...(isUsableOffSnapshot(offSnapshotRef.current, created.date)
+          ? { offSnapshot: offSnapshotRef.current }
+          : {}),
+        ...(teeSheet ? { teeSheet } : {}),
+      };
       const prepAfterPreview = await prepareRecalcDraftExpectedVersion({
         discardObsoletePending,
         flushOwnSaves: flushDraftSave,
@@ -3646,7 +3697,10 @@ export default function ManageAssignmentsOpsPage() {
   const boardRows = useMemo(() => {
     if (shiftTab === "UNASSIGNED" || shiftTab === "CLOSED") return [];
     // 선택된 부 내부에서만 matrix — reservation.shift 기준으로 재검증
-    const built = buildShiftBoard(shiftRows, boardOpenCourses, shiftTab);
+    const built = buildShiftBoard(shiftRows, boardOpenCourses, shiftTab, {
+      teeSheet: draft?.teeSheet,
+      unassignedReservations: draft?.unassignedReservations,
+    });
     if (!cellEditOn || !draft) return built;
     return overlayUnassignedVacancies({
       board: built,
@@ -4485,11 +4539,10 @@ export default function ManageAssignmentsOpsPage() {
       {draft && (
         <>
           {/*
-            부 탭 + (배치표) 컬럼 헤더를 하나의 sticky 스택으로 묶어
-            서로 다른 top/z-index sticky가 첫 데이터 행을 덮지 않게 한다.
-            헤더는 문서 흐름 높이를 유지한 채 스택과 함께 고정된다.
+            부 탭·툴·스페어는 페이지와 함께 스크롤한다.
+            컬럼 헤더(시간/베/스/오/레)만 배치표 범위(.ops-board-scope)에서 sticky.
           */}
-          <div className="ops-sticky-stack" ref={stickyStackRef}>
+          <div className="ops-sticky-stack" ref={stickyStackRef} data-ops-sticky-stack="1">
             <nav className="ops-tabs">
               {SHIFTS.map((s) => (
                 <button
@@ -4643,39 +4696,17 @@ export default function ManageAssignmentsOpsPage() {
               </div>
             ) : null}
 
-            {shiftTab !== "UNASSIGNED" &&
-              shiftTab !== "CLOSED" &&
-              viewMode === "board" &&
-              boardRows.length > 0 && (
-                <div className="ops-board-head-bar">
-                  <div
-                    className="ops-board-head"
-                    role="row"
-                    aria-label={`${shiftTab} 배치표 헤더`}
-                  >
-                    <div className="bh-time" role="columnheader">
-                      시간
-                    </div>
-                    {COURSE_CODES.map((code) => (
-                      <div
-                        key={code}
-                        className={`bh-course ${
-                          boardOpenCourses.includes(code) ? "" : "closed"
-                        }`}
-                        role="columnheader"
-                        title={COURSE_LABELS[code]}
-                      >
-                        {COURSE_SHORT[code]}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
           </div>
 
           {shiftTab !== "UNASSIGNED" && shiftTab !== "CLOSED" && (
               <>
               {viewMode === "board" && (
+                <div
+                  className={`ops-board-scope${
+                    boardRows.length > 0 ? " has-sticky-head" : ""
+                  }`}
+                  data-ops-board-scope="1"
+                >
                 <div
                   ref={boardWrapRef}
                   className={`ops-board-wrap${
@@ -4685,30 +4716,69 @@ export default function ManageAssignmentsOpsPage() {
                   {boardRows.length === 0 ? (
                     <div className="ops-empty">이 부 배치 없음</div>
                   ) : (
-                    <div
+                    <table
                       className={`ops-board${cellEditOn ? " cell-edit-on" : ""}`}
-                      role="table"
                       aria-label={`${shiftTab} 배치표`}
                       data-cell-edit={cellEditOn ? "on" : "off"}
                     >
+                      <colgroup>
+                        <col className="ops-col-time" />
+                        {COURSE_CODES.map((code) => (
+                          <col key={code} className="ops-col-course" />
+                        ))}
+                      </colgroup>
+                      <thead
+                        className="ops-board-head-bar"
+                        data-ops-board-head="1"
+                      >
+                        <tr
+                          className="ops-board-head"
+                          aria-label={`${shiftTab} 배치표 헤더`}
+                        >
+                          <th className="bh-time" scope="col">
+                            시간
+                          </th>
+                          {COURSE_CODES.map((code) => (
+                            <th
+                              key={code}
+                              className={`bh-course ${
+                                boardOpenCourses.includes(code) ? "" : "closed"
+                              }`}
+                              scope="col"
+                              title={COURSE_LABELS[code]}
+                            >
+                              {COURSE_SHORT[code]}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
                       {boardRows.map((tr) => (
-                          <div key={tr.teeTime} className="ops-board-block">
-                            <div className="ops-board-row" role="row">
-                              <div className="bc-time" role="cell">
+                          <tr key={tr.teeTime} className="ops-board-row">
+                              <th className="bc-time" scope="row">
                                 {tr.teeTime}
-                              </div>
+                              </th>
                               {COURSE_CODES.map((code) => {
                                 const cell = tr.cells[code];
                                 if (cell.kind === "closed") {
                                   return (
-                                    <div
+                                    <td
                                       key={code}
                                       className="bc-cell closed"
-                                      role="cell"
                                       aria-label={`${COURSE_LABELS[code]} 닫힘`}
                                     >
                                       <span className="bc-closed">닫힘</span>
-                                    </div>
+                                    </td>
+                                  );
+                                }
+                                if (cell.kind === "unassigned") {
+                                  return (
+                                    <td
+                                      key={code}
+                                      className="bc-cell unassigned"
+                                      data-board-cell="unassigned"
+                                      aria-label={`${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} 미배정 예약`}
+                                    />
                                   );
                                 }
                                 if (cell.kind === "empty") {
@@ -4723,31 +4793,35 @@ export default function ManageAssignmentsOpsPage() {
                                     }
                                   );
                                   return (
-                                    <button
+                                    <td
                                       key={code}
-                                      type="button"
                                       className={`bc-cell empty ${
                                         moveDest ? "move-dest" : "addable"
                                       }${pendingDest ? " pending" : ""}`}
-                                      role="cell"
-                                      aria-busy={pendingDest}
-                                      aria-label={
-                                        pendingDest
-                                          ? `${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} ${TEAM_MOVING_LABEL}`
-                                          : moveDest
-                                          ? `${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} 이동 목적지 선택`
-                                          : `${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} 추가팀 등록`
-                                      }
-                                      onClick={() =>
-                                        onEmptyBoardCellClick(code, tr.teeTime)
-                                      }
+                                      data-board-cell="empty"
                                     >
-                                      {pendingDest
-                                        ? TEAM_MOVING_LABEL
-                                        : moveDest
-                                          ? "이동"
-                                          : "-"}
-                                    </button>
+                                      <button
+                                        type="button"
+                                        className="bc-empty-hit"
+                                        aria-busy={pendingDest}
+                                        aria-label={
+                                          pendingDest
+                                            ? `${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} ${TEAM_MOVING_LABEL}`
+                                            : moveDest
+                                            ? `${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} 이동 목적지 선택`
+                                            : `${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} 추가팀 등록`
+                                        }
+                                        onClick={() =>
+                                          onEmptyBoardCellClick(code, tr.teeTime)
+                                        }
+                                      >
+                                        {pendingDest
+                                          ? TEAM_MOVING_LABEL
+                                          : moveDest
+                                            ? "이동"
+                                            : null}
+                                      </button>
+                                    </td>
                                   );
                                 }
                                 const primary = cell.rows[0];
@@ -4770,7 +4844,7 @@ export default function ManageAssignmentsOpsPage() {
                                       cellEditKey
                                 );
                                 return (
-                                  <div
+                                  <td
                                     key={code}
                                     className={`bc-cell assigned ${
                                       special ? "special" : ""
@@ -4779,7 +4853,6 @@ export default function ManageAssignmentsOpsPage() {
                                     }${marks.limousine ? " limo" : ""}${
                                       marks.driving ? " drive" : ""
                                     } ${active ? "active" : ""}`}
-                                    role="cell"
                                   >
                                     <BoardAssignedSlots
                                       rows={cell.rows}
@@ -4794,14 +4867,15 @@ export default function ManageAssignmentsOpsPage() {
                                       onCaddyTap={onCaddyTap}
                                       onToggleLock={onToggleLock}
                                     />
-                                  </div>
+                                  </td>
                                 );
                               })}
-                            </div>
-                          </div>
+                          </tr>
                         ))}
-                    </div>
+                      </tbody>
+                    </table>
                   )}
+                </div>
                 </div>
               )}
 
@@ -5016,7 +5090,7 @@ export default function ManageAssignmentsOpsPage() {
       </div>
 
       {draft && (
-        <section className="ops-publish" aria-label="운영 반영">
+        <section className="ops-publish" aria-label="운영 반영" data-ops-publish="1">
           <h2 className="ops-publish-title">운영 반영</h2>
           <button
             type="button"
@@ -5206,6 +5280,12 @@ const opsCss = `
     width: 100%;
     container-type: inline-size;
     container-name: ops-assign;
+    --ops-board-sticky-top: 0px;
+  }
+  @media (max-width: 959px) {
+    .ops-root {
+      --ops-board-sticky-top: 53px;
+    }
   }
   @media (min-width: 960px) {
     .ops-root {
@@ -5688,18 +5768,24 @@ const opsCss = `
   .warn.error { background: #fef2f2; color: #991b1b; }
   .warn.warn { background: #fffbeb; color: #92400e; }
   /*
-    단일 sticky 스택: 부 탭 + 보기 토글 + 컬럼 헤더가 같은 블록으로 고정되어
-    이중 sticky(top 오프셋)로 첫 행을 덮는 문제를 제거한다.
+    부 탭·툴·스페어는 문서 흐름. sticky 아님.
+    컬럼 헤더만 .ops-board-scope 안에서 고정되어 표가 끝나면 해제된다.
   */
   .ops-sticky-stack {
-    position: sticky;
-    top: 0;
-    z-index: 5;
+    position: relative;
+    z-index: auto;
     display: grid;
     gap: 8px;
     padding: 6px 0 0;
     background: #f8fafc;
-    box-shadow: 0 1px 0 #e2e8f0;
+  }
+  .ops-board-scope {
+    position: relative;
+    /* ops-root container-type보다 가까운 containing block — 표가 끝나면 unstick */
+    transform: translateY(0);
+    --ops-board-line: #cbd5e1;
+    min-width: 0;
+    max-width: 100%;
   }
   .ops-tabs {
     display: grid;
@@ -6269,133 +6355,136 @@ const opsCss = `
     }
   }
   .ops-board-head-bar {
-    width: 100%;
-    border: 1px solid #e2e8f0;
-    border-bottom: 0;
-    border-radius: 8px 8px 0 0;
-    overflow: hidden;
+    position: sticky;
+    top: var(--ops-board-sticky-top, 0px);
+    z-index: 4;
     background: #0f172a;
   }
   .ops-board-wrap {
     width: 100%;
+    max-width: 100%;
+    min-width: 0;
     /* overflow-x:hidden 은 sticky 스크롤 컨테인먼트를 만들어 모바일에서 깨질 수 있음 */
     overflow-x: clip;
+    overflow-y: visible;
   }
   @media (max-width: 959px) {
-    .ops-board-wrap.has-sticky-head {
+    .ops-board-scope.has-sticky-head {
       padding-bottom: calc(var(--vh-bottom-nav-height, 58px) + env(safe-area-inset-bottom, 0px) + 8px);
     }
   }
-  /* ops-root gap(12px)을 상쇄해 헤더 바·본문 테두리가 이어지게 함 */
-  .ops-sticky-stack:has(.ops-board-head-bar) + .ops-board-wrap.has-sticky-head {
-    margin-top: -8px;
-  }
   .ops-board {
     width: 100%;
-    display: grid;
-    gap: 0;
-    border: 1px solid #e2e8f0;
-    border-radius: 8px;
-    overflow: hidden;
+    max-width: 100%;
+    min-width: 0;
+    table-layout: fixed;
+    border-collapse: collapse;
+    border-spacing: 0;
+    empty-cells: show;
+    border: 1px solid var(--ops-board-line);
     background: #fff;
+    box-sizing: border-box;
   }
-  .ops-board-wrap.has-sticky-head .ops-board {
-    border-top: 0;
-    border-radius: 0 0 8px 8px;
-  }
-  .ops-board-head,
-  .ops-board-row {
-    display: grid;
-    grid-template-columns: 40px repeat(4, minmax(0, 1fr));
-    width: 100%;
-  }
-  .ops-board-head {
-    /* 스택 안에서 일반 흐름 — 별도 sticky/top 오프셋 없음 */
-    position: relative;
+  .ops-col-time { width: 52px; }
+  .ops-col-course { width: calc((100% - 52px) / 4); }
+  .ops-board-head th {
+    position: sticky;
+    top: var(--ops-board-sticky-top, 0px);
+    z-index: 4;
+    box-sizing: border-box;
+    height: 32px;
+    padding: 4px 2px;
     background: #0f172a;
     color: #fff;
-  }
-  .ops-board-head > div {
-    padding: 6px 2px;
-    text-align: center;
+    border: 1px solid #334155;
     font-size: 0.72rem;
     font-weight: 800;
     letter-spacing: -0.02em;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
   }
-  .ops-board-head .bh-time { text-align: center; }
   .ops-board-head .bh-course.closed { color: #94a3b8; text-decoration: line-through; }
-  .ops-board-block + .ops-board-block {
-    border-top: 1px solid #e2e8f0;
+  .ops-board-row > .bc-time,
+  .ops-board-row > .bc-cell {
+    box-sizing: border-box;
+    height: 64px;
+    vertical-align: middle;
+    border: 1px solid var(--ops-board-line);
   }
   .ops-board-row > .bc-time {
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    width: 52px;
     font-size: 0.68rem;
     font-weight: 800;
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
     color: #334155;
     background: #f8fafc;
-    border-right: 1px solid #e2e8f0;
-    padding: 4px 1px;
-    min-height: 36px;
+    text-align: center;
+    padding: 2px 1px;
   }
   .bc-cell {
-    min-width: 0;
-    min-height: 36px;
-    padding: 4px 2px;
-    border-right: 1px solid #f1f5f9;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 1px;
+    padding: 2px 3px;
+    background: #fff;
     font-size: 0.72rem;
     line-height: 1.15;
+    text-align: center;
+    overflow: hidden;
+  }
+  .bc-cell.empty {
+    padding: 0;
+    background: #fff;
+    position: relative;
+  }
+  .bc-empty-hit {
+    appearance: none;
+    -webkit-appearance: none;
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+    padding: 0;
+  }
+  .bc-cell.unassigned {
     background: #fff;
   }
-  .ops-board-row > .bc-cell:last-child { border-right: 0; }
-  .bc-cell.empty {
-    color: #cbd5e1;
-    font-weight: 600;
-  }
-  button.bc-cell.empty.addable {
+  .bc-cell.empty.addable .bc-empty-hit {
     cursor: pointer;
-    color: #94a3b8;
   }
-  button.bc-cell.empty.addable:hover,
-  button.bc-cell.empty.addable:focus-visible {
+  .bc-cell.empty.addable .bc-empty-hit:hover,
+  .bc-cell.empty.addable .bc-empty-hit:focus-visible {
     background: #f8fafc;
-    color: #0f172a;
     outline: 2px solid #0f172a;
     outline-offset: -2px;
   }
-  button.bc-cell.empty.move-dest {
+  .bc-cell.empty.move-dest .bc-empty-hit {
     cursor: pointer;
     color: #9a3412;
     font-size: 0.62rem;
     font-weight: 700;
-    min-height: 72px;
-    width: 100%;
     -webkit-tap-highlight-color: transparent;
   }
-  button.bc-cell.empty.move-dest:hover,
-  button.bc-cell.empty.move-dest:focus-visible {
+  .bc-cell.empty.move-dest .bc-empty-hit:hover,
+  .bc-cell.empty.move-dest .bc-empty-hit:focus-visible {
     background: #fff7ed;
     color: #9a3412;
     outline: 2px solid #ea580c;
     outline-offset: -2px;
   }
-  button.bc-cell.empty.move-dest.pending,
-  button.bc-cell.empty.move-dest:disabled {
+  .bc-cell.empty.move-dest.pending .bc-empty-hit,
+  .bc-cell.empty.move-dest .bc-empty-hit:disabled {
     cursor: wait;
     color: #c2410c;
     background: #fff7ed;
-  }
-  @media (max-width: 640px) {
-    button.bc-cell.empty.move-dest {
-      min-height: 88px;
-    }
   }
   .move-mode-banner {
     display: flex;
@@ -6469,17 +6558,9 @@ const opsCss = `
     font-size: 0.62rem;
     font-weight: 800;
   }
-  button.bc-cell {
-    border: 0;
-    cursor: pointer;
-    font: inherit;
-    color: inherit;
-    width: 100%;
-  }
   .bc-cell.assigned {
     background: #fff;
-    gap: 4px;
-    padding: 3px 1px;
+    padding: 2px 3px;
   }
   .bc-cell.assigned.special {
     background: #fffbeb;
@@ -6505,7 +6586,8 @@ const opsCss = `
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 1px;
+    justify-content: center;
+    gap: 0;
     width: 100%;
     min-width: 0;
   }
@@ -6532,7 +6614,7 @@ const opsCss = `
     background: #fffbeb;
   }
   .ops-board.cell-edit-on .bc-caddy {
-    min-height: 36px;
+    min-height: 22px;
   }
   @media (max-width: 640px) {
     .ops-board.cell-edit-on .bc-caddy,
@@ -6546,7 +6628,7 @@ const opsCss = `
       min-height: 32px;
     }
     .ops-board.cell-edit-on .bc-cell {
-      min-height: 56px;
+      height: 64px;
     }
     .bc-slot {
       gap: 0;
@@ -6554,88 +6636,105 @@ const opsCss = `
     .bc-team,
     .bc-caddy {
       min-height: 0;
-      padding: 1px 1px 0;
+      padding: 0;
     }
     .bc-team-name {
       font-size: 0.52rem;
-      line-height: 1.15;
     }
     .bc-name {
-      font-size: 0.7rem;
-      line-height: 1.2;
+      font-size: 0.68rem;
     }
     .bc-affil {
       font-size: 0.5rem;
-      line-height: 1.1;
-    }
-    .bc-marks {
-      max-height: 14px;
-      overflow: hidden;
-    }
-    .lock-chip {
-      margin-top: 1px;
     }
   }
   .bc-team,
   .bc-caddy {
+    appearance: none;
+    -webkit-appearance: none;
     border: 0;
     background: transparent;
     font: inherit;
     color: inherit;
     cursor: pointer;
     width: 100%;
-    padding: 1px 2px;
+    min-width: 0;
+    padding: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 1px;
-    min-height: 22px;
+    justify-content: center;
+    gap: 0;
+    min-height: 0;
+    text-align: center;
+  }
+  .bc-team {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    justify-content: center;
+    overflow: hidden;
+    gap: 2px;
+    min-height: 14px;
+  }
+  .bc-team .bc-badge {
+    flex: 0 0 auto;
   }
   .bc-team-name {
-    font-size: 0.58rem;
+    font-size: 0.55rem;
     font-weight: 700;
     color: #475569;
+    flex: 0 1 auto;
+    min-width: 0;
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    text-align: center;
+    line-height: 1.2;
   }
   .bc-caddy .bc-name,
   .bc-caddy .bc-affil {
     pointer-events: none;
   }
   .lock-chip {
-    font-size: 0.58rem !important;
-    padding: 1px 5px !important;
-    min-height: 18px !important;
-    line-height: 1.1;
+    font-size: 0.52rem !important;
+    padding: 0 4px !important;
+    min-height: 14px !important;
+    line-height: 1.2;
     border-radius: 999px;
+    margin-top: 1px;
   }
   .bc-name {
     font-weight: 800;
-    font-size: 0.78rem;
+    font-size: 0.72rem;
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    text-align: center;
     color: #0f172a;
+    line-height: 1.2;
   }
   .bc-affil {
-    font-size: 0.55rem;
+    font-size: 0.52rem;
     font-weight: 700;
     color: #64748b;
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    line-height: 1.1;
+    text-align: center;
+    line-height: 1.15;
   }
   .bc-marks {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    flex-wrap: nowrap;
     gap: 2px;
     max-width: 100%;
+    overflow: hidden;
+    height: 14px;
   }
   .bc-badge {
     display: inline-block;

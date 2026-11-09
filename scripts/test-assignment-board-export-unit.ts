@@ -182,6 +182,36 @@ section("빈 팀/닫힘 표시 유지");
   assert(slice.rows[0].cells.OCEAN.kind === "closed", "닫힌 코스 closed");
   assert(html.includes("닫힘"), "export에 닫힘");
   assert(html.includes('class="bx-cell empty"'), "export에 빈칸 셀");
+  assert(html.includes('data-board-cell="empty"'), "empty 데이터 마커");
+  assert(!/class="bx-cell empty"[^>]*>\s*-/.test(html), "이미지 빈칸에 '-' 없음");
+}
+
+section("미배정·empty 모두 화면 빈칸");
+{
+  const d = draftOf([row("3부", "16:40", "VERTHILL", "V1", { caddyName: "김배정" })]);
+  d.unassignedReservations = [
+    {
+      reservation: {
+        id: "u1633",
+        date: "2026-09-07",
+        course: "VERTHILL",
+        shift: "3부",
+        teeTime: "16:33",
+        teamName: "미배정팀",
+        rawRowIndex: 1,
+      },
+      reason: "OPEN",
+    },
+  ];
+  const slice = buildBoardExportSlice(d, "3부");
+  const html = renderToStaticMarkup(createElement(AssignmentBoardExportView, { slice }));
+  assert(slice.rows.some((r) => r.teeTime === "16:33" && r.cells.VERTHILL.kind === "unassigned"), "kind unassigned 유지");
+  assert(slice.rows.some((r) => r.teeTime === "16:33" && r.cells.SKY.kind === "empty"), "kind empty 유지");
+  assert(!html.includes("미배치"), "이미지 셀에 미배치 문구 없음");
+  assert(html.includes('data-board-cell="unassigned"'), "unassigned 마커");
+  const emptyBits = html.split('data-board-cell="empty"');
+  assert(emptyBits.length > 1, "empty 셀 존재");
+  assert(!emptyBits.slice(1).some((part) => /^[^>]*>\s*-/.test(part)), "empty 셀 텍스트가 '-'가 아님");
 }
 
 section("관리자 UI가 export DOM에서 제외");
@@ -408,7 +438,7 @@ section("헤더 베르힐/스카이/오션/레이크 + 시간 확대 CSS");
   );
   assert(/\.bx-time[\s\S]*font-size: 17px/.test(css), "티타임 font-size 확대");
   assert(/\.bx-time[\s\S]*font-weight: 800/.test(css), "티타임 font-weight");
-  assert(/\.bx-board-head > div[\s\S]*font-size: 12px/.test(css), "헤더 font-size 조정");
+  assert(/\.bx-board-head th[\s\S]*font-size: 12px/.test(css), "헤더 font-size 조정");
   assert(/#8a6d2f/.test(css) && /#3d3420/.test(css), "dark gold 헤더/구분 바");
   assert(/border-top: 1\.5px solid #b6a57a/.test(css), "행 구분선 강화");
 }

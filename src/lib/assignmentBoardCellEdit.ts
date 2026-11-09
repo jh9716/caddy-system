@@ -540,7 +540,7 @@ export function overlayUnassignedVacancies(input: {
       byTime.set(teeTime, timeRow);
     }
     const cell = timeRow.cells[code];
-    if (cell.kind !== "empty") continue;
+    if (cell.kind === "assigned" || cell.kind === "closed") continue;
     timeRow.cells[code] = {
       kind: "assigned",
       rows: [vacantRowFromReservation(input.draft, reservation)],

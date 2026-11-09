@@ -2,89 +2,80 @@
 export const publishedBoardCss = `
   .pub-board-root {
     width: 100%;
+    max-width: 100%;
+    min-width: 0;
     display: grid;
     gap: 8px;
-  }
-  .ops-board-head-bar {
-    width: 100%;
-    border: 1px solid #e2e8f0;
-    border-bottom: 0;
-    border-radius: 8px 8px 0 0;
-    overflow: hidden;
-    background: #0f172a;
+    --ops-board-line: #cbd5e1;
   }
   .ops-board-wrap {
     width: 100%;
+    max-width: 100%;
+    min-width: 0;
     overflow-x: clip;
-  }
-  .ops-board-wrap.has-sticky-head {
-    margin-top: 0;
   }
   .ops-board {
     width: 100%;
-    display: grid;
-    gap: 0;
-    border: 1px solid #e2e8f0;
-    border-radius: 0 0 8px 8px;
-    overflow: hidden;
+    max-width: 100%;
+    min-width: 0;
+    table-layout: fixed;
+    border-collapse: collapse;
+    border-spacing: 0;
+    empty-cells: show;
+    border: 1px solid var(--ops-board-line);
     background: #fff;
+    box-sizing: border-box;
   }
-  .ops-board-head,
-  .ops-board-row {
-    display: grid;
-    grid-template-columns: 40px repeat(4, minmax(0, 1fr));
-    width: 100%;
-  }
-  .ops-board-head {
-    position: relative;
+  .ops-col-time { width: 52px; }
+  .ops-col-course { width: calc((100% - 52px) / 4); }
+  .ops-board-head th {
+    box-sizing: border-box;
+    height: 32px;
+    padding: 4px 2px;
     background: #0f172a;
     color: #fff;
-  }
-  .ops-board-head > div {
-    padding: 6px 2px;
-    text-align: center;
+    border: 1px solid #334155;
     font-size: 0.72rem;
     font-weight: 800;
-    letter-spacing: -0.02em;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
   }
   .ops-board-head .bh-course.closed {
     color: #94a3b8;
     text-decoration: line-through;
   }
-  .ops-board-block + .ops-board-block {
-    border-top: 1px solid #e2e8f0;
+  .ops-board-row > .bc-time,
+  .ops-board-row > .bc-cell {
+    box-sizing: border-box;
+    height: 64px;
+    vertical-align: middle;
+    border: 1px solid var(--ops-board-line);
   }
   .ops-board-row > .bc-time {
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    width: 52px;
     font-size: 0.68rem;
     font-weight: 800;
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
     color: #334155;
     background: #f8fafc;
-    border-right: 1px solid #e2e8f0;
-    padding: 4px 1px;
-    min-height: 36px;
+    text-align: center;
+    padding: 2px 1px;
   }
   .bc-cell {
-    min-width: 0;
-    min-height: 36px;
-    padding: 4px 2px;
-    border-right: 1px solid #f1f5f9;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 1px;
+    padding: 2px 3px;
+    background: #fff;
     font-size: 0.72rem;
     line-height: 1.15;
+    text-align: center;
+    overflow: hidden;
+  }
+  .bc-cell.empty {
     background: #fff;
   }
-  .ops-board-row > .bc-cell:last-child { border-right: 0; }
-  .bc-cell.empty {
-    color: #cbd5e1;
-    font-weight: 600;
+  .bc-cell.unassigned {
+    background: #fff;
   }
   .bc-cell.closed {
     background: repeating-linear-gradient(
@@ -102,8 +93,6 @@ export const publishedBoardCss = `
   }
   .bc-cell.assigned {
     background: #fff;
-    gap: 4px;
-    padding: 3px 1px;
   }
   .bc-cell.assigned.special { background: #fffbeb; }
   .bc-cell.assigned.two-work {
@@ -120,71 +109,88 @@ export const publishedBoardCss = `
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 1px;
+    justify-content: center;
+    gap: 0;
     width: 100%;
     min-width: 0;
   }
   .bc-team,
   .bc-caddy {
     width: 100%;
-    padding: 1px 2px;
+    min-width: 0;
+    padding: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 1px;
-    min-height: 22px;
+    text-align: center;
   }
-  .bc-team-name {
-    font-size: 0.58rem;
-    font-weight: 700;
-    color: #475569;
+  .bc-team {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    justify-content: center;
+    overflow: hidden;
+    gap: 2px;
+    min-height: 14px;
+  }
+  .bc-team .bc-badge {
+    flex: 0 0 auto;
+  }
+  .bc-team-name,
+  .bc-name,
+  .bc-affil {
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    text-align: center;
+  }
+  .bc-team-name {
+    font-size: 0.55rem;
+    font-weight: 700;
+    color: #475569;
+    flex: 0 1 auto;
+    min-width: 0;
+    line-height: 1.2;
   }
   .lock-chip {
-    font-size: 0.58rem;
-    padding: 1px 5px;
-    min-height: 18px;
-    line-height: 1.1;
+    font-size: 0.52rem;
+    padding: 0 4px;
+    min-height: 14px;
+    line-height: 1.2;
     border-radius: 999px;
     background: #e2e8f0;
     color: #334155;
     font-weight: 800;
+    margin-top: 1px;
   }
   .bc-name {
     font-weight: 800;
-    font-size: 0.78rem;
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    font-size: 0.72rem;
     color: #0f172a;
+    line-height: 1.2;
   }
   .bc-affil {
-    font-size: 0.55rem;
+    font-size: 0.52rem;
     font-weight: 700;
     color: #64748b;
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    line-height: 1.1;
+    line-height: 1.15;
   }
   .bc-marks {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    flex-wrap: nowrap;
     gap: 2px;
     max-width: 100%;
+    overflow: hidden;
+    height: 14px;
   }
   .bc-badge {
     display: inline-block;
-    font-size: 0.55rem;
+    font-size: 0.52rem;
     font-weight: 800;
     line-height: 1.15;
-    padding: 1px 4px;
+    padding: 0 4px;
     border-radius: 4px;
     white-space: nowrap;
   }
@@ -196,18 +202,16 @@ export const publishedBoardCss = `
     color: #166534;
     background: #dcfce7;
     box-shadow: 0 0 0 1px #86efac;
-    font-size: 0.6rem;
   }
   .bc-badge.limo {
     color: #9a3412;
     background: #fb923c;
     box-shadow: 0 0 0 1px #c2410c;
-    font-size: 0.6rem;
   }
   .bc-badge.drive { color: #fff; background: #7c3aed; }
   .bc-badge.two-three { color: #0f766e; background: #ccfbf1; }
   .bc-special {
-    font-size: 0.58rem;
+    font-size: 0.52rem;
     font-weight: 800;
     color: #b45309;
   }
@@ -230,11 +234,10 @@ export const publishedBoardCss = `
     font-size: 0.85rem;
   }
   @media (max-width: 480px) {
-    .ops-board-head,
-    .ops-board-row {
-      grid-template-columns: 32px repeat(4, minmax(0, 1fr));
+    .ops-board-head th {
+      font-size: 0.62rem;
     }
-    .bc-name { font-size: 0.72rem; }
-    .bc-team-name { font-size: 0.52rem; }
+    .bc-name { font-size: 0.68rem; }
+    .bc-team-name { font-size: 0.5rem; }
   }
 `;

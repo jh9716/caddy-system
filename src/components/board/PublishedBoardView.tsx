@@ -15,7 +15,6 @@ import {
 } from "@/lib/reservationParser";
 import { publishedBoardCss } from "@/components/board/publishedBoardCss";
 import { supportBoardBadgeLabels } from "@/lib/dailySpecialSupport";
-
 function Marks({ row }: { row: PublishedPlacementV1 }) {
   const special = row.kind !== "regular" && row.kind !== "specialSupport";
   if (
@@ -57,12 +56,16 @@ function ReadOnlySlot({ row }: { row: PublishedPlacementV1 }) {
   return (
     <div className="bc-slot">
       <div className="bc-team">
-        <span className="bc-team-name">{row.teamName || "팀"}</span>
+        <span className="bc-team-name" title={row.teamName || "팀"}>
+          {row.teamName || "팀"}
+        </span>
         {row.houseRequest ? <span className="bc-badge house">하우스</span> : null}
         {row.limousine ? <span className="bc-badge limo">리무진</span> : null}
       </div>
       <div className="bc-caddy">
-        <span className="bc-name">{row.caddyName}</span>
+        <span className="bc-name" title={row.caddyName}>
+          {row.caddyName}
+        </span>
         {row.caddyTeam ? <span className="bc-affil">{row.caddyTeam}</span> : null}
         <Marks row={row} />
       </div>
@@ -102,42 +105,55 @@ export default function PublishedBoardView({
 
   return (
     <div className="pub-board-root">
-      <div className="ops-board-head-bar">
-        <div className="ops-board-head">
-          <div className="bh-time">시각</div>
-          {COURSE_CODES.map((code) => (
-            <div
-              key={code}
-              className={`bh-course${open.has(code) ? "" : " closed"}`}
-            >
-              {COURSE_LABELS[code]}
-            </div>
-          ))}
-        </div>
-      </div>
-      <div className="ops-board-wrap has-sticky-head">
-        <div className="ops-board" role="table" aria-label={`${shift} 배치표`}>
-          {board.length === 0 ? (
-            <div className="pub-empty-shift">이 부에 확정된 배치가 없습니다.</div>
-          ) : (
-            board.map((tr) => (
-              <div key={tr.teeTime} className="ops-board-block">
-                <div className="ops-board-row" role="row">
-                  <div className="bc-time">{tr.teeTime || "—"}</div>
+      <div className="ops-board-wrap">
+        {board.length === 0 ? (
+          <div className="pub-empty-shift">이 부에 확정된 배치가 없습니다.</div>
+        ) : (
+          <table className="ops-board" aria-label={`${shift} 배치표`}>
+            <colgroup>
+              <col className="ops-col-time" />
+              {COURSE_CODES.map((code) => (
+                <col key={code} className="ops-col-course" />
+              ))}
+            </colgroup>
+            <thead className="ops-board-head-bar">
+              <tr className="ops-board-head">
+                <th className="bh-time" scope="col">
+                  시각
+                </th>
+                {COURSE_CODES.map((code) => (
+                  <th
+                    key={code}
+                    className={`bh-course${open.has(code) ? "" : " closed"}`}
+                    scope="col"
+                  >
+                    {COURSE_LABELS[code]}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {board.map((tr) => (
+                <tr key={tr.teeTime} className="ops-board-row">
+                  <th className="bc-time" scope="row">
+                    {tr.teeTime || "—"}
+                  </th>
                   {COURSE_CODES.map((code) => {
                     const cell = tr.cells[code];
                     if (cell.kind === "closed") {
                       return (
-                        <div key={code} className="bc-cell closed">
+                        <td key={code} className="bc-cell closed">
                           <span className="bc-closed">닫힘</span>
-                        </div>
+                        </td>
                       );
                     }
                     if (cell.kind === "empty") {
                       return (
-                        <div key={code} className="bc-cell empty">
-                          ·
-                        </div>
+                        <td
+                          key={code}
+                          className="bc-cell empty"
+                          data-board-cell="empty"
+                        />
                       );
                     }
                     const special = cell.placements.some((p) => p.kind !== "regular");
@@ -146,7 +162,7 @@ export default function PublishedBoardView({
                     const limo = cell.placements.some((p) => p.limousine);
                     const drive = cell.placements.some((p) => p.driving);
                     return (
-                      <div
+                      <td
                         key={code}
                         className={`bc-cell assigned${special ? " special" : ""}${
                           two ? " two-work" : ""
@@ -160,14 +176,14 @@ export default function PublishedBoardView({
                             row={p}
                           />
                         ))}
-                      </div>
+                      </td>
                     );
                   })}
-                </div>
-              </div>
-            ))
-          )}
-        </div>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
       <SpareStrip spare={spare} shift={shift} />
       <style>{publishedBoardCss}</style>

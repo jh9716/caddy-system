@@ -85,76 +85,97 @@ export function AssignmentBoardExportView({
           </span>
         </div>
       </section>
-      <div className="bx-board-head">
-        <div>시간</div>
-        {COURSE_CODES.map((code) => (
-          <div
-            key={code}
-            className={open.has(code) ? "" : "closed"}
-            title={COURSE_LABELS[code]}
-          >
-            {BOARD_EXPORT_COURSE_LABELS[code]}
-          </div>
-        ))}
-      </div>
-      <div className="bx-board" role="table" aria-label={`${slice.shift} 배치표`}>
-        {slice.rows.length === 0 ? (
-          <div className="bx-empty-board">이 부 배치 없음</div>
-        ) : (
-          slice.rows.map((tr) => (
-            <div key={tr.teeTime} className="bx-row" data-export-teetime={tr.teeTime}>
-              <div className="bx-time">{tr.teeTime || "—"}</div>
-              {COURSE_CODES.map((code) => {
-                const cell = tr.cells[code];
-                if (cell.kind === "closed") {
-                  return (
-                    <div key={code} className="bx-cell closed">
-                      닫힘
-                    </div>
+      {slice.rows.length === 0 ? (
+        <div className="bx-empty-board">이 부 배치 없음</div>
+      ) : (
+        <table className="bx-board" aria-label={`${slice.shift} 배치표`}>
+          <colgroup>
+            <col className="bx-col-time" />
+            {COURSE_CODES.map((code) => (
+              <col key={code} className="bx-col-course" />
+            ))}
+          </colgroup>
+          <thead>
+            <tr className="bx-board-head">
+              <th>시간</th>
+              {COURSE_CODES.map((code) => (
+                <th
+                  key={code}
+                  className={open.has(code) ? "" : "closed"}
+                  title={COURSE_LABELS[code]}
+                >
+                  {BOARD_EXPORT_COURSE_LABELS[code]}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {slice.rows.map((tr) => (
+              <tr key={tr.teeTime} className="bx-row" data-export-teetime={tr.teeTime}>
+                <th className="bx-time">{tr.teeTime || "—"}</th>
+                {COURSE_CODES.map((code) => {
+                  const cell = tr.cells[code];
+                  if (cell.kind === "closed") {
+                    return (
+                      <td key={code} className="bx-cell closed">
+                        닫힘
+                      </td>
+                    );
+                  }
+                  if (cell.kind === "unassigned") {
+                    return (
+                      <td
+                        key={code}
+                        className="bx-cell unassigned"
+                        data-board-cell="unassigned"
+                      />
+                    );
+                  }
+                  if (cell.kind === "empty") {
+                    return (
+                      <td
+                        key={code}
+                        className="bx-cell empty"
+                        data-board-cell="empty"
+                      />
+                    );
+                  }
+                  const special = cell.rows.some((r) => r.kind !== "regular");
+                  const two = cell.rows.some((r) =>
+                    boardAssignmentMarks(r, allAssignments).twoWork
                   );
-                }
-                if (cell.kind === "empty") {
-                  return (
-                    <div key={code} className="bx-cell empty">
-                      -
-                    </div>
+                  const chageun = cell.rows.some((r) =>
+                    boardAssignmentMarks(r, allAssignments).chageun
                   );
-                }
-                const special = cell.rows.some((r) => r.kind !== "regular");
-                const two = cell.rows.some((r) =>
-                  boardAssignmentMarks(r, allAssignments).twoWork
-                );
-                const chageun = cell.rows.some((r) =>
-                  boardAssignmentMarks(r, allAssignments).chageun
-                );
-                const limo = cell.rows.some((r) => r.reservation?.limousineCart === true);
-                const drive = cell.rows.some((r) => r.kind === "driving");
-                return (
-                  <div
-                    key={code}
-                    className={`bx-cell assigned${special ? " special" : ""}${
-                      two ? " two-work" : ""
-                    }${chageun ? " chageun" : ""}${limo ? " limo" : ""}${
-                      drive ? " drive" : ""
-                    }`}
-                  >
-                    {cell.rows.map((row) => (
-                      <div
-                        key={`${row.reservation.id}-${row.caddy.id}`}
-                        className="bx-slot"
-                      >
-                        <span className="bx-name">{row.caddy.name}</span>
-                        <span className="bx-affil">{caddyAffiliation(row.caddy)}</span>
-                        <ExportMarks row={row} allAssignments={allAssignments} />
-                      </div>
-                    ))}
-                  </div>
-                );
-              })}
-            </div>
-          ))
-        )}
-      </div>
+                  const limo = cell.rows.some((r) => r.reservation?.limousineCart === true);
+                  const drive = cell.rows.some((r) => r.kind === "driving");
+                  return (
+                    <td
+                      key={code}
+                      className={`bx-cell assigned${special ? " special" : ""}${
+                        two ? " two-work" : ""
+                      }${chageun ? " chageun" : ""}${limo ? " limo" : ""}${
+                        drive ? " drive" : ""
+                      }`}
+                    >
+                      {cell.rows.map((row) => (
+                        <div
+                          key={`${row.reservation.id}-${row.caddy.id}`}
+                          className="bx-slot"
+                        >
+                          <span className="bx-name">{row.caddy.name}</span>
+                          <span className="bx-affil">{caddyAffiliation(row.caddy)}</span>
+                          <ExportMarks row={row} allAssignments={allAssignments} />
+                        </div>
+                      ))}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
       <style>{assignmentBoardExportCss}</style>
     </div>
   );

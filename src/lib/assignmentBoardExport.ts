@@ -11,6 +11,7 @@ import {
   buildShiftBoard,
   type BoardTimeRow,
 } from "@/lib/assignmentBoardView";
+import { cloneCourseTeeSheet } from "@/lib/assignmentBoardTeeSheet";
 import type { AutoAssignmentRow } from "@/lib/autoAssignEngine";
 import type { SpareByShift } from "@/lib/autoAssignEngine";
 import { formatCaddyLabel } from "@/lib/caddyDisplay";
@@ -117,6 +118,9 @@ export function assignmentDraftFromPublishedPayload(
     unassignedReservations: [],
     closedCourseReservations: [],
     openCourses: [...payload.openCourses],
+    ...(payload.teeSheet?.length
+      ? { teeSheet: cloneCourseTeeSheet(payload.teeSheet) }
+      : {}),
     caddyPool: [],
     sparesByShift,
     confirmedAt: null,
@@ -147,7 +151,10 @@ export function buildBoardExportSlice(
     date: draft.date,
     shift,
     openCourses,
-    rows: buildShiftBoard(shiftRows, openCourses, shift),
+    rows: buildShiftBoard(shiftRows, openCourses, shift, {
+      teeSheet: draft.teeSheet,
+      unassignedReservations: draft.unassignedReservations,
+    }),
     spare: spareLabelsFromShift(
       draft.sparesByShift?.find((row) => row.shift === shift) || null
     ),

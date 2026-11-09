@@ -12,6 +12,10 @@ import {
   buildBoardExportSlice,
   type BoardExportSlice,
 } from "@/lib/assignmentBoardExport";
+import {
+  BOARD_EMPTY_CELL_MARK,
+  BOARD_UNASSIGNED_CELL_LABEL,
+} from "@/lib/assignmentBoardTeeSheet";
 import type { AssignmentDraft } from "@/lib/assignmentDraft";
 import type { AssignmentKind, AutoAssignmentRow } from "@/lib/autoAssignEngine";
 import {
@@ -150,7 +154,7 @@ function sliceToAoa(slice: BoardExportSlice): unknown[][] {
       if (cell.kind === "assigned") {
         line.push(boardExcelCellText(cell.rows));
       } else {
-        line.push("");
+        line.push(BOARD_EMPTY_CELL_MARK);
       }
     }
     aoa.push(line);
@@ -307,7 +311,15 @@ export function countAssignedExcelCells(sheets: ParsedBoardExcelSheet[]): {
     let n = 0;
     for (const row of sheet.rows) {
       for (const code of COURSE_CODES) {
-        if (String(row.values[code] || "").trim() !== "") n += 1;
+        const text = String(row.values[code] || "").trim();
+        if (
+          text !== "" &&
+          text !== BOARD_EMPTY_CELL_MARK &&
+          text !== BOARD_UNASSIGNED_CELL_LABEL &&
+          text !== "-"
+        ) {
+          n += 1;
+        }
       }
     }
     if (shift in byShift) byShift[shift] = n;
