@@ -7,13 +7,22 @@ import {
   boardAssignmentMarks,
   buildShiftBoard,
   countBoardAssignments,
+  countBoardEmptyCells,
+  countBoardUnassignedCells,
   filterAssignmentsByShift,
   isChageunAssignment,
   isSpecialSupportAssignment,
   isTwoWorkAssignment,
 } from "../src/lib/assignmentBoardView";
-import type { AutoAssignmentRow } from "../src/lib/autoAssignEngine";
+import type {
+  AutoAssignReservation,
+  AutoAssignmentRow,
+} from "../src/lib/autoAssignEngine";
 import { REASON } from "../src/lib/autoAssignEngine";
+import {
+  fillInteriorTeeTimes,
+  inferCourseTeeIntervalMinutes,
+} from "../src/lib/assignmentBoardTeeSheet";
 import { COURSE_CODES, type ShiftPart } from "../src/lib/reservationParser";
 
 let passed = 0;
@@ -264,7 +273,16 @@ section("찾근: fixed+찾근 reason만, 일반/54홀은 유지");
   );
 }
 
-section("빈 스카이 11:00 칸은 empty, 행 없는 11:00은 보드에 없음");
+section("코스 간격 추론: 8분은 7분 격자를 만들지 않음");
+{
+  assert(inferCourseTeeIntervalMinutes(["16:40", "16:48", "16:56"]) === 8, "8분 모드");
+  const filled = fillInteriorTeeTimes(["16:40", "16:48", "16:56", "17:12"]);
+  assert(filled.includes("17:04"), "8분 배수 17:04");
+  assert(!filled.includes("17:01"), "7분 17:01 발명 금지");
+  assert(!filled.includes("16:33"), "앞쪽 연장 금지");
+}
+
+section("빈 스카이 11:00 칸은 empty, 20분 간격은 11:00을 만들지 않음");
 {
   const rows = [
     row("2부", "10:50", "VERTHILL", "A"),
@@ -283,8 +301,91 @@ section("빈 스카이 11:00 칸은 empty, 행 없는 11:00은 보드에 없음"
   );
   assert(
     !only1050.some((tr) => tr.teeTime === "11:00"),
-    "no 11:00 row when all four courses empty at that time"
+    "20분 관측 간격은 중간 11:00을 발명하지 않음"
   );
+}
+
+section("16:33 미배정 예약은 스크롤이 아니라 행으로 표시");
+{
+  const assigned = [
+    row("3부", "16:40", "VERTHILL", "V1640"),
+    row("3부", "16:47", "VERTHILL", "V1647"),
+    row("3부", "16:54", "VERTHILL", "V1654"),
+    row("3부", "17:08", "VERTHILL", "V1708"),
+  ];
+  const unassigned: AutoAssignReservation = {
+    id: "U1633",
+    date: "2026-08-20",
+    course: "VERTHILL",
+    shift: "3부",
+    teeTime: "16:33",
+    teamName: "미배정팀",
+    rawRowIndex: 1,
+  };
+  const fingerprint = JSON.stringify(assigned.map((r) => r.caddy.id));
+  const board = buildShiftBoard(assigned, COURSE_CODES, "3부", {
+    unassignedReservations: [{ reservation: unassigned, reason: "OPEN" }],
+  });
+  assert(JSON.stringify(assigned.map((r) => r.caddy.id)) === fingerprint, "엔진 배정 불변");
+  assert(!!board.find((tr) => tr.teeTime === "16:33"), "16:33 행 존재");
+  assert(board.find((tr) => tr.teeTime === "16:33")!.cells.VERTHILL.kind === "unassigned", "16:33 베르힐 미배정");
+  assert(board.find((tr) => tr.teeTime === "16:33")!.cells.SKY.kind === "empty", "16:33 스카이는 빈칸");
+  assert(!!board.find((tr) => tr.teeTime === "17:01"), "7분 관측이면 17:01 빈 행 유지");
+  assert(board.find((tr) => tr.teeTime === "17:01")!.cells.OCEAN.kind === "empty", "17:01 empty");
+  assert(countBoardAssignments(board) === assigned.length, "빈 행이 배정 수를 늘리지 않음");
+  assert(countBoardUnassignedCells(board) === 1, "미배정 1칸");
+  assert(countBoardEmptyCells(board) > 0, "예약 없는 빈칸 존재");
+}
+
+section("코스별 다른 간격 + 티시트 선행 공석");
+{
+  const assigned = [
+    row("3부", "16:40", "VERTHILL", "V"),
+    row("3부", "16:48", "SKY", "S"),
+  ];
+  const board = buildShiftBoard(assigned, COURSE_CODES, "3부", {
+    teeSheet: [
+      { course: "VERTHILL", shift: "3부", teeTime: "16:33" },
+      { course: "VERTHILL", shift: "3부", teeTime: "16:40" },
+      { course: "VERTHILL", shift: "3부", teeTime: "16:47" },
+      { course: "SKY", shift: "3부", teeTime: "16:40" },
+      { course: "SKY", shift: "3부", teeTime: "16:48" },
+    ],
+  });
+  const times = board.map((tr) => tr.teeTime).join(",");
+  assert(times === "16:33,16:40,16:47,16:48", `정렬된 연합 축 ${times}`);
+  assert(board[0].cells.VERTHILL.kind === "empty", "티시트 16:33 공석");
+  assert(board[0].cells.SKY.kind === "empty", "16:33 스카이 '-'");
+  assert(board.find((tr) => tr.teeTime === "16:47")!.cells.VERTHILL.kind === "empty", "베르힐 7분 공석");
+  assert(board.find((tr) => tr.teeTime === "16:48")!.cells.SKY.kind === "assigned", "스카이 8분 배정");
+  assert(countBoardAssignments(board) === 2, "티시트 공석이 배정 수를 늘리지 않음");
+  assert(
+    !board.some((tr) => tr.teeTime === "16:26" || tr.teeTime === "16:54"),
+    "전역 7분 격자 생성 금지"
+  );
+}
+
+section("불완전한 티시트도 코스 간격의 내부 공석만 채움");
+{
+  const assigned = [
+    row("3부", "16:40", "VERTHILL", "V"),
+    row("3부", "17:08", "VERTHILL", "W"),
+  ];
+  const board = buildShiftBoard(assigned, COURSE_CODES, "3부", {
+    teeSheet: [
+      { course: "VERTHILL", shift: "3부", teeTime: "16:33" },
+      { course: "VERTHILL", shift: "3부", teeTime: "16:40" },
+      { course: "VERTHILL", shift: "3부", teeTime: "17:08" },
+    ],
+  });
+  const times = board.map((tr) => tr.teeTime);
+  assert(times.includes("16:33"), "티시트 선행 16:33");
+  assert(times.includes("16:47"), "7분 내부 16:47");
+  assert(times.includes("16:54"), "7분 내부 16:54");
+  assert(times.includes("17:01"), "7분 내부 17:01");
+  assert(!times.includes("16:26"), "앞쪽 연장 금지");
+  assert(!times.includes("17:15"), "뒤쪽 연장 금지");
+  assert(countBoardAssignments(board) === 2, "내부 공석이 배정 수를 늘리지 않음");
 }
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);

@@ -130,6 +130,12 @@ export const assignmentBoardExportCss = `
   font-size: 16px;
   font-weight: 600;
 }
+.bx-cell.unassigned {
+  color: #8a5a12;
+  background: #f8edd3;
+  font-size: 12px;
+  font-weight: 700;
+}
 .bx-cell.closed {
   background: repeating-linear-gradient(
     -45deg,

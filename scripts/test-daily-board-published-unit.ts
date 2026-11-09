@@ -658,7 +658,7 @@ async function main() {
     assert(/아직 확정된 배치표가 없습니다/.test(page), "empty copy");
     assert(!/작업본/.test(page), "empty state does not mention 작업본");
     assert(/max-width: 480px/.test(css), "mobile breakpoint");
-    assert(/grid-template-columns: 40px repeat\(4/.test(css), "matrix columns");
+    assert(/grid-template-columns: 52px repeat\(4/.test(css), "matrix columns");
   }
 
   section("권한: 캐디 Published GET / Draft·publish 차단");

@@ -1029,6 +1029,7 @@ section("source guards: API / UI / migration / live save order");
   assert(/unavailableCaddyIds\?:/.test(payloadType), "payload stores optional unavailableCaddyIds");
   assert(/unavailableFromShift\?:/.test(payloadType), "payload stores optional unavailableFromShift");
   assert(/offSnapshot\?:/.test(payloadType), "payload stores optional offSnapshot without migration");
+  assert(/teeSheet\?:/.test(payloadType), "payload stores optional teeSheet without migration");
   assert(/CONFIRMED/.test(page), "client CONFIRMED kept as legacy ops status");
   assert(/function onConfirm/.test(page), "legacy onConfirm handler kept");
   assert(/async function onApplyToOps/.test(page), "legacy onApplyToOps handler kept");

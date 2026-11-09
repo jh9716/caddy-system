@@ -43,6 +43,11 @@ export function cloneDraftSnapshot(draft: AssignmentDraft): AssignmentDraft {
     unavailableFromShift: (draft.unavailableFromShift || []).map((row) => ({
       ...row,
     })),
+    ...(draft.teeSheet?.length
+      ? {
+          teeSheet: draft.teeSheet.map((slot) => ({ ...slot })),
+        }
+      : {}),
   };
 }
 

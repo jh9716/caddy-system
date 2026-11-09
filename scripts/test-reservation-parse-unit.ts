@@ -415,6 +415,16 @@ section("xlsx roundtrip + 빈 예약자 스킵");
     "empty team skipped"
   );
   assert(vacant.summary.totals.teams === 5, "5 teams");
+  assert(
+    vacant.teeSheet.some(
+      (s) => s.teeTime === "06:00" && s.shift === "1부" && s.course === "VERTHILL"
+    ),
+    "빈 팀 06:00은 티시트에만 남김"
+  );
+  assert(
+    !vacant.reservations.some((r) => r.teeTime === "06:00"),
+    "06:00은 예약 건수에 안 들어감"
+  );
 }
 
 section("회귀: 경기진행등록.xls 205 = 75/63/67 (구 96/42/67 폐기)");
