@@ -24,6 +24,7 @@ export function markCommentDeleted(list: CommentPublic[], id: number): CommentPu
           body: null,
           canDelete: false,
           canEdit: false,
+          parentId: c.parentId ?? null,
         }
       : c
   );

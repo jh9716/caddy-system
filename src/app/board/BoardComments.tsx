@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CommentPublic } from "@/lib/comment";
-import { COMMENT_BODY_MAX, COMMENT_DELETED_PLACEHOLDER } from "@/lib/commentConstants";
 import {
   CLIENT_RESOURCE,
   clientResourceStoreKey,
@@ -22,6 +21,7 @@ import {
   markCommentDeleted,
   replaceComment,
 } from "@/lib/boardCommentsState";
+import CommentThreadPanel from "@/components/comments/CommentThreadPanel";
 
 type CommentsCache = {
   comments: CommentPublic[];
@@ -32,16 +32,6 @@ function rememberComments(date: string, payload: CommentsCache) {
   const ns = readLastClientAuthNamespace();
   if (!ns) return;
   writeClientResource(ns, CLIENT_RESOURCE.BOARD_COMMENTS, date, payload);
-}
-
-function formatCommentTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const mm = String(d.getMonth() + 1);
-  const dd = String(d.getDate());
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mi = String(d.getMinutes()).padStart(2, "0");
-  return `${mm}/${dd} ${hh}:${mi}`;
 }
 
 /**
@@ -74,17 +64,12 @@ export default function BoardComments({ date }: { date: string }) {
       peekLastNamespaceResource<CommentsCache>(CLIENT_RESOURCE.BOARD_COMMENTS, date)
     );
   });
-  const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [editBody, setEditBody] = useState("");
   const [error, setError] = useState<string | null>(null);
-  /** 현재 화면의 날짜. 비동기 응답이 다른 날짜에 섞이지 않도록 비교용. */
   const dateRef = useRef(date);
   dateRef.current = date;
   const refreshAbortRef = useRef<AbortController | null>(null);
   const liveCount = useMemo(() => liveCommentCount(comments), [comments]);
-  /** 진행 중 작성/수정/삭제 토큰. 날짜 전환 시 무효화 → 이전 날짜 작업 결과는 적용되지 않음. */
   const gateRef = useRef(createMutationGate());
 
   const applyList = useCallback((forDate: string, next: CommentsCache) => {
@@ -95,7 +80,6 @@ export default function BoardComments({ date }: { date: string }) {
     rememberComments(forDate, next);
   }, []);
 
-  /** 작성·수정·삭제 후 서버 목록으로 즉시 재동기화 (캐시/중복제거 우회). */
   const refreshNow = useCallback(
     async (forDate: string) => {
       refreshAbortRef.current?.abort();
@@ -138,12 +122,8 @@ export default function BoardComments({ date }: { date: string }) {
       setComments([]);
       setCanCompose(false);
     }
-    // 날짜 전환: 초안·수정 상태·오류·busy 초기화, 이전 날짜 작업 무효화
     gateRef.current.invalidate();
     setBusy(false);
-    setBody("");
-    setEditingId(null);
-    setEditBody("");
     setError(null);
     (async () => {
       const ns = await ensureClientAuthNamespace();
@@ -182,16 +162,12 @@ export default function BoardComments({ date }: { date: string }) {
     };
   }, [date]);
 
-  /**
-   * 공통 mutation 실행: 네트워크 오류·HTTP 오류 모두 busy 해제 + 오류 표시.
-   * 날짜가 바뀌었거나(forDate) 토큰이 무효화되면 결과를 버린다.
-   */
   async function runMutation(
     action: "create" | "edit" | "delete",
     forDate: string,
     request: () => Promise<Response>,
     onSuccess: (data: Record<string, unknown>) => void
-  ) {
+  ): Promise<boolean> {
     const token = gateRef.current.start();
     setBusy(true);
     setError(null);
@@ -204,32 +180,27 @@ export default function BoardComments({ date }: { date: string }) {
         setBusy(false);
         setError(commentMutationErrorMessage(action, { network: true }));
       }
-      return;
+      return false;
     }
     if (consumeUnauthorizedMemberResponse(res)) {
       if (stillHere()) setBusy(false);
-      return;
+      return false;
     }
     const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    if (!stillHere()) return;
+    if (!stillHere()) return false;
     setBusy(false);
     if (!res.ok) {
       setError(commentMutationErrorMessage(action, { message: data.message }));
-      return;
+      return false;
     }
     onSuccess(data);
     void refreshNow(forDate);
+    return true;
   }
 
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (busy || !canCompose) return;
-    if (!body.trim()) {
-      setError("댓글을 입력해 주세요.");
-      return;
-    }
+  async function onCreate(nextBody: string, parentId: number | null): Promise<boolean> {
     const forDate = date;
-    await runMutation(
+    return runMutation(
       "create",
       forDate,
       () =>
@@ -237,7 +208,7 @@ export default function BoardComments({ date }: { date: string }) {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ body }),
+          body: JSON.stringify(parentId != null ? { body: nextBody, parentId } : { body: nextBody }),
         }),
       (data) => {
         if (data.comment) {
@@ -247,30 +218,13 @@ export default function BoardComments({ date }: { date: string }) {
             return next;
           });
         }
-        setBody("");
       }
     );
   }
 
-  function startEdit(item: CommentPublic) {
-    setEditingId(item.id);
-    setEditBody(item.body ?? "");
-    setError(null);
-  }
-
-  function cancelEdit() {
-    setEditingId(null);
-    setEditBody("");
-  }
-
-  async function onSaveEdit(commentId: number) {
-    if (busy) return;
-    if (!editBody.trim()) {
-      setError("댓글을 입력해 주세요.");
-      return;
-    }
+  async function onSaveEdit(commentId: number, nextBody: string): Promise<boolean> {
     const forDate = date;
-    await runMutation(
+    return runMutation(
       "edit",
       forDate,
       () =>
@@ -278,7 +232,7 @@ export default function BoardComments({ date }: { date: string }) {
           method: "PATCH",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ body: editBody }),
+          body: JSON.stringify({ body: nextBody }),
         }),
       (data) => {
         if (data.comment) {
@@ -288,15 +242,13 @@ export default function BoardComments({ date }: { date: string }) {
             return next;
           });
         }
-        cancelEdit();
       }
     );
   }
 
-  async function onDelete(commentId: number) {
-    if (!confirm("이 댓글을 삭제할까요?")) return;
+  async function onDelete(commentId: number): Promise<boolean> {
     const forDate = date;
-    await runMutation(
+    return runMutation(
       "delete",
       forDate,
       () =>
@@ -310,7 +262,6 @@ export default function BoardComments({ date }: { date: string }) {
           rememberComments(forDate, { comments: next, canCompose });
           return next;
         });
-        setEditingId((cur) => (cur === commentId ? null : cur));
       }
     );
   }
@@ -318,136 +269,17 @@ export default function BoardComments({ date }: { date: string }) {
   if (!visible) return null;
 
   return (
-    <section
-      className="course-report-comments board-comments"
-      aria-label="댓글"
-      data-board-date={date}
-    >
-      <h2 className="course-report-comments-title">
-        댓글 <span className="board-comments-count">{liveCount}</span>
-      </h2>
-      {error ? (
-        <p className="board-comments-error" role="alert">
-          {error}
-        </p>
-      ) : null}
-      {comments.length === 0 ? (
-        <p className="board-comments-empty">등록된 댓글이 없습니다.</p>
-      ) : (
-        <ul className="course-report-comment-list">
-          {comments.map((item) => (
-            <li
-              key={item.id}
-              className={`course-report-comment${item.deleted ? " is-deleted" : ""}`}
-            >
-              {item.deleted ? (
-                <p className="course-report-comment-deleted">
-                  {COMMENT_DELETED_PLACEHOLDER}
-                </p>
-              ) : (
-                <>
-                  <div className="course-report-comment-meta">
-                    <span className="course-report-comment-author">
-                      {item.authorDisplayName}
-                    </span>
-                    <time dateTime={item.createdAt}>
-                      {formatCommentTime(item.createdAt)}
-                    </time>
-                    {item.edited ? (
-                      <span className="board-comment-edited">(수정됨)</span>
-                    ) : null}
-                    {editingId !== item.id && (item.canEdit || item.canDelete) ? (
-                      <span className="board-comment-actions">
-                        {item.canEdit ? (
-                          <button
-                            type="button"
-                            className="course-report-comment-delete board-comment-action"
-                            disabled={busy}
-                            onClick={() => startEdit(item)}
-                          >
-                            수정
-                          </button>
-                        ) : null}
-                        {item.canDelete ? (
-                          <button
-                            type="button"
-                            className="course-report-comment-delete board-comment-action"
-                            disabled={busy}
-                            onClick={() => void onDelete(item.id)}
-                          >
-                            삭제
-                          </button>
-                        ) : null}
-                      </span>
-                    ) : null}
-                  </div>
-                  {editingId === item.id ? (
-                    <div className="course-report-comment-form board-comment-edit-form">
-                      <textarea
-                        aria-label="댓글 수정"
-                        value={editBody}
-                        maxLength={COMMENT_BODY_MAX}
-                        rows={3}
-                        disabled={busy}
-                        onChange={(e) => setEditBody(e.target.value)}
-                      />
-                      <div className="board-comment-edit-actions">
-                        <span className="board-comment-counter">
-                          {editBody.length}/{COMMENT_BODY_MAX}
-                        </span>
-                        <button
-                          type="button"
-                          className="ui-btn course-report-comment-submit"
-                          disabled={busy}
-                          onClick={cancelEdit}
-                        >
-                          취소
-                        </button>
-                        <button
-                          type="button"
-                          className="ui-btn ui-btn-primary course-report-comment-submit"
-                          disabled={busy}
-                          onClick={() => void onSaveEdit(item.id)}
-                        >
-                          {busy ? "저장 중…" : "저장"}
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="course-report-comment-body">{item.body}</p>
-                  )}
-                </>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-      {canCompose ? (
-        <form className="course-report-comment-form" onSubmit={(e) => void onSubmit(e)}>
-          <textarea
-            aria-label="댓글"
-            value={body}
-            maxLength={COMMENT_BODY_MAX}
-            rows={3}
-            placeholder="댓글을 입력하세요"
-            disabled={busy}
-            enterKeyHint="enter"
-            onChange={(e) => setBody(e.target.value)}
-          />
-          <div className="board-comment-edit-actions">
-            <span className="board-comment-counter">
-              {body.length}/{COMMENT_BODY_MAX}
-            </span>
-            <button
-              type="submit"
-              className="ui-btn ui-btn-primary course-report-comment-submit"
-              disabled={busy || !body.trim()}
-            >
-              {busy ? "등록 중…" : "등록"}
-            </button>
-          </div>
-        </form>
-      ) : null}
-    </section>
+    <CommentThreadPanel
+      key={date}
+      comments={comments}
+      canCompose={canCompose}
+      busy={busy}
+      error={error}
+      liveCount={liveCount}
+      dateAttr={date}
+      onCreate={onCreate}
+      onEdit={onSaveEdit}
+      onDelete={onDelete}
+    />
   );
 }

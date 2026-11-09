@@ -9,6 +9,7 @@ import {
   listCommentsByTarget,
   resolveCommentAuthorUserId,
   softDeleteCommentByTarget,
+  updateCommentByTarget,
   type CommentPublic,
 } from "@/lib/commentThread";
 import { COMMENT_TARGET } from "@/lib/commentConstants";
@@ -61,13 +62,34 @@ export async function createCourseReportComment(
   db: PrismaClient,
   reportId: number,
   auth: ResolvedAuthUser,
-  rawBody: unknown
+  rawBody: unknown,
+  rawParentId?: unknown
 ): Promise<CommentPublic> {
   const { targetType, targetKey } = courseReportTarget(reportId);
   return createCommentByTarget(
     db,
     targetType,
     targetKey,
+    auth,
+    rawBody,
+    (client) => requireLiveCourseReport(client, reportId),
+    rawParentId
+  );
+}
+
+export async function updateCourseReportComment(
+  db: PrismaClient,
+  reportId: number,
+  commentId: number,
+  auth: ResolvedAuthUser,
+  rawBody: unknown
+): Promise<CommentPublic> {
+  const { targetType, targetKey } = courseReportTarget(reportId);
+  return updateCommentByTarget(
+    db,
+    targetType,
+    targetKey,
+    commentId,
     auth,
     rawBody,
     (client) => requireLiveCourseReport(client, reportId)

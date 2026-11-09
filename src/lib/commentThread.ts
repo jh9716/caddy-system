@@ -9,6 +9,7 @@ import {
   isCommentTableMissing,
   isCommentUniqueConflict,
   parseCommentBody,
+  parseCommentParentId,
   resolveCommentAuthorUserId,
   toCommentPublic,
   type CommentPublic,
@@ -123,13 +124,61 @@ export async function listCommentsByTarget(
   }
 }
 
+async function resolveReplyParentId(
+  tx: Prisma.TransactionClient,
+  threadId: number,
+  requestedParentId: number | null
+): Promise<number | null> {
+  if (requestedParentId == null) return null;
+  const parent = await tx.comment.findFirst({
+    where: { id: requestedParentId, threadId },
+    select: { id: true, parentId: true, deletedAt: true },
+  });
+  if (!parent) {
+    throw new CommentValidationError(
+      "invalid_parent",
+      "답글 대상 댓글을 찾을 수 없습니다.",
+      404
+    );
+  }
+  if (parent.deletedAt) {
+    throw new CommentValidationError(
+      "parent_deleted",
+      "삭제된 댓글에는 답글을 작성할 수 없습니다.",
+      404
+    );
+  }
+  const rootId = parent.parentId ?? parent.id;
+  if (rootId === parent.id) return parent.id;
+  const root = await tx.comment.findFirst({
+    where: { id: rootId, threadId },
+    select: { id: true, parentId: true, deletedAt: true },
+  });
+  if (!root || root.parentId != null) {
+    throw new CommentValidationError(
+      "invalid_parent",
+      "답글 대상 댓글을 찾을 수 없습니다.",
+      404
+    );
+  }
+  if (root.deletedAt) {
+    throw new CommentValidationError(
+      "parent_deleted",
+      "삭제된 댓글에는 답글을 작성할 수 없습니다.",
+      404
+    );
+  }
+  return root.id;
+}
+
 export async function createCommentByTarget(
   db: PrismaClient,
   targetType: CommentTargetType,
   targetKey: string,
   auth: ResolvedAuthUser,
   rawBody: unknown,
-  ensureTarget: EnsureCommentTarget
+  ensureTarget: EnsureCommentTarget,
+  rawParentId?: unknown
 ): Promise<CommentPublic> {
   const authorUserId = await resolveCommentAuthorUserId(db, auth);
   if (!canComposeComment({ role: auth.role, userId: authorUserId }) || authorUserId == null) {
@@ -140,15 +189,37 @@ export async function createCommentByTarget(
     );
   }
   const body = parseCommentBody(rawBody);
+  const requestedParentId = parseCommentParentId(rawParentId);
   try {
     const created = await db.$transaction(async (tx) => {
       await ensureTarget(tx);
-      const thread = await getOrCreateCommentThread(tx, targetType, targetKey);
+      if (requestedParentId == null) {
+        const thread = await getOrCreateCommentThread(tx, targetType, targetKey);
+        return tx.comment.create({
+          data: {
+            threadId: thread.id,
+            authorUserId,
+            body,
+            parentId: null,
+          },
+          include: { author: { select: COMMENT_AUTHOR_SELECT } },
+        });
+      }
+      const thread = await findCommentThread(tx, targetType, targetKey);
+      if (!thread) {
+        throw new CommentValidationError(
+          "invalid_parent",
+          "답글 대상 댓글을 찾을 수 없습니다.",
+          404
+        );
+      }
+      const parentId = await resolveReplyParentId(tx, thread.id, requestedParentId);
       return tx.comment.create({
         data: {
           threadId: thread.id,
           authorUserId,
           body,
+          parentId,
         },
         include: { author: { select: COMMENT_AUTHOR_SELECT } },
       });

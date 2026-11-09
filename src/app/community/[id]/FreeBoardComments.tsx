@@ -1,17 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { FreeBoardCommentPublic } from "@/lib/freeBoardComments";
-import { COMMENT_BODY_MAX, COMMENT_DELETED_PLACEHOLDER } from "@/lib/commentConstants";
 import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
-
-function formatTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(
-    d.getMinutes()
-  ).padStart(2, "0")}`;
-}
+import { liveCommentCount } from "@/lib/boardCommentsState";
+import CommentThreadPanel from "@/components/comments/CommentThreadPanel";
 
 export default function FreeBoardComments({
   postId,
@@ -23,12 +16,9 @@ export default function FreeBoardComments({
   canCompose: boolean;
 }) {
   const [comments, setComments] = useState(initialComments);
-  const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [editingBody, setEditingBody] = useState("");
-  const liveCount = comments.filter((c) => !c.deleted).length;
+  const liveCount = useMemo(() => liveCommentCount(comments), [comments]);
   const base = `/api/free-board/${postId}/comments`;
 
   async function reload() {
@@ -39,9 +29,8 @@ export default function FreeBoardComments({
     if (Array.isArray(data.comments)) setComments(data.comments as FreeBoardCommentPublic[]);
   }
 
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (busy || !body.trim()) return;
+  async function onCreate(body: string, parentId: number | null): Promise<boolean> {
+    if (busy) return false;
     setBusy(true);
     setError(null);
     let res: Response;
@@ -50,30 +39,30 @@ export default function FreeBoardComments({
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body }),
+        body: JSON.stringify(parentId != null ? { body, parentId } : { body }),
       });
     } catch {
       setBusy(false);
       setError("네트워크 오류로 등록하지 못했습니다.");
-      return;
+      return false;
     }
     if (consumeUnauthorizedMemberResponse(res)) {
       setBusy(false);
-      return;
+      return false;
     }
     const data = await res.json().catch(() => ({}));
     setBusy(false);
     if (!res.ok) {
       setError(typeof data.message === "string" ? data.message : "댓글 등록 실패");
-      return;
+      return false;
     }
     if (data.comment) setComments((cur) => [...cur, data.comment as FreeBoardCommentPublic]);
-    setBody("");
     void reload();
+    return true;
   }
 
-  async function onEdit(id: number) {
-    if (busy || !editingBody.trim()) return;
+  async function onEdit(id: number, editingBody: string): Promise<boolean> {
+    if (busy) return false;
     setBusy(true);
     setError(null);
     const res = await fetch(`${base}/${id}`, {
@@ -83,17 +72,21 @@ export default function FreeBoardComments({
       body: JSON.stringify({ body: editingBody }),
     }).catch(() => null);
     setBusy(false);
-    if (!res) return setError("네트워크 오류로 수정하지 못했습니다.");
-    if (consumeUnauthorizedMemberResponse(res)) return;
+    if (!res) {
+      setError("네트워크 오류로 수정하지 못했습니다.");
+      return false;
+    }
+    if (consumeUnauthorizedMemberResponse(res)) return false;
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) return setError(typeof data.message === "string" ? data.message : "댓글 수정 실패");
+    if (!res.ok) {
+      setError(typeof data.message === "string" ? data.message : "댓글 수정 실패");
+      return false;
+    }
     if (data.comment) setComments((cur) => cur.map((c) => (c.id === id ? data.comment : c)));
-    setEditingId(null);
-    setEditingBody("");
+    return true;
   }
 
-  async function onDelete(id: number) {
-    if (!confirm("이 댓글을 삭제할까요?")) return;
+  async function onDelete(id: number): Promise<boolean> {
     setBusy(true);
     setError(null);
     let res: Response;
@@ -102,113 +95,46 @@ export default function FreeBoardComments({
     } catch {
       setBusy(false);
       setError("네트워크 오류로 삭제하지 못했습니다.");
-      return;
+      return false;
     }
     if (consumeUnauthorizedMemberResponse(res)) {
       setBusy(false);
-      return;
+      return false;
     }
     setBusy(false);
     if (!res.ok) {
       setError("댓글 삭제 실패");
-      return;
+      return false;
     }
     setComments((cur) =>
       cur.map((c) =>
         c.id === id
-          ? { ...c, deleted: true, body: null, authorDisplayName: null, authorUserId: null, canDelete: false }
+          ? {
+              ...c,
+              deleted: true,
+              body: null,
+              authorDisplayName: null,
+              authorUserId: null,
+              canDelete: false,
+              canEdit: false,
+            }
           : c
       )
     );
     void reload();
+    return true;
   }
 
   return (
-    <section className="course-report-comments board-comments" aria-label="댓글">
-      <h2 className="course-report-comments-title">댓글 {liveCount}</h2>
-      {error ? (
-        <p className="free-board-error" role="alert">
-          {error}
-        </p>
-      ) : null}
-      {comments.length === 0 ? (
-        <p className="board-comments-empty">등록된 댓글이 없습니다.</p>
-      ) : (
-        <ul className="course-report-comment-list">
-          {comments.map((item) => (
-            <li key={item.id} className={`course-report-comment${item.deleted ? " is-deleted" : ""}`}>
-              {item.deleted ? (
-                <p className="course-report-comment-deleted">{COMMENT_DELETED_PLACEHOLDER}</p>
-              ) : (
-                <>
-                  <div className="course-report-comment-meta">
-                    <span className="course-report-comment-author">{item.authorDisplayName}</span>
-                    <time dateTime={item.createdAt}>{formatTime(item.createdAt)}</time>
-                    {item.canEdit ? (
-                      <button
-                        type="button"
-                        className="course-report-comment-delete free-board-touch"
-                        disabled={busy}
-                        onClick={() => { setEditingId(item.id); setEditingBody(item.body ?? ""); }}
-                      >
-                        수정
-                      </button>
-                    ) : null}
-                    {item.canDelete ? (
-                      <button
-                        type="button"
-                        className="course-report-comment-delete free-board-touch"
-                        disabled={busy}
-                        onClick={() => void onDelete(item.id)}
-                      >
-                        삭제
-                      </button>
-                    ) : null}
-                  </div>
-                  {editingId === item.id ? (
-                    <div className="course-report-comment-form">
-                      <textarea
-                        aria-label="댓글 수정"
-                        value={editingBody}
-                        maxLength={COMMENT_BODY_MAX}
-                        rows={3}
-                        disabled={busy}
-                        onChange={(e) => setEditingBody(e.target.value)}
-                      />
-                      <div>
-                        <button type="button" className="ui-btn ui-btn-primary" disabled={busy || !editingBody.trim()} onClick={() => void onEdit(item.id)}>저장</button>
-                        <button type="button" className="ui-btn ui-btn-ghost" disabled={busy} onClick={() => { setEditingId(null); setEditingBody(""); }}>취소</button>
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="course-report-comment-body">{item.body}</p>
-                  )}
-                </>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-      {canCompose ? (
-        <form className="course-report-comment-form" onSubmit={(e) => void onSubmit(e)}>
-          <textarea
-            aria-label="댓글"
-            value={body}
-            maxLength={COMMENT_BODY_MAX}
-            rows={3}
-            placeholder="댓글을 입력하세요"
-            disabled={busy}
-            onChange={(e) => setBody(e.target.value)}
-          />
-          <button
-            type="submit"
-            className="ui-btn ui-btn-primary course-report-comment-submit"
-            disabled={busy || !body.trim()}
-          >
-            {busy ? "등록 중…" : "등록"}
-          </button>
-        </form>
-      ) : null}
-    </section>
+    <CommentThreadPanel
+      comments={comments}
+      canCompose={canCompose}
+      busy={busy}
+      error={error}
+      liveCount={liveCount}
+      onCreate={onCreate}
+      onEdit={onEdit}
+      onDelete={onDelete}
+    />
   );
 }
