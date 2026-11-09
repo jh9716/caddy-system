@@ -610,7 +610,38 @@ async function putAssignmentDraft(
   return { res, data };
 }
 
+/** 배치표 컬럼 헤더를 .vh-mobile-bar 바로 아래에 붙인다. 공통 앱 바는 건드리지 않는다. */
+function useOpsBoardMobileBarOffset() {
+  useEffect(() => {
+    const root = document.querySelector<HTMLElement>(".ops-root");
+    if (!root) return;
+    const bar = document.querySelector<HTMLElement>(".vh-mobile-bar");
+    const apply = () => {
+      const style = bar ? getComputedStyle(bar) : null;
+      const visible =
+        !!bar &&
+        style?.display !== "none" &&
+        (style?.position === "sticky" || style?.position === "fixed") &&
+        bar.offsetParent !== null;
+      const h = visible ? Math.round(bar.getBoundingClientRect().height) : 0;
+      root.style.setProperty("--ops-board-sticky-top", `${h}px`);
+    };
+    apply();
+    const ro =
+      typeof ResizeObserver !== "undefined" && bar
+        ? new ResizeObserver(apply)
+        : null;
+    if (ro && bar) ro.observe(bar);
+    window.addEventListener("resize", apply);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener("resize", apply);
+    };
+  }, []);
+}
+
 export default function ManageAssignmentsOpsPage() {
+  useOpsBoardMobileBarOffset();
   const [date, setDate] = useState("");
   const [specialSupportByShift, setSpecialSupportByShift] = useState(
     emptySpecialSupportByShift
@@ -4506,11 +4537,10 @@ export default function ManageAssignmentsOpsPage() {
       {draft && (
         <>
           {/*
-            부 탭 + (배치표) 컬럼 헤더를 하나의 sticky 스택으로 묶어
-            서로 다른 top/z-index sticky가 첫 데이터 행을 덮지 않게 한다.
-            헤더는 문서 흐름 높이를 유지한 채 스택과 함께 고정된다.
+            부 탭·툴·스페어는 페이지와 함께 스크롤한다.
+            컬럼 헤더(시간/베/스/오/레)만 배치표 범위(.ops-board-scope)에서 sticky.
           */}
-          <div className="ops-sticky-stack" ref={stickyStackRef}>
+          <div className="ops-sticky-stack" ref={stickyStackRef} data-ops-sticky-stack="1">
             <nav className="ops-tabs">
               {SHIFTS.map((s) => (
                 <button
@@ -4664,39 +4694,42 @@ export default function ManageAssignmentsOpsPage() {
               </div>
             ) : null}
 
-            {shiftTab !== "UNASSIGNED" &&
-              shiftTab !== "CLOSED" &&
-              viewMode === "board" &&
-              boardRows.length > 0 && (
-                <div className="ops-board-head-bar">
-                  <div
-                    className="ops-board-head"
-                    role="row"
-                    aria-label={`${shiftTab} 배치표 헤더`}
-                  >
-                    <div className="bh-time" role="columnheader">
-                      시간
-                    </div>
-                    {COURSE_CODES.map((code) => (
-                      <div
-                        key={code}
-                        className={`bh-course ${
-                          boardOpenCourses.includes(code) ? "" : "closed"
-                        }`}
-                        role="columnheader"
-                        title={COURSE_LABELS[code]}
-                      >
-                        {COURSE_SHORT[code]}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
           </div>
 
           {shiftTab !== "UNASSIGNED" && shiftTab !== "CLOSED" && (
               <>
               {viewMode === "board" && (
+                <div
+                  className={`ops-board-scope${
+                    boardRows.length > 0 ? " has-sticky-head" : ""
+                  }`}
+                  data-ops-board-scope="1"
+                >
+                  {boardRows.length > 0 ? (
+                    <div className="ops-board-head-bar" data-ops-board-head="1">
+                      <div
+                        className="ops-board-head"
+                        role="row"
+                        aria-label={`${shiftTab} 배치표 헤더`}
+                      >
+                        <div className="bh-time" role="columnheader">
+                          시간
+                        </div>
+                        {COURSE_CODES.map((code) => (
+                          <div
+                            key={code}
+                            className={`bh-course ${
+                              boardOpenCourses.includes(code) ? "" : "closed"
+                            }`}
+                            role="columnheader"
+                            title={COURSE_LABELS[code]}
+                          >
+                            {COURSE_SHORT[code]}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 <div
                   ref={boardWrapRef}
                   className={`ops-board-wrap${
@@ -4837,6 +4870,7 @@ export default function ManageAssignmentsOpsPage() {
                         ))}
                     </div>
                   )}
+                </div>
                 </div>
               )}
 
@@ -5051,7 +5085,7 @@ export default function ManageAssignmentsOpsPage() {
       </div>
 
       {draft && (
-        <section className="ops-publish" aria-label="운영 반영">
+        <section className="ops-publish" aria-label="운영 반영" data-ops-publish="1">
           <h2 className="ops-publish-title">운영 반영</h2>
           <button
             type="button"
@@ -5241,6 +5275,12 @@ const opsCss = `
     width: 100%;
     container-type: inline-size;
     container-name: ops-assign;
+    --ops-board-sticky-top: 0px;
+  }
+  @media (max-width: 959px) {
+    .ops-root {
+      --ops-board-sticky-top: 53px;
+    }
   }
   @media (min-width: 960px) {
     .ops-root {
@@ -5723,18 +5763,21 @@ const opsCss = `
   .warn.error { background: #fef2f2; color: #991b1b; }
   .warn.warn { background: #fffbeb; color: #92400e; }
   /*
-    단일 sticky 스택: 부 탭 + 보기 토글 + 컬럼 헤더가 같은 블록으로 고정되어
-    이중 sticky(top 오프셋)로 첫 행을 덮는 문제를 제거한다.
+    부 탭·툴·스페어는 문서 흐름. sticky 아님.
+    컬럼 헤더만 .ops-board-scope 안에서 고정되어 표가 끝나면 해제된다.
   */
   .ops-sticky-stack {
-    position: sticky;
-    top: 0;
-    z-index: 5;
+    position: relative;
+    z-index: auto;
     display: grid;
     gap: 8px;
     padding: 6px 0 0;
     background: #f8fafc;
-    box-shadow: 0 1px 0 #e2e8f0;
+  }
+  .ops-board-scope {
+    position: relative;
+    /* ops-root container-type보다 가까운 containing block — 표가 끝나면 unstick */
+    transform: translateY(0);
   }
   .ops-tabs {
     display: grid;
@@ -6310,20 +6353,20 @@ const opsCss = `
     border-radius: 8px 8px 0 0;
     overflow: hidden;
     background: #0f172a;
+    position: sticky;
+    top: var(--ops-board-sticky-top, 0px);
+    z-index: 4;
   }
   .ops-board-wrap {
     width: 100%;
     /* overflow-x:hidden 은 sticky 스크롤 컨테인먼트를 만들어 모바일에서 깨질 수 있음 */
     overflow-x: clip;
+    overflow-y: visible;
   }
   @media (max-width: 959px) {
-    .ops-board-wrap.has-sticky-head {
+    .ops-board-scope.has-sticky-head {
       padding-bottom: calc(var(--vh-bottom-nav-height, 58px) + env(safe-area-inset-bottom, 0px) + 8px);
     }
-  }
-  /* ops-root gap(12px)을 상쇄해 헤더 바·본문 테두리가 이어지게 함 */
-  .ops-sticky-stack:has(.ops-board-head-bar) + .ops-board-wrap.has-sticky-head {
-    margin-top: -8px;
   }
   .ops-board {
     width: 100%;
@@ -6345,7 +6388,6 @@ const opsCss = `
     width: 100%;
   }
   .ops-board-head {
-    /* 스택 안에서 일반 흐름 — 별도 sticky/top 오프셋 없음 */
     position: relative;
     background: #0f172a;
     color: #fff;

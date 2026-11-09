@@ -121,6 +121,8 @@
     "test:assignment-board-workbook-unit": "bash scripts/tsx-safe.sh scripts/test-assignment-board-workbook-unit.ts",
     "test:assignment-board-export-unit": "bash scripts/tsx-safe.sh scripts/test-assignment-board-export-unit.ts",
     "test:assignment-board-export-xlsx-unit": "bash scripts/tsx-safe.sh scripts/test-assignment-board-export-xlsx-unit.ts",
+    "test:assignment-board-sticky-unit": "bash scripts/tsx-safe.sh scripts/test-assignment-board-sticky-unit.ts",
+    "test:assignment-board-sticky-chromium": "bash scripts/tsx-safe.sh scripts/test-assignment-board-sticky-chromium.ts",
     "test:daily-staffing-summary-unit": "bash scripts/tsx-safe.sh scripts/test-daily-staffing-summary-unit.ts",
     "test:assignment-confirm-unit": "bash scripts/tsx-safe.sh scripts/test-assignment-confirm-unit.ts",
     "test:assignment-draft-unit": "bash scripts/tsx-safe.sh scripts/test-assignment-draft-unit.ts",
