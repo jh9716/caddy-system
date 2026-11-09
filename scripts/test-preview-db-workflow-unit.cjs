@@ -83,6 +83,87 @@ t(!/EXPECTED_MIGRATIONS\s*=\s*\d+/.test(stateSrc), "state.cjs 숫자 하드코�
 t(!/"60"|expected 60/.test(wf), "workflow 60 하드코딩 없음");
 t(/migration-state\.cjs/.test(wf), "workflow 가 repo 도출 검사 사용");
 t(/validatePreviewDbUrl\(url/.test(stateSrc) && /neondb/.test(stateSrc) && /read_only/.test(stateSrc), "state.cjs 격리 검증 유지");
+const verifySql = fs.readFileSync(path.join(__dirname, "preview-db", "verify-readonly.sql"), "utf8");
+t(/BEGIN TRANSACTION READ ONLY/.test(verifySql), "verify-readonly READ ONLY");
+t(/comment_parentid_column/.test(verifySql), "verify parentId column exists");
+t(/comment_parentid_nullable/.test(verifySql), "verify parentId nullable");
+t(/Comment_parentId_fkey/.test(verifySql), "verify parentId FK name");
+t(/delete_rule/.test(verifySql), "verify parentId FK delete_rule");
+t(/comment_total=/.test(verifySql), "verify Comment 전체 건수");
+t(/comment_parent_null=/.test(verifySql), "verify 기존 parentId NULL");
+t(/comment_parent_set=/.test(verifySql), "verify parentId set count");
+t(/comment_id_fingerprint=/.test(verifySql), "verify comment id fingerprint (no body)");
+t(/20261109193000_comment_replies_v1/.test(verifySql), "verify replies migration finished");
+t(!/"body"/.test(verifySql) && !/authorUserId/.test(verifySql), "verify SQL 댓글 본문·작성자 미출력");
+t(/comment_parentid_nullable/.test(stateSrc) && /YES/.test(stateSrc), "state.cjs asserts parentId nullable");
+t(/comment_parentid_fk_delete/.test(stateSrc) && /RESTRICT/.test(stateSrc), "state.cjs asserts FK RESTRICT");
+t(/comment_id_fingerprint/.test(stateSrc), "state.cjs prints comment fingerprint for before/after");
+t(/comment_total/.test(stateSrc), "state.cjs prints comment_total in precheck/verify");
+t(repoMigs.includes("20261109193000_comment_replies_v1"), "comment_replies_v1 migration 포함");
+{
+  const { parsePrismaMigrateStatusPending, gateSingleMigration } = require("./maintenance/single-migration-gate.cjs");
+  t(parsePrismaMigrateStatusPending("Database schema is up to date!").length === 0, "status parser up to date");
+  const one = parsePrismaMigrateStatusPending(
+    "Following migrations have not yet been applied:\n20261109193000_comment_replies_v1\n\nTo apply migrations in production run prisma migrate deploy.\n"
+  );
+  t(one.length === 1 && one[0] === "20261109193000_comment_replies_v1", "status parser one pending");
+  const two = parsePrismaMigrateStatusPending(
+    "Following migrations have not yet been applied:\n20261109193000_comment_replies_v1\n20261110000000_other_v1\n"
+  );
+  t(two.length === 2 && two[1] === "20261110000000_other_v1", "status parser extra pending");
+  const target = "20261109193000_comment_replies_v1";
+  const repo = ["20260919070000_comment_v1", target];
+  t(
+    gateSingleMigration({
+      target,
+      repo,
+      appliedFinished: ["20260919070000_comment_v1"],
+      failedNames: [],
+      statusPending: [target],
+    }).action === "deploy",
+    "gate deploy when only replies pending"
+  );
+  t(
+    gateSingleMigration({
+      target,
+      repo,
+      appliedFinished: ["20260919070000_comment_v1"],
+      failedNames: [],
+      statusPending: [target, "20261110000000_other_v1"],
+    }).action === "hold",
+    "gate hold unexpected pending"
+  );
+  t(
+    gateSingleMigration({
+      target,
+      repo,
+      appliedFinished: repo,
+      failedNames: [],
+      statusPending: [],
+    }).action === "already-applied",
+    "gate already-applied"
+  );
+  t(
+    gateSingleMigration({
+      target,
+      repo,
+      appliedFinished: ["20260919070000_comment_v1"],
+      failedNames: ["20260809101500_broken"],
+      statusPending: [target],
+    }).action === "hold",
+    "gate hold failed migrations"
+  );
+  t(
+    gateSingleMigration({
+      target,
+      repo,
+      appliedFinished: ["20260919070000_comment_v1", "20269999999999_unknown"],
+      failedNames: [],
+      statusPending: [target],
+    }).action === "hold",
+    "gate hold unknown applied"
+  );
+}
 const R = ["20260101000000_a", "20260102000000_b", "20260103000000_c"];
 const base = { tables: 5, otherObjects: 0, hasPm: true, failed: 0, repo: R };
 t(classifyMigrationState({ ...base, tables: 0, hasPm: false, applied: [] }).state === "EMPTY", "classify EMPTY");

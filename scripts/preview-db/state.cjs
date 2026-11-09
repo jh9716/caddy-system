@@ -86,6 +86,19 @@ report.missing_migrations = String(cls.missing.length);
 report.unknown_migrations = String(cls.unknown.length);
 report.state = state;
 
+const commentTable = psql(`BEGIN TRANSACTION READ ONLY;
+SELECT 'comment_table=' || (to_regclass('public."Comment"') IS NOT NULL);
+ROLLBACK;`);
+report.comment_table = commentTable.comment_table || "false";
+if (commentTable.comment_table === "true") {
+  const commentCounts = psql(`BEGIN TRANSACTION READ ONLY;
+SELECT 'comment_total=' || count(*)::text FROM "Comment";
+SELECT 'comment_id_fingerprint=' || coalesce(md5(string_agg(id::text, ',' ORDER BY id)), 'empty') FROM "Comment";
+ROLLBACK;`);
+  report.comment_total = commentCounts.comment_total || "0";
+  report.comment_id_fingerprint = commentCounts.comment_id_fingerprint || "empty";
+}
+
 if (mode === "seed-gate" && state === "MIGRATED") {
   const c = psql(`BEGIN TRANSACTION READ ONLY;
 SELECT 'users=' || count(*) FROM "User";
@@ -105,6 +118,24 @@ if (mode === "verify") {
   for (const [k, val] of Object.entries(vr)) console.log(`verify.${k}=${val}`);
   if (Number(vr.users_non_test) || Number(vr.caddies_non_test)) die("non-test users/caddies found");
   if (Number(vr.migrations_failed)) die("failed migrations present");
+  if (vr.comment_parentid_column !== "1") die("Comment.parentId column missing");
+  if (vr.comment_parentid_nullable !== "YES") die("Comment.parentId must be nullable");
+  if (vr.comment_parentid_fk !== "1") die("Comment.parentId FK missing");
+  if (vr.comment_parentid_fk_delete !== "RESTRICT") die("Comment.parentId FK must be ON DELETE RESTRICT");
+  if (vr.comment_replies_migration !== "1") die("comment_replies_v1 migration not finished");
+  const commentTotal = Number(vr.comment_total);
+  const commentNull = Number(vr.comment_parent_null);
+  const commentSet = Number(vr.comment_parent_set);
+  if (!Number.isFinite(commentTotal) || commentTotal < 0) die("Comment total missing");
+  if (commentNull + commentSet !== commentTotal) {
+    die(`Comment parentId accounting mismatch ${commentTotal} != ${commentNull}+${commentSet}`);
+  }
+  if (report.comment_total && report.comment_total !== vr.comment_total) {
+    die(`Comment row count changed during verify ${report.comment_total} → ${vr.comment_total}`);
+  }
+  if (report.comment_id_fingerprint && vr.comment_id_fingerprint && report.comment_id_fingerprint !== vr.comment_id_fingerprint) {
+    die("Comment id fingerprint changed; existing rows were modified");
+  }
   process.exit(0);
 }
 if (mode === "migrate-gate") {

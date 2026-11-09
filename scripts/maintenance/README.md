@@ -60,7 +60,9 @@ DATABASE_URL="$PRODUCTION_DATABASE_URL" \
 npx tsx scripts/maintenance/deploy-comment-replies-migration.ts
 ```
 
-`prisma migrate deploy` only. No db push / migrate reset / seed / Comment INSERT/UPDATE/DELETE.
+READ-ONLY inspect first (`_prisma_migrations` + `prisma migrate status`). `prisma migrate deploy` runs only when the sole pending migration is `20261109193000_comment_replies_v1`. Unexpected pending, failed, rolled-back, or unknown applied migrations abort before deploy. Already-applied + schema OK is a no-op. No db push / migrate reset / seed / Comment INSERT/UPDATE/DELETE.
+
+Preview verify (`scripts/preview-db/verify-readonly.sql`) prints `comment_total` and `comment_id_fingerprint` (ids only, no body). Compare those keys from precheck vs verify after migrate. After additive apply, `comment_parent_set` must be 0.
 
 ChatAttachment Photo V1 production schema:
 
