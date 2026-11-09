@@ -563,6 +563,39 @@ async function main() {
     assert((await cdel(L, leaderCommentId)).status === 200, "leader own comment delete 200");
     const thread = await prisma.commentThread.findFirst({ where: { targetType: "FREE_BOARD_POST", targetKey: String(pid) } });
     assert(thread != null, "FREE_BOARD_POST thread");
+    const rootForReply = await json(await cpost(B, "답글 원댓글"));
+    const rootForReplyId = Number(rootForReply.comment.id);
+    const replyRes = await C_POST(
+      req(`http://local/api/free-board/${pid}/comments`, {
+        method: "POST",
+        headers: H(B),
+        body: JSON.stringify({ body: "1단계 답글", parentId: rootForReplyId }),
+      }),
+      idP(pid)
+    );
+    const replyBody = await json(replyRes);
+    assert(replyRes.status === 201 && replyBody.comment.parentId === rootForReplyId, "free-board reply parentId");
+    const nestedRes = await C_POST(
+      req(`http://local/api/free-board/${pid}/comments`, {
+        method: "POST",
+        headers: H(A),
+        body: JSON.stringify({ body: "답글의 답글", parentId: Number(replyBody.comment.id) }),
+      }),
+      idP(pid)
+    );
+    assert(
+      nestedRes.status === 201 && (await json(nestedRes)).comment.parentId === rootForReplyId,
+      "free-board nested flattened"
+    );
+    assert((await cpatch(A, Number(replyBody.comment.id), "x")).status === 403, "non-author reply edit 403");
+    assert((await cpatch(B, Number(replyBody.comment.id), "답글 수정")).status === 200, "author reply edit 200");
+    const listedAfter = await json(await C_LIST(req(`http://local/api/free-board/${pid}/comments`, { headers: { cookie: A } }), idP(pid)));
+    assert(Array.isArray(listedAfter.comments), "free-board list remains flat");
+    assert(
+      listedAfter.comments.find((c: { id: number }) => c.id === Number(replyBody.comment.id))?.parentId ===
+        rootForReplyId,
+      "list includes parentId"
+    );
 
     section("upload blocked when preview storage missing");
     {
