@@ -163,7 +163,90 @@ t(repoMigs.includes("20261109193000_comment_replies_v1"), "comment_replies_v1 mi
     }).action === "hold",
     "gate hold unknown applied"
   );
+  const {
+    gateCommentRepliesPreviewMigrate,
+    isCommentRepliesPreviewBranch,
+    PREVIEW_PROJECT_ID,
+    PREVIEW_NEON_ENDPOINT,
+  } = require("./maintenance/single-migration-gate.cjs");
+  t(isCommentRepliesPreviewBranch("preview-db-comment-replies-8d28"), "comment-replies branch matches");
+  t(!isCommentRepliesPreviewBranch("preview-db-free-board-v1"), "other preview-db branch is not comment-replies");
+  t(!isCommentRepliesPreviewBranch("main"), "main is not comment-replies");
+  const repliesRepo = ["20260919070000_comment_v1", target];
+  const repliesBase = {
+    refName: "preview-db-comment-replies-8d28",
+    previewProjectId: PREVIEW_PROJECT_ID,
+    neonEndpoint: PREVIEW_NEON_ENDPOINT,
+    repo: repliesRepo,
+    appliedFinished: ["20260919070000_comment_v1"],
+    failedNames: [],
+    statusPending: [target],
+  };
+  t(gateCommentRepliesPreviewMigrate(repliesBase).action === "allow", "대상 migration 1개 → PASS");
+  t(
+    gateCommentRepliesPreviewMigrate({
+      ...repliesBase,
+      statusPending: [target, "20261110000000_other_v1"],
+      repo: [...repliesRepo, "20261110000000_other_v1"],
+    }).action === "hold",
+    "다른 pending 추가 → HOLD"
+  );
+  t(
+    gateCommentRepliesPreviewMigrate({
+      ...repliesBase,
+      appliedFinished: repliesRepo,
+      statusPending: [],
+    }).action === "hold",
+    "pending 없음 → HOLD"
+  );
+  t(
+    gateCommentRepliesPreviewMigrate({
+      ...repliesBase,
+      failedNames: ["20260809101500_broken"],
+    }).action === "hold",
+    "failed 존재 → HOLD"
+  );
+  t(
+    gateCommentRepliesPreviewMigrate({
+      ...repliesBase,
+      appliedFinished: ["20260919070000_comment_v1", "20269999999999_unknown"],
+    }).action === "hold",
+    "unknown 존재 → HOLD"
+  );
+  t(
+    gateCommentRepliesPreviewMigrate({
+      ...repliesBase,
+      refName: "preview-db-free-board-v1",
+      statusPending: [target, "20261110000000_other_v1"],
+    }).action === "skip",
+    "다른 브랜치에서 댓글 전용 조건 적용 방지"
+  );
+  t(
+    gateCommentRepliesPreviewMigrate({
+      ...repliesBase,
+      previewProjectId: "morning-tooth-60659454",
+    }).action === "hold",
+    "운영 프로젝트 id → HOLD"
+  );
+  t(
+    gateCommentRepliesPreviewMigrate({
+      ...repliesBase,
+      neonEndpoint: "ep-crimson-cell-a1i1tpce",
+    }).action === "hold",
+    "운영 DB 연결 시 차단"
+  );
+  t(
+    gateCommentRepliesPreviewMigrate({
+      ...repliesBase,
+      appliedFinishedAgain: repliesRepo,
+      statusPendingAgain: [],
+    }).action === "hold",
+    "실행 직전 목록이 바뀌면 HOLD"
+  );
 }
+t(/gateCommentRepliesPreviewMigrate/.test(stateSrc), "state.cjs 댓글 migrate-gate 재사용");
+t(/PREVIEW_REF_NAME/.test(wfRaw), "workflow 가 브랜치 이름을 migrate-gate 에 전달");
+t((wfRaw.match(/state\.cjs migrate-gate/g) || []).length >= 2, "migrate 직전 migrate-gate 재조회");
 const R = ["20260101000000_a", "20260102000000_b", "20260103000000_c"];
 const base = { tables: 5, otherObjects: 0, hasPm: true, failed: 0, repo: R };
 t(classifyMigrationState({ ...base, tables: 0, hasPm: false, applied: [] }).state === "EMPTY", "classify EMPTY");

@@ -7,6 +7,11 @@ const path = require("node:path");
 const { validatePreviewDbUrl } = require("./validate-url.cjs");
 
 const { listRepoMigrations, classifyMigrationState } = require("./migration-state.cjs");
+const {
+  gateCommentRepliesPreviewMigrate,
+  isCommentRepliesPreviewBranch,
+  COMMENT_REPLIES_MIGRATION,
+} = require("../maintenance/single-migration-gate.cjs");
 const mode = process.argv[2];
 const localHarness = process.argv.includes("--local-harness");
 if (localHarness && process.env.GITHUB_ACTIONS === "true") die("--local-harness not allowed in Actions");
@@ -60,15 +65,27 @@ try {
 }
 report.repo_migrations = String(repoMigrations.length);
 
-let applied = [];
-let failed = 0;
-if (hasPm) {
+function readPrismaMigrationNames() {
   const q = psql(`BEGIN TRANSACTION READ ONLY;
 SELECT 'applied=' || coalesce(string_agg(migration_name, ',' ORDER BY migration_name), '') FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL;
 SELECT 'failed=' || count(*) FROM "_prisma_migrations" WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL;
+SELECT 'failed_names=' || coalesce(string_agg(migration_name, ',' ORDER BY migration_name), '') FROM "_prisma_migrations" WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL;
 ROLLBACK;`);
-  applied = q.applied ? q.applied.split(",") : [];
-  failed = Number(q.failed);
+  return {
+    applied: q.applied ? q.applied.split(",") : [],
+    failed: Number(q.failed),
+    failedNames: q.failed_names ? q.failed_names.split(",") : [],
+  };
+}
+
+let applied = [];
+let failed = 0;
+let failedNames = [];
+if (hasPm) {
+  const q = readPrismaMigrationNames();
+  applied = q.applied;
+  failed = q.failed;
+  failedNames = q.failedNames;
   report.applied_migrations = String(applied.length);
   report.failed_migrations = String(failed);
 }
@@ -139,6 +156,34 @@ if (mode === "verify") {
   process.exit(0);
 }
 if (mode === "migrate-gate") {
+  const refName = process.env.PREVIEW_REF_NAME || process.env.GITHUB_REF_NAME || "";
+  report.ref_name = refName;
+  console.log(`ref_name=${refName}`);
+  if (isCommentRepliesPreviewBranch(refName)) {
+    if (!hasPm) die("HOLD: comment-replies migrate requires _prisma_migrations");
+    const repoAgain = listRepoMigrations(path.join(__dirname, "..", "..", "prisma", "migrations"));
+    const again = readPrismaMigrationNames();
+    const pending = repoAgain.filter((m) => !again.applied.includes(m));
+    const pendingFirst = repoMigrations.filter((m) => !applied.includes(m));
+    const gate = gateCommentRepliesPreviewMigrate({
+      refName,
+      previewProjectId: process.env.PREVIEW_PROJECT_ID,
+      neonEndpoint: base.neon_endpoint,
+      repo: repoMigrations,
+      appliedFinished: applied,
+      failedNames,
+      statusPending: pendingFirst,
+      repoAgain,
+      appliedFinishedAgain: again.applied,
+      failedNamesAgain: again.failedNames,
+      statusPendingAgain: pending,
+    });
+    console.log(`comment_replies_gate=${gate.action}`);
+    console.log(`comment_replies_target=${COMMENT_REPLIES_MIGRATION}`);
+    console.log(`pending_migrations=${pending.length}`);
+    if (gate.action !== "allow") die(`HOLD: ${gate.reason}`);
+    process.exit(0);
+  }
   if (state === "EMPTY" || state === "PARTIALLY_MIGRATED") process.exit(0);
   if (state === "MIGRATED") die("already fully migrated; nothing to do");
   die(`refusing to migrate in state ${state}`);

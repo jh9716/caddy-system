@@ -140,4 +140,84 @@ function gateSingleMigration(input) {
   };
 }
 
-module.exports = { parsePrismaMigrateStatusPending, gateSingleMigration };
+const COMMENT_REPLIES_MIGRATION = "20261109193000_comment_replies_v1";
+const PREVIEW_PROJECT_ID = "lucky-mode-29989630";
+const PREVIEW_NEON_ENDPOINT = "ep-odd-voice-aokrqp5t";
+const COMMENT_REPLIES_BRANCH_RE = /^preview-db-comment-replies-.+/;
+
+function isCommentRepliesPreviewBranch(refName) {
+  return COMMENT_REPLIES_BRANCH_RE.test(String(refName || ""));
+}
+
+function listsEqual(a, b) {
+  const left = Array.isArray(a) ? a : [];
+  const right = Array.isArray(b) ? b : [];
+  if (left.length !== right.length) return false;
+  for (let i = 0; i < left.length; i += 1) {
+    if (left[i] !== right[i]) return false;
+  }
+  return true;
+}
+
+/**
+ * Extra Preview migrate-gate for comment-replies branches only.
+ * Other preview-db-* branches should skip and keep the generic EMPTY/PARTIAL rule.
+ *
+ * @returns {{ action: 'skip' | 'allow' | 'hold', reason: string }}
+ */
+function gateCommentRepliesPreviewMigrate(input) {
+  const refName = input && input.refName;
+  if (!isCommentRepliesPreviewBranch(refName)) {
+    return { action: "skip", reason: "not a comment-replies preview branch" };
+  }
+  if (input.previewProjectId !== PREVIEW_PROJECT_ID) {
+    return {
+      action: "hold",
+      reason: `preview project is not ${PREVIEW_PROJECT_ID}`,
+    };
+  }
+  const neonEndpoint = input.neonEndpoint;
+  if (neonEndpoint && neonEndpoint !== "n/a" && neonEndpoint !== PREVIEW_NEON_ENDPOINT) {
+    return { action: "hold", reason: "neon endpoint is not Preview" };
+  }
+  if (/ep-crimson-cell|morning-tooth-60659454/.test(String(neonEndpoint || ""))) {
+    return { action: "hold", reason: "production endpoint" };
+  }
+
+  const first = gateSingleMigration({
+    target: COMMENT_REPLIES_MIGRATION,
+    repo: input.repo,
+    appliedFinished: input.appliedFinished,
+    failedNames: input.failedNames,
+    statusPending: input.statusPending,
+  });
+  const second = gateSingleMigration({
+    target: COMMENT_REPLIES_MIGRATION,
+    repo: input.repoAgain != null ? input.repoAgain : input.repo,
+    appliedFinished:
+      input.appliedFinishedAgain != null ? input.appliedFinishedAgain : input.appliedFinished,
+    failedNames: input.failedNamesAgain != null ? input.failedNamesAgain : input.failedNames,
+    statusPending: input.statusPendingAgain != null ? input.statusPendingAgain : input.statusPending,
+  });
+  if (
+    first.action !== second.action ||
+    first.reason !== second.reason ||
+    !listsEqual(first.pendingFromRepo, second.pendingFromRepo)
+  ) {
+    return { action: "hold", reason: "migration list changed between checks" };
+  }
+  if (first.action !== "deploy") {
+    return { ...first, action: "hold", reason: first.reason };
+  }
+  return { ...first, action: "allow", reason: first.reason };
+}
+
+module.exports = {
+  parsePrismaMigrateStatusPending,
+  gateSingleMigration,
+  gateCommentRepliesPreviewMigrate,
+  isCommentRepliesPreviewBranch,
+  COMMENT_REPLIES_MIGRATION,
+  PREVIEW_PROJECT_ID,
+  PREVIEW_NEON_ENDPOINT,
+};
