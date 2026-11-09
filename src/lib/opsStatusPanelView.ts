@@ -151,6 +151,7 @@ export const OPS_SPECIAL_DUTY_CHIP_LABELS: Record<
 > = {
   ONE_MAK: "1막",
   ONE_TWO: "1·2",
+  TWO: "2부",
   TWO_THREE: "2·3",
   ONE_THREE: "1·3",
   FIFTY_FOUR: "54",

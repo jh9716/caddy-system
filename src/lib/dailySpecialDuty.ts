@@ -15,6 +15,7 @@ import type { AutoAssignCaddy } from "@/lib/autoAssignEngine";
 export const DAILY_SPECIAL_KINDS = [
   "ONE_MAK",
   "ONE_TWO",
+  "TWO",
   "TWO_THREE",
   "ONE_THREE",
   "FIFTY_FOUR",
@@ -25,6 +26,7 @@ export const DAILY_SPECIAL_KINDS = [
 export const DAILY_SPECIAL_KIND_UI = [
   "ONE_MAK",
   "ONE_TWO",
+  "TWO",
   "TWO_THREE",
   "ONE_THREE",
   "FIFTY_FOUR",
@@ -35,6 +37,7 @@ export type DailySpecialKind = (typeof DAILY_SPECIAL_KINDS)[number];
 export const DAILY_SPECIAL_KIND_LABELS: Record<DailySpecialKind, string> = {
   ONE_MAK: "1막",
   ONE_TWO: "1·2부",
+  TWO: "2부",
   TWO_THREE: "2·3부",
   ONE_THREE: "1·3부",
   FIFTY_FOUR: "54홀",
@@ -52,6 +55,7 @@ export const SPECIAL_SETTINGS_STALE_MESSAGE =
 export const ENGINE_SPECIAL_KINDS = [
   "ONE_MAK",
   "ONE_TWO",
+  "TWO",
   "TWO_THREE",
   "ONE_THREE",
   "FIFTY_FOUR",
@@ -122,6 +126,10 @@ export type SpecialDutyRecord = {
   teamOrder?: number;
   caddyType?: string | null;
   employmentStatus?: string;
+  /** 2부 단독(TWO) 지정 코스. 다른 유형은 null. */
+  course?: string | null;
+  /** 2부 단독(TWO) 지정 티타임. 다른 유형은 null. */
+  teeTime?: string | null;
 };
 
 export function splitPastedSpecialNames(raw: unknown): string[] {
@@ -181,6 +189,8 @@ export type SpecialDutyPick = {
   name: string;
   team?: string;
   teamOrder?: number;
+  course?: string | null;
+  teeTime?: string | null;
 };
 
 export function appendSpecialDutyPick(
@@ -428,13 +438,18 @@ export function resolvePastedSpecialNames(
   return { matched, reviews };
 }
 
-export type EngineSpecialCaddy = AutoAssignCaddy & { inputOrder: number };
+export type EngineSpecialCaddy = AutoAssignCaddy & {
+  inputOrder: number;
+  specialCourse?: string | null;
+  specialTeeTime?: string | null;
+};
 
 export type EngineSpecialBundles = {
   /** null = 해당 유형 관리자 입력 없음 → 기존 태그 추출 유지 */
   fiftyFourHole: EngineSpecialCaddy[] | null;
   oneThreeCandidates: EngineSpecialCaddy[] | null;
   oneTwoCandidates: EngineSpecialCaddy[] | null;
+  twoCandidates: EngineSpecialCaddy[] | null;
   twoThreeCandidates: EngineSpecialCaddy[] | null;
   oneMakCandidates: EngineSpecialCaddy[] | null;
   extraSpecial: EngineSpecialCaddy[];
@@ -455,6 +470,8 @@ function toEngineCaddy(row: SpecialDutyRecord): EngineSpecialCaddy {
     teamOrder: Number(row.teamOrder) || 0,
     caddyType: row.caddyType ?? undefined,
     inputOrder: row.sortOrder,
+    specialCourse: row.course ?? null,
+    specialTeeTime: row.teeTime ?? null,
   };
 }
 
@@ -512,6 +529,7 @@ export function buildEngineSpecialBundles(
   const fiftyFourHole = pick("FIFTY_FOUR");
   const oneThreeCandidates = pick("ONE_THREE");
   const oneTwoCandidates = pick("ONE_TWO");
+  const twoCandidates = pick("TWO");
   const twoThreeCandidates = pick("TWO_THREE");
   const oneMakCandidates = pick("ONE_MAK");
   const chageun = pick("CHAGEUN") || [];
@@ -520,6 +538,7 @@ export function buildEngineSpecialBundles(
     fiftyFourHole,
     oneThreeCandidates,
     oneTwoCandidates,
+    twoCandidates,
     twoThreeCandidates,
     oneMakCandidates,
     extraSpecial: chageun,

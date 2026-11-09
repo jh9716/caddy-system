@@ -38,6 +38,7 @@ const ASSIGNMENT_KINDS: AssignmentKind[] = [
   "fiftyFourHole",
   "oneThree",
   "oneTwo",
+  "two",
   "twoThree",
   "oneMak",
   "fixed",

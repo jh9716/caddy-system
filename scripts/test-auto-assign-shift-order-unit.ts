@@ -307,13 +307,13 @@ section("3부 평일: 1·3 → WEEKDAY → 휴무지원 → THIRD → 2·3 → �
   const s3 = sortedShift(result, "3부");
   const names = s3.map((a) => a.caddy.name);
   const idx = (name: string) => names.indexOf(name);
-  assert(idx("일삼") >= 0 && idx("주중") > idx("일삼"), "1·3 다음 주중반");
+  assert(idx("일삼") >= 0 && idx("휴지") > idx("일삼"), "1·3 다음 휴무지원");
+  assert(idx("주중") > idx("휴지"), "휴무지원 다음 주중반(일반 3부반)");
   assert(
-    String(s3[idx("주중")]?.reason || "").startsWith("WEEKDAY_BAND_PRIORITY"),
-    "평일 WEEKDAY dedicated band"
+    !String(s3[idx("주중")]?.reason || "").startsWith("WEEKDAY_BAND_PRIORITY"),
+    "평일 WEEKDAY dedicated band 없음"
   );
-  assert(idx("휴지") > idx("주중"), "주중반 다음 휴무지원");
-  assert(idx("원번") > idx("휴지"), "휴무지원 다음 3부반 원번");
+  assert(idx("원번") > idx("주중"), "주중반과 원번은 같은 3부반 회전");
   assert(idx("이삼") > idx("원번"), "원번 다음 2·3");
   assert(idx("찾근") > idx("이삼"), "2·3 다음 찾근");
   const houseAfter = s3.findIndex(
@@ -455,10 +455,10 @@ section("Mode A: spare HOUSE prefix 유지");
     "Mode A 3부 앞이 2부 spare HOUSE"
   );
   assert(s3[2]?.caddy.id === 51, "spare 다음 1·3");
-  assert(s3[3]?.caddy.name === "주중", "1·3 다음 주중반");
+  assert(s3[3]?.caddy.name === "주중", "1·3 다음 일반 3부반(주중반 포함)");
   assert(
-    String(s3[3]?.reason || "").startsWith("WEEKDAY_BAND_PRIORITY"),
-    "Mode A 본체도 WEEKDAY band"
+    !String(s3[3]?.reason || "").startsWith("WEEKDAY_BAND_PRIORITY"),
+    "Mode A 본체도 WEEKDAY band 없음"
   );
 }
 

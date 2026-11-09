@@ -1150,6 +1150,48 @@ section("저장된 평일 Draft는 엔진 수정만으로 자동 교정되지 �
   );
 }
 
+section("TWO kind payload 저장·재조회");
+{
+  const date = "2026-08-26";
+  const { db } = createMemoryDraftDb();
+  const draft = makeDraft(date);
+  const twoRow = draft.assignments.find((a) => String(a.reservation.shift) === "2부");
+  assert(!!twoRow, "2부 배정 있음");
+  const withTwo: AssignmentDraft = {
+    ...draft,
+    assignments: draft.assignments.map((row) =>
+      row === twoRow ? { ...row, kind: "two" as const } : row
+    ),
+  };
+  const payload = assignmentDraftToPayload(withTwo);
+  const parsed = parseDailyBoardDraftPayload(payload, date);
+  assert(
+    parsed.assignments.some((a) => a.kind === "two"),
+    "parse two kind"
+  );
+  const regularStill = parsed.assignments.filter((a) => a.kind === "regular");
+  assert(regularStill.length === draft.assignments.length - 1, "다른 kind 유지");
+  const created = await saveDailyBoardDraft({
+    date,
+    expectedVersion: 0,
+    payload,
+    updatedByUserId: null,
+    db,
+  });
+  assert(created.version === 1, "TWO 초안 저장");
+  const hydrated = await getDailyBoardDraft(date, db);
+  assert(!!hydrated, "TWO 초안 재조회");
+  const restored = payloadToAssignmentDraft(hydrated!.payload);
+  const restoredTwo = restored.assignments.find(
+    (a) => reservationKey(a.reservation) === reservationKey(twoRow!.reservation)
+  );
+  assert(restoredTwo?.kind === "two", "재조회 TWO 복원");
+  assert(
+    restored.assignments.filter((a) => a.kind === "regular").length === regularStill.length,
+    "재조회 regular 유지"
+  );
+}
+
 section("캐디 권한 Draft API 접근 불가 (requireAdmin 401)");
 {
   const route = readSrc("src/app/api/assignments/draft/route.ts");

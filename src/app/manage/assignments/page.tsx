@@ -14,7 +14,9 @@ import {
   reservationIdentity,
   reservationsFromAssignmentDraft,
   shift1ReservationsForAnchor,
+  shift2ReservationsForSlot,
   buildShift1StartOptions,
+  buildShift2StartOptions,
   resolveHouseStartCaddyIdForRecalc,
   RECALC_CONFIRM_MESSAGE,
   RECALC_NEED_COURSE_MESSAGE,
@@ -38,11 +40,20 @@ import {
 } from "@/lib/assignmentBoardView";
 import {
   applyDirectCaddyEdit,
-  DIRECT_EDIT_PROTECTED_MESSAGE,
-  isDirectEditProtected,
+  applyDirectCaddyVacate,
+  directEditRejectReason,
   isDirectEditVacant,
   overlayUnassignedVacancies,
 } from "@/lib/assignmentBoardCellEdit";
+import {
+  cloneDraftSnapshot,
+  listWorkbookCellCoords,
+  neighborWorkbookCell,
+  pushWorkbookUndo,
+  redoWorkbookState,
+  undoWorkbookState,
+  type WorkbookCellCoord,
+} from "@/lib/assignmentBoardWorkbook";
 import { LazyBoardExcelExportButton } from "@/components/board/LazyBoardExcelExportButton";
 import { LazyBoardImageExportMenu } from "@/components/board/LazyBoardImageExportMenu";
 import { formatCaddyLabel, caddyAffiliation } from "@/lib/caddyDisplay";
@@ -307,6 +318,7 @@ function AssignmentMarkBadges({
   limousine,
   driving,
   twoThree,
+  twoOnly,
   supportKind,
   supportWorkPattern,
 }: {
@@ -317,6 +329,7 @@ function AssignmentMarkBadges({
   limousine?: boolean;
   driving?: boolean;
   twoThree?: boolean;
+  twoOnly?: boolean;
   supportKind?: string;
   supportWorkPattern?: string;
 }) {
@@ -327,7 +340,8 @@ function AssignmentMarkBadges({
     !special &&
     !limousine &&
     !driving &&
-    !twoThree
+    !twoThree &&
+    !twoOnly
   ) {
     return null;
   }
@@ -347,6 +361,8 @@ function AssignmentMarkBadges({
       ) : null}
       {chageun ? (
         <span className="bc-badge call">찾근</span>
+      ) : twoOnly ? (
+        <span className="bc-badge two-only">2부</span>
       ) : twoThree ? (
         <span className="bc-badge two-three">2·3</span>
       ) : special && !driving && !specialSupport ? (
@@ -439,6 +455,7 @@ const BoardAssignedSlots = memo(function BoardAssignedSlots({
                 special={special && row.kind !== "specialSupport"}
                 driving={marks.driving}
                 twoThree={row.kind === "twoThree"}
+                twoOnly={row.kind === "two"}
                 supportKind={row.supportKind || row.caddy.supportKind}
                 supportWorkPattern={row.supportWorkPattern || row.caddy.supportWorkPattern}
               />
@@ -733,6 +750,8 @@ export default function ManageAssignmentsOpsPage() {
   } | null>(null);
   const [cellEditOn, setCellEditOn] = useState(false);
   const [cellEditKey, setCellEditKey] = useState<string | null>(null);
+  const [workbookUndo, setWorkbookUndo] = useState<AssignmentDraft[]>([]);
+  const [workbookRedo, setWorkbookRedo] = useState<AssignmentDraft[]>([]);
   const [pendingEditKeys, setPendingEditKeys] = useState<Set<string>>(
     () => new Set()
   );
@@ -1520,6 +1539,13 @@ export default function ManageAssignmentsOpsPage() {
     }
     return shift1Options;
   }, [date, draft, shift1Options]);
+
+  const shift2StartOptions = useMemo(() => {
+    if (draft && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return buildShift2StartOptions(shift2ReservationsForSlot(draft), date);
+    }
+    return [];
+  }, [date, draft]);
 
   const recalcDisabled = useMemo(() => {
     if (!date || !draft) return true;
@@ -2603,10 +2629,11 @@ export default function ManageAssignmentsOpsPage() {
       return;
     }
     const key = reservationIdentity(row.reservation);
-    if (cellEditOn && mode === "caddy") {
-      if (isDirectEditProtected(row)) {
-        showToast(DIRECT_EDIT_PROTECTED_MESSAGE);
-        setError(DIRECT_EDIT_PROTECTED_MESSAGE);
+    if (cellEditOn) {
+      const blocked = directEditRejectReason(row);
+      if (blocked) {
+        showToast(blocked.message);
+        setError(blocked.message);
         setQuickSheet(null);
         setCellEditKey(null);
         return;
@@ -2636,6 +2663,46 @@ export default function ManageAssignmentsOpsPage() {
     [swapKey, moveKey, cellEditOn]
   );
 
+  function rememberWorkbookUndo(current: AssignmentDraft) {
+    setWorkbookUndo((prev) => pushWorkbookUndo(prev, cloneDraftSnapshot(current)));
+    setWorkbookRedo([]);
+  }
+
+  function applyWorkbookDraft(next: AssignmentDraft, toastText?: string) {
+    setDraft(next);
+    setWarnings(detectDraftWarnings(next));
+    queueDraftSave(next);
+    if (toastText) showToast(toastText);
+  }
+
+  function undoWorkbookEdit() {
+    const current = draftRef.current;
+    if (!current) return;
+    const stepped = undoWorkbookState({
+      undo: workbookUndo,
+      redo: workbookRedo,
+      current: cloneDraftSnapshot(current),
+    });
+    if (!stepped) return;
+    setWorkbookUndo(stepped.undo);
+    setWorkbookRedo(stepped.redo);
+    applyWorkbookDraft(stepped.current, "수정 취소");
+  }
+
+  function redoWorkbookEdit() {
+    const current = draftRef.current;
+    if (!current) return;
+    const stepped = redoWorkbookState({
+      undo: workbookUndo,
+      redo: workbookRedo,
+      current: cloneDraftSnapshot(current),
+    });
+    if (!stepped) return;
+    setWorkbookUndo(stepped.undo);
+    setWorkbookRedo(stepped.redo);
+    applyWorkbookDraft(stepped.current, "다시 실행");
+  }
+
   function applyDirectCellPick(row: AutoAssignmentRow, caddyId: number) {
     const current = draftRef.current;
     if (!current) return;
@@ -2654,6 +2721,7 @@ export default function ManageAssignmentsOpsPage() {
       return;
     }
     if (result.action === "swap") {
+      rememberWorkbookUndo(current);
       setPendingEditKeys(new Set(result.affectedKeys));
       setCellEditKey(null);
       applyQuickChange({
@@ -2663,12 +2731,30 @@ export default function ManageAssignmentsOpsPage() {
       });
       return;
     }
-    setDraft(result.draft);
-    setWarnings(detectDraftWarnings(result.draft));
-    queueDraftSave(result.draft);
+    rememberWorkbookUndo(current);
+    applyWorkbookDraft(result.draft, result.toast);
     setPendingEditKeys(new Set(result.affectedKeys));
     setCellEditKey(null);
-    if (result.toast) showToast(result.toast);
+  }
+
+  function applyDirectCellVacate(row: AutoAssignmentRow) {
+    const current = draftRef.current;
+    if (!current) return;
+    const key = reservationIdentity(row.reservation);
+    const result = applyDirectCaddyVacate(current, key);
+    if (!result.ok) {
+      setError(result.message);
+      showToast(result.message);
+      return;
+    }
+    if (result.action === "noop") {
+      setCellEditKey(null);
+      return;
+    }
+    rememberWorkbookUndo(current);
+    applyWorkbookDraft(result.draft, result.toast);
+    setPendingEditKeys(new Set(result.affectedKeys));
+    setCellEditKey(null);
   }
 
   function onStartTeamMove(row: AutoAssignmentRow) {
@@ -3598,6 +3684,68 @@ export default function ManageAssignmentsOpsPage() {
     return null;
   }, [draft, cellEditKey, boardRows]);
 
+  useEffect(() => {
+    if (!cellEditOn || !draft) return;
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        if (e.shiftKey) redoWorkbookEdit();
+        else undoWorkbookEdit();
+        return;
+      }
+      const coords = listWorkbookCellCoords(boardRows, boardOpenCourses);
+      if (!coords.length) return;
+      let current: WorkbookCellCoord | null = null;
+      if (cellEditRow) {
+        const course = cellEditRow.reservation.course as CourseCode;
+        current = {
+          teeTime: cellEditRow.reservation.teeTime,
+          course,
+        };
+      }
+      const delta =
+        e.key === "ArrowUp"
+          ? { dRow: -1 }
+          : e.key === "ArrowDown"
+            ? { dRow: 1 }
+            : e.key === "ArrowLeft"
+              ? { dCol: -1 }
+              : e.key === "ArrowRight"
+                ? { dCol: 1 }
+                : null;
+      if (!delta) return;
+      e.preventDefault();
+      const next = neighborWorkbookCell(coords, current, delta);
+      if (!next) return;
+      const timeRow = boardRows.find((row) => row.teeTime === next.teeTime);
+      const cell = timeRow?.cells[next.course];
+      if (!cell || cell.kind !== "assigned" || !cell.rows[0]) return;
+      const key = reservationIdentity(cell.rows[0].reservation);
+      setCellEditKey(key);
+      setExpandedKey(key);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [
+    cellEditOn,
+    draft,
+    boardRows,
+    boardOpenCourses,
+    cellEditRow,
+    workbookUndo,
+    workbookRedo,
+  ]);
+
   const hasSelectedDate = /^\d{4}-\d{2}-\d{2}$/.test(date);
 
   const staffingAvailableCount = useMemo(
@@ -4275,6 +4423,7 @@ export default function ManageAssignmentsOpsPage() {
             date={date}
             excludedRows={availability?.excluded}
             shift1Options={shift1StartOptions}
+            shift2Options={shift2StartOptions}
             hasDraft={Boolean(draft || serverDraftVersionRef.current > 0)}
             bundleReady={dateBundleReady}
             initialPayload={specialDutyBundle}
@@ -4405,7 +4554,23 @@ export default function ManageAssignmentsOpsPage() {
                     setCellEditKey(null);
                   }}
                 >
-                  직접편집 {cellEditOn ? "ON" : "OFF"}
+                  엑셀편집 {cellEditOn ? "ON" : "OFF"}
+                </button>
+                <button
+                  type="button"
+                  className="ops-workbook-undo"
+                  disabled={workbookUndo.length === 0}
+                  onClick={undoWorkbookEdit}
+                >
+                  취소
+                </button>
+                <button
+                  type="button"
+                  className="ops-workbook-undo"
+                  disabled={workbookRedo.length === 0}
+                  onClick={redoWorkbookEdit}
+                >
+                  되돌리기
                 </button>
                 <div className="ops-board-tools-end">
                   <LazyBoardImageExportMenu draft={draft} onNotice={showToast} />
@@ -4428,8 +4593,8 @@ export default function ManageAssignmentsOpsPage() {
             {shiftTab !== "UNASSIGNED" && shiftTab !== "CLOSED" && (
               <p className="ops-board-hint">
                 {cellEditOn
-                  ? "캐디 이름을 눌러 바로 선택합니다. 병가·결근 등은 선택기 안 업무 메뉴를 사용하세요."
-                  : "팀 또는 캐디를 눌러 바로 수정합니다. 상단 버튼은 그대로 쓸 수 있습니다."}
+                  ? "셀을 눌러 검색·배치합니다. 빈 칸·순서 바꾸기·취소/되돌리기를 지원합니다. 화살표로 셀 이동."
+                  : "팀 또는 캐디를 눌러 바로 수정합니다. 엑셀편집으로 그리드 조작을 켤 수 있습니다."}
               </p>
             )}
 
@@ -4715,6 +4880,7 @@ export default function ManageAssignmentsOpsPage() {
                               special={special && row.kind !== "specialSupport"}
                               driving={marks.driving}
                               twoThree={row.kind === "twoThree"}
+                              twoOnly={row.kind === "two"}
                               supportKind={row.supportKind || row.caddy.supportKind}
                               supportWorkPattern={row.supportWorkPattern || row.caddy.supportWorkPattern}
                             />
@@ -4925,6 +5091,7 @@ export default function ManageAssignmentsOpsPage() {
           unavailableCaddyIds={unavailableCaddyIds}
           onClose={() => setCellEditKey(null)}
           onSelect={(caddyId) => applyDirectCellPick(cellEditRow, caddyId)}
+          onVacate={() => applyDirectCellVacate(cellEditRow)}
           onOpenDutyMenu={() => {
             const key = reservationIdentity(cellEditRow.reservation);
             setCellEditKey(null);
@@ -5034,7 +5201,7 @@ const opsCss = `
     margin: 0 auto;
     display: grid;
     gap: 8px;
-    padding: 0 8px 72px;
+    padding: 0 8px calc(var(--vh-bottom-nav-height, 58px) + env(safe-area-inset-bottom, 0px) + 20px);
     box-sizing: border-box;
     width: 100%;
     container-type: inline-size;
@@ -5589,12 +5756,12 @@ const opsCss = `
   .bx-export-menu { position: relative; }
   .bx-export-btn {
     min-height: 32px;
-    padding: 0 10px;
+    padding: 0 8px;
     border-radius: 8px;
     border: 1px solid #cbd5e1;
     background: #fff;
     color: #0f172a;
-    font-size: 0.78rem;
+    font-size: 0.72rem;
     font-weight: 700;
     cursor: pointer;
     white-space: nowrap;
@@ -5672,6 +5839,21 @@ const opsCss = `
     background: #eff6ff;
     border-color: #2563eb;
     color: #1d4ed8;
+  }
+  .ops-workbook-undo {
+    min-height: 28px;
+    padding: 0 10px;
+    border-radius: 999px;
+    border: 1px solid #cbd5e1;
+    background: #fff;
+    color: #334155;
+    font-size: 0.78rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .ops-workbook-undo:disabled {
+    color: #94a3b8;
+    cursor: not-allowed;
   }
   .ops-board-hint {
     margin: 0;
@@ -6099,6 +6281,11 @@ const opsCss = `
     /* overflow-x:hidden 은 sticky 스크롤 컨테인먼트를 만들어 모바일에서 깨질 수 있음 */
     overflow-x: clip;
   }
+  @media (max-width: 959px) {
+    .ops-board-wrap.has-sticky-head {
+      padding-bottom: calc(var(--vh-bottom-nav-height, 58px) + env(safe-area-inset-bottom, 0px) + 8px);
+    }
+  }
   /* ops-root gap(12px)을 상쇄해 헤더 바·본문 테두리가 이어지게 함 */
   .ops-sticky-stack:has(.ops-board-head-bar) + .ops-board-wrap.has-sticky-head {
     margin-top: -8px;
@@ -6344,6 +6531,51 @@ const opsCss = `
   .ops-row.cell-edit-pending .col.caddy {
     background: #fffbeb;
   }
+  .ops-board.cell-edit-on .bc-caddy {
+    min-height: 36px;
+  }
+  @media (max-width: 640px) {
+    .ops-board.cell-edit-on .bc-caddy,
+    .ops-board.cell-edit-on .bc-team {
+      -webkit-tap-highlight-color: transparent;
+    }
+    .ops-board.cell-edit-on .bc-team {
+      min-height: 18px;
+    }
+    .ops-board.cell-edit-on .bc-caddy {
+      min-height: 32px;
+    }
+    .ops-board.cell-edit-on .bc-cell {
+      min-height: 56px;
+    }
+    .bc-slot {
+      gap: 0;
+    }
+    .bc-team,
+    .bc-caddy {
+      min-height: 0;
+      padding: 1px 1px 0;
+    }
+    .bc-team-name {
+      font-size: 0.52rem;
+      line-height: 1.15;
+    }
+    .bc-name {
+      font-size: 0.7rem;
+      line-height: 1.2;
+    }
+    .bc-affil {
+      font-size: 0.5rem;
+      line-height: 1.1;
+    }
+    .bc-marks {
+      max-height: 14px;
+      overflow: hidden;
+    }
+    .lock-chip {
+      margin-top: 1px;
+    }
+  }
   .bc-team,
   .bc-caddy {
     border: 0;
@@ -6446,6 +6678,10 @@ const opsCss = `
   .bc-badge.drive {
     color: #fff;
     background: #7c3aed;
+  }
+  .bc-badge.two-only {
+    color: #1e3a8a;
+    background: #dbeafe;
   }
   .bc-badge.two-three {
     color: #0f766e;

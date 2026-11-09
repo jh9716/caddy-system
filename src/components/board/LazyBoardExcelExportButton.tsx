@@ -39,7 +39,7 @@ export function LazyBoardExcelExportButton({
       data-board-excel-export="1"
       onClick={() => void downloadWorkbook()}
     >
-      {busy ? "준비 중…" : "엑셀"}
+      {busy ? "준비 중…" : "엑셀 저장"}
     </button>
   );
 }

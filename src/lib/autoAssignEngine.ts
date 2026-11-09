@@ -3,15 +3,16 @@
  * - 순수 함수: DB write 없음
  * - 우선순위: 고정/특별찾근 → 54홀 → 1·3부 → 1·2부 → 2·3부 → 일반 순번
  * - 일반: HOUSE 순번 + 부별 스페어1·2
- * - 3부: Mode A(원번 미완주) 2부 스페어 HOUSE → 1·3 → 주중반/주말반
- *        → 휴무지원 → regular THIRD → 2·3 → 찾근 → 남은 HOUSE
- *        Mode B(원번 완주) 1·3 → 주중반/주말반 → 휴무지원 → regular THIRD
- *        → 2·3 → 찾근 → 남은 HOUSE
+ * - 3부: Mode A(원번 미완주) 2부 스페어 HOUSE → 1·3 → 주말반(토/일/공휴일)
+ *        → 휴무지원 → regular THIRD(주중반 포함) → 2·3 → 찾근 → 남은 HOUSE
+ *        Mode B(원번 완주) 1·3 → 주말반(토/일/공휴일) → 휴무지원
+ *        → regular THIRD(주중반 포함) → 2·3 → 찾근 → 남은 HOUSE
  *        2부 찾근(SPECIAL_CALL)은 지정 예약을 점유하지 않고 보호 1·2 다음·2·3 앞.
  *        3부 찾근(SPECIAL_CALL)은 remaining 큐에서 2·3 다음·HOUSE 앞.
  *        마샬/당번/일반 FIXED 핀은 assignFixedPriority 최우선 유지.
  *        thirdBandSubgroup=WEEKEND는 평일(비공휴일) 3부 어디에든 넣지 않음
- *        thirdBandSubgroup=WEEKDAY는 평일 3부 우선 band, 주말/공휴일은 regular THIRD
+ *        thirdBandSubgroup=WEEKDAY는 평일에도 일반 3부반 순번(9~12조 회전).
+ *        주말/공휴일 WEEKDAY도 regular THIRD. 전용 WEEKDAY band 없음.
  * - DRIVING은 일반 HOUSE/THIRD 순번에 섞지 않음
  * - 8단계: 일반 예약 캔슬/추가 시 regular reflow (special 보호, 스페어·3부 재계산)
  */
@@ -29,7 +30,6 @@ import {
 } from "@/lib/reservationParser";
 import {
   extractWeekendBandInRotationOrder,
-  extractWeekdayBandInRotationOrder,
   resolveThirdStartTeam,
   rotateThirdQueueFromStartCaddy,
   rotateThirdQueueFromStartTeam,
@@ -67,6 +67,11 @@ import {
   specialSupportCaddyIds,
   unusedSupportCount,
 } from "@/lib/dailySpecialSupport";
+import {
+  assignTwoOnlyExactSlots,
+  TWO_ONLY_REASON,
+  type TwoOnlyCandidate,
+} from "@/lib/specialDutyTwo";
 
 /** 배치/표시용 코스 고정 순서 */
 export const COURSE_ORDER: readonly CourseCode[] = COURSE_CODES;
@@ -134,6 +139,11 @@ export const REASON = {
   WEEKEND_BAND_PRIORITY: "WEEKEND_BAND_PRIORITY",
   WEEKDAY_BAND_PRIORITY: "WEEKDAY_BAND_PRIORITY",
   SPECIAL_SUPPORT: "SPECIAL_SUPPORT",
+  TWO_ONLY_PRIORITY: TWO_ONLY_REASON.PRIORITY,
+  TWO_ONLY_MISSING_RESERVATION: TWO_ONLY_REASON.MISSING_RESERVATION,
+  TWO_ONLY_RESERVATION_CONFLICT: TWO_ONLY_REASON.RESERVATION_CONFLICT,
+  TWO_ONLY_CADDY_CONFLICT: TWO_ONLY_REASON.CADDY_CONFLICT,
+  TWO_ONLY_MISSING_SLOT: TWO_ONLY_REASON.MISSING_SLOT,
 } as const;
 
 export type FixedAssignmentType =
@@ -237,6 +247,7 @@ export type AssignmentKind =
   | "fiftyFourHole"
   | "oneThree"
   | "oneTwo"
+  | "two"
   | "twoThree"
   | "oneMak"
   | "fixed"
@@ -311,6 +322,7 @@ export type AutoAssignResultV1 = {
   fiftyFourHoleAssignments: AutoAssignmentRow[];
   oneThreeAssignments: AutoAssignmentRow[];
   oneTwoAssignments: AutoAssignmentRow[];
+  twoAssignments: AutoAssignmentRow[];
   twoThreeAssignments: AutoAssignmentRow[];
   oneMakAssignments: AutoAssignmentRow[];
   /** 토/일/공휴일 주말반 3부 (kind=regular). 1·3 다음, regular THIRD 앞 */
@@ -349,6 +361,9 @@ export type AutoAssignResultV1 = {
     oneTwoCandidateCount: number;
     oneTwoAssignedCaddyCount: number;
     oneTwoUnassignedCount: number;
+    twoCandidateCount: number;
+    twoAssignedCaddyCount: number;
+    twoUnassignedCount: number;
     twoThreeCandidateCount: number;
     twoThreeAssignedCaddyCount: number;
     twoThreeUnassignedCount: number;
@@ -1330,6 +1345,7 @@ export function applyWeekendBandPriorityIfPresent(
 export type SpecialDutySlotResult = {
   fiftyFourHoleAssignments: AutoAssignmentRow[];
   oneTwoAssignments: AutoAssignmentRow[];
+  twoAssignments: AutoAssignmentRow[];
   twoThreeAssignments: AutoAssignmentRow[];
   oneThreeAssignments: AutoAssignmentRow[];
   oneMakAssignments: AutoAssignmentRow[];
@@ -1360,6 +1376,7 @@ export function assignSpecialDutySlots(input: {
   reservations: AutoAssignReservation[];
   fiftyFourHole: AutoAssignCaddy[];
   oneTwoCandidates: AutoAssignCaddy[];
+  twoCandidates?: TwoOnlyCandidate[];
   twoThreeCandidates?: AutoAssignCaddy[];
   oneThreeCandidates: AutoAssignCaddy[];
   oneMakCandidates: AutoAssignCaddy[];
@@ -1387,6 +1404,7 @@ export function assignSpecialDutySlots(input: {
   let remaining = [...input.reservations];
   const fiftyFourHoleAssignments: AutoAssignmentRow[] = [];
   const oneTwoAssignments: AutoAssignmentRow[] = [];
+  const twoAssignments: AutoAssignmentRow[] = [];
   const twoThreeAssignments: AutoAssignmentRow[] = [];
   const oneThreeAssignments: AutoAssignmentRow[] = [];
   const oneMakAssignments: AutoAssignmentRow[] = [];
@@ -1395,6 +1413,21 @@ export function assignSpecialDutySlots(input: {
   const weekendBandAssignments: AutoAssignmentRow[] = [];
   const specialUnassigned: SpecialUnassignedRow[] = [];
   const assignedCaddyIds = new Set<number>();
+
+  // 2부 단독: 고정 이후 remaining에서 지정 코스+시간만. 근접 대체 없음.
+  {
+    const twoPlaced = assignTwoOnlyExactSlots({
+      date,
+      candidates: [...(input.twoCandidates || [])],
+      remaining,
+      occupiedReservations: input.occupiedReservations || [],
+      assignedCaddyIds,
+    });
+    twoAssignments.push(...twoPlaced.assignments);
+    specialUnassigned.push(...twoPlaced.specialUnassigned);
+    remaining = twoPlaced.remainingReservations;
+    for (const id of twoPlaced.assignedCaddyIds) assignedCaddyIds.add(id);
+  }
 
   const fiftyFour = dedupeCaddies([...input.fiftyFourHole]).sort(
     compareSpecialCandidateOrder
@@ -1502,6 +1535,7 @@ export function assignSpecialDutySlots(input: {
     const taken: AutoAssignReservation[] = [];
     let cursor = 0;
     for (const caddy of fiftyFour) {
+      if (assignedCaddyIds.has(caddy.id)) continue;
       if (cursor >= window.length) {
         specialUnassigned.push({
           caddy,
@@ -1553,6 +1587,7 @@ export function assignSpecialDutySlots(input: {
     const taken: AutoAssignReservation[] = [];
     let cursor = 0;
     for (const caddy of oneTwo) {
+      if (assignedCaddyIds.has(caddy.id)) continue;
       if (cursor >= window.length) {
         specialUnassigned.push({
           caddy,
@@ -1993,6 +2028,7 @@ export function assignSpecialDutySlots(input: {
     const taken: AutoAssignReservation[] = [];
     let cursor = insertAt;
     for (const caddy of twoThree) {
+      if (assignedCaddyIds.has(caddy.id)) continue;
       if (cursor >= shift2.length) {
         specialUnassigned.push({
           caddy,
@@ -2098,6 +2134,7 @@ export function assignSpecialDutySlots(input: {
   return {
     fiftyFourHoleAssignments,
     oneTwoAssignments,
+    twoAssignments,
     twoThreeAssignments,
     oneThreeAssignments,
     oneMakAssignments,
@@ -2725,15 +2762,15 @@ export function assignOneTwoPriority(input: {
  * - 3부 (실제 1·2부 배치 결과 기준):
  *   A) HOUSE 원번 잔여(1·2부 미근무 HOUSE 존재):
  *      2부 스페어 HOUSE(최대 2, sparesByShift["2부"]) → 1·3 신청자
- *      → 주중반(평일) 또는 주말반(토/일/공휴일) → 휴무지원 → THIRD → 2·3
+ *      → 주말반(토/일/공휴일) → 휴무지원 → THIRD(주중반 포함) → 2·3
  *      → 3부 찾근(SPECIAL_CALL) → 남은 미근무 HOUSE → (부족 시) 기근무 wrap
  *   B) HOUSE 소진(전원이 1·2부 중 ≥1회 실근무):
- *      1·3 신청자 → 주중반/주말반 → 휴무지원 → THIRD → 2·3 → 찾근
- *      → (1부 미근무 ∩ 2부 실근무) HOUSE, 단 1부 spare1·2 제외
+ *      1·3 신청자 → 주말반(토/일/공휴일) → 휴무지원 → THIRD(주중반 포함)
+ *      → 2·3 → 찾근 → (1부 미근무 ∩ 2부 실근무) HOUSE, 단 1부 spare1·2 제외
  *      (2부 스페어 우선 없음. 2부 spare 표시/계산은 유지)
  *   WEEKEND는 날짜와 관계없이 regular THIRD에서 분리하고, 토/일/공휴일에만 우선 band.
- *   WEEKDAY는 평일에만 우선 band로 분리하고, 주말/공휴일에는 regular THIRD에 남긴다.
- *   평일 비공휴일에 WEEKEND는 그날 3부에 배치하지 않는다.
+ *   WEEKDAY는 평일 전용 band를 쓰지 않고 일반 3부반(9~12조 회전) 순번에 포함한다.
+ *   주말/공휴일 WEEKDAY도 regular THIRD. 평일 비공휴일에 WEEKEND는 그날 3부에 배치하지 않는다.
  * - 3부 spare1·2 = 당일 3부 최종 배치 sequence에서 마지막 배치자 다음 가용 2명
  *   (별도 HOUSE queue에서 새로 뽑지 않음. Mode A/B 동일. 순환 시 해당 3부 sequence 유지)
  * - DRIVING은 일반 순번에 섞지 않음
@@ -2786,7 +2823,7 @@ export function assignRegularSequence(input: {
   oneThreeForThird?: AutoAssignCaddy[];
   /**
    * 2부 2·3 배치에 성공한 신청자.
-   * 3부 remaining: 1·3 → WEEKEND → 휴무지원 → THIRD → 하우스 2·3부 → 찾근 → 일반 HOUSE.
+   * 3부 remaining: 1·3 → WEEKEND → 휴무지원 → THIRD(주중반 포함) → 하우스 2·3부 → 찾근 → 일반 HOUSE.
    */
   twoThreeForThird?: AutoAssignCaddy[];
   /**
@@ -2854,16 +2891,10 @@ export function assignRegularSequence(input: {
   const thirdStartTeam = resolveThirdStartTeam(input.thirdStartTeam, input.date);
   let third = rotateThirdQueueFromStartTeam(pools.third, thirdStartTeam);
   const weekendSeparated = extractWeekendBandInRotationOrder(third);
-  const weekdaySeparated = extractWeekdayBandInRotationOrder(third);
   const weekendIds = new Set(weekendSeparated.map((c) => c.id));
-  const weekdayIds = new Set(weekdaySeparated.map((c) => c.id));
   const weekendPriority = isWeekendBandPriorityDate(input.date);
   third = third.filter((caddy) => !weekendIds.has(caddy.id));
-  if (!weekendPriority) {
-    third = third.filter((caddy) => !weekdayIds.has(caddy.id));
-  }
   const weekendBand = weekendPriority ? weekendSeparated : [];
-  const weekdayBand = weekendPriority ? [] : weekdaySeparated;
   const oneThreeForThird = dedupeCaddies([...(input.oneThreeForThird || [])]);
   const chageunForThird = dedupeCaddies([...(input.chageunForThird || [])]);
   const twoThreeForThird = dedupeCaddies([...(input.twoThreeForThird || [])]);
@@ -2930,7 +2961,6 @@ export function assignRegularSequence(input: {
     ...chageunForThird.map((c) => c.id),
     ...twoThreeForThird.map((c) => c.id),
     ...weekendBand.map((c) => c.id),
-    ...weekdayBand.map((c) => c.id),
   ]);
 
   for (const shift of SHIFT_PARTS) {
@@ -3095,11 +3125,6 @@ export function assignRegularSequence(input: {
           kind: "regular",
           reason: REASON.WEEKEND_BAND_PRIORITY,
         });
-      const pushWeekday = (caddy: AutoAssignCaddy) =>
-        pushCaddy(caddy, -1, {
-          kind: "regular",
-          reason: REASON.WEEKDAY_BAND_PRIORITY,
-        });
       const pushOffSupport = (caddy: AutoAssignCaddy) =>
         pushCaddy(caddy, -1, {
           kind: "specialSupport",
@@ -3113,13 +3138,12 @@ export function assignRegularSequence(input: {
       );
 
       if (!houseExhaustedIn12) {
-        // Mode A: 2부 스페어(실측) → 1·3 → 주중/주말반 → 휴무지원 → regular THIRD → 2·3 → 찾근 → 남은 미근무 → wrap
+        // Mode A: 2부 스페어(실측) → 1·3 → 주말반 → 휴무지원 → regular THIRD(주중반 포함) → 2·3 → 찾근 → 남은 미근무 → wrap
         for (const caddy of shift2SpareCaddiesFromSpares(house, sparesByShift)) {
           pushCaddy(caddy, seqOf(caddy));
         }
         for (const caddy of oneThreeForThird) pushOneThree(caddy);
         for (const caddy of weekendBand) pushWeekend(caddy);
-        for (const caddy of weekdayBand) pushWeekday(caddy);
         for (const caddy of offSupportShift3) pushOffSupport(caddy);
         for (let i = 0; i < third.length; i++) {
           pushCaddy(third[i], 10_000 + i);
@@ -3134,10 +3158,9 @@ export function assignRegularSequence(input: {
           pushCaddy(c, seqOf(c));
         }
       } else {
-        // Mode B: 1·3 → 주중/주말반 → 휴무지원 → THIRD → 2·3 → 찾근 → 2부 실근무·1부 미근무 HOUSE (spare1·2 제외)
+        // Mode B: 1·3 → 주말반 → 휴무지원 → THIRD(주중반 포함) → 2·3 → 찾근 → 2부 실근무·1부 미근무 HOUSE (spare1·2 제외)
         for (const caddy of oneThreeForThird) pushOneThree(caddy);
         for (const caddy of weekendBand) pushWeekend(caddy);
-        for (const caddy of weekdayBand) pushWeekday(caddy);
         for (const caddy of offSupportShift3) pushOffSupport(caddy);
         for (let i = 0; i < third.length; i++) {
           pushCaddy(third[i], 10_000 + i);
@@ -3386,6 +3409,8 @@ export function computeAutoAssignmentsV1(input: {
   oneThreeCandidates?: AutoAssignCaddy[];
   /** 1·2부 신청자 후보 — 명시적 입력 */
   oneTwoCandidates?: AutoAssignCaddy[];
+  /** 2부 단독 특수근무. 지정 코스+티타임 정확 일치만. */
+  twoCandidates?: TwoOnlyCandidate[];
   /** 2·3부 신청자 후보 — 명시적 입력 */
   twoThreeCandidates?: AutoAssignCaddy[];
   /** 1막 신청자 후보 — 찾근_1막(fixed)과 별개 */
@@ -3558,6 +3583,19 @@ export function computeAutoAssignmentsV1(input: {
     .sort(compareSpecialCandidateOrder);
   const twoThreeIds = new Set(twoThreeCandidates.map((c) => c.id));
 
+  const twoCandidates = dedupeCaddies([...(input.twoCandidates || [])])
+    .filter(
+      (c) =>
+        !fixedIds.has(c.id) &&
+        !fiftyFourIds.has(c.id) &&
+        !oneThreeIds.has(c.id) &&
+        !oneTwoIds.has(c.id) &&
+        !oneMakIds.has(c.id) &&
+        !twoThreeIds.has(c.id)
+    )
+    .sort(compareSpecialCandidateOrder) as TwoOnlyCandidate[];
+  const twoIds = new Set(twoCandidates.map((c) => c.id));
+
   const specialExclude = new Set<number>([
     ...fixedIds,
     ...fiftyFourIds,
@@ -3565,6 +3603,7 @@ export function computeAutoAssignmentsV1(input: {
     ...oneTwoIds,
     ...oneMakIds,
     ...twoThreeIds,
+    ...twoIds,
   ]);
   const special = dedupeCaddies([...(input.special || [])])
     .filter((c) => !specialExclude.has(c.id))
@@ -3604,6 +3643,7 @@ export function computeAutoAssignmentsV1(input: {
     reservations: fixed.remainingReservations,
     fiftyFourHole,
     oneTwoCandidates,
+    twoCandidates,
     twoThreeCandidates,
     oneThreeCandidates,
     oneMakCandidates,
@@ -3630,7 +3670,7 @@ export function computeAutoAssignmentsV1(input: {
     compareReservationOrder
   );
 
-  // 4) 일반 순번 — 1·2부 후 3부: 2부 스페어 → 1·3 → 주중/주말반 → 휴무지원 → THIRD → 2·3 → 찾근
+  // 4) 일반 순번 — 1·2부 후 3부: 2부 스페어 → 1·3 → 주말반 → 휴무지원 → THIRD(주중반 포함) → 2·3 → 찾근
   // houseStartCaddyId는 일반 HOUSE에서 적용. 시작점이 특수근무로 빠지면
   // 원본 HOUSE 회전 후 특수 id만 제외하고 이어간다 (전체 abort 없음).
   const regular = assignRegularSequence({
@@ -3656,6 +3696,7 @@ export function computeAutoAssignmentsV1(input: {
       ...fiftyFourHoleAssignments,
       ...oneTwoAssignments,
       ...oneMakAssignments,
+      ...slotted.twoAssignments,
       ...slotted.oneThreeAssignments,
       ...slotted.twoThreeAssignments,
       ...slotted.shift2ChageunAssignments,
@@ -3722,6 +3763,7 @@ export function computeAutoAssignmentsV1(input: {
     ...fiftyFourHoleAssignments,
     ...slotted.oneThreeAssignments,
     ...oneTwoAssignments,
+    ...slotted.twoAssignments,
     ...oneMakAssignments,
     ...slotted.twoThreeAssignments,
     ...slotted.shift2ChageunAssignments,
@@ -3741,6 +3783,7 @@ export function computeAutoAssignmentsV1(input: {
     ...fiftyFourHoleAssignments,
     ...oneThreeAssignments,
     ...oneTwoAssignments,
+    ...slotted.twoAssignments,
     ...twoThreeAssignments,
     ...oneMakAssignments,
     ...weekendBandAssignments,
@@ -3764,6 +3807,9 @@ export function computeAutoAssignmentsV1(input: {
   const twoThreeAssignedCaddyCount = new Set(
     twoThreeAssignments.map((a) => a.caddy.id)
   ).size;
+  const twoAssignedCaddyCount = new Set(
+    slotted.twoAssignments.map((a) => a.caddy.id)
+  ).size;
 
   return {
     date,
@@ -3772,6 +3818,7 @@ export function computeAutoAssignmentsV1(input: {
     fiftyFourHoleAssignments,
     oneThreeAssignments,
     oneTwoAssignments,
+    twoAssignments: slotted.twoAssignments,
     twoThreeAssignments,
     oneMakAssignments,
     weekendBandAssignments,
@@ -3809,6 +3856,11 @@ export function computeAutoAssignmentsV1(input: {
       oneTwoAssignedCaddyCount,
       oneTwoUnassignedCount: slotted.specialUnassigned.filter((u) =>
         u.reason.startsWith("ONE_TWO")
+      ).length,
+      twoCandidateCount: twoCandidates.length,
+      twoAssignedCaddyCount,
+      twoUnassignedCount: slotted.specialUnassigned.filter((u) =>
+        u.reason.startsWith("TWO_ONLY")
       ).length,
       oneMakCandidateCount: oneMakCandidates.length,
       oneMakAssignedCaddyCount,
@@ -3978,6 +4030,7 @@ function bucketizeAssignments(assignments: AutoAssignmentRow[]): {
   fiftyFourHoleAssignments: AutoAssignmentRow[];
   oneThreeAssignments: AutoAssignmentRow[];
   oneTwoAssignments: AutoAssignmentRow[];
+  twoAssignments: AutoAssignmentRow[];
   twoThreeAssignments: AutoAssignmentRow[];
   oneMakAssignments: AutoAssignmentRow[];
   weekendBandAssignments: AutoAssignmentRow[];
@@ -3987,6 +4040,7 @@ function bucketizeAssignments(assignments: AutoAssignmentRow[]): {
   const fiftyFourHoleAssignments: AutoAssignmentRow[] = [];
   const oneThreeAssignments: AutoAssignmentRow[] = [];
   const oneTwoAssignments: AutoAssignmentRow[] = [];
+  const twoAssignments: AutoAssignmentRow[] = [];
   const twoThreeAssignments: AutoAssignmentRow[] = [];
   const oneMakAssignments: AutoAssignmentRow[] = [];
   const weekendBandAssignments: AutoAssignmentRow[] = [];
@@ -3996,6 +4050,7 @@ function bucketizeAssignments(assignments: AutoAssignmentRow[]): {
     else if (row.kind === "fiftyFourHole") fiftyFourHoleAssignments.push(row);
     else if (row.kind === "oneThree") oneThreeAssignments.push(row);
     else if (row.kind === "oneTwo") oneTwoAssignments.push(row);
+    else if (row.kind === "two") twoAssignments.push(row);
     else if (row.kind === "twoThree") twoThreeAssignments.push(row);
     else if (row.kind === "oneMak") oneMakAssignments.push(row);
     else if (isWeekendBandRow(row)) weekendBandAssignments.push(row);
@@ -4006,6 +4061,7 @@ function bucketizeAssignments(assignments: AutoAssignmentRow[]): {
     fiftyFourHoleAssignments,
     oneThreeAssignments,
     oneTwoAssignments,
+    twoAssignments,
     twoThreeAssignments,
     oneMakAssignments,
     weekendBandAssignments,

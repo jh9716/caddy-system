@@ -362,10 +362,8 @@ section("토/일/공휴일 WEEKEND 우선, 평일은 없음");
       a.shift === "3부" &&
       String(a.reason || "").startsWith("WEEKDAY_BAND_PRIORITY")
   );
-  assert(
-    wdBand.map((a) => a.caddy.name).join(",") === "D10",
-    "평일 WEEKDAY 우선 band"
-  );
+  assert(wdBand.length === 0, "평일 WEEKDAY dedicated band 없음");
+  assert(wdThirdNames.includes("D10"), "평일 WEEKDAY는 3부 최종 배치에 포함");
   const wdRegularThird = wdResult.regularAssignments
     .filter(
       (a) =>
@@ -375,8 +373,8 @@ section("토/일/공휴일 WEEKEND 우선, 평일은 없음");
     )
     .map((a) => a.caddy.name);
   assert(
-    wdRegularThird[0] === "N11" && !wdRegularThird.includes("D10"),
-    "평일 regular THIRD는 WEEKDAY band 제외 후 N11부터"
+    wdRegularThird[0] === "D10" && wdRegularThird.includes("N11"),
+    "평일 WEEKDAY는 9~12조 회전에 포함 (12스타트 → 10조 D10 then 11조 N11)"
   );
 }
 
@@ -1300,6 +1298,43 @@ section("LIVE reflow가 thirdStartCaddyId를 유지");
     .filter((a) => a.shift === "3부" && a.caddy.caddyType === "THIRD")
     .map((a) => a.caddy.name);
   assert(afterThird[0] === "C", "캔슬 reflow 후에도 C부터 시작");
+}
+
+section("평일 주중반은 일반 3부반 순번 · 건너뛰기/중복 없음");
+{
+  const date = "2026-08-18";
+  const third = [
+    caddy(12, "12조", 1, { name: "N12" }),
+    caddy(91, "9조", 1, { name: "D9", thirdBandSubgroup: "WEEKDAY" }),
+    caddy(10, "10조", 1, { name: "N10" }),
+    caddy(11, "11조", 1, { name: "D11", thirdBandSubgroup: "WEEKDAY" }),
+    caddy(92, "12조", 2, { name: "W12", thirdBandSubgroup: "WEEKEND" }),
+  ];
+  const result = computeAutoAssignmentsV1({
+    date,
+    available: [...housePool(4), ...third],
+    reservations: [
+      ...res(date, "1부", 2, 6),
+      ...res(date, "2부", 2, 10),
+      ...res(date, "3부", 4, 14),
+    ],
+  });
+  const names = result.assignments
+    .filter((a) => a.shift === "3부" && a.caddy.caddyType === "THIRD")
+    .sort((a, b) => a.reservation.teeTime.localeCompare(b.reservation.teeTime))
+    .map((a) => a.caddy.name);
+  assert(
+    names.join(",") === "N12,D9,N10,D11",
+    "12스타트 회전: 12조 → 9조주중 → 10조 → 11조주중"
+  );
+  assert(!names.includes("W12"), "평일 WEEKEND 제외 유지");
+  assert(new Set(names).size === names.length, "순번 중복 없음");
+  assert(
+    result.assignments.every(
+      (a) => !String(a.reason || "").startsWith("WEEKDAY_BAND_PRIORITY")
+    ),
+    "WEEKDAY_BAND_PRIORITY 미사용"
+  );
 }
 
 section("UI: 3부 첫 캐디 선택 optional · 날짜 변경 시 초기화");

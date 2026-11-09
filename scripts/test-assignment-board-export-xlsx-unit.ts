@@ -325,6 +325,8 @@ section("export source 안전장치 (호출/의존 금지)");
   const lazyExcel = read("src/components/board/LazyBoardExcelExportButton.tsx");
   const lazyPng = read("src/components/board/LazyBoardImageExportMenu.tsx");
   assert(/import\("@\/lib\/assignmentBoardExportXlsx"\)/.test(lazyExcel), "엑셀 클릭 시 xlsx lib load");
+  assert(/엑셀 저장/.test(btn) && /엑셀 저장/.test(lazyExcel), "버튼 문구는 엑셀 저장");
+  assert(!/>엑셀</.test(btn) && !/>엑셀</.test(lazyExcel), "짧은 엑셀 라벨 제거");
   assert(/import\("@\/components\/board\/BoardImageExportMenu"\)/.test(lazyPng), "이미지 클릭 시 menu load");
   const boardPage = read("src/app/board/page.tsx");
   assert(/LazyBoardImageExportMenu/.test(boardPage), "board는 lazy 이미지 메뉴");
@@ -426,7 +428,7 @@ section("기존 이미지 export 회귀 문구");
   const menu = read("src/components/board/BoardImageExportMenu.tsx");
   assert(menu.includes("{busy ? \"준비 중…\" : \"이미지\"}"), "이미지 버튼 라벨");
   const page = read("src/app/manage/assignments/page.tsx");
-  assert(page.includes("직접편집"), "직접편집 토글 유지");
+  assert(page.includes("엑셀편집"), "엑셀편집 토글 유지");
   assert(page.includes("+ 추가팀"), "추가팀 유지");
 }
 

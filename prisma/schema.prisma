@@ -664,6 +664,7 @@ model OffRequestTeamFinalization {
 enum DailySpecialKind {
   ONE_MAK
   ONE_TWO
+  TWO
   TWO_THREE
   ONE_THREE
   FIFTY_FOUR
@@ -678,6 +679,10 @@ model DailySpecialDuty {
   caddy     Caddy            @relation(fields: [caddyId], references: [id])
   /// 1부터. 같은 date+kind 안에서 작을수록 먼저 배치
   sortOrder Int
+  /// 2부 단독(TWO)만 사용. 지정 코스. 다른 유형은 null.
+  course    String?
+  /// 2부 단독(TWO)만 사용. 지정 티타임(HH:MM). 다른 유형은 null.
+  teeTime   String?
   createdAt DateTime         @default(now())
   updatedAt DateTime         @updatedAt
 

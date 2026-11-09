@@ -36,6 +36,7 @@ import {
 import { resolveCourseCode, SHIFT1_PROTECTED_COUNT } from "@/lib/autoAssignEngine";
 import { COURSE_LABELS } from "@/lib/reservationParser";
 import { type Shift1StartOption } from "@/lib/assignmentDraft";
+import { twoOnlySlotLabel } from "@/lib/specialDutyTwo";
 
 export type { Shift1StartOption };
 
@@ -86,6 +87,7 @@ export const SpecialDutyPanel = memo(function SpecialDutyPanel({
   date,
   excludedRows,
   shift1Options = [],
+  shift2Options = [],
   hasDraft,
   onChanged,
   onLoaded,
@@ -96,6 +98,7 @@ export const SpecialDutyPanel = memo(function SpecialDutyPanel({
   date: string;
   excludedRows?: Array<{ id: number; excludedReasons?: string[] | null }>;
   shift1Options?: Shift1StartOption[];
+  shift2Options?: Shift1StartOption[];
   hasDraft?: boolean;
   onChanged?: () => void;
   onLoaded?: (groups: OpsSpecialDutyGroup[]) => void;
@@ -121,6 +124,7 @@ export const SpecialDutyPanel = memo(function SpecialDutyPanel({
   const [caddies, setCaddies] = useState<SearchCaddy[]>([]);
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<SpecialDutyPick[]>([]);
+  const [twoSlot, setTwoSlot] = useState("");
   const [pasteWarnings, setPasteWarnings] = useState<string | null>(null);
   const [deletedIdsByKind, setDeletedIdsByKind] = useState<
     Partial<Record<DailySpecialKind, number[]>>
@@ -335,9 +339,67 @@ export const SpecialDutyPanel = memo(function SpecialDutyPanel({
 
   async function onRegisterBatch() {
     if (!selected.length) return;
-    await postAdd({ caddyIds: selected.map((row) => row.caddyId) });
+    if (kind === "TWO") {
+      const [course, teeTime] = twoSlot ? twoSlot.split("@@") : ["", ""];
+      if (!course || !teeTime) {
+        setError("2부 단독은 코스와 예약 시간을 지정해야 합니다.");
+        return;
+      }
+      await postAdd({
+        caddyIds: selected.map((row) => row.caddyId),
+        slots: selected.map((row) => ({
+          caddyId: row.caddyId,
+          course: row.course || course,
+          teeTime: row.teeTime || teeTime,
+        })),
+      });
+    } else {
+      await postAdd({ caddyIds: selected.map((row) => row.caddyId) });
+    }
     setSelected([]);
     setPasteWarnings(null);
+  }
+
+  async function onUpdateTwoSlot(
+    item: SpecialDutyRecord & { id?: number },
+    value: string
+  ) {
+    if (!item.id) return;
+    const [course, teeTime] = value ? value.split("@@") : ["", ""];
+    if (!course || !teeTime) {
+      setError("2부 단독은 코스와 예약 시간을 지정해야 합니다.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/daily-special-duties", {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "updateSlot",
+          id: item.id,
+          course,
+          teeTime,
+        }),
+      });
+      const data = (await res.json()) as ListPayload;
+      if (!res.ok) {
+        setError(data.error || "2부 시간 저장 실패");
+        return;
+      }
+      applyPayload(data);
+      showToast("2부 지정 예약을 저장했습니다");
+      if (hasDraft) {
+        setDraftNotice(SPECIAL_DUTY_CHANGED_MESSAGE);
+        onChanged?.();
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "2부 시간 저장 실패");
+    } finally {
+      setBusy(false);
+    }
   }
 
   function markDirty(kind: DailySpecialKind) {
@@ -695,10 +757,15 @@ export const SpecialDutyPanel = memo(function SpecialDutyPanel({
                 </label>
               )}
             </div>
-          ) : activeKind === "FIFTY_FOUR" || activeKind === "ONE_TWO" || activeKind === "TWO_THREE" ? (
+          ) : activeKind === "FIFTY_FOUR" ||
+            activeKind === "ONE_TWO" ||
+            activeKind === "TWO_THREE" ||
+            activeKind === "TWO" ? (
             <div className="sd-rule">
               {activeKind === "FIFTY_FOUR"
                 ? "1부 세 번째 자리부터 자동 배치"
+                : activeKind === "TWO"
+                  ? "지정한 2부 코스·시간에만 배치합니다. 없으면 미배치·경고입니다."
                 : activeKind === "TWO_THREE"
                   ? "2부는 앞 2자리·찾근 다음, 3부는 3부반 원번 다음·찾근 앞"
                 : "1부는 앞 2자리·54홀 다음, 2부는 HOUSE 첫근무 종료 지점"}
@@ -715,6 +782,37 @@ export const SpecialDutyPanel = memo(function SpecialDutyPanel({
                     <span className="sd-pri">{item.sortOrder}</span>
                     <div className="sd-who">
                       <strong>{formatCaddyLabel(item)}</strong>
+                      {activeKind === "TWO" ? (
+                        <select
+                          className="sd-two-slot"
+                          value={
+                            item.course && item.teeTime
+                              ? `${item.course}@@${item.teeTime}`
+                              : ""
+                          }
+                          disabled={busy || !item.id}
+                          onChange={(e) =>
+                            void onUpdateTwoSlot(item, e.target.value)
+                          }
+                        >
+                          <option value="">
+                            {item.course && item.teeTime
+                              ? twoOnlySlotLabel({
+                                  course: item.course,
+                                  teeTime: item.teeTime,
+                                })
+                              : "지정 예약 선택"}
+                          </option>
+                          {shift2Options.map((opt) => (
+                            <option
+                              key={`${item.caddyId}-${opt.course}-${opt.teeTime}`}
+                              value={`${opt.course}@@${opt.teeTime}`}
+                            >
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      ) : null}
                       {item.conflicts?.length
                         ? item.conflicts.map((c, i) =>
                             c.code === "SOFT_OVERRIDE" ? (
@@ -794,6 +892,34 @@ export const SpecialDutyPanel = memo(function SpecialDutyPanel({
                 </button>
               ))}
             </div>
+            {kind === "TWO" ? (
+              <label className="sd-field">
+                <span>지정 예약 (코스·2부 시간)</span>
+                <select
+                  value={twoSlot}
+                  onChange={(e) => setTwoSlot(e.target.value)}
+                >
+                  <option value="">예약 선택…</option>
+                  {shift2Options.map((opt) => (
+                    <option
+                      key={`${opt.course}-${opt.teeTime}-${opt.label}`}
+                      value={`${opt.course}@@${opt.teeTime}`}
+                    >
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+                {shift2Options.length === 0 ? (
+                  <span className="sd-hint">
+                    작업본 또는 예약 Excel의 2부 시간이 필요합니다.
+                  </span>
+                ) : (
+                  <span className="sd-hint">
+                    선택한 코스·시간에만 배치합니다. 가장 가까운 시간으로 바꾸지 않습니다.
+                  </span>
+                )}
+              </label>
+            ) : null}
             <label className="sd-field">
               <span>이름 검색 · 연속 추가</span>
               <input
@@ -877,7 +1003,11 @@ export const SpecialDutyPanel = memo(function SpecialDutyPanel({
             <button
               type="button"
               className="sd-save"
-              disabled={busy || selected.length === 0}
+              disabled={
+                busy ||
+                selected.length === 0 ||
+                (kind === "TWO" && !twoSlot)
+              }
               onClick={() => void onRegisterBatch()}
             >
               {busy ? "저장 중…" : `${selected.length}명 한번에 등록`}
@@ -943,7 +1073,16 @@ export const SpecialDutyPanel = memo(function SpecialDutyPanel({
           color: #fff;
           border-color: #0f172a;
         }
-        .sd-kinds-modal { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+        .sd-kinds-modal { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .sd-two-slot {
+          display: block;
+          margin-top: 4px;
+          width: 100%;
+          min-height: 36px;
+          border-radius: 8px;
+          border: 1px solid #cbd5e1;
+          font-size: 0.78rem;
+        }
         .sd-body {
           margin-top: 8px;
           display: grid;

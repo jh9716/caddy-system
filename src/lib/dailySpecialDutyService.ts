@@ -19,6 +19,7 @@ import {
   type SpecialDutyConflict,
   type SpecialDutyRecord,
 } from "@/lib/dailySpecialDuty";
+import { parseTwoOnlySlot } from "@/lib/specialDutyTwo";
 import type { NameMatchCaddy } from "@/lib/dailyCaddyNameMatch";
 import {
   PROTECTED_TAIL_COUNT_DEFAULT,
@@ -57,6 +58,8 @@ function toRecord(row: {
   kind: string;
   caddyId: number;
   sortOrder: number;
+  course?: string | null;
+  teeTime?: string | null;
   caddy: {
     id: number;
     name: string;
@@ -79,6 +82,8 @@ function toRecord(row: {
     teamOrder: row.caddy.teamOrder,
     caddyType: row.caddy.caddyType,
     employmentStatus: row.caddy.employmentStatus,
+    course: row.course ?? null,
+    teeTime: row.teeTime ?? null,
   };
 }
 
@@ -122,6 +127,9 @@ export async function addDailySpecialDuties(input: {
   caddyIds?: number[];
   namesText?: string;
   caddies: NameMatchCaddy[];
+  slots?: Array<{ caddyId: number; course?: unknown; teeTime?: unknown }>;
+  course?: unknown;
+  teeTime?: unknown;
 }): Promise<{
   added: SpecialDutyRecord[];
   reviews: ReturnType<typeof resolvePastedSpecialNames>["reviews"];
@@ -129,6 +137,31 @@ export async function addDailySpecialDuties(input: {
 }> {
   const { start, end } = dateRange(input.date);
   const kind = input.kind;
+  const slotsByCaddy = new Map<number, { course: string; teeTime: string }>();
+  for (const slot of input.slots || []) {
+    const caddyId = Number(slot.caddyId);
+    if (!Number.isInteger(caddyId) || caddyId < 1) continue;
+    const parsed = parseTwoOnlySlot(slot);
+    if (!parsed.ok) {
+      throw new DailySpecialDutyError(parsed.message, "two_slot_invalid");
+    }
+    slotsByCaddy.set(caddyId, parsed);
+  }
+  if (kind === "TWO" && input.course != null && input.teeTime != null) {
+    const parsed = parseTwoOnlySlot({
+      course: input.course,
+      teeTime: input.teeTime,
+    });
+    if (!parsed.ok) {
+      throw new DailySpecialDutyError(parsed.message, "two_slot_invalid");
+    }
+    for (const id of input.caddyIds || []) {
+      const n = Number(id);
+      if (Number.isInteger(n) && n > 0 && !slotsByCaddy.has(n)) {
+        slotsByCaddy.set(n, parsed);
+      }
+    }
+  }
 
   const resolvedIds: Array<{ caddyId: number; name?: string }> = [];
   const seen = new Set<number>();
@@ -161,8 +194,13 @@ export async function addDailySpecialDuties(input: {
     .map((row) => row.sortOrder);
   let cursor = nextSortOrder(kindOrders);
   const duplicates: Array<{ caddyId: number; name?: string }> = [];
-  const toCreate: Array<{ caddyId: number; sortOrder: number; name?: string }> =
-    [];
+  const toCreate: Array<{
+    caddyId: number;
+    sortOrder: number;
+    name?: string;
+    course?: string | null;
+    teeTime?: string | null;
+  }> = [];
 
   for (const item of resolvedIds) {
     if (hasDuplicateKind(existing, kind, item.caddyId)) {
@@ -170,7 +208,20 @@ export async function addDailySpecialDuties(input: {
       continue;
     }
     existing.push({ kind, caddyId: item.caddyId, sortOrder: cursor });
-    toCreate.push({ ...item, sortOrder: cursor });
+    let course: string | null = null;
+    let teeTime: string | null = null;
+    if (kind === "TWO") {
+      const slot = slotsByCaddy.get(item.caddyId);
+      if (!slot) {
+        throw new DailySpecialDutyError(
+          "2부 단독은 코스와 예약 시간을 지정해야 합니다.",
+          "two_slot_required"
+        );
+      }
+      course = slot.course;
+      teeTime = slot.teeTime;
+    }
+    toCreate.push({ ...item, sortOrder: cursor, course, teeTime });
     cursor += 1;
   }
 
@@ -208,6 +259,8 @@ export async function addDailySpecialDuties(input: {
           kind,
           caddyId: row.caddyId,
           sortOrder: row.sortOrder,
+          course: row.course ?? null,
+          teeTime: row.teeTime ?? null,
         },
       })
     )
@@ -524,6 +577,39 @@ export async function upsertDailySpecialPlacement(input: {
     protectedTailCount: parsed.value,
     source: "row",
   };
+}
+
+export async function updateDailySpecialDutySlot(input: {
+  id: number;
+  course?: unknown;
+  teeTime?: unknown;
+}): Promise<{ date: string; record: SpecialDutyRecord }> {
+  const row = await prisma.dailySpecialDuty.findUnique({
+    where: { id: input.id },
+    include: { caddy: { select: caddySelect } },
+  });
+  if (!row) {
+    throw new DailySpecialDutyError("항목을 찾지 못했습니다.", "not_found", 404);
+  }
+  if (!isDailySpecialKind(row.kind) || row.kind !== "TWO") {
+    throw new DailySpecialDutyError(
+      "코스·시간은 2부 단독만 수정합니다.",
+      "two_slot_kind_invalid"
+    );
+  }
+  const parsed = parseTwoOnlySlot({
+    course: input.course,
+    teeTime: input.teeTime,
+  });
+  if (!parsed.ok) {
+    throw new DailySpecialDutyError(parsed.message, "two_slot_invalid");
+  }
+  const updated = await prisma.dailySpecialDuty.update({
+    where: { id: row.id },
+    data: { course: parsed.course, teeTime: parsed.teeTime },
+    include: { caddy: { select: caddySelect } },
+  });
+  return { date: toYmd(updated.date), record: toRecord(updated) };
 }
 
 export async function loadEngineSpecialBundlesForDate(
