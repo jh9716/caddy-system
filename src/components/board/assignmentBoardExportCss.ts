@@ -8,6 +8,8 @@ export const assignmentBoardExportCss = `
   color: #1c160c;
   font-family: "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
   padding: 20px 16px 16px;
+  --bx-line: #b6a57a;
+  --bx-cols: 68px repeat(4, minmax(0, 1fr));
 }
 .bx-head {
   display: flex;
@@ -68,19 +70,28 @@ export const assignmentBoardExportCss = `
 }
 .bx-board-head {
   display: grid;
-  grid-template-columns: 68px repeat(4, minmax(0, 1fr));
+  grid-template-columns: var(--bx-cols);
+  align-items: stretch;
+  width: 100%;
+  box-sizing: border-box;
   background: #3d3420;
   color: #f3e6c0;
   border-radius: 8px 8px 0 0;
   overflow: hidden;
 }
 .bx-board-head > div {
-  padding: 9px 1px;
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 9px 2px;
   text-align: center;
   font-size: 12px;
   font-weight: 800;
   letter-spacing: -0.02em;
+  border-right: 1.5px solid #5c4e2e;
+  overflow-wrap: anywhere;
+  word-break: keep-all;
 }
+.bx-board-head > div:last-child { border-right: 0; }
 .bx-board-head .closed {
   color: #b8a97a;
   text-decoration: line-through;
@@ -91,13 +102,24 @@ export const assignmentBoardExportCss = `
   border-radius: 0 0 8px 8px;
   overflow: hidden;
   background: #fffdf7;
+  width: 100%;
+  box-sizing: border-box;
 }
 .bx-row {
   display: grid;
-  grid-template-columns: 68px repeat(4, minmax(0, 1fr));
+  grid-template-columns: var(--bx-cols);
+  align-items: stretch;
+  width: 100%;
+  box-sizing: border-box;
   border-top: 1.5px solid #b6a57a;
 }
 .bx-row:first-child { border-top: 0; }
+.bx-time,
+.bx-cell {
+  box-sizing: border-box;
+  min-width: 0;
+  align-self: stretch;
+}
 .bx-time {
   display: flex;
   align-items: center;
@@ -108,27 +130,25 @@ export const assignmentBoardExportCss = `
   font-variant-numeric: tabular-nums;
   color: #1c160c;
   background: #efe4c8;
-  border-right: 1.5px solid #b6a57a;
-  min-height: 46px;
+  border-right: 1.5px solid var(--bx-line);
+  min-height: 48px;
   padding: 6px 2px;
 }
 .bx-cell {
-  min-width: 0;
-  min-height: 46px;
-  padding: 5px 3px;
-  border-right: 1.5px solid #c9bb93;
+  min-height: 48px;
+  padding: 5px 4px;
+  border-right: 1.5px solid var(--bx-line);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 2px;
   background: #fffdf7;
+  text-align: center;
 }
 .bx-row > .bx-cell:last-child { border-right: 0; }
 .bx-cell.empty {
-  color: #c9bb93;
-  font-size: 16px;
-  font-weight: 600;
+  background: #fffdf7;
 }
 .bx-cell.unassigned {
   color: #8a5a12;
@@ -176,18 +196,21 @@ export const assignmentBoardExportCss = `
   font-size: 14px;
   color: #1c160c;
   max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  word-break: keep-all;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.2;
 }
 .bx-affil {
   font-size: 10px;
   font-weight: 700;
   color: #6b5a32;
   max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  word-break: keep-all;
+  white-space: normal;
+  text-align: center;
 }
 .bx-marks {
   display: inline-flex;

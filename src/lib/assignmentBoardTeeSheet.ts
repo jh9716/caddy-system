@@ -14,8 +14,8 @@ import {
   type ShiftPart,
 } from "@/lib/reservationParser";
 
-/** 현장 엑셀 빈 칸 표시 */
-export const BOARD_EMPTY_CELL_MARK = "-";
+/** 예약 없는 칸 표시. 화면·이미지·엑셀 모두 빈 문자열. kind empty는 유지. */
+export const BOARD_EMPTY_CELL_MARK = "";
 /** 예약은 있으나 캐디 미배정 */
 export const BOARD_UNASSIGNED_CELL_LABEL = "미배치";
 

@@ -94,7 +94,6 @@ import {
   type ShiftPart,
 } from "@/lib/reservationParser";
 import {
-  BOARD_EMPTY_CELL_MARK,
   BOARD_UNASSIGNED_CELL_LABEL,
   cloneCourseTeeSheet,
 } from "@/lib/assignmentBoardTeeSheet";
@@ -4771,6 +4770,7 @@ export default function ManageAssignmentsOpsPage() {
                                       key={code}
                                       className="bc-cell unassigned"
                                       role="cell"
+                                      data-board-cell="unassigned"
                                       aria-label={`${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} ${BOARD_UNASSIGNED_CELL_LABEL}`}
                                     >
                                       <span className="bc-unassigned">
@@ -4791,31 +4791,36 @@ export default function ManageAssignmentsOpsPage() {
                                     }
                                   );
                                   return (
-                                    <button
+                                    <div
                                       key={code}
-                                      type="button"
                                       className={`bc-cell empty ${
                                         moveDest ? "move-dest" : "addable"
                                       }${pendingDest ? " pending" : ""}`}
                                       role="cell"
-                                      aria-busy={pendingDest}
-                                      aria-label={
-                                        pendingDest
-                                          ? `${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} ${TEAM_MOVING_LABEL}`
-                                          : moveDest
-                                          ? `${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} 이동 목적지 선택`
-                                          : `${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} 추가팀 등록`
-                                      }
-                                      onClick={() =>
-                                        onEmptyBoardCellClick(code, tr.teeTime)
-                                      }
+                                      data-board-cell="empty"
                                     >
-                                      {pendingDest
-                                        ? TEAM_MOVING_LABEL
-                                        : moveDest
-                                          ? "이동"
-                                          : BOARD_EMPTY_CELL_MARK}
-                                    </button>
+                                      <button
+                                        type="button"
+                                        className="bc-empty-hit"
+                                        aria-busy={pendingDest}
+                                        aria-label={
+                                          pendingDest
+                                            ? `${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} ${TEAM_MOVING_LABEL}`
+                                            : moveDest
+                                            ? `${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} 이동 목적지 선택`
+                                            : `${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} 추가팀 등록`
+                                        }
+                                        onClick={() =>
+                                          onEmptyBoardCellClick(code, tr.teeTime)
+                                        }
+                                      >
+                                        {pendingDest
+                                          ? TEAM_MOVING_LABEL
+                                          : moveDest
+                                            ? "이동"
+                                            : null}
+                                      </button>
+                                    </div>
                                   );
                                 }
                                 const primary = cell.rows[0];
@@ -5778,6 +5783,11 @@ const opsCss = `
     position: relative;
     /* ops-root container-type보다 가까운 containing block — 표가 끝나면 unstick */
     transform: translateY(0);
+    --ops-board-line: #cbd5e1;
+    --ops-board-time-col: 52px;
+    --ops-board-cols: var(--ops-board-time-col) repeat(4, minmax(0, 1fr));
+    min-width: 0;
+    max-width: 100%;
   }
   .ops-tabs {
     display: grid;
@@ -6348,7 +6358,9 @@ const opsCss = `
   }
   .ops-board-head-bar {
     width: 100%;
-    border: 1px solid #e2e8f0;
+    max-width: 100%;
+    box-sizing: border-box;
+    border: 1px solid var(--ops-board-line);
     border-bottom: 0;
     border-radius: 8px 8px 0 0;
     overflow: hidden;
@@ -6359,6 +6371,8 @@ const opsCss = `
   }
   .ops-board-wrap {
     width: 100%;
+    max-width: 100%;
+    min-width: 0;
     /* overflow-x:hidden 은 sticky 스크롤 컨테인먼트를 만들어 모바일에서 깨질 수 있음 */
     overflow-x: clip;
     overflow-y: visible;
@@ -6370,12 +6384,15 @@ const opsCss = `
   }
   .ops-board {
     width: 100%;
+    max-width: 100%;
+    min-width: 0;
     display: grid;
     gap: 0;
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--ops-board-line);
     border-radius: 8px;
     overflow: hidden;
     background: #fff;
+    box-sizing: border-box;
   }
   .ops-board-wrap.has-sticky-head .ops-board {
     border-top: 0;
@@ -6384,8 +6401,12 @@ const opsCss = `
   .ops-board-head,
   .ops-board-row {
     display: grid;
-    grid-template-columns: 52px repeat(4, minmax(0, 1fr));
+    grid-template-columns: var(--ops-board-cols);
+    align-items: stretch;
     width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
   }
   .ops-board-head {
     position: relative;
@@ -6393,16 +6414,29 @@ const opsCss = `
     color: #fff;
   }
   .ops-board-head > div {
+    box-sizing: border-box;
+    min-width: 0;
     padding: 6px 2px;
     text-align: center;
     font-size: 0.72rem;
     font-weight: 800;
     letter-spacing: -0.02em;
+    border-right: 1px solid #334155;
+    overflow-wrap: anywhere;
+    word-break: keep-all;
   }
+  .ops-board-head > div:last-child { border-right: 0; }
   .ops-board-head .bh-time { text-align: center; }
   .ops-board-head .bh-course.closed { color: #94a3b8; text-decoration: line-through; }
   .ops-board-block + .ops-board-block {
-    border-top: 1px solid #e2e8f0;
+    border-top: 1px solid var(--ops-board-line);
+  }
+  .ops-board-row > .bc-time,
+  .ops-board-row > .bc-cell {
+    box-sizing: border-box;
+    min-width: 0;
+    align-self: stretch;
+    height: auto;
   }
   .ops-board-row > .bc-time {
     display: flex;
@@ -6414,28 +6448,50 @@ const opsCss = `
     white-space: nowrap;
     color: #334155;
     background: #f8fafc;
-    border-right: 1px solid #e2e8f0;
+    border-right: 1px solid var(--ops-board-line);
     padding: 4px 1px;
-    min-height: 36px;
+    min-height: 40px;
   }
   .bc-cell {
     min-width: 0;
-    min-height: 36px;
+    min-height: 40px;
     padding: 4px 2px;
-    border-right: 1px solid #f1f5f9;
+    border-right: 1px solid var(--ops-board-line);
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 1px;
+    gap: 2px;
     font-size: 0.72rem;
-    line-height: 1.15;
+    line-height: 1.2;
     background: #fff;
   }
   .ops-board-row > .bc-cell:last-child { border-right: 0; }
   .bc-cell.empty {
-    color: #cbd5e1;
-    font-weight: 600;
+    color: inherit;
+    padding: 0;
+    background: #fff;
+  }
+  .bc-empty-hit {
+    appearance: none;
+    -webkit-appearance: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-height: 40px;
+    height: 100%;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+    padding: 4px 2px;
+    text-align: center;
+    overflow-wrap: anywhere;
+    word-break: keep-all;
   }
   .bc-cell.unassigned {
     color: #b45309;
@@ -6444,41 +6500,39 @@ const opsCss = `
     font-size: 0.68rem;
   }
   .bc-unassigned { letter-spacing: -0.02em; }
-  button.bc-cell.empty.addable {
+  .bc-cell.empty.addable .bc-empty-hit {
     cursor: pointer;
-    color: #94a3b8;
   }
-  button.bc-cell.empty.addable:hover,
-  button.bc-cell.empty.addable:focus-visible {
+  .bc-cell.empty.addable .bc-empty-hit:hover,
+  .bc-cell.empty.addable .bc-empty-hit:focus-visible {
     background: #f8fafc;
     color: #0f172a;
     outline: 2px solid #0f172a;
     outline-offset: -2px;
   }
-  button.bc-cell.empty.move-dest {
+  .bc-cell.empty.move-dest .bc-empty-hit {
     cursor: pointer;
     color: #9a3412;
     font-size: 0.62rem;
     font-weight: 700;
     min-height: 72px;
-    width: 100%;
     -webkit-tap-highlight-color: transparent;
   }
-  button.bc-cell.empty.move-dest:hover,
-  button.bc-cell.empty.move-dest:focus-visible {
+  .bc-cell.empty.move-dest .bc-empty-hit:hover,
+  .bc-cell.empty.move-dest .bc-empty-hit:focus-visible {
     background: #fff7ed;
     color: #9a3412;
     outline: 2px solid #ea580c;
     outline-offset: -2px;
   }
-  button.bc-cell.empty.move-dest.pending,
-  button.bc-cell.empty.move-dest:disabled {
+  .bc-cell.empty.move-dest.pending .bc-empty-hit,
+  .bc-cell.empty.move-dest .bc-empty-hit:disabled {
     cursor: wait;
     color: #c2410c;
     background: #fff7ed;
   }
   @media (max-width: 640px) {
-    button.bc-cell.empty.move-dest {
+    .bc-cell.empty.move-dest .bc-empty-hit {
       min-height: 88px;
     }
   }
@@ -6554,17 +6608,10 @@ const opsCss = `
     font-size: 0.62rem;
     font-weight: 800;
   }
-  button.bc-cell {
-    border: 0;
-    cursor: pointer;
-    font: inherit;
-    color: inherit;
-    width: 100%;
-  }
   .bc-cell.assigned {
     background: #fff;
-    gap: 4px;
-    padding: 3px 1px;
+    gap: 3px;
+    padding: 4px 2px;
   }
   .bc-cell.assigned.special {
     background: #fffbeb;
@@ -6653,37 +6700,40 @@ const opsCss = `
       font-size: 0.5rem;
       line-height: 1.1;
     }
-    .bc-marks {
-      max-height: 14px;
-      overflow: hidden;
-    }
     .lock-chip {
       margin-top: 1px;
     }
   }
   .bc-team,
   .bc-caddy {
+    appearance: none;
+    -webkit-appearance: none;
     border: 0;
     background: transparent;
     font: inherit;
     color: inherit;
     cursor: pointer;
     width: 100%;
+    min-width: 0;
     padding: 1px 2px;
     display: flex;
     flex-direction: column;
     align-items: center;
+    justify-content: center;
     gap: 1px;
     min-height: 22px;
+    text-align: center;
   }
   .bc-team-name {
     font-size: 0.58rem;
     font-weight: 700;
     color: #475569;
     max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
+    word-break: keep-all;
+    white-space: normal;
+    text-align: center;
+    line-height: 1.2;
   }
   .bc-caddy .bc-name,
   .bc-caddy .bc-affil {
@@ -6700,25 +6750,29 @@ const opsCss = `
     font-weight: 800;
     font-size: 0.78rem;
     max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
+    word-break: keep-all;
+    white-space: normal;
+    text-align: center;
     color: #0f172a;
+    line-height: 1.2;
   }
   .bc-affil {
     font-size: 0.55rem;
     font-weight: 700;
     color: #64748b;
     max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    line-height: 1.1;
+    overflow-wrap: anywhere;
+    word-break: keep-all;
+    white-space: normal;
+    text-align: center;
+    line-height: 1.15;
   }
   .bc-marks {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    flex-wrap: wrap;
     gap: 2px;
     max-width: 100%;
   }

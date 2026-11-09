@@ -20,6 +20,8 @@ import type {
 } from "../src/lib/autoAssignEngine";
 import { REASON } from "../src/lib/autoAssignEngine";
 import {
+  BOARD_EMPTY_CELL_MARK,
+  BOARD_UNASSIGNED_CELL_LABEL,
   fillInteriorTeeTimes,
   inferCourseTeeIntervalMinutes,
 } from "../src/lib/assignmentBoardTeeSheet";
@@ -329,7 +331,9 @@ section("16:33 미배정 예약은 스크롤이 아니라 행으로 표시");
   assert(JSON.stringify(assigned.map((r) => r.caddy.id)) === fingerprint, "엔진 배정 불변");
   assert(!!board.find((tr) => tr.teeTime === "16:33"), "16:33 행 존재");
   assert(board.find((tr) => tr.teeTime === "16:33")!.cells.VERTHILL.kind === "unassigned", "16:33 베르힐 미배정");
-  assert(board.find((tr) => tr.teeTime === "16:33")!.cells.SKY.kind === "empty", "16:33 스카이는 빈칸");
+  assert(board.find((tr) => tr.teeTime === "16:33")!.cells.SKY.kind === "empty", "16:33 스카이는 empty 유지");
+  assert(BOARD_EMPTY_CELL_MARK === "", "예약 없는 칸 표시는 빈 문자열");
+  assert(BOARD_UNASSIGNED_CELL_LABEL === "미배치", "미배정 라벨 유지");
   assert(!!board.find((tr) => tr.teeTime === "17:01"), "7분 관측이면 17:01 빈 행 유지");
   assert(board.find((tr) => tr.teeTime === "17:01")!.cells.OCEAN.kind === "empty", "17:01 empty");
   assert(countBoardAssignments(board) === assigned.length, "빈 행이 배정 수를 늘리지 않음");
@@ -355,7 +359,7 @@ section("코스별 다른 간격 + 티시트 선행 공석");
   const times = board.map((tr) => tr.teeTime).join(",");
   assert(times === "16:33,16:40,16:47,16:48", `정렬된 연합 축 ${times}`);
   assert(board[0].cells.VERTHILL.kind === "empty", "티시트 16:33 공석");
-  assert(board[0].cells.SKY.kind === "empty", "16:33 스카이 '-'");
+  assert(board[0].cells.SKY.kind === "empty", "16:33 스카이는 empty");
   assert(board.find((tr) => tr.teeTime === "16:47")!.cells.VERTHILL.kind === "empty", "베르힐 7분 공석");
   assert(board.find((tr) => tr.teeTime === "16:48")!.cells.SKY.kind === "assigned", "스카이 8분 배정");
   assert(countBoardAssignments(board) === 2, "티시트 공석이 배정 수를 늘리지 않음");

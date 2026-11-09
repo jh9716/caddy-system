@@ -12,7 +12,10 @@ import {
   BOARD_EXPORT_SHIFTS,
   buildBoardExportSlice,
 } from "../src/lib/assignmentBoardExport";
-import { BOARD_EMPTY_CELL_MARK } from "../src/lib/assignmentBoardTeeSheet";
+import {
+  BOARD_EMPTY_CELL_MARK,
+  BOARD_UNASSIGNED_CELL_LABEL,
+} from "../src/lib/assignmentBoardTeeSheet";
 import {
   BOARD_XLSX_TABLE_HEADERS,
   BOARD_XLSX_TITLE,
@@ -459,12 +462,13 @@ section("3부 빈 티타임 '-' / 미배정 구분 / 배정 수 불변");
   assert(slice.rows.some((r) => r.teeTime === "17:01"), "xlsx 축에 17:01 공석");
   const bytes = await writeBoardExportXlsxBytes(d);
   const sheets = await parseBoardExportWorkbook(bytes);
-  assert(cellAt(sheets, "3부", "16:33", "VERTHILL") === "", "미배정은 빈 문자열");
-  assert(cellAt(sheets, "3부", "16:33", "SKY") === BOARD_EMPTY_CELL_MARK, "예약 없는 칸 '-'");
-  assert(cellAt(sheets, "3부", "17:01", "VERTHILL") === BOARD_EMPTY_CELL_MARK, "17:01 '-'");
+  assert(cellAt(sheets, "3부", "16:33", "VERTHILL") === BOARD_UNASSIGNED_CELL_LABEL, "미배정은 미배치");
+  assert(cellAt(sheets, "3부", "16:33", "SKY") === BOARD_EMPTY_CELL_MARK, "예약 없는 칸 빈 문자열");
+  assert(cellAt(sheets, "3부", "17:01", "VERTHILL") === BOARD_EMPTY_CELL_MARK, "17:01 빈칸");
+  assert(BOARD_EMPTY_CELL_MARK === "", "empty 표시 상수 빈 문자열");
   assert(cellAt(sheets, "3부", "16:40", "VERTHILL") === "김배정", "배정 이름");
   const counts = countAssignedExcelCells(sheets);
-  assert(counts.byShift["3부"] === 4, "'-' 가 배정 카운트에 안 잡힘");
+  assert(counts.byShift["3부"] === 4, "빈칸·미배치가 배정 카운트에 안 잡힘");
   assert(d.unassignedReservations.length === 1, "미배정 건수 불변");
 }
 }
@@ -478,7 +482,10 @@ section("기존 이미지 export 회귀 문구");
   assert(page.includes("+ 추가팀"), "추가팀 유지");
   assert(page.includes("unassignedReservations: draft?.unassignedReservations"), "미배정 overlay를 엑셀편집 ON에만 가두지 않음");
   assert(page.includes("teeSheet: draft?.teeSheet"), "운영 티시트 사용");
-  assert(page.includes("BOARD_EMPTY_CELL_MARK"), "빈칸 '-'");
+  assert(page.includes('data-board-cell="empty"'), "empty 칸 마커");
+  assert(page.includes("onEmptyBoardCellClick"), "빈칸 클릭 유지");
+  assert(page.includes("bc-empty-hit"), "빈칸 히트 영역");
+  assert(!page.includes(": BOARD_EMPTY_CELL_MARK}"), "빈칸 '-' 표시 제거");
   const overlay = read("src/lib/assignmentBoardCellEdit.ts");
   assert(overlay.includes("LOCK"), "LOCK 보호 유지");
 }

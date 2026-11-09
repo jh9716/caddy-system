@@ -55,6 +55,11 @@ section("내부 이중 스크롤 금지 / 기존 기능 유지");
   assert(page.includes("data-cell-edit-toggle"), "엑셀편집 토글 유지");
   assert(page.includes("ops-spares-all"), "스페어 현황 유지");
   assert(page.includes("data-ops-publish"), "운영 반영 구간");
+  assert(page.includes("bc-empty-hit"), "빈칸 클릭 유지");
+  assert(page.includes("onEmptyBoardCellClick"), "빈칸 클릭 핸들러 유지");
+  assert(page.includes('data-board-cell="empty"'), "empty 칸 구분");
+  assert(page.includes('data-board-cell="unassigned"'), "unassigned 칸 구분");
+  assert(/--ops-board-cols/.test(page), "헤더·행 동일 열 템플릿");
   assert(src("src/lib/autoAssignEngine.ts").length === engineFingerprint, "엔진 파일 불변");
 }
 

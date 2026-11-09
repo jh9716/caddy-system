@@ -6,10 +6,7 @@ import {
 import { boardAssignmentMarks } from "@/lib/assignmentBoardView";
 import type { AutoAssignmentRow } from "@/lib/autoAssignEngine";
 import { caddyAffiliation } from "@/lib/caddyDisplay";
-import {
-  BOARD_EMPTY_CELL_MARK,
-  BOARD_UNASSIGNED_CELL_LABEL,
-} from "@/lib/assignmentBoardTeeSheet";
+import { BOARD_UNASSIGNED_CELL_LABEL } from "@/lib/assignmentBoardTeeSheet";
 import { COURSE_CODES, COURSE_LABELS } from "@/lib/reservationParser";
 import { assignmentBoardExportCss } from "@/components/board/assignmentBoardExportCss";
 import { supportBoardBadgeLabels } from "@/lib/dailySpecialSupport";
@@ -119,16 +116,22 @@ export function AssignmentBoardExportView({
                 }
                 if (cell.kind === "unassigned") {
                   return (
-                    <div key={code} className="bx-cell unassigned">
+                    <div
+                      key={code}
+                      className="bx-cell unassigned"
+                      data-board-cell="unassigned"
+                    >
                       {BOARD_UNASSIGNED_CELL_LABEL}
                     </div>
                   );
                 }
                 if (cell.kind === "empty") {
                   return (
-                    <div key={code} className="bx-cell empty">
-                      {BOARD_EMPTY_CELL_MARK}
-                    </div>
+                    <div
+                      key={code}
+                      className="bx-cell empty"
+                      data-board-cell="empty"
+                    />
                   );
                 }
                 const special = cell.rows.some((r) => r.kind !== "regular");

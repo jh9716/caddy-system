@@ -182,6 +182,36 @@ section("빈 팀/닫힘 표시 유지");
   assert(slice.rows[0].cells.OCEAN.kind === "closed", "닫힌 코스 closed");
   assert(html.includes("닫힘"), "export에 닫힘");
   assert(html.includes('class="bx-cell empty"'), "export에 빈칸 셀");
+  assert(html.includes('data-board-cell="empty"'), "empty 데이터 마커");
+  assert(!/class="bx-cell empty"[^>]*>\s*-/.test(html), "이미지 빈칸에 '-' 없음");
+}
+
+section("미배정은 미배치, empty는 빈칸");
+{
+  const d = draftOf([row("3부", "16:40", "VERTHILL", "V1", { caddyName: "김배정" })]);
+  d.unassignedReservations = [
+    {
+      reservation: {
+        id: "u1633",
+        date: "2026-09-07",
+        course: "VERTHILL",
+        shift: "3부",
+        teeTime: "16:33",
+        teamName: "미배정팀",
+        rawRowIndex: 1,
+      },
+      reason: "OPEN",
+    },
+  ];
+  const slice = buildBoardExportSlice(d, "3부");
+  const html = renderToStaticMarkup(createElement(AssignmentBoardExportView, { slice }));
+  assert(slice.rows.some((r) => r.teeTime === "16:33" && r.cells.VERTHILL.kind === "unassigned"), "kind unassigned 유지");
+  assert(slice.rows.some((r) => r.teeTime === "16:33" && r.cells.SKY.kind === "empty"), "kind empty 유지");
+  assert(html.includes("미배치"), "이미지에 미배치");
+  assert(html.includes('data-board-cell="unassigned"'), "unassigned 마커");
+  const emptyBits = html.split('data-board-cell="empty"');
+  assert(emptyBits.length > 1, "empty 셀 존재");
+  assert(!emptyBits.slice(1).some((part) => /^[^>]*>\s*-/.test(part)), "empty 셀 텍스트가 '-'가 아님");
 }
 
 section("관리자 UI가 export DOM에서 제외");
