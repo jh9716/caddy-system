@@ -156,6 +156,9 @@ section("UI 재사용 · 엑셀편집");
 {
   const page = fs.readFileSync("src/app/manage/assignments/page.tsx", "utf8");
   assert(/엑셀편집/.test(page), "엑셀편집 토글");
+  assert(/엑셀 저장/.test(fs.readFileSync("src/components/board/LazyBoardExcelExportButton.tsx", "utf8")), "내보내기는 엑셀 저장");
+  assert(/vh-bottom-nav-height/.test(page), "모바일 하단 탭 여백");
+  assert(/directEditRejectReason/.test(page), "엑셀편집 ON 팀/캐디 공통 보호");
   assert(/undoWorkbookEdit/.test(page), "취소");
   assert(/applyDirectCaddyEdit/.test(page), "V3 직접편집 재사용");
   assert(/overlayUnassignedVacancies/.test(page), "빈 슬롯 overlay 재사용");

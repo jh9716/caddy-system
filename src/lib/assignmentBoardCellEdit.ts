@@ -39,6 +39,9 @@ import {
 export const DIRECT_EDIT_PROTECTED_MESSAGE =
   "54홀·1·2·2·3·1·3·고정 등 특수 연결 배치는 직접편집할 수 없습니다. 기존 메뉴를 사용하세요.";
 
+export const DIRECT_EDIT_LOCKED_MESSAGE =
+  "LOCK된 배치는 직접편집할 수 없습니다. LOCK을 해제한 뒤 수정하세요.";
+
 export const DIRECT_EDIT_SHIFT_BLOCKED_MESSAGE =
   "LOCK/특수 배치를 밀어야 해서 이 위치에 미배치 캐디를 넣을 수 없습니다.";
 
@@ -143,6 +146,29 @@ export function isDirectEditProtected(row: AutoAssignmentRow): boolean {
   return false;
 }
 
+export function isDirectEditLocked(row: AutoAssignmentRow): boolean {
+  if (isDirectEditVacant(row)) return false;
+  return isPlacementLocked(row);
+}
+
+export function directEditRejectReason(
+  row: AutoAssignmentRow
+): { code: string; message: string } | null {
+  if (isDirectEditProtected(row)) {
+    return {
+      code: "DIRECT_EDIT_PROTECTED",
+      message: DIRECT_EDIT_PROTECTED_MESSAGE,
+    };
+  }
+  if (isDirectEditLocked(row)) {
+    return {
+      code: "DIRECT_EDIT_LOCKED",
+      message: DIRECT_EDIT_LOCKED_MESSAGE,
+    };
+  }
+  return null;
+}
+
 export function isDirectEditShiftable(row: AutoAssignmentRow): boolean {
   if (isDirectEditProtected(row)) return false;
   if (isDirectEditVacant(row)) return false;
@@ -152,7 +178,7 @@ export function isDirectEditShiftable(row: AutoAssignmentRow): boolean {
 }
 
 export function isDirectEditTargetAllowed(row: AutoAssignmentRow): boolean {
-  if (isDirectEditProtected(row)) return false;
+  if (directEditRejectReason(row)) return false;
   if (isDirectEditVacant(row)) return true;
   return row.kind === "regular";
 }
@@ -775,12 +801,15 @@ export function applyDirectCaddyEdit(
     };
   }
 
-  if (assigned && isDirectEditProtected(assigned)) {
-    return {
-      ok: false,
-      code: "DIRECT_EDIT_PROTECTED",
-      message: DIRECT_EDIT_PROTECTED_MESSAGE,
-    };
+  if (assigned) {
+    const blocked = directEditRejectReason(assigned);
+    if (blocked) {
+      return {
+        ok: false,
+        code: blocked.code,
+        message: blocked.message,
+      };
+    }
   }
 
   const caddy = findCaddyInDraft(draft, caddyId);
@@ -815,11 +844,12 @@ export function applyDirectCaddyEdit(
   const peer = sameShiftAssignedRow(draft, shift, caddy.id, resKey);
 
   if (peer) {
-    if (isDirectEditProtected(peer)) {
+    const peerBlocked = directEditRejectReason(peer);
+    if (peerBlocked) {
       return {
         ok: false,
-        code: "DIRECT_EDIT_PROTECTED",
-        message: DIRECT_EDIT_PROTECTED_MESSAGE,
+        code: peerBlocked.code,
+        message: peerBlocked.message,
       };
     }
     if (unassigned) {
@@ -882,11 +912,12 @@ export function applyDirectCaddyVacate(
       message: DIRECT_EDIT_NOT_FOUND_MESSAGE,
     };
   }
-  if (isDirectEditProtected(assigned)) {
+  const blocked = directEditRejectReason(assigned);
+  if (blocked) {
     return {
       ok: false,
-      code: "DIRECT_EDIT_PROTECTED",
-      message: DIRECT_EDIT_PROTECTED_MESSAGE,
+      code: blocked.code,
+      message: blocked.message,
     };
   }
   if (isDirectEditVacant(assigned)) {

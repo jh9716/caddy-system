@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   groupDirectEditCandidates,
+  isDirectEditLocked,
   listDirectEditCandidates,
   type DirectEditCandidate,
 } from "@/lib/assignmentBoardCellEdit";
@@ -100,7 +101,7 @@ export function CaddyCellEditSheet({
           items={groups.unassigned}
           onSelect={onSelect}
         />
-        {onVacate && !vacant ? (
+        {onVacate && !vacant && !isDirectEditLocked(row) ? (
           <button type="button" className="btn ghost de-duty" onClick={onVacate}>
             빈 칸으로
           </button>

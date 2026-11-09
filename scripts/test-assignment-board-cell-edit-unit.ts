@@ -7,8 +7,9 @@ import path from "node:path";
 import {
   applyDirectCaddyEdit,
   applyDirectCaddyVacate,
+  DIRECT_EDIT_LOCKED_MESSAGE,
   DIRECT_EDIT_PROTECTED_MESSAGE,
-  DIRECT_EDIT_SHIFT_BLOCKED_MESSAGE,
+  isDirectEditLocked,
   isDirectEditProtected,
   listDirectEditCandidates,
   overlayUnassignedVacancies,
@@ -517,11 +518,29 @@ console.log("== 6. linked 54/special/fixed 차단 ==");
   assert(!insertIntoLock.ok, "LOCK 셀 spare 삽입 차단");
   if (!insertIntoLock.ok) {
     assert(
-      insertIntoLock.message === DIRECT_EDIT_SHIFT_BLOCKED_MESSAGE ||
-        insertIntoLock.message === DIRECT_EDIT_PROTECTED_MESSAGE,
+      insertIntoLock.message === DIRECT_EDIT_LOCKED_MESSAGE,
       "LOCK 차단 메시지"
     );
   }
+  assert(isDirectEditLocked(locked), "명시 LOCK 판정");
+  const vacateLock = applyDirectCaddyVacate(draft, reservationKey(rLock));
+  assert(!vacateLock.ok, "LOCK 비우기 차단");
+  if (!vacateLock.ok) {
+    assert(vacateLock.message === DIRECT_EDIT_LOCKED_MESSAGE, "LOCK 비우기 메시지");
+  }
+  const swapLock = applyDirectCaddyEdit(draft, {
+    reservationKey: reservationKey(rA),
+    caddyId: lockedCaddy.id,
+  });
+  assert(!swapLock.ok, "LOCK 맞교환 차단");
+  if (!swapLock.ok) {
+    assert(swapLock.message === DIRECT_EDIT_LOCKED_MESSAGE, "LOCK 맞교환 메시지");
+  }
+  assert(
+    draft.assignments.find((a) => a.reservation.teamName === "LOCK팀")?.caddy.id ===
+      lockedCaddy.id,
+    "LOCK 원본 유지"
+  );
   assert(
     draft.assignments.find((a) => a.pairId === fiftyFour.pairId)?.caddy.id === cD.id,
     "원본 54홀 유지"
@@ -604,8 +623,10 @@ console.log("== UI: 직접편집 toggle + 기존 context menu 유지 ==");
   );
   assert(/data-cell-edit-toggle/.test(page), "엑셀편집 toggle");
   assert(/엑셀편집/.test(page), "엑셀편집 라벨");
+  assert(/directEditRejectReason/.test(page), "excel ON 보호를 팀/캐디 공통 적용");
   assert(/applyDirectCaddyVacate/.test(page), "빈 칸 vacate");
   assert(/cellEditOn/.test(page) && /setCellEditOn/.test(page), "toggle state");
+  assert(/isDirectEditLocked/.test(picker), "LOCK이면 빈 칸 버튼 숨김은 보조");
   assert(/BoardQuickSheet/.test(page), "BoardQuickSheet still mounted");
   const caddyBlock = sheet.split("qa-caddy-actions")[1] || "";
   assert(/캐디 맞교환/.test(caddyBlock), "기존 SWAP 메뉴");

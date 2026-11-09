@@ -41,8 +41,7 @@ import {
 import {
   applyDirectCaddyEdit,
   applyDirectCaddyVacate,
-  DIRECT_EDIT_PROTECTED_MESSAGE,
-  isDirectEditProtected,
+  directEditRejectReason,
   isDirectEditVacant,
   overlayUnassignedVacancies,
 } from "@/lib/assignmentBoardCellEdit";
@@ -2630,10 +2629,11 @@ export default function ManageAssignmentsOpsPage() {
       return;
     }
     const key = reservationIdentity(row.reservation);
-    if (cellEditOn && mode === "caddy") {
-      if (isDirectEditProtected(row)) {
-        showToast(DIRECT_EDIT_PROTECTED_MESSAGE);
-        setError(DIRECT_EDIT_PROTECTED_MESSAGE);
+    if (cellEditOn) {
+      const blocked = directEditRejectReason(row);
+      if (blocked) {
+        showToast(blocked.message);
+        setError(blocked.message);
         setQuickSheet(null);
         setCellEditKey(null);
         return;
@@ -5201,7 +5201,7 @@ const opsCss = `
     margin: 0 auto;
     display: grid;
     gap: 8px;
-    padding: 0 8px 72px;
+    padding: 0 8px calc(var(--vh-bottom-nav-height, 58px) + env(safe-area-inset-bottom, 0px) + 20px);
     box-sizing: border-box;
     width: 100%;
     container-type: inline-size;
@@ -5756,12 +5756,12 @@ const opsCss = `
   .bx-export-menu { position: relative; }
   .bx-export-btn {
     min-height: 32px;
-    padding: 0 10px;
+    padding: 0 8px;
     border-radius: 8px;
     border: 1px solid #cbd5e1;
     background: #fff;
     color: #0f172a;
-    font-size: 0.78rem;
+    font-size: 0.72rem;
     font-weight: 700;
     cursor: pointer;
     white-space: nowrap;
@@ -6281,6 +6281,11 @@ const opsCss = `
     /* overflow-x:hidden 은 sticky 스크롤 컨테인먼트를 만들어 모바일에서 깨질 수 있음 */
     overflow-x: clip;
   }
+  @media (max-width: 959px) {
+    .ops-board-wrap.has-sticky-head {
+      padding-bottom: calc(var(--vh-bottom-nav-height, 58px) + env(safe-area-inset-bottom, 0px) + 8px);
+    }
+  }
   /* ops-root gap(12px)을 상쇄해 헤더 바·본문 테두리가 이어지게 함 */
   .ops-sticky-stack:has(.ops-board-head-bar) + .ops-board-wrap.has-sticky-head {
     margin-top: -8px;
@@ -6532,11 +6537,43 @@ const opsCss = `
   @media (max-width: 640px) {
     .ops-board.cell-edit-on .bc-caddy,
     .ops-board.cell-edit-on .bc-team {
-      min-height: 44px;
       -webkit-tap-highlight-color: transparent;
     }
+    .ops-board.cell-edit-on .bc-team {
+      min-height: 18px;
+    }
+    .ops-board.cell-edit-on .bc-caddy {
+      min-height: 32px;
+    }
     .ops-board.cell-edit-on .bc-cell {
-      min-height: 52px;
+      min-height: 56px;
+    }
+    .bc-slot {
+      gap: 0;
+    }
+    .bc-team,
+    .bc-caddy {
+      min-height: 0;
+      padding: 1px 1px 0;
+    }
+    .bc-team-name {
+      font-size: 0.52rem;
+      line-height: 1.15;
+    }
+    .bc-name {
+      font-size: 0.7rem;
+      line-height: 1.2;
+    }
+    .bc-affil {
+      font-size: 0.5rem;
+      line-height: 1.1;
+    }
+    .bc-marks {
+      max-height: 14px;
+      overflow: hidden;
+    }
+    .lock-chip {
+      margin-top: 1px;
     }
   }
   .bc-team,
