@@ -67,7 +67,7 @@ function chromePath(): string {
 function htmlPage(): string {
   const rows = Array.from({ length: 24 }, (_, i) => {
     const mark = i === 0 ? ' data-row="first"' : i === 23 ? ' data-row="last"' : "";
-    return `<div class="ops-board-block"${mark}><div class="ops-board-row"><div class="bc-time">16:${String(i).padStart(2, "0")}</div><div class="bc-cell">R${i}</div><div class="bc-cell">-</div><div class="bc-cell">-</div><div class="bc-cell">-</div></div></div>`;
+    return `<tr class="ops-board-row"${mark}><th class="bc-time">16:${String(i).padStart(2, "0")}</th><td class="bc-cell">R${i}</td><td class="bc-cell"></td><td class="bc-cell"></td><td class="bc-cell"></td></tr>`;
   }).join("");
   return `<!doctype html>
 <html lang="ko"><head>
@@ -86,14 +86,20 @@ function htmlPage(): string {
   .ops-sticky-stack { position: relative; z-index: auto; display: grid; gap: 8px; padding: 6px 0 0; background: #f8fafc; }
   .ops-tabs { min-height: 44px; background: #e2e8f0; display: flex; align-items: center; padding: 8px; }
   .ops-board-scope { position: relative; transform: translateY(0); }
+  .ops-board { width: 100%; table-layout: fixed; border-collapse: collapse; }
+  .ops-col-time { width: 52px; }
   .ops-board-head-bar {
     position: sticky; top: var(--ops-board-sticky-top, 0px); z-index: 4;
+    background: #0f172a;
+  }
+  .ops-board-head th {
+    position: sticky; top: var(--ops-board-sticky-top, 0px); z-index: 4;
     background: #0f172a; color: #fff; padding: 8px; font-weight: 800;
+    border: 1px solid #334155;
   }
   .ops-board-wrap { overflow-x: clip; overflow-y: visible; }
-  .ops-board-row { display: grid; grid-template-columns: 52px repeat(4, 1fr); min-height: 40px; border: 1px solid #e2e8f0; }
-  .bc-time { display: flex; align-items: center; justify-content: center; background: #f8fafc; }
-  .bc-cell { display: flex; align-items: center; justify-content: center; }
+  .ops-board-row td, .ops-board-row th { height: 40px; border: 1px solid #e2e8f0; text-align: center; }
+  .bc-time { background: #f8fafc; }
   .ops-publish { margin-top: 16px; padding: 24px; border: 1px solid #e5e7eb; min-height: 180px; background: #fff; }
   .ops-notify { padding: 40px; background: #f1f5f9; min-height: 220px; }
 </style>
@@ -106,8 +112,15 @@ function htmlPage(): string {
       <div class="ops-tabs">1부 2부 3부 · 엑셀편집 · 이미지 · 엑셀 · 스페어</div>
     </div>
     <div class="ops-board-scope has-sticky-head" data-ops-board-scope="1">
-      <div class="ops-board-head-bar" data-ops-board-head="1">시간 / 베 / 스 / 오 / 레</div>
-      <div class="ops-board-wrap">${rows}</div>
+      <div class="ops-board-wrap">
+        <table class="ops-board">
+          <colgroup><col class="ops-col-time" /><col /><col /><col /><col /></colgroup>
+          <thead class="ops-board-head-bar" data-ops-board-head="1">
+            <tr class="ops-board-head"><th>시간</th><th>베</th><th>스</th><th>오</th><th>레</th></tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
     </div>
     <section class="ops-publish" data-ops-publish="1">운영 반영</section>
     <div class="ops-notify">배치표 알림</div>

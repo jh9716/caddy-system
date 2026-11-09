@@ -153,8 +153,6 @@ function sliceToAoa(slice: BoardExportSlice): unknown[][] {
       const cell = timeRow.cells[code];
       if (cell.kind === "assigned") {
         line.push(boardExcelCellText(cell.rows));
-      } else if (cell.kind === "unassigned") {
-        line.push(BOARD_UNASSIGNED_CELL_LABEL);
       } else {
         line.push(BOARD_EMPTY_CELL_MARK);
       }

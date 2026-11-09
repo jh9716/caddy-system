@@ -38,10 +38,10 @@ section("컬럼 헤더만 배치표 범위 sticky");
   assert(/--ops-board-sticky-top/.test(headBarCss), "앱 바 높이 변수");
   assert(page.includes("useOpsBoardMobileBarOffset"), "모바일 바 높이 측정");
   assert(
-    page.indexOf('data-ops-board-scope="1"') < page.indexOf('data-ops-board-head="1"') &&
-      page.indexOf('data-ops-board-head="1"') < page.indexOf("ref={boardWrapRef}"),
-    "헤더가 scope 안·행 래퍼보다 앞에 있어 첫 행을 덮지 않음"
+    page.indexOf('data-ops-board-scope="1"') < page.indexOf('data-ops-board-head="1"'),
+    "헤더가 scope 안"
   );
+  assert(page.indexOf("<thead") < page.indexOf("<tbody"), "thead가 행보다 앞");
 }
 
 section("내부 이중 스크롤 금지 / 기존 기능 유지");
@@ -59,7 +59,12 @@ section("내부 이중 스크롤 금지 / 기존 기능 유지");
   assert(page.includes("onEmptyBoardCellClick"), "빈칸 클릭 핸들러 유지");
   assert(page.includes('data-board-cell="empty"'), "empty 칸 구분");
   assert(page.includes('data-board-cell="unassigned"'), "unassigned 칸 구분");
-  assert(/--ops-board-cols/.test(page), "헤더·행 동일 열 템플릿");
+  assert(/table-layout:\s*fixed/.test(page), "고정 열 너비");
+  assert(/ops-col-time/.test(page) && /width: 52px/.test(page), "시간 열 52px");
+  const unassignedTd = page.split('className="bc-cell unassigned"')[1]?.slice(0, 500) || "";
+  assert(unassignedTd.includes('data-board-cell="unassigned"'), "unassigned 마커");
+  assert(!unassignedTd.includes("미배치"), "보드 미배정 칸에 미배치 문구 없음");
+  assert(!unassignedTd.includes("bc-empty-hit"), "미배정 칸은 추가팀 버튼이 아님");
   assert(src("src/lib/autoAssignEngine.ts").length === engineFingerprint, "엔진 파일 불변");
 }
 

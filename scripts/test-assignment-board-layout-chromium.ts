@@ -50,6 +50,11 @@ type Report = {
   headerLefts: number[];
   rowLefts: number[];
   rowHeights: number[];
+  typicalHeights: number[];
+  nameHeight: number;
+  nameWraps: boolean;
+  unassignedIsButton: boolean;
+  misbaechiInBoard: boolean;
   scrollWidth: number;
   clientWidth: number;
   overflowX: string;
@@ -197,109 +202,103 @@ function exportDraft(): AssignmentDraft {
 const manageCss = `
   * { box-sizing: border-box; }
   body { margin: 0; font-family: sans-serif; background: #fff; }
-  .ops-board-scope {
-    --ops-board-line: #cbd5e1;
-    --ops-board-time-col: 52px;
-    --ops-board-cols: var(--ops-board-time-col) repeat(4, minmax(0, 1fr));
-    min-width: 0; max-width: 100%;
-  }
-  .ops-board-head-bar {
-    width: 100%; box-sizing: border-box;
-    border: 1px solid var(--ops-board-line); border-bottom: 0;
-    border-radius: 8px 8px 0 0; overflow: hidden; background: #0f172a;
-  }
+  .ops-board-scope { --ops-board-line: #cbd5e1; min-width: 0; max-width: 100%; }
   .ops-board-wrap { width: 100%; max-width: 100%; min-width: 0; overflow-x: clip; overflow-y: visible; }
   .ops-board {
-    width: 100%; max-width: 100%; min-width: 0; display: grid; gap: 0;
-    border: 1px solid var(--ops-board-line); border-radius: 0 0 8px 8px;
-    overflow: hidden; background: #fff; box-sizing: border-box;
+    width: 100%; table-layout: fixed; border-collapse: collapse; border-spacing: 0;
+    empty-cells: show; border: 1px solid var(--ops-board-line); background: #fff;
   }
-  .ops-board-head, .ops-board-row {
-    display: grid; grid-template-columns: var(--ops-board-cols);
-    align-items: stretch; width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box;
+  .ops-col-time { width: 52px; }
+  .ops-col-course { width: calc((100% - 52px) / 4); }
+  .ops-board-head th {
+    height: 32px; padding: 4px 2px; background: #0f172a; color: #fff;
+    border: 1px solid #334155; font-size: 0.72rem; font-weight: 800; text-align: center;
+    white-space: nowrap; overflow: hidden;
   }
-  .ops-board-head { background: #0f172a; color: #fff; }
-  .ops-board-head > div {
-    box-sizing: border-box; min-width: 0; padding: 6px 2px; text-align: center;
-    font-size: 0.72rem; font-weight: 800; border-right: 1px solid #334155;
-  }
-  .ops-board-head > div:last-child { border-right: 0; }
-  .ops-board-block + .ops-board-block { border-top: 1px solid var(--ops-board-line); }
   .ops-board-row > .bc-time, .ops-board-row > .bc-cell {
-    box-sizing: border-box; min-width: 0; align-self: stretch;
+    box-sizing: border-box; height: 64px; vertical-align: middle;
+    border: 1px solid var(--ops-board-line);
   }
   .ops-board-row > .bc-time {
-    display: flex; align-items: center; justify-content: center;
-    font-size: 0.68rem; font-weight: 800; font-variant-numeric: tabular-nums;
-    white-space: nowrap; color: #334155; background: #f8fafc;
-    border-right: 1px solid var(--ops-board-line); padding: 4px 1px; min-height: 40px;
+    width: 52px; font-size: 0.68rem; font-weight: 800; font-variant-numeric: tabular-nums;
+    white-space: nowrap; color: #334155; background: #f8fafc; text-align: center;
   }
-  .bc-cell {
-    min-width: 0; min-height: 40px; padding: 4px 2px;
-    border-right: 1px solid var(--ops-board-line);
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 2px; font-size: 0.72rem; line-height: 1.2; background: #fff;
-  }
-  .ops-board-row > .bc-cell:last-child { border-right: 0; }
-  .bc-cell.empty { padding: 0; }
+  .bc-cell { padding: 2px 3px; background: #fff; text-align: center; overflow: hidden; }
+  .bc-cell.empty { padding: 0; position: relative; }
   .bc-empty-hit {
-    appearance: none; display: flex; align-items: center; justify-content: center;
-    width: 100%; min-height: 40px; height: 100%; margin: 0; border: 0; background: transparent;
-    font: inherit; cursor: pointer;
+    appearance: none; position: absolute; inset: 0; display: block;
+    width: 100%; height: 100%; min-height: 0; margin: 0; border: 0;
+    background: transparent; cursor: pointer;
   }
-  .bc-cell.unassigned { color: #b45309; background: #fffbeb; font-weight: 700; font-size: 0.68rem; }
-  .bc-slot { display: flex; flex-direction: column; align-items: center; width: 100%; min-width: 0; gap: 1px; }
-  .bc-team, .bc-caddy {
-    width: 100%; min-width: 0; padding: 1px 2px; display: flex; flex-direction: column;
-    align-items: center; text-align: center;
-  }
+  .bc-slot { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; min-width: 0; gap: 0; }
+  .bc-team, .bc-caddy { width: 100%; min-width: 0; display: flex; flex-direction: column; align-items: center; }
   .bc-team-name, .bc-name, .bc-affil {
-    max-width: 100%; overflow-wrap: anywhere; word-break: keep-all; white-space: normal; text-align: center;
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center;
   }
-  .bc-team-name { font-size: 0.58rem; font-weight: 700; color: #475569; }
-  .bc-name { font-weight: 800; font-size: 0.78rem; color: #0f172a; }
-  .bc-affil { font-size: 0.55rem; font-weight: 700; color: #64748b; }
-  .lock-chip { font-size: 0.58rem; padding: 1px 5px; border-radius: 999px; background: #e2e8f0; font-weight: 800; }
+  .bc-team-name { font-size: 0.55rem; font-weight: 700; color: #475569; }
+  .bc-name { font-weight: 800; font-size: 0.72rem; color: #0f172a; line-height: 1.2; }
+  .bc-affil { font-size: 0.52rem; font-weight: 700; color: #64748b; }
+  .lock-chip { font-size: 0.52rem; padding: 0 4px; border-radius: 999px; background: #e2e8f0; font-weight: 800; }
 `;
 
 function manageBoardHtml(): string {
   return `<div class="ops-board-scope" data-layout-manage="1" style="padding:8px">
-    <div class="ops-board-head-bar" data-layout-head="1">
-      <div class="ops-board-head">
-        <div class="bh-time">시간</div>
-        <div class="bh-course">베</div>
-        <div class="bh-course">스</div>
-        <div class="bh-course">오</div>
-        <div class="bh-course">레</div>
-      </div>
-    </div>
     <div class="ops-board-wrap">
-      <div class="ops-board">
-        <div class="ops-board-block">
-          <div class="ops-board-row" data-layout-row="unassigned">
-            <div class="bc-time">16:33</div>
-            <div class="bc-cell unassigned" data-board-cell="unassigned"><span class="bc-unassigned">미배치</span></div>
-            <div class="bc-cell empty" data-board-cell="empty"><button type="button" class="bc-empty-hit" aria-label="추가팀 등록"></button></div>
-            <div class="bc-cell empty" data-board-cell="empty"><button type="button" class="bc-empty-hit" aria-label="추가팀 등록"></button></div>
-            <div class="bc-cell empty" data-board-cell="empty"><button type="button" class="bc-empty-hit" aria-label="추가팀 등록"></button></div>
-          </div>
-        </div>
-        <div class="ops-board-block">
-          <div class="ops-board-row" data-layout-row="tall">
-            <div class="bc-time">16:40</div>
-            <div class="bc-cell assigned">
+      <table class="ops-board">
+        <colgroup>
+          <col class="ops-col-time" /><col class="ops-col-course" /><col class="ops-col-course" />
+          <col class="ops-col-course" /><col class="ops-col-course" />
+        </colgroup>
+        <thead class="ops-board-head-bar" data-layout-head="1">
+          <tr class="ops-board-head">
+            <th class="bh-time">시간</th><th>베</th><th>스</th><th>오</th><th>레</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="ops-board-row" data-layout-row="unassigned">
+            <th class="bc-time">16:33</th>
+            <td class="bc-cell unassigned" data-board-cell="unassigned" aria-label="미배정 예약"></td>
+            <td class="bc-cell empty" data-board-cell="empty"><button type="button" class="bc-empty-hit" aria-label="추가팀 등록"></button></td>
+            <td class="bc-cell empty" data-board-cell="empty"><button type="button" class="bc-empty-hit" aria-label="추가팀 등록"></button></td>
+            <td class="bc-cell empty" data-board-cell="empty"><button type="button" class="bc-empty-hit" aria-label="추가팀 등록"></button></td>
+          </tr>
+          <tr class="ops-board-row" data-layout-row="tall">
+            <th class="bc-time">16:40</th>
+            <td class="bc-cell assigned">
               <div class="bc-slot">
                 <div class="bc-team"><span class="bc-team-name">합성팀V1</span></div>
-                <div class="bc-caddy"><span class="bc-name">김배정</span><span class="bc-affil">1조</span></div>
+                <div class="bc-caddy"><span class="bc-name" data-long-name="1">테스트마샬2</span><span class="bc-affil">5조</span></div>
                 <span class="lock-chip">LOCK</span>
               </div>
-            </div>
-            <div class="bc-cell empty" data-board-cell="empty"><button type="button" class="bc-empty-hit" aria-label="추가팀 등록"></button></div>
-            <div class="bc-cell empty" data-board-cell="empty"><button type="button" class="bc-empty-hit" aria-label="추가팀 등록"></button></div>
-            <div class="bc-cell empty" data-board-cell="empty"><button type="button" class="bc-empty-hit" aria-label="추가팀 등록"></button></div>
-          </div>
-        </div>
-      </div>
+            </td>
+            <td class="bc-cell empty" data-board-cell="empty"><button type="button" class="bc-empty-hit" aria-label="추가팀 등록"></button></td>
+            <td class="bc-cell empty" data-board-cell="empty"><button type="button" class="bc-empty-hit" aria-label="추가팀 등록"></button></td>
+            <td class="bc-cell empty" data-board-cell="empty"><button type="button" class="bc-empty-hit" aria-label="추가팀 등록"></button></td>
+          </tr>
+          <tr class="ops-board-row" data-layout-row="typical">
+            <th class="bc-time">16:47</th>
+            <td class="bc-cell assigned">
+              <div class="bc-slot">
+                <div class="bc-team"><span class="bc-team-name">합성팀V2</span></div>
+                <div class="bc-caddy"><span class="bc-name">이배정</span><span class="bc-affil">1조</span></div>
+              </div>
+            </td>
+            <td class="bc-cell assigned">
+              <div class="bc-slot">
+                <div class="bc-team"><span class="bc-team-name">합성팀S2</span></div>
+                <div class="bc-caddy"><span class="bc-name">한스카이</span><span class="bc-affil">1조</span></div>
+              </div>
+            </td>
+            <td class="bc-cell empty" data-board-cell="empty"><button type="button" class="bc-empty-hit" aria-label="추가팀 등록"></button></td>
+            <td class="bc-cell assigned">
+              <div class="bc-slot">
+                <div class="bc-team"><span class="bc-team-name">합성팀L1</span></div>
+                <div class="bc-caddy"><span class="bc-name">라레이크</span><span class="bc-affil">1조</span></div>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   </div>`;
 }
@@ -343,18 +342,29 @@ async function run() {
   const manage = document.querySelector("[data-layout-manage]");
   const head = manage.querySelector(".ops-board-head");
   const tall = manage.querySelector("[data-layout-row=tall]");
+  const typical = manage.querySelector("[data-layout-row=typical]");
   const empties = Array.from(manage.querySelectorAll('[data-board-cell="empty"]'));
   const unassigned = manage.querySelector('[data-board-cell="unassigned"]');
-  const dashNodes = Array.from(document.querySelectorAll(".shot-390 .bc-cell.empty, .shot-390 .bx-cell.empty"))
-    .filter((el) => (el.textContent || "").trim() === "-");
+  const longName = manage.querySelector("[data-long-name]");
+  const dashNodes = Array.from(document.querySelectorAll(".shot-390 .bc-cell.empty, .shot-390 .bx-cell.empty, .shot-390 .bc-cell.unassigned"))
+    .filter((el) => {
+      const t = (el.textContent || "").trim();
+      return t === "-" || t === "미배치";
+    });
   const wrap = manage.querySelector(".ops-board-wrap");
+  const boardText = (manage.innerText || "");
   const report = {
     emptyDashCount: dashNodes.length,
     unassignedText: (unassigned && unassigned.textContent || "").trim(),
     emptyTexts: empties.map((el) => (el.textContent || "").trim()),
-    headerLefts: lefts(head, ":scope > div"),
+    headerLefts: lefts(head, ":scope > th"),
     rowLefts: lefts(tall, ":scope > *"),
     rowHeights: Array.from(tall.children).map((el) => Math.round(el.getBoundingClientRect().height)),
+    typicalHeights: Array.from(typical.children).map((el) => Math.round(el.getBoundingClientRect().height)),
+    nameHeight: longName ? Math.round(longName.getBoundingClientRect().height) : 0,
+    nameWraps: longName ? longName.getBoundingClientRect().height > 18 : true,
+    unassignedIsButton: !!(unassigned && unassigned.querySelector("button")),
+    misbaechiInBoard: boardText.includes("미배치"),
     scrollWidth: wrap.scrollWidth,
     clientWidth: wrap.clientWidth,
     overflowX: getComputedStyle(wrap).overflowX,
@@ -461,8 +471,10 @@ async function main() {
     }
     const r = report as Report;
     assert(r.emptyDashCount === 0, "빈칸에 '-' 없음");
-    assert(r.unassignedText === "미배치", "미배정 칸 미배치");
+    assert(r.unassignedText === "", "미배정 칸도 화면 빈칸");
     assert(r.emptyTexts.every((t) => t === ""), "예약 없는 칸은 완전 빈칸");
+    assert(!r.misbaechiInBoard, "배치표에 미배치 문구 없음");
+    assert(!r.unassignedIsButton, "미배정 칸은 추가팀 버튼이 아님");
     assert(r.headerLefts.length === 5 && r.rowLefts.length === 5, "5열");
     assert(
       r.headerLefts.every((x, i) => Math.abs(x - r.rowLefts[i]) <= 1),
@@ -473,6 +485,13 @@ async function main() {
       r.rowHeights.every((h) => Math.abs(h - h0) <= 1),
       "같은 티타임 행 높이 공유"
     );
+    const t0 = r.typicalHeights[0];
+    assert(
+      r.typicalHeights.every((h) => Math.abs(h - t0) <= 1),
+      "배정·빈칸 혼합 행 높이 공유"
+    );
+    assert(Math.abs(h0 - t0) <= 4, "일반 티타임 행 높이 일정");
+    assert(!r.nameWraps && r.nameHeight <= 18, "캐디 이름 한 줄");
     assert(r.scrollWidth <= r.clientWidth + 1, "가로 스크롤 없음");
     assert(r.overflowX === "clip" || r.overflowX === "hidden", "overflow-x clip");
 

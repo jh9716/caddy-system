@@ -93,10 +93,7 @@ import {
   type CourseTeeSlot,
   type ShiftPart,
 } from "@/lib/reservationParser";
-import {
-  BOARD_UNASSIGNED_CELL_LABEL,
-  cloneCourseTeeSheet,
-} from "@/lib/assignmentBoardTeeSheet";
+import { cloneCourseTeeSheet } from "@/lib/assignmentBoardTeeSheet";
 
 type RunResponse = AutoAssignResultV1 & {
   error?: string;
@@ -431,7 +428,10 @@ const BoardAssignedSlots = memo(function BoardAssignedSlots({
               className="bc-team"
               onClick={() => onTeamTap(row)}
             >
-              <span className="bc-team-name">
+              <span
+                className="bc-team-name"
+                title={row.reservation.teamName || "팀"}
+              >
                 {row.reservation.teamName || "팀"}
               </span>
               {marks.houseRequest ? (
@@ -448,11 +448,14 @@ const BoardAssignedSlots = memo(function BoardAssignedSlots({
               }`}
               onClick={() => onCaddyTap(row)}
             >
-              <span className="bc-name">
+              <span
+                className="bc-name"
+                title={vacant ? undefined : row.caddy.name}
+              >
                 {vacant ? "빈칸" : row.caddy.name}
               </span>
-              <span className="bc-affil">
-                {vacant ? "미배치" : caddyAffiliation(row.caddy)}
+              <span className="bc-affil" title={vacant ? undefined : caddyAffiliation(row.caddy)}>
+                {vacant ? "" : caddyAffiliation(row.caddy)}
               </span>
               <AssignmentMarkBadges
                 twoWork={marks.twoWork}
@@ -4704,31 +4707,6 @@ export default function ManageAssignmentsOpsPage() {
                   }`}
                   data-ops-board-scope="1"
                 >
-                  {boardRows.length > 0 ? (
-                    <div className="ops-board-head-bar" data-ops-board-head="1">
-                      <div
-                        className="ops-board-head"
-                        role="row"
-                        aria-label={`${shiftTab} 배치표 헤더`}
-                      >
-                        <div className="bh-time" role="columnheader">
-                          시간
-                        </div>
-                        {COURSE_CODES.map((code) => (
-                          <div
-                            key={code}
-                            className={`bh-course ${
-                              boardOpenCourses.includes(code) ? "" : "closed"
-                            }`}
-                            role="columnheader"
-                            title={COURSE_LABELS[code]}
-                          >
-                            {COURSE_SHORT[code]}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
                 <div
                   ref={boardWrapRef}
                   className={`ops-board-wrap${
@@ -4738,45 +4716,69 @@ export default function ManageAssignmentsOpsPage() {
                   {boardRows.length === 0 ? (
                     <div className="ops-empty">이 부 배치 없음</div>
                   ) : (
-                    <div
+                    <table
                       className={`ops-board${cellEditOn ? " cell-edit-on" : ""}`}
-                      role="table"
                       aria-label={`${shiftTab} 배치표`}
                       data-cell-edit={cellEditOn ? "on" : "off"}
                     >
+                      <colgroup>
+                        <col className="ops-col-time" />
+                        {COURSE_CODES.map((code) => (
+                          <col key={code} className="ops-col-course" />
+                        ))}
+                      </colgroup>
+                      <thead
+                        className="ops-board-head-bar"
+                        data-ops-board-head="1"
+                      >
+                        <tr
+                          className="ops-board-head"
+                          aria-label={`${shiftTab} 배치표 헤더`}
+                        >
+                          <th className="bh-time" scope="col">
+                            시간
+                          </th>
+                          {COURSE_CODES.map((code) => (
+                            <th
+                              key={code}
+                              className={`bh-course ${
+                                boardOpenCourses.includes(code) ? "" : "closed"
+                              }`}
+                              scope="col"
+                              title={COURSE_LABELS[code]}
+                            >
+                              {COURSE_SHORT[code]}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
                       {boardRows.map((tr) => (
-                          <div key={tr.teeTime} className="ops-board-block">
-                            <div className="ops-board-row" role="row">
-                              <div className="bc-time" role="cell">
+                          <tr key={tr.teeTime} className="ops-board-row">
+                              <th className="bc-time" scope="row">
                                 {tr.teeTime}
-                              </div>
+                              </th>
                               {COURSE_CODES.map((code) => {
                                 const cell = tr.cells[code];
                                 if (cell.kind === "closed") {
                                   return (
-                                    <div
+                                    <td
                                       key={code}
                                       className="bc-cell closed"
-                                      role="cell"
                                       aria-label={`${COURSE_LABELS[code]} 닫힘`}
                                     >
                                       <span className="bc-closed">닫힘</span>
-                                    </div>
+                                    </td>
                                   );
                                 }
                                 if (cell.kind === "unassigned") {
                                   return (
-                                    <div
+                                    <td
                                       key={code}
                                       className="bc-cell unassigned"
-                                      role="cell"
                                       data-board-cell="unassigned"
-                                      aria-label={`${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} ${BOARD_UNASSIGNED_CELL_LABEL}`}
-                                    >
-                                      <span className="bc-unassigned">
-                                        {BOARD_UNASSIGNED_CELL_LABEL}
-                                      </span>
-                                    </div>
+                                      aria-label={`${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} 미배정 예약`}
+                                    />
                                   );
                                 }
                                 if (cell.kind === "empty") {
@@ -4791,12 +4793,11 @@ export default function ManageAssignmentsOpsPage() {
                                     }
                                   );
                                   return (
-                                    <div
+                                    <td
                                       key={code}
                                       className={`bc-cell empty ${
                                         moveDest ? "move-dest" : "addable"
                                       }${pendingDest ? " pending" : ""}`}
-                                      role="cell"
                                       data-board-cell="empty"
                                     >
                                       <button
@@ -4820,7 +4821,7 @@ export default function ManageAssignmentsOpsPage() {
                                             ? "이동"
                                             : null}
                                       </button>
-                                    </div>
+                                    </td>
                                   );
                                 }
                                 const primary = cell.rows[0];
@@ -4843,7 +4844,7 @@ export default function ManageAssignmentsOpsPage() {
                                       cellEditKey
                                 );
                                 return (
-                                  <div
+                                  <td
                                     key={code}
                                     className={`bc-cell assigned ${
                                       special ? "special" : ""
@@ -4852,7 +4853,6 @@ export default function ManageAssignmentsOpsPage() {
                                     }${marks.limousine ? " limo" : ""}${
                                       marks.driving ? " drive" : ""
                                     } ${active ? "active" : ""}`}
-                                    role="cell"
                                   >
                                     <BoardAssignedSlots
                                       rows={cell.rows}
@@ -4867,13 +4867,13 @@ export default function ManageAssignmentsOpsPage() {
                                       onCaddyTap={onCaddyTap}
                                       onToggleLock={onToggleLock}
                                     />
-                                  </div>
+                                  </td>
                                 );
                               })}
-                            </div>
-                          </div>
+                          </tr>
                         ))}
-                    </div>
+                      </tbody>
+                    </table>
                   )}
                 </div>
                 </div>
@@ -5784,8 +5784,6 @@ const opsCss = `
     /* ops-root container-type보다 가까운 containing block — 표가 끝나면 unstick */
     transform: translateY(0);
     --ops-board-line: #cbd5e1;
-    --ops-board-time-col: 52px;
-    --ops-board-cols: var(--ops-board-time-col) repeat(4, minmax(0, 1fr));
     min-width: 0;
     max-width: 100%;
   }
@@ -6357,17 +6355,10 @@ const opsCss = `
     }
   }
   .ops-board-head-bar {
-    width: 100%;
-    max-width: 100%;
-    box-sizing: border-box;
-    border: 1px solid var(--ops-board-line);
-    border-bottom: 0;
-    border-radius: 8px 8px 0 0;
-    overflow: hidden;
-    background: #0f172a;
     position: sticky;
     top: var(--ops-board-sticky-top, 0px);
     z-index: 4;
+    background: #0f172a;
   }
   .ops-board-wrap {
     width: 100%;
@@ -6386,101 +6377,74 @@ const opsCss = `
     width: 100%;
     max-width: 100%;
     min-width: 0;
-    display: grid;
-    gap: 0;
+    table-layout: fixed;
+    border-collapse: collapse;
+    border-spacing: 0;
+    empty-cells: show;
     border: 1px solid var(--ops-board-line);
-    border-radius: 8px;
-    overflow: hidden;
     background: #fff;
     box-sizing: border-box;
   }
-  .ops-board-wrap.has-sticky-head .ops-board {
-    border-top: 0;
-    border-radius: 0 0 8px 8px;
-  }
-  .ops-board-head,
-  .ops-board-row {
-    display: grid;
-    grid-template-columns: var(--ops-board-cols);
-    align-items: stretch;
-    width: 100%;
-    max-width: 100%;
-    min-width: 0;
+  .ops-col-time { width: 52px; }
+  .ops-col-course { width: calc((100% - 52px) / 4); }
+  .ops-board-head th {
+    position: sticky;
+    top: var(--ops-board-sticky-top, 0px);
+    z-index: 4;
     box-sizing: border-box;
-  }
-  .ops-board-head {
-    position: relative;
+    height: 32px;
+    padding: 4px 2px;
     background: #0f172a;
     color: #fff;
-  }
-  .ops-board-head > div {
-    box-sizing: border-box;
-    min-width: 0;
-    padding: 6px 2px;
-    text-align: center;
+    border: 1px solid #334155;
     font-size: 0.72rem;
     font-weight: 800;
     letter-spacing: -0.02em;
-    border-right: 1px solid #334155;
-    overflow-wrap: anywhere;
-    word-break: keep-all;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
   }
-  .ops-board-head > div:last-child { border-right: 0; }
-  .ops-board-head .bh-time { text-align: center; }
   .ops-board-head .bh-course.closed { color: #94a3b8; text-decoration: line-through; }
-  .ops-board-block + .ops-board-block {
-    border-top: 1px solid var(--ops-board-line);
-  }
   .ops-board-row > .bc-time,
   .ops-board-row > .bc-cell {
     box-sizing: border-box;
-    min-width: 0;
-    align-self: stretch;
-    height: auto;
+    height: 64px;
+    vertical-align: middle;
+    border: 1px solid var(--ops-board-line);
   }
   .ops-board-row > .bc-time {
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    width: 52px;
     font-size: 0.68rem;
     font-weight: 800;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
     color: #334155;
     background: #f8fafc;
-    border-right: 1px solid var(--ops-board-line);
-    padding: 4px 1px;
-    min-height: 40px;
+    text-align: center;
+    padding: 2px 1px;
   }
   .bc-cell {
-    min-width: 0;
-    min-height: 40px;
-    padding: 4px 2px;
-    border-right: 1px solid var(--ops-board-line);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 2px;
-    font-size: 0.72rem;
-    line-height: 1.2;
+    padding: 2px 3px;
     background: #fff;
+    font-size: 0.72rem;
+    line-height: 1.15;
+    text-align: center;
+    overflow: hidden;
   }
-  .ops-board-row > .bc-cell:last-child { border-right: 0; }
   .bc-cell.empty {
-    color: inherit;
     padding: 0;
     background: #fff;
+    position: relative;
   }
   .bc-empty-hit {
     appearance: none;
     -webkit-appearance: none;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    position: absolute;
+    inset: 0;
+    display: block;
     width: 100%;
-    min-height: 40px;
     height: 100%;
+    min-height: 0;
     margin: 0;
     border: 0;
     border-radius: 0;
@@ -6488,25 +6452,17 @@ const opsCss = `
     font: inherit;
     color: inherit;
     cursor: pointer;
-    padding: 4px 2px;
-    text-align: center;
-    overflow-wrap: anywhere;
-    word-break: keep-all;
+    padding: 0;
   }
   .bc-cell.unassigned {
-    color: #b45309;
-    background: #fffbeb;
-    font-weight: 700;
-    font-size: 0.68rem;
+    background: #fff;
   }
-  .bc-unassigned { letter-spacing: -0.02em; }
   .bc-cell.empty.addable .bc-empty-hit {
     cursor: pointer;
   }
   .bc-cell.empty.addable .bc-empty-hit:hover,
   .bc-cell.empty.addable .bc-empty-hit:focus-visible {
     background: #f8fafc;
-    color: #0f172a;
     outline: 2px solid #0f172a;
     outline-offset: -2px;
   }
@@ -6515,7 +6471,6 @@ const opsCss = `
     color: #9a3412;
     font-size: 0.62rem;
     font-weight: 700;
-    min-height: 72px;
     -webkit-tap-highlight-color: transparent;
   }
   .bc-cell.empty.move-dest .bc-empty-hit:hover,
@@ -6530,11 +6485,6 @@ const opsCss = `
     cursor: wait;
     color: #c2410c;
     background: #fff7ed;
-  }
-  @media (max-width: 640px) {
-    .bc-cell.empty.move-dest .bc-empty-hit {
-      min-height: 88px;
-    }
   }
   .move-mode-banner {
     display: flex;
@@ -6610,8 +6560,7 @@ const opsCss = `
   }
   .bc-cell.assigned {
     background: #fff;
-    gap: 3px;
-    padding: 4px 2px;
+    padding: 2px 3px;
   }
   .bc-cell.assigned.special {
     background: #fffbeb;
@@ -6637,7 +6586,8 @@ const opsCss = `
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 1px;
+    justify-content: center;
+    gap: 0;
     width: 100%;
     min-width: 0;
   }
@@ -6664,7 +6614,7 @@ const opsCss = `
     background: #fffbeb;
   }
   .ops-board.cell-edit-on .bc-caddy {
-    min-height: 36px;
+    min-height: 22px;
   }
   @media (max-width: 640px) {
     .ops-board.cell-edit-on .bc-caddy,
@@ -6678,7 +6628,7 @@ const opsCss = `
       min-height: 32px;
     }
     .ops-board.cell-edit-on .bc-cell {
-      min-height: 56px;
+      height: 64px;
     }
     .bc-slot {
       gap: 0;
@@ -6686,22 +6636,16 @@ const opsCss = `
     .bc-team,
     .bc-caddy {
       min-height: 0;
-      padding: 1px 1px 0;
+      padding: 0;
     }
     .bc-team-name {
       font-size: 0.52rem;
-      line-height: 1.15;
     }
     .bc-name {
-      font-size: 0.7rem;
-      line-height: 1.2;
+      font-size: 0.68rem;
     }
     .bc-affil {
       font-size: 0.5rem;
-      line-height: 1.1;
-    }
-    .lock-chip {
-      margin-top: 1px;
     }
   }
   .bc-team,
@@ -6715,23 +6659,36 @@ const opsCss = `
     cursor: pointer;
     width: 100%;
     min-width: 0;
-    padding: 1px 2px;
+    padding: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 1px;
-    min-height: 22px;
+    gap: 0;
+    min-height: 0;
     text-align: center;
   }
+  .bc-team {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    justify-content: center;
+    overflow: hidden;
+    gap: 2px;
+    min-height: 14px;
+  }
+  .bc-team .bc-badge {
+    flex: 0 0 auto;
+  }
   .bc-team-name {
-    font-size: 0.58rem;
+    font-size: 0.55rem;
     font-weight: 700;
     color: #475569;
+    flex: 0 1 auto;
+    min-width: 0;
     max-width: 100%;
-    overflow-wrap: anywhere;
-    word-break: keep-all;
-    white-space: normal;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     text-align: center;
     line-height: 1.2;
   }
@@ -6740,31 +6697,32 @@ const opsCss = `
     pointer-events: none;
   }
   .lock-chip {
-    font-size: 0.58rem !important;
-    padding: 1px 5px !important;
-    min-height: 18px !important;
-    line-height: 1.1;
+    font-size: 0.52rem !important;
+    padding: 0 4px !important;
+    min-height: 14px !important;
+    line-height: 1.2;
     border-radius: 999px;
+    margin-top: 1px;
   }
   .bc-name {
     font-weight: 800;
-    font-size: 0.78rem;
+    font-size: 0.72rem;
     max-width: 100%;
-    overflow-wrap: anywhere;
-    word-break: keep-all;
-    white-space: normal;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     text-align: center;
     color: #0f172a;
     line-height: 1.2;
   }
   .bc-affil {
-    font-size: 0.55rem;
+    font-size: 0.52rem;
     font-weight: 700;
     color: #64748b;
     max-width: 100%;
-    overflow-wrap: anywhere;
-    word-break: keep-all;
-    white-space: normal;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     text-align: center;
     line-height: 1.15;
   }
@@ -6772,9 +6730,11 @@ const opsCss = `
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 2px;
     max-width: 100%;
+    overflow: hidden;
+    height: 14px;
   }
   .bc-badge {
     display: inline-block;

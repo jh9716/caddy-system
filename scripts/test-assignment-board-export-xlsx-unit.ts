@@ -12,10 +12,7 @@ import {
   BOARD_EXPORT_SHIFTS,
   buildBoardExportSlice,
 } from "../src/lib/assignmentBoardExport";
-import {
-  BOARD_EMPTY_CELL_MARK,
-  BOARD_UNASSIGNED_CELL_LABEL,
-} from "../src/lib/assignmentBoardTeeSheet";
+import { BOARD_EMPTY_CELL_MARK } from "../src/lib/assignmentBoardTeeSheet";
 import {
   BOARD_XLSX_TABLE_HEADERS,
   BOARD_XLSX_TITLE,
@@ -462,7 +459,7 @@ section("3부 빈 티타임 '-' / 미배정 구분 / 배정 수 불변");
   assert(slice.rows.some((r) => r.teeTime === "17:01"), "xlsx 축에 17:01 공석");
   const bytes = await writeBoardExportXlsxBytes(d);
   const sheets = await parseBoardExportWorkbook(bytes);
-  assert(cellAt(sheets, "3부", "16:33", "VERTHILL") === BOARD_UNASSIGNED_CELL_LABEL, "미배정은 미배치");
+  assert(cellAt(sheets, "3부", "16:33", "VERTHILL") === BOARD_EMPTY_CELL_MARK, "미배정 칸도 엑셀 빈칸");
   assert(cellAt(sheets, "3부", "16:33", "SKY") === BOARD_EMPTY_CELL_MARK, "예약 없는 칸 빈 문자열");
   assert(cellAt(sheets, "3부", "17:01", "VERTHILL") === BOARD_EMPTY_CELL_MARK, "17:01 빈칸");
   assert(BOARD_EMPTY_CELL_MARK === "", "empty 표시 상수 빈 문자열");
