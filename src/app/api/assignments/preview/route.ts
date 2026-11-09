@@ -281,6 +281,7 @@ export async function POST(req: NextRequest) {
           warnings: parsed.warnings,
           needsReviewCount: parsed.needsReview.length,
         },
+        teeSheet: parsed.teeSheet,
         availabilityCounts: availability.counts,
         dailySummary: availability.dailySummary,
         specialDutySkipped: bundles.skippedPlacements,

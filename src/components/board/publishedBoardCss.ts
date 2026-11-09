@@ -32,7 +32,7 @@ export const publishedBoardCss = `
   .ops-board-head,
   .ops-board-row {
     display: grid;
-    grid-template-columns: 40px repeat(4, minmax(0, 1fr));
+    grid-template-columns: 52px repeat(4, minmax(0, 1fr));
     width: 100%;
   }
   .ops-board-head {
@@ -61,6 +61,7 @@ export const publishedBoardCss = `
     font-size: 0.68rem;
     font-weight: 800;
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
     color: #334155;
     background: #f8fafc;
     border-right: 1px solid #e2e8f0;
@@ -85,6 +86,12 @@ export const publishedBoardCss = `
   .bc-cell.empty {
     color: #cbd5e1;
     font-weight: 600;
+  }
+  .bc-cell.unassigned {
+    color: #b45309;
+    background: #fffbeb;
+    font-weight: 700;
+    font-size: 0.68rem;
   }
   .bc-cell.closed {
     background: repeating-linear-gradient(
@@ -232,7 +239,7 @@ export const publishedBoardCss = `
   @media (max-width: 480px) {
     .ops-board-head,
     .ops-board-row {
-      grid-template-columns: 32px repeat(4, minmax(0, 1fr));
+      grid-template-columns: 52px repeat(4, minmax(0, 1fr));
     }
     .bc-name { font-size: 0.72rem; }
     .bc-team-name { font-size: 0.52rem; }

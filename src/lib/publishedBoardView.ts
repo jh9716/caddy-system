@@ -7,6 +7,7 @@ import type {
   DailyBoardPublishedPayloadV1,
   PublishedPlacementV1,
 } from "@/lib/dailyBoardPublished";
+import { collectShiftBoardTeeTimes } from "@/lib/assignmentBoardTeeSheet";
 import {
   COURSE_CODES,
   type CourseCode,
@@ -32,26 +33,37 @@ export function filterPlacementsByShift(
 }
 
 export function buildPublishedShiftBoard(
-  payload: Pick<DailyBoardPublishedPayloadV1, "placements" | "openCourses">,
+  payload: Pick<
+    DailyBoardPublishedPayloadV1,
+    "placements" | "openCourses" | "teeSheet"
+  >,
   shift: ShiftPart
 ): PublishedTimeRow[] {
   const scoped = filterPlacementsByShift(payload.placements, shift);
   const open = new Set(payload.openCourses);
   const byTimeCourse = new Map<string, PublishedPlacementV1[]>();
-  const times = new Set<string>();
 
   for (const row of scoped) {
     const code = resolveCourseCode(row.course);
     if (!code) continue;
     const tee = row.teeTime || "";
-    times.add(tee);
     const key = `${tee}|${code}`;
     const list = byTimeCourse.get(key) || [];
     list.push(row);
     byTimeCourse.set(key, list);
   }
 
-  return [...times].sort((a, b) => a.localeCompare(b)).map((teeTime) => {
+  const times = collectShiftBoardTeeTimes({
+    shift,
+    teeSheet: payload.teeSheet,
+    reservations: scoped.map((row) => ({
+      course: row.course,
+      shift: row.shift,
+      teeTime: row.teeTime,
+    })),
+  });
+
+  return times.map((teeTime) => {
     const cells = {} as Record<CourseCode, PublishedBoardCell>;
     for (const code of COURSE_CODES) {
       if (!open.has(code)) {

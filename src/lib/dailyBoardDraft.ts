@@ -24,9 +24,11 @@ import type {
   UnavailableFromShiftRow,
 } from "@/lib/autoAssignEngine";
 import { ensureReservationUid } from "@/lib/reservationIdentity";
+import { cloneCourseTeeSheet } from "@/lib/assignmentBoardTeeSheet";
 import {
   COURSE_CODES,
   type CourseCode,
+  type CourseTeeSlot,
   type ShiftPart,
 } from "@/lib/reservationParser";
 
@@ -77,6 +79,8 @@ export type DailyBoardDraftPayloadV1 = {
   unavailableFromShift?: UnavailableFromShiftRow[];
   /** optional: 검증된 날짜 휴무. legacy payload에는 없음. migration 없음. */
   offSnapshot?: DraftOffSnapshot;
+  /** optional: 표시 전용 코스별 운영 티. legacy payload에는 없음. */
+  teeSheet?: CourseTeeSlot[];
   confirmedAt: string | null;
   appliedAt: string | null;
   applyAuditId: number | null;
@@ -182,6 +186,7 @@ export function assignmentDraftToPayload(
   if (!isYmd(draft.date)) {
     throw new DailyBoardDraftPayloadError("draft.date는 YYYY-MM-DD 이어야 합니다.");
   }
+  const teeSheet = cloneCourseTeeSheet(draft.teeSheet);
   return {
     schemaVersion: DAILY_BOARD_DRAFT_SCHEMA_VERSION,
     date: draft.date,
@@ -240,12 +245,14 @@ export function assignmentDraftToPayload(
     ...(isUsableOffSnapshot(draft.offSnapshot, draft.date)
       ? { offSnapshot: draft.offSnapshot }
       : {}),
+    ...(teeSheet ? { teeSheet } : {}),
   };
 }
 
 export function payloadToAssignmentDraft(
   payload: DailyBoardDraftPayloadV1
 ): AssignmentDraft {
+  const teeSheet = cloneCourseTeeSheet(payload.teeSheet);
   return {
     date: payload.date,
     status: payload.status,
@@ -278,6 +285,7 @@ export function payloadToAssignmentDraft(
     ...(isUsableOffSnapshot(payload.offSnapshot, payload.date)
       ? { offSnapshot: payload.offSnapshot }
       : {}),
+    ...(teeSheet ? { teeSheet } : {}),
   };
 }
 
@@ -520,6 +528,7 @@ export function parseDailyBoardDraftPayload(
     throw new DailyBoardDraftPayloadError("assignments가 너무 많습니다.");
   }
   const offSnapshot = parseOffSnapshot(o.offSnapshot);
+  const teeSheet = parseOptionalTeeSheet(o.teeSheet);
   return stampPayloadReservationIdentities({
     schemaVersion: DAILY_BOARD_DRAFT_SCHEMA_VERSION,
     date: expectedDate,
@@ -584,7 +593,29 @@ export function parseDailyBoardDraftPayload(
     ...(isUsableOffSnapshot(offSnapshot, expectedDate)
       ? { offSnapshot }
       : {}),
+    ...(teeSheet ? { teeSheet } : {}),
   });
+}
+
+function parseOptionalTeeSheet(raw: unknown): CourseTeeSlot[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const slots: CourseTeeSlot[] = [];
+  for (const item of raw.slice(0, 2000)) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const rec = item as Record<string, unknown>;
+    const course = String(rec.course || "");
+    const shift = String(rec.shift || "");
+    const teeTime = String(rec.teeTime || "");
+    if (!(COURSE_CODES as readonly string[]).includes(course)) continue;
+    if (!SHIFT_PARTS.includes(shift as ShiftPart)) continue;
+    if (!/^\d{2}:\d{2}$/.test(teeTime)) continue;
+    slots.push({
+      course: course as CourseCode,
+      shift: shift as ShiftPart,
+      teeTime,
+    });
+  }
+  return cloneCourseTeeSheet(slots);
 }
 
 export function formatDraftSavedAt(iso: string | Date): string {

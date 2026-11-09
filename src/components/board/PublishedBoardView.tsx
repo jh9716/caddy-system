@@ -15,6 +15,7 @@ import {
 } from "@/lib/reservationParser";
 import { publishedBoardCss } from "@/components/board/publishedBoardCss";
 import { supportBoardBadgeLabels } from "@/lib/dailySpecialSupport";
+import { BOARD_EMPTY_CELL_MARK } from "@/lib/assignmentBoardTeeSheet";
 
 function Marks({ row }: { row: PublishedPlacementV1 }) {
   const special = row.kind !== "regular" && row.kind !== "specialSupport";
@@ -136,7 +137,7 @@ export default function PublishedBoardView({
                     if (cell.kind === "empty") {
                       return (
                         <div key={code} className="bc-cell empty">
-                          ·
+                          {BOARD_EMPTY_CELL_MARK}
                         </div>
                       );
                     }

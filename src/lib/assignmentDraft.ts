@@ -26,7 +26,13 @@ import {
   type UnavailableFromShiftRow,
 } from "@/lib/autoAssignEngine";
 import { ensureReservationUid } from "@/lib/reservationIdentity";
-import { COURSE_LABELS, type CourseCode, type ShiftPart } from "@/lib/reservationParser";
+import { cloneCourseTeeSheet } from "@/lib/assignmentBoardTeeSheet";
+import {
+  COURSE_LABELS,
+  type CourseCode,
+  type CourseTeeSlot,
+  type ShiftPart,
+} from "@/lib/reservationParser";
 import {
   mergeRosterBaseline,
   overlayUnavailableIdsKeepingPlaced,
@@ -64,6 +70,8 @@ export type AssignmentDraft = {
   unavailableFromShift?: UnavailableFromShiftRow[];
   /** 날짜 검증된 휴무 snapshot. mutation은 이것만 쓰고 Google을 치지 않는다. */
   offSnapshot?: DraftOffSnapshot;
+  /** 표시 전용 코스별 운영 티. 엔진/예약 건수에 넣지 않는다. */
+  teeSheet?: CourseTeeSlot[];
   confirmedAt: string | null;
   appliedAt?: string | null;
   applyAuditId?: number | null;
@@ -1095,6 +1103,7 @@ export function applyLiveResultToDraft(
   const merged = mergeDraftOnlyReservationFlags(after, draft);
   const next = createDraftFromAutoResult(merged, draft.caddyPool);
   const resetConfirm = draft.status === "CONFIRMED" || draft.status === "APPLIED";
+  const teeSheet = cloneCourseTeeSheet(draft.teeSheet);
   return {
     ...next,
     status: "EDITED",
@@ -1118,6 +1127,7 @@ export function applyLiveResultToDraft(
     ...(isUsableOffSnapshot(draft.offSnapshot, next.date)
       ? { offSnapshot: draft.offSnapshot }
       : {}),
+    ...(teeSheet ? { teeSheet } : {}),
   };
 }
 

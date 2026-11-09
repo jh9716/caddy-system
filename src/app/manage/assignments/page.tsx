@@ -90,8 +90,14 @@ import {
   COURSE_CODES,
   COURSE_LABELS,
   type CourseCode,
+  type CourseTeeSlot,
   type ShiftPart,
 } from "@/lib/reservationParser";
+import {
+  BOARD_EMPTY_CELL_MARK,
+  BOARD_UNASSIGNED_CELL_LABEL,
+  cloneCourseTeeSheet,
+} from "@/lib/assignmentBoardTeeSheet";
 
 type RunResponse = AutoAssignResultV1 & {
   error?: string;
@@ -99,6 +105,7 @@ type RunResponse = AutoAssignResultV1 & {
   availabilityCounts?: { available: number; special: number; excluded: number };
   specialDutySkipped?: Array<{ caddyId?: number; name?: string }>;
   rosterBaseline?: AutoAssignCaddy[];
+  teeSheet?: CourseTeeSlot[];
 };
 
 const SHIFTS: ShiftPart[] = ["1부", "2부", "3부"];
@@ -2371,10 +2378,16 @@ export default function ManageAssignmentsOpsPage() {
         data,
         mergeRosterBaseline(caddyPool, data.rosterBaseline)
       );
-      const seeded =
-        isUsableOffSnapshot(offSnapshotRef.current, next.date)
-          ? { ...next, offSnapshot: offSnapshotRef.current }
-          : next;
+      const teeSheet =
+        cloneCourseTeeSheet(data.teeSheet) ||
+        cloneCourseTeeSheet(draftRef.current?.teeSheet);
+      const seeded = {
+        ...next,
+        ...(isUsableOffSnapshot(offSnapshotRef.current, next.date)
+          ? { offSnapshot: offSnapshotRef.current }
+          : {}),
+        ...(teeSheet ? { teeSheet } : {}),
+      };
       setDraft(seeded);
       confirmedDraftRef.current = seeded;
       pendingIntentsRef.current = [];
@@ -2502,9 +2515,14 @@ export default function ManageAssignmentsOpsPage() {
         data,
         mergeRosterBaseline(caddyPool, data.rosterBaseline)
       );
-      const next = isUsableOffSnapshot(offSnapshotRef.current, created.date)
-        ? { ...created, offSnapshot: offSnapshotRef.current }
-        : created;
+      const teeSheet = cloneCourseTeeSheet(current?.teeSheet);
+      const next = {
+        ...created,
+        ...(isUsableOffSnapshot(offSnapshotRef.current, created.date)
+          ? { offSnapshot: offSnapshotRef.current }
+          : {}),
+        ...(teeSheet ? { teeSheet } : {}),
+      };
       const prepAfterPreview = await prepareRecalcDraftExpectedVersion({
         discardObsoletePending,
         flushOwnSaves: flushDraftSave,
@@ -3646,7 +3664,10 @@ export default function ManageAssignmentsOpsPage() {
   const boardRows = useMemo(() => {
     if (shiftTab === "UNASSIGNED" || shiftTab === "CLOSED") return [];
     // 선택된 부 내부에서만 matrix — reservation.shift 기준으로 재검증
-    const built = buildShiftBoard(shiftRows, boardOpenCourses, shiftTab);
+    const built = buildShiftBoard(shiftRows, boardOpenCourses, shiftTab, {
+      teeSheet: draft?.teeSheet,
+      unassignedReservations: draft?.unassignedReservations,
+    });
     if (!cellEditOn || !draft) return built;
     return overlayUnassignedVacancies({
       board: built,
@@ -4711,6 +4732,20 @@ export default function ManageAssignmentsOpsPage() {
                                     </div>
                                   );
                                 }
+                                if (cell.kind === "unassigned") {
+                                  return (
+                                    <div
+                                      key={code}
+                                      className="bc-cell unassigned"
+                                      role="cell"
+                                      aria-label={`${shiftTab} ${tr.teeTime} ${COURSE_LABELS[code]} ${BOARD_UNASSIGNED_CELL_LABEL}`}
+                                    >
+                                      <span className="bc-unassigned">
+                                        {BOARD_UNASSIGNED_CELL_LABEL}
+                                      </span>
+                                    </div>
+                                  );
+                                }
                                 if (cell.kind === "empty") {
                                   const cellAction = emptyBoardCellAction(moveKey);
                                   const moveDest = cellAction === "move";
@@ -4746,7 +4781,7 @@ export default function ManageAssignmentsOpsPage() {
                                         ? TEAM_MOVING_LABEL
                                         : moveDest
                                           ? "이동"
-                                          : "-"}
+                                          : BOARD_EMPTY_CELL_MARK}
                                     </button>
                                   );
                                 }
@@ -6306,7 +6341,7 @@ const opsCss = `
   .ops-board-head,
   .ops-board-row {
     display: grid;
-    grid-template-columns: 40px repeat(4, minmax(0, 1fr));
+    grid-template-columns: 52px repeat(4, minmax(0, 1fr));
     width: 100%;
   }
   .ops-board-head {
@@ -6334,6 +6369,7 @@ const opsCss = `
     font-size: 0.68rem;
     font-weight: 800;
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
     color: #334155;
     background: #f8fafc;
     border-right: 1px solid #e2e8f0;
@@ -6359,6 +6395,13 @@ const opsCss = `
     color: #cbd5e1;
     font-weight: 600;
   }
+  .bc-cell.unassigned {
+    color: #b45309;
+    background: #fffbeb;
+    font-weight: 700;
+    font-size: 0.68rem;
+  }
+  .bc-unassigned { letter-spacing: -0.02em; }
   button.bc-cell.empty.addable {
     cursor: pointer;
     color: #94a3b8;

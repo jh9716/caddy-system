@@ -8,19 +8,31 @@
 import {
   REASON,
   resolveCourseCode,
+  type AutoAssignReservation,
   type AutoAssignmentRow,
 } from "@/lib/autoAssignEngine";
+import { collectShiftBoardTeeTimes } from "@/lib/assignmentBoardTeeSheet";
 import {
   COURSE_CODES,
   SHIFT_PARTS,
   type CourseCode,
+  type CourseTeeSlot,
   type ShiftPart,
 } from "@/lib/reservationParser";
 
 export type BoardCell =
   | { kind: "closed" }
   | { kind: "empty" }
+  | { kind: "unassigned"; reservation: AutoAssignReservation }
   | { kind: "assigned"; rows: AutoAssignmentRow[] };
+
+export type BuildShiftBoardOptions = {
+  /** 예약 엑셀에서 뽑은 코스별 운영 티. 없으면 예약 관측값으로 내부 gap만 채움. */
+  teeSheet?: readonly CourseTeeSlot[] | null;
+  unassignedReservations?: ReadonlyArray<{
+    reservation: AutoAssignReservation;
+  }> | null;
+};
 
 export type BoardTimeRow = {
   teeTime: string;
@@ -114,30 +126,63 @@ export function filterAssignmentsByShift(
 /**
  * 이미 한 부로 걸러진 rows로 teeTime × 코스 matrix 생성.
  * shift를 넘기면 방어적으로 해당 부가 아닌 행은 제외한다.
+ * 시간축 = 운영 티시트 ∪ 예약(배정+미배정). 빈 운영 티는 empty('-').
  */
 export function buildShiftBoard(
   rows: readonly AutoAssignmentRow[],
   openCourses: readonly CourseCode[],
-  shift?: ShiftPart
+  shift?: ShiftPart,
+  options?: BuildShiftBoardOptions
 ): BoardTimeRow[] {
   const scoped =
     shift != null ? filterAssignmentsByShift(rows, shift) : [...rows];
   const open = new Set(openCourses);
   const byTimeCourse = new Map<string, AutoAssignmentRow[]>();
-  const times = new Set<string>();
+  const unassignedByTimeCourse = new Map<string, AutoAssignReservation>();
 
   for (const row of scoped) {
     const code = resolveCourseCode(row.reservation.course);
     if (!code) continue;
     const tee = row.reservation.teeTime || "";
-    times.add(tee);
     const key = `${tee}|${code}`;
     const list = byTimeCourse.get(key) || [];
     list.push(row);
     byTimeCourse.set(key, list);
   }
 
-  return [...times].sort((a, b) => a.localeCompare(b)).map((teeTime) => {
+  const unassignedScoped = (options?.unassignedReservations || [])
+    .map((u) => u.reservation)
+    .filter((reservation) =>
+      shift != null ? String(reservation.shift) === shift : true
+    );
+  for (const reservation of unassignedScoped) {
+    const code = resolveCourseCode(reservation.course);
+    if (!code) continue;
+    const tee = reservation.teeTime || "";
+    const key = `${tee}|${code}`;
+    if (byTimeCourse.has(key)) continue;
+    if (!unassignedByTimeCourse.has(key)) {
+      unassignedByTimeCourse.set(key, reservation);
+    }
+  }
+
+  const timeAxis =
+    shift != null
+      ? collectShiftBoardTeeTimes({
+          shift,
+          teeSheet: options?.teeSheet,
+          reservations: [
+            ...scoped.map((row) => row.reservation),
+            ...unassignedScoped,
+          ],
+        })
+      : [
+          ...new Set(
+            scoped.map((row) => row.reservation.teeTime || "").filter(Boolean)
+          ),
+        ].sort((a, b) => a.localeCompare(b));
+
+  return timeAxis.map((teeTime) => {
     const cells = {} as Record<CourseCode, BoardCell>;
     for (const code of COURSE_CODES) {
       if (!open.has(code)) {
@@ -145,20 +190,46 @@ export function buildShiftBoard(
         continue;
       }
       const list = byTimeCourse.get(`${teeTime}|${code}`) || [];
-      cells[code] =
-        list.length > 0 ? { kind: "assigned", rows: list } : { kind: "empty" };
+      if (list.length > 0) {
+        cells[code] = { kind: "assigned", rows: list };
+        continue;
+      }
+      const vacant = unassignedByTimeCourse.get(`${teeTime}|${code}`);
+      cells[code] = vacant
+        ? { kind: "unassigned", reservation: vacant }
+        : { kind: "empty" };
     }
     return { teeTime, cells };
   });
 }
 
-/** matrix 안 assigned 셀에 들어 있는 assignment 개수 합 */
+/** matrix 안 assigned 셀에 들어 있는 assignment 개수 합. empty/unassigned 제외. */
 export function countBoardAssignments(board: readonly BoardTimeRow[]): number {
   let n = 0;
   for (const tr of board) {
     for (const code of COURSE_CODES) {
       const cell = tr.cells[code];
       if (cell.kind === "assigned") n += cell.rows.length;
+    }
+  }
+  return n;
+}
+
+export function countBoardUnassignedCells(board: readonly BoardTimeRow[]): number {
+  let n = 0;
+  for (const tr of board) {
+    for (const code of COURSE_CODES) {
+      if (tr.cells[code]?.kind === "unassigned") n += 1;
+    }
+  }
+  return n;
+}
+
+export function countBoardEmptyCells(board: readonly BoardTimeRow[]): number {
+  let n = 0;
+  for (const tr of board) {
+    for (const code of COURSE_CODES) {
+      if (tr.cells[code]?.kind === "empty") n += 1;
     }
   }
   return n;

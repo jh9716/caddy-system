@@ -17,6 +17,43 @@ export const COURSE_LABELS: Record<CourseCode, string> = {
 export const SHIFT_PARTS = ["1부", "2부", "3부"] as const;
 export type ShiftPart = (typeof SHIFT_PARTS)[number];
 
+/** 예약 없는 공석 티를 포함한 코스별 운영 시간표. 예약 건수에 넣지 않는다. */
+export type CourseTeeSlot = {
+  course: CourseCode;
+  shift: ShiftPart;
+  teeTime: string;
+};
+
+export function dedupeCourseTeeSlots(
+  slots: readonly CourseTeeSlot[]
+): CourseTeeSlot[] {
+  const seen = new Set<string>();
+  const out: CourseTeeSlot[] = [];
+  for (const slot of slots) {
+    if (!slot?.course || !slot.shift || !slot.teeTime) continue;
+    const key = `${slot.shift}|${slot.course}|${slot.teeTime}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      course: slot.course,
+      shift: slot.shift,
+      teeTime: slot.teeTime,
+    });
+  }
+  const courseRank = Object.fromEntries(
+    COURSE_CODES.map((code, i) => [code, i])
+  ) as Record<CourseCode, number>;
+  const shiftRank = Object.fromEntries(
+    SHIFT_PARTS.map((shift, i) => [shift, i])
+  ) as Record<ShiftPart, number>;
+  return out.sort((a, b) => {
+    const sr = shiftRank[a.shift] - shiftRank[b.shift];
+    if (sr !== 0) return sr;
+    if (a.teeTime !== b.teeTime) return a.teeTime.localeCompare(b.teeTime);
+    return courseRank[a.course] - courseRank[b.course];
+  });
+}
+
 /** 부 미검출 시 reviewReasons에 넣는 고정 코드 */
 export const SHIFT_NOT_DETECTED = "SHIFT_NOT_DETECTED";
 
@@ -66,6 +103,8 @@ export type ReservationParseResult = {
   duplicates: ParsedReservation[];
   summary: ReservationParseSummary;
   warnings: string[];
+  /** 팀명 없는 공석 티 포함. 예약/미배정 카운트와 분리. */
+  teeSheet: CourseTeeSlot[];
 };
 
 type HeaderKind =
@@ -778,6 +817,8 @@ export function parseReservationMatrix(
     defaultCourse?: CourseCode | null;
     /** @deprecated 무시됨 — 티타임 밴드/부 컬럼만 사용 */
     defaultShift?: ShiftPart | null;
+    /** 있으면 공석 티를 여기에 추가한다 (예약 배열과 분리). */
+    teeSheet?: CourseTeeSlot[];
   }
 ): ParsedReservation[] {
   const stringMatrix = matrix.map((row) => row.map((c) => cellText(c)));
@@ -789,6 +830,7 @@ export function parseReservationMatrix(
   const sheetCourse = options.defaultCourse || sheetCtx.course;
   // 시트 공통 티타임 밴드 (4코스가 같은 행의 shift를 공유)
   const rowShiftMap = buildRowShiftMap(matrix, blocks);
+  const teeSheet = options.teeSheet;
 
   const out: ParsedReservation[] = [];
   for (const block of blocks) {
@@ -798,6 +840,7 @@ export function parseReservationMatrix(
         fallbackDate,
         sheetCourse,
         rowShiftMap,
+        teeSheet,
       })
     );
   }
@@ -813,6 +856,7 @@ function parseCourseBlock(
     fallbackDate: string | null;
     sheetCourse: CourseCode | null;
     rowShiftMap: Array<ShiftPart | null>;
+    teeSheet?: CourseTeeSlot[];
   }
 ): ParsedReservation[] {
   const { headerRow, columns, startCol, endCol } = block;
@@ -836,8 +880,6 @@ function parseCourseBlock(
     const teamRaw =
       columns.teamName != null ? cellText(values[columns.teamName]) : "";
     const teamName = teamRaw || null;
-    // 예약자/팀명 없는 행은 예약으로 세지 않음 (섹션 라벨·공석 티)
-    if (!teamName) continue;
 
     const courseRaw =
       columns.course != null ? cellText(values[columns.course]) : "";
@@ -847,6 +889,18 @@ function parseCourseBlock(
     const teeTime = parseTeeTime(teeRaw);
     const dateRaw = columns.date != null ? values[columns.date] : undefined;
     const date = parseDateValue(dateRaw) || ctx.fallbackDate || null;
+    const course = normalizeCourse(courseRaw) || blockCourse;
+    const shiftRaw =
+      columns.shift != null ? cellText(values[columns.shift]) : "";
+    const shift: ShiftPart | null =
+      normalizeShiftColumn(shiftRaw) || ctx.rowShiftMap[r] || null;
+
+    if (ctx.teeSheet && course && shift && teeTime) {
+      ctx.teeSheet.push({ course, shift, teeTime });
+    }
+
+    // 예약자/팀명 없는 행은 예약으로 세지 않음 (섹션 라벨·공석 티)
+    if (!teamName) continue;
 
     // 시간·코스·날짜 단서가 전혀 없으면 스킵
     if (!teeTime && !courseRaw && !dateRaw) continue;
@@ -856,16 +910,7 @@ function parseCourseBlock(
 
     if (!teeTime) reviewReasons.push("잘못된 시간 형식");
     if (!date) reviewReasons.push("날짜 없음");
-
-    const course = normalizeCourse(courseRaw) || blockCourse;
     if (!course) reviewReasons.push("코스 판별 실패");
-
-    const shiftRaw =
-      columns.shift != null ? cellText(values[columns.shift]) : "";
-    // 전용 부 컬럼(명시 N부, 드묾) → 아니면 시트 공통 티타임 밴드.
-    // 절대시각 threshold / 빈행 순서 / 1부 fallback 없음.
-    const shift: ShiftPart | null =
-      normalizeShiftColumn(shiftRaw) || ctx.rowShiftMap[r] || null;
     if (!shift) reviewReasons.push(SHIFT_NOT_DETECTED);
 
     const hole =
@@ -993,7 +1038,8 @@ export function buildReservationSummary(
 export function finalizeReservationParse(
   rows: ParsedReservation[],
   sheetCount: number,
-  warnings: string[] = []
+  warnings: string[] = [],
+  teeSheet: readonly CourseTeeSlot[] = []
 ): ReservationParseResult {
   const withDupes = markDuplicates(rows);
   // stable sort: date, course order, shift, teeTime, sheet, row
@@ -1025,6 +1071,7 @@ export function finalizeReservationParse(
     duplicates: sorted.filter((r) => r.isDuplicate),
     summary: buildReservationSummary(sorted, sheetCount),
     warnings,
+    teeSheet: dedupeCourseTeeSlots(teeSheet),
   };
 }
 
@@ -1035,11 +1082,13 @@ export function parseReservationSheets(
 ): ReservationParseResult {
   const warnings: string[] = [];
   const all: ParsedReservation[] = [];
+  const teeSheet: CourseTeeSlot[] = [];
 
   for (const sheet of sheets) {
     const rows = parseReservationMatrix(sheet.matrix, {
       sourceSheet: sheet.name,
       defaultDate: options?.defaultDate ?? null,
+      teeSheet,
     });
     if (rows.length === 0) {
       warnings.push(`시트 "${sheet.name}": 헤더/예약 행을 찾지 못함`);
@@ -1048,6 +1097,6 @@ export function parseReservationSheets(
     all.push(...rows);
   }
 
-  return finalizeReservationParse(all, sheets.length, warnings);
+  return finalizeReservationParse(all, sheets.length, warnings, teeSheet);
 }
 

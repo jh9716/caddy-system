@@ -15,10 +15,12 @@ import {
   isYmd,
   type DailyBoardDraftPayloadV1,
 } from "@/lib/dailyBoardDraft";
+import { cloneCourseTeeSheet } from "@/lib/assignmentBoardTeeSheet";
 import {
   COURSE_CODES,
   SHIFT_PARTS,
   type CourseCode,
+  type CourseTeeSlot,
   type ShiftPart,
 } from "@/lib/reservationParser";
 
@@ -112,6 +114,8 @@ export type DailyBoardPublishedPayloadV1 = {
   placements: PublishedPlacementV1[];
   sparesByShift: PublishedSpareV1[];
   publisherUsername: string | null;
+  /** optional: 표시 전용 코스별 운영 티. legacy payload에는 없음. */
+  teeSheet?: CourseTeeSlot[];
 };
 
 export class DailyBoardPublishedPayloadError extends Error {
@@ -295,6 +299,12 @@ export function parseDailyBoardPublishedPayload(
       o.publisherUsername == null || o.publisherUsername === ""
         ? null
         : String(o.publisherUsername),
+    ...(Array.isArray(o.teeSheet)
+      ? (() => {
+          const teeSheet = cloneCourseTeeSheet(o.teeSheet as CourseTeeSlot[]);
+          return teeSheet ? { teeSheet } : {};
+        })()
+      : {}),
   };
 }
 
@@ -369,6 +379,7 @@ export function buildPublishedPayloadFromDraft(
   const placements = assignments.map((row) =>
     placementFromAssignment(row, assignments)
   );
+  const teeSheet = cloneCourseTeeSheet(draft.teeSheet);
   const sparesByShift = (draft.sparesByShift || []).map((s) => ({
     shift: s.shift,
     spare1: spareFromDraft(s.spare1),
@@ -382,6 +393,7 @@ export function buildPublishedPayloadFromDraft(
       placements,
       sparesByShift,
       publisherUsername: opts?.publisherUsername ?? null,
+      ...(teeSheet ? { teeSheet } : {}),
     },
     draft.date
   );
