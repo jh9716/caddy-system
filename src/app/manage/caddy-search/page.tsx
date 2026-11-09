@@ -106,7 +106,7 @@ export default function ManageCaddySearchPage() {
         <div>
           <h1 className="cs-title">캐디 검색</h1>
           <p className="cs-sub">
-            이름 · 조 · 번호 · 휴대폰 뒤자리. 연락처는 관리자만 봅니다.
+            이름 · 조 · 번호 · 휴대폰 뒤자리 · 차량번호. 연락처·차량번호는 관리자만 봅니다.
           </p>
         </div>
         <Link href="/manage/caddies" className="cs-link">
@@ -121,7 +121,7 @@ export default function ManageCaddySearchPage() {
           className="cs-search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="김현정 / 7조 / 123 / 5678"
+          placeholder="김현정 / 7조 / 123 / 5678 / 12가5432"
           autoComplete="off"
           autoCorrect="off"
           spellCheck={false}
@@ -137,7 +137,9 @@ export default function ManageCaddySearchPage() {
       {loading ? <p className="cs-muted">검색 중…</p> : null}
 
       {!loading && !query.trim() ? (
-        <p className="cs-empty">이름, 조, 캐디 번호, 휴대폰 뒤 4자리를 입력하세요.</p>
+        <p className="cs-empty">
+          이름, 조, 캐디 번호, 휴대폰 뒤 4자리, 차량번호를 입력하세요.
+        </p>
       ) : null}
 
       {!loading && query.trim() ? (
@@ -160,7 +162,12 @@ export default function ManageCaddySearchPage() {
                 <div
                   className={`cs-phone${!hit.hasPhone ? " is-missing" : ""}`}
                 >
-                  {!hit.hasPhone ? "연락처 등록 필요" : hit.maskedPhone}
+                  {!hit.hasPhone ? "연락처 등록 필요" : hit.displayPhone}
+                </div>
+                <div
+                  className={`cs-vehicle${!hit.vehicleNumber ? " is-missing" : ""}`}
+                >
+                  {hit.vehicleNumber || "차량 미등록"}
                 </div>
                 {today ? <div className="cs-today">오늘 배치 {today}</div> : null}
               </div>
@@ -230,6 +237,8 @@ export default function ManageCaddySearchPage() {
         .cs-meta { margin-top: 3px; font-size: 0.78rem; color: var(--vh-muted); }
         .cs-phone { margin-top: 6px; font-size: 0.86rem; font-weight: 700; }
         .cs-phone.is-missing { color: var(--vh-muted); font-weight: 600; }
+        .cs-vehicle { margin-top: 3px; font-size: 0.8rem; font-weight: 700; }
+        .cs-vehicle.is-missing { color: var(--vh-muted); font-weight: 600; }
         .cs-today { margin-top: 4px; font-size: 0.74rem; color: var(--vh-green-800); }
         .cs-actions { display: grid; gap: 6px; min-width: 72px; }
         .cs-btn {

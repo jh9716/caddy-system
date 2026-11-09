@@ -153,7 +153,7 @@ export function reservationMoveBlockReason(
       message: "LOCK된 예약은 이동할 수 없습니다.",
     };
   }
-  if (row.kind === "oneThree") {
+  if (row.kind === "oneThree" || row.kind === "two") {
     return {
       code: "MOVE_SPECIAL",
       message: "특수배치는 1차에서 팀 이동하지 않습니다.",

@@ -113,6 +113,8 @@ model Caddy {
   memo              String?
   /// 휴대폰 (canonical: 010XXXXXXXX). null=미등록. PG unique는 NULL 다수 허용.
   phoneNormalized   String?          @unique
+  /// 차량번호. null=미등록. 관리자 전용 조회/수정. 기존 캐디는 NULL 유지.
+  vehicleNumber     String?
   assignments       Assignment[]
   schedules         Schedule[]
   shiftDuties       ShiftDuty[]
@@ -246,6 +248,8 @@ model Notice {
   pushSentByUserId Int?
   /// 첨부 사진. Bytes는 private Blob. 기존 Notice row는 0장.
   photos NoticePhoto[]
+  /// PDF 첨부. Bytes는 private Blob. NoticePhoto와 분리. 기존 Notice row는 0개.
+  files  NoticeFile[]
 
   @@index([pinned, important, createdAt])
   @@index([targetType, targetValue])
@@ -262,6 +266,22 @@ model NoticePhoto {
   size       Int
   sortOrder  Int      @default(0)
   createdAt  DateTime @default(now())
+
+  @@index([noticeId, sortOrder])
+}
+
+/// Notice PDF attachment. Bytes live in private object storage, not Postgres.
+/// Separate from NoticePhoto — not a photo MIME add-on. public URL column 없음.
+model NoticeFile {
+  id           Int      @id @default(autoincrement())
+  noticeId     Int
+  notice       Notice   @relation(fields: [noticeId], references: [id], onDelete: Cascade)
+  storageKey   String   @unique
+  originalName String
+  mimeType     String
+  size         Int
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
 
   @@index([noticeId, sortOrder])
 }
@@ -644,6 +664,7 @@ model OffRequestTeamFinalization {
 enum DailySpecialKind {
   ONE_MAK
   ONE_TWO
+  TWO
   TWO_THREE
   ONE_THREE
   FIFTY_FOUR
@@ -658,6 +679,10 @@ model DailySpecialDuty {
   caddy     Caddy            @relation(fields: [caddyId], references: [id])
   /// 1부터. 같은 date+kind 안에서 작을수록 먼저 배치
   sortOrder Int
+  /// 2부 단독(TWO)만 사용. 지정 코스. 다른 유형은 null.
+  course    String?
+  /// 2부 단독(TWO)만 사용. 지정 티타임(HH:MM). 다른 유형은 null.
+  teeTime   String?
   createdAt DateTime         @default(now())
   updatedAt DateTime         @updatedAt
 

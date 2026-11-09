@@ -69,9 +69,10 @@ section("같은 유형 A→B→C 입력 순서 보존");
 {
   assert(
     DAILY_SPECIAL_KIND_UI.join(",") ===
-      "ONE_MAK,ONE_TWO,TWO_THREE,ONE_THREE,FIFTY_FOUR",
-    "UI 칩 순서 1막·1·2·2·3·1·3·54홀"
+      "ONE_MAK,ONE_TWO,TWO,TWO_THREE,ONE_THREE,FIFTY_FOUR",
+    "UI 칩 순서 1막·1·2·2부·2·3·1·3·54홀"
   );
+  assert(DAILY_SPECIAL_KIND_LABELS.TWO === "2부", "2부 단독 라벨");
   assert(DAILY_SPECIAL_KIND_LABELS.TWO_THREE === "2·3부", "2·3부 라벨");
   const rows = [
     rec("ONE_TWO", 1, 1, "김A", "3조", 9),
@@ -1167,8 +1168,8 @@ section("특수근무 검색·3부 첫 캐디 후보는 RETIRED/LEAVE 제외");
     "2·3부 운영 규칙 안내"
   );
   assert(
-    /sd-kinds-modal \{ grid-template-columns: repeat\(5/.test(specialSrc),
-    "등록 칩 5열"
+    /sd-kinds-modal \{ grid-template-columns: repeat\(3/.test(specialSrc),
+    "등록 칩 3열(6종: 1막·1·2·2부 / 2·3·1·3·54홀)"
   );
   const engineSrc = readFileSync(
     join(process.cwd(), "src/lib/autoAssignEngine.ts"),

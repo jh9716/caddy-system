@@ -4,6 +4,7 @@ import { getRequestAuthUser } from "@/lib/getRequestAuthUser";
 import { formatKstDisplay } from "@/lib/kstDate";
 import { loadNoticeViewer } from "@/lib/noticeAccess";
 import { isNoticePhotoTableMissing } from "@/lib/noticePhoto";
+import { isNoticeFileTableMissing } from "@/lib/noticeFile";
 import { formatNoticeAuthorDisplay } from "@/lib/noticeAuthor";
 import {
   formatNoticeTargetLabel,
@@ -30,6 +31,7 @@ export default async function NoticeListPage() {
     targetType: string;
     targetValue: string | null;
     photoCount: number;
+    fileCount: number;
   }>;
   try {
     const rows = await prisma.notice.findMany({
@@ -43,7 +45,7 @@ export default async function NoticeListPage() {
         pinned: true,
         targetType: true,
         targetValue: true,
-        _count: { select: { photos: true } },
+        _count: { select: { photos: true, files: true } },
       },
       orderBy: noticeListOrder(),
       take: 80,
@@ -51,25 +53,51 @@ export default async function NoticeListPage() {
     notices = rows.map(({ _count, ...row }) => ({
       ...row,
       photoCount: _count.photos,
+      fileCount: _count.files,
     }));
   } catch (e) {
-    if (!isNoticePhotoTableMissing(e)) throw e;
-    const rows = await prisma.notice.findMany({
-      where: visibleNoticeWhere(viewer),
-      select: {
-        id: true,
-        title: true,
-        author: true,
-        createdAt: true,
-        important: true,
-        pinned: true,
-        targetType: true,
-        targetValue: true,
-      },
-      orderBy: noticeListOrder(),
-      take: 80,
-    });
-    notices = rows.map((row) => ({ ...row, photoCount: 0 }));
+    if (isNoticeFileTableMissing(e) && !isNoticePhotoTableMissing(e)) {
+      const rows = await prisma.notice.findMany({
+        where: visibleNoticeWhere(viewer),
+        select: {
+          id: true,
+          title: true,
+          author: true,
+          createdAt: true,
+          important: true,
+          pinned: true,
+          targetType: true,
+          targetValue: true,
+          _count: { select: { photos: true } },
+        },
+        orderBy: noticeListOrder(),
+        take: 80,
+      });
+      notices = rows.map(({ _count, ...row }) => ({
+        ...row,
+        photoCount: _count.photos,
+        fileCount: 0,
+      }));
+    } else if (isNoticePhotoTableMissing(e) || isNoticeFileTableMissing(e)) {
+      const rows = await prisma.notice.findMany({
+        where: visibleNoticeWhere(viewer),
+        select: {
+          id: true,
+          title: true,
+          author: true,
+          createdAt: true,
+          important: true,
+          pinned: true,
+          targetType: true,
+          targetValue: true,
+        },
+        orderBy: noticeListOrder(),
+        take: 80,
+      });
+      notices = rows.map((row) => ({ ...row, photoCount: 0, fileCount: 0 }));
+    } else {
+      throw e;
+    }
   }
 
   return (
@@ -92,6 +120,9 @@ export default async function NoticeListPage() {
                 {n.pinned ? <span className="notice-badge notice-badge-pinned">고정</span> : null}
                 {n.photoCount > 0 ? (
                   <span className="notice-badge notice-badge-photo">사진 {n.photoCount}</span>
+                ) : null}
+                {n.fileCount > 0 ? (
+                  <span className="notice-badge notice-badge-file">PDF {n.fileCount}</span>
                 ) : null}
                 <span className="notice-list-title">{n.title}</span>
               </div>

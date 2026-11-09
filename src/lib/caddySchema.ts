@@ -34,6 +34,9 @@ export const thirdBandSubgroupSchema = z
 /** UI/API 입력 필드명. DB 컬럼은 phoneNormalized. 빈 문자열 허용(서버에서 null). */
 const phoneInputSchema = z.string().optional().nullable();
 
+/** UI/API 입력 필드명. DB 컬럼은 vehicleNumber. 빈 문자열 허용(서버에서 null). */
+const vehicleInputSchema = z.string().optional().nullable();
+
 export const caddyCreateSchema = z
   .object({
     name: z.string().trim().min(1, "이름은 필수입니다."),
@@ -45,6 +48,7 @@ export const caddyCreateSchema = z
     status: caddyStatus.optional().default("근무중"),
     memo: z.string().optional().nullable(),
     phone: phoneInputSchema,
+    vehicleNumber: vehicleInputSchema,
     employeeCode: z.string().trim().min(1).optional().nullable(),
     caddyType: z.enum(["HOUSE", "THIRD", "DRIVING"]).optional(),
     missingFromImport: z.boolean().optional(),
@@ -79,6 +83,8 @@ export const caddyUpdateSchema = z.object({
   memo: z.string().optional().nullable(),
   /** 생략 시 기존 phone 유지. null/"" → 삭제(null). */
   phone: phoneInputSchema,
+  /** 생략 시 기존 차량번호 유지. null/"" → 삭제(null). */
+  vehicleNumber: vehicleInputSchema,
   employeeCode: z.string().trim().min(1).optional().nullable(),
   caddyType: z.enum(["HOUSE", "THIRD", "DRIVING"]).optional(),
   missingFromImport: z.boolean().optional(),

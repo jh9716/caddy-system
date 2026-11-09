@@ -6,6 +6,7 @@ import {
   isNoticeAuthResponse,
   requireNoticeAdmin,
 } from "@/lib/noticeAccess";
+import { parseRequestedSortOrder } from "@/lib/noticeMediaLock";
 import { uploadNoticePhoto } from "@/lib/noticePhoto";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +19,9 @@ async function noticeId(
   return Number(resolved.id);
 }
 
-async function readUploadBytes(req: NextRequest): Promise<Uint8Array> {
+async function readUploadBytes(
+  req: NextRequest
+): Promise<{ bytes: Uint8Array; requestedSortOrder: number | null }> {
   const contentType = req.headers.get("content-type") || "";
   if (contentType.includes("multipart/form-data")) {
     const form = await req.formData().catch(() => null);
@@ -26,13 +29,16 @@ async function readUploadBytes(req: NextRequest): Promise<Uint8Array> {
     if (!(file instanceof Blob)) {
       throw new CourseReportPhotoValidationError("empty_file", "사진 파일이 필요합니다.");
     }
-    return new Uint8Array(await file.arrayBuffer());
+    return {
+      bytes: new Uint8Array(await file.arrayBuffer()),
+      requestedSortOrder: parseRequestedSortOrder(form?.get("sortOrder")),
+    };
   }
   const buf = await req.arrayBuffer().catch(() => null);
   if (!buf || buf.byteLength === 0) {
     throw new CourseReportPhotoValidationError("empty_file", "사진 파일이 필요합니다.");
   }
-  return new Uint8Array(buf);
+  return { bytes: new Uint8Array(buf), requestedSortOrder: null };
 }
 
 export async function POST(
@@ -48,8 +54,13 @@ export async function POST(
   }
 
   try {
-    const bytes = await readUploadBytes(req);
-    const photo = await uploadNoticePhoto(prisma, { noticeId: id, bytes, auth });
+    const { bytes, requestedSortOrder } = await readUploadBytes(req);
+    const photo = await uploadNoticePhoto(prisma, {
+      noticeId: id,
+      bytes,
+      auth,
+      requestedSortOrder,
+    });
     return NextResponse.json({ ok: true, photo });
   } catch (e) {
     if (e instanceof CourseReportPhotoValidationError || e instanceof CourseReportPhotoStorageError) {

@@ -55,7 +55,6 @@ assert(
       "/notice",
       "/chat",
       "/course-reports",
-      "/schedule",
       "/manage/tools",
     ], "/course-reports", "/community").join(","),
   "main href order"
@@ -63,12 +62,18 @@ assert(
 assert(
   ADMIN_MAIN_NAV.map((i) => i.label).join(",") ===
     withFb(
-      "대시보드,캐디 관리,마샬 관리,카트 관리,휴무 신청,자동배치,배치표,공지,채팅,코스 제보,스케줄,관리도구".split(","),
+      "대시보드,캐디 관리,마샬 관리,카트 관리,휴무 신청,자동배치,배치표,공지,채팅,코스 제보,관리도구".split(","),
       "코스 제보",
       "가배치표 게시판"
     ).join(","),
   "main labels"
 );
+assert(
+  ADMIN_MAIN_NAV.every((i) => i.href !== "/schedule" && i.label !== "스케줄"),
+  "스케줄 is hidden from admin side menu"
+);
+assert(fs.existsSync(path.resolve("src/app/schedule/page.tsx")), "kept /schedule page");
+assert(fs.existsSync(path.resolve("src/app/api/schedule/route.ts")), "kept /api/schedule");
 
 console.log("== tools stay off the main nav ==");
 for (const href of ADMIN_HIDDEN_FROM_MAIN_HREFS) {

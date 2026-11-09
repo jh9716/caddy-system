@@ -88,6 +88,7 @@ const SPECIAL_KINDS: AssignmentKind[] = [
   "fiftyFourHole",
   "oneThree",
   "oneTwo",
+  "two",
   "twoThree",
   "oneMak",
   "driving",
@@ -377,14 +378,15 @@ export function reservationsFromAssignmentDraft(
  * 특수근무 MANUAL 1부 시작 위치용. 현재 작업본에 보이는 1부 슬롯만 사용한다.
  * closed(코스 OFF) 예약은 선택지에서 제외한다.
  */
-export function shift1ReservationsForAnchor(
-  draft: AssignmentDraft
+export function shiftReservationsForOptions(
+  draft: AssignmentDraft,
+  shift: ShiftPart
 ): AutoAssignReservation[] {
   const seen = new Set<string>();
   const out: AutoAssignReservation[] = [];
   const push = (reservation: AutoAssignReservation | undefined | null) => {
     if (!reservation) return;
-    if (String(reservation.shift) !== "1부") return;
+    if (String(reservation.shift) !== shift) return;
     const key = reservationKey(reservation);
     if (seen.has(key)) return;
     seen.add(key);
@@ -395,6 +397,18 @@ export function shift1ReservationsForAnchor(
   return out;
 }
 
+export function shift1ReservationsForAnchor(
+  draft: AssignmentDraft
+): AutoAssignReservation[] {
+  return shiftReservationsForOptions(draft, "1부");
+}
+
+export function shift2ReservationsForSlot(
+  draft: AssignmentDraft
+): AutoAssignReservation[] {
+  return shiftReservationsForOptions(draft, "2부");
+}
+
 export type Shift1StartOption = {
   course: string;
   teeTime: string;
@@ -402,14 +416,14 @@ export type Shift1StartOption = {
   label: string;
 };
 
-/** Excel preview / 작업본 1부 슬롯을 시작 위치 select 옵션으로 만든다. */
-export function buildShift1StartOptions(
+export function buildShiftStartOptions(
   rows: AutoAssignReservation[],
-  date: string
+  date: string,
+  shift: ShiftPart
 ): Shift1StartOption[] {
   const filtered = rows.filter(
     (row) =>
-      String(row.shift) === "1부" && (!row.date || row.date === date)
+      String(row.shift) === shift && (!row.date || row.date === date)
   );
   const sorted = filtered.slice().sort(compareReservationOrder);
   const seen = new Set<string>();
@@ -430,6 +444,21 @@ export function buildShift1StartOptions(
     });
   }
   return out;
+}
+
+/** Excel preview / 작업본 1부 슬롯을 시작 위치 select 옵션으로 만든다. */
+export function buildShift1StartOptions(
+  rows: AutoAssignReservation[],
+  date: string
+): Shift1StartOption[] {
+  return buildShiftStartOptions(rows, date, "1부");
+}
+
+export function buildShift2StartOptions(
+  rows: AutoAssignReservation[],
+  date: string
+): Shift1StartOption[] {
+  return buildShiftStartOptions(rows, date, "2부");
 }
 
 export const RECALC_CONFIRM_MESSAGE =
@@ -977,6 +1006,9 @@ export function autoResultFromDraft(
     oneTwoCandidateCount: 0,
     oneTwoAssignedCaddyCount: 0,
     oneTwoUnassignedCount: 0,
+    twoCandidateCount: 0,
+    twoAssignedCaddyCount: 0,
+    twoUnassignedCount: 0,
     twoThreeCandidateCount: 0,
     twoThreeAssignedCaddyCount: 0,
     twoThreeUnassignedCount: 0,
@@ -1019,6 +1051,7 @@ export function autoResultFromDraft(
     fiftyFourHoleAssignments: assignments.filter((a) => a.kind === "fiftyFourHole"),
     oneThreeAssignments: assignments.filter((a) => a.kind === "oneThree"),
     oneTwoAssignments: assignments.filter((a) => a.kind === "oneTwo"),
+    twoAssignments: assignments.filter((a) => a.kind === "two"),
     twoThreeAssignments: assignments.filter((a) => a.kind === "twoThree"),
     oneMakAssignments: assignments.filter((a) => a.kind === "oneMak"),
     weekendBandAssignments,

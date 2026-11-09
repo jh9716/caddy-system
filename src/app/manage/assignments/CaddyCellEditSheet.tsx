@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   groupDirectEditCandidates,
+  isDirectEditLocked,
   listDirectEditCandidates,
   type DirectEditCandidate,
 } from "@/lib/assignmentBoardCellEdit";
@@ -17,6 +18,7 @@ export function CaddyCellEditSheet({
   onClose,
   onSelect,
   onOpenDutyMenu,
+  onVacate,
 }: {
   draft: AssignmentDraft;
   row: AutoAssignmentRow;
@@ -24,6 +26,7 @@ export function CaddyCellEditSheet({
   onClose: () => void;
   onSelect: (caddyId: number) => void;
   onOpenDutyMenu: () => void;
+  onVacate?: () => void;
 }) {
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -98,6 +101,11 @@ export function CaddyCellEditSheet({
           items={groups.unassigned}
           onSelect={onSelect}
         />
+        {onVacate && !vacant && !isDirectEditLocked(row) ? (
+          <button type="button" className="btn ghost de-duty" onClick={onVacate}>
+            빈 칸으로
+          </button>
+        ) : null}
         <button type="button" className="btn ghost de-duty" onClick={onOpenDutyMenu}>
           병가·결근 등 업무 메뉴
         </button>

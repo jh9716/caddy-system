@@ -69,6 +69,17 @@ function req(url: string, init?: ConstructorParameters<typeof NextRequest>[1]) {
   return new NextRequest(url, init);
 }
 
+function passthroughNoticeTransaction() {
+  const orig = prisma.$transaction.bind(prisma);
+  prisma.$transaction = (async (arg: unknown, options?: unknown) => {
+    if (typeof arg === "function") return (arg as (tx: typeof prisma) => Promise<unknown>)(prisma);
+    return orig(arg as never, options as never);
+  }) as typeof prisma.$transaction;
+  return () => {
+    prisma.$transaction = orig;
+  };
+}
+
 function adminAuth(user: { id: number; username: string }) {
   return {
     session: {} as never,
@@ -110,6 +121,87 @@ async function postPhoto(cookie: string, noticeId: number, bytes: Uint8Array) {
 }
 
 async function main() {
+  section("notice photo limits are independent");
+  {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const read = (rel: string) => fs.readFileSync(path.resolve(rel), "utf8");
+    const constants = read("src/lib/noticePhotoConstants.ts");
+    const form = read("src/app/notice/new/ui/NewNoticeForm.tsx");
+    const noticeClient = read("src/lib/noticePhotoClient.ts");
+    const reportClient = read("src/lib/courseReportPhotoClient.ts");
+    const chatClient = read("src/lib/chatPhotoClient.ts");
+    assert(NOTICE_PHOTO_MAX === 10, "notice max 10");
+    assert(constants.includes("NOTICE_PHOTO_MAX = 10"), "constant 10");
+    assert(!constants.includes("NOTICE_PHOTO_MAX = COURSE_REPORT_PHOTO_MAX"), "notice max not aliased");
+    assert(form.includes("NOTICE_PHOTO_MAX"), "form uses notice max");
+    assert(!form.includes("COURSE_REPORT_PHOTO_MAX"), "form does not use report max");
+    assert(form.includes("instantNoticePhotoPicks"), "form instant thumbs before encode");
+    assert(form.includes('className="is-revealed"'), "form reveals composer thumbs");
+    assert(form.includes("notice-form-progress"), "form shows save progress");
+    assert(form.includes("submitLock"), "form double-submit lock");
+    assert(!form.includes("pickNoticePhotos("), "form does not block pick on encode");
+    assert(noticeClient.includes("prepareNoticePhoto"), "notice client has dedicated prepare");
+    assert(noticeClient.includes("instantNoticePhotoPicks"), "picker shows original file immediately");
+    assert(!noticeClient.includes("pickCourseReportPhotos(files, room, prepareNoticePhoto"), "does not reuse report picker");
+    assert(noticeClient.includes("NOTICE_MEDIA_UPLOAD_CONCURRENCY"), "bounded parallel photo upload");
+    assert(read("src/lib/noticeMediaLock.ts").includes("FOR UPDATE"), "parallel inserts lock notice row");
+    assert(read("src/app/globals.css").includes(".notice-form .course-report-photo-item img"), "notice form thumb opacity override");
+    assert(reportClient.includes("COURSE_REPORT_PHOTO_LONG_EDGE"), "report still uses 1200-edge encode");
+    assert(reportClient.includes("COURSE_REPORT_PHOTO_JPEG_QUALITY"), "report quality unchanged");
+    assert(chatClient.includes("prepareCourseReportPhoto as prepareChatPhoto"), "chat still uses report prepare");
+
+    const { parseRequestedSortOrder, resolveLockedSortOrder } = await import(
+      "../src/lib/noticeMediaLock"
+    );
+    assert(parseRequestedSortOrder("3") === 3, "sortOrder form field parsed");
+    assert(parseRequestedSortOrder("nope") == null, "invalid sortOrder ignored");
+    assert(resolveLockedSortOrder(1, 3, false) === 3, "requested sort kept when free");
+    assert(resolveLockedSortOrder(1, 3, true) === 2, "taken sort falls back to max+1");
+
+    const {
+      instantNoticePhotoPicks,
+      uploadNoticePendingPhotos,
+      NOTICE_MEDIA_UPLOAD_CONCURRENCY,
+    } = await import("../src/lib/noticePhotoClient");
+    assert(NOTICE_MEDIA_UPLOAD_CONCURRENCY === 3, "photo upload concurrency 3");
+    const jpegFile = new File([jpegBytes()], "a.jpg", { type: "image/jpeg" });
+    const instant = instantNoticePhotoPicks([jpegFile], 10);
+    assert(instant.items.length === 1, "instant pick keeps jpeg");
+    assert(instant.items[0].status === "preparing", "thumb before encode");
+    assert(instant.items[0].previewUrl.startsWith("blob:"), "object URL from original file");
+    const heic = instantNoticePhotoPicks(
+      [new File([jpegBytes()], "b.heic", { type: "image/heic" })],
+      10
+    );
+    assert(heic.items[0].previewUrl === "", "heic waits for convert before object URL");
+
+    const delayMs = 90;
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const slowPost = (async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, delayMs));
+      inFlight -= 1;
+      return new Response(JSON.stringify({ photo: { id: 1 } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    const six = Array.from({ length: 6 }, () => ({ blob: new Blob(["x"]) }));
+    const t0 = Date.now();
+    const parallelUp = await uploadNoticePendingPhotos(1, six, slowPost);
+    const parallelMs = Date.now() - t0;
+    assert(parallelUp.uploaded === 6 && parallelUp.failed === 0, "6 mock photos uploaded");
+    assert(maxInFlight <= NOTICE_MEDIA_UPLOAD_CONCURRENCY, "caps concurrent photo POSTs at 3");
+    assert(maxInFlight >= 2, "uses more than one upload at a time");
+    assert(parallelMs < delayMs * 6 * 0.7, "bounded parallel faster than sequential 6");
+    console.log(
+      `  measured client upload: 6 photos delay=${delayMs}ms concurrency=${NOTICE_MEDIA_UPLOAD_CONCURRENCY} wall=${parallelMs}ms (sequential estimate ${delayMs * 6}ms)`
+    );
+  }
+
   assertLocalDatabaseUrl(process.env.DATABASE_URL);
   const prevSecret = process.env.SESSION_SECRET;
   process.env.SESSION_SECRET = "notice-photo-unit-secret-32chars!!!";
@@ -177,6 +269,8 @@ async function main() {
       assert(detail.status === 200, "notice without photos still 200");
       assert(Array.isArray(body.photos) && body.photos.length === 0, "photos []");
       assert(body.photoCount === 0, "photoCount 0");
+      assert(Array.isArray(body.files) && body.files.length === 0, "files []");
+      assert(body.fileCount === 0, "fileCount 0");
     }
 
     section("admin upload / caddy blocked");
@@ -255,11 +349,12 @@ async function main() {
 
     section("multi photo + limit");
     {
-      await postPhoto(adminCookie, createdJson.id, jpegBytes(32, 2));
-      const third = await postPhoto(adminCookie, createdJson.id, jpegBytes(32, 3));
-      assert(third.status === 200, "third photo ok");
-      const fourth = await postPhoto(adminCookie, createdJson.id, jpegBytes(32, 4));
-      assert(fourth.status === 409, `over ${NOTICE_PHOTO_MAX} rejected`);
+      for (let i = 2; i <= NOTICE_PHOTO_MAX; i++) {
+        const res = await postPhoto(adminCookie, createdJson.id, jpegBytes(32, i));
+        assert(res.status === 200, `photo ${i} ok`);
+      }
+      const over = await postPhoto(adminCookie, createdJson.id, jpegBytes(32, 99));
+      assert(over.status === 409, `over ${NOTICE_PHOTO_MAX} rejected`);
       const detail = await GET_NOTICE(
         req(`https://www.verthill.kr/api/notice/${createdJson.id}`, {
           headers: { cookie: adminCookie },
@@ -267,8 +362,8 @@ async function main() {
         { params: { id: String(createdJson.id) } }
       );
       const body = await detail.json();
-      assert(body.photos.length === 3, "three photos listed");
-      assert(body.photoCount === 3, "photoCount 3");
+      assert(body.photos.length === NOTICE_PHOTO_MAX, `${NOTICE_PHOTO_MAX} photos listed`);
+      assert(body.photoCount === NOTICE_PHOTO_MAX, `photoCount ${NOTICE_PHOTO_MAX}`);
     }
 
     section("future notice photo hidden from caddy");
@@ -320,7 +415,7 @@ async function main() {
       const rows = await prisma.noticePhoto.findMany({
         where: { noticeId: createdJson.id },
       });
-      assert(rows.length === 3, "three stored keys");
+      assert(rows.length === NOTICE_PHOTO_MAX, `${NOTICE_PHOTO_MAX} stored keys`);
       const firstKey = rows[0].storageKey;
       const restKeys = rows.slice(1).map((r) => r.storageKey);
       assert((await store.get(firstKey)) != null, "blob exists before individual delete");
@@ -335,8 +430,9 @@ async function main() {
       assert(delOne.status === 200, "individual photo delete 200");
       assert((await store.get(firstKey)) == null, "individual delete removes blob");
       assert(
-        (await prisma.noticePhoto.count({ where: { noticeId: createdJson.id } })) === 2,
-        "two photos remain after individual delete"
+        (await prisma.noticePhoto.count({ where: { noticeId: createdJson.id } })) ===
+          NOTICE_PHOTO_MAX - 1,
+        "remaining photos stay after individual delete"
       );
 
       const doomed = await POST_NOTICE(
@@ -387,6 +483,7 @@ async function main() {
       });
       const before = await prisma.noticePhoto.count({ where: { noticeId: createdJson.id } });
       const origCreate = prisma.noticePhoto.create.bind(prisma.noticePhoto);
+      const restoreTx = passthroughNoticeTransaction();
       prisma.noticePhoto.create = (async () => {
         throw new Error("forced_create_fail");
       }) as typeof prisma.noticePhoto.create;
@@ -410,6 +507,7 @@ async function main() {
         assert(e instanceof Error && e.message === "forced_create_fail", "row create failed");
       } finally {
         prisma.noticePhoto.create = origCreate;
+        restoreTx();
       }
       assert(lastPut.length > 0, "blob put before row create");
       assert((await inner.get(lastPut)) == null, "failed upload blob rolled back");
@@ -655,8 +753,8 @@ async function main() {
       );
       const lightboxCss = noticePhotoCss.slice(noticePhotoCss.indexOf(".notice-photos-lightbox img"));
       assert(lightboxCss.includes("object-fit: contain"), "lightbox contain");
-      assert(lightboxCss.includes("max-height: 90vh"), "lightbox fits viewport");
-      assert(lightboxCss.includes("width: auto") && lightboxCss.includes("height: auto"), "lightbox keeps ratio");
+      assert(noticePhotoCss.includes("max-height: 90vh"), "lightbox stage fits viewport");
+      assert(lightboxCss.includes("height: auto"), "lightbox keeps ratio");
       assert(!/include:\s*\{\s*photos:/.test(apiOne), "GET detail does not include photos on Notice");
       assert(!/include:\s*\{\s*photos:/.test(rscDetail), "RSC detail does not include photos on Notice");
       assert(!summary.includes("photos:"), "summary notice query has no photos include");
@@ -682,6 +780,7 @@ async function main() {
       const origPhotoCount = prisma.noticePhoto.count.bind(prisma.noticePhoto);
       const origPhotoCreate = prisma.noticePhoto.create.bind(prisma.noticePhoto);
       const origPhotoDelete = prisma.noticePhoto.delete.bind(prisma.noticePhoto);
+      const restoreTx = passthroughNoticeTransaction();
       const boom = async () => {
         throw noticePhotoTableMissingError();
       };
@@ -804,12 +903,88 @@ async function main() {
         prisma.noticePhoto.count = origPhotoCount;
         prisma.noticePhoto.create = origPhotoCreate;
         prisma.noticePhoto.delete = origPhotoDelete;
+        restoreTx();
       }
 
       assert(
         (await prisma.noticePhoto.count({ where: { noticeId: createdJson.id } })) === photoCountBefore,
         "existing photo rows not damaged"
       );
+    }
+
+    section("parallel upload lock, order, limit");
+    {
+      const createdPar = await POST_NOTICE(
+        req("https://www.verthill.kr/api/notice", {
+          method: "POST",
+          headers: { cookie: adminCookie, "content-type": "application/json" },
+          body: JSON.stringify({ title: `${tag}-parallel`, content: "par" }),
+        })
+      );
+      const parJson = await createdPar.json();
+      noticeIds.push(parJson.id);
+      const putDelay = 80;
+      setCourseReportPhotoStoreForTests({
+        ...mem,
+        async put(key, bytes, mime) {
+          await new Promise((r) => setTimeout(r, putDelay));
+          return mem.put(key, bytes, mime);
+        },
+      });
+      const seqStart = Date.now();
+      for (let i = 0; i < 3; i++) {
+        const res = await postPhoto(adminCookie, parJson.id, jpegBytes(24, 40 + i));
+        assert(res.status === 200, `sequential photo ${i + 1} ok`);
+      }
+      const sequentialMs = Date.now() - seqStart;
+
+      const parStart = Date.now();
+      const parRes = await Promise.all(
+        [0, 1, 2, 3, 4, 5].map((i) => {
+          const form = new FormData();
+          form.append("file", new Blob([jpegBytes(24, 50 + i)], { type: "image/jpeg" }), "n.jpg");
+          form.append("sortOrder", String(10 + i));
+          return POST_PHOTO(
+            req(`https://www.verthill.kr/api/notice/${parJson.id}/photos`, {
+              method: "POST",
+              headers: { cookie: adminCookie },
+              body: form,
+            }),
+            { params: { id: String(parJson.id) } }
+          );
+        })
+      );
+      const parallelMs = Date.now() - parStart;
+      assert(
+        parRes.every((res) => res.status === 200),
+        "6 parallel photo uploads 200"
+      );
+      const rows = await prisma.noticePhoto.findMany({
+        where: { noticeId: parJson.id },
+        orderBy: { sortOrder: "asc" },
+      });
+      assert(rows.length === 9, "3 sequential + 6 parallel stored");
+      assert(
+        rows.slice(3).map((row) => row.sortOrder).join(",") === "10,11,12,13,14,15",
+        "parallel uploads keep requested order"
+      );
+      assert(parallelMs < sequentialMs * 1.1, "6 parallel blob puts beat 3 sequential wall time");
+      console.log(
+        `  measured blob+db: sequential 3 photos ${sequentialMs}ms; parallel 6 photos ${parallelMs}ms (put delay ${putDelay}ms)`
+      );
+
+      const extras = await Promise.all(
+        [0, 1, 2, 3].map((i) => postPhoto(adminCookie, parJson.id, jpegBytes(16, 80 + i)))
+      );
+      const extraOk = extras.filter((res) => res.status === 200).length;
+      const extraConflict = extras.filter((res) => res.status === 409).length;
+      assert(extraOk + extraConflict === 4, "over-limit parallel all answered");
+      assert(extraOk === 1 && extraConflict === 3, "lock allows only the remaining slot");
+      assert(
+        (await prisma.noticePhoto.count({ where: { noticeId: parJson.id } })) === NOTICE_PHOTO_MAX,
+        "parallel over-limit does not exceed max 10"
+      );
+      setCourseReportPhotoStoreForTests(mem);
     }
 
     section("patch without sendPush keeps photos");
@@ -830,7 +1005,7 @@ async function main() {
         { params: { id: String(createdJson.id) } }
       );
       const body = await after.json();
-      assert(body.photos.length === 2, "remaining photos survive text patch");
+      assert(body.photos.length === NOTICE_PHOTO_MAX - 1, "remaining photos survive text patch");
     }
   } finally {
     setCourseReportPhotoStoreForTests(null);

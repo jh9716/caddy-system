@@ -41,7 +41,9 @@ export default function NoticePhotoGallery({
           onClick={() => setOpenId(null)}
           aria-label="닫기"
         >
-          <RevealedPhoto src={noticePhotoSrc(noticeId, open.id)} />
+          <span className="notice-photos-lightbox-stage">
+            <RevealedPhoto src={noticePhotoSrc(noticeId, open.id)} />
+          </span>
         </button>
       ) : null}
     </div>

@@ -39,6 +39,9 @@ import {
 export const DIRECT_EDIT_PROTECTED_MESSAGE =
   "54홀·1·2·2·3·1·3·고정 등 특수 연결 배치는 직접편집할 수 없습니다. 기존 메뉴를 사용하세요.";
 
+export const DIRECT_EDIT_LOCKED_MESSAGE =
+  "LOCK된 배치는 직접편집할 수 없습니다. LOCK을 해제한 뒤 수정하세요.";
+
 export const DIRECT_EDIT_SHIFT_BLOCKED_MESSAGE =
   "LOCK/특수 배치를 밀어야 해서 이 위치에 미배치 캐디를 넣을 수 없습니다.";
 
@@ -104,6 +107,7 @@ const LINKED_SPECIAL_KINDS = new Set<AutoAssignmentRow["kind"]>([
   "fiftyFourHole",
   "oneThree",
   "oneTwo",
+  "two",
   "twoThree",
   "oneMak",
   "fixed",
@@ -142,6 +146,29 @@ export function isDirectEditProtected(row: AutoAssignmentRow): boolean {
   return false;
 }
 
+export function isDirectEditLocked(row: AutoAssignmentRow): boolean {
+  if (isDirectEditVacant(row)) return false;
+  return isPlacementLocked(row);
+}
+
+export function directEditRejectReason(
+  row: AutoAssignmentRow
+): { code: string; message: string } | null {
+  if (isDirectEditProtected(row)) {
+    return {
+      code: "DIRECT_EDIT_PROTECTED",
+      message: DIRECT_EDIT_PROTECTED_MESSAGE,
+    };
+  }
+  if (isDirectEditLocked(row)) {
+    return {
+      code: "DIRECT_EDIT_LOCKED",
+      message: DIRECT_EDIT_LOCKED_MESSAGE,
+    };
+  }
+  return null;
+}
+
 export function isDirectEditShiftable(row: AutoAssignmentRow): boolean {
   if (isDirectEditProtected(row)) return false;
   if (isDirectEditVacant(row)) return false;
@@ -151,7 +178,7 @@ export function isDirectEditShiftable(row: AutoAssignmentRow): boolean {
 }
 
 export function isDirectEditTargetAllowed(row: AutoAssignmentRow): boolean {
-  if (isDirectEditProtected(row)) return false;
+  if (directEditRejectReason(row)) return false;
   if (isDirectEditVacant(row)) return true;
   return row.kind === "regular";
 }
@@ -774,12 +801,15 @@ export function applyDirectCaddyEdit(
     };
   }
 
-  if (assigned && isDirectEditProtected(assigned)) {
-    return {
-      ok: false,
-      code: "DIRECT_EDIT_PROTECTED",
-      message: DIRECT_EDIT_PROTECTED_MESSAGE,
-    };
+  if (assigned) {
+    const blocked = directEditRejectReason(assigned);
+    if (blocked) {
+      return {
+        ok: false,
+        code: blocked.code,
+        message: blocked.message,
+      };
+    }
   }
 
   const caddy = findCaddyInDraft(draft, caddyId);
@@ -814,11 +844,12 @@ export function applyDirectCaddyEdit(
   const peer = sameShiftAssignedRow(draft, shift, caddy.id, resKey);
 
   if (peer) {
-    if (isDirectEditProtected(peer)) {
+    const peerBlocked = directEditRejectReason(peer);
+    if (peerBlocked) {
       return {
         ok: false,
-        code: "DIRECT_EDIT_PROTECTED",
-        message: DIRECT_EDIT_PROTECTED_MESSAGE,
+        code: peerBlocked.code,
+        message: peerBlocked.message,
       };
     }
     if (unassigned) {
@@ -866,6 +897,65 @@ export function applyDirectCaddyEdit(
     if (broken) return broken;
   }
   return next;
+}
+
+export function applyDirectCaddyVacate(
+  draft: AssignmentDraft,
+  reservationKeyValue: string
+): DirectCaddyEditResult {
+  const resKey = String(reservationKeyValue || "");
+  const assigned = findTargetAssignment(draft, resKey);
+  if (!assigned) {
+    return {
+      ok: false,
+      code: "RESERVATION_NOT_FOUND",
+      message: DIRECT_EDIT_NOT_FOUND_MESSAGE,
+    };
+  }
+  const blocked = directEditRejectReason(assigned);
+  if (blocked) {
+    return {
+      ok: false,
+      code: blocked.code,
+      message: blocked.message,
+    };
+  }
+  if (isDirectEditVacant(assigned)) {
+    return {
+      ok: true,
+      action: "noop",
+      draft,
+      toast: "",
+      affectedKeys: [resKey],
+    };
+  }
+  const displaced = cloneCaddy(assigned.caddy);
+  const nextDraft = markEdited({
+    ...draft,
+    assignments: draft.assignments.map((row) =>
+      reservationKey(row.reservation) === resKey
+        ? {
+            ...cloneRow(row),
+            caddy: { ...VACANT_CADDY_PLACEHOLDER },
+            reason: `DIRECT_EDIT_VACATE(${row.reason})`,
+          }
+        : row
+    ),
+    sparesByShift: offerSpare(
+      draft.sparesByShift || [],
+      assignmentShift(assigned),
+      displaced
+    ),
+  });
+  const broken = rejectBrokenInvariants(nextDraft);
+  if (broken) return broken;
+  return {
+    ok: true,
+    action: "place",
+    draft: nextDraft,
+    toast: `${displaced.name} 빈 칸`,
+    affectedKeys: [resKey],
+  };
 }
 
 export function groupDirectEditCandidates(

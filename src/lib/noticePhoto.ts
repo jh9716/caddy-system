@@ -7,16 +7,16 @@ import {
   COURSE_REPORT_PHOTO_EXT,
   type CourseReportPhotoMime,
 } from "@/lib/courseReportPhotoConstants";
-import {
-  CourseReportPhotoValidationError,
-  assertCourseReportPhotoBytes,
-} from "@/lib/courseReportPhotoMagic";
+import { CourseReportPhotoValidationError } from "@/lib/courseReportPhotoMagic";
+import { assertNoticePhotoBytes } from "@/lib/noticePhotoMagic";
+import { lockNoticeRow, resolveLockedSortOrder } from "@/lib/noticeMediaLock";
 import {
   CourseReportPhotoStorageError,
   getCourseReportPhotoStore,
 } from "@/lib/courseReportPhotoStorage";
 import {
   NOTICE_PHOTO_MAX,
+  noticePhotoLimitMessage,
   type NoticePhotoPublic,
 } from "@/lib/noticePhotoConstants";
 
@@ -98,6 +98,7 @@ export async function uploadNoticePhoto(
     noticeId: number;
     bytes: Uint8Array;
     auth: ResolvedAuthUser;
+    requestedSortOrder?: number | null;
   }
 ): Promise<NoticePhotoPublic> {
   if (!canManageNoticePhotos(input.auth.role)) {
@@ -117,22 +118,7 @@ export async function uploadNoticePhoto(
     throw new CourseReportPhotoValidationError("not_found", "공지를 찾을 수 없습니다.", 404);
   }
 
-  let existing: number;
-  try {
-    existing = await db.noticePhoto.count({ where: { noticeId: input.noticeId } });
-  } catch (e) {
-    if (isNoticePhotoTableMissing(e)) photoTableNotReady();
-    throw e;
-  }
-  if (existing >= NOTICE_PHOTO_MAX) {
-    throw new CourseReportPhotoValidationError(
-      "photo_limit",
-      "사진은 최대 3장까지 첨부할 수 있습니다.",
-      409
-    );
-  }
-
-  const mime = assertCourseReportPhotoBytes(input.bytes);
+  const mime = assertNoticePhotoBytes(input.bytes);
   const storageKey = buildNoticePhotoStorageKey(input.noticeId, mime);
   try {
     await store.put(storageKey, input.bytes, mime);
@@ -147,30 +133,54 @@ export async function uploadNoticePhoto(
 
   let row: NoticePhoto;
   try {
-    row = await db.noticePhoto.create({
-      data: {
-        noticeId: input.noticeId,
-        storageKey,
-        mimeType: mime,
-        size: input.bytes.byteLength,
-        sortOrder: existing,
-      },
+    row = await db.$transaction(async (tx) => {
+      const locked = await lockNoticeRow(tx, input.noticeId);
+      if (!locked) {
+        throw new CourseReportPhotoValidationError("not_found", "공지를 찾을 수 없습니다.", 404);
+      }
+      let existing: number;
+      try {
+        existing = await tx.noticePhoto.count({ where: { noticeId: input.noticeId } });
+      } catch (e) {
+        if (isNoticePhotoTableMissing(e)) photoTableNotReady();
+        throw e;
+      }
+      if (existing >= NOTICE_PHOTO_MAX) {
+        throw new CourseReportPhotoValidationError(
+          "photo_limit",
+          noticePhotoLimitMessage(),
+          409
+        );
+      }
+      const agg = await tx.noticePhoto.aggregate({
+        where: { noticeId: input.noticeId },
+        _max: { sortOrder: true },
+      });
+      const requested = input.requestedSortOrder ?? null;
+      const taken =
+        requested != null
+          ? Boolean(
+              await tx.noticePhoto.findFirst({
+                where: { noticeId: input.noticeId, sortOrder: requested },
+                select: { id: true },
+              })
+            )
+          : false;
+      return tx.noticePhoto.create({
+        data: {
+          noticeId: input.noticeId,
+          storageKey,
+          mimeType: mime,
+          size: input.bytes.byteLength,
+          sortOrder: resolveLockedSortOrder(agg._max.sortOrder, requested, taken),
+        },
+      });
     });
   } catch (e) {
     await store.delete(storageKey).catch(() => undefined);
+    if (e instanceof CourseReportPhotoValidationError) throw e;
     if (isNoticePhotoTableMissing(e)) photoTableNotReady();
     throw e;
-  }
-
-  const after = await db.noticePhoto.count({ where: { noticeId: input.noticeId } });
-  if (after > NOTICE_PHOTO_MAX) {
-    await db.noticePhoto.delete({ where: { id: row.id } }).catch(() => undefined);
-    await store.delete(storageKey).catch(() => undefined);
-    throw new CourseReportPhotoValidationError(
-      "photo_limit",
-      "사진은 최대 3장까지 첨부할 수 있습니다.",
-      409
-    );
   }
   return toNoticePhotoPublic(row);
 }

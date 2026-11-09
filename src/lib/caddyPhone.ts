@@ -59,13 +59,22 @@ export function normalizeKrMobile(input: string): string {
   return s;
 }
 
-/** 목록/상세 표시용: 010-****-5678 (null → null) */
+/** 목록/상세 표시용: 010-****-5678 (null → null). 비관리자·감사 로그용. */
 export function maskKrMobile(
   phoneNormalized: string | null | undefined
 ): string | null {
   if (phoneNormalized == null || phoneNormalized === "") return null;
   if (!/^010\d{8}$/.test(phoneNormalized)) return "010-****-****";
   return `010-****-${phoneNormalized.slice(7)}`;
+}
+
+/** 관리자 전용 표시: 010-1234-5678 (null → null). 일반 회원 응답에 쓰지 말 것. */
+export function formatKrMobileDisplay(
+  phoneNormalized: string | null | undefined
+): string | null {
+  if (phoneNormalized == null || phoneNormalized === "") return null;
+  if (!/^010\d{8}$/.test(phoneNormalized)) return phoneNormalized;
+  return `010-${phoneNormalized.slice(3, 7)}-${phoneNormalized.slice(7)}`;
 }
 
 /** Prisma P2002 target 이 phoneNormalized 인지 */

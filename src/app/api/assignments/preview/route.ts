@@ -29,6 +29,7 @@ import { isThirdWeeklyTeam } from "@/lib/thirdWeeklyRotation";
 import { loadEffectiveThirdStartTeam } from "@/lib/thirdWeeklyStartService";
 import { regularPoolExcludingStoredOpsDuty } from "@/lib/opsDutyLivePool";
 import { loadSupportEngineQueuesForDate } from "@/lib/dailySpecialSupportService";
+import { twoOnlyCandidatesFromRecords } from "@/lib/specialDutyTwo";
 import { stampReservationIdentities } from "@/lib/reservationIdentity";
 import { rosterBaselineFromAvailability } from "@/lib/caddyPoolCanonical";
 
@@ -202,6 +203,9 @@ export async function POST(req: NextRequest) {
         extractOneTwoCandidates(availability.special);
       const oneMakCandidates = bundles.oneMakCandidates ?? [];
       const twoThreeCandidates = bundles.twoThreeCandidates ?? [];
+      const twoCandidates = twoOnlyCandidatesFromRecords(
+        bundles.twoCandidates ?? []
+      );
 
       let openCourses: string[] | null = null;
       const openRaw = form.get("openCourses");
@@ -253,6 +257,7 @@ export async function POST(req: NextRequest) {
         oneThreeCandidates,
         oneTwoCandidates,
         twoThreeCandidates,
+        twoCandidates,
         oneMakCandidates,
         placementMode: placement.mode,
         protectedTailCount: placement.protectedTailCount,
@@ -323,6 +328,9 @@ export async function POST(req: NextRequest) {
     let explicit23 = Array.isArray(body.twoThreeCandidates)
       ? body.twoThreeCandidates
       : null;
+    let explicitTwo = Array.isArray(body.twoCandidates)
+      ? body.twoCandidates
+      : null;
     let oneThreeAnchor = parseSpecialAnchor(body.oneThreeAnchor);
     let oneMakAnchor = parseSpecialAnchor(body.oneMakAnchor);
     let placementMode: "AUTO" | "MANUAL" | null = null;
@@ -378,6 +386,9 @@ export async function POST(req: NextRequest) {
       if (explicit23 == null && bundles.twoThreeCandidates !== null) {
         explicit23 = bundles.twoThreeCandidates;
       }
+      if (explicitTwo == null && bundles.twoCandidates !== null) {
+        explicitTwo = bundles.twoCandidates;
+      }
       if (placement.mode === "AUTO") {
         oneThreeAnchor = null;
         oneMakAnchor = null;
@@ -410,6 +421,9 @@ export async function POST(req: NextRequest) {
     );
     const oneMakCandidates = Array.isArray(explicitMak) ? explicitMak : [];
     const twoThreeCandidates = Array.isArray(explicit23) ? explicit23 : [];
+    const twoCandidates = twoOnlyCandidatesFromRecords(
+      Array.isArray(explicitTwo) ? explicitTwo : []
+    );
     const fixedAssignments = Array.isArray(body.fixedAssignments)
       ? (body.fixedAssignments as FixedAssignmentInput[])
       : [];
@@ -447,6 +461,7 @@ export async function POST(req: NextRequest) {
       oneThreeCandidates,
       oneTwoCandidates,
       twoThreeCandidates,
+      twoCandidates,
       oneMakCandidates,
       placementMode,
       protectedTailCount,
