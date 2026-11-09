@@ -166,11 +166,7 @@ export const ADMIN_MAIN_NAV: readonly AdminNavItem[] = [
         },
       ]
     : []),
-  {
-    href: "/schedule",
-    label: "스케줄",
-    match: (p) => pathStartsWith(p, "/schedule"),
-  },
+  // /schedule 페이지·API는 유지. 관리자 사이드 메뉴에서만 숨긴다.
   {
     href: "/manage/tools",
     label: "관리도구",

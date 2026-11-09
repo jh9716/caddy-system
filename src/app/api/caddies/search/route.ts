@@ -18,6 +18,7 @@ const SEARCH_SELECT = {
   caddyType: true,
   employmentStatus: true,
   phoneNormalized: true,
+  vehicleNumber: true,
 } as const;
 
 /**

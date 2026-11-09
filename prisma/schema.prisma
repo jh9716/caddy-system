@@ -113,6 +113,8 @@ model Caddy {
   memo              String?
   /// 휴대폰 (canonical: 010XXXXXXXX). null=미등록. PG unique는 NULL 다수 허용.
   phoneNormalized   String?          @unique
+  /// 차량번호. null=미등록. 관리자 전용 조회/수정. 기존 캐디는 NULL 유지.
+  vehicleNumber     String?
   assignments       Assignment[]
   schedules         Schedule[]
   shiftDuties       ShiftDuty[]

@@ -164,7 +164,8 @@ async function main() {
     assert(/pathname === "\/assignments"/.test(mw), "assignments admin gate");
     assert(/pathname === "\/schedule"/.test(mw), "schedule admin gate");
     assert(/dest\.pathname = "\/board"/.test(mw), "non-admin /schedule → /board");
-    assert(/href: "\/schedule"/.test(shell), "admin ManageShell still links 가용표");
+    assert(!/href: "\/schedule"/.test(shell), "admin nav hides 스케줄 menu");
+    assert(fs.existsSync(path.resolve("src/app/schedule/page.tsx")), "schedule page kept");
     assert(/requireAdmin/.test(dbcheck), "dbcheck admin only");
     assert(/CourseReportPhoto/.test(dbcheck), "dbcheck still probes photo table for admin");
     assert(/ok:\s*true/.test(health), "public health remains /api/health");

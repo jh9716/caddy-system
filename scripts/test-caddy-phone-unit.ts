@@ -5,6 +5,7 @@
 import {
   CaddyPhoneError,
   isPhoneUniqueViolation,
+  formatKrMobileDisplay,
   maskKrMobile,
   normalizeKrMobile,
   parseOptionalPhoneInput,
@@ -81,6 +82,14 @@ section("maskKrMobile");
   assert(maskKrMobile("") === null, "empty mask");
 }
 
+section("formatKrMobileDisplay (admin)");
+{
+  assert(formatKrMobileDisplay("01012345678") === "010-1234-5678", "admin display");
+  assert(formatKrMobileDisplay("01088101234") === "010-8810-1234", "admin full digits");
+  assert(formatKrMobileDisplay(null) === null, "null display");
+  assert(formatKrMobileDisplay("") === null, "empty display");
+}
+
 section("isPhoneUniqueViolation");
 {
   assert(
@@ -105,6 +114,7 @@ section("zod create/update accept phone");
   const c = caddyCreateSchema.safeParse({
     name: "테스트",
     team: "1조",
+    teamOrder: 1,
     phone: "010-1111-2222",
   });
   assert(c.success && c.data.phone === "010-1111-2222", "create phone raw");
@@ -112,6 +122,7 @@ section("zod create/update accept phone");
   const cEmpty = caddyCreateSchema.safeParse({
     name: "테스트",
     team: "1조",
+    teamOrder: 1,
     phone: "",
   });
   assert(cEmpty.success && cEmpty.data.phone === "", "create empty phone");
@@ -173,6 +184,28 @@ section("admin API phone + schedule omit source guard");
     "schedule does not include full caddy"
   );
   assert(!/phoneNormalized:\s*true/.test(schedule), "schedule select omits phone");
+
+  const caddiesPage = fs.readFileSync(
+    path.resolve("src/app/manage/caddies/page.tsx"),
+    "utf8"
+  );
+  const searchPage = fs.readFileSync(
+    path.resolve("src/app/manage/caddy-search/page.tsx"),
+    "utf8"
+  );
+  const alimtalk = fs.readFileSync(
+    path.resolve("src/lib/alimtalkWorkNoticePreview.ts"),
+    "utf8"
+  );
+  const linkApi = fs.readFileSync(
+    path.resolve("src/lib/caddyLinkRequest.ts"),
+    "utf8"
+  );
+  assert(/formatKrMobileDisplay/.test(caddiesPage), "manage caddies admin display");
+  assert(!/maskKrMobile/.test(caddiesPage), "manage caddies no list masking");
+  assert(/hit\.displayPhone/.test(searchPage), "search admin displayPhone");
+  assert(/maskKrMobile/.test(alimtalk), "alimtalk still masks");
+  assert(/maskKrMobile/.test(linkApi), "link request still masks");
 }
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);

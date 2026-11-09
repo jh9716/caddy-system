@@ -1,5 +1,5 @@
 /**
- * 관리자 캐디 통합검색 / 연락처 마스킹 / tel 링크 단위 테스트 (DB 없음)
+ * 관리자 캐디 통합검색 / 관리자 연락처 전체표시 / tel 링크 단위 테스트 (DB 없음)
  * 실행: npx tsx scripts/test-caddy-search-unit.ts
  */
 import fs from "node:fs";
@@ -17,6 +17,7 @@ import {
   matchesNameQuery,
   matchesPhoneQuery,
   matchesTeamQuery,
+  matchesVehicleQuery,
   rankCaddySearchHit,
   searchCaddiesLimited,
   todayPlacementSummary,
@@ -24,7 +25,11 @@ import {
   toCaddySearchView,
   type CaddySearchRecord,
 } from "../src/lib/caddySearch";
-import { maskKrMobile, normalizeKrMobile } from "../src/lib/caddyPhone";
+import {
+  formatKrMobileDisplay,
+  maskKrMobile,
+  normalizeKrMobile,
+} from "../src/lib/caddyPhone";
 import { rosterImportContactSummary } from "../src/lib/rosterImportContactSummary";
 
 let passed = 0;
@@ -139,28 +144,30 @@ section("phone full / last4 / 하이픈");
   assert(!matchesPhoneQuery("01012345678", "7조"), "조 query는 전화 비교 안 함");
 }
 
-section("phone null / RETIRED / masking / tel");
+section("phone null / RETIRED / admin display / tel");
 {
   assert(matchesCaddySearch(noPhone, "원다빈"), "번호 없어도 이름 검색");
   assert(!matchesCaddySearch(noPhone, "5678"), "번호 없으면 last4 실패");
   const missing = toCaddySearchView(noPhone);
   assert(missing.phoneMissing === true, "phone missing flag");
   assert(missing.telHref === null, "phone null tel 없음");
-  assert(missing.maskedPhone === null, "phone null mask 없음");
+  assert(missing.displayPhone === null, "phone null display 없음");
+  assert(missing.vehicleNumber === null, "vehicle null display 없음");
 
   const retiredView = toCaddySearchView(retired);
   assert(retiredView.statusLabel === "퇴사", "RETIRED 표시");
   assert(filterCaddiesBySearch(roster, "이퇴사")[0]?.employmentStatus === "RETIRED", "RETIRED 검색");
 
   const view = toCaddySearchView(kim);
-  assert(view.maskedPhone === "010-****-5678", "masking");
-  assert(maskKrMobile(kim.phoneNormalized) === "010-****-5678", "mask helper");
+  assert(view.displayPhone === "010-1234-5678", "admin full display");
+  assert(formatKrMobileDisplay(kim.phoneNormalized) === "010-1234-5678", "display helper");
+  assert(maskKrMobile(kim.phoneNormalized) === "010-****-5678", "mask helper kept for non-admin");
   assert(view.telHref === "tel:01012345678", "tel href");
   assert(caddyTelHref("01012345678") === "tel:01012345678", "tel helper");
   assert(caddyTelHref(null) === null, "no tel for null");
   assert(caddyTelHref("010-1234-5678") === null, "비정규화 번호는 tel 안 만듦");
-  assert(view.maskedPhone !== kim.phoneNormalized, "UI mask != raw");
-  assert(!JSON.stringify({ ...view, telHref: null }).includes("01012345678"), "view 본문에 raw phone 없음");
+  assert(view.displayPhone !== kim.phoneNormalized, "UI display != canonical digits");
+  assert(!JSON.stringify({ ...view, telHref: null }).includes("01012345678"), "view 본문에 canonical phone 없음");
 }
 
 section("오늘 배치 요약 (기존 published payload 재사용)");
@@ -233,7 +240,12 @@ section("검색 UI / 권한 / 개인정보 source guard");
   assert(/연락처 등록 필요/.test(page), "phone 없는 UX");
   assert(/tel:\$\{hit\.telPhone\}/.test(page), "tel href는 검색 hit telPhone만");
   assert(!/\{hit\.telPhone\}/.test(page.replace(/tel:\$\{hit\.telPhone\}/g, "")), "raw telPhone 화면 텍스트 없음");
-  assert(/hit\.maskedPhone/.test(page), "화면은 maskedPhone");
+  assert(/hit\.displayPhone/.test(page), "화면은 displayPhone");
+  assert(/hit\.vehicleNumber/.test(page), "검색 결과 차량번호");
+  assert(/차량번호/.test(page), "검색 UI 안내 차량번호");
+  assert(/12가5432/.test(page), "placeholder 차량번호 예시");
+  assert(/matchesVehicleQuery/.test(matcher), "matcher 차량번호 검색");
+  assert(!/hit\.maskedPhone/.test(page), "검색 화면 maskedPhone 미사용");
   assert(!/console\.(log|info|debug|warn)\([^)]*phone/i.test(page), "검색 페이지 phone console 없음");
   assert(!/console\.(log|info|debug|warn)\([^)]*phone/i.test(matcher), "matcher phone console 없음");
   assert(/href: "\/manage\/caddy-search"/.test(shell), "nav 캐디 검색");
@@ -260,7 +272,7 @@ section("검색 UI / 권한 / 개인정보 source guard");
   assert(/전화번호 있음/.test(caddiesPage) && /동명이인/.test(caddiesPage), "import preview 문구");
   assert(/\/api\/caddies\?employment=/.test(caddiesPage), "/manage/caddies 기존 GET 유지");
   assert(!/\/api\/caddies\/search/.test(caddiesPage), "/manage/caddies는 검색 API 미사용");
-  assert(!/vehicleNumber/.test(schema), "vehicleNumber schema 없음");
+  assert(/vehicleNumber\s+String\?/.test(schema), "vehicleNumber optional additive");
   assert(!/model NotificationSend/.test(schema) && !/model AlimTalkSend/.test(schema), "알림톡 모델 없음");
   assert(!/phoneNormalized/.test(publishedView), "published view 전화 없음");
   assert(!/phoneNormalized/.test(published), "published payload 전화 없음");
@@ -300,18 +312,27 @@ section("V2 API 응답 최소화 / telPhone / 빈 query");
   );
   assert(!("phoneNormalized" in hit), "phoneNormalized key 없음");
   assert(!("memo" in hit) && !("extraFlags" in hit), "memo/extraFlags 없음");
-  assert(hit.maskedPhone === "010-****-5678", "maskedPhone");
+  assert(!("maskedPhone" in hit), "maskedPhone key 없음");
+  assert(hit.displayPhone === "010-1234-5678", "displayPhone");
   assert(hit.hasPhone === true, "hasPhone");
   assert(hit.telPhone === "01012345678", "telPhone canonical");
+  assert(hit.vehicleNumber === null, "vehicle default null");
   const json = JSON.stringify(hit);
   assert(!json.includes("phoneNormalized"), "JSON에 phoneNormalized 키 없음");
   assert(!json.includes("memo"), "JSON에 memo 없음");
-  assert(json.includes("010-****-5678"), "mask in JSON");
+  assert(json.includes("010-1234-5678"), "formatted phone in JSON");
+  assert(!json.includes("010-****-5678"), "search JSON not masked");
 
   const missing = toCaddySearchApiHit(noPhone);
   assert(missing.hasPhone === false, "no phone hasPhone false");
   assert(missing.telPhone === null, "no phone telPhone null");
-  assert(missing.maskedPhone === null, "no phone masked null");
+  assert(missing.displayPhone === null, "no phone display null");
+  assert(missing.vehicleNumber === null, "no phone vehicle null");
+
+  const withCarRecord: CaddySearchRecord = { ...kim, vehicleNumber: "77하9999" };
+  const withCar = toCaddySearchApiHit(withCarRecord);
+  assert(withCar.vehicleNumber === "77하9999", "vehicle in search hit");
+  assert(matchesCaddySearch(withCarRecord, "77하9999"), "전체 차량번호 검색");
 
   const empty = caddySearchApiResponse(roster, "");
   assert(Array.isArray(empty.results) && empty.results.length === 0, "empty q → []");
@@ -347,6 +368,125 @@ section("V2 API 응답 최소화 / telPhone / 빈 query");
   assert(rankCaddySearchHit(kim, "5678") === CADDY_SEARCH_RANK.EXACT_PHONE, "rank last4");
   assert(rankCaddySearchHit(kim, "김현정") === CADDY_SEARCH_RANK.NAME_CONTAINS, "rank name contains");
   assert(rankCaddySearchHit(kim, "7조") === CADDY_SEARCH_RANK.TEAM, "rank team");
+}
+
+section("차량번호 검색 (관리자 전용 matcher)");
+{
+  const marshal: CaddySearchRecord = {
+    id: 501,
+    name: "테스트마샬01",
+    team: "9조",
+    teamOrder: 1,
+    caddyType: "HOUSE",
+    employmentStatus: "ACTIVE",
+    phoneNormalized: "01088101234",
+    vehicleNumber: "12가5432",
+  };
+  const previousPlate: CaddySearchRecord = {
+    ...marshal,
+    vehicleNumber: "99하1111",
+  };
+  const noVehicleCaddy: CaddySearchRecord = {
+    id: 502,
+    name: "차량미등록캐디",
+    team: "4조",
+    teamOrder: 2,
+    caddyType: "HOUSE",
+    employmentStatus: "ACTIVE",
+    phoneNormalized: "01033334444",
+    vehicleNumber: null,
+  };
+  const phoneLast4Overlap: CaddySearchRecord = {
+    ...kim,
+    id: 503,
+    name: "전화우선캐디",
+    vehicleNumber: "12가5678",
+  };
+  const vehicleRoster = [
+    ...roster,
+    marshal,
+    noVehicleCaddy,
+    phoneLast4Overlap,
+  ];
+
+  assert(matchesVehicleQuery("12가5432", "12가5432"), "전체 번호");
+  assert(matchesVehicleQuery("12가5432", "5432"), "뒷자리");
+  assert(matchesVehicleQuery("12가5432", "가5432"), "일부 번호");
+  assert(matchesVehicleQuery("12가5432", "12 가 5432"), "공백 차이");
+  assert(matchesVehicleQuery("12가5432", "12-가-5432"), "하이픈 차이");
+  assert(matchesVehicleQuery("12가5432", "  12가5432  "), "trim");
+  assert(matchesCaddySearch(marshal, "5432"), "5432 → 테스트마샬01");
+  assert(matchesCaddySearch(marshal, "12가5432"), "12가5432 → 테스트마샬01");
+  assert(matchesCaddySearch(marshal, "가5432"), "가5432 → 테스트마샬01");
+  assert(matchesCaddySearch(marshal, "12 가 5432"), "공백 쿼리 → 테스트마샬01");
+  assert(matchesCaddySearch(marshal, "12-가-5432"), "하이픈 쿼리 → 테스트마샬01");
+  assert(!matchesCaddySearch(previousPlate, "5432"), "변경 전 값 5432 제외");
+  assert(!matchesCaddySearch(previousPlate, "12가5432"), "변경 전 전체번호 제외");
+  assert(matchesCaddySearch(previousPlate, "99하1111"), "변경 전 레코드는 옛 번호만");
+  assert(
+    searchCaddiesLimited([marshal], "5432").map((h) => h.id).join() === "501",
+    "최신 차량번호만 검색"
+  );
+  assert(
+    searchCaddiesLimited([previousPlate], "99하1111")[0]?.id === 501,
+    "변경 전 스냅샷은 옛 번호로 검색"
+  );
+  assert(
+    searchCaddiesLimited([marshal], "99하1111").length === 0,
+    "변경 후 옛 번호 제외"
+  );
+  assert(!matchesVehicleQuery(null, "5432"), "미등록 차량은 번호 검색 안 함");
+  assert(!matchesCaddySearch(noVehicleCaddy, "5432"), "미등록 캐디 5432 제외");
+  assert(matchesCaddySearch(noVehicleCaddy, "차량미등록캐디"), "미등록 캐디 이름 검색");
+  assert(matchesCaddySearch(noVehicleCaddy, "01033334444"), "미등록 캐디 휴대폰 검색");
+  assert(matchesCaddySearch(noVehicleCaddy, "4조"), "미등록 캐디 조 검색");
+  assert(!matchesVehicleQuery("12가5432", "12"), "짧은 숫자는 차량 오탐 없음");
+  assert(!matchesVehicleQuery("12가5432", "7"), "1자리 숫자는 차량 검색 아님");
+  assert(
+    searchCaddiesLimited(vehicleRoster, "5432").some((h) => h.id === 501),
+    "통합검색 5432에 마샬 포함"
+  );
+  assert(
+    searchCaddiesLimited(vehicleRoster, "12가5432")[0]?.id === 501,
+    "통합검색 전체 차량번호"
+  );
+  assert(
+    rankCaddySearchHit(marshal, "5432") === CADDY_SEARCH_RANK.OTHER,
+    "차량 전용 hit는 OTHER"
+  );
+  assert(
+    rankCaddySearchHit(marshal, "12가5432") === CADDY_SEARCH_RANK.OTHER,
+    "전체 차량번호도 OTHER"
+  );
+  const last4Ranked = searchCaddiesLimited(
+    [kim, { ...marshal, vehicleNumber: "12가5678" }],
+    "5678"
+  );
+  assert(last4Ranked[0]?.id === 12, "휴대폰 last4가 차량번호보다 앞");
+  assert(
+    rankCaddySearchHit(phoneLast4Overlap, "5678") === CADDY_SEARCH_RANK.EXACT_PHONE,
+    "전화 last4 순위 유지"
+  );
+  assert(
+    rankCaddySearchHit(kim, "김현정") === CADDY_SEARCH_RANK.NAME_CONTAINS,
+    "이름 순위 차량 추가로 불변"
+  );
+  assert(
+    searchCaddiesLimited(vehicleRoster, "김현정")[0]?.id === 12,
+    "이름 검색 회귀"
+  );
+  assert(
+    searchCaddiesLimited(vehicleRoster, "7조")[0]?.id === 12,
+    "조 검색 회귀"
+  );
+  assert(
+    searchCaddiesLimited(vehicleRoster, "01012345678")[0]?.id === 12,
+    "휴대폰 검색 회귀"
+  );
+  assert(
+    searchCaddiesLimited(vehicleRoster, "원다빈")[0]?.id === 14,
+    "차량 없는 캐디 이름 회귀"
+  );
 }
 
 section("20건 limit");
