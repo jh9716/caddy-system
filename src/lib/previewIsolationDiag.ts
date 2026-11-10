@@ -1,6 +1,6 @@
 /**
  * TEMPORARY Preview isolation probe for PR #371.
- * Remove this module (and the /api/_preview-isolation-diag route) before
+ * Remove this module (and the /api/preview-isolation-diag route) before
  * merging to main. It never logs or returns DATABASE_URL, passwords, tokens,
  * connection strings, or hostnames.
  */

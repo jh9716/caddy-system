@@ -14,7 +14,7 @@ import {
   inspectPreviewIsolation,
   previewIsolationEnabled,
 } from "../src/lib/previewIsolationDiag";
-import { GET } from "../src/app/api/_preview-isolation-diag/route";
+import { GET } from "../src/app/api/preview-isolation-diag/route";
 
 let passed = 0;
 let failed = 0;
@@ -189,7 +189,7 @@ section("source hygiene");
     "utf8"
   );
   const route = fs.readFileSync(
-    path.join("src/app/api/_preview-isolation-diag/route.ts"),
+    path.join("src/app/api/preview-isolation-diag/route.ts"),
     "utf8"
   );
   assert(!/\bconsole\.(log|info|debug|warn|error)\b/.test(lib), "lib has no console logging");
@@ -199,6 +199,10 @@ section("source hygiene");
   assert(
     route.includes("TEMPORARY") && lib.includes("TEMPORARY"),
     "temporary removal comment present"
+  );
+  assert(
+    fs.existsSync(path.join("src/app/api/preview-isolation-diag/route.ts")),
+    "route is not a Next.js private _folder"
   );
 }
 
