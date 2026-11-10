@@ -5,6 +5,15 @@ export const LOCAL_NOTICE_FILE_PUT_PATH = "/api/notice/local-blob-put";
 export const NOTICE_FILE_MAGIC_PREFIX_BYTES = 256;
 export const NOTICE_FILE_ZIP_MAX_ENTRIES = 4096;
 export const NOTICE_FILE_ZIP_MAX_CD_BYTES = 2 * 1024 * 1024;
+export const NOTICE_FILE_ZIP_MAX_UNCOMPRESSED_ENTRY = 64 * 1024 * 1024;
+export const NOTICE_FILE_ZIP_MAX_UNCOMPRESSED_TOTAL = 128 * 1024 * 1024;
+export const NOTICE_FILE_OLE_MAX_DIR_ENTRIES = 256;
+export const NOTICE_FILE_OLE_MAX_FAT_ENTRIES = 65_536;
+export const NOTICE_FILE_OLE_MAX_MINI_STREAM = 1024 * 1024;
+/** pg_advisory_xact_lock namespace (int4). Second key is sha256(storageKey) int32. */
+export const NOTICE_FILE_LOCK_NS = 1620002;
+export const NOTICE_FILE_TX_TIMEOUT_MS = 60_000;
+export const NOTICE_FILE_TX_MAX_WAIT_MS = 20_000;
 
 export const NOTICE_FILE_EXTS = ["pdf", "xlsx", "xls", "hwp", "hwpx"] as const;
 export type NoticeFileExt = (typeof NOTICE_FILE_EXTS)[number];

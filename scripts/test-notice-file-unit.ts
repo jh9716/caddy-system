@@ -104,32 +104,49 @@ function crc32(buf: Uint8Array): number {
   return (c ^ 0xffffffff) >>> 0;
 }
 
-function zipStore(entries: Array<{ name: string; data: string | Uint8Array }>): Uint8Array {
-  const files = entries.map((entry) => ({
-    name: Buffer.from(entry.name, "utf8"),
-    data: typeof entry.data === "string" ? Buffer.from(entry.data, "utf8") : Buffer.from(entry.data),
-  }));
+function zipStore(
+  entries: Array<{
+    name: string;
+    localName?: string;
+    data: string | Uint8Array;
+    method?: number;
+    uncompressedSize?: number;
+  }>
+): Uint8Array {
+  const files = entries.map((entry) => {
+    const data =
+      typeof entry.data === "string" ? Buffer.from(entry.data, "utf8") : Buffer.from(entry.data);
+    return {
+      name: Buffer.from(entry.name, "utf8"),
+      localName: Buffer.from(entry.localName ?? entry.name, "utf8"),
+      data,
+      method: entry.method ?? 0,
+      uncompressedSize: entry.uncompressedSize ?? data.length,
+    };
+  });
   const locals: Buffer[] = [];
   const centrals: Buffer[] = [];
   let offset = 0;
   for (const file of files) {
     const crc = crc32(file.data);
-    const local = Buffer.alloc(30 + file.name.length + file.data.length);
+    const local = Buffer.alloc(30 + file.localName.length + file.data.length);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(file.method, 8);
     local.writeUInt32LE(crc, 14);
     local.writeUInt32LE(file.data.length, 18);
-    local.writeUInt32LE(file.data.length, 22);
-    local.writeUInt16LE(file.name.length, 26);
-    file.name.copy(local, 30);
-    file.data.copy(local, 30 + file.name.length);
+    local.writeUInt32LE(file.uncompressedSize, 22);
+    local.writeUInt16LE(file.localName.length, 26);
+    file.localName.copy(local, 30);
+    file.data.copy(local, 30 + file.localName.length);
     const central = Buffer.alloc(46 + file.name.length);
     central.writeUInt32LE(0x02014b50, 0);
     central.writeUInt16LE(20, 4);
     central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(file.method, 10);
     central.writeUInt32LE(crc, 16);
     central.writeUInt32LE(file.data.length, 20);
-    central.writeUInt32LE(file.data.length, 24);
+    central.writeUInt32LE(file.uncompressedSize, 24);
     central.writeUInt16LE(file.name.length, 28);
     central.writeUInt32LE(offset, 42);
     file.name.copy(central, 46);
@@ -182,12 +199,102 @@ function oleWithUtf16(names: string[], ascii = ""): Uint8Array {
   return out;
 }
 
+function writeCfbDirEntry(
+  buf: Buffer,
+  offset: number,
+  input: {
+    name: string;
+    type: number;
+    child?: number;
+    start: number;
+    size: number;
+  }
+) {
+  const utf16 = Buffer.from(input.name, "utf16le");
+  utf16.copy(buf, offset);
+  buf.writeUInt16LE(utf16.length + 2, offset + 0x40);
+  buf.writeUInt8(input.type, offset + 0x42);
+  buf.writeUInt8(1, offset + 0x43);
+  buf.writeUInt32LE(0xffffffff, offset + 0x44);
+  buf.writeUInt32LE(0xffffffff, offset + 0x48);
+  buf.writeUInt32LE(input.child ?? 0xffffffff, offset + 0x4c);
+  buf.writeUInt32LE(input.start, offset + 0x74);
+  buf.writeUInt32LE(input.size, offset + 0x78);
+}
+
+function buildCfb(streams: Array<{ name: string; data: Uint8Array }>): Uint8Array {
+  const sectorSize = 512;
+  const padded = streams.map((stream) => {
+    const data = new Uint8Array(Math.max(stream.data.length, 4096));
+    data.set(stream.data);
+    return { name: stream.name, data };
+  });
+  const streamSectors = padded.map((stream) => Math.ceil(stream.data.length / sectorSize));
+  const dirStart = 1;
+  let next = 2;
+  const starts = streamSectors.map((count) => {
+    const start = next;
+    next += count;
+    return start;
+  });
+  const totalSectors = next;
+  const out = Buffer.alloc(512 + totalSectors * sectorSize);
+  out.set([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1], 0);
+  out.writeUInt16LE(0x003e, 0x18);
+  out.writeUInt16LE(3, 0x1a);
+  out.writeUInt16LE(0xfffe, 0x1c);
+  out.writeUInt16LE(9, 0x1e);
+  out.writeUInt16LE(6, 0x20);
+  out.writeUInt32LE(1, 0x2c);
+  out.writeUInt32LE(dirStart, 0x30);
+  out.writeUInt32LE(4096, 0x38);
+  out.writeUInt32LE(0xfffffffe, 0x3c);
+  out.writeUInt32LE(0xfffffffe, 0x44);
+  out.writeUInt32LE(0, 0x4c);
+  for (let i = 1; i < 109; i++) out.writeUInt32LE(0xffffffff, 0x4c + i * 4);
+
+  const fatOff = 512;
+  out.writeUInt32LE(0xfffffffd, fatOff);
+  out.writeUInt32LE(0xfffffffe, fatOff + 4);
+  for (let i = 2; i < totalSectors; i++) {
+    const endOfThisStream = starts.some(
+      (start, idx) => i === start + streamSectors[idx]! - 1
+    );
+    out.writeUInt32LE(endOfThisStream ? 0xfffffffe : i + 1, fatOff + i * 4);
+  }
+  for (let i = totalSectors; i < 128; i++) {
+    out.writeUInt32LE(0xffffffff, fatOff + i * 4);
+  }
+
+  const dirOff = 512 + dirStart * sectorSize;
+  writeCfbDirEntry(out, dirOff, {
+    name: "Root Entry",
+    type: 5,
+    child: padded.length ? 1 : 0xffffffff,
+    start: 0xfffffffe,
+    size: 0,
+  });
+  padded.forEach((stream, i) => {
+    writeCfbDirEntry(out, dirOff + (i + 1) * 128, {
+      name: stream.name,
+      type: 2,
+      start: starts[i]!,
+      size: stream.data.length,
+    });
+    const dataOff = 512 + starts[i]! * sectorSize;
+    Buffer.from(stream.data).copy(out, dataOff);
+  });
+  return new Uint8Array(out);
+}
+
 function xlsBytes(): Uint8Array {
-  return oleWithUtf16(["Workbook"]);
+  return buildCfb([{ name: "Workbook", data: new Uint8Array(16) }]);
 }
 
 function hwpBytes(): Uint8Array {
-  return oleWithUtf16(["FileHeader"], "HWP Document File");
+  const header = new Uint8Array(64);
+  header.set(Buffer.from("HWP Document File", "utf8"));
+  return buildCfb([{ name: "FileHeader", data: header }]);
 }
 
 async function postFile(
@@ -328,8 +435,8 @@ async function main() {
       assert(sanitizeNoticeFileName("") === "attachment.pdf", "empty fallback");
       assert(assertNoticeFileBytes(xlsxBytes()).ext === "xlsx", "xlsx zip structure ok");
       assert(assertNoticeFileBytes(hwpxBytes()).ext === "hwpx", "hwpx mimetype ok");
-      assert(assertNoticeFileBytes(xlsBytes()).ext === "xls", "xls ole workbook ok");
-      assert(assertNoticeFileBytes(hwpBytes()).ext === "hwp", "hwp ole header ok");
+      assert(assertNoticeFileBytes(xlsBytes()).ext === "xls", "xls ole directory ok");
+      assert(assertNoticeFileBytes(hwpBytes()).ext === "hwp", "hwp ole directory ok");
       let zipRejected = false;
       try {
         assertNoticeFileBytes(zipStore([{ name: "hello.txt", data: "hi" }]), "xlsx");
@@ -365,6 +472,86 @@ async function main() {
         oleOnly = true;
       }
       assert(oleOnly, "bare ole rejected as hwp");
+      let stringXls = false;
+      try {
+        assertNoticeFileBytes(oleWithUtf16(["Workbook"]), "xls");
+      } catch {
+        stringXls = true;
+      }
+      assert(stringXls, "utf16 string insertion rejected as xls");
+      let stringHwp = false;
+      try {
+        assertNoticeFileBytes(oleWithUtf16(["FileHeader"], "HWP Document File"), "hwp");
+      } catch {
+        stringHwp = true;
+      }
+      assert(stringHwp, "ascii/utf16 insertion rejected as hwp");
+      let localMismatch = false;
+      try {
+        assertNoticeFileBytes(
+          zipStore([
+            { name: "[Content_Types].xml", data: "<Types/>" },
+            { name: "xl/workbook.xml", localName: "xl/not-workbook.xml", data: "<workbook/>" },
+          ]),
+          "xlsx"
+        );
+      } catch {
+        localMismatch = true;
+      }
+      assert(localMismatch, "zip local/cd name mismatch rejected");
+      let zipBomb = false;
+      try {
+        assertNoticeFileBytes(
+          zipStore([
+            { name: "[Content_Types].xml", data: "<Types/>", method: 8, uncompressedSize: 80 * 1024 * 1024 },
+            { name: "xl/workbook.xml", data: "<workbook/>" },
+          ]),
+          "xlsx"
+        );
+      } catch {
+        zipBomb = true;
+      }
+      assert(zipBomb, "huge uncompressed zip entry rejected");
+      let emptyRequired = false;
+      try {
+        assertNoticeFileBytes(
+          zipStore([
+            { name: "[Content_Types].xml", data: "" },
+            { name: "xl/workbook.xml", data: "<workbook/>" },
+          ]),
+          "xlsx"
+        );
+      } catch {
+        emptyRequired = true;
+      }
+      assert(emptyRequired, "empty workbook content-types rejected");
+      let vbaZip = false;
+      try {
+        assertNoticeFileBytes(
+          zipStore([
+            { name: "[Content_Types].xml", data: "<Types/>" },
+            { name: "xl/workbook.xml", data: "<workbook/>" },
+            { name: "xl/vbaProject.bin", data: "vba" },
+          ]),
+          "xlsx"
+        );
+      } catch {
+        vbaZip = true;
+      }
+      assert(vbaZip, "macro zip rejected");
+      let hwpxNoStoredMime = false;
+      try {
+        assertNoticeFileBytes(
+          zipStore([
+            { name: "mimetype", data: "application/hwp+zip", method: 8, uncompressedSize: 18 },
+            { name: "Contents/content.hpf", data: "<hpf/>" },
+          ]),
+          "hwpx"
+        );
+      } catch {
+        hwpxNoStoredMime = true;
+      }
+      assert(hwpxNoStoredMime, "deflated hwpx mimetype rejected");
     }
 
     const house = await prisma.caddy.create({
@@ -643,6 +830,146 @@ async function main() {
       assert(pdfAsXlsx.status === 400, "pdf bytes rejected as xlsx");
     }
 
+    section("complete/abort race");
+    {
+      const raceNotice = await POST_NOTICE(
+        req("https://www.verthill.kr/api/notice", {
+          method: "POST",
+          headers: { cookie: adminCookie, "content-type": "application/json" },
+          body: JSON.stringify({ title: `${tag}-race`, content: "race" }),
+        })
+      );
+      const raceJson = await raceNotice.json();
+      noticeIds.push(raceJson.id);
+      const originalGet = mem.get.bind(mem);
+      mem.get = async (key, opts) => {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        return originalGet(key, opts);
+      };
+      try {
+        for (let i = 0; i < 5; i++) {
+          const payload = xlsxBytes();
+          const prep = await prepareFile(
+            adminCookie,
+            raceJson.id,
+            `race-${i}.xlsx`,
+            NOTICE_FILE_XLSX_MIME,
+            payload.byteLength
+          );
+          const prepJson = await prep.json();
+          assert(prep.status === 200, `race ${i} prepare 200`);
+          const put = await putPrepared(
+            prepJson.upload.uploadUrl,
+            payload,
+            NOTICE_FILE_XLSX_MIME
+          );
+          assert(put.status === 204, `race ${i} put 204`);
+          const [done, aborted] = await Promise.all([
+            completeFile(
+              adminCookie,
+              raceJson.id,
+              prepJson.upload.grant,
+              `race-${i}.xlsx`
+            ),
+            abortFile(adminCookie, raceJson.id, prepJson.upload.grant),
+          ]);
+          const doneJson = await done.json().catch(() => ({}));
+          const abortedJson = await aborted.json().catch(() => ({}));
+          const row = await prisma.noticeFile.findUnique({
+            where: { storageKey: prepJson.upload.storageKey },
+          });
+          const blob = await originalGet(prepJson.upload.storageKey);
+          assert(Boolean(row) === Boolean(blob), `race ${i} row and blob agree`);
+          assert(aborted.status === 200, `race ${i} abort 200`);
+          assert(
+            abortedJson.registered === Boolean(row),
+            `race ${i} abort registered flag matches row`
+          );
+          assert(
+            row ? done.status === 200 : done.status !== 200,
+            `race ${i} complete status matches row`
+          );
+          assert(!row || doneJson.file?.id === row.id, `race ${i} complete id matches row`);
+          if (row) {
+            await prisma.noticeFile.delete({ where: { id: row.id } });
+            await mem.delete(prepJson.upload.storageKey);
+          }
+        }
+      } finally {
+        mem.get = originalGet;
+      }
+
+      const keep = xlsxBytes();
+      const keepPrep = await prepareFile(
+        adminCookie,
+        raceJson.id,
+        "keep.xlsx",
+        NOTICE_FILE_XLSX_MIME,
+        keep.byteLength
+      );
+      const keepPrepJson = await keepPrep.json();
+      await putPrepared(keepPrepJson.upload.uploadUrl, keep, NOTICE_FILE_XLSX_MIME);
+      const keepDone = await completeFile(
+        adminCookie,
+        raceJson.id,
+        keepPrepJson.upload.grant,
+        "keep.xlsx"
+      );
+      const keepDoneJson = await keepDone.json();
+      assert(keepDone.status === 200, "complete then abort: complete 200");
+      const keepAbort = await abortFile(
+        adminCookie,
+        raceJson.id,
+        keepPrepJson.upload.grant
+      );
+      const keepAbortJson = await keepAbort.json();
+      assert(keepAbortJson.registered === true, "abort after complete does not delete");
+      assert(
+        (await mem.get(keepPrepJson.upload.storageKey)) != null,
+        "registered blob survives abort"
+      );
+      const replay = await completeFile(
+        adminCookie,
+        raceJson.id,
+        keepPrepJson.upload.grant,
+        "keep.xlsx"
+      );
+      const replayJson = await replay.json();
+      assert(replay.status === 200, "duplicate complete after abort still 200");
+      assert(replayJson.file.id === keepDoneJson.file.id, "duplicate complete same id");
+
+      const gone = xlsxBytes();
+      const gonePrep = await prepareFile(
+        adminCookie,
+        raceJson.id,
+        "gone.xlsx",
+        NOTICE_FILE_XLSX_MIME,
+        gone.byteLength
+      );
+      const gonePrepJson = await gonePrep.json();
+      await putPrepared(gonePrepJson.upload.uploadUrl, gone, NOTICE_FILE_XLSX_MIME);
+      const goneAbort = await abortFile(
+        adminCookie,
+        raceJson.id,
+        gonePrepJson.upload.grant
+      );
+      const goneAbortJson = await goneAbort.json();
+      assert(goneAbortJson.registered === false, "abort before complete unregistered");
+      const goneDone = await completeFile(
+        adminCookie,
+        raceJson.id,
+        gonePrepJson.upload.grant,
+        "gone.xlsx"
+      );
+      assert(goneDone.status === 404, "complete after abort cannot register");
+      assert(
+        (await prisma.noticeFile.findUnique({
+          where: { storageKey: gonePrepJson.upload.storageKey },
+        })) == null,
+        "complete after abort left no row"
+      );
+    }
+
     section("future notice hidden + delete + limit");
     {
       const future = await POST_NOTICE(
@@ -789,6 +1116,18 @@ async function main() {
       assert(
         read("src/app/api/notice/local-blob-put/route.ts").includes('process.env.VERCEL === "1"'),
         "local put 404 on vercel"
+      );
+      assert(
+        read("src/lib/noticeFile.ts").includes("pg_advisory_xact_lock"),
+        "complete/abort serialize on storage key lock"
+      );
+      assert(
+        read("src/lib/noticeFileMagic.ts").includes("localName !== name"),
+        "zip local names must match central directory"
+      );
+      assert(
+        read("src/lib/noticeFileMagic.ts").includes("parseOleCompound"),
+        "ole uses cfb directory parse"
       );
     }
   } finally {
