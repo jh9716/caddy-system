@@ -42,6 +42,9 @@ const mk = (pathname: string) => { const ev: string[] = []; const hist: string[]
 // source guards
 const src = readFileSync("src/app/chat/ChatClient.tsx", "utf8");
 ok(/readReusableChatToken<TokenPayload>\(\)/.test(src) && /cachedToken \?\? \(await fetchToken\(\)\)/.test(src), "token reuse in init");
+ok(/readCachedChatRooms<RoomSummary>\(info\.user\.userId\)/.test(src) && /applyRooms\(cachedRooms, "cache"\)/.test(src), "same-session memory list after token");
+ok(!/readPersistedChatListForPaint/.test(src), "no persisted list paint");
+ok(/shouldStartDirectoryHttpFallback/.test(src) && /await fetchRoomsHttp/.test(src), "directory HTTP fallback kept");
 ok(/const staleCached = !dirOpened && usedCachedTokenRef\.current/.test(src), "stale cached token refresh");
 ok(/startEarlyDeepLink\(requested\)/.test(src) && /closeEarlyDeepLinkDenied\(\)/.test(src), "early deep link + deny path");
 ok(/fetchTargetedRoom\(info\.token, requested\);\s*\/\/[^\n]*\n[^\n]*\n\s*startEarlyDeepLink/.test(src), "targeted permission fetch kept with early open");
