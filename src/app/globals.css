@@ -2915,6 +2915,14 @@ html.vh-chat-open .vh-work-inner,
   opacity: 1;
 }
 
+.notice-photo-paste-hint {
+  margin: 8px 0 0;
+  color: var(--vh-ink-soft);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
 .notice-photo-thumb-fallback,
 .notice-photo-thumb-status {
   position: absolute;

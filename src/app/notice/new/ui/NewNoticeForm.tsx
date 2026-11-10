@@ -17,9 +17,17 @@ import { DRIVING_POOL_TEAM, PRIMARY_TEAMS } from '@/lib/caddyManage'
 import {
   NOTICE_PHOTO_ACCEPT,
   NOTICE_PHOTO_MAX,
+  noticePhotoLimitMessage,
   type NoticePhotoPublic,
 } from '@/lib/noticePhotoConstants'
 import { noticePhotoSrc } from '@/lib/noticePhotoConstants'
+import {
+  NOTICE_PASTE_EXCEL_FALLBACK,
+  NOTICE_PASTE_HINT,
+  NOTICE_PASTE_WHILE_SAVING,
+  classifyNoticeClipboard,
+  noticeClipboardFromData,
+} from '@/lib/noticeClipboardPaste'
 import {
   instantNoticePhotoPicks,
   prepareNoticePendingPhoto,
@@ -93,6 +101,7 @@ function pushResultMessage(push: {
 
 export default function NewNoticeForm({ mode = 'new', initial }: Props) {
   const router = useRouter()
+  const formRef = useRef<HTMLFormElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const pdfRef = useRef<HTMLInputElement>(null)
   const [title, setTitle] = useState(initial?.title ?? '')
@@ -115,14 +124,22 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
   )
   const [pending, setPending] = useState<NoticePendingPick[]>([])
   const [saveProgress, setSaveProgress] = useState('')
+  const [pasteNote, setPasteNote] = useState('')
   const pendingRef = useRef<NoticePendingPick[]>([])
   const submitLock = useRef(false)
+  const busyRef = useRef(false)
+  const existingCountRef = useRef(0)
+  const reservedPasteRef = useRef(0)
+  const fingerprintsRef = useRef(new Set<string>())
+  const mountedRef = useRef(true)
   const [existingFiles, setExistingFiles] = useState<NoticeFilePublic[]>(
     initial?.files ?? []
   )
   const [pendingFiles, setPendingFiles] = useState<NoticePendingFile[]>([])
   const isEdit = mode === 'edit'
   const scheduled = isFutureNoticeStart(publishStartAt || null)
+  busyRef.current = busy
+  existingCountRef.current = existingPhotos.length
   const totalPhotos = existingPhotos.length + pending.length
   const canAdd = totalPhotos < NOTICE_PHOTO_MAX
   const totalFiles = existingFiles.length + pendingFiles.length
@@ -134,61 +151,161 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
   )
 
   useEffect(() => {
-    pendingRef.current = pending
-  }, [pending])
-
-  useEffect(() => {
+    mountedRef.current = true
     return () => {
+      mountedRef.current = false
       for (const item of pendingRef.current) revokeNoticePreviewUrl(item.previewUrl)
     }
   }, [])
 
-  async function onPick(files: FileList | null) {
-    if (!files || busy) return
+  function syncPending(next: NoticePendingPick[]) {
+    pendingRef.current = next
+    setPending(next)
+  }
+
+  function photoRoomLeft() {
+    return Math.max(
+      0,
+      NOTICE_PHOTO_MAX -
+        existingCountRef.current -
+        pendingRef.current.length -
+        reservedPasteRef.current
+    )
+  }
+
+  async function addPhotoFiles(files: File[]) {
+    if (!files.length || busyRef.current || !mountedRef.current) return
     setStatusNote('')
-    const room = NOTICE_PHOTO_MAX - existingPhotos.length - pending.length
-    const { items, note } = instantNoticePhotoPicks(Array.from(files), room, {
-      fileIds: pending.map((p) => p.fileId),
-    })
-    if (note) setStatusNote(note)
-    if (items.length) {
-      setPending((cur) => {
-        const roomLeft = NOTICE_PHOTO_MAX - existingPhotos.length - cur.length
-        return [...cur, ...items.slice(0, Math.max(0, roomLeft))]
-      })
-      for (const item of items) {
-        const prepared = await prepareNoticePendingPhoto(item)
-        setPending((cur) => {
-          const still = cur.find((p) => p.key === item.key)
-          if (!still) {
-            if (prepared.previewUrl !== item.previewUrl) {
-              revokeNoticePreviewUrl(prepared.previewUrl)
-            }
-            return cur
-          }
-          if (
-            prepared.status === 'ready' &&
-            prepared.fingerprint &&
-            cur.some((p) => p.key !== item.key && p.fingerprint === prepared.fingerprint)
-          ) {
-            revokeNoticePreviewUrl(prepared.previewUrl)
-            setStatusNote('이미 추가한 사진입니다.')
-            return cur.filter((p) => p.key !== item.key)
-          }
-          return cur.map((p) => (p.key === item.key ? prepared : p))
-        })
-        if (prepared.status === 'failed' && prepared.error) setStatusNote(prepared.error)
-      }
+    const room = photoRoomLeft()
+    if (room <= 0) {
+      setStatusNote(noticePhotoLimitMessage())
+      return
     }
+    const { items, note } = instantNoticePhotoPicks(files, room, {
+      fileIds: pendingRef.current.map((p) => p.fileId),
+    })
+    if (items.length < files.length && items.length >= room) {
+      setStatusNote(noticePhotoLimitMessage())
+    } else if (note) {
+      setStatusNote(note)
+    }
+    if (!items.length) return
+    syncPending([...pendingRef.current, ...items])
+    for (const item of items) {
+      const prepared = await prepareNoticePendingPhoto(item)
+      if (!mountedRef.current) {
+        revokeNoticePreviewUrl(prepared.previewUrl)
+        return
+      }
+      const current = pendingRef.current
+      const still = current.find((p) => p.key === item.key)
+      if (!still) {
+        if (prepared.previewUrl !== item.previewUrl) revokeNoticePreviewUrl(prepared.previewUrl)
+        continue
+      }
+      if (
+        prepared.status === 'ready' &&
+        prepared.fingerprint &&
+        (fingerprintsRef.current.has(prepared.fingerprint) ||
+          current.some((p) => p.key !== item.key && p.fingerprint === prepared.fingerprint))
+      ) {
+        revokeNoticePreviewUrl(prepared.previewUrl)
+        syncPending(pendingRef.current.filter((p) => p.key !== item.key))
+        setStatusNote('이미 추가한 사진입니다.')
+        continue
+      }
+      if (prepared.status === 'ready' && prepared.fingerprint) {
+        fingerprintsRef.current.add(prepared.fingerprint)
+      }
+      syncPending(pendingRef.current.map((p) => (p.key === item.key ? prepared : p)))
+      if (prepared.status === 'failed' && prepared.error) setStatusNote(prepared.error)
+    }
+  }
+
+  const addPhotoFilesRef = useRef(addPhotoFiles)
+  addPhotoFilesRef.current = addPhotoFiles
+
+  function releasePasteReservation() {
+    reservedPasteRef.current = Math.max(0, reservedPasteRef.current - 1)
+  }
+
+  async function pasteExcelTable(html: string) {
+    if (photoRoomLeft() <= 0) {
+      setStatusNote(noticePhotoLimitMessage())
+      return
+    }
+    reservedPasteRef.current += 1
+    setPasteNote('엑셀 표를 이미지로 만드는 중…')
+    let released = false
+    const release = () => {
+      if (released) return
+      released = true
+      releasePasteReservation()
+    }
+    try {
+      const { excelClipboardHtmlToNoticePhoto } = await import('@/lib/noticeExcelTableImage')
+      const file = await excelClipboardHtmlToNoticePhoto(html)
+      release()
+      if (!mountedRef.current) return
+      setPasteNote('')
+      await addPhotoFilesRef.current([file])
+    } catch (error) {
+      release()
+      if (!mountedRef.current) return
+      setPasteNote('')
+      setStatusNote(error instanceof Error ? error.message : NOTICE_PASTE_EXCEL_FALLBACK)
+    }
+  }
+
+  const pasteExcelRef = useRef(pasteExcelTable)
+  pasteExcelRef.current = pasteExcelTable
+
+  useEffect(() => {
+    function onDocPaste(event: ClipboardEvent) {
+      const form = formRef.current
+      if (!form) return
+      const target = event.target
+      if (target instanceof Node) {
+        const inside = form.contains(target)
+        const atRoot = target === document.body || target === document.documentElement
+        if (!inside && !atRoot) return
+      }
+      const decision = classifyNoticeClipboard(noticeClipboardFromData(event.clipboardData))
+      if (decision.kind === 'text') return
+      event.preventDefault()
+      if (busyRef.current) {
+        setStatusNote(NOTICE_PASTE_WHILE_SAVING)
+        return
+      }
+      if (decision.kind === 'unsupported') {
+        setPasteNote('')
+        setStatusNote(decision.message)
+        return
+      }
+      if (decision.kind === 'image') {
+        setPasteNote('')
+        void addPhotoFilesRef.current(decision.files)
+        return
+      }
+      void pasteExcelRef.current(decision.html)
+    }
+    document.addEventListener('paste', onDocPaste, true)
+    return () => document.removeEventListener('paste', onDocPaste, true)
+  }, [])
+
+  async function onPick(files: FileList | null) {
+    if (!files || busyRef.current) return
+    await addPhotoFiles(Array.from(files))
     if (fileRef.current) fileRef.current.value = ''
   }
 
   function removePending(key: string) {
-    setPending((cur) => {
-      const hit = cur.find((p) => p.key === key)
-      if (hit) revokeNoticePreviewUrl(hit.previewUrl)
-      return cur.filter((p) => p.key !== key)
-    })
+    const hit = pendingRef.current.find((p) => p.key === key)
+    if (hit) {
+      revokeNoticePreviewUrl(hit.previewUrl)
+      if (hit.fingerprint) fingerprintsRef.current.delete(hit.fingerprint)
+    }
+    syncPending(pendingRef.current.filter((p) => p.key !== key))
   }
 
   async function removeExisting(photoId: number) {
@@ -246,6 +363,7 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
     e.preventDefault()
     if (submitLock.current || busy) return
     submitLock.current = true
+    busyRef.current = true
     setBusy(true)
     setStatusNote('')
     try {
@@ -340,10 +458,15 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
           const failedKeys = new Set(
             uploaded.failedIndexes.map((i) => readyPhotos[i]?.key).filter(Boolean)
           )
-          setPending((cur) => cur.filter((p) => failedKeys.has(p.key)))
+          const kept = pendingRef.current.filter((p) => failedKeys.has(p.key))
+          fingerprintsRef.current = new Set(
+            kept.map((p) => p.fingerprint).filter((fp): fp is string => Boolean(fp))
+          )
+          syncPending(kept)
         } else {
           for (const item of readyPhotos) revokeNoticePreviewUrl(item.previewUrl)
-          setPending([])
+          fingerprintsRef.current.clear()
+          syncPending([])
         }
       }
       const fileSortStart =
@@ -415,7 +538,7 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
   }
 
   return (
-    <form onSubmit={onSubmit} className="notice-form">
+    <form ref={formRef} onSubmit={onSubmit} className="notice-form">
       <label className="notice-field">
         <span>제목</span>
         <input
@@ -501,6 +624,12 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
             />
           </label>
         </div>
+        <p className="notice-photo-paste-hint">{NOTICE_PASTE_HINT}</p>
+        {pasteNote ? (
+          <p className="notice-form-progress" role="status">
+            {pasteNote}
+          </p>
+        ) : null}
         {statusNote ? <p className="course-report-photo-note">{statusNote}</p> : null}
       </fieldset>
       <fieldset className="course-report-fieldset">
