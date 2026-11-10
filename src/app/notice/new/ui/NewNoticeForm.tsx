@@ -472,10 +472,10 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
       const fileSortStart =
         existingFiles.reduce((max, file) => Math.max(max, file.sortOrder), -1) + 1
       if (noticeId && pendingFiles.length > 0) {
-        setSaveProgress(`PDF 업로드 중 0/${pendingFiles.length}`)
+        setSaveProgress(`첨부파일 업로드 중 0/${pendingFiles.length}`)
         const uploadedFiles = await uploadNoticePendingFiles(noticeId, pendingFiles, {
           onProgress: (p) =>
-            setSaveProgress(`PDF 업로드 중 ${p.done}/${p.total}`),
+            setSaveProgress(`첨부파일 업로드 중 ${p.done}/${p.total}`),
           sortOrderStart: fileSortStart,
         })
         if (isMemberSessionRedirectScheduled()) return
@@ -489,7 +489,7 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
       if (photoFailed > 0 || fileFailed > 0) {
         const parts = [
           photoFailed > 0 ? `사진 ${photoFailed}장` : '',
-          fileFailed > 0 ? `PDF ${fileFailed}개` : '',
+          fileFailed > 0 ? `첨부파일 ${fileFailed}개` : '',
         ].filter(Boolean)
         alert(
           `공지는 저장됐지만 ${parts.join(', ')}를 올리지 못했습니다. 기존 첨부 파일은 그대로 두었습니다. 자동 푸시는 보내지 않았습니다.`
@@ -633,7 +633,7 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
         {statusNote ? <p className="course-report-photo-note">{statusNote}</p> : null}
       </fieldset>
       <fieldset className="course-report-fieldset">
-        <legend>PDF 첨부 (최대 {NOTICE_FILE_MAX}개)</legend>
+        <legend>첨부파일 (최대 {NOTICE_FILE_MAX}개 · PDF/Excel/한글)</legend>
         <ul className="notice-files-composer">
           {existingFiles.map((file) => (
             <li key={file.id} className="notice-files-composer-item">
@@ -664,8 +664,11 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
             </li>
           ))}
         </ul>
+        <p className="notice-photo-paste-hint">
+          PDF, Excel(.xlsx/.xls), 한글(.hwp/.hwpx) · 파일당 20MB · 최대 {NOTICE_FILE_MAX}개
+        </p>
         <label className={`notice-file-add${canAddFile ? '' : ' is-disabled'}`}>
-          + PDF
+          + 파일
           <input
             ref={pdfRef}
             type="file"

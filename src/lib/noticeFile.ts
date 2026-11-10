@@ -9,21 +9,65 @@ import {
 } from "@/lib/courseReportPhotoStorage";
 import { lockNoticeRow, resolveLockedSortOrder } from "@/lib/noticeMediaLock";
 import {
-  NOTICE_FILE_EXT,
+  NOTICE_FILE_MAGIC_PREFIX_BYTES,
   NOTICE_FILE_MAX,
-  NOTICE_FILE_MIME,
+  NOTICE_FILE_MAX_BYTES,
+  NOTICE_FILE_MIME_BY_EXT,
+  NOTICE_FILE_SIGNED_PUT_TTL_MS,
+  noticeFileExtFromMime,
+  noticeFileExtFromName,
   noticeFileLimitMessage,
+  noticeFileSizeMessage,
+  noticeFileTypeMessage,
   sanitizeNoticeFileName,
+  type NoticeFileExt,
   type NoticeFilePublic,
 } from "@/lib/noticeFileConstants";
 import {
   NoticeFileValidationError,
-  assertNoticePdfBytes,
+  assertNoticeFileBytes,
+  detectNoticeFileKind,
 } from "@/lib/noticeFileMagic";
+import {
+  assertNoticeFileGrantFresh,
+  noticeFileActorKey,
+  parseNoticeFileStorageKey,
+  parseNoticeFileUploadSize,
+  parseSignedNoticeFileGrant,
+  signLocalNoticeFilePutUrl,
+  signNoticeFileUploadGrant,
+  type NoticeFileUploadGrant,
+} from "@/lib/noticeFileGrant";
 
 export type { NoticeFilePublic } from "@/lib/noticeFileConstants";
 export { noticeFileSrc, sanitizeNoticeFileName } from "@/lib/noticeFileConstants";
 export { NoticeFileValidationError } from "@/lib/noticeFileMagic";
+
+export type NoticeFilePrepareResult = {
+  storageKey: string;
+  uploadUrl: string;
+  grant: string;
+  contentType: string;
+  maxBytes: number;
+  expiresAt: number;
+  originalName: string;
+};
+
+function claimedNoticeFileExt(input: {
+  originalName?: string | null;
+  contentType?: string | null;
+}): NoticeFileExt {
+  const fromName = noticeFileExtFromName(input.originalName);
+  const fromMime = noticeFileExtFromMime(input.contentType);
+  if (fromName && fromMime && fromName !== fromMime) {
+    throw new NoticeFileValidationError("unsupported_type", noticeFileTypeMessage());
+  }
+  const ext = fromName ?? fromMime;
+  if (!ext) {
+    throw new NoticeFileValidationError("unsupported_type", noticeFileTypeMessage());
+  }
+  return ext;
+}
 
 export function isNoticeFileTableMissing(e: unknown): boolean {
   if (
@@ -61,15 +105,23 @@ export function canManageNoticeFiles(role: ResolvedAuthUser["role"]): boolean {
   return canWriteInternalNotice(role);
 }
 
-export function buildNoticeFileStorageKey(noticeId: number, id = randomUUID()): string {
-  return `notices/${noticeId}/files/${id}.${NOTICE_FILE_EXT}`;
+export function buildNoticeFileStorageKey(
+  noticeId: number,
+  ext: NoticeFileExt,
+  id = randomUUID()
+): string {
+  return `notices/${noticeId}/files/${id}.${ext}`;
 }
 
 export function noticeFileContentDisposition(
   originalName: string,
-  disposition: "inline" | "attachment"
+  disposition: "inline" | "attachment",
+  ext?: NoticeFileExt | null
 ): string {
-  const filename = sanitizeNoticeFileName(originalName);
+  const filename = sanitizeNoticeFileName(
+    originalName,
+    ext ?? noticeFileExtFromName(originalName) ?? "pdf"
+  );
   const fallback = filename.replace(/[^\x20-\x7E]/g, "_");
   const encoded = encodeURIComponent(filename).replace(
     /[!'()*]/g,
@@ -119,6 +171,305 @@ export async function listNoticeFileStorageKeys(
   }
 }
 
+async function requireWritableNotice(
+  db: PrismaClient,
+  noticeId: number,
+  auth: ResolvedAuthUser
+): Promise<void> {
+  if (!canManageNoticeFiles(auth.role)) {
+    throw new NoticeFileValidationError("forbidden", "첨부파일을 올릴 수 없습니다.", 403);
+  }
+  const notice = await db.notice.findUnique({ where: { id: noticeId } });
+  if (!notice) {
+    throw new NoticeFileValidationError("not_found", "공지를 찾을 수 없습니다.", 404);
+  }
+}
+
+function requireConfiguredStore() {
+  const store = getCourseReportPhotoStore();
+  if (!store.configured) {
+    throw new CourseReportPhotoStorageError(
+      "storage_not_configured",
+      "첨부파일 저장소가 설정되지 않았습니다.",
+      503
+    );
+  }
+  return store;
+}
+
+export async function prepareNoticeFileUpload(
+  db: PrismaClient,
+  input: {
+    noticeId: number;
+    originalName?: string | null;
+    contentType?: string | null;
+    size: unknown;
+    auth: ResolvedAuthUser;
+  }
+): Promise<NoticeFilePrepareResult> {
+  await requireWritableNotice(db, input.noticeId, input.auth);
+  const store = requireConfiguredStore();
+  const size = parseNoticeFileUploadSize(input.size);
+  const ext = claimedNoticeFileExt({
+    originalName: input.originalName,
+    contentType: input.contentType,
+  });
+  const mime = NOTICE_FILE_MIME_BY_EXT[ext];
+  const existing = await countNoticeFiles(db, input.noticeId);
+  if (existing >= NOTICE_FILE_MAX) {
+    throw new NoticeFileValidationError("file_limit", noticeFileLimitMessage(), 409);
+  }
+  const storageKey = buildNoticeFileStorageKey(input.noticeId, ext);
+  const originalName = sanitizeNoticeFileName(input.originalName, ext);
+  const unsignedGrant = {
+    noticeId: input.noticeId,
+    actor: noticeFileActorKey(input.auth),
+    storageKey,
+    ext,
+    contentType: mime,
+    maxBytes: size,
+  };
+  const signed = signNoticeFileUploadGrant(unsignedGrant);
+  const grant: NoticeFileUploadGrant = { ...unsignedGrant, exp: signed.expiresAt };
+  let uploadUrl: string;
+  if (store.createSignedPutUrl) {
+    try {
+      const blob = await store.createSignedPutUrl({
+        pathname: storageKey,
+        contentType: mime,
+        maximumSizeInBytes: size,
+        validUntilMs: signed.expiresAt,
+      });
+      uploadUrl = blob.uploadUrl;
+    } catch (e) {
+      if (e instanceof CourseReportPhotoStorageError) throw e;
+      throw new CourseReportPhotoStorageError(
+        "signed_put_failed",
+        "첨부파일 업로드 URL 발급에 실패했습니다.",
+        502
+      );
+    }
+  } else {
+    uploadUrl = signLocalNoticeFilePutUrl(grant);
+  }
+  return {
+    storageKey,
+    uploadUrl,
+    grant: signed.token,
+    contentType: mime,
+    maxBytes: size,
+    expiresAt: signed.expiresAt,
+    originalName,
+  };
+}
+
+async function loadUploadedNoticeFileBytes(
+  storageKey: string,
+  ext: NoticeFileExt
+): Promise<{ bytes: Uint8Array; size: number }> {
+  const store = requireConfiguredStore();
+  if (ext === "pdf" && store.readPrefixAndMeta) {
+    const inspected = await store.readPrefixAndMeta(storageKey, NOTICE_FILE_MAGIC_PREFIX_BYTES);
+    if (!inspected || inspected.size <= 0) {
+      throw new NoticeFileValidationError("not_found", "첨부파일을 찾을 수 없습니다.", 404);
+    }
+    if (inspected.size > NOTICE_FILE_MAX_BYTES) {
+      throw new NoticeFileValidationError("file_too_large", noticeFileSizeMessage());
+    }
+    const kind = detectNoticeFileKind(inspected.prefix);
+    if (kind?.ext === "pdf") {
+      return { bytes: inspected.prefix, size: inspected.size };
+    }
+  }
+  const bytes = await store.get(storageKey);
+  if (!bytes || bytes.byteLength === 0) {
+    throw new NoticeFileValidationError("not_found", "첨부파일을 찾을 수 없습니다.", 404);
+  }
+  return { bytes, size: bytes.byteLength };
+}
+
+async function findExistingByStorageKey(
+  db: PrismaClient,
+  storageKey: string,
+  noticeId: number
+): Promise<NoticeFile | null> {
+  try {
+    const row = await db.noticeFile.findUnique({ where: { storageKey } });
+    if (row && row.noticeId === noticeId) return row;
+    return row ? row : null;
+  } catch (e) {
+    if (isNoticeFileTableMissing(e)) fileTableNotReady();
+    throw e;
+  }
+}
+
+export async function completeNoticeFileUpload(
+  db: PrismaClient,
+  input: {
+    noticeId: number;
+    grant: string;
+    originalName?: string | null;
+    auth: ResolvedAuthUser;
+    requestedSortOrder?: number | null;
+  }
+): Promise<NoticeFilePublic> {
+  await requireWritableNotice(db, input.noticeId, input.auth);
+  const grant = parseSignedNoticeFileGrant(input.grant);
+  if (grant.noticeId !== input.noticeId || grant.actor !== noticeFileActorKey(input.auth)) {
+    throw new NoticeFileValidationError("forbidden", "첨부파일을 올릴 수 없습니다.", 403);
+  }
+  const existingRow = await findExistingByStorageKey(db, grant.storageKey, input.noticeId);
+  if (existingRow) {
+    if (existingRow.noticeId !== input.noticeId) {
+      throw new NoticeFileValidationError("forbidden", "첨부파일을 올릴 수 없습니다.", 403);
+    }
+    return toNoticeFilePublic(existingRow);
+  }
+  assertNoticeFileGrantFresh(grant);
+
+  const store = requireConfiguredStore();
+  let inspected: { bytes: Uint8Array; size: number };
+  try {
+    inspected = await loadUploadedNoticeFileBytes(grant.storageKey, grant.ext);
+  } catch (e) {
+    await store.delete(grant.storageKey).catch(() => undefined);
+    throw e;
+  }
+  if (inspected.size > grant.maxBytes) {
+    await store.delete(grant.storageKey).catch(() => undefined);
+    throw new NoticeFileValidationError("file_too_large", noticeFileSizeMessage());
+  }
+  let kind;
+  try {
+    kind = assertNoticeFileBytes(inspected.bytes, grant.ext);
+  } catch (e) {
+    await store.delete(grant.storageKey).catch(() => undefined);
+    throw e;
+  }
+  const originalName = sanitizeNoticeFileName(input.originalName || grant.storageKey, kind.ext);
+
+  let row: NoticeFile;
+  try {
+    row = await db.$transaction(async (tx) => {
+      const locked = await lockNoticeRow(tx, input.noticeId);
+      if (!locked) {
+        throw new NoticeFileValidationError("not_found", "공지를 찾을 수 없습니다.", 404);
+      }
+      const already = await tx.noticeFile.findUnique({
+        where: { storageKey: grant.storageKey },
+      });
+      if (already) {
+        if (already.noticeId !== input.noticeId) {
+          throw new NoticeFileValidationError("forbidden", "첨부파일을 올릴 수 없습니다.", 403);
+        }
+        return already;
+      }
+      let existing: number;
+      try {
+        existing = await tx.noticeFile.count({ where: { noticeId: input.noticeId } });
+      } catch (e) {
+        if (isNoticeFileTableMissing(e)) fileTableNotReady();
+        throw e;
+      }
+      if (existing >= NOTICE_FILE_MAX) {
+        throw new NoticeFileValidationError("file_limit", noticeFileLimitMessage(), 409);
+      }
+      const agg = await tx.noticeFile.aggregate({
+        where: { noticeId: input.noticeId },
+        _max: { sortOrder: true },
+      });
+      const requested = input.requestedSortOrder ?? null;
+      const taken =
+        requested != null
+          ? Boolean(
+              await tx.noticeFile.findFirst({
+                where: { noticeId: input.noticeId, sortOrder: requested },
+                select: { id: true },
+              })
+            )
+          : false;
+      return tx.noticeFile.create({
+        data: {
+          noticeId: input.noticeId,
+          storageKey: grant.storageKey,
+          originalName,
+          mimeType: kind.mime,
+          size: inspected.size,
+          sortOrder: resolveLockedSortOrder(agg._max.sortOrder, requested, taken),
+        },
+      });
+    });
+  } catch (e) {
+    if (
+      e instanceof Prisma.PrismaClientKnownRequestError &&
+      e.code === "P2002"
+    ) {
+      const raced = await findExistingByStorageKey(db, grant.storageKey, input.noticeId);
+      if (raced && raced.noticeId === input.noticeId) return toNoticeFilePublic(raced);
+    }
+    if (e instanceof NoticeFileValidationError && e.code === "file_limit") {
+      await store.delete(grant.storageKey).catch(() => undefined);
+    } else if (!(e instanceof NoticeFileValidationError) || e.code !== "forbidden") {
+      const raced = await findExistingByStorageKey(db, grant.storageKey, input.noticeId).catch(
+        () => null
+      );
+      if (!raced) await store.delete(grant.storageKey).catch(() => undefined);
+    }
+    if (e instanceof NoticeFileValidationError) throw e;
+    if (isNoticeFileTableMissing(e)) fileTableNotReady();
+    throw e;
+  }
+  return toNoticeFilePublic(row);
+}
+
+export async function abortNoticeFileUpload(
+  db: PrismaClient,
+  input: {
+    noticeId: number;
+    grant: string;
+    auth: ResolvedAuthUser;
+  }
+): Promise<{ ok: true; registered: boolean }> {
+  await requireWritableNotice(db, input.noticeId, input.auth);
+  const grant = parseSignedNoticeFileGrant(input.grant);
+  if (grant.noticeId !== input.noticeId || grant.actor !== noticeFileActorKey(input.auth)) {
+    throw new NoticeFileValidationError("forbidden", "첨부파일을 올릴 수 없습니다.", 403);
+  }
+  const existing = await findExistingByStorageKey(db, grant.storageKey, input.noticeId);
+  if (existing) {
+    return { ok: true, registered: true };
+  }
+  await cleanupNoticeFileBlobsBestEffort([grant.storageKey], {
+    noticeId: input.noticeId,
+  });
+  return { ok: true, registered: false };
+}
+
+export async function putLocalNoticeFileBytes(input: {
+  storageKey: string;
+  contentType: string;
+  bytes: Uint8Array;
+}): Promise<void> {
+  const parsed = parseNoticeFileStorageKey(input.storageKey);
+  if (!parsed) {
+    throw new NoticeFileValidationError("unauthorized", "업로드 권한이 없습니다.", 401);
+  }
+  if (NOTICE_FILE_MIME_BY_EXT[parsed.ext] !== input.contentType) {
+    throw new NoticeFileValidationError("unsupported_type", noticeFileTypeMessage());
+  }
+  const store = requireConfiguredStore();
+  try {
+    await store.put(input.storageKey, input.bytes, input.contentType);
+  } catch (e) {
+    if (e instanceof CourseReportPhotoStorageError) throw e;
+    throw new CourseReportPhotoStorageError(
+      "storage_put_failed",
+      "첨부파일 저장에 실패했습니다.",
+      502
+    );
+  }
+}
+
 export async function uploadNoticeFile(
   db: PrismaClient,
   input: {
@@ -129,28 +480,14 @@ export async function uploadNoticeFile(
     requestedSortOrder?: number | null;
   }
 ): Promise<NoticeFilePublic> {
-  if (!canManageNoticeFiles(input.auth.role)) {
-    throw new NoticeFileValidationError("forbidden", "첨부파일을 올릴 수 없습니다.", 403);
-  }
-  const store = getCourseReportPhotoStore();
-  if (!store.configured) {
-    throw new CourseReportPhotoStorageError(
-      "storage_not_configured",
-      "첨부파일 저장소가 설정되지 않았습니다.",
-      503
-    );
-  }
-
-  const notice = await db.notice.findUnique({ where: { id: input.noticeId } });
-  if (!notice) {
-    throw new NoticeFileValidationError("not_found", "공지를 찾을 수 없습니다.", 404);
-  }
-
-  const mime = assertNoticePdfBytes(input.bytes);
-  const originalName = sanitizeNoticeFileName(input.originalName);
-  const storageKey = buildNoticeFileStorageKey(input.noticeId);
+  await requireWritableNotice(db, input.noticeId, input.auth);
+  const store = requireConfiguredStore();
+  const claimed = noticeFileExtFromName(input.originalName);
+  const kind = assertNoticeFileBytes(input.bytes, claimed);
+  const originalName = sanitizeNoticeFileName(input.originalName, kind.ext);
+  const storageKey = buildNoticeFileStorageKey(input.noticeId, kind.ext);
   try {
-    await store.put(storageKey, input.bytes, mime);
+    await store.put(storageKey, input.bytes, kind.mime);
   } catch (e) {
     if (e instanceof CourseReportPhotoStorageError) throw e;
     throw new CourseReportPhotoStorageError(
@@ -196,7 +533,7 @@ export async function uploadNoticeFile(
           noticeId: input.noticeId,
           storageKey,
           originalName,
-          mimeType: mime,
+          mimeType: kind.mime,
           size: input.bytes.byteLength,
           sortOrder: resolveLockedSortOrder(agg._max.sortOrder, requested, taken),
         },
@@ -297,21 +634,15 @@ export async function loadNoticeFileMeta(
   if (!file || file.noticeId !== input.noticeId) {
     throw new NoticeFileValidationError("not_found", "첨부파일을 찾을 수 없습니다.", 404);
   }
-  if (file.mimeType !== NOTICE_FILE_MIME) {
-    throw new NoticeFileValidationError("unsupported_type", "PDF 파일만 열 수 있습니다.", 415);
+  const ext = noticeFileExtFromMime(file.mimeType) ?? noticeFileExtFromName(file.originalName);
+  if (!ext || NOTICE_FILE_MIME_BY_EXT[ext] !== file.mimeType) {
+    throw new NoticeFileValidationError("unsupported_type", noticeFileTypeMessage(), 415);
   }
   return file;
 }
 
 export async function openNoticeFileBody(storageKey: string, abortSignal?: AbortSignal) {
-  const store = getCourseReportPhotoStore();
-  if (!store.configured) {
-    throw new CourseReportPhotoStorageError(
-      "storage_not_configured",
-      "첨부파일 저장소가 설정되지 않았습니다.",
-      503
-    );
-  }
+  const store = requireConfiguredStore();
   const opts = abortSignal ? { abortSignal } : undefined;
   const body = store.open
     ? await store.open(storageKey, opts)
@@ -321,3 +652,5 @@ export async function openNoticeFileBody(storageKey: string, abortSignal?: Abort
   }
   return body;
 }
+
+export const NOTICE_FILE_UPLOAD_TTL_MS = NOTICE_FILE_SIGNED_PUT_TTL_MS;

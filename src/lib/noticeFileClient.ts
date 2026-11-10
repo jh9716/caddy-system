@@ -1,10 +1,17 @@
 import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
 import {
+  LOCAL_NOTICE_FILE_PUT_PATH,
   NOTICE_FILE_ACCEPT,
   NOTICE_FILE_MAX_BYTES,
+  NOTICE_FILE_MIME_BY_EXT,
+  canInlineNoticeFile,
+  noticeFileExtFromMime,
+  noticeFileExtFromName,
   noticeFileSizeMessage,
   noticeFileSrc,
+  noticeFileTypeMessage,
   sanitizeNoticeFileName,
+  type NoticeFileExt,
 } from "@/lib/noticeFileConstants";
 import {
   NOTICE_MEDIA_UPLOAD_CONCURRENCY,
@@ -22,10 +29,19 @@ export type NoticePendingFile = {
   fileId: string;
 };
 
+export function noticeFileClientExt(file: File): NoticeFileExt | null {
+  const fromName = noticeFileExtFromName(file.name);
+  const fromMime = noticeFileExtFromMime(file.type);
+  if (fromName && fromMime && fromName !== fromMime) return null;
+  return fromName ?? fromMime;
+}
+
+export function isNoticeAllowedFile(file: File): boolean {
+  return noticeFileClientExt(file) != null;
+}
+
 export function isNoticePdfFile(file: File): boolean {
-  const type = (file.type || "").toLowerCase();
-  const name = (file.name || "").toLowerCase();
-  return type === "application/pdf" || name.endsWith(".pdf");
+  return noticeFileClientExt(file) === "pdf";
 }
 
 export function noticeFilePickId(file: File): string {
@@ -47,8 +63,8 @@ export function pickNoticeFiles(
       note = "이미 추가한 파일입니다.";
       continue;
     }
-    if (!isNoticePdfFile(file)) {
-      note = "PDF 파일만 첨부할 수 있습니다.";
+    if (!isNoticeAllowedFile(file)) {
+      note = noticeFileTypeMessage();
       continue;
     }
     if (file.size > NOTICE_FILE_MAX_BYTES) {
@@ -56,7 +72,7 @@ export function pickNoticeFiles(
       continue;
     }
     if (file.size <= 0) {
-      note = "PDF 파일이 필요합니다.";
+      note = "첨부파일이 필요합니다.";
       continue;
     }
     seen.add(fileId);
@@ -67,6 +83,101 @@ export function pickNoticeFiles(
     });
   }
   return { items, note };
+}
+
+async function putNoticeFileBytes(
+  uploadUrl: string,
+  file: File,
+  contentType: string
+): Promise<void> {
+  const sameOrigin = uploadUrl.startsWith("/") || uploadUrl.includes(LOCAL_NOTICE_FILE_PUT_PATH);
+  const res = await fetch(uploadUrl, {
+    method: "PUT",
+    credentials: sameOrigin ? "include" : "omit",
+    headers: { "content-type": contentType },
+    body: file,
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(
+      typeof data.message === "string" ? data.message : "첨부파일 업로드에 실패했습니다."
+    );
+  }
+}
+
+async function abortNoticeFileGrant(
+  post: typeof fetch,
+  noticeId: number,
+  grant: string | undefined
+): Promise<void> {
+  if (!grant) return;
+  await post(`/api/notice/${noticeId}/files/abort`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ grant }),
+  }).catch(() => undefined);
+}
+
+async function uploadNoticeFileDirect(
+  noticeId: number,
+  item: { file: File },
+  post: typeof fetch,
+  sortOrder?: number
+): Promise<boolean> {
+  const ext = noticeFileClientExt(item.file);
+  if (!ext) throw new Error(noticeFileTypeMessage());
+  const contentType = NOTICE_FILE_MIME_BY_EXT[ext];
+  const originalName = sanitizeNoticeFileName(item.file.name, ext);
+  let grant: string | undefined;
+  const preparedRes = await post(`/api/notice/${noticeId}/files/prepare`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      originalName,
+      contentType,
+      size: item.file.size,
+    }),
+  });
+  if (consumeUnauthorizedMemberResponse(preparedRes)) {
+    throw new Error("unauthorized");
+  }
+  const prepared = await preparedRes.json().catch(() => ({}));
+  if (!preparedRes.ok || !prepared?.upload?.uploadUrl || !prepared.upload.grant) {
+    throw new Error(
+      typeof prepared.message === "string" ? prepared.message : "첨부파일 업로드에 실패했습니다."
+    );
+  }
+  grant = String(prepared.upload.grant);
+  const uploadUrl = String(prepared.upload.uploadUrl);
+  const putType = String(prepared.upload.contentType || contentType);
+  try {
+    await putNoticeFileBytes(uploadUrl, item.file, putType);
+    const completeRes = await post(`/api/notice/${noticeId}/files/complete`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        grant,
+        originalName,
+        ...(sortOrder != null ? { sortOrder } : {}),
+      }),
+    });
+    if (consumeUnauthorizedMemberResponse(completeRes)) {
+      throw new Error("unauthorized");
+    }
+    if (!completeRes.ok) {
+      const data = await completeRes.json().catch(() => ({}));
+      throw new Error(
+        typeof data.message === "string" ? data.message : "첨부파일 업로드에 실패했습니다."
+      );
+    }
+    return true;
+  } catch (e) {
+    await abortNoticeFileGrant(post, noticeId, grant);
+    throw e;
+  }
 }
 
 export async function uploadNoticePendingFiles(
@@ -96,32 +207,17 @@ export async function uploadNoticePendingFiles(
         onProgress?.({ done, total });
         return;
       }
-      const fd = new FormData();
-      fd.append("file", item.file, sanitizeNoticeFileName(item.file.name));
-      if (sortOrderStart != null) {
-        fd.append("sortOrder", String(sortOrderStart + i));
-      }
-      const res = await post(`/api/notice/${noticeId}/files`, {
-        method: "POST",
-        credentials: "include",
-        body: fd,
-      });
-      if (consumeUnauthorizedMemberResponse(res)) {
-        unauthorized = true;
-        failed += 1;
-        failedIndexes.push(i);
-        done += 1;
-        onProgress?.({ done, total });
-        return;
-      }
-      if (res.ok) uploaded += 1;
-      else {
-        failed += 1;
-        failedIndexes.push(i);
-      }
+      await uploadNoticeFileDirect(
+        noticeId,
+        item,
+        post,
+        sortOrderStart != null ? sortOrderStart + i : undefined
+      );
+      uploaded += 1;
       done += 1;
       onProgress?.({ done, total });
-    } catch {
+    } catch (e) {
+      if (e instanceof Error && e.message === "unauthorized") unauthorized = true;
       failed += 1;
       failedIndexes.push(i);
       done += 1;
@@ -140,11 +236,17 @@ export function formatNoticeFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
+function filenameForNoticeFile(originalName: string, mimeType?: string): string {
+  const ext = noticeFileExtFromMime(mimeType) ?? noticeFileExtFromName(originalName) ?? "pdf";
+  return sanitizeNoticeFileName(originalName, ext);
+}
+
 async function blobFromNoticeFile(
   noticeId: number,
   fileId: number,
   originalName: string,
-  download: boolean
+  download: boolean,
+  mimeType?: string
 ): Promise<{ blob: Blob; filename: string }> {
   const res = await fetch(noticeFileSrc(noticeId, fileId, { download }), {
     credentials: "include",
@@ -157,9 +259,12 @@ async function blobFromNoticeFile(
     throw new Error(typeof data.message === "string" ? data.message : "파일을 열 수 없습니다.");
   }
   const blob = await res.blob();
+  const filename = filenameForNoticeFile(originalName, mimeType);
+  const ext = noticeFileExtFromName(filename) ?? "pdf";
+  const type = NOTICE_FILE_MIME_BY_EXT[ext];
   return {
-    blob: blob.type === "application/pdf" ? blob : new Blob([blob], { type: "application/pdf" }),
-    filename: sanitizeNoticeFileName(originalName),
+    blob: blob.type === type ? blob : new Blob([blob], { type }),
+    filename,
   };
 }
 
@@ -179,12 +284,14 @@ export async function downloadNoticeFile(input: {
   noticeId: number;
   fileId: number;
   originalName: string;
+  mimeType?: string;
 }): Promise<void> {
   const { blob, filename } = await blobFromNoticeFile(
     input.noticeId,
     input.fileId,
     input.originalName,
-    true
+    true,
+    input.mimeType
   );
   triggerBlobDownload(blob, filename);
 }
@@ -193,8 +300,14 @@ export async function openNoticeFile(input: {
   noticeId: number;
   fileId: number;
   originalName: string;
+  mimeType?: string;
   native?: boolean;
 }): Promise<void> {
+  const inline = canInlineNoticeFile(input.mimeType);
+  if (!inline) {
+    await downloadNoticeFile(input);
+    return;
+  }
   const inlineUrl = noticeFileSrc(input.noticeId, input.fileId);
   if (!input.native) {
     const opened = window.open(inlineUrl, "_blank", "noopener");
@@ -204,7 +317,8 @@ export async function openNoticeFile(input: {
     input.noticeId,
     input.fileId,
     input.originalName,
-    false
+    false,
+    input.mimeType
   );
   const objectUrl = URL.createObjectURL(blob);
   const opened = window.open(objectUrl, "_blank", "noopener");

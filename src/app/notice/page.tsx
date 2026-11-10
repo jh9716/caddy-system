@@ -122,7 +122,7 @@ export default async function NoticeListPage() {
                   <span className="notice-badge notice-badge-photo">사진 {n.photoCount}</span>
                 ) : null}
                 {n.fileCount > 0 ? (
-                  <span className="notice-badge notice-badge-file">PDF {n.fileCount}</span>
+                  <span className="notice-badge notice-badge-file">첨부 {n.fileCount}</span>
                 ) : null}
                 <span className="notice-list-title">{n.title}</span>
               </div>
