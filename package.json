@@ -62,7 +62,6 @@
     "test:free-board-unit": "bash scripts/tsx-safe.sh scripts/test-free-board-unit.ts",
     "test:chat-preview-env-unit": "bash scripts/tsx-safe.sh scripts/test-chat-preview-env-unit.ts",
     "test:preview-db-workflow-unit": "node scripts/test-preview-db-workflow-unit.cjs",
-    "test:preview-db-probe-unit": "bash scripts/tsx-safe.sh scripts/test-preview-db-probe-unit.ts",
     "test:floating-chat-unit": "bash scripts/tsx-safe.sh scripts/test-floating-chat-unit.ts",
     "test:member-shell-unit": "bash scripts/tsx-safe.sh scripts/test-member-shell-unit.ts",
     "test:caddy-dashboard-v2-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-dashboard-v2-unit.ts",
