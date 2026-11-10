@@ -10,6 +10,13 @@ import {
   COURSE_REPORT_PHOTO_DUPLICATE_MESSAGE,
 } from "@/lib/courseReportPhotoClient";
 import {
+  NOTICE_PASTE_EXCEL_FALLBACK,
+  NOTICE_PASTE_HINT,
+  NOTICE_PASTE_WHILE_SAVING,
+  classifyNoticeClipboard,
+  noticeClipboardFromData,
+} from "@/lib/noticeClipboardPaste";
+import {
   FREE_BOARD_BODY_MAX,
   FREE_BOARD_PHOTO_ACCEPT,
   FREE_BOARD_PHOTO_MAX,
@@ -42,6 +49,7 @@ export default function FreeBoardForm({
   initial?: { id: number; title: string; body: string; photos: FreeBoardPhotoPublic[] };
 }) {
   const router = useRouter();
+  const formRef = useRef<HTMLFormElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const isEdit = mode === "edit";
   const [title, setTitle] = useState(initial?.title ?? "");
@@ -55,11 +63,18 @@ export default function FreeBoardForm({
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [note, setNote] = useState("");
+  const [pasteNote, setPasteNote] = useState("");
   /** 글 저장(POST/PATCH)이 이미 끝난 게시글 id. 재시도 시 글을 다시 만들지 않는다. */
   const [savedPostId, setSavedPostId] = useState<number | null>(null);
   const pendingRef = useRef<Pending[]>([]);
   pendingRef.current = pending;
   const kept = existing.filter((p) => !removedIds.includes(p.id));
+  const busyRef = useRef(false);
+  const keptCountRef = useRef(0);
+  const reservedPasteRef = useRef(0);
+  const mountedRef = useRef(true);
+  busyRef.current = busy;
+  keptCountRef.current = kept.length;
   const total = kept.length + pending.length;
   const canAdd = total < FREE_BOARD_PHOTO_MAX;
   const failedCount = pending.filter((p) => p.status === "failed").length;
@@ -68,7 +83,9 @@ export default function FreeBoardForm({
 
   // 미리보기 object URL 은 컴포넌트가 사라질 때만 해제 (표시 중 해제 → 빈 썸네일 방지)
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
       for (const p of pendingRef.current) URL.revokeObjectURL(p.previewUrl);
     };
   }, []);
@@ -105,12 +122,17 @@ export default function FreeBoardForm({
     fileRef.current?.click();
   }
 
-  async function onPick(files: FileList | null) {
-    if (!files || files.length === 0) return;
-    const list = Array.from(files);
-    if (fileRef.current) fileRef.current.value = "";
+  function photoRoomLeft() {
+    return Math.max(
+      0,
+      FREE_BOARD_PHOTO_MAX - keptCountRef.current - pendingRef.current.length - reservedPasteRef.current
+    );
+  }
+
+  async function addPhotoFiles(list: File[]) {
+    if (!list.length || !mountedRef.current) return;
     setNote("");
-    const room = FREE_BOARD_PHOTO_MAX - kept.length - pendingRef.current.length;
+    const room = photoRoomLeft();
     if (room <= 0) {
       setNote(MAX_NOTE);
       return;
@@ -155,6 +177,7 @@ export default function FreeBoardForm({
         }
         seenIds.add(fileId);
         seenPrints.add(fingerprint);
+        if (!mountedRef.current) continue;
         const item: Pending = {
           key: `${Date.now()}-${fileId}`,
           uploadKey: newFreeBoardUploadKey(),
@@ -177,6 +200,84 @@ export default function FreeBoardForm({
       }
     }
   }
+
+  const addPhotoFilesRef = useRef(addPhotoFiles);
+  addPhotoFilesRef.current = addPhotoFiles;
+
+  async function onPick(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    const list = Array.from(files);
+    if (fileRef.current) fileRef.current.value = "";
+    await addPhotoFiles(list);
+  }
+
+  function releasePasteReservation() {
+    reservedPasteRef.current = Math.max(0, reservedPasteRef.current - 1);
+  }
+
+  async function pasteExcelTable(html: string) {
+    if (photoRoomLeft() <= 0) {
+      setNote(MAX_NOTE);
+      return;
+    }
+    reservedPasteRef.current += 1;
+    setPasteNote("엑셀 표를 이미지로 만드는 중…");
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      releasePasteReservation();
+    };
+    try {
+      const { excelClipboardHtmlToNoticePhoto } = await import("@/lib/noticeExcelTableImage");
+      const file = await excelClipboardHtmlToNoticePhoto(html);
+      release();
+      if (!mountedRef.current) return;
+      setPasteNote("");
+      await addPhotoFilesRef.current([file]);
+    } catch (error) {
+      release();
+      if (!mountedRef.current) return;
+      setPasteNote("");
+      setNote(error instanceof Error ? error.message : NOTICE_PASTE_EXCEL_FALLBACK);
+    }
+  }
+
+  const pasteExcelRef = useRef(pasteExcelTable);
+  pasteExcelRef.current = pasteExcelTable;
+
+  useEffect(() => {
+    function onDocPaste(event: ClipboardEvent) {
+      const form = formRef.current;
+      if (!form) return;
+      const target = event.target;
+      if (target instanceof Node) {
+        const inside = form.contains(target);
+        const atRoot = target === document.body || target === document.documentElement;
+        if (!inside && !atRoot) return;
+      }
+      const decision = classifyNoticeClipboard(noticeClipboardFromData(event.clipboardData));
+      if (decision.kind === "text") return;
+      event.preventDefault();
+      if (busyRef.current) {
+        setNote(NOTICE_PASTE_WHILE_SAVING);
+        return;
+      }
+      if (decision.kind === "unsupported") {
+        setPasteNote("");
+        setNote(decision.message);
+        return;
+      }
+      if (decision.kind === "image") {
+        setPasteNote("");
+        void addPhotoFilesRef.current(decision.files);
+        return;
+      }
+      void pasteExcelRef.current(decision.html);
+    }
+    document.addEventListener("paste", onDocPaste, true);
+    return () => document.removeEventListener("paste", onDocPaste, true);
+  }, []);
 
   function removePending(key: string) {
     if (busy) return;
@@ -293,7 +394,7 @@ export default function FreeBoardForm({
           : "가배치표 올리기";
 
   return (
-    <form onSubmit={onSubmit} className="course-report-form free-board-form">
+    <form ref={formRef} onSubmit={onSubmit} className="course-report-form free-board-form">
       <label className="course-report-field">
         <span>제목</span>
         <input
@@ -392,6 +493,8 @@ export default function FreeBoardForm({
             onChange={(e) => void onPick(e.target.files)}
           />
         </div>
+        <p className="notice-photo-paste-hint">{NOTICE_PASTE_HINT}</p>
+        {pasteNote ? <p className="course-report-photo-note">{pasteNote}</p> : null}
         {!canAdd ? <p className="course-report-photo-note">{MAX_NOTE}</p> : null}
         {pickFailures.length ? (
           <ul className="free-board-photo-failures">
