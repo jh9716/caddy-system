@@ -4,12 +4,11 @@ import {
   CommentValidationError,
   canComposeCommentAs,
   createCommentByTarget,
-  findCommentThread,
   listCommentsByTarget,
   softDeleteCommentByTarget,
-  COMMENT_AUTHOR_SELECT,
+  updateCommentByTarget,
 } from "@/lib/commentThread";
-import { parseCommentBody, toCommentPublic, type CommentPublic } from "@/lib/comment";
+import type { CommentPublic } from "@/lib/comment";
 
 export { CommentValidationError, canComposeCommentAs };
 export type { CommentPublic };
@@ -39,25 +38,29 @@ export async function listFreeBoardComments(
   const rows = await listCommentsByTarget(db, FREE_BOARD_COMMENT_TARGET, String(postId), viewer, (c) =>
     requireLivePost(c, postId)
   );
-  return rows.map((row) => ({
-    ...row,
-    canEdit: !row.deleted && viewer.userId != null && row.authorUserId === viewer.userId,
-  }));
+  return rows.map((row) => ({ ...row, canEdit: row.canEdit === true }));
 }
 
 export async function createFreeBoardComment(
   db: PrismaClient,
   postId: number,
   auth: ResolvedAuthUser,
-  rawBody: unknown
+  rawBody: unknown,
+  rawParentId?: unknown
 ): Promise<FreeBoardCommentPublic> {
-  const row = await createCommentByTarget(db, FREE_BOARD_COMMENT_TARGET, String(postId), auth, rawBody, (c) =>
-    requireLivePost(c, postId)
+  const row = await createCommentByTarget(
+    db,
+    FREE_BOARD_COMMENT_TARGET,
+    String(postId),
+    auth,
+    rawBody,
+    (c) => requireLivePost(c, postId),
+    rawParentId
   );
-  return { ...row, canEdit: row.authorUserId === auth.userId };
+  return { ...row, canEdit: row.canEdit === true };
 }
 
-/** 수정은 댓글 작성자 본인만. 관리자도 타인 댓글은 수정할 수 없다. */
+/** 수정은 공용 updateCommentByTarget — 작성자 본인만. 관리자도 타인 댓글은 수정할 수 없다. */
 export async function updateFreeBoardComment(
   db: PrismaClient,
   postId: number,
@@ -65,26 +68,16 @@ export async function updateFreeBoardComment(
   auth: ResolvedAuthUser,
   rawBody: unknown
 ): Promise<FreeBoardCommentPublic> {
-  if (!Number.isInteger(commentId) || commentId <= 0) {
-    throw new CommentValidationError("not_found", "Not found", 404);
-  }
-  const body = parseCommentBody(rawBody);
-  const updated = await db.$transaction(async (tx) => {
-    await requireLivePost(tx, postId);
-    const thread = await findCommentThread(tx, FREE_BOARD_COMMENT_TARGET, String(postId));
-    if (!thread) throw new CommentValidationError("not_found", "Not found", 404);
-    const row = await tx.comment.findFirst({ where: { id: commentId, threadId: thread.id } });
-    if (!row || row.deletedAt) throw new CommentValidationError("not_found", "Not found", 404);
-    if (auth.userId == null || row.authorUserId !== auth.userId) {
-      throw new CommentValidationError("forbidden", "본인 댓글만 수정할 수 있습니다.", 403);
-    }
-    return tx.comment.update({
-      where: { id: row.id },
-      data: { body },
-      include: { author: { select: COMMENT_AUTHOR_SELECT } },
-    });
-  });
-  return { ...toCommentPublic(updated, auth), canEdit: true };
+  const row = await updateCommentByTarget(
+    db,
+    FREE_BOARD_COMMENT_TARGET,
+    String(postId),
+    commentId,
+    auth,
+    rawBody,
+    (c) => requireLivePost(c, postId)
+  );
+  return { ...row, canEdit: row.canEdit === true };
 }
 
 /** 삭제: 작성자 본인 또는 관리자 (기존 canSoftDeleteComment 정책). */

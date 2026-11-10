@@ -3234,8 +3234,23 @@ body.manage-mode .vh-auth-frame {
   color: var(--vh-muted);
   font: inherit;
   font-size: 12px;
-  min-height: 32px;
+  min-height: 44px;
+  min-width: 44px;
   cursor: pointer;
+}
+
+.course-report-comment.is-reply {
+  margin-left: 16px;
+  padding-left: 12px;
+  border-left: 2px solid var(--vh-border-strong);
+}
+
+.board-comment-reply-form {
+  margin-top: 8px;
+}
+
+.board-comment-reply-form textarea {
+  min-height: 44px;
 }
 
 .course-report-comment-body,

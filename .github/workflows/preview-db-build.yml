@@ -105,12 +105,15 @@ jobs:
         if: inputs.mode == 'migrate'
         env:
           DATABASE_URL: ${{ secrets.PREVIEW_DATABASE_URL }}
+          PREVIEW_REF_NAME: ${{ github.ref_name }}
         run: |
           set +x
           set -eu
           node scripts/preview-db/validate-url.cjs
           node scripts/preview-db/state.cjs migrate-gate
           set -o pipefail
+          node scripts/preview-db/validate-url.cjs
+          node scripts/preview-db/state.cjs migrate-gate
           ./node_modules/.bin/prisma migrate deploy 2>&1 | sed -E 's#postgres(ql)?://[^ ]+#<url>#g'
           node scripts/preview-db/state.cjs verify
 

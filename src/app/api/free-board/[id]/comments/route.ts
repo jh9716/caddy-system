@@ -7,6 +7,7 @@ import {
   createFreeBoardComment,
   listFreeBoardComments,
 } from "@/lib/freeBoardComments";
+import { readCommentWritePayload } from "@/lib/comment";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -40,11 +41,13 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const payload = await req.json().catch(() => ({}));
   try {
     const actor = await resolveFreeBoardActor(prisma, auth);
+    const write = readCommentWritePayload(payload);
     const comment = await createFreeBoardComment(
       prisma,
       id,
       actor,
-      payload && typeof payload === "object" ? (payload as { body?: unknown }).body : undefined
+      write.body,
+      write.parentId
     );
     return NextResponse.json({ comment }, { status: 201 });
   } catch (e) {

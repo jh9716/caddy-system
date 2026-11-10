@@ -6,6 +6,7 @@ import {
   createCourseReportComment,
   listCourseReportComments,
 } from "@/lib/courseReportComments";
+import { readCommentWritePayload } from "@/lib/comment";
 import {
   isCourseReportAuthResponse,
   requireCourseReportReader,
@@ -57,11 +58,13 @@ export async function POST(
   if (isCourseReportAuthResponse(auth)) return auth;
   const payload = await req.json().catch(() => ({}));
   try {
+    const write = readCommentWritePayload(payload);
     const comment = await createCourseReportComment(
       prisma,
       await reportId(params),
       auth,
-      payload && typeof payload === "object" ? (payload as { body?: unknown }).body : payload
+      write.body,
+      write.parentId
     );
     return NextResponse.json({ comment }, { status: 201 });
   } catch (e) {

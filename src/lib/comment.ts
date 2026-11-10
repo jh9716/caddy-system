@@ -53,6 +53,64 @@ export function parseCommentBody(input: unknown): string {
   return body;
 }
 
+/** omitted/null → 원댓글. 양의 정수만 허용. */
+export function parseCommentParentId(input: unknown): number | null {
+  if (input === undefined || input === null) return null;
+  if (typeof input !== "number" || !Number.isInteger(input) || input <= 0) {
+    throw new CommentValidationError(
+      "invalid_parent",
+      "답글 대상이 올바르지 않습니다.",
+      400
+    );
+  }
+  return input;
+}
+
+export function readCommentWritePayload(payload: unknown): {
+  body: unknown;
+  parentId: unknown;
+} {
+  if (payload && typeof payload === "object") {
+    const raw = payload as { body?: unknown; parentId?: unknown };
+    return { body: raw.body, parentId: raw.parentId };
+  }
+  return { body: payload, parentId: undefined };
+}
+
+export type CommentDisplayGroup<T extends { id: number; parentId?: number | null }> = {
+  root: T;
+  replies: T[];
+};
+
+/** API 평면 배열을 원댓글 + 1단계 답글로 묶는다. 저장 시 평탄화가 깨져도 표시는 1단계. */
+export function groupCommentsForDisplay<T extends { id: number; parentId?: number | null }>(
+  list: T[]
+): CommentDisplayGroup<T>[] {
+  const byId = new Map(list.map((row) => [row.id, row]));
+  const roots: T[] = [];
+  const repliesByRoot = new Map<number, T[]>();
+  for (const row of list) {
+    const rawParent = row.parentId ?? null;
+    if (rawParent == null) {
+      roots.push(row);
+      continue;
+    }
+    const parent = byId.get(rawParent);
+    const rootId = parent?.parentId ?? parent?.id ?? rawParent;
+    if (!byId.has(rootId)) {
+      roots.push(row);
+      continue;
+    }
+    const packed = repliesByRoot.get(rootId) ?? [];
+    packed.push(row);
+    repliesByRoot.set(rootId, packed);
+  }
+  return roots.map((root) => ({
+    root,
+    replies: repliesByRoot.get(root.id) ?? [],
+  }));
+}
+
 export function canComposeComment(auth: {
   role: ResolvedAuthUser["role"] | null | undefined;
   userId: number | null;
@@ -179,6 +237,8 @@ export type CommentPublic = {
   /** 생성 후 수정된 댓글. */
   edited?: boolean;
   updatedAt?: string | null;
+  /** NULL/undefined = 원댓글. 답글은 원댓글 id. */
+  parentId?: number | null;
 };
 
 export function toCommentPublic(
@@ -189,11 +249,13 @@ export function toCommentPublic(
     deletedAt: Date | null;
     createdAt: Date;
     updatedAt?: Date | null;
+    parentId?: number | null;
     author: { username: string; caddy: { name: string | null } | null };
   },
   viewer: { role: ResolvedAuthUser["role"]; userId: number | null }
 ): CommentPublic {
   const deleted = row.deletedAt != null;
+  const parentId = row.parentId ?? null;
   if (deleted) {
     return {
       id: row.id,
@@ -206,6 +268,7 @@ export function toCommentPublic(
       canEdit: false,
       edited: false,
       updatedAt: null,
+      parentId,
     };
   }
   return {
@@ -228,5 +291,6 @@ export function toCommentPublic(
     }),
     edited: isCommentEdited(row.createdAt, row.updatedAt),
     updatedAt: row.updatedAt ? row.updatedAt.toISOString() : null,
+    parentId,
   };
 }

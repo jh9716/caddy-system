@@ -30,7 +30,12 @@ import {
   PATCH as PATCH_COMMENT,
 } from "../src/app/api/board/[date]/comments/[commentId]/route";
 import { shouldApplyCommentsResponse } from "../src/app/board/BoardComments";
-import { canEditComment, isCommentEdited } from "../src/lib/comment";
+import {
+  canEditComment,
+  groupCommentsForDisplay,
+  isCommentEdited,
+  parseCommentParentId,
+} from "../src/lib/comment";
 import {
   appendCommentUnique,
   commentMutationErrorMessage,
@@ -147,6 +152,28 @@ async function main() {
     assert(t.deleted && t.body == null && t.authorDisplayName == null && !t.canEdit && !t.canDelete, "tombstone hides body/author/actions");
     assert(liveCommentCount(d) === 2, "count excludes deleted");
     assert(l0.length === 2, "pure (input not mutated)");
+    assert(parseCommentParentId(undefined) == null && parseCommentParentId(null) == null, "parent omitted → null");
+    assert(parseCommentParentId(4) === 4, "parent int");
+    try {
+      parseCommentParentId("4");
+      assert(false, "string parent rejected");
+    } catch (e) {
+      assert((e as { code?: string }).code === "invalid_parent", "string parent code");
+    }
+    try {
+      parseCommentParentId(0);
+      assert(false, "zero parent rejected");
+    } catch (e) {
+      assert((e as { code?: string }).code === "invalid_parent", "zero parent code");
+    }
+    const grouped = groupCommentsForDisplay([
+      { id: 1, parentId: null },
+      { id: 2, parentId: null },
+      { id: 3, parentId: 1 },
+      { id: 4, parentId: 3 },
+    ]);
+    assert(grouped.length === 2 && grouped[0].replies.map((r) => r.id).join(",") === "3,4", "display flatten to 1 level");
+    assert(grouped[1].replies.length === 0, "unrelated root has no replies");
     assert(
       commentMutationErrorMessage("edit", { network: true }).includes("네트워크"),
       "network error message"
@@ -168,8 +195,9 @@ async function main() {
     assert(viaRun === 3, "create/edit/delete fetch all go through runMutation");
     assert(fetchCalls === viaRun + 2, "other fetches = initial load + refresh only");
     assert(/try \{\s*res = await request\(\);\s*\} catch/.test(ui), "network failure caught (busy reset)");
-    assert(/gateRef\.current\.invalidate\(\);\s*setBusy\(false\);\s*setBody\(""\);\s*setEditingId\(null\);\s*setEditBody\(""\);\s*setError\(null\);/.test(ui), "date switch resets busy/draft/edit/error");
-    assert(/if \(!stillHere\(\)\) return;/.test(ui), "stale mutation result discarded");
+    assert(/gateRef\.current\.invalidate\(\);\s*setBusy\(false\);\s*setError\(null\);/.test(ui), "date switch resets busy/error");
+    assert(ui.includes("key={date}"), "date key remounts composer/reply draft");
+    assert(/if \(!stillHere\(\)\) return/.test(ui), "stale mutation result discarded");
     assert(/void refreshNow\(forDate\)/.test(ui), "server re-sync after success");
   }
 
@@ -187,7 +215,6 @@ async function main() {
       assert(!src.includes("deliverWebPush"), `${rel} no push`);
       assert(!src.includes("PushSubscription"), `${rel} no PushSubscription`);
       assert(!src.includes("@vercel/blob"), `${rel} no blob`);
-      assert(!src.includes("parentId"), `${rel} no parentId`);
       assert(!src.includes("put("), `${rel} no blob put`);
       assert(!src.includes("dangerouslySetInnerHTML"), `${rel} no innerHTML`);
       assert(!src.includes("stripHtml"), `${rel} no stripHtml`);
@@ -199,9 +226,15 @@ async function main() {
       .readdirSync(path.resolve("prisma/migrations"))
       .filter((name) => /^\d{14}_/.test(name));
     assert(
-      !migDirs.some((name) => name > "20260919070000_comment_v1" && name.includes("comment")),
-      "no new comment migration"
+      migDirs.includes("20261109193000_comment_replies_v1"),
+      "comment replies migration present"
     );
+    const replyMig = read("prisma/migrations/20261109193000_comment_replies_v1/migration.sql");
+    assert(replyMig.includes('ADD COLUMN "parentId" INTEGER'), "additive parentId");
+    assert(/ON DELETE RESTRICT/i.test(replyMig), "parent FK restrict");
+    assert(!/\bDROP\s+(TABLE|COLUMN|INDEX|TYPE)\b/i.test(replyMig), "replies mig no DROP");
+    assert(!/(^|\n)\s*UPDATE\s+/i.test(replyMig), "replies mig no UPDATE");
+    assert(!/(^|\n)\s*INSERT\s+/i.test(replyMig), "replies mig no INSERT");
     assert(!fs.existsSync("src/app/api/notice/[id]/comments"), "no notice comments API");
     const boardPage = read("src/app/board/page.tsx");
     assert(boardPage.includes("PublishedBoardView"), "PublishedBoardView kept");
@@ -212,11 +245,15 @@ async function main() {
     );
     assert(!boardPage.includes("CourseReportComments"), "board does not use CourseReportComments");
     const ui = read("src/app/board/BoardComments.tsx");
-    assert(ui.includes("{item.body}"), "React text child");
-    assert(ui.includes("등록된 댓글이 없습니다."), "empty copy");
-    assert(ui.includes("COMMENT_DELETED_PLACEHOLDER"), "deleted placeholder");
+    const panel = read("src/components/comments/CommentThreadPanel.tsx");
+    assert(panel.includes("{item.body}"), "React text child");
+    assert(panel.includes("등록된 댓글이 없습니다."), "empty copy");
+    assert(panel.includes("COMMENT_DELETED_PLACEHOLDER"), "deleted placeholder");
+    assert(panel.includes("답글"), "reply action");
+    assert(ui.includes("CommentThreadPanel"), "board uses shared panel");
     const css = read("src/app/globals.css");
     assert(css.includes(".board-comments"), "board comments css");
+    assert(css.includes(".course-report-comment.is-reply"), "reply indent css");
     assert(css.includes("min-height: 44px"), "44px touch");
     const commentLib = read("src/lib/comment.ts");
     assert(commentLib.includes("findUnique"), "author lookup findUnique");
@@ -877,6 +914,121 @@ async function main() {
       assert(del.status === 200, "own delete before edit-after-delete");
       const afterDel = await patch(caddyCookie, mineId, "삭제 후 수정");
       assert(afterDel.status === 404, "PATCH deleted 404");
+    }
+
+    section("replies (1-level parentId)");
+    {
+      const post = (cookie: string, body: unknown, parentId?: unknown) =>
+        POST_COMMENT(
+          req(`http://local/api/board/${pubDate}/comments`, {
+            method: "POST",
+            headers: { cookie, "content-type": "application/json" },
+            body: JSON.stringify(parentId === undefined ? { body } : { body, parentId }),
+          }),
+          dateParams(pubDate)
+        );
+      const rootPost = await post(caddyCookie, "원댓글-답글테스트");
+      const rootJson = await jsonOf(rootPost);
+      const rootId = Number(rootJson.comment.id);
+      assert(rootPost.status === 201, "root 201");
+      assert(rootJson.comment.parentId == null, "root parentId null");
+
+      const reply = await post(leaderCookie, "1단계 답글", rootId);
+      const replyJson = await jsonOf(reply);
+      assert(reply.status === 201, "reply 201");
+      assert(replyJson.comment?.parentId === rootId, "reply parentId = root");
+      const replyId = Number(replyJson.comment.id);
+
+      const nested = await post(adminCookie, "답글의 답글", replyId);
+      const nestedJson = await jsonOf(nested);
+      assert(nested.status === 201, "nested reply 201");
+      assert(nestedJson.comment?.parentId === rootId, "nested flattened to root");
+
+      const badType = await post(caddyCookie, "x", "1");
+      assert(badType.status === 400 && (await jsonOf(badType)).error === "invalid_parent", "string parentId 400");
+      const missing = await post(caddyCookie, "x", 99999999);
+      assert(missing.status === 404 && (await jsonOf(missing)).error === "invalid_parent", "missing parent 404");
+
+      const otherRoot = await post(caddyCookie, "다른 원댓글");
+      const otherRootId = Number((await jsonOf(otherRoot)).comment.id);
+      await DELETE_COMMENT(
+        req(`http://local/api/board/${pubDate}/comments/${otherRootId}`, {
+          method: "DELETE",
+          headers: { cookie: caddyCookie },
+        }),
+        commentParams(pubDate, otherRootId)
+      );
+      const toDeleted = await post(leaderCookie, "삭제된 원댓글 답글", otherRootId);
+      assert(toDeleted.status === 404 && (await jsonOf(toDeleted)).error === "parent_deleted", "deleted root no new reply");
+
+      const cr = await POST_REPORT(
+        req("http://local/api/course-reports", {
+          method: "POST",
+          headers: { cookie: caddyCookie, "content-type": "application/json" },
+          body: JSON.stringify({
+            title: `${tag} 교차`,
+            body: "본문",
+            course: "LAKE",
+            category: "CART_PATH",
+          }),
+        })
+      );
+      const crId = Number((await jsonOf(cr)).id);
+      reportIds.push(crId);
+      const crComment = await POST_CR_COMMENT(
+        req(`http://local/api/course-reports/${crId}/comments`, {
+          method: "POST",
+          headers: { cookie: caddyCookie, "content-type": "application/json" },
+          body: JSON.stringify({ body: "제보원댓글" }),
+        }),
+        reportParams(crId)
+      );
+      const crCommentId = Number((await jsonOf(crComment)).comment.id);
+      const cross = await post(caddyCookie, "교차 thread 답글", crCommentId);
+      assert(cross.status === 404, "cross-thread parent blocked");
+
+      const patched = await PATCH_COMMENT(
+        req(`http://local/api/board/${pubDate}/comments/${replyId}`, {
+          method: "PATCH",
+          headers: { cookie: leaderCookie, "content-type": "application/json" },
+          body: JSON.stringify({ body: "답글 수정" }),
+        }),
+        commentParams(pubDate, replyId)
+      );
+      assert(patched.status === 200 && (await jsonOf(patched)).comment?.parentId === rootId, "reply edit keeps parentId");
+      const otherEdit = await PATCH_COMMENT(
+        req(`http://local/api/board/${pubDate}/comments/${replyId}`, {
+          method: "PATCH",
+          headers: { cookie: caddyCookie, "content-type": "application/json" },
+          body: JSON.stringify({ body: "x" }),
+        }),
+        commentParams(pubDate, replyId)
+      );
+      assert(otherEdit.status === 403, "non-author reply edit 403");
+
+      await DELETE_COMMENT(
+        req(`http://local/api/board/${pubDate}/comments/${rootId}`, {
+          method: "DELETE",
+          headers: { cookie: caddyCookie },
+        }),
+        commentParams(pubDate, rootId)
+      );
+      const listed = await jsonOf(
+        await GET_COMMENTS(
+          req(`http://local/api/board/${pubDate}/comments`, { headers: { cookie: caddyCookie } }),
+          dateParams(pubDate)
+        )
+      );
+      const listedRoot = listed.comments.find((c: { id: number }) => c.id === rootId);
+      const listedReply = listed.comments.find((c: { id: number }) => c.id === replyId);
+      const listedNested = listed.comments.find((c: { id: number }) => c.id === nestedJson.comment.id);
+      assert(listedRoot?.deleted === true && listedRoot?.parentId == null, "deleted root placeholder");
+      assert(listedReply?.deleted === false && listedReply?.parentId === rootId, "reply preserved under deleted root");
+      assert(listedNested?.parentId === rootId, "flattened nested still under root");
+      assert(Array.isArray(listed.comments), "list stays a flat array");
+
+      const stillReply = await post(adminCookie, "삭제 원댓글에 추가", rootId);
+      assert(stillReply.status === 404, "no new reply on deleted root after delete");
     }
 
     section("date isolation (P1)");

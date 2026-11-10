@@ -17,5 +17,31 @@ UNION ALL SELECT 'penalty_occurrences=' || count(*)::text FROM "MarshalPenaltyOc
 UNION ALL SELECT 'rotation_credits=' || count(*)::text FROM "MarshalRotationCredit"
 UNION ALL SELECT 'notices=' || count(*)::text FROM "Notice"
 UNION ALL SELECT 'push_tokens=' || ((SELECT count(*) FROM "DevicePushToken")+(SELECT count(*) FROM "PushSubscription"))::text
-UNION ALL SELECT 'coverage_trigger=' || count(*)::text FROM pg_trigger WHERE tgname='marshal_penalty_fill_coverage';
+UNION ALL SELECT 'coverage_trigger=' || count(*)::text FROM pg_trigger WHERE tgname='marshal_penalty_fill_coverage'
+UNION ALL SELECT 'comment_total=' || count(*)::text FROM "Comment"
+UNION ALL SELECT 'comment_parent_null=' || count(*) FILTER (WHERE "parentId" IS NULL)::text FROM "Comment"
+UNION ALL SELECT 'comment_parent_set=' || count(*) FILTER (WHERE "parentId" IS NOT NULL)::text FROM "Comment"
+UNION ALL SELECT 'comment_id_fingerprint=' || coalesce(md5(string_agg(id::text, ',' ORDER BY id)), 'empty') FROM "Comment"
+UNION ALL SELECT 'comment_parentid_column=' || count(*)::text FROM information_schema.columns
+  WHERE table_schema='public' AND table_name='Comment' AND column_name='parentId'
+UNION ALL SELECT 'comment_parentid_nullable=' || coalesce(max(is_nullable), 'missing') FROM information_schema.columns
+  WHERE table_schema='public' AND table_name='Comment' AND column_name='parentId'
+UNION ALL SELECT 'comment_parentid_fk=' || count(*)::text FROM information_schema.table_constraints
+  WHERE table_schema='public' AND table_name='Comment' AND constraint_type='FOREIGN KEY'
+    AND constraint_name='Comment_parentId_fkey'
+UNION ALL SELECT 'comment_parentid_fk_delete=' || coalesce((
+    SELECT rc.delete_rule
+    FROM information_schema.table_constraints tc
+    JOIN information_schema.referential_constraints rc
+      ON rc.constraint_name = tc.constraint_name
+     AND rc.constraint_schema = tc.table_schema
+    WHERE tc.table_schema='public'
+      AND tc.table_name='Comment'
+      AND tc.constraint_type='FOREIGN KEY'
+      AND tc.constraint_name='Comment_parentId_fkey'
+    LIMIT 1
+  ), 'missing')
+UNION ALL SELECT 'comment_replies_migration=' || count(*)::text FROM "_prisma_migrations"
+  WHERE migration_name='20261109193000_comment_replies_v1'
+    AND finished_at IS NOT NULL AND rolled_back_at IS NULL;
 ROLLBACK;

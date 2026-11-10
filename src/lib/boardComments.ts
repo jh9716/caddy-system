@@ -128,7 +128,8 @@ export async function createBoardDateComment(
   db: PrismaClient,
   ymd: string,
   auth: ResolvedAuthUser,
-  rawBody: unknown
+  rawBody: unknown,
+  rawParentId?: unknown
 ): Promise<CommentPublic> {
   const date = parseBoardCommentDate(ymd);
   const { targetType, targetKey } = boardDateTarget(date);
@@ -138,7 +139,8 @@ export async function createBoardDateComment(
     targetKey,
     auth,
     rawBody,
-    (client) => requirePublishedBoardDate(client, date)
+    (client) => requirePublishedBoardDate(client, date),
+    rawParentId
   );
 }
 

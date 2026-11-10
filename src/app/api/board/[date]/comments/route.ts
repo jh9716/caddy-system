@@ -9,6 +9,7 @@ import {
   listBoardDateComments,
   requireBoardCommentReader,
 } from "@/lib/boardComments";
+import { readCommentWritePayload } from "@/lib/comment";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -59,13 +60,13 @@ export async function POST(
   if (isBoardCommentAuthResponse(auth)) return auth;
   const payload = await req.json().catch(() => ({}));
   try {
+    const write = readCommentWritePayload(payload);
     const comment = await createBoardDateComment(
       prisma,
       await boardDate(params),
       auth,
-      payload && typeof payload === "object"
-        ? (payload as { body?: unknown }).body
-        : payload
+      write.body,
+      write.parentId
     );
     return NextResponse.json({ comment }, { status: 201 });
   } catch (e) {

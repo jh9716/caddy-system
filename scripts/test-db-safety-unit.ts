@@ -226,6 +226,10 @@ console.log("== readonly inspect allowlist includes push subscription ==");
     "guard allowlists comment v1 inspect"
   );
   assert(
+    guardSrc.includes("inspect-comment-replies-prod-readonly"),
+    "guard allowlists comment replies inspect"
+  );
+  assert(
     guardSrc.includes("inspect-device-push-token-prod-readonly"),
     "guard allowlists device push token inspect"
   );
@@ -296,6 +300,51 @@ console.log("== readonly inspect allowlist includes push subscription ==");
   assert(!/\bDROP\s+(TABLE|COLUMN|INDEX|TYPE)\b/i.test(commentMig), "comment migration no DROP");
   assert(!/(^|\n)\s*UPDATE\s+/i.test(commentMig), "comment migration no UPDATE");
   assert(!/(^|\n)\s*DELETE\s+/i.test(commentMig), "comment migration no DELETE");
+  const commentRepliesMig = fs.readFileSync(
+    path.resolve("prisma/migrations/20261109193000_comment_replies_v1/migration.sql"),
+    "utf8"
+  );
+  assert(commentRepliesMig.includes('ADD COLUMN "parentId" INTEGER'), "replies mig additive parentId");
+  assert(/ON DELETE RESTRICT/i.test(commentRepliesMig), "replies mig FK restrict");
+  assert(!/\bDROP\s+(TABLE|COLUMN|INDEX|TYPE)\b/i.test(commentRepliesMig), "replies mig no DROP");
+  assert(!/(^|\n)\s*UPDATE\s+/i.test(commentRepliesMig), "replies mig no UPDATE");
+  assert(!/(^|\n)\s*INSERT\s+/i.test(commentRepliesMig), "replies mig no INSERT");
+  assert(!/(^|\n)\s*DELETE\s+/i.test(commentRepliesMig), "replies mig no DELETE");
+  const commentRepliesDeploy = fs.readFileSync(
+    path.resolve("scripts/maintenance/deploy-comment-replies-migration.ts"),
+    "utf8"
+  );
+  assert(
+    commentRepliesDeploy.includes("COMMENT_REPLIES_V1_20261109"),
+    "replies deploy uses exact confirm task-id"
+  );
+  assert(commentRepliesDeploy.includes('["migrate", "status"]'), "replies deploy inspects migrate status first");
+  assert(commentRepliesDeploy.includes('["migrate", "deploy"]'), "replies deploy uses migrate deploy");
+  assert(
+    commentRepliesDeploy.indexOf('["migrate", "status"]') <
+      commentRepliesDeploy.indexOf('["migrate", "deploy"]'),
+    "replies deploy status before deploy"
+  );
+  assert(commentRepliesDeploy.includes("gateSingleMigration"), "replies deploy uses pending gate");
+  assert(commentRepliesDeploy.includes("unexpectedPending"), "replies deploy holds extra pending");
+  assert(commentRepliesDeploy.includes("already-applied"), "replies deploy handles already applied");
+  assert(commentRepliesDeploy.includes("failed migrations"), "replies deploy holds failed migrations");
+  assert(!commentRepliesDeploy.includes('["migrate", "dev"]'), "replies deploy no migrate dev call");
+  assert(!commentRepliesDeploy.includes('["migrate", "reset"]'), "replies deploy no migrate reset call");
+  assert(!commentRepliesDeploy.includes('["db", "push"]'), "replies deploy no db push call");
+  const commentRepliesInspect = fs.readFileSync(
+    path.resolve("scripts/inspect-comment-replies-prod-readonly.ts"),
+    "utf8"
+  );
+  assert(!commentRepliesInspect.includes('"body"'), "replies inspect does not select comment body");
+  assert(
+    commentRepliesInspect.includes("information_schema.columns"),
+    "replies inspect checks parentId via information_schema"
+  );
+  assert(
+    commentRepliesInspect.includes("write/migrate flags are not allowed"),
+    "replies inspect refuses write flags"
+  );
   const commentDeploy = fs.readFileSync(
     path.resolve("scripts/maintenance/deploy-comment-v1-migration.ts"),
     "utf8"

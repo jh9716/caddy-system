@@ -21,7 +21,10 @@ import {
   GET as GET_COMMENTS,
   POST as POST_COMMENT,
 } from "../src/app/api/course-reports/[id]/comments/route";
-import { DELETE as DELETE_COMMENT } from "../src/app/api/course-reports/[id]/comments/[commentId]/route";
+import {
+  DELETE as DELETE_COMMENT,
+  PATCH as PATCH_COMMENT,
+} from "../src/app/api/course-reports/[id]/comments/[commentId]/route";
 
 let passed = 0;
 let failed = 0;
@@ -104,7 +107,6 @@ async function main() {
       assert(!src.includes("deliverWebPush"), `${rel} no push`);
       assert(!src.includes("PushSubscription"), `${rel} no PushSubscription`);
       assert(!src.includes("@vercel/blob"), `${rel} no blob`);
-      assert(!src.includes("parentId"), `${rel} no parentId`);
       assert(!src.includes("put("), `${rel} no blob put`);
     }
     const schema = read("prisma/schema.prisma");
@@ -115,7 +117,7 @@ async function main() {
     assert(schema.includes("model CommentThread"), "CommentThread");
     assert(schema.includes("model Comment {"), "Comment");
     assert(schema.includes("onDelete: Restrict"), "author Restrict");
-    assert(!/model Comment \{[\s\S]*parentId/.test(schema), "Comment no parentId");
+    assert(/model Comment \{[\s\S]*parentId/.test(schema), "Comment parentId");
     const mig = read("prisma/migrations/20260919070000_comment_v1/migration.sql");
     assert(mig.includes('CREATE TYPE "CommentTargetType"'), "CREATE TYPE");
     assert(mig.includes('CREATE TABLE "CommentThread"'), "CREATE TABLE thread");
@@ -149,8 +151,11 @@ async function main() {
       assert(!read(rel).includes("dangerouslySetInnerHTML"), `${rel} no innerHTML`);
     }
     const commentUi = read("src/app/course-reports/[id]/CourseReportComments.tsx");
-    assert(commentUi.includes("{item.body}"), "React text child body");
+    const panel = read("src/components/comments/CommentThreadPanel.tsx");
+    assert(panel.includes("{item.body}"), "React text child body");
+    assert(commentUi.includes("CommentThreadPanel"), "course report uses shared panel");
     assert(!commentUi.includes("dangerouslySetInnerHTML"), "UI no innerHTML");
+    assert(!panel.includes("dangerouslySetInnerHTML"), "panel no innerHTML");
     const crPage = read("src/app/course-reports/[id]/page.tsx");
     assert(crPage.includes("canComposeCommentAs"), "CR comments use comment compose gate");
     assert(!crPage.includes("canComposeCourseReport"), "CR comments not gated by report compose");
@@ -158,8 +163,8 @@ async function main() {
       .readdirSync(path.resolve("prisma/migrations"))
       .filter((name) => /^\d{14}_/.test(name));
     assert(
-      !migDirs.some((name) => name > "20260919070000_comment_v1" && name.includes("comment")),
-      "no new comment migration"
+      migDirs.includes("20261109193000_comment_replies_v1"),
+      "comment replies migration present"
     );
     const deploy = read("scripts/maintenance/deploy-comment-v1-migration.ts");
     assert(deploy.includes("COMMENT_V1_20260919"), "maintenance confirm task-id");
@@ -651,6 +656,69 @@ async function main() {
       assert(adminDel.status === 200, "admin delete others 200");
     }
 
+    section("replies + PATCH");
+    {
+      const post = (cookie: string, body: unknown, parentId?: unknown) =>
+        POST_COMMENT(
+          req(`http://local/api/course-reports/${reportId}/comments`, {
+            method: "POST",
+            headers: { cookie, "content-type": "application/json" },
+            body: JSON.stringify(parentId === undefined ? { body } : { body, parentId }),
+          }),
+          reportParams(reportId)
+        );
+      const root = await post(caddyCookie, "제보 원댓글");
+      const rootJson = await jsonOf(root);
+      const rootId = Number(rootJson.comment.id);
+      assert(root.status === 201 && rootJson.comment.parentId == null, "root parent null");
+      const reply = await post(leaderCookie, "제보 답글", rootId);
+      const replyJson = await jsonOf(reply);
+      const replyId = Number(replyJson.comment.id);
+      assert(reply.status === 201 && replyJson.comment.parentId === rootId, "reply parentId");
+      const nested = await post(adminCookie, "제보 중첩", replyId);
+      const nestedJson = await jsonOf(nested);
+      assert(nested.status === 201 && nestedJson.comment.parentId === rootId, "flatten to root");
+      const patchOk = await PATCH_COMMENT(
+        req(`http://local/api/course-reports/${reportId}/comments/${replyId}`, {
+          method: "PATCH",
+          headers: { cookie: leaderCookie, "content-type": "application/json" },
+          body: JSON.stringify({ body: "제보 답글 수정" }),
+        }),
+        commentParams(reportId, replyId)
+      );
+      assert(patchOk.status === 200, "course report reply PATCH 200");
+      const patchOther = await PATCH_COMMENT(
+        req(`http://local/api/course-reports/${reportId}/comments/${replyId}`, {
+          method: "PATCH",
+          headers: { cookie: caddyCookie, "content-type": "application/json" },
+          body: JSON.stringify({ body: "x" }),
+        }),
+        commentParams(reportId, replyId)
+      );
+      assert(patchOther.status === 403, "course report non-author PATCH 403");
+      await DELETE_COMMENT(
+        req(`http://local/api/course-reports/${reportId}/comments/${rootId}`, {
+          method: "DELETE",
+          headers: { cookie: caddyCookie },
+        }),
+        commentParams(reportId, rootId)
+      );
+      const listed = await jsonOf(
+        await GET_COMMENTS(
+          req(`http://local/api/course-reports/${reportId}/comments`, {
+            headers: { cookie: otherCookie },
+          }),
+          reportParams(reportId)
+        )
+      );
+      const listedRoot = listed.comments.find((c: { id: number }) => c.id === rootId);
+      const listedReply = listed.comments.find((c: { id: number }) => c.id === replyId);
+      assert(listedRoot?.deleted === true, "deleted root kept");
+      assert(listedReply?.deleted === false && listedReply?.parentId === rootId, "reply kept");
+      const toDeleted = await post(leaderCookie, "삭제 원댓글 답글", rootId);
+      assert(toDeleted.status === 404, "deleted root rejects new reply");
+    }
+
     section("missing / soft-deleted report");
     {
       const missing = await GET_COMMENTS(
@@ -744,10 +812,13 @@ async function main() {
     section("UI");
     {
       const ui = read("src/app/course-reports/[id]/CourseReportComments.tsx");
-      assert(ui.includes("댓글을 입력하세요"), "placeholder");
-      assert(ui.includes("COMMENT_DELETED_PLACEHOLDER"), "deleted copy");
-      assert(ui.includes("confirm("), "delete confirm");
-      assert(ui.includes("canDelete"), "own/admin delete gate");
+      const panel = read("src/components/comments/CommentThreadPanel.tsx");
+      assert(ui.includes("CommentThreadPanel"), "shared panel");
+      assert(panel.includes("댓글을 입력하세요"), "placeholder");
+      assert(panel.includes("COMMENT_DELETED_PLACEHOLDER"), "deleted copy");
+      assert(panel.includes("confirm("), "delete confirm");
+      assert(panel.includes("canDelete"), "own/admin delete gate");
+      assert(panel.includes("답글"), "reply action");
       const css = read("src/app/globals.css");
       assert(css.includes(".course-report-comment-submit"), "submit css");
       assert(css.includes("min-height: 44px"), "44px submit");
