@@ -342,7 +342,7 @@ async function deleteBlobIfRowMissing(
   storageKey: string,
   noticeId: number
 ): Promise<void> {
-  const raced = await findExistingByStorageKey(db, storageKey, noticeId).catch(() => null);
+  const raced = await findExistingByStorageKey(db, storageKey, noticeId);
   if (!raced) await deleteUnregisteredNoticeFileBlob(storageKey);
 }
 

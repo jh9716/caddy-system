@@ -1160,6 +1160,42 @@ async function main() {
         (await mem.get(retryPrepJson.upload.storageKey)) != null,
         "retry complete stored blob"
       );
+
+      const lookupFailKey = `notices/${pairJson.id}/files/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.xlsx`;
+      await mem.put(lookupFailKey, xlsxBytes(), NOTICE_FILE_XLSX_MIME);
+      const failingDb = {
+        $transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
+          fn({
+            $executeRaw: async () => 1,
+            noticeFile: {
+              findUnique: async () => {
+                throw new Error("simulated NoticeFile lookup failure");
+              },
+            },
+          }),
+      };
+      let lookupThrew = false;
+      try {
+        await sweepUnregisteredNoticeFileBlob(failingDb as typeof prisma, {
+          storageKey: lookupFailKey,
+          noticeId: pairJson.id,
+        });
+      } catch {
+        lookupThrew = true;
+      }
+      assert(lookupThrew, "lookup failure surfaces from sweep");
+      assert(
+        (await mem.get(lookupFailKey)) != null,
+        "lookup failure does not delete blob"
+      );
+      await sweepUnregisteredNoticeFileBlob(prisma, {
+        storageKey: lookupFailKey,
+        noticeId: pairJson.id,
+      });
+      assert(
+        (await mem.get(lookupFailKey)) == null,
+        "confirmed missing row deletes blob"
+      );
     }
 
     section("future notice hidden + delete + limit");
@@ -1320,6 +1356,12 @@ async function main() {
       assert(
         read("src/lib/noticeFile.ts").includes("sweepUnregisteredNoticeFileBlob"),
         "failed complete sweep re-locks before blob delete"
+      );
+      assert(
+        !read("src/lib/noticeFile.ts").includes(
+          "findExistingByStorageKey(db, storageKey, noticeId).catch"
+        ),
+        "lookup errors are not treated as missing"
       );
       assert(
         read("src/lib/noticeFileMagic.ts").includes("localName !== name"),
