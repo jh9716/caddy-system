@@ -210,6 +210,9 @@ async function lockNoticeFileStorageKey(
   storageKey: string
 ): Promise<void> {
   const key = noticeFileStorageLockKey(storageKey);
+  // pg_advisory_xact_lock() returns void. Prisma $queryRaw cannot deserialize
+  // that column (P2010). $executeRaw runs the SELECT, holds the lock until
+  // COMMIT/ROLLBACK, and is the same pattern as notice/board push.
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(
     CAST(${NOTICE_FILE_LOCK_NS} AS integer),
     CAST(${key} AS integer)
@@ -333,6 +336,31 @@ async function deleteUnregisteredNoticeFileBlob(storageKey: string): Promise<voi
   await store.delete(storageKey).catch(() => undefined);
 }
 
+/** Caller must already hold lockNoticeFileStorageKey(storageKey). */
+async function deleteBlobIfRowMissing(
+  db: PrismaClient | Prisma.TransactionClient,
+  storageKey: string,
+  noticeId: number
+): Promise<void> {
+  const raced = await findExistingByStorageKey(db, storageKey, noticeId).catch(() => null);
+  if (!raced) await deleteUnregisteredNoticeFileBlob(storageKey);
+}
+
+/**
+ * Re-check NoticeFile under the storage-key lock before deleting a blob.
+ * Used after a failed complete so a sibling complete cannot register a row
+ * whose object is then removed by this catch.
+ */
+export async function sweepUnregisteredNoticeFileBlob(
+  db: PrismaClient,
+  input: { storageKey: string; noticeId: number }
+): Promise<void> {
+  await db.$transaction(async (tx) => {
+    await lockNoticeFileStorageKey(tx, input.storageKey);
+    await deleteBlobIfRowMissing(tx, input.storageKey, input.noticeId);
+  }, NOTICE_FILE_TX_OPTS);
+}
+
 export async function completeNoticeFileUpload(
   db: PrismaClient,
   input: {
@@ -442,10 +470,10 @@ export async function completeNoticeFileUpload(
       if (raced && raced.noticeId === input.noticeId) return toNoticeFilePublic(raced);
     }
     if (!(e instanceof NoticeFileValidationError) || e.code !== "forbidden") {
-      const raced = await findExistingByStorageKey(db, grant.storageKey, input.noticeId).catch(
-        () => null
-      );
-      if (!raced) await deleteUnregisteredNoticeFileBlob(grant.storageKey);
+      await sweepUnregisteredNoticeFileBlob(db, {
+        storageKey: grant.storageKey,
+        noticeId: input.noticeId,
+      }).catch(() => undefined);
     }
     if (e instanceof NoticeFileValidationError) throw e;
     if (isNoticeFileTableMissing(e)) fileTableNotReady();

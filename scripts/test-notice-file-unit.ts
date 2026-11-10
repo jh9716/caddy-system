@@ -20,6 +20,7 @@ import {
 import {
   NOTICE_FILE_HWP_MIME,
   NOTICE_FILE_HWPX_MIME,
+  NOTICE_FILE_LOCK_NS,
   NOTICE_FILE_MAX,
   NOTICE_FILE_MAX_BYTES,
   NOTICE_FILE_PDF_MIME,
@@ -29,6 +30,7 @@ import {
 import {
   isNoticeFileTableMissing,
   sanitizeNoticeFileName,
+  sweepUnregisteredNoticeFileBlob,
 } from "../src/lib/noticeFile";
 import { assertNoticeFileBytes, assertNoticePdfBytes } from "../src/lib/noticeFileMagic";
 import { GET as GET_NOTICE, DELETE as DELETE_NOTICE } from "../src/app/api/notice/[id]/route";
@@ -970,6 +972,196 @@ async function main() {
       );
     }
 
+    section("pg advisory lock + complete/complete + catch sweep");
+    {
+      const lockKey = 424242;
+      const executeOk = await prisma.$transaction(async (tx) => {
+        const result = await tx.$executeRaw`SELECT pg_advisory_xact_lock(
+          CAST(${NOTICE_FILE_LOCK_NS} AS integer),
+          CAST(${lockKey} AS integer)
+        )`;
+        return result;
+      });
+      assert(executeOk === 1 || executeOk === 0, "executeRaw advisory lock runs on caddy_local");
+
+      let queryRawVoid = false;
+      try {
+        await prisma.$transaction(async (tx) => {
+          await tx.$queryRaw`SELECT pg_advisory_xact_lock(
+            CAST(${NOTICE_FILE_LOCK_NS} AS integer),
+            CAST(${lockKey} AS integer)
+          )`;
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e ?? "");
+        queryRawVoid = /void|deserialize/i.test(msg);
+      }
+      assert(queryRawVoid, "queryRaw cannot deserialize void advisory lock");
+
+      let waiterMs = 0;
+      await Promise.all([
+        prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(
+            CAST(${NOTICE_FILE_LOCK_NS} AS integer),
+            CAST(${lockKey} AS integer)
+          )`;
+          await new Promise((resolve) => setTimeout(resolve, 350));
+        }),
+        (async () => {
+          await new Promise((resolve) => setTimeout(resolve, 40));
+          const start = Date.now();
+          await prisma.$transaction(async (tx) => {
+            await tx.$executeRaw`SELECT pg_advisory_xact_lock(
+              CAST(${NOTICE_FILE_LOCK_NS} AS integer),
+              CAST(${lockKey} AS integer)
+            )`;
+          });
+          waiterMs = Date.now() - start;
+        })(),
+      ]);
+      assert(waiterMs >= 250, "second connection waits on executeRaw xact lock");
+
+      const pairNotice = await POST_NOTICE(
+        req("https://www.verthill.kr/api/notice", {
+          method: "POST",
+          headers: { cookie: adminCookie, "content-type": "application/json" },
+          body: JSON.stringify({ title: `${tag}-pair`, content: "pair" }),
+        })
+      );
+      const pairJson = await pairNotice.json();
+      noticeIds.push(pairJson.id);
+      const pairBytes = xlsxBytes();
+      const pairPrep = await prepareFile(
+        adminCookie,
+        pairJson.id,
+        "pair.xlsx",
+        NOTICE_FILE_XLSX_MIME,
+        pairBytes.byteLength
+      );
+      const pairPrepJson = await pairPrep.json();
+      await putPrepared(pairPrepJson.upload.uploadUrl, pairBytes, NOTICE_FILE_XLSX_MIME);
+      const [left, right] = await Promise.all([
+        completeFile(adminCookie, pairJson.id, pairPrepJson.upload.grant, "pair.xlsx"),
+        completeFile(adminCookie, pairJson.id, pairPrepJson.upload.grant, "pair.xlsx"),
+      ]);
+      const leftJson = await left.json();
+      const rightJson = await right.json();
+      assert(left.status === 200 && right.status === 200, "parallel complete both 200");
+      assert(leftJson.file.id === rightJson.file.id, "parallel complete same row");
+      assert(
+        (await prisma.noticeFile.count({ where: { storageKey: pairPrepJson.upload.storageKey } })) ===
+          1,
+        "parallel complete did not duplicate"
+      );
+      assert(
+        (await mem.get(pairPrepJson.upload.storageKey)) != null,
+        "parallel complete blob remains"
+      );
+
+      await sweepUnregisteredNoticeFileBlob(prisma, {
+        storageKey: pairPrepJson.upload.storageKey,
+        noticeId: pairJson.id,
+      });
+      assert(
+        (await mem.get(pairPrepJson.upload.storageKey)) != null,
+        "sweep after register keeps blob"
+      );
+      assert(
+        (await prisma.noticeFile.findUnique({
+          where: { storageKey: pairPrepJson.upload.storageKey },
+        })) != null,
+        "sweep after register keeps row"
+      );
+
+      const originalGet = mem.get.bind(mem);
+      mem.get = async (key, opts) => {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        return originalGet(key, opts);
+      };
+      try {
+        const sweepBytes = xlsxBytes();
+        const sweepPrep = await prepareFile(
+          adminCookie,
+          pairJson.id,
+          "sweep.xlsx",
+          NOTICE_FILE_XLSX_MIME,
+          sweepBytes.byteLength
+        );
+        const sweepPrepJson = await sweepPrep.json();
+        await putPrepared(sweepPrepJson.upload.uploadUrl, sweepBytes, NOTICE_FILE_XLSX_MIME);
+        const [sweptComplete] = await Promise.all([
+          completeFile(adminCookie, pairJson.id, sweepPrepJson.upload.grant, "sweep.xlsx"),
+          sweepUnregisteredNoticeFileBlob(prisma, {
+            storageKey: sweepPrepJson.upload.storageKey,
+            noticeId: pairJson.id,
+          }),
+        ]);
+        const sweptRow = await prisma.noticeFile.findUnique({
+          where: { storageKey: sweepPrepJson.upload.storageKey },
+        });
+        const sweptBlob = await originalGet(sweepPrepJson.upload.storageKey);
+        assert(Boolean(sweptRow) === Boolean(sweptBlob), "complete vs sweep row and blob agree");
+        assert(
+          sweptRow ? sweptComplete.status === 200 : sweptComplete.status !== 200,
+          "complete vs sweep status matches row"
+        );
+      } finally {
+        mem.get = originalGet;
+      }
+
+      const retryBytes = xlsxBytes();
+      const spoofBytes = docxBytes();
+      const retryPrep = await prepareFile(
+        adminCookie,
+        pairJson.id,
+        "retry.xlsx",
+        NOTICE_FILE_XLSX_MIME,
+        Math.max(retryBytes.byteLength, spoofBytes.byteLength)
+      );
+      const retryPrepJson = await retryPrep.json();
+      const spoofPut = await putPrepared(
+        retryPrepJson.upload.uploadUrl,
+        spoofBytes,
+        NOTICE_FILE_XLSX_MIME
+      );
+      assert(spoofPut.status === 204, "spoof put 204");
+      const retryFail = await completeFile(
+        adminCookie,
+        pairJson.id,
+        retryPrepJson.upload.grant,
+        "retry.xlsx"
+      );
+      const retryFailJson = await retryFail.json().catch(() => ({}));
+      assert(
+        retryFail.status === 400,
+        `first complete rejects spoofed zip (${retryFail.status} ${JSON.stringify(retryFailJson)})`
+      );
+      assert(
+        (await mem.get(retryPrepJson.upload.storageKey)) == null,
+        "failed complete deleted unverified blob"
+      );
+      assert(
+        (await prisma.noticeFile.findUnique({
+          where: { storageKey: retryPrepJson.upload.storageKey },
+        })) == null,
+        "failed complete left no row"
+      );
+      await putPrepared(retryPrepJson.upload.uploadUrl, retryBytes, NOTICE_FILE_XLSX_MIME);
+      const retryOk = await completeFile(
+        adminCookie,
+        pairJson.id,
+        retryPrepJson.upload.grant,
+        "retry.xlsx"
+      );
+      const retryOkJson = await retryOk.json();
+      assert(retryOk.status === 200, "retry complete after failed attempt 200");
+      assert(retryOkJson.file?.id > 0, "retry registered a row");
+      assert(
+        (await mem.get(retryPrepJson.upload.storageKey)) != null,
+        "retry complete stored blob"
+      );
+    }
+
     section("future notice hidden + delete + limit");
     {
       const future = await POST_NOTICE(
@@ -1120,6 +1312,14 @@ async function main() {
       assert(
         read("src/lib/noticeFile.ts").includes("pg_advisory_xact_lock"),
         "complete/abort serialize on storage key lock"
+      );
+      assert(
+        read("src/lib/noticeFile.ts").includes("$executeRaw`SELECT pg_advisory_xact_lock"),
+        "advisory lock uses executeRaw not queryRaw"
+      );
+      assert(
+        read("src/lib/noticeFile.ts").includes("sweepUnregisteredNoticeFileBlob"),
+        "failed complete sweep re-locks before blob delete"
       );
       assert(
         read("src/lib/noticeFileMagic.ts").includes("localName !== name"),
