@@ -249,8 +249,8 @@ async function main() {
   );
 
   console.log("== Android version frozen ==");
-  assert(appGradle.includes("versionCode 14"), "versionCode 14");
-  assert(appGradle.includes('versionName "1.0.9"'), "versionName 1.0.9");
+  assert(appGradle.includes("versionCode 15"), "versionCode 15");
+  assert(appGradle.includes('versionName "1.0.10"'), "versionName 1.0.10");
   assert(
     appGradle.includes('applicationId "kr.verthill.caddy"') &&
       appGradle.includes('applicationIdSuffix ".debug"'),

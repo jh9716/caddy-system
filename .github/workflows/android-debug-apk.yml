@@ -174,7 +174,7 @@ jobs:
           if "github.com" in cfg or "accounts.google.com" in cfg:
               raise SystemExit("debug APK must not add GitHub/Google WebView hosts")
           gradle = Path("android/app/build.gradle").read_text()
-          if "versionCode 14" not in gradle or 'versionName "1.0.9"' not in gradle:
+          if "versionCode 15" not in gradle or 'versionName "1.0.10"' not in gradle:
               raise SystemExit("versionCode/versionName changed")
           print("debug APK Preview overlay: PASS")
           PY
