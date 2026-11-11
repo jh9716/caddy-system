@@ -10,6 +10,8 @@ import * as XLSX from "xlsx";
 import { AssignmentBoardPrintSheet } from "../src/components/board/AssignmentBoardPrintSheet";
 import { BoardSheetExportView } from "../src/components/board/BoardSheetExportView";
 import PublishedBoardSheet from "../src/components/board/PublishedBoardSheet";
+import { BoardSheetMobile } from "../src/components/board/BoardSheetMobile";
+import { boardMobileBadges, buildBoardMobileModel } from "../src/lib/boardSheetMobile";
 import {
   BOARD_PRINT_SHIFTS,
   boardPrintWeekday,
@@ -42,6 +44,7 @@ import {
   fullLoadDraft,
   fullLoadTeeTime,
   largeDraft,
+  richMobileDraft,
   threeShiftDraft,
 } from "./fixtures/boardPrintFixtures";
 
@@ -174,6 +177,58 @@ console.log("[빈 티] 실제 티시트의 빈 티 = 시각 + 빈 칸");
   const noSheet = { ...threeShiftDraft(), teeSheet: undefined };
   const m2 = buildBoardSheetModel(noSheet, "1부");
   assert(m2.courses.every((c) => c.slots.every((s) => s.state !== "empty")), "티시트 없으면 빈 시각을 만들지 않음");
+}
+
+
+console.log("[모바일] 4코스 동시 보기 모델");
+{
+  const src = richMobileDraft("2026-11-17");
+  const payload = buildPublishedPayloadFromDraft(src as unknown as DailyBoardDraftPayloadV1);
+  const viewDraft = assignmentDraftForPublishedView(payload);
+  for (const shift of BOARD_PRINT_SHIFTS) {
+    const sheet = buildBoardSheetModel(viewDraft, shift, { includeTeamName: true, showLock: true });
+    const mob = buildBoardMobileModel(sheet, payload);
+    assert(mob.rowCount === sheet.rowCount && mob.rowCount === 21, `${shift}: 모바일 행 수 = 공통 시트 행 수 (21)`);
+    const sameSlots = mob.courses.every((c, k) => c.slots.length === sheet.courses[k].slots.length && c.slots.every((sl, i) => sl.teeTime === sheet.courses[k].slots[i].teeTime && sl.state === sheet.courses[k].slots[i].state));
+    assert(sameSlots, `${shift}: 칸별 시각·상태 = 공통 시트와 동일 (시각 생성·이동 없음)`);
+    const names = mob.courses.flatMap((c, k) => c.slots.flatMap((sl, i) => sl.caddies.filter((x) => !x.vacant).map((x) => `${c.code}|${sl.teeTime}|${x.name}|${sheet.courses[k].slots[i].caddies.filter((y) => !y.vacant).map((y) => y.name).join("/")}`)));
+    assert(names.every((n) => { const [, , name, sheetNames] = n.split("|"); return sheetNames.split("/").includes(name); }), `${shift}: 시각-캐디 연결 = 공통 시트와 동일`);
+    const own = src.assignments.filter((a) => a.reservation.shift === shift && a.caddy.id > 0).length;
+    assert(names.length === own, `${shift}: 자기 부 캐디 ${own}명 모두, 다른 부 없음`);
+  }
+  // 배지: 기존 운영 모바일(PublishedBoardView) 표시 항목 모두 유지
+  const all = payload.placements;
+  const has = (pred: (p: (typeof all)[number]) => boolean, label: string) => all.filter(pred).every((p) => boardMobileBadges(p).some((b) => b.label === label));
+  assert(has((p) => p.limousine, "리무진") && has((p) => p.houseRequest === true, "하우스") && has((p) => p.driving, "드라이빙") && has((p) => p.twoWork, "투") && has((p) => p.chageun, "찾근") && has((p) => p.locked, "LOCK"), "배지: 리무진·하우스·드라이빙·투·찾근·LOCK (기존과 동일 의미)");
+  assert(all.filter((p) => p.specialSupport).length > 0 && has((p) => p.specialSupport, "특"), "배지: 특수지원 (기존 supportBoardBadgeLabels)");
+  assert(all.some((p) => p.twoWork), "fixture: 1·2 연속근무 '투' 존재");
+  const m1 = buildBoardMobileModel(buildBoardSheetModel(viewDraft, "1부", { includeTeamName: true, showLock: true }), payload);
+  const h1 = renderToStaticMarkup(<BoardSheetMobile model={m1} />);
+  assert(h1.includes("남궁가나다라마") && (h1.match(/data-mobile-course-head=/g) || []).length === 4, "모바일 HTML: 4코스 머리글, 긴 이름 그대로");
+  assert(/1부예약/.test(h1), "모바일 관리자 응답: 예약자명 표시");
+  const caddyPayload = { ...payload, placements: payload.placements.map((p) => ({ ...p, teamName: null })) };
+  const caddyHtml = renderToStaticMarkup(<PublishedBoardSheet payload={caddyPayload} shift={"1부" as ShiftPart} />);
+  assert(!/[123]부예약/.test(caddyHtml), "모바일·PC 캐디 응답: 예약자명 없음");
+  const m2 = buildBoardMobileModel(buildBoardSheetModel(viewDraft, "2부", { includeTeamName: true, showLock: true }), payload);
+  const h2 = renderToStaticMarkup(<BoardSheetMobile model={m2} />);
+  assert(/data-mobile-slot="vacant"/.test(h2) && />투</.test(h2), "모바일 2부: 빈 캐디 칸 '미배치', 연속근무 '투'");
+  // 초과·휴장·빈 티
+  const over = fullLoadDraft({ overflow: [{ shift: "1부", course: "LAKE", extra: 3 }], emptyTees: [{ shift: "1부", course: "SKY", index: 4 }] });
+  const op = buildPublishedPayloadFromDraft(over as unknown as DailyBoardDraftPayloadV1);
+  const om = buildBoardMobileModel(buildBoardSheetModel(assignmentDraftForPublishedView(op), "1부", { includeTeamName: true, showLock: true }), op);
+  const oh = renderToStaticMarkup(<BoardSheetMobile model={om} />);
+  assert(om.rowCount === 24 && (oh.match(/data-mobile-row="/g) || []).length === 24 && oh.includes("21팀 초과 24행"), "모바일: 레이크 24팀 → 24행, 잘림 없음 + 경고");
+  assert(op.teeSheet?.length ? oh.includes(`data-mobile-cell="empty" data-mobile-course="SKY" data-mobile-time="${fullLoadTeeTime("1부", "SKY", 4)}"`) : true, `모바일: 티시트의 빈 티(${fullLoadTeeTime("1부", "SKY", 4)}) 시각 표시·캐디 빈칸 (payload.teeSheet ${op.teeSheet?.length ? "있음" : "없음"})`);
+  const closedSrc = emptyAndUnassignedDraft("2026-11-13");
+  const cp = buildPublishedPayloadFromDraft(closedSrc as unknown as DailyBoardDraftPayloadV1);
+  const cm = buildBoardMobileModel(buildBoardSheetModel(assignmentDraftForPublishedView(cp), "2부", { includeTeamName: true, showLock: true }), cp);
+  const ch = renderToStaticMarkup(<BoardSheetMobile model={cm} />);
+  assert((ch.match(/data-mobile-cell="closed"/g) || []).length === 21 && ch.includes(">휴장<"), "모바일: 휴장 코스 21칸 빗금·'휴장'");
+  assert(ch.includes("예약 없음"), "모바일: 예약 없는 코스 머리글 '예약 없음', 칸 빈칸");
+  // 화면 전환: 넓은 화면 통합표 / 좁은 화면 모바일 — 둘 다 같은 payload
+  const both = renderToStaticMarkup(<PublishedBoardSheet payload={payload} shift={"1부" as ShiftPart} />);
+  assert(both.includes("data-board-sheet=") && both.includes("data-board-mobile="), "PublishedBoardSheet: PC 통합표 + 모바일 4코스 보기 (CSS 로 화면 폭에 따라 하나만 표시)");
+  assert(/@media \(max-width: 1119px\)/.test(both) && !both.includes("data-board-sheet-fit"), "모바일 기준 1119px 이하, 화면 맞춤 버튼 없음");
 }
 
 async function xlsxSection() {

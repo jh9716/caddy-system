@@ -265,3 +265,51 @@ export function fullLoadDraft(opts?: {
     confirmedAt: null,
   };
 }
+
+/**
+ * 모바일 4코스 보기 검증용: 21팀 만석 + 특수 표시(리무진·하우스·LOCK·드라이빙·지원·찾근·1·2/투) + 긴 이름 + 예약자명.
+ * 같은 캐디가 1부·2부 1·2 연속근무 → 2부 칸에 '투'.
+ */
+export function richMobileDraft(date = "2026-11-17"): AssignmentDraft {
+  const d = fullLoadDraft({ date });
+  const byShiftCourse = (shift: ShiftPart, course: CourseCode) =>
+    d.assignments.filter((a) => a.reservation.shift === shift && a.reservation.course === course);
+  for (const shift of ["1부", "2부", "3부"] as ShiftPart[]) {
+    for (const course of COURSE_CODES) {
+      byShiftCourse(shift, course).forEach((a, i) => {
+        const k = (i + COURSE_CODES.indexOf(course)) % 10;
+        if (k === 1) a.reservation.limousineCart = true;
+        if (k === 2) a.reservation.houseRequest = true;
+        if (k === 3) a.locked = true;
+        if (k === 4) a.kind = "driving";
+        if (k === 5) {
+          a.kind = "specialSupport";
+          a.supportKind = "SPECIAL_SUPPORT";
+          a.supportWorkPattern = "ONE_TWO";
+        }
+        if (k === 6) {
+          a.kind = "fixed";
+          a.reason = "찾근";
+        }
+      });
+    }
+  }
+  // 긴 이름·긴 배지 조합 (칸 밖 넘침 검사)
+  const long = byShiftCourse("1부", "SKY")[9];
+  long.caddy = { ...long.caddy, name: "남궁가나다라마" };
+  long.reservation.limousineCart = true;
+  long.reservation.houseRequest = true;
+  long.locked = true;
+  // 1·2 연속근무: 1부 베르힐 8번째 캐디가 2부 베르힐 8번째에도
+  const a1 = byShiftCourse("1부", "VERTHILL")[7];
+  const a2 = byShiftCourse("2부", "VERTHILL")[7];
+  a1.kind = "oneTwo";
+  a2.kind = "oneTwo";
+  a1.pairId = a2.pairId = "p-mobile-12";
+  a2.caddy = { ...a1.caddy };
+  // 2부 레이크: 빈 캐디 칸(미배치) 1개
+  const v = byShiftCourse("2부", "LAKE")[3];
+  v.caddy = { ...v.caddy, id: 0, name: "" };
+  v.reason = "UNASSIGNED_VACANT";
+  return d;
+}
