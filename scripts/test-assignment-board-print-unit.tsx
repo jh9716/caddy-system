@@ -9,9 +9,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import * as XLSX from "xlsx";
 import { AssignmentBoardPrintSheet } from "../src/components/board/AssignmentBoardPrintSheet";
 import { BoardSheetExportView } from "../src/components/board/BoardSheetExportView";
-import PublishedBoardSheet from "../src/components/board/PublishedBoardSheet";
-import { BoardSheetMobile } from "../src/components/board/BoardSheetMobile";
-import { boardMobileBadges, buildBoardMobileModel } from "../src/lib/boardSheetMobile";
+import { existsSync, readFileSync } from "node:fs";
+import PublishedBoardView from "../src/components/board/PublishedBoardView";
+import { buildPublishedShiftBoard, countPublishedCourseTeams } from "../src/lib/publishedBoardView";
+import { publishedPayloadForReader } from "../src/lib/publishedBoardPrivacy";
+import type { DailyBoardPublishedPayloadV1 } from "../src/lib/dailyBoardPublished";
 import {
   BOARD_PRINT_SHIFTS,
   boardPrintWeekday,
@@ -35,7 +37,6 @@ import { COURSE_CODES, type ShiftPart } from "../src/lib/reservationParser";
 import { buildPublishedPayloadFromDraft } from "../src/lib/dailyBoardPublished";
 import type { DailyBoardDraftPayloadV1 } from "../src/lib/dailyBoardDraft";
 import {
-  assignmentDraftForPublishedView,
   canPrintPublishedBoard,
   publishedBoardPrintDraft,
 } from "../src/lib/publishedBoardPrint";
@@ -180,55 +181,111 @@ console.log("[빈 티] 실제 티시트의 빈 티 = 시각 + 빈 칸");
 }
 
 
-console.log("[모바일] 4코스 동시 보기 모델");
+console.log("[/board 시간축] 운영 PublishedBoardView 방식 (시각 행 × 4코스 열)");
 {
-  const src = richMobileDraft("2026-11-17");
-  const payload = buildPublishedPayloadFromDraft(src as unknown as DailyBoardDraftPayloadV1);
-  const viewDraft = assignmentDraftForPublishedView(payload);
+  const pv = (payload: DailyBoardPublishedPayloadV1, shift: ShiftPart) =>
+    renderToStaticMarkup(<PublishedBoardView payload={payload} shift={shift} />);
+  const pubOf = (d: unknown) => buildPublishedPayloadFromDraft(d as DailyBoardDraftPayloadV1);
+  const realTimes = (payload: DailyBoardPublishedPayloadV1, shift: ShiftPart) =>
+    new Set([
+      ...(payload.teeSheet || []).filter((t) => t.shift === shift).map((t) => t.teeTime),
+      ...payload.placements.filter((p) => p.shift === shift).map((p) => p.teeTime),
+    ]);
+  // 4코스 만석 × 1·2·3부
+  const fp = pubOf(fullLoadDraft({ emptyTees: [{ shift: "3부", course: "LAKE", index: 5 }] }));
   for (const shift of BOARD_PRINT_SHIFTS) {
-    const sheet = buildBoardSheetModel(viewDraft, shift, { includeTeamName: true, showLock: true });
-    const mob = buildBoardMobileModel(sheet, payload);
-    assert(mob.rowCount === sheet.rowCount && mob.rowCount === 21, `${shift}: 모바일 행 수 = 공통 시트 행 수 (21)`);
-    const sameSlots = mob.courses.every((c, k) => c.slots.length === sheet.courses[k].slots.length && c.slots.every((sl, i) => sl.teeTime === sheet.courses[k].slots[i].teeTime && sl.state === sheet.courses[k].slots[i].state));
-    assert(sameSlots, `${shift}: 칸별 시각·상태 = 공통 시트와 동일 (시각 생성·이동 없음)`);
-    const names = mob.courses.flatMap((c, k) => c.slots.flatMap((sl, i) => sl.caddies.filter((x) => !x.vacant).map((x) => `${c.code}|${sl.teeTime}|${x.name}|${sheet.courses[k].slots[i].caddies.filter((y) => !y.vacant).map((y) => y.name).join("/")}`)));
-    assert(names.every((n) => { const [, , name, sheetNames] = n.split("|"); return sheetNames.split("/").includes(name); }), `${shift}: 시각-캐디 연결 = 공통 시트와 동일`);
-    const own = src.assignments.filter((a) => a.reservation.shift === shift && a.caddy.id > 0).length;
-    assert(names.length === own, `${shift}: 자기 부 캐디 ${own}명 모두, 다른 부 없음`);
+    const board = buildPublishedShiftBoard(fp, shift, { fillInterior: false });
+    const times = board.map((r) => r.teeTime);
+    assert(times.length > 21 && times.join() === [...times].sort().join() && new Set(times).size === times.length, `${shift}: 시간축 ${times.length}행 (21행 강제 없음, 정렬·중복 없음)`);
+    const real = realTimes(fp, shift);
+    assert(times.every((t) => real.has(t)), `${shift}: 모든 행 = 실제 티시트/배정 시각 (계산으로 만든 시각 없음)`);
+    assert([...real].every((t) => times.includes(t)), `${shift}: 티시트 시각 누락 없음`);
+    const placed = board.flatMap((r) => COURSE_CODES.flatMap((c) => { const cell = r.cells[c]; return cell.kind === "assigned" ? cell.placements.map((p) => `${c}|${r.teeTime}|${p.caddyId}`) : []; }));
+    const own = fp.placements.filter((p) => p.shift === shift).map((p) => `${p.course}|${p.teeTime}|${p.caddyId}`);
+    assert(placed.length === own.length && new Set(placed).size === placed.length && own.every((k) => placed.includes(k)), `${shift}: 캐디 ${own.length}명 누락·중복 없음, 같은 시각·같은 코스 칸`);
+    const h = pv(fp, shift);
+    assert((h.match(/data-board-time="/g) || []).length === times.length, `${shift}: HTML 행 수 = 시간축`);
+    const counts = countPublishedCourseTeams(board);
+    const expect = shift === "3부" ? [21, 21, 21, 20] : [21, 21, 21, 21];
+    assert(COURSE_CODES.every((c, i) => counts[c].teams === expect[i]), `${shift}: 코스별 배정 팀 수 ${expect.join("/")}`);
+    assert(COURSE_CODES.every((c, i) => h.includes(`data-board-course-teams="${expect[i]}">배정 ${expect[i]}팀<`)), `${shift}: 머리글 '배정 N팀' 표시`);
   }
-  // 배지: 기존 운영 모바일(PublishedBoardView) 표시 항목 모두 유지
-  const all = payload.placements;
-  const has = (pred: (p: (typeof all)[number]) => boolean, label: string) => all.filter(pred).every((p) => boardMobileBadges(p).some((b) => b.label === label));
-  assert(has((p) => p.limousine, "리무진") && has((p) => p.houseRequest === true, "하우스") && has((p) => p.driving, "드라이빙") && has((p) => p.twoWork, "투") && has((p) => p.chageun, "찾근") && has((p) => p.locked, "LOCK"), "배지: 리무진·하우스·드라이빙·투·찾근·LOCK (기존과 동일 의미)");
-  assert(all.filter((p) => p.specialSupport).length > 0 && has((p) => p.specialSupport, "특"), "배지: 특수지원 (기존 supportBoardBadgeLabels)");
-  assert(all.some((p) => p.twoWork), "fixture: 1·2 연속근무 '투' 존재");
-  const m1 = buildBoardMobileModel(buildBoardSheetModel(viewDraft, "1부", { includeTeamName: true, showLock: true }), payload);
-  const h1 = renderToStaticMarkup(<BoardSheetMobile model={m1} />);
-  assert(h1.includes("남궁가나다라마") && (h1.match(/data-mobile-course-head=/g) || []).length === 4, "모바일 HTML: 4코스 머리글, 긴 이름 그대로");
-  assert(/1부예약/.test(h1), "모바일 관리자 응답: 예약자명 표시");
-  const caddyPayload = { ...payload, placements: payload.placements.map((p) => ({ ...p, teamName: null })) };
-  const caddyHtml = renderToStaticMarkup(<PublishedBoardSheet payload={caddyPayload} shift={"1부" as ShiftPart} />);
-  assert(!/[123]부예약/.test(caddyHtml), "모바일·PC 캐디 응답: 예약자명 없음");
-  const m2 = buildBoardMobileModel(buildBoardSheetModel(viewDraft, "2부", { includeTeamName: true, showLock: true }), payload);
-  const h2 = renderToStaticMarkup(<BoardSheetMobile model={m2} />);
-  assert(/data-mobile-slot="vacant"/.test(h2) && />투</.test(h2), "모바일 2부: 빈 캐디 칸 '미배치', 연속근무 '투'");
-  // 초과·휴장·빈 티
-  const over = fullLoadDraft({ overflow: [{ shift: "1부", course: "LAKE", extra: 3 }], emptyTees: [{ shift: "1부", course: "SKY", index: 4 }] });
-  const op = buildPublishedPayloadFromDraft(over as unknown as DailyBoardDraftPayloadV1);
-  const om = buildBoardMobileModel(buildBoardSheetModel(assignmentDraftForPublishedView(op), "1부", { includeTeamName: true, showLock: true }), op);
-  const oh = renderToStaticMarkup(<BoardSheetMobile model={om} />);
-  assert(om.rowCount === 24 && (oh.match(/data-mobile-row="/g) || []).length === 24 && oh.includes("21팀 초과 24행"), "모바일: 레이크 24팀 → 24행, 잘림 없음 + 경고");
-  assert(op.teeSheet?.length ? oh.includes(`data-mobile-cell="empty" data-mobile-course="SKY" data-mobile-time="${fullLoadTeeTime("1부", "SKY", 4)}"`) : true, `모바일: 티시트의 빈 티(${fullLoadTeeTime("1부", "SKY", 4)}) 시각 표시·캐디 빈칸 (payload.teeSheet ${op.teeSheet?.length ? "있음" : "없음"})`);
-  const closedSrc = emptyAndUnassignedDraft("2026-11-13");
-  const cp = buildPublishedPayloadFromDraft(closedSrc as unknown as DailyBoardDraftPayloadV1);
-  const cm = buildBoardMobileModel(buildBoardSheetModel(assignmentDraftForPublishedView(cp), "2부", { includeTeamName: true, showLock: true }), cp);
-  const ch = renderToStaticMarkup(<BoardSheetMobile model={cm} />);
-  assert((ch.match(/data-mobile-cell="closed"/g) || []).length === 21 && ch.includes(">휴장<"), "모바일: 휴장 코스 21칸 빗금·'휴장'");
-  assert(ch.includes("예약 없음"), "모바일: 예약 없는 코스 머리글 '예약 없음', 칸 빈칸");
-  // 화면 전환: 넓은 화면 통합표 / 좁은 화면 모바일 — 둘 다 같은 payload
-  const both = renderToStaticMarkup(<PublishedBoardSheet payload={payload} shift={"1부" as ShiftPart} />);
-  assert(both.includes("data-board-sheet=") && both.includes("data-board-mobile="), "PublishedBoardSheet: PC 통합표 + 모바일 4코스 보기 (CSS 로 화면 폭에 따라 하나만 표시)");
-  assert(/@media \(max-width: 1119px\)/.test(both) && !both.includes("data-board-sheet-fit"), "모바일 기준 1119px 이하, 화면 맞춤 버튼 없음");
+  {
+    const b3 = buildPublishedShiftBoard(fp, "3부", { fillInterior: false });
+    const t = fullLoadTeeTime("3부", "LAKE", 5);
+    const row = b3.find((r) => r.teeTime === t);
+    assert(row && row.cells.LAKE.kind === "empty", `빈 티 ${t}: 티시트 시각 유지, 레이크 칸 비움 (팀 수 미포함)`);
+  }
+  // 21팀 초과
+  const op = pubOf(fullLoadDraft({ overflow: [{ shift: "1부", course: "LAKE", extra: 3 }] }));
+  {
+    const c = countPublishedCourseTeams(buildPublishedShiftBoard(op, "1부", { fillInterior: false }));
+    const h = pv(op, "1부");
+    assert(c.LAKE.teams === 24 && h.includes('bh-count over" data-board-course-teams="24">배정 24팀<'), "레이크 24팀: 잘림 없이 '배정 24팀' (21 초과 강조)");
+    assert(h.includes(fullLoadTeeTime("1부", "LAKE", 23)), "24번째 팀 시각 표시");
+  }
+  // 휴장 / 예약 없음 / 빈 캐디 칸
+  const cp = pubOf(emptyAndUnassignedDraft("2026-11-13"));
+  {
+    const h = pv(cp, "2부");
+    assert(/data-board-course-head="SKY"[^>]*><span class="bh-name">스카이<\/span><span class="bh-count">휴장</.test(h), "휴장 코스 머리글 '휴장'");
+    assert(h.includes('data-board-course-teams="0">배정 0팀<'), "예약 없는 코스: '배정 0팀'");
+    assert(/미배치 1</.test(h) && /data-board-slot="vacant"/.test(h) && />미배치</.test(h) && !h.includes("이름없음"), "빈 캐디 칸: '이름없음' 대신 '미배치', 머리글 '미배치 1'");
+    assert(!h.includes("undefined") && !h.includes(">null<"), "undefined/null 없음");
+  }
+  // 2인 캐디 팀 = 1팀
+  {
+    const base = pubOf(threeShiftDraft("2026-11-12"));
+    const first = base.placements.find((p) => p.shift === "1부")!;
+    const two = { ...base, placements: [...base.placements, { ...first, caddyId: 99901, caddyName: "둘째캐디" }] };
+    const c1 = countPublishedCourseTeams(buildPublishedShiftBoard(base, "1부", { fillInterior: false }));
+    const c2 = countPublishedCourseTeams(buildPublishedShiftBoard(two, "1부", { fillInterior: false }));
+    const code = first.course as (typeof COURSE_CODES)[number];
+    assert(c2[code].teams === c1[code].teams && c2[code].caddies === c1[code].caddies + 1, "2인 캐디 팀: 팀 수 1, 캐디 수 2");
+    assert(pv(two, "1부").includes("둘째캐디"), "2인 캐디 모두 표시");
+  }
+  // 칸 = 한 팀 (관리자 payload 로 확인: 한 칸에 예약 1건)
+  for (const pay of [fp, op, cp, pubOf(richMobileDraft("2026-11-17")), pubOf(threeShiftDraft())]) {
+    const m = new Map<string, Set<string>>();
+    for (const p of pay.placements) {
+      const k = `${p.shift}|${p.course}|${p.teeTime}`;
+      if (!m.has(k)) m.set(k, new Set());
+      m.get(k)!.add(String(p.reservationKey ?? p.reservationId));
+    }
+    assert([...m.values()].every((v) => v.size === 1), `fixture ${pay.date}: (부·코스·시각) 칸마다 예약 1건 → 칸 수 = 팀 수`);
+  }
+  // 긴 이름·여러 배지·LOCK·권한
+  const rp = pubOf(richMobileDraft("2026-11-17"));
+  {
+    const h1 = pv(rp, "1부");
+    assert(h1.includes(">남궁가나다라마<"), "긴 이름 전체 표시 (자르지 않음)");
+    const all = [...BOARD_PRINT_SHIFTS].map((s) => pv(rp, s)).join("");
+    for (const label of ["리무진", "하우스", "드라이빙", "투", "찾근", "LOCK"]) assert(all.includes(`>${label}<`), `배지 '${label}' 표시`);
+    assert(rp.placements.some((p) => p.specialSupport) && /bc-badge support"/.test(all), "특수지원 배지 표시");
+    const admin = pv(publishedPayloadForReader(rp, "admin"), "1부");
+    const caddy = pv(publishedPayloadForReader(rp, "caddy"), "1부");
+    assert(/1부예약/.test(admin) && !/[123]부예약/.test(caddy), "예약자명: 관리자 표시 / 캐디 미표시 (서버 redaction 그대로)");
+    assert(caddy.includes("남궁가나다라마"), "캐디 응답: 캐디명 표시");
+    const ca = countPublishedCourseTeams(buildPublishedShiftBoard(publishedPayloadForReader(rp, "admin"), "1부", { fillInterior: false }));
+    const cc = countPublishedCourseTeams(buildPublishedShiftBoard(publishedPayloadForReader(rp, "caddy"), "1부", { fillInterior: false }));
+    assert(JSON.stringify(ca) === JSON.stringify(cc), "팀 수: 관리자·캐디 응답 동일");
+  }
+  // 운영 기본(보간) 동작은 다른 호출자용으로 유지
+  {
+    const tp = pubOf(threeShiftDraft());
+    const noSheet = { ...tp, teeSheet: undefined };
+    const def = buildPublishedShiftBoard(noSheet, "1부").map((r) => r.teeTime);
+    const real = buildPublishedShiftBoard(noSheet, "1부", { fillInterior: false }).map((r) => r.teeTime);
+    assert(real.every((t) => def.includes(t)), "옵션 없는 기본 호출 = 기존 보간 동작 유지 (시간축 상위집합)");
+  }
+  // 페이지·CSS
+  const page = readFileSync("src/app/board/page.tsx", "utf8");
+  const css = readFileSync("src/components/board/publishedBoardCss.ts", "utf8");
+  assert(/<PublishedBoardView payload=\{published\.payload\} shift=\{shift\} \/>/.test(page) && /max-width: 720px;/.test(page), "/board: 운영 PublishedBoardView + 720px 복구");
+  assert(!/PublishedBoardSheet|BoardSheetMobile|화면 맞춤/.test(page), "/board: 21행 시트·모바일 시트·화면 맞춤 없음");
+  assert(!existsSync("src/components/board/PublishedBoardSheet.tsx") && !existsSync("src/components/board/BoardSheetMobile.tsx") && !existsSync("src/lib/boardSheetMobile.ts"), "미사용 21행 화면 컴포넌트 제거");
+  assert(/LazyBoardPrintButton/.test(page) && /staleBoard \? null : <BoardComments/.test(page), "/board: A4 인쇄 버튼·댓글 유지");
+  assert(!/text-overflow: ellipsis/.test(css), "/board CSS: 이름 말줄임 없음");
 }
 
 async function xlsxSection() {
@@ -304,16 +361,14 @@ console.log("[/board] Published 어댑터·개인정보");
     assert(!/[123]부팀/.test(h), `/board 인쇄 ${shift}: 예약자명 없음`);
   }
   // 화면: 관리자 응답(팀명 있음) → 기존처럼 표시, 캐디 응답(서버가 팀명 null) → 표시 없음
-  const adminHtml = renderToStaticMarkup(<PublishedBoardSheet payload={payload} shift={"1부" as ShiftPart} />);
+  const adminHtml = renderToStaticMarkup(<PublishedBoardView payload={payload} shift={"1부" as ShiftPart} />);
   assert(/1부팀/.test(adminHtml), "/board 화면 관리자·조장: 서버가 준 예약자명 표시 (기존과 동일)");
   assert(!/2부팀|3부팀/.test(adminHtml), "/board 화면 1부: 다른 부 없음");
   const caddyPayload = { ...payload, placements: payload.placements.map((p) => ({ ...p, teamName: null })) };
-  const caddyHtml = renderToStaticMarkup(<PublishedBoardSheet payload={caddyPayload} shift={"1부" as ShiftPart} />);
+  const caddyHtml = renderToStaticMarkup(<PublishedBoardView payload={caddyPayload} shift={"1부" as ShiftPart} />);
   assert(!/[123]부팀/.test(caddyHtml), "/board 화면 캐디: 예약자명 노출 없음");
   const lockPayload = { ...payload, placements: payload.placements.map((p, i) => (i === 0 ? { ...p, locked: true } : p)) };
-  assert(renderToStaticMarkup(<PublishedBoardSheet payload={lockPayload} shift={"1부" as ShiftPart} />).includes(">LOCK<"), "/board 화면: LOCK 표시 유지");
-  const view = assignmentDraftForPublishedView(payload);
-  assert(view.assignments.length === payload.placements.length, "화면 어댑터 1:1");
+  assert(renderToStaticMarkup(<PublishedBoardView payload={lockPayload} shift={"1부" as ShiftPart} />).includes(">LOCK<"), "/board 화면: LOCK 표시 유지");
   const vacantSrc = emptyAndUnassignedDraft("2026-11-13");
   const vacantPub = { date: "2026-11-13", payload: buildPublishedPayloadFromDraft(vacantSrc as unknown as DailyBoardDraftPayloadV1) };
   const vd = publishedBoardPrintDraft({ selectedDate: "2026-11-13", loading: false, published: vacantPub })!;

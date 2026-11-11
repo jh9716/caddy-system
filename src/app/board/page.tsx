@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LazyBoardImageExportMenu } from "@/components/board/LazyBoardImageExportMenu";
 import { LazyBoardPrintButton } from "@/components/board/LazyBoardPrintButton";
-import PublishedBoardSheet from "@/components/board/PublishedBoardSheet";
+import PublishedBoardView from "@/components/board/PublishedBoardView";
 import BoardComments from "./BoardComments";
 import { assignmentDraftFromPublishedPayload } from "@/lib/assignmentBoardExport";
 import {
@@ -258,14 +258,14 @@ export default function PublishedBoardPage() {
             </div>
           </div>
           {notice && !staleBoard ? <p className="pub-notice">{notice}</p> : null}
-          <PublishedBoardSheet payload={published.payload} shift={shift} />
+          <PublishedBoardView payload={published.payload} shift={shift} />
           {staleBoard ? null : <BoardComments date={published.date} />}
         </div>
       ) : null}
 
       <style>{`
         .pub-page {
-          max-width: 1160px;
+          max-width: 720px;
           margin: 0 auto;
           padding: 12px 10px 72px;
           display: grid;
@@ -335,8 +335,6 @@ export default function PublishedBoardPage() {
           flex: 0 0 auto;
         }
         .pub-notice { color: #334155; }
-        /* 댓글은 기존 폭 유지 (배치표 시트만 넓게) */
-        .pub-board-root ~ * { max-width: 720px; }
         .pub-page > * { min-width: 0; }
         .pub-skel { min-height: 240px; }
       `}</style>
