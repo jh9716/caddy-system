@@ -26,6 +26,9 @@ import { buildBoardPrintSheet, type BoardPrintSheet } from "../src/lib/assignmen
 import type { AssignmentDraft } from "../src/lib/assignmentDraft";
 import type { ShiftPart } from "../src/lib/reservationParser";
 import { emptyAndUnassignedDraft, largeDraft, threeShiftDraft } from "./fixtures/boardPrintFixtures";
+import { buildPublishedPayloadFromDraft } from "../src/lib/dailyBoardPublished";
+import type { DailyBoardDraftPayloadV1 } from "../src/lib/dailyBoardDraft";
+import { publishedBoardPrintDraft } from "../src/lib/publishedBoardPrint";
 
 (globalThis as unknown as { React: typeof React }).React = React;
 
@@ -242,6 +245,16 @@ async function main() {
       const ownSet = new Set(own);
       const otherOnly = [...new Set(fx.assignments.filter((a) => a.reservation.shift !== shift).map((a) => a.caddy.name))].filter((n) => !ownSet.has(n));
       await printCase(cdp, `fixture-${shift}`, buildBoardPrintSheet(fx, shift), { forbidden: otherOnly, required: [...ownSet] });
+    }
+
+    // 1-b) /board: 같은 fixture 를 Published payload 로 만든 뒤 /board 어댑터로 인쇄
+    const pubPayload = buildPublishedPayloadFromDraft(fx as unknown as DailyBoardDraftPayloadV1);
+    const boardDraft = publishedBoardPrintDraft({ selectedDate: fx.date, loading: false, published: { date: fx.date, payload: pubPayload } });
+    assert(boardDraft != null, "/board 어댑터: 확정 데이터 → 인쇄 draft");
+    for (const shift of ["1부", "2부", "3부"] as ShiftPart[]) {
+      const ownSet = new Set(fx.assignments.filter((a) => a.reservation.shift === shift).map((a) => a.caddy.name));
+      const otherOnly = [...new Set(fx.assignments.filter((a) => a.reservation.shift !== shift).map((a) => a.caddy.name))].filter((n) => !ownSet.has(n));
+      await printCase(cdp, `board-published-${shift}`, buildBoardPrintSheet(boardDraft!, shift), { forbidden: otherOnly, required: [...ownSet] });
     }
 
     // 2) 합성 3부 draft, 예약자명 ON — 팀명 접두사로 부 섞임 검출

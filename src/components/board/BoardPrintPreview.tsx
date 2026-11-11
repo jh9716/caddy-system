@@ -30,17 +30,26 @@ function nowLabel(): string {
  * 배치표 A4 인쇄 미리보기 (읽기 전용).
  * draft는 화면이 들고 있는 최신 상태를 그대로 읽는다. 저장/자동배치/API 호출 없음.
  */
+export const BOARD_PRINT_DEFAULT_HINT =
+  "인쇄 창에서 용지 A4 · 가로 방향 · 배율 기본(100%)을 확인하세요. 저장되지 않은 화면 수정도 그대로 반영됩니다.";
+
 export function BoardPrintPreview({
   draft,
   initialShift,
   onClose,
+  allowTeamName = true,
+  hint = BOARD_PRINT_DEFAULT_HINT,
 }: {
   draft: AssignmentDraft;
   initialShift?: ShiftPart | null;
   onClose: () => void;
+  /** false면 "예약자명 표시" 옵션 자체를 숨기고 항상 비표시 (/board Published 정책) */
+  allowTeamName?: boolean;
+  hint?: string;
 }) {
   const [shift, setShift] = useState<ShiftPart>(initialShift || "1부");
-  const [includeTeamName, setIncludeTeamName] = useState(false);
+  const [teamNameChecked, setIncludeTeamName] = useState(false);
+  const includeTeamName = allowTeamName && teamNameChecked;
   const [fit, setFit] = useState(true);
   const [viewportW, setViewportW] = useState<number>(() =>
     typeof window === "undefined" ? PAPER_WIDTH_PX : window.innerWidth
@@ -114,14 +123,17 @@ export function BoardPrintPreview({
             </button>
           ))}
         </div>
-        <label>
-          <input
-            type="checkbox"
-            checked={includeTeamName}
-            onChange={(e) => setIncludeTeamName(e.target.checked)}
-          />
-          예약자명 표시
-        </label>
+        {allowTeamName ? (
+          <label>
+            <input
+              type="checkbox"
+              data-print-team-name="1"
+              checked={includeTeamName}
+              onChange={(e) => setIncludeTeamName(e.target.checked)}
+            />
+            예약자명 표시
+          </label>
+        ) : null}
         <label>
           <input type="checkbox" checked={fit} onChange={(e) => setFit(e.target.checked)} />
           화면 맞춤
@@ -134,9 +146,7 @@ export function BoardPrintPreview({
             닫기
           </button>
         </div>
-        <p className="bp-hint">
-          인쇄 창에서 용지 A4 · 가로 방향 · 배율 기본(100%)을 확인하세요. 저장되지 않은 화면 수정도 그대로 반영됩니다.
-        </p>
+        <p className="bp-hint">{hint}</p>
       </div>
       <div className="bp-stage">
         <div className="bp-paper" style={zoom !== 1 ? { zoom } : undefined}>

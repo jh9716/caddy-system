@@ -8,6 +8,8 @@ type PreviewProps = {
   draft: AssignmentDraft;
   initialShift?: ShiftPart | null;
   onClose: () => void;
+  allowTeamName?: boolean;
+  hint?: string;
 };
 
 /** 배치표 툴바의 "인쇄" 버튼. 미리보기 코드는 클릭 시에만 로드한다 (읽기 전용). */
@@ -15,10 +17,15 @@ export function LazyBoardPrintButton({
   draft,
   shift,
   onNotice,
+  allowTeamName,
+  hint,
 }: {
   draft: AssignmentDraft;
   shift?: ShiftPart | null;
   onNotice: (msg: string) => void;
+  /** false면 예약자명 옵션 숨김 (/board) */
+  allowTeamName?: boolean;
+  hint?: string;
 }) {
   const [Preview, setPreview] = useState<ComponentType<PreviewProps> | null>(null);
   const [open, setOpen] = useState(false);
@@ -55,7 +62,13 @@ export function LazyBoardPrintButton({
         {preparing ? "준비 중…" : "인쇄"}
       </button>
       {open && Preview ? (
-        <Preview draft={draft} initialShift={shift ?? null} onClose={close} />
+        <Preview
+          draft={draft}
+          initialShift={shift ?? null}
+          onClose={close}
+          allowTeamName={allowTeamName}
+          hint={hint}
+        />
       ) : null}
     </>
   );
