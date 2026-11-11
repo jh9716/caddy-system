@@ -17,6 +17,7 @@ public class MainActivity extends BridgeActivity {
         if (bridge != null && bridge.getWebView() != null) {
             HeicNativeJpegConverter.cleanupStale(this);
             bridge.getWebView().setWebChromeClient(new VerthillBridgeWebChromeClient(bridge));
+            DebugWebViewHook.install(bridge);
         }
     }
 }

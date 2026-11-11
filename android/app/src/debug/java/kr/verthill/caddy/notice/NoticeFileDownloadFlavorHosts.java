@@ -19,7 +19,7 @@ final class NoticeFileDownloadFlavorHosts {
 
     private NoticeFileDownloadFlavorHosts() {}
 
-    static boolean extraAllowed(String host) {
+    public static boolean extraAllowed(String host) {
         if (host == null || host.isEmpty()) {
             return false;
         }

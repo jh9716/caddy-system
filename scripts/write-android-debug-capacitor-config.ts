@@ -7,6 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
+  ANDROID_DEBUG_PREVIEW_AUTH_HOSTS,
   ANDROID_DEBUG_PREVIEW_DEFAULT_URL,
   ANDROID_DEBUG_PREVIEW_PRODUCTION_HOSTS,
   androidDebugPreviewHostFromUrl,
@@ -41,7 +42,11 @@ function main() {
       url: origin,
       cleartext: false,
       androidScheme: "https",
-      allowNavigation: [...ANDROID_DEBUG_PREVIEW_PRODUCTION_HOSTS, host],
+      allowNavigation: [
+        ...ANDROID_DEBUG_PREVIEW_PRODUCTION_HOSTS,
+        host,
+        ...ANDROID_DEBUG_PREVIEW_AUTH_HOSTS,
+      ],
     },
   };
   const outDir = path.resolve("android/app/src/debug/assets");

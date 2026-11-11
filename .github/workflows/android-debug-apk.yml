@@ -169,6 +169,10 @@ jobs:
               raise SystemExit("debug APK lost production allowNavigation entries")
           if "kauth.kakao.com" in cfg:
               raise SystemExit("debug APK must not add Kakao WebView hosts")
+          if '"vercel.com"' not in cfg:
+              raise SystemExit("debug APK must keep Vercel SSO on vercel.com in WebView")
+          if "github.com" in cfg or "accounts.google.com" in cfg:
+              raise SystemExit("debug APK must not add GitHub/Google WebView hosts")
           gradle = Path("android/app/build.gradle").read_text()
           if "versionCode 14" not in gradle or 'versionName "1.0.9"' not in gradle:
               raise SystemExit("versionCode/versionName changed")

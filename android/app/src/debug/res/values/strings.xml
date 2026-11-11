@@ -4,4 +4,5 @@
     <string name="title_activity_main">VERTHILL 테스트</string>
     <string name="package_name">kr.verthill.caddy.debug</string>
     <string name="custom_url_scheme">kr.verthill.caddy.debug</string>
+    <string name="debug_preview_auth_blocked">Google/GitHub 로그인은 테스트 앱에서 열리지 않습니다. Vercel Email로 로그인하세요.</string>
 </resources>

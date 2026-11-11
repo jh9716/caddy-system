@@ -15,6 +15,9 @@ export const ANDROID_DEBUG_PREVIEW_PRODUCTION_HOSTS = [
   "verthill.kr",
 ] as const;
 
+/** Vercel Authentication SSO hosts for Debug WebView only. Not download hosts. */
+export const ANDROID_DEBUG_PREVIEW_AUTH_HOSTS = ["vercel.com"] as const;
+
 export function androidDebugPreviewHostFromUrl(raw: string): string | null {
   const value = String(raw ?? "").trim();
   if (!value) return null;

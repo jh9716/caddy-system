@@ -9,7 +9,9 @@ import os from "node:os";
 import path from "node:path";
 import { execSync } from "node:child_process";
 import {
+  ANDROID_DEBUG_PREVIEW_AUTH_HOSTS,
   ANDROID_DEBUG_PREVIEW_DEFAULT_URL,
+  ANDROID_DEBUG_PREVIEW_PRODUCTION_HOSTS,
   androidDebugPreviewHostFromUrl,
   isAndroidDebugPreviewHost,
 } from "../src/lib/androidDebugPreviewHost";
@@ -141,6 +143,49 @@ assert(
   ),
   "HEIC FileProvider uses runtime package name"
 );
+assert(
+  ANDROID_DEBUG_PREVIEW_AUTH_HOSTS.length === 1 &&
+    ANDROID_DEBUG_PREVIEW_AUTH_HOSTS[0] === "vercel.com",
+  "debug auth host is vercel.com only"
+);
+assert(
+  ANDROID_DEBUG_PREVIEW_PRODUCTION_HOSTS.includes("www.verthill.kr"),
+  "debug overlay still keeps production hosts"
+);
+{
+  const nav = read("android/app/src/debug/java/kr/verthill/caddy/DebugPreviewWebViewClient.java");
+  const hook = read("android/app/src/debug/java/kr/verthill/caddy/DebugWebViewHook.java");
+  const releaseHook = read("android/app/src/release/java/kr/verthill/caddy/DebugWebViewHook.java");
+  const mainActivity = read("android/app/src/main/java/kr/verthill/caddy/MainActivity.java");
+  assert(hook.includes("new DebugPreviewWebViewClient(bridge)"), "debug installs preview WebViewClient");
+  assert(
+    releaseHook.includes("static void install(Bridge bridge) {}") &&
+      !releaseHook.includes("WebViewClient"),
+    "release WebView hook is a no-op"
+  );
+  assert(
+    mainActivity.includes("DebugWebViewHook.install(bridge)") &&
+      mainActivity.indexOf("super.onCreate(savedInstanceState)") <
+        mainActivity.indexOf("DebugWebViewHook.install"),
+    "debug hook runs after BridgeActivity onCreate"
+  );
+  assert(nav.includes('"vercel.com"'), "debug client keeps vercel.com");
+  assert(nav.includes("github.com") && nav.includes("accounts.google.com"), "debug client names IdP hosts");
+  assert(nav.includes("return true") && !nav.includes("ACTION_VIEW"), "blocked IdP does not open a browser");
+  assert(!nav.includes("startActivity"), "debug client does not start an external activity");
+  assert(
+    !nav.includes("getQuery") &&
+      !nav.includes("getQueryParameter") &&
+      !nav.includes("url.toString()") &&
+      !nav.includes("request.getUrl().toString()"),
+    "nav log has no query or full URL"
+  );
+  assert(!nav.includes("CookieManager") && !nav.includes("password"), "nav log has no cookies or passwords");
+  assert(
+    !debugHosts.includes('"vercel.com"') && !debugHosts.includes("vercel.com\""),
+    "notice download FlavorHosts still excludes vercel.com"
+  );
+}
 
 console.log("== debug overlay writer ==");
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vh-debug-cap-"));
@@ -155,7 +200,10 @@ try {
   const written = read("android/app/src/debug/assets/capacitor.config.json");
   assert(written.includes(ANDROID_DEBUG_PREVIEW_DEFAULT_URL), "overlay writes Preview URL");
   assert(written.includes("www.verthill.kr"), "overlay keeps production allowNavigation");
+  assert(written.includes('"vercel.com"'), "overlay keeps Vercel SSO in WebView");
   assert(!written.includes("kauth.kakao.com"), "overlay has no Kakao hosts");
+  assert(!written.includes("github.com"), "overlay has no GitHub host");
+  assert(!written.includes("accounts.google.com"), "overlay has no Google host");
   try {
     execSync(
       "bash scripts/tsx-safe.sh scripts/write-android-debug-capacitor-config.ts --url https://www.verthill.kr",
@@ -186,6 +234,11 @@ assert(
   "CI checks release applicationId has no .debug"
 );
 assert(workflow.includes("compileReleaseJavaWithJavac"), "release Java compile guard");
+assert(workflow.includes('"vercel.com"'), "CI requires debug vercel.com allowNavigation");
+assert(
+  workflow.includes("debug APK must not add GitHub/Google WebView hosts"),
+  "CI rejects GitHub/Google allowNavigation"
+);
 assert(workflow.includes("native:android-debug-preview-config"), "writes debug overlay");
 assert(workflow.includes("ephemeral debug.keystore"), "throwaway debug cert");
 assert(workflow.includes("Upload app-debug.apk"), "uploads debug APK");

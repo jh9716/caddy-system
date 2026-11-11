@@ -6,7 +6,7 @@ package kr.verthill.caddy.notice;
 final class NoticeFileDownloadFlavorHosts {
     private NoticeFileDownloadFlavorHosts() {}
 
-    static boolean extraAllowed(String host) {
+    public static boolean extraAllowed(String host) {
         return false;
     }
 
